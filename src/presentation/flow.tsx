@@ -14,7 +14,6 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Quote, RemittanceState, PayoutMethod } from "../domain/remittance";
 import { createContainer } from "../composition/container";
-import { openKycWindow } from "../infrastructure/didit/popup";
 import { Button, Card, ChaskiMark, Field, Pill, Row, Stepper, TextInput } from "./ui";
 
 type Step = "send" | "connect" | "verify" | "review" | "track" | "done";
@@ -60,6 +59,7 @@ export function RemittanceFlow() {
   const [preview, setPreview] = useState<Quote | null>(null);
   const [rem, setRem] = useState<RemittanceState | null>(null);
   const [address, setAddress] = useState<string | null>(null);
+  const [resuming, setResuming] = useState(false); // retomando KYC al volver de Didit
 
   const amountNum = Number(amount) || 0;
 
@@ -78,6 +78,58 @@ export function RemittanceFlow() {
     }, 300);
     return () => clearTimeout(t);
   }, [amountNum, method, c]);
+
+  // Retomar el KYC al volver del redirect de Didit (móvil, misma pestaña). Corre una vez al montar:
+  // si hay un KYC pendiente, consulta la decisión (reintenta si Didit aún procesa) y sigue el flujo.
+  const resumedRef = useRef(false);
+  useEffect(() => {
+    if (resumedRef.current) return;
+    resumedRef.current = true;
+    let alive = true;
+    (async () => {
+      for (let i = 0; i < 40; i++) {
+        let res: Awaited<ReturnType<typeof c.resumeKyc.execute>>;
+        try {
+          res = await c.resumeKyc.execute();
+        } catch {
+          break;
+        }
+        if (!alive) return;
+        if (res.kind === "none") {
+          setResuming(false);
+          return;
+        }
+        if (res.kind === "processing") {
+          setResuming(true);
+          await sleep(2500);
+          continue;
+        }
+        setResuming(false);
+        if (res.kind === "passed") {
+          setRem(res.snapshot);
+          try {
+            const locked = await c.lockQuote.execute({ remittanceId: res.snapshot.id });
+            if (alive) setRem(locked.snapshot);
+          } catch {
+            /* si la cotización falla, el review re-cotiza */
+          }
+          if (alive) setStep("review");
+        } else {
+          setRem(res.snapshot);
+          setStep("verify");
+          setError("La verificación no pasó. Probá de nuevo.");
+        }
+        return;
+      }
+      if (alive) {
+        setResuming(false);
+        setError("La verificación está tardando. Actualizá la página en un momento.");
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [c]);
 
   const guard = useCallback(async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -109,11 +161,15 @@ export function RemittanceFlow() {
       setAddress(addr);
       if (rememberedKyc && rememberedKyc.approved && rememberedKyc.payoutAllowed) {
         // KYC-once: esta wallet ya está verificada → saltear identidad, directo a cotizar/revisar.
-        const r2 = await c.runKyc.execute({ remittanceId: rem.id, address: addr });
-        setRem(r2.snapshot);
-        const locked = await c.lockQuote.execute({ remittanceId: rem.id });
-        setRem(locked.snapshot);
-        setStep("review");
+        const res = await c.startKyc.execute({ remittanceId: rem.id, address: addr });
+        if (res.kind === "done") {
+          setRem(res.snapshot);
+          const locked = await c.lockQuote.execute({ remittanceId: rem.id });
+          setRem(locked.snapshot);
+          setStep("review");
+        } else {
+          setStep("verify");
+        }
       } else {
         setStep("verify");
       }
@@ -122,27 +178,29 @@ export function RemittanceFlow() {
   const onVerify = () =>
     guard(async () => {
       if (!rem) return;
-      // Abrir la ventana SINCRÓNICO al click (el navegador bloquea window.open tras un await).
-      // En modo real el gateway la navega a Didit; sin key (501) el gateway la cierra.
-      openKycWindow();
-      // Progreso visible; en modo real el escaneo real ocurre en la ventana de Didit.
-      for (let i = 1; i <= SCAN_STEPS.length; i++) {
-        setScanStage(i);
-        await sleep(650);
-      }
-      const r = await c.runKyc.execute({
+      setScanStage(1);
+      const callbackUrl =
+        typeof window !== "undefined" ? `${window.location.origin}/?kyc=return` : undefined;
+      const res = await c.startKyc.execute({
         remittanceId: rem.id,
         address: address ?? "",
-        purpose: "family support",
+        callbackUrl,
       });
-      setRem(r.snapshot);
-      if (r.status !== "kyc_passed") {
+      if (res.kind === "redirect") {
+        // Redirect en la MISMA pestaña a Didit (suave en móvil). La página navega y se retoma
+        // sola al volver (ver el efecto de resume). No seguimos acá.
+        window.location.href = res.url;
+        return;
+      }
+      // done: simulación (sin key) o KYC-once.
+      setRem(res.snapshot);
+      if (res.snapshot.status !== "kyc_passed") {
         setScanStage(0);
         setError("No pudimos verificar tu identidad. Intentá de nuevo.");
         return;
       }
       setScanStage(4);
-      await sleep(500);
+      await sleep(400);
       const locked = await c.lockQuote.execute({ remittanceId: rem.id });
       setRem(locked.snapshot);
       setStep("review");
@@ -211,6 +269,17 @@ export function RemittanceFlow() {
         <Stepper steps={STEP_LABELS} current={STEP_INDEX[step]} />
       </div>
 
+      {resuming ? (
+        <Card className="mt-2 flex-1 space-y-4 text-center">
+          <Loader2 className="mx-auto mt-6 h-8 w-8 animate-spin text-cochineal" />
+          <div>
+            <p className="text-base font-bold">Verificando tu identidad…</p>
+            <p className="mx-auto mt-1 max-w-xs text-sm text-stone">
+              Estamos confirmando tu verificación con Didit. Un segundo.
+            </p>
+          </div>
+        </Card>
+      ) : (
       <AnimatePresence mode="wait">
         <motion.div
           key={step}
@@ -446,6 +515,7 @@ export function RemittanceFlow() {
           {step === "done" && rem && <Receipt rem={rem} onNew={() => resetTo(setStep, setRem, setPreview)} />}
         </motion.div>
       </AnimatePresence>
+      )}
 
       {error ? (
         <div className="mt-4 rounded-xl border border-cochineal/20 bg-cochineal/5 px-4 py-3 text-sm text-cochineal-ink">

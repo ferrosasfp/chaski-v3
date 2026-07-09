@@ -1,14 +1,16 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { ConfirmAndSend } from "./use-cases/confirm-and-send";
 import { ConnectWallet } from "./use-cases/connect-wallet";
 import { CreateRemittance } from "./use-cases/create-remittance";
 import { LockQuote } from "./use-cases/lock-quote";
 import { PreviewQuote } from "./use-cases/preview-quote";
-import { RunKyc } from "./use-cases/run-kyc";
+import { ResumeKyc } from "./use-cases/resume-kyc";
+import { StartKyc } from "./use-cases/start-kyc";
 import { TrackRemittance } from "./use-cases/track-remittance";
 import {
   beneficiary,
   FakeKycGateway,
+  FakeKycPendingStore,
   FakeKycStore,
   FakePayoutGateway,
   FakeQuoteGateway,
@@ -24,14 +26,18 @@ function setup(opts?: { kyc?: FakeKycGateway; payout?: FakePayoutGateway; kycSto
   const ids = new SeqIds();
   const payout = opts?.payout ?? new FakePayoutGateway();
   const kycStore = opts?.kycStore ?? new FakeKycStore();
+  const pending = new FakeKycPendingStore();
   const wallet = new FakeWallet();
+  const kycGw = opts?.kyc ?? new FakeKycGateway();
   return {
     repo,
     clock,
     kycStore,
+    pending,
     create: new CreateRemittance(repo, clock, ids),
     connect: new ConnectWallet(wallet, kycStore),
-    kyc: new RunKyc(opts?.kyc ?? new FakeKycGateway(), kycStore, repo, clock),
+    startKyc: new StartKyc(kycGw, kycStore, pending, repo, clock),
+    resumeKyc: new ResumeKyc(kycGw, kycStore, pending, repo, clock),
     lock: new LockQuote(new FakeQuoteGateway(), repo, clock),
     confirm: new ConfirmAndSend(wallet, payout, repo, clock),
     track: new TrackRemittance(payout, repo, clock),
@@ -46,10 +52,10 @@ const kycInput = (remittanceId: string) => ({
 
 describe("Use-cases — money-path", () => {
   it("happy path: create → kyc → lock → confirm → track → settled", async () => {
-    const { create, kyc, lock, confirm, track } = setup();
+    const { create, startKyc, lock, confirm, track } = setup();
     const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
     const id = r0.snapshot.id;
-    await kyc.execute(kycInput(id));
+    expect((await startKyc.execute(kycInput(id))).kind).toBe("done");
     let r = await lock.execute({ remittanceId: id });
     expect(r.status).toBe("quoted");
     r = await confirm.execute({ remittanceId: id });
@@ -61,12 +67,13 @@ describe("Use-cases — money-path", () => {
   });
 
   it("KYC no pasa → kyc_failed, y lock falla (el dominio fuerza el orden)", async () => {
-    const { create, kyc, lock } = setup({
+    const { create, startKyc, lock } = setup({
       kyc: new FakeKycGateway({ approved: false, payoutAllowed: false }),
     });
     const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
-    const r = await kyc.execute(kycInput(r0.snapshot.id));
-    expect(r.status).toBe("kyc_failed");
+    const res = await startKyc.execute(kycInput(r0.snapshot.id));
+    expect(res.kind).toBe("done");
+    if (res.kind === "done") expect(res.snapshot.status).toBe("kyc_failed");
     await expect(lock.execute({ remittanceId: r0.snapshot.id })).rejects.toThrow(
       /invalid_transition/,
     );
@@ -81,12 +88,12 @@ describe("Use-cases — money-path", () => {
   });
 
   it("payout falla → payout_failed (con reason)", async () => {
-    const { create, kyc, lock, confirm } = setup({
+    const { create, startKyc, lock, confirm } = setup({
       payout: new FakePayoutGateway({ status: "failed", failureReason: "partner_down" }),
     });
     const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
     const id = r0.snapshot.id;
-    await kyc.execute(kycInput(id));
+    await startKyc.execute(kycInput(id));
     await lock.execute({ remittanceId: id });
     const r = await confirm.execute({ remittanceId: id });
     expect(r.status).toBe("payout_failed");
@@ -122,12 +129,28 @@ describe("Use-cases — money-path", () => {
 
   it("KYC-once: la 2da remesa de la misma wallet reusa el KYC (sin re-verificar)", async () => {
     const kycStore = new FakeKycStore();
-    const { create, kyc } = setup({ kycStore });
+    const { create, startKyc } = setup({ kycStore });
     const r1 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
-    await kyc.execute(kycInput(r1.snapshot.id)); // verifica + guarda en el store
+    await startKyc.execute(kycInput(r1.snapshot.id)); // verifica + guarda en el store
     const r2 = await create.execute({ amountUsd: 200, beneficiary: beneficiary() });
-    // 2da remesa, misma wallet, SIN datos de identidad → reusa el KYC recordado
-    const r = await kyc.execute({ remittanceId: r2.snapshot.id, address: "0xSender" });
-    expect(r.status).toBe("kyc_passed");
+    const res = await startKyc.execute({ remittanceId: r2.snapshot.id, address: "0xSender" });
+    expect(res.kind).toBe("done");
+    if (res.kind === "done") expect(res.snapshot.status).toBe("kyc_passed");
+  });
+
+  it("Didit redirect → resume aplica la decisión y pasa el KYC (flujo móvil)", async () => {
+    const { create, startKyc, resumeKyc } = setup({ kyc: new FakeKycGateway({}, true) });
+    const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
+    const start = await startKyc.execute({ remittanceId: r0.snapshot.id, address: "0xSender" });
+    expect(start.kind).toBe("redirect"); // te manda a Didit
+
+    const res = await resumeKyc.execute(); // simula el retorno de Didit
+    expect(res.kind).toBe("passed");
+    if (res.kind === "passed") expect(res.snapshot.status).toBe("kyc_passed");
+  });
+
+  it("resume sin KYC pendiente → none (carga normal de la app)", async () => {
+    const { resumeKyc } = setup();
+    expect((await resumeKyc.execute()).kind).toBe("none");
   });
 });

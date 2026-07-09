@@ -22,16 +22,38 @@ export interface QuoteGateway {
   requestQuote(req: QuoteRequest): Promise<Quote>;
 }
 
-// ── KYC (Didit: escanear DNI + selfie; los datos los EXTRAE Didit, no se tipean) ──
-// El request lleva solo el CONTEXTO de la operación (no la identidad — esa la devuelve Didit).
+// ── KYC (Didit hosted, redirect same-tab: suave en móvil) ────────────────────
+// El request lleva el CONTEXTO de la operación (no la identidad — esa la extrae Didit del documento).
 export interface KycRequest {
   amountUsd: number;
   beneficiary: Beneficiary;
   purpose: string;
+  callbackUrl?: string; // a dónde vuelve Didit tras el escaneo (misma pestaña)
+}
+// start() puede resolver directo (simulación) o pedir un redirect (Didit real).
+export type KycStartResult =
+  | { kind: "completed"; verification: KycVerification }
+  | { kind: "redirect"; url: string; sessionId: string };
+// decision() se consulta al volver del redirect; terminal=false ⇒ Didit aún procesa.
+export interface KycDecision {
+  terminal: boolean;
+  verification: KycVerification;
 }
 export interface KycGateway {
-  // En real: crea una sesión Didit (redirect/widget) y devuelve el resultado con la identidad extraída.
-  verify(req: KycRequest): Promise<KycVerification>;
+  start(req: KycRequest): Promise<KycStartResult>;
+  decision(sessionId: string): Promise<KycDecision>;
+}
+
+// KYC pendiente: se persiste antes del redirect para retomar el flujo al volver de Didit.
+export interface KycPending {
+  remittanceId: string;
+  sessionId: string;
+  address: string;
+}
+export interface KycPendingStore {
+  save(p: KycPending): Promise<void>;
+  get(): Promise<KycPending | null>;
+  clear(): Promise<void>;
 }
 
 // ── Payout / value-delivery (agente remit-cashout-payout + partner) ──────────

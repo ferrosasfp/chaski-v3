@@ -10,8 +10,12 @@ import {
 import type {
   Clock,
   IdGenerator,
+  KycDecision,
   KycGateway,
+  KycPending,
+  KycPendingStore,
   KycRequest,
+  KycStartResult,
   KycStore,
   PayoutGateway,
   PayoutRecord,
@@ -75,8 +79,12 @@ export class FakeQuoteGateway implements QuoteGateway {
 }
 
 export class FakeKycGateway implements KycGateway {
-  constructor(private overrides: Partial<KycVerification> = {}) {}
-  async verify(_req: KycRequest): Promise<KycVerification> {
+  // redirect=true → start() pide redirect (para probar el flujo Didit/resume).
+  constructor(
+    private overrides: Partial<KycVerification> = {},
+    private redirect = false,
+  ) {}
+  private v(): KycVerification {
     return {
       verificationId: "v-1",
       approved: true,
@@ -94,6 +102,27 @@ export class FakeKycGateway implements KycGateway {
       },
       ...this.overrides,
     };
+  }
+  async start(_req: KycRequest): Promise<KycStartResult> {
+    return this.redirect
+      ? { kind: "redirect", url: "https://verify.didit.me/session/fake", sessionId: "sess-fake" }
+      : { kind: "completed", verification: this.v() };
+  }
+  async decision(_sessionId: string): Promise<KycDecision> {
+    return { terminal: true, verification: this.v() };
+  }
+}
+
+export class FakeKycPendingStore implements KycPendingStore {
+  private p: KycPending | null = null;
+  async save(p: KycPending): Promise<void> {
+    this.p = p;
+  }
+  async get(): Promise<KycPending | null> {
+    return this.p;
+  }
+  async clear(): Promise<void> {
+    this.p = null;
   }
 }
 

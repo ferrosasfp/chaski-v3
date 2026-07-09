@@ -5,8 +5,10 @@
 import { Money } from "../../domain/money";
 import type { KycVerification, Quote } from "../../domain/remittance";
 import type {
+  KycDecision,
   KycGateway,
   KycRequest,
+  KycStartResult,
   PayoutGateway,
   PayoutRecord,
   PayoutSubmit,
@@ -60,13 +62,19 @@ export class FallbackQuoteGateway implements QuoteGateway {
 
 export class FallbackKycGateway implements KycGateway {
   // Simula el resultado de una sesión Didit: la identidad se EXTRAE del documento escaneado
-  // (no la tipea el usuario). En real, Didit devuelve estos datos ya verificados + el screening AML.
-  async verify(req: KycRequest): Promise<KycVerification> {
+  // (no la tipea el usuario). start() resuelve directo (sin redirect); decision() por si se consulta.
+  async start(req: KycRequest): Promise<KycStartResult> {
+    return { kind: "completed", verification: this.simulated(req.amountUsd) };
+  }
+  async decision(_sessionId: string): Promise<KycDecision> {
+    return { terminal: true, verification: this.simulated(0) };
+  }
+  private simulated(amountUsd: number): KycVerification {
     return {
       verificationId: `didit-demo-${Date.now().toString(36)}`,
       approved: true,
       payoutAllowed: true,
-      riskLevel: req.amountUsd >= 1000 ? "medium" : "low",
+      riskLevel: amountUsd >= 1000 ? "medium" : "low",
       provenance: "local-fallback",
       identity: {
         firstName: "María Elena",

@@ -82,6 +82,7 @@ export class WalletConnectWallet implements WalletPort {
       projectId: this.projectId,
       chains: [43114], // Avalanche
       showQrModal: true, // QR en desktop, deep-link a la wallet en móvil
+      qrModalOptions: { themeMode: "light" }, // evita el modal negro-sobre-negro
       metadata: {
         name: "Chaski",
         description: "Envía USDC a Perú, sin vueltas",

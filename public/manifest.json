@@ -1,0 +1,13 @@
+{
+  "name": "Chaski — tu remesa a Perú",
+  "short_name": "Chaski",
+  "id": "chaski-v2",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FBFAF7",
+  "theme_color": "#CB2A54",
+  "description": "Mandá plata a tu familia en Perú con solo pedirlo.",
+  "icons": []
+}

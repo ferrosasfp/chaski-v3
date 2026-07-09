@@ -1,0 +1,357 @@
+<title>Chaski · Unit economics</title>
+<style>
+  :root {
+    --paper: #fbfaf7;
+    --card: #ffffff;
+    --ink: #17130f;
+    --stone: #8a8178;
+    --line: #ebe7df;
+    --cochineal: #cb2a54;
+    --cochineal-ink: #9e1c40;
+    --verde: #12805c;
+    --verde-bg: #e7f3ee;
+    --sand: #f3efe7;
+    --font: -apple-system, "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .num { font-variant-numeric: tabular-nums; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 28px 20px 64px; }
+
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 26px; }
+  .mark { width: 40px; height: 40px; flex: none; }
+  header h1 { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; margin: 0; }
+  header p { margin: 2px 0 0; font-size: 13px; color: var(--stone); }
+
+  /* hero metric */
+  .hero {
+    background: var(--card); border: 1px solid var(--line); border-radius: 20px;
+    padding: 24px 26px; box-shadow: 0 1px 2px rgba(23,19,15,.04), 0 12px 34px -18px rgba(23,19,15,.16);
+    margin-bottom: 22px;
+    display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 22px; align-items: end;
+  }
+  .hero .lead .k { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--stone); font-weight: 700; }
+  .hero .lead .v { font-size: clamp(38px, 7vw, 56px); font-weight: 800; letter-spacing: -0.03em; color: var(--cochineal); line-height: 1; margin-top: 6px; }
+  .hero .lead .sub { font-size: 13px; color: var(--stone); margin-top: 8px; }
+  .hero .stat .k { font-size: 12px; color: var(--stone); font-weight: 600; }
+  .hero .stat .v { font-size: 24px; font-weight: 800; letter-spacing: -0.02em; margin-top: 3px; }
+
+  .grid { display: grid; grid-template-columns: 380px 1fr; gap: 22px; align-items: start; }
+
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 20px; box-shadow: 0 1px 2px rgba(23,19,15,.04), 0 10px 30px -20px rgba(23,19,15,.14); }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--stone); font-weight: 700; margin: 0 0 14px; }
+  .panel + .panel { margin-top: 18px; }
+
+  .group { margin-bottom: 18px; }
+  .group:last-child { margin-bottom: 0; }
+  .glabel { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--cochineal-ink); font-weight: 700; margin-bottom: 8px; }
+
+  .ctrl { margin-bottom: 14px; }
+  .ctrl:last-child { margin-bottom: 0; }
+  .ctrl .row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+  .ctrl label { font-size: 13.5px; color: var(--ink); font-weight: 500; }
+  .ctrl output { font-size: 15px; font-weight: 800; color: var(--ink); }
+  input[type="range"] { width: 100%; accent-color: var(--cochineal); height: 22px; cursor: pointer; }
+  input[type="range"]:focus-visible { outline: 2px solid var(--cochineal); outline-offset: 3px; border-radius: 4px; }
+
+  /* breakdown rows */
+  .rows { display: flex; flex-direction: column; }
+  .r { display: flex; justify-content: space-between; align-items: baseline; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .r:last-child { border-bottom: 0; }
+  .r .lab { font-size: 14px; color: var(--stone); }
+  .r .val { font-size: 15px; font-weight: 700; }
+  .r.cost .val { color: var(--cochineal-ink); }
+  .r.gain .val { color: var(--verde); }
+  .r.total { margin-top: 4px; border-top: 2px solid var(--line); padding-top: 12px; }
+  .r.total .lab { color: var(--ink); font-weight: 700; font-size: 14.5px; }
+  .r.total .val { font-size: 20px; font-weight: 800; color: var(--verde); }
+  .tag { font-size: 11px; font-weight: 700; color: var(--stone); background: var(--sand); padding: 2px 7px; border-radius: 999px; margin-left: 8px; }
+
+  .cols2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 560px) { .cols2 { grid-template-columns: 1fr; } }
+
+  /* scenarios */
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 10px 8px; font-size: 14px; white-space: nowrap; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--stone); font-weight: 700; border-bottom: 1px solid var(--line); }
+  td:first-child, th:first-child { text-align: left; }
+  tbody tr { border-bottom: 1px solid var(--line); }
+  tbody tr:last-child { border-bottom: 0; }
+  tbody tr.here { background: color-mix(in srgb, var(--cochineal) 6%, transparent); }
+  td.net { font-weight: 800; color: var(--verde); }
+  .users-cell { font-weight: 700; }
+
+  /* WU strip */
+  .wu { margin-top: 22px; background: var(--verde-bg); border: 1px solid color-mix(in srgb, var(--verde) 24%, transparent); border-radius: 18px; padding: 18px 22px; display: flex; flex-wrap: wrap; gap: 18px 34px; align-items: center; }
+  .wu .big { font-size: 26px; font-weight: 800; color: var(--verde); letter-spacing: -0.02em; }
+  .wu .txt { font-size: 14px; color: var(--ink); }
+  .wu .txt b { color: var(--verde); }
+  .barwrap { flex: 1 1 220px; min-width: 200px; }
+  .bar { height: 12px; border-radius: 999px; background: var(--sand); overflow: hidden; margin-top: 6px; display: flex; }
+  .bar > i { display: block; height: 100%; }
+  .barlabels { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--stone); margin-top: 5px; }
+
+  .note { margin-top: 26px; font-size: 12.5px; color: var(--stone); line-height: 1.6; }
+  .note b { color: var(--ink); }
+
+  @media (max-width: 860px) {
+    .grid { grid-template-columns: 1fr; }
+    .hero { grid-template-columns: 1fr 1fr; }
+    .hero .lead { grid-column: 1 / -1; }
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <svg class="mark" viewBox="0 0 40 40" role="img" aria-label="Chaski">
+      <rect width="40" height="40" rx="10" fill="#17130F"></rect>
+      <path d="M7 27 L7 23 L11 23 L11 19 L15 19 L15 15 L19 15" stroke="#FBFAF7" stroke-width="2.2" fill="none" stroke-linecap="square"></path>
+      <circle cx="27" cy="15" r="5.2" fill="#CB2A54"></circle>
+      <circle cx="27" cy="15" r="1.8" fill="#17130F"></circle>
+    </svg>
+    <div>
+      <h1>Chaski · Unit economics</h1>
+      <p>Cuánto gana Chaski por remesa y por mes. Movés los supuestos, ves el resultado.</p>
+    </div>
+  </header>
+
+  <section class="hero">
+    <div class="lead">
+      <div class="k">Contribución neta / mes</div>
+      <div class="v num" id="h-net">$0</div>
+      <div class="sub" id="h-sub">—</div>
+    </div>
+    <div class="stat">
+      <div class="k">Volumen (GMV) / mes</div>
+      <div class="v num" id="h-gmv">$0</div>
+    </div>
+    <div class="stat">
+      <div class="k">Fee de protocolo WasiAI (1%)</div>
+      <div class="v num" id="h-proto">$0</div>
+    </div>
+  </section>
+
+  <div class="grid">
+    <!-- INPUTS -->
+    <div class="panel" aria-label="Supuestos">
+      <h2>Supuestos</h2>
+
+      <div class="group">
+        <div class="glabel">Por envío</div>
+        <div class="ctrl">
+          <div class="row"><label for="i-send">Monto promedio</label><output id="o-send"></output></div>
+          <input type="range" id="i-send" min="50" max="2000" step="25" value="400" />
+        </div>
+        <div class="ctrl">
+          <div class="row"><label for="i-markup">Markup al cliente (vs tasa media)</label><output id="o-markup"></output></div>
+          <input type="range" id="i-markup" min="0.5" max="5" step="0.05" value="2.5" />
+        </div>
+        <div class="ctrl">
+          <div class="row"><label for="i-transfi">Costo TransFi (su tajada)</label><output id="o-transfi"></output></div>
+          <input type="range" id="i-transfi" min="0.2" max="3" step="0.05" value="1" />
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="glabel">Volumen</div>
+        <div class="ctrl">
+          <div class="row"><label for="i-users">Usuarios activos / mes</label><output id="o-users"></output></div>
+          <input type="range" id="i-users" min="50" max="100000" step="50" value="1000" />
+        </div>
+        <div class="ctrl">
+          <div class="row"><label for="i-freq">Envíos por usuario / mes</label><output id="o-freq"></output></div>
+          <input type="range" id="i-freq" min="0.5" max="4" step="0.1" value="1.2" />
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="glabel">Costos variables</div>
+        <div class="ctrl">
+          <div class="row"><label for="i-kyc">KYC por usuario (una vez)</label><output id="o-kyc"></output></div>
+          <input type="range" id="i-kyc" min="0" max="1.5" step="0.05" value="0.30" />
+        </div>
+        <div class="ctrl">
+          <div class="row"><label for="i-gas">Gas por envío (Avalanche)</label><output id="o-gas"></output></div>
+          <input type="range" id="i-gas" min="0" max="0.5" step="0.01" value="0.02" />
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="glabel">Cliente</div>
+        <div class="ctrl">
+          <div class="row"><label for="i-ret">Retención promedio</label><output id="o-ret"></output></div>
+          <input type="range" id="i-ret" min="3" max="48" step="1" value="18" />
+        </div>
+      </div>
+    </div>
+
+    <!-- OUTPUTS -->
+    <div>
+      <div class="panel">
+        <h2>Por envío ($<span id="pt-send"></span>)</h2>
+        <div class="rows">
+          <div class="r"><span class="lab">Paga el cliente <span class="tag" id="pt-mk"></span></span><span class="val num" id="pt-customer"></span></div>
+          <div class="r cost"><span class="lab">− Costo TransFi</span><span class="val num" id="pt-transfi"></span></div>
+          <div class="r gain"><span class="lab">= Ingreso de Chaski <span class="tag" id="pt-take"></span></span><span class="val num" id="pt-gross"></span></div>
+          <div class="r cost"><span class="lab">− KYC (amortizado)</span><span class="val num" id="pt-kyc"></span></div>
+          <div class="r cost"><span class="lab">− Gas</span><span class="val num" id="pt-gas"></span></div>
+          <div class="r total"><span class="lab">Contribución neta por envío</span><span class="val num" id="pt-net"></span></div>
+        </div>
+      </div>
+
+      <div class="cols2" style="margin-top:18px">
+        <div class="panel">
+          <h2>Por usuario</h2>
+          <div class="rows">
+            <div class="r"><span class="lab">LTV (contribución)</span><span class="val num" id="u-ltv"></span></div>
+            <div class="r"><span class="lab">CAC de equilibrio</span><span class="val num" id="u-cac"></span></div>
+            <div class="r"><span class="lab">CAC sano (LTV ÷ 3)</span><span class="val num" id="u-cac3"></span></div>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Por mes</h2>
+          <div class="rows">
+            <div class="r"><span class="lab">Envíos</span><span class="val num" id="m-tx"></span></div>
+            <div class="r"><span class="lab">Ingreso bruto</span><span class="val num" id="m-gross"></span></div>
+            <div class="r gain"><span class="lab">Contribución neta</span><span class="val num" id="m-net"></span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:18px">
+        <h2>Escenarios de escala (a los supuestos actuales)</h2>
+        <div class="scroll">
+          <table>
+            <thead><tr><th>Usuarios</th><th>GMV / mes</th><th>Bruto / mes</th><th>Neto / mes</th><th>Neto / año</th></tr></thead>
+            <tbody id="scen"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="wu">
+    <div>
+      <div class="big num" id="wu-save">$0</div>
+      <div class="txt" style="font-size:12px;color:var(--stone)">ahorra el cliente vs Western Union, por envío</div>
+    </div>
+    <div class="barwrap">
+      <div class="bar" id="wu-bar"></div>
+      <div class="barlabels"><span>Chaski <b id="wu-ch" class="num"></b></span><span>Western Union <span id="wu-wu" class="num"></span></span></div>
+    </div>
+    <div class="txt" style="flex:1 1 240px">Todos ganan menos WU: el cliente paga menos <b>y</b> Chaski igual gana. Ese es el filo de los rieles cripto.</div>
+  </div>
+
+  <p class="note">
+    <b>Modelo, no promesa.</b> El ingreso de Chaski es el <b>spread</b> (markup al cliente − tajada de TransFi), como Wise/Remitly. La comparación usa un markup de referencia de Western Union del 6,5%. El KYC se amortiza sobre los envíos de vida del usuario (freq × retención). No incluye costos fijos (infra, sueldos, marketing) ni el <b>fee de protocolo WasiAI (1%)</b>, que es ingreso aparte de la capa protocolo — cobrado sobre Chaski y sobre cualquier app que use los rieles. Todo sobre <b>Avalanche</b>, non-custodial (el USDC nunca pasa por Chaski).
+  </p>
+</div>
+
+<script>
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const usd = (n, d = 0) => "$" + n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+  const usdc = (n) => "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const compact = (n) => {
+    if (n >= 1e6) return "$" + (n / 1e6).toLocaleString("en-US", { maximumFractionDigits: 2 }) + "M";
+    if (n >= 1e3) return "$" + (n / 1e3).toLocaleString("en-US", { maximumFractionDigits: 1 }) + "k";
+    return "$" + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+  };
+  const intc = (n) => n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+  const WU_MARKUP = 6.5;
+
+  const I = {
+    send: $("i-send"), markup: $("i-markup"), transfi: $("i-transfi"),
+    users: $("i-users"), freq: $("i-freq"), kyc: $("i-kyc"), gas: $("i-gas"), ret: $("i-ret"),
+  };
+
+  function perTx(send, markupPct, transfiPct, kyc, gas, freq, ret) {
+    const customerPays = send * (markupPct / 100);   // markup total que paga el cliente vs tasa media
+    const transfiCost = send * (transfiPct / 100);   // tajada de TransFi
+    const gross = Math.max(0, customerPays - transfiCost); // spread que le queda a Chaski
+    const takeRate = Math.max(0, markupPct - transfiPct);
+    const kycAmort = kyc / Math.max(1, freq * ret);  // KYC una vez por usuario, sobre sus envíos de vida
+    const net = gross - kycAmort - gas;
+    return { customerPays, transfiCost, gross, takeRate, kycAmort, gas, net };
+  }
+
+  function render() {
+    const send = +I.send.value, markup = +I.markup.value, transfi = +I.transfi.value;
+    const users = +I.users.value, freq = +I.freq.value, kyc = +I.kyc.value, gas = +I.gas.value, ret = +I.ret.value;
+
+    // slider readouts
+    $("o-send").textContent = usd(send);
+    $("o-markup").textContent = markup.toFixed(2) + "%";
+    $("o-transfi").textContent = transfi.toFixed(2) + "%";
+    $("o-users").textContent = intc(users);
+    $("o-freq").textContent = freq.toFixed(1);
+    $("o-kyc").textContent = usdc(kyc);
+    $("o-gas").textContent = usdc(gas);
+    $("o-ret").textContent = ret + " meses";
+
+    const t = perTx(send, markup, transfi, kyc, gas, freq, ret);
+    const txMonth = users * freq;
+    const gmvMonth = txMonth * send;
+    const grossMonth = txMonth * t.gross;
+    const netMonth = txMonth * t.net;
+    const protoMonth = gmvMonth * 0.01;
+
+    // hero
+    $("h-net").textContent = compact(netMonth);
+    $("h-sub").textContent = intc(txMonth) + " envíos · take neto " + ((t.net / send) * 100).toFixed(2) + "%";
+    $("h-gmv").textContent = compact(gmvMonth);
+    $("h-proto").textContent = compact(protoMonth);
+
+    // per-tx (el desglose CUADRA: cliente − TransFi = spread; spread − KYC − gas = neto)
+    $("pt-send").textContent = intc(send);
+    $("pt-mk").textContent = "markup " + markup.toFixed(1) + "%";
+    $("pt-customer").textContent = usdc(t.customerPays);
+    $("pt-transfi").textContent = usdc(t.transfiCost);
+    $("pt-take").textContent = "spread " + t.takeRate.toFixed(2) + "%";
+    $("pt-gross").textContent = usdc(t.gross);
+    $("pt-kyc").textContent = usdc(t.kycAmort);
+    $("pt-gas").textContent = usdc(gas);
+    $("pt-net").textContent = usdc(t.net);
+
+    // per-user
+    const ltv = t.net * freq * ret;
+    $("u-ltv").textContent = usdc(ltv);
+    $("u-cac").textContent = usdc(ltv);
+    $("u-cac3").textContent = usdc(ltv / 3);
+
+    // per-month
+    $("m-tx").textContent = intc(txMonth);
+    $("m-gross").textContent = compact(grossMonth);
+    $("m-net").textContent = compact(netMonth);
+
+    // scenarios
+    const tiers = [100, 1000, 10000, 100000];
+    const rows = tiers.map((u) => {
+      const tx = u * freq, gmv = tx * send, gross = tx * t.rev, net = tx * t.net;
+      const here = Math.abs(u - users) / u < 0.15 ? " here" : "";
+      return `<tr class="${here.trim()}"><td class="users-cell">${intc(u)}</td><td>${compact(gmv)}</td><td>${compact(gross)}</td><td class="net">${compact(net)}</td><td class="net">${compact(net * 12)}</td></tr>`;
+    }).join("");
+    $("scen").innerHTML = rows;
+
+    // WU comparison (por envío)
+    const paysChaski = send * (markup / 100);
+    const paysWU = send * (WU_MARKUP / 100);
+    const save = Math.max(0, paysWU - paysChaski);
+    $("wu-save").textContent = usdc(save);
+    $("wu-ch").textContent = usdc(paysChaski);
+    $("wu-wu").textContent = usdc(paysWU);
+    const chPct = (paysChaski / paysWU) * 100;
+    $("wu-bar").innerHTML = `<i style="width:${chPct}%;background:var(--verde)"></i><i style="width:${100 - chPct}%;background:color-mix(in srgb, var(--cochineal) 55%, white)"></i>`;
+  }
+
+  Object.values(I).forEach((el) => el.addEventListener("input", render));
+  render();
+</script>

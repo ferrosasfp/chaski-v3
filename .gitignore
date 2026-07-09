@@ -1,0 +1,20 @@
+# deps
+node_modules/
+
+# next
+.next/
+out/
+next-env.d.ts
+
+# env (NUNCA commitear las keys)
+.env
+.env.local
+.env*.local
+
+# vercel
+.vercel
+
+# misc
+*.log
+.DS_Store
+coverage/

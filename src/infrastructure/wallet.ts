@@ -59,7 +59,74 @@ export class FallbackWallet implements WalletPort {
   }
 }
 
-/** Elige la wallet REAL si hay una inyectada (MetaMask), si no la demo simulada. */
+// EIP-1193 mínimo que expone el provider de WalletConnect (lo que usamos).
+interface WcProvider {
+  request(args: { method: string; params?: unknown }): Promise<unknown>;
+  connect(): Promise<void>;
+  accounts: string[];
+}
+
+/** REAL vía WalletConnect — para navegadores móviles normales (Safari/Chrome): abre modal/deep-link
+ * a la wallet instalada en el cel. connect() dispara el deep-link; la lib mantiene la sesión. */
+export class WalletConnectWallet implements WalletPort {
+  private address: `0x${string}` | null = null;
+  private provider: WcProvider | null = null;
+
+  constructor(private readonly projectId: string) {}
+
+  private async ensureProvider(): Promise<WcProvider> {
+    if (this.provider) return this.provider;
+    // Lazy-import: la lib de WC es pesada y usa APIs del browser → solo se carga en el cliente.
+    const { EthereumProvider } = await import("@walletconnect/ethereum-provider");
+    const p = await EthereumProvider.init({
+      projectId: this.projectId,
+      chains: [43114], // Avalanche
+      showQrModal: true, // QR en desktop, deep-link a la wallet en móvil
+      metadata: {
+        name: "Chaski",
+        description: "Envía USDC a Perú, sin vueltas",
+        url: typeof window !== "undefined" ? window.location.origin : "https://chaski-v2.vercel.app",
+        icons: [],
+      },
+    });
+    this.provider = p as unknown as WcProvider;
+    return this.provider;
+  }
+
+  async connect(): Promise<string> {
+    const provider = await this.ensureProvider();
+    await provider.connect(); // abre el modal WC / deep-link a la wallet del cel
+    const addr = provider.accounts?.[0];
+    if (!addr) throw new Error("no_account");
+    this.address = addr as `0x${string}`;
+    return this.address;
+  }
+
+  async getAddress(): Promise<string | null> {
+    return this.address;
+  }
+
+  async authorizePrincipal(quote: Quote): Promise<{ tx: string }> {
+    const provider = await this.ensureProvider();
+    if (!this.address) throw new Error("wallet_not_connected");
+    const client = createWalletClient({ chain: avalanche, transport: custom(provider) });
+    const sig = await client.signMessage({
+      account: this.address,
+      message: `Chaski · autorizo enviar ${quote.send.format()} (remesa ${quote.quoteId})`,
+    });
+    return { tx: sig };
+  }
+}
+
+/**
+ * Elige la wallet:
+ * - inyectada (MetaMask desktop / browser de la wallet en el cel) → InjectedWallet
+ * - navegador móvil normal con projectId de WalletConnect → WalletConnectWallet (deep-link)
+ * - si no hay ninguna → demo simulada
+ */
 export function pickWallet(): WalletPort {
-  return injectedProvider() ? new InjectedWallet() : new FallbackWallet();
+  if (injectedProvider()) return new InjectedWallet();
+  const wcId = process.env.NEXT_PUBLIC_REOWN_PROJECT_ID;
+  if (typeof window !== "undefined" && wcId) return new WalletConnectWallet(wcId);
+  return new FallbackWallet();
 }

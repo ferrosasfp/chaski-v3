@@ -167,6 +167,21 @@ export class ThrowingKycPendingStore implements KycPendingStore {
   }
 }
 
+// Doble que SIEMPRE falla en clear() (simula localStorage roto) para el test defensivo de WKH-184:
+// ForgetKyc debe resolver igual aunque pending.clear() re-lance (CD-8). save/get funcionan normal.
+export class ThrowingClearKycPendingStore implements KycPendingStore {
+  private p: KycPending | null = null;
+  async save(p: KycPending): Promise<void> {
+    this.p = p;
+  }
+  async get(): Promise<KycPending | null> {
+    return this.p;
+  }
+  async clear(): Promise<void> {
+    throw new Error("kyc_pending_unavailable");
+  }
+}
+
 export class FakePayoutGateway implements PayoutGateway {
   constructor(
     private submitResult: Partial<PayoutRecord> = {},

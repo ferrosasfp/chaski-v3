@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   FakeKycPendingStore,
   FakeKycStore,
+  ThrowingClearKycPendingStore,
   ThrowingClearKycStore,
 } from "../../test-support/fakes";
 import { toPersistedIdentity, type KycVerification } from "../../domain/remittance";
@@ -57,5 +58,14 @@ describe("ForgetKyc", () => {
     ).resolves.toBeUndefined();
 
     expect(await pending.get()).toBeNull(); // el pending igual se limpió (CD-8)
+  });
+
+  it("CD-8: si pending.clear rechaza (storage roto), execute resuelve igual y NO rechaza", async () => {
+    const kycStore = new FakeKycStore();
+    const pending = new ThrowingClearKycPendingStore();
+
+    await expect(
+      new ForgetKyc(kycStore, pending).execute({ address: "0xSender" }),
+    ).resolves.toBeUndefined();
   });
 });

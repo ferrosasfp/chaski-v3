@@ -246,6 +246,12 @@ export function RemittanceFlow() {
       setAddress(null);
       setRem(null);
       setPreview(null);
+      // Limpia la PII del beneficiario de la persona anterior (mismo threat-model que esta HU):
+      // en un dispositivo compartido, la persona B no debe aterrizar con el nombre/celular de A.
+      setRecipient("");
+      setDestination("");
+      setScanStage(0);
+      setAmount("400"); // no es PII → vuelve al default inicial (evita form con monto en blanco)
       setStep("send");
       setConfirmReset(false);
     });

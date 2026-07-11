@@ -14,6 +14,10 @@ export class ForgetKyc {
     } catch {
       /* storage roto: no rompe el reset (AC-5/CD-8) */
     }
-    await this.pending.clear(); // AC-3 — limpia el pending
+    try {
+      await this.pending.clear(); // AC-3 — limpia el pending
+    } catch {
+      /* storage roto: execute() NUNCA rechaza por storage (CD-8) */
+    }
   }
 }

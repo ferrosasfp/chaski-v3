@@ -19,6 +19,7 @@ import {
   FallbackQuoteGateway,
 } from "../infrastructure/fallback/gateways";
 import { LocalKycPendingStore } from "../infrastructure/kyc-pending-store";
+import { HttpPayoutAuthorityGateway } from "../infrastructure/payout/payout-authority-gateway";
 import { LocalKycStore } from "../infrastructure/kyc-store";
 import { LocalRepo } from "../infrastructure/persistence";
 import { CryptoIds, SystemClock } from "../infrastructure/system";
@@ -48,6 +49,7 @@ export function createContainer(): Container {
   // key → Didit real; si no (501) → simulación. No depende del inlineado NEXT_PUBLIC del cliente.
   const kyc = new DiditKycGateway(new FallbackKycGateway());
   const payouts = new FallbackPayoutGateway();
+  const payoutAuthority = new HttpPayoutAuthorityGateway(); // autoridad server-side (WKH-180)
   const wallet = pickWallet(); // wallet REAL (MetaMask) si está inyectada, si no la demo
 
   return {
@@ -57,7 +59,7 @@ export function createContainer(): Container {
     startKyc: new StartKyc(kyc, kycStore, kycPending, repo, clock),
     resumeKyc: new ResumeKyc(kyc, kycStore, kycPending, repo, clock),
     lockQuote: new LockQuote(quotes, repo, clock),
-    confirmAndSend: new ConfirmAndSend(wallet, payouts, repo, clock),
+    confirmAndSend: new ConfirmAndSend(wallet, payouts, repo, clock, payoutAuthority),
     trackRemittance: new TrackRemittance(payouts, repo, clock),
     listHistory: new ListHistory(repo),
     abandonPendingKyc: new AbandonPendingKyc(kycPending),

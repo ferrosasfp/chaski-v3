@@ -13,6 +13,7 @@ import {
   FakeKycGateway,
   FakeKycPendingStore,
   FakeKycStore,
+  FakePayoutAuthorityGateway,
   FakePayoutGateway,
   FakeQuoteGateway,
   FakeWallet,
@@ -40,7 +41,7 @@ function setup(opts?: { kyc?: FakeKycGateway; payout?: FakePayoutGateway; kycSto
     startKyc: new StartKyc(kycGw, kycStore, pending, repo, clock),
     resumeKyc: new ResumeKyc(kycGw, kycStore, pending, repo, clock),
     lock: new LockQuote(new FakeQuoteGateway(), repo, clock),
-    confirm: new ConfirmAndSend(wallet, payout, repo, clock),
+    confirm: new ConfirmAndSend(wallet, payout, repo, clock, new FakePayoutAuthorityGateway()),
     track: new TrackRemittance(payout, repo, clock),
   };
 }

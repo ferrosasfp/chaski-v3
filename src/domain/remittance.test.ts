@@ -104,6 +104,46 @@ describe("Remittance — máquina de estados", () => {
   });
 });
 
+describe("Remittance.attachQuote — A5 consistencia receive vs send/fee/rate (AC-1/AC-2)", () => {
+  // expected = (400 − 0.5) × 3.7 = 1478.15 ; allowedDelta = max(0.02, 1478.15 × 1%) = 14.7815
+  it("AC-1: receive consistente (dentro de tolerancia) → status quoted", () => {
+    const r = ready();
+    r.attachQuote(quote(), T0); // receive 1480, delta 1.85 « 14.78
+    expect(r.status).toBe("quoted");
+    expect(r.snapshot.quote?.receive.major).toBe(1480);
+  });
+
+  it("AC-2: receive inflado (2×) > tolerancia → throw quote_receive_mismatch, NO pasa a quoted", () => {
+    const r = ready();
+    expect(() => r.attachQuote({ ...quote(), receive: Money.of(2960, "PEN") }, T0)).toThrow(
+      /quote_receive_mismatch/,
+    );
+    expect(r.status).toBe("kyc_passed"); // no transicionó
+  });
+
+  it("AC-2: receive degradado a la mitad > tolerancia → throw quote_receive_mismatch", () => {
+    const r = ready();
+    expect(() => r.attachQuote({ ...quote(), receive: Money.of(740, "PEN") }, T0)).toThrow(
+      /quote_receive_mismatch/,
+    );
+    expect(r.status).toBe("kyc_passed");
+  });
+
+  it("AC-2 boundary: justo DENTRO de la tolerancia pasa (delta 14.75 < 14.7815)", () => {
+    const r = ready();
+    r.attachQuote({ ...quote(), receive: Money.of(1492.9, "PEN") }, T0); // delta 14.75
+    expect(r.status).toBe("quoted");
+  });
+
+  it("AC-2 boundary: justo AFUERA de la tolerancia falla (delta 14.85 > 14.7815)", () => {
+    const r = ready();
+    expect(() => r.attachQuote({ ...quote(), receive: Money.of(1493, "PEN") }, T0)).toThrow(
+      /quote_receive_mismatch/,
+    );
+    expect(r.status).toBe("kyc_passed");
+  });
+});
+
 describe("toPersistedIdentity — reductor único de PII (AC-1, CD-2)", () => {
   const full: VerifiedIdentity = {
     firstName: "María Elena",

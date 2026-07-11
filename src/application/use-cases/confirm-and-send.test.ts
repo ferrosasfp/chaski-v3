@@ -8,6 +8,7 @@ import {
   FixedClock,
   InMemoryRepo,
   QUOTE_EXPIRES,
+  ScriptedClock,
   T0,
   beneficiary,
 } from "../../test-support/fakes";
@@ -114,5 +115,69 @@ describe("ConfirmAndSend — enforcement autoridad server-side (WKH-180)", () =>
     });
 
     expect(out.status).toBe("settled");
+  });
+});
+
+describe("ConfirmAndSend — expiry re-check M2 + payload M3 (AC-5/AC-6)", () => {
+  it("AC-5: quote vence ENTRE confirm y submit (ScriptedClock) → payout_failed, sin firma ni submit", async () => {
+    const repo = new InMemoryRepo();
+    const wallet = new FakeWallet();
+    const payouts = new FakePayoutGateway();
+    const authorizeSpy = vi.spyOn(wallet, "authorizePrincipal");
+    const submitSpy = vi.spyOn(payouts, "submit");
+    const authority = new FakePayoutAuthorityGateway({ authorized: true }); // autoridad OK: aísla el guard de expiry
+    const id = await seedQuoted(repo);
+
+    // 1ª llamada (confirm) = T0 válido; 2ª (re-check) = 18:11 > QUOTE_EXPIRES (18:10).
+    const clock = new ScriptedClock([T0, "2026-07-09T18:11:00.000Z"]);
+    const out = await new ConfirmAndSend(wallet, payouts, repo, clock, authority).execute({
+      remittanceId: id,
+    });
+
+    expect(out.status).toBe("payout_failed");
+    expect(out.snapshot.failureReason).toBe("quote_expired_before_submit");
+    expect(authorizeSpy).not.toHaveBeenCalled();
+    expect(submitSpy).not.toHaveBeenCalled();
+  });
+
+  it("MNR-A: válido en el 1er check pero vence DURANTE la firma → payout_failed, firma SÍ ocurre, submit NO", async () => {
+    const repo = new InMemoryRepo();
+    const wallet = new FakeWallet();
+    const payouts = new FakePayoutGateway();
+    const authorizeSpy = vi.spyOn(wallet, "authorizePrincipal");
+    const submitSpy = vi.spyOn(payouts, "submit");
+    const authority = new FakePayoutAuthorityGateway({ authorized: true }); // aísla el 2º guard de expiry
+    const id = await seedQuoted(repo);
+
+    // Reloj: confirm=T0, 1er re-check=T0 (válido, pasa la firma), markPrincipalIn=T0,
+    // 2º re-check (nowBeforeSubmit) = 18:11 > QUOTE_EXPIRES (18:10) → venció DURANTE la firma.
+    const clock = new ScriptedClock([T0, T0, T0, "2026-07-09T18:11:00.000Z"]);
+    const out = await new ConfirmAndSend(wallet, payouts, repo, clock, authority).execute({
+      remittanceId: id,
+    });
+
+    expect(out.status).toBe("payout_failed");
+    expect(out.snapshot.failureReason).toBe("quote_expired_before_submit");
+    expect(authorizeSpy).toHaveBeenCalledTimes(1); // la firma SÍ ocurrió (ventana larga)
+    expect(submitSpy).not.toHaveBeenCalled(); // pero NO se submitea sobre un quote muerto
+    expect(out.snapshot.principalTx).toBe("0xprincipal"); // principal ya adentro → refund path
+  });
+
+  it("AC-6: happy path → submit recibe expectedReceivePen == quote.receive (Money PEN lockeado)", async () => {
+    const repo = new InMemoryRepo();
+    const wallet = new FakeWallet();
+    const payouts = new FakePayoutGateway();
+    const submitSpy = vi.spyOn(payouts, "submit");
+    const authority = new FakePayoutAuthorityGateway({ authorized: true });
+    const id = await seedQuoted(repo);
+
+    await new ConfirmAndSend(wallet, payouts, repo, new FixedClock(), authority).execute({
+      remittanceId: id,
+    });
+
+    expect(submitSpy).toHaveBeenCalledTimes(1);
+    const arg = submitSpy.mock.calls[0]?.[0];
+    expect(arg?.expectedReceivePen).toEqual(Money.of(1480, "PEN"));
+    expect(arg?.amountUsd).toBe(400); // amountUsd preservado (no reemplazado)
   });
 });

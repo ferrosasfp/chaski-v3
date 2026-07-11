@@ -63,6 +63,7 @@ export interface KycPendingStore {
 export interface PayoutSubmit {
   quoteId: string;
   amountUsd: number;
+  expectedReceivePen: Money; // PEN lockeado que el usuario confirmó (M3/AC-6); NO reemplaza amountUsd
   beneficiary: Beneficiary;
   kycVerificationId: string;
   idempotencyKey: string;

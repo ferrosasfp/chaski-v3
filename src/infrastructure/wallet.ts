@@ -1,9 +1,9 @@
 // Infrastructure — WalletPort. InjectedWallet (REAL, abre MetaMask via viem) + FallbackWallet (demo).
 // pickWallet() usa la real si hay wallet inyectada, si no la simulada (para que el demo corra igual).
-import { createWalletClient, custom } from "viem";
-import { avalanche } from "viem/chains";
+import { createWalletClient, custom, isAddress, toHex } from "viem";
 import type { WalletPort } from "../application/ports";
 import type { Quote } from "../domain/remittance";
+import { resolveChain, resolveChainId } from "./chain";
 
 // biome-ignore lint/suspicious/noExplicitAny: provider EIP-1193 inyectado (window.ethereum)
 function injectedProvider(): any {
@@ -18,9 +18,19 @@ export class InjectedWallet implements WalletPort {
   async connect(): Promise<string> {
     const eth = injectedProvider();
     if (!eth) throw new Error("no_wallet");
-    const client = createWalletClient({ chain: avalanche, transport: custom(eth) });
+    const client = createWalletClient({ chain: resolveChain(), transport: custom(eth) });
     const [addr] = await client.requestAddresses(); // eth_requestAccounts → abre la wallet
     if (!addr) throw new Error("no_account");
+    if (!isAddress(addr)) throw new Error("invalid_address"); // AC-9: address EVM bien formada
+    // AC-8: chainId de la sesión debe coincidir con el configurado; switch SUAVE si difiere.
+    const chainId = await client.getChainId();
+    if (chainId !== resolveChainId()) {
+      try {
+        await client.switchChain({ id: resolveChainId() });
+      } catch {
+        throw new Error("wrong_chain");
+      }
+    }
     this.address = addr;
     return addr;
   }
@@ -32,7 +42,8 @@ export class InjectedWallet implements WalletPort {
   async authorizePrincipal(quote: Quote): Promise<{ tx: string }> {
     const eth = injectedProvider();
     if (!eth || !this.address) throw new Error("wallet_not_connected");
-    const client = createWalletClient({ chain: avalanche, transport: custom(eth) });
+    if (!isAddress(this.address)) throw new Error("invalid_address"); // AC-9: antes de firmar
+    const client = createWalletClient({ chain: resolveChain(), transport: custom(eth) });
     // DEMO: firma un MENSAJE (prompt real de la wallet). En producción: EIP-3009 signTypedData del
     // transferWithAuthorization → el principal viaja gasless al partner via el facilitator.
     const sig = await client.signMessage({
@@ -80,7 +91,7 @@ export class WalletConnectWallet implements WalletPort {
     const { EthereumProvider } = await import("@walletconnect/ethereum-provider");
     const p = await EthereumProvider.init({
       projectId: this.projectId,
-      chains: [43114], // Avalanche
+      chains: [resolveChainId()], // Avalanche (AC-7/CD-5: única fuente env-driven)
       showQrModal: true, // QR en desktop, deep-link a la wallet en móvil
       qrModalOptions: { themeMode: "light" }, // evita el modal negro-sobre-negro
       metadata: {
@@ -99,6 +110,20 @@ export class WalletConnectWallet implements WalletPort {
     await provider.connect(); // abre el modal WC / deep-link a la wallet del cel
     const addr = provider.accounts?.[0];
     if (!addr) throw new Error("no_account");
+    if (!isAddress(addr)) throw new Error("invalid_address"); // AC-9: address EVM bien formada
+    // AC-8: chainId de la sesión debe coincidir; switch SUAVE (wallet_switchEthereumChain) si difiere.
+    const hex = (await provider.request({ method: "eth_chainId" })) as string;
+    const chainId = Number.parseInt(hex, 16);
+    if (chainId !== resolveChainId()) {
+      try {
+        await provider.request({
+          method: "wallet_switchEthereumChain",
+          params: [{ chainId: toHex(resolveChainId()) }], // CD-9: toHex de viem, no literal a mano
+        });
+      } catch {
+        throw new Error("wrong_chain");
+      }
+    }
     this.address = addr as `0x${string}`;
     return this.address;
   }
@@ -110,7 +135,8 @@ export class WalletConnectWallet implements WalletPort {
   async authorizePrincipal(quote: Quote): Promise<{ tx: string }> {
     const provider = await this.ensureProvider();
     if (!this.address) throw new Error("wallet_not_connected");
-    const client = createWalletClient({ chain: avalanche, transport: custom(provider) });
+    if (!isAddress(this.address)) throw new Error("invalid_address"); // AC-9: antes de firmar
+    const client = createWalletClient({ chain: resolveChain(), transport: custom(provider) });
     const sig = await client.signMessage({
       account: this.address,
       message: `Chaski · autorizo enviar ${quote.send.format()} (remesa ${quote.quoteId})`,

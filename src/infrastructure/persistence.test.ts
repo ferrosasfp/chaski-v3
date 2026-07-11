@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { ConcurrentModificationError } from "../application/errors";
 import { Money } from "../domain/money";
 import { Remittance } from "../domain/remittance";
 import { beneficiary } from "../test-support/fakes";
@@ -73,6 +74,55 @@ describe("LocalRepo.list — scope por wallet (AC-5/7, CD-5)", () => {
   });
 });
 
+describe("LocalRepo.save — CAS / lock optimista (AC-3/AC-4, CD-4)", () => {
+  it("AC-3/AC-4: carrera — dos get() (version V), un save() avanza, el save() stale tira ConcurrentModificationError", async () => {
+    const repo = new LocalRepo();
+    await repo.save(withOwner("race-1", "0xAAA")); // persistido version 1
+
+    // Dos lecturas del MISMO id → ambas rehidratan con version 1 (read-stale de la carrera).
+    const r1 = await repo.get("race-1");
+    const r2 = await repo.get("race-1");
+    if (!r1 || !r2) throw new Error("setup");
+    expect(r1.snapshot.version).toBe(1);
+    expect(r2.snapshot.version).toBe(1);
+
+    // r1 procede: persiste version 2. r2 sigue stale (version 1) → fail-loud.
+    await repo.save(r1);
+    await expect(repo.save(r2)).rejects.toBeInstanceOf(ConcurrentModificationError);
+
+    // El estado persistido es el del ganador (r1), NO pisado por r2.
+    const persisted = await repo.get("race-1");
+    expect(persisted?.snapshot.version).toBe(2);
+  });
+
+  it("AC-3: secuencial (get→save×N) NO genera falso conflicto", async () => {
+    const repo = new LocalRepo();
+    await repo.save(withOwner("seq-1", "0xAAA"));
+    for (let i = 0; i < 3; i++) {
+      const r = await repo.get("seq-1");
+      if (!r) throw new Error("setup");
+      await repo.save(r); // cada get() lee la última version → sin conflicto
+    }
+    expect((await repo.get("seq-1"))?.snapshot.version).toBe(4);
+  });
+
+  it("AC-4: 2 confirm concurrentes sobre la misma instancia rehidratada → 1 procede, 1 tira", async () => {
+    const repo = new LocalRepo();
+    await repo.save(withOwner("cc-1", "0xAAA")); // version 1
+    // Simula dos ejecuciones que leyeron la MISMA version antes de confirmar.
+    const a = await repo.get("cc-1");
+    const b = await repo.get("cc-1");
+    if (!a || !b) throw new Error("setup");
+    const results = await Promise.allSettled([repo.save(a), repo.save(b)]);
+    const ok = results.filter((r) => r.status === "fulfilled").length;
+    const failed = results.filter(
+      (r) => r.status === "rejected" && r.reason instanceof ConcurrentModificationError,
+    ).length;
+    expect(ok).toBe(1);
+    expect(failed).toBe(1);
+  });
+});
+
 describe("LocalRepo.read — defensivo AC-4 (snapshot legacy con PII cruda)", () => {
   // Snapshot escrito ANTES del fix: identity FULL (documentNumber crudo + dateOfBirth + nationality),
   // SIN ownerAddress. El read no debe crashear y debe normalizar al shape reducido.
@@ -129,6 +179,16 @@ describe("LocalRepo.read — defensivo AC-4 (snapshot legacy con PII cruda)", ()
     const repo = new LocalRepo();
     expect((await repo.get("leg-1"))?.snapshot.ownerAddress).toBeNull();
     expect(await repo.list("0xAAA")).toEqual([]);
+  });
+
+  it("AC-4: legacy sin `version` → normaliza a 0 sin crashear (y el próximo save avanza a 1)", async () => {
+    storage.setItem(KEY, JSON.stringify(legacy)); // fixture legacy no trae `version`
+    const repo = new LocalRepo();
+    const r = await repo.get("leg-1");
+    expect(r).not.toBeNull();
+    expect(r?.snapshot.version).toBe(0);
+    if (r) await repo.save(r); // save sobre version 0 → sin falso conflicto
+    expect((await repo.get("leg-1"))?.snapshot.version).toBe(1);
   });
 
   it("raw corrupto no crashea (parse defensivo → mapa vacío)", async () => {

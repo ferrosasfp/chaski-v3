@@ -8,6 +8,7 @@
 | WKH-181 | [P1] No persistir PII cruda + historial por-wallet + riskLevel AML | DONE (2026-07-11) | `doc/sdd/004-wkh-181-pii-persistence-history-per-wallet/done-report.md` |
 | WKH-182 | [P2 money-path robustez] Validación de dominio del quote, lock optimista, chain configurable y monto lockeado al payout | DONE (2026-07-11) | `doc/sdd/005-wkh-182-money-path-robustez/done-report.md` |
 | WKH-183 | [P3 higiene] pending-store huérfano, copy de errores, FX/Money, drift env | DONE (2026-07-11) | `doc/sdd/006-wkh-183-higiene-menores/done-report.md` |
+| WKH-184 | [Residual AC-8 WKH-181] Reset explícito de KYC-once + señal soft de FallbackWallet (Opción D) | in progress (F1, 2026-07-11) | `doc/sdd/007-wkh-184-fallback-wallet-reset-demo-signal/work-item.md` |
 
 ## Notas de coordinación
 - WKH-178 y WKH-179 corren en paralelo, ambas del mismo repo (`chaski-v2`) y de la misma auditoría
@@ -68,3 +69,16 @@
   `flow.tsx`'s `humanError()` que consume los códigos que `wallet.ts` ya lanza hoy). Ver
   `doc/sdd/006-wkh-183-higiene-menores/work-item.md` para el detalle completo (grounding, ACs,
   DT-N, CD-N).
+- WKH-184 (F1, `007`, 2026-07-11) cierra formalmente el residual AC-8 diferido de WKH-181 (ver
+  `doc/sdd/004-wkh-181-pii-persistence-history-per-wallet/done-report.md` §"El Residual Diferido").
+  El founder tomó la decisión de producto explícitamente: **Opción D** (reset manual + señal soft de
+  `FallbackWallet`, sin pseudo-address por instalación y sin hard-require de wallet real) — descarta
+  la alternativa DT-2 que WKH-181 había dejado abierta. Trabaja sobre el estado ya mergeado de
+  WKH-178 a WKH-183 (todas en `main`). Toca `src/application/ports.ts` (nuevo método `KycStore.clear`),
+  `src/infrastructure/kyc-store.ts`, un use-case nuevo (`ForgetKyc` o equivalente),
+  `src/composition/container.ts`, `src/infrastructure/wallet.ts` (constante exportada de la address
+  demo), `src/presentation/flow-vm.ts` (helper `isFallbackWalletAddress`) y `src/presentation/flow.tsx`
+  (control de reset + extensión del banner "Modo demo"). Sin HU activa en paralelo hoy que toque los
+  mismos archivos — autocontenida, sin coordinación de merge pendiente. Ver
+  `doc/sdd/007-wkh-184-fallback-wallet-reset-demo-signal/work-item.md` para el detalle completo
+  (grounding, ACs EARS, DT-N, CD-N, waves sugeridas).

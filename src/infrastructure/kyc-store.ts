@@ -104,4 +104,21 @@ export class LocalKycStore implements KycStore {
     }
     s.setItem(KEY, JSON.stringify(all));
   }
+
+  // Reset explícito (WKH-184): olvida SOLO la entry de esta address (CD-3, scopeado + case-insensitive),
+  // NUNCA el mapa completo ni otras entries. Best-effort: si el storage falla no lanza (AC-5/CD-5).
+  async clear(address: string): Promise<void> {
+    const all = this.read(); // mapa saneado (mismo que save)
+    delete all[address.toLowerCase()]; // SOLO la key pedida (CD-3, case-insensitive)
+    const s = ls();
+    if (!s) {
+      this.mem = all;
+      return;
+    }
+    try {
+      s.setItem(KEY, JSON.stringify(all));
+    } catch {
+      /* quota / private-browsing: best-effort — no throw (AC-5/CD-5) */
+    }
+  }
 }

@@ -1,9 +1,16 @@
 import type { Money } from "../domain/money";
 import type { RemittanceState } from "../domain/remittance";
+import { FALLBACK_WALLET_ADDRESS } from "../infrastructure/wallet";
 
 /** "Modo demo" ⇔ algún dato del flujo vino del fallback local (no Didit / no partner real). */
 export function isDemoMode(rem: RemittanceState): boolean {
   return rem.quote?.provenance === "local-fallback" || rem.kyc?.provenance === "local-fallback";
+}
+
+/** true si la wallet conectada es la FallbackWallet demo (sin aislamiento real por wallet). WKH-184.
+ *  Case-insensitive: el address del estado viene crudo mixed-case desde connect() (CD-9). */
+export function isFallbackWalletAddress(address: string | null): boolean {
+  return !!address && address.toLowerCase() === FALLBACK_WALLET_ADDRESS.toLowerCase();
 }
 
 /** Monto a MOSTRAR como entregado: el real; si no llegó, el cotizado; si tampoco, null → UI muestra "—". */

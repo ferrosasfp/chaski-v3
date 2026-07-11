@@ -144,6 +144,41 @@ describe("LocalKycStore — scrub comprensivo de PII legacy (MNR-1)", () => {
   });
 });
 
+describe("LocalKycStore — clear scopeado (WKH-184 AC-2/CD-3)", () => {
+  it("clear borra SOLO la address pedida, no afecta otras", async () => {
+    const store = new LocalKycStore();
+    await store.save("0xAAA", kyc);
+    await store.save("0xBBB", kyc);
+
+    await store.clear("0xAAA");
+
+    expect(await store.get("0xAAA")).toBeNull();
+    expect((await store.get("0xBBB"))?.verificationId).toBe("v-1");
+  });
+
+  it("clear es case-insensitive (clear('0xaaa') borra la entry de '0xAAA')", async () => {
+    const store = new LocalKycStore();
+    await store.save("0xAAA", kyc);
+
+    await store.clear("0xaaa");
+
+    expect(await store.get("0xAAA")).toBeNull();
+  });
+
+  it("AC-5: clear NO propaga la excepción si setItem lanza (quota/private-browsing)", async () => {
+    // MemStorage cuyo setItem tira SIEMPRE (simula storage lleno).
+    const throwing = new (class extends MemStorage {
+      override setItem(): void {
+        throw new Error("QuotaExceededError");
+      }
+    })();
+    (globalThis as { window?: { localStorage: Storage } }).window = { localStorage: throwing };
+    const store = new LocalKycStore();
+
+    await expect(store.clear("0xAAA")).resolves.toBeUndefined();
+  });
+});
+
 describe("LocalKycStore — read defensivo AC-4", () => {
   it("entry legacy bare (KycVerification sin savedAt) → get null (non-crashing)", async () => {
     // shape viejo: address → KycVerification plano, sin wrapper.

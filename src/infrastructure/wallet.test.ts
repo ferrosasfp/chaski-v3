@@ -2,7 +2,13 @@ import { getAddress } from "viem";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Money } from "../domain/money";
 import type { Quote } from "../domain/remittance";
-import { InjectedWallet, WalletConnectWallet } from "./wallet";
+import {
+  FALLBACK_WALLET_ADDRESS,
+  FallbackWallet,
+  InjectedWallet,
+  pickWallet,
+  WalletConnectWallet,
+} from "./wallet";
 
 // MNR-B: mock del lazy-import de @walletconnect/ethereum-provider. El WalletConnectWallet hace
 // `await import("@walletconnect/ethereum-provider")` dentro de ensureProvider() → interceptamos el
@@ -89,6 +95,20 @@ afterEach(() => {
   delete (globalThis as { window?: unknown }).window;
   delete process.env.NEXT_PUBLIC_CHAIN_ID;
   wc.provider = null;
+});
+
+describe("FallbackWallet — connect (WKH-184 AC-8/AC-9)", () => {
+  it("AC-8/AC-9: connect() retorna la constante única FALLBACK_WALLET_ADDRESS", async () => {
+    const addr = await new FallbackWallet().connect();
+    expect(addr).toBe(FALLBACK_WALLET_ADDRESS);
+  });
+});
+
+describe("pickWallet — sin wallet real (WKH-184 AC-8, CD-2)", () => {
+  it("sin provider inyectado y sin window (SSR/test) → FallbackWallet (flujo completa sin wallet real)", () => {
+    // Entorno node de vitest: sin window ni provider inyectado → cae al demo, sin gating nuevo.
+    expect(pickWallet()).toBeInstanceOf(FallbackWallet);
+  });
 });
 
 describe("InjectedWallet — chainId check + switch suave (AC-8)", () => {

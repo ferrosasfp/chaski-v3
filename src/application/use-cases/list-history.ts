@@ -5,7 +5,7 @@ import type { RemittanceRepository } from "../ports";
 export class ListHistory {
   constructor(private readonly repo: RemittanceRepository) {}
 
-  execute(): Promise<RemittanceState[]> {
-    return this.repo.list();
+  execute(address: string): Promise<RemittanceState[]> {
+    return this.repo.list(address);
   }
 }

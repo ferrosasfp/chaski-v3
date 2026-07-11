@@ -1,10 +1,51 @@
 // Infrastructure — RemittanceRepository. localStorage en el browser (fixea el gap del demo:
 // SIN persistencia/historial), in-memory en SSR. Serializa Money como { __m:[minor,currency] }.
 import { Money } from "../domain/money";
-import { Remittance, type RemittanceState } from "../domain/remittance";
+import {
+  type PersistedIdentity,
+  Remittance,
+  type RemittanceState,
+  toPersistedIdentity,
+} from "../domain/remittance";
 import type { RemittanceRepository } from "../application/ports";
 
 const KEY = "chaski.remittances.v1";
+
+// Read defensivo (AC-4): un snapshot legacy puede traer identity FULL (documentNumber crudo,
+// dateOfBirth, nationality) o carecer de ownerAddress. Normaliza al shape reducido SIN crashear;
+// el próximo save() persiste ya saneado. La reducción de PII pasa por el helper único (CD-2).
+function str(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
+function normalizeIdentity(raw: unknown): PersistedIdentity | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  // ya reducida (persistida post-fix)
+  if (typeof o.documentNumberLast4 === "string") {
+    return {
+      firstName: str(o.firstName),
+      lastNamePaternal: str(o.lastNamePaternal),
+      lastNameMaternal: str(o.lastNameMaternal),
+      documentType: str(o.documentType),
+      documentNumberLast4: o.documentNumberLast4,
+    };
+  }
+  // legacy FULL → reducir con el helper único
+  return toPersistedIdentity({
+    firstName: str(o.firstName),
+    lastNamePaternal: str(o.lastNamePaternal),
+    lastNameMaternal: str(o.lastNameMaternal),
+    documentType: str(o.documentType),
+    documentNumber: str(o.documentNumber),
+    dateOfBirth: str(o.dateOfBirth),
+    nationality: str(o.nationality),
+  });
+}
+function normalizeState(s: RemittanceState): RemittanceState {
+  const kyc = s.kyc ? { ...s.kyc, identity: normalizeIdentity(s.kyc.identity) } : null;
+  const ownerAddress = typeof s.ownerAddress === "string" ? s.ownerAddress : null;
+  return { ...s, kyc, ownerAddress };
+}
 
 function replacer(_k: string, v: unknown): unknown {
   return v instanceof Money ? { __m: [v.minor, v.currency] } : v;
@@ -32,7 +73,7 @@ export class LocalRepo implements RemittanceRepository {
     if (!raw) return new Map();
     try {
       const arr = JSON.parse(raw, reviver) as RemittanceState[];
-      return new Map(arr.map((s) => [s.id, s]));
+      return new Map(arr.map((s) => [s.id, normalizeState(s)]));
     } catch {
       return new Map();
     }
@@ -58,7 +99,12 @@ export class LocalRepo implements RemittanceRepository {
     return s ? Remittance.rehydrate(s) : null;
   }
 
-  async list(): Promise<RemittanceState[]> {
-    return [...this.read().values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  async list(address: string): Promise<RemittanceState[]> {
+    // Scope por wallet (AC-5/7): SOLO entries cuyo ownerAddress matchea (case-insensitive, CD-5);
+    // owner null (remesa abandonada sin verificar) → EXCLUIDO.
+    const target = address.toLowerCase();
+    return [...this.read().values()]
+      .filter((s) => s.ownerAddress != null && s.ownerAddress.toLowerCase() === target)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 }

@@ -79,6 +79,31 @@ describe("mapDiditDecision — Didit decision → modelo Chaski", () => {
   });
 });
 
+describe("resolveRiskLevel (vía mapDiditDecision) — señal AML defensiva (AC-9/10/11, CD-3)", () => {
+  it("AC-9: risk_level fino reconocido ('medium') se PRESERVA en vez de colapsar a binario", () => {
+    const r = mapDiditDecision({ status: "Approved", session_id: "s", risk_level: "medium" });
+    expect(r.riskLevel).toBe("medium");
+  });
+
+  it("AC-9: 'high' explícito en un Approved gana sobre el 'low' binario", () => {
+    const r = mapDiditDecision({ status: "Approved", session_id: "s", risk_level: "high" });
+    expect(r.riskLevel).toBe("high");
+  });
+
+  it("AC-10: sin campo risk_level → fallback binario (Approved→low, Declined→high), sin regresión", () => {
+    expect(mapDiditDecision({ status: "Approved", session_id: "s" }).riskLevel).toBe("low");
+    expect(mapDiditDecision({ status: "Declined", session_id: "s" }).riskLevel).toBe("high");
+  });
+
+  it("AC-11: valor no reconocido ('extreme') → fallback binario, NUNCA un 4to valor (CD-3)", () => {
+    const approved = mapDiditDecision({ status: "Approved", session_id: "s", risk_level: "extreme" });
+    expect(approved.riskLevel).toBe("low"); // cae al binario, no propaga "extreme"
+    const declined = mapDiditDecision({ status: "Declined", session_id: "s", risk_level: "extreme" });
+    expect(declined.riskLevel).toBe("high");
+    expect(["low", "medium", "high"]).toContain(approved.riskLevel);
+  });
+});
+
 const fullIdentity: VerifiedIdentity = {
   firstName: "María Elena",
   lastNamePaternal: "Quispe",

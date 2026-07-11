@@ -1,7 +1,16 @@
 import { describe, it, expect } from "vitest";
 import { Money } from "./money";
-import { canTransition, type KycVerification, type Quote, Remittance } from "./remittance";
+import {
+  canTransition,
+  type KycVerification,
+  type Quote,
+  Remittance,
+  toPersistedIdentity,
+  type VerifiedIdentity,
+} from "./remittance";
 import { beneficiary, QUOTE_EXPIRES, T0 } from "../test-support/fakes";
+
+const OWNER = "0xSender";
 
 const passKyc: KycVerification = {
   verificationId: "v",
@@ -24,7 +33,7 @@ const quote = (send = 400): Quote => ({
 
 function ready(): Remittance {
   const r = Remittance.create("r", beneficiary(), Money.of(400, "USDC"), T0);
-  r.startKyc(T0);
+  r.startKyc(T0, OWNER);
   r.applyKyc(passKyc, T0);
   return r; // kyc_passed
 }
@@ -46,7 +55,7 @@ describe("Remittance — máquina de estados", () => {
 
   it("KYC no pasa → kyc_failed terminal", () => {
     const r = Remittance.create("r", beneficiary(), Money.of(400, "USDC"), T0);
-    r.startKyc(T0);
+    r.startKyc(T0, OWNER);
     r.applyKyc({ ...passKyc, approved: false, payoutAllowed: false }, T0);
     expect(r.status).toBe("kyc_failed");
     expect(r.isTerminal).toBe(true);
@@ -80,5 +89,55 @@ describe("Remittance — máquina de estados", () => {
     expect(canTransition("created", "kyc_pending")).toBe(true);
     expect(canTransition("created", "settled")).toBe(false);
     expect(canTransition("payout_failed", "refunded")).toBe(true);
+  });
+
+  it("startKyc setea ownerAddress en el estado (AC-6)", () => {
+    const r = Remittance.create("r", beneficiary(), Money.of(400, "USDC"), T0);
+    expect(r.snapshot.ownerAddress).toBeNull();
+    r.startKyc(T0, OWNER);
+    expect(r.snapshot.ownerAddress).toBe(OWNER);
+  });
+
+  it("create inicializa ownerAddress en null (remesa abandonada sin owner)", () => {
+    const r = Remittance.create("r", beneficiary(), Money.of(400, "USDC"), T0);
+    expect(r.snapshot.ownerAddress).toBeNull();
+  });
+});
+
+describe("toPersistedIdentity — reductor único de PII (AC-1, CD-2)", () => {
+  const full: VerifiedIdentity = {
+    firstName: "María Elena",
+    lastNamePaternal: "Quispe",
+    lastNameMaternal: "Mamani",
+    documentType: "DNI",
+    documentNumber: "44556677",
+    dateOfBirth: "1990-05-14",
+    nationality: "PE",
+  };
+
+  it("conserva nombres + documentType; documentNumber → últimos 4 (documentNumberLast4)", () => {
+    const p = toPersistedIdentity(full);
+    expect(p.firstName).toBe("María Elena");
+    expect(p.lastNamePaternal).toBe("Quispe");
+    expect(p.lastNameMaternal).toBe("Mamani");
+    expect(p.documentType).toBe("DNI");
+    expect(p.documentNumberLast4).toBe("6677");
+  });
+
+  it("DROPEA documentNumber completo / dateOfBirth / nationality (no aparecen en el shape reducido)", () => {
+    const p = toPersistedIdentity(full);
+    expect(Object.keys(p).sort()).toEqual(
+      ["documentNumberLast4", "documentType", "firstName", "lastNameMaternal", "lastNamePaternal"].sort(),
+    );
+    expect("documentNumber" in p).toBe(false);
+    expect("dateOfBirth" in p).toBe(false);
+    expect("nationality" in p).toBe(false);
+  });
+
+  it("edge documentNumber: '' → '' ; '12' → '12' (nunca más de 4)", () => {
+    expect(toPersistedIdentity({ ...full, documentNumber: "" }).documentNumberLast4).toBe("");
+    expect(toPersistedIdentity({ ...full, documentNumber: "12" }).documentNumberLast4).toBe("12");
+    expect(toPersistedIdentity({ ...full, documentNumber: "1234" }).documentNumberLast4).toBe("1234");
+    expect(toPersistedIdentity({ ...full, documentNumber: "12345" }).documentNumberLast4).toBe("2345");
   });
 });

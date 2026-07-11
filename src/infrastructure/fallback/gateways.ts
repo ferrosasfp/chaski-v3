@@ -3,7 +3,7 @@
 // Los adapters REALES (que llaman a los agentes remit-* vía las API routes) van en ./a2a (post-sandbox).
 
 import { Money } from "../../domain/money";
-import type { KycVerification, Quote } from "../../domain/remittance";
+import { type KycVerification, type Quote, toPersistedIdentity } from "../../domain/remittance";
 import type {
   KycDecision,
   KycGateway,
@@ -76,7 +76,7 @@ export class FallbackKycGateway implements KycGateway {
       payoutAllowed: true,
       riskLevel: amountUsd >= 1000 ? "medium" : "low",
       provenance: "local-fallback",
-      identity: {
+      identity: toPersistedIdentity({
         firstName: "María Elena",
         lastNamePaternal: "Quispe",
         lastNameMaternal: "Mamani",
@@ -84,7 +84,7 @@ export class FallbackKycGateway implements KycGateway {
         documentNumber: "44556677",
         dateOfBirth: "1990-05-14",
         nationality: "PE",
-      },
+      }),
     };
   }
 }

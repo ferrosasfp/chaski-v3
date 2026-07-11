@@ -6,6 +6,7 @@ import {
   type Quote,
   Remittance,
   type RemittanceState,
+  toPersistedIdentity,
 } from "../domain/remittance";
 import type {
   Clock,
@@ -57,8 +58,11 @@ export class InMemoryRepo implements RemittanceRepository {
     const s = this.store.get(id);
     return s ? Remittance.rehydrate(s) : null;
   }
-  async list(): Promise<RemittanceState[]> {
-    return [...this.store.values()];
+  async list(address: string): Promise<RemittanceState[]> {
+    const target = address.toLowerCase();
+    return [...this.store.values()].filter(
+      (s) => s.ownerAddress != null && s.ownerAddress.toLowerCase() === target,
+    );
   }
 }
 
@@ -93,7 +97,7 @@ export class FakeKycGateway implements KycGateway {
       payoutAllowed: true,
       riskLevel: "low",
       provenance: "fake",
-      identity: {
+      identity: toPersistedIdentity({
         firstName: "Test",
         lastNamePaternal: "Quispe",
         lastNameMaternal: "Mamani",
@@ -101,7 +105,7 @@ export class FakeKycGateway implements KycGateway {
         documentNumber: "12345678",
         dateOfBirth: "1990-01-01",
         nationality: "PE",
-      },
+      }),
       ...this.overrides,
     };
   }

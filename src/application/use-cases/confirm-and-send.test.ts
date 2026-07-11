@@ -35,7 +35,7 @@ const quote: Quote = {
 // Construye una remesa lista para confirm() (estado "quoted" con KYC pasado + quote válido).
 async function seedQuoted(repo: InMemoryRepo, kyc: KycVerification = passKyc): Promise<string> {
   const r = Remittance.create("r-1", beneficiary(), Money.of(400, "USDC"), T0);
-  r.startKyc(T0);
+  r.startKyc(T0, "0xSender");
   r.applyKyc(kyc, T0);
   r.attachQuote(quote, T0);
   await repo.save(r);

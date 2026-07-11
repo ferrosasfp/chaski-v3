@@ -8,6 +8,7 @@ import { PreviewQuote } from "./use-cases/preview-quote";
 import { ResumeKyc } from "./use-cases/resume-kyc";
 import { StartKyc } from "./use-cases/start-kyc";
 import { TrackRemittance } from "./use-cases/track-remittance";
+import { FallbackKycGateway } from "../infrastructure/fallback/gateways";
 import {
   beneficiary,
   FakeKycGateway,
@@ -168,5 +169,39 @@ describe("Use-cases — money-path", () => {
   it("resume sin KYC pendiente → none (carga normal de la app)", async () => {
     const { resumeKyc } = setup();
     expect((await resumeKyc.execute()).kind).toBe("none");
+  });
+
+  it("AC-6: tras startKyc, el snapshot persistido queda con ownerAddress == caller.address", async () => {
+    const { create, startKyc, repo } = setup();
+    const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
+    const id = r0.snapshot.id;
+    expect(r0.snapshot.ownerAddress).toBeNull(); // creada sin owner
+    await startKyc.execute({ remittanceId: id, address: "0xAAA" });
+    const saved = await repo.get(id);
+    expect(saved?.snapshot.ownerAddress).toBe("0xAAA");
+  });
+
+  it("AC-12: flujo fallback (sin sandbox Didit) queda verde con identity REDUCIDA presente", async () => {
+    const repo = new InMemoryRepo();
+    const clock = new FixedClock();
+    const ids = new SeqIds();
+    const create = new CreateRemittance(repo, clock, ids);
+    const startKyc = new StartKyc(
+      new FallbackKycGateway(),
+      new FakeKycStore(),
+      new FakeKycPendingStore(),
+      repo,
+      clock,
+    );
+    const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
+    const res = await startKyc.execute({ remittanceId: r0.snapshot.id, address: "0xAAA" });
+    expect(res.kind).toBe("done");
+    if (res.kind === "done") {
+      expect(res.snapshot.status).toBe("kyc_passed");
+      const idn = res.snapshot.kyc?.identity;
+      expect(idn?.firstName).toBe("María Elena"); // fixture demo preservado (AC-12)
+      expect(idn?.documentNumberLast4).toBe("6677"); // reducida
+      expect(idn && "documentNumber" in idn).toBe(false); // sin PII cruda
+    }
   });
 });

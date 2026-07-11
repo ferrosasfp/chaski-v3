@@ -109,7 +109,8 @@ export interface KycStore {
 export interface RemittanceRepository {
   save(r: Remittance): Promise<void>;
   get(id: string): Promise<Remittance | null>;
-  list(): Promise<RemittanceState[]>;
+  // list scopeada por wallet: SOLO entries cuyo ownerAddress matchea (case-insensitive). WKH-181.
+  list(address: string): Promise<RemittanceState[]>;
 }
 
 // ── Utilidades inyectables (nada de Date.now/Math.random en el dominio) ──────

@@ -23,7 +23,9 @@ export interface Quote {
   provenance: string;
 }
 
-/** Datos de identidad EXTRAÍDOS del documento por el verificador (Didit) — no se tipean. */
+/** Datos de identidad EXTRAÍDOS del documento por el verificador (Didit) — no se tipean.
+ * Tipo de FRONTERA Didit: contiene PII cruda. NUNCA entra al estado del cliente ni a
+ * localStorage — se reduce a PersistedIdentity vía toPersistedIdentity aguas arriba (CD-6). */
 export interface VerifiedIdentity {
   firstName: string; // nombre(s)
   lastNamePaternal: string; // apellido paterno
@@ -34,13 +36,37 @@ export interface VerifiedIdentity {
   nationality: string; // ISO country (ej. "PE")
 }
 
+/** Identidad REDUCIDA que se persiste (localStorage) y llega al Review. Sin PII cruda:
+ * nunca `documentNumber` completo / `dateOfBirth` / `nationality`. Es lo único que habla
+ * el estado del cliente, el KycStore y la UI (CD-6). */
+export interface PersistedIdentity {
+  firstName: string;
+  lastNamePaternal: string;
+  lastNameMaternal: string;
+  documentType: string;
+  documentNumberLast4: string; // últimos ≤4; nunca el número completo
+}
+
+/** Reductor ÚNICO de PII (CD-2). Los 3 productores de identity lo embudan (kyc-gateway,
+ * fallback/gateways, fakes). Puro, sin I/O — estilo maskIdentity (decision.ts). */
+export function toPersistedIdentity(id: VerifiedIdentity): PersistedIdentity {
+  const dn = id.documentNumber ?? "";
+  return {
+    firstName: id.firstName,
+    lastNamePaternal: id.lastNamePaternal,
+    lastNameMaternal: id.lastNameMaternal,
+    documentType: id.documentType,
+    documentNumberLast4: dn.slice(-4), // "44556677"→"6677"; ""→""; "12"→"12"
+  };
+}
+
 export interface KycVerification {
   verificationId: string;
   approved: boolean;
   payoutAllowed: boolean;
   riskLevel: "low" | "medium" | "high";
   provenance: string;
-  identity: VerifiedIdentity | null; // lo que Didit extrae del documento (no lo tipea el usuario)
+  identity: PersistedIdentity | null; // reducida (sin PII cruda) — lo que Didit extrae, ya reducido
 }
 
 export type RemittanceStatus =
@@ -89,6 +115,7 @@ export interface RemittanceState {
   refundTx: string | null;
   deliveredPen: Money | null;
   failureReason: string | null;
+  ownerAddress: string | null; // wallet dueña del estado (seteada al verificar identidad); scope del historial
   createdAt: string;
   updatedAt: string;
 }
@@ -112,6 +139,7 @@ export class Remittance {
       refundTx: null,
       deliveredPen: null,
       failureReason: null,
+      ownerAddress: null,
       createdAt: now,
       updatedAt: now,
     });
@@ -138,8 +166,8 @@ export class Remittance {
     this.state = { ...this.state, ...patch, status: next, updatedAt: now };
   }
 
-  startKyc(now: string): void {
-    this.to("kyc_pending", now);
+  startKyc(now: string, ownerAddress: string): void {
+    this.to("kyc_pending", now, { ownerAddress });
   }
 
   applyKyc(kyc: KycVerification, now: string): void {

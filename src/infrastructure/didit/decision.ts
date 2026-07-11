@@ -19,11 +19,21 @@ interface DiditRaw {
   session_id?: string;
   id_verifications?: Array<Record<string, unknown>>;
   vendor_data?: string; // lo que /api/kyc/session mandó (= senderAddress); Didit lo eco-a en /decision/ (WKH-180)
+  risk_level?: string; // TBD placeholder AML (WKH-22/Fase A); UN candidato documentado, no inventar más
 }
 
 // Estados finales de Didit (case-sensitive, según la doc de la API v3).
 const TERMINAL = new Set(["Approved", "Declined", "Abandoned", "Expired", "Kyc Expired"]);
 const s = (v: unknown): string => (typeof v === "string" ? v : "");
+
+// Mapeo defensivo del riesgo AML (WKH-181). Si el payload trae una señal fina reconocida
+// ("low"|"medium"|"high") se preserva (AC-9); si no, fallback binario approved?low:high (AC-10,
+// CD-3: sin 4to valor). Puro (AC-11).
+function resolveRiskLevel(raw: DiditRaw, approved: boolean): "low" | "medium" | "high" {
+  const c = raw?.risk_level; // UN candidato documentado; NO inventar múltiples nombres
+  if (c === "low" || c === "medium" || c === "high") return c;
+  return approved ? "low" : "high";
+}
 
 // NOTA: los paths exactos de los campos extraídos (first_name, last_name, el split paterno/materno)
 // dependen de la config del workflow en Didit → verificar contra el sandbox cuando llegue el API key.
@@ -48,7 +58,7 @@ export function mapDiditDecision(raw: DiditRaw): DiditDecisionResult {
     verificationId: s(raw?.session_id),
     approved,
     payoutAllowed: approved,
-    riskLevel: approved ? "low" : "high",
+    riskLevel: resolveRiskLevel(raw, approved),
     provenance: "didit",
     status,
     identity,

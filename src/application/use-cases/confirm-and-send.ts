@@ -48,11 +48,33 @@ export class ConfirmAndSend {
       return r; // NO se autoriza el principal, NO se submitea el payout
     }
 
+    // 2.5 Re-check de vigencia del quote (M2/AC-5, CD-2): la ventana confirm→firma es de minutos
+    //     (firma EIP-3009 real). Si el quote venció ENTRE confirm y submit → payout_failed SIN
+    //     authorizePrincipal ni submit (orden de guards: CAS → autoridad → expiry → firma → submit).
+    const nowRecheck = this.clock.nowIso();
+    if (!r.isQuoteStillValid(nowRecheck)) {
+      r.markPayoutFailed("quote_expired_before_submit", nowRecheck);
+      await this.repo.save(r);
+      return r;
+    }
+
     // 3. Autorizar el principal on-chain (el sender firma; el operador NO fondea).
     //    (paso renumerado tras insertar la autoridad server-side WKH-180 como paso 2)
     const { tx } = await this.wallet.authorizePrincipal(quote);
     r.markPrincipalIn(tx, this.clock.nowIso());
     await this.repo.save(r);
+
+    // 3.5 Segundo re-check de vigencia (MNR-A, cierra el residual de M2): la FIRMA es la ventana
+    //     LARGA (minutos con WalletConnect). Un quote válido en el check del paso 2.5 puede VENCER
+    //     durante authorizePrincipal y aun así llegar a submit(). Re-chequeamos AQUÍ, ya con el
+    //     principal adentro (principal_in → payout_failed es válido → dispara refund) SIN submitear
+    //     un payout sobre un quote muerto. CD-2 intacto: CAS → autoridad → expiry → firma → EXPIRY → submit.
+    const nowBeforeSubmit = this.clock.nowIso();
+    if (!r.isQuoteStillValid(nowBeforeSubmit)) {
+      r.markPayoutFailed("quote_expired_before_submit", nowBeforeSubmit);
+      await this.repo.save(r);
+      return r; // firma ya ocurrida, pero NO se submitea el payout
+    }
 
     // 4. Submit del payout (idempotente por remesa+quote).
     const idempotencyKey = `${s.id}:${quote.quoteId}`;
@@ -60,6 +82,7 @@ export class ConfirmAndSend {
       const rec = await this.payouts.submit({
         quoteId: quote.quoteId,
         amountUsd: s.sendUsd.major,
+        expectedReceivePen: quote.receive, // M3/AC-6: PEN lockeado que el usuario confirmó
         beneficiary: s.beneficiary,
         kycVerificationId: kyc.verificationId,
         idempotencyKey,

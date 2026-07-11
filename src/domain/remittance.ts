@@ -102,6 +102,22 @@ export function canTransition(from: RemittanceStatus, to: RemittanceStatus): boo
   return TRANSITIONS[from].includes(to);
 }
 
+// A5 (AC-1/AC-2): tolerancias de consistencia de `receive` vs (send − fee) × rate.
+const RECEIVE_TOL_ABS_PEN = 0.02; // 2 centavos — absorbe redondeo a 2 decimales de PEN
+const RECEIVE_TOL_REL = 0.01; // 1%
+
+/** Invariante money-path PURA (CD-3, sin I/O): `receive` debe ser consistente con el propio
+ * `send`/`feeUsd`/`rate` del quote. Espeja netUsd = max(0, send − fee) del gateway. Es un límite
+ * de sanidad defensivo (caza tampering grueso: receive inflado 2× / degradado a la mitad), NO una
+ * auditoría de precisión ni detecta un `rate` manipulado (otro vector, fuera de scope). */
+function assertReceiveConsistent(quote: Quote): void {
+  const expected = Math.max(0, quote.send.major - quote.feeUsd.major) * quote.rate;
+  const allowedDelta = Math.max(RECEIVE_TOL_ABS_PEN, expected * RECEIVE_TOL_REL);
+  if (Math.abs(quote.receive.major - expected) > allowedDelta) {
+    throw new Error("quote_receive_mismatch");
+  }
+}
+
 export interface RemittanceState {
   id: string;
   status: RemittanceStatus;
@@ -118,6 +134,7 @@ export interface RemittanceState {
   ownerAddress: string | null; // wallet dueña del estado (seteada al verificar identidad); scope del historial
   createdAt: string;
   updatedAt: string;
+  version: number; // token de concurrencia (CAS/AC-3/4). Bumpeado por el repo al escribir, NO por la FSM.
 }
 
 export class Remittance {
@@ -142,6 +159,7 @@ export class Remittance {
       ownerAddress: null,
       createdAt: now,
       updatedAt: now,
+      version: 0,
     });
   }
 
@@ -182,6 +200,7 @@ export class Remittance {
     // Invariante money-path: el quote debe cotizar EXACTAMENTE el monto a enviar.
     if (quote.send.minor !== this.state.sendUsd.minor) throw new Error("quote_amount_mismatch");
     if (this.isQuoteExpired(quote, now)) throw new Error("quote_expired");
+    assertReceiveConsistent(quote); // A5 (AC-1/AC-2): receive ≈ (send − fee) × rate, antes de transicionar
     this.to("quoted", now, { quote });
   }
 
@@ -209,6 +228,19 @@ export class Remittance {
   }
   markRefunded(refundTx: string, now: string): void {
     this.to("refunded", now, { refundTx });
+  }
+
+  /** Re-sincroniza la versión de la instancia tras un save() (repo → agregado). Necesario porque
+   * ConfirmAndSend hace hasta 4 save() sobre la MISMA instancia: sin esto el 2º save() chocaría
+   * consigo mismo. Acople controlado repo→agregado, análogo a un ORM que devuelve la versión tras flush. */
+  markSaved(v: number): void {
+    this.state = { ...this.state, version: v };
+  }
+
+  /** Re-check público de vigencia del quote (M2/AC-5). Reusa el guard privado; el dominio sigue
+   * puro con `now` inyectado (sin Date.now()). */
+  isQuoteStillValid(now: string): boolean {
+    return this.state.quote != null && !this.isQuoteExpired(this.state.quote, now);
   }
 
   private isQuoteExpired(quote: Quote, nowIso: string): boolean {

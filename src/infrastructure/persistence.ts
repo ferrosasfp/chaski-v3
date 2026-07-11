@@ -7,6 +7,7 @@ import {
   type RemittanceState,
   toPersistedIdentity,
 } from "../domain/remittance";
+import { ConcurrentModificationError } from "../application/errors";
 import type { RemittanceRepository } from "../application/ports";
 
 const KEY = "chaski.remittances.v1";
@@ -44,7 +45,9 @@ function normalizeIdentity(raw: unknown): PersistedIdentity | null {
 function normalizeState(s: RemittanceState): RemittanceState {
   const kyc = s.kyc ? { ...s.kyc, identity: normalizeIdentity(s.kyc.identity) } : null;
   const ownerAddress = typeof s.ownerAddress === "string" ? s.ownerAddress : null;
-  return { ...s, kyc, ownerAddress };
+  // Snapshot legacy sin version (pre-WKH-182) → default 0 (CAS/AC-3/4).
+  const version = typeof s.version === "number" ? s.version : 0;
+  return { ...s, kyc, ownerAddress, version };
 }
 
 function replacer(_k: string, v: unknown): unknown {
@@ -89,9 +92,18 @@ export class LocalRepo implements RemittanceRepository {
   }
 
   async save(r: Remittance): Promise<void> {
+    // CAS / lock optimista (AC-3/AC-4, CD-4): si el persistido cambió desde la lectura base
+    // (version distinta), fail-loud — NO pisar el estado ajeno. El token viaja en el snapshot,
+    // por eso la firma de save() NO cambia (los otros use-cases obtienen CAS transparente).
     const map = this.read();
-    map.set(r.snapshot.id, r.snapshot);
+    const existing = map.get(r.snapshot.id);
+    if (existing && existing.version !== r.snapshot.version) {
+      throw new ConcurrentModificationError(r.snapshot.id, r.snapshot.version, existing.version);
+    }
+    const next = r.snapshot.version + 1;
+    map.set(r.snapshot.id, { ...r.snapshot, version: next });
     this.write(map);
+    r.markSaved(next); // sincroniza la instancia para el PRÓXIMO save() de la cadena
   }
 
   async get(id: string): Promise<Remittance | null> {

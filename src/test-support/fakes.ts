@@ -8,6 +8,7 @@ import {
   type RemittanceState,
   toPersistedIdentity,
 } from "../domain/remittance";
+import { ConcurrentModificationError } from "../application/errors";
 import type {
   Clock,
   IdGenerator,
@@ -42,6 +43,18 @@ export class FixedClock implements Clock {
   }
 }
 
+// Reloj con secuencia programada (AC-5): FixedClock devuelve el mismo `now` siempre → no puede
+// simular "válido en confirm, vencido en re-check". Clampa al último valor (CD-6: index → T|undefined).
+export class ScriptedClock implements Clock {
+  private i = 0;
+  constructor(private readonly seq: string[]) {}
+  nowIso(): string {
+    const v = this.seq[Math.min(this.i, this.seq.length - 1)];
+    this.i++;
+    return v ?? "";
+  }
+}
+
 export class SeqIds implements IdGenerator {
   private n = 0;
   newId(): string {
@@ -52,7 +65,14 @@ export class SeqIds implements IdGenerator {
 export class InMemoryRepo implements RemittanceRepository {
   private store = new Map<string, RemittanceState>();
   async save(r: Remittance): Promise<void> {
-    this.store.set(r.snapshot.id, r.snapshot);
+    // CAS gemelo del LocalRepo (AC-3/AC-4, CD-4). El Map ES el store → write es el set directo.
+    const existing = this.store.get(r.snapshot.id);
+    if (existing && existing.version !== r.snapshot.version) {
+      throw new ConcurrentModificationError(r.snapshot.id, r.snapshot.version, existing.version);
+    }
+    const next = r.snapshot.version + 1;
+    this.store.set(r.snapshot.id, { ...r.snapshot, version: next });
+    r.markSaved(next);
   }
   async get(id: string): Promise<Remittance | null> {
     const s = this.store.get(id);

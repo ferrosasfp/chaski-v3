@@ -11,12 +11,14 @@ export interface DiditDecisionResult {
   provenance: string; // "didit" → tag de verificación REAL (ver kyc-validator del backend)
   status: string;
   identity: VerifiedIdentity | null;
+  vendorData: string; // eco de vendor_data (= senderAddress) → base del ownership check (WKH-180); "" si ausente
 }
 
 interface DiditRaw {
   status?: string;
   session_id?: string;
   id_verifications?: Array<Record<string, unknown>>;
+  vendor_data?: string; // lo que /api/kyc/session mandó (= senderAddress); Didit lo eco-a en /decision/ (WKH-180)
 }
 
 // Estados finales de Didit (case-sensitive, según la doc de la API v3).
@@ -50,6 +52,7 @@ export function mapDiditDecision(raw: DiditRaw): DiditDecisionResult {
     provenance: "didit",
     status,
     identity,
+    vendorData: s(raw?.vendor_data),
   };
 }
 

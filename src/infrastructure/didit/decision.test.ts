@@ -57,6 +57,17 @@ describe("mapDiditDecision — Didit decision → modelo Chaski", () => {
     expect(r.provenance).toBe("didit");
   });
 
+  it("extrae vendorData (presente → valor; ausente → '') — base del ownership check (WKH-180)", () => {
+    const withVendor = mapDiditDecision({
+      status: "Approved",
+      session_id: "s6",
+      vendor_data: "0xSender",
+    });
+    expect(withVendor.vendorData).toBe("0xSender");
+    const withoutVendor = mapDiditDecision({ status: "Approved", session_id: "s7" });
+    expect(withoutVendor.vendorData).toBe("");
+  });
+
   it("tolera nombre de campo alternativo para el 2º apellido (last_name_2)", () => {
     const r = mapDiditDecision({
       status: "Approved",

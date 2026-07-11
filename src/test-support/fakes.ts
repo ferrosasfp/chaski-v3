@@ -17,6 +17,8 @@ import type {
   KycRequest,
   KycStartResult,
   KycStore,
+  PayoutAuthorityGateway,
+  PayoutAuthorization,
   PayoutGateway,
   PayoutRecord,
   PayoutSubmit,
@@ -172,6 +174,17 @@ export class FakeKycStore implements KycStore {
   }
   async save(address: string, kyc: KycVerification): Promise<void> {
     this.m.set(address.toLowerCase(), kyc);
+  }
+}
+
+// Autoridad de payout fake (WKH-180). Por default authorized:true (regresión demo); pasá
+// { authorized:false, reason } para probar el enforcement. Registra los inputs recibidos.
+export class FakePayoutAuthorityGateway implements PayoutAuthorityGateway {
+  public calls: Array<{ verificationId: string; address: string }> = [];
+  constructor(private result: PayoutAuthorization = { authorized: true }) {}
+  async authorize(input: { verificationId: string; address: string }): Promise<PayoutAuthorization> {
+    this.calls.push(input);
+    return this.result;
   }
 }
 

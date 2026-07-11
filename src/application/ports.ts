@@ -79,6 +79,19 @@ export interface PayoutGateway {
   status(payoutId: string): Promise<PayoutRecord>;
 }
 
+// ── Autoridad de payout server-side (WKH-180) ────────────────────────────────
+// Re-valida en el SERVIDOR (contra Didit) que el KYC autoriza el payout para este caller.
+// Es la ÚNICA fuente de verdad para autorizar: NUNCA los booleanos que llegan del browser
+// (approved/payoutAllowed/kycVerificationId en localStorage son atacante-controlables — CD-2).
+export interface PayoutAuthorization {
+  authorized: boolean;
+  reason?: string; // "kyc_not_approved" | "kyc_reauth_failed" | "kyc_ownership_mismatch" | "kyc_authority_error" | "kyc_authority_unavailable" | ...
+}
+export interface PayoutAuthorityGateway {
+  // address es NO-opcional (CD-A3); el use-case pasa getAddress() ?? "".
+  authorize(input: { verificationId: string; address: string }): Promise<PayoutAuthorization>;
+}
+
 // ── Wallet (DApp: el sender CONECTA su wallet = login, y firma la autorización EIP-3009) ──
 export interface WalletPort {
   connect(): Promise<string>; // conecta y devuelve la address (el "login")

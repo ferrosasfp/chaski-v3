@@ -14,7 +14,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Quote, RemittanceState, PayoutMethod } from "../domain/remittance";
 import { createContainer } from "../composition/container";
-import { deliveredDisplay, isDemoMode } from "./flow-vm";
+import { deliveredDisplay, humanError, isDemoMode } from "./flow-vm";
 import { Button, Card, ChaskiMark, Field, Pill, Row, Stepper, TextInput } from "./ui";
 
 type Step = "send" | "connect" | "verify" | "review" | "track" | "done";
@@ -633,13 +633,6 @@ function Receipt({ rem, onNew }: { rem: RemittanceState; onNew: () => void }) {
 
 function methodLabel(m: PayoutMethod): string {
   return m === "yape" ? "Yape" : m === "plin" ? "Plin" : "cuenta bancaria";
-}
-function humanError(code: string): string {
-  if (code.includes("quote_expired") || code.includes("QUOTE_STALE"))
-    return "La tasa cambió. Revisá el nuevo monto.";
-  if (code.includes("kyc")) return "No pudimos verificar tu identidad.";
-  if (code.includes("payout")) return "No se pudo entregar. Si te cobramos, te reembolsamos.";
-  return "Algo salió mal. Intentá de nuevo.";
 }
 function resetTo(
   setStep: (s: Step) => void,

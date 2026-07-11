@@ -152,6 +152,21 @@ export class FakeKycPendingStore implements KycPendingStore {
   }
 }
 
+// Doble que SIEMPRE falla en save() (simula localStorage lleno / private-browsing) para el
+// test estrella de V1 (WKH-183): re-lanza el mismo Error que LocalKycPendingStore.
+export class ThrowingKycPendingStore implements KycPendingStore {
+  private p: KycPending | null = null;
+  async save(_p: KycPending): Promise<void> {
+    throw new Error("kyc_pending_unavailable");
+  }
+  async get(): Promise<KycPending | null> {
+    return this.p;
+  }
+  async clear(): Promise<void> {
+    this.p = null;
+  }
+}
+
 export class FakePayoutGateway implements PayoutGateway {
   constructor(
     private submitResult: Partial<PayoutRecord> = {},

@@ -18,7 +18,11 @@ export class Money {
       throw new Error(`invalid_money_amount:${major}`);
     }
     const factor = 10 ** DECIMALS[currency];
-    return new Money(Math.round(major * factor), currency);
+    const minor = Math.round(major * factor);
+    if (minor > Number.MAX_SAFE_INTEGER) {
+      throw new Error(`invalid_money_amount:${major}`); // CD-4: cap técnico, NO regla de negocio
+    }
+    return new Money(minor, currency);
   }
 
   static fromMinor(minor: number, currency: Currency): Money {

@@ -56,14 +56,16 @@ export class StartKyc {
       return { kind: "done", snapshot: r.snapshot };
     }
 
-    // redirect: guardar la remesa en kyc_pending + el pendiente (sessionId) y mandar a Didit.
-    await this.repo.save(r);
+    // redirect: guardar PRIMERO el pendiente; solo si eso funciona, persistir la remesa en kyc_pending.
+    // Si pending.save() lanza (quota / private-browsing), repo.save(r) NO corre → la remesa sigue
+    // persistida en "created" (su último estado guardado) → el retry hace created→kyc_pending (válido).
     await this.pending.save({
       remittanceId: input.remittanceId,
       sessionId: res.sessionId,
       address: input.address,
       sessionToken: res.authToken, // token HMAC para autorizar el GET /decision al volver (WKH-179)
     });
+    await this.repo.save(r); // ← si pending.save lanzó, ESTO no corre → remesa sigue en "created"
     return { kind: "redirect", url: res.url };
   }
 }

@@ -30,7 +30,7 @@ export class StartKyc {
     if (!r) throw new Error("remittance_not_found");
     const s = r.snapshot;
 
-    r.startKyc(this.clock.nowIso());
+    r.startKyc(this.clock.nowIso(), input.address);
 
     // KYC-once: reusar la verificación recordada para esta wallet si ya pasó.
     const remembered = await this.kycStore.get(input.address);

@@ -8,6 +8,7 @@ import type {
   KycRequest,
   KycStartResult,
 } from "../../application/ports";
+import { toPersistedIdentity } from "../../domain/remittance";
 import type { DiditDecisionResult } from "./decision";
 
 export class DiditKycGateway implements KycGateway {
@@ -47,7 +48,7 @@ export class DiditKycGateway implements KycGateway {
         payoutAllowed: d.payoutAllowed,
         riskLevel: d.riskLevel,
         provenance: d.provenance,
-        identity: d.identity,
+        identity: d.identity ? toPersistedIdentity(d.identity) : null, // reducir PII aguas arriba (CD-6)
       },
     };
   }

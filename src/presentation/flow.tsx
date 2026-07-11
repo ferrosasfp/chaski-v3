@@ -516,7 +516,7 @@ export function RemittanceFlow() {
                       {rem.kyc.identity.firstName} {rem.kyc.identity.lastNamePaternal}{" "}
                       {rem.kyc.identity.lastNameMaternal}
                     </b>{" "}
-                    · {rem.kyc.identity.documentType} ••••{rem.kyc.identity.documentNumber.slice(-4)}
+                    · {rem.kyc.identity.documentType} ••••{rem.kyc.identity.documentNumberLast4}
                   </p>
                 </div>
               ) : null}

@@ -22,6 +22,13 @@ describe("Money", () => {
     expect(Money.of(1480.5, "PEN").format()).toContain("S/");
   });
 
+  it("AC-9: cap safe-int → monto que desborda MAX_SAFE_INTEGER lanza; holgado NO", () => {
+    // 1e12 * 1e6 (USDC) = 1e18 > Number.MAX_SAFE_INTEGER (~9.007e15)
+    expect(() => Money.of(1e12, "USDC")).toThrow(/invalid_money_amount/);
+    // caso holgado: NO debe lanzar (evita falso-positivo / regla de negocio encubierta)
+    expect(() => Money.of(1_000_000, "USDC")).not.toThrow();
+  });
+
   it("minus: no negativo + no cruza monedas", () => {
     expect(() => Money.of(1, "USDC").minus(Money.of(2, "USDC"))).toThrow(/money_negative/);
     expect(() => Money.of(1, "USDC").minus(Money.fromMinor(100, "PEN"))).toThrow(

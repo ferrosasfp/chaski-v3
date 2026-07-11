@@ -6,7 +6,11 @@ const KEY = "chaski.kyc.pending.v1";
 
 export class LocalKycPendingStore implements KycPendingStore {
   async save(p: KycPending): Promise<void> {
-    if (typeof localStorage !== "undefined") localStorage.setItem(KEY, JSON.stringify(p));
+    try {
+      if (typeof localStorage !== "undefined") localStorage.setItem(KEY, JSON.stringify(p));
+    } catch {
+      throw new Error("kyc_pending_unavailable");
+    }
   }
   async get(): Promise<KycPending | null> {
     if (typeof localStorage === "undefined") return null;
@@ -19,6 +23,10 @@ export class LocalKycPendingStore implements KycPendingStore {
     }
   }
   async clear(): Promise<void> {
-    if (typeof localStorage !== "undefined") localStorage.removeItem(KEY);
+    try {
+      if (typeof localStorage !== "undefined") localStorage.removeItem(KEY);
+    } catch {
+      throw new Error("kyc_pending_unavailable");
+    }
   }
 }

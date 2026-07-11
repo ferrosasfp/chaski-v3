@@ -50,7 +50,7 @@ export class FallbackQuoteGateway implements QuoteGateway {
     return {
       quoteId: `fb-${Date.now().toString(36)}`,
       send: Money.of(req.amountUsd, "USDC"),
-      receive: Money.of(Number((netUsd * rate).toFixed(2)), "PEN"),
+      receive: Money.of(netUsd * rate, "PEN"), // único redondeo = Money.of (dominio); sin doble round (V4)
       feeUsd: Money.of(FLAT_FEE_USD, "USDC"),
       rate: Number(rate.toFixed(6)),
       etaMinutes: 30,
@@ -63,6 +63,9 @@ export class FallbackQuoteGateway implements QuoteGateway {
 export class FallbackKycGateway implements KycGateway {
   // Simula el resultado de una sesión Didit: la identidad se EXTRAE del documento escaneado
   // (no la tipea el usuario). start() resuelve directo (sin redirect); decision() por si se consulta.
+  // SIEMPRE aprueba (approved:true, payoutAllowed:true); NUNCA representa un rechazo.
+  // En prod su alcance está contenido por el gate server-side de WKH-180
+  // (/api/payout/validate: sin DIDIT_API_KEY + prod → 503 fail-loud, nunca autoriza por default).
   async start(req: KycRequest): Promise<KycStartResult> {
     return { kind: "completed", verification: this.simulated(req.amountUsd) };
   }

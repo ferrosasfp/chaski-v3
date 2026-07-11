@@ -9,6 +9,7 @@ import { ResumeKyc } from "./use-cases/resume-kyc";
 import { StartKyc } from "./use-cases/start-kyc";
 import { TrackRemittance } from "./use-cases/track-remittance";
 import { FallbackKycGateway } from "../infrastructure/fallback/gateways";
+import type { KycPendingStore } from "./ports";
 import {
   beneficiary,
   FakeKycGateway,
@@ -21,15 +22,21 @@ import {
   FixedClock,
   InMemoryRepo,
   SeqIds,
+  ThrowingKycPendingStore,
 } from "../test-support/fakes";
 
-function setup(opts?: { kyc?: FakeKycGateway; payout?: FakePayoutGateway; kycStore?: FakeKycStore }) {
+function setup(opts?: {
+  kyc?: FakeKycGateway;
+  payout?: FakePayoutGateway;
+  kycStore?: FakeKycStore;
+  pending?: KycPendingStore;
+}) {
   const repo = new InMemoryRepo();
   const clock = new FixedClock();
   const ids = new SeqIds();
   const payout = opts?.payout ?? new FakePayoutGateway();
   const kycStore = opts?.kycStore ?? new FakeKycStore();
-  const pending = new FakeKycPendingStore();
+  const pending = opts?.pending ?? new FakeKycPendingStore();
   const wallet = new FakeWallet();
   const kycGw = opts?.kyc ?? new FakeKycGateway();
   return {
@@ -164,6 +171,40 @@ describe("Use-cases — money-path", () => {
     const res = await resumeKyc.execute(); // simula el retorno de Didit
     expect(res.kind).toBe("passed");
     if (res.kind === "passed") expect(res.snapshot.status).toBe("kyc_passed");
+  });
+
+  it("V1 ⭐ AC-1/2/3: si pending.save falla en el redirect, la remesa NO queda huérfana en kyc_pending", async () => {
+    const { create, startKyc, repo } = setup({
+      kyc: new FakeKycGateway({}, true), // fuerza redirect
+      pending: new ThrowingKycPendingStore(), // save() siempre lanza
+    });
+    const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
+    const id = r0.snapshot.id;
+    await expect(
+      startKyc.execute({ remittanceId: id, address: "0xSender" }),
+    ).rejects.toThrow(/kyc_pending_unavailable/); // AC-1: re-lanza el Error, no crudo; AC-3: no {kind:"redirect"}
+    const persisted = await repo.get(id);
+    expect(persisted?.snapshot.status).toBe("created"); // AC-2 ⭐ NO "kyc_pending"
+  });
+
+  it("V1 AC-4: tras un pending que falló, el retry con store sano avanza sin invalid_transition", async () => {
+    // repo/clock compartidos para simular fallo → retry sobre la MISMA remesa persistida.
+    const repo = new InMemoryRepo();
+    const clock = new FixedClock();
+    const createShared = new CreateRemittance(repo, clock, new SeqIds());
+    const r0 = await createShared.execute({ amountUsd: 400, beneficiary: beneficiary() });
+    const id = r0.snapshot.id;
+
+    const kycGw = new FakeKycGateway({}, true);
+    const kycStore = new FakeKycStore();
+    const failing = new StartKyc(kycGw, kycStore, new ThrowingKycPendingStore(), repo, clock);
+    await expect(failing.execute({ remittanceId: id, address: "0xSender" })).rejects.toThrow();
+    expect((await repo.get(id))?.snapshot.status).toBe("created");
+
+    const healthy = new StartKyc(kycGw, kycStore, new FakeKycPendingStore(), repo, clock);
+    const res = await healthy.execute({ remittanceId: id, address: "0xSender" }); // created→kyc_pending válido
+    expect(res.kind).toBe("redirect");
+    expect((await repo.get(id))?.snapshot.status).toBe("kyc_pending");
   });
 
   it("resume sin KYC pendiente → none (carga normal de la app)", async () => {

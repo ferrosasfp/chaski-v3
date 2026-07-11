@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Money } from "../domain/money";
 import type { RemittanceState } from "../domain/remittance";
-import { deliveredDisplay, isDemoMode } from "./flow-vm";
+import { deliveredDisplay, humanError, isDemoMode } from "./flow-vm";
 
 describe("flow-vm — deliveredDisplay", () => {
   it("AC-2: deliveredPen null → usa quote.receive", () => {
@@ -59,5 +59,30 @@ describe("flow-vm — isDemoMode", () => {
       kyc: { provenance: "didit" },
     } as RemittanceState;
     expect(isDemoMode(rem)).toBe(false);
+  });
+});
+
+describe("flow-vm — humanError", () => {
+  it("AC-5: no_wallet → copy específico (≠ genérico)", () => {
+    expect(humanError("no_wallet")).toContain("wallet instalada");
+    expect(humanError("no_wallet")).not.toBe("Algo salió mal. Intentá de nuevo.");
+  });
+
+  it("AC-6: no_account / wallet_not_connected → reconectar", () => {
+    expect(humanError("no_account")).toContain("Reconectá");
+    expect(humanError("wallet_not_connected")).toContain("Reconectá");
+  });
+
+  it("CD-5: kyc_pending_unavailable se evalúa ANTES de includes('kyc')", () => {
+    expect(humanError("kyc_pending_unavailable")).toBe(
+      "No pudimos preparar la verificación. Probá de nuevo.",
+    );
+    expect(humanError("kyc_pending_unavailable")).not.toBe("No pudimos verificar tu identidad.");
+  });
+
+  it("kyc genérico y payout siguen mapeando a su copy", () => {
+    expect(humanError("kyc_rejected")).toBe("No pudimos verificar tu identidad.");
+    expect(humanError("payout_failed")).toContain("reembolsamos");
+    expect(humanError("otra_cosa")).toBe("Algo salió mal. Intentá de nuevo.");
   });
 });

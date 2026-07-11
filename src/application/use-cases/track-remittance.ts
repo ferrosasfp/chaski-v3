@@ -1,4 +1,3 @@
-import { Money } from "../../domain/money";
 import type { Remittance } from "../../domain/remittance";
 import type { Clock, PayoutGateway, RemittanceRepository } from "../ports";
 
@@ -18,7 +17,7 @@ export class TrackRemittance {
 
     const rec = await this.payouts.status(s.payoutId);
     if (rec.status === "settled") {
-      r.markSettled(rec.txRef ?? "", rec.deliveredPen ?? Money.zero("PEN"), this.clock.nowIso());
+      r.markSettled(rec.txRef ?? "", rec.deliveredPen, this.clock.nowIso());
       await this.repo.save(r);
     } else if (rec.status === "failed") {
       r.markPayoutFailed(rec.failureReason ?? "payout_failed", this.clock.nowIso());

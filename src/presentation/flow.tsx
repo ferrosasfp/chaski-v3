@@ -14,6 +14,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Quote, RemittanceState, PayoutMethod } from "../domain/remittance";
 import { createContainer } from "../composition/container";
+import { deliveredDisplay, isDemoMode } from "./flow-vm";
 import { Button, Card, ChaskiMark, Field, Pill, Row, Stepper, TextInput } from "./ui";
 
 type Step = "send" | "connect" | "verify" | "review" | "track" | "done";
@@ -60,6 +61,7 @@ export function RemittanceFlow() {
   const [rem, setRem] = useState<RemittanceState | null>(null);
   const [address, setAddress] = useState<string | null>(null);
   const [resuming, setResuming] = useState(false); // retomando KYC al volver de Didit
+  const [timedOut, setTimedOut] = useState(false); // el resume-loop agotó el timeout
 
   const amountNum = Number(amount) || 0;
 
@@ -123,7 +125,9 @@ export function RemittanceFlow() {
       }
       if (alive) {
         setResuming(false);
-        setError("La verificación está tardando. Actualizá la página en un momento.");
+        await c.abandonPendingKyc.execute(); // limpia el pending (CD-6): próximo reload no repite el bloqueo
+        setTimedOut(true);
+        // La card de timedOut ya comunica el mensaje; no seteamos error para no duplicarlo (MENOR-A).
       }
     })();
     return () => {
@@ -222,6 +226,13 @@ export function RemittanceFlow() {
       setRem(r.snapshot);
     });
 
+  // A4: tras el timeout del KYC, reintentar sin refrescar (resetea a un flujo fresco en "send").
+  const onRetryKyc = () => {
+    setTimedOut(false);
+    setError(null);
+    resetTo(setStep, setRem, setPreview);
+  };
+
   // polling en tracking
   const remId = rem?.id;
   const remStatus = rem?.status;
@@ -269,6 +280,12 @@ export function RemittanceFlow() {
         <Stepper steps={STEP_LABELS} current={STEP_INDEX[step]} />
       </div>
 
+      {rem && isDemoMode(rem) && (step === "review" || step === "track") ? (
+        <div className="mb-4 flex items-center justify-center">
+          <Pill tone="warn">Modo demo — sin dinero real</Pill>
+        </div>
+      ) : null}
+
       {resuming ? (
         <Card className="mt-2 flex-1 space-y-4 text-center">
           <Loader2 className="mx-auto mt-6 h-8 w-8 animate-spin text-cochineal" />
@@ -278,6 +295,16 @@ export function RemittanceFlow() {
               Estamos confirmando tu verificación con Didit. Un segundo.
             </p>
           </div>
+        </Card>
+      ) : timedOut ? (
+        <Card className="mt-2 flex-1 space-y-4 text-center">
+          <div>
+            <p className="text-base font-bold">La verificación está tardando</p>
+            <p className="mx-auto mt-1 max-w-xs text-sm text-stone">
+              No pudimos confirmar tu identidad a tiempo. Podés reintentar sin recargar la página.
+            </p>
+          </div>
+          <Button onClick={onRetryKyc}>Reintentar</Button>
         </Card>
       ) : (
       <AnimatePresence mode="wait">
@@ -574,7 +601,7 @@ function TrackView({ rem }: { rem: RemittanceState }) {
 }
 
 function Receipt({ rem, onNew }: { rem: RemittanceState; onNew: () => void }) {
-  const delivered = rem.deliveredPen ?? rem.quote?.receive;
+  const delivered = deliveredDisplay(rem);
   return (
     <div className="space-y-4">
       <Card className="text-center">
@@ -584,6 +611,11 @@ function Receipt({ rem, onNew }: { rem: RemittanceState; onNew: () => void }) {
         <p className="text-sm text-stone">{rem.beneficiary.name} recibió</p>
         <p className="tabular text-4xl font-extrabold text-verde">{delivered ? delivered.format() : "—"}</p>
         <p className="mt-1 text-xs text-stone">en su {methodLabel(rem.beneficiary.method)}</p>
+        {isDemoMode(rem) ? (
+          <div className="mt-3 flex items-center justify-center">
+            <Pill tone="warn">Modo demo — sin dinero real</Pill>
+          </div>
+        ) : null}
       </Card>
       <Card>
         <p className="mb-2 text-sm font-semibold">Recibo</p>

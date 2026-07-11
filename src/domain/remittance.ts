@@ -173,7 +173,7 @@ export class Remittance {
   markPayoutSubmitted(payoutId: string, now: string): void {
     this.to("payout_submitted", now, { payoutId });
   }
-  markSettled(payoutTx: string, deliveredPen: Money, now: string): void {
+  markSettled(payoutTx: string, deliveredPen: Money | null, now: string): void {
     this.to("settled", now, { payoutTx, deliveredPen });
   }
   markPayoutFailed(reason: string, now: string): void {

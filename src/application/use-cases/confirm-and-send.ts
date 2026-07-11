@@ -1,4 +1,3 @@
-import { Money } from "../../domain/money";
 import type { Remittance } from "../../domain/remittance";
 import type {
   Clock,
@@ -49,7 +48,7 @@ export class ConfirmAndSend {
       });
       r.markPayoutSubmitted(rec.payoutId, this.clock.nowIso());
       if (rec.status === "settled") {
-        r.markSettled(rec.txRef ?? "", rec.deliveredPen ?? Money.zero("PEN"), this.clock.nowIso());
+        r.markSettled(rec.txRef ?? "", rec.deliveredPen, this.clock.nowIso());
       } else if (rec.status === "failed") {
         r.markPayoutFailed(rec.failureReason ?? "payout_failed", this.clock.nowIso());
       }

@@ -2,6 +2,7 @@
 // cuando llegue el sandbox (Fase A) se swappean por los adapters reales ACÁ — cero cambio en
 // use-cases ni UI (dependency inversion). Es el mismo principio que las factories del backend.
 
+import { AbandonPendingKyc } from "../application/use-cases/abandon-pending-kyc";
 import { ConfirmAndSend } from "../application/use-cases/confirm-and-send";
 import { ConnectWallet } from "../application/use-cases/connect-wallet";
 import { CreateRemittance } from "../application/use-cases/create-remittance";
@@ -33,6 +34,7 @@ export interface Container {
   confirmAndSend: ConfirmAndSend;
   trackRemittance: TrackRemittance;
   listHistory: ListHistory;
+  abandonPendingKyc: AbandonPendingKyc;
 }
 
 export function createContainer(): Container {
@@ -58,6 +60,7 @@ export function createContainer(): Container {
     confirmAndSend: new ConfirmAndSend(wallet, payouts, repo, clock),
     trackRemittance: new TrackRemittance(payouts, repo, clock),
     listHistory: new ListHistory(repo),
+    abandonPendingKyc: new AbandonPendingKyc(kycPending),
   };
 }
 

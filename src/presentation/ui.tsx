@@ -97,12 +97,13 @@ const PILL: Record<string, string> = {
   active: "bg-cochineal/10 text-cochineal-ink",
   ok: "bg-verde-bg text-verde",
   bad: "bg-cochineal/10 text-cochineal-ink",
+  warn: "bg-sand text-ink",
 };
 export function Pill({
   tone = "neutral",
   children,
 }: {
-  tone?: "neutral" | "active" | "ok" | "bad";
+  tone?: "neutral" | "active" | "ok" | "bad" | "warn";
   children: ReactNode;
 }) {
   return (

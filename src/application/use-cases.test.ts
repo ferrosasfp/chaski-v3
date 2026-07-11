@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { Money } from "../domain/money";
 import { ConfirmAndSend } from "./use-cases/confirm-and-send";
 import { ConnectWallet } from "./use-cases/connect-wallet";
 import { CreateRemittance } from "./use-cases/create-remittance";
@@ -62,8 +63,22 @@ describe("Use-cases — money-path", () => {
     expect(r.status).toBe("payout_submitted");
     r = await track.execute({ remittanceId: id });
     expect(r.status).toBe("settled");
-    expect(r.snapshot.deliveredPen?.currency).toBe("PEN");
+    expect(r.snapshot.deliveredPen).toEqual(Money.of(368, "PEN"));
     expect(r.snapshot.principalTx).toBe("0xprincipal");
+  });
+
+  it("payout settled con deliveredPen null → settled preserva null (AC-1, no coalesce a S/0)", async () => {
+    const { create, startKyc, lock, confirm, track } = setup({
+      payout: new FakePayoutGateway({}, { deliveredPen: null }),
+    });
+    const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
+    const id = r0.snapshot.id;
+    await startKyc.execute(kycInput(id));
+    await lock.execute({ remittanceId: id });
+    await confirm.execute({ remittanceId: id });
+    const r = await track.execute({ remittanceId: id });
+    expect(r.snapshot.status).toBe("settled");
+    expect(r.snapshot.deliveredPen).toBeNull();
   });
 
   it("KYC no pasa → kyc_failed, y lock falla (el dominio fuerza el orden)", async () => {

@@ -17,16 +17,25 @@ export class DiditKycGateway implements KycGateway {
     const sres = await fetch("/api/kyc/session", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ callback: req.callbackUrl }),
+      // vendorData = address del sender → rate-limit por address (WKH-179). callback lo IGNORA
+      // la ruta (se reconstruye server-side, M6) pero se manda por compat.
+      body: JSON.stringify({ callback: req.callbackUrl, vendorData: req.senderAddress }),
     });
     if (sres.status === 501) return this.fallback.start(req); // sin Didit → simulación
     if (!sres.ok) throw new Error("didit_session_failed");
-    const { sessionId, url } = (await sres.json()) as { sessionId: string; url: string };
-    return { kind: "redirect", url, sessionId };
+    // authToken = token HMAC NUESTRO (WKH-179) que autoriza el GET /decision.
+    const { sessionId, url, authToken } = (await sres.json()) as {
+      sessionId: string;
+      url: string;
+      authToken?: string;
+    };
+    return { kind: "redirect", url, sessionId, authToken };
   }
 
-  async decision(sessionId: string): Promise<KycDecision> {
-    const dres = await fetch(`/api/kyc/decision?sessionId=${encodeURIComponent(sessionId)}`);
+  async decision(sessionId: string, authToken?: string): Promise<KycDecision> {
+    const dres = await fetch(`/api/kyc/decision?sessionId=${encodeURIComponent(sessionId)}`, {
+      headers: authToken ? { "x-kyc-token": authToken } : {},
+    });
     if (dres.status === 501) return this.fallback.decision(sessionId);
     if (!dres.ok) throw new Error("didit_decision_failed");
     const d = (await dres.json()) as DiditDecisionResult;

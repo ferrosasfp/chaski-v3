@@ -29,11 +29,13 @@ export interface KycRequest {
   beneficiary: Beneficiary;
   purpose: string;
   callbackUrl?: string; // a dónde vuelve Didit tras el escaneo (misma pestaña)
+  senderAddress?: string; // wallet del sender → rate-limit por address (WKH-179)
 }
 // start() puede resolver directo (simulación) o pedir un redirect (Didit real).
+// authToken (WKH-179): token HMAC NUESTRO que ata la sesión al caller (NO el sessionToken de Didit).
 export type KycStartResult =
   | { kind: "completed"; verification: KycVerification }
-  | { kind: "redirect"; url: string; sessionId: string };
+  | { kind: "redirect"; url: string; sessionId: string; authToken?: string };
 // decision() se consulta al volver del redirect; terminal=false ⇒ Didit aún procesa.
 export interface KycDecision {
   terminal: boolean;
@@ -41,7 +43,7 @@ export interface KycDecision {
 }
 export interface KycGateway {
   start(req: KycRequest): Promise<KycStartResult>;
-  decision(sessionId: string): Promise<KycDecision>;
+  decision(sessionId: string, authToken?: string): Promise<KycDecision>;
 }
 
 // KYC pendiente: se persiste antes del redirect para retomar el flujo al volver de Didit.
@@ -49,6 +51,7 @@ export interface KycPending {
   remittanceId: string;
   sessionId: string;
   address: string;
+  sessionToken?: string; // authToken HMAC persistido para autorizar el GET /decision (WKH-179)
 }
 export interface KycPendingStore {
   save(p: KycPending): Promise<void>;

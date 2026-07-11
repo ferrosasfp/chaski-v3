@@ -37,7 +37,7 @@ export class ResumeKyc {
 
     let dec: Awaited<ReturnType<KycGateway["decision"]>>;
     try {
-      dec = await this.kyc.decision(p.sessionId);
+      dec = await this.kyc.decision(p.sessionId, p.sessionToken);
     } catch {
       return { kind: "processing" }; // reintentable
     }

@@ -45,6 +45,7 @@ export class StartKyc {
       beneficiary: s.beneficiary,
       purpose: input.purpose ?? "family support",
       callbackUrl: input.callbackUrl,
+      senderAddress: input.address, // rate-limit por address (WKH-179)
     });
 
     if (res.kind === "completed") {
@@ -61,6 +62,7 @@ export class StartKyc {
       remittanceId: input.remittanceId,
       sessionId: res.sessionId,
       address: input.address,
+      sessionToken: res.authToken, // token HMAC para autorizar el GET /decision al volver (WKH-179)
     });
     return { kind: "redirect", url: res.url };
   }

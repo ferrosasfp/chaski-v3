@@ -52,3 +52,19 @@ export function mapDiditDecision(raw: DiditRaw): DiditDecisionResult {
     identity,
   };
 }
+
+// ── Masking (WKH-179, defensa en profundidad) ────────────────────────────────
+// Enmascara el documentNumber en el límite HTTP (últimos 4). Puro, testeable sin I/O (CD-B).
+// El resto de campos queda intacto — siguen protegidos por el auth check (AC-1); el masking
+// es defensa en profundidad SOLO sobre el número. CD-8: nunca exponer <4 dígitos en claro.
+export function maskIdentity(identity: VerifiedIdentity): VerifiedIdentity {
+  const dn = identity.documentNumber;
+  const masked =
+    dn.length <= 4 ? "*".repeat(dn.length) : "*".repeat(dn.length - 4) + dn.slice(-4);
+  return { ...identity, documentNumber: masked };
+}
+
+// Compone el masking sobre la decisión completa. identity nula → null (ya se filtra en mapDiditDecision).
+export function maskDecision(d: DiditDecisionResult): DiditDecisionResult {
+  return { ...d, identity: d.identity ? maskIdentity(d.identity) : null };
+}

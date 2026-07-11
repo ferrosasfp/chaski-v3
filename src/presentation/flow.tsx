@@ -14,7 +14,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Quote, RemittanceState, PayoutMethod } from "../domain/remittance";
 import { createContainer } from "../composition/container";
-import { deliveredDisplay, humanError, isDemoMode } from "./flow-vm";
+import { deliveredDisplay, humanError, isDemoMode, isFallbackWalletAddress } from "./flow-vm";
 import { Button, Card, ChaskiMark, Field, Pill, Row, Stepper, TextInput } from "./ui";
 
 type Step = "send" | "connect" | "verify" | "review" | "track" | "done";
@@ -62,6 +62,7 @@ export function RemittanceFlow() {
   const [address, setAddress] = useState<string | null>(null);
   const [resuming, setResuming] = useState(false); // retomando KYC al volver de Didit
   const [timedOut, setTimedOut] = useState(false); // el resume-loop agotó el timeout
+  const [confirmReset, setConfirmReset] = useState(false); // control "¿No sos vos?" (WKH-184)
 
   const amountNum = Number(amount) || 0;
 
@@ -233,6 +234,28 @@ export function RemittanceFlow() {
     resetTo(setStep, setRem, setPreview);
   };
 
+  // Reset explícito (WKH-184): olvida el KYC-once de esta address + pending, y vuelve a estado fresco
+  // exigiendo reconexión. SEPARADO de resetTo (que preserva address para "enviar otra" — CD-7).
+  const forgetAndDisconnect = () =>
+    guard(async () => {
+      try {
+        if (address) await c.forgetKyc.execute({ address });
+      } catch {
+        /* best-effort — el reset del estado corre igual (AC-5/CD-8) */
+      }
+      setAddress(null);
+      setRem(null);
+      setPreview(null);
+      // Limpia la PII del beneficiario de la persona anterior (mismo threat-model que esta HU):
+      // en un dispositivo compartido, la persona B no debe aterrizar con el nombre/celular de A.
+      setRecipient("");
+      setDestination("");
+      setScanStage(0);
+      setAmount("400"); // no es PII → vuelve al default inicial (evita form con monto en blanco)
+      setStep("send");
+      setConfirmReset(false);
+    });
+
   // polling en tracking
   const remId = rem?.id;
   const remStatus = rem?.status;
@@ -270,15 +293,50 @@ export function RemittanceFlow() {
           <p className="text-xs text-stone">tu plata a Perú, sin vueltas</p>
         </div>
         {address ? (
-          <span className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-sand px-2.5 py-1 text-xs font-semibold text-ink">
-            <span className="h-1.5 w-1.5 rounded-full bg-verde"></span>
-            {address.slice(0, 6)}…{address.slice(-4)}
-          </span>
+          <div className="ml-auto flex flex-col items-end gap-1">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-sand px-2.5 py-1 text-xs font-semibold text-ink">
+              <span className="h-1.5 w-1.5 rounded-full bg-verde"></span>
+              {address.slice(0, 6)}…{address.slice(-4)}
+            </span>
+            {confirmReset ? (
+              <div className="flex items-center gap-2 text-xs text-stone">
+                <span>Esto borra tu verificación en este dispositivo.</span>
+                <button
+                  onClick={forgetAndDisconnect}
+                  disabled={busy}
+                  className="font-semibold text-cochineal underline underline-offset-2"
+                >
+                  Empezar de nuevo
+                </button>
+                <button
+                  onClick={() => setConfirmReset(false)}
+                  className="text-stone underline underline-offset-2"
+                >
+                  Cancelar
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmReset(true)}
+                className="text-xs text-stone underline underline-offset-2"
+              >
+                ¿No sos vos?
+              </button>
+            )}
+          </div>
         ) : null}
       </header>
       <div className="mb-6">
         <Stepper steps={STEP_LABELS} current={STEP_INDEX[step]} />
       </div>
+
+      {address && isFallbackWalletAddress(address) ? (
+        <div className="mb-4 flex items-center justify-center">
+          <Pill tone="warn">
+            Sin aislamiento por wallet en este dispositivo — conectá MetaMask o WalletConnect.
+          </Pill>
+        </div>
+      ) : null}
 
       {rem && isDemoMode(rem) && (step === "review" || step === "track") ? (
         <div className="mb-4 flex items-center justify-center">

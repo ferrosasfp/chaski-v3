@@ -8,6 +8,7 @@
 | WKH-181 | [P1] No persistir PII cruda + historial por-wallet + riskLevel AML | DONE (2026-07-11) | `doc/sdd/004-wkh-181-pii-persistence-history-per-wallet/done-report.md` |
 | WKH-182 | [P2 money-path robustez] Validación de dominio del quote, lock optimista, chain configurable y monto lockeado al payout | DONE (2026-07-11) | `doc/sdd/005-wkh-182-money-path-robustez/done-report.md` |
 | WKH-183 | [P3 higiene] pending-store huérfano, copy de errores, FX/Money, drift env | DONE (2026-07-11) | `doc/sdd/006-wkh-183-higiene-menores/done-report.md` |
+| WKH-184 | [Residual AC-8 WKH-181] Reset explícito de KYC-once + señal soft de FallbackWallet (Opción D) | DONE (2026-07-11) | `doc/sdd/007-wkh-184-fallback-wallet-reset-demo-signal/done-report.md` |
 
 ## Notas de coordinación
 - WKH-178 y WKH-179 corren en paralelo, ambas del mismo repo (`chaski-v2`) y de la misma auditoría
@@ -68,3 +69,29 @@
   `flow.tsx`'s `humanError()` que consume los códigos que `wallet.ts` ya lanza hoy). Ver
   `doc/sdd/006-wkh-183-higiene-menores/work-item.md` para el detalle completo (grounding, ACs,
   DT-N, CD-N).
+- **WKH-184 (DONE, 2026-07-11)**: cierra formalmente el residual AC-8 diferido de WKH-181. Opción D
+  confirmada (reset manual + señal soft de `FallbackWallet`, sin pseudo-address ni hard-require).
+  9/9 ACs PASS, 10/10 CDs cumplidas, pipeline QUALITY completo (F0→F1→F2→F2.5→F3→AR→CR→F4).
+  Fix-pack post-CR (MNR-1 + MNR-2) aplicado y verificado. Listo para merge. Ver
+  `doc/sdd/007-wkh-184-fallback-wallet-reset-demo-signal/done-report.md`.
+
+---
+
+## 🔴 AUDITORÍA CHASKI V2 (2026-07-10/11) — 100% CERRADA
+
+**Estado final**: Todas las 7 HUs del backlog de seguridad/higiene en estado **DONE**.
+
+| HU | Status | Cierre |
+|----|--------|--------|
+| WKH-178 (P0: demo-safe + recibo real) | DONE | 2026-07-10 |
+| WKH-179 (P0: IDOR PII + auth/rate-limit) | DONE | 2026-07-10 |
+| WKH-180 (P1: payout authority server-side) | DONE | 2026-07-11 |
+| WKH-181 (P1: PII persistence + per-wallet + AML) | DONE | 2026-07-11 |
+| WKH-182 (P2: money-path robustez) | DONE | 2026-07-11 |
+| WKH-183 (P3: higiene menores) | DONE | 2026-07-11 |
+| WKH-184 (Residual AC-8: reset + señal FallbackWallet) | DONE | 2026-07-11 |
+
+**Impacto**: Chaski v2 sale del hackathon con pipeline de seguridad/QA completo, aislamiento por wallet,
+PII persistida responsablemente, reset explícito para shared-device, y flujo e2e funcional. Cero hallazgos
+bloqueantes abiertos. El AC-8 residual de WKH-181 (diferido a WKH-184) está formalmente cerrado.
+**Next:** commit + push + merge a `main` (acción del orquestador/dev), luego deploy a staging/prod.

@@ -5,6 +5,10 @@ import type { WalletPort } from "../application/ports";
 import type { Quote } from "../domain/remittance";
 import { resolveChain, resolveChainId } from "./chain";
 
+/** Address de la FallbackWallet demo. Fuente ÚNICA del literal (CD-4, WKH-184):
+ *  ningún otro archivo re-hardcodea este string — presentación/helpers lo importan. */
+export const FALLBACK_WALLET_ADDRESS = "0xDEMO00000000000000000000000000000A11ce";
+
 // biome-ignore lint/suspicious/noExplicitAny: provider EIP-1193 inyectado (window.ethereum)
 function injectedProvider(): any {
   if (typeof window === "undefined") return undefined;
@@ -59,7 +63,7 @@ export class FallbackWallet implements WalletPort {
   private address: string | null = null;
   async connect(): Promise<string> {
     await new Promise((r) => setTimeout(r, 400));
-    this.address = "0xDEMO00000000000000000000000000000A11ce";
+    this.address = FALLBACK_WALLET_ADDRESS;
     return this.address;
   }
   async getAddress(): Promise<string | null> {

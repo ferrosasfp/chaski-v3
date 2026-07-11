@@ -167,6 +167,21 @@ export class ThrowingKycPendingStore implements KycPendingStore {
   }
 }
 
+// Doble que SIEMPRE falla en clear() (simula localStorage roto) para el test defensivo de WKH-184:
+// ForgetKyc debe resolver igual aunque pending.clear() re-lance (CD-8). save/get funcionan normal.
+export class ThrowingClearKycPendingStore implements KycPendingStore {
+  private p: KycPending | null = null;
+  async save(p: KycPending): Promise<void> {
+    this.p = p;
+  }
+  async get(): Promise<KycPending | null> {
+    return this.p;
+  }
+  async clear(): Promise<void> {
+    throw new Error("kyc_pending_unavailable");
+  }
+}
+
 export class FakePayoutGateway implements PayoutGateway {
   constructor(
     private submitResult: Partial<PayoutRecord> = {},
@@ -213,6 +228,24 @@ export class FakeKycStore implements KycStore {
   }
   async save(address: string, kyc: KycVerification): Promise<void> {
     this.m.set(address.toLowerCase(), kyc);
+  }
+  async clear(address: string): Promise<void> {
+    this.m.delete(address.toLowerCase());
+  }
+}
+
+// Doble que SIEMPRE falla en clear() (simula localStorage roto) para el test defensivo de WKH-184:
+// ForgetKyc debe resolver igual y correr pending.clear() (AC-5/CD-8). get/save funcionan normal.
+export class ThrowingClearKycStore implements KycStore {
+  private m = new Map<string, KycVerification>();
+  async get(address: string): Promise<KycVerification | null> {
+    return this.m.get(address.toLowerCase()) ?? null;
+  }
+  async save(address: string, kyc: KycVerification): Promise<void> {
+    this.m.set(address.toLowerCase(), kyc);
+  }
+  async clear(_address: string): Promise<void> {
+    throw new Error("kyc_store_unavailable");
   }
 }
 

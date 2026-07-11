@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { Money } from "../domain/money";
 import type { RemittanceState } from "../domain/remittance";
-import { deliveredDisplay, humanError, isDemoMode } from "./flow-vm";
+import { FALLBACK_WALLET_ADDRESS } from "../infrastructure/wallet";
+import { deliveredDisplay, humanError, isDemoMode, isFallbackWalletAddress } from "./flow-vm";
 
 describe("flow-vm — deliveredDisplay", () => {
   it("AC-2: deliveredPen null → usa quote.receive", () => {
@@ -59,6 +60,24 @@ describe("flow-vm — isDemoMode", () => {
       kyc: { provenance: "didit" },
     } as RemittanceState;
     expect(isDemoMode(rem)).toBe(false);
+  });
+});
+
+describe("flow-vm — isFallbackWalletAddress (WKH-184 AC-7/AC-9)", () => {
+  it("AC-7: la address demo → true", () => {
+    expect(isFallbackWalletAddress(FALLBACK_WALLET_ADDRESS)).toBe(true);
+  });
+
+  it("AC-9: case-insensitive (variante uppercase de la const) → true", () => {
+    expect(isFallbackWalletAddress(FALLBACK_WALLET_ADDRESS.toUpperCase())).toBe(true);
+  });
+
+  it("AC-7: address real mixed-case → false", () => {
+    expect(isFallbackWalletAddress("0xAbC1230000000000000000000000000000000001")).toBe(false);
+  });
+
+  it("AC-7: null → false", () => {
+    expect(isFallbackWalletAddress(null)).toBe(false);
   });
 });
 

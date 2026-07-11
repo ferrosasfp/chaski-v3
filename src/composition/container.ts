@@ -6,6 +6,7 @@ import { AbandonPendingKyc } from "../application/use-cases/abandon-pending-kyc"
 import { ConfirmAndSend } from "../application/use-cases/confirm-and-send";
 import { ConnectWallet } from "../application/use-cases/connect-wallet";
 import { CreateRemittance } from "../application/use-cases/create-remittance";
+import { ForgetKyc } from "../application/use-cases/forget-kyc";
 import { ListHistory } from "../application/use-cases/list-history";
 import { LockQuote } from "../application/use-cases/lock-quote";
 import { PreviewQuote } from "../application/use-cases/preview-quote";
@@ -36,6 +37,7 @@ export interface Container {
   trackRemittance: TrackRemittance;
   listHistory: ListHistory;
   abandonPendingKyc: AbandonPendingKyc;
+  forgetKyc: ForgetKyc;
 }
 
 export function createContainer(): Container {
@@ -63,6 +65,7 @@ export function createContainer(): Container {
     trackRemittance: new TrackRemittance(payouts, repo, clock),
     listHistory: new ListHistory(repo),
     abandonPendingKyc: new AbandonPendingKyc(kycPending),
+    forgetKyc: new ForgetKyc(kycStore, kycPending),
   };
 }
 

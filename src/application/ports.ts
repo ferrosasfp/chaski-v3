@@ -104,6 +104,7 @@ export interface WalletPort {
 export interface KycStore {
   get(address: string): Promise<KycVerification | null>;
   save(address: string, kyc: KycVerification): Promise<void>;
+  clear(address: string): Promise<void>; // reset explícito del KYC-once de esa address (WKH-184)
 }
 
 // ── Persistencia (historial/estado — aislado del demo) ───────────────────────

@@ -1,6 +1,6 @@
 // Infrastructure — KycStore. Recuerda la verificación KYC por dirección de wallet (KYC-once).
 // localStorage en browser, in-memory en SSR. KycVerification es plano (sin Money) → JSON directo.
-import type { KycVerification } from "../domain/remittance";
+import { type KycVerification, type PersistedIdentity, toPersistedIdentity } from "../domain/remittance";
 import type { KycStore } from "../application/ports";
 
 const KEY = "chaski.kyc.v1";
@@ -22,6 +22,38 @@ function isEntry(x: unknown): x is KycEntry {
   );
 }
 
+// Read defensivo (MNR-1, simétrico con persistence.ts): un entry legacy de OTRA address puede traer
+// identity FULL (documentNumber crudo / dateOfBirth / nationality). Normaliza al shape reducido SIN
+// crashear; el próximo save() reescribe el mapa YA saneado (scrub comprensivo de todas las addresses,
+// no solo la actual). La reducción de PII pasa por el helper único (CD-2).
+function str(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
+function normalizeIdentity(raw: unknown): PersistedIdentity | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  // ya reducida (persistida post-fix)
+  if (typeof o.documentNumberLast4 === "string") {
+    return {
+      firstName: str(o.firstName),
+      lastNamePaternal: str(o.lastNamePaternal),
+      lastNameMaternal: str(o.lastNameMaternal),
+      documentType: str(o.documentType),
+      documentNumberLast4: o.documentNumberLast4,
+    };
+  }
+  // legacy FULL → reducir con el helper único (CD-2)
+  return toPersistedIdentity({
+    firstName: str(o.firstName),
+    lastNamePaternal: str(o.lastNamePaternal),
+    lastNameMaternal: str(o.lastNameMaternal),
+    documentType: str(o.documentType),
+    documentNumber: str(o.documentNumber),
+    dateOfBirth: str(o.dateOfBirth),
+    nationality: str(o.nationality),
+  });
+}
+
 function ls(): Storage | null {
   try {
     return typeof window !== "undefined" ? window.localStorage : null;
@@ -33,7 +65,7 @@ function ls(): Storage | null {
 export class LocalKycStore implements KycStore {
   private mem: Record<string, KycEntry> = {};
 
-  private read(): Record<string, unknown> {
+  private rawObject(): Record<string, unknown> {
     const s = ls();
     if (!s) return this.mem;
     try {
@@ -43,19 +75,31 @@ export class LocalKycStore implements KycStore {
     }
   }
 
+  // Devuelve el mapa YA saneado: entries legacy bare (sin savedAt) descartados (AC-4: get→null) y
+  // el identity de cada entry válido reducido a PersistedIdentity. Así el próximo save() persiste
+  // el objeto completo sin PII cruda de ninguna address.
+  private read(): Record<string, KycEntry> {
+    const out: Record<string, KycEntry> = {};
+    for (const [addr, val] of Object.entries(this.rawObject())) {
+      if (!isEntry(val)) continue; // legacy bare → descartado (scrub en el próximo save)
+      out[addr] = { v: { ...val.v, identity: normalizeIdentity(val.v.identity) }, savedAt: val.savedAt };
+    }
+    return out;
+  }
+
   async get(address: string): Promise<KycVerification | null> {
     const entry = this.read()[address.toLowerCase()];
-    if (!isEntry(entry)) return null; // ausente o legacy bare (sin savedAt) → null (AC-4 defensivo)
+    if (!entry) return null; // ausente o legacy bare descartado → null (AC-4 defensivo)
     if (Date.now() - entry.savedAt > KYC_TTL_MS) return null; // expirado → fuerza re-verify
     return entry.v;
   }
 
   async save(address: string, kyc: KycVerification): Promise<void> {
-    const all = this.read();
+    const all = this.read(); // ya saneado: PII legacy de otras addresses reducida/descartada
     all[address.toLowerCase()] = { v: kyc, savedAt: Date.now() };
     const s = ls();
     if (!s) {
-      this.mem = all as Record<string, KycEntry>;
+      this.mem = all;
       return;
     }
     s.setItem(KEY, JSON.stringify(all));

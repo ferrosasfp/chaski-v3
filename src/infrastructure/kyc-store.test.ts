@@ -99,6 +99,51 @@ describe("LocalKycStore — TTL 180 días", () => {
   });
 });
 
+describe("LocalKycStore — scrub comprensivo de PII legacy (MNR-1)", () => {
+  it("save de una address scrubbea la PII cruda legacy de TODAS las otras addresses", async () => {
+    // Address A: entry legacy con identity FULL (shape pre-181: documentNumber crudo / dateOfBirth /
+    // nationality en claro) pero con wrapper válido { v, savedAt } → sobreviviría a un save() naïf.
+    const legacyFullA = {
+      v: {
+        verificationId: "v-A",
+        approved: true,
+        payoutAllowed: true,
+        riskLevel: "low",
+        provenance: "didit",
+        identity: {
+          firstName: "Legacy",
+          lastNamePaternal: "Uno",
+          lastNameMaternal: "Dos",
+          documentType: "DNI",
+          documentNumber: "44556677",
+          dateOfBirth: "1990-05-14",
+          nationality: "PE",
+        },
+      },
+      savedAt: Date.now(),
+    };
+    // Address B: entry ya válido/reducido.
+    const validB = { v: kyc, savedAt: Date.now() };
+    storage.setItem(KEY, JSON.stringify({ "0xa": legacyFullA, "0xb": validB }));
+
+    const store = new LocalKycStore();
+    await store.save("0xC", kyc); // save de OTRA address
+
+    const raw = storage.getItem(KEY);
+    // el string persistido YA NO contiene la PII cruda de A (scrub comprensivo)
+    expect(raw).not.toContain("44556677");
+    expect(raw).not.toContain("dateOfBirth");
+    expect(raw).not.toContain("nationality");
+    expect(raw).not.toContain("1990-05-14");
+
+    // A quedó reducida (últimos 4), B intacta, C agregada
+    const parsed = JSON.parse(raw ?? "{}") as Record<string, { v: KycVerification }>;
+    expect(parsed["0xa"]?.v.identity?.documentNumberLast4).toBe("6677");
+    expect(parsed["0xb"]?.v.verificationId).toBe("v-1");
+    expect(parsed["0xc"]?.v.verificationId).toBe("v-1");
+  });
+});
+
 describe("LocalKycStore — read defensivo AC-4", () => {
   it("entry legacy bare (KycVerification sin savedAt) → get null (non-crashing)", async () => {
     // shape viejo: address → KycVerification plano, sin wrapper.

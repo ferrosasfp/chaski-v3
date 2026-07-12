@@ -9,6 +9,7 @@
 | WKH-182 | [P2 money-path robustez] Validación de dominio del quote, lock optimista, chain configurable y monto lockeado al payout | DONE (2026-07-11) | `doc/sdd/005-wkh-182-money-path-robustez/done-report.md` |
 | WKH-183 | [P3 higiene] pending-store huérfano, copy de errores, FX/Money, drift env | DONE (2026-07-11) | `doc/sdd/006-wkh-183-higiene-menores/done-report.md` |
 | WKH-184 | [Residual AC-8 WKH-181] Reset explícito de KYC-once + señal soft de FallbackWallet (Opción D) | DONE (2026-07-11) | `doc/sdd/007-wkh-184-fallback-wallet-reset-demo-signal/done-report.md` |
+| WKH-185 | [Deuda técnica] Component test harness (jsdom + RTL) + backfill de ACs de UI sin RTL (178/181/184) | DONE (2026-07-11) | `doc/sdd/008-wkh-185-component-test-harness-backfill/done-report.md` |
 
 ## Notas de coordinación
 - WKH-178 y WKH-179 corren en paralelo, ambas del mismo repo (`chaski-v2`) y de la misma auditoría
@@ -74,6 +75,17 @@
   9/9 ACs PASS, 10/10 CDs cumplidas, pipeline QUALITY completo (F0→F1→F2→F2.5→F3→AR→CR→F4).
   Fix-pack post-CR (MNR-1 + MNR-2) aplicado y verificado. Listo para merge. Ver
   `doc/sdd/007-wkh-184-fallback-wallet-reset-demo-signal/done-report.md`.
+- **WKH-185 (F1, 2026-07-11, `008`)**: deuda técnica pura, distinta al backlog de auditoría
+  178-184 (no encontró bugs, agrega infraestructura de testing). Trabaja sobre el estado ya
+  mergeado de WKH-178..184 (`main`). Backfillea, con evidencia RTL, exactamente los ACs marcados
+  "sin RTL"/"code review (sin RTL)" en los `f4-report.md` ya escritos de WKH-178 (AC-8), WKH-181
+  (AC-3/AC-13) y WKH-184 (AC-4, AC-6, fix-pack MNR-1) — lista cerrada, ver work-item DT-5. Toca
+  `src/presentation/flow.tsx` con **un único cambio de código de producción**: un prop opcional
+  `container?: Container` para poder inyectar fakes desde tests (default preserva el
+  comportamiento actual byte-a-byte — único caller real, `app/page.tsx`, no pasa props). No crea
+  `vitest.config.ts`: usa el docblock per-file `// @vitest-environment jsdom`, sin tocar el
+  entorno `node` default de los 14 tests existentes. Sin bloqueantes para F2. Ver
+  `doc/sdd/008-wkh-185-component-test-harness-backfill/work-item.md`.
 
 ---
 
@@ -94,4 +106,11 @@
 **Impacto**: Chaski v2 sale del hackathon con pipeline de seguridad/QA completo, aislamiento por wallet,
 PII persistida responsablemente, reset explícito para shared-device, y flujo e2e funcional. Cero hallazgos
 bloqueantes abiertos. El AC-8 residual de WKH-181 (diferido a WKH-184) está formalmente cerrado.
-**Next:** commit + push + merge a `main` (acción del orquestador/dev), luego deploy a staging/prod.
+
+## 🟡 DEUDA TÉCNICA POST-AUDITORÍA
+
+| HU | Status | Nota |
+|----|--------|------|
+| WKH-185 (harness jsdom+RTL + backfill ACs UI sin RTL) | DONE (2026-07-11) | Cierra el gap de test automático dejado por 178/181/184 en `flow.tsx`. Test-only. Sin hallazgos (AR/CR/F4). |
+
+**Estado final**: La auditoría integral de Chaski v2 2026-07-10/11 + backfill técnico = **100% COMPLETADA**. Todas las HUs en estado DONE. Listo para merge a `main` y deploy a staging/prod.

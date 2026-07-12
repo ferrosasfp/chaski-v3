@@ -3,7 +3,25 @@
 import { createWalletClient, custom, isAddress, toHex } from "viem";
 import type { WalletPort } from "../application/ports";
 import type { Quote } from "../domain/remittance";
-import { resolveChain, resolveChainId } from "./chain";
+import { resolveChain, resolveChainId, resolveReceiverAddress, resolveUsdcAddress } from "./chain";
+
+// EIP-712 types de transferWithAuthorization (EIP-3009). Compartido por ambos wallets reales.
+const TRANSFER_WITH_AUTHORIZATION_TYPES = {
+  TransferWithAuthorization: [
+    { name: "from", type: "address" },
+    { name: "to", type: "address" },
+    { name: "value", type: "uint256" },
+    { name: "validAfter", type: "uint256" },
+    { name: "validBefore", type: "uint256" },
+    { name: "nonce", type: "bytes32" },
+  ],
+} as const;
+
+/** ¿Encender la firma REAL EIP-3009? Flag OFF por default (WKH-186/AC-9). El guard del container
+ * (AC-11) ya garantizó adapter=a2a + receiver + usdc ANTES de construir cualquier wallet. */
+function eip3009Enabled(): boolean {
+  return process.env.NEXT_PUBLIC_EIP3009_ENABLED === "true";
+}
 
 /** Address de la FallbackWallet demo. Fuente ÚNICA del literal (CD-4, WKH-184):
  *  ningún otro archivo re-hardcodea este string — presentación/helpers lo importan. */
@@ -48,8 +66,30 @@ export class InjectedWallet implements WalletPort {
     if (!eth || !this.address) throw new Error("wallet_not_connected");
     if (!isAddress(this.address)) throw new Error("invalid_address"); // AC-9: antes de firmar
     const client = createWalletClient({ chain: resolveChain(), transport: custom(eth) });
-    // DEMO: firma un MENSAJE (prompt real de la wallet). En producción: EIP-3009 signTypedData del
-    // transferWithAuthorization → el principal viaja gasless al partner via el facilitator.
+    if (eip3009Enabled()) {
+      // AC-10: firma REAL de transferWithAuthorization (EIP-712). value = quote.send.minor (micro-USDC
+      // = base units EIP-3009, cero floats). validBefore atado a la expiración del quote.
+      const usdc = resolveUsdcAddress();
+      const receiver = resolveReceiverAddress(); // MNR-A: valida isAddress fail-loud (no cast crudo)
+      const nonce = toHex(crypto.getRandomValues(new Uint8Array(32)));
+      const validBefore = BigInt(Math.floor(Date.parse(quote.expiresAt) / 1000));
+      const sig = await client.signTypedData({
+        account: this.address,
+        domain: { name: "USD Coin", version: "2", chainId: resolveChainId(), verifyingContract: usdc },
+        types: TRANSFER_WITH_AUTHORIZATION_TYPES,
+        primaryType: "TransferWithAuthorization",
+        message: {
+          from: this.address,
+          to: receiver,
+          value: BigInt(quote.send.minor),
+          validAfter: 0n,
+          validBefore,
+          nonce,
+        },
+      });
+      return { tx: sig };
+    }
+    // DEMO (default): firma un MENSAJE (prompt real de la wallet). Byte-idéntico a hoy (AC-9).
     const sig = await client.signMessage({
       account: this.address,
       message: `Chaski · autorizo enviar ${quote.send.format()} (remesa ${quote.quoteId})`,
@@ -141,6 +181,29 @@ export class WalletConnectWallet implements WalletPort {
     if (!this.address) throw new Error("wallet_not_connected");
     if (!isAddress(this.address)) throw new Error("invalid_address"); // AC-9: antes de firmar
     const client = createWalletClient({ chain: resolveChain(), transport: custom(provider) });
+    if (eip3009Enabled()) {
+      // AC-10: firma REAL de transferWithAuthorization (EIP-712), idéntica a InjectedWallet.
+      const usdc = resolveUsdcAddress();
+      const receiver = resolveReceiverAddress(); // MNR-A: valida isAddress fail-loud (no cast crudo)
+      const nonce = toHex(crypto.getRandomValues(new Uint8Array(32)));
+      const validBefore = BigInt(Math.floor(Date.parse(quote.expiresAt) / 1000));
+      const sig = await client.signTypedData({
+        account: this.address,
+        domain: { name: "USD Coin", version: "2", chainId: resolveChainId(), verifyingContract: usdc },
+        types: TRANSFER_WITH_AUTHORIZATION_TYPES,
+        primaryType: "TransferWithAuthorization",
+        message: {
+          from: this.address,
+          to: receiver,
+          value: BigInt(quote.send.minor),
+          validAfter: 0n,
+          validBefore,
+          nonce,
+        },
+      });
+      return { tx: sig };
+    }
+    // DEMO (default): firma un MENSAJE. Byte-idéntico a hoy (AC-9).
     const sig = await client.signMessage({
       account: this.address,
       message: `Chaski · autorizo enviar ${quote.send.format()} (remesa ${quote.quoteId})`,

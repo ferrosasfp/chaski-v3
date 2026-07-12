@@ -54,6 +54,8 @@ function makeProvider(opts: FakeProviderOpts = {}) {
       case "personal_sign":
       case "eth_sign":
         return "0xsignature";
+      case "eth_signTypedData_v4":
+        return "0xtypedsig";
       default:
         throw new Error(`unhandled:${args.method}`);
     }
@@ -81,6 +83,8 @@ function makeWcProvider(opts: FakeProviderOpts = {}) {
       case "personal_sign":
       case "eth_sign":
         return "0xsignature";
+      case "eth_signTypedData_v4":
+        return "0xtypedsig";
       default:
         throw new Error(`unhandled:${args.method}`);
     }
@@ -94,8 +98,43 @@ function makeWcProvider(opts: FakeProviderOpts = {}) {
 afterEach(() => {
   delete (globalThis as { window?: unknown }).window;
   delete process.env.NEXT_PUBLIC_CHAIN_ID;
+  delete process.env.NEXT_PUBLIC_EIP3009_ENABLED;
+  delete process.env.NEXT_PUBLIC_PAYOUT_RECEIVER_ADDRESS;
+  delete process.env.NEXT_PUBLIC_USDC_CONTRACT_ADDRESS;
   wc.provider = null;
 });
+
+// EIP-3009 real (WKH-186 AC-10): addresses env-driven (all-lowercase → isAddress OK sin checksum).
+const RECEIVER = "0x1111111111111111111111111111111111111111";
+const USDC = "0x5425890298aed601595a70ab815c96711a31bc65"; // USDC Fuji canónico (comentario .env.example)
+const eip3009Quote: Quote = {
+  quoteId: "q1",
+  send: Money.of(400, "USDC"), // minor = 400_000000 = base units EIP-3009
+  receive: Money.of(1480, "PEN"),
+  feeUsd: Money.of(0.5, "USDC"),
+  rate: 3.7,
+  etaMinutes: 30,
+  expiresAt: "2026-07-09T18:10:00.000Z",
+  provenance: "fake",
+};
+
+function enableEip3009(): void {
+  process.env.NEXT_PUBLIC_EIP3009_ENABLED = "true";
+  process.env.NEXT_PUBLIC_PAYOUT_RECEIVER_ADDRESS = RECEIVER;
+  process.env.NEXT_PUBLIC_USDC_CONTRACT_ADDRESS = USDC;
+}
+
+// Extrae el typed-data (params[1] JSON) del eth_signTypedData_v4 registrado.
+function typedDataOf(calls: ProviderCall[]): {
+  domain: { name: string; verifyingContract: string };
+  primaryType: string;
+  message: { to: string; value: string | number };
+} {
+  const call = calls.find((c) => c.method === "eth_signTypedData_v4");
+  if (!call) throw new Error("eth_signTypedData_v4 not called");
+  const params = call.params as unknown[];
+  return JSON.parse(params[1] as string);
+}
 
 describe("FallbackWallet — connect (WKH-184 AC-8/AC-9)", () => {
   it("AC-8/AC-9: connect() retorna la constante única FALLBACK_WALLET_ADDRESS", async () => {
@@ -211,5 +250,61 @@ describe("WalletConnectWallet — validación de address (AC-9)", () => {
     await expect(w.authorizePrincipal(quote)).rejects.toThrow(/invalid_address/);
     const p = wc.provider as ReturnType<typeof makeWcProvider>;
     expect(p.calls.some((c) => c.method === "personal_sign" || c.method === "eth_sign")).toBe(false);
+  });
+});
+
+describe("EIP-3009 flag (WKH-186 AC-9/AC-10) — InjectedWallet", () => {
+  it("AC-9: flag OFF (default) → signMessage (personal_sign), signTypedData NO llamado (byte-idéntico)", async () => {
+    const p = makeProvider();
+    stubWindow(p);
+    const w = new InjectedWallet();
+    await w.connect();
+    const { tx } = await w.authorizePrincipal(eip3009Quote);
+    expect(tx).toBe("0xsignature"); // path demo intacto
+    expect(p.calls.some((c) => c.method === "personal_sign")).toBe(true);
+    expect(p.calls.some((c) => c.method === "eth_signTypedData_v4")).toBe(false);
+  });
+
+  it("AC-10: flag ON → signTypedData de transferWithAuthorization (to=receiver, value=send.minor, USDC domain)", async () => {
+    enableEip3009();
+    const p = makeProvider();
+    stubWindow(p);
+    const w = new InjectedWallet();
+    await w.connect();
+    const { tx } = await w.authorizePrincipal(eip3009Quote);
+    expect(tx).toBe("0xtypedsig");
+    expect(p.calls.some((c) => c.method === "personal_sign")).toBe(false); // NO firma demo
+    const td = typedDataOf(p.calls);
+    expect(td.primaryType).toBe("TransferWithAuthorization");
+    expect(td.domain.name).toBe("USD Coin");
+    expect(td.domain.verifyingContract.toLowerCase()).toBe(USDC);
+    expect(td.message.to.toLowerCase()).toBe(RECEIVER);
+    expect(String(td.message.value)).toBe("400000000"); // 400 USDC en micro-USDC (base units)
+  });
+});
+
+describe("EIP-3009 flag (WKH-186 AC-9/AC-10) — WalletConnectWallet", () => {
+  it("AC-9: flag OFF (default) → signMessage, signTypedData NO llamado", async () => {
+    wc.provider = makeWcProvider();
+    const w = new WalletConnectWallet("proj-id");
+    await w.connect();
+    const { tx } = await w.authorizePrincipal(eip3009Quote);
+    expect(tx).toBe("0xsignature");
+    const p = wc.provider as ReturnType<typeof makeWcProvider>;
+    expect(p.calls.some((c) => c.method === "eth_signTypedData_v4")).toBe(false);
+  });
+
+  it("AC-10: flag ON → signTypedData con to=receiver/value=send.minor/USDC domain", async () => {
+    enableEip3009();
+    wc.provider = makeWcProvider();
+    const w = new WalletConnectWallet("proj-id");
+    await w.connect();
+    const { tx } = await w.authorizePrincipal(eip3009Quote);
+    expect(tx).toBe("0xtypedsig");
+    const p = wc.provider as ReturnType<typeof makeWcProvider>;
+    const td = typedDataOf(p.calls);
+    expect(td.primaryType).toBe("TransferWithAuthorization");
+    expect(td.message.to.toLowerCase()).toBe(RECEIVER);
+    expect(String(td.message.value)).toBe("400000000");
   });
 });

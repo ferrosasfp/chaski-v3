@@ -18,6 +18,7 @@ import {
   FakePayoutAuthorityGateway,
   FakePayoutGateway,
   FakeQuoteGateway,
+  FakeRefundGateway,
   FakeWallet,
   FixedClock,
   InMemoryRepo,
@@ -49,8 +50,15 @@ function setup(opts?: {
     startKyc: new StartKyc(kycGw, kycStore, pending, repo, clock),
     resumeKyc: new ResumeKyc(kycGw, kycStore, pending, repo, clock),
     lock: new LockQuote(new FakeQuoteGateway(), repo, clock),
-    confirm: new ConfirmAndSend(wallet, payout, repo, clock, new FakePayoutAuthorityGateway()),
-    track: new TrackRemittance(payout, repo, clock),
+    confirm: new ConfirmAndSend(
+      wallet,
+      payout,
+      repo,
+      clock,
+      new FakePayoutAuthorityGateway(),
+      new FakeRefundGateway(),
+    ),
+    track: new TrackRemittance(payout, repo, clock, new FakeRefundGateway()),
   };
 }
 
@@ -71,8 +79,8 @@ describe("Use-cases — money-path", () => {
     r = await confirm.execute({ remittanceId: id });
     expect(r.status).toBe("payout_submitted");
     r = await track.execute({ remittanceId: id });
-    expect(r.status).toBe("settled");
-    expect(r.snapshot.deliveredPen).toEqual(Money.of(368, "PEN"));
+    expect(r.status).toBe("settled"); // delivered dentro de tolerancia del receive lockeado (AC-6)
+    expect(r.snapshot.deliveredPen).toEqual(Money.of(1478.15, "PEN"));
     expect(r.snapshot.principalTx).toBe("0xprincipal");
   });
 
@@ -111,7 +119,7 @@ describe("Use-cases — money-path", () => {
     );
   });
 
-  it("payout falla → payout_failed (con reason)", async () => {
+  it("payout falla → refunded, failureReason preservado (WKH-186 refund-on-failure)", async () => {
     const { create, startKyc, lock, confirm } = setup({
       payout: new FakePayoutGateway({ status: "failed", failureReason: "partner_down" }),
     });
@@ -120,8 +128,11 @@ describe("Use-cases — money-path", () => {
     await startKyc.execute(kycInput(id));
     await lock.execute({ remittanceId: id });
     const r = await confirm.execute({ remittanceId: id });
-    expect(r.status).toBe("payout_failed");
+    // Antes de WKH-186 la remesa quedaba clavada en payout_failed; ahora el refund la avanza a
+    // refunded en el mismo execute(). markRefunded solo patchea refundTx → failureReason sobrevive.
+    expect(r.status).toBe("refunded");
     expect(r.snapshot.failureReason).toBe("partner_down");
+    expect(r.snapshot.refundTx).toBe("refund-fake");
   });
 
   it("PreviewQuote no crea remesa", async () => {

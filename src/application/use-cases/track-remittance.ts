@@ -37,15 +37,24 @@ export class TrackRemittance {
 
     const rec = await this.payouts.status(s.payoutId);
     if (rec.status === "settled") {
-      // Reconciliación PRE-markSettled (AC-6/CD-6): reusa el receive lockeado del quote persistido.
-      // Con el fallback (deliveredPen:null) la guarda es falsa → markSettled(null) byte-idéntico.
-      const expected = s.quote?.receive ?? null;
-      if (expected && rec.deliveredPen && !isDeliveredWithinReceiveTolerance(expected, rec.deliveredPen)) {
-        await this.failAndRefund(r, "payout_amount_mismatch");
+      // MNR-D: la reconciliación va DENTRO de un try/catch — simétrico con ConfirmAndSend. Si
+      // isDeliveredWithinReceiveTolerance lanzara (ej. reconcile_currency_mismatch por monedas
+      // divergentes), la rejection NO debe escapar cruda de execute(): se degrada a failAndRefund
+      // con razón estable. Money-path uniformemente fail-safe (nunca una promesa rechazada al UI).
+      try {
+        // Reconciliación PRE-markSettled (AC-6/CD-6): reusa el receive lockeado del quote persistido.
+        // Con el fallback (deliveredPen:null) la guarda es falsa → markSettled(null) byte-idéntico.
+        const expected = s.quote?.receive ?? null;
+        if (expected && rec.deliveredPen && !isDeliveredWithinReceiveTolerance(expected, rec.deliveredPen)) {
+          await this.failAndRefund(r, "payout_amount_mismatch");
+          return r;
+        }
+        r.markSettled(rec.txRef ?? "", rec.deliveredPen, this.clock.nowIso());
+        await this.repo.save(r);
+      } catch (err) {
+        await this.failAndRefund(r, err instanceof Error ? err.message : "reconcile_error");
         return r;
       }
-      r.markSettled(rec.txRef ?? "", rec.deliveredPen, this.clock.nowIso());
-      await this.repo.save(r);
     } else if (rec.status === "failed") {
       await this.failAndRefund(r, rec.failureReason ?? "payout_failed");
     }

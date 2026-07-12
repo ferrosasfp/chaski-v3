@@ -10,7 +10,7 @@
 | WKH-183 | [P3 higiene] pending-store huérfano, copy de errores, FX/Money, drift env | DONE (2026-07-11) | `doc/sdd/006-wkh-183-higiene-menores/done-report.md` |
 | WKH-184 | [Residual AC-8 WKH-181] Reset explícito de KYC-once + señal soft de FallbackWallet (Opción D) | DONE (2026-07-11) | `doc/sdd/007-wkh-184-fallback-wallet-reset-demo-signal/done-report.md` |
 | WKH-185 | [Deuda técnica] Component test harness (jsdom + RTL) + backfill de ACs de UI sin RTL (178/181/184) | DONE (2026-07-11) | `doc/sdd/008-wkh-185-component-test-harness-backfill/done-report.md` |
-| WKH-186 | [Técnico, porción de WKH-168] Value-delivery scaffolding: adapter a2a (mock/off), reconciliación + idempotencia, refund-on-failure, EIP-3009-ready | F1 (2026-07-11) | `doc/sdd/009-wkh-186-value-delivery-scaffolding/work-item.md` |
+| WKH-186 | [Técnico, porción de WKH-168] Value-delivery scaffolding: adapter a2a (mock/off), reconciliación + idempotencia, refund-on-failure, EIP-3009-ready | DONE (2026-07-11) | `doc/sdd/009-wkh-186-value-delivery-scaffolding/done-report.md` |
 
 ## Notas de coordinación
 - WKH-178 y WKH-179 corren en paralelo, ambas del mismo repo (`chaski-v2`) y de la misma auditoría
@@ -87,31 +87,22 @@
   `vitest.config.ts`: usa el docblock per-file `// @vitest-environment jsdom`, sin tocar el
   entorno `node` default de los 14 tests existentes. Sin bloqueantes para F2. Ver
   `doc/sdd/008-wkh-185-component-test-harness-backfill/work-item.md`.
-- **WKH-186 (F1, 2026-07-11, `009`)**: porción TÉCNICA de WKH-168 (desembolso real), SIN depender
+- **WKH-186 (DONE, 2026-07-11, `009`)**: porción TÉCNICA de WKH-168 (desembolso real), SIN depender
   del partner/sandbox TransFi — scaffolding completo de value-delivery con TODO mock/apagado por
-  default (cero movimiento de dinero real). Trabaja sobre el estado ya mergeado de WKH-178..185
-  (`main`); no reabre ninguno de esos gaps. 4 piezas: (1) adapter `src/infrastructure/a2a/` que
-  llama directo (server-side, DT-1) a los agentes live `remit-corridor-fx`/`remit-cashout-payout`
-  del repo `wasiai-remittance-agents` (verificado en disco: contrato `POST /invoke → {result}`
-  estable, sin auth hoy), detrás de un flag de composición `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`
-  (default `fallback`, como hoy); (2) reconciliación (deliveredPen vs expectedReceivePen, misma
-  tolerancia que `assertReceiveConsistent`) + idempotencia end-to-end (el `idempotencyKey` ya
-  existente viaja intacto); (3) **refund-on-failure**: cierra un gap real encontrado en F0 (NINGÚN
-  use-case existente llama `Remittance.markRefunded()` — una remesa en `payout_failed` queda
-  huérfana hoy, incluso en modo 100% mock) con un `RefundGateway` nuevo (`LedgerRefundGateway`,
-  ledger-only, sin movimiento on-chain real — CD-8 documenta el gap de clawback real como Fase A);
-  (4) EIP-3009-ready: `wallet.ts` gana un path real de `signTypedData`
-  `transferWithAuthorization` detrás de `NEXT_PUBLIC_EIP3009_ENABLED` (default `false`, preserva el
-  `signMessage` simbólico actual), con fail-loud en `createContainer()` si se enciende sin el
-  adapter payout real (`NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER=a2a`) o sin
-  `NEXT_PUBLIC_PAYOUT_RECEIVER_ADDRESS` configurada (CD-3/CD-4). Sin HUs concurrentes en
-  `chaski-v2` hoy (backlog 178-185 100% cerrado) → sin riesgo de colisión de merge. 4
-  `[NEEDS CLARIFICATION]` no bloqueantes (todos resolubles por el Architect en F2 o diferidos a
-  Fase A/founder, ninguno bloquea el scaffolding mock): (1) llamada directa al agente vs a través
-  del gateway pagado `wasiai-a2a`; (2) dirección/contrato USDC exacto por chain para el dominio
-  EIP-3009; (3) `NEXT_PUBLIC_PAYOUT_RECEIVER_ADDRESS` no existe hoy (Fase A/partner); (4)
-  `remit-cashout-payout` no expone hoy polling asíncrono separado (HU futura en ESE repo, fuera de
-  `chaski-v2`). Ver `doc/sdd/009-wkh-186-value-delivery-scaffolding/work-item.md`.
+  default (cero movimiento de dinero real, verificado en 6 capas independientes CD-2). Trabaja sobre
+  el estado ya mergeado de WKH-178..185 (`main`); no reabre ninguno de esos gaps. 4 piezas
+  IMPLEMENTADAS: (1) adapter `src/infrastructure/a2a/` que llama directo (server-side, DT-1) a los
+  agentes live `remit-corridor-fx`/`remit-cashout-payout` del repo `wasiai-remittance-agents`,
+  detrás de flag `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` (default `fallback`); (2) reconciliación
+  (deliveredPen vs expectedReceivePen, misma tolerancia que `assertReceiveConsistent`) + idempotencia
+  end-to-end (`idempotencyKey` intacto); (3) **gap real cerrado**: refund-on-failure (nadie llamaba
+  `markRefunded()` antes, remesas quedaban huérfanas en `payout_failed`) con `LedgerRefundGateway`
+  ledger-only (CD-8, gap de clawback on-chain real diferido a Fase A); (4) EIP-3009-ready:
+  `wallet.ts` rama `signTypedData` `transferWithAuthorization` (default `false`, fail-loud si se
+  enciende sin conditions CD-3/CD-4). Pipeline QUALITY completo: 14/14 ACs PASS, 17/17 CDs ✅,
+  0 BLOQUEANTES, 4 MENORs fixeados (MNR-A receiver validation, MNR-B cache-miss status, MNR-C shape
+  align, MNR-D try/catch), 223/223 tests verdes, build OK, CD-2 money-path verificada 6 capas.
+  Runbook Fase A documentado en `done-report.md` §8. Ver `doc/sdd/009-wkh-186-value-delivery-scaffolding/done-report.md`.
 
 ---
 
@@ -145,4 +136,4 @@ bloqueantes abiertos. El AC-8 residual de WKH-181 (diferido a WKH-184) está for
 
 | HU | Status | Nota |
 |----|--------|------|
-| WKH-186 (scaffolding a2a mock/off + reconciliación + refund + EIP-3009-ready) | F1 (2026-07-11) | Sin movimiento de dinero real. Deja el terreno listo para WKH-168 real (Fase A/TransFi). Ver Notas de coordinación arriba. |
+| WKH-186 (scaffolding a2a mock/off + reconciliación + refund + EIP-3009-ready) | DONE (2026-07-11) | Sin movimiento de dinero real (CD-2 verificada 6 capas). Gap real cerrado (refund-on-failure). Runbook Fase A documentado. Listo para merge. Ver `doc/sdd/009-wkh-186-value-delivery-scaffolding/done-report.md`. |

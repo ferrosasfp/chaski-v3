@@ -115,6 +115,37 @@ describe("TrackRemittance — refund-on-failure (AC-7/CD-7)", () => {
   });
 });
 
+describe("TrackRemittance — MNR-B: incertidumbre no false-refundea", () => {
+  it("status no-terminal 'submitted' (cache-miss del gateway a2a) → NO refunda, queda payout_submitted (recuperable)", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedSubmitted(repo);
+    const refund = new FakeRefundGateway();
+    // El A2aPayoutGateway en cache-miss devuelve status:"submitted" (MNR-B): estado NO-terminal.
+    const payouts = new FakePayoutGateway({}, { status: "submitted", deliveredPen: null, txRef: null, failureReason: "payout_status_unknown" });
+    const out = await new TrackRemittance(payouts, repo, new FixedClock(), refund).execute({ remittanceId: id });
+    expect(out.status).toBe("payout_submitted"); // NO transiciona a payout_failed
+    expect(out.status).not.toBe("refunded");
+    expect(refund.calls).toHaveLength(0); // NUNCA refundea sobre incertidumbre
+  });
+});
+
+describe("TrackRemittance — MNR-D: reconciliación fail-safe (simetría con ConfirmAndSend)", () => {
+  it("si la reconciliación LANZA (reconcile_currency_mismatch) → execute() NO rechaza crudo, degrada a failAndRefund", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedSubmitted(repo);
+    const refund = new FakeRefundGateway();
+    // deliveredPen con moneda DIVERGENTE (USDC vs el receive lockeado en PEN) → isDeliveredWithin...
+    // lanza reconcile_currency_mismatch. Fuera del try/catch escaparía crudo (rechazo de execute()).
+    const payouts = new FakePayoutGateway({}, { status: "settled", deliveredPen: Money.of(1480, "USDC"), txRef: "0xok" });
+    const uc = new TrackRemittance(payouts, repo, new FixedClock(), refund);
+    // La promesa NO rechaza (fail-safe uniforme); se degrada a refunded con razón estable.
+    const out = await uc.execute({ remittanceId: id });
+    expect(out.status).toBe("refunded");
+    expect(out.snapshot.failureReason).toBe("reconcile_currency_mismatch");
+    expect(refund.calls).toHaveLength(1);
+  });
+});
+
 describe("TrackRemittance — guard (idempotencia)", () => {
   it("no corre si el estado no es payout_submitted (terminal/otro) → no-op", async () => {
     const repo = new InMemoryRepo();

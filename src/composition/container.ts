@@ -14,6 +14,7 @@ import { ResumeKyc } from "../application/use-cases/resume-kyc";
 import { StartKyc } from "../application/use-cases/start-kyc";
 import { TrackRemittance } from "../application/use-cases/track-remittance";
 import { A2aPayoutGateway, A2aQuoteGateway } from "../infrastructure/a2a/gateways";
+import { resolveReceiverAddress } from "../infrastructure/chain";
 import { DiditKycGateway } from "../infrastructure/didit/kyc-gateway";
 import {
   FallbackKycGateway,
@@ -57,8 +58,12 @@ export function createContainer(): Container {
   // (firma real + payout mock). Default (EIP-3009 off) → nunca entra acá.
   if (process.env.NEXT_PUBLIC_EIP3009_ENABLED === "true") {
     if (adapter !== "a2a") throw new Error("eip3009_requires_a2a_adapter"); // CD-3
-    if (!process.env.NEXT_PUBLIC_PAYOUT_RECEIVER_ADDRESS) throw new Error("eip3009_requires_receiver"); // CD-4
-    if (!process.env.NEXT_PUBLIC_USDC_CONTRACT_ADDRESS) throw new Error("eip3009_requires_usdc_contract"); // CD-16
+    if (!process.env.NEXT_PUBLIC_PAYOUT_RECEIVER_ADDRESS) throw new Error("eip3009_requires_receiver"); // CD-4 (presencia)
+    if (!process.env.NEXT_PUBLIC_USDC_CONTRACT_ADDRESS) throw new Error("eip3009_requires_usdc_contract"); // CD-16 (presencia)
+    // MNR-A: además de presencia, validar FORMATO (isAddress) fail-loud — un receiver malformado
+    // (typo / checksum válido) firmaría al destino equivocado en Fase A. La app NO arranca con un
+    // receiver malformado; el error surge acá (construcción), NUNCA en sign-time. Simétrico con usdc.
+    resolveReceiverAddress(); // throws payout_receiver_not_configured si el formato es inválido
   }
   const useA2a = adapter === "a2a";
   const quotes = useA2a ? new A2aQuoteGateway() : new FallbackQuoteGateway();

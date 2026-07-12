@@ -76,6 +76,39 @@ describe("POST /api/a2a/payout/submit — proxy server-only a remit-cashout-payo
     expect(await res.json()).toEqual({ error: "a2a_bad_shape" });
   });
 
+  it("MNR-C: result { status:'settled', payoutId:null } → 502 a2a_bad_shape (alineado con el gateway)", async () => {
+    // Antes la route lo aceptaba (validador divergente del gateway isValidPayoutShape). payoutId null
+    // SOLO válido en failed/blocked: un settled/submitted sin payoutId no es trackeable → bad shape.
+    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ result: { status: "settled", payoutId: null, deliveredLocal: 1478.15, txRef: "0x", reason: null, provenance: "p" } }),
+    })));
+    const res = await POST(req(validPayload));
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "a2a_bad_shape" });
+  });
+
+  it("MNR-C: result { status:'submitted', payoutId:null } → 502 a2a_bad_shape (submitted también requiere payoutId)", async () => {
+    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ result: { status: "submitted", payoutId: null, deliveredLocal: null, txRef: null, reason: null, provenance: "p" } }),
+    })));
+    const res = await POST(req(validPayload));
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "a2a_bad_shape" });
+  });
+
+  it("MNR-C: result { status:'failed', payoutId:null } → 200 (payoutId null SÍ válido en failed)", async () => {
+    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+    const failedResult = { status: "failed", payoutId: null, deliveredLocal: null, txRef: null, reason: "partner_down", provenance: "p" };
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ result: failedResult }) })));
+    const res = await POST(req(validPayload));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ result: failedResult });
+  });
+
   it("fetch throw (timeout/DNS) → 502 a2a_unavailable, NO 500 crudo, no ecoa el beneficiary", async () => {
     vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("aborted"); }));

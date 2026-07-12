@@ -20,6 +20,10 @@ function isValidPayoutResult(v: unknown): boolean {
   if (!(typeof v.deliveredLocal === "number" || v.deliveredLocal === null)) return false;
   if (!(typeof v.txRef === "string" || v.txRef === null)) return false;
   if (!(typeof v.reason === "string" || v.reason === null)) return false;
+  // MNR-C: alineado con isValidPayoutShape del gateway (gateways.ts, la autoridad de shape). payoutId
+  // null SOLO es válido cuando el payout no se ejecutó (failed/blocked); settled/submitted sin payoutId
+  // → shape inválido (no podríamos trackear el payout). La route es tan estricta como el gateway.
+  if (v.payoutId === null && v.status !== "failed" && v.status !== "blocked") return false;
   return true;
 }
 

@@ -135,14 +135,20 @@ export class A2aPayoutGateway implements PayoutGateway {
   }
 
   async status(payoutId: string): Promise<PayoutRecord> {
-    return (
-      this.last.get(payoutId) ?? {
-        payoutId,
-        status: "failed",
-        deliveredPen: null,
-        txRef: null,
-        failureReason: "payout_status_unknown",
-      }
-    );
+    const cached = this.last.get(payoutId);
+    if (cached) return cached;
+    // MNR-B (money-path): cache-miss (recarga → container nuevo → Map vacío) NO es evidencia de que
+    // el payout FALLÓ. Fabricar "failed" acá false-refundearía un payout que pudo ser exitoso (submit
+    // devolvió "submitted", estado no-terminal). Devolvemos un estado NO-TERMINAL ("submitted", flag
+    // payout_status_unknown) → TrackRemittance NO transiciona a payout_failed ni refundea sobre
+    // incertidumbre; la remesa queda RECUPERABLE. Principio: NUNCA refundear/fallar sobre un payout que
+    // no sabemos que falló. El fix real (polling async / persistir el estado del submit) es Fase A (AC-14).
+    return {
+      payoutId,
+      status: "submitted",
+      deliveredPen: null,
+      txRef: null,
+      failureReason: "payout_status_unknown",
+    };
   }
 }

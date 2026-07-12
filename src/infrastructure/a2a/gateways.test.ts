@@ -132,12 +132,16 @@ describe("A2aPayoutGateway (AC-4/AC-5/AC-14)", () => {
     expect(status).toEqual(submitted);
   });
 
-  it("AC-14: status de un id desconocido → failed/payout_status_unknown (opaco)", async () => {
+  it("MNR-B: status de un id desconocido (cache-miss) → NO-TERMINAL 'submitted', NUNCA 'failed' (no false-refund)", async () => {
     const gw = new A2aPayoutGateway();
     const status = await gw.status("nope");
+    // Cache-miss (recarga → Map vacío) NO es evidencia de fallo. Fabricar "failed" false-refundearía
+    // un payout que pudo ser exitoso. Estado no-terminal → TrackRemittance NO refundea sobre incertidumbre.
+    expect(status.status).toBe("submitted");
+    expect(status.status).not.toBe("failed");
     expect(status).toEqual({
       payoutId: "nope",
-      status: "failed",
+      status: "submitted",
       deliveredPen: null,
       txRef: null,
       failureReason: "payout_status_unknown",

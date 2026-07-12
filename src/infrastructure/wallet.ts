@@ -3,7 +3,7 @@
 import { createWalletClient, custom, isAddress, toHex } from "viem";
 import type { WalletPort } from "../application/ports";
 import type { Quote } from "../domain/remittance";
-import { resolveChain, resolveChainId, resolveUsdcAddress } from "./chain";
+import { resolveChain, resolveChainId, resolveReceiverAddress, resolveUsdcAddress } from "./chain";
 
 // EIP-712 types de transferWithAuthorization (EIP-3009). Compartido por ambos wallets reales.
 const TRANSFER_WITH_AUTHORIZATION_TYPES = {
@@ -70,7 +70,7 @@ export class InjectedWallet implements WalletPort {
       // AC-10: firma REAL de transferWithAuthorization (EIP-712). value = quote.send.minor (micro-USDC
       // = base units EIP-3009, cero floats). validBefore atado a la expiración del quote.
       const usdc = resolveUsdcAddress();
-      const receiver = process.env.NEXT_PUBLIC_PAYOUT_RECEIVER_ADDRESS as `0x${string}`;
+      const receiver = resolveReceiverAddress(); // MNR-A: valida isAddress fail-loud (no cast crudo)
       const nonce = toHex(crypto.getRandomValues(new Uint8Array(32)));
       const validBefore = BigInt(Math.floor(Date.parse(quote.expiresAt) / 1000));
       const sig = await client.signTypedData({
@@ -184,7 +184,7 @@ export class WalletConnectWallet implements WalletPort {
     if (eip3009Enabled()) {
       // AC-10: firma REAL de transferWithAuthorization (EIP-712), idéntica a InjectedWallet.
       const usdc = resolveUsdcAddress();
-      const receiver = process.env.NEXT_PUBLIC_PAYOUT_RECEIVER_ADDRESS as `0x${string}`;
+      const receiver = resolveReceiverAddress(); // MNR-A: valida isAddress fail-loud (no cast crudo)
       const nonce = toHex(crypto.getRandomValues(new Uint8Array(32)));
       const validBefore = BigInt(Math.floor(Date.parse(quote.expiresAt) / 1000));
       const sig = await client.signTypedData({

@@ -333,14 +333,14 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
       {address && isFallbackWalletAddress(address) ? (
         <div className="mb-4 flex items-center justify-center">
           <Pill tone="warn">
-            Sin aislamiento por wallet en este dispositivo — conectá MetaMask o WalletConnect.
+            Sin aislamiento por wallet en este dispositivo. Conectá MetaMask o WalletConnect.
           </Pill>
         </div>
       ) : null}
 
       {rem && isDemoMode(rem) && (step === "review" || step === "track") ? (
         <div className="mb-4 flex items-center justify-center">
-          <Pill tone="warn">Modo demo — sin dinero real</Pill>
+          <Pill tone="warn">Modo demo (sin dinero real)</Pill>
         </div>
       ) : null}
 
@@ -453,7 +453,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                 <div>
                   <p className="text-base font-bold">Conectá tu wallet</p>
                   <p className="mx-auto mt-1 max-w-xs text-sm text-stone">
-                    Firmás el envío desde tu billetera con USDC. Chaski nunca toca tu plata — solo la
+                    Firmás el envío desde tu billetera con USDC. Chaski nunca toca tu plata, solo la
                     dirige.
                   </p>
                 </div>
@@ -486,7 +486,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                 </div>
                 <p className="text-sm text-stone">
                   Por ley, verificamos tu identidad <b>una sola vez</b>. Escaneás tu DNI y te sacás
-                  una selfie — lo hace <b>Didit</b>, un verificador certificado. Tus datos no se
+                  una selfie. Lo hace <b>Didit</b>, un verificador certificado. Tus datos no se
                   comparten.
                 </p>
                 {scanStage === 0 ? (
@@ -671,7 +671,7 @@ function Receipt({ rem, onNew }: { rem: RemittanceState; onNew: () => void }) {
         <p className="mt-1 text-xs text-stone">en su {methodLabel(rem.beneficiary.method)}</p>
         {isDemoMode(rem) ? (
           <div className="mt-3 flex items-center justify-center">
-            <Pill tone="warn">Modo demo — sin dinero real</Pill>
+            <Pill tone="warn">Modo demo (sin dinero real)</Pill>
           </div>
         ) : null}
       </Card>

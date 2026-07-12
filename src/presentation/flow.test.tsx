@@ -52,7 +52,7 @@ it("T1: modo demo muestra el monto del quote (no S/0.00) y el banner 'Modo demo'
 
   // (b) banner "Modo demo — sin dinero real" presente, una sola vez.
   const banners = await screen.findAllByText(
-    /Modo demo — sin dinero real/,
+    /Modo demo \(sin dinero real\)/,
     {},
     { timeout: 6000 },
   );

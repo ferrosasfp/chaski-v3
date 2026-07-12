@@ -26,6 +26,7 @@ import type {
   PayoutSubmit,
   QuoteGateway,
   QuoteRequest,
+  RefundGateway,
   RemittanceRepository,
   WalletPort,
 } from "../application/ports";
@@ -200,8 +201,11 @@ export class FakePayoutGateway implements PayoutGateway {
   async status(payoutId: string): Promise<PayoutRecord> {
     return {
       payoutId,
+      // deliveredPen CONSISTENTE con el receive del FakeQuoteGateway canónico (400 USDC → ~1478.15
+      // PEN): tras la reconciliación de WKH-186 (AC-6) un delivered fuera de tolerancia refundea en
+      // vez de settlear. El happy-path por default debe caer DENTRO de tolerancia → settled.
       status: "settled",
-      deliveredPen: Money.of(368, "PEN"),
+      deliveredPen: Money.of(1478.15, "PEN"),
       txRef: "0xdelivered",
       failureReason: null,
       ...this.statusResult,
@@ -257,6 +261,23 @@ export class FakePayoutAuthorityGateway implements PayoutAuthorityGateway {
   async authorize(input: { verificationId: string; address: string }): Promise<PayoutAuthorization> {
     this.calls.push(input);
     return this.result;
+  }
+}
+
+// Refund fake (WKH-186). Por default resuelve { refundTx:"refund-fake" } (regresión-neutral);
+// mode="reject" ejercita el best-effort de failAndRefund (queda en payout_failed si el refund falla).
+// Registra los inputs recibidos (molde de FakePayoutAuthorityGateway).
+export class FakeRefundGateway implements RefundGateway {
+  public calls: Array<{ remittanceId: string; amountUsd: Money; reason: string }> = [];
+  constructor(private mode: "resolve" | "reject" = "resolve") {}
+  async creditBack(input: {
+    remittanceId: string;
+    amountUsd: Money;
+    reason: string;
+  }): Promise<{ refundTx: string }> {
+    this.calls.push(input);
+    if (this.mode === "reject") throw new Error("refund_unavailable");
+    return { refundTx: "refund-fake" };
   }
 }
 

@@ -21,6 +21,7 @@ import {
 } from "../infrastructure/fallback/gateways";
 import { LocalKycPendingStore } from "../infrastructure/kyc-pending-store";
 import { HttpPayoutAuthorityGateway } from "../infrastructure/payout/payout-authority-gateway";
+import { LedgerRefundGateway } from "../infrastructure/refund/ledger-refund-gateway";
 import { LocalKycStore } from "../infrastructure/kyc-store";
 import { LocalRepo } from "../infrastructure/persistence";
 import { CryptoIds, SystemClock } from "../infrastructure/system";
@@ -52,6 +53,7 @@ export function createContainer(): Container {
   const kyc = new DiditKycGateway(new FallbackKycGateway());
   const payouts = new FallbackPayoutGateway();
   const payoutAuthority = new HttpPayoutAuthorityGateway(); // autoridad server-side (WKH-180)
+  const refund = new LedgerRefundGateway(); // refund-on-failure ledger-only (WKH-186/AC-8, CD-8)
   const wallet = pickWallet(); // wallet REAL (MetaMask) si está inyectada, si no la demo
 
   return {
@@ -61,8 +63,8 @@ export function createContainer(): Container {
     startKyc: new StartKyc(kyc, kycStore, kycPending, repo, clock),
     resumeKyc: new ResumeKyc(kyc, kycStore, kycPending, repo, clock),
     lockQuote: new LockQuote(quotes, repo, clock),
-    confirmAndSend: new ConfirmAndSend(wallet, payouts, repo, clock, payoutAuthority),
-    trackRemittance: new TrackRemittance(payouts, repo, clock),
+    confirmAndSend: new ConfirmAndSend(wallet, payouts, repo, clock, payoutAuthority, refund),
+    trackRemittance: new TrackRemittance(payouts, repo, clock, refund),
     listHistory: new ListHistory(repo),
     abandonPendingKyc: new AbandonPendingKyc(kycPending),
     forgetKyc: new ForgetKyc(kycStore, kycPending),

@@ -24,6 +24,7 @@ import type {
   PayoutAuthorityGateway,
   PayoutGateway,
   QuoteGateway,
+  RefundGateway,
   WalletPort,
 } from "../application/ports";
 import {
@@ -34,6 +35,7 @@ import {
   FakeKycPendingStore,
   FakePayoutGateway,
   FakePayoutAuthorityGateway,
+  FakeRefundGateway,
   FixedClock,
   SeqIds,
   InMemoryRepo,
@@ -47,6 +49,7 @@ export interface TestContainerOverrides {
   pending?: KycPendingStore; // default: new FakeKycPendingStore()
   payouts?: PayoutGateway; // default: new FakePayoutGateway()
   payoutAuthority?: PayoutAuthorityGateway; // default: new FakePayoutAuthorityGateway()
+  refund?: RefundGateway; // default: new FakeRefundGateway() (regresión-neutral, WKH-186)
   clock?: Clock; // default: new FixedClock()
   useCases?: Partial<Container>; // escape hatch (ej. resumeKyc stub para T3)
 }
@@ -62,6 +65,7 @@ export function buildTestContainer(o: TestContainerOverrides = {}): Container {
   const pending = o.pending ?? new FakeKycPendingStore();
   const payouts = o.payouts ?? new FakePayoutGateway();
   const payoutAuthority = o.payoutAuthority ?? new FakePayoutAuthorityGateway();
+  const refund = o.refund ?? new FakeRefundGateway();
 
   const base: Container = {
     previewQuote: new PreviewQuote(quotes),
@@ -70,8 +74,8 @@ export function buildTestContainer(o: TestContainerOverrides = {}): Container {
     startKyc: new StartKyc(kyc, kycStore, pending, repo, clock),
     resumeKyc: new ResumeKyc(kyc, kycStore, pending, repo, clock),
     lockQuote: new LockQuote(quotes, repo, clock),
-    confirmAndSend: new ConfirmAndSend(wallet, payouts, repo, clock, payoutAuthority),
-    trackRemittance: new TrackRemittance(payouts, repo, clock),
+    confirmAndSend: new ConfirmAndSend(wallet, payouts, repo, clock, payoutAuthority, refund),
+    trackRemittance: new TrackRemittance(payouts, repo, clock, refund),
     listHistory: new ListHistory(repo),
     abandonPendingKyc: new AbandonPendingKyc(pending),
     forgetKyc: new ForgetKyc(kycStore, pending),

@@ -118,6 +118,17 @@ function assertReceiveConsistent(quote: Quote): void {
   }
 }
 
+/** Reconciliación money-path PURA (WKH-186/AC-6, CD-6): valida que el PEN ENTREGADO por el partner
+ * (`delivered`) es consistente con el `receive` lockeado del quote (`expected`), dentro de la MISMA
+ * tolerancia que `assertReceiveConsistent` (sin tolerancia nueva). Se aplica ANTES de `markSettled`:
+ * mismatch → payout_failed razón `payout_amount_mismatch`. Currency distinta = error de programación. */
+export function isDeliveredWithinReceiveTolerance(expected: Money, delivered: Money): boolean {
+  if (expected.currency !== delivered.currency) throw new Error("reconcile_currency_mismatch");
+  const e = expected.major;
+  const allowedDelta = Math.max(RECEIVE_TOL_ABS_PEN, e * RECEIVE_TOL_REL); // MISMAS constantes (CD-6)
+  return Math.abs(delivered.major - e) <= allowedDelta;
+}
+
 export interface RemittanceState {
   id: string;
   status: RemittanceStatus;

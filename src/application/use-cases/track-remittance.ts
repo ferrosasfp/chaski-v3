@@ -1,5 +1,5 @@
-import type { Remittance } from "../../domain/remittance";
-import type { Clock, PayoutGateway, RemittanceRepository } from "../ports";
+import { type Remittance, isDeliveredWithinReceiveTolerance } from "../../domain/remittance";
+import type { Clock, PayoutGateway, RefundGateway, RemittanceRepository } from "../ports";
 
 /** Polling del estado del payout → actualiza el agregado (settled / failed). Idempotente. */
 export class TrackRemittance {
@@ -7,7 +7,27 @@ export class TrackRemittance {
     private readonly payouts: PayoutGateway,
     private readonly repo: RemittanceRepository,
     private readonly clock: Clock,
+    private readonly refund: RefundGateway,
   ) {}
+
+  /** Refund-on-failure (WKH-186/AC-7, CD-7): idéntico a ConfirmAndSend — marca payout_failed y
+   * acto seguido intenta el credit-back en el MISMO execute(). Best-effort: si el refund falla,
+   * queda en payout_failed (el mock nunca falla). `reason` = enum estable, NUNCA PII (CD-5). */
+  private async failAndRefund(r: Remittance, reason: string): Promise<void> {
+    r.markPayoutFailed(reason, this.clock.nowIso());
+    await this.repo.save(r);
+    try {
+      const { refundTx } = await this.refund.creditBack({
+        remittanceId: r.snapshot.id,
+        amountUsd: r.snapshot.sendUsd,
+        reason,
+      });
+      r.markRefunded(refundTx, this.clock.nowIso());
+      await this.repo.save(r);
+    } catch {
+      // refund falló → queda en payout_failed (best-effort). El mock nunca falla.
+    }
+  }
 
   async execute(input: { remittanceId: string }): Promise<Remittance> {
     const r = await this.repo.get(input.remittanceId);
@@ -17,11 +37,17 @@ export class TrackRemittance {
 
     const rec = await this.payouts.status(s.payoutId);
     if (rec.status === "settled") {
+      // Reconciliación PRE-markSettled (AC-6/CD-6): reusa el receive lockeado del quote persistido.
+      // Con el fallback (deliveredPen:null) la guarda es falsa → markSettled(null) byte-idéntico.
+      const expected = s.quote?.receive ?? null;
+      if (expected && rec.deliveredPen && !isDeliveredWithinReceiveTolerance(expected, rec.deliveredPen)) {
+        await this.failAndRefund(r, "payout_amount_mismatch");
+        return r;
+      }
       r.markSettled(rec.txRef ?? "", rec.deliveredPen, this.clock.nowIso());
       await this.repo.save(r);
     } else if (rec.status === "failed") {
-      r.markPayoutFailed(rec.failureReason ?? "payout_failed", this.clock.nowIso());
-      await this.repo.save(r);
+      await this.failAndRefund(r, rec.failureReason ?? "payout_failed");
     }
     return r;
   }

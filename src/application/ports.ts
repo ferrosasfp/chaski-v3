@@ -80,6 +80,15 @@ export interface PayoutGateway {
   status(payoutId: string): Promise<PayoutRecord>;
 }
 
+// ── Refund-on-failure (WKH-186) ──────────────────────────────────────────────
+// Se dispara tras CADA markPayoutFailed (cierra el gap de remesas huérfanas en payout_failed).
+// El adapter default (LedgerRefundGateway) es LEDGER-ONLY: produce un refundTx sintético, NO
+// revierte ningún movimiento on-chain real (el clawback real es follow-up de Fase A). El `reason`
+// es un enum estable de la FSM — NUNCA PII (CD-5).
+export interface RefundGateway {
+  creditBack(input: { remittanceId: string; amountUsd: Money; reason: string }): Promise<{ refundTx: string }>;
+}
+
 // ── Autoridad de payout server-side (WKH-180) ────────────────────────────────
 // Re-valida en el SERVIDOR (contra Didit) que el KYC autoriza el payout para este caller.
 // Es la ÚNICA fuente de verdad para autorizar: NUNCA los booleanos que llegan del browser

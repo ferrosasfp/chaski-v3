@@ -1,8 +1,9 @@
-import type { Remittance } from "../../domain/remittance";
+import { type Remittance, isDeliveredWithinReceiveTolerance } from "../../domain/remittance";
 import type {
   Clock,
   PayoutAuthorityGateway,
   PayoutGateway,
+  RefundGateway,
   RemittanceRepository,
   WalletPort,
 } from "../ports";
@@ -19,7 +20,30 @@ export class ConfirmAndSend {
     private readonly repo: RemittanceRepository,
     private readonly clock: Clock,
     private readonly authority: PayoutAuthorityGateway,
+    private readonly refund: RefundGateway,
   ) {}
+
+  /** Refund-on-failure (WKH-186/AC-7, CD-7): marca payout_failed y acto seguido intenta el credit-back
+   * en el MISMO execute() (ninguna remesa queda huérfana en payout_failed). El refund es best-effort:
+   * si falla, la remesa queda en payout_failed (el mock nunca falla). `reason` = enum estable, NUNCA
+   * PII (CD-5). Nota Fase A: en modo real el refund del auth-gate/expiry pre-firma (principal nunca
+   * pulleado) debería condicionarse a principalTx != null; hoy es NO-OP ledger (DT-3) → refundear
+   * uniformemente cierra el gap (AC-7 = "por cualquier razón"). La condicionalidad real = follow-up. */
+  private async failAndRefund(r: Remittance, reason: string): Promise<void> {
+    r.markPayoutFailed(reason, this.clock.nowIso());
+    await this.repo.save(r);
+    try {
+      const { refundTx } = await this.refund.creditBack({
+        remittanceId: r.snapshot.id,
+        amountUsd: r.snapshot.sendUsd,
+        reason,
+      });
+      r.markRefunded(refundTx, this.clock.nowIso());
+      await this.repo.save(r);
+    } catch {
+      // refund falló → queda en payout_failed (best-effort). El mock nunca falla.
+    }
+  }
 
   async execute(input: { remittanceId: string }): Promise<Remittance> {
     const r = await this.repo.get(input.remittanceId);
@@ -43,8 +67,7 @@ export class ConfirmAndSend {
       address: address ?? "",
     });
     if (!auth.authorized) {
-      r.markPayoutFailed(auth.reason ?? "kyc_reauth_failed", this.clock.nowIso());
-      await this.repo.save(r);
+      await this.failAndRefund(r, auth.reason ?? "kyc_reauth_failed");
       return r; // NO se autoriza el principal, NO se submitea el payout
     }
 
@@ -53,8 +76,7 @@ export class ConfirmAndSend {
     //     authorizePrincipal ni submit (orden de guards: CAS → autoridad → expiry → firma → submit).
     const nowRecheck = this.clock.nowIso();
     if (!r.isQuoteStillValid(nowRecheck)) {
-      r.markPayoutFailed("quote_expired_before_submit", nowRecheck);
-      await this.repo.save(r);
+      await this.failAndRefund(r, "quote_expired_before_submit");
       return r;
     }
 
@@ -71,8 +93,7 @@ export class ConfirmAndSend {
     //     un payout sobre un quote muerto. CD-2 intacto: CAS → autoridad → expiry → firma → EXPIRY → submit.
     const nowBeforeSubmit = this.clock.nowIso();
     if (!r.isQuoteStillValid(nowBeforeSubmit)) {
-      r.markPayoutFailed("quote_expired_before_submit", nowBeforeSubmit);
-      await this.repo.save(r);
+      await this.failAndRefund(r, "quote_expired_before_submit");
       return r; // firma ya ocurrida, pero NO se submitea el payout
     }
 
@@ -89,14 +110,23 @@ export class ConfirmAndSend {
       });
       r.markPayoutSubmitted(rec.payoutId, this.clock.nowIso());
       if (rec.status === "settled") {
+        // Reconciliación PRE-markSettled (AC-6/CD-6): el PEN entregado debe caber en la MISMA
+        // tolerancia del receive lockeado. Con el fallback (deliveredPen:null) la guarda es falsa →
+        // markSettled(null) byte-idéntico a hoy. Mismatch → payout_failed→refunded, NUNCA settled.
+        if (rec.deliveredPen && !isDeliveredWithinReceiveTolerance(quote.receive, rec.deliveredPen)) {
+          await this.failAndRefund(r, "payout_amount_mismatch");
+          return r;
+        }
         r.markSettled(rec.txRef ?? "", rec.deliveredPen, this.clock.nowIso());
       } else if (rec.status === "failed") {
-        r.markPayoutFailed(rec.failureReason ?? "payout_failed", this.clock.nowIso());
+        await this.failAndRefund(r, rec.failureReason ?? "payout_failed");
+        return r;
       }
     } catch (err) {
-      r.markPayoutFailed(err instanceof Error ? err.message : "payout_error", this.clock.nowIso());
+      await this.failAndRefund(r, err instanceof Error ? err.message : "payout_error");
+      return r;
     }
-    await this.repo.save(r);
+    await this.repo.save(r); // persiste payout_submitted (fallback) o settled (happy real)
     return r;
   }
 }

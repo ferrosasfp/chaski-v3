@@ -32,10 +32,12 @@ const quote = (send = 400): Quote => ({
 });
 
 function ready(): Remittance {
+  // WKH-187: cotiza PRIMERO (created→quoted), luego el KYC. Queda kyc_passed CON quote.
   const r = Remittance.create("r", beneficiary(), Money.of(400, "USDC"), T0);
-  r.startKyc(T0, OWNER);
-  r.applyKyc(passKyc, T0);
-  return r; // kyc_passed
+  r.attachQuote(quote(), T0); // created → quoted
+  r.startKyc(T0, OWNER); // quoted → kyc_pending
+  r.applyKyc(passKyc, T0); // kyc_pending → kyc_passed (quote sobrevive por shallow-merge)
+  return r; // kyc_passed con quote
 }
 
 describe("Remittance — máquina de estados", () => {
@@ -55,6 +57,7 @@ describe("Remittance — máquina de estados", () => {
 
   it("KYC no pasa → kyc_failed terminal", () => {
     const r = Remittance.create("r", beneficiary(), Money.of(400, "USDC"), T0);
+    r.attachQuote(quote(), T0); // WKH-187: cotiza antes del KYC
     r.startKyc(T0, OWNER);
     r.applyKyc({ ...passKyc, approved: false, payoutAllowed: false }, T0);
     expect(r.status).toBe("kyc_failed");
@@ -86,7 +89,8 @@ describe("Remittance — máquina de estados", () => {
   });
 
   it("canTransition", () => {
-    expect(canTransition("created", "kyc_pending")).toBe(true);
+    expect(canTransition("created", "quoted")).toBe(true); // WKH-187: cotiza primero
+    expect(canTransition("created", "kyc_pending")).toBe(false); // WKH-187: el KYC ya no arranca sin cotizar
     expect(canTransition("created", "settled")).toBe(false);
     expect(canTransition("payout_failed", "refunded")).toBe(true);
   });
@@ -94,6 +98,7 @@ describe("Remittance — máquina de estados", () => {
   it("startKyc setea ownerAddress en el estado (AC-6)", () => {
     const r = Remittance.create("r", beneficiary(), Money.of(400, "USDC"), T0);
     expect(r.snapshot.ownerAddress).toBeNull();
+    r.attachQuote(quote(), T0); // WKH-187: cotiza antes del KYC
     r.startKyc(T0, OWNER);
     expect(r.snapshot.ownerAddress).toBe(OWNER);
   });
@@ -101,6 +106,92 @@ describe("Remittance — máquina de estados", () => {
   it("create inicializa ownerAddress en null (remesa abandonada sin owner)", () => {
     const r = Remittance.create("r", beneficiary(), Money.of(400, "USDC"), T0);
     expect(r.snapshot.ownerAddress).toBeNull();
+  });
+});
+
+describe("WKH-187 — reorden quote-antes-del-KYC (money-path INVIOLABLE)", () => {
+  // T-COMPLIANCE (AC-3): el gate confirm() NO se debilitó con el reorden. Lee el campo `kyc`,
+  // no la posición en la FSM: sin KYC pasado, confirm() rechaza en cualquier estado alcanzable.
+  it("T-COMPLIANCE: confirm() sin KYC lanza confirm_requires_kyc_passed en el NUEVO orden", () => {
+    // desde `quoted` (created→quoted, kyc=null): el path pre-KYC más peligroso (DT-1b abre quoted→confirmed)
+    const q = Remittance.create("r", beneficiary(), Money.of(400, "USDC"), T0);
+    q.attachQuote(quote(), T0);
+    expect(q.status).toBe("quoted");
+    expect(q.snapshot.kyc).toBeNull();
+    expect(() => q.confirm(T0)).toThrow(/confirm_requires_kyc_passed/); // gate ANTES de to("confirmed")
+    expect(q.status).toBe("quoted"); // NO transicionó a confirmed
+
+    // desde `kyc_pending` (quoted→kyc_pending, KYC aún no resuelto)
+    const p = Remittance.create("r", beneficiary(), Money.of(400, "USDC"), T0);
+    p.attachQuote(quote(), T0);
+    p.startKyc(T0, OWNER);
+    expect(p.status).toBe("kyc_pending");
+    expect(() => p.confirm(T0)).toThrow(/confirm_requires_kyc_passed/);
+
+    // KYC rechazado tampoco confirma
+    const f = Remittance.create("r", beneficiary(), Money.of(400, "USDC"), T0);
+    f.attachQuote(quote(), T0);
+    f.startKyc(T0, OWNER);
+    f.applyKyc({ ...passKyc, approved: false, payoutAllowed: false }, T0);
+    expect(() => f.confirm(T0)).toThrow(/confirm_requires_kyc_passed/);
+  });
+
+  // T-AC5a (AC-5): re-quote kyc_passed→quoted CONSERVA state.kyc (shallow-merge), luego confirm OK.
+  it("T-AC5a: re-quote post-KYC conserva state.kyc y permite confirm quoted→confirmed", () => {
+    const r = ready(); // kyc_passed con quote y kyc set
+    expect(r.snapshot.kyc).not.toBeNull();
+    r.attachQuote(quote(), T0); // kyc_passed → quoted (re-quote)
+    expect(r.status).toBe("quoted");
+    expect(r.snapshot.kyc).not.toBeNull(); // el KYC NO se perdió (no se re-escanea DNI)
+    r.confirm(T0); // quoted → confirmed (DT-1b) con kyc pasado
+    expect(r.status).toBe("confirmed");
+  });
+
+  // T-REORDER (AC-1/DT-1b): la trayectoria pre-KYC-quote es válida; created→kyc_pending ya no existe.
+  it("T-REORDER: created→quoted→kyc_pending→kyc_passed→confirmed válida; created→kyc_pending inválida", () => {
+    expect(canTransition("created", "quoted")).toBe(true);
+    expect(canTransition("created", "kyc_pending")).toBe(false);
+    const r = Remittance.create("r", beneficiary(), Money.of(400, "USDC"), T0);
+    r.attachQuote(quote(), T0);
+    expect(r.status).toBe("quoted"); // quote visible ANTES del KYC
+    r.startKyc(T0, OWNER);
+    expect(r.status).toBe("kyc_pending");
+    r.applyKyc(passKyc, T0);
+    expect(r.status).toBe("kyc_passed");
+    r.confirm(T0);
+    expect(r.status).toBe("confirmed");
+    // el arranque directo al KYC ya no es alcanzable
+    const bad = Remittance.create("r", beneficiary(), Money.of(400, "USDC"), T0);
+    expect(() => bad.startKyc(T0, OWNER)).toThrow(/invalid_transition:created->kyc_pending/);
+  });
+
+  // T-REQUOTE (AC-5/DT-1b): quote expira DURANTE el KYC → re-quote (monto nuevo) → confirm, sin dead-end.
+  it("T-REQUOTE: expiry durante KYC → re-cotiza con monto nuevo y confirma (quoted→confirmed)", () => {
+    const LATER = "2026-07-09T18:20:00.000Z"; // > QUOTE_EXPIRES
+    const r = ready(); // kyc_passed con quote (expira en QUOTE_EXPIRES)
+    const oldReceive = r.snapshot.quote!.receive.minor;
+    expect(r.isQuoteStillValid(LATER)).toBe(false); // el quote venció durante el KYC
+    // auto re-quote con monto nuevo (tasa mejor): kyc_passed → quoted, kyc intacto
+    const fresh: Quote = { ...quote(), receive: Money.of(1500, "PEN"), rate: 3.75, expiresAt: "2026-07-09T18:25:00.000Z" };
+    r.attachQuote(fresh, LATER);
+    expect(r.status).toBe("quoted");
+    expect(r.snapshot.quote!.receive.minor).not.toBe(oldReceive); // monto nuevo
+    expect(r.snapshot.kyc).not.toBeNull(); // NO se re-escanea DNI
+    r.confirm(LATER);
+    expect(r.status).toBe("confirmed"); // sin dead-end
+  });
+
+  // T-AC9 (AC-9): el tramo post-confirmed (WKH-186) sigue intacto: confirmed→…→settled.
+  it("T-AC9: happy path a settled intacto tras el reorden", () => {
+    const r = ready();
+    r.confirm(T0); // kyc_passed → confirmed
+    r.markPrincipalIn("0x1", T0);
+    expect(r.status).toBe("principal_in");
+    r.markPayoutSubmitted("p1", T0);
+    expect(r.status).toBe("payout_submitted");
+    r.markSettled("0x2", Money.of(1480, "PEN"), T0);
+    expect(r.status).toBe("settled");
+    expect(r.isTerminal).toBe(true);
   });
 });
 

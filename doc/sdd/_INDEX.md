@@ -11,6 +11,7 @@
 | WKH-184 | [Residual AC-8 WKH-181] Reset explícito de KYC-once + señal soft de FallbackWallet (Opción D) | DONE (2026-07-11) | `doc/sdd/007-wkh-184-fallback-wallet-reset-demo-signal/done-report.md` |
 | WKH-185 | [Deuda técnica] Component test harness (jsdom + RTL) + backfill de ACs de UI sin RTL (178/181/184) | DONE (2026-07-11) | `doc/sdd/008-wkh-185-component-test-harness-backfill/done-report.md` |
 | WKH-186 | [Técnico, porción de WKH-168] Value-delivery scaffolding: adapter a2a (mock/off), reconciliación + idempotencia, refund-on-failure, EIP-3009-ready | DONE (2026-07-11) | `doc/sdd/009-wkh-186-value-delivery-scaffolding/done-report.md` |
+| WKH-187 | [Money-path/UX] Reordenar el flujo: mostrar el quote (valor) antes del KYC | DONE (2026-07-12) | `doc/sdd/010-wkh-187-quote-before-kyc-reorder/done-report.md` |
 
 ## Notas de coordinación
 - WKH-178 y WKH-179 corren en paralelo, ambas del mismo repo (`chaski-v2`) y de la misma auditoría
@@ -103,6 +104,19 @@
   0 BLOQUEANTES, 4 MENORs fixeados (MNR-A receiver validation, MNR-B cache-miss status, MNR-C shape
   align, MNR-D try/catch), 223/223 tests verdes, build OK, CD-2 money-path verificada 6 capas.
   Runbook Fase A documentado en `done-report.md` §8. Ver `doc/sdd/009-wkh-186-value-delivery-scaffolding/done-report.md`.
+- **WKH-187 (DONE, 2026-07-12, `010`)**: reorden money-path/UX puro — mostrar el quote lockeado apenas
+  se conecta la wallet, pedir el KYC recién cuando el usuario confirma que quiere enviar. Trabaja
+  sobre el estado ya mergeado de WKH-178..186 (`main`). El gate de compliance (`confirm_requires_kyc_passed`,
+  `remittance.ts` L219-222) y la autoridad server-side de payout (WKH-180) quedan explícitamente
+  FUERA de scope de modificación (AC-3/AC-7, CD-2/CD-3) — el reorden es solo de CUÁNDO se pide cada cosa
+  en la UI y qué transiciones de la FSM son alcanzables entre sí, no de QUÉ invariantes se verifican.
+  Implementación (commit `e5155e2`): único cambio de dominio es `TRANSITIONS` (L83-99 reescrito,
+  3 transiciones nuevas con razones de negocio inline). `confirm()`, `applyKyc()`, `attachQuote()`
+  byte-idénticos. UI: `Step` nuevo (`"confirm"` / `"review"` pre-KYC), `onConnect` (lockQuote movido),
+  `onContinue` (navegación pura), resume auto-requote condicional (DT-3). Tests: 9 archivos, 235/235
+  verdes, 9/9 ACs PASS, 0 BLQ/0 MENOR en AR/CR. Auto-blindaje: 3 lecciones para reordenes de FSM
+  (exhaustividad de tests, precondición de estado en I/O, tiempo real en RTL). Ver
+  `doc/sdd/010-wkh-187-quote-before-kyc-reorder/done-report.md`.
 
 ---
 
@@ -137,3 +151,9 @@ bloqueantes abiertos. El AC-8 residual de WKH-181 (diferido a WKH-184) está for
 | HU | Status | Nota |
 |----|--------|------|
 | WKH-186 (scaffolding a2a mock/off + reconciliación + refund + EIP-3009-ready) | DONE (2026-07-11) | Sin movimiento de dinero real (CD-2 verificada 6 capas). Gap real cerrado (refund-on-failure). Runbook Fase A documentado. Listo para merge. Ver `doc/sdd/009-wkh-186-value-delivery-scaffolding/done-report.md`. |
+
+## 🔵 MONEY-PATH / UX (post value-delivery scaffolding)
+
+| HU | Status | Nota |
+|----|--------|------|
+| WKH-187 (reorden: quote antes del KYC) | DONE (2026-07-12) | Reorden puro de secuencia (dominio + UI); el gate de compliance `confirm_requires_kyc_passed` y la autoridad server-side WKH-180 quedan explícitamente intactos (AC-3/AC-7, CD-2/CD-3). 9/9 ACs PASS, 235/235 tests verdes, 0 BLQ/0 MENOR en AR/CR, tsc/build OK. Auto-blindaje documentado: 3 lecciones para reordenes de FSM. Ver `doc/sdd/010-wkh-187-quote-before-kyc-reorder/done-report.md`.

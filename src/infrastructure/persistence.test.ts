@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConcurrentModificationError } from "../application/errors";
 import { Money } from "../domain/money";
-import { Remittance } from "../domain/remittance";
+import { type Quote, Remittance } from "../domain/remittance";
 import { beneficiary } from "../test-support/fakes";
 import { LocalRepo } from "./persistence";
 
@@ -41,9 +41,21 @@ afterEach(() => {
   delete (globalThis as { window?: unknown }).window;
 });
 
+const seedQuote: Quote = {
+  quoteId: "q",
+  send: Money.of(400, "USDC"),
+  receive: Money.of(1480, "PEN"),
+  feeUsd: Money.of(0.5, "USDC"),
+  rate: 3.7,
+  etaMinutes: 30,
+  expiresAt: "2026-07-11T01:00:00.000Z", // > NOW
+  provenance: "fake",
+};
+
 function withOwner(id: string, owner: string): Remittance {
   const r = Remittance.create(id, beneficiary(), Money.of(400, "USDC"), NOW);
-  r.startKyc(NOW, owner); // setea ownerAddress
+  r.attachQuote(seedQuote, NOW); // WKH-187: cotiza antes del KYC (created→quoted)
+  r.startKyc(NOW, owner); // quoted→kyc_pending, setea ownerAddress
   return r;
 }
 

@@ -58,14 +58,15 @@ export class StartKyc {
 
     // redirect: guardar PRIMERO el pendiente; solo si eso funciona, persistir la remesa en kyc_pending.
     // Si pending.save() lanza (quota / private-browsing), repo.save(r) NO corre → la remesa sigue
-    // persistida en "created" (su último estado guardado) → el retry hace created→kyc_pending (válido).
+    // persistida en "quoted" (WKH-187: cotiza antes del KYC, ese es su último estado guardado) → el
+    // retry hace quoted→kyc_pending (válido).
     await this.pending.save({
       remittanceId: input.remittanceId,
       sessionId: res.sessionId,
       address: input.address,
       sessionToken: res.authToken, // token HMAC para autorizar el GET /decision al volver (WKH-179)
     });
-    await this.repo.save(r); // ← si pending.save lanzó, ESTO no corre → remesa sigue en "created"
+    await this.repo.save(r); // ← si pending.save lanzó, ESTO no corre → remesa sigue en "quoted"
     return { kind: "redirect", url: res.url };
   }
 }

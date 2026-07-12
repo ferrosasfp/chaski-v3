@@ -83,17 +83,17 @@ export type RemittanceStatus =
   | "refunded";
 
 const TRANSITIONS: Record<RemittanceStatus, readonly RemittanceStatus[]> = {
-  created: ["kyc_pending"],
-  kyc_pending: ["kyc_passed", "kyc_failed"],
-  kyc_passed: ["quoted"],
-  kyc_failed: [],
-  quoted: ["quoted", "confirmed"], // re-quote permitido
-  confirmed: ["principal_in", "payout_failed"],
-  principal_in: ["payout_submitted", "payout_failed"],
-  payout_submitted: ["settled", "payout_failed"],
-  settled: [],
-  payout_failed: ["refunded"],
-  refunded: [],
+  created: ["quoted"], // WKH-187: cotiza PRIMERO (quote antes del KYC)
+  quoted: ["quoted", "kyc_pending", "confirmed"], // re-quote | iniciar KYC | confirmar (gate por state.kyc, DT-1b)
+  kyc_pending: ["kyc_passed", "kyc_failed"], // (sin cambios)
+  kyc_passed: ["quoted", "confirmed"], // WKH-187: re-quote post-KYC (conserva kyc) | confirmar
+  kyc_failed: [], // (sin cambios)
+  confirmed: ["principal_in", "payout_failed"], // (sin cambios)
+  principal_in: ["payout_submitted", "payout_failed"], // (sin cambios)
+  payout_submitted: ["settled", "payout_failed"], // (sin cambios)
+  settled: [], // (sin cambios)
+  payout_failed: ["refunded"], // (sin cambios)
+  refunded: [], // (sin cambios)
 };
 
 export const TERMINAL_STATUSES: readonly RemittanceStatus[] = ["settled", "kyc_failed", "refunded"];

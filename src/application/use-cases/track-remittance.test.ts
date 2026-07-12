@@ -36,9 +36,9 @@ const quote: Quote = {
 // Construye una remesa ya en payout_submitted (lista para track()).
 async function seedSubmitted(repo: InMemoryRepo): Promise<string> {
   const r = Remittance.create("r-1", beneficiary(), Money.of(400, "USDC"), T0);
-  r.startKyc(T0, "0xSender");
-  r.applyKyc(passKyc, T0);
-  r.attachQuote(quote, T0);
+  r.attachQuote(quote, T0); // WKH-187: cotiza antes del KYC (created→quoted)
+  r.startKyc(T0, "0xSender"); // quoted→kyc_pending
+  r.applyKyc(passKyc, T0); // kyc_pending→kyc_passed (quote sobrevive)
   r.confirm(T0);
   r.markPrincipalIn("0xprincipal", T0);
   r.markPayoutSubmitted("p-1", T0);

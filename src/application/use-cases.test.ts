@@ -69,13 +69,13 @@ const kycInput = (remittanceId: string) => ({
 });
 
 describe("Use-cases — money-path", () => {
-  it("happy path: create → kyc → lock → confirm → track → settled", async () => {
+  it("happy path: create → lock → kyc → confirm → track → settled", async () => {
     const { create, startKyc, lock, confirm, track } = setup();
     const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
     const id = r0.snapshot.id;
-    expect((await startKyc.execute(kycInput(id))).kind).toBe("done");
-    let r = await lock.execute({ remittanceId: id });
+    let r = await lock.execute({ remittanceId: id }); // WKH-187: cotiza PRIMERO (created→quoted)
     expect(r.status).toBe("quoted");
+    expect((await startKyc.execute(kycInput(id))).kind).toBe("done"); // quoted→kyc_pending→kyc_passed
     r = await confirm.execute({ remittanceId: id });
     expect(r.status).toBe("payout_submitted");
     r = await track.execute({ remittanceId: id });
@@ -90,31 +90,32 @@ describe("Use-cases — money-path", () => {
     });
     const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
     const id = r0.snapshot.id;
+    await lock.execute({ remittanceId: id }); // WKH-187: cotiza antes del KYC
     await startKyc.execute(kycInput(id));
-    await lock.execute({ remittanceId: id });
     await confirm.execute({ remittanceId: id });
     const r = await track.execute({ remittanceId: id });
     expect(r.snapshot.status).toBe("settled");
     expect(r.snapshot.deliveredPen).toBeNull();
   });
 
-  it("KYC no pasa → kyc_failed, y lock falla (el dominio fuerza el orden)", async () => {
+  it("KYC no pasa → kyc_failed terminal, re-lock falla (el dominio fuerza el orden)", async () => {
     const { create, startKyc, lock } = setup({
       kyc: new FakeKycGateway({ approved: false, payoutAllowed: false }),
     });
     const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
-    const res = await startKyc.execute(kycInput(r0.snapshot.id));
+    const id = r0.snapshot.id;
+    await lock.execute({ remittanceId: id }); // WKH-187: cotiza antes del KYC (created→quoted)
+    const res = await startKyc.execute(kycInput(id)); // quoted→kyc_pending→kyc_failed
     expect(res.kind).toBe("done");
     if (res.kind === "done") expect(res.snapshot.status).toBe("kyc_failed");
-    await expect(lock.execute({ remittanceId: r0.snapshot.id })).rejects.toThrow(
-      /invalid_transition/,
-    );
+    // kyc_failed es terminal: no se puede re-cotizar tras un KYC rechazado
+    await expect(lock.execute({ remittanceId: id })).rejects.toThrow(/invalid_transition/);
   });
 
-  it("no se puede lock antes de KYC", async () => {
-    const { create, lock } = setup();
+  it("no se puede startKyc antes de cotizar (WKH-187: created→kyc_pending inválido)", async () => {
+    const { create, startKyc } = setup();
     const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
-    await expect(lock.execute({ remittanceId: r0.snapshot.id })).rejects.toThrow(
+    await expect(startKyc.execute(kycInput(r0.snapshot.id))).rejects.toThrow(
       /invalid_transition/,
     );
   });
@@ -125,8 +126,8 @@ describe("Use-cases — money-path", () => {
     });
     const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
     const id = r0.snapshot.id;
+    await lock.execute({ remittanceId: id }); // WKH-187: cotiza antes del KYC
     await startKyc.execute(kycInput(id));
-    await lock.execute({ remittanceId: id });
     const r = await confirm.execute({ remittanceId: id });
     // Antes de WKH-186 la remesa quedaba clavada en payout_failed; ahora el refund la avanza a
     // refunded en el mismo execute(). markRefunded solo patchea refundTx → failureReason sobrevive.
@@ -164,18 +165,21 @@ describe("Use-cases — money-path", () => {
 
   it("KYC-once: la 2da remesa de la misma wallet reusa el KYC (sin re-verificar)", async () => {
     const kycStore = new FakeKycStore();
-    const { create, startKyc } = setup({ kycStore });
+    const { create, startKyc, lock } = setup({ kycStore });
     const r1 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
+    await lock.execute({ remittanceId: r1.snapshot.id }); // WKH-187: cotiza antes del KYC
     await startKyc.execute(kycInput(r1.snapshot.id)); // verifica + guarda en el store
     const r2 = await create.execute({ amountUsd: 200, beneficiary: beneficiary() });
+    await lock.execute({ remittanceId: r2.snapshot.id });
     const res = await startKyc.execute({ remittanceId: r2.snapshot.id, address: "0xSender" });
     expect(res.kind).toBe("done");
     if (res.kind === "done") expect(res.snapshot.status).toBe("kyc_passed");
   });
 
   it("Didit redirect → resume aplica la decisión y pasa el KYC (flujo móvil)", async () => {
-    const { create, startKyc, resumeKyc } = setup({ kyc: new FakeKycGateway({}, true) });
+    const { create, startKyc, lock, resumeKyc } = setup({ kyc: new FakeKycGateway({}, true) });
     const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
+    await lock.execute({ remittanceId: r0.snapshot.id }); // WKH-187: cotiza antes del KYC
     const start = await startKyc.execute({ remittanceId: r0.snapshot.id, address: "0xSender" });
     expect(start.kind).toBe("redirect"); // te manda a Didit
 
@@ -185,17 +189,18 @@ describe("Use-cases — money-path", () => {
   });
 
   it("V1 ⭐ AC-1/2/3: si pending.save falla en el redirect, la remesa NO queda huérfana en kyc_pending", async () => {
-    const { create, startKyc, repo } = setup({
+    const { create, startKyc, lock, repo } = setup({
       kyc: new FakeKycGateway({}, true), // fuerza redirect
       pending: new ThrowingKycPendingStore(), // save() siempre lanza
     });
     const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
     const id = r0.snapshot.id;
+    await lock.execute({ remittanceId: id }); // WKH-187: cotiza antes del KYC (created→quoted)
     await expect(
       startKyc.execute({ remittanceId: id, address: "0xSender" }),
     ).rejects.toThrow(/kyc_pending_unavailable/); // AC-1: re-lanza el Error, no crudo; AC-3: no {kind:"redirect"}
     const persisted = await repo.get(id);
-    expect(persisted?.snapshot.status).toBe("created"); // AC-2 ⭐ NO "kyc_pending"
+    expect(persisted?.snapshot.status).toBe("quoted"); // AC-2 ⭐ WKH-187: último estado guardado = quoted, NO "kyc_pending"
   });
 
   it("V1 AC-4: tras un pending que falló, el retry con store sano avanza sin invalid_transition", async () => {
@@ -205,15 +210,16 @@ describe("Use-cases — money-path", () => {
     const createShared = new CreateRemittance(repo, clock, new SeqIds());
     const r0 = await createShared.execute({ amountUsd: 400, beneficiary: beneficiary() });
     const id = r0.snapshot.id;
+    await new LockQuote(new FakeQuoteGateway(), repo, clock).execute({ remittanceId: id }); // WKH-187: cotiza antes del KYC
 
     const kycGw = new FakeKycGateway({}, true);
     const kycStore = new FakeKycStore();
     const failing = new StartKyc(kycGw, kycStore, new ThrowingKycPendingStore(), repo, clock);
     await expect(failing.execute({ remittanceId: id, address: "0xSender" })).rejects.toThrow();
-    expect((await repo.get(id))?.snapshot.status).toBe("created");
+    expect((await repo.get(id))?.snapshot.status).toBe("quoted"); // WKH-187: último estado guardado = quoted
 
     const healthy = new StartKyc(kycGw, kycStore, new FakeKycPendingStore(), repo, clock);
-    const res = await healthy.execute({ remittanceId: id, address: "0xSender" }); // created→kyc_pending válido
+    const res = await healthy.execute({ remittanceId: id, address: "0xSender" }); // quoted→kyc_pending válido
     expect(res.kind).toBe("redirect");
     expect((await repo.get(id))?.snapshot.status).toBe("kyc_pending");
   });
@@ -224,10 +230,11 @@ describe("Use-cases — money-path", () => {
   });
 
   it("AC-6: tras startKyc, el snapshot persistido queda con ownerAddress == caller.address", async () => {
-    const { create, startKyc, repo } = setup();
+    const { create, startKyc, lock, repo } = setup();
     const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
     const id = r0.snapshot.id;
     expect(r0.snapshot.ownerAddress).toBeNull(); // creada sin owner
+    await lock.execute({ remittanceId: id }); // WKH-187: cotiza antes del KYC
     await startKyc.execute({ remittanceId: id, address: "0xAAA" });
     const saved = await repo.get(id);
     expect(saved?.snapshot.ownerAddress).toBe("0xAAA");
@@ -246,6 +253,7 @@ describe("Use-cases — money-path", () => {
       clock,
     );
     const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
+    await new LockQuote(new FakeQuoteGateway(), repo, clock).execute({ remittanceId: r0.snapshot.id }); // WKH-187: cotiza antes del KYC
     const res = await startKyc.execute({ remittanceId: r0.snapshot.id, address: "0xAAA" });
     expect(res.kind).toBe("done");
     if (res.kind === "done") {

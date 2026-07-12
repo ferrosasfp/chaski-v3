@@ -13,17 +13,20 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Quote, RemittanceState, PayoutMethod } from "../domain/remittance";
+import { Remittance } from "../domain/remittance"; // WKH-187: rehydrate/isQuoteStillValid en el resume (CD-11)
 import { createContainer, type Container } from "../composition/container";
 import { deliveredDisplay, humanError, isDemoMode, isFallbackWalletAddress } from "./flow-vm";
 import { Button, Card, ChaskiMark, Field, Pill, Row, Stepper, TextInput } from "./ui";
 
-type Step = "send" | "connect" | "verify" | "review" | "track" | "done";
-const STEP_LABELS = ["Enviar", "Identidad", "Revisar", "Seguir"];
+// WKH-187: el quote se muestra ANTES del KYC. Orden: send→connect→review(pre-KYC)→verify→confirm(post-KYC)→track→done.
+type Step = "send" | "connect" | "review" | "verify" | "confirm" | "track" | "done";
+const STEP_LABELS = ["Enviar", "Revisar", "Identidad", "Seguir"];
 const STEP_INDEX: Record<Step, number> = {
   send: 0,
-  connect: 1,
-  verify: 1,
-  review: 2,
+  connect: 0,
+  review: 1,
+  verify: 2,
+  confirm: 2, // comparte "Identidad" con verify (solape análogo al connect/verify anterior)
   track: 3,
   done: 3,
 };
@@ -63,6 +66,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
   const [resuming, setResuming] = useState(false); // retomando KYC al volver de Didit
   const [timedOut, setTimedOut] = useState(false); // el resume-loop agotó el timeout
   const [confirmReset, setConfirmReset] = useState(false); // control "¿No sos vos?" (WKH-184)
+  const [rateUpdated, setRateUpdated] = useState(false); // WKH-187: el quote se re-cotizó tras expirar durante el KYC
 
   const amountNum = Number(amount) || 0;
 
@@ -109,14 +113,27 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
         }
         setResuming(false);
         if (res.kind === "passed") {
-          setRem(res.snapshot);
-          try {
-            const locked = await c.lockQuote.execute({ remittanceId: res.snapshot.id });
-            if (alive) setRem(locked.snapshot);
-          } catch {
-            /* si la cotización falla, el review re-cotiza */
+          setRem(res.snapshot); // el snapshot ya trae el quote lockeado pre-redirect (WKH-187)
+          // CD-11: re-check de expiry con la lógica del dominio (single-source-of-truth), NO recalcular en la UI.
+          const valid = Remittance.rehydrate(res.snapshot).isQuoteStillValid(new Date().toISOString());
+          if (valid) {
+            if (alive) setStep("confirm"); // AC-6: quote vigente → NO re-cotiza
+          } else {
+            try {
+              const prev = res.snapshot.quote?.receive; // lo que vio pre-KYC
+              const locked = await c.lockQuote.execute({ remittanceId: res.snapshot.id }); // AUTO re-quote (kyc_passed→quoted)
+              if (alive) {
+                setRem(locked.snapshot);
+                // AC-5: indicador solo si el monto cambió; NUNCA re-pide escanear DNI (state.kyc intacto).
+                if (prev && locked.snapshot.quote && prev.minor !== locked.snapshot.quote.receive.minor) {
+                  setRateUpdated(true);
+                }
+                setStep("confirm");
+              }
+            } catch {
+              if (alive) setStep("confirm"); // el paso confirm ofrece Recotizar (onRelock) si falta quote/expiró
+            }
           }
-          if (alive) setStep("review");
         } else {
           setRem(res.snapshot);
           setStep("verify");
@@ -156,6 +173,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
       });
       setRem(r.snapshot);
       setScanStage(0);
+      setRateUpdated(false); // WKH-187: flujo nuevo, sin indicador de re-cotización heredado
       setStep("connect");
     });
 
@@ -164,21 +182,26 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
       if (!rem) return;
       const { address: addr, rememberedKyc } = await c.connectWallet.execute();
       setAddress(addr);
+      // WKH-187/CD-12: cotizá SIEMPRE apenas conecta (created→quoted), ANTES de cualquier KYC.
+      // El quote queda visible en el paso `review` pre-KYC (AC-1).
+      const locked = await c.lockQuote.execute({ remittanceId: rem.id });
+      setRem(locked.snapshot);
       if (rememberedKyc && rememberedKyc.approved && rememberedKyc.payoutAllowed) {
-        // KYC-once: esta wallet ya está verificada → saltear identidad, directo a cotizar/revisar.
+        // KYC-once: esta wallet ya está verificada → salta review+verify, directo a confirmar (AC-4).
         const res = await c.startKyc.execute({ remittanceId: rem.id, address: addr });
         if (res.kind === "done") {
           setRem(res.snapshot);
-          const locked = await c.lockQuote.execute({ remittanceId: rem.id });
-          setRem(locked.snapshot);
-          setStep("review");
+          setStep("confirm");
         } else {
-          setStep("verify");
+          setStep("review");
         }
       } else {
-        setStep("verify");
+        setStep("review");
       }
     });
+
+  // WKH-187/AC-2: la CTA "Continuar" del review lleva al KYC pero NO lo auto-inicia (navegación pura).
+  const onContinue = () => setStep("verify");
 
   const onVerify = () =>
     guard(async () => {
@@ -197,7 +220,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
         window.location.href = res.url;
         return;
       }
-      // done: simulación (sin key) o KYC-once.
+      // done: simulación (sin key) o KYC-once. El quote ya está lockeado desde onConnect (WKH-187).
       setRem(res.snapshot);
       if (res.snapshot.status !== "kyc_passed") {
         setScanStage(0);
@@ -206,9 +229,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
       }
       setScanStage(4);
       await sleep(400);
-      const locked = await c.lockQuote.execute({ remittanceId: rem.id });
-      setRem(locked.snapshot);
-      setStep("review");
+      setStep("confirm");
     });
 
   const onConfirm = () =>
@@ -252,6 +273,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
       setDestination("");
       setScanStage(0);
       setAmount("400"); // no es PII → vuelve al default inicial (evita form con monto en blanco)
+      setRateUpdated(false); // WKH-187
       setStep("send");
       setConfirmReset(false);
     });
@@ -338,7 +360,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
         </div>
       ) : null}
 
-      {rem && isDemoMode(rem) && (step === "review" || step === "track") ? (
+      {rem && isDemoMode(rem) && (step === "review" || step === "confirm" || step === "track") ? (
         <div className="mb-4 flex items-center justify-center">
           <Pill tone="warn">Modo demo (sin dinero real)</Pill>
         </div>
@@ -545,8 +567,46 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
             </div>
           )}
 
+          {/* WKH-187: paso `review` pre-KYC — muestra el VALOR (cuánto recibe la familia) antes de verificar. */}
           {step === "review" && rem?.quote && (
             <div className="space-y-4">
+              <Card>
+                <div className="mb-2 flex items-center justify-between">
+                  <p className="text-sm font-semibold">Revisá el envío</p>
+                  <Pill tone="active">tasa fijada</Pill>
+                </div>
+                <div className="mb-3 rounded-xl bg-sand px-4 py-3 text-center">
+                  <p className="text-xs text-stone">{rem.beneficiary.name} recibe</p>
+                  <p className="tabular text-3xl font-extrabold text-verde">
+                    {rem.quote.receive.format()}
+                  </p>
+                </div>
+                <Row label="Enviás" value={rem.sendUsd.format()} />
+                <Row label="Comisión" value={rem.quote.feeUsd.format()} />
+                <Row label="Tipo de cambio" value={`S/ ${rem.quote.rate.toFixed(3)}`} />
+                <Row label="Llega en" value={`~${rem.quote.etaMinutes} min`} />
+                <div className="my-2 h-px bg-line" />
+                <Row label="Recibe en" value={`${methodLabel(rem.beneficiary.method)} · ${rem.beneficiary.destination}`} />
+              </Card>
+              <Button disabled={busy} onClick={onContinue}>
+                Continuar <ArrowRight className="h-4 w-4" />
+              </Button>
+              <p className="text-center text-xs text-stone">
+                Para enviar, verificás tu identidad una sola vez (por ley).
+              </p>
+            </div>
+          )}
+
+          {/* WKH-187: paso `confirm` post-KYC — el review con badge de identidad + confirmar/relock. */}
+          {step === "confirm" && rem?.quote && (
+            <div className="space-y-4">
+              {rateUpdated ? (
+                <div className="flex items-center justify-center">
+                  <Pill tone="active">
+                    La tasa se actualizó · tu familia recibe {rem.quote.receive.format()} ahora
+                  </Pill>
+                </div>
+              ) : null}
               <Card>
                 <div className="mb-2 flex items-center justify-between">
                   <p className="text-sm font-semibold">Revisá antes de enviar</p>

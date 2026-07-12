@@ -11,6 +11,7 @@
 | WKH-184 | [Residual AC-8 WKH-181] Reset explícito de KYC-once + señal soft de FallbackWallet (Opción D) | DONE (2026-07-11) | `doc/sdd/007-wkh-184-fallback-wallet-reset-demo-signal/done-report.md` |
 | WKH-185 | [Deuda técnica] Component test harness (jsdom + RTL) + backfill de ACs de UI sin RTL (178/181/184) | DONE (2026-07-11) | `doc/sdd/008-wkh-185-component-test-harness-backfill/done-report.md` |
 | WKH-186 | [Técnico, porción de WKH-168] Value-delivery scaffolding: adapter a2a (mock/off), reconciliación + idempotencia, refund-on-failure, EIP-3009-ready | DONE (2026-07-11) | `doc/sdd/009-wkh-186-value-delivery-scaffolding/done-report.md` |
+| WKH-187 | [Money-path/UX] Reordenar el flujo: mostrar el quote (valor) antes del KYC | in progress (F1, 2026-07-12) | `doc/sdd/010-wkh-187-quote-before-kyc-reorder/work-item.md` |
 
 ## Notas de coordinación
 - WKH-178 y WKH-179 corren en paralelo, ambas del mismo repo (`chaski-v2`) y de la misma auditoría
@@ -103,6 +104,27 @@
   0 BLOQUEANTES, 4 MENORs fixeados (MNR-A receiver validation, MNR-B cache-miss status, MNR-C shape
   align, MNR-D try/catch), 223/223 tests verdes, build OK, CD-2 money-path verificada 6 capas.
   Runbook Fase A documentado en `done-report.md` §8. Ver `doc/sdd/009-wkh-186-value-delivery-scaffolding/done-report.md`.
+- **WKH-187 (F1, 2026-07-12, `010`)**: reorden money-path/UX puro — mostrar el quote lockeado apenas
+  se conecta la wallet, pedir el KYC recién cuando el usuario confirma que quiere enviar. Trabaja
+  sobre el estado ya mergeado de WKH-178..186 (`main`); no reabre ninguno de esos gaps. El gate de
+  compliance (`confirm_requires_kyc_passed`, `remittance.ts` L219-222) y la autoridad server-side de
+  payout (WKH-180, `confirm-and-send.ts` L60-72) quedan explícitamente FUERA de scope de
+  modificación (AC-3/AC-7, CD-2/CD-3) — el reorden es solo de CUÁNDO se pide cada cosa en la UI y
+  qué transiciones de la FSM son alcanzables entre sí, no de QUÉ invariantes se verifican. Propuesta
+  de `TRANSITIONS` (DT-1): `created→quoted→kyc_pending→kyc_passed→{quoted|confirmed}` (el
+  `kyc_passed→quoted` habilita re-cotizar sin perder el KYC si el quote vence durante el escaneo
+  Didit — borde real que se alarga con este reorden, AC-5). Toca `remittance.ts`, `flow.tsx`,
+  `start-kyc.ts`/`resume-kyc.ts`/`lock-quote.ts`/`connect-wallet.ts` (orden de invocación, no
+  firmas) y los tests correspondientes (`remittance.test.ts`, `confirm-and-send.test.ts`,
+  `flow.test.tsx`, etc). 3 `[NEEDS CLARIFICATION]` para F2 (ninguno bloqueante salvo el del re-quote
+  post-KYC): (1) copy/diseño exacto del paso de revisión pre-KYC; (2) comportamiento exacto si el
+  quote vence durante el KYC (re-quote automático vs. tap explícito, y si un monto muy distinto
+  exige re-confirmación) — BLOQUEANTE para cerrar el SDD de F2 si no se resuelve; (3) labels exactos
+  del `Stepper` tras el reorden. Además 1 `[TBD]`: no se pudo leer el ticket de Jira WKH-187
+  directamente en esta sesión (tool no disponible) — el work-item se armó desde el brief funcional
+  del orquestador + grounding directo del código; revisar si el ticket original tiene contexto
+  adicional (métricas de drop-off, mockups) antes de HU_APPROVED. Ver
+  `doc/sdd/010-wkh-187-quote-before-kyc-reorder/work-item.md`.
 
 ---
 
@@ -137,3 +159,9 @@ bloqueantes abiertos. El AC-8 residual de WKH-181 (diferido a WKH-184) está for
 | HU | Status | Nota |
 |----|--------|------|
 | WKH-186 (scaffolding a2a mock/off + reconciliación + refund + EIP-3009-ready) | DONE (2026-07-11) | Sin movimiento de dinero real (CD-2 verificada 6 capas). Gap real cerrado (refund-on-failure). Runbook Fase A documentado. Listo para merge. Ver `doc/sdd/009-wkh-186-value-delivery-scaffolding/done-report.md`. |
+
+## 🔵 MONEY-PATH / UX (post value-delivery scaffolding)
+
+| HU | Status | Nota |
+|----|--------|------|
+| WKH-187 (reorden: quote antes del KYC) | F1 (2026-07-12) | Reorden puro de secuencia (dominio + UI); el gate de compliance `confirm_requires_kyc_passed` y la autoridad server-side WKH-180 quedan explícitamente intactos (AC-3/AC-7, CD-2/CD-3). 1 NEEDS CLARIFICATION bloqueante para F2 (manejo del re-quote si el quote vence durante el escaneo KYC). Ver `doc/sdd/010-wkh-187-quote-before-kyc-reorder/work-item.md`.

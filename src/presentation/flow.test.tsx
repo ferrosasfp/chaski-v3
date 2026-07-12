@@ -7,6 +7,7 @@ import { RemittanceFlow } from "./flow";
 import { buildTestContainer } from "../test-support/test-container";
 import { FallbackQuoteGateway } from "../infrastructure/fallback/gateways";
 import { ResumeKyc } from "../application/use-cases/resume-kyc";
+import { AbandonPendingKyc } from "../application/use-cases/abandon-pending-kyc";
 import { LockQuote } from "../application/use-cases/lock-quote";
 import { ConfirmAndSend } from "../application/use-cases/confirm-and-send";
 import { Money } from "../domain/money";
@@ -305,32 +306,147 @@ it("T-REQUOTE: resume 'passed' con quote vencido auto re-cotiza, muestra el mont
   expect(screen.getByText(/Identidad verificada/)).toBeInTheDocument();
 });
 
-// ── T3 — AC-5: botón "Reintentar" + retry sin reload (fake timers, CD-10) ─────
-describe("T3 (fake timers aislados, CD-10)", () => {
+// ── T-ESC1..T-ESC6 — WKH-188: escape visible + timeout de 20 s (fake timers) ───
+describe("WKH-188 resume escape (fake timers aislados, CD-10)", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => {
     vi.useRealTimers();
     cleanup();
   });
 
-  it("tras el timeout del resume-KYC muestra 'Reintentar' y el retry NO recarga la página", async () => {
-    // resumeKyc siempre "processing" → el resume-loop (40× sleep(2500)) agota el timeout.
+  // Setup común: resumeKyc siempre "processing" → el overlay `resuming` se mantiene.
+  function escapeContainer() {
+    const resumeSpy = vi.fn(async () => ({ kind: "processing" as const }));
+    const abandonSpy = vi.fn(async () => {});
+    const container = buildTestContainer({
+      useCases: {
+        resumeKyc: { execute: resumeSpy } as unknown as ResumeKyc,
+        abandonPendingKyc: { execute: abandonSpy } as unknown as AbandonPendingKyc,
+      },
+    });
+    return { container, resumeSpy, abandonSpy };
+  }
+
+  // Ancla el timer del escape apenas `resuming` se vuelve true (1er flush chico), y luego avanza
+  // bien pasado el umbral de 5 s → el botón de escape queda visible de forma determinista.
+  // Auto-blindaje WKH-188: bajo fake timers, el flush del efecto passive de React se ancla al
+  // FINAL del primer chunk de `advanceTimersByTimeAsync`; si el 1er advance es grande (p.ej. 6000),
+  // el setTimeout(5000) del escape se agenda tarde y no dispara a tiempo. Un 1er flush de 1 ms lo
+  // ancla cerca de t≈0 → el escape cruza los 5 s como se espera.
+  async function armEscape(): Promise<void> {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1); // ancla: resuming=true + escape timer agendado ~t=0
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6999); // total ~7 s (> 5 s umbral, < 20 s timeout)
+    });
+  }
+
+  // ── T-ESC1 — AC-1: el escape aparece a los 5 s, no antes ──────────────────
+  it("T-ESC1: el escape aparece a los 5 s, no antes", async () => {
+    const { container } = escapeContainer();
+    render(<RemittanceFlow container={container} />);
+
+    // Ancla el timer del escape apenas resuming=true (ver armEscape / auto-blindaje).
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+
+    // A ~4 s: sin botón de escape, pero el overlay de resume ya está visible.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3999); // total ~4 s
+    });
+    expect(screen.queryByRole("button", { name: /Empezar de nuevo/ })).toBeNull();
+    expect(screen.getByText(/Verificando tu identidad/)).toBeInTheDocument();
+
+    // Pasado el umbral de 5 s: el botón de escape aparece (sigue en resuming, lejos del timeout).
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000); // total ~7 s
+    });
+    expect(screen.getByRole("button", { name: /Empezar de nuevo/ })).toBeInTheDocument();
+  });
+
+  // ── T-ESC2 — AC-2: cancelar limpia el pending y vuelve a `send` ───────────
+  it("T-ESC2: cancelar limpia el pending y vuelve a 'send'", async () => {
+    const { container, abandonSpy } = escapeContainer();
+    render(<RemittanceFlow container={container} />);
+
+    await armEscape();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Empezar de nuevo/ }));
+    });
+
+    // (a) abandonPendingKyc llamado 1× (antes de navegar).
+    expect(abandonSpy).toHaveBeenCalledTimes(1);
+    // (b) volvió al paso `send`; el overlay de resume desapareció.
+    expect(screen.getByLabelText("Monto en dólares")).toBeInTheDocument();
+    expect(screen.queryByText(/Verificando tu identidad/)).toBeNull();
+  });
+
+  // ── T-ESC3 — AC-3: cancelar detiene el loop (sin más resumeKyc) ──────────
+  it("T-ESC3: cancelar detiene el loop (sin más resumeKyc)", async () => {
+    const { container, resumeSpy } = escapeContainer();
+    render(<RemittanceFlow container={container} />);
+
+    await armEscape();
+    const n = resumeSpy.mock.calls.length;
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Empezar de nuevo/ }));
+    });
+    // Avanzar bien más allá del intervalo de poll: el loop no debe volver a poletear.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20000);
+    });
+
+    expect(resumeSpy.mock.calls.length).toBe(n);
+    expect(screen.getByLabelText("Monto en dólares")).toBeInTheDocument();
+  });
+
+  // ── T-ESC4 — AC-4: el escape NO abre camino a `confirm` sin KYC ──────────
+  it("T-ESC4: el escape NO abre camino a confirm sin KYC", async () => {
+    const { container } = escapeContainer();
+    render(<RemittanceFlow container={container} />);
+
+    await armEscape();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Empezar de nuevo/ }));
+    });
+
+    expect(screen.queryByRole("button", { name: /Confirmar y enviar/ })).toBeNull();
+    expect(screen.queryByText(/Identidad verificada/)).toBeNull();
+    expect(screen.getByLabelText("Monto en dólares")).toBeInTheDocument();
+  });
+
+  // ── T-ESC5 — AC-5: timeout total 20 s (no 100 s) + `timedOut` (ex-T3) ─────
+  it("T-ESC5: tras el timeout del resume-KYC (8× sleep(2500) = 20 s) muestra 'Reintentar' y el retry NO recarga la página", async () => {
+    // resumeKyc siempre "processing" → el resume-loop (8× sleep(2500) = 20 s) agota el timeout.
+    const abandonSpy = vi.fn(async () => {});
     const container = buildTestContainer({
       useCases: {
         resumeKyc: {
           execute: async () => ({ kind: "processing" as const }),
         } as unknown as ResumeKyc,
+        abandonPendingKyc: { execute: abandonSpy } as unknown as AbandonPendingKyc,
       },
     });
     render(<RemittanceFlow container={container} />);
 
-    // Agotar el loop (40 × 2500 ms = 100 s) → estado timedOut.
+    // MENOR-1 (CR): borde inferior — ANTES de los 20 s el timeout NO debe dispararse.
+    // Guarda contra un timeout accidentalmente más corto (p.ej. RESUME_MAX_POLLS=4 → 10 s).
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(100_000);
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(screen.queryByText("Reintentar")).toBeNull();
+    expect(screen.getByText(/Verificando tu identidad/)).toBeInTheDocument();
+
+    // Completar el loop (total 8 × 2500 ms = 20 s) → estado timedOut.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
     });
 
-    // (a) botón "Reintentar" visible.
+    // (a) botón "Reintentar" visible + abandon llamado al agotarse (WKH-178).
     expect(screen.getByText("Reintentar")).toBeInTheDocument();
+    expect(abandonSpy).toHaveBeenCalled();
 
     // Spy sobre window.location.reload — onRetryKyc NO debe recargar. jsdom marca reload como
     // non-configurable, así que se reemplaza el objeto location entero (restaurado al final).
@@ -357,5 +473,98 @@ describe("T3 (fake timers aislados, CD-10)", () => {
         value: originalLocation,
       });
     }
+  });
+
+  // ── T-ESC6 — AC-6: respuesta terminal `failed` sale de `resuming` al 1er poll ─
+  it("T-ESC6: respuesta terminal 'failed' sale de resuming al primer poll", async () => {
+    // La rama `failed` solo hace setRem + setStep("verify"); cualquier snapshot válido sirve.
+    const failedSnapshot = Remittance.create("rem-1", beneficiary(), Money.of(400, "USDC"), T0).snapshot;
+    const container = buildTestContainer({
+      useCases: {
+        resumeKyc: {
+          execute: async () => ({ kind: "failed" as const, snapshot: failedSnapshot }),
+        } as unknown as ResumeKyc,
+      },
+    });
+    render(<RemittanceFlow container={container} />);
+
+    // El primer poll es terminal (sin sleep) → aterriza en `verify`. Flush sin disparar el escape (5 s).
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByRole("button", { name: /Escanear DNI \+ selfie/ })).toBeInTheDocument();
+    expect(screen.getByText(/La verificación no pasó/)).toBeInTheDocument();
+
+    // El escape NUNCA aparece (el overlay `resuming` nunca estuvo activo el tiempo suficiente).
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000);
+    });
+    expect(screen.queryByRole("button", { name: /Empezar de nuevo/ })).toBeNull();
+  });
+
+  // ── T-ESC7 — BLQ-MED-1 (AR): escape durante execute() en vuelo NO re-cuelga el overlay ─
+  // Regresión del bug que la HU vino a matar: si el usuario clickea "Empezar de nuevo" mientras
+  // un `resumeKyc.execute()` está en vuelo y ese execute() resuelve DESPUÉS del click, el loop
+  // NO debe volver a `setResuming(true)`. Sin el guard `cancelledRef` tras el `await execute()`
+  // (flow.tsx, 3er punto de suspensión) este test queda ROJO: el overlay reaparece STUCK en `send`.
+  it("T-ESC7: cancelar mientras execute() está en vuelo NO re-cuelga el overlay (BLQ-MED-1)", async () => {
+    // resumeKyc.execute() devuelve promesas DIFERIDAS (resueltas a mano), para cruzar el click.
+    const pendingResolvers: Array<(v: { kind: "processing" }) => void> = [];
+    const resumeSpy = vi.fn(
+      () =>
+        new Promise<{ kind: "processing" }>((resolve) => {
+          pendingResolvers.push(resolve);
+        }),
+    );
+    const abandonSpy = vi.fn(async () => {});
+    const container = buildTestContainer({
+      useCases: {
+        resumeKyc: { execute: resumeSpy } as unknown as ResumeKyc,
+        abandonPendingKyc: { execute: abandonSpy } as unknown as AbandonPendingKyc,
+      },
+    });
+    render(<RemittanceFlow container={container} />);
+
+    // (1) 1er execute() creado al montar; lo resolvemos con `processing` → resuming=true + ancla el
+    // timer del escape cerca de t≈0 (auto-blindaje WKH-188).
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1); // deja que el loop llame al 1er execute()
+    });
+    await act(async () => {
+      pendingResolvers[0]!({ kind: "processing" });
+      await vi.advanceTimersByTimeAsync(1); // resuming=true, escape timer agendado
+    });
+
+    // (2) avanzar > 5 s: el sleep(2500) dispara el 2do execute() (que queda EN VUELO, sin resolver)
+    // y el timer del escape hace visible el botón. El overlay sigue en `resuming`.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6999); // total ~7 s (> 5 s escape, < 20 s timeout)
+    });
+    expect(screen.getByRole("button", { name: /Empezar de nuevo/ })).toBeInTheDocument();
+    expect(pendingResolvers.length).toBe(2); // el 2do execute() está en vuelo
+
+    // (3) el usuario clickea el escape MIENTRAS el 2do execute() está en vuelo.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Empezar de nuevo/ }));
+    });
+    // ya volvió a `send` y el overlay desapareció.
+    expect(screen.getByLabelText("Monto en dólares")).toBeInTheDocument();
+    expect(screen.queryByText(/Verificando tu identidad/)).toBeNull();
+
+    // (4) AHORA resuelve el execute() que estaba en vuelo (llega tarde, tras el cancel).
+    await act(async () => {
+      pendingResolvers[1]!({ kind: "processing" });
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    // dar tiempo a un eventual (indebido) sleep(2500) del loop re-colgado.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    // Con el guard BLQ-MED-1: el overlay NO reaparece y seguimos en `send`.
+    // Sin el guard: setResuming(true) re-cuelga "Verificando tu identidad…" encima de `send` (ROJO).
+    expect(screen.queryByText(/Verificando tu identidad/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Empezar de nuevo/ })).toBeNull();
+    expect(screen.getByLabelText("Monto en dólares")).toBeInTheDocument();
   });
 });

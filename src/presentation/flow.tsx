@@ -46,6 +46,13 @@ const SCAN_STEPS = [
 ];
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// WKH-188: timing del resume-loop de KYC, alineado al estándar de UX (SDD §5.1).
+// Escape < límite de atención 10 s (NN/g); poll total 20 s dentro del rango 15-30 s de
+// auto-poll post-redirect de verificadores hospedados.
+const RESUME_ESCAPE_DELAY_MS = 5000;   // el escape aparece a los 5 s
+const RESUME_POLL_INTERVAL_MS = 2500;  // intervalo de poll (sin cambio vs WKH-178)
+const RESUME_MAX_POLLS = 8;            // 8 × 2500 ms = 20 s total (antes 40 = ~100 s)
+
 export function RemittanceFlow({ container }: { container?: Container } = {}) {
   const c = useMemo(() => container ?? createContainer(), [container]);
   const [step, setStep] = useState<Step>("send");
@@ -67,6 +74,8 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
   const [timedOut, setTimedOut] = useState(false); // el resume-loop agotó el timeout
   const [confirmReset, setConfirmReset] = useState(false); // control "¿No sos vos?" (WKH-184)
   const [rateUpdated, setRateUpdated] = useState(false); // WKH-187: el quote se re-cotizó tras expirar durante el KYC
+  const [showResumeEscape, setShowResumeEscape] = useState(false); // WKH-188: botón de escape a los 5 s
+  const cancelledRef = useRef(false); // WKH-188: corta el resume-loop tras el escape
 
   const amountNum = Number(amount) || 0;
 
@@ -94,7 +103,8 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
     resumedRef.current = true;
     let alive = true;
     (async () => {
-      for (let i = 0; i < 40; i++) {
+      for (let i = 0; i < RESUME_MAX_POLLS; i++) {
+        if (cancelledRef.current) return; // CD-CANCEL: no dispara otra iteración tras el escape
         let res: Awaited<ReturnType<typeof c.resumeKyc.execute>>;
         try {
           res = await c.resumeKyc.execute();
@@ -102,13 +112,17 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
           break;
         }
         if (!alive) return;
+        // BLQ-MED-1 (WKH-188): 3er punto de suspensión. Si el escape corrió mientras execute()
+        // estaba en vuelo, cortar ANTES de tocar `resuming`/navegar → el overlay no re-cuelga.
+        if (cancelledRef.current) return; // CD-CANCEL: cubre el `await execute()`, no solo top+post-sleep
         if (res.kind === "none") {
           setResuming(false);
           return;
         }
         if (res.kind === "processing") {
           setResuming(true);
-          await sleep(2500);
+          await sleep(RESUME_POLL_INTERVAL_MS);
+          if (cancelledRef.current) return; // CD-CANCEL: no dispara otra iteración tras el escape
           continue;
         }
         setResuming(false);
@@ -152,6 +166,18 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
       alive = false;
     };
   }, [c]);
+
+  // WKH-188: mientras el overlay `resuming` está visible, ofrecer un escape a los 5 s (AC-1).
+  // Time-based (no atado al conteo de iteraciones). Al caer `resuming` (terminal temprano o timeout),
+  // limpia el timer y resetea el flag → el botón nunca aparece indebido (AC-6).
+  useEffect(() => {
+    if (!resuming) {
+      setShowResumeEscape(false);
+      return;
+    }
+    const t = setTimeout(() => setShowResumeEscape(true), RESUME_ESCAPE_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [resuming]);
 
   const guard = useCallback(async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -247,6 +273,20 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
       const r = await c.lockQuote.execute({ remittanceId: rem.id });
       setRem(r.snapshot);
     });
+
+  // WKH-188 (AC-2/AC-3): escape manual del overlay `resuming`. Detiene el loop, limpia el pending
+  // ANTES de navegar (CD-2), y vuelve a `send` (estado usable, anterior al gate — CD-1).
+  const onCancelResume = async () => {
+    cancelledRef.current = true; // síncrono: el loop lo ve tras su sleep en curso
+    try {
+      await c.abandonPendingKyc.execute(); // CD-2: abandon ANTES de navegar
+    } catch {
+      /* best-effort — el reset de estado corre igual (patrón forgetAndDisconnect) */
+    }
+    setShowResumeEscape(false);
+    setResuming(false);
+    resetTo(setStep, setRem, setPreview); // → paso `send`
+  };
 
   // A4: tras el timeout del KYC, reintentar sin refrescar (resetea a un flujo fresco en "send").
   const onRetryKyc = () => {
@@ -375,6 +415,14 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
               Estamos confirmando tu verificación con Didit. Un segundo.
             </p>
           </div>
+          {showResumeEscape ? (
+            <div className="space-y-2">
+              <p className="text-sm text-stone">¿No completaste la verificación?</p>
+              <Button variant="outline" onClick={onCancelResume}>
+                Empezar de nuevo
+              </Button>
+            </div>
+          ) : null}
         </Card>
       ) : timedOut ? (
         <Card className="mt-2 flex-1 space-y-4 text-center">

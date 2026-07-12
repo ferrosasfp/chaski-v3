@@ -12,6 +12,7 @@
 | WKH-185 | [Deuda técnica] Component test harness (jsdom + RTL) + backfill de ACs de UI sin RTL (178/181/184) | DONE (2026-07-11) | `doc/sdd/008-wkh-185-component-test-harness-backfill/done-report.md` |
 | WKH-186 | [Técnico, porción de WKH-168] Value-delivery scaffolding: adapter a2a (mock/off), reconciliación + idempotencia, refund-on-failure, EIP-3009-ready | DONE (2026-07-11) | `doc/sdd/009-wkh-186-value-delivery-scaffolding/done-report.md` |
 | WKH-187 | [Money-path/UX] Reordenar el flujo: mostrar el quote (valor) antes del KYC | DONE (2026-07-12) | `doc/sdd/010-wkh-187-quote-before-kyc-reorder/done-report.md` |
+| WKH-188 | [Bug UX, KYC resume] Escape visible + timeout más corto en el resume de KYC abandonado | DONE (2026-07-12) | `doc/sdd/011-wkh-188-kyc-resume-escape/done-report.md` |
 
 ## Notas de coordinación
 - WKH-178 y WKH-179 corren en paralelo, ambas del mismo repo (`chaski-v2`) y de la misma auditoría
@@ -117,6 +118,23 @@
   verdes, 9/9 ACs PASS, 0 BLQ/0 MENOR en AR/CR. Auto-blindaje: 3 lecciones para reordenes de FSM
   (exhaustividad de tests, precondición de estado en I/O, tiempo real en RTL). Ver
   `doc/sdd/010-wkh-187-quote-before-kyc-reorder/done-report.md`.
+- **WKH-188 (F1, 2026-07-12, `011`)**: bug reportado por el founder en móvil — al abandonar una
+  sesión de Didit a mitad de camino (botón "atrás" del navegador), el usuario queda ~100s
+  (40×2500ms) en el overlay "Verificando tu identidad…" sin ningún control de salida antes del
+  timeout completo (`flow.tsx` L92-154/L369-378), percibido como colgado. Trabaja sobre el estado
+  ya mergeado de WKH-178..187 (`main`). Fix acotado de UX del resume-loop: (1) escape visible antes
+  del timeout completo, reusando `AbandonPendingKyc` ya existente (WKH-178); (2) timeout total
+  acortado de ~100s a ~25-30s. El gate `confirm_requires_kyc_passed` y la autoridad server-side de
+  payout (WKH-180) quedan explícitamente FUERA de scope (AC-4, CD-1/CD-3) — es un fix de timing/UI,
+  no de las invariantes de negocio. Hallazgo del F0: `decision.ts` YA mapea
+  `"Abandoned"/"Expired"/"Kyc Expired"` como terminal (L26) — el punto 4 del objetivo del founder
+  (fail-fast si Didit expone un estado explícito de abandono) está mayormente cubierto por código
+  existente; queda 1 `[NEEDS CLARIFICATION]` NO bloqueante sobre si Didit transiciona ese status de
+  forma síncrona al abandono o solo tras su propio TTL — no bloquea el fix principal (escape +
+  timeout corto). Toca únicamente `src/presentation/flow.tsx` (+ tests en `flow.test.tsx`, reusa el
+  patrón de fake timers `T3` de WKH-178/CD-10). Sin colisión de merge esperada (última HU en tocar
+  `flow.tsx` fue WKH-187, ya mergeada). Ver
+  `doc/sdd/011-wkh-188-kyc-resume-escape/work-item.md`.
 
 ---
 
@@ -156,4 +174,10 @@ bloqueantes abiertos. El AC-8 residual de WKH-181 (diferido a WKH-184) está for
 
 | HU | Status | Nota |
 |----|--------|------|
-| WKH-187 (reorden: quote antes del KYC) | DONE (2026-07-12) | Reorden puro de secuencia (dominio + UI); el gate de compliance `confirm_requires_kyc_passed` y la autoridad server-side WKH-180 quedan explícitamente intactos (AC-3/AC-7, CD-2/CD-3). 9/9 ACs PASS, 235/235 tests verdes, 0 BLQ/0 MENOR en AR/CR, tsc/build OK. Auto-blindaje documentado: 3 lecciones para reordenes de FSM. Ver `doc/sdd/010-wkh-187-quote-before-kyc-reorder/done-report.md`.
+| WKH-187 (reorden: quote antes del KYC) | DONE (2026-07-12) | Reorden puro de secuencia (dominio + UI); el gate de compliance `confirm_requires_kyc_passed` y la autoridad server-side WKH-180 quedan explícitamente intactos (AC-3/AC-7, CD-2/CD-3). 9/9 ACs PASS, 235/235 tests verdes, 0 BLQ/0 MENOR en AR/CR, tsc/build OK. Auto-blindaje documentado: 3 lecciones para reordenes de FSM. Ver `doc/sdd/010-wkh-187-quote-before-kyc-reorder/done-report.md`. |
+
+## 🟣 BUGS POST-LAUNCH (reportados en producción)
+
+| HU | Status | Nota |
+|----|--------|------|
+| WKH-188 (resume de KYC abandonado: escape visible + timeout corto) | F1 in progress (2026-07-12) | Bug reportado por el founder en móvil (usuario dio "atrás" en Didit, quedó ~100s sin escape en el overlay "Verificando…"). Fix de UX/timing en `flow.tsx`, sin tocar el gate de compliance ni la autoridad server-side WKH-180 (CD-1/CD-3). Ver `doc/sdd/011-wkh-188-kyc-resume-escape/work-item.md`. |

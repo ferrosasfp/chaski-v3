@@ -13,6 +13,7 @@ import { PreviewQuote } from "../application/use-cases/preview-quote";
 import { ResumeKyc } from "../application/use-cases/resume-kyc";
 import { StartKyc } from "../application/use-cases/start-kyc";
 import { TrackRemittance } from "../application/use-cases/track-remittance";
+import { A2aPayoutGateway, A2aQuoteGateway } from "../infrastructure/a2a/gateways";
 import { DiditKycGateway } from "../infrastructure/didit/kyc-gateway";
 import {
   FallbackKycGateway,
@@ -47,11 +48,24 @@ export function createContainer(): Container {
   const repo = new LocalRepo();
   const kycStore = new LocalKycStore();
   const kycPending = new LocalKycPendingStore();
-  const quotes = new FallbackQuoteGateway();
+  // Flag de composición value-delivery (WKH-186/AC-1/AC-2, DT-4): un solo flag cablea quote+payout
+  // (evita quote-real + payout-mock). Default "fallback" → demo byte-idéntico (mock). "a2a" → los
+  // agentes remit-* reales vía las API routes server-only.
+  const adapter = process.env.NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER; // "fallback"(default) | "a2a"
+  // Guard fail-loud money-path (WKH-186/AC-11, CD-3/4/16): EIP-3009 encendido SIN adapter=a2a /
+  // receiver / usdc → throw en construcción, la app NO arranca. Imposible un modo mixto silencioso
+  // (firma real + payout mock). Default (EIP-3009 off) → nunca entra acá.
+  if (process.env.NEXT_PUBLIC_EIP3009_ENABLED === "true") {
+    if (adapter !== "a2a") throw new Error("eip3009_requires_a2a_adapter"); // CD-3
+    if (!process.env.NEXT_PUBLIC_PAYOUT_RECEIVER_ADDRESS) throw new Error("eip3009_requires_receiver"); // CD-4
+    if (!process.env.NEXT_PUBLIC_USDC_CONTRACT_ADDRESS) throw new Error("eip3009_requires_usdc_contract"); // CD-16
+  }
+  const useA2a = adapter === "a2a";
+  const quotes = useA2a ? new A2aQuoteGateway() : new FallbackQuoteGateway();
   // Server-truth: SIEMPRE el gateway Didit, con la simulación como fallback. Si el server tiene
   // key → Didit real; si no (501) → simulación. No depende del inlineado NEXT_PUBLIC del cliente.
   const kyc = new DiditKycGateway(new FallbackKycGateway());
-  const payouts = new FallbackPayoutGateway();
+  const payouts = useA2a ? new A2aPayoutGateway() : new FallbackPayoutGateway();
   const payoutAuthority = new HttpPayoutAuthorityGateway(); // autoridad server-side (WKH-180)
   const refund = new LedgerRefundGateway(); // refund-on-failure ledger-only (WKH-186/AC-8, CD-8)
   const wallet = pickWallet(); // wallet REAL (MetaMask) si está inyectada, si no la demo

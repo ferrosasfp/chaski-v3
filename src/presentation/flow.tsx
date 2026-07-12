@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Quote, RemittanceState, PayoutMethod } from "../domain/remittance";
-import { createContainer } from "../composition/container";
+import { createContainer, type Container } from "../composition/container";
 import { deliveredDisplay, humanError, isDemoMode, isFallbackWalletAddress } from "./flow-vm";
 import { Button, Card, ChaskiMark, Field, Pill, Row, Stepper, TextInput } from "./ui";
 
@@ -43,8 +43,8 @@ const SCAN_STEPS = [
 ];
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export function RemittanceFlow() {
-  const c = useMemo(() => createContainer(), []);
+export function RemittanceFlow({ container }: { container?: Container } = {}) {
+  const c = useMemo(() => container ?? createContainer(), [container]);
   const [step, setStep] = useState<Step>("send");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

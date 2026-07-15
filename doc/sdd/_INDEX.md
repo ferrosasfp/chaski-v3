@@ -13,6 +13,10 @@
 | WKH-186 | [Técnico, porción de WKH-168] Value-delivery scaffolding: adapter a2a (mock/off), reconciliación + idempotencia, refund-on-failure, EIP-3009-ready | DONE (2026-07-11) | `doc/sdd/009-wkh-186-value-delivery-scaffolding/done-report.md` |
 | WKH-187 | [Money-path/UX] Reordenar el flujo: mostrar el quote (valor) antes del KYC | DONE (2026-07-12) | `doc/sdd/010-wkh-187-quote-before-kyc-reorder/done-report.md` |
 | WKH-188 | [Bug UX, KYC resume] Escape visible + timeout más corto en el resume de KYC abandonado | DONE (2026-07-12) | `doc/sdd/011-wkh-188-kyc-resume-escape/done-report.md` |
+| WKH-198 | [Hallazgo A, auditoría adversarial #2] Fail-closed en expiry de quote — guard NaN + validación de shape de fecha | DONE (2026-07-14) | `doc/sdd/012-wkh-198-quote-expiry-fail-closed/done-report.md` |
+| WKH-199 | [Hallazgo B, auditoría adversarial #2] KYC re-brick — `KycStore.save()` best-effort + reorder critical-write-first | DONE (2026-07-14) | `doc/sdd/013-wkh-199-kyc-store-save-best-effort/done-report.md` |
+| WKH-200 | [Hallazgo C, auditoría adversarial #2] Estados honestos en TrackView + banner demo cubre payout-mock (provenance propagada) | DONE (2026-07-14) | `doc/sdd/014-wkh-200-track-honesty-payout-mock-banner/done-report.md` |
+| WKH-201 | [Hallazgo D, auditoría adversarial #2] `forgetAndDisconnect` purga PII persistida via `clearByOwner` best-effort | DONE (2026-07-14) | `doc/sdd/014-wkh-201-forget-disconnect-purge-persisted-pii/done-report.md` |
 
 ## Notas de coordinación
 - WKH-178 y WKH-179 corren en paralelo, ambas del mismo repo (`chaski-v2`) y de la misma auditoría
@@ -118,7 +122,7 @@
   verdes, 9/9 ACs PASS, 0 BLQ/0 MENOR en AR/CR. Auto-blindaje: 3 lecciones para reordenes de FSM
   (exhaustividad de tests, precondición de estado en I/O, tiempo real en RTL). Ver
   `doc/sdd/010-wkh-187-quote-before-kyc-reorder/done-report.md`.
-- **WKH-188 (F1, 2026-07-12, `011`)**: bug reportado por el founder en móvil — al abandonar una
+- **WKH-188 (DONE, 2026-07-12, `011`)**: bug reportado por el founder en móvil — al abandonar una
   sesión de Didit a mitad de camino (botón "atrás" del navegador), el usuario queda ~100s
   (40×2500ms) en el overlay "Verificando tu identidad…" sin ningún control de salida antes del
   timeout completo (`flow.tsx` L92-154/L369-378), percibido como colgado. Trabaja sobre el estado
@@ -134,7 +138,103 @@
   timeout corto). Toca únicamente `src/presentation/flow.tsx` (+ tests en `flow.test.tsx`, reusa el
   patrón de fake timers `T3` de WKH-178/CD-10). Sin colisión de merge esperada (última HU en tocar
   `flow.tsx` fue WKH-187, ya mergeada). Ver
-  `doc/sdd/011-wkh-188-kyc-resume-escape/work-item.md`.
+  `doc/sdd/011-wkh-188-kyc-resume-escape/done-report.md`.
+- **WKH-198 (F1, 2026-07-14, `012`)**: hallazgo A de la 2ª auditoría adversarial de `chaski-v2`,
+  distinto al backlog 178-188 (auditoría nueva). Trabaja sobre el estado ya mergeado de
+  WKH-178..188 (`main`). Bug de integridad money-path confirmado en F0: `isQuoteExpired`
+  (`remittance.ts:257-259`) usa `new Date(expiresAt).getTime() <= new Date(nowIso).getTime()` sin
+  guard de `NaN` — un `expiresAt` no-fecha (agente malicioso/roto, tampering de `localStorage`)
+  hace que la comparación `NaN <= x` sea `false` en JS, y el quote **nunca vence** (fail-open, no
+  fail-closed). En modo EIP-3009 real (flag OFF por default, WKH-186), el mismo dato malformado
+  produce `BigInt(NaN)` en `wallet.ts:75`/`:189` → `RangeError` sin catch al firmar, remesa
+  atascada en `confirmed` sin refund. Fix quirúrgico en 3 capas: (1) guard `Number.isNaN(...)`
+  fail-closed en `isQuoteExpired` (dominio, defensa de último recurso); (2) rechazo de shape en el
+  borde — `isValidQuoteShape` (`src/infrastructure/a2a/gateways.ts:42-53`) e `isValidQuoteResult`
+  (`app/api/a2a/quote/route.ts:12-23`), ambos hoy solo validan `typeof expiresAt === "string"` sin
+  parseabilidad; (3) guard defensivo en `wallet.ts` antes de `BigInt(Math.floor(Date.parse(...) /
+  1000))`, fail LOUD (no silencioso). Scope OUT explícito: el enforcement del submit/autoridad
+  server-side de payout es **WKH-202** (hallazgo relacionado, otra HU), no se toca acá; tampoco
+  `FallbackQuoteGateway` (genera `expiresAt` siempre válido, no es vector). 2 `[TBD]` NO
+  bloqueantes para F2 (mecanismo exacto del guard en `wallet.ts`: reusar función del dominio vs.
+  duplicar chequeo local; si crear test-file dedicado para `quote/route.ts` que hoy no existe). Sin
+  colisión de merge esperada — toca `remittance.ts`/`wallet.ts`/`gateways.ts`/`quote/route.ts`,
+  mismos archivos que WKH-182/186/187 (todas DONE y mergeadas). Ver
+  `doc/sdd/012-wkh-198-quote-expiry-fail-closed/work-item.md`.
+- **WKH-199 (F1, 2026-07-14, `013`, renumerado)**: hallazgo B de la misma 2ª auditoría adversarial
+  (paralelo a WKH-198). `012` fue tomado primero por WKH-198 (colisión de NNN detectada durante F1
+  de WKH-199); `doc/sdd/012-wkh-199-kyc-store-save-best-effort/` quedó como stub obsoleto que
+  apunta al path correcto (mismo patrón que la colisión histórica WKH-178/179). Trabaja sobre el
+  estado ya mergeado de WKH-178..188 (`main`). Reincidencia confirmada en F0 de la MISMA clase de
+  bug que WKH-183 cerró para `kyc-pending-store.ts` ("write no-crítico bloquea el crítico"), ahora
+  en el cache de KYC-once: `KycStore.save()` (`kyc-store.ts:97-106`) NO tiene try/catch (a
+  diferencia de `clear()`, `:118-122`), y se llama ANTES de `applyKyc()`+`repo.save()` tanto en
+  `resume-kyc.ts:47` como en la rama `"completed"` de `start-kyc.ts:51-57` — si `setItem` lanza, un
+  KYC YA APROBADO nunca se persiste y el resume-loop de `flow.tsx` (`catch { break }`, L109-113) cae
+  al timeout. Fix: try/catch best-effort en `save()` (simétrico a `clear()`) + reorden del write
+  no-crítico después del crítico en ambos use-cases, mismo patrón exacto que WKH-183 ya estableció
+  en la rama `redirect` de `start-kyc.ts`. Sin `[NEEDS CLARIFICATION]` bloqueantes. **Sin overlap de
+  archivos con WKH-198** (WKH-198 toca `remittance.ts`/`wallet.ts`/`gateways.ts`/`quote/route.ts`;
+  WKH-199 toca `kyc-store.ts`/`resume-kyc.ts`/`start-kyc.ts`/`test-support/fakes.ts`) — ambas pueden
+  avanzar F2/F3 sin coordinar orden de merge. Ver
+  `doc/sdd/013-wkh-199-kyc-store-save-best-effort/work-item.md`.
+- **WKH-200 (F1, 2026-07-14, `014`, renumerado DOS veces)**: hallazgo C de la misma 2ª auditoría
+  adversarial, en paralelo con WKH-198/199/201 (mismo batch de analysts corriendo simultáneamente
+  sobre `chaski-v2`). **Doble colisión de NNN**: WKH-200 probó `012` (ya tomado por WKH-198) → `013`
+  (tomado casi simultáneamente por WKH-199) → se asentó en `014`. `doc/sdd/012-wkh-200-.../` y
+  `doc/sdd/013-wkh-200-.../` quedaron como stubs obsoletos que apuntan acá (mismo patrón que la
+  colisión histórica WKH-178/179). **Comparte prefijo `014` con WKH-201** (`014-wkh-201-...`, distinto
+  nombre de carpeta) — sin colisión real de filesystem, rompe la convención de NNN único; se decide
+  NO re-renumerar de nuevo (evitar una tercera cascada) y dejarlo documentado acá, mismo criterio ya
+  aplicado al soft-share `013` entre WKH-199/200 antes de esta corrección. Trabaja sobre el estado ya
+  mergeado de WKH-178..188 (`main`). Bug de honestidad de estado + demo confirmado en F0: `TrackView`
+  (`flow.tsx:722-767`) trata `payout_failed`/`refunded` como "no reconocido" (`order.indexOf` = `-1`)
+  → muestra "Tu chaski está en camino…" para siempre, sin ninguna rama de error, aunque el copy de
+  reembolso ya existe (`humanError`, `flow-vm.ts:33`). `payout_failed` NO está en `TERMINAL_STATUSES`
+  (`remittance.ts:99`) → el polling de `flow.tsx:325-345` (1.5s) nunca se detiene si el refund
+  automático falla y la remesa queda congelada en `payout_failed`. Además `isDemoMode`
+  (`flow-vm.ts:6-8`) solo mira `quote.provenance`/`kyc.provenance`, nunca la provenance del
+  **payout** — `PayoutRecord` (`ports.ts:71-77`) ni siquiera tiene ese campo, aunque el shape crudo
+  del agente sí lo trae (`RawPayoutResult.provenance`, `gateways.ts:34`) y se descarta en
+  `mapResultToPayoutRecord` (`gateways.ts:83-91`) — con adapter `a2a` real + Didit real +
+  `PAYOUT_ALLOW_MOCK`, el recibo final ("Entregado") no muestra ningún aviso de modo demo. Fix en 3
+  capas: (1) branch dedicado en `TrackView` para `payout_failed`/`refunded` (AC-1); (2) parar el
+  polling explícitamente en `payout_failed`, sin tocar `TERMINAL_STATUSES` del dominio (AC-2, CD-1);
+  (3) propagar `provenance` del payout hasta `RemittanceState` (`payoutProvenance`, DT-1) e incluirla
+  en `isDemoMode` (AC-3), + cerrar el gap del banner en `step === "verify"` (AC-4). Scope OUT
+  explícito: WKH-202 (enforcement del submit), la lógica de CUÁNDO se refunda (solo la presentación
+  del estado ya alcanzado), y el repo externo `wasiai-remittance-agents`. 1
+  `[NEEDS CLARIFICATION]` NO bloqueante: el string exacto de `provenance` que devuelve
+  `remit-cashout-payout` en modo `PAYOUT_ALLOW_MOCK` (resoluble en F2 leyendo el repo hermano).
+  Riesgo de colisión de MERGE (no de NNN) con WKH-198 si ambas tocan `flow.tsx` en simultáneo —
+  coordinar orden de merge entre Architects/Devs antes de F3. Sin overlap de archivos con WKH-199
+  (toca `kyc-store.ts`/`resume-kyc.ts`/`start-kyc.ts`, ninguno en el Scope IN de esta HU). Overlap con
+  WKH-201 no verificado (ambas trabajan sobre `chaski-v2`, pero WKH-201 toca
+  `ports.ts`/`persistence.ts`/`forget-kyc.ts`/`container.ts`/`test-support/fakes.ts` — sin
+  intersección directa con el Scope IN de esta HU salvo, potencialmente, `container.ts` si ambas lo
+  tocan; coordinar con el Architect en F2 si aparece). Ver
+  `doc/sdd/014-wkh-200-track-honesty-payout-mock-banner/work-item.md`.
+- **WKH-201 (F1, 2026-07-14, `014`)**: hallazgo D de la 2ª auditoría adversarial de `chaski-v2`,
+  analyst paralelo de WKH-198/199/200 (mismo backlog de auditoría, work-items escritos en
+  simultáneo). **Doble colisión de NNN**: primer intento `012` (ya tomado por WKH-198), segundo
+  intento `013` (tomado en simultáneo por WKH-199 y WKH-200) — renumerado finalmente a `014`. Stubs
+  obsoletos en `doc/sdd/012-wkh-201-.../work-item.md` y `doc/sdd/013-wkh-201-.../work-item.md`, ambos
+  apuntando al path correcto. Trabaja sobre el estado ya mergeado de WKH-178..188 (`main`). Completa
+  el reset de WKH-184: `ForgetKyc` (`forget-kyc.ts:11-22`) y `forgetAndDisconnect` (`flow.tsx:300-319`)
+  hoy solo limpian el KYC-once (`KycStore`) + el pending + el estado React in-memory — el repo
+  persistido `chaski.remittances.v1` (`LocalRepo`, `persistence.ts`) NO se toca, y retiene
+  `beneficiary.name`/`beneficiary.destination` + la identity reducida del sender de la Persona A tras
+  el reset. `list()` ya filtra por `ownerAddress` (mitigante de UI, `persistence.ts:114-121`), así
+  que la Persona B no lo ve en el historial, pero la PII sigue legible en `localStorage` en el mismo
+  dispositivo/origen (devtools, XSS). Fix: método nuevo `clearByOwner(address)` en
+  `RemittanceRepository`/`LocalRepo`, cableado como tercer argumento best-effort de `ForgetKyc`
+  (DT-1/DT-2), sin tocar el filtrado owner-scoped de `list()`. Toca `ports.ts`, `persistence.ts`,
+  `forget-kyc.ts`, `container.ts`, `test-support/fakes.ts` — mismos archivos tocados por
+  WKH-181/182/184/186 (todas ya en `main`); sin overlap directo detectado hoy con WKH-198
+  (`remittance.ts`/`wallet.ts`/`gateways.ts`/`quote/route.ts`) ni WKH-199
+  (`kyc-store.ts`/`resume-kyc.ts`/`start-kyc.ts`). Overlap con WKH-200 acotado a `container.ts` (ver
+  nota de WKH-200 arriba) — coordinar con el Architect si aparece en F2. Autocontenida, no
+  bloquea ni es bloqueada por otra HU del backlog. Ver
+  `doc/sdd/014-wkh-201-forget-disconnect-purge-persisted-pii/work-item.md`.
 
 ---
 
@@ -180,4 +280,49 @@ bloqueantes abiertos. El AC-8 residual de WKH-181 (diferido a WKH-184) está for
 
 | HU | Status | Nota |
 |----|--------|------|
-| WKH-188 (resume de KYC abandonado: escape visible + timeout corto) | F1 in progress (2026-07-12) | Bug reportado por el founder en móvil (usuario dio "atrás" en Didit, quedó ~100s sin escape en el overlay "Verificando…"). Fix de UX/timing en `flow.tsx`, sin tocar el gate de compliance ni la autoridad server-side WKH-180 (CD-1/CD-3). Ver `doc/sdd/011-wkh-188-kyc-resume-escape/work-item.md`. |
+| WKH-188 (resume de KYC abandonado: escape visible + timeout corto) | DONE (2026-07-12) | Bug reportado por el founder en móvil (usuario dio "atrás" en Didit, quedó ~100s sin escape en el overlay "Verificando…"). Fix de UX/timing en `flow.tsx`, sin tocar el gate de compliance ni la autoridad server-side WKH-180 (CD-1/CD-3). Ver `doc/sdd/011-wkh-188-kyc-resume-escape/done-report.md`. |
+
+## 🟠 AUDITORÍA ADVERSARIAL #2 (2026-07-14) — 100% CERRADA
+
+**Estado final**: Todas las 4 HUs del batch de auditoría adversarial #2 de `chaski-v2` en estado **DONE**.
+
+| HU | Status | Cierre |
+|----|--------|--------|
+| WKH-198 (Hallazgo A: fail-closed en expiry de quote — guard NaN + shape de fecha) | DONE | 2026-07-14 |
+| WKH-199 (Hallazgo B: KYC re-brick — `KycStore.save()` best-effort + reorder) | DONE | 2026-07-14 |
+| WKH-200 (Hallazgo C: estados honestos en TrackView + banner demo cubre payout-mock) | DONE | 2026-07-14 |
+| WKH-201 (Hallazgo D: `forgetAndDisconnect` purga PII persistida) | DONE | 2026-07-14 |
+
+**Impacto**: 4 defectos de seguridad/integridad cerrados en auditoría adversarial #2. Money-path protegido (fail-closed en expiry quote), KYC cache resiliente (best-effort), UI honesta (payout-failed status + demo banner), reset completo (PII purged). Pipeline QUALITY completo (F0→F1→F2→F2.5→F3→AR→CR→F4). Cero hallazgos bloqueantes abiertos.
+
+**Desvíos documentados**:
+- **WKH-199 MNR-1**: `project-context.md` creado entero (188 líneas, documental de patrones Chaski v2, no en Story File pero value-added).
+- **WKH-200 MNR-1**: Fake-timers test growth artifact documentado en auto-blindaje (T-AC2 poll-count intermitente, workaround en snapshot inicial).
+- **WKH-201 MNR-1**: Consumidor `test-container.ts` omitido en Story File, wiring actualizado en F3 (byte-idéntico, fallo de survey).
+
+**NNN Colisión histórica**: 4 analysts paralelos → WKH-198 tomó `012`, WKH-199 probó `012` (colisión) → `013`, WKH-200 probó `012`/`013` (colisiones) → `014`, WKH-201 probó `012`/`013` (colisiones) → `014` (comparte prefijo con WKH-200, carpetas distintas). Stubs obsoletos creados durante F1 (`012-wkh-199-*`, `012-wkh-200-*`, `012-wkh-201-*`, `013-wkh-200-*`, `013-wkh-201-*`), limpiados en esta fase final (git rm). Ver nota de coordinación debajo.
+
+### Nota de coordinación — Limpieza de stubs de colisión NNN (auditoría adversarial #2)
+
+Hubo una **carrera de 4 analysts en paralelo** (2026-07-14, mismo repo `chaski-v2`, el orquestador creó 4 work-items de HU de manera concurrent). La asignación de directorio SDD `NNN-titulo` quedó expuesta a colisión de filesystem:
+
+- **WKH-198** asignado a `012-wkh-198-...` ✓ (ganador, primer analyst que escribió el path y hizo commit)
+- **WKH-199** intentó `012-wkh-199-...` (colisión) → detectada en F1 → renumerado a `013-wkh-199-...` (folder real)
+  - **Stub obsoleto**: `012-wkh-199-kyc-store-save-best-effort/work-item.md` (solo redirige a `013-...`)
+- **WKH-200** intentó `012-wkh-200-...` (colisión con WKH-198) → `013-wkh-200-...` (colisión con WKH-199) → `014-wkh-200-...` (folder real)
+  - **Stubs obsoletos**: `012-wkh-200-track-honesty-payout-mock-banner/work-item.md` y `013-wkh-200-track-honesty-payout-mock-banner/work-item.md` (redirigen a `014-...`)
+- **WKH-201** intentó `012-wkh-201-...` (colisión) → `013-wkh-201-...` (colisión) → `014-wkh-201-...` (folder real, comparte prefijo `014` con WKH-200, carpetas distintas)
+  - **Stubs obsoletos**: `012-wkh-201-forget-disconnect-purge-persisted-pii/work-item.md` y `013-wkh-201-forget-disconnect-purge-persisted-pii/work-item.md` (redirigen a `014-...`)
+
+**Resolución (fase DONE, 2026-07-14)**:
+- Todos los stubs fueron eliminados con `git rm doc/sdd/012-wkh-199-*`, etc.
+- Las carpetas canónicas se mantienen:
+  - `012-wkh-198-quote-expiry-fail-closed/`
+  - `013-wkh-199-kyc-store-save-best-effort/`
+  - `014-wkh-200-track-honesty-payout-mock-banner/`
+  - `014-wkh-201-forget-disconnect-purge-persisted-pii/`
+- Verás 4 folders con prefijo `014` = error histórico de NNN; la convención dice "prefijo único por HU" pero se toleró aquí por timing (4 HUs simultáneas). Futuras HUs respetarán NNN único (ej., WKH-202 será `015` si es la siguiente).
+
+**Patrón idéntico al de WKH-178/179**: colisión de 2 analysts → renumeración → stubs residuales. Documentado histórico en `_INDEX.md` L21-25 de esa época. Motivo recurrente: fork-join architecture (múltiples agents lanzados simultáneamente sin coordinar NNN pre-asignado).
+
+**Lección para futuras auditorías en paralelo**: Si se lanzan 3+ analysts al mismo tiempo sobre el mismo repo, considerar pre-asignar el rango de NNN (ej., "WKH-198 usa `012`, WKH-199 usa `013`, WKH-200 usa `014`, WKH-201 usa `015`") antes de que escriban los work-items, para evitar stubs. Alternativa: usar timestamp + analyst-id en el nombre de carpeta si los stubs se acumulan.

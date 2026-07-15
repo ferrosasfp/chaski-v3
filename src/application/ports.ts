@@ -122,6 +122,9 @@ export interface RemittanceRepository {
   get(id: string): Promise<Remittance | null>;
   // list scopeada por wallet: SOLO entries cuyo ownerAddress matchea (case-insensitive). WKH-181.
   list(address: string): Promise<RemittanceState[]>;
+  // Purga TODA entry cuyo ownerAddress matchee address (mismo scoping case-insensitive que list()).
+  // Best-effort desde el reset (WKH-201): borra la PII persistida del beneficiario al desconectar.
+  clearByOwner(address: string): Promise<void>;
 }
 
 // ── Utilidades inyectables (nada de Date.now/Math.random en el dominio) ──────

@@ -86,6 +86,46 @@ describe("LocalRepo.list — scope por wallet (AC-5/7, CD-5)", () => {
   });
 });
 
+describe("LocalRepo.clearByOwner — purga PII del owner en el reset (WKH-201)", () => {
+  it("AC-1: borra las entries del owner → list vacío (case-insensitive)", async () => {
+    const repo = new LocalRepo();
+    await repo.save(withOwner("a1", "0xAAA"));
+    await repo.save(withOwner("a2", "0xAAA"));
+
+    await repo.clearByOwner("0xaaa"); // lower → prueba case-insensitive
+
+    expect(await repo.list("0xAAA")).toEqual([]);
+  });
+
+  it("AC-2: NO toca otros owners ni las entries ownerAddress === null", async () => {
+    const repo = new LocalRepo();
+    await repo.save(withOwner("a1", "0xAAA"));
+    await repo.save(withOwner("b1", "0xBBB"));
+    const abandoned = Remittance.create("x1", beneficiary(), Money.of(400, "USDC"), NOW); // sin startKyc
+    await repo.save(abandoned);
+
+    await repo.clearByOwner("0xAAA");
+
+    // otro owner intacto
+    expect((await repo.list("0xBBB")).map((s) => s.id)).toEqual(["b1"]);
+    // la entry null persiste
+    expect(await repo.get("x1")).not.toBeNull();
+    expect((await repo.get("x1"))?.snapshot.ownerAddress).toBeNull();
+  });
+
+  it("AC-3: borra del blob real (repo fresco re-lee del storage → list [])", async () => {
+    const repo = new LocalRepo();
+    await repo.save(withOwner("a1", "0xAAA"));
+    await repo.clearByOwner("0xAAA");
+
+    // instancia fresca que re-lee del storage real (no un reset in-memory)
+    const fresh = new LocalRepo();
+    expect(await fresh.list("0xAAA")).toEqual([]);
+    // el blob JSON ya no contiene el destination (celular Yape) del owner purgado
+    expect(storage.getItem(KEY)).not.toContain(beneficiary().destination);
+  });
+});
+
 describe("LocalRepo.save — CAS / lock optimista (AC-3/AC-4, CD-4)", () => {
   it("AC-3/AC-4: carrera — dos get() (version V), un save() avanza, el save() stale tira ConcurrentModificationError", async () => {
     const repo = new LocalRepo();

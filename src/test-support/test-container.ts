@@ -78,7 +78,7 @@ export function buildTestContainer(o: TestContainerOverrides = {}): Container {
     trackRemittance: new TrackRemittance(payouts, repo, clock, refund),
     listHistory: new ListHistory(repo),
     abandonPendingKyc: new AbandonPendingKyc(pending),
-    forgetKyc: new ForgetKyc(kycStore, pending),
+    forgetKyc: new ForgetKyc(kycStore, pending, repo),
   };
   return { ...base, ...(o.useCases ?? {}) };
 }

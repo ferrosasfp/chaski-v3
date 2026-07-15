@@ -308,3 +308,27 @@ describe("EIP-3009 flag (WKH-186 AC-9/AC-10) — WalletConnectWallet", () => {
     expect(String(td.message.value)).toBe("400000000");
   });
 });
+
+describe("WKH-198 AC-5 — expiresAt malformado en firma EIP-3009 real (CD-8: fail LOUD)", () => {
+  it("InjectedWallet: flag ON + expiresAt no-parseable → throw quote_expires_at_invalid, firma NO llamada", async () => {
+    enableEip3009();
+    const p = makeProvider();
+    stubWindow(p);
+    const w = new InjectedWallet();
+    await w.connect();
+    await expect(w.authorizePrincipal({ ...eip3009Quote, expiresAt: "not-a-date" }))
+      .rejects.toThrow("quote_expires_at_invalid");
+    expect(p.calls.some((c) => c.method === "eth_signTypedData_v4")).toBe(false);
+  });
+
+  it("WalletConnectWallet: flag ON + expiresAt no-parseable → throw quote_expires_at_invalid, firma NO llamada", async () => {
+    enableEip3009();
+    wc.provider = makeWcProvider();
+    const w = new WalletConnectWallet("proj-id");
+    await w.connect();
+    await expect(w.authorizePrincipal({ ...eip3009Quote, expiresAt: "not-a-date" }))
+      .rejects.toThrow("quote_expires_at_invalid");
+    const p = wc.provider as ReturnType<typeof makeWcProvider>;
+    expect(p.calls.some((c) => c.method === "eth_signTypedData_v4")).toBe(false);
+  });
+});

@@ -63,6 +63,11 @@ describe("A2aQuoteGateway (AC-3)", () => {
     vi.stubGlobal("fetch", okJson({ result: { quoteId: "x" } }));
     await expect(new A2aQuoteGateway().requestQuote(quoteReq)).rejects.toThrow("a2a_quote_bad_shape");
   });
+
+  it("WKH-198 AC-4: expiresAt no-parseable → throw a2a_quote_bad_shape", async () => {
+    vi.stubGlobal("fetch", okJson({ result: { ...validQuoteResult, expiresAt: "not-a-date" } }));
+    await expect(new A2aQuoteGateway().requestQuote(quoteReq)).rejects.toThrow("a2a_quote_bad_shape");
+  });
 });
 
 describe("A2aPayoutGateway (AC-4/AC-5/AC-14)", () => {

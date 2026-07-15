@@ -3,6 +3,7 @@
 // app/api/payout/validate: sin base → 501; TODO en try/catch (nunca 500 crudo); cero PII (CD-5:
 // el body del request no se ecoa en errores). Espejo del A2aQuoteGateway cliente.
 import { NextResponse } from "next/server";
+import { isParseableIso } from "../../../../src/domain/remittance";
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
@@ -18,6 +19,7 @@ function isValidQuoteResult(v: unknown): boolean {
     typeof v.netDeliveredLocal === "number" &&
     typeof v.etaMinutes === "number" &&
     typeof v.expiresAt === "string" &&
+    isParseableIso(v.expiresAt) && // WKH-198 AC-4: rechaza fecha no-parseable
     typeof v.provenance === "string"
   );
 }

@@ -64,6 +64,17 @@ describe("POST /api/a2a/quote — proxy server-only a remit-corridor-fx (WKH-186
     expect(await res.json()).toEqual({ error: "a2a_bad_shape" });
   });
 
+  it("WKH-198 AC-4: expiresAt no-parseable del agente → 502 a2a_bad_shape (CD-9)", async () => {
+    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ result: { ...validResult, expiresAt: "not-a-date" } }),
+    })));
+    const res = await POST(req({ amountUsd: 400, destCountry: "PE", payoutMethod: "yape" }));
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "a2a_bad_shape" });
+  });
+
   it("fetch throw (timeout/DNS) → 502 a2a_unavailable, NO 500 crudo", async () => {
     vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("aborted"); }));

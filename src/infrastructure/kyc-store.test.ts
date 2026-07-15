@@ -177,6 +177,19 @@ describe("LocalKycStore — clear scopeado (WKH-184 AC-2/CD-3)", () => {
 
     await expect(store.clear("0xAAA")).resolves.toBeUndefined();
   });
+
+  it("AC-1: save NO propaga la excepción si setItem lanza (quota/private-browsing)", async () => {
+    // MemStorage cuyo setItem tira SIEMPRE (simula storage lleno) — mismo patrón que AC-5 (clear).
+    const throwing = new (class extends MemStorage {
+      override setItem(): void {
+        throw new Error("QuotaExceededError");
+      }
+    })();
+    (globalThis as { window?: { localStorage: Storage } }).window = { localStorage: throwing };
+    const store = new LocalKycStore();
+
+    await expect(store.save("0xAAA", kyc)).resolves.toBeUndefined();
+  });
 });
 
 describe("LocalKycStore — read defensivo AC-4", () => {

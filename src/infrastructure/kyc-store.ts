@@ -102,7 +102,11 @@ export class LocalKycStore implements KycStore {
       this.mem = all;
       return;
     }
-    s.setItem(KEY, JSON.stringify(all));
+    try {
+      s.setItem(KEY, JSON.stringify(all));
+    } catch {
+      /* quota / private-browsing: best-effort — no throw (AC-1/CD-3) */
+    }
   }
 
   // Reset explícito (WKH-184): olvida SOLO la entry de esta address (CD-3, scopeado + case-insensitive),

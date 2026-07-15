@@ -9,7 +9,7 @@ import { ResumeKyc } from "./use-cases/resume-kyc";
 import { StartKyc } from "./use-cases/start-kyc";
 import { TrackRemittance } from "./use-cases/track-remittance";
 import { FallbackKycGateway } from "../infrastructure/fallback/gateways";
-import type { KycPendingStore } from "./ports";
+import type { KycPendingStore, KycStore } from "./ports";
 import {
   beneficiary,
   FakeKycGateway,
@@ -24,12 +24,13 @@ import {
   InMemoryRepo,
   SeqIds,
   ThrowingKycPendingStore,
+  ThrowingSaveKycStore,
 } from "../test-support/fakes";
 
 function setup(opts?: {
   kyc?: FakeKycGateway;
   payout?: FakePayoutGateway;
-  kycStore?: FakeKycStore;
+  kycStore?: KycStore;
   pending?: KycPendingStore;
 }) {
   const repo = new InMemoryRepo();
@@ -186,6 +187,36 @@ describe("Use-cases — money-path", () => {
     const res = await resumeKyc.execute(); // simula el retorno de Didit
     expect(res.kind).toBe("passed");
     if (res.kind === "passed") expect(res.snapshot.status).toBe("kyc_passed");
+  });
+
+  it("AC-2: ResumeKyc persiste kyc_passed pese al fallo del cache (kycStore.save lanza)", async () => {
+    const { create, startKyc, lock, resumeKyc, repo } = setup({
+      kyc: new FakeKycGateway({}, true), // fuerza redirect (path resume)
+      kycStore: new ThrowingSaveKycStore(), // save() SIEMPRE lanza
+    });
+    const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
+    const id = r0.snapshot.id;
+    await lock.execute({ remittanceId: id }); // WKH-187: cotiza antes del KYC
+    const start = await startKyc.execute({ remittanceId: id, address: "0xSender" });
+    expect(start.kind).toBe("redirect");
+
+    // ThrowingSaveKycStore.save lanza SIEMPRE (más agresivo que el try/catch del store real): prueba
+    // el reorder en aislamiento — repo.save YA corrió antes del kycStore.save que lanza, así que el
+    // KYC queda persistido pese a la excepción del cache. Sin el reorder, el repo NO tendría kyc_passed.
+    await expect(resumeKyc.execute()).rejects.toThrow(/kyc_store_unavailable/);
+    expect((await repo.get(id))?.snapshot.status).toBe("kyc_passed"); // AC-2: persistido en el repo
+  });
+
+  it("AC-3: StartKyc completed persiste kyc_passed pese al fallo del cache (kycStore.save lanza)", async () => {
+    const { create, startKyc, lock, repo } = setup({
+      kycStore: new ThrowingSaveKycStore(), // save() SIEMPRE lanza; FakeKycGateway default → completed
+    });
+    const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
+    const id = r0.snapshot.id;
+    await lock.execute({ remittanceId: id }); // WKH-187: cotiza antes del KYC
+    // rama "completed": repo.save YA corrió antes del kycStore.save que lanza → kyc_passed persistido.
+    await expect(startKyc.execute(kycInput(id))).rejects.toThrow(/kyc_store_unavailable/);
+    expect((await repo.get(id))?.snapshot.status).toBe("kyc_passed"); // AC-3: persistido en el repo
   });
 
   it("V1 ⭐ AC-1/2/3: si pending.save falla en el redirect, la remesa NO queda huérfana en kyc_pending", async () => {

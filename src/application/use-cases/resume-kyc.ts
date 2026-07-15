@@ -44,9 +44,9 @@ export class ResumeKyc {
     if (!dec.terminal) return { kind: "processing" };
 
     const v = dec.verification;
-    if (v.approved && v.payoutAllowed) await this.kycStore.save(p.address, v);
     r.applyKyc(v, this.clock.nowIso());
     await this.repo.save(r);
+    if (v.approved && v.payoutAllowed) await this.kycStore.save(p.address, v);
     await this.pending.clear();
     return { kind: r.status === "kyc_passed" ? "passed" : "failed", snapshot: r.snapshot };
   }

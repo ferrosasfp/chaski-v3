@@ -50,9 +50,9 @@ export class StartKyc {
 
     if (res.kind === "completed") {
       const v = res.verification;
-      if (v.approved && v.payoutAllowed) await this.kycStore.save(input.address, v);
       r.applyKyc(v, this.clock.nowIso());
       await this.repo.save(r);
+      if (v.approved && v.payoutAllowed) await this.kycStore.save(input.address, v);
       return { kind: "done", snapshot: r.snapshot };
     }
 

@@ -47,7 +47,9 @@ function normalizeState(s: RemittanceState): RemittanceState {
   const ownerAddress = typeof s.ownerAddress === "string" ? s.ownerAddress : null;
   // Snapshot legacy sin version (pre-WKH-182) → default 0 (CAS/AC-3/4).
   const version = typeof s.version === "number" ? s.version : 0;
-  return { ...s, kyc, ownerAddress, version };
+  // Snapshot legacy sin payoutProvenance (pre-WKH-200) → default null (CD-2, nunca lanza).
+  const payoutProvenance = typeof s.payoutProvenance === "string" ? s.payoutProvenance : null;
+  return { ...s, kyc, ownerAddress, version, payoutProvenance };
 }
 
 function replacer(_k: string, v: unknown): unknown {

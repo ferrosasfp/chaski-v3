@@ -85,17 +85,18 @@ describe("A2aPayoutGateway (AC-4/AC-5/AC-14)", () => {
     expect(sent.kycPayoutAllowed).toBe(true); // DT-5 sintetizado
     expect(sent.kycVerificationId).toBe("v-1"); // propagado
     expect(sent.quoteId).toBe("cfx-1");
-    expect(rec).toEqual({ payoutId: "po-1", status: "submitted", deliveredPen: null, txRef: null, failureReason: null });
+    expect(rec).toEqual({ payoutId: "po-1", status: "submitted", deliveredPen: null, txRef: null, failureReason: null, provenance: "remit-cashout-payout" });
   });
 
   it("AC-4: mapea settled con deliveredLocal→Money PEN + txRef", async () => {
     vi.stubGlobal("fetch", okJson({
-      result: { status: "settled", payoutId: "po-2", deliveredLocal: 1478.15, txRef: "0xdlv", reason: null, provenance: "p" },
+      result: { status: "settled", payoutId: "po-2", deliveredLocal: 1478.15, txRef: "0xdlv", reason: null, provenance: "transfi" },
     }));
     const rec = await new A2aPayoutGateway().submit(payoutReq);
     expect(rec.status).toBe("settled");
     expect(rec.deliveredPen).toEqual(Money.of(1478.15, "PEN"));
     expect(rec.txRef).toBe("0xdlv");
+    expect(rec.provenance).toBe("transfi"); // T-AC5c: provenance propagada en el mapeo
   });
 
   it("DT-13: blocked → failed", async () => {
@@ -150,6 +151,7 @@ describe("A2aPayoutGateway (AC-4/AC-5/AC-14)", () => {
       deliveredPen: null,
       txRef: null,
       failureReason: "payout_status_unknown",
+      provenance: "", // WKH-200: record fabricado (cache-miss) → provenance vacía, cosmético
     });
   });
 });

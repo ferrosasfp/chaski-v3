@@ -148,6 +148,7 @@ export interface RemittanceState {
   refundTx: string | null;
   deliveredPen: Money | null;
   failureReason: string | null;
+  payoutProvenance: string | null; // proveniencia del payout (real vs mock) — propagada desde PayoutRecord (WKH-200)
   ownerAddress: string | null; // wallet dueña del estado (seteada al verificar identidad); scope del historial
   createdAt: string;
   updatedAt: string;
@@ -173,6 +174,7 @@ export class Remittance {
       refundTx: null,
       deliveredPen: null,
       failureReason: null,
+      payoutProvenance: null,
       ownerAddress: null,
       createdAt: now,
       updatedAt: now,
@@ -234,11 +236,22 @@ export class Remittance {
   markPrincipalIn(tx: string, now: string): void {
     this.to("principal_in", now, { principalTx: tx });
   }
-  markPayoutSubmitted(payoutId: string, now: string): void {
-    this.to("payout_submitted", now, { payoutId });
+  markPayoutSubmitted(payoutId: string, now: string, payoutProvenance?: string): void {
+    // patch condicional (WKH-200): el campo SOLO aparece cuando el arg no es undefined → un backfill
+    // parcial no pisa el valor previo. Un payoutProvenance seteado acá persiste al markSettled vía to().
+    const patch: Partial<RemittanceState> = {
+      payoutId,
+      ...(payoutProvenance !== undefined ? { payoutProvenance } : {}),
+    };
+    this.to("payout_submitted", now, patch);
   }
-  markSettled(payoutTx: string, deliveredPen: Money | null, now: string): void {
-    this.to("settled", now, { payoutTx, deliveredPen });
+  markSettled(payoutTx: string, deliveredPen: Money | null, now: string, payoutProvenance?: string): void {
+    const patch: Partial<RemittanceState> = {
+      payoutTx,
+      deliveredPen,
+      ...(payoutProvenance !== undefined ? { payoutProvenance } : {}),
+    };
+    this.to("settled", now, patch);
   }
   markPayoutFailed(reason: string, now: string): void {
     this.to("payout_failed", now, { failureReason: reason });

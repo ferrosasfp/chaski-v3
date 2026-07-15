@@ -108,7 +108,7 @@ export class ConfirmAndSend {
         kycVerificationId: kyc.verificationId,
         idempotencyKey,
       });
-      r.markPayoutSubmitted(rec.payoutId, this.clock.nowIso());
+      r.markPayoutSubmitted(rec.payoutId, this.clock.nowIso(), rec.provenance);
       if (rec.status === "settled") {
         // Reconciliación PRE-markSettled (AC-6/CD-6): el PEN entregado debe caber en la MISMA
         // tolerancia del receive lockeado. Con el fallback (deliveredPen:null) la guarda es falsa →
@@ -117,7 +117,7 @@ export class ConfirmAndSend {
           await this.failAndRefund(r, "payout_amount_mismatch");
           return r;
         }
-        r.markSettled(rec.txRef ?? "", rec.deliveredPen, this.clock.nowIso());
+        r.markSettled(rec.txRef ?? "", rec.deliveredPen, this.clock.nowIso(), rec.provenance);
       } else if (rec.status === "failed") {
         await this.failAndRefund(r, rec.failureReason ?? "payout_failed");
         return r;

@@ -313,3 +313,31 @@ describe("toPersistedIdentity — reductor único de PII (AC-1, CD-2)", () => {
     expect(toPersistedIdentity({ ...full, documentNumber: "12345" }).documentNumberLast4).toBe("2345");
   });
 });
+
+describe("WKH-200 — payoutProvenance propagado por mark* (AC-5)", () => {
+  it("T-AC5a: markPayoutSubmitted lo setea y sobrevive a markSettled sin arg (to() lo conserva)", () => {
+    const r = ready();
+    r.confirm(T0);
+    r.markPrincipalIn("0x1", T0);
+    r.markPayoutSubmitted("p1", T0, "local-fallback");
+    expect(r.snapshot.payoutProvenance).toBe("local-fallback");
+    r.markSettled("0x", Money.of(1480, "PEN"), T0); // sin provenance → conservado
+    expect(r.status).toBe("settled");
+    expect(r.snapshot.payoutProvenance).toBe("local-fallback");
+  });
+
+  it("T-AC5b: markSettled con provenance backfillea una remesa que llegó a payout_submitted sin él", () => {
+    const r = ready();
+    r.confirm(T0);
+    r.markPrincipalIn("0x1", T0);
+    r.markPayoutSubmitted("p1", T0); // sin provenance → null
+    expect(r.snapshot.payoutProvenance).toBeNull();
+    r.markSettled("0x", Money.of(1480, "PEN"), T0, "local-fallback");
+    expect(r.snapshot.payoutProvenance).toBe("local-fallback");
+  });
+
+  it("create() inicializa payoutProvenance en null", () => {
+    const r = Remittance.create("r", beneficiary(), Money.of(400, "USDC"), T0);
+    expect(r.snapshot.payoutProvenance).toBeNull();
+  });
+});

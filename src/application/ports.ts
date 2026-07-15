@@ -74,6 +74,7 @@ export interface PayoutRecord {
   deliveredPen: Money | null;
   txRef: string | null;
   failureReason: string | null;
+  provenance: string; // proveniencia del desembolso (real vs mock) — propagada a RemittanceState (WKH-200)
 }
 export interface PayoutGateway {
   submit(req: PayoutSubmit): Promise<PayoutRecord>;

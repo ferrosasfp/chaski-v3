@@ -56,6 +56,15 @@ describe("TrackRemittance — reconciliación PRE-markSettled (AC-6/CD-6)", () =
     expect(out.snapshot.deliveredPen).toEqual(Money.of(1480, "PEN"));
   });
 
+  it("T-AC5e: propaga la provenance del status() al snapshot al settlear (payout mock → local-fallback)", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedSubmitted(repo);
+    const payouts = new FakePayoutGateway({}, { status: "settled", deliveredPen: Money.of(1480, "PEN"), txRef: "0xok", provenance: "local-fallback" });
+    const out = await new TrackRemittance(payouts, repo, new FixedClock(), new FakeRefundGateway()).execute({ remittanceId: id });
+    expect(out.status).toBe("settled");
+    expect(out.snapshot.payoutProvenance).toBe("local-fallback");
+  });
+
   it("deliveredPen en el borde exacto de la tolerancia (+14.8) → settled", async () => {
     const repo = new InMemoryRepo();
     const id = await seedSubmitted(repo);

@@ -120,6 +120,23 @@ describe("ConfirmAndSend — enforcement autoridad server-side (WKH-180)", () =>
 
     expect(out.status).toBe("settled");
   });
+
+  it("T-AC5d: propaga la provenance del payout al snapshot (payout mock → local-fallback)", async () => {
+    const repo = new InMemoryRepo();
+    const wallet = new FakeWallet();
+    const payouts = new FakePayoutGateway(
+      { status: "settled", txRef: "0xdelivered", deliveredPen: Money.of(1480, "PEN"), provenance: "local-fallback" },
+    );
+    const authority = new FakePayoutAuthorityGateway({ authorized: true });
+    const id = await seedQuoted(repo);
+
+    const out = await new ConfirmAndSend(wallet, payouts, repo, new FixedClock(), authority, new FakeRefundGateway()).execute({
+      remittanceId: id,
+    });
+
+    expect(out.status).toBe("settled");
+    expect(out.snapshot.payoutProvenance).toBe("local-fallback");
+  });
 });
 
 describe("ConfirmAndSend — expiry re-check M2 + payload M3 (AC-5/AC-6)", () => {

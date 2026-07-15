@@ -243,6 +243,14 @@ describe("LocalRepo.read — defensivo AC-4 (snapshot legacy con PII cruda)", ()
     expect((await repo.get("leg-1"))?.snapshot.version).toBe(1);
   });
 
+  it("T-AC5f: legacy sin `payoutProvenance` → normaliza a null sin crashear (CD-2)", async () => {
+    storage.setItem(KEY, JSON.stringify(legacy)); // fixture legacy no trae `payoutProvenance`
+    const repo = new LocalRepo();
+    const r = await repo.get("leg-1");
+    expect(r).not.toBeNull();
+    expect(r?.snapshot.payoutProvenance).toBeNull();
+  });
+
   it("raw corrupto no crashea (parse defensivo → mapa vacío)", async () => {
     storage.setItem(KEY, "{not json");
     const repo = new LocalRepo();

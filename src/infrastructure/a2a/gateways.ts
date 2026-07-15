@@ -89,6 +89,7 @@ function mapResultToPayoutRecord(result: RawPayoutResult): PayoutRecord {
     deliveredPen: result.deliveredLocal != null ? Money.of(result.deliveredLocal, "PEN") : null,
     txRef: result.txRef,
     failureReason: result.reason,
+    provenance: result.provenance, // WKH-200: proveniencia real del agente (transfi / local-fallback / n/a)
   };
 }
 
@@ -151,6 +152,7 @@ export class A2aPayoutGateway implements PayoutGateway {
       deliveredPen: null,
       txRef: null,
       failureReason: "payout_status_unknown",
+      provenance: "", // WKH-200: record fabricado (nunca settlea) → cosmético, no marca demo/real
     };
   }
 }

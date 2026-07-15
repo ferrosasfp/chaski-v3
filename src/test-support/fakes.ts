@@ -85,6 +85,31 @@ export class InMemoryRepo implements RemittanceRepository {
       (s) => s.ownerAddress != null && s.ownerAddress.toLowerCase() === target,
     );
   }
+  async clearByOwner(address: string): Promise<void> {
+    // Gemelo del filtro de list() sobre this.store (WKH-201/CD-6). this.store ES el store → delete directo.
+    const target = address.toLowerCase();
+    for (const [id, s] of this.store) {
+      if (s.ownerAddress != null && s.ownerAddress.toLowerCase() === target) {
+        this.store.delete(id);
+      }
+    }
+  }
+}
+
+// Doble que SIEMPRE falla en clearByOwner (simula localStorage roto) para el test defensivo de
+// WKH-201/AC-4: ForgetKyc debe resolver igual y correr las otras limpiezas (CD-2/CD-7). save/get/list
+// mínimos operativos (molde de ThrowingClearKycStore, invirtiendo cuál método lanza).
+export class ThrowingClearByOwnerRepo implements RemittanceRepository {
+  async save(_r: Remittance): Promise<void> {}
+  async get(_id: string): Promise<Remittance | null> {
+    return null;
+  }
+  async list(_address: string): Promise<RemittanceState[]> {
+    return [];
+  }
+  async clearByOwner(_address: string): Promise<void> {
+    throw new Error("remittance_repo_unavailable");
+  }
 }
 
 export class FakeQuoteGateway implements QuoteGateway {

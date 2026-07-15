@@ -119,4 +119,18 @@ export class LocalRepo implements RemittanceRepository {
       .filter((s) => s.ownerAddress != null && s.ownerAddress.toLowerCase() === target)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
+
+  async clearByOwner(address: string): Promise<void> {
+    // Reset (WKH-201): borra del blob real toda entry del owner conectado — mismo predicado que
+    // list() (CD-1). Reusa read()/write() (CD-8: sin try/catch interno; el error de storage lo
+    // absorbe ForgetKyc). Preserva otros owners y las entries ownerAddress === null.
+    const target = address.toLowerCase();
+    const map = this.read();
+    for (const [id, s] of map) {
+      if (s.ownerAddress != null && s.ownerAddress.toLowerCase() === target) {
+        map.delete(id);
+      }
+    }
+    this.write(map);
+  }
 }

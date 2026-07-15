@@ -86,7 +86,7 @@ export function createContainer(): Container {
     trackRemittance: new TrackRemittance(payouts, repo, clock, refund),
     listHistory: new ListHistory(repo),
     abandonPendingKyc: new AbandonPendingKyc(kycPending),
-    forgetKyc: new ForgetKyc(kycStore, kycPending),
+    forgetKyc: new ForgetKyc(kycStore, kycPending, repo),
   };
 }
 

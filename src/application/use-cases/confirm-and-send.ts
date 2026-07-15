@@ -106,6 +106,7 @@ export class ConfirmAndSend {
         expectedReceivePen: quote.receive, // M3/AC-6: PEN lockeado que el usuario confirmó
         beneficiary: s.beneficiary,
         kycVerificationId: kyc.verificationId,
+        address: address ?? "", // WKH-202/DT-2: misma coerción que authority.authorize() (L67)
         idempotencyKey,
       });
       r.markPayoutSubmitted(rec.payoutId, this.clock.nowIso(), rec.provenance);

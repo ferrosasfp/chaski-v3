@@ -201,6 +201,23 @@ describe("ConfirmAndSend — expiry re-check M2 + payload M3 (AC-5/AC-6)", () =>
     expect(arg?.expectedReceivePen).toEqual(Money.of(1480, "PEN"));
     expect(arg?.amountUsd).toBe(400); // amountUsd preservado (no reemplazado)
   });
+
+  it("WKH-202/DT-2: submit recibe el address del wallet (el server re-valida ownership vs Didit)", async () => {
+    const repo = new InMemoryRepo();
+    const wallet = new FakeWallet();
+    const payouts = new FakePayoutGateway();
+    const submitSpy = vi.spyOn(payouts, "submit");
+    const authority = new FakePayoutAuthorityGateway({ authorized: true });
+    const id = await seedQuoted(repo);
+
+    await new ConfirmAndSend(wallet, payouts, repo, new FixedClock(), authority, new FakeRefundGateway()).execute({
+      remittanceId: id,
+    });
+
+    expect(submitSpy).toHaveBeenCalledTimes(1);
+    const arg = submitSpy.mock.calls[0]?.[0];
+    expect(arg?.address).toBe("0xSender"); // sin esto la route rechaza con 400 (fail-closed)
+  });
 });
 
 describe("ConfirmAndSend — reconciliación + refund-on-failure (WKH-186 AC-6/AC-7)", () => {

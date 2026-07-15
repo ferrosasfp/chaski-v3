@@ -17,6 +17,7 @@
 | WKH-199 | [Hallazgo B, auditoría adversarial #2] KYC re-brick — `KycStore.save()` best-effort + reorder critical-write-first | DONE (2026-07-14) | `doc/sdd/013-wkh-199-kyc-store-save-best-effort/done-report.md` |
 | WKH-200 | [Hallazgo C, auditoría adversarial #2] Estados honestos en TrackView + banner demo cubre payout-mock (provenance propagada) | DONE (2026-07-14) | `doc/sdd/014-wkh-200-track-honesty-payout-mock-banner/done-report.md` |
 | WKH-201 | [Hallazgo D, auditoría adversarial #2] `forgetAndDisconnect` purga PII persistida via `clearByOwner` best-effort | DONE (2026-07-14) | `doc/sdd/014-wkh-201-forget-disconnect-purge-persisted-pii/done-report.md` |
+| WKH-202 | [GATE Fase A] Hardening del enforcement de `/api/a2a/payout/submit` (auth + re-validación KYC/ownership server-side) | DONE (2026-07-15) | `doc/sdd/015-wkh-202-payout-submit-hardening/done-report.md` |
 
 ## Notas de coordinación
 - WKH-178 y WKH-179 corren en paralelo, ambas del mismo repo (`chaski-v2`) y de la misma auditoría
@@ -235,6 +236,29 @@
   nota de WKH-200 arriba) — coordinar con el Architect si aparece en F2. Autocontenida, no
   bloquea ni es bloqueada por otra HU del backlog. Ver
   `doc/sdd/014-wkh-201-forget-disconnect-purge-persisted-pii/work-item.md`.
+- **WKH-202 (F1, 2026-07-15, `015`)**: gate de la Fase A del plan de remesa real — hallazgo de la
+  auditoría adversarial #2 (relacionado a WKH-198/200 pero separado, ver notas de ambas arriba).
+  Trabaja sobre el estado ya mergeado de WKH-178..201 (`main`). NNN pre-asignado `015` por el
+  orquestador (sin colisión — lección aplicada de la carrera de 4 analysts que generó WKH-198/199/
+  200/201). F0 confirmó el hallazgo central: `app/api/a2a/payout/submit/route.ts` (L1-52) forwardea
+  `amountUsd`/`beneficiary`/`kycVerificationId` verbatim sin NINGUNA autorización — inofensivo hoy
+  solo porque `REMIT_AGENTS_BASE_URL` no está seteada (guard 501 fail-closed, L32). Hallazgo NUEVO no
+  anticipado por el ticket original: `PayoutSubmit` (`ports.ts:63-70`) NO incluye `address`, así que
+  hoy es estructuralmente imposible re-validar ownership dentro de esa ruta sin extender el
+  contrato primero (DT-2). También confirmado: NO hay persistencia server-side de quotes/remesas
+  (arquitectura localStorage-only) → la integridad de monto/beneficiario contra "una remesa real"
+  no es 100% verificable sin agregar infraestructura nueva — `[NEEDS CLARIFICATION]` BLOQUEANTE
+  (DT-3) que el Architect debe resolver con el humano antes de cerrar el SDD en F2 (alcance:
+  ¿KYC+ownership alcanza, o se requiere un quote registry server-side nuevo?). Exemplars
+  reusables confirmados en disco: `app/api/payout/validate/route.ts` (WKH-180, autoridad
+  server-side) y `kyc-auth.ts`/`app/api/kyc/decision/route.ts` (WKH-179, patrón de token HMAC).
+  `app/api/a2a/payout/submit/route.test.ts` YA EXISTE (7 tests de WKH-186, ninguno cubre auth) —
+  se EXTIENDE, no se crea. Toca `route.ts`/`route.test.ts`, `ports.ts`, `gateways.ts` (a2a),
+  `confirm-and-send.ts` — mismos archivos que WKH-180/182/186/187/198/200 (todas ya en `main`), sin
+  overlap con ninguna HU abierta (no hay otras HUs abiertas en `chaski-v2` ahora mismo). Sizing
+  QUALITY (override esperado del orquestador, ya alineado): money-path + auth. Ver
+  `doc/sdd/015-wkh-202-payout-submit-hardening/work-item.md` para el detalle completo (grounding,
+  ACs, DT-N, CD-N, Missing Inputs).
 
 ---
 
@@ -282,9 +306,11 @@ bloqueantes abiertos. El AC-8 residual de WKH-181 (diferido a WKH-184) está for
 |----|--------|------|
 | WKH-188 (resume de KYC abandonado: escape visible + timeout corto) | DONE (2026-07-12) | Bug reportado por el founder en móvil (usuario dio "atrás" en Didit, quedó ~100s sin escape en el overlay "Verificando…"). Fix de UX/timing en `flow.tsx`, sin tocar el gate de compliance ni la autoridad server-side WKH-180 (CD-1/CD-3). Ver `doc/sdd/011-wkh-188-kyc-resume-escape/done-report.md`. |
 
-## 🟠 AUDITORÍA ADVERSARIAL #2 (2026-07-14) — 100% CERRADA
+## 🟠 AUDITORÍA ADVERSARIAL #2 (2026-07-14) — 100% CERRADA (hallazgos A-D); WKH-202 (gate Fase A) EN CURSO
 
-**Estado final**: Todas las 4 HUs del batch de auditoría adversarial #2 de `chaski-v2` en estado **DONE**.
+**Estado**: Los 5 hallazgos originales A-D + WKH-202 (gate Fase A) del batch de auditoría adversarial #2 
+de `chaski-v2` están **100% DONE** (2026-07-14/15) — es el bloqueante para habilitar 
+`REMIT_AGENTS_BASE_URL` en producción, **ahora listo para merge**.
 
 | HU | Status | Cierre |
 |----|--------|--------|
@@ -292,15 +318,16 @@ bloqueantes abiertos. El AC-8 residual de WKH-181 (diferido a WKH-184) está for
 | WKH-199 (Hallazgo B: KYC re-brick — `KycStore.save()` best-effort + reorder) | DONE | 2026-07-14 |
 | WKH-200 (Hallazgo C: estados honestos en TrackView + banner demo cubre payout-mock) | DONE | 2026-07-14 |
 | WKH-201 (Hallazgo D: `forgetAndDisconnect` purga PII persistida) | DONE | 2026-07-14 |
+| WKH-202 (GATE Fase A: enforcement de `/api/a2a/payout/submit`) | DONE | 2026-07-15 |
 
-**Impacto**: 4 defectos de seguridad/integridad cerrados en auditoría adversarial #2. Money-path protegido (fail-closed en expiry quote), KYC cache resiliente (best-effort), UI honesta (payout-failed status + demo banner), reset completo (PII purged). Pipeline QUALITY completo (F0→F1→F2→F2.5→F3→AR→CR→F4). Cero hallazgos bloqueantes abiertos.
+**Impacto**: 4 defectos de seguridad/integridad cerrados en auditoría adversarial #2. Money-path protegido (fail-closed en expiry quote), KYC cache resiliente (best-effort), UI honesta (payout-failed status + demo banner), reset completo (PII purged). Pipeline QUALITY completo (F0→F1→F2→F2.5→F3→AR→CR→F4). Cero hallazgos bloqueantes abiertos en A-D. WKH-202 es un hallazgo adicional (enforcement del endpoint de submit real) que bloquea la Fase A del plan de remesa real hasta cerrarse.
 
 **Desvíos documentados**:
 - **WKH-199 MNR-1**: `project-context.md` creado entero (188 líneas, documental de patrones Chaski v2, no en Story File pero value-added).
 - **WKH-200 MNR-1**: Fake-timers test growth artifact documentado en auto-blindaje (T-AC2 poll-count intermitente, workaround en snapshot inicial).
 - **WKH-201 MNR-1**: Consumidor `test-container.ts` omitido en Story File, wiring actualizado en F3 (byte-idéntico, fallo de survey).
 
-**NNN Colisión histórica**: 4 analysts paralelos → WKH-198 tomó `012`, WKH-199 probó `012` (colisión) → `013`, WKH-200 probó `012`/`013` (colisiones) → `014`, WKH-201 probó `012`/`013` (colisiones) → `014` (comparte prefijo con WKH-200, carpetas distintas). Stubs obsoletos creados durante F1 (`012-wkh-199-*`, `012-wkh-200-*`, `012-wkh-201-*`, `013-wkh-200-*`, `013-wkh-201-*`), limpiados en esta fase final (git rm). Ver nota de coordinación debajo.
+**NNN Colisión histórica**: 4 analysts paralelos → WKH-198 tomó `012`, WKH-199 probó `012` (colisión) → `013`, WKH-200 probó `012`/`013` (colisiones) → `014`, WKH-201 probó `012`/`013` (colisiones) → `014` (comparte prefijo con WKH-200, carpetas distintas). Stubs obsoletos creados durante F1 (`012-wkh-199-*`, `012-wkh-200-*`, `012-wkh-201-*`, `013-wkh-200-*`, `013-wkh-201-*`), limpiados en esta fase final (git rm). Ver nota de coordinación debajo. **WKH-202 usó `015` sin colisión** (NNN pre-asignado por el orquestador, aplicando la lección de esta sección).
 
 ### Nota de coordinación — Limpieza de stubs de colisión NNN (auditoría adversarial #2)
 
@@ -326,3 +353,5 @@ Hubo una **carrera de 4 analysts en paralelo** (2026-07-14, mismo repo `chaski-v
 **Patrón idéntico al de WKH-178/179**: colisión de 2 analysts → renumeración → stubs residuales. Documentado histórico en `_INDEX.md` L21-25 de esa época. Motivo recurrente: fork-join architecture (múltiples agents lanzados simultáneamente sin coordinar NNN pre-asignado).
 
 **Lección para futuras auditorías en paralelo**: Si se lanzan 3+ analysts al mismo tiempo sobre el mismo repo, considerar pre-asignar el rango de NNN (ej., "WKH-198 usa `012`, WKH-199 usa `013`, WKH-200 usa `014`, WKH-201 usa `015`") antes de que escriban los work-items, para evitar stubs. Alternativa: usar timestamp + analyst-id en el nombre de carpeta si los stubs se acumulan.
+
+**Confirmación (WKH-202, 2026-07-15)**: la lección se aplicó — el orquestador pre-asignó `015` a WKH-202 antes de lanzar el analyst, sin colisión de NNN. Único analyst corriendo sobre `chaski-v2` en este momento (sin carrera paralela).

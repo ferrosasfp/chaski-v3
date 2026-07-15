@@ -23,6 +23,7 @@ const payoutReq: PayoutSubmit = {
   expectedReceivePen: Money.of(1478.15, "PEN"),
   beneficiary: { name: "Mamá", country: "PE", method: "yape", destination: "999888777" },
   kycVerificationId: "v-1",
+  address: "0xSender", // WKH-202/DT-2
   idempotencyKey: "r-1:cfx-1",
 };
 
@@ -84,6 +85,7 @@ describe("A2aPayoutGateway (AC-4/AC-5/AC-14)", () => {
     expect(sent.idempotencyKey).toBe("r-1:cfx-1"); // CD-10 intacto
     expect(sent.kycPayoutAllowed).toBe(true); // DT-5 sintetizado
     expect(sent.kycVerificationId).toBe("v-1"); // propagado
+    expect(sent.address).toBe("0xSender"); // WKH-202/DT-2: la route lo re-valida server-side
     expect(sent.quoteId).toBe("cfx-1");
     expect(rec).toEqual({ payoutId: "po-1", status: "submitted", deliveredPen: null, txRef: null, failureReason: null, provenance: "remit-cashout-payout" });
   });

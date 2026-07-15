@@ -66,6 +66,9 @@ export interface PayoutSubmit {
   expectedReceivePen: Money; // PEN lockeado que el usuario confirmó (M3/AC-6); NO reemplaza amountUsd
   beneficiary: Beneficiary;
   kycVerificationId: string;
+  // WKH-202/DT-2: el server re-valida ownership (vendor_data de Didit) — NO-opcional (CD-4): un
+  // address opcional sería fail-open.
+  address: string;
   idempotencyKey: string;
 }
 export interface PayoutRecord {

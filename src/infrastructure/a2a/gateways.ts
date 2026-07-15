@@ -124,7 +124,11 @@ export class A2aPayoutGateway implements PayoutGateway {
         quoteId: req.quoteId,
         amountUsd: req.amountUsd,
         kycVerificationId: req.kycVerificationId,
-        kycPayoutAllowed: true, // DT-5: sintetizado (la autoridad WKH-180 ya se validó en ConfirmAndSend)
+        address: req.address, // WKH-202: la route lo re-valida server-side (ownership vs vendor_data de Didit)
+        // DT-5: sintetizado (la autoridad WKH-180 ya se validó en ConfirmAndSend). WKH-202: el agente NO debe
+        // confiar en este booleano del caller; se re-deriva server-side en WKH-203 (repo
+        // wasiai-remittance-agents). NO removerlo acá: es contrato cross-repo (CD-14).
+        kycPayoutAllowed: true,
         beneficiary: req.beneficiary, // viaja al server; NUNCA se loguea (CD-5)
         idempotencyKey: req.idempotencyKey, // INTACTO (CD-10)
       }),

@@ -5,6 +5,7 @@
 // el flag NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER="a2a"; el default sigue siendo Fallback (mock).
 // CD-5: errores estables y PII-free (nunca interpolan beneficiary). CD-10: idempotencyKey intacto.
 import { Money } from "../../domain/money";
+import { isParseableIso } from "../../domain/remittance";
 import type { Quote } from "../../domain/remittance";
 import type {
   PayoutGateway,
@@ -48,6 +49,7 @@ function isValidQuoteShape(v: unknown): v is RawQuoteResult {
     typeof v.netDeliveredLocal === "number" &&
     typeof v.etaMinutes === "number" &&
     typeof v.expiresAt === "string" &&
+    isParseableIso(v.expiresAt) && // WKH-198 AC-4: rechaza fecha no-parseable
     typeof v.provenance === "string"
   );
 }

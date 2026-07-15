@@ -3,6 +3,7 @@
 import { createWalletClient, custom, isAddress, toHex } from "viem";
 import type { WalletPort } from "../application/ports";
 import type { Quote } from "../domain/remittance";
+import { isParseableIso } from "../domain/remittance";
 import { resolveChain, resolveChainId, resolveReceiverAddress, resolveUsdcAddress } from "./chain";
 
 // EIP-712 types de transferWithAuthorization (EIP-3009). Compartido por ambos wallets reales.
@@ -72,6 +73,7 @@ export class InjectedWallet implements WalletPort {
       const usdc = resolveUsdcAddress();
       const receiver = resolveReceiverAddress(); // MNR-A: valida isAddress fail-loud (no cast crudo)
       const nonce = toHex(crypto.getRandomValues(new Uint8Array(32)));
+      if (!isParseableIso(quote.expiresAt)) throw new Error("quote_expires_at_invalid"); // WKH-198 AC-5 (CD-8: fail LOUD)
       const validBefore = BigInt(Math.floor(Date.parse(quote.expiresAt) / 1000));
       const sig = await client.signTypedData({
         account: this.address,
@@ -186,6 +188,7 @@ export class WalletConnectWallet implements WalletPort {
       const usdc = resolveUsdcAddress();
       const receiver = resolveReceiverAddress(); // MNR-A: valida isAddress fail-loud (no cast crudo)
       const nonce = toHex(crypto.getRandomValues(new Uint8Array(32)));
+      if (!isParseableIso(quote.expiresAt)) throw new Error("quote_expires_at_invalid"); // WKH-198 AC-5 (CD-8: fail LOUD)
       const validBefore = BigInt(Math.floor(Date.parse(quote.expiresAt) / 1000));
       const sig = await client.signTypedData({
         account: this.address,

@@ -102,6 +102,12 @@ export function canTransition(from: RemittanceStatus, to: RemittanceStatus): boo
   return TRANSITIONS[from].includes(to);
 }
 
+/** ¿`value` parsea a un instante válido? Fuente ÚNICA del chequeo de parseabilidad de fechas
+ *  (WKH-198, CD-5): dominio, validadores de shape (gateways/route) y wallet.ts lo reusan. */
+export function isParseableIso(value: string): boolean {
+  return !Number.isNaN(new Date(value).getTime());
+}
+
 // A5 (AC-1/AC-2): tolerancias de consistencia de `receive` vs (send − fee) × rate.
 const RECEIVE_TOL_ABS_PEN = 0.02; // 2 centavos — absorbe redondeo a 2 decimales de PEN
 const RECEIVE_TOL_REL = 0.01; // 1%
@@ -255,6 +261,7 @@ export class Remittance {
   }
 
   private isQuoteExpired(quote: Quote, nowIso: string): boolean {
+    if (!isParseableIso(quote.expiresAt) || !isParseableIso(nowIso)) return true; // fail-closed (CD-1)
     return new Date(quote.expiresAt).getTime() <= new Date(nowIso).getTime();
   }
 }

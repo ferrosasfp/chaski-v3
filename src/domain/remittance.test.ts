@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { Money } from "./money";
 import {
   canTransition,
+  isParseableIso,
   type KycVerification,
   type Quote,
   Remittance,
@@ -192,6 +193,46 @@ describe("WKH-187 — reorden quote-antes-del-KYC (money-path INVIOLABLE)", () =
     r.markSettled("0x2", Money.of(1480, "PEN"), T0);
     expect(r.status).toBe("settled");
     expect(r.isTerminal).toBe(true);
+  });
+});
+
+describe("WKH-198 — expiry fail-closed (guard NaN, money-path CD-1)", () => {
+  it("AC-1a: attachQuote con expiresAt 'not-a-date' (no-parseable) → EXPIRADO", () => {
+    expect(() => ready().attachQuote({ ...quote(), expiresAt: "not-a-date" }, T0)).toThrow(
+      /quote_expired/,
+    );
+  });
+
+  it("AC-1b: attachQuote con expiresAt '' (string vacío, CD-6) → EXPIRADO", () => {
+    expect(() => ready().attachQuote({ ...quote(), expiresAt: "" }, T0)).toThrow(/quote_expired/);
+  });
+
+  it("AC-1c: confirm con nowIso malformado (quote válido) → confirm_quote_expired (guard sobre nowIso)", () => {
+    const r = ready();
+    r.attachQuote(quote(), T0); // kyc_passed → quoted con quote válido, KYC intacto
+    expect(() => r.confirm("not-a-date")).toThrow(/confirm_quote_expired/);
+  });
+
+  it("AC-1d: isQuoteStillValid con nowIso malformado (quote válido) → false (fail-closed)", () => {
+    const r = ready(); // tiene quote válido
+    expect(r.isQuoteStillValid("not-a-date")).toBe(false);
+  });
+
+  it("AC-2 no-regresión: expiresAt válido == now (<=) → EXPIRADO", () => {
+    expect(() => ready().attachQuote({ ...quote(), expiresAt: T0 }, T0)).toThrow(/quote_expired/);
+  });
+
+  it("AC-3 no-regresión: expiresAt futuro (QUOTE_EXPIRES), now T0 → NO expira", () => {
+    const r = ready();
+    r.attachQuote({ ...quote(), expiresAt: QUOTE_EXPIRES }, T0);
+    expect(r.status).toBe("quoted");
+    expect(r.isQuoteStillValid(T0)).toBe(true);
+  });
+
+  it("isParseableIso: ISO válido → true; 'not-a-date' y '' → false", () => {
+    expect(isParseableIso("2026-07-09T18:00:00.000Z")).toBe(true);
+    expect(isParseableIso("not-a-date")).toBe(false);
+    expect(isParseableIso("")).toBe(false);
   });
 });
 

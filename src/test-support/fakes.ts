@@ -220,6 +220,7 @@ export class FakePayoutGateway implements PayoutGateway {
       deliveredPen: null,
       txRef: null,
       failureReason: null,
+      provenance: "fake", // WKH-200/CD-7: default sin alterar deliveredPen
       ...this.submitResult,
     };
   }
@@ -233,6 +234,7 @@ export class FakePayoutGateway implements PayoutGateway {
       deliveredPen: Money.of(1478.15, "PEN"),
       txRef: "0xdelivered",
       failureReason: null,
+      provenance: "fake", // WKH-200/CD-7: default sin alterar deliveredPen
       ...this.statusResult,
     };
   }

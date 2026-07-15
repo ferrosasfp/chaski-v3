@@ -329,7 +329,9 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
       try {
         const r = await c.trackRemittance.execute({ remittanceId: remId });
         setRem(r.snapshot);
-        if (r.isTerminal) {
+        // AC-2 (WKH-200): payout_failed NO es terminal (→ refunded) pero el poll debe frenar igual
+        // (UI-only, sin tocar TERMINAL_STATUSES / CD-1). El setStep("done") sigue gateado por settled.
+        if (r.isTerminal || r.status === "payout_failed") {
           clearInterval(iv);
           pollRef.current = false;
           if (r.status === "settled") setStep("done");
@@ -400,7 +402,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
         </div>
       ) : null}
 
-      {rem && isDemoMode(rem) && (step === "review" || step === "confirm" || step === "track") ? (
+      {rem && isDemoMode(rem) && (step === "review" || step === "confirm" || step === "track" || step === "verify") ? (
         <div className="mb-4 flex items-center justify-center">
           <Pill tone="warn">Modo demo (sin dinero real)</Pill>
         </div>
@@ -725,6 +727,20 @@ const TRACK_STEPS: { key: RemittanceState["status"][]; label: string }[] = [
   { key: ["settled"], label: "Entregado" },
 ];
 function TrackView({ rem }: { rem: RemittanceState }) {
+  // AC-1 (WKH-200): payout_failed/refunded NO están en `order` → idx=-1 renderizaría la vista
+  // optimista ("en camino", steps grises). Branch temprano a una vista honesta de fallo/reembolso.
+  // Copy vía humanError (enum→copy fijo, PII-free / CD-5): NUNCA interpolar failureReason/beneficiary.
+  if (rem.status === "payout_failed" || rem.status === "refunded") {
+    return (
+      <Card className="space-y-3">
+        <p className="text-sm font-semibold">No pudo entregarse</p>
+        <p className="text-sm text-stone">{humanError("payout_failed")}</p>
+        {rem.refundTx ? (
+          <p className="text-xs text-stone">Referencia de reembolso: {rem.refundTx}</p>
+        ) : null}
+      </Card>
+    );
+  }
   const order: RemittanceState["status"][] = [
     "confirmed",
     "principal_in",

@@ -2,9 +2,24 @@ import type { Money } from "../domain/money";
 import type { RemittanceState } from "../domain/remittance";
 import { FALLBACK_WALLET_ADDRESS } from "../infrastructure/wallet";
 
+/** Proveniencias de payout que representan un desembolso REAL (allowlist fail-safe, CD-8). Cualquier
+ *  valor desconocido/typo cae del lado seguro → muestra el banner (over-warn), nunca lo oculta.
+ *  Exemplar: REAL_KYC_PROVENANCES = new Set(["didit"]) en el agente KYC. */
+const REAL_PAYOUT_PROVENANCES = new Set(["transfi"]);
+
+/** true si la proveniencia del payout indica un desembolso NO real (mock). `null`/`undefined`
+ *  (remesa sin payout aún / legacy) → false (no fuerza el banner por ausencia de dato). */
+export function isPayoutDemo(p: string | null | undefined): boolean {
+  return p != null && !REAL_PAYOUT_PROVENANCES.has(p);
+}
+
 /** "Modo demo" ⇔ algún dato del flujo vino del fallback local (no Didit / no partner real). */
 export function isDemoMode(rem: RemittanceState): boolean {
-  return rem.quote?.provenance === "local-fallback" || rem.kyc?.provenance === "local-fallback";
+  return (
+    rem.quote?.provenance === "local-fallback" ||
+    rem.kyc?.provenance === "local-fallback" ||
+    isPayoutDemo(rem.payoutProvenance)
+  );
 }
 
 /** true si la wallet conectada es la FallbackWallet demo (sin aislamiento real por wallet). WKH-184.

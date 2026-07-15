@@ -61,6 +61,37 @@ describe("flow-vm — isDemoMode", () => {
     } as RemittanceState;
     expect(isDemoMode(rem)).toBe(false);
   });
+
+  it("T-AC3a (AC-3/5): quote/kyc reales pero payout mock (local-fallback) → true", () => {
+    const rem = {
+      quote: { provenance: "didit" },
+      kyc: { provenance: "didit" },
+      payoutProvenance: "local-fallback",
+    } as RemittanceState;
+    expect(isDemoMode(rem)).toBe(true);
+  });
+
+  it("T-AC3b (AC-3/5): payout real transfi / null / ausente (quote/kyc reales) → false", () => {
+    const real = {
+      quote: { provenance: "didit" },
+      kyc: { provenance: "didit" },
+      payoutProvenance: "transfi",
+    } as RemittanceState;
+    expect(isDemoMode(real)).toBe(false);
+
+    const noPayout = {
+      quote: { provenance: "didit" },
+      kyc: { provenance: "didit" },
+      payoutProvenance: null,
+    } as RemittanceState;
+    expect(isDemoMode(noPayout)).toBe(false);
+
+    const absent = {
+      quote: { provenance: "didit" },
+      kyc: { provenance: "didit" },
+    } as RemittanceState; // payoutProvenance undefined (legacy) → false
+    expect(isDemoMode(absent)).toBe(false);
+  });
 });
 
 describe("flow-vm — isFallbackWalletAddress (WKH-184 AC-7/AC-9)", () => {

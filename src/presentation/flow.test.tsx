@@ -10,6 +10,7 @@ import { ResumeKyc } from "../application/use-cases/resume-kyc";
 import { AbandonPendingKyc } from "../application/use-cases/abandon-pending-kyc";
 import { LockQuote } from "../application/use-cases/lock-quote";
 import { ConfirmAndSend } from "../application/use-cases/confirm-and-send";
+import { TrackRemittance } from "../application/use-cases/track-remittance";
 import { Money } from "../domain/money";
 import {
   type KycVerification,
@@ -566,5 +567,203 @@ describe("WKH-188 resume escape (fake timers aislados, CD-10)", () => {
     expect(screen.queryByText(/Verificando tu identidad/)).toBeNull();
     expect(screen.queryByRole("button", { name: /Empezar de nuevo/ })).toBeNull();
     expect(screen.getByLabelText("Monto en dólares")).toBeInTheDocument();
+  });
+});
+
+// ── WKH-200 — honestidad de estado en TrackView + banner demo cubre payout-mock ─────────────
+// Construye un snapshot en el estado final pedido (quote/kyc REALES "didit"), variando SOLO la
+// proveniencia del payout. expiresAt futuro real → los guards de expiry (dominio) no interfieren.
+function buildFlowSnapshot(
+  finalStatus: "payout_submitted" | "settled" | "payout_failed" | "refunded",
+  payoutProvenance: string | null,
+): RemittanceState {
+  const r = Remittance.create("rem-1", beneficiary(), Money.of(400, "USDC"), T0);
+  r.attachQuote(
+    {
+      quoteId: "q",
+      send: Money.of(400, "USDC"),
+      receive: Money.of(1478.15, "PEN"), // (400 − 0.5) × 3.7, dentro de tolerancia
+      feeUsd: Money.of(0.5, "USDC"),
+      rate: 3.7,
+      etaMinutes: 30,
+      expiresAt: "2099-01-01T00:00:00.000Z",
+      provenance: "didit", // quote REAL
+    },
+    T0,
+  );
+  r.startKyc(T0, "0xSender");
+  r.applyKyc(passKyc, T0); // kyc REAL (didit)
+  r.confirm(T0);
+  r.markPrincipalIn("0xp", T0);
+  const prov = payoutProvenance ?? undefined;
+  if (finalStatus === "payout_submitted") {
+    r.markPayoutSubmitted("p1", T0, prov);
+  } else if (finalStatus === "settled") {
+    r.markPayoutSubmitted("p1", T0, prov);
+    r.markSettled("0xs", Money.of(1478.15, "PEN"), T0);
+  } else if (finalStatus === "payout_failed") {
+    r.markPayoutFailed("partner_down", T0);
+  } else {
+    r.markPayoutFailed("partner_down", T0);
+    r.markRefunded("refund-x", T0);
+  }
+  return r.snapshot;
+}
+
+// Navega send → connect → confirm por el atajo KYC-once (sin escaneo ni sleeps): la wallet ya está
+// verificada, así el paso confirm aparece sin timers de por medio.
+async function goToConfirmViaKycOnce(): Promise<void> {
+  fillSend();
+  fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+  await screen.findByRole("button", { name: /Confirmar y enviar/ });
+}
+
+function trackContainer(
+  confirmSnapshot: RemittanceState,
+  trackSnapshot: RemittanceState,
+  kycStore: FakeKycStore,
+) {
+  return buildTestContainer({
+    kycStore,
+    useCases: {
+      confirmAndSend: {
+        execute: async () => Remittance.rehydrate(confirmSnapshot),
+      } as unknown as ConfirmAndSend,
+      trackRemittance: {
+        execute: async () => Remittance.rehydrate(trackSnapshot),
+      } as unknown as TrackRemittance,
+    },
+  });
+}
+
+async function seededKycStore(): Promise<FakeKycStore> {
+  const kycStore = new FakeKycStore();
+  await kycStore.save("0xSender", passKyc);
+  return kycStore;
+}
+
+// ── T-AC1a — AC-1: payout_failed en track renderiza la vista de fallo, no la optimista ─────────
+it("T-AC1a: remesa en payout_failed muestra 'No se pudo entregar', nunca 'en camino'", async () => {
+  const failed = buildFlowSnapshot("payout_failed", null);
+  render(<RemittanceFlow container={trackContainer(failed, failed, await seededKycStore())} />);
+
+  await goToConfirmViaKycOnce();
+  fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
+
+  expect(await screen.findByText(/No se pudo entregar/)).toBeInTheDocument();
+  expect(screen.queryByText(/Tu chaski está en camino/)).toBeNull();
+});
+
+// ── T-AC1b — AC-1: refunded en track renderiza la misma vista de fallo/reembolso ──────────────
+it("T-AC1b: remesa en refunded muestra la vista de fallo/reembolso, nunca 'en camino'", async () => {
+  const refunded = buildFlowSnapshot("refunded", null);
+  render(<RemittanceFlow container={trackContainer(refunded, refunded, await seededKycStore())} />);
+
+  await goToConfirmViaKycOnce();
+  fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
+
+  expect(await screen.findByText(/No se pudo entregar/)).toBeInTheDocument();
+  expect(screen.queryByText(/en camino/)).toBeNull();
+});
+
+// ── T-AC3c — AC-3: payout mock (didit quote/kyc) dispara el banner en track y en el Receipt ────
+it("T-AC3c (track): quote/kyc reales pero payout local-fallback → banner 'Modo demo' en track", async () => {
+  const submitted = buildFlowSnapshot("payout_submitted", "local-fallback");
+  render(<RemittanceFlow container={trackContainer(submitted, submitted, await seededKycStore())} />);
+
+  await goToConfirmViaKycOnce();
+  fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
+
+  // sigue en track (payout_submitted, no settled) y el banner de demo aparece por el payout mock.
+  expect(await screen.findByText(/Tu chaski está en camino/)).toBeInTheDocument();
+  expect(screen.getByText(/Modo demo/)).toBeInTheDocument();
+});
+
+it("T-AC3c (receipt): payout local-fallback settled → banner 'Modo demo' en el Receipt", async () => {
+  const settled = buildFlowSnapshot("settled", "local-fallback");
+  render(<RemittanceFlow container={trackContainer(settled, settled, await seededKycStore())} />);
+
+  await goToConfirmViaKycOnce();
+  fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
+
+  // settled → paso done → Receipt con el Pill de demo.
+  expect(await screen.findByText(/recibió/)).toBeInTheDocument();
+  expect(screen.getByText(/Modo demo/)).toBeInTheDocument();
+});
+
+// ── T-AC4 — AC-4: el banner demo cubre el paso verify ─────────────────────────────────────────
+it("T-AC4: en step verify con quote demo (fallback) el banner 'Modo demo' es visible", async () => {
+  render(<RemittanceFlow container={buildTestContainer({ quotes: new FallbackQuoteGateway() })} />);
+
+  await goToReview(); // quote fallback → isDemoMode true
+  fireEvent.click(screen.getByRole("button", { name: /Continuar/ })); // review → verify
+
+  expect(await screen.findByRole("button", { name: /Escanear DNI \+ selfie/ })).toBeInTheDocument();
+  const banners = await screen.findAllByText(/Modo demo \(sin dinero real\)/, {}, { timeout: 6000 });
+  expect(banners.length).toBeGreaterThanOrEqual(1);
+});
+
+// ── T-AC2 — AC-2: payout_failed corta el poll (clearInterval) aunque NO sea terminal ──────────
+describe("WKH-200 poll stop (fake timers)", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    cleanup();
+  });
+
+  it("T-AC2: al recibir payout_failed el poll frena (call-count se estabiliza), sin tocar TERMINAL_STATUSES", async () => {
+    const kycStore = new FakeKycStore();
+    await kycStore.save("0xSender", passKyc);
+    // onConfirm deja la remesa en payout_failed (status !== settled → step "track"): el poll ARRANCA
+    // igual (el efecto solo gatea por step). trackRemittance devuelve payout_failed en cada tick.
+    const failed = buildFlowSnapshot("payout_failed", null);
+    const trackSpy = vi.fn(async () => Remittance.rehydrate(failed));
+    const container = buildTestContainer({
+      kycStore,
+      useCases: {
+        confirmAndSend: {
+          execute: async () => Remittance.rehydrate(failed),
+        } as unknown as ConfirmAndSend,
+        trackRemittance: { execute: trackSpy } as unknown as TrackRemittance,
+      },
+    });
+    render(<RemittanceFlow container={container} />);
+
+    // navegación con flush de microtasks (sin sleeps en el atajo KYC-once).
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    fillSend();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Conectar wallet/ }));
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
+      await vi.advanceTimersByTimeAsync(1);
+    });
+
+    // ancla el setInterval del poll (auto-blindaje WKH-188) y deja correr hasta que el poll frena:
+    // 1er tick → payout_failed → clearInterval (con el fix). Avanzamos amplio para que estabilice.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12000); // > 7 ticks de 1.5 s si NO frenara
+    });
+    const stabilized = trackSpy.mock.calls.length;
+    expect(stabilized).toBeGreaterThanOrEqual(1); // el poll SÍ arrancó y consultó al menos una vez
+
+    // sin el fix (payout_failed no-terminal) el poll seguiría llamando cada 1.5 s → count crecería.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12000);
+    });
+    expect(trackSpy.mock.calls.length).toBe(stabilized);
+    expect(screen.getByText(/No se pudo entregar/)).toBeInTheDocument();
   });
 });

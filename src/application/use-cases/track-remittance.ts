@@ -49,7 +49,7 @@ export class TrackRemittance {
           await this.failAndRefund(r, "payout_amount_mismatch");
           return r;
         }
-        r.markSettled(rec.txRef ?? "", rec.deliveredPen, this.clock.nowIso());
+        r.markSettled(rec.txRef ?? "", rec.deliveredPen, this.clock.nowIso(), rec.provenance);
         await this.repo.save(r);
       } catch (err) {
         await this.failAndRefund(r, err instanceof Error ? err.message : "reconcile_error");

@@ -102,6 +102,7 @@ export class FallbackPayoutGateway implements PayoutGateway {
       deliveredPen: null,
       txRef: null,
       failureReason: null,
+      provenance: "local-fallback", // WKH-200: mock → dispara el banner de modo demo
     };
   }
   async status(payoutId: string): Promise<PayoutRecord> {
@@ -111,6 +112,7 @@ export class FallbackPayoutGateway implements PayoutGateway {
       deliveredPen: null,
       txRef: null,
       failureReason: null,
+      provenance: "local-fallback", // WKH-200: mock → dispara el banner de modo demo
     };
   }
 }

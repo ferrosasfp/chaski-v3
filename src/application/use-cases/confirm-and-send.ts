@@ -4,6 +4,7 @@ import type {
   Clock,
   PayoutAuthorityGateway,
   PayoutGateway,
+  PopSigner,
   PrincipalSettlementGateway,
   RefundGateway,
   RemittanceRepository,
@@ -39,6 +40,10 @@ export class ConfirmAndSend {
     //    bien formado (resolveReceiverAddress() throwea en construcción). Misma env, mismo
     //    composition root, mismo guard ⇒ C5 queda IDÉNTICO en fuerza, sin opcional y sin fail-open.
     private readonly settlement?: { gateway: PrincipalSettlementGateway; receiver: `0x${string}` },
+    // WKH-206 — 8º param OPCIONAL. MISMO criterio que `settlement`: el container solo lo inyecta con
+    // NEXT_PUBLIC_PAYOUT_POP_ENABLED=true ⇒ AC-5 se preserva POR CONSTRUCCIÓN, sin que el use-case lea
+    // env vars (CD-13). Undefined = demo byte-idéntico (no se adjunta prueba al submit).
+    private readonly pop?: PopSigner,
   ) {}
 
   /** Refund-on-failure (WKH-186/AC-7, CD-7): marca payout_failed y acto seguido intenta el credit-back
@@ -210,6 +215,24 @@ export class ConfirmAndSend {
     // 4. Submit del payout (idempotente por remesa+quote).
     const idempotencyKey = `${s.id}:${quote.quoteId}`;
     try {
+      // WKH-206: prueba de posesión. Solo en modo opt-in (this.pop inyectado). En demo queda undefined
+      // ⇒ el submit NO recibe estos campos ⇒ byte-idéntico (AC-5). CD-13: la infra viaja inyectada.
+      //
+      // Fix-pack AR-MNR-1 (patrón WKH-168/202 "nada fuera del try/catch"): el prove() vive DENTRO de
+      // este try — el mismo que ya degrada un fallo de submit. Con el principal REALMENTE adentro
+      // (markPrincipalIn en L196, principalReallyIn=true en modo real) un throw de prove() JAMÁS escapa
+      // execute() ni deja la remesa varada en principal_in: el catch de abajo lo degrada controlado
+      // (failAndRefund con principalReallyIn → AC-6). DT-2: prove() → null ⇒ SKIP (mecanismo apagado
+      // server-side, 501) ⇒ el submit NO recibe los campos; prove() → throw ⇒ fail-closed controlado.
+      let popChallenge: string | undefined;
+      let popSignature: string | undefined;
+      if (this.pop) {
+        const proof = await this.pop.prove(address ?? "");
+        if (proof) {
+          popChallenge = proof.challenge;
+          popSignature = proof.signature;
+        }
+      }
       const rec = await this.payouts.submit({
         quoteId: quote.quoteId,
         amountUsd: s.sendUsd.major,
@@ -221,6 +244,9 @@ export class ConfirmAndSend {
         // WKH-168/AC-10: la evidencia firmada de que el principal entró de verdad. En modo demo es
         // undefined (el server la exige solo cuando SETTLE_ATTESTATION_SECRET está configurado).
         settlementAttestation,
+        // WKH-206/AC-3: prueba de posesión (challenge + firma). undefined en demo ⇒ no se adjunta.
+        popChallenge,
+        popSignature,
       });
       r.markPayoutSubmitted(rec.payoutId, this.clock.nowIso(), rec.provenance);
       if (rec.status === "settled") {

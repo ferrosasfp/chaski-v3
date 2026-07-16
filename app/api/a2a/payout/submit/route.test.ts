@@ -14,6 +14,22 @@ vi.mock("../../../../../src/infrastructure/settlement/attestation-store", () => 
   claimAttestationOnce: claimMock,
 }));
 
+// WKH-206: se mockea el nonce-store (Upstash) — NO el verificador del challenge, que corre REAL para
+// probar el HMAC de verdad. El type param es OBLIGATORIO (CD-16): sin él vi.fn infiere `{ok:boolean}`
+// desde el default y las ramas alreadyUsed/unavailable no compilan (el gate es `npm run qa`).
+type PopNonceClaim = { ok: true } | { ok: false; alreadyUsed: true } | { ok: false; unavailable: true };
+const { popClaimMock } = vi.hoisted(() => ({
+  popClaimMock: vi.fn<(nonce: string) => Promise<PopNonceClaim>>(async () => ({ ok: true })),
+}));
+vi.mock("../../../../../src/infrastructure/auth/pop-nonce-store", () => ({
+  claimPopNonceOnce: popClaimMock,
+}));
+
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import {
+  buildPopMessage,
+  issuePopChallenge,
+} from "../../../../../src/infrastructure/auth/pop-challenge";
 import { issueSettlementAttestation } from "../../../../../src/infrastructure/settlement/attestation";
 import { POST } from "./route";
 
@@ -59,6 +75,7 @@ beforeEach(() => {
   vi.stubEnv("DIDIT_API_KEY", ""); // → rama simulated_dev, sin fetch a Didit
   vi.stubEnv("VERCEL_ENV", ""); // → no-prod y no-Vercel: la simulación se acepta (DT-5 no dispara)
   vi.stubEnv("SETTLE_ATTESTATION_SECRET", ""); // → rama A1 (skip): los 19 existentes intactos
+  vi.stubEnv("PAYOUT_POP_SECRET", ""); // WKH-206: guard 7 SKIP total (los tests que quieren PoP lo re-stubean)
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -531,5 +548,265 @@ describe("POST /api/a2a/payout/submit — GATE G3: atestación de settlement (WK
       expect(await res.json()).toEqual({ error: "payout_settlement_unavailable" });
     }
     expect(agentCalls).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WKH-206 — GUARD 7: proof-of-possession (AC-1/AC-2/AC-3/AC-4/AC-6).
+//
+// El caller firma con la PRIVATE KEY de `address` un challenge server-emitido; el guard recupera
+// criptográficamente al firmante y exige == address ANTES de forwardear. El verificador del challenge
+// corre REAL (HMAC de verdad); las firmas son REALES (privateKeyToAccount). Solo el nonce-store se
+// mockea (popClaimMock). `agentCalls`=0 prueba literalmente "el agente NUNCA fue invocado".
+// ─────────────────────────────────────────────────────────────────────────────
+
+const POP_SECRET = "test-pop-secret";
+
+/** Emite un challenge REAL (HMAC) y lo firma con `account` (firma REAL). address del challenge =
+ *  account.address lowercased por default (P3 pasa). Overrideá para los ataques. */
+async function signedPop(opts: {
+  account: ReturnType<typeof privateKeyToAccount>;
+  chainId?: number;
+  address?: string; // address DENTRO del challenge (default: la del account)
+  exp?: number;
+  nonce?: string;
+}): Promise<{ popChallenge: string; popSignature: string }> {
+  const chainId = opts.chainId ?? 43113;
+  const addr = (opts.address ?? opts.account.address).toLowerCase();
+  const nonce = opts.nonce ?? "abcdef0123456789abcdef0123456789";
+  const exp = opts.exp ?? Math.floor(Date.now() / 1000) + 300;
+  const ch = { address: addr, chainId, nonce, exp };
+  const popChallenge = issuePopChallenge(ch);
+  const popSignature = await opts.account.signMessage({ message: buildPopMessage(ch) });
+  return { popChallenge, popSignature };
+}
+
+describe("POST /api/a2a/payout/submit — GUARD 7: proof-of-possession (WKH-206)", () => {
+  beforeEach(() => {
+    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+    // El deployment corre en la MISMA cadena que firma signedPop() por default (43113). SETUP.
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "43113");
+    popClaimMock.mockReset();
+    popClaimMock.mockResolvedValue({ ok: true });
+  });
+
+  it("AC-1: PAYOUT_POP_SECRET ausente ⇒ SKIP total, forward byte-idéntico; popClaimMock NUNCA llamado", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", ""); // apagado (default)
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    // Sin popChallenge/popSignature en el body y sin secreto: pasa igual (el demo no cambia).
+    const res = await POST(req(validPayload));
+    expect(res.status).toBe(200);
+    expect(agentCalls).toHaveLength(1);
+    expect(popClaimMock).not.toHaveBeenCalled();
+  });
+
+  it("AC-1/DT-4: secreto ausente EN VERCEL (VERCEL_ENV=preview) ⇒ SKIP igual (NO 503, a diferencia de la atestación)", async () => {
+    // Para AISLAR el guard 7 en Vercel hay que pasar los guards 4-6 (autoridad REAL) y 8 (atestación
+    // válida): con la atestación apagada, su guard A2 daría 503 en Vercel y no probaríamos el PoP.
+    vi.stubEnv("PAYOUT_POP_SECRET", ""); // ← lo que se prueba: PoP apagado
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("DIDIT_API_KEY", "test-key"); // autoridad REAL (simulated_dev daría 503 en Vercel)
+    vi.stubEnv("SETTLE_ATTESTATION_SECRET", SECRET); // atestación ON + payload válido ⇒ guard 8 pasa
+    claimMock.mockResolvedValue({ ok: true }); // store de la atestación
+    const { fn, agentCalls } = fetchRouter({
+      didit: () => ({ status: "Approved", session_id: "v-1", vendor_data: SENDER }),
+    });
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req(attestedPayload())); // sin PoP en el body
+    expect(res.status).toBe(200); // guard 7 NO dispara 503 cuando el secreto está ausente (DT-4)
+    expect(agentCalls).toHaveLength(1);
+    expect(popClaimMock).not.toHaveBeenCalled(); // el guard 7 ni corrió
+  });
+
+  it("AC-3: happy — challenge válido + firma REAL que recupera a `address` ⇒ forward, nonce quemado", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", POP_SECRET);
+    const account = privateKeyToAccount(generatePrivateKey());
+    const pop = await signedPop({ account });
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req({ ...validPayload, address: account.address, ...pop }));
+    expect(res.status).toBe(200);
+    expect(agentCalls).toHaveLength(1);
+    expect(popClaimMock).toHaveBeenCalledWith("abcdef0123456789abcdef0123456789"); // el nonce del challenge
+  });
+
+  it("AC-3/suplantación: firma de OTRA key (recupera a address distinta) ⇒ 403 opaco, agente NUNCA", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", POP_SECRET);
+    const victim = privateKeyToAccount(generatePrivateKey());
+    const attacker = privateKeyToAccount(generatePrivateKey());
+    // El challenge se emite para la address de la VÍCTIMA, pero lo firma el ATACANTE.
+    const chainId = 43113;
+    const nonce = "abcdef0123456789abcdef0123456789";
+    const exp = Math.floor(Date.now() / 1000) + 300;
+    const ch = { address: victim.address.toLowerCase(), chainId, nonce, exp };
+    const popChallenge = issuePopChallenge(ch);
+    const popSignature = await attacker.signMessage({ message: buildPopMessage(ch) }); // firma HOSTIL
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(
+      req({ ...validPayload, address: victim.address, popChallenge, popSignature }),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "payout_pop_unverified" });
+    expect(agentCalls).toHaveLength(0);
+    expect(popClaimMock).not.toHaveBeenCalled(); // rechazo P5 stateless: NUNCA quema el nonce
+  });
+
+  it("AC-3/P1: popChallenge/popSignature ausentes o no-string ⇒ 403, agente NUNCA", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", POP_SECRET);
+    const account = privateKeyToAccount(generatePrivateKey());
+    const pop = await signedPop({ account });
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    const bad: Record<string, unknown>[] = [
+      {}, // ambos ausentes
+      { popChallenge: pop.popChallenge }, // falta firma
+      { popSignature: pop.popSignature }, // falta challenge
+      { popChallenge: "", popSignature: pop.popSignature },
+      { popChallenge: pop.popChallenge, popSignature: "" },
+      { popChallenge: 123, popSignature: pop.popSignature },
+      { popChallenge: pop.popChallenge, popSignature: null },
+    ];
+    for (const over of bad) {
+      const res = await POST(req({ ...validPayload, address: account.address, ...over }));
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: "payout_pop_unverified" });
+    }
+    expect(agentCalls).toHaveLength(0);
+    expect(popClaimMock).not.toHaveBeenCalled();
+  });
+
+  it("AC-3/P3: challenge emitido para address distinta a body.address ⇒ 403", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", POP_SECRET);
+    const account = privateKeyToAccount(generatePrivateKey());
+    // Challenge + firma coherentes entre sí (para la address del account), pero el body declara OTRA.
+    const pop = await signedPop({ account });
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(
+      req({ ...validPayload, address: "0x9999999999999999999999999999999999999999", ...pop }),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "payout_pop_unverified" });
+    expect(agentCalls).toHaveLength(0);
+    expect(popClaimMock).not.toHaveBeenCalled();
+  });
+
+  it("AC-4/replay: 2ª presentación (popClaimMock {alreadyUsed}) ⇒ 409, agente NUNCA", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", POP_SECRET);
+    const account = privateKeyToAccount(generatePrivateKey());
+    const pop = await signedPop({ account });
+    popClaimMock.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: false, alreadyUsed: true });
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    const payload = { ...validPayload, address: account.address, ...pop };
+    expect((await POST(req(payload))).status).toBe(200);
+    const second = await POST(req(payload));
+    expect(second.status).toBe(409);
+    expect(await second.json()).toEqual({ error: "payout_pop_replayed" });
+    expect(agentCalls).toHaveLength(1); // el 2º NO llegó al agente
+  });
+
+  it("AC-4: challenge EXPIRADO ⇒ 403 (mismo enum opaco que HMAC malo — CD-4 no-oracle)", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", POP_SECRET);
+    const account = privateKeyToAccount(generatePrivateKey());
+    const pop = await signedPop({ account, exp: Math.floor(Date.now() / 1000) - 1 });
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req({ ...validPayload, address: account.address, ...pop }));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "payout_pop_unverified" });
+    expect(agentCalls).toHaveLength(0);
+    expect(popClaimMock).not.toHaveBeenCalled();
+  });
+
+  it("AC-4/fail-closed: nonce-store caído ({unavailable}) ⇒ 503, agente NUNCA (NUNCA forward)", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", POP_SECRET);
+    const account = privateKeyToAccount(generatePrivateKey());
+    const pop = await signedPop({ account });
+    popClaimMock.mockResolvedValue({ ok: false, unavailable: true });
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req({ ...validPayload, address: account.address, ...pop }));
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "payout_pop_unavailable" });
+    expect(agentCalls).toHaveLength(0);
+  });
+
+  it("AC-6/P4: challenge de OTRA cadena (ch.chainId ≠ resolveChainId) ⇒ 403", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", POP_SECRET);
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "43113"); // deployment Fuji
+    const account = privateKeyToAccount(generatePrivateKey());
+    // Firma coherente para chainId 43114 (mainnet) — replay cross-entorno con el mismo secreto.
+    const pop = await signedPop({ account, chainId: 43114 });
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req({ ...validPayload, address: account.address, ...pop }));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "payout_pop_unverified" });
+    expect(agentCalls).toHaveLength(0);
+    expect(popClaimMock).not.toHaveBeenCalled();
+  });
+
+  it("AC-6/mutante fail-open chainId: body jura chainId, pero P4 lo saca de la ENV ⇒ 403 igual (CD-9)", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", POP_SECRET);
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "43113"); // deployment Fuji
+    const account = privateKeyToAccount(generatePrivateKey());
+    const pop = await signedPop({ account, chainId: 43114 }); // challenge de mainnet
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    // Un mutante body-sourced (`ch.chainId !== body.chainId`) ACEPTARÍA cuando body.chainId==43114.
+    // Con el guard correcto (contra resolveChainId()==43113) rebota SIEMPRE, aunque el body mienta.
+    for (const chainId of [43114, "43114", 43113, null]) {
+      const res = await POST(req({ ...validPayload, address: account.address, chainId, ...pop }));
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: "payout_pop_unverified" });
+    }
+    expect(agentCalls).toHaveLength(0);
+    expect(popClaimMock).not.toHaveBeenCalled();
+  });
+
+  it("CD-4 no-oracle: P2 (HMAC malo) / P3 (address) / P4 (chainId) / P5 (firma) ⇒ MISMO 403 + body", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", POP_SECRET);
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "43113");
+    const account = privateKeyToAccount(generatePrivateKey());
+    const good = await signedPop({ account });
+    const attacker = privateKeyToAccount(generatePrivateKey());
+    // P2: HMAC forjado (challenge basura). P3: address distinta. P4: otra cadena. P5: firma hostil.
+    const p5 = await signedPop({ account: attacker, address: account.address.toLowerCase() });
+    const p4 = await signedPop({ account, chainId: 43114 });
+    const cases: { label: string; address: string; over: Record<string, unknown> }[] = [
+      { label: "P2", address: account.address, over: { popChallenge: "basura.mac", popSignature: good.popSignature } },
+      { label: "P3", address: "0x9999999999999999999999999999999999999999", over: { ...good } },
+      { label: "P4", address: account.address, over: { ...p4 } },
+      { label: "P5", address: account.address, over: { popChallenge: good.popChallenge, popSignature: p5.popSignature } },
+    ];
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    for (const c of cases) {
+      const res = await POST(req({ ...validPayload, address: c.address, ...c.over }));
+      expect(res.status, c.label).toBe(403);
+      expect(await res.json(), c.label).toEqual({ error: "payout_pop_unverified" });
+    }
+    expect(agentCalls).toHaveLength(0);
+    expect(popClaimMock).not.toHaveBeenCalled(); // ningún rechazo P2-P5 quema el nonce (burn-position)
+  });
+
+  it("AC-5/no-regresión WKH-202: ownership mismatch ⇒ 403 payout_not_authorized ANTES del guard 7 (guards 4-6 intactos)", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", POP_SECRET); // PoP encendido
+    vi.stubEnv("DIDIT_API_KEY", "test-key");
+    const account = privateKeyToAccount(generatePrivateKey());
+    const pop = await signedPop({ account });
+    // La autoridad RECHAZA (vendor_data ≠ address): debe cortar con el enum de WKH-202, NO el de PoP.
+    const { fn, agentCalls } = fetchRouter({
+      didit: () => ({ status: "Approved", session_id: "v-1", vendor_data: "0xOtherWallet" }),
+    });
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req({ ...validPayload, address: account.address, ...pop }));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "payout_not_authorized" }); // guard 6, NO payout_pop_unverified
+    expect(agentCalls).toHaveLength(0);
+    expect(popClaimMock).not.toHaveBeenCalled(); // el guard 7 ni siquiera corrió
   });
 });

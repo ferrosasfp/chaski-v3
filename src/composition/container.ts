@@ -14,6 +14,7 @@ import { ResumeKyc } from "../application/use-cases/resume-kyc";
 import { StartKyc } from "../application/use-cases/start-kyc";
 import { TrackRemittance } from "../application/use-cases/track-remittance";
 import { A2aPayoutGateway, A2aQuoteGateway } from "../infrastructure/a2a/gateways";
+import { HttpPopSigner } from "../infrastructure/auth/http-pop-signer";
 import { resolveReceiverAddress } from "../infrastructure/chain";
 import { DiditKycGateway } from "../infrastructure/didit/kyc-gateway";
 import {
@@ -89,6 +90,11 @@ export function createContainer(): Container {
     process.env.NEXT_PUBLIC_EIP3009_ENABLED === "true"
       ? { gateway: new HttpSettlementGateway(), receiver: resolveReceiverAddress() }
       : undefined;
+  // Proof-of-possession opt-in (WKH-206/AC-1, CD-2): se instancia SOLO con el flag on. Off ⇒
+  // `undefined` → ConfirmAndSend no recibe 8º arg → demo byte-idéntico por construcción (el use-case
+  // nunca lee env — CD-13). Doble flag coordinado con el server PAYOUT_POP_SECRET (idéntico a EIP3009).
+  const pop =
+    process.env.NEXT_PUBLIC_PAYOUT_POP_ENABLED === "true" ? new HttpPopSigner(wallet) : undefined;
 
   return {
     previewQuote: new PreviewQuote(quotes),
@@ -105,6 +111,7 @@ export function createContainer(): Container {
       payoutAuthority,
       refund,
       settlement, // WKH-168: undefined con el flag off ⇒ AC-5 por construcción
+      pop, // WKH-206: undefined con el flag off ⇒ AC-5 por construcción
     ),
     trackRemittance: new TrackRemittance(payouts, repo, clock, refund),
     listHistory: new ListHistory(repo),

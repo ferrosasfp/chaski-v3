@@ -135,6 +135,10 @@ export class A2aPayoutGateway implements PayoutGateway {
         // verificar el receipt on-chain). La route la re-verifica y la quema (single-use) ANTES de
         // forwardear. En modo demo es undefined → JSON.stringify la omite → body byte-idéntico (AC-5).
         settlementAttestation: req.settlementAttestation,
+        // WKH-206: prueba de posesión (challenge + firma). En demo son undefined → JSON.stringify los
+        // omite → body byte-idéntico (AC-5). El guard 7 server-side los re-verifica.
+        popChallenge: req.popChallenge,
+        popSignature: req.popSignature,
       }),
     });
     if (!res.ok) throw new Error("a2a_payout_unavailable"); // AC-5, PII-free

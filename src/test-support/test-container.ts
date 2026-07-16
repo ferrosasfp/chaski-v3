@@ -23,6 +23,7 @@ import type {
   KycStore,
   PayoutAuthorityGateway,
   PayoutGateway,
+  PopSigner,
   PrincipalSettlementGateway,
   QuoteGateway,
   RefundGateway,
@@ -56,6 +57,9 @@ export interface TestContainerOverrides {
   // ACOPLADO al gateway (AR/MNR-4 + CR/MNR-2): en modo real siempre existe, sin opcional que se
   // saltee C5 en silencio.
   settlement?: { gateway: PrincipalSettlementGateway; receiver: `0x${string}` };
+  // WKH-206: sin override queda UNDEFINED → ConfirmAndSend corre en modo DEMO byte-idéntico (AC-5).
+  // Inyectarlo = "modo PoP" (mismo criterio que el container: solo con el flag on).
+  pop?: PopSigner;
   clock?: Clock; // default: new FixedClock()
   useCases?: Partial<Container>; // escape hatch (ej. resumeKyc stub para T3)
 }
@@ -88,6 +92,7 @@ export function buildTestContainer(o: TestContainerOverrides = {}): Container {
       payoutAuthority,
       refund,
       o.settlement, // WKH-168: undefined = modo demo (AC-5); definido = modo real
+      o.pop, // WKH-206: undefined = modo demo (AC-5); definido = modo PoP
     ),
     trackRemittance: new TrackRemittance(payouts, repo, clock, refund),
     listHistory: new ListHistory(repo),

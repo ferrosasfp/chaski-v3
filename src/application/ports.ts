@@ -75,6 +75,11 @@ export interface PayoutSubmit {
   // el demo debe seguir byte-idéntico. NO es fail-open: el enforcement vive en el SERVER
   // (/api/a2a/payout/submit, rama A3 → 403), no en el tipo. Omitirla no ayuda al atacante.
   settlementAttestation?: string;
+  // WKH-206: prueba de posesión (challenge server-emitido + firma de la wallet). MISMO criterio que
+  // settlementAttestation: OPCIONAL a propósito (demo byte-idéntico, AC-5); el enforcement es
+  // server-side (guard 7 → 403), NO fail-open. Omitirlos no ayuda al atacante.
+  popChallenge?: string;
+  popSignature?: string;
 }
 export interface PayoutRecord {
   payoutId: string;
@@ -160,6 +165,22 @@ export interface WalletPort {
     tx: string; // demo: firma simbólica (AC-5)
     eip3009?: { authorization: Eip3009Authorization; signature: string }; // SOLO en modo real
   }>;
+  // WKH-206: firma un mensaje arbitrario (personal_sign) con la key de la wallet conectada. Lo usa el
+  // PopSigner para probar posesión de `address`. En demo devuelve una firma simbólica (AC-5).
+  signMessage(message: string): Promise<string>;
+}
+
+// ── Proof-of-Possession (WKH-206) ────────────────────────────────────────────
+// Obtiene un challenge server-emitido para `address` y lo firma con la wallet. El use-case adjunta el
+// { challenge, signature } al submit; el server (guard 7) recupera al firmante y exige == address.
+// OPT-IN: sólo se inyecta cuando NEXT_PUBLIC_PAYOUT_POP_ENABLED === "true" (demo byte-idéntico si no).
+// WKH-206/DT-2 (fix-pack AR-MNR-1): `prove` distingue DOS resultados no-felices:
+//   · `null` ⇒ SKIP: el mecanismo está apagado server-side (501 `pop_not_configured`). El use-case NO
+//     adjunta popChallenge/popSignature ⇒ byte-idéntico al demo (el server sin secreto también skipea).
+//   · throw ⇒ fail-closed CONTROLADO: cualquier otro error (red / 400 / 5xx en un deployment ON). El
+//     use-case lo degrada por su camino de error existente (failAndRefund), NUNCA deja la remesa varada.
+export interface PopSigner {
+  prove(address: string): Promise<{ challenge: string; signature: string } | null>;
 }
 
 // ── KYC recordado por dirección (KYC-once: se verifica una vez por wallet) ────

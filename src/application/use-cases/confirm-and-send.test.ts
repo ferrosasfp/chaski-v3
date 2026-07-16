@@ -6,6 +6,7 @@ import {
   FAKE_SETTLE_TX,
   FakePayoutAuthorityGateway,
   FakePayoutGateway,
+  FakePopSigner,
   FakeRefundGateway,
   FakeSettlementGateway,
   FakeWallet,
@@ -16,7 +17,7 @@ import {
   T0,
   beneficiary,
 } from "../../test-support/fakes";
-import type { Eip3009Authorization, SettlementFailureReason } from "../ports";
+import type { Eip3009Authorization, PopSigner, SettlementFailureReason } from "../ports";
 import { ConfirmAndSend } from "./confirm-and-send";
 
 const passKyc: KycVerification = {
@@ -594,5 +595,109 @@ describe("ConfirmAndSend — marca AC-6 (principal REALMENTE adentro, refund man
     expect(outD.snapshot.failureReason).toBe("partner_down");
     expect(refundD.calls[0]?.reason).toBe("partner_down");
     expect(outD.snapshot.principalTx).toBe("0xprincipal"); // demo byte-idéntico
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WKH-206 — proof-of-possession opt-in (8º arg `pop`).
+// Modo PoP ⇔ el 8º arg (pop) está inyectado; sin él, TODO queda byte-idéntico (AC-5).
+// ─────────────────────────────────────────────────────────────────────────────
+describe("ConfirmAndSend — proof-of-possession opt-in (WKH-206)", () => {
+  it("AC-3: `pop` inyectado ⇒ el submit recibe popChallenge/popSignature de la prueba", async () => {
+    const repo = new InMemoryRepo();
+    const payouts = new FakePayoutGateway();
+    const submitSpy = vi.spyOn(payouts, "submit");
+    const id = await seedQuoted(repo);
+    await new ConfirmAndSend(
+      new FakeWallet(),
+      payouts,
+      repo,
+      new FixedClock(),
+      new FakePayoutAuthorityGateway(),
+      new FakeRefundGateway(),
+      undefined, // settlement: modo demo
+      new FakePopSigner(), // pop: modo PoP → adjunta la prueba
+    ).execute({ remittanceId: id });
+
+    expect(submitSpy.mock.calls[0]?.[0].popChallenge).toBe("pop-ch");
+    expect(submitSpy.mock.calls[0]?.[0].popSignature).toBe("0xfakesig");
+  });
+
+  it("AC-5: `pop` undefined (demo) ⇒ el submit NO recibe popChallenge/popSignature (byte-idéntico)", async () => {
+    const repo = new InMemoryRepo();
+    const payouts = new FakePayoutGateway();
+    const submitSpy = vi.spyOn(payouts, "submit");
+    const id = await seedQuoted(repo);
+    await new ConfirmAndSend(
+      new FakeWallet(),
+      payouts,
+      repo,
+      new FixedClock(),
+      new FakePayoutAuthorityGateway(),
+      new FakeRefundGateway(),
+    ).execute({ remittanceId: id });
+
+    expect(submitSpy.mock.calls[0]?.[0].popChallenge).toBeUndefined();
+    expect(submitSpy.mock.calls[0]?.[0].popSignature).toBeUndefined();
+  });
+
+  it("DT-2/AR-MNR-1: pop.prove() → null (501, server-OFF) ⇒ SKIP: submit SIN campos, remesa avanza normal", async () => {
+    // El HttpPopSigner devuelve null cuando /challenge responde 501 (mecanismo apagado server-side).
+    // El use-case NO adjunta popChallenge/popSignature ⇒ el submit es byte-idéntico al demo y la
+    // remesa avanza (settled), sin error.
+    const repo = new InMemoryRepo();
+    const payouts = new FakePayoutGateway();
+    const submitSpy = vi.spyOn(payouts, "submit");
+    const id = await seedQuoted(repo);
+    const skipPop: PopSigner = { prove: async () => null };
+    const out = await new ConfirmAndSend(
+      new FakeWallet(),
+      payouts,
+      repo,
+      new FixedClock(),
+      new FakePayoutAuthorityGateway(),
+      new FakeRefundGateway(),
+      undefined, // settlement: modo demo
+      skipPop, // pop inyectado pero devuelve null ⇒ SKIP
+    ).execute({ remittanceId: id });
+
+    expect(submitSpy.mock.calls[0]?.[0].popChallenge).toBeUndefined();
+    expect(submitSpy.mock.calls[0]?.[0].popSignature).toBeUndefined();
+    expect(out.snapshot.status).toBe("payout_submitted"); // avanza normal (default del fake), NO error
+    expect(out.snapshot.failureReason).toBeNull(); // el SKIP no degradó nada
+  });
+
+  it("DT-2/AR-MNR-1: pop.prove() TIRA en modo REAL ⇒ degrada CONTROLADO (refund manual), NO escapa execute() ni queda varada en principal_in", async () => {
+    // Modo real (settlement inyectado ⇒ markPrincipalIn con el USDC VERIFICADO adentro). Un throw de
+    // prove() (blip de red / 5xx en deployment ON) NO debe escapar execute() ni dejar la remesa en
+    // principal_in: se degrada por el camino de error existente (failAndRefund con principalReallyIn
+    // ⇒ AC-6 = principal_settled_refund_manual).
+    const repo = new InMemoryRepo();
+    const payouts = new FakePayoutGateway();
+    const submitSpy = vi.spyOn(payouts, "submit");
+    const refund = new FakeRefundGateway();
+    const id = await seedQuoted(repo);
+    const throwingPop: PopSigner = {
+      prove: async () => {
+        throw new Error("pop_challenge_unavailable");
+      },
+    };
+
+    // El assert de "no escapa": execute() RESUELVE (no rechaza) con la remesa degradada.
+    const out = await new ConfirmAndSend(
+      realWallet(),
+      payouts,
+      repo,
+      new FixedClock(),
+      new FakePayoutAuthorityGateway(),
+      refund,
+      realMode(okSettle()), // modo real ⇒ principalReallyIn = true
+      throwingPop,
+    ).execute({ remittanceId: id });
+
+    expect(out.snapshot.status).not.toBe("principal_in"); // NO queda varada
+    expect(out.snapshot.failureReason).toBe("principal_settled_refund_manual"); // AC-6 (principal real adentro)
+    expect(submitSpy).not.toHaveBeenCalled(); // el submit NUNCA se disparó (prove falló antes)
+    expect(refund.calls[0]?.reason).toBe("principal_settled_refund_manual");
   });
 });

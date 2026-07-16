@@ -130,6 +130,14 @@ export class InjectedWallet implements WalletPort {
     });
     return { tx: sig };
   }
+
+  // WKH-206: firma el popMessage con la wallet real (personal_sign vía viem).
+  async signMessage(message: string): Promise<string> {
+    const eth = injectedProvider();
+    if (!eth || !this.address) throw new Error("wallet_not_connected");
+    const client = createWalletClient({ chain: resolveChain(), transport: custom(eth) });
+    return client.signMessage({ account: this.address, message });
+  }
 }
 
 /** Demo — simula conectar + firmar (sin wallet real). Se usa si no hay wallet inyectada. */
@@ -145,6 +153,10 @@ export class FallbackWallet implements WalletPort {
   }
   async authorizePrincipal(_quote: Quote): Promise<{ tx: string }> {
     return { tx: `0xdemo${Date.now().toString(16)}` };
+  }
+  // WKH-206: firma fake demo (no toca red — mismo espíritu que authorizePrincipal).
+  async signMessage(_message: string): Promise<string> {
+    return `0xdemosig${Date.now().toString(16)}`;
   }
 }
 
@@ -261,6 +273,14 @@ export class WalletConnectWallet implements WalletPort {
       message: `Chaski · autorizo enviar ${quote.send.format()} (remesa ${quote.quoteId})`,
     });
     return { tx: sig };
+  }
+
+  // WKH-206: firma el popMessage vía el provider de WalletConnect (personal_sign).
+  async signMessage(message: string): Promise<string> {
+    const provider = await this.ensureProvider();
+    if (!this.address) throw new Error("wallet_not_connected");
+    const client = createWalletClient({ chain: resolveChain(), transport: custom(provider) });
+    return client.signMessage({ account: this.address, message });
   }
 }
 

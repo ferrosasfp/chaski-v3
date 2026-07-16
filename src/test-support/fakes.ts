@@ -25,6 +25,7 @@ import type {
   PayoutGateway,
   PayoutRecord,
   PayoutSubmit,
+  PopSigner,
   PrincipalSettlementGateway,
   QuoteGateway,
   QuoteRequest,
@@ -260,6 +261,18 @@ export class FakeWallet implements WalletPort {
     _remittanceId?: string,
   ): Promise<{ tx: string; eip3009?: { authorization: Eip3009Authorization; signature: string } }> {
     return this.eip3009 ? { tx: "0xprincipal", eip3009: this.eip3009 } : { tx: "0xprincipal" };
+  }
+  // WKH-206: firma fake (no toca red).
+  async signMessage(_message: string): Promise<string> {
+    return "0xfakesig";
+  }
+}
+
+// WKH-206: PopSigner fake — devuelve un { challenge, signature } sintético para probar que el
+// use-case adjunta la prueba al submit cuando el modo PoP está inyectado (AC-3).
+export class FakePopSigner implements PopSigner {
+  async prove(_address: string): Promise<{ challenge: string; signature: string } | null> {
+    return { challenge: "pop-ch", signature: "0xfakesig" };
   }
 }
 

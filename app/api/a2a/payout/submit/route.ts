@@ -27,7 +27,10 @@
 // Residual WKH-207: una atestación quemada + un forward fallido deja la remesa varada (sin
 // reconciliación server-side).
 import { NextResponse } from "next/server";
+import { verifyMessage } from "viem";
 import { Money } from "../../../../../src/domain/money";
+import { verifyPopChallenge, buildPopMessage } from "../../../../../src/infrastructure/auth/pop-challenge";
+import { claimPopNonceOnce } from "../../../../../src/infrastructure/auth/pop-nonce-store";
 import { resolveChainId } from "../../../../../src/infrastructure/chain";
 import { resolvePayoutAuthority } from "../../../../../src/infrastructure/payout/authority";
 import { verifySettlementAttestation } from "../../../../../src/infrastructure/settlement/attestation";
@@ -107,6 +110,66 @@ export async function POST(req: Request): Promise<Response> {
         // RECHAZA. Un reason que no conocemos JAMÁS cae en el forward (lección WKH-198: el NaN
         // fail-open).
         return NextResponse.json({ error: "payout_authority_unavailable" }, { status: 502 });
+    }
+  }
+
+  // ── 7. Proof-of-Possession (WKH-206, AC-2/AC-3/AC-4/AC-6) ──────────────────────────────────────
+  // Prueba criptográfica de que el caller controla la private key de `address`: firma un challenge
+  // server-emitido (nonce single-use + exp + chainId). Defensa en profundidad OPT-IN: PAYOUT_POP_SECRET
+  // ausente ⇒ SKIP TOTAL en TODO entorno (Vercel incluido, DT-4/AC-1) ⇒ submit byte-idéntico a pre-206.
+  // Va DESPUÉS de la autoridad (WKH-202) y ANTES de la atestación (WKH-168): los guards 4-6 y 8 quedan
+  // intactos (CD-5). Todo fallo cripto/stateless (P2/P3/P4/P5) → el MISMO 403 opaco (CD-4 no-oracle).
+  const POP_SECRET = process.env.PAYOUT_POP_SECRET; // CD-14: dentro del handler
+  if (POP_SECRET) {
+    const popChallenge = body.popChallenge;
+    const popSignature = body.popSignature;
+    // P1 — presencia + tipo.
+    if (
+      typeof popChallenge !== "string" ||
+      !popChallenge.trim() ||
+      typeof popSignature !== "string" ||
+      !popSignature.trim()
+    ) {
+      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+    }
+    // P2 — HMAC + exp + tipos colapsan en null → mismo 403 opaco.
+    const ch = verifyPopChallenge(popChallenge, Date.now());
+    if (!ch) {
+      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+    }
+    // P3 — el challenge fue emitido para ESTA address (case-insensitive: el casing no es un mismatch).
+    if (ch.address.toLowerCase() !== address.toLowerCase()) {
+      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+    }
+    // P4 — chainId binding (AC-6). Contra la ENV server-side (resolveChainId()), NUNCA un chainId del
+    // body: un campo del caller sería el binding FALSO que este guard mata (CD-9).
+    if (ch.chainId !== resolveChainId()) {
+      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+    }
+    // P5 — PRUEBA CRIPTOGRÁFICA: recuperar al firmante del mensaje reconstruido (buildPopMessage=SSOT,
+    // CD-10). verifyMessage es async (cubre ERC-1271). Firma/address malformada → fail-closed.
+    let ok = false;
+    try {
+      ok = await verifyMessage({
+        address: ch.address as `0x${string}`,
+        message: buildPopMessage(ch),
+        signature: popSignature as `0x${string}`,
+      });
+    } catch {
+      ok = false;
+    }
+    if (!ok) {
+      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+    }
+    // P6 — single-use atómico, fail-CLOSED (mirror A8/A9). Va al FINAL: los rechazos stateless P1-P5
+    // NUNCA queman el nonce.
+    const claim = await claimPopNonceOnce(ch.nonce);
+    if (!claim.ok) {
+      if ("alreadyUsed" in claim) {
+        return NextResponse.json({ error: "payout_pop_replayed" }, { status: 409 });
+      }
+      // Upstash caído/no configurado ⇒ 503 fail-CLOSED. NUNCA forwardea.
+      return NextResponse.json({ error: "payout_pop_unavailable" }, { status: 503 });
     }
   }
 

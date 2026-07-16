@@ -70,6 +70,11 @@ export interface PayoutSubmit {
   // address opcional sería fail-open.
   address: string;
   idempotencyKey: string;
+  // WKH-168: atestación HMAC del settlement del principal, emitida por /api/settle/principal tras
+  // verificar el receipt on-chain. OPCIONAL a propósito: en modo demo NO existe atestación (AC-5) y
+  // el demo debe seguir byte-idéntico. NO es fail-open: el enforcement vive en el SERVER
+  // (/api/a2a/payout/submit, rama A3 → 403), no en el tipo. Omitirla no ayuda al atacante.
+  settlementAttestation?: string;
 }
 export interface PayoutRecord {
   payoutId: string;
@@ -106,11 +111,55 @@ export interface PayoutAuthorityGateway {
   authorize(input: { verificationId: string; address: string }): Promise<PayoutAuthorization>;
 }
 
+// ── Settlement del principal (WKH-168) ───────────────────────────────────────
+// AC-9 (residual NO cerrado por esta HU): si el browser se cierra entre el settle on-chain y el
+// estado terminal, la remesa queda HUÉRFANA con el principal REALMENTE adentro. Esta HU EMPEORA la
+// consecuencia (antes no había plata; ahora sí) sin cerrar el gap: no hay persistencia server-side
+// ni reconciliación. → WKH-207. El single-use pre-forward de la atestación agrega un 2º caso de
+// varado (atestación quemada + forward fallido) → misma HU.
+export interface Eip3009Authorization {
+  from: string; // 0x + 40 hex
+  to: string; // 0x + 40 hex
+  value: string; // uint256 decimal CANÓNICO (/^(0|[1-9]\d*)$/) — NUNCA bigint (CD-16)
+  validAfter: string; // idem
+  validBefore: string; // idem
+  nonce: string; // 0x + 64 hex (bytes32)
+}
+
+export type SettlementFailureReason =
+  | "settlement_unavailable"
+  | "settlement_rejected"
+  | "settlement_amount_mismatch"
+  | "settlement_receiver_mismatch"
+  | "settlement_reverted"
+  | "settlement_unverified";
+
+export interface PrincipalSettlementGateway {
+  settle(input: {
+    authorization: Eip3009Authorization;
+    signature: string;
+    address: string;
+    quoteId: string;
+    expectedValueMinor: number; // quote.send.minor
+  }): Promise<
+    | { ok: true; txHash: string; valueMinor: number; to: string; from: string; attestation: string }
+    | { ok: false; reason: SettlementFailureReason }
+  >;
+}
+
 // ── Wallet (DApp: el sender CONECTA su wallet = login, y firma la autorización EIP-3009) ──
+// WKH-168 — remittanceId es REQUERIDO (CD-19: el nonce determinístico es la garantía anti-doble-pago
+// a nivel CONTRATO; un remittanceId opcional permitiría caer en silencio al nonce random).
 export interface WalletPort {
   connect(): Promise<string>; // conecta y devuelve la address (el "login")
   getAddress(): Promise<string | null>;
-  authorizePrincipal(quote: Quote): Promise<{ tx: string }>;
+  authorizePrincipal(
+    quote: Quote,
+    remittanceId: string,
+  ): Promise<{
+    tx: string; // demo: firma simbólica (AC-5)
+    eip3009?: { authorization: Eip3009Authorization; signature: string }; // SOLO en modo real
+  }>;
 }
 
 // ── KYC recordado por dirección (KYC-once: se verifica una vez por wallet) ────

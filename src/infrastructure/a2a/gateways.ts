@@ -131,6 +131,10 @@ export class A2aPayoutGateway implements PayoutGateway {
         kycPayoutAllowed: true,
         beneficiary: req.beneficiary, // viaja al server; NUNCA se loguea (CD-5)
         idempotencyKey: req.idempotencyKey, // INTACTO (CD-10)
+        // WKH-168/AC-10: evidencia HMAC de que el principal entró de verdad (emitida server-side tras
+        // verificar el receipt on-chain). La route la re-verifica y la quema (single-use) ANTES de
+        // forwardear. En modo demo es undefined → JSON.stringify la omite → body byte-idéntico (AC-5).
+        settlementAttestation: req.settlementAttestation,
       }),
     });
     if (!res.ok) throw new Error("a2a_payout_unavailable"); // AC-5, PII-free

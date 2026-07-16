@@ -24,6 +24,7 @@ import {
 import { LocalKycPendingStore } from "../infrastructure/kyc-pending-store";
 import { HttpPayoutAuthorityGateway } from "../infrastructure/payout/payout-authority-gateway";
 import { LedgerRefundGateway } from "../infrastructure/refund/ledger-refund-gateway";
+import { HttpSettlementGateway } from "../infrastructure/settlement/http-settlement-gateway";
 import { LocalKycStore } from "../infrastructure/kyc-store";
 import { LocalRepo } from "../infrastructure/persistence";
 import { CryptoIds, SystemClock } from "../infrastructure/system";
@@ -74,6 +75,20 @@ export function createContainer(): Container {
   const payoutAuthority = new HttpPayoutAuthorityGateway(); // autoridad server-side (WKH-180)
   const refund = new LedgerRefundGateway(); // refund-on-failure ledger-only (WKH-186/AC-8, CD-8)
   const wallet = pickWallet(); // wallet REAL (MetaMask) si está inyectada, si no la demo
+  // Settlement real del principal (WKH-168/AC-5, CD-1): se instancia SOLO con el flag on. Con el
+  // flag off queda `undefined` → ConfirmAndSend no recibe 7º arg → "modo demo" byte-idéntico a
+  // pre-HU, POR CONSTRUCCIÓN (el use-case nunca lee una env — CD-14). El guard fail-loud de arriba
+  // ya garantizó adapter=a2a + receiver + usdc antes de llegar acá: imposible firma-real+payout-mock.
+  //
+  // AR/MNR-4 + CR/MNR-2: el receiver se INYECTA acoplado al gateway (antes el use-case lo resolvía
+  // importando infrastructure/chain → application→infrastructure). Acá es gratis: es el mismo valor
+  // que el guard de arriba ya resolvió y validó fail-loud. `resolveReceiverAddress()` es puro e
+  // idempotente y sólo se evalúa con el flag ON (el ternario corta antes) ⇒ AC-5 intacto, y no
+  // puede throwear acá sin haber throweado ya en el guard (que queda BYTE-IDÉNTICO).
+  const settlement =
+    process.env.NEXT_PUBLIC_EIP3009_ENABLED === "true"
+      ? { gateway: new HttpSettlementGateway(), receiver: resolveReceiverAddress() }
+      : undefined;
 
   return {
     previewQuote: new PreviewQuote(quotes),
@@ -82,7 +97,15 @@ export function createContainer(): Container {
     startKyc: new StartKyc(kyc, kycStore, kycPending, repo, clock),
     resumeKyc: new ResumeKyc(kyc, kycStore, kycPending, repo, clock),
     lockQuote: new LockQuote(quotes, repo, clock),
-    confirmAndSend: new ConfirmAndSend(wallet, payouts, repo, clock, payoutAuthority, refund),
+    confirmAndSend: new ConfirmAndSend(
+      wallet,
+      payouts,
+      repo,
+      clock,
+      payoutAuthority,
+      refund,
+      settlement, // WKH-168: undefined con el flag off ⇒ AC-5 por construcción
+    ),
     trackRemittance: new TrackRemittance(payouts, repo, clock, refund),
     listHistory: new ListHistory(repo),
     abandonPendingKyc: new AbandonPendingKyc(kycPending),

@@ -1,5 +1,6 @@
-import { getAddress } from "viem";
+import { getAddress, keccak256, toBytes } from "viem";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WalletPort } from "../application/ports";
 import { Money } from "../domain/money";
 import type { Quote } from "../domain/remittance";
 import {
@@ -195,7 +196,7 @@ describe("InjectedWallet — validación de address (AC-9)", () => {
     // Inyecta una address malformada en el campo privado (defensa en profundidad: el guard debe
     // disparar aunque connect() no la haya validado). TS `private` es solo compile-time.
     (w as unknown as { address: string }).address = "0xNOT_AN_ADDRESS";
-    await expect(w.authorizePrincipal(quote)).rejects.toThrow(/invalid_address/);
+    await expect(w.authorizePrincipal(quote, "rem-1")).rejects.toThrow(/invalid_address/);
     expect(p.calls.some((c) => c.method === "personal_sign" || c.method === "eth_sign")).toBe(false);
   });
 });
@@ -247,7 +248,7 @@ describe("WalletConnectWallet — validación de address (AC-9)", () => {
     // Address malformada inyectada en el campo privado (mismo patrón que InjectedWallet): el guard
     // isAddress debe disparar antes de crear el walletClient / pedir firma. TS `private` = compile-time.
     (w as unknown as { address: string }).address = "0xNOT_AN_ADDRESS";
-    await expect(w.authorizePrincipal(quote)).rejects.toThrow(/invalid_address/);
+    await expect(w.authorizePrincipal(quote, "rem-1")).rejects.toThrow(/invalid_address/);
     const p = wc.provider as ReturnType<typeof makeWcProvider>;
     expect(p.calls.some((c) => c.method === "personal_sign" || c.method === "eth_sign")).toBe(false);
   });
@@ -259,7 +260,7 @@ describe("EIP-3009 flag (WKH-186 AC-9/AC-10) — InjectedWallet", () => {
     stubWindow(p);
     const w = new InjectedWallet();
     await w.connect();
-    const { tx } = await w.authorizePrincipal(eip3009Quote);
+    const { tx } = await w.authorizePrincipal(eip3009Quote, "rem-1");
     expect(tx).toBe("0xsignature"); // path demo intacto
     expect(p.calls.some((c) => c.method === "personal_sign")).toBe(true);
     expect(p.calls.some((c) => c.method === "eth_signTypedData_v4")).toBe(false);
@@ -271,7 +272,7 @@ describe("EIP-3009 flag (WKH-186 AC-9/AC-10) — InjectedWallet", () => {
     stubWindow(p);
     const w = new InjectedWallet();
     await w.connect();
-    const { tx } = await w.authorizePrincipal(eip3009Quote);
+    const { tx } = await w.authorizePrincipal(eip3009Quote, "rem-1");
     expect(tx).toBe("0xtypedsig");
     expect(p.calls.some((c) => c.method === "personal_sign")).toBe(false); // NO firma demo
     const td = typedDataOf(p.calls);
@@ -288,7 +289,7 @@ describe("EIP-3009 flag (WKH-186 AC-9/AC-10) — WalletConnectWallet", () => {
     wc.provider = makeWcProvider();
     const w = new WalletConnectWallet("proj-id");
     await w.connect();
-    const { tx } = await w.authorizePrincipal(eip3009Quote);
+    const { tx } = await w.authorizePrincipal(eip3009Quote, "rem-1");
     expect(tx).toBe("0xsignature");
     const p = wc.provider as ReturnType<typeof makeWcProvider>;
     expect(p.calls.some((c) => c.method === "eth_signTypedData_v4")).toBe(false);
@@ -299,13 +300,98 @@ describe("EIP-3009 flag (WKH-186 AC-9/AC-10) — WalletConnectWallet", () => {
     wc.provider = makeWcProvider();
     const w = new WalletConnectWallet("proj-id");
     await w.connect();
-    const { tx } = await w.authorizePrincipal(eip3009Quote);
+    const { tx } = await w.authorizePrincipal(eip3009Quote, "rem-1");
     expect(tx).toBe("0xtypedsig");
     const p = wc.provider as ReturnType<typeof makeWcProvider>;
     const td = typedDataOf(p.calls);
     expect(td.primaryType).toBe("TransferWithAuthorization");
     expect(td.message.to.toLowerCase()).toBe(RECEIVER);
     expect(String(td.message.value)).toBe("400000000");
+  });
+});
+
+// WKH-168 W1.2 — nonce determinístico (CD-19) + payload EIP-3009 completo devuelto al caller.
+// El nonce ERA aleatorio y la firma se DESCARTABA (solo se devolvía `tx`): nadie podía transmitir la
+// autorización, y un reintento tras timeout habría generado una autorización NUEVA = doble-pago.
+describe("WKH-168 — nonce determinístico + payload EIP-3009 (CD-19/CD-16)", () => {
+  function nonceOf(calls: ProviderCall[]): string {
+    const call = calls.find((c) => c.method === "eth_signTypedData_v4");
+    if (!call) throw new Error("eth_signTypedData_v4 not called");
+    const params = call.params as unknown[];
+    return JSON.parse(params[1] as string).message.nonce;
+  }
+
+  it("CD-19: el nonce es keccak256(remittanceId:quoteId) — MISMO input ⇒ MISMO nonce (doble-pago imposible)", async () => {
+    enableEip3009();
+    const p1 = makeProvider();
+    stubWindow(p1);
+    const w1 = new InjectedWallet();
+    await w1.connect();
+    await w1.authorizePrincipal(eip3009Quote, "rem-1");
+
+    // Reintento tras un timeout ambiguo: misma remesa + mismo quote ⇒ MISMA autorización.
+    const p2 = makeProvider();
+    stubWindow(p2);
+    const w2 = new InjectedWallet();
+    await w2.connect();
+    await w2.authorizePrincipal(eip3009Quote, "rem-1");
+
+    expect(nonceOf(p1.calls)).toBe(nonceOf(p2.calls));
+    expect(nonceOf(p1.calls)).toBe(keccak256(toBytes("rem-1:q1")));
+  });
+
+  it("CD-19: remesas distintas ⇒ nonces DISTINTOS (unicidad por (from, nonce))", async () => {
+    enableEip3009();
+    const p1 = makeProvider();
+    stubWindow(p1);
+    const w1 = new InjectedWallet();
+    await w1.connect();
+    await w1.authorizePrincipal(eip3009Quote, "rem-1");
+
+    const p2 = makeProvider();
+    stubWindow(p2);
+    const w2 = new InjectedWallet();
+    await w2.connect();
+    await w2.authorizePrincipal(eip3009Quote, "rem-2");
+
+    expect(nonceOf(p1.calls)).not.toBe(nonceOf(p2.calls));
+  });
+
+  it("flag ON ⇒ devuelve eip3009 con la authorization COMPLETA en strings canónicos; flag OFF ⇒ sin eip3009 (AC-5)", async () => {
+    enableEip3009();
+    const p = makeProvider();
+    stubWindow(p);
+    const w = new InjectedWallet();
+    await w.connect();
+    const res = await w.authorizePrincipal(eip3009Quote, "rem-1");
+
+    expect(res.eip3009).toBeDefined();
+    expect(res.eip3009?.signature).toBe("0xtypedsig");
+    const a = res.eip3009?.authorization;
+    expect(a?.from.toLowerCase()).toBe(VALID_ADDR.toLowerCase());
+    expect(a?.to.toLowerCase()).toBe(RECEIVER);
+    // CD-16: uint256 decimal canónico (string), NUNCA bigint → JSON.stringify no puede tirar TypeError.
+    expect(a?.value).toBe("400000000");
+    expect(a?.validAfter).toBe("0");
+    expect(a?.validBefore).toBe(String(Math.floor(Date.parse(eip3009Quote.expiresAt) / 1000)));
+    expect(a?.nonce).toMatch(/^0x[0-9a-fA-F]{64}$/);
+    expect(() => JSON.stringify(a)).not.toThrow();
+
+    // Flag OFF (demo, default): byte-idéntico a pre-HU → sin payload EIP-3009.
+    delete process.env.NEXT_PUBLIC_EIP3009_ENABLED;
+    const p2 = makeProvider();
+    stubWindow(p2);
+    const w2 = new InjectedWallet();
+    await w2.connect();
+    const demo = await w2.authorizePrincipal(eip3009Quote, "rem-1");
+    expect(demo.eip3009).toBeUndefined();
+    expect(demo.tx).toBe("0xsignature");
+
+    // FallbackWallet (demo puro) tampoco expone eip3009 (AC-5). Se tipa como WalletPort: la clase
+    // implementa con menos params (válido en TS) y así se ejercita el CONTRATO del port.
+    const fbWallet: WalletPort = new FallbackWallet();
+    const fb = await fbWallet.authorizePrincipal(eip3009Quote, "rem-1");
+    expect(fb.eip3009).toBeUndefined();
   });
 });
 
@@ -316,7 +402,7 @@ describe("WKH-198 AC-5 — expiresAt malformado en firma EIP-3009 real (CD-8: fa
     stubWindow(p);
     const w = new InjectedWallet();
     await w.connect();
-    await expect(w.authorizePrincipal({ ...eip3009Quote, expiresAt: "not-a-date" }))
+    await expect(w.authorizePrincipal({ ...eip3009Quote, expiresAt: "not-a-date" }, "rem-1"))
       .rejects.toThrow("quote_expires_at_invalid");
     expect(p.calls.some((c) => c.method === "eth_signTypedData_v4")).toBe(false);
   });
@@ -326,7 +412,7 @@ describe("WKH-198 AC-5 — expiresAt malformado en firma EIP-3009 real (CD-8: fa
     wc.provider = makeWcProvider();
     const w = new WalletConnectWallet("proj-id");
     await w.connect();
-    await expect(w.authorizePrincipal({ ...eip3009Quote, expiresAt: "not-a-date" }))
+    await expect(w.authorizePrincipal({ ...eip3009Quote, expiresAt: "not-a-date" }, "rem-1"))
       .rejects.toThrow("quote_expires_at_invalid");
     const p = wc.provider as ReturnType<typeof makeWcProvider>;
     expect(p.calls.some((c) => c.method === "eth_signTypedData_v4")).toBe(false);

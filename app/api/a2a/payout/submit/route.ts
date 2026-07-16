@@ -13,10 +13,25 @@
 //   4-6. autoridad → simulated_dev en Vercel → 503 (DT-5); !authorized → switch (default = 502)
 //   7. forward (bloque intacto)
 // La respuesta sólo lleva enums; NUNCA el reason de la autoridad (CD-12 no-oracle) ni PII (CD-5).
-// Residual (NO lo cierra esta HU): kycPayoutAllowed sigue siendo un booleano del caller (WKH-203) y
-// nadie verifica que el sender pagó el principal en USDC (WKH-168).
+//
+// WKH-168 (GATE G3): hasta esta HU, NADIE verificaba que el sender hubiera pagado el principal en
+// USDC → un atacante con SU PROPIO KYC aprobado y SU PROPIA address pasaba todos los guards de
+// arriba y pedía un payout por un monto ARBITRARIO (el AR de WKH-202 lo probó ejecutando). Ahora se
+// exige una ATESTACIÓN de settlement (HMAC emitido por /api/settle/principal tras VERIFICAR el
+// receipt on-chain) atada al monto y al pagador, y single-use (anti-replay):
+//   8. atestación → A1 skip local / A2 503 en deploy / A3-A7″ 403 opaco / A8 409 / A9 503
+// La atestación ata CUATRO cosas al payout: el MONTO (A6), el PAGADOR (A7), el QUOTE/tasa (A7′) y la
+// CADENA (A7″: mata el replay cross-entorno si se reusa el SETTLE_ATTESTATION_SECRET).
+// Va DESPUÉS de la autoridad (WKH-202) y ANTES del forward: los guards 1-6 quedan intactos (CD-11).
+// Residual (NO lo cierra esta HU): kycPayoutAllowed sigue siendo un booleano del caller (WKH-203).
+// Residual WKH-207: una atestación quemada + un forward fallido deja la remesa varada (sin
+// reconciliación server-side).
 import { NextResponse } from "next/server";
+import { Money } from "../../../../../src/domain/money";
+import { resolveChainId } from "../../../../../src/infrastructure/chain";
 import { resolvePayoutAuthority } from "../../../../../src/infrastructure/payout/authority";
+import { verifySettlementAttestation } from "../../../../../src/infrastructure/settlement/attestation";
+import { claimAttestationOnce } from "../../../../../src/infrastructure/settlement/attestation-store";
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
@@ -94,6 +109,97 @@ export async function POST(req: Request): Promise<Response> {
         return NextResponse.json({ error: "payout_authority_unavailable" }, { status: 502 });
     }
   }
+
+  // ── 8. Atestación de settlement del principal (WKH-168, AC-10/AC-11) ───────────────────────────
+  // ESTE es el gate G3: sin evidencia de que el USDC entró DE VERDAD, no hay payout. Todo error
+  // devuelve el MISMO enum (CD-12 no-oracle): el endpoint no es un oráculo de por qué falló.
+  const SETTLE_SECRET = process.env.SETTLE_ATTESTATION_SECRET; // CD-14: dentro del handler
+  if (!SETTLE_SECRET) {
+    // A2 — en un deploy de Vercel, sin secreto NO se puede verificar nada ⇒ 503. Nunca fail-open en
+    // un entorno desplegado (mismo patrón que simulated_dev arriba).
+    if ((process.env.VERCEL_ENV ?? "") !== "") {
+      return NextResponse.json({ error: "payout_settlement_unavailable" }, { status: 503 });
+    }
+    // A1 — fuera de Vercel (local/CI) sin secreto: skip → el demo local sigue byte-idéntico (AC-5).
+  } else {
+    // A3 — atestación ausente/no-string/vacía.
+    const token = body.settlementAttestation;
+    if (typeof token !== "string" || !token.trim()) {
+      return NextResponse.json({ error: "payout_principal_unverified" }, { status: 403 });
+    }
+    // A4/A5 — formato, HMAC (timing-safe) y expiración colapsan en null → mismo 403 opaco.
+    const att = verifySettlementAttestation(token, Date.now());
+    if (!att) {
+      return NextResponse.json({ error: "payout_principal_unverified" }, { status: 403 });
+    }
+    // A6′ — body.amountUsd viene del caller HOSTIL y Money.of() TIRA con NaN/negativo/>MAX_SAFE_INTEGER.
+    // Este bloque corre FUERA del try/catch del forward ⇒ sin este guard, `curl -d '{"amountUsd":"x"}'`
+    // daría un 500 crudo (el bug WKH-202/BLQ-BAJO-1 repetido). Guard de tipo ANTES de Money.of, +
+    // try/catch por el cap: SIEMPRE 403 opaco, NUNCA 500. PROHIBIDO Money.of(Number(body.amountUsd)).
+    if (
+      typeof body.amountUsd !== "number" ||
+      !Number.isFinite(body.amountUsd) ||
+      body.amountUsd <= 0
+    ) {
+      return NextResponse.json({ error: "payout_principal_unverified" }, { status: 403 });
+    }
+    let expectedMinor: number;
+    try {
+      expectedMinor = Money.of(body.amountUsd, "USDC").minor;
+    } catch {
+      return NextResponse.json({ error: "payout_principal_unverified" }, { status: 403 });
+    }
+    // A6 — mata el "monto arbitrario": el payout no puede exceder el USDC realmente recibido.
+    if (expectedMinor !== att.valueMinor) {
+      return NextResponse.json({ error: "payout_principal_unverified" }, { status: 403 });
+    }
+    // A7 — ata el pagador ON-CHAIN al address ya KYC-validado (WKH-202): no podés cobrar el payout
+    // de un principal que pagó otro.
+    if (att.from.toLowerCase() !== address.toLowerCase()) {
+      return NextResponse.json({ error: "payout_principal_unverified" }, { status: 403 });
+    }
+    // A7′ — ata la TASA (AR/MNR-1). El quoteId viajaba FIRMADO en la atestación (attestation.ts:21)
+    // y NADIE lo comparaba: A6 ataba el monto y A7 el pagador, pero el quoteId del body —el que se
+    // forwardea al agente y con el que el partner liquida la TASA— podía ser OTRO. El AR lo probó
+    // ejecutando: att.quoteId="cfx-1" + body.quoteId="cfx-OTRO-RATE" ⇒ 200 y forward. Pagar el
+    // principal bajo un quote y cobrar bajo otro con mejor tasa para el mismo USD = SOBRE-ENTREGA.
+    // (El AC-10 enumeraba solo 3 checks: es omisión del spec, no del enforcement.)
+    // Igualdad EXACTA: el quoteId es un ID opaco del partner ⇒ NO se normaliza (a diferencia del
+    // address en A7, donde el casing no es un mismatch real).
+    // Sin guard de presencia aparte: att.quoteId es no-vacío por construcción (attestation.ts:91 lo
+    // rechaza vacío) ⇒ un body.quoteId ausente/no-string colapsa a "" y NUNCA matchea → 403.
+    const bodyQuoteId = typeof body.quoteId === "string" ? body.quoteId : "";
+    if (bodyQuoteId !== att.quoteId) {
+      return NextResponse.json({ error: "payout_principal_unverified" }, { status: 403 });
+    }
+    // A7″ — ata la CADENA (re-AR). El chainId viaja FIRMADO en la atestación (attestation.ts:17) y
+    // NADIE lo comparaba. Dentro de UN deployment es inocuo: settle/principal:65 firma el mismo
+    // resolveChainId() que lee esta route, y el caller no puede tocarlo (NEXT_PUBLIC_CHAIN_ID es una
+    // env del DEPLOYMENT: no viaja en el body y esta route no lo lee de ahí).
+    // El gatillo real NO es "el día que haya dos redes" (ese era el encuadre equivocado del hallazgo
+    // original): es REUSAR SETTLE_ATTESTATION_SECRET entre entornos. Preview en Fuji + prod en
+    // mainnet con el MISMO secreto ⇒ una atestación emitida en Fuji con USDC de FAUCET (gratis)
+    // valida el HMAC en mainnet y ata monto (A6), pagador (A7) y quote (A7′) sin objeción ⇒ payout
+    // REAL de $400 por $0. Pasa con UNA SOLA cadena ⇒ es un error de ops, no un ítem de roadmap.
+    // CD-9: se compara contra la env SERVER-SIDE. PROHIBIDO un chainId del body: un campo del caller
+    // sería exactamente el binding falso que este guard mata.
+    // Sin try/catch: resolveChainId() no tira (chain.ts:9-13 hace fallback a 43114), a diferencia de
+    // resolveReceiverAddress()/resolveUsdcAddress(), que son fail-loud.
+    if (att.chainId !== resolveChainId()) {
+      return NextResponse.json({ error: "payout_principal_unverified" }, { status: 403 });
+    }
+    // A8/A9 — single-use atómico. La atestación es un HMAC stateless ⇒ sin esto es REPLAYABLE.
+    const claim = await claimAttestationOnce(att.txHash);
+    if (!claim.ok) {
+      if ("alreadyUsed" in claim) {
+        return NextResponse.json({ error: "payout_already_settled" }, { status: 409 });
+      }
+      // A9 — Upstash caído/no configurado ⇒ 503 fail-CLOSED. NUNCA forwardea (un fail-open acá le
+      // daría al atacante N payouts por un solo principal: tirá Upstash y replayá).
+      return NextResponse.json({ error: "payout_settlement_unavailable" }, { status: 503 });
+    }
+  }
+  // A10 — todo OK → forward (bloque intacto).
 
   try {
     const res = await fetch(`${BASE}/api/agents/remit-cashout-payout/invoke`, {

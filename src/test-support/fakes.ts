@@ -11,6 +11,7 @@ import {
 import { ConcurrentModificationError } from "../application/errors";
 import type {
   Clock,
+  Eip3009Authorization,
   IdGenerator,
   KycDecision,
   KycGateway,
@@ -24,10 +25,12 @@ import type {
   PayoutGateway,
   PayoutRecord,
   PayoutSubmit,
+  PrincipalSettlementGateway,
   QuoteGateway,
   QuoteRequest,
   RefundGateway,
   RemittanceRepository,
+  SettlementFailureReason,
   WalletPort,
 } from "../application/ports";
 
@@ -240,15 +243,23 @@ export class FakePayoutGateway implements PayoutGateway {
   }
 }
 
+// FakeWallet — por default devuelve { tx } SIN eip3009 (modo demo byte-idéntico, AC-5). Pasá un
+// `eip3009` al constructor para simular la rama REAL de InjectedWallet/WalletConnectWallet (WKH-168).
 export class FakeWallet implements WalletPort {
+  constructor(
+    private readonly eip3009?: { authorization: Eip3009Authorization; signature: string },
+  ) {}
   async connect(): Promise<string> {
     return "0xSender";
   }
   async getAddress(): Promise<string | null> {
     return "0xSender";
   }
-  async authorizePrincipal(_quote: Quote): Promise<{ tx: string }> {
-    return { tx: "0xprincipal" };
+  async authorizePrincipal(
+    _quote: Quote,
+    _remittanceId?: string,
+  ): Promise<{ tx: string; eip3009?: { authorization: Eip3009Authorization; signature: string } }> {
+    return this.eip3009 ? { tx: "0xprincipal", eip3009: this.eip3009 } : { tx: "0xprincipal" };
   }
 }
 
@@ -321,6 +332,49 @@ export class FakeRefundGateway implements RefundGateway {
     this.calls.push(input);
     if (this.mode === "reject") throw new Error("refund_unavailable");
     return { refundTx: "refund-fake" };
+  }
+}
+
+// Settlement fake del principal (WKH-168). Por default resuelve OK con el monto canónico del
+// FakeQuoteGateway (400 USDC → 400_000_000 micro-USDC). mode="reject" ejercita C3 (settle() throw).
+// Registra los inputs recibidos (molde de FakeRefundGateway / FakePayoutAuthorityGateway).
+export const FAKE_SETTLE_TX =
+  "0xabc0000000000000000000000000000000000000000000000000000000000001";
+export const FAKE_RECEIVER = "0x2222222222222222222222222222222222222222";
+
+export type FakeSettleResult =
+  | { ok: true; txHash: string; valueMinor: number; to: string; from: string; attestation: string }
+  | { ok: false; reason: SettlementFailureReason };
+
+export class FakeSettlementGateway implements PrincipalSettlementGateway {
+  public calls: Array<{
+    authorization: Eip3009Authorization;
+    signature: string;
+    address: string;
+    quoteId: string;
+    expectedValueMinor: number;
+  }> = [];
+  constructor(
+    private readonly result: FakeSettleResult = {
+      ok: true,
+      txHash: FAKE_SETTLE_TX,
+      valueMinor: 400_000_000,
+      to: FAKE_RECEIVER,
+      from: "0x1111111111111111111111111111111111111111",
+      attestation: "att-fake",
+    },
+    private readonly mode: "resolve" | "reject" = "resolve",
+  ) {}
+  async settle(input: {
+    authorization: Eip3009Authorization;
+    signature: string;
+    address: string;
+    quoteId: string;
+    expectedValueMinor: number;
+  }): Promise<FakeSettleResult> {
+    this.calls.push(input);
+    if (this.mode === "reject") throw new Error("settlement_boom");
+    return this.result;
   }
 }
 

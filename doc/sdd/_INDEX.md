@@ -18,6 +18,7 @@
 | WKH-200 | [Hallazgo C, auditoría adversarial #2] Estados honestos en TrackView + banner demo cubre payout-mock (provenance propagada) | DONE (2026-07-14) | `doc/sdd/014-wkh-200-track-honesty-payout-mock-banner/done-report.md` |
 | WKH-201 | [Hallazgo D, auditoría adversarial #2] `forgetAndDisconnect` purga PII persistida via `clearByOwner` best-effort | DONE (2026-07-14) | `doc/sdd/014-wkh-201-forget-disconnect-purge-persisted-pii/done-report.md` |
 | WKH-202 | [GATE Fase A] Hardening del enforcement de `/api/a2a/payout/submit` (auth + re-validación KYC/ownership server-side) | DONE (2026-07-15) | `doc/sdd/015-wkh-202-payout-submit-hardening/done-report.md` |
+| WKH-168 | [GATE Fase A / G3, Mitad A] Principal-in real: settle on-chain verificado (broadcast + receipt + monto/receiver) antes de `principal_in`, reusando `wasiai-facilitator` | DONE (2026-07-15) | `doc/sdd/016-wkh-168-principal-in-real-settlement/done-report.md` |
 
 ## Notas de coordinación
 - WKH-178 y WKH-179 corren en paralelo, ambas del mismo repo (`chaski-v2`) y de la misma auditoría
@@ -97,7 +98,7 @@
 - **WKH-186 (DONE, 2026-07-11, `009`)**: porción TÉCNICA de WKH-168 (desembolso real), SIN depender
   del partner/sandbox TransFi — scaffolding completo de value-delivery con TODO mock/apagado por
   default (cero movimiento de dinero real, verificado en 6 capas independientes CD-2). Trabaja sobre
-  el estado ya mergeado de WKH-178..185 (`main`); no reabre ninguno de esos gaps. 4 piezas
+  el estado ya mergeado de WKH-178..185 (`main`). 4 piezas
   IMPLEMENTADAS: (1) adapter `src/infrastructure/a2a/` que llama directo (server-side, DT-1) a los
   agentes live `remit-corridor-fx`/`remit-cashout-payout` del repo `wasiai-remittance-agents`,
   detrás de flag `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` (default `fallback`); (2) reconciliación
@@ -259,6 +260,38 @@
   QUALITY (override esperado del orquestador, ya alineado): money-path + auth. Ver
   `doc/sdd/015-wkh-202-payout-submit-hardening/work-item.md` para el detalle completo (grounding,
   ACs, DT-N, CD-N, Missing Inputs).
+- **WKH-168 (F1, 2026-07-15, `016`)**: gate G3 de la Fase A ("el único de los 5 huecos que verifica
+  que el DINERO existe") — se parte en 2 mitades, esta HU es SOLO la Mitad A (settle on-chain
+  real, NO bloqueada por TransFi). Trabaja sobre el estado ya mergeado de WKH-178..202 (`main`).
+  F0 confirmó el bug de fondo: `authorizePrincipal` (`wallet.ts:78`/`:193`) produce una FIRMA
+  EIP-712, nunca una transacción transmitida — 0 ocurrencias de `waitForTransactionReceipt` en todo
+  el repo — así que `confirm-and-send.ts:85-86` marca `principal_in` sobre una firma, no sobre
+  dinero confirmado. **Hallazgo clave de F0**: `wasiai-facilitator` (repo hermano) YA tiene un
+  adapter Avalanche real y auditado (`src/chains/avalanche.ts`, `avalancheFujiAdapter`/
+  `avalancheMainnetAdapter`, "WFAC-52 delivered full real EIP-3009 settle + verify against Fuji
+  RPC") que coincide EXACTO con las chains que `chaski-v2` ya soporta (43113/43114) — veredicto:
+  **reusar ese `/settle` auditado, no escribir un relayer nuevo** (DT-1, CD-5). Segundo hallazgo:
+  el problema de "remesa huérfana" (browser cerrado entre `principal_in` y terminal) NO se cierra
+  solo moviendo `localStorage` a una DB — requiere TAMBIÉN un mecanismo de reconciliación
+  server-side, porque la orquestación de `ConfirmAndSend.execute()` corre client-side hoy (DT-2) —
+  se documentan 3 opciones de persistencia (Upstash ya cableado / Supabase de `wasiai-a2a` /
+  Supabase propio) SIN decidir, y se **recomienda SPLIT**: esta HU queda acotada a
+  settle+verificación (monto/receiver antes de `markPrincipalIn`, tamaño L), y la persistencia +
+  reconciliación de huérfanos se registra como HU de seguimiento aparte (candidata L/XL, NNN
+  sugerido siguiente libre, ej. WKH-207 — NO creada todavía, requiere aprobación humana del split).
+  9 ACs EARS (incluye AC-6 nuevo: honestidad sobre que `LedgerRefundGateway` es ledger-only y deja
+  de ser inofensivo una vez que el principal se mueve de verdad). Scope OUT explícito: Mitad B
+  (TransFi), clawback real, persistencia server-side, G5/WKH-206, WKH-205, y modificar código de
+  `wasiai-facilitator`/`wasiai-a2a` (se consumen solo como servicios HTTP). Toca
+  `confirm-and-send.ts`, `wallet.ts`, `ports.ts`, `container.ts`, `ledger-refund-gateway.ts` — mismos
+  archivos que WKH-180/186/198/202 (todas ya en `main`); sin otras HUs activas en `chaski-v2` en
+  este momento. Sizing QUALITY (override del orquestador esperado y ya alineado): money-path +
+  posible cambio arquitectónico. Missing Inputs: 2 `[NEEDS CLARIFICATION]` NO bloqueantes sobre el
+  deploy corriente del facilitador (RPC Fuji fondeada, `FACILITATOR_API_KEY` propio o compartido) +
+  1 BLOQUEANTE para la HU de seguimiento (cuál opción de persistencia, requiere decisión humana) +
+  `[SIN PRODUCT CONTEXT]` (no existe `product-context.md`, contexto de negocio asumido del
+  orquestador). Ver `doc/sdd/016-wkh-168-principal-in-real-settlement/work-item.md` para el detalle
+  completo (grounding, ACs, DT-N, CD-N, Missing Inputs).
 
 ---
 
@@ -293,6 +326,7 @@ bloqueantes abiertos. El AC-8 residual de WKH-181 (diferido a WKH-184) está for
 | HU | Status | Nota |
 |----|--------|------|
 | WKH-186 (scaffolding a2a mock/off + reconciliación + refund + EIP-3009-ready) | DONE (2026-07-11) | Sin movimiento de dinero real (CD-2 verificada 6 capas). Gap real cerrado (refund-on-failure). Runbook Fase A documentado. Listo para merge. Ver `doc/sdd/009-wkh-186-value-delivery-scaffolding/done-report.md`. |
+| WKH-168 (Mitad A: settle on-chain real verificado, reusa `wasiai-facilitator`) | F1 (2026-07-15) | Cierra el bug de fondo (`principal_in` = firma, no dinero). Recomendación de SPLIT documentada (persistencia + reconciliación → HU de seguimiento aparte). Ver `doc/sdd/016-wkh-168-principal-in-real-settlement/work-item.md`. |
 
 ## 🔵 MONEY-PATH / UX (post value-delivery scaffolding)
 
@@ -306,11 +340,12 @@ bloqueantes abiertos. El AC-8 residual de WKH-181 (diferido a WKH-184) está for
 |----|--------|------|
 | WKH-188 (resume de KYC abandonado: escape visible + timeout corto) | DONE (2026-07-12) | Bug reportado por el founder en móvil (usuario dio "atrás" en Didit, quedó ~100s sin escape en el overlay "Verificando…"). Fix de UX/timing en `flow.tsx`, sin tocar el gate de compliance ni la autoridad server-side WKH-180 (CD-1/CD-3). Ver `doc/sdd/011-wkh-188-kyc-resume-escape/done-report.md`. |
 
-## 🟠 AUDITORÍA ADVERSARIAL #2 (2026-07-14) — 100% CERRADA (hallazgos A-D); WKH-202 (gate Fase A) EN CURSO
+## 🟠 AUDITORÍA ADVERSARIAL #2 (2026-07-14) — 100% CERRADA (hallazgos A-D); WKH-202 (gate Fase A) DONE; WKH-168 (gate Fase A, G3) EN CURSO
 
 **Estado**: Los 5 hallazgos originales A-D + WKH-202 (gate Fase A) del batch de auditoría adversarial #2 
-de `chaski-v2` están **100% DONE** (2026-07-14/15) — es el bloqueante para habilitar 
-`REMIT_AGENTS_BASE_URL` en producción, **ahora listo para merge**.
+de `chaski-v2` están **100% DONE** (2026-07-14/15). WKH-168 (G3, Mitad A: settle real) está en F1
+(2026-07-15) — es el siguiente gate de la Fase A a cerrar; **NO es bloqueante para lo ya mergeado**,
+es la puerta de entrada para habilitar el flag `NEXT_PUBLIC_EIP3009_ENABLED` con seguridad.
 
 | HU | Status | Cierre |
 |----|--------|--------|
@@ -318,16 +353,17 @@ de `chaski-v2` están **100% DONE** (2026-07-14/15) — es el bloqueante para ha
 | WKH-199 (Hallazgo B: KYC re-brick — `KycStore.save()` best-effort + reorder) | DONE | 2026-07-14 |
 | WKH-200 (Hallazgo C: estados honestos en TrackView + banner demo cubre payout-mock) | DONE | 2026-07-14 |
 | WKH-201 (Hallazgo D: `forgetAndDisconnect` purga PII persistida) | DONE | 2026-07-14 |
-| WKH-202 (GATE Fase A: enforcement de `/api/a2a/payout/submit`) | DONE | 2026-07-15 |
+| WKH-202 (GATE Fase A / G1+enforcement: `/api/a2a/payout/submit`) | DONE | 2026-07-15 |
+| WKH-168 (GATE Fase A / G3, Mitad A: settle on-chain verificado) | F1 (en curso) | 2026-07-15 |
 
-**Impacto**: 4 defectos de seguridad/integridad cerrados en auditoría adversarial #2. Money-path protegido (fail-closed en expiry quote), KYC cache resiliente (best-effort), UI honesta (payout-failed status + demo banner), reset completo (PII purged). Pipeline QUALITY completo (F0→F1→F2→F2.5→F3→AR→CR→F4). Cero hallazgos bloqueantes abiertos en A-D. WKH-202 es un hallazgo adicional (enforcement del endpoint de submit real) que bloquea la Fase A del plan de remesa real hasta cerrarse.
+**Impacto**: 4 defectos de seguridad/integridad cerrados en auditoría adversarial #2. Money-path protegido (fail-closed en expiry quote), KYC cache resiliente (best-effort), UI honesta (payout-failed status + demo banner), reset completo (PII purged). Pipeline QUALITY completo (F0→F1→F2→F2.5→F3→AR→CR→F4). Cero hallazgos bloqueantes abiertos en A-D. WKH-202 (DONE) cerró el enforcement del endpoint de submit. WKH-168 (G3, en curso) es el gate que verifica que el DINERO existe antes de disparar el payout — sin él, un atacante con KYC propio aprobado pasa todos los demás gates y pide un payout con monto arbitrario.
 
 **Desvíos documentados**:
 - **WKH-199 MNR-1**: `project-context.md` creado entero (188 líneas, documental de patrones Chaski v2, no en Story File pero value-added).
 - **WKH-200 MNR-1**: Fake-timers test growth artifact documentado en auto-blindaje (T-AC2 poll-count intermitente, workaround en snapshot inicial).
 - **WKH-201 MNR-1**: Consumidor `test-container.ts` omitido en Story File, wiring actualizado en F3 (byte-idéntico, fallo de survey).
 
-**NNN Colisión histórica**: 4 analysts paralelos → WKH-198 tomó `012`, WKH-199 probó `012` (colisión) → `013`, WKH-200 probó `012`/`013` (colisiones) → `014`, WKH-201 probó `012`/`013` (colisiones) → `014` (comparte prefijo con WKH-200, carpetas distintas). Stubs obsoletos creados durante F1 (`012-wkh-199-*`, `012-wkh-200-*`, `012-wkh-201-*`, `013-wkh-200-*`, `013-wkh-201-*`), limpiados en esta fase final (git rm). Ver nota de coordinación debajo. **WKH-202 usó `015` sin colisión** (NNN pre-asignado por el orquestador, aplicando la lección de esta sección).
+**NNN Colisión histórica**: 4 analysts paralelos → WKH-198 tomó `012`, WKH-199 probó `012` (colisión) → `013`, WKH-200 probó `012`/`013` (colisiones) → `014`, WKH-201 probó `012`/`013` (colisiones) → `014` (comparte prefijo con WKH-200, carpetas distintas). Stubs obsoletos creados durante F1 (`012-wkh-199-*`, `012-wkh-200-*`, `012-wkh-201-*`, `013-wkh-200-*`, `013-wkh-201-*`), limpiados en esta fase final (git rm). Ver nota de coordinación debajo. **WKH-202 usó `015` sin colisión** (NNN pre-asignado por el orquestador, aplicando la lección de esta sección). **WKH-168 usó `016` sin colisión** (mismo criterio, único analyst corriendo sobre `chaski-v2` en el momento de F1).
 
 ### Nota de coordinación — Limpieza de stubs de colisión NNN (auditoría adversarial #2)
 
@@ -355,3 +391,5 @@ Hubo una **carrera de 4 analysts en paralelo** (2026-07-14, mismo repo `chaski-v
 **Lección para futuras auditorías en paralelo**: Si se lanzan 3+ analysts al mismo tiempo sobre el mismo repo, considerar pre-asignar el rango de NNN (ej., "WKH-198 usa `012`, WKH-199 usa `013`, WKH-200 usa `014`, WKH-201 usa `015`") antes de que escriban los work-items, para evitar stubs. Alternativa: usar timestamp + analyst-id en el nombre de carpeta si los stubs se acumulan.
 
 **Confirmación (WKH-202, 2026-07-15)**: la lección se aplicó — el orquestador pre-asignó `015` a WKH-202 antes de lanzar el analyst, sin colisión de NNN. Único analyst corriendo sobre `chaski-v2` en este momento (sin carrera paralela).
+
+**Confirmación (WKH-168, 2026-07-15)**: la misma lección se aplicó — el orquestador pre-asignó `016` a WKH-168 antes de lanzar el analyst (instrucción explícita "usá el NNN `016` — WKH-202 tomó el `015`"), sin colisión de NNN.

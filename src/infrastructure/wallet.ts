@@ -1,7 +1,7 @@
 // Infrastructure — WalletPort. InjectedWallet (REAL, abre MetaMask via viem) + FallbackWallet (demo).
 // pickWallet() usa la real si hay wallet inyectada, si no la simulada (para que el demo corra igual).
-import { createWalletClient, custom, isAddress, toHex } from "viem";
-import type { WalletPort } from "../application/ports";
+import { createWalletClient, custom, isAddress, keccak256, toBytes, toHex } from "viem";
+import type { Eip3009Authorization, WalletPort } from "../application/ports";
 import type { Quote } from "../domain/remittance";
 import { isParseableIso } from "../domain/remittance";
 import { resolveChain, resolveChainId, resolveReceiverAddress, resolveUsdcAddress } from "./chain";
@@ -22,6 +22,20 @@ const TRANSFER_WITH_AUTHORIZATION_TYPES = {
  * (AC-11) ya garantizó adapter=a2a + receiver + usdc ANTES de construir cualquier wallet. */
 function eip3009Enabled(): boolean {
   return process.env.NEXT_PUBLIC_EIP3009_ENABLED === "true";
+}
+
+/** Nonce EIP-3009 DETERMINÍSTICO por (remittanceId, quoteId) — CD-19 (WKH-168/DT-6).
+ *
+ * El nonce ERA aleatorio (32 bytes de CSPRNG) y se DESCARTABA: la firma se retenía y nadie la
+ * transmitía. Con un nonce aleatorio, un settle con respuesta ambigua (timeout) + reintento = una
+ * autorización NUEVA = el usuario PAGA DOS VECES. Determinístico: el contrato USDC marca
+ * authorizationState[from][nonce] → el 2º settle de la MISMA autorización REVIERTE ⇒ doble-pago
+ * IMPOSIBLE a nivel CONTRATO, no a nivel convención.
+ *
+ * El nonce NO es secreto (EIP-3009 solo exige unicidad por (from, nonce)) y sin la firma es inútil
+ * para un tercero. remittanceId es único (CryptoIds). */
+function deterministicNonce(remittanceId: string, quoteId: string): `0x${string}` {
+  return keccak256(toBytes(`${remittanceId}:${quoteId}`));
 }
 
 /** Address de la FallbackWallet demo. Fuente ÚNICA del literal (CD-4, WKH-184):
@@ -62,7 +76,10 @@ export class InjectedWallet implements WalletPort {
     return this.address;
   }
 
-  async authorizePrincipal(quote: Quote): Promise<{ tx: string }> {
+  async authorizePrincipal(
+    quote: Quote,
+    remittanceId: string,
+  ): Promise<{ tx: string; eip3009?: { authorization: Eip3009Authorization; signature: string } }> {
     const eth = injectedProvider();
     if (!eth || !this.address) throw new Error("wallet_not_connected");
     if (!isAddress(this.address)) throw new Error("invalid_address"); // AC-9: antes de firmar
@@ -72,7 +89,7 @@ export class InjectedWallet implements WalletPort {
       // = base units EIP-3009, cero floats). validBefore atado a la expiración del quote.
       const usdc = resolveUsdcAddress();
       const receiver = resolveReceiverAddress(); // MNR-A: valida isAddress fail-loud (no cast crudo)
-      const nonce = toHex(crypto.getRandomValues(new Uint8Array(32)));
+      const nonce = deterministicNonce(remittanceId, quote.quoteId); // CD-19: NO random (WKH-168)
       if (!isParseableIso(quote.expiresAt)) throw new Error("quote_expires_at_invalid"); // WKH-198 AC-5 (CD-8: fail LOUD)
       const validBefore = BigInt(Math.floor(Date.parse(quote.expiresAt) / 1000));
       const sig = await client.signTypedData({
@@ -89,7 +106,22 @@ export class InjectedWallet implements WalletPort {
           nonce,
         },
       });
-      return { tx: sig };
+      // WKH-168/CD-16: la serialización bigint → string decimal canónico se hace ACÁ (donde se firma).
+      // JAMÁS JSON.stringify sobre un bigint (TypeError). Money.minor es entero → String() es seguro.
+      return {
+        tx: sig,
+        eip3009: {
+          signature: sig,
+          authorization: {
+            from: this.address,
+            to: receiver,
+            value: String(quote.send.minor),
+            validAfter: "0",
+            validBefore: validBefore.toString(),
+            nonce,
+          },
+        },
+      };
     }
     // DEMO (default): firma un MENSAJE (prompt real de la wallet). Byte-idéntico a hoy (AC-9).
     const sig = await client.signMessage({
@@ -178,7 +210,10 @@ export class WalletConnectWallet implements WalletPort {
     return this.address;
   }
 
-  async authorizePrincipal(quote: Quote): Promise<{ tx: string }> {
+  async authorizePrincipal(
+    quote: Quote,
+    remittanceId: string,
+  ): Promise<{ tx: string; eip3009?: { authorization: Eip3009Authorization; signature: string } }> {
     const provider = await this.ensureProvider();
     if (!this.address) throw new Error("wallet_not_connected");
     if (!isAddress(this.address)) throw new Error("invalid_address"); // AC-9: antes de firmar
@@ -187,7 +222,7 @@ export class WalletConnectWallet implements WalletPort {
       // AC-10: firma REAL de transferWithAuthorization (EIP-712), idéntica a InjectedWallet.
       const usdc = resolveUsdcAddress();
       const receiver = resolveReceiverAddress(); // MNR-A: valida isAddress fail-loud (no cast crudo)
-      const nonce = toHex(crypto.getRandomValues(new Uint8Array(32)));
+      const nonce = deterministicNonce(remittanceId, quote.quoteId); // CD-19: NO random (WKH-168)
       if (!isParseableIso(quote.expiresAt)) throw new Error("quote_expires_at_invalid"); // WKH-198 AC-5 (CD-8: fail LOUD)
       const validBefore = BigInt(Math.floor(Date.parse(quote.expiresAt) / 1000));
       const sig = await client.signTypedData({
@@ -204,7 +239,21 @@ export class WalletConnectWallet implements WalletPort {
           nonce,
         },
       });
-      return { tx: sig };
+      // WKH-168/CD-16: bigint → string decimal canónico ACÁ (donde se firma). Ver InjectedWallet.
+      return {
+        tx: sig,
+        eip3009: {
+          signature: sig,
+          authorization: {
+            from: this.address,
+            to: receiver,
+            value: String(quote.send.minor),
+            validAfter: "0",
+            validBefore: validBefore.toString(),
+            nonce,
+          },
+        },
+      };
     }
     // DEMO (default): firma un MENSAJE. Byte-idéntico a hoy (AC-9).
     const sig = await client.signMessage({

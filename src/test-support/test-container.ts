@@ -23,6 +23,7 @@ import type {
   KycStore,
   PayoutAuthorityGateway,
   PayoutGateway,
+  PrincipalSettlementGateway,
   QuoteGateway,
   RefundGateway,
   WalletPort,
@@ -50,6 +51,11 @@ export interface TestContainerOverrides {
   payouts?: PayoutGateway; // default: new FakePayoutGateway()
   payoutAuthority?: PayoutAuthorityGateway; // default: new FakePayoutAuthorityGateway()
   refund?: RefundGateway; // default: new FakeRefundGateway() (regresión-neutral, WKH-186)
+  // WKH-168: sin override queda UNDEFINED → ConfirmAndSend corre en modo DEMO byte-idéntico (AC-5).
+  // Inyectarlo = "modo real" (mismo criterio que el container: solo con el flag on). El receiver va
+  // ACOPLADO al gateway (AR/MNR-4 + CR/MNR-2): en modo real siempre existe, sin opcional que se
+  // saltee C5 en silencio.
+  settlement?: { gateway: PrincipalSettlementGateway; receiver: `0x${string}` };
   clock?: Clock; // default: new FixedClock()
   useCases?: Partial<Container>; // escape hatch (ej. resumeKyc stub para T3)
 }
@@ -74,7 +80,15 @@ export function buildTestContainer(o: TestContainerOverrides = {}): Container {
     startKyc: new StartKyc(kyc, kycStore, pending, repo, clock),
     resumeKyc: new ResumeKyc(kyc, kycStore, pending, repo, clock),
     lockQuote: new LockQuote(quotes, repo, clock),
-    confirmAndSend: new ConfirmAndSend(wallet, payouts, repo, clock, payoutAuthority, refund),
+    confirmAndSend: new ConfirmAndSend(
+      wallet,
+      payouts,
+      repo,
+      clock,
+      payoutAuthority,
+      refund,
+      o.settlement, // WKH-168: undefined = modo demo (AC-5); definido = modo real
+    ),
     trackRemittance: new TrackRemittance(payouts, repo, clock, refund),
     listHistory: new ListHistory(repo),
     abandonPendingKyc: new AbandonPendingKyc(pending),

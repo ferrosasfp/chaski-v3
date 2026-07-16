@@ -2,9 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import { Money } from "../../domain/money";
 import { type KycVerification, type Quote, Remittance } from "../../domain/remittance";
 import {
+  FAKE_RECEIVER,
+  FAKE_SETTLE_TX,
   FakePayoutAuthorityGateway,
   FakePayoutGateway,
   FakeRefundGateway,
+  FakeSettlementGateway,
   FakeWallet,
   FixedClock,
   InMemoryRepo,
@@ -13,6 +16,7 @@ import {
   T0,
   beneficiary,
 } from "../../test-support/fakes";
+import type { Eip3009Authorization, SettlementFailureReason } from "../ports";
 import { ConfirmAndSend } from "./confirm-and-send";
 
 const passKyc: KycVerification = {
@@ -305,5 +309,290 @@ describe("ConfirmAndSend — reconciliación + refund-on-failure (WKH-186 AC-6/A
     expect(out.status).toBe("payout_failed");
     expect(out.snapshot.failureReason).toBe("partner_down");
     expect(out.snapshot.refundTx).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WKH-168 W5.2 — settle REAL del principal (ramas C1-C8).
+//
+// El bug que esto mata: `markPrincipalIn(tx)` marcaba "plata adentro" con una FIRMA. Nadie
+// transmitía nada, nadie esperaba un receipt → el payout salía sobre dinero que podía no existir.
+// Modo real ⇔ el 7º arg (settlement) está inyectado; sin él, TODO queda byte-idéntico (AC-5).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SENDER = "0x1111111111111111111111111111111111111111";
+const authorization: Eip3009Authorization = {
+  from: SENDER,
+  to: FAKE_RECEIVER,
+  value: "400000000",
+  validAfter: "0",
+  validBefore: "1783036800",
+  nonce: "0xbbbb000000000000000000000000000000000000000000000000000000000002",
+};
+const eip3009 = { authorization, signature: "0xSIGNATURE_CRUDA" };
+
+/** Wallet en modo REAL: devuelve el payload EIP-3009 además del tx (como InjectedWallet con el flag on). */
+function realWallet(): FakeWallet {
+  return new FakeWallet(eip3009);
+}
+
+// AR/MNR-4 + CR/MNR-2: el 7º arg es `{ gateway, receiver }`. El receiver se INYECTA (antes el
+// use-case lo leía de process.env vía infrastructure/chain) ⇒ estos tests unitarios volvieron a ser
+// env-free: cero stubEnv, cero unstubAllEnvs. Es SETUP: ningún assert cambió.
+function realMode(gateway: FakeSettlementGateway, receiver: `0x${string}` = FAKE_RECEIVER) {
+  return { gateway, receiver };
+}
+
+function okSettle(over: Partial<{ txHash: string; valueMinor: number; to: string }> = {}) {
+  return new FakeSettlementGateway({
+    ok: true,
+    txHash: FAKE_SETTLE_TX,
+    valueMinor: 400_000_000,
+    to: FAKE_RECEIVER,
+    from: SENDER,
+    attestation: "att-fake",
+    ...over,
+  });
+}
+
+describe("ConfirmAndSend — settle real del principal (WKH-168, C1-C6)", () => {
+  it("AC-1: modo real ⇒ settle() recibe la AUTORIZACIÓN COMPLETA (no solo la firma) + el expectedValueMinor", async () => {
+    const repo = new InMemoryRepo();
+    const settlement = okSettle();
+    const id = await seedQuoted(repo);
+    await new ConfirmAndSend(
+      realWallet(),
+      new FakePayoutGateway(),
+      repo,
+      new FixedClock(),
+      new FakePayoutAuthorityGateway(),
+      new FakeRefundGateway(),
+      realMode(settlement),
+    ).execute({ remittanceId: id });
+
+    expect(settlement.calls).toHaveLength(1);
+    expect(settlement.calls[0]?.authorization).toEqual(authorization);
+    expect(settlement.calls[0]?.signature).toBe("0xSIGNATURE_CRUDA");
+    expect(settlement.calls[0]?.expectedValueMinor).toBe(400_000_000); // del QUOTE, no del caller
+    expect(settlement.calls[0]?.quoteId).toBe("q1");
+  });
+
+  it("AC-4/C6: happy real ⇒ principalTx es el HASH VERIFICADO on-chain, NUNCA la firma cruda", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedQuoted(repo);
+    const out = await new ConfirmAndSend(
+      realWallet(),
+      new FakePayoutGateway(),
+      repo,
+      new FixedClock(),
+      new FakePayoutAuthorityGateway(),
+      new FakeRefundGateway(),
+      realMode(okSettle()),
+    ).execute({ remittanceId: id });
+
+    expect(out.snapshot.principalTx).toBe(FAKE_SETTLE_TX);
+    expect(out.snapshot.principalTx).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(out.snapshot.principalTx).not.toBe("0xSIGNATURE_CRUDA"); // ← el bug que la HU mata
+    expect(out.snapshot.principalTx).not.toBe("0xprincipal");
+  });
+
+  it("AC-10: la atestación del settle se forwardea al submit del payout", async () => {
+    const repo = new InMemoryRepo();
+    const payouts = new FakePayoutGateway();
+    const submitSpy = vi.spyOn(payouts, "submit");
+    const id = await seedQuoted(repo);
+    await new ConfirmAndSend(
+      realWallet(),
+      payouts,
+      repo,
+      new FixedClock(),
+      new FakePayoutAuthorityGateway(),
+      new FakeRefundGateway(),
+      realMode(okSettle()),
+    ).execute({ remittanceId: id });
+
+    expect(submitSpy.mock.calls[0]?.[0].settlementAttestation).toBe("att-fake");
+  });
+
+  it("C1: modo real pero la wallet NO devolvió eip3009 (invariante rota) ⇒ payout_failed, NUNCA principal_in", async () => {
+    const repo = new InMemoryRepo();
+    const settlement = okSettle();
+    const payouts = new FakePayoutGateway();
+    const submitSpy = vi.spyOn(payouts, "submit");
+    const id = await seedQuoted(repo);
+    // FakeWallet SIN eip3009 = la wallet demo. En modo real eso es una invariante rota: fail-loud.
+    const out = await new ConfirmAndSend(
+      new FakeWallet(),
+      payouts,
+      repo,
+      new FixedClock(),
+      new FakePayoutAuthorityGateway(),
+      new FakeRefundGateway(),
+      realMode(settlement),
+    ).execute({ remittanceId: id });
+
+    expect(out.snapshot.principalTx).toBeNull();
+    expect(out.snapshot.failureReason).toBe("settlement_unverified");
+    expect(settlement.calls).toHaveLength(0); // nada que transmitir
+    expect(submitSpy).not.toHaveBeenCalled();
+  });
+
+  it("AC-3/C2: cada SettlementFailureReason ⇒ payout_failed, principalTx null, submit NO llamado, creditBack sí", async () => {
+    const reasons: SettlementFailureReason[] = [
+      "settlement_unavailable",
+      "settlement_rejected",
+      "settlement_amount_mismatch",
+      "settlement_receiver_mismatch",
+      "settlement_reverted",
+      "settlement_unverified",
+    ];
+    for (const reason of reasons) {
+      const repo = new InMemoryRepo();
+      const payouts = new FakePayoutGateway();
+      const submitSpy = vi.spyOn(payouts, "submit");
+      const refund = new FakeRefundGateway();
+      const id = await seedQuoted(repo);
+      const out = await new ConfirmAndSend(
+        realWallet(),
+        payouts,
+        repo,
+        new FixedClock(),
+        new FakePayoutAuthorityGateway(),
+        refund,
+        realMode(new FakeSettlementGateway({ ok: false, reason })),
+      ).execute({ remittanceId: id });
+
+      expect(out.snapshot.principalTx).toBeNull(); // AC-3: NUNCA principal_in
+      expect(out.snapshot.failureReason).toBe(reason);
+      expect(submitSpy).not.toHaveBeenCalled(); // el payout NO se dispara sin plata
+      expect(refund.calls[0]?.reason).toBe(reason);
+    }
+  });
+
+  it("AC-3/C3: settle() THROW (red/bug) ⇒ settlement_unavailable, principalTx null, ninguna excepción escapa", async () => {
+    const repo = new InMemoryRepo();
+    const payouts = new FakePayoutGateway();
+    const submitSpy = vi.spyOn(payouts, "submit");
+    const id = await seedQuoted(repo);
+    const throwing = new FakeSettlementGateway(undefined, "reject");
+
+    const out = await new ConfirmAndSend(
+      realWallet(),
+      payouts,
+      repo,
+      new FixedClock(),
+      new FakePayoutAuthorityGateway(),
+      new FakeRefundGateway(),
+      realMode(throwing),
+    ).execute({ remittanceId: id });
+
+    expect(out.snapshot.principalTx).toBeNull();
+    expect(out.snapshot.failureReason).toBe("settlement_unavailable");
+    expect(submitSpy).not.toHaveBeenCalled();
+  });
+
+  it("AC-2/C4: settle ok pero valueMinor ≠ quote.send.minor ⇒ amount_mismatch, markPrincipalIn NUNCA llamado", async () => {
+    const repo = new InMemoryRepo();
+    const payouts = new FakePayoutGateway();
+    const submitSpy = vi.spyOn(payouts, "submit");
+    const id = await seedQuoted(repo);
+    // El settle "exitoso" reporta 1 micro-USDC: el use-case NO puede creerle.
+    const out = await new ConfirmAndSend(
+      realWallet(),
+      payouts,
+      repo,
+      new FixedClock(),
+      new FakePayoutAuthorityGateway(),
+      new FakeRefundGateway(),
+      realMode(okSettle({ valueMinor: 1 })),
+    ).execute({ remittanceId: id });
+
+    expect(out.snapshot.principalTx).toBeNull();
+    expect(out.snapshot.failureReason).toBe("settlement_amount_mismatch");
+    expect(submitSpy).not.toHaveBeenCalled();
+  });
+
+  it("AC-2/C5: settle ok pero el `to` no es el receiver de env ⇒ receiver_mismatch, sin principal_in", async () => {
+    const repo = new InMemoryRepo();
+    const payouts = new FakePayoutGateway();
+    const submitSpy = vi.spyOn(payouts, "submit");
+    const id = await seedQuoted(repo);
+    const out = await new ConfirmAndSend(
+      realWallet(),
+      payouts,
+      repo,
+      new FixedClock(),
+      new FakePayoutAuthorityGateway(),
+      new FakeRefundGateway(),
+      realMode(okSettle({ to: "0x9999999999999999999999999999999999999999" })),
+    ).execute({ remittanceId: id });
+
+    expect(out.snapshot.principalTx).toBeNull();
+    expect(out.snapshot.failureReason).toBe("settlement_receiver_mismatch");
+    expect(submitSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("ConfirmAndSend — marca AC-6 (principal REALMENTE adentro, refund manual)", () => {
+  it("AC-6/C7: modo real + quote vencido DURANTE el settle ⇒ principal_settled_refund_manual", async () => {
+    const repo = new InMemoryRepo();
+    const refund = new FakeRefundGateway();
+    const payouts = new FakePayoutGateway();
+    const submitSpy = vi.spyOn(payouts, "submit");
+    const id = await seedQuoted(repo);
+    // Llamadas a nowIso(): 1) confirm 2) re-check 2.5 (válido) 3) markPrincipalIn 4) re-check 3.5
+    // (VENCIDO: el quote murió DURANTE el settle, que en real tarda — espera el receipt).
+    const clock = new ScriptedClock([T0, T0, T0, "2026-07-09T18:20:00.000Z"]);
+
+    const out = await new ConfirmAndSend(
+      realWallet(),
+      payouts,
+      repo,
+      clock,
+      new FakePayoutAuthorityGateway(),
+      refund,
+      realMode(okSettle()),
+    ).execute({ remittanceId: id });
+
+    // El principal YA está adentro on-chain: el "refund" del ledger NO lo revierte (DT-8) → la marca
+    // dice la verdad en vez de mentir con quote_expired_before_submit.
+    expect(out.snapshot.principalTx).toBe(FAKE_SETTLE_TX);
+    expect(out.snapshot.failureReason).toBe("principal_settled_refund_manual");
+    expect(refund.calls[0]?.reason).toBe("principal_settled_refund_manual");
+    expect(submitSpy).not.toHaveBeenCalled();
+  });
+
+  it("AC-6/C8 + contraste AC-5: payout falla ⇒ real = marca manual; DEMO = el reason de hoy INTACTO", async () => {
+    // (a) modo REAL: el principal entró de verdad → marca AC-6.
+    const repoR = new InMemoryRepo();
+    const refundR = new FakeRefundGateway();
+    const idR = await seedQuoted(repoR);
+    const outR = await new ConfirmAndSend(
+      realWallet(),
+      new FakePayoutGateway({ status: "failed", failureReason: "partner_down" }),
+      repoR,
+      new FixedClock(),
+      new FakePayoutAuthorityGateway(),
+      refundR,
+      realMode(okSettle()),
+    ).execute({ remittanceId: idR });
+    expect(outR.snapshot.failureReason).toBe("principal_settled_refund_manual");
+    expect(refundR.calls[0]?.reason).toBe("principal_settled_refund_manual");
+
+    // (b) modo DEMO (sin 7º arg): NADA cambia respecto de pre-HU — el reason del partner sobrevive.
+    const repoD = new InMemoryRepo();
+    const refundD = new FakeRefundGateway();
+    const idD = await seedQuoted(repoD);
+    const outD = await new ConfirmAndSend(
+      new FakeWallet(),
+      new FakePayoutGateway({ status: "failed", failureReason: "partner_down" }),
+      repoD,
+      new FixedClock(),
+      new FakePayoutAuthorityGateway(),
+      refundD,
+    ).execute({ remittanceId: idD });
+    expect(outD.snapshot.failureReason).toBe("partner_down");
+    expect(refundD.calls[0]?.reason).toBe("partner_down");
+    expect(outD.snapshot.principalTx).toBe("0xprincipal"); // demo byte-idéntico
   });
 });

@@ -1,4 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// WKH-168: se mockea el store (Upstash) — no el verificador de la atestación, que corre REAL para
+// probar el HMAC de verdad. El mock default es "primer uso OK" ⇒ los 19 tests existentes, que caen
+// en A1 (skip), ni se enteran.
+// Tipado explícito (tsc strict, cero `any`): sin él, vi.fn infiere `{ok: boolean}` desde el default
+// y los mockResolvedValue con alreadyUsed/unavailable no compilan (WKH-196: el gate es `npm run qa`,
+// no `npm run build` — el build excluye los tests y esto pasaría en silencio).
+type Claim = { ok: true } | { ok: false; alreadyUsed: true } | { ok: false; unavailable: true };
+const { claimMock } = vi.hoisted(() => ({
+  claimMock: vi.fn<(txHash: string) => Promise<Claim>>(async () => ({ ok: true })),
+}));
+vi.mock("../../../../../src/infrastructure/settlement/attestation-store", () => ({
+  claimAttestationOnce: claimMock,
+}));
+
+import { issueSettlementAttestation } from "../../../../../src/infrastructure/settlement/attestation";
 import { POST } from "./route";
 
 const BASE = "https://agents.example.com";
@@ -35,9 +51,14 @@ const validResult = {
 // exportado en la shell/CI haría fetchear Didit → rojo intermitente). Esto es SETUP, no asserts:
 // los 7 de WKH-186 caen en simulated_dev + VERCEL_ENV="" → autorizado → el único fetch que ven sus
 // mocks sigue siendo el del agente.
+// WKH-168 W6.4: mismo razonamiento para SETTLE_ATTESTATION_SECRET. Sin este stub, un secreto
+// exportado en la shell/CI mandaría los 19 tests existentes a la rama A3 → 403 → rojo intermitente.
+// Con "" caen en A1 (skip, fuera de Vercel) → byte-idénticos. Los tests que quieren el secreto lo
+// re-stubean adentro (gana el stub más reciente).
 beforeEach(() => {
   vi.stubEnv("DIDIT_API_KEY", ""); // → rama simulated_dev, sin fetch a Didit
   vi.stubEnv("VERCEL_ENV", ""); // → no-prod y no-Vercel: la simulación se acepta (DT-5 no dispara)
+  vi.stubEnv("SETTLE_ATTESTATION_SECRET", ""); // → rama A1 (skip): los 19 existentes intactos
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -251,6 +272,264 @@ describe("POST /api/a2a/payout/submit — enforcement server-side del payout (WK
     // La simulación NO autoriza un payout en ningún scope de Vercel (fail-open real, CD-4).
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: "payout_authority_unavailable" });
+    expect(agentCalls).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WKH-168 W6.4 — GATE G3: la atestación de settlement (AC-10/AC-11).
+//
+// Sin esto, un atacante con SU PROPIO KYC aprobado y SU PROPIA address pasa todos los guards de
+// arriba (G1/G2/G4) y pide un payout por un monto ARBITRARIO sin haber pagado un solo USDC. El AR de
+// WKH-202 lo probó EJECUTANDO. Estos 9 tests son el gate.
+// `agentCalls` = 0 prueba literalmente "el agente NUNCA fue invocado".
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SECRET = "test-settle-secret";
+const SENDER = "0x1111111111111111111111111111111111111111";
+const ATT_TX = "0xaaaa000000000000000000000000000000000000000000000000000000000001";
+const RECEIVER_ADDR = "0x2222222222222222222222222222222222222222";
+
+/** Atestación VÁLIDA por default (el camino honesto): 400 USDC pagados por SENDER. */
+function attFor(over: Partial<Parameters<typeof issueSettlementAttestation>[0]> = {}): string {
+  return issueSettlementAttestation({
+    txHash: ATT_TX,
+    chainId: 43113,
+    valueMinor: 400_000_000, // == Money.of(400,"USDC").minor
+    from: SENDER,
+    to: RECEIVER_ADDR,
+    quoteId: "cfx-1",
+    exp: Math.floor(Date.now() / 1000) + 900,
+    ...over,
+  });
+}
+
+/** El payload del camino honesto: address == att.from y amountUsd == att.valueMinor. */
+function attestedPayload(over: Record<string, unknown> = {}) {
+  return { ...validPayload, address: SENDER, settlementAttestation: attFor(), ...over };
+}
+
+describe("POST /api/a2a/payout/submit — GATE G3: atestación de settlement (WKH-168)", () => {
+  beforeEach(() => {
+    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+    // A7″: el deployment corre en la MISMA cadena que firma attFor() (43113). SETUP, no assert: sin
+    // este stub, resolveChainId() cae en su default 43114 (chain.ts:12) y el camino honesto daría 403.
+    // Los tests que quieren OTRA cadena la re-stubean adentro (gana el stub más reciente).
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "43113");
+    claimMock.mockReset();
+    claimMock.mockResolvedValue({ ok: true });
+  });
+
+  it("A10: atestación válida + monto y sender que atan ⇒ forward al agente (camino honesto, 200)", async () => {
+    vi.stubEnv("SETTLE_ATTESTATION_SECRET", SECRET);
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req(attestedPayload()));
+    expect(res.status).toBe(200);
+    expect(agentCalls).toHaveLength(1);
+    // La atestación se quemó (single-use) con el txHash verificado.
+    expect(claimMock).toHaveBeenCalledWith(ATT_TX);
+  });
+
+  it("A3/AC-10: SIN atestación (el bypass del atacante) ⇒ 403 y el agente NUNCA se invoca", async () => {
+    vi.stubEnv("SETTLE_ATTESTATION_SECRET", SECRET);
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    // Exactamente el request del AR de WKH-202: KYC propio aprobado, address propia, sin pagar nada.
+    for (const p of [
+      validPayload,
+      { ...validPayload, settlementAttestation: "" },
+      { ...validPayload, settlementAttestation: 123 },
+      { ...validPayload, settlementAttestation: null },
+    ]) {
+      const res = await POST(req(p));
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: "payout_principal_unverified" });
+    }
+    expect(agentCalls).toHaveLength(0);
+    expect(claimMock).not.toHaveBeenCalled();
+  });
+
+  it("A4/AC-10: HMAC forjado o firmado con OTRO secreto ⇒ 403, agente NUNCA invocado", async () => {
+    // El atacante fabrica una atestación con su propio secreto y monto inflado.
+    vi.stubEnv("SETTLE_ATTESTATION_SECRET", "el-secreto-del-atacante");
+    const forged = attFor({ valueMinor: 999_000_000 });
+    vi.stubEnv("SETTLE_ATTESTATION_SECRET", SECRET); // el server usa el REAL
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+
+    for (const token of [forged, "basura", "a.b", `${attFor()}x`]) {
+      const res = await POST(req({ ...validPayload, address: SENDER, settlementAttestation: token }));
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: "payout_principal_unverified" });
+    }
+    expect(agentCalls).toHaveLength(0);
+  });
+
+  it("A5/AC-10: atestación VENCIDA ⇒ 403 (mismo enum opaco que el HMAC malo — CD-12 no-oracle)", async () => {
+    vi.stubEnv("SETTLE_ATTESTATION_SECRET", SECRET);
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    const expired = attFor({ exp: Math.floor(Date.now() / 1000) - 1 });
+    const res = await POST(req(attestedPayload({ settlementAttestation: expired })));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "payout_principal_unverified" });
+    expect(agentCalls).toHaveLength(0);
+  });
+
+  it("A6/AC-10: MONTO ARBITRARIO — amountUsd ≠ el USDC realmente recibido ⇒ 403, agente NUNCA invocado", async () => {
+    vi.stubEnv("SETTLE_ATTESTATION_SECRET", SECRET);
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    // Pagó 400 (att.valueMinor = 400_000000) y pide cobrar 5000: el corazón del ataque.
+    const res = await POST(req(attestedPayload({ amountUsd: 5000 })));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "payout_principal_unverified" });
+    // Ni un centavo de más: 400.01 también rebota.
+    expect((await POST(req(attestedPayload({ amountUsd: 400.01 })))).status).toBe(403);
+    expect(agentCalls).toHaveLength(0);
+  });
+
+  it("A6′/AC-10: amountUsd HOSTIL (string, NaN, ±Infinity, 0, negativo, enorme) ⇒ 403 opaco, NUNCA 500 crudo", async () => {
+    vi.stubEnv("SETTLE_ATTESTATION_SECRET", SECRET);
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    // Money.of() TIRA con NaN/negativo/>MAX_SAFE_INTEGER y este bloque corre FUERA del try/catch del
+    // forward ⇒ sin el guard A6′ esto era un 500 crudo (WKH-202/BLQ-BAJO-1 repetido).
+    const hostile: unknown[] = [
+      "400",
+      "abc",
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      0,
+      -400,
+      1e300,
+      null,
+      undefined,
+      {},
+      [],
+    ];
+    for (const amountUsd of hostile) {
+      const res = await POST(req(attestedPayload({ amountUsd })));
+      expect(res.status).toBe(403); // nunca 500
+      expect(await res.json()).toEqual({ error: "payout_principal_unverified" });
+    }
+    expect(agentCalls).toHaveLength(0);
+  });
+
+  it("A7/AC-10: el principal lo pagó OTRO (att.from ≠ address del body) ⇒ 403, agente NUNCA invocado", async () => {
+    vi.stubEnv("SETTLE_ATTESTATION_SECRET", SECRET);
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    // El atacante reusa la atestación de un pago ajeno y pone SU address (que pasó su propio KYC).
+    const res = await POST(
+      req({ ...validPayload, address: "0x9999999999999999999999999999999999999999", settlementAttestation: attFor() }),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "payout_principal_unverified" });
+    expect(agentCalls).toHaveLength(0);
+    // Case-insensitive: la MISMA address en otro casing SÍ pasa (no es un mismatch real).
+    const ok = await POST(req(attestedPayload({ address: SENDER.toUpperCase().replace("0X", "0x") })));
+    expect(ok.status).toBe(200);
+  });
+
+  it("A7′/AC-10: el quoteId del body ≠ el quoteId FIRMADO en la atestación (swap de TASA) ⇒ 403, agente NUNCA invocado", async () => {
+    vi.stubEnv("SETTLE_ATTESTATION_SECRET", SECRET);
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    // Repro exacto del AR (ATTACK-4): el principal se pagó bajo "cfx-1" (att.quoteId) pero el payout
+    // se pide bajo OTRO quote — el mismo USD a una tasa mejor ⇒ sobre-entrega. Antes: 200 + forward.
+    const res = await POST(req(attestedPayload({ quoteId: "cfx-OTRO-RATE" })));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "payout_principal_unverified" });
+    // Ausente / no-string / vacío ⇒ tampoco matchea (fail-closed, sin guard de presencia aparte).
+    for (const quoteId of [undefined, "", 1, null, {}, "CFX-1"]) {
+      expect((await POST(req(attestedPayload({ quoteId })))).status).toBe(403);
+    }
+    expect(agentCalls).toHaveLength(0);
+    expect(claimMock).not.toHaveBeenCalled(); // ni se quema la atestación: el guard va ANTES de A8
+  });
+
+  it("A7″: atestación de OTRA CADENA (replay cross-entorno con USDC de FAUCET) ⇒ 403, agente NUNCA invocado", async () => {
+    vi.stubEnv("SETTLE_ATTESTATION_SECRET", SECRET);
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    // El gatillo NO es "el día que haya dos redes": es REUSAR SETTLE_ATTESTATION_SECRET entre
+    // entornos. Preview en Fuji + prod en mainnet con el mismo secreto ⇒ la atestación emitida en
+    // Fuji (USDC de faucet, GRATIS) valida el HMAC en mainnet y ata monto (A6), pagador (A7) y quote
+    // (A7′) sin objeción ⇒ payout REAL de $400 por $0. Con UNA sola cadena en la app.
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "43114"); // el deployment es MAINNET
+    const fromFuji = await POST(req(attestedPayload({ settlementAttestation: attFor({ chainId: 43113 }) })));
+    expect(fromFuji.status).toBe(403);
+    expect(await fromFuji.json()).toEqual({ error: "payout_principal_unverified" }); // CD-12: mismo enum opaco
+
+    // Simétrico: el deployment es Fuji y la atestación dice mainnet.
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "43113");
+    const fromMainnet = await POST(req(attestedPayload({ settlementAttestation: attFor({ chainId: 43114 }) })));
+    expect(fromMainnet.status).toBe(403);
+    expect(await fromMainnet.json()).toEqual({ error: "payout_principal_unverified" });
+
+    // CD-9: el chainId sale de la ENV, JAMÁS del body. Un `chainId` del caller sería el binding
+    // FALSO que este guard mata: el atacante declararía la cadena de SU atestación y auto-validaría.
+    // Sin este assert, la forma body-sourced (fail-open) pasa los asserts de arriba sin objeción
+    // (verificado MUTANDO: sobrevive). El deployment sigue en Fuji ⇒ la atestación de mainnet rebota
+    // aunque el body jure 43114.
+    for (const chainId of [43114, 43113, "43114", null]) {
+      const spoofed = await POST(
+        req(attestedPayload({ settlementAttestation: attFor({ chainId: 43114 }), chainId })),
+      );
+      expect(spoofed.status).toBe(403);
+    }
+
+    expect(agentCalls).toHaveLength(0);
+    expect(claimMock).not.toHaveBeenCalled(); // ni se quema la atestación: el guard va ANTES de A8
+  });
+
+  it("A8/AC-11: REPLAY — 2ª presentación de la misma atestación ⇒ 409, agente NUNCA invocado", async () => {
+    vi.stubEnv("SETTLE_ATTESTATION_SECRET", SECRET);
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    claimMock.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: false, alreadyUsed: true });
+
+    expect((await POST(req(attestedPayload()))).status).toBe(200);
+    const second = await POST(req(attestedPayload()));
+    expect(second.status).toBe(409);
+    expect(await second.json()).toEqual({ error: "payout_already_settled" });
+    expect(agentCalls).toHaveLength(1); // el 2º NO llegó al agente
+  });
+
+  it("A9/A2/AC-11: Upstash caído ⇒ 503 sin forwardear; y sin secreto EN VERCEL ⇒ 503 (nunca fail-open)", async () => {
+    vi.stubEnv("SETTLE_ATTESTATION_SECRET", SECRET);
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+
+    // A9 — fail-CLOSED: si Upstash está caído no podemos garantizar el single-use ⇒ bloquear. Con
+    // fail-open, el atacante tiraría Upstash y cobraría N payouts sobre un solo principal.
+    claimMock.mockResolvedValue({ ok: false, unavailable: true });
+    const down = await POST(req(attestedPayload()));
+    expect(down.status).toBe(503);
+    expect(await down.json()).toEqual({ error: "payout_settlement_unavailable" });
+
+    expect(agentCalls).toHaveLength(0);
+  });
+
+  it("A2/AC-10: deploy de Vercel SIN SETTLE_ATTESTATION_SECRET ⇒ 503, agente NUNCA invocado (jamás skip)", async () => {
+    // La autoridad debe AUTORIZAR de verdad (key + Approved + ownership): con simulated_dev, el guard
+    // de WKH-202 cortaría antes en Vercel y este test no probaría A2 (CD-11: el orden importa).
+    vi.stubEnv("DIDIT_API_KEY", "test-key");
+    vi.stubEnv("SETTLE_ATTESTATION_SECRET", "");
+    const { fn, agentCalls } = fetchRouter({
+      didit: () => ({ status: "Approved", session_id: "v-1", vendor_data: "0xSender" }),
+    });
+    vi.stubGlobal("fetch", fn);
+
+    for (const scope of ["production", "preview"]) {
+      vi.stubEnv("VERCEL_ENV", scope); // un preview con agentes reales tampoco desembolsa sin verificar
+      const res = await POST(req(validPayload));
+      expect(res.status).toBe(503);
+      expect(await res.json()).toEqual({ error: "payout_settlement_unavailable" });
+    }
     expect(agentCalls).toHaveLength(0);
   });
 });

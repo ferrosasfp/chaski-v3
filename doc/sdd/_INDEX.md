@@ -21,7 +21,7 @@
 | WKH-168 | [GATE Fase A / G3, Mitad A] Principal-in real: settle on-chain verificado (broadcast + receipt + monto/receiver) antes de `principal_in`, reusando `wasiai-facilitator` | DONE (2026-07-15) | `doc/sdd/016-wkh-168-principal-in-real-settlement/done-report.md` |
 | WKH-206 | [GATE Fase A / G5, último hueco] Proof-of-possession (SIWE/EIP-4361) para el `address` del payout — el caller debe probar criptográficamente que controla la private key, no solo pasar el string | DONE (2026-07-16) | `doc/sdd/017-wkh-206-payout-proof-of-possession/report.md` |
 | WKH-205 | [Deuda técnica, cero-deuda] Cierra follow-ups de WKH-202 (MNR-2/3/5/6) + residual R2 de WKH-206: oráculo KYC de `/api/payout/validate`, bug body-null, rate-limit de `/challenge` | DONE (2026-07-16) | `doc/sdd/018-wkh-205-payout-validate-oracle-hardening/report.md` |
-| WKH-207 | [Deuda técnica mayor, seguimiento de WKH-168] Persistencia server-side + reconciliación de remesas huérfanas (el residual AC-9/DT-2 de WKH-168) | F1 (2026-07-16, en curso) | `doc/sdd/019-wkh-207-remittance-persistence-reconciliation/work-item.md` |
+| WKH-207 | [Deuda técnica mayor, seguimiento de WKH-168] Persistencia server-side + reconciliación de remesas huérfanas (el residual AC-9/DT-2 de WKH-168) | DONE (2026-07-16) | `doc/sdd/019-wkh-207-remittance-persistence-reconciliation/report.md` |
 
 ## Notas de coordinación
 - WKH-178 y WKH-179 corren en paralelo, ambas del mismo repo (`chaski-v2`) y de la misma auditoría
@@ -245,7 +245,7 @@ bloqueantes abiertos. El AC-8 residual de WKH-181 (diferido a WKH-184) está for
 |----|--------|------|
 | WKH-186 (scaffolding a2a mock/off + reconciliación + refund + EIP-3009-ready) | DONE (2026-07-11) | Sin movimiento de dinero real (CD-2 verificada 6 capas). Gap real cerrado (refund-on-failure). Runbook Fase A documentado. Listo para merge. Ver `doc/sdd/009-wkh-186-value-delivery-scaffolding/done-report.md`. |
 | WKH-168 (Mitad A: settle on-chain real verificado, reusa `wasiai-facilitator`) | DONE (2026-07-15) | Cierra el bug de fondo (`principal_in` = firma, no dinero). Mitad B (persistencia + reconciliación) registrada como WKH-207. Ver `doc/sdd/016-wkh-168-principal-in-real-settlement/done-report.md`. |
-| WKH-207 (Mitad B de WKH-168: persistencia server-side + reconciliación de remesas huérfanas) | F1 (2026-07-16) | La deuda técnica MÁS GRANDE del gate de Fase A. 1 `[NEEDS CLARIFICATION]` BLOQUEANTE (dónde persiste). Ver `doc/sdd/019-wkh-207-remittance-persistence-reconciliation/work-item.md`. |
+| WKH-207 (Mitad B de WKH-168: persistencia server-side + reconciliación de remesas huérfanas) | DONE (2026-07-16) | Persistencia Postgres propio (Supabase free, decisión founder) + reconcile `manual_review` (auto-retry deferido por PII+dedupe, money-safe). Migración PENDING-DEPLOY. 10/10 ACs, 451/451 tests, AR cazó 1 BLQ money-path (createClient fuera de try/catch) → fix-packeado → re-AR APROBADO. Ver `doc/sdd/019-wkh-207-remittance-persistence-reconciliation/report.md`. |
 
 ## 🔵 MONEY-PATH / UX (post value-delivery scaffolding)
 
@@ -274,7 +274,7 @@ de `chaski-v2` están **100% DONE** (2026-07-14/15/16). WKH-168 (G3, Mitad A: se
 | WKH-168 (GATE Fase A / G3, Mitad A: settle on-chain verificado) | DONE | 2026-07-15 |
 | WKH-206 (GATE Fase A / G5, último hueco: proof-of-possession SIWE) | DONE | 2026-07-16 |
 | WKH-205 (follow-ups WKH-202/206: oráculo `/validate`, bug body-null, rate-limit) | DONE | 2026-07-16 |
-| WKH-207 (Mitad B de WKH-168: persistencia + reconciliación de huérfanos) | F1 | 2026-07-16 (en curso) |
+| WKH-207 (Mitad B de WKH-168: persistencia + reconciliación de huérfanos) | DONE | 2026-07-16 |
 
 **Impacto**: 4 defectos de seguridad/integridad cerrados en auditoría adversarial #2 (hallazgos A-D). Money-path protegido (fail-closed en expiry quote), KYC cache resiliente (best-effort), UI honesta (payout-failed status + demo banner), reset completo (PII purged). Pipeline QUALITY completo (F0→F1→F2→F2.5→F3→AR→CR→F4) para **TODOS los gates de Fase A cerrados**. WKH-202 (DONE 2026-07-15) cerró el enforcement del endpoint de submit. WKH-168 (G3, DONE 2026-07-15) es el gate que verifica que el DINERO existe antes de disparar el payout (sin él, un atacante con KYC propio aprobado pasa todos los demás gates y pide un payout con monto arbitrario). WKH-206 (G5, DONE 2026-07-16) es el último hueco — proof-of-possession del `address`, con el hallazgo honesto de que WKH-168 ya mitiga la mayor parte del riesgo para el camino real de dinero via EIP-712 on-chain (ver report.md para el detalle completo). **Los 5 huecos del gate de Fase A (G1..G5) están cerrados a nivel código.** **WKH-207 (F1, 2026-07-16) es el residual de persistencia/reconciliación, y WKH-205 (F1, 2026-07-16) es el residual de hardening/oráculo — ambos corriendo en paralelo (`018`/`019`) para que el founder pueda declarar "cero deuda técnica" real.**
 

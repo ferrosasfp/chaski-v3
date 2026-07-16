@@ -2,10 +2,26 @@
 // vi.mock del onchain-verifier (Exemplar 6) + fetch stubeado para las ramas del facilitador: cero
 // RPC, cero cadena, cero HTTP real.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { keccak256, toBytes } from "viem";
 
 const { verifyMock } = vi.hoisted(() => ({ verifyMock: vi.fn() }));
 vi.mock("../../../../src/infrastructure/settlement/onchain-verifier", () => ({
   verifySettlementOnChain: verifyMock,
+}));
+
+// WKH-207: mock del ledger. getLedgerMock devuelve null por default (flag OFF ⇒ byte-idéntico);
+// un test lo apunta a ledgerMock para ejercitar el flag ON.
+const { ledgerMock, getLedgerMock } = vi.hoisted(() => ({
+  ledgerMock: {
+    recordPrincipalIn: vi.fn(),
+    recordPayoutOutcome: vi.fn(),
+    listStale: vi.fn(),
+    markOutcome: vi.fn(),
+  },
+  getLedgerMock: vi.fn(),
+}));
+vi.mock("../../../../src/infrastructure/persistence/supabase-settlement-ledger", () => ({
+  getSettlementLedger: getLedgerMock,
 }));
 
 import { verifySettlementAttestation } from "../../../../src/infrastructure/settlement/attestation";
@@ -90,6 +106,11 @@ describe("POST /api/settle/principal (WKH-168)", () => {
       to: RECEIVER,
       valueMinor: VALUE,
     });
+    // WKH-207: por default el ledger está apagado (flag OFF ⇒ null ⇒ byte-idéntico).
+    ledgerMock.recordPrincipalIn.mockReset();
+    ledgerMock.recordPrincipalIn.mockResolvedValue(undefined);
+    getLedgerMock.mockReset();
+    getLedgerMock.mockReturnValue(null);
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -370,5 +391,113 @@ describe("POST /api/settle/principal (WKH-168)", () => {
     const res = await POST(req(body()));
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: "settle_misconfigured" });
+  });
+
+  // ── WKH-207: persistencia server-side ADITIVA ──────────────────────────────
+  describe("WKH-207 ledger (settle)", () => {
+    // nonce determinístico = keccak256(`${remittanceId}:${quoteId}`) — wallet.ts:37-39.
+    const REMIT = "rem-207";
+    const QID = "q-400";
+    const GOOD_NONCE = keccak256(toBytes(`${REMIT}:${QID}`));
+
+    it("AC-1/CD-13: flag ON + nonce que matchea ⇒ recordPrincipalIn con valores VERIFICADOS antes de responder 200", async () => {
+      getLedgerMock.mockReturnValue(ledgerMock);
+      facilitatorResponds(200, { settled: true, transactionHash: TX });
+      const res = await POST(
+        req(
+          body({
+            authorization: authorization({ nonce: GOOD_NONCE }),
+            quoteId: QID,
+            remittanceId: REMIT,
+          }),
+        ),
+      );
+      expect(res.status).toBe(200);
+      expect(ledgerMock.recordPrincipalIn).toHaveBeenCalledTimes(1);
+      const arg = ledgerMock.recordPrincipalIn.mock.calls[0]![0] as Record<string, unknown>;
+      // CD-13: valores VERIFICADOS on-chain (verifyMock), NUNCA eco del body.
+      expect(arg.txHash).toBe(TX);
+      expect(arg.valueMinor).toBe(VALUE);
+      expect(arg.senderAddress).toBe(SENDER);
+      expect(arg.receiverAddress).toBe(RECEIVER);
+      expect(arg.quoteId).toBe(QID);
+      expect(arg.remittanceId).toBe(REMIT);
+      expect(arg.idempotencyKey).toBe(`${REMIT}:${QID}`);
+      expect(arg.chainId).toBe(43113);
+    });
+
+    it("AC-2: flag OFF ⇒ ledger NUNCA llamado y response byte-idéntico", async () => {
+      // getLedgerMock devuelve null por default (beforeEach).
+      facilitatorResponds(200, { settled: true, transactionHash: TX });
+      const res = await POST(req(body({ quoteId: QID, remittanceId: REMIT })));
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.txHash).toBe(TX);
+      expect(json.valueMinor).toBe(VALUE);
+      expect(ledgerMock.recordPrincipalIn).not.toHaveBeenCalled();
+    });
+
+    it("DT-3: flag ON pero remittanceId NO reproduce el nonce firmado ⇒ NO persiste, settle igual 200", async () => {
+      getLedgerMock.mockReturnValue(ledgerMock);
+      facilitatorResponds(200, { settled: true, transactionHash: TX });
+      // nonce del auth = GOOD_NONCE (de REMIT), pero declaramos otro remittanceId ⇒ mismatch.
+      const res = await POST(
+        req(
+          body({
+            authorization: authorization({ nonce: GOOD_NONCE }),
+            quoteId: QID,
+            remittanceId: "rem-OTRO",
+          }),
+        ),
+      );
+      expect(res.status).toBe(200);
+      expect(ledgerMock.recordPrincipalIn).not.toHaveBeenCalled();
+    });
+
+    it("CD-17: flag ON + recordPrincipalIn throw ⇒ settle responde 200 igual (best-effort)", async () => {
+      getLedgerMock.mockReturnValue(ledgerMock);
+      ledgerMock.recordPrincipalIn.mockRejectedValue(new Error("db down"));
+      facilitatorResponds(200, { settled: true, transactionHash: TX });
+      const res = await POST(
+        req(
+          body({
+            authorization: authorization({ nonce: GOOD_NONCE }),
+            quoteId: QID,
+            remittanceId: REMIT,
+          }),
+        ),
+      );
+      expect(res.status).toBe(200);
+      expect(ledgerMock.recordPrincipalIn).toHaveBeenCalledTimes(1);
+    });
+
+    // BLQ-MED-1 (AR): con el getSettlementLedger REAL, flag ON + SUPABASE_URL malformada
+    // (createClient lanzaría sincrónicamente) ⇒ getSupabaseServerClient degrada a null ⇒ el settle YA
+    // broadcasteó/verificó on-chain y responde 200, NUNCA un 500 crudo. Mata la mutación catch→throw.
+    it("BLQ-MED-1: flag ON + SUPABASE_URL malformada ⇒ ledger real degrada a null ⇒ settle 200 (NUNCA 500 crudo)", async () => {
+      const actual = await vi.importActual<
+        typeof import("../../../../src/infrastructure/persistence/supabase-settlement-ledger")
+      >("../../../../src/infrastructure/persistence/supabase-settlement-ledger");
+      const { __resetSupabaseClient } = await import(
+        "../../../../src/infrastructure/persistence/supabase-server"
+      );
+      __resetSupabaseClient();
+      getLedgerMock.mockImplementation(actual.getSettlementLedger);
+      vi.stubEnv("SETTLEMENT_LEDGER_ENABLED", "true");
+      vi.stubEnv("SUPABASE_URL", "abc.supabase.co"); // sin scheme → createClient lanzaría
+      vi.stubEnv("SUPABASE_SERVICE_KEY", "svc");
+      facilitatorResponds(200, { settled: true, transactionHash: TX });
+      const res = await POST(
+        req(
+          body({
+            authorization: authorization({ nonce: GOOD_NONCE }),
+            quoteId: QID,
+            remittanceId: REMIT,
+          }),
+        ),
+      );
+      expect(res.status).toBe(200);
+      __resetSupabaseClient();
+    });
   });
 });

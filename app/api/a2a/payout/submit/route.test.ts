@@ -25,6 +25,21 @@ vi.mock("../../../../../src/infrastructure/auth/pop-nonce-store", () => ({
   claimPopNonceOnce: popClaimMock,
 }));
 
+// WKH-207: mock del ledger. getLedgerMock devuelve null por default (flag OFF ⇒ byte-idéntico); los
+// tests del flag ON lo apuntan a ledgerMock.
+const { ledgerMock, getLedgerMock } = vi.hoisted(() => ({
+  ledgerMock: {
+    recordPrincipalIn: vi.fn(),
+    recordPayoutOutcome: vi.fn(),
+    listStale: vi.fn(),
+    markOutcome: vi.fn(),
+  },
+  getLedgerMock: vi.fn(),
+}));
+vi.mock("../../../../../src/infrastructure/persistence/supabase-settlement-ledger", () => ({
+  getSettlementLedger: getLedgerMock,
+}));
+
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import {
   buildPopMessage,
@@ -76,6 +91,11 @@ beforeEach(() => {
   vi.stubEnv("VERCEL_ENV", ""); // → no-prod y no-Vercel: la simulación se acepta (DT-5 no dispara)
   vi.stubEnv("SETTLE_ATTESTATION_SECRET", ""); // → rama A1 (skip): los 19 existentes intactos
   vi.stubEnv("PAYOUT_POP_SECRET", ""); // WKH-206: guard 7 SKIP total (los tests que quieren PoP lo re-stubean)
+  // WKH-207: ledger apagado por default (flag OFF ⇒ null ⇒ byte-idéntico).
+  ledgerMock.recordPayoutOutcome.mockReset();
+  ledgerMock.recordPayoutOutcome.mockResolvedValue(undefined);
+  getLedgerMock.mockReset();
+  getLedgerMock.mockReturnValue(null);
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -808,5 +828,141 @@ describe("POST /api/a2a/payout/submit — GUARD 7: proof-of-possession (WKH-206)
     expect(await res.json()).toEqual({ error: "payout_not_authorized" }); // guard 6, NO payout_pop_unverified
     expect(agentCalls).toHaveLength(0);
     expect(popClaimMock).not.toHaveBeenCalled(); // el guard 7 ni siquiera corrió
+  });
+
+  // ── WKH-207: persistencia del outcome del forward (aditiva, owner-scoped) ──
+  describe("WKH-207 ledger (submit)", () => {
+    // fetch que responde con un result del agente con el status dado, o !ok, o throw.
+    function agentResponds(
+      kind: "settled" | "submitted" | "failed" | "blocked" | "notok" | "throw",
+    ) {
+      return vi.fn(async (_url: string, _init?: RequestInit) => {
+        if (kind === "throw") throw new Error("timeout");
+        if (kind === "notok") return { ok: false, json: async () => ({}) };
+        const terminalNoPayout = kind === "failed" || kind === "blocked";
+        return {
+          ok: true,
+          json: async () => ({
+            result: { ...validResult, status: kind, payoutId: terminalNoPayout ? null : "po-1" },
+          }),
+        };
+      });
+    }
+
+    it("AC-3: flag ON + forward settled ⇒ recordPayoutOutcome('settled') owner-scoped; response 200 intacto", async () => {
+      getLedgerMock.mockReturnValue(ledgerMock);
+      vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+      vi.stubGlobal("fetch", agentResponds("settled"));
+      const res = await POST(req(validPayload));
+      expect(res.status).toBe(200);
+      expect(ledgerMock.recordPayoutOutcome).toHaveBeenCalledTimes(1);
+      const arg = ledgerMock.recordPayoutOutcome.mock.calls[0]![0] as Record<string, unknown>;
+      expect(arg.status).toBe("settled");
+      expect(arg.idempotencyKey).toBe("r-1:cfx-1"); // CD-9: owner-scoped por (idem, sender)
+      expect(arg.senderAddress).toBe("0xSender");
+      expect(arg.payoutId).toBe("po-1");
+    });
+
+    it("AC-3: flag ON + forward submitted ⇒ status 'submitted'", async () => {
+      getLedgerMock.mockReturnValue(ledgerMock);
+      vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+      vi.stubGlobal("fetch", agentResponds("submitted"));
+      const res = await POST(req(validPayload));
+      expect(res.status).toBe(200);
+      expect(ledgerMock.recordPayoutOutcome.mock.calls[0]![0]).toMatchObject({ status: "submitted" });
+    });
+
+    it("AC-3: flag ON + upstream !ok (502) ⇒ status 'forward_error'", async () => {
+      getLedgerMock.mockReturnValue(ledgerMock);
+      vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+      vi.stubGlobal("fetch", agentResponds("notok"));
+      const res = await POST(req(validPayload));
+      expect(res.status).toBe(502);
+      expect(ledgerMock.recordPayoutOutcome.mock.calls[0]![0]).toMatchObject({
+        status: "forward_error",
+      });
+    });
+
+    it("AC-3: flag ON + timeout/catch ⇒ status 'forward_error'", async () => {
+      getLedgerMock.mockReturnValue(ledgerMock);
+      vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+      vi.stubGlobal("fetch", agentResponds("throw"));
+      const res = await POST(req(validPayload));
+      expect(res.status).toBe(502);
+      expect(ledgerMock.recordPayoutOutcome.mock.calls[0]![0]).toMatchObject({
+        status: "forward_error",
+      });
+    });
+
+    // MNR-1 (CR): forward res.ok con result.status "failed"/"blocked" ⇒ ledger status "failed" +
+    // last_error a2a_failed/a2a_blocked (rama §5, línea ~315-325). El response al cliente sigue 200.
+    it("AC-3/MNR-1: flag ON + forward result.status 'failed' ⇒ recordPayoutOutcome {status:'failed', error:'a2a_failed'}; response 200", async () => {
+      getLedgerMock.mockReturnValue(ledgerMock);
+      vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+      vi.stubGlobal("fetch", agentResponds("failed"));
+      const res = await POST(req(validPayload));
+      expect(res.status).toBe(200);
+      expect(ledgerMock.recordPayoutOutcome.mock.calls[0]![0]).toMatchObject({
+        status: "failed",
+        error: "a2a_failed",
+        payoutId: null,
+      });
+    });
+
+    it("AC-3/MNR-1: flag ON + forward result.status 'blocked' ⇒ recordPayoutOutcome {status:'failed', error:'a2a_blocked'}; response 200", async () => {
+      getLedgerMock.mockReturnValue(ledgerMock);
+      vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+      vi.stubGlobal("fetch", agentResponds("blocked"));
+      const res = await POST(req(validPayload));
+      expect(res.status).toBe(200);
+      expect(ledgerMock.recordPayoutOutcome.mock.calls[0]![0]).toMatchObject({
+        status: "failed",
+        error: "a2a_blocked",
+        payoutId: null,
+      });
+    });
+
+    it("AC-2: flag OFF ⇒ recordPayoutOutcome NUNCA llamado; response byte-idéntico", async () => {
+      // getLedgerMock devuelve null por default (beforeEach).
+      vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+      vi.stubGlobal("fetch", agentResponds("settled"));
+      const res = await POST(req(validPayload));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        result: { ...validResult, status: "settled", payoutId: "po-1" },
+      });
+      expect(ledgerMock.recordPayoutOutcome).not.toHaveBeenCalled();
+    });
+
+    it("CD-17: flag ON + recordPayoutOutcome throw ⇒ response 200 igual (best-effort)", async () => {
+      getLedgerMock.mockReturnValue(ledgerMock);
+      ledgerMock.recordPayoutOutcome.mockRejectedValue(new Error("db down"));
+      vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+      vi.stubGlobal("fetch", agentResponds("settled"));
+      const res = await POST(req(validPayload));
+      expect(res.status).toBe(200);
+    });
+
+    // BLQ-MED-1 (AR): con el getSettlementLedger REAL, flag ON + SUPABASE_URL malformada
+    // (createClient lanzaría sincrónicamente) ⇒ getSupabaseServerClient degrada a null ⇒ el forward
+    // completa y la ruta responde 200, NUNCA un 500 crudo. Mata la mutación catch→throw.
+    it("BLQ-MED-1: flag ON + SUPABASE_URL malformada ⇒ ledger real degrada a null ⇒ forward 200 (NUNCA 500 crudo)", async () => {
+      const actual = await vi.importActual<
+        typeof import("../../../../../src/infrastructure/persistence/supabase-settlement-ledger")
+      >("../../../../../src/infrastructure/persistence/supabase-settlement-ledger");
+      const { __resetSupabaseClient } = await import(
+        "../../../../../src/infrastructure/persistence/supabase-server"
+      );
+      __resetSupabaseClient();
+      getLedgerMock.mockImplementation(actual.getSettlementLedger);
+      vi.stubEnv("SETTLEMENT_LEDGER_ENABLED", "true");
+      vi.stubEnv("SUPABASE_URL", "abc.supabase.co"); // sin scheme → createClient lanzaría
+      vi.stubEnv("SUPABASE_SERVICE_KEY", "svc");
+      vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+      vi.stubGlobal("fetch", agentResponds("settled"));
+      const res = await POST(req(validPayload));
+      expect(res.status).toBe(200);
+      __resetSupabaseClient();
+    });
   });
 });

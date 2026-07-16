@@ -146,6 +146,7 @@ export interface PrincipalSettlementGateway {
     address: string;
     quoteId: string;
     expectedValueMinor: number; // quote.send.minor
+    remittanceId: string; // WKH-207 (aditivo): el cliente ya tiene s.id — habilita el ledger server-side
   }): Promise<
     | { ok: true; txHash: string; valueMinor: number; to: string; from: string; attestation: string }
     | { ok: false; reason: SettlementFailureReason }
@@ -199,6 +200,70 @@ export interface RemittanceRepository {
   // Purga TODA entry cuyo ownerAddress matchee address (mismo scoping case-insensitive que list()).
   // Best-effort desde el reset (WKH-201): borra la PII persistida del beneficiario al desconectar.
   clearByOwner(address: string): Promise<void>;
+}
+
+// ── Ledger de settlements server-side (WKH-207) ──────────────────────────────
+// Persiste la EVIDENCIA money-path del settle del principal (txHash/monto/address/quoteId/status)
+// para cerrar el residual de remesas huérfanas de WKH-168: si el browser se cierra entre principal_in
+// y un estado terminal, este ledger es la ÚNICA fuente server-side para reconciliar. NUNCA persiste
+// PII (beneficiary/documento) — CD-7. Flag-gated: la factory devuelve null con el flag OFF/envs
+// ausentes ⇒ las rutas skipean el persist ⇒ byte-idéntico (AC-2/AC-10).
+export type SettlementLedgerStatus =
+  | 'principal_in'
+  | 'submitted'
+  | 'settled'
+  | 'failed'
+  | 'forward_error'
+  | 'manual_review';
+
+export interface SettlementRecord {
+  id: string;
+  remittanceId: string;
+  quoteId: string;
+  idempotencyKey: string;
+  txHash: string;
+  chainId: number;
+  senderAddress: string;
+  receiverAddress: string;
+  valueMinor: number; // parseado desde value_minor::text (CD-12, WKH-196)
+  status: SettlementLedgerStatus;
+  attempts: number;
+  payoutId: string | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SettlementLedger {
+  // settle route (AC-1): upsert por tx_hash (ON CONFLICT DO NOTHING), status principal_in.
+  recordPrincipalIn(input: {
+    remittanceId: string;
+    quoteId: string;
+    idempotencyKey: string;
+    txHash: string;
+    chainId: number;
+    senderAddress: string;
+    receiverAddress: string;
+    valueMinor: number;
+  }): Promise<void>;
+  // submit route (AC-3): UPDATE owner-scoped por (idempotencyKey, senderAddress).
+  recordPayoutOutcome(input: {
+    idempotencyKey: string;
+    senderAddress: string;
+    status: SettlementLedgerStatus;
+    payoutId?: string | null;
+    error?: string | null;
+  }): Promise<void>;
+  // reconcile (AC-4): no-terminales más viejas que olderThanIso. Global (admin) — sin owner filter.
+  listStale(input: { olderThanIso: string; limit: number }): Promise<SettlementRecord[]>;
+  // reconcile (AC-6): incrementa attempts + set status/last_error. Por id.
+  markOutcome(input: {
+    id: string;
+    status: SettlementLedgerStatus;
+    payoutId?: string | null;
+    error?: string | null;
+    incrementAttempt: boolean;
+  }): Promise<void>;
 }
 
 // ── Utilidades inyectables (nada de Date.now/Math.random en el dominio) ──────

@@ -73,6 +73,7 @@ export class HttpSettlementGateway implements PrincipalSettlementGateway {
     address: string;
     quoteId: string;
     expectedValueMinor: number;
+    remittanceId: string; // WKH-207 (aditivo): server-only, para el ledger. Con flag OFF se ignora.
   }): Promise<
     | { ok: true; txHash: string; valueMinor: number; to: string; from: string; attestation: string }
     | { ok: false; reason: SettlementFailureReason }
@@ -90,6 +91,7 @@ export class HttpSettlementGateway implements PrincipalSettlementGateway {
           address: input.address,
           quoteId: input.quoteId,
           expectedValueMinor: input.expectedValueMinor,
+          remittanceId: input.remittanceId, // WKH-207: aditivo; server lo usa sólo con el flag ON
         }),
       });
     } catch {

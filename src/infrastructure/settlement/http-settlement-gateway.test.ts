@@ -23,6 +23,7 @@ const input = {
   address: SENDER,
   quoteId: "q-400",
   expectedValueMinor: VALUE,
+  remittanceId: "rem-1", // WKH-207 (aditivo)
 };
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -59,6 +60,8 @@ describe("HttpSettlementGateway (WKH-168)", () => {
     const sent = JSON.parse(init.body as string);
     expect(sent.authorization).toEqual(authorization);
     expect(sent.expectedValueMinor).toBe(VALUE);
+    // WKH-207: el remittanceId viaja aditivo en el body (server lo usa sólo con el ledger ON).
+    expect(sent.remittanceId).toBe("rem-1");
     // CD-16: todo string canónico ⇒ JSON.stringify no puede tirar TypeError por un bigint.
     expect(typeof sent.authorization.value).toBe("string");
   });

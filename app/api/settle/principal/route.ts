@@ -15,8 +15,9 @@
 // Guard-order OBLIGATORIO (espeja submit/route.ts): flag → config → env → body → formato → binding
 // (monto/receiver/sender) → broadcast → verify → attest.
 import { NextResponse } from "next/server";
-import { isAddress, isAddressEqual } from "viem";
+import { isAddress, isAddressEqual, keccak256, toBytes } from "viem";
 import { resolveChainId, resolveReceiverAddress, resolveUsdcAddress } from "../../../../src/infrastructure/chain";
+import { getSettlementLedger } from "../../../../src/infrastructure/persistence/supabase-settlement-ledger";
 import {
   ATTESTATION_TTL_SECONDS,
   issueSettlementAttestation,
@@ -200,6 +201,40 @@ export async function POST(req: Request): Promise<Response> {
     // Sin SETTLE_ATTESTATION_SECRET no podemos atestiguar. El principal YA está adentro (varado →
     // WKH-207), pero NO inventamos una atestación: fail-closed (CD-12).
     return NextResponse.json({ error: "settle_misconfigured" }, { status: 500 });
+  }
+
+  // ── WKH-207: persistencia server-side ADITIVA (post-V9, best-effort). ────────────────────────────
+  // Flag-gated: getSettlementLedger() es null con el flag OFF/envs ausentes ⇒ SKIP TOTAL ⇒ el settle
+  // responde byte-idéntico (AC-2/AC-10). NUNCA toca S1-V9 (CD-4). En su PROPIO try/catch: si la DB
+  // cae, se loguea un enum sin PII y el money-path responde IGUAL (CD-17). CD-13: se escriben los
+  // valores VERIFICADOS on-chain (verified.*), NUNCA un eco del body del cliente.
+  const ledger = getSettlementLedger();
+  if (ledger) {
+    try {
+      const remittanceId = parsed.remittanceId;
+      if (typeof remittanceId === "string" && remittanceId.trim()) {
+        // Binding nonce OPCIONAL (defensa en profundidad, DT-3): el nonce EIP-3009 es determinístico
+        // = keccak256(`${remittanceId}:${quoteId}`) (wallet.ts:37-39). Si el remittanceId declarado
+        // NO reproduce el nonce firmado, NO persistimos esa fila (log) — el settle YA respondió OK.
+        const expectedNonce = keccak256(toBytes(`${remittanceId}:${quoteId}`));
+        if (expectedNonce.toLowerCase() !== nonce.toLowerCase()) {
+          console.error("[ledger] recordPrincipalIn_nonce_mismatch");
+        } else {
+          await ledger.recordPrincipalIn({
+            remittanceId,
+            quoteId,
+            idempotencyKey: `${remittanceId}:${quoteId}`,
+            txHash: verified.txHash,
+            chainId,
+            senderAddress: verified.from, // CD-13: valores VERIFICADOS, no el body
+            receiverAddress: verified.to,
+            valueMinor: verified.valueMinor,
+          });
+        }
+      }
+    } catch (e) {
+      console.error("[ledger] recordPrincipalIn_failed", e); // best-effort, NUNCA rompe (CD-17/DT-5)
+    }
   }
 
   // Solo hechos públicos (CD-17): txHash y montos. NUNCA la signature, la API key, la base URL ni el RPC.

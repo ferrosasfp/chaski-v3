@@ -32,6 +32,9 @@ import type {
   RefundGateway,
   RemittanceRepository,
   SettlementFailureReason,
+  SettlementLedger,
+  SettlementLedgerStatus,
+  SettlementRecord,
   WalletPort,
 } from "../application/ports";
 
@@ -366,6 +369,7 @@ export class FakeSettlementGateway implements PrincipalSettlementGateway {
     address: string;
     quoteId: string;
     expectedValueMinor: number;
+    remittanceId: string;
   }> = [];
   constructor(
     private readonly result: FakeSettleResult = {
@@ -384,10 +388,103 @@ export class FakeSettlementGateway implements PrincipalSettlementGateway {
     address: string;
     quoteId: string;
     expectedValueMinor: number;
+    remittanceId: string;
   }): Promise<FakeSettleResult> {
     this.calls.push(input);
     if (this.mode === "reject") throw new Error("settlement_boom");
     return this.result;
+  }
+}
+
+// Ledger de settlements fake (WKH-207). In-memory (molde de InMemoryRepo). recordPrincipalIn es
+// idempotente por tx_hash (ON CONFLICT DO NOTHING); recordPayoutOutcome muta owner-scoped por
+// (idempotencyKey, senderAddress); listStale filtra no-terminales < olderThanIso; markOutcome muta
+// por id. Los estados NO-terminales candidatos a varado son principal_in/submitted/forward_error.
+const STALE_STATUSES: readonly SettlementLedgerStatus[] = [
+  "principal_in",
+  "submitted",
+  "forward_error",
+];
+
+export class FakeSettlementLedger implements SettlementLedger {
+  public store = new Map<string, SettlementRecord>();
+  private seq = 0;
+  constructor(private nowIso: string = T0) {}
+
+  async recordPrincipalIn(input: {
+    remittanceId: string;
+    quoteId: string;
+    idempotencyKey: string;
+    txHash: string;
+    chainId: number;
+    senderAddress: string;
+    receiverAddress: string;
+    valueMinor: number;
+  }): Promise<void> {
+    // ON CONFLICT DO NOTHING por tx_hash: un settle reintentado a nivel red = una sola fila.
+    for (const r of this.store.values()) {
+      if (r.txHash === input.txHash) return;
+    }
+    const id = `settle-${++this.seq}`;
+    this.store.set(id, {
+      id,
+      remittanceId: input.remittanceId,
+      quoteId: input.quoteId,
+      idempotencyKey: input.idempotencyKey,
+      txHash: input.txHash,
+      chainId: input.chainId,
+      senderAddress: input.senderAddress.toLowerCase(),
+      receiverAddress: input.receiverAddress.toLowerCase(),
+      valueMinor: input.valueMinor,
+      status: "principal_in",
+      attempts: 0,
+      payoutId: null,
+      lastError: null,
+      createdAt: this.nowIso,
+      updatedAt: this.nowIso,
+    });
+  }
+
+  async recordPayoutOutcome(input: {
+    idempotencyKey: string;
+    senderAddress: string;
+    status: SettlementLedgerStatus;
+    payoutId?: string | null;
+    error?: string | null;
+  }): Promise<void> {
+    const owner = input.senderAddress.toLowerCase();
+    for (const r of this.store.values()) {
+      // CD-9: owner-scoped — otro sender NO puede mutar esta fila.
+      if (r.idempotencyKey === input.idempotencyKey && r.senderAddress === owner) {
+        r.status = input.status;
+        if (input.payoutId !== undefined) r.payoutId = input.payoutId;
+        if (input.error !== undefined) r.lastError = input.error;
+        r.updatedAt = this.nowIso;
+      }
+    }
+  }
+
+  async listStale(input: { olderThanIso: string; limit: number }): Promise<SettlementRecord[]> {
+    return [...this.store.values()]
+      .filter((r) => STALE_STATUSES.includes(r.status) && r.updatedAt < input.olderThanIso)
+      .slice(0, input.limit)
+      .map((r) => ({ ...r }));
+  }
+
+  async markOutcome(input: {
+    id: string;
+    status: SettlementLedgerStatus;
+    payoutId?: string | null;
+    error?: string | null;
+    incrementAttempt: boolean;
+  }): Promise<void> {
+    const r = this.store.get(input.id);
+    if (!r) return;
+    r.status = input.status;
+    if (input.payoutId !== undefined) r.payoutId = input.payoutId;
+    if (input.error !== undefined) r.lastError = input.error;
+    if (input.incrementAttempt) r.attempts += 1;
+    r.updatedAt = this.nowIso;
   }
 }
 

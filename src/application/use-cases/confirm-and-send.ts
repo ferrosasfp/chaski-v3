@@ -142,6 +142,7 @@ export class ConfirmAndSend {
           address: address ?? "", // misma coerción que authority.authorize()
           quoteId: quote.quoteId,
           expectedValueMinor: quote.send.minor,
+          remittanceId: s.id, // WKH-207 (CD-5): único arg aditivo — habilita el ledger server-side
         });
       } catch {
         // C3 — CD-12: ninguna excepción escapa. Red caída/bug ⇒ bloquear (el principal NO entró, o

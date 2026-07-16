@@ -28,7 +28,9 @@
 // reconciliación server-side).
 import { NextResponse } from "next/server";
 import { verifyMessage } from "viem";
+import type { SettlementLedgerStatus } from "../../../../../src/application/ports";
 import { Money } from "../../../../../src/domain/money";
+import { getSettlementLedger } from "../../../../../src/infrastructure/persistence/supabase-settlement-ledger";
 import { verifyPopChallenge, buildPopMessage } from "../../../../../src/infrastructure/auth/pop-challenge";
 import { claimPopNonceOnce } from "../../../../../src/infrastructure/auth/pop-nonce-store";
 import { resolveChainId } from "../../../../../src/infrastructure/chain";
@@ -262,7 +264,35 @@ export async function POST(req: Request): Promise<Response> {
       return NextResponse.json({ error: "payout_settlement_unavailable" }, { status: 503 });
     }
   }
-  // A10 — todo OK → forward (bloque intacto).
+  // ── WKH-207: persistencia del outcome del forward (aditiva, best-effort, owner-scoped). ──────────
+  // Flag-gated: getSettlementLedger() null con flag OFF/envs ausentes ⇒ SKIP TOTAL ⇒ response
+  // byte-idéntico (AC-2/AC-10). NUNCA toca los guards 1-8 (CD-3) ni cambia la respuesta. En su propio
+  // try/catch: la DB no rompe el money-path (CD-17). CD-9: owner = `address` (ya validado). NUNCA
+  // persiste PII (solo idempotencyKey + status/enum, CD-7).
+  const ledger = getSettlementLedger();
+  const persistOutcome = async (
+    status: SettlementLedgerStatus,
+    payoutId: string | null,
+    error: string | null,
+  ): Promise<void> => {
+    if (!ledger) return; // flag OFF ⇒ byte-idéntico
+    try {
+      const idempotencyKey = typeof body.idempotencyKey === "string" ? body.idempotencyKey : "";
+      if (idempotencyKey) {
+        await ledger.recordPayoutOutcome({
+          idempotencyKey,
+          senderAddress: address,
+          status,
+          payoutId,
+          error,
+        });
+      }
+    } catch (e) {
+      console.error("[ledger] recordPayoutOutcome_failed", e); // best-effort, NUNCA rompe (CD-17)
+    }
+  };
+
+  // A10 — todo OK → forward (bloque intacto salvo el side-effect aditivo del ledger antes de cada return).
 
   try {
     const res = await fetch(`${BASE}/api/agents/remit-cashout-payout/invoke`, {
@@ -271,14 +301,33 @@ export async function POST(req: Request): Promise<Response> {
       body: JSON.stringify(body), // idempotencyKey/beneficiary forwardeados tal cual (CD-10)
       signal: AbortSignal.timeout(10_000),
     });
-    if (!res.ok) return NextResponse.json({ error: "a2a_upstream_error" }, { status: 502 });
+    if (!res.ok) {
+      await persistOutcome("forward_error", null, "a2a_upstream_error");
+      return NextResponse.json({ error: "a2a_upstream_error" }, { status: 502 });
+    }
     const { result } = (await res.json()) as { result: unknown };
     if (!isValidPayoutResult(result)) {
+      await persistOutcome("forward_error", null, "a2a_bad_shape");
       return NextResponse.json({ error: "a2a_bad_shape" }, { status: 502 });
     }
+    // Mapeo forward-result → status del ledger (AC-3, tabla §5). settled/submitted directos;
+    // failed/blocked → failed. isValidPayoutResult ya garantizó el shape (status + payoutId).
+    const okResult = result as { status: string; payoutId: string | null };
+    const mapped: SettlementLedgerStatus =
+      okResult.status === "settled"
+        ? "settled"
+        : okResult.status === "submitted"
+          ? "submitted"
+          : "failed";
+    await persistOutcome(
+      mapped,
+      okResult.payoutId,
+      mapped === "failed" ? `a2a_${okResult.status}` : null,
+    );
     return NextResponse.json({ result }, { status: 200 }); // sólo el result (nunca BASE ni PII)
   } catch {
     // timeout/DNS/parse → 502 opaco (nunca 500 crudo, nunca ecoa el beneficiary)
+    await persistOutcome("forward_error", null, "a2a_unavailable");
     return NextResponse.json({ error: "a2a_unavailable" }, { status: 502 });
   }
 }

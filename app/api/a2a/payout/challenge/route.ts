@@ -14,9 +14,15 @@ import {
   buildPopMessage,
   issuePopChallenge,
 } from "../../../../../src/infrastructure/auth/pop-challenge";
+import {
+  PAYOUT_CHALLENGE_RL,
+  checkRouteRateLimit,
+  clientIp,
+} from "../../../../../src/infrastructure/rate-limit";
 
+// CD-5/MNR-5: excluye arrays.
 function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
+  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 export async function POST(req: Request): Promise<Response> {
@@ -24,6 +30,19 @@ export async function POST(req: Request): Promise<Response> {
   if (!POP_SECRET) {
     // Mecanismo apagado (default): el cliente lo trata como skip.
     return NextResponse.json({ error: "pop_not_configured" }, { status: 501 });
+  }
+
+  // WKH-205 AC-5/AC-6/CD-9: rate-limit IP-only, TRAS el 501 de POP_SECRET y ANTES de parsear el body
+  // / emitir el HMAC (CPU-DoS). IP-only: el body (y el address) aún no se parsean acá.
+  const rl = await checkRouteRateLimit(PAYOUT_CHALLENGE_RL, { ip: clientIp(req) });
+  if (rl.unavailable) {
+    return NextResponse.json({ error: "pop_rate_limit_unavailable" }, { status: 503 }); // AC-6 fail-closed
+  }
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: "pop_rate_limited" },
+      { status: 429, headers: { "Retry-After": String(rl.retryAfter ?? 60) } },
+    );
   }
 
   // BLQ-BAJO-1 (auto-blindaje WKH-202): req.json() RESUELVE con `null` para el literal `null` → el

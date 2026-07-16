@@ -5,6 +5,17 @@ import {
   buildPopMessage,
   verifyPopChallenge,
 } from "../../../../../src/infrastructure/auth/pop-challenge";
+
+// WKH-205: el rate-limit IP-only corre tras el 501 de POP_SECRET. Los tests no fijan Upstash env
+// (fail-closed → 503) → mockeamos checkRouteRateLimit a { ok:true } por default y lo overrideamos en
+// AC-5 (!ok → 429) / AC-6 (unavailable → 503). clientIp/PAYOUT_CHALLENGE_RL se conservan reales.
+const { checkRouteRateLimitMock } = vi.hoisted(() => ({ checkRouteRateLimitMock: vi.fn() }));
+vi.mock("../../../../../src/infrastructure/rate-limit", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../../../src/infrastructure/rate-limit")>();
+  return { ...actual, checkRouteRateLimit: checkRouteRateLimitMock };
+});
+
 import { POST } from "./route";
 
 const ADDR = "0x1111111111111111111111111111111111111111";
@@ -20,6 +31,8 @@ function req(payload: unknown): Request {
 describe("POST /api/a2a/payout/challenge (WKH-206)", () => {
   beforeEach(() => {
     vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "43113");
+    checkRouteRateLimitMock.mockReset();
+    checkRouteRateLimitMock.mockResolvedValue({ ok: true }); // default: rate-limit permite el paso
   });
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -67,5 +80,27 @@ describe("POST /api/a2a/payout/challenge (WKH-206)", () => {
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({ error: "pop_invalid_request" });
     }
+  });
+
+  it("WKH-205 AC-5: rate-limit !ok (con POP_SECRET) → 429, NINGÚN challenge/HMAC emitido", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", "test-secret");
+    checkRouteRateLimitMock.mockResolvedValue({ ok: false, retryAfter: 45 });
+    const res = await POST(req({ address: ADDR }));
+    expect(res.status).toBe(429);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toEqual({ error: "pop_rate_limited" });
+    // No se emitió challenge: la respuesta no contiene popChallenge/popMessage.
+    expect(body.popChallenge).toBeUndefined();
+    expect(res.headers.get("Retry-After")).toBe("45");
+  });
+
+  it("WKH-205 AC-6: Upstash ausente (con POP_SECRET) → 503 fail-closed, NINGÚN challenge emitido", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", "test-secret");
+    checkRouteRateLimitMock.mockResolvedValue({ ok: false, unavailable: true });
+    const res = await POST(req({ address: ADDR }));
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toEqual({ error: "pop_rate_limit_unavailable" });
+    expect(body.popChallenge).toBeUndefined();
   });
 });

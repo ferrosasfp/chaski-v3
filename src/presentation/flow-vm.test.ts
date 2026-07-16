@@ -135,4 +135,10 @@ describe("flow-vm — humanError", () => {
     expect(humanError("payout_failed")).toContain("reembolsamos");
     expect(humanError("otra_cosa")).toBe("Algo salió mal. Intentá de nuevo.");
   });
+
+  it("WKH-205 AC-7: kyc_not_authorized (colapsado) mapea igual que kyc_not_approved → cliente observable byte-idéntico", () => {
+    expect(humanError("kyc_not_authorized")).toBe("No pudimos verificar tu identidad.");
+    // == humanError("kyc_not_approved"): el colapso del oráculo es invisible al cliente legítimo.
+    expect(humanError("kyc_not_authorized")).toBe(humanError("kyc_not_approved"));
+  });
 });

@@ -37,7 +37,7 @@ import { verifySettlementAttestation } from "../../../../../src/infrastructure/s
 import { claimAttestationOnce } from "../../../../../src/infrastructure/settlement/attestation-store";
 
 function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
+  return typeof v === "object" && v !== null && !Array.isArray(v); // MNR-5: excluye arrays
 }
 
 // Shape mínimo esperado del result del agente (validación defensiva, sin any).

@@ -211,7 +211,7 @@ describe("POST /api/a2a/payout/submit — enforcement server-side del payout (WK
   // .catch() no disparaba y el acceso al campo tiraba un TypeError FUERA del try → 500 crudo. Los
   // otros no-record ([], 123, "str") ya daban 400 (acceso a campo sobre ellos = undefined); se
   // incluyen igual para fijar el contrato: NINGÚN body no-record llega al fetch.
-  it.each([
+  it.each<[string, unknown]>([
     ["null", null],
     ["array", []],
     ["number", 123],

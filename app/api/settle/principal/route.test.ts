@@ -485,7 +485,7 @@ describe("POST /api/settle/principal (WKH-168)", () => {
       getLedgerMock.mockImplementation(actual.getSettlementLedger);
       vi.stubEnv("SETTLEMENT_LEDGER_ENABLED", "true");
       vi.stubEnv("SUPABASE_URL", "abc.supabase.co"); // sin scheme → createClient lanzaría
-      vi.stubEnv("SUPABASE_SERVICE_KEY", "svc");
+      vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "svc");
       facilitatorResponds(200, { settled: true, transactionHash: TX });
       const res = await POST(
         req(

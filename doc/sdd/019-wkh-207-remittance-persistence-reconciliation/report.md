@@ -81,6 +81,6 @@ Nuevos: ledger 8, settle +4, submit +8, reconcile 13. Mutation self-check: 4 mut
 ## Checklist ops antes de encender (va a Task #35)
 
 1. Crear la org Supabase FREE de chaski-v2 + proyecto; aplicar la migración `20260716T000000_...sql`.
-2. Setear `SUPABASE_URL` (con `https://`), `SUPABASE_SERVICE_KEY`, `SETTLEMENT_LEDGER_ENABLED=true`, `RECONCILE_ADMIN_SECRET`, `RECONCILE_STALE_THRESHOLD_SECONDS`.
+2. Setear `SUPABASE_URL` (con `https://`), `SUPABASE_SERVICE_ROLE_KEY`, `SETTLEMENT_LEDGER_ENABLED=true`, `RECONCILE_ADMIN_SECRET`, `RECONCILE_STALE_THRESHOLD_SECONDS`.
 3. Free tier: los proyectos free se auto-pausan tras ~7d de inactividad → subir a Pro al encender el money-path real.
 4. Programar el trigger del reconcile (cron) o correrlo manualmente con el secreto.

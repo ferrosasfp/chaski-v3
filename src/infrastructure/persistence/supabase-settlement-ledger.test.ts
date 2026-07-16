@@ -176,21 +176,21 @@ describe("getSettlementLedger factory (WKH-207 AC-10/CD-14)", () => {
   it("flag OFF ⇒ null (byte-idéntico, aunque las envs estén)", () => {
     vi.stubEnv("SETTLEMENT_LEDGER_ENABLED", "");
     vi.stubEnv("SUPABASE_URL", "https://x.supabase.co");
-    vi.stubEnv("SUPABASE_SERVICE_KEY", "svc");
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "svc");
     expect(getSettlementLedger()).toBeNull();
   });
 
   it("flag ON pero envs de Supabase ausentes ⇒ null (degrada con gracia)", () => {
     vi.stubEnv("SETTLEMENT_LEDGER_ENABLED", "true");
     vi.stubEnv("SUPABASE_URL", "");
-    vi.stubEnv("SUPABASE_SERVICE_KEY", "");
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "");
     expect(getSettlementLedger()).toBeNull();
   });
 
   it("flag ON + envs presentes ⇒ instancia del ledger", () => {
     vi.stubEnv("SETTLEMENT_LEDGER_ENABLED", "true");
     vi.stubEnv("SUPABASE_URL", "https://x.supabase.co");
-    vi.stubEnv("SUPABASE_SERVICE_KEY", "svc");
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "svc");
     expect(getSettlementLedger()).toBeInstanceOf(SupabaseSettlementLedger);
   });
 
@@ -200,7 +200,7 @@ describe("getSettlementLedger factory (WKH-207 AC-10/CD-14)", () => {
   it("flag ON + SUPABASE_URL malformada (sin scheme) ⇒ null (NO lanza, degrada como OFF)", () => {
     vi.stubEnv("SETTLEMENT_LEDGER_ENABLED", "true");
     vi.stubEnv("SUPABASE_URL", "abc.supabase.co");
-    vi.stubEnv("SUPABASE_SERVICE_KEY", "svc");
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "svc");
     expect(getSettlementLedger()).toBeNull();
   });
 });
@@ -216,20 +216,20 @@ describe("getSupabaseServerClient (WKH-207 BLQ-MED-1 — null-safe ante URL inv�
 
   it("SUPABASE_URL malformada (sin scheme) ⇒ null, NO lanza", () => {
     vi.stubEnv("SUPABASE_URL", "abc.supabase.co");
-    vi.stubEnv("SUPABASE_SERVICE_KEY", "svc");
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "svc");
     expect(() => getSupabaseServerClient()).not.toThrow();
     expect(getSupabaseServerClient()).toBeNull();
   });
 
   it("envs ausentes ⇒ null", () => {
     vi.stubEnv("SUPABASE_URL", "");
-    vi.stubEnv("SUPABASE_SERVICE_KEY", "");
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "");
     expect(getSupabaseServerClient()).toBeNull();
   });
 
   it("SUPABASE_URL válida + key ⇒ cliente Supabase (no null)", () => {
     vi.stubEnv("SUPABASE_URL", "https://x.supabase.co");
-    vi.stubEnv("SUPABASE_SERVICE_KEY", "svc");
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "svc");
     const client = getSupabaseServerClient();
     expect(client).not.toBeNull();
     expect(client?.from).toBeTypeOf("function");

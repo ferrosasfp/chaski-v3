@@ -1,5 +1,5 @@
 // Infrastructure — SettlementLedger sobre Supabase (WKH-207). SERVER-ONLY (CD-11): usa el cliente
-// de supabase-server.ts (SUPABASE_SERVICE_KEY / BYPASSRLS). PROHIBIDO importarlo desde el browser.
+// de supabase-server.ts (SUPABASE_SERVICE_ROLE_KEY / BYPASSRLS). PROHIBIDO importarlo desde el browser.
 //
 // Persiste SOLO evidencia money-path (txHash/monto/address/quoteId/status) — NUNCA PII (CD-7). El
 // guard REAL de ownership es app-layer: `.eq('sender_address', <caller>)` (CD-9), porque el service

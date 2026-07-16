@@ -168,7 +168,7 @@ create index if not exists idx_remit_settle_stale on public.remittance_settlemen
 -- Ownership lookups / RLS (AC-9).
 create index if not exists idx_remit_settle_owner on public.remittance_settlements (sender_address);
 
--- RLS defensa en profundidad (AC-9/CD-9). La app usa SUPABASE_SERVICE_KEY (BYPASSRLS) ⇒ el guard
+-- RLS defensa en profundidad (AC-9/CD-9). La app usa SUPABASE_SERVICE_ROLE_KEY (BYPASSRLS) ⇒ el guard
 -- REAL es el filtro app-layer `.eq('sender_address', <caller>)`. RLS protege ante un client anon-key.
 alter table public.remittance_settlements enable row level security;
 -- Sin policy permisiva ⇒ deny-all para roles no-service (fail-closed). El service key opera igual.
@@ -299,7 +299,7 @@ git log --oneline -5
   agregues `RECONCILE_MAX_ATTEMPTS` ni `RECONCILE_AUTO_RETRY`** — el retry-forward está fuera de scope (§8):
   ```
   SUPABASE_URL=
-  SUPABASE_SERVICE_KEY=
+  SUPABASE_SERVICE_ROLE_KEY=
   SETTLEMENT_LEDGER_ENABLED=            # "true" para encender (default OFF = byte-idéntico, CD-2)
   RECONCILE_ADMIN_SECRET=              # ausente ⇒ /reconcile-orphans responde 501 (CD-8)
   RECONCILE_STALE_THRESHOLD_SECONDS=   # default 900 (15 min)
@@ -314,7 +314,7 @@ git log --oneline -5
 ### Wave 1 — Persistence impl (depende de W0)
 - [ ] **W1.1** — Crear `src/infrastructure/persistence/supabase-server.ts`.
   **Exemplar exacto: `rate-limit.ts:33-60`.** Factory memoizada (`let cached: SupabaseClient | null = null`),
-  lee `process.env.SUPABASE_URL` + `SUPABASE_SERVICE_KEY` **DENTRO** de la fn (CD-14), `return null` si
+  lee `process.env.SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` **DENTRO** de la fn (CD-14), `return null` si
   faltan. `createClient(url, key, { auth: { persistSession: false } })`. **Server-only (CD-11).** Exportá
   también `__resetSupabaseClient()` para tests (patrón `__resetKycRateLimitClient`).
 - [ ] **W1.2** — Crear `src/infrastructure/persistence/supabase-settlement-ledger.ts`:

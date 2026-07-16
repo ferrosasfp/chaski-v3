@@ -957,7 +957,7 @@ describe("POST /api/a2a/payout/submit — GUARD 7: proof-of-possession (WKH-206)
       getLedgerMock.mockImplementation(actual.getSettlementLedger);
       vi.stubEnv("SETTLEMENT_LEDGER_ENABLED", "true");
       vi.stubEnv("SUPABASE_URL", "abc.supabase.co"); // sin scheme → createClient lanzaría
-      vi.stubEnv("SUPABASE_SERVICE_KEY", "svc");
+      vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "svc");
       vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
       vi.stubGlobal("fetch", agentResponds("settled"));
       const res = await POST(req(validPayload));

@@ -1,7 +1,7 @@
 // Infrastructure — cliente Supabase SERVER-ONLY para el ledger de settlements (WKH-207).
 //
 // ⚠️ CD-11: server-only. PROHIBIDO importarlo desde cualquier módulo "use client" / componente /
-// browser — usa SUPABASE_SERVICE_KEY (BYPASSRLS), que NUNCA debe llegar al bundle del cliente.
+// browser — usa SUPABASE_SERVICE_ROLE_KEY (BYPASSRLS), que NUNCA debe llegar al bundle del cliente.
 //
 // Patrón exemplar: rate-limit.ts:107-140 (factory lazy memoizada null-safe). Lee las envs DENTRO de
 // la función en runtime (CD-14) y devuelve null si faltan ⇒ el ledger se apaga con gracia
@@ -13,11 +13,11 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 let cached: SupabaseClient | null = null;
 
 /** Devuelve el cliente Supabase server-only, o `null` si faltan las envs (SUPABASE_URL /
- *  SUPABASE_SERVICE_KEY). Null ⇒ el ledger se apaga (CD-14: envs leídas en runtime). */
+ *  SUPABASE_SERVICE_ROLE_KEY). Null ⇒ el ledger se apaga (CD-14: envs leídas en runtime). */
 export function getSupabaseServerClient(): SupabaseClient | null {
   if (cached) return cached;
   const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_KEY;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) return null;
   // CD-17/AC-10: createClient() LANZA sincrónicamente ante una URL malformada (ej. `abc.supabase.co`
   // sin scheme — typo de deploy). Fuera del try/catch best-effort de las rutas eso sería un 500 crudo

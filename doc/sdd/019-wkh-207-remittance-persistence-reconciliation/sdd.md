@@ -165,7 +165,7 @@ create index if not exists idx_remit_settle_stale on public.remittance_settlemen
 -- Ownership lookups / RLS (AC-9).
 create index if not exists idx_remit_settle_owner on public.remittance_settlements (sender_address);
 
--- RLS defensa en profundidad (AC-9/CD-9). La app usa SUPABASE_SERVICE_KEY (BYPASSRLS) ⇒ el guard
+-- RLS defensa en profundidad (AC-9/CD-9). La app usa SUPABASE_SERVICE_ROLE_KEY (BYPASSRLS) ⇒ el guard
 -- REAL es el filtro app-layer `.eq('sender_address', <caller>)`. RLS protege ante un client anon-key.
 alter table public.remittance_settlements enable row level security;
 -- Sin policy permisiva ⇒ deny-all para roles no-service (fail-closed). El service key opera igual.
@@ -219,7 +219,7 @@ interface SettlementLedger {
 hacen `const ledger = getSettlementLedger(); if (!ledger) { /* skip, byte-idéntico */ }` (AC-2/AC-10).
 
 **Cliente Supabase server-only** (`supabase-server.ts`): factory memoizada como `rate-limit.ts` —
-lee `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` en runtime, `createClient(...)` con `auth: { persistSession:false }`,
+lee `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` en runtime, `createClient(...)` con `auth: { persistSession:false }`,
 null si faltan. **NUNCA se importa desde un módulo `"use client"`** (CD-11): vive bajo
 `src/infrastructure/persistence/` e importado solo por route handlers server.
 
@@ -497,7 +497,7 @@ es aditivo → conflicto de líneas como máximo, no de diseño.
 ### Wave 0 — Serial Gate (contratos + esquema + tipos)
 - [ ] W0.1: `supabase/migrations/<ts>_create_remittance_settlements.sql` (PENDING-DEPLOY). — §4.2
 - [ ] W0.2: `ports.ts` — `SettlementLedger` + `SettlementRecord`/`SettlementLedgerStatus`; `settle` +`remittanceId`.
-- [ ] W0.3: `.env.example` — `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SETTLEMENT_LEDGER_ENABLED`, `RECONCILE_ADMIN_SECRET`, `RECONCILE_STALE_THRESHOLD_SECONDS`. (NO `RECONCILE_MAX_ATTEMPTS` ni `RECONCILE_AUTO_RETRY`: el retry-forward está fuera de scope, §10/DT-4.)
+- [ ] W0.3: `.env.example` — `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SETTLEMENT_LEDGER_ENABLED`, `RECONCILE_ADMIN_SECRET`, `RECONCILE_STALE_THRESHOLD_SECONDS`. (NO `RECONCILE_MAX_ATTEMPTS` ni `RECONCILE_AUTO_RETRY`: el retry-forward está fuera de scope, §10/DT-4.)
 - [ ] W0.4: `fakes.ts` — `FakeSettlementLedger`.
 - Verificación: `npm run qa` (tsc).
 

@@ -2,19 +2,70 @@
 // adapters de WalletPort (InjectedWallet + WalletConnectWallet). PROHIBIDO hardcodear el
 // chainId en un adapter y config en el otro.
 import { type Chain, isAddress } from "viem";
-import { avalanche, avalancheFuji } from "viem/chains";
+import { base, baseSepolia } from "viem/chains";
 
-/** Deriva el chainId de NEXT_PUBLIC_CHAIN_ID. Solo Avalanche mainnet (43114) / Fuji (43113)
- * soportados; cualquier otra cosa (unset, "99", basura) → 43114 (prod actual, fail-safe). */
+const BASE_SEPOLIA_CHAIN_ID = 84532;
+const BASE_MAINNET_CHAIN_ID = 8453;
+
+/** Config estable por red (NO secreta, NO env-editable para name/version — DT-3). El `eip712`
+ *  coincide con el DOMAIN_SEPARATOR on-chain real (verificado, wasiai-facilitator/chains/base.ts). */
+export type NetworkConfig = {
+  chainId: number;
+  viemChain: Chain;
+  /** USDC canónico de Circle en esta red — REFERENCIA documentada (DT-4). El verifyingContract real
+   *  de la firma sigue saliendo de resolveUsdcAddress() (env-driven). Usado en tests de consistencia. */
+  canonicalUsdc: `0x${string}`;
+  /** Domain EIP-712: DEBE matchear el contrato on-chain (CD-4). Sepolia="USDC", mainnet="USD Coin". */
+  eip712: { name: string; version: string };
+  rpcEnvVar: "BASE_SEPOLIA_RPC_URL" | "BASE_MAINNET_RPC_URL";
+};
+
+const NETWORKS: Record<typeof BASE_SEPOLIA_CHAIN_ID | typeof BASE_MAINNET_CHAIN_ID, NetworkConfig> = {
+  [BASE_SEPOLIA_CHAIN_ID]: {
+    chainId: BASE_SEPOLIA_CHAIN_ID,
+    viemChain: baseSepolia,
+    canonicalUsdc: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    eip712: { name: "USDC", version: "2" }, // ← Hallazgo F0: testnet usa "USDC", NO "USD Coin"
+    rpcEnvVar: "BASE_SEPOLIA_RPC_URL",
+  },
+  [BASE_MAINNET_CHAIN_ID]: {
+    chainId: BASE_MAINNET_CHAIN_ID,
+    viemChain: base,
+    canonicalUsdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    eip712: { name: "USD Coin", version: "2" },
+    rpcEnvVar: "BASE_MAINNET_RPC_URL",
+  },
+};
+
+/** Deriva el chainId de NEXT_PUBLIC_CHAIN_ID. Solo Base mainnet (8453) / Sepolia (84532); unset o
+ *  cualquier otra cosa → 84532 (Base Sepolia, fail-safe testnet — DT-5: jamás mainnet real). */
 export function resolveChainId(): number {
   const raw = process.env.NEXT_PUBLIC_CHAIN_ID;
   const n = raw ? Number.parseInt(raw, 10) : Number.NaN;
-  return n === 43113 ? 43113 : 43114;
+  return n === BASE_MAINNET_CHAIN_ID ? BASE_MAINNET_CHAIN_ID : BASE_SEPOLIA_CHAIN_ID;
 }
 
-/** El objeto Chain de viem correspondiente al chainId resuelto (CD-9: derivado de la lib). */
+/** NetworkConfig de la red activa (acceso por clave literal — CD-7, sin object-injection). */
+export function resolveNetworkConfig(): NetworkConfig {
+  return resolveChainId() === BASE_MAINNET_CHAIN_ID
+    ? NETWORKS[BASE_MAINNET_CHAIN_ID]
+    : NETWORKS[BASE_SEPOLIA_CHAIN_ID];
+}
+
+/** El objeto Chain de viem de la red activa (CD-9: derivado de la lib). */
 export function resolveChain(): Chain {
-  return resolveChainId() === 43113 ? avalancheFuji : avalanche;
+  return resolveNetworkConfig().viemChain;
+}
+
+/** RPC READ-ONLY de la red activa (server-only). `switch` sobre la unión literal (patrón
+ *  wasiai-facilitator readRpcUrl — CD-7). undefined si la env no está → el caller fail-closea (V1). */
+export function resolveRpcUrl(): string | undefined {
+  switch (resolveNetworkConfig().rpcEnvVar) {
+    case "BASE_SEPOLIA_RPC_URL":
+      return process.env.BASE_SEPOLIA_RPC_URL;
+    case "BASE_MAINNET_RPC_URL":
+      return process.env.BASE_MAINNET_RPC_URL;
+  }
 }
 
 /** Dirección del contrato USDC para la firma EIP-3009 (WKH-186/DT-10, CD-14/CD-16). ÚNICA fuente

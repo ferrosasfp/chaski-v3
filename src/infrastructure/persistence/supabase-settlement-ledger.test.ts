@@ -71,7 +71,7 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
       quote_id: "q-1",
       idempotency_key: "rem-1:q-1",
       tx_hash: "0xtx",
-      chain_id: 43113,
+      chain_id: 84532,
       sender_address: "0xsender",
       receiver_address: "0xreceiver",
       // > 2^53: un JSON.parse crudo lo redondearía (WKH-196). Llega como STRING por el ::text.
@@ -123,7 +123,7 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
       quoteId: "q-1",
       idempotencyKey: "rem-1:q-1",
       txHash: "0xTX",
-      chainId: 43113,
+      chainId: 84532,
       senderAddress: SENDER,
       receiverAddress: "0xREceiverAddr2222222222222222222222222222",
       valueMinor: 400_000_000,

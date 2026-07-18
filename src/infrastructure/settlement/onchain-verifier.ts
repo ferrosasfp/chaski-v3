@@ -15,7 +15,7 @@
 //
 // CD-18: read-only puro. Cero wallet, cero clave privada, cero escrituras on-chain de ningún tipo.
 import { createPublicClient, http, isAddressEqual, parseEventLogs } from "viem";
-import { resolveChain, resolveUsdcAddress } from "../chain";
+import { resolveChain, resolveRpcUrl, resolveUsdcAddress } from "../chain";
 
 /** ABI mínima del evento Transfer de ERC-20. El CONTRATO no se hardcodea: sale de
  *  resolveUsdcAddress() (env-driven, fail-loud). */
@@ -56,7 +56,7 @@ export interface VerifyInput {
  */
 export async function verifySettlementOnChain(input: VerifyInput): Promise<VerifyResult> {
   // V1 — sin RPC no hay verificación posible ⇒ NO se atestigua (fail-closed, nunca "asumir que fue").
-  const rpc = process.env.AVALANCHE_RPC_URL; // CD-14: env leída dentro de la función
+  const rpc = resolveRpcUrl(); // CD-14: env (indirecta, RPC de Base por red) leída dentro de la función
   if (!rpc) return { ok: false, reason: "settle_unverified" };
 
   let usdc: `0x${string}`;

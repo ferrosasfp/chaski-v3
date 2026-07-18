@@ -14,7 +14,7 @@ const TO = "0x2222222222222222222222222222222222222222";
 function payload(over: Partial<SettlementAttestation> = {}): SettlementAttestation {
   return {
     txHash: TX,
-    chainId: 43113,
+    chainId: 84532,
     valueMinor: 400_000_000,
     from: FROM,
     to: TO,

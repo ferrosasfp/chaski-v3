@@ -30,7 +30,7 @@ import { POST } from "./route";
 const RECEIVER = "0x2222222222222222222222222222222222222222";
 const SENDER = "0x1111111111111111111111111111111111111111";
 const ATTACKER = "0x3333333333333333333333333333333333333333";
-const USDC = "0x5425890298aed601595a70ab815c96711a31bc65";
+const USDC = "0x036cbd53842c5426634e7929541ec2318f3dcf7e"; // USDC Base Sepolia canónico
 const TX = "0xaaaa000000000000000000000000000000000000000000000000000000000001";
 const NONCE = "0xbbbb000000000000000000000000000000000000000000000000000000000002";
 const VALUE = 400_000_000;
@@ -94,7 +94,7 @@ describe("POST /api/settle/principal (WKH-168)", () => {
     vi.stubEnv("FACILITATOR_API_KEY", "secret-key-123");
     vi.stubEnv("NEXT_PUBLIC_PAYOUT_RECEIVER_ADDRESS", RECEIVER);
     vi.stubEnv("NEXT_PUBLIC_USDC_CONTRACT_ADDRESS", USDC);
-    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "43113");
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "84532");
     vi.stubEnv("SETTLE_ATTESTATION_SECRET", "att-secret");
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -149,14 +149,14 @@ describe("POST /api/settle/principal (WKH-168)", () => {
     expect(sent.x402Version).toBe(2); // el NÚMERO 2 (z.literal(2)), no "2"
     expect(sent.accepted.payTo.toLowerCase()).toBe(RECEIVER); // env, NO el body
     expect(sent.accepted.asset.toLowerCase()).toBe(USDC); // env, NO el body
-    expect(sent.accepted.network).toBe("eip155:43113"); // env, NO el body
+    expect(sent.accepted.network).toBe("eip155:84532"); // env, NO el body
     expect(sent.accepted.amount).toBe(String(VALUE));
     expect(sent.accepted.extra.assetTransferMethod).toBe("eip3009");
     expect(sent.payload.authorization.nonce).toBe(NONCE);
   });
 
   it("AC-7/CD-17: la respuesta al cliente NUNCA contiene la API key, la base URL ni el RPC", async () => {
-    vi.stubEnv("AVALANCHE_RPC_URL", "https://secret-rpc.example/KEY123");
+    vi.stubEnv("BASE_SEPOLIA_RPC_URL", "https://secret-rpc.example/KEY123");
     facilitatorResponds(200, { settled: true, transactionHash: TX });
     const res = await POST(req(body()));
     const raw = JSON.stringify(await res.json());
@@ -423,7 +423,7 @@ describe("POST /api/settle/principal (WKH-168)", () => {
       expect(arg.quoteId).toBe(QID);
       expect(arg.remittanceId).toBe(REMIT);
       expect(arg.idempotencyKey).toBe(`${REMIT}:${QID}`);
-      expect(arg.chainId).toBe(43113);
+      expect(arg.chainId).toBe(84532);
     });
 
     it("AC-2: flag OFF ⇒ ledger NUNCA llamado y response byte-idéntico", async () => {

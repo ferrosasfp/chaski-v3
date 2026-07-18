@@ -14,7 +14,7 @@ const ADDR = "0x1111111111111111111111111111111111111111";
 function payload(over: Partial<PopChallenge> = {}): PopChallenge {
   return {
     address: ADDR,
-    chainId: 43113,
+    chainId: 84532,
     nonce: "abcdef0123456789abcdef0123456789",
     exp: Math.floor(NOW_MS / 1000) + 300,
     ...over,
@@ -75,13 +75,13 @@ describe("pop-challenge (WKH-206)", () => {
     // Cada payload deforme se firma con el secreto REAL (HMAC válido) para probar que la validación
     // de tipos corta igual — un HMAC bueno sobre un payload malo sigue siendo malo.
     const deformes: Record<string, unknown>[] = [
-      { address: "no-es-address", chainId: 43113, nonce: "abcdef0123456789abcdef0123456789", exp: Math.floor(NOW_MS / 1000) + 300 },
-      { address: ADDR, chainId: 43113.5, nonce: "abcdef0123456789abcdef0123456789", exp: Math.floor(NOW_MS / 1000) + 300 },
-      { address: ADDR, chainId: "43113", nonce: "abcdef0123456789abcdef0123456789", exp: Math.floor(NOW_MS / 1000) + 300 },
-      { address: ADDR, chainId: 43113, nonce: "SHORT", exp: Math.floor(NOW_MS / 1000) + 300 },
-      { address: ADDR, chainId: 43113, nonce: "ABCDEF0123456789ABCDEF0123456789", exp: Math.floor(NOW_MS / 1000) + 300 }, // uppercase → no matchea /^[0-9a-f]{32}$/
-      { address: ADDR, chainId: 43113, nonce: 12345, exp: Math.floor(NOW_MS / 1000) + 300 },
-      { address: ADDR, chainId: 43113, nonce: "abcdef0123456789abcdef0123456789", exp: "later" },
+      { address: "no-es-address", chainId: 84532, nonce: "abcdef0123456789abcdef0123456789", exp: Math.floor(NOW_MS / 1000) + 300 },
+      { address: ADDR, chainId: 84532.5, nonce: "abcdef0123456789abcdef0123456789", exp: Math.floor(NOW_MS / 1000) + 300 },
+      { address: ADDR, chainId: "84532", nonce: "abcdef0123456789abcdef0123456789", exp: Math.floor(NOW_MS / 1000) + 300 },
+      { address: ADDR, chainId: 84532, nonce: "SHORT", exp: Math.floor(NOW_MS / 1000) + 300 },
+      { address: ADDR, chainId: 84532, nonce: "ABCDEF0123456789ABCDEF0123456789", exp: Math.floor(NOW_MS / 1000) + 300 }, // uppercase → no matchea /^[0-9a-f]{32}$/
+      { address: ADDR, chainId: 84532, nonce: 12345, exp: Math.floor(NOW_MS / 1000) + 300 },
+      { address: ADDR, chainId: 84532, nonce: "abcdef0123456789abcdef0123456789", exp: "later" },
     ];
     for (const deforme of deformes) {
       const payloadB64 = Buffer.from(JSON.stringify(deforme), "utf8").toString("base64url");

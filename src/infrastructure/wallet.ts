@@ -4,7 +4,13 @@ import { createWalletClient, custom, isAddress, keccak256, toBytes, toHex } from
 import type { Eip3009Authorization, WalletPort } from "../application/ports";
 import type { Quote } from "../domain/remittance";
 import { isParseableIso } from "../domain/remittance";
-import { resolveChain, resolveChainId, resolveReceiverAddress, resolveUsdcAddress } from "./chain";
+import {
+  resolveChain,
+  resolveChainId,
+  resolveNetworkConfig,
+  resolveReceiverAddress,
+  resolveUsdcAddress,
+} from "./chain";
 
 // EIP-712 types de transferWithAuthorization (EIP-3009). Compartido por ambos wallets reales.
 const TRANSFER_WITH_AUTHORIZATION_TYPES = {
@@ -92,9 +98,18 @@ export class InjectedWallet implements WalletPort {
       const nonce = deterministicNonce(remittanceId, quote.quoteId); // CD-19: NO random (WKH-168)
       if (!isParseableIso(quote.expiresAt)) throw new Error("quote_expires_at_invalid"); // WKH-198 AC-5 (CD-8: fail LOUD)
       const validBefore = BigInt(Math.floor(Date.parse(quote.expiresAt) / 1000));
+      // CD-4/AC-10: domain EIP-712 por red (name/version del DOMAIN_SEPARATOR on-chain real, NO
+      // hardcodeado). Base Sepolia = "USDC", Base mainnet = "USD Coin". net.chainId === resolveChainId()
+      // ⇒ fuente única, sin drift entre el chainId de la firma y la red activa.
+      const net = resolveNetworkConfig();
       const sig = await client.signTypedData({
         account: this.address,
-        domain: { name: "USD Coin", version: "2", chainId: resolveChainId(), verifyingContract: usdc },
+        domain: {
+          name: net.eip712.name,
+          version: net.eip712.version,
+          chainId: net.chainId,
+          verifyingContract: usdc,
+        },
         types: TRANSFER_WITH_AUTHORIZATION_TYPES,
         primaryType: "TransferWithAuthorization",
         message: {
@@ -181,7 +196,7 @@ export class WalletConnectWallet implements WalletPort {
     const { EthereumProvider } = await import("@walletconnect/ethereum-provider");
     const p = await EthereumProvider.init({
       projectId: this.projectId,
-      chains: [resolveChainId()], // Avalanche (AC-7/CD-5: única fuente env-driven)
+      chains: [resolveChainId()], // Base (AC-7/CD-5: única fuente env-driven)
       showQrModal: true, // QR en desktop, deep-link a la wallet en móvil
       qrModalOptions: { themeMode: "light" }, // evita el modal negro-sobre-negro
       metadata: {
@@ -237,9 +252,18 @@ export class WalletConnectWallet implements WalletPort {
       const nonce = deterministicNonce(remittanceId, quote.quoteId); // CD-19: NO random (WKH-168)
       if (!isParseableIso(quote.expiresAt)) throw new Error("quote_expires_at_invalid"); // WKH-198 AC-5 (CD-8: fail LOUD)
       const validBefore = BigInt(Math.floor(Date.parse(quote.expiresAt) / 1000));
+      // CD-4/AC-10: domain EIP-712 por red (name/version del DOMAIN_SEPARATOR on-chain real, NO
+      // hardcodeado). Base Sepolia = "USDC", Base mainnet = "USD Coin". net.chainId === resolveChainId()
+      // ⇒ fuente única, sin drift entre el chainId de la firma y la red activa.
+      const net = resolveNetworkConfig();
       const sig = await client.signTypedData({
         account: this.address,
-        domain: { name: "USD Coin", version: "2", chainId: resolveChainId(), verifyingContract: usdc },
+        domain: {
+          name: net.eip712.name,
+          version: net.eip712.version,
+          chainId: net.chainId,
+          verifyingContract: usdc,
+        },
         types: TRANSFER_WITH_AUTHORIZATION_TYPES,
         primaryType: "TransferWithAuthorization",
         message: {

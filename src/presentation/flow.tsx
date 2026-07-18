@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Quote, RemittanceState, PayoutMethod } from "../domain/remittance";
 import { Remittance } from "../domain/remittance"; // WKH-187: rehydrate/isQuoteStillValid en el resume (CD-11)
 import { createContainer, type Container } from "../composition/container";
+import { resolveChain } from "../infrastructure/chain"; // WKH-209: nombre de la red activa (env-driven, NEXT_PUBLIC_)
 import { deliveredDisplay, humanError, isDemoMode, isFallbackWalletAddress } from "./flow-vm";
 import { Button, Card, ChaskiMark, Field, Pill, Row, Stepper, TextInput } from "./ui";
 
@@ -533,7 +534,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                   <p className="text-xs text-verde/80">Vas a enviar</p>
                   <p className="tabular text-lg font-extrabold text-verde">
                     {rem ? rem.sendUsd.format() : "—"}{" "}
-                    <span className="text-sm font-medium">en Avalanche</span>
+                    <span className="text-sm font-medium">en {resolveChain().name}</span>
                   </p>
                 </div>
               </Card>

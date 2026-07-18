@@ -30,7 +30,7 @@ function req(payload: unknown): Request {
 
 describe("POST /api/a2a/payout/challenge (WKH-206)", () => {
   beforeEach(() => {
-    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "43113");
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "84532");
     checkRouteRateLimitMock.mockReset();
     checkRouteRateLimitMock.mockResolvedValue({ ok: true }); // default: rate-limit permite el paso
   });
@@ -58,7 +58,7 @@ describe("POST /api/a2a/payout/challenge (WKH-206)", () => {
     const ch = verifyPopChallenge(popChallenge, Date.now());
     expect(ch).not.toBeNull();
     expect(ch?.address).toBe(ADDR.toLowerCase()); // normalizado a lowercase
-    expect(ch?.chainId).toBe(43113); // CD-9: de la ENV, no del body
+    expect(ch?.chainId).toBe(84532); // CD-9: de la ENV, no del body
     expect(ch?.exp).toBe(exp);
     // El popMessage es EXACTAMENTE buildPopMessage(ch) (CD-10: única fuente del formato).
     expect(popMessage).toBe(buildPopMessage(ch!));

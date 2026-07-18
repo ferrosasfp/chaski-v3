@@ -13,7 +13,7 @@ vi.mock("viem", async (importOriginal) => {
 
 import { verifySettlementOnChain } from "./onchain-verifier";
 
-const USDC = "0x5425890298aed601595a70ab815c96711a31bc65"; // USDC Fuji canónico
+const USDC = "0x036cbd53842c5426634e7929541ec2318f3dcf7e"; // USDC Base Sepolia canónico
 const OTHER_TOKEN = "0x9999999999999999999999999999999999999999";
 const SENDER = "0x1111111111111111111111111111111111111111";
 const RECEIVER = "0x2222222222222222222222222222222222222222";
@@ -44,9 +44,9 @@ const input = {
 
 describe("onchain-verifier (WKH-168) — verificación INDEPENDIENTE del broadcaster", () => {
   beforeEach(() => {
-    vi.stubEnv("AVALANCHE_RPC_URL", "https://rpc.example/fuji");
+    vi.stubEnv("BASE_SEPOLIA_RPC_URL", "https://rpc.example/base-sepolia");
     vi.stubEnv("NEXT_PUBLIC_USDC_CONTRACT_ADDRESS", USDC);
-    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "43113");
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "84532");
     getReceiptMock.mockReset();
   });
   afterEach(() => {
@@ -65,8 +65,18 @@ describe("onchain-verifier (WKH-168) — verificación INDEPENDIENTE del broadca
     expect(r.to.toLowerCase()).toBe(RECEIVER);
   });
 
-  it("V1: sin AVALANCHE_RPC_URL ⇒ settle_unverified SIN leer la cadena (fail-closed)", async () => {
-    vi.stubEnv("AVALANCHE_RPC_URL", "");
+  it("V1/AC-11: sin BASE_SEPOLIA_RPC_URL (RPC de Base ausente) ⇒ settle_unverified SIN leer la cadena (fail-closed)", async () => {
+    vi.stubEnv("BASE_SEPOLIA_RPC_URL", "");
+    const r = await verifySettlementOnChain(input);
+    expect(r).toEqual({ ok: false, reason: "settle_unverified" });
+    expect(getReceiptMock).not.toHaveBeenCalled();
+  });
+
+  it("AC-6 KILLER: AVALANCHE_RPC_URL seteado pero BASE_SEPOLIA_RPC_URL vacío ⇒ settle_unverified SIN leer la cadena (NO lee el env viejo de Avalanche)", async () => {
+    // Prueba que resolveRpcUrl() lee el RPC de la red ACTIVA (Base), jamás el env legacy. Si algún
+    // mutante devolviera process.env.AVALANCHE_RPC_URL, este test leería la cadena y fallaría.
+    vi.stubEnv("AVALANCHE_RPC_URL", "https://rpc.example/legacy-avalanche"); // env VIEJO: NO debe leerse
+    vi.stubEnv("BASE_SEPOLIA_RPC_URL", ""); // env NUEVO de la red activa ausente
     const r = await verifySettlementOnChain(input);
     expect(r).toEqual({ ok: false, reason: "settle_unverified" });
     expect(getReceiptMock).not.toHaveBeenCalled();

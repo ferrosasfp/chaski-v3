@@ -331,7 +331,7 @@ const RECEIVER_ADDR = "0x2222222222222222222222222222222222222222";
 function attFor(over: Partial<Parameters<typeof issueSettlementAttestation>[0]> = {}): string {
   return issueSettlementAttestation({
     txHash: ATT_TX,
-    chainId: 43113,
+    chainId: 84532,
     valueMinor: 400_000_000, // == Money.of(400,"USDC").minor
     from: SENDER,
     to: RECEIVER_ADDR,
@@ -349,10 +349,10 @@ function attestedPayload(over: Record<string, unknown> = {}) {
 describe("POST /api/a2a/payout/submit — GATE G3: atestación de settlement (WKH-168)", () => {
   beforeEach(() => {
     vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
-    // A7″: el deployment corre en la MISMA cadena que firma attFor() (43113). SETUP, no assert: sin
-    // este stub, resolveChainId() cae en su default 43114 (chain.ts:12) y el camino honesto daría 403.
-    // Los tests que quieren OTRA cadena la re-stubean adentro (gana el stub más reciente).
-    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "43113");
+    // A7″: el deployment corre en la MISMA cadena que firma attFor() (Base Sepolia 84532). SETUP, no
+    // assert: sin este stub el default fail-safe de resolveChainId() (84532) coincidiría igual, pero lo
+    // fijamos explícito. Los tests que quieren OTRA cadena la re-stubean adentro (gana el stub más reciente).
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "84532");
     claimMock.mockReset();
     claimMock.mockResolvedValue({ ok: true });
   });
@@ -493,28 +493,28 @@ describe("POST /api/a2a/payout/submit — GATE G3: atestación de settlement (WK
     const { fn, agentCalls } = fetchRouter({});
     vi.stubGlobal("fetch", fn);
     // El gatillo NO es "el día que haya dos redes": es REUSAR SETTLE_ATTESTATION_SECRET entre
-    // entornos. Preview en Fuji + prod en mainnet con el mismo secreto ⇒ la atestación emitida en
-    // Fuji (USDC de faucet, GRATIS) valida el HMAC en mainnet y ata monto (A6), pagador (A7) y quote
-    // (A7′) sin objeción ⇒ payout REAL de $400 por $0. Con UNA sola cadena en la app.
-    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "43114"); // el deployment es MAINNET
-    const fromFuji = await POST(req(attestedPayload({ settlementAttestation: attFor({ chainId: 43113 }) })));
-    expect(fromFuji.status).toBe(403);
-    expect(await fromFuji.json()).toEqual({ error: "payout_principal_unverified" }); // CD-12: mismo enum opaco
+    // entornos. Preview en Base Sepolia + prod en Base mainnet con el mismo secreto ⇒ la atestación
+    // emitida en Base Sepolia (USDC de faucet, GRATIS) valida el HMAC en mainnet y ata monto (A6),
+    // pagador (A7) y quote (A7′) sin objeción ⇒ payout REAL de $400 por $0. Con UNA sola cadena en la app.
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "8453"); // el deployment es MAINNET
+    const fromSepolia = await POST(req(attestedPayload({ settlementAttestation: attFor({ chainId: 84532 }) })));
+    expect(fromSepolia.status).toBe(403);
+    expect(await fromSepolia.json()).toEqual({ error: "payout_principal_unverified" }); // CD-12: mismo enum opaco
 
-    // Simétrico: el deployment es Fuji y la atestación dice mainnet.
-    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "43113");
-    const fromMainnet = await POST(req(attestedPayload({ settlementAttestation: attFor({ chainId: 43114 }) })));
+    // Simétrico: el deployment es Base Sepolia y la atestación dice mainnet.
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "84532");
+    const fromMainnet = await POST(req(attestedPayload({ settlementAttestation: attFor({ chainId: 8453 }) })));
     expect(fromMainnet.status).toBe(403);
     expect(await fromMainnet.json()).toEqual({ error: "payout_principal_unverified" });
 
     // CD-9: el chainId sale de la ENV, JAMÁS del body. Un `chainId` del caller sería el binding
     // FALSO que este guard mata: el atacante declararía la cadena de SU atestación y auto-validaría.
     // Sin este assert, la forma body-sourced (fail-open) pasa los asserts de arriba sin objeción
-    // (verificado MUTANDO: sobrevive). El deployment sigue en Fuji ⇒ la atestación de mainnet rebota
-    // aunque el body jure 43114.
-    for (const chainId of [43114, 43113, "43114", null]) {
+    // (verificado MUTANDO: sobrevive). El deployment sigue en Base Sepolia ⇒ la atestación de mainnet rebota
+    // aunque el body jure 8453.
+    for (const chainId of [8453, 84532, "8453", null]) {
       const spoofed = await POST(
-        req(attestedPayload({ settlementAttestation: attFor({ chainId: 43114 }), chainId })),
+        req(attestedPayload({ settlementAttestation: attFor({ chainId: 8453 }), chainId })),
       );
       expect(spoofed.status).toBe(403);
     }
@@ -591,7 +591,7 @@ async function signedPop(opts: {
   exp?: number;
   nonce?: string;
 }): Promise<{ popChallenge: string; popSignature: string }> {
-  const chainId = opts.chainId ?? 43113;
+  const chainId = opts.chainId ?? 84532;
   const addr = (opts.address ?? opts.account.address).toLowerCase();
   const nonce = opts.nonce ?? "abcdef0123456789abcdef0123456789";
   const exp = opts.exp ?? Math.floor(Date.now() / 1000) + 300;
@@ -604,8 +604,8 @@ async function signedPop(opts: {
 describe("POST /api/a2a/payout/submit — GUARD 7: proof-of-possession (WKH-206)", () => {
   beforeEach(() => {
     vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
-    // El deployment corre en la MISMA cadena que firma signedPop() por default (43113). SETUP.
-    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "43113");
+    // El deployment corre en la MISMA cadena que firma signedPop() por default (84532). SETUP.
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "84532");
     popClaimMock.mockReset();
     popClaimMock.mockResolvedValue({ ok: true });
   });
@@ -656,7 +656,7 @@ describe("POST /api/a2a/payout/submit — GUARD 7: proof-of-possession (WKH-206)
     const victim = privateKeyToAccount(generatePrivateKey());
     const attacker = privateKeyToAccount(generatePrivateKey());
     // El challenge se emite para la address de la VÍCTIMA, pero lo firma el ATACANTE.
-    const chainId = 43113;
+    const chainId = 84532;
     const nonce = "abcdef0123456789abcdef0123456789";
     const exp = Math.floor(Date.now() / 1000) + 300;
     const ch = { address: victim.address.toLowerCase(), chainId, nonce, exp };
@@ -756,10 +756,10 @@ describe("POST /api/a2a/payout/submit — GUARD 7: proof-of-possession (WKH-206)
 
   it("AC-6/P4: challenge de OTRA cadena (ch.chainId ≠ resolveChainId) ⇒ 403", async () => {
     vi.stubEnv("PAYOUT_POP_SECRET", POP_SECRET);
-    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "43113"); // deployment Fuji
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "84532"); // deployment Base Sepolia
     const account = privateKeyToAccount(generatePrivateKey());
-    // Firma coherente para chainId 43114 (mainnet) — replay cross-entorno con el mismo secreto.
-    const pop = await signedPop({ account, chainId: 43114 });
+    // Firma coherente para chainId 8453 (mainnet) — replay cross-entorno con el mismo secreto.
+    const pop = await signedPop({ account, chainId: 8453 });
     const { fn, agentCalls } = fetchRouter({});
     vi.stubGlobal("fetch", fn);
     const res = await POST(req({ ...validPayload, address: account.address, ...pop }));
@@ -771,14 +771,14 @@ describe("POST /api/a2a/payout/submit — GUARD 7: proof-of-possession (WKH-206)
 
   it("AC-6/mutante fail-open chainId: body jura chainId, pero P4 lo saca de la ENV ⇒ 403 igual (CD-9)", async () => {
     vi.stubEnv("PAYOUT_POP_SECRET", POP_SECRET);
-    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "43113"); // deployment Fuji
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "84532"); // deployment Base Sepolia
     const account = privateKeyToAccount(generatePrivateKey());
-    const pop = await signedPop({ account, chainId: 43114 }); // challenge de mainnet
+    const pop = await signedPop({ account, chainId: 8453 }); // challenge de mainnet
     const { fn, agentCalls } = fetchRouter({});
     vi.stubGlobal("fetch", fn);
-    // Un mutante body-sourced (`ch.chainId !== body.chainId`) ACEPTARÍA cuando body.chainId==43114.
-    // Con el guard correcto (contra resolveChainId()==43113) rebota SIEMPRE, aunque el body mienta.
-    for (const chainId of [43114, "43114", 43113, null]) {
+    // Un mutante body-sourced (`ch.chainId !== body.chainId`) ACEPTARÍA cuando body.chainId==8453.
+    // Con el guard correcto (contra resolveChainId()==84532) rebota SIEMPRE, aunque el body mienta.
+    for (const chainId of [8453, "8453", 84532, null]) {
       const res = await POST(req({ ...validPayload, address: account.address, chainId, ...pop }));
       expect(res.status).toBe(403);
       expect(await res.json()).toEqual({ error: "payout_pop_unverified" });
@@ -789,13 +789,13 @@ describe("POST /api/a2a/payout/submit — GUARD 7: proof-of-possession (WKH-206)
 
   it("CD-4 no-oracle: P2 (HMAC malo) / P3 (address) / P4 (chainId) / P5 (firma) ⇒ MISMO 403 + body", async () => {
     vi.stubEnv("PAYOUT_POP_SECRET", POP_SECRET);
-    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "43113");
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "84532");
     const account = privateKeyToAccount(generatePrivateKey());
     const good = await signedPop({ account });
     const attacker = privateKeyToAccount(generatePrivateKey());
     // P2: HMAC forjado (challenge basura). P3: address distinta. P4: otra cadena. P5: firma hostil.
     const p5 = await signedPop({ account: attacker, address: account.address.toLowerCase() });
-    const p4 = await signedPop({ account, chainId: 43114 });
+    const p4 = await signedPop({ account, chainId: 8453 });
     const cases: { label: string; address: string; over: Record<string, unknown> }[] = [
       { label: "P2", address: account.address, over: { popChallenge: "basura.mac", popSignature: good.popSignature } },
       { label: "P3", address: "0x9999999999999999999999999999999999999999", over: { ...good } },

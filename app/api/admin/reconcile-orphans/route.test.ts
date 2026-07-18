@@ -34,7 +34,7 @@ function ledgerWithStale(n: number): FakeSettlementLedger {
       quoteId,
       idempotencyKey: `${remittanceId}:${quoteId}`,
       txHash: `0xtx${i}`,
-      chainId: 43113,
+      chainId: 84532,
       senderAddress: "0xsender",
       receiverAddress: "0xreceiver",
       valueMinor: 400_000_000,

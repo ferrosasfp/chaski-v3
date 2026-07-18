@@ -22,6 +22,7 @@
 | WKH-206 | [GATE Fase A / G5, último hueco] Proof-of-possession (SIWE/EIP-4361) para el `address` del payout — el caller debe probar criptográficamente que controla la private key, no solo pasar el string | DONE (2026-07-16) | `doc/sdd/017-wkh-206-payout-proof-of-possession/report.md` |
 | WKH-205 | [Deuda técnica, cero-deuda] Cierra follow-ups de WKH-202 (MNR-2/3/5/6) + residual R2 de WKH-206: oráculo KYC de `/api/payout/validate`, bug body-null, rate-limit de `/challenge` | DONE (2026-07-16) | `doc/sdd/018-wkh-205-payout-validate-oracle-hardening/report.md` |
 | WKH-207 | [Deuda técnica mayor, seguimiento de WKH-168] Persistencia server-side + reconciliación de remesas huérfanas (el residual AC-9/DT-2 de WKH-168) | DONE (2026-07-16) | `doc/sdd/019-wkh-207-remittance-persistence-reconciliation/report.md` |
+| WKH-209 | [Money-path, decisión founder] Mover el settlement del principal (WKH-168, EIP-3009) de Avalanche a Base — chainId, USDC address, RPC de verificación y domain EIP-712 parametrizados por red, reusando `wasiai-facilitator` (adapter Base ya existe) | DONE (2026-07-17) — 11/11 ACs, 460 tests, 0 BLQ. Fix del domain EIP-712 name-por-red (`"USDC"` Sepolia / `"USD Coin"` mainnet). Flag OFF. | `doc/sdd/020-wkh-209-settle-principal-en-base/done-report.md` |
 
 ## Notas de coordinación
 - WKH-178 y WKH-179 corren en paralelo, ambas del mismo repo (`chaski-v2`) y de la misma auditoría
@@ -209,6 +210,33 @@
   reduce el riesgo de colisión a nivel de líneas, no de diseño. Ver
   `doc/sdd/019-wkh-207-remittance-persistence-reconciliation/work-item.md` para el
   detalle completo (grounding, ACs, DT-N, CD-N, riesgos, Missing Inputs).
+- **WKH-209 (F1, 2026-07-17, `020`, NNN pre-asignado sin colisión por el orquestador)**: decisión del
+  founder — el corredor de remesa usa **Base** (TransFi, el partner de payout, no soporta USDC en
+  Avalanche pero sí en Base). Esta HU mueve el settlement REAL del principal (WKH-168, EIP-3009) de
+  Avalanche (Fuji 43113/mainnet 43114) a Base (Sepolia 84532/mainnet 8453), reusando
+  `wasiai-facilitator` (su `BaseEip3009Adapter`/`src/chains/base.ts` YA existe y settlea Base Sepolia
+  en prod — esta HU apunta Chaski a esa infra, no la construye). Es config/parametrización, NO lógica
+  de dominio nueva: el guard-order y la atestación/PoP/ledger de WKH-168/202/206/207 quedan intactos
+  (CD-2). **Hallazgo crítico de F0**: `src/infrastructure/wallet.ts:97,242` hardcodea el domain
+  EIP-712 `name: "USD Coin", version: "2"` — correcto para el USDC de Avalanche, pero el USDC de Base
+  **Sepolia** usa `eip712Name="USDC"` (NO "USD Coin", per `wasiai-facilitator/src/chains/base.ts:42-53`,
+  verificado on-chain contra el contrato real). Un swap ingenuo de solo chainId+address firmaría un
+  domain que no ata al `DOMAIN_SEPARATOR` real del contrato → AC-4/CD-4/DT-3 fuerzan que el
+  `name`/`version` queden parametrizados por chainId (lookup público, NO env — mismo patrón que
+  `wasiai-facilitator` ya usa). Toca `src/infrastructure/chain.ts:5,7-13,16-18` (chainId/viem Chain
+  hardcodeados a avalanche/avalancheFuji), `src/infrastructure/wallet.ts:97,242` (domain), y
+  `src/infrastructure/settlement/onchain-verifier.ts:59` (`AVALANCHE_RPC_URL` literal) + `.env.example`.
+  Sizing M. Scope OUT estricto: NO toca `submit/route.ts` guard-order, NO toca `wasiai-facilitator`
+  (repo externo, solo coordinación operativa de sus flags `BASE_SEPOLIA_ENABLED`/
+  `BASE_SEPOLIA_RPC_URL`), NO enciende `NEXT_PUBLIC_EIP3009_ENABLED` en ningún entorno compartido, NO
+  ejecuta/valida contra Base mainnet — solo Base Sepolia testnet, tokens sin valor. **1
+  `[NEEDS CLARIFICATION]` BLOQUEANTE para F2** (DT-1): swap directo a Base (elimina soporte de
+  Avalanche del código) vs generalizar a multi-red (Avalanche disponible pero inactivo) — recomendación
+  del Analyst es swap directo, pero requiere confirmación explícita del founder por ser irreversible
+  sin otra HU. Sin overlap de archivos con trabajo en curso conocido (única HU activa sobre
+  `chaski-v2` en este momento). Ver
+  `doc/sdd/020-wkh-209-settle-principal-en-base/work-item.md` para el detalle completo (grounding,
+  ACs, DT-N, CD-N, tabla de riesgo money-path, Missing Inputs).
 
 ---
 
@@ -246,6 +274,7 @@ bloqueantes abiertos. El AC-8 residual de WKH-181 (diferido a WKH-184) está for
 | WKH-186 (scaffolding a2a mock/off + reconciliación + refund + EIP-3009-ready) | DONE (2026-07-11) | Sin movimiento de dinero real (CD-2 verificada 6 capas). Gap real cerrado (refund-on-failure). Runbook Fase A documentado. Listo para merge. Ver `doc/sdd/009-wkh-186-value-delivery-scaffolding/done-report.md`. |
 | WKH-168 (Mitad A: settle on-chain real verificado, reusa `wasiai-facilitator`) | DONE (2026-07-15) | Cierra el bug de fondo (`principal_in` = firma, no dinero). Mitad B (persistencia + reconciliación) registrada como WKH-207. Ver `doc/sdd/016-wkh-168-principal-in-real-settlement/done-report.md`. |
 | WKH-207 (Mitad B de WKH-168: persistencia server-side + reconciliación de remesas huérfanas) | DONE (2026-07-16) | Persistencia Postgres propio (Supabase free, decisión founder) + reconcile `manual_review` (auto-retry deferido por PII+dedupe, money-safe). Migración PENDING-DEPLOY. 10/10 ACs, 451/451 tests, AR cazó 1 BLQ money-path (createClient fuera de try/catch) → fix-packeado → re-AR APROBADO. Ver `doc/sdd/019-wkh-207-remittance-persistence-reconciliation/report.md`. |
+| WKH-209 (mover el settle REAL del principal de Avalanche a Base — decisión founder, TransFi solo soporta USDC en Base) | DONE (2026-07-17) | Swap parametrizado por red (tabla NETWORKS), Avalanche eliminado. Resuelto el bug latente del domain EIP-712: Base Sepolia usa name `"USDC"`, mainnet `"USD Coin"`. DT-1 resuelto = swap directo. Default fail-safe = Base Sepolia. 11/11 ACs, 460 tests, AR+CR+F4 aprobados 0 BLQ (1 MENOR: comentario stale en submit/route.ts diferido). Flag EIP-3009 OFF, cero plata real. Ver `doc/sdd/020-wkh-209-settle-principal-en-base/done-report.md`. |
 
 ## 🔵 MONEY-PATH / UX (post value-delivery scaffolding)
 
@@ -283,7 +312,7 @@ de `chaski-v2` están **100% DONE** (2026-07-14/15/16). WKH-168 (G3, Mitad A: se
 - **WKH-200 MNR-1**: Fake-timers test growth artifact documentado en auto-blindaje (T-AC2 poll-count intermitente, workaround en snapshot inicial).
 - **WKH-201 MNR-1**: Consumidor `test-container.ts` omitido en Story File, wiring actualizado en F3 (byte-idéntico, fallo de survey).
 
-**NNN Colisión histórica**: 4 analysts paralelos → WKH-198 tomó `012`, WKH-199 probó `012` (colisión) → `013`, WKH-200 probó `012`/`013` (colisiones) → `014`, WKH-201 probó `012`/`013` (colisiones) → `014` (comparte prefijo con WKH-200, carpetas distintas). Stubs obsoletos creados durante F1 (`012-wkh-199-*`, `012-wkh-200-*`, `012-wkh-201-*`, `013-wkh-200-*`, `013-wkh-201-*`), limpiados en esta fase final (git rm). Ver nota de coordinación debajo. **WKH-202 usó `015` sin colisión** (NNN pre-asignado por el orquestador, aplicando la lección de esta sección). **WKH-168 usó `016` sin colisión** (mismo criterio, único analyst corriendo sobre `chaski-v2` en el momento de F1). **WKH-206 usó `017` sin colisión** (mismo criterio; NNN pre-asignado explícitamente por el orquestador, ver nota de WKH-206 arriba). **WKH-205 usó `018` sin colisión** (NNN pre-asignado explícitamente por el orquestador — instrucción "usá el NNN `018` — 015=WKH-202, 016=WKH-168, 017=WKH-206 ya tomados; WKH-207 tomará `019` en paralelo, NO usar 019"). **WKH-207 usó `019` sin colisión** (NNN pre-asignado explícitamente por el orquestador — instrucción "usá el NNN `019` — 015..017 tomados; WKH-205 usa `018` en paralelo, NO usar 018").
+**NNN Colisión histórica**: 4 analysts paralelos → WKH-198 tomó `012`, WKH-199 probó `012` (colisión) → `013`, WKH-200 probó `012`/`013` (colisiones) → `014`, WKH-201 probó `012`/`013` (colisiones) → `014` (comparte prefijo con WKH-200, carpetas distintas). Stubs obsoletos creados durante F1 (`012-wkh-199-*`, `012-wkh-200-*`, `012-wkh-201-*`, `013-wkh-200-*`, `013-wkh-201-*`), limpiados en esta fase final (git rm). Ver nota de coordinación debajo. **WKH-202 usó `015` sin colisión** (NNN pre-asignado por el orquestador, aplicando la lección de esta sección). **WKH-168 usó `016` sin colisión** (mismo criterio, único analyst corriendo sobre `chaski-v2` en el momento de F1). **WKH-206 usó `017` sin colisión** (mismo criterio; NNN pre-asignado explícitamente por el orquestador, ver nota de WKH-206 arriba). **WKH-205 usó `018` sin colisión** (NNN pre-asignado explícitamente por el orquestador — instrucción "usá el NNN `018` — 015=WKH-202, 016=WKH-168, 017=WKH-206 ya tomados; WKH-207 tomará `019` en paralelo, NO usar 019"). **WKH-207 usó `019` sin colisión** (NNN pre-asignado explícitamente por el orquestador — instrucción "usá el NNN `019` — 015..017 tomados; WKH-205 usa `018` en paralelo, NO usar 018"). **WKH-209 usó `020` sin colisión** (NNN pre-asignado explícitamente por el orquestador — instrucción "usá el NNN `020` — 016..019 tomados", único analyst corriendo sobre `chaski-v2` en el momento de F1).
 
 ### Nota de coordinación — Limpieza de stubs de colisión NNN (auditoría adversarial #2)
 
@@ -319,3 +348,5 @@ Hubo una **carrera de 4 analysts en paralelo** (2026-07-14, mismo repo `chaski-v
 **Confirmación (WKH-207, 2026-07-16)**: la misma lección se aplicó — el orquestador pre-asignó `019` a WKH-207 antes de lanzar el analyst (instrucción explícita "usá el NNN `019` — 015..017 tomados; WKH-205 usa `018` en paralelo, NO usar 018"), sin colisión de NNN. `018` quedó reservado para WKH-205 (follow-ups de WKH-202) — ambas HUs corrieron F1 en paralelo, se coordinó overlap de archivos (`submit/route.ts`, sin overlap de lógica, ver bullets de ambas arriba) entre los dos Analysts sin necesidad de re-lanzar ninguna.
 
 **Confirmación (WKH-205, 2026-07-16)**: la misma lección se aplicó — el orquestador pre-asignó `018` a WKH-205 antes de lanzar el analyst (instrucción explícita "usá el NNN `018` — 015=WKH-202, 016=WKH-168, 017=WKH-206 ya tomados; WKH-207 tomará `019` en paralelo — NO usar `019`"), sin colisión de NNN.
+
+**Confirmación (WKH-209, 2026-07-17)**: la misma lección se aplicó — el orquestador pre-asignó `020` a WKH-209 antes de lanzar el analyst (instrucción explícita "usá el NNN `020` — 016..019 tomados"), sin colisión de NNN. Único analyst corriendo sobre `chaski-v2` en este momento.

@@ -23,10 +23,10 @@ vi.mock("@walletconnect/ethereum-provider", () => ({
 
 // AC-8/AC-9 sobre InjectedWallet (viem + provider inyectado = mockable con window.ethereum).
 // Env de test = node (sin window/jsdom) → stub de globalThis.window, patrón persistence.test.ts:35-41.
-// El chain configurado por default es 43114 (NEXT_PUBLIC_CHAIN_ID unset → resolveChainId()=43114).
+// El chain configurado por default es 84532 (NEXT_PUBLIC_CHAIN_ID unset → resolveChainId()=84532, Base Sepolia).
 
 const VALID_ADDR = "0xf39fd6e51aad88f6f4ce6ab8827279cffFb92266"; // hardhat acct#0 (viem lo checksumea)
-const CHAIN_MAINNET_HEX = "0xa86a"; // 43114
+const CHAIN_MAINNET_HEX = "0x2105"; // 8453 (Base mainnet)
 const CHAIN_ETH_HEX = "0x1"; // 1 (red distinta → dispara el switch)
 
 interface ProviderCall {
@@ -107,7 +107,7 @@ afterEach(() => {
 
 // EIP-3009 real (WKH-186 AC-10): addresses env-driven (all-lowercase → isAddress OK sin checksum).
 const RECEIVER = "0x1111111111111111111111111111111111111111";
-const USDC = "0x5425890298aed601595a70ab815c96711a31bc65"; // USDC Fuji canónico (comentario .env.example)
+const USDC = "0x036cbd53842c5426634e7929541ec2318f3dcf7e"; // USDC Base Sepolia canónico (comentario .env.example)
 const eip3009Quote: Quote = {
   quoteId: "q1",
   send: Money.of(400, "USDC"), // minor = 400_000000 = base units EIP-3009
@@ -127,7 +127,7 @@ function enableEip3009(): void {
 
 // Extrae el typed-data (params[1] JSON) del eth_signTypedData_v4 registrado.
 function typedDataOf(calls: ProviderCall[]): {
-  domain: { name: string; verifyingContract: string };
+  domain: { name: string; version: string; chainId: number; verifyingContract: string };
   primaryType: string;
   message: { to: string; value: string | number };
 } {
@@ -152,7 +152,8 @@ describe("pickWallet — sin wallet real (WKH-184 AC-8, CD-2)", () => {
 });
 
 describe("InjectedWallet — chainId check + switch suave (AC-8)", () => {
-  it("chain coincide (43114) → connect OK, NO dispara switch", async () => {
+  it("chain coincide (8453) → connect OK, NO dispara switch", async () => {
+    process.env.NEXT_PUBLIC_CHAIN_ID = "8453"; // config == provider (Base mainnet) → sin switch
     const p = makeProvider({ chainIdHex: CHAIN_MAINNET_HEX });
     stubWindow(p);
     const w = new InjectedWallet();
@@ -206,7 +207,8 @@ describe("InjectedWallet — validación de address (AC-9)", () => {
 // vía provider.request + wallet_switchEthereumChain + guard isAddress) quedaba sin cobertura. El
 // lazy-import de @walletconnect está mockeado (arriba) → EthereumProvider.init devuelve wc.provider.
 describe("WalletConnectWallet — chainId hex parse + switch suave (AC-8)", () => {
-  it("chain coincide (43114) → connect OK, NO dispara switch", async () => {
+  it("chain coincide (8453) → connect OK, NO dispara switch", async () => {
+    process.env.NEXT_PUBLIC_CHAIN_ID = "8453"; // config == provider (Base mainnet) → sin switch
     wc.provider = makeWcProvider({ chainIdHex: CHAIN_MAINNET_HEX });
     const w = new WalletConnectWallet("proj-id");
     const addr = await w.connect();
@@ -266,8 +268,9 @@ describe("EIP-3009 flag (WKH-186 AC-9/AC-10) — InjectedWallet", () => {
     expect(p.calls.some((c) => c.method === "eth_signTypedData_v4")).toBe(false);
   });
 
-  it("AC-10: flag ON → signTypedData de transferWithAuthorization (to=receiver, value=send.minor, USDC domain)", async () => {
+  it("AC-4: flag ON + Base Sepolia (84532) → domain.name='USDC', version='2', chainId=84532 (to=receiver, value=send.minor)", async () => {
     enableEip3009();
+    process.env.NEXT_PUBLIC_CHAIN_ID = "84532"; // Base Sepolia: el USDC on-chain usa name="USDC"
     const p = makeProvider();
     stubWindow(p);
     const w = new InjectedWallet();
@@ -277,10 +280,27 @@ describe("EIP-3009 flag (WKH-186 AC-9/AC-10) — InjectedWallet", () => {
     expect(p.calls.some((c) => c.method === "personal_sign")).toBe(false); // NO firma demo
     const td = typedDataOf(p.calls);
     expect(td.primaryType).toBe("TransferWithAuthorization");
-    expect(td.domain.name).toBe("USD Coin");
+    expect(td.domain.name).toBe("USDC"); // CD-4: testnet usa "USDC", NO "USD Coin"
+    expect(td.domain.version).toBe("2");
+    expect(td.domain.chainId).toBe(84532); // AC-10: chainId de la firma == red activa
     expect(td.domain.verifyingContract.toLowerCase()).toBe(USDC);
     expect(td.message.to.toLowerCase()).toBe(RECEIVER);
     expect(String(td.message.value)).toBe("400000000"); // 400 USDC en micro-USDC (base units)
+  });
+
+  it("AC-5: flag ON + Base mainnet (8453) → domain.name='USD Coin', version='2', chainId=8453 (unit puro sobre typed-data, sin red — CD-1)", async () => {
+    enableEip3009();
+    process.env.NEXT_PUBLIC_CHAIN_ID = "8453"; // Base mainnet: el USDC on-chain usa name="USD Coin"
+    const p = makeProvider();
+    stubWindow(p);
+    const w = new InjectedWallet();
+    await w.connect();
+    const { tx } = await w.authorizePrincipal(eip3009Quote, "rem-1");
+    expect(tx).toBe("0xtypedsig");
+    const td = typedDataOf(p.calls);
+    expect(td.domain.name).toBe("USD Coin");
+    expect(td.domain.version).toBe("2");
+    expect(td.domain.chainId).toBe(8453); // AC-10: chainId de la firma == red activa
   });
 });
 

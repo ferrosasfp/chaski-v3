@@ -162,6 +162,50 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
       }),
     ).rejects.toThrow();
   });
+
+  // ── recordWebhookOutcome (WKH-210): UPDATE por payout_id, filtro NON_TERMINAL, NO owner-scoped ──
+  it("WKH-210/CD-12: recordWebhookOutcome hace UPDATE por payout_id + filtro .in(status, NON_TERMINAL), sin sender_address", async () => {
+    const { client, calls } = makeClient([{ data: null, error: null }]);
+    const ledger = new SupabaseSettlementLedger(client);
+    await ledger.recordWebhookOutcome({ payoutId: "p-1", status: "settled" });
+    const patch = calls.update[0]?.[0] as Record<string, unknown>;
+    expect(patch.status).toBe("settled");
+    expect(patch.updated_at).toBeTypeOf("string");
+    expect(calls.eq).toContainEqual(["payout_id", "p-1"]);
+    // NO owner-scoped: el guard es el HMAC, jamás filtra por sender_address (CD-12).
+    expect(calls.eq.some((c) => c[0] === "sender_address")).toBe(false);
+    // Filtro NON_TERMINAL (DT-2b): nunca degrada un estado terminal ni reclasifica manual_review.
+    expect(calls.in[0]?.[0]).toBe("status");
+    expect(calls.in[0]?.[1]).toEqual(["principal_in", "submitted", "forward_error"]);
+  });
+
+  it("WKH-210/DT-8: status failed persiste last_error enum estable (transfi_fund_failed), nunca el reason crudo", async () => {
+    const { client, calls } = makeClient([{ data: null, error: null }]);
+    const ledger = new SupabaseSettlementLedger(client);
+    await ledger.recordWebhookOutcome({
+      payoutId: "p-2",
+      status: "failed",
+      error: "transfi_fund_failed",
+    });
+    const patch = calls.update[0]?.[0] as Record<string, unknown>;
+    expect(patch.last_error).toBe("transfi_fund_failed");
+  });
+
+  it("WKH-210/AC-8: 0-match (payoutId inexistente) no lanza (Supabase no reporta error en UPDATE 0-row)", async () => {
+    const { client } = makeClient([{ data: null, error: null }]);
+    const ledger = new SupabaseSettlementLedger(client);
+    await expect(
+      ledger.recordWebhookOutcome({ payoutId: "no-existe", status: "settled" }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("WKH-210: error de Supabase ⇒ throw ledger_record_webhook_outcome_failed:*", async () => {
+    const { client } = makeClient([{ data: null, error: { code: "PGRST000" } }]);
+    const ledger = new SupabaseSettlementLedger(client);
+    await expect(
+      ledger.recordWebhookOutcome({ payoutId: "p-3", status: "settled" }),
+    ).rejects.toThrow(/ledger_record_webhook_outcome_failed:PGRST000/);
+  });
 });
 
 describe("getSettlementLedger factory (WKH-207 AC-10/CD-14)", () => {

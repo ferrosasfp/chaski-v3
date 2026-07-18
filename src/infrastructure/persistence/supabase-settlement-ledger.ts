@@ -167,6 +167,28 @@ export class SupabaseSettlementLedger implements SettlementLedger {
     const { error } = await this.client.from(TABLE).update(patch).eq("id", input.id);
     if (error) throw new Error(`ledger_mark_outcome_failed:${error.code ?? "unknown"}`);
   }
+
+  async recordWebhookOutcome(input: {
+    payoutId: string;
+    status: SettlementLedgerStatus;
+    error?: string | null;
+  }): Promise<void> {
+    // WKH-210: UPDATE por payout_id, NO owner-scoped (el guard es el HMAC del endpoint, CD-12). El
+    // filtro .in("status", STALE_STATUSES) = no-terminal set (DT-2b): nunca degrada un estado terminal
+    // ni reclasifica manual_review. NO lee columnas ⇒ no aplica el ::text de value_minor (es un UPDATE
+    // puro, no un select). last_error es un enum estable, NUNCA PII (CD-3).
+    const patch: Record<string, unknown> = {
+      status: input.status,
+      updated_at: new Date().toISOString(),
+    };
+    if (input.error !== undefined) patch.last_error = input.error;
+    const { error } = await this.client
+      .from(TABLE)
+      .update(patch)
+      .eq("payout_id", input.payoutId)
+      .in("status", STALE_STATUSES as unknown as string[]); // no-terminal set (DT-2b)
+    if (error) throw new Error(`ledger_record_webhook_outcome_failed:${error.code ?? "unknown"}`);
+  }
 }
 
 /**

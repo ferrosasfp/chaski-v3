@@ -242,13 +242,14 @@ export async function POST(req: Request): Promise<Response> {
     // resolveChainId() que lee esta route, y el caller no puede tocarlo (NEXT_PUBLIC_CHAIN_ID es una
     // env del DEPLOYMENT: no viaja en el body y esta route no lo lee de ahí).
     // El gatillo real NO es "el día que haya dos redes" (ese era el encuadre equivocado del hallazgo
-    // original): es REUSAR SETTLE_ATTESTATION_SECRET entre entornos. Preview en Fuji + prod en
-    // mainnet con el MISMO secreto ⇒ una atestación emitida en Fuji con USDC de FAUCET (gratis)
-    // valida el HMAC en mainnet y ata monto (A6), pagador (A7) y quote (A7′) sin objeción ⇒ payout
-    // REAL de $400 por $0. Pasa con UNA SOLA cadena ⇒ es un error de ops, no un ítem de roadmap.
+    // original): es REUSAR SETTLE_ATTESTATION_SECRET entre entornos. Preview en Base Sepolia (84532) +
+    // prod en Base mainnet (8453) con el MISMO secreto ⇒ una atestación emitida en Base Sepolia con
+    // USDC de FAUCET (gratis) valida el HMAC en mainnet y ata monto (A6), pagador (A7) y quote (A7′) sin
+    // objeción ⇒ payout REAL de $400 por $0. Pasa con UNA SOLA cadena ⇒ es un error de ops, no un ítem
+    // de roadmap.
     // CD-9: se compara contra la env SERVER-SIDE. PROHIBIDO un chainId del body: un campo del caller
     // sería exactamente el binding falso que este guard mata.
-    // Sin try/catch: resolveChainId() no tira (chain.ts:9-13 hace fallback a 43114), a diferencia de
+    // Sin try/catch: resolveChainId() no tira (chain.ts:42-45 hace fallback a 84532), a diferencia de
     // resolveReceiverAddress()/resolveUsdcAddress(), que son fail-loud.
     if (att.chainId !== resolveChainId()) {
       return NextResponse.json({ error: "payout_principal_unverified" }, { status: 403 });

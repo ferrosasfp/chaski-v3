@@ -486,6 +486,23 @@ export class FakeSettlementLedger implements SettlementLedger {
     if (input.incrementAttempt) r.attempts += 1;
     r.updatedAt = this.nowIso;
   }
+
+  async recordWebhookOutcome(input: {
+    payoutId: string;
+    status: SettlementLedgerStatus;
+    error?: string | null;
+  }): Promise<void> {
+    const NON_TERMINAL: SettlementLedgerStatus[] = ["principal_in", "submitted", "forward_error"];
+    for (const r of this.store.values()) {
+      // NO owner-scoped (CD-12): correlaciona solo por payoutId. Filtro NON_TERMINAL = DT-2b:
+      // nunca degrada un estado terminal ni reclasifica manual_review.
+      if (r.payoutId === input.payoutId && NON_TERMINAL.includes(r.status)) {
+        r.status = input.status;
+        if (input.error !== undefined) r.lastError = input.error;
+        r.updatedAt = this.nowIso;
+      }
+    }
+  }
 }
 
 export const beneficiary = (method: PayoutMethod = "yape") => ({

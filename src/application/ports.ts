@@ -264,6 +264,14 @@ export interface SettlementLedger {
     error?: string | null;
     incrementAttempt: boolean;
   }): Promise<void>;
+  // webhook TransFi (WKH-210): UPDATE por payout_id, NO owner-scoped (el guard es el HMAC del endpoint,
+  // CD-12). Solo aplica a filas NO-terminales (principal_in|submitted|forward_error): nunca reclasifica
+  // manual_review ni degrada un estado terminal (DT-2b). 0-match ⇒ no-op sin error (AC-8).
+  recordWebhookOutcome(input: {
+    payoutId: string;
+    status: SettlementLedgerStatus; // solo 'submitted' | 'settled' | 'failed' (post-mapeo)
+    error?: string | null;          // enum estable, NUNCA el motivo crudo (DT-8/CD-3)
+  }): Promise<void>;
 }
 
 // ── Utilidades inyectables (nada de Date.now/Math.random en el dominio) ──────

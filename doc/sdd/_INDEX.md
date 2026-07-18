@@ -23,6 +23,7 @@
 | WKH-205 | [Deuda técnica, cero-deuda] Cierra follow-ups de WKH-202 (MNR-2/3/5/6) + residual R2 de WKH-206: oráculo KYC de `/api/payout/validate`, bug body-null, rate-limit de `/challenge` | DONE (2026-07-16) | `doc/sdd/018-wkh-205-payout-validate-oracle-hardening/report.md` |
 | WKH-207 | [Deuda técnica mayor, seguimiento de WKH-168] Persistencia server-side + reconciliación de remesas huérfanas (el residual AC-9/DT-2 de WKH-168) | DONE (2026-07-16) | `doc/sdd/019-wkh-207-remittance-persistence-reconciliation/report.md` |
 | WKH-209 | [Money-path, decisión founder] Mover el settlement del principal (WKH-168, EIP-3009) de Avalanche a Base — chainId, USDC address, RPC de verificación y domain EIP-712 parametrizados por red, reusando `wasiai-facilitator` (adapter Base ya existe) | DONE (2026-07-17) — 11/11 ACs, 460 tests, 0 BLQ. Fix del domain EIP-712 name-por-red (`"USDC"` Sepolia / `"USD Coin"` mainnet). Flag OFF. | `doc/sdd/020-wkh-209-settle-principal-en-base/done-report.md` |
+| WKH-210 | [Money-path, seguimiento de WKH-207] Cerrar el loop async de TransFi: receptor de webhooks (`fund_settled`/`asset_deposited`/`fund_failed`) sobre el `SettlementLedger` de WKH-207 | DONE (2026-07-17) — 11/11 ACs, 501 tests, AR+CR+F4 0 BLQ. HMAC body-crudo timing-safe, idempotencia at-least-once (mutar-primero/claim-después, AR-MNR-1 fix-packeado), no-PII, flags OFF. Reorder no-custodial = WKH-211. Smoke webhook gateado al founder. | `doc/sdd/021-wkh-210-transfi-deposit-flow-webhook/done-report.md` |
 
 ## Notas de coordinación
 - WKH-178 y WKH-179 corren en paralelo, ambas del mismo repo (`chaski-v2`) y de la misma auditoría
@@ -237,6 +238,38 @@
   `chaski-v2` en este momento). Ver
   `doc/sdd/020-wkh-209-settle-principal-en-base/work-item.md` para el detalle completo (grounding,
   ACs, DT-N, CD-N, tabla de riesgo money-path, Missing Inputs).
+- **WKH-210 (F1, 2026-07-17, `021`, NNN pre-asignado sin colisión por el orquestador)**: cierra el
+  loop async de TransFi — la HU original pedía DOS cosas (envío no-custodial `to=depositAddress` +
+  receptor de webhooks); F0 encontró que son piezas de riesgo/blast-radius MUY distintas y
+  recomendó **SPLIT**: `WKH-210` queda acotada al receptor de webhooks (`app/api/webhooks/transfi/
+  route.ts`, HMAC fail-closed + idempotencia claim-once + update del `SettlementLedger` de WKH-207);
+  el reorder no-custodial se recomienda como ticket nuevo separado (candidato WKH-211, a confirmar
+  por el orquestador). Motivo del split: el receiver del settle HOY es un ÚNICO address ESTÁTICO de
+  plataforma (env pública `NEXT_PUBLIC_PAYOUT_RECEIVER_ADDRESS`, `chain.ts:86-90`), usado como
+  invariante de seguridad fijo en CUATRO puntos (`wallet.ts:97` firma, `settle/principal/route.ts`
+  S12 + V1-V9, `confirm-and-send.ts` C5) — convertirlo en un `depositAddress` dinámico por remesa
+  exige una fuente de verdad server-side nueva (no solo reordenar dos llamadas) y toca
+  `WalletPort.authorizePrincipal`, AMBAS wallets reales, y el guard-order S1-V9 completo de
+  `settle/principal`. **F0 NO pudo verificar la premisa "WKH-208 ya existe y devuelve
+  `depositAddress`"**: el código de `remit-cashout-payout` vive en el repo externo
+  `wasiai-remittance-agents` (según la nota de WKH-186 arriba), que no está presente en este
+  workspace; ni `PayoutRecord`/`PayoutSubmit` (`ports.ts:62-95`) ni `RawPayoutResult`
+  (`gateways.ts:19-36`) tienen hoy ningún campo `depositAddress`. Trabaja sobre el estado ya
+  mergeado de WKH-178..209 (`main`). Sizing **L**: 11 ACs EARS, 6 DT-N, 8 CD-N, tabla de riesgo
+  money-path (HMAC falsificado / replay / PII en payload). Toca (nuevo) `app/api/webhooks/transfi/
+  route.ts`, `src/infrastructure/webhooks/webhook-event-store.ts`,
+  `src/infrastructure/webhooks/transfi-hmac.ts`, extiende el port `SettlementLedger`
+  (`ports.ts:237-267`) con un método nuevo indexado por `payoutId` (implementado en
+  `supabase-settlement-ledger.ts:73-170`), y aprovecha el barrido del comentario stale MNR-1 de
+  WKH-209 (`submit/route.ts:244-248`, terminología Fuji→Base Sepolia). Scope OUT estricto: CERO
+  cambios a `wallet.ts`, `confirm-and-send.ts` o el guard-order de `settle/principal`/`submit`
+  (salvo el comentario puntual). **2 `[NEEDS CLARIFICATION]` BLOQUEANTES para F2**: (1) confirmar
+  la existencia/contrato real de WKH-208 antes de que el Architect diseñe el ticket del reorder;
+  (2) confirmar con el founder que el split (DT-1) es aceptado, o si insiste en meter el reorder
+  dentro de esta misma HU pese al blast-radius documentado. Sin overlap de archivos con trabajo en
+  curso conocido (única HU activa sobre `chaski-v2` en este momento). Ver
+  `doc/sdd/021-wkh-210-transfi-deposit-flow-webhook/work-item.md` para el detalle completo
+  (grounding, ACs, DT-N, CD-N, tabla de riesgo money-path, Missing Inputs).
 
 ---
 
@@ -275,6 +308,7 @@ bloqueantes abiertos. El AC-8 residual de WKH-181 (diferido a WKH-184) está for
 | WKH-168 (Mitad A: settle on-chain real verificado, reusa `wasiai-facilitator`) | DONE (2026-07-15) | Cierra el bug de fondo (`principal_in` = firma, no dinero). Mitad B (persistencia + reconciliación) registrada como WKH-207. Ver `doc/sdd/016-wkh-168-principal-in-real-settlement/done-report.md`. |
 | WKH-207 (Mitad B de WKH-168: persistencia server-side + reconciliación de remesas huérfanas) | DONE (2026-07-16) | Persistencia Postgres propio (Supabase free, decisión founder) + reconcile `manual_review` (auto-retry deferido por PII+dedupe, money-safe). Migración PENDING-DEPLOY. 10/10 ACs, 451/451 tests, AR cazó 1 BLQ money-path (createClient fuera de try/catch) → fix-packeado → re-AR APROBADO. Ver `doc/sdd/019-wkh-207-remittance-persistence-reconciliation/report.md`. |
 | WKH-209 (mover el settle REAL del principal de Avalanche a Base — decisión founder, TransFi solo soporta USDC en Base) | DONE (2026-07-17) | Swap parametrizado por red (tabla NETWORKS), Avalanche eliminado. Resuelto el bug latente del domain EIP-712: Base Sepolia usa name `"USDC"`, mainnet `"USD Coin"`. DT-1 resuelto = swap directo. Default fail-safe = Base Sepolia. 11/11 ACs, 460 tests, AR+CR+F4 aprobados 0 BLQ (1 MENOR: comentario stale en submit/route.ts diferido). Flag EIP-3009 OFF, cero plata real. Ver `doc/sdd/020-wkh-209-settle-principal-en-base/done-report.md`. |
+| WKH-210 (loop async TransFi — receptor de webhooks sobre el ledger de WKH-207; SPLIT del envío no-custodial) | F1 (2026-07-17) | Cierra la confirmación asíncrona (`fund_settled`/`asset_deposited`/`fund_failed`) que hoy solo resuelve `reconcile-orphans` a `manual_review`. El reorder no-custodial (`to=depositAddress`) se recomienda como ticket separado (candidato WKH-211) por cambio de modelo de seguridad — ver nota arriba. 2 `[NEEDS CLARIFICATION]` BLOQUEANTES para F2. Ver `doc/sdd/021-wkh-210-transfi-deposit-flow-webhook/work-item.md`. |
 
 ## 🔵 MONEY-PATH / UX (post value-delivery scaffolding)
 
@@ -350,3 +384,5 @@ Hubo una **carrera de 4 analysts en paralelo** (2026-07-14, mismo repo `chaski-v
 **Confirmación (WKH-205, 2026-07-16)**: la misma lección se aplicó — el orquestador pre-asignó `018` a WKH-205 antes de lanzar el analyst (instrucción explícita "usá el NNN `018` — 015=WKH-202, 016=WKH-168, 017=WKH-206 ya tomados; WKH-207 tomará `019` en paralelo — NO usar `019`"), sin colisión de NNN.
 
 **Confirmación (WKH-209, 2026-07-17)**: la misma lección se aplicó — el orquestador pre-asignó `020` a WKH-209 antes de lanzar el analyst (instrucción explícita "usá el NNN `020` — 016..019 tomados"), sin colisión de NNN. Único analyst corriendo sobre `chaski-v2` en este momento.
+
+**Confirmación (WKH-210, 2026-07-17)**: la misma lección se aplicó — el orquestador pre-asignó `021` a WKH-210 antes de lanzar el analyst (instrucción explícita "usá el NNN `021` — 016..020 tomados"), sin colisión de NNN. Único analyst corriendo sobre `chaski-v2` en este momento.

@@ -77,6 +77,19 @@ export const PAYOUT_CHALLENGE_RL: RouteRateLimitConfig = {
   },
 };
 
+// PREPARE IP 10/"10 m" (sin addr): cada prepare crea una orden TransFi real → sin rate-limit, spam =
+// órdenes huérfanas masivas (WKH-211/DT-5). IP-only (el body aún no se parsea acá). Mismo perfil que
+// CHALLENGE (POST caro, CPU + side-effect externo).
+export const DEPOSIT_PREPARE_RL: RouteRateLimitConfig = {
+  bucketPrefix: "payout:prepare:rl",
+  ip: {
+    envMax: "DEPOSIT_PREPARE_RL_IP_MAX",
+    defMax: 10,
+    envWindow: "DEPOSIT_PREPARE_RL_IP_WINDOW",
+    defWindow: "10 m",
+  },
+};
+
 interface Limiters {
   ip: Ratelimit;
   address?: Ratelimit; // ausente cuando cfg.addr no está (IP-only)

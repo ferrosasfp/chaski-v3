@@ -23,6 +23,7 @@ import type {
   KycStore,
   PayoutAuthorityGateway,
   PayoutGateway,
+  PayoutPrepareGateway,
   PopSigner,
   PrincipalSettlementGateway,
   QuoteGateway,
@@ -56,7 +57,9 @@ export interface TestContainerOverrides {
   // Inyectarlo = "modo real" (mismo criterio que el container: solo con el flag on). El receiver va
   // ACOPLADO al gateway (AR/MNR-4 + CR/MNR-2): en modo real siempre existe, sin opcional que se
   // saltee C5 en silencio.
-  settlement?: { gateway: PrincipalSettlementGateway; receiver: `0x${string}` };
+  // WKH-211 [SDD-GAP #1]: el `prepare` gateway va ACOPLADO dentro de `settlement` (no un opcional
+  // suelto) — modo real ⇔ gateway Y prepare presentes juntos.
+  settlement?: { gateway: PrincipalSettlementGateway; prepare: PayoutPrepareGateway };
   // WKH-206: sin override queda UNDEFINED → ConfirmAndSend corre en modo DEMO byte-idéntico (AC-5).
   // Inyectarlo = "modo PoP" (mismo criterio que el container: solo con el flag on).
   pop?: PopSigner;

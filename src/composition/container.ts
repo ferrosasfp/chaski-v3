@@ -25,6 +25,7 @@ import {
 import { LocalKycPendingStore } from "../infrastructure/kyc-pending-store";
 import { HttpPayoutAuthorityGateway } from "../infrastructure/payout/payout-authority-gateway";
 import { LedgerRefundGateway } from "../infrastructure/refund/ledger-refund-gateway";
+import { HttpPayoutPrepareGateway } from "../infrastructure/settlement/http-payout-prepare-gateway";
 import { HttpSettlementGateway } from "../infrastructure/settlement/http-settlement-gateway";
 import { LocalKycStore } from "../infrastructure/kyc-store";
 import { LocalRepo } from "../infrastructure/persistence";
@@ -86,9 +87,14 @@ export function createContainer(): Container {
   // que el guard de arriba ya resolvió y validó fail-loud. `resolveReceiverAddress()` es puro e
   // idempotente y sólo se evalúa con el flag ON (el ternario corta antes) ⇒ AC-5 intacto, y no
   // puede throwear acá sin haber throweado ya en el guard (que queda BYTE-IDÉNTICO).
+  // WKH-211 [SDD-GAP #1]: el `prepare` gateway va ACOPLADO dentro de `settlement` (no un 9º param
+  // suelto) → `settlement !== undefined ⇔ modo real ⇔ gateway Y prepare presentes juntos`, preservando
+  // el invariante anti-fail-open del ex-`receiver`. El `receiver` se REMUEVE: el `to` ahora es el
+  // depositAddress ATESTADO por remesa que devuelve `prepare` (el use-case ya no lee un receiver global).
+  // Ambos se instancian con el MISMO flag; el guard fail-loud de arriba ya validó adapter=a2a + envs.
   const settlement =
     process.env.NEXT_PUBLIC_EIP3009_ENABLED === "true"
-      ? { gateway: new HttpSettlementGateway(), receiver: resolveReceiverAddress() }
+      ? { gateway: new HttpSettlementGateway(), prepare: new HttpPayoutPrepareGateway() }
       : undefined;
   // Proof-of-possession opt-in (WKH-206/AC-1, CD-2): se instancia SOLO con el flag on. Off ⇒
   // `undefined` → ConfirmAndSend no recibe 8º arg → demo byte-idéntico por construcción (el use-case

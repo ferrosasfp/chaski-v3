@@ -147,9 +147,41 @@ export interface PrincipalSettlementGateway {
     quoteId: string;
     expectedValueMinor: number; // quote.send.minor
     remittanceId: string; // WKH-207 (aditivo): el cliente ya tiene s.id — habilita el ledger server-side
+    // WKH-211 (aditivo): binding HMAC del depositAddress no-custodial. El server lo usa SOLO en modo
+    // deposit-flow (DEPOSIT_ATTESTATION_SECRET presente); en el path estático se ignora. Opcional a
+    // propósito: en modo estático NO existe atestación (el guard estático es byte-idéntico, AC-5/AC-6).
+    depositAttestation?: string;
   }): Promise<
     | { ok: true; txHash: string; valueMinor: number; to: string; from: string; attestation: string }
     | { ok: false; reason: SettlementFailureReason }
+  >;
+}
+
+// ── Prepare del payout no-custodial (WKH-211) ────────────────────────────────
+// Crea la orden TransFi (invoca al agente) y emite la DepositAttestation HMAC que ata el
+// depositAddress a esta remesa, ANTES de que el cliente firme (Opción B, DT-1). El use-case firma
+// `to = depositAddress` del result. Flag-gated: sólo se inyecta con NEXT_PUBLIC_EIP3009_ENABLED=true
+// (acoplado a `settlement` — ver ConfirmAndSend). En demo NO existe ⇒ byte-idéntico (AC-5).
+export interface PayoutPrepareResult {
+  depositAddress: string; // 0x + 40 hex — el `to` no-custodial atestado
+  attestation: string; // DepositAttestation HMAC (b64url.b64url)
+  payoutId: string; // id de la orden TransFi creada
+  provenance: string; // proveniencia (transfi / mock) — propagada al snapshot
+}
+export interface PayoutPrepareGateway {
+  prepare(input: {
+    remittanceId: string;
+    quoteId: string;
+    kycVerificationId: string;
+    address: string;
+    amountUsd: number;
+    beneficiary: Beneficiary;
+    idempotencyKey: string;
+    popChallenge?: string;
+    popSignature?: string;
+  }): Promise<
+    | { ok: true; result: PayoutPrepareResult }
+    | { ok: false; reason: string }
   >;
 }
 
@@ -159,9 +191,13 @@ export interface PrincipalSettlementGateway {
 export interface WalletPort {
   connect(): Promise<string>; // conecta y devuelve la address (el "login")
   getAddress(): Promise<string | null>;
+  // WKH-211 — 3er arg OPCIONAL `deposit`. En modo real (eip3009Enabled()) el `to` de la firma es el
+  // `deposit.address` ATESTADO server-side (NUNCA el receiver estático): sin él, fail-loud (throw), NO
+  // fail-open. Opcional en el tipo SOLO para preservar la firma demo (que lo ignora, AC-5).
   authorizePrincipal(
     quote: Quote,
     remittanceId: string,
+    deposit?: { address: string },
   ): Promise<{
     tx: string; // demo: firma simbólica (AC-5)
     eip3009?: { authorization: Eip3009Authorization; signature: string }; // SOLO en modo real
@@ -209,6 +245,7 @@ export interface RemittanceRepository {
 // PII (beneficiary/documento) — CD-7. Flag-gated: la factory devuelve null con el flag OFF/envs
 // ausentes ⇒ las rutas skipean el persist ⇒ byte-idéntico (AC-2/AC-10).
 export type SettlementLedgerStatus =
+  | 'prepared'   // WKH-211: orden TransFi creada (depositAddress atestado), aún sin principal_in on-chain
   | 'principal_in'
   | 'submitted'
   | 'settled'
@@ -235,6 +272,19 @@ export interface SettlementRecord {
 }
 
 export interface SettlementLedger {
+  // prepare route (WKH-211/AC-8): registra la orden TransFi creada ANTES del principal_in, para dar
+  // visibilidad de órdenes huérfanas (prepare ok + settle falla). El depositAddress va en
+  // receiver_address (semánticamente ES el receiver no-custodial — SIN columna nueva). NUNCA PII (CD-7).
+  // Una fila 'prepared' NUNCA es principal_in (CD-6): la cancelación real de TransFi es follow-up (DT-5).
+  recordOrderPrepared(input: {
+    remittanceId: string;
+    quoteId: string;
+    idempotencyKey: string;
+    depositAddress: string; // → columna receiver_address (NO columna nueva)
+    chainId: number;
+    senderAddress: string;
+    payoutId: string;
+  }): Promise<void>;
   // settle route (AC-1): upsert por tx_hash (ON CONFLICT DO NOTHING), status principal_in.
   recordPrincipalIn(input: {
     remittanceId: string;

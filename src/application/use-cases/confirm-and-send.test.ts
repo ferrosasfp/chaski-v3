@@ -2,10 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import { Money } from "../../domain/money";
 import { type KycVerification, type Quote, Remittance } from "../../domain/remittance";
 import {
+  FAKE_DEPOSIT_ADDRESS,
   FAKE_RECEIVER,
   FAKE_SETTLE_TX,
   FakePayoutAuthorityGateway,
   FakePayoutGateway,
+  FakePayoutPrepareGateway,
   FakePopSigner,
   FakeRefundGateway,
   FakeSettlementGateway,
@@ -337,19 +339,24 @@ function realWallet(): FakeWallet {
   return new FakeWallet(eip3009);
 }
 
-// AR/MNR-4 + CR/MNR-2: el 7º arg es `{ gateway, receiver }`. El receiver se INYECTA (antes el
-// use-case lo leía de process.env vía infrastructure/chain) ⇒ estos tests unitarios volvieron a ser
-// env-free: cero stubEnv, cero unstubAllEnvs. Es SETUP: ningún assert cambió.
-function realMode(gateway: FakeSettlementGateway, receiver: `0x${string}` = FAKE_RECEIVER) {
-  return { gateway, receiver };
+// WKH-211 [SDD-GAP #1]: el 7º arg es `{ gateway, prepare }` (el `receiver` se removió). En modo real
+// el `to` es el depositAddress ATESTADO que devuelve prepare (FAKE_DEPOSIT_ADDRESS por default) — C5 lo
+// compara runtime. El default de prepare resuelve OK; pasá otro para ejercitar AC-7 (prepare falla).
+function realMode(
+  gateway: FakeSettlementGateway,
+  prepare: FakePayoutPrepareGateway = new FakePayoutPrepareGateway(),
+) {
+  return { gateway, prepare };
 }
 
+// El `to` on-chain que reporta el settle DEBE ser el depositAddress atestado (lo que firmó la wallet)
+// para que C5 (isAddressEqual(res.to, deposit.address)) matchee en el happy-path.
 function okSettle(over: Partial<{ txHash: string; valueMinor: number; to: string }> = {}) {
   return new FakeSettlementGateway({
     ok: true,
     txHash: FAKE_SETTLE_TX,
     valueMinor: 400_000_000,
-    to: FAKE_RECEIVER,
+    to: FAKE_DEPOSIT_ADDRESS, // WKH-211: el `to` verificado = depositAddress atestado, NO el receiver
     from: SENDER,
     attestation: "att-fake",
     ...over,
@@ -397,22 +404,28 @@ describe("ConfirmAndSend — settle real del principal (WKH-168, C1-C6)", () => 
     expect(out.snapshot.principalTx).not.toBe("0xprincipal");
   });
 
-  it("AC-10: la atestación del settle se forwardea al submit del payout", async () => {
+  it("WKH-211/AC-1: el depositAttestation de prepare viaja al SETTLE (no al submit); submit NO se llama (DT-7)", async () => {
     const repo = new InMemoryRepo();
     const payouts = new FakePayoutGateway();
     const submitSpy = vi.spyOn(payouts, "submit");
+    const settlement = okSettle();
     const id = await seedQuoted(repo);
-    await new ConfirmAndSend(
+    const out = await new ConfirmAndSend(
       realWallet(),
       payouts,
       repo,
       new FixedClock(),
       new FakePayoutAuthorityGateway(),
       new FakeRefundGateway(),
-      realMode(okSettle()),
+      realMode(settlement),
     ).execute({ remittanceId: id });
 
-    expect(submitSpy.mock.calls[0]?.[0].settlementAttestation).toBe("att-fake");
+    // El binding HMAC de prepare (deposit-att-fake) es lo que el guard B1-B6 re-verifica server-side.
+    expect(settlement.calls[0]?.depositAttestation).toBe("deposit-att-fake");
+    // DT-7: la orden ya se creó en prepare ⇒ el submit del payout NUNCA se llama en modo real.
+    expect(submitSpy).not.toHaveBeenCalled();
+    // markPayoutSubmitted usa el payoutId de prepare (transfi-po-1).
+    expect(out.snapshot.status).toBe("payout_submitted");
   });
 
   it("C1: modo real pero la wallet NO devolvió eip3009 (invariante rota) ⇒ payout_failed, NUNCA principal_in", async () => {
@@ -563,22 +576,28 @@ describe("ConfirmAndSend — marca AC-6 (principal REALMENTE adentro, refund man
     expect(submitSpy).not.toHaveBeenCalled();
   });
 
-  it("AC-6/C8 + contraste AC-5: payout falla ⇒ real = marca manual; DEMO = el reason de hoy INTACTO", async () => {
-    // (a) modo REAL: el principal entró de verdad → marca AC-6.
+  it("WKH-211/DT-7 + contraste AC-5: real = submit NO se llama (payout gateway irrelevante); DEMO = reason del partner INTACTO", async () => {
+    // (a) modo REAL: la orden se creó en prepare ⇒ payouts.submit NUNCA se llama. Un payout gateway
+    // que "fallaría" es IRRELEVANTE: la remesa avanza a payout_submitted (el settled llega por webhook).
+    // El principal_settled_refund_manual del modo real sólo lo produce el 2º expiry (C7), no un submit.
     const repoR = new InMemoryRepo();
     const refundR = new FakeRefundGateway();
+    const payoutsR = new FakePayoutGateway({ status: "failed", failureReason: "partner_down" });
+    const submitSpyR = vi.spyOn(payoutsR, "submit");
     const idR = await seedQuoted(repoR);
     const outR = await new ConfirmAndSend(
       realWallet(),
-      new FakePayoutGateway({ status: "failed", failureReason: "partner_down" }),
+      payoutsR,
       repoR,
       new FixedClock(),
       new FakePayoutAuthorityGateway(),
       refundR,
       realMode(okSettle()),
     ).execute({ remittanceId: idR });
-    expect(outR.snapshot.failureReason).toBe("principal_settled_refund_manual");
-    expect(refundR.calls[0]?.reason).toBe("principal_settled_refund_manual");
+    expect(submitSpyR).not.toHaveBeenCalled(); // DT-7: submit no se dispara en real
+    expect(outR.snapshot.status).toBe("payout_submitted"); // avanza con el payoutId de prepare
+    expect(outR.snapshot.failureReason).toBeNull(); // no hubo fallo (submit ni se llamó)
+    expect(refundR.calls).toHaveLength(0);
 
     // (b) modo DEMO (sin 7º arg): NADA cambia respecto de pre-HU — el reason del partner sobrevive.
     const repoD = new InMemoryRepo();
@@ -667,14 +686,16 @@ describe("ConfirmAndSend — proof-of-possession opt-in (WKH-206)", () => {
     expect(out.snapshot.failureReason).toBeNull(); // el SKIP no degradó nada
   });
 
-  it("DT-2/AR-MNR-1: pop.prove() TIRA en modo REAL ⇒ degrada CONTROLADO (refund manual), NO escapa execute() ni queda varada en principal_in", async () => {
-    // Modo real (settlement inyectado ⇒ markPrincipalIn con el USDC VERIFICADO adentro). Un throw de
-    // prove() (blip de red / 5xx en deployment ON) NO debe escapar execute() ni dejar la remesa en
-    // principal_in: se degrada por el camino de error existente (failAndRefund con principalReallyIn
-    // ⇒ AC-6 = principal_settled_refund_manual).
+  it("WKH-211/AC-7: pop.prove() TIRA en modo REAL ⇒ falla ANTES de firmar (nunca principal_in), NO escapa execute()", async () => {
+    // WKH-211: en el reorder, prove() se ejecuta en PREPARE (paso 2.7), ANTES de authorizePrincipal.
+    // Un throw de prove() (blip de red / 5xx en deployment ON) cae en el catch del prepare → se falla
+    // ANTES de la firma (AC-7): el principal NUNCA entró ⇒ refund normal (NO la marca manual AC-6, que
+    // sólo aplica con el principal ya adentro). NO escapa execute() ni deja la remesa varada.
     const repo = new InMemoryRepo();
     const payouts = new FakePayoutGateway();
     const submitSpy = vi.spyOn(payouts, "submit");
+    const wallet = realWallet();
+    const authorizeSpy = vi.spyOn(wallet, "authorizePrincipal");
     const refund = new FakeRefundGateway();
     const id = await seedQuoted(repo);
     const throwingPop: PopSigner = {
@@ -685,19 +706,21 @@ describe("ConfirmAndSend — proof-of-possession opt-in (WKH-206)", () => {
 
     // El assert de "no escapa": execute() RESUELVE (no rechaza) con la remesa degradada.
     const out = await new ConfirmAndSend(
-      realWallet(),
+      wallet,
       payouts,
       repo,
       new FixedClock(),
       new FakePayoutAuthorityGateway(),
       refund,
-      realMode(okSettle()), // modo real ⇒ principalReallyIn = true
+      realMode(okSettle()), // modo real
       throwingPop,
     ).execute({ remittanceId: id });
 
     expect(out.snapshot.status).not.toBe("principal_in"); // NO queda varada
-    expect(out.snapshot.failureReason).toBe("principal_settled_refund_manual"); // AC-6 (principal real adentro)
-    expect(submitSpy).not.toHaveBeenCalled(); // el submit NUNCA se disparó (prove falló antes)
-    expect(refund.calls[0]?.reason).toBe("principal_settled_refund_manual");
+    expect(out.snapshot.principalTx).toBeNull(); // el principal NUNCA entró (falló antes de firmar)
+    expect(out.snapshot.failureReason).toBe("prepare_unavailable"); // AC-7: fail ANTES de la firma
+    expect(authorizeSpy).not.toHaveBeenCalled(); // la wallet NUNCA firmó (prove falló en prepare)
+    expect(submitSpy).not.toHaveBeenCalled();
+    expect(refund.calls[0]?.reason).toBe("prepare_unavailable");
   });
 });

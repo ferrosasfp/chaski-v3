@@ -8,7 +8,6 @@ import {
   resolveChain,
   resolveChainId,
   resolveNetworkConfig,
-  resolveReceiverAddress,
   resolveUsdcAddress,
 } from "./chain";
 
@@ -85,6 +84,7 @@ export class InjectedWallet implements WalletPort {
   async authorizePrincipal(
     quote: Quote,
     remittanceId: string,
+    deposit?: { address: string },
   ): Promise<{ tx: string; eip3009?: { authorization: Eip3009Authorization; signature: string } }> {
     const eth = injectedProvider();
     if (!eth || !this.address) throw new Error("wallet_not_connected");
@@ -94,7 +94,11 @@ export class InjectedWallet implements WalletPort {
       // AC-10: firma REAL de transferWithAuthorization (EIP-712). value = quote.send.minor (micro-USDC
       // = base units EIP-3009, cero floats). validBefore atado a la expiración del quote.
       const usdc = resolveUsdcAddress();
-      const receiver = resolveReceiverAddress(); // MNR-A: valida isAddress fail-loud (no cast crudo)
+      // WKH-211: en modo real el `to` es el depositAddress ATESTADO server-side (NUNCA el receiver
+      // estático). fail-loud: sin deposit válido no se firma (CD-2/AC-7). NO fallback a
+      // resolveReceiverAddress() — firmar un `to` no confirmado ES el desvío que la HU cierra.
+      if (!deposit || !isAddress(deposit.address)) throw new Error("deposit_address_missing");
+      const receiver = deposit.address as `0x${string}`;
       const nonce = deterministicNonce(remittanceId, quote.quoteId); // CD-19: NO random (WKH-168)
       if (!isParseableIso(quote.expiresAt)) throw new Error("quote_expires_at_invalid"); // WKH-198 AC-5 (CD-8: fail LOUD)
       const validBefore = BigInt(Math.floor(Date.parse(quote.expiresAt) / 1000));
@@ -240,6 +244,7 @@ export class WalletConnectWallet implements WalletPort {
   async authorizePrincipal(
     quote: Quote,
     remittanceId: string,
+    deposit?: { address: string },
   ): Promise<{ tx: string; eip3009?: { authorization: Eip3009Authorization; signature: string } }> {
     const provider = await this.ensureProvider();
     if (!this.address) throw new Error("wallet_not_connected");
@@ -248,7 +253,11 @@ export class WalletConnectWallet implements WalletPort {
     if (eip3009Enabled()) {
       // AC-10: firma REAL de transferWithAuthorization (EIP-712), idéntica a InjectedWallet.
       const usdc = resolveUsdcAddress();
-      const receiver = resolveReceiverAddress(); // MNR-A: valida isAddress fail-loud (no cast crudo)
+      // WKH-211: en modo real el `to` es el depositAddress ATESTADO server-side (NUNCA el receiver
+      // estático). fail-loud: sin deposit válido no se firma (CD-2/AC-7). NO fallback a
+      // resolveReceiverAddress() — firmar un `to` no confirmado ES el desvío que la HU cierra.
+      if (!deposit || !isAddress(deposit.address)) throw new Error("deposit_address_missing");
+      const receiver = deposit.address as `0x${string}`;
       const nonce = deterministicNonce(remittanceId, quote.quoteId); // CD-19: NO random (WKH-168)
       if (!isParseableIso(quote.expiresAt)) throw new Error("quote_expires_at_invalid"); // WKH-198 AC-5 (CD-8: fail LOUD)
       const validBefore = BigInt(Math.floor(Date.parse(quote.expiresAt) / 1000));

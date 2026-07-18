@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { HttpPayoutPrepareGateway } from "../infrastructure/settlement/http-payout-prepare-gateway";
 import { HttpSettlementGateway } from "../infrastructure/settlement/http-settlement-gateway";
 import { createContainer } from "./container";
 
@@ -72,8 +73,8 @@ describe("createContainer — guard fail-loud EIP-3009 (WKH-186 AC-11, CD-3/4/16
 // (riesgo de falso verde). Esto es evidencia más directa: qué recibió el use-case.
 function settlementOf(
   c: ReturnType<typeof createContainer>,
-): { gateway?: unknown; receiver?: unknown } | undefined {
-  return (c.confirmAndSend as unknown as { settlement?: { gateway?: unknown; receiver?: unknown } })
+): { gateway?: unknown; prepare?: unknown } | undefined {
+  return (c.confirmAndSend as unknown as { settlement?: { gateway?: unknown; prepare?: unknown } })
     .settlement;
 }
 
@@ -94,16 +95,15 @@ describe("createContainer — settlement del principal (WKH-168 AC-5/CD-1)", () 
     expect(settlementOf(createContainer())?.gateway).toBeInstanceOf(HttpSettlementGateway);
   });
 
-  // AR/MNR-4 + CR/MNR-2: el composition root es el ÚNICO que resuelve el receiver, y lo inyecta
-  // ACOPLADO al gateway. Antes el use-case lo leía de env importando infrastructure/chain.
-  it("AR/MNR-4: modo real → el receiver de env viaja INYECTADO junto al gateway (application ya no lee env)", () => {
+  // WKH-211 [SDD-GAP #1]: el composition root inyecta el `prepare` gateway ACOPLADO dentro de
+  // `settlement` (ya NO un `receiver`). modo real ⇔ gateway Y prepare presentes juntos (anti-fail-open).
+  it("WKH-211: modo real → settlement lleva el HttpPayoutPrepareGateway acoplado (no un receiver suelto)", () => {
     vi.stubEnv("NEXT_PUBLIC_EIP3009_ENABLED", "true");
     vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a");
     vi.stubEnv("NEXT_PUBLIC_PAYOUT_RECEIVER_ADDRESS", "0x1111111111111111111111111111111111111111");
     vi.stubEnv("NEXT_PUBLIC_USDC_CONTRACT_ADDRESS", "0x5425890298aed601595a70ab815c96711a31bc65");
-    // El receiver inyectado es el de la env, ya validado fail-loud por el guard (resolveReceiverAddress).
-    expect(settlementOf(createContainer())?.receiver).toBe(
-      "0x1111111111111111111111111111111111111111",
-    );
+    const s = settlementOf(createContainer());
+    expect(s?.prepare).toBeInstanceOf(HttpPayoutPrepareGateway);
+    expect(s?.gateway).toBeInstanceOf(HttpSettlementGateway); // ambos juntos ⇔ modo real
   });
 });

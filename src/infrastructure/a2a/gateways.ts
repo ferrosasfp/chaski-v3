@@ -33,6 +33,10 @@ interface RawPayoutResult {
   txRef: string | null;
   reason: string | null;
   provenance: string;
+  // WKH-212 (cross-repo, ya expuesto por el agente): depositAddress no-custodial. null en mock/blocked,
+  // valor real cuando la orden se ejecutó con TRANSFI_ADAPTER_READY. El submit NO lo usa (lo lee el
+  // prepare del result crudo); acá sólo se valida en el shape (CD-10) para no romper el contrato del wire.
+  depositAddress: string | null;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -63,6 +67,9 @@ function isValidPayoutShape(v: unknown): v is RawPayoutResult {
   if (!(typeof v.deliveredLocal === "number" || v.deliveredLocal === null)) return false;
   if (!(typeof v.txRef === "string" || v.txRef === null)) return false;
   if (!(typeof v.reason === "string" || v.reason === null)) return false;
+  // WKH-212/CD-10: el agente ahora expone depositAddress (string | null) en TODO result. Validar el
+  // tipo evita que un shape stale pase silenciosamente (el bug recurrente que CD-10 previene).
+  if (!(typeof v.depositAddress === "string" || v.depositAddress === null)) return false;
   // payoutId null SOLO es válido cuando el payout no se ejecutó (failed/blocked). Si settled/submitted
   // sin payoutId → shape inválido (AC-5): no podríamos trackear el payout.
   if (v.payoutId === null && v.status !== "failed" && v.status !== "blocked") return false;

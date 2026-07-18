@@ -22,6 +22,7 @@ import {
   ATTESTATION_TTL_SECONDS,
   issueSettlementAttestation,
 } from "../../../../src/infrastructure/settlement/attestation";
+import { verifyDepositAttestation } from "../../../../src/infrastructure/settlement/deposit-attestation";
 import {
   broadcastSettle,
   isBroadcasterConfigured,
@@ -141,9 +142,51 @@ export async function POST(req: Request): Promise<Response> {
   if (value !== String(expectedValueMinor)) {
     return NextResponse.json({ error: "settle_amount_mismatch" }, { status: 400 });
   }
-  // S12 — CD-9: el payTo sale de ENV, jamás del body. Acá solo validamos que lo firmado coincida.
-  if (!isAddressEqual(to, receiver)) {
-    return NextResponse.json({ error: "settle_receiver_mismatch" }, { status: 400 });
+  // S12 / B1-B6 — el `to` FIRMADO se compara contra el valor SERVER-CONTROLADO (CD-9: jamás el body).
+  // Doble-modo flag-gated por la PRESENCIA de DEPOSIT_ATTESTATION_SECRET (leído en runtime, CD-14):
+  //  · Modo estático (secreto AUSENTE): el valor es el receiver de ENV — path WKH-168/209 BYTE-IDÉNTICO.
+  //  · Modo deposit-flow (secreto PRESENTE): el valor es el depositAddress ATESTADO por HMAC (WKH-211).
+  //    El `to` deja de ser un env global reusable y se ata a ESTA remesa (remittanceId+quoteId+chainId+
+  //    exp). MÁS fuerte, no más débil (DT-3): V1-V9 on-chain queda INTACTA; sólo cambia el VALOR de
+  //    expectedTo. El body NUNCA es la fuente de expectedTo (sigue siendo un HMAC server-firmado).
+  const DEPOSIT_SECRET = process.env.DEPOSIT_ATTESTATION_SECRET; // CD-14: dentro del handler
+  let expectedTo: `0x${string}` = receiver; // modo estático por default
+  if (DEPOSIT_SECRET) {
+    // B1 — atestación MANDATORIA en este modo (sin ella no hay `to` legítimo).
+    const token = parsed.depositAttestation;
+    if (typeof token !== "string" || !token.trim()) {
+      return NextResponse.json({ error: "settle_binding_missing" }, { status: 400 });
+    }
+    // B2 — formato/HMAC/exp/tipos colapsan en null → 400 opaco (no-oracle).
+    const att = verifyDepositAttestation(token, Date.now());
+    if (!att) {
+      return NextResponse.json({ error: "settle_binding_invalid" }, { status: 400 });
+    }
+    // B3 — ata el binding a ESTA remesa. En este modo el remittanceId del body es MANDATORIO no-vacío.
+    const bodyRemittanceId = typeof parsed.remittanceId === "string" ? parsed.remittanceId : "";
+    if (!bodyRemittanceId.trim() || att.remittanceId !== bodyRemittanceId) {
+      return NextResponse.json({ error: "settle_binding_invalid" }, { status: 400 });
+    }
+    // B4 — mata el reciclado cross-quote. quoteId ya validado no-vacío (S línea 133). Igualdad EXACTA
+    // (ID opaco del partner, sin normalizar — espíritu A7′).
+    if (att.quoteId !== quoteId) {
+      return NextResponse.json({ error: "settle_binding_invalid" }, { status: 400 });
+    }
+    // B5 — mata replay cross-entorno (espíritu A7″). chainId de la ENV server-side (CD-9), NUNCA del body.
+    if (att.chainId !== chainId) {
+      return NextResponse.json({ error: "settle_binding_invalid" }, { status: 400 });
+    }
+    // B6 — el `to` firmado DEBE ser el depositAddress atestado. Rechazo PRE-broadcast (AC-3): NUNCA se
+    // llama broadcastSettle ni verifySettlementOnChain con un `to` no atestado.
+    if (!isAddressEqual(to, att.depositAddress as `0x${string}`)) {
+      return NextResponse.json({ error: "settle_receiver_mismatch" }, { status: 400 });
+    }
+    expectedTo = att.depositAddress as `0x${string}`;
+  } else {
+    // S12 — modo estático (byte-idéntico WKH-168/209): el payTo sale de ENV, jamás del body.
+    if (!isAddressEqual(to, receiver)) {
+      return NextResponse.json({ error: "settle_receiver_mismatch" }, { status: 400 });
+    }
   }
   // S13 — ata la firma al caller declarado. Ningún fetch.
   if (!isAddressEqual(from, address as `0x${string}`)) {
@@ -155,7 +198,7 @@ export async function POST(req: Request): Promise<Response> {
   const sent = await broadcastSettle({
     authorization: { from, to, value, validAfter, validBefore, nonce },
     signature,
-    payTo: receiver, // CD-9: env
+    payTo: expectedTo, // CD-9: server-controlado (receiver de ENV en estático; depositAddress atestado en deposit-flow)
     asset: usdc, // CD-9: env
     chainId, // CD-9: env
     amountMinor: String(expectedValueMinor), // pinneado igual a authorization.value por S11
@@ -177,7 +220,7 @@ export async function POST(req: Request): Promise<Response> {
   const verified = await verifySettlementOnChain({
     txHash: sent.txHash,
     expectedFrom: from,
-    expectedTo: receiver, // CD-9: env, NO el `to` del body (aunque S12 ya los pinneó iguales)
+    expectedTo, // CD-9: server-controlado (env estático / depositAddress atestado), NO el `to` del body
     expectedValueMinor,
   });
   if (!verified.ok) {

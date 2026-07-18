@@ -73,6 +73,45 @@ function mapRow(r: RawRow): SettlementRecord {
 export class SupabaseSettlementLedger implements SettlementLedger {
   constructor(private readonly client: SupabaseClient) {}
 
+  async recordOrderPrepared(input: {
+    remittanceId: string;
+    quoteId: string;
+    idempotencyKey: string;
+    depositAddress: string;
+    chainId: number;
+    senderAddress: string;
+    payoutId: string;
+  }): Promise<void> {
+    // WKH-211/AC-8: registra la orden TransFi creada en prepare (ANTES del principal_in on-chain), para
+    // visibilidad de huérfanas (DT-5). Upsert por idempotency_key (retry de prepare = una sola fila).
+    // El depositAddress va en receiver_address (ES el receiver no-custodial, SIN columna nueva). NUNCA
+    // PII (CD-7). value_minor no se conoce aún → '0' (el real llega en recordPrincipalIn). tx_hash aún
+    // no existe (no hubo settle) → placeholder determinístico por idempotency_key (satisface el NOT NULL
+    // y no colisiona con un tx_hash real 0x+64hex).
+    // [STORY-GAP]: el índice único uq_remit_settle_idem + tx_hash NOT NULL hace que un recordPrincipalIn
+    // posterior (upsert onConflict tx_hash con el TX real) colisione con esta fila por idempotency_key →
+    // ese write best-effort falla (se loguea, NUNCA rompe el money-path, CD-17). Efecto: una remesa
+    // preparada+settleada puede quedar visible como 'prepared'. Fund-safe (CD-6 se mantiene: 'prepared'
+    // JAMÁS pasa a principal_in por esta vía). La reconciliación real (relajar tx_hash / re-keyear el
+    // upsert de principal_in por idempotency_key) es follow-up — ver reporte F3.
+    const { error } = await this.client.from(TABLE).upsert(
+      {
+        remittance_id: input.remittanceId,
+        quote_id: input.quoteId,
+        idempotency_key: input.idempotencyKey,
+        tx_hash: `prepared:${input.idempotencyKey}`, // placeholder (NOT NULL); no hay settle aún
+        chain_id: input.chainId,
+        sender_address: input.senderAddress.toLowerCase(),
+        receiver_address: input.depositAddress.toLowerCase(), // el depositAddress ES el receiver
+        value_minor: "0", // desconocido en prepare; el real llega en recordPrincipalIn
+        status: "prepared",
+        payout_id: input.payoutId,
+      },
+      { onConflict: "idempotency_key", ignoreDuplicates: true },
+    );
+    if (error) throw new Error(`ledger_record_order_prepared_failed:${error.code ?? "unknown"}`);
+  }
+
   async recordPrincipalIn(input: {
     remittanceId: string;
     quoteId: string;

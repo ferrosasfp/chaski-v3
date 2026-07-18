@@ -23,6 +23,7 @@ import type {
   PayoutAuthorityGateway,
   PayoutAuthorization,
   PayoutGateway,
+  PayoutPrepareGateway,
   PayoutRecord,
   PayoutSubmit,
   PopSigner,
@@ -262,6 +263,8 @@ export class FakeWallet implements WalletPort {
   async authorizePrincipal(
     _quote: Quote,
     _remittanceId?: string,
+    _deposit?: { address: string }, // WKH-211: 3er arg (to = depositAddress). El fake lo ignora; los
+    // tests spyean authorizePrincipal para inspeccionar que recibió el depositAddress de prepare.
   ): Promise<{ tx: string; eip3009?: { authorization: Eip3009Authorization; signature: string } }> {
     return this.eip3009 ? { tx: "0xprincipal", eip3009: this.eip3009 } : { tx: "0xprincipal" };
   }
@@ -370,6 +373,7 @@ export class FakeSettlementGateway implements PrincipalSettlementGateway {
     quoteId: string;
     expectedValueMinor: number;
     remittanceId: string;
+    depositAttestation?: string; // WKH-211: el binding HMAC que viaja al settle en modo real
   }> = [];
   constructor(
     private readonly result: FakeSettleResult = {
@@ -389,9 +393,59 @@ export class FakeSettlementGateway implements PrincipalSettlementGateway {
     quoteId: string;
     expectedValueMinor: number;
     remittanceId: string;
+    depositAttestation?: string;
   }): Promise<FakeSettleResult> {
     this.calls.push(input);
     if (this.mode === "reject") throw new Error("settlement_boom");
+    return this.result;
+  }
+}
+
+// WKH-211 — PayoutPrepareGateway fake. Por default resuelve OK con un depositAddress sintético (el `to`
+// que el use-case pasa a authorizePrincipal). Pasá { ok:false, reason } o mode="reject" para ejercitar
+// AC-7 (falla ANTES de firmar). Registra los inputs recibidos (molde de FakeSettlementGateway).
+export const FAKE_DEPOSIT_ADDRESS = "0x5555555555555555555555555555555555555555";
+export type FakePrepareResult =
+  | { ok: true; result: { depositAddress: string; attestation: string; payoutId: string; provenance: string } }
+  | { ok: false; reason: string };
+
+export class FakePayoutPrepareGateway implements PayoutPrepareGateway {
+  public calls: Array<{
+    remittanceId: string;
+    quoteId: string;
+    kycVerificationId: string;
+    address: string;
+    amountUsd: number;
+    beneficiary: unknown;
+    idempotencyKey: string;
+    popChallenge?: string;
+    popSignature?: string;
+  }> = [];
+  constructor(
+    private readonly result: FakePrepareResult = {
+      ok: true,
+      result: {
+        depositAddress: FAKE_DEPOSIT_ADDRESS,
+        attestation: "deposit-att-fake",
+        payoutId: "transfi-po-1",
+        provenance: "transfi",
+      },
+    },
+    private readonly mode: "resolve" | "reject" = "resolve",
+  ) {}
+  async prepare(input: {
+    remittanceId: string;
+    quoteId: string;
+    kycVerificationId: string;
+    address: string;
+    amountUsd: number;
+    beneficiary: import("../domain/remittance").Beneficiary;
+    idempotencyKey: string;
+    popChallenge?: string;
+    popSignature?: string;
+  }): Promise<FakePrepareResult> {
+    this.calls.push(input);
+    if (this.mode === "reject") throw new Error("prepare_boom");
     return this.result;
   }
 }
@@ -410,6 +464,41 @@ export class FakeSettlementLedger implements SettlementLedger {
   public store = new Map<string, SettlementRecord>();
   private seq = 0;
   constructor(private nowIso: string = T0) {}
+
+  async recordOrderPrepared(input: {
+    remittanceId: string;
+    quoteId: string;
+    idempotencyKey: string;
+    depositAddress: string;
+    chainId: number;
+    senderAddress: string;
+    payoutId: string;
+  }): Promise<void> {
+    // WKH-211: registra la orden preparada. Upsert por idempotency_key (retry = una sola fila). El
+    // depositAddress va en receiver_address (ES el receiver no-custodial). value_minor '0' (aún no se
+    // conoce); tx_hash placeholder (no hubo settle). status 'prepared' (NUNCA principal_in — CD-6).
+    for (const r of this.store.values()) {
+      if (r.idempotencyKey === input.idempotencyKey) return;
+    }
+    const id = `prep-${++this.seq}`;
+    this.store.set(id, {
+      id,
+      remittanceId: input.remittanceId,
+      quoteId: input.quoteId,
+      idempotencyKey: input.idempotencyKey,
+      txHash: `prepared:${input.idempotencyKey}`,
+      chainId: input.chainId,
+      senderAddress: input.senderAddress.toLowerCase(),
+      receiverAddress: input.depositAddress.toLowerCase(),
+      valueMinor: 0,
+      status: "prepared",
+      attempts: 0,
+      payoutId: input.payoutId,
+      lastError: null,
+      createdAt: this.nowIso,
+      updatedAt: this.nowIso,
+    });
+  }
 
   async recordPrincipalIn(input: {
     remittanceId: string;

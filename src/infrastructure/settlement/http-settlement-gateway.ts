@@ -74,6 +74,7 @@ export class HttpSettlementGateway implements PrincipalSettlementGateway {
     quoteId: string;
     expectedValueMinor: number;
     remittanceId: string; // WKH-207 (aditivo): server-only, para el ledger. Con flag OFF se ignora.
+    depositAttestation?: string; // WKH-211 (aditivo): binding HMAC; el server lo usa sólo en deposit-flow.
   }): Promise<
     | { ok: true; txHash: string; valueMinor: number; to: string; from: string; attestation: string }
     | { ok: false; reason: SettlementFailureReason }
@@ -92,6 +93,9 @@ export class HttpSettlementGateway implements PrincipalSettlementGateway {
           quoteId: input.quoteId,
           expectedValueMinor: input.expectedValueMinor,
           remittanceId: input.remittanceId, // WKH-207: aditivo; server lo usa sólo con el flag ON
+          // WKH-211: binding HMAC. undefined en modo estático ⇒ JSON.stringify lo omite ⇒ body
+          // byte-idéntico a WKH-209 (el server exige B1 sólo con DEPOSIT_ATTESTATION_SECRET presente).
+          depositAttestation: input.depositAttestation,
         }),
       });
     } catch {

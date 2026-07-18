@@ -4,6 +4,7 @@ import type {
   Clock,
   PayoutAuthorityGateway,
   PayoutGateway,
+  PayoutPrepareGateway,
   PopSigner,
   PrincipalSettlementGateway,
   RefundGateway,
@@ -39,7 +40,16 @@ export class ConfirmAndSend {
     //    fail-loud del container (container.ts:60-68) YA probó que el receiver está configurado y
     //    bien formado (resolveReceiverAddress() throwea en construcción). Misma env, mismo
     //    composition root, mismo guard ⇒ C5 queda IDÉNTICO en fuerza, sin opcional y sin fail-open.
-    private readonly settlement?: { gateway: PrincipalSettlementGateway; receiver: `0x${string}` },
+    // WKH-211 [SDD-GAP #1 resuelto]: el `prepare` gateway viaja ACOPLADO dentro de `settlement` (no
+    // como 9º param suelto). Así `settlement !== undefined ⇔ modo real ⇔ gateway Y prepare presentes
+    // JUNTOS` — preserva el invariante anti-fail-open ya establecido para el ex-`receiver` (un opcional
+    // suelto `prepare?` que quede undefined en real saltearía el binding EN SILENCIO). El `receiver` se
+    // REMUEVE: el `to` ya no es un valor estático global — es el depositAddress ATESTADO por remesa que
+    // devuelve `prepare` (C5 lo compara runtime). El container inyecta ambos SOLO con el flag ON.
+    private readonly settlement?: {
+      gateway: PrincipalSettlementGateway;
+      prepare: PayoutPrepareGateway;
+    },
     // WKH-206 — 8º param OPCIONAL. MISMO criterio que `settlement`: el container solo lo inyecta con
     // NEXT_PUBLIC_PAYOUT_POP_ENABLED=true ⇒ AC-5 se preserva POR CONSTRUCCIÓN, sin que el use-case lea
     // env vars (CD-13). Undefined = demo byte-idéntico (no se adjunta prueba al submit).
@@ -115,9 +125,61 @@ export class ConfirmAndSend {
       return r;
     }
 
+    // 2.7 PREPARE no-custodial (WKH-211, SOLO modo real, ANTES de la firma). Crea la orden TransFi y
+    //     obtiene el depositAddress ATESTADO server-side; el sender firmará `to = depositAddress`.
+    //     AC-7: si prepare falla, se falla ANTES de pedir la firma (la wallet NUNCA firma un `to` no
+    //     confirmado). El principal NO entró ⇒ principalReallyIn = false (refund normal, sin marca AC-6).
+    //     Modo demo (this.settlement === undefined): NO se ejecuta ⇒ byte-idéntico (AC-5).
+    let deposit: { address: string } | undefined; // 3er arg de authorizePrincipal (undefined en demo)
+    let depositAttestation: string | undefined; // binding HMAC que viaja al settle (WKH-211)
+    let preparedPayoutId: string | undefined; // markPayoutSubmitted en real (la orden ya se creó)
+    let preparedProvenance: string | undefined;
+    if (this.settlement) {
+      try {
+        // La prueba PoP (WKH-206) se obtiene ACÁ y se forwardea al guard PR6 de /api/payout/prepare
+        // (mismo patrón que el submit del demo). prove() → null ⇒ SKIP (mecanismo server-off); throw
+        // ⇒ cae al catch de abajo (fail-closed ANTES de firmar). NO claim-once (stateless, DT-6/PR6).
+        let popChallenge: string | undefined;
+        let popSignature: string | undefined;
+        if (this.pop) {
+          const proof = await this.pop.prove(address ?? "");
+          if (proof) {
+            popChallenge = proof.challenge;
+            popSignature = proof.signature;
+          }
+        }
+        const prep = await this.settlement.prepare.prepare({
+          remittanceId: s.id,
+          quoteId: quote.quoteId,
+          kycVerificationId: kyc.verificationId,
+          address: address ?? "", // misma coerción que authority.authorize()
+          amountUsd: s.sendUsd.major,
+          beneficiary: s.beneficiary,
+          idempotencyKey: `${s.id}:${quote.quoteId}`,
+          popChallenge,
+          popSignature,
+        });
+        if (!prep.ok) {
+          // AC-7: falla ANTES de firmar. Sin depositAddress confirmado, no se pide la firma.
+          await this.failAndRefund(r, prep.reason, false);
+          return r;
+        }
+        deposit = { address: prep.result.depositAddress };
+        depositAttestation = prep.result.attestation;
+        preparedPayoutId = prep.result.payoutId;
+        preparedProvenance = prep.result.provenance;
+      } catch {
+        // prove()/prepare() throw (red/bug) ⇒ fail-closed ANTES de la firma (el principal NUNCA entró).
+        await this.failAndRefund(r, "prepare_unavailable", false);
+        return r;
+      }
+    }
+
     // 3. Autorizar el principal on-chain (el sender firma; el operador NO fondea).
     //    (paso renumerado tras insertar la autoridad server-side WKH-180 como paso 2)
-    const { tx, eip3009 } = await this.wallet.authorizePrincipal(quote, s.id);
+    //    WKH-211: en modo real el 3er arg `deposit` fija el `to` = depositAddress atestado (AC-1). En
+    //    demo `deposit` es undefined ⇒ authorizePrincipal firma el mensaje simbólico (byte-idéntico).
+    const { tx, eip3009 } = await this.wallet.authorizePrincipal(quote, s.id, deposit);
 
     // 3.2 SETTLE REAL (WKH-168). Hasta esta HU, `markPrincipalIn(tx)` marcaba la remesa como
     //     "plata adentro" con una FIRMA: nadie transmitía la autorización, nadie esperaba un
@@ -142,7 +204,8 @@ export class ConfirmAndSend {
           address: address ?? "", // misma coerción que authority.authorize()
           quoteId: quote.quoteId,
           expectedValueMinor: quote.send.minor,
-          remittanceId: s.id, // WKH-207 (CD-5): único arg aditivo — habilita el ledger server-side
+          remittanceId: s.id, // WKH-207 (CD-5): habilita el ledger server-side
+          depositAttestation, // WKH-211: binding HMAC — el guard B1-B6 lo re-verifica server-side
         });
       } catch {
         // C3 — CD-12: ninguna excepción escapa. Red caída/bug ⇒ bloquear (el principal NO entró, o
@@ -175,15 +238,16 @@ export class ConfirmAndSend {
         return r;
       }
       // C5 — este SÍ puede dispararse (asimetría con C4): `res.to` es un hecho de la CADENA
-      // (onchain-verifier.ts:135 devuelve `t.args.to` del log) y se compara contra el receiver
-      // configurado del CLIENTE ⇒ un drift de env cliente↔server lo enciende. Tampoco es el guard
-      // del money-path (ese es V6, arriba): es su detector.
+      // (onchain-verifier.ts:135 devuelve `t.args.to` del log) y se compara RUNTIME contra el
+      // depositAddress ATESTADO que devolvió prepare (WKH-211: ya NO this.settlement.receiver, que se
+      // removió). Un drift cliente↔server lo enciende. Tampoco es el guard del money-path (ese es
+      // V1-V9/B6 server-side): es su detector cliente.
       let toOk = false;
       try {
-        toOk = isAddressEqual(res.to as `0x${string}`, this.settlement.receiver);
+        toOk = deposit != null && isAddressEqual(res.to as `0x${string}`, deposit.address as `0x${string}`);
       } catch {
-        toOk = false; // address malformada ⇒ fail-closed (CD-12). Sólo `res.to` puede serlo: el
-        // receiver inyectado ya pasó isAddress en el container (resolveReceiverAddress()).
+        toOk = false; // address malformada ⇒ fail-closed (CD-12). El depositAddress ya pasó isAddress
+        // en prepare/verifyDepositAttestation; sólo `res.to` puede ser malformada acá.
       }
       if (!toOk) {
         await this.failAndRefund(r, "settlement_receiver_mismatch", false);
@@ -213,7 +277,18 @@ export class ConfirmAndSend {
       return r; // firma ya ocurrida, pero NO se submitea el payout
     }
 
-    // 4. Submit del payout (idempotente por remesa+quote).
+    // 4-real. WKH-211/DT-7: la orden TransFi YA se creó en prepare (2.7). En modo real NO se llama
+    //   payouts.submit: el PEN lo libera TransFi al detectar el depósito on-chain en el depositAddress,
+    //   y el estado `settled` llega async por el webhook (WKH-210 → ledger). Se marca payout_submitted
+    //   con el payoutId de prepare (preparedPayoutId/preparedProvenance están definidos porque
+    //   this.settlement ⇒ prep.ok, arriba). markPrincipalIn ya ocurrió SOLO tras V1-V9 (CD-6).
+    if (this.settlement) {
+      r.markPayoutSubmitted(preparedPayoutId ?? "", this.clock.nowIso(), preparedProvenance ?? "");
+      await this.repo.save(r);
+      return r;
+    }
+
+    // 4. Submit del payout (idempotente por remesa+quote). SOLO modo demo (byte-idéntico a pre-HU, AC-5).
     const idempotencyKey = `${s.id}:${quote.quoteId}`;
     try {
       // WKH-206: prueba de posesión. Solo en modo opt-in (this.pop inyectado). En demo queda undefined

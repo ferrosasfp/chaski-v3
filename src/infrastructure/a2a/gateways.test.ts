@@ -74,7 +74,7 @@ describe("A2aQuoteGateway (AC-3)", () => {
 describe("A2aPayoutGateway (AC-4/AC-5/AC-14)", () => {
   it("AC-4: submit → POST /api/a2a/payout/submit; idempotencyKey INTACTO, kycPayoutAllowed:true sintetizado", async () => {
     const fetchMock = okJson({
-      result: { slug: "remit-cashout-payout", executed: true, status: "submitted", payoutId: "po-1", deliveredLocal: null, txRef: null, reason: null, provenance: "remit-cashout-payout" },
+      result: { slug: "remit-cashout-payout", executed: true, status: "submitted", payoutId: "po-1", deliveredLocal: null, txRef: null, reason: null, provenance: "remit-cashout-payout", depositAddress: null },
     });
     vi.stubGlobal("fetch", fetchMock);
     const rec = await new A2aPayoutGateway().submit(payoutReq);
@@ -92,7 +92,7 @@ describe("A2aPayoutGateway (AC-4/AC-5/AC-14)", () => {
 
   it("AC-4: mapea settled con deliveredLocal→Money PEN + txRef", async () => {
     vi.stubGlobal("fetch", okJson({
-      result: { status: "settled", payoutId: "po-2", deliveredLocal: 1478.15, txRef: "0xdlv", reason: null, provenance: "transfi" },
+      result: { status: "settled", payoutId: "po-2", deliveredLocal: 1478.15, txRef: "0xdlv", reason: null, provenance: "transfi", depositAddress: "0x4444444444444444444444444444444444444444" },
     }));
     const rec = await new A2aPayoutGateway().submit(payoutReq);
     expect(rec.status).toBe("settled");
@@ -103,7 +103,7 @@ describe("A2aPayoutGateway (AC-4/AC-5/AC-14)", () => {
 
   it("DT-13: blocked → failed", async () => {
     vi.stubGlobal("fetch", okJson({
-      result: { status: "blocked", payoutId: null, deliveredLocal: null, txRef: null, reason: "sanctions_hit", provenance: "p" },
+      result: { status: "blocked", payoutId: null, deliveredLocal: null, txRef: null, reason: "sanctions_hit", provenance: "p", depositAddress: null },
     }));
     const rec = await new A2aPayoutGateway().submit(payoutReq);
     expect(rec.status).toBe("failed");
@@ -125,14 +125,14 @@ describe("A2aPayoutGateway (AC-4/AC-5/AC-14)", () => {
 
   it("AC-5: shape inválido (settled sin payoutId) → throw a2a_payout_bad_shape", async () => {
     vi.stubGlobal("fetch", okJson({
-      result: { status: "settled", payoutId: null, deliveredLocal: 1478.15, txRef: "0x", reason: null, provenance: "p" },
+      result: { status: "settled", payoutId: null, deliveredLocal: 1478.15, txRef: "0x", reason: null, provenance: "p", depositAddress: null },
     }));
     await expect(new A2aPayoutGateway().submit(payoutReq)).rejects.toThrow("a2a_payout_bad_shape");
   });
 
   it("AC-14: status(payoutId) devuelve el PayoutRecord cacheado del submit()", async () => {
     vi.stubGlobal("fetch", okJson({
-      result: { status: "settled", payoutId: "po-3", deliveredLocal: 1478.15, txRef: "0xdlv", reason: null, provenance: "p" },
+      result: { status: "settled", payoutId: "po-3", deliveredLocal: 1478.15, txRef: "0xdlv", reason: null, provenance: "p", depositAddress: null },
     }));
     const gw = new A2aPayoutGateway();
     const submitted = await gw.submit(payoutReq);

@@ -3,6 +3,7 @@
 // chainId en un adapter y config en el otro.
 import { type Chain, isAddress } from "viem";
 import { base, baseSepolia } from "viem/chains";
+import { PublicKey } from "@solana/web3.js";
 
 const BASE_SEPOLIA_CHAIN_ID = 84532;
 const BASE_MAINNET_CHAIN_ID = 8453;
@@ -10,6 +11,7 @@ const BASE_MAINNET_CHAIN_ID = 8453;
 /** Config estable por red (NO secreta, NO env-editable para name/version — DT-3). El `eip712`
  *  coincide con el DOMAIN_SEPARATOR on-chain real (verificado, wasiai-facilitator/chains/base.ts). */
 export type NetworkConfig = {
+  vm: "evm";
   chainId: number;
   viemChain: Chain;
   /** USDC canónico de Circle en esta red — REFERENCIA documentada (DT-4). El verifyingContract real
@@ -20,8 +22,11 @@ export type NetworkConfig = {
   rpcEnvVar: "BASE_SEPOLIA_RPC_URL" | "BASE_MAINNET_RPC_URL";
 };
 
+export type EvmNetworkConfig = NetworkConfig; // alias de compat (discriminante vm:"evm")
+
 const NETWORKS: Record<typeof BASE_SEPOLIA_CHAIN_ID | typeof BASE_MAINNET_CHAIN_ID, NetworkConfig> = {
   [BASE_SEPOLIA_CHAIN_ID]: {
+    vm: "evm",
     chainId: BASE_SEPOLIA_CHAIN_ID,
     viemChain: baseSepolia,
     canonicalUsdc: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
@@ -29,6 +34,7 @@ const NETWORKS: Record<typeof BASE_SEPOLIA_CHAIN_ID | typeof BASE_MAINNET_CHAIN_
     rpcEnvVar: "BASE_SEPOLIA_RPC_URL",
   },
   [BASE_MAINNET_CHAIN_ID]: {
+    vm: "evm",
     chainId: BASE_MAINNET_CHAIN_ID,
     viemChain: base,
     canonicalUsdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
@@ -87,4 +93,72 @@ export function resolveReceiverAddress(): `0x${string}` {
   const raw = process.env.NEXT_PUBLIC_PAYOUT_RECEIVER_ADDRESS;
   if (!raw || !isAddress(raw)) throw new Error("payout_receiver_not_configured"); // fail-loud
   return raw;
+}
+
+// ── Solana (WKH-206 / HU-SOL-1) — config devnet paralela, NO reemplaza EVM ────────
+export interface SolanaNetworkConfig {
+  vm: "solana";
+  cluster: "devnet"; // única entrada en esta HU (mainnet-beta → HU-SOL-2/SOL-4)
+  /** USDC devnet de Circle — REFERENCIA documentada (análogo a canonicalUsdc EVM). El mint REAL sale
+   *  de resolveSolanaUsdcMint() (env-driven, CD-6). NO se hardcodea en el resolver. */
+  canonicalUsdcMint: string;
+  usdcMintEnvVar: "NEXT_PUBLIC_SOLANA_USDC_MINT";
+  rpcEnvVar: "SOLANA_DEVNET_RPC_URL";
+}
+export type VmNetworkConfig = EvmNetworkConfig | SolanaNetworkConfig;
+
+const SOLANA_DEVNET: SolanaNetworkConfig = {
+  vm: "solana",
+  cluster: "devnet",
+  canonicalUsdcMint: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", // Circle USDC devnet (REFERENCIA)
+  usdcMintEnvVar: "NEXT_PUBLIC_SOLANA_USDC_MINT",
+  rpcEnvVar: "SOLANA_DEVNET_RPC_URL",
+};
+
+/** VM activa. Env ORTOGONAL a NEXT_PUBLIC_CHAIN_ID (que sigue siendo EVM-only). unset/"" → "evm"
+ *  (fail-safe default, CD-SDD-12: ningún deploy existente cambia de VM por omisión). Un valor
+ *  explícito inválido → throw (fail-loud, AC-6). */
+export function resolveActiveVm(): "evm" | "solana" {
+  const raw = process.env.NEXT_PUBLIC_VM;
+  if (!raw || raw === "evm") return "evm";
+  if (raw === "solana") return "solana";
+  throw new Error("unsupported_vm"); // fail-loud (AC-6)
+}
+
+/** Config de la red Solana activa (devnet, única entrada en esta HU). */
+export function resolveSolanaNetworkConfig(): SolanaNetworkConfig {
+  return SOLANA_DEVNET;
+}
+
+/** Mint USDC Solana — ÚNICA fuente (env NEXT_PUBLIC_SOLANA_USDC_MINT); fail-loud si falta/malformado.
+ *  Valida con PublicKey de @solana/web3.js (base58), NUNCA con isAddress de viem (CD-2/CD-6). */
+export function resolveSolanaUsdcMint(): string {
+  const raw = process.env.NEXT_PUBLIC_SOLANA_USDC_MINT;
+  if (!raw) throw new Error("solana_usdc_mint_not_configured"); // fail-loud
+  try {
+    new PublicKey(raw); // lanza TypeError si no es base58 válido
+  } catch {
+    throw new Error("solana_usdc_mint_not_configured"); // fail-loud
+  }
+  return raw;
+}
+
+/** RPC READ-ONLY de Solana devnet (server-only). Paralelo a resolveRpcUrl. undefined si la env no está. */
+export function resolveSolanaRpcUrl(): string | undefined {
+  switch (resolveSolanaNetworkConfig().rpcEnvVar) {
+    case "SOLANA_DEVNET_RPC_URL":
+      return process.env.SOLANA_DEVNET_RPC_URL;
+  }
+}
+
+/** Dispatcher multi-VM (AC-2/AC-6). switch sobre resolveActiveVm() — sin object-injection (CD-7). */
+export function resolveActiveNetworkConfig(): VmNetworkConfig {
+  switch (resolveActiveVm()) {
+    case "evm":
+      return resolveNetworkConfig(); // reusa el resolver EVM INTACTO
+    case "solana":
+      return resolveSolanaNetworkConfig();
+    default:
+      throw new Error("unsupported_vm"); // inalcanzable (resolveActiveVm ya throwea), defensa AC-6
+  }
 }

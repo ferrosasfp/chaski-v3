@@ -15,6 +15,7 @@
     "qa": "npm run typecheck && npm run test"
   },
   "dependencies": {
+    "@solana/web3.js": "^1.98.4",
     "@supabase/supabase-js": "^2.110.7",
     "@tanstack/react-query": "^5.59.0",
     "@upstash/ratelimit": "^2.0.8",

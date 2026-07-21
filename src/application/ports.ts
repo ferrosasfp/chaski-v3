@@ -131,6 +131,33 @@ export interface Eip3009Authorization {
   nonce: string; // 0x + 64 hex (bytes32)
 }
 
+// ── VmAuthorization (WKH-206 / HU-SOL-1) — andamiaje de TIPOS multi-VM ────────────
+// El discriminador `vm` vive a nivel ENVELOPE { authorization, signature }, NO dentro del payload
+// EIP-3009 (Eip3009Authorization se mantiene byte-idéntico: se firma EIP-712 y se serializa cruda al
+// POST /api/settle/principal — meterle un campo cambiaría ese body → violación money-path CD-3/CD-SDD-7).
+// Estructuralmente `EvmAuthorization` (menos el tag `vm`) == el `eip3009?:` de authorizePrincipal (L203),
+// que NO se re-tipa en esta HU para preservar byte-identidad (AC-5). El wiring runtime es HU-SOL-2/SOL-4.
+
+// Variante EVM del envelope (envuelve el payload EIP-3009 INTACTO).
+export interface EvmAuthorization {
+  vm: "evm";
+  authorization: Eip3009Authorization;
+  signature: string;
+}
+
+// Variante Solana — PLACEHOLDER DE TIPOS (DT-3). Sin lógica de firma/verificación (Scope OUT).
+// Los campos pueden ajustarse en HU-SOL-2 (legacy Transaction vs VersionedTransaction). [TBD HU-SOL-2]
+export interface SolanaAuthorization {
+  vm: "solana";
+  from: string; // base58 (PublicKey del pagador)              [TBD HU-SOL-2]
+  to: string; // base58 (ATA / owner del receiver)             [TBD HU-SOL-2]
+  amount: string; // base units del SPL token (uint64 decimal string, sin floats)
+  recentBlockhash: string; // equivalente Solana de validAfter/validBefore [TBD HU-SOL-2]
+  signature: string; // firma base58                            [TBD HU-SOL-2]
+}
+
+export type VmAuthorization = EvmAuthorization | SolanaAuthorization;
+
 export type SettlementFailureReason =
   | "settlement_unavailable"
   | "settlement_rejected"

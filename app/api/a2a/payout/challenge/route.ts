@@ -8,12 +8,18 @@
 import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { isAddress } from "viem";
-import { resolveChainId, resolveActiveVm } from "../../../../../src/infrastructure/chain";
+import {
+  resolveChainId,
+  resolveActiveVm,
+  resolveSolanaNetworkId,
+} from "../../../../../src/infrastructure/chain";
 import { canonicalizeAddress } from "../../../../../src/infrastructure/address";
 import {
   POP_CHALLENGE_TTL_SECONDS,
   buildPopMessage,
+  buildSolanaPopMessage,
   issuePopChallenge,
+  issueSolanaPopChallenge,
 } from "../../../../../src/infrastructure/auth/pop-challenge";
 import {
   PAYOUT_CHALLENGE_RL,
@@ -51,7 +57,28 @@ export async function POST(req: Request): Promise<Response> {
   const parsed: unknown = await req.json().catch(() => null);
   const body: Record<string, unknown> = isRecord(parsed) ? parsed : {};
 
-  const address = typeof body.address === "string" ? body.address : "";
+  const rawAddress = typeof body.address === "string" ? body.address : "";
+
+  // HU-SOL-8/CD-3: dispatch por VM. La rama Solana emite un challenge ed25519 con network-id CAIP-2
+  // (server-side, NUNCA del body); la rama EVM queda byte-idéntica a WKH-206.
+  const vm = resolveActiveVm();
+  if (vm === "solana") {
+    let addr: string;
+    try {
+      addr = canonicalizeAddress(rawAddress, "solana"); // base58 32 bytes (CD-8), NO isAddress
+    } catch {
+      return NextResponse.json({ error: "pop_invalid_request" }, { status: 400 });
+    }
+    const networkId = resolveSolanaNetworkId(); // CD-3: server-side, NUNCA del body
+    const nonce = randomBytes(16).toString("hex");
+    const exp = Math.floor(Date.now() / 1000) + POP_CHALLENGE_TTL_SECONDS;
+    const popChallenge = issueSolanaPopChallenge({ address: addr, networkId, nonce, exp });
+    const popMessage = buildSolanaPopMessage({ address: addr, networkId, nonce, exp });
+    return NextResponse.json({ popChallenge, popMessage, exp }, { status: 200 });
+  }
+
+  // ── RAMA EVM: byte-idéntica a WKH-206 (isAddress + issuePopChallenge + buildPopMessage). ──
+  const address = rawAddress;
   if (!isAddress(address)) {
     return NextResponse.json({ error: "pop_invalid_request" }, { status: 400 });
   }

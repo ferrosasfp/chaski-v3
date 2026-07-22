@@ -13,13 +13,19 @@ import "@solana/wallet-adapter-react-ui/styles.css";
 
 /** Suscribe useWallet()/useWalletModal() y empuja al singleton React-free. No renderiza DOM. */
 function SolanaWalletBridgeSync(): null {
-  const { publicKey, connected } = useWallet();
+  const { publicKey, connected, signMessage } = useWallet();
   const { setVisible, visible } = useWalletModal();
 
   // Registra el handle imperativo openModal (capturado desde useWalletModal).
   useEffect(() => {
     solanaWalletBridge.registerOpenModal(() => setVisible(true));
   }, [setVisible]);
+
+  // HU-SOL-8: registra el handle imperativo signMessage (capturado desde useWallet). Sólo si la wallet
+  // lo expone (Phantom/Solflare sí; el tipo del adapter es `... | undefined`).
+  useEffect(() => {
+    if (signMessage) solanaWalletBridge.registerSignMessage((bytes) => signMessage(bytes));
+  }, [signMessage]);
 
   // Empuja el estado en cada cambio. base58 OPACO (CD-3): publicKey.toBase58(), SIN toLowerCase.
   useEffect(() => {

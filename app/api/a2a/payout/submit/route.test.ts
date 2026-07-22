@@ -40,10 +40,14 @@ vi.mock("../../../../../src/infrastructure/persistence/supabase-settlement-ledge
   getSettlementLedger: getLedgerMock,
 }));
 
+import nacl from "tweetnacl";
+import bs58 from "bs58";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import {
   buildPopMessage,
+  buildSolanaPopMessage,
   issuePopChallenge,
+  issueSolanaPopChallenge,
 } from "../../../../../src/infrastructure/auth/pop-challenge";
 import { issueSettlementAttestation } from "../../../../../src/infrastructure/settlement/attestation";
 import { POST } from "./route";
@@ -964,5 +968,176 @@ describe("POST /api/a2a/payout/submit — GUARD 7: proof-of-possession (WKH-206)
       expect(res.status).toBe(200);
       __resetSupabaseClient();
     });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HU-SOL-8 (WKH-211) — GUARD 7 rama SOLANA: PoP ed25519 OBLIGATORIO (AC-2/AC-3/AC-4/AC-7).
+//
+// vm=solana (NEXT_PUBLIC_VM). El caller firma con la PRIVATE KEY ed25519 de `address` (base58) el
+// challenge server-emitido; el guard verifica con nacl.sign.detached.verify ANTES de forwardear. El
+// challenge corre REAL (HMAC de verdad); las firmas son REALES (nacl). Sólo el nonce-store (popClaimMock).
+// `agentCalls`=0 prueba que el agente NUNCA fue invocado.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Emite un challenge Solana REAL (HMAC) y lo firma con `keypair` (firma ed25519 REAL). networkId por
+ *  default = solana:devnet (P4 pasa). address del challenge = pubkey del keypair (P3 pasa). */
+function signedSolanaPop(opts: {
+  keypair: nacl.SignKeyPair;
+  networkId?: string;
+  address?: string;
+  nonce?: string;
+  exp?: number;
+}): { popChallenge: string; popSignature: string; address: string; nonce: string } {
+  const address = opts.address ?? bs58.encode(opts.keypair.publicKey);
+  const networkId = opts.networkId ?? "solana:devnet";
+  const nonce = opts.nonce ?? "abcdef0123456789abcdef0123456789";
+  const exp = opts.exp ?? Math.floor(Date.now() / 1000) + 300;
+  const ch = { address, networkId, nonce, exp };
+  const popChallenge = issueSolanaPopChallenge(ch);
+  const sig = nacl.sign.detached(new TextEncoder().encode(buildSolanaPopMessage(ch)), opts.keypair.secretKey);
+  return { popChallenge, popSignature: bs58.encode(sig), address, nonce };
+}
+
+describe("POST /api/a2a/payout/submit — GUARD 7 SOLANA: PoP ed25519 obligatorio (HU-SOL-8)", () => {
+  const SOL_POP_SECRET = "test-pop-secret";
+  beforeEach(() => {
+    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+    vi.stubEnv("NEXT_PUBLIC_VM", "solana"); // rama Solana del guard
+    popClaimMock.mockReset();
+    popClaimMock.mockResolvedValue({ ok: true });
+  });
+
+  it("AC-3: vm=solana + PAYOUT_POP_SECRET unset ⇒ 503 payout_pop_unavailable, agente NUNCA (jamás skip)", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", ""); // OBLIGATORIO en Solana: sin secreto → 503 (NO skip como EVM)
+    const kp = nacl.sign.keyPair();
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req({ ...validPayload, address: bs58.encode(kp.publicKey) }));
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "payout_pop_unavailable" });
+    expect(agentCalls).toHaveLength(0);
+    expect(popClaimMock).not.toHaveBeenCalled();
+  });
+
+  it("AC-2: firma ed25519 forjada ⇒ 403 payout_pop_unverified, agente NUNCA", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", SOL_POP_SECRET);
+    const kp = nacl.sign.keyPair();
+    const pop = signedSolanaPop({ keypair: kp });
+    // Firma forjada: 64 bytes random base58 (challenge válido, firma inválida).
+    const forged = bs58.encode(nacl.randomBytes(64));
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(
+      req({ ...validPayload, address: pop.address, popChallenge: pop.popChallenge, popSignature: forged }),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "payout_pop_unverified" });
+    expect(agentCalls).toHaveLength(0);
+    expect(popClaimMock).not.toHaveBeenCalled(); // rechazo P5 stateless: NUNCA quema el nonce
+  });
+
+  it("AC-2/suplantación: firma de OTRA key ed25519 ⇒ 403, agente NUNCA", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", SOL_POP_SECRET);
+    const victim = nacl.sign.keyPair();
+    const attacker = nacl.sign.keyPair();
+    // Challenge emitido para la VÍCTIMA, firmado por el ATACANTE.
+    const address = bs58.encode(victim.publicKey);
+    const ch = { address, networkId: "solana:devnet", nonce: "abcdef0123456789abcdef0123456789", exp: Math.floor(Date.now() / 1000) + 300 };
+    const popChallenge = issueSolanaPopChallenge(ch);
+    const popSignature = bs58.encode(
+      nacl.sign.detached(new TextEncoder().encode(buildSolanaPopMessage(ch)), attacker.secretKey),
+    );
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req({ ...validPayload, address, popChallenge, popSignature }));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "payout_pop_unverified" });
+    expect(agentCalls).toHaveLength(0);
+    expect(popClaimMock).not.toHaveBeenCalled();
+  });
+
+  it("AC-4: token networkId='solana:mainnet' (HMAC válido, firma válida) + server devnet ⇒ 403 (CD-3)", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", SOL_POP_SECRET);
+    const kp = nacl.sign.keyPair();
+    // Firma coherente para mainnet — replay cross-cluster con el mismo secreto HMAC ("$400 por $0").
+    const pop = signedSolanaPop({ keypair: kp, networkId: "solana:mainnet" });
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(
+      req({ ...validPayload, address: pop.address, popChallenge: pop.popChallenge, popSignature: pop.popSignature }),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "payout_pop_unverified" });
+    expect(agentCalls).toHaveLength(0);
+    expect(popClaimMock).not.toHaveBeenCalled(); // P4 va ANTES de P6: no quema el nonce
+  });
+
+  it("AC-3/happy: challenge + firma ed25519 REAL válidos ⇒ forward, nonce quemado (usuario Solana PASA G5)", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", SOL_POP_SECRET);
+    const kp = nacl.sign.keyPair();
+    const pop = signedSolanaPop({ keypair: kp });
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(
+      req({ ...validPayload, address: pop.address, popChallenge: pop.popChallenge, popSignature: pop.popSignature }),
+    );
+    expect(res.status).toBe(200);
+    expect(agentCalls).toHaveLength(1);
+    expect(popClaimMock).toHaveBeenCalledWith(pop.nonce); // AC-7: el nonce del challenge se reclama
+  });
+
+  it("AC-7/replay: 2ª presentación (popClaimMock alreadyUsed) ⇒ 409 payout_pop_replayed, agente NUNCA en la 2ª", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", SOL_POP_SECRET);
+    const kp = nacl.sign.keyPair();
+    const pop = signedSolanaPop({ keypair: kp });
+    popClaimMock.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: false, alreadyUsed: true });
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    const payload = { ...validPayload, address: pop.address, popChallenge: pop.popChallenge, popSignature: pop.popSignature };
+    expect((await POST(req(payload))).status).toBe(200);
+    const second = await POST(req(payload));
+    expect(second.status).toBe(409);
+    expect(await second.json()).toEqual({ error: "payout_pop_replayed" });
+    expect(agentCalls).toHaveLength(1); // el 2º NO llegó al agente
+  });
+
+  it("AC-7/fail-closed: nonce-store caído (unavailable) ⇒ 503 payout_pop_unavailable, agente NUNCA (NUNCA forward)", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", SOL_POP_SECRET);
+    const kp = nacl.sign.keyPair();
+    const pop = signedSolanaPop({ keypair: kp });
+    popClaimMock.mockResolvedValue({ ok: false, unavailable: true });
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(
+      req({ ...validPayload, address: pop.address, popChallenge: pop.popChallenge, popSignature: pop.popSignature }),
+    );
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "payout_pop_unavailable" });
+    expect(agentCalls).toHaveLength(0);
+  });
+
+  it("AC-4/P4 no-oracle: networkId mainnet, address mismatch y firma forjada ⇒ MISMO 403 opaco", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", SOL_POP_SECRET);
+    const kp = nacl.sign.keyPair();
+    const good = signedSolanaPop({ keypair: kp });
+    const p4 = signedSolanaPop({ keypair: kp, networkId: "solana:mainnet" });
+    const forged = bs58.encode(nacl.randomBytes(64));
+    const otherAddr = bs58.encode(nacl.sign.keyPair().publicKey);
+    const cases: { label: string; address: string; over: Record<string, unknown> }[] = [
+      { label: "P2", address: good.address, over: { popChallenge: "basura.mac", popSignature: good.popSignature } },
+      { label: "P3", address: otherAddr, over: { popChallenge: good.popChallenge, popSignature: good.popSignature } },
+      { label: "P4", address: p4.address, over: { popChallenge: p4.popChallenge, popSignature: p4.popSignature } },
+      { label: "P5", address: good.address, over: { popChallenge: good.popChallenge, popSignature: forged } },
+    ];
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    for (const c of cases) {
+      const res = await POST(req({ ...validPayload, address: c.address, ...c.over }));
+      expect(res.status, c.label).toBe(403);
+      expect(await res.json(), c.label).toEqual({ error: "payout_pop_unverified" });
+    }
+    expect(agentCalls).toHaveLength(0);
+    expect(popClaimMock).not.toHaveBeenCalled(); // ningún rechazo P2-P5 quema el nonce
   });
 });

@@ -98,3 +98,74 @@ export function verifyPopChallenge(token: string, nowMs: number): PopChallenge |
 
   return { address, chainId, nonce, exp };
 }
+
+// ── Solana (HU-SOL-8 / WKH-211) — hermanas nuevas del challenge PoP ed25519 ────────────────────────
+// 100% aditivo: la rama EVM de arriba (PopChallenge, issue/verify/buildPopMessage) NO se toca un byte
+// (CD-1/CD-SDD-1). El challenge Solana ata un network-id CAIP-2 (solana:devnet | solana:mainnet) en vez
+// del chainId:number EVM — anti-replay cross-cluster (CD-3). Reusa secret()/sign()/isRecord() privados.
+
+export interface SolanaPopChallenge {
+  address: string; // base58 canónico (PublicKey.toBase58), case-sensitive (CD-8)
+  networkId: string; // CAIP-2: "solana:devnet" | "solana:mainnet" (CD-3) — REEMPLAZA a chainId
+  nonce: string; // 32 hex (mismo randomBytes(16).toString('hex') que EVM)
+  exp: number; // epoch SEGUNDOS
+}
+
+/**
+ * SSOT del mensaje Solana (CD-6). 5 líneas \n-separadas, SIN newline final. Mirror estructural de
+ * buildPopMessage pero con `network:` en vez de `chainId:`. El cliente lo firma VERBATIM; el emisor
+ * (challenge/route) y el verificador (submit/prepare) llaman a ESTA misma función ⇒ byte-idéntico.
+ */
+export function buildSolanaPopMessage(p: SolanaPopChallenge): string {
+  return `Chaski Proof-of-Possession\naddress: ${p.address}\nnetwork: ${p.networkId}\nnonce: ${p.nonce}\nexpires: ${p.exp}`;
+}
+
+export function issueSolanaPopChallenge(p: SolanaPopChallenge): string {
+  const payloadB64 = Buffer.from(JSON.stringify(p), "utf8").toString("base64url");
+  return `${payloadB64}.${sign(payloadB64)}`;
+}
+
+/**
+ * Mirror de verifyPopChallenge (HMAC-first, parse en try/catch, expiración) pero con validación de
+ * campos Solana. Devuelve null ante CUALQUIER problema (fail-closed → 403 opaco, CD-4 no-oracle). La
+ * validez base58 del `address` la cierra el verifier ed25519 (verifySolanaPop), NO acá.
+ */
+export function verifySolanaPopChallenge(token: string, nowMs: number): SolanaPopChallenge | null {
+  // 1. Formato: exactamente 2 partes no vacías.
+  if (typeof token !== "string") return null;
+  const parts = token.split(".");
+  if (parts.length !== 2) return null;
+  const [payloadB64, macB64] = parts;
+  if (!payloadB64 || !macB64) return null;
+
+  // 2. Defensa: sin secreto no se verifica nada (la route ya hizo 503 fail-closed cuando ausente).
+  if (!process.env.PAYOUT_POP_SECRET) return null;
+
+  // 3. HMAC PRIMERO — longitud primero (timingSafeEqual TIRA con buffers de distinta longitud), luego
+  //    la comparación timing-safe.
+  const expected = Buffer.from(sign(payloadB64));
+  const received = Buffer.from(macB64);
+  if (expected.length !== received.length) return null;
+  if (!timingSafeEqual(expected, received)) return null;
+
+  // 4. Parse DENTRO de try/catch (un payload b64 válido puede no ser JSON).
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+  if (!isRecord(parsed)) return null;
+
+  // 5. Validar el tipo de CADA campo.
+  const { address, networkId, nonce, exp } = parsed;
+  if (typeof address !== "string" || !address.trim()) return null;
+  if (typeof networkId !== "string" || !/^solana:(devnet|mainnet)$/.test(networkId)) return null;
+  if (typeof nonce !== "string" || !/^[0-9a-f]{32}$/.test(nonce)) return null;
+  if (typeof exp !== "number" || !Number.isFinite(exp)) return null;
+
+  // 6. Expiración.
+  if (exp * 1000 <= nowMs) return null;
+
+  return { address, networkId, nonce, exp };
+}

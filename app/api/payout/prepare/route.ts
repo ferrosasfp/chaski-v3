@@ -13,8 +13,18 @@
 // → PR8 fail-closed (nunca se atesta sin address confirmada).
 import { NextResponse } from "next/server";
 import { isAddress, verifyMessage } from "viem";
-import { buildPopMessage, verifyPopChallenge } from "../../../../src/infrastructure/auth/pop-challenge";
-import { resolveChainId, resolveActiveVm } from "../../../../src/infrastructure/chain";
+import {
+  buildPopMessage,
+  verifyPopChallenge,
+  buildSolanaPopMessage,
+  verifySolanaPopChallenge,
+} from "../../../../src/infrastructure/auth/pop-challenge";
+import { verifySolanaPop } from "../../../../src/infrastructure/auth/pop-verify-solana";
+import {
+  resolveChainId,
+  resolveActiveVm,
+  resolveSolanaNetworkId,
+} from "../../../../src/infrastructure/chain";
 import { canonicalizeAddress } from "../../../../src/infrastructure/address";
 import { getSettlementLedger } from "../../../../src/infrastructure/persistence/supabase-settlement-ledger";
 import { resolvePayoutAuthority } from "../../../../src/infrastructure/payout/authority";
@@ -109,8 +119,56 @@ export async function POST(req: Request): Promise<Response> {
   // PR6 — proof-of-possession (WKH-206). OPT-IN: sin PAYOUT_POP_SECRET, SKIP total. Cualquier fallo
   // cripto → 403 opaco. NO claim-once (P6): el nonce se quema recién en submit/tracking; acá stateless
   // (no quemar el nonce ANTES de la firma real).
+  // HU-SOL-8/CD-2: dispatch por VM. En Solana el PoP es OBLIGATORIO (fail-closed 503 sin secreto), SIN
+  // claim-once (el nonce se quema recién en submit); en EVM el bloque WKH-206 queda byte-idéntico en el
+  // `else if (POP_SECRET)` (opt-in, AC-8).
+  const vm = resolveActiveVm();
   const POP_SECRET = process.env.PAYOUT_POP_SECRET; // CD-14: dentro del handler
-  if (POP_SECRET) {
+  if (vm === "solana") {
+    // CD-2 / AC-3: OBLIGATORIO. Sin secreto → 503 fail-closed (NUNCA skip).
+    if (!POP_SECRET) {
+      return NextResponse.json({ error: "payout_pop_unavailable" }, { status: 503 });
+    }
+    const popChallenge = body.popChallenge;
+    const popSignature = body.popSignature;
+    // P1 — presencia + tipo → 403 opaco.
+    if (
+      typeof popChallenge !== "string" ||
+      !popChallenge.trim() ||
+      typeof popSignature !== "string" ||
+      !popSignature.trim()
+    ) {
+      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+    }
+    // P2 — HMAC + exp + tipos colapsan en null → 403 opaco.
+    const ch = verifySolanaPopChallenge(popChallenge, Date.now());
+    if (!ch) {
+      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+    }
+    // P3 — address match (CD-8, base58 case-sensitive). canonicalizeAddress throwea → try/catch → 403.
+    try {
+      if (canonicalizeAddress(ch.address, "solana") !== canonicalizeAddress(address, "solana")) {
+        return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+      }
+    } catch {
+      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+    }
+    // P4 — CAIP-2 binding (AC-4/CD-3): network-id del token vs el resuelto server-side, NUNCA del body.
+    if (ch.networkId !== resolveSolanaNetworkId()) {
+      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+    }
+    // P5 — ed25519 (AC-1/AC-2): mensaje reconstruido con la MISMA buildSolanaPopMessage (CD-6). SIN P6
+    // claim-once (el nonce se quema recién en submit).
+    if (
+      !verifySolanaPop({
+        addressBase58: ch.address,
+        message: buildSolanaPopMessage(ch),
+        signatureBase58: popSignature,
+      })
+    ) {
+      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+    }
+  } else if (POP_SECRET) {
     const popChallenge = body.popChallenge;
     const popSignature = body.popSignature;
     if (

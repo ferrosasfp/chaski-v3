@@ -130,6 +130,19 @@ export function resolveSolanaNetworkConfig(): SolanaNetworkConfig {
   return SOLANA_DEVNET;
 }
 
+/** Network-id CAIP-2 del cluster Solana activo (HU-SOL-8/CD-3, anti-replay cross-cluster). switch
+ *  sobre el literal cluster (sin object-injection, patrón de resolveActiveNetworkConfig L177). En esta
+ *  HU solo existe devnet; mainnet-beta → "solana:mainnet" cuando HU-SOL-2/SOL-4 agreguen la entrada. */
+export function resolveSolanaNetworkId(): string {
+  switch (resolveSolanaNetworkConfig().cluster) {
+    case "devnet":
+      return "solana:devnet";
+    // mainnet-beta → "solana:mainnet"
+    default:
+      throw new Error("unsupported_solana_cluster"); // fail-loud (cluster futuro sin mapeo)
+  }
+}
+
 /** Mint USDC Solana — ÚNICA fuente (env NEXT_PUBLIC_SOLANA_USDC_MINT); fail-loud si falta/malformado.
  *  Valida con PublicKey de @solana/web3.js (base58), NUNCA con isAddress de viem (CD-2/CD-6). */
 export function resolveSolanaUsdcMint(): string {

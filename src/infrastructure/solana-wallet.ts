@@ -6,6 +6,7 @@
 // Anchor, fija feePayer=facilitator, partial-signa SÓLO con la wallet (bridge) y devuelve la tx
 // serializada base64 — NUNCA broadcastea (CD-SDD-1, AC-3): el broadcast es del facilitator (HU-SOL-14).
 import { sha256 } from "@noble/hashes/sha256";
+import bs58 from "bs58";
 import { PublicKey } from "@solana/web3.js";
 import type {
   Transaction as Web3Transaction,
@@ -149,7 +150,14 @@ export class SolanaWalletAdapter implements WalletPort {
     };
   }
 
-  async signMessage(_message: string): Promise<string> {
-    return `solana-demosig-${Date.now().toString(16)}`;
+  // HU-SOL-8 (AC-1/CD-6/CD-SDD-3): firma REAL del proof-of-possession. El caller (http-pop-signer) pasa
+  // el popMessage VERBATIM; la wallet (vía bridge) devuelve la firma ed25519 de 64 bytes; se codifica
+  // base58 (simétrico con verifySolanaPop.signatureBase58). Browser+node-safe: bs58 + TextEncoder,
+  // NUNCA Buffer node-only (auto-blindaje HU-SOL-5 BLQ-MED-1).
+  async signMessage(message: string): Promise<string> {
+    const bytes = new TextEncoder().encode(message); // browser+node-safe (NO Buffer)
+    const sig = await solanaWalletBridge.signMessage(bytes); // Uint8Array(64) de la wallet
+    // Normalizar a Uint8Array cubre adapters que devuelvan otro shape (R-2 del SDD).
+    return bs58.encode(sig instanceof Uint8Array ? sig : new Uint8Array(sig));
   }
 }

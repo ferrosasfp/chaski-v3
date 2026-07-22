@@ -16,10 +16,10 @@
 | `SOLANA_USDC_MINT` | Mint USDC devnet (pin de referencia del adapter) | `4zMMC9srt5Ri5X14GAgipK2c61N56M5Qo4czJC7pegg7` |
 | `SOLANA_TOKEN_PROGRAM_ID` | Program id de SPL Token | `TokenkegQfeZyiNwAJsyFbPVwwQQfHub7s6SVm3x5LevB` |
 | `SOLANA_ESCROW_PROGRAM_ID` | Program id del escrow Anchor | Obtenido de `escrowIdl.address` de chaski |
-| `SOLANA_FEE_PAYER_PRIVATE_KEY` | Keypair privada del fee-payer (gasless) | Base58 privada (45-chars) |
+| `SOLANA_FEE_PAYER_PRIVATE_KEY` | Keypair privada del fee-payer (gasless) | **Array JSON de 64 números** (contenido de fee-payer.json, formato Solana CLI — NO base58) |
 | `SOLANA_FEE_PAYER_SPONSOR_ENABLED` | Registra `POST /solana/sponsor` | `true` (solo en devnet/test) |
 | `SOLANA_SPONSOR_POP_SECRET` | Secreto PoP del sponsor (valida prueba de posesión sender) | Generado en paso 3 |
-| `SOLANA_ESCROW_RELEASE_AUTHORITY_SECRET_KEY` | Keypair privada release-authority | Base58 privada (45-chars) |
+| `SOLANA_ESCROW_RELEASE_AUTHORITY_SECRET_KEY` | Keypair privada release-authority | **Array JSON de 64 números** (contenido de release-authority.json — NO base58) |
 | `SOLANA_ESCROW_RELEASE_ENABLED` | Registra `POST /solana/escrow/release` | `true` (solo en devnet/test) |
 | `SOLANA_ESCROW_RELEASE_ATTESTATION_SECRET` | Secreto atestación (KYC+TransFi autoriza release) | Mismo que chaski `DEPOSIT_ATTESTATION_SECRET` |
 | `SOLANA_SPONSOR_MAX_COMPUTE_UNITS` | Tope compute units tx sponsoreada | `200000` (típico) |
@@ -88,48 +88,34 @@
 
 ### Paso 3: Generar + fondear keypairs devnet
 
-**Fee-payer** (facilitator):
+**Usá el script helper** (hace las 2 keypairs, las fondea y te imprime los valores exactos para cada env):
 ```bash
-# Generar nueva keypair para fee-payer
-solana-keygen new -o /tmp/fee-payer.json --no-bip39-passphrase
-
-# Obtener el pubkey (copiá exacto)
-solana address -k /tmp/fee-payer.json
-# Ejemplo output: 9JxTr1cxYuVS3hmqvnqBCJZWqL9yXvLGKNF6X9T4yM4K
-
-# Fondear desde el devnet faucet (10 SOL por request, ~500M lamports)
-solana airdrop 10 9JxTr1cxYuVS3hmqvnqBCJZWqL9yXvLGKNF6X9T4yM4K --url devnet
-# Repetir 2-3 veces para acumular ~30 SOL (cubre gas de múltiples txs)
-
-# Guardar la privada base58
-cat /tmp/fee-payer.json | jq -r '.[] | @base64d' | tail -c 32 | base64 -w 0
-# Copiar output → `SOLANA_FEE_PAYER_PRIVATE_KEY` en Railway/facilitator
+cd /ruta/a/chaski-v3
+./scripts/gen-devnet-keys.sh
+# Genera ./m5-keys/{fee-payer,release-authority}.json (gitignoreados),
+# los fondea vía airdrop devnet, e imprime al final el mapeo:
+#   RAILWAY: SOLANA_FEE_PAYER_PRIVATE_KEY / SOLANA_ESCROW_RELEASE_AUTHORITY_SECRET_KEY
+#   VERCEL:  NEXT_PUBLIC_SOLANA_FACILITATOR_PUBKEY / SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY
 ```
 
-**Release-authority** (facilitator):
+**⚠️ FORMATO DE LA PRIVATE KEY (crítico — verificado en el código del facilitator):**
+El código hace `Keypair.fromSecretKey(Uint8Array.from(JSON.parse(env)))` → el valor de la env es el **array JSON de 64 números** (el contenido literal del `.json`, ej. `[12,34,...,255]`), **NO base58**. Si pegás base58 el deploy falla al iniciar.
+- `SOLANA_FEE_PAYER_PRIVATE_KEY` = `cat m5-keys/fee-payer.json` (el array completo)
+- `SOLANA_ESCROW_RELEASE_AUTHORITY_SECRET_KEY` = `cat m5-keys/release-authority.json`
+
+**Pubkeys (públicos, base58) → Chaski/Vercel:**
+- pubkey del fee-payer → `NEXT_PUBLIC_SOLANA_FACILITATOR_PUBKEY`
+- pubkey de release-authority → `SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY` (server-only, sin `NEXT_PUBLIC_`)
+
+Manual (si preferís sin el script):
 ```bash
-# Generar release-authority keypair
-solana-keygen new -o /tmp/release-authority.json --no-bip39-passphrase
-
-# Obtener pubkey
-solana address -k /tmp/release-authority.json
-# Ejemplo output: 7kVJ9z8HhPZnL4q1v8S9mJ8kKw3xV5tY2bX1cD6eF9g
-
-# Fondear (~2-5 SOL para sign+broadcast del release)
-solana airdrop 5 7kVJ9z8HhPZnL4q1v8S9mJ8kKw3xV5tY2bX1cD6eF9g --url devnet
-
-# Guardar privada
-cat /tmp/release-authority.json | jq -r '.[] | @base64d' | tail -c 32 | base64 -w 0
-# Copiar output → `SOLANA_ESCROW_RELEASE_AUTHORITY_SECRET_KEY` en Railway/facilitator
+solana-keygen new --no-bip39-passphrase -o m5-keys/fee-payer.json
+solana address -k m5-keys/fee-payer.json          # → el pubkey (base58)
+solana airdrop 10 <pubkey> --url devnet           # repetir 2-3x (~30 SOL)
+cat m5-keys/fee-payer.json                          # → el array JSON = la env PRIVATE_KEY
 ```
 
-**Copiar pubkeys a Chaski**:
-```bash
-# El pubkey de fee-payer → `NEXT_PUBLIC_SOLANA_FACILITATOR_PUBKEY` en Vercel/chaski
-# El pubkey de release-authority → `SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY` en Vercel/chaski (server-only, no NEXT_PUBLIC_)
-```
-
-⚠️ Verificar que los balance `solana balance <pubkey> --url devnet` confirman fondeo antes de continuar.
+⚠️ Verificá `solana balance <pubkey> --url devnet` > 0 antes de continuar. NUNCA commitees los `.json`.
 
 ---
 

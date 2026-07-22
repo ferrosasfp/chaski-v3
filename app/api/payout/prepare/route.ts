@@ -90,7 +90,20 @@ export async function POST(req: Request): Promise<Response> {
   const quoteId = typeof body.quoteId === "string" ? body.quoteId : "";
   const kycVerificationId = typeof body.kycVerificationId === "string" ? body.kycVerificationId : "";
   const address = typeof body.address === "string" ? body.address : "";
-  if (!remittanceId.trim() || !quoteId.trim() || !kycVerificationId.trim() || !isAddress(address)) {
+  // HU-SOL-9: validación de `address` VM-discriminada. evm → isAddress (byte-idéntico). solana →
+  // canonicalizeAddress base58 (throwea con malformado → try/catch → false, mismo 400 opaco, CD-2).
+  let addressOk: boolean;
+  if (resolveActiveVm() === "solana") {
+    try {
+      canonicalizeAddress(address, "solana");
+      addressOk = true;
+    } catch {
+      addressOk = false;
+    }
+  } else {
+    addressOk = isAddress(address);
+  }
+  if (!remittanceId.trim() || !quoteId.trim() || !kycVerificationId.trim() || !addressOk) {
     return NextResponse.json({ error: "prepare_invalid_request" }, { status: 400 });
   }
 

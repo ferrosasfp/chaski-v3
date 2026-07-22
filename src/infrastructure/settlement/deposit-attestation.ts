@@ -15,12 +15,27 @@
 // (keccak256(remittanceId:quoteId)) hace el 2º settle contract-imposible; B3/B4/B5 matan el reuse.
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { isAddress } from "viem";
+import { canonicalizeAddress } from "../address";
 
 export interface DepositAttestation {
   remittanceId: string; // no-vacío
   quoteId: string; // no-vacío
   depositAddress: string; // 0x + 40 hex (isAddress)
   chainId: number; // entero
+  exp: number; // epoch SEGUNDOS
+}
+
+// Variante Solana del binding pre-settlement (HU-SOL-9 / WKH-208, DT-2 / CD-8). Tipo/funciones
+// SEPARADAS del EVM (NO un `vm` discriminante dentro de DepositAttestation): agregar un campo al
+// tipo EVM tocaría su serialización JSON y rompería `deposit-attestation.test.ts:39` (toEqual). El
+// esqueleto HMAC (sign/secret + timingSafe longitud-primero + fail-closed) se REUSA sin cambiar la
+// salida EVM. Mismo secreto DEPOSIT_ATTESTATION_SECRET (mismo dominio "pre-settlement deposit binding").
+export interface SolanaDepositAttestation {
+  remittanceId: string; // no-vacío
+  quoteId: string; // no-vacío
+  beneficiary: string; // base58 — destino del release del escrow (== payTo atestado, AC-4)
+  authority: string; // base58 — release-authority (facilitator, resuelto server-side env-driven)
+  cluster: "devnet"; // análogo Solana de chainId (anti-replay cross-cluster, AC-5)
   exp: number; // epoch SEGUNDOS
 }
 
@@ -96,4 +111,70 @@ export function verifyDepositAttestation(
   if (exp * 1000 <= nowMs) return null;
 
   return { remittanceId, quoteId, depositAddress, chainId, exp };
+}
+
+// ── Solana (HU-SOL-9 / WKH-208) — issue/verify SEPARADOS del EVM (CD-8), mismo esqueleto HMAC ──────
+export function issueSolanaDepositAttestation(p: SolanaDepositAttestation): string {
+  const payloadB64 = Buffer.from(JSON.stringify(p), "utf8").toString("base64url");
+  return `${payloadB64}.${sign(payloadB64)}`;
+}
+
+/**
+ * Devuelve null ante CUALQUIER problema (formato, HMAC, exp, tipos, base58 deforme). Nunca throw por
+ * token inválido (fail-closed en cada paso, AC-5, no-oracle). Mismo esqueleto que verifyDepositAttestation:
+ * formato → HMAC-primero (longitud-primero + timingSafe) → parse try/catch → tipos por-campo → exp.
+ * `beneficiary`/`authority`: base58 vía canonicalizeAddress(x,"solana") en try/catch → null si throwea
+ * (NUNCA isAddress de viem, CD-2). La igualdad se compara canónica case-sensitive (CD-10), NO lowercase.
+ */
+export function verifySolanaDepositAttestation(
+  token: string,
+  nowMs: number,
+): SolanaDepositAttestation | null {
+  // 1. Formato: exactamente 2 partes no vacías.
+  if (typeof token !== "string") return null;
+  const parts = token.split(".");
+  if (parts.length !== 2) return null;
+  const [payloadB64, macB64] = parts;
+  if (!payloadB64 || !macB64) return null;
+
+  // 2. Defensa: sin secreto no se verifica nada.
+  if (!process.env.DEPOSIT_ATTESTATION_SECRET) return null;
+
+  // 3. HMAC PRIMERO — longitud primero (timingSafeEqual TIRA con buffers de distinta longitud),
+  //    luego comparación timing-safe.
+  const expected = Buffer.from(sign(payloadB64));
+  const received = Buffer.from(macB64);
+  if (expected.length !== received.length) return null;
+  if (!timingSafeEqual(expected, received)) return null;
+
+  // 4. Parse DENTRO de try/catch.
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+  if (!isRecord(parsed)) return null;
+
+  // 5. Validar el tipo de CADA campo.
+  const { remittanceId, quoteId, beneficiary, authority, cluster, exp } = parsed;
+  if (typeof remittanceId !== "string" || remittanceId.length === 0) return null;
+  if (typeof quoteId !== "string" || quoteId.length === 0) return null;
+  if (typeof beneficiary !== "string" || beneficiary.length === 0) return null;
+  if (typeof authority !== "string" || authority.length === 0) return null;
+  // base58 válido: canonicalizeAddress throwea con base58 deforme → fail-closed a null (CD-2, sin
+  // ecoar la address, NUNCA isAddress). NO se lowercasea (CD-10: reabre el IDOR de aliasing).
+  try {
+    canonicalizeAddress(beneficiary, "solana");
+    canonicalizeAddress(authority, "solana");
+  } catch {
+    return null;
+  }
+  if (cluster !== "devnet") return null; // única entrada de esta HU (anti-replay cross-cluster)
+  if (typeof exp !== "number" || !Number.isFinite(exp)) return null;
+
+  // 6. Expiración.
+  if (exp * 1000 <= nowMs) return null;
+
+  return { remittanceId, quoteId, beneficiary, authority, cluster, exp };
 }

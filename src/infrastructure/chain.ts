@@ -169,6 +169,23 @@ export function resolveSolanaFacilitatorPubkey(): string {
   return raw;
 }
 
+/** Pubkey de la RELEASE-AUTHORITY del escrow Solana no-custodial (HU-SOL-9 / WKH-208). ÚNICA fuente
+ *  (env SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY); fail-loud si falta/malformado. Valida con PublicKey
+ *  (base58), NUNCA con isAddress de viem (CD-2). Devuelve el `raw` base58, JAMÁS derivado del body
+ *  (CD-3/CD-9). La keypair PRIVADA que firma el release es founder-gated y NO vive en chaski
+ *  (firma = HU-SOL-13); esta HU sólo conoce el PUBKEY. Invariante consumido por HU-SOL-13:
+ *  SolanaDepositAttestation.authority === resolveSolanaReleaseAuthorityPubkey() === deposit.escrow.authority. */
+export function resolveSolanaReleaseAuthorityPubkey(): string {
+  const raw = process.env.SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY;
+  if (!raw) throw new Error("solana_release_authority_not_configured"); // fail-loud
+  try {
+    new PublicKey(raw); // lanza si no es base58 válido
+  } catch {
+    throw new Error("solana_release_authority_not_configured"); // fail-loud
+  }
+  return raw;
+}
+
 /** RPC READ-ONLY de Solana devnet (server-only). Paralelo a resolveRpcUrl. undefined si la env no está. */
 export function resolveSolanaRpcUrl(): string | undefined {
   switch (resolveSolanaNetworkConfig().rpcEnvVar) {

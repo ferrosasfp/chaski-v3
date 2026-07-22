@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PublicKey } from "@solana/web3.js";
-import { canonicalizeAddress } from "./address";
+import { isAddressEqual } from "viem";
+import { addressEqualsVm, canonicalizeAddress } from "./address";
 import { FALLBACK_WALLET_ADDRESS } from "./wallet";
 
 // Pubkey base58 válida y mixed-case (mint devnet de chain.ts) — round-trip válido.
@@ -60,5 +61,50 @@ describe("canonicalizeAddress (HU-SOL-7 / WKH-213)", () => {
     expect(canonicalizeAddress(chAddr, "solana")).not.toBe(
       canonicalizeAddress(attacker, "solana"),
     );
+  });
+});
+
+// Extraído inline de settle/principal/route.ts (MNR-1, HU-SOL-9 / WKH-208). Testea AMBAS ramas VM.
+// EVM byte-idéntico ⇒ mismas assertions que isAddressEqual (CD-1). Solana case-sensitive fail-closed.
+describe("addressEqualsVm (HU-SOL-9 / WKH-208)", () => {
+  // EIP-55 checksums (viem los acepta). El .toLowerCase() es la MISMA address, distinto case.
+  const EVM_A = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed";
+  const EVM_B = "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359";
+  const SOLANA_A = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+  const SOLANA_B = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+
+  // evm: case-distintas iguales → true (paridad byte-idéntica con isAddressEqual)
+  it("evm: mismas address case-distintas → true (paridad isAddressEqual)", () => {
+    expect(addressEqualsVm(EVM_A, EVM_A.toLowerCase(), "evm")).toBe(true);
+    expect(addressEqualsVm(EVM_A, EVM_A.toLowerCase(), "evm")).toBe(
+      isAddressEqual(EVM_A, EVM_A.toLowerCase() as `0x${string}`),
+    );
+  });
+
+  // evm: distintas → false (paridad con isAddressEqual)
+  it("evm: address distintas → false (paridad isAddressEqual)", () => {
+    expect(addressEqualsVm(EVM_A, EVM_B, "evm")).toBe(false);
+    expect(addressEqualsVm(EVM_A, EVM_B, "evm")).toBe(isAddressEqual(EVM_A, EVM_B));
+  });
+
+  // solana: dos pubkeys base58 iguales → true (round-trip canónico)
+  it("solana: pubkeys iguales → true", () => {
+    expect(addressEqualsVm(SOLANA_A, SOLANA_A, "solana")).toBe(true);
+  });
+
+  // solana: dos pubkeys distintas → false (no colisión)
+  it("solana: pubkeys distintas → false", () => {
+    expect(addressEqualsVm(SOLANA_A, SOLANA_B, "solana")).toBe(false);
+  });
+
+  // solana: una malformada → false fail-closed (NO throw, replica el inline try/catch)
+  it("solana: pubkey malformada → false fail-closed (no throw)", () => {
+    expect(() => addressEqualsVm(SOLANA_A, "no-base58-!!!", "solana")).not.toThrow();
+    expect(addressEqualsVm(SOLANA_A, "no-base58-!!!", "solana")).toBe(false);
+  });
+
+  // solana case-sensitivity: pubkey vs versión con case alterado → false (cruza HU-SOL-7, no IDOR)
+  it("solana: case alterado NO colisiona → false (case-sensitive, HU-SOL-7)", () => {
+    expect(addressEqualsVm(SOLANA_A, SOLANA_A.toLowerCase(), "solana")).toBe(false);
   });
 });

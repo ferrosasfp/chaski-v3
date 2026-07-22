@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { solanaWalletBridge } from "../infrastructure/solana-wallet-bridge";
 import { HttpPayoutPrepareGateway } from "../infrastructure/settlement/http-payout-prepare-gateway";
 import { HttpSettlementGateway } from "../infrastructure/settlement/http-settlement-gateway";
 import { createContainer } from "./container";
@@ -105,5 +106,25 @@ describe("createContainer — settlement del principal (WKH-168 AC-5/CD-1)", () 
     const s = settlementOf(createContainer());
     expect(s?.prepare).toBeInstanceOf(HttpPayoutPrepareGateway);
     expect(s?.gateway).toBeInstanceOf(HttpSettlementGateway); // ambos juntos ⇔ modo real
+  });
+});
+
+describe("createContainer — dispatcher de wallet por VM (HU-SOL-4, AC-4/AC-5)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    solanaWalletBridge.reset();
+  });
+
+  it("AC-4: VM=solana → cablea el SolanaWalletAdapter (no pickWallet)", async () => {
+    vi.stubEnv("NEXT_PUBLIC_VM", "solana");
+    const c = createContainer();
+    // El adapter Solana sin árbol montado → openModal throw wallet_bridge_not_mounted.
+    // (En rama evm, FallbackWallet resolvería a la address demo → distinguible = mata la mutación.)
+    await expect(c.connectWallet.execute()).rejects.toThrow("wallet_bridge_not_mounted");
+  });
+
+  it("AC-5: VM inválida → createContainer throw unsupported_vm (fail-loud)", () => {
+    vi.stubEnv("NEXT_PUBLIC_VM", "aptos");
+    expect(() => createContainer()).toThrow("unsupported_vm");
   });
 });

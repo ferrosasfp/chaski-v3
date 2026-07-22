@@ -15,7 +15,7 @@ import { StartKyc } from "../application/use-cases/start-kyc";
 import { TrackRemittance } from "../application/use-cases/track-remittance";
 import { A2aPayoutGateway, A2aQuoteGateway } from "../infrastructure/a2a/gateways";
 import { HttpPopSigner } from "../infrastructure/auth/http-pop-signer";
-import { resolveReceiverAddress } from "../infrastructure/chain";
+import { resolveActiveVm, resolveReceiverAddress } from "../infrastructure/chain";
 import { DiditKycGateway } from "../infrastructure/didit/kyc-gateway";
 import {
   FallbackKycGateway,
@@ -29,6 +29,7 @@ import { HttpPayoutPrepareGateway } from "../infrastructure/settlement/http-payo
 import { HttpSettlementGateway } from "../infrastructure/settlement/http-settlement-gateway";
 import { LocalKycStore } from "../infrastructure/kyc-store";
 import { LocalRepo } from "../infrastructure/persistence";
+import { SolanaWalletAdapter } from "../infrastructure/solana-wallet";
 import { CryptoIds, SystemClock } from "../infrastructure/system";
 import { pickWallet } from "../infrastructure/wallet";
 
@@ -76,7 +77,11 @@ export function createContainer(): Container {
   const payouts = useA2a ? new A2aPayoutGateway() : new FallbackPayoutGateway();
   const payoutAuthority = new HttpPayoutAuthorityGateway(); // autoridad server-side (WKH-180)
   const refund = new LedgerRefundGateway(); // refund-on-failure ledger-only (WKH-186/AC-8, CD-8)
-  const wallet = pickWallet(); // wallet REAL (MetaMask) si está inyectada, si no la demo
+  // Dispatcher de wallet gateado por VM (AC-4): un solo resolveActiveVm() gobierna el wiring; imposible
+  // modo mixto silencioso. El adapter Solana es React-free (seam AC-3) → import estático seguro para el
+  // bundle EVM. VM=evm/unset → pickWallet() EVM INTACTO. VM inválida → resolveActiveVm() throw (AC-5).
+  const wallet =
+    resolveActiveVm() === "solana" ? new SolanaWalletAdapter() : pickWallet();
   // Settlement real del principal (WKH-168/AC-5, CD-1): se instancia SOLO con el flag on. Con el
   // flag off queda `undefined` → ConfirmAndSend no recibe 7º arg → "modo demo" byte-idéntico a
   // pre-HU, POR CONSTRUCCIÓN (el use-case nunca lee una env — CD-14). El guard fail-loud de arriba

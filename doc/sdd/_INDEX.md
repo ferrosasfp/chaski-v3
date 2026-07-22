@@ -26,6 +26,7 @@
 | WKH-210 | [Money-path, seguimiento de WKH-207] Cerrar el loop async de TransFi: receptor de webhooks (`fund_settled`/`asset_deposited`/`fund_failed`) sobre el `SettlementLedger` de WKH-207 | DONE (2026-07-17) — 11/11 ACs, 501 tests, AR+CR+F4 0 BLQ. HMAC body-crudo timing-safe, idempotencia at-least-once (mutar-primero/claim-después, AR-MNR-1 fix-packeado), no-PII, flags OFF. Reorder no-custodial = WKH-211. Smoke webhook gateado al founder. | `doc/sdd/021-wkh-210-transfi-deposit-flow-webhook/done-report.md` |
 | WKH-211 | [Money-path, cambio de modelo de seguridad, seguimiento de WKH-210] Value-delivery no-custodial: el USDC del sender va directo al `depositAddress` que TransFi asigna por orden (`to=depositAddress` en la firma EIP-3009), reemplazando el receiver estático de plataforma | DONE (2026-07-18) — binding=Opción B (`/api/payout/prepare` + DepositAttestation HMAC). 8/8 ACs, 553 tests, AR+CR+F4 0 BLQ. Vector de desvío de fondos cerrado (7 sub-ataques rechazan pre-broadcast); guard 8 byte-idéntico; V1-V9 intacta; flags OFF byte-idéntico. 2 MENORes fund-safe → WKH-213. | `doc/sdd/022-wkh-211-non-custodial-deposit-flow/done-report.md` |
 | WKH-206 / HU-SOL-1 | [Solana LATAM Labs, fundación del port multi-VM] Generalizar la config de red (`chain.ts`) y el contrato de autorización (`ports.ts`) de EVM-only a multi-VM (discriminador `vm: 'evm' \| 'solana'`), agregando una entrada Solana configurable/resolvible SIN wallet ni firma Solana todavía | DONE (2026-07-21) — 7/7 ACs, 562 tests, AR+CR+F4 0 BLQ. Branch `feat/023-hu-sol-1-multi-vm-config` commit `1b6aa22`. | `doc/sdd/023-hu-sol-1-multi-vm-config/report.md` |
+| WKH-212 / HU-SOL-4 | [Solana LATAM Labs, wallet Solana] Integración `@solana/wallet-adapter-react`: árbol de providers (ConnectionProvider+WalletProvider+WalletModalProvider) montado condicionalmente por NEXT_PUBLIC_VM, puenteado al `WalletPort` imperativo via singleton React-free. Phantom/Solflare conectables desde la UI. **Path EVM byte-idéntico (AC-3)**. Firma SPL (HU-SOL-2) y PoP (HU-SOL-8) quedan OUT. | DONE (2026-07-21) — 6/6 ACs PASS, 571 tests (562 EVM intactos + 9 nuevos Solana), AR+CR+F4 0 BLQ/0 MENOR. Seam React-free garantiza AC-3 por construcción. Peer-conflict `@solana/pay` diferido a HU-SOL-5. Branch `feat/024-hu-sol-4-wallet-adapter` commit `2dd1758`. | `doc/sdd/024-hu-sol-4-wallet-adapter/report.md` |
 
 ## Notas de coordinación
 - WKH-178 y WKH-179 corren en paralelo, ambas del mismo repo (`chaski-v2`) y de la misma auditoría
@@ -461,15 +462,13 @@ Hubo una **carrera de 4 analysts en paralelo** (2026-07-14, mismo repo `chaski-v
 
 **Objetivo del programa**: portar el settlement no-custodial de Chaski a **Solana**, manteniendo el
 path EVM (Base, EIP-3009, WKH-168/202/206/207/209/210/211) 100% vivo — arquitectura multi-VM, no un
-reemplazo. Roadmap de 4 HUs (numeración de programa, Jira ticket real entre paréntesis):
+reemplazo. Roadmap inicial planificado de 4 HUs; Sprint 2 ejecuta HU-SOL-1 (023, DONE 2026-07-21) + HU-SOL-4 (024, DONE 2026-07-21); HU-SOL-5/HU-SOL-7 en paralelo (025/026, SPEC_APPROVED, F3 en cola):
 
-| HU (programa) | Título | Estado | Bloquea / Bloqueado por |
-|----------------|--------|--------|--------------------------|
-| HU-SOL-1 (WKH-206*) | Config de red multi-VM (`chain.ts`) + `VmAuthorization` discriminado (`ports.ts`) — fundación, sin wallet ni firma Solana | F1 (2026-07-20) | Bloquea a HU-SOL-2 y HU-SOL-4 |
-| HU-SOL-2 | Wallet Solana (conexión + firma SPL) | No iniciada | Bloqueada por HU-SOL-1 |
-| HU-SOL-4 | Binding no-custodial + settle Solana (equivalente a WKH-211/WKH-168 del lado Solana) | No iniciada | Bloqueada por HU-SOL-1 y HU-SOL-2 |
+| HU (programa) | Jira | Título | Estado | Bloquea / Bloqueado por |
+|----------------|------|--------|--------|--------------------------|
+| HU-SOL-1 | WKH-206* | Config de red multi-VM (`chain.ts`) + `VmAuthorization` discriminado (`ports.ts`) — fundación, sin wallet ni firma Solana | **DONE (2026-07-21)** | Bloqueaba a HU-SOL-4 |
+| HU-SOL-4 | WKH-212 | **Integración `@solana/wallet-adapter-react`**: árbol providers condicional (Phantom/Solflare), singleton bridge React-free, puenteado al `WalletPort`. Path EVM byte-idéntico (AC-3). Firma SPL (HU-SOL-2) / PoP (HU-SOL-8) / settle Solana OUT. | **DONE (2026-07-21)** | Bloquea a HU-SOL-2 (firma SPL) + HU-SOL-8 (PoP) |
+| HU-SOL-5 | WKH-? | Firma real de transacciones Solana + SPL token transfer (`authorizePrincipal` real, `signMessage` real) | **SPEC_APPROVED (F3 en cola, gated por merge HU-SOL-4)** | Bloqueada por HU-SOL-4; resuelve peer-conflict `@solana/pay` (major mismatch Kit v1↔v2) |
+| HU-SOL-7 | WKH-213 | Identidad Solana base58 (equivalent a EIP-4361/SIWE para Solana, Proof-of-Possession) | **SPEC_APPROVED (F3 en cola)** | Bloqueada por HU-SOL-4 (wallet conectada) |
 
-*Nota de numeración*: el ticket Jira reusado para HU-SOL-1 es **WKH-206** (mismo número que
-"proof-of-possession", ya DONE) — el programa Solana LATAM Labs usa su propia numeración de HU
-(`HU-SOL-N`) independiente del backlog Jira `WKH-NNN` de `chaski-v2`; se documenta ambos IDs en el
-work-item para trazabilidad. Ver `doc/sdd/023-hu-sol-1-multi-vm-config/work-item.md`.
+*Nota de numeración*: el ticket Jira reusado para HU-SOL-1 es **WKH-206** (mismo número que "proof-of-possession" EVM, ya DONE 2026-07-16) — el programa Solana LATAM Labs usa su propia numeración de HU (`HU-SOL-N`) independiente del backlog Jira `WKH-NNN` de `chaski-v2`; se documenta ambos IDs en el work-item para trazabilidad. HU-SOL-4/WKH-212 es wallet-adapter-react (conexión pura, sin firma); HU-SOL-2 será firma SPL (OUT de HU-SOL-4); HU-SOL-8 será PoP Solana (OUT de HU-SOL-4). Falta HU-SOL-3 en el roadmap (posiblemente reserved para escrow Solana, análogo a WKH-168/WKH-211 del lado Solana). Ver `doc/sdd/023-hu-sol-1-multi-vm-config/work-item.md` y `doc/sdd/024-hu-sol-4-wallet-adapter/report.md`.

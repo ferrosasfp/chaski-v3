@@ -198,7 +198,7 @@ async function main(): Promise<void> {
   const beneficiaryPk = new PublicKey(beneficiary);
   const authorityPk = new PublicKey(authority);
   const mintPk = new PublicKey(USDC_MINT);
-  const programId = new PublicKey((escrowIdl as { address: string }).address); // BBQ9…79WA (CD-SDD-4)
+  const programId = new PublicKey((escrowIdl as { address: string }).address); // DR5G…SE4x (CD-SDD-4)
 
   const remittanceIdBytes = remittanceIdToBytes16(REMITTANCE_ID); // [u8;16] determinístico
   const amount = new anchor.BN(String(Math.round(Number(AMOUNT_USD) * 1_000_000))); // USDC 6 dec, u64
@@ -294,7 +294,7 @@ async function main(): Promise<void> {
   if (!deposited) return fail(6, "escrow no alcanzó status Deposited en la ventana");
   ok(6, "vault on-chain en status Deposited");
 
-  // ── Checkpoints 7-8 (BEST-EFFORT) — release del escrow + orden TransFi ────────────────────────────
+  // ── Checkpoint 7 (BEST-EFFORT) — release del escrow + orden TransFi ────────────────────────────────
   //    Requieren KYC Didit REAL (el `submit` rechaza el `simulated_dev` del preview) + credenciales
   //    TransFi sandbox → DIFERIDOS (decisión del founder: M5 = la tx del deposit on-chain, ya capturada
   //    arriba). Un fallo acá NO invalida M5; sólo se reporta como best-effort. Referencia a `attestation`

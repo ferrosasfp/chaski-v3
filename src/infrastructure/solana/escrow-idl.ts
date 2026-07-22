@@ -2,7 +2,7 @@
 // COPIA PINNEADA del IDL del programa escrow Anchor (HU-SOL-12, artefacto INMUTABLE del repo externo
 // /home/ferdev/.openclaw/workspace/solana-programs/target/idl/escrow.json). Se COPIA, NO se edita
 // (CD-5). No puede importarse por path relativo desde src/ (el IDL vive fuera de chaski-v3, AH-10).
-// El `address` (BBQ9…79WA) es la ÚNICA fuente del program id (CD-SDD-4). El adapter lo castea a
+// El `address` (DR5G…SE4x) es la ÚNICA fuente del program id (CD-SDD-4). El adapter lo castea a
 // anchor.Idl en runtime (lazy). Verificado contra AH-11: ix `deposit` discriminator
 // [242,35,198,137,82,225,242,182]; args remittance_id[u8;16]/beneficiary/authority/amount(u64)/deadline(i64).
 export const escrowIdl = {

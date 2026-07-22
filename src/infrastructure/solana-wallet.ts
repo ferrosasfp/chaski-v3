@@ -87,7 +87,7 @@ export class SolanaWalletAdapter implements WalletPort {
     const beneficiaryPk = new PublicKey(deposit.escrow.beneficiary);
     const authorityPk = new PublicKey(deposit.escrow.authority);
     const mintPk = new PublicKey(deposit.escrow.mint ?? resolveSolanaUsdcMint()); // CD-SDD-4
-    const programId = new PublicKey((escrowIdl as { address: string }).address); // BBQ9…79WA, CD-SDD-4
+    const programId = new PublicKey((escrowIdl as { address: string }).address); // DR5G…SE4x, CD-SDD-4
 
     // ── Args canónicos (AC-8/CD-SDD-3) — String(...) NO Number(...) ──
     const remittanceIdBytes = this.remittanceIdToBytes16(remittanceId); // [u8;16] determinístico
@@ -170,7 +170,7 @@ export class SolanaWalletAdapter implements WalletPort {
     const { escrowIdl } = await import("./solana/escrow-idl");
 
     const senderPk = new PublicKey(senderB58); // valida base58 (CD-SDD-7)
-    const programId = new PublicKey((escrowIdl as { address: string }).address); // BBQ9…79WA
+    const programId = new PublicKey((escrowIdl as { address: string }).address); // DR5G…SE4x
 
     // ── PDA escrow_state (misma derivación que authorizePrincipal / cross-repo, AH-9) ──
     const remittanceIdBytes = this.remittanceIdToBytes16(remittanceId); // [u8;16] determinístico

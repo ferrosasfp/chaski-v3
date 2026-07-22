@@ -139,7 +139,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     escrow: { beneficiary: BENEFICIARY_B58, authority: AUTHORITY_B58 },
   });
 
-  it("AC-1: arma la ix deposit (programId BBQ9…79WA, discriminator, accounts del IDL + PDAs/ATA)", async () => {
+  it("AC-1: arma la ix deposit (programId DR5G…SE4x, discriminator, accounts del IDL + PDAs/ATA)", async () => {
     const adapter = await connectedAdapter();
     const rid = "rem-ac1";
     await adapter.authorizePrincipal(makeQuote(), rid, escrowDeposit());

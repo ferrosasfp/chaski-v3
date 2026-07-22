@@ -305,6 +305,7 @@ NC-2 (companion Zod), cualquier cambio a archivos cerrados en HU-SOL-13a.
 |-----|-----|
 | `SOLANA_RPC_URL` | RPC devnet (lee vault + broadcastea). |
 | `SOLANA_USDC_MINT` | Mint USDC devnet (pin de referencia del adapter). |
+| `SOLANA_ESCROW_PROGRAM_ID` | Program id del escrow Anchor (== `escrowIdl.address` de chaski = **`DR5GoMT7sAKzD6wZMKJPeknS3Y6fzgZUNevi7xiESE4x`**). El CR-1 del sponsor (`solana-sponsor/cr1.ts`) valida contra esto. **Seteado hoy en Railway** (el live default-eaba al `BBQ9…` nunca deployado). |
 | `SOLANA_FEE_PAYER_PRIVATE_KEY` | Keypair del fee-payer (gasless). Su pubkey = `NEXT_PUBLIC_SOLANA_FACILITATOR_PUBKEY` de chaski. |
 | `SOLANA_FEE_PAYER_SPONSOR_ENABLED` | Registra `POST /solana/sponsor` (default OFF ⇒ 404). |
 | `SOLANA_SPONSOR_POP_SECRET` | Secreto PoP del sponsor. |
@@ -423,6 +424,33 @@ NC-2 (companion Zod), cualquier cambio a archivos cerrados en HU-SOL-13a.
 ```
 
 Sin checks fallidos.
+
+---
+
+## 13. As-built / estado M5 (actualización 2026-07-22)
+
+> El código de esta HU **ya está mergeado** y el núcleo de M5 **ya se cumplió on-chain**. Esta sección
+> deja el SDD alineado con la realidad; el diseño de §4 se implementó tal cual (as-designed = as-built).
+
+- **Código mergeado** (branch `feat/m5-escrow-dr5g-address`): rama Solana de `prepare/route.ts`
+  (`:256-318`, dispatch `resolveActiveVm()`, enum **`prepare_solana_authority_unavailable`** en `:282`),
+  `scripts/smoke-solana-e2e.ts`, `.env.example` (bloque Solana completo, `:76-89`), `tsconfig.scripts.json`,
+  `package.json` (`smoke:solana` + `typecheck:scripts` + devDep `tsx`). Commits `64ec019` (código) +
+  `89628d8` (BBQ9→DR5G + rework del smoke con PoP ed25519 + link explorer).
+- **Escrow deployado**: `DR5GoMT7sAKzD6wZMKJPeknS3Y6fzgZUNevi7xiESE4x` (devnet). El `escrowIdl.address`
+  de chaski ya apunta a DR5G (`escrow-idl.ts:9`); el `BBQ9…` viejo nunca se deployó.
+- **Deposit no-custodial probado on-chain 2×**: directo (tx `3y6qK6…N3bAMs`) y gasless vía facilitator
+  `/solana/sponsor` (tx `2PcvKg…VPZV2`). Vault ATA `Hc2h5FS…KWhF` = **10 USDC**. Ver §0 del
+  `runbook-skeleton.md` (links de explorer).
+- **Facilitator**: `SOLANA_ESCROW_PROGRAM_ID=DR5G` + `SOLANA_FEE_PAYER_SPONSOR_ENABLED=true` seteados en
+  Railway; `/solana/sponsor` registrado y probado (HU-SOL-9 wire DONE hoy).
+- **Runbook con valores reales**: `runbook-skeleton.md` actualizado con las pubkeys/addresses/tx públicas
+  y las 3 tablas de env (Railway/Vercel×2). Secretos SOLO en `m5-keys/` (gitignored, CD-4).
+
+**Pendiente founder-gated** (Scope OUT, ver runbook §0): merge de branches HELD, habilitar la pata de
+release (`SOLANA_ESCROW_RELEASE_ENABLED=true` + secretos en Railway), migraciones `004`+chaski, IDs
+TransFi sandbox, flip de flags en el entorno del smoke, y la corrida final del smoke con la pata fiat
+(checkpoints 7-8, hoy best-effort diferidos).
 
 ---
 

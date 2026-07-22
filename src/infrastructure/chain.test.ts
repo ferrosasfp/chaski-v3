@@ -5,6 +5,7 @@ import {
   resolveChain,
   resolveChainId,
   resolveNetworkConfig,
+  resolveSolanaReleaseAuthorityPubkey,
   resolveSolanaUsdcMint,
   resolveUsdcAddress,
 } from "./chain";
@@ -19,6 +20,7 @@ afterEach(() => {
   delete process.env.NEXT_PUBLIC_USDC_CONTRACT_ADDRESS;
   delete process.env.NEXT_PUBLIC_VM;
   delete process.env.NEXT_PUBLIC_SOLANA_USDC_MINT;
+  delete process.env.SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY;
 });
 
 describe("resolveChainId / resolveChain — chain env-driven (AC-1/2/3, CD-5)", () => {
@@ -144,6 +146,38 @@ describe("resolveSolanaUsdcMint — env-driven fail-loud (AC-3)", () => {
   it("address EVM → RECHAZADA por el validador Solana (cruce prohibido CD-2)", () => {
     process.env.NEXT_PUBLIC_SOLANA_USDC_MINT = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
     expect(() => resolveSolanaUsdcMint()).toThrow("solana_usdc_mint_not_configured");
+  });
+});
+
+// ── T3 (HU-SOL-9 / WKH-208, AC-4/AC-6): release-authority env-driven fail-loud ──
+const RELEASE_AUTHORITY = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"; // base58 pubkey válida
+
+describe("resolveSolanaReleaseAuthorityPubkey — env-driven fail-loud (AC-4/AC-6)", () => {
+  it("base58 válido → devuelve el pubkey EXACTO (jamás lee del body, case-sensitive)", () => {
+    process.env.SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY = RELEASE_AUTHORITY;
+    expect(resolveSolanaReleaseAuthorityPubkey()).toBe(RELEASE_AUTHORITY);
+  });
+
+  it("env ausente → throw solana_release_authority_not_configured", () => {
+    delete process.env.SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY;
+    expect(() => resolveSolanaReleaseAuthorityPubkey()).toThrow(
+      "solana_release_authority_not_configured",
+    );
+  });
+
+  it('malformado ("0xNOT") → throw (fail-loud, no fallback)', () => {
+    process.env.SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY = "0xNOT";
+    expect(() => resolveSolanaReleaseAuthorityPubkey()).toThrow(
+      "solana_release_authority_not_configured",
+    );
+  });
+
+  it("address EVM → RECHAZADA por el validador Solana (cruce prohibido CD-2)", () => {
+    process.env.SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY =
+      "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+    expect(() => resolveSolanaReleaseAuthorityPubkey()).toThrow(
+      "solana_release_authority_not_configured",
+    );
   });
 });
 

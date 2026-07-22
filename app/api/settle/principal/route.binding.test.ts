@@ -184,3 +184,49 @@ describe("POST /api/settle/principal — modo deposit-flow (WKH-211, B1-B6)", ()
     expect(verifyMock).not.toHaveBeenCalled();
   });
 });
+
+// ── T6 (HU-SOL-9 / WKH-208, AC-4/AC-5): vm=solana fail-closed pre-broadcast (CD-5) ──
+// NOTA (Auto-Blindaje HU-SOL-9): addressEquals NO se exporta (Next.js valida los exports de un
+// route.ts contra los handlers → un export extra rompe tsc/.next/types). Además su rama Solana es
+// forward-looking: el settle Solana completo (resolver receiver/att Solana-aware) es HU-SOL-13, así
+// que la rama Solana de B6/S12/S13 no es alcanzable end-to-end vía la route en ESTA HU. Lo que SÍ se
+// prueba acá: en vm=solana un `to` base58 fail-closea PRE-broadcast (CD-5, ningún fetch). La igualdad
+// canónica base58 en sí está cubierta por address.test.ts (canonicalizeAddress). El path EVM de
+// addressEquals lo ejercitan los 8 tests B1-B6 de arriba (byte-idéntico, AC-2).
+const SOL_BENEFICIARY = "So11111111111111111111111111111111111111112"; // base58 pubkey
+const SOL_OTHER = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"; // base58 pubkey distinta
+
+describe("POST /api/settle/principal — vm=solana fail-closed pre-broadcast (HU-SOL-9, CD-5)", () => {
+  beforeEach(() => {
+    vi.stubEnv("NEXT_PUBLIC_EIP3009_ENABLED", "true");
+    vi.stubEnv("NEXT_PUBLIC_PAYOUT_RECEIVER_ADDRESS", RECEIVER);
+    vi.stubEnv("NEXT_PUBLIC_USDC_CONTRACT_ADDRESS", USDC);
+    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "84532");
+    vi.stubEnv("SETTLE_ATTESTATION_SECRET", "settle-secret");
+    vi.stubEnv("DEPOSIT_ATTESTATION_SECRET", "deposit-secret");
+    vi.stubEnv("NEXT_PUBLIC_VM", "solana"); // dark: activa la rama Solana
+    isConfiguredMock.mockReset();
+    isConfiguredMock.mockReturnValue(true);
+    broadcastMock.mockReset();
+    broadcastMock.mockResolvedValue({ ok: true, txHash: TX });
+    verifyMock.mockReset();
+    verifyMock.mockResolvedValue({ ok: true, txHash: TX, from: SENDER, to: DEPOSIT, valueMinor: VALUE });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it("un `to` base58 en vm=solana fail-closea PRE-broadcast (NUNCA broadcastSettle/verify, sin fetch)", async () => {
+    // La orquestación completa del settle Solana es HU-SOL-13; esta HU sólo deja B6/S12/S13 VM-safe.
+    // El guard EIP-3009 (S5) fail-closea el `to` base58 ANTES de cualquier red (CD-5).
+    const solBody = body({
+      authorization: authorization({ to: SOL_BENEFICIARY, from: SOL_OTHER }),
+      address: SOL_OTHER,
+    });
+    const res = await POST(req(solBody));
+    expect(res.status).toBe(400);
+    expect(broadcastMock).not.toHaveBeenCalled();
+    expect(verifyMock).not.toHaveBeenCalled();
+  });
+});

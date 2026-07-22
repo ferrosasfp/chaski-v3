@@ -15,8 +15,9 @@
 // Guard-order OBLIGATORIO (espeja submit/route.ts): flag → config → env → body → formato → binding
 // (monto/receiver/sender) → broadcast → verify → attest.
 import { NextResponse } from "next/server";
-import { isAddress, isAddressEqual, keccak256, toBytes } from "viem";
+import { isAddress, keccak256, toBytes } from "viem";
 import { resolveChainId, resolveReceiverAddress, resolveUsdcAddress, resolveActiveVm } from "../../../../src/infrastructure/chain";
+import { addressEqualsVm } from "../../../../src/infrastructure/address";
 import { getSettlementLedger } from "../../../../src/infrastructure/persistence/supabase-settlement-ledger";
 import {
   ATTESTATION_TTL_SECONDS,
@@ -150,6 +151,7 @@ export async function POST(req: Request): Promise<Response> {
   //    exp). MÁS fuerte, no más débil (DT-3): V1-V9 on-chain queda INTACTA; sólo cambia el VALOR de
   //    expectedTo. El body NUNCA es la fuente de expectedTo (sigue siendo un HMAC server-firmado).
   const DEPOSIT_SECRET = process.env.DEPOSIT_ATTESTATION_SECRET; // CD-14: dentro del handler
+  const vm = resolveActiveVm(); // HU-SOL-9: VM-discrimina B6/S12/S13. unset→"evm" (byte-idéntico).
   let expectedTo: `0x${string}` = receiver; // modo estático por default
   if (DEPOSIT_SECRET) {
     // B1 — atestación MANDATORIA en este modo (sin ella no hay `to` legítimo).
@@ -178,18 +180,18 @@ export async function POST(req: Request): Promise<Response> {
     }
     // B6 — el `to` firmado DEBE ser el depositAddress atestado. Rechazo PRE-broadcast (AC-3): NUNCA se
     // llama broadcastSettle ni verifySettlementOnChain con un `to` no atestado.
-    if (!isAddressEqual(to, att.depositAddress as `0x${string}`)) {
+    if (!addressEqualsVm(to, att.depositAddress, vm)) {
       return NextResponse.json({ error: "settle_receiver_mismatch" }, { status: 400 });
     }
     expectedTo = att.depositAddress as `0x${string}`;
   } else {
     // S12 — modo estático (byte-idéntico WKH-168/209): el payTo sale de ENV, jamás del body.
-    if (!isAddressEqual(to, receiver)) {
+    if (!addressEqualsVm(to, receiver, vm)) {
       return NextResponse.json({ error: "settle_receiver_mismatch" }, { status: 400 });
     }
   }
   // S13 — ata la firma al caller declarado. Ningún fetch.
-  if (!isAddressEqual(from, address as `0x${string}`)) {
+  if (!addressEqualsVm(from, address, vm)) {
     return NextResponse.json({ error: "settle_sender_mismatch" }, { status: 400 });
   }
 

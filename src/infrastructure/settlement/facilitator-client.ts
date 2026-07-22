@@ -141,3 +141,101 @@ export async function broadcastSettle(input: SettleBroadcastInput): Promise<Faci
   // cadena. Chequear body.to === payTo acá sería comparar nuestro input contra nuestro input.
   return { ok: true, txHash };
 }
+
+// ── Solana (HU-SOL-9 / WKH-208) — verify-only sobre una tx YA FINALIZADA on-chain ────────────────
+// La semántica del /settle Solana del facilitator es VERIFY + dedup (solana-adapter.ts: la tx ya está
+// minada), NO broadcast → la función se llama verifySolanaSettlement (DT-4). Función + objeto literal
+// NUEVOS: el objeto `payload` de la rama EIP-3009 (broadcastSettle) NO se muta (AC-3). Enum de
+// resultado PROPIO (SDD §10: semántica verify-only más honesta, no se mezcla con la de broadcast).
+export type SolanaFacilitatorFailure =
+  | "settle_rejected" // 400/401/403 (INVALID_*, allowlist, auth)
+  | "settle_in_flight" // 409 CONFLICT — dedup en vuelo, NO re-enviar
+  | "settle_unavailable" // 429/503, sin config, timeout/fetch throw
+  | "settle_reverted" // 500 TRANSACTION_FAILED
+  | "settle_unverified"; // 200 con shape malo / settled!==true / signature no-base58
+
+export type SolanaFacilitatorResult =
+  | { ok: true; signature: string }
+  | { ok: false; reason: SolanaFacilitatorFailure };
+
+export interface SolanaSettleInput {
+  cluster: "devnet"; // → accepted.network = `solana:${cluster}`
+  mint: string; // base58 — accepted.asset (CD-9: server-side, jamás el body crudo)
+  payTo: string; // base58 — accepted.payTo (== beneficiary ATESTADO, AC-4)
+  amountMinor: string; // u64 decimal canónico (SPL base units) — accepted.amount
+  signature: string; // base58 — tx signature YA FINALIZADA on-chain (origen: HU-SOL-14, Scope OUT)
+  reference: string; // base58 — payload.reference (Solana Pay correlation)
+  resourceUrl: string;
+}
+
+// CD-9: NO se reusa el regex 0x-64 de la respuesta EVM (rechazaría una signature base58). Mismo
+// criterio que isBase58Signature del adaptador Solana (BASE58_RE + longitud 64-120).
+const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]+$/;
+function isBase58Signature(v: unknown): v is string {
+  return typeof v === "string" && BASE58_RE.test(v) && v.length >= 64 && v.length <= 120;
+}
+
+/**
+ * Construye el envelope x402 `solana:<cluster>` en base58 y hace POST al MISMO /settle del facilitator.
+ * VERIFY-ONLY (la tx ya está finalizada; el facilitator verifica + dedup, NO broadcastea — HU-SOL-14
+ * produce la signature). Devuelve `{ ok:true, signature }` o `{ ok:false, reason }`. Nunca throw: toda
+ * excepción se mapea a settle_unavailable. Env leída DENTRO de la función (CD-14). Reusa
+ * isBroadcasterConfigured() + mapStatus() sin cambios.
+ */
+export async function verifySolanaSettlement(
+  input: SolanaSettleInput,
+): Promise<SolanaFacilitatorResult> {
+  const BASE = process.env.FACILITATOR_BASE_URL;
+  const KEY = process.env.FACILITATOR_API_KEY;
+  if (!BASE || !KEY) return { ok: false, reason: "settle_unavailable" };
+
+  // Objeto literal NUEVO (AC-3): base58 asset/payTo, payload.signature/reference base58, SIN el
+  // objeto `authorization` de EIP-3009, SIN `extra.assetTransferMethod` (no aplica a SPL).
+  const payload = {
+    x402Version: 2, // z.literal(2)
+    resource: { url: input.resourceUrl },
+    accepted: {
+      scheme: "exact",
+      network: `solana:${input.cluster}`, // namespace → dispatch al adaptador Solana
+      amount: input.amountMinor, // u64 decimal canónico (string)
+      asset: input.mint, // base58 (NO 0x-hex) — CD-9: server-side
+      payTo: input.payTo, // base58 (NO 0x-hex) — CD-9: == beneficiary atestado
+      maxTimeoutSeconds: 60,
+    },
+    payload: {
+      signature: input.signature, // base58 tx sig (NO 0x-hex, NO objeto authorization)
+      reference: input.reference, // base58 (Solana Pay correlation)
+    },
+  };
+
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}/settle`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${KEY}`, // credencial server-side, jamás en el cliente
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(SETTLE_TIMEOUT_MS),
+    });
+  } catch {
+    return { ok: false, reason: "settle_unavailable" }; // timeout/DNS/fetch throw
+  }
+
+  if (!res.ok) return { ok: false, reason: mapStatus(res.status) };
+
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    return { ok: false, reason: "settle_unverified" };
+  }
+  if (!isRecord(body)) return { ok: false, reason: "settle_unverified" };
+  if (body.settled !== true) return { ok: false, reason: "settle_unverified" };
+  // CD-9: la signature base58 viaja en transactionHash (el adaptador la castea `as 0x` por tipo).
+  if (!isBase58Signature(body.transactionHash)) {
+    return { ok: false, reason: "settle_unverified" };
+  }
+  return { ok: true, signature: body.transactionHash };
+}

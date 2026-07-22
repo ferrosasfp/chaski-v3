@@ -9,6 +9,8 @@ import {
 } from "../domain/remittance";
 import { ConcurrentModificationError } from "../application/errors";
 import type { RemittanceRepository } from "../application/ports";
+import { canonicalizeAddress } from "./address";
+import { resolveActiveVm } from "./chain";
 
 const KEY = "chaski.remittances.v1";
 
@@ -116,9 +118,9 @@ export class LocalRepo implements RemittanceRepository {
   async list(address: string): Promise<RemittanceState[]> {
     // Scope por wallet (AC-5/7): SOLO entries cuyo ownerAddress matchea (case-insensitive, CD-5);
     // owner null (remesa abandonada sin verificar) → EXCLUIDO.
-    const target = address.toLowerCase();
+    const target = canonicalizeAddress(address, resolveActiveVm());
     return [...this.read().values()]
-      .filter((s) => s.ownerAddress != null && s.ownerAddress.toLowerCase() === target)
+      .filter((s) => s.ownerAddress != null && canonicalizeAddress(s.ownerAddress, resolveActiveVm()) === target)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
@@ -126,10 +128,10 @@ export class LocalRepo implements RemittanceRepository {
     // Reset (WKH-201): borra del blob real toda entry del owner conectado — mismo predicado que
     // list() (CD-1). Reusa read()/write() (CD-8: sin try/catch interno; el error de storage lo
     // absorbe ForgetKyc). Preserva otros owners y las entries ownerAddress === null.
-    const target = address.toLowerCase();
+    const target = canonicalizeAddress(address, resolveActiveVm());
     const map = this.read();
     for (const [id, s] of map) {
-      if (s.ownerAddress != null && s.ownerAddress.toLowerCase() === target) {
+      if (s.ownerAddress != null && canonicalizeAddress(s.ownerAddress, resolveActiveVm()) === target) {
         map.delete(id);
       }
     }

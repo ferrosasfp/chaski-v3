@@ -9,6 +9,8 @@ import {
   toPersistedIdentity,
 } from "../domain/remittance";
 import { ConcurrentModificationError } from "../application/errors";
+import { canonicalizeAddress } from "../infrastructure/address";
+import { resolveActiveVm } from "../infrastructure/chain";
 import type {
   Clock,
   Eip3009Authorization,
@@ -88,16 +90,21 @@ export class InMemoryRepo implements RemittanceRepository {
     return s ? Remittance.rehydrate(s) : null;
   }
   async list(address: string): Promise<RemittanceState[]> {
-    const target = address.toLowerCase();
+    const target = canonicalizeAddress(address, resolveActiveVm());
     return [...this.store.values()].filter(
-      (s) => s.ownerAddress != null && s.ownerAddress.toLowerCase() === target,
+      (s) =>
+        s.ownerAddress != null &&
+        canonicalizeAddress(s.ownerAddress, resolveActiveVm()) === target,
     );
   }
   async clearByOwner(address: string): Promise<void> {
     // Gemelo del filtro de list() sobre this.store (WKH-201/CD-6). this.store ES el store → delete directo.
-    const target = address.toLowerCase();
+    const target = canonicalizeAddress(address, resolveActiveVm());
     for (const [id, s] of this.store) {
-      if (s.ownerAddress != null && s.ownerAddress.toLowerCase() === target) {
+      if (
+        s.ownerAddress != null &&
+        canonicalizeAddress(s.ownerAddress, resolveActiveVm()) === target
+      ) {
         this.store.delete(id);
       }
     }
@@ -285,13 +292,13 @@ export class FakePopSigner implements PopSigner {
 export class FakeKycStore implements KycStore {
   private m = new Map<string, KycVerification>();
   async get(address: string): Promise<KycVerification | null> {
-    return this.m.get(address.toLowerCase()) ?? null;
+    return this.m.get(canonicalizeAddress(address, resolveActiveVm())) ?? null;
   }
   async save(address: string, kyc: KycVerification): Promise<void> {
-    this.m.set(address.toLowerCase(), kyc);
+    this.m.set(canonicalizeAddress(address, resolveActiveVm()), kyc);
   }
   async clear(address: string): Promise<void> {
-    this.m.delete(address.toLowerCase());
+    this.m.delete(canonicalizeAddress(address, resolveActiveVm()));
   }
 }
 
@@ -301,13 +308,13 @@ export class FakeKycStore implements KycStore {
 export class ThrowingSaveKycStore implements KycStore {
   private m = new Map<string, KycVerification>();
   async get(address: string): Promise<KycVerification | null> {
-    return this.m.get(address.toLowerCase()) ?? null;
+    return this.m.get(canonicalizeAddress(address, resolveActiveVm())) ?? null;
   }
   async save(_address: string, _kyc: KycVerification): Promise<void> {
     throw new Error("kyc_store_unavailable");
   }
   async clear(address: string): Promise<void> {
-    this.m.delete(address.toLowerCase());
+    this.m.delete(canonicalizeAddress(address, resolveActiveVm()));
   }
 }
 
@@ -316,10 +323,10 @@ export class ThrowingSaveKycStore implements KycStore {
 export class ThrowingClearKycStore implements KycStore {
   private m = new Map<string, KycVerification>();
   async get(address: string): Promise<KycVerification | null> {
-    return this.m.get(address.toLowerCase()) ?? null;
+    return this.m.get(canonicalizeAddress(address, resolveActiveVm())) ?? null;
   }
   async save(address: string, kyc: KycVerification): Promise<void> {
-    this.m.set(address.toLowerCase(), kyc);
+    this.m.set(canonicalizeAddress(address, resolveActiveVm()), kyc);
   }
   async clear(_address: string): Promise<void> {
     throw new Error("kyc_store_unavailable");
@@ -473,6 +480,7 @@ export class FakeSettlementLedger implements SettlementLedger {
     chainId: number;
     senderAddress: string;
     payoutId: string;
+    vm: "evm" | "solana";
   }): Promise<void> {
     // WKH-211: registra la orden preparada. Upsert por idempotency_key (retry = una sola fila). El
     // depositAddress va en receiver_address (ES el receiver no-custodial). value_minor '0' (aún no se
@@ -488,8 +496,8 @@ export class FakeSettlementLedger implements SettlementLedger {
       idempotencyKey: input.idempotencyKey,
       txHash: `prepared:${input.idempotencyKey}`,
       chainId: input.chainId,
-      senderAddress: input.senderAddress.toLowerCase(),
-      receiverAddress: input.depositAddress.toLowerCase(),
+      senderAddress: canonicalizeAddress(input.senderAddress, input.vm),
+      receiverAddress: canonicalizeAddress(input.depositAddress, input.vm),
       valueMinor: 0,
       status: "prepared",
       attempts: 0,
@@ -509,6 +517,7 @@ export class FakeSettlementLedger implements SettlementLedger {
     senderAddress: string;
     receiverAddress: string;
     valueMinor: number;
+    vm: "evm" | "solana";
   }): Promise<void> {
     // ON CONFLICT DO NOTHING por tx_hash: un settle reintentado a nivel red = una sola fila.
     for (const r of this.store.values()) {
@@ -522,8 +531,8 @@ export class FakeSettlementLedger implements SettlementLedger {
       idempotencyKey: input.idempotencyKey,
       txHash: input.txHash,
       chainId: input.chainId,
-      senderAddress: input.senderAddress.toLowerCase(),
-      receiverAddress: input.receiverAddress.toLowerCase(),
+      senderAddress: canonicalizeAddress(input.senderAddress, input.vm),
+      receiverAddress: canonicalizeAddress(input.receiverAddress, input.vm),
       valueMinor: input.valueMinor,
       status: "principal_in",
       attempts: 0,
@@ -540,8 +549,9 @@ export class FakeSettlementLedger implements SettlementLedger {
     status: SettlementLedgerStatus;
     payoutId?: string | null;
     error?: string | null;
+    vm: "evm" | "solana";
   }): Promise<void> {
-    const owner = input.senderAddress.toLowerCase();
+    const owner = canonicalizeAddress(input.senderAddress, input.vm);
     for (const r of this.store.values()) {
       // CD-9: owner-scoped — otro sender NO puede mutar esta fila.
       if (r.idempotencyKey === input.idempotencyKey && r.senderAddress === owner) {

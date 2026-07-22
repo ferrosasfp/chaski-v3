@@ -16,7 +16,7 @@
 // (monto/receiver/sender) → broadcast → verify → attest.
 import { NextResponse } from "next/server";
 import { isAddress, isAddressEqual, keccak256, toBytes } from "viem";
-import { resolveChainId, resolveReceiverAddress, resolveUsdcAddress } from "../../../../src/infrastructure/chain";
+import { resolveChainId, resolveReceiverAddress, resolveUsdcAddress, resolveActiveVm } from "../../../../src/infrastructure/chain";
 import { getSettlementLedger } from "../../../../src/infrastructure/persistence/supabase-settlement-ledger";
 import {
   ATTESTATION_TTL_SECONDS,
@@ -272,6 +272,7 @@ export async function POST(req: Request): Promise<Response> {
             senderAddress: verified.from, // CD-13: valores VERIFICADOS, no el body
             receiverAddress: verified.to,
             valueMinor: verified.valueMinor,
+            vm: resolveActiveVm(),
           });
         }
       }

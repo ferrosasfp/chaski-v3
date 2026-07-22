@@ -311,6 +311,7 @@ export interface SettlementLedger {
     chainId: number;
     senderAddress: string;
     payoutId: string;
+    vm: "evm" | "solana";
   }): Promise<void>;
   // settle route (AC-1): upsert por tx_hash (ON CONFLICT DO NOTHING), status principal_in.
   recordPrincipalIn(input: {
@@ -322,6 +323,7 @@ export interface SettlementLedger {
     senderAddress: string;
     receiverAddress: string;
     valueMinor: number;
+    vm: "evm" | "solana";
   }): Promise<void>;
   // submit route (AC-3): UPDATE owner-scoped por (idempotencyKey, senderAddress).
   recordPayoutOutcome(input: {
@@ -330,6 +332,7 @@ export interface SettlementLedger {
     status: SettlementLedgerStatus;
     payoutId?: string | null;
     error?: string | null;
+    vm: "evm" | "solana";
   }): Promise<void>;
   // reconcile (AC-4): no-terminales más viejas que olderThanIso. Global (admin) — sin owner filter.
   listStale(input: { olderThanIso: string; limit: number }): Promise<SettlementRecord[]>;

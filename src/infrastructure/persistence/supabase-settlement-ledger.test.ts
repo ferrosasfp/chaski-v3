@@ -3,6 +3,7 @@
 // (value_minor::text) y AC-10 (factory null-safe).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { PublicKey } from "@solana/web3.js";
 import { SupabaseSettlementLedger, getSettlementLedger } from "./supabase-settlement-ledger";
 import { __resetSupabaseClient, getSupabaseServerClient } from "./supabase-server";
 
@@ -107,12 +108,55 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
       senderAddress: SENDER,
       status: "settled",
       payoutId: "p-1",
+      vm: "evm",
     });
     // El UPDATE cruza AMBOS filtros: sin el sender_address, otro owner podría mutar esta fila (IDOR).
     expect(calls.eq).toContainEqual(["idempotency_key", "rem-1:q-1"]);
     expect(calls.eq).toContainEqual(["sender_address", SENDER.toLowerCase()]);
     // El patch lleva el status mapeado.
     expect((calls.update[0]?.[0] as Record<string, unknown>).status).toBe("settled");
+  });
+
+  // ── W3.1 (HU-SOL-7 / CD-9): el guard `.eq('sender_address', ...)` canonicaliza VM-aware ANTES del
+  //    filtro. Con vm:'solana' NUNCA lowercasea la pubkey (cierra la colisión IDOR base58, CR-2). ──
+  it("CD-9 IDOR: recordPayoutOutcome vm:'solana' filtra por la pubkey base58 case-preservada (no lowercase)", async () => {
+    const K = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // base58 mixed-case válida
+    const { client, calls } = makeClient([{ data: null, error: null }]);
+    await new SupabaseSettlementLedger(client).recordPayoutOutcome({
+      idempotencyKey: "rem-1:q-1",
+      senderAddress: K,
+      status: "settled",
+      vm: "solana",
+    });
+    expect(calls.eq).toContainEqual(["sender_address", new PublicKey(K).toBase58()]); // case preservado
+    expect(calls.eq).not.toContainEqual(["sender_address", K.toLowerCase()]); // NUNCA colapsa a lowercase
+  });
+
+  it("CD-9 IDOR: dos senders Solana case-distintos ⇒ filtros distintos (sin cross-mutación)", async () => {
+    const K1 = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+    const K2 = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+    const { client, calls } = makeClient([
+      { data: null, error: null },
+      { data: null, error: null },
+    ]);
+    const ledger = new SupabaseSettlementLedger(client);
+    await ledger.recordPayoutOutcome({ idempotencyKey: "k", senderAddress: K1, status: "settled", vm: "solana" });
+    await ledger.recordPayoutOutcome({ idempotencyKey: "k", senderAddress: K2, status: "settled", vm: "solana" });
+    const senderFilters = calls.eq.filter((a) => a[0] === "sender_address").map((a) => a[1]);
+    expect(senderFilters).toContain(new PublicKey(K1).toBase58());
+    expect(senderFilters).toContain(new PublicKey(K2).toBase58());
+    expect(new PublicKey(K1).toBase58()).not.toBe(new PublicKey(K2).toBase58());
+  });
+
+  it("byte-id EVM: recordPayoutOutcome vm:'evm' sigue produciendo senderAddress.toLowerCase()", async () => {
+    const { client, calls } = makeClient([{ data: null, error: null }]);
+    await new SupabaseSettlementLedger(client).recordPayoutOutcome({
+      idempotencyKey: "k",
+      senderAddress: SENDER,
+      status: "settled",
+      vm: "evm",
+    });
+    expect(calls.eq).toContainEqual(["sender_address", SENDER.toLowerCase()]);
   });
 
   it("recordPrincipalIn: upsert idempotente por tx_hash (ignoreDuplicates) con addresses lowercased y value_minor string", async () => {
@@ -127,6 +171,7 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
       senderAddress: SENDER,
       receiverAddress: "0xREceiverAddr2222222222222222222222222222",
       valueMinor: 400_000_000,
+      vm: "evm",
     });
     const row = calls.upsert[0]?.[0] as Record<string, unknown>;
     const opts = calls.upsert[0]?.[1] as Record<string, unknown>;
@@ -159,6 +204,7 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
         idempotencyKey: "k",
         senderAddress: SENDER,
         status: "settled",
+        vm: "evm",
       }),
     ).rejects.toThrow();
   });

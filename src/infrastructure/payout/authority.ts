@@ -9,6 +9,8 @@
 //   con key → formato → Didit → mapeo → ownership (vendor_data vs address)
 // Nunca fetch a Didit antes de pasar los guards.
 import { mapDiditDecision } from "../didit/decision";
+import { canonicalizeAddress } from "../address";
+import { resolveActiveVm } from "../chain";
 
 const BASE = process.env.DIDIT_BASE_URL ?? "https://verification.didit.me";
 
@@ -80,7 +82,7 @@ export async function resolvePayoutAuthority(
     // (SDD §8/R1) y el riesgo ya NO es nulo. Hoy lo acota que el payout corre en PAYOUT_ALLOW_MOCK
     // (no desembolsa real). El check queda como defensa best-effort; el hardening completo
     // (binding a sesión firmada / SIWE) = follow-up.
-    if (d.vendorData !== "" && d.vendorData.toLowerCase() !== address.toLowerCase()) {
+    if (d.vendorData !== "" && canonicalizeAddress(d.vendorData, resolveActiveVm()) !== canonicalizeAddress(address, resolveActiveVm())) {
       return { authorized: false, reason: "kyc_ownership_mismatch", httpStatus: 200 };
     }
 

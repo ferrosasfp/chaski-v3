@@ -1,6 +1,8 @@
 import type { Money } from "../domain/money";
 import type { RemittanceState } from "../domain/remittance";
 import { FALLBACK_WALLET_ADDRESS } from "../infrastructure/wallet";
+import { canonicalizeAddress } from "../infrastructure/address";
+import { resolveActiveVm } from "../infrastructure/chain";
 
 /** Proveniencias de payout que representan un desembolso REAL (allowlist fail-safe, CD-8). Cualquier
  *  valor desconocido/typo cae del lado seguro → muestra el banner (over-warn), nunca lo oculta.
@@ -25,7 +27,7 @@ export function isDemoMode(rem: RemittanceState): boolean {
 /** true si la wallet conectada es la FallbackWallet demo (sin aislamiento real por wallet). WKH-184.
  *  Case-insensitive: el address del estado viene crudo mixed-case desde connect() (CD-9). */
 export function isFallbackWalletAddress(address: string | null): boolean {
-  return !!address && address.toLowerCase() === FALLBACK_WALLET_ADDRESS.toLowerCase();
+  return !!address && canonicalizeAddress(address, resolveActiveVm()) === canonicalizeAddress(FALLBACK_WALLET_ADDRESS, resolveActiveVm());
 }
 
 /** Monto a MOSTRAR como entregado: el real; si no llegó, el cotizado; si tampoco, null → UI muestra "—". */

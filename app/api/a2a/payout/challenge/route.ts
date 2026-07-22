@@ -8,7 +8,8 @@
 import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { isAddress } from "viem";
-import { resolveChainId } from "../../../../../src/infrastructure/chain";
+import { resolveChainId, resolveActiveVm } from "../../../../../src/infrastructure/chain";
+import { canonicalizeAddress } from "../../../../../src/infrastructure/address";
 import {
   POP_CHALLENGE_TTL_SECONDS,
   buildPopMessage,
@@ -58,7 +59,7 @@ export async function POST(req: Request): Promise<Response> {
   const nonce = randomBytes(16).toString("hex");
   const exp = Math.floor(Date.now() / 1000) + POP_CHALLENGE_TTL_SECONDS;
   const chainId = resolveChainId(); // CD-9: la cadena sale de la ENV server-side, NUNCA del body
-  const addr = address.toLowerCase();
+  const addr = canonicalizeAddress(address, resolveActiveVm());
 
   const challenge = issuePopChallenge({ address: addr, chainId, nonce, exp });
   const message = buildPopMessage({ address: addr, chainId, nonce, exp });

@@ -3,7 +3,7 @@
 // chainId en un adapter y config en el otro.
 import { type Chain, isAddress } from "viem";
 import { base, baseSepolia } from "viem/chains";
-import { PublicKey } from "@solana/web3.js";
+import { type Cluster, clusterApiUrl, PublicKey } from "@solana/web3.js";
 
 const BASE_SEPOLIA_CHAIN_ID = 84532;
 const BASE_MAINNET_CHAIN_ID = 8453;
@@ -143,12 +143,33 @@ export function resolveSolanaUsdcMint(): string {
   return raw;
 }
 
+/** Pubkey del facilitator Solana (feePayer). ÚNICA fuente (env NEXT_PUBLIC_SOLANA_FACILITATOR_PUBKEY);
+ *  fail-loud si falta/malformado. Valida con PublicKey (base58), NUNCA con isAddress de viem (CD-SDD-7). */
+export function resolveSolanaFacilitatorPubkey(): string {
+  const raw = process.env.NEXT_PUBLIC_SOLANA_FACILITATOR_PUBKEY;
+  if (!raw) throw new Error("solana_facilitator_not_configured"); // fail-loud
+  try {
+    new PublicKey(raw); // lanza si no es base58 válido
+  } catch {
+    throw new Error("solana_facilitator_not_configured"); // fail-loud
+  }
+  return raw;
+}
+
 /** RPC READ-ONLY de Solana devnet (server-only). Paralelo a resolveRpcUrl. undefined si la env no está. */
 export function resolveSolanaRpcUrl(): string | undefined {
   switch (resolveSolanaNetworkConfig().rpcEnvVar) {
     case "SOLANA_DEVNET_RPC_URL":
       return process.env.SOLANA_DEVNET_RPC_URL;
   }
+}
+
+/** RPC público CLIENT-SAFE de Solana (AR-MNR-2). A diferencia de resolveSolanaRpcUrl() (server-only,
+ *  env NO-`NEXT_PUBLIC`), este corre en el bundle browser: lee `NEXT_PUBLIC_SOLANA_RPC_URL` y hace
+ *  fallback al endpoint público de la lib (`clusterApiUrl(cluster)`) si la env no está. Fail-soft:
+ *  NUNCA throwea por RPC ausente — el fallback siempre cubre. Se usa sólo para leer blockhash. */
+export function resolveSolanaRpcUrlPublic(cluster: Cluster): string {
+  return process.env.NEXT_PUBLIC_SOLANA_RPC_URL || clusterApiUrl(cluster);
 }
 
 /** Dispatcher multi-VM (AC-2/AC-6). switch sobre resolveActiveVm() — sin object-injection (CD-7). */

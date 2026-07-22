@@ -10,10 +10,15 @@ export interface SolanaWalletState {
 }
 
 type OpenModalFn = () => void;
+/** HU-SOL-5: firma parcial la tx con la wallet conectada. `tx` opaco (`unknown`) para NO importar
+ *  @solana/web3.js types acá (preserva el seam React-free de HU-SOL-4). El sync component captura
+ *  `useWallet().signTransaction` y lo registra; el adapter lo consume. */
+type SignTransactionFn = (tx: unknown) => Promise<unknown>;
 
 class SolanaWalletBridge {
   private state: SolanaWalletState = { publicKey: null, connected: false };
   private openModalHandle: OpenModalFn | null = null;
+  private signTxHandle: SignTransactionFn | null = null;
   private pendingResolve: (() => void) | null = null;
   private pendingReject: ((e: Error) => void) | null = null;
   private pendingTimer: ReturnType<typeof setTimeout> | null = null;
@@ -37,6 +42,18 @@ class SolanaWalletBridge {
   openModal(): void {
     if (!this.openModalHandle) throw new Error("wallet_bridge_not_mounted");
     this.openModalHandle();
+  }
+
+  /** HU-SOL-5: registrado por el sync component (captura useWallet().signTransaction). */
+  registerSignTransaction(fn: SignTransactionFn): void {
+    this.signTxHandle = fn;
+  }
+
+  /** HU-SOL-5: partial-sign de la tx con la wallet conectada. Fail-loud si el árbol no montó el
+   *  handle (nunca firma con una clave que no sea la de la wallet). */
+  async signTransaction(tx: unknown): Promise<unknown> {
+    if (!this.signTxHandle) throw new Error("wallet_sign_not_available");
+    return this.signTxHandle(tx);
   }
 
   /** Deferred: resuelve cuando el estado transiciona a connected && publicKey; timeout → reject. */
@@ -75,6 +92,7 @@ class SolanaWalletBridge {
     this.clearPending();
     this.state = { publicKey: null, connected: false };
     this.openModalHandle = null;
+    this.signTxHandle = null; // HU-SOL-5: aditivo, limpia el handle entre tests
   }
 
   private settle(): void {

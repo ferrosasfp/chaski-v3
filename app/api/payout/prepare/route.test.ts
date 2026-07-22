@@ -26,7 +26,16 @@ vi.mock("../../../../src/infrastructure/persistence/supabase-settlement-ledger",
   getSettlementLedger: getLedgerMock,
 }));
 
-import { verifyDepositAttestation } from "../../../../src/infrastructure/settlement/deposit-attestation";
+import bs58 from "bs58";
+import nacl from "tweetnacl";
+import {
+  issueSolanaPopChallenge,
+  buildSolanaPopMessage,
+} from "../../../../src/infrastructure/auth/pop-challenge";
+import {
+  verifyDepositAttestation,
+  verifySolanaDepositAttestation,
+} from "../../../../src/infrastructure/settlement/deposit-attestation";
 import { POST } from "./route";
 
 const ADDR = "0x1111111111111111111111111111111111111111";
@@ -82,6 +91,23 @@ function agentResult(over: Record<string, unknown> = {}) {
     depositAddress: DEPOSIT,
     ...over,
   };
+}
+
+// HU-SOL-11 — PoP Solana firmado REAL (ed25519), portado de submit/route.test.ts:983-1000. El challenge
+// corre REAL (HMAC de verdad, exige PAYOUT_POP_SECRET stubeado) y la firma es REAL (nacl). CD-10: la
+// address del challenge = pubkey del keypair (P3 pasa); networkId solana:devnet (P4 pasa).
+function signedSolanaPop(keypair: nacl.SignKeyPair, addr: string) {
+  const ch = {
+    address: addr,
+    networkId: "solana:devnet",
+    nonce: "abcdef0123456789abcdef0123456789",
+    exp: Math.floor(Date.now() / 1000) + 300,
+  };
+  const popChallenge = issueSolanaPopChallenge(ch);
+  const popSignature = bs58.encode(
+    nacl.sign.detached(new TextEncoder().encode(buildSolanaPopMessage(ch)), keypair.secretKey),
+  );
+  return { popChallenge, popSignature };
 }
 
 describe("POST /api/payout/prepare (WKH-211)", () => {
@@ -296,6 +322,74 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       expect(res.status).toBe(403);
       expect(await res.json()).toEqual({ error: "payout_pop_unverified" });
       expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── HU-SOL-11: rama Solana del BLOQUE DE RESPUESTA (PR8-PR11). vm=solana + PoP ed25519 REAL válido
+  //    (OBLIGATORIO en Solana) → 200 con el shape del gateway {beneficiary,authority,attestation,
+  //    payoutId,provenance} base58. La atestación es REAL (verifica con verifySolanaDepositAttestation).
+  //    beneficiary = deposit-address base58 del agente; caller.address = pubkey del keypair que firma PR6. ──
+  describe("rama Solana de respuesta (HU-SOL-11)", () => {
+    const SOL_BENEFICIARY = "So11111111111111111111111111111111111111112"; // base58 válido (== SOL_ADDR)
+    let kp: nacl.SignKeyPair;
+    let callerAddr: string;
+    let authorityPubkey: string;
+    beforeEach(() => {
+      kp = nacl.sign.keyPair();
+      callerAddr = bs58.encode(kp.publicKey); // pubkey del firmante = address del caller (P3)
+      authorityPubkey = bs58.encode(nacl.sign.keyPair().publicKey); // CD-10: NUNCA base58 a mano
+      vi.stubEnv("NEXT_PUBLIC_VM", "solana");
+      vi.stubEnv("PAYOUT_POP_SECRET", "pop-secret"); // OBLIGATORIO en Solana para pasar PR6
+      vi.stubEnv("SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY", authorityPubkey);
+    });
+
+    it("AC-1: vm=solana + PoP válido + depositAddress base58 → 200 shape Solana; la atestación VERIFICA", async () => {
+      agentResponds(200, agentResult({ depositAddress: SOL_BENEFICIARY }));
+      const res = await POST(
+        req(bodyOf({ address: callerAddr, ...signedSolanaPop(kp, callerAddr) })),
+      );
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as Record<string, unknown>;
+      // Shape EXACTO de isValidSolanaPrepareShape (http-solana-prepare-gateway.ts:48).
+      expect(json.beneficiary).toBe(SOL_BENEFICIARY);
+      expect(json.authority).toBe(authorityPubkey);
+      expect(json.payoutId).toBe("transfi-po-1");
+      expect(typeof json.provenance).toBe("string");
+      // La atestación Solana es REAL: verifica y ata beneficiary/authority/cluster.
+      const att = verifySolanaDepositAttestation(json.attestation as string, Date.now());
+      expect(att).not.toBeNull();
+      expect(att?.beneficiary).toBe(SOL_BENEFICIARY);
+      expect(att?.authority).toBe(authorityPubkey);
+      expect(att?.cluster).toBe("devnet");
+      // NUNCA ecoa PII del beneficiary ni la BASE (CD-5).
+      const raw = JSON.stringify(json);
+      expect(raw).not.toContain("Mamá");
+      expect(raw).not.toContain("999888777");
+      expect(raw).not.toContain("agents.test");
+    });
+
+    it("AC-2: vm=solana + authority env ausente/malformada → 503 prepare_solana_authority_unavailable", async () => {
+      for (const bad of ["", "0xNOT"]) {
+        vi.stubEnv("SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY", bad);
+        agentResponds(200, agentResult({ depositAddress: SOL_BENEFICIARY }));
+        const res = await POST(
+          req(bodyOf({ address: callerAddr, ...signedSolanaPop(kp, callerAddr) })),
+        );
+        expect(res.status).toBe(503);
+        // NUNCA payout_authority_unavailable, NUNCA 200 parcial, NO ecoa el env.
+        expect(await res.json()).toEqual({ error: "prepare_solana_authority_unavailable" });
+      }
+    });
+
+    it("AC-3: vm=solana + depositAddress null / no-base58 → 502 prepare_no_deposit_address", async () => {
+      for (const bad of [null, "0xNOT_BASE58"]) {
+        agentResponds(200, agentResult({ depositAddress: bad }));
+        const res = await POST(
+          req(bodyOf({ address: callerAddr, ...signedSolanaPop(kp, callerAddr) })),
+        );
+        expect(res.status).toBe(502);
+        expect(await res.json()).toEqual({ error: "prepare_no_deposit_address" });
+      }
     });
   });
 });

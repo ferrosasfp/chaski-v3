@@ -12,7 +12,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:core": "vitest run src/domain src/application",
-    "qa": "npm run typecheck && npm run test"
+    "typecheck:scripts": "tsc -p tsconfig.scripts.json --noEmit",
+    "smoke:solana": "tsx scripts/smoke-solana-e2e.ts",
+    "qa": "npm run typecheck && npm run typecheck:scripts && npm run test"
   },
   "dependencies": {
     "@coral-xyz/anchor": "0.30.1",
@@ -51,6 +53,7 @@
     "jsdom": "^25.0.0",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.13",
+    "tsx": "^4.19.0",
     "typescript": "^5.6.2",
     "vitest": "^2.1.1"
   }

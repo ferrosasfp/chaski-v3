@@ -24,6 +24,8 @@ import {
   resolveChainId,
   resolveActiveVm,
   resolveSolanaNetworkId,
+  resolveSolanaReleaseAuthorityPubkey,
+  resolveSolanaNetworkConfig,
 } from "../../../../src/infrastructure/chain";
 import { canonicalizeAddress } from "../../../../src/infrastructure/address";
 import { getSettlementLedger } from "../../../../src/infrastructure/persistence/supabase-settlement-ledger";
@@ -31,6 +33,7 @@ import { resolvePayoutAuthority } from "../../../../src/infrastructure/payout/au
 import {
   DEPOSIT_ATTESTATION_TTL_SECONDS,
   issueDepositAttestation,
+  issueSolanaDepositAttestation,
 } from "../../../../src/infrastructure/settlement/deposit-attestation";
 import {
   DEPOSIT_PREPARE_RL,
@@ -249,6 +252,71 @@ export async function POST(req: Request): Promise<Response> {
   }
   const okResult = result as { payoutId: string | null; provenance?: unknown; depositAddress?: unknown };
   const depositAddress = typeof okResult.depositAddress === "string" ? okResult.depositAddress : "";
+
+  // HU-SOL-11 — dispatch por VM del BLOQUE DE RESPUESTA (PR8-PR11). El guard-order PR1-PR7 quedó
+  // INTACTO arriba (CD-1). La rama Solana `return`ea ANTES del check EVM `isAddress` de abajo, así que
+  // el EVM NUNCA corre isAddress sobre un pubkey base58 (CD-2: rama EVM byte-idéntica). CD-9: todo inline.
+  const vmOut = resolveActiveVm();
+  if (vmOut === "solana") {
+    // 1. beneficiary = MISMO depositAddress del agente (DT-1). Vacío → mismo enum opaco que EVM.
+    if (!depositAddress.trim()) {
+      return NextResponse.json({ error: "prepare_no_deposit_address" }, { status: 502 });
+    }
+    // base58 válido (AC-3, no-oráculo: MISMO enum que EVM, no distinguir motivo).
+    try {
+      canonicalizeAddress(depositAddress, "solana");
+    } catch {
+      return NextResponse.json({ error: "prepare_no_deposit_address" }, { status: 502 });
+    }
+    // 2. payoutId presente (fail-closed: no atestar una orden sin id trackeable).
+    const payoutIdSol = typeof okResult.payoutId === "string" ? okResult.payoutId : "";
+    if (!payoutIdSol.trim()) {
+      return NextResponse.json({ error: "prepare_no_deposit_address" }, { status: 502 });
+    }
+    const provenanceSol = typeof okResult.provenance === "string" ? okResult.provenance : "";
+    // 3. authority (DESPUÉS de validar beneficiary, DT-2). Ausente/malformada → 503 enum NUEVO opaco.
+    let authoritySol: string;
+    try {
+      authoritySol = resolveSolanaReleaseAuthorityPubkey();
+    } catch {
+      return NextResponse.json({ error: "prepare_solana_authority_unavailable" }, { status: 503 });
+    }
+    // 4. cluster ("devnet").
+    const clusterSol = resolveSolanaNetworkConfig().cluster;
+    // 5. atestación Solana (beneficiary/authority/cluster; mismo TTL/secret).
+    const attestationSol = issueSolanaDepositAttestation({
+      remittanceId,
+      quoteId,
+      beneficiary: depositAddress,
+      authority: authoritySol,
+      cluster: clusterSol,
+      exp: Math.floor(Date.now() / 1000) + DEPOSIT_ATTESTATION_TTL_SECONDS,
+    });
+    // 6. ledger best-effort (vm:"solana" es el discriminante; chainId es telemetría). NUNCA rompe (CD-17).
+    const ledgerSol = getSettlementLedger();
+    if (ledgerSol) {
+      try {
+        await ledgerSol.recordOrderPrepared({
+          remittanceId,
+          quoteId,
+          idempotencyKey: typeof body.idempotencyKey === "string" ? body.idempotencyKey : `${remittanceId}:${quoteId}`,
+          depositAddress,
+          chainId: resolveChainId(),
+          senderAddress: address,
+          payoutId: payoutIdSol,
+          vm: "solana",
+        });
+      } catch (e) {
+        console.error("[ledger] recordOrderPrepared_failed", e);
+      }
+    }
+    // 7. 200 — matchea EXACTO isValidSolanaPrepareShape del gateway.
+    return NextResponse.json(
+      { beneficiary: depositAddress, authority: authoritySol, attestation: attestationSol, payoutId: payoutIdSol, provenance: provenanceSol },
+      { status: 200 },
+    );
+  }
+  // ── RAMA EVM (default) — TODO lo de abajo SIN CAMBIOS (byte-idéntico, CD-2) ──
   if (!depositAddress.trim() || !isAddress(depositAddress)) {
     return NextResponse.json({ error: "prepare_no_deposit_address" }, { status: 502 });
   }

@@ -158,6 +158,21 @@ export interface SolanaAuthorization {
 
 export type VmAuthorization = EvmAuthorization | SolanaAuthorization;
 
+// ── HU-SOL-5 (WKH-207*) — widening ADITIVO del WalletPort para el path Solana ──────
+/** Datos del escrow que el CALLER (HU-SOL-13) resuelve y pasa a la wallet Solana. base58. */
+export interface SolanaEscrowDeposit {
+  beneficiary: string; // Pubkey base58 — destino de la remesa (release). Resuelto por HU-SOL-13.
+  authority: string; // Pubkey base58 — quien puede release/refund. Resuelto por HU-SOL-13.
+  mint?: string; // opcional: override del mint; default resolveSolanaUsdcMint() (CD-SDD-4).
+}
+
+/** Variante Solana del retorno de authorizePrincipal (envelope, alineada con SolanaAuthorization). */
+export interface SolanaPrincipalAuthorization {
+  vm: "solana";
+  partialSignedTx: string; // tx legacy serializada base64, partial-signed (feePayer=facilitator, firma wallet-only)
+  reference: string; // Pubkey base58 de la reference (trazabilidad)
+}
+
 export type SettlementFailureReason =
   | "settlement_unavailable"
   | "settlement_rejected"
@@ -224,10 +239,11 @@ export interface WalletPort {
   authorizePrincipal(
     quote: Quote,
     remittanceId: string,
-    deposit?: { address: string },
+    deposit?: { address: string; escrow?: SolanaEscrowDeposit }, // escrow? = ADITIVO (Solana, HU-SOL-5)
   ): Promise<{
     tx: string; // demo: firma simbólica (AC-5)
     eip3009?: { authorization: Eip3009Authorization; signature: string }; // SOLO en modo real
+    solana?: SolanaPrincipalAuthorization; // ADITIVO (Solana, HU-SOL-5)
   }>;
   // WKH-206: firma un mensaje arbitrario (personal_sign) con la key de la wallet conectada. Lo usa el
   // PopSigner para probar posesión de `address`. En demo devuelve una firma simbólica (AC-5).

@@ -13,9 +13,15 @@ import { PreviewQuote } from "../application/use-cases/preview-quote";
 import { ResumeKyc } from "../application/use-cases/resume-kyc";
 import { StartKyc } from "../application/use-cases/start-kyc";
 import { TrackRemittance } from "../application/use-cases/track-remittance";
+import type { SolanaEscrowRefundGateway as SolanaEscrowRefundPort } from "../application/ports";
 import { A2aPayoutGateway, A2aQuoteGateway } from "../infrastructure/a2a/gateways";
 import { HttpPopSigner } from "../infrastructure/auth/http-pop-signer";
-import { resolveActiveVm, resolveReceiverAddress } from "../infrastructure/chain";
+import {
+  resolveActiveVm,
+  resolveReceiverAddress,
+  resolveSolanaFacilitatorPubkey,
+  resolveSolanaUsdcMint,
+} from "../infrastructure/chain";
 import { DiditKycGateway } from "../infrastructure/didit/kyc-gateway";
 import {
   FallbackKycGateway,
@@ -25,8 +31,11 @@ import {
 import { LocalKycPendingStore } from "../infrastructure/kyc-pending-store";
 import { HttpPayoutAuthorityGateway } from "../infrastructure/payout/payout-authority-gateway";
 import { LedgerRefundGateway } from "../infrastructure/refund/ledger-refund-gateway";
+import { SolanaEscrowRefundGateway } from "../infrastructure/refund/solana-escrow-refund-gateway";
 import { HttpPayoutPrepareGateway } from "../infrastructure/settlement/http-payout-prepare-gateway";
 import { HttpSettlementGateway } from "../infrastructure/settlement/http-settlement-gateway";
+import { HttpSolanaPayoutPrepareGateway } from "../infrastructure/settlement/http-solana-prepare-gateway";
+import { HttpSolanaSettlementGateway } from "../infrastructure/settlement/http-solana-settlement-gateway";
 import { LocalKycStore } from "../infrastructure/kyc-store";
 import { LocalRepo } from "../infrastructure/persistence";
 import { SolanaWalletAdapter } from "../infrastructure/solana-wallet";
@@ -45,6 +54,9 @@ export interface Container {
   listHistory: ListHistory;
   abandonPendingKyc: AbandonPendingKyc;
   forgetKyc: ForgetKyc;
+  // HU-SOL-13 (WKH-216): refund trustless del escrow Solana. OPCIONAL: sólo se cablea con
+  // resolveActiveVm()==="solana" (undefined en EVM/demo ⇒ la UI no muestra la acción). AC-6/CD-10.
+  solanaRefund?: SolanaEscrowRefundPort;
 }
 
 export function createContainer(): Container {
@@ -80,8 +92,22 @@ export function createContainer(): Container {
   // Dispatcher de wallet gateado por VM (AC-4): un solo resolveActiveVm() gobierna el wiring; imposible
   // modo mixto silencioso. El adapter Solana es React-free (seam AC-3) → import estático seguro para el
   // bundle EVM. VM=evm/unset → pickWallet() EVM INTACTO. VM inválida → resolveActiveVm() throw (AC-5).
-  const wallet =
-    resolveActiveVm() === "solana" ? new SolanaWalletAdapter() : pickWallet();
+  const solanaWallet = resolveActiveVm() === "solana" ? new SolanaWalletAdapter() : null;
+  const wallet = solanaWallet ?? pickWallet();
+  // HU-SOL-13 (WKH-216) — guard fail-loud money-path Solana, análogo al EIP-3009 de arriba. MUTUAMENTE
+  // EXCLUYENTE con el path EVM: si la VM activa es Solana, EIP-3009 DEBE estar OFF (nunca se inyectan
+  // `settlement` y `solana` juntos — CD-2/CD-14). Con el flag Solana ON exige mint+facilitator
+  // configurados (client-safe, NEXT_PUBLIC_); la release-authority se resuelve SERVER-SIDE (nunca en el
+  // bundle browser, CD-6). Default (flags OFF) → nunca entra acá ⇒ EVM/demo byte-idéntico.
+  const solanaSettleOn = process.env.NEXT_PUBLIC_SOLANA_SETTLE_ENABLED === "true";
+  if (solanaWallet && process.env.NEXT_PUBLIC_EIP3009_ENABLED === "true") {
+    throw new Error("solana_vm_excludes_eip3009"); // mutua exclusión (CD-14)
+  }
+  if (solanaSettleOn) {
+    if (!solanaWallet) throw new Error("solana_settle_requires_solana_vm"); // flag sin VM Solana
+    resolveSolanaUsdcMint(); // fail-loud si falta/malformado
+    resolveSolanaFacilitatorPubkey(); // fail-loud si falta/malformado
+  }
   // Settlement real del principal (WKH-168/AC-5, CD-1): se instancia SOLO con el flag on. Con el
   // flag off queda `undefined` → ConfirmAndSend no recibe 7º arg → "modo demo" byte-idéntico a
   // pre-HU, POR CONSTRUCCIÓN (el use-case nunca lee una env — CD-14). El guard fail-loud de arriba
@@ -106,6 +132,16 @@ export function createContainer(): Container {
   // nunca lee env — CD-13). Doble flag coordinado con el server PAYOUT_POP_SECRET (idéntico a EIP3009).
   const pop =
     process.env.NEXT_PUBLIC_PAYOUT_POP_ENABLED === "true" ? new HttpPopSigner(wallet) : undefined;
+  // HU-SOL-13 (WKH-216) — inyección Solana ACOPLADA (prepare+gateway), MUTUAMENTE EXCLUYENTE con
+  // `settlement` (EVM): sólo con VM Solana + el flag Solana ON. Undefined en EVM/demo ⇒ ConfirmAndSend
+  // no recibe 9º arg ⇒ path EVM byte-idéntico (CD-2/CD-14). El guard de arriba ya validó los envs.
+  const solana =
+    solanaWallet && solanaSettleOn
+      ? { prepare: new HttpSolanaPayoutPrepareGateway(), gateway: new HttpSolanaSettlementGateway() }
+      : undefined;
+  // Refund trustless (AC-6/CD-10): disponible en modo Solana como válvula de recuperación (lee on-chain
+  // y aborta si no es refundeable). undefined en EVM/demo ⇒ la UI no muestra la acción.
+  const solanaRefund = solanaWallet ? new SolanaEscrowRefundGateway(solanaWallet) : undefined;
 
   return {
     previewQuote: new PreviewQuote(quotes),
@@ -123,11 +159,13 @@ export function createContainer(): Container {
       refund,
       settlement, // WKH-168: undefined con el flag off ⇒ AC-5 por construcción
       pop, // WKH-206: undefined con el flag off ⇒ AC-5 por construcción
+      solana, // HU-SOL-13: undefined en EVM/demo ⇒ path EVM byte-idéntico por construcción
     ),
     trackRemittance: new TrackRemittance(payouts, repo, clock, refund),
     listHistory: new ListHistory(repo),
     abandonPendingKyc: new AbandonPendingKyc(kycPending),
     forgetKyc: new ForgetKyc(kycStore, kycPending, repo),
+    solanaRefund, // HU-SOL-13: undefined en EVM/demo ⇒ la UI no muestra la acción refund
   };
 }
 

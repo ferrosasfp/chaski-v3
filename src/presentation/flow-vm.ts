@@ -25,9 +25,20 @@ export function isDemoMode(rem: RemittanceState): boolean {
 }
 
 /** true si la wallet conectada es la FallbackWallet demo (sin aislamiento real por wallet). WKH-184.
- *  Case-insensitive: el address del estado viene crudo mixed-case desde connect() (CD-9). */
+ *  Case-insensitive: el address del estado viene crudo mixed-case desde connect() (CD-9).
+ *  BLQ-MED-1 (AR/CR): fail-safe. FALLBACK_WALLET_ADDRESS es un address EVM ("0xDEMO…"); bajo vm=solana
+ *  canonicalizeAddress(FALLBACK, "solana") throwea (new PublicKey del EVM tira) → el render de
+ *  RemittanceFlow completo crasheaba. Envuelto en try/catch (mismo patrón que addressEqualsVm en
+ *  address.ts:39-43 y el resolveActiveVm try/catch en TrackView): si el address no canonicaliza bajo el
+ *  VM activo, NO es el fallback → false. EVM (toLowerCase, NUNCA throw) queda byte-idéntico. */
 export function isFallbackWalletAddress(address: string | null): boolean {
-  return !!address && canonicalizeAddress(address, resolveActiveVm()) === canonicalizeAddress(FALLBACK_WALLET_ADDRESS, resolveActiveVm());
+  if (!address) return false;
+  try {
+    const vm = resolveActiveVm();
+    return canonicalizeAddress(address, vm) === canonicalizeAddress(FALLBACK_WALLET_ADDRESS, vm);
+  } catch {
+    return false;
+  }
 }
 
 /** Monto a MOSTRAR como entregado: el real; si no llegó, el cotizado; si tampoco, null → UI muestra "—". */

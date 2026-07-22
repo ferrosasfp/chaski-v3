@@ -150,6 +150,83 @@ export class SolanaWalletAdapter implements WalletPort {
     };
   }
 
+  // HU-SOL-13 (WKH-216/AC-6/AC-7, CD-10): refund TRUSTLESS del escrow. El SENDER firma + el SENDER
+  // broadcastea (feePayer=sender), SIN facilitator ni release-authority (CD-10). Antes de firmar lee
+  // `EscrowState` on-chain (autoritativo, AH-14/NC-3) y ABORTA client-side si status≠Deposited o
+  // now<deadline (evita una tx que revertiría; defensa en profundidad — el programa ya rechaza
+  // EscrowNotDeposited/DeadlineNotReached). Reusa remittanceIdToBytes16 + la derivación PDA de
+  // authorizePrincipal. CD-15: libs isomórficas (@noble/hashes, TextEncoder, Buffer polyfill de Next),
+  // NUNCA node:crypto — el test-env `node` enmascara la falla del bundle browser.
+  async refundEscrow(remittanceId: string, sender?: string): Promise<{ refundTx: string }> {
+    // ── GUARDS fail-loud — ANTES de leer/construir/firmar nada ──
+    const senderB58 = sender ?? (await this.getAddress());
+    if (!senderB58) throw new Error("wallet_not_connected");
+
+    // ── lazy-import (patrón authorizePrincipal, DT-SDD-8) ──
+    const web3 = await import("@solana/web3.js");
+    const { PublicKey, Transaction, Connection } = web3;
+    const anchor = await import("@coral-xyz/anchor");
+    const { getAssociatedTokenAddressSync } = await import("@solana/spl-token");
+    const { escrowIdl } = await import("./solana/escrow-idl");
+
+    const senderPk = new PublicKey(senderB58); // valida base58 (CD-SDD-7)
+    const programId = new PublicKey((escrowIdl as { address: string }).address); // BBQ9…79WA
+
+    // ── PDA escrow_state (misma derivación que authorizePrincipal / cross-repo, AH-9) ──
+    const remittanceIdBytes = this.remittanceIdToBytes16(remittanceId); // [u8;16] determinístico
+    const [escrowStatePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("escrow"), senderPk.toBuffer(), Buffer.from(remittanceIdBytes)],
+      programId,
+    );
+
+    const connection = new Connection(
+      resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), // client-safe
+    );
+
+    // ── Read on-chain (autoritativo): status==Deposited && now>=deadline (AC-6/AC-7) ──
+    const info = await connection.getAccountInfo(escrowStatePda);
+    if (!info) throw new Error("escrow_not_found"); // nada que refundear
+    const coder = new anchor.BorshAccountsCoder(escrowIdl as unknown as Idl);
+    const state = coder.decode("EscrowState", info.data) as {
+      mint: InstanceType<typeof PublicKey>;
+      deadline: { toNumber(): number };
+      status: Record<string, unknown>;
+    };
+    const statusKey = Object.keys(state.status)[0]; // enum anchor 0.30 → { Deposited: {} } | { Released: {} } | ...
+    if (statusKey !== "Deposited") throw new Error("escrow_not_deposited"); // AC-6: sólo Deposited
+    const deadlineSec = state.deadline.toNumber();
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (nowSec < deadlineSec) throw new Error("refund_before_deadline"); // AC-7: bloquea pre-deadline
+
+    // ── Build ix `refund` (AH-10) vía anchor Program (mismo shape loose que deposit) ──
+    const mintPk = state.mint; // el mint on-chain (autoritativo), NUNCA del cliente
+    const vault = getAssociatedTokenAddressSync(mintPk, escrowStatePda, /*allowOwnerOffCurve*/ true);
+    const senderAta = getAssociatedTokenAddressSync(mintPk, senderPk);
+    const program = new anchor.Program(escrowIdl as unknown as Idl, { connection } as Provider);
+    const methods = program.methods as unknown as {
+      refund: (...args: unknown[]) => {
+        accounts: (a: Record<string, InstanceType<typeof PublicKey>>) => {
+          instruction: () => Promise<TransactionInstruction>;
+        };
+      };
+    };
+    const ix = await methods
+      .refund(Array.from(remittanceIdBytes))
+      .accounts({ sender: senderPk, mint: mintPk, escrowState: escrowStatePda, vault, senderAta })
+      .instruction();
+
+    // ── feePayer=SENDER (CD-10: sin facilitator) + blockhash + sign SENDER + broadcast SENDER ──
+    const { blockhash } = await connection.getLatestBlockhash();
+    const tx = new Transaction().add(ix);
+    tx.feePayer = senderPk; // AC-6/CD-10: el sender paga el fee y firma (NUNCA la release-authority)
+    tx.recentBlockhash = blockhash;
+    const signed = (await solanaWalletBridge.signTransaction(tx)) as Web3Transaction; // firma SÓLO el sender
+    const signature = await connection.sendRawTransaction(
+      signed.serialize(), // requireAllSignatures=true por default (el sender es el único signer)
+    );
+    return { refundTx: signature }; // signature base58 broadcasteada
+  }
+
   // HU-SOL-8 (AC-1/CD-6/CD-SDD-3): firma REAL del proof-of-possession. El caller (http-pop-signer) pasa
   // el popMessage VERBATIM; la wallet (vía bridge) devuelve la firma ed25519 de 64 bytes; se codifica
   // base58 (simétrico con verifySolanaPop.signatureBase58). Browser+node-safe: bs58 + TextEncoder,

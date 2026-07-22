@@ -1,4 +1,5 @@
 // Test doubles — implementaciones fake de los ports (para probar use-cases sin infra real).
+import bs58 from "bs58";
 import { Money } from "../domain/money";
 import {
   type KycVerification,
@@ -38,6 +39,11 @@ import type {
   SettlementLedger,
   SettlementLedgerStatus,
   SettlementRecord,
+  SolanaEscrowRefundGateway,
+  SolanaPayoutPrepareGateway,
+  SolanaPrincipalAuthorization,
+  SolanaSettlementFailureReason,
+  SolanaSettlementGateway,
   WalletPort,
 } from "../application/ports";
 
@@ -601,6 +607,142 @@ export class FakeSettlementLedger implements SettlementLedger {
         r.updatedAt = this.nowIso;
       }
     }
+  }
+}
+
+// ── HU-SOL-13 (WKH-216) — dobles del money-path Solana no-custodial ──────────────────────────────
+export const FAKE_SOLANA_BENEFICIARY = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // base58 devnet
+export const FAKE_SOLANA_AUTHORITY = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"; // base58 (release-authority)
+export const FAKE_SOLANA_SIGNATURE = bs58.encode(new Uint8Array(64).fill(7)); // signature base58 válida (64 bytes)
+export const FAKE_SOLANA_REFERENCE = "So11111111111111111111111111111111111111112"; // base58 reference
+
+// FakeSolanaWallet — WalletPort cuya authorizePrincipal devuelve el envelope `solana` (HU-SOL-5), para
+// probar la rama Solana de ConfirmAndSend sin @solana/web3.js. Registra el 3er arg `deposit` recibido:
+// los tests verifican que el escrow (beneficiary/authority) llegó SERVER-SIDE desde prepare (nunca del body).
+export class FakeSolanaWallet implements WalletPort {
+  public authorizeCalls: Array<{
+    remittanceId?: string;
+    deposit?: { address: string; escrow?: { beneficiary: string; authority: string; mint?: string } };
+  }> = [];
+  // Pasá `null` para simular una wallet que NO arma el deposit (return sin envelope solana). `undefined`
+  // (omitido) usa el default OK — por eso el "no-envelope" es `null` explícito (no `undefined`).
+  private readonly solana: SolanaPrincipalAuthorization | null;
+  constructor(solana: SolanaPrincipalAuthorization | null = {
+    vm: "solana",
+    partialSignedTx: "AQID", // base64 sintético
+    reference: FAKE_SOLANA_REFERENCE,
+  }) {
+    this.solana = solana;
+  }
+  async connect(): Promise<string> {
+    return FAKE_SOLANA_BENEFICIARY;
+  }
+  async getAddress(): Promise<string | null> {
+    return FAKE_SOLANA_BENEFICIARY;
+  }
+  async authorizePrincipal(
+    _quote: Quote,
+    remittanceId?: string,
+    deposit?: { address: string; escrow?: { beneficiary: string; authority: string; mint?: string } },
+  ): Promise<{ tx: string; solana?: SolanaPrincipalAuthorization }> {
+    this.authorizeCalls.push({ remittanceId, deposit });
+    return this.solana ? { tx: this.solana.partialSignedTx, solana: this.solana } : { tx: "0xsol" };
+  }
+  async signMessage(_message: string): Promise<string> {
+    return "solana-fakesig";
+  }
+}
+
+// FakeSolanaPayoutPrepareGateway — resuelve beneficiary+authority server-side (por default OK). Pasá
+// { ok:false, reason } o mode="reject" para ejercitar el fail-closed pre-firma (AC-1). Registra los inputs.
+export type FakeSolanaPrepareResult =
+  | {
+      ok: true;
+      result: { beneficiary: string; authority: string; attestation: string; payoutId: string; provenance: string };
+    }
+  | { ok: false; reason: string };
+
+export class FakeSolanaPayoutPrepareGateway implements SolanaPayoutPrepareGateway {
+  public calls: Array<{
+    remittanceId: string;
+    quoteId: string;
+    kycVerificationId: string;
+    address: string;
+    amountUsd: number;
+    beneficiary: unknown;
+    idempotencyKey: string;
+  }> = [];
+  constructor(
+    private readonly result: FakeSolanaPrepareResult = {
+      ok: true,
+      result: {
+        beneficiary: FAKE_SOLANA_BENEFICIARY,
+        authority: FAKE_SOLANA_AUTHORITY,
+        attestation: "solana-deposit-att-fake",
+        payoutId: "transfi-sol-po-1",
+        provenance: "transfi",
+      },
+    },
+    private readonly mode: "resolve" | "reject" = "resolve",
+  ) {}
+  async prepare(input: {
+    remittanceId: string;
+    quoteId: string;
+    kycVerificationId: string;
+    address: string;
+    amountUsd: number;
+    beneficiary: import("../domain/remittance").Beneficiary;
+    idempotencyKey: string;
+  }): Promise<FakeSolanaPrepareResult> {
+    this.calls.push(input);
+    if (this.mode === "reject") throw new Error("solana_prepare_boom");
+    return this.result;
+  }
+}
+
+// FakeSolanaSettlementGateway — broadcast del deposit (por default OK con signature base58). Pasá
+// { ok:false, reason } o mode="reject" para ejercitar el fail-closed (C3). Registra los inputs.
+export type FakeSolanaSettleResult =
+  | { ok: true; signature: string }
+  | { ok: false; reason: SolanaSettlementFailureReason };
+
+export class FakeSolanaSettlementGateway implements SolanaSettlementGateway {
+  public calls: Array<{
+    partialSignedTx: string;
+    reference: string;
+    sender: string;
+    remittanceId: string;
+    popProof?: string;
+  }> = [];
+  constructor(
+    private readonly result: FakeSolanaSettleResult = { ok: true, signature: FAKE_SOLANA_SIGNATURE },
+    private readonly mode: "resolve" | "reject" = "resolve",
+  ) {}
+  async settle(input: {
+    partialSignedTx: string;
+    reference: string;
+    sender: string;
+    remittanceId: string;
+    popProof?: string;
+  }): Promise<FakeSolanaSettleResult> {
+    this.calls.push(input);
+    if (this.mode === "reject") throw new Error("solana_settle_boom");
+    return this.result;
+  }
+}
+
+// FakeSolanaEscrowRefundGateway — refund trustless (AC-6). Registra los inputs; por default devuelve
+// una signature base58 sintética. mode="reject" ejercita el error path de la UI.
+export class FakeSolanaEscrowRefundGateway implements SolanaEscrowRefundGateway {
+  public calls: Array<{ remittanceId: string; sender: string }> = [];
+  constructor(
+    private readonly refundTx: string = FAKE_SOLANA_SIGNATURE,
+    private readonly mode: "resolve" | "reject" = "resolve",
+  ) {}
+  async refund(input: { remittanceId: string; sender: string }): Promise<{ refundTx: string }> {
+    this.calls.push(input);
+    if (this.mode === "reject") throw new Error("solana_refund_boom");
+    return { refundTx: this.refundTx };
   }
 }
 

@@ -28,6 +28,7 @@ import type {
   PrincipalSettlementGateway,
   QuoteGateway,
   RefundGateway,
+  SolanaEscrowRefundGateway,
   WalletPort,
 } from "../application/ports";
 import {
@@ -63,6 +64,8 @@ export interface TestContainerOverrides {
   // WKH-206: sin override queda UNDEFINED → ConfirmAndSend corre en modo DEMO byte-idéntico (AC-5).
   // Inyectarlo = "modo PoP" (mismo criterio que el container: solo con el flag on).
   pop?: PopSigner;
+  // HU-SOL-13: sin override queda UNDEFINED → la acción refund Solana NO se muestra (EVM/demo byte-idéntico).
+  solanaRefund?: SolanaEscrowRefundGateway;
   clock?: Clock; // default: new FixedClock()
   useCases?: Partial<Container>; // escape hatch (ej. resumeKyc stub para T3)
 }
@@ -101,6 +104,7 @@ export function buildTestContainer(o: TestContainerOverrides = {}): Container {
     listHistory: new ListHistory(repo),
     abandonPendingKyc: new AbandonPendingKyc(pending),
     forgetKyc: new ForgetKyc(kycStore, pending, repo),
+    solanaRefund: o.solanaRefund, // HU-SOL-13: undefined ⇒ la UI no muestra la acción refund
   };
   return { ...base, ...(o.useCases ?? {}) };
 }

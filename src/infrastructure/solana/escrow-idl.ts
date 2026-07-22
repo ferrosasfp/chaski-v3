@@ -6,7 +6,7 @@
 // anchor.Idl en runtime (lazy). Verificado contra AH-11: ix `deposit` discriminator
 // [242,35,198,137,82,225,242,182]; args remittance_id[u8;16]/beneficiary/authority/amount(u64)/deadline(i64).
 export const escrowIdl = {
-  address: "BBQ9TcriBT7tqe5czR72CkUyxYg6z8pH7nk161yh79WA",
+  address: "DR5GoMT7sAKzD6wZMKJPeknS3Y6fzgZUNevi7xiESE4x",
   metadata: {
     name: "escrow",
     version: "0.1.0",

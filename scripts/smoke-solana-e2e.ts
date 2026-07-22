@@ -14,7 +14,9 @@
 //    de la ix `deposit` de `solana-wallet.ts`. NO reimplementa el discriminator ni "miente" el shape.
 //  - Runtime `tsx` (`npm run smoke:solana`). Typecheck aislado vía `tsconfig.scripts.json`. NO se ejecuta
 //    en F3: sólo typechea/lintea.
+import { createHmac } from "node:crypto";
 import bs58 from "bs58";
+import nacl from "tweetnacl";
 import { sha256 } from "@noble/hashes/sha256";
 import {
   clusterApiUrl,
@@ -49,6 +51,7 @@ const REQUIRED_ENVS = [
   "SMOKE_AMOUNT_USD", // monto en USD (se convierte a minor units USDC de 6 decimales)
   "SMOKE_SOLANA_USDC_MINT", // mint USDC devnet (base58) — necesario para construir la ix `deposit`
   "SMOKE_SOLANA_FACILITATOR_PUBKEY", // pubkey devnet del facilitator (feePayer gasless) — cofirma server-side
+  "SMOKE_SPONSOR_POP_SECRET", // secreto compartido con el facilitator (== SOLANA_SPONSOR_POP_SECRET) para el popProof
 ] as const;
 
 function requireEnv(name: string): string {
@@ -78,6 +81,8 @@ const USDC_MINT = requireEnv("SMOKE_SOLANA_USDC_MINT");
 // Pubkey del facilitator (feePayer gasless). Se resuelve UPFRONT (antes de cualquier fetch con side-effect,
 // p.ej. /api/payout/prepare que crea una orden TransFi sandbox) para abortar fail-loud sin efectos.
 const FACILITATOR_PUBKEY = requireEnv("SMOKE_SOLANA_FACILITATOR_PUBKEY");
+// Secreto del popProof del sponsor (== SOLANA_SPONSOR_POP_SECRET del facilitator). SECRETO — nunca se imprime.
+const SPONSOR_POP_SECRET = requireEnv("SMOKE_SPONSOR_POP_SECRET");
 // Ventana del deadline del escrow (i64 unix seconds). Default 1h; env-overridable. NO es secreto.
 const DEADLINE_SECONDS = Number.parseInt(process.env.SMOKE_DEADLINE_SECONDS ?? "3600", 10);
 
@@ -102,7 +107,7 @@ async function main(): Promise<void> {
   // ── Checkpoint 1 — healthcheck de los 3 servicios ────────────────────────────────────────────────
   for (const [label, base] of [
     ["chaski", CHASKI_URL],
-    ["facilitator", FACILITATOR_URL],
+    ["facilitator", `${FACILITATOR_URL}/health`], // el facilitator no tiene root route (404); healthcheck vía /health
     ["remit", REMIT_URL],
   ] as const) {
     let res: Response;
@@ -124,6 +129,35 @@ async function main(): Promise<void> {
   const sender = Keypair.fromSecretKey(bs58.decode(SENDER_SECRET_KEY)); // SECRETO — nunca se imprime
   const senderAddr = sender.publicKey.toBase58();
   const idempotencyKey = `${REMITTANCE_ID}:${QUOTE_ID}`;
+
+  // ── PoP (WKH-206/HU-SOL-8): challenge → firma ed25519 del sender. En vm=solana es OBLIGATORIO en
+  //    /api/payout/prepare (PR6). El sender firma el popMessage VERBATIM con su key ed25519. ──────────
+  let popChallenge: string;
+  let popSignature: string;
+  try {
+    const chRes = await fetch(`${CHASKI_URL}/api/a2a/payout/challenge`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ address: senderAddr }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!chRes.ok) return fail(3, `PoP challenge no-2xx (${chRes.status})`);
+    const chBody: unknown = await chRes.json().catch(() => null);
+    if (
+      !isRecord(chBody) ||
+      typeof chBody.popChallenge !== "string" ||
+      typeof chBody.popMessage !== "string"
+    ) {
+      return fail(3, "PoP challenge shape inválido (popChallenge/popMessage)");
+    }
+    popChallenge = chBody.popChallenge;
+    const sig = nacl.sign.detached(new TextEncoder().encode(chBody.popMessage), sender.secretKey);
+    popSignature = bs58.encode(sig); // firma ed25519 base58, verbatim al verificador (pop-verify-solana)
+  } catch (e) {
+    return fail(3, `PoP challenge inalcanzable: ${e instanceof Error ? e.name : "error"}`);
+  }
+  ok(3, "PoP challenge firmado (ed25519)");
+
   let prepareRes: Response;
   try {
     prepareRes = await fetch(`${CHASKI_URL}/api/payout/prepare`, {
@@ -136,6 +170,8 @@ async function main(): Promise<void> {
         address: senderAddr,
         amountUsd: Number(AMOUNT_USD),
         idempotencyKey,
+        popChallenge,
+        popSignature,
       }),
       signal: AbortSignal.timeout(15_000),
     });
@@ -218,6 +254,8 @@ async function main(): Promise<void> {
         reference: reference.toBase58(),
         sender: senderAddr,
         remittanceId: REMITTANCE_ID,
+        // popProof = HMAC-SHA256(sender, SOLANA_SPONSOR_POP_SECRET).hex — verbatim a verifySponsorPop del facilitator.
+        popProof: createHmac("sha256", SPONSOR_POP_SECRET).update(senderAddr).digest("hex"),
       }),
       signal: AbortSignal.timeout(30_000),
     });
@@ -229,6 +267,14 @@ async function main(): Promise<void> {
   const signature = isRecord(sponsorBody) && typeof sponsorBody.signature === "string" ? sponsorBody.signature : "";
   if (!signature.trim()) return fail(5, "sponsor no devolvió signature base58");
   ok(5, "deposit broadcasteado (gasless) — signature recibida");
+
+  // ── M5 EVIDENCE ── la tx del deposit YA está on-chain: imprimir el link del Explorer ACÁ (= AC de M5),
+  //    ANTES de las patas best-effort (release/TransFi, que requieren KYC Didit real + credenciales TransFi).
+  const explorerUrl = `https://explorer.solana.com/tx/${signature}?cluster=${CLUSTER}`;
+  console.log("\n============================================================");
+  console.log(">>> M5 — TX del deposit no-custodial (verificable en Solana Explorer):");
+  console.log(`    ${explorerUrl}`);
+  console.log("============================================================\n");
 
   // ── Checkpoint 6 — verify vault: leer EscrowState on-chain hasta status==Deposited ───────────────
   let deposited = false;
@@ -248,10 +294,13 @@ async function main(): Promise<void> {
   if (!deposited) return fail(6, "escrow no alcanzó status Deposited en la ventana");
   ok(6, "vault on-chain en status Deposited");
 
-  // ── Checkpoint 7 — release (submit): dispara el path de release del escrow ────────────────────────
-  let releaseRes: Response;
+  // ── Checkpoints 7-8 (BEST-EFFORT) — release del escrow + orden TransFi ────────────────────────────
+  //    Requieren KYC Didit REAL (el `submit` rechaza el `simulated_dev` del preview) + credenciales
+  //    TransFi sandbox → DIFERIDOS (decisión del founder: M5 = la tx del deposit on-chain, ya capturada
+  //    arriba). Un fallo acá NO invalida M5; sólo se reporta como best-effort. Referencia a `attestation`
+  //    y `payoutId` del prepare para el intento.
   try {
-    releaseRes = await fetch(`${CHASKI_URL}/api/a2a/payout/submit`, {
+    const releaseRes = await fetch(`${CHASKI_URL}/api/a2a/payout/submit`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -264,22 +313,20 @@ async function main(): Promise<void> {
       }),
       signal: AbortSignal.timeout(30_000),
     });
+    console.log(
+      releaseRes.ok
+        ? "OK [7] release/TransFi (pata fiat) disparado"
+        : `WARN [7] release/TransFi best-effort no-2xx (${releaseRes.status}) — requiere KYC Didit real + TransFi; NO afecta M5 (deposit ya on-chain)`,
+    );
   } catch (e) {
-    return fail(7, `release inalcanzable: ${e instanceof Error ? e.name : "error"}`);
+    console.log(
+      `WARN [7] release/TransFi best-effort inalcanzable (${e instanceof Error ? e.name : "error"}) — NO afecta M5`,
+    );
   }
-  if (!releaseRes.ok) return fail(7, `release no-2xx (${releaseRes.status})`);
-  const releaseBody: unknown = await releaseRes.json().catch(() => null);
-  if (!isRecord(releaseBody)) return fail(7, "release body no es objeto");
-  ok(7, "release del escrow disparado");
 
-  // ── Checkpoint 8 — orden TransFi sandbox: assert payoutId/estado ─────────────────────────────────
-  const releasePayoutId = typeof releaseBody.payoutId === "string" ? releaseBody.payoutId : payoutId;
-  if (!releasePayoutId.trim()) return fail(8, "orden TransFi sin payoutId");
-  ok(8, "orden TransFi sandbox — payoutId presente");
-
-  // ── Checkpoint 9 — link de Solana Explorer (evidencia de M5) ─────────────────────────────────────
-  console.log(`https://explorer.solana.com/tx/${signature}?cluster=${CLUSTER}`);
-  ok(9, "link de Solana Explorer impreso");
+  // ── Checkpoint 9 — evidencia final de M5 ─────────────────────────────────────────────────────────
+  console.log(`\nM5 OK — tx del deposit no-custodial verificable en:\n${explorerUrl}`);
+  ok(9, "M5 completado (deposit on-chain); release/TransFi diferidos (best-effort)");
 }
 
 main().catch((e) => {

@@ -60,7 +60,7 @@ describe("SolanaWalletAdapter", () => {
 });
 
 // ── HU-SOL-5 (WKH-207*) — authorizePrincipal real: ix deposit al escrow (SPL, gasless) ────────
-const ESCROW_PROGRAM_ID = "BBQ9TcriBT7tqe5czR72CkUyxYg6z8pH7nk161yh79WA";
+const ESCROW_PROGRAM_ID = "DR5GoMT7sAKzD6wZMKJPeknS3Y6fzgZUNevi7xiESE4x";
 const DEPOSIT_DISCRIMINATOR = [242, 35, 198, 137, 82, 225, 242, 182];
 const FIXED_BLOCKHASH = Keypair.generate().publicKey.toBase58(); // 32 bytes base58 válido (NO devnet)
 

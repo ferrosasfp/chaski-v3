@@ -14,7 +14,8 @@
 import { NextResponse } from "next/server";
 import { isAddress, verifyMessage } from "viem";
 import { buildPopMessage, verifyPopChallenge } from "../../../../src/infrastructure/auth/pop-challenge";
-import { resolveChainId } from "../../../../src/infrastructure/chain";
+import { resolveChainId, resolveActiveVm } from "../../../../src/infrastructure/chain";
+import { canonicalizeAddress } from "../../../../src/infrastructure/address";
 import { getSettlementLedger } from "../../../../src/infrastructure/persistence/supabase-settlement-ledger";
 import { resolvePayoutAuthority } from "../../../../src/infrastructure/payout/authority";
 import {
@@ -124,7 +125,7 @@ export async function POST(req: Request): Promise<Response> {
     if (!ch) {
       return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
     }
-    if (ch.address.toLowerCase() !== address.toLowerCase()) {
+    if (canonicalizeAddress(ch.address, resolveActiveVm()) !== canonicalizeAddress(address, resolveActiveVm())) {
       return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
     }
     if (ch.chainId !== resolveChainId()) {
@@ -211,6 +212,7 @@ export async function POST(req: Request): Promise<Response> {
         chainId,
         senderAddress: address,
         payoutId,
+        vm: resolveActiveVm(),
       });
     } catch (e) {
       console.error("[ledger] recordOrderPrepared_failed", e); // best-effort, NUNCA rompe (CD-17)

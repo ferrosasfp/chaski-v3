@@ -83,6 +83,42 @@ describe("LocalKycStore — persistencia sin PII cruda (AC-2)", () => {
   });
 });
 
+// ── W3.2 (HU-SOL-7 / CD-9): con vm='solana' la KYC-once usa la pubkey base58 case-preservada como key.
+//    Dos pubkeys Solana distintas NUNCA colisionan; una key malformada → throw (fail-loud), NUNCA la
+//    entry de la víctima (cierra el IDOR base58). Restaura la env en afterEach. ──
+describe("LocalKycStore — IDOR base58 Solana (CD-9)", () => {
+  const K = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // víctima (base58 mixed-case)
+  const K2 = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // otra pubkey válida distinta
+  let prevVm: string | undefined;
+  beforeEach(() => {
+    prevVm = process.env.NEXT_PUBLIC_VM;
+    process.env.NEXT_PUBLIC_VM = "solana";
+  });
+  afterEach(() => {
+    if (prevVm === undefined) delete process.env.NEXT_PUBLIC_VM;
+    else process.env.NEXT_PUBLIC_VM = prevVm;
+  });
+
+  it("AC-4: round-trip íntegro — save(K)+get(K) devuelve la misma entry (case preservado)", async () => {
+    const store = new LocalKycStore();
+    await store.save(K, kyc);
+    const got = await store.get(K);
+    expect(got?.verificationId).toBe("v-1");
+  });
+
+  it("CD-9: get(K') de otra pubkey Solana válida → null (NO colisiona con la víctima)", async () => {
+    const store = new LocalKycStore();
+    await store.save(K, kyc);
+    expect(await store.get(K2)).toBeNull();
+  });
+
+  it("CD-9: una key Solana malformada → throw (fail-loud), NUNCA devuelve la entry de la víctima", async () => {
+    const store = new LocalKycStore();
+    await store.save(K, kyc);
+    await expect(store.get("no-base58-!!!")).rejects.toThrow();
+  });
+});
+
 describe("LocalKycStore — TTL 180 días", () => {
   it("dentro de 180d → hit; pasados 180d → null (fuerza re-verify)", async () => {
     vi.useFakeTimers();

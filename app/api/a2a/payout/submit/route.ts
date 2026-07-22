@@ -33,7 +33,8 @@ import { Money } from "../../../../../src/domain/money";
 import { getSettlementLedger } from "../../../../../src/infrastructure/persistence/supabase-settlement-ledger";
 import { verifyPopChallenge, buildPopMessage } from "../../../../../src/infrastructure/auth/pop-challenge";
 import { claimPopNonceOnce } from "../../../../../src/infrastructure/auth/pop-nonce-store";
-import { resolveChainId } from "../../../../../src/infrastructure/chain";
+import { resolveChainId, resolveActiveVm } from "../../../../../src/infrastructure/chain";
+import { canonicalizeAddress } from "../../../../../src/infrastructure/address";
 import { resolvePayoutAuthority } from "../../../../../src/infrastructure/payout/authority";
 import { verifySettlementAttestation } from "../../../../../src/infrastructure/settlement/attestation";
 import { claimAttestationOnce } from "../../../../../src/infrastructure/settlement/attestation-store";
@@ -140,7 +141,7 @@ export async function POST(req: Request): Promise<Response> {
       return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
     }
     // P3 — el challenge fue emitido para ESTA address (case-insensitive: el casing no es un mismatch).
-    if (ch.address.toLowerCase() !== address.toLowerCase()) {
+    if (canonicalizeAddress(ch.address, resolveActiveVm()) !== canonicalizeAddress(address, resolveActiveVm())) {
       return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
     }
     // P4 — chainId binding (AC-6). Contra la ENV server-side (resolveChainId()), NUNCA un chainId del
@@ -220,7 +221,7 @@ export async function POST(req: Request): Promise<Response> {
     }
     // A7 — ata el pagador ON-CHAIN al address ya KYC-validado (WKH-202): no podés cobrar el payout
     // de un principal que pagó otro.
-    if (att.from.toLowerCase() !== address.toLowerCase()) {
+    if (canonicalizeAddress(att.from, resolveActiveVm()) !== canonicalizeAddress(address, resolveActiveVm())) {
       return NextResponse.json({ error: "payout_principal_unverified" }, { status: 403 });
     }
     // A7′ — ata la TASA (AR/MNR-1). El quoteId viajaba FIRMADO en la atestación (attestation.ts:21)
@@ -286,6 +287,7 @@ export async function POST(req: Request): Promise<Response> {
           status,
           payoutId,
           error,
+          vm: resolveActiveVm(),
         });
       }
     } catch (e) {

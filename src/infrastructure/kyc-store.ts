@@ -2,6 +2,8 @@
 // localStorage en browser, in-memory en SSR. KycVerification es plano (sin Money) → JSON directo.
 import { type KycVerification, type PersistedIdentity, toPersistedIdentity } from "../domain/remittance";
 import type { KycStore } from "../application/ports";
+import { canonicalizeAddress } from "./address";
+import { resolveActiveVm } from "./chain";
 
 const KEY = "chaski.kyc.v1";
 const KYC_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 días — revisión AML periódica; promovible a NEXT_PUBLIC_KYC_TTL_DAYS
@@ -88,7 +90,7 @@ export class LocalKycStore implements KycStore {
   }
 
   async get(address: string): Promise<KycVerification | null> {
-    const entry = this.read()[address.toLowerCase()];
+    const entry = this.read()[canonicalizeAddress(address, resolveActiveVm())];
     if (!entry) return null; // ausente o legacy bare descartado → null (AC-4 defensivo)
     if (Date.now() - entry.savedAt > KYC_TTL_MS) return null; // expirado → fuerza re-verify
     return entry.v;
@@ -96,7 +98,7 @@ export class LocalKycStore implements KycStore {
 
   async save(address: string, kyc: KycVerification): Promise<void> {
     const all = this.read(); // ya saneado: PII legacy de otras addresses reducida/descartada
-    all[address.toLowerCase()] = { v: kyc, savedAt: Date.now() };
+    all[canonicalizeAddress(address, resolveActiveVm())] = { v: kyc, savedAt: Date.now() };
     const s = ls();
     if (!s) {
       this.mem = all;
@@ -113,7 +115,7 @@ export class LocalKycStore implements KycStore {
   // NUNCA el mapa completo ni otras entries. Best-effort: si el storage falla no lanza (AC-5/CD-5).
   async clear(address: string): Promise<void> {
     const all = this.read(); // mapa saneado (mismo que save)
-    delete all[address.toLowerCase()]; // SOLO la key pedida (CD-3, case-insensitive)
+    delete all[canonicalizeAddress(address, resolveActiveVm())]; // SOLO la key pedida (CD-3, case-insensitive)
     const s = ls();
     if (!s) {
       this.mem = all;

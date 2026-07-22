@@ -21,6 +21,7 @@ describe("órdenes huérfanas 'prepared' (WKH-211, in-memory)", () => {
       chainId: 84532,
       senderAddress: SENDER,
       payoutId: "transfi-po-1",
+      vm: "evm" as const,
     });
     const row = [...ledger.store.values()][0]!;
     expect(row.status).toBe("prepared");
@@ -42,6 +43,7 @@ describe("órdenes huérfanas 'prepared' (WKH-211, in-memory)", () => {
       chainId: 84532,
       senderAddress: SENDER,
       payoutId: "transfi-po-1",
+      vm: "evm" as const,
     });
     // Aunque sea vieja, 'prepared' NO está en el stale-set (principal_in/submitted/forward_error).
     const stale = await ledger.listStale({ olderThanIso: "2030-01-01T00:00:00.000Z", limit: 10 });
@@ -58,6 +60,7 @@ describe("órdenes huérfanas 'prepared' (WKH-211, in-memory)", () => {
       chainId: 84532,
       senderAddress: SENDER,
       payoutId: "transfi-po-1",
+      vm: "evm" as const,
     };
     await ledger.recordOrderPrepared(input);
     await ledger.recordOrderPrepared(input);
@@ -96,6 +99,7 @@ describe("SupabaseSettlementLedger.recordOrderPrepared (WKH-211)", () => {
       chainId: 84532,
       senderAddress: SENDER,
       payoutId: "transfi-po-1",
+      vm: "evm" as const,
     });
     const [row, opts] = upsertArgs[0]! as [Record<string, unknown>, Record<string, unknown>];
     expect(row.status).toBe("prepared");
@@ -118,6 +122,7 @@ describe("SupabaseSettlementLedger.recordOrderPrepared (WKH-211)", () => {
         chainId: 84532,
         senderAddress: SENDER,
         payoutId: "transfi-po-1",
+        vm: "evm",
       }),
     ).rejects.toThrow(/ledger_record_order_prepared_failed/);
   });

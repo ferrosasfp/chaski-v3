@@ -17,6 +17,7 @@ import type {
   SettlementRecord,
 } from "../../application/ports";
 import { getSupabaseServerClient } from "./supabase-server";
+import { canonicalizeAddress } from "../address";
 
 const TABLE = "remittance_settlements";
 
@@ -81,6 +82,7 @@ export class SupabaseSettlementLedger implements SettlementLedger {
     chainId: number;
     senderAddress: string;
     payoutId: string;
+    vm: "evm" | "solana";
   }): Promise<void> {
     // WKH-211/AC-8: registra la orden TransFi creada en prepare (ANTES del principal_in on-chain), para
     // visibilidad de huérfanas (DT-5). Upsert por idempotency_key (retry de prepare = una sola fila).
@@ -101,8 +103,8 @@ export class SupabaseSettlementLedger implements SettlementLedger {
         idempotency_key: input.idempotencyKey,
         tx_hash: `prepared:${input.idempotencyKey}`, // placeholder (NOT NULL); no hay settle aún
         chain_id: input.chainId,
-        sender_address: input.senderAddress.toLowerCase(),
-        receiver_address: input.depositAddress.toLowerCase(), // el depositAddress ES el receiver
+        sender_address: canonicalizeAddress(input.senderAddress, input.vm),
+        receiver_address: canonicalizeAddress(input.depositAddress, input.vm), // el depositAddress ES el receiver
         value_minor: "0", // desconocido en prepare; el real llega en recordPrincipalIn
         status: "prepared",
         payout_id: input.payoutId,
@@ -121,6 +123,7 @@ export class SupabaseSettlementLedger implements SettlementLedger {
     senderAddress: string;
     receiverAddress: string;
     valueMinor: number;
+    vm: "evm" | "solana";
   }): Promise<void> {
     // Upsert idempotente por tx_hash (ON CONFLICT DO NOTHING): un settle reintentado a nivel red =
     // una sola fila. addresses lowercased (owner canónico, CD-9). value_minor como string (uint256-safe).
@@ -131,8 +134,8 @@ export class SupabaseSettlementLedger implements SettlementLedger {
         idempotency_key: input.idempotencyKey,
         tx_hash: input.txHash,
         chain_id: input.chainId,
-        sender_address: input.senderAddress.toLowerCase(),
-        receiver_address: input.receiverAddress.toLowerCase(),
+        sender_address: canonicalizeAddress(input.senderAddress, input.vm),
+        receiver_address: canonicalizeAddress(input.receiverAddress, input.vm),
         value_minor: String(input.valueMinor),
         status: "principal_in",
       },
@@ -147,6 +150,7 @@ export class SupabaseSettlementLedger implements SettlementLedger {
     status: SettlementLedgerStatus;
     payoutId?: string | null;
     error?: string | null;
+    vm: "evm" | "solana";
   }): Promise<void> {
     // UPDATE owner-scoped (CD-9): un caller SOLO puede mutar su propia fila. El filtro por
     // sender_address es el guard REAL (el service key bypassea RLS).
@@ -160,7 +164,7 @@ export class SupabaseSettlementLedger implements SettlementLedger {
       .from(TABLE)
       .update(patch)
       .eq("idempotency_key", input.idempotencyKey)
-      .eq("sender_address", input.senderAddress.toLowerCase());
+      .eq("sender_address", canonicalizeAddress(input.senderAddress, input.vm));
     if (error) throw new Error(`ledger_record_payout_outcome_failed:${error.code ?? "unknown"}`);
   }
 

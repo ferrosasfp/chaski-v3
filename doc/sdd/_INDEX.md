@@ -363,34 +363,7 @@
   sin overlap con otro trabajo activo (single analyst, confirmado). Ver
   `doc/sdd/027-hu-sol-8-pop-ed25519/work-item.md` para el detalle completo (grounding, ACs, DT-N,
   CD-N, Missing Inputs).
-- **HU-SOL-9 / WKH-208 (F1, 2026-07-22, `028`, NNN pre-asignado sin colisión por el orquestador —
-  `027` es HU-SOL-8, F1 en curso EN PARALELO sobre este mismo repo)**: binding no-custodial + wire
-  al facilitator. F0 confirmó que los 3 sitios citados por la HU (`deposit-attestation.ts`,
-  `settle/principal/route.ts` S12/B1-B6, `prepare/route.ts` PR4/PR8) son 100% EVM-shaped hoy
-  (`isAddress`/`isAddressEqual` de viem) y que `canonicalizeAddress(address, vm)` (HU-SOL-7, YA
-  EXISTE) resuelve exactamente el problema — candidato de reuso directo. **Hallazgo cross-repo
-  BLOQUEANTE**: el schema Zod HTTP del facilitator (`wasiai-facilitator/src/core/schemas.ts::
-  AcceptedSchema`) exige `asset`/`payTo` 0x-hex en AMBAS ramas del `z.union` (incluida la rama
-  `permit2`/`erc7710`, que solo extiende `extra`) — un request Solana base58 se rechaza en el gate
-  Zod ANTES del dispatch por namespace, sin importar qué tan bien lo construya `facilitator-client.ts`
-  del lado chaski. El propio `report.md` de HU-SOL-6/WKH-205 (`wasiai-facilitator/doc/sdd/
-  026-hu-sol-6-solana-adapter/report.md` L27-31) nombra EXPLÍCITAMENTE a esta HU (HU-SOL-9/13) como
-  responsable del "wire-format" — pero la directiva de esta HU prohíbe tocar `wasiai-facilitator`
-  (repo externo). Recomendación del Analyst (DT-5, mismo patrón SPLIT que WKH-210/211): companion
-  ticket separado en `wasiai-facilitator` para relajar el schema, coordinado por el
-  orquestador/founder antes de declarar esta HU "e2e-reachable". **Hallazgo de coordinación NUEVO**
-  (no anticipado por el ticket Jira original): `doc/sdd/027-hu-sol-8-pop-ed25519/work-item.md` (F1,
-  corriendo en paralelo sobre este mismo repo) declara en su propio "Análisis de paralelismo" que
-  bloquea a HU-SOL-9 para activación real (el binding Didit es débil en Solana sin el gate PoP
-  obligatorio) — overlap de archivo real con `app/api/payout/prepare/route.ts` (HU-SOL-8 toca PR6
-  guard PoP; esta HU toca PR4/PR7-PR11 forward+depositAddress+atestación; secciones distintas hoy,
-  coordinar orden de merge). Sizing L (QUALITY). 6 ACs EARS, 5 DT-N, 7 CD-N. 1
-  `[NEEDS CLARIFICATION]` BLOQUEANTE cross-repo (companion ticket del facilitator) + 4 NO
-  bloqueantes para F2 (shape del envelope discriminado en `DepositAttestation`, nombre de la
-  función Solana en `facilitator-client.ts`, código/enum HTTP exacto, shape de
-  `SolanaPrincipalAuthorization.partialSignedTx`). Ver
-  `doc/sdd/028-hu-sol-9-binding-wire-facilitator/work-item.md` para el detalle completo (grounding,
-  ACs, DT-N, CD-N, Missing Inputs).
+| WKH-208 / HU-SOL-9 | [Solana LATAM Labs, binding no-custodial + wire al facilitator] Ramifica la validación de address por VM (base58 cuando `vm==="solana"`) en `deposit-attestation.ts`, `settle/principal/route.ts` y `prepare/route.ts`, y agrega wire Solana hacia `/settle` del facilitator. Path EVM byte-idéntico. | DONE | feat/028-hu-sol-9-binding-wire-facilitator |
 
 ---
 

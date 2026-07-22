@@ -1,4 +1,6 @@
 import { sha256 } from "@noble/hashes/sha256";
+import nacl from "tweetnacl";
+import bs58 from "bs58";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { Connection, Keypair, PublicKey, Transaction } from "@solana/web3.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -236,5 +238,44 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     await expect(
       adapter.authorizePrincipal(makeQuote({ expiresAt: "not-a-date" }), "rem-bad", escrowDeposit()),
     ).rejects.toThrow("quote_expires_at_invalid");
+  });
+});
+
+// ── HU-SOL-8 (WKH-211) — signMessage real base58 browser-safe (CD-SDD-3) ────────────────────────────
+const POP_MESSAGE =
+  "Chaski Proof-of-Possession\naddress: 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU\nnetwork: solana:devnet\nnonce: abcdef0123456789abcdef0123456789\nexpires: 4102444800";
+
+describe("SolanaWalletAdapter.signMessage (HU-SOL-8)", () => {
+  it("firma vía el bridge y devuelve base58 de 64 bytes; los bytes firmados son TextEncoder(message) (NO Buffer)", async () => {
+    const sig = nacl.randomBytes(64); // Uint8Array(64) — lo que devuelve la wallet real
+    const signSpy = vi.fn(async (_bytes: Uint8Array) => sig);
+    solanaWalletBridge.registerSignMessage(signSpy);
+    const adapter = new SolanaWalletAdapter();
+
+    const out = await adapter.signMessage(POP_MESSAGE);
+    // Simétrico con verifySolanaPop.signatureBase58: base58 de exactamente 64 bytes.
+    expect(bs58.decode(out)).toEqual(sig);
+    expect(bs58.decode(out).length).toBe(64);
+    // El bridge recibió TextEncoder(message) — browser-safe, NUNCA Buffer node-only (CD-SDD-3).
+    const passed = signSpy.mock.calls[0]?.[0];
+    if (!passed) throw new Error("signMessage_not_called");
+    expect(passed).toBeInstanceOf(Uint8Array);
+    expect(passed).toEqual(new TextEncoder().encode(POP_MESSAGE));
+  });
+
+  it("normaliza un shape no-Uint8Array de la wallet a Uint8Array (R-2)", async () => {
+    const raw = nacl.randomBytes(64);
+    const arrayLike = Array.from(raw); // number[] — un adapter que devuelva otro shape
+    const signSpy = vi.fn(async (_bytes: Uint8Array) => arrayLike as unknown as Uint8Array);
+    solanaWalletBridge.registerSignMessage(signSpy);
+    const adapter = new SolanaWalletAdapter();
+
+    const out = await adapter.signMessage(POP_MESSAGE);
+    expect(bs58.decode(out)).toEqual(raw); // normalizado correctamente a los 64 bytes
+  });
+
+  it("bridge sin handle montado ⇒ throw wallet_sign_not_available (fail-loud)", async () => {
+    const adapter = new SolanaWalletAdapter(); // bridge reseteado en afterEach, sin registerSignMessage
+    await expect(adapter.signMessage(POP_MESSAGE)).rejects.toThrow("wallet_sign_not_available");
   });
 });

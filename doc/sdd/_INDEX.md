@@ -27,6 +27,10 @@
 | WKH-211 | [Money-path, cambio de modelo de seguridad, seguimiento de WKH-210] Value-delivery no-custodial: el USDC del sender va directo al `depositAddress` que TransFi asigna por orden (`to=depositAddress` en la firma EIP-3009), reemplazando el receiver estático de plataforma | DONE (2026-07-18) — binding=Opción B (`/api/payout/prepare` + DepositAttestation HMAC). 8/8 ACs, 553 tests, AR+CR+F4 0 BLQ. Vector de desvío de fondos cerrado (7 sub-ataques rechazan pre-broadcast); guard 8 byte-idéntico; V1-V9 intacta; flags OFF byte-idéntico. 2 MENORes fund-safe → WKH-213. | `doc/sdd/022-wkh-211-non-custodial-deposit-flow/done-report.md` |
 | WKH-206 / HU-SOL-1 | [Solana LATAM Labs, fundación del port multi-VM] Generalizar la config de red (`chain.ts`) y el contrato de autorización (`ports.ts`) de EVM-only a multi-VM (discriminador `vm: 'evm' \| 'solana'`), agregando una entrada Solana configurable/resolvible SIN wallet ni firma Solana todavía | DONE (2026-07-21) — 7/7 ACs, 562 tests, AR+CR+F4 0 BLQ. Branch `feat/023-hu-sol-1-multi-vm-config` commit `1b6aa22`. | `doc/sdd/023-hu-sol-1-multi-vm-config/report.md` |
 | WKH-212 / HU-SOL-4 | [Solana LATAM Labs, wallet Solana] Integración `@solana/wallet-adapter-react`: árbol de providers (ConnectionProvider+WalletProvider+WalletModalProvider) montado condicionalmente por NEXT_PUBLIC_VM, puenteado al `WalletPort` imperativo via singleton React-free. Phantom/Solflare conectables desde la UI. **Path EVM byte-idéntico (AC-3)**. Firma SPL (HU-SOL-2) y PoP (HU-SOL-8) quedan OUT. | DONE (2026-07-21) — 6/6 ACs PASS, 571 tests (562 EVM intactos + 9 nuevos Solana), AR+CR+F4 0 BLQ/0 MENOR. Seam React-free garantiza AC-3 por construcción. Peer-conflict `@solana/pay` diferido a HU-SOL-5. Branch `feat/024-hu-sol-4-wallet-adapter` commit `2dd1758`. | `doc/sdd/024-hu-sol-4-wallet-adapter/report.md` |
+| WKH-207 / HU-SOL-5 | [Solana LATAM Labs, wallet firma el deposit al escrow] `authorizePrincipal` construye la ix escrow Anchor gasless (feePayer=facilitator, partial-sign SOLO wallet), retorna tx serializada + reference. Path EVM byte-idéntico. | DONE (2026-07-21) — 8/8 ACs, 594 tests (586 base + 8 Solana), AR+CR+F4 APROBADO. BLQ-MED-1 (`node:crypto` en browser) fix-packeado con `@noble/hashes`. Branch `feat/025-hu-sol-5-wallet-deposit-escrow` commit `79ff56b`. | `doc/sdd/025-hu-sol-5-wallet-deposit-escrow/report.md` |
+| WKH-213 / HU-SOL-7 | [Solana LATAM Labs, GATE DE SEGURIDAD IDOR] Identidad multi-VM base58 — cierra un IDOR cross-tenant: `.toLowerCase()` corrompe base58 (case-sensitive), colisiona pubkeys distintas. Helper único `canonicalizeAddress(address, vm)` en 15 sitios/9 archivos. EVM byte-idéntico. | DONE (2026-07-21) — 9/9 ACs PASS, 586 tests, AR (ataque IDOR ejecutado, falla sin colisión) + CR + F4 0 BLQ. 1 MENOR fix-packeado (test-doubles). Branch `feat/026-hu-sol-7-identidad-base58` commit `e65bae6`. | `doc/sdd/026-hu-sol-7-identidad-base58/report.md` |
+| WKH-211 / HU-SOL-8 | [Solana LATAM Labs, GATE DE SEGURIDAD] PoP + atestación ed25519 — el gate G5 (WKH-206) solo verifica ECDSA (`viem.verifyMessage`/`isAddress`), que SIEMPRE rechaza una address Solana base58. Agrega verificador ed25519 real (`nacl.sign.detached.verify` + decode base58 estricto 32 bytes), preserva `buildPopMessage` SSOT + nonce single-use, vuelve PoP OBLIGATORIO (no opt-in) en el money-path Solana (el binding Didit es débil, `authority.ts:74-87`), y ata las atestaciones a un network-id CAIP-2 (`solana:devnet`/`solana:mainnet`) en vez de `chainId:number` — anti replay cross-cluster (mismo vector "$400 por $0" ya cerrado del lado EVM). | DONE (2026-07-22) — 8/8 ACs, 621 tests, 0 BLQ/0 MENOR. Branch `feat/027-hu-sol-8-pop-ed25519` commit `eb9a406`. Verificador ed25519 + CAIP-2 + obligatoriedad + EVM byte-idéntico. | `doc/sdd/027-hu-sol-8-pop-ed25519/report.md` |
+| WKH-208 / HU-SOL-9 | [Solana LATAM Labs, binding no-custodial + wire al facilitator] Ramifica la validación de address por VM (base58 cuando `vm==="solana"`) en `deposit-attestation.ts`, `settle/principal/route.ts` y `prepare/route.ts`, y hace que `facilitator-client.ts` construya un payload Solana representable hacia `/settle` del `wasiai-facilitator`. Con el escrow futuro (HU-SOL-13) el binding pasa a ser la authority del `release` (`to` atestado == `beneficiary`). Path EVM byte-idéntico. | F1 (2026-07-22) — 6 ACs EARS, 5 DT-N, 7 CD-N. **Hallazgo cross-repo BLOQUEANTE**: el schema Zod HTTP del facilitator (`wasiai-facilitator/src/core/schemas.ts::AcceptedSchema`) rechaza `asset`/`payTo` base58 en ambas ramas del union — confirmado por el propio report de HU-SOL-6, que nombra a esta HU como responsable; esta HU tiene PROHIBIDO tocar el repo del facilitator. Recomendado companion ticket separado (ver Missing Inputs). | `doc/sdd/028-hu-sol-9-binding-wire-facilitator/work-item.md` |
 
 ## Notas de coordinación
 - WKH-178 y WKH-179 corren en paralelo, ambas del mismo repo (`chaski-v2`) y de la misma auditoría
@@ -131,8 +135,7 @@
   para `kyc-pending-store.ts`. Ver `doc/sdd/013-wkh-199-kyc-store-save-best-effort/work-item.md`.
 - **WKH-200 (F1, 2026-07-14, `014`, renumerado DOS veces)**: hallazgo C de la misma 2ª auditoría
   adversarial. Bug de honestidad de estado + demo confirmado en F0: `TrackView` trataba
-  `payout_failed`/`refunded` como "no reconocido". Ver
-  `doc/sdd/014-wkh-200-track-honesty-payout-mock-banner/work-item.md`.
+  `payout_failed`/`refunded` como "no reconocido". Ver `doc/sdd/014-wkh-200-track-honesty-payout-mock-banner/work-item.md`.
 - **WKH-201 (F1, 2026-07-14, `014`)**: hallazgo D de la 2ª auditoría adversarial de `chaski-v2`,
   analyst paralelo de WKH-198/199/200. Completa el reset de WKH-184: `ForgetKyc` no purgaba el repo
   persistido (`LocalRepo`). Ver `doc/sdd/014-wkh-201-forget-disconnect-purge-persisted-pii/work-item.md`.
@@ -336,6 +339,58 @@
   cualquier HU EVM futura que también toque `ports.ts:125-132` — coordinar orden de merge si corre
   en paralelo. Ver `doc/sdd/023-hu-sol-1-multi-vm-config/work-item.md` para el detalle completo
   (grounding, ACs, DT-N, CD-N, Missing Inputs).
+- **HU-SOL-8 / WKH-211 (F1, 2026-07-22, `027`, NNN pre-asignado sin colisión por el orquestador —
+  `026` fue el último NNN usado, HU-SOL-7)**: PoP + atestación ed25519, el gate de seguridad G5
+  (WKH-206) portado a Solana. F0 confirmó que `verifyPopChallenge`/`buildPopMessage`
+  (`pop-challenge.ts`) y los guards P5 de `submit/route.ts`/PR6 de `prepare/route.ts` usan
+  `viem.verifyMessage`/`isAddress` — SIEMPRE rechazan una address Solana base58. Esta HU agrega la
+  rama ed25519 real (`nacl.sign.detached.verify` + decode base58 estricto de 32 bytes, reusando el
+  `canonicalizeAddress`/`PublicKey` de HU-SOL-7), preservando `buildPopMessage` SSOT y el nonce
+  single-use (`pop-nonce-store.ts`, reusado sin cambios). **Ampliación de auditoría, no solo el
+  porteo mecánico**: (1) el binding Didit (`authority.ts:74-87`, `vendor_data`/`address`
+  caller-controlados) es best-effort y débil, así que el PoP debe volverse OBLIGATORIO (no opt-in
+  por presencia de `PAYOUT_POP_SECRET` como en EVM) en el money-path Solana; (2) las atestaciones
+  deben atar un network-id CAIP-2 (`solana:devnet`/`solana:mainnet`) en vez de `chainId:number` —
+  compartir el HMAC entre clusters reabriría el vector "$400 por $0" ya cerrado del lado EVM
+  (A7″ de `submit/route.ts`). Sizing L (QUALITY, gate de seguridad). 8 ACs EARS, 5 DT-N, 8 CD-N.
+  Depende de HU-SOL-7 (WKH-213, DONE) y HU-SOL-5 (WKH-207, DONE) — sin bloqueo. Bloquea a HU-SOL-9
+  (settle Solana). 3 `[NEEDS CLARIFICATION]` NO bloqueantes para F2: (1) si el `WalletPort` Solana
+  ya expone firma de mensaje arbitrario (no verificado en este F0, posible dependencia bloqueante
+  si falta); (2) shape exacto de la extensión CAIP-2 de `PopChallenge`; (3) si `tweetnacl` resuelve
+  transitivamente en el árbol de deps o hay que agregarla explícita. Scope IN toca
+  `pop-challenge.ts`, `submit/route.ts` (P1-P6), `prepare/route.ts` (PR6), `http-pop-signer.ts` —
+  los MISMOS archivos de más alto riesgo que tocó WKH-211/HU-SOL-8 mismo (ya DONE del lado EVM);
+  sin overlap con otro trabajo activo (single analyst, confirmado). Ver
+  `doc/sdd/027-hu-sol-8-pop-ed25519/work-item.md` para el detalle completo (grounding, ACs, DT-N,
+  CD-N, Missing Inputs).
+- **HU-SOL-9 / WKH-208 (F1, 2026-07-22, `028`, NNN pre-asignado sin colisión por el orquestador —
+  `027` es HU-SOL-8, F1 en curso EN PARALELO sobre este mismo repo)**: binding no-custodial + wire
+  al facilitator. F0 confirmó que los 3 sitios citados por la HU (`deposit-attestation.ts`,
+  `settle/principal/route.ts` S12/B1-B6, `prepare/route.ts` PR4/PR8) son 100% EVM-shaped hoy
+  (`isAddress`/`isAddressEqual` de viem) y que `canonicalizeAddress(address, vm)` (HU-SOL-7, YA
+  EXISTE) resuelve exactamente el problema — candidato de reuso directo. **Hallazgo cross-repo
+  BLOQUEANTE**: el schema Zod HTTP del facilitator (`wasiai-facilitator/src/core/schemas.ts::
+  AcceptedSchema`) exige `asset`/`payTo` 0x-hex en AMBAS ramas del `z.union` (incluida la rama
+  `permit2`/`erc7710`, que solo extiende `extra`) — un request Solana base58 se rechaza en el gate
+  Zod ANTES del dispatch por namespace, sin importar qué tan bien lo construya `facilitator-client.ts`
+  del lado chaski. El propio `report.md` de HU-SOL-6/WKH-205 (`wasiai-facilitator/doc/sdd/
+  026-hu-sol-6-solana-adapter/report.md` L27-31) nombra EXPLÍCITAMENTE a esta HU (HU-SOL-9/13) como
+  responsable del "wire-format" — pero la directiva de esta HU prohíbe tocar `wasiai-facilitator`
+  (repo externo). Recomendación del Analyst (DT-5, mismo patrón SPLIT que WKH-210/211): companion
+  ticket separado en `wasiai-facilitator` para relajar el schema, coordinado por el
+  orquestador/founder antes de declarar esta HU "e2e-reachable". **Hallazgo de coordinación NUEVO**
+  (no anticipado por el ticket Jira original): `doc/sdd/027-hu-sol-8-pop-ed25519/work-item.md` (F1,
+  corriendo en paralelo sobre este mismo repo) declara en su propio "Análisis de paralelismo" que
+  bloquea a HU-SOL-9 para activación real (el binding Didit es débil en Solana sin el gate PoP
+  obligatorio) — overlap de archivo real con `app/api/payout/prepare/route.ts` (HU-SOL-8 toca PR6
+  guard PoP; esta HU toca PR4/PR7-PR11 forward+depositAddress+atestación; secciones distintas hoy,
+  coordinar orden de merge). Sizing L (QUALITY). 6 ACs EARS, 5 DT-N, 7 CD-N. 1
+  `[NEEDS CLARIFICATION]` BLOQUEANTE cross-repo (companion ticket del facilitator) + 4 NO
+  bloqueantes para F2 (shape del envelope discriminado en `DepositAttestation`, nombre de la
+  función Solana en `facilitator-client.ts`, código/enum HTTP exacto, shape de
+  `SolanaPrincipalAuthorization.partialSignedTx`). Ver
+  `doc/sdd/028-hu-sol-9-binding-wire-facilitator/work-item.md` para el detalle completo (grounding,
+  ACs, DT-N, CD-N, Missing Inputs).
 
 ---
 
@@ -375,7 +430,7 @@ bloqueantes abiertos. El AC-8 residual de WKH-181 (diferido a WKH-184) está for
 | WKH-207 (Mitad B de WKH-168: persistencia server-side + reconciliación de remesas huérfanas) | DONE (2026-07-16) | Persistencia Postgres propio (Supabase free, decisión founder) + reconcile `manual_review` (auto-retry deferido por PII+dedupe, money-safe). Migración PENDING-DEPLOY. 10/10 ACs, 451/451 tests, AR cazó 1 BLQ money-path (createClient fuera de try/catch) → fix-packeado → re-AR APROBADO. Ver `doc/sdd/019-wkh-207-remittance-persistence-reconciliation/report.md`. |
 | WKH-209 (mover el settle REAL del principal de Avalanche a Base — decisión founder, TransFi solo soporta USDC en Base) | DONE (2026-07-17) | Swap parametrizado por red (tabla NETWORKS), Avalanche eliminado. Resuelto el bug latente del domain EIP-712: Base Sepolia usa name `"USDC"`, mainnet `"USD Coin"`. DT-1 resuelto = swap directo. Default fail-safe = Base Sepolia. 11/11 ACs, 460 tests, AR+CR+F4 aprobados 0 BLQ (1 MENOR: comentario stale en submit/route.ts diferido). Flag EIP-3009 OFF, cero plata real. Ver `doc/sdd/020-wkh-209-settle-principal-en-base/done-report.md`. |
 | WKH-210 (loop async TransFi — receptor de webhooks sobre el ledger de WKH-207; SPLIT del envío no-custodial) | DONE (2026-07-17) | Cierra la confirmación asíncrona (`fund_settled`/`asset_deposited`/`fund_failed`) que antes solo resolvía `reconcile-orphans` a `manual_review`. 11/11 ACs, 501 tests, AR+CR+F4 0 BLQ. El reorder no-custodial (`to=depositAddress`) es **WKH-211** (F1, ver abajo). Smoke webhook gateado al founder. Ver `doc/sdd/021-wkh-210-transfi-deposit-flow-webhook/done-report.md`. |
-| WKH-211 (reorder no-custodial: `to=depositAddress` de TransFi en vez del receiver estático de plataforma — cambio de modelo de seguridad) | F1 (2026-07-17) | Cierra el value-delivery no-custodial end-to-end. F0 encontró 2 hallazgos nuevos que WKH-210 no pudo ver (sin acceso al repo del agente en ese momento): `depositAddress` existe en el tipo interno del agente (WKH-208) pero NO sale por HTTP (dependencia cross-repo bloqueante), y el guard 8/G3 de `submit/route.ts` (atestación de settlement pre-payout) es estructuralmente incompatible con el orden invertido — necesita rediseño, no remoción. Sizing XL. 2 `[NEEDS CLARIFICATION]` BLOQUEANTES para F2 (enfoque de binding A/B/C + dependencia cross-repo). Ver `doc/sdd/022-wkh-211-non-custodial-deposit-flow/work-item.md`. |
+| WKH-211 (reorder no-custodial: `to=depositAddress` de TransFi en vez del receiver estático de plataforma — cambio de modelo de seguridad) | DONE (2026-07-18) | Cierra el value-delivery no-custodial end-to-end. F0 encontró 2 hallazgos nuevos que WKH-210 no pudo ver (sin acceso al repo del agente en ese momento): `depositAddress` existe en el tipo interno del agente (WKH-208) pero NO sale por HTTP (dependencia cross-repo bloqueante), y el guard 8/G3 de `submit/route.ts` (atestación de settlement pre-payout) es estructuralmente incompatible con el orden invertido — necesita rediseño, no remoción. Sizing XL. 8/8 ACs, 553 tests, AR+CR+F4 0 BLQ. Ver `doc/sdd/022-wkh-211-non-custodial-deposit-flow/done-report.md`. |
 
 ## 🔵 MONEY-PATH / UX (post value-delivery scaffolding)
 
@@ -458,17 +513,26 @@ Hubo una **carrera de 4 analysts en paralelo** (2026-07-14, mismo repo `chaski-v
 
 **Confirmación (HU-SOL-1, 2026-07-20)**: mismo criterio — `023` confirmado sin colisión vía `Glob doc/sdd/*/work-item.md` (`022` fue el último NNN usado, WKH-211). Único analyst corriendo sobre `chaski-v2` en este momento.
 
+**Confirmación (HU-SOL-8, 2026-07-22)**: mismo criterio — `027` confirmado sin colisión vía `Glob doc/sdd/02[4-9]*` (`026` fue el último NNN usado, HU-SOL-7). Único analyst corriendo sobre `chaski-v3` en este momento.
+
+**Confirmación (HU-SOL-9, 2026-07-22)**: mismo criterio — `028` pre-asignado explícitamente por el orquestador, sin colisión (confirmado vía `Glob doc/sdd/023*..027*`; `027` = HU-SOL-8, F1 en curso EN PARALELO sobre este mismo repo — ver bullet de HU-SOL-9 arriba y fila en la tabla Solana LATAM Labs abajo).
+
 ## ⚪ SOLANA LATAM LABS (2026-07-20, nuevo programa)
 
 **Objetivo del programa**: portar el settlement no-custodial de Chaski a **Solana**, manteniendo el
 path EVM (Base, EIP-3009, WKH-168/202/206/207/209/210/211) 100% vivo — arquitectura multi-VM, no un
-reemplazo. Roadmap inicial planificado de 4 HUs; Sprint 2 ejecuta HU-SOL-1 (023, DONE 2026-07-21) + HU-SOL-4 (024, DONE 2026-07-21); HU-SOL-5/HU-SOL-7 en paralelo (025/026, SPEC_APPROVED, F3 en cola):
+reemplazo. Roadmap inicial planificado de 4 HUs, ampliado por hallazgos de F0 sucesivos; Sprint 2
+ejecutó HU-SOL-1 (023, DONE 2026-07-21) + HU-SOL-4 (024, DONE 2026-07-21) + HU-SOL-5 (025, DONE
+2026-07-21) + HU-SOL-7 (026, DONE 2026-07-21). Sprint 3 (Seguridad + e2e) ejecuta HU-SOL-8 (027, F1)
++ HU-SOL-9 (028, F1) en paralelo:
 
 | HU (programa) | Jira | Título | Estado | Bloquea / Bloqueado por |
 |----------------|------|--------|--------|--------------------------|
 | HU-SOL-1 | WKH-206* | Config de red multi-VM (`chain.ts`) + `VmAuthorization` discriminado (`ports.ts`) — fundación, sin wallet ni firma Solana | **DONE (2026-07-21)** | Bloqueaba a HU-SOL-4 |
 | HU-SOL-4 | WKH-212 | **Integración `@solana/wallet-adapter-react`**: árbol providers condicional (Phantom/Solflare), singleton bridge React-free, puenteado al `WalletPort`. Path EVM byte-idéntico (AC-3). Firma SPL (HU-SOL-2) / PoP (HU-SOL-8) / settle Solana OUT. | **DONE (2026-07-21)** | Bloquea a HU-SOL-2 (firma SPL) + HU-SOL-8 (PoP) |
 | HU-SOL-5 | WKH-207* | Wallet Solana firma el `deposit` al escrow (gasless-facilitator): `authorizePrincipal` construye ix escrow Anchor, feePayer=facilitator, partial-sign SOLO wallet, retorno tx serializada + reference. Path EVM byte-idéntico. | **DONE (2026-07-21)** — 8/8 ACs, 594 tests (586 base + 8 Solana), AR+CR+F4 APROBADO. BLQ-MED-1 (CR: `node:crypto` browser) fix-packeado con `@noble/hashes`. Branch `feat/025-hu-sol-5-wallet-deposit-escrow` commit `79ff56b`. | Bloqueada por HU-SOL-4 (resuelto 2026-07-21); bloquea a HU-SOL-13 (verificación server-side) + HU-SOL-14 (broadcast gasless) |
-| HU-SOL-7 | WKH-213 | Identidad Solana base58 (equivalent a EIP-4361/SIWE para Solana, Proof-of-Possession) | **DONE (2026-07-21)** | Bloquea a HU-SOL-8 (PoP ed25519) + HU-SOL-9 (settle Solana) |
+| HU-SOL-7 | WKH-213 | Identidad Solana base58 (equivalent a EIP-4361/SIWE para Solana, Proof-of-Possession) | **DONE (2026-07-21)** — 9/9 ACs PASS, 586 tests, AR+CR+F4 0 BLQ. `canonicalizeAddress(address, vm)` cierra un IDOR cross-tenant (`.toLowerCase()` corrompe base58). Branch `feat/026-hu-sol-7-identidad-base58` commit `e65bae6`. | Bloquea a HU-SOL-8 (PoP ed25519) + HU-SOL-9 (settle Solana) |
+| HU-SOL-8 | WKH-211* | **PoP + atestación ed25519 (GATE DE SEGURIDAD)**: el gate G5 (WKH-206) solo verifica ECDSA (`viem.verifyMessage`/`isAddress`), que SIEMPRE rechaza una address Solana. Agrega verificador ed25519 real (`nacl.sign.detached.verify` + decode base58 estricto), vuelve PoP OBLIGATORIO (no opt-in) en el money-path Solana (binding Didit débil, `authority.ts:74-87`), ata las atestaciones a un network-id CAIP-2 (anti replay cross-cluster). | **F1 (2026-07-22)** — 8 ACs EARS, 5 DT-N, 8 CD-N. 3 `[NEEDS CLARIFICATION]` NO bloqueantes para F2 (firma de mensaje arbitrario en `WalletPort` Solana, shape CAIP-2, resolución de `tweetnacl`). | Bloqueada por HU-SOL-7 (resuelto 2026-07-21) + HU-SOL-5 (resuelto 2026-07-21); bloquea a HU-SOL-9 (settle Solana) |
+| HU-SOL-9 | WKH-208 | **Binding no-custodial + wire al facilitator**: ramifica la validación de address por VM (base58 cuando `vm==="solana"`) en `deposit-attestation.ts`, `settle/principal/route.ts` (S12/B1-B6) y `prepare/route.ts` (PR4/PR8), y hace que `facilitator-client.ts` construya un payload Solana representable hacia `/settle`. Con el escrow futuro (HU-SOL-13) el binding pasa a ser la authority del `release` (`to` atestado == `beneficiary` del escrow). | **F1 (2026-07-22)** — 6 ACs EARS, 5 DT-N, 7 CD-N. **1 `[NEEDS CLARIFICATION]` BLOQUEANTE cross-repo**: el schema Zod HTTP de `wasiai-facilitator` (`core/schemas.ts::AcceptedSchema`) rechaza `asset`/`payTo` base58 en ambas ramas del union — nombrado explícitamente por el propio report de HU-SOL-6 como responsabilidad de esta HU, pero esta HU tiene prohibido tocar ese repo (recomendado companion ticket separado). 4 `[NEEDS CLARIFICATION]` NO bloqueantes adicionales. | Depende de HU-SOL-5/HU-SOL-6/HU-SOL-7 (DONE); bloqueada por HU-SOL-8 (hallazgo de F0, activación real) + companion ticket cross-repo del facilitator (e2e-reachability); bloquea a HU-SOL-13 (release authority) |
 
-*Nota de numeración*: el ticket Jira reusado para HU-SOL-1 es **WKH-206** (mismo número que "proof-of-possession" EVM, ya DONE 2026-07-16); **HU-SOL-5 es WKH-207** (mismo número que "Persistencia server-side + reconciliación de remesas huérfanas" del plan chaski-v2, ya DONE 2026-07-16 — reuso intencional cross-programa, mismo patrón que HU-SOL-1) — el programa Solana LATAM Labs usa su propia numeración de HU (`HU-SOL-N`) independiente del backlog Jira `WKH-NNN` de `chaski-v2`; se documenta ambos IDs en el work-item para trazabilidad. HU-SOL-4/WKH-212 es wallet-adapter-react (conexión pura, sin firma); HU-SOL-2 será firma SPL (OUT de HU-SOL-4); HU-SOL-8 será PoP Solana (OUT de HU-SOL-4). Falta HU-SOL-3 en el roadmap (posiblemente reserved para escrow Solana, análogo a WKH-168/WKH-211 del lado Solana). Ver `doc/sdd/023-hu-sol-1-multi-vm-config/work-item.md`, `doc/sdd/024-hu-sol-4-wallet-adapter/report.md` y `doc/sdd/025-hu-sol-5-wallet-deposit-escrow/report.md`.
+*Nota de numeración*: el ticket Jira reusado para HU-SOL-1 es **WKH-206** (mismo número que "proof-of-possession" EVM, ya DONE 2026-07-16); **HU-SOL-5 es WKH-207** (mismo número que "Persistencia server-side + reconciliación de remesas huérfanas" del plan chaski-v2, ya DONE 2026-07-16 — reuso intencional cross-programa, mismo patrón que HU-SOL-1); **HU-SOL-8 es WKH-211** (mismo número que "Value-delivery no-custodial" de chaski-v2, ya DONE 2026-07-18 — reuso intencional cross-programa, mismo patrón); **HU-SOL-9 es WKH-208** (mismo número que "remit-cashout-payout", ya DONE — reuso intencional cross-programa, mismo patrón) — el programa Solana LATAM Labs usa su propia numeración de HU (`HU-SOL-N`) independiente del backlog Jira `WKH-NNN` de `chaski-v2`; se documenta ambos IDs en el work-item para trazabilidad. HU-SOL-4/WKH-212 es wallet-adapter-react (conexión pura, sin firma); HU-SOL-2 será firma SPL (OUT de HU-SOL-4); HU-SOL-8/WKH-211 es PoP Solana (OUT de HU-SOL-4, DEPENDE de HU-SOL-7); HU-SOL-6/WKH-205 (adaptador Solana del `wasiai-facilitator`, repo externo) está **DONE pero HELD** (branch `feat/026-wkh-205-solana-adapter` sin merge/deploy) — su propio report nombra a HU-SOL-9 como el follow-up del wire-format HTTP. Falta HU-SOL-3 en el roadmap (posiblemente reserved para escrow Solana, análogo a WKH-168/WKH-211 del lado Solana) y HU-SOL-13/HU-SOL-14 (release authority / broadcast gasless) están planificadas pero sin F1 aún. Ver `doc/sdd/023-hu-sol-1-multi-vm-config/work-item.md`, `doc/sdd/024-hu-sol-4-wallet-adapter/report.md`, `doc/sdd/025-hu-sol-5-wallet-deposit-escrow/report.md`, `doc/sdd/026-hu-sol-7-identidad-base58/report.md`, `doc/sdd/027-hu-sol-8-pop-ed25519/work-item.md` y `doc/sdd/028-hu-sol-9-binding-wire-facilitator/work-item.md`.

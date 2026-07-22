@@ -14,11 +14,15 @@ type OpenModalFn = () => void;
  *  @solana/web3.js types acá (preserva el seam React-free de HU-SOL-4). El sync component captura
  *  `useWallet().signTransaction` y lo registra; el adapter lo consume. */
 type SignTransactionFn = (tx: unknown) => Promise<unknown>;
+/** HU-SOL-8: firma un mensaje arbitrario (ed25519) con la wallet conectada. El sync component captura
+ *  `useWallet().signMessage` y lo registra; el adapter lo consume para el proof-of-possession. */
+type SignMessageFn = (message: Uint8Array) => Promise<Uint8Array>;
 
 class SolanaWalletBridge {
   private state: SolanaWalletState = { publicKey: null, connected: false };
   private openModalHandle: OpenModalFn | null = null;
   private signTxHandle: SignTransactionFn | null = null;
+  private signMsgHandle: SignMessageFn | null = null;
   private pendingResolve: (() => void) | null = null;
   private pendingReject: ((e: Error) => void) | null = null;
   private pendingTimer: ReturnType<typeof setTimeout> | null = null;
@@ -54,6 +58,18 @@ class SolanaWalletBridge {
   async signTransaction(tx: unknown): Promise<unknown> {
     if (!this.signTxHandle) throw new Error("wallet_sign_not_available");
     return this.signTxHandle(tx);
+  }
+
+  /** HU-SOL-8: registrado por el sync component (captura useWallet().signMessage). */
+  registerSignMessage(fn: SignMessageFn): void {
+    this.signMsgHandle = fn;
+  }
+
+  /** HU-SOL-8: firma un mensaje con la wallet conectada. Fail-loud si el árbol no montó el handle
+   *  (mirror de signTransaction: nunca firma con una clave que no sea la de la wallet). */
+  async signMessage(message: Uint8Array): Promise<Uint8Array> {
+    if (!this.signMsgHandle) throw new Error("wallet_sign_not_available");
+    return this.signMsgHandle(message);
   }
 
   /** Deferred: resuelve cuando el estado transiciona a connected && publicKey; timeout → reject. */
@@ -93,6 +109,7 @@ class SolanaWalletBridge {
     this.state = { publicKey: null, connected: false };
     this.openModalHandle = null;
     this.signTxHandle = null; // HU-SOL-5: aditivo, limpia el handle entre tests
+    this.signMsgHandle = null; // HU-SOL-8: aditivo, limpia el handle entre tests
   }
 
   private settle(): void {

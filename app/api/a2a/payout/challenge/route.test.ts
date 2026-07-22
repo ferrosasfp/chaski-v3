@@ -3,7 +3,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildPopMessage,
+  buildSolanaPopMessage,
   verifyPopChallenge,
+  verifySolanaPopChallenge,
 } from "../../../../../src/infrastructure/auth/pop-challenge";
 
 // WKH-205: el rate-limit IP-only corre tras el 501 de POP_SECRET. Los tests no fijan Upstash env
@@ -102,5 +104,56 @@ describe("POST /api/a2a/payout/challenge (WKH-206)", () => {
     const body = (await res.json()) as Record<string, unknown>;
     expect(body).toEqual({ error: "pop_rate_limit_unavailable" });
     expect(body.popChallenge).toBeUndefined();
+  });
+});
+
+// ── HU-SOL-8 (WKH-211) — emisión del challenge Solana (rama vm=solana) ──────────────────────────────
+const SOL_ADDR = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // base58 canónico válido
+
+describe("POST /api/a2a/payout/challenge — rama Solana (HU-SOL-8)", () => {
+  beforeEach(() => {
+    vi.stubEnv("NEXT_PUBLIC_VM", "solana");
+    checkRouteRateLimitMock.mockReset();
+    checkRouteRateLimitMock.mockResolvedValue({ ok: true });
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("vm=solana + address base58 válida → 200 { popChallenge, popMessage, exp }; popMessage lleva `network: solana:devnet` y round-trippea", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", "test-secret");
+    const res = await POST(req({ address: SOL_ADDR }));
+    expect(res.status).toBe(200);
+    const { popChallenge, popMessage, exp } = (await res.json()) as {
+      popChallenge: string;
+      popMessage: string;
+      exp: number;
+    };
+    expect(popMessage).toContain("network: solana:devnet");
+    expect(popMessage).not.toContain("chainId:"); // CAIP-2, NO chainId numérico
+    // El challenge emitido verifica con el mismo secreto (round-trip real) y ata el network-id server-side.
+    const ch = verifySolanaPopChallenge(popChallenge, Date.now());
+    expect(ch).not.toBeNull();
+    expect(ch?.address).toBe(SOL_ADDR); // base58 case-sensitive (CD-8)
+    expect(ch?.networkId).toBe("solana:devnet"); // CD-3: de la ENV, no del body
+    expect(ch?.exp).toBe(exp);
+    // El popMessage es EXACTAMENTE buildSolanaPopMessage(ch) (CD-6: única fuente del formato).
+    expect(popMessage).toBe(buildSolanaPopMessage(ch!));
+  });
+
+  it("vm=solana + address base58 inválida → 400 pop_invalid_request, NUNCA 500", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", "test-secret");
+    for (const address of ["", "0OIl-not-base58", "0x1111111111111111111111111111111111111111", undefined, 123]) {
+      const res = await POST(req({ address }));
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "pop_invalid_request" });
+    }
+  });
+
+  it("vm=solana + sin PAYOUT_POP_SECRET → 501 pop_not_configured (ANTES de la rama VM, intacto)", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", "");
+    const res = await POST(req({ address: SOL_ADDR }));
+    expect(res.status).toBe(501);
+    expect(await res.json()).toEqual({ error: "pop_not_configured" });
   });
 });

@@ -272,4 +272,28 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
     expect(res.status).toBe(200);
     expect(ledgerMock.recordOrderPrepared).toHaveBeenCalledTimes(1);
   });
+
+  // ── HU-SOL-8: PR6 rama Solana — PoP OBLIGATORIO (AC-3). R-3: PR4 (isAddress) sigue exigiendo 0x hoy
+  //    (abrir base58 es HU-SOL-9); el address 0x pasa PR4 y llega a PR6 con vm=solana. NO se toca PR4. ──
+  describe("PR6 rama Solana (HU-SOL-8)", () => {
+    beforeEach(() => {
+      vi.stubEnv("NEXT_PUBLIC_VM", "solana");
+    });
+
+    it("AC-3: vm=solana + PAYOUT_POP_SECRET unset ⇒ 503 payout_pop_unavailable, NINGÚN fetch (jamás skip)", async () => {
+      vi.stubEnv("PAYOUT_POP_SECRET", ""); // OBLIGATORIO en Solana: sin secreto → 503 fail-closed
+      const res = await POST(req(bodyOf())); // address 0x pasa PR4; vm=solana ⇒ PR6 exige PoP
+      expect(res.status).toBe(503);
+      expect(await res.json()).toEqual({ error: "payout_pop_unavailable" });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("AC-3: vm=solana + secreto presente + sin popChallenge/popSignature ⇒ 403 payout_pop_unverified, NINGÚN fetch", async () => {
+      vi.stubEnv("PAYOUT_POP_SECRET", "pop-secret");
+      const res = await POST(req(bodyOf())); // sin campos PoP
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: "payout_pop_unverified" });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -173,6 +173,67 @@ export interface SolanaPrincipalAuthorization {
   reference: string; // Pubkey base58 de la reference (trazabilidad)
 }
 
+// ── HU-SOL-13 (WKH-216) — puertos del money-path Solana no-custodial (escrow Anchor) ──────────────
+// ADITIVOS: NO tocan ningún tipo EVM (CD-2/CD-14). El use-case recibe `solana` como 9º param OPCIONAL
+// (mutuamente excluyente con `settlement?` EVM). Cuando el container NO inyecta `solana` (EVM/demo),
+// estas interfaces no participan ⇒ el path EVM queda byte-idéntico POR CONSTRUCCIÓN.
+export type SolanaSettlementFailureReason =
+  | "solana_settle_unavailable" // red caída / facilitator no configurado
+  | "solana_settle_rejected" // CR-1 del deposit rechazó (422 SPONSOR_REJECTED)
+  | "solana_settle_rate_limited" // 429
+  | "solana_settle_broadcast_failed" // 409/502 (blockhash expirado / broadcast falló)
+  | "solana_settle_unverified"; // shape de respuesta inválido
+
+// Broadcast del `deposit` Solana vía la ruta server-only /api/settle/solana-sponsor → facilitator
+// (HU-SOL-14). NUNCA reusa PrincipalSettlementGateway (EIP-3009-shaped) ni su regex 0x… (CD-13): la
+// signature de respuesta es base58. Corre en el CLIENTE (el browser jamás llama al facilitator directo).
+export interface SolanaSettlementGateway {
+  settle(input: {
+    partialSignedTx: string; // base64 (= SolanaPrincipalAuthorization.partialSignedTx)
+    reference: string; // base58 (= SolanaPrincipalAuthorization.reference)
+    sender: string; // base58 wallet del depositor
+    remittanceId: string; // server-only, trazabilidad
+    popProof?: string; // PoP (HU-SOL-8) — wire-format founder-gated ([NC-2]); mockeado en unit-test
+  }): Promise<
+    | { ok: true; signature: string } // base58 tx signature YA broadcasteada+confirmada
+    | { ok: false; reason: SolanaSettlementFailureReason }
+  >;
+}
+
+// Prepare del payout Solana no-custodial: crea/consulta la orden TransFi y resuelve, SERVER-SIDE
+// (NUNCA del body del cliente, CD-7): `beneficiary` (deposit-address Solana de la orden) + `authority`
+// (release-authority pubkey, resolveSolanaReleaseAuthorityPubkey). El use-case pasa ambos a
+// authorizePrincipal para que la wallet arme la ix `deposit` del escrow (no una transferencia directa).
+export interface SolanaPayoutPrepareGateway {
+  prepare(input: {
+    remittanceId: string;
+    quoteId: string;
+    kycVerificationId: string;
+    address: string;
+    amountUsd: number;
+    beneficiary: Beneficiary;
+    idempotencyKey: string;
+  }): Promise<
+    | {
+        ok: true;
+        result: {
+          beneficiary: string; // base58 — destino del release (server-side)
+          authority: string; // base58 — release-authority (server-side)
+          attestation: string;
+          payoutId: string;
+          provenance: string;
+        };
+      }
+    | { ok: false; reason: string }
+  >;
+}
+
+// Refund trustless post-deadline (AC-6/CD-10): delega en wallet.refundEscrow (sender firma + sender
+// broadcastea, SIN facilitator ni release-authority). Devuelve la signature base58 del refund.
+export interface SolanaEscrowRefundGateway {
+  refund(input: { remittanceId: string; sender: string }): Promise<{ refundTx: string }>;
+}
+
 export type SettlementFailureReason =
   | "settlement_unavailable"
   | "settlement_rejected"

@@ -9,6 +9,8 @@ import type {
   PrincipalSettlementGateway,
   RefundGateway,
   RemittanceRepository,
+  SolanaPayoutPrepareGateway,
+  SolanaSettlementGateway,
   WalletPort,
 } from "../ports";
 
@@ -54,6 +56,16 @@ export class ConfirmAndSend {
     // NEXT_PUBLIC_PAYOUT_POP_ENABLED=true ⇒ AC-5 se preserva POR CONSTRUCCIÓN, sin que el use-case lea
     // env vars (CD-13). Undefined = demo byte-idéntico (no se adjunta prueba al submit).
     private readonly pop?: PopSigner,
+    // HU-SOL-13 (WKH-216) — 9º param OPCIONAL `solana`, MUTUAMENTE EXCLUYENTE con `settlement?` (EVM).
+    // Gateway+prepare viajan ACOPLADOS: `solana !== undefined ⇔ modo real Solana` (mismo invariante
+    // anti-fail-open que `settlement`). El container lo inyecta SOLO con resolveActiveVm()==="solana" +
+    // el flag Solana ON, y garantiza que NUNCA coexiste con `settlement`. Undefined ⇒ el path EVM/demo
+    // (incluido el bloque `if (this.settlement)`) queda BYTE-IDÉNTICO por construcción (CD-2/CD-14). El
+    // use-case NUNCA lee process.env.
+    private readonly solana?: {
+      prepare: SolanaPayoutPrepareGateway;
+      gateway: SolanaSettlementGateway;
+    },
   ) {}
 
   /** Refund-on-failure (WKH-186/AC-7, CD-7): marca payout_failed y acto seguido intenta el credit-back
@@ -122,6 +134,73 @@ export class ConfirmAndSend {
     const nowRecheck = this.clock.nowIso();
     if (!r.isQuoteStillValid(nowRecheck)) {
       await this.failAndRefund(r, "quote_expired_before_submit");
+      return r;
+    }
+
+    // 2.6 Rama SOLANA no-custodial (HU-SOL-13/AC-1, 9º param OPCIONAL). HERMANA del bloque EVM
+    //     `if (this.settlement)`: cuando this.solana===undefined (EVM/demo) NO se ejecuta ⇒ el path
+    //     EVM (prepare 2.7 + settle 3.2 + submit) queda BYTE-IDÉNTICO (CD-2/CD-14). El container
+    //     garantiza mutua exclusión con `settlement` (nunca ambos inyectados a la vez).
+    if (this.solana) {
+      // 1. PREPARE server-side (análogo a 2.7): resuelve beneficiary+authority SERVER-SIDE (NUNCA del
+      //    body — AC-1/CD-7). Fallo ⇒ falla ANTES de firmar (el deposit NO entró, principalReallyIn=false).
+      let prep: Awaited<ReturnType<SolanaPayoutPrepareGateway["prepare"]>>;
+      try {
+        prep = await this.solana.prepare.prepare({
+          remittanceId: s.id,
+          quoteId: quote.quoteId,
+          kycVerificationId: kyc.verificationId,
+          address: address ?? "", // misma coerción que authority.authorize()
+          amountUsd: s.sendUsd.major,
+          beneficiary: s.beneficiary,
+          idempotencyKey: `${s.id}:${quote.quoteId}`,
+        });
+      } catch {
+        await this.failAndRefund(r, "prepare_unavailable", false);
+        return r;
+      }
+      if (!prep.ok) {
+        await this.failAndRefund(r, prep.reason, false);
+        return r;
+      }
+      // 2. authorizePrincipal: la wallet arma+partial-firma la ix `deposit` del escrow con el
+      //    beneficiary+authority resueltos server-side (HU-SOL-5 ya arma el deposit desde el 3er arg).
+      const { solana } = await this.wallet.authorizePrincipal(quote, s.id, {
+        address: prep.result.beneficiary,
+        escrow: { beneficiary: prep.result.beneficiary, authority: prep.result.authority },
+      });
+      // Sin el envelope Solana no hay tx que broadcastear ⇒ fail-closed, NUNCA markPrincipalIn (la
+      // mentira que la HU vino a matar). El deposit NO entró ⇒ principalReallyIn=false.
+      if (!solana) {
+        await this.failAndRefund(r, "settlement_unverified", false);
+        return r;
+      }
+      // 3. BROADCAST del deposit vía el facilitator (gasless, /api/settle/solana-sponsor → /solana/sponsor).
+      //    Excepción (red/bug) ⇒ fail-closed (patrón C3); reason del gateway ⇒ payout_failed. Ambos con
+      //    principalReallyIn=false (el deposit no se confirmó, o no podemos saberlo: fail-closed igual).
+      let res: Awaited<ReturnType<SolanaSettlementGateway["settle"]>>;
+      try {
+        res = await this.solana.gateway.settle({
+          partialSignedTx: solana.partialSignedTx,
+          reference: solana.reference,
+          sender: address ?? "",
+          remittanceId: s.id,
+        });
+      } catch {
+        await this.failAndRefund(r, "solana_settle_unavailable", false);
+        return r;
+      }
+      if (!res.ok) {
+        await this.failAndRefund(r, res.reason, false);
+        return r;
+      }
+      // 4. markPrincipalIn con la signature base58 VERIFICADA on-chain por /solana/sponsor. Luego
+      //    payout_submitted con el payoutId de prepare (la orden TransFi ya se creó). La RELEASE del
+      //    vault la dispara el facilitator (13c) async — NO chaski.
+      r.markPrincipalIn(res.signature, this.clock.nowIso());
+      await this.repo.save(r);
+      r.markPayoutSubmitted(prep.result.payoutId, this.clock.nowIso(), prep.result.provenance);
+      await this.repo.save(r);
       return r;
     }
 

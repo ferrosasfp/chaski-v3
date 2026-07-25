@@ -8,6 +8,21 @@
 
 Ramifica por VM la validación/comparación de address (base58 cuando `vm==="solana"`) en `deposit-attestation.ts`, `settle/principal/route.ts` (B6/S12/S13) y `prepare/route.ts` (PR4), reusando `canonicalizeAddress` (HU-SOL-7). Agrega `SolanaDepositAttestation` HMAC (tipos SEPARADOS del EVM, anti-forja/replay cross-cluster), `resolveSolanaReleaseAuthorityPubkey()` env-driven server-side (la consume HU-SOL-13 para firmar `release`), y `verifySolanaSettlement` que arma el envelope x402 `solana:<cluster>` base58 (verify-only, NO broadcast). **EVM byte-idéntico** (648 tests, payload EIP-3009 sin mutar). Fix-pack AR+CR MNR-1: `addressEqualsVm` extraído a `src/infrastructure/address.ts` con tests de ambas ramas (incluye case-sensitivity anti-IDOR base58).
 
+## Addendum — Wave W4 (facilitator schema base58) · 2026-07-22
+
+El chaski-side (arriba) ya estaba mergeado; el net-new de esta iteración fue la **Wave W4** en `wasiai-facilitator`, que cierra el gate HTTP que hasta hoy rechazaba (400 `INVALID_PAYLOAD`) todo request Solana antes del dispatch por namespace. Con el repo `wasiai-facilitator` montado en el workspace, el orquestador levantó CD-4 solo para el schema Zod (CD-4' blinda el resto del facilitator).
+
+**Cambios** (`wasiai-facilitator`):
+- `src/methods/eip3009/schemas.ts` — `Base58PubkeySchema` (`new PublicKey` try/catch) + `Base58SignatureSchema` (regex base58 + len 64-120), consistentes con `isBase58Pubkey/Signature` del `solana-adapter` (CD-9).
+- `src/core/schemas.ts` — `SolanaAcceptedSchema`/`SolanaPayloadSchema`/`SolanaRequestSchema` (`.strict()`, sin `extra`/`authorization`) agregados como **3ª rama del `z.union`** (última → primera-que-matchea preserva byte-identidad EVM). Desacople runtime(3 ramas)/tipo-estático(`VerifyRequest` EVM-only) vía cast de frontera sancionado `as unknown as z.ZodType<VerifyRequest,…>` (mismo patrón de `core/settle.ts:144`) — así los consumers EVM (`core/settle.ts`, `routes/*`) compilan sin narrowing y un request Solana nunca se lee como EVM (early-return al adapter en `namespace==='solana'`).
+- Tests: `core.schemas.solana.test.ts` (TF1-TF3 + 4 negativos del fix-pack CR) + `routes.settle.solana.test.ts` (TF4: body Solana ya NO da 400, alcanza dispatch → 503 `CHAIN_UNAVAILABLE` con adapter OFF).
+
+**Gates W4**: AR APROBADO (5 vectores con repro ejecutable, 0 BLQ) · CR APROBADO (0 BLQ) · F4 APROBADO (`npm run qa` exit 0: typecheck+lint+format:check+test). **997 tests (73 files), 979 EVM byte-idénticos.**
+
+**Branch**: `wasiai-facilitator` @ `feat/m5-escrow-dr5g-address` (contiene también el fix BBQ9→DR5G) — pendiente de merge a `main` + redeploy Railway (founder-gated, junto con HU-SOL-6/13bc HELD).
+
+**Carry-forward → HU-SOL-13**: AR-MNR-2 — `routes/settle.ts:287,339,381` persisten el settle Solana con `method:'eip3009'` hardcodeado (telemetría mislabeleada, no rompe funcionalidad). Fuera de scope acá (CD-4'); a resolver en el wiring del escrow (waves 13b/13c).
+
 ## Cadena de gates
 - F3: 642 → fix-pack → **648 tests**, tsc 0 completo.
 - AR: APROBADO — 7 vectores (atestación forja/replay HMAC, release-authority server-side, envelope discriminado EIP-3009 intacto, IDOR base58, no-broadcast, EVM byte-idéntico, cobertura), 0 BLOQUEANTEs, 1 MENOR (resuelto).

@@ -60,7 +60,7 @@ describe("SolanaWalletAdapter", () => {
 });
 
 // ── HU-SOL-5 (WKH-207*) — authorizePrincipal real: ix deposit al escrow (SPL, gasless) ────────
-const ESCROW_PROGRAM_ID = "BBQ9TcriBT7tqe5czR72CkUyxYg6z8pH7nk161yh79WA";
+const ESCROW_PROGRAM_ID = "DR5GoMT7sAKzD6wZMKJPeknS3Y6fzgZUNevi7xiESE4x";
 const DEPOSIT_DISCRIMINATOR = [242, 35, 198, 137, 82, 225, 242, 182];
 const FIXED_BLOCKHASH = Keypair.generate().publicKey.toBase58(); // 32 bytes base58 válido (NO devnet)
 
@@ -139,7 +139,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     escrow: { beneficiary: BENEFICIARY_B58, authority: AUTHORITY_B58 },
   });
 
-  it("AC-1: arma la ix deposit (programId BBQ9…79WA, discriminator, accounts del IDL + PDAs/ATA)", async () => {
+  it("AC-1: arma la ix deposit (programId DR5G…SE4x, discriminator, accounts del IDL + PDAs/ATA)", async () => {
     const adapter = await connectedAdapter();
     const rid = "rem-ac1";
     await adapter.authorizePrincipal(makeQuote(), rid, escrowDeposit());

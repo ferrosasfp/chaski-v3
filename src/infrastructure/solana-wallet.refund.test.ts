@@ -10,7 +10,7 @@ import { SolanaWalletAdapter } from "./solana-wallet";
 import { escrowIdl } from "./solana/escrow-idl";
 import { solanaWalletBridge } from "./solana-wallet-bridge";
 
-const ESCROW_PROGRAM_ID = "BBQ9TcriBT7tqe5czR72CkUyxYg6z8pH7nk161yh79WA";
+const ESCROW_PROGRAM_ID = "DR5GoMT7sAKzD6wZMKJPeknS3Y6fzgZUNevi7xiESE4x";
 const REFUND_DISCRIMINATOR = [2, 96, 183, 251, 63, 208, 46, 46];
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const ASSOCIATED_TOKEN_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";

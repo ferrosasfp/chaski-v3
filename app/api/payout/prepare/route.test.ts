@@ -391,5 +391,18 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
         expect(await res.json()).toEqual({ error: "prepare_no_deposit_address" });
       }
     });
+
+    it("AC-3: vm=solana + depositAddress base58 válido pero payoutId ausente (vacío/whitespace) → 502 prepare_no_deposit_address (guard route.ts:272-275)", async () => {
+      // payoutId="" pasa isValidPayoutResult (status submitted) pero muere en el guard fail-closed:
+      // no se atesta una orden sin id trackeable. (payoutId=null+submitted lo caza antes PR8 → upstream_error.)
+      for (const badPayoutId of ["", "   "]) {
+        agentResponds(200, agentResult({ depositAddress: SOL_BENEFICIARY, payoutId: badPayoutId }));
+        const res = await POST(
+          req(bodyOf({ address: callerAddr, ...signedSolanaPop(kp, callerAddr) })),
+        );
+        expect(res.status).toBe(502);
+        expect(await res.json()).toEqual({ error: "prepare_no_deposit_address" });
+      }
+    });
   });
 });

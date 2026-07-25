@@ -17,8 +17,8 @@ Todos los 7 ACs código (AC-1..AC-7) PASS con evidencia archivo:línea. H1 de pr
 | **F0** | `work-item.md` (grounding, AC-1..AC-7, DT-N, CD-N) | hallazgo H1 confirmado en código: `prepare/route.ts:252` `isAddress()` rechaza base58; cliente (`HttpSolanaPayoutPrepareGateway`) listo desde HU-SOL-13a pero server nunca produce shape correcto | `work-item.md` |
 | **F1** | `sdd.md` (SDD_MODE: full) + `story-HU-SOL-11.md` (Story File) | Spec + anti-hallucination checklist + waves (W0/W1/W2) validados contra código real; 7 Missing Inputs resueltos en §10 del SDD | `sdd.md`, `story-HU-SOL-11.md` |
 | **F3 (Dev)** | `story-HU-SOL-11.md` | ✓ 679/679 tests PASS (incluye rama Solana nueva + 0 regresión EVM); `tsc --noEmit` + `tsc -p tsconfig.scripts.json --noEmit` = exit 0 | commit `64ec019` |
-| **AR** | Código F3 + auto-blindaje | APROBADO — 7 vectores, 0 findings. Auto-blindaje: 3 lecciones (feePayer, tsx install, lint pre-existente) | `auto-blindaje.md` |
-| **CR** | Código F3 | APROBADO — 0 BLQ, 1 MENOR (envs late) fix-packeado | pasado verbalmente |
+| **AR** | Código F3 + auto-blindaje | APROBADO — 7 vectores atacados, 0 BLOQUEANTE, 1 MENOR (comentarios BBQ9, fix-packeado). Auto-blindaje: 3 lecciones (feePayer, tsx install, lint pre-existente). | `ar-report.md` |
+| **CR** | Código F3 | APROBADO — 0 BLOQUEANTE, 3 MENOR (comentarios BBQ9, checkpoint label, test edge payoutId, todos fix-packeados). Shape Solana correcto, EVM byte-idéntico +68/-0. | `cr-report.md` |
 | **F4 (QA)** | Código F3 + AC-1..AC-7 | APROBADO PARA DONE — 7/7 ACs PASS, evidencia archivo:línea | `validation.md` |
 
 ---
@@ -39,8 +39,12 @@ Todos los 7 ACs código (AC-1..AC-7) PASS con evidencia archivo:línea. H1 de pr
 
 ## Hallazgos finales
 
-**BLOQUEANTEs**: Ninguno — todos resueltos o pre-existentes.  
-**MENOREs**: 1 MENOR (smoke envs late) resuelto en fix-pack.
+**BLOQUEANTEs**: Ninguno — completamente resueltos.  
+**MENOREs**: 4 resueltos en fix-pack:
+- Comentarios stale `BBQ9` (4 archivos): reemplazados por `DR5G...` (escrow real).
+- Checkpoint label impreciso ("7-8" → "7").
+- Test edge case `payoutId` vacío/whitespace: agregado a AC-3.
+- Envs late validation (smoke-solana-e2e.ts): moved upfront antes de cualquier fetch.
 
 ---
 

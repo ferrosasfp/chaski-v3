@@ -73,7 +73,7 @@ export function createContainer(): Container {
   // receiver / usdc → throw en construcción, la app NO arranca. Imposible un modo mixto silencioso
   // (firma real + payout mock). Default (EIP-3009 off) → nunca entra acá.
   if (process.env.NEXT_PUBLIC_EIP3009_ENABLED === "true") {
-    if (adapter !== "a2a") throw new Error("eip3009_requires_a2a_adapter"); // CD-3
+    if (adapter !== "a2a" && adapter !== "a2a-gateway") throw new Error("eip3009_requires_a2a_adapter"); // CD-3 (WKH-218: a2a-gateway también es adapter real)
     if (!process.env.NEXT_PUBLIC_PAYOUT_RECEIVER_ADDRESS) throw new Error("eip3009_requires_receiver"); // CD-4 (presencia)
     if (!process.env.NEXT_PUBLIC_USDC_CONTRACT_ADDRESS) throw new Error("eip3009_requires_usdc_contract"); // CD-16 (presencia)
     // MNR-A: además de presencia, validar FORMATO (isAddress) fail-loud — un receiver malformado
@@ -81,7 +81,7 @@ export function createContainer(): Container {
     // receiver malformado; el error surge acá (construcción), NUNCA en sign-time. Simétrico con usdc.
     resolveReceiverAddress(); // throws payout_receiver_not_configured si el formato es inválido
   }
-  const useA2a = adapter === "a2a";
+  const useA2a = adapter === "a2a" || adapter === "a2a-gateway"; // WKH-218: gateway también usa los A2a gateways cliente
   const quotes = useA2a ? new A2aQuoteGateway() : new FallbackQuoteGateway();
   // Server-truth: SIEMPRE el gateway Didit, con la simulación como fallback. Si el server tiene
   // key → Didit real; si no (501) → simulación. No depende del inlineado NEXT_PUBLIC del cliente.

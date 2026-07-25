@@ -43,9 +43,15 @@ sin browser/wallet/red. Ver `src/application/use-cases.test.ts` + `src/domain/*.
 Chaski andino (reusada del demo): cochinilla `#CB2A54` + verde `#12805C`, neutros cálidos, Hanken Grotesk,
 la marca ChaskiMark (Qhapaq Ñan + nudo de khipu). Mobile-first, cripto-invisible (se habla de $ y S/, no de USDC).
 
-## Qué falta (Fase A / próxima iteración)
-- Adapters reales: `A2aQuoteGateway`/`A2aKycGateway`/`A2aPayoutGateway` (llaman a los agentes `remit-*` vía
-  API routes con la key server-side, patrón del demo) + `WagmiWallet` (EIP-3009). Se enchufan en el container.
+## Integración A2A (mergeado en main — WKH-186)
+
+Chaski corre **sobre los rieles A2A** del gateway neutro. Los adapters A2A ya están en `src/infrastructure/a2a/`:
+- `A2aQuoteGateway` / `A2aKycGateway` / `A2aPayoutGateway` (llaman a los agentes `remit-*` vía rutas server-only con key server-side)
+- Flag `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER=a2a` activa el wiring en el composition root; default sigue siendo Fallback (mock).
+- Ambos adapters coexisten sin conflicto en el mismo contenedor.
+
+## Qué falta (Fase A+)
 - El value-delivery real (movimiento del principal on-chain) — WKH-168, gated al sandbox de TransFi.
 - Pantalla de historial (el `ListHistory` ya existe) + íconos PWA + more.
+- `WagmiWallet` (EIP-3009 gasless, cuando la identidad se unice con Privy/AgentKit).
 - Ver `docs/architecture.md` + `docs/ux-design.md`.

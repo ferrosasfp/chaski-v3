@@ -1141,3 +1141,123 @@ describe("POST /api/a2a/payout/submit — GUARD 7 SOLANA: PoP ed25519 obligatori
     expect(popClaimMock).not.toHaveBeenCalled(); // ningún rechazo P2-P5 quema el nonce
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WKH-218 — modo de transporte "a2a-gateway": payout vía /discover + /compose (post guards 1-8).
+// El file-level beforeEach ya deja guards 4-8 en modo skip (SETTLE/POP secret vacíos, simulated_dev
+// local) ⇒ el payload válido pasa los guards y ENTRA a la rama de forward, donde se ramifica.
+// ─────────────────────────────────────────────────────────────────────────────
+const GW = "https://gateway.example.com";
+const GW_KEY = "ak_secret";
+const gwAgent = { slug: "remit-cashout-payout", registry: "default", capabilities: ["cashout-payout"], status: "active" };
+const gwDiscoverOk = { agents: [gwAgent], total: 1, registries: ["default"] };
+const gwComposeOk = { success: true, steps: [{ output: validResult }] };
+
+/** Router que separa /discover y /compose del gateway del fetch DIRECTO al agente
+ *  ({BASE}/api/agents/.../invoke). directCalls>0 ⇒ hubo fallback punto-a-punto (prohibido, AC-4). */
+function gwRouter(opts: {
+  discover?: () => unknown;
+  compose?: () => unknown;
+  discoverThrows?: boolean;
+  captureCompose?: (init?: RequestInit) => void;
+}) {
+  const directCalls: string[] = [];
+  const fn = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.includes("/discover")) {
+      if (opts.discoverThrows) throw new Error("network");
+      return { ok: true, json: async () => opts.discover?.() ?? gwDiscoverOk };
+    }
+    if (url.includes("/compose")) {
+      opts.captureCompose?.(init);
+      return { ok: true, json: async () => opts.compose?.() ?? gwComposeOk };
+    }
+    directCalls.push(url); // {BASE}/api/agents/remit-cashout-payout/invoke — jamás en modo gateway
+    return { ok: true, json: async () => ({ result: validResult }) };
+  });
+  return { fn, directCalls };
+}
+
+function setGatewayEnv() {
+  vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gateway");
+  vi.stubEnv("WASIAI_A2A_GATEWAY_URL", GW);
+  vi.stubEnv("WASIAI_A2A_AGENT_KEY", GW_KEY);
+  vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE); // guard 1 la exige (DT-A2A-9), el forward NO la usa
+}
+
+describe("POST /api/a2a/payout/submit — modo a2a-gateway (WKH-218)", () => {
+  it("AC-2: payload que pasa guards 1-8 + gateway ⇒ invoca {GW}/compose con el payout agent; NO fetch directo", async () => {
+    setGatewayEnv();
+    const { fn, directCalls } = gwRouter({});
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req(validPayload));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ result: validResult });
+    const urls = fn.mock.calls.map((c) => c[0] as string);
+    expect(urls.some((u) => u === `${GW}/discover`)).toBe(true);
+    expect(urls.some((u) => u === `${GW}/compose`)).toBe(true);
+    expect(directCalls).toHaveLength(0); // AC-4: cero fallback punto-a-punto
+  });
+
+  it("AC-8: idempotencyKey viaja INTACTO en el input del compose step; beneficiary intacto (no regenerado)", async () => {
+    setGatewayEnv();
+    let composeInit: RequestInit | undefined;
+    const { fn } = gwRouter({ captureCompose: (init) => (composeInit = init) });
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req(validPayload));
+    expect(res.status).toBe(200);
+    const stepInput = JSON.parse(composeInit!.body as string).steps[0].input;
+    expect(stepInput.idempotencyKey).toBe("r-1:cfx-1"); // CD-8: sin regenerar
+    expect(stepInput.beneficiary).toEqual(validPayload.beneficiary); // intacto
+    // header x-a2a-key presente (AC-5), gateway resuelve el pago.
+    expect((composeInit!.headers as Record<string, string>)["x-a2a-key"]).toBe(GW_KEY);
+  });
+
+  it("AC-4/fail-closed ESTRELLA: gateway inalcanzable + /discover vacío ⇒ 502; directFetch NUNCA llamado", async () => {
+    setGatewayEnv();
+    // (i) /discover vacío ⇒ no_agent ⇒ 502, cero fallback.
+    const empty = gwRouter({ discover: () => ({ agents: [], total: 0, registries: [] }) });
+    vi.stubGlobal("fetch", empty.fn);
+    const r1 = await POST(req(validPayload));
+    expect(r1.status).toBe(502);
+    expect(await r1.json()).toEqual({ error: "a2a_unavailable" });
+    expect(empty.directCalls).toHaveLength(0); // ← expect(directFetch).not.toHaveBeenCalled()
+
+    // (ii) /discover throw (inalcanzable) ⇒ 502, cero fallback.
+    const down = gwRouter({ discoverThrows: true });
+    vi.stubGlobal("fetch", down.fn);
+    const r2 = await POST(req(validPayload));
+    expect(r2.status).toBe(502);
+    expect(await r2.json()).toEqual({ error: "a2a_unavailable" });
+    expect(down.directCalls).toHaveLength(0);
+  });
+
+  it("AC-4/PII-free: error del gateway NUNCA ecoa el beneficiary", async () => {
+    setGatewayEnv();
+    const { fn } = gwRouter({ discoverThrows: true });
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req(validPayload)); // beneficiary.destination = 999888777
+    const raw = await res.text();
+    expect(raw).not.toContain("999888777");
+    expect(JSON.parse(raw)).toEqual({ error: "a2a_unavailable" });
+  });
+
+  it("gateway compose shape inválido ⇒ 502 a2a_bad_shape (persistOutcome forward_error)", async () => {
+    setGatewayEnv();
+    const { fn } = gwRouter({ compose: () => ({ success: true, steps: [{ output: { status: "weird" } }] }) });
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req(validPayload));
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "a2a_bad_shape" });
+  });
+
+  it("AC-6: flag='a2a' (no gateway) ⇒ punto-a-punto byte-idéntico ({BASE}/api/agents/remit-cashout-payout/invoke)", async () => {
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a");
+    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+    const { fn, agentCalls } = fetchRouter({});
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req(validPayload));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ result: validResult });
+    expect(agentCalls).toEqual([`${BASE}/api/agents/remit-cashout-payout/invoke`]);
+  });
+});

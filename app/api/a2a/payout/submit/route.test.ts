@@ -1260,4 +1260,24 @@ describe("POST /api/a2a/payout/submit — modo a2a-gateway (WKH-218)", () => {
     expect(await res.json()).toEqual({ result: validResult });
     expect(agentCalls).toEqual([`${BASE}/api/agents/remit-cashout-payout/invoke`]);
   });
+
+  // W3 — byte-identidad flag OFF: con las envs del gateway SETEADAS pero flag ≠ "a2a-gateway", el
+  // gateway se IGNORA por completo y el payout forwardea punto-a-punto (CD-6/AC-6).
+  it.each(["fallback", "a2a", undefined])(
+    "W3/AC-6: flag=%s + WASIAI_A2A_* seteadas ⇒ gateway IGNORADO (fetch directo al agente)",
+    async (flag) => {
+      if (flag === undefined) vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "");
+      else vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", flag);
+      vi.stubEnv("WASIAI_A2A_GATEWAY_URL", GW); // seteadas, pero NO deben usarse
+      vi.stubEnv("WASIAI_A2A_AGENT_KEY", GW_KEY);
+      vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+      const { fn, directCalls } = gwRouter({});
+      vi.stubGlobal("fetch", fn);
+      const res = await POST(req(validPayload));
+      expect(res.status).toBe(200);
+      const urls = fn.mock.calls.map((c) => c[0] as string);
+      expect(urls.some((u) => u.includes("/discover"))).toBe(false); // gateway NUNCA tocado
+      expect(directCalls).toEqual([`${BASE}/api/agents/remit-cashout-payout/invoke`]);
+    },
+  );
 });

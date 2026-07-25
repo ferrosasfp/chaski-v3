@@ -184,4 +184,24 @@ describe("POST /api/a2a/quote — modo a2a-gateway (WKH-218)", () => {
     expect(await res.json()).toEqual({ result: validResult });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  // W3 — byte-identidad flag OFF: aunque las envs del gateway estén SETEADAS, con el flag ≠
+  // "a2a-gateway" el gateway se IGNORA por completo (CD-6/AC-6). "construye, no enciende".
+  it.each(["fallback", "a2a", undefined])(
+    "W3/AC-6: flag=%s + WASIAI_A2A_* seteadas ⇒ gateway IGNORADO (fetch al {BASE}/api/agents/...)",
+    async (flag) => {
+      if (flag === undefined) vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "");
+      else vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", flag);
+      vi.stubEnv("WASIAI_A2A_GATEWAY_URL", GW); // seteadas, pero NO deben usarse
+      vi.stubEnv("WASIAI_A2A_AGENT_KEY", KEY);
+      vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+      const { fn, directCalls } = gwRouter({});
+      vi.stubGlobal("fetch", fn);
+      const res = await POST(req({ amountUsd: 400, destCountry: "PE", payoutMethod: "yape" }));
+      expect(res.status).toBe(200);
+      const urls = fn.mock.calls.map((c) => c[0] as string);
+      expect(urls.some((u) => u.includes("/discover"))).toBe(false); // gateway NUNCA tocado
+      expect(directCalls).toEqual([`${BASE}/api/agents/remit-corridor-fx/invoke`]);
+    },
+  );
 });

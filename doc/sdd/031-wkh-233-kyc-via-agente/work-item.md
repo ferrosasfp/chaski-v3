@@ -83,6 +83,37 @@ Un swap literal de Chaski al contrato `/invoke` actual del agente:
 Por esto, DT-1 (abajo) recomienda **NO** hacer el swap literal — ver Missing Inputs #1/#2
 (BLOQUEANTES para F2).
 
+### Refresh de grounding (2026-07-24, post WKH-218 DONE)
+Se re-verificó el estado del repo `wasiai-remittance-agents` (solo lectura, CD-3) y de `chaski-v3`
+contra el momento del F1 original (2026-07-22). Hallazgos del refresh:
+
+1. **Contrato HTTP del agente: SIN CAMBIOS.** `src/app/api/agents/remit-kyc-validator/invoke/route.ts`
+   sigue siendo el único endpoint (`POST /invoke`); `KycInputSchema` sigue exigiendo `legalId` en
+   claro (`kyc-validator.ts:16-24`); no existe ningún route `session`/`decision` nuevo. El hallazgo
+   crítico de F0 y los 2 Missing Inputs BLOQUEANTES (#1/#2) siguen vigentes sin cambios.
+2. **Dato nuevo (no cambia el bloqueo, informa DT-4):** `wasiai-remittance-agents/src/providers/kyc.ts:68-155`
+   (`DiditKycProvider.status()`) YA implementa un mapeo `GET /v3/session/{id}/decision/` con
+   exactamente los mismos campos que consume `chaski-v3/src/infrastructure/didit/decision.ts`
+   (`status`, `aml.hits`, `session_id`, `vendor_data`) — pero ese método **no está expuesto por
+   ningún HTTP route** (`runKycValidator` solo llama a `provider.verify()`, nunca a `.status()`).
+   Confirma que el lift-and-shift de DT-4 es técnicamente viable sin reescribir la lógica de mapeo
+   desde cero, aunque el companion ticket sigue sin existir como endpoint HTTP.
+3. **Cambio real de contexto — WKH-218 pasó de F1 a DONE (2026-07-24).**
+   `chaski-v3/src/infrastructure/a2a/gateway-client.ts` (`runViaGateway`) existe hoy en el repo:
+   resuelve el agente vía `POST /discover` + lo invoca vía `POST /compose` contra el gateway
+   `wasiai-a2a` (auth `x-a2a-key`, fail-closed exhaustivo). Ya lo usan `app/api/a2a/quote/route.ts`
+   y `app/api/a2a/payout/submit/route.ts` bajo el 3er valor de
+   `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER === "a2a-gateway"` (rama aditiva, la punto-a-punto queda
+   byte-idéntica). Esto **actualiza DT-2/agrega DT-6** (abajo): cuando el companion ticket exista y
+   DT-1 se ratifique, el transporte recomendado para el `A2aKycGateway` de esta HU es reusar
+   `runViaGateway` (mismo patrón `a2a-gateway`) en vez de construir un proxy punto-a-punto nuevo
+   contra `REMIT_AGENTS_BASE_URL` — consistente con el KEYSTONE del pitch ("Chaski corre sobre los
+   rieles A2A") y evita construir un 4to patrón de transporte distinto en el mismo repo. Esto es una
+   actualización de **diseño**, no un desbloqueo: `remit-kyc-validator` ya es discoverable hoy vía
+   `/discover` (WKH-170, publicado), pero `/compose` solo puede invocar el contrato HTTP que el
+   agente YA expone (`/invoke`) — el gateway no resuelve por sí mismo el gap de contrato del
+   hallazgo crítico de F0.
+
 ## Acceptance Criteria (EARS)
 - AC-1: WHEN `NEXT_PUBLIC_KYC_ADAPTER=="a2a"` AND el sender inicia KYC, the system SHALL crear la
   sesión de verificación invocando `remit-kyc-validator` a través del proxy server-only A2A (nunca
@@ -117,10 +148,12 @@ Por esto, DT-1 (abajo) recomienda **NO** hacer el swap literal — ver Missing I
 
 ## Scope IN
 - `chaski-v3/src/infrastructure/a2a/gateways.ts` — nuevo `A2aKycGateway` (implementa el port
-  `KycGateway`, mismo patrón que `A2aQuoteGateway`/`A2aPayoutGateway`).
+  `KycGateway`). **Actualización refresh 2026-07-24**: el Architect debe evaluar si el transporte
+  interno usa el patrón punto-a-punto pre-218 (`A2aQuoteGateway`/`A2aPayoutGateway` originales) o
+  reusa `runViaGateway`/`gateway-client.ts` (patrón `a2a-gateway` de WKH-218, ya DONE) — ver DT-6.
 - `chaski-v3/app/api/kyc/session/route.ts` — rewire condicional: adapter=="a2a" → proxy al agente
-  (`${REMIT_AGENTS_BASE_URL}/api/agents/remit-kyc-validator/session`); adapter default → código
-  actual sin cambios.
+  (`${REMIT_AGENTS_BASE_URL}/api/agents/remit-kyc-validator/session`, o vía `runViaGateway` si se
+  adopta DT-6); adapter default → código actual sin cambios.
 - `chaski-v3/app/api/kyc/decision/route.ts` — mismo rewire condicional hacia
   `GET .../remit-kyc-validator/decision`.
 - `chaski-v3/src/infrastructure/payout/authority.ts` (`resolvePayoutAuthority`) — rewire
@@ -156,7 +189,9 @@ Por esto, DT-1 (abajo) recomienda **NO** hacer el swap literal — ver Missing I
 - DT-2: flag **dedicado** `NEXT_PUBLIC_KYC_ADAPTER` (`"didit"` default | `"a2a"`), independiente de
   `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` (quote/payout) — el KYC es el hard-gate de compliance y
   necesita poder activarse/revertirse sin acoplar el rollout de quote/payout. A confirmar nombre
-  exacto con el Architect (Missing Inputs #3).
+  exacto con el Architect (Missing Inputs #3). **Actualización refresh 2026-07-24**: el valor
+  `"a2a"` de este flag no prejuzga el transporte interno (punto-a-punto vs gateway) — ese detalle
+  queda en DT-6.
 - DT-3: el guard-order completo de `resolvePayoutAuthority` (no-key/prod fail-loud 503,
   no-key/non-prod `simulated_dev`, guard de formato, ownership check) se preserva 1:1; solo cambia
   el transporte del "Guard 2: Didit real" (Didit directo → agente).
@@ -164,10 +199,24 @@ Por esto, DT-1 (abajo) recomienda **NO** hacer el swap literal — ver Missing I
   posible, un **lift-and-shift** de la lógica YA PROBADA de
   `chaski-v3/app/api/kyc/session/route.ts` + `kyc/decision/route.ts` (workflow_id, vendor_data,
   callback server-side) hacia el agente — minimiza drift de comportamiento respecto de reescribir
-  la integración v2 no confirmada que el agente ya tiene en `providers/kyc.ts`.
+  la integración v2 no confirmada que el agente ya tiene en `providers/kyc.ts`. El refresh de
+  2026-07-24 encontró que `DiditKycProvider.status()` (`kyc.ts:68-155`) ya tiene un mapeo v3
+  equivalente al de `decision.ts` de Chaski (mismos campos), aunque sin HTTP route — reduce el
+  esfuerzo estimado del companion ticket, no cambia su necesidad.
 - DT-5: `KYC_SESSION_SECRET` (HMAC sesión↔caller) y el rate-limit (`checkKycRateLimit`) **quedan en
   Chaski** — son controles del lado del caller (anti-abuso/anti-IDOR de ESTE repo), el agente no
   conoce el modelo de identidad de Chaski.
+- DT-6 (**nueva, refresh 2026-07-24**): con WKH-218 DONE, `A2aKycGateway`/las rutas
+  `/api/kyc/session`/`/api/kyc/decision` deberían, cuando esta HU se ratifique, invocar al agente
+  vía `runViaGateway` (`src/infrastructure/a2a/gateway-client.ts`, patrón `a2a-gateway`:
+  `/discover` + `/compose` contra `wasiai-a2a`) en vez de un fetch punto-a-punto nuevo contra
+  `REMIT_AGENTS_BASE_URL`. Justificación: (a) evita un 4to patrón de transporte distinto conviviendo
+  en el mismo repo (hoy ya hay 3: `fallback`, `a2a` punto-a-punto legacy, `a2a-gateway`); (b)
+  consistente con el KEYSTONE del pitch; (c) `remit-kyc-validator` ya es discoverable hoy vía
+  `/discover` (WKH-170, publicado) — el gateway no necesita cambios para soportarlo. Esto NO
+  resuelve el hallazgo crítico de F0 (el contrato `/invoke` sigue sin servir para el flujo
+  hosted-redirect): es guía de transporte para cuando DT-1 se ratifique y el companion ticket
+  exista, no un desbloqueo. A confirmar con el Architect en F2 (Missing Inputs #5, NO bloqueante).
 
 ## Constraint Directives (CD-N)
 - CD-1: PROHIBIDO leer `DIDIT_API_KEY`/`DIDIT_WORKFLOW_ID`/`DIDIT_BASE_URL` en cualquier código
@@ -190,11 +239,14 @@ Por esto, DT-1 (abajo) recomienda **NO** hacer el swap literal — ver Missing I
   Didit v3 hosted-redirect) vs Opción B (swap literal al `/invoke` síncrono con `legalId`, que el
   Analyst **desaconseja firmemente** por reabrir PII-en-tránsito tipo-WKH-179 + perder
   document-scan/liveness + depender de una integración Didit no confirmada)? Requiere ratificación
-  del founder antes de que el Architect cierre el SDD.
+  del founder antes de que el Architect cierre el SDD. **Vigente sin cambios tras el refresh
+  2026-07-24.**
 - [BLOQUEANTE] #2 — el ticket companion cross-repo en `wasiai-remittance-agents` (2 endpoints
   nuevos) **no existe hoy**. El Architect debe decidir si F2 de esta HU espera ese companion ticket
   (secuenciado) o entrega el path `a2a` code-complete-pero-permanentemente-OFF hasta que el
-  companion exista (mismo patrón PENDING-DEPLOY ya usado en WKH-167/169/170/210/211).
+  companion exista (mismo patrón PENDING-DEPLOY ya usado en WKH-167/169/170/210/211). **Vigente sin
+  cambios tras el refresh 2026-07-24** (confirmado por lectura directa del código: sigue sin existir
+  ningún route `session`/`decision`).
 - [NEEDS CLARIFICATION] #3 — nombre exacto del flag nuevo (`NEXT_PUBLIC_KYC_ADAPTER` propuesto por
   el Analyst) — a confirmar con el Architect, dado que el patrón existente usa un único flag
   (`NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`) para quote+payout (WKH-186/DT-4).
@@ -202,11 +254,23 @@ Por esto, DT-1 (abajo) recomienda **NO** hacer el swap literal — ver Missing I
   confirmada que el agente ya tiene en `providers/kyc.ts` a favor de un lift-and-shift del código
   v3 ya probado de Chaski (DT-4, recomendado) — decisión del Architect del repo
   `wasiai-remittance-agents`.
+- [NEEDS CLARIFICATION] #5 (**nueva, refresh 2026-07-24, NO bloqueante**) — confirmar con el
+  Architect si el transporte interno de `A2aKycGateway` debe reusar `runViaGateway`/
+  `gateway-client.ts` (patrón `a2a-gateway` de WKH-218, ya DONE — ver DT-6) en vez de un proxy
+  punto-a-punto nuevo. No bloquea F2: es una decisión de diseño que se resuelve junto con #1/#2
+  cuando esta HU se ratifique, no antes.
 
 ## Análisis de paralelismo
 - Bloquea/depende de un ticket nuevo cross-repo en `wasiai-remittance-agents` (companion, sugerido
   nombre a definir por el orquestador, p.ej. WKH-234) — el flag `NEXT_PUBLIC_KYC_ADAPTER` queda
   default OFF hasta que ambas mitades estén DONE + deployadas + verificadas.
+- **Actualización refresh 2026-07-24**: `WKH-218` (KEYSTONE, rieles A2A) y `WKH-227`/HU-SOL-24
+  (contratos/IDL/golden tests) — ambas hermanas de F1 en el momento del work-item original — están
+  ahora **DONE**. Ninguna de las dos toca el Scope IN de esta HU (`app/api/kyc/*`,
+  `src/infrastructure/payout/authority.ts`, `src/infrastructure/a2a/gateways.ts`), así que no hay
+  overlap de líneas retroactivo que resolver. WKH-233 sigue siendo la ÚNICA HU del backlog
+  bloqueada en F1 esperando ratificación del founder; el resto del backlog activo de `chaski-v3`
+  avanzó sin ella.
 - NO bloquea ninguna otra HU activa de `chaski-v3`: el flag nuevo es aditivo y default OFF, y el
   Scope IN no colisiona con el trabajo Solana en curso (HU-SOL-*, todos en `doc/sdd/023..030`)
   salvo por `container.ts`, donde el cambio es aditivo (nuevo `if` de wiring, no toca las ramas

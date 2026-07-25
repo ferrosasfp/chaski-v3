@@ -33,7 +33,7 @@
 | WKH-208 / HU-SOL-9 | [Solana LATAM Labs, binding no-custodial + wire al facilitator] Ramifica la validación de address por VM (base58 cuando `vm==="solana"`) en `deposit-attestation.ts`, `settle/principal/route.ts` y `prepare/route.ts`, y hace que `facilitator-client.ts` construya un payload Solana representable hacia `/settle` del `wasiai-facilitator`. Con el escrow futuro (HU-SOL-13) el binding pasa a ser la authority del `release` (`to` atestado == `beneficiary`). Path EVM byte-idéntico. | F1 (2026-07-22) — 6 ACs EARS, 5 DT-N, 7 CD-N. **Hallazgo cross-repo BLOQUEANTE**: el schema Zod HTTP del facilitator (`wasiai-facilitator/src/core/schemas.ts::AcceptedSchema`) rechaza `asset`/`payTo` base58 en ambas ramas del union — confirmado por el propio report de HU-SOL-6, que nombra a esta HU como responsable; esta HU tiene PROHIBIDO tocar el repo del facilitator. Recomendado companion ticket separado (ver Missing Inputs). | `doc/sdd/028-hu-sol-9-binding-wire-facilitator/work-item.md` |
 | WKH-216 / HU-SOL-13 | [Solana LATAM Labs, integración del escrow] Cablea el escrow Anchor (deposit real + verify vault on-chain + release autorizado + refund trustless) al money-path Solana no-custodial. 3 waves cross-repo: 13a (chaski deposit wiring + refund UI), 13b/13c (facilitator read vault + firma+broadcast release con reuso de HU-SOL-14). Path EVM byte-idéntico. Flag OFF devnet. | DONE (2026-07-22) — 7/7 ACs (AC-1,AC-6,AC-7 chaski; AC-2,AC-3,AC-4,AC-5 facilitator), 1655 tests (676+979), AR (BLQ-MED-1 flow-vm fix-pack) + CR (0 BLQ) + F4 (0 BLQ) — 2 MENOR H1/H2 documentados no-bloqueantes, git-hygiene fix-packeado 13bc. Branch `feat/029-hu-sol-13-escrow-integration` commit `e9f494a` (chaski), `feat/029bc-hu-sol-13bc-escrow-facilitator` `d0ae09d` (facilitator, HELD). | `doc/sdd/029-hu-sol-13-escrow-integration/report.md` |
 | WKH-214 / HU-SOL-11 | [Solana LATAM Labs, entrega M5] e2e Solana devnet + deploy + smoke. Cierra el gap de código H1 identificado por el report de HU-SOL-13: `/api/payout/prepare` no tiene rama Solana (siempre arma shape EVM `{depositAddress,...}` y exige `isAddress`, que SIEMPRE rechaza base58) — sin fix, el prepare Solana real muere fail-closed y el e2e nunca puede completarse. Esta HU entrega SOLO la porción código/docs (rama Solana de `prepare/route.ts` invocando `resolveSolanaReleaseAuthorityPubkey()`, smoke script parametrizable por env, `.env.example` actualizado); el cierre real de M5 (deploy Vercel/Railway, keypairs devnet, IDs TransFi sandbox, flip de flags, tx verificable en Solana Explorer) es un runbook founder-gated, NO un entregable de F3. | DONE (2026-07-22, parte código; M5-run founder-gated) — 7/7 ACs código PASS, 679 tests, 0 BLQ, 1 MENOR fix-pack. AR APROBADO, CR APROBADO, F4 APROBADO. Branch `feat/030-hu-sol-11-e2e-m5` commit `64ec019`. Runbook-M5 materializado en `RUNBOOK-M5.md` (8 pasos, fondeo keypairs, flip flags, smoke against live services). | `doc/sdd/030-hu-sol-11-e2e-m5/report.md` |
-| WKH-233 | [Fuera del programa Solana LATAM Labs — hardening de KYC] Chaski v3 debe consumir el agente `remit-kyc-validator` (A2A), no Didit directo. Hoy `app/api/kyc/session/route.ts`, `app/api/kyc/decision/route.ts` y `src/infrastructure/payout/authority.ts` llaman a Didit directo (3 sitios); el objetivo es que Chaski deje de leer `DIDIT_API_KEY`/`DIDIT_WORKFLOW_ID`/`DIDIT_BASE_URL` y componga el KYC 100% vía A2A. | F1 (2026-07-22, `031`) — 9 ACs EARS, 5 DT-N, 8 CD-N. **Hallazgo crítico BLOQUEANTE**: el contrato HTTP actual del agente (`POST /invoke`, síncrono, exige `legalId`/DNI en claro del caller) es INCOMPATIBLE con el flujo hosted-redirect + document-scan/liveness que Chaski usa hoy — swapearlo 1:1 reabriría la superficie de PII-en-tránsito que WKH-179 cerró y perdería el document-scan/liveness (SBS-compliant Perú), además de depender de la integración Didit v2 del agente, que está sin confirmar contra sandbox (TODOs abiertos, `DIDIT_ADAPTER_READY` no confirmado activo). Recomendación del Analyst (DT-1): companion ticket cross-repo en `wasiai-remittance-agents` que agregue 2 endpoints nuevos (`POST /session`, `GET /decision`) espejando Didit v3 real — esta HU tiene PROHIBIDO tocar ese repo (CD-3). 2 `[NEEDS CLARIFICATION]` BLOQUEANTES para F2 (ver Missing Inputs #1/#2). | `doc/sdd/031-wkh-233-kyc-via-agente/work-item.md` |
+| WKH-233 | [Fuera del programa Solana LATAM Labs — hardening de KYC] Chaski v3 debe consumir el agente `remit-kyc-validator` (A2A), no Didit directo. Hoy `app/api/kyc/session/route.ts`, `app/api/kyc/decision/route.ts` y `src/infrastructure/payout/authority.ts` llaman a Didit directo (3 sitios); el objetivo es que Chaski deje de leer `DIDIT_API_KEY`/`DIDIT_WORKFLOW_ID`/`DIDIT_BASE_URL` y componga el KYC 100% vía A2A. | F1 (2026-07-22, `031`) — 9 ACs EARS, 5 DT-N, 8 CD-N. **Hallazgo crítico BLOQUEANTE**: el contrato HTTP actual del agente (`POST /invoke`, síncrono, exige `legalId`/DNI en claro del caller) es INCOMPATIBLE con el flujo hosted-redirect + document-scan/liveness que Chaski usa hoy — swapearlo 1:1 reabriría la superficie de PII-en-tránsito que WKH-179 cerró y perdería el document-scan/liveness (SBS-compliant Perú), además de depender de la integración Didit v2 del agente, que está sin confirmar contra sandbox (TODOs abiertos, `DIDIT_ADAPTER_READY` no confirmado activo). Recomendación del Analyst (DT-1): companion ticket cross-repo en `wasiai-remittance-agents` que agregue 2 endpoints nuevos (`POST /session`, `GET /decision`) espejando Didit v3 real — esta HU tiene PROHIBIDO tocar ese repo (CD-3). 2 `[NEEDS CLARIFICATION]` BLOQUEANTES para F2 (ver Missing Inputs #1/#2). **Refresh 2026-07-24** (post WKH-218 DONE): grounding re-verificado — contrato del agente `remit-kyc-validator` SIN CAMBIOS (aún solo `POST /invoke`), bloqueo intacto; se agrega DT-6 (nueva) recomendando que el transporte A2A del KYC reuse `gateway-client.ts`/`runViaGateway` (patrón `a2a-gateway` de WKH-218) en vez de un proxy punto-a-punto nuevo, una vez ratificado — decisión de diseño, no desbloqueo. | `doc/sdd/031-wkh-233-kyc-via-agente/work-item.md` |
 | WKH-227 / HU-SOL-24 | [Sprint 2, auditoría 2ª ola de testing — cierra T-3 y T-9, cross-repo] Contratos A2A tipados + IDL versionado + golden EVM tests. Los validadores manuales duplicados entre `chaski-v3` y `wasiai-remittance-agents`/`wasiai-facilitator` (`quote/route.ts`, `facilitator-client.ts`) driftean en silencio ante un rename; el IDL del escrow está copiado a mano en `chaski-v3` y `wasiai-facilitator` sin ningún test que lo garantice; el "EVM byte-idéntico" que las HUs Solana vienen prometiendo se verifica hoy solo por review manual. 100% ADITIVO (fixtures/hashes/golden tests nuevos, cero cambio de comportamiento runtime). | F1 (2026-07-22, `032`) — 7 ACs EARS, 5 DT-N, 7 CD-N. **Dato de grounding importante**: el IDL vendoreado en `chaski-v3` y `wasiai-facilitator` está verificado byte-a-byte idéntico a la fuente (`solana-programs/target/idl/escrow.json`) al momento de este F1 — NO ha divergido todavía, pero hoy esa igualdad es pura disciplina manual sin test que la garantice. 2 Missing Inputs no-bloqueantes (mecanismo de drift-detection es semi-manual sin CI cross-repo; posible split en 3 Story Files por repo). | `doc/sdd/032-wkh-227-contratos-idl-golden/work-item.md` |
 | WKH-218 | [KEYSTONE del pitch, fuera del programa Solana LATAM Labs] Chaski corre SOBRE los rieles A2A (no punto-a-punto) — hoy `app/api/a2a/{quote,payout/submit}/route.ts` llaman a `REMIT_AGENTS_BASE_URL` directo con slugs hardcodeados, sin discovery/orquestación/x402/fee-split del gateway `wasiai-a2a`; el objetivo es enrutar el quote + payout vía `POST /discover` + `POST /compose` con una Agent Key propia. | F1 (2026-07-24, `033`) — 8 ACs EARS, 5 DT-N, 8 CD-N. Grounding confirmó el contrato real de `/discover`/`/compose` en `wasiai-a2a` (solo lectura, CD-1) y el guard-order intocable de `submit/route.ts` (guards 1-8, autoridad+PoP+atestación). DT-1: `/compose` single-step (no `/orchestrate`, evita LLM planning en un money-path determinístico). 4 Missing Inputs NO bloqueantes para F2 (aprovisionamiento founder-gated de la Agent Key BLOQUEA solo el e2e real, no el código con gateway mockeado). | `doc/sdd/033-wkh-218-chaski-sobre-rieles-a2a/work-item.md` |
 
@@ -401,28 +401,47 @@
   BAJO, coordinar orden de merge si alguna HU Solana toca `container.ts` en la misma ventana. Ver
   `doc/sdd/031-wkh-233-kyc-via-agente/work-item.md` para el detalle completo (grounding, ACs, DT-N,
   CD-N, Missing Inputs).
-- **WKH-227 / HU-SOL-24 (F1, 2026-07-22, `032`, NNN confirmado sin colisión — `031` fue el último
-  NNN usado, WKH-233; confirmado vía `Glob doc/sdd/031*`)**: Sprint 2 de la auditoría de 2ª ola de
-  testing — cierra T-3 (contratos cross-repo manuales duplicados) y T-9 (golden EVM tests) sobre los
-  4 repos montados (`chaski-v3`, `wasiai-facilitator`, `wasiai-remittance-agents`,
-  `solana-programs`). Es la primera HU del backlog cuyo Scope IN toca explícitamente los 4 repos a
-  la vez (aunque de forma aditiva). F0 confirmó dos cosas importantes: (1) los validadores manuales
-  duplicados SÍ existen y SÍ tienen riesgo real de drift silencioso (`quote/route.ts:13-25`,
-  `facilitator-client.ts:88-104,194-209`, sin ningún import compartido con los schemas Zod de los
-  repos provider); (2) el IDL del escrow vendoreado en `chaski-v3` y `wasiai-facilitator` **NO ha
-  divergido todavía** de la fuente (`solana-programs/target/idl/escrow.json`) — están byte-a-byte
-  idénticos hoy, pero sin ningún test que lo garantice (pura disciplina de comentario "COPIA
-  PINNEADA"). 100% ADITIVO: cero cambio de comportamiento runtime, solo fixtures/hashes/golden tests
-  nuevos en una carpeta `contracts/` por repo (NO un paquete npm compartido — DT-1, no hay monorepo
-  entre los 4 repos). 7 ACs EARS, 5 DT-N, 7 CD-N. 2 `[NEEDS CLARIFICATION]` NO bloqueantes para F2:
-  (1) el mecanismo de drift-detection es semi-manual (sin CI cross-repo real); (2) si el Architect
-  divide esta HU en 3 Story Files paralelos (uno por repo) o uno monolítico. Sin overlap de archivos
-  de producción con ninguna HU activa/DONE — el Scope IN son carpetas `contracts/` nuevas junto a
-  archivos existentes, sin modificarlos. Ver
-  `doc/sdd/032-wkh-227-contratos-idl-golden/work-item.md` para el detalle completo (grounding, ACs,
-  DT-N, CD-N, Missing Inputs).
-- **WKH-218 (F1, 2026-07-24, `033`, NNN confirmado sin colisión — `032` fue el último NNN usado,
-  WKH-227/HU-SOL-24)**: KEYSTONE del pitch — hoy Chaski BYPASSEA el gateway `wasiai-a2a`
+  **Refresh de grounding (2026-07-24, post WKH-218 DONE)**: re-verificado el contrato HTTP de
+  `remit-kyc-validator` contra el código actual de `wasiai-remittance-agents` — SIN CAMBIOS
+  respecto al F0 original: sigue existiendo únicamente `POST /invoke`
+  (`src/app/api/agents/remit-kyc-validator/invoke/route.ts`), sigue exigiendo `legalId` en claro
+  (`kyc-validator.ts:16-24`), y sigue sin existir ningún endpoint `POST /session`/`GET /decision`.
+  El método interno `DiditKycProvider.status()` (`wasiai-remittance-agents/src/providers/kyc.ts:68-155`)
+  SÍ replica el mapeo v3 (`GET /v3/session/{id}/decision/`, mismos campos `status`/`aml.hits`/
+  `session_id`/`vendor_data` que `chaski-v3/src/infrastructure/didit/decision.ts`) pero NO está
+  expuesto por ningún HTTP route — confirma que DT-4 (lift-and-shift) es viable sin reescribir esa
+  lógica desde cero, y refuerza (no debilita) el bloqueo: los 2 Missing Inputs BLOQUEANTES (#1
+  ratificación DT-1, #2 companion ticket) siguen vigentes sin cambios. **Novedad real**: `WKH-218`
+  (que era hermana en F1) está ahora **DONE** — `chaski-v3/src/infrastructure/a2a/gateway-client.ts`
+  (`runViaGateway`, discover+compose contra `wasiai-a2a`) existe en el repo y ya lo usan `quote`/
+  `payout/submit` bajo `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER==='a2a-gateway'`. Esto actualiza DT-2 (sin
+  desbloquear nada): cuando el companion ticket exista y DT-1 se ratifique, el transporte
+  recomendado para el nuevo `A2aKycGateway` es reusar `runViaGateway` (mismo patrón `a2a-gateway`)
+  en vez de construir un proxy punto-a-punto nuevo contra `REMIT_AGENTS_BASE_URL` — consistente con
+  el KEYSTONE del pitch ("Chaski corre sobre los rieles A2A"). Ver work-item, sección DT-N (DT-2
+  actualizada, DT-6 nueva) y Missing Inputs (sin cambios de estado en #1/#2, solo #5 nueva
+  no-bloqueante).
+- **WKH-227 / HU-SOL-24 (F1, 2026-07-22, `032`, NNN confirmado sin colisión vía `Glob doc/sdd/031*`)**:
+  Sprint 2 de la auditoría de 2ª ola de testing — cierra T-3 (contratos cross-repo manuales
+  duplicados) y T-9 (golden EVM tests) sobre los 4 repos montados (`chaski-v3`,
+  `wasiai-facilitator`, `wasiai-remittance-agents`, `solana-programs`). Es la primera HU del
+  backlog cuyo Scope IN toca explícitamente los 4 repos a la vez (aunque de forma aditiva). F0
+  confirmó dos cosas importantes: (1) los validadores manuales duplicados SÍ existen y SÍ tienen
+  riesgo real de drift silencioso (`quote/route.ts:13-25`, `facilitator-client.ts:88-104,194-209`,
+  sin ningún import compartido con los schemas Zod de los repos provider); (2) el IDL del escrow
+  vendoreado en `chaski-v3` y `wasiai-facilitator` **NO ha divergido todavía** de la fuente
+  (`solana-programs/target/idl/escrow.json`) — están byte-a-byte idénticos hoy, pero sin ningún
+  test que lo garantice (pura disciplina de comentario "COPIA PINNEADA"). 100% ADITIVO: cero cambio
+  de comportamiento runtime, solo fixtures/hashes/golden tests nuevos en una carpeta `contracts/`
+  por repo (NO un paquete npm compartido — DT-1, no hay monorepo entre los 4 repos). 7 ACs EARS, 5
+  DT-N, 7 CD-N. 2 `[NEEDS CLARIFICATION]` NO bloqueantes para F2: (1) el mecanismo de
+  drift-detection es semi-manual (sin CI cross-repo real); (2) si el Architect divide esta HU en 3
+  Story Files paralelos (uno por repo) o uno monolítico. Sin overlap de archivos de producción con
+  ninguna HU activa/DONE — el Scope IN son carpetas `contracts/` nuevas junto a archivos
+  existentes, sin modificarlos. Ver `doc/sdd/032-wkh-227-contratos-idl-golden/work-item.md` para el
+  detalle completo (grounding, ACs, DT-N, CD-N, Missing Inputs).
+- **WKH-218 (F1, 2026-07-24, `033`, NNN confirmado sin colisión vía `Glob doc/sdd/032*`)**:
+  KEYSTONE del pitch — hoy Chaski BYPASSEA el gateway `wasiai-a2a`
   (`app/api/a2a/{quote,payout/submit}/route.ts` llaman a `REMIT_AGENTS_BASE_URL` directo con slugs
   hardcodeados). F0 verificó el contrato REAL de `/discover`/`/compose` leyendo el código fuente de
   `wasiai-a2a` (solo lectura, CD-1): `POST /compose` acepta `{ steps: [{agent, registry?, input,
@@ -575,6 +594,8 @@ Hubo una **carrera de 4 analysts en paralelo** (2026-07-14, mismo repo `chaski-v
 
 **Confirmación (WKH-218, 2026-07-24, `033`, NNN confirmado sin colisión vía `Glob doc/sdd/032*`)**: mismo criterio. Único analyst corriendo sobre `chaski-v3` en este momento (WKH-233 sigue en F1 BLOQUEADA, sin trabajo de código en curso). Primera HU del backlog cuyo grounding cruzó a `wasiai-a2a` (el gateway, montado como dependencia de solo-lectura en este workspace, distinto de `wasiai-v2`) para verificar el contrato real de `/discover`/`/compose`/`/orchestrate` — CD-1 prohíbe tocar ese repo.
 
+**Refresh de grounding (WKH-233, 2026-07-24)**: re-lectura completa de este `_INDEX.md` + re-verificación del contrato del agente `remit-kyc-validator` en `wasiai-remittance-agents` (solo lectura, sin cambios detectados) + confirmación de que `WKH-218` pasó de F1 a DONE en el ínterin y de que `WKH-227`/HU-SOL-24 pasó de F1 a DONE también. Mismo NNN `031` (sin colisión, work-item existente actualizado in-place — no se crea carpeta nueva, ver work-item.md sección "Refresh de grounding" y DT-6). Único analyst corriendo sobre `chaski-v3` en este momento. WKH-233 sigue siendo la ÚNICA HU del backlog activo bloqueada en F1 esperando ratificación explícita del founder (Missing Inputs #1/#2, ambos BLOQUEANTES y sin cambios de estado).
+
 ## ⚪ SOLANA LATAM LABS (2026-07-20, nuevo programa)
 
 **Objetivo del programa**: portar el settlement no-custodial de Chaski a **Solana**, manteniendo el
@@ -606,11 +627,15 @@ las anteriores:
 (WKH-186). **Bloqueado para F2** hasta ratificación del founder de DT-1 (ver Missing Inputs #1/#2 del
 work-item) y hasta que exista un companion ticket cross-repo en `wasiai-remittance-agents` (2
 endpoints nuevos, `POST /session` + `GET /decision`, espejando el Didit v3 hosted-redirect que
-Chaski ya usa en producción).
+Chaski ya usa en producción). **Refresh 2026-07-24**: grounding re-verificado (contrato del agente
+sin cambios, bloqueo intacto); con `WKH-218` (KEYSTONE, rieles A2A) ya DONE, el transporte
+recomendado para cuando esta HU se ratifique pasa a ser `gateway-client.ts`/`runViaGateway` (patrón
+`a2a-gateway`) en vez de un proxy punto-a-punto nuevo — actualización de diseño (DT-6 en el
+work-item), no cambio de estado de bloqueo.
 
 | HU | Jira | Título | Estado |
 |----|------|--------|--------|
-| WKH-233 | WKH-233 | KYC vía agente A2A (`remit-kyc-validator`), no Didit directo — cierra `DIDIT_API_KEY` fuera de `chaski-v3` | **F1 (2026-07-22)** — 9 ACs EARS, 5 DT-N, 8 CD-N. 2 `[NEEDS CLARIFICATION]` BLOQUEANTES para F2. Ver `doc/sdd/031-wkh-233-kyc-via-agente/work-item.md`. |
+| WKH-233 | WKH-233 | KYC vía agente A2A (`remit-kyc-validator`), no Didit directo — cierra `DIDIT_API_KEY` fuera de `chaski-v3` | **F1 (2026-07-22, refresh 2026-07-24)** — 9 ACs EARS, 6 DT-N (DT-6 nueva post-refresh), 8 CD-N. 2 `[NEEDS CLARIFICATION]` BLOQUEANTES para F2 (sin cambios), + 1 NO bloqueante nueva (#5, transporte). Ver `doc/sdd/031-wkh-233-kyc-via-agente/work-item.md`. |
 
 ## 🧪 TESTING / QUALITY INFRA (2ª ola de auditoría de testing, Sprint 2)
 

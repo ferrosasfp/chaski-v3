@@ -636,4 +636,4 @@ intocable (CD-2); solo cambia el transporte del forward final. Cero dinero real 
 
 | HU | Jira | Título | Estado |
 |----|------|--------|--------|
-| WKH-218 | WKH-218 | Chaski corre SOBRE los rieles A2A (no punto-a-punto) — `/discover`+`/compose` con Agent Key propia | **F1 (2026-07-24)** — 8 ACs EARS, 5 DT-N, 8 CD-N. 4 `[NEEDS CLARIFICATION]` NO bloqueantes para F2 (solo el aprovisionamiento founder-gated de la Agent Key bloquea el e2e real, no el código). Ver `doc/sdd/033-wkh-218-chaski-sobre-rieles-a2a/work-item.md`. |
+| WKH-218 | WKH-218 | Chaski corre SOBRE los rieles A2A (no punto-a-punto) — `/discover`+`/compose` con Agent Key propia | **DONE (2026-07-24)** — 8/8 ACs PASS, 0 BLQ, 2 MNR opcionales. Diff exacto 9 archivos scope IN, 730 tests, tsc 0, gates all PASS. Ver `doc/sdd/033-wkh-218-chaski-sobre-rieles-a2a/done-report.md`. |

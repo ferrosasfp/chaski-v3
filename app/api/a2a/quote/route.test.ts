@@ -83,3 +83,125 @@ describe("POST /api/a2a/quote — proxy server-only a remit-corridor-fx (WKH-186
     expect(await res.json()).toEqual({ error: "a2a_unavailable" });
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WKH-218 — modo de transporte "a2a-gateway": quote vía /discover + /compose del gateway.
+// ─────────────────────────────────────────────────────────────────────────────
+const GW = "https://gateway.example.com";
+const KEY = "ak_secret";
+const agent = { slug: "remit-corridor-fx", registry: "default", capabilities: ["fx-quote"], status: "active" };
+const discoverOk = { agents: [agent], total: 1, registries: ["default"] };
+const composeOk = { success: true, steps: [{ output: validResult }] };
+
+/** Router que separa las llamadas al gateway (/discover, /compose) del fetch DIRECTO al agente. */
+function gwRouter(opts: { discover?: () => unknown; compose?: () => unknown; discoverThrows?: boolean }) {
+  const directCalls: string[] = [];
+  const fn = vi.fn(async (url: string) => {
+    if (url.includes("/discover")) {
+      if (opts.discoverThrows) throw new Error("network");
+      return { ok: true, json: async () => opts.discover?.() ?? discoverOk };
+    }
+    if (url.includes("/compose")) return { ok: true, json: async () => opts.compose?.() ?? composeOk };
+    directCalls.push(url); // {BASE}/api/agents/.../invoke — el punto-a-punto que NUNCA debe ocurrir
+    return { ok: true, json: async () => ({ result: validResult }) };
+  });
+  return { fn, directCalls };
+}
+
+describe("POST /api/a2a/quote — modo a2a-gateway (WKH-218)", () => {
+  function setGatewayEnv() {
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gateway");
+    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", GW);
+    vi.stubEnv("WASIAI_A2A_AGENT_KEY", KEY);
+    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE); // seteada, pero el gateway NO debe usarla (DT-A2A-9)
+  }
+
+  it("AC-1: gateway → fetch a {GW}/discover + {GW}/compose (NO {BASE}/api/agents/...); 200 { result }", async () => {
+    setGatewayEnv();
+    const { fn, directCalls } = gwRouter({});
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req({ amountUsd: 400, destCountry: "PE", payoutMethod: "yape" }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ result: validResult });
+    const urls = fn.mock.calls.map((c) => c[0] as string);
+    expect(urls.some((u) => u === `${GW}/discover`)).toBe(true);
+    expect(urls.some((u) => u === `${GW}/compose`)).toBe(true);
+    expect(directCalls).toHaveLength(0); // AC-4: jamás el punto-a-punto
+  });
+
+  it("AC-4/fail-closed: /discover inalcanzable ⇒ 502; NUNCA fetch al {BASE}/api/agents (directFetch not called)", async () => {
+    setGatewayEnv();
+    const { fn, directCalls } = gwRouter({ discoverThrows: true });
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req({ amountUsd: 400 }));
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "a2a_unavailable" });
+    expect(directCalls).not.toContain(`${BASE}/api/agents/remit-corridor-fx/invoke`);
+    expect(directCalls).toHaveLength(0);
+  });
+
+  it("AC-4/fail-closed: /discover agents:[] (vacío) ⇒ 502; directFetch NUNCA llamado", async () => {
+    setGatewayEnv();
+    const { fn, directCalls } = gwRouter({ discover: () => ({ agents: [], total: 0, registries: [] }) });
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req({ amountUsd: 400 }));
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "a2a_unavailable" });
+    expect(directCalls).toHaveLength(0); // AC-4 ESTRELLA: cero fallback silencioso
+  });
+
+  it("gateway not_configured (falta WASIAI_A2A_GATEWAY_URL) ⇒ 501, sin fetch", async () => {
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gateway");
+    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", "");
+    vi.stubEnv("WASIAI_A2A_AGENT_KEY", "");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const res = await POST(req({ amountUsd: 400 }));
+    expect(res.status).toBe(501);
+    expect(await res.json()).toEqual({ error: "a2a_not_configured" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("gateway shape inválido (compose output no-quote) ⇒ 502 a2a_bad_shape", async () => {
+    setGatewayEnv();
+    const { fn } = gwRouter({ compose: () => ({ success: true, steps: [{ output: { quoteId: "x" } }] }) });
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req({ amountUsd: 400 }));
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "a2a_bad_shape" });
+  });
+
+  it("AC-6: flag='a2a' (no gateway) ⇒ punto-a-punto byte-idéntico ({BASE}/api/agents/remit-corridor-fx/invoke)", async () => {
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a"); // no gateway
+    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+    const fetchMock = vi.fn(async (url: string) => {
+      expect(url).toBe(`${BASE}/api/agents/remit-corridor-fx/invoke`); // el path de siempre
+      return { ok: true, json: async () => ({ result: validResult }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const res = await POST(req({ amountUsd: 400, destCountry: "PE", payoutMethod: "yape" }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ result: validResult });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  // W3 — byte-identidad flag OFF: aunque las envs del gateway estén SETEADAS, con el flag ≠
+  // "a2a-gateway" el gateway se IGNORA por completo (CD-6/AC-6). "construye, no enciende".
+  it.each(["fallback", "a2a", undefined])(
+    "W3/AC-6: flag=%s + WASIAI_A2A_* seteadas ⇒ gateway IGNORADO (fetch al {BASE}/api/agents/...)",
+    async (flag) => {
+      if (flag === undefined) vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "");
+      else vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", flag);
+      vi.stubEnv("WASIAI_A2A_GATEWAY_URL", GW); // seteadas, pero NO deben usarse
+      vi.stubEnv("WASIAI_A2A_AGENT_KEY", KEY);
+      vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+      const { fn, directCalls } = gwRouter({});
+      vi.stubGlobal("fetch", fn);
+      const res = await POST(req({ amountUsd: 400, destCountry: "PE", payoutMethod: "yape" }));
+      expect(res.status).toBe(200);
+      const urls = fn.mock.calls.map((c) => c[0] as string);
+      expect(urls.some((u) => u.includes("/discover"))).toBe(false); // gateway NUNCA tocado
+      expect(directCalls).toEqual([`${BASE}/api/agents/remit-corridor-fx/invoke`]);
+    },
+  );
+});

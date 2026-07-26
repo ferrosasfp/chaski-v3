@@ -192,6 +192,45 @@ describe("runViaGateway — AC-5: gateway resuelve precio/x402 (x-a2a-key, sin f
   });
 });
 
+// El saldo de una Agent Key es POR RED (`budget[chainId]`). Sin `x-payment-chain` el gateway cobra
+// en su red default y una key con fondos en OTRA red recibe 403 INSUFFICIENT_BUDGET. Medido en vivo
+// 2026-07-26 contra el gateway de prod: key con 6.793 en avalanche-fuji, default kite-ozone-testnet,
+// resultado 403 → el /api/a2a/quote de Chaski devolvía 502 a2a_unavailable.
+describe("runViaGateway — selección de la red de cobro (x-payment-chain)", () => {
+  it("con WASIAI_A2A_PAYMENT_CHAIN, /compose lleva el header con ese valor", async () => {
+    vi.stubEnv("WASIAI_A2A_PAYMENT_CHAIN", "avalanche-fuji");
+    const { fn, calls } = router({});
+    vi.stubGlobal("fetch", fn);
+    await runViaGateway({ capability: "fx-quote", input: { amountUsd: 25 } });
+    const compose = calls.find((c) => c.url.includes("/compose"))!;
+    expect((compose.init!.headers as Record<string, string>)["x-payment-chain"]).toBe(
+      "avalanche-fuji",
+    );
+    // /discover es sin auth y no cobra: no debe llevarlo.
+    const discover = calls.find((c) => c.url.includes("/discover"))!;
+    expect((discover.init!.headers as Record<string, string>)["x-payment-chain"]).toBeUndefined();
+  });
+
+  it("sin la env, el header NO se manda (preserva el comportamiento previo: red default del gateway)", async () => {
+    const { fn, calls } = router({});
+    vi.stubGlobal("fetch", fn);
+    await runViaGateway({ capability: "fx-quote", input: { amountUsd: 25 } });
+    const compose = calls.find((c) => c.url.includes("/compose"))!;
+    expect((compose.init!.headers as Record<string, string>)["x-payment-chain"]).toBeUndefined();
+    // La auth sigue intacta: el fix no toca x-a2a-key.
+    expect((compose.init!.headers as Record<string, string>)["x-a2a-key"]).toBe(KEY);
+  });
+
+  it("env en blanco se trata como ausente (no manda un header vacío)", async () => {
+    vi.stubEnv("WASIAI_A2A_PAYMENT_CHAIN", "   ");
+    const { fn, calls } = router({});
+    vi.stubGlobal("fetch", fn);
+    await runViaGateway({ capability: "fx-quote", input: { amountUsd: 25 } });
+    const compose = calls.find((c) => c.url.includes("/compose"))!;
+    expect((compose.init!.headers as Record<string, string>)["x-payment-chain"]).toBeUndefined();
+  });
+});
+
 describe("runViaGateway — AC-7: creds server-only, no logueadas", () => {
   it("sin WASIAI_A2A_GATEWAY_URL ⇒ not_configured SIN fetch", async () => {
     vi.stubEnv("WASIAI_A2A_GATEWAY_URL", "");

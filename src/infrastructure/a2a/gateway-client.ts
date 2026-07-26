@@ -27,11 +27,26 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 // Config server-only (SIN NEXT_PUBLIC_, CD-3), leída en runtime dentro de la fn (patrón !BASE).
-function readGatewayConfig(): { url: string; key: string } | null {
+//
+// `paymentChain` (WASIAI_A2A_PAYMENT_CHAIN) selecciona en QUÉ red se cobra el fee del agente,
+// vía el header `x-payment-chain` del gateway. Es OPCIONAL: ausente ⇒ no se manda el header y el
+// gateway usa su red default, que es el comportamiento previo (cero cambio si nadie la setea).
+//
+// Por qué existe: el saldo de una Agent Key es POR RED (`budget[chainId]`). Sin este header, una
+// key con saldo en avalanche-fuji contra un gateway cuya default es kite-ozone-testnet recibe
+// 403 INSUFFICIENT_BUDGET aunque tenga fondos — el caller no tenía forma de decir dónde cobrarle.
+// Medido 2026-07-26: "chain 2368 (kite-ozone-testnet) balance is 0; no x-payment-chain header
+// sent, used default 'kite-ozone-testnet'; chains with balance: avalanche-fuji (6.793)".
+function readGatewayConfig(): {
+  url: string;
+  key: string;
+  paymentChain?: string;
+} | null {
   const url = process.env.WASIAI_A2A_GATEWAY_URL;
   const key = process.env.WASIAI_A2A_AGENT_KEY;
   if (!url || !key) return null; // ausente/vacío ⇒ not_configured
-  return { url, key };
+  const paymentChain = process.env.WASIAI_A2A_PAYMENT_CHAIN?.trim();
+  return paymentChain ? { url, key, paymentChain } : { url, key };
 }
 
 export async function runViaGateway(params: {
@@ -73,7 +88,12 @@ export async function runViaGateway(params: {
   try {
     const res = await fetch(`${cfg.url}/compose`, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-a2a-key": cfg.key },
+      headers: {
+        "content-type": "application/json",
+        "x-a2a-key": cfg.key,
+        // Solo si está configurada: sin ella el gateway cobra en su red default (ver readGatewayConfig).
+        ...(cfg.paymentChain ? { "x-payment-chain": cfg.paymentChain } : {}),
+      },
       body: JSON.stringify({
         steps: [{ agent: pick.slug, registry: pick.registry, input: params.input }],
       }),

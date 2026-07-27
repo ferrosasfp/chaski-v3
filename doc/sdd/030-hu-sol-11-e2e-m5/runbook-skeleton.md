@@ -11,6 +11,13 @@
 > plataforma (Railway/Vercel) — **NUNCA** en este archivo versionado (CD-4). Acá solo van valores
 > PÚBLICOS (pubkeys, addresses, program id, mint, tx signatures).
 
+> ### 🧾 Barrida de verificación 2026-07-27
+> Este archivo es un **snapshot del 2026-07-22** y quedó parcialmente stale. Lo corregido va marcado
+> **[stale, corregido 2026-07-27]**. Estado y receta vigentes:
+> - **`ESCROW-DEVNET-RECIPE.md`**: circuito completo (deposit gasless, release, refund) ya ejercitado
+>   on-chain el 2026-07-27, con la autenticación (`Authorization: Bearer`) y el formato del attestation.
+> - **`RUNBOOK-M5.md`**: pasos de setup corregidos.
+
 ---
 
 ## 0. Estado real de M5 (2026-07-22) — qué YA está hecho
@@ -22,18 +29,18 @@
 | ✅ Escrow Anchor **deployado** en devnet | Program id **`DR5GoMT7sAKzD6wZMKJPeknS3Y6fzgZUNevi7xiESE4x`** (`declare_id=DR5G`, upgrade-authority = fee-payer). El `BBQ9…` viejo NUNCA se deployó (keypair perdida) → DR5G es el canónico; código actualizado en los 3 repos (`escrow-idl.ts:9` en chaski). |
 | ✅ Deposit no-custodial **directo** on-chain | tx `3y6qK6uUpYBRxGbZqbUnav4fVhMbYyyaTD8AGL3KgrvdzkeGBBqRxgE7S9LPac7HVAeBVbZkqgdcUByBtVN3bAMs` ([explorer](https://explorer.solana.com/tx/3y6qK6uUpYBRxGbZqbUnav4fVhMbYyyaTD8AGL3KgrvdzkeGBBqRxgE7S9LPac7HVAeBVbZkqgdcUByBtVN3bAMs?cluster=devnet)) |
 | ✅ Deposit **gasless** vía facilitator `/solana/sponsor` | tx `2PcvKgsZFeBo4xHgKZTnSHLREyAyZHRkw57pVev3j7JV2JdPJ4FgYcyyg5ToLgGoTUE3v52FA6NGBke32mDVPZV2` ([explorer](https://explorer.solana.com/tx/2PcvKgsZFeBo4xHgKZTnSHLREyAyZHRkw57pVev3j7JV2JdPJ4FgYcyyg5ToLgGoTUE3v52FA6NGBke32mDVPZV2?cluster=devnet)) |
-| ✅ Vault del escrow fondeado | escrowState PDA `GXY2todK6pJPdT8h1EcRNZgFX7cZXEnDN7L3XSHCHY2J` (owner=DR5G); vault ATA `Hc2h5FS1hpgGEFLSd7wrrr6f3JVvgq5jzXsGA4yEKWhF` = **10 USDC** confirmados on-chain |
+| ✅ Vault del escrow fondeado | escrowState PDA `GXY2todK6pJPdT8h1EcRNZgFX7cZXEnDN7L3XSHCHY2J` (owner=DR5G); vault ATA `Hc2h5FS1hpgGEFLSd7wrrr6f3JVvgq5jzXsGA4yEKWhF` = **10 USDC** confirmados on-chain al 2026-07-22. **[stale, corregido 2026-07-27]** Hoy ese vault está en **0** y el escrow en **`Released`** (se liberó después): verificado con `getAccountInfo` + decode del `EscrowState`. El release de este escrow NO invalida la evidencia del deposit |
 | ✅ Facilitator con `/solana/sponsor` registrado + `SOLANA_ESCROW_PROGRAM_ID=DR5G` seteado en Railway | HU-SOL-9 (wire facilitator) DONE hoy; sponsor probado (tx gasless de arriba) |
 | ✅ Código chaski de esta HU **mergeado** | rama Solana de `prepare/route.ts` + `scripts/smoke-solana-e2e.ts` + `.env.example` — commits `64ec019` (código) + `89628d8` (BBQ9→DR5G + rework smoke) en branch `feat/m5-escrow-dr5g-address` |
 
 ### Qué QUEDA (founder-gated)
 
-1. **Merge de branches HELD**: `feat/m5-escrow-dr5g-address` (chaski) + HU-SOL-6 (`feat/026-wkh-205-solana-adapter`) + `feat/029bc-hu-sol-13bc-escrow-facilitator` (facilitator).
+1. ~~**Merge de branches HELD**: `feat/m5-escrow-dr5g-address` (chaski) + HU-SOL-6 (`feat/026-wkh-205-solana-adapter`) + `feat/029bc-hu-sol-13bc-escrow-facilitator` (facilitator).~~ **[stale, corregido 2026-07-27]** YA ESTÁN MERGEADAS: `chaski-v3` main = `a79cca2`, `wasiai-facilitator` main = `75099ef` (`git log --oneline -1 main` en cada repo).
 2. **Habilitar la pata de release** en Railway (facilitator): `SOLANA_ESCROW_RELEASE_ENABLED=true` + `SOLANA_ESCROW_RELEASE_AUTHORITY_SECRET_KEY` + `SOLANA_ESCROW_RELEASE_ATTESTATION_SECRET` (secretos en `m5-keys/`).
 3. **Migraciones**: `004` (facilitator, escrow release dedup) + la de chaski (verificar nombre exacto en `supabase/` en el deploy).
 4. **IDs sandbox TransFi** para el corredor Solana (`TRANSFI_USDC_NETWORK=solana`) en `remit-agents`.
 5. **Flip de flags** SOLO en el entorno aislado del smoke (nunca compartido).
-6. **Corrida final del smoke** con la pata fiat (release + orden TransFi). Hoy los checkpoints 1-6 (hasta vault Deposited) pasan; los checkpoints 7-8 (release/TransFi) son best-effort diferidos (requieren KYC Didit real + credenciales TransFi sandbox).
+6. **Corrida final del smoke** con la pata fiat (release + orden TransFi). Hoy los checkpoints 1-6 (hasta vault Deposited) pasan; el checkpoint 7 (release + TransFi) es best-effort diferido (requiere KYC Didit real + credenciales TransFi sandbox). **[stale, corregido 2026-07-27]** No hay "checkpoint 8": el script tiene 1-7 y 9.
 
 ---
 
@@ -110,17 +117,19 @@ Fuente: `.env.example` (AC-7) + `m5-keys/M5-ENV-CHECKLIST.md`. Deploy **preview*
 | `NEXT_PUBLIC_SOLANA_RPC_URL` / `SOLANA_DEVNET_RPC_URL` | `https://api.devnet.solana.com` | |
 | `PAYOUT_POP_SECRET` | `m5-keys/` (gitignored) | PoP Solana OBLIGATORIO en `prepare` |
 | `DEPOSIT_ATTESTATION_SECRET` | `m5-keys/` (gitignored) | habilita `prepare` (503 sin él) |
-| `FACILITATOR_BASE_URL` / `FACILITATOR_API_KEY` | URL Railway del facilitator + API key | para `/api/settle/solana-sponsor` |
+| `FACILITATOR_BASE_URL` / `FACILITATOR_API_KEY` | URL Railway del facilitator + API key. La key ya existe en el entorno **preview** de este proyecto en Vercel (`vercel env pull --environment=preview`); se manda como `Authorization: Bearer` | para `/api/settle/solana-sponsor` |
 | `DIDIT_API_KEY` | **NO setear** en preview | ⇒ KYC `simulated_dev` |
 
 ---
 
 ## Los pasos founder-gated restantes (NO F3)
 
-1. **Merge branches HELD**: `feat/m5-escrow-dr5g-address` (chaski) + `feat/026-wkh-205-solana-adapter`
-   (HU-SOL-6, facilitator) + `feat/029bc-hu-sol-13bc-escrow-facilitator` (facilitator) → deploy Railway.
-2. **Migraciones**: `004` (facilitator, escrow release dedup) + la de chaski (verificar nombre exacto en
-   `supabase/` en el deploy; no bloquea el código de F3).
+1. ~~**Merge branches HELD**~~ **[stale, corregido 2026-07-27]**: ya mergeadas (`chaski-v3` main
+   `a79cca2`, `wasiai-facilitator` main `75099ef`). Queda solo el **deploy Railway**.
+2. **Migraciones**: `004_facilitator_solana_release_dedup.sql` (facilitator) +
+   `20260721T000000_add_vm_network_id_to_remittance_settlements.sql` (chaski). **[corregido
+   2026-07-27]** los nombres exactos ya están verificados en los repos, no hace falta "verificar en el
+   deploy".
 3. **Habilitar release** (Tabla A, filas ⏳): `SOLANA_ESCROW_RELEASE_ENABLED=true` + secret key +
    attestation secret en Railway.
 4. **Setear remit** (Tabla B): `TRANSFI_USDC_NETWORK=solana` + `TRANSFI_DEVNET_SOLANA_DEPOSIT_ADDRESS` +
@@ -139,7 +148,7 @@ Fuente: `.env.example` (AC-7) + `m5-keys/M5-ENV-CHECKLIST.md`. Deploy **preview*
    export SMOKE_REMIT_URL=<vercel url remit>
    export SMOKE_SENDER_SECRET_KEY=$(cat m5-keys/sender.b58)
    export SMOKE_KYC_VERIFICATION_ID=devnet-smoke-kyc        # cualquier string (simulated_dev)
-   export SMOKE_REMITTANCE_ID=m5-smoke-$(date +%s)
+   export SMOKE_REMITTANCE_ID=m5-smoke-$(date +%s)   # ⚠️ ANOTALO: el release y el refund lo exigen
    export SMOKE_QUOTE_ID=m5-quote-1
    export SMOKE_AMOUNT_USD=10
    export SMOKE_SOLANA_USDC_MINT=8yRX3fZ2hFtTFdBhUBG7jZwnNEwYUFhMFsDP7vzWwz3Q
@@ -150,4 +159,7 @@ Fuente: `.env.example` (AC-7) + `m5-keys/M5-ENV-CHECKLIST.md`. Deploy **preview*
    El smoke aborta fail-loud si falta `SMOKE_ALLOW_REAL=true` (AC-6) o cualquier env requerida (AC-5).
 8. **Capturar el link de Solana Explorer** que imprime el checkpoint 5/9
    (`https://explorer.solana.com/tx/<sig>?cluster=devnet`) y adjuntarlo como evidencia de cierre de M5.
-   Los checkpoints 7-8 (release/TransFi, best-effort) se cierran cuando estén las creds fiat reales.
+   El checkpoint 7 (release/TransFi, best-effort) se cierra cuando estén las creds fiat reales.
+   **[stale, corregido 2026-07-27]** No hay checkpoint 8. Y guardá también el `escrowState PDA` + el
+   `remittanceId`: el RPC público poda historial de tx (las cuentas no), así que la signature sola no
+   alcanza como evidencia a los pocos días.

@@ -370,7 +370,10 @@ export interface SettlementRecord {
   quoteId: string;
   idempotencyKey: string;
   txHash: string;
-  chainId: number;
+  // NULL en las filas Solana: su identidad de red vive en network_id (CAIP-2), no en un chainId
+  // numérico (CHECK remittance_settlements_vm_netid_chk, migración 20260721). Tiparlo `number` a secas
+  // era una mentira en cuanto el ledger empezó a escribir chain_id NULL para Solana.
+  chainId: number | null;
   senderAddress: string;
   receiverAddress: string;
   valueMinor: number; // parseado desde value_minor::text (CD-12, WKH-196)
@@ -400,6 +403,8 @@ export interface SettlementLedger {
     quoteId: string;
     idempotencyKey: string;
     depositAddress: string; // → columna receiver_address (NO columna nueva)
+    // chainId EVM. Con vm:'solana' el ledger lo IGNORA y escribe network_id (CAIP-2) + chain_id NULL:
+    // Solana no tiene chainId numérico y el CHECK de la DB lo prohíbe (ver vmNetworkColumns).
     chainId: number;
     senderAddress: string;
     payoutId: string;
@@ -411,7 +416,7 @@ export interface SettlementLedger {
     quoteId: string;
     idempotencyKey: string;
     txHash: string;
-    chainId: number;
+    chainId: number; // EVM. Con vm:'solana' se ignora ⇒ network_id + chain_id NULL (ver arriba).
     senderAddress: string;
     receiverAddress: string;
     valueMinor: number;
@@ -430,9 +435,10 @@ export interface SettlementLedger {
   listStale(input: { olderThanIso: string; limit: number }): Promise<SettlementRecord[]>;
   // HU-SOL-20/AC-2: lectura OWNER-SCOPED para recuperar los remittanceId de un sender cuando el
   // cliente los perdió. El filtro .eq('sender_address', ...) es el guard REAL (el service key
-  // bypassea RLS). NUNCA devuelve PII ni value_minor. NO filtra por `vm` (esa columna nunca se
-  // escribe: toda fila dice 'evm', incluidas las Solana) ni por status (las filas que interesan
-  // nacen 'prepared', que NO está en STALE_STATUSES).
+  // bypassea RLS). NUNCA devuelve PII ni value_minor. NO filtra por `vm` — y sigue siendo correcto
+  // después del fix de escritura: las filas escritas ANTES de ese fix dicen vm='evm' aunque sean
+  // Solana, y son justo las que hay que recuperar ⇒ filtrar por vm devolvería CERO. Tampoco filtra por
+  // status (las filas que interesan nacen 'prepared', que NO está en STALE_STATUSES).
   listRemittanceIdsBySender(input: {
     senderAddress: string;
     vm: "evm" | "solana";

@@ -19,6 +19,7 @@ import { isAddress, keccak256, toBytes } from "viem";
 import { resolveChainId, resolveReceiverAddress, resolveUsdcAddress, resolveActiveVm } from "../../../../src/infrastructure/chain";
 import { addressEqualsVm } from "../../../../src/infrastructure/address";
 import { getSettlementLedger } from "../../../../src/infrastructure/persistence/supabase-settlement-ledger";
+import { logLedgerWriteFailure } from "../../../../src/infrastructure/persistence/ledger-write-failure";
 import {
   ATTESTATION_TTL_SECONDS,
   issueSettlementAttestation,
@@ -279,7 +280,10 @@ export async function POST(req: Request): Promise<Response> {
         }
       }
     } catch (e) {
-      console.error("[ledger] recordPrincipalIn_failed", e); // best-effort, NUNCA rompe (CD-17/DT-5)
+      // best-effort, NUNCA rompe (CD-17/DT-5) — control de flujo INTACTO. La señal se clasifica por
+      // clase de código: 23xxx (integridad) = bug nuestro que perdió la evidencia del principal ⇒
+      // error+[ALERT]; infra transitoria ⇒ warn; sin mapear ⇒ grita.
+      logLedgerWriteFailure("recordPrincipalIn", e);
     }
   }
 

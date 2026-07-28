@@ -29,6 +29,7 @@ import {
 } from "../../../../src/infrastructure/chain";
 import { canonicalizeAddress } from "../../../../src/infrastructure/address";
 import { getSettlementLedger } from "../../../../src/infrastructure/persistence/supabase-settlement-ledger";
+import { logLedgerWriteFailure } from "../../../../src/infrastructure/persistence/ledger-write-failure";
 import { resolvePayoutAuthority } from "../../../../src/infrastructure/payout/authority";
 import {
   DEPOSIT_ATTESTATION_TTL_SECONDS,
@@ -292,7 +293,8 @@ export async function POST(req: Request): Promise<Response> {
       cluster: clusterSol,
       exp: Math.floor(Date.now() / 1000) + DEPOSIT_ATTESTATION_TTL_SECONDS,
     });
-    // 6. ledger best-effort (vm:"solana" es el discriminante; chainId es telemetría). NUNCA rompe (CD-17).
+    // 6. ledger best-effort (vm:"solana" es el discriminante; el ledger IGNORA el chainId en esta rama y
+    //    escribe network_id CAIP-2 + chain_id NULL — ver vmNetworkColumns). NUNCA rompe (CD-17).
     const ledgerSol = getSettlementLedger();
     if (ledgerSol) {
       try {
@@ -307,7 +309,10 @@ export async function POST(req: Request): Promise<Response> {
           vm: "solana",
         });
       } catch (e) {
-        console.error("[ledger] recordOrderPrepared_failed", e);
+        // MISMO control de flujo (se traga la excepción, CD-17); cambia SOLO la señal: una violación de
+        // integridad (SQLSTATE 23xxx = bug nuestro, la fila NO se escribió) grita en error+[ALERT], un
+        // fallo de infra transitorio va a warn, y lo NO mapeado grita por default.
+        logLedgerWriteFailure("recordOrderPrepared", e);
       }
     }
     // 7. 200 — matchea EXACTO isValidSolanaPrepareShape del gateway.
@@ -354,7 +359,7 @@ export async function POST(req: Request): Promise<Response> {
         vm: resolveActiveVm(),
       });
     } catch (e) {
-      console.error("[ledger] recordOrderPrepared_failed", e); // best-effort, NUNCA rompe (CD-17)
+      logLedgerWriteFailure("recordOrderPrepared", e); // best-effort, NUNCA rompe (CD-17); señal por clase
     }
   }
 

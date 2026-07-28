@@ -19,3 +19,10 @@ next-env.d.ts
 .DS_Store
 coverage/
 m5-keys/
+
+# documentacion interna de trabajo (se queda en el disco, fuera del repo)
+doc/
+project-context.md
+docs/roadmap.md
+docs/ux-design.md
+docs/unit-economics.html

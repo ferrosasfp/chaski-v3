@@ -16,6 +16,7 @@ import type { Idl, Provider } from "@coral-xyz/anchor";
 import type {
   SolanaEscrowDeposit,
   SolanaPrincipalAuthorization,
+  SolanaRemittanceIdResolver,
   WalletPort,
 } from "../application/ports";
 import type { Quote } from "../domain/remittance";
@@ -28,8 +29,17 @@ import {
 } from "./chain";
 import { solanaWalletBridge } from "./solana-wallet-bridge";
 
+// HU-SOL-20/AC-2: tope de candidatos que el fallback sondea on-chain. Los ids vienen ordenados por
+// created_at desc, así que 10 cubre de sobra un escrow reciente perdido y acota a UNA sola llamada RPC.
+const MAX_RECOVERY_CANDIDATES = 10;
+
 export class SolanaWalletAdapter implements WalletPort {
   private address: string | null = null;
+
+  // HU-SOL-20/AC-2: resolver OPCIONAL del remittanceId durable server-side. Ausente (EVM/demo, o
+  // wiring viejo) ⇒ `refundEscrow` sin id explícito falla fail-loud con `escrow_id_unavailable`; el
+  // path con id presente NUNCA lo consulta (AC-6 byte-idéntico).
+  constructor(private readonly remittanceIdResolver?: SolanaRemittanceIdResolver) {}
 
   async connect(): Promise<string> {
     const state = solanaWalletBridge.getState();
@@ -60,6 +70,67 @@ export class SolanaWalletAdapter implements WalletPort {
    *  sha256(utf8(remittanceId))[:16]. */
   private remittanceIdToBytes16(remittanceId: string): Uint8Array {
     return Uint8Array.from(sha256(new TextEncoder().encode(remittanceId)).subarray(0, 16));
+  }
+
+  /** ÚNICA fuente de la derivación de la PDA `escrow_state` para el refund (seeds: "escrow" | sender |
+   *  remittanceId[u8;16]) — la usan el path normal y el fallback de recuperación (HU-SOL-20/AC-2), así
+   *  que no pueden divergir. Byte-idéntica a la de authorizePrincipal / cross-repo (AH-9).
+   *  `PublicKey.findProgramAddressSync` es estático: el import de módulo y el lazy-import resuelven a
+   *  la MISMA clase. */
+  private deriveEscrowState(
+    senderPk: InstanceType<typeof PublicKey>,
+    programId: InstanceType<typeof PublicKey>,
+    remittanceId: string,
+  ): { pda: InstanceType<typeof PublicKey>; bytes: Uint8Array } {
+    const bytes = this.remittanceIdToBytes16(remittanceId); // [u8;16] determinístico
+    const [pda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("escrow"), senderPk.toBuffer(), Buffer.from(bytes)],
+      programId,
+    );
+    return { pda, bytes };
+  }
+
+  // HU-SOL-20/AC-2 — FALLBACK de recuperación: el caller no trajo el remittanceId (localStorage
+  // borrado / otro dispositivo), así que se lo pide al store durable server-side y se elige on-chain.
+  // Sin resolver inyectado ⇒ fail-loud (`escrow_id_unavailable`), NUNCA silencioso.
+  // Sondea hasta MAX_RECOVERY_CANDIDATES PDAs en UNA sola llamada RPC y devuelve el PRIMER escrow con
+  // status Deposited (los ids llegan ordenados por created_at desc). El resultado es solo un CANDIDATO:
+  // el caller vuelve a leer la cuenta elegida y re-aplica los guards autoritativos (status/deadline).
+  private async resolveRemittanceIdFromLedger(senderB58: string): Promise<string> {
+    const resolver = this.remittanceIdResolver;
+    if (!resolver) throw new Error("escrow_id_unavailable"); // fail-loud: no hay de dónde recuperar
+    const ids = await resolver.listBySender(senderB58);
+    if (ids.length === 0) throw new Error("escrow_not_found"); // nada durable para este sender
+    const candidates = ids.slice(0, MAX_RECOVERY_CANDIDATES);
+
+    const web3 = await import("@solana/web3.js");
+    const { PublicKey: PublicKeyLazy, Connection } = web3;
+    const anchor = await import("@coral-xyz/anchor");
+    const { escrowIdl } = await import("./solana/escrow-idl");
+
+    const senderPk = new PublicKeyLazy(senderB58); // valida base58 (CD-SDD-7)
+    const programId = new PublicKeyLazy((escrowIdl as { address: string }).address);
+    const pdas = candidates.map((id) => this.deriveEscrowState(senderPk, programId, id).pda);
+
+    const connection = new Connection(
+      resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), // client-safe
+    );
+    // UNA sola llamada RPC para los N candidatos (el nombre real de la API es getMultipleAccountsInfo).
+    const infos = await connection.getMultipleAccountsInfo(pdas);
+    const coder = new anchor.BorshAccountsCoder(escrowIdl as unknown as Idl);
+    for (let i = 0; i < candidates.length; i++) {
+      const acc = infos[i];
+      if (!acc) continue; // nunca se depositó (o ya cerró): no es candidata
+      let statusKey: string | undefined;
+      try {
+        const state = coder.decode("EscrowState", acc.data) as { status: Record<string, unknown> };
+        statusKey = Object.keys(state.status)[0]; // { Deposited: {} } | { Released: {} } | ...
+      } catch {
+        continue; // cuenta deforme/ajena al layout: se descarta, NUNCA rompe la recuperación
+      }
+      if (statusKey === "Deposited") return candidates[i]!; // el primero refundeable gana
+    }
+    throw new Error("escrow_not_found"); // ningún candidato está Deposited
   }
 
   // HU-SOL-5 (AC-1..AC-4, AC-7, AC-8): construye la ix `deposit` del escrow Anchor, fija
@@ -157,10 +228,19 @@ export class SolanaWalletAdapter implements WalletPort {
   // EscrowNotDeposited/DeadlineNotReached). Reusa remittanceIdToBytes16 + la derivación PDA de
   // authorizePrincipal. CD-15: libs isomórficas (@noble/hashes, TextEncoder, Buffer polyfill de Next),
   // NUNCA node:crypto — el test-env `node` enmascara la falla del bundle browser.
-  async refundEscrow(remittanceId: string, sender?: string): Promise<{ refundTx: string }> {
+  // HU-SOL-20/AC-2: `remittanceId` pasa a OPCIONAL. Con id presente el método queda BYTE-IDÉNTICO
+  // (AC-6, cero cambio en el path que ya funciona); sin id se resuelve desde el store durable
+  // server-side (AC-2) y recién entonces sigue el MISMO camino, guards autoritativos incluidos.
+  async refundEscrow(remittanceId?: string, sender?: string): Promise<{ refundTx: string }> {
     // ── GUARDS fail-loud — ANTES de leer/construir/firmar nada ──
     const senderB58 = sender ?? (await this.getAddress());
     if (!senderB58) throw new Error("wallet_not_connected");
+
+    // HU-SOL-20/AC-2: id presente ⇒ NO se consulta el resolver (AC-6). Ausente/vacío ⇒ recuperación.
+    const escrowId =
+      typeof remittanceId === "string" && remittanceId.trim().length > 0
+        ? remittanceId
+        : await this.resolveRemittanceIdFromLedger(senderB58);
 
     // ── lazy-import (patrón authorizePrincipal, DT-SDD-8) ──
     const web3 = await import("@solana/web3.js");
@@ -173,10 +253,10 @@ export class SolanaWalletAdapter implements WalletPort {
     const programId = new PublicKey((escrowIdl as { address: string }).address); // DR5G…SE4x
 
     // ── PDA escrow_state (misma derivación que authorizePrincipal / cross-repo, AH-9) ──
-    const remittanceIdBytes = this.remittanceIdToBytes16(remittanceId); // [u8;16] determinístico
-    const [escrowStatePda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("escrow"), senderPk.toBuffer(), Buffer.from(remittanceIdBytes)],
+    const { pda: escrowStatePda, bytes: remittanceIdBytes } = this.deriveEscrowState(
+      senderPk,
       programId,
+      escrowId,
     );
 
     const connection = new Connection(

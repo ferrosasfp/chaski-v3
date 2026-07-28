@@ -90,6 +90,19 @@ export const DEPOSIT_PREPARE_RL: RouteRateLimitConfig = {
   },
 };
 
+// ESCROW RECOVERY IP 10/"10 m" (sin addr): HU-SOL-20/AC-2. El endpoint verifica un PoP ed25519 (CPU) y
+// luego lee el ledger; sin rate-limit sería un oráculo enumerable a fuerza bruta. IP-only, igual que
+// CHALLENGE/PREPARE: corre ANTES de parsear el body, así que la address todavía no existe acá.
+export const ESCROW_RECOVERY_RL: RouteRateLimitConfig = {
+  bucketPrefix: "escrow:recovery:rl",
+  ip: {
+    envMax: "ESCROW_RECOVERY_RL_IP_MAX",
+    defMax: 10,
+    envWindow: "ESCROW_RECOVERY_RL_IP_WINDOW",
+    defWindow: "10 m",
+  },
+};
+
 interface Limiters {
   ip: Ratelimit;
   address?: Ratelimit; // ausente cuando cfg.addr no está (IP-only)

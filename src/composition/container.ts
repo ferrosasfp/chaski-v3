@@ -13,7 +13,10 @@ import { PreviewQuote } from "../application/use-cases/preview-quote";
 import { ResumeKyc } from "../application/use-cases/resume-kyc";
 import { StartKyc } from "../application/use-cases/start-kyc";
 import { TrackRemittance } from "../application/use-cases/track-remittance";
-import type { SolanaEscrowRefundGateway as SolanaEscrowRefundPort } from "../application/ports";
+import type {
+  PopSigner,
+  SolanaEscrowRefundGateway as SolanaEscrowRefundPort,
+} from "../application/ports";
 import { A2aPayoutGateway, A2aQuoteGateway } from "../infrastructure/a2a/gateways";
 import { HttpPopSigner } from "../infrastructure/auth/http-pop-signer";
 import {
@@ -31,6 +34,7 @@ import {
 import { LocalKycPendingStore } from "../infrastructure/kyc-pending-store";
 import { HttpPayoutAuthorityGateway } from "../infrastructure/payout/payout-authority-gateway";
 import { LedgerRefundGateway } from "../infrastructure/refund/ledger-refund-gateway";
+import { HttpSolanaRemittanceIdResolver } from "../infrastructure/refund/http-solana-remittance-id-resolver";
 import { SolanaEscrowRefundGateway } from "../infrastructure/refund/solana-escrow-refund-gateway";
 import { HttpPayoutPrepareGateway } from "../infrastructure/settlement/http-payout-prepare-gateway";
 import { HttpSettlementGateway } from "../infrastructure/settlement/http-settlement-gateway";
@@ -57,6 +61,20 @@ export interface Container {
   // HU-SOL-13 (WKH-216): refund trustless del escrow Solana. OPCIONAL: sólo se cablea con
   // resolveActiveVm()==="solana" (undefined en EVM/demo ⇒ la UI no muestra la acción). AC-6/CD-10.
   solanaRefund?: SolanaEscrowRefundPort;
+}
+
+// HU-SOL-20/AC-2 — arma el adapter Solana CON su resolver de remittanceId en un solo paso (sin setter,
+// sin objeto a medio construir y sin una segunda instancia del adapter).
+// El ciclo aparente (adapter → resolver → PopSigner → WalletPort=adapter) se rompe DIFIRIENDO la
+// construcción del PopSigner: `lazyPop.prove` recién se evalúa en tiempo de refund, cuando `adapter` ya
+// existe. Es el mismo wallet que firma el PoP y el que refundea — condición del endpoint, que exige que
+// el challenge sea de la MISMA address que pide sus ids.
+function createSolanaWallet(): SolanaWalletAdapter {
+  const lazyPop: PopSigner = { prove: (address) => new HttpPopSigner(adapter).prove(address) };
+  const adapter: SolanaWalletAdapter = new SolanaWalletAdapter(
+    new HttpSolanaRemittanceIdResolver(lazyPop),
+  );
+  return adapter;
 }
 
 export function createContainer(): Container {
@@ -92,7 +110,7 @@ export function createContainer(): Container {
   // Dispatcher de wallet gateado por VM (AC-4): un solo resolveActiveVm() gobierna el wiring; imposible
   // modo mixto silencioso. El adapter Solana es React-free (seam AC-3) → import estático seguro para el
   // bundle EVM. VM=evm/unset → pickWallet() EVM INTACTO. VM inválida → resolveActiveVm() throw (AC-5).
-  const solanaWallet = resolveActiveVm() === "solana" ? new SolanaWalletAdapter() : null;
+  const solanaWallet = resolveActiveVm() === "solana" ? createSolanaWallet() : null;
   const wallet = solanaWallet ?? pickWallet();
   // HU-SOL-13 (WKH-216) — guard fail-loud money-path Solana, análogo al EIP-3009 de arriba. MUTUAMENTE
   // EXCLUYENTE con el path EVM: si la VM activa es Solana, EIP-3009 DEBE estar OFF (nunca se inyectan

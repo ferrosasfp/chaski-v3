@@ -32,6 +32,7 @@ import { runViaGateway } from "../../../../../src/infrastructure/a2a/gateway-cli
 import type { SettlementLedgerStatus } from "../../../../../src/application/ports";
 import { Money } from "../../../../../src/domain/money";
 import { getSettlementLedger } from "../../../../../src/infrastructure/persistence/supabase-settlement-ledger";
+import { logLedgerWriteFailure } from "../../../../../src/infrastructure/persistence/ledger-write-failure";
 import {
   verifyPopChallenge,
   buildPopMessage,
@@ -357,7 +358,9 @@ export async function POST(req: Request): Promise<Response> {
         });
       }
     } catch (e) {
-      console.error("[ledger] recordPayoutOutcome_failed", e); // best-effort, NUNCA rompe (CD-17)
+      // best-effort, NUNCA rompe (CD-17) — control de flujo INTACTO, sólo cambia la señal (por clase
+      // de código: integridad/alto vs infra/transitorio, default alto).
+      logLedgerWriteFailure("recordPayoutOutcome", e);
     }
   };
 

@@ -6,6 +6,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { PublicKey } from "@solana/web3.js";
 import { SupabaseSettlementLedger, getSettlementLedger } from "./supabase-settlement-ledger";
 import { __resetSupabaseClient, getSupabaseServerClient } from "./supabase-server";
+import { resolveSolanaNetworkId } from "../chain";
 
 // Registra cada método del builder + resuelve un resultado por cada from() (queue). El builder es
 // thenable ⇒ `await builder` resuelve el resultado asignado a ese from().
@@ -74,14 +75,18 @@ const SENDER = "0xAbCabcABCabcABCabcABCabcABCabcABCabcABC11";
 // código pide, con DOS senders distintos adentro:
 //   · borrar el `.eq('sender_address', …)`   ⇒ devuelve filas del OTRO sender  → rojo
 //   · escribir mal el nombre de la columna    ⇒ `unknown_column` (lo que haría Postgres, 42703) → rojo
-//   · agregar `.eq('vm','solana')` (§4.2)     ⇒ 0 filas (toda fila real dice 'evm')            → rojo
+//   · agregar `.eq('vm','solana')` (§4.2)     ⇒ 0 filas (las filas LEGACY dicen 'evm')          → rojo
 // Un espía `toHaveBeenCalledWith` NO caza los dos últimos casos.
 interface FakeLedgerRow {
   remittance_id: string;
   status: string;
   created_at: string;
   sender_address: string;
-  vm: string; // SIEMPRE 'evm' — la columna existe pero nadie la escribe (§4.2 del story)
+  // 'evm' en TODAS las filas de este fixture a propósito: son filas LEGACY, escritas antes del fix de
+  // identidad de red (el escritor no seteaba `vm`, así que toda remesa Solana quedó etiquetada 'evm').
+  // Son EXACTAMENTE las filas que este fallback tiene que poder recuperar ⇒ la lectura no puede
+  // filtrar por `vm` ni antes ni después del fix.
+  vm: string;
   value_minor: string;
 }
 function makeBehaviorClient(table: FakeLedgerRow[]): {
@@ -139,6 +144,74 @@ function makeBehaviorClient(table: FakeLedgerRow[]): {
 
 const SOL_A = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // base58 canónico válido
 const SOL_B = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // otro sender distinto
+
+// ── Doble de DB que APLICA las restricciones reales (migración 20260721, YA aplicada) ───────────────
+// `makeClient` acepta CUALQUIER upsert ⇒ un test que sólo espía la fila pasaría igual si el escritor
+// pusiera vm='solana' SIN anular chain_id, que es exactamente la combinación que Postgres RECHAZA
+// (23514 / remittance_settlements_vm_netid_chk). Sin un doble que aplique el CHECK, el test es vacuo:
+// en prod el write se cae, la ruta se lo traga (CD-17) y la evidencia durable no existe.
+// Reproduce lo medido contra la base real:
+//   · chain_id numérico, `vm` ausente (default 'evm'), network_id ausente → ACEPTA  (el estado pre-fix)
+//   · chain_id NULL sin escribir `vm`                                      → 23514
+//   · vm='solana' + chain_id NULL + network_id presente                    → ACEPTA
+// Alcance del doble: SOLO el CHECK de identidad de red (vm/chain_id/network_id) + el default de la
+// columna `vm`. NO modela los NOT NULL ni los índices únicos (los cubren otros tests).
+interface DbViolation {
+  code: string;
+  constraint: string;
+  message: string;
+}
+/** El CHECK real, como función pura (para poder probar que el doble MUERDE). */
+function vmNetIdViolation(row: Record<string, unknown>): DbViolation | null {
+  const vm = "vm" in row && row.vm !== undefined ? row.vm : "evm"; // columna: not null default 'evm'
+  const chainId = row.chain_id ?? null;
+  const networkId = row.network_id ?? null;
+  if (vm !== "evm" && vm !== "solana") {
+    return { code: "23514", constraint: "remittance_settlements_vm_chk", message: "vm out of enum" };
+  }
+  const coherent =
+    (vm === "evm" && chainId !== null && networkId === null) ||
+    (vm === "solana" && networkId !== null && chainId === null);
+  if (!coherent) {
+    return {
+      code: "23514",
+      constraint: "remittance_settlements_vm_netid_chk",
+      message: "vm/network identity incoherent",
+    };
+  }
+  return null;
+}
+function makeConstraintClient(): {
+  client: SupabaseClient;
+  rows: Record<string, unknown>[];
+  rejected: DbViolation[];
+} {
+  const rows: Record<string, unknown>[] = [];
+  const rejected: DbViolation[] = [];
+  const client = {
+    from: vi.fn(() => {
+      let pending: Record<string, unknown> | null = null;
+      const builder: Record<string, unknown> = {};
+      builder.upsert = vi.fn((row: Record<string, unknown>) => {
+        pending = row;
+        return builder;
+      });
+      builder.then = (resolve: (v: unknown) => void) => {
+        if (pending === null) return resolve({ data: null, error: null });
+        const violation = vmNetIdViolation(pending);
+        if (violation) {
+          rejected.push(violation);
+          return resolve({ data: null, error: violation }); // PostgREST propaga error.code
+        }
+        // Fila efectiva = defaults de la columna + lo escrito (así se ve lo que quedaría en la tabla).
+        rows.push({ vm: "evm", chain_id: null, network_id: null, ...pending });
+        return resolve({ data: null, error: null });
+      };
+      return builder;
+    }),
+  };
+  return { client: client as unknown as SupabaseClient, rows, rejected };
+}
 function solRows(): FakeLedgerRow[] {
   return [
     { remittance_id: "rem-A-old", status: "prepared", created_at: "2026-07-20T00:00:00.000Z", sender_address: SOL_A, vm: "evm", value_minor: "0" },
@@ -354,8 +427,8 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
     expect(JSON.stringify(out)).not.toContain("rem-B1");
   });
 
-  it("T-R0-1 (§4.2): NO filtra por la columna `vm` — toda fila real dice 'evm', incluidas las Solana", async () => {
-    // Las filas del doble llevan vm:'evm' (fiel a prod: recordOrderPrepared nunca escribe la columna).
+  it("T-R0-1 (§4.2): NO filtra por la columna `vm` — las filas LEGACY Solana dicen 'evm'", async () => {
+    // Las filas del doble llevan vm:'evm' (fiel a las filas ya escritas: el escritor no seteaba `vm`).
     // Si la query agregara `.eq('vm','solana')`, esto devolvería [] y el fallback de AC-2 no protegería nada.
     const { client } = makeBehaviorClient(solRows());
     const out = await new SupabaseSettlementLedger(client).listRemittanceIdsBySender({
@@ -437,6 +510,27 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
     ).rejects.toThrow(/ledger_list_by_sender_failed:PGRST301/);
   });
 
+  // ── R0 tras el fix de escritura: filas LEGACY (vm='evm') + filas nuevas (vm='solana') convivien ──
+  it("R0 sigue igual DESPUÉS del fix: recupera las filas legacy (vm='evm') Y las nuevas (vm='solana') del mismo sender", async () => {
+    // La tabla real va a tener las dos cosas: lo escrito antes del fix (mislabel 'evm') y lo escrito
+    // después ('solana'). La lectura de HU-SOL-20 NO discrimina por vm ⇒ devuelve ambas. Si alguien
+    // agregara `.eq('vm','solana')`, la fila legacy desaparecería y el refund de una remesa vieja se
+    // quedaría sin remittanceId (la plata atrapada en el escrow, que es el caso que R0 cubre).
+    const mixed: FakeLedgerRow[] = [
+      { remittance_id: "rem-legacy", status: "prepared", created_at: "2026-07-20T00:00:00.000Z", sender_address: SOL_A, vm: "evm", value_minor: "0" },
+      { remittance_id: "rem-nueva", status: "prepared", created_at: "2026-07-28T00:00:00.000Z", sender_address: SOL_A, vm: "solana", value_minor: "0" },
+      { remittance_id: "rem-otro-sender", status: "prepared", created_at: "2026-07-28T00:00:00.000Z", sender_address: SOL_B, vm: "solana", value_minor: "0" },
+    ];
+    const { client } = makeBehaviorClient(mixed);
+    const out = await new SupabaseSettlementLedger(client).listRemittanceIdsBySender({
+      senderAddress: SOL_A,
+      vm: "solana",
+      limit: 20,
+    });
+    expect(out.map((r) => r.remittanceId)).toEqual(["rem-nueva", "rem-legacy"]); // created_at DESC
+    expect(out.map((r) => r.remittanceId)).not.toContain("rem-otro-sender"); // el guard sigue siendo el sender
+  });
+
   it("T-R0-3: address base58 malformada ⇒ throw de canonicalizeAddress, NUNCA una query sin filtro", async () => {
     const { client } = makeBehaviorClient(solRows());
     await expect(
@@ -446,6 +540,167 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
         limit: 20,
       }),
     ).rejects.toThrow("address_canonicalization_failed");
+  });
+});
+
+// ── Identidad de red del INSERT: vm + (chain_id | network_id) ────────────────────────────────────────
+// El bug: el upsert escribía SÓLO chain_id (el chainId EVM configurado) y descartaba el `vm` en
+// silencio ⇒ toda fila de una remesa Solana quedaba vm='evm' + chainId de Avalanche con addresses
+// base58, y cualquier query que filtrara .eq('vm','solana') devolvía CERO filas SIEMPRE.
+// Las dos mitades del arreglo (escribir `vm` y anular `chain_id`) van juntas o el CHECK de la DB
+// rechaza el insert — y ese rechazo lo traga el catch best-effort de la ruta (CD-17), o sea que se
+// pierde la evidencia durable con un log como única señal. Por eso se prueba con un doble que APLICA
+// el CHECK, no con un espía.
+const CHAIN_ID_EVM = 84532; // Base Sepolia (rama EVM)
+const CHAIN_ID_MISLABEL = 43113; // el chainId EVM que se escribía en las filas Solana (Avalanche Fuji)
+
+describe("identidad de red del ledger — vm + chain_id/network_id (CHECK 20260721)", () => {
+  it("el doble APLICA el CHECK: reproduce los tres inserts medidos y RECHAZA las dos mitades desacopladas", () => {
+    // Medido contra la base real (si el doble no rechazara, los tests de abajo serían vacuos):
+    expect(vmNetIdViolation({ chain_id: CHAIN_ID_MISLABEL })).toBeNull(); // pre-fix: ACEPTA (mal etiquetado)
+    expect(vmNetIdViolation({ chain_id: null })?.constraint).toBe("remittance_settlements_vm_netid_chk"); // anular sin `vm` ⇒ 23514
+    expect(
+      vmNetIdViolation({ vm: "solana", chain_id: null, network_id: "solana:devnet" }),
+    ).toBeNull(); // el arreglo completo: ACEPTA
+    // Mitad A — escribir `vm='solana'` y OLVIDARSE de anular chain_id:
+    const halfA = vmNetIdViolation({ vm: "solana", chain_id: CHAIN_ID_MISLABEL, network_id: "solana:devnet" });
+    expect(halfA?.code).toBe("23514");
+    // Mitad B — anular chain_id sin escribir `vm` (default 'evm'):
+    const halfB = vmNetIdViolation({ chain_id: null, network_id: "solana:devnet" });
+    expect(halfB?.code).toBe("23514");
+    // Y un `vm` fuera del enum también revienta (remittance_settlements_vm_chk).
+    expect(vmNetIdViolation({ vm: "sui", chain_id: null })?.constraint).toBe("remittance_settlements_vm_chk");
+  });
+
+  it("recordOrderPrepared vm:'solana' ⇒ la DB ACEPTA la fila: vm='solana', network_id CAIP-2, chain_id NULL", async () => {
+    const { client, rows, rejected } = makeConstraintClient();
+    await new SupabaseSettlementLedger(client).recordOrderPrepared({
+      remittanceId: "rem-1",
+      quoteId: "q-1",
+      idempotencyKey: "rem-1:q-1",
+      depositAddress: SOL_B,
+      chainId: CHAIN_ID_MISLABEL, // el caller sigue pasando un chainId EVM: el ledger lo IGNORA
+      senderAddress: SOL_A,
+      payoutId: "p-1",
+      vm: "solana",
+    });
+    expect(rejected).toEqual([]); // si el write violara el CHECK, la fila NO existiría en prod
+    const row = rows[0] ?? {};
+    expect(row.vm).toBe("solana"); // ← mitad 1: el discriminante YA no se descarta
+    expect(row.network_id).toBe(resolveSolanaNetworkId()); // fuente canónica, no un literal nuevo
+    expect(row.network_id).toBe("solana:devnet");
+    expect(row.chain_id).toBeNull(); // ← mitad 2: NUNCA el chainId EVM en una fila Solana
+    expect(row.chain_id).not.toBe(CHAIN_ID_MISLABEL);
+    // La fila queda consultable por VM: `.eq('vm','solana')` ya no da cero.
+    expect(rows.filter((r) => r.vm === "solana").length).toBe(1);
+    // El resto de la fila, intacto (address base58 case-preservada, sin PII).
+    expect(row.sender_address).toBe(new PublicKey(SOL_A).toBase58());
+    expect(row.receiver_address).toBe(new PublicKey(SOL_B).toBase58());
+    expect(row.status).toBe("prepared");
+  });
+
+  it("recordOrderPrepared vm:'evm' ⇒ byte-idéntico: vm='evm', chain_id numérico, network_id NULL", async () => {
+    const { client, rows, rejected } = makeConstraintClient();
+    await new SupabaseSettlementLedger(client).recordOrderPrepared({
+      remittanceId: "rem-2",
+      quoteId: "q-2",
+      idempotencyKey: "rem-2:q-2",
+      depositAddress: "0xREceiverAddr2222222222222222222222222222",
+      chainId: CHAIN_ID_EVM,
+      senderAddress: SENDER,
+      payoutId: "p-2",
+      vm: "evm",
+    });
+    expect(rejected).toEqual([]);
+    const row = rows[0] ?? {};
+    expect(row.vm).toBe("evm");
+    expect(row.chain_id).toBe(CHAIN_ID_EVM); // la rama EVM NO cambia de dato
+    expect(row.network_id).toBeNull();
+    expect(row.sender_address).toBe(SENDER.toLowerCase());
+  });
+
+  it("recordPrincipalIn vm:'solana' ⇒ mismas dos mitades (el escritor del principal tenía el MISMO bug)", async () => {
+    const { client, rows, rejected } = makeConstraintClient();
+    await new SupabaseSettlementLedger(client).recordPrincipalIn({
+      remittanceId: "rem-3",
+      quoteId: "q-3",
+      idempotencyKey: "rem-3:q-3",
+      txHash: "5x".repeat(10),
+      chainId: CHAIN_ID_MISLABEL,
+      senderAddress: SOL_A,
+      receiverAddress: SOL_B,
+      valueMinor: 400_000_000,
+      vm: "solana",
+    });
+    expect(rejected).toEqual([]);
+    const row = rows[0] ?? {};
+    expect(row.vm).toBe("solana");
+    expect(row.network_id).toBe(resolveSolanaNetworkId());
+    expect(row.chain_id).toBeNull();
+    expect(row.value_minor).toBe("400000000"); // uint256-safe intacto (CD-12)
+    expect(row.status).toBe("principal_in");
+  });
+
+  it("recordPrincipalIn vm:'evm' ⇒ byte-idéntico (chain_id numérico, network_id NULL)", async () => {
+    const { client, rows, rejected } = makeConstraintClient();
+    await new SupabaseSettlementLedger(client).recordPrincipalIn({
+      remittanceId: "rem-4",
+      quoteId: "q-4",
+      idempotencyKey: "rem-4:q-4",
+      txHash: "0xTX",
+      chainId: CHAIN_ID_EVM,
+      senderAddress: SENDER,
+      receiverAddress: "0xREceiverAddr2222222222222222222222222222",
+      valueMinor: 1,
+      vm: "evm",
+    });
+    expect(rejected).toEqual([]);
+    const row = rows[0] ?? {};
+    expect(row.vm).toBe("evm");
+    expect(row.chain_id).toBe(CHAIN_ID_EVM);
+    expect(row.network_id).toBeNull();
+  });
+
+  it("invariante de los DOS escritores × las DOS VMs: exactamente UNA columna de red no-nula, coherente con vm", async () => {
+    // Barrido: si un escritor futuro (o un refactor) desacopla las mitades en cualquiera de los cuatro
+    // combos, esto se pone rojo — el CHECK del doble rechaza y `rejected` deja de estar vacío.
+    for (const vm of ["evm", "solana"] as const) {
+      const sender = vm === "solana" ? SOL_A : SENDER;
+      const receiver = vm === "solana" ? SOL_B : "0xREceiverAddr2222222222222222222222222222";
+      const { client, rows, rejected } = makeConstraintClient();
+      const ledger = new SupabaseSettlementLedger(client);
+      await ledger.recordOrderPrepared({
+        remittanceId: "rem-x",
+        quoteId: "q-x",
+        idempotencyKey: "rem-x:q-x",
+        depositAddress: receiver,
+        chainId: CHAIN_ID_EVM,
+        senderAddress: sender,
+        payoutId: "p-x",
+        vm,
+      });
+      await ledger.recordPrincipalIn({
+        remittanceId: "rem-x",
+        quoteId: "q-x",
+        idempotencyKey: "rem-x:q-x",
+        txHash: "0xTXX",
+        chainId: CHAIN_ID_EVM,
+        senderAddress: sender,
+        receiverAddress: receiver,
+        valueMinor: 7,
+        vm,
+      });
+      expect(rejected).toEqual([]);
+      expect(rows.length).toBe(2);
+      for (const row of rows) {
+        expect(row.vm).toBe(vm);
+        const hasChain = row.chain_id !== null;
+        const hasNetwork = row.network_id !== null;
+        expect(hasChain).toBe(vm === "evm");
+        expect(hasNetwork).toBe(vm === "solana");
+        expect(hasChain === hasNetwork).toBe(false); // XOR: nunca las dos, nunca ninguna
+      }
+    }
   });
 });
 

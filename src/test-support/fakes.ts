@@ -578,7 +578,8 @@ export class FakeSettlementLedger implements SettlementLedger {
   }
 
   // HU-SOL-20/AC-2: lectura owner-scoped por sender_address canonicalizado, created_at desc, sin
-  // filtro por `vm` (columna nunca escrita) ni por status (las filas que interesan son 'prepared').
+  // filtro por `vm` (las filas pre-fix dicen 'evm' aunque sean Solana: son las que hay que recuperar)
+  // ni por status (las filas que interesan son 'prepared').
   async listRemittanceIdsBySender(input: {
     senderAddress: string;
     vm: "evm" | "solana";

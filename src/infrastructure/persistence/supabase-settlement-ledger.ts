@@ -19,6 +19,7 @@ import type {
 } from "../../application/ports";
 import { getSupabaseServerClient } from "./supabase-server";
 import { canonicalizeAddress } from "../address";
+import { resolveSolanaNetworkId } from "../chain";
 
 const TABLE = "remittance_settlements";
 
@@ -33,6 +34,34 @@ const STALE_STATUSES: readonly SettlementLedgerStatus[] = [
   "forward_error",
 ];
 
+/** Columnas de IDENTIDAD DE RED de un INSERT, coherentes por construcción con el CHECK
+ *  `remittance_settlements_vm_netid_chk` (migración 20260721, YA aplicada):
+ *      vm='evm'    ⇒ chain_id NOT NULL  Y  network_id NULL
+ *      vm='solana' ⇒ network_id NOT NULL Y  chain_id NULL
+ *  Las DOS mitades (el `vm` y su columna de red) salen de ACÁ y de ningún otro lado: es imposible que
+ *  un escritor ponga `vm='solana'` y se olvide de anular `chain_id` (o al revés) — esa desincronización
+ *  es exactamente el bug que arregla este cambio. Una violación del CHECK no rompe el money-path
+ *  (CD-17: la ruta captura y sigue) ⇒ la fila simplemente NO se escribe, así que el acoplamiento tiene
+ *  que ser estructural, no una convención entre call-sites.
+ *  `network_id` sale de resolveSolanaNetworkId() (CAIP-2, la MISMA fuente server-side que ata el PoP
+ *  ed25519, el envelope x402 `solana:<cluster>` y el binding P4 de /solana/escrow/remittance-ids) —
+ *  NUNCA del body, NUNCA un literal nuevo. `chainId` es un chainId EVM: en la rama Solana NO se
+ *  escribe (no existe chainId numérico en Solana; escribirlo era el mislabel: filas base58 con el
+ *  chainId de Avalanche). */
+function vmNetworkColumns(
+  vm: "evm" | "solana",
+  chainId: number,
+): { vm: "evm" | "solana"; chain_id: number | null; network_id: string | null } {
+  switch (vm) {
+    case "evm":
+      return { vm: "evm", chain_id: chainId, network_id: null };
+    case "solana":
+      return { vm: "solana", chain_id: null, network_id: resolveSolanaNetworkId() };
+    default:
+      throw new Error("ledger_unsupported_vm"); // fail-loud (vm fuera del union, defensa runtime)
+  }
+}
+
 // Shape crudo de una fila leída (value_minor llega como string por el ::text).
 interface RawRow {
   id: string;
@@ -40,7 +69,9 @@ interface RawRow {
   quote_id: string;
   idempotency_key: string;
   tx_hash: string;
-  chain_id: number;
+  // NULLABLE desde la migración 20260721: las filas Solana NO tienen chainId numérico (su identidad de
+  // red vive en network_id). Tiparlo `number` sería mentir en un read del money-path.
+  chain_id: number | null;
   sender_address: string;
   receiver_address: string;
   value_minor: string;
@@ -103,7 +134,10 @@ export class SupabaseSettlementLedger implements SettlementLedger {
         quote_id: input.quoteId,
         idempotency_key: input.idempotencyKey,
         tx_hash: `prepared:${input.idempotencyKey}`, // placeholder (NOT NULL); no hay settle aún
-        chain_id: input.chainId,
+        // vm + (chain_id | network_id) en un solo lugar: acopladas por el CHECK de la DB (ver
+        // vmNetworkColumns). Antes esto era `chain_id: input.chainId` a secas ⇒ TODA fila de una remesa
+        // Solana quedaba vm='evm' con un chainId de Avalanche y una address base58.
+        ...vmNetworkColumns(input.vm, input.chainId),
         sender_address: canonicalizeAddress(input.senderAddress, input.vm),
         receiver_address: canonicalizeAddress(input.depositAddress, input.vm), // el depositAddress ES el receiver
         value_minor: "0", // desconocido en prepare; el real llega en recordPrincipalIn
@@ -134,7 +168,7 @@ export class SupabaseSettlementLedger implements SettlementLedger {
         quote_id: input.quoteId,
         idempotency_key: input.idempotencyKey,
         tx_hash: input.txHash,
-        chain_id: input.chainId,
+        ...vmNetworkColumns(input.vm, input.chainId), // MISMA fuente que recordOrderPrepared (CHECK 20260721)
         sender_address: canonicalizeAddress(input.senderAddress, input.vm),
         receiver_address: canonicalizeAddress(input.receiverAddress, input.vm),
         value_minor: String(input.valueMinor),
@@ -155,6 +189,11 @@ export class SupabaseSettlementLedger implements SettlementLedger {
   }): Promise<void> {
     // UPDATE owner-scoped (CD-9): un caller SOLO puede mutar su propia fila. El filtro por
     // sender_address es el guard REAL (el service key bypassea RLS).
+    // NO toca vm/chain_id/network_id (ni las necesita): el patch no incluye esas columnas ⇒ el CHECK
+    // vm_netid se re-evalúa sobre la fila resultante, que las conserva ⇒ pasa si la fila ya era
+    // coherente. Y NO filtra por `vm` a propósito: las filas pre-fix de una remesa Solana dicen
+    // vm='evm', así que agregar .eq("vm", ...) dejaría de mutarlas (una remesa vieja no llegaría nunca
+    // a estado terminal). El input.vm se usa SOLO para canonicalizar la address del guard.
     const patch: Record<string, unknown> = {
       status: input.status,
       updated_at: new Date().toISOString(),
@@ -191,9 +230,12 @@ export class SupabaseSettlementLedger implements SettlementLedger {
     // HU-SOL-20/AC-2: recuperación del remittanceId cuando el cliente lo perdió. OWNER-SCOPED: el
     // `.eq("sender_address", ...)` es el ÚNICO guard real (el service key bypassea RLS) ⇒ borrarlo es
     // un IDOR que expone las remesas de terceros.
-    // NO filtra por `vm`: esa columna NUNCA se escribe (recordOrderPrepared no la incluye) ⇒ toda fila
-    // dice 'evm' y un .eq("vm","solana") devolvería CERO filas siempre. La address ya discrimina la VM
-    // (base58 case-sensitive vs 0x+40hex lowercased — ver canonicalizeAddress).
+    // NO filtra por `vm`, A PROPÓSITO y sigue siendo correcto DESPUÉS del fix de escritura: las filas
+    // escritas ANTES de este fix (o sea TODAS las remesas Solana ya existentes) dicen vm='evm', y son
+    // precisamente las que este fallback tiene que poder recuperar ⇒ un .eq("vm","solana") las perdería
+    // y devolvería CERO. La address ya discrimina la VM sin ayuda de la columna (base58 case-sensitive
+    // vs 0x+40hex lowercased — ver canonicalizeAddress). El test T-R0-1 (§4.2) se pone ROJO si alguien
+    // agrega ese filtro.
     // NO filtra por status: las filas que interesan nacen 'prepared' (recordOrderPrepared), que NO está
     // en STALE_STATUSES; el status viaja en la respuesta y decide el consumidor.
     // NUNCA selecciona value_minor (no se lee ⇒ el ::text de CD-12 no aplica) ni PII (CD-7).
@@ -225,6 +267,8 @@ export class SupabaseSettlementLedger implements SettlementLedger {
   }): Promise<void> {
     // Por id (admin, owner-agnóstico). incrementAttempt ⇒ lee-incrementa-escribe (Supabase JS no
     // expresa `attempts = attempts + 1` sin RPC; el reconcile es de baja concurrencia).
+    // UPDATE de status/attempts/last_error: NO toca vm/chain_id/network_id ⇒ nada que acoplar al CHECK
+    // vm_netid (la fila conserva su identidad de red).
     const patch: Record<string, unknown> = {
       status: input.status,
       updated_at: new Date().toISOString(),
@@ -254,6 +298,8 @@ export class SupabaseSettlementLedger implements SettlementLedger {
     // filtro .in("status", STALE_STATUSES) = no-terminal set (DT-2b): nunca degrada un estado terminal
     // ni reclasifica manual_review. NO lee columnas ⇒ no aplica el ::text de value_minor (es un UPDATE
     // puro, no un select). last_error es un enum estable, NUNCA PII (CD-3).
+    // NO toca vm/chain_id/network_id (UPDATE parcial) ⇒ nada que acoplar al CHECK vm_netid. Tampoco
+    // discrimina por VM: correlaciona por payout_id, que es VM-agnóstico.
     const patch: Record<string, unknown> = {
       status: input.status,
       updated_at: new Date().toISOString(),

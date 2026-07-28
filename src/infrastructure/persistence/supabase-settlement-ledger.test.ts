@@ -69,6 +69,34 @@ function makeClient(results: Array<{ data: unknown; error: unknown }>): {
 
 const SENDER = "0xAbCabcABCabcABCabcABCabcABCabcABCabcABC11";
 
+// Monto del incidente WKH-196: 2^53 < valor < 2^54. Se declara COMO STRING y nunca como literal
+// numérico — escribirlo `90071992547409910` en JS produce 90071992547409900 (el motor lo redondea al
+// parsear el fuente), que es justo la corrupción que estos tests tienen que cazar.
+const VALUE_MINOR_OVER_2_53 = "90071992547409910";
+
+/** Fila cruda del ledger tal como la devuelve PostgREST (value_minor ya casteado a ::text). */
+function rawRow(over: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
+  return {
+    id: "id-1",
+    remittance_id: "rem-1",
+    quote_id: "q-1",
+    idempotency_key: "rem-1:q-1",
+    tx_hash: "0xtx",
+    chain_id: 84532,
+    sender_address: "0xsender",
+    receiver_address: "0xreceiver",
+    // > 2^53: un JSON.parse crudo lo redondearía (WKH-196). Llega como STRING por el ::text.
+    value_minor: VALUE_MINOR_OVER_2_53,
+    status: "principal_in",
+    attempts: 0,
+    payout_id: null,
+    last_error: null,
+    created_at: "2026-07-16T00:00:00.000Z",
+    updated_at: "2026-07-16T00:00:00.000Z",
+    ...over,
+  };
+}
+
 // ── HU-SOL-20 · doble de COMPORTAMIENTO (no un recorder) ────────────────────────────────────────────
 // `makeClient` de arriba es un recorder: devuelve el resultado encolado SIN aplicar los filtros, así
 // que un test de aislamiento pasaría igual con y sin `.eq('sender_address', …)` (test vacuo). Para el
@@ -225,25 +253,7 @@ function solRows(): FakeLedgerRow[] {
 
 describe("SupabaseSettlementLedger (WKH-207)", () => {
   it("AC-4/CD-12: listStale selecciona value_minor::text, filtra por status no-terminal + updated_at < umbral, y parsea el monto uint256-safe", async () => {
-    const raw = {
-      id: "id-1",
-      remittance_id: "rem-1",
-      quote_id: "q-1",
-      idempotency_key: "rem-1:q-1",
-      tx_hash: "0xtx",
-      chain_id: 84532,
-      sender_address: "0xsender",
-      receiver_address: "0xreceiver",
-      // > 2^53: un JSON.parse crudo lo redondearía (WKH-196). Llega como STRING por el ::text.
-      value_minor: "90071992547409910",
-      status: "principal_in",
-      attempts: 0,
-      payout_id: null,
-      last_error: null,
-      created_at: "2026-07-16T00:00:00.000Z",
-      updated_at: "2026-07-16T00:00:00.000Z",
-    };
-    const { client, calls } = makeClient([{ data: [raw], error: null }]);
+    const { client, calls } = makeClient([{ data: [rawRow()], error: null }]);
     const ledger = new SupabaseSettlementLedger(client);
     const out = await ledger.listStale({ olderThanIso: "2026-07-16T01:00:00.000Z", limit: 50 });
 
@@ -254,15 +264,73 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
     expect(calls.in[0]?.[1]).toEqual(["principal_in", "submitted", "forward_error"]);
     expect(calls.lt[0]).toEqual(["updated_at", "2026-07-16T01:00:00.000Z"]);
     expect(calls.limit[0]).toEqual([50]);
-    // El monto se parsea a number desde el string ::text.
-    // OJO (deuda, no la arregla este test): el fixture es "90071992547409910" pero `valueMinor`
-    // es un `number`, y ese valor supera Number.MAX_SAFE_INTEGER (2^53-1), asi que `Number(...)`
-    // lo redondea a 90071992547409900. El literal se escribe redondeado A PROPOSITO para que la
-    // perdida de precision quede visible en vez de esconderse detras de un literal que miente
-    // (escribir ...910 aca es identico byte a byte tras el parseo, y disimula el problema).
-    expect(out[0]?.valueMinor).toBe(90071992547409900);
+    // El monto sale COMO STRING, con los mismos dígitos que entraron. La afirmación es contra el
+    // string y NUNCA contra un literal numérico: `90071992547409910` escrito como número en JS YA
+    // vale 90071992547409900 (supera 2^53-1), así que un assert numérico sufre la misma corrupción
+    // que debería detectar y pasa verde con el bug puesto. Esa era la deuda que escondía este test.
+    expect(out[0]?.valueMinor).toBe(VALUE_MINOR_OVER_2_53);
+    expect(typeof out[0]?.valueMinor).toBe("string"); // un Number() acá lo volvería "number" ⇒ rojo
     expect(out[0]?.remittanceId).toBe("rem-1");
   });
+
+  // ── CD-12/WKH-196 · el round-trip que el test viejo no podía hacer ────────────────────────────────
+  // Lo que entra por el fixture tiene que salir IDÉNTICO carácter por carácter. Se prueban los dos
+  // extremos del rango real de la columna numeric(78,0): el primer entero que `number` ya no
+  // representa (2^53+1) y el uint256 máximo (2^256-1, 78 dígitos).
+  it.each([
+    ["2^53+1 (primer entero que `number` no representa)", "9007199254740993"],
+    ["> 2^53 (el caso del incidente WKH-196)", VALUE_MINOR_OVER_2_53],
+    ["uint256 máximo (2^256-1, 78 dígitos)", "115792089237316195423570985008687907853269984665640564039457584007913129639935"],
+    ["monto real de una remesa (dentro de rango, no debe cambiar)", "400000000"],
+    ["cero (fila 'prepared', monto aún desconocido)", "0"],
+  ])("CD-12 round-trip: %s sale idéntico carácter por carácter", async (_label, digits) => {
+    const { client } = makeClient([{ data: [rawRow({ value_minor: digits })], error: null }]);
+    const out = await new SupabaseSettlementLedger(client).listStale({
+      olderThanIso: "2030-01-01T00:00:00.000Z",
+      limit: 50,
+    });
+    const got = out[0]?.valueMinor;
+    expect(got).toBe(digits); // identidad exacta, sin normalizar
+    expect(typeof got).toBe("string");
+    // Comparación adicional a nivel numérico EXACTO: BigInt no pierde dígitos (Number sí). Si alguien
+    // reintrodujera un Number() intermedio, este assert también se pone rojo.
+    expect(BigInt(String(got))).toBe(BigInt(digits));
+    expect(String(got).length).toBe(digits.length); // sin notación científica ("9e+15") ni truncado
+  });
+
+  // El guard es la contraparte en runtime del `::text`: si alguien borra el cast del select, PostgREST
+  // devuelve el numeric como número JSON YA redondeado. Preferimos romper el reconcile (503, cero
+  // dinero en juego) antes que escribir evidencia con un monto mentiroso.
+  it("CD-12: si value_minor NO llega como texto (::text borrado del select) ⇒ TIRA, no redondea", async () => {
+    // Lo que devolvería PostgREST sin el cast: un número JSON YA corrompido por JSON.parse. Se
+    // construye con Number(<string>) y NO con un literal numérico a propósito — escribir
+    // `90071992547409910` en el fuente es un error de lint (noPrecisionLoss) porque el motor ya lo
+    // redondea al parsear: el linter mismo confirma por qué este campo no puede ser `number`.
+    const corrupted = Number(VALUE_MINOR_OVER_2_53);
+    expect(String(corrupted)).not.toBe(VALUE_MINOR_OVER_2_53); // la pérdida, demostrada
+    const { client } = makeClient([
+      { data: [rawRow({ value_minor: corrupted })], error: null },
+    ]);
+    await expect(
+      new SupabaseSettlementLedger(client).listStale({
+        olderThanIso: "2030-01-01T00:00:00.000Z",
+        limit: 50,
+      }),
+    ).rejects.toThrow("ledger_value_minor_not_text");
+  });
+
+  it.each([["notación científica", "9.007199254740993e+15"], ["vacío", ""], ["negativo", "-1"], ["basura", "abc"]])(
+    "CD-12: value_minor con %s ⇒ TIRA (nunca un monto silenciosamente inventado)",
+    async (_label, bad) => {
+      const { client } = makeClient([{ data: [rawRow({ value_minor: bad })], error: null }]);
+      await expect(
+        new SupabaseSettlementLedger(client).listStale({
+          olderThanIso: "2030-01-01T00:00:00.000Z",
+          limit: 50,
+        }),
+      ).rejects.toThrow("ledger_value_minor_not_text");
+    },
+  );
 
   it("AC-9/CD-9: recordPayoutOutcome es owner-scoped — filtra por idempotency_key Y sender_address (lowercased)", async () => {
     const { client, calls } = makeClient([{ data: null, error: null }]);

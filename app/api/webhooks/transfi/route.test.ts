@@ -49,7 +49,7 @@ function ledgerWith(payoutId: string, status: SettlementLedgerStatus): FakeSettl
     chainId: 84532, // sandbox / Base Sepolia (AC-11)
     senderAddress: "0xsender",
     receiverAddress: "0xreceiver",
-    valueMinor: 400_000_000,
+    valueMinor: "400000000", // string exacto (uint256-safe), como lo devuelve el ::text
     status,
     attempts: 0,
     payoutId,

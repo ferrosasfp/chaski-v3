@@ -376,7 +376,19 @@ export interface SettlementRecord {
   chainId: number | null;
   senderAddress: string;
   receiverAddress: string;
-  valueMinor: number; // parseado desde value_minor::text (CD-12, WKH-196)
+  // STRING, no `number`: es un uint256 (numeric(78,0)) y `number` sólo representa enteros exactos
+  // hasta 2^53-1. El `::text` del SELECT (CD-12, WKH-196) existe para que los dígitos crucen el
+  // transporte intactos; tiparlo `number` obligaba a un `Number(...)` que volvía a redondear justo
+  // lo que el cast había salvado ("90071992547409910" → 90071992547409900).
+  // Por qué `string` y no `bigint`:
+  //   · NINGÚN consumidor hace aritmética con este campo (es evidencia del money-path: se persiste,
+  //     se lee y se muestra). Sin sitio de conversión no hay dónde recolar la pérdida.
+  //   · `bigint` revienta en JSON.stringify (TypeError) y este record vive en rutas admin que
+  //     serializan/loguean; `string` es JSON-safe y ya es la representación que se ESCRIBE
+  //     (value_minor: String(...)), así que el round-trip es comparable carácter por carácter.
+  // REGLA: si algún día hace falta operar con él, usar `BigInt(rec.valueMinor)` — exacto y que tira
+  // ante basura. PROHIBIDO `Number(rec.valueMinor)`: ese es exactamente el bug de WKH-196.
+  valueMinor: string; // dígitos decimales exactos desde value_minor::text (CD-12, WKH-196)
   status: SettlementLedgerStatus;
   attempts: number;
   payoutId: string | null;

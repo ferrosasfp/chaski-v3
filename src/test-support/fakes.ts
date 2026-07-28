@@ -505,7 +505,7 @@ export class FakeSettlementLedger implements SettlementLedger {
       chainId: input.chainId,
       senderAddress: canonicalizeAddress(input.senderAddress, input.vm),
       receiverAddress: canonicalizeAddress(input.depositAddress, input.vm),
-      valueMinor: 0,
+      valueMinor: "0", // string, como la columna ::text (aún no se conoce el monto)
       status: "prepared",
       attempts: 0,
       payoutId: input.payoutId,
@@ -540,7 +540,9 @@ export class FakeSettlementLedger implements SettlementLedger {
       chainId: input.chainId,
       senderAddress: canonicalizeAddress(input.senderAddress, input.vm),
       receiverAddress: canonicalizeAddress(input.receiverAddress, input.vm),
-      valueMinor: input.valueMinor,
+      // Espeja al ledger real: la ESCRITURA recibe un number y lo persiste como texto
+      // (`value_minor: String(input.valueMinor)`), y la LECTURA devuelve ese texto sin re-parsear.
+      valueMinor: String(input.valueMinor),
       status: "principal_in",
       attempts: 0,
       payoutId: null,

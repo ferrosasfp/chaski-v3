@@ -1,0 +1,67 @@
+{
+  // Linter del repo: Biome, fijado por version en devDependencies (@biomejs/biome).
+  //
+  // OJO / trampa de supply-chain: el paquete npm `biome` (SIN scope) NO es este linter. Es un
+  // gestor de env vars abandonado en 2016, de otro autor, que sale con codigo 0 para cualquier
+  // entrada. Correr `npx biome ...` sin el binario local instalado baja ESE paquete y produce un
+  // "linter en verde" que no analiza nada. Usar SIEMPRE `npm run lint` (binario de node_modules).
+  //
+  // Deuda conocida al configurarlo (0 errores, 88 warnings). Ninguna regla se apago para pasar:
+  //   82  style/noNonNullAssertion        79 en tests/test-support, 3 en produccion
+  //                                       (app/api/kyc/session/route.ts, src/infrastructure/rate-limit.ts,
+  //                                        src/infrastructure/solana-wallet.ts)
+  //    3  complexity/useOptionalChain     `a && a.b` en gates de KYC; el fix es "unsafe" segun Biome
+  //                                       y toca el money-path ⇒ no se toco por estilo.
+  //    1  correctness/useExhaustiveDependencies  sacar la dep cambiaria cuando corre el efecto.
+  //    1  suspicious/noTemplateCurlyInString     falso positivo: `${...}` literal en el NOMBRE de un test.
+  //    1  style/useTemplate
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": {
+    "enabled": false,
+    "clientKind": "git",
+    "useIgnoreFile": false
+  },
+  "files": {
+    "includes": [
+      "src/**/*.ts",
+      "src/**/*.tsx",
+      "app/**/*.ts",
+      "app/**/*.tsx",
+      "scripts/**/*.ts",
+      "scripts/**/*.tsx"
+    ]
+  },
+  "formatter": {
+    "enabled": false
+  },
+  "javascript": {
+    "globals": ["React"]
+  },
+  "linter": {
+    "enabled": true,
+    "domains": {
+      "react": "recommended",
+      "next": "recommended",
+      "test": "recommended"
+    },
+    "rules": {
+      "preset": "recommended",
+      "correctness": {
+        "noUnusedVariables": "error",
+        "noUnusedImports": "error",
+        "noUnusedFunctionParameters": "error",
+        "useExhaustiveDependencies": "warn"
+      },
+      "suspicious": {
+        "noDoubleEquals": "error",
+        "noExplicitAny": "error"
+      },
+      "style": {
+        "noNonNullAssertion": "warn",
+        "useConst": "error",
+        "noParameterAssign": "error",
+        "useTemplate": "warn"
+      }
+    }
+  }
+}

@@ -1,5 +1,5 @@
 import { getAddress, keccak256, toBytes } from "viem";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WalletPort } from "../application/ports";
 import { Money } from "../domain/money";
 import type { Quote } from "../domain/remittance";

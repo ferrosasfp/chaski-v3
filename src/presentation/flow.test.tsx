@@ -6,15 +6,14 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { RemittanceFlow, TrackView } from "./flow";
 import { buildTestContainer } from "../test-support/test-container";
 import { FallbackQuoteGateway } from "../infrastructure/fallback/gateways";
-import { ResumeKyc } from "../application/use-cases/resume-kyc";
-import { AbandonPendingKyc } from "../application/use-cases/abandon-pending-kyc";
-import { LockQuote } from "../application/use-cases/lock-quote";
-import { ConfirmAndSend } from "../application/use-cases/confirm-and-send";
-import { TrackRemittance } from "../application/use-cases/track-remittance";
+import type { ResumeKyc } from "../application/use-cases/resume-kyc";
+import type { AbandonPendingKyc } from "../application/use-cases/abandon-pending-kyc";
+import type { LockQuote } from "../application/use-cases/lock-quote";
+import type { ConfirmAndSend } from "../application/use-cases/confirm-and-send";
+import type { TrackRemittance } from "../application/use-cases/track-remittance";
 import { Money } from "../domain/money";
 import {
   type KycVerification,
-  type Quote,
   Remittance,
   type RemittanceState,
   toPersistedIdentity,
@@ -79,7 +78,7 @@ vi.mock("framer-motion", () => ({
     {
       get:
         (_t, tag: string) =>
-        ({ children, ...props }: any) =>
+        ({ children, ...props }: { children?: React.ReactNode } & Record<string, unknown>) =>
           React.createElement(tag, props, children),
     },
   ),

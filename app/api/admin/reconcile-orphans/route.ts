@@ -62,7 +62,7 @@ export async function POST(req: Request): Promise<Response> {
 
   // 3. listStale (AC-4): no-terminales más viejas que el umbral.
   const olderThanIso = new Date(Date.now() - staleThresholdSeconds() * 1000).toISOString();
-  let stale;
+  let stale: Awaited<ReturnType<typeof ledger.listStale>>;
   try {
     stale = await ledger.listStale({ olderThanIso, limit: MAX_LIMIT });
   } catch {

@@ -61,6 +61,10 @@ export function Field({
   children: ReactNode;
 }) {
   return (
+    // <Field> es un wrapper generico: el control real llega por `children` (siempre un <TextInput>
+    // en los call sites) y el <label> lo ENVUELVE, que es una asociacion valida. La regla no puede
+    // verlo porque `children` es opaco en analisis estatico.
+    // biome-ignore lint/a11y/noLabelWithoutControl: el control llega por `children` (ver arriba).
     <label className="block">
       <span className="mb-1.5 block text-sm font-medium text-stone">{label}</span>
       {children}
@@ -121,7 +125,11 @@ export function Pill({
 /** Stepper de progreso del flujo. */
 export function Stepper({ steps, current }: { steps: string[]; current: number }) {
   return (
-    <div className="flex items-center gap-1.5" aria-label={`Paso ${current + 1} de ${steps.length}`}>
+    // El aria-label vivia en este <div>, que tiene rol implicito `generic` y por lo tanto NO lo
+    // expone a lectores de pantalla (el texto no se anunciaba). Se reemplaza por texto real
+    // visualmente oculto: se anuncia de verdad y no cambia el layout (sr-only sale del flujo).
+    <div className="flex items-center gap-1.5">
+      <span className="sr-only">{`Paso ${current + 1} de ${steps.length}`}</span>
       {steps.map((s, i) => (
         <div
           key={s}

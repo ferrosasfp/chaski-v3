@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    name: typecheck + tests + build
+    name: lint + typecheck + tests + build
     runs-on: ubuntu-latest
 
     steps:
@@ -22,6 +22,13 @@ jobs:
       # peers de React 18, por eso el install usa --legacy-peer-deps (igual que en local).
       - name: Install
         run: npm ci --legacy-peer-deps
+
+      # Biome (@biomejs/biome, fijado por version en devDependencies) sobre src/, app/ y scripts/.
+      # Corre el binario LOCAL de node_modules: nunca resuelve el paquete desde la red.
+      # Ojo: el paquete npm `biome` (sin scope) NO es Biome, es otra cosa abandonada en 2016 que
+      # devuelve 0 para todo. Por eso esto nunca debe invocarse con `npx biome`.
+      - name: Lint
+        run: npm run lint
 
       # tsc --noEmit sobre la app (tsconfig.json).
       - name: Typecheck

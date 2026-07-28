@@ -271,7 +271,7 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
     await adapter.refundEscrow();
     const batch = vi.mocked(Connection.prototype.getMultipleAccountsInfo);
     expect(batch).toHaveBeenCalledTimes(1);
-    expect((batch.mock.calls[0]?.[0] as PublicKey[]).length).toBe(3);
+    expect((batch.mock.calls[0]?.[0] as PublicKey[] | undefined)?.length).toBe(3);
   });
 
   it("T-R0-10: 0 candidatos en el ledger ⇒ escrow_not_found, SIN firmar ni broadcastear", async () => {
@@ -309,7 +309,7 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
     const adapter = await connectedWith({ listBySender });
     await expect(adapter.refundEscrow()).rejects.toThrow("escrow_not_found");
     const batch = vi.mocked(Connection.prototype.getMultipleAccountsInfo);
-    expect((batch.mock.calls[0]?.[0] as PublicKey[]).length).toBe(10);
+    expect((batch.mock.calls[0]?.[0] as PublicKey[] | undefined)?.length).toBe(10);
   });
 
   it("T-R0-10 (fail-loud): sin resolver inyectado y sin id ⇒ escrow_id_unavailable (nunca silencioso)", async () => {

@@ -5,9 +5,8 @@ queda bloqueado en un escrow on chain, y recién cuando el pago en destino está
 la autoridad de release lo libera. El operador nunca tiene la custodia del dinero.
 
 El principal viaja por **Solana**. El escrow es un programa **Anchor** en devnet, sin plata
-real. El resto del ecosistema es multichain: el marketplace de agentes que provee la
-cotización de FX y el desembolso vive en Avalanche, y el settlement lo coordina un
-facilitator con un adaptador por red.
+real. El resto del ecosistema es multichain: el marketplace de agentes vive en Avalanche, y
+el settlement lo coordina un facilitator con un adaptador por red.
 
 > **Estado.** Devnet, sin dinero real. La configuración por defecto del repo no mueve
 > fondos: los caminos de settlement están detrás de flags que arrancan apagadas. Ver
@@ -161,10 +160,19 @@ Hoy conviven dos caminos:
 - **Solana** para el principal, con el escrow no custodial descrito arriba.
 - **EVM** sobre Base, con firma EIP-3009, implementado y apagado.
 
-La cotización de FX y el desembolso se resuelven llamando a agentes de un marketplace vía un
-gateway A2A, con una agent key propia del lado del servidor. Ese marketplace corre sobre
-Avalanche. El settlement lo coordina un facilitator que tiene un adaptador por red, que es
-lo que permite que el principal viaje por una cadena y el resto del ecosistema viva en otra.
+El agente que cotiza el FX se resuelve en tiempo de ejecución: la app le pregunta al gateway
+A2A por la capability que necesita y llama al agente que le devuelve, sin URL ni slug fijos
+en el código, con una agent key propia del lado del servidor. Es fail closed, así que si el
+gateway no responde la operación corta en vez de caer a una llamada directa. Ese camino está
+detrás de una flag y arranca apagado.
+
+La verificación de identidad y el desembolso todavía se integran punto a punto, no por el
+gateway. Llevarlos al mismo riel es trabajo pendiente, y el desembolso además tiene que
+preservar la atestación que ata la dirección de depósito a la remesa.
+
+El marketplace de agentes corre sobre Avalanche. El settlement lo coordina un facilitator con
+un adaptador por red, que es lo que permite que el principal viaje por una cadena y el resto
+del ecosistema viva en otra.
 
 ## Configuración
 

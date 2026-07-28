@@ -59,6 +59,7 @@ function makeClient(results: Array<{ data: unknown; error: unknown }>): {
       builder.single = chain("single");
       builder.order = chain("order");
       // thenable: awaitar cualquier terminal resuelve el resultado de este from().
+      // biome-ignore lint/suspicious/noThenProperty: thenable intencional, replica PostgREST/supabase-js.
       builder.then = (resolve: (v: unknown) => void) => resolve(result);
       return builder;
     }),
@@ -127,6 +128,7 @@ function makeBehaviorClient(table: FakeLedgerRow[]): {
         return builder;
       });
       // Proyecta SOLO las columnas pedidas: si el código seleccionara value_minor, aparecería acá.
+      // biome-ignore lint/suspicious/noThenProperty: thenable intencional, replica PostgREST/supabase-js.
       builder.then = (resolve: (v: unknown) => void) =>
         resolve({
           data: rows.map((r) => {
@@ -196,6 +198,7 @@ function makeConstraintClient(): {
         pending = row;
         return builder;
       });
+      // biome-ignore lint/suspicious/noThenProperty: thenable intencional, replica PostgREST/supabase-js.
       builder.then = (resolve: (v: unknown) => void) => {
         if (pending === null) return resolve({ data: null, error: null });
         const violation = vmNetIdViolation(pending);
@@ -252,7 +255,12 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
     expect(calls.lt[0]).toEqual(["updated_at", "2026-07-16T01:00:00.000Z"]);
     expect(calls.limit[0]).toEqual([50]);
     // El monto se parsea a number desde el string ::text.
-    expect(out[0]?.valueMinor).toBe(90071992547409910);
+    // OJO (deuda, no la arregla este test): el fixture es "90071992547409910" pero `valueMinor`
+    // es un `number`, y ese valor supera Number.MAX_SAFE_INTEGER (2^53-1), asi que `Number(...)`
+    // lo redondea a 90071992547409900. El literal se escribe redondeado A PROPOSITO para que la
+    // perdida de precision quede visible en vez de esconderse detras de un literal que miente
+    // (escribir ...910 aca es identico byte a byte tras el parseo, y disimula el problema).
+    expect(out[0]?.valueMinor).toBe(90071992547409900);
     expect(out[0]?.remittanceId).toBe("rem-1");
   });
 
@@ -270,7 +278,7 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
     expect(calls.eq).toContainEqual(["idempotency_key", "rem-1:q-1"]);
     expect(calls.eq).toContainEqual(["sender_address", SENDER.toLowerCase()]);
     // El patch lleva el status mapeado.
-    expect((calls.update[0]?.[0] as Record<string, unknown>).status).toBe("settled");
+    expect((calls.update[0]?.[0] as Record<string, unknown> | undefined)?.status).toBe("settled");
   });
 
   // ── W3.1 (HU-SOL-7 / CD-9): el guard `.eq('sender_address', ...)` canonicaliza VM-aware ANTES del

@@ -367,6 +367,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
               <div className="flex items-center gap-2 text-xs text-stone">
                 <span>Esto borra tu verificación en este dispositivo.</span>
                 <button
+                  type="button"
                   onClick={forgetAndDisconnect}
                   disabled={busy}
                   className="font-semibold text-cochineal underline underline-offset-2"
@@ -374,6 +375,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                   Empezar de nuevo
                 </button>
                 <button
+                  type="button"
                   onClick={() => setConfirmReset(false)}
                   className="text-stone underline underline-offset-2"
                 >
@@ -382,6 +384,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
               </div>
             ) : (
               <button
+                type="button"
                 onClick={() => setConfirmReset(true)}
                 className="text-xs text-stone underline underline-offset-2"
               >
@@ -489,6 +492,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                     {METHODS.map((m) => (
                       <button
                         key={m.id}
+                        type="button"
                         onClick={() => setMethod(m.id)}
                         className={
                           method === m.id

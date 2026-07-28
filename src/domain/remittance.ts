@@ -1,7 +1,7 @@
 // Domain — el agregado Remittance + su máquina de estados. Money-path: las invariantes de
 // negocio viven ACÁ (no en la UI, no en el gateway). Puro, sin deps salvo Money.
 
-import { Money } from "./money";
+import type { Money } from "./money";
 
 export type PayoutMethod = "yape" | "plin" | "bank_cci";
 

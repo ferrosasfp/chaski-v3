@@ -81,6 +81,8 @@ function makeClient(result: { data: unknown; error: unknown }): {
         upsertArgs.push(args);
         return builder;
       });
+      // Thenable intencional: replica el query builder de PostgREST/supabase-js, que es awaitable.
+      // biome-ignore lint/suspicious/noThenProperty: sin `then` el doble no imita al cliente real.
       builder.then = (resolve: (v: unknown) => void) => resolve(result);
       return builder;
     }),

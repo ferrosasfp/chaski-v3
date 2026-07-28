@@ -4,7 +4,7 @@
 // sobre el mismo estado). Overrides a nivel gateway y escape-hatch a nivel use-case (useCases).
 // CD-11: cero I/O real acá (la única excepción, FallbackQuoteGateway, la inyecta el test).
 
-import { Container } from "../composition/container";
+import type { Container } from "../composition/container";
 import { PreviewQuote } from "../application/use-cases/preview-quote";
 import { CreateRemittance } from "../application/use-cases/create-remittance";
 import { ConnectWallet } from "../application/use-cases/connect-wallet";

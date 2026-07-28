@@ -4,10 +4,9 @@
 // reconstruido server-side (ignora body.callback, M6); emite el token HMAC de sesión (B1).
 // Guard-order: 501 → 500 → rate-limit → callback server-side → Didit → issue token (CD-2).
 import { NextResponse } from "next/server";
+import { resolveDiditBaseUrl } from "../../../../src/infrastructure/didit/didit-env";
 import { issueSessionToken } from "../../../../src/infrastructure/kyc-auth";
 import { checkKycRateLimit } from "../../../../src/infrastructure/rate-limit";
-
-const BASE = process.env.DIDIT_BASE_URL ?? "https://verification.didit.me";
 
 // MNR-1: la key del rate-limit por IP debe venir de una fuente que el cliente NO pueda forjar.
 // En Vercel, `x-vercel-forwarded-for` y `x-real-ip` los INYECTA/SOBRESCRIBE la edge de Vercel con la
@@ -41,6 +40,16 @@ export async function POST(req: Request): Promise<Response> {
     return NextResponse.json({ error: "server_misconfigured" }, { status: 500 });
   }
 
+  // Ambiente de Didit: fail-closed y LAZY. Va junto al resto de los guards de MISCONFIG (500) y
+  // ANTES del rate-limit, para no gastar presupuesto del limiter en un request que no puede andar.
+  // No viola CD-2 (resolver una URL no es un fetch: a Didit se le sigue hablando recién más abajo).
+  let base: string;
+  try {
+    base = resolveDiditBaseUrl();
+  } catch {
+    return NextResponse.json({ error: "didit_env_misconfigured" }, { status: 500 });
+  }
+
   const body = (await req.json().catch(() => ({}))) as { vendorData?: string; callback?: string };
 
   // Rate-limit ANTES de cualquier fetch a Didit (CD-2). Fail-closed si Upstash no está (503).
@@ -60,7 +69,7 @@ export async function POST(req: Request): Promise<Response> {
   const callbackBase = process.env.KYC_CALLBACK_BASE_URL;
   const callback = callbackBase ? `${callbackBase}/kyc/callback` : undefined;
 
-  const res = await fetch(`${BASE}/v3/session/`, {
+  const res = await fetch(`${base}/v3/session/`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-api-key": apiKey },
     body: JSON.stringify({

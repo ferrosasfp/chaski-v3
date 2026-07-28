@@ -95,6 +95,12 @@ beforeEach(() => {
   vi.stubEnv("VERCEL_ENV", ""); // → no-prod y no-Vercel: la simulación se acepta (DT-5 no dispara)
   vi.stubEnv("SETTLE_ATTESTATION_SECRET", ""); // → rama A1 (skip): los 19 existentes intactos
   vi.stubEnv("PAYOUT_POP_SECRET", ""); // WKH-206: guard 7 SKIP total (los tests que quieren PoP lo re-stubean)
+  // Ambiente de Didit (fail-closed): los tests que SÍ stubean DIDIT_API_KEY llegan al guard 3 de
+  // authority.ts, que sin DIDIT_ENV devuelve 503 kyc_authority_misconfigured. Mismo razonamiento que
+  // los stubs de arriba: fija el ambiente en "mock" para que un DIDIT_ENV=live de la shell/CI no
+  // pueda resolver el host REAL de Didit desde un test.
+  vi.stubEnv("DIDIT_ENV", "mock");
+  vi.stubEnv("DIDIT_BASE_URL", "http://localhost:9999/didit-mock");
   // WKH-207: ledger apagado por default (flag OFF ⇒ null ⇒ byte-idéntico).
   ledgerMock.recordPayoutOutcome.mockReset();
   ledgerMock.recordPayoutOutcome.mockResolvedValue(undefined);

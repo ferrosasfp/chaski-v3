@@ -37,6 +37,11 @@ beforeEach(() => {
   // Default: rate-limit permite el paso (los tests de autoridad no lo ejercitan).
   checkRouteRateLimitMock.mockReset();
   checkRouteRateLimitMock.mockResolvedValue({ ok: true });
+  // Ambiente de Didit (fail-closed): los tests con DIDIT_API_KEY llegan al guard 3 de authority.ts,
+  // que sin DIDIT_ENV devuelve 503 kyc_authority_misconfigured. Se fija "mock" para que un
+  // DIDIT_ENV=live de la shell/CI no pueda resolver el host REAL de Didit desde un test.
+  vi.stubEnv("DIDIT_ENV", "mock");
+  vi.stubEnv("DIDIT_BASE_URL", "http://localhost:9999/didit-mock");
 });
 
 describe("POST /api/payout/validate — autoridad server-side (WKH-180)", () => {
@@ -255,5 +260,34 @@ describe("HttpPayoutAuthorityGateway — adapter fail-closed (WKH-180, CD-A4)", 
     const gw = new HttpPayoutAuthorityGateway();
     const r = await gw.authorize({ verificationId: VID, address: ADDR });
     expect(r).toEqual({ authorized: true, reason: "simulated_dev" });
+  });
+});
+
+describe("autoridad de payout — ambiente de Didit fail-closed (guard 3)", () => {
+  it("key + SIN DIDIT_ENV → 503 kyc_authority_misconfigured; NO se re-valida contra Didit", async () => {
+    vi.stubEnv("DIDIT_API_KEY", "test-key");
+    vi.stubEnv("DIDIT_ENV", undefined);
+    vi.stubEnv("DIDIT_BASE_URL", undefined);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const res = await POST(req({ verificationId: VID, address: ADDR }));
+    // 503 (misconfig NUESTRA) y NO 502 (kyc_reauth_failed = "Didit falló"): un reason que manda a
+    // ops a mirar al partner cuando el problema es una env sin setear cuesta horas de diagnóstico.
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ authorized: false, reason: "kyc_authority_misconfigured" });
+    expect(fetchMock).not.toHaveBeenCalled(); // fail-closed: nunca autoriza, nunca habla con Didit
+  });
+
+  it("DIDIT_ENV=live + VERCEL_ENV=preview → 503 (un preview NO re-valida contra el Didit real)", async () => {
+    // El vector real: los previews de Vercel HEREDAN las envs de producción por default.
+    vi.stubEnv("DIDIT_API_KEY", "test-key");
+    vi.stubEnv("DIDIT_ENV", "live");
+    vi.stubEnv("DIDIT_BASE_URL", undefined);
+    vi.stubEnv("VERCEL_ENV", "preview");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const res = await POST(req({ verificationId: VID, address: ADDR }));
+    expect(res.status).toBe(503);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

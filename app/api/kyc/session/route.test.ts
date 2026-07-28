@@ -32,6 +32,11 @@ beforeEach(() => {
   vi.stubEnv("DIDIT_WORKFLOW_ID", "wf-1");
   vi.stubEnv("KYC_SESSION_SECRET", "test-secret-123");
   vi.stubEnv("KYC_CALLBACK_BASE_URL", "");
+  // Ambiente de Didit declarado (fail-closed): sin esto la ruta corta en 500 didit_env_misconfigured
+  // antes del rate-limit. Además BLINDA contra un DIDIT_ENV=live exportado en la shell/CI: un test
+  // jamás debe poder resolver el host REAL de Didit (crea verificaciones con PII).
+  vi.stubEnv("DIDIT_ENV", "mock");
+  vi.stubEnv("DIDIT_BASE_URL", "http://localhost:9999/didit-mock");
 });
 
 describe("POST /api/kyc/session — guard-order + rate-limit + callback + token (WKH-179)", () => {
@@ -142,5 +147,31 @@ describe("POST /api/kyc/session — guard-order + rate-limit + callback + token 
     expect(body.sessionToken).toBe("didit-tok");
     expect(typeof body.authToken).toBe("string");
     expect(body.authToken).not.toBe(body.sessionToken);
+  });
+
+  // ── Ambiente de Didit: fail-closed (elimina el default productivo) ──────────
+  it("key + workflow válidos + SIN DIDIT_ENV → 500 didit_env_misconfigured y NO se crea sesión en Didit", async () => {
+    vi.stubEnv("DIDIT_ENV", undefined);
+    vi.stubEnv("DIDIT_BASE_URL", undefined);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const res = await POST(req({ vendorData: "0xabc" }));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "didit_env_misconfigured" });
+    // EL assert que importa: esta ruta CREA verificaciones de identidad. Sin ambiente declarado no
+    // sale ni un request. Antes de este fix, acá se creaba una sesión REAL en producción de Didit.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("DIDIT_ENV=mock + DIDIT_BASE_URL → el fetch va al MOCK, nunca al host de Didit", async () => {
+    // El `_url: string` NO es decorativo: sin parámetro declarado, `mock.calls` se tipa como `[]`
+    // y `calls[0][0]` no compila con strict (TS2493).
+    const fetchMock = vi.fn(async (_url: string) => ({ ok: true, json: async () => DIDIT_OK }));
+    vi.stubGlobal("fetch", fetchMock);
+    const res = await POST(req({ vendorData: "0xabc" }));
+    expect(res.status).toBe(200);
+    const url = String(fetchMock.mock.calls[0]?.[0]);
+    expect(url).toBe("http://localhost:9999/didit-mock/v3/session/");
+    expect(url).not.toContain("didit.me");
   });
 });

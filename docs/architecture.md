@@ -1,53 +1,133 @@
-# Chaski v2 — Arquitectura (DApp mobile + Clean Architecture)
+# Arquitectura
 
-DApp **mobile-first** (PWA Web3) con **Clean Architecture**. Producción, no hackathon.
-En paralelo al demo (yarvis) — NO lo toca.
+Detalle de capas y flujo. El panorama general y el estado del proyecto están en el
+[README](../README.md).
 
-## Es una DApp mobile (la tecnología que lo hace real)
-- **PWA** (instalable, mobile-first) — como el demo, pero producto completo.
-- **Wallet Web3:** el sender es cripto-nativo → conecta su wallet (con USDC). Firma la **autorización EIP-3009**
-  del principal (el USDC de la remesa) — el operador NO fondea. Stack: **wagmi + viem** + un connector (Reown/
-  RainbowKit — a confirmar matcheando el demo). Multichain testnet (la chain que acepte TransFi: Base/Avalanche).
-- **On-chain real:** el movimiento del principal es on-chain (a la wallet del partner/beneficiario, NO self-transfer);
-  la UI muestra los refs on-chain (opt-in, cripto-invisible por default).
-- Next.js (app router) + Tailwind (matchear el demo para reusar patrones + la identidad Chaski).
+## Regla de dependencia
 
-## Clean Architecture — la regla de dependencia apunta HACIA adentro
 ```
-Presentation (UI)  →  Application (use-cases + ports)  →  Domain (entities)
-Infrastructure (adapters)  →  implementa los ports (inyectados en el composition root)
+presentation   ->  application  ->  domain
+infrastructure ->  application (implementa sus ports)
+composition    ->  conoce a todos, los cablea
 ```
-Nada del dominio conoce React, viem, ni el gateway a2a. Los adapters son reemplazables (fallback → real) sin tocar
-use-cases ni UI — mismo principio que el provider-pattern del backend.
 
-### Capas y contenido
-- **`src/domain/`** — entidades + value objects PUROS (sin deps): `Remittance`, `Quote`, `Beneficiary`,
-  `KycVerification`, `Money` (USD/PEN con precisión), `RemittanceStatus` (la máquina de estados:
-  CREATED→KYC→QUOTED→PRINCIPAL_IN→PAYOUT→SETTLED/REFUNDED). Invariantes de negocio acá (ej. "no PRINCIPAL_IN sin KYC+quote válido").
-- **`src/application/`** — **use-cases** (orquestan el dominio): `RequestQuote`, `VerifyIdentity`, `ConfirmAndSend`,
-  `TrackRemittance`, `ListHistory`. Y los **ports** (interfaces que los use-cases requieren): `QuoteGateway`,
-  `KycGateway`, `PayoutGateway`, `WalletPort` (conectar/firmar), `RemittanceRepository`, `Clock`. Los use-cases
-  dependen SOLO de estos ports.
-- **`src/infrastructure/`** — **adapters** que implementan los ports:
-  - `A2aQuoteGateway` / `A2aKycGateway` / `A2aPayoutGateway` → llaman a los agentes `remit-*` vía el gateway a2a
-    (reusa el patrón `/api/plan` + `/api/execute` del demo, key server-side, apuntando a `remit-*` NO `agentshop-*`).
-  - `ViemWalletAdapter` → wagmi/viem: conectar wallet + firmar EIP-3009 del principal.
-  - `RemittanceRepository` → persistencia del historial/estado (IndexedDB local o el backend; aislado del demo).
-  - `SystemClock`.
-- **`src/presentation/`** — React/Next (screens + componentes) que consumen los use-cases vía un **composition root**
-  (`src/composition/container.ts`) que inyecta los adapters. La UI no instancia infra directo.
-- **`app/`** — rutas Next (PWA shell) + `app/api/*` (los server routes que hablan con el gateway con la key server-side,
-  patrón del demo).
+Nada del dominio ni de la aplicación importa React, `viem`, `@solana/web3.js` ni un cliente
+de base de datos. Los adaptadores se eligen en un solo lugar, `src/composition/container.ts`,
+que es el único archivo que menciona clases concretas de infraestructura.
 
-### Regla clave (dependency inversion)
-El fallback vs real de cada gateway se resuelve en el **composition root** (igual que las factories del backend):
-en dev, adapters fallback; con sandbox, adapters reales — **cero cambio en use-cases ni UI**. Esto hace la DApp
-demostrable HOY end-to-end (fallback) y lista para real apenas llegue Fase A.
+La consecuencia práctica: el camino del dinero se prueba en la capa de use cases con dobles,
+sin navegador, sin red y sin wallet. Es la razón por la que hay 819 tests que corren en
+segundos en vez de una suite de integración lenta y frágil.
 
-## Testabilidad
-Dominio + use-cases testeables sin red/wallet/UI (se inyectan ports fake). Es la razón de Clean Architecture acá:
-un money-path se prueba en la capa de use-cases con dobles, no en el navegador.
+## `src/domain/`
 
-## Flujo (mapeado a las capas)
-Screens (Presentation) → use-cases (Application) → ports → adapters (Infra: agentes a2a `remit-*` + wallet + repo).
-El detalle de screens/estados está en `ux-design.md`.
+Puro, sin dependencias externas.
+
+- `Money`: montos en unidades menores, enteros, cero floats. Evita que un redondeo de punto
+  flotante se convierta en una diferencia de plata.
+- `Remittance`: el agregado. Contiene la máquina de estados y las invariantes de negocio.
+
+Estados: `created`, `kyc_pending`, `kyc_passed`, `kyc_failed`, `quoted`, `confirmed`,
+`principal_in`, `payout_submitted`, `settled`, `payout_failed`, `refunded`.
+
+Las transiciones no son libres. No se puede confirmar sin identidad verificada y sin una
+cotización vigente. Una cotización con fecha de vencimiento no parseable se trata como
+vencida, no como válida.
+
+## `src/application/`
+
+Los use cases orquestan el dominio y dependen solo de los ports.
+
+Use cases: `PreviewQuote`, `CreateRemittance`, `ConnectWallet`, `StartKyc`, `ResumeKyc`,
+`AbandonPendingKyc`, `ForgetKyc`, `LockQuote`, `ConfirmAndSend`, `TrackRemittance`,
+`ListHistory`.
+
+Los ports viven en `src/application/ports.ts`. Los principales:
+
+| Port | Responsabilidad |
+|---|---|
+| `QuoteGateway` | Cotización de FX del corredor |
+| `KycGateway`, `KycStore`, `KycPendingStore` | Verificación de identidad y su estado |
+| `PayoutGateway`, `PayoutAuthorityGateway` | Envío del desembolso y su autorización server side |
+| `WalletPort` | Conectar y firmar, indistinto EVM o Solana |
+| `PrincipalSettlementGateway` | Movimiento del principal en el camino EVM |
+| `SolanaSettlementGateway`, `SolanaPayoutPrepareGateway` | Depósito al escrow y patrocinio de gas |
+| `SolanaEscrowRefundGateway`, `SolanaRemittanceIdResolver`, `RefundGateway` | Devolución y recuperación |
+| `PopSigner` | Prueba de posesión de la clave |
+| `RemittanceRepository`, `SettlementLedger` | Persistencia local y ledger de settlement |
+| `Clock`, `IdGenerator` | Tiempo e identificadores, inyectados para poder testear |
+
+`WalletPort` es la abstracción que hace posible el multichain: el mismo use case sirve para
+una wallet EVM y para una Solana, porque ninguno de los dos adaptadores filtra su tipo de
+cadena hacia arriba.
+
+## `src/infrastructure/`
+
+Los adaptadores, agrupados por responsabilidad:
+
+- `wallet.ts`, `solana-wallet.ts`, `solana-wallet-bridge.ts`: wallets EVM (inyectada y
+  WalletConnect) y Solana, más el fallback de demo.
+- `settlement/`: cliente del facilitator, atestación de depósito, verificador on chain,
+  gateways de preparación y settlement para cada VM.
+- `solana/escrow-idl.ts`: copia pinneada del IDL del programa Anchor.
+- `refund/`: devolución vía escrow y resolución del identificador de remesa desde el índice
+  on chain.
+- `persistence/`: ledger de settlement en Postgres y manejo de fallos de escritura.
+- `a2a/`: clientes de los agentes del marketplace, siempre detrás de rutas server only.
+- `auth/`, `rate-limit.ts`, `address.ts`, `chain.ts`: prueba de posesión, límites de tasa,
+  validación de direcciones y resolución de red desde el entorno.
+
+`chain.ts` es la única fuente de verdad para red, mint, direcciones de contrato y pubkeys.
+No hay ninguna de esas constantes escrita en otro archivo.
+
+## `app/`
+
+Shell de Next con App Router, más las rutas de API. Las rutas son server only: son el único
+lugar donde viven las keys de los servicios externos, que nunca llegan al bundle del
+navegador.
+
+- `api/payout/prepare`, `api/payout/validate`: preparación y validación del desembolso.
+- `api/settle/principal`, `api/settle/solana-sponsor`: settlement por VM.
+- `api/solana/escrow/remittance-ids`: lectura del índice on chain de escrows.
+- `api/kyc/session`, `api/kyc/decision`: identidad.
+- `api/a2a/quote`, `api/a2a/payout/challenge`, `api/a2a/payout/submit`: llamadas al
+  marketplace de agentes.
+- `api/webhooks/*`: notificaciones del proveedor de desembolso, con firma verificada.
+- `api/admin/reconcile-orphans`: reconciliación de filas del ledger sin contraparte.
+
+## Flujo
+
+Pasos de la interfaz: `send`, `connect`, `review`, `verify`, `confirm`, `track`, `done`.
+
+```
+send      monto, preview de tasa en vivo
+connect   conexión de wallet
+review    revisión de la cotización y el beneficiario
+verify    verificación de identidad
+confirm   confirmación, firma del depósito al escrow
+track     seguimiento del estado
+done      recibo
+```
+
+La cotización se pide antes de la verificación de identidad, a propósito: el usuario ve el
+precio antes de que se le pida un documento.
+
+## Composition root
+
+`src/composition/container.ts` decide, leyendo el entorno:
+
+- Qué VM está activa, y con eso qué adaptador de wallet se inyecta. Un solo dispatcher, para
+  que no exista un modo mixto silencioso.
+- Qué adaptador de cotización y desembolso se usa: el de demo o el que llama a los agentes.
+- Si el settlement real está encendido o no.
+
+Los guards son fail loud y corren en construcción, no en tiempo de firma. Una configuración
+incoherente rompe al arrancar la app. Los casos cubiertos:
+
+- Firma EIP-3009 encendida sin adaptador real, sin dirección receptora, sin contrato de
+  token, o con una dirección malformada.
+- Camino Solana encendido sin VM Solana, sin mint, o sin la pubkey del facilitator.
+- VM Solana y firma EIP-3009 encendidas a la vez, que son mutuamente excluyentes.
+
+Con el entorno vacío ningún guard se activa, porque ninguna flag está encendida: la app
+levanta en modo demo y no mueve fondos.

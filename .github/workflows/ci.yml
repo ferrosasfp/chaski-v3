@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    name: typecheck + tests + build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # El arbol de dependencias mezcla React 19 con paquetes que todavia declaran
+      # peers de React 18, por eso el install usa --legacy-peer-deps (igual que en local).
+      - name: Install
+        run: npm ci --legacy-peer-deps
+
+      # tsc --noEmit sobre la app (tsconfig.json).
+      - name: Typecheck
+        run: npm run typecheck
+
+      # tsc --noEmit sobre scripts/ (tsconfig.scripts.json), que queda fuera del build de Next.
+      - name: Typecheck scripts
+        run: npm run typecheck:scripts
+
+      # vitest run: dominio, aplicacion, infraestructura, rutas de API, componentes
+      # y los contract tests (incluido el hash canonico del IDL del escrow).
+      - name: Tests
+        run: npm test
+
+      - name: Build
+        run: npm run build

@@ -50,8 +50,26 @@ NO lleva PII (`travelRuleData` / `legalId` / `documentNumber`).
 ## `ESCROW_IDL_SHA256`
 
 ```
-aa53c03f159f7381cedf598cfd1b9e0b12d34dcdb2ae3240e9c14b288225fb71
+4bcc34a997396d360ab996ea5bb1015ffdd8a1d357d3f4b4cffcbfe8ea98d12b
 ```
+
+### Bitácora de re-pinneos
+
+| Fecha | Hash | SDD que lo autoriza | Motivo |
+|-------|------|---------------------|--------|
+| 2026-07-22 | `aa53c03f159f7381cedf598cfd1b9e0b12d34dcdb2ae3240e9c14b288225fb71` | WKH-227 / HU-SOL-24 (pin inicial) | Congelar el IDL del escrow tal como estaba deployado (4 ix, `EscrowState`). |
+| 2026-07-28 | `4bcc34a997396d360ab996ea5bb1015ffdd8a1d357d3f4b4cffcbfe8ea98d12b` | **HU-SOL-20 / R2b** — `solana-programs/doc/sdd/002-escrow-remittance-id-recovery/sdd.md` §4.10 (DT-9), §5 paso R2, gate G5 | R1 amplió el programa: **+2 instrucciones** (`register_escrow`, `deregister_escrow`), **+1 account type** (`EscrowIndex`) y **+1 error** (`6005 EscrowIndexFull`). |
+
+Este re-pinneo **no es drift**: es el SDD explícito que exige el párrafo de abajo. Verificado antes de
+re-pinnear que las **4 instrucciones preexistentes** (`deposit`, `release`, `refund`, `close`) siguen
+canonicalizando **byte-idénticas** (mismo discriminador, mismas cuentas en el mismo orden, mismos args),
+que el tipo `EscrowState` y su discriminador de cuenta **no cambiaron** (8 campos, sin padding) y que el
+`address` sigue siendo `DR5GoMT7sAKzD6wZMKJPeknS3Y6fzgZUNevi7xiESE4x` (upgrade in-place, CD-15). El
+valor es **idéntico** al pineado por R2a en `wasiai-facilitator` (`src/chains/escrow-idl.hash.test.ts`).
+
+⚠️ El hash **no** se calcula con `sha256sum` (hashea bytes, no JSON canónico) ni con Python
+(`json.dumps` escapa los no-ASCII como `\uXXXX` y `JSON.stringify` no; el IDL tiene `docs` con
+acentos ⇒ hash distinto sobre el mismo archivo). Usar `canonicalSha256` de `idl/canonical-hash.ts`.
 
 SHA-256 canónico (claves ordenadas) del IDL del escrow. Verificado en F2 sobre los 3 IDL reales del
 ecosistema (chaski `src/infrastructure/solana/escrow-idl.ts`, el sibling `solana-programs/target/idl/escrow.json`

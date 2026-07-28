@@ -206,7 +206,10 @@ export class WalletConnectWallet implements WalletPort {
       metadata: {
         name: "Chaski",
         description: "Envía USDC a Perú, sin vueltas",
-        url: typeof window !== "undefined" ? window.location.origin : "https://chaski-v2.vercel.app",
+        // En el browser (único lugar donde corre este init) manda el origin real. La rama
+        // server-side es inalcanzable en la práctica; se resuelve por env para no hardcodear
+        // ninguna URL de despliegue en el repo.
+        url: typeof window !== "undefined" ? window.location.origin : (process.env.NEXT_PUBLIC_APP_URL ?? ""),
         icons: [],
       },
     });

@@ -35,6 +35,7 @@ import type {
   QuoteRequest,
   RefundGateway,
   RemittanceRepository,
+  SenderRemittanceRef,
   SettlementFailureReason,
   SettlementLedger,
   SettlementLedgerStatus,
@@ -574,6 +575,21 @@ export class FakeSettlementLedger implements SettlementLedger {
       .filter((r) => STALE_STATUSES.includes(r.status) && r.updatedAt < input.olderThanIso)
       .slice(0, input.limit)
       .map((r) => ({ ...r }));
+  }
+
+  // HU-SOL-20/AC-2: lectura owner-scoped por sender_address canonicalizado, created_at desc, sin
+  // filtro por `vm` (columna nunca escrita) ni por status (las filas que interesan son 'prepared').
+  async listRemittanceIdsBySender(input: {
+    senderAddress: string;
+    vm: "evm" | "solana";
+    limit: number;
+  }): Promise<SenderRemittanceRef[]> {
+    const owner = canonicalizeAddress(input.senderAddress, input.vm);
+    return [...this.store.values()]
+      .filter((r) => r.senderAddress === owner)
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+      .slice(0, input.limit)
+      .map((r) => ({ remittanceId: r.remittanceId, status: r.status, createdAt: r.createdAt }));
   }
 
   async markOutcome(input: {

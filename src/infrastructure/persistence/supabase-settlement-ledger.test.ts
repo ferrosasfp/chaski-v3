@@ -19,6 +19,7 @@ interface Calls {
   lt: unknown[][];
   limit: unknown[][];
   single: unknown[][];
+  order: unknown[][]; // HU-SOL-20: listRemittanceIdsBySender ordena por created_at desc
 }
 function makeClient(results: Array<{ data: unknown; error: unknown }>): {
   client: SupabaseClient;
@@ -34,6 +35,7 @@ function makeClient(results: Array<{ data: unknown; error: unknown }>): {
     lt: [],
     limit: [],
     single: [],
+    order: [],
   };
   let i = 0;
   const client = {
@@ -54,6 +56,7 @@ function makeClient(results: Array<{ data: unknown; error: unknown }>): {
       builder.lt = chain("lt");
       builder.limit = chain("limit");
       builder.single = chain("single");
+      builder.order = chain("order");
       // thenable: awaitar cualquier terminal resuelve el resultado de este from().
       builder.then = (resolve: (v: unknown) => void) => resolve(result);
       return builder;
@@ -63,6 +66,86 @@ function makeClient(results: Array<{ data: unknown; error: unknown }>): {
 }
 
 const SENDER = "0xAbCabcABCabcABCabcABCabcABCabcABCabcABC11";
+
+// ── HU-SOL-20 · doble de COMPORTAMIENTO (no un recorder) ────────────────────────────────────────────
+// `makeClient` de arriba es un recorder: devuelve el resultado encolado SIN aplicar los filtros, así
+// que un test de aislamiento pasaría igual con y sin `.eq('sender_address', …)` (test vacuo). Para el
+// guard de ownership de HU-SOL-20 hace falta una tabla en memoria que aplique SOLO los filtros que el
+// código pide, con DOS senders distintos adentro:
+//   · borrar el `.eq('sender_address', …)`   ⇒ devuelve filas del OTRO sender  → rojo
+//   · escribir mal el nombre de la columna    ⇒ `unknown_column` (lo que haría Postgres, 42703) → rojo
+//   · agregar `.eq('vm','solana')` (§4.2)     ⇒ 0 filas (toda fila real dice 'evm')            → rojo
+// Un espía `toHaveBeenCalledWith` NO caza los dos últimos casos.
+interface FakeLedgerRow {
+  remittance_id: string;
+  status: string;
+  created_at: string;
+  sender_address: string;
+  vm: string; // SIEMPRE 'evm' — la columna existe pero nadie la escribe (§4.2 del story)
+  value_minor: string;
+}
+function makeBehaviorClient(table: FakeLedgerRow[]): {
+  client: SupabaseClient;
+  selects: string[];
+} {
+  const selects: string[] = [];
+  const client = {
+    from: vi.fn(() => {
+      let rows = [...table];
+      let cols: string[] = [];
+      const builder: Record<string, unknown> = {};
+      builder.select = vi.fn((c: string) => {
+        selects.push(c);
+        cols = c.split(",").map((s) => s.trim());
+        return builder;
+      });
+      builder.eq = vi.fn((col: string, val: unknown) => {
+        // Una columna inexistente en Postgres es un ERROR (42703), no un filtro que se ignora. Si el
+        // doble lo ignorara, un `sender_adress` mal escrito pasaría el test y en prod el dueño no vería
+        // lo suyo. Acá explota.
+        if (!(col in (table[0] ?? {}))) throw new Error(`unknown_column:${col}`);
+        rows = rows.filter((r) => (r as unknown as Record<string, unknown>)[col] === val);
+        return builder;
+      });
+      builder.order = vi.fn((col: string, opts?: { ascending?: boolean }) => {
+        if (!(col in (table[0] ?? {}))) throw new Error(`unknown_column:${col}`);
+        const dir = opts?.ascending === false ? -1 : 1;
+        rows = [...rows].sort((a, b) => {
+          const av = String((a as unknown as Record<string, unknown>)[col]);
+          const bv = String((b as unknown as Record<string, unknown>)[col]);
+          return av < bv ? -dir : av > bv ? dir : 0;
+        });
+        return builder;
+      });
+      builder.limit = vi.fn((n: number) => {
+        rows = rows.slice(0, n);
+        return builder;
+      });
+      // Proyecta SOLO las columnas pedidas: si el código seleccionara value_minor, aparecería acá.
+      builder.then = (resolve: (v: unknown) => void) =>
+        resolve({
+          data: rows.map((r) => {
+            const out: Record<string, unknown> = {};
+            for (const c of cols) out[c] = (r as unknown as Record<string, unknown>)[c];
+            return out;
+          }),
+          error: null,
+        });
+      return builder;
+    }),
+  };
+  return { client: client as unknown as SupabaseClient, selects };
+}
+
+const SOL_A = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // base58 canónico válido
+const SOL_B = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // otro sender distinto
+function solRows(): FakeLedgerRow[] {
+  return [
+    { remittance_id: "rem-A-old", status: "prepared", created_at: "2026-07-20T00:00:00.000Z", sender_address: SOL_A, vm: "evm", value_minor: "0" },
+    { remittance_id: "rem-B1", status: "prepared", created_at: "2026-07-26T00:00:00.000Z", sender_address: SOL_B, vm: "evm", value_minor: "0" },
+    { remittance_id: "rem-A-new", status: "settled", created_at: "2026-07-27T00:00:00.000Z", sender_address: SOL_A, vm: "evm", value_minor: "0" },
+  ];
+}
 
 describe("SupabaseSettlementLedger (WKH-207)", () => {
   it("AC-4/CD-12: listStale selecciona value_minor::text, filtra por status no-terminal + updated_at < umbral, y parsea el monto uint256-safe", async () => {
@@ -251,6 +334,118 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
     await expect(
       ledger.recordWebhookOutcome({ payoutId: "p-3", status: "settled" }),
     ).rejects.toThrow(/ledger_record_webhook_outcome_failed:PGRST000/);
+  });
+
+  // ── HU-SOL-20/AC-2 · listRemittanceIdsBySender (T-R0-1/2/3) ──────────────────────────────────────
+  // El `.eq('sender_address', …)` es el ÚNICO guard de ownership (el service key BYPASSEA RLS):
+  // borrarlo expone los remittanceId de terceros, o sea la PDA de su escrow. Se prueba con el doble de
+  // COMPORTAMIENTO, no con un espía.
+  it("T-R0-1 (AC-2/IDOR): devuelve SOLO las filas del sender pedido — el otro sender NUNCA aparece", async () => {
+    const { client } = makeBehaviorClient(solRows());
+    const out = await new SupabaseSettlementLedger(client).listRemittanceIdsBySender({
+      senderAddress: SOL_A,
+      vm: "solana",
+      limit: 20,
+    });
+    const ids = out.map((r) => r.remittanceId);
+    expect(ids).toEqual(["rem-A-new", "rem-A-old"]); // created_at DESC
+    // Sin el filtro por sender_address, rem-B1 estaría acá: es el IDOR que el guard cierra.
+    expect(ids).not.toContain("rem-B1");
+    expect(JSON.stringify(out)).not.toContain("rem-B1");
+  });
+
+  it("T-R0-1 (§4.2): NO filtra por la columna `vm` — toda fila real dice 'evm', incluidas las Solana", async () => {
+    // Las filas del doble llevan vm:'evm' (fiel a prod: recordOrderPrepared nunca escribe la columna).
+    // Si la query agregara `.eq('vm','solana')`, esto devolvería [] y el fallback de AC-2 no protegería nada.
+    const { client } = makeBehaviorClient(solRows());
+    const out = await new SupabaseSettlementLedger(client).listRemittanceIdsBySender({
+      senderAddress: SOL_A,
+      vm: "solana",
+      limit: 20,
+    });
+    expect(out.length).toBe(2); // > 0 ⇒ no se filtró por vm
+  });
+
+  it("T-R0-1 (IDOR base58): la pubkey se canonicaliza SIN lowercase — un sender no ve lo del otro", async () => {
+    const { client, selects } = makeBehaviorClient(solRows());
+    const ledger = new SupabaseSettlementLedger(client);
+    const a = await ledger.listRemittanceIdsBySender({ senderAddress: SOL_A, vm: "solana", limit: 20 });
+    const b = await ledger.listRemittanceIdsBySender({ senderAddress: SOL_B, vm: "solana", limit: 20 });
+    expect(a.map((r) => r.remittanceId)).toEqual(["rem-A-new", "rem-A-old"]);
+    expect(b.map((r) => r.remittanceId)).toEqual(["rem-B1"]);
+    // Un lowercase de la base58 no matchearía ninguna fila (la columna guarda el case canónico).
+    const lowered = await ledger.listRemittanceIdsBySender({
+      senderAddress: new PublicKey(SOL_A).toBase58(),
+      vm: "evm", // canonicaliza a lowercase ⇒ 0 filas: prueba que el case IMPORTA
+      limit: 20,
+    });
+    expect(lowered).toEqual([]);
+    expect(selects.length).toBe(3);
+  });
+
+  it("T-R0-2 (CD-12/CD-7): el select trae remittance_id/status/created_at y NUNCA value_minor ni PII", async () => {
+    const { client, selects } = makeBehaviorClient(solRows());
+    const out = await new SupabaseSettlementLedger(client).listRemittanceIdsBySender({
+      senderAddress: SOL_A,
+      vm: "solana",
+      limit: 20,
+    });
+    const cols = String(selects[0]);
+    expect(cols).toContain("remittance_id");
+    expect(cols).toContain("status");
+    expect(cols).toContain("created_at");
+    expect(cols).not.toContain("value_minor"); // no se lee ⇒ el ::text de CD-12 no aplica
+    expect(cols).not.toContain("receiver_address");
+    // La proyección del doble solo devuelve lo pedido ⇒ el shape de salida no puede filtrar montos.
+    expect(Object.keys(out[0] ?? {}).sort()).toEqual(["createdAt", "remittanceId", "status"]);
+    expect(out[0]?.status).toBe("settled");
+    expect(out[0]?.createdAt).toBe("2026-07-27T00:00:00.000Z");
+  });
+
+  it("T-R0-2: ordena created_at DESC y aplica el limit (recorder: verifica los argumentos exactos)", async () => {
+    const { client, calls } = makeClient([{ data: [], error: null }]);
+    await new SupabaseSettlementLedger(client).listRemittanceIdsBySender({
+      senderAddress: SOL_A,
+      vm: "solana",
+      limit: 7,
+    });
+    expect(calls.eq).toContainEqual(["sender_address", new PublicKey(SOL_A).toBase58()]);
+    expect(calls.eq.map((c) => c[0])).not.toContain("vm"); // §4.2
+    expect(calls.in.length).toBe(0); // §4.3: NO filtra por STALE_STATUSES (perdería las 'prepared')
+    expect(calls.order[0]).toEqual(["created_at", { ascending: false }]);
+    expect(calls.limit[0]).toEqual([7]);
+  });
+
+  it("T-R0-2: limit recorta (el tope duro lo aplica el endpoint)", async () => {
+    const { client } = makeBehaviorClient(solRows());
+    const out = await new SupabaseSettlementLedger(client).listRemittanceIdsBySender({
+      senderAddress: SOL_A,
+      vm: "solana",
+      limit: 1,
+    });
+    expect(out.map((r) => r.remittanceId)).toEqual(["rem-A-new"]); // el más reciente
+  });
+
+  it("T-R0-3 (fail-loud): error del builder ⇒ throw ledger_list_by_sender_failed:<code>, NUNCA [] silencioso", async () => {
+    const { client } = makeClient([{ data: null, error: { code: "PGRST301" } }]);
+    await expect(
+      new SupabaseSettlementLedger(client).listRemittanceIdsBySender({
+        senderAddress: SOL_A,
+        vm: "solana",
+        limit: 20,
+      }),
+    ).rejects.toThrow(/ledger_list_by_sender_failed:PGRST301/);
+  });
+
+  it("T-R0-3: address base58 malformada ⇒ throw de canonicalizeAddress, NUNCA una query sin filtro", async () => {
+    const { client } = makeBehaviorClient(solRows());
+    await expect(
+      new SupabaseSettlementLedger(client).listRemittanceIdsBySender({
+        senderAddress: "0OIl-no-es-base58",
+        vm: "solana",
+        limit: 20,
+      }),
+    ).rejects.toThrow("address_canonicalization_failed");
   });
 });
 

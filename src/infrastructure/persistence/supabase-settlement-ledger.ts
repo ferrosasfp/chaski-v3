@@ -12,6 +12,7 @@
 // DENTRO de la factory en runtime (CD-14).
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
+  SenderRemittanceRef,
   SettlementLedger,
   SettlementLedgerStatus,
   SettlementRecord,
@@ -180,6 +181,39 @@ export class SupabaseSettlementLedger implements SettlementLedger {
     if (error) throw new Error(`ledger_list_stale_failed:${error.code ?? "unknown"}`);
     const rows = (data ?? []) as unknown as RawRow[];
     return rows.map(mapRow);
+  }
+
+  async listRemittanceIdsBySender(input: {
+    senderAddress: string;
+    vm: "evm" | "solana";
+    limit: number;
+  }): Promise<SenderRemittanceRef[]> {
+    // HU-SOL-20/AC-2: recuperación del remittanceId cuando el cliente lo perdió. OWNER-SCOPED: el
+    // `.eq("sender_address", ...)` es el ÚNICO guard real (el service key bypassea RLS) ⇒ borrarlo es
+    // un IDOR que expone las remesas de terceros.
+    // NO filtra por `vm`: esa columna NUNCA se escribe (recordOrderPrepared no la incluye) ⇒ toda fila
+    // dice 'evm' y un .eq("vm","solana") devolvería CERO filas siempre. La address ya discrimina la VM
+    // (base58 case-sensitive vs 0x+40hex lowercased — ver canonicalizeAddress).
+    // NO filtra por status: las filas que interesan nacen 'prepared' (recordOrderPrepared), que NO está
+    // en STALE_STATUSES; el status viaja en la respuesta y decide el consumidor.
+    // NUNCA selecciona value_minor (no se lee ⇒ el ::text de CD-12 no aplica) ni PII (CD-7).
+    const { data, error } = await this.client
+      .from(TABLE)
+      .select("remittance_id, status, created_at")
+      .eq("sender_address", canonicalizeAddress(input.senderAddress, input.vm)) // ← EL GUARD
+      .order("created_at", { ascending: false })
+      .limit(input.limit);
+    if (error) throw new Error(`ledger_list_by_sender_failed:${error.code ?? "unknown"}`);
+    const rows = (data ?? []) as unknown as Array<{
+      remittance_id: string;
+      status: SettlementLedgerStatus;
+      created_at: string;
+    }>;
+    return rows.map((r) => ({
+      remittanceId: r.remittance_id,
+      status: r.status,
+      createdAt: r.created_at,
+    }));
   }
 
   async markOutcome(input: {

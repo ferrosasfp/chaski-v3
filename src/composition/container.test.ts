@@ -127,4 +127,34 @@ describe("createContainer — dispatcher de wallet por VM (HU-SOL-4, AC-4/AC-5)"
     vi.stubEnv("NEXT_PUBLIC_VM", "aptos");
     expect(() => createContainer()).toThrow("unsupported_vm");
   });
+
+  // HU-SOL-20/AC-2: el adapter Solana se construye CON su resolver de remittanceId. El wiring tiene un
+  // ciclo aparente (adapter → resolver → PopSigner → wallet=adapter) que se rompe difiriendo el
+  // PopSigner; este test lo ejercita END-TO-END en el container real. Si el diferido estuviera mal
+  // (TDZ / instancia a medio construir), acá saldría un ReferenceError, no un escrow_not_found.
+  it("HU-SOL-20: VM=solana cablea el resolver de remittanceId sin ciclo — el refund sin id pide el PoP", async () => {
+    vi.stubEnv("NEXT_PUBLIC_VM", "solana");
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+      Response.json({ error: "pop_not_configured" }, { status: 501 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const c = createContainer();
+      // El port declara remittanceId requerido (la UI de recuperación es R4); acá se ejercita la
+      // capacidad ya cableada del adapter: refund SIN id.
+      const gw = c.solanaRefund as unknown as {
+        refund(i: { remittanceId?: string; sender: string }): Promise<{ refundTx: string }>;
+      };
+      expect(gw).toBeDefined();
+      // 501 ⇒ prove() null ⇒ resolver devuelve [] ⇒ escrow_not_found (nunca un crash de wiring).
+      await expect(gw.refund({ sender: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU" })).rejects.toThrow(
+        "escrow_not_found",
+      );
+      // Prueba de que el PopSigner diferido SE construyó con el propio adapter y corrió.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/a2a/payout/challenge");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

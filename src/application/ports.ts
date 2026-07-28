@@ -234,6 +234,13 @@ export interface SolanaEscrowRefundGateway {
   refund(input: { remittanceId: string; sender: string }): Promise<{ refundTx: string }>;
 }
 
+// HU-SOL-20/AC-2: resuelve los remittanceId del sender desde el store durable server-side cuando el
+// cliente los perdió (localStorage vacío / otro dispositivo). Devuelve [] si el mecanismo está
+// apagado o no verificado — NUNCA lanza por "no hay nada".
+export interface SolanaRemittanceIdResolver {
+  listBySender(sender: string): Promise<string[]>;
+}
+
 export type SettlementFailureReason =
   | "settlement_unavailable"
   | "settlement_rejected"
@@ -375,6 +382,14 @@ export interface SettlementRecord {
   updatedAt: string;
 }
 
+// HU-SOL-20/AC-2: proyección MÍNIMA de una fila del ledger para la recuperación del remittanceId. NO
+// lleva PII, NO lleva value_minor, NO lleva address (el caller ya probó posesión de la suya).
+export interface SenderRemittanceRef {
+  remittanceId: string;
+  status: SettlementLedgerStatus;
+  createdAt: string;
+}
+
 export interface SettlementLedger {
   // prepare route (WKH-211/AC-8): registra la orden TransFi creada ANTES del principal_in, para dar
   // visibilidad de órdenes huérfanas (prepare ok + settle falla). El depositAddress va en
@@ -413,6 +428,16 @@ export interface SettlementLedger {
   }): Promise<void>;
   // reconcile (AC-4): no-terminales más viejas que olderThanIso. Global (admin) — sin owner filter.
   listStale(input: { olderThanIso: string; limit: number }): Promise<SettlementRecord[]>;
+  // HU-SOL-20/AC-2: lectura OWNER-SCOPED para recuperar los remittanceId de un sender cuando el
+  // cliente los perdió. El filtro .eq('sender_address', ...) es el guard REAL (el service key
+  // bypassea RLS). NUNCA devuelve PII ni value_minor. NO filtra por `vm` (esa columna nunca se
+  // escribe: toda fila dice 'evm', incluidas las Solana) ni por status (las filas que interesan
+  // nacen 'prepared', que NO está en STALE_STATUSES).
+  listRemittanceIdsBySender(input: {
+    senderAddress: string;
+    vm: "evm" | "solana";
+    limit: number;
+  }): Promise<SenderRemittanceRef[]>;
   // reconcile (AC-6): incrementa attempts + set status/last_error. Por id.
   markOutcome(input: {
     id: string;

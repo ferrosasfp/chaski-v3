@@ -23,9 +23,9 @@ next-env.d.ts
 coverage/
 m5-keys/
 
-# documentacion interna de trabajo (se queda en el disco, fuera del repo)
+# documentacion interna de trabajo (se queda en el disco, fuera del repo).
+# En docs/ solo se versiona la documentacion tecnica listada abajo.
 doc/
 project-context.md
-docs/roadmap.md
-docs/ux-design.md
-docs/unit-economics.html
+docs/*
+!docs/architecture.md

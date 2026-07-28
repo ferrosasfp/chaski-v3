@@ -37,7 +37,7 @@ function ledgerWithStale(n: number): FakeSettlementLedger {
       chainId: 84532,
       senderAddress: "0xsender",
       receiverAddress: "0xreceiver",
-      valueMinor: 400_000_000,
+      valueMinor: "400000000", // string exacto (uint256-safe), como lo devuelve el ::text
       status: "principal_in",
       attempts: 0,
       payoutId: null,

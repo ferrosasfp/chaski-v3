@@ -3,9 +3,11 @@
 //
 // Persiste SOLO evidencia money-path (txHash/monto/address/quoteId/status) — NUNCA PII (CD-7). El
 // guard REAL de ownership es app-layer: `.eq('sender_address', <caller>)` (CD-9), porque el service
-// key bypassea RLS. Toda lectura de value_minor (numeric(78,0)) castea `::text` y parsea en JS —
-// precisión uint256 (CD-12, WKH-196): PostgREST leería un numeric grande como número JSON y
-// JSON.parse redondearía > 2^53.
+// key bypassea RLS. Toda lectura de value_minor (numeric(78,0)) castea `::text` y los dígitos viajan
+// COMO STRING hasta el consumidor, sin re-parseo — precisión uint256 (CD-12, WKH-196): PostgREST
+// leería un numeric grande como número JSON y JSON.parse redondearía > 2^53. El `Number(...)` que
+// había en mapRow deshacía el cast en la línea siguiente; hoy hay un guard que rompe fuerte si el
+// valor NO llega como texto (uint256TextOrThrow).
 //
 // Factory getSettlementLedger(): null si SETTLEMENT_LEDGER_ENABLED !== "true" O el cliente Supabase
 // es null (envs ausentes) ⇒ las rutas skipean el persist ⇒ byte-idéntico (AC-2/AC-10). La env se lee
@@ -83,6 +85,32 @@ interface RawRow {
   updated_at: string;
 }
 
+/** Dígitos decimales, sin signo ni notación científica: la forma EXACTA en que Postgres emite un
+ *  `numeric(78,0)` casteado a texto. */
+const UINT256_TEXT = /^\d+$/;
+
+/** Devuelve los dígitos de value_minor TAL CUAL vinieron del `::text`, o TIRA.
+ *
+ *  Este guard es la contraparte en runtime del cast en SELECT_COLS. `mapRow` recibe filas via
+ *  `as unknown as RawRow[]` (PostgREST no está tipado), así que `value_minor: string` es una promesa
+ *  SIN verificar: si alguien borra el `::text` del select, PostgREST devuelve el numeric como número
+ *  JSON, JSON.parse lo redondea > 2^53 y el tipo seguiría diciendo `string` mientras el dato ya
+ *  está corrupto. Acá se rompe fuerte en vez de propagar un monto mentiroso al ledger de evidencia.
+ *
+ *  Fail-loud es seguro: el único lector es listStale (reconcile admin), cuyo call-site captura y
+ *  responde 503 (route.ts:66-71). NADA de dinero se mueve por esta lectura ⇒ el peor caso de tirar
+ *  es un reconcile que no corre; el peor caso de NO tirar es evidencia con montos redondeados.
+ *
+ *  PROHIBIDO "arreglarlo" con String(r.value_minor): un número ya redondeado se convierte en un
+ *  string igual de corrupto, y el guard pasaría a certificar la pérdida en vez de detectarla. */
+function uint256TextOrThrow(raw: unknown): string {
+  if (typeof raw !== "string" || !UINT256_TEXT.test(raw)) {
+    // NUNCA ecoa el valor recibido (el mensaje va a logs; enums estables, CD-7).
+    throw new Error("ledger_value_minor_not_text");
+  }
+  return raw;
+}
+
 function mapRow(r: RawRow): SettlementRecord {
   return {
     id: r.id,
@@ -93,7 +121,9 @@ function mapRow(r: RawRow): SettlementRecord {
     chainId: r.chain_id,
     senderAddress: r.sender_address,
     receiverAddress: r.receiver_address,
-    valueMinor: Number(r.value_minor), // CD-12: parseado desde el string ::text
+    // CD-12: los dígitos del ::text PASAN DERECHO, sin re-parseo. Un Number() acá redondearía > 2^53
+    // y tiraría a la basura justo lo que el cast preserva (WKH-196). Ver SettlementRecord.valueMinor.
+    valueMinor: uint256TextOrThrow(r.value_minor),
     status: r.status,
     attempts: r.attempts,
     payoutId: r.payout_id,

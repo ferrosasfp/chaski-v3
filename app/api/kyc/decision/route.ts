@@ -5,9 +5,8 @@
 // → 400 → 401 → recién Didit (nunca fetch a Didit sin autorización, CD-2).
 import { NextResponse } from "next/server";
 import { mapDiditDecision, maskDecision } from "../../../../src/infrastructure/didit/decision";
+import { resolveDiditBaseUrl } from "../../../../src/infrastructure/didit/didit-env";
 import { verifySessionToken } from "../../../../src/infrastructure/kyc-auth";
-
-const BASE = process.env.DIDIT_BASE_URL ?? "https://verification.didit.me";
 
 export async function GET(req: Request): Promise<Response> {
   const apiKey = process.env.DIDIT_API_KEY;
@@ -27,7 +26,17 @@ export async function GET(req: Request): Promise<Response> {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const res = await fetch(`${BASE}/v3/session/${encodeURIComponent(sessionId)}/decision/`, {
+  // Ambiente de Didit: fail-closed y LAZY (después de los guards, CD-2 intacto). Sin DIDIT_ENV no
+  // se resuelve host → 500 de MISCONFIG (no 502): el problema es nuestro, no de Didit.
+  let base: string;
+  try {
+    base = resolveDiditBaseUrl();
+  } catch {
+    // Etiqueta value-free: el mensaje del throw nombra la env, pero NO se filtra al cliente.
+    return NextResponse.json({ error: "didit_env_misconfigured" }, { status: 500 });
+  }
+
+  const res = await fetch(`${base}/v3/session/${encodeURIComponent(sessionId)}/decision/`, {
     headers: { "x-api-key": apiKey },
     signal: AbortSignal.timeout(10_000),
   });

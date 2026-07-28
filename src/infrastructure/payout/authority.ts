@@ -6,13 +6,12 @@
 // Guard-order (CD-A1), idéntico al original:
 //   sin key + prod → 503 fail-loud (nunca autoriza por default — CD-4)
 //   sin key + no-prod → simulación { authorized:true, simulated_dev } (el demo sigue andando)
-//   con key → formato → Didit → mapeo → ownership (vendor_data vs address)
+//   con key → formato → ambiente (DIDIT_ENV, fail-closed) → Didit → mapeo → ownership
 // Nunca fetch a Didit antes de pasar los guards.
 import { mapDiditDecision } from "../didit/decision";
+import { resolveDiditBaseUrl } from "../didit/didit-env";
 import { canonicalizeAddress } from "../address";
 import { resolveActiveVm } from "../chain";
-
-const BASE = process.env.DIDIT_BASE_URL ?? "https://verification.didit.me";
 
 export interface PayoutAuthorityDecision {
   authorized: boolean;
@@ -49,6 +48,17 @@ export async function resolvePayoutAuthority(
     return { authorized: false, reason: "invalid_verification_id", httpStatus: 400 };
   }
 
+  // Guard 3: AMBIENTE de Didit (fail-closed, LAZY). Va FUERA del try/catch de abajo A PROPÓSITO:
+  // adentro se confundiría con `kyc_reauth_failed` (502), que significa "la autoridad falló/está
+  // caída" y manda a ops a mirar a Didit. Esto es MISCONFIG NUESTRA → 503 con su propio reason.
+  // Fail-closed igual: nunca autoriza (CD-4).
+  let base: string;
+  try {
+    base = resolveDiditBaseUrl();
+  } catch {
+    return { authorized: false, reason: "kyc_authority_misconfigured", httpStatus: 503 };
+  }
+
   // Didit: re-consulta la decisión REAL (CD-A2: key + fetch solo acá, server runtime).
   // fail-closed EXPLÍCITO (MNR-A): un throw del fetch (timeout de AbortSignal, DNS, connection
   // reset) o un JSON malformado NUNCA debe escapar como 500 crudo — el adapter asume que el body
@@ -57,7 +67,7 @@ export async function resolvePayoutAuthority(
   // que !res.ok). Nunca autoriza ante un fallo de la autoridad (CD-4).
   try {
     const res = await fetch(
-      `${BASE}/v3/session/${encodeURIComponent(verificationId)}/decision/`,
+      `${base}/v3/session/${encodeURIComponent(verificationId)}/decision/`,
       { headers: { "x-api-key": apiKey }, signal: AbortSignal.timeout(10_000) },
     );
     if (!res.ok) {

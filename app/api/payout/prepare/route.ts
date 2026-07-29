@@ -28,6 +28,12 @@ import {
   resolveSolanaNetworkConfig,
 } from "../../../../src/infrastructure/chain";
 import { canonicalizeAddress } from "../../../../src/infrastructure/address";
+import {
+  PAYOUT_CAPABILITY,
+  PAYOUT_MIN_REPUTATION,
+  logGatewayFailure,
+  runViaGateway,
+} from "../../../../src/infrastructure/a2a/gateway-client";
 import { getSettlementLedger } from "../../../../src/infrastructure/persistence/supabase-settlement-ledger";
 import { logLedgerWriteFailure } from "../../../../src/infrastructure/persistence/ledger-write-failure";
 import { resolvePayoutAuthority } from "../../../../src/infrastructure/payout/authority";
@@ -221,29 +227,59 @@ export async function POST(req: Request): Promise<Response> {
     }
   }
 
-  // PR7 — forward al agente (crea la orden TransFi). idempotencyKey intacto (CD-10). Todo en try/catch:
-  // timeout/DNS/parse → 502 opaco, NUNCA 500 crudo, NUNCA ecoa el beneficiary.
-  let res: Response;
-  try {
-    res = await fetch(`${BASE}/api/agents/remit-cashout-payout/invoke`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body), // idempotencyKey/beneficiary forwardeados tal cual (CD-10/CD-5)
-      signal: AbortSignal.timeout(10_000),
-    });
-  } catch {
-    return NextResponse.json({ error: "prepare_upstream_error" }, { status: 502 });
-  }
-  if (!res.ok) {
-    return NextResponse.json({ error: "prepare_upstream_error" }, { status: 502 });
-  }
-
+  // PR7 — forward al agente (crea la orden TransFi). Transporte según adapter (WKH-304, DT-3/CD-3).
+  // El adapter se lee ACÁ y no antes: PR1-PR6 corren SIEMPRE e idénticos con el flag prendido o
+  // apagado (CD-3) — el cambio de transporte no puede mover un solo guard de lugar.
+  // Este es el ÚNICO leg del money-path que cambia de transporte: el `result` que sale de acá va al
+  // MISMO PR8 (validador del depositAddress) y al MISMO PR9 (emisor de la atestación) que ya existían.
+  // El transporte NO participa de ninguno de los dos (CD-10): el piso de reputación sube el piso, no
+  // reemplaza esas dos capas, que son independientes de QUÉ agente respondió.
   let result: unknown;
-  try {
-    const json = (await res.json()) as { result?: unknown };
-    result = json.result;
-  } catch {
-    return NextResponse.json({ error: "prepare_upstream_error" }, { status: 502 });
+  if (process.env.NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER === "a2a-gateway") {
+    const r = await runViaGateway({
+      steps: [
+        {
+          capability: process.env.WASIAI_A2A_PAYOUT_CAPABILITY ?? PAYOUT_CAPABILITY,
+          constraints: { min_reputation: PAYOUT_MIN_REPUTATION }, // CD-5: NUNCA omitir
+          input: body, // ya es Record<string, unknown> (PR4); idempotencyKey/beneficiary tal cual
+        },
+      ],
+    });
+    if (!r.ok) {
+      logGatewayFailure("payout-prepare", r);
+      // CD-1: JAMÁS cae al fetch punto-a-punto de abajo. No hay orden, no hay atestación, no hay
+      // ledger. Un fallback silencioso acá crearía la orden con OTRO agente y atestaría SU dirección.
+      return NextResponse.json(
+        { error: r.code === "not_configured" ? "prepare_not_configured" : "prepare_upstream_error" },
+        { status: r.code === "not_configured" ? 501 : 502 },
+      );
+    }
+    result = r.outputs[0];
+  } else {
+    // ── rama punto-a-punto EXISTENTE, sin cambios de lógica (CD-15) ──
+    // idempotencyKey intacto (CD-10). Todo en try/catch: timeout/DNS/parse → 502 opaco, NUNCA 500
+    // crudo, NUNCA ecoa el beneficiary.
+    let res: Response;
+    try {
+      res = await fetch(`${BASE}/api/agents/remit-cashout-payout/invoke`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body), // idempotencyKey/beneficiary forwardeados tal cual (CD-10/CD-5)
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch {
+      return NextResponse.json({ error: "prepare_upstream_error" }, { status: 502 });
+    }
+    if (!res.ok) {
+      return NextResponse.json({ error: "prepare_upstream_error" }, { status: 502 });
+    }
+
+    try {
+      const json = (await res.json()) as { result?: unknown };
+      result = json.result;
+    } catch {
+      return NextResponse.json({ error: "prepare_upstream_error" }, { status: 502 });
+    }
   }
 
   // PR8 — valida el shape + EXIGE depositAddress string no-vacío + isAddress. El mock del agente

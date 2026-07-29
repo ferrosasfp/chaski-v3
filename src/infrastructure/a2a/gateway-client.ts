@@ -8,7 +8,9 @@
 // gateway) en vez de colapsar todo a "unavailable". Lo importan SOLO las routes server-only
 // (NUNCA container.ts ni "use client" — CD-A2A-10). Cero PII / cero secreto en logs (CD-8/CD-9):
 // jamás se loguea el input (contiene beneficiary), la Agent Key, la URL ni el `message` del gateway.
-// Sin any / sin as unknown (CD-12): responses tipadas unknown y estrechadas con isRecord + Array.isArray.
+// Sin tipos de escape ni conversiones forzadas (CD-12): las responses se tipan `unknown` y se
+// estrechan con isRecord + Array.isArray. (La regla se enuncia sin nombrar los literales prohibidos:
+// el gate de QA es un grep sobre este archivo y un comentario que los cite lo deja en rojo.)
 // Chaski NO firma x402 (AC-5): el único header de auth es x-a2a-key; el body NO lleva challenge ni firma.
 
 /** Capacidades verificadas contra el catálogo en vivo del gateway (2026-07-28). CD-14.
@@ -152,10 +154,15 @@ export async function runViaGateway(params: { steps: GatewayStep[] }): Promise<G
   // 3. POST /compose — auth x-a2a-key, un step por capacidad, input TAL CUAL. El step emite EXACTO
   //    tres claves: capability, input y (opcional) constraints. Nada de nombre/registro del agente
   //    (`agent` + `capability` juntos ⇒ ambiguous_step del servidor, CD-1) y NADA de chaining entre
-  //    pasos: el único mecanismo que existe hoy anida la salida del paso anterior, y el mapeo de
-  //    campos que haría falta (WKH-305) TODAVÍA no está del lado servidor — emitirlo ahora sería un
-  //    no-op silencioso (el validador de shape no rechaza claves desconocidas a nivel step), que es
-  //    literalmente el bug que esta HU viene a cerrar. CD-6: por eso cada leg va en su propia llamada.
+  //    pasos.
+  //    Por qué no hay chaining, al día de hoy: el mapeo de campos entre pasos YA EXISTE del lado
+  //    servidor (WKH-305, mergeada), y su regla S8 RECHAZA con 400 pre-cobro un mapeo declarado en el
+  //    step 0 — porque no hay paso anterior del cual mapear. Esta HU manda exactamente UN step por
+  //    llamada (un leg por request), así que todo step que emite este cliente ES el step 0: declarar
+  //    un mapeo acá no sería un no-op, sería un 400 garantizado. Lo que WKH-305 destraba es FUSIONAR
+  //    cotización + desembolso en una sola llamada, y eso es un cambio de diseño que además necesita
+  //    una decisión de producto sobre re-cotizar (§11 del Story), no un campo más en el body.
+  //    El tipo `GatewayStep` no declara la clave: el intento se cae en compilación (TS2353).
   let res: Response;
   try {
     res = await fetch(`${cfg.url}/compose`, {

@@ -4,6 +4,7 @@ import {
   canTransition,
   isParseableIso,
   type KycVerification,
+  MIN_SEND_USD,
   type Quote,
   Remittance,
   toPersistedIdentity,
@@ -40,6 +41,47 @@ function ready(): Remittance {
   r.applyKyc(passKyc, T0); // kyc_pending → kyc_passed (quote sobrevive por shallow-merge)
   return r; // kyc_passed con quote
 }
+
+// ── WKH-314 — el mínimo de la interfaz, y por qué NO se verifica con assertReceiveConsistent ──
+describe("WKH-314 — monto mínimo enviable", () => {
+  // Assert contra el LITERAL, no contra la constante importada comparada consigo misma: este
+  // número es una decisión del founder ($5, que con la comisión por defecto de $0.50 deja la
+  // comisión en el 10% del piso). Si alguien lo mueve, este test tiene que obligar a decidirlo.
+  it("T-314-DOM-1: el mínimo es 5 dólares", () => {
+    expect(MIN_SEND_USD).toBe(5);
+  });
+
+  // CONTRATO CROSS-REPO, sin import posible: la autoridad es `FX_MIN_SEND_USD` del agente
+  // `remit-corridor-fx`, cuyo default es el MISMO 5. Este de acá es la copia para la interfaz.
+  // Si divergen, tiene que ganar el agente y la degradación es benigna (la interfaz deja pasar,
+  // el agente corta con `fx_amount_below_minimum` y la persona ve un error, no un cero). Lo que
+  // NO puede pasar es que la interfaz sea MÁS permisiva de lo que este número declara.
+  it("T-314-DOM-2: el mínimo es positivo y mayor que la comisión por defecto del agente (0.50)", () => {
+    expect(MIN_SEND_USD).toBeGreaterThan(0.5);
+  });
+
+  // Fija POR QUÉ hizo falta un guard nuevo en vez de endurecer el invariante que ya existía.
+  // `assertReceiveConsistent` recalcula `max(0, send − fee) × rate`: para 40 centavos con
+  // comisión 0.50 su esperado da CERO, igual que el `receive` de cero, así que COINCIDE. Este
+  // test deja la coincidencia escrita para que nadie "arregle" esa función y termine con la
+  // política escrita en dos lados.
+  it("T-314-DOM-3: un quote que entrega cero es CONSISTENTE para el invariante — por eso no puede atajarlo", () => {
+    const quoteQueEntregaCero: Quote = {
+      quoteId: "q-cero",
+      send: Money.of(0.4, "USDC"),
+      receive: Money.of(0, "PEN"), // max(0, 0.40 − 0.50) × 3.315 = 0
+      feeUsd: Money.of(0.5, "USDC"),
+      rate: 3.315,
+      etaMinutes: 30,
+      expiresAt: QUOTE_EXPIRES,
+      provenance: "fx-mid-live",
+    };
+    const r = Remittance.create("r-cero", beneficiary(), Money.of(0.4, "USDC"), T0);
+    // NO lanza: el invariante está de acuerdo con la cotización que entrega cero.
+    expect(() => r.attachQuote(quoteQueEntregaCero, T0)).not.toThrow();
+    expect(r.status).toBe("quoted"); // y la remesa AVANZA de estado con la promesa de cero
+  });
+});
 
 describe("Remittance — máquina de estados", () => {
   it("happy path completo", () => {

@@ -108,6 +108,22 @@ export function isParseableIso(value: string): boolean {
   return !Number.isNaN(new Date(value).getTime());
 }
 
+/**
+ * WKH-314 — monto mínimo enviable, en USD. Es EXPERIENCIA DE USO, no la protección.
+ *
+ * ⚠️ LA AUTORIDAD ES EL AGENTE (`remit-corridor-fx`), no este número. Allá el mínimo es
+ * configurable (`FX_MIN_SEND_USD`) y está atado a la comisión, de modo que no pueda existir
+ * una comisión que lo anule. Acá vive una copia para que la interfaz no habilite un envío que
+ * el agente va a rechazar: sin esto, la persona escribía 40 centavos, leía "tu familia recibe
+ * S/ 0.00" y el botón la dejaba seguir hasta depositar dólares reales a cambio de nada.
+ *
+ * Si los dos números divergen, gana el agente y la degradación es benigna: la interfaz deja
+ * pasar, el agente corta con `fx_amount_below_minimum` y la persona ve un error en vez de una
+ * promesa de cero. Nunca al revés — por eso la copia es aceptable y no hay que "sincronizarla"
+ * leyendo config del agente desde el browser.
+ */
+export const MIN_SEND_USD = 5;
+
 // A5 (AC-1/AC-2): tolerancias de consistencia de `receive` vs (send − fee) × rate.
 const RECEIVE_TOL_ABS_PEN = 0.02; // 2 centavos — absorbe redondeo a 2 decimales de PEN
 const RECEIVE_TOL_REL = 0.01; // 1%
@@ -115,7 +131,19 @@ const RECEIVE_TOL_REL = 0.01; // 1%
 /** Invariante money-path PURA (CD-3, sin I/O): `receive` debe ser consistente con el propio
  * `send`/`feeUsd`/`rate` del quote. Espeja netUsd = max(0, send − fee) del gateway. Es un límite
  * de sanidad defensivo (caza tampering grueso: receive inflado 2× / degradado a la mitad), NO una
- * auditoría de precisión ni detecta un `rate` manipulado (otro vector, fuera de scope). */
+ * auditoría de precisión ni detecta un `rate` manipulado (otro vector, fuera de scope).
+ *
+ * ⚠️ WKH-314 — NO INTENTES QUE ESTO ATAJE UNA COTIZACIÓN QUE ENTREGA CERO. No puede, y no por
+ * estar mal escrito: REPLICA la fórmula que vigila, `max(0, ...)` incluido. Para un envío de 40
+ * centavos con una comisión de 0.50, su `expected` también da cero y COINCIDE con el `receive`
+ * de cero — el guard no falla, está de acuerdo. Un control que reimplementa la operación que
+ * vigila sólo detecta discrepancias de TRANSPORTE (que alguien haya tocado el número en el
+ * medio), nunca un error que está DENTRO de la fórmula.
+ *
+ * El mínimo es una regla de POLÍTICA independiente (`MIN_SEND_USD` acá, `FX_MIN_SEND_USD` en el
+ * agente) justamente para no meter el número en los dos lados de esta comparación, donde
+ * divergiría al primer cambio. Si "arreglás" esta función para que atrape el cero, vas a estar
+ * escribiendo la política dos veces. */
 function assertReceiveConsistent(quote: Quote): void {
   const expected = Math.max(0, quote.send.major - quote.feeUsd.major) * quote.rate;
   const allowedDelta = Math.max(RECEIVE_TOL_ABS_PEN, expected * RECEIVE_TOL_REL);

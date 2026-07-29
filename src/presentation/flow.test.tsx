@@ -135,6 +135,46 @@ it("T1: modo demo muestra el monto del quote (no S/0.00) y el banner 'Modo demo'
   // (c) cero red: los fakes no llaman fetch de negocio (FallbackQuoteGateway cae al estático, CD-5).
 });
 
+// ── WKH-314 — la interfaz no puede habilitar un envío que entrega cero ───────────────
+//
+// Antes: escribías 40 centavos, la pantalla decía "Tu familia recibe S/ 0.00" con la tasa y el
+// ETA al lado como si fuera una cotización normal, y el botón Continuar quedaba HABILITADO
+// (`canSend = amountNum > 0`). El depósito se arma con el monto ENVIADO, así que la persona
+// terminaba poniendo dólares reales a cambio de nada.
+//
+// La protección real vive en el agente (`fx_amount_below_minimum`); esto es que la persona se
+// entere ANTES del nombre, el KYC y la plata.
+it("T-314-UI-1: por debajo del mínimo el botón NO habilita y se explica por qué", async () => {
+  render(<RemittanceFlow container={buildTestContainer()} />);
+
+  const amountInput = await screen.findByLabelText("Monto en dólares");
+  fireEvent.change(amountInput, { target: { value: "0.40" } });
+  fillSend(); // nombre y destino completos: lo ÚNICO que falta es que el monto alcance
+
+  // ── EL EFECTO PRIMERO: no se puede avanzar ────────────────────────────────────────
+  // Si esto fuera después del chequeo del texto, un mutante que rompiera el mensaje mataría
+  // el test sin llegar a mirar lo que importa, que es que nadie pueda depositar.
+  expect(screen.getByRole("button", { name: /Continuar/ })).toBeDisabled();
+  // Y no se muestra un cero disfrazado de cotización.
+  expect(screen.queryByText("S/0.00")).toBeNull();
+
+  // ── y recién ahora, que la persona entienda qué hacer ─────────────────────────────
+  expect(await screen.findByRole("alert")).toHaveTextContent(/mínimo para enviar es \$5/i);
+});
+
+// Contra-ejemplo OBLIGATORIO: sin esto, deshabilitar el botón SIEMPRE dejaba el test de arriba
+// en verde y la app inutilizable.
+it("T-314-UI-2: en el mínimo exacto el botón SÍ habilita y no hay advertencia", async () => {
+  render(<RemittanceFlow container={buildTestContainer()} />);
+
+  const amountInput = await screen.findByLabelText("Monto en dólares");
+  fireEvent.change(amountInput, { target: { value: "5" } });
+  fillSend();
+
+  expect(screen.getByRole("button", { name: /Continuar/ })).toBeEnabled();
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
 // ── T2 — AC-9: review nombre + doc enmascarado (CD-12) ───────────────────────
 it("T2: confirm renderiza el nombre y el documento enmascarado; el número completo nunca está en el DOM", async () => {
   const { container } = render(<RemittanceFlow container={buildTestContainer()} />);

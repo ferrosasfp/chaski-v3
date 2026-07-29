@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Quote, RemittanceState, PayoutMethod } from "../domain/remittance";
-import { Remittance } from "../domain/remittance"; // WKH-187: rehydrate/isQuoteStillValid en el resume (CD-11)
+import { MIN_SEND_USD, Remittance } from "../domain/remittance"; // WKH-187: rehydrate/isQuoteStillValid en el resume (CD-11) · WKH-314: mínimo enviable
 import { createContainer, type Container } from "../composition/container";
 import { resolveActiveVm, resolveChain } from "../infrastructure/chain"; // WKH-209/HU-SOL-13: red + VM activa (env-driven, NEXT_PUBLIC_)
 import { deliveredDisplay, humanError, isDemoMode, isFallbackWalletAddress } from "./flow-vm";
@@ -82,7 +82,9 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
 
   // preview en vivo (debounced)
   useEffect(() => {
-    if (amountNum <= 0) {
+    // WKH-314: por debajo del mínimo no se pide cotización. El agente la rechaza igual, así que
+    // pedirla sería un viaje garantizado a un error — y, antes de esta HU, una promesa de cero.
+    if (amountNum < MIN_SEND_USD) {
       setPreview(null);
       return;
     }
@@ -347,7 +349,12 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
     };
   }, [step, remId, remStatus, c]);
 
-  const canSend = amountNum > 0 && recipient.trim() && destination.trim();
+  // WKH-314: por debajo del mínimo la comisión se come el envío entero y la cotización
+  // entregaría cero. El agente lo rechaza igual (es él quien protege); esto es para que la
+  // persona se entere ANTES de poner el nombre, el KYC y la plata, no después.
+  const belowMinimum = amountNum > 0 && amountNum < MIN_SEND_USD;
+  const canSend =
+    amountNum >= MIN_SEND_USD && Boolean(recipient.trim()) && Boolean(destination.trim());
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col px-5 pb-10 pt-6">
@@ -465,6 +472,12 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                     />
                   </div>
                 </Field>
+                {belowMinimum ? (
+                  <p className="mt-2 text-xs font-medium text-cochineal" role="alert">
+                    El mínimo para enviar es ${MIN_SEND_USD}. Por debajo de eso la comisión se
+                    lleva todo y tu familia no recibiría nada.
+                  </p>
+                ) : null}
                 <div className="mt-4 rounded-xl bg-verde-bg px-4 py-3">
                   <p className="text-xs font-medium text-verde/80">Tu familia recibe</p>
                   <p className="tabular text-2xl font-extrabold text-verde">

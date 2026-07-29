@@ -28,7 +28,12 @@
 // reconciliación server-side).
 import { NextResponse } from "next/server";
 import { verifyMessage } from "viem";
-import { runViaGateway } from "../../../../../src/infrastructure/a2a/gateway-client";
+import {
+  PAYOUT_CAPABILITY,
+  PAYOUT_MIN_REPUTATION,
+  logGatewayFailure,
+  runViaGateway,
+} from "../../../../../src/infrastructure/a2a/gateway-client";
 import type { SettlementLedgerStatus } from "../../../../../src/application/ports";
 import { Money } from "../../../../../src/domain/money";
 import { getSettlementLedger } from "../../../../../src/infrastructure/persistence/supabase-settlement-ledger";
@@ -366,31 +371,40 @@ export async function POST(req: Request): Promise<Response> {
 
   // A10 — todo OK → forward (bloque intacto salvo el side-effect aditivo del ledger antes de cada return).
 
-  // WKH-218: modo de transporte "a2a-gateway". SOLO se ramifica ACÁ (post guard 8): los guards 1-8
-  // (L74-333) quedan byte-idénticos (CD-2). Resuelve el agente vía /discover + /compose del gateway
-  // wasiai-a2a (CD-7: /compose, NO /orchestrate) con el body TAL CUAL (idempotencyKey/beneficiary
-  // intactos, CD-8/AC-8). Fail-closed SIN fallback punto-a-punto (CD-5/AC-4): cualquier error corta con
-  // 502 opaco + persistOutcome idéntico; NUNCA cae al fetch({BASE}/...) de abajo. Flag ≠ "a2a-gateway"
-  // (default) ⇒ esta rama no se entra ⇒ el bloque punto-a-punto queda byte-idéntico (CD-6/AC-6).
+  // WKH-218 + WKH-304: modo de transporte "a2a-gateway". SOLO se ramifica ACÁ (post guard 8): los
+  // guards 1-8 quedan byte-idénticos (CD-3). Pide la CAPACIDAD de payout al gateway wasiai-a2a vía
+  // POST /compose (CD-7: /compose, NO /orchestrate) con el body TAL CUAL (idempotencyKey/beneficiary
+  // intactos, CD-8/AC-8): el GATEWAY resuelve qué agente la cumple — acá ya no se descubre ni se
+  // elige por nombre, ni se cae al primero de la lista (CD-1). El piso `min_reputation` es el MISMO par
+  // (capability, constraints) que usa /api/payout/prepare, importado del MISMO módulo (CD-11): dos
+  // literales sueltos es cómo los dos legs divergen sin que nadie se entere. Fail-closed SIN fallback
+  // punto-a-punto (CD-1/AC-4): cualquier error corta con 502 opaco + persistOutcome idéntico; NUNCA
+  // cae al fetch({BASE}/...) de abajo. El detalle granular va al log (sólo enums, CD-9), nunca al
+  // body (CD-8). Flag ≠ "a2a-gateway" (default) ⇒ el bloque punto-a-punto queda byte-idéntico (CD-15).
   const adapter = process.env.NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER; // leído post guard 8, nunca antes
   if (adapter === "a2a-gateway") {
     const r = await runViaGateway({
-      capability: process.env.WASIAI_A2A_PAYOUT_CAPABILITY ?? "cashout-payout",
-      expectedSlug: process.env.WASIAI_A2A_PAYOUT_SLUG ?? "remit-cashout-payout",
-      input: body as Record<string, unknown>, // idempotencyKey/beneficiary intactos (CD-8)
+      steps: [
+        {
+          capability: process.env.WASIAI_A2A_PAYOUT_CAPABILITY ?? PAYOUT_CAPABILITY,
+          constraints: { min_reputation: PAYOUT_MIN_REPUTATION }, // CD-5/CD-11: MISMO par que prepare
+          input: body as Record<string, unknown>, // idempotencyKey/beneficiary intactos (CD-8)
+        },
+      ],
     });
     if (!r.ok) {
       // not_configured no debería llegar (guard 1 !BASE→501 ya corrió, DT-A2A-9); igual mapear opaco.
+      logGatewayFailure("payout-submit", r);
       await persistOutcome("forward_error", null, "a2a_unavailable");
-      return NextResponse.json({ error: "a2a_unavailable" }, { status: 502 }); // no_agent | unavailable | not_configured
+      return NextResponse.json({ error: "a2a_unavailable" }, { status: 502 });
     }
-    if (!isValidPayoutResult(r.result)) {
+    if (!isValidPayoutResult(r.outputs[0])) {
       await persistOutcome("forward_error", null, "a2a_bad_shape");
       return NextResponse.json({ error: "a2a_bad_shape" }, { status: 502 });
     }
     // Mismo mapeo + ledger + return que la rama punto-a-punto (idéntico): settled/submitted directos;
     // failed/blocked → failed. isValidPayoutResult ya garantizó el shape (status + payoutId).
-    const okResult = r.result as { status: string; payoutId: string | null };
+    const okResult = r.outputs[0] as { status: string; payoutId: string | null };
     const mapped: SettlementLedgerStatus =
       okResult.status === "settled"
         ? "settled"
@@ -398,7 +412,7 @@ export async function POST(req: Request): Promise<Response> {
           ? "submitted"
           : "failed";
     await persistOutcome(mapped, okResult.payoutId, mapped === "failed" ? `a2a_${okResult.status}` : null);
-    return NextResponse.json({ result: r.result }, { status: 200 }); // sólo el result (nunca URL ni PII)
+    return NextResponse.json({ result: r.outputs[0] }, { status: 200 }); // sólo el result (nunca URL ni PII)
   }
 
   // --- rama punto-a-punto: el bloque try/fetch(...remit-cashout-payout/invoke) EXISTENTE, INTACTO ---

@@ -50,6 +50,12 @@ import {
   issueSolanaPopChallenge,
 } from "../../../../../src/infrastructure/auth/pop-challenge";
 import { issueSettlementAttestation } from "../../../../../src/infrastructure/settlement/attestation";
+// WKH-304/CD-11: el par (capacidad, piso) se assertea contra las MISMAS constantes que consume la
+// route — nunca contra literales copiados en el test, que es como el test deja de proteger nada.
+import {
+  PAYOUT_CAPABILITY,
+  PAYOUT_MIN_REPUTATION,
+} from "../../../../../src/infrastructure/a2a/gateway-client";
 import { POST } from "./route";
 
 const BASE = "https://agents.example.com";
@@ -1149,36 +1155,41 @@ describe("POST /api/a2a/payout/submit — GUARD 7 SOLANA: PoP ed25519 obligatori
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// WKH-218 — modo de transporte "a2a-gateway": payout vía /discover + /compose (post guards 1-8).
+// WKH-218 + WKH-304 — modo de transporte "a2a-gateway": el payout se pide por CAPACIDAD a
+// POST /compose (post guards 1-8) y el GATEWAY resuelve qué agente la cumple. Ya no hay /discover,
+// ni slug esperado, ni pick del primero de la lista: los casos que asertaban la llamada a /discover
+// se portaron al contrato nuevo (no se borró ninguno).
 // El file-level beforeEach ya deja guards 4-8 en modo skip (SETTLE/POP secret vacíos, simulated_dev
 // local) ⇒ el payload válido pasa los guards y ENTRA a la rama de forward, donde se ramifica.
 // ─────────────────────────────────────────────────────────────────────────────
 const GW = "https://gateway.example.com";
 const GW_KEY = "ak_secret";
-const gwAgent = { slug: "remit-cashout-payout", registry: "default", capabilities: ["cashout-payout"], status: "active" };
-const gwDiscoverOk = { agents: [gwAgent], total: 1, registries: ["default"] };
 const gwComposeOk = { success: true, steps: [{ output: validResult }] };
 
-/** Router que separa /discover y /compose del gateway del fetch DIRECTO al agente
- *  ({BASE}/api/agents/.../invoke). directCalls>0 ⇒ hubo fallback punto-a-punto (prohibido, AC-4). */
-function gwRouter(opts: {
-  discover?: () => unknown;
-  compose?: () => unknown;
-  discoverThrows?: boolean;
-  captureCompose?: (init?: RequestInit) => void;
-}) {
+/** Router que separa el /compose del gateway del fetch DIRECTO al agente
+ *  ({BASE}/api/agents/.../invoke). directCalls>0 ⇒ hubo fallback punto-a-punto (prohibido, CD-1). */
+function gwRouter(
+  opts: {
+    compose?: () => unknown;
+    status?: number;
+    composeThrows?: boolean;
+    captureCompose?: (init?: RequestInit) => void;
+  } = {},
+) {
   const directCalls: string[] = [];
   const fn = vi.fn(async (url: string, init?: RequestInit) => {
-    if (url.includes("/discover")) {
-      if (opts.discoverThrows) throw new Error("network");
-      return { ok: true, json: async () => opts.discover?.() ?? gwDiscoverOk };
-    }
     if (url.includes("/compose")) {
+      if (opts.composeThrows) throw new Error("network");
       opts.captureCompose?.(init);
-      return { ok: true, json: async () => opts.compose?.() ?? gwComposeOk };
+      const status = opts.status ?? 200;
+      return {
+        ok: status >= 200 && status < 300,
+        status,
+        json: async () => opts.compose?.() ?? gwComposeOk,
+      };
     }
     directCalls.push(url); // {BASE}/api/agents/remit-cashout-payout/invoke — jamás en modo gateway
-    return { ok: true, json: async () => ({ result: validResult }) };
+    return { ok: true, status: 200, json: async () => ({ result: validResult }) };
   });
   return { fn, directCalls };
 }
@@ -1190,18 +1201,43 @@ function setGatewayEnv() {
   vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE); // guard 1 la exige (DT-A2A-9), el forward NO la usa
 }
 
-describe("POST /api/a2a/payout/submit — modo a2a-gateway (WKH-218)", () => {
-  it("AC-2: payload que pasa guards 1-8 + gateway ⇒ invoca {GW}/compose con el payout agent; NO fetch directo", async () => {
+describe("POST /api/a2a/payout/submit — modo a2a-gateway (WKH-218 / WKH-304)", () => {
+  it("AC-2: payload que pasa guards 1-8 + gateway ⇒ ÚNICO fetch a {GW}/compose por capacidad; NO fetch directo", async () => {
     setGatewayEnv();
-    const { fn, directCalls } = gwRouter({});
+    vi.stubEnv("WASIAI_A2A_PAYOUT_CAPABILITY", undefined); // ausencia real ⇒ default del código
+    let composeInit: RequestInit | undefined;
+    const { fn, directCalls } = gwRouter({ captureCompose: (init) => (composeInit = init) });
     vi.stubGlobal("fetch", fn);
     const res = await POST(req(validPayload));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ result: validResult });
     const urls = fn.mock.calls.map((c) => c[0] as string);
-    expect(urls.some((u) => u === `${GW}/discover`)).toBe(true);
-    expect(urls.some((u) => u === `${GW}/compose`)).toBe(true);
-    expect(directCalls).toHaveLength(0); // AC-4: cero fallback punto-a-punto
+    expect(urls).toEqual([`${GW}/compose`]);
+    expect(urls.some((u) => u.includes("/discover"))).toBe(false);
+    expect(directCalls).toHaveLength(0); // CD-1: cero fallback punto-a-punto
+
+    const step = JSON.parse(composeInit!.body as string).steps[0];
+    expect(step.capability).toBe("remittance-payout"); // el default REAL del catálogo (M8)
+    expect(step).not.toHaveProperty("agent"); // M5: nunca el nombre del agente
+    expect(step).not.toHaveProperty("registry");
+  });
+
+  // T-A5.1/T-A5.3 (parte S) — el par (capability, constraints) se assertea contra las MISMAS
+  // constantes importadas que va a usar prepare (CD-11), no contra literales copiados: dos literales
+  // sueltos es exactamente cómo los dos legs divergen sin que nadie se entere (M9).
+  // Los dos asserts del piso son intencionales: el segundo (> 0) es el que mata un piso en cero, que
+  // existe pero no filtra nada (M3b).
+  it("T-A5.1/T-A5.3: el step de payout lleva constraints.min_reputation = PAYOUT_MIN_REPUTATION (> 0)", async () => {
+    setGatewayEnv();
+    let composeInit: RequestInit | undefined;
+    const { fn } = gwRouter({ captureCompose: (init) => (composeInit = init) });
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req(validPayload));
+    expect(res.status).toBe(200);
+    const step = JSON.parse(composeInit!.body as string).steps[0];
+    expect(step.capability).toBe(PAYOUT_CAPABILITY);
+    expect(step.constraints).toEqual({ min_reputation: PAYOUT_MIN_REPUTATION });
+    expect(PAYOUT_MIN_REPUTATION).toBeGreaterThan(0);
   });
 
   it("AC-8: idempotencyKey viaja INTACTO en el input del compose step; beneficiary intacto (no regenerado)", async () => {
@@ -1218,18 +1254,24 @@ describe("POST /api/a2a/payout/submit — modo a2a-gateway (WKH-218)", () => {
     expect((composeInit!.headers as Record<string, string>)["x-a2a-key"]).toBe(GW_KEY);
   });
 
-  it("AC-4/fail-closed ESTRELLA: gateway inalcanzable + /discover vacío ⇒ 502; directFetch NUNCA llamado", async () => {
+  // (portado de "gateway inalcanzable + /discover vacío"): el "no hay agente para esa capacidad"
+  // hoy es un 422 no_agent_match del gateway. En los dos casos: 502 opaco y CERO punto-a-punto.
+  it("AC-4/fail-closed ESTRELLA: 422 no_agent_match + gateway inalcanzable ⇒ 502; directFetch NUNCA llamado", async () => {
     setGatewayEnv();
-    // (i) /discover vacío ⇒ no_agent ⇒ 502, cero fallback.
-    const empty = gwRouter({ discover: () => ({ agents: [], total: 0, registries: [] }) });
-    vi.stubGlobal("fetch", empty.fn);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    // (i) nadie resuelve la capacidad (con el piso, puede no haber candidatos) ⇒ 502, cero fallback.
+    const noMatch = gwRouter({
+      status: 422,
+      compose: () => ({ error: "no candidates", code: "no_agent_match", reason: "no_candidates", step: 0 }),
+    });
+    vi.stubGlobal("fetch", noMatch.fn);
     const r1 = await POST(req(validPayload));
     expect(r1.status).toBe(502);
     expect(await r1.json()).toEqual({ error: "a2a_unavailable" });
-    expect(empty.directCalls).toHaveLength(0); // ← expect(directFetch).not.toHaveBeenCalled()
+    expect(noMatch.directCalls).toHaveLength(0); // ← expect(directFetch).not.toHaveBeenCalled()
 
-    // (ii) /discover throw (inalcanzable) ⇒ 502, cero fallback.
-    const down = gwRouter({ discoverThrows: true });
+    // (ii) /compose throw (inalcanzable) ⇒ 502, cero fallback.
+    const down = gwRouter({ composeThrows: true });
     vi.stubGlobal("fetch", down.fn);
     const r2 = await POST(req(validPayload));
     expect(r2.status).toBe(502);
@@ -1237,9 +1279,42 @@ describe("POST /api/a2a/payout/submit — modo a2a-gateway (WKH-218)", () => {
     expect(down.directCalls).toHaveLength(0);
   });
 
+  it("CD-8: el 502 del gateway no ecoa el detalle del gateway (body = exactamente { error })", async () => {
+    setGatewayEnv();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { fn } = gwRouter({
+      status: 503,
+      compose: () => ({ error: "registry https://internal.registry down", error_code: "REGISTRY_UNAVAILABLE" }),
+    });
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req(validPayload));
+    expect(res.status).toBe(502);
+    const json = await res.json();
+    expect(Object.keys(json)).toEqual(["error"]);
+    expect(json).toEqual({ error: "a2a_unavailable" });
+  });
+
+  it("AC-4/persistencia: un fallo del gateway registra forward_error en el ledger (igual que el punto-a-punto)", async () => {
+    setGatewayEnv();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    getLedgerMock.mockReturnValue(ledgerMock);
+    const { fn } = gwRouter({ composeThrows: true });
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req(validPayload));
+    expect(res.status).toBe(502);
+    expect(ledgerMock.recordPayoutOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: "r-1:cfx-1",
+        status: "forward_error",
+        error: "a2a_unavailable",
+      }),
+    );
+  });
+
   it("AC-4/PII-free: error del gateway NUNCA ecoa el beneficiary", async () => {
     setGatewayEnv();
-    const { fn } = gwRouter({ discoverThrows: true });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { fn } = gwRouter({ composeThrows: true });
     vi.stubGlobal("fetch", fn);
     const res = await POST(req(validPayload)); // beneficiary.destination = 999888777
     const raw = await res.text();
@@ -1267,10 +1342,12 @@ describe("POST /api/a2a/payout/submit — modo a2a-gateway (WKH-218)", () => {
     expect(agentCalls).toEqual([`${BASE}/api/agents/remit-cashout-payout/invoke`]);
   });
 
-  // W3 — byte-identidad flag OFF: con las envs del gateway SETEADAS pero flag ≠ "a2a-gateway", el
-  // gateway se IGNORA por completo y el payout forwardea punto-a-punto (CD-6/AC-6).
+  // T-A4.1 — byte-identidad flag OFF: con las envs del gateway SETEADAS pero flag ≠ "a2a-gateway",
+  // el gateway se IGNORA por completo y el payout forwardea punto-a-punto (CD-15).
+  // El assert es sobre /compose: con /discover borrado, asertar que NO se llama a /discover pasa
+  // trivialmente y deja de proteger nada.
   it.each(["fallback", "a2a", undefined])(
-    "W3/AC-6: flag=%s + WASIAI_A2A_* seteadas ⇒ gateway IGNORADO (fetch directo al agente)",
+    "T-A4.1: flag=%s + WASIAI_A2A_* seteadas ⇒ gateway IGNORADO (fetch directo al agente)",
     async (flag) => {
       if (flag === undefined) vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "");
       else vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", flag);
@@ -1282,7 +1359,7 @@ describe("POST /api/a2a/payout/submit — modo a2a-gateway (WKH-218)", () => {
       const res = await POST(req(validPayload));
       expect(res.status).toBe(200);
       const urls = fn.mock.calls.map((c) => c[0] as string);
-      expect(urls.some((u) => u.includes("/discover"))).toBe(false); // gateway NUNCA tocado
+      expect(urls.some((u) => u.includes("/compose"))).toBe(false); // gateway NUNCA tocado
       expect(directCalls).toEqual([`${BASE}/api/agents/remit-cashout-payout/invoke`]);
     },
   );

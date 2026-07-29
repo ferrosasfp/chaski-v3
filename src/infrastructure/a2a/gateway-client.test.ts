@@ -8,6 +8,7 @@ import {
   PAYOUT_CAPABILITY,
   PAYOUT_MIN_REPUTATION,
   type GatewayFailure,
+  type GatewayStep,
   logGatewayFailure,
   runViaGateway,
 } from "./gateway-client";
@@ -123,6 +124,33 @@ describe("runViaGateway — AC-1: se pide por CAPACIDAD, el gateway resuelve (ce
       input: {},
       constraints: { min_reputation: 2 },
     });
+  });
+
+  // El step emitido NO es el step recibido: se re-serializa clave por clave. Esa es la propiedad que
+  // hace imposible que un caller cuele chaining (`inputFromPrevious`, `passOutput`) o el nombre de un
+  // agente en el body — y la que hay que testear ACÁ, no en la route (donde el assert equivalente
+  // miraría el body ya filtrado y no podría ponerse rojo por nada que haga el caller).
+  // El tipo `GatewayStep` ya rechaza esas claves en compilación (TS2353); el intersect con
+  // Record<string, unknown> es lo que permite construir el caso hostil SIN `any` ni `as unknown as`.
+  it("T-A1.1b: el step emitido es un whitelist (capability/input/constraints): lo que el caller agregue de más NO viaja", async () => {
+    const hostile: GatewayStep & Record<string, unknown> = {
+      capability: PAYOUT_CAPABILITY,
+      input: { amountUsd: 400 },
+      inputFromPrevious: { quoteId: "quoteId" }, // chaining: sólo con WKH-305 + decisión de producto
+      passOutput: true, // chaining viejo del server
+      agent: "remit-cashout-payout", // nombre del agente (CD-1)
+      registry: "default",
+    };
+    const { fn, calls } = router();
+    vi.stubGlobal("fetch", fn);
+    await runViaGateway({ steps: [hostile] });
+
+    const raw = calls[0]!.init!.body as string;
+    expect(Object.keys(composeBody(calls).steps[0]!)).toEqual(["capability", "input"]);
+    expect(raw).not.toContain("inputFromPrevious");
+    expect(raw).not.toContain("passOutput");
+    expect(raw).not.toContain("registry");
+    expect(raw).not.toContain("remit-cashout-payout");
   });
 
   it("el input viaja TAL CUAL en el step (idempotencyKey/beneficiary intactos, CD-8)", async () => {

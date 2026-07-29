@@ -641,9 +641,15 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       let composeInit: RequestInit | undefined;
       gwRouter({ captureCompose: (init) => (composeInit = init) });
       const res = await POST(req(bodyOf()));
-      expect(res.status).toBe(200);
       const sent = JSON.parse(composeInit!.body as string);
-      expect(sent.steps).toHaveLength(1);
+      // VA PRIMERO, antes del status: si alguien fusiona los legs en una sola llamada, el 200 se cae
+      // por otro motivo (largo de outputs ≠ al pedido ⇒ 502) y el que rompió la decisión ve seis
+      // tests hablando del piso y de la atestación, ninguno nombrándole lo que acaba de tocar.
+      expect(
+        sent.steps,
+        "1 step por llamada: fusionar cotización+desembolso necesita WKH-305 + decisión de producto sobre re-cotizar (§11)",
+      ).toHaveLength(1);
+      expect(res.status).toBe(200);
       const step = sent.steps[0];
       expect(step.capability).toBe(PAYOUT_CAPABILITY);
       expect(step.capability).toBe("remittance-payout"); // el valor REAL del catálogo (M8)
@@ -653,10 +659,10 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       // El input viaja TAL CUAL (el agente strippea con Zod lo que no conoce).
       expect(step.input.idempotencyKey).toBe("rem-1:q-400");
       expect(step.input.quoteId).toBe("q-400");
-      // CD-6: esta HU manda UN step por llamada; nada de chaining entre pasos.
-      const rawBody = composeInit!.body as string;
-      expect(rawBody).not.toContain("inputFromPrevious");
-      expect(rawBody).not.toContain("passOutput");
+      // (Acá vivían dos asserts de que el body no contuviera `inputFromPrevious`/`passOutput`. No
+      // protegían nada: runViaGateway re-serializa el step con un whitelist de tres claves, así que
+      // ningún caller podía ponerlos rojos. La propiedad real —el whitelist— se testea donde vive,
+      // en gateway-client.test.ts, y el campo además lo bloquea el tipo GatewayStep en compilación.)
     });
 
     // T-A5.2 — capas INDEPENDIENTES. El piso no es un control de seguridad: no verifica que la

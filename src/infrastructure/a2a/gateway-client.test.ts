@@ -373,6 +373,38 @@ describe("runViaGateway — AC-2: fallo TIPADO y granular, cero segundo intento"
     });
   });
 
+  // ESTE es el escenario que justifica leer el body de forma tolerante en la rama de error: un 5xx
+  // servido por un proxy/CDN no trae JSON, trae HTML. Si el mapeo dependiera de que el body parsee,
+  // un registry caído se reportaría como "el gateway contestó cualquier cosa" (bad_response) en vez
+  // de "el registry no está" (registry_unavailable), y el diagnóstico apuntaría al lugar equivocado.
+  it("T-A2.5b: status de error con body ILEGIBLE (HTML de un proxy) ⇒ igual mapea por status", async () => {
+    const html = router({ status: 503, jsonThrows: true });
+    vi.stubGlobal("fetch", html.fn);
+    expect(await runViaGateway({ steps: [fxStep] })).toEqual({
+      ok: false,
+      code: "registry_unavailable",
+      httpStatus: 503,
+    });
+
+    // Mismo razonamiento con un body que SÍ parsea pero no es un objeto: no hay campos granulares
+    // que copiar y el status sigue mandando (no se inventa un gatewayCode).
+    const notRecord = router({ status: 404, body: "not-a-record" });
+    vi.stubGlobal("fetch", notRecord.fn);
+    const r = await runViaGateway({ steps: [fxStep] });
+    expect(r).toEqual({ ok: false, code: "agent_not_found", httpStatus: 404 });
+    expect(r).not.toHaveProperty("gatewayCode");
+  });
+
+  // Hermana de T-A2.4: sin `steps` en el body no se puede DERIVAR el índice del paso que falló, y
+  // entonces no se reporta ninguno. Nunca un 0 inventado (que se leería como "falló el primero").
+  it("T-A2.5c: success:false SIN steps ⇒ step_failed sin `step` (no se inventa el índice)", async () => {
+    const { fn } = router({ body: { success: false, error: "boom" } });
+    vi.stubGlobal("fetch", fn);
+    const r = await runViaGateway({ steps: [fxStep] });
+    expect(r).toEqual({ ok: false, code: "step_failed", message: "boom" });
+    expect(r).not.toHaveProperty("step");
+  });
+
   // T-A2.6: opacidad. El failure se serializa y viaja por logs/telemetría: no puede llevar el
   // secreto, la URL interna ni el PII del input.
   it("T-A2.6: el GatewayFailure serializado no contiene la Agent Key, la URL del gateway ni el PII del input", async () => {

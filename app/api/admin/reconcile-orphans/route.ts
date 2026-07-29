@@ -9,15 +9,23 @@
 //
 // Auth fail-closed (CD-8): RECONCILE_ADMIN_SECRET ausente ⇒ 501 (no configurado); secreto
 // ausente/inválido en el header ⇒ 401. Comparación timing-safe (patrón attestation.ts:68-73).
-// La respuesta lleva SOLO conteos agregados — NUNCA PII, montos ni addresses de terceros (CD-7).
+// La respuesta lleva conteos agregados + IDs operativos — NUNCA PII, montos ni addresses (CD-7).
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { getSettlementLedger } from "../../../../src/infrastructure/persistence/supabase-settlement-ledger";
+import { DEPOSIT_ATTESTATION_TTL_SECONDS } from "../../../../src/infrastructure/settlement/deposit-attestation";
 
 // Umbral por default: 15 min (una remesa sana llega a estado terminal en segundos).
 const DEFAULT_STALE_SECONDS = 900;
 // Cota dura del batch: el reconcile es de baja concurrencia; evita un scan ilimitado.
 const MAX_LIMIT = 100;
+// WKH-213 — umbral de las 'prepared'. NO es el de arriba, y no puede serlo: aquel reloj mide
+// updated_at, que en una fila 'prepared' no se mueve nunca (nadie la vuelve a tocar). La cota con
+// sentido es el vencimiento de la atestación de depósito: pasado ese punto la orden YA NO puede
+// completarse por el camino normal (el settle exigiría una atestación vencida ⇒ 400), así que la
+// huérfana es definitiva. Se deriva de la MISMA constante que emite la atestación (nunca un literal
+// paralelo: si el TTL cambia, este umbral cambia con él).
+const PREPARED_ORPHAN_SECONDS = DEPOSIT_ATTESTATION_TTL_SECONDS;
 
 /** Comparación timing-safe: longitud primero (timingSafeEqual TIRA con buffers de distinta longitud),
  *  luego comparación constante. Patrón attestation.ts:68-73. */
@@ -61,6 +69,21 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // 3. listStale (AC-4): no-terminales más viejas que el umbral.
+  // WKH-213 — órdenes 'prepared' huérfanas. Va ANTES del barrido de varadas a propósito: es una
+  // lectura pura, así que si falla se corta en 503 SIN haber mutado nada (el reintento del operador
+  // re-corre el endpoint entero). Y falla FUERTE: devolver `{ total: 0 }` porque la consulta se cayó
+  // se lee idéntico a "no hay huérfanas", que es la peor mentira que puede decir esta superficie.
+  const preparedOlderThanIso = new Date(Date.now() - PREPARED_ORPHAN_SECONDS * 1000).toISOString();
+  let prepared: Awaited<ReturnType<typeof ledger.listPreparedOrphans>>;
+  try {
+    prepared = await ledger.listPreparedOrphans({
+      olderThanIso: preparedOlderThanIso,
+      limit: MAX_LIMIT,
+    });
+  } catch {
+    return NextResponse.json({ error: "reconcile_unavailable" }, { status: 503 });
+  }
+
   const olderThanIso = new Date(Date.now() - staleThresholdSeconds() * 1000).toISOString();
   let stale: Awaited<ReturnType<typeof ledger.listStale>>;
   try {
@@ -97,5 +120,30 @@ export async function POST(req: Request): Promise<Response> {
 
   // 5. Solo conteos agregados (CD-7): NUNCA PII/montos/addresses de terceros. `failed` = filas cuyo
   //    markOutcome tiró (batch parcial → 200, NUNCA 500).
-  return NextResponse.json({ scanned: stale.length, manualReview, failed }, { status: 200 });
+  // `preparedOrphans`: sólo VISIBILIDAD, cero mutación — una 'prepared' no se re-procesa (su principal
+  // nunca entró; cancelar la orden del proveedor es DT-5, fuera de este endpoint).
+  //   · total     = conteo EXACTO de coincidencias, NO items.length (que está capado por MAX_LIMIT).
+  //   · truncated = hay más de las que entran en la página ⇒ el operador sabe que está viendo un corte.
+  //   · items     = IDs operativos para actuar (payoutId es lo que se cancela del lado del proveedor).
+  //     NUNCA addresses ni montos: el operador no los necesita y esta respuesta va a logs (CD-7).
+  return NextResponse.json(
+    {
+      scanned: stale.length,
+      manualReview,
+      failed,
+      preparedOrphans: {
+        total: prepared.total,
+        truncated: prepared.total > prepared.records.length,
+        olderThan: preparedOlderThanIso,
+        items: prepared.records.map((r) => ({
+          id: r.id,
+          remittanceId: r.remittanceId,
+          quoteId: r.quoteId,
+          payoutId: r.payoutId,
+          createdAt: r.createdAt,
+        })),
+      },
+    },
+    { status: 200 },
+  );
 }

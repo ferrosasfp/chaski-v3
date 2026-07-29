@@ -20,9 +20,13 @@ interface Calls {
   lt: unknown[][];
   limit: unknown[][];
   single: unknown[][];
+  maybeSingle: unknown[][]; // WKH-213: recordPrincipalIn pregunta si la fila ya existe
   order: unknown[][]; // HU-SOL-20: listRemittanceIdsBySender ordena por created_at desc
 }
-function makeClient(results: Array<{ data: unknown; error: unknown }>): {
+function makeClient(
+  // `count` sólo lo usa listPreparedOrphans (select con { count: "exact" }).
+  results: Array<{ data: unknown; error: unknown; count?: number }>,
+): {
   client: SupabaseClient;
   calls: Calls;
 } {
@@ -36,6 +40,7 @@ function makeClient(results: Array<{ data: unknown; error: unknown }>): {
     lt: [],
     limit: [],
     single: [],
+    maybeSingle: [],
     order: [],
   };
   let i = 0;
@@ -57,6 +62,7 @@ function makeClient(results: Array<{ data: unknown; error: unknown }>): {
       builder.lt = chain("lt");
       builder.limit = chain("limit");
       builder.single = chain("single");
+      builder.maybeSingle = chain("maybeSingle");
       builder.order = chain("order");
       // thenable: awaitar cualquier terminal resuelve el resultado de este from().
       // biome-ignore lint/suspicious/noThenProperty: thenable intencional, replica PostgREST/supabase-js.
@@ -211,32 +217,196 @@ function vmNetIdViolation(row: Record<string, unknown>): DbViolation | null {
   }
   return null;
 }
-function makeConstraintClient(): {
+// ── WKH-213 · TABLA EN MEMORIA que aplica TODAS las restricciones de la migración ───────────────────
+// El doble anterior (`makeConstraintClient`) sólo entendía `upsert` y sólo aplicaba el CHECK de
+// identidad de red: no modelaba los DOS índices únicos ni el UPDATE, así que no podía ver el bug que
+// esta HU arregla (el INSERT del settle chocando con la fila 'prepared' por idempotency_key) ni medir
+// el ESTADO FINAL de la fila, que es lo único que importa acá.
+// Lo que aplica, tal cual la DB (migraciones 20260716 / 20260718 / 20260721):
+//   · uq_remit_settle_txhash + uq_remit_settle_idem  → 23505 (y `ON CONFLICT` sólo perdona SU índice)
+//   · remittance_settlements_vm_netid_chk / _vm_chk  → 23514
+//   · NOT NULL de las columnas obligatorias          → 23502
+//   · defaults de columna (vm='evm', attempts=0, …)
+// Verbos soportados: upsert(onConflict/ignoreDuplicates), update(+select devolviendo las filas
+// mutadas), select(+count exact), eq, in, lt, order, limit, maybeSingle, single.
+const NOT_NULL_COLUMNS = [
+  "remittance_id",
+  "quote_id",
+  "idempotency_key",
+  "tx_hash",
+  "sender_address",
+  "receiver_address",
+  "value_minor",
+  "status",
+];
+const COLUMN_DEFAULTS: Record<string, unknown> = {
+  vm: "evm",
+  chain_id: null,
+  network_id: null,
+  status: "principal_in",
+  attempts: 0,
+  payout_id: null,
+  last_error: null,
+  created_at: "2026-07-28T00:00:00.000Z",
+  updated_at: "2026-07-28T00:00:00.000Z",
+};
+/** Violación de integridad de una fila candidata (CHECK + NOT NULL). El unique se chequea aparte
+ *  porque necesita ver el resto de la tabla. */
+function rowViolation(row: Record<string, unknown>): DbViolation | null {
+  const netId = vmNetIdViolation(row);
+  if (netId) return netId;
+  for (const col of NOT_NULL_COLUMNS) {
+    if (row[col] === null || row[col] === undefined) {
+      return { code: "23502", constraint: `${col}_not_null`, message: `null value in ${col}` };
+    }
+  }
+  return null;
+}
+function makeTableClient(seed: Record<string, unknown>[] = []): {
   client: SupabaseClient;
   rows: Record<string, unknown>[];
   rejected: DbViolation[];
 } {
-  const rows: Record<string, unknown>[] = [];
+  const rows: Record<string, unknown>[] = seed.map((r, i) => ({
+    id: `seed-${i + 1}`,
+    ...COLUMN_DEFAULTS,
+    ...r,
+  }));
   const rejected: DbViolation[] = [];
+  let seq = 0;
+  const uniqueViolation = (
+    candidate: Record<string, unknown>,
+    selfId: unknown,
+  ): DbViolation | null => {
+    for (const r of rows) {
+      if (r.id === selfId) continue;
+      if (r.tx_hash === candidate.tx_hash) {
+        return { code: "23505", constraint: "uq_remit_settle_txhash", message: "duplicate tx_hash" };
+      }
+      if (r.idempotency_key === candidate.idempotency_key) {
+        return { code: "23505", constraint: "uq_remit_settle_idem", message: "duplicate idem" };
+      }
+    }
+    return null;
+  };
   const client = {
     from: vi.fn(() => {
+      type Filter = (r: Record<string, unknown>) => boolean;
+      const filters: Filter[] = [];
+      let mode: "read" | "insert" | "update" = "read";
       let pending: Record<string, unknown> | null = null;
+      let onConflict = "";
+      let ignoreDuplicates = false;
+      let selectCols: string | null = null;
+      let wantCount = false;
+      let orderBy: { col: string; asc: boolean } | null = null;
+      let limitN: number | null = null;
+      let terminal: "many" | "maybeSingle" | "single" = "many";
       const builder: Record<string, unknown> = {};
-      builder.upsert = vi.fn((row: Record<string, unknown>) => {
-        pending = row;
+      builder.select = vi.fn((cols?: string, opts?: { count?: string }) => {
+        selectCols = cols ?? "*";
+        if (opts?.count === "exact") wantCount = true;
         return builder;
       });
+      builder.upsert = vi.fn((row: Record<string, unknown>, opts?: Record<string, unknown>) => {
+        mode = "insert";
+        pending = row;
+        onConflict = typeof opts?.onConflict === "string" ? opts.onConflict : "";
+        ignoreDuplicates = opts?.ignoreDuplicates === true;
+        return builder;
+      });
+      builder.update = vi.fn((patch: Record<string, unknown>) => {
+        mode = "update";
+        pending = patch;
+        return builder;
+      });
+      builder.eq = vi.fn((col: string, val: unknown) => {
+        filters.push((r) => r[col] === val);
+        return builder;
+      });
+      builder.in = vi.fn((col: string, vals: unknown[]) => {
+        filters.push((r) => vals.includes(r[col]));
+        return builder;
+      });
+      builder.lt = vi.fn((col: string, val: unknown) => {
+        filters.push((r) => String(r[col]) < String(val));
+        return builder;
+      });
+      builder.order = vi.fn((col: string, opts?: { ascending?: boolean }) => {
+        orderBy = { col, asc: opts?.ascending !== false };
+        return builder;
+      });
+      builder.limit = vi.fn((n: number) => {
+        limitN = n;
+        return builder;
+      });
+      builder.maybeSingle = vi.fn(() => {
+        terminal = "maybeSingle";
+        return builder;
+      });
+      builder.single = vi.fn(() => {
+        terminal = "single";
+        return builder;
+      });
+      const project = (r: Record<string, unknown>): Record<string, unknown> => {
+        if (!selectCols || selectCols === "*") return { ...r };
+        const out: Record<string, unknown> = {};
+        for (const raw of selectCols.split(",")) {
+          const col = raw.trim().replace("::text", "");
+          out[col] = r[col];
+        }
+        return out;
+      };
       // biome-ignore lint/suspicious/noThenProperty: thenable intencional, replica PostgREST/supabase-js.
       builder.then = (resolve: (v: unknown) => void) => {
-        if (pending === null) return resolve({ data: null, error: null });
-        const violation = vmNetIdViolation(pending);
-        if (violation) {
-          rejected.push(violation);
-          return resolve({ data: null, error: violation }); // PostgREST propaga error.code
+        const matched = rows.filter((r) => filters.every((f) => f(r)));
+        if (mode === "insert" && pending) {
+          const candidate: Record<string, unknown> = {
+            ...COLUMN_DEFAULTS,
+            ...pending,
+            id: `row-${++seq}`,
+          };
+          const conflicting = onConflict
+            ? rows.find((r) => r[onConflict] === candidate[onConflict])
+            : undefined;
+          if (conflicting && ignoreDuplicates) return resolve({ data: null, error: null }); // DO NOTHING
+          const violation = rowViolation(candidate) ?? uniqueViolation(candidate, null);
+          if (violation) {
+            rejected.push(violation);
+            return resolve({ data: null, error: violation }); // PostgREST propaga error.code
+          }
+          rows.push(candidate);
+          return resolve({ data: null, error: null });
         }
-        // Fila efectiva = defaults de la columna + lo escrito (así se ve lo que quedaría en la tabla).
-        rows.push({ vm: "evm", chain_id: null, network_id: null, ...pending });
-        return resolve({ data: null, error: null });
+        if (mode === "update" && pending) {
+          const updated: Record<string, unknown>[] = [];
+          for (const r of matched) {
+            const next = { ...r, ...pending };
+            const violation = rowViolation(next) ?? uniqueViolation(next, r.id);
+            if (violation) {
+              rejected.push(violation);
+              return resolve({ data: null, error: violation });
+            }
+            Object.assign(r, pending);
+            updated.push(r);
+          }
+          // PostgREST devuelve las filas mutadas SOLO si se encadenó .select().
+          return resolve({ data: selectCols ? updated.map(project) : null, error: null });
+        }
+        let out = [...matched];
+        if (orderBy) {
+          const { col, asc } = orderBy;
+          out.sort((a, b) => {
+            const av = String(a[col]);
+            const bv = String(b[col]);
+            return av < bv ? (asc ? -1 : 1) : av > bv ? (asc ? 1 : -1) : 0;
+          });
+        }
+        const total = out.length; // count exact: ANTES del limit (como Content-Range de PostgREST)
+        if (limitN !== null) out = out.slice(0, limitN);
+        const data =
+          terminal === "many" ? out.map(project) : out.length > 0 ? project(out[0]!) : null;
+        return resolve(wantCount ? { data, error: null, count: total } : { data, error: null });
       };
       return builder;
     }),
@@ -391,8 +561,12 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
     expect(calls.eq).toContainEqual(["sender_address", SENDER.toLowerCase()]);
   });
 
-  it("recordPrincipalIn: upsert idempotente por tx_hash (ignoreDuplicates) con addresses lowercased y value_minor string", async () => {
-    const { client, calls } = makeClient([{ data: null, error: null }]);
+  // WKH-213/R2 — el UPDATE va PRIMERO y está keyeado por idempotency_key (NO por tx_hash), es
+  // owner-scoped y sólo asciende desde 'prepared'. Este test mira los ARGUMENTOS (el estado final de
+  // la fila lo miden los tests con la tabla en memoria, más abajo).
+  it("recordPrincipalIn: UPDATE por idempotency_key + sender_address + status='prepared' (CAS), con addresses lowercased y value_minor string", async () => {
+    // 1er from() = el UPDATE de ascenso; devuelve una fila ⇒ la función corta ahí.
+    const { client, calls } = makeClient([{ data: [{ id: "row-1" }], error: null }]);
     const ledger = new SupabaseSettlementLedger(client);
     await ledger.recordPrincipalIn({
       remittanceId: "rem-1",
@@ -405,13 +579,22 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
       valueMinor: 400_000_000,
       vm: "evm",
     });
-    const row = calls.upsert[0]?.[0] as Record<string, unknown>;
-    const opts = calls.upsert[0]?.[1] as Record<string, unknown>;
-    expect(row.status).toBe("principal_in");
-    expect(row.sender_address).toBe(SENDER.toLowerCase());
-    expect(row.receiver_address).toBe("0xreceiveraddr2222222222222222222222222222");
-    expect(row.value_minor).toBe("400000000"); // string (uint256-safe)
-    expect(opts).toEqual({ onConflict: "tx_hash", ignoreDuplicates: true });
+    const patch = calls.update[0]?.[0] as Record<string, unknown>;
+    expect(patch.status).toBe("principal_in");
+    expect(patch.tx_hash).toBe("0xTX");
+    expect(patch.sender_address).toBe(SENDER.toLowerCase());
+    expect(patch.receiver_address).toBe("0xreceiveraddr2222222222222222222222222222");
+    expect(patch.value_minor).toBe("400000000"); // string (uint256-safe)
+    // payout_id NO viaja en el patch: escribirlo (null) borraría el id de la orden que puso prepare.
+    expect(Object.keys(patch)).not.toContain("payout_id");
+    // La clave del write es idempotency_key: con onConflict:'tx_hash' el INSERT moría contra el OTRO
+    // índice único y la fila jamás llegaba a principal_in.
+    expect(calls.eq).toContainEqual(["idempotency_key", "rem-1:q-1"]);
+    expect(calls.eq).toContainEqual(["sender_address", SENDER.toLowerCase()]); // ownership (CD-9)
+    expect(calls.eq).toContainEqual(["status", "prepared"]); // CAS: nunca degrada un estado avanzado
+    // Matcheó ⇒ NO hay segundo write (ni relleno de evidencia, ni INSERT).
+    expect(calls.upsert.length).toBe(0);
+    expect(calls.update.length).toBe(1);
   });
 
   it("markOutcome con incrementAttempt: lee attempts y escribe attempts+1 + status", async () => {
@@ -452,9 +635,16 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
     expect(calls.eq).toContainEqual(["payout_id", "p-1"]);
     // NO owner-scoped: el guard es el HMAC, jamás filtra por sender_address (CD-12).
     expect(calls.eq.some((c) => c[0] === "sender_address")).toBe(false);
-    // Filtro NON_TERMINAL (DT-2b): nunca degrada un estado terminal ni reclasifica manual_review.
+    // Filtro NO-TERMINAL (DT-2b): nunca degrada un estado terminal ni reclasifica manual_review.
+    // WKH-213/R1: 'prepared' ESTÁ en el conjunto — sin él, el aviso del proveedor sobre una orden cuyo
+    // settle nunca aterrizó se perdía y la fila quedaba congelada para siempre.
     expect(calls.in[0]?.[0]).toBe("status");
-    expect(calls.in[0]?.[1]).toEqual(["principal_in", "submitted", "forward_error"]);
+    expect(calls.in[0]?.[1]).toEqual(["principal_in", "submitted", "forward_error", "prepared"]);
+    // Y NO degrada: los terminales siguen afuera.
+    const updatable = calls.in[0]?.[1] as string[];
+    expect(updatable).not.toContain("settled");
+    expect(updatable).not.toContain("failed");
+    expect(updatable).not.toContain("manual_review");
   });
 
   it("WKH-210/DT-8: status failed persiste last_error enum estable (transfi_fund_failed), nunca el reason crudo", async () => {
@@ -649,7 +839,7 @@ describe("identidad de red del ledger — vm + chain_id/network_id (CHECK 202607
   });
 
   it("recordOrderPrepared vm:'solana' ⇒ la DB ACEPTA la fila: vm='solana', network_id CAIP-2, chain_id NULL", async () => {
-    const { client, rows, rejected } = makeConstraintClient();
+    const { client, rows, rejected } = makeTableClient();
     await new SupabaseSettlementLedger(client).recordOrderPrepared({
       remittanceId: "rem-1",
       quoteId: "q-1",
@@ -676,7 +866,7 @@ describe("identidad de red del ledger — vm + chain_id/network_id (CHECK 202607
   });
 
   it("recordOrderPrepared vm:'evm' ⇒ byte-idéntico: vm='evm', chain_id numérico, network_id NULL", async () => {
-    const { client, rows, rejected } = makeConstraintClient();
+    const { client, rows, rejected } = makeTableClient();
     await new SupabaseSettlementLedger(client).recordOrderPrepared({
       remittanceId: "rem-2",
       quoteId: "q-2",
@@ -696,7 +886,7 @@ describe("identidad de red del ledger — vm + chain_id/network_id (CHECK 202607
   });
 
   it("recordPrincipalIn vm:'solana' ⇒ mismas dos mitades (el escritor del principal tenía el MISMO bug)", async () => {
-    const { client, rows, rejected } = makeConstraintClient();
+    const { client, rows, rejected } = makeTableClient();
     await new SupabaseSettlementLedger(client).recordPrincipalIn({
       remittanceId: "rem-3",
       quoteId: "q-3",
@@ -718,7 +908,7 @@ describe("identidad de red del ledger — vm + chain_id/network_id (CHECK 202607
   });
 
   it("recordPrincipalIn vm:'evm' ⇒ byte-idéntico (chain_id numérico, network_id NULL)", async () => {
-    const { client, rows, rejected } = makeConstraintClient();
+    const { client, rows, rejected } = makeTableClient();
     await new SupabaseSettlementLedger(client).recordPrincipalIn({
       remittanceId: "rem-4",
       quoteId: "q-4",
@@ -740,10 +930,12 @@ describe("identidad de red del ledger — vm + chain_id/network_id (CHECK 202607
   it("invariante de los DOS escritores × las DOS VMs: exactamente UNA columna de red no-nula, coherente con vm", async () => {
     // Barrido: si un escritor futuro (o un refactor) desacopla las mitades en cualquiera de los cuatro
     // combos, esto se pone rojo — el CHECK del doble rechaza y `rejected` deja de estar vacío.
+    // WKH-213: prepare + settle de la MISMA remesa son UNA sola fila (el settle completa la preparada),
+    // así que el barrido también fija que el merge no rompe la identidad de red.
     for (const vm of ["evm", "solana"] as const) {
       const sender = vm === "solana" ? SOL_A : SENDER;
       const receiver = vm === "solana" ? SOL_B : "0xREceiverAddr2222222222222222222222222222";
-      const { client, rows, rejected } = makeConstraintClient();
+      const { client, rows, rejected } = makeTableClient();
       const ledger = new SupabaseSettlementLedger(client);
       await ledger.recordOrderPrepared({
         remittanceId: "rem-x",
@@ -767,7 +959,10 @@ describe("identidad de red del ledger — vm + chain_id/network_id (CHECK 202607
         vm,
       });
       expect(rejected).toEqual([]);
-      expect(rows.length).toBe(2);
+      expect(rows.length).toBe(1); // una remesa = UNA fila (el settle aterriza sobre la preparada)
+      expect(rows[0]?.status).toBe("principal_in");
+      expect(rows[0]?.tx_hash).toBe("0xTXX");
+      expect(rows[0]?.payout_id).toBe("p-x"); // el merge NO pisó el payout_id de prepare
       for (const row of rows) {
         expect(row.vm).toBe(vm);
         const hasChain = row.chain_id !== null;
@@ -777,6 +972,419 @@ describe("identidad de red del ledger — vm + chain_id/network_id (CHECK 202607
         expect(hasChain === hasNetwork).toBe(false); // XOR: nunca las dos, nunca ninguna
       }
     }
+  });
+});
+
+// ── WKH-213 · el settle ATERRIZA sobre la fila preparada (R2) ────────────────────────────────────────
+// Todo lo de acá mide el ESTADO FINAL DE LA FILA contra la tabla en memoria que aplica los DOS índices
+// únicos + el CHECK + los NOT NULL. Un espía de `upsert` no sirve: el bug original era precisamente
+// que la llamada se hacía "bien" y la DB la rechazaba.
+const DEPOSIT_EVM = "0x4444444444444444444444444444444444444444";
+const RECEIVER_EVM = "0xREceiverAddr2222222222222222222222222222";
+
+function prepareInput(over: Record<string, unknown> = {}) {
+  return {
+    remittanceId: "rem-1",
+    quoteId: "q-1",
+    idempotencyKey: "rem-1:q-1",
+    depositAddress: DEPOSIT_EVM,
+    chainId: CHAIN_ID_EVM,
+    senderAddress: SENDER,
+    payoutId: "transfi-po-1",
+    vm: "evm" as const,
+    ...over,
+  };
+}
+function settleInput(over: Record<string, unknown> = {}) {
+  return {
+    remittanceId: "rem-1",
+    quoteId: "q-1",
+    idempotencyKey: "rem-1:q-1",
+    txHash: "0xTXREAL",
+    chainId: CHAIN_ID_EVM,
+    senderAddress: SENDER,
+    receiverAddress: DEPOSIT_EVM, // el `to` VERIFICADO on-chain ES el depositAddress atestado
+    valueMinor: 400_000_000,
+    vm: "evm" as const,
+    ...over,
+  };
+}
+
+describe("WKH-213/R2 — el settle completa la fila 'prepared' (estado final de la fila)", () => {
+  it("prepare + settle ⇒ UNA fila en principal_in, con el hash y el monto REALES y el payout_id INTACTO", async () => {
+    const { client, rows, rejected } = makeTableClient();
+    const ledger = new SupabaseSettlementLedger(client);
+    await ledger.recordOrderPrepared(prepareInput());
+    await ledger.recordPrincipalIn(settleInput());
+
+    expect(rejected).toEqual([]); // con onConflict:'tx_hash' acá había un 23505 (uq_remit_settle_idem)
+    expect(rows.length).toBe(1); // la MISMA fila, no una nueva
+    const row = rows[0]!;
+    expect(row.status).toBe("principal_in"); // ← lo que en prod NUNCA pasaba
+    expect(row.tx_hash).toBe("0xTXREAL"); // el placeholder 'prepared:…' quedó reemplazado
+    expect(row.value_minor).toBe("400000000"); // monto real (venía '0' de prepare)
+    expect(row.payout_id).toBe("transfi-po-1"); // ← el merge NO pisó con null lo que prepare dejó bien
+    expect(row.sender_address).toBe(SENDER.toLowerCase());
+    expect(row.receiver_address).toBe(DEPOSIT_EVM.toLowerCase());
+    expect(row.idempotency_key).toBe("rem-1:q-1");
+    expect(row.created_at).toBe(COLUMN_DEFAULTS.created_at); // es la fila de prepare, no una recién nacida
+  });
+
+  it("idempotencia REAL: el settle repetido 3 veces deja la fila idéntica y NO lanza", async () => {
+    const { client, rows, rejected } = makeTableClient();
+    const ledger = new SupabaseSettlementLedger(client);
+    await ledger.recordOrderPrepared(prepareInput());
+    await ledger.recordPrincipalIn(settleInput());
+    const after1 = { ...rows[0]! };
+    await expect(ledger.recordPrincipalIn(settleInput())).resolves.toBeUndefined();
+    await expect(ledger.recordPrincipalIn(settleInput())).resolves.toBeUndefined();
+    expect(rejected).toEqual([]); // un retry benigno NO puede disparar un falso [ALERT] 23505
+    expect(rows.length).toBe(1);
+    expect(rows[0]).toEqual(after1); // byte-idéntica: reintentar es inocuo
+  });
+
+  it("settle SIN prepare (modo estático WKH-168/209 o ledger apagado al preparar) ⇒ INSERT normal", async () => {
+    const { client, rows, rejected } = makeTableClient();
+    await new SupabaseSettlementLedger(client).recordPrincipalIn(
+      settleInput({ receiverAddress: RECEIVER_EVM }),
+    );
+    expect(rejected).toEqual([]);
+    expect(rows.length).toBe(1);
+    expect(rows[0]?.status).toBe("principal_in");
+    expect(rows[0]?.tx_hash).toBe("0xTXREAL");
+    expect(rows[0]?.payout_id).toBeNull(); // no hubo prepare: no hay orden que preservar
+  });
+
+  it("CD-9: un settle de OTRO sender NO se lleva puesta la fila preparada (sigue 'prepared', sin fila nueva)", async () => {
+    const OTRO = "0x9999999999999999999999999999999999999999";
+    const { client, rows, rejected } = makeTableClient();
+    const ledger = new SupabaseSettlementLedger(client);
+    await ledger.recordOrderPrepared(prepareInput());
+    await ledger.recordPrincipalIn(settleInput({ senderAddress: OTRO, txHash: "0xATACANTE" }));
+    expect(rejected).toEqual([]);
+    expect(rows.length).toBe(1);
+    expect(rows[0]?.status).toBe("prepared"); // intacta
+    expect(rows[0]?.sender_address).toBe(SENDER.toLowerCase()); // NO se reescribió con el ajeno
+    expect(rows[0]?.tx_hash).toBe("prepared:rem-1:q-1"); // ni su evidencia
+  });
+
+  it("la protección del índice de tx_hash SIGUE viva: dos remesas distintas con el MISMO hash ⇒ TIRA 23505", async () => {
+    const { client, rows } = makeTableClient();
+    const ledger = new SupabaseSettlementLedger(client);
+    await ledger.recordOrderPrepared(prepareInput());
+    await ledger.recordPrincipalIn(settleInput()); // rem-1 se queda con 0xTXREAL
+    await ledger.recordOrderPrepared(
+      prepareInput({ remittanceId: "rem-2", quoteId: "q-2", idempotencyKey: "rem-2:q-2" }),
+    );
+    // rem-2 intenta reclamar el MISMO hash on-chain: la DB lo rechaza y el ledger NO se lo come.
+    await expect(
+      ledger.recordPrincipalIn(
+        settleInput({ remittanceId: "rem-2", quoteId: "q-2", idempotencyKey: "rem-2:q-2" }),
+      ),
+    ).rejects.toThrow(/ledger_record_principal_in_failed:23505/);
+    expect(rows.find((r) => r.remittance_id === "rem-2")?.status).toBe("prepared"); // no se corrompió
+  });
+
+  // ── EL ORDEN INVERSO: el webhook del proveedor llega ANTES que el settle ──────────────────────────
+  it("webhook ANTES que el settle: el settle NO degrada el estado terminal, pero SÍ completa la evidencia", async () => {
+    const { client, rows, rejected } = makeTableClient();
+    const ledger = new SupabaseSettlementLedger(client);
+    await ledger.recordOrderPrepared(prepareInput());
+    // R1: el proveedor avisa "pagado" sobre la fila 'prepared' (antes esto no mutaba NADA).
+    await ledger.recordWebhookOutcome({ payoutId: "transfi-po-1", status: "settled" });
+    expect(rows[0]?.status).toBe("settled");
+    // Y ahora sí llega el settle, tarde.
+    await ledger.recordPrincipalIn(settleInput());
+    expect(rejected).toEqual([]);
+    expect(rows.length).toBe(1);
+    expect(rows[0]?.status).toBe("settled"); // ← NO vuelve a principal_in (sería un retroceso de estado)
+    expect(rows[0]?.tx_hash).toBe("0xTXREAL"); // ← pero el hash verificado on-chain NO se pierde
+    expect(rows[0]?.value_minor).toBe("400000000");
+    expect(rows[0]?.payout_id).toBe("transfi-po-1");
+  });
+
+  it("webhook ANTES que el settle: la fila terminal NO vuelve a la cola de varadas (listStale la ignora)", async () => {
+    const { client } = makeTableClient();
+    const ledger = new SupabaseSettlementLedger(client);
+    await ledger.recordOrderPrepared(prepareInput());
+    await ledger.recordWebhookOutcome({ payoutId: "transfi-po-1", status: "settled" });
+    await ledger.recordPrincipalIn(settleInput());
+    const stale = await ledger.listStale({ olderThanIso: "2030-01-01T00:00:00.000Z", limit: 50 });
+    expect(stale).toEqual([]); // si el settle hubiera degradado el status, acá aparecería
+  });
+
+  it("el settle NO pisa una evidencia real ya escrita, ni siquiera con otro hash (fila ya avanzada)", async () => {
+    const { client, rows } = makeTableClient();
+    const ledger = new SupabaseSettlementLedger(client);
+    await ledger.recordOrderPrepared(prepareInput());
+    await ledger.recordPrincipalIn(settleInput());
+    await ledger.recordPayoutOutcome({
+      idempotencyKey: "rem-1:q-1",
+      senderAddress: SENDER,
+      status: "submitted",
+      payoutId: "transfi-po-1",
+      vm: "evm",
+    });
+    await ledger.recordPrincipalIn(settleInput({ txHash: "0xOTROHASH" }));
+    expect(rows[0]?.status).toBe("submitted"); // no degrada
+    expect(rows[0]?.tx_hash).toBe("0xTXREAL"); // no reescribe la evidencia original
+  });
+
+  // ── La otra dirección: la huérfana de verdad SIGUE siendo huérfana ────────────────────────────────
+  it("prepare SIN settle ⇒ la fila sigue 'prepared' y aparece como huérfana (nadie la asciende sola)", async () => {
+    const { client, rows } = makeTableClient([]);
+    const ledger = new SupabaseSettlementLedger(client);
+    await ledger.recordOrderPrepared(prepareInput());
+    expect(rows[0]?.status).toBe("prepared");
+    // No está en la cola de varadas (su principal NUNCA entró: no se re-procesa — CD-6).
+    expect(await ledger.listStale({ olderThanIso: "2030-01-01T00:00:00.000Z", limit: 50 })).toEqual(
+      [],
+    );
+    // Pero SÍ está en la superficie de huérfanas.
+    const orphans = await ledger.listPreparedOrphans({
+      olderThanIso: "2030-01-01T00:00:00.000Z",
+      limit: 50,
+    });
+    expect(orphans.total).toBe(1);
+    expect(orphans.records[0]?.remittanceId).toBe("rem-1");
+    expect(orphans.records[0]?.payoutId).toBe("transfi-po-1"); // el id que el operador cancela
+  });
+});
+
+describe("WKH-213/R1 — el webhook puede sacar una fila de 'prepared'", () => {
+  it("'prepared' + webhook 'settled' ⇒ la fila queda settled (antes se quedaba en prepared para siempre)", async () => {
+    const { client, rows } = makeTableClient();
+    const ledger = new SupabaseSettlementLedger(client);
+    await ledger.recordOrderPrepared(prepareInput());
+    await ledger.recordWebhookOutcome({ payoutId: "transfi-po-1", status: "settled" });
+    expect(rows[0]?.status).toBe("settled");
+  });
+
+  it("'prepared' + webhook 'failed' ⇒ failed con last_error enum estable (NUNCA el motivo crudo)", async () => {
+    const { client, rows } = makeTableClient();
+    const ledger = new SupabaseSettlementLedger(client);
+    await ledger.recordOrderPrepared(prepareInput());
+    await ledger.recordWebhookOutcome({
+      payoutId: "transfi-po-1",
+      status: "failed",
+      error: "transfi_fund_failed",
+    });
+    expect(rows[0]?.status).toBe("failed");
+    expect(rows[0]?.last_error).toBe("transfi_fund_failed");
+  });
+
+  it.each([
+    ["settled", "settled"],
+    ["failed", "failed"],
+    ["manual_review", "manual_review"],
+  ])("DT-2b intacto: una fila '%s' NO la degrada el webhook", async (initial, expected) => {
+    const { client, rows } = makeTableClient([
+      {
+        remittance_id: "rem-9",
+        quote_id: "q-9",
+        idempotency_key: "rem-9:q-9",
+        tx_hash: "0xtx9",
+        chain_id: CHAIN_ID_EVM,
+        sender_address: SENDER.toLowerCase(),
+        receiver_address: DEPOSIT_EVM.toLowerCase(),
+        value_minor: "400000000",
+        status: initial,
+        payout_id: "transfi-po-9",
+      },
+    ]);
+    await new SupabaseSettlementLedger(client).recordWebhookOutcome({
+      payoutId: "transfi-po-9",
+      status: "submitted",
+    });
+    expect(rows[0]?.status).toBe(expected); // sin cambios
+  });
+});
+
+describe("WKH-213/R3 — el rail Solana escribe al ledger", () => {
+  const SOL_SIGNATURE = "5".repeat(64); // base58 (dígitos válidos en el alfabeto)
+  function solPrepared() {
+    return {
+      remittanceId: "rem-sol",
+      quoteId: "q-sol",
+      idempotencyKey: "rem-sol:q-sol",
+      depositAddress: SOL_B,
+      chainId: CHAIN_ID_MISLABEL, // el caller pasa un chainId EVM: el ledger lo IGNORA en Solana
+      senderAddress: SOL_A,
+      payoutId: "transfi-po-sol",
+      vm: "solana" as const,
+    };
+  }
+
+  it("prepared Solana + signature ⇒ principal_in con la firma como tx_hash, identidad de red INTACTA", async () => {
+    const { client, rows, rejected } = makeTableClient();
+    const ledger = new SupabaseSettlementLedger(client);
+    await ledger.recordOrderPrepared(solPrepared());
+    await ledger.recordSolanaPrincipalIn({
+      remittanceId: "rem-sol",
+      senderAddress: SOL_A,
+      signature: SOL_SIGNATURE,
+    });
+    expect(rejected).toEqual([]);
+    expect(rows.length).toBe(1);
+    const row = rows[0]!;
+    expect(row.status).toBe("principal_in"); // ← antes: 'prepared' para siempre
+    expect(row.tx_hash).toBe(SOL_SIGNATURE); // la firma ES el identificador de tx en Solana
+    expect(row.vm).toBe("solana"); // marcada como Solana, NO como EVM
+    expect(row.network_id).toBe(resolveSolanaNetworkId());
+    expect(row.chain_id).toBeNull();
+    expect(row.payout_id).toBe("transfi-po-sol"); // intacto
+    expect(row.sender_address).toBe(new PublicKey(SOL_A).toBase58()); // base58 case-preservado (CD-10)
+  });
+
+  it("sin fila 'prepared' ⇒ NO-OP: jamás inventa una fila (no hay quote_id/value_minor honestos)", async () => {
+    const { client, rows, rejected } = makeTableClient();
+    await new SupabaseSettlementLedger(client).recordSolanaPrincipalIn({
+      remittanceId: "rem-inexistente",
+      senderAddress: SOL_A,
+      signature: SOL_SIGNATURE,
+    });
+    expect(rows).toEqual([]);
+    expect(rejected).toEqual([]);
+  });
+
+  it("CD-9: la signature de OTRO sender no toca la fila (sigue 'prepared')", async () => {
+    const { client, rows } = makeTableClient();
+    const ledger = new SupabaseSettlementLedger(client);
+    await ledger.recordOrderPrepared(solPrepared());
+    await ledger.recordSolanaPrincipalIn({
+      remittanceId: "rem-sol",
+      senderAddress: SOL_B, // otro sender
+      signature: SOL_SIGNATURE,
+    });
+    expect(rows[0]?.status).toBe("prepared");
+    expect(rows[0]?.tx_hash).toBe("prepared:rem-sol:q-sol");
+  });
+
+  // El CAS del UPDATE (`.eq("status","prepared")`) NO es redundante con el filtro del SELECT: protege
+  // la ventana ENTRE los dos round-trips. Un doble secuencial no puede expresar esa carrera, así que
+  // se inyecta el interleaving a mano — sin este test, borrar el CAS no rompe nada y el guard muere.
+  function withRaceBeforeNthFrom(
+    inner: SupabaseClient,
+    nth: number,
+    effect: () => void,
+  ): SupabaseClient {
+    let n = 0;
+    const from = (table: string): unknown => {
+      n += 1;
+      if (n === nth) effect();
+      return (inner as unknown as { from: (t: string) => unknown }).from(table);
+    };
+    return { from } as unknown as SupabaseClient;
+  }
+
+  it("CARRERA: si el webhook mueve la fila ENTRE el select y el update, el CAS evita la degradación", async () => {
+    const { client, rows } = makeTableClient();
+    await new SupabaseSettlementLedger(client).recordOrderPrepared(solPrepared());
+    // 1er from() = el SELECT de la fila 'prepared'; 2º from() = el UPDATE. El webhook se cuela justo
+    // antes del UPDATE y la deja en terminal.
+    const raced = withRaceBeforeNthFrom(client, 2, () => {
+      rows[0]!.status = "settled";
+    });
+    await new SupabaseSettlementLedger(raced).recordSolanaPrincipalIn({
+      remittanceId: "rem-sol",
+      senderAddress: SOL_A,
+      signature: SOL_SIGNATURE,
+    });
+    expect(rows[0]?.status).toBe("settled"); // el UPDATE no encontró 'prepared' ⇒ no degradó
+    expect(rows[0]?.tx_hash).toBe("prepared:rem-sol:q-sol"); // tampoco escribió sobre una fila cerrada
+  });
+
+  it("CAS: si el webhook ya la movió a terminal, la signature NO degrada el estado", async () => {
+    const { client, rows } = makeTableClient();
+    const ledger = new SupabaseSettlementLedger(client);
+    await ledger.recordOrderPrepared(solPrepared());
+    await ledger.recordWebhookOutcome({ payoutId: "transfi-po-sol", status: "settled" });
+    await ledger.recordSolanaPrincipalIn({
+      remittanceId: "rem-sol",
+      senderAddress: SOL_A,
+      signature: SOL_SIGNATURE,
+    });
+    expect(rows[0]?.status).toBe("settled");
+  });
+});
+
+describe("WKH-213 — listPreparedOrphans (superficie del operador)", () => {
+  function preparedRow(i: number, createdAt: string): Record<string, unknown> {
+    return {
+      remittance_id: `rem-${i}`,
+      quote_id: `q-${i}`,
+      idempotency_key: `rem-${i}:q-${i}`,
+      tx_hash: `prepared:rem-${i}:q-${i}`,
+      chain_id: CHAIN_ID_EVM,
+      sender_address: SENDER.toLowerCase(),
+      receiver_address: DEPOSIT_EVM.toLowerCase(),
+      value_minor: "0",
+      status: "prepared",
+      payout_id: `po-${i}`,
+      created_at: createdAt,
+      updated_at: createdAt,
+    };
+  }
+
+  it("total es el conteo EXACTO de coincidencias, NO el tamaño de la página", async () => {
+    const seed = Array.from({ length: 7 }, (_, i) =>
+      preparedRow(i, `2026-07-20T00:00:0${i}.000Z`),
+    );
+    const { client } = makeTableClient(seed);
+    const out = await new SupabaseSettlementLedger(client).listPreparedOrphans({
+      olderThanIso: "2026-07-21T00:00:00.000Z",
+      limit: 3,
+    });
+    expect(out.records.length).toBe(3); // la página
+    expect(out.total).toBe(7); // la verdad
+    expect(out.records[0]?.remittanceId).toBe("rem-0"); // las más viejas primero
+  });
+
+  it("filtra por created_at (NO updated_at) y sólo status 'prepared'", async () => {
+    const { client } = makeTableClient([
+      preparedRow(1, "2026-07-20T00:00:00.000Z"), // vieja ⇒ huérfana
+      preparedRow(2, "2026-07-28T00:00:00.000Z"), // recién creada ⇒ todavía no
+      { ...preparedRow(3, "2026-07-20T00:00:00.000Z"), status: "principal_in", tx_hash: "0xreal" },
+    ]);
+    const out = await new SupabaseSettlementLedger(client).listPreparedOrphans({
+      olderThanIso: "2026-07-21T00:00:00.000Z",
+      limit: 50,
+    });
+    expect(out.total).toBe(1);
+    expect(out.records.map((r) => r.remittanceId)).toEqual(["rem-1"]);
+  });
+
+  it("fail-loud: error de la consulta ⇒ TIRA (NUNCA una lista vacía, que se leería como 'no hay nada')", async () => {
+    const { client } = makeClient([{ data: null, error: { code: "PGRST301" } }]);
+    await expect(
+      new SupabaseSettlementLedger(client).listPreparedOrphans({
+        olderThanIso: "2030-01-01T00:00:00.000Z",
+        limit: 50,
+      }),
+    ).rejects.toThrow(/ledger_list_prepared_failed:PGRST301/);
+  });
+
+  it("fail-loud: si PostgREST no devuelve el count exacto ⇒ TIRA (no degrada a records.length)", async () => {
+    // Sin `count`, reportar total=1 sobre una página de 1 sería inventar el tamaño del problema.
+    const { client } = makeClient([{ data: [rawRow({ status: "prepared" })], error: null }]);
+    await expect(
+      new SupabaseSettlementLedger(client).listPreparedOrphans({
+        olderThanIso: "2030-01-01T00:00:00.000Z",
+        limit: 50,
+      }),
+    ).rejects.toThrow("ledger_list_prepared_count_missing");
+  });
+
+  it("CD-12: el select trae value_minor::text y pide count exact", async () => {
+    const { client, calls } = makeClient([{ data: [], error: null, count: 0 }]);
+    await new SupabaseSettlementLedger(client).listPreparedOrphans({
+      olderThanIso: "2030-01-01T00:00:00.000Z",
+      limit: 50,
+    });
+    expect(String(calls.select[0]?.[0])).toContain("value_minor::text");
+    expect(calls.select[0]?.[1]).toEqual({ count: "exact" });
+    expect(calls.eq).toContainEqual(["status", "prepared"]);
+    expect(calls.lt[0]).toEqual(["created_at", "2030-01-01T00:00:00.000Z"]); // created_at, NO updated_at
   });
 });
 

@@ -409,7 +409,21 @@ export interface SettlementLedger {
   // prepare route (WKH-211/AC-8): registra la orden TransFi creada ANTES del principal_in, para dar
   // visibilidad de órdenes huérfanas (prepare ok + settle falla). El depositAddress va en
   // receiver_address (semánticamente ES el receiver no-custodial — SIN columna nueva). NUNCA PII (CD-7).
-  // Una fila 'prepared' NUNCA es principal_in (CD-6): la cancelación real de TransFi es follow-up (DT-5).
+  //
+  // CD-6 — REGLA NUEVA (WKH-213, invierte la anterior). Antes decía: "una fila 'prepared' NUNCA es
+  // principal_in". Hoy dice: **una fila 'prepared' es la MISMA fila que el settle completa a
+  // 'principal_in'** (mismo idempotency_key, mismo sender). El upsert de recordPrincipalIn se re-keyeó
+  // a idempotency_key con MERGE (antes: onConflict tx_hash + ignoreDuplicates).
+  // Por qué cambió: la tabla tiene DOS índices únicos (tx_hash e idempotency_key) y `ON CONFLICT` sólo
+  // resuelve el que se declara. Con la fila 'prepared' ya ocupando la MISMA idempotency_key
+  // (`${remittanceId}:${quoteId}` en las dos escrituras), el INSERT del settle violaba el OTRO índice →
+  // 23505 → excepción tragada por el best-effort de la route ⇒ en modo real NINGUNA fila llegaba nunca
+  // a 'principal_in', y listStale (que sólo escanea principal_in|submitted|forward_error) escaneaba un
+  // conjunto estructuralmente VACÍO. La regla vieja no era una salvaguarda: era el bug.
+  // Lo que la regla vieja protegía sigue protegido, y de forma MÁS fuerte: el ascenso a 'principal_in'
+  // NO lo hace el reconcile ni una inferencia — lo hace SÓLO el settle con evidencia VERIFICADA
+  // on-chain (CD-13), owner-scoped, y únicamente desde 'prepared' (jamás degrada un estado ya avanzado).
+  // La cancelación real de la orden TransFi huérfana sigue siendo follow-up (DT-5).
   recordOrderPrepared(input: {
     remittanceId: string;
     quoteId: string;
@@ -422,7 +436,19 @@ export interface SettlementLedger {
     payoutId: string;
     vm: "evm" | "solana";
   }): Promise<void>;
-  // settle route (AC-1): upsert por tx_hash (ON CONFLICT DO NOTHING), status principal_in.
+  // settle route (AC-1): COMPLETA la fila 'prepared' de esta remesa a 'principal_in' con la evidencia
+  // verificada on-chain (tx_hash + value_minor reales). Clave: idempotency_key (NO tx_hash — ver CD-6
+  // arriba). Contrato exacto (WKH-213), en orden:
+  //   1. UPDATE owner-scoped de la fila (idempotency_key, sender_address) que está en 'prepared'
+  //      ⇒ status='principal_in' + hash/monto reales. payout_id NO se toca (el patch no lo incluye) ⇒
+  //      el id de la orden TransFi escrito por prepare sobrevive.
+  //   2. Si ya avanzó (el webhook del proveedor llegó ANTES que el settle): NO se degrada el status;
+  //      se rellena SÓLO la evidencia (hash/monto) si el tx_hash sigue siendo el placeholder de prepare.
+  //   3. Si la fila ya tiene evidencia real (settle reintentado) o es de otro owner: NO-OP.
+  //   4. Si no existe fila (ledger apagado durante prepare / modo estático sin prepare): INSERT.
+  // Idempotente: re-ejecutarlo es inocuo. El índice único de tx_hash NO se relaja: dos remesas
+  // distintas con el mismo hash violan uq_remit_settle_txhash y esta función TIRA (best-effort en la
+  // route ⇒ log [ALERT], no rompe el money-path).
   recordPrincipalIn(input: {
     remittanceId: string;
     quoteId: string;
@@ -433,6 +459,19 @@ export interface SettlementLedger {
     receiverAddress: string;
     valueMinor: number;
     vm: "evm" | "solana";
+  }): Promise<void>;
+  // settle Solana (WKH-213/R3): ata la signature base58 VERIFICADA on-chain por el facilitator a la
+  // fila 'prepared' de esta remesa ⇒ 'principal_in'. Método PROPIO (no recordPrincipalIn) porque el
+  // rail Solana tiene OTROS datos verificados disponibles: /solana/sponsor devuelve la signature y
+  // NADA MÁS — no hay monto ni receiver verificados server-side (no existe verificador on-chain Solana
+  // en este repo). Escribir el monto que declara el cliente violaría CD-13, así que value_minor
+  // conserva el de la fila 'prepared'; el resto (quote_id, receiver, payout_id) ya está ahí.
+  // OWNER-SCOPED por sender_address (base58 canónico, CD-9/CD-10). NO inserta si no hay fila
+  // preparada: sin ella no hay quote_id/value_minor honestos para las columnas NOT NULL.
+  recordSolanaPrincipalIn(input: {
+    remittanceId: string;
+    senderAddress: string; // base58 del depositor (canonicalizeAddress(...,'solana'))
+    signature: string; // base58 — el equivalente Solana del txHash
   }): Promise<void>;
   // submit route (AC-3): UPDATE owner-scoped por (idempotencyKey, senderAddress).
   recordPayoutOutcome(input: {
@@ -445,6 +484,17 @@ export interface SettlementLedger {
   }): Promise<void>;
   // reconcile (AC-4): no-terminales más viejas que olderThanIso. Global (admin) — sin owner filter.
   listStale(input: { olderThanIso: string; limit: number }): Promise<SettlementRecord[]>;
+  // reconcile (WKH-213): órdenes que quedaron en 'prepared' (la orden del proveedor se creó y el
+  // settle NUNCA aterrizó). Global (admin). `total` es el conteo EXACTO de coincidencias — NO
+  // records.length: el consumidor necesita distinguir "no hay nada" de "hay más de los que entran en
+  // la página" (records está capado por `limit`). El umbral se mide contra created_at, NO updated_at:
+  // una fila 'prepared' no vuelve a tocarse nunca, así que updated_at nunca envejece respecto de ella.
+  // TIRA ante cualquier fallo de la consulta (incluido un count ausente): devolver una lista vacía
+  // por error se lee igual que "no hay huérfanas", que es la peor mentira posible.
+  listPreparedOrphans(input: {
+    olderThanIso: string;
+    limit: number;
+  }): Promise<{ total: number; records: SettlementRecord[] }>;
   // HU-SOL-20/AC-2: lectura OWNER-SCOPED para recuperar los remittanceId de un sender cuando el
   // cliente los perdió. El filtro .eq('sender_address', ...) es el guard REAL (el service key
   // bypassea RLS). NUNCA devuelve PII ni value_minor. NO filtra por `vm` — y sigue siendo correcto
@@ -465,8 +515,13 @@ export interface SettlementLedger {
     incrementAttempt: boolean;
   }): Promise<void>;
   // webhook TransFi (WKH-210): UPDATE por payout_id, NO owner-scoped (el guard es el HMAC del endpoint,
-  // CD-12). Solo aplica a filas NO-terminales (principal_in|submitted|forward_error): nunca reclasifica
-  // manual_review ni degrada un estado terminal (DT-2b). 0-match ⇒ no-op sin error (AC-8).
+  // CD-12). Solo aplica a filas NO-terminales: nunca reclasifica manual_review ni degrada un estado
+  // terminal (DT-2b). 0-match ⇒ no-op sin error (AC-8).
+  // WKH-213/R1: el conjunto no-terminal INCLUYE 'prepared'. Antes era exactamente STALE_STATUSES
+  // (principal_in|submitted|forward_error), así que el proveedor podía avisar "pagado" sobre una orden
+  // cuyo settle nunca aterrizó y la fila se quedaba en 'prepared' para siempre. 'prepared' es
+  // no-terminal por definición ⇒ pertenece al conjunto. NO se agrega a STALE_STATUSES (ese conjunto es
+  // el del reconcile/listStale: una 'prepared' no se re-procesa ni existe en el índice parcial de la DB).
   recordWebhookOutcome(input: {
     payoutId: string;
     status: SettlementLedgerStatus; // solo 'submitted' | 'settled' | 'failed' (post-mapeo)

@@ -254,6 +254,28 @@ describe("POST /api/webhooks/transfi (WKH-210)", () => {
     expect(ledger.store.get("id-1")?.status).toBe("settled");
   });
 
+  // ── WKH-213/R1: el aviso del proveedor SÍ mueve una fila 'prepared' ────────
+  // Antes, el filtro no-terminal era exactamente STALE_STATUSES (sin 'prepared'), así que si el settle
+  // nunca aterrizaba el proveedor podía avisar "pagado" y la fila se quedaba idéntica: el aviso se
+  // perdía y la remesa quedaba congelada en 'prepared' para siempre.
+  it("R1: fund_settled sobre una fila 'prepared' ⇒ la fila pasa a settled (el aviso ya no se pierde)", async () => {
+    const ledger = ledgerWith("p-1", "prepared");
+    getLedgerMock.mockReturnValue(ledger);
+    const raw = JSON.stringify({ orderId: "p-1", status: "fund_settled" });
+    const res = await POST(makeReq(raw, sign(raw)).req);
+    expect(res.status).toBe(200);
+    expect(ledger.store.get("id-1")?.status).toBe("settled");
+  });
+
+  it("R1: fund_failed sobre una fila 'prepared' ⇒ failed con last_error enum estable", async () => {
+    const ledger = ledgerWith("p-1", "prepared");
+    getLedgerMock.mockReturnValue(ledger);
+    const raw = JSON.stringify({ orderId: "p-1", status: "fund_failed" });
+    await POST(makeReq(raw, sign(raw)).req);
+    expect(ledger.store.get("id-1")?.status).toBe("failed");
+    expect(ledger.store.get("id-1")?.lastError).toBe("transfi_fund_failed");
+  });
+
   // ── claim best-effort: NO revierte una mutación ya exitosa ──────────────────
   it("503-a→200: claim unavailable (Upstash caído) DESPUÉS de mutar ⇒ 200 best-effort, mutación aplicada", async () => {
     // FIX AR MNR-1: el claim pasó a best-effort (post-mutación). Un Upstash caído YA NO produce 503:

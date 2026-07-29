@@ -1,26 +1,72 @@
-// Infrastructure — cliente server-only del gateway wasiai-a2a (WKH-218). 3er modo de transporte
-// value-delivery ("a2a-gateway"): resuelve el agente vía POST /discover (SIN auth) y lo invoca vía
-// POST /compose (single-step, auth x-a2a-key). Lo importan SOLO las routes server-only app/api/a2a/*
-// (NUNCA container.ts ni "use client" — CD-A2A-10). Fail-closed exhaustivo (CD-5): cualquier error
-// del gateway (timeout/DNS/5xx/shape inválido/discover vacío) devuelve { ok:false } → la route corta
-// con 502/501 opaco, CERO fallback silencioso al punto-a-punto. Cero PII / cero secreto en logs
-// (CD-3/CD-4): jamás se loguea el input (contiene beneficiary), la Agent Key ni la URL. Sin any /
-// sin as unknown (CD-A2A-11): responses tipadas unknown y estrechadas con isRecord + Array.isArray.
-// Chaski NO firma x402 (AC-5): el único header es x-a2a-key; el body NO lleva challenge ni firma.
+// Infrastructure — cliente server-only del gateway wasiai-a2a (WKH-218, reescrito en WKH-304). 3er
+// modo de transporte value-delivery ("a2a-gateway"): NO resuelve el agente por nombre — manda
+// `capability` (+ `constraints` opcionales) por step a POST /compose y el GATEWAY resuelve, fail-closed
+// (WKH-304/CD-1). Ya NO existe /discover, ni `expectedSlug`, ni el pick `agents.find(...) ?? agents[0]`:
+// ese fallback silencioso corría OTRO agente sin decirlo, que es el anti-patrón que la HU cierra.
+// Multi-step por contrato (`steps[]`), errores GRANULARES (índice del paso + code/reason reales del
+// gateway) en vez de colapsar todo a "unavailable". Lo importan SOLO las routes server-only
+// (NUNCA container.ts ni "use client" — CD-A2A-10). Cero PII / cero secreto en logs (CD-8/CD-9):
+// jamás se loguea el input (contiene beneficiary), la Agent Key, la URL ni el `message` del gateway.
+// Sin any / sin as unknown (CD-12): responses tipadas unknown y estrechadas con isRecord + Array.isArray.
+// Chaski NO firma x402 (AC-5): el único header de auth es x-a2a-key; el body NO lleva challenge ni firma.
 
-export type GatewayFailCode = "not_configured" | "no_agent" | "unavailable";
+/** Capacidades verificadas contra el catálogo en vivo del gateway (2026-07-28). CD-14.
+ *  Los defaults viejos ("fx-quote" / "cashout-payout") NO existen en ningún AgentCard: sólo
+ *  "funcionaban" porque el fallback silencioso al primer agente del /discover los tapaba. */
+export const FX_QUOTE_CAPABILITY = "remittance-fx-quote";
+export const PAYOUT_CAPABILITY = "remittance-payout";
+
+/** Piso de confianza del leg de payout (AC-5 / CD-5). Constante de código, NO env: una env con
+ *  default ausente es un piso que se apaga solo (nadie la setea en un entorno nuevo, min_reputation
+ *  queda undefined, el filtro no filtra y el control desaparece sin que falle nada). NO es un control
+ *  de seguridad: sube el piso, no reemplaza PR8 (formato del depositAddress) ni PR9 (atestación HMAC),
+ *  que corren idénticos con piso o sin piso. Valor 2 = "al menos una task liquidada con historial
+ *  limpio" según la fórmula del gateway (score = round(min(tasksSettled/50,1) * 100 * successRate)
+ *  ⇒ 2 puntos por task liquidada; sin score computado el agente cuenta 0 y queda excluido si min > 0). */
+export const PAYOUT_MIN_REPUTATION = 2;
+
+/** Constraints admitidas por el gateway. Cualquier otra clave ⇒ 400 (compose-step-shape del server). */
+export type GatewayConstraints = {
+  max_price_usdc?: number;
+  min_reputation?: number;
+};
+
+export type GatewayStep = {
+  capability: string; // NUNCA `agent` (CD-1)
+  input: Record<string, unknown>; // el body TAL CUAL
+  constraints?: GatewayConstraints;
+};
+
+export type GatewayFailCode =
+  | "not_configured" // envs ausentes ⇒ cero fetch
+  | "invalid_steps" // steps vacío ⇒ cero fetch
+  | "no_agent_match" // 422 — ninguna capacidad resolvió
+  | "invalid_request" // 400 de shape (VALIDATION_ERROR / ambiguous_step)
+  | "agent_not_found" // 404
+  | "registry_unavailable" // 503
+  | "payment_required" // 402
+  | "forbidden" // 403
+  | "step_failed" // success:false mid-pipeline
+  | "bad_response" // 200 con shape inválido / JSON ilegible
+  | "unavailable"; // red, timeout, status no mapeado
+
+export type GatewayFailure = {
+  ok: false;
+  code: GatewayFailCode;
+  /** Índice del step que falló: del body (400/422) o derivado de steps.length (mid-pipeline). */
+  step?: number;
+  /** `code` / `error_code` REAL del gateway, sin traducir. */
+  gatewayCode?: string;
+  /** `reason` del 422: 'no_candidates' | 'excluded_by_scope'. */
+  reason?: string;
+  /** Mensaje del gateway. SERVER-ONLY: prohibido ecoarlo al browser y prohibido loguearlo (CD-8/CD-9). */
+  message?: string;
+  httpStatus?: number;
+};
+
 export type GatewayResult =
-  | { ok: true; result: unknown }
-  | { ok: false; code: GatewayFailCode };
-
-// Tipos narrow del gateway (reproducidos local, NO importados de wasiai-a2a — CD-1).
-interface GatewayAgent {
-  slug: string; // → ComposeStep.agent
-  registry: string; // → ComposeStep.registry
-  capabilities: string[];
-  status: "active" | "inactive" | "unreachable";
-  // (id/name/description/priceUsdc/verified/... presentes en el gateway pero NO consumidos)
-}
+  | { ok: true; outputs: Record<string, unknown>[] } // uno por step, en orden
+  | GatewayFailure;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
@@ -49,44 +95,65 @@ function readGatewayConfig(): {
   return paymentChain ? { url, key, paymentChain } : { url, key };
 }
 
-export async function runViaGateway(params: {
-  capability: string; // WASIAI_A2A_FX_CAPABILITY | WASIAI_A2A_PAYOUT_CAPABILITY
-  expectedSlug?: string; // WASIAI_A2A_FX_SLUG | WASIAI_A2A_PAYOUT_SLUG (desambigua el pick)
-  input: Record<string, unknown>; // el body TAL CUAL (idempotencyKey/beneficiary intactos, CD-8)
-}): Promise<GatewayResult> {
+/** Copia los campos granulares del body de error del gateway SIN traducirlos (§5 del Story).
+ *  Sólo `code`/`error_code` → gatewayCode, `reason`, `step` numérico y `error` → message. */
+function readFailureFields(body: unknown): Omit<GatewayFailure, "ok" | "code"> {
+  if (!isRecord(body)) return {};
+  const step = typeof body.step === "number" ? body.step : undefined;
+  const gatewayCode =
+    typeof body.code === "string"
+      ? body.code
+      : typeof body.error_code === "string"
+        ? body.error_code
+        : undefined;
+  const reason = typeof body.reason === "string" ? body.reason : undefined;
+  const message = typeof body.error === "string" ? body.error : undefined;
+  return {
+    ...(step !== undefined ? { step } : {}),
+    ...(gatewayCode !== undefined ? { gatewayCode } : {}),
+    ...(reason !== undefined ? { reason } : {}),
+    ...(message !== undefined ? { message } : {}),
+  };
+}
+
+/** Mapeo POR STATUS de la tabla §5. Status desconocido ⇒ unavailable (con httpStatus). */
+function mapErrorStatus(status: number, body: unknown): GatewayFailCode {
+  switch (status) {
+    case 400:
+      // Dos 400 distintos: el de shape (VALIDATION_ERROR / ambiguous_step, pre-débito) y el
+      // `success:false` de un fallo mid-pipeline. Se discrimina por el campo `success`.
+      return isRecord(body) && body.success === false ? "step_failed" : "invalid_request";
+    case 402:
+      return "payment_required";
+    case 403:
+      return "forbidden";
+    case 404:
+      return "agent_not_found";
+    case 422:
+      return "no_agent_match";
+    case 503:
+      return "registry_unavailable";
+    default:
+      return "unavailable";
+  }
+}
+
+export async function runViaGateway(params: { steps: GatewayStep[] }): Promise<GatewayResult> {
   // 1. Config: ausente ⇒ not_configured SIN fetch.
   const cfg = readGatewayConfig();
   if (!cfg) return { ok: false, code: "not_configured" };
 
-  // 2. POST /discover — SIN auth. Cualquier throw / !ok / shape inválido ⇒ unavailable (fail-closed).
-  let discovery: unknown;
-  try {
-    const res = await fetch(`${cfg.url}/discover`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ capabilities: [params.capability], includeInactive: false }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!res.ok) return { ok: false, code: "unavailable" };
-    discovery = await res.json();
-  } catch {
-    return { ok: false, code: "unavailable" }; // timeout/DNS/parse → opaco, NUNCA propaga
-  }
-  if (!isRecord(discovery) || !Array.isArray(discovery.agents)) {
-    return { ok: false, code: "unavailable" };
-  }
+  // 2. Sin steps no hay nada que componer ⇒ invalid_steps SIN fetch. El cliente NO replica el
+  //    MAX_COMPOSE_STEPS del servidor: el servidor lo valida pre-débito y duplicar el número en dos
+  //    lados es cómo se desincronizan.
+  if (params.steps.length === 0) return { ok: false, code: "invalid_steps" };
 
-  // 3. Pick del agente resuelto (NUNCA el slug hardcodeado del punto-a-punto — CD-5).
-  const agents = discovery.agents as GatewayAgent[];
-  const pick = params.expectedSlug
-    ? (agents.find((a) => a.slug === params.expectedSlug) ?? agents[0])
-    : agents[0];
-  if (agents.length === 0 || pick == null) return { ok: false, code: "no_agent" };
-
-  // 4. POST /compose — single-step, auth x-a2a-key, input TAL CUAL. Throw / !ok ⇒ unavailable.
-  let composed: unknown;
+  // 3. POST /compose — auth x-a2a-key, un step por capacidad, input TAL CUAL. NUNCA se emite `agent`,
+  //    `registry`, `passOutput` ni `inputFromPrevious` (CD-1/CD-6: `agent` + `capability` juntos son
+  //    `ambiguous_step`, e `inputFromPrevious` hoy sería un no-op silencioso — WKH-305 pendiente).
+  let res: Response;
   try {
-    const res = await fetch(`${cfg.url}/compose`, {
+    res = await fetch(`${cfg.url}/compose`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -95,24 +162,86 @@ export async function runViaGateway(params: {
         ...(cfg.paymentChain ? { "x-payment-chain": cfg.paymentChain } : {}),
       },
       body: JSON.stringify({
-        steps: [{ agent: pick.slug, registry: pick.registry, input: params.input }],
+        steps: params.steps.map((s) => ({
+          capability: s.capability,
+          input: s.input,
+          ...(s.constraints ? { constraints: s.constraints } : {}),
+        })),
       }),
       signal: AbortSignal.timeout(10_000),
     });
-    if (!res.ok) return { ok: false, code: "unavailable" };
-    composed = await res.json();
   } catch {
+    // 4a. timeout/DNS/red → opaco, NUNCA propaga.
     return { ok: false, code: "unavailable" };
   }
 
-  // 5. Validación de la respuesta del compose (sin any: estrechada con isRecord + Array.isArray).
-  if (!isRecord(composed) || composed.success !== true) return { ok: false, code: "unavailable" };
-  const steps = composed.steps;
-  if (!Array.isArray(steps) || steps.length === 0) return { ok: false, code: "unavailable" };
-  const output = (steps[0] as { output?: unknown }).output;
-  if (!isRecord(output)) return { ok: false, code: "unavailable" };
+  // 4b. Body ilegible: en un status de error se sigue mapeando POR STATUS (defensivo, el gateway
+  //     detrás de un proxy puede devolver HTML); en un 200 es `bad_response`.
+  let parsed: unknown;
+  let parseOk = true;
+  try {
+    parsed = await res.json();
+  } catch {
+    parseOk = false;
+  }
 
-  // 6. Happy path: steps[0].output SIN re-desenvolver (el gateway ya hizo output = data.result ?? data,
-  //    DT-A2A-6). La route revalida el shape final con su propio isValid*Result.
-  return { ok: true, result: output };
+  // 5. Status de error ⇒ mapeo granular por status + copia de los campos REALES del gateway.
+  if (!res.ok) {
+    const code = mapErrorStatus(res.status, parsed);
+    return {
+      ok: false,
+      code,
+      ...readFailureFields(parsed),
+      httpStatus: res.status,
+    };
+  }
+  if (!parseOk || !isRecord(parsed)) return { ok: false, code: "bad_response" };
+
+  // 6. 200 con success:false ⇒ fallo mid-pipeline. El índice del paso que falló es ESTRUCTURAL:
+  //    el servidor devuelve en `steps` sólo los pasos COMPLETADOS ⇒ el que falló es steps.length.
+  //    PROHIBIDO parsear el texto "Step 2 failed: ..." (message queda server-only, CD-8/CD-9).
+  if (parsed.success !== true) {
+    const completed = Array.isArray(parsed.steps) ? parsed.steps.length : undefined;
+    return {
+      ok: false,
+      code: "step_failed",
+      ...(completed !== undefined ? { step: completed } : {}),
+      ...(typeof parsed.error === "string" ? { message: parsed.error } : {}),
+    };
+  }
+
+  // 7. Un output por step pedido, en orden. Largo distinto ⇒ bad_response (el gateway no compuso lo
+  //    que se le pidió: aceptarlo sería leer el output de OTRO step).
+  const steps = parsed.steps;
+  if (!Array.isArray(steps) || steps.length !== params.steps.length) {
+    return { ok: false, code: "bad_response" };
+  }
+  const outputs: Record<string, unknown>[] = [];
+  for (let i = 0; i < steps.length; i++) {
+    const entry: unknown = steps[i];
+    const output = isRecord(entry) ? entry.output : undefined;
+    if (!isRecord(output)) return { ok: false, code: "bad_response", step: i };
+    outputs.push(output);
+  }
+
+  // 8. Happy path: outputs[i] = steps[i].output SIN re-desenvolver (el gateway ya hizo
+  //    output = data.result ?? data, DT-A2A-6). Cada route revalida su propio shape final.
+  return { ok: true, outputs };
+}
+
+/** Log de fallo con SÓLO enums (CD-9): ni el `message` del gateway, ni el input (PII), ni la URL,
+ *  ni la Agent Key. Existe porque el valor operativo es poder distinguir "no hay agente para esa
+ *  capacidad" (no_agent_match/no_candidates) de "el gateway está caído" (unavailable) sin adivinar. */
+export function logGatewayFailure(
+  leg: "quote" | "payout-submit" | "payout-prepare",
+  f: GatewayFailure,
+): void {
+  console.warn("[a2a-gateway] leg_failed", {
+    leg,
+    code: f.code,
+    step: f.step,
+    gatewayCode: f.gatewayCode,
+    reason: f.reason,
+    httpStatus: f.httpStatus,
+  });
 }

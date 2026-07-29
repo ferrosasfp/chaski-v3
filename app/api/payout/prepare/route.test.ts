@@ -686,6 +686,30 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       expect(onJson).toEqual({ error: "prepare_no_deposit_address" });
     });
 
+    // T-A5.2b — espejo del anterior con el SHAPE roto en vez de la dirección rota. isValidPayoutResult
+    // es lo único que exige `status ∈ {submitted,settled,failed,blocked}`, y después de PR8 nadie
+    // vuelve a mirar `status`. El gate corre para las DOS ramas de transporte; sin este test se podía
+    // desactivarlo sólo en la de gateway y la suite entera quedaba verde — justo en el transporte
+    // donde el que responde ya no es una URL fija sino el agente que eligió el gateway.
+    it("T-A5.2b: shape inválido del result da el MISMO 502 prepare_upstream_error con el flag encendido que apagado, y NUNCA atesta", async () => {
+      // (a) flag apagado (camino punto-a-punto de siempre)
+      agentResponds(200, agentResult({ status: "weird" }));
+      const off = await POST(req(bodyOf()));
+      const offJson = (await off.json()) as Record<string, unknown>;
+
+      // (b) flag encendido: el gate de shape tiene que correr IGUAL en la rama de gateway
+      setGatewayEnv();
+      gwRouter({ output: agentResult({ status: "weird" }) });
+      const on = await POST(req(bodyOf()));
+      const onJson = (await on.json()) as Record<string, unknown>;
+
+      expect(off.status).toBe(502);
+      expect(on.status).toBe(off.status);
+      expect(onJson).toEqual(offJson);
+      expect(onJson).toEqual({ error: "prepare_upstream_error" });
+      expect(onJson).not.toHaveProperty("attestation");
+    });
+
     // T-A4.1 (mitad P) — "construye, no enciende": con el flag ≠ a2a-gateway el gateway se ignora
     // aunque sus envs estén seteadas. El assert es sobre /compose (con el discovery borrado, asertar
     // que no se llama a /discover pasa trivialmente y deja de proteger nada).

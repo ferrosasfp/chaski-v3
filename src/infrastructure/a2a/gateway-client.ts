@@ -1,8 +1,9 @@
 // Infrastructure — cliente server-only del gateway wasiai-a2a (WKH-218, reescrito en WKH-304). 3er
 // modo de transporte value-delivery ("a2a-gateway"): NO resuelve el agente por nombre — manda
 // `capability` (+ `constraints` opcionales) por step a POST /compose y el GATEWAY resuelve, fail-closed
-// (WKH-304/CD-1). Ya NO existe /discover, ni `expectedSlug`, ni el pick `agents.find(...) ?? agents[0]`:
-// ese fallback silencioso corría OTRO agente sin decirlo, que es el anti-patrón que la HU cierra.
+// (WKH-304/CD-1). Este cliente ya no descubre agentes ni los elige: la resolución por nombre y su
+// caída silenciosa al primer agente de la lista se borraron enteras — corrían OTRO agente sin
+// decirlo, que es el anti-patrón que esta HU cierra.
 // Multi-step por contrato (`steps[]`), errores GRANULARES (índice del paso + code/reason reales del
 // gateway) en vez de colapsar todo a "unavailable". Lo importan SOLO las routes server-only
 // (NUNCA container.ts ni "use client" — CD-A2A-10). Cero PII / cero secreto en logs (CD-8/CD-9):
@@ -12,7 +13,7 @@
 
 /** Capacidades verificadas contra el catálogo en vivo del gateway (2026-07-28). CD-14.
  *  Los defaults viejos ("fx-quote" / "cashout-payout") NO existen en ningún AgentCard: sólo
- *  "funcionaban" porque el fallback silencioso al primer agente del /discover los tapaba. */
+ *  "funcionaban" porque el fallback silencioso al primer agente descubierto los tapaba. */
 export const FX_QUOTE_CAPABILITY = "remittance-fx-quote";
 export const PAYOUT_CAPABILITY = "remittance-payout";
 
@@ -148,9 +149,13 @@ export async function runViaGateway(params: { steps: GatewayStep[] }): Promise<G
   //    lados es cómo se desincronizan.
   if (params.steps.length === 0) return { ok: false, code: "invalid_steps" };
 
-  // 3. POST /compose — auth x-a2a-key, un step por capacidad, input TAL CUAL. NUNCA se emite `agent`,
-  //    `registry`, `passOutput` ni `inputFromPrevious` (CD-1/CD-6: `agent` + `capability` juntos son
-  //    `ambiguous_step`, e `inputFromPrevious` hoy sería un no-op silencioso — WKH-305 pendiente).
+  // 3. POST /compose — auth x-a2a-key, un step por capacidad, input TAL CUAL. El step emite EXACTO
+  //    tres claves: capability, input y (opcional) constraints. Nada de nombre/registro del agente
+  //    (`agent` + `capability` juntos ⇒ ambiguous_step del servidor, CD-1) y NADA de chaining entre
+  //    pasos: el único mecanismo que existe hoy anida la salida del paso anterior, y el mapeo de
+  //    campos que haría falta (WKH-305) TODAVÍA no está del lado servidor — emitirlo ahora sería un
+  //    no-op silencioso (el validador de shape no rechaza claves desconocidas a nivel step), que es
+  //    literalmente el bug que esta HU viene a cerrar. CD-6: por eso cada leg va en su propia llamada.
   let res: Response;
   try {
     res = await fetch(`${cfg.url}/compose`, {

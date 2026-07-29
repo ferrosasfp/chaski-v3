@@ -374,8 +374,8 @@ export async function POST(req: Request): Promise<Response> {
   // WKH-218 + WKH-304: modo de transporte "a2a-gateway". SOLO se ramifica ACÁ (post guard 8): los
   // guards 1-8 quedan byte-idénticos (CD-3). Pide la CAPACIDAD de payout al gateway wasiai-a2a vía
   // POST /compose (CD-7: /compose, NO /orchestrate) con el body TAL CUAL (idempotencyKey/beneficiary
-  // intactos, CD-8/AC-8): el GATEWAY resuelve qué agente la cumple — ya no hay /discover ni slug
-  // esperado ni pick del primero de la lista (WKH-304/CD-1). El piso `min_reputation` es el MISMO par
+  // intactos, CD-8/AC-8): el GATEWAY resuelve qué agente la cumple — acá ya no se descubre ni se
+  // elige por nombre, ni se cae al primero de la lista (CD-1). El piso `min_reputation` es el MISMO par
   // (capability, constraints) que usa /api/payout/prepare, importado del MISMO módulo (CD-11): dos
   // literales sueltos es cómo los dos legs divergen sin que nadie se entere. Fail-closed SIN fallback
   // punto-a-punto (CD-1/AC-4): cualquier error corta con 502 opaco + persistOutcome idéntico; NUNCA
@@ -412,7 +412,7 @@ export async function POST(req: Request): Promise<Response> {
           ? "submitted"
           : "failed";
     await persistOutcome(mapped, okResult.payoutId, mapped === "failed" ? `a2a_${okResult.status}` : null);
-    return NextResponse.json({ result: r.result }, { status: 200 }); // sólo el result (nunca URL ni PII)
+    return NextResponse.json({ result: r.outputs[0] }, { status: 200 }); // sólo el result (nunca URL ni PII)
   }
 
   // --- rama punto-a-punto: el bloque try/fetch(...remit-cashout-payout/invoke) EXISTENTE, INTACTO ---

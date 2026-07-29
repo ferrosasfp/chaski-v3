@@ -35,7 +35,7 @@ export async function POST(req: Request): Promise<Response> {
 
   // WKH-218 + WKH-304: 3er modo de transporte. Pide la CAPACIDAD al gateway wasiai-a2a vía POST
   // /compose (CD-7: /compose, NO /orchestrate) y es el GATEWAY el que resuelve qué agente la cumple:
-  // acá ya no hay /discover, ni slug esperado, ni pick del primero de la lista (WKH-304/CD-1).
+  // acá ya no se descubre ni se elige agente por nombre, ni se cae al primero de la lista (CD-1).
   // El leg de FX NO lleva constraints a propósito: un piso de reputación no selecciona por
   // compatibilidad de contrato y sólo agrega superficie de fallo — lo que protege es
   // isValidQuoteResult, que corta con 502 si el agente que gana el ranking devuelve otro shape.

@@ -25,6 +25,9 @@ vi.mock("../../../../src/infrastructure/persistence/supabase-settlement-ledger",
 }));
 
 import { verifySettlementAttestation } from "../../../../src/infrastructure/settlement/attestation";
+// WKH-213: doble de ledger que modela los DOS índices únicos de la tabla (a diferencia de ledgerMock,
+// que sólo registra llamadas) ⇒ permite medir el ESTADO FINAL de la fila tras un POST real.
+import { FakeSettlementLedger } from "../../../../src/test-support/fakes";
 import { POST } from "./route";
 
 const RECEIVER = "0x2222222222222222222222222222222222222222";
@@ -469,6 +472,74 @@ describe("POST /api/settle/principal (WKH-168)", () => {
       );
       expect(res.status).toBe(200);
       expect(ledgerMock.recordPrincipalIn).toHaveBeenCalledTimes(1);
+    });
+
+    // ── WKH-213/R2 · el settle real ATERRIZA sobre la fila preparada ──────────────────────────────
+    // Los tests de arriba miden que se LLAMÓ a recordPrincipalIn. Este mide el ESTADO FINAL DE LA FILA
+    // con el doble de ledger que modela los DOS índices únicos de la tabla: es la diferencia entre
+    // "la ruta hizo la llamada" y "la evidencia quedó escrita". Con el upsert viejo (onConflict
+    // tx_hash) la llamada se hacía igual, la DB la rechazaba por uq_remit_settle_idem y la fila se
+    // quedaba en 'prepared' para siempre.
+    it("R2 e2e: prepare + POST settle ⇒ la fila queda principal_in con el hash/monto verificados y el payoutId intacto", async () => {
+      const ledger = new FakeSettlementLedger("2026-07-28T00:00:00.000Z");
+      await ledger.recordOrderPrepared({
+        remittanceId: REMIT,
+        quoteId: QID,
+        idempotencyKey: `${REMIT}:${QID}`,
+        depositAddress: RECEIVER, // en modo estático el receiver de ENV ES el `to` verificado
+        chainId: 84532,
+        senderAddress: SENDER,
+        payoutId: "transfi-po-207",
+        vm: "evm",
+      });
+      expect([...ledger.store.values()][0]!.status).toBe("prepared");
+      getLedgerMock.mockReturnValue(ledger);
+      facilitatorResponds(200, { settled: true, transactionHash: TX });
+      const res = await POST(
+        req(
+          body({
+            authorization: authorization({ nonce: GOOD_NONCE }),
+            quoteId: QID,
+            remittanceId: REMIT,
+          }),
+        ),
+      );
+      expect(res.status).toBe(200);
+      expect(ledger.store.size).toBe(1); // UNA fila: el settle completó la preparada
+      const row = [...ledger.store.values()][0]!;
+      expect(row.status).toBe("principal_in");
+      expect(row.txHash).toBe(TX); // el hash VERIFICADO on-chain (CD-13)
+      expect(row.valueMinor).toBe(String(VALUE));
+      expect(row.payoutId).toBe("transfi-po-207"); // la orden del proveedor NO se perdió
+      // Y ahora la remesa es visible para la reconciliación (antes la cola estaba vacía siempre).
+      const stale = await ledger.listStale({ olderThanIso: "2030-01-01T00:00:00.000Z", limit: 10 });
+      expect(stale.map((r) => r.remittanceId)).toEqual([REMIT]);
+    });
+
+    it("R2 e2e: dos POST idénticos (retry del settle) ⇒ sigue UNA fila y el 2º responde 200 igual", async () => {
+      const ledger = new FakeSettlementLedger("2026-07-28T00:00:00.000Z");
+      await ledger.recordOrderPrepared({
+        remittanceId: REMIT,
+        quoteId: QID,
+        idempotencyKey: `${REMIT}:${QID}`,
+        depositAddress: RECEIVER,
+        chainId: 84532,
+        senderAddress: SENDER,
+        payoutId: "transfi-po-207",
+        vm: "evm",
+      });
+      getLedgerMock.mockReturnValue(ledger);
+      facilitatorResponds(200, { settled: true, transactionHash: TX });
+      const payload = body({
+        authorization: authorization({ nonce: GOOD_NONCE }),
+        quoteId: QID,
+        remittanceId: REMIT,
+      });
+      expect((await POST(req(payload))).status).toBe(200);
+      const after1 = { ...[...ledger.store.values()][0]! };
+      expect((await POST(req(payload))).status).toBe(200);
+      expect(ledger.store.size).toBe(1);
+      expect([...ledger.store.values()][0]).toEqual(after1); // idempotente de verdad
     });
 
     // BLQ-MED-1 (AR): con el getSettlementLedger REAL, flag ON + SUPABASE_URL malformada

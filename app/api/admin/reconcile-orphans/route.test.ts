@@ -91,7 +91,7 @@ describe("POST /api/admin/reconcile-orphans (WKH-207)", () => {
     getLedgerMock.mockReturnValue(ledgerWithStale(0));
     const res = await POST(req(bearer(SECRET)));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ scanned: 0, manualReview: 0, failed: 0 });
+    expect(await res.json()).toMatchObject({ scanned: 0, manualReview: 0, failed: 0 });
   });
 
   it("AC-7: acepta el secreto vía x-reconcile-secret además de Bearer", async () => {
@@ -116,7 +116,7 @@ describe("POST /api/admin/reconcile-orphans (WKH-207)", () => {
     getLedgerMock.mockReturnValue(ledger);
     const res = await POST(req(bearer(SECRET)));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ scanned: 3, manualReview: 3, failed: 0 });
+    expect(await res.json()).toMatchObject({ scanned: 3, manualReview: 3, failed: 0 });
     // Todas las filas quedaron en manual_review, con attempts incrementado (evidencia preservada).
     for (const rec of ledger.store.values()) {
       expect(rec.status).toBe("manual_review");
@@ -171,7 +171,7 @@ describe("POST /api/admin/reconcile-orphans (WKH-207)", () => {
     getLedgerMock.mockReturnValue(ledger);
     const res = await POST(req(bearer(SECRET)));
     expect(res.status).toBe(200); // batch parcial NO revienta el endpoint
-    expect(await res.json()).toEqual({ scanned: 2, manualReview: 1, failed: 1 });
+    expect(await res.json()).toMatchObject({ scanned: 2, manualReview: 1, failed: 1 });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -183,5 +183,133 @@ describe("POST /api/admin/reconcile-orphans (WKH-207)", () => {
     const res = await POST(req(bearer(SECRET)));
     expect(res.status).toBe(503);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  // ── WKH-213 · las 'prepared' huérfanas viajan DENTRO de esta misma respuesta ─────────────────────
+  // No hay cola nueva: el operador ya consulta este endpoint. Las 'prepared' son visibilidad pura
+  // (cero mutación: su principal nunca entró).
+  /** Ledger con N órdenes 'prepared' nacidas `ageSeconds` atrás (reloj = created_at, no updated_at). */
+  async function ledgerWithPrepared(n: number, ageSeconds: number): Promise<FakeSettlementLedger> {
+    const born = new Date(Date.now() - ageSeconds * 1000).toISOString();
+    const ledger = new FakeSettlementLedger(born);
+    for (let i = 0; i < n; i++) {
+      await ledger.recordOrderPrepared({
+        remittanceId: `rem-p${i}`,
+        quoteId: `q-p${i}`,
+        idempotencyKey: `rem-p${i}:q-p${i}`,
+        depositAddress: "0x4444444444444444444444444444444444444444",
+        chainId: 84532,
+        senderAddress: "0x1111111111111111111111111111111111111111",
+        payoutId: `transfi-po-${i}`,
+        vm: "evm",
+      });
+    }
+    return ledger;
+  }
+
+  it("una 'prepared' vencida aparece en preparedOrphans con su payoutId, y NO se muta ni entra en scanned", async () => {
+    vi.stubEnv("RECONCILE_ADMIN_SECRET", SECRET);
+    const ledger = await ledgerWithPrepared(2, 3600); // 1 hora: muy por encima del TTL de la atestación
+    getLedgerMock.mockReturnValue(ledger);
+    const res = await POST(req(bearer(SECRET)));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.scanned).toBe(0); // una 'prepared' NO se re-procesa (CD-6)
+    expect(json.preparedOrphans.total).toBe(2);
+    expect(json.preparedOrphans.truncated).toBe(false);
+    expect(json.preparedOrphans.items.map((i: { payoutId: string }) => i.payoutId)).toEqual([
+      "transfi-po-0",
+      "transfi-po-1",
+    ]);
+    // Visibilidad, NO mutación: las filas siguen exactamente donde estaban.
+    for (const rec of ledger.store.values()) {
+      expect(rec.status).toBe("prepared");
+      expect(rec.attempts).toBe(0);
+    }
+    // CD-7: la superficie no expone addresses ni montos.
+    const raw = JSON.stringify(json);
+    expect(raw).not.toContain("0x1111111111111111111111111111111111111111");
+    expect(raw).not.toContain("valueMinor");
+  });
+
+  it("el umbral de las 'prepared' es el TTL de la atestación de depósito, NO el de las varadas", async () => {
+    vi.stubEnv("RECONCILE_ADMIN_SECRET", SECRET);
+    // 11 min: YA venció la atestación de depósito (10 min) pero NO el umbral de varadas (15 min).
+    // Si alguien reusara DEFAULT_STALE_SECONDS para las 'prepared', esta huérfana quedaría invisible.
+    const ledger = await ledgerWithPrepared(1, 11 * 60);
+    getLedgerMock.mockReturnValue(ledger);
+    const json = await (await POST(req(bearer(SECRET)))).json();
+    expect(json.preparedOrphans.total).toBe(1);
+  });
+
+  it("una 'prepared' recién nacida NO es huérfana todavía (la remesa aún puede completarse)", async () => {
+    vi.stubEnv("RECONCILE_ADMIN_SECRET", SECRET);
+    const ledger = await ledgerWithPrepared(1, 30); // 30 s
+    getLedgerMock.mockReturnValue(ledger);
+    const json = await (await POST(req(bearer(SECRET)))).json();
+    expect(json.preparedOrphans.total).toBe(0);
+    expect(json.preparedOrphans.items).toEqual([]);
+  });
+
+  it("truncamiento: total dice la verdad aunque la página esté capada en 100", async () => {
+    vi.stubEnv("RECONCILE_ADMIN_SECRET", SECRET);
+    const ledger = await ledgerWithPrepared(105, 3600);
+    getLedgerMock.mockReturnValue(ledger);
+    const json = await (await POST(req(bearer(SECRET)))).json();
+    expect(json.preparedOrphans.items.length).toBe(100); // MAX_LIMIT
+    expect(json.preparedOrphans.total).toBe(105); // el tamaño REAL del problema
+    expect(json.preparedOrphans.truncated).toBe(true);
+  });
+
+  it("fail-loud: si la consulta de 'prepared' falla ⇒ 503 y NADA se mutó (nunca una lista vacía mentirosa)", async () => {
+    vi.stubEnv("RECONCILE_ADMIN_SECRET", SECRET);
+    const ledger = ledgerWithStale(2);
+    vi.spyOn(ledger, "listPreparedOrphans").mockRejectedValue(new Error("db down"));
+    const markSpy = vi.spyOn(ledger, "markOutcome");
+    getLedgerMock.mockReturnValue(ledger);
+    const res = await POST(req(bearer(SECRET)));
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "reconcile_unavailable" });
+    // Corta ANTES de mutar: el reintento del operador re-corre el endpoint entero sin efectos a medias.
+    expect(markSpy).not.toHaveBeenCalled();
+    for (const rec of ledger.store.values()) expect(rec.status).toBe("principal_in");
+  });
+
+  // ── La cola de varadas vuelve a tener contenido (era estructuralmente vacía) ─────────────────────
+  it("una remesa preparada + settleada y varada SÍ aparece en scanned ⇒ manual_review", async () => {
+    vi.stubEnv("RECONCILE_ADMIN_SECRET", SECRET);
+    const ledger = new FakeSettlementLedger(OLD); // updatedAt viejo ⇒ varada
+    await ledger.recordOrderPrepared({
+      remittanceId: "rem-x",
+      quoteId: "q-x",
+      idempotencyKey: "rem-x:q-x",
+      depositAddress: "0x4444444444444444444444444444444444444444",
+      chainId: 84532,
+      senderAddress: "0x1111111111111111111111111111111111111111",
+      payoutId: "transfi-po-x",
+      vm: "evm",
+    });
+    await ledger.recordPrincipalIn({
+      remittanceId: "rem-x",
+      quoteId: "q-x",
+      idempotencyKey: "rem-x:q-x",
+      txHash: "0xTXREAL",
+      chainId: 84532,
+      senderAddress: "0x1111111111111111111111111111111111111111",
+      receiverAddress: "0x4444444444444444444444444444444444444444",
+      valueMinor: 400_000_000,
+      vm: "evm",
+    });
+    getLedgerMock.mockReturnValue(ledger);
+    const json = await (await POST(req(bearer(SECRET)))).json();
+    // ANTES de WKH-213 esto era 0: el settle nunca aterrizaba, la fila quedaba 'prepared' y listStale
+    // escaneaba un conjunto estructuralmente vacío.
+    expect(json.scanned).toBe(1);
+    expect(json.manualReview).toBe(1);
+    expect(json.preparedOrphans.total).toBe(0); // ya no es 'prepared': se completó
+    const rec = [...ledger.store.values()][0]!;
+    expect(rec.status).toBe("manual_review");
+    expect(rec.txHash).toBe("0xTXREAL"); // la evidencia del principal, preservada
+    expect(rec.payoutId).toBe("transfi-po-x");
   });
 });

@@ -29,12 +29,35 @@ const TABLE = "remittance_settlements";
 const SELECT_COLS =
   "id, remittance_id, quote_id, idempotency_key, tx_hash, chain_id, sender_address, receiver_address, value_minor::text, status, attempts, payout_id, last_error, created_at, updated_at";
 
-// Estados NO-terminales candidatos a varado (AC-4). Mirror del índice parcial de la migración.
+// Estados NO-terminales candidatos a varado (AC-4). Mirror del índice parcial de la migración
+// (idx_remit_settle_stale ... where status in ('principal_in','submitted','forward_error')).
+// NO agregar 'prepared' acá: rompería el mirror del índice parcial y haría que el reconcile
+// re-procesara órdenes cuyo principal NUNCA entró (CD-6). Las 'prepared' se listan aparte
+// (listPreparedOrphans) con su propio umbral.
 const STALE_STATUSES: readonly SettlementLedgerStatus[] = [
   "principal_in",
   "submitted",
   "forward_error",
 ];
+
+/** Estados que el webhook del proveedor PUEDE mutar (WKH-213/R1). Es STALE_STATUSES + 'prepared', y
+ *  es un conjunto DISTINTO a propósito: 'prepared' es no-terminal (el proveedor puede avisar "pagado"
+ *  antes de que el settle aterrice, o sin que aterrice nunca) pero NO es re-procesable por el
+ *  reconcile. Compartir la constante era el bug: el webhook heredaba el conjunto del reconcile y
+ *  dejaba las 'prepared' congeladas para siempre. Sigue sin incluir estados terminales
+ *  (settled/failed) ni manual_review ⇒ nunca degrada ni reclasifica (DT-2b). */
+const WEBHOOK_UPDATABLE_STATUSES: readonly SettlementLedgerStatus[] = [
+  ...STALE_STATUSES,
+  "prepared",
+];
+
+/** tx_hash de una fila 'prepared': placeholder determinístico por idempotency_key (satisface el NOT
+ *  NULL y no colisiona con un tx_hash real 0x+64hex ni con una signature base58). ÚNICA definición
+ *  del formato: la escribe recordOrderPrepared y la reconoce recordPrincipalIn para saber si una fila
+ *  todavía NO tiene evidencia real. Si esto se duplica, el rellenado de evidencia deja de encontrarla. */
+function preparedPlaceholderTxHash(idempotencyKey: string): string {
+  return `prepared:${idempotencyKey}`;
+}
 
 /** Columnas de IDENTIDAD DE RED de un INSERT, coherentes por construcción con el CHECK
  *  `remittance_settlements_vm_netid_chk` (migración 20260721, YA aplicada):
@@ -152,18 +175,15 @@ export class SupabaseSettlementLedger implements SettlementLedger {
     // PII (CD-7). value_minor no se conoce aún → '0' (el real llega en recordPrincipalIn). tx_hash aún
     // no existe (no hubo settle) → placeholder determinístico por idempotency_key (satisface el NOT NULL
     // y no colisiona con un tx_hash real 0x+64hex).
-    // [STORY-GAP]: el índice único uq_remit_settle_idem + tx_hash NOT NULL hace que un recordPrincipalIn
-    // posterior (upsert onConflict tx_hash con el TX real) colisione con esta fila por idempotency_key →
-    // ese write best-effort falla (se loguea, NUNCA rompe el money-path, CD-17). Efecto: una remesa
-    // preparada+settleada puede quedar visible como 'prepared'. Fund-safe (CD-6 se mantiene: 'prepared'
-    // JAMÁS pasa a principal_in por esta vía). La reconciliación real (relajar tx_hash / re-keyear el
-    // upsert de principal_in por idempotency_key) es follow-up — ver reporte F3.
+    // WKH-213: esta fila YA NO es un callejón sin salida. recordPrincipalIn se re-keyeó a
+    // idempotency_key con MERGE, así que el settle COMPLETA esta misma fila (hash/monto reales →
+    // 'principal_in') en vez de intentar insertar una nueva y morir contra uq_remit_settle_idem.
     const { error } = await this.client.from(TABLE).upsert(
       {
         remittance_id: input.remittanceId,
         quote_id: input.quoteId,
         idempotency_key: input.idempotencyKey,
-        tx_hash: `prepared:${input.idempotencyKey}`, // placeholder (NOT NULL); no hay settle aún
+        tx_hash: preparedPlaceholderTxHash(input.idempotencyKey), // placeholder (NOT NULL); no hay settle aún
         // vm + (chain_id | network_id) en un solo lugar: acopladas por el CHECK de la DB (ver
         // vmNetworkColumns). Antes esto era `chain_id: input.chainId` a secas ⇒ TODA fila de una remesa
         // Solana quedaba vm='evm' con un chainId de Avalanche y una address base58.
@@ -190,23 +210,139 @@ export class SupabaseSettlementLedger implements SettlementLedger {
     valueMinor: number;
     vm: "evm" | "solana";
   }): Promise<void> {
-    // Upsert idempotente por tx_hash (ON CONFLICT DO NOTHING): un settle reintentado a nivel red =
-    // una sola fila. addresses lowercased (owner canónico, CD-9). value_minor como string (uint256-safe).
-    const { error } = await this.client.from(TABLE).upsert(
-      {
-        remittance_id: input.remittanceId,
-        quote_id: input.quoteId,
-        idempotency_key: input.idempotencyKey,
-        tx_hash: input.txHash,
-        ...vmNetworkColumns(input.vm, input.chainId), // MISMA fuente que recordOrderPrepared (CHECK 20260721)
-        sender_address: canonicalizeAddress(input.senderAddress, input.vm),
-        receiver_address: canonicalizeAddress(input.receiverAddress, input.vm),
-        value_minor: String(input.valueMinor),
+    // WKH-213/R2 — el settle ATERRIZA SOBRE LA FILA PREPARADA. Antes esto era un solo
+    // `upsert(..., { onConflict: "tx_hash", ignoreDuplicates: true })`: como la fila 'prepared' ya
+    // ocupaba la MISMA idempotency_key, el INSERT violaba el OTRO índice único (uq_remit_settle_idem),
+    // salía 23505 y el best-effort de la route se lo tragaba ⇒ en modo real NINGUNA fila llegaba nunca
+    // a 'principal_in'. `ON CONFLICT` sólo resuelve el índice que se le declara: con DOS índices únicos
+    // sobre la tabla, un upsert de una sola clave NO es idempotencia, es una bomba silenciosa.
+    //
+    // ⚠️ El índice único de tx_hash SIGUE VIVO y sigue protegiendo: si dos remesas distintas llegaran
+    // con el mismo hash, el UPDATE/INSERT de abajo viola uq_remit_settle_txhash → 23505 → esta función
+    // TIRA. Lo que cambia es que ahora esa colisión GRITA (log [ALERT] del best-effort de la route) en
+    // vez de morir en silencio dentro de un ignoreDuplicates. La protección no se relajó: se hizo audible.
+    const owner = canonicalizeAddress(input.senderAddress, input.vm);
+    const nowIso = new Date().toISOString();
+    // Evidencia VERIFICADA on-chain (CD-13) — nunca un eco del body. payout_id NO está en el patch:
+    // el id de la orden del proveedor que escribió prepare NO se pisa (un merge con null lo borraría).
+    const evidence = {
+      tx_hash: input.txHash,
+      value_minor: String(input.valueMinor), // uint256-safe
+      updated_at: nowIso,
+    };
+    const fullPatch = {
+      ...evidence,
+      remittance_id: input.remittanceId,
+      quote_id: input.quoteId,
+      ...vmNetworkColumns(input.vm, input.chainId), // MISMA fuente que recordOrderPrepared (CHECK 20260721)
+      sender_address: owner,
+      receiver_address: canonicalizeAddress(input.receiverAddress, input.vm),
+      status: "principal_in" as const,
+    };
+
+    // 1. Camino normal: la fila preparada de ESTE owner pasa a principal_in con la evidencia real.
+    //    `.eq("status","prepared")` es un CAS: sólo asciende desde 'prepared', NUNCA degrada un estado
+    //    ya avanzado (submitted/settled/failed/manual_review). `.eq("sender_address", owner)` es el
+    //    guard de ownership (CD-9): el service key bypassea RLS, así que sin este filtro un settle
+    //    ajeno podría sobrescribir la evidencia de otra remesa. `.select("id")` es lo que permite
+    //    saber si matcheó (sin él, un UPDATE de 0 filas es indistinguible de uno exitoso).
+    const { data: upgraded, error: upgradeErr } = await this.client
+      .from(TABLE)
+      .update(fullPatch)
+      .eq("idempotency_key", input.idempotencyKey)
+      .eq("sender_address", owner)
+      .eq("status", "prepared")
+      .select("id");
+    if (upgradeErr)
+      throw new Error(`ledger_record_principal_in_failed:${upgradeErr.code ?? "unknown"}`);
+    if ((upgraded ?? []).length > 0) return;
+
+    // 2. La fila ya avanzó: el webhook del proveedor llegó ANTES que el settle (R1 la sacó de
+    //    'prepared' a submitted/settled/failed). El status es de la máquina de estados y NO se degrada;
+    //    la evidencia es aditiva y sí se completa — pero SÓLO si el tx_hash sigue siendo el placeholder
+    //    de prepare (`.eq("tx_hash", placeholder)`), o sea únicamente cuando nadie escribió evidencia
+    //    real todavía. Así el hash verificado on-chain no se pierde por una carrera de llegada, y
+    //    jamás pisa un hash real ya escrito.
+    const { data: filled, error: fillErr } = await this.client
+      .from(TABLE)
+      .update(evidence)
+      .eq("idempotency_key", input.idempotencyKey)
+      .eq("sender_address", owner)
+      .eq("tx_hash", preparedPlaceholderTxHash(input.idempotencyKey))
+      .select("id");
+    if (fillErr) throw new Error(`ledger_record_principal_in_failed:${fillErr.code ?? "unknown"}`);
+    if ((filled ?? []).length > 0) return;
+
+    // 3. ¿Existe la fila? Si existe (settle reintentado ⇒ ya tiene su evidencia real, o pertenece a
+    //    otro sender), NO-OP: reintentar el settle es inocuo. Este SELECT es lo que separa "ya está"
+    //    de "no está" — sin él, el INSERT de abajo chocaría contra uq_remit_settle_txhash (índice
+    //    DISTINTO del target del ON CONFLICT) y convertiría un retry benigno en un falso [ALERT].
+    const { data: existing, error: readErr } = await this.client
+      .from(TABLE)
+      .select("id")
+      .eq("idempotency_key", input.idempotencyKey)
+      .maybeSingle();
+    if (readErr) throw new Error(`ledger_record_principal_in_failed:${readErr.code ?? "unknown"}`);
+    if (existing) return;
+
+    // 4. No hubo prepare (modo estático WKH-168/209, o el ledger estaba apagado cuando se preparó):
+    //    INSERT. ignoreDuplicates cubre la carrera contra un prepare concurrente (llegó entre el
+    //    SELECT y este INSERT) sin degradar nada.
+    const { error: insertErr } = await this.client
+      .from(TABLE)
+      .upsert(
+        { ...fullPatch, idempotency_key: input.idempotencyKey },
+        { onConflict: "idempotency_key", ignoreDuplicates: true },
+      );
+    if (insertErr)
+      throw new Error(`ledger_record_principal_in_failed:${insertErr.code ?? "unknown"}`);
+  }
+
+  async recordSolanaPrincipalIn(input: {
+    remittanceId: string;
+    senderAddress: string;
+    signature: string;
+  }): Promise<void> {
+    // WKH-213/R3 — el rail Solana ESCRIBE al ledger. La signature base58 que /solana/sponsor verifica
+    // on-chain es el equivalente Solana del txHash; sin esto, una remesa Solana nacía 'prepared' y
+    // MORÍA 'prepared' (su flujo no pasa por /api/settle/principal ni por el submit a2a, así que
+    // ninguna otra escritura la tocaba nunca).
+    // Se ancla a la fila preparada en vez de insertar una nueva porque los datos que faltan
+    // (quote_id, value_minor, receiver, payout_id) YA están ahí y son server-side: el sponsor sólo
+    // devuelve la signature, y escribir un monto declarado por el cliente violaría CD-13.
+    const owner = canonicalizeAddress(input.senderAddress, "solana"); // base58 case-sensitive (CD-10)
+    // 1. Fila 'prepared' de ESTA remesa y ESTE sender. `.eq("sender_address", owner)` es el guard de
+    //    ownership (CD-9). Una remesa re-cotizada puede tener MÁS de una 'prepared' (una por quoteId):
+    //    se toma la más reciente — la vieja quedó genuinamente huérfana y debe seguir visible como tal.
+    //    NO filtra por `vm` a propósito (misma razón que listRemittanceIdsBySender: las filas escritas
+    //    antes del fix de HU-SOL-7 dicen vm='evm' aunque sean Solana; la address base58 ya discrimina).
+    const { data, error: readErr } = await this.client
+      .from(TABLE)
+      .select("id")
+      .eq("remittance_id", input.remittanceId)
+      .eq("sender_address", owner)
+      .eq("status", "prepared")
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (readErr)
+      throw new Error(`ledger_record_solana_principal_in_failed:${readErr.code ?? "unknown"}`);
+    const row = ((data ?? []) as unknown as Array<{ id: string }>)[0];
+    // Sin fila preparada NO se inserta: quote_id/value_minor son NOT NULL y acá no hay fuente
+    // verificada para ninguno de los dos. Inventarlos sería evidencia falsa (peor que no tener fila).
+    if (!row) return;
+    // 2. Ascenso con re-check de 'prepared' (CAS): si el webhook la movió entre el SELECT y el UPDATE,
+    //    NO se degrada el estado terminal.
+    const { error } = await this.client
+      .from(TABLE)
+      .update({
+        tx_hash: input.signature, // el hash Solana; el índice único de tx_hash sigue aplicando
         status: "principal_in",
-      },
-      { onConflict: "tx_hash", ignoreDuplicates: true },
-    );
-    if (error) throw new Error(`ledger_record_principal_in_failed:${error.code ?? "unknown"}`);
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", row.id)
+      .eq("status", "prepared");
+    if (error)
+      throw new Error(`ledger_record_solana_principal_in_failed:${error.code ?? "unknown"}`);
   }
 
   async recordPayoutOutcome(input: {
@@ -250,6 +386,31 @@ export class SupabaseSettlementLedger implements SettlementLedger {
     if (error) throw new Error(`ledger_list_stale_failed:${error.code ?? "unknown"}`);
     const rows = (data ?? []) as unknown as RawRow[];
     return rows.map(mapRow);
+  }
+
+  async listPreparedOrphans(input: {
+    olderThanIso: string;
+    limit: number;
+  }): Promise<{ total: number; records: SettlementRecord[] }> {
+    // WKH-213: órdenes 'prepared' cuyo settle nunca aterrizó. Global (admin), sin owner filter (mismo
+    // criterio que listStale). CD-12: el select trae value_minor::text.
+    // created_at (NO updated_at): una fila 'prepared' no se toca de nuevo, así que su updated_at no
+    // envejece respecto de su nacimiento — el reloj con sentido es cuánto hace que se creó la orden.
+    // count:"exact" ⇒ PostgREST devuelve el total de coincidencias en Content-Range, INDEPENDIENTE
+    // del .limit() (la página). Sin eso no se puede distinguir "hay 100" de "hay 100.000".
+    const { data, error, count } = await this.client
+      .from(TABLE)
+      .select(SELECT_COLS, { count: "exact" })
+      .eq("status", "prepared")
+      .lt("created_at", input.olderThanIso)
+      .order("created_at", { ascending: true }) // las más viejas primero (las que más urgen)
+      .limit(input.limit);
+    if (error) throw new Error(`ledger_list_prepared_failed:${error.code ?? "unknown"}`);
+    // Un count ausente NO se degrada a records.length: eso reportaría "total: 3" sobre una página de 3
+    // cuando podría haber 300. Sin conteo exacto no hay respuesta honesta ⇒ se tira (la route → 503).
+    if (typeof count !== "number") throw new Error("ledger_list_prepared_count_missing");
+    const rows = (data ?? []) as unknown as RawRow[];
+    return { total: count, records: rows.map(mapRow) };
   }
 
   async listRemittanceIdsBySender(input: {
@@ -325,9 +486,13 @@ export class SupabaseSettlementLedger implements SettlementLedger {
     error?: string | null;
   }): Promise<void> {
     // WKH-210: UPDATE por payout_id, NO owner-scoped (el guard es el HMAC del endpoint, CD-12). El
-    // filtro .in("status", STALE_STATUSES) = no-terminal set (DT-2b): nunca degrada un estado terminal
-    // ni reclasifica manual_review. NO lee columnas ⇒ no aplica el ::text de value_minor (es un UPDATE
-    // puro, no un select). last_error es un enum estable, NUNCA PII (CD-3).
+    // filtro .in("status", WEBHOOK_UPDATABLE_STATUSES) = no-terminal set (DT-2b): nunca degrada un
+    // estado terminal ni reclasifica manual_review. NO lee columnas ⇒ no aplica el ::text de
+    // value_minor (es un UPDATE puro, no un select). last_error es un enum estable, NUNCA PII (CD-3).
+    // WKH-213/R1: el conjunto incluye 'prepared'. Con STALE_STATUSES (que NO lo incluye) el proveedor
+    // podía avisar "pagado" sobre una orden cuyo settle nunca aterrizó y la fila se quedaba idéntica:
+    // el aviso se perdía. 'prepared' es no-terminal ⇒ es mutable por el webhook. Ver por qué NO se
+    // agregó a STALE_STATUSES en la definición de las dos constantes.
     // NO toca vm/chain_id/network_id (UPDATE parcial) ⇒ nada que acoplar al CHECK vm_netid. Tampoco
     // discrimina por VM: correlaciona por payout_id, que es VM-agnóstico.
     const patch: Record<string, unknown> = {
@@ -339,7 +504,7 @@ export class SupabaseSettlementLedger implements SettlementLedger {
       .from(TABLE)
       .update(patch)
       .eq("payout_id", input.payoutId)
-      .in("status", STALE_STATUSES as unknown as string[]); // no-terminal set (DT-2b)
+      .in("status", WEBHOOK_UPDATABLE_STATUSES as unknown as string[]); // no-terminal set (DT-2b + R1)
     if (error) throw new Error(`ledger_record_webhook_outcome_failed:${error.code ?? "unknown"}`);
   }
 }

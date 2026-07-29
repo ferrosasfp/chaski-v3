@@ -4,7 +4,13 @@
 // NUNCA se ecoa al cliente). Espeja el patrón del test EVM app/api/settle/principal/route.test.ts:
 // fetch stubeado, cero HTTP real, cero red, cero cadena.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FAKE_SOLANA_BENEFICIARY, FAKE_SOLANA_REFERENCE, FAKE_SOLANA_SIGNATURE } from "../../../../src/test-support/fakes";
+// WKH-213/R3: el route ahora persiste la signature en el ledger (best-effort). getLedgerMock devuelve
+// null por default ⇒ TODOS los tests previos quedan byte-idénticos (flag OFF = skip total).
+const { getLedgerMock } = vi.hoisted(() => ({ getLedgerMock: vi.fn(() => null as unknown) }));
+vi.mock("../../../../src/infrastructure/persistence/supabase-settlement-ledger", () => ({
+  getSettlementLedger: getLedgerMock,
+}));
+import { FakeSettlementLedger, FAKE_SOLANA_BENEFICIARY, FAKE_SOLANA_REFERENCE, FAKE_SOLANA_SIGNATURE } from "../../../../src/test-support/fakes";
 import { POST } from "./route";
 
 const SENDER = FAKE_SOLANA_BENEFICIARY; // base58 devnet (44 chars)
@@ -59,6 +65,8 @@ describe("POST /api/settle/solana-sponsor (HU-SOL-13)", () => {
     vi.stubEnv("FACILITATOR_API_KEY", API_KEY);
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
+    getLedgerMock.mockReset();
+    getLedgerMock.mockReturnValue(null); // sin ledger: comportamiento previo, byte-idéntico
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -180,5 +188,65 @@ describe("POST /api/settle/solana-sponsor (HU-SOL-13)", () => {
       expect(res.status).toBe(502);
       expect(await res.json()).toEqual({ error: "solana_settle_broadcast_failed" });
     }
+  });
+
+  // ── WKH-213/R3 · la remesa Solana YA NO muere 'prepared' ─────────────────────────────────────────
+  // Antes de esto, el rail Solana no escribía NADA al ledger: la fila nacía 'prepared' en
+  // /api/payout/prepare y se quedaba ahí para siempre, así que ninguna superficie podía decir nada de
+  // una remesa Solana. Se mide el ESTADO FINAL de la fila, no que se llamó a una función.
+  async function ledgerWithPreparedSolana(): Promise<FakeSettlementLedger> {
+    const ledger = new FakeSettlementLedger("2026-07-28T00:00:00.000Z");
+    await ledger.recordOrderPrepared({
+      remittanceId: "rem-sol-1", // el MISMO remittanceId que manda el body()
+      quoteId: "q-sol",
+      idempotencyKey: "rem-sol-1:q-sol",
+      depositAddress: FAKE_SOLANA_REFERENCE,
+      chainId: 43113,
+      senderAddress: SENDER,
+      payoutId: "transfi-po-sol",
+      vm: "solana",
+    });
+    return ledger;
+  }
+
+  it("R3: 200 del sponsor ⇒ la fila 'prepared' de esa remesa queda en principal_in con la signature", async () => {
+    const ledger = await ledgerWithPreparedSolana();
+    getLedgerMock.mockReturnValue(ledger);
+    facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
+    const res = await POST(req(body()));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ signature: FAKE_SOLANA_SIGNATURE });
+    const row = [...ledger.store.values()][0]!;
+    expect(row.status).toBe("principal_in"); // ← antes: 'prepared', siempre
+    expect(row.txHash).toBe(FAKE_SOLANA_SIGNATURE); // la firma verificada on-chain, en el ledger
+    expect(row.payoutId).toBe("transfi-po-sol"); // intacto
+  });
+
+  it("R3: una respuesta NO-ok del sponsor no escribe nada (la fila sigue 'prepared')", async () => {
+    const ledger = await ledgerWithPreparedSolana();
+    getLedgerMock.mockReturnValue(ledger);
+    facilitatorResponds(422, { error: "SPONSOR_REJECTED" });
+    const res = await POST(req(body()));
+    expect(res.status).toBe(422);
+    expect([...ledger.store.values()][0]!.status).toBe("prepared"); // sin broadcast no hay evidencia
+  });
+
+  it("CD-17: si el ledger TIRA, el money-path responde IGUAL (200 con la signature)", async () => {
+    const ledger = await ledgerWithPreparedSolana();
+    vi.spyOn(ledger, "recordSolanaPrincipalIn").mockRejectedValue(new Error("db down"));
+    getLedgerMock.mockReturnValue(ledger);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
+    const res = await POST(req(body()));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ signature: FAKE_SOLANA_SIGNATURE });
+  });
+
+  it("flag OFF (ledger null) ⇒ respuesta byte-idéntica, sin tocar la DB", async () => {
+    getLedgerMock.mockReturnValue(null);
+    facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
+    const res = await POST(req(body()));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ signature: FAKE_SOLANA_SIGNATURE });
   });
 });

@@ -464,20 +464,62 @@ export class FakePayoutPrepareGateway implements PayoutPrepareGateway {
   }
 }
 
-// Ledger de settlements fake (WKH-207). In-memory (molde de InMemoryRepo). recordPrincipalIn es
-// idempotente por tx_hash (ON CONFLICT DO NOTHING); recordPayoutOutcome muta owner-scoped por
-// (idempotencyKey, senderAddress); listStale filtra no-terminales < olderThanIso; markOutcome muta
-// por id. Los estados NO-terminales candidatos a varado son principal_in/submitted/forward_error.
+// Ledger de settlements fake (WKH-207). In-memory (molde de InMemoryRepo). recordPayoutOutcome muta
+// owner-scoped por (idempotencyKey, senderAddress); listStale filtra no-terminales < olderThanIso;
+// markOutcome muta por id.
+//
+// ⚠️ WKH-213 — POR QUÉ ESTE DOBLE MODELA LOS *DOS* ÍNDICES ÚNICOS DE LA TABLA.
+// Hasta acá, recordPrincipalIn deduplicaba SÓLO por tx_hash. La tabla real tiene DOS índices únicos
+// (migración 20260716:24-25): uq_remit_settle_txhash Y uq_remit_settle_idem. Modelar uno solo hacía
+// que los tests "demostraran" un flujo IMPOSIBLE en producción: en la DB real el INSERT del settle
+// chocaba contra la fila 'prepared' por idempotency_key (23505) y el error se perdía en el
+// best-effort de la route, así que NINGUNA fila llegaba nunca a 'principal_in' — mientras el doble
+// mostraba, feliz, dos filas. Un doble que no modela una restricción de la DB no prueba nada del
+// money-path: prueba la fantasía que el doble implementa.
+// REGLA: toda restricción de integridad que la DB aplica sobre esta tabla se modela ACÁ (assertUnique).
 const STALE_STATUSES: readonly SettlementLedgerStatus[] = [
   "principal_in",
   "submitted",
   "forward_error",
 ];
 
+/** Conjunto mutable por el webhook (R1) = STALE_STATUSES + 'prepared'. Espeja
+ *  WEBHOOK_UPDATABLE_STATUSES del ledger real; DISTINTO del conjunto del reconcile a propósito. */
+const WEBHOOK_UPDATABLE_STATUSES: readonly SettlementLedgerStatus[] = [
+  ...STALE_STATUSES,
+  "prepared",
+];
+
+/** Mismo placeholder determinístico que escribe el ledger real en una fila 'prepared'. */
+function preparedPlaceholderTxHash(idempotencyKey: string): string {
+  return `prepared:${idempotencyKey}`;
+}
+
 export class FakeSettlementLedger implements SettlementLedger {
   public store = new Map<string, SettlementRecord>();
   private seq = 0;
   constructor(private nowIso: string = T0) {}
+
+  /** Emula los DOS índices únicos de la tabla. `selfId` es la fila que se está actualizando (una fila
+   *  no choca consigo misma). Tira con el MISMO texto que el ledger real ante un 23505, para que un
+   *  test no pueda distinguir el doble de la DB por el mensaje. */
+  private assertUnique(
+    candidate: { txHash: string; idempotencyKey: string },
+    failPrefix: string,
+    selfId?: string,
+  ): void {
+    for (const [id, r] of this.store) {
+      if (id === selfId) continue;
+      if (r.txHash === candidate.txHash) throw new Error(`${failPrefix}:23505`); // uq_remit_settle_txhash
+      if (r.idempotencyKey === candidate.idempotencyKey) throw new Error(`${failPrefix}:23505`); // uq_remit_settle_idem
+    }
+  }
+
+  /** La fila de una idempotency_key (el índice único garantiza 0 ó 1). */
+  private byIdempotencyKey(key: string): SettlementRecord | undefined {
+    for (const r of this.store.values()) if (r.idempotencyKey === key) return r;
+    return undefined;
+  }
 
   async recordOrderPrepared(input: {
     remittanceId: string;
@@ -491,17 +533,18 @@ export class FakeSettlementLedger implements SettlementLedger {
   }): Promise<void> {
     // WKH-211: registra la orden preparada. Upsert por idempotency_key (retry = una sola fila). El
     // depositAddress va en receiver_address (ES el receiver no-custodial). value_minor '0' (aún no se
-    // conoce); tx_hash placeholder (no hubo settle). status 'prepared' (NUNCA principal_in — CD-6).
-    for (const r of this.store.values()) {
-      if (r.idempotencyKey === input.idempotencyKey) return;
-    }
+    // conoce); tx_hash placeholder (no hubo settle). status 'prepared' — el settle la COMPLETA a
+    // principal_in sobre ESTA MISMA fila (CD-6 reescrito, WKH-213).
+    if (this.byIdempotencyKey(input.idempotencyKey)) return; // ON CONFLICT (idempotency_key) DO NOTHING
+    const txHash = preparedPlaceholderTxHash(input.idempotencyKey);
+    this.assertUnique({ txHash, idempotencyKey: input.idempotencyKey }, "ledger_record_order_prepared_failed");
     const id = `prep-${++this.seq}`;
     this.store.set(id, {
       id,
       remittanceId: input.remittanceId,
       quoteId: input.quoteId,
       idempotencyKey: input.idempotencyKey,
-      txHash: `prepared:${input.idempotencyKey}`,
+      txHash,
       chainId: input.chainId,
       senderAddress: canonicalizeAddress(input.senderAddress, input.vm),
       receiverAddress: canonicalizeAddress(input.depositAddress, input.vm),
@@ -526,10 +569,60 @@ export class FakeSettlementLedger implements SettlementLedger {
     valueMinor: number;
     vm: "evm" | "solana";
   }): Promise<void> {
-    // ON CONFLICT DO NOTHING por tx_hash: un settle reintentado a nivel red = una sola fila.
-    for (const r of this.store.values()) {
-      if (r.txHash === input.txHash) return;
+    // WKH-213/R2 — MISMO algoritmo de 4 pasos que SupabaseSettlementLedger.recordPrincipalIn (si uno
+    // cambia y el otro no, los tests dejan de decir la verdad sobre producción):
+    //   1. UPDATE owner-scoped de la fila 'prepared' → principal_in con la evidencia real.
+    //   2. La fila ya avanzó (webhook primero) ⇒ se rellena SÓLO la evidencia sobre el placeholder,
+    //      sin degradar el status.
+    //   3. La fila existe con evidencia real / de otro owner ⇒ NO-OP (retry inocuo).
+    //   4. No existe ⇒ INSERT.
+    const owner = canonicalizeAddress(input.senderAddress, input.vm);
+    // Espeja al ledger real: la ESCRITURA recibe un number y lo persiste como texto
+    // (`value_minor: String(input.valueMinor)`), y la LECTURA devuelve ese texto sin re-parsear.
+    const valueMinor = String(input.valueMinor);
+    const existing = this.byIdempotencyKey(input.idempotencyKey);
+
+    if (existing && existing.senderAddress === owner && existing.status === "prepared") {
+      // El índice de tx_hash SIGUE aplicando sobre un UPDATE (otra fila con ese hash ⇒ 23505).
+      this.assertUnique(
+        { txHash: input.txHash, idempotencyKey: input.idempotencyKey },
+        "ledger_record_principal_in_failed",
+        existing.id,
+      );
+      existing.remittanceId = input.remittanceId;
+      existing.quoteId = input.quoteId;
+      existing.txHash = input.txHash;
+      existing.chainId = input.chainId;
+      existing.senderAddress = owner;
+      existing.receiverAddress = canonicalizeAddress(input.receiverAddress, input.vm);
+      existing.valueMinor = valueMinor;
+      existing.status = "principal_in";
+      existing.updatedAt = this.nowIso;
+      // payoutId NO se toca: lo escribió prepare y un merge con null lo borraría.
+      return;
     }
+    if (
+      existing &&
+      existing.senderAddress === owner &&
+      existing.txHash === preparedPlaceholderTxHash(input.idempotencyKey)
+    ) {
+      // Webhook llegó primero: status intacto (terminal), evidencia completada.
+      this.assertUnique(
+        { txHash: input.txHash, idempotencyKey: input.idempotencyKey },
+        "ledger_record_principal_in_failed",
+        existing.id,
+      );
+      existing.txHash = input.txHash;
+      existing.valueMinor = valueMinor;
+      existing.updatedAt = this.nowIso;
+      return;
+    }
+    if (existing) return; // evidencia real ya escrita / otro owner ⇒ NO-OP
+
+    this.assertUnique(
+      { txHash: input.txHash, idempotencyKey: input.idempotencyKey },
+      "ledger_record_principal_in_failed",
+    );
     const id = `settle-${++this.seq}`;
     this.store.set(id, {
       id,
@@ -538,11 +631,9 @@ export class FakeSettlementLedger implements SettlementLedger {
       idempotencyKey: input.idempotencyKey,
       txHash: input.txHash,
       chainId: input.chainId,
-      senderAddress: canonicalizeAddress(input.senderAddress, input.vm),
+      senderAddress: owner,
       receiverAddress: canonicalizeAddress(input.receiverAddress, input.vm),
-      // Espeja al ledger real: la ESCRITURA recibe un number y lo persiste como texto
-      // (`value_minor: String(input.valueMinor)`), y la LECTURA devuelve ese texto sin re-parsear.
-      valueMinor: String(input.valueMinor),
+      valueMinor,
       status: "principal_in",
       attempts: 0,
       payoutId: null,
@@ -550,6 +641,35 @@ export class FakeSettlementLedger implements SettlementLedger {
       createdAt: this.nowIso,
       updatedAt: this.nowIso,
     });
+  }
+
+  async recordSolanaPrincipalIn(input: {
+    remittanceId: string;
+    senderAddress: string;
+    signature: string;
+  }): Promise<void> {
+    // WKH-213/R3 — espeja al ledger real: ancla la signature a la fila 'prepared' MÁS RECIENTE de esta
+    // remesa y este sender (owner-scoped). Sin fila preparada: NO-OP (no hay quote_id/value_minor
+    // honestos que insertar). El índice único de tx_hash también aplica acá.
+    const owner = canonicalizeAddress(input.senderAddress, "solana");
+    const candidates = [...this.store.values()]
+      .filter(
+        (r) =>
+          r.remittanceId === input.remittanceId &&
+          r.senderAddress === owner &&
+          r.status === "prepared",
+      )
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+    const row = candidates[0];
+    if (!row) return;
+    this.assertUnique(
+      { txHash: input.signature, idempotencyKey: row.idempotencyKey },
+      "ledger_record_solana_principal_in_failed",
+      row.id,
+    );
+    row.txHash = input.signature;
+    row.status = "principal_in";
+    row.updatedAt = this.nowIso;
   }
 
   async recordPayoutOutcome(input: {
@@ -577,6 +697,21 @@ export class FakeSettlementLedger implements SettlementLedger {
       .filter((r) => STALE_STATUSES.includes(r.status) && r.updatedAt < input.olderThanIso)
       .slice(0, input.limit)
       .map((r) => ({ ...r }));
+  }
+
+  async listPreparedOrphans(input: {
+    olderThanIso: string;
+    limit: number;
+  }): Promise<{ total: number; records: SettlementRecord[] }> {
+    // WKH-213: 'prepared' más viejas que el umbral, por created_at (updated_at NO envejece en una fila
+    // que nadie vuelve a tocar). `total` es el conteo EXACTO de coincidencias, NO el de la página.
+    const matches = [...this.store.values()]
+      .filter((r) => r.status === "prepared" && r.createdAt < input.olderThanIso)
+      .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+    return {
+      total: matches.length,
+      records: matches.slice(0, input.limit).map((r) => ({ ...r })),
+    };
   }
 
   // HU-SOL-20/AC-2: lectura owner-scoped por sender_address canonicalizado, created_at desc, sin
@@ -616,11 +751,11 @@ export class FakeSettlementLedger implements SettlementLedger {
     status: SettlementLedgerStatus;
     error?: string | null;
   }): Promise<void> {
-    const NON_TERMINAL: SettlementLedgerStatus[] = ["principal_in", "submitted", "forward_error"];
     for (const r of this.store.values()) {
-      // NO owner-scoped (CD-12): correlaciona solo por payoutId. Filtro NON_TERMINAL = DT-2b:
-      // nunca degrada un estado terminal ni reclasifica manual_review.
-      if (r.payoutId === input.payoutId && NON_TERMINAL.includes(r.status)) {
+      // NO owner-scoped (CD-12): correlaciona solo por payoutId. Filtro no-terminal = DT-2b: nunca
+      // degrada un estado terminal ni reclasifica manual_review. WKH-213/R1: el conjunto incluye
+      // 'prepared' (el proveedor puede avisar antes de que el settle aterrice, o sin que aterrice).
+      if (r.payoutId === input.payoutId && WEBHOOK_UPDATABLE_STATUSES.includes(r.status)) {
         r.status = input.status;
         if (input.error !== undefined) r.lastError = input.error;
         r.updatedAt = this.nowIso;

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Chaski v2 — DApp mobile de remesas (USDC→PEN→Yape). Clean Architecture. En paralelo al demo.",
+  "description": "Chaski — DApp de remesas no custodiales sobre Solana (USDC→PEN→Yape). Escrow Anchor en devnet, prueba de posesión ed25519, gas patrocinado. Clean Architecture.",
   "scripts": {
     "dev": "next dev --webpack",
     "build": "next build --webpack",

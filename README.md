@@ -61,9 +61,9 @@ por eso el `--legacy-peer-deps`.
 | `npm run typecheck:scripts` | `tsc --noEmit` sobre `scripts/`, que queda fuera del build de Next |
 | `npm test` | `vitest run`, la suite completa |
 | `npm run test:core` | Solo dominio y aplicación, sin infraestructura ni componentes |
-| `npm run qa` | Los dos typechecks más la suite completa |
+| `npm run qa` | La puerta completa: lint, los dos typechecks y la suite |
 | `npm run smoke:solana` | Smoke end to end contra devnet. Opt in, ver abajo |
-| `npm run lint` | `next lint` |
+| `npm run lint` | `biome lint src app scripts` |
 
 ## Tests
 
@@ -182,7 +182,7 @@ fondos.
 
 | Variable | Default | Efecto |
 |---|---|---|
-| `NEXT_PUBLIC_VM` | `evm` | `solana` activa el camino Solana |
+| `NEXT_PUBLIC_VM` | `evm` en el código, **`solana` en `.env.example`** | Chaski corre hoy sobre Solana. El archivo de ejemplo trae `solana` para que un clon limpio levante el camino real; el default del código se invierte cuando se elimine el interruptor |
 | `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED` | apagado | Enciende depósito al escrow y patrocinio de gas |
 | `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` | `fallback` | `a2a` o `a2a-gateway` usan los agentes reales |
 | `NEXT_PUBLIC_EIP3009_ENABLED` | apagado | Firma EIP-3009 real en el camino EVM |

@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { HistoryView, RemittanceFlow, ResetWarning } from "./flow";
+import { escrowFundsKnowledge } from "./flow-vm";
 import { buildTestContainer } from "../test-support/test-container";
 import { Money } from "../domain/money";
 import {
@@ -175,7 +176,7 @@ describe("una remesa con fondos en el escrow siempre es alcanzable desde la inte
   // esta remesa se lista como "no llegaste a depositar", pierde la puerta y con ella el único camino
   // a USDC que sabemos que están en el vault.
   it("una remesa cuyo depósito confirmó la cadena llega hasta 'Recuperar fondos'", async () => {
-    const { gateway, container } = await seededFlow([inEscrowSnapshot("rem-1")]);
+    const { repo, gateway, container } = await seededFlow([inEscrowSnapshot("rem-1")]);
     render(<RemittanceFlow container={container} />);
 
     fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
@@ -189,6 +190,15 @@ describe("una remesa con fondos en el escrow siempre es alcanzable desde la inte
     fireEvent.click(recuperar);
     await waitFor(() => expect(gateway.calls).toHaveLength(1));
     expect(gateway.calls[0]).toEqual({ remittanceId: "rem-1", sender: FAKE_SOLANA_BENEFICIARY });
+
+    // Y así queda el snapshot DESPUÉS de recuperar, que es de dónde sale la trampa 3: la remesa pasa
+    // a `refunded` CONSERVANDO el marcador de depósito, porque venía de payout_failed
+    // (recover-escrow-funds.ts:76). Leerlo sin mirar el status le diría a esta persona que sus USDC
+    // siguen en el escrow cuando acaban de volver a su wallet.
+    await waitFor(async () => expect((await repo.get("rem-1"))?.status).toBe("refunded"));
+    const after = (await repo.get("rem-1"))?.snapshot;
+    expect(after?.failureReason).toBe(PRINCIPAL_SETTLED_REFUND_MANUAL);
+    expect(after && escrowFundsKnowledge(after)).not.toBe("in-escrow");
   });
 
   it("lista TODAS las remesas del dueño, no sólo la última", async () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Money } from "../domain/money";
 import type { RemittanceState, RemittanceStatus } from "../domain/remittance";
-import { deliveredDisplay, humanError, isDemoMode, statusDisplay } from "./flow-vm";
+import { deliveredDisplay, escrowRefundError, humanError, isDemoMode, statusDisplay } from "./flow-vm";
 
 // WKH-320: acá abajo vivía el describe de isFallbackWalletAddress (WKH-184 AC-7/AC-9), que probaba
 // que la UI detectara la wallet demo por su address y, entre otras cosas, que la detección fuera
@@ -131,6 +131,34 @@ describe("flow-vm — isDemoMode", () => {
       kyc: { provenance: "didit" },
     } as RemittanceState; // payoutProvenance undefined (legacy) → false
     expect(isDemoMode(absent)).toBe(false);
+  });
+});
+
+describe("flow-vm — escrowRefundError", () => {
+  // La distinción que importa: "no encontramos tu depósito" es probablemente una buena noticia (nunca
+  // salió de tu wallet). Decirla como "no pudimos recuperar tus fondos" deja a la persona creyendo
+  // que su plata está atrapada.
+  it("escrow_not_found NO se dice como un fracaso de recuperación", () => {
+    const copy = escrowRefundError("escrow_not_found");
+    expect(copy).toContain("No encontramos un depósito tuyo en el escrow");
+    expect(copy).not.toBe("No pudimos recuperar los fondos. Intentá de nuevo.");
+    // Y no afirma que no exista: puede estar en vuelo.
+    expect(copy).toContain("probá de nuevo en un rato");
+  });
+
+  it("escrow_not_deposited dice que ya no está ahí, sin inventar a dónde fue", () => {
+    expect(escrowRefundError("escrow_not_deposited")).toContain("ya no está en el escrow");
+  });
+
+  it("refund_before_deadline explica la condición, no un fallo", () => {
+    expect(escrowRefundError("refund_before_deadline")).toContain("después del vencimiento");
+  });
+
+  it("wallet desconectada → reconectar; desconocido → el genérico de siempre", () => {
+    expect(escrowRefundError("wallet_not_connected")).toContain("Reconectá");
+    expect(escrowRefundError("cualquier_otra_cosa")).toBe(
+      "No pudimos recuperar los fondos. Intentá de nuevo.",
+    );
   });
 });
 

@@ -65,6 +65,27 @@ export function statusDisplay(status: RemittanceStatus): {
   }
 }
 
+/**
+ * Copy de los errores del refund del escrow (enum→frase fija, PII-free / CD-5).
+ *
+ * Existe porque la acción tenía UNA sola frase para todo: "No pudimos recuperar los fondos". Con el
+ * caso indeterminado esa frase pasa a ser activamente engañosa: el error más probable ahí es
+ * `escrow_not_found`, que significa "no hay depósito tuyo en el escrow" — o sea, la buena noticia de
+ * que probablemente no salió un peso de tu wallet. Decirle a esa persona que no pudimos recuperar sus
+ * fondos la deja creyendo que su plata está atrapada en algún lado.
+ */
+export function escrowRefundError(code: string): string {
+  if (code.includes("escrow_not_found"))
+    return "No encontramos un depósito tuyo en el escrow. Si nunca salió de tu wallet, tus USDC siguen ahí. Si acabás de enviarlo, probá de nuevo en un rato.";
+  if (code.includes("escrow_not_deposited"))
+    return "Ese depósito ya no está en el escrow: o volvió antes, o ya se liberó al pago.";
+  if (code.includes("refund_before_deadline"))
+    return "Todavía no: el contrato permite recuperar recién después del vencimiento.";
+  if (code.includes("wallet_not_connected") || code.includes("no_account"))
+    return "Reconectá o desbloqueá tu wallet para continuar.";
+  return "No pudimos recuperar los fondos. Intentá de nuevo.";
+}
+
 /** Traduce un código de error interno a copy humano para la UI. */
 export function humanError(code: string): string {
   if (code.includes("quote_expired") || code.includes("QUOTE_STALE"))

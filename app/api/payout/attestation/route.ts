@@ -34,7 +34,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 export async function POST(req: Request): Promise<Response> {
-  // A1 — sin el secreto NO se puede verificar nada. 503 fail-closed, MISMO criterio que PR2 de
+  // A1. Sin el secreto NO se puede verificar nada. 503 fail-closed, MISMO criterio que PR2 de
   // prepare: una ruta de verificación que responde "ok" sin poder verificar es peor que no tenerla.
   // (`verifySolanaDepositAttestation` ya devuelve null sin secreto; el 503 explícito distingue
   // "no puedo" de "no valida", que son cosas distintas para quien opera.)
@@ -42,21 +42,21 @@ export async function POST(req: Request): Promise<Response> {
     return NextResponse.json({ error: "attestation_unavailable" }, { status: 503 });
   }
 
-  // A2 — body null-safe (req.json() RESUELVE `null` con el body literal `null`: el .catch NO dispara).
+  // A2. Body null-safe (req.json() RESUELVE `null` con el body literal `null`: el .catch NO dispara).
   const parsed: unknown = await req.json().catch(() => null);
   const body: Record<string, unknown> = isRecord(parsed) ? parsed : {};
   const attestation = typeof body.attestation === "string" ? body.attestation : "";
   const remittanceId = typeof body.remittanceId === "string" ? body.remittanceId : "";
   const quoteId = typeof body.quoteId === "string" ? body.quoteId : "";
 
-  // A3 — HMAC + exp + cluster + tipos, todo dentro de verifySolanaDepositAttestation (fail-closed,
+  // A3. HMAC + exp + cluster + tipos, todo dentro de verifySolanaDepositAttestation (fail-closed,
   // devuelve null ante CUALQUIER problema y nunca es un oráculo de cuál).
   const attested = attestation ? verifySolanaDepositAttestation(attestation, Date.now()) : null;
   if (!attested) {
     return NextResponse.json({ error: "attestation_unverified" }, { status: 403 });
   }
 
-  // A4 — binding a ESTA remesa. Sin esto, una atestación VÁLIDA de otra remesa pasa: el atacante
+  // A4. Binding a ESTA remesa. Sin esto, una atestación VÁLIDA de otra remesa pasa: el atacante
   // arranca una remesa propia, se queda con su atestación legítima (que certifica SU dirección de
   // depósito) y la pega entera en la respuesta de la víctima. La firma verificaría perfecto.
   // Comparación exacta: los dos ids los generamos nosotros, no hay normalización que aplicar.
@@ -64,7 +64,7 @@ export async function POST(req: Request): Promise<Response> {
     return NextResponse.json({ error: "attestation_unverified" }, { status: 403 });
   }
 
-  // A5 — se devuelve lo que está DENTRO del payload firmado, no lo que el caller mandó. Así el
+  // A5. Se devuelve lo que está DENTRO del payload firmado, no lo que el caller mandó. Así el
   // consumidor puede usar el valor atestado en vez de compararlo y quedarse con el suyo.
   return NextResponse.json(
     { beneficiary: attested.beneficiary, authority: attested.authority },

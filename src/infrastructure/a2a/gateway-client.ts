@@ -41,8 +41,8 @@ export const PAYOUT_MIN_REPUTATION = 2;
  * Y hay una segunda mitad, que es la que de verdad importa. La neutralización de `verified` y
  * `reputation` del admitido vive DENTRO de ese mismo bloque. Sin piso no hay neutralización, y esos
  * dos campos salen del card que el propio agente publica: un desconocido que declara
- * `verified: true, reputation: 100` gana el ranking de FX HOY MISMO — sin carril, sin piso y sin
- * que nadie lo note — porque `verified` es la PRIMERA clave del sort. Mandar el piso es lo que lo
+ * `verified: true, reputation: 100` gana el ranking de FX HOY MISMO (sin carril, sin piso y sin
+ * que nadie lo note), porque `verified` es la PRIMERA clave del sort. Mandar el piso es lo que lo
  * manda al final de la fila.
  *
  * O sea: pedir el carril sin piso no sería "más abierto". Sería el carril apagado y encima el
@@ -56,7 +56,7 @@ export const PAYOUT_MIN_REPUTATION = 2;
  * que ningún candidato queda excluido. Con el piso puesto, si NINGÚN agente del corredor llega a 2
  * y el carril no admite a nadie (por ejemplo porque el standing del gateway está degradado, que
  * falla cerrado), el leg pasa de cotizar a un 422 `no_agent_match`. Es una cotización que no sale,
- * no plata perdida, y se ve antes de que la persona firme nada — pero es un modo de falla nuevo.
+ * no plata perdida, y se ve antes de que la persona firme nada, pero es un modo de falla nuevo.
  */
 export const FX_MIN_REPUTATION = 2;
 
@@ -65,7 +65,7 @@ export type GatewayConstraints = {
   max_price_usdc?: number;
   min_reputation?: number;
   /**
-   * WKH-313 — opt-in al CARRIL DE ESTRENO de ESTE step: admite bajo `min_reputation` a un agente
+   * WKH-313: opt-in al CARRIL DE ESTRENO de ESTE step: admite bajo `min_reputation` a un agente
    * sin historial liquidado. El admitido NO recibe score fabricado (conserva su 0, así que ordena
    * ÚLTIMO) y el gateway le neutraliza `verified`/`reputation`, que su propio card auto-reporta.
    * Sólo puede ganar cuando NINGÚN agente pasa por mérito.

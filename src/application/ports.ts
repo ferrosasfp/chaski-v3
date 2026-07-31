@@ -181,8 +181,8 @@ export interface SolanaPayoutPrepareGateway {
     | {
         ok: true;
         result: {
-          beneficiary: string; // base58 — destino del release (server-side), YA VERIFICADO contra la atestación
-          authority: string; // base58 — release-authority (server-side), YA VERIFICADA contra la atestación
+          beneficiary: string; // base58, destino del release (server-side), YA VERIFICADO contra la atestación
+          authority: string; // base58, release-authority (server-side), YA VERIFICADA contra la atestación
           attestation: string;
           payoutId: string;
           provenance: string;

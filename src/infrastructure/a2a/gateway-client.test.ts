@@ -232,7 +232,7 @@ describe("runViaGateway — AC-1: se pide por CAPACIDAD, el gateway resuelve (ce
   });
 
   // "No sé quién atendió" es un estado real y se dice como tal: null, no un objeto con campos
-  // vacíos. Y NO invalida el output — la elección del agente no cambia por que no sepamos anotarla.
+  // vacíos. Y NO invalida el output: la elección del agente no cambia por que no sepamos anotarla.
   it("un agent ilegible da null en esa posicion y NO tumba el output del step", async () => {
     const { fn } = router({
       body: {

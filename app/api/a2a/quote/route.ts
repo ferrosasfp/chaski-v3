@@ -38,7 +38,7 @@ export async function POST(req: Request): Promise<Response> {
   // /compose (CD-7: /compose, NO /orchestrate) y es el GATEWAY el que resuelve qué agente la cumple:
   // acá ya no se descubre ni se elige agente por nombre, ni se cae al primero de la lista (CD-1).
   //
-  // WKH-313 — el leg de FX (y SÓLO el de FX) pide el CARRIL DE ESTRENO: admite agentes sin
+  // WKH-313: el leg de FX (y SÓLO el de FX) pide el CARRIL DE ESTRENO: admite agentes sin
   // historial liquidado, que ordenan ÚLTIMOS y sólo ganan si ninguno pasa por mérito.
   //
   // Va acá y no en el payout por una razón de MAGNITUD, no de gusto: un agente nuevo que cotiza mal

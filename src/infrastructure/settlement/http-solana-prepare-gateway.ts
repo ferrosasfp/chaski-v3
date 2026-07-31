@@ -84,7 +84,7 @@ function isValidSolanaPrepareShape(v: unknown): v is {
  *
  * Vive en el server porque el secreto vive en el server: `DEPOSIT_ATTESTATION_SECRET` no se manda
  * al browser, así que el browser no puede recalcular el HMAC por su cuenta. Decodificar el payload
- * acá sin verificar la firma no serviría de nada — el que puede alterar el beneficiary también
+ * acá sin verificar la firma no serviría de nada: el que puede alterar el beneficiary también
  * puede re-armar un payload que diga lo que quiera.
  *
  * ⚠️ ALCANCE (el largo está en la route). Esto detecta que el beneficiary se haya ALTERADO entre
@@ -121,7 +121,7 @@ async function verifyAttestation(
 
 /** Lee el `agent` que la route agrega al 200 (trazabilidad). Sin `slug` no hay identidad que
  *  afirmar ⇒ `undefined`: la remesa queda diciendo "no sé quién", que es la verdad. NUNCA bloquea
- *  el prepare — saber o no saber quién atendió no cambia la validez del destino, y hacerlo
+ *  el prepare: saber o no saber quién atendió no cambia la validez del destino, y hacerlo
  *  bloqueante convertiría un dato de auditoría en un modo de falla del money-path. */
 function readAgentRef(raw: unknown): AgentRef | undefined {
   if (!isRecord(raw)) return undefined;

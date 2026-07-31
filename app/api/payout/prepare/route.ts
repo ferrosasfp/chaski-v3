@@ -320,7 +320,7 @@ export async function POST(req: Request): Promise<Response> {
       payoutId: payoutIdSol,
       provenance: provenanceSol,
       // Aditivo y opcional: el cliente lo lee aparte y su ausencia no invalida nada. NO va dentro
-      // de la atestación a propósito — la atestación ata el DESTINO, y meterle un campo que no
+      // de la atestación a propósito: la atestación ata el DESTINO, y meterle un campo que no
       // participa del binding sólo agranda lo que hay que firmar sin proteger nada más.
       ...(resolvedAgent ? { agent: resolvedAgent } : {}),
     },

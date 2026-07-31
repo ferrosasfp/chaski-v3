@@ -716,7 +716,7 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       expect(step.capability).toBe("remittance-payout"); // el valor REAL del catálogo (M8)
       expect(step.constraints).toEqual({ min_reputation: PAYOUT_MIN_REPUTATION });
       expect(PAYOUT_MIN_REPUTATION).toBeGreaterThan(0);
-      // WKH-313 — el CARRIL DE ESTRENO no se enciende acá, y es una decision, no un olvido: un
+      // WKH-313: el CARRIL DE ESTRENO no se enciende acá, y es una decision, no un olvido: un
       // agente nuevo que cotiza mal produce una cotizacion mala (se ve antes de firmar nada); un
       // agente nuevo en payout decide A DONDE VA LA PLATA. El toEqual de arriba ya lo cubre, pero
       // el assert nombrado es lo que hace que quien copie la linea del leg de FX lea POR QUE no va.

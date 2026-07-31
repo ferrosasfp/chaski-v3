@@ -228,7 +228,7 @@ describe("HttpSolanaPayoutPrepareGateway — el body que arma el cliente ES el q
   // ⚠️ Lo que prueban es que una respuesta ALTERADA EN EL CAMINO no llega a la wallet. NO prueban
   // que la dirección sea legítima: la firma la pone nuestro servidor sobre lo que dijo el agente.
 
-  /** Deja pasar todo a las routes reales, pero reescribe el JSON del 200 de /api/payout/prepare —
+  /** Deja pasar todo a las routes reales, pero reescribe el JSON del 200 de /api/payout/prepare:
    *  exactamente lo que puede hacer un intermediario entre nuestro servidor y el navegador. */
   function tamperingFetch(patch: (body: Record<string, unknown>) => Record<string, unknown>) {
     const inner = routeFetch(agentOk);

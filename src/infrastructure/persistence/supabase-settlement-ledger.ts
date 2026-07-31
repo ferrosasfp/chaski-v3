@@ -311,10 +311,9 @@ export class SupabaseSettlementLedger implements SettlementLedger {
     senderAddress: string;
     signature: string;
   }): Promise<void> {
-    // WKH-213/R3 — el rail Solana ESCRIBE al ledger. La signature base58 que /solana/sponsor verifica
-    // on-chain es el equivalente Solana del txHash; sin esto, una remesa Solana nacía 'prepared' y
-    // MORÍA 'prepared' (su flujo no pasa por /api/settle/principal ni por el submit a2a, así que
-    // ninguna otra escritura la tocaba nunca).
+    // WKH-213/R3 — el settle ESCRIBE al ledger. La signature base58 que /solana/sponsor verifica
+    // on-chain es lo que ocupa el lugar del txHash; sin esto, una remesa nacía 'prepared' y MORÍA
+    // 'prepared' (ninguna otra escritura la tocaba nunca).
     // Se ancla a la fila preparada en vez de insertar una nueva porque los datos que faltan
     // (quote_id, value_minor, receiver, payout_id) YA están ahí y son server-side: el sponsor sólo
     // devuelve la signature, y escribir un monto declarado por el cliente violaría CD-13.

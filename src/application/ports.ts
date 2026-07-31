@@ -121,7 +121,7 @@ export interface PayoutAuthorityGateway {
 // terminal, la remesa queda HUÉRFANA con el principal REALMENTE adentro. No hay reconciliación
 // automática; la evidencia server-side para reconciliar a mano vive en el SettlementLedger (WKH-207).
 
-// ── HU-SOL-5 (WKH-207*) — WalletPort del path Solana ──────
+// ── HU-SOL-5 (WKH-207*) — WalletPort: el envelope que firma para el escrow ──────
 /** Datos del escrow que el CALLER (HU-SOL-13) resuelve y pasa a la wallet Solana. base58. */
 export interface SolanaEscrowDeposit {
   beneficiary: string; // Pubkey base58 — destino de la remesa (release). Resuelto por HU-SOL-13.
@@ -370,7 +370,7 @@ export interface SettlementLedger {
   }): Promise<void>;
   // settle Solana (WKH-213/R3): ata la signature base58 VERIFICADA on-chain por el facilitator a la
   // fila 'prepared' de esta remesa ⇒ 'principal_in'. Método PROPIO (no recordPrincipalIn) porque el
-  // rail Solana tiene OTROS datos verificados disponibles: /solana/sponsor devuelve la signature y
+  // settle tiene OTROS datos verificados disponibles: /solana/sponsor devuelve la signature y
   // NADA MÁS — no hay monto ni receiver verificados server-side (no existe verificador on-chain Solana
   // en este repo). Escribir el monto que declara el cliente violaría CD-13, así que value_minor
   // conserva el de la fila 'prepared'; el resto (quote_id, receiver, payout_id) ya está ahí.

@@ -51,7 +51,7 @@ export interface TestContainerOverrides {
   payouts?: PayoutGateway; // default: new FakePayoutGateway()
   payoutAuthority?: PayoutAuthorityGateway; // default: new FakePayoutAuthorityGateway()
   refund?: RefundGateway; // default: new FakeRefundGateway() (regresión-neutral, WKH-186)
-  // El settlement real se arma con `useCases.confirmAndSend` (ver confirm-and-send.solana.test).
+  // El settlement real se arma con `useCases.confirmAndSend` (ver confirm-and-send.money-path.test).
   // HU-SOL-13: sin override queda UNDEFINED → la acción de refund NO se muestra.
   solanaRefund?: SolanaEscrowRefundGateway;
   clock?: Clock; // default: new FixedClock()

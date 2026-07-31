@@ -190,10 +190,10 @@ describe("POST /api/settle/solana-sponsor (HU-SOL-13)", () => {
     }
   });
 
-  // ── WKH-213/R3 · la remesa Solana YA NO muere 'prepared' ─────────────────────────────────────────
-  // Antes de esto, el rail Solana no escribía NADA al ledger: la fila nacía 'prepared' en
+  // ── WKH-213/R3 · la remesa YA NO muere 'prepared' ────────────────────────────────────────────────
+  // Antes de esto, el settle no escribía NADA al ledger: la fila nacía 'prepared' en
   // /api/payout/prepare y se quedaba ahí para siempre, así que ninguna superficie podía decir nada de
-  // una remesa Solana. Se mide el ESTADO FINAL de la fila, no que se llamó a una función.
+  // la remesa. Se mide el ESTADO FINAL de la fila, no que se llamó a una función.
   async function ledgerWithPreparedSolana(): Promise<FakeSettlementLedger> {
     const ledger = new FakeSettlementLedger("2026-07-28T00:00:00.000Z");
     await ledger.recordOrderPrepared({

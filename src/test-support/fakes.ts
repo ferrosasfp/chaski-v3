@@ -669,7 +669,7 @@ export const FAKE_SOLANA_SIGNATURE = bs58.encode(new Uint8Array(64).fill(7)); //
 export const FAKE_SOLANA_REFERENCE = "So11111111111111111111111111111111111111112"; // base58 reference
 
 // FakeSolanaWallet — WalletPort cuya authorizePrincipal devuelve el envelope `solana` (HU-SOL-5), para
-// probar la rama Solana de ConfirmAndSend sin @solana/web3.js. Registra el 3er arg `deposit` recibido:
+// probar el money-path de ConfirmAndSend sin @solana/web3.js. Registra el 3er arg `deposit` recibido:
 // los tests verifican que el escrow (beneficiary/authority) llegó SERVER-SIDE desde prepare (nunca del body).
 export class FakeSolanaWallet implements WalletPort {
   public authorizeCalls: Array<{

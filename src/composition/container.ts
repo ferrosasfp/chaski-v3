@@ -60,7 +60,7 @@ export interface Container {
   solanaRefund?: SolanaEscrowRefundPort;
 }
 
-// HU-SOL-20/AC-2 — arma el adapter Solana CON su resolver de remittanceId en un solo paso (sin setter,
+// HU-SOL-20/AC-2 — arma el SolanaWalletAdapter CON su resolver de remittanceId en un solo paso (sin setter,
 // sin objeto a medio construir y sin una segunda instancia del adapter).
 // El ciclo aparente (adapter → resolver → PopSigner → WalletPort=adapter) se rompe DIFIRIENDO la
 // construcción del PopSigner: `lazyPop.prove` recién se evalúa en tiempo de refund, cuando `adapter` ya
@@ -96,7 +96,7 @@ export function createContainer(): Container {
   const payouts = useA2a ? new A2aPayoutGateway() : new FallbackPayoutGateway();
   const payoutAuthority = new HttpPayoutAuthorityGateway(); // autoridad server-side (WKH-180)
   const refund = new LedgerRefundGateway(); // refund-on-failure ledger-only (WKH-186/AC-8, CD-8)
-  // La wallet es SIEMPRE el adapter Solana: no hay selección posible, y por eso no hay ternario.
+  // La wallet es SIEMPRE el SolanaWalletAdapter: no hay selección posible, y por eso no hay ternario.
   const wallet = createSolanaWallet();
   // HU-SOL-13 (WKH-216) — guard fail-loud money-path Solana. Con el flag ON exige mint+facilitator
   // configurados (client-safe, NEXT_PUBLIC_); la release-authority se resuelve SERVER-SIDE (nunca en

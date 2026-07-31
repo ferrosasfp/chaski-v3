@@ -40,7 +40,7 @@ describe("createContainer — se construye SIN leer ninguna env EVM (AC-3.1)", (
   });
 
   // El ternario `solanaWallet ?? pickWallet()` era el punto donde una wallet EVM podía entrar. Ya no
-  // hay ternario: la wallet es SIEMPRE el adapter Solana, sin importar la configuración.
+  // hay ternario: la wallet es SIEMPRE el SolanaWalletAdapter, sin importar la configuración.
   it("AC-3.1: la wallet es SIEMPRE el SolanaWalletAdapter (no hay ternario que pueda elegir otra)", () => {
     const c = createContainer();
     const wallet = (c.connectWallet as unknown as { wallet: unknown }).wallet;
@@ -112,7 +112,7 @@ describe("createContainer — money-path Solana (HU-SOL-13)", () => {
     expect(solana?.gateway).toBeDefined();
   });
 
-  // HU-SOL-20/AC-2: el adapter Solana se construye CON su resolver de remittanceId. El wiring tiene un
+  // HU-SOL-20/AC-2: el SolanaWalletAdapter se construye CON su resolver de remittanceId. El wiring tiene un
   // ciclo aparente (adapter → resolver → PopSigner → wallet=adapter) que se rompe difiriendo el
   // PopSigner; esto lo ejercita END-TO-END en el container real. Si el diferido estuviera mal
   // (TDZ / instancia a medio construir), acá saldría un ReferenceError, no un escrow_not_found.

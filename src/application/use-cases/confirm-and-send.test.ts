@@ -3,10 +3,10 @@
 // Alcance de este archivo: SÓLO los guards previos (identidad verificada, autoridad de payout,
 // vigencia de la cotización). El paso `payouts.submit` NO se ejerce acá porque es estructuralmente
 // inalcanzable: sin `solana` inyectado el use-case corta en el tapón fail-closed DT-8, probado en
-// confirm-and-send.solana.test.ts. DT-11: el port PayoutGateway sigue vivo — TrackRemittance usa
+// confirm-and-send.money-path.test.ts. DT-11: el port PayoutGateway sigue vivo — TrackRemittance usa
 // `payouts.status()`.
 //
-// El camino completo (prepare → firma → settle) se prueba en confirm-and-send.solana.test.ts, y el
+// El camino completo (prepare → firma → settle) se prueba en confirm-and-send.money-path.test.ts, y el
 // ORDEN de sus guards en confirm-and-send.reorder.test.ts.
 import { describe, expect, it, vi } from "vitest";
 import { Money } from "../../domain/money";

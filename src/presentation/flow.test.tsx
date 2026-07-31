@@ -816,7 +816,7 @@ describe("WKH-200 poll stop (fake timers)", () => {
 });
 
 // ── T7 — HU-SOL-13 (AC-6/AC-7): acción refund en TrackView, SOLO vm=solana + refundeable + now>=deadline ──
-// Se testea TrackView EN AISLAMIENTO (export): el render del flujo completo en modo Solana toca
+// Se testea TrackView EN AISLAMIENTO (export): el render del flujo completo toca
 // isFallbackWalletAddress (flow-vm, Scope OUT) que no canonicaliza el FALLBACK EVM en base58. deadline
 // on-chain = floor(Date.parse(expiresAt)/1000); la UI compara contra Date.now() (proxy defensivo). Pasado
 // ⇒ CTA visible; futuro ⇒ oculta. El guard AUTORITATIVO vive on-chain en wallet.refundEscrow.

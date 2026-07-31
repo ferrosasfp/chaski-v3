@@ -1,6 +1,7 @@
-// Tests — ConfirmAndSend rama SOLANA (HU-SOL-13/WKH-216, 9º param `solana`). AC-1: el deposit se cablea
-// con beneficiary/authority resueltos SERVER-SIDE (del prepare, NUNCA del body). AC-4/CD-7: prepare !ok /
-// gateway !ok / gateway throw ⇒ failAndRefund, NUNCA markPrincipalIn. Cero @solana/web3.js (fakes puros).
+// Tests — ConfirmAndSend, el money-path completo (HU-SOL-13/WKH-216): prepare → firma → settle →
+// markPrincipalIn. AC-1: el deposit se cablea con beneficiary/authority resueltos SERVER-SIDE (del
+// prepare, NUNCA del body). AC-4/CD-7: prepare !ok / gateway !ok / gateway throw ⇒ failAndRefund,
+// NUNCA markPrincipalIn. Cero @solana/web3.js (fakes puros).
 import { describe, expect, it, vi } from "vitest";
 import { Money } from "../../domain/money";
 import { type KycVerification, type Quote, Remittance } from "../../domain/remittance";
@@ -69,7 +70,7 @@ function build(
   );
 }
 
-describe("ConfirmAndSend — rama Solana (HU-SOL-13)", () => {
+describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
   it("T1/AC-1: happy — beneficiary/authority server-side → authorizePrincipal(escrow) → settle → markPrincipalIn + payout_submitted", async () => {
     const repo = new InMemoryRepo();
     const wallet = new FakeSolanaWallet();
@@ -99,7 +100,7 @@ describe("ConfirmAndSend — rama Solana (HU-SOL-13)", () => {
     expect(out.status).toBe("payout_submitted");
     expect(out.snapshot.payoutId).toBe("transfi-sol-po-1");
     expect(out.snapshot.payoutProvenance).toBe("transfi");
-    // En modo Solana el submit del payout NO se llama (la release la dispara el facilitator async).
+    // El submit del payout NO se llama: la release la dispara el facilitator async.
     expect(submitSpy).not.toHaveBeenCalled();
   });
 
@@ -174,9 +175,9 @@ describe("ConfirmAndSend — rama Solana (HU-SOL-13)", () => {
 });
 
 // ── T7 / DT-8 (WKH-320) — el tapón fail-closed ────────────────────────────────────────────────────
-// Al quedar la rama Solana como CAMINO ÚNICO, su ausencia ya no cae a un camino alternativo: cae al
-// vacío. Sin este tapón, execute() llegaría al final y devolvería la remesa 'confirmed' SIN haber
-// movido nada — un no-op silencioso en el money-path, peor que el throw de antes.
+// Este settlement es el ÚNICO que existe: si no está inyectado no hay un camino alternativo al que
+// caer, se cae al vacío. Sin este tapón, execute() llegaría al final y devolvería la remesa
+// 'confirmed' SIN haber movido nada — un no-op silencioso en el money-path, peor que el throw de antes.
 describe("ConfirmAndSend — DT-8: sin `solana` inyectado (WKH-320)", () => {
   it("T7: solana === undefined ⇒ payout_failed/refunded con reason settlement_unavailable", async () => {
     const repo = new InMemoryRepo();

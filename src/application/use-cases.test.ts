@@ -127,7 +127,7 @@ describe("Use-cases — money-path", () => {
   });
 
   // WKH-320: antes este caso forzaba el fallo con un payout status:'failed' (paso 4, inalcanzable
-  // post-poda). Se re-cablea sobre el settle Solana, que es donde vive hoy el fallo del money-path.
+  // post-poda). Se re-cablea sobre el settle, que es donde vive hoy el fallo del money-path.
   // El invariante probado es el mismo: refund-on-failure avanza a refunded en el MISMO execute() y
   // markRefunded sólo patchea refundTx, así que el failureReason sobrevive.
   it("el settle falla → refunded, failureReason preservado (WKH-186 refund-on-failure)", async () => {

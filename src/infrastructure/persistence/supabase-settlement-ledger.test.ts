@@ -870,8 +870,8 @@ describe("identidad de red del ledger — vm + chain_id/network_id (CHECK 202607
 
   // WKH-320: acá vivía "recordOrderPrepared vm:'evm' ⇒ byte-idéntico (chain_id numérico,
   // network_id NULL)". Probaba escribir una fila vm='evm' desde una address 0x, camino que ningún
-  // caller post-poda puede producir. La otra mitad del invariante —que la rama Solana escribe
-  // network_id CAIP-2 y chain_id NULL— se sigue probando justo abajo, y ES la que corre en prod.
+  // caller post-poda puede producir. La otra mitad del invariante —que la escritura con vm:'solana'
+  // pone network_id CAIP-2 y chain_id NULL— se sigue probando justo abajo, y ES la que corre en prod.
 
   it("recordPrincipalIn vm:'solana' ⇒ mismas dos mitades (el escritor del principal tenía el MISMO bug)", async () => {
     const { client, rows, rejected } = makeTableClient();
@@ -1175,7 +1175,7 @@ describe("WKH-213/R1 — el webhook puede sacar una fila de 'prepared'", () => {
   });
 });
 
-describe("WKH-213/R3 — el rail Solana escribe al ledger", () => {
+describe("WKH-213/R3 — el settle escribe al ledger", () => {
   const SOL_SIGNATURE = "5".repeat(64); // base58 (dígitos válidos en el alfabeto)
   function solPrepared() {
     return {

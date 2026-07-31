@@ -104,9 +104,9 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // ── WKH-213/R3: persistencia server-side ADITIVA (best-effort), espeja settle/principal:252-288. ──
-  // Sin esto el rail Solana NUNCA escribía al ledger: la remesa nacía 'prepared' en /api/payout/prepare
-  // y moría 'prepared' (su flujo no pasa por /api/settle/principal ni por el submit a2a), así que la
-  // signature verificada on-chain no llegaba a ninguna superficie.
+  // Sin esto el settle NUNCA escribía al ledger: la remesa nacía 'prepared' en /api/payout/prepare y
+  // moría 'prepared' (ninguna otra escritura la tocaba), así que la signature verificada on-chain no
+  // llegaba a ninguna superficie.
   // Flag-gated: getSettlementLedger() es null con el flag OFF/envs ausentes ⇒ SKIP TOTAL ⇒ respuesta
   // byte-idéntica. En su PROPIO try/catch: la DB NUNCA rompe el money-path (CD-17). Va DESPUÉS de
   // validar la signature: sólo se persiste evidencia que ya pasó el shape-check (CD-13).

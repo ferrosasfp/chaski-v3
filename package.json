@@ -2,6 +2,7 @@
   "name": "chaski-v3",
   "version": "0.1.0",
   "private": true,
+  "engines": { "node": "22.x" },
   "type": "module",
   "description": "Chaski — DApp de remesas no custodiales sobre Solana (USDC→PEN→Yape). Escrow Anchor en devnet, prueba de posesión ed25519, gas patrocinado. Clean Architecture.",
   "scripts": {

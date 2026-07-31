@@ -11,7 +11,7 @@ infrastructure ->  application (implementa sus ports)
 composition    ->  conoce a todos, los cablea
 ```
 
-Nada del dominio ni de la aplicación importa React, `viem`, `@solana/web3.js` ni un cliente
+Nada del dominio ni de la aplicación importa React, `@solana/web3.js` ni un cliente
 de base de datos. Los adaptadores se eligen en un solo lugar, `src/composition/container.ts`,
 que es el único archivo que menciona clases concretas de infraestructura.
 
@@ -49,26 +49,25 @@ Los ports viven en `src/application/ports.ts`. Los principales:
 | `QuoteGateway` | Cotización de FX del corredor |
 | `KycGateway`, `KycStore`, `KycPendingStore` | Verificación de identidad y su estado |
 | `PayoutGateway`, `PayoutAuthorityGateway` | Envío del desembolso y su autorización server side |
-| `WalletPort` | Conectar y firmar, indistinto EVM o Solana |
-| `PrincipalSettlementGateway` | Movimiento del principal en el camino EVM |
+| `WalletPort` | Conectar y firmar |
 | `SolanaSettlementGateway`, `SolanaPayoutPrepareGateway` | Depósito al escrow y patrocinio de gas |
 | `SolanaEscrowRefundGateway`, `SolanaRemittanceIdResolver`, `RefundGateway` | Devolución y recuperación |
 | `PopSigner` | Prueba de posesión de la clave |
 | `RemittanceRepository`, `SettlementLedger` | Persistencia local y ledger de settlement |
 | `Clock`, `IdGenerator` | Tiempo e identificadores, inyectados para poder testear |
 
-`WalletPort` es la abstracción que hace posible el multichain: el mismo use case sirve para
-una wallet EVM y para una Solana, porque ninguno de los dos adaptadores filtra su tipo de
-cadena hacia arriba.
+`WalletPort` no filtra nada de la cadena hacia arriba: el use case pide una firma y recibe un
+envelope opaco. Esa frontera es la que permitió, en WKH-320, sacar una máquina virtual entera
+sin tocar una línea del dominio ni de los use cases más allá de sus dependencias inyectadas.
 
 ## `src/infrastructure/`
 
 Los adaptadores, agrupados por responsabilidad:
 
-- `wallet.ts`, `solana-wallet.ts`, `solana-wallet-bridge.ts`: wallets EVM (inyectada y
-  WalletConnect) y Solana, más el fallback de demo.
-- `settlement/`: cliente del facilitator, atestación de depósito, verificador on chain,
-  gateways de preparación y settlement para cada VM.
+- `solana-wallet.ts`, `solana-wallet-bridge.ts`: el adaptador de wallet y el puente con el
+  árbol de providers de React.
+- `settlement/`: cliente del facilitator, atestación de depósito, gateways de preparación y
+  settlement.
 - `solana/escrow-idl.ts`: copia pinneada del IDL del programa Anchor.
 - `refund/`: devolución vía escrow y resolución del identificador de remesa desde el índice
   on chain.
@@ -124,10 +123,10 @@ precio antes de que se le pida un documento.
 Los guards son fail loud y corren en construcción, no en tiempo de firma. Una configuración
 incoherente rompe al arrancar la app. Los casos cubiertos:
 
-- Firma EIP-3009 encendida sin adaptador real, sin dirección receptora, sin contrato de
-  token, o con una dirección malformada.
-- Camino Solana encendido sin VM Solana, sin mint, o sin la pubkey del facilitator.
-- VM Solana y firma EIP-3009 encendidas a la vez, que son mutuamente excluyentes.
+- Camino de settlement encendido sin mint, o sin la pubkey del facilitator.
+- Variables de entorno de un camino de settlement que ya no existe en este código. Ese es el
+  único guard que no se resuelve por construcción: esa configuración vive fuera del código,
+  en el panel del proveedor de hosting, y ahí puede quedar huérfana sin que nadie se entere.
 
 Con el entorno vacío ningún guard se activa, porque ninguna flag está encendida: la app
 levanta en modo demo y no mueve fondos.

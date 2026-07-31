@@ -80,8 +80,10 @@ export async function resolvePayoutAuthority(
       return { authorized: false, reason: "kyc_not_approved", httpStatus: 200 };
     }
 
-    // Ownership best-effort: vendor_data (= senderAddress) vs address del caller (case-insensitive,
-    // direcciones EVM). Si Didit NO eco-a vendor_data (d.vendorData === "") → se omite (residual documentado).
+    // Ownership best-effort: vendor_data (= senderAddress) vs address del caller. WKH-320: la
+    // comparación es CASE-SENSITIVE, porque la canonicalización es base58 (CD-7); antes de esta HU la
+    // rama EVM lowercaseaba. Si Didit NO eco-a vendor_data (d.vendorData === "") → se omite
+    // (residual documentado).
     // MNR-B: este binding ownership solo tiene FUERZA REAL cuando `address` proviene de un caller
     // AUTENTICADO (sesión firmada / SIWE) — no de un endpoint público, donde `address` y
     // `vendor_data` son ambos caller-controlados, así que un replay de un verificationId Approved

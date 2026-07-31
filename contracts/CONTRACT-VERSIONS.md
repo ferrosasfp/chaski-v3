@@ -11,23 +11,19 @@ driftea su shape y se re-vendorea la copia, el test del consumer se pone **ROJO*
 | `vendored/corridor-fx.output.fixture.ts` | `wasiai-remittance-agents` | `src/contracts/corridor-fx.output.fixture.ts` | 2026-07-22 | `isValidQuoteResult` (handler `POST` de `app/api/a2a/quote/route.ts`) + `isValidQuoteShape` (`A2aQuoteGateway`) |
 | `vendored/kyc-validator.output.fixture.ts` | `wasiai-remittance-agents` | `src/contracts/kyc-validator.output.fixture.ts` | 2026-07-22 | shape-guard **forward-looking** (test-only) |
 | `vendored/cashout-payout.output.fixture.ts` | `wasiai-remittance-agents` | `src/contracts/cashout-payout.output.fixture.ts` | 2026-07-22 | `isValidPayoutShape` (`A2aPayoutGateway.submit`) |
-| `vendored/settle-eip3009.body.fixture.ts` | `wasiai-facilitator` | `src/contracts/settle-eip3009.body.fixture.ts` | 2026-07-22 | body de `broadcastSettle()` (`toEqual`) — **== golden #3** |
 
-## CD-4 — árbitro consumer (settle body)
+## WKH-320 — se retira el fixture del `/settle` EIP-3009
 
-El fixture `/settle` del origen W2 usó valores **placeholder** para los campos runtime-variables de
-`payload`. Al capturar el body REAL que arma `broadcastSettle()` de chaski con el fixture determinístico
-(`remittanceId="rmt_fixed_0001"`, `quoteId="q_fixed_0001"`), el único campo que difirió fue:
+Este registro tenía una cuarta fila (`vendored/settle-eip3009.body.fixture.ts`, del
+`wasiai-facilitator`) y una sección entera que arbitraba, por CD-4, el `nonce` determinístico del
+body que armaba `broadcastSettle()`. Las dos se retiran junto con el camino que congelaban: Chaski
+ya no transmite un `transferWithAuthorization`, así que no hay body del consumer que comparar.
 
-| Campo | W2 (placeholder) | chaski REAL (determinístico) |
-|-------|------------------|------------------------------|
-| `payload.authorization.nonce` | `0x` + `cd`×32 | `keccak256("rmt_fixed_0001:q_fixed_0001")` = `0xdbe8185143ae74c74fd732bc99ea20992b6c4904b208b19a85afa598986aac82` |
-
-Por **CD-4 gana la salida REAL del consumer**: la copia vendoreada (`settle-eip3009.body.fixture.ts`)
-se re-pinneó con el nonce determinístico real. El resto del body (x402Version, resource.url, accepted.*,
-extra.name="USD Coin", from/to/value/validAfter/validBefore, signature de shape) es idéntico a W2.
-Follow-up sugerido: re-sincronizar el fixture ORIGEN en `wasiai-facilitator` con el mismo nonce
-determinístico (fuera de scope de esta wave — no se toca otro repo).
+Lo mismo aplica al corpus `contracts/golden/`, que desapareció entero (4 payloads EVM + su README).
+**El ancla de serialización que sobrevive es más fuerte que la que se fue**: el pin por hash
+canónico del IDL del escrow (`contracts/idl/escrow-idl.hash.test.ts`), que corre en cada `npm test`,
+compara contra el mismo valor pinneado en `wasiai-facilitator`, y además fija el program id y el
+orden posicional de las cuentas de `deposit`, `refund` y `register_escrow`.
 
 ## Deuda técnica — sincronización cross-repo (Missing Input #1)
 

@@ -30,9 +30,6 @@ En construcción o apagado a propósito:
 
 - El desembolso a fiat corre contra un adaptador mock por defecto. El adaptador real existe
   y está cableado, pero exige credenciales de proveedor que no están en este repo.
-- El camino de settlement EVM (firma EIP-3009 sobre Base) está implementado y apagado. Es
-  mutuamente excluyente con el camino Solana: encender los dos a la vez hace que la app no
-  arranque, a propósito.
 - Nada de esto apunta a mainnet. El script de smoke aborta si el cluster no es devnet.
 
 ## Correr el proyecto
@@ -67,7 +64,7 @@ por eso el `--legacy-peer-deps`.
 
 ## Tests
 
-**819 casos en 68 archivos**, todos en verde. Se reparten en:
+**692 casos en 57 archivos**, todos en verde. Se reparten en:
 
 - Dominio y aplicación con dobles de prueba, sin red ni wallet ni navegador. Ahí viven las
   invariantes del camino del dinero: no se confirma sin identidad verificada y cotización
@@ -76,10 +73,15 @@ por eso el `--legacy-peer-deps`.
 - Contract tests contra copias pinneadas del output de cada servicio externo
   (`contracts/`). Si un proveedor cambia la forma de su respuesta y alguien re vendorea la
   copia, el test del consumidor se pone rojo en vez de romperse en producción.
-- Golden tests del cuerpo de la firma EIP-3009 y del payload de atestación de depósito.
+- El IDL del programa de escrow está pinneado por hash canónico
+  (`contracts/idl/escrow-idl.hash.test.ts`): si alguien edita el IDL vendoreado a mano, o el
+  programa on chain cambia el orden de sus cuentas, la suite se pone roja antes de que una
+  transacción se rechace en producción.
+- Un invariante repo wide (`src/composition/no-evm-surface.test.ts`) que recorre el árbol y
+  falla si vuelve a aparecer superficie de otra máquina virtual.
 
 ```bash
-npm test          # 819 tests
+npm test          # 692 tests
 npm run qa        # typechecks + tests
 ```
 
@@ -140,8 +142,8 @@ infrastructure ->  implementa los ports, se inyecta en el composition root
   fallo) y las invariantes de negocio.
 - **`src/application/`** los use cases y los ports que necesitan. Dependen solo de las
   interfaces, nunca de un adaptador concreto.
-- **`src/infrastructure/`** los adaptadores: wallets EVM y Solana, escrow, settlement,
-  atestaciones, ledger en Postgres, identidad, rate limiting, clientes de los agentes.
+- **`src/infrastructure/`** los adaptadores: wallet Solana, escrow, settlement, atestaciones,
+  ledger en Postgres, identidad, rate limiting, clientes de los agentes.
 - **`src/composition/container.ts`** el único lugar que conoce clases concretas. Ahí viven
   los guards que hacen que una configuración incoherente rompa al arrancar y no en medio de
   una transferencia.
@@ -150,15 +152,6 @@ infrastructure ->  implementa los ports, se inyecta en el composition root
 
 Que el dominio no sepa nada de React ni de `@solana/web3.js` es lo que permite probar el
 camino del dinero con dobles, en milisegundos, sin navegador.
-
-### Multichain
-
-La app no asume una sola cadena. `NEXT_PUBLIC_VM` elige la máquina virtual de settlement y
-un solo dispatcher gobierna el cableado del wallet, así que no hay modo mixto silencioso.
-Hoy conviven dos caminos:
-
-- **Solana** para el principal, con el escrow no custodial descrito arriba.
-- **EVM** sobre Base, con firma EIP-3009, implementado y apagado.
 
 El agente que cotiza el FX se resuelve en tiempo de ejecución: la app le pregunta al gateway
 A2A por la capability que necesita y llama al agente que le devuelve, sin URL ni slug fijos
@@ -182,22 +175,25 @@ fondos.
 
 | Variable | Default | Efecto |
 |---|---|---|
-| `NEXT_PUBLIC_VM` | `evm` en el código, **`solana` en `.env.example`** | Chaski corre hoy sobre Solana. El archivo de ejemplo trae `solana` para que un clon limpio levante el camino real; el default del código se invierte cuando se elimine el interruptor |
 | `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED` | apagado | Enciende depósito al escrow y patrocinio de gas |
 | `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` | `fallback` | `a2a` o `a2a-gateway` usan los agentes reales |
-| `NEXT_PUBLIC_EIP3009_ENABLED` | apagado | Firma EIP-3009 real en el camino EVM |
 
-Los guards del composition root son fail loud. Encender la firma EIP-3009 sin un adaptador
-real, o sin dirección receptora, o con una dirección malformada, hace que la app no arranque.
-Lo mismo con el camino Solana sin mint o sin la pubkey del facilitator. La idea es que un
-error de configuración se vea al desplegar y no cuando hay dinero en tránsito.
+Los guards del composition root son fail loud. Encender el camino Solana sin mint o sin la
+pubkey del facilitator hace que la app no arranque. La idea es que un error de configuración
+se vea al desplegar y no cuando hay dinero en tránsito.
+
+Hay un guard más, y su alcance es deliberado: el composition root aborta si encuentra
+variables de entorno de un camino de settlement que ya no existe en este código. Vive fuera
+del código, en el panel del proveedor de hosting, que es el único lugar donde esa
+configuración puede quedar huérfana sin que nadie se entere.
 
 Las migraciones de la base están en `supabase/migrations/`.
 
 ## Stack
 
 Next 16 con App Router, React 19, TypeScript en modo estricto, Tailwind, Vitest.
-`@coral-xyz/anchor` y `@solana/web3.js` para Solana, `viem` y `wagmi` para EVM.
+`@coral-xyz/anchor`, `@solana/web3.js` y `@solana/wallet-adapter-*` para Solana; `tweetnacl`
+y `bs58` para la prueba de posesión ed25519.
 
 ## Licencia
 

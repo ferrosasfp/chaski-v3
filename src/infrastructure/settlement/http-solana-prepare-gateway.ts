@@ -1,6 +1,6 @@
 // Infrastructure — SolanaPayoutPrepareGateway sobre NUESTRA ruta server-only /api/payout/prepare
 // (HU-SOL-13/AC-1). Corre en el CLIENTE: llama SIEMPRE a /api/payout/prepare y JAMÁS al agente directo
-// (REMIT_AGENTS_BASE_URL vive server-side, CD-6). Espeja el prepare EVM (http-payout-prepare-gateway).
+// (REMIT_AGENTS_BASE_URL vive server-side, CD-6).
 //
 // Resuelve, SERVER-SIDE (nunca del body del cliente, CD-7): `beneficiary` (deposit-address Solana de la
 // orden TransFi) + `authority` (release-authority pubkey = resolveSolanaReleaseAuthorityPubkey(), env

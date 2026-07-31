@@ -35,6 +35,7 @@ import { HttpPopSigner } from "../auth/http-pop-signer";
 import { HttpSolanaPayoutPrepareGateway } from "./http-solana-prepare-gateway";
 import { POST as CHALLENGE_POST } from "../../../app/api/a2a/payout/challenge/route";
 import { POST as PREPARE_POST } from "../../../app/api/payout/prepare/route";
+import { POST as ATTESTATION_POST } from "../../../app/api/payout/attestation/route";
 
 const DEPOSIT = "So11111111111111111111111111111111111111112";
 const beneficiary = {
@@ -89,6 +90,9 @@ function routeFetch(agent: () => Response) {
       body: init?.body as string,
     });
     if (target === "/api/a2a/payout/challenge") return CHALLENGE_POST(request);
+    // El verificador de la atestación corre REAL, con el MISMO secreto que la emitió. Mockearlo
+    // sería probar que el cliente llama a algo, no que la firma sirve para algo.
+    if (target === "/api/payout/attestation") return ATTESTATION_POST(request);
     if (target === "/api/payout/prepare") {
       // Dentro del handler, el fetch al agente usa la MISMA función global: se distingue por URL
       // absoluta (BASE) y se responde con el result del agente.
@@ -213,6 +217,169 @@ describe("HttpSolanaPayoutPrepareGateway — el body que arma el cliente ES el q
 
     expect(out).toEqual({ ok: false, reason: "payout_pop_unavailable" });
     expect(fetchMock.mock.calls.map((c) => String(c[0]))).toEqual(["/api/a2a/payout/challenge"]);
+  });
+
+  // ── La atestación del depósito, conectada ────────────────────────────────────────────────────
+  //
+  // Estos tests existen porque `verifySolanaDepositAttestation` estaba escrita, testeada y NO LA
+  // LLAMABA NADIE: la route firmaba el beneficiary y el cliente usaba el beneficiary de primer
+  // nivel tirando la firma. Cada uno de acá abajo se pone ROJO si se quita la verificación.
+  //
+  // ⚠️ Lo que prueban es que una respuesta ALTERADA EN EL CAMINO no llega a la wallet. NO prueban
+  // que la dirección sea legítima: la firma la pone nuestro servidor sobre lo que dijo el agente.
+
+  /** Deja pasar todo a las routes reales, pero reescribe el JSON del 200 de /api/payout/prepare —
+   *  exactamente lo que puede hacer un intermediario entre nuestro servidor y el navegador. */
+  function tamperingFetch(patch: (body: Record<string, unknown>) => Record<string, unknown>) {
+    const inner = routeFetch(agentOk);
+    return vi.fn(async (url: string, init?: RequestInit) => {
+      const res = await inner(url, init);
+      if (String(url) !== "/api/payout/prepare" || res.status !== 200) return res;
+      const body = (await res.json()) as Record<string, unknown>;
+      return new Response(JSON.stringify(patch(body)), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+  }
+
+  // EL asesino del mutante. Sacá la llamada a verifyAttestation (o el mismatch check) y este test
+  // se pone verde con el beneficiary del atacante viajando a la wallet.
+  it("beneficiary adulterado en el camino con la atestación INTACTA ⇒ prepare_attestation_mismatch", async () => {
+    const ATACANTE = bs58.encode(nacl.sign.keyPair().publicKey);
+    vi.stubGlobal(
+      "fetch",
+      tamperingFetch((b) => ({ ...b, beneficiary: ATACANTE })),
+    );
+
+    const out = await new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet)).prepare(
+      prepareInput(),
+    );
+
+    expect(out).toEqual({ ok: false, reason: "prepare_attestation_mismatch" });
+  });
+
+  // Misma idea sobre la OTRA mitad del binding: la release-authority.
+  it("authority adulterada en el camino con la atestación INTACTA ⇒ prepare_attestation_mismatch", async () => {
+    const OTRA = bs58.encode(nacl.sign.keyPair().publicKey);
+    vi.stubGlobal(
+      "fetch",
+      tamperingFetch((b) => ({ ...b, authority: OTRA })),
+    );
+
+    const out = await new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet)).prepare(
+      prepareInput(),
+    );
+
+    expect(out).toEqual({ ok: false, reason: "prepare_attestation_mismatch" });
+  });
+
+  // El atacante reescribe beneficiary Y atestación: sin el secreto no puede firmar, el HMAC no valida.
+  it("atestación forjada (no firmada con el secreto) ⇒ prepare_attestation_unverified", async () => {
+    const ATACANTE = bs58.encode(nacl.sign.keyPair().publicKey);
+    const payload = Buffer.from(
+      JSON.stringify({
+        remittanceId: "rem-1",
+        quoteId: "q-400",
+        beneficiary: ATACANTE,
+        authority: AUTHORITY,
+        cluster: "devnet",
+        exp: Math.floor(Date.now() / 1000) + 600,
+      }),
+      "utf8",
+    ).toString("base64url");
+    vi.stubGlobal(
+      "fetch",
+      tamperingFetch((b) => ({
+        ...b,
+        beneficiary: ATACANTE,
+        attestation: `${payload}.${Buffer.from("mac-inventado").toString("base64url")}`,
+      })),
+    );
+
+    const out = await new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet)).prepare(
+      prepareInput(),
+    );
+
+    expect(out).toEqual({ ok: false, reason: "prepare_attestation_unverified" });
+  });
+
+  // Replay entre remesas: la atestación es AUTÉNTICA (nuestro servidor la firmó) pero es de OTRA
+  // remesa. Sin el binding remittanceId+quoteId, el atacante se hace una remesa propia, se guarda su
+  // atestación legítima y la pega entera acá.
+  it("atestación AUTÉNTICA pero de otra remesa ⇒ prepare_attestation_unverified", async () => {
+    let ajena: { beneficiary: unknown; authority: unknown; attestation: unknown } | null = null;
+    const inner = routeFetch(agentOk);
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const res = await inner(url, init);
+      if (String(url) !== "/api/payout/prepare" || res.status !== 200) return res;
+      const body = (await res.json()) as Record<string, unknown>;
+      if (!ajena) {
+        // primera corrida: es la remesa del atacante, nos quedamos con su triple
+        ajena = {
+          beneficiary: body.beneficiary,
+          authority: body.authority,
+          attestation: body.attestation,
+        };
+        return new Response(JSON.stringify(body), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ...body, ...ajena }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const gw = new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet));
+
+    // 1) remesa del atacante: su atestación queda capturada
+    const propia = await gw.prepare({ ...prepareInput(), remittanceId: "rem-atacante" });
+    expect(propia.ok).toBe(true);
+    // 2) remesa de la víctima: le inyectamos el triple ajeno, firma auténtica incluida
+    const out = await gw.prepare(prepareInput());
+
+    expect(out).toEqual({ ok: false, reason: "prepare_attestation_unverified" });
+  });
+
+  // Si NO se puede verificar, no se usa. "No pude preguntar" no es "está bien".
+  it("el verificador caído (throw) ⇒ prepare_attestation_unverified, el beneficiary NO se usa", async () => {
+    const inner = routeFetch(agentOk);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (String(url) === "/api/payout/attestation") throw new Error("network");
+        return inner(url, init);
+      }),
+    );
+
+    const out = await new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet)).prepare(
+      prepareInput(),
+    );
+
+    expect(out).toEqual({ ok: false, reason: "prepare_attestation_unverified" });
+  });
+
+  // La verificación ocurre ANTES de devolver el beneficiary, y el valor devuelto sale del payload
+  // FIRMADO (no del campo de primer nivel).
+  it("happy path: se postea a /api/payout/attestation despues del prepare y el beneficiary sale del payload firmado", async () => {
+    const fetchMock = routeFetch(agentOk);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const out = await new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet)).prepare(
+      prepareInput(),
+    );
+
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error("unreachable");
+    expect(out.result.beneficiary).toBe(DEPOSIT);
+    const calls = fetchMock.mock.calls.map((c) => String(c[0]));
+    expect(calls).toEqual([
+      "/api/a2a/payout/challenge",
+      "/api/payout/prepare",
+      "/api/payout/attestation",
+    ]);
+    const verifyBody = JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body)) as {
+      remittanceId: string;
+      quoteId: string;
+    };
+    expect(verifyBody.remittanceId).toBe("rem-1");
+    expect(verifyBody.quoteId).toBe("q-400");
   });
 
   // El PopSigner lanza (red caída / 5xx del emisor) ⇒ fail-closed, sin postear.

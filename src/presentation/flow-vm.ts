@@ -1,5 +1,6 @@
 import type { Money } from "../domain/money";
 import type { RemittanceState, RemittanceStatus } from "../domain/remittance";
+import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
 
 /** Proveniencias de payout que representan un desembolso REAL (allowlist fail-safe, CD-8). Cualquier
  *  valor desconocido/typo cae del lado seguro → muestra el banner (over-warn), nunca lo oculta.
@@ -63,6 +64,53 @@ export function statusDisplay(status: RemittanceStatus): {
       // Fail-safe: un estado que no llega al recibo NO se disfraza de entregado.
       return { label: "En curso", tone: "neutral" };
   }
+}
+
+/**
+ * Qué sabemos del DINERO de una remesa que el historial va a listar. Tres valores, y el del medio es
+ * la razón de existir de la función: "no lo comprobamos" no es "no hay nada".
+ *
+ * Nada de esto lee la cadena. Se calcula SOLO con el snapshot persistido, así que lo único que puede
+ * afirmar es qué llegamos a escribir nosotros. Por eso el único valor que afirma un desenlace es
+ * `returned`, y sale de un marcador que se escribe en un solo lugar y bajo una sola condición.
+ *
+ * - `returned`   los USDC volvieron. Lo respalda `ESCROW_REFUNDED_BY_SENDER`, que RecoverEscrowFunds
+ *                escribe recién con `confirmation === "confirmed"` (recover-escrow-funds.ts:70-77),
+ *                o sea después de ver la tx confirmada. Es el único hecho de la cadena que este
+ *                snapshot contiene sobre el vault.
+ * - `unverified` se autorizó o entró un depósito y NADIE leyó el vault desde entonces. Puede haber
+ *                USDC ahí o no.
+ * - `no-deposit` nunca se autorizó un depósito, así que no hay plata en juego.
+ *
+ * ⚠️ DOS COSAS QUE PARECEN PRUEBA Y NO LO SON. Si "simplificás" esto usándolas, la pantalla vuelve a
+ * afirmar lo que nadie midió:
+ *
+ * 1. `refundTx != null` NO prueba que los USDC volvieron. El adapter DEFAULT de refund es
+ *    LedgerRefundGateway, que devuelve un string sintético `refund-ledger-<base36>` sin tocar la
+ *    cadena (ledger-refund-gateway.ts:9-16). Una remesa reembolsada "en el papel" puede tener sus
+ *    USDC intactos en el vault. Por eso acá se mira el marcador, no el campo.
+ * 2. `status === "settled"` NO prueba que el vault se liberó. `settled` dice que el partner de payout
+ *    reportó haber entregado los PEN; la release del vault la dispara hoy una persona a mano y este
+ *    repo no la llama nunca (confirm-and-send.ts:168-181). Son dos hechos distintos y sólo tenemos
+ *    el primero, así que una remesa entregada también cae en `unverified`.
+ */
+export type EscrowKnowledge = "no-deposit" | "returned" | "unverified";
+
+export function escrowFundsKnowledge(rem: RemittanceState): EscrowKnowledge {
+  // Primero el único caso medido contra la cadena. El status tiene que ser `refunded` además del
+  // marcador: el marcador solo vive un instante en payout_failed antes del markRefunded.
+  if (rem.status === "refunded" && rem.failureReason === ESCROW_REFUNDED_BY_SENDER) return "returned";
+  // `principalTx` = vimos entrar el depósito. `confirmed` = firmamos la autorización y nunca
+  // registramos el desenlace, que es justo el caso en que el browser se cerró con los USDC en vuelo.
+  if (rem.principalTx != null || rem.status === "confirmed") return "unverified";
+  return "no-deposit";
+}
+
+/** La frase que acompaña a cada valor. Ninguna afirma un estado del vault que no hayamos medido. */
+export function escrowKnowledgeCopy(k: EscrowKnowledge): string {
+  if (k === "returned") return "Tus USDC volvieron a tu wallet.";
+  if (k === "unverified") return "No comprobamos si tus USDC siguen en el escrow.";
+  return "No llegaste a depositar.";
 }
 
 /** Traduce un código de error interno a copy humano para la UI. */

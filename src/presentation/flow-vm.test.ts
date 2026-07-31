@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { Money } from "../domain/money";
 import type { RemittanceState, RemittanceStatus } from "../domain/remittance";
-import { deliveredDisplay, humanError, isDemoMode, statusDisplay } from "./flow-vm";
+import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
+import {
+  deliveredDisplay,
+  escrowFundsKnowledge,
+  escrowKnowledgeCopy,
+  humanError,
+  isDemoMode,
+  statusDisplay,
+} from "./flow-vm";
 
 // WKH-320: acá abajo vivía el describe de isFallbackWalletAddress (WKH-184 AC-7/AC-9), que probaba
 // que la UI detectara la wallet demo por su address y, entre otras cosas, que la detección fuera
@@ -64,6 +72,70 @@ describe("flow-vm — statusDisplay", () => {
   it("el fallo y el reembolso se nombran, no se disfrazan", () => {
     expect(statusDisplay("payout_failed").tone).toBe("bad");
     expect(statusDisplay("refunded").label).toBe("Reembolsado");
+  });
+});
+
+// El historial muestra remesas viejas, y la tentación de toda pantalla de historial es contar el
+// final. De estas remesas no tenemos el final: nadie leyó el vault. Estos tests fijan qué se puede
+// afirmar y, sobre todo, los dos campos que PARECEN prueba de que la plata se movió y no lo son.
+describe("flow-vm — escrowFundsKnowledge", () => {
+  const rem = (s: Partial<RemittanceState>): RemittanceState =>
+    ({ status: "created", principalTx: null, refundTx: null, failureReason: null, ...s }) as RemittanceState;
+
+  it("sin depósito autorizado no hay plata en juego", () => {
+    for (const s of ["created", "quoted", "kyc_pending", "kyc_passed", "kyc_failed"] as RemittanceStatus[]) {
+      expect(escrowFundsKnowledge(rem({ status: s }))).toBe("no-deposit");
+    }
+  });
+
+  it("un depósito que entró y nadie volvió a mirar es 'unverified', NUNCA 'no-deposit'", () => {
+    for (const s of ["principal_in", "payout_submitted", "payout_failed"] as RemittanceStatus[]) {
+      expect(escrowFundsKnowledge(rem({ status: s, principalTx: "sig" }))).toBe("unverified");
+    }
+  });
+
+  // El caso que se pierde si se mira sólo `principalTx`: la persona firmó, el browser murió antes de
+  // que volviera la respuesta, y los USDC pueden haber salido igual.
+  it("`confirmed` sin principalTx también es 'unverified': se autorizó y no sabemos el desenlace", () => {
+    expect(escrowFundsKnowledge(rem({ status: "confirmed" }))).toBe("unverified");
+  });
+
+  it("sólo el marcador que se escribe tras confirmar la tx afirma que los USDC volvieron", () => {
+    const state = rem({
+      status: "refunded",
+      principalTx: "sig",
+      refundTx: "5xReal",
+      failureReason: ESCROW_REFUNDED_BY_SENDER,
+    });
+    expect(escrowFundsKnowledge(state)).toBe("returned");
+  });
+
+  // ── Las dos trampas ────────────────────────────────────────────────────────────────────────────
+  // TRAMPA 1: el adapter default de refund devuelve un string sintético SIN tocar la cadena
+  // (ledger-refund-gateway.ts:9-16). Si esto midiera `refundTx != null`, una remesa con los USDC
+  // intactos en el vault se anunciaría como devuelta y nadie iría a buscarlos.
+  it("un refundTx del ledger NO cuenta como devuelto: es un string sintético, no una tx", () => {
+    const state = rem({
+      status: "refunded",
+      principalTx: "sig",
+      refundTx: "refund-ledger-abc123", // lo que produce LedgerRefundGateway
+      failureReason: "payout_amount_mismatch", // el credit-back, no la recuperación del sender
+    });
+    expect(escrowFundsKnowledge(state)).not.toBe("returned");
+    expect(escrowFundsKnowledge(state)).toBe("unverified");
+  });
+
+  // TRAMPA 2: `settled` dice que el partner entregó los PEN. La release del vault la dispara una
+  // persona a mano y este repo no la llama nunca (confirm-and-send.ts:168-181): son dos hechos
+  // distintos y sólo tenemos el primero.
+  it("`settled` NO afirma que el vault se liberó: sigue siendo 'unverified'", () => {
+    expect(escrowFundsKnowledge(rem({ status: "settled", principalTx: "sig" }))).toBe("unverified");
+  });
+
+  it("ninguna frase promete un estado del vault salvo la del caso medido", () => {
+    expect(escrowKnowledgeCopy("unverified")).toBe("No comprobamos si tus USDC siguen en el escrow.");
+    expect(escrowKnowledgeCopy("returned")).toBe("Tus USDC volvieron a tu wallet.");
+    expect(escrowKnowledgeCopy("no-deposit")).toBe("No llegaste a depositar.");
   });
 });
 

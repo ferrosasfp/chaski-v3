@@ -4,7 +4,6 @@
 
 import { Money } from "../../domain/money";
 import {
-  type Beneficiary,
   type KycVerification,
   type Quote,
   toPersistedIdentity,

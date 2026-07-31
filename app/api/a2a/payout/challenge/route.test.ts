@@ -2,9 +2,7 @@
 // el popChallenge devuelto DEBE verificar con verifyPopChallenge.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  buildPopMessage,
   buildSolanaPopMessage,
-  verifyPopChallenge,
   verifySolanaPopChallenge,
 } from "../../../../../src/infrastructure/auth/pop-challenge";
 
@@ -20,7 +18,9 @@ vi.mock("../../../../../src/infrastructure/rate-limit", async (importOriginal) =
 
 import { POST } from "./route";
 
-const ADDR = "0x1111111111111111111111111111111111111111";
+// WKH-320: la address del caller es base58. Este archivo probaba además la EMISIÓN EVM del challenge
+// (address normalizada a lowercase + `chainId: 84532` de la ENV) — se fue con la VM que la ataba.
+const ADDR = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 
 function req(payload: unknown): Request {
   return new Request("http://localhost/api/a2a/payout/challenge", {
@@ -47,28 +47,13 @@ describe("POST /api/a2a/payout/challenge (WKH-206)", () => {
     expect(await res.json()).toEqual({ error: "pop_not_configured" });
   });
 
-  it("AC-2: address válida → 200 { popChallenge, popMessage, exp } y el challenge VERIFICA (HMAC real)", async () => {
-    vi.stubEnv("PAYOUT_POP_SECRET", "test-secret");
-    const res = await POST(req({ address: ADDR }));
-    expect(res.status).toBe(200);
-    const { popChallenge, popMessage, exp } = (await res.json()) as {
-      popChallenge: string;
-      popMessage: string;
-      exp: number;
-    };
-    // El challenge emitido verifica con el mismo secreto (round-trip real).
-    const ch = verifyPopChallenge(popChallenge, Date.now());
-    expect(ch).not.toBeNull();
-    expect(ch?.address).toBe(ADDR.toLowerCase()); // normalizado a lowercase
-    expect(ch?.chainId).toBe(84532); // CD-9: de la ENV, no del body
-    expect(ch?.exp).toBe(exp);
-    // El popMessage es EXACTAMENTE buildPopMessage(ch) (CD-10: única fuente del formato).
-    expect(popMessage).toBe(buildPopMessage(ch!));
-  });
+  // WKH-320: acá había un round-trip del challenge EVM (address lowercaseada + chainId 84532 de la
+  // ENV). El round-trip del challenge que SÍ se emite hoy —ed25519 con network-id CAIP-2— se prueba
+  // en el describe de abajo, contra la misma ruta.
 
   it("robustez: address malformada → 400, nunca 500", async () => {
     vi.stubEnv("PAYOUT_POP_SECRET", "test-secret");
-    for (const address of ["", "no-es-address", "0x123", undefined, 123]) {
+    for (const address of ["", "no-es-address", "0x123", "0OIl-not-base58", undefined, 123]) {
       const res = await POST(req({ address }));
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({ error: "pop_invalid_request" });
@@ -107,12 +92,11 @@ describe("POST /api/a2a/payout/challenge (WKH-206)", () => {
   });
 });
 
-// ── HU-SOL-8 (WKH-211) — emisión del challenge Solana (rama vm=solana) ──────────────────────────────
+// ── HU-SOL-8 (WKH-211) — emisión del challenge, hoy la única ──────────────────────────────────────
 const SOL_ADDR = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // base58 canónico válido
 
-describe("POST /api/a2a/payout/challenge — rama Solana (HU-SOL-8)", () => {
+describe("POST /api/a2a/payout/challenge — challenge ed25519 (HU-SOL-8)", () => {
   beforeEach(() => {
-    vi.stubEnv("NEXT_PUBLIC_VM", "solana");
     checkRouteRateLimitMock.mockReset();
     checkRouteRateLimitMock.mockResolvedValue({ ok: true });
   });
@@ -120,7 +104,7 @@ describe("POST /api/a2a/payout/challenge — rama Solana (HU-SOL-8)", () => {
     vi.unstubAllEnvs();
   });
 
-  it("vm=solana + address base58 válida → 200 { popChallenge, popMessage, exp }; popMessage lleva `network: solana:devnet` y round-trippea", async () => {
+  it("address base58 válida → 200 { popChallenge, popMessage, exp }; popMessage lleva `network: solana:devnet` y round-trippea", async () => {
     vi.stubEnv("PAYOUT_POP_SECRET", "test-secret");
     const res = await POST(req({ address: SOL_ADDR }));
     expect(res.status).toBe(200);

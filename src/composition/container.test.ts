@@ -1,155 +1,140 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+// Tests — createContainer (T2, WKH-320 / AC-3.1).
+//
+// QUÉ SE FUE DE ACÁ Y POR QUÉ (CD-10/CD-22): este archivo probaba el guard fail-loud de EIP-3009
+// (adapter=a2a + receiver + usdc + formato del receiver, 6 casos), el cableado del
+// HttpSettlementGateway/HttpPayoutPrepareGateway con el flag ON, y el dispatcher de wallet por VM
+// (VM=solana → SolanaWalletAdapter; VM inválida → unsupported_vm). Los tres grupos probaban ramas
+// que ya no existen: no hay flag EIP-3009, no hay gateways EVM que cablear, y no hay una VM que
+// pueda no ser Solana. Lo que los reemplaza está abajo, y es más fuerte: el estado peligroso dejó
+// de ser expresable, y lo único que NO se resuelve por construcción —una env EVM huérfana en el
+// panel de Vercel— lo caza assertNoEvmResidue().
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { SolanaWalletAdapter } from "../infrastructure/solana-wallet";
 import { solanaWalletBridge } from "../infrastructure/solana-wallet-bridge";
-import { HttpPayoutPrepareGateway } from "../infrastructure/settlement/http-payout-prepare-gateway";
-import { HttpSettlementGateway } from "../infrastructure/settlement/http-settlement-gateway";
 import { createContainer } from "./container";
 
-// El container corre en entorno de módulo (node). pickWallet() sin window → FallbackWallet, sin I/O.
-afterEach(() => vi.unstubAllEnvs());
+// Las envs EVM tienen que estar AUSENTES para que el container arranque (assertNoEvmResidue).
+const EVM_ENVS = [
+  "NEXT_PUBLIC_VM",
+  "NEXT_PUBLIC_EIP3009_ENABLED",
+  "NEXT_PUBLIC_PAYOUT_RECEIVER_ADDRESS",
+  "NEXT_PUBLIC_USDC_CONTRACT_ADDRESS",
+  "NEXT_PUBLIC_CHAIN_ID",
+  "NEXT_PUBLIC_REOWN_PROJECT_ID",
+] as const;
 
-describe("createContainer — flag adapter value-delivery (WKH-186 AC-1/AC-2)", () => {
-  it("AC-1: sin flag (default) → construye OK (Fallback cableado, demo byte-idéntico)", () => {
-    vi.unstubAllEnvs();
+beforeEach(() => {
+  for (const k of EVM_ENVS) vi.stubEnv(k, undefined as unknown as string);
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+  solanaWalletBridge.reset();
+});
+
+describe("createContainer — se construye SIN leer ninguna env EVM (AC-3.1)", () => {
+  it("con TODAS las envs EVM ausentes construye OK", () => {
     expect(() => createContainer()).not.toThrow();
   });
 
-  it("AC-2: flag 'a2a' (sin EIP-3009) → construye OK (adapters a2a cableados)", () => {
+  it("el flag de value-delivery sigue funcionando (a2a) sin ninguna env EVM", () => {
     vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a");
     expect(() => createContainer()).not.toThrow();
   });
-});
 
-describe("createContainer — guard fail-loud EIP-3009 (WKH-186 AC-11, CD-3/4/16)", () => {
-  it("CD-3: EIP-3009 on + adapter != a2a → throw eip3009_requires_a2a_adapter", () => {
-    vi.stubEnv("NEXT_PUBLIC_EIP3009_ENABLED", "true");
-    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "fallback");
-    expect(() => createContainer()).toThrow("eip3009_requires_a2a_adapter");
-  });
-
-  it("CD-4: EIP-3009 on + adapter a2a + sin receiver → throw eip3009_requires_receiver", () => {
-    vi.stubEnv("NEXT_PUBLIC_EIP3009_ENABLED", "true");
-    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a");
-    vi.stubEnv("NEXT_PUBLIC_PAYOUT_RECEIVER_ADDRESS", "");
-    expect(() => createContainer()).toThrow("eip3009_requires_receiver");
-  });
-
-  it("CD-16: EIP-3009 on + adapter a2a + receiver + sin usdc → throw eip3009_requires_usdc_contract", () => {
-    vi.stubEnv("NEXT_PUBLIC_EIP3009_ENABLED", "true");
-    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a");
-    vi.stubEnv("NEXT_PUBLIC_PAYOUT_RECEIVER_ADDRESS", "0x1111111111111111111111111111111111111111");
-    vi.stubEnv("NEXT_PUBLIC_USDC_CONTRACT_ADDRESS", "");
-    expect(() => createContainer()).toThrow("eip3009_requires_usdc_contract");
-  });
-
-  it("AC-11: EIP-3009 on + a2a + receiver + usdc → construye OK (todo configurado)", () => {
-    vi.stubEnv("NEXT_PUBLIC_EIP3009_ENABLED", "true");
-    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a");
-    vi.stubEnv("NEXT_PUBLIC_PAYOUT_RECEIVER_ADDRESS", "0x1111111111111111111111111111111111111111");
-    vi.stubEnv("NEXT_PUBLIC_USDC_CONTRACT_ADDRESS", "0x5425890298aed601595a70ab815c96711a31bc65");
-    expect(() => createContainer()).not.toThrow();
-  });
-
-  it("MNR-A: EIP-3009 on + a2a + receiver MALFORMADO (no isAddress) → throw en createContainer (fail-loud, NO en sign-time)", () => {
-    vi.stubEnv("NEXT_PUBLIC_EIP3009_ENABLED", "true");
-    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a");
-    vi.stubEnv("NEXT_PUBLIC_PAYOUT_RECEIVER_ADDRESS", "0xNOT_A_VALID_ADDRESS"); // truthy pero malformado
-    vi.stubEnv("NEXT_PUBLIC_USDC_CONTRACT_ADDRESS", "0x5425890298aed601595a70ab815c96711a31bc65");
-    // La app NO arranca: el receiver malformado (que antes se colaba por `as 0x${string}`) falla acá.
-    expect(() => createContainer()).toThrow("payout_receiver_not_configured");
-  });
-
-  it("MNR-A: EIP-3009 on + a2a + receiver con checksum inválido → throw en createContainer", () => {
-    vi.stubEnv("NEXT_PUBLIC_EIP3009_ENABLED", "true");
-    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a");
-    // 40 hex chars con checksum mixto INVÁLIDO (isAddress lo rechaza) → simula un typo de address.
-    vi.stubEnv("NEXT_PUBLIC_PAYOUT_RECEIVER_ADDRESS", "0xAbCdEf1111111111111111111111111111111111");
-    vi.stubEnv("NEXT_PUBLIC_USDC_CONTRACT_ADDRESS", "0x5425890298aed601595a70ab815c96711a31bc65");
-    expect(() => createContainer()).toThrow("payout_receiver_not_configured");
-  });
-});
-
-// WKH-168 W4.4 — el settlement real se cablea SOLO con el flag on (AC-5/CD-1 por construcción).
-// Se inspecciona la dependencia REALMENTE inyectada en ConfirmAndSend en vez de espiar la factory
-// con vi.mock: vi.mock es hoisted a TODO el archivo y envolvería los 8 tests del guard fail-loud
-// (riesgo de falso verde). Esto es evidencia más directa: qué recibió el use-case.
-function settlementOf(
-  c: ReturnType<typeof createContainer>,
-): { gateway?: unknown; prepare?: unknown } | undefined {
-  return (c.confirmAndSend as unknown as { settlement?: { gateway?: unknown; prepare?: unknown } })
-    .settlement;
-}
-
-describe("createContainer — settlement del principal (WKH-168 AC-5/CD-1)", () => {
-  it("AC-5/CD-1: flag EIP-3009 OFF (default) → ConfirmAndSend NO recibe settlement (demo byte-idéntico)", () => {
-    vi.unstubAllEnvs();
-    expect(settlementOf(createContainer())).toBeUndefined();
-    // Tampoco con el adapter a2a solo: el gate es el flag EIP-3009, no el adapter.
-    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a");
-    expect(settlementOf(createContainer())).toBeUndefined();
-  });
-
-  it("flag EIP-3009 ON + config completa → ConfirmAndSend recibe el HttpSettlementGateway (modo real)", () => {
-    vi.stubEnv("NEXT_PUBLIC_EIP3009_ENABLED", "true");
-    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a");
-    vi.stubEnv("NEXT_PUBLIC_PAYOUT_RECEIVER_ADDRESS", "0x1111111111111111111111111111111111111111");
-    vi.stubEnv("NEXT_PUBLIC_USDC_CONTRACT_ADDRESS", "0x5425890298aed601595a70ab815c96711a31bc65");
-    expect(settlementOf(createContainer())?.gateway).toBeInstanceOf(HttpSettlementGateway);
-  });
-
-  // WKH-211 [SDD-GAP #1]: el composition root inyecta el `prepare` gateway ACOPLADO dentro de
-  // `settlement` (ya NO un `receiver`). modo real ⇔ gateway Y prepare presentes juntos (anti-fail-open).
-  it("WKH-211: modo real → settlement lleva el HttpPayoutPrepareGateway acoplado (no un receiver suelto)", () => {
-    vi.stubEnv("NEXT_PUBLIC_EIP3009_ENABLED", "true");
-    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a");
-    vi.stubEnv("NEXT_PUBLIC_PAYOUT_RECEIVER_ADDRESS", "0x1111111111111111111111111111111111111111");
-    vi.stubEnv("NEXT_PUBLIC_USDC_CONTRACT_ADDRESS", "0x5425890298aed601595a70ab815c96711a31bc65");
-    const s = settlementOf(createContainer());
-    expect(s?.prepare).toBeInstanceOf(HttpPayoutPrepareGateway);
-    expect(s?.gateway).toBeInstanceOf(HttpSettlementGateway); // ambos juntos ⇔ modo real
-  });
-});
-
-describe("createContainer — dispatcher de wallet por VM (HU-SOL-4, AC-4/AC-5)", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    solanaWalletBridge.reset();
-  });
-
-  it("AC-4: VM=solana → cablea el SolanaWalletAdapter (no pickWallet)", async () => {
-    vi.stubEnv("NEXT_PUBLIC_VM", "solana");
+  // El ternario `solanaWallet ?? pickWallet()` era el punto donde una wallet EVM podía entrar. Ya no
+  // hay ternario: la wallet es SIEMPRE el adapter Solana, sin importar la configuración.
+  it("AC-3.1: la wallet es SIEMPRE el SolanaWalletAdapter (no hay ternario que pueda elegir otra)", () => {
     const c = createContainer();
-    // El adapter Solana sin árbol montado → openModal throw wallet_bridge_not_mounted.
-    // (En rama evm, FallbackWallet resolvería a la address demo → distinguible = mata la mutación.)
-    await expect(c.connectWallet.execute()).rejects.toThrow("wallet_bridge_not_mounted");
+    const wallet = (c.connectWallet as unknown as { wallet: unknown }).wallet;
+    expect(wallet).toBeInstanceOf(SolanaWalletAdapter);
   });
 
-  it("AC-5: VM inválida → createContainer throw unsupported_vm (fail-loud)", () => {
-    vi.stubEnv("NEXT_PUBLIC_VM", "aptos");
-    expect(() => createContainer()).toThrow("unsupported_vm");
+  it("AC-3.1: y lo sigue siendo con el adapter de value-delivery en 'fallback' (el gate no es ese flag)", () => {
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "fallback");
+    const c = createContainer();
+    expect((c.connectWallet as unknown as { wallet: unknown }).wallet).toBeInstanceOf(
+      SolanaWalletAdapter,
+    );
+  });
+
+  // T2 — `pickWallet` no es "una función que no se llama": el MÓDULO no existe.
+  it("AC-3.1: el módulo de la wallet EVM no existe en el árbol (pickWallet no es importable)", () => {
+    expect(existsSync(path.resolve(process.cwd(), "src/infrastructure/wallet.ts"))).toBe(false);
+  });
+});
+
+describe("createContainer — assertNoEvmResidue es la PRIMERA línea (AC-3.3)", () => {
+  // Va antes de cualquier `new`: un deploy con config EVM huérfana no arranca, en vez de arrancar
+  // a medias con la mitad del grafo construido.
+  it("una env EVM residual ⇒ el container NO se construye, y el error la nombra", () => {
+    vi.stubEnv("NEXT_PUBLIC_VM", "solana");
+    expect(() => createContainer()).toThrow("evm_config_residue");
+    expect(() => createContainer()).toThrow("NEXT_PUBLIC_VM");
+  });
+
+  it("también con NEXT_PUBLIC_EIP3009_ENABLED, que antes ENCENDÍA un camino y ahora lo bloquea", () => {
+    vi.stubEnv("NEXT_PUBLIC_EIP3009_ENABLED", "true");
+    expect(() => createContainer()).toThrow("evm_config_residue");
+  });
+});
+
+describe("createContainer — money-path Solana (HU-SOL-13)", () => {
+  it("flag Solana OFF ⇒ ConfirmAndSend NO recibe `solana` (y su tapón DT-8 falla fail-closed)", () => {
+    const c = createContainer();
+    const solana = (c.confirmAndSend as unknown as { solana?: unknown }).solana;
+    expect(solana).toBeUndefined();
+  });
+
+  it("flag Solana ON sin mint configurado ⇒ throw fail-loud en construcción (la app NO arranca)", () => {
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_SETTLE_ENABLED", "true");
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_USDC_MINT", "");
+    expect(() => createContainer()).toThrow("solana_usdc_mint_not_configured");
+  });
+
+  it("flag Solana ON con mint pero sin facilitator ⇒ throw fail-loud en construcción", () => {
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_SETTLE_ENABLED", "true");
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_USDC_MINT", "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_FACILITATOR_PUBKEY", "");
+    expect(() => createContainer()).toThrow("solana_facilitator_not_configured");
+  });
+
+  it("flag Solana ON con todo configurado ⇒ ConfirmAndSend recibe prepare+gateway ACOPLADOS", () => {
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_SETTLE_ENABLED", "true");
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_USDC_MINT", "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
+    vi.stubEnv(
+      "NEXT_PUBLIC_SOLANA_FACILITATOR_PUBKEY",
+      "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+    );
+    const c = createContainer();
+    const solana = (c.confirmAndSend as unknown as {
+      solana?: { prepare?: unknown; gateway?: unknown };
+    }).solana;
+    // Los dos JUNTOS o ninguno: un `prepare` suelto que quede undefined saltearía el binding en silencio.
+    expect(solana?.prepare).toBeDefined();
+    expect(solana?.gateway).toBeDefined();
   });
 
   // HU-SOL-20/AC-2: el adapter Solana se construye CON su resolver de remittanceId. El wiring tiene un
   // ciclo aparente (adapter → resolver → PopSigner → wallet=adapter) que se rompe difiriendo el
-  // PopSigner; este test lo ejercita END-TO-END en el container real. Si el diferido estuviera mal
+  // PopSigner; esto lo ejercita END-TO-END en el container real. Si el diferido estuviera mal
   // (TDZ / instancia a medio construir), acá saldría un ReferenceError, no un escrow_not_found.
-  it("HU-SOL-20: VM=solana cablea el resolver de remittanceId sin ciclo — el refund sin id pide el PoP", async () => {
-    vi.stubEnv("NEXT_PUBLIC_VM", "solana");
+  it("HU-SOL-20: el resolver de remittanceId queda cableado sin ciclo — el refund sin id pide el PoP", async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
       Response.json({ error: "pop_not_configured" }, { status: 501 }),
     );
     vi.stubGlobal("fetch", fetchMock);
     try {
       const c = createContainer();
-      // El port declara remittanceId requerido (la UI de recuperación es R4); acá se ejercita la
-      // capacidad ya cableada del adapter: refund SIN id.
       const gw = c.solanaRefund as unknown as {
         refund(i: { remittanceId?: string; sender: string }): Promise<{ refundTx: string }>;
       };
       expect(gw).toBeDefined();
       // 501 ⇒ prove() null ⇒ resolver devuelve [] ⇒ escrow_not_found (nunca un crash de wiring).
-      await expect(gw.refund({ sender: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU" })).rejects.toThrow(
-        "escrow_not_found",
-      );
+      await expect(
+        gw.refund({ sender: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU" }),
+      ).rejects.toThrow("escrow_not_found");
       // Prueba de que el PopSigner diferido SE construyó con el propio adapter y corrió.
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/a2a/payout/challenge");

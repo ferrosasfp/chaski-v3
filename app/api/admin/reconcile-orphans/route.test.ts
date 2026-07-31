@@ -35,8 +35,8 @@ function ledgerWithStale(n: number): FakeSettlementLedger {
       idempotencyKey: `${remittanceId}:${quoteId}`,
       txHash: `0xtx${i}`,
       chainId: 84532,
-      senderAddress: "0xsender",
-      receiverAddress: "0xreceiver",
+      senderAddress: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+      receiverAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
       valueMinor: "400000000", // string exacto (uint256-safe), como lo devuelve el ::text
       status: "principal_in",
       attempts: 0,
@@ -197,9 +197,9 @@ describe("POST /api/admin/reconcile-orphans (WKH-207)", () => {
         remittanceId: `rem-p${i}`,
         quoteId: `q-p${i}`,
         idempotencyKey: `rem-p${i}:q-p${i}`,
-        depositAddress: "0x4444444444444444444444444444444444444444",
+        depositAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
         chainId: 84532,
-        senderAddress: "0x1111111111111111111111111111111111111111",
+        senderAddress: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
         payoutId: `transfi-po-${i}`,
         vm: "evm",
       });
@@ -228,7 +228,7 @@ describe("POST /api/admin/reconcile-orphans (WKH-207)", () => {
     }
     // CD-7: la superficie no expone addresses ni montos.
     const raw = JSON.stringify(json);
-    expect(raw).not.toContain("0x1111111111111111111111111111111111111111");
+    expect(raw).not.toContain("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
     expect(raw).not.toContain("valueMinor");
   });
 
@@ -283,9 +283,9 @@ describe("POST /api/admin/reconcile-orphans (WKH-207)", () => {
       remittanceId: "rem-x",
       quoteId: "q-x",
       idempotencyKey: "rem-x:q-x",
-      depositAddress: "0x4444444444444444444444444444444444444444",
+      depositAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
       chainId: 84532,
-      senderAddress: "0x1111111111111111111111111111111111111111",
+      senderAddress: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
       payoutId: "transfi-po-x",
       vm: "evm",
     });
@@ -295,8 +295,8 @@ describe("POST /api/admin/reconcile-orphans (WKH-207)", () => {
       idempotencyKey: "rem-x:q-x",
       txHash: "0xTXREAL",
       chainId: 84532,
-      senderAddress: "0x1111111111111111111111111111111111111111",
-      receiverAddress: "0x4444444444444444444444444444444444444444",
+      senderAddress: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+      receiverAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
       valueMinor: 400_000_000,
       vm: "evm",
     });

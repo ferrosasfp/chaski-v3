@@ -7,8 +7,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { FakeSettlementLedger, T0 } from "../../test-support/fakes";
 import { SupabaseSettlementLedger } from "./supabase-settlement-ledger";
 
-const DEPOSIT = "0x4444444444444444444444444444444444444444";
-const SENDER = "0x1111111111111111111111111111111111111111";
+// WKH-320: addresses base58 — la canonicalización del ledger dejó de aceptar hexadecimal.
+const DEPOSIT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const SENDER = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 
 describe("órdenes huérfanas 'prepared' (WKH-211, in-memory)", () => {
   it("AC-8: recordOrderPrepared guarda status 'prepared' + depositAddress en receiver_address, SIN PII", async () => {
@@ -25,8 +26,8 @@ describe("órdenes huérfanas 'prepared' (WKH-211, in-memory)", () => {
     });
     const row = [...ledger.store.values()][0]!;
     expect(row.status).toBe("prepared");
-    expect(row.receiverAddress).toBe(DEPOSIT.toLowerCase()); // el depositAddress ES el receiver
-    expect(row.senderAddress).toBe(SENDER.toLowerCase());
+    expect(row.receiverAddress).toBe(DEPOSIT); // el depositAddress ES el receiver (base58, sin lowercase — CD-7)
+    expect(row.senderAddress).toBe(SENDER);
     expect(row.payoutId).toBe("transfi-po-1");
     expect(row.chainId).toBe(84532);
     // Sólo hechos operativos: ni beneficiary ni documento (la fila no tiene esos campos).
@@ -166,8 +167,8 @@ describe("SupabaseSettlementLedger.recordOrderPrepared (WKH-211)", () => {
     });
     const [row, opts] = upsertArgs[0]! as [Record<string, unknown>, Record<string, unknown>];
     expect(row.status).toBe("prepared");
-    expect(row.receiver_address).toBe(DEPOSIT.toLowerCase());
-    expect(row.sender_address).toBe(SENDER.toLowerCase());
+    expect(row.receiver_address).toBe(DEPOSIT);
+    expect(row.sender_address).toBe(SENDER);
     expect(row.value_minor).toBe("0"); // desconocido en prepare
     expect(row.payout_id).toBe("transfi-po-1");
     expect(opts.onConflict).toBe("idempotency_key");

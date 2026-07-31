@@ -1,4 +1,10 @@
 // @vitest-environment jsdom
+//
+// WKH-320: este archivo probaba el GATING por VM: con VM=solana montaba el árbol Solana y con la VM
+// unset/evm hacía passthrough sin montar nada. Ese segundo caso probaba un estado que dejó de ser
+// expresable — no hay una VM que pueda no ser Solana, así que no hay configuración en la que el
+// árbol NO se monte. Lo que se clava ahora es lo contrario y es más fuerte: se monta SIEMPRE, sin
+// leer una sola env.
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
@@ -12,17 +18,14 @@ vi.mock("./solana/solana-providers", () => ({
   ),
 }));
 
-const ORIGINAL_VM = process.env.NEXT_PUBLIC_VM;
 afterEach(() => {
   cleanup(); // desmonta el DOM entre tests (patrón flow.test.tsx) — evita children duplicados
-  if (ORIGINAL_VM === undefined) delete process.env.NEXT_PUBLIC_VM;
-  else process.env.NEXT_PUBLIC_VM = ORIGINAL_VM;
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
 });
 
-describe("Providers — gating por VM", () => {
-  it("VM=solana → monta el árbol Solana envolviendo children (AC-1)", async () => {
-    process.env.NEXT_PUBLIC_VM = "solana";
+describe("Providers — el árbol Solana se monta SIEMPRE (WKH-320 / AC-1)", () => {
+  it("monta el árbol Solana envolviendo children", async () => {
     render(
       <Providers>
         <div data-testid="child">app</div>
@@ -33,14 +36,14 @@ describe("Providers — gating por VM", () => {
     expect(screen.getByTestId("child")).toBeInTheDocument();
   });
 
-  it("VM unset/evm → passthrough, NINGÚN provider Solana montado (AC-3)", () => {
-    delete process.env.NEXT_PUBLIC_VM; // default = evm
+  it("lo monta IGUAL sin ninguna env de configuración presente (cero dispatcher)", async () => {
+    // Si alguien reintrodujera un `if` por env, con todo ausente caería al passthrough y esto
+    // se pondría rojo.
     render(
       <Providers>
         <div data-testid="child">app</div>
       </Providers>,
     );
-    expect(screen.getByTestId("child")).toBeInTheDocument();
-    expect(screen.queryByTestId("solana-tree")).toBeNull(); // cero árbol Solana
+    await waitFor(() => expect(screen.getByTestId("solana-tree")).toBeInTheDocument());
   });
 });

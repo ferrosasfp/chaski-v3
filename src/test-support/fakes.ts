@@ -260,12 +260,14 @@ export class FakePayoutGateway implements PayoutGateway {
 // FakeWallet — wallet mínima que devuelve { tx } y nada más. WKH-320: antes podía devolver además un
 // envelope `eip3009` para simular la rama real de InjectedWallet/WalletConnectWallet; esos adapters ya
 // no existen. Para el camino real Solana está FakeSolanaWallet, más abajo.
+export const FAKE_WALLET_ADDRESS = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // base58 válida
+
 export class FakeWallet implements WalletPort {
   async connect(): Promise<string> {
-    return "FakeSender";
+    return FAKE_WALLET_ADDRESS;
   }
   async getAddress(): Promise<string | null> {
-    return "FakeSender";
+    return FAKE_WALLET_ADDRESS;
   }
   async authorizePrincipal(
     _quote: Quote,

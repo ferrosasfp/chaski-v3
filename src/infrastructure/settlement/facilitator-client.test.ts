@@ -3,8 +3,6 @@
 // EIP-3009). T5: regresión byte-idéntica de broadcastSettle (payload EIP-3009 intacto, AC-2).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  broadcastSettle,
-  type SettleBroadcastInput,
   type SolanaSettleInput,
   verifySolanaSettlement,
 } from "./facilitator-client";
@@ -131,62 +129,6 @@ describe("verifySolanaSettlement (HU-SOL-9, AC-3) — envelope base58 verify-onl
   });
 });
 
-// ── T5 (AC-2): regresión byte-idéntica de broadcastSettle — payload EIP-3009 intacto ──
-const EVM_TXHASH = `0x${"a".repeat(64)}`;
-function evmInput(): SettleBroadcastInput {
-  return {
-    authorization: {
-      from: "0x1111111111111111111111111111111111111111",
-      to: "0x2222222222222222222222222222222222222222",
-      value: "400000000",
-      validAfter: "0",
-      validBefore: "1783036800",
-      nonce: `0x${"b".repeat(64)}`,
-    },
-    signature: "0xdeadbeef",
-    payTo: "0x2222222222222222222222222222222222222222",
-    asset: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
-    chainId: 84532,
-    amountMinor: "400000000",
-    resourceUrl: "https://chaski.test/api/settle/principal",
-  };
-}
-
-describe("broadcastSettle (regresión AC-2) — payload EIP-3009 byte-idéntico", () => {
-  beforeEach(() => {
-    vi.stubEnv("FACILITATOR_BASE_URL", "https://facilitator.test");
-    vi.stubEnv("FACILITATOR_API_KEY", "test-key");
-  });
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-    vi.unstubAllEnvs();
-  });
-
-  it("construye el payload EIP-3009 exacto (eip155, extra.assetTransferMethod, authorization) y 200 ⇒ txHash", async () => {
-    const fetchMock = mockFetchOnce(200, { settled: true, transactionHash: EVM_TXHASH });
-    const input = evmInput();
-    const result = await broadcastSettle(input);
-    expect(result).toEqual({ ok: true, txHash: EVM_TXHASH });
-
-    const [, init] = fetchMock.mock.calls[0]!;
-    const sentBody = JSON.parse((init as { body: string }).body);
-    expect(sentBody).toEqual({
-      x402Version: 2,
-      resource: { url: input.resourceUrl },
-      accepted: {
-        scheme: "exact",
-        network: "eip155:84532",
-        amount: "400000000",
-        asset: input.asset,
-        payTo: input.payTo,
-        maxTimeoutSeconds: 60,
-        extra: { assetTransferMethod: "eip3009", name: "USD Coin", version: "2" },
-      },
-      payload: {
-        signature: input.signature,
-        authorization: input.authorization,
-      },
-    });
-  });
-});
+// WKH-320: acá abajo vivía la regresión byte-idéntica de broadcastSettle — que el payload EIP-3009
+// enviado al /settle del facilitator (network eip155:<chainId>, extra.assetTransferMethod, el objeto
+// `authorization`) no cambiara ni un byte. Se fue con el broadcast que verificaba.

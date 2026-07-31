@@ -66,6 +66,8 @@ const FORBIDDEN: ReadonlyArray<{ pattern: RegExp; why: string; allow?: readonly 
       "src/composition/evm-residue-guard.ts", // el guard que la caza: nombrarla ES su trabajo
       "src/composition/evm-residue-guard.test.ts",
       "src/composition/evm-residue-guard.static.test.ts",
+      // Ídem: prueba que el guard, ya montado como primera línea de createContainer(), la nombra.
+      "src/composition/container.test.ts",
     ],
   },
   { pattern: /\bisAddress\s*\(/, why: "validador de address hexadecimal" },

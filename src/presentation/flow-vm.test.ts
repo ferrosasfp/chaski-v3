@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { Money } from "../domain/money";
 import type { RemittanceState } from "../domain/remittance";
-import { FALLBACK_WALLET_ADDRESS } from "../infrastructure/wallet";
-import { deliveredDisplay, humanError, isDemoMode, isFallbackWalletAddress } from "./flow-vm";
+import { deliveredDisplay, humanError, isDemoMode } from "./flow-vm";
+
+// WKH-320: acá abajo vivía el describe de isFallbackWalletAddress (WKH-184 AC-7/AC-9), que probaba
+// que la UI detectara la wallet demo por su address y, entre otras cosas, que la detección fuera
+// CASE-INSENSITIVE. Se fue con la función, y va declarado como PÉRDIDA DE UN CONTROL YA MUERTO
+// (R-4): bajo Solana su try/catch devolvía false SIEMPRE (la constante era una address 0x y
+// canonicalizeAddress tiraba), o sea que en producción ese control no señalaba nada. isDemoMode(),
+// que decide por provenance, sí funciona y cubre la necesidad de la UI — y se sigue probando acá.
 
 describe("flow-vm — deliveredDisplay", () => {
   it("AC-2: deliveredPen null → usa quote.receive", () => {
@@ -91,24 +97,6 @@ describe("flow-vm — isDemoMode", () => {
       kyc: { provenance: "didit" },
     } as RemittanceState; // payoutProvenance undefined (legacy) → false
     expect(isDemoMode(absent)).toBe(false);
-  });
-});
-
-describe("flow-vm — isFallbackWalletAddress (WKH-184 AC-7/AC-9)", () => {
-  it("AC-7: la address demo → true", () => {
-    expect(isFallbackWalletAddress(FALLBACK_WALLET_ADDRESS)).toBe(true);
-  });
-
-  it("AC-9: case-insensitive (variante uppercase de la const) → true", () => {
-    expect(isFallbackWalletAddress(FALLBACK_WALLET_ADDRESS.toUpperCase())).toBe(true);
-  });
-
-  it("AC-7: address real mixed-case → false", () => {
-    expect(isFallbackWalletAddress("0xAbC1230000000000000000000000000000000001")).toBe(false);
-  });
-
-  it("AC-7: null → false", () => {
-    expect(isFallbackWalletAddress(null)).toBe(false);
   });
 });
 

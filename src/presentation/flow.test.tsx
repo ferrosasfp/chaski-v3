@@ -63,7 +63,7 @@ function passedSnapshot(receiveMajor: number, rate: number, expiresAt: string): 
     },
     T0,
   );
-  r.startKyc(T0, "0xSender");
+  r.startKyc(T0, "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
   r.applyKyc(passKyc, T0);
   return r.snapshot;
 }
@@ -198,14 +198,14 @@ it("T4: '¿No sos vos?' aparece solo con una address conectada", async () => {
   // (i) render inicial: address === null → sin control de reset.
   expect(screen.queryByText("¿No sos vos?")).toBeNull();
 
-  // (ii) send → connect: FakeWallet.connect() = "0xSender".
+  // (ii) send → connect: FakeWallet.connect() = la pubkey base58 "4zMMC9…".
   fillSend();
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
   fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
 
   // (b) con address conectada → aparece el control + el badge de address.
   expect(await screen.findByText("¿No sos vos?")).toBeInTheDocument();
-  expect(screen.getByText(/0xSend/)).toBeInTheDocument();
+  expect(screen.getByText(/4zMMC9/)).toBeInTheDocument();
 });
 
 // ── T5 — AC-6 + AC-8: reset limpia estado React + PII (WKH-184 + MNR-1) ───────
@@ -225,7 +225,7 @@ it("T5: 'Empezar de nuevo' limpia address + PII del beneficiario y vuelve a 'sen
   expect(amountInput).toBeInTheDocument();
 
   // (b) badge de address desaparece (address === null).
-  await waitFor(() => expect(screen.queryByText(/0xSend/)).toBeNull());
+  await waitFor(() => expect(screen.queryByText(/4zMMC9/)).toBeNull());
 
   // (c) recipient limpio · (d) destino limpio · (e) monto vuelve al default "400".
   const recipientInput = screen.getByPlaceholderText("Nombre de tu familiar") as HTMLInputElement;
@@ -266,7 +266,7 @@ it("T-AC2: el review tiene 'Continuar'; el escaneo aparece recién tras el tap (
 // ── T-AC4 — AC-4: KYC-once salta review+verify y va directo a confirm ─────────
 it("T-AC4: KYC-once → tras conectar va directo a confirm (sin review ni escaneo), con quote lockeado", async () => {
   const kycStore = new FakeKycStore();
-  await kycStore.save("0xSender", passKyc); // wallet ya verificada
+  await kycStore.save("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", passKyc); // wallet ya verificada
   render(<RemittanceFlow container={buildTestContainer({ kycStore })} />);
 
   fillSend();
@@ -638,7 +638,7 @@ function buildFlowSnapshot(
     },
     T0,
   );
-  r.startKyc(T0, "0xSender");
+  r.startKyc(T0, "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
   r.applyKyc(passKyc, T0); // kyc REAL (didit)
   r.confirm(T0);
   r.markPrincipalIn("0xp", T0);
@@ -686,7 +686,7 @@ function trackContainer(
 
 async function seededKycStore(): Promise<FakeKycStore> {
   const kycStore = new FakeKycStore();
-  await kycStore.save("0xSender", passKyc);
+  await kycStore.save("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", passKyc);
   return kycStore;
 }
 
@@ -761,7 +761,7 @@ describe("WKH-200 poll stop (fake timers)", () => {
 
   it("T-AC2: al recibir payout_failed el poll frena (call-count se estabiliza), sin tocar TERMINAL_STATUSES", async () => {
     const kycStore = new FakeKycStore();
-    await kycStore.save("0xSender", passKyc);
+    await kycStore.save("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", passKyc);
     // onConfirm deja la remesa en payout_failed (status !== settled → step "track"): el poll ARRANCA
     // igual (el efecto solo gatea por step). trackRemittance devuelve payout_failed en cada tick.
     const failed = buildFlowSnapshot("payout_failed", null);
@@ -850,7 +850,6 @@ describe("HU-SOL-13 — acción refund en TrackView (T7)", () => {
   });
 
   it("AC-6: vm=solana + now>=deadline (expiresAt pasado) ⇒ 'Recuperar fondos' visible; el click dispara el gateway", async () => {
-    vi.stubEnv("NEXT_PUBLIC_VM", "solana");
     const refund = new FakeSolanaEscrowRefundGateway();
     const rem = solanaPayoutSubmittedSnapshot("2026-07-10T00:00:00.000Z"); // pasado vs Date.now() real
     render(<TrackView rem={rem} refundGateway={refund} sender={FAKE_SOLANA_BENEFICIARY} />);
@@ -864,7 +863,6 @@ describe("HU-SOL-13 — acción refund en TrackView (T7)", () => {
   });
 
   it("AC-7: vm=solana + now<deadline (expiresAt futuro) ⇒ 'Recuperar fondos' OCULTA (defensa en profundidad)", () => {
-    vi.stubEnv("NEXT_PUBLIC_VM", "solana");
     const refund = new FakeSolanaEscrowRefundGateway();
     const rem = solanaPayoutSubmittedSnapshot("2099-01-01T00:00:00.000Z"); // futuro ⇒ pre-deadline
     render(<TrackView rem={rem} refundGateway={refund} sender={FAKE_SOLANA_BENEFICIARY} />);
@@ -873,43 +871,34 @@ describe("HU-SOL-13 — acción refund en TrackView (T7)", () => {
     expect(refund.calls).toHaveLength(0);
   });
 
-  it("CD-2/regresión EVM: vm=evm + now>=deadline ⇒ NINGÚN botón 'Recuperar fondos' (UI byte-idéntica)", () => {
-    // sin stub NEXT_PUBLIC_VM ⇒ resolveActiveVm()==="evm" (default). La acción refund NO se monta.
-    const refund = new FakeSolanaEscrowRefundGateway();
-    const rem = solanaPayoutSubmittedSnapshot("2026-07-10T00:00:00.000Z");
-    render(<TrackView rem={rem} refundGateway={refund} sender="0xSender" />);
-
-    expect(screen.getByText(/Tu chaski está en camino/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Recuperar fondos/ })).toBeNull();
-    expect(refund.calls).toHaveLength(0);
-  });
+  // WKH-320: acá vivía "CD-2/regresión EVM: vm=evm + now>=deadline ⇒ NINGÚN botón 'Recuperar
+  // fondos'". Probaba que la acción de refund NO se montara cuando la VM activa no era Solana — un
+  // estado que dejó de ser expresable. Lo que queda probado arriba es lo que sí decide hoy si el
+  // botón aparece: el deadline y el estado de la remesa, no la VM.
 });
 
-// ── T8 — BLQ-MED-1 (AR/CR): RemittanceFlow COMPLETO renderiza bajo vm=solana con wallet conectada ──
-// Regresión del crash de render: con NEXT_PUBLIC_VM=solana + wallet conectada, flow.tsx:398 evalúa
-// isFallbackWalletAddress(address), que canonicaliza el FALLBACK_WALLET_ADDRESS (un address EVM
-// "0xDEMO…") bajo vm=solana → new PublicKey("0xDEMO…") THROWEA "address_canonicalization_failed"
-// EN RENDER → el árbol completo de RemittanceFlow crasheaba y el flujo NUNCA se veía (bloqueaba el
-// e2e HU-SOL-11 + el flip del flag). El F3 tuvo que testear TrackView en aislamiento (T7) por eso.
-// Post-fix (flow-vm.ts isFallbackWalletAddress fail-safe try/catch → false): el flujo se renderiza.
-describe("HU-SOL-13 — BLQ-MED-1: RemittanceFlow completo renderiza bajo vm=solana (T8)", () => {
+// ── T8 — BLQ-MED-1 (AR/CR): RemittanceFlow COMPLETO renderiza con la wallet conectada ──
+// Regresión del crash de render: el flujo evaluaba isFallbackWalletAddress(address), que
+// canonicalizaba una constante EVM ("0xDEMO…") con el canonicalizador Solana → THROW EN RENDER, y
+// el árbol completo de RemittanceFlow se caía. WKH-320 eliminó esa función (R-4: su catch devolvía
+// false SIEMPRE en producción, o sea que el control ya no señalaba nada), así que la causa raíz
+// dejó de existir. El test se conserva como REGRESIÓN: si alguien reintroduce un canonicalizador en
+// el render, esto se pone rojo antes que un usuario vea una pantalla en blanco.
+describe("HU-SOL-13 / WKH-320 — BLQ-MED-1: RemittanceFlow completo renderiza (T8)", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     cleanup();
   });
 
-  it("BLQ-MED-1: vm=solana + wallet conectada ⇒ el flujo NO crashea (el paso review se ve); banner de fallback OCULTO", async () => {
-    vi.stubEnv("NEXT_PUBLIC_VM", "solana");
-    // FakeSolanaWallet.connect() → address base58 (FAKE_SOLANA_BENEFICIARY). Al conectar se setea
-    // `address` y el render evalúa isFallbackWalletAddress bajo vm=solana → antes THROW en render.
+  it("BLQ-MED-1: wallet conectada ⇒ el flujo NO crashea (el paso review se ve); banner de fallback OCULTO", async () => {
+    // FakeSolanaWallet.connect() → address base58 (FAKE_SOLANA_BENEFICIARY).
     render(<RemittanceFlow container={buildTestContainer({ wallet: new FakeSolanaWallet() })} />);
 
     // send → connect → review: si el render crasheara, "Revisá el envío" NUNCA aparecería.
     await goToReview();
     expect(screen.getByText(/Revisá el envío/)).toBeInTheDocument();
 
-    // El address conectado (base58) NO es el FALLBACK EVM; y bajo solana el FALLBACK EVM no
-    // canonicaliza ⇒ fail-safe false ⇒ el banner "Sin aislamiento por wallet" NUNCA se muestra.
+    // El banner "Sin aislamiento por wallet" ya no existe (se fue con isFallbackWalletAddress).
     expect(screen.queryByText(/Sin aislamiento por wallet/)).toBeNull();
   });
 });

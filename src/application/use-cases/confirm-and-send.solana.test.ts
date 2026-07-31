@@ -43,29 +43,28 @@ const quote: Quote = {
 async function seedQuoted(repo: InMemoryRepo): Promise<string> {
   const r = Remittance.create("r-1", beneficiary(), Money.of(400, "USDC"), T0);
   r.attachQuote(quote, T0);
-  r.startKyc(T0, "solana-owner");
+  r.startKyc(T0, FAKE_SOLANA_BENEFICIARY);
   r.applyKyc(passKyc, T0);
   await repo.save(r);
   return "r-1";
 }
 
-// Construye la rama Solana: sin `settlement` (EVM) ni `pop`, con el 9º arg `solana` (prepare+gateway).
+// Construye el camino real: el 6º arg `solana` (prepare+gateway acoplados). WKH-320: ya no hay 7º/8º
+// args (`settlement` EVM y `pop`) porque no hay una segunda VM con la que ser mutuamente excluyente.
 function build(
   repo: InMemoryRepo,
   wallet: FakeSolanaWallet,
   prepare: FakeSolanaPayoutPrepareGateway,
   gateway: FakeSolanaSettlementGateway,
-  payouts: FakePayoutGateway,
+  _payouts?: FakePayoutGateway,
+  refund: FakeRefundGateway = new FakeRefundGateway(),
 ): ConfirmAndSend {
   return new ConfirmAndSend(
     wallet,
-    payouts,
     repo,
     new FixedClock(),
     new FakePayoutAuthorityGateway({ authorized: true }),
-    new FakeRefundGateway(),
-    undefined, // settlement EVM: NUNCA junto con solana (mutua exclusión)
-    undefined, // pop
+    refund,
     { prepare, gateway },
   );
 }
@@ -171,5 +170,54 @@ describe("ConfirmAndSend — rama Solana (HU-SOL-13)", () => {
     expect(out.snapshot.principalTx).toBeNull();
     expect(out.status).toBe("refunded");
     expect(out.snapshot.failureReason).toBe("settlement_unverified");
+  });
+});
+
+// ── T7 / DT-8 (WKH-320) — el tapón fail-closed ────────────────────────────────────────────────────
+// Al quedar la rama Solana como CAMINO ÚNICO, su ausencia ya no cae a un camino alternativo: cae al
+// vacío. Sin este tapón, execute() llegaría al final y devolvería la remesa 'confirmed' SIN haber
+// movido nada — un no-op silencioso en el money-path, peor que el throw de antes.
+describe("ConfirmAndSend — DT-8: sin `solana` inyectado (WKH-320)", () => {
+  it("T7: solana === undefined ⇒ payout_failed/refunded con reason settlement_unavailable", async () => {
+    const repo = new InMemoryRepo();
+    const wallet = new FakeSolanaWallet();
+    const authorizeSpy = vi.spyOn(wallet, "authorizePrincipal");
+    const refund = new FakeRefundGateway();
+    const id = await seedQuoted(repo);
+
+    const out = await new ConfirmAndSend(
+      wallet,
+      repo,
+      new FixedClock(),
+      new FakePayoutAuthorityGateway({ authorized: true }),
+      refund,
+      // sin 6º arg: flag apagado / envs faltantes
+    ).execute({ remittanceId: id });
+
+    // NUNCA 'confirmed' en silencio.
+    expect(out.status).toBe("refunded");
+    expect(out.status).not.toBe("confirmed");
+    expect(out.snapshot.failureReason).toBe("settlement_unavailable");
+    // NUNCA markPrincipalIn: no entró un peso.
+    expect(out.snapshot.principalTx).toBeNull();
+    // Y ni siquiera se le pidió la firma a la wallet.
+    expect(authorizeSpy).not.toHaveBeenCalled();
+    // El credit-back corrió en el MISMO execute (ninguna remesa queda huérfana).
+    expect(refund.calls).toHaveLength(1);
+    expect(refund.calls[0]?.reason).toBe("settlement_unavailable");
+  });
+
+  it("T7: NINGUNA excepción escapa de execute() (fail-closed controlado, no un throw crudo)", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedQuoted(repo);
+    await expect(
+      new ConfirmAndSend(
+        new FakeSolanaWallet(),
+        repo,
+        new FixedClock(),
+        new FakePayoutAuthorityGateway({ authorized: true }),
+        new FakeRefundGateway(),
+      ).execute({ remittanceId: id }),
+    ).resolves.toBeDefined();
   });
 });

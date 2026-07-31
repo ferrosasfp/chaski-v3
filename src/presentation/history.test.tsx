@@ -252,6 +252,35 @@ describe("el botón que borra avisa lo que se lleva", () => {
     ).toBeInTheDocument();
   });
 
+  // El camino que importa, y el que deja pasar un mutante si no se testea: la persona NUNCA abrió el
+  // historial. Si la advertencia se conformara con lo que ya hubiera en memoria, acá no tendría nada
+  // y diría "no pudimos revisar" sobre una remesa que sí está y sí tiene USDC sin comprobar. Por eso
+  // `onAskReset` consulta el historial ANTES de ofrecer el borrado.
+  it("advierte aunque la persona nunca haya abierto el historial", async () => {
+    // Id distinto de "rem-N" a propósito: este test SÍ crea una remesa nueva, y SeqIds emite
+    // "rem-1", que chocaría con la sembrada y haría fallar el save por CAS.
+    const { container } = await seededFlow([depositedSnapshot("vieja-1")]);
+    render(<RemittanceFlow container={container} />);
+
+    // send → connect (así se setea `address` sin pasar por el historial).
+    fireEvent.change(screen.getByPlaceholderText("Nombre de tu familiar"), {
+      target: { value: "Mamá" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("999 888 777"), {
+      target: { value: "999888777" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+    await screen.findByText(/Revisá el envío/);
+
+    fireEvent.click(screen.getByText("¿No sos vos?"));
+
+    expect(
+      await screen.findByText(/Tenés 1 envío del que no comprobamos si sus USDC/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/No pudimos revisar/)).toBeNull();
+  });
+
   it("en el flujo real, abrir '¿No sos vos?' con una remesa depositada muestra la advertencia", async () => {
     const { container } = await seededFlow([depositedSnapshot("rem-1")]);
     render(<RemittanceFlow container={container} />);

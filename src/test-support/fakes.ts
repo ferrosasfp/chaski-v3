@@ -13,6 +13,7 @@ import { ConcurrentModificationError } from "../application/errors";
 import { canonicalizeAddress } from "../infrastructure/address";
 import type {
   Clock,
+  EscrowRefundConfirmation,
   IdGenerator,
   KycDecision,
   KycGateway,
@@ -36,6 +37,7 @@ import type {
   SettlementLedgerStatus,
   SettlementRecord,
   SolanaEscrowRefundGateway,
+  SolanaEscrowRefundResult,
   SolanaPayoutPrepareGateway,
   SolanaPrincipalAuthorization,
   SolanaSettlementFailureReason,
@@ -784,17 +786,20 @@ export class FakeSolanaSettlementGateway implements SolanaSettlementGateway {
 }
 
 // FakeSolanaEscrowRefundGateway — refund trustless (AC-6). Registra los inputs; por default devuelve
-// una signature base58 sintética. mode="reject" ejercita el error path de la UI.
+// una signature base58 sintética CONFIRMADA. mode="reject" ejercita el error path de la UI, y
+// `confirmation` los dos casos en que la cadena no confirmó (pending/unknown): sin ese tercer valor no
+// se puede testear que la app deje de afirmar que la plata volvió.
 export class FakeSolanaEscrowRefundGateway implements SolanaEscrowRefundGateway {
   public calls: Array<{ remittanceId: string; sender: string }> = [];
   constructor(
     private readonly refundTx: string = FAKE_SOLANA_SIGNATURE,
     private readonly mode: "resolve" | "reject" = "resolve",
+    private readonly confirmation: EscrowRefundConfirmation = "confirmed",
   ) {}
-  async refund(input: { remittanceId: string; sender: string }): Promise<{ refundTx: string }> {
+  async refund(input: { remittanceId: string; sender: string }): Promise<SolanaEscrowRefundResult> {
     this.calls.push(input);
     if (this.mode === "reject") throw new Error("solana_refund_boom");
-    return { refundTx: this.refundTx };
+    return { refundTx: this.refundTx, confirmation: this.confirmation };
   }
 }
 

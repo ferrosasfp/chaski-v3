@@ -27,7 +27,10 @@ function remittanceIdBytes16(remittanceId: string): Uint8Array {
 }
 
 /** Encodea un EscrowState (con el discriminator de cuenta) tal como lo devolvería getAccountInfo. */
-async function encodeEscrowState(status: "deposited" | "released", deadlineSec: number): Promise<Buffer> {
+async function encodeEscrowState(
+  status: "deposited" | "released" | "refunded",
+  deadlineSec: number,
+): Promise<Buffer> {
   const coder = new anchor.BorshAccountsCoder(escrowIdl as unknown as Idl);
   return coder.encode("EscrowState", {
     sender: SENDER_KP.publicKey,
@@ -36,9 +39,18 @@ async function encodeEscrowState(status: "deposited" | "released", deadlineSec: 
     mint: new PublicKey(MINT_B58),
     amount: new anchor.BN(1_000_000),
     deadline: new anchor.BN(deadlineSec),
-    status: status === "deposited" ? { Deposited: {} } : { Released: {} },
+    status:
+      status === "deposited" ? { Deposited: {} } : status === "released" ? { Released: {} } : { Refunded: {} },
     bump: 255,
   });
+}
+
+/** confirmTransaction mockeado: por default confirma SIN error (el caso feliz de los tests viejos). */
+function mockConfirm(result: { err: unknown } | "reject" = { err: null }) {
+  return vi.spyOn(Connection.prototype, "confirmTransaction").mockImplementation((async () => {
+    if (result === "reject") throw new Error("block height exceeded");
+    return { context: { slot: 1 }, value: result };
+  }) as never);
 }
 
 function mockAccountInfo(data: Buffer | null) {
@@ -73,6 +85,7 @@ describe("SolanaWalletAdapter.refundEscrow (HU-SOL-13)", () => {
     } as Awaited<ReturnType<Connection["getLatestBlockhash"]>>);
     sendSpy = vi.fn(async () => "refund-sig-broadcasted");
     vi.spyOn(Connection.prototype, "sendRawTransaction").mockImplementation(sendSpy as never);
+    mockConfirm(); // la confirmación es parte del camino normal: sin ella el refund no afirma nada
     // El sender firma REALMENTE (partialSign con su keypair) — la única firma (feePayer=sender).
     signSpy = vi.fn(async (tx: Transaction) => {
       tx.partialSign(SENDER_KP);
@@ -151,6 +164,166 @@ describe("SolanaWalletAdapter.refundEscrow (HU-SOL-13)", () => {
   });
 });
 
+// ── Confirmación del refund: "el RPC la aceptó" NO es "la plata volvió" ──────────────────────────
+// El daño que cubren estos tests: la persona firma en Phantom y tarda 40 s, el blockhash vence, la tx
+// se cae — y la app le decía "Recuperaste tus fondos" con los USDC todavía en el vault, cerrando el
+// camino de reintento con un estado terminal. La signature sola nunca fue evidencia de nada.
+describe("SolanaWalletAdapter.refundEscrow — confirmación (tri-estado)", () => {
+  const PAST_DEADLINE = () => Math.floor(Date.now() / 1000) - 3600;
+
+  /** getAccountInfo que responde una secuencia: 1ª lectura = guard pre-firma, 2ª = probe post-envío. */
+  async function mockAccountSequence(
+    ...states: Array<"deposited" | "released" | "refunded" | null | "throw">
+  ) {
+    const datas = await Promise.all(
+      states.map(async (s) =>
+        s === null || s === "throw" ? s : await encodeEscrowState(s, PAST_DEADLINE()),
+      ),
+    );
+    let i = 0;
+    vi.spyOn(Connection.prototype, "getAccountInfo").mockImplementation((async () => {
+      const d = datas[Math.min(i, datas.length - 1)];
+      i++;
+      if (d === "throw") throw new Error("rpc_down");
+      return d
+        ? { data: d, executable: false, lamports: 1, owner: new PublicKey(ESCROW_PROGRAM_ID), rentEpoch: 0 }
+        : null;
+    }) as never);
+  }
+
+  async function connected(confirmTimeoutMs = 20): Promise<SolanaWalletAdapter> {
+    solanaWalletBridge.setState({ publicKey: SENDER_B58, connected: true });
+    const adapter = new SolanaWalletAdapter(undefined, confirmTimeoutMs);
+    await adapter.connect();
+    return adapter;
+  }
+
+  beforeEach(() => {
+    vi.spyOn(Connection.prototype, "getLatestBlockhash").mockResolvedValue({
+      blockhash: FIXED_BLOCKHASH,
+      lastValidBlockHeight: 42,
+    } as Awaited<ReturnType<Connection["getLatestBlockhash"]>>);
+    vi.spyOn(Connection.prototype, "sendRawTransaction").mockImplementation((async () =>
+      "refund-sig") as never);
+    const sign: ReturnType<typeof vi.fn> = vi.fn(async (tx: Transaction) => {
+      tx.partialSign(SENDER_KP);
+      return tx;
+    });
+    solanaWalletBridge.registerSignTransaction(sign);
+  });
+  afterEach(() => {
+    solanaWalletBridge.reset();
+    vi.restoreAllMocks();
+  });
+
+  it("confirmada sin error ⇒ 'confirmed', y se confirma la MISMA signature que se broadcasteó", async () => {
+    await mockAccountSequence("deposited");
+    const confirmSpy = mockConfirm({ err: null });
+    const adapter = await connected();
+
+    await expect(adapter.refundEscrow("rem-1")).resolves.toEqual({
+      refundTx: "refund-sig",
+      confirmation: "confirmed",
+    });
+    const arg = confirmSpy.mock.calls[0]?.[0] as unknown as {
+      signature: string;
+      blockhash: string;
+      lastValidBlockHeight: number;
+    };
+    expect(arg.signature).toBe("refund-sig"); // la que devolvió sendRawTransaction, no una inventada
+    expect(arg.blockhash).toBe(FIXED_BLOCKHASH); // el blockhash de ESTA tx: la estrategia de expiry
+    expect(arg.lastValidBlockHeight).toBe(42);
+  });
+
+  // El caso del AR, exacto: el blockhash vence mientras la persona firma. Nadie puede decir que volvió.
+  it("blockhash vencido + escrow SIGUE Deposited ⇒ 'pending' (ni éxito ni fracaso), sin tirar", async () => {
+    await mockAccountSequence("deposited", "deposited");
+    mockConfirm("reject");
+    const adapter = await connected();
+
+    await expect(adapter.refundEscrow("rem-1")).resolves.toEqual({
+      refundTx: "refund-sig",
+      confirmation: "pending",
+    });
+  });
+
+  // Un blockhash vencido prueba que la tx no puede entrar DE ACÁ EN ADELANTE, no que no haya entrado.
+  it("no pudimos ver la tx pero el escrow quedó Refunded ⇒ 'confirmed' (gana la fuente autoritativa)", async () => {
+    await mockAccountSequence("deposited", "refunded");
+    mockConfirm("reject");
+    const adapter = await connected();
+
+    await expect(adapter.refundEscrow("rem-1")).resolves.toEqual({
+      refundTx: "refund-sig",
+      confirmation: "confirmed",
+    });
+  });
+
+  it("no pudimos ver la tx NI leer el escrow (RPC caído) ⇒ 'unknown', jamás un éxito", async () => {
+    await mockAccountSequence("deposited", "throw");
+    mockConfirm("reject");
+    const adapter = await connected();
+
+    await expect(adapter.refundEscrow("rem-1")).resolves.toEqual({
+      refundTx: "refund-sig",
+      confirmation: "unknown",
+    });
+  });
+
+  // La cuenta ausente NO prueba un refund: la ix `close` la borra tanto después de un refund como de
+  // un release. Ausencia = no sabemos a dónde fue la plata.
+  it("escrow ya cerrado tras el envío ⇒ 'unknown' (la ausencia no es evidencia de reembolso)", async () => {
+    await mockAccountSequence("deposited", null);
+    mockConfirm("reject");
+    const adapter = await connected();
+
+    const out = await adapter.refundEscrow("rem-1");
+    expect(out.confirmation).toBe("unknown");
+  });
+
+  it("la tx entró y REVIRTIÓ (y el escrow no está Refunded) ⇒ refund_tx_failed: un 'no' medido", async () => {
+    await mockAccountSequence("deposited", "deposited");
+    mockConfirm({ err: { InstructionError: [0, { Custom: 6002 }] } });
+    const adapter = await connected();
+
+    await expect(adapter.refundEscrow("rem-1")).rejects.toThrow("refund_tx_failed");
+  });
+
+  // No repetir la mentira vieja al revés: si un intento anterior ya devolvió la plata, este revert no
+  // puede reportarse como "no pudimos recuperar".
+  it("la tx revirtió PERO el escrow está Refunded ⇒ 'confirmed' (la plata ya había vuelto)", async () => {
+    await mockAccountSequence("deposited", "refunded");
+    mockConfirm({ err: "AccountNotFound" });
+    const adapter = await connected();
+
+    const out = await adapter.refundEscrow("rem-1");
+    expect(out.confirmation).toBe("confirmed");
+  });
+
+  it("la confirmación que nunca responde no cuelga a la persona: vence el techo y cae al probe", async () => {
+    await mockAccountSequence("deposited", "deposited");
+    // Promesa que NUNCA resuelve: el websocket ausente del RPC público es exactamente esto.
+    vi.spyOn(Connection.prototype, "confirmTransaction").mockImplementation(
+      (() => new Promise(() => {})) as never,
+    );
+    const adapter = await connected(10); // techo diminuto SOLO para el test
+
+    await expect(adapter.refundEscrow("rem-1")).resolves.toEqual({
+      refundTx: "refund-sig",
+      confirmation: "pending",
+    });
+  });
+
+  it("el refund SIEMPRE pregunta: confirmTransaction se llama una vez por broadcast", async () => {
+    await mockAccountSequence("deposited");
+    const confirmSpy = mockConfirm({ err: null });
+    const adapter = await connected();
+
+    await adapter.refundEscrow("rem-1");
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
 // ── HU-SOL-20/AC-2 · fallback de recuperación del remittanceId (T-R0-9 / T-R0-10) ──────────────────
 // La PDA del escrow se deriva del remittanceId. Si el cliente lo perdió (localStorage borrado / otro
 // dispositivo) los fondos quedan inalcanzables. El fallback lo recupera del store durable server-side y
@@ -199,6 +372,7 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
     } as Awaited<ReturnType<Connection["getLatestBlockhash"]>>);
     sendSpy = vi.fn(async () => "refund-sig-recovered");
     vi.spyOn(Connection.prototype, "sendRawTransaction").mockImplementation(sendSpy as never);
+    mockConfirm();
     signSpy = vi.fn(async (tx: Transaction) => {
       tx.partialSign(SENDER_KP);
       return tx;
@@ -236,7 +410,10 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
     await mockChain({ "rem-recovered": "deposited" });
     const listBySender = vi.fn(async () => ["rem-recovered"]);
     const adapter = await connectedWith({ listBySender });
-    await expect(adapter.refundEscrow("   ")).resolves.toEqual({ refundTx: "refund-sig-recovered" });
+    await expect(adapter.refundEscrow("   ")).resolves.toEqual({
+      refundTx: "refund-sig-recovered",
+      confirmation: "confirmed",
+    });
     expect(listBySender).toHaveBeenCalledTimes(1);
   });
 
@@ -358,7 +535,10 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
       (async (k: PublicKey) => (k.toBase58() === goodPda ? accountInfo(good) : null)) as never,
     );
     const adapter = await connectedWith({ listBySender: vi.fn(async () => ["rem-basura", "rem-sana"]) });
-    await expect(adapter.refundEscrow()).resolves.toEqual({ refundTx: "refund-sig-recovered" });
+    await expect(adapter.refundEscrow()).resolves.toEqual({
+      refundTx: "refund-sig-recovered",
+      confirmation: "confirmed",
+    });
     const ix = capturedTx(signSpy).instructions[0];
     if (!ix) throw new Error("no_instruction");
     expect(ix.keys[2]!.pubkey.toBase58()).toBe(goodPda);
@@ -374,10 +554,13 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
   // El gateway es el único camino de la UI hacia refundEscrow: si no propagara el `remittanceId`
   // OPCIONAL tal cual, la recuperación de AC-2 nunca se activaría (o pasaría un id equivocado).
   it("HU-SOL-20: SolanaEscrowRefundGateway propaga (remittanceId, sender) tal cual, con y sin id", async () => {
-    const refundEscrow = vi.fn(async () => ({ refundTx: "sig" }));
+    const refundEscrow = vi.fn(async () => ({ refundTx: "sig", confirmation: "pending" as const }));
     const gw = new SolanaEscrowRefundGateway({ refundEscrow });
+    // Y propaga el `confirmation` SIN ascenderlo: un gateway que devolviera "confirmed" acá volvería
+    // a poner la afirmación no verificada arriba de la cadena.
     await expect(gw.refund({ remittanceId: "rem-9", sender: SENDER_B58 })).resolves.toEqual({
       refundTx: "sig",
+      confirmation: "pending",
     });
     expect(refundEscrow).toHaveBeenLastCalledWith("rem-9", SENDER_B58);
     await gw.refund({ sender: SENDER_B58 }); // sin id ⇒ delega el fallback al adapter

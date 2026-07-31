@@ -74,8 +74,11 @@ describe("RecoverEscrowFunds — el refund exitoso deja rastro", () => {
   it("desde payout_submitted: persiste refunded + la signature del refund", async () => {
     const { repo, uc } = await setup("payout_submitted");
 
-    const r = await uc.execute(input);
+    const res = await uc.execute(input);
+    const r = res.remittance;
 
+    expect(res.confirmation).toBe("confirmed");
+    expect(res.refundTx).toBe(FAKE_SOLANA_SIGNATURE);
     expect(r.status).toBe("refunded");
     expect(r.snapshot.refundTx).toBe(FAKE_SOLANA_SIGNATURE);
     const saved = await repo.get("rem-1");
@@ -146,9 +149,60 @@ describe("RecoverEscrowFunds — el refund exitoso deja rastro", () => {
     };
     const uc = new RecoverEscrowFunds(brokenSave, new FixedClock(), gateway);
 
-    const r = await uc.execute(input);
+    const { remittance } = await uc.execute(input);
 
-    expect(r.status).toBe("refunded");
-    expect(r.snapshot.refundTx).toBe(FAKE_SOLANA_SIGNATURE);
+    expect(remittance.status).toBe("refunded");
+    expect(remittance.snapshot.refundTx).toBe(FAKE_SOLANA_SIGNATURE);
+  });
+});
+
+// ── El estado terminal EXIGE confirmación de la cadena ───────────────────────────────────────────
+// El daño: la persona aprieta recuperar, firma en Phantom, tarda 40 s. El RPC acepta y devuelve la
+// signature; el blockhash vence antes de que la tx entre en un bloque y la tx se cae. Con el terminal
+// escrito sobre esa signature, la persona leía "Recuperaste tus fondos", los USDC seguían en el vault
+// y el botón NO volvía nunca (refunded es terminal, sin transición de salida: el segundo intento corta
+// con refund_not_available). "El RPC la aceptó" es un tercer valor, ni confirmado ni fallado.
+describe("RecoverEscrowFunds — sin confirmación no hay terminal", () => {
+  for (const confirmation of ["pending", "unknown"] as const) {
+    it(`confirmation="${confirmation}" ⇒ NO escribe refunded y la remesa sigue recuperable`, async () => {
+      const gateway = new FakeSolanaEscrowRefundGateway(FAKE_SOLANA_SIGNATURE, "resolve", confirmation);
+      const { repo, uc } = await setup("payout_submitted", gateway);
+
+      const res = await uc.execute(input);
+
+      // (1) lo que se devuelve dice exactamente lo que se sabe: se envió, no se confirmó.
+      expect(res.confirmation).toBe(confirmation);
+      expect(res.refundTx).toBe(FAKE_SOLANA_SIGNATURE);
+      // (2) el agregado NO quedó terminal, ni en memoria ni en disco.
+      expect(res.remittance.status).toBe("payout_submitted");
+      expect(res.remittance.snapshot.refundTx).toBeNull();
+      const saved = await repo.get("rem-1");
+      expect(saved?.status).toBe("payout_submitted");
+      expect(saved?.snapshot.refundTx).toBeNull();
+      expect(saved?.snapshot.failureReason).toBeNull(); // tampoco se marcó un fallo que no ocurrió
+    });
+
+    it(`confirmation="${confirmation}" ⇒ el SEGUNDO intento todavía es posible (el camino no se cierra)`, async () => {
+      const gateway = new FakeSolanaEscrowRefundGateway(FAKE_SOLANA_SIGNATURE, "resolve", confirmation);
+      const { uc } = await setup("payout_submitted", gateway);
+
+      await uc.execute(input);
+      // Sin esto la 2ª llamada moriría en el guard RECOVERABLE con refund_not_available: la persona
+      // quedaba sin reintento sobre una tx que pudo no haber entrado nunca.
+      await expect(uc.execute(input)).resolves.toMatchObject({ confirmation });
+      expect(gateway.calls).toHaveLength(2); // llegó a la cadena las dos veces
+    });
+  }
+
+  it("desde payout_failed sin confirmar: conserva su razón original y NO la pisa con la del refund", async () => {
+    const gateway = new FakeSolanaEscrowRefundGateway(FAKE_SOLANA_SIGNATURE, "resolve", "pending");
+    const { repo, uc } = await setup("payout_failed", gateway);
+
+    await uc.execute(input);
+
+    const saved = await repo.get("rem-1");
+    expect(saved?.status).toBe("payout_failed");
+    expect(saved?.snapshot.failureReason).toBe("partner_down");
+    expect(saved?.snapshot.refundTx).toBeNull();
   });
 });

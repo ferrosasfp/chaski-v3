@@ -191,10 +191,29 @@ export interface SolanaPayoutPrepareGateway {
   >;
 }
 
+// Respuesta de PREGUNTARLE a la cadena si el refund entró. TRES valores, no dos, y a propósito:
+// "el RPC aceptó la transacción" no es "los USDC volvieron". Entre que la persona aprieta el botón y
+// que la tx entra en un bloque hay una firma en la wallet que puede tardar un minuto, y un blockhash
+// que puede vencer antes. Un boolean se comería justamente el valor del medio.
+//   · "confirmed" — la cadena dice que el escrow quedó Refunded. Es lo ÚNICO que autoriza a afirmar
+//     que la plata volvió, y lo único que puede escribir el estado terminal.
+//   · "pending"   — pudimos preguntar y la respuesta es "todavía no". Ni sí ni no: la tx puede entrar
+//     en el próximo bloque o puede no entrar nunca. La persona tiene que poder reintentar.
+//   · "unknown"   — NO pudimos preguntar (RPC caído, timeout, cuenta ilegible). Indeterminación de
+//     medición: no dice nada sobre dónde está la plata, sólo sobre nosotros.
+// Un fracaso MEDIDO (la tx entró y el programa revirtió) NO es ninguno de estos tres: es un throw.
+export type EscrowRefundConfirmation = "confirmed" | "pending" | "unknown";
+
 // Refund trustless post-deadline (AC-6/CD-10): delega en wallet.refundEscrow (sender firma + sender
-// broadcastea, SIN facilitator ni release-authority). Devuelve la signature base58 del refund.
+// broadcastea, SIN facilitator ni release-authority). Devuelve la signature base58 del refund JUNTO
+// con qué sabemos de ella: la signature sola era una afirmación de que la plata volvió que nadie
+// había verificado.
+export interface SolanaEscrowRefundResult {
+  refundTx: string; // base58 — la tx que el RPC aceptó (existe incluso sin confirmar)
+  confirmation: EscrowRefundConfirmation;
+}
 export interface SolanaEscrowRefundGateway {
-  refund(input: { remittanceId: string; sender: string }): Promise<{ refundTx: string }>;
+  refund(input: { remittanceId: string; sender: string }): Promise<SolanaEscrowRefundResult>;
 }
 
 // HU-SOL-20/AC-2: resuelve los remittanceId del sender desde el store durable server-side cuando el

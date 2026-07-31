@@ -9,12 +9,15 @@ import { sha256 } from "@noble/hashes/sha256";
 import bs58 from "bs58";
 import { PublicKey } from "@solana/web3.js";
 import type {
+  Connection as Web3Connection,
   Transaction as Web3Transaction,
   TransactionInstruction,
 } from "@solana/web3.js";
 import type { Idl, Provider } from "@coral-xyz/anchor";
 import type {
+  EscrowRefundConfirmation,
   SolanaEscrowDeposit,
+  SolanaEscrowRefundResult,
   SolanaPrincipalAuthorization,
   SolanaRemittanceIdResolver,
   WalletPort,
@@ -33,13 +36,44 @@ import { solanaWalletBridge } from "./solana-wallet-bridge";
 // created_at desc, así que 10 cubre de sobra un escrow reciente perdido y acota a UNA sola llamada RPC.
 const MAX_RECOVERY_CANDIDATES = 10;
 
+// Cuánto esperamos a que la cadena responda si el refund entró, antes de dejar de preguntar. Vencido,
+// el resultado es INDETERMINADO (nunca un éxito, nunca un fracaso): la tx puede seguir viva. 30 s es
+// menos que la vida útil de un blockhash (~60-90 s), así que "se acabó la espera" jamás significa
+// "la tx ya no puede entrar".
+const REFUND_CONFIRM_TIMEOUT_MS = 30_000;
+
+/** Marca interna: la tx ENTRÓ en un bloque y el programa la revirtió. Es un "no" MEDIDO, no una
+ *  indeterminación, y por eso viaja como excepción y no como uno de los tres valores. */
+class RefundTxReverted extends Error {}
+
+/** Corre `p` con un techo de tiempo. El perdedor de la carrera queda con handler (Promise.race los
+ *  attachea a los dos), así que no genera un rejection sin manejar; el timer se limpia siempre. */
+async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      p,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("confirm_timeout")), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export class SolanaWalletAdapter implements WalletPort {
   private address: string | null = null;
 
   // HU-SOL-20/AC-2: resolver OPCIONAL del remittanceId durable server-side. Ausente (modo demo o
   // wiring viejo) ⇒ `refundEscrow` sin id explícito falla fail-loud con `escrow_id_unavailable`; el
   // path con id presente NUNCA lo consulta (AC-6 byte-idéntico).
-  constructor(private readonly remittanceIdResolver?: SolanaRemittanceIdResolver) {}
+  // `confirmTimeoutMs` es inyectable SÓLO para que los tests no tengan que esperar 30 s de reloj real
+  // (el default es el de producción). NUNCA para apagar la confirmación: no hay valor que la saltee.
+  constructor(
+    private readonly remittanceIdResolver?: SolanaRemittanceIdResolver,
+    private readonly confirmTimeoutMs: number = REFUND_CONFIRM_TIMEOUT_MS,
+  ) {}
 
   async connect(): Promise<string> {
     const state = solanaWalletBridge.getState();
@@ -231,7 +265,7 @@ export class SolanaWalletAdapter implements WalletPort {
   // HU-SOL-20/AC-2: `remittanceId` pasa a OPCIONAL. Con id presente el método queda BYTE-IDÉNTICO
   // (AC-6, cero cambio en el path que ya funciona); sin id se resuelve desde el store durable
   // server-side (AC-2) y recién entonces sigue el MISMO camino, guards autoritativos incluidos.
-  async refundEscrow(remittanceId?: string, sender?: string): Promise<{ refundTx: string }> {
+  async refundEscrow(remittanceId?: string, sender?: string): Promise<SolanaEscrowRefundResult> {
     // ── GUARDS fail-loud — ANTES de leer/construir/firmar nada ──
     const senderB58 = sender ?? (await this.getAddress());
     if (!senderB58) throw new Error("wallet_not_connected");
@@ -296,7 +330,7 @@ export class SolanaWalletAdapter implements WalletPort {
       .instruction();
 
     // ── feePayer=SENDER (CD-10: sin facilitator) + blockhash + sign SENDER + broadcast SENDER ──
-    const { blockhash } = await connection.getLatestBlockhash();
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
     const tx = new Transaction().add(ix);
     tx.feePayer = senderPk; // AC-6/CD-10: el sender paga el fee y firma (NUNCA la release-authority)
     tx.recentBlockhash = blockhash;
@@ -304,7 +338,84 @@ export class SolanaWalletAdapter implements WalletPort {
     const signature = await connection.sendRawTransaction(
       signed.serialize(), // requireAllSignatures=true por default (el sender es el único signer)
     );
-    return { refundTx: signature }; // signature base58 broadcasteada
+    // ⚠️ Acá terminaba el método, devolviendo la signature a secas — y el caller la leía como "la
+    // plata volvió". No lo era: el RPC ACEPTÓ la transacción, nada más. Entre el getLatestBlockhash de
+    // arriba y este punto hay una firma en la wallet que la persona puede tardar un minuto en dar; si
+    // el blockhash vence antes de que la tx entre en un bloque (común en devnet), la tx se cae y los
+    // USDC siguen en el vault. Preguntar es obligatorio ANTES de afirmar nada.
+    const confirmation = await this.confirmRefund(connection, escrowStatePda, signature, {
+      blockhash,
+      lastValidBlockHeight,
+      coder,
+    });
+    return { refundTx: signature, confirmation };
+  }
+
+  /** ¿Entró el refund? Devuelve el tri-estado de `EscrowRefundConfirmation` y TIRA `refund_tx_failed`
+   *  sólo cuando medimos que la tx entró y revirtió (un "no" real, con evidencia). Nunca colapsa una
+   *  indeterminación a éxito ni a fracaso. */
+  private async confirmRefund(
+    connection: Web3Connection,
+    escrowStatePda: InstanceType<typeof PublicKey>,
+    signature: string,
+    ctx: {
+      blockhash: string;
+      lastValidBlockHeight: number;
+      coder: { decode(name: string, data: Buffer): unknown };
+    },
+  ): Promise<EscrowRefundConfirmation> {
+    let reverted = false;
+    try {
+      const res = await withTimeout(
+        connection.confirmTransaction(
+          {
+            signature,
+            blockhash: ctx.blockhash,
+            lastValidBlockHeight: ctx.lastValidBlockHeight,
+          },
+          "confirmed",
+        ),
+        this.confirmTimeoutMs,
+      );
+      // La tx entró en un bloque Y el programa la revirtió: eso sí es un "no" (los USDC no se movieron).
+      if (res?.value?.err) throw new RefundTxReverted("refund_tx_failed");
+      return "confirmed"; // confirmada sin error ⇒ la ix `refund` se ejecutó
+    } catch (err) {
+      // Todo lo que NO sea un revert medido es "no pudimos ver": timeout, blockhash vencido, websocket
+      // ausente, RPC caído. Un blockhash vencido prueba que la tx no puede entrar DE ACÁ EN ADELANTE,
+      // NO que no haya entrado antes ⇒ hay que ir a mirar el estado autoritativo.
+      reverted = err instanceof RefundTxReverted;
+    }
+    // Fuente autoritativa: el propio EscrowState. `refund` NO cierra la cuenta (eso lo hace la ix
+    // `close`, separada), así que status==Refunded sigue legible después del refund.
+    const probed = await this.probeEscrowRefunded(connection, escrowStatePda, ctx.coder);
+    // Si la cadena dice Refunded, la plata volvió — aunque ESTA tx haya revertido (puede haberla
+    // devuelto un intento anterior). Reportar fallo acá sería la mentira vieja al revés.
+    if (probed === "confirmed") return "confirmed";
+    if (reverted) throw new Error("refund_tx_failed"); // tx revertida + escrow no Refunded ⇒ no volvió
+    return probed; // "pending" | "unknown" — la persona sigue pudiendo reintentar
+  }
+
+  /** Lee el EscrowState y responde SÓLO lo que ve. "confirmed" exige status==Refunded, que es la única
+   *  lectura que prueba que los USDC salieron del vault hacia el sender. */
+  private async probeEscrowRefunded(
+    connection: Web3Connection,
+    escrowStatePda: InstanceType<typeof PublicKey>,
+    coder: { decode(name: string, data: Buffer): unknown },
+  ): Promise<EscrowRefundConfirmation> {
+    try {
+      const info = await connection.getAccountInfo(escrowStatePda);
+      // Cuenta ausente: la ix `close` la borra DESPUÉS de un refund O de un release, así que la
+      // ausencia no dice a dónde fue la plata. Es indeterminación, NO un éxito.
+      if (!info) return "unknown";
+      const state = coder.decode("EscrowState", info.data) as { status: Record<string, unknown> };
+      // Deposited ⇒ la tx todavía no entró (la plata sigue en el vault, el reintento es válido).
+      // Released ⇒ salió hacia el beneficiario, o sea que NO volvió al sender. Ninguno de los dos
+      // habilita a decir "recuperaste tus fondos", que es lo único que este método decide.
+      return Object.keys(state.status)[0] === "Refunded" ? "confirmed" : "pending";
+    } catch {
+      return "unknown"; // no pudimos leer (RPC caído / bytes indecodificables): no sabemos, y se dice
+    }
   }
 
   // HU-SOL-8 (AC-1/CD-6/CD-SDD-3): firma REAL del proof-of-possession. El caller (http-pop-signer) pasa

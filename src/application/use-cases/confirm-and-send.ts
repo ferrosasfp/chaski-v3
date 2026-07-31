@@ -26,10 +26,10 @@ export const PRINCIPAL_STATE_UNKNOWN = "principal_state_unknown";
 
 /** Reasons del settle que PRUEBAN que el depósito nunca salió hacia la cadena, porque la respuesta
  *  viene de un punto ANTERIOR al broadcast:
- *    · solana_settle_rejected     — 422: el facilitator se negó a esponsorear (la tx nunca tuvo firma
+ *    · solana_settle_rejected (422): el facilitator se negó a esponsorear (la tx nunca tuvo firma
  *      del feePayer, así que no puede entrar en ningún bloque). También cubre el 400/501 de nuestra
  *      propia route, que corta antes de reenviar.
- *    · solana_settle_rate_limited — 429: ni lo procesó.
+ *    · solana_settle_rate_limited (429): ni lo procesó.
  *  TODO LO DEMÁS es indeterminado y NO se puede leer como "no pasó": un timeout de 15 s (503), un 502,
  *  o un 200 con shape raro son compatibles con un depósito perfectamente confirmado del otro lado.
  *  Para esos se va a preguntarle a la cadena, que es la única fuente autoritativa. */
@@ -87,13 +87,13 @@ export class ConfirmAndSend {
     // haber entrado perfectamente. Lo único que se perdió es la respuesta. Un boolean no tiene dónde
     // poner "no pude preguntar", así que lo escribía como "no pasó".
     // Los tres valores, y ninguno colapsa en otro:
-    //   · "deposited"     — el principal está en el vault. LedgerRefundGateway no puede sacarlo de ahí
+    //   · "deposited":     el principal está en el vault. LedgerRefundGateway no puede sacarlo de ahí
     //     (ni ningún otro código de este repo): la salida es el refund trustless que firma el sender, o
     //     la release-authority a mano. Marca estable, sin PII (CD-17). Reconciliación → WKH-207.
-    //   · "unknown"       — no pudimos averiguarlo. Reusar el `reason` del gateway acá sería afirmar un
+    //   · "unknown":       no pudimos averiguarlo. Reusar el `reason` del gateway acá sería afirmar un
     //     fallo que nadie midió; y afirmarlo importa, porque de eso depende lo que se le dice a la
     //     persona sobre dónde está su plata.
-    //   · "not_deposited" — sabemos que no entró: el `reason` puntual es la verdad y se conserva.
+    //   · "not_deposited": sabemos que no entró: el `reason` puntual es la verdad y se conserva.
     // Default "not_deposited" ⇒ vale sólo para los guards que cortan ANTES de que la tx salga; el
     // caller que ya broadcasteó tiene que pasar lo que la cadena le haya contestado.
     const effective =
@@ -126,7 +126,7 @@ export class ConfirmAndSend {
   /** El settle no nos dio un sí, pero el depósito YA pudo haber entrado. Antes de escribir nada se le
    *  pregunta a la cadena: es la única que sabe, y es la única fuente que no se puede reemplazar por
    *  otra mejor (a diferencia de cualquier agente). Con la respuesta, `failAndRefund` elige entre los
-   *  tres casos — y en dos de ellos la remesa queda en payout_failed, o sea RECUPERABLE: el sender
+   *  tres casos, y en dos de ellos la remesa queda en payout_failed, o sea RECUPERABLE: el sender
    *  puede firmar el refund trustless del escrow desde la propia pantalla. */
   private async failAfterBroadcast(
     r: Remittance,
@@ -138,7 +138,7 @@ export class ConfirmAndSend {
   }
 
   /** Le pregunta a la cadena si el principal está en el vault. Todo lo que no sea una respuesta clara
-   *  es "unknown": si el probe se cae, no sabemos — y eso es exactamente lo que hay que decir, no un
+   *  es "unknown": si el probe se cae, no sabemos, y eso es exactamente lo que hay que decir, no un
    *  "no entró" de consuelo. Sin `solana` inyectado no hay a quién preguntarle (y no hubo broadcast). */
   private async probePrincipal(
     remittanceId: string,
@@ -198,7 +198,7 @@ export class ConfirmAndSend {
       return r;
     }
     // 1. PREPARE server-side (análogo a 2.7): resuelve beneficiary+authority SERVER-SIDE (NUNCA del
-    //    body — AC-1/CD-7). Fallo ⇒ falla ANTES de firmar: la tx nunca salió, el deposit NO entró.
+    //    body; AC-1/CD-7). Fallo ⇒ falla ANTES de firmar: la tx nunca salió, el deposit NO entró.
     let prep: Awaited<ReturnType<SolanaPayoutPrepareGateway["prepare"]>>;
     try {
       prep = await this.solana.prepare.prepare({

@@ -1,9 +1,9 @@
-// Tests — la regla única que decide si un refund tiene comprobante. Es la que impide que una remesa
+// Tests: la regla única que decide si un refund tiene comprobante. Es la que impide que una remesa
 // llegue a `refunded` (terminal, sin salida) sin que nadie haya movido plata.
 import { describe, expect, it } from "vitest";
 import { isRealRefundReceipt } from "./refund-receipt";
 
-describe("isRealRefundReceipt — sin movimiento no hay comprobante", () => {
+describe("isRealRefundReceipt: sin movimiento no hay comprobante", () => {
   it("null ⇒ false: el adapter ledger-only no revirtió nada", () => {
     expect(isRealRefundReceipt(null)).toBe(false);
   });

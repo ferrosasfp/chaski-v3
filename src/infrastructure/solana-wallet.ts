@@ -261,7 +261,7 @@ export class SolanaWalletAdapter implements WalletPort, SolanaEscrowDepositProbe
    * ¿Entró el principal al vault del escrow de ESTA remesa? Se lo pregunta A LA CADENA, derivando la
    * MISMA PDA `escrow_state` que arma el deposit (deriveEscrowState, fuente única). No consulta a
    * ningún agente, ni conoce su URL ni su slug: los agentes se reemplazan por otros mejores, la cadena
-   * no. Reusa el criterio de tres valores de `probeEscrowRefunded` — este es su espejo en la otra
+   * no. Reusa el criterio de tres valores de `probeEscrowRefunded`: este es su espejo en la otra
    * punta del money-path.
    *
    * · cuenta presente y decodificable ⇒ "deposited". La cuenta `escrow_state` sólo la crea la ix

@@ -1,4 +1,4 @@
-// Tests — SolanaWalletAdapter.probeDeposit: la pregunta "¿entró el principal al vault?" hecha A LA
+// Tests de SolanaWalletAdapter.probeDeposit: la pregunta "¿entró el principal al vault?" hecha A LA
 // CADENA. Es la pieza que le da al money-path su tercer valor: antes, perder la respuesta del settle
 // se escribía como "el depósito no entró" y sobre eso se emitía un reembolso inexistente.
 // Connection mockeada (cero red, mismo patrón que solana-wallet.refund.test.ts).
@@ -74,7 +74,7 @@ async function connectedAdapter(): Promise<SolanaWalletAdapter> {
   return adapter;
 }
 
-describe("SolanaWalletAdapter.probeDeposit — la cadena como fuente autoritativa", () => {
+describe("SolanaWalletAdapter.probeDeposit: la cadena como fuente autoritativa", () => {
   afterEach(() => {
     solanaWalletBridge.reset();
     vi.restoreAllMocks();

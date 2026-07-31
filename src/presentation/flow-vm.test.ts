@@ -134,7 +134,7 @@ describe("flow-vm — isDemoMode", () => {
   });
 });
 
-describe("flow-vm — escrowRefundError", () => {
+describe("flow-vm: escrowRefundError", () => {
   // La distinción que importa: "no encontramos tu depósito" es probablemente una buena noticia (nunca
   // salió de tu wallet). Decirla como "no pudimos recuperar tus fondos" deja a la persona creyendo
   // que su plata está atrapada.

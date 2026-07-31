@@ -18,7 +18,7 @@ export class TrackRemittance {
    * ⚠️ Este era el peor caso del comprobante fabricado, porque acá el principal está SEGURO adentro:
    * se llega desde payout_submitted, o sea con el deposit ya confirmado on-chain en el vault. El
    * payout falló, se escribía un `refund-ledger-…` inventado, la remesa quedaba en `refunded`
-   * (terminal) y el botón de recuperar desaparecía para siempre — con la plata en el escrow. */
+   * (terminal) y el botón de recuperar desaparecía para siempre, con la plata en el escrow. */
   private async failAndRefund(r: Remittance, reason: string): Promise<void> {
     r.markPayoutFailed(reason, this.clock.nowIso());
     await this.repo.save(r);

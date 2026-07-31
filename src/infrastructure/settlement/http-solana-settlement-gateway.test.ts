@@ -66,7 +66,7 @@ describe("HttpSolanaSettlementGateway (HU-SOL-13)", () => {
   });
 
   // Antes esto esperaba "solana_settle_rejected", que le dice al use-case "el facilitator se negó ANTES
-  // de broadcastear" — o sea, "no hace falta ir a mirar la cadena". Pero un 500 de nuestra propia route
+  // de broadcastear", o sea, "no hace falta ir a mirar la cadena". Pero un 500 de nuestra propia route
   // puede ocurrir DESPUÉS del broadcast (route.ts:113, getSettlementLedger() fuera del try), con el
   // depósito ya confirmado. Bloquear se mantiene; afirmar de más, no.
   it("fail-closed: enum desconocido / status raro / body no-JSON ⇒ bloquea, y NO afirma que no salió (CD-12)", async () => {

@@ -173,7 +173,7 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
   // ── El comprobante que no existe ──────────────────────────────────────────────────────────────
   // Con el adapter REAL (LedgerRefundGateway, el que corre en producción) no hay reembolso: no
   // revierte nada. Antes devolvía igual un `refund-ledger-…` fabricado y la remesa terminaba en
-  // `refunded` — terminal — mostrándole a la persona una referencia de reembolso inventada.
+  // `refunded` (terminal), mostrándole a la persona una referencia de reembolso inventada.
   it("adapter REAL sin comprobante ⇒ payout_failed con refundTx null, NUNCA refunded ni referencia inventada", async () => {
     const repo = new InMemoryRepo();
     const wallet = new FakeSolanaWallet();
@@ -221,7 +221,7 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
 // Antes había dos, y el que faltaba era el peligroso: "no pudimos averiguarlo" se escribía como "no
 // entró", y sobre ese "no entró" se emitía un reembolso que nadie hizo. Cada caso se clava por
 // separado; si dos colapsan en uno, alguno de estos tests se pone rojo.
-describe("ConfirmAndSend — sabemos que no entró / sabemos que sí / no pudimos averiguarlo", () => {
+describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos averiguarlo", () => {
   function afterSettleFailure(
     repo: InMemoryRepo,
     probe: FakeSolanaEscrowDepositProbe,
@@ -239,7 +239,7 @@ describe("ConfirmAndSend — sabemos que no entró / sabemos que sí / no pudimo
   }
   const throwingGateway = () => new FakeSolanaSettlementGateway(undefined, "reject");
 
-  it("CASO 1 — la cadena dice que NO entró: se conserva el reason puntual del settle", async () => {
+  it("CASO 1: la cadena dice que NO entró: se conserva el reason puntual del settle", async () => {
     const repo = new InMemoryRepo();
     const id = await seedQuoted(repo);
     const probe = new FakeSolanaEscrowDepositProbe("not_deposited");
@@ -254,7 +254,7 @@ describe("ConfirmAndSend — sabemos que no entró / sabemos que sí / no pudimo
     expect(out.snapshot.principalTx).toBeNull();
   });
 
-  it("CASO 2 — la cadena dice que SÍ entró: marca de resolución manual, NUNCA el reason del settle", async () => {
+  it("CASO 2: la cadena dice que SÍ entró: marca de resolución manual, NUNCA el reason del settle", async () => {
     const repo = new InMemoryRepo();
     const id = await seedQuoted(repo);
     const probe = new FakeSolanaEscrowDepositProbe("deposited");
@@ -274,7 +274,7 @@ describe("ConfirmAndSend — sabemos que no entró / sabemos que sí / no pudimo
     expect(probe.calls).toEqual([{ remittanceId: "r-1", sender: FAKE_SOLANA_BENEFICIARY }]);
   });
 
-  it("CASO 3 — no pudimos averiguarlo: reason propio, y NO se colapsa en ninguno de los otros dos", async () => {
+  it("CASO 3: no pudimos averiguarlo: reason propio, y NO se colapsa en ninguno de los otros dos", async () => {
     const repo = new InMemoryRepo();
     const id = await seedQuoted(repo);
     const probe = new FakeSolanaEscrowDepositProbe("unknown");

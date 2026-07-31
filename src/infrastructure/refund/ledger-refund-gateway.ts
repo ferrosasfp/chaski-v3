@@ -4,7 +4,7 @@
 // ⚠️ ACÁ NACÍA EL COMPROBANTE FABRICADO. Este método devolvía `refund-ledger-${Date.now()}`: un string
 // con forma de identificador que no identifica NADA. Nadie lo puede buscar, en ninguna cadena ni en
 // ningún libro. Aguas abajo el use-case lo escribía como `refundTx` y la remesa saltaba a `refunded`,
-// que es terminal — así que la persona leía "Referencia de reembolso: refund-ledger-mabc" al lado de
+// que es terminal, así que la persona leía "Referencia de reembolso: refund-ledger-mabc" al lado de
 // la palabra reembolso, con sus USDC todavía en el vault del escrow y sin ningún botón para sacarlos.
 //
 // `null` es la respuesta HONESTA de un adapter que no mueve plata: no revertí nada, no tengo

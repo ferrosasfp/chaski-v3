@@ -350,11 +350,11 @@ export class FakePayoutAuthorityGateway implements PayoutAuthorityGateway {
 }
 
 // Refund fake (WKH-186). Tres modos, uno por cada cosa que puede pasar de verdad:
-//   · "resolve"    — devolvió un comprobante REAL ("refund-fake"): alguien revirtió plata. Es el único
+//   · "resolve":    devolvió un comprobante REAL ("refund-fake"): alguien revirtió plata. Es el único
 //     caso que autoriza a escribir `refunded`.
-//   · "no-receipt" — devolvió null: el adapter NO revirtió nada (es lo que hace el LedgerRefundGateway
+//   · "no-receipt": devolvió null: el adapter NO revirtió nada (es lo que hace el LedgerRefundGateway
 //     que corre en producción). Sin este modo, los tests sólo ejercitaban un adapter que no existe.
-//   · "reject"     — lanzó: ejercita el best-effort de failAndRefund (queda en payout_failed).
+//   · "reject":     lanzó: ejercita el best-effort de failAndRefund (queda en payout_failed).
 // Registra los inputs recibidos (molde de FakePayoutAuthorityGateway).
 export class FakeRefundGateway implements RefundGateway {
   public calls: Array<{ remittanceId: string; amountUsd: Money; reason: string }> = [];
@@ -810,7 +810,7 @@ export class FakeSolanaEscrowRefundGateway implements SolanaEscrowRefundGateway 
   }
 }
 
-// FakeSolanaEscrowDepositProbe — la respuesta de LA CADENA a "¿entró el principal?". Se construye con
+// FakeSolanaEscrowDepositProbe: la respuesta de LA CADENA a "¿entró el principal?". Se construye con
 // el valor que se quiere probar; mode="reject" ejercita que un probe caído se lea como "unknown" (no
 // pudimos preguntar) y NUNCA como "no entró".
 export class FakeSolanaEscrowDepositProbe implements SolanaEscrowDepositProbe {

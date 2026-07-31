@@ -70,7 +70,7 @@ export function statusDisplay(status: RemittanceStatus): {
  *
  * Existe porque la acción tenía UNA sola frase para todo: "No pudimos recuperar los fondos". Con el
  * caso indeterminado esa frase pasa a ser activamente engañosa: el error más probable ahí es
- * `escrow_not_found`, que significa "no hay depósito tuyo en el escrow" — o sea, la buena noticia de
+ * `escrow_not_found`, que significa "no hay depósito tuyo en el escrow", o sea, la buena noticia de
  * que probablemente no salió un peso de tu wallet. Decirle a esa persona que no pudimos recuperar sus
  * fondos la deja creyendo que su plata está atrapada en algún lado.
  */

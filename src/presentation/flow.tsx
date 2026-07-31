@@ -25,6 +25,7 @@ import {
   humanError,
   isDemoMode,
   statusDisplay,
+  unverifiedEscrowCount,
 } from "./flow-vm";
 import { cn } from "./cn";
 import { Button, Card, ChaskiMark, Field, Pill, Row, Stepper, TextInput } from "./ui";
@@ -336,6 +337,19 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
     resetTo(setStep, setRem, setPreview);
   };
 
+  // Antes de OFRECER el borrado, averiguar qué se va a borrar. La advertencia no puede hablar de
+  // remesas con fondos sin comprobar si nunca las miró. Si la consulta falla, `history` queda en
+  // `null` y la advertencia dice que no pudo revisar — que no es lo mismo que "no hay nada".
+  const onAskReset = async () => {
+    setConfirmReset(true);
+    if (!address) return;
+    try {
+      setHistory(await c.listHistory.execute(address));
+    } catch {
+      setHistory(null);
+    }
+  };
+
   // Reset explícito (WKH-184): olvida el KYC-once de esta address + pending, y vuelve a estado fresco
   // exigiendo reconexión. SEPARADO de resetTo (que preserva address para "enviar otra" — CD-7).
   const forgetAndDisconnect = () =>
@@ -348,6 +362,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
       setAddress(null);
       setRem(null);
       setPreview(null);
+      setHistory(null); // las entries del dueño ya no existen: no se puede seguir mostrando la lista
       // Limpia la PII del beneficiario de la persona anterior (mismo threat-model que esta HU):
       // en un dispositivo compartido, la persona B no debe aterrizar con el nombre/celular de A.
       setRecipient("");
@@ -418,28 +433,30 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
               {address.slice(0, 6)}…{address.slice(-4)}
             </span>
             {confirmReset ? (
-              <div className="flex items-center gap-2 text-xs text-stone">
-                <span>Esto borra tu verificación en este dispositivo.</span>
-                <button
-                  type="button"
-                  onClick={forgetAndDisconnect}
-                  disabled={busy}
-                  className="font-semibold text-cochineal underline underline-offset-2"
-                >
-                  Empezar de nuevo
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmReset(false)}
-                  className="text-stone underline underline-offset-2"
-                >
-                  Cancelar
-                </button>
+              <div className="max-w-[15rem] space-y-1.5 text-right text-xs text-stone">
+                <ResetWarning items={history} />
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={forgetAndDisconnect}
+                    disabled={busy}
+                    className="font-semibold text-cochineal underline underline-offset-2"
+                  >
+                    Borrar igual
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmReset(false)}
+                    className="text-stone underline underline-offset-2"
+                  >
+                    Cancelar
+                  </button>
+                </div>
               </div>
             ) : (
               <button
                 type="button"
-                onClick={() => setConfirmReset(true)}
+                onClick={onAskReset}
                 className="text-xs text-stone underline underline-offset-2"
               >
                 ¿No sos vos?
@@ -1046,6 +1063,40 @@ function RefundLockedNotice({ availableAt }: { availableAt: string }) {
           : "Vas a poder recuperar tus USDC cuando venza el plazo del contrato."}
       </p>
     </div>
+  );
+}
+
+// La advertencia del botón que BORRA. "¿No sos vos?" llama a ForgetKyc, que además de olvidar el
+// KYC hace repo.clearByOwner(address): borra TODAS las remesas del dueño del almacenamiento local
+// (forget-kyc.ts:25). Su copy decía sólo "esto borra tu verificación", así que ya mentía por omisión
+// antes de esta HU. Ahora que las remesas son alcanzables desde el historial, ese borrado se lleva
+// puesto el único camino que existe hacia una remesa con USDC en el escrow.
+//
+// Lo que la advertencia NO dice, y es deliberado: no dice que se pierda la plata. Borrar el
+// almacenamiento local no toca el vault. Lo que se pierde es el camino desde esta pantalla, y eso es
+// exactamente lo que está escrito.
+//
+// Tampoco bloquea: el botón existe para un dispositivo compartido (WKH-201, purgar la PII del
+// anterior) y ese uso es legítimo. Se avisa y se decide; el paso de confirmación ya estaba.
+export function ResetWarning({ items }: { items: RemittanceState[] | null }) {
+  // `null` = no pudimos leer el historial. Callar sería degradar la advertencia en silencio.
+  const atRisk = items === null ? null : unverifiedEscrowCount(items);
+  return (
+    <>
+      <p>Esto borra tu verificación y el registro de tus envíos en este dispositivo.</p>
+      {atRisk === null ? (
+        <p className="font-semibold text-cochineal-ink">
+          No pudimos revisar si tenés envíos con USDC sin comprobar.
+        </p>
+      ) : atRisk > 0 ? (
+        <p className="font-semibold text-cochineal-ink">
+          {atRisk === 1
+            ? "Tenés 1 envío del que no comprobamos si sus USDC siguen en el escrow."
+            : `Tenés ${atRisk} envíos de los que no comprobamos si sus USDC siguen en el escrow.`}{" "}
+          Borrarlos no toca esa plata, pero perdés la forma de llegar a ella desde esta pantalla.
+        </p>
+      ) : null}
+    </>
   );
 }
 

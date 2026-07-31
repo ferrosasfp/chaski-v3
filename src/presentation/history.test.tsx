@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { HistoryView, RemittanceFlow } from "./flow";
+import { HistoryView, RemittanceFlow, ResetWarning } from "./flow";
 import { buildTestContainer } from "../test-support/test-container";
 import { Money } from "../domain/money";
 import {
@@ -207,5 +207,63 @@ describe("el historial dice lo que sabe, y del vault no sabe nada", () => {
     await open([]);
     expect(screen.getByText(/No encontramos envíos guardados para esta wallet/)).toBeInTheDocument();
     expect(screen.getByText(/Si borraste los datos del navegador o entrás desde otro/)).toBeInTheDocument();
+  });
+});
+
+// ── El botón que borra ────────────────────────────────────────────────────────────────────────────
+// "¿No sos vos?" llama a ForgetKyc, que hace repo.clearByOwner: borra TODAS las remesas del dueño del
+// almacenamiento local (forget-kyc.ts:25). Su copy hablaba sólo de la verificación, así que ya mentía
+// por omisión. Mientras no había historial el daño era invisible; ahora se lleva puesto el único
+// camino que existe hacia una remesa con USDC en el escrow.
+describe("el botón que borra avisa lo que se lleva", () => {
+  it("dice que borra el registro de los envíos, no sólo la verificación", () => {
+    render(<ResetWarning items={[]} />);
+    expect(
+      screen.getByText(/borra tu verificación y el registro de tus envíos en este dispositivo/),
+    ).toBeInTheDocument();
+  });
+
+  it("con USDC sin comprobar lo advierte, y habla de perder el CAMINO, nunca la plata", () => {
+    render(<ResetWarning items={[depositedSnapshot("rem-1")]} />);
+    expect(screen.getByText(/no comprobamos si sus USDC siguen en el escrow/)).toBeInTheDocument();
+    // El límite de la advertencia: borrar el localStorage no toca el vault, y no se dice que sí.
+    expect(screen.getByText(/Borrarlos no toca esa plata/)).toBeInTheDocument();
+  });
+
+  it("cuenta cuántos envíos están en esa situación", () => {
+    render(
+      <ResetWarning
+        items={[depositedSnapshot("a"), depositedSnapshot("b"), abandonedSnapshot("c")]}
+      />,
+    );
+    expect(screen.getByText(/Tenés 2 envíos de los que no comprobamos/)).toBeInTheDocument();
+  });
+
+  it("sin nada depositado no inventa una alarma", () => {
+    render(<ResetWarning items={[abandonedSnapshot("c")]} />);
+    expect(screen.queryByText(/no comprobamos si sus USDC/)).toBeNull();
+  });
+
+  // Si la consulta del historial falla, callar sería degradar la advertencia en silencio.
+  it("si no pudo revisar el historial lo dice, en vez de no advertir nada", () => {
+    render(<ResetWarning items={null} />);
+    expect(
+      screen.getByText(/No pudimos revisar si tenés envíos con USDC sin comprobar/),
+    ).toBeInTheDocument();
+  });
+
+  it("en el flujo real, abrir '¿No sos vos?' con una remesa depositada muestra la advertencia", async () => {
+    const { container } = await seededFlow([depositedSnapshot("rem-1")]);
+    render(<RemittanceFlow container={container} />);
+    // Conectar para que exista address (es lo que hace visible el control del header).
+    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    await screen.findByText(/Tus envíos/);
+
+    fireEvent.click(screen.getByText("¿No sos vos?"));
+    expect(
+      await screen.findByText(/no comprobamos si sus USDC siguen en el escrow/),
+    ).toBeInTheDocument();
+    // Y el CTA destructivo se llama por lo que hace.
+    expect(screen.getByText("Borrar igual")).toBeInTheDocument();
   });
 });

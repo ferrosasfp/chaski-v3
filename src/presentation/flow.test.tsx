@@ -216,7 +216,10 @@ it("T4: '¿No sos vos?' aparece solo con una address conectada", async () => {
 });
 
 // ── T5 — AC-6 + AC-8: reset limpia estado React + PII (WKH-184 + MNR-1) ───────
-it("T5: 'Empezar de nuevo' limpia address + PII del beneficiario y vuelve a 'send'", async () => {
+// El CTA se llama "Borrar igual" y no "Empezar de nuevo": el overlay de resume tiene un botón con
+// ESE nombre que no borra nada, y dos botones con la misma etiqueta donde uno destruye datos y el
+// otro no es un accidente esperando. Lo que el test verifica no cambió.
+it("T5: 'Borrar igual' limpia address + PII del beneficiario y vuelve a 'send'", async () => {
   render(<RemittanceFlow container={buildTestContainer()} />);
 
   fillSend("Mamá", "999888777");
@@ -225,7 +228,7 @@ it("T5: 'Empezar de nuevo' limpia address + PII del beneficiario y vuelve a 'sen
 
   // Con address conectada → abrir la confirmación y ejecutar forgetAndDisconnect.
   fireEvent.click(await screen.findByText("¿No sos vos?"));
-  fireEvent.click(await screen.findByText("Empezar de nuevo"));
+  fireEvent.click(await screen.findByText("Borrar igual"));
 
   // (a) vuelve a "send" (input de monto visible de nuevo).
   const amountInput = (await screen.findByLabelText("Monto en dólares")) as HTMLInputElement;

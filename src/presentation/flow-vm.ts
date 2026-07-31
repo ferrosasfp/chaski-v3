@@ -106,6 +106,22 @@ export function escrowFundsKnowledge(rem: RemittanceState): EscrowKnowledge {
   return "no-deposit";
 }
 
+/**
+ * Cuántas de estas remesas tienen USDC cuyo paradero no comprobamos. Lo consume la advertencia del
+ * botón que BORRA las remesas del dueño del almacenamiento local (ForgetKyc → repo.clearByOwner).
+ *
+ * Ese botón siempre fue más destructivo de lo que decía: su copy hablaba sólo de la verificación y
+ * ya borraba las remesas. Mientras no había pantalla de historial el daño era invisible; ahora que
+ * las remesas son alcanzables, borrarlas es perder el único camino que existe hacia ellas.
+ *
+ * Ojo con lo que este número NO dice: borrar el almacenamiento local no toca los USDC, y no prueba
+ * que estén en el escrow (por eso son `unverified` y no otra cosa). La advertencia que lo use tiene
+ * que hablar de perder el CAMINO, nunca de perder la plata.
+ */
+export function unverifiedEscrowCount(items: RemittanceState[]): number {
+  return items.filter((r) => escrowFundsKnowledge(r) === "unverified").length;
+}
+
 /** La frase que acompaña a cada valor. Ninguna afirma un estado del vault que no hayamos medido. */
 export function escrowKnowledgeCopy(k: EscrowKnowledge): string {
   if (k === "returned") return "Tus USDC volvieron a tu wallet.";

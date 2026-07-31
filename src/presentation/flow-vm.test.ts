@@ -9,6 +9,7 @@ import {
   humanError,
   isDemoMode,
   statusDisplay,
+  unverifiedEscrowCount,
 } from "./flow-vm";
 
 // WKH-320: acá abajo vivía el describe de isFallbackWalletAddress (WKH-184 AC-7/AC-9), que probaba
@@ -130,6 +131,22 @@ describe("flow-vm — escrowFundsKnowledge", () => {
   // distintos y sólo tenemos el primero.
   it("`settled` NO afirma que el vault se liberó: sigue siendo 'unverified'", () => {
     expect(escrowFundsKnowledge(rem({ status: "settled", principalTx: "sig" }))).toBe("unverified");
+  });
+
+  it("unverifiedEscrowCount cuenta SÓLO las que tienen USDC de paradero desconocido", () => {
+    const items = [
+      rem({ status: "principal_in", principalTx: "sig" }), // unverified
+      rem({ status: "confirmed" }), // unverified
+      rem({ status: "quoted" }), // no-deposit
+      rem({
+        status: "refunded",
+        principalTx: "sig",
+        refundTx: "5xReal",
+        failureReason: ESCROW_REFUNDED_BY_SENDER,
+      }), // returned
+    ];
+    expect(unverifiedEscrowCount(items)).toBe(2);
+    expect(unverifiedEscrowCount([])).toBe(0);
   });
 
   it("ninguna frase promete un estado del vault salvo la del caso medido", () => {

@@ -12,6 +12,7 @@ import {
   FakePayoutAuthorityGateway,
   FakePayoutGateway,
   FakeRefundGateway,
+  FakeSolanaEscrowDepositProbe,
   FakeSolanaPayoutPrepareGateway,
   FakeSolanaSettlementGateway,
   FakeSolanaWallet,
@@ -69,7 +70,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       new FixedClock(),
       new FakePayoutAuthorityGateway(),
       new FakeRefundGateway(),
-      { prepare, gateway },
+      { prepare, gateway, probe: new FakeSolanaEscrowDepositProbe() },
     ).execute({ remittanceId: id });
 
     // Orden REAL de invocación: prepare ANTES de firmar ANTES de settle.
@@ -99,7 +100,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       new FixedClock(),
       new FakePayoutAuthorityGateway({ authorized: false, reason: "kyc_not_approved" }),
       new FakeRefundGateway(),
-      { prepare, gateway: new FakeSolanaSettlementGateway() },
+      { prepare, gateway: new FakeSolanaSettlementGateway(), probe: new FakeSolanaEscrowDepositProbe() },
     ).execute({ remittanceId: id });
 
     expect(prepareSpy).not.toHaveBeenCalled(); // no se crea una orden real sin autoridad
@@ -119,7 +120,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       clock,
       new FakePayoutAuthorityGateway(),
       new FakeRefundGateway(),
-      { prepare, gateway: new FakeSolanaSettlementGateway() },
+      { prepare, gateway: new FakeSolanaSettlementGateway(), probe: new FakeSolanaEscrowDepositProbe() },
     ).execute({ remittanceId: id });
 
     expect(prepareSpy).not.toHaveBeenCalled();
@@ -146,7 +147,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       new FixedClock(),
       new FakePayoutAuthorityGateway(),
       refund,
-      { prepare, gateway },
+      { prepare, gateway, probe: new FakeSolanaEscrowDepositProbe() },
     ).execute({ remittanceId: id });
 
     expect(authorizeSpy).not.toHaveBeenCalled(); // AC-7: NUNCA se pidió la firma
@@ -168,7 +169,11 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       new FixedClock(),
       new FakePayoutAuthorityGateway(),
       new FakeRefundGateway(),
-      { prepare: new FakeSolanaPayoutPrepareGateway(), gateway: new FakeSolanaSettlementGateway() },
+      {
+        prepare: new FakeSolanaPayoutPrepareGateway(),
+        gateway: new FakeSolanaSettlementGateway(),
+        probe: new FakeSolanaEscrowDepositProbe(),
+      },
     ).execute({ remittanceId: id });
 
     // DT-7/DT-11: el use-case ya ni recibe el PayoutGateway; este spy no puede dispararse ni por
@@ -195,7 +200,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       new FixedClock(),
       new FakePayoutAuthorityGateway(),
       new FakeRefundGateway(),
-      { prepare: new FakeSolanaPayoutPrepareGateway(), gateway },
+      { prepare: new FakeSolanaPayoutPrepareGateway(), gateway, probe: new FakeSolanaEscrowDepositProbe() },
     ).execute({ remittanceId: id });
 
     expect(out.snapshot.principalTx).toBeNull();

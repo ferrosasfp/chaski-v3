@@ -28,6 +28,7 @@ import type {
   PayoutRecord,
   PayoutSubmit,
   PopSigner,
+  PrincipalDepositState,
   QuoteGateway,
   QuoteRequest,
   RefundGateway,
@@ -36,6 +37,7 @@ import type {
   SettlementLedger,
   SettlementLedgerStatus,
   SettlementRecord,
+  SolanaEscrowDepositProbe,
   SolanaEscrowRefundGateway,
   SolanaEscrowRefundResult,
   SolanaPayoutPrepareGateway,
@@ -805,6 +807,22 @@ export class FakeSolanaEscrowRefundGateway implements SolanaEscrowRefundGateway 
     this.calls.push(input);
     if (this.mode === "reject") throw new Error("solana_refund_boom");
     return { refundTx: this.refundTx, confirmation: this.confirmation };
+  }
+}
+
+// FakeSolanaEscrowDepositProbe — la respuesta de LA CADENA a "¿entró el principal?". Se construye con
+// el valor que se quiere probar; mode="reject" ejercita que un probe caído se lea como "unknown" (no
+// pudimos preguntar) y NUNCA como "no entró".
+export class FakeSolanaEscrowDepositProbe implements SolanaEscrowDepositProbe {
+  public calls: Array<{ remittanceId: string; sender: string }> = [];
+  constructor(
+    private readonly state: PrincipalDepositState = "not_deposited",
+    private readonly mode: "resolve" | "reject" = "resolve",
+  ) {}
+  async probeDeposit(input: { remittanceId: string; sender: string }): Promise<PrincipalDepositState> {
+    this.calls.push(input);
+    if (this.mode === "reject") throw new Error("escrow_probe_boom");
+    return this.state;
   }
 }
 

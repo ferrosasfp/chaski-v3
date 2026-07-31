@@ -19,6 +19,7 @@ import {
   FakePayoutGateway,
   FakeQuoteGateway,
   FakeRefundGateway,
+  FakeSolanaEscrowDepositProbe,
   FakeSolanaPayoutPrepareGateway,
   FakeSolanaSettlementGateway,
   FakeSolanaWallet,
@@ -63,6 +64,7 @@ function setup(opts?: {
     confirm: new ConfirmAndSend(wallet, repo, clock, new FakePayoutAuthorityGateway(), new FakeRefundGateway(), {
       prepare: new FakeSolanaPayoutPrepareGateway(),
       gateway: opts?.solanaGateway ?? new FakeSolanaSettlementGateway(),
+      probe: new FakeSolanaEscrowDepositProbe(),
     }),
     track: new TrackRemittance(payout, repo, clock, new FakeRefundGateway()),
   };

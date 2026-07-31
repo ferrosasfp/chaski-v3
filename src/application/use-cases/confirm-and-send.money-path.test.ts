@@ -12,6 +12,8 @@ import {
   FakePayoutAuthorityGateway,
   FakePayoutGateway,
   FakeRefundGateway,
+  FakeSolanaEscrowDepositProbe,
+  FakeSolanaEscrowRefundGateway,
   FakeSolanaPayoutPrepareGateway,
   FakeSolanaSettlementGateway,
   FakeSolanaWallet,
@@ -23,7 +25,12 @@ import {
 } from "../../test-support/fakes";
 import type { RefundGateway } from "../ports";
 import { LedgerRefundGateway } from "../../infrastructure/refund/ledger-refund-gateway";
-import { ConfirmAndSend } from "./confirm-and-send";
+import {
+  ConfirmAndSend,
+  PRINCIPAL_SETTLED_REFUND_MANUAL,
+  PRINCIPAL_STATE_UNKNOWN,
+} from "./confirm-and-send";
+import { RecoverEscrowFunds } from "./recover-escrow-funds";
 
 const passKyc: KycVerification = {
   verificationId: "v-1",
@@ -63,6 +70,9 @@ function build(
   // RefundGateway (la interfaz), NO el fake: los tests tienen que poder cablear el adapter REAL de
   // producción, que es el único que dice la verdad sobre si hubo reembolso.
   refund: RefundGateway = new FakeRefundGateway(),
+  // La respuesta de la cadena a "¿entró el principal?". Default "not_deposited" = lo que pasa en los
+  // casos que cortan antes del broadcast; los casos donde la tx YA salió pasan el suyo explícito.
+  probe: FakeSolanaEscrowDepositProbe = new FakeSolanaEscrowDepositProbe("not_deposited"),
 ): ConfirmAndSend {
   return new ConfirmAndSend(
     wallet,
@@ -70,7 +80,7 @@ function build(
     new FixedClock(),
     new FakePayoutAuthorityGateway({ authorized: true }),
     refund,
-    { prepare, gateway },
+    { prepare, gateway, probe },
   );
 }
 
@@ -204,6 +214,183 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
     expect(out.snapshot.principalTx).toBeNull();
     expect(out.status).toBe("refunded");
     expect(out.snapshot.failureReason).toBe("settlement_unverified");
+  });
+});
+
+// ── Los TRES casos del principal cuando el settle no nos dio un sí ────────────────────────────────
+// Antes había dos, y el que faltaba era el peligroso: "no pudimos averiguarlo" se escribía como "no
+// entró", y sobre ese "no entró" se emitía un reembolso que nadie hizo. Cada caso se clava por
+// separado; si dos colapsan en uno, alguno de estos tests se pone rojo.
+describe("ConfirmAndSend — sabemos que no entró / sabemos que sí / no pudimos averiguarlo", () => {
+  function afterSettleFailure(
+    repo: InMemoryRepo,
+    probe: FakeSolanaEscrowDepositProbe,
+    gateway: FakeSolanaSettlementGateway,
+  ) {
+    return build(
+      repo,
+      new FakeSolanaWallet(),
+      new FakeSolanaPayoutPrepareGateway(),
+      gateway,
+      new FakePayoutGateway(),
+      new FakeRefundGateway("no-receipt"), // el adapter REAL no revierte nada
+      probe,
+    );
+  }
+  const throwingGateway = () => new FakeSolanaSettlementGateway(undefined, "reject");
+
+  it("CASO 1 — la cadena dice que NO entró: se conserva el reason puntual del settle", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedQuoted(repo);
+    const probe = new FakeSolanaEscrowDepositProbe("not_deposited");
+
+    const out = await afterSettleFailure(repo, probe, throwingGateway()).execute({
+      remittanceId: id,
+    });
+
+    expect(out.snapshot.failureReason).toBe("solana_settle_unavailable");
+    expect(out.status).toBe("payout_failed");
+    expect(out.snapshot.refundTx).toBeNull();
+    expect(out.snapshot.principalTx).toBeNull();
+  });
+
+  it("CASO 2 — la cadena dice que SÍ entró: marca de resolución manual, NUNCA el reason del settle", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedQuoted(repo);
+    const probe = new FakeSolanaEscrowDepositProbe("deposited");
+
+    const out = await afterSettleFailure(repo, probe, throwingGateway()).execute({
+      remittanceId: id,
+    });
+
+    expect(out.snapshot.failureReason).toBe(PRINCIPAL_SETTLED_REFUND_MANUAL);
+    expect(out.snapshot.failureReason).not.toBe("solana_settle_unavailable");
+    // La plata está en el vault: la remesa NO puede quedar terminal ni mostrar comprobante.
+    expect(out.status).toBe("payout_failed");
+    expect(out.snapshot.refundTx).toBeNull();
+    // markPrincipalIn sigue exigiendo la signature verificada: el probe NO la reemplaza.
+    expect(out.snapshot.principalTx).toBeNull();
+    // Se le preguntó a la cadena por ESTA remesa y ESTE sender (la PDA se deriva de los dos).
+    expect(probe.calls).toEqual([{ remittanceId: "r-1", sender: FAKE_SOLANA_BENEFICIARY }]);
+  });
+
+  it("CASO 3 — no pudimos averiguarlo: reason propio, y NO se colapsa en ninguno de los otros dos", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedQuoted(repo);
+    const probe = new FakeSolanaEscrowDepositProbe("unknown");
+
+    const out = await afterSettleFailure(repo, probe, throwingGateway()).execute({
+      remittanceId: id,
+    });
+
+    expect(out.snapshot.failureReason).toBe(PRINCIPAL_STATE_UNKNOWN);
+    expect(out.snapshot.failureReason).not.toBe("solana_settle_unavailable"); // ni "no entró"
+    expect(out.snapshot.failureReason).not.toBe(PRINCIPAL_SETTLED_REFUND_MANUAL); // ni "sí entró"
+    expect(out.status).toBe("payout_failed"); // recuperable
+    expect(out.snapshot.refundTx).toBeNull(); // sin comprobante inventado
+  });
+
+  it("el probe se cae ⇒ unknown: un error al preguntar NO es una respuesta negativa", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedQuoted(repo);
+    const probe = new FakeSolanaEscrowDepositProbe("not_deposited", "reject"); // lanza
+
+    const out = await afterSettleFailure(repo, probe, throwingGateway()).execute({
+      remittanceId: id,
+    });
+
+    expect(out.snapshot.failureReason).toBe(PRINCIPAL_STATE_UNKNOWN);
+  });
+
+  // El timeout de 15 s de /api/settle/solana-sponsor llega como `solana_settle_unavailable` con
+  // ok:false, NO como excepción (el gateway HTTP ya atrapa el fetch). Es EL caso de producción: el
+  // facilitator pudo haber broadcasteado y confirmado el depósito mientras nosotros dejábamos de
+  // esperar. Si esta rama no pregunta, el bug sigue vivo por el camino más frecuente.
+  it("timeout del settle (ok:false unavailable) ⇒ pregunta a la cadena, no asume que no pasó", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedQuoted(repo);
+    const probe = new FakeSolanaEscrowDepositProbe("unknown");
+    const gateway = new FakeSolanaSettlementGateway({
+      ok: false,
+      reason: "solana_settle_unavailable",
+    });
+
+    const out = await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id });
+
+    expect(probe.calls).toHaveLength(1);
+    expect(out.snapshot.failureReason).toBe(PRINCIPAL_STATE_UNKNOWN);
+  });
+
+  it("200 con shape inválido (unverified) ⇒ pregunta a la cadena: un 200 es compatible con un depósito hecho", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedQuoted(repo);
+    const probe = new FakeSolanaEscrowDepositProbe("deposited");
+    const gateway = new FakeSolanaSettlementGateway({
+      ok: false,
+      reason: "solana_settle_unverified",
+    });
+
+    const out = await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id });
+
+    expect(probe.calls).toHaveLength(1);
+    expect(out.snapshot.failureReason).toBe(PRINCIPAL_SETTLED_REFUND_MANUAL);
+  });
+
+  it("broadcast_failed (409/502) ⇒ pregunta a la cadena: un blockhash vencido no prueba que no entró antes", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedQuoted(repo);
+    const probe = new FakeSolanaEscrowDepositProbe("deposited");
+    const gateway = new FakeSolanaSettlementGateway({
+      ok: false,
+      reason: "solana_settle_broadcast_failed",
+    });
+
+    const out = await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id });
+
+    expect(probe.calls).toHaveLength(1);
+    expect(out.snapshot.failureReason).toBe(PRINCIPAL_SETTLED_REFUND_MANUAL);
+  });
+
+  // La otra mitad de la regla: cuando la respuesta viene de ANTES del broadcast, la cadena no aporta
+  // nada y no se la molesta. Sin este test, "preguntar siempre" pasaría igual y perderíamos la
+  // distinción entre un no medido y un no supuesto.
+  it("rejected (422) y rate_limited (429) ⇒ NO se pregunta: la tx nunca salió", async () => {
+    for (const reason of ["solana_settle_rejected", "solana_settle_rate_limited"] as const) {
+      const repo = new InMemoryRepo();
+      const id = await seedQuoted(repo);
+      const probe = new FakeSolanaEscrowDepositProbe("deposited"); // aunque dijera que sí
+      const gateway = new FakeSolanaSettlementGateway({ ok: false, reason });
+
+      const out = await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id });
+
+      expect(probe.calls).toHaveLength(0);
+      expect(out.snapshot.failureReason).toBe(reason);
+    }
+  });
+
+  // El cierre del círculo: el caso indeterminado tiene que dejar a la persona PODER recuperar. Antes
+  // la remesa quedaba en `refunded` y este mismo use-case cortaba con refund_not_available.
+  it("tras el caso indeterminado el sender PUEDE recuperar sus fondos del escrow", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedQuoted(repo);
+    const probe = new FakeSolanaEscrowDepositProbe("unknown");
+
+    const out = await afterSettleFailure(repo, probe, throwingGateway()).execute({
+      remittanceId: id,
+    });
+    expect(out.snapshot.failureReason).toBe(PRINCIPAL_STATE_UNKNOWN);
+
+    // El sender firma el refund trustless del escrow y la cadena lo confirma.
+    const recovered = await new RecoverEscrowFunds(
+      repo,
+      new FixedClock(),
+      new FakeSolanaEscrowRefundGateway(),
+    ).execute({ remittanceId: id, sender: FAKE_SOLANA_BENEFICIARY });
+
+    expect(recovered.confirmation).toBe("confirmed");
+    expect(recovered.remittance.status).toBe("refunded");
+    // Y ESTE comprobante sí existe: es una signature real, no un refund-ledger- inventado.
+    expect(recovered.remittance.snapshot.refundTx).toBe(FAKE_SOLANA_SIGNATURE);
   });
 });
 

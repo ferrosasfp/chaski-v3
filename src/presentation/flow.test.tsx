@@ -3,7 +3,7 @@ import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { RemittanceFlow, TrackView } from "./flow";
+import { Receipt, RemittanceFlow, TrackView } from "./flow";
 import { buildTestContainer } from "../test-support/test-container";
 import { FallbackQuoteGateway } from "../infrastructure/fallback/gateways";
 import type { ResumeKyc } from "../application/use-cases/resume-kyc";
@@ -960,6 +960,94 @@ describe("HU-SOL-13 — acción refund en TrackView (T7)", () => {
   // fondos'". Probaba que la acción de refund NO se montara cuando la VM activa no era Solana — un
   // estado que dejó de ser expresable. Lo que queda probado arriba es lo que sí decide hoy si el
   // botón aparece: el deadline y el estado de la remesa, no la VM.
+});
+
+// ── Honestidad del recibo y de los tildes del tracking ──────────────────────────────────────────
+describe("el recibo dice lo que sabe, y no más", () => {
+  afterEach(() => cleanup());
+
+  // El bug: `Estado: Entregado` estaba HARDCODEADO. Un recibo sobre una remesa que no se entregó
+  // decía "Entregado" igual. Se prueba renderizando el recibo con un estado que dice otra cosa.
+  it("un recibo sobre una remesa NO entregada no dice 'Entregado'", () => {
+    const rem = buildFlowSnapshot("payout_submitted", "transfi");
+    render(<Receipt rem={rem} onNew={() => {}} />);
+
+    expect(screen.queryByText("Entregado")).toBeNull();
+    expect(screen.getByText(/Pago en curso/)).toBeInTheDocument();
+  });
+
+  it("con la remesa entregada, ahí sí dice 'Entregado'", () => {
+    render(<Receipt rem={buildFlowSnapshot("settled", "transfi")} onNew={() => {}} />);
+    expect(screen.getByText("Entregado")).toBeInTheDocument();
+  });
+
+  // El monto: sin deliveredPen, el número es el COTIZADO. Decir "recibió" sobre él es afirmar una
+  // entrega que nadie confirmó.
+  it("sin monto entregado confirmado NO dice 'recibió': dice que es el cotizado", () => {
+    const base = Remittance.rehydrate(buildFlowSnapshot("payout_submitted", "transfi"));
+    base.markSettled("payout-tx", null, T0); // settled SIN deliveredPen
+    render(<Receipt rem={base.snapshot} onNew={() => {}} />);
+
+    expect(screen.queryByText(/recibió/)).toBeNull();
+    expect(screen.getByText(/tiene que recibir/)).toBeInTheDocument();
+    expect(screen.getByText(/Todavía no tenemos confirmación de cuánto llegó/)).toBeInTheDocument();
+  });
+
+  it("con deliveredPen confirmado sí dice 'recibió' y no muestra la advertencia", () => {
+    render(<Receipt rem={buildFlowSnapshot("settled", "transfi")} onNew={() => {}} />);
+    expect(screen.getByText(/recibió/)).toBeInTheDocument();
+    expect(screen.queryByText(/Todavía no tenemos confirmación/)).toBeNull();
+  });
+
+  // principalTx es el ÚNICO dato del flujo verificado contra la cadena, y no se mostraba en NINGUNA
+  // pantalla (grep de principalTx en src/presentation daba cero).
+  it("muestra el depósito on-chain (principalTx), que es el único dato verificado", () => {
+    const rem = buildFlowSnapshot("settled", "transfi"); // principalTx = "0xp"
+    render(<Receipt rem={rem} onNew={() => {}} />);
+    expect(screen.getByText(/Depósito en Solana/)).toBeInTheDocument();
+    expect(screen.getByText(rem.principalTx as string)).toBeInTheDocument();
+  });
+});
+
+describe("los tildes del tracking no marcan como hecho lo que está en curso", () => {
+  afterEach(() => cleanup());
+
+  function toneOf(label: string): string {
+    const li = screen.getByText(label).closest("li");
+    return li?.querySelector("span")?.className ?? "";
+  }
+
+  // El bug: en payout_submitted el paso "pagando a tu familiar" se pintaba con el tilde verde de
+  // COMPLETADO. Los USDC siguen en el vault y el release lo dispara una persona a mano.
+  it("en payout_submitted el paso del pago está EN CURSO, no completado", () => {
+    const rem = buildFlowSnapshot("payout_submitted", "transfi");
+    render(<TrackView rem={rem} recover={undefined} sender={null} onRecovered={() => {}} />);
+
+    expect(toneOf("Preparando el pago a tu familiar")).toContain("bg-cochineal"); // activo
+    expect(toneOf("Preparando el pago a tu familiar")).not.toContain("bg-verde"); // NO completado
+    // El paso anterior sí está completado: el depósito on-chain existe (principalTx).
+    expect(toneOf("Fondos en camino")).toContain("bg-verde");
+    // Y el último no está ni activo ni completado.
+    expect(toneOf("Entregado")).toContain("bg-line");
+  });
+
+  it("en principal_in el paso de los fondos está EN CURSO, no completado", () => {
+    const base = Remittance.rehydrate(buildFlowSnapshot("payout_submitted", "transfi"));
+    const rem = { ...base.snapshot, status: "principal_in" as const };
+    render(<TrackView rem={rem} recover={undefined} sender={null} onRecovered={() => {}} />);
+
+    expect(toneOf("Fondos en camino")).toContain("bg-cochineal");
+    expect(toneOf("Fondos en camino")).not.toContain("bg-verde");
+  });
+
+  it("en settled los tres pasos sí están completados", () => {
+    const rem = buildFlowSnapshot("settled", "transfi");
+    render(<TrackView rem={rem} recover={undefined} sender={null} onRecovered={() => {}} />);
+
+    for (const l of ["Fondos en camino", "Preparando el pago a tu familiar", "Entregado"]) {
+      expect(toneOf(l)).toContain("bg-verde");
+    }
+  });
 });
 
 // ── T8 — BLQ-MED-1 (AR/CR): RemittanceFlow COMPLETO renderiza con la wallet conectada ──

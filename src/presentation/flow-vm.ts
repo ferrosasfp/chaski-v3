@@ -1,5 +1,5 @@
 import type { Money } from "../domain/money";
-import type { RemittanceState } from "../domain/remittance";
+import type { RemittanceState, RemittanceStatus } from "../domain/remittance";
 
 /** Proveniencias de payout que representan un desembolso REAL (allowlist fail-safe, CD-8). Cualquier
  *  valor desconocido/typo cae del lado seguro → muestra el banner (over-warn), nunca lo oculta.
@@ -21,9 +21,48 @@ export function isDemoMode(rem: RemittanceState): boolean {
   );
 }
 
-/** Monto a MOSTRAR como entregado: el real; si no llegó, el cotizado; si tampoco, null → UI muestra "—". */
-export function deliveredDisplay(rem: RemittanceState): Money | null {
-  return rem.deliveredPen ?? rem.quote?.receive ?? null;
+/**
+ * Monto a mostrar en el recibo, DICIENDO cuál de los dos es.
+ *
+ * Antes devolvía `deliveredPen ?? quote.receive` a secas, y la pantalla ponía los dos bajo la misma
+ * frase: "{nombre} recibió {monto}". Con `deliveredPen` en null —que es el caso de TODA remesa cuyo
+ * payout no reportó un monto entregado— el recibo afirmaba que la familia recibió una cifra que
+ * nadie confirmó: era el número COTIZADO con cara de comprobante.
+ *
+ * Devolver el par (monto, confirmado) es lo que impide volver a confundirlos: quien lo consuma tiene
+ * que decidir qué frase usar, y no puede hacerlo por accidente.
+ */
+export function deliveredDisplay(rem: RemittanceState): {
+  amount: Money | null;
+  confirmed: boolean;
+} {
+  if (rem.deliveredPen) return { amount: rem.deliveredPen, confirmed: true };
+  return { amount: rem.quote?.receive ?? null, confirmed: false };
+}
+
+/** Copy del estado de la remesa para la persona. Existe porque el recibo tenía "Entregado"
+ *  HARDCODEADO: decía lo mismo pasara lo que pasara. Acá el estado real elige la frase. */
+export function statusDisplay(status: RemittanceStatus): {
+  label: string;
+  tone: "ok" | "active" | "bad" | "neutral";
+} {
+  switch (status) {
+    case "settled":
+      return { label: "Entregado", tone: "ok" };
+    case "payout_submitted":
+      return { label: "Pago en curso", tone: "active" };
+    case "principal_in":
+      return { label: "Fondos depositados", tone: "active" };
+    case "confirmed":
+      return { label: "Confirmado", tone: "active" };
+    case "payout_failed":
+      return { label: "No se pudo entregar", tone: "bad" };
+    case "refunded":
+      return { label: "Reembolsado", tone: "neutral" };
+    default:
+      // Fail-safe: un estado que no llega al recibo NO se disfraza de entregado.
+      return { label: "En curso", tone: "neutral" };
+  }
 }
 
 /** Traduce un código de error interno a copy humano para la UI. */

@@ -5,6 +5,7 @@ import {
   BadgeCheck,
   Camera,
   Check,
+  Clock3,
   IdCard,
   Loader2,
   ScanFace,
@@ -17,7 +18,8 @@ import { MIN_SEND_USD, Remittance } from "../domain/remittance"; // WKH-187: reh
 import { createContainer, type Container } from "../composition/container";
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
 import { resolveSolanaNetworkConfig } from "../infrastructure/chain"; // HU-SOL-13: cluster Solana activo (env-driven)
-import { deliveredDisplay, humanError, isDemoMode } from "./flow-vm";
+import { deliveredDisplay, humanError, isDemoMode, statusDisplay } from "./flow-vm";
+import { cn } from "./cn";
 import { Button, Card, ChaskiMark, Field, Pill, Row, Stepper, TextInput } from "./ui";
 
 // WKH-187: el quote se muestra ANTES del KYC. Orden: send→connect→review(pre-KYC)→verify→confirm(post-KYC)→track→done.
@@ -741,7 +743,10 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
 
 const TRACK_STEPS: { key: RemittanceState["status"][]; label: string }[] = [
   { key: ["confirmed", "principal_in"], label: "Fondos en camino" },
-  { key: ["payout_submitted"], label: "Pagando a tu familiar" },
+  // "Pagando a tu familiar" decía más de lo que pasa: en payout_submitted la orden con el partner
+  // está creada y los USDC siguen en el vault del escrow, esperando un release que hoy dispara una
+  // persona a mano (ver confirm-and-send.ts:173-182). Nadie está pagando todavía.
+  { key: ["payout_submitted"], label: "Preparando el pago a tu familiar" },
   { key: ["settled"], label: "Entregado" },
 ];
 // Exportado para test directo (HU-SOL-13/T7): testear TrackView en aislamiento cubre exactamente la
@@ -820,8 +825,14 @@ export function TrackView({
       </div>
       <ol className="space-y-3">
         {TRACK_STEPS.map((s, i) => {
-          const reached = order.indexOf(s.key[s.key.length - 1] ?? "settled") <= idx;
-          const active = s.key.includes(rem.status);
+          const last = order.indexOf(s.key[s.key.length - 1] ?? "settled");
+          // Un paso está COMPLETADO cuando el estado lo pasó de largo, no cuando lo alcanzó. Antes
+          // era `last <= idx`, así que estar EN payout_submitted pintaba el tilde verde de
+          // "pagando a tu familiar": un paso en curso se dibujaba como un paso terminado.
+          // La excepción es el último ("Entregado"): no hay ningún estado después, así que ahí
+          // completarlo ES estar en él.
+          const reached = idx > last || (last === order.length - 1 && idx === last);
+          const active = !reached && s.key.includes(rem.status);
           return (
             <li key={s.label} className="flex items-center gap-3">
               <span
@@ -900,17 +911,42 @@ export function RefundAction({
   );
 }
 
-function Receipt({ rem, onNew }: { rem: RemittanceState; onNew: () => void }) {
-  const delivered = deliveredDisplay(rem);
+// El recibo. Antes afirmaba tres cosas que no sabía: el estado ("Entregado" HARDCODEADO), el monto
+// (el cotizado presentado como recibido cuando nadie confirmó cuánto llegó) y la referencia (un uuid
+// local). Y no mostraba `principalTx`, que es el ÚNICO dato del flujo verificado on-chain.
+// Exportado para test directo, mismo criterio que TrackView: la única forma de probar que el recibo
+// no afirma MÁS de lo que dice el estado es renderizarlo con un estado que diga menos.
+export function Receipt({ rem, onNew }: { rem: RemittanceState; onNew: () => void }) {
+  const { amount, confirmed } = deliveredDisplay(rem);
+  const status = statusDisplay(rem.status);
   return (
     <div className="space-y-4">
       <Card className="text-center">
-        <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-verde-bg">
-          <Check className="h-7 w-7 text-verde" />
+        <div
+          className={cn(
+            "mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full",
+            confirmed ? "bg-verde-bg" : "bg-sand",
+          )}
+        >
+          {confirmed ? (
+            <Check className="h-7 w-7 text-verde" />
+          ) : (
+            <Clock3 className="h-7 w-7 text-stone" />
+          )}
         </div>
-        <p className="text-sm text-stone">{rem.beneficiary.name} recibió</p>
-        <p className="tabular text-4xl font-extrabold text-verde">{delivered ? delivered.format() : "—"}</p>
+        {/* "recibió" SÓLO con un monto entregado confirmado. Si no, se dice qué es el número. */}
+        <p className="text-sm text-stone">
+          {rem.beneficiary.name} {confirmed ? "recibió" : "tiene que recibir"}
+        </p>
+        <p className={cn("tabular text-4xl font-extrabold", confirmed ? "text-verde" : "text-ink")}>
+          {amount ? amount.format() : "—"}
+        </p>
         <p className="mt-1 text-xs text-stone">en su {methodLabel(rem.beneficiary.method)}</p>
+        {confirmed ? null : (
+          <p className="mx-auto mt-2 max-w-xs text-xs text-stone">
+            Es el monto cotizado. Todavía no tenemos confirmación de cuánto llegó.
+          </p>
+        )}
         {isDemoMode(rem) ? (
           <div className="mt-3 flex items-center justify-center">
             <Pill tone="warn">Modo demo (sin dinero real)</Pill>
@@ -921,7 +957,12 @@ function Receipt({ rem, onNew }: { rem: RemittanceState; onNew: () => void }) {
         <p className="mb-2 text-sm font-semibold">Recibo</p>
         <Row label="Enviaste" value={rem.sendUsd.format()} />
         {rem.quote ? <Row label="Tipo de cambio" value={`S/ ${rem.quote.rate.toFixed(3)}`} /> : null}
-        <Row label="Estado" value={<Pill tone="ok">Entregado</Pill>} />
+        <Row label="Estado" value={<Pill tone={status.tone}>{status.label}</Pill>} />
+        {/* El único dato de esta pantalla que alguien verificó contra la cadena. */}
+        {rem.principalTx ? (
+          <Row label="Depósito en Solana" value={shortTx(rem.principalTx)} />
+        ) : null}
+        {rem.refundTx ? <Row label="Reembolso" value={shortTx(rem.refundTx)} /> : null}
         <Row label="Referencia" value={rem.id.slice(0, 8)} />
       </Card>
       <Button variant="outline" onClick={onNew}>
@@ -929,6 +970,11 @@ function Receipt({ rem, onNew }: { rem: RemittanceState; onNew: () => void }) {
       </Button>
     </div>
   );
+}
+
+/** Firma base58 acortada para la UI (el valor entero no entra en una fila y nadie lo lee completo). */
+function shortTx(tx: string): string {
+  return tx.length <= 16 ? tx : `${tx.slice(0, 8)}…${tx.slice(-8)}`;
 }
 
 function methodLabel(m: PayoutMethod): string {

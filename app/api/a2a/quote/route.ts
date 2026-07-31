@@ -60,7 +60,15 @@ export async function POST(req: Request): Promise<Response> {
     }
     if (!isValidQuoteResult(r.outputs[0]))
       return NextResponse.json({ error: "a2a_bad_shape" }, { status: 502 });
-    return NextResponse.json({ result: r.outputs[0] }, { status: 200 }); // sólo el result (nunca URL ni PII)
+    // QUIÉN cotizó. El gateway lo dice en `steps[0].agent` y hasta acá se tiraba. Sigue sin
+    // viajar ni la URL ni PII: sólo el slug/registry/capability del agente elegido, que es
+    // exactamente lo que hace auditable una elección hecha server-side. Ausente ⇒ no se manda la
+    // clave, y la remesa queda diciendo "no sé quién", que es la verdad.
+    const chosen = r.agents[0];
+    return NextResponse.json(
+      { result: r.outputs[0], ...(chosen ? { agent: chosen } : {}) },
+      { status: 200 },
+    );
   }
 
   // --- rama punto-a-punto / mock: BYTE-IDÉNTICA al actual (BASE, fetch, isValidQuoteResult) ---

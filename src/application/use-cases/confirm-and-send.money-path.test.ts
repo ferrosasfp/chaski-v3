@@ -104,6 +104,62 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
     expect(submitSpy).not.toHaveBeenCalled();
   });
 
+  // Trazabilidad de la plata: la remesa tiene que poder decir QUIÉN dio el beneficiary contra el
+  // que la persona firmó. Sin esto, con el carril de estreno encendido, Chaski atestaría una
+  // dirección sin poder decir de dónde salió.
+  it("guarda con la remesa el agente que dio el beneficiary (slug, carril de estreno incluido)", async () => {
+    const repo = new InMemoryRepo();
+    const prepare = new FakeSolanaPayoutPrepareGateway({
+      ok: true,
+      result: {
+        beneficiary: FAKE_SOLANA_BENEFICIARY,
+        authority: FAKE_SOLANA_AUTHORITY,
+        attestation: "att",
+        payoutId: "transfi-sol-po-1",
+        provenance: "transfi",
+        agent: {
+          slug: "remit-cashout-payout",
+          registry: "WasiAI",
+          capability: "remittance-payout",
+          trial: true,
+        },
+      },
+    });
+    const id = await seedQuoted(repo);
+
+    const out = await build(
+      repo,
+      new FakeSolanaWallet(),
+      prepare,
+      new FakeSolanaSettlementGateway(),
+    ).execute({ remittanceId: id });
+
+    expect(out.status).toBe("payout_submitted");
+    expect(out.snapshot.payoutAgent).toEqual({
+      slug: "remit-cashout-payout",
+      registry: "WasiAI",
+      capability: "remittance-payout",
+      trial: true,
+    });
+  });
+
+  // No saber quién atendió es un estado legítimo y se guarda como tal. Rellenar con un objeto
+  // vacío afirmaría que sabemos y no diríamos quién.
+  it("sin agente informado, payoutAgent queda null (no un objeto fabricado)", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedQuoted(repo);
+
+    const out = await build(
+      repo,
+      new FakeSolanaWallet(),
+      new FakeSolanaPayoutPrepareGateway(),
+      new FakeSolanaSettlementGateway(),
+    ).execute({ remittanceId: id });
+
+    expect(out.status).toBe("payout_submitted");
+    expect(out.snapshot.payoutAgent).toBeNull();
+  });
+
   it("T2/AC-1: prepare !ok ⇒ failAndRefund ANTES de firmar; authorizePrincipal + settle NUNCA; principalTx null", async () => {
     const repo = new InMemoryRepo();
     const wallet = new FakeSolanaWallet();

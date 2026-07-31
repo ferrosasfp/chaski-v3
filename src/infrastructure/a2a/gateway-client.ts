@@ -40,6 +40,22 @@ export type GatewayStep = {
   constraints?: GatewayConstraints;
 };
 
+/**
+ * QUIÉN ejecutó un step, tal como lo dijo el gateway. Se lee de `steps[i].agent` (+ `resolvedFrom`),
+ * que la respuesta de `/compose` YA traía y este cliente descartaba.
+ *
+ * Es trazabilidad, no una decisión: nada del transporte lo usa para elegir, reintentar ni validar.
+ * Sirve para poder responder "qué agente atendió esta remesa", que sin esto no se podía responder.
+ */
+export type GatewayAgentRef = {
+  slug: string;
+  registry: string;
+  /** `resolvedFrom.capability`: presente SÓLO si lo eligió el gateway a partir de una capacidad. */
+  capability?: string;
+  /** `agent.trial.granted`: entró por el carril de estreno, o sea sin historial liquidado. */
+  trial?: boolean;
+};
+
 export type GatewayFailCode =
   | "not_configured" // envs ausentes ⇒ cero fetch
   | "invalid_steps" // steps vacío ⇒ cero fetch
@@ -68,11 +84,48 @@ export type GatewayFailure = {
 };
 
 export type GatewayResult =
-  | { ok: true; outputs: Record<string, unknown>[] } // uno por step, en orden
+  | {
+      ok: true;
+      outputs: Record<string, unknown>[]; // uno por step, en orden
+      /**
+       * Uno por step, en el MISMO orden que `outputs`. `null` = el gateway no dijo (o no dijo de
+       * forma legible) qué agente ejecutó ese step.
+       *
+       * `null` y no un objeto con campos vacíos, a propósito: "no sé quién atendió" es un estado
+       * real y el consumidor tiene que poder distinguirlo de "atendió alguien sin nombre". Y NO es
+       * un error de transporte: la elección del agente no cambia por que no sepamos anotarla, así
+       * que un `agent` ilegible NO invalida un output que sí es válido.
+       */
+      agents: (GatewayAgentRef | null)[];
+    }
   | GatewayFailure;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
+}
+
+/** Lee `steps[i].agent` (+ `resolvedFrom`) SIN inventar nada: sin `slug` string no-vacío no hay
+ *  identidad que afirmar ⇒ `null`. Los opcionales entran sólo con el tipo exacto. */
+function readAgentRef(entry: unknown): GatewayAgentRef | null {
+  if (!isRecord(entry)) return null;
+  const agent = entry.agent;
+  if (!isRecord(agent)) return null;
+  if (typeof agent.slug !== "string" || !agent.slug) return null;
+  const resolvedFrom = entry.resolvedFrom;
+  const capability =
+    isRecord(resolvedFrom) && typeof resolvedFrom.capability === "string"
+      ? resolvedFrom.capability
+      : undefined;
+  // `trial` sólo existe en la respuesta cuando la admisión ocurrió de verdad (el gateway lo omite,
+  // no lo manda en false). Se copia `granted` tal cual; su ausencia NO se traduce a `false`, porque
+  // "el gateway no lo marcó" no es "este agente tiene historial".
+  const trial = isRecord(agent.trial) && agent.trial.granted === true ? true : undefined;
+  return {
+    slug: agent.slug,
+    registry: typeof agent.registry === "string" ? agent.registry : "",
+    ...(capability !== undefined ? { capability } : {}),
+    ...(trial !== undefined ? { trial } : {}),
+  };
 }
 
 // Config server-only (SIN NEXT_PUBLIC_, CD-3), leída en runtime dentro de la fn (patrón !BASE).
@@ -229,16 +282,20 @@ export async function runViaGateway(params: { steps: GatewayStep[] }): Promise<G
     return { ok: false, code: "bad_response" };
   }
   const outputs: Record<string, unknown>[] = [];
+  const agents: (GatewayAgentRef | null)[] = [];
   for (let i = 0; i < steps.length; i++) {
     const entry: unknown = steps[i];
     const output = isRecord(entry) ? entry.output : undefined;
     if (!isRecord(output)) return { ok: false, code: "bad_response", step: i };
     outputs.push(output);
+    // QUIÉN lo ejecutó. El gateway ya lo mandaba en `steps[i].agent` y este cliente lo tiraba.
+    // No participa de ninguna validación: un agente ilegible da `null`, nunca un bad_response.
+    agents.push(readAgentRef(entry));
   }
 
   // 8. Happy path: outputs[i] = steps[i].output SIN re-desenvolver (el gateway ya hizo
   //    output = data.result ?? data, DT-A2A-6). Cada route revalida su propio shape final.
-  return { ok: true, outputs };
+  return { ok: true, outputs, agents };
 }
 
 /** Log de fallo con SÓLO enums (CD-9): ni el `message` del gateway, ni el input (PII), ni la URL,

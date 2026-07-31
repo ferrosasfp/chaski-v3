@@ -55,6 +55,38 @@ describe("A2aQuoteGateway (AC-3)", () => {
     expect(q.provenance).toBe("remit-corridor-fx");
   });
 
+  // El agente que cotizó viaja DENTRO del Quote: es lo que se persiste con la remesa, así que
+  // sobrevive a una recarga por el mismo camino que la tasa y el recibo lo puede mostrar.
+  it("el agente que cotizó queda DENTRO del Quote (sobrevive a la persistencia del snapshot)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      okJson({
+        result: validQuoteResult,
+        agent: {
+          slug: "remit-corridor-fx",
+          registry: "WasiAI",
+          capability: "remittance-fx-quote",
+          trial: true,
+        },
+      }),
+    );
+    const q = await new A2aQuoteGateway().requestQuote(quoteReq);
+    expect(q.agent).toEqual({
+      slug: "remit-corridor-fx",
+      registry: "WasiAI",
+      capability: "remittance-fx-quote",
+      trial: true,
+    });
+  });
+
+  it("sin agent (o ilegible) el Quote NO lo inventa: el campo queda ausente", async () => {
+    vi.stubGlobal("fetch", okJson({ result: validQuoteResult }));
+    expect((await new A2aQuoteGateway().requestQuote(quoteReq)).agent).toBeUndefined();
+
+    vi.stubGlobal("fetch", okJson({ result: validQuoteResult, agent: { registry: "WasiAI" } }));
+    expect((await new A2aQuoteGateway().requestQuote(quoteReq)).agent).toBeUndefined();
+  });
+
   it("AC-5: !ok → throw a2a_quote_unavailable (PII-free)", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 502, json: async () => ({}) })));
     await expect(new A2aQuoteGateway().requestQuote(quoteReq)).rejects.toThrow("a2a_quote_unavailable");

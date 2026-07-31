@@ -26,7 +26,7 @@
 // de TransFi por orden) y la respuesta Solana-shaped del server (`{beneficiary, authority, ...}` base58)
 // son founder-gated — hasta que el agente remit-cashout-payout exponga el destino Solana. El binding/
 // atestación queda listo. Este gateway se unit-testea con un mock (FakeSolanaPayoutPrepareGateway).
-import type { Beneficiary } from "../../domain/remittance";
+import type { AgentRef, Beneficiary } from "../../domain/remittance";
 import type { PopSigner, SolanaPayoutPrepareGateway } from "../../application/ports";
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -66,6 +66,7 @@ function isValidSolanaPrepareShape(v: unknown): v is {
   attestation: string;
   payoutId: string;
   provenance: string;
+  agent?: unknown; // trazabilidad: se lee aparte y NO se exige (ausente ⇒ "no sé quién")
 } {
   if (!isRecord(v)) return false;
   if (typeof v.beneficiary !== "string" || !v.beneficiary) return false;
@@ -118,6 +119,21 @@ async function verifyAttestation(
   return { beneficiary: out.beneficiary, authority: out.authority };
 }
 
+/** Lee el `agent` que la route agrega al 200 (trazabilidad). Sin `slug` no hay identidad que
+ *  afirmar ⇒ `undefined`: la remesa queda diciendo "no sé quién", que es la verdad. NUNCA bloquea
+ *  el prepare — saber o no saber quién atendió no cambia la validez del destino, y hacerlo
+ *  bloqueante convertiría un dato de auditoría en un modo de falla del money-path. */
+function readAgentRef(raw: unknown): AgentRef | undefined {
+  if (!isRecord(raw)) return undefined;
+  if (typeof raw.slug !== "string" || !raw.slug) return undefined;
+  return {
+    slug: raw.slug,
+    registry: typeof raw.registry === "string" ? raw.registry : "",
+    ...(typeof raw.capability === "string" ? { capability: raw.capability } : {}),
+    ...(typeof raw.trial === "boolean" ? { trial: raw.trial } : {}),
+  };
+}
+
 export class HttpSolanaPayoutPrepareGateway implements SolanaPayoutPrepareGateway {
   // El PoP NO es opcional acá. La route lo exige (PR6) y responde 403 opaco sin él, así que un
   // gateway sin PopSigner sólo puede producir un rechazo: por eso el signer es un argumento de
@@ -141,6 +157,7 @@ export class HttpSolanaPayoutPrepareGateway implements SolanaPayoutPrepareGatewa
           attestation: string;
           payoutId: string;
           provenance: string;
+          agent?: AgentRef;
         };
       }
     | { ok: false; reason: string }
@@ -221,6 +238,7 @@ export class HttpSolanaPayoutPrepareGateway implements SolanaPayoutPrepareGatewa
     if (attested.beneficiary !== body.beneficiary || attested.authority !== body.authority) {
       return { ok: false, reason: "prepare_attestation_mismatch" };
     }
+    const agent = readAgentRef(body.agent);
     return {
       ok: true,
       result: {
@@ -231,6 +249,7 @@ export class HttpSolanaPayoutPrepareGateway implements SolanaPayoutPrepareGatewa
         attestation: body.attestation,
         payoutId: body.payoutId,
         provenance: body.provenance,
+        ...(agent ? { agent } : {}),
       },
     };
   }

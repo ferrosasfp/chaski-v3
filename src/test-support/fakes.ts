@@ -712,7 +712,14 @@ export class FakeSolanaWallet implements WalletPort {
 export type FakeSolanaPrepareResult =
   | {
       ok: true;
-      result: { beneficiary: string; authority: string; attestation: string; payoutId: string; provenance: string };
+      result: {
+        beneficiary: string;
+        authority: string;
+        attestation: string;
+        payoutId: string;
+        provenance: string;
+        agent?: import("../domain/remittance").AgentRef;
+      };
     }
   | { ok: false; reason: string };
 

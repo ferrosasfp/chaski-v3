@@ -2,6 +2,7 @@
 // SIN persistencia/historial), in-memory en SSR. Serializa Money como { __m:[minor,currency] }.
 import { Money } from "../domain/money";
 import {
+  type AgentRef,
   type PersistedIdentity,
   Remittance,
   type RemittanceState,
@@ -43,6 +44,20 @@ function normalizeIdentity(raw: unknown): PersistedIdentity | null {
     nationality: str(o.nationality),
   });
 }
+/** Read defensivo del AgentRef persistido. Sin `slug` no hay identidad que afirmar ⇒ null (decir
+ *  "no sé" es correcto; inventar un slug vacío no lo es). Los campos opcionales sólo se conservan
+ *  si vienen con el tipo correcto. */
+function normalizeAgentRef(raw: unknown): AgentRef | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.slug !== "string" || !o.slug) return null;
+  return {
+    slug: o.slug,
+    registry: str(o.registry),
+    ...(typeof o.capability === "string" ? { capability: o.capability } : {}),
+    ...(typeof o.trial === "boolean" ? { trial: o.trial } : {}),
+  };
+}
 function normalizeState(s: RemittanceState): RemittanceState {
   const kyc = s.kyc ? { ...s.kyc, identity: normalizeIdentity(s.kyc.identity) } : null;
   const ownerAddress = typeof s.ownerAddress === "string" ? s.ownerAddress : null;
@@ -50,7 +65,10 @@ function normalizeState(s: RemittanceState): RemittanceState {
   const version = typeof s.version === "number" ? s.version : 0;
   // Snapshot legacy sin payoutProvenance (pre-WKH-200) → default null (CD-2, nunca lanza).
   const payoutProvenance = typeof s.payoutProvenance === "string" ? s.payoutProvenance : null;
-  return { ...s, kyc, ownerAddress, version, payoutProvenance };
+  // Snapshot legacy sin payoutAgent → null, que es exactamente lo que significa: de esa remesa NO
+  // sabemos qué agente la atendió. Un objeto vacío en su lugar afirmaría que sí y no diría quién.
+  const payoutAgent = normalizeAgentRef(s.payoutAgent);
+  return { ...s, kyc, ownerAddress, version, payoutProvenance, payoutAgent };
 }
 
 function replacer(_k: string, v: unknown): unknown {

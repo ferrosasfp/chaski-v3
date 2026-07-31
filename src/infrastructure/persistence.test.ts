@@ -263,6 +263,41 @@ describe("LocalRepo.read — defensivo AC-4 (snapshot legacy con PII cruda)", ()
     expect(r?.snapshot.payoutProvenance).toBeNull();
   });
 
+  // El criterio de la etapa: la identidad del agente tiene que SOBREVIVIR a una recarga. Acá se
+  // prueba contra el blob real de localStorage, ida y vuelta.
+  it("la identidad del agente (quote y payout) sobrevive el round-trip por localStorage", async () => {
+    const repo = new LocalRepo();
+    const r = Remittance.create("ag-1", beneficiary(), Money.of(400, "USDC"), NOW);
+    r.attachQuote(
+      { ...seedQuote, agent: { slug: "remit-corridor-fx", registry: "WasiAI", trial: true } },
+      NOW,
+    );
+    await repo.save(r);
+
+    // segunda instancia = lo que pasa después de un F5: se lee del storage, no de memoria
+    const back = await new LocalRepo().get("ag-1");
+    expect(back?.snapshot.quote?.agent).toEqual({
+      slug: "remit-corridor-fx",
+      registry: "WasiAI",
+      trial: true,
+    });
+  });
+
+  it("legacy sin `payoutAgent` → null: de esa remesa NO sabemos quién la atendió", async () => {
+    storage.setItem(KEY, JSON.stringify(legacy)); // fixture legacy no trae `payoutAgent`
+    const r = await new LocalRepo().get("leg-1");
+    expect(r?.snapshot.payoutAgent).toBeNull();
+  });
+
+  it("payoutAgent persistido sin slug → null (no se afirma una identidad sin nombre)", async () => {
+    storage.setItem(
+      KEY,
+      JSON.stringify([{ ...legacy[0], id: "leg-2", payoutAgent: { registry: "WasiAI" } }]),
+    );
+    const r = await new LocalRepo().get("leg-2");
+    expect(r?.snapshot.payoutAgent).toBeNull();
+  });
+
   it("raw corrupto no crashea (parse defensivo → mapa vacío)", async () => {
     storage.setItem(KEY, "{not json");
     const repo = new LocalRepo();

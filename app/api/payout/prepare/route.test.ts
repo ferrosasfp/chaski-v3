@@ -509,6 +509,53 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       expect(raw).not.toContain("999888777");
     });
 
+    // Traza del dinero: el 200 tiene que decir QUIÉN dio la dirección que se acaba de atestar.
+    // Sin esto, con el carril de estreno encendido, se atesta una dirección sin poder decir de
+    // dónde salió.
+    it("el 200 informa QUÉ agente dio el depositAddress, sin filtrar la URL del gateway", async () => {
+      setGatewayEnv();
+      gwRouter({
+        body: {
+          success: true,
+          steps: [
+            {
+              output: agentResult(),
+              agent: {
+                slug: "remit-cashout-payout",
+                registry: "WasiAI",
+                invokeUrl: "https://interno.test/invoke",
+                trial: { granted: true, under_min_reputation: 2 },
+              },
+              resolvedFrom: { capability: "remittance-payout" },
+            },
+          ],
+        },
+      });
+      const res = await POST(req(bodyOf()));
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as Record<string, unknown>;
+      expect(json.agent).toEqual({
+        slug: "remit-cashout-payout",
+        registry: "WasiAI",
+        capability: "remittance-payout",
+        trial: true,
+      });
+      expect(JSON.stringify(json)).not.toContain("interno.test");
+    });
+
+    // La identidad del agente NO es un guard: que no se sepa no puede tumbar un prepare válido.
+    it("agente ilegible ⇒ 200 sin la clave agent (el prepare NO se cae por no saber quién fue)", async () => {
+      setGatewayEnv();
+      gwRouter({
+        body: { success: true, steps: [{ output: agentResult(), agent: { registry: "X" } }] },
+      });
+      const res = await POST(req(bodyOf()));
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as Record<string, unknown>;
+      expect(json.beneficiary).toBe(DEPOSIT);
+      expect(json).not.toHaveProperty("agent");
+    });
+
     it("T-A3.2: guard-order INTACTO con el flag encendido (PR3/PR5/PR6/PR4 cortan igual y NINGÚN fetch)", async () => {
       setGatewayEnv();
       gwRouter();

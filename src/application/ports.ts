@@ -4,6 +4,7 @@
 
 import type { Money } from "../domain/money";
 import type {
+  AgentRef,
   Beneficiary,
   KycVerification,
   PayoutMethod,
@@ -180,11 +181,13 @@ export interface SolanaPayoutPrepareGateway {
     | {
         ok: true;
         result: {
-          beneficiary: string; // base58 — destino del release (server-side)
-          authority: string; // base58 — release-authority (server-side)
+          beneficiary: string; // base58 — destino del release (server-side), YA VERIFICADO contra la atestación
+          authority: string; // base58 — release-authority (server-side), YA VERIFICADA contra la atestación
           attestation: string;
           payoutId: string;
           provenance: string;
+          /** QUIÉN dio este `beneficiary`. Ausente ⟹ el transporte no lo informó (punto-a-punto). */
+          agent?: AgentRef;
         };
       }
     | { ok: false; reason: string }

@@ -191,6 +191,10 @@ export async function POST(req: Request): Promise<Response> {
   // El transporte NO participa de ninguno de los dos (CD-10): el piso de reputación sube el piso, no
   // reemplaza esas dos capas, que son independientes de QUÉ agente respondió.
   let result: unknown;
+  // QUIÉN dio el depositAddress. `undefined` = no lo sabemos (rama punto-a-punto: ahí el agente lo
+  // fija la URL, no lo elige nadie). Viaja al 200 para que la remesa pueda decir de dónde salió la
+  // dirección contra la que la persona firmó. NO participa de ningún guard.
+  let resolvedAgent: Record<string, unknown> | undefined;
   if (process.env.NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER === "a2a-gateway") {
     const r = await runViaGateway({
       steps: [
@@ -211,6 +215,10 @@ export async function POST(req: Request): Promise<Response> {
       );
     }
     result = r.outputs[0];
+    // El gateway SÍ dice a quién eligió (`steps[i].agent`); hasta acá se descartaba. Si no lo dijo
+    // de forma legible queda undefined y la remesa lo va a decir así, sin rellenar.
+    const chosen = r.agents[0];
+    if (chosen) resolvedAgent = { ...chosen };
   } else {
     // ── rama punto-a-punto EXISTENTE, sin cambios de lógica (CD-15) ──
     // idempotencyKey intacto (CD-10). Todo en try/catch: timeout/DNS/parse → 502 opaco, NUNCA 500
@@ -305,7 +313,17 @@ export async function POST(req: Request): Promise<Response> {
   }
   // 7. 200 — matchea EXACTO isValidSolanaPrepareShape del gateway.
   return NextResponse.json(
-    { beneficiary: depositAddress, authority: authoritySol, attestation: attestationSol, payoutId: payoutIdSol, provenance: provenanceSol },
+    {
+      beneficiary: depositAddress,
+      authority: authoritySol,
+      attestation: attestationSol,
+      payoutId: payoutIdSol,
+      provenance: provenanceSol,
+      // Aditivo y opcional: el cliente lo lee aparte y su ausencia no invalida nada. NO va dentro
+      // de la atestación a propósito — la atestación ata el DESTINO, y meterle un campo que no
+      // participa del binding sólo agranda lo que hay que firmar sin proteger nada más.
+      ...(resolvedAgent ? { agent: resolvedAgent } : {}),
+    },
     { status: 200 },
   );
 }

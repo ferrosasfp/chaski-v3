@@ -12,6 +12,32 @@ export interface Beneficiary {
   destination: string; // celular (Yape/Plin) o CCI (banco)
 }
 
+/**
+ * QUIÉN atendió un leg de la remesa. Dato de TRAZABILIDAD, no de negocio: nada del flujo lo lee
+ * para decidir, y ninguna invariante depende de él. Existe porque el gateway elige el agente y
+ * hasta ahora Chaski tiraba esa elección: una remesa no podía decir quién la cotizó ni quién dio
+ * la dirección de depósito contra la que la persona firmó.
+ *
+ * Vive en el agregado (y no en un log del server) por dos razones concretas: se persiste con el
+ * resto del snapshot, así que SOBREVIVE a una recarga; y está donde la UI ya lee, así que el
+ * recibo puede mostrarlo sin una consulta nueva.
+ *
+ * Todo campo es lo que el gateway DIJO. Ninguno se rellena por defecto ni se deduce: si el
+ * gateway no lo mandó, el campo queda ausente y el consumidor tiene que poder decir "no sé".
+ */
+export interface AgentRef {
+  slug: string; // el slug CANÓNICO del agente que ejecutó el step
+  registry: string; // de qué catálogo salió (display name del gateway)
+  /** La capacidad por la que el GATEWAY lo eligió. Ausente ⟹ el llamador lo nombró. */
+  capability?: string;
+  /**
+   * WKH-313: entró bajo el piso de reputación por el CARRIL DE ESTRENO, o sea SIN historial
+   * liquidado. `true` es una afirmación del gateway, no una inferencia nuestra; ausente
+   * significa "el gateway no lo marcó", que no es lo mismo que "tiene historial".
+   */
+  trial?: boolean;
+}
+
 export interface Quote {
   quoteId: string;
   send: Money; // USDC que sale del sender
@@ -21,6 +47,8 @@ export interface Quote {
   etaMinutes: number;
   expiresAt: string; // ISO
   provenance: string;
+  /** Quién cotizó (leg de FX). Ausente cuando el transporte no lo informa (rama punto-a-punto). */
+  agent?: AgentRef;
 }
 
 /** Datos de identidad EXTRAÍDOS del documento por el verificador (Didit) — no se tipean.
@@ -177,6 +205,12 @@ export interface RemittanceState {
   deliveredPen: Money | null;
   failureReason: string | null;
   payoutProvenance: string | null; // proveniencia del payout (real vs mock) — propagada desde PayoutRecord (WKH-200)
+  /**
+   * Quién atendió el leg de PAYOUT, o sea quién dio el `depositAddress` contra el que la persona
+   * firmó el principal. `null` = no lo sabemos (rama punto-a-punto, o el gateway no lo informó).
+   * NUNCA se rellena con un valor plausible: no saberlo es un estado legítimo y se dice así.
+   */
+  payoutAgent: AgentRef | null;
   ownerAddress: string | null; // wallet dueña del estado (seteada al verificar identidad); scope del historial
   createdAt: string;
   updatedAt: string;
@@ -203,6 +237,7 @@ export class Remittance {
       deliveredPen: null,
       failureReason: null,
       payoutProvenance: null,
+      payoutAgent: null,
       ownerAddress: null,
       createdAt: now,
       updatedAt: now,
@@ -264,12 +299,20 @@ export class Remittance {
   markPrincipalIn(tx: string, now: string): void {
     this.to("principal_in", now, { principalTx: tx });
   }
-  markPayoutSubmitted(payoutId: string, now: string, payoutProvenance?: string): void {
+  markPayoutSubmitted(
+    payoutId: string,
+    now: string,
+    payoutProvenance?: string,
+    payoutAgent?: AgentRef,
+  ): void {
     // patch condicional (WKH-200): el campo SOLO aparece cuando el arg no es undefined → un backfill
     // parcial no pisa el valor previo. Un payoutProvenance seteado acá persiste al markSettled vía to().
+    // `payoutAgent` sigue la MISMA regla y por el mismo motivo: `undefined` (el caller no sabe quién
+    // atendió) no puede borrar una identidad ya registrada.
     const patch: Partial<RemittanceState> = {
       payoutId,
       ...(payoutProvenance !== undefined ? { payoutProvenance } : {}),
+      ...(payoutAgent !== undefined ? { payoutAgent } : {}),
     };
     this.to("payout_submitted", now, patch);
   }

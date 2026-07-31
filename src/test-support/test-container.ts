@@ -26,6 +26,7 @@ import type {
   PayoutGateway,
   QuoteGateway,
   RefundGateway,
+  RemittanceRepository,
   SolanaEscrowRefundGateway,
   WalletPort,
 } from "../application/ports";
@@ -56,13 +57,17 @@ export interface TestContainerOverrides {
   // HU-SOL-13: sin override queda UNDEFINED → la acción de refund NO se muestra.
   solanaRefund?: SolanaEscrowRefundGateway;
   clock?: Clock; // default: new FixedClock()
+  // Repo COMPARTIDO por todos los use-cases (default: new InMemoryRepo()). Se inyecta para poder
+  // SEMBRARLO antes de renderizar: es la única forma de testear el historial, que por definición
+  // habla de remesas que existían antes de que el componente montara.
+  repo?: RemittanceRepository;
   useCases?: Partial<Container>; // escape hatch (ej. resumeKyc stub para T3)
 }
 
 export function buildTestContainer(o: TestContainerOverrides = {}): Container {
   const clock = o.clock ?? new FixedClock();
   const ids = new SeqIds();
-  const repo = new InMemoryRepo();
+  const repo = o.repo ?? new InMemoryRepo();
   const quotes = o.quotes ?? new FakeQuoteGateway();
   const kyc = o.kyc ?? new FakeKycGateway();
   const wallet = o.wallet ?? new FakeWallet();

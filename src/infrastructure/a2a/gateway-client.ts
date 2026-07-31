@@ -52,11 +52,21 @@ export const PAYOUT_MIN_REPUTATION = 2;
  * que quedar por DEBAJO del techo `T` del carril (`TRIAL_MAX_MIN_REPUTATION`, default 10): con un
  * piso por encima de `T`, `isTrialEligible` devuelve false y el carril se apaga en silencio.
  *
- * ⚠️ LO QUE ESTE PISO CUESTA, dicho de frente: hoy el leg de FX no manda ninguna constraint, así
- * que ningún candidato queda excluido. Con el piso puesto, si NINGÚN agente del corredor llega a 2
- * y el carril no admite a nadie (por ejemplo porque el standing del gateway está degradado, que
- * falla cerrado), el leg pasa de cotizar a un 422 `no_agent_match`. Es una cotización que no sale,
- * no plata perdida, y se ve antes de que la persona firme nada, pero es un modo de falla nuevo.
+ * ⚠️ LO QUE ESTE PISO CUESTA, dicho de frente, y son DOS cosas:
+ *
+ * 1. Hoy el leg de FX no manda ninguna constraint, así que ningún candidato queda excluido. Con el
+ *    piso puesto, si NINGÚN agente del corredor llega a 2 y el carril no admite a nadie (por ejemplo
+ *    porque el standing del gateway está degradado, que falla cerrado), el leg pasa de cotizar a un
+ *    422 `no_agent_match`. Es una cotización que no sale, no plata perdida, y se ve antes de que la
+ *    persona firme nada, pero es un modo de falla nuevo.
+ *
+ * 2. EL CARRIL NO PUEDE RESCATAR AL TITULAR. Medido: el único candidato de FX de hoy pasa por
+ *    MÉRITO, con score 7 y 5 tasks liquidadas (el piso lee `computedReputation.score`, no el
+ *    `reputation` del card). Si ese score cayera por debajo de 2, el carril de estreno NO lo
+ *    levantaría: admite a quien NO tiene historial liquidado, y con 5 tasks ya no califica como
+ *    novato. O sea que en ese escenario el titular queda afuera y el ÚNICO admisible pasa a ser un
+ *    recién llegado sin historial. `allow_trial` no es una red debajo del titular; es una puerta
+ *    para el que todavía no tiene puntaje. Hoy, de hecho, no admite a nadie: es preventivo.
  */
 export const FX_MIN_REPUTATION = 2;
 

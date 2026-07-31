@@ -130,6 +130,10 @@ interface FakeLedgerRow {
   // filtrar por `vm` ni antes ni después del fix.
   vm: string;
   value_minor: string;
+  // La deposit-address registrada al preparar. La lee listPreparedDepositAddresses, que es el lado B
+  // del chequeo de destino del settle; sin esta columna en el doble, un `.eq('receiver_address', …)`
+  // mal escrito o un select equivocado no se verían.
+  receiver_address: string;
 }
 function makeBehaviorClient(table: FakeLedgerRow[]): {
   client: SupabaseClient;
@@ -420,11 +424,16 @@ function makeTableClient(seed: Record<string, unknown>[] = []): {
   };
   return { client: client as unknown as SupabaseClient, rows, rejected };
 }
+// Direcciones de depósito distintas por fila: si la lectura devolviera la de otra fila (o la de otro
+// sender), el valor devuelto lo delata en vez de coincidir por casualidad.
+const DEPOSIT_A_OLD = "So11111111111111111111111111111111111111112";
+const DEPOSIT_A_NEW = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
+const DEPOSIT_B1 = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
 function solRows(): FakeLedgerRow[] {
   return [
-    { remittance_id: "rem-A-old", status: "prepared", created_at: "2026-07-20T00:00:00.000Z", sender_address: SOL_A, vm: "evm", value_minor: "0" },
-    { remittance_id: "rem-B1", status: "prepared", created_at: "2026-07-26T00:00:00.000Z", sender_address: SOL_B, vm: "evm", value_minor: "0" },
-    { remittance_id: "rem-A-new", status: "settled", created_at: "2026-07-27T00:00:00.000Z", sender_address: SOL_A, vm: "evm", value_minor: "0" },
+    { remittance_id: "rem-A-old", status: "prepared", created_at: "2026-07-20T00:00:00.000Z", sender_address: SOL_A, vm: "evm", value_minor: "0", receiver_address: DEPOSIT_A_OLD },
+    { remittance_id: "rem-B1", status: "prepared", created_at: "2026-07-26T00:00:00.000Z", sender_address: SOL_B, vm: "evm", value_minor: "0", receiver_address: DEPOSIT_B1 },
+    { remittance_id: "rem-A-new", status: "settled", created_at: "2026-07-27T00:00:00.000Z", sender_address: SOL_A, vm: "evm", value_minor: "0", receiver_address: DEPOSIT_A_NEW },
   ];
 }
 
@@ -779,6 +788,66 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
     ).rejects.toThrow(/ledger_list_by_sender_failed:PGRST301/);
   });
 
+  // ── listPreparedDepositAddresses · el lado B del chequeo de destino del settle ────────────────────
+  // Lo que devuelve esta lectura es contra lo que el settle compara el beneficiary que va DENTRO de la
+  // tx firmada. Dos formas de romperla en silencio, y las dos se prueban con el doble de
+  // COMPORTAMIENTO (un espía no las caza):
+  //   · sin `.eq('sender_address', …)` ⇒ la dirección de OTRO sender entra en la lista de válidas
+  //   · sin `.eq('remittance_id', …)`  ⇒ una dirección de OTRA remesa del mismo sender entra igual
+  // En los dos casos el guard del settle seguiría "pasando", pero ya no compararía lo que dice comparar.
+  it("devuelve SOLO la deposit-address de ESA remesa y ESE sender", async () => {
+    const { client } = makeBehaviorClient(solRows());
+    const out = await new SupabaseSettlementLedger(client).listPreparedDepositAddresses({
+      remittanceId: "rem-A-old",
+      senderAddress: SOL_A,
+    });
+    expect(out).toEqual([DEPOSIT_A_OLD]);
+    expect(out).not.toContain(DEPOSIT_A_NEW); // otra remesa del MISMO sender: no es válida acá
+    expect(out).not.toContain(DEPOSIT_B1); // otro sender: el guard de ownership
+  });
+
+  it("la remesa de OTRO sender no aporta ninguna dirección (IDOR: el filtro es el sender)", async () => {
+    const { client } = makeBehaviorClient(solRows());
+    const out = await new SupabaseSettlementLedger(client).listPreparedDepositAddresses({
+      remittanceId: "rem-B1", // existe, pero es de SOL_B
+      senderAddress: SOL_A,
+    });
+    expect(out).toEqual([]); // ⇒ el settle responde 'unregistered', NO 'mismatch'
+  });
+
+  it("NO filtra por status: una fila ya avanzada (settled) sigue aportando su dirección", async () => {
+    // Un settle reintentado encuentra su fila fuera de 'prepared'. Con un `.eq('status','prepared')`
+    // esto devolvería [] y el retry legítimo se leería como "no registrada".
+    const { client } = makeBehaviorClient(solRows());
+    const out = await new SupabaseSettlementLedger(client).listPreparedDepositAddresses({
+      remittanceId: "rem-A-new", // status 'settled'
+      senderAddress: SOL_A,
+    });
+    expect(out).toEqual([DEPOSIT_A_NEW]);
+  });
+
+  it("fail-loud: error del builder ⇒ throw, NUNCA [] (una lista vacía se leería como 'no hay ninguna')", async () => {
+    const { client } = makeClient([{ data: null, error: { code: "PGRST301" } }]);
+    await expect(
+      new SupabaseSettlementLedger(client).listPreparedDepositAddresses({
+        remittanceId: "rem-1",
+        senderAddress: SOL_A,
+      }),
+    ).rejects.toThrow(/ledger_list_prepared_addresses_failed:PGRST301/);
+  });
+
+  it("filtra por remittance_id Y sender_address canonicalizado (recorder: los argumentos exactos)", async () => {
+    const { client, calls } = makeClient([{ data: [], error: null }]);
+    await new SupabaseSettlementLedger(client).listPreparedDepositAddresses({
+      remittanceId: "rem-1",
+      senderAddress: SOL_A,
+    });
+    expect(calls.eq).toContainEqual(["remittance_id", "rem-1"]);
+    expect(calls.eq).toContainEqual(["sender_address", new PublicKey(SOL_A).toBase58()]);
+    expect(calls.eq.map((c) => c[0])).not.toContain("status"); // ver el test de arriba
+    expect(String(calls.select[0]?.[0])).not.toContain("value_minor"); // no se lee ⇒ sin ::text
+  });
+
   // ── R0 tras el fix de escritura: filas LEGACY (vm='evm') + filas nuevas (vm='solana') convivien ──
   it("R0 sigue igual DESPUÉS del fix: recupera las filas legacy (vm='evm') Y las nuevas (vm='solana') del mismo sender", async () => {
     // La tabla real va a tener las dos cosas: lo escrito antes del fix (mislabel 'evm') y lo escrito
@@ -786,9 +855,9 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
     // agregara `.eq('vm','solana')`, la fila legacy desaparecería y el refund de una remesa vieja se
     // quedaría sin remittanceId (la plata atrapada en el escrow, que es el caso que R0 cubre).
     const mixed: FakeLedgerRow[] = [
-      { remittance_id: "rem-legacy", status: "prepared", created_at: "2026-07-20T00:00:00.000Z", sender_address: SOL_A, vm: "evm", value_minor: "0" },
-      { remittance_id: "rem-nueva", status: "prepared", created_at: "2026-07-28T00:00:00.000Z", sender_address: SOL_A, vm: "solana", value_minor: "0" },
-      { remittance_id: "rem-otro-sender", status: "prepared", created_at: "2026-07-28T00:00:00.000Z", sender_address: SOL_B, vm: "solana", value_minor: "0" },
+      { remittance_id: "rem-legacy", status: "prepared", created_at: "2026-07-20T00:00:00.000Z", sender_address: SOL_A, vm: "evm", value_minor: "0", receiver_address: DEPOSIT_A_OLD },
+      { remittance_id: "rem-nueva", status: "prepared", created_at: "2026-07-28T00:00:00.000Z", sender_address: SOL_A, vm: "solana", value_minor: "0", receiver_address: DEPOSIT_A_NEW },
+      { remittance_id: "rem-otro-sender", status: "prepared", created_at: "2026-07-28T00:00:00.000Z", sender_address: SOL_B, vm: "solana", value_minor: "0", receiver_address: DEPOSIT_B1 },
     ];
     const { client } = makeBehaviorClient(mixed);
     const out = await new SupabaseSettlementLedger(client).listRemittanceIdsBySender({

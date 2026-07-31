@@ -11,6 +11,7 @@ import { ForgetKyc } from "../application/use-cases/forget-kyc";
 import { ListHistory } from "../application/use-cases/list-history";
 import { LockQuote } from "../application/use-cases/lock-quote";
 import { PreviewQuote } from "../application/use-cases/preview-quote";
+import { RecoverEscrowFunds } from "../application/use-cases/recover-escrow-funds";
 import { ResumeKyc } from "../application/use-cases/resume-kyc";
 import { StartKyc } from "../application/use-cases/start-kyc";
 import { TrackRemittance } from "../application/use-cases/track-remittance";
@@ -58,6 +59,11 @@ export interface Container {
   // el container real siempre lo cablea, pero el test-container lo deja pasar undefined y la UI ya
   // maneja su ausencia. Volverlo requerido sería re-tipar superficie que esta HU no vino a tocar.
   solanaRefund?: SolanaEscrowRefundPort;
+  // Recuperación de fondos del escrow CON persistencia del resultado. Es lo que la UI invoca: el
+  // gateway suelto (`solanaRefund`) devuelve una signature y nada más, y de ahí salía el bug de
+  // reportar como fallada una recuperación exitosa. Opcional por la misma razón que solanaRefund:
+  // el test-container lo deja pasar undefined y la UI ya maneja su ausencia.
+  recoverEscrowFunds?: RecoverEscrowFunds;
 }
 
 // HU-SOL-20/AC-2 — arma el SolanaWalletAdapter CON su resolver de remittanceId en un solo paso (sin setter,
@@ -142,6 +148,7 @@ export function createContainer(): Container {
     abandonPendingKyc: new AbandonPendingKyc(kycPending),
     forgetKyc: new ForgetKyc(kycStore, kycPending, repo),
     solanaRefund, // HU-SOL-13: refund trustless del escrow
+    recoverEscrowFunds: new RecoverEscrowFunds(repo, clock, solanaRefund),
   };
 }
 

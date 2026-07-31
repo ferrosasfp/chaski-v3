@@ -6,6 +6,7 @@
 
 import type { Container } from "../composition/container";
 import { PreviewQuote } from "../application/use-cases/preview-quote";
+import { RecoverEscrowFunds } from "../application/use-cases/recover-escrow-funds";
 import { CreateRemittance } from "../application/use-cases/create-remittance";
 import { ConnectWallet } from "../application/use-cases/connect-wallet";
 import { StartKyc } from "../application/use-cases/start-kyc";
@@ -84,6 +85,11 @@ export function buildTestContainer(o: TestContainerOverrides = {}): Container {
     abandonPendingKyc: new AbandonPendingKyc(pending),
     forgetKyc: new ForgetKyc(kycStore, pending, repo),
     solanaRefund: o.solanaRefund, // HU-SOL-13: undefined ⇒ la UI no muestra la acción refund
+    // Se arma sobre el MISMO repo/clock que el resto: un test que dispara el refund tiene que poder
+    // leer el estado persistido después, que es justo lo que el bug no hacía.
+    recoverEscrowFunds: o.solanaRefund
+      ? new RecoverEscrowFunds(repo, clock, o.solanaRefund)
+      : undefined,
   };
   return { ...base, ...(o.useCases ?? {}) };
 }

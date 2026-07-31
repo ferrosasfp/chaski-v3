@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Quote, RemittanceState, PayoutMethod } from "../domain/remittance";
 import { MIN_SEND_USD, Remittance } from "../domain/remittance"; // WKH-187: rehydrate/isQuoteStillValid en el resume (CD-11) · WKH-314: mínimo enviable
 import { createContainer, type Container } from "../composition/container";
+import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
 import { resolveSolanaNetworkConfig } from "../infrastructure/chain"; // HU-SOL-13: cluster Solana activo (env-driven)
 import { deliveredDisplay, humanError, isDemoMode } from "./flow-vm";
 import { Button, Card, ChaskiMark, Field, Pill, Row, Stepper, TextInput } from "./ui";
@@ -716,7 +717,12 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
           )}
 
           {step === "track" && rem && (
-            <TrackView rem={rem} refundGateway={c.solanaRefund} sender={address} />
+            <TrackView
+              rem={rem}
+              recover={c.recoverEscrowFunds}
+              sender={address}
+              onRecovered={setRem}
+            />
           )}
 
           {step === "done" && rem && <Receipt rem={rem} onNew={() => resetTo(setStep, setRem, setPreview)} />}
@@ -742,12 +748,16 @@ const TRACK_STEPS: { key: RemittanceState["status"][]; label: string }[] = [
 // acción refund (AC-6/AC-7) sin montar el flujo entero.
 export function TrackView({
   rem,
-  refundGateway,
+  recover,
   sender,
+  onRecovered,
 }: {
   rem: RemittanceState;
-  refundGateway?: Container["solanaRefund"];
+  // El use-case, NO el gateway suelto: el gateway devuelve una signature y nada más, y de ahí salía
+  // el bug de que un refund exitoso no dejaba rastro en el estado.
+  recover?: Container["recoverEscrowFunds"];
   sender: string | null;
+  onRecovered: (snapshot: RemittanceState) => void;
 }) {
   // HU-SOL-13 (AC-6/AC-7, CD-10): acción refund trustless. Siempre disponible: ninguna configuración
   // la puede apagar.
@@ -761,21 +771,36 @@ export function TrackView({
     rem.status === "payout_submitted" ||
     rem.status === "payout_failed";
   const showRefund =
-    refundeable && rem.refundTx == null && deadlineReached && !!refundGateway && !!sender;
+    refundeable && rem.refundTx == null && deadlineReached && !!recover && !!sender;
 
   // AC-1 (WKH-200): payout_failed/refunded NO están en `order` → idx=-1 renderizaría la vista
   // optimista ("en camino", steps grises). Branch temprano a una vista honesta de fallo/reembolso.
   // Copy vía humanError (enum→copy fijo, PII-free / CD-5): NUNCA interpolar failureReason/beneficiary.
   if (rem.status === "payout_failed" || rem.status === "refunded") {
+    // La persona que acaba de recuperar SU plata del escrow no vivió un "no pudo entregarse": vivió
+    // una recuperación exitosa. El titular se decide por el enum estable que escribe el use-case,
+    // nunca interpolando el failureReason crudo (CD-5).
+    const recoveredBySender = rem.failureReason === ESCROW_REFUNDED_BY_SENDER;
     return (
       <Card className="space-y-3">
-        <p className="text-sm font-semibold">No pudo entregarse</p>
-        <p className="text-sm text-stone">{humanError("payout_failed")}</p>
+        <p className="text-sm font-semibold">
+          {recoveredBySender ? "Recuperaste tus fondos" : "No pudo entregarse"}
+        </p>
+        <p className="text-sm text-stone">
+          {recoveredBySender
+            ? "Los USDC volvieron a tu wallet. Esta remesa no se entregó."
+            : humanError("payout_failed")}
+        </p>
         {rem.refundTx ? (
           <p className="text-xs text-stone">Referencia de reembolso: {rem.refundTx}</p>
         ) : null}
-        {showRefund && refundGateway && sender ? (
-          <RefundAction remittanceId={rem.id} sender={sender} gateway={refundGateway} />
+        {showRefund && recover && sender ? (
+          <RefundAction
+            remittanceId={rem.id}
+            sender={sender}
+            recover={recover}
+            onRecovered={onRecovered}
+          />
         ) : null}
       </Card>
     );
@@ -817,45 +842,54 @@ export function TrackView({
           );
         })}
       </ol>
-      {showRefund && refundGateway && sender ? (
-        <RefundAction remittanceId={rem.id} sender={sender} gateway={refundGateway} />
+      {showRefund && recover && sender ? (
+        <RefundAction
+          remittanceId={rem.id}
+          sender={sender}
+          recover={recover}
+          onRecovered={onRecovered}
+        />
       ) : null}
     </Card>
   );
 }
 
 // HU-SOL-13 (AC-6/CD-10): botón "Recuperar fondos" — el SENDER firma+broadcastea el refund del escrow
-// (vía el gateway → wallet.refundEscrow), SIN facilitator ni release-authority. Estado local: idle →
-// firmando → hecho/error. Sólo se monta cuando TrackView calculó showRefund (vm=solana + refundeable +
-// now>=deadline). El guard AUTORITATIVO (status==Deposited / now>=deadline on-chain) vive en refundEscrow.
-function RefundAction({
+// (vía el use-case → gateway → wallet.refundEscrow), SIN facilitator ni release-authority. Sólo se
+// monta cuando TrackView calculó showRefund (refundeable + now>=deadline). El guard AUTORITATIVO
+// (status==Deposited / now>=deadline on-chain) vive en refundEscrow.
+//
+// El resultado NO se guarda en un useState local. Acá vivía exactamente eso: la signature entraba a
+// un estado de componente, el repo nunca se enteraba, y tras una recarga la remesa volvía a
+// "payout_submitted". El segundo intento chocaba contra un escrow ya Refunded y la app le decía a la
+// persona que había fallado una operación que había funcionado. Ahora el use-case escribe el estado
+// y el flujo re-renderiza con la verdad (status refunded + refundTx).
+export function RefundAction({
   remittanceId,
   sender,
-  gateway,
+  recover,
+  onRecovered,
 }: {
   remittanceId: string;
   sender: string;
-  gateway: NonNullable<Container["solanaRefund"]>;
+  recover: NonNullable<Container["recoverEscrowFunds"]>;
+  onRecovered: (snapshot: RemittanceState) => void;
 }) {
   const [busy, setBusy] = useState(false);
-  const [refundTx, setRefundTx] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const onRefund = useCallback(async () => {
     setBusy(true);
     setErr(null);
     try {
-      const { refundTx: tx } = await gateway.refund({ remittanceId, sender });
-      setRefundTx(tx);
+      const r = await recover.execute({ remittanceId, sender });
+      onRecovered(r.snapshot); // el estado nuevo manda: la pantalla deja de decir "en camino"
     } catch {
       setErr("No pudimos recuperar los fondos. Intentá de nuevo."); // enum→copy fijo, sin PII (CD-5)
     } finally {
       setBusy(false);
     }
-  }, [gateway, remittanceId, sender]);
+  }, [recover, remittanceId, sender, onRecovered]);
 
-  if (refundTx) {
-    return <p className="text-xs text-stone">Refund enviado: {refundTx}</p>;
-  }
   return (
     <div className="space-y-2">
       <Button variant="outline" onClick={onRefund} disabled={busy}>

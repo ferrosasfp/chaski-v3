@@ -18,11 +18,15 @@ import {
   type RemittanceState,
   toPersistedIdentity,
 } from "../domain/remittance";
+import { RecoverEscrowFunds } from "../application/use-cases/recover-escrow-funds";
 import {
   FAKE_SOLANA_BENEFICIARY,
+  FAKE_SOLANA_SIGNATURE,
   FakeKycStore,
   FakeSolanaEscrowRefundGateway,
   FakeSolanaWallet,
+  FixedClock,
+  InMemoryRepo,
   QUOTE_EXPIRES,
   T0,
   beneficiary,
@@ -843,32 +847,113 @@ function solanaPayoutSubmittedSnapshot(expiresAt: string): RemittanceState {
   return r.snapshot;
 }
 
+// Harness: TrackView con el estado VIVO, como lo tiene RemittanceFlow. Sin esto no se puede probar
+// lo único que importa del refund — que después de recuperar, la PANTALLA cambia.
+function LiveTrackView({
+  initial,
+  recover,
+}: {
+  initial: RemittanceState;
+  recover: RecoverEscrowFunds;
+}) {
+  const [rem, setRem] = React.useState(initial);
+  return (
+    <TrackView rem={rem} recover={recover} sender={FAKE_SOLANA_BENEFICIARY} onRecovered={setRem} />
+  );
+}
+
+// Arma el use-case real sobre un repo real, sembrado con la remesa. El único doble es el gateway
+// on-chain (no hay cadena en el test); todo lo demás corre de verdad, que es lo que hace falta para
+// que el test hable de la persistencia.
+async function seededRecovery(rem: RemittanceState, gateway: FakeSolanaEscrowRefundGateway) {
+  const repo = new InMemoryRepo();
+  await repo.save(Remittance.rehydrate(rem));
+  return { repo, recover: new RecoverEscrowFunds(repo, new FixedClock(), gateway) };
+}
+
 describe("HU-SOL-13 — acción refund en TrackView (T7)", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     cleanup();
   });
 
-  it("AC-6: vm=solana + now>=deadline (expiresAt pasado) ⇒ 'Recuperar fondos' visible; el click dispara el gateway", async () => {
-    const refund = new FakeSolanaEscrowRefundGateway();
+  it("AC-6: now>=deadline (expiresAt pasado) ⇒ 'Recuperar fondos' visible; el click dispara el refund on-chain", async () => {
+    const gateway = new FakeSolanaEscrowRefundGateway();
     const rem = solanaPayoutSubmittedSnapshot("2026-07-10T00:00:00.000Z"); // pasado vs Date.now() real
-    render(<TrackView rem={rem} refundGateway={refund} sender={FAKE_SOLANA_BENEFICIARY} />);
+    const { recover } = await seededRecovery(rem, gateway);
+    render(<LiveTrackView initial={rem} recover={recover} />);
 
     const btn = await screen.findByRole("button", { name: /Recuperar fondos/ });
     expect(btn).toBeInTheDocument();
     fireEvent.click(btn);
-    await waitFor(() => expect(refund.calls).toHaveLength(1));
-    expect(refund.calls[0]).toEqual({ remittanceId: "rem-1", sender: FAKE_SOLANA_BENEFICIARY });
-    expect(await screen.findByText(/Refund enviado/)).toBeInTheDocument();
+    await waitFor(() => expect(gateway.calls).toHaveLength(1));
+    expect(gateway.calls[0]).toEqual({ remittanceId: "rem-1", sender: FAKE_SOLANA_BENEFICIARY });
   });
 
-  it("AC-7: vm=solana + now<deadline (expiresAt futuro) ⇒ 'Recuperar fondos' OCULTA (defensa en profundidad)", () => {
-    const refund = new FakeSolanaEscrowRefundGateway();
+  // El test que faltaba, y el que describe el daño real: antes la signature entraba a un useState y
+  // la remesa seguía diciendo "en camino". Tras una recarga volvía a payout_submitted, la persona
+  // reintentaba, el programa rechazaba el escrow ya Refunded y la app le decía que había fallado
+  // algo que había funcionado.
+  it("un refund exitoso ESCRIBE el estado: la pantalla deja de decir 'en camino' y el repo dice refunded", async () => {
+    const gateway = new FakeSolanaEscrowRefundGateway();
+    const rem = solanaPayoutSubmittedSnapshot("2026-07-10T00:00:00.000Z");
+    const { repo, recover } = await seededRecovery(rem, gateway);
+    render(<LiveTrackView initial={rem} recover={recover} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Recuperar fondos/ }));
+
+    // (1) la pantalla: ya no promete una entrega en curso.
+    expect(await screen.findByText(/Recuperaste tus fondos/)).toBeInTheDocument();
+    expect(screen.queryByText(/Tu chaski está en camino/)).toBeNull();
+    expect(screen.getByText(new RegExp(FAKE_SOLANA_SIGNATURE))).toBeInTheDocument();
+    // (2) y el botón desaparece: no se ofrece repetir una recuperación ya hecha.
+    expect(screen.queryByRole("button", { name: /Recuperar fondos/ })).toBeNull();
+    // (3) el estado PERSISTIDO, que es lo que sobrevive a la recarga.
+    const saved = await repo.get("rem-1");
+    expect(saved?.status).toBe("refunded");
+    expect(saved?.snapshot.refundTx).toBe(FAKE_SOLANA_SIGNATURE);
+  });
+
+  it("un refund que falla NO escribe estado y la remesa queda recuperable (se puede reintentar)", async () => {
+    const gateway = new FakeSolanaEscrowRefundGateway(FAKE_SOLANA_SIGNATURE, "reject");
+    const rem = solanaPayoutSubmittedSnapshot("2026-07-10T00:00:00.000Z");
+    const { repo, recover } = await seededRecovery(rem, gateway);
+    render(<LiveTrackView initial={rem} recover={recover} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Recuperar fondos/ }));
+
+    expect(await screen.findByText(/No pudimos recuperar los fondos/)).toBeInTheDocument();
+    const saved = await repo.get("rem-1");
+    expect(saved?.status).toBe("payout_submitted");
+    expect(saved?.snapshot.refundTx).toBeNull();
+    expect(screen.getByRole("button", { name: /Recuperar fondos/ })).toBeInTheDocument();
+  });
+
+  it("AC-7: now<deadline (expiresAt futuro) ⇒ 'Recuperar fondos' OCULTA (defensa en profundidad)", async () => {
+    const gateway = new FakeSolanaEscrowRefundGateway();
     const rem = solanaPayoutSubmittedSnapshot("2099-01-01T00:00:00.000Z"); // futuro ⇒ pre-deadline
-    render(<TrackView rem={rem} refundGateway={refund} sender={FAKE_SOLANA_BENEFICIARY} />);
+    const { recover } = await seededRecovery(rem, gateway);
+    render(<LiveTrackView initial={rem} recover={recover} />);
 
     expect(screen.queryByRole("button", { name: /Recuperar fondos/ })).toBeNull();
-    expect(refund.calls).toHaveLength(0);
+    expect(gateway.calls).toHaveLength(0);
+  });
+
+  // El botón vive en las DOS ramas de TrackView, no sólo en la optimista: una remesa que ya falló
+  // sigue pudiendo tener los USDC dentro del vault.
+  it("en payout_failed (rama de fallo) el botón TAMBIÉN está: el escrow puede seguir con fondos", async () => {
+    const gateway = new FakeSolanaEscrowRefundGateway();
+    const base = Remittance.rehydrate(solanaPayoutSubmittedSnapshot("2026-07-10T00:00:00.000Z"));
+    base.markPayoutFailed("partner_down", T0);
+    const rem = base.snapshot;
+    const { repo, recover } = await seededRecovery(rem, gateway);
+    render(<LiveTrackView initial={rem} recover={recover} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Recuperar fondos/ }));
+
+    await waitFor(() => expect(gateway.calls).toHaveLength(1));
+    const saved = await repo.get("rem-1");
+    expect(saved?.status).toBe("refunded");
   });
 
   // WKH-320: acá vivía "CD-2/regresión EVM: vm=evm + now>=deadline ⇒ NINGÚN botón 'Recuperar

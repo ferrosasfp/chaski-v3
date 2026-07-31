@@ -5,6 +5,7 @@ import {
   BadgeCheck,
   Camera,
   Check,
+  Clock3,
   IdCard,
   Loader2,
   ScanFace,
@@ -13,10 +14,12 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Quote, RemittanceState, PayoutMethod } from "../domain/remittance";
-import { MIN_SEND_USD, Remittance } from "../domain/remittance"; // WKH-187: rehydrate/isQuoteStillValid en el resume (CD-11) · WKH-314: mínimo enviable
+import { MIN_SEND_USD, Remittance, TERMINAL_STATUSES } from "../domain/remittance"; // WKH-187: rehydrate/isQuoteStillValid en el resume (CD-11) · WKH-314: mínimo enviable
 import { createContainer, type Container } from "../composition/container";
+import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
 import { resolveSolanaNetworkConfig } from "../infrastructure/chain"; // HU-SOL-13: cluster Solana activo (env-driven)
-import { deliveredDisplay, humanError, isDemoMode } from "./flow-vm";
+import { deliveredDisplay, humanError, isDemoMode, statusDisplay } from "./flow-vm";
+import { cn } from "./cn";
 import { Button, Card, ChaskiMark, Field, Pill, Row, Stepper, TextInput } from "./ui";
 
 // WKH-187: el quote se muestra ANTES del KYC. Orden: send→connect→review(pre-KYC)→verify→confirm(post-KYC)→track→done.
@@ -327,10 +330,18 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
   const pollRef = useRef(false);
   useEffect(() => {
     if (step !== "track" || !remId || pollRef.current) return;
+    // El effect DEPENDE de remStatus, así que cada cambio de estado arrancaba un intervalo NUEVO —
+    // incluido el salto a `refunded`. 1,5 s después ese intervalo leía el estado PERSISTIDO (viejo si
+    // el save había fallado) y lo pisaba: la persona veía "Recuperaste tus fondos" y la pantalla
+    // volvía sola a "Preparando el pago", con el botón de nuevo. Sobre un estado que ya no avanza por
+    // sí solo no hay nada que pollear, y sí algo que arruinar.
+    if (remStatus && (TERMINAL_STATUSES.includes(remStatus) || remStatus === "payout_failed")) return;
     pollRef.current = true;
+    let cancelled = false; // el tick en vuelo no puede escribir después de la limpieza
     const iv = setInterval(async () => {
       try {
         const r = await c.trackRemittance.execute({ remittanceId: remId });
+        if (cancelled) return;
         setRem(r.snapshot);
         // AC-2 (WKH-200): payout_failed NO es terminal (→ refunded) pero el poll debe frenar igual
         // (UI-only, sin tocar TERMINAL_STATUSES / CD-1). El setStep("done") sigue gateado por settled.
@@ -344,6 +355,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
       }
     }, 1500);
     return () => {
+      cancelled = true;
       clearInterval(iv);
       pollRef.current = false;
     };
@@ -716,7 +728,12 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
           )}
 
           {step === "track" && rem && (
-            <TrackView rem={rem} refundGateway={c.solanaRefund} sender={address} />
+            <TrackView
+              rem={rem}
+              recover={c.recoverEscrowFunds}
+              sender={address}
+              onRecovered={setRem}
+            />
           )}
 
           {step === "done" && rem && <Receipt rem={rem} onNew={() => resetTo(setStep, setRem, setPreview)} />}
@@ -733,21 +750,30 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
   );
 }
 
-const TRACK_STEPS: { key: RemittanceState["status"][]; label: string }[] = [
+const TRACK_STEPS: { key: RemittanceState["status"][]; label: string; manual?: boolean }[] = [
   { key: ["confirmed", "principal_in"], label: "Fondos en camino" },
-  { key: ["payout_submitted"], label: "Pagando a tu familiar" },
+  // "Pagando a tu familiar" decía más de lo que pasa: en payout_submitted la orden con el partner
+  // está creada y los USDC siguen en el vault del escrow, esperando un release que hoy dispara una
+  // persona a mano (ver confirm-and-send.ts:173-182). Nadie está pagando todavía.
+  // `manual`: este paso NO avanza solo. Arreglar la etiqueta no alcanzaba — el spinner que giraba
+  // encima seguía afirmando progreso, y giraba para siempre.
+  { key: ["payout_submitted"], label: "Preparando el pago a tu familiar", manual: true },
   { key: ["settled"], label: "Entregado" },
 ];
 // Exportado para test directo (HU-SOL-13/T7): testear TrackView en aislamiento cubre exactamente la
 // acción refund (AC-6/AC-7) sin montar el flujo entero.
 export function TrackView({
   rem,
-  refundGateway,
+  recover,
   sender,
+  onRecovered,
 }: {
   rem: RemittanceState;
-  refundGateway?: Container["solanaRefund"];
+  // El use-case, NO el gateway suelto: el gateway devuelve una signature y nada más, y de ahí salía
+  // el bug de que un refund exitoso no dejaba rastro en el estado.
+  recover?: Container["recoverEscrowFunds"];
   sender: string | null;
+  onRecovered: (snapshot: RemittanceState) => void;
 }) {
   // HU-SOL-13 (AC-6/AC-7, CD-10): acción refund trustless. Siempre disponible: ninguna configuración
   // la puede apagar.
@@ -761,21 +787,42 @@ export function TrackView({
     rem.status === "payout_submitted" ||
     rem.status === "payout_failed";
   const showRefund =
-    refundeable && rem.refundTx == null && deadlineReached && !!refundGateway && !!sender;
+    refundeable && rem.refundTx == null && deadlineReached && !!recover && !!sender;
+  // Misma condición SALVO el deadline: existe la salida, todavía no está abierta. Se muestra en vez
+  // de esconderse, con la hora en que se abre.
+  const refundLocked =
+    refundeable && rem.refundTx == null && !deadlineReached && !!recover && !!sender && !!rem.quote;
 
   // AC-1 (WKH-200): payout_failed/refunded NO están en `order` → idx=-1 renderizaría la vista
   // optimista ("en camino", steps grises). Branch temprano a una vista honesta de fallo/reembolso.
   // Copy vía humanError (enum→copy fijo, PII-free / CD-5): NUNCA interpolar failureReason/beneficiary.
   if (rem.status === "payout_failed" || rem.status === "refunded") {
+    // La persona que acaba de recuperar SU plata del escrow no vivió un "no pudo entregarse": vivió
+    // una recuperación exitosa. El titular se decide por el enum estable que escribe el use-case,
+    // nunca interpolando el failureReason crudo (CD-5).
+    const recoveredBySender = rem.failureReason === ESCROW_REFUNDED_BY_SENDER;
     return (
       <Card className="space-y-3">
-        <p className="text-sm font-semibold">No pudo entregarse</p>
-        <p className="text-sm text-stone">{humanError("payout_failed")}</p>
+        <p className="text-sm font-semibold">
+          {recoveredBySender ? "Recuperaste tus fondos" : "No pudo entregarse"}
+        </p>
+        <p className="text-sm text-stone">
+          {recoveredBySender
+            ? "Los USDC volvieron a tu wallet. Esta remesa no se entregó."
+            : humanError("payout_failed")}
+        </p>
         {rem.refundTx ? (
           <p className="text-xs text-stone">Referencia de reembolso: {rem.refundTx}</p>
         ) : null}
-        {showRefund && refundGateway && sender ? (
-          <RefundAction remittanceId={rem.id} sender={sender} gateway={refundGateway} />
+        {showRefund && recover && sender ? (
+          <RefundAction
+            remittanceId={rem.id}
+            sender={sender}
+            recover={recover}
+            onRecovered={onRecovered}
+          />
+        ) : refundLocked && rem.quote ? (
+          <RefundLockedNotice availableAt={rem.quote.expiresAt} />
         ) : null}
       </Card>
     );
@@ -787,16 +834,28 @@ export function TrackView({
     "settled",
   ];
   const idx = order.indexOf(rem.status);
+  // En payout_submitted no hay nada moviéndose: los USDC están en el vault y el release lo dispara
+  // una persona a mano. Un encabezado que late y dice "en camino" es una animación afirmando lo que
+  // el sistema no hace.
+  const waitingOnPerson = rem.status === "payout_submitted";
   return (
     <Card className="space-y-4">
       <div className="flex items-center gap-2.5">
-        <ChaskiMark className="h-8 w-8 animate-pulse" />
-        <p className="text-sm font-semibold">Tu chaski está en camino…</p>
+        <ChaskiMark className={cn("h-8 w-8", waitingOnPerson ? undefined : "animate-pulse")} />
+        <p className="text-sm font-semibold">
+          {waitingOnPerson ? "Tu envío está esperando" : "Tu chaski está en camino…"}
+        </p>
       </div>
       <ol className="space-y-3">
         {TRACK_STEPS.map((s, i) => {
-          const reached = order.indexOf(s.key[s.key.length - 1] ?? "settled") <= idx;
-          const active = s.key.includes(rem.status);
+          const last = order.indexOf(s.key[s.key.length - 1] ?? "settled");
+          // Un paso está COMPLETADO cuando el estado lo pasó de largo, no cuando lo alcanzó. Antes
+          // era `last <= idx`, así que estar EN payout_submitted pintaba el tilde verde de
+          // "pagando a tu familiar": un paso en curso se dibujaba como un paso terminado.
+          // La excepción es el último ("Entregado"): no hay ningún estado después, así que ahí
+          // completarlo ES estar en él.
+          const reached = idx > last || (last === order.length - 1 && idx === last);
+          const active = !reached && s.key.includes(rem.status);
           return (
             <li key={s.label} className="flex items-center gap-3">
               <span
@@ -808,7 +867,17 @@ export function TrackView({
                       : "flex h-6 w-6 items-center justify-center rounded-full bg-line"
                 }
               >
-                {reached ? <Check className="h-3.5 w-3.5" /> : active ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <span className="text-xs text-stone">{i + 1}</span>}
+                {/* Un paso que no avanza solo NO gira: el reloj quieto dice "esperando", el spinner
+                    decía "trabajando". */}
+                {reached ? (
+                  <Check className="h-3.5 w-3.5" />
+                ) : active && s.manual ? (
+                  <Clock3 className="h-3.5 w-3.5" />
+                ) : active ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <span className="text-xs text-stone">{i + 1}</span>
+                )}
               </span>
               <span className={reached || active ? "text-sm font-medium text-ink" : "text-sm text-stone"}>
                 {s.label}
@@ -817,66 +886,154 @@ export function TrackView({
           );
         })}
       </ol>
-      {showRefund && refundGateway && sender ? (
-        <RefundAction remittanceId={rem.id} sender={sender} gateway={refundGateway} />
+      {waitingOnPerson ? (
+        <p className="text-xs text-stone">
+          Este paso no avanza solo: la entrega la libera una persona del equipo, así que puede quedarse
+          acá un buen rato. Si preferís no esperar, podés recuperar tus USDC.
+        </p>
+      ) : null}
+      {showRefund && recover && sender ? (
+        <RefundAction
+          remittanceId={rem.id}
+          sender={sender}
+          recover={recover}
+          onRecovered={onRecovered}
+        />
+      ) : refundLocked && rem.quote ? (
+        <RefundLockedNotice availableAt={rem.quote.expiresAt} />
       ) : null}
     </Card>
   );
 }
 
 // HU-SOL-13 (AC-6/CD-10): botón "Recuperar fondos" — el SENDER firma+broadcastea el refund del escrow
-// (vía el gateway → wallet.refundEscrow), SIN facilitator ni release-authority. Estado local: idle →
-// firmando → hecho/error. Sólo se monta cuando TrackView calculó showRefund (vm=solana + refundeable +
-// now>=deadline). El guard AUTORITATIVO (status==Deposited / now>=deadline on-chain) vive en refundEscrow.
-function RefundAction({
+// (vía el use-case → gateway → wallet.refundEscrow), SIN facilitator ni release-authority. Sólo se
+// monta cuando TrackView calculó showRefund (refundeable + now>=deadline). El guard AUTORITATIVO
+// (status==Deposited / now>=deadline on-chain) vive en refundEscrow.
+//
+// El resultado NO se guarda en un useState local. Acá vivía exactamente eso: la signature entraba a
+// un estado de componente, el repo nunca se enteraba, y tras una recarga la remesa volvía a
+// "payout_submitted". El segundo intento chocaba contra un escrow ya Refunded y la app le decía a la
+// persona que había fallado una operación que había funcionado. Ahora el use-case escribe el estado
+// y el flujo re-renderiza con la verdad (status refunded + refundTx).
+export function RefundAction({
   remittanceId,
   sender,
-  gateway,
+  recover,
+  onRecovered,
 }: {
   remittanceId: string;
   sender: string;
-  gateway: NonNullable<Container["solanaRefund"]>;
+  recover: NonNullable<Container["recoverEscrowFunds"]>;
+  onRecovered: (snapshot: RemittanceState) => void;
 }) {
   const [busy, setBusy] = useState(false);
-  const [refundTx, setRefundTx] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // Lo enviado que la cadena TODAVÍA no confirmó. Deliberadamente efímero (no toca el estado
+  // persistido): afirmaría un final que nadie verificó, y `refunded` es terminal.
+  const [sent, setSent] = useState<{ confirmation: "pending" | "unknown"; refundTx: string } | null>(
+    null,
+  );
   const onRefund = useCallback(async () => {
     setBusy(true);
     setErr(null);
     try {
-      const { refundTx: tx } = await gateway.refund({ remittanceId, sender });
-      setRefundTx(tx);
+      const res = await recover.execute({ remittanceId, sender });
+      if (res.confirmation === "confirmed") {
+        setSent(null);
+        onRecovered(res.remittance.snapshot); // el estado nuevo manda: la pantalla deja de decir "en camino"
+        return;
+      }
+      // Ni éxito ni fracaso: la orden salió y no sabemos si entró. El botón SIGUE acá.
+      setSent({ confirmation: res.confirmation, refundTx: res.refundTx });
     } catch {
       setErr("No pudimos recuperar los fondos. Intentá de nuevo."); // enum→copy fijo, sin PII (CD-5)
     } finally {
       setBusy(false);
     }
-  }, [gateway, remittanceId, sender]);
+  }, [recover, remittanceId, sender, onRecovered]);
 
-  if (refundTx) {
-    return <p className="text-xs text-stone">Refund enviado: {refundTx}</p>;
-  }
   return (
     <div className="space-y-2">
       <Button variant="outline" onClick={onRefund} disabled={busy}>
-        {busy ? "Recuperando…" : "Recuperar fondos"}
+        {busy ? "Recuperando…" : sent ? "Volver a intentar" : "Recuperar fondos"}
       </Button>
+      {sent ? (
+        <div className="space-y-1">
+          {/* "Enviamos la orden", NUNCA "volvieron": el verbo tiene que ser el de lo que sabemos. */}
+          <p className="text-xs font-semibold text-ink">Enviamos la orden de recuperación</p>
+          <p className="text-xs text-stone">
+            {sent.confirmation === "pending"
+              ? "Todavía no la vemos confirmada en la cadena. Puede entrar en un rato, o puede no haber entrado. Hasta que se confirme no sabemos si tus USDC volvieron."
+              : "No pudimos consultar la cadena para saber si entró. Nadie sabe todavía si tus USDC volvieron; no es que hayan fallado."}
+          </p>
+          <p className="text-xs text-stone">Orden enviada: {sent.refundTx}</p>
+        </div>
+      ) : null}
       {err ? <p className="text-xs text-cochineal-ink">{err}</p> : null}
     </div>
   );
 }
 
-function Receipt({ rem, onNew }: { rem: RemittanceState; onNew: () => void }) {
-  const delivered = deliveredDisplay(rem);
+// La recuperación con su condición A LA VISTA. Antes, pre-deadline, no se renderizaba NADA: la persona
+// miraba un spinner sin saber que existía una salida ni cuándo se abría (10 minutos, los del quote).
+// El botón sigue deshabilitado hasta el deadline — el programa Anchor rechaza un refund anterior
+// (DeadlineNotReached) y el adapter aborta antes de firmar: acá no se debilita ningún guard, se
+// muestra cuándo deja de aplicar.
+function RefundLockedNotice({ availableAt }: { availableAt: string }) {
+  const when = Number.isNaN(Date.parse(availableAt))
+    ? null
+    : new Date(availableAt).toLocaleTimeString("es-PE", { hour: "2-digit", minute: "2-digit" });
+  return (
+    <div className="space-y-2">
+      <Button variant="outline" disabled>
+        Recuperar fondos
+      </Button>
+      <p className="text-xs text-stone">
+        {when
+          ? `Podés recuperar tus USDC a partir de las ${when}. Hasta esa hora el contrato no lo permite.`
+          : "Vas a poder recuperar tus USDC cuando venza el plazo del contrato."}
+      </p>
+    </div>
+  );
+}
+
+// El recibo. Antes afirmaba tres cosas que no sabía: el estado ("Entregado" HARDCODEADO), el monto
+// (el cotizado presentado como recibido cuando nadie confirmó cuánto llegó) y la referencia (un uuid
+// local). Y no mostraba `principalTx`, que es el ÚNICO dato del flujo verificado on-chain.
+// Exportado para test directo, mismo criterio que TrackView: la única forma de probar que el recibo
+// no afirma MÁS de lo que dice el estado es renderizarlo con un estado que diga menos.
+export function Receipt({ rem, onNew }: { rem: RemittanceState; onNew: () => void }) {
+  const { amount, confirmed } = deliveredDisplay(rem);
+  const status = statusDisplay(rem.status);
   return (
     <div className="space-y-4">
       <Card className="text-center">
-        <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-verde-bg">
-          <Check className="h-7 w-7 text-verde" />
+        <div
+          className={cn(
+            "mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full",
+            confirmed ? "bg-verde-bg" : "bg-sand",
+          )}
+        >
+          {confirmed ? (
+            <Check className="h-7 w-7 text-verde" />
+          ) : (
+            <Clock3 className="h-7 w-7 text-stone" />
+          )}
         </div>
-        <p className="text-sm text-stone">{rem.beneficiary.name} recibió</p>
-        <p className="tabular text-4xl font-extrabold text-verde">{delivered ? delivered.format() : "—"}</p>
+        {/* "recibió" SÓLO con un monto entregado confirmado. Si no, se dice qué es el número. */}
+        <p className="text-sm text-stone">
+          {rem.beneficiary.name} {confirmed ? "recibió" : "tiene que recibir"}
+        </p>
+        <p className={cn("tabular text-4xl font-extrabold", confirmed ? "text-verde" : "text-ink")}>
+          {amount ? amount.format() : "—"}
+        </p>
         <p className="mt-1 text-xs text-stone">en su {methodLabel(rem.beneficiary.method)}</p>
+        {confirmed ? null : (
+          <p className="mx-auto mt-2 max-w-xs text-xs text-stone">
+            Es el monto cotizado. Todavía no tenemos confirmación de cuánto llegó.
+          </p>
+        )}
         {isDemoMode(rem) ? (
           <div className="mt-3 flex items-center justify-center">
             <Pill tone="warn">Modo demo (sin dinero real)</Pill>
@@ -887,7 +1044,12 @@ function Receipt({ rem, onNew }: { rem: RemittanceState; onNew: () => void }) {
         <p className="mb-2 text-sm font-semibold">Recibo</p>
         <Row label="Enviaste" value={rem.sendUsd.format()} />
         {rem.quote ? <Row label="Tipo de cambio" value={`S/ ${rem.quote.rate.toFixed(3)}`} /> : null}
-        <Row label="Estado" value={<Pill tone="ok">Entregado</Pill>} />
+        <Row label="Estado" value={<Pill tone={status.tone}>{status.label}</Pill>} />
+        {/* El único dato de esta pantalla que alguien verificó contra la cadena. */}
+        {rem.principalTx ? (
+          <Row label="Depósito en Solana" value={shortTx(rem.principalTx)} />
+        ) : null}
+        {rem.refundTx ? <Row label="Reembolso" value={shortTx(rem.refundTx)} /> : null}
         <Row label="Referencia" value={rem.id.slice(0, 8)} />
       </Card>
       <Button variant="outline" onClick={onNew}>
@@ -895,6 +1057,11 @@ function Receipt({ rem, onNew }: { rem: RemittanceState; onNew: () => void }) {
       </Button>
     </div>
   );
+}
+
+/** Firma base58 acortada para la UI (el valor entero no entra en una fila y nadie lo lee completo). */
+function shortTx(tx: string): string {
+  return tx.length <= 16 ? tx : `${tx.slice(0, 8)}…${tx.slice(-8)}`;
 }
 
 function methodLabel(m: PayoutMethod): string {

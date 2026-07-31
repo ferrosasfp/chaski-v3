@@ -32,7 +32,9 @@ export async function resolvePayoutAuthority(
       // fail-loud (WKH-180/AC-3, CD-4): prod sin key NUNCA autoriza silenciosamente. fetch NO se llama.
       return { authorized: false, reason: "kyc_authority_unavailable", httpStatus: 503 };
     }
-    // no-prod: simulación (WKH-180/AC-4). fetch NO se llama. El demo local llega a "Entregado".
+    // no-prod: simulación (WKH-180/AC-4). fetch NO se llama. Este guard AUTORIZA, y nada más: acá
+    // decía "el demo local llega a Entregado" y no es cierto — la remesa muere después, en el tapón
+    // DT-8 de ConfirmAndSend (sin `solana` inyectado ⇒ settlement_unavailable ⇒ payout_failed).
     // OJO: autoriza sin consultar a Didit → para el money-path NO alcanza. El caller `submit`
     // rechaza este `simulated_dev` en todo scope de Vercel (WKH-202/DT-5); acá se conserva porque
     // /api/payout/validate (advisory) y el demo local dependen de él.

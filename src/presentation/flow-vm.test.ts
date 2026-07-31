@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Money } from "../domain/money";
-import type { RemittanceState } from "../domain/remittance";
-import { deliveredDisplay, humanError, isDemoMode } from "./flow-vm";
+import type { RemittanceState, RemittanceStatus } from "../domain/remittance";
+import { deliveredDisplay, humanError, isDemoMode, statusDisplay } from "./flow-vm";
 
 // WKH-320: acá abajo vivía el describe de isFallbackWalletAddress (WKH-184 AC-7/AC-9), que probaba
 // que la UI detectara la wallet demo por su address y, entre otras cosas, que la detección fuera
@@ -10,26 +10,60 @@ import { deliveredDisplay, humanError, isDemoMode } from "./flow-vm";
 // canonicalizeAddress tiraba), o sea que en producción ese control no señalaba nada. isDemoMode(),
 // que decide por provenance, sí funciona y cubre la necesidad de la UI — y se sigue probando acá.
 
+// Los 3 tests de acá abajo se REESCRIBIERON (no se borraron): siguen probando qué número se muestra,
+// que era su intención original. Lo que cambió es que ahora también se prueba lo que faltaba y era la
+// causa de la mentira del recibo — que el llamador SEPA si ese número es el entregado o el cotizado.
+// La firma vieja devolvía un Money pelado y los dos casos volvían indistinguibles, así que la
+// pantalla podía escribir "recibió" sobre una cifra que nadie confirmó, y lo hacía.
 describe("flow-vm — deliveredDisplay", () => {
-  it("AC-2: deliveredPen null → usa quote.receive", () => {
+  it("AC-2: deliveredPen null → usa quote.receive, PERO marcado como NO confirmado", () => {
     const rem = {
       deliveredPen: null,
       quote: { receive: Money.of(1490, "PEN") },
     } as RemittanceState;
-    expect(deliveredDisplay(rem)).toEqual(Money.of(1490, "PEN"));
+    expect(deliveredDisplay(rem)).toEqual({ amount: Money.of(1490, "PEN"), confirmed: false });
   });
 
-  it("prioriza deliveredPen real sobre quote.receive", () => {
+  it("prioriza deliveredPen real sobre quote.receive, y ESE sí es confirmado", () => {
     const rem = {
       deliveredPen: Money.of(368, "PEN"),
       quote: { receive: Money.of(1490, "PEN") },
     } as RemittanceState;
-    expect(deliveredDisplay(rem)).toEqual(Money.of(368, "PEN"));
+    expect(deliveredDisplay(rem)).toEqual({ amount: Money.of(368, "PEN"), confirmed: true });
   });
 
-  it("AC-3: deliveredPen y quote null → null (UI muestra '—')", () => {
+  it("AC-3: deliveredPen y quote null → amount null (UI muestra '—')", () => {
     const rem = { deliveredPen: null, quote: null } as RemittanceState;
-    expect(deliveredDisplay(rem)).toBeNull();
+    expect(deliveredDisplay(rem)).toEqual({ amount: null, confirmed: false });
+  });
+});
+
+describe("flow-vm — statusDisplay", () => {
+  // "Entregado" es la ÚNICA etiqueta que puede afirmar una entrega, y sólo la produce `settled`.
+  it("sólo `settled` produce 'Entregado'", () => {
+    expect(statusDisplay("settled")).toEqual({ label: "Entregado", tone: "ok" });
+    const otros: RemittanceStatus[] = [
+      "created",
+      "quoted",
+      "kyc_pending",
+      "kyc_passed",
+      "kyc_failed",
+      "confirmed",
+      "principal_in",
+      "payout_submitted",
+      "payout_failed",
+      "refunded",
+    ];
+    for (const s of otros) expect(statusDisplay(s).label).not.toBe("Entregado");
+  });
+
+  it("payout_submitted NO dice entregado: el pago está en curso", () => {
+    expect(statusDisplay("payout_submitted")).toEqual({ label: "Pago en curso", tone: "active" });
+  });
+
+  it("el fallo y el reembolso se nombran, no se disfrazan", () => {
+    expect(statusDisplay("payout_failed").tone).toBe("bad");
+    expect(statusDisplay("refunded").label).toBe("Reembolsado");
   });
 });
 

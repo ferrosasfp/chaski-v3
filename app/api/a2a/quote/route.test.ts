@@ -152,7 +152,9 @@ describe("POST /api/a2a/quote — modo a2a-gateway (WKH-218 / WKH-304)", () => {
     const step = JSON.parse(composeInit!.body as string).steps[0];
     expect(step.capability).toBe("remittance-fx-quote"); // el default REAL del catálogo (M8)
     expect(step).not.toHaveProperty("agent"); // M5: nunca el nombre del agente
-    expect(step).not.toHaveProperty("constraints"); // el leg de FX no lleva piso (§W1a)
+    // WKH-313: el leg de FX pide el carril de estreno, y el piso viaja CON él. `allow_trial` solo
+    // seria letra muerta: el gateway solo lo lee dentro del bloque de `min_reputation`.
+    expect(step.constraints).toEqual({ min_reputation: 2, allow_trial: true });
     expect(step.input).toEqual({ amountUsd: 400, destCountry: "PE", payoutMethod: "yape" });
   });
 

@@ -28,10 +28,51 @@ export const PAYOUT_CAPABILITY = "remittance-payout";
  *  ⇒ 2 puntos por task liquidada; sin score computado el agente cuenta 0 y queda excluido si min > 0). */
 export const PAYOUT_MIN_REPUTATION = 2;
 
+/**
+ * Piso de confianza del leg de FX (WKH-313). Mismo valor que el de payout, constante SEPARADA a
+ * propósito: son dos decisiones de riesgo distintas y compartir el número las ataría (bajar el piso
+ * de FX no puede bajar el de payout de rebote).
+ *
+ * ⚠️ POR QUÉ EL LEG DE FX MANDA UN PISO, SI LO QUE QUEREMOS ES ADMITIR AGENTES NUEVOS. Medido en el
+ * gateway, no asumido: `allow_trial` se lee ÚNICAMENTE dentro de `if (query.minReputation != null)`
+ * (`services/discovery.ts`, el bloque que llama a `applyReputationFloor`). Sin `min_reputation` la
+ * clave `allow_trial` es LETRA MUERTA: viaja, el gateway la acepta, y no ejecuta nada.
+ *
+ * Y hay una segunda mitad, que es la que de verdad importa. La neutralización de `verified` y
+ * `reputation` del admitido vive DENTRO de ese mismo bloque. Sin piso no hay neutralización, y esos
+ * dos campos salen del card que el propio agente publica: un desconocido que declara
+ * `verified: true, reputation: 100` gana el ranking de FX HOY MISMO — sin carril, sin piso y sin
+ * que nadie lo note — porque `verified` es la PRIMERA clave del sort. Mandar el piso es lo que lo
+ * manda al final de la fila.
+ *
+ * O sea: pedir el carril sin piso no sería "más abierto". Sería el carril apagado y encima el
+ * ranking decidido por lo que el candidato dice de sí mismo.
+ *
+ * Valor 2 = "al menos una task liquidada" con la fórmula del gateway, igual que en payout. Tiene
+ * que quedar por DEBAJO del techo `T` del carril (`TRIAL_MAX_MIN_REPUTATION`, default 10): con un
+ * piso por encima de `T`, `isTrialEligible` devuelve false y el carril se apaga en silencio.
+ *
+ * ⚠️ LO QUE ESTE PISO CUESTA, dicho de frente: hoy el leg de FX no manda ninguna constraint, así
+ * que ningún candidato queda excluido. Con el piso puesto, si NINGÚN agente del corredor llega a 2
+ * y el carril no admite a nadie (por ejemplo porque el standing del gateway está degradado, que
+ * falla cerrado), el leg pasa de cotizar a un 422 `no_agent_match`. Es una cotización que no sale,
+ * no plata perdida, y se ve antes de que la persona firme nada — pero es un modo de falla nuevo.
+ */
+export const FX_MIN_REPUTATION = 2;
+
 /** Constraints admitidas por el gateway. Cualquier otra clave ⇒ 400 (compose-step-shape del server). */
 export type GatewayConstraints = {
   max_price_usdc?: number;
   min_reputation?: number;
+  /**
+   * WKH-313 — opt-in al CARRIL DE ESTRENO de ESTE step: admite bajo `min_reputation` a un agente
+   * sin historial liquidado. El admitido NO recibe score fabricado (conserva su 0, así que ordena
+   * ÚLTIMO) y el gateway le neutraliza `verified`/`reputation`, que su propio card auto-reporta.
+   * Sólo puede ganar cuando NINGÚN agente pasa por mérito.
+   *
+   * Sólo tiene efecto acompañado de `min_reputation` (ver FX_MIN_REPUTATION). No-booleano ⇒ 400.
+   */
+  allow_trial?: boolean;
 };
 
 export type GatewayStep = {

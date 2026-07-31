@@ -165,6 +165,33 @@ describe("runViaGateway — AC-1: se pide por CAPACIDAD, el gateway resuelve (ce
     expect(composeBody(calls).steps[0]!.input).toEqual(input);
   });
 
+  // ── WKH-313: la clave del carril de estreno viaja tal cual, y sólo si el caller la pide ────────
+  it("allow_trial viaja en constraints junto al piso; sin pedirlo, la clave NO aparece", async () => {
+    const { fn, calls } = router();
+    vi.stubGlobal("fetch", fn);
+    await runViaGateway({
+      steps: [
+        {
+          capability: FX_QUOTE_CAPABILITY,
+          input: {},
+          constraints: { min_reputation: 2, allow_trial: true },
+        },
+      ],
+    });
+    expect(composeBody(calls).steps[0]!.constraints).toEqual({
+      min_reputation: 2,
+      allow_trial: true,
+    });
+
+    const sin = router();
+    vi.stubGlobal("fetch", sin.fn);
+    await runViaGateway({
+      steps: [{ capability: FX_QUOTE_CAPABILITY, input: {}, constraints: { min_reputation: 2 } }],
+    });
+    expect(composeBody(sin.calls).steps[0]!.constraints).toEqual({ min_reputation: 2 });
+    expect(sin.calls[0]!.init!.body as string).not.toContain("allow_trial");
+  });
+
   // ── Etapa 0.b: QUIÉN respondió. El gateway ya lo mandaba y este cliente lo tiraba ──────────────
   it("conserva el agente de cada step (slug, registry, capability resuelta y carril de estreno)", async () => {
     const { fn } = router({

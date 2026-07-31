@@ -109,8 +109,14 @@ export function createContainer(): Container {
   // HU-SOL-13 (WKH-216) — inyección Solana ACOPLADA (prepare+gateway), sólo con el flag Solana ON.
   // Undefined ⇒ ConfirmAndSend no recibe 6º arg ⇒ su tapón DT-8 falla la remesa fail-closed en vez de
   // devolverla 'confirmed' sin haber movido nada. El guard de arriba ya validó los envs.
+  // El prepare va con su PopSigner: /api/payout/prepare exige el PoP (PR6) y sin él responde 403
+  // ANTES de que la wallet pida una sola firma. Es el MISMO HttpPopSigner sobre la MISMA wallet que
+  // ya usa el camino de refund (createSolanaWallet), no un mecanismo nuevo.
   const solana = solanaSettleOn
-    ? { prepare: new HttpSolanaPayoutPrepareGateway(), gateway: new HttpSolanaSettlementGateway() }
+    ? {
+        prepare: new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet)),
+        gateway: new HttpSolanaSettlementGateway(),
+      }
     : undefined;
   // Refund trustless (AC-6/CD-10): válvula de recuperación (lee on-chain y aborta si no es
   // refundeable). SIEMPRE presente: no hay configuración que la pueda apagar.

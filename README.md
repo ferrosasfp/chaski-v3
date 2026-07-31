@@ -68,22 +68,26 @@ app is configured against is Circle's (`4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJD
 single environment variable, never a hardcode. Saying "USDC moved" about those signatures would be
 false, so it is not said here.
 
-**The deposit works end to end and is the strongest piece.** The sender's wallet signs, a sponsoring
-fee payer covers the fees so the user never needs SOL, and the result is a transaction anyone can open
-in the explorer.
+**The deposit is the strongest piece, and the caveat matters.** The instruction lands on chain, the
+sender's wallet is the only signer of the transfer, and a sponsoring fee payer covers the fees so the
+user never needs SOL. What the signature above proves is that this works when the smoke script drives
+it. From the browser it does not land today, for the reason in the next paragraph: the wallet only
+partial signs, and the deposit does not exist on chain until somebody broadcasts it.
 
 **The confirmation from the browser does not complete the broadcast.** The first half of this was
 fixed: the client now signs a proof of possession before asking the server to create the payout order,
-so the flow no longer dies before the wallet is ever prompted. The second half is still cut. To
-broadcast the deposit, the facilitator requires a `popProof` that is mandatory in its schema
+so the flow no longer dies before the wallet is ever prompted. The second half is still cut, and it is
+the same transaction as the deposit, which is why the two are one problem and not two. To broadcast it,
+the facilitator requires a `popProof` that is mandatory in its schema
 ([`solana-sponsor.ts:59`](https://github.com/ferrosasfp/wasiai-facilitator/blob/main/src/routes/solana-sponsor.ts))
 and is an HMAC over a secret shared between servers. Chaski's client path does not compute it: the call
 at `src/application/use-cases/confirm-and-send.ts:156-161` sends four fields and `popProof` is not one
 of them, and the forwarding route only passes it along if it arrived
 (`app/api/settle/solana-sponsor/route.ts:57`). The reason it cannot simply be added is the interesting
-part: a browser cannot hold a server to server shared secret without leaking it. The fix is a change of
-protocol, replacing that HMAC with a signature from the same wallet that is already signing the deposit
-one line earlier. That work is in progress and it is not in this branch.
+part: a browser cannot hold a server to server shared secret without leaking it. So the fix is a change
+of protocol rather than a missing line, replacing that HMAC with a signature from the same wallet that
+is already signing the deposit one step earlier. That replacement is the open work on this leg, and it
+is not in this branch.
 
 **The release runs, but nothing decides when to run it.** The instruction is implemented, constrained
 and proven on chain, as the table above shows. What does not exist, in any of the three repos, is a

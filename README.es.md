@@ -70,23 +70,26 @@ contra el que la app está configurada es el de Circle
 (`4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`), y es una sola variable de entorno, nunca un hardcode.
 Decir "se movió USDC" sobre esas firmas sería falso, así que acá no se dice.
 
-**El depósito funciona de punta a punta y es la pieza más sólida.** La wallet del que envía firma, un
-fee payer patrocinador cubre las fees así el usuario nunca necesita SOL, y el resultado es una
-transacción que cualquiera puede abrir en el explorador.
+**El depósito es la pieza más sólida, y la salvedad importa.** La instrucción entra en la cadena, la
+wallet del que envía es la única que firma la transferencia, y un fee payer patrocinador cubre las fees
+así el usuario nunca necesita SOL. Lo que prueba la firma de arriba es que eso funciona cuando lo
+maneja el script de smoke. Desde el navegador hoy no entra, por el motivo del párrafo siguiente: la
+wallet sólo firma parcialmente, y el depósito no existe en la cadena hasta que alguien lo broadcastea.
 
 **La confirmación desde el navegador no completa el broadcast.** La primera mitad de esto ya se
 arregló: el cliente ahora firma una prueba de posesión antes de pedirle al servidor que cree la orden de
 payout, así que el flujo ya no muere antes de que la wallet pida una sola firma. La segunda mitad sigue
-cortada. Para broadcastear el depósito, el facilitator exige un `popProof` que es obligatorio en su
-schema
+cortada, y es la misma transacción que el depósito, que es por lo que los dos son un solo problema y no
+dos. Para broadcastearla, el facilitator exige un `popProof` que es obligatorio en su schema
 ([`solana-sponsor.ts:59`](https://github.com/ferrosasfp/wasiai-facilitator/blob/main/src/routes/solana-sponsor.ts))
 y es un HMAC sobre un secreto compartido entre servidores. El camino cliente de Chaski no lo calcula: la
 llamada en `src/application/use-cases/confirm-and-send.ts:156-161` manda cuatro campos y `popProof` no
 es uno de ellos, y la ruta que reenvía sólo lo pasa si llegó
 (`app/api/settle/solana-sponsor/route.ts:57`). El motivo por el que no alcanza con agregarlo es la parte
-interesante: un navegador no puede guardar un secreto compartido entre servidores sin filtrarlo. El
-arreglo es un cambio de protocolo, reemplazar ese HMAC por una firma de la misma wallet que ya está
-firmando el depósito una línea antes. Ese trabajo está en curso y no está en esta rama.
+interesante: un navegador no puede guardar un secreto compartido entre servidores sin filtrarlo. Así
+que el arreglo es un cambio de protocolo y no una línea que falta: reemplazar ese HMAC por una firma de
+la misma wallet que ya está firmando el depósito un paso antes. Ese reemplazo es el trabajo abierto de
+esta pata, y no está en esta rama.
 
 **El release corre, pero nada decide cuándo correrlo.** La instrucción está implementada, restringida y
 probada on chain, como muestra la tabla de arriba. Lo que no existe, en ninguno de los tres repos, es un

@@ -18,12 +18,22 @@ import { MIN_SEND_USD, Remittance, TERMINAL_STATUSES } from "../domain/remittanc
 import { createContainer, type Container } from "../composition/container";
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
 import { resolveSolanaNetworkConfig } from "../infrastructure/chain"; // HU-SOL-13: cluster Solana activo (env-driven)
-import { deliveredDisplay, humanError, isDemoMode, statusDisplay } from "./flow-vm";
+import {
+  deliveredDisplay,
+  escrowFundsKnowledge,
+  escrowKnowledgeCopy,
+  humanError,
+  isDemoMode,
+  statusDisplay,
+} from "./flow-vm";
 import { cn } from "./cn";
 import { Button, Card, ChaskiMark, Field, Pill, Row, Stepper, TextInput } from "./ui";
 
 // WKH-187: el quote se muestra ANTES del KYC. Orden: send→connect→review(pre-KYC)→verify→confirm(post-KYC)→track→done.
-type Step = "send" | "connect" | "review" | "verify" | "confirm" | "track" | "done";
+// `history` NO es un paso del flujo: es la puerta de entrada a las remesas que ya existen. Se
+// necesita porque `step`/`rem`/`address` son estado de React y una recarga los borra: sin esta
+// pantalla, una remesa con USDC en el escrow dejaba de tener camino desde la interfaz.
+type Step = "send" | "connect" | "review" | "verify" | "confirm" | "track" | "done" | "history";
 const STEP_LABELS = ["Enviar", "Revisar", "Identidad", "Seguir"];
 const STEP_INDEX: Record<Step, number> = {
   send: 0,
@@ -33,6 +43,7 @@ const STEP_INDEX: Record<Step, number> = {
   confirm: 2, // comparte "Identidad" con verify (solape análogo al connect/verify anterior)
   track: 3,
   done: 3,
+  history: 0, // fuera de la línea del flujo; el stepper no la representa
 };
 
 const METHODS: { id: PayoutMethod; label: string }[] = [
@@ -80,6 +91,9 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
   const [rateUpdated, setRateUpdated] = useState(false); // WKH-187: el quote se re-cotizó tras expirar durante el KYC
   const [showResumeEscape, setShowResumeEscape] = useState(false); // WKH-188: botón de escape a los 5 s
   const cancelledRef = useRef(false); // WKH-188: corta el resume-loop tras el escape
+  // Las remesas ya guardadas de esta wallet. `null` = todavía no las pedimos (que no es lo mismo que
+  // "no hay"): la pantalla de historial sólo se renderiza con la lista ya resuelta.
+  const [history, setHistory] = useState<RemittanceState[] | null>(null);
 
   const amountNum = Number(amount) || 0;
 
@@ -234,6 +248,27 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
 
   // WKH-187/AC-2: la CTA "Continuar" del review lleva al KYC pero NO lo auto-inicia (navegación pura).
   const onContinue = () => setStep("verify");
+
+  // La puerta de entrada a lo que ya existe. Pide la address ANTES de listar porque el historial está
+  // scopeado por dueño (repo.list): sin saber quién sos no hay lista que mostrar, y adivinarla sería
+  // mostrarle a alguien las remesas de otro. Con la wallet ya conectada (autoConnect) `connect()` no
+  // abre ningún modal: lee el estado del bridge y devuelve la misma address.
+  const openHistory = () =>
+    guard(async () => {
+      const addr = address ?? (await c.connectWallet.execute()).address;
+      setAddress(addr);
+      setHistory(await c.listHistory.execute(addr));
+      setStep("history");
+    });
+
+  // Retomar una remesa del historial. No reconstruye nada: mete el snapshot guardado en el MISMO
+  // estado que usa el flujo y salta a la vista que ya sabe mostrarlo, botón de recuperar incluido.
+  // `settled` va al recibo; el resto al seguimiento, que es donde vive "Recuperar fondos".
+  const onOpenFromHistory = (entry: RemittanceState) => {
+    setError(null);
+    setRem(entry);
+    setStep(entry.status === "settled" ? "done" : "track");
+  };
 
   const onVerify = () =>
     guard(async () => {
@@ -535,6 +570,18 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
               <Button disabled={!canSend || busy} onClick={onSend}>
                 Continuar <ArrowRight className="h-4 w-4" />
               </Button>
+
+              {/* La vuelta a lo que ya existe. Vive en `send` porque es donde aterriza toda recarga y
+                  también adonde vuelve "Enviar otra": desde acá una remesa con USDC en el escrow
+                  siempre tiene camino, sin importar cómo se llegó. */}
+              <button
+                type="button"
+                onClick={openHistory}
+                disabled={busy}
+                className="w-full text-center text-sm font-semibold text-cochineal underline underline-offset-2 disabled:opacity-50"
+              >
+                Ver mis envíos
+              </button>
             </div>
           )}
 
@@ -734,6 +781,10 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
               sender={address}
               onRecovered={setRem}
             />
+          )}
+
+          {step === "history" && history && (
+            <HistoryView items={history} onOpen={onOpenFromHistory} onBack={() => setStep("send")} />
           )}
 
           {step === "done" && rem && <Receipt rem={rem} onNew={() => resetTo(setStep, setRem, setPreview)} />}
@@ -996,6 +1047,98 @@ function RefundLockedNotice({ availableAt }: { availableAt: string }) {
       </p>
     </div>
   );
+}
+
+// El historial. Existe porque `step`/`rem`/`address` son estado de React: una recarga los borraba y
+// la remesa quedaba sin ningún camino desde la interfaz, con los USDC en el vault. El dato SIEMPRE
+// estuvo (el repo las guarda por dueño); lo que faltaba era la pantalla.
+//
+// Lo que esta pantalla NO hace, y es deliberado: no consulta la cadena. Muestra el snapshot guardado
+// y dice de cuál de tres cosas se trata (escrowFundsKnowledge). Cuando no sabemos dónde están los
+// USDC lo escribe con esas palabras, en vez de deducir un final del status.
+//
+// Exportado para test directo, mismo criterio que TrackView y Receipt.
+export function HistoryView({
+  items,
+  onOpen,
+  onBack,
+}: {
+  items: RemittanceState[];
+  onOpen: (rem: RemittanceState) => void;
+  onBack: () => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <Card className="space-y-2">
+        <p className="text-sm font-semibold">Tus envíos</p>
+        {/* De dónde sale esta lista, dicho antes de que la persona saque conclusiones de que esté vacía. */}
+        <p className="text-xs text-stone">
+          Son los envíos guardados en este dispositivo. Si borraste los datos del navegador o entrás
+          desde otro, acá no van a aparecer aunque existan.
+        </p>
+      </Card>
+
+      {items.length === 0 ? (
+        <Card>
+          <p className="text-sm text-stone">
+            No encontramos envíos guardados para esta wallet en este dispositivo.
+          </p>
+        </Card>
+      ) : (
+        <ul className="space-y-3">
+          {items.map((rem) => (
+            <HistoryEntry key={rem.id} rem={rem} onOpen={onOpen} />
+          ))}
+        </ul>
+      )}
+
+      <Button variant="outline" onClick={onBack}>
+        Volver
+      </Button>
+    </div>
+  );
+}
+
+function HistoryEntry({
+  rem,
+  onOpen,
+}: {
+  rem: RemittanceState;
+  onOpen: (rem: RemittanceState) => void;
+}) {
+  const status = statusDisplay(rem.status);
+  const knowledge = escrowFundsKnowledge(rem);
+  // Una remesa que nunca autorizó un depósito no tiene nada que seguir: abrirla en el seguimiento
+  // renderizaría la vista optimista ("tu chaski está en camino", pasos en gris) sobre un envío que
+  // no llegó a existir. Se lista igual, porque es historia de la persona, pero sin esa puerta.
+  const openable = knowledge !== "no-deposit";
+  return (
+    <li>
+      <Card className="space-y-2">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold">{rem.beneficiary.name}</p>
+            <p className="tabular text-xs text-stone">
+              {rem.sendUsd.format()} · {formatEntryDate(rem.createdAt)}
+            </p>
+          </div>
+          <Pill tone={status.tone}>{status.label}</Pill>
+        </div>
+        <p className="text-xs text-stone">{escrowKnowledgeCopy(knowledge)}</p>
+        {openable ? (
+          <Button variant="outline" onClick={() => onOpen(rem)}>
+            {rem.status === "settled" ? "Ver recibo" : "Ver seguimiento"}
+          </Button>
+        ) : null}
+      </Card>
+    </li>
+  );
+}
+
+/** Fecha corta de la entrada. Un `createdAt` implanteable NO se disfraza de fecha: se dice que no la hay. */
+function formatEntryDate(createdAt: string): string {
+  const t = Date.parse(createdAt);
+  return Number.isNaN(t) ? "sin fecha" : new Date(t).toLocaleDateString("es-PE");
 }
 
 // El recibo. Antes afirmaba tres cosas que no sabía: el estado ("Entregado" HARDCODEADO), el monto

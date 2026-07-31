@@ -424,6 +424,33 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
     }
   });
 
+  // LOS DOS REASONS QUE LLEGARON DESPUÉS (guard del destino, S3.5 del settle). Los emite NUESTRA
+  // propia route ANTES del forward al facilitator: no hubo broadcast, no se gastó un token de rate
+  // limit, no se escribió una fila. O sea que "no entró" acá NO es una suposición, es un hecho, y
+  // preguntarle a la cadena sobre un hecho conocido tiene un costo concreto: si el probe contesta
+  // cualquier otra cosa, el reason del guard se PIERDE y la remesa deja de poder decir por qué falló.
+  // `solana_settle_beneficiary_mismatch` es el único reason de todo el catálogo que describe un
+  // ataque en curso: si se sobrescribe con "no sabemos", el ataque se vuelve invisible.
+  it("los reasons del guard de destino ⇒ NO se pregunta: la route cortó antes del forward", async () => {
+    for (const reason of [
+      "solana_settle_beneficiary_mismatch",
+      "solana_settle_beneficiary_unconfirmed",
+    ] as const) {
+      const repo = new InMemoryRepo();
+      const id = await seedQuoted(repo);
+      const probe = new FakeSolanaEscrowDepositProbe("deposited"); // aunque dijera que sí
+      const gateway = new FakeSolanaSettlementGateway({ ok: false, reason });
+
+      const out = await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id });
+
+      expect(probe.calls).toHaveLength(0);
+      expect(out.snapshot.failureReason).toBe(reason);
+      expect(out.snapshot.failureReason).not.toBe(PRINCIPAL_STATE_UNKNOWN);
+      expect(out.snapshot.refundTx).toBeNull();
+      expect(out.snapshot.principalTx).toBeNull();
+    }
+  });
+
   // El cierre del círculo: el caso indeterminado tiene que dejar a la persona PODER recuperar. Antes
   // la remesa quedaba en `refunded` y este mismo use-case cortaba con refund_not_available.
   it("tras el caso indeterminado el sender PUEDE recuperar sus fondos del escrow", async () => {

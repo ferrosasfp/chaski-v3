@@ -23,12 +23,13 @@ const BASE58_SIGNATURE = /^[1-9A-HJ-NP-Za-km-z]{43,90}$/;
  *  reason que BLOQUEA. Sin default permisivo (lección WKH-198). El enum de la route es nuestro.
  *
  *  ⚠️ El default era `solana_settle_rejected`, y eso decía DE MÁS. Bloquear está bien; el problema es
- *  que "rejected" significa "el facilitator se negó ANTES de broadcastear", y aguas arriba el use-case
- *  usa esa distinción para decidir si hace falta ir a mirar la cadena. Un 500 de nuestra propia route
- *  puede ocurrir DESPUÉS del broadcast (route.ts:113 llama getSettlementLedger() fuera del try: si
- *  tira, Next responde 500 con el depósito ya confirmado on-chain). Etiquetarlo "rejected" hacía que
- *  nadie fuera a preguntar, y la plata quedaba adentro con la remesa diciendo que no había entrado.
- *  Ahora lo desconocido cae en el bucket INDETERMINADO: bloquea igual, y no afirma lo que no sabe. */
+ *  que "rejected" significa "se cortó ANTES de broadcastear", y aguas arriba el use-case usa esa
+ *  distinción para decidir si hace falta ir a mirar la cadena. Un status que este mapa no conoce no
+ *  dice dónde se originó: puede venir de un intermediario (proxy/CDN/página de error de Next) que se
+ *  metió DESPUÉS de que la route ya reenvió al facilitator y el depósito ya entró. Etiquetarlo
+ *  "rejected" hacía que nadie fuera a preguntar, y la plata quedaba adentro con la remesa diciendo
+ *  que no había entrado. Ahora lo desconocido cae en el bucket INDETERMINADO: bloquea igual, y no
+ *  afirma lo que no sabe. Lo que SÍ se puede afirmar tiene su rama explícita (400/501/422/429). */
 function mapErrorReason(status: number, error: unknown): SolanaSettlementFailureReason {
   if (typeof error === "string") {
     switch (error) {
@@ -41,6 +42,13 @@ function mapErrorReason(status: number, error: unknown): SolanaSettlementFailure
         return "solana_settle_broadcast_failed";
       case "solana_settle_unavailable":
       // "no pude preguntarle al ledger" (503 de S3.5): reintentable, y NO se traduce a un rechazo.
+      // LÍMITE CONOCIDO, y es del lado seguro: este caso se corta ANTES del forward (la route no
+      // llegó al fetch), o sea que "no entró" es un hecho; pero comparte reason con el 503 del
+      // timeout, que SÍ es posterior al broadcast. Aguas arriba, entonces, se lo trata como
+      // indeterminado: se le pregunta a la cadena. El costo máximo es una consulta de más y, si esa
+      // consulta también se cae, decirle a la persona "todavía no sabemos" cuando podríamos decirle
+      // "no salió". Nunca al revés: de acá no sale un cobro ni un comprobante de reembolso.
+      // Separarlos pide un reason propio en SolanaSettlementFailureReason; queda anotado, no hecho.
       case "solana_settle_ledger_unavailable":
         return "solana_settle_unavailable";
       // S3.5 del settle: el destino se comparó contra lo que el servidor registró al preparar y NO

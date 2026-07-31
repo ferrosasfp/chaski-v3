@@ -30,12 +30,26 @@ export const PRINCIPAL_STATE_UNKNOWN = "principal_state_unknown";
  *      del feePayer, así que no puede entrar en ningún bloque). También cubre el 400/501 de nuestra
  *      propia route, que corta antes de reenviar.
  *    · solana_settle_rate_limited (429): ni lo procesó.
+ *    · solana_settle_beneficiary_mismatch / _unconfirmed: el guard de destino (S3.5) de nuestra route
+ *      cortó ANTES del forward. La route no llegó a hacer el fetch al facilitator, así que no hay tx
+ *      viajando y "no entró" es un hecho, no una suposición. Que estén acá NO es una optimización:
+ *      mandarlos a preguntar a la cadena hace que un probe que conteste otra cosa PISE el reason, y
+ *      `beneficiary_mismatch` es el único de todo el catálogo que describe un ataque en curso.
+ *      Sobrescribirlo con "no sabemos" o con "resolución manual" vuelve invisible al ataque en la
+ *      única superficie donde queda escrito (failureReason de la remesa).
  *  TODO LO DEMÁS es indeterminado y NO se puede leer como "no pasó": un timeout de 15 s (503), un 502,
  *  o un 200 con shape raro son compatibles con un depósito perfectamente confirmado del otro lado.
- *  Para esos se va a preguntarle a la cadena, que es la única fuente autoritativa. */
+ *  Para esos se va a preguntarle a la cadena, que es la única fuente autoritativa.
+ *
+ *  ⚠️ REGLA PARA EL PRÓXIMO REASON QUE SE AGREGUE a SolanaSettlementFailureReason: si lo emite
+ *  /api/settle/solana-sponsor ANTES de su `fetch` al facilitator, va en esta lista; si puede salir
+ *  de después (o de un intermediario), NO va. El default de no estar acá es el seguro (se pregunta),
+ *  pero no es gratis: cuesta el reason. */
 const SETTLE_REASONS_BEFORE_BROADCAST: readonly SolanaSettlementFailureReason[] = [
   "solana_settle_rejected",
   "solana_settle_rate_limited",
+  "solana_settle_beneficiary_mismatch",
+  "solana_settle_beneficiary_unconfirmed",
 ];
 
 /**

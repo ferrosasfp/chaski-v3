@@ -90,25 +90,32 @@ El valor pinneado coincide con el que tiene `wasiai-facilitator`.
 
 ### Smoke de devnet
 
-`npm run smoke:solana` corre el ciclo del depósito contra servicios ya desplegados: healthchecks,
-prueba de posesión, `/api/payout/prepare`, la instrucción `deposit` firmada por el sender, el
-broadcast gasless vía el facilitator y la lectura de la cuenta de escrow on chain hasta que reporta
-`Deposited`. Está deliberadamente incómodo de ejecutar:
+`npm run smoke:solana` corre el ciclo ON CHAIN completo contra servicios ya desplegados: healthchecks,
+prueba de posesión, `/api/payout/prepare`, la instrucción `deposit` firmada por el sender, el broadcast
+gasless vía el facilitator, la verificación del escrow (estado, saldo del vault y beneficiario), el
+release contra el facilitator y la relectura de la cadena hasta ver el escrow liberado y el vault en
+cero. Está deliberadamente incómodo de ejecutar:
 
 - Aborta antes de cualquier llamada si no está `SMOKE_ALLOW_REAL=true`. No corre en CI.
 - Las URLs de los servicios, las keys, los identificadores, el monto, el mint y la pubkey del
-  facilitator son todas variables de entorno: son once requeridas, listadas y validadas una por una
-  en `scripts/smoke-solana-e2e.ts:43-66` y documentadas en `.env.example`. Si falta alguna, el script
+  facilitator son todas variables de entorno: son trece requeridas, listadas y validadas una por una
+  en `scripts/smoke-solana-e2e.ts:55-78` y documentadas en `.env.example`. Si falta alguna, el script
   aborta e imprime el nombre de la variable, nunca su valor.
 - Dos entradas NO son variables, y cada una tiene su motivo. El cluster es la constante
-  `CLUSTER = "devnet"` (`:34`): no hay variable de entorno que pueda apuntar este script a mainnet. El
+  `CLUSTER = "devnet"` (`:46`): no hay variable de entorno que pueda apuntar este script a mainnet. El
   endpoint de RPC sí tiene default: `SMOKE_SOLANA_RPC_URL` si la seteás, y si no
-  `clusterApiUrl("devnet")` (`:78`), que es el endpoint público de devnet. `SMOKE_DEADLINE_SECONDS`
+  `clusterApiUrl("devnet")` (`:108`), que es el endpoint público de devnet. `SMOKE_DEADLINE_SECONDS`
   también tiene default, una hora.
-- Su último paso, la pata fiat, es best effort y hoy siempre advierte: postea a
-  `/api/a2a/payout/submit`, una ruta que ya no existe en este repo. Ese paso se reporta como `WARN` y
-  no hace fallar la corrida. La evidencia del depósito, que es para lo que existe el smoke, ya está on
-  chain para entonces.
+- **Lo que el smoke NO prueba, y lo imprime en cada corrida.** La atestación que autoriza el release la
+  calcula el propio script con el secreto compartido. En el diseño del sistema esa atestación certifica
+  que el KYC se aprobó y que la orden fiat se completó, así que un script que se la firma a sí mismo
+  prueba la pata on chain y no prueba nada de la pata fiat. Y hay algo más grande: hoy no existe, en
+  ninguno de los tres repos, un componente que decida llamar al release. Ese paso lo ejecuta una persona
+  a mano, y el smoke está sustituyendo a ese actor ausente. El smoke demuestra que las piezas on chain
+  funcionan cuando alguien las llama en orden, no que el sistema las llame solo.
+- La proveniencia del payout se imprime como parte del resultado: el único valor que significa
+  desembolso fiat real es `transfi`, y si aparece, el script aborta (el alcance autorizado es devnet sin
+  dinero real).
 
 ## Correr el proyecto
 
@@ -142,15 +149,17 @@ el `--legacy-peer-deps`.
 
 ## Tests
 
-**692 casos en 57 archivos**, todos en verde. Se reparten en:
+**697 casos en 56 archivos**, todos en verde. Se reparten en:
 
 - Dominio y aplicación con dobles de prueba, sin red ni wallet ni navegador. Ahí viven las invariantes
   del camino del dinero: no se confirma sin identidad verificada y cotización vigente, la cotización
   vencida falla cerrado, la máquina de estados no admite saltos.
 - Rutas de API, adaptadores de infraestructura y componentes con Testing Library.
-- Contract tests contra copias pinneadas del output de cada servicio externo (`contracts/`). Si un
-  proveedor cambia la forma de su respuesta y alguien re vendorea la copia, el test del consumidor se
-  pone rojo en vez de romperse en producción.
+- Contract tests contra copias pinneadas del output de dos servicios externos, la cotización y el KYC
+  (`contracts/`). Si un proveedor cambia la forma de su respuesta y alguien re vendorea la copia, el
+  test del consumidor se pone rojo en vez de romperse en producción. El tercero, el del payout, se
+  retiró: su validador consumidor estaba dentro de un método que apuntaba a una ruta borrada, así que
+  su verde no probaba nada. El motivo y el follow up están escritos en `contracts/CONTRACT-VERSIONS.md`.
 - El IDL del escrow pinneado por hash canónico (`contracts/idl/escrow-idl.hash.test.ts`), descrito
   arriba.
 - Un guard contra el regreso del camino EVM que este repo supo tener
@@ -168,7 +177,7 @@ el `--legacy-peer-deps`.
   `@ethersproject/*` o `thirdweb`. Cubrir un nombre nuevo es agregarlo a la lista, con su motivo.
 
 ```bash
-npm test          # 692 tests en 57 archivos
+npm test          # 697 tests en 56 archivos
 npm run qa        # lint + los dos typechecks + tests
 ```
 

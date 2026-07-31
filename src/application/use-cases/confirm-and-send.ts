@@ -168,8 +168,18 @@ export class ConfirmAndSend {
       return r;
     }
     // 4. markPrincipalIn con la signature base58 VERIFICADA on-chain por /solana/sponsor. Luego
-    //    payout_submitted con el payoutId de prepare (la orden TransFi ya se creó). La RELEASE del
-    //    vault la dispara el facilitator (13c) async — NO chaski.
+    //    payout_submitted con el payoutId de prepare (la orden de desembolso ya se creó).
+    //
+    //    ⚠️ ACÁ TERMINA EL FLUJO AUTOMÁTICO, y esto decía lo contrario. Decía que "la RELEASE del
+    //    vault la dispara el facilitator (13c) async, NO chaski". La segunda mitad es cierta: chaski
+    //    no la dispara (cero referencias a `escrow/release` en este repo). La primera es FALSA: no
+    //    hay nada async. El facilitator expone POST /solana/escrow/release y sólo responde cuando
+    //    alguien se lo pide; no existe hoy, en ninguno de los tres repos, un componente que decida
+    //    llamarlo. Hoy ese release lo ejecuta una PERSONA a mano.
+    //
+    //    Consecuencia para quien lea esto: la remesa queda en payout_submitted con el dinero todavía
+    //    en el vault del escrow. Que llegue a "entregado" en el camino Solana es un hueco de
+    //    producto abierto, no un paso que ocurre solo más tarde.
     r.markPrincipalIn(res.signature, this.clock.nowIso());
     await this.repo.save(r);
     r.markPayoutSubmitted(prep.result.payoutId, this.clock.nowIso(), prep.result.provenance);

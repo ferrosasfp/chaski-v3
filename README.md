@@ -90,25 +90,32 @@ before a transaction gets rejected in production. Re pinning is an explicit deci
 
 ### Devnet smoke
 
-`npm run smoke:solana` drives the deposit cycle against already deployed services: healthchecks, proof
-of possession, `/api/payout/prepare`, the `deposit` instruction signed by the sender, the gasless
-broadcast through the facilitator, and reading the escrow account on chain until it reports
-`Deposited`. It is deliberately uncomfortable to run:
+`npm run smoke:solana` drives the full ON CHAIN cycle against already deployed services: healthchecks,
+proof of possession, `/api/payout/prepare`, the `deposit` instruction signed by the sender, the gasless
+broadcast through the facilitator, the escrow verification (status, vault balance and beneficiary), the
+release against the facilitator, and re-reading the chain until the escrow is released and the vault is
+empty. It is deliberately uncomfortable to run:
 
 - It aborts before any call unless `SMOKE_ALLOW_REAL=true`. It does not run in CI.
 - The service URLs, the keys, the identifiers, the amount, the mint and the facilitator pubkey are all
-  environment variables, the eleven required ones listed and validated one by one in
-  `scripts/smoke-solana-e2e.ts:43-66` and documented in `.env.example`. If one is missing the script
+  environment variables, the thirteen required ones listed and validated one by one in
+  `scripts/smoke-solana-e2e.ts:55-78` and documented in `.env.example`. If one is missing the script
   aborts and prints the variable's name, never its value.
 - Two inputs are not variables, and that is the point of each. The cluster is the constant
-  `CLUSTER = "devnet"` (`:34`): there is no environment variable that can aim this script at mainnet.
+  `CLUSTER = "devnet"` (`:46`): there is no environment variable that can aim this script at mainnet.
   The RPC endpoint does have a default: `SMOKE_SOLANA_RPC_URL` if you set it, otherwise
-  `clusterApiUrl("devnet")` (`:78`), which is the public devnet endpoint. `SMOKE_DEADLINE_SECONDS`
+  `clusterApiUrl("devnet")` (`:108`), which is the public devnet endpoint. `SMOKE_DEADLINE_SECONDS`
   also defaults, to one hour.
-- Its last step, the fiat leg, is best effort and today it always warns: it posts to
-  `/api/a2a/payout/submit`, a route that no longer exists in this repo. That step is reported as
-  `WARN` and does not fail the run. The deposit evidence, which is what the smoke is for, is already
-  on chain by then.
+- **What the smoke does not prove, printed on every run.** The attestation that authorizes the release
+  is computed by the script itself from the shared secret. By design that attestation certifies that
+  KYC was approved and that the fiat order completed, so a script that signs it for itself proves the
+  on chain leg and proves nothing about the fiat leg. And there is something bigger: today no component
+  in any of the three repos decides to call the release. A person runs that step by hand, and the smoke
+  is standing in for that absent actor. The smoke shows that the on chain pieces work when somebody
+  calls them in order, not that the system calls them on its own.
+- The payout provenance is printed as part of the result: the only value that means a real fiat payout
+  is `transfi`, and if it shows up the script aborts (the authorized scope is devnet with no real
+  money).
 
 ## Running it
 
@@ -142,15 +149,17 @@ The dependency tree mixes React 19 with packages that still declare React 18 pee
 
 ## Tests
 
-**692 cases across 57 files**, all green. They break down as:
+**697 cases across 56 files**, all green. They break down as:
 
 - Domain and application with test doubles, no network, wallet or browser. That is where the money
   path invariants live: nothing is confirmed without a verified identity and a live quote, an expired
   quote fails closed, the state machine admits no jumps.
 - API routes, infrastructure adapters and components with Testing Library.
-- Contract tests against pinned copies of each external service's output (`contracts/`). If a provider
-  changes the shape of its response and someone re vendors the copy, the consumer's test goes red
-  instead of breaking in production.
+- Contract tests against pinned copies of two external services' output, the quote and the KYC
+  (`contracts/`). If a provider changes the shape of its response and someone re vendors the copy, the
+  consumer's test goes red instead of breaking in production. The third one, the payout, was retired:
+  its consumer validator lived inside a method that pointed at a deleted route, so its green proved
+  nothing. The reason and the follow up are written down in `contracts/CONTRACT-VERSIONS.md`.
 - The escrow IDL pinned by canonical hash (`contracts/idl/escrow-idl.hash.test.ts`), described above.
 - A guard against the return of the EVM path this repo used to have
   (`src/composition/no-evm-surface.test.ts`). It walks `src/`, `app/`, `scripts/` and `contracts/` on
@@ -167,7 +176,7 @@ The dependency tree mixes React 19 with packages that still declare React 18 pee
   `thirdweb`. Covering a new name means adding it to the list, with its reason.
 
 ```bash
-npm test          # 692 tests across 57 files
+npm test          # 697 tests across 56 files
 npm run qa        # lint + both typechecks + tests
 ```
 

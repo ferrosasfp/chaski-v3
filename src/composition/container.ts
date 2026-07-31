@@ -106,7 +106,7 @@ export function createContainer(): Container {
   // WKH-320: se van los dos guards de mutua exclusión con EVM (`solana_vm_excludes_eip3009` y
   // `solana_settle_requires_solana_vm`). No es que se hayan relajado: la condición que vigilaban
   // dejó de ser expresable. No hay una VM que pueda no ser Solana, y no hay un flag EIP-3009 con el
-  // cual colisionar. El interruptor NEXT_PUBLIC_VM residual lo caza assertNoEvmResidue() de arriba,
+  // cual colisionar. Un interruptor de VM residual en el entorno lo caza assertNoEvmResidue(),
   // que es un control que SÍ puede dispararse.
   const solanaSettleOn = process.env.NEXT_PUBLIC_SOLANA_SETTLE_ENABLED === "true";
   if (solanaSettleOn) {

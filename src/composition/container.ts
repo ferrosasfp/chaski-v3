@@ -118,10 +118,15 @@ export function createContainer(): Container {
   // El prepare va con su PopSigner: /api/payout/prepare exige el PoP (PR6) y sin él responde 403
   // ANTES de que la wallet pida una sola firma. Es el MISMO HttpPopSigner sobre la MISMA wallet que
   // ya usa el camino de refund (createSolanaWallet), no un mecanismo nuevo.
+  // `probe` = el MISMO adapter de wallet, que sabe derivar la PDA `escrow_state` y leerla on-chain.
+  // Es la fuente autoritativa de si el principal entró cuando el settle no nos dio respuesta. No se
+  // cablea ningún agente acá a propósito: un agente es reemplazable por otro mejor vía discovery, la
+  // cadena no, y la verdad sobre el dinero tiene que colgar de lo que no se reemplaza.
   const solana = solanaSettleOn
     ? {
         prepare: new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet)),
         gateway: new HttpSolanaSettlementGateway(),
+        probe: wallet,
       }
     : undefined;
   // Refund trustless (AC-6/CD-10): válvula de recuperación (lee on-chain y aborta si no es

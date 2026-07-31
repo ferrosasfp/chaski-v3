@@ -73,8 +73,11 @@ describe("ConfirmAndSend — enforcement autoridad server-side (WKH-180)", () =>
       new FakeRefundGateway(),
     ).execute({ remittanceId: id });
 
-    // WKH-186: refund-on-failure avanza payout_failed → refunded en el mismo execute(); failureReason
-    // sobrevive (markRefunded solo patchea refundTx). El guard de WKH-180 sigue intacto: NO firma.
+    // WKH-186: con un adapter que devuelve un comprobante REAL (el FakeRefundGateway default), el
+    // refund-on-failure avanza payout_failed → refunded en el mismo execute(); failureReason sobrevive
+    // (markRefunded solo patchea refundTx). Con el adapter de PRODUCCIÓN, que no revierte nada y
+    // devuelve null, se queda en payout_failed y sin referencia: eso NO se lee de este caso.
+    // El guard de WKH-180 sigue intacto: NO firma.
     expect(out.status).toBe("refunded");
     expect(out.snapshot.failureReason).toBe("kyc_not_approved");
     expect(out.snapshot.refundTx).toBe("refund-fake");

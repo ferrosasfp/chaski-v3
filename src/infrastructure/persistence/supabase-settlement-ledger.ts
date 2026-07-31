@@ -73,6 +73,12 @@ function preparedPlaceholderTxHash(idempotencyKey: string): string {
  *  NUNCA del body, NUNCA un literal nuevo. `chainId` es un chainId EVM: en la rama Solana NO se
  *  escribe (no existe chainId numérico en Solana; escribirlo era el mislabel: filas base58 con el
  *  chainId de Avalanche). */
+/** WKH-320 — el `chainId` del port sigue siendo `number` (CD-11: NO se re-tipa el port ni la columna).
+ *  Los callers vivos son todos Solana y no tienen un chainId que pasar: mandan esta constante, que
+ *  `vmNetworkColumns` DESCARTA en la rama "solana" (escribe `chain_id: null`). Es un relleno inerte
+ *  con nombre, no un chainId 0 que se persista en ningún lado. */
+export const CHAIN_ID_NOT_APPLICABLE = 0;
+
 function vmNetworkColumns(
   vm: "evm" | "solana",
   chainId: number,

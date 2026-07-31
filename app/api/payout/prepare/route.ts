@@ -1,9 +1,9 @@
-// Server-side: PREPARE del payout no-custodial (WKH-211, AC-1/AC-7). Crea la orden TransFi (invoca al
-// agente remit-cashout-payout) y emite la DepositAttestation HMAC que ata el depositAddress a ESTA
-// remesa ANTES de que el cliente firme (Opción B, DT-1). El cliente firma `to = depositAddress`; el
-// guard de /api/settle/principal re-verifica la atestación (B1-B6) y usa expectedTo = depositAddress.
+// Server-side: PREPARE del payout no-custodial (WKH-211 / HU-SOL-11, AC-1/AC-7). Crea la orden TransFi
+// (invoca al agente remit-cashout-payout) y emite la SolanaDepositAttestation HMAC que ata el
+// beneficiary (deposit-address) y la release-authority a ESTA remesa ANTES de que el cliente firme
+// (Opción B, DT-1). La wallet arma la ix `deposit` del escrow contra ese beneficiary atestado.
 //
-// Compone challenge/route.ts (emisor HMAC) + submit/route.ts (guards autoridad WKH-202 + PoP WKH-206).
+// Compone challenge/route.ts (emisor HMAC del PoP) + los guards de autoridad WKH-202 y PoP WKH-206.
 // Guard-order fail-closed (envs leídas en runtime, CD-14): 501-BASE → 503-secreto → rate-limit →
 // formato → autoridad → PoP → forward → shape+depositAddress → attest → ledger → 200.
 //
@@ -12,17 +12,12 @@
 // (no-null) exige el agente con TRANSFI_ADAPTER_READY=true (cross-repo WKH-212); el mock devuelve null
 // → PR8 fail-closed (nunca se atesta sin address confirmada).
 import { NextResponse } from "next/server";
-import { isAddress, verifyMessage } from "viem";
 import {
-  buildPopMessage,
-  verifyPopChallenge,
   buildSolanaPopMessage,
   verifySolanaPopChallenge,
 } from "../../../../src/infrastructure/auth/pop-challenge";
 import { verifySolanaPop } from "../../../../src/infrastructure/auth/pop-verify-solana";
 import {
-  resolveChainId,
-  resolveActiveVm,
   resolveSolanaNetworkId,
   resolveSolanaReleaseAuthorityPubkey,
   resolveSolanaNetworkConfig,
@@ -34,12 +29,14 @@ import {
   logGatewayFailure,
   runViaGateway,
 } from "../../../../src/infrastructure/a2a/gateway-client";
-import { getSettlementLedger } from "../../../../src/infrastructure/persistence/supabase-settlement-ledger";
+import {
+  CHAIN_ID_NOT_APPLICABLE,
+  getSettlementLedger,
+} from "../../../../src/infrastructure/persistence/supabase-settlement-ledger";
 import { logLedgerWriteFailure } from "../../../../src/infrastructure/persistence/ledger-write-failure";
 import { resolvePayoutAuthority } from "../../../../src/infrastructure/payout/authority";
 import {
   DEPOSIT_ATTESTATION_TTL_SECONDS,
-  issueDepositAttestation,
   issueSolanaDepositAttestation,
 } from "../../../../src/infrastructure/settlement/deposit-attestation";
 import {
@@ -53,7 +50,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 // Shape mínimo del result del agente (mirror del isValidPayoutResult de submit/route.ts). El
-// depositAddress se valida aparte en PR8 (exige string no-vacío + isAddress).
+// depositAddress se valida aparte en PR8 (exige string no-vacío + base58 canónico).
 function isValidPayoutResult(v: unknown): boolean {
   if (!isRecord(v)) return false;
   const statusOk =
@@ -100,18 +97,14 @@ export async function POST(req: Request): Promise<Response> {
   const quoteId = typeof body.quoteId === "string" ? body.quoteId : "";
   const kycVerificationId = typeof body.kycVerificationId === "string" ? body.kycVerificationId : "";
   const address = typeof body.address === "string" ? body.address : "";
-  // HU-SOL-9: validación de `address` VM-discriminada. evm → isAddress (byte-idéntico). solana →
-  // canonicalizeAddress base58 (throwea con malformado → try/catch → false, mismo 400 opaco, CD-2).
+  // HU-SOL-9: `address` es base58. canonicalizeAddress throwea con malformado → try/catch → false →
+  // el mismo 400 opaco (CD-2).
   let addressOk: boolean;
-  if (resolveActiveVm() === "solana") {
-    try {
-      canonicalizeAddress(address, "solana");
-      addressOk = true;
-    } catch {
-      addressOk = false;
-    }
-  } else {
-    addressOk = isAddress(address);
+  try {
+    canonicalizeAddress(address);
+    addressOk = true;
+  } catch {
+    addressOk = false;
   }
   if (!remittanceId.trim() || !quoteId.trim() || !kycVerificationId.trim() || !addressOk) {
     return NextResponse.json({ error: "prepare_invalid_request" }, { status: 400 });
@@ -139,92 +132,60 @@ export async function POST(req: Request): Promise<Response> {
     }
   }
 
-  // PR6 — proof-of-possession (WKH-206). OPT-IN: sin PAYOUT_POP_SECRET, SKIP total. Cualquier fallo
-  // cripto → 403 opaco. NO claim-once (P6): el nonce se quema recién en submit/tracking; acá stateless
-  // (no quemar el nonce ANTES de la firma real).
-  // HU-SOL-8/CD-2: dispatch por VM. En Solana el PoP es OBLIGATORIO (fail-closed 503 sin secreto), SIN
-  // claim-once (el nonce se quema recién en submit); en EVM el bloque WKH-206 queda byte-idéntico en el
-  // `else if (POP_SECRET)` (opt-in, AC-8).
-  const vm = resolveActiveVm();
+  // PR6 — proof-of-possession (WKH-206/HU-SOL-8). OBLIGATORIO: sin PAYOUT_POP_SECRET → 503 fail-closed
+  // (NUNCA skip). Stateless a propósito: el nonce NO se quema en este repo. Hasta WKH-320 lo quemaba
+  // /api/a2a/payout/submit (claimPopNonceOnce); esa ruta era EVM y se eliminó, así que hoy el
+  // anti-replay del PoP dentro de su TTL (10 min, pop-challenge.ts) es responsabilidad del
+  // facilitator, que es quien exige y verifica el popProof. Chaski YA NO tiene ese control.
+  // Residual R-3 de WKH-320: restituir el single-use en el path vivo = HU aparte.
+  //
+  // WKH-320: acá había un dispatch `if (vm === "solana") … else if (POP_SECRET) …`. El cuerpo que
+  // sobrevive es el del IF (PoP obligatorio, 503 sin secreto), NUNCA el del ELSE IF, que era el PoP
+  // opt-in del camino EVM: quedarse con ese habría convertido una prueba obligatoria en opcional y
+  // reabierto G5. Cualquier fallo cripto → 403 opaco (CD-4, no-oracle).
   const POP_SECRET = process.env.PAYOUT_POP_SECRET; // CD-14: dentro del handler
-  if (vm === "solana") {
-    // CD-2 / AC-3: OBLIGATORIO. Sin secreto → 503 fail-closed (NUNCA skip).
-    if (!POP_SECRET) {
-      return NextResponse.json({ error: "payout_pop_unavailable" }, { status: 503 });
-    }
-    const popChallenge = body.popChallenge;
-    const popSignature = body.popSignature;
-    // P1 — presencia + tipo → 403 opaco.
-    if (
-      typeof popChallenge !== "string" ||
-      !popChallenge.trim() ||
-      typeof popSignature !== "string" ||
-      !popSignature.trim()
-    ) {
+  // CD-2 / AC-3: OBLIGATORIO. Sin secreto → 503 fail-closed (NUNCA skip).
+  if (!POP_SECRET) {
+    return NextResponse.json({ error: "payout_pop_unavailable" }, { status: 503 });
+  }
+  const popChallenge = body.popChallenge;
+  const popSignature = body.popSignature;
+  // P1 — presencia + tipo → 403 opaco.
+  if (
+    typeof popChallenge !== "string" ||
+    !popChallenge.trim() ||
+    typeof popSignature !== "string" ||
+    !popSignature.trim()
+  ) {
+    return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+  }
+  // P2 — HMAC + exp + tipos colapsan en null → 403 opaco.
+  const ch = verifySolanaPopChallenge(popChallenge, Date.now());
+  if (!ch) {
+    return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+  }
+  // P3 — address match (CD-8, base58 case-sensitive). canonicalizeAddress throwea → try/catch → 403.
+  try {
+    if (canonicalizeAddress(ch.address) !== canonicalizeAddress(address)) {
       return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
     }
-    // P2 — HMAC + exp + tipos colapsan en null → 403 opaco.
-    const ch = verifySolanaPopChallenge(popChallenge, Date.now());
-    if (!ch) {
-      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
-    }
-    // P3 — address match (CD-8, base58 case-sensitive). canonicalizeAddress throwea → try/catch → 403.
-    try {
-      if (canonicalizeAddress(ch.address, "solana") !== canonicalizeAddress(address, "solana")) {
-        return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
-      }
-    } catch {
-      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
-    }
-    // P4 — CAIP-2 binding (AC-4/CD-3): network-id del token vs el resuelto server-side, NUNCA del body.
-    if (ch.networkId !== resolveSolanaNetworkId()) {
-      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
-    }
-    // P5 — ed25519 (AC-1/AC-2): mensaje reconstruido con la MISMA buildSolanaPopMessage (CD-6). SIN P6
-    // claim-once (el nonce se quema recién en submit).
-    if (
-      !verifySolanaPop({
-        addressBase58: ch.address,
-        message: buildSolanaPopMessage(ch),
-        signatureBase58: popSignature,
-      })
-    ) {
-      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
-    }
-  } else if (POP_SECRET) {
-    const popChallenge = body.popChallenge;
-    const popSignature = body.popSignature;
-    if (
-      typeof popChallenge !== "string" ||
-      !popChallenge.trim() ||
-      typeof popSignature !== "string" ||
-      !popSignature.trim()
-    ) {
-      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
-    }
-    const ch = verifyPopChallenge(popChallenge, Date.now());
-    if (!ch) {
-      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
-    }
-    if (canonicalizeAddress(ch.address, resolveActiveVm()) !== canonicalizeAddress(address, resolveActiveVm())) {
-      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
-    }
-    if (ch.chainId !== resolveChainId()) {
-      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
-    }
-    let ok = false;
-    try {
-      ok = await verifyMessage({
-        address: ch.address as `0x${string}`,
-        message: buildPopMessage(ch),
-        signature: popSignature as `0x${string}`,
-      });
-    } catch {
-      ok = false;
-    }
-    if (!ok) {
-      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
-    }
+  } catch {
+    return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+  }
+  // P4 — CAIP-2 binding (AC-4/CD-3): network-id del token vs el resuelto server-side, NUNCA del body.
+  if (ch.networkId !== resolveSolanaNetworkId()) {
+    return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+  }
+  // P5 — ed25519 (AC-1/AC-2): mensaje reconstruido con la MISMA buildSolanaPopMessage (CD-6). SIN
+  // claim-once del nonce: ver la nota de arriba (residual R-3, WKH-320).
+  if (
+    !verifySolanaPop({
+      addressBase58: ch.address,
+      message: buildSolanaPopMessage(ch),
+      signatureBase58: popSignature,
+    })
+  ) {
+    return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
   }
 
   // PR7 — forward al agente (crea la orden TransFi). Transporte según adapter (WKH-304, DT-3/CD-3).
@@ -282,7 +243,7 @@ export async function POST(req: Request): Promise<Response> {
     }
   }
 
-  // PR8 — valida el shape + EXIGE depositAddress string no-vacío + isAddress. El mock del agente
+  // PR8 — valida el shape + EXIGE depositAddress string no-vacío + base58 canónico. El mock del agente
   // devuelve depositAddress:null → AQUÍ muere (AC-7 fail-closed): NUNCA se atesta sin address confirmada.
   if (!isValidPayoutResult(result)) {
     return NextResponse.json({ error: "prepare_upstream_error" }, { status: 502 });
@@ -290,115 +251,67 @@ export async function POST(req: Request): Promise<Response> {
   const okResult = result as { payoutId: string | null; provenance?: unknown; depositAddress?: unknown };
   const depositAddress = typeof okResult.depositAddress === "string" ? okResult.depositAddress : "";
 
-  // HU-SOL-11 — dispatch por VM del BLOQUE DE RESPUESTA (PR8-PR11). El guard-order PR1-PR7 quedó
-  // INTACTO arriba (CD-1). La rama Solana `return`ea ANTES del check EVM `isAddress` de abajo, así que
-  // el EVM NUNCA corre isAddress sobre un pubkey base58 (CD-2: rama EVM byte-idéntica). CD-9: todo inline.
-  const vmOut = resolveActiveVm();
-  if (vmOut === "solana") {
-    // 1. beneficiary = MISMO depositAddress del agente (DT-1). Vacío → mismo enum opaco que EVM.
-    if (!depositAddress.trim()) {
-      return NextResponse.json({ error: "prepare_no_deposit_address" }, { status: 502 });
-    }
-    // base58 válido (AC-3, no-oráculo: MISMO enum que EVM, no distinguir motivo).
-    try {
-      canonicalizeAddress(depositAddress, "solana");
-    } catch {
-      return NextResponse.json({ error: "prepare_no_deposit_address" }, { status: 502 });
-    }
-    // 2. payoutId presente (fail-closed: no atestar una orden sin id trackeable).
-    const payoutIdSol = typeof okResult.payoutId === "string" ? okResult.payoutId : "";
-    if (!payoutIdSol.trim()) {
-      return NextResponse.json({ error: "prepare_no_deposit_address" }, { status: 502 });
-    }
-    const provenanceSol = typeof okResult.provenance === "string" ? okResult.provenance : "";
-    // 3. authority (DESPUÉS de validar beneficiary, DT-2). Ausente/malformada → 503 enum NUEVO opaco.
-    let authoritySol: string;
-    try {
-      authoritySol = resolveSolanaReleaseAuthorityPubkey();
-    } catch {
-      return NextResponse.json({ error: "prepare_solana_authority_unavailable" }, { status: 503 });
-    }
-    // 4. cluster ("devnet").
-    const clusterSol = resolveSolanaNetworkConfig().cluster;
-    // 5. atestación Solana (beneficiary/authority/cluster; mismo TTL/secret).
-    const attestationSol = issueSolanaDepositAttestation({
-      remittanceId,
-      quoteId,
-      beneficiary: depositAddress,
-      authority: authoritySol,
-      cluster: clusterSol,
-      exp: Math.floor(Date.now() / 1000) + DEPOSIT_ATTESTATION_TTL_SECONDS,
-    });
-    // 6. ledger best-effort (vm:"solana" es el discriminante; el ledger IGNORA el chainId en esta rama y
-    //    escribe network_id CAIP-2 + chain_id NULL — ver vmNetworkColumns). NUNCA rompe (CD-17).
-    const ledgerSol = getSettlementLedger();
-    if (ledgerSol) {
-      try {
-        await ledgerSol.recordOrderPrepared({
-          remittanceId,
-          quoteId,
-          idempotencyKey: typeof body.idempotencyKey === "string" ? body.idempotencyKey : `${remittanceId}:${quoteId}`,
-          depositAddress,
-          chainId: resolveChainId(),
-          senderAddress: address,
-          payoutId: payoutIdSol,
-          vm: "solana",
-        });
-      } catch (e) {
-        // MISMO control de flujo (se traga la excepción, CD-17); cambia SOLO la señal: una violación de
-        // integridad (SQLSTATE 23xxx = bug nuestro, la fila NO se escribió) grita en error+[ALERT], un
-        // fallo de infra transitorio va a warn, y lo NO mapeado grita por default.
-        logLedgerWriteFailure("recordOrderPrepared", e);
-      }
-    }
-    // 7. 200 — matchea EXACTO isValidSolanaPrepareShape del gateway.
-    return NextResponse.json(
-      { beneficiary: depositAddress, authority: authoritySol, attestation: attestationSol, payoutId: payoutIdSol, provenance: provenanceSol },
-      { status: 200 },
-    );
-  }
-  // ── RAMA EVM (default) — TODO lo de abajo SIN CAMBIOS (byte-idéntico, CD-2) ──
-  if (!depositAddress.trim() || !isAddress(depositAddress)) {
+  // PR8-PR11 — bloque de respuesta. WKH-320: acá había un dispatch por VM cuya rama EVM validaba el
+  // depositAddress con un validador hexadecimal y emitía la atestación EVM. Queda el camino Solana.
+  // 1. beneficiary = MISMO depositAddress del agente (DT-1). Vacío → mismo enum opaco que EVM.
+  if (!depositAddress.trim()) {
     return NextResponse.json({ error: "prepare_no_deposit_address" }, { status: 502 });
   }
-  // payoutId: en un result válido con depositAddress real, la orden se creó ⇒ payoutId presente. Si
-  // fuese null (shape borde), fail-closed: no atestamos una orden sin id trackeable.
-  const payoutId = typeof okResult.payoutId === "string" ? okResult.payoutId : "";
-  if (!payoutId.trim()) {
+  // base58 válido (AC-3, no-oráculo: MISMO enum que EVM, no distinguir motivo).
+  try {
+    canonicalizeAddress(depositAddress);
+  } catch {
     return NextResponse.json({ error: "prepare_no_deposit_address" }, { status: 502 });
   }
-  const provenance = typeof okResult.provenance === "string" ? okResult.provenance : "";
-
-  // PR9 — emite la DepositAttestation. chainId de la ENV server-side (CD-9), NUNCA del body.
-  const chainId = resolveChainId();
-  const attestation = issueDepositAttestation({
+  // 2. payoutId presente (fail-closed: no atestar una orden sin id trackeable).
+  const payoutIdSol = typeof okResult.payoutId === "string" ? okResult.payoutId : "";
+  if (!payoutIdSol.trim()) {
+    return NextResponse.json({ error: "prepare_no_deposit_address" }, { status: 502 });
+  }
+  const provenanceSol = typeof okResult.provenance === "string" ? okResult.provenance : "";
+  // 3. authority (DESPUÉS de validar beneficiary, DT-2). Ausente/malformada → 503 enum NUEVO opaco.
+  let authoritySol: string;
+  try {
+    authoritySol = resolveSolanaReleaseAuthorityPubkey();
+  } catch {
+    return NextResponse.json({ error: "prepare_solana_authority_unavailable" }, { status: 503 });
+  }
+  // 4. cluster ("devnet").
+  const clusterSol = resolveSolanaNetworkConfig().cluster;
+  // 5. atestación Solana (beneficiary/authority/cluster; mismo TTL/secret).
+  const attestationSol = issueSolanaDepositAttestation({
     remittanceId,
     quoteId,
-    depositAddress,
-    chainId,
+    beneficiary: depositAddress,
+    authority: authoritySol,
+    cluster: clusterSol,
     exp: Math.floor(Date.now() / 1000) + DEPOSIT_ATTESTATION_TTL_SECONDS,
   });
-
-  // PR10 — ledger best-effort flag-gated (patrón submit:273-294). NUNCA PII (CD-7/AC-8: solo
-  // IDs/address/chainId). NUNCA rompe el money-path (CD-17).
-  const ledger = getSettlementLedger();
-  if (ledger) {
+  // 6. ledger best-effort (vm:"solana" es el discriminante; el ledger IGNORA el chainId en esta rama y
+  //    escribe network_id CAIP-2 + chain_id NULL — ver vmNetworkColumns). NUNCA rompe (CD-17).
+  const ledgerSol = getSettlementLedger();
+  if (ledgerSol) {
     try {
-      await ledger.recordOrderPrepared({
+      await ledgerSol.recordOrderPrepared({
         remittanceId,
         quoteId,
         idempotencyKey: typeof body.idempotencyKey === "string" ? body.idempotencyKey : `${remittanceId}:${quoteId}`,
         depositAddress,
-        chainId,
+        chainId: CHAIN_ID_NOT_APPLICABLE, // WKH-320: no hay chainId en Solana; vmNetworkColumns lo descarta
         senderAddress: address,
-        payoutId,
-        vm: resolveActiveVm(),
+        payoutId: payoutIdSol,
+        vm: "solana",
       });
     } catch (e) {
-      logLedgerWriteFailure("recordOrderPrepared", e); // best-effort, NUNCA rompe (CD-17); señal por clase
+      // MISMO control de flujo (se traga la excepción, CD-17); cambia SOLO la señal: una violación de
+      // integridad (SQLSTATE 23xxx = bug nuestro, la fila NO se escribió) grita en error+[ALERT], un
+      // fallo de infra transitorio va a warn, y lo NO mapeado grita por default.
+      logLedgerWriteFailure("recordOrderPrepared", e);
     }
   }
-
-  // PR11 — 200. NUNCA BASE/PII/beneficiary; sólo hechos operativos.
-  return NextResponse.json({ depositAddress, attestation, payoutId, provenance }, { status: 200 });
+  // 7. 200 — matchea EXACTO isValidSolanaPrepareShape del gateway.
+  return NextResponse.json(
+    { beneficiary: depositAddress, authority: authoritySol, attestation: attestationSol, payoutId: payoutIdSol, provenance: provenanceSol },
+    { status: 200 },
+  );
 }

@@ -137,7 +137,8 @@ function readAgentRef(raw: unknown): AgentRef | undefined {
   if (typeof raw.slug !== "string" || !raw.slug) return undefined;
   return {
     slug: raw.slug,
-    registry: typeof raw.registry === "string" ? raw.registry : "",
+    // Ausente ⟹ ausente. Un "" de relleno afirmaría un catálogo vacío (ver AgentRef en el dominio).
+    ...(typeof raw.registry === "string" && raw.registry ? { registry: raw.registry } : {}),
     ...(typeof raw.capability === "string" ? { capability: raw.capability } : {}),
     ...(typeof raw.trial === "boolean" ? { trial: raw.trial } : {}),
   };

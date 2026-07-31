@@ -90,7 +90,8 @@ export type GatewayStep = {
  */
 export type GatewayAgentRef = {
   slug: string;
-  registry: string;
+  /** De qué catálogo salió. Ausente ⟹ el gateway no lo dijo (NO se rellena con "": ver AgentRef). */
+  registry?: string;
   /** `resolvedFrom.capability`: presente SÓLO si lo eligió el gateway a partir de una capacidad. */
   capability?: string;
   /** `agent.trial.granted`: entró por el carril de estreno, o sea sin historial liquidado. */
@@ -163,7 +164,9 @@ function readAgentRef(entry: unknown): GatewayAgentRef | null {
   const trial = isRecord(agent.trial) && agent.trial.granted === true ? true : undefined;
   return {
     slug: agent.slug,
-    registry: typeof agent.registry === "string" ? agent.registry : "",
+    // MISMO criterio que capability/trial: si no vino con el tipo exacto, el campo NO se escribe. Un
+    // `""` de relleno diría "el catálogo es vacío" en vez de "el gateway no lo dijo".
+    ...(typeof agent.registry === "string" && agent.registry ? { registry: agent.registry } : {}),
     ...(capability !== undefined ? { capability } : {}),
     ...(trial !== undefined ? { trial } : {}),
   };

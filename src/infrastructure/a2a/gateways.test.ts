@@ -79,6 +79,14 @@ describe("A2aQuoteGateway (AC-3)", () => {
     });
   });
 
+  // Un agente CON slug pero SIN registry: el slug se conserva y el catálogo NO se inventa vacío.
+  it("agent con slug y sin registry ⇒ el registry queda AUSENTE (no cadena vacía)", async () => {
+    vi.stubGlobal("fetch", okJson({ result: validQuoteResult, agent: { slug: "sin-catalogo" } }));
+    const q = await new A2aQuoteGateway().requestQuote(quoteReq);
+    expect(q.agent).toEqual({ slug: "sin-catalogo" });
+    expect(q.agent).not.toHaveProperty("registry");
+  });
+
   it("sin agent (o ilegible) el Quote NO lo inventa: el campo queda ausente", async () => {
     vi.stubGlobal("fetch", okJson({ result: validQuoteResult }));
     expect((await new A2aQuoteGateway().requestQuote(quoteReq)).agent).toBeUndefined();

@@ -27,7 +27,14 @@ export interface Beneficiary {
  */
 export interface AgentRef {
   slug: string; // el slug CANÓNICO del agente que ejecutó el step
-  registry: string; // de qué catálogo salió (display name del gateway)
+  /**
+   * De qué catálogo salió (display name del gateway). OPCIONAL: ausente ⟹ el gateway NO lo dijo.
+   * Antes se rellenaba con `""` cuando faltaba, y eso afirmaba otra cosa: "el catálogo es vacío".
+   * Un consumidor que muestre el campo escribiría un espacio en blanco como si fuera un dato, y uno
+   * que compare contra "" trataría dos catálogos desconocidos como el mismo. La ausencia es el
+   * único valor que dice la verdad, y es lo que promete el párrafo de arriba.
+   */
+  registry?: string;
   /** La capacidad por la que el GATEWAY lo eligió. Ausente ⟹ el llamador lo nombró. */
   capability?: string;
   /**

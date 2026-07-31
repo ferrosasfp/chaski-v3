@@ -390,6 +390,25 @@ describe("HttpSolanaPayoutPrepareGateway — el body que arma el cliente ES el q
     // al preparar (app/api/settle/solana-sponsor/route.ts, tests en su route.test.ts).
   });
 
+  // El `agent` es trazabilidad y se lee sin inventar nada: un agente que viene con slug y sin
+  // catálogo se guarda así. Rellenar `registry: ""` diría "el catálogo es vacío" en vez de "no lo
+  // dijo", que es la misma clase de afirmación de más que este archivo vino a corregir.
+  it("agent con slug y sin registry ⇒ el registry queda AUSENTE (no cadena vacía)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      tamperingFetch((b) => ({ ...b, agent: { slug: "remit-cashout-payout" } })),
+    );
+
+    const out = await new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet)).prepare(
+      prepareInput(),
+    );
+
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error("unreachable");
+    expect(out.result.agent).toEqual({ slug: "remit-cashout-payout" });
+    expect(out.result.agent).not.toHaveProperty("registry");
+  });
+
   // Si NO se puede verificar, no se usa. "No pude preguntar" no es "está bien".
   it("el verificador caído (throw) ⇒ prepare_attestation_unverified, el beneficiary NO se usa", async () => {
     const inner = routeFetch(agentOk);

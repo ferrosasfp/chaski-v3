@@ -53,7 +53,9 @@ function normalizeAgentRef(raw: unknown): AgentRef | null {
   if (typeof o.slug !== "string" || !o.slug) return null;
   return {
     slug: o.slug,
-    registry: str(o.registry),
+    // Ausente ⟹ ausente. `str(...)` devolvía "" para lo que no fuera string, y un snapshot viejo sin
+    // registry pasaba a AFIRMAR un catálogo vacío al releerse (ver AgentRef en el dominio).
+    ...(typeof o.registry === "string" && o.registry ? { registry: o.registry } : {}),
     ...(typeof o.capability === "string" ? { capability: o.capability } : {}),
     ...(typeof o.trial === "boolean" ? { trial: o.trial } : {}),
   };

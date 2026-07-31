@@ -298,6 +298,19 @@ describe("LocalRepo.read — defensivo AC-4 (snapshot legacy con PII cruda)", ()
     expect(r?.snapshot.payoutAgent).toBeNull();
   });
 
+  // Un snapshot escrito por una versión que no guardaba el catálogo. Al releerlo, el campo tiene que
+  // seguir AUSENTE: rellenarlo con "" convierte "no lo sabíamos" en "el catálogo era vacío", que es
+  // una afirmación que nadie hizo nunca.
+  it("payoutAgent persistido sin registry → el campo queda AUSENTE (no cadena vacía)", async () => {
+    storage.setItem(
+      KEY,
+      JSON.stringify([{ ...legacy[0], id: "leg-3", payoutAgent: { slug: "remit-cashout-payout" } }]),
+    );
+    const r = await new LocalRepo().get("leg-3");
+    expect(r?.snapshot.payoutAgent).toEqual({ slug: "remit-cashout-payout" });
+    expect(r?.snapshot.payoutAgent).not.toHaveProperty("registry");
+  });
+
   it("raw corrupto no crashea (parse defensivo → mapa vacío)", async () => {
     storage.setItem(KEY, "{not json");
     const repo = new LocalRepo();

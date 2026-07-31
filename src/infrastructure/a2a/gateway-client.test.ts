@@ -231,6 +231,20 @@ describe("runViaGateway — AC-1: se pide por CAPACIDAD, el gateway resuelve (ce
     ]);
   });
 
+  // `registry` ausente NO se rellena con "". Antes sí, y esa cadena vacía afirma "el catálogo es
+  // vacío" en vez de "el gateway no lo dijo": un consumidor no puede distinguir esos dos estados.
+  it("sin registry en la respuesta, el campo queda AUSENTE (no cadena vacía)", async () => {
+    const { fn } = router({
+      body: { success: true, steps: [{ output: { a: 1 }, agent: { slug: "sin-catalogo" } }] },
+    });
+    vi.stubGlobal("fetch", fn);
+    const r = await runViaGateway({ steps: [{ capability: FX_QUOTE_CAPABILITY, input: {} }] });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("unreachable");
+    expect(r.agents[0]).toEqual({ slug: "sin-catalogo" });
+    expect(r.agents[0]).not.toHaveProperty("registry");
+  });
+
   // "No sé quién atendió" es un estado real y se dice como tal: null, no un objeto con campos
   // vacíos. Y NO invalida el output: la elección del agente no cambia por que no sepamos anotarla.
   it("un agent ilegible da null en esa posicion y NO tumba el output del step", async () => {

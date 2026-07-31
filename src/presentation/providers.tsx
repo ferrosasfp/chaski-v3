@@ -1,15 +1,10 @@
 "use client";
-// Dispatcher de providers gateado por VM. En "evm" → passthrough (cero DOM/contexto/chunk Solana,
-// AC-3). En "solana" → árbol Solana cargado vía next/dynamic (chunk aislado). resolveActiveVm()
-// throwea con VM inválida → fail-loud en render (AC-5).
+// WKH-320: Chaski es una DApp Solana. El árbol de providers Solana se monta SIEMPRE, vía next/dynamic
+// (chunk aislado, ssr:false). Ya no hay dispatcher por VM porque ya no hay una segunda VM.
 import dynamic from "next/dynamic";
-import { resolveActiveVm } from "../infrastructure/chain";
 
 const SolanaProviders = dynamic(() => import("./solana/solana-providers"), { ssr: false });
 
 export function Providers({ children }: { children: React.ReactNode }) {
-  if (resolveActiveVm() === "solana") {
-    return <SolanaProviders>{children}</SolanaProviders>;
-  }
-  return <>{children}</>;
+  return <SolanaProviders>{children}</SolanaProviders>;
 }

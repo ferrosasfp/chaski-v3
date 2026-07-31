@@ -70,11 +70,26 @@ describe("HttpSolanaSettlementGateway (HU-SOL-13)", () => {
     }
   });
 
-  it("fail-closed: enum desconocido / status raro / body no-JSON ⇒ bloquea, nunca ok:true (CD-12)", async () => {
+  // 400/501 los emite NUESTRA route antes de reenviar nada: ahí sí se puede afirmar que la tx no salió.
+  it("400/501 (la route cortó antes de reenviar) ⇒ rejected: el deposit nunca salió", async () => {
+    for (const status of [400, 501]) {
+      responds(status, { error: "solana_settle_invalid_request" });
+      expect(await new HttpSolanaSettlementGateway().settle(input)).toEqual({
+        ok: false,
+        reason: "solana_settle_rejected",
+      });
+    }
+  });
+
+  // Antes esto esperaba "solana_settle_rejected", que le dice al use-case "el facilitator se negó ANTES
+  // de broadcastear", o sea, "no hace falta ir a mirar la cadena". Pero un 500 de nuestra propia route
+  // puede ocurrir DESPUÉS del broadcast (route.ts:113, getSettlementLedger() fuera del try), con el
+  // depósito ya confirmado. Bloquear se mantiene; afirmar de más, no.
+  it("fail-closed: enum desconocido / status raro / body no-JSON ⇒ bloquea, y NO afirma que no salió (CD-12)", async () => {
     responds(500, { error: "un_enum_que_no_existe" });
     expect(await new HttpSolanaSettlementGateway().settle(input)).toEqual({
       ok: false,
-      reason: "solana_settle_rejected",
+      reason: "solana_settle_unavailable", // indeterminado: aguas arriba se le pregunta a la cadena
     });
     fetchMock.mockImplementation(async () => new Response("<html>", { status: 503 }));
     expect(await new HttpSolanaSettlementGateway().settle(input)).toEqual({

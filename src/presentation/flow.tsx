@@ -16,9 +16,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Quote, RemittanceState, PayoutMethod } from "../domain/remittance";
 import { MIN_SEND_USD, Remittance, TERMINAL_STATUSES } from "../domain/remittance"; // WKH-187: rehydrate/isQuoteStillValid en el resume (CD-11) · WKH-314: mínimo enviable
 import { createContainer, type Container } from "../composition/container";
+import {
+  PRINCIPAL_SETTLED_REFUND_MANUAL,
+  PRINCIPAL_STATE_UNKNOWN,
+} from "../application/use-cases/confirm-and-send";
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
 import { resolveSolanaNetworkConfig } from "../infrastructure/chain"; // HU-SOL-13: cluster Solana activo (env-driven)
-import { deliveredDisplay, humanError, isDemoMode, statusDisplay } from "./flow-vm";
+import {
+  deliveredDisplay,
+  escrowRefundError,
+  humanError,
+  isDemoMode,
+  statusDisplay,
+} from "./flow-vm";
 import { cn } from "./cn";
 import { Button, Card, ChaskiMark, Field, Pill, Row, Stepper, TextInput } from "./ui";
 
@@ -801,16 +811,50 @@ export function TrackView({
     // una recuperación exitosa. El titular se decide por el enum estable que escribe el use-case,
     // nunca interpolando el failureReason crudo (CD-5).
     const recoveredBySender = rem.failureReason === ESCROW_REFUNDED_BY_SENDER;
+    // Los otros dos casos que no pueden seguir escondidos detrás de "No pudo entregarse":
+    //   · el depósito ESTÁ en el escrow (la cadena lo mostró)
+    //   · NO SABEMOS si entró (perdimos la respuesta del settle y la cadena tampoco contestó)
+    // El segundo es el que antes se decía como un fallo con una referencia de reembolso inventada al
+    // lado. Ahora se dice lo que es, y se ofrece la salida.
+    const principalInEscrow = rem.failureReason === PRINCIPAL_SETTLED_REFUND_MANUAL;
+    const principalUnknown = rem.failureReason === PRINCIPAL_STATE_UNKNOWN;
+    // ¿Hay una salida a la vista? (el botón, habilitado o esperando el deadline). Si no la hay, el
+    // texto no puede mandar a apretar un botón que no está.
+    const recoveryOffered = showRefund || refundLocked;
     return (
       <Card className="space-y-3">
         <p className="text-sm font-semibold">
-          {recoveredBySender ? "Recuperaste tus fondos" : "No pudo entregarse"}
+          {recoveredBySender
+            ? "Recuperaste tus fondos"
+            : principalUnknown
+              ? "No sabemos todavía si te cobramos"
+              : principalInEscrow
+                ? "Tus USDC quedaron en el escrow"
+                : "No pudo entregarse"}
         </p>
         <p className="text-sm text-stone">
           {recoveredBySender
             ? "Los USDC volvieron a tu wallet. Esta remesa no se entregó."
-            : humanError("payout_failed")}
+            : principalUnknown
+              ? "Se cortó la comunicación mientras enviábamos tu depósito, y la cadena tampoco nos contestó. Puede que tus USDC estén en el escrow o que nunca hayan salido de tu wallet: todavía no lo sabemos. Nadie te reembolsó nada."
+              : principalInEscrow
+                ? "Tu depósito entró al escrow y el envío no siguió. Los USDC siguen ahí, a tu nombre. Nadie te los reembolsó: los recuperás vos, firmando desde tu wallet."
+                : humanError("payout_failed")}
         </p>
+        {(principalUnknown || principalInEscrow) && recoveryOffered ? (
+          <p className="text-sm text-stone">
+            Pedí que vuelvan con el botón de acá abajo: si están en el escrow, vuelven a tu wallet; si
+            nunca salieron, no hay nada que devolver.
+          </p>
+        ) : null}
+        {(principalUnknown || principalInEscrow) && !recoveryOffered ? (
+          <p className="text-sm text-stone">
+            Para recuperarlos, conectá la misma wallet con la que enviaste.
+          </p>
+        ) : null}
+        {/* Sólo se muestra un comprobante que EXISTE. El adapter ledger-only devuelve null y esta
+            línea no se renderiza: un identificador fabricado al lado de la palabra reembolso es peor
+            que no decir nada. */}
         {rem.refundTx ? (
           <p className="text-xs text-stone">Referencia de reembolso: {rem.refundTx}</p>
         ) : null}
@@ -946,8 +990,10 @@ export function RefundAction({
       }
       // Ni éxito ni fracaso: la orden salió y no sabemos si entró. El botón SIGUE acá.
       setSent({ confirmation: res.confirmation, refundTx: res.refundTx });
-    } catch {
-      setErr("No pudimos recuperar los fondos. Intentá de nuevo."); // enum→copy fijo, sin PII (CD-5)
+    } catch (e) {
+      // enum→copy fijo, sin PII (CD-5). Antes era UNA frase para todo, y con el caso indeterminado
+      // esa frase mentía: "no encontramos depósito" no es "no pudimos recuperar tus fondos".
+      setErr(escrowRefundError(e instanceof Error ? e.message : ""));
     } finally {
       setBusy(false);
     }

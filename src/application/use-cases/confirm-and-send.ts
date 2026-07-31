@@ -1,13 +1,42 @@
 import type { Remittance } from "../../domain/remittance";
+import { isRealRefundReceipt } from "../refund-receipt";
 import type {
   Clock,
   PayoutAuthorityGateway,
+  PrincipalDepositState,
   RefundGateway,
   RemittanceRepository,
+  SolanaEscrowDepositProbe,
   SolanaPayoutPrepareGateway,
+  SolanaSettlementFailureReason,
   SolanaSettlementGateway,
   WalletPort,
 } from "../ports";
+
+/** Marca estable (enum, NUNCA PII): el principal está REALMENTE en el vault del escrow y este código
+ *  no puede sacarlo. La salida es el refund trustless que firma el propio sender (o la
+ *  release-authority, a mano). La UI la usa para no decir "no pudo entregarse" a secas. */
+export const PRINCIPAL_SETTLED_REFUND_MANUAL = "principal_settled_refund_manual";
+
+/** Marca estable del TERCER caso, el que antes no existía: perdimos la respuesta del settle y la
+ *  cadena tampoco nos contestó, así que NO SABEMOS si el depósito entró. No es un fallo (no probamos
+ *  que no entró) ni un éxito. La remesa queda en payout_failed, que es recuperable, y la UI se lo dice
+ *  a la persona con esas palabras en vez de inventarle un reembolso. */
+export const PRINCIPAL_STATE_UNKNOWN = "principal_state_unknown";
+
+/** Reasons del settle que PRUEBAN que el depósito nunca salió hacia la cadena, porque la respuesta
+ *  viene de un punto ANTERIOR al broadcast:
+ *    · solana_settle_rejected (422): el facilitator se negó a esponsorear (la tx nunca tuvo firma
+ *      del feePayer, así que no puede entrar en ningún bloque). También cubre el 400/501 de nuestra
+ *      propia route, que corta antes de reenviar.
+ *    · solana_settle_rate_limited (429): ni lo procesó.
+ *  TODO LO DEMÁS es indeterminado y NO se puede leer como "no pasó": un timeout de 15 s (503), un 502,
+ *  o un 200 con shape raro son compatibles con un depósito perfectamente confirmado del otro lado.
+ *  Para esos se va a preguntarle a la cadena, que es la única fuente autoritativa. */
+const SETTLE_REASONS_BEFORE_BROADCAST: readonly SolanaSettlementFailureReason[] = [
+  "solana_settle_rejected",
+  "solana_settle_rate_limited",
+];
 
 /**
  * Confirmación + envío. El corazón del money-path (value-delivery orquestado en el cliente):
@@ -30,9 +59,13 @@ export class ConfirmAndSend {
     // Su ausencia NO cae a un modo alternativo: cae al vacío. Por eso hay un tapón fail-closed
     // explícito al entrar al bloque (DT-8); sin él, `execute()` llegaría al final y devolvería la
     // remesa 'confirmed' SIN haber movido nada.
+    // `probe` viaja en el MISMO bundle y es REQUERIDO por la misma razón que prepare y gateway: un
+    // `probe?` suelto que quedara undefined haría que el use-case dejara de preguntarle a la cadena EN
+    // SILENCIO, y volvería a tratar "no pude preguntar" como "no pasó".
     private readonly solana?: {
       prepare: SolanaPayoutPrepareGateway;
       gateway: SolanaSettlementGateway;
+      probe: SolanaEscrowDepositProbe;
     },
   ) {}
 
@@ -45,16 +78,30 @@ export class ConfirmAndSend {
   private async failAndRefund(
     r: Remittance,
     reason: string,
-    principalReallyIn = false,
+    principal: PrincipalDepositState = "not_deposited",
   ): Promise<void> {
-    // AC-6/DT-8 (WKH-168): con el principal REALMENTE adentro (depositado y confirmado on-chain),
-    // LedgerRefundGateway NO revierte nada (ledger-refund-gateway.ts:9 devuelve un refundTx
-    // SINTÉTICO). Reusar el reason normal sería una mentira NUEVA y peligrosa: diría "refunded"
-    // sobre plata que sigue adentro. Marca estable, sin PII (CD-17). El clawback real NO es de este
-    // patrón: el vault del escrow se recupera por refund trustless post-deadline (SolanaEscrowRefund-
-    // Gateway) o por la release-authority. Resolución MANUAL. Reconciliación → WKH-207.
-    // Default false ⇒ el caller lo pasa explícito cuando el depósito ya está adentro.
-    const effective = principalReallyIn ? "principal_settled_refund_manual" : reason;
+    // ⚠️ ACÁ VIVÍA UN BOOLEAN, Y UN BOOLEAN NO PODÍA DECIR LA VERDAD.
+    // El parámetro era `principalReallyIn = false` y todos los callers del camino Solana pasaban
+    // `false`, incluido el que atrapa una excepción del settle. Pero una excepción ahí incluye el caso
+    // en que se cortó la red MIENTRAS esperábamos la respuesta: la tx ya viajó al facilitator y puede
+    // haber entrado perfectamente. Lo único que se perdió es la respuesta. Un boolean no tiene dónde
+    // poner "no pude preguntar", así que lo escribía como "no pasó".
+    // Los tres valores, y ninguno colapsa en otro:
+    //   · "deposited":     el principal está en el vault. LedgerRefundGateway no puede sacarlo de ahí
+    //     (ni ningún otro código de este repo): la salida es el refund trustless que firma el sender, o
+    //     la release-authority a mano. Marca estable, sin PII (CD-17). Reconciliación → WKH-207.
+    //   · "unknown":       no pudimos averiguarlo. Reusar el `reason` del gateway acá sería afirmar un
+    //     fallo que nadie midió; y afirmarlo importa, porque de eso depende lo que se le dice a la
+    //     persona sobre dónde está su plata.
+    //   · "not_deposited": sabemos que no entró: el `reason` puntual es la verdad y se conserva.
+    // Default "not_deposited" ⇒ vale sólo para los guards que cortan ANTES de que la tx salga; el
+    // caller que ya broadcasteó tiene que pasar lo que la cadena le haya contestado.
+    const effective =
+      principal === "deposited"
+        ? PRINCIPAL_SETTLED_REFUND_MANUAL
+        : principal === "unknown"
+          ? PRINCIPAL_STATE_UNKNOWN
+          : reason;
     r.markPayoutFailed(effective, this.clock.nowIso());
     await this.repo.save(r);
     try {
@@ -63,10 +110,45 @@ export class ConfirmAndSend {
         amountUsd: r.snapshot.sendUsd,
         reason: effective,
       });
+      // ⚠️ Sin comprobante REAL no se escribe `refunded`. Antes se escribía siempre, con el string
+      // fabricado del adapter ledger-only adentro, y `refunded` es TERMINAL: la remesa quedaba con una
+      // referencia de reembolso inventada y sin ninguna salida (el botón de recuperar exige
+      // refundTx == null y el use-case de recuperación corta con refund_not_available). Quedarse en
+      // payout_failed no es un estado peor: es el único desde el que la persona puede sacar su plata.
+      if (!isRealRefundReceipt(refundTx)) return;
       r.markRefunded(refundTx, this.clock.nowIso());
       await this.repo.save(r);
     } catch {
       // refund falló → queda en payout_failed (best-effort). El mock nunca falla.
+    }
+  }
+
+  /** El settle no nos dio un sí, pero el depósito YA pudo haber entrado. Antes de escribir nada se le
+   *  pregunta a la cadena: es la única que sabe, y es la única fuente que no se puede reemplazar por
+   *  otra mejor (a diferencia de cualquier agente). Con la respuesta, `failAndRefund` elige entre los
+   *  tres casos, y en dos de ellos la remesa queda en payout_failed, o sea RECUPERABLE: el sender
+   *  puede firmar el refund trustless del escrow desde la propia pantalla. */
+  private async failAfterBroadcast(
+    r: Remittance,
+    reason: string,
+    remittanceId: string,
+    sender: string,
+  ): Promise<void> {
+    await this.failAndRefund(r, reason, await this.probePrincipal(remittanceId, sender));
+  }
+
+  /** Le pregunta a la cadena si el principal está en el vault. Todo lo que no sea una respuesta clara
+   *  es "unknown": si el probe se cae, no sabemos, y eso es exactamente lo que hay que decir, no un
+   *  "no entró" de consuelo. Sin `solana` inyectado no hay a quién preguntarle (y no hubo broadcast). */
+  private async probePrincipal(
+    remittanceId: string,
+    sender: string,
+  ): Promise<PrincipalDepositState> {
+    if (!this.solana) return "unknown";
+    try {
+      return await this.solana.probe.probeDeposit({ remittanceId, sender });
+    } catch {
+      return "unknown";
     }
   }
 
@@ -112,11 +194,11 @@ export class ConfirmAndSend {
     // silencioso en el money-path. Reusa el reason estable `settlement_unavailable` y failAndRefund,
     // sin enums nuevos y sin leer una sola env (CD-13/CD-14 intactos).
     if (!this.solana) {
-      await this.failAndRefund(r, "settlement_unavailable", false);
+      await this.failAndRefund(r, "settlement_unavailable", "not_deposited");
       return r;
     }
     // 1. PREPARE server-side (análogo a 2.7): resuelve beneficiary+authority SERVER-SIDE (NUNCA del
-    //    body — AC-1/CD-7). Fallo ⇒ falla ANTES de firmar (el deposit NO entró, principalReallyIn=false).
+    //    body; AC-1/CD-7). Fallo ⇒ falla ANTES de firmar: la tx nunca salió, el deposit NO entró.
     let prep: Awaited<ReturnType<SolanaPayoutPrepareGateway["prepare"]>>;
     try {
       prep = await this.solana.prepare.prepare({
@@ -129,11 +211,11 @@ export class ConfirmAndSend {
         idempotencyKey: `${s.id}:${quote.quoteId}`,
       });
     } catch {
-      await this.failAndRefund(r, "prepare_unavailable", false);
+      await this.failAndRefund(r, "prepare_unavailable", "not_deposited");
       return r;
     }
     if (!prep.ok) {
-      await this.failAndRefund(r, prep.reason, false);
+      await this.failAndRefund(r, prep.reason, "not_deposited");
       return r;
     }
     // 2. authorizePrincipal: la wallet arma+partial-firma la ix `deposit` del escrow con el
@@ -143,14 +225,22 @@ export class ConfirmAndSend {
       escrow: { beneficiary: prep.result.beneficiary, authority: prep.result.authority },
     });
     // Sin el envelope Solana no hay tx que broadcastear ⇒ fail-closed, NUNCA markPrincipalIn (la
-    // mentira que la HU vino a matar). El deposit NO entró ⇒ principalReallyIn=false.
+    // mentira que la HU vino a matar). Nunca hubo broadcast ⇒ el deposit NO entró, y eso sí lo sabemos.
     if (!solana) {
-      await this.failAndRefund(r, "settlement_unverified", false);
+      await this.failAndRefund(r, "settlement_unverified", "not_deposited");
       return r;
     }
     // 3. BROADCAST del deposit vía el facilitator (gasless, /api/settle/solana-sponsor → /solana/sponsor).
-    //    Excepción (red/bug) ⇒ fail-closed (patrón C3); reason del gateway ⇒ payout_failed. Ambos con
-    //    principalReallyIn=false (el deposit no se confirmó, o no podemos saberlo: fail-closed igual).
+    //
+    //    ⚠️ DESDE ACÁ LA TX YA SALIÓ DE NUESTRAS MANOS. Lo que decía este comentario era: "el deposit no
+    //    se confirmó, o no podemos saberlo: fail-closed igual". Las dos mitades no son lo mismo y
+    //    tratarlas igual costaba caro: fail-closed está bien para NO avanzar la remesa, pero no autoriza
+    //    a AFIRMAR que la plata no se movió. Sobre esa afirmación se escribía un reembolso inexistente.
+    //
+    //    Una excepción acá (o un timeout de 15 s, que el gateway ya convierte en `solana_settle_unavailable`)
+    //    incluye el caso en que se cortó la red mientras esperábamos: el facilitator pudo haber
+    //    broadcasteado y confirmado el depósito. Lo único que perdimos es la respuesta. Por eso se le
+    //    pregunta a la CADENA, que es la fuente autoritativa, y no a ningún agente.
     let res: Awaited<ReturnType<SolanaSettlementGateway["settle"]>>;
     try {
       res = await this.solana.gateway.settle({
@@ -160,11 +250,17 @@ export class ConfirmAndSend {
         remittanceId: s.id,
       });
     } catch {
-      await this.failAndRefund(r, "solana_settle_unavailable", false);
+      await this.failAfterBroadcast(r, "solana_settle_unavailable", s.id, address ?? "");
       return r;
     }
     if (!res.ok) {
-      await this.failAndRefund(r, res.reason, false);
+      // Sólo los reasons que prueban un corte ANTERIOR al broadcast pueden afirmar "no entró". El
+      // resto va a la cadena: un `reason` no es evidencia de dónde está la plata.
+      if (SETTLE_REASONS_BEFORE_BROADCAST.includes(res.reason)) {
+        await this.failAndRefund(r, res.reason, "not_deposited");
+        return r;
+      }
+      await this.failAfterBroadcast(r, res.reason, s.id, address ?? "");
       return r;
     }
     // 4. markPrincipalIn con la signature base58 VERIFICADA on-chain por /solana/sponsor. Luego

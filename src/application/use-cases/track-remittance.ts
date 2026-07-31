@@ -1,4 +1,5 @@
 import { type Remittance, isDeliveredWithinReceiveTolerance } from "../../domain/remittance";
+import { isRealRefundReceipt } from "../refund-receipt";
 import type { Clock, PayoutGateway, RefundGateway, RemittanceRepository } from "../ports";
 
 /** Polling del estado del payout → actualiza el agregado (settled / failed). Idempotente. */
@@ -12,7 +13,12 @@ export class TrackRemittance {
 
   /** Refund-on-failure (WKH-186/AC-7, CD-7): idéntico a ConfirmAndSend — marca payout_failed y
    * acto seguido intenta el credit-back en el MISMO execute(). Best-effort: si el refund falla,
-   * queda en payout_failed (el mock nunca falla). `reason` = enum estable, NUNCA PII (CD-5). */
+   * queda en payout_failed (el mock nunca falla). `reason` = enum estable, NUNCA PII (CD-5).
+   *
+   * ⚠️ Este era el peor caso del comprobante fabricado, porque acá el principal está SEGURO adentro:
+   * se llega desde payout_submitted, o sea con el deposit ya confirmado on-chain en el vault. El
+   * payout falló, se escribía un `refund-ledger-…` inventado, la remesa quedaba en `refunded`
+   * (terminal) y el botón de recuperar desaparecía para siempre, con la plata en el escrow. */
   private async failAndRefund(r: Remittance, reason: string): Promise<void> {
     r.markPayoutFailed(reason, this.clock.nowIso());
     await this.repo.save(r);
@@ -22,6 +28,9 @@ export class TrackRemittance {
         amountUsd: r.snapshot.sendUsd,
         reason,
       });
+      // Sin comprobante real NO hay estado terminal: la remesa se queda en payout_failed, que es
+      // desde donde el sender todavía puede recuperar sus fondos del escrow.
+      if (!isRealRefundReceipt(refundTx)) return;
       r.markRefunded(refundTx, this.clock.nowIso());
       await this.repo.save(r);
     } catch {

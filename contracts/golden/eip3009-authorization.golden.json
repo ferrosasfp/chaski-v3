@@ -1,8 +1,0 @@
-{
-  "from": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
-  "to": "0x1111111111111111111111111111111111111111",
-  "value": "400000000",
-  "validAfter": "0",
-  "validBefore": "1893456000",
-  "nonce": "0xdbe8185143ae74c74fd732bc99ea20992b6c4904b208b19a85afa598986aac82"
-}

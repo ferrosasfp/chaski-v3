@@ -97,8 +97,19 @@ export class FallbackKycGateway implements KycGateway {
 }
 
 export class FallbackPayoutGateway implements PayoutGateway {
-  // MOCK — no desembolsa. `submit` deja el payout "en camino"; `status` lo settlea (para
-  // que la UI muestre la progresión submitted → settled). deliveredPen null (la UI usa el quote).
+  // MOCK — no desembolsa. `submit` deja el payout "en camino"; `status` NO lo settlea.
+  //
+  // Acá vivía `status: "settled"` devuelto sin consultar absolutamente nada. Con el flag de
+  // settlement Solana encendido y el adapter de value-delivery apagado (la configuración de devnet
+  // de hoy), ese `settled` era lo que el primer tick del poll leía sobre una remesa con los USDC
+  // todavía en el vault del escrow: la app decía "Entregado", saltaba al recibo verde y, de paso,
+  // desmontaba la pantalla donde vive "Recuperar fondos". Fabricaba un hecho sobre plata ajena.
+  //
+  // Este adapter no tiene backend al que preguntarle: lo que sabe del payout es NADA. El estado que
+  // refleja "nada" es el no-terminal, con la razón explícita — mismo criterio que
+  // A2aPayoutGateway.status() (a2a/gateways.ts:104-123): no saber NO es evidencia de entrega, ni de
+  // fallo. TrackRemittance no transiciona con "submitted" ⇒ la remesa queda donde está, visible y
+  // recuperable, en vez de mentir en cualquiera de las dos direcciones.
   async submit(req: PayoutSubmit): Promise<PayoutRecord> {
     return {
       payoutId: `fb-${req.idempotencyKey}`,
@@ -112,10 +123,10 @@ export class FallbackPayoutGateway implements PayoutGateway {
   async status(payoutId: string): Promise<PayoutRecord> {
     return {
       payoutId,
-      status: "settled",
+      status: "submitted", // NO-terminal: es lo que sabe este adapter, que es nada
       deliveredPen: null,
       txRef: null,
-      failureReason: null,
+      failureReason: "payout_status_unknown", // marca explícita, no un null que se lea como "todo bien"
       provenance: "local-fallback", // WKH-200: mock → dispara el banner de modo demo
     };
   }

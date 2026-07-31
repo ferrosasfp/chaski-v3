@@ -10,7 +10,7 @@
 // El payout del camino Solana lo arma el server en /api/payout/prepare, no este adapter.
 import { Money } from "../../domain/money";
 import { isParseableIso } from "../../domain/remittance";
-import type { Quote } from "../../domain/remittance";
+import type { AgentRef, Quote } from "../../domain/remittance";
 import type {
   PayoutGateway,
   PayoutRecord,
@@ -48,7 +48,22 @@ function isValidQuoteShape(v: unknown): v is RawQuoteResult {
   );
 }
 
-function mapResultToQuote(result: RawQuoteResult, req: QuoteRequest): Quote {
+/** Lee el `agent` que la route agrega al 200. Sin `slug` string no-vacío ⇒ `undefined`: la remesa
+ *  queda diciendo "no sé quién cotizó" en vez de afirmar un agente sin nombre. NUNCA rompe el
+ *  quote: quién lo emitió no cambia si la cotización es válida (eso lo dice isValidQuoteShape). */
+function readAgentRef(raw: unknown): AgentRef | undefined {
+  if (!isRecord(raw)) return undefined;
+  if (typeof raw.slug !== "string" || !raw.slug) return undefined;
+  return {
+    slug: raw.slug,
+    // Ausente ⟹ ausente. Un "" de relleno afirmaría un catálogo vacío (ver AgentRef en el dominio).
+    ...(typeof raw.registry === "string" && raw.registry ? { registry: raw.registry } : {}),
+    ...(typeof raw.capability === "string" ? { capability: raw.capability } : {}),
+    ...(typeof raw.trial === "boolean" ? { trial: raw.trial } : {}),
+  };
+}
+
+function mapResultToQuote(result: RawQuoteResult, req: QuoteRequest, agent?: AgentRef): Quote {
   return {
     quoteId: result.quoteId,
     send: Money.of(req.amountUsd, "USDC"), // del REQUEST (no del agente)
@@ -58,6 +73,9 @@ function mapResultToQuote(result: RawQuoteResult, req: QuoteRequest): Quote {
     etaMinutes: result.etaMinutes,
     expiresAt: result.expiresAt,
     provenance: result.provenance,
+    // Viaja DENTRO del quote y no en un campo suelto: el quote es lo que se persiste con la remesa,
+    // así que la identidad del que cotizó sobrevive a una recarga por el mismo camino que la tasa.
+    ...(agent ? { agent } : {}),
   };
 }
 
@@ -73,9 +91,9 @@ export class A2aQuoteGateway implements QuoteGateway {
       }),
     });
     if (!res.ok) throw new Error("a2a_quote_unavailable"); // AC-5, PII-free
-    const { result } = (await res.json()) as { result: unknown };
+    const { result, agent } = (await res.json()) as { result: unknown; agent?: unknown };
     if (!isValidQuoteShape(result)) throw new Error("a2a_quote_bad_shape");
-    return mapResultToQuote(result, req);
+    return mapResultToQuote(result, req, readAgentRef(agent));
   }
 }
 

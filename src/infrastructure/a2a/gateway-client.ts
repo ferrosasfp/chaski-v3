@@ -28,16 +28,84 @@ export const PAYOUT_CAPABILITY = "remittance-payout";
  *  ⇒ 2 puntos por task liquidada; sin score computado el agente cuenta 0 y queda excluido si min > 0). */
 export const PAYOUT_MIN_REPUTATION = 2;
 
+/**
+ * Piso de confianza del leg de FX (WKH-313). Mismo valor que el de payout, constante SEPARADA a
+ * propósito: son dos decisiones de riesgo distintas y compartir el número las ataría (bajar el piso
+ * de FX no puede bajar el de payout de rebote).
+ *
+ * ⚠️ POR QUÉ EL LEG DE FX MANDA UN PISO, SI LO QUE QUEREMOS ES ADMITIR AGENTES NUEVOS. Medido en el
+ * gateway, no asumido: `allow_trial` se lee ÚNICAMENTE dentro de `if (query.minReputation != null)`
+ * (`services/discovery.ts`, el bloque que llama a `applyReputationFloor`). Sin `min_reputation` la
+ * clave `allow_trial` es LETRA MUERTA: viaja, el gateway la acepta, y no ejecuta nada.
+ *
+ * Y hay una segunda mitad, que es la que de verdad importa. La neutralización de `verified` y
+ * `reputation` del admitido vive DENTRO de ese mismo bloque. Sin piso no hay neutralización, y esos
+ * dos campos salen del card que el propio agente publica: un desconocido que declara
+ * `verified: true, reputation: 100` gana el ranking de FX HOY MISMO (sin carril, sin piso y sin
+ * que nadie lo note), porque `verified` es la PRIMERA clave del sort. Mandar el piso es lo que lo
+ * manda al final de la fila.
+ *
+ * O sea: pedir el carril sin piso no sería "más abierto". Sería el carril apagado y encima el
+ * ranking decidido por lo que el candidato dice de sí mismo.
+ *
+ * Valor 2 = "al menos una task liquidada" con la fórmula del gateway, igual que en payout. Tiene
+ * que quedar por DEBAJO del techo `T` del carril (`TRIAL_MAX_MIN_REPUTATION`, default 10): con un
+ * piso por encima de `T`, `isTrialEligible` devuelve false y el carril se apaga en silencio.
+ *
+ * ⚠️ LO QUE ESTE PISO CUESTA, dicho de frente, y son DOS cosas:
+ *
+ * 1. Hoy el leg de FX no manda ninguna constraint, así que ningún candidato queda excluido. Con el
+ *    piso puesto, si NINGÚN agente del corredor llega a 2 y el carril no admite a nadie (por ejemplo
+ *    porque el standing del gateway está degradado, que falla cerrado), el leg pasa de cotizar a un
+ *    422 `no_agent_match`. Es una cotización que no sale, no plata perdida, y se ve antes de que la
+ *    persona firme nada, pero es un modo de falla nuevo.
+ *
+ * 2. EL CARRIL NO PUEDE RESCATAR AL TITULAR. Medido: el único candidato de FX de hoy pasa por
+ *    MÉRITO, con score 7 y 5 tasks liquidadas (el piso lee `computedReputation.score`, no el
+ *    `reputation` del card). Si ese score cayera por debajo de 2, el carril de estreno NO lo
+ *    levantaría: admite a quien NO tiene historial liquidado, y con 5 tasks ya no califica como
+ *    novato. O sea que en ese escenario el titular queda afuera y el ÚNICO admisible pasa a ser un
+ *    recién llegado sin historial. `allow_trial` no es una red debajo del titular; es una puerta
+ *    para el que todavía no tiene puntaje. Hoy, de hecho, no admite a nadie: es preventivo.
+ */
+export const FX_MIN_REPUTATION = 2;
+
 /** Constraints admitidas por el gateway. Cualquier otra clave ⇒ 400 (compose-step-shape del server). */
 export type GatewayConstraints = {
   max_price_usdc?: number;
   min_reputation?: number;
+  /**
+   * WKH-313: opt-in al CARRIL DE ESTRENO de ESTE step: admite bajo `min_reputation` a un agente
+   * sin historial liquidado. El admitido NO recibe score fabricado (conserva su 0, así que ordena
+   * ÚLTIMO) y el gateway le neutraliza `verified`/`reputation`, que su propio card auto-reporta.
+   * Sólo puede ganar cuando NINGÚN agente pasa por mérito.
+   *
+   * Sólo tiene efecto acompañado de `min_reputation` (ver FX_MIN_REPUTATION). No-booleano ⇒ 400.
+   */
+  allow_trial?: boolean;
 };
 
 export type GatewayStep = {
   capability: string; // NUNCA `agent` (CD-1)
   input: Record<string, unknown>; // el body TAL CUAL
   constraints?: GatewayConstraints;
+};
+
+/**
+ * QUIÉN ejecutó un step, tal como lo dijo el gateway. Se lee de `steps[i].agent` (+ `resolvedFrom`),
+ * que la respuesta de `/compose` YA traía y este cliente descartaba.
+ *
+ * Es trazabilidad, no una decisión: nada del transporte lo usa para elegir, reintentar ni validar.
+ * Sirve para poder responder "qué agente atendió esta remesa", que sin esto no se podía responder.
+ */
+export type GatewayAgentRef = {
+  slug: string;
+  /** De qué catálogo salió. Ausente ⟹ el gateway no lo dijo (NO se rellena con "": ver AgentRef). */
+  registry?: string;
+  /** `resolvedFrom.capability`: presente SÓLO si lo eligió el gateway a partir de una capacidad. */
+  capability?: string;
+  /** `agent.trial.granted`: entró por el carril de estreno, o sea sin historial liquidado. */
+  trial?: boolean;
 };
 
 export type GatewayFailCode =
@@ -68,11 +136,50 @@ export type GatewayFailure = {
 };
 
 export type GatewayResult =
-  | { ok: true; outputs: Record<string, unknown>[] } // uno por step, en orden
+  | {
+      ok: true;
+      outputs: Record<string, unknown>[]; // uno por step, en orden
+      /**
+       * Uno por step, en el MISMO orden que `outputs`. `null` = el gateway no dijo (o no dijo de
+       * forma legible) qué agente ejecutó ese step.
+       *
+       * `null` y no un objeto con campos vacíos, a propósito: "no sé quién atendió" es un estado
+       * real y el consumidor tiene que poder distinguirlo de "atendió alguien sin nombre". Y NO es
+       * un error de transporte: la elección del agente no cambia por que no sepamos anotarla, así
+       * que un `agent` ilegible NO invalida un output que sí es válido.
+       */
+      agents: (GatewayAgentRef | null)[];
+    }
   | GatewayFailure;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
+}
+
+/** Lee `steps[i].agent` (+ `resolvedFrom`) SIN inventar nada: sin `slug` string no-vacío no hay
+ *  identidad que afirmar ⇒ `null`. Los opcionales entran sólo con el tipo exacto. */
+function readAgentRef(entry: unknown): GatewayAgentRef | null {
+  if (!isRecord(entry)) return null;
+  const agent = entry.agent;
+  if (!isRecord(agent)) return null;
+  if (typeof agent.slug !== "string" || !agent.slug) return null;
+  const resolvedFrom = entry.resolvedFrom;
+  const capability =
+    isRecord(resolvedFrom) && typeof resolvedFrom.capability === "string"
+      ? resolvedFrom.capability
+      : undefined;
+  // `trial` sólo existe en la respuesta cuando la admisión ocurrió de verdad (el gateway lo omite,
+  // no lo manda en false). Se copia `granted` tal cual; su ausencia NO se traduce a `false`, porque
+  // "el gateway no lo marcó" no es "este agente tiene historial".
+  const trial = isRecord(agent.trial) && agent.trial.granted === true ? true : undefined;
+  return {
+    slug: agent.slug,
+    // MISMO criterio que capability/trial: si no vino con el tipo exacto, el campo NO se escribe. Un
+    // `""` de relleno diría "el catálogo es vacío" en vez de "el gateway no lo dijo".
+    ...(typeof agent.registry === "string" && agent.registry ? { registry: agent.registry } : {}),
+    ...(capability !== undefined ? { capability } : {}),
+    ...(trial !== undefined ? { trial } : {}),
+  };
 }
 
 // Config server-only (SIN NEXT_PUBLIC_, CD-3), leída en runtime dentro de la fn (patrón !BASE).
@@ -229,16 +336,20 @@ export async function runViaGateway(params: { steps: GatewayStep[] }): Promise<G
     return { ok: false, code: "bad_response" };
   }
   const outputs: Record<string, unknown>[] = [];
+  const agents: (GatewayAgentRef | null)[] = [];
   for (let i = 0; i < steps.length; i++) {
     const entry: unknown = steps[i];
     const output = isRecord(entry) ? entry.output : undefined;
     if (!isRecord(output)) return { ok: false, code: "bad_response", step: i };
     outputs.push(output);
+    // QUIÉN lo ejecutó. El gateway ya lo mandaba en `steps[i].agent` y este cliente lo tiraba.
+    // No participa de ninguna validación: un agente ilegible da `null`, nunca un bad_response.
+    agents.push(readAgentRef(entry));
   }
 
   // 8. Happy path: outputs[i] = steps[i].output SIN re-desenvolver (el gateway ya hizo
   //    output = data.result ?? data, DT-A2A-6). Cada route revalida su propio shape final.
-  return { ok: true, outputs };
+  return { ok: true, outputs, agents };
 }
 
 /** Log de fallo con SÓLO enums (CD-9): ni el `message` del gateway, ni el input (PII), ni la URL,

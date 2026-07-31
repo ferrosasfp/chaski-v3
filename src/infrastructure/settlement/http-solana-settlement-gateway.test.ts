@@ -54,6 +54,22 @@ describe("HttpSolanaSettlementGateway (HU-SOL-13)", () => {
     }
   });
 
+  // S3.5 del settle: los tres desenlaces del chequeo de destino llegan con enums DISTINTOS y se
+  // mapean a reasons distintos. Si los tres colapsaran en uno, la remesa fallada no podría decir si
+  // el destino estaba mal o si no se pudo comprobar, que es justo lo que hay que poder distinguir.
+  it("mapea los enums del chequeo de destino sin colapsarlos entre sí", async () => {
+    const cases: Array<[number, string, string]> = [
+      [409, "solana_settle_beneficiary_mismatch", "solana_settle_beneficiary_mismatch"],
+      [409, "solana_settle_beneficiary_unregistered", "solana_settle_beneficiary_unconfirmed"],
+      [400, "solana_settle_deposit_unreadable", "solana_settle_beneficiary_unconfirmed"],
+      [503, "solana_settle_ledger_unavailable", "solana_settle_unavailable"],
+    ];
+    for (const [status, error, reason] of cases) {
+      responds(status, { error });
+      expect(await new HttpSolanaSettlementGateway().settle(input)).toEqual({ ok: false, reason });
+    }
+  });
+
   it("fail-closed: enum desconocido / status raro / body no-JSON ⇒ bloquea, nunca ok:true (CD-12)", async () => {
     responds(500, { error: "un_enum_que_no_existe" });
     expect(await new HttpSolanaSettlementGateway().settle(input)).toEqual({

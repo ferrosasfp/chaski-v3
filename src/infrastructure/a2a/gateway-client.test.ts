@@ -67,7 +67,7 @@ describe("runViaGateway — AC-1: se pide por CAPACIDAD, el gateway resuelve (ce
     const { fn, calls } = router();
     vi.stubGlobal("fetch", fn);
     const r = await runViaGateway({ steps: [fxStep] });
-    expect(r).toEqual({ ok: true, outputs: [quoteOutput] });
+    expect(r).toEqual({ ok: true, outputs: [quoteOutput], agents: [null] });
 
     expect(calls.map((c) => c.url)).toEqual([`${URL}/compose`]);
     expect(calls.some((c) => c.url.includes("/discover"))).toBe(false);
@@ -165,6 +165,112 @@ describe("runViaGateway — AC-1: se pide por CAPACIDAD, el gateway resuelve (ce
     expect(composeBody(calls).steps[0]!.input).toEqual(input);
   });
 
+  // ── WKH-313: la clave del carril de estreno viaja tal cual, y sólo si el caller la pide ────────
+  it("allow_trial viaja en constraints junto al piso; sin pedirlo, la clave NO aparece", async () => {
+    const { fn, calls } = router();
+    vi.stubGlobal("fetch", fn);
+    await runViaGateway({
+      steps: [
+        {
+          capability: FX_QUOTE_CAPABILITY,
+          input: {},
+          constraints: { min_reputation: 2, allow_trial: true },
+        },
+      ],
+    });
+    expect(composeBody(calls).steps[0]!.constraints).toEqual({
+      min_reputation: 2,
+      allow_trial: true,
+    });
+
+    const sin = router();
+    vi.stubGlobal("fetch", sin.fn);
+    await runViaGateway({
+      steps: [{ capability: FX_QUOTE_CAPABILITY, input: {}, constraints: { min_reputation: 2 } }],
+    });
+    expect(composeBody(sin.calls).steps[0]!.constraints).toEqual({ min_reputation: 2 });
+    expect(sin.calls[0]!.init!.body as string).not.toContain("allow_trial");
+  });
+
+  // ── Etapa 0.b: QUIÉN respondió. El gateway ya lo mandaba y este cliente lo tiraba ──────────────
+  it("conserva el agente de cada step (slug, registry, capability resuelta y carril de estreno)", async () => {
+    const { fn } = router({
+      body: {
+        success: true,
+        steps: [
+          {
+            output: { a: 1 },
+            agent: {
+              slug: "remit-corridor-fx",
+              registry: "WasiAI",
+              trial: { granted: true, under_min_reputation: 2 },
+            },
+            resolvedFrom: { capability: "remittance-fx-quote" },
+          },
+          { output: { b: 2 }, agent: { slug: "otro-agente", registry: "self-published" } },
+        ],
+      },
+    });
+    vi.stubGlobal("fetch", fn);
+    const r = await runViaGateway({
+      steps: [
+        { capability: FX_QUOTE_CAPABILITY, input: {} },
+        { capability: PAYOUT_CAPABILITY, input: {} },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("unreachable");
+    expect(r.agents).toEqual([
+      {
+        slug: "remit-corridor-fx",
+        registry: "WasiAI",
+        capability: "remittance-fx-quote",
+        trial: true,
+      },
+      { slug: "otro-agente", registry: "self-published" },
+    ]);
+  });
+
+  // `registry` ausente NO se rellena con "". Antes sí, y esa cadena vacía afirma "el catálogo es
+  // vacío" en vez de "el gateway no lo dijo": un consumidor no puede distinguir esos dos estados.
+  it("sin registry en la respuesta, el campo queda AUSENTE (no cadena vacía)", async () => {
+    const { fn } = router({
+      body: { success: true, steps: [{ output: { a: 1 }, agent: { slug: "sin-catalogo" } }] },
+    });
+    vi.stubGlobal("fetch", fn);
+    const r = await runViaGateway({ steps: [{ capability: FX_QUOTE_CAPABILITY, input: {} }] });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("unreachable");
+    expect(r.agents[0]).toEqual({ slug: "sin-catalogo" });
+    expect(r.agents[0]).not.toHaveProperty("registry");
+  });
+
+  // "No sé quién atendió" es un estado real y se dice como tal: null, no un objeto con campos
+  // vacíos. Y NO invalida el output: la elección del agente no cambia por que no sepamos anotarla.
+  it("un agent ilegible da null en esa posicion y NO tumba el output del step", async () => {
+    const { fn } = router({
+      body: {
+        success: true,
+        steps: [{ output: { a: 1 }, agent: { registry: "WasiAI" } }], // sin slug
+      },
+    });
+    vi.stubGlobal("fetch", fn);
+    const r = await runViaGateway({ steps: [{ capability: FX_QUOTE_CAPABILITY, input: {} }] });
+    expect(r).toEqual({ ok: true, outputs: [{ a: 1 }], agents: [null] });
+  });
+
+  // `trial` ausente NO se traduce a `false`: "el gateway no lo marcó" no es "tiene historial".
+  it("sin trial en la respuesta, el campo queda AUSENTE (no false)", async () => {
+    const { fn } = router({
+      body: { success: true, steps: [{ output: { a: 1 }, agent: { slug: "s", registry: "r" } }] },
+    });
+    vi.stubGlobal("fetch", fn);
+    const r = await runViaGateway({ steps: [{ capability: FX_QUOTE_CAPABILITY, input: {} }] });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("unreachable");
+    expect(r.agents[0]).not.toHaveProperty("trial");
+  });
+
   it("multi-step: un output por step pedido, en orden", async () => {
     const { fn } = router({
       body: { success: true, steps: [{ output: { a: 1 } }, { output: { b: 2 } }] },
@@ -176,7 +282,7 @@ describe("runViaGateway — AC-1: se pide por CAPACIDAD, el gateway resuelve (ce
         { capability: PAYOUT_CAPABILITY, input: {} },
       ],
     });
-    expect(r).toEqual({ ok: true, outputs: [{ a: 1 }, { b: 2 }] });
+    expect(r).toEqual({ ok: true, outputs: [{ a: 1 }, { b: 2 }], agents: [null, null] });
   });
 });
 

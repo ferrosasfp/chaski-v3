@@ -152,8 +152,62 @@ describe("POST /api/a2a/quote — modo a2a-gateway (WKH-218 / WKH-304)", () => {
     const step = JSON.parse(composeInit!.body as string).steps[0];
     expect(step.capability).toBe("remittance-fx-quote"); // el default REAL del catálogo (M8)
     expect(step).not.toHaveProperty("agent"); // M5: nunca el nombre del agente
-    expect(step).not.toHaveProperty("constraints"); // el leg de FX no lleva piso (§W1a)
+    // WKH-313: el leg de FX pide el carril de estreno, y el piso viaja CON él. `allow_trial` solo
+    // seria letra muerta: el gateway solo lo lee dentro del bloque de `min_reputation`.
+    expect(step.constraints).toEqual({ min_reputation: 2, allow_trial: true });
     expect(step.input).toEqual({ amountUsd: 400, destCountry: "PE", payoutMethod: "yape" });
+  });
+
+  // Trazabilidad: el gateway dice a quién eligió y hasta ahora la respuesta lo tiraba. Si mañana el
+  // descubrimiento puede traer cualquier agente, no poder decir CUÁL cotizó es no tener traza.
+  it("el 200 informa QUÉ agente cotizó (slug/registry/capability/carril), sin URL ni PII", async () => {
+    setGatewayEnv();
+    const { fn } = gwRouter({
+      compose: () => ({
+        success: true,
+        steps: [
+          {
+            output: validResult,
+            agent: {
+              slug: "remit-corridor-fx",
+              registry: "WasiAI",
+              invokeUrl: "https://interno.example.com/invoke", // NO debe salir
+              trial: { granted: true, under_min_reputation: 2 },
+            },
+            resolvedFrom: { capability: "remittance-fx-quote" },
+          },
+        ],
+      }),
+    });
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req({ amountUsd: 400, destCountry: "PE", payoutMethod: "yape" }));
+
+    expect(res.status).toBe(200);
+    const raw = await res.text();
+    expect(raw).not.toContain("interno.example.com");
+    expect(JSON.parse(raw)).toEqual({
+      result: validResult,
+      agent: {
+        slug: "remit-corridor-fx",
+        registry: "WasiAI",
+        capability: "remittance-fx-quote",
+        trial: true,
+      },
+    });
+  });
+
+  // Un agente ilegible no rompe la cotización: la clave simplemente no viaja y quien la lea sabe
+  // que no sabemos. Lo prohibido es fabricar un agente para llenar el campo.
+  it("agente ilegible ⇒ el 200 NO trae la clave agent (y el quote sigue siendo válido)", async () => {
+    setGatewayEnv();
+    const { fn } = gwRouter({
+      compose: () => ({ success: true, steps: [{ output: validResult, agent: { registry: "X" } }] }),
+    });
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req({ amountUsd: 400 }));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ result: validResult });
   });
 
   it("WASIAI_A2A_FX_CAPABILITY override manda sobre el default del código", async () => {

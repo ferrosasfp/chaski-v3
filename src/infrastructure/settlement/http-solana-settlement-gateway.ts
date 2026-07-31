@@ -32,7 +32,19 @@ function mapErrorReason(status: number, error: unknown): SolanaSettlementFailure
       case "solana_settle_broadcast_failed":
         return "solana_settle_broadcast_failed";
       case "solana_settle_unavailable":
+      // "no pude preguntarle al ledger" (503 de S3.5): reintentable, y NO se traduce a un rechazo.
+      case "solana_settle_ledger_unavailable":
         return "solana_settle_unavailable";
+      // S3.5 del settle: el destino se comparó contra lo que el servidor registró al preparar y NO
+      // coincide. Se mapea a un reason propio en vez de caer al 409 → broadcast_failed de abajo, que
+      // diría "no se pudo transmitir" sobre una tx que nunca se intentó transmitir.
+      case "solana_settle_beneficiary_mismatch":
+        return "solana_settle_beneficiary_mismatch";
+      // El servidor no pudo comparar (nada registrado / tx ilegible). Bloquea igual, pero el
+      // diagnóstico es "no se comprobó", no "no coincide": son cosas distintas y se cuentan distinto.
+      case "solana_settle_beneficiary_unregistered":
+      case "solana_settle_deposit_unreadable":
+        return "solana_settle_beneficiary_unconfirmed";
       // enum NUEVO / desconocido cae abajo: bloquea igual.
       default:
         break;

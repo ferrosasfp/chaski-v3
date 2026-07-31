@@ -509,6 +509,53 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       expect(raw).not.toContain("999888777");
     });
 
+    // Traza del dinero: el 200 tiene que decir QUIÉN dio la dirección que se acaba de atestar.
+    // Sin esto, con el carril de estreno encendido, se atesta una dirección sin poder decir de
+    // dónde salió.
+    it("el 200 informa QUÉ agente dio el depositAddress, sin filtrar la URL del gateway", async () => {
+      setGatewayEnv();
+      gwRouter({
+        body: {
+          success: true,
+          steps: [
+            {
+              output: agentResult(),
+              agent: {
+                slug: "remit-cashout-payout",
+                registry: "WasiAI",
+                invokeUrl: "https://interno.test/invoke",
+                trial: { granted: true, under_min_reputation: 2 },
+              },
+              resolvedFrom: { capability: "remittance-payout" },
+            },
+          ],
+        },
+      });
+      const res = await POST(req(bodyOf()));
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as Record<string, unknown>;
+      expect(json.agent).toEqual({
+        slug: "remit-cashout-payout",
+        registry: "WasiAI",
+        capability: "remittance-payout",
+        trial: true,
+      });
+      expect(JSON.stringify(json)).not.toContain("interno.test");
+    });
+
+    // La identidad del agente NO es un guard: que no se sepa no puede tumbar un prepare válido.
+    it("agente ilegible ⇒ 200 sin la clave agent (el prepare NO se cae por no saber quién fue)", async () => {
+      setGatewayEnv();
+      gwRouter({
+        body: { success: true, steps: [{ output: agentResult(), agent: { registry: "X" } }] },
+      });
+      const res = await POST(req(bodyOf()));
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as Record<string, unknown>;
+      expect(json.beneficiary).toBe(DEPOSIT);
+      expect(json).not.toHaveProperty("agent");
+    });
+
     it("T-A3.2: guard-order INTACTO con el flag encendido (PR3/PR5/PR6/PR4 cortan igual y NINGÚN fetch)", async () => {
       setGatewayEnv();
       gwRouter();
@@ -669,6 +716,12 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       expect(step.capability).toBe("remittance-payout"); // el valor REAL del catálogo (M8)
       expect(step.constraints).toEqual({ min_reputation: PAYOUT_MIN_REPUTATION });
       expect(PAYOUT_MIN_REPUTATION).toBeGreaterThan(0);
+      // WKH-313: el CARRIL DE ESTRENO no se enciende acá, y es una decision, no un olvido: un
+      // agente nuevo que cotiza mal produce una cotizacion mala (se ve antes de firmar nada); un
+      // agente nuevo en payout decide A DONDE VA LA PLATA. El toEqual de arriba ya lo cubre, pero
+      // el assert nombrado es lo que hace que quien copie la linea del leg de FX lea POR QUE no va.
+      expect(step.constraints).not.toHaveProperty("allow_trial");
+      expect(composeInit!.body as string).not.toContain("allow_trial");
       expect(step).not.toHaveProperty("agent"); // M5: nunca el nombre del agente
       // El input viaja TAL CUAL (el agente strippea con Zod lo que no conoce).
       expect(step.input.idempotencyKey).toBe("rem-1:q-400");

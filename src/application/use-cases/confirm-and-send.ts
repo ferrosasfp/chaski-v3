@@ -182,7 +182,16 @@ export class ConfirmAndSend {
     //    producto abierto, no un paso que ocurre solo más tarde.
     r.markPrincipalIn(res.signature, this.clock.nowIso());
     await this.repo.save(r);
-    r.markPayoutSubmitted(prep.result.payoutId, this.clock.nowIso(), prep.result.provenance);
+    // `prep.result.agent` = QUIÉN dio el beneficiary que se acaba de depositar. Se guarda con la
+    // remesa (sobrevive a la recarga, se puede mostrar en el recibo) porque sin eso una remesa no
+    // puede decir de dónde salió la dirección contra la que la persona firmó. Es traza, no lógica:
+    // nada de este flujo lo lee para decidir, y `undefined` no pisa lo que ya hubiera.
+    r.markPayoutSubmitted(
+      prep.result.payoutId,
+      this.clock.nowIso(),
+      prep.result.provenance,
+      prep.result.agent,
+    );
     await this.repo.save(r);
     return r;
   }

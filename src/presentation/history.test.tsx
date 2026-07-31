@@ -17,6 +17,10 @@ import {
   type RemittanceState,
   toPersistedIdentity,
 } from "../domain/remittance";
+import {
+  PRINCIPAL_SETTLED_REFUND_MANUAL,
+  PRINCIPAL_STATE_UNKNOWN,
+} from "../application/use-cases/confirm-and-send";
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
 import {
   FAKE_SOLANA_BENEFICIARY,
@@ -74,6 +78,30 @@ function depositedSnapshot(id: string, expiresAt = "2026-07-10T00:00:00.000Z"): 
   r.confirm(T0);
   r.markPrincipalIn("solana-sig", T0);
   r.markPayoutSubmitted("transfi-sol-po-1", T0, "transfi");
+  return r.snapshot;
+}
+
+/**
+ * El estado que trajo el fix del reembolso fabricado, y que esta pantalla no conocía: el settle no
+ * nos dio respuesta, se le preguntó A LA CADENA y contestó que el depósito ESTÁ en el vault. La
+ * remesa queda en payout_failed (recuperable) con el marcador escrito y SIN `principalTx`, porque
+ * markPrincipalIn nunca corrió. Mirando sólo `principalTx` esta remesa parece no haber depositado
+ * nunca: es exactamente la que no puede desaparecer de la lista.
+ */
+function inEscrowSnapshot(id: string, expiresAt = "2026-07-10T00:00:00.000Z"): RemittanceState {
+  const r = quotedRemittance(id, expiresAt);
+  r.applyKyc(passKyc, T0);
+  r.confirm(T0);
+  r.markPayoutFailed(PRINCIPAL_SETTLED_REFUND_MANUAL, T0);
+  return r.snapshot;
+}
+
+/** El guard de destino cortó ANTES del broadcast: el depósito NO salió, y eso está probado. */
+function beneficiaryMismatchSnapshot(id: string): RemittanceState {
+  const r = quotedRemittance(id, "2026-07-10T00:00:00.000Z");
+  r.applyKyc(passKyc, T0);
+  r.confirm(T0);
+  r.markPayoutFailed("solana_settle_beneficiary_mismatch", T0);
   return r.snapshot;
 }
 
@@ -142,6 +170,27 @@ describe("una remesa con fondos en el escrow siempre es alcanzable desde la inte
     expect(screen.getByRole("button", { name: /Ver mis envíos/ })).toBeInTheDocument();
   });
 
+  // El caso que el merge trajo, y el que se pierde si la pantalla sigue mirando sólo `principalTx`:
+  // acá markPrincipalIn NUNCA corrió (el settle no contestó), pero la CADENA confirmó el depósito. Si
+  // esta remesa se lista como "no llegaste a depositar", pierde la puerta y con ella el único camino
+  // a USDC que sabemos que están en el vault.
+  it("una remesa cuyo depósito confirmó la cadena llega hasta 'Recuperar fondos'", async () => {
+    const { gateway, container } = await seededFlow([inEscrowSnapshot("rem-1")]);
+    render(<RemittanceFlow container={container} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    expect(await screen.findByText(/Tus envíos/)).toBeInTheDocument();
+    expect(screen.getByText("Mamá")).toBeInTheDocument();
+    expect(screen.getByText(/Tus USDC quedaron en el escrow, a tu nombre/)).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole("button", { name: /Ver seguimiento/ }));
+    const recuperar = await screen.findByRole("button", { name: /Recuperar fondos/ });
+    expect(recuperar).toBeEnabled();
+    fireEvent.click(recuperar);
+    await waitFor(() => expect(gateway.calls).toHaveLength(1));
+    expect(gateway.calls[0]).toEqual({ remittanceId: "rem-1", sender: FAKE_SOLANA_BENEFICIARY });
+  });
+
   it("lista TODAS las remesas del dueño, no sólo la última", async () => {
     const { container } = await seededFlow([
       depositedSnapshot("rem-1"),
@@ -196,6 +245,31 @@ describe("el historial dice lo que sabe, y del vault no sabe nada", () => {
     expect(screen.getByText(/Tus USDC volvieron a tu wallet/)).toBeInTheDocument();
   });
 
+  // Los dos estados que trajo el fix del reembolso fabricado, en la pantalla que no los conocía.
+  it("si la cadena confirmó el depósito lo DICE, en vez de decir que no comprobamos nada", async () => {
+    await open([inEscrowSnapshot("rem-1")]);
+    expect(screen.getByText(/Tus USDC quedaron en el escrow, a tu nombre/)).toBeInTheDocument();
+    expect(screen.queryByText(/No llegaste a depositar/)).toBeNull();
+  });
+
+  it("si no pudimos averiguar si entró, lo dice con esas palabras y ofrece la puerta", async () => {
+    const s = inEscrowSnapshot("rem-1");
+    await open([{ ...s, failureReason: PRINCIPAL_STATE_UNKNOWN }]);
+    expect(screen.getByText(/No comprobamos si tus USDC siguen en el escrow/)).toBeInTheDocument();
+    expect(screen.queryByText(/No llegaste a depositar/)).toBeNull();
+    expect(screen.getByRole("button", { name: /Ver seguimiento/ })).toBeInTheDocument();
+  });
+
+  // `beneficiary_mismatch` es el único reason del catálogo que describe un ataque en curso, y el guard
+  // corta ANTES del broadcast: el depósito NO salió. La pantalla NO puede sugerir que sus USDC podrían
+  // estar en el escrow, o manda a la persona a buscar plata que nunca se movió.
+  it("un fallo probado antes del broadcast NO insinúa que haya USDC en el escrow", async () => {
+    await open([beneficiaryMismatchSnapshot("rem-1")]);
+    expect(screen.getByText(/No llegaste a depositar/)).toBeInTheDocument();
+    expect(screen.queryByText(/en el escrow/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Ver seguimiento/ })).toBeNull();
+  });
+
   it("una remesa sin depósito se lista pero NO ofrece seguimiento (no hay nada que seguir)", async () => {
     await open([abandonedSnapshot("rem-3")]);
     expect(screen.getByText("Mamá")).toBeInTheDocument();
@@ -237,6 +311,16 @@ describe("el botón que borra avisa lo que se lleva", () => {
       />,
     );
     expect(screen.getByText(/Tenés 2 envíos de los que no comprobamos/)).toBeInTheDocument();
+  });
+
+  // Lo que sí comprobamos no se anuncia como "no comprobamos": sería el mismo error de esta pantalla
+  // hacia el otro lado, y encima ablanda la advertencia justo en el caso más caro.
+  it("lo que la cadena confirmó se advierte con su propia frase, no con la de 'no comprobamos'", () => {
+    render(<ResetWarning items={[inEscrowSnapshot("a"), depositedSnapshot("b")]} />);
+    expect(screen.getByText(/Tenés 1 envío con USDC en el escrow, a tu nombre/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Tenés 1 envío del que no comprobamos si sus USDC/),
+    ).toBeInTheDocument();
   });
 
   it("sin nada depositado no inventa una alarma", () => {

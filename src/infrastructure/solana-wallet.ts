@@ -16,7 +16,9 @@ import type {
 import type { Idl, Provider } from "@coral-xyz/anchor";
 import type {
   EscrowRefundConfirmation,
+  PrincipalDepositState,
   SolanaEscrowDeposit,
+  SolanaEscrowDepositProbe,
   SolanaEscrowRefundResult,
   SolanaPrincipalAuthorization,
   SolanaRemittanceIdResolver,
@@ -62,7 +64,7 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   }
 }
 
-export class SolanaWalletAdapter implements WalletPort {
+export class SolanaWalletAdapter implements WalletPort, SolanaEscrowDepositProbe {
   private address: string | null = null;
 
   // HU-SOL-20/AC-2: resolver OPCIONAL del remittanceId durable server-side. Ausente (modo demo o
@@ -253,6 +255,53 @@ export class SolanaWalletAdapter implements WalletPort {
       tx: serialized,
       solana: { vm: "solana", partialSignedTx: serialized, reference: reference.toBase58() },
     };
+  }
+
+  /**
+   * ¿Entró el principal al vault del escrow de ESTA remesa? Se lo pregunta A LA CADENA, derivando la
+   * MISMA PDA `escrow_state` que arma el deposit (deriveEscrowState, fuente única). No consulta a
+   * ningún agente, ni conoce su URL ni su slug: los agentes se reemplazan por otros mejores, la cadena
+   * no. Reusa el criterio de tres valores de `probeEscrowRefunded`: este es su espejo en la otra
+   * punta del money-path.
+   *
+   * · cuenta presente y decodificable ⇒ "deposited". La cuenta `escrow_state` sólo la crea la ix
+   *   `deposit`, así que su existencia ES la prueba de que el depósito entró.
+   * · cuenta AUSENTE ⇒ "unknown", NUNCA "not_deposited". Que todavía no esté no prueba que no vaya a
+   *   estar: la tx puede estar en vuelo con un blockhash vivo (~60-90 s) y aterrizar un segundo
+   *   después. Es la misma lección que `probeEscrowRefunded`: la ausencia de una cuenta no dice a
+   *   dónde fue la plata, dice que no la vimos.
+   * · RPC caído / bytes indecodificables ⇒ "unknown". No pudimos preguntar, y eso se dice.
+   *
+   * Por eso hoy este método no devuelve "not_deposited": ese valor lo aportan los guards que cortan
+   * ANTES de que la tx salga. Queda en el contrato para el día que se pueda PROBAR la ausencia (leer
+   * el blockHeight y ver que el blockhash del deposit ya venció) sin cambiarle la forma a nadie.
+   */
+  async probeDeposit(input: { remittanceId: string; sender: string }): Promise<PrincipalDepositState> {
+    const senderB58 = input.sender?.trim() ? input.sender : ((await this.getAddress()) ?? "");
+    // Sin sender o sin id no hay PDA que derivar: no es que no haya depósito, es que no podemos mirar.
+    if (!senderB58 || !input.remittanceId?.trim()) return "unknown";
+    try {
+      const web3 = await import("@solana/web3.js");
+      const { PublicKey: PublicKeyLazy, Connection } = web3;
+      const anchor = await import("@coral-xyz/anchor");
+      const { escrowIdl } = await import("./solana/escrow-idl");
+
+      const senderPk = new PublicKeyLazy(senderB58); // valida base58 (CD-SDD-7)
+      const programId = new PublicKeyLazy((escrowIdl as { address: string }).address);
+      const { pda } = this.deriveEscrowState(senderPk, programId, input.remittanceId);
+
+      const connection = new Connection(
+        resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), // client-safe
+      );
+      const info = await connection.getAccountInfo(pda);
+      if (!info) return "unknown"; // ausencia ≠ prueba: la tx puede seguir en vuelo
+      // Decodificar es lo que distingue "la cuenta del escrow de esta remesa" de una cuenta ajena que
+      // cayó en la misma dirección. Si no decodifica, el catch responde "unknown" (no inventamos un no).
+      new anchor.BorshAccountsCoder(escrowIdl as unknown as Idl).decode("EscrowState", info.data);
+      return "deposited";
+    } catch {
+      return "unknown"; // no pudimos preguntar; NO es una respuesta negativa
+    }
   }
 
   // HU-SOL-13 (WKH-216/AC-6/AC-7, CD-10): refund TRUSTLESS del escrow. El SENDER firma + el SENDER

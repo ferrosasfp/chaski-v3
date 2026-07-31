@@ -1,5 +1,9 @@
 import type { Money } from "../domain/money";
 import type { RemittanceState, RemittanceStatus } from "../domain/remittance";
+import {
+  PRINCIPAL_SETTLED_REFUND_MANUAL,
+  PRINCIPAL_STATE_UNKNOWN,
+} from "../application/use-cases/confirm-and-send";
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
 
 /** Proveniencias de payout que representan un desembolso REAL (allowlist fail-safe, CD-8). Cualquier
@@ -67,66 +71,127 @@ export function statusDisplay(status: RemittanceStatus): {
 }
 
 /**
- * Qué sabemos del DINERO de una remesa que el historial va a listar. Tres valores, y el del medio es
- * la razón de existir de la función: "no lo comprobamos" no es "no hay nada".
+ * Qué sabemos del DINERO de una remesa que el historial va a listar. CUATRO valores, y ninguno
+ * colapsa en otro: "no lo comprobamos" no es "no hay nada", y "la cadena dijo que está" tampoco es
+ * "no lo comprobamos".
  *
- * Nada de esto lee la cadena. Se calcula SOLO con el snapshot persistido, así que lo único que puede
- * afirmar es qué llegamos a escribir nosotros. Por eso el único valor que afirma un desenlace es
- * `returned`, y sale de un marcador que se escribe en un solo lugar y bajo una sola condición.
+ * Esta función no lee la cadena: se calcula SOLO con el snapshot persistido, así que lo único que
+ * puede afirmar es lo que alguien ya midió y llegamos a ESCRIBIR. Por eso los dos valores que
+ * afirman algo del vault salen de marcadores que se escriben en UN solo lugar y bajo UNA sola
+ * condición, nunca de deducir un final a partir del status.
  *
  * - `returned`   los USDC volvieron. Lo respalda `ESCROW_REFUNDED_BY_SENDER`, que RecoverEscrowFunds
  *                escribe recién con `confirmation === "confirmed"` (recover-escrow-funds.ts:70-77),
- *                o sea después de ver la tx confirmada. Es el único hecho de la cadena que este
- *                snapshot contiene sobre el vault.
- * - `unverified` se autorizó o entró un depósito y NADIE leyó el vault desde entonces. Puede haber
- *                USDC ahí o no.
- * - `no-deposit` nunca se autorizó un depósito, así que no hay plata en juego.
+ *                o sea después de ver la tx del refund confirmada.
+ * - `in-escrow`  los USDC están en el vault, a nombre de la persona. Lo respalda
+ *                `PRINCIPAL_SETTLED_REFUND_MANUAL`, que ConfirmAndSend escribe SÓLO cuando el probe
+ *                le contestó `"deposited"`, y ese probe le pregunta A LA CADENA
+ *                (confirm-and-send.ts:113-118 + ports.ts `SolanaEscrowDepositProbe`). Es el segundo
+ *                hecho de la cadena que un snapshot puede contener, y llegó con el fix del reembolso
+ *                fabricado: antes esta remesa no existía como estado propio.
+ * - `unverified` se autorizó o entró un depósito y NADIE leyó el vault desde entonces, o lo leímos y
+ *                la cadena no contestó (`PRINCIPAL_STATE_UNKNOWN`). Puede haber USDC ahí o no.
+ * - `no-deposit` sabemos que el depósito NO salió: nunca se autorizó, o el intento murió ANTES del
+ *                broadcast y eso está probado (SETTLE_REASONS_BEFORE_BROADCAST en
+ *                confirm-and-send.ts:48-53, que incluye `solana_settle_beneficiary_mismatch`). No
+ *                hay plata en juego y por eso es el único valor que NO ofrece camino de recuperación.
  *
- * ⚠️ DOS COSAS QUE PARECEN PRUEBA Y NO LO SON. Si "simplificás" esto usándolas, la pantalla vuelve a
- * afirmar lo que nadie midió:
+ * ⚠️ TRES COSAS QUE PARECEN PRUEBA Y NO LO SON. Si "simplificás" esto usándolas, la pantalla vuelve
+ * a afirmar lo que nadie midió:
  *
- * 1. `refundTx != null` NO prueba que los USDC volvieron. El adapter DEFAULT de refund es
- *    LedgerRefundGateway, que devuelve un string sintético `refund-ledger-<base36>` sin tocar la
- *    cadena (ledger-refund-gateway.ts:9-16). Una remesa reembolsada "en el papel" puede tener sus
- *    USDC intactos en el vault. Por eso acá se mira el marcador, no el campo.
+ * 1. `refundTx != null` NO prueba que los USDC volvieron. Hoy el adapter DEFAULT devuelve `null` y
+ *    `refunded` exige un comprobante real (refund-receipt.ts), pero la regla que sostiene eso vive en
+ *    OTRO archivo y cualquier adapter que vuelva a fabricar un identificador la rompe sin tocar este
+ *    archivo. Acá se mira el marcador, no el campo: es lo que hace que este archivo no dependa de la
+ *    honestidad del de al lado.
  * 2. `status === "settled"` NO prueba que el vault se liberó. `settled` dice que el partner de payout
  *    reportó haber entregado los PEN; la release del vault la dispara hoy una persona a mano y este
- *    repo no la llama nunca (confirm-and-send.ts:168-181). Son dos hechos distintos y sólo tenemos
+ *    repo no la llama nunca (confirm-and-send.ts:283-292). Son dos hechos distintos y sólo tenemos
  *    el primero, así que una remesa entregada también cae en `unverified`.
+ * 3. Un `failureReason` de depósito NO sigue valiendo después de un `refunded`. `principal_settled_
+ *    refund_manual` describe el depósito de ANTES de que la persona lo recuperara, y RecoverEscrowFunds
+ *    conserva ese reason cuando la remesa ya venía de payout_failed (recover-escrow-funds.ts:76). Leer
+ *    el marcador sin mirar el status le diría "tus USDC están en el escrow" a quien ya los tiene en la
+ *    wallet. Por eso `refunded` se resuelve PRIMERO y por sí solo.
  */
-export type EscrowKnowledge = "no-deposit" | "returned" | "unverified";
+export type EscrowKnowledge = "no-deposit" | "in-escrow" | "returned" | "unverified";
 
 export function escrowFundsKnowledge(rem: RemittanceState): EscrowKnowledge {
-  // Primero el único caso medido contra la cadena. El status tiene que ser `refunded` además del
-  // marcador: el marcador solo vive un instante en payout_failed antes del markRefunded.
-  if (rem.status === "refunded" && rem.failureReason === ESCROW_REFUNDED_BY_SENDER) return "returned";
-  // `principalTx` = vimos entrar el depósito. `confirmed` = firmamos la autorización y nunca
-  // registramos el desenlace, que es justo el caso en que el browser se cerró con los USDC en vuelo.
+  // 1. `refunded` es terminal y se resuelve entero acá, antes de mirar ningún marcador de depósito:
+  //    el depósito que esos marcadores describen es justamente el que ya pudo volver (trampa 3).
+  //    Sólo el marcador del sender afirma la vuelta; cualquier otro `refunded` cae del lado que no
+  //    afirma nada del vault, que es el lado seguro.
+  if (rem.status === "refunded")
+    return rem.failureReason === ESCROW_REFUNDED_BY_SENDER ? "returned" : "unverified";
+  // 2. Lo que la CADENA contestó cuando el settle no nos dio respuesta. Son enums estables escritos
+  //    en un solo lugar (failAndRefund), no interpretaciones del status.
+  if (rem.failureReason === PRINCIPAL_SETTLED_REFUND_MANUAL) return "in-escrow";
+  if (rem.failureReason === PRINCIPAL_STATE_UNKNOWN) return "unverified";
+  // 3. `principalTx` = vimos entrar el depósito. `confirmed` = firmamos la autorización y nunca
+  //    registramos el desenlace, que es justo el caso en que el browser se cerró con los USDC en vuelo.
   if (rem.principalTx != null || rem.status === "confirmed") return "unverified";
+  // 4. Todo lo demás: nunca salió. Incluye los fallos probados ANTES del broadcast, entre ellos
+  //    `solana_settle_beneficiary_mismatch`, donde el guard de destino cortó y no hay tx viajando.
   return "no-deposit";
 }
 
 /**
- * Cuántas de estas remesas tienen USDC cuyo paradero no comprobamos. Lo consume la advertencia del
- * botón que BORRA las remesas del dueño del almacenamiento local (ForgetKyc → repo.clearByOwner).
+ * Cuántas de estas remesas pierden el camino a sus USDC si se borra el almacenamiento local, partidas
+ * en los dos casos que NO se pueden decir con la misma frase. Lo consume la advertencia del botón que
+ * BORRA las remesas del dueño (ForgetKyc → repo.clearByOwner).
  *
  * Ese botón siempre fue más destructivo de lo que decía: su copy hablaba sólo de la verificación y
  * ya borraba las remesas. Mientras no había pantalla de historial el daño era invisible; ahora que
  * las remesas son alcanzables, borrarlas es perder el único camino que existe hacia ellas.
  *
- * Ojo con lo que este número NO dice: borrar el almacenamiento local no toca los USDC, y no prueba
- * que estén en el escrow (por eso son `unverified` y no otra cosa). La advertencia que lo use tiene
- * que hablar de perder el CAMINO, nunca de perder la plata.
+ * Por qué DOS números y no uno: `inEscrow` son remesas cuyo depósito la cadena confirmó, y meterlas
+ * en el mismo balde que las `unverified` haría que la advertencia dijera "no comprobamos" sobre plata
+ * que sí comprobamos. Es el mismo error que esta HU vino a matar, sólo que en el otro sentido.
+ *
+ * Ojo con lo que estos números NO dicen: borrar el almacenamiento local no toca los USDC. La
+ * advertencia que los use tiene que hablar de perder el CAMINO, nunca de perder la plata.
  */
-export function unverifiedEscrowCount(items: RemittanceState[]): number {
-  return items.filter((r) => escrowFundsKnowledge(r) === "unverified").length;
+export function escrowFundsAtRisk(items: RemittanceState[]): {
+  inEscrow: number;
+  unverified: number;
+} {
+  let inEscrow = 0;
+  let unverified = 0;
+  for (const r of items) {
+    const k = escrowFundsKnowledge(r);
+    if (k === "in-escrow") inEscrow += 1;
+    else if (k === "unverified") unverified += 1;
+  }
+  return { inEscrow, unverified };
 }
 
 /** La frase que acompaña a cada valor. Ninguna afirma un estado del vault que no hayamos medido. */
 export function escrowKnowledgeCopy(k: EscrowKnowledge): string {
   if (k === "returned") return "Tus USDC volvieron a tu wallet.";
+  if (k === "in-escrow") return "Tus USDC quedaron en el escrow, a tu nombre.";
   if (k === "unverified") return "No comprobamos si tus USDC siguen en el escrow.";
   return "No llegaste a depositar.";
+}
+
+/**
+ * Copy de los errores del refund del escrow (enum→frase fija, PII-free / CD-5).
+ *
+ * Existe porque la acción tenía UNA sola frase para todo: "No pudimos recuperar los fondos". Con el
+ * caso indeterminado esa frase pasa a ser activamente engañosa: el error más probable ahí es
+ * `escrow_not_found`, que significa "no hay depósito tuyo en el escrow", o sea, la buena noticia de
+ * que probablemente no salió un peso de tu wallet. Decirle a esa persona que no pudimos recuperar sus
+ * fondos la deja creyendo que su plata está atrapada en algún lado.
+ */
+export function escrowRefundError(code: string): string {
+  if (code.includes("escrow_not_found"))
+    return "No encontramos un depósito tuyo en el escrow. Si nunca salió de tu wallet, tus USDC siguen ahí. Si acabás de enviarlo, probá de nuevo en un rato.";
+  if (code.includes("escrow_not_deposited"))
+    return "Ese depósito ya no está en el escrow: o volvió antes, o ya se liberó al pago.";
+  if (code.includes("refund_before_deadline"))
+    return "Todavía no: el contrato permite recuperar recién después del vencimiento.";
+  if (code.includes("wallet_not_connected") || code.includes("no_account"))
+    return "Reconectá o desbloqueá tu wallet para continuar.";
+  return "No pudimos recuperar los fondos. Intentá de nuevo.";
 }
 
 /** Traduce un código de error interno a copy humano para la UI. */

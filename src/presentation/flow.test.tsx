@@ -10,6 +10,10 @@ import type { ResumeKyc } from "../application/use-cases/resume-kyc";
 import type { AbandonPendingKyc } from "../application/use-cases/abandon-pending-kyc";
 import type { LockQuote } from "../application/use-cases/lock-quote";
 import type { ConfirmAndSend } from "../application/use-cases/confirm-and-send";
+import {
+  PRINCIPAL_SETTLED_REFUND_MANUAL,
+  PRINCIPAL_STATE_UNKNOWN,
+} from "../application/use-cases/confirm-and-send";
 import type { TrackRemittance } from "../application/use-cases/track-remittance";
 import { Money } from "../domain/money";
 import {
@@ -1050,6 +1054,87 @@ describe("HU-SOL-13 — acción refund en TrackView (T7)", () => {
   // fondos'". Probaba que la acción de refund NO se montara cuando la VM activa no era Solana — un
   // estado que dejó de ser expresable. Lo que queda probado arriba es lo que sí decide hoy si el
   // botón aparece: el deadline y el estado de la remesa, no la VM.
+});
+
+// ── Lo que la pantalla dice en cada uno de los tres casos ─────────────────────────────────────────
+// Antes decía lo mismo en los tres: "No pudo entregarse. Si te cobramos, te reembolsamos", con una
+// referencia de reembolso inventada al lado. Estos tests clavan que cada caso tiene su frase, y que
+// la referencia sólo aparece cuando existe.
+describe("los tres casos, dichos con palabras distintas", () => {
+  afterEach(() => cleanup());
+
+  /** Una remesa que ya falló, con el failureReason que escribió el use-case. */
+  function failedWith(reason: string, expiresAt = "2026-07-10T00:00:00.000Z"): RemittanceState {
+    const base = Remittance.rehydrate(solanaPayoutSubmittedSnapshot(expiresAt));
+    base.markPayoutFailed(reason, T0);
+    return base.snapshot;
+  }
+
+  it("NO SABEMOS: lo dice con esas palabras, no lo llama fallo ni reembolso", async () => {
+    const rem = failedWith(PRINCIPAL_STATE_UNKNOWN);
+    const { recover } = await seededRecovery(rem, new FakeSolanaEscrowRefundGateway());
+    render(<LiveTrackView initial={rem} recover={recover} />);
+
+    expect(screen.getByText(/No sabemos todavía si te cobramos/)).toBeInTheDocument();
+    expect(screen.getByText(/todavía no lo sabemos/)).toBeInTheDocument();
+    expect(screen.getByText(/Nadie te reembolsó nada/)).toBeInTheDocument();
+    // NO se disfraza de fallo entregado ni de reembolso hecho.
+    expect(screen.queryByText(/No pudo entregarse/)).toBeNull();
+    expect(screen.queryByText(/te reembolsamos/)).toBeNull();
+    expect(screen.queryByText(/Referencia de reembolso/)).toBeNull();
+    // Y la salida está a la vista.
+    expect(screen.getByRole("button", { name: /Recuperar fondos/ })).toBeEnabled();
+  });
+
+  it("SÍ ENTRÓ: dice dónde están los USDC y que los recupera la persona", async () => {
+    const rem = failedWith(PRINCIPAL_SETTLED_REFUND_MANUAL);
+    const { recover } = await seededRecovery(rem, new FakeSolanaEscrowRefundGateway());
+    render(<LiveTrackView initial={rem} recover={recover} />);
+
+    expect(screen.getByText(/Tus USDC quedaron en el escrow/)).toBeInTheDocument();
+    expect(screen.getByText(/Los USDC siguen ahí, a tu nombre/)).toBeInTheDocument();
+    expect(screen.queryByText(/Referencia de reembolso/)).toBeNull();
+    expect(screen.getByRole("button", { name: /Recuperar fondos/ })).toBeEnabled();
+  });
+
+  it("NO ENTRÓ: sigue siendo el fallo de siempre, sin inventar un tercer estado", async () => {
+    const rem = failedWith("solana_settle_rejected");
+    const { recover } = await seededRecovery(rem, new FakeSolanaEscrowRefundGateway());
+    render(<LiveTrackView initial={rem} recover={recover} />);
+
+    expect(screen.getByText(/No pudo entregarse/)).toBeInTheDocument();
+    expect(screen.queryByText(/No sabemos todavía/)).toBeNull();
+    expect(screen.queryByText(/quedaron en el escrow/)).toBeNull();
+    expect(screen.queryByText(/Referencia de reembolso/)).toBeNull();
+  });
+
+  // El mutante que hay que matar: alguien vuelve a escribir un comprobante fabricado en el estado.
+  it("un refundTx fabricado en el estado se mostraría: por eso el use-case NO lo escribe", async () => {
+    const base = Remittance.rehydrate(failedWith("partner_down"));
+    base.markRefunded("refund-ledger-mabc", T0); // exactamente lo que el ledger devolvía antes
+    const rem = base.snapshot;
+    const { recover } = await seededRecovery(rem, new FakeSolanaEscrowRefundGateway());
+    render(<LiveTrackView initial={rem} recover={recover} />);
+
+    // La pantalla es fiel al estado: si el estado tiene una referencia, la muestra. Por eso la
+    // defensa tiene que estar aguas arriba, y por eso el test de arriba verifica que NO llega acá.
+    expect(screen.getByText(/Referencia de reembolso/)).toBeInTheDocument();
+    // Y confirma el daño: en `refunded` la persona ya no tiene botón para recuperar nada.
+    expect(screen.queryByRole("button", { name: /Recuperar fondos/ })).toBeNull();
+  });
+
+  it("escrow_not_found NO se dice como 'no pudimos recuperar tus fondos'", async () => {
+    const rem = failedWith(PRINCIPAL_STATE_UNKNOWN);
+    const gateway = new FakeSolanaEscrowRefundGateway(FAKE_SOLANA_SIGNATURE, "reject");
+    vi.spyOn(gateway, "refund").mockRejectedValue(new Error("escrow_not_found"));
+    const { recover } = await seededRecovery(rem, gateway);
+    render(<LiveTrackView initial={rem} recover={recover} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Recuperar fondos/ }));
+
+    expect(await screen.findByText(/No encontramos un depósito tuyo en el escrow/)).toBeInTheDocument();
+    expect(screen.queryByText(/No pudimos recuperar los fondos/)).toBeNull();
+  });
 });
 
 // ── Honestidad del recibo y de los tildes del tracking ──────────────────────────────────────────

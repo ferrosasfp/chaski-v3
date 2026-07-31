@@ -1,15 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { Money } from "../domain/money";
 import type { RemittanceState, RemittanceStatus } from "../domain/remittance";
+import {
+  PRINCIPAL_SETTLED_REFUND_MANUAL,
+  PRINCIPAL_STATE_UNKNOWN,
+} from "../application/use-cases/confirm-and-send";
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
 import {
   deliveredDisplay,
+  escrowFundsAtRisk,
   escrowFundsKnowledge,
   escrowKnowledgeCopy,
+  escrowRefundError,
   humanError,
   isDemoMode,
   statusDisplay,
-  unverifiedEscrowCount,
 } from "./flow-vm";
 
 // WKH-320: acá abajo vivía el describe de isFallbackWalletAddress (WKH-184 AC-7/AC-9), que probaba
@@ -77,8 +82,8 @@ describe("flow-vm — statusDisplay", () => {
 });
 
 // El historial muestra remesas viejas, y la tentación de toda pantalla de historial es contar el
-// final. De estas remesas no tenemos el final: nadie leyó el vault. Estos tests fijan qué se puede
-// afirmar y, sobre todo, los dos campos que PARECEN prueba de que la plata se movió y no lo son.
+// final. De casi todas estas remesas no tenemos el final. Estos tests fijan qué se puede afirmar y,
+// sobre todo, los tres datos que PARECEN prueba de que la plata se movió y no lo son.
 describe("flow-vm — escrowFundsKnowledge", () => {
   const rem = (s: Partial<RemittanceState>): RemittanceState =>
     ({ status: "created", principalTx: null, refundTx: null, failureReason: null, ...s }) as RemittanceState;
@@ -111,10 +116,41 @@ describe("flow-vm — escrowFundsKnowledge", () => {
     expect(escrowFundsKnowledge(state)).toBe("returned");
   });
 
-  // ── Las dos trampas ────────────────────────────────────────────────────────────────────────────
-  // TRAMPA 1: el adapter default de refund devuelve un string sintético SIN tocar la cadena
-  // (ledger-refund-gateway.ts:9-16). Si esto midiera `refundTx != null`, una remesa con los USDC
-  // intactos en el vault se anunciaría como devuelta y nadie iría a buscarlos.
+  // ── Lo que la CADENA contestó, y quedó escrito ─────────────────────────────────────────────────
+  // Los dos enums que trajo el fix del reembolso fabricado. Sin estos dos casos, una remesa cuyo
+  // depósito la cadena CONFIRMÓ caía en `no-deposit` ("no llegaste a depositar") y perdía el botón de
+  // recuperar: la pantalla del historial le escondía a la persona la plata que sí está en el vault.
+  it("`principal_settled_refund_manual` = la cadena vio el depósito: 'in-escrow', jamás 'no-deposit'", () => {
+    const state = rem({ status: "payout_failed", failureReason: PRINCIPAL_SETTLED_REFUND_MANUAL });
+    expect(escrowFundsKnowledge(state)).toBe("in-escrow");
+  });
+
+  it("`principal_state_unknown` = no pudimos preguntar: 'unverified', jamás 'no-deposit'", () => {
+    const state = rem({ status: "payout_failed", failureReason: PRINCIPAL_STATE_UNKNOWN });
+    expect(escrowFundsKnowledge(state)).toBe("unverified");
+  });
+
+  // El único reason del catálogo que describe un ATAQUE en curso. El guard de destino corta ANTES del
+  // broadcast (SETTLE_REASONS_BEFORE_BROADCAST), así que el depósito NO salió: si esto dijera que sus
+  // USDC podrían estar en el escrow, mandaría a la persona a buscar plata que nunca se movió.
+  it("`solana_settle_beneficiary_mismatch` = probado que no entró: 'no-deposit'", () => {
+    for (const reason of [
+      "solana_settle_beneficiary_mismatch",
+      "solana_settle_beneficiary_unconfirmed",
+      "solana_settle_rejected",
+      "solana_settle_rate_limited",
+    ]) {
+      expect(escrowFundsKnowledge(rem({ status: "payout_failed", failureReason: reason }))).toBe(
+        "no-deposit",
+      );
+    }
+  });
+
+  // ── Las tres trampas ───────────────────────────────────────────────────────────────────────────
+  // TRAMPA 1: `refundTx` es un campo, no una prueba. Hoy el adapter default devuelve null y `refunded`
+  // exige comprobante real, pero esa regla vive en OTRO archivo (refund-receipt.ts): si alguien vuelve
+  // a fabricar un identificador, una remesa con los USDC intactos en el vault se anunciaría como
+  // devuelta y nadie iría a buscarlos. Acá se mira el marcador del sender, no el campo.
   it("un refundTx del ledger NO cuenta como devuelto: es un string sintético, no una tx", () => {
     const state = rem({
       status: "refunded",
@@ -127,17 +163,35 @@ describe("flow-vm — escrowFundsKnowledge", () => {
   });
 
   // TRAMPA 2: `settled` dice que el partner entregó los PEN. La release del vault la dispara una
-  // persona a mano y este repo no la llama nunca (confirm-and-send.ts:168-181): son dos hechos
+  // persona a mano y este repo no la llama nunca (confirm-and-send.ts:283-292): son dos hechos
   // distintos y sólo tenemos el primero.
   it("`settled` NO afirma que el vault se liberó: sigue siendo 'unverified'", () => {
     expect(escrowFundsKnowledge(rem({ status: "settled", principalTx: "sig" }))).toBe("unverified");
   });
 
-  it("unverifiedEscrowCount cuenta SÓLO las que tienen USDC de paradero desconocido", () => {
+  // TRAMPA 3: un marcador de DEPÓSITO deja de valer cuando la remesa ya está `refunded`. Es el caso
+  // que trajo el merge: RecoverEscrowFunds conserva el failureReason viejo si la remesa ya venía de
+  // payout_failed (recover-escrow-funds.ts:76), así que una persona que YA recuperó su plata queda
+  // con `principal_settled_refund_manual` escrito. Leer el marcador sin mirar el status le diría que
+  // sus USDC siguen en el escrow cuando los tiene en la wallet.
+  it("un marcador de depósito NO sobrevive al refunded: no puede decir 'in-escrow'", () => {
+    const state = rem({
+      status: "refunded",
+      refundTx: "5xRealSignature",
+      failureReason: PRINCIPAL_SETTLED_REFUND_MANUAL,
+    });
+    expect(escrowFundsKnowledge(state)).not.toBe("in-escrow");
+    expect(escrowFundsKnowledge(state)).toBe("unverified");
+  });
+
+  it("escrowFundsAtRisk separa lo que la cadena confirmó de lo que nadie miró", () => {
     const items = [
       rem({ status: "principal_in", principalTx: "sig" }), // unverified
       rem({ status: "confirmed" }), // unverified
       rem({ status: "quoted" }), // no-deposit
+      rem({ status: "payout_failed", failureReason: PRINCIPAL_SETTLED_REFUND_MANUAL }), // in-escrow
+      rem({ status: "payout_failed", failureReason: PRINCIPAL_STATE_UNKNOWN }), // unverified
+      rem({ status: "payout_failed", failureReason: "solana_settle_beneficiary_mismatch" }), // no-deposit
       rem({
         status: "refunded",
         principalTx: "sig",
@@ -145,14 +199,29 @@ describe("flow-vm — escrowFundsKnowledge", () => {
         failureReason: ESCROW_REFUNDED_BY_SENDER,
       }), // returned
     ];
-    expect(unverifiedEscrowCount(items)).toBe(2);
-    expect(unverifiedEscrowCount([])).toBe(0);
+    expect(escrowFundsAtRisk(items)).toEqual({ inEscrow: 1, unverified: 3 });
+    expect(escrowFundsAtRisk([])).toEqual({ inEscrow: 0, unverified: 0 });
   });
 
-  it("ninguna frase promete un estado del vault salvo la del caso medido", () => {
+  it("ninguna frase promete un estado del vault salvo las de los dos casos medidos", () => {
     expect(escrowKnowledgeCopy("unverified")).toBe("No comprobamos si tus USDC siguen en el escrow.");
     expect(escrowKnowledgeCopy("returned")).toBe("Tus USDC volvieron a tu wallet.");
+    expect(escrowKnowledgeCopy("in-escrow")).toBe("Tus USDC quedaron en el escrow, a tu nombre.");
     expect(escrowKnowledgeCopy("no-deposit")).toBe("No llegaste a depositar.");
+  });
+
+  // Los cuatro valores son ALCANZABLES desde un snapshot que el money-path puede escribir. Un valor
+  // que ningún estado real produce es peor que no tenerlo: da la sensación de estar cubierto.
+  it("los cuatro valores son alcanzables", () => {
+    const reached = new Set([
+      escrowFundsKnowledge(rem({ status: "quoted" })),
+      escrowFundsKnowledge(rem({ status: "payout_failed", failureReason: PRINCIPAL_SETTLED_REFUND_MANUAL })),
+      escrowFundsKnowledge(rem({ status: "principal_in", principalTx: "sig" })),
+      escrowFundsKnowledge(
+        rem({ status: "refunded", refundTx: "5xReal", failureReason: ESCROW_REFUNDED_BY_SENDER }),
+      ),
+    ]);
+    expect(reached).toEqual(new Set(["no-deposit", "in-escrow", "unverified", "returned"]));
   });
 });
 
@@ -220,6 +289,34 @@ describe("flow-vm — isDemoMode", () => {
       kyc: { provenance: "didit" },
     } as RemittanceState; // payoutProvenance undefined (legacy) → false
     expect(isDemoMode(absent)).toBe(false);
+  });
+});
+
+describe("flow-vm: escrowRefundError", () => {
+  // La distinción que importa: "no encontramos tu depósito" es probablemente una buena noticia (nunca
+  // salió de tu wallet). Decirla como "no pudimos recuperar tus fondos" deja a la persona creyendo
+  // que su plata está atrapada.
+  it("escrow_not_found NO se dice como un fracaso de recuperación", () => {
+    const copy = escrowRefundError("escrow_not_found");
+    expect(copy).toContain("No encontramos un depósito tuyo en el escrow");
+    expect(copy).not.toBe("No pudimos recuperar los fondos. Intentá de nuevo.");
+    // Y no afirma que no exista: puede estar en vuelo.
+    expect(copy).toContain("probá de nuevo en un rato");
+  });
+
+  it("escrow_not_deposited dice que ya no está ahí, sin inventar a dónde fue", () => {
+    expect(escrowRefundError("escrow_not_deposited")).toContain("ya no está en el escrow");
+  });
+
+  it("refund_before_deadline explica la condición, no un fallo", () => {
+    expect(escrowRefundError("refund_before_deadline")).toContain("después del vencimiento");
+  });
+
+  it("wallet desconectada → reconectar; desconocido → el genérico de siempre", () => {
+    expect(escrowRefundError("wallet_not_connected")).toContain("Reconectá");
+    expect(escrowRefundError("cualquier_otra_cosa")).toBe(
+      "No pudimos recuperar los fondos. Intentá de nuevo.",
+    );
   });
 });
 

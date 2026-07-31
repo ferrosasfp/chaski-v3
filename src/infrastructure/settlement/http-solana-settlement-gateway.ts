@@ -20,7 +20,16 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 const BASE58_SIGNATURE = /^[1-9A-HJ-NP-Za-km-z]{43,90}$/;
 
 /** Mapa status/enum → reason estable. Fail-closed (CD-12): cualquier status/enum desconocido ⇒ un
- *  reason que BLOQUEA. Sin default permisivo (lección WKH-198). El enum de la route es nuestro. */
+ *  reason que BLOQUEA. Sin default permisivo (lección WKH-198). El enum de la route es nuestro.
+ *
+ *  ⚠️ El default era `solana_settle_rejected`, y eso decía DE MÁS. Bloquear está bien; el problema es
+ *  que "rejected" significa "se cortó ANTES de broadcastear", y aguas arriba el use-case usa esa
+ *  distinción para decidir si hace falta ir a mirar la cadena. Un status que este mapa no conoce no
+ *  dice dónde se originó: puede venir de un intermediario (proxy/CDN/página de error de Next) que se
+ *  metió DESPUÉS de que la route ya reenvió al facilitator y el depósito ya entró. Etiquetarlo
+ *  "rejected" hacía que nadie fuera a preguntar, y la plata quedaba adentro con la remesa diciendo
+ *  que no había entrado. Ahora lo desconocido cae en el bucket INDETERMINADO: bloquea igual, y no
+ *  afirma lo que no sabe. Lo que SÍ se puede afirmar tiene su rama explícita (400/501/422/429). */
 function mapErrorReason(status: number, error: unknown): SolanaSettlementFailureReason {
   if (typeof error === "string") {
     switch (error) {
@@ -33,6 +42,13 @@ function mapErrorReason(status: number, error: unknown): SolanaSettlementFailure
         return "solana_settle_broadcast_failed";
       case "solana_settle_unavailable":
       // "no pude preguntarle al ledger" (503 de S3.5): reintentable, y NO se traduce a un rechazo.
+      // LÍMITE CONOCIDO, y es del lado seguro: este caso se corta ANTES del forward (la route no
+      // llegó al fetch), o sea que "no entró" es un hecho; pero comparte reason con el 503 del
+      // timeout, que SÍ es posterior al broadcast. Aguas arriba, entonces, se lo trata como
+      // indeterminado: se le pregunta a la cadena. El costo máximo es una consulta de más y, si esa
+      // consulta también se cae, decirle a la persona "todavía no sabemos" cuando podríamos decirle
+      // "no salió". Nunca al revés: de acá no sale un cobro ni un comprobante de reembolso.
+      // Separarlos pide un reason propio en SolanaSettlementFailureReason; queda anotado, no hecho.
       case "solana_settle_ledger_unavailable":
         return "solana_settle_unavailable";
       // S3.5 del settle: el destino se comparó contra lo que el servidor registró al preparar y NO
@@ -52,9 +68,12 @@ function mapErrorReason(status: number, error: unknown): SolanaSettlementFailure
   }
   if (status === 422) return "solana_settle_rejected"; // CR-1 del deposit rechazó
   if (status === 429) return "solana_settle_rate_limited";
+  // 400/501: nuestra propia route cortó ANTES de reenviar (request inválido / settlement apagado).
+  // La tx no salió, y eso sí se puede afirmar.
+  if (status === 400 || status === 501) return "solana_settle_rejected";
   if (status === 409 || status === 502) return "solana_settle_broadcast_failed"; // blockhash/broadcast
   if (status === 503 || status === 504) return "solana_settle_unavailable";
-  return "solana_settle_rejected"; // 4xx/5xx desconocido ⇒ bloquear
+  return "solana_settle_unavailable"; // desconocido ⇒ bloquea, y NO afirma que el deposit no salió
 }
 
 /** Shape del 200. Validado explícitamente (CD-13): un 200 con shape raro NO puede volverse un

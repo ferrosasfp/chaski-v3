@@ -10,6 +10,7 @@ import {
   T0,
   beneficiary,
 } from "../../test-support/fakes";
+import { LedgerRefundGateway } from "../../infrastructure/refund/ledger-refund-gateway";
 import { TrackRemittance } from "./track-remittance";
 
 const passKyc: KycVerification = {
@@ -110,6 +111,25 @@ describe("TrackRemittance — refund-on-failure (AC-7/CD-7)", () => {
     expect(out.snapshot.failureReason).toBe("partner_down");
     expect(out.snapshot.refundTx).toBe("refund-fake");
     expect(refund.calls).toHaveLength(1);
+  });
+
+  // ── El comprobante que no existe ──────────────────────────────────────────────────────────────
+  // Acá el principal está SEGURO en el vault del escrow (se llega desde payout_submitted, con el
+  // deposit confirmado on-chain). El adapter REAL de producción no revierte nada; escribir `refunded`
+  // sobre eso cerraba la única salida que tiene la persona para sacar su plata.
+  it("adapter sin comprobante (el REAL de producción) → payout_failed y refundTx null, NUNCA refunded", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedSubmitted(repo);
+    const refund = new LedgerRefundGateway(); // el que corre en producción, no un fake
+    const payouts = new FakePayoutGateway({}, { status: "failed", failureReason: "partner_down", deliveredPen: null });
+    const out = await new TrackRemittance(payouts, repo, new FixedClock(), refund).execute({ remittanceId: id });
+    expect(out.status).toBe("payout_failed"); // recuperable: el sender todavía puede refundear el escrow
+    expect(out.status).not.toBe("refunded"); // `refunded` es terminal y no hay transición de salida
+    expect(out.snapshot.refundTx).toBeNull(); // ninguna "referencia de reembolso" inventada
+    // Y el estado PERSISTIDO dice lo mismo (no sólo el agregado en memoria).
+    const saved = await repo.get(id);
+    expect(saved?.status).toBe("payout_failed");
+    expect(saved?.snapshot.refundTx).toBeNull();
   });
 
   it("refund falla (reject) → queda en payout_failed (best-effort, no throw)", async () => {

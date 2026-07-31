@@ -146,6 +146,13 @@ export type SolanaSettlementFailureReason =
   | "solana_settle_rejected" // CR-1 del deposit rechazó (422 SPONSOR_REJECTED)
   | "solana_settle_rate_limited" // 429
   | "solana_settle_broadcast_failed" // 409/502 (blockhash expirado / broadcast falló)
+  // El servidor cortó el depósito porque la tx paga a una dirección que NO registró al preparar
+  // (S3.5 del settle). Reason PROPIO y no "rejected": el facilitador no la rechazó, no llegó a verla.
+  // Es el único desenlace de esta lista que describe un ataque en curso y no una falla de infra.
+  | "solana_settle_beneficiary_mismatch"
+  // El servidor no pudo COMPARAR el destino: no hay dirección registrada para esta remesa/sender, o
+  // de la tx no se puede leer ninguna. No afirma que el destino esté mal, afirma que no se comprobó.
+  | "solana_settle_beneficiary_unconfirmed"
   | "solana_settle_unverified"; // shape de respuesta inválido
 
 // Broadcast del `deposit` Solana vía la ruta server-only /api/settle/solana-sponsor → facilitator
@@ -436,6 +443,26 @@ export interface SettlementLedger {
     vm: "evm" | "solana";
     limit: number;
   }): Promise<SenderRemittanceRef[]>;
+  // settle Solana: las deposit-address que ESTE servidor registró al preparar `remittanceId` para
+  // `senderAddress` (columna receiver_address, escrita por recordOrderPrepared con el depositAddress
+  // que resolvió el server). Es la fuente contra la que el settle compara el beneficiary que viaja
+  // DENTRO de la tx firmada: el único lado de esa comparación que ni el navegador ni el canal pueden
+  // tocar. Si esto se alimentara de algo del request, el guard se estaría comparando consigo mismo.
+  //
+  // TRES resultados, y son tres a propósito (lección WKH-308: "no pude preguntar" NO es "no"):
+  //   · array con 1+ direcciones ⇒ hay contra qué comparar.
+  //   · array VACÍO ⇒ la consulta corrió y no hay ninguna registrada. NO es "no coincide".
+  //   · TIRA ⇒ no se pudo leer. NO es "no hay ninguna" y NO es "no coincide". El caller lo trata
+  //     como su propio desenlace (503 reintentable), NUNCA como un rechazo.
+  // Devuelve varias porque una remesa puede tener más de un prepare (una fila por quote:
+  // idempotency_key = `${remittanceId}:${quoteId}`), y CADA una de esas direcciones la emitió este
+  // servidor para esta remesa. OWNER-SCOPED por sender_address (CD-9: el service key bypassea RLS).
+  // NO filtra por status: una fila que ya avanzó a 'principal_in' (settle reintentado) conserva su
+  // receiver_address, y filtrarla convertiría un retry legítimo en un rechazo.
+  listPreparedDepositAddresses(input: {
+    remittanceId: string;
+    senderAddress: string;
+  }): Promise<string[]>;
   // reconcile (AC-6): incrementa attempts + set status/last_error. Por id.
   markOutcome(input: {
     id: string;

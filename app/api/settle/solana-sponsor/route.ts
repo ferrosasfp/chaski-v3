@@ -5,8 +5,10 @@
 //
 // TODO en guards fail-closed: nunca 500 crudo, nunca se ecoa el motivo del facilitador (CD-12
 // no-oracle), nunca se expone la API key / base URL al cliente (CD-6). Guard-order: flag → config →
-// body → formato → forward → map.
+// body → formato → DESTINO → forward → map.
 import { NextResponse } from "next/server";
+import { canonicalizeAddress } from "../../../../src/infrastructure/address";
+import { readDepositBeneficiary } from "../../../../src/infrastructure/settlement/solana-deposit-beneficiary";
 import { getSettlementLedger } from "../../../../src/infrastructure/persistence/supabase-settlement-ledger";
 import { logLedgerWriteFailure } from "../../../../src/infrastructure/persistence/ledger-write-failure";
 
@@ -55,6 +57,78 @@ export async function POST(req: Request): Promise<Response> {
   // si falta). Sólo se envía si vino como string.
   const forwardBody: Record<string, unknown> = { partialSignedTx, reference, sender, remittanceId };
   if (typeof popProof === "string" && popProof.trim()) forwardBody.popProof = popProof;
+
+  // ── S3.5 · EL DESTINO: contra lo que el SERVIDOR registró al preparar ────────────────────────────
+  //
+  // QUÉ ATAJA, Y POR QUÉ ACÁ. Todo lo que protege el destino antes de este punto (la atestación HMAC
+  // de /api/payout/prepare y su verificación en /api/payout/attestation) se decide en el navegador y
+  // viaja por el mismo canal: un intermediario que reescribe las DOS respuestas pone su dirección en
+  // las dos y la comparación del cliente compara dos valores suyos (está clavado, con su resultado
+  // real, en http-solana-prepare-gateway.test.ts, "LÍMITE CONOCIDO"). Acá no participa ni el
+  // navegador ni el canal: los DOS lados de la comparación salen del server.
+  //   · Lado A: el beneficiary que está DENTRO de los bytes de la tx que la wallet firmó. Nadie puede
+  //     cambiarlo sin invalidar la firma del sender, y es exactamente lo que la cadena va a ejecutar.
+  //     NO se lee de ninguna clave del body: un campo del request lo elige quien manda el request, y
+  //     un guard alimentado por el request se compara consigo mismo.
+  //   · Lado B: la deposit-address que ESTE servidor persistió cuando preparó la remesa
+  //     (remittance_settlements.receiver_address, escrita en /api/payout/prepare).
+  //
+  // QUÉ NO ATAJA: que la dirección registrada sea legítima. Si el AGENTE de payout dio la dirección
+  // de otro, el servidor la registró y la tx la lleva: coinciden y esto pasa. Ese riesgo se acota por
+  // QUÉ agente atiende el leg (piso de reputación), no acá. Tampoco compara la release-authority: el
+  // ledger no la persiste, así que no hay contra qué compararla sin inventar una fuente. Una authority
+  // adulterada no permite quedarse con la plata (el release sigue yendo al beneficiary verificado),
+  // pero sí puede trabar el vault; cerrarlo pide persistirla en el prepare y es trabajo aparte.
+  //
+  // CON EL LEDGER APAGADO ESTE CHEQUEO NO EXISTE. `getSettlementLedger()` devuelve null con
+  // SETTLEMENT_LEDGER_ENABLED != "true" o sin envs de Supabase, y ahí no hay lado B contra el cual
+  // comparar. Es la MISMA condición que gobierna el persist de abajo, y se dice de frente en vez de
+  // dejarlo implícito: apagar el ledger apaga este control.
+  const ledger = getSettlementLedger();
+  if (ledger) {
+    // Se decodifica ANTES de tocar la DB: es local y barato, y evita gastar una consulta en una tx
+    // que ni siquiera es un depósito nuestro.
+    const inTx = await readDepositBeneficiary(partialSignedTx);
+    if (inTx.state !== "read") {
+      // De esta tx no se puede afirmar NINGÚN destino (base64 roto, tx versionada, sin la ix del
+      // escrow). No es "no coincide": es "no se puede juzgar", y por eso tiene su propio enum.
+      return NextResponse.json({ error: "solana_settle_deposit_unreadable" }, { status: 400 });
+    }
+    let owner: string;
+    try {
+      owner = canonicalizeAddress(sender); // base58 de 32 bytes; la regex de arriba no lo garantiza
+    } catch {
+      return NextResponse.json({ error: "solana_settle_invalid_request" }, { status: 400 });
+    }
+    // TRES desenlaces posibles de la consulta, y son tres a propósito (WKH-308: "no pude preguntar"
+    // NO es "no"). Ninguno de los tres consume nada: no hubo forward, no hay token de rate-limit
+    // gastado en el facilitador, no se escribió una sola fila. Reintentar es inocuo.
+    let registered: string[];
+    try {
+      registered = await ledger.listPreparedDepositAddresses({ remittanceId, senderAddress: owner });
+    } catch (e) {
+      // (1) NO SE PUDO LEER. La DB no contestó: no sabemos si coincide ni si está registrada. 503
+      // reintentable con enum propio, NUNCA colapsado con el rechazo: tratar esto como "no coincide"
+      // convertiría un hipo de infra en una acusación, que es el error que este repo ya cometió antes.
+      logLedgerWriteFailure("listPreparedDepositAddresses", e);
+      return NextResponse.json({ error: "solana_settle_ledger_unavailable" }, { status: 503 });
+    }
+    if (registered.length === 0) {
+      // (2) LA CONSULTA CORRIÓ Y NO HAY NINGUNA REGISTRADA para esta remesa y este sender. Tampoco es
+      // "no coincide": no hay con qué comparar. Se corta igual (sin lado B el control no existe) pero
+      // con su propio enum, porque el diagnóstico es distinto: el prepare no dejó fila (su escritura
+      // es best-effort y pudo fallar), o la remesa/sender no son los que se prepararon.
+      return NextResponse.json({ error: "solana_settle_beneficiary_unregistered" }, { status: 409 });
+    }
+    if (!registered.includes(inTx.beneficiary)) {
+      // (3) COINCIDENCIA NEGATIVA: la tx paga a una dirección que este servidor NO emitió para esta
+      // remesa. Es el ataque que esta capa existe para ver. Se corta ANTES del forward: la tx no se
+      // broadcastea, así que la plata no sale. Comparación base58 case-sensitive contra el valor
+      // canonicalizado que guardó el ledger (minusculizar reabriría el aliasing).
+      console.error("[settle][ALERT] solana_settle_beneficiary_mismatch", { remittanceId });
+      return NextResponse.json({ error: "solana_settle_beneficiary_mismatch" }, { status: 409 });
+    }
+  }
 
   // S4 — FORWARD. El Bearer se añade ACÁ (CD-6). try/catch: timeout/DNS/parse ⇒ 502 opaco, NUNCA 500
   // crudo, NUNCA ecoa BASE/KEY ni el motivo del facilitador.
@@ -110,7 +184,8 @@ export async function POST(req: Request): Promise<Response> {
   // Flag-gated: getSettlementLedger() es null con el flag OFF/envs ausentes ⇒ SKIP TOTAL ⇒ respuesta
   // byte-idéntica. En su PROPIO try/catch: la DB NUNCA rompe el money-path (CD-17). Va DESPUÉS de
   // validar la signature: sólo se persiste evidencia que ya pasó el shape-check (CD-13).
-  const ledger = getSettlementLedger();
+  // Reusa el `ledger` resuelto en S3.5 (una sola resolución por request: si dos llamadas devolvieran
+  // cosas distintas, el chequeo del destino y el persist estarían hablando de ledgers distintos).
   if (ledger) {
     try {
       await ledger.recordSolanaPrincipalIn({ remittanceId, senderAddress: sender, signature });

@@ -630,6 +630,21 @@ export class FakeSettlementLedger implements SettlementLedger {
       .map((r) => ({ remittanceId: r.remittanceId, status: r.status, createdAt: r.createdAt }));
   }
 
+  /** MISMO criterio que SupabaseSettlementLedger.listPreparedDepositAddresses: owner-scoped por
+   *  sender_address, SIN filtro de status (un settle reintentado ve su fila ya en 'principal_in').
+   *  El caso "no se pudo leer" no se emula acá: se prueba con un spy que rechaza, que es lo que hace
+   *  la DB real, y así el test no puede confundirlo con la lista vacía. */
+  async listPreparedDepositAddresses(input: {
+    remittanceId: string;
+    senderAddress: string;
+  }): Promise<string[]> {
+    const owner = canonicalizeAddress(input.senderAddress);
+    return [...this.store.values()]
+      .filter((r) => r.remittanceId === input.remittanceId && r.senderAddress === owner)
+      .map((r) => r.receiverAddress)
+      .filter((a) => typeof a === "string" && a.length > 0);
+  }
+
   async markOutcome(input: {
     id: string;
     status: SettlementLedgerStatus;

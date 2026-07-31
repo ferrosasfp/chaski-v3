@@ -3,7 +3,8 @@
 // contrato del forward al facilitador (el `Authorization: Bearer` se inyecta SERVER-SIDE y el secreto
 // NUNCA se ecoa al cliente). Espeja el patrón del test EVM app/api/settle/principal/route.test.ts:
 // fetch stubeado, cero HTTP real, cero red, cero cadena.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Idl } from "@coral-xyz/anchor";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 // WKH-213/R3: el route ahora persiste la signature en el ledger (best-effort). getLedgerMock devuelve
 // null por default ⇒ TODOS los tests previos quedan byte-idénticos (flag OFF = skip total).
 const { getLedgerMock } = vi.hoisted(() => ({ getLedgerMock: vi.fn(() => null as unknown) }));
@@ -15,9 +16,47 @@ import { POST } from "./route";
 
 const SENDER = FAKE_SOLANA_BENEFICIARY; // base58 devnet (44 chars)
 const REFERENCE = FAKE_SOLANA_REFERENCE; // base58 (43 chars)
-const PARTIAL_TX = "AQIDBAUGBwg="; // base64 estándar (partialSignedTx serializada)
 const API_KEY = "sol-secret-key-123";
 const BASE = "https://facilitator.test";
+
+// ── Txs REALES (S3.5) ─────────────────────────────────────────────────────────────────────────────
+// El settle ahora LEE el destino de los bytes de la tx, así que un placeholder tipo "AQIDBAUGBwg="
+// dejó de ser un input válido: no es una tx y no afirma ningún beneficiary. Se arman con el MISMO
+// coder del MISMO IDL pinneado que usa la wallet de producción. Que el escritor real y el lector real
+// coincidan está probado aparte, sobre la salida de authorizePrincipal, en
+// src/infrastructure/settlement/solana-deposit-beneficiary.test.ts.
+/** Tx `deposit` legacy, partial-firmada, hacia `beneficiary`. */
+async function depositTx(beneficiary: string): Promise<string> {
+  const { Keypair, PublicKey, Transaction, TransactionInstruction } = await import(
+    "@solana/web3.js"
+  );
+  const anchor = await import("@coral-xyz/anchor");
+  const { escrowIdl } = await import("../../../../src/infrastructure/solana/escrow-idl");
+  const coder = new anchor.BorshInstructionCoder(escrowIdl as unknown as Idl);
+  const data = coder.encode("deposit", {
+    remittanceId: Array.from(new Uint8Array(16)),
+    beneficiary: new PublicKey(beneficiary),
+    authority: Keypair.generate().publicKey,
+    amount: new anchor.BN("400000000"),
+    deadline: new anchor.BN("4070908800"),
+  });
+  const ix = new TransactionInstruction({
+    programId: new PublicKey((escrowIdl as { address: string }).address),
+    keys: [{ pubkey: new PublicKey(SENDER), isSigner: true, isWritable: true }],
+    data,
+  });
+  const tx = new Transaction().add(ix);
+  tx.feePayer = Keypair.generate().publicKey;
+  tx.recentBlockhash = Keypair.generate().publicKey.toBase58();
+  return tx.serialize({ requireAllSignatures: false, verifySignatures: false }).toString("base64");
+}
+
+/** Depósito hacia la deposit-address que el servidor registró al preparar (el camino feliz). */
+let PARTIAL_TX = "";
+/** Depósito hacia una dirección que este servidor NUNCA emitió (la respuesta de prepare adulterada). */
+let TX_A_OTRO = "";
+/** La dirección del atacante, para poder afirmar que NO es la registrada. */
+let OTRO_DESTINO = "";
 
 function body(over: Record<string, unknown> = {}) {
   return {
@@ -59,6 +98,13 @@ function facilitatorResponds(status: number, payload: unknown = {}): void {
 }
 
 describe("POST /api/settle/solana-sponsor (HU-SOL-13)", () => {
+  beforeAll(async () => {
+    const { Keypair } = await import("@solana/web3.js");
+    OTRO_DESTINO = Keypair.generate().publicKey.toBase58();
+    PARTIAL_TX = await depositTx(FAKE_SOLANA_REFERENCE); // = el depositAddress que registra el prepare
+    TX_A_OTRO = await depositTx(OTRO_DESTINO);
+  });
+
   beforeEach(() => {
     vi.stubEnv("NEXT_PUBLIC_SOLANA_SETTLE_ENABLED", "true");
     vi.stubEnv("FACILITATOR_BASE_URL", BASE);
@@ -240,6 +286,100 @@ describe("POST /api/settle/solana-sponsor (HU-SOL-13)", () => {
     const res = await POST(req(body()));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ signature: FAKE_SOLANA_SIGNATURE });
+  });
+
+  // ── S3.5 · el destino de la tx contra lo que el SERVIDOR registró al preparar ────────────────────
+  //
+  // Esta es la única defensa del destino en la que no participan ni el navegador ni el canal: los dos
+  // lados salen del server (los bytes firmados y la fila del ledger). La capa de atestación NO cubre
+  // al intermediario que reescribe las dos rutas, y eso está clavado con su resultado real en
+  // src/infrastructure/settlement/http-solana-prepare-gateway.test.ts ("LÍMITE CONOCIDO").
+  //
+  // EL asesino del mutante: si alguien borra el `!registered.includes(...)`, o lo invierte, o lo
+  // alimenta con el beneficiary del body en vez de con el de la tx, este test se pone rojo.
+  it("S3.5: la tx paga a una dirección que el servidor NO registró ⇒ 409 mismatch y NINGÚN forward", async () => {
+    const ledger = await ledgerWithPreparedSolana(); // registró FAKE_SOLANA_REFERENCE
+    getLedgerMock.mockReturnValue(ledger);
+    const alerta = vi.spyOn(console, "error").mockImplementation(() => {});
+    facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
+
+    const res = await POST(req(body({ partialSignedTx: TX_A_OTRO })));
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "solana_settle_beneficiary_mismatch" });
+    expect(fetchMock).not.toHaveBeenCalled(); // la tx NO se broadcastea: la plata no sale
+    // El rechazo no consume nada: la fila sigue como estaba y el reintento es posible.
+    expect([...ledger.store.values()][0]!.status).toBe("prepared");
+    expect([...ledger.store.values()][0]!.txHash).toBe("prepared:rem-sol-1:q-sol");
+    expect(alerta).toHaveBeenCalled(); // el mismatch grita [ALERT]
+    expect(OTRO_DESTINO).not.toBe(FAKE_SOLANA_REFERENCE); // el caso no es vacuo
+  });
+
+  it("S3.5: la MISMA tx buena, con la dirección registrada, pasa (el guard no bloquea el camino feliz)", async () => {
+    const ledger = await ledgerWithPreparedSolana();
+    getLedgerMock.mockReturnValue(ledger);
+    facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
+
+    const res = await POST(req(body()));
+
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("S3.5: la dirección está registrada pero para OTRO sender ⇒ 409 unregistered (owner-scoped)", async () => {
+    const ledger = await ledgerWithPreparedSolana();
+    getLedgerMock.mockReturnValue(ledger);
+    facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
+    const { Keypair } = await import("@solana/web3.js");
+    const ajeno = Keypair.generate().publicKey.toBase58();
+
+    const res = await POST(req(body({ sender: ajeno })));
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "solana_settle_beneficiary_unregistered" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("S3.5: sin fila registrada para esa remesa ⇒ 409 unregistered, y NO se confunde con mismatch", async () => {
+    getLedgerMock.mockReturnValue(new FakeSettlementLedger("2026-07-28T00:00:00.000Z")); // ledger vacío
+    facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
+
+    const res = await POST(req(body()));
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "solana_settle_beneficiary_unregistered" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // "No pude preguntar" NO es "no coincide": tercer desenlace, enum propio, 503 reintentable.
+  it("S3.5: la lectura del ledger TIRA ⇒ 503 ledger_unavailable (NUNCA mismatch), NINGÚN forward", async () => {
+    const ledger = await ledgerWithPreparedSolana();
+    vi.spyOn(ledger, "listPreparedDepositAddresses").mockRejectedValue(new Error("db down"));
+    getLedgerMock.mockReturnValue(ledger);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
+
+    const res = await POST(req(body()));
+
+    expect(res.status).toBe(503);
+    const json = await res.json();
+    expect(json).toEqual({ error: "solana_settle_ledger_unavailable" });
+    expect(JSON.stringify(json)).not.toContain("mismatch"); // no acusa de lo que no pudo comprobar
+    expect(fetchMock).not.toHaveBeenCalled(); // nada consumido ⇒ el reintento sirve
+  });
+
+  it("S3.5: una tx de la que no se puede leer ningún destino ⇒ 400 deposit_unreadable, NINGÚN forward", async () => {
+    const ledger = await ledgerWithPreparedSolana();
+    getLedgerMock.mockReturnValue(ledger);
+    facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
+
+    // base64 válido para la regex de S3, pero no es una tx: antes de S3.5 esto llegaba al facilitador.
+    const res = await POST(req(body({ partialSignedTx: "AQIDBAUGBwg=" })));
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "solana_settle_deposit_unreadable" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("flag OFF (ledger null) ⇒ respuesta byte-idéntica, sin tocar la DB", async () => {

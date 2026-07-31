@@ -406,6 +406,12 @@ async function main(): Promise<void> {
   ok(4, "ix deposit construida + partial-firmada por el sender (escrow escrowIdl)");
 
   // ── Checkpoint 5: POST /api/settle/solana-sponsor (broadcast gasless vía facilitator) ───────────
+  //    DEPENDE del checkpoint 3, y ahora de verdad: con el ledger encendido, el settle compara el
+  //    beneficiary que va dentro de esta tx contra la deposit-address que el servidor registró al
+  //    preparar ESTE remittanceId para ESTE sender (S3.5 de la route). Como el beneficiary sale del
+  //    200 del checkpoint 3 y el sender es el mismo, coincide. Si alguien corre el 5 con un
+  //    remittanceId que no pasó por el 3, la respuesta es 409 `solana_settle_beneficiary_unregistered`
+  //    y NO es un fallo del facilitador.
   let sponsorRes: Response;
   try {
     sponsorRes = await fetch(`${CHASKI_URL}/api/settle/solana-sponsor`, {

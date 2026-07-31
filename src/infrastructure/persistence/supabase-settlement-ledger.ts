@@ -456,6 +456,32 @@ export class SupabaseSettlementLedger implements SettlementLedger {
     }));
   }
 
+  async listPreparedDepositAddresses(input: {
+    remittanceId: string;
+    senderAddress: string;
+  }): Promise<string[]> {
+    // Las deposit-address que ESTE servidor registró al preparar la remesa. El settle Solana compara
+    // contra esto el beneficiary que viaja dentro de la tx firmada (ver el port). OWNER-SCOPED: el
+    // `.eq("sender_address", ...)` es el guard real (el service key bypassea RLS).
+    // NO filtra por status: un settle reintentado encuentra su fila ya en 'principal_in' y su
+    // receiver_address sigue siendo la misma dirección; filtrar por 'prepared' haría que el retry
+    // pareciera "no registrada".
+    // TIRA ante cualquier error de la consulta: devolver [] sería indistinguible de "no hay ninguna
+    // registrada", y esos dos desenlaces terminan en respuestas distintas del settle a propósito.
+    const { data, error } = await this.client
+      .from(TABLE)
+      .select("receiver_address")
+      .eq("remittance_id", input.remittanceId)
+      .eq("sender_address", canonicalizeAddress(input.senderAddress)); // ← EL GUARD
+    if (error) throw new Error(`ledger_list_prepared_addresses_failed:${error.code ?? "unknown"}`);
+    const rows = (data ?? []) as unknown as Array<{ receiver_address: unknown }>;
+    // Una fila con receiver_address no-string es una fila que NO puede afirmar ninguna dirección: se
+    // descarta en vez de convertirse en un "" que después compararía como una dirección vacía.
+    return rows
+      .map((r) => r.receiver_address)
+      .filter((a): a is string => typeof a === "string" && a.length > 0);
+  }
+
   async markOutcome(input: {
     id: string;
     status: SettlementLedgerStatus;

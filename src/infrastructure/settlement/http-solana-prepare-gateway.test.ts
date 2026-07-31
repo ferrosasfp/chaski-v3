@@ -227,9 +227,13 @@ describe("HttpSolanaPayoutPrepareGateway — el body que arma el cliente ES el q
   //
   // ⚠️ Lo que prueban es que una respuesta ALTERADA EN EL CAMINO no llega a la wallet. NO prueban
   // que la dirección sea legítima: la firma la pone nuestro servidor sobre lo que dijo el agente.
+  // Y NO prueban nada sobre el intermediario que reescribe las DOS rutas: ese caso está clavado
+  // abajo, con su resultado real, en "LÍMITE CONOCIDO".
 
-  /** Deja pasar todo a las routes reales, pero reescribe el JSON del 200 de /api/payout/prepare:
-   *  exactamente lo que puede hacer un intermediario entre nuestro servidor y el navegador. */
+  /** Deja pasar todo a las routes reales, pero reescribe el JSON del 200 de /api/payout/prepare y
+   *  SÓLO ese: modela un adversario ACOTADO a esa respuesta (un proxy que reescribe por path, un
+   *  bug de caché, una route nuestra que devuelve un campo cambiado). El adversario que además
+   *  reescribe /api/payout/attestation NO está modelado acá y esta capa no lo detiene. */
   function tamperingFetch(patch: (body: Record<string, unknown>) => Record<string, unknown>) {
     const inner = routeFetch(agentOk);
     return vi.fn(async (url: string, init?: RequestInit) => {
@@ -335,6 +339,55 @@ describe("HttpSolanaPayoutPrepareGateway — el body que arma el cliente ES el q
     const out = await gw.prepare(prepareInput());
 
     expect(out).toEqual({ ok: false, reason: "prepare_attestation_unverified" });
+  });
+
+  // ── LÍMITE CONOCIDO de esta capa, clavado con su resultado real ───────────────────────────────
+  //
+  // Este test PASA con el código actual y tiene que pasar: no documenta un éxito, documenta hasta
+  // dónde llega la atestación. Si algún día alguien hace que este test se ponga rojo, la capa
+  // mejoró de verdad y hay que reescribir el bloque de alcance de las dos puntas.
+  //
+  // El adversario es el MISMO de los tests de arriba, sin ninguna capacidad nueva: está en el
+  // camino entre nuestro servidor y el navegador. Sólo que ahora reescribe las DOS respuestas, que
+  // es lo que un intermediario hace por definición (mismo origen, misma sesión TLS, mismo `fetch`).
+  // `verifyAttestation` no verifica firmas: le pregunta al server y le cree. Poniendo su dirección
+  // en las dos respuestas, la igualdad que compara el gateway compara dos valores del atacante.
+  it("LÍMITE CONOCIDO: el intermediario que reescribe LAS DOS rutas pasa, y el beneficiary del atacante llega a la wallet", async () => {
+    const ATACANTE = bs58.encode(nacl.sign.keyPair().publicKey);
+    const inner = routeFetch(agentOk);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const target = String(url);
+        const res = await inner(url, init);
+        if (res.status !== 200) return res;
+        // 1) el 200 de prepare: le pone SU dirección (la atestación queda intacta, firmada sobre la real)
+        if (target === "/api/payout/prepare") {
+          const body = (await res.json()) as Record<string, unknown>;
+          return new Response(JSON.stringify({ ...body, beneficiary: ATACANTE }), { status: 200 });
+        }
+        // 2) el 200 del verificador: le hace decir que el firmado era el suyo. No forjó ningún HMAC;
+        //    reescribió el VEREDICTO, que es lo único que el cliente llega a ver.
+        if (target === "/api/payout/attestation") {
+          const body = (await res.json()) as Record<string, unknown>;
+          return new Response(JSON.stringify({ ...body, beneficiary: ATACANTE }), { status: 200 });
+        }
+        return res;
+      }),
+    );
+
+    const out = await new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet)).prepare(
+      prepareInput(),
+    );
+
+    // Pasa. Y devuelve la dirección del atacante, contra la que la wallet firmaría el depósito.
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error("unreachable");
+    expect(out.result.beneficiary).toBe(ATACANTE);
+    expect(out.result.beneficiary).not.toBe(DEPOSIT);
+    // Lo que corta ESTE ataque corre server-side y no está en este archivo: el settle compara el
+    // beneficiary de los bytes de la tx firmada contra la deposit-address que el servidor persistió
+    // al preparar (app/api/settle/solana-sponsor/route.ts, tests en su route.test.ts).
   });
 
   // Si NO se puede verificar, no se usa. "No pude preguntar" no es "está bien".

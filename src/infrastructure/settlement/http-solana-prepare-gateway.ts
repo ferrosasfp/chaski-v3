@@ -14,13 +14,20 @@
 // El `beneficiary` NO se usa hasta que su atestación se verifica (ver `verifyAttestation` más abajo).
 // Antes de eso el campo `attestation` llegaba y se descartaba: la firma existía y no la miraba nadie.
 //
-// ⚠️ ALCANCE, en dos mitades, y las dos hacen falta:
-//   · SÍ cubre que el `beneficiary` no se haya ALTERADO entre nuestro servidor y este código.
-//   · NO cubre que el `beneficiary` sea LEGÍTIMO. Nuestro servidor firma la dirección que le dio el
-//     AGENTE de payout. Si el agente miente, la atestación certifica la mentira sin pestañear.
-//     Contra eso no defiende esta capa; defiende de QUÉ agente se trata, que es otra cosa y vive
-//     en el piso de reputación / el catálogo. Quien lea sólo la primera mitad va a creer que
-//     estamos cubiertos contra el agente y va a dejar de buscar acá.
+// ⚠️ ALCANCE (el largo está en app/api/payout/attestation/route.ts; acá va lo mínimo para no
+// leer de más en esta capa):
+//   · SÍ detecta la adulteración AISLADA del 200 de prepare, el REPLAY de una atestación de otra
+//     remesa (binding remittanceId+quoteId) y bugs nuestros de orden o de campo.
+//   · NO detecta al intermediario que reescribe LAS DOS rutas. `verifyAttestation` no verifica
+//     ninguna firma: le pide el veredicto al server por el MISMO canal y le cree. Quien reescribe
+//     una respuesta reescribe la otra, y la comparación de abajo termina comparando dos valores
+//     del atacante.
+//   · NO detecta que el `beneficiary` sea LEGÍTIMO: nuestro servidor firma lo que dijo el AGENTE
+//     de payout. Si el agente miente, la atestación certifica la mentira sin pestañear.
+//   La defensa que sí alcanza al intermediario corre SERVER-SIDE en el settle: compara el
+//   beneficiary de los bytes de la tx firmada contra la deposit-address que el servidor persistió
+//   al preparar (app/api/settle/solana-sponsor/route.ts). Esta capa corta antes de que la persona
+//   firme, que es su valor real, pero no es la que decide.
 //
 // [NC-1]/[NC-2] (founder-gated, FUERA de F3): la resolución REAL del beneficiary (deposit-address Solana
 // de TransFi por orden) y la respuesta Solana-shaped del server (`{beneficiary, authority, ...}` base58)
@@ -87,9 +94,11 @@ function isValidSolanaPrepareShape(v: unknown): v is {
  * acá sin verificar la firma no serviría de nada: el que puede alterar el beneficiary también
  * puede re-armar un payload que diga lo que quiera.
  *
- * ⚠️ ALCANCE (el largo está en la route). Esto detecta que el beneficiary se haya ALTERADO entre
- * nuestro servidor y este código. NO dice nada sobre si el agente de payout dio una dirección
- * legítima: nuestro servidor firmó lo que el agente le dijo.
+ * ⚠️ ACÁ NO SE VERIFICA NINGUNA FIRMA. Esta función hace un POST y le cree al 200: `res.ok` más dos
+ * `typeof === "string"`. El veredicto sobre el HMAC lo emite el server. Por eso NO cubre a un
+ * intermediario capaz de reescribir las dos respuestas (le basta poner su dirección en las dos);
+ * sí cubre al que sólo toca la de prepare, al replay de otra remesa y a los bugs propios. El
+ * detalle completo, con el repro, está en app/api/payout/attestation/route.ts.
  */
 async function verifyAttestation(
   attestation: string,

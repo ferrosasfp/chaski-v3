@@ -2,27 +2,46 @@
 // beneficiary+authority que están DENTRO del payload firmado.
 //
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// QUÉ PROTEGE ESTA ATESTACIÓN, Y QUÉ NO. Leer las dos mitades: la segunda es la que evita que
-// alguien lea la primera y deje de buscar.
+// ALCANCE. Leer entero antes de confiar en esto para algo: la lista de lo que NO cubre es más
+// larga que la de lo que sí, y una versión anterior de este bloque nombraba como cubierto
+// justamente al adversario que lo atraviesa.
 //
-// SÍ PROTEGE: que el `beneficiary` no se ALTERE entre nuestro servidor y el navegador. La firma la
-//   pone `issueSolanaDepositAttestation` con DEPOSIT_ATTESTATION_SECRET, que nunca sale del server,
-//   así que una respuesta de /api/payout/prepare adulterada en el camino (proxy, red hostil, un
-//   intermediario que reescribe el JSON) no puede traer una atestación que valide para OTRA
-//   dirección. También ata la atestación a ESTA remesa (remittanceId + quoteId): una atestación
-//   legítima de otra remesa (por ejemplo, una que el atacante generó para su propia dirección)
-//   no se puede pegar acá.
+// SÍ DETECTA, y estas tres son reales:
+//   1. La adulteración AISLADA del 200 de /api/payout/prepare. Un intermediario que reescribe el
+//      `beneficiary` y deja el resto igual queda expuesto: la atestación sigue firmada sobre la
+//      dirección vieja y el consumidor compara los dos valores. No puede forjar una atestación
+//      nueva porque DEPOSIT_ATTESTATION_SECRET nunca sale del server.
+//   2. El REPLAY de una atestación de otra remesa. Es auténtica (la firmamos nosotros) pero es de
+//      otro par remittanceId+quoteId, y el binding de A4 la rechaza. Sin eso, el atacante prepara
+//      una remesa propia, se guarda su atestación legítima y la pega en la respuesta de la víctima.
+//   3. Bugs NUESTROS: un `beneficiary` que no coincide con el que está dentro del payload firmado,
+//      una atestación vencida, otra `cluster`, o una inversión de campos aguas arriba.
 //
-// NO PROTEGE: que el `beneficiary` sea LEGÍTIMO. Nuestro servidor firma la dirección que le dio el
+// NO DETECTA al intermediario que reescribe LAS DOS RUTAS, y esto es lo que hay que entender antes
+//   de darle peso a esta capa. El consumidor (`verifyAttestation`, http-solana-prepare-gateway.ts)
+//   NO verifica ninguna firma: hace un fetch a esta ruta y le CREE la respuesta. El HMAC lo
+//   verificamos acá, en el server, porque el secreto vive acá; el navegador no puede recalcularlo.
+//   Entonces el que puede reescribir el 200 de prepare puede reescribir también el 200 de esta
+//   ruta: es el MISMO origen, la MISMA sesión TLS y el MISMO `fetch`. Pone su dirección en las dos
+//   respuestas y la comparación del cliente da IGUAL, porque compara dos valores suyos. Es un
+//   segundo pedido, no un segundo canal de confianza.
+//
+// NO DETECTA que el `beneficiary` sea LEGÍTIMO. Nuestro servidor firma la dirección que le dio el
 //   AGENTE de payout, sin poder comprobarla contra nada. Si el agente devuelve la dirección de
 //   otro, la atestación la certifica igual y esta ruta la valida igual. La firma dice
 //   "este valor salió de nuestro servidor", NO "este valor es correcto". Contra el agente esta
 //   capa no defiende NADA; lo que acota ese riesgo es de qué agente se trata (piso de reputación,
 //   carril de estreno, catálogo) y eso vive en otro lado.
 //
-// TAMPOCO PROTEGE contra un adversario que ya corre DENTRO del navegador (una extensión, un XSS):
-//   quien controla `fetch` puede falsificar la respuesta de ESTA ruta igual que la de prepare. La
-//   verificación es un segundo canal, no un enclave.
+// NO DETECTA a un adversario que ya corre DENTRO del navegador (una extensión, un XSS): quien
+//   controla `fetch` falsifica la respuesta de ESTA ruta igual que la de prepare.
+//
+// DÓNDE VIVE LA DEFENSA QUE SÍ ALCANZA A ESOS TRES: server-side, en el settle
+//   (app/api/settle/solana-sponsor/route.ts). Ahí se lee el `beneficiary` de los BYTES de la tx que
+//   la wallet firmó y se compara contra la deposit-address que ESTE servidor persistió al preparar
+//   (remittance_settlements.receiver_address). El navegador no participa de esa comparación y el
+//   canal tampoco: los dos lados salen del server. Esta capa de acá sigue valiendo porque corta
+//   ANTES de que la persona firme, pero no es la que decide.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 //
 // Errores: enums opacos, cero PII, cero eco del beneficiary recibido. Fail-closed en cada paso.

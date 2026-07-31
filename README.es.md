@@ -149,15 +149,17 @@ el `--legacy-peer-deps`.
 
 ## Tests
 
-**692 casos en 57 archivos**, todos en verde. Se reparten en:
+**697 casos en 56 archivos**, todos en verde. Se reparten en:
 
 - Dominio y aplicación con dobles de prueba, sin red ni wallet ni navegador. Ahí viven las invariantes
   del camino del dinero: no se confirma sin identidad verificada y cotización vigente, la cotización
   vencida falla cerrado, la máquina de estados no admite saltos.
 - Rutas de API, adaptadores de infraestructura y componentes con Testing Library.
-- Contract tests contra copias pinneadas del output de cada servicio externo (`contracts/`). Si un
-  proveedor cambia la forma de su respuesta y alguien re vendorea la copia, el test del consumidor se
-  pone rojo en vez de romperse en producción.
+- Contract tests contra copias pinneadas del output de dos servicios externos, la cotización y el KYC
+  (`contracts/`). Si un proveedor cambia la forma de su respuesta y alguien re vendorea la copia, el
+  test del consumidor se pone rojo en vez de romperse en producción. El tercero, el del payout, se
+  retiró: su validador consumidor estaba dentro de un método que apuntaba a una ruta borrada, así que
+  su verde no probaba nada. El motivo y el follow up están escritos en `contracts/CONTRACT-VERSIONS.md`.
 - El IDL del escrow pinneado por hash canónico (`contracts/idl/escrow-idl.hash.test.ts`), descrito
   arriba.
 - Un guard contra el regreso del camino EVM que este repo supo tener
@@ -175,7 +177,7 @@ el `--legacy-peer-deps`.
   `@ethersproject/*` o `thirdweb`. Cubrir un nombre nuevo es agregarlo a la lista, con su motivo.
 
 ```bash
-npm test          # 692 tests en 57 archivos
+npm test          # 697 tests en 56 archivos
 npm run qa        # lint + los dos typechecks + tests
 ```
 

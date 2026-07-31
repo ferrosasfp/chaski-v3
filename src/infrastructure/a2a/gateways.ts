@@ -1,9 +1,13 @@
-// Infrastructure — adapters A2A (WKH-186). Llaman a los agentes remit-* (remit-corridor-fx /
-// remit-cashout-payout) a través de las API routes server-only de esta app (/api/a2a/*), espejando
-// DiditKycGateway→/api/kyc/* y HttpPayoutAuthorityGateway→/api/payout/validate. El gateway NUNCA
-// fetchea el agente directo (el REMIT_AGENTS_BASE_URL vive SOLO en el server, CD-9). Se cablean con
-// el flag NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER="a2a"; el default sigue siendo Fallback (mock).
-// CD-5: errores estables y PII-free (nunca interpolan beneficiary). CD-10: idempotencyKey intacto.
+// Infrastructure: adapters A2A (WKH-186). Llaman a los agentes remit-* a través de las API routes
+// server-only de esta app (/api/a2a/*), espejando DiditKycGateway→/api/kyc/* y
+// HttpPayoutAuthorityGateway→/api/payout/validate. El gateway NUNCA fetchea el agente directo (el
+// REMIT_AGENTS_BASE_URL vive SOLO en el server, CD-9). Se cablean con el flag
+// NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER="a2a"; el default sigue siendo Fallback (mock).
+// CD-5: errores estables y PII-free (nunca interpolan beneficiary).
+//
+// Hoy la ÚNICA ruta viva de este par es /api/a2a/quote. La del payout (/api/a2a/payout/submit) la
+// borró WKH-320; ver el comentario de A2aPayoutGateway.submit, que es lo único que quedó de ese lado.
+// El payout del camino Solana lo arma el server en /api/payout/prepare, no este adapter.
 import { Money } from "../../domain/money";
 import { isParseableIso } from "../../domain/remittance";
 import type { Quote } from "../../domain/remittance";
@@ -25,20 +29,6 @@ interface RawQuoteResult {
   expiresAt: string;
   provenance: string;
 }
-type RawPayoutStatus = "submitted" | "settled" | "failed" | "blocked";
-interface RawPayoutResult {
-  status: RawPayoutStatus;
-  payoutId: string | null;
-  deliveredLocal: number | null;
-  txRef: string | null;
-  reason: string | null;
-  provenance: string;
-  // WKH-212 (cross-repo, ya expuesto por el agente): depositAddress no-custodial. null en mock/blocked,
-  // valor real cuando la orden se ejecutó con TRANSFI_ADAPTER_READY. El submit NO lo usa (lo lee el
-  // prepare del result crudo); acá sólo se valida en el shape (CD-10) para no romper el contrato del wire.
-  depositAddress: string | null;
-}
-
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
 }
@@ -58,24 +48,6 @@ function isValidQuoteShape(v: unknown): v is RawQuoteResult {
   );
 }
 
-function isValidPayoutShape(v: unknown): v is RawPayoutResult {
-  if (!isRecord(v)) return false;
-  const statusOk =
-    v.status === "submitted" || v.status === "settled" || v.status === "failed" || v.status === "blocked";
-  if (!statusOk) return false;
-  if (!(typeof v.payoutId === "string" || v.payoutId === null)) return false;
-  if (!(typeof v.deliveredLocal === "number" || v.deliveredLocal === null)) return false;
-  if (!(typeof v.txRef === "string" || v.txRef === null)) return false;
-  if (!(typeof v.reason === "string" || v.reason === null)) return false;
-  // WKH-212/CD-10: el agente ahora expone depositAddress (string | null) en TODO result. Validar el
-  // tipo evita que un shape stale pase silenciosamente (el bug recurrente que CD-10 previene).
-  if (!(typeof v.depositAddress === "string" || v.depositAddress === null)) return false;
-  // payoutId null SOLO es válido cuando el payout no se ejecutó (failed/blocked). Si settled/submitted
-  // sin payoutId → shape inválido (AC-5): no podríamos trackear el payout.
-  if (v.payoutId === null && v.status !== "failed" && v.status !== "blocked") return false;
-  return true;
-}
-
 function mapResultToQuote(result: RawQuoteResult, req: QuoteRequest): Quote {
   return {
     quoteId: result.quoteId,
@@ -86,17 +58,6 @@ function mapResultToQuote(result: RawQuoteResult, req: QuoteRequest): Quote {
     etaMinutes: result.etaMinutes,
     expiresAt: result.expiresAt,
     provenance: result.provenance,
-  };
-}
-
-function mapResultToPayoutRecord(result: RawPayoutResult): PayoutRecord {
-  return {
-    payoutId: result.payoutId ?? "", // null solo en failed/blocked (validado en el guard)
-    status: result.status === "blocked" ? "failed" : result.status, // DT-13: blocked→failed
-    deliveredPen: result.deliveredLocal != null ? Money.of(result.deliveredLocal, "PEN") : null,
-    txRef: result.txRef,
-    failureReason: result.reason,
-    provenance: result.provenance, // WKH-200: proveniencia real del agente (transfi / local-fallback / n/a)
   };
 }
 
@@ -119,52 +80,38 @@ export class A2aQuoteGateway implements QuoteGateway {
 }
 
 export class A2aPayoutGateway implements PayoutGateway {
-  // DT-12/AC-14: remit-cashout-payout resuelve TODO en el submit (no hay /status async). status()
-  // devuelve el PayoutRecord cacheado del último submit(); id desconocido → failed opaco.
-  private last = new Map<string, PayoutRecord>();
-
-  async submit(req: PayoutSubmit): Promise<PayoutRecord> {
-    const res = await fetch("/api/a2a/payout/submit", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        quoteId: req.quoteId,
-        amountUsd: req.amountUsd,
-        kycVerificationId: req.kycVerificationId,
-        address: req.address, // WKH-202: la route lo re-valida server-side (ownership vs vendor_data de Didit)
-        // DT-5: sintetizado (la autoridad WKH-180 ya se validó en ConfirmAndSend). WKH-202: el agente NO debe
-        // confiar en este booleano del caller; se re-deriva server-side en WKH-203 (repo
-        // wasiai-remittance-agents). NO removerlo acá: es contrato cross-repo (CD-14).
-        kycPayoutAllowed: true,
-        beneficiary: req.beneficiary, // viaja al server; NUNCA se loguea (CD-5)
-        idempotencyKey: req.idempotencyKey, // INTACTO (CD-10)
-        // WKH-168/AC-10: evidencia HMAC de que el principal entró de verdad (emitida server-side tras
-        // verificar el receipt on-chain). La route la re-verifica y la quema (single-use) ANTES de
-        // forwardear. En modo demo es undefined → JSON.stringify la omite → body byte-idéntico (AC-5).
-        settlementAttestation: req.settlementAttestation,
-        // WKH-206: prueba de posesión (challenge + firma). En demo son undefined → JSON.stringify los
-        // omite → body byte-idéntico (AC-5). El guard 7 server-side los re-verifica.
-        popChallenge: req.popChallenge,
-        popSignature: req.popSignature,
-      }),
-    });
-    if (!res.ok) throw new Error("a2a_payout_unavailable"); // AC-5, PII-free
-    const { result } = (await res.json()) as { result: unknown };
-    if (!isValidPayoutShape(result)) throw new Error("a2a_payout_bad_shape");
-    const rec = mapResultToPayoutRecord(result);
-    this.last.set(rec.payoutId, rec);
-    return rec;
+  /**
+   * ⛔ NO HAY RUTA DEL OTRO LADO. Este método posteaba a `/api/a2a/payout/submit`, borrada por
+   * WKH-320 (la ausencia del directorio está asertada en `src/composition/no-evm-surface.test.ts:124`).
+   *
+   * Por qué tira ACÁ y no después del fetch: el `if (!res.ok) throw new Error("a2a_payout_unavailable")`
+   * que había antes reportaba un 404 permanente y estructural (la ruta NO EXISTE) con el mismo error
+   * que un 502 transitorio del agente. Eso manda a buscar el problema a la red y al deploy del agente,
+   * cuando lo que falta es una ruta que nadie va a levantar. El nombre del error es el diagnóstico.
+   *
+   * Por qué la clase sigue viva: `status()` SÍ se usa en producción (`TrackRemittance` lo llama vía el
+   * puerto `PayoutGateway`, `track-remittance.ts:38`) y el container la cablea (`container.ts:96`). Lo
+   * muerto es este método, no el adapter. Y hoy NADIE lo invoca: el único consumidor del puerto es
+   * `TrackRemittance`, que sólo llama a `status()`.
+   *
+   * Si algún día vuelve a hacer falta un submit desde el cliente, hay que construir la ruta primero.
+   * Este throw es lo que impide que se "arregle" apuntándolo a cualquier otro lado.
+   */
+  async submit(_req: PayoutSubmit): Promise<PayoutRecord> {
+    throw new Error("a2a_payout_submit_route_removed"); // PII-free, como el resto de los errores (CD-5)
   }
 
   async status(payoutId: string): Promise<PayoutRecord> {
-    const cached = this.last.get(payoutId);
-    if (cached) return cached;
-    // MNR-B (money-path): cache-miss (recarga → container nuevo → Map vacío) NO es evidencia de que
-    // el payout FALLÓ. Fabricar "failed" acá false-refundearía un payout que pudo ser exitoso (submit
-    // devolvió "submitted", estado no-terminal). Devolvemos un estado NO-TERMINAL ("submitted", flag
-    // payout_status_unknown) → TrackRemittance NO transiciona a payout_failed ni refundea sobre
-    // incertidumbre; la remesa queda RECUPERABLE. Principio: NUNCA refundear/fallar sobre un payout que
-    // no sabemos que falló. El fix real (polling async / persistir el estado del submit) es Fase A (AC-14).
+    // Acá vivía un Map con el último PayoutRecord del `submit`. Sin submit no hay nada que cachear:
+    // sería un caché que no se puede llenar. Lo que queda es lo que ya devolvía en el cache-miss, que
+    // era el caso real en producción (recarga → container nuevo → Map vacío).
+    //
+    // MNR-B (money-path): no saber el estado de un payout NO es evidencia de que FALLÓ. Fabricar
+    // "failed" acá false-refundearía un payout que pudo ser exitoso. Devolvemos un estado NO-TERMINAL
+    // ("submitted", flag payout_status_unknown) ⇒ TrackRemittance NO transiciona a payout_failed ni
+    // refundea sobre incertidumbre; la remesa queda RECUPERABLE. Principio: NUNCA refundear/fallar
+    // sobre un payout que no sabemos que falló. El fix real (polling async / persistir el estado del
+    // submit) es Fase A (AC-14).
     return {
       payoutId,
       status: "submitted",

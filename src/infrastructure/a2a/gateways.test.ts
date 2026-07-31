@@ -71,80 +71,43 @@ describe("A2aQuoteGateway (AC-3)", () => {
   });
 });
 
-describe("A2aPayoutGateway (AC-4/AC-5/AC-14)", () => {
-  it("AC-4: submit → POST /api/a2a/payout/submit; idempotencyKey INTACTO, kycPayoutAllowed:true sintetizado", async () => {
-    const fetchMock = okJson({
-      result: { slug: "remit-cashout-payout", executed: true, status: "submitted", payoutId: "po-1", deliveredLocal: null, txRef: null, reason: null, provenance: "remit-cashout-payout", depositAddress: null },
-    });
+describe("A2aPayoutGateway (AC-14 + la ruta que ya no existe)", () => {
+  it("submit tira a2a_payout_submit_route_removed y NO hace un solo fetch", async () => {
+    // El test que había acá mockeaba fetch y asserteaba que la URL fuera "/api/a2a/payout/submit":
+    // verde permanente sobre una ruta BORRADA por WKH-320 (su ausencia está asertada en
+    // src/composition/no-evm-surface.test.ts:124). Ahora se aserta lo contrario, que es lo cierto:
+    // no hay a dónde postear, así que no se postea.
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({}) }));
     vi.stubGlobal("fetch", fetchMock);
-    const rec = await new A2aPayoutGateway().submit(payoutReq);
-
-    const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(url).toBe("/api/a2a/payout/submit");
-    const sent = JSON.parse((init as RequestInit).body as string);
-    expect(sent.idempotencyKey).toBe("r-1:cfx-1"); // CD-10 intacto
-    expect(sent.kycPayoutAllowed).toBe(true); // DT-5 sintetizado
-    expect(sent.kycVerificationId).toBe("v-1"); // propagado
-    expect(sent.address).toBe("0xSender"); // WKH-202/DT-2: la route lo re-valida server-side
-    expect(sent.quoteId).toBe("cfx-1");
-    expect(rec).toEqual({ payoutId: "po-1", status: "submitted", deliveredPen: null, txRef: null, failureReason: null, provenance: "remit-cashout-payout" });
+    await expect(new A2aPayoutGateway().submit(payoutReq)).rejects.toThrow(
+      "a2a_payout_submit_route_removed",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("AC-4: mapea settled con deliveredLocal→Money PEN + txRef", async () => {
-    vi.stubGlobal("fetch", okJson({
-      result: { status: "settled", payoutId: "po-2", deliveredLocal: 1478.15, txRef: "0xdlv", reason: null, provenance: "transfi", depositAddress: "So11111111111111111111111111111111111111112" },
-    }));
-    const rec = await new A2aPayoutGateway().submit(payoutReq);
-    expect(rec.status).toBe("settled");
-    expect(rec.deliveredPen).toEqual(Money.of(1478.15, "PEN"));
-    expect(rec.txRef).toBe("0xdlv");
-    expect(rec.provenance).toBe("transfi"); // T-AC5c: provenance propagada en el mapeo
+  it("el error NO se confunde con una caída transitoria del agente", () => {
+    // "a2a_payout_unavailable" era el error de un 502 del agente: transitorio, se reintenta, se mira
+    // el deploy. Este es estructural y permanente. Que se llamen distinto es el punto del fix.
+    expect("a2a_payout_submit_route_removed").not.toBe("a2a_payout_unavailable");
   });
 
-  it("DT-13: blocked → failed", async () => {
-    vi.stubGlobal("fetch", okJson({
-      result: { status: "blocked", payoutId: null, deliveredLocal: null, txRef: null, reason: "sanctions_hit", provenance: "p", depositAddress: null },
-    }));
-    const rec = await new A2aPayoutGateway().submit(payoutReq);
-    expect(rec.status).toBe("failed");
-    expect(rec.failureReason).toBe("sanctions_hit");
-  });
-
-  it("AC-5: !ok → throw a2a_payout_unavailable, mensaje NO contiene PII del beneficiario", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 502, json: async () => ({}) })));
+  it("el mensaje sigue siendo PII-free (CD-5)", async () => {
     let msg = "";
     try {
       await new A2aPayoutGateway().submit(payoutReq);
     } catch (e) {
       msg = e instanceof Error ? e.message : String(e);
     }
-    expect(msg).toBe("a2a_payout_unavailable");
+    expect(msg).toBe("a2a_payout_submit_route_removed");
     expect(msg).not.toContain("Mamá");
     expect(msg).not.toContain("999888777");
   });
 
-  it("AC-5: shape inválido (settled sin payoutId) → throw a2a_payout_bad_shape", async () => {
-    vi.stubGlobal("fetch", okJson({
-      result: { status: "settled", payoutId: null, deliveredLocal: 1478.15, txRef: "0x", reason: null, provenance: "p", depositAddress: null },
-    }));
-    await expect(new A2aPayoutGateway().submit(payoutReq)).rejects.toThrow("a2a_payout_bad_shape");
-  });
-
-  it("AC-14: status(payoutId) devuelve el PayoutRecord cacheado del submit()", async () => {
-    vi.stubGlobal("fetch", okJson({
-      result: { status: "settled", payoutId: "po-3", deliveredLocal: 1478.15, txRef: "0xdlv", reason: null, provenance: "p", depositAddress: null },
-    }));
-    const gw = new A2aPayoutGateway();
-    const submitted = await gw.submit(payoutReq);
-    const status = await gw.status("po-3");
-    expect(status).toEqual(submitted);
-  });
-
-  it("MNR-B: status de un id desconocido (cache-miss) → NO-TERMINAL 'submitted', NUNCA 'failed' (no false-refund)", async () => {
-    const gw = new A2aPayoutGateway();
-    const status = await gw.status("nope");
-    // Cache-miss (recarga → Map vacío) NO es evidencia de fallo. Fabricar "failed" false-refundearía
-    // un payout que pudo ser exitoso. Estado no-terminal → TrackRemittance NO refundea sobre incertidumbre.
+  it("MNR-B: status de cualquier id devuelve NO-TERMINAL 'submitted', NUNCA 'failed' (no false-refund)", async () => {
+    // Sin submit no hay caché posible, así que este es el ÚNICO comportamiento de status(). Antes era
+    // el del cache-miss, que igual era el caso real en producción (recarga → Map vacío). No fabricar
+    // "failed" es lo que evita refundear un payout que pudo ser exitoso.
+    const status = await new A2aPayoutGateway().status("nope");
     expect(status.status).toBe("submitted");
     expect(status.status).not.toBe("failed");
     expect(status).toEqual({
@@ -153,7 +116,7 @@ describe("A2aPayoutGateway (AC-4/AC-5/AC-14)", () => {
       deliveredPen: null,
       txRef: null,
       failureReason: "payout_status_unknown",
-      provenance: "", // WKH-200: record fabricado (cache-miss) → provenance vacía, cosmético
+      provenance: "", // WKH-200: record fabricado → provenance vacía, cosmético
     });
   });
 });

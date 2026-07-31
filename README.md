@@ -149,15 +149,17 @@ The dependency tree mixes React 19 with packages that still declare React 18 pee
 
 ## Tests
 
-**692 cases across 57 files**, all green. They break down as:
+**697 cases across 56 files**, all green. They break down as:
 
 - Domain and application with test doubles, no network, wallet or browser. That is where the money
   path invariants live: nothing is confirmed without a verified identity and a live quote, an expired
   quote fails closed, the state machine admits no jumps.
 - API routes, infrastructure adapters and components with Testing Library.
-- Contract tests against pinned copies of each external service's output (`contracts/`). If a provider
-  changes the shape of its response and someone re vendors the copy, the consumer's test goes red
-  instead of breaking in production.
+- Contract tests against pinned copies of two external services' output, the quote and the KYC
+  (`contracts/`). If a provider changes the shape of its response and someone re vendors the copy, the
+  consumer's test goes red instead of breaking in production. The third one, the payout, was retired:
+  its consumer validator lived inside a method that pointed at a deleted route, so its green proved
+  nothing. The reason and the follow up are written down in `contracts/CONTRACT-VERSIONS.md`.
 - The escrow IDL pinned by canonical hash (`contracts/idl/escrow-idl.hash.test.ts`), described above.
 - A guard against the return of the EVM path this repo used to have
   (`src/composition/no-evm-surface.test.ts`). It walks `src/`, `app/`, `scripts/` and `contracts/` on
@@ -174,7 +176,7 @@ The dependency tree mixes React 19 with packages that still declare React 18 pee
   `thirdweb`. Covering a new name means adding it to the list, with its reason.
 
 ```bash
-npm test          # 692 tests across 57 files
+npm test          # 697 tests across 56 files
 npm run qa        # lint + both typechecks + tests
 ```
 

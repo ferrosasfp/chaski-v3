@@ -10,7 +10,27 @@ driftea su shape y se re-vendorea la copia, el test del consumer se pone **ROJO*
 |--------------------|-------------|----------------|------|--------------------|
 | `vendored/corridor-fx.output.fixture.ts` | `wasiai-remittance-agents` | `src/contracts/corridor-fx.output.fixture.ts` | 2026-07-22 | `isValidQuoteResult` (handler `POST` de `app/api/a2a/quote/route.ts`) + `isValidQuoteShape` (`A2aQuoteGateway`) |
 | `vendored/kyc-validator.output.fixture.ts` | `wasiai-remittance-agents` | `src/contracts/kyc-validator.output.fixture.ts` | 2026-07-22 | shape-guard **forward-looking** (test-only) |
-| `vendored/cashout-payout.output.fixture.ts` | `wasiai-remittance-agents` | `src/contracts/cashout-payout.output.fixture.ts` | 2026-07-22 | `isValidPayoutShape` (`A2aPayoutGateway.submit`) |
+
+## Contrato retirado: `cashout-payout` (2026-07-31)
+
+`vendored/cashout-payout.output.fixture.ts` y `contracts.payout.test.ts` se **borraron**, y hay que
+decir qué se perdió con ellos en vez de dejar el archivo sin dueño.
+
+Su validador consumer era `isValidPayoutShape`, que vivía dentro de `A2aPayoutGateway.submit`. Ese
+`submit` posteaba a `/api/a2a/payout/submit`, una ruta que **WKH-320 borró** (su ausencia está
+asertada en `src/composition/no-evm-surface.test.ts:124`). O sea: el contract test replayaba el
+fixture del provider contra un validador que **ningún camino de producción ejecuta**. Un validador sin
+consumer productivo no es un guard de contrato, es una decoración, y su verde no significaba nada.
+
+El consumer VIVO del output de `remit-cashout-payout` hoy es server-side:
+`app/api/payout/prepare/route.ts` (`isValidPayoutResult`, `:54-65`, más el chequeo aparte del
+`depositAddress` en PR8). Está cubierto por `app/api/payout/prepare/route.test.ts`, pero **no** contra
+el fixture vendoreado del provider, así que la detección de drift provider→consumer del payout **hoy
+no existe**.
+
+**Follow-up (necesita su propia HU)**: extraer `isValidPayoutResult` del route a un módulo importable
+y apuntar ahí el contract test, re-vendoreando el fixture. No se hizo acá porque significa tocar una
+route del money-path por una razón de tooling, y eso merece su propio SDD.
 
 ## Ancla de serialización del settlement
 

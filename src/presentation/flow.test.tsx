@@ -18,7 +18,10 @@ import {
   type RemittanceState,
   toPersistedIdentity,
 } from "../domain/remittance";
-import { RecoverEscrowFunds } from "../application/use-cases/recover-escrow-funds";
+import {
+  ESCROW_REFUNDED_BY_SENDER,
+  RecoverEscrowFunds,
+} from "../application/use-cases/recover-escrow-funds";
 import {
   FAKE_SOLANA_BENEFICIARY,
   FAKE_SOLANA_SIGNATURE,
@@ -727,7 +730,8 @@ it("T-AC3c (track): quote/kyc reales pero payout local-fallback → banner 'Modo
   fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
 
   // sigue en track (payout_submitted, no settled) y el banner de demo aparece por el payout mock.
-  expect(await screen.findByText(/Tu chaski está en camino/)).toBeInTheDocument();
+  // El encabezado ya no dice "en camino" acá: en payout_submitted no se mueve nada solo.
+  expect(await screen.findByText(/Tu envío está esperando/)).toBeInTheDocument();
   expect(screen.getByText(/Modo demo/)).toBeInTheDocument();
 });
 
@@ -763,18 +767,17 @@ describe("WKH-200 poll stop (fake timers)", () => {
     cleanup();
   });
 
-  it("T-AC2: al recibir payout_failed el poll frena (call-count se estabiliza), sin tocar TERMINAL_STATUSES", async () => {
+  /** Navega hasta `track` con la remesa que devuelva `final`, espiando el poll. */
+  async function trackWith(final: RemittanceState) {
     const kycStore = new FakeKycStore();
     await kycStore.save("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", passKyc);
-    // onConfirm deja la remesa en payout_failed (status !== settled → step "track"): el poll ARRANCA
-    // igual (el efecto solo gatea por step). trackRemittance devuelve payout_failed en cada tick.
-    const failed = buildFlowSnapshot("payout_failed", null);
-    const trackSpy = vi.fn(async () => Remittance.rehydrate(failed));
+    // El poll devuelve SIEMPRE el estado persistido (que en el caso del refund quedó viejo).
+    const trackSpy = vi.fn(async () => Remittance.rehydrate(final));
     const container = buildTestContainer({
       kycStore,
       useCases: {
         confirmAndSend: {
-          execute: async () => Remittance.rehydrate(failed),
+          execute: async () => Remittance.rehydrate(final),
         } as unknown as ConfirmAndSend,
         trackRemittance: { execute: trackSpy } as unknown as TrackRemittance,
       },
@@ -798,9 +801,14 @@ describe("WKH-200 poll stop (fake timers)", () => {
       fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
       await vi.advanceTimersByTimeAsync(1);
     });
+    return trackSpy;
+  }
 
-    // ancla el setInterval del poll (auto-blindaje WKH-188) y deja correr hasta que el poll frena:
-    // 1er tick → payout_failed → clearInterval (con el fix). Avanzamos amplio para que estabilice.
+  it("T-AC2: sobre payout_failed el poll no queda corriendo (call-count estable), sin tocar TERMINAL_STATUSES", async () => {
+    // Antes el poll arrancaba igual y frenaba en el 1er tick. Ahora ni arranca: desde payout_failed la
+    // FSM sólo va a `refunded`, y a eso no se llega poleando. Menos llamadas, misma garantía.
+    const trackSpy = await trackWith(buildFlowSnapshot("payout_failed", null));
+
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1);
     });
@@ -808,14 +816,36 @@ describe("WKH-200 poll stop (fake timers)", () => {
       await vi.advanceTimersByTimeAsync(12000); // > 7 ticks de 1.5 s si NO frenara
     });
     const stabilized = trackSpy.mock.calls.length;
-    expect(stabilized).toBeGreaterThanOrEqual(1); // el poll SÍ arrancó y consultó al menos una vez
 
-    // sin el fix (payout_failed no-terminal) el poll seguiría llamando cada 1.5 s → count crecería.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(12000);
     });
     expect(trackSpy.mock.calls.length).toBe(stabilized);
     expect(screen.getByText(/No se pudo entregar/)).toBeInTheDocument();
+  });
+
+  // El poll DESMENTÍA a la pantalla. El effect depende de `remStatus`, así que al pasar a `refunded`
+  // arrancaba un intervalo NUEVO y 1,5 s después leía el estado PERSISTIDO (viejo si el save falló) y
+  // hacía setRem: la persona veía "Recuperaste tus fondos" un segundo y medio y la pantalla volvía
+  // sola a "Preparando el pago", con el botón otra vez, que al apretarlo el programa rechazaba.
+  it("sobre una remesa ya recuperada el poll NO corre ni pisa la pantalla con el estado viejo", async () => {
+    const recovered = Remittance.rehydrate(buildFlowSnapshot("payout_failed", null));
+    recovered.markRefunded("refund-sig", T0);
+    const stale = buildFlowSnapshot("payout_submitted", "transfi"); // lo que devolvería el repo viejo
+    const trackSpy = await trackWith({
+      ...recovered.snapshot,
+      failureReason: ESCROW_REFUNDED_BY_SENDER,
+    });
+    // El poll, si corriera, devolvería el estado viejo: se lo cargamos explícitamente.
+    trackSpy.mockImplementation(async () => Remittance.rehydrate(stale));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12000); // 8 ticks de sobra
+    });
+
+    expect(trackSpy).not.toHaveBeenCalled();
+    expect(screen.getByText(/Recuperaste tus fondos/)).toBeInTheDocument();
+    expect(screen.queryByText(/Preparando el pago a tu familiar/)).toBeNull();
   });
 });
 
@@ -929,14 +959,71 @@ describe("HU-SOL-13 — acción refund en TrackView (T7)", () => {
     expect(screen.getByRole("button", { name: /Recuperar fondos/ })).toBeInTheDocument();
   });
 
-  it("AC-7: now<deadline (expiresAt futuro) ⇒ 'Recuperar fondos' OCULTA (defensa en profundidad)", async () => {
+  // AC-7 sigue intacto (pre-deadline no se puede refundear: el programa Anchor rechaza y el adapter
+  // aborta antes de firmar). Lo que cambió es que la salida DEJA DE ESTAR ESCONDIDA: antes no se
+  // renderizaba nada y la persona miraba un spinner sin saber que existía ni cuándo se abría.
+  it("AC-7: now<deadline (expiresAt futuro) ⇒ el botón está VISIBLE pero deshabilitado, y no toca la cadena", async () => {
     const gateway = new FakeSolanaEscrowRefundGateway();
     const rem = solanaPayoutSubmittedSnapshot("2099-01-01T00:00:00.000Z"); // futuro ⇒ pre-deadline
     const { recover } = await seededRecovery(rem, gateway);
     render(<LiveTrackView initial={rem} recover={recover} />);
 
-    expect(screen.queryByRole("button", { name: /Recuperar fondos/ })).toBeNull();
+    const btn = screen.getByRole("button", { name: /Recuperar fondos/ });
+    expect(btn).toBeDisabled();
+    expect(screen.getByText(/Podés recuperar tus USDC a partir de las/)).toBeInTheDocument();
+    fireEvent.click(btn); // el guard no se debilita: el click no dispara NADA
     expect(gateway.calls).toHaveLength(0);
+  });
+
+  // ── El refund que la cadena todavía no confirmó ────────────────────────────────────────────────
+  // El caso: la persona firma en Phantom y tarda 40 s, el blockhash vence y la tx se cae. Antes la
+  // pantalla decía "Recuperaste tus fondos. Los USDC volvieron a tu wallet" con la plata en el vault,
+  // y el botón no volvía NUNCA (refunded es terminal). El verbo tiene que ser el de lo que sabemos.
+  it("confirmation=pending ⇒ dice 'Enviamos la orden', NUNCA 'volvieron', y el botón sigue disponible", async () => {
+    const gateway = new FakeSolanaEscrowRefundGateway(FAKE_SOLANA_SIGNATURE, "resolve", "pending");
+    const rem = solanaPayoutSubmittedSnapshot("2026-07-10T00:00:00.000Z");
+    const { repo, recover } = await seededRecovery(rem, gateway);
+    render(<LiveTrackView initial={rem} recover={recover} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Recuperar fondos/ }));
+
+    expect(await screen.findByText(/Enviamos la orden de recuperación/)).toBeInTheDocument();
+    expect(screen.queryByText(/Recuperaste tus fondos/)).toBeNull();
+    expect(screen.queryByText(/volvieron a tu wallet/)).toBeNull();
+    expect(screen.getByText(/Todavía no la vemos confirmada en la cadena/)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(FAKE_SOLANA_SIGNATURE))).toBeInTheDocument();
+    // El reintento sigue existiendo: es lo único que salva a la persona si la tx se cayó.
+    expect(screen.getByRole("button", { name: /Volver a intentar/ })).toBeEnabled();
+    // Y nada terminal quedó escrito.
+    expect((await repo.get("rem-1"))?.status).toBe("payout_submitted");
+  });
+
+  it("confirmation=unknown ⇒ dice que no pudimos preguntar, sin declarar éxito ni fracaso", async () => {
+    const gateway = new FakeSolanaEscrowRefundGateway(FAKE_SOLANA_SIGNATURE, "resolve", "unknown");
+    const rem = solanaPayoutSubmittedSnapshot("2026-07-10T00:00:00.000Z");
+    const { repo, recover } = await seededRecovery(rem, gateway);
+    render(<LiveTrackView initial={rem} recover={recover} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Recuperar fondos/ }));
+
+    expect(await screen.findByText(/Enviamos la orden de recuperación/)).toBeInTheDocument();
+    expect(screen.getByText(/No pudimos consultar la cadena/)).toBeInTheDocument();
+    expect(screen.queryByText(/Recuperaste tus fondos/)).toBeNull();
+    expect(screen.queryByText(/No pudimos recuperar los fondos/)).toBeNull(); // tampoco un fracaso
+    expect(screen.getByRole("button", { name: /Volver a intentar/ })).toBeEnabled();
+    expect((await repo.get("rem-1"))?.status).toBe("payout_submitted");
+  });
+
+  it("el segundo intento SÍ llega a la cadena (el camino de reintento no se cerró)", async () => {
+    const gateway = new FakeSolanaEscrowRefundGateway(FAKE_SOLANA_SIGNATURE, "resolve", "pending");
+    const rem = solanaPayoutSubmittedSnapshot("2026-07-10T00:00:00.000Z");
+    const { recover } = await seededRecovery(rem, gateway);
+    render(<LiveTrackView initial={rem} recover={recover} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Recuperar fondos/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Volver a intentar/ }));
+
+    await waitFor(() => expect(gateway.calls).toHaveLength(2));
   });
 
   // El botón vive en las DOS ramas de TrackView, no sólo en la optimista: una remesa que ya falló
@@ -1047,6 +1134,41 @@ describe("los tildes del tracking no marcan como hecho lo que está en curso", (
     for (const l of ["Fondos en camino", "Preparando el pago a tu familiar", "Entregado"]) {
       expect(toneOf(l)).toContain("bg-verde");
     }
+  });
+
+  // Arreglar la etiqueta no alcanzaba: encima seguía girando un spinner, y con la configuración de
+  // hoy ahí no pasa nada solo (el release lo dispara una persona a mano). La animación afirmaba un
+  // progreso inexistente, para siempre.
+  it("en payout_submitted NADA gira: el paso que no avanza solo no se anima", () => {
+    const rem = buildFlowSnapshot("payout_submitted", "transfi");
+    const { container } = render(
+      <TrackView rem={rem} recover={undefined} sender={null} onRecovered={() => {}} />,
+    );
+
+    expect(container.querySelectorAll(".animate-spin")).toHaveLength(0);
+    expect(container.querySelectorAll(".animate-pulse")).toHaveLength(0);
+  });
+
+  it("en payout_submitted el encabezado no promete movimiento y avisa que el paso es manual", () => {
+    const rem = buildFlowSnapshot("payout_submitted", "transfi");
+    render(<TrackView rem={rem} recover={undefined} sender={null} onRecovered={() => {}} />);
+
+    expect(screen.queryByText(/Tu chaski está en camino/)).toBeNull();
+    expect(screen.getByText(/Tu envío está esperando/)).toBeInTheDocument();
+    expect(screen.getByText(/Este paso no avanza solo/)).toBeInTheDocument();
+    expect(screen.getByText(/la libera una persona del equipo/)).toBeInTheDocument();
+  });
+
+  // En principal_in el settle SÍ está en curso de verdad: ahí el spinner no miente y se queda.
+  it("en principal_in el paso en curso SÍ se anima (ahí sí está pasando algo)", () => {
+    const base = Remittance.rehydrate(buildFlowSnapshot("payout_submitted", "transfi"));
+    const rem = { ...base.snapshot, status: "principal_in" as const };
+    const { container } = render(
+      <TrackView rem={rem} recover={undefined} sender={null} onRecovered={() => {}} />,
+    );
+
+    expect(container.querySelectorAll(".animate-spin").length).toBeGreaterThan(0);
+    expect(screen.getByText(/Tu chaski está en camino/)).toBeInTheDocument();
   });
 });
 

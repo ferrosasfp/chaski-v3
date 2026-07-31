@@ -5,11 +5,11 @@ queda bloqueado en un escrow on chain, y recién cuando el pago en destino está
 la autoridad de release lo libera. El operador nunca tiene la custodia del dinero.
 
 El principal viaja por **Solana**. El escrow es un programa **Anchor** en devnet, sin plata
-real. El resto del ecosistema es multichain: el marketplace de agentes vive en Avalanche, y
-el settlement lo coordina un facilitator con un adaptador por red.
+real. El settlement lo coordina un facilitator, que es el único servicio que transmite a la
+red: esta app firma y verifica, nunca broadcastea por su cuenta.
 
 > **Estado.** Devnet, sin dinero real. La configuración por defecto del repo no mueve
-> fondos: los caminos de settlement están detrás de flags que arrancan apagadas. Ver
+> fondos: el settlement está detrás de una flag que arranca apagada. Ver
 > [Configuración](#configuración) para el detalle de qué enciende qué.
 
 ## Qué hace hoy y qué no
@@ -24,7 +24,9 @@ Funcionando en devnet:
   clave privada de esa autoridad no vive en este repo.
 - Índice on chain de escrows por remesa, para poder recuperar una operación cuyo
   identificador local se perdió.
-- Ledger de settlement en Postgres, con el registro de la VM y la red usadas en cada fila.
+- Ledger de settlement en Postgres, que registra la red de cada fila como identificador
+  CAIP-2 (`solana:devnet`). La columna conserva además un discriminador heredado, porque
+  describe filas ya escritas: podar código no es reescribir la historia de la base.
 
 En construcción o apagado a propósito:
 
@@ -77,8 +79,11 @@ por eso el `--legacy-peer-deps`.
   (`contracts/idl/escrow-idl.hash.test.ts`): si alguien edita el IDL vendoreado a mano, o el
   programa on chain cambia el orden de sus cuentas, la suite se pone roja antes de que una
   transacción se rechace en producción.
-- Un invariante repo wide (`src/composition/no-evm-surface.test.ts`) que recorre el árbol y
-  falla si vuelve a aparecer superficie de otra máquina virtual.
+- Una garantía repo wide (`src/composition/no-evm-surface.test.ts`): recorre `src/`, `app/`,
+  `scripts/` y `contracts/` en cada corrida y **falla si vuelve a aparecer superficie de otra
+  máquina virtual** — un import de una librería de otra cadena, un validador de direcciones
+  hexadecimales, un interruptor de VM, o una de las rutas eliminadas de vuelta en el árbol.
+  Que este repo sea sólo Solana no depende de que alguien se acuerde: lo sostiene un test.
 
 ```bash
 npm test          # 692 tests
@@ -105,7 +110,7 @@ El ciclo:
    en el vault del escrow. El operador no lo toca.
 3. El facilitator cofirma como fee payer y hace el broadcast, así el usuario no necesita SOL.
    Para pedir ese patrocinio hay que probar posesión de la clave con una firma ed25519 sobre
-   un desafío, atado a la red vía CAIP-2 para que no se pueda reusar en otra cadena.
+   un desafío, atado a la red vía CAIP-2 para que no se pueda reusar en otro cluster.
 4. Con el pago en destino confirmado, la autoridad de release ejecuta `release`. Si algo
    falla, `refund` devuelve el principal a quien lo depositó, sin permiso de nadie más.
 
@@ -162,10 +167,6 @@ detrás de una flag y arranca apagado.
 La verificación de identidad y el desembolso todavía se integran punto a punto, no por el
 gateway. Llevarlos al mismo riel es trabajo pendiente, y el desembolso además tiene que
 preservar la atestación que ata la dirección de depósito a la remesa.
-
-El marketplace de agentes corre sobre Avalanche. El settlement lo coordina un facilitator con
-un adaptador por red, que es lo que permite que el principal viaje por una cadena y el resto
-del ecosistema viva en otra.
 
 ## Configuración
 

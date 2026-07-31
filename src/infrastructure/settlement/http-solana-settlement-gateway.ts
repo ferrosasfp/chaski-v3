@@ -3,9 +3,9 @@
 // la URL del facilitador — el Bearer del facilitador vive server-side y nunca se expone al browser
 // (CD-6). Este archivo no conoce ninguna env del facilitador.
 //
-// ⚠️ CD-13: NO reusa PrincipalSettlementGateway ni su regex `^0x…{64}$` — la respuesta Solana es una
-// signature BASE58 (no un hash 0x). Fail-closed: un 200 con shape raro NUNCA se vuelve un principal_in.
-// Exemplar: http-settlement-gateway.ts (type-guards explícitos, mapErrorStatus sin default permisivo).
+// ⚠️ CD-13: la respuesta es una signature BASE58 — validarla con una regex hexadecimal la rechazaría
+// siempre. Fail-closed: un 200 con shape raro NUNCA se vuelve un principal_in. Type-guards explícitos
+// y mapErrorStatus sin default permisivo.
 import type {
   SolanaSettlementFailureReason,
   SolanaSettlementGateway,

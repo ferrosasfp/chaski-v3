@@ -15,8 +15,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Quote, RemittanceState, PayoutMethod } from "../domain/remittance";
 import { MIN_SEND_USD, Remittance } from "../domain/remittance"; // WKH-187: rehydrate/isQuoteStillValid en el resume (CD-11) · WKH-314: mínimo enviable
 import { createContainer, type Container } from "../composition/container";
-import { resolveActiveVm, resolveChain } from "../infrastructure/chain"; // WKH-209/HU-SOL-13: red + VM activa (env-driven, NEXT_PUBLIC_)
-import { deliveredDisplay, humanError, isDemoMode, isFallbackWalletAddress } from "./flow-vm";
+import { resolveSolanaNetworkConfig } from "../infrastructure/chain"; // HU-SOL-13: cluster Solana activo (env-driven)
+import { deliveredDisplay, humanError, isDemoMode } from "./flow-vm";
 import { Button, Card, ChaskiMark, Field, Pill, Row, Stepper, TextInput } from "./ui";
 
 // WKH-187: el quote se muestra ANTES del KYC. Orden: send→connect→review(pre-KYC)→verify→confirm(post-KYC)→track→done.
@@ -405,14 +405,6 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
         <Stepper steps={STEP_LABELS} current={STEP_INDEX[step]} />
       </div>
 
-      {address && isFallbackWalletAddress(address) ? (
-        <div className="mb-4 flex items-center justify-center">
-          <Pill tone="warn">
-            Sin aislamiento por wallet en este dispositivo. Conectá MetaMask o WalletConnect.
-          </Pill>
-        </div>
-      ) : null}
-
       {rem && isDemoMode(rem) && (step === "review" || step === "confirm" || step === "track" || step === "verify") ? (
         <div className="mb-4 flex items-center justify-center">
           <Pill tone="warn">Modo demo (sin dinero real)</Pill>
@@ -551,7 +543,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                   <p className="text-xs text-verde/80">Vas a enviar</p>
                   <p className="tabular text-lg font-extrabold text-verde">
                     {rem ? rem.sendUsd.format() : "—"}{" "}
-                    <span className="text-sm font-medium">en {resolveChain().name}</span>
+                    <span className="text-sm font-medium">en Solana {resolveSolanaNetworkConfig().cluster}</span>
                   </p>
                 </div>
               </Card>
@@ -746,9 +738,8 @@ const TRACK_STEPS: { key: RemittanceState["status"][]; label: string }[] = [
   { key: ["payout_submitted"], label: "Pagando a tu familiar" },
   { key: ["settled"], label: "Entregado" },
 ];
-// Exportado para test directo (HU-SOL-13/T7): el render del flujo completo en modo Solana toca
-// isFallbackWalletAddress (flow-vm, Scope OUT) que no canonicaliza el FALLBACK EVM en base58; testear
-// TrackView en aislamiento evita ese acople y cubre exactamente la acción refund (AC-6/AC-7).
+// Exportado para test directo (HU-SOL-13/T7): testear TrackView en aislamiento cubre exactamente la
+// acción refund (AC-6/AC-7) sin montar el flujo entero.
 export function TrackView({
   rem,
   refundGateway,
@@ -758,15 +749,8 @@ export function TrackView({
   refundGateway?: Container["solanaRefund"];
   sender: string | null;
 }) {
-  // HU-SOL-13 (AC-6/AC-7, CD-10): acción refund trustless SOLO en modo Solana. resolveActiveVm() lee
-  // NEXT_PUBLIC_VM (client-safe); throw en VM inválida ⇒ try/catch → false (nunca rompe el render). En
-  // EVM/demo isSolana=false ⇒ NINGÚN nodo nuevo ⇒ UI byte-idéntica (CD-2).
-  let isSolana = false;
-  try {
-    isSolana = resolveActiveVm() === "solana";
-  } catch {
-    isSolana = false;
-  }
+  // HU-SOL-13 (AC-6/AC-7, CD-10): acción refund trustless. Siempre disponible: ninguna configuración
+  // la puede apagar.
   // Deadline on-chain = floor(Date.parse(quote.expiresAt)/1000) (fijado por HU-SOL-5, AH-14/NC-3). La UI
   // usa el mismo instante como proxy DEFENSIVO (defensa en profundidad): el guard AUTORITATIVO es la
   // lectura on-chain dentro de wallet.refundEscrow (aborta si status≠Deposited o now<deadline).
@@ -777,7 +761,7 @@ export function TrackView({
     rem.status === "payout_submitted" ||
     rem.status === "payout_failed";
   const showRefund =
-    isSolana && refundeable && rem.refundTx == null && deadlineReached && !!refundGateway && !!sender;
+    refundeable && rem.refundTx == null && deadlineReached && !!refundGateway && !!sender;
 
   // AC-1 (WKH-200): payout_failed/refunded NO están en `order` → idx=-1 renderizaría la vista
   // optimista ("en camino", steps grises). Branch temprano a una vista honesta de fallo/reembolso.

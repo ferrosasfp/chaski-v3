@@ -1,17 +1,21 @@
+// Tests — ConfirmAndSend: los guards que corren ANTES de tocar el money-path.
+//
+// Alcance de este archivo: SÓLO los guards previos (identidad verificada, autoridad de payout,
+// vigencia de la cotización). El paso `payouts.submit` NO se ejerce acá porque es estructuralmente
+// inalcanzable: sin `solana` inyectado el use-case corta en el tapón fail-closed DT-8, probado en
+// confirm-and-send.money-path.test.ts. DT-11: el port PayoutGateway sigue vivo — TrackRemittance usa
+// `payouts.status()`.
+//
+// El camino completo (prepare → firma → settle) se prueba en confirm-and-send.money-path.test.ts, y el
+// ORDEN de sus guards en confirm-and-send.reorder.test.ts.
 import { describe, expect, it, vi } from "vitest";
 import { Money } from "../../domain/money";
 import { type KycVerification, type Quote, Remittance } from "../../domain/remittance";
 import {
-  FAKE_DEPOSIT_ADDRESS,
-  FAKE_RECEIVER,
-  FAKE_SETTLE_TX,
+  FAKE_SOLANA_BENEFICIARY,
   FakePayoutAuthorityGateway,
-  FakePayoutGateway,
-  FakePayoutPrepareGateway,
-  FakePopSigner,
   FakeRefundGateway,
-  FakeSettlementGateway,
-  FakeWallet,
+  FakeSolanaWallet,
   FixedClock,
   InMemoryRepo,
   QUOTE_EXPIRES,
@@ -19,7 +23,6 @@ import {
   T0,
   beneficiary,
 } from "../../test-support/fakes";
-import type { Eip3009Authorization, PopSigner, SettlementFailureReason } from "../ports";
 import { ConfirmAndSend } from "./confirm-and-send";
 
 const passKyc: KycVerification = {
@@ -45,682 +48,149 @@ const quote: Quote = {
 async function seedQuoted(repo: InMemoryRepo, kyc: KycVerification = passKyc): Promise<string> {
   const r = Remittance.create("r-1", beneficiary(), Money.of(400, "USDC"), T0);
   r.attachQuote(quote, T0); // WKH-187: cotiza antes del KYC (created→quoted)
-  r.startKyc(T0, "0xSender"); // quoted→kyc_pending
+  r.startKyc(T0, FAKE_SOLANA_BENEFICIARY); // quoted→kyc_pending
   r.applyKyc(kyc, T0); // kyc_pending→kyc_passed (quote sobrevive)
   await repo.save(r);
   return "r-1";
 }
 
 describe("ConfirmAndSend — enforcement autoridad server-side (WKH-180)", () => {
-  it("AC-1/AC-2/AC-6: authority false → payout_failed, submit + authorizePrincipal NOT called", async () => {
+  it("AC-1/AC-2/AC-6: authority false → payout_failed, NO se le pide la firma a la wallet", async () => {
     const repo = new InMemoryRepo();
-    const wallet = new FakeWallet();
-    const payouts = new FakePayoutGateway();
+    const wallet = new FakeSolanaWallet();
     const authorizeSpy = vi.spyOn(wallet, "authorizePrincipal");
-    const submitSpy = vi.spyOn(payouts, "submit");
-    const authority = new FakePayoutAuthorityGateway({ authorized: false, reason: "kyc_not_approved" });
+    const authority = new FakePayoutAuthorityGateway({
+      authorized: false,
+      reason: "kyc_not_approved",
+    });
     const id = await seedQuoted(repo);
 
-    const out = await new ConfirmAndSend(wallet, payouts, repo, new FixedClock(), authority, new FakeRefundGateway()).execute({
-      remittanceId: id,
-    });
+    const out = await new ConfirmAndSend(
+      wallet,
+      repo,
+      new FixedClock(),
+      authority,
+      new FakeRefundGateway(),
+    ).execute({ remittanceId: id });
 
     // WKH-186: refund-on-failure avanza payout_failed → refunded en el mismo execute(); failureReason
-    // sobrevive (markRefunded solo patchea refundTx). Los guards de WKH-180 siguen intactos: NO firma, NO submit.
+    // sobrevive (markRefunded solo patchea refundTx). El guard de WKH-180 sigue intacto: NO firma.
     expect(out.status).toBe("refunded");
     expect(out.snapshot.failureReason).toBe("kyc_not_approved");
     expect(out.snapshot.refundTx).toBe("refund-fake");
+    expect(out.snapshot.principalTx).toBeNull();
     expect(authorizeSpy).not.toHaveBeenCalled();
-    expect(submitSpy).not.toHaveBeenCalled();
     // La autoridad recibió el verificationId real + la address del caller.
-    expect(authority.calls).toEqual([{ verificationId: "v-1", address: "0xSender" }]);
+    expect(authority.calls).toEqual([{ verificationId: "v-1", address: FAKE_SOLANA_BENEFICIARY }]);
   });
 
   it("AC-6: kyc.approved:true FORJADO pero authority false → bloqueado (override server-side gana)", async () => {
     const repo = new InMemoryRepo();
-    const wallet = new FakeWallet();
-    const payouts = new FakePayoutGateway();
-    const submitSpy = vi.spyOn(payouts, "submit");
+    const wallet = new FakeSolanaWallet();
+    const authorizeSpy = vi.spyOn(wallet, "authorizePrincipal");
     // El estado client-side dice approved:true/payoutAllowed:true (como si localStorage estuviera forjado).
     const forged: KycVerification = { ...passKyc, approved: true, payoutAllowed: true };
-    const authority = new FakePayoutAuthorityGateway({ authorized: false, reason: "kyc_ownership_mismatch" });
+    const authority = new FakePayoutAuthorityGateway({
+      authorized: false,
+      reason: "kyc_ownership_mismatch",
+    });
     const id = await seedQuoted(repo, forged);
 
-    const out = await new ConfirmAndSend(wallet, payouts, repo, new FixedClock(), authority, new FakeRefundGateway()).execute({
-      remittanceId: id,
-    });
+    const out = await new ConfirmAndSend(
+      wallet,
+      repo,
+      new FixedClock(),
+      authority,
+      new FakeRefundGateway(),
+    ).execute({ remittanceId: id });
 
     expect(out.status).toBe("refunded"); // WKH-186: refund-on-failure; override server-side igual gana
     expect(out.snapshot.failureReason).toBe("kyc_ownership_mismatch");
-    expect(submitSpy).not.toHaveBeenCalled();
-  });
-
-  it("AC-1: authority true → flujo completo → submit llamado → payout_submitted (regresión demo)", async () => {
-    const repo = new InMemoryRepo();
-    const wallet = new FakeWallet();
-    const payouts = new FakePayoutGateway();
-    const authorizeSpy = vi.spyOn(wallet, "authorizePrincipal");
-    const submitSpy = vi.spyOn(payouts, "submit");
-    const authority = new FakePayoutAuthorityGateway({ authorized: true }); // default dev sin key
-    const id = await seedQuoted(repo);
-
-    const out = await new ConfirmAndSend(wallet, payouts, repo, new FixedClock(), authority, new FakeRefundGateway()).execute({
-      remittanceId: id,
-    });
-
-    expect(authorizeSpy).toHaveBeenCalledTimes(1);
-    expect(submitSpy).toHaveBeenCalledTimes(1);
-    expect(out.status).toBe("payout_submitted");
-    expect(out.snapshot.principalTx).toBe("0xprincipal");
-  });
-
-  it("authority true + payout settled → settled (happy path completo)", async () => {
-    const repo = new InMemoryRepo();
-    const wallet = new FakeWallet();
-    const payouts = new FakePayoutGateway({ status: "settled", txRef: "0xdelivered", deliveredPen: Money.of(1480, "PEN") });
-    const authority = new FakePayoutAuthorityGateway({ authorized: true });
-    const id = await seedQuoted(repo);
-
-    const out = await new ConfirmAndSend(wallet, payouts, repo, new FixedClock(), authority, new FakeRefundGateway()).execute({
-      remittanceId: id,
-    });
-
-    expect(out.status).toBe("settled");
-  });
-
-  it("T-AC5d: propaga la provenance del payout al snapshot (payout mock → local-fallback)", async () => {
-    const repo = new InMemoryRepo();
-    const wallet = new FakeWallet();
-    const payouts = new FakePayoutGateway(
-      { status: "settled", txRef: "0xdelivered", deliveredPen: Money.of(1480, "PEN"), provenance: "local-fallback" },
-    );
-    const authority = new FakePayoutAuthorityGateway({ authorized: true });
-    const id = await seedQuoted(repo);
-
-    const out = await new ConfirmAndSend(wallet, payouts, repo, new FixedClock(), authority, new FakeRefundGateway()).execute({
-      remittanceId: id,
-    });
-
-    expect(out.status).toBe("settled");
-    expect(out.snapshot.payoutProvenance).toBe("local-fallback");
+    expect(authorizeSpy).not.toHaveBeenCalled();
   });
 });
 
-describe("ConfirmAndSend — expiry re-check M2 + payload M3 (AC-5/AC-6)", () => {
-  it("AC-5: quote vence ENTRE confirm y submit (ScriptedClock) → payout_failed, sin firma ni submit", async () => {
+describe("ConfirmAndSend — re-check de vigencia del quote (M2/AC-5)", () => {
+  it("AC-5: el quote vence ENTRE confirm y la firma (ScriptedClock) → refunded, SIN firma", async () => {
     const repo = new InMemoryRepo();
-    const wallet = new FakeWallet();
-    const payouts = new FakePayoutGateway();
+    const wallet = new FakeSolanaWallet();
     const authorizeSpy = vi.spyOn(wallet, "authorizePrincipal");
-    const submitSpy = vi.spyOn(payouts, "submit");
-    const authority = new FakePayoutAuthorityGateway({ authorized: true }); // autoridad OK: aísla el guard de expiry
+    const authority = new FakePayoutAuthorityGateway({ authorized: true }); // aísla el guard de expiry
     const id = await seedQuoted(repo);
 
     // 1ª llamada (confirm) = T0 válido; 2ª (re-check) = 18:11 > QUOTE_EXPIRES (18:10).
     const clock = new ScriptedClock([T0, "2026-07-09T18:11:00.000Z"]);
-    const out = await new ConfirmAndSend(wallet, payouts, repo, clock, authority, new FakeRefundGateway()).execute({
-      remittanceId: id,
-    });
+    const out = await new ConfirmAndSend(
+      wallet,
+      repo,
+      clock,
+      authority,
+      new FakeRefundGateway(),
+    ).execute({ remittanceId: id });
 
     expect(out.status).toBe("refunded"); // WKH-186: refund-on-failure; guard de expiry intacto
     expect(out.snapshot.failureReason).toBe("quote_expired_before_submit");
+    expect(out.snapshot.principalTx).toBeNull();
     expect(authorizeSpy).not.toHaveBeenCalled();
-    expect(submitSpy).not.toHaveBeenCalled();
-  });
-
-  it("MNR-A: válido en el 1er check pero vence DURANTE la firma → payout_failed, firma SÍ ocurre, submit NO", async () => {
-    const repo = new InMemoryRepo();
-    const wallet = new FakeWallet();
-    const payouts = new FakePayoutGateway();
-    const authorizeSpy = vi.spyOn(wallet, "authorizePrincipal");
-    const submitSpy = vi.spyOn(payouts, "submit");
-    const authority = new FakePayoutAuthorityGateway({ authorized: true }); // aísla el 2º guard de expiry
-    const id = await seedQuoted(repo);
-
-    // Reloj: confirm=T0, 1er re-check=T0 (válido, pasa la firma), markPrincipalIn=T0,
-    // 2º re-check (nowBeforeSubmit) = 18:11 > QUOTE_EXPIRES (18:10) → venció DURANTE la firma.
-    const clock = new ScriptedClock([T0, T0, T0, "2026-07-09T18:11:00.000Z"]);
-    const out = await new ConfirmAndSend(wallet, payouts, repo, clock, authority, new FakeRefundGateway()).execute({
-      remittanceId: id,
-    });
-
-    expect(out.status).toBe("refunded"); // WKH-186: principal adentro → refund-on-failure lo cierra
-    expect(out.snapshot.failureReason).toBe("quote_expired_before_submit");
-    expect(authorizeSpy).toHaveBeenCalledTimes(1); // la firma SÍ ocurrió (ventana larga)
-    expect(submitSpy).not.toHaveBeenCalled(); // pero NO se submitea sobre un quote muerto
-    expect(out.snapshot.principalTx).toBe("0xprincipal"); // principal ya adentro → refund path
-  });
-
-  it("AC-6: happy path → submit recibe expectedReceivePen == quote.receive (Money PEN lockeado)", async () => {
-    const repo = new InMemoryRepo();
-    const wallet = new FakeWallet();
-    const payouts = new FakePayoutGateway();
-    const submitSpy = vi.spyOn(payouts, "submit");
-    const authority = new FakePayoutAuthorityGateway({ authorized: true });
-    const id = await seedQuoted(repo);
-
-    await new ConfirmAndSend(wallet, payouts, repo, new FixedClock(), authority, new FakeRefundGateway()).execute({
-      remittanceId: id,
-    });
-
-    expect(submitSpy).toHaveBeenCalledTimes(1);
-    const arg = submitSpy.mock.calls[0]?.[0];
-    expect(arg?.expectedReceivePen).toEqual(Money.of(1480, "PEN"));
-    expect(arg?.amountUsd).toBe(400); // amountUsd preservado (no reemplazado)
-  });
-
-  it("WKH-202/DT-2: submit recibe el address del wallet (el server re-valida ownership vs Didit)", async () => {
-    const repo = new InMemoryRepo();
-    const wallet = new FakeWallet();
-    const payouts = new FakePayoutGateway();
-    const submitSpy = vi.spyOn(payouts, "submit");
-    const authority = new FakePayoutAuthorityGateway({ authorized: true });
-    const id = await seedQuoted(repo);
-
-    await new ConfirmAndSend(wallet, payouts, repo, new FixedClock(), authority, new FakeRefundGateway()).execute({
-      remittanceId: id,
-    });
-
-    expect(submitSpy).toHaveBeenCalledTimes(1);
-    const arg = submitSpy.mock.calls[0]?.[0];
-    expect(arg?.address).toBe("0xSender"); // sin esto la route rechaza con 400 (fail-closed)
   });
 });
 
-describe("ConfirmAndSend — reconciliación + refund-on-failure (WKH-186 AC-6/AC-7)", () => {
-  it("AC-6: submit settled con deliveredPen FUERA de tolerancia → refunded payout_amount_mismatch, NUNCA settled", async () => {
+describe("ConfirmAndSend — refund-on-failure best-effort (WKH-186 AC-7)", () => {
+  // Se conserva el invariante, re-cableado sobre un camino que SÍ existe: antes se ejercitaba con un
+  // payout con status 'failed' (paso 4, inalcanzable post-poda); ahora con el guard de autoridad.
+  it("AC-7: si el credit-back falla (reject) la remesa queda en payout_failed, y execute NO lanza", async () => {
     const repo = new InMemoryRepo();
-    const wallet = new FakeWallet();
-    // receive lockeado = 1480 PEN (tol 14.8); delivered 368 → mismatch grueso.
-    const payouts = new FakePayoutGateway({ status: "settled", txRef: "0xbad", deliveredPen: Money.of(368, "PEN") });
-    const authority = new FakePayoutAuthorityGateway({ authorized: true });
-    const refund = new FakeRefundGateway();
-    const id = await seedQuoted(repo);
-
-    const out = await new ConfirmAndSend(wallet, payouts, repo, new FixedClock(), authority, refund).execute({
-      remittanceId: id,
-    });
-
-    expect(out.status).toBe("refunded");
-    expect(out.snapshot.failureReason).toBe("payout_amount_mismatch");
-    expect(out.snapshot.refundTx).toBe("refund-fake");
-    expect(refund.calls[0]?.amountUsd).toEqual(Money.of(400, "USDC"));
-  });
-
-  it("AC-6: submit settled con deliveredPen DENTRO de tolerancia → settled (sin refund)", async () => {
-    const repo = new InMemoryRepo();
-    const wallet = new FakeWallet();
-    const payouts = new FakePayoutGateway({ status: "settled", txRef: "0xok", deliveredPen: Money.of(1480, "PEN") });
-    const authority = new FakePayoutAuthorityGateway({ authorized: true });
-    const refund = new FakeRefundGateway();
-    const id = await seedQuoted(repo);
-
-    const out = await new ConfirmAndSend(wallet, payouts, repo, new FixedClock(), authority, refund).execute({
-      remittanceId: id,
-    });
-
-    expect(out.status).toBe("settled");
-    expect(refund.calls).toHaveLength(0);
-  });
-
-  it("AC-7: submit lanza (partner caído) → catch → refunded, creditBack llamado en el mismo execute()", async () => {
-    const repo = new InMemoryRepo();
-    const wallet = new FakeWallet();
-    const payouts = new FakePayoutGateway();
-    vi.spyOn(payouts, "submit").mockRejectedValueOnce(new Error("a2a_payout_unavailable"));
-    const authority = new FakePayoutAuthorityGateway({ authorized: true });
-    const refund = new FakeRefundGateway();
-    const id = await seedQuoted(repo);
-
-    const out = await new ConfirmAndSend(wallet, payouts, repo, new FixedClock(), authority, refund).execute({
-      remittanceId: id,
-    });
-
-    expect(out.status).toBe("refunded");
-    expect(out.snapshot.failureReason).toBe("a2a_payout_unavailable");
-    expect(refund.calls).toHaveLength(1);
-  });
-
-  it("AC-7: submit status failed → refunded, failureReason preservado", async () => {
-    const repo = new InMemoryRepo();
-    const wallet = new FakeWallet();
-    const payouts = new FakePayoutGateway({ status: "failed", failureReason: "partner_down" });
-    const authority = new FakePayoutAuthorityGateway({ authorized: true });
-    const refund = new FakeRefundGateway();
-    const id = await seedQuoted(repo);
-
-    const out = await new ConfirmAndSend(wallet, payouts, repo, new FixedClock(), authority, refund).execute({
-      remittanceId: id,
-    });
-
-    expect(out.status).toBe("refunded");
-    expect(out.snapshot.failureReason).toBe("partner_down");
-  });
-
-  it("AC-7: refund falla (reject) → queda en payout_failed (best-effort, no throw)", async () => {
-    const repo = new InMemoryRepo();
-    const wallet = new FakeWallet();
-    const payouts = new FakePayoutGateway({ status: "failed", failureReason: "partner_down" });
-    const authority = new FakePayoutAuthorityGateway({ authorized: true });
+    const authority = new FakePayoutAuthorityGateway({ authorized: false, reason: "partner_down" });
     const refund = new FakeRefundGateway("reject");
     const id = await seedQuoted(repo);
 
-    const out = await new ConfirmAndSend(wallet, payouts, repo, new FixedClock(), authority, refund).execute({
-      remittanceId: id,
-    });
+    const out = await new ConfirmAndSend(
+      new FakeSolanaWallet(),
+      repo,
+      new FixedClock(),
+      authority,
+      refund,
+    ).execute({ remittanceId: id });
 
-    expect(out.status).toBe("payout_failed");
+    expect(out.status).toBe("payout_failed"); // best-effort: NO escala a refunded ni tira
     expect(out.snapshot.failureReason).toBe("partner_down");
     expect(out.snapshot.refundTx).toBeNull();
   });
+
+  it("AC-7: el credit-back recibe el monto ENVIADO de la remesa, no otro", async () => {
+    const repo = new InMemoryRepo();
+    const authority = new FakePayoutAuthorityGateway({
+      authorized: false,
+      reason: "kyc_not_approved",
+    });
+    const refund = new FakeRefundGateway();
+    const id = await seedQuoted(repo);
+
+    await new ConfirmAndSend(
+      new FakeSolanaWallet(),
+      repo,
+      new FixedClock(),
+      authority,
+      refund,
+    ).execute({ remittanceId: id });
+
+    expect(refund.calls).toHaveLength(1);
+    expect(refund.calls[0]?.amountUsd).toEqual(Money.of(400, "USDC"));
+    expect(refund.calls[0]?.remittanceId).toBe("r-1");
+  });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// WKH-168 W5.2 — settle REAL del principal (ramas C1-C8).
-//
-// El bug que esto mata: `markPrincipalIn(tx)` marcaba "plata adentro" con una FIRMA. Nadie
-// transmitía nada, nadie esperaba un receipt → el payout salía sobre dinero que podía no existir.
-// Modo real ⇔ el 7º arg (settlement) está inyectado; sin él, TODO queda byte-idéntico (AC-5).
-// ─────────────────────────────────────────────────────────────────────────────
-
-const SENDER = "0x1111111111111111111111111111111111111111";
-const authorization: Eip3009Authorization = {
-  from: SENDER,
-  to: FAKE_RECEIVER,
-  value: "400000000",
-  validAfter: "0",
-  validBefore: "1783036800",
-  nonce: "0xbbbb000000000000000000000000000000000000000000000000000000000002",
-};
-const eip3009 = { authorization, signature: "0xSIGNATURE_CRUDA" };
-
-/** Wallet en modo REAL: devuelve el payload EIP-3009 además del tx (como InjectedWallet con el flag on). */
-function realWallet(): FakeWallet {
-  return new FakeWallet(eip3009);
-}
-
-// WKH-211 [SDD-GAP #1]: el 7º arg es `{ gateway, prepare }` (el `receiver` se removió). En modo real
-// el `to` es el depositAddress ATESTADO que devuelve prepare (FAKE_DEPOSIT_ADDRESS por default) — C5 lo
-// compara runtime. El default de prepare resuelve OK; pasá otro para ejercitar AC-7 (prepare falla).
-function realMode(
-  gateway: FakeSettlementGateway,
-  prepare: FakePayoutPrepareGateway = new FakePayoutPrepareGateway(),
-) {
-  return { gateway, prepare };
-}
-
-// El `to` on-chain que reporta el settle DEBE ser el depositAddress atestado (lo que firmó la wallet)
-// para que C5 (isAddressEqual(res.to, deposit.address)) matchee en el happy-path.
-function okSettle(over: Partial<{ txHash: string; valueMinor: number; to: string }> = {}) {
-  return new FakeSettlementGateway({
-    ok: true,
-    txHash: FAKE_SETTLE_TX,
-    valueMinor: 400_000_000,
-    to: FAKE_DEPOSIT_ADDRESS, // WKH-211: el `to` verificado = depositAddress atestado, NO el receiver
-    from: SENDER,
-    attestation: "att-fake",
-    ...over,
-  });
-}
-
-describe("ConfirmAndSend — settle real del principal (WKH-168, C1-C6)", () => {
-  it("AC-1: modo real ⇒ settle() recibe la AUTORIZACIÓN COMPLETA (no solo la firma) + el expectedValueMinor", async () => {
+describe("ConfirmAndSend — invariantes de entrada", () => {
+  it("remesa inexistente → throw remittance_not_found (no devuelve algo a medias)", async () => {
     const repo = new InMemoryRepo();
-    const settlement = okSettle();
-    const id = await seedQuoted(repo);
-    await new ConfirmAndSend(
-      realWallet(),
-      new FakePayoutGateway(),
-      repo,
-      new FixedClock(),
-      new FakePayoutAuthorityGateway(),
-      new FakeRefundGateway(),
-      realMode(settlement),
-    ).execute({ remittanceId: id });
-
-    expect(settlement.calls).toHaveLength(1);
-    expect(settlement.calls[0]?.authorization).toEqual(authorization);
-    expect(settlement.calls[0]?.signature).toBe("0xSIGNATURE_CRUDA");
-    expect(settlement.calls[0]?.expectedValueMinor).toBe(400_000_000); // del QUOTE, no del caller
-    expect(settlement.calls[0]?.quoteId).toBe("q1");
-  });
-
-  it("AC-4/C6: happy real ⇒ principalTx es el HASH VERIFICADO on-chain, NUNCA la firma cruda", async () => {
-    const repo = new InMemoryRepo();
-    const id = await seedQuoted(repo);
-    const out = await new ConfirmAndSend(
-      realWallet(),
-      new FakePayoutGateway(),
-      repo,
-      new FixedClock(),
-      new FakePayoutAuthorityGateway(),
-      new FakeRefundGateway(),
-      realMode(okSettle()),
-    ).execute({ remittanceId: id });
-
-    expect(out.snapshot.principalTx).toBe(FAKE_SETTLE_TX);
-    expect(out.snapshot.principalTx).toMatch(/^0x[0-9a-f]{64}$/);
-    expect(out.snapshot.principalTx).not.toBe("0xSIGNATURE_CRUDA"); // ← el bug que la HU mata
-    expect(out.snapshot.principalTx).not.toBe("0xprincipal");
-  });
-
-  it("WKH-211/AC-1: el depositAttestation de prepare viaja al SETTLE (no al submit); submit NO se llama (DT-7)", async () => {
-    const repo = new InMemoryRepo();
-    const payouts = new FakePayoutGateway();
-    const submitSpy = vi.spyOn(payouts, "submit");
-    const settlement = okSettle();
-    const id = await seedQuoted(repo);
-    const out = await new ConfirmAndSend(
-      realWallet(),
-      payouts,
-      repo,
-      new FixedClock(),
-      new FakePayoutAuthorityGateway(),
-      new FakeRefundGateway(),
-      realMode(settlement),
-    ).execute({ remittanceId: id });
-
-    // El binding HMAC de prepare (deposit-att-fake) es lo que el guard B1-B6 re-verifica server-side.
-    expect(settlement.calls[0]?.depositAttestation).toBe("deposit-att-fake");
-    // DT-7: la orden ya se creó en prepare ⇒ el submit del payout NUNCA se llama en modo real.
-    expect(submitSpy).not.toHaveBeenCalled();
-    // markPayoutSubmitted usa el payoutId de prepare (transfi-po-1).
-    expect(out.snapshot.status).toBe("payout_submitted");
-  });
-
-  it("C1: modo real pero la wallet NO devolvió eip3009 (invariante rota) ⇒ payout_failed, NUNCA principal_in", async () => {
-    const repo = new InMemoryRepo();
-    const settlement = okSettle();
-    const payouts = new FakePayoutGateway();
-    const submitSpy = vi.spyOn(payouts, "submit");
-    const id = await seedQuoted(repo);
-    // FakeWallet SIN eip3009 = la wallet demo. En modo real eso es una invariante rota: fail-loud.
-    const out = await new ConfirmAndSend(
-      new FakeWallet(),
-      payouts,
-      repo,
-      new FixedClock(),
-      new FakePayoutAuthorityGateway(),
-      new FakeRefundGateway(),
-      realMode(settlement),
-    ).execute({ remittanceId: id });
-
-    expect(out.snapshot.principalTx).toBeNull();
-    expect(out.snapshot.failureReason).toBe("settlement_unverified");
-    expect(settlement.calls).toHaveLength(0); // nada que transmitir
-    expect(submitSpy).not.toHaveBeenCalled();
-  });
-
-  it("AC-3/C2: cada SettlementFailureReason ⇒ payout_failed, principalTx null, submit NO llamado, creditBack sí", async () => {
-    const reasons: SettlementFailureReason[] = [
-      "settlement_unavailable",
-      "settlement_rejected",
-      "settlement_amount_mismatch",
-      "settlement_receiver_mismatch",
-      "settlement_reverted",
-      "settlement_unverified",
-    ];
-    for (const reason of reasons) {
-      const repo = new InMemoryRepo();
-      const payouts = new FakePayoutGateway();
-      const submitSpy = vi.spyOn(payouts, "submit");
-      const refund = new FakeRefundGateway();
-      const id = await seedQuoted(repo);
-      const out = await new ConfirmAndSend(
-        realWallet(),
-        payouts,
+    await expect(
+      new ConfirmAndSend(
+        new FakeSolanaWallet(),
         repo,
         new FixedClock(),
-        new FakePayoutAuthorityGateway(),
-        refund,
-        realMode(new FakeSettlementGateway({ ok: false, reason })),
-      ).execute({ remittanceId: id });
-
-      expect(out.snapshot.principalTx).toBeNull(); // AC-3: NUNCA principal_in
-      expect(out.snapshot.failureReason).toBe(reason);
-      expect(submitSpy).not.toHaveBeenCalled(); // el payout NO se dispara sin plata
-      expect(refund.calls[0]?.reason).toBe(reason);
-    }
-  });
-
-  it("AC-3/C3: settle() THROW (red/bug) ⇒ settlement_unavailable, principalTx null, ninguna excepción escapa", async () => {
-    const repo = new InMemoryRepo();
-    const payouts = new FakePayoutGateway();
-    const submitSpy = vi.spyOn(payouts, "submit");
-    const id = await seedQuoted(repo);
-    const throwing = new FakeSettlementGateway(undefined, "reject");
-
-    const out = await new ConfirmAndSend(
-      realWallet(),
-      payouts,
-      repo,
-      new FixedClock(),
-      new FakePayoutAuthorityGateway(),
-      new FakeRefundGateway(),
-      realMode(throwing),
-    ).execute({ remittanceId: id });
-
-    expect(out.snapshot.principalTx).toBeNull();
-    expect(out.snapshot.failureReason).toBe("settlement_unavailable");
-    expect(submitSpy).not.toHaveBeenCalled();
-  });
-
-  it("AC-2/C4: settle ok pero valueMinor ≠ quote.send.minor ⇒ amount_mismatch, markPrincipalIn NUNCA llamado", async () => {
-    const repo = new InMemoryRepo();
-    const payouts = new FakePayoutGateway();
-    const submitSpy = vi.spyOn(payouts, "submit");
-    const id = await seedQuoted(repo);
-    // El settle "exitoso" reporta 1 micro-USDC: el use-case NO puede creerle.
-    const out = await new ConfirmAndSend(
-      realWallet(),
-      payouts,
-      repo,
-      new FixedClock(),
-      new FakePayoutAuthorityGateway(),
-      new FakeRefundGateway(),
-      realMode(okSettle({ valueMinor: 1 })),
-    ).execute({ remittanceId: id });
-
-    expect(out.snapshot.principalTx).toBeNull();
-    expect(out.snapshot.failureReason).toBe("settlement_amount_mismatch");
-    expect(submitSpy).not.toHaveBeenCalled();
-  });
-
-  it("AC-2/C5: settle ok pero el `to` no es el receiver de env ⇒ receiver_mismatch, sin principal_in", async () => {
-    const repo = new InMemoryRepo();
-    const payouts = new FakePayoutGateway();
-    const submitSpy = vi.spyOn(payouts, "submit");
-    const id = await seedQuoted(repo);
-    const out = await new ConfirmAndSend(
-      realWallet(),
-      payouts,
-      repo,
-      new FixedClock(),
-      new FakePayoutAuthorityGateway(),
-      new FakeRefundGateway(),
-      realMode(okSettle({ to: "0x9999999999999999999999999999999999999999" })),
-    ).execute({ remittanceId: id });
-
-    expect(out.snapshot.principalTx).toBeNull();
-    expect(out.snapshot.failureReason).toBe("settlement_receiver_mismatch");
-    expect(submitSpy).not.toHaveBeenCalled();
-  });
-});
-
-describe("ConfirmAndSend — marca AC-6 (principal REALMENTE adentro, refund manual)", () => {
-  it("AC-6/C7: modo real + quote vencido DURANTE el settle ⇒ principal_settled_refund_manual", async () => {
-    const repo = new InMemoryRepo();
-    const refund = new FakeRefundGateway();
-    const payouts = new FakePayoutGateway();
-    const submitSpy = vi.spyOn(payouts, "submit");
-    const id = await seedQuoted(repo);
-    // Llamadas a nowIso(): 1) confirm 2) re-check 2.5 (válido) 3) markPrincipalIn 4) re-check 3.5
-    // (VENCIDO: el quote murió DURANTE el settle, que en real tarda — espera el receipt).
-    const clock = new ScriptedClock([T0, T0, T0, "2026-07-09T18:20:00.000Z"]);
-
-    const out = await new ConfirmAndSend(
-      realWallet(),
-      payouts,
-      repo,
-      clock,
-      new FakePayoutAuthorityGateway(),
-      refund,
-      realMode(okSettle()),
-    ).execute({ remittanceId: id });
-
-    // El principal YA está adentro on-chain: el "refund" del ledger NO lo revierte (DT-8) → la marca
-    // dice la verdad en vez de mentir con quote_expired_before_submit.
-    expect(out.snapshot.principalTx).toBe(FAKE_SETTLE_TX);
-    expect(out.snapshot.failureReason).toBe("principal_settled_refund_manual");
-    expect(refund.calls[0]?.reason).toBe("principal_settled_refund_manual");
-    expect(submitSpy).not.toHaveBeenCalled();
-  });
-
-  it("WKH-211/DT-7 + contraste AC-5: real = submit NO se llama (payout gateway irrelevante); DEMO = reason del partner INTACTO", async () => {
-    // (a) modo REAL: la orden se creó en prepare ⇒ payouts.submit NUNCA se llama. Un payout gateway
-    // que "fallaría" es IRRELEVANTE: la remesa avanza a payout_submitted (el settled llega por webhook).
-    // El principal_settled_refund_manual del modo real sólo lo produce el 2º expiry (C7), no un submit.
-    const repoR = new InMemoryRepo();
-    const refundR = new FakeRefundGateway();
-    const payoutsR = new FakePayoutGateway({ status: "failed", failureReason: "partner_down" });
-    const submitSpyR = vi.spyOn(payoutsR, "submit");
-    const idR = await seedQuoted(repoR);
-    const outR = await new ConfirmAndSend(
-      realWallet(),
-      payoutsR,
-      repoR,
-      new FixedClock(),
-      new FakePayoutAuthorityGateway(),
-      refundR,
-      realMode(okSettle()),
-    ).execute({ remittanceId: idR });
-    expect(submitSpyR).not.toHaveBeenCalled(); // DT-7: submit no se dispara en real
-    expect(outR.snapshot.status).toBe("payout_submitted"); // avanza con el payoutId de prepare
-    expect(outR.snapshot.failureReason).toBeNull(); // no hubo fallo (submit ni se llamó)
-    expect(refundR.calls).toHaveLength(0);
-
-    // (b) modo DEMO (sin 7º arg): NADA cambia respecto de pre-HU — el reason del partner sobrevive.
-    const repoD = new InMemoryRepo();
-    const refundD = new FakeRefundGateway();
-    const idD = await seedQuoted(repoD);
-    const outD = await new ConfirmAndSend(
-      new FakeWallet(),
-      new FakePayoutGateway({ status: "failed", failureReason: "partner_down" }),
-      repoD,
-      new FixedClock(),
-      new FakePayoutAuthorityGateway(),
-      refundD,
-    ).execute({ remittanceId: idD });
-    expect(outD.snapshot.failureReason).toBe("partner_down");
-    expect(refundD.calls[0]?.reason).toBe("partner_down");
-    expect(outD.snapshot.principalTx).toBe("0xprincipal"); // demo byte-idéntico
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// WKH-206 — proof-of-possession opt-in (8º arg `pop`).
-// Modo PoP ⇔ el 8º arg (pop) está inyectado; sin él, TODO queda byte-idéntico (AC-5).
-// ─────────────────────────────────────────────────────────────────────────────
-describe("ConfirmAndSend — proof-of-possession opt-in (WKH-206)", () => {
-  it("AC-3: `pop` inyectado ⇒ el submit recibe popChallenge/popSignature de la prueba", async () => {
-    const repo = new InMemoryRepo();
-    const payouts = new FakePayoutGateway();
-    const submitSpy = vi.spyOn(payouts, "submit");
-    const id = await seedQuoted(repo);
-    await new ConfirmAndSend(
-      new FakeWallet(),
-      payouts,
-      repo,
-      new FixedClock(),
-      new FakePayoutAuthorityGateway(),
-      new FakeRefundGateway(),
-      undefined, // settlement: modo demo
-      new FakePopSigner(), // pop: modo PoP → adjunta la prueba
-    ).execute({ remittanceId: id });
-
-    expect(submitSpy.mock.calls[0]?.[0].popChallenge).toBe("pop-ch");
-    expect(submitSpy.mock.calls[0]?.[0].popSignature).toBe("0xfakesig");
-  });
-
-  it("AC-5: `pop` undefined (demo) ⇒ el submit NO recibe popChallenge/popSignature (byte-idéntico)", async () => {
-    const repo = new InMemoryRepo();
-    const payouts = new FakePayoutGateway();
-    const submitSpy = vi.spyOn(payouts, "submit");
-    const id = await seedQuoted(repo);
-    await new ConfirmAndSend(
-      new FakeWallet(),
-      payouts,
-      repo,
-      new FixedClock(),
-      new FakePayoutAuthorityGateway(),
-      new FakeRefundGateway(),
-    ).execute({ remittanceId: id });
-
-    expect(submitSpy.mock.calls[0]?.[0].popChallenge).toBeUndefined();
-    expect(submitSpy.mock.calls[0]?.[0].popSignature).toBeUndefined();
-  });
-
-  it("DT-2/AR-MNR-1: pop.prove() → null (501, server-OFF) ⇒ SKIP: submit SIN campos, remesa avanza normal", async () => {
-    // El HttpPopSigner devuelve null cuando /challenge responde 501 (mecanismo apagado server-side).
-    // El use-case NO adjunta popChallenge/popSignature ⇒ el submit es byte-idéntico al demo y la
-    // remesa avanza (settled), sin error.
-    const repo = new InMemoryRepo();
-    const payouts = new FakePayoutGateway();
-    const submitSpy = vi.spyOn(payouts, "submit");
-    const id = await seedQuoted(repo);
-    const skipPop: PopSigner = { prove: async () => null };
-    const out = await new ConfirmAndSend(
-      new FakeWallet(),
-      payouts,
-      repo,
-      new FixedClock(),
-      new FakePayoutAuthorityGateway(),
-      new FakeRefundGateway(),
-      undefined, // settlement: modo demo
-      skipPop, // pop inyectado pero devuelve null ⇒ SKIP
-    ).execute({ remittanceId: id });
-
-    expect(submitSpy.mock.calls[0]?.[0].popChallenge).toBeUndefined();
-    expect(submitSpy.mock.calls[0]?.[0].popSignature).toBeUndefined();
-    expect(out.snapshot.status).toBe("payout_submitted"); // avanza normal (default del fake), NO error
-    expect(out.snapshot.failureReason).toBeNull(); // el SKIP no degradó nada
-  });
-
-  it("WKH-211/AC-7: pop.prove() TIRA en modo REAL ⇒ falla ANTES de firmar (nunca principal_in), NO escapa execute()", async () => {
-    // WKH-211: en el reorder, prove() se ejecuta en PREPARE (paso 2.7), ANTES de authorizePrincipal.
-    // Un throw de prove() (blip de red / 5xx en deployment ON) cae en el catch del prepare → se falla
-    // ANTES de la firma (AC-7): el principal NUNCA entró ⇒ refund normal (NO la marca manual AC-6, que
-    // sólo aplica con el principal ya adentro). NO escapa execute() ni deja la remesa varada.
-    const repo = new InMemoryRepo();
-    const payouts = new FakePayoutGateway();
-    const submitSpy = vi.spyOn(payouts, "submit");
-    const wallet = realWallet();
-    const authorizeSpy = vi.spyOn(wallet, "authorizePrincipal");
-    const refund = new FakeRefundGateway();
-    const id = await seedQuoted(repo);
-    const throwingPop: PopSigner = {
-      prove: async () => {
-        throw new Error("pop_challenge_unavailable");
-      },
-    };
-
-    // El assert de "no escapa": execute() RESUELVE (no rechaza) con la remesa degradada.
-    const out = await new ConfirmAndSend(
-      wallet,
-      payouts,
-      repo,
-      new FixedClock(),
-      new FakePayoutAuthorityGateway(),
-      refund,
-      realMode(okSettle()), // modo real
-      throwingPop,
-    ).execute({ remittanceId: id });
-
-    expect(out.snapshot.status).not.toBe("principal_in"); // NO queda varada
-    expect(out.snapshot.principalTx).toBeNull(); // el principal NUNCA entró (falló antes de firmar)
-    expect(out.snapshot.failureReason).toBe("prepare_unavailable"); // AC-7: fail ANTES de la firma
-    expect(authorizeSpy).not.toHaveBeenCalled(); // la wallet NUNCA firmó (prove falló en prepare)
-    expect(submitSpy).not.toHaveBeenCalled();
-    expect(refund.calls[0]?.reason).toBe("prepare_unavailable");
+        new FakePayoutAuthorityGateway({ authorized: true }),
+        new FakeRefundGateway(),
+      ).execute({ remittanceId: "no-existe" }),
+    ).rejects.toThrow("remittance_not_found");
   });
 });

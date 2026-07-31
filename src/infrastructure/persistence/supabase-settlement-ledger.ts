@@ -59,6 +59,13 @@ function preparedPlaceholderTxHash(idempotencyKey: string): string {
   return `prepared:${idempotencyKey}`;
 }
 
+/** El `chainId` del port sigue siendo `number` (CD-11: NO se re-tipa el port ni la columna, porque
+ *  la columna describe filas ya escritas). Ningún caller vivo tiene un chainId que pasar: mandan
+ *  esta constante, que
+ *  `vmNetworkColumns` DESCARTA en la rama "solana" (escribe `chain_id: null`). Es un relleno inerte
+ *  con nombre, no un chainId 0 que se persista en ningún lado. */
+export const CHAIN_ID_NOT_APPLICABLE = 0;
+
 /** Columnas de IDENTIDAD DE RED de un INSERT, coherentes por construcción con el CHECK
  *  `remittance_settlements_vm_netid_chk` (migración 20260721, YA aplicada):
  *      vm='evm'    ⇒ chain_id NOT NULL  Y  network_id NULL
@@ -70,9 +77,9 @@ function preparedPlaceholderTxHash(idempotencyKey: string): string {
  *  que ser estructural, no una convención entre call-sites.
  *  `network_id` sale de resolveSolanaNetworkId() (CAIP-2, la MISMA fuente server-side que ata el PoP
  *  ed25519, el envelope x402 `solana:<cluster>` y el binding P4 de /solana/escrow/remittance-ids) —
- *  NUNCA del body, NUNCA un literal nuevo. `chainId` es un chainId EVM: en la rama Solana NO se
- *  escribe (no existe chainId numérico en Solana; escribirlo era el mislabel: filas base58 con el
- *  chainId de Avalanche). */
+ *  NUNCA del body, NUNCA un literal nuevo. `chainId` es el identificador numérico de red que usaba una
+ *  versión anterior de este servicio: acá NO se escribe (no hay chainId numérico en Solana, y
+ *  escribirlo era el mislabel — filas con address base58 etiquetadas con un id de otra red). */
 function vmNetworkColumns(
   vm: "evm" | "solana",
   chainId: number,
@@ -185,11 +192,12 @@ export class SupabaseSettlementLedger implements SettlementLedger {
         idempotency_key: input.idempotencyKey,
         tx_hash: preparedPlaceholderTxHash(input.idempotencyKey), // placeholder (NOT NULL); no hay settle aún
         // vm + (chain_id | network_id) en un solo lugar: acopladas por el CHECK de la DB (ver
-        // vmNetworkColumns). Antes esto era `chain_id: input.chainId` a secas ⇒ TODA fila de una remesa
-        // Solana quedaba vm='evm' con un chainId de Avalanche y una address base58.
+        // vmNetworkColumns). Una versión anterior de este servicio escribía `chain_id: input.chainId`
+        // a secas ⇒ TODA fila quedaba con el discriminador y el id de red heredados, y una address
+        // base58. Esas filas siguen en la tabla: por eso el discriminador no se puede podar.
         ...vmNetworkColumns(input.vm, input.chainId),
-        sender_address: canonicalizeAddress(input.senderAddress, input.vm),
-        receiver_address: canonicalizeAddress(input.depositAddress, input.vm), // el depositAddress ES el receiver
+        sender_address: canonicalizeAddress(input.senderAddress),
+        receiver_address: canonicalizeAddress(input.depositAddress), // el depositAddress ES el receiver
         value_minor: "0", // desconocido en prepare; el real llega en recordPrincipalIn
         status: "prepared",
         payout_id: input.payoutId,
@@ -221,7 +229,7 @@ export class SupabaseSettlementLedger implements SettlementLedger {
     // con el mismo hash, el UPDATE/INSERT de abajo viola uq_remit_settle_txhash → 23505 → esta función
     // TIRA. Lo que cambia es que ahora esa colisión GRITA (log [ALERT] del best-effort de la route) en
     // vez de morir en silencio dentro de un ignoreDuplicates. La protección no se relajó: se hizo audible.
-    const owner = canonicalizeAddress(input.senderAddress, input.vm);
+    const owner = canonicalizeAddress(input.senderAddress);
     const nowIso = new Date().toISOString();
     // Evidencia VERIFICADA on-chain (CD-13) — nunca un eco del body. payout_id NO está en el patch:
     // el id de la orden del proveedor que escribió prepare NO se pisa (un merge con null lo borraría).
@@ -236,7 +244,7 @@ export class SupabaseSettlementLedger implements SettlementLedger {
       quote_id: input.quoteId,
       ...vmNetworkColumns(input.vm, input.chainId), // MISMA fuente que recordOrderPrepared (CHECK 20260721)
       sender_address: owner,
-      receiver_address: canonicalizeAddress(input.receiverAddress, input.vm),
+      receiver_address: canonicalizeAddress(input.receiverAddress),
       status: "principal_in" as const,
     };
 
@@ -303,14 +311,13 @@ export class SupabaseSettlementLedger implements SettlementLedger {
     senderAddress: string;
     signature: string;
   }): Promise<void> {
-    // WKH-213/R3 — el rail Solana ESCRIBE al ledger. La signature base58 que /solana/sponsor verifica
-    // on-chain es el equivalente Solana del txHash; sin esto, una remesa Solana nacía 'prepared' y
-    // MORÍA 'prepared' (su flujo no pasa por /api/settle/principal ni por el submit a2a, así que
-    // ninguna otra escritura la tocaba nunca).
+    // WKH-213/R3 — el settle ESCRIBE al ledger. La signature base58 que /solana/sponsor verifica
+    // on-chain es lo que ocupa el lugar del txHash; sin esto, una remesa nacía 'prepared' y MORÍA
+    // 'prepared' (ninguna otra escritura la tocaba nunca).
     // Se ancla a la fila preparada en vez de insertar una nueva porque los datos que faltan
     // (quote_id, value_minor, receiver, payout_id) YA están ahí y son server-side: el sponsor sólo
     // devuelve la signature, y escribir un monto declarado por el cliente violaría CD-13.
-    const owner = canonicalizeAddress(input.senderAddress, "solana"); // base58 case-sensitive (CD-10)
+    const owner = canonicalizeAddress(input.senderAddress); // base58 case-sensitive (CD-10)
     // 1. Fila 'prepared' de ESTA remesa y ESTE sender. `.eq("sender_address", owner)` es el guard de
     //    ownership (CD-9). Una remesa re-cotizada puede tener MÁS de una 'prepared' (una por quoteId):
     //    se toma la más reciente — la vieja quedó genuinamente huérfana y debe seguir visible como tal.
@@ -370,7 +377,7 @@ export class SupabaseSettlementLedger implements SettlementLedger {
       .from(TABLE)
       .update(patch)
       .eq("idempotency_key", input.idempotencyKey)
-      .eq("sender_address", canonicalizeAddress(input.senderAddress, input.vm));
+      .eq("sender_address", canonicalizeAddress(input.senderAddress));
     if (error) throw new Error(`ledger_record_payout_outcome_failed:${error.code ?? "unknown"}`);
   }
 
@@ -433,7 +440,7 @@ export class SupabaseSettlementLedger implements SettlementLedger {
     const { data, error } = await this.client
       .from(TABLE)
       .select("remittance_id, status, created_at")
-      .eq("sender_address", canonicalizeAddress(input.senderAddress, input.vm)) // ← EL GUARD
+      .eq("sender_address", canonicalizeAddress(input.senderAddress)) // ← EL GUARD
       .order("created_at", { ascending: false })
       .limit(input.limit);
     if (error) throw new Error(`ledger_list_by_sender_failed:${error.code ?? "unknown"}`);

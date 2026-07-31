@@ -4,7 +4,6 @@
 
 import { Money } from "../../domain/money";
 import {
-  type Beneficiary,
   type KycVerification,
   type Quote,
   toPersistedIdentity,
@@ -15,7 +14,6 @@ import type {
   KycRequest,
   KycStartResult,
   PayoutGateway,
-  PayoutPrepareGateway,
   PayoutRecord,
   PayoutSubmit,
   QuoteGateway,
@@ -120,25 +118,5 @@ export class FallbackPayoutGateway implements PayoutGateway {
       failureReason: null,
       provenance: "local-fallback", // WKH-200: mock → dispara el banner de modo demo
     };
-  }
-}
-
-// WKH-211 — mock del PayoutPrepareGateway. NUNCA produce un depositAddress real (no-custodial ⇒ el `to`
-// firmable debe venir SIEMPRE del server con DEPOSIT_ATTESTATION_SECRET). Por eso el container jamás lo
-// cablea en modo real (sólo inyecta el Http* con los flags ON). Devuelve un fallo estable: el demo no
-// usa el path de prepare (settlement === undefined ⇒ ni se invoca).
-export class FallbackPayoutPrepareGateway implements PayoutPrepareGateway {
-  async prepare(_input: {
-    remittanceId: string;
-    quoteId: string;
-    kycVerificationId: string;
-    address: string;
-    amountUsd: number;
-    beneficiary: Beneficiary;
-    idempotencyKey: string;
-    popChallenge?: string;
-    popSignature?: string;
-  }): Promise<{ ok: false; reason: string }> {
-    return { ok: false, reason: "prepare_mock" };
   }
 }

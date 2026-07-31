@@ -5,6 +5,15 @@ import { LocalKycStore } from "./kyc-store";
 const KEY = "chaski.kyc.v1";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+// WKH-320: estos tests usaban labels `0xAAA`/`0xaaa` como addresses y probaban que el scoping era
+// CASE-INSENSITIVE (la rama EVM lowercaseaba). Esa rama ya no existe: canonicalizeAddress es base58
+// y case-SENSITIVE. Las addresses pasan a ser pubkeys reales y el caso que probaba la
+// case-insensibilidad se reemplaza por el que prueba lo contrario, que es el invariante vivo (CD-7).
+const A = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+const B = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const C = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+const D = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"; // nunca guardada
+
 // Stub Storage Map-backed (jsdom NO instalado). CD-9: tipado explícito, sin any.
 class MemStorage implements Storage {
   private m = new Map<string, string>();
@@ -59,12 +68,12 @@ describe("LocalKycStore — persistencia sin PII cruda (AC-2)", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-11T00:00:00.000Z"));
     const store = new LocalKycStore();
-    await store.save("0xAAA", kyc);
+    await store.save(A, kyc);
 
     const raw = storage.getItem(KEY);
     expect(raw).not.toBeNull();
     const parsed = JSON.parse(raw ?? "{}") as Record<string, { v: KycVerification; savedAt: number }>;
-    const entry = parsed["0xaaa"];
+    const entry = parsed[A];
     expect(entry?.savedAt).toBe(Date.now());
     expect(entry?.v.identity?.documentNumberLast4).toBe("6677");
     // el string persistido NUNCA contiene PII cruda
@@ -74,31 +83,21 @@ describe("LocalKycStore — persistencia sin PII cruda (AC-2)", () => {
     expect(raw).not.toContain("1990-05-14");
   });
 
-  it("round-trip: get devuelve la verificación guardada (case-insensitive en address)", async () => {
+  it("round-trip: get devuelve la verificación guardada", async () => {
     const store = new LocalKycStore();
-    await store.save("0xAAA", kyc);
-    const got = await store.get("0xaaa");
+    await store.save(A, kyc);
+    const got = await store.get(A);
     expect(got?.verificationId).toBe("v-1");
     expect(got?.identity?.documentNumberLast4).toBe("6677");
   });
 });
 
-// ── W3.2 (HU-SOL-7 / CD-9): con vm='solana' la KYC-once usa la pubkey base58 case-preservada como key.
-//    Dos pubkeys Solana distintas NUNCA colisionan; una key malformada → throw (fail-loud), NUNCA la
-//    entry de la víctima (cierra el IDOR base58). Restaura la env en afterEach. ──
+// ── W3.2 (HU-SOL-7 / CD-9): la KYC-once usa la pubkey base58 case-preservada como key. Dos pubkeys
+//    distintas NUNCA colisionan; una key malformada → throw (fail-loud), NUNCA la entry de la víctima
+//    (cierra el IDOR base58). WKH-320: ya no hace falta stubear la VM — es la única. ──
 describe("LocalKycStore — IDOR base58 Solana (CD-9)", () => {
   const K = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // víctima (base58 mixed-case)
   const K2 = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // otra pubkey válida distinta
-  let prevVm: string | undefined;
-  beforeEach(() => {
-    prevVm = process.env.NEXT_PUBLIC_VM;
-    process.env.NEXT_PUBLIC_VM = "solana";
-  });
-  afterEach(() => {
-    if (prevVm === undefined) delete process.env.NEXT_PUBLIC_VM;
-    else process.env.NEXT_PUBLIC_VM = prevVm;
-  });
-
   it("AC-4: round-trip íntegro — save(K)+get(K) devuelve la misma entry (case preservado)", async () => {
     const store = new LocalKycStore();
     await store.save(K, kyc);
@@ -125,13 +124,13 @@ describe("LocalKycStore — TTL 180 días", () => {
     const base = new Date("2026-01-01T00:00:00.000Z");
     vi.setSystemTime(base);
     const store = new LocalKycStore();
-    await store.save("0xAAA", kyc);
+    await store.save(A, kyc);
 
     vi.setSystemTime(new Date(base.getTime() + 179 * DAY_MS));
-    expect((await store.get("0xAAA"))?.verificationId).toBe("v-1");
+    expect((await store.get(A))?.verificationId).toBe("v-1");
 
     vi.setSystemTime(new Date(base.getTime() + 181 * DAY_MS));
-    expect(await store.get("0xAAA")).toBeNull();
+    expect(await store.get(A)).toBeNull();
   });
 });
 
@@ -160,10 +159,10 @@ describe("LocalKycStore — scrub comprensivo de PII legacy (MNR-1)", () => {
     };
     // Address B: entry ya válido/reducido.
     const validB = { v: kyc, savedAt: Date.now() };
-    storage.setItem(KEY, JSON.stringify({ "0xa": legacyFullA, "0xb": validB }));
+    storage.setItem(KEY, JSON.stringify({ [A]: legacyFullA, [B]: validB }));
 
     const store = new LocalKycStore();
-    await store.save("0xC", kyc); // save de OTRA address
+    await store.save(C, kyc); // save de OTRA address
 
     const raw = storage.getItem(KEY);
     // el string persistido YA NO contiene la PII cruda de A (scrub comprensivo)
@@ -174,31 +173,38 @@ describe("LocalKycStore — scrub comprensivo de PII legacy (MNR-1)", () => {
 
     // A quedó reducida (últimos 4), B intacta, C agregada
     const parsed = JSON.parse(raw ?? "{}") as Record<string, { v: KycVerification }>;
-    expect(parsed["0xa"]?.v.identity?.documentNumberLast4).toBe("6677");
-    expect(parsed["0xb"]?.v.verificationId).toBe("v-1");
-    expect(parsed["0xc"]?.v.verificationId).toBe("v-1");
+    expect(parsed[A]?.v.identity?.documentNumberLast4).toBe("6677");
+    expect(parsed[B]?.v.verificationId).toBe("v-1");
+    expect(parsed[C]?.v.verificationId).toBe("v-1");
   });
 });
 
 describe("LocalKycStore — clear scopeado (WKH-184 AC-2/CD-3)", () => {
   it("clear borra SOLO la address pedida, no afecta otras", async () => {
     const store = new LocalKycStore();
-    await store.save("0xAAA", kyc);
-    await store.save("0xBBB", kyc);
+    await store.save(A, kyc);
+    await store.save(B, kyc);
 
-    await store.clear("0xAAA");
+    await store.clear(A);
 
-    expect(await store.get("0xAAA")).toBeNull();
-    expect((await store.get("0xBBB"))?.verificationId).toBe("v-1");
+    expect(await store.get(A)).toBeNull();
+    expect((await store.get(B))?.verificationId).toBe("v-1");
   });
 
-  it("clear es case-insensitive (clear('0xaaa') borra la entry de '0xAAA')", async () => {
+  // WKH-320: este caso probaba que `clear` era CASE-INSENSITIVE (clear('0xaaa') borraba la entry de
+  // '0xAAA'), que era el comportamiento de la rama EVM. Esa rama no existe. Lo que se clava ahora es
+  // el invariante vivo y opuesto: base58 CASE-SENSITIVE (CD-7, el IDOR que cerró HU-SOL-7).
+  it("clear es CASE-SENSITIVE: una variante con otro case NO borra la entry ajena", async () => {
     const store = new LocalKycStore();
-    await store.save("0xAAA", kyc);
+    await store.save(A, kyc);
 
-    await store.clear("0xaaa");
+    // Misma pubkey con un carácter en otro case ⇒ otra key (o base58 inválido ⇒ throw). En los dos
+    // casos NO puede borrar la entry de la víctima.
+    const altCase = `${A.slice(0, 1)}${A[1] === A[1]!.toLowerCase() ? A[1]!.toUpperCase() : A[1]!.toLowerCase()}${A.slice(2)}`;
+    expect(altCase).not.toBe(A);
+    await store.clear(altCase).catch(() => undefined);
 
-    expect(await store.get("0xAAA")).toBeNull();
+    expect((await store.get(A))?.verificationId).toBe("v-1");
   });
 
   it("AC-5: clear NO propaga la excepción si setItem lanza (quota/private-browsing)", async () => {
@@ -211,7 +217,7 @@ describe("LocalKycStore — clear scopeado (WKH-184 AC-2/CD-3)", () => {
     (globalThis as { window?: { localStorage: Storage } }).window = { localStorage: throwing };
     const store = new LocalKycStore();
 
-    await expect(store.clear("0xAAA")).resolves.toBeUndefined();
+    await expect(store.clear(A)).resolves.toBeUndefined();
   });
 
   it("AC-1: save NO propaga la excepción si setItem lanza (quota/private-browsing)", async () => {
@@ -224,26 +230,26 @@ describe("LocalKycStore — clear scopeado (WKH-184 AC-2/CD-3)", () => {
     (globalThis as { window?: { localStorage: Storage } }).window = { localStorage: throwing };
     const store = new LocalKycStore();
 
-    await expect(store.save("0xAAA", kyc)).resolves.toBeUndefined();
+    await expect(store.save(A, kyc)).resolves.toBeUndefined();
   });
 });
 
 describe("LocalKycStore — read defensivo AC-4", () => {
   it("entry legacy bare (KycVerification sin savedAt) → get null (non-crashing)", async () => {
     // shape viejo: address → KycVerification plano, sin wrapper.
-    storage.setItem(KEY, JSON.stringify({ "0xaaa": kyc }));
+    storage.setItem(KEY, JSON.stringify({ [A]: kyc }));
     const store = new LocalKycStore();
-    expect(await store.get("0xAAA")).toBeNull();
+    expect(await store.get(A)).toBeNull();
   });
 
   it("address ausente → null", async () => {
     const store = new LocalKycStore();
-    expect(await store.get("0xNOPE")).toBeNull();
+    expect(await store.get(D)).toBeNull();
   });
 
   it("raw corrupto → null (parse defensivo)", async () => {
     storage.setItem(KEY, "{broken");
     const store = new LocalKycStore();
-    expect(await store.get("0xAAA")).toBeNull();
+    expect(await store.get(A)).toBeNull();
   });
 });

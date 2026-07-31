@@ -23,9 +23,6 @@ import type {
   KycStore,
   PayoutAuthorityGateway,
   PayoutGateway,
-  PayoutPrepareGateway,
-  PopSigner,
-  PrincipalSettlementGateway,
   QuoteGateway,
   RefundGateway,
   SolanaEscrowRefundGateway,
@@ -54,17 +51,8 @@ export interface TestContainerOverrides {
   payouts?: PayoutGateway; // default: new FakePayoutGateway()
   payoutAuthority?: PayoutAuthorityGateway; // default: new FakePayoutAuthorityGateway()
   refund?: RefundGateway; // default: new FakeRefundGateway() (regresión-neutral, WKH-186)
-  // WKH-168: sin override queda UNDEFINED → ConfirmAndSend corre en modo DEMO byte-idéntico (AC-5).
-  // Inyectarlo = "modo real" (mismo criterio que el container: solo con el flag on). El receiver va
-  // ACOPLADO al gateway (AR/MNR-4 + CR/MNR-2): en modo real siempre existe, sin opcional que se
-  // saltee C5 en silencio.
-  // WKH-211 [SDD-GAP #1]: el `prepare` gateway va ACOPLADO dentro de `settlement` (no un opcional
-  // suelto) — modo real ⇔ gateway Y prepare presentes juntos.
-  settlement?: { gateway: PrincipalSettlementGateway; prepare: PayoutPrepareGateway };
-  // WKH-206: sin override queda UNDEFINED → ConfirmAndSend corre en modo DEMO byte-idéntico (AC-5).
-  // Inyectarlo = "modo PoP" (mismo criterio que el container: solo con el flag on).
-  pop?: PopSigner;
-  // HU-SOL-13: sin override queda UNDEFINED → la acción refund Solana NO se muestra (EVM/demo byte-idéntico).
+  // El settlement real se arma con `useCases.confirmAndSend` (ver confirm-and-send.money-path.test).
+  // HU-SOL-13: sin override queda UNDEFINED → la acción de refund NO se muestra.
   solanaRefund?: SolanaEscrowRefundGateway;
   clock?: Clock; // default: new FixedClock()
   useCases?: Partial<Container>; // escape hatch (ej. resumeKyc stub para T3)
@@ -90,16 +78,7 @@ export function buildTestContainer(o: TestContainerOverrides = {}): Container {
     startKyc: new StartKyc(kyc, kycStore, pending, repo, clock),
     resumeKyc: new ResumeKyc(kyc, kycStore, pending, repo, clock),
     lockQuote: new LockQuote(quotes, repo, clock),
-    confirmAndSend: new ConfirmAndSend(
-      wallet,
-      payouts,
-      repo,
-      clock,
-      payoutAuthority,
-      refund,
-      o.settlement, // WKH-168: undefined = modo demo (AC-5); definido = modo real
-      o.pop, // WKH-206: undefined = modo demo (AC-5); definido = modo PoP
-    ),
+    confirmAndSend: new ConfirmAndSend(wallet, repo, clock, payoutAuthority, refund),
     trackRemittance: new TrackRemittance(payouts, repo, clock, refund),
     listHistory: new ListHistory(repo),
     abandonPendingKyc: new AbandonPendingKyc(pending),

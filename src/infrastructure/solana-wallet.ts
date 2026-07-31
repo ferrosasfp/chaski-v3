@@ -1,7 +1,7 @@
 // src/infrastructure/solana-wallet.ts
 // SolanaWalletAdapter implements WalletPort — puente React-free hacia el árbol Solana vía el
 // singleton bridge. NUNCA importa @solana/wallet-adapter-* (seam AC-3). Valida base58 con PublicKey
-// de @solana/web3.js (CD-SDD-5), NUNCA isAddress de viem. connect()/getAddress()/signMessage() son
+// de @solana/web3.js (CD-SDD-5), NUNCA con un validador hexadecimal. connect()/getAddress()/signMessage() son
 // de HU-SOL-4 (NO se tocan). authorizePrincipal (HU-SOL-5) construye la ix `deposit` del escrow
 // Anchor, fija feePayer=facilitator, partial-signa SÓLO con la wallet (bridge) y devuelve la tx
 // serializada base64 — NUNCA broadcastea (CD-SDD-1, AC-3): el broadcast es del facilitator (HU-SOL-14).
@@ -36,7 +36,7 @@ const MAX_RECOVERY_CANDIDATES = 10;
 export class SolanaWalletAdapter implements WalletPort {
   private address: string | null = null;
 
-  // HU-SOL-20/AC-2: resolver OPCIONAL del remittanceId durable server-side. Ausente (EVM/demo, o
+  // HU-SOL-20/AC-2: resolver OPCIONAL del remittanceId durable server-side. Ausente (modo demo o
   // wiring viejo) ⇒ `refundEscrow` sin id explícito falla fail-loud con `escrow_id_unavailable`; el
   // path con id presente NUNCA lo consulta (AC-6 byte-idéntico).
   constructor(private readonly remittanceIdResolver?: SolanaRemittanceIdResolver) {}

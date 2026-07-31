@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WalletPort } from "../../application/ports";
 import { HttpPopSigner } from "./http-pop-signer";
 
-const ADDR = "0x1111111111111111111111111111111111111111";
+const ADDR = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // base58 pubkey
 
 // Wallet mínima: solo signMessage importa acá; el resto no se invoca.
 function fakeWallet(sig = "0xwalletsig"): WalletPort {

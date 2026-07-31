@@ -11,10 +11,8 @@ import {
 } from "../domain/remittance";
 import { ConcurrentModificationError } from "../application/errors";
 import { canonicalizeAddress } from "../infrastructure/address";
-import { resolveActiveVm } from "../infrastructure/chain";
 import type {
   Clock,
-  Eip3009Authorization,
   IdGenerator,
   KycDecision,
   KycGateway,
@@ -26,17 +24,14 @@ import type {
   PayoutAuthorityGateway,
   PayoutAuthorization,
   PayoutGateway,
-  PayoutPrepareGateway,
   PayoutRecord,
   PayoutSubmit,
   PopSigner,
-  PrincipalSettlementGateway,
   QuoteGateway,
   QuoteRequest,
   RefundGateway,
   RemittanceRepository,
   SenderRemittanceRef,
-  SettlementFailureReason,
   SettlementLedger,
   SettlementLedgerStatus,
   SettlementRecord,
@@ -97,20 +92,20 @@ export class InMemoryRepo implements RemittanceRepository {
     return s ? Remittance.rehydrate(s) : null;
   }
   async list(address: string): Promise<RemittanceState[]> {
-    const target = canonicalizeAddress(address, resolveActiveVm());
+    const target = canonicalizeAddress(address);
     return [...this.store.values()].filter(
       (s) =>
         s.ownerAddress != null &&
-        canonicalizeAddress(s.ownerAddress, resolveActiveVm()) === target,
+        canonicalizeAddress(s.ownerAddress) === target,
     );
   }
   async clearByOwner(address: string): Promise<void> {
     // Gemelo del filtro de list() sobre this.store (WKH-201/CD-6). this.store ES el store → delete directo.
-    const target = canonicalizeAddress(address, resolveActiveVm());
+    const target = canonicalizeAddress(address);
     for (const [id, s] of this.store) {
       if (
         s.ownerAddress != null &&
-        canonicalizeAddress(s.ownerAddress, resolveActiveVm()) === target
+        canonicalizeAddress(s.ownerAddress) === target
       ) {
         this.store.delete(id);
       }
@@ -262,29 +257,28 @@ export class FakePayoutGateway implements PayoutGateway {
   }
 }
 
-// FakeWallet — por default devuelve { tx } SIN eip3009 (modo demo byte-idéntico, AC-5). Pasá un
-// `eip3009` al constructor para simular la rama REAL de InjectedWallet/WalletConnectWallet (WKH-168).
+// FakeWallet — wallet mínima que devuelve { tx } y nada más. Para el camino real Solana está
+// FakeSolanaWallet, más abajo.
+export const FAKE_WALLET_ADDRESS = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // base58 válida
+
 export class FakeWallet implements WalletPort {
-  constructor(
-    private readonly eip3009?: { authorization: Eip3009Authorization; signature: string },
-  ) {}
   async connect(): Promise<string> {
-    return "0xSender";
+    return FAKE_WALLET_ADDRESS;
   }
   async getAddress(): Promise<string | null> {
-    return "0xSender";
+    return FAKE_WALLET_ADDRESS;
   }
   async authorizePrincipal(
     _quote: Quote,
     _remittanceId?: string,
     _deposit?: { address: string }, // WKH-211: 3er arg (to = depositAddress). El fake lo ignora; los
     // tests spyean authorizePrincipal para inspeccionar que recibió el depositAddress de prepare.
-  ): Promise<{ tx: string; eip3009?: { authorization: Eip3009Authorization; signature: string } }> {
-    return this.eip3009 ? { tx: "0xprincipal", eip3009: this.eip3009 } : { tx: "0xprincipal" };
+  ): Promise<{ tx: string }> {
+    return { tx: "fake-principal" };
   }
   // WKH-206: firma fake (no toca red).
   async signMessage(_message: string): Promise<string> {
-    return "0xfakesig";
+    return "fakesig";
   }
 }
 
@@ -299,13 +293,13 @@ export class FakePopSigner implements PopSigner {
 export class FakeKycStore implements KycStore {
   private m = new Map<string, KycVerification>();
   async get(address: string): Promise<KycVerification | null> {
-    return this.m.get(canonicalizeAddress(address, resolveActiveVm())) ?? null;
+    return this.m.get(canonicalizeAddress(address)) ?? null;
   }
   async save(address: string, kyc: KycVerification): Promise<void> {
-    this.m.set(canonicalizeAddress(address, resolveActiveVm()), kyc);
+    this.m.set(canonicalizeAddress(address), kyc);
   }
   async clear(address: string): Promise<void> {
-    this.m.delete(canonicalizeAddress(address, resolveActiveVm()));
+    this.m.delete(canonicalizeAddress(address));
   }
 }
 
@@ -315,13 +309,13 @@ export class FakeKycStore implements KycStore {
 export class ThrowingSaveKycStore implements KycStore {
   private m = new Map<string, KycVerification>();
   async get(address: string): Promise<KycVerification | null> {
-    return this.m.get(canonicalizeAddress(address, resolveActiveVm())) ?? null;
+    return this.m.get(canonicalizeAddress(address)) ?? null;
   }
   async save(_address: string, _kyc: KycVerification): Promise<void> {
     throw new Error("kyc_store_unavailable");
   }
   async clear(address: string): Promise<void> {
-    this.m.delete(canonicalizeAddress(address, resolveActiveVm()));
+    this.m.delete(canonicalizeAddress(address));
   }
 }
 
@@ -330,10 +324,10 @@ export class ThrowingSaveKycStore implements KycStore {
 export class ThrowingClearKycStore implements KycStore {
   private m = new Map<string, KycVerification>();
   async get(address: string): Promise<KycVerification | null> {
-    return this.m.get(canonicalizeAddress(address, resolveActiveVm())) ?? null;
+    return this.m.get(canonicalizeAddress(address)) ?? null;
   }
   async save(address: string, kyc: KycVerification): Promise<void> {
-    this.m.set(canonicalizeAddress(address, resolveActiveVm()), kyc);
+    this.m.set(canonicalizeAddress(address), kyc);
   }
   async clear(_address: string): Promise<void> {
     throw new Error("kyc_store_unavailable");
@@ -365,102 +359,6 @@ export class FakeRefundGateway implements RefundGateway {
     this.calls.push(input);
     if (this.mode === "reject") throw new Error("refund_unavailable");
     return { refundTx: "refund-fake" };
-  }
-}
-
-// Settlement fake del principal (WKH-168). Por default resuelve OK con el monto canónico del
-// FakeQuoteGateway (400 USDC → 400_000_000 micro-USDC). mode="reject" ejercita C3 (settle() throw).
-// Registra los inputs recibidos (molde de FakeRefundGateway / FakePayoutAuthorityGateway).
-export const FAKE_SETTLE_TX =
-  "0xabc0000000000000000000000000000000000000000000000000000000000001";
-export const FAKE_RECEIVER = "0x2222222222222222222222222222222222222222";
-
-export type FakeSettleResult =
-  | { ok: true; txHash: string; valueMinor: number; to: string; from: string; attestation: string }
-  | { ok: false; reason: SettlementFailureReason };
-
-export class FakeSettlementGateway implements PrincipalSettlementGateway {
-  public calls: Array<{
-    authorization: Eip3009Authorization;
-    signature: string;
-    address: string;
-    quoteId: string;
-    expectedValueMinor: number;
-    remittanceId: string;
-    depositAttestation?: string; // WKH-211: el binding HMAC que viaja al settle en modo real
-  }> = [];
-  constructor(
-    private readonly result: FakeSettleResult = {
-      ok: true,
-      txHash: FAKE_SETTLE_TX,
-      valueMinor: 400_000_000,
-      to: FAKE_RECEIVER,
-      from: "0x1111111111111111111111111111111111111111",
-      attestation: "att-fake",
-    },
-    private readonly mode: "resolve" | "reject" = "resolve",
-  ) {}
-  async settle(input: {
-    authorization: Eip3009Authorization;
-    signature: string;
-    address: string;
-    quoteId: string;
-    expectedValueMinor: number;
-    remittanceId: string;
-    depositAttestation?: string;
-  }): Promise<FakeSettleResult> {
-    this.calls.push(input);
-    if (this.mode === "reject") throw new Error("settlement_boom");
-    return this.result;
-  }
-}
-
-// WKH-211 — PayoutPrepareGateway fake. Por default resuelve OK con un depositAddress sintético (el `to`
-// que el use-case pasa a authorizePrincipal). Pasá { ok:false, reason } o mode="reject" para ejercitar
-// AC-7 (falla ANTES de firmar). Registra los inputs recibidos (molde de FakeSettlementGateway).
-export const FAKE_DEPOSIT_ADDRESS = "0x5555555555555555555555555555555555555555";
-export type FakePrepareResult =
-  | { ok: true; result: { depositAddress: string; attestation: string; payoutId: string; provenance: string } }
-  | { ok: false; reason: string };
-
-export class FakePayoutPrepareGateway implements PayoutPrepareGateway {
-  public calls: Array<{
-    remittanceId: string;
-    quoteId: string;
-    kycVerificationId: string;
-    address: string;
-    amountUsd: number;
-    beneficiary: unknown;
-    idempotencyKey: string;
-    popChallenge?: string;
-    popSignature?: string;
-  }> = [];
-  constructor(
-    private readonly result: FakePrepareResult = {
-      ok: true,
-      result: {
-        depositAddress: FAKE_DEPOSIT_ADDRESS,
-        attestation: "deposit-att-fake",
-        payoutId: "transfi-po-1",
-        provenance: "transfi",
-      },
-    },
-    private readonly mode: "resolve" | "reject" = "resolve",
-  ) {}
-  async prepare(input: {
-    remittanceId: string;
-    quoteId: string;
-    kycVerificationId: string;
-    address: string;
-    amountUsd: number;
-    beneficiary: import("../domain/remittance").Beneficiary;
-    idempotencyKey: string;
-    popChallenge?: string;
-    popSignature?: string;
-  }): Promise<FakePrepareResult> {
-    this.calls.push(input);
-    if (this.mode === "reject") throw new Error("prepare_boom");
-    return this.result;
   }
 }
 
@@ -546,8 +444,8 @@ export class FakeSettlementLedger implements SettlementLedger {
       idempotencyKey: input.idempotencyKey,
       txHash,
       chainId: input.chainId,
-      senderAddress: canonicalizeAddress(input.senderAddress, input.vm),
-      receiverAddress: canonicalizeAddress(input.depositAddress, input.vm),
+      senderAddress: canonicalizeAddress(input.senderAddress),
+      receiverAddress: canonicalizeAddress(input.depositAddress),
       valueMinor: "0", // string, como la columna ::text (aún no se conoce el monto)
       status: "prepared",
       attempts: 0,
@@ -576,7 +474,7 @@ export class FakeSettlementLedger implements SettlementLedger {
     //      sin degradar el status.
     //   3. La fila existe con evidencia real / de otro owner ⇒ NO-OP (retry inocuo).
     //   4. No existe ⇒ INSERT.
-    const owner = canonicalizeAddress(input.senderAddress, input.vm);
+    const owner = canonicalizeAddress(input.senderAddress);
     // Espeja al ledger real: la ESCRITURA recibe un number y lo persiste como texto
     // (`value_minor: String(input.valueMinor)`), y la LECTURA devuelve ese texto sin re-parsear.
     const valueMinor = String(input.valueMinor);
@@ -594,7 +492,7 @@ export class FakeSettlementLedger implements SettlementLedger {
       existing.txHash = input.txHash;
       existing.chainId = input.chainId;
       existing.senderAddress = owner;
-      existing.receiverAddress = canonicalizeAddress(input.receiverAddress, input.vm);
+      existing.receiverAddress = canonicalizeAddress(input.receiverAddress);
       existing.valueMinor = valueMinor;
       existing.status = "principal_in";
       existing.updatedAt = this.nowIso;
@@ -632,7 +530,7 @@ export class FakeSettlementLedger implements SettlementLedger {
       txHash: input.txHash,
       chainId: input.chainId,
       senderAddress: owner,
-      receiverAddress: canonicalizeAddress(input.receiverAddress, input.vm),
+      receiverAddress: canonicalizeAddress(input.receiverAddress),
       valueMinor,
       status: "principal_in",
       attempts: 0,
@@ -651,7 +549,7 @@ export class FakeSettlementLedger implements SettlementLedger {
     // WKH-213/R3 — espeja al ledger real: ancla la signature a la fila 'prepared' MÁS RECIENTE de esta
     // remesa y este sender (owner-scoped). Sin fila preparada: NO-OP (no hay quote_id/value_minor
     // honestos que insertar). El índice único de tx_hash también aplica acá.
-    const owner = canonicalizeAddress(input.senderAddress, "solana");
+    const owner = canonicalizeAddress(input.senderAddress);
     const candidates = [...this.store.values()]
       .filter(
         (r) =>
@@ -680,7 +578,7 @@ export class FakeSettlementLedger implements SettlementLedger {
     error?: string | null;
     vm: "evm" | "solana";
   }): Promise<void> {
-    const owner = canonicalizeAddress(input.senderAddress, input.vm);
+    const owner = canonicalizeAddress(input.senderAddress);
     for (const r of this.store.values()) {
       // CD-9: owner-scoped — otro sender NO puede mutar esta fila.
       if (r.idempotencyKey === input.idempotencyKey && r.senderAddress === owner) {
@@ -722,7 +620,7 @@ export class FakeSettlementLedger implements SettlementLedger {
     vm: "evm" | "solana";
     limit: number;
   }): Promise<SenderRemittanceRef[]> {
-    const owner = canonicalizeAddress(input.senderAddress, input.vm);
+    const owner = canonicalizeAddress(input.senderAddress);
     return [...this.store.values()]
       .filter((r) => r.senderAddress === owner)
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
@@ -771,7 +669,7 @@ export const FAKE_SOLANA_SIGNATURE = bs58.encode(new Uint8Array(64).fill(7)); //
 export const FAKE_SOLANA_REFERENCE = "So11111111111111111111111111111111111111112"; // base58 reference
 
 // FakeSolanaWallet — WalletPort cuya authorizePrincipal devuelve el envelope `solana` (HU-SOL-5), para
-// probar la rama Solana de ConfirmAndSend sin @solana/web3.js. Registra el 3er arg `deposit` recibido:
+// probar el money-path de ConfirmAndSend sin @solana/web3.js. Registra el 3er arg `deposit` recibido:
 // los tests verifican que el escrow (beneficiary/authority) llegó SERVER-SIDE desde prepare (nunca del body).
 export class FakeSolanaWallet implements WalletPort {
   public authorizeCalls: Array<{

@@ -3,8 +3,7 @@
 // y notifica acá; el endpoint verifica el HMAC (fail-closed), MUTA el ledger idempotentemente
 // correlacionando por payoutId y recién DESPUÉS marca el evento como visto (claim best-effort).
 //
-// NO es el reorder no-custodial (to=depositAddress) → eso es WKH-211 (otro ticket). Sandbox / Base
-// Sepolia únicamente; flags EIP3009/ADAPTER quedan OFF (byte-idéntico al demo).
+// NO es el reorder no-custodial (beneficiary atestado) → eso es WKH-211 (otro ticket).
 //
 // Auth fail-closed (CD-2): sin TRANSFI_WEBHOOK_SECRET ⇒ 501 ANTES de leer el body; firma
 // ausente/inválida ⇒ 401 ANTES de parsear. HMAC sobre el body CRUDO (CD-9/DT-4). No-PII (CD-3): NUNCA

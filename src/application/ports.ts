@@ -116,49 +116,12 @@ export interface PayoutAuthorityGateway {
   authorize(input: { verificationId: string; address: string }): Promise<PayoutAuthorization>;
 }
 
-// ── Settlement del principal (WKH-168) ───────────────────────────────────────
-// AC-9 (residual NO cerrado por esta HU): si el browser se cierra entre el settle on-chain y el
-// estado terminal, la remesa queda HUÉRFANA con el principal REALMENTE adentro. Esta HU EMPEORA la
-// consecuencia (antes no había plata; ahora sí) sin cerrar el gap: no hay persistencia server-side
-// ni reconciliación. → WKH-207. El single-use pre-forward de la atestación agrega un 2º caso de
-// varado (atestación quemada + forward fallido) → misma HU.
-export interface Eip3009Authorization {
-  from: string; // 0x + 40 hex
-  to: string; // 0x + 40 hex
-  value: string; // uint256 decimal CANÓNICO (/^(0|[1-9]\d*)$/) — NUNCA bigint (CD-16)
-  validAfter: string; // idem
-  validBefore: string; // idem
-  nonce: string; // 0x + 64 hex (bytes32)
-}
+// ── Settlement del principal ─────────────────────────────────────────────────
+// Residual NO cerrado por esta HU: si el browser se cierra entre el settle on-chain y el estado
+// terminal, la remesa queda HUÉRFANA con el principal REALMENTE adentro. No hay reconciliación
+// automática; la evidencia server-side para reconciliar a mano vive en el SettlementLedger (WKH-207).
 
-// ── VmAuthorization (WKH-206 / HU-SOL-1) — andamiaje de TIPOS multi-VM ────────────
-// El discriminador `vm` vive a nivel ENVELOPE { authorization, signature }, NO dentro del payload
-// EIP-3009 (Eip3009Authorization se mantiene byte-idéntico: se firma EIP-712 y se serializa cruda al
-// POST /api/settle/principal — meterle un campo cambiaría ese body → violación money-path CD-3/CD-SDD-7).
-// Estructuralmente `EvmAuthorization` (menos el tag `vm`) == el `eip3009?:` de authorizePrincipal (L203),
-// que NO se re-tipa en esta HU para preservar byte-identidad (AC-5). El wiring runtime es HU-SOL-2/SOL-4.
-
-// Variante EVM del envelope (envuelve el payload EIP-3009 INTACTO).
-export interface EvmAuthorization {
-  vm: "evm";
-  authorization: Eip3009Authorization;
-  signature: string;
-}
-
-// Variante Solana — PLACEHOLDER DE TIPOS (DT-3). Sin lógica de firma/verificación (Scope OUT).
-// Los campos pueden ajustarse en HU-SOL-2 (legacy Transaction vs VersionedTransaction). [TBD HU-SOL-2]
-export interface SolanaAuthorization {
-  vm: "solana";
-  from: string; // base58 (PublicKey del pagador)              [TBD HU-SOL-2]
-  to: string; // base58 (ATA / owner del receiver)             [TBD HU-SOL-2]
-  amount: string; // base units del SPL token (uint64 decimal string, sin floats)
-  recentBlockhash: string; // equivalente Solana de validAfter/validBefore [TBD HU-SOL-2]
-  signature: string; // firma base58                            [TBD HU-SOL-2]
-}
-
-export type VmAuthorization = EvmAuthorization | SolanaAuthorization;
-
-// ── HU-SOL-5 (WKH-207*) — widening ADITIVO del WalletPort para el path Solana ──────
+// ── HU-SOL-5 (WKH-207*) — WalletPort: el envelope que firma para el escrow ──────
 /** Datos del escrow que el CALLER (HU-SOL-13) resuelve y pasa a la wallet Solana. base58. */
 export interface SolanaEscrowDeposit {
   beneficiary: string; // Pubkey base58 — destino de la remesa (release). Resuelto por HU-SOL-13.
@@ -166,7 +129,7 @@ export interface SolanaEscrowDeposit {
   mint?: string; // opcional: override del mint; default resolveSolanaUsdcMint() (CD-SDD-4).
 }
 
-/** Variante Solana del retorno de authorizePrincipal (envelope, alineada con SolanaAuthorization). */
+/** Retorno de authorizePrincipal para el depósito en el escrow Anchor (envelope Solana). */
 export interface SolanaPrincipalAuthorization {
   vm: "solana";
   partialSignedTx: string; // tx legacy serializada base64, partial-signed (feePayer=facilitator, firma wallet-only)
@@ -174,9 +137,9 @@ export interface SolanaPrincipalAuthorization {
 }
 
 // ── HU-SOL-13 (WKH-216) — puertos del money-path Solana no-custodial (escrow Anchor) ──────────────
-// ADITIVOS: NO tocan ningún tipo EVM (CD-2/CD-14). El use-case recibe `solana` como 9º param OPCIONAL
-// (mutuamente excluyente con `settlement?` EVM). Cuando el container NO inyecta `solana` (EVM/demo),
-// estas interfaces no participan ⇒ el path EVM queda byte-idéntico POR CONSTRUCCIÓN.
+// El use-case recibe `solana` como parámetro OPCIONAL: el container lo inyecta SOLO con el flag de
+// settlement encendido y los envs validados. Sin inyección (modo demo) estas interfaces no participan
+// y el use-case fail-closea explícitamente (DT-8) en vez de seguir de largo.
 export type SolanaSettlementFailureReason =
   | "solana_settle_unavailable" // red caída / facilitator no configurado
   | "solana_settle_rejected" // CR-1 del deposit rechazó (422 SPONSOR_REJECTED)
@@ -185,8 +148,8 @@ export type SolanaSettlementFailureReason =
   | "solana_settle_unverified"; // shape de respuesta inválido
 
 // Broadcast del `deposit` Solana vía la ruta server-only /api/settle/solana-sponsor → facilitator
-// (HU-SOL-14). NUNCA reusa PrincipalSettlementGateway (EIP-3009-shaped) ni su regex 0x… (CD-13): la
-// signature de respuesta es base58. Corre en el CLIENTE (el browser jamás llama al facilitator directo).
+// (HU-SOL-14). La signature de respuesta es base58: validarla con una regex hexadecimal la rechazaría
+// siempre (CD-13). Corre en el CLIENTE (el browser jamás llama al facilitator directo).
 export interface SolanaSettlementGateway {
   settle(input: {
     partialSignedTx: string; // base64 (= SolanaPrincipalAuthorization.partialSignedTx)
@@ -241,80 +204,25 @@ export interface SolanaRemittanceIdResolver {
   listBySender(sender: string): Promise<string[]>;
 }
 
-export type SettlementFailureReason =
-  | "settlement_unavailable"
-  | "settlement_rejected"
-  | "settlement_amount_mismatch"
-  | "settlement_receiver_mismatch"
-  | "settlement_reverted"
-  | "settlement_unverified";
-
-export interface PrincipalSettlementGateway {
-  settle(input: {
-    authorization: Eip3009Authorization;
-    signature: string;
-    address: string;
-    quoteId: string;
-    expectedValueMinor: number; // quote.send.minor
-    remittanceId: string; // WKH-207 (aditivo): el cliente ya tiene s.id — habilita el ledger server-side
-    // WKH-211 (aditivo): binding HMAC del depositAddress no-custodial. El server lo usa SOLO en modo
-    // deposit-flow (DEPOSIT_ATTESTATION_SECRET presente); en el path estático se ignora. Opcional a
-    // propósito: en modo estático NO existe atestación (el guard estático es byte-idéntico, AC-5/AC-6).
-    depositAttestation?: string;
-  }): Promise<
-    | { ok: true; txHash: string; valueMinor: number; to: string; from: string; attestation: string }
-    | { ok: false; reason: SettlementFailureReason }
-  >;
-}
-
-// ── Prepare del payout no-custodial (WKH-211) ────────────────────────────────
-// Crea la orden TransFi (invoca al agente) y emite la DepositAttestation HMAC que ata el
-// depositAddress a esta remesa, ANTES de que el cliente firme (Opción B, DT-1). El use-case firma
-// `to = depositAddress` del result. Flag-gated: sólo se inyecta con NEXT_PUBLIC_EIP3009_ENABLED=true
-// (acoplado a `settlement` — ver ConfirmAndSend). En demo NO existe ⇒ byte-idéntico (AC-5).
-export interface PayoutPrepareResult {
-  depositAddress: string; // 0x + 40 hex — el `to` no-custodial atestado
-  attestation: string; // DepositAttestation HMAC (b64url.b64url)
-  payoutId: string; // id de la orden TransFi creada
-  provenance: string; // proveniencia (transfi / mock) — propagada al snapshot
-}
-export interface PayoutPrepareGateway {
-  prepare(input: {
-    remittanceId: string;
-    quoteId: string;
-    kycVerificationId: string;
-    address: string;
-    amountUsd: number;
-    beneficiary: Beneficiary;
-    idempotencyKey: string;
-    popChallenge?: string;
-    popSignature?: string;
-  }): Promise<
-    | { ok: true; result: PayoutPrepareResult }
-    | { ok: false; reason: string }
-  >;
-}
-
-// ── Wallet (DApp: el sender CONECTA su wallet = login, y firma la autorización EIP-3009) ──
-// WKH-168 — remittanceId es REQUERIDO (CD-19: el nonce determinístico es la garantía anti-doble-pago
-// a nivel CONTRATO; un remittanceId opcional permitiría caer en silencio al nonce random).
+// ── Wallet (DApp: el sender CONECTA su wallet = login, y firma el depósito en el escrow) ──
+// remittanceId es REQUERIDO (CD-19: es lo que ata la firma a ESTA remesa; opcional permitiría caer
+// en silencio a un identificador random y perder la garantía anti-doble-pago).
 export interface WalletPort {
   connect(): Promise<string>; // conecta y devuelve la address (el "login")
   getAddress(): Promise<string | null>;
-  // WKH-211 — 3er arg OPCIONAL `deposit`. En modo real (eip3009Enabled()) el `to` de la firma es el
-  // `deposit.address` ATESTADO server-side (NUNCA el receiver estático): sin él, fail-loud (throw), NO
-  // fail-open. Opcional en el tipo SOLO para preservar la firma demo (que lo ignora, AC-5).
+  // WKH-211 — 3er arg OPCIONAL `deposit`. En modo real el destino de la firma es el `deposit.address`
+  // ATESTADO server-side (NUNCA un receiver estático): sin él, fail-loud (throw), NO fail-open.
+  // Opcional en el tipo SOLO para preservar la firma demo (que lo ignora, AC-5).
   authorizePrincipal(
     quote: Quote,
     remittanceId: string,
     deposit?: { address: string; escrow?: SolanaEscrowDeposit }, // escrow? = ADITIVO (Solana, HU-SOL-5)
   ): Promise<{
     tx: string; // demo: firma simbólica (AC-5)
-    eip3009?: { authorization: Eip3009Authorization; signature: string }; // SOLO en modo real
-    solana?: SolanaPrincipalAuthorization; // ADITIVO (Solana, HU-SOL-5)
+    solana?: SolanaPrincipalAuthorization; // el envelope real (HU-SOL-5)
   }>;
-  // WKH-206: firma un mensaje arbitrario (personal_sign) con la key de la wallet conectada. Lo usa el
-  // PopSigner para probar posesión de `address`. En demo devuelve una firma simbólica (AC-5).
+  // WKH-206: firma un mensaje arbitrario con la key de la wallet conectada. Lo usa el PopSigner para
+  // probar posesión de `address`. En demo devuelve una firma simbólica (AC-5).
   signMessage(message: string): Promise<string>;
 }
 
@@ -429,7 +337,7 @@ export interface SettlementLedger {
     quoteId: string;
     idempotencyKey: string;
     depositAddress: string; // → columna receiver_address (NO columna nueva)
-    // chainId EVM. Con vm:'solana' el ledger lo IGNORA y escribe network_id (CAIP-2) + chain_id NULL:
+    // chainId numérico, heredado del schema. Con vm:'solana' el ledger lo IGNORA y escribe network_id (CAIP-2) + chain_id NULL:
     // Solana no tiene chainId numérico y el CHECK de la DB lo prohíbe (ver vmNetworkColumns).
     chainId: number;
     senderAddress: string;
@@ -454,7 +362,7 @@ export interface SettlementLedger {
     quoteId: string;
     idempotencyKey: string;
     txHash: string;
-    chainId: number; // EVM. Con vm:'solana' se ignora ⇒ network_id + chain_id NULL (ver arriba).
+    chainId: number; // heredado del schema. Con vm:'solana' se ignora ⇒ network_id + chain_id NULL (ver arriba).
     senderAddress: string;
     receiverAddress: string;
     valueMinor: number;
@@ -462,7 +370,7 @@ export interface SettlementLedger {
   }): Promise<void>;
   // settle Solana (WKH-213/R3): ata la signature base58 VERIFICADA on-chain por el facilitator a la
   // fila 'prepared' de esta remesa ⇒ 'principal_in'. Método PROPIO (no recordPrincipalIn) porque el
-  // rail Solana tiene OTROS datos verificados disponibles: /solana/sponsor devuelve la signature y
+  // settle tiene OTROS datos verificados disponibles: /solana/sponsor devuelve la signature y
   // NADA MÁS — no hay monto ni receiver verificados server-side (no existe verificador on-chain Solana
   // en este repo). Escribir el monto que declara el cliente violaría CD-13, así que value_minor
   // conserva el de la fila 'prepared'; el resto (quote_id, receiver, payout_id) ya está ahí.

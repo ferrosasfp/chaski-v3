@@ -46,7 +46,7 @@ function ledgerWith(payoutId: string, status: SettlementLedgerStatus): FakeSettl
     quoteId: "q-1",
     idempotencyKey: "rem-1:q-1",
     txHash: "0xtx1",
-    chainId: 84532, // sandbox / Base Sepolia (AC-11)
+    chainId: 84532, // id numérico heredado de una fila vieja del ledger (AC-11)
     senderAddress: "0xsender",
     receiverAddress: "0xreceiver",
     valueMinor: "400000000", // string exacto (uint256-safe), como lo devuelve el ::text

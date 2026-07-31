@@ -1,24 +1,19 @@
-// Server-side: emisor del challenge proof-of-possession del payout (WKH-206, AC-2). El caller pide un
-// challenge para SU address; el server lo firma (HMAC PAYOUT_POP_SECRET, server-only SIN NEXT_PUBLIC_
-// — CD-8) con un nonce single-use + expiración + chainId, y devuelve el popMessage que la wallet debe
-// firmar VERBATIM. El nonce NO se quema acá (DT-5): se quema recién en /submit al presentar la firma.
+// Server-side: emisor del challenge proof-of-possession del payout (WKH-206 / HU-SOL-8, AC-2). El
+// caller pide un challenge para SU address; el server lo firma (HMAC PAYOUT_POP_SECRET, server-only
+// SIN NEXT_PUBLIC_ — CD-8) con un nonce + expiración + network-id CAIP-2, y devuelve el popMessage
+// que la wallet debe firmar VERBATIM.
+// El nonce NO se quema (DT-5): el anti-replay dentro del TTL es responsabilidad del facilitator, que
+// es quien exige y verifica el popProof. Residual R-3 documentado.
 //
 // TODO defensivo: NUNCA 500 crudo. Sin secreto → 501 (no configurado, skip total del mecanismo).
 // address malformada / body no-record → 400. NO fetchea Didit, NO lee estado KYC, NO escribe Upstash.
 import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
-import { isAddress } from "viem";
-import {
-  resolveChainId,
-  resolveActiveVm,
-  resolveSolanaNetworkId,
-} from "../../../../../src/infrastructure/chain";
+import { resolveSolanaNetworkId } from "../../../../../src/infrastructure/chain";
 import { canonicalizeAddress } from "../../../../../src/infrastructure/address";
 import {
   POP_CHALLENGE_TTL_SECONDS,
-  buildPopMessage,
   buildSolanaPopMessage,
-  issuePopChallenge,
   issueSolanaPopChallenge,
 } from "../../../../../src/infrastructure/auth/pop-challenge";
 import {
@@ -59,37 +54,17 @@ export async function POST(req: Request): Promise<Response> {
 
   const rawAddress = typeof body.address === "string" ? body.address : "";
 
-  // HU-SOL-8/CD-3: dispatch por VM. La rama Solana emite un challenge ed25519 con network-id CAIP-2
-  // (server-side, NUNCA del body); la rama EVM queda byte-idéntica a WKH-206.
-  const vm = resolveActiveVm();
-  if (vm === "solana") {
-    let addr: string;
-    try {
-      addr = canonicalizeAddress(rawAddress, "solana"); // base58 32 bytes (CD-8), NO isAddress
-    } catch {
-      return NextResponse.json({ error: "pop_invalid_request" }, { status: 400 });
-    }
-    const networkId = resolveSolanaNetworkId(); // CD-3: server-side, NUNCA del body
-    const nonce = randomBytes(16).toString("hex");
-    const exp = Math.floor(Date.now() / 1000) + POP_CHALLENGE_TTL_SECONDS;
-    const popChallenge = issueSolanaPopChallenge({ address: addr, networkId, nonce, exp });
-    const popMessage = buildSolanaPopMessage({ address: addr, networkId, nonce, exp });
-    return NextResponse.json({ popChallenge, popMessage, exp }, { status: 200 });
-  }
-
-  // ── RAMA EVM: byte-idéntica a WKH-206 (isAddress + issuePopChallenge + buildPopMessage). ──
-  const address = rawAddress;
-  if (!isAddress(address)) {
+  // HU-SOL-8/CD-3: challenge ed25519 con network-id CAIP-2 (server-side, NUNCA del body).
+  let addr: string;
+  try {
+    addr = canonicalizeAddress(rawAddress); // base58 32 bytes (CD-8)
+  } catch {
     return NextResponse.json({ error: "pop_invalid_request" }, { status: 400 });
   }
-
+  const networkId = resolveSolanaNetworkId(); // CD-3: server-side, NUNCA del body
   const nonce = randomBytes(16).toString("hex");
   const exp = Math.floor(Date.now() / 1000) + POP_CHALLENGE_TTL_SECONDS;
-  const chainId = resolveChainId(); // CD-9: la cadena sale de la ENV server-side, NUNCA del body
-  const addr = canonicalizeAddress(address, resolveActiveVm());
-
-  const challenge = issuePopChallenge({ address: addr, chainId, nonce, exp });
-  const message = buildPopMessage({ address: addr, chainId, nonce, exp });
-
-  return NextResponse.json({ popChallenge: challenge, popMessage: message, exp }, { status: 200 });
+  const popChallenge = issueSolanaPopChallenge({ address: addr, networkId, nonce, exp });
+  const popMessage = buildSolanaPopMessage({ address: addr, networkId, nonce, exp });
+  return NextResponse.json({ popChallenge, popMessage, exp }, { status: 200 });
 }

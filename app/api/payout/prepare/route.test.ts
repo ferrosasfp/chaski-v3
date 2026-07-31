@@ -24,6 +24,10 @@ const { ledgerMock, getLedgerMock } = vi.hoisted(() => ({
 }));
 vi.mock("../../../../src/infrastructure/persistence/supabase-settlement-ledger", () => ({
   getSettlementLedger: getLedgerMock,
+  // WKH-320: la route también importa esta constante del mismo módulo. Si el factory no la exporta,
+  // llega `undefined` a la route y el bloque del ledger se cae en silencio dentro de su try/catch
+  // best-effort — o sea, el test verde y el ledger sin escribir. Se re-exporta con su valor real.
+  CHAIN_ID_NOT_APPLICABLE: 0,
 }));
 
 import bs58 from "bs58";
@@ -32,10 +36,7 @@ import {
   issueSolanaPopChallenge,
   buildSolanaPopMessage,
 } from "../../../../src/infrastructure/auth/pop-challenge";
-import {
-  verifyDepositAttestation,
-  verifySolanaDepositAttestation,
-} from "../../../../src/infrastructure/settlement/deposit-attestation";
+import { verifySolanaDepositAttestation } from "../../../../src/infrastructure/settlement/deposit-attestation";
 // WKH-304/CD-11: el par (capacidad, piso) se assertea contra las MISMAS constantes que consume la
 // route y que consume submit — nunca contra literales copiados en el test.
 import {
@@ -44,9 +45,17 @@ import {
 } from "../../../../src/infrastructure/a2a/gateway-client";
 import { POST } from "./route";
 
-const ADDR = "0x1111111111111111111111111111111111111111";
-const DEPOSIT = "0x4444444444444444444444444444444444444444";
+// WKH-320: la ruta dejó de tener dispatch por VM. El caller manda una address base58 y el PoP es
+// OBLIGATORIO, así que el body por defecto de TODOS los tests de guard-order lleva un PoP ed25519
+// REAL firmado en el beforeEach (antes el default era una address 0x y el PoP apagado). Las
+// assertions de orden, códigos HTTP y enums NO cambian: eso es exactamente lo que CD-4 protege.
+const DEPOSIT = "So11111111111111111111111111111111111111112"; // deposit-address base58 del agente
 const beneficiary = { name: "Mamá", country: "PE", method: "yape", destination: "999888777" };
+
+// Seteados en el beforeEach: el keypair que firma el PoP y su pubkey (= address del caller).
+let KP: nacl.SignKeyPair;
+let ADDR: string;
+let AUTHORITY: string;
 
 function bodyOf(over: Record<string, unknown> = {}) {
   return {
@@ -57,6 +66,7 @@ function bodyOf(over: Record<string, unknown> = {}) {
     amountUsd: 400,
     beneficiary,
     idempotencyKey: "rem-1:q-400",
+    ...signedSolanaPop(KP, ADDR), // PR6 es OBLIGATORIO: sin esto todo muere en 403
     ...over,
   };
 }
@@ -118,11 +128,14 @@ function signedSolanaPop(keypair: nacl.SignKeyPair, addr: string) {
 
 describe("POST /api/payout/prepare (WKH-211)", () => {
   beforeEach(() => {
+    KP = nacl.sign.keyPair();
+    ADDR = bs58.encode(KP.publicKey); // pubkey del firmante = address del caller (P3)
+    AUTHORITY = bs58.encode(nacl.sign.keyPair().publicKey); // CD-10: NUNCA base58 a mano
     vi.stubEnv("REMIT_AGENTS_BASE_URL", "https://agents.test");
     vi.stubEnv("DEPOSIT_ATTESTATION_SECRET", "test-deposit-secret");
-    vi.stubEnv("NEXT_PUBLIC_CHAIN_ID", "84532");
+    vi.stubEnv("SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY", AUTHORITY);
     vi.stubEnv("VERCEL_ENV", ""); // local/CI por default
-    vi.stubEnv("PAYOUT_POP_SECRET", ""); // PoP apagado por default
+    vi.stubEnv("PAYOUT_POP_SECRET", "pop-secret"); // PR6 OBLIGATORIO (WKH-320): nunca skip
     // WKH-304: PR7 ahora LEE este flag. Sin stubearlo, las suites de arriba dependerían del ambiente
     // (un NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER=a2a-gateway exportado en la shell las mandaría al
     // gateway). "" ⇒ camino punto-a-punto determinista, byte-idéntico al de antes de esta HU.
@@ -145,21 +158,23 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
   });
 
   // ── Happy path (AC-1) ──────────────────────────────────────────────────────
-  it("AC-1: config OK + agente con depositAddress real → 200 { depositAddress, attestation, payoutId, provenance }; la attestation VERIFICA", async () => {
+  it("AC-1: config OK + agente con depositAddress real → 200 { beneficiary, authority, attestation, payoutId, provenance }; la attestation VERIFICA", async () => {
     agentResponds(200, agentResult());
     const res = await POST(req(bodyOf()));
     expect(res.status).toBe(200);
     const json = (await res.json()) as Record<string, unknown>;
-    expect(json.depositAddress).toBe(DEPOSIT);
+    expect(json.beneficiary).toBe(DEPOSIT);
+    expect(json.authority).toBe(AUTHORITY);
     expect(json.payoutId).toBe("transfi-po-1");
     expect(json.provenance).toBe("transfi");
-    // La attestation es real: verifica con el secreto y ata remittanceId/quoteId/chainId/depositAddress.
-    const att = verifyDepositAttestation(json.attestation as string, Date.now());
+    // La attestation es real: verifica con el secreto y ata remittanceId/quoteId/beneficiary/cluster.
+    const att = verifySolanaDepositAttestation(json.attestation as string, Date.now());
     expect(att).not.toBeNull();
     expect(att?.remittanceId).toBe("rem-1");
     expect(att?.quoteId).toBe("q-400");
-    expect(att?.depositAddress).toBe(DEPOSIT);
-    expect(att?.chainId).toBe(84532); // CD-9: de la ENV, no del body
+    expect(att?.beneficiary).toBe(DEPOSIT);
+    expect(att?.authority).toBe(AUTHORITY); // CD-9: de la ENV server-side, NUNCA del body
+    expect(att?.cluster).toBe("devnet");
     // NUNCA ecoa BASE ni el beneficiary (CD-5).
     const raw = JSON.stringify(json);
     expect(raw).not.toContain("agents.test");
@@ -247,7 +262,7 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
   // ── PR6 — PoP (AC-6) ───────────────────────────────────────────────────────
   it("AC-6: con PAYOUT_POP_SECRET, sin popChallenge/popSignature válidos → 403 payout_pop_unverified, NINGÚN fetch", async () => {
     vi.stubEnv("PAYOUT_POP_SECRET", "pop-secret");
-    const res = await POST(req(bodyOf())); // sin popChallenge
+    const res = await POST(req(bodyOf({ popChallenge: undefined, popSignature: undefined })));
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: "payout_pop_unverified" });
     expect(fetchMock).not.toHaveBeenCalled();
@@ -292,7 +307,8 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
     const arg = ledgerMock.recordOrderPrepared.mock.calls[0]![0] as Record<string, unknown>;
     expect(arg.remittanceId).toBe("rem-1");
     expect(arg.depositAddress).toBe(DEPOSIT);
-    expect(arg.chainId).toBe(84532);
+    expect(arg.chainId).toBe(0); // WKH-320: CHAIN_ID_NOT_APPLICABLE — vmNetworkColumns lo descarta
+    expect(arg.vm).toBe("solana");
     expect(arg.senderAddress).toBe(ADDR);
     expect(arg.payoutId).toBe("transfi-po-1");
     // NUNCA PII del beneficiary.
@@ -309,37 +325,38 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
     expect(ledgerMock.recordOrderPrepared).toHaveBeenCalledTimes(1);
   });
 
-  // ── HU-SOL-8: PR6 rama Solana — PoP OBLIGATORIO (AC-3). Actualizado por HU-SOL-9: PR4 ahora valida
-  //    base58 en vm=solana (antes exigía 0x), así que el address del caller debe ser un pubkey base58
-  //    para pasar PR4 y llegar a PR6. Las assertions (503/403/no-fetch) NO cambian. ──
-  const SOL_ADDR = "So11111111111111111111111111111111111111112"; // base58 pubkey (pasa PR4 en solana)
-  describe("PR6 rama Solana (HU-SOL-8)", () => {
-    beforeEach(() => {
-      vi.stubEnv("NEXT_PUBLIC_VM", "solana");
-    });
-
-    it("AC-3: vm=solana + PAYOUT_POP_SECRET unset ⇒ 503 payout_pop_unavailable, NINGÚN fetch (jamás skip)", async () => {
-      vi.stubEnv("PAYOUT_POP_SECRET", ""); // OBLIGATORIO en Solana: sin secreto → 503 fail-closed
-      const res = await POST(req(bodyOf({ address: SOL_ADDR }))); // base58 pasa PR4; vm=solana ⇒ PR6 exige PoP
+  // ── HU-SOL-8: PR6 — PoP OBLIGATORIO (AC-3). El address del caller es un pubkey base58 (pasa PR4)
+  //    y llega a PR6. Las assertions (503/403/no-fetch) NO cambian con WKH-320: eso es CD-4. ──
+  const SOL_ADDR = "So11111111111111111111111111111111111111112"; // base58 pubkey (pasa PR4)
+  describe("PR6 — PoP obligatorio (HU-SOL-8)", () => {
+    it("AC-3: PAYOUT_POP_SECRET unset ⇒ 503 payout_pop_unavailable, NINGÚN fetch (jamás skip)", async () => {
+      // El body se arma ANTES de apagar el secreto: issueSolanaPopChallenge lo necesita para firmar.
+      // Que el PoP venga BIEN FORMADO es lo que hace fuerte al caso: el 503 no se explica por un body
+      // incompleto, se explica por el secreto ausente (fail-closed, jamás skip).
+      const body = bodyOf({ address: SOL_ADDR });
+      vi.stubEnv("PAYOUT_POP_SECRET", ""); // OBLIGATORIO: sin secreto → 503 fail-closed
+      const res = await POST(req(body));
       expect(res.status).toBe(503);
       expect(await res.json()).toEqual({ error: "payout_pop_unavailable" });
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it("AC-3: vm=solana + secreto presente + sin popChallenge/popSignature ⇒ 403 payout_pop_unverified, NINGÚN fetch", async () => {
+    it("AC-3: secreto presente + sin popChallenge/popSignature ⇒ 403 payout_pop_unverified, NINGÚN fetch", async () => {
       vi.stubEnv("PAYOUT_POP_SECRET", "pop-secret");
-      const res = await POST(req(bodyOf({ address: SOL_ADDR }))); // sin campos PoP
+      const res = await POST(
+        req(bodyOf({ address: SOL_ADDR, popChallenge: undefined, popSignature: undefined })),
+      );
       expect(res.status).toBe(403);
       expect(await res.json()).toEqual({ error: "payout_pop_unverified" });
       expect(fetchMock).not.toHaveBeenCalled();
     });
   });
 
-  // ── HU-SOL-11: rama Solana del BLOQUE DE RESPUESTA (PR8-PR11). vm=solana + PoP ed25519 REAL válido
-  //    (OBLIGATORIO en Solana) → 200 con el shape del gateway {beneficiary,authority,attestation,
+  // ── HU-SOL-11: BLOQUE DE RESPUESTA (PR8-PR11). PoP ed25519 REAL válido (OBLIGATORIO)
+  //    → 200 con el shape del gateway {beneficiary,authority,attestation,
   //    payoutId,provenance} base58. La atestación es REAL (verifica con verifySolanaDepositAttestation).
   //    beneficiary = deposit-address base58 del agente; caller.address = pubkey del keypair que firma PR6. ──
-  describe("rama Solana de respuesta (HU-SOL-11)", () => {
+  describe("bloque de respuesta PR8-PR11 (HU-SOL-11)", () => {
     const SOL_BENEFICIARY = "So11111111111111111111111111111111111111112"; // base58 válido (== SOL_ADDR)
     let kp: nacl.SignKeyPair;
     let callerAddr: string;
@@ -348,12 +365,11 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       kp = nacl.sign.keyPair();
       callerAddr = bs58.encode(kp.publicKey); // pubkey del firmante = address del caller (P3)
       authorityPubkey = bs58.encode(nacl.sign.keyPair().publicKey); // CD-10: NUNCA base58 a mano
-      vi.stubEnv("NEXT_PUBLIC_VM", "solana");
       vi.stubEnv("PAYOUT_POP_SECRET", "pop-secret"); // OBLIGATORIO en Solana para pasar PR6
       vi.stubEnv("SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY", authorityPubkey);
     });
 
-    it("AC-1: vm=solana + PoP válido + depositAddress base58 → 200 shape Solana; la atestación VERIFICA", async () => {
+    it("AC-1: PoP válido + depositAddress base58 → 200 shape Solana; la atestación VERIFICA", async () => {
       agentResponds(200, agentResult({ depositAddress: SOL_BENEFICIARY }));
       const res = await POST(
         req(bodyOf({ address: callerAddr, ...signedSolanaPop(kp, callerAddr) })),
@@ -378,7 +394,7 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       expect(raw).not.toContain("agents.test");
     });
 
-    it("AC-2: vm=solana + authority env ausente/malformada → 503 prepare_solana_authority_unavailable", async () => {
+    it("AC-2: authority env ausente/malformada → 503 prepare_solana_authority_unavailable", async () => {
       for (const bad of ["", "0xNOT"]) {
         vi.stubEnv("SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY", bad);
         agentResponds(200, agentResult({ depositAddress: SOL_BENEFICIARY }));
@@ -391,7 +407,7 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       }
     });
 
-    it("AC-3: vm=solana + depositAddress null / no-base58 → 502 prepare_no_deposit_address", async () => {
+    it("AC-3: depositAddress null / no-base58 → 502 prepare_no_deposit_address", async () => {
       for (const bad of [null, "0xNOT_BASE58"]) {
         agentResponds(200, agentResult({ depositAddress: bad }));
         const res = await POST(
@@ -402,7 +418,7 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       }
     });
 
-    it("AC-3: vm=solana + depositAddress base58 válido pero payoutId ausente (vacío/whitespace) → 502 prepare_no_deposit_address (guard route.ts:272-275)", async () => {
+    it("AC-3: depositAddress base58 válido pero payoutId ausente (vacío/whitespace) → 502 prepare_no_deposit_address (guard route.ts:272-275)", async () => {
       // payoutId="" pasa isValidPayoutResult (status submitted) pero muere en el guard fail-closed:
       // no se atesta una orden sin id trackeable. (payoutId=null+submitted lo caza antes PR8 → upstream_error.)
       for (const badPayoutId of ["", "   "]) {
@@ -467,21 +483,21 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       return { agentCalls };
     }
 
-    it("T-A3.1: prepare feliz por gateway ⇒ 200 con depositAddress + attestation que VERIFICA; nunca el agente directo", async () => {
+    it("T-A3.1: prepare feliz por gateway ⇒ 200 con beneficiary + attestation que VERIFICA; nunca el agente directo", async () => {
       setGatewayEnv();
       const { agentCalls } = gwRouter();
       const res = await POST(req(bodyOf()));
       expect(res.status).toBe(200);
       const json = (await res.json()) as Record<string, unknown>;
-      expect(json.depositAddress).toBe(DEPOSIT);
+      expect(json.beneficiary).toBe(DEPOSIT);
       expect(json.payoutId).toBe("transfi-po-1");
       // PR9 sigue siendo el ÚNICO emisor: la atestación es REAL y ata la dirección a ESTA remesa.
-      const att = verifyDepositAttestation(json.attestation as string, Date.now());
+      const att = verifySolanaDepositAttestation(json.attestation as string, Date.now());
       expect(att).not.toBeNull();
       expect(att?.remittanceId).toBe("rem-1");
       expect(att?.quoteId).toBe("q-400");
-      expect(att?.depositAddress).toBe(DEPOSIT);
-      expect(att?.chainId).toBe(84532); // de la ENV server-side, no del body
+      expect(att?.beneficiary).toBe(DEPOSIT);
+      expect(att?.authority).toBe(AUTHORITY); // de la ENV server-side, no del body
       // El transporte fue el gateway y SÓLO el gateway.
       const urls = fetchMock.mock.calls.map((c) => c[0] as string);
       expect(urls).toEqual([`${GW}/compose`]);
@@ -522,9 +538,9 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       expect((await POST(req(bodyOf()))).status).toBe(503);
       authorityMock.mockResolvedValue({ authorized: true, httpStatus: 200 });
 
-      // PR6 — PoP.
-      vi.stubEnv("PAYOUT_POP_SECRET", "pop-secret");
-      const rPop = await POST(req(bodyOf()));
+      // PR6 — PoP. WKH-320: es OBLIGATORIO, así que el corte se ejercita QUITÁNDOLE la prueba al
+      // body (antes bastaba con encender el secreto, porque sin él la ruta skipeaba).
+      const rPop = await POST(req(bodyOf({ popChallenge: undefined, popSignature: undefined })));
       expect(rPop.status).toBe(403);
       expect(await rPop.json()).toEqual({ error: "payout_pop_unverified" });
 
@@ -587,14 +603,12 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       expect(ledgerMock.recordOrderPrepared).not.toHaveBeenCalled();
     });
 
-    it("T-A3.5: rama Solana en modo gateway ⇒ base58 atesta (verifica de verdad); una address EVM muere en PR8 (residual R-3)", async () => {
+    it("T-A3.5: modo gateway ⇒ base58 atesta (verifica de verdad); una address no-base58 muere en PR8 (residual R-3)", async () => {
       const kp = nacl.sign.keyPair();
       const callerAddr = bs58.encode(kp.publicKey);
       const authorityPubkey = bs58.encode(nacl.sign.keyPair().publicKey);
       const SOL_BENEFICIARY = "So11111111111111111111111111111111111111112";
       setGatewayEnv();
-      vi.stubEnv("NEXT_PUBLIC_VM", "solana");
-      vi.stubEnv("PAYOUT_POP_SECRET", "pop-secret");
       vi.stubEnv("SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY", authorityPubkey);
 
       // (i) el agente que gana la capacidad devuelve base58 ⇒ 200 con atestación Solana REAL.
@@ -610,9 +624,9 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       expect(att?.cluster).toBe("devnet");
 
       // (ii) R-3: el resolver rechaza por diseño una restricción de chain, así que la capacidad puede
-      // resolver al agente EVM y devolver una address no-base58. PR8 es VM-discriminado y corta ANTES
-      // de atestar. El arreglo real es de catálogo, no de código cliente.
-      gwRouter({ output: agentResult({ depositAddress: DEPOSIT }) }); // 0x… en vm=solana
+      // resolver a un agente que devuelva una address no-base58. PR8 corta ANTES de atestar. El
+      // arreglo real es de catálogo, no de código cliente.
+      gwRouter({ output: agentResult({ depositAddress: "0x4444444444444444444444444444444444444444" }) });
       const bad = await POST(req(bodyOf({ address: callerAddr, ...signedSolanaPop(kp, callerAddr) })));
       expect(bad.status).toBe(502);
       const badJson = (await bad.json()) as Record<string, unknown>;

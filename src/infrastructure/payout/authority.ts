@@ -11,7 +11,6 @@
 import { mapDiditDecision } from "../didit/decision";
 import { resolveDiditBaseUrl } from "../didit/didit-env";
 import { canonicalizeAddress } from "../address";
-import { resolveActiveVm } from "../chain";
 
 export interface PayoutAuthorityDecision {
   authorized: boolean;
@@ -81,8 +80,9 @@ export async function resolvePayoutAuthority(
       return { authorized: false, reason: "kyc_not_approved", httpStatus: 200 };
     }
 
-    // Ownership best-effort: vendor_data (= senderAddress) vs address del caller (case-insensitive,
-    // direcciones EVM). Si Didit NO eco-a vendor_data (d.vendorData === "") → se omite (residual documentado).
+    // Ownership best-effort: vendor_data (= senderAddress) vs address del caller. La comparación es
+    // CASE-SENSITIVE porque la canonicalización es base58 (CD-7): lowercasear acá abriría una colisión.
+    // Si Didit NO eco-a vendor_data (d.vendorData === "") → se omite (residual documentado).
     // MNR-B: este binding ownership solo tiene FUERZA REAL cuando `address` proviene de un caller
     // AUTENTICADO (sesión firmada / SIWE) — no de un endpoint público, donde `address` y
     // `vendor_data` son ambos caller-controlados, así que un replay de un verificationId Approved
@@ -92,7 +92,7 @@ export async function resolvePayoutAuthority(
     // (SDD §8/R1) y el riesgo ya NO es nulo. Hoy lo acota que el payout corre en PAYOUT_ALLOW_MOCK
     // (no desembolsa real). El check queda como defensa best-effort; el hardening completo
     // (binding a sesión firmada / SIWE) = follow-up.
-    if (d.vendorData !== "" && canonicalizeAddress(d.vendorData, resolveActiveVm()) !== canonicalizeAddress(address, resolveActiveVm())) {
+    if (d.vendorData !== "" && canonicalizeAddress(d.vendorData) !== canonicalizeAddress(address)) {
       return { authorized: false, reason: "kyc_ownership_mismatch", httpStatus: 200 };
     }
 

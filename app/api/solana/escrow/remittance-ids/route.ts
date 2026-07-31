@@ -64,7 +64,7 @@ export async function POST(req: Request): Promise<Response> {
   const rawSender = typeof body.sender === "string" ? body.sender : "";
   let sender: string;
   try {
-    sender = canonicalizeAddress(rawSender, "solana"); // base58 32 bytes; malformado → throw
+    sender = canonicalizeAddress(rawSender); // base58 32 bytes; malformado → throw
   } catch {
     return NextResponse.json({ error: "escrow_recovery_invalid_request" }, { status: 400 });
   }
@@ -91,7 +91,7 @@ export async function POST(req: Request): Promise<Response> {
   // P3 — address match (base58 case-sensitive): el challenge tiene que ser DE ESTE sender. Sin esto,
   // un caller presentaría el challenge+firma de la wallet A y pediría los ids de la wallet B (IDOR).
   try {
-    if (canonicalizeAddress(ch.address, "solana") !== sender) {
+    if (canonicalizeAddress(ch.address) !== sender) {
       return NextResponse.json({ error: "escrow_recovery_unverified" }, { status: 403 });
     }
   } catch {

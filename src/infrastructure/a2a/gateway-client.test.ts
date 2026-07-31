@@ -501,19 +501,18 @@ describe("runViaGateway — AC-5: gateway resuelve precio/x402 (x-a2a-key, sin f
   });
 });
 
-// El saldo de una Agent Key es POR RED (`budget[chainId]`). Sin `x-payment-chain` el gateway cobra
-// en su red default y una key con fondos en OTRA red recibe 403 INSUFFICIENT_BUDGET. Medido en vivo
-// 2026-07-26 contra el gateway de prod: key con 6.793 en avalanche-fuji, default kite-ozone-testnet,
-// resultado 403 → el /api/a2a/quote de Chaski devolvía 502 a2a_unavailable.
+// El saldo de una Agent Key es POR RED. Sin `x-payment-chain` el gateway cobra en su red default y
+// una key con fondos en OTRA red recibe 403 INSUFFICIENT_BUDGET; visto en vivo contra el gateway de
+// prod, con el resultado de que el /api/a2a/quote de Chaski devolvía 502 a2a_unavailable.
 describe("runViaGateway — selección de la red de cobro (x-payment-chain)", () => {
   it("con WASIAI_A2A_PAYMENT_CHAIN, /compose lleva el header con ese valor", async () => {
-    vi.stubEnv("WASIAI_A2A_PAYMENT_CHAIN", "avalanche-fuji");
+    vi.stubEnv("WASIAI_A2A_PAYMENT_CHAIN", "solana-devnet");
     const { fn, calls } = router();
     vi.stubGlobal("fetch", fn);
     await runViaGateway({ steps: [fxStep] });
     const compose = calls.find((c) => c.url.includes("/compose"))!;
     expect((compose.init!.headers as Record<string, string>)["x-payment-chain"]).toBe(
-      "avalanche-fuji",
+      "solana-devnet",
     );
   });
 

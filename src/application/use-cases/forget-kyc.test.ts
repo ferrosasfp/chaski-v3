@@ -53,25 +53,28 @@ const kyc: KycVerification = {
   }),
 };
 
+// WKH-320: address base58 (la canonicalización dejó de aceptar hexadecimal).
+const SENDER = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+
 describe("ForgetKyc", () => {
   it("AC-1: olvida el KYC-once de la address (fuerza re-verify: get → null)", async () => {
     const kycStore = new FakeKycStore();
     const pending = new FakeKycPendingStore();
-    await kycStore.save("0xSender", kyc);
-    expect(await kycStore.get("0xSender")).not.toBeNull();
+    await kycStore.save(SENDER, kyc);
+    expect(await kycStore.get(SENDER)).not.toBeNull();
 
-    await new ForgetKyc(kycStore, pending, new InMemoryRepo()).execute({ address: "0xSender" });
+    await new ForgetKyc(kycStore, pending, new InMemoryRepo()).execute({ address: SENDER });
 
-    expect(await kycStore.get("0xSender")).toBeNull();
+    expect(await kycStore.get(SENDER)).toBeNull();
   });
 
   it("AC-3: limpia el pending en curso", async () => {
     const kycStore = new FakeKycStore();
     const pending = new FakeKycPendingStore();
-    await pending.save({ remittanceId: "r-1", sessionId: "s-1", address: "0xSender" });
+    await pending.save({ remittanceId: "r-1", sessionId: "s-1", address: SENDER });
     expect(await pending.get()).not.toBeNull();
 
-    await new ForgetKyc(kycStore, pending, new InMemoryRepo()).execute({ address: "0xSender" });
+    await new ForgetKyc(kycStore, pending, new InMemoryRepo()).execute({ address: SENDER });
 
     expect(await pending.get()).toBeNull();
   });
@@ -79,10 +82,10 @@ describe("ForgetKyc", () => {
   it("AC-5 defensivo: si kycStore.clear rechaza, execute resuelve igual y pending.clear corre", async () => {
     const kycStore = new ThrowingClearKycStore();
     const pending = new FakeKycPendingStore();
-    await pending.save({ remittanceId: "r-1", sessionId: "s-1", address: "0xSender" });
+    await pending.save({ remittanceId: "r-1", sessionId: "s-1", address: SENDER });
 
     await expect(
-      new ForgetKyc(kycStore, pending, new InMemoryRepo()).execute({ address: "0xSender" }),
+      new ForgetKyc(kycStore, pending, new InMemoryRepo()).execute({ address: SENDER }),
     ).resolves.toBeUndefined();
 
     expect(await pending.get()).toBeNull(); // el pending igual se limpió (CD-8)
@@ -93,7 +96,7 @@ describe("ForgetKyc", () => {
     const pending = new ThrowingClearKycPendingStore();
 
     await expect(
-      new ForgetKyc(kycStore, pending, new InMemoryRepo()).execute({ address: "0xSender" }),
+      new ForgetKyc(kycStore, pending, new InMemoryRepo()).execute({ address: SENDER }),
     ).resolves.toBeUndefined();
   });
 
@@ -101,27 +104,27 @@ describe("ForgetKyc", () => {
     const kycStore = new FakeKycStore();
     const pending = new FakeKycPendingStore();
     const repo = new InMemoryRepo();
-    await seedOwned(repo, "rem-1", "0xSender");
-    expect((await repo.list("0xSender")).map((s) => s.id)).toEqual(["rem-1"]);
+    await seedOwned(repo, "rem-1", SENDER);
+    expect((await repo.list(SENDER)).map((s) => s.id)).toEqual(["rem-1"]);
 
-    await new ForgetKyc(kycStore, pending, repo).execute({ address: "0xSender" });
+    await new ForgetKyc(kycStore, pending, repo).execute({ address: SENDER });
 
-    expect(await repo.list("0xSender")).toEqual([]);
+    expect(await repo.list(SENDER)).toEqual([]);
   });
 
   it("AC-4: si clearByOwner rechaza, execute resuelve y kyc/pending igual se limpian", async () => {
     const kycStore = new FakeKycStore();
     const pending = new FakeKycPendingStore();
     const repo = new ThrowingClearByOwnerRepo(); // clearByOwner re-lanza (CD-7)
-    await kycStore.save("0xSender", kyc);
-    await pending.save({ remittanceId: "r-1", sessionId: "s-1", address: "0xSender" });
+    await kycStore.save(SENDER, kyc);
+    await pending.save({ remittanceId: "r-1", sessionId: "s-1", address: SENDER });
 
     await expect(
-      new ForgetKyc(kycStore, pending, repo).execute({ address: "0xSender" }),
+      new ForgetKyc(kycStore, pending, repo).execute({ address: SENDER }),
     ).resolves.toBeUndefined();
 
     // el fallo del repo NO impidió las otras limpiezas (CD-2)
-    expect(await kycStore.get("0xSender")).toBeNull();
+    expect(await kycStore.get(SENDER)).toBeNull();
     expect(await pending.get()).toBeNull();
   });
 
@@ -129,15 +132,15 @@ describe("ForgetKyc", () => {
     const kycStore = new FakeKycStore();
     const pending = new FakeKycPendingStore();
     const repo = new InMemoryRepo();
-    await kycStore.save("0xSender", kyc);
-    await pending.save({ remittanceId: "r-1", sessionId: "s-1", address: "0xSender" });
-    await seedOwned(repo, "rem-1", "0xSender");
+    await kycStore.save(SENDER, kyc);
+    await pending.save({ remittanceId: "r-1", sessionId: "s-1", address: SENDER });
+    await seedOwned(repo, "rem-1", SENDER);
 
-    await new ForgetKyc(kycStore, pending, repo).execute({ address: "0xSender" });
+    await new ForgetKyc(kycStore, pending, repo).execute({ address: SENDER });
 
     // las tres limpiezas corrieron
-    expect(await kycStore.get("0xSender")).toBeNull();
+    expect(await kycStore.get(SENDER)).toBeNull();
     expect(await pending.get()).toBeNull();
-    expect(await repo.list("0xSender")).toEqual([]);
+    expect(await repo.list(SENDER)).toEqual([]);
   });
 });

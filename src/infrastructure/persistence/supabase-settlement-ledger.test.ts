@@ -4,7 +4,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { PublicKey } from "@solana/web3.js";
-import { SupabaseSettlementLedger, getSettlementLedger } from "./supabase-settlement-ledger";
+import {
+  CHAIN_ID_NOT_APPLICABLE,
+  SupabaseSettlementLedger,
+  getSettlementLedger,
+} from "./supabase-settlement-ledger";
 import { __resetSupabaseClient, getSupabaseServerClient } from "./supabase-server";
 import { resolveSolanaNetworkId } from "../chain";
 
@@ -73,7 +77,10 @@ function makeClient(
   return { client: client as unknown as SupabaseClient, calls };
 }
 
-const SENDER = "0xAbCabcABCabcABCabcABCabcABCabcABCabcABC11";
+// WKH-320: era una address EVM mixed-case, elegida para que `.toLowerCase()` fuera observable. La
+// canonicalización dejó de tener rama `evm`, así que pasa a ser una pubkey base58 y los asserts que
+// esperaban lowercase pasan a esperar el valor CASE-PRESERVADO, que es el invariante vivo (CD-7).
+const SENDER = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 
 // Monto del incidente WKH-196: 2^53 < valor < 2^54. Se declara COMO STRING y nunca como literal
 // numérico — escribirlo `90071992547409910` en JS produce 90071992547409900 (el motor lo redondea al
@@ -502,7 +509,7 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
     },
   );
 
-  it("AC-9/CD-9: recordPayoutOutcome es owner-scoped — filtra por idempotency_key Y sender_address (lowercased)", async () => {
+  it("AC-9/CD-9: recordPayoutOutcome es owner-scoped — filtra por idempotency_key Y sender_address", async () => {
     const { client, calls } = makeClient([{ data: null, error: null }]);
     const ledger = new SupabaseSettlementLedger(client);
     await ledger.recordPayoutOutcome({
@@ -510,11 +517,11 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
       senderAddress: SENDER,
       status: "settled",
       payoutId: "p-1",
-      vm: "evm",
+      vm: "solana",
     });
     // El UPDATE cruza AMBOS filtros: sin el sender_address, otro owner podría mutar esta fila (IDOR).
     expect(calls.eq).toContainEqual(["idempotency_key", "rem-1:q-1"]);
-    expect(calls.eq).toContainEqual(["sender_address", SENDER.toLowerCase()]);
+    expect(calls.eq).toContainEqual(["sender_address", SENDER]);
     // El patch lleva el status mapeado.
     expect((calls.update[0]?.[0] as Record<string, unknown> | undefined)?.status).toBe("settled");
   });
@@ -550,21 +557,14 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
     expect(new PublicKey(K1).toBase58()).not.toBe(new PublicKey(K2).toBase58());
   });
 
-  it("byte-id EVM: recordPayoutOutcome vm:'evm' sigue produciendo senderAddress.toLowerCase()", async () => {
-    const { client, calls } = makeClient([{ data: null, error: null }]);
-    await new SupabaseSettlementLedger(client).recordPayoutOutcome({
-      idempotencyKey: "k",
-      senderAddress: SENDER,
-      status: "settled",
-      vm: "evm",
-    });
-    expect(calls.eq).toContainEqual(["sender_address", SENDER.toLowerCase()]);
-  });
+  // WKH-320: acá vivía "byte-id EVM: recordPayoutOutcome vm:'evm' sigue produciendo
+  // senderAddress.toLowerCase()". Probaba que una fila vm='evm' escrita desde una address 0x
+  // conservara la semántica de lowercase — camino que ningún caller post-poda puede producir.
 
   // WKH-213/R2 — el UPDATE va PRIMERO y está keyeado por idempotency_key (NO por tx_hash), es
   // owner-scoped y sólo asciende desde 'prepared'. Este test mira los ARGUMENTOS (el estado final de
   // la fila lo miden los tests con la tabla en memoria, más abajo).
-  it("recordPrincipalIn: UPDATE por idempotency_key + sender_address + status='prepared' (CAS), con addresses lowercased y value_minor string", async () => {
+  it("recordPrincipalIn: UPDATE por idempotency_key + sender_address + status='prepared' (CAS), con las addresses canónicas y value_minor string", async () => {
     // 1er from() = el UPDATE de ascenso; devuelve una fila ⇒ la función corta ahí.
     const { client, calls } = makeClient([{ data: [{ id: "row-1" }], error: null }]);
     const ledger = new SupabaseSettlementLedger(client);
@@ -573,24 +573,24 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
       quoteId: "q-1",
       idempotencyKey: "rem-1:q-1",
       txHash: "0xTX",
-      chainId: 84532,
+      chainId: CHAIN_ID_NOT_APPLICABLE,
       senderAddress: SENDER,
-      receiverAddress: "0xREceiverAddr2222222222222222222222222222",
+      receiverAddress: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
       valueMinor: 400_000_000,
-      vm: "evm",
+      vm: "solana",
     });
     const patch = calls.update[0]?.[0] as Record<string, unknown>;
     expect(patch.status).toBe("principal_in");
     expect(patch.tx_hash).toBe("0xTX");
-    expect(patch.sender_address).toBe(SENDER.toLowerCase());
-    expect(patch.receiver_address).toBe("0xreceiveraddr2222222222222222222222222222");
+    expect(patch.sender_address).toBe(SENDER);
+    expect(patch.receiver_address).toBe("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"); // base58 sin lowercase (CD-7)
     expect(patch.value_minor).toBe("400000000"); // string (uint256-safe)
     // payout_id NO viaja en el patch: escribirlo (null) borraría el id de la orden que puso prepare.
     expect(Object.keys(patch)).not.toContain("payout_id");
     // La clave del write es idempotency_key: con onConflict:'tx_hash' el INSERT moría contra el OTRO
     // índice único y la fila jamás llegaba a principal_in.
     expect(calls.eq).toContainEqual(["idempotency_key", "rem-1:q-1"]);
-    expect(calls.eq).toContainEqual(["sender_address", SENDER.toLowerCase()]); // ownership (CD-9)
+    expect(calls.eq).toContainEqual(["sender_address", SENDER]); // ownership (CD-9)
     expect(calls.eq).toContainEqual(["status", "prepared"]); // CAS: nunca degrada un estado avanzado
     // Matcheó ⇒ NO hay segundo write (ni relleno de evidencia, ni INSERT).
     expect(calls.upsert.length).toBe(0);
@@ -619,7 +619,7 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
         idempotencyKey: "k",
         senderAddress: SENDER,
         status: "settled",
-        vm: "evm",
+        vm: "solana",
       }),
     ).rejects.toThrow();
   });
@@ -712,14 +712,17 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
     const b = await ledger.listRemittanceIdsBySender({ senderAddress: SOL_B, vm: "solana", limit: 20 });
     expect(a.map((r) => r.remittanceId)).toEqual(["rem-A-new", "rem-A-old"]);
     expect(b.map((r) => r.remittanceId)).toEqual(["rem-B1"]);
-    // Un lowercase de la base58 no matchearía ninguna fila (la columna guarda el case canónico).
-    const lowered = await ledger.listRemittanceIdsBySender({
-      senderAddress: new PublicKey(SOL_A).toBase58(),
-      vm: "evm", // canonicaliza a lowercase ⇒ 0 filas: prueba que el case IMPORTA
-      limit: 20,
-    });
+    // WKH-320: antes este sub-caso probaba que el case IMPORTA pasando `vm:"evm"` para forzar el
+    // lowercase del canonicalizador. Esa rama ya no existe. Se prueba lo mismo de forma DIRECTA, que
+    // además es más honesta: una pubkey lowercaseada a mano o NO canonicaliza (throw) o es OTRA
+    // address; en ninguno de los dos casos devuelve las filas de SOL_A.
+    const loweredRaw = SOL_A.toLowerCase();
+    expect(loweredRaw).not.toBe(SOL_A);
+    const lowered = await ledger
+      .listRemittanceIdsBySender({ senderAddress: loweredRaw, vm: "solana", limit: 20 })
+      .catch(() => []);
     expect(lowered).toEqual([]);
-    expect(selects.length).toBe(3);
+    expect(selects.length).toBeGreaterThanOrEqual(2);
   });
 
   it("T-R0-2 (CD-12/CD-7): el select trae remittance_id/status/created_at y NUNCA value_minor ni PII", async () => {
@@ -810,15 +813,15 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
 });
 
 // ── Identidad de red del INSERT: vm + (chain_id | network_id) ────────────────────────────────────────
-// El bug: el upsert escribía SÓLO chain_id (el chainId EVM configurado) y descartaba el `vm` en
-// silencio ⇒ toda fila de una remesa Solana quedaba vm='evm' + chainId de Avalanche con addresses
-// base58, y cualquier query que filtrara .eq('vm','solana') devolvía CERO filas SIEMPRE.
+// El bug: el upsert escribía SÓLO chain_id (el id numérico de red configurado) y descartaba el `vm`
+// en silencio ⇒ toda fila quedaba con el discriminador y el id de red heredados aunque su address
+// fuera base58, y cualquier query que filtrara .eq('vm','solana') devolvía CERO filas SIEMPRE.
 // Las dos mitades del arreglo (escribir `vm` y anular `chain_id`) van juntas o el CHECK de la DB
 // rechaza el insert — y ese rechazo lo traga el catch best-effort de la ruta (CD-17), o sea que se
 // pierde la evidencia durable con un log como única señal. Por eso se prueba con un doble que APLICA
 // el CHECK, no con un espía.
-const CHAIN_ID_EVM = 84532; // Base Sepolia (rama EVM)
-const CHAIN_ID_MISLABEL = 43113; // el chainId EVM que se escribía en las filas Solana (Avalanche Fuji)
+const CHAIN_ID_EVM = 84532; // id numérico de red de una versión anterior de este servicio
+const CHAIN_ID_MISLABEL = 43113; // el id numérico que se escribía, mal, en las filas de este servicio
 
 describe("identidad de red del ledger — vm + chain_id/network_id (CHECK 20260721)", () => {
   it("el doble APLICA el CHECK: reproduce los tres inserts medidos y RECHAZA las dos mitades desacopladas", () => {
@@ -865,25 +868,10 @@ describe("identidad de red del ledger — vm + chain_id/network_id (CHECK 202607
     expect(row.status).toBe("prepared");
   });
 
-  it("recordOrderPrepared vm:'evm' ⇒ byte-idéntico: vm='evm', chain_id numérico, network_id NULL", async () => {
-    const { client, rows, rejected } = makeTableClient();
-    await new SupabaseSettlementLedger(client).recordOrderPrepared({
-      remittanceId: "rem-2",
-      quoteId: "q-2",
-      idempotencyKey: "rem-2:q-2",
-      depositAddress: "0xREceiverAddr2222222222222222222222222222",
-      chainId: CHAIN_ID_EVM,
-      senderAddress: SENDER,
-      payoutId: "p-2",
-      vm: "evm",
-    });
-    expect(rejected).toEqual([]);
-    const row = rows[0] ?? {};
-    expect(row.vm).toBe("evm");
-    expect(row.chain_id).toBe(CHAIN_ID_EVM); // la rama EVM NO cambia de dato
-    expect(row.network_id).toBeNull();
-    expect(row.sender_address).toBe(SENDER.toLowerCase());
-  });
+  // WKH-320: acá vivía "recordOrderPrepared vm:'evm' ⇒ byte-idéntico (chain_id numérico,
+  // network_id NULL)". Probaba escribir una fila vm='evm' desde una address 0x, camino que ningún
+  // caller post-poda puede producir. La otra mitad del invariante —que la escritura con vm:'solana'
+  // pone network_id CAIP-2 y chain_id NULL— se sigue probando justo abajo, y ES la que corre en prod.
 
   it("recordPrincipalIn vm:'solana' ⇒ mismas dos mitades (el escritor del principal tenía el MISMO bug)", async () => {
     const { client, rows, rejected } = makeTableClient();
@@ -907,25 +895,7 @@ describe("identidad de red del ledger — vm + chain_id/network_id (CHECK 202607
     expect(row.status).toBe("principal_in");
   });
 
-  it("recordPrincipalIn vm:'evm' ⇒ byte-idéntico (chain_id numérico, network_id NULL)", async () => {
-    const { client, rows, rejected } = makeTableClient();
-    await new SupabaseSettlementLedger(client).recordPrincipalIn({
-      remittanceId: "rem-4",
-      quoteId: "q-4",
-      idempotencyKey: "rem-4:q-4",
-      txHash: "0xTX",
-      chainId: CHAIN_ID_EVM,
-      senderAddress: SENDER,
-      receiverAddress: "0xREceiverAddr2222222222222222222222222222",
-      valueMinor: 1,
-      vm: "evm",
-    });
-    expect(rejected).toEqual([]);
-    const row = rows[0] ?? {};
-    expect(row.vm).toBe("evm");
-    expect(row.chain_id).toBe(CHAIN_ID_EVM);
-    expect(row.network_id).toBeNull();
-  });
+  // WKH-320: ídem para recordPrincipalIn vm:'evm'.
 
   it("invariante de los DOS escritores × las DOS VMs: exactamente UNA columna de red no-nula, coherente con vm", async () => {
     // Barrido: si un escritor futuro (o un refactor) desacopla las mitades en cualquiera de los cuatro
@@ -934,7 +904,7 @@ describe("identidad de red del ledger — vm + chain_id/network_id (CHECK 202607
     // así que el barrido también fija que el merge no rompe la identidad de red.
     for (const vm of ["evm", "solana"] as const) {
       const sender = vm === "solana" ? SOL_A : SENDER;
-      const receiver = vm === "solana" ? SOL_B : "0xREceiverAddr2222222222222222222222222222";
+      const receiver = vm === "solana" ? SOL_B : "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
       const { client, rows, rejected } = makeTableClient();
       const ledger = new SupabaseSettlementLedger(client);
       await ledger.recordOrderPrepared({
@@ -979,19 +949,24 @@ describe("identidad de red del ledger — vm + chain_id/network_id (CHECK 202607
 // Todo lo de acá mide el ESTADO FINAL DE LA FILA contra la tabla en memoria que aplica los DOS índices
 // únicos + el CHECK + los NOT NULL. Un espía de `upsert` no sirve: el bug original era precisamente
 // que la llamada se hacía "bien" y la DB la rechazaba.
-const DEPOSIT_EVM = "0x4444444444444444444444444444444444444444";
-const RECEIVER_EVM = "0xREceiverAddr2222222222222222222222222222";
+// WKH-320: estas fixtures eran EVM (address 0x + vm:'evm' + chainId numérico). El SUJETO de este
+// bloque no es la VM: es el write-path del ledger (idempotencia, el CAS por sender, los dos índices
+// únicos, la precedencia del webhook). Ese camino vive, así que la fixture se convierte a Solana en
+// vez de borrarse — borrarla habría tirado 13 invariantes del money-path que no son EVM-específicos.
+const SENDER_SOL = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+const DEPOSIT_SOL = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const RECEIVER_SOL = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 
 function prepareInput(over: Record<string, unknown> = {}) {
   return {
     remittanceId: "rem-1",
     quoteId: "q-1",
     idempotencyKey: "rem-1:q-1",
-    depositAddress: DEPOSIT_EVM,
-    chainId: CHAIN_ID_EVM,
-    senderAddress: SENDER,
+    depositAddress: DEPOSIT_SOL,
+    chainId: CHAIN_ID_NOT_APPLICABLE,
+    senderAddress: SENDER_SOL,
     payoutId: "transfi-po-1",
-    vm: "evm" as const,
+    vm: "solana" as const,
     ...over,
   };
 }
@@ -1001,11 +976,11 @@ function settleInput(over: Record<string, unknown> = {}) {
     quoteId: "q-1",
     idempotencyKey: "rem-1:q-1",
     txHash: "0xTXREAL",
-    chainId: CHAIN_ID_EVM,
-    senderAddress: SENDER,
-    receiverAddress: DEPOSIT_EVM, // el `to` VERIFICADO on-chain ES el depositAddress atestado
+    chainId: CHAIN_ID_NOT_APPLICABLE,
+    senderAddress: SENDER_SOL,
+    receiverAddress: DEPOSIT_SOL, // el destino VERIFICADO on-chain ES el atestado en prepare
     valueMinor: 400_000_000,
-    vm: "evm" as const,
+    vm: "solana" as const,
     ...over,
   };
 }
@@ -1024,8 +999,8 @@ describe("WKH-213/R2 — el settle completa la fila 'prepared' (estado final de 
     expect(row.tx_hash).toBe("0xTXREAL"); // el placeholder 'prepared:…' quedó reemplazado
     expect(row.value_minor).toBe("400000000"); // monto real (venía '0' de prepare)
     expect(row.payout_id).toBe("transfi-po-1"); // ← el merge NO pisó con null lo que prepare dejó bien
-    expect(row.sender_address).toBe(SENDER.toLowerCase());
-    expect(row.receiver_address).toBe(DEPOSIT_EVM.toLowerCase());
+    expect(row.sender_address).toBe(SENDER_SOL); // base58 sin lowercase (CD-7)
+    expect(row.receiver_address).toBe(DEPOSIT_SOL);
     expect(row.idempotency_key).toBe("rem-1:q-1");
     expect(row.created_at).toBe(COLUMN_DEFAULTS.created_at); // es la fila de prepare, no una recién nacida
   });
@@ -1046,7 +1021,7 @@ describe("WKH-213/R2 — el settle completa la fila 'prepared' (estado final de 
   it("settle SIN prepare (modo estático WKH-168/209 o ledger apagado al preparar) ⇒ INSERT normal", async () => {
     const { client, rows, rejected } = makeTableClient();
     await new SupabaseSettlementLedger(client).recordPrincipalIn(
-      settleInput({ receiverAddress: RECEIVER_EVM }),
+      settleInput({ receiverAddress: RECEIVER_SOL }),
     );
     expect(rejected).toEqual([]);
     expect(rows.length).toBe(1);
@@ -1056,7 +1031,7 @@ describe("WKH-213/R2 — el settle completa la fila 'prepared' (estado final de 
   });
 
   it("CD-9: un settle de OTRO sender NO se lleva puesta la fila preparada (sigue 'prepared', sin fila nueva)", async () => {
-    const OTRO = "0x9999999999999999999999999999999999999999";
+    const OTRO = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
     const { client, rows, rejected } = makeTableClient();
     const ledger = new SupabaseSettlementLedger(client);
     await ledger.recordOrderPrepared(prepareInput());
@@ -1064,7 +1039,7 @@ describe("WKH-213/R2 — el settle completa la fila 'prepared' (estado final de 
     expect(rejected).toEqual([]);
     expect(rows.length).toBe(1);
     expect(rows[0]?.status).toBe("prepared"); // intacta
-    expect(rows[0]?.sender_address).toBe(SENDER.toLowerCase()); // NO se reescribió con el ajeno
+    expect(rows[0]?.sender_address).toBe(SENDER_SOL); // NO se reescribió con el ajeno
     expect(rows[0]?.tx_hash).toBe("prepared:rem-1:q-1"); // ni su evidencia
   });
 
@@ -1185,8 +1160,8 @@ describe("WKH-213/R1 — el webhook puede sacar una fila de 'prepared'", () => {
         idempotency_key: "rem-9:q-9",
         tx_hash: "0xtx9",
         chain_id: CHAIN_ID_EVM,
-        sender_address: SENDER.toLowerCase(),
-        receiver_address: DEPOSIT_EVM.toLowerCase(),
+        sender_address: SENDER,
+        receiver_address: DEPOSIT_SOL.toLowerCase(),
         value_minor: "400000000",
         status: initial,
         payout_id: "transfi-po-9",
@@ -1200,7 +1175,7 @@ describe("WKH-213/R1 — el webhook puede sacar una fila de 'prepared'", () => {
   });
 });
 
-describe("WKH-213/R3 — el rail Solana escribe al ledger", () => {
+describe("WKH-213/R3 — el settle escribe al ledger", () => {
   const SOL_SIGNATURE = "5".repeat(64); // base58 (dígitos válidos en el alfabeto)
   function solPrepared() {
     return {
@@ -1316,8 +1291,8 @@ describe("WKH-213 — listPreparedOrphans (superficie del operador)", () => {
       idempotency_key: `rem-${i}:q-${i}`,
       tx_hash: `prepared:rem-${i}:q-${i}`,
       chain_id: CHAIN_ID_EVM,
-      sender_address: SENDER.toLowerCase(),
-      receiver_address: DEPOSIT_EVM.toLowerCase(),
+      sender_address: SENDER,
+      receiver_address: DEPOSIT_SOL.toLowerCase(),
       value_minor: "0",
       status: "prepared",
       payout_id: `po-${i}`,

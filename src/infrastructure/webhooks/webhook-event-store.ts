@@ -1,5 +1,5 @@
-// Infrastructure — single-use (claim-once) del webhook de TransFi (WKH-210, CD-4). Clon de
-// pop-nonce-store.ts.
+// Infrastructure — single-use (claim-once) del webhook de TransFi (WKH-210, CD-4). Es el ÚNICO
+// claim-once del repo: el anti-replay del PoP dentro de su TTL es del facilitator (residual R-3).
 //
 // Qué resuelve: TransFi puede re-entregar el MISMO evento (retries, at-least-once). Sin estado, un 2º
 // delivery re-mutaría el ledger. Este flag `SET NX` por eventId lo quema en el primer uso: el 2º

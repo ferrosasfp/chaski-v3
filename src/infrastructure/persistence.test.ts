@@ -59,55 +59,67 @@ function withOwner(id: string, owner: string): Remittance {
   return r;
 }
 
-describe("LocalRepo.list — scope por wallet (AC-5/7, CD-5)", () => {
-  it("AC-5: devuelve SOLO entries del address, case-insensitive", async () => {
-    const repo = new LocalRepo();
-    await repo.save(withOwner("a1", "0xAAA"));
-    await repo.save(withOwner("b1", "0xBBB"));
+// WKH-320: estos tests usaban labels `0xAAA`/`0xaaa` como owners y probaban que el scoping por
+// wallet era CASE-INSENSITIVE (rama EVM). Esa rama ya no existe: la canonicalización es base58 y
+// case-SENSITIVE. Las addresses pasan a ser pubkeys reales; el caso que probaba la
+// case-insensibilidad se reemplaza por el que prueba lo contrario (CD-7).
+const A = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+const B = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const Z = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"; // nunca dueña de nada
 
-    const lower = await repo.list("0xaaa");
-    expect(lower.map((s) => s.id)).toEqual(["a1"]);
-    const upper = await repo.list("0xAAA");
-    expect(upper.map((s) => s.id)).toEqual(["a1"]);
+describe("LocalRepo.list — scope por wallet (AC-5/7, CD-5)", () => {
+  it("AC-5: devuelve SOLO entries del address (scoping por owner)", async () => {
+    const repo = new LocalRepo();
+    await repo.save(withOwner("a1", A));
+    await repo.save(withOwner("b1", B));
+
+    expect((await repo.list(A)).map((s) => s.id)).toEqual(["a1"]);
     // ningún registro de otra wallet
-    expect((await repo.list("0xbbb")).map((s) => s.id)).toEqual(["b1"]);
+    expect((await repo.list(B)).map((s) => s.id)).toEqual(["b1"]);
+    // WKH-320/CD-7: el scoping es CASE-SENSITIVE. Antes este caso probaba que `list` con la misma
+    // address en otro case devolvía lo mismo (rama EVM, lowercase). Ahora una variante con otro case
+    // es OTRA address: o no matchea, o ni siquiera canonicaliza. Nunca devuelve lo ajeno.
+    const altCase = `${A.slice(0, 1)}${A[1] === A[1]!.toLowerCase() ? A[1]!.toUpperCase() : A[1]!.toLowerCase()}${A.slice(2)}`;
+    expect(altCase).not.toBe(A);
+    const leaked = await repo.list(altCase).catch(() => []);
+    expect(leaked.map((s) => s.id)).toEqual([]);
   });
 
   it("AC-7: remesa sin owner (created, nunca verificó) queda EXCLUIDA de cualquier list scopeada", async () => {
     const repo = new LocalRepo();
     const abandoned = Remittance.create("x1", beneficiary(), Money.of(400, "USDC"), NOW); // sin startKyc
     await repo.save(abandoned);
-    await repo.save(withOwner("a1", "0xAAA"));
+    await repo.save(withOwner("a1", A));
 
     expect(abandoned.snapshot.ownerAddress).toBeNull();
-    expect((await repo.list("0xAAA")).map((s) => s.id)).toEqual(["a1"]);
+    expect((await repo.list(A)).map((s) => s.id)).toEqual(["a1"]);
     // no aparece bajo ninguna address
-    expect((await repo.list("0xZZZ")).map((s) => s.id)).toEqual([]);
+    expect((await repo.list(Z)).map((s) => s.id)).toEqual([]);
   });
 });
 
 describe("LocalRepo.clearByOwner — purga PII del owner en el reset (WKH-201)", () => {
-  it("AC-1: borra las entries del owner → list vacío (case-insensitive)", async () => {
+  it("AC-1: borra las entries del owner → list vacío", async () => {
     const repo = new LocalRepo();
-    await repo.save(withOwner("a1", "0xAAA"));
-    await repo.save(withOwner("a2", "0xAAA"));
+    await repo.save(withOwner("a1", A));
+    await repo.save(withOwner("a2", A));
 
-    await repo.clearByOwner("0xaaa"); // lower → prueba case-insensitive
+    await repo.clearByOwner(A);
 
-    expect(await repo.list("0xAAA")).toEqual([]);
+    expect(await repo.list(A)).toEqual([]);
   });
 
   it("AC-2: NO toca otros owners ni las entries ownerAddress === null", async () => {
     const repo = new LocalRepo();
-    await repo.save(withOwner("a1", "0xAAA"));
-    await repo.save(withOwner("b1", "0xBBB"));
+    await repo.save(withOwner("a1", A));
+    await repo.save(withOwner("b1", B));
     const abandoned = Remittance.create("x1", beneficiary(), Money.of(400, "USDC"), NOW); // sin startKyc
     await repo.save(abandoned);
 
-    await repo.clearByOwner("0xAAA");
+    await repo.clearByOwner(A);
 
     // otro owner intacto
-    expect((await repo.list("0xBBB")).map((s) => s.id)).toEqual(["b1"]);
+    expect((await repo.list(B)).map((s) => s.id)).toEqual(["b1"]);
     // la entry null persiste
     expect(await repo.get("x1")).not.toBeNull();
     expect((await repo.get("x1"))?.snapshot.ownerAddress).toBeNull();
@@ -115,12 +127,12 @@ describe("LocalRepo.clearByOwner — purga PII del owner en el reset (WKH-201)",
 
   it("AC-3: borra del blob real (repo fresco re-lee del storage → list [])", async () => {
     const repo = new LocalRepo();
-    await repo.save(withOwner("a1", "0xAAA"));
-    await repo.clearByOwner("0xAAA");
+    await repo.save(withOwner("a1", A));
+    await repo.clearByOwner(A);
 
     // instancia fresca que re-lee del storage real (no un reset in-memory)
     const fresh = new LocalRepo();
-    expect(await fresh.list("0xAAA")).toEqual([]);
+    expect(await fresh.list(A)).toEqual([]);
     // el blob JSON ya no contiene el destination (celular Yape) del owner purgado
     expect(storage.getItem(KEY)).not.toContain(beneficiary().destination);
   });
@@ -129,7 +141,7 @@ describe("LocalRepo.clearByOwner — purga PII del owner en el reset (WKH-201)",
 describe("LocalRepo.save — CAS / lock optimista (AC-3/AC-4, CD-4)", () => {
   it("AC-3/AC-4: carrera — dos get() (version V), un save() avanza, el save() stale tira ConcurrentModificationError", async () => {
     const repo = new LocalRepo();
-    await repo.save(withOwner("race-1", "0xAAA")); // persistido version 1
+    await repo.save(withOwner("race-1", A)); // persistido version 1
 
     // Dos lecturas del MISMO id → ambas rehidratan con version 1 (read-stale de la carrera).
     const r1 = await repo.get("race-1");
@@ -149,7 +161,7 @@ describe("LocalRepo.save — CAS / lock optimista (AC-3/AC-4, CD-4)", () => {
 
   it("AC-3: secuencial (get→save×N) NO genera falso conflicto", async () => {
     const repo = new LocalRepo();
-    await repo.save(withOwner("seq-1", "0xAAA"));
+    await repo.save(withOwner("seq-1", A));
     for (let i = 0; i < 3; i++) {
       const r = await repo.get("seq-1");
       if (!r) throw new Error("setup");
@@ -160,7 +172,7 @@ describe("LocalRepo.save — CAS / lock optimista (AC-3/AC-4, CD-4)", () => {
 
   it("AC-4: 2 confirm concurrentes sobre la misma instancia rehidratada → 1 procede, 1 tira", async () => {
     const repo = new LocalRepo();
-    await repo.save(withOwner("cc-1", "0xAAA")); // version 1
+    await repo.save(withOwner("cc-1", A)); // version 1
     // Simula dos ejecuciones que leyeron la MISMA version antes de confirmar.
     const a = await repo.get("cc-1");
     const b = await repo.get("cc-1");
@@ -230,7 +242,7 @@ describe("LocalRepo.read — defensivo AC-4 (snapshot legacy con PII cruda)", ()
     storage.setItem(KEY, JSON.stringify(legacy));
     const repo = new LocalRepo();
     expect((await repo.get("leg-1"))?.snapshot.ownerAddress).toBeNull();
-    expect(await repo.list("0xAAA")).toEqual([]);
+    expect(await repo.list(A)).toEqual([]);
   });
 
   it("AC-4: legacy sin `version` → normaliza a 0 sin crashear (y el próximo save avanza a 1)", async () => {
@@ -254,7 +266,7 @@ describe("LocalRepo.read — defensivo AC-4 (snapshot legacy con PII cruda)", ()
   it("raw corrupto no crashea (parse defensivo → mapa vacío)", async () => {
     storage.setItem(KEY, "{not json");
     const repo = new LocalRepo();
-    expect(await repo.list("0xAAA")).toEqual([]);
+    expect(await repo.list(A)).toEqual([]);
     expect(await repo.get("whatever")).toBeNull();
   });
 });

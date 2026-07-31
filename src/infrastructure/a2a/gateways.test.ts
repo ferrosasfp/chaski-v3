@@ -92,7 +92,7 @@ describe("A2aPayoutGateway (AC-4/AC-5/AC-14)", () => {
 
   it("AC-4: mapea settled con deliveredLocal→Money PEN + txRef", async () => {
     vi.stubGlobal("fetch", okJson({
-      result: { status: "settled", payoutId: "po-2", deliveredLocal: 1478.15, txRef: "0xdlv", reason: null, provenance: "transfi", depositAddress: "0x4444444444444444444444444444444444444444" },
+      result: { status: "settled", payoutId: "po-2", deliveredLocal: 1478.15, txRef: "0xdlv", reason: null, provenance: "transfi", depositAddress: "So11111111111111111111111111111111111111112" },
     }));
     const rec = await new A2aPayoutGateway().submit(payoutReq);
     expect(rec.status).toBe("settled");

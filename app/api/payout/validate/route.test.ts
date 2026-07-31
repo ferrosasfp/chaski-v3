@@ -15,7 +15,9 @@ vi.mock("../../../../src/infrastructure/rate-limit", async (importOriginal) => {
 import { POST } from "./route";
 
 const VID = "sess-abc";
-const ADDR = "0xSender";
+// WKH-320: addresses base58 — la canonicalización dejó de aceptar hexadecimal, y el match de
+// ownership dejó de ser case-insensitive (CD-7).
+const ADDR = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 
 function req(payload: unknown): Request {
   return new Request("http://localhost/api/payout/validate", {
@@ -126,16 +128,16 @@ describe("POST /api/payout/validate — autoridad server-side (WKH-180)", () => 
   // ── Ownership (vendor_data) ──────────────────────────────────────────────────
   it("vendor_data mismatch vs address → 200 kyc_not_authorized (colapsado) (AC-1 ownership)", async () => {
     vi.stubEnv("DIDIT_API_KEY", "test-key");
-    vi.stubGlobal("fetch", diditOk({ status: "Approved", session_id: VID, vendor_data: "0xOtherWallet" }));
+    vi.stubGlobal("fetch", diditOk({ status: "Approved", session_id: VID, vendor_data: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }));
     const res = await POST(req({ verificationId: VID, address: ADDR }));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ authorized: false, reason: "kyc_not_authorized" });
   });
 
-  it("vendor_data match (case-insensitive) → true", async () => {
+  it("vendor_data match exacto (base58 case-sensitive) → true", async () => {
     vi.stubEnv("DIDIT_API_KEY", "test-key");
-    vi.stubGlobal("fetch", diditOk({ status: "Approved", session_id: VID, vendor_data: "0xSENDER" }));
-    const res = await POST(req({ verificationId: VID, address: "0xsender" }));
+    vi.stubGlobal("fetch", diditOk({ status: "Approved", session_id: VID, vendor_data: ADDR }));
+    const res = await POST(req({ verificationId: VID, address: ADDR }));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ authorized: true });
   });
@@ -179,7 +181,7 @@ describe("POST /api/payout/validate — autoridad server-side (WKH-180)", () => 
     const declinedBody = await declined.json();
 
     // (2) ownership mismatch (Approved pero vendor_data != address)
-    vi.stubGlobal("fetch", diditOk({ status: "Approved", session_id: VID, vendor_data: "0xOtherWallet" }));
+    vi.stubGlobal("fetch", diditOk({ status: "Approved", session_id: VID, vendor_data: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }));
     const mismatch = await POST(req({ verificationId: VID, address: ADDR }));
     const mismatchBody = await mismatch.json();
 

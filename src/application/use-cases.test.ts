@@ -19,7 +19,11 @@ import {
   FakePayoutGateway,
   FakeQuoteGateway,
   FakeRefundGateway,
-  FakeWallet,
+  FakeSolanaPayoutPrepareGateway,
+  FakeSolanaSettlementGateway,
+  FakeSolanaWallet,
+  FAKE_SOLANA_BENEFICIARY,
+  FAKE_SOLANA_SIGNATURE,
   FixedClock,
   InMemoryRepo,
   SeqIds,
@@ -32,6 +36,7 @@ function setup(opts?: {
   payout?: FakePayoutGateway;
   kycStore?: KycStore;
   pending?: KycPendingStore;
+  solanaGateway?: FakeSolanaSettlementGateway;
 }) {
   const repo = new InMemoryRepo();
   const clock = new FixedClock();
@@ -39,7 +44,11 @@ function setup(opts?: {
   const payout = opts?.payout ?? new FakePayoutGateway();
   const kycStore = opts?.kycStore ?? new FakeKycStore();
   const pending = opts?.pending ?? new FakeKycPendingStore();
-  const wallet = new FakeWallet();
+  // WKH-320: el e2e corre sobre el CAMINO REAL. Antes usaba la FakeWallet demo y llegaba a
+  // payouts.submit (paso 4), que post-poda es estructuralmente inalcanzable: sin `solana` inyectado
+  // el tapón DT-8 falla la remesa fail-closed. Se inyecta el par prepare+gateway Solana, así el
+  // recorrido create → lock → kyc → confirm → track sigue probado punta a punta.
+  const wallet = new FakeSolanaWallet();
   const kycGw = opts?.kyc ?? new FakeKycGateway();
   return {
     repo,
@@ -51,21 +60,17 @@ function setup(opts?: {
     startKyc: new StartKyc(kycGw, kycStore, pending, repo, clock),
     resumeKyc: new ResumeKyc(kycGw, kycStore, pending, repo, clock),
     lock: new LockQuote(new FakeQuoteGateway(), repo, clock),
-    confirm: new ConfirmAndSend(
-      wallet,
-      payout,
-      repo,
-      clock,
-      new FakePayoutAuthorityGateway(),
-      new FakeRefundGateway(),
-    ),
+    confirm: new ConfirmAndSend(wallet, repo, clock, new FakePayoutAuthorityGateway(), new FakeRefundGateway(), {
+      prepare: new FakeSolanaPayoutPrepareGateway(),
+      gateway: opts?.solanaGateway ?? new FakeSolanaSettlementGateway(),
+    }),
     track: new TrackRemittance(payout, repo, clock, new FakeRefundGateway()),
   };
 }
 
 const kycInput = (remittanceId: string) => ({
   remittanceId,
-  address: "0xSender",
+  address: FAKE_SOLANA_BENEFICIARY,
   purpose: "family support",
 });
 
@@ -82,7 +87,7 @@ describe("Use-cases — money-path", () => {
     r = await track.execute({ remittanceId: id });
     expect(r.status).toBe("settled"); // delivered dentro de tolerancia del receive lockeado (AC-6)
     expect(r.snapshot.deliveredPen).toEqual(Money.of(1478.15, "PEN"));
-    expect(r.snapshot.principalTx).toBe("0xprincipal");
+    expect(r.snapshot.principalTx).toBe(FAKE_SOLANA_SIGNATURE);
   });
 
   it("payout settled con deliveredPen null → settled preserva null (AC-1, no coalesce a S/0)", async () => {
@@ -121,9 +126,13 @@ describe("Use-cases — money-path", () => {
     );
   });
 
-  it("payout falla → refunded, failureReason preservado (WKH-186 refund-on-failure)", async () => {
+  // WKH-320: antes este caso forzaba el fallo con un payout status:'failed' (paso 4, inalcanzable
+  // post-poda). Se re-cablea sobre el settle, que es donde vive hoy el fallo del money-path.
+  // El invariante probado es el mismo: refund-on-failure avanza a refunded en el MISMO execute() y
+  // markRefunded sólo patchea refundTx, así que el failureReason sobrevive.
+  it("el settle falla → refunded, failureReason preservado (WKH-186 refund-on-failure)", async () => {
     const { create, startKyc, lock, confirm } = setup({
-      payout: new FakePayoutGateway({ status: "failed", failureReason: "partner_down" }),
+      solanaGateway: new FakeSolanaSettlementGateway({ ok: false, reason: "solana_settle_rejected" }),
     });
     const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
     const id = r0.snapshot.id;
@@ -133,8 +142,9 @@ describe("Use-cases — money-path", () => {
     // Antes de WKH-186 la remesa quedaba clavada en payout_failed; ahora el refund la avanza a
     // refunded en el mismo execute(). markRefunded solo patchea refundTx → failureReason sobrevive.
     expect(r.status).toBe("refunded");
-    expect(r.snapshot.failureReason).toBe("partner_down");
+    expect(r.snapshot.failureReason).toBe("solana_settle_rejected");
     expect(r.snapshot.refundTx).toBe("refund-fake");
+    expect(r.snapshot.principalTx).toBeNull(); // el depósito no se confirmó ⇒ nunca principal_in
   });
 
   it("PreviewQuote no crea remesa", async () => {
@@ -150,9 +160,9 @@ describe("Use-cases — money-path", () => {
     const kycStore = new FakeKycStore();
     const { connect } = setup({ kycStore });
     let res = await connect.execute();
-    expect(res.address).toBe("0xSender");
+    expect(res.address).toBe(FAKE_SOLANA_BENEFICIARY);
     expect(res.rememberedKyc).toBeNull();
-    await kycStore.save("0xSender", {
+    await kycStore.save(FAKE_SOLANA_BENEFICIARY, {
       verificationId: "v",
       approved: true,
       payoutAllowed: true,
@@ -172,7 +182,7 @@ describe("Use-cases — money-path", () => {
     await startKyc.execute(kycInput(r1.snapshot.id)); // verifica + guarda en el store
     const r2 = await create.execute({ amountUsd: 200, beneficiary: beneficiary() });
     await lock.execute({ remittanceId: r2.snapshot.id });
-    const res = await startKyc.execute({ remittanceId: r2.snapshot.id, address: "0xSender" });
+    const res = await startKyc.execute({ remittanceId: r2.snapshot.id, address: FAKE_SOLANA_BENEFICIARY });
     expect(res.kind).toBe("done");
     if (res.kind === "done") expect(res.snapshot.status).toBe("kyc_passed");
   });
@@ -181,7 +191,7 @@ describe("Use-cases — money-path", () => {
     const { create, startKyc, lock, resumeKyc } = setup({ kyc: new FakeKycGateway({}, true) });
     const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
     await lock.execute({ remittanceId: r0.snapshot.id }); // WKH-187: cotiza antes del KYC
-    const start = await startKyc.execute({ remittanceId: r0.snapshot.id, address: "0xSender" });
+    const start = await startKyc.execute({ remittanceId: r0.snapshot.id, address: FAKE_SOLANA_BENEFICIARY });
     expect(start.kind).toBe("redirect"); // te manda a Didit
 
     const res = await resumeKyc.execute(); // simula el retorno de Didit
@@ -197,7 +207,7 @@ describe("Use-cases — money-path", () => {
     const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
     const id = r0.snapshot.id;
     await lock.execute({ remittanceId: id }); // WKH-187: cotiza antes del KYC
-    const start = await startKyc.execute({ remittanceId: id, address: "0xSender" });
+    const start = await startKyc.execute({ remittanceId: id, address: FAKE_SOLANA_BENEFICIARY });
     expect(start.kind).toBe("redirect");
 
     // ThrowingSaveKycStore.save lanza SIEMPRE (más agresivo que el try/catch del store real): prueba
@@ -228,7 +238,7 @@ describe("Use-cases — money-path", () => {
     const id = r0.snapshot.id;
     await lock.execute({ remittanceId: id }); // WKH-187: cotiza antes del KYC (created→quoted)
     await expect(
-      startKyc.execute({ remittanceId: id, address: "0xSender" }),
+      startKyc.execute({ remittanceId: id, address: FAKE_SOLANA_BENEFICIARY }),
     ).rejects.toThrow(/kyc_pending_unavailable/); // AC-1: re-lanza el Error, no crudo; AC-3: no {kind:"redirect"}
     const persisted = await repo.get(id);
     expect(persisted?.snapshot.status).toBe("quoted"); // AC-2 ⭐ WKH-187: último estado guardado = quoted, NO "kyc_pending"
@@ -246,11 +256,11 @@ describe("Use-cases — money-path", () => {
     const kycGw = new FakeKycGateway({}, true);
     const kycStore = new FakeKycStore();
     const failing = new StartKyc(kycGw, kycStore, new ThrowingKycPendingStore(), repo, clock);
-    await expect(failing.execute({ remittanceId: id, address: "0xSender" })).rejects.toThrow();
+    await expect(failing.execute({ remittanceId: id, address: FAKE_SOLANA_BENEFICIARY })).rejects.toThrow();
     expect((await repo.get(id))?.snapshot.status).toBe("quoted"); // WKH-187: último estado guardado = quoted
 
     const healthy = new StartKyc(kycGw, kycStore, new FakeKycPendingStore(), repo, clock);
-    const res = await healthy.execute({ remittanceId: id, address: "0xSender" }); // quoted→kyc_pending válido
+    const res = await healthy.execute({ remittanceId: id, address: FAKE_SOLANA_BENEFICIARY }); // quoted→kyc_pending válido
     expect(res.kind).toBe("redirect");
     expect((await repo.get(id))?.snapshot.status).toBe("kyc_pending");
   });
@@ -266,9 +276,9 @@ describe("Use-cases — money-path", () => {
     const id = r0.snapshot.id;
     expect(r0.snapshot.ownerAddress).toBeNull(); // creada sin owner
     await lock.execute({ remittanceId: id }); // WKH-187: cotiza antes del KYC
-    await startKyc.execute({ remittanceId: id, address: "0xAAA" });
+    await startKyc.execute({ remittanceId: id, address: FAKE_SOLANA_BENEFICIARY });
     const saved = await repo.get(id);
-    expect(saved?.snapshot.ownerAddress).toBe("0xAAA");
+    expect(saved?.snapshot.ownerAddress).toBe(FAKE_SOLANA_BENEFICIARY);
   });
 
   it("AC-12: flujo fallback (sin sandbox Didit) queda verde con identity REDUCIDA presente", async () => {
@@ -285,7 +295,7 @@ describe("Use-cases — money-path", () => {
     );
     const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
     await new LockQuote(new FakeQuoteGateway(), repo, clock).execute({ remittanceId: r0.snapshot.id }); // WKH-187: cotiza antes del KYC
-    const res = await startKyc.execute({ remittanceId: r0.snapshot.id, address: "0xAAA" });
+    const res = await startKyc.execute({ remittanceId: r0.snapshot.id, address: FAKE_SOLANA_BENEFICIARY });
     expect(res.kind).toBe("done");
     if (res.kind === "done") {
       expect(res.snapshot.status).toBe("kyc_passed");

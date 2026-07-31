@@ -10,10 +10,9 @@
 // sobre el STRING base64url del payload (no sobre el JSON crudo): así verify() re-HMACea el string
 // recibido tal cual y no depende de que JSON.stringify re-serialice idéntico.
 //
-// WKH-320: la mitad EVM de este archivo (PopChallenge con `chainId:number`, issuePopChallenge,
-// buildPopMessage, verifyPopChallenge) se eliminó con la VM que describía. Borrar `verifyPopChallenge`
-// y `buildPopMessage` es además una BARRERA DEL COMPILADOR: sin ellas, el `else if (POP_SECRET)` de
-// prepare/route.ts —que convertía el PoP de obligatorio en opt-in— NO COMPILA (TS2305).
+// Este módulo exporta UN solo emisor y UN solo verificador, y eso es una BARRERA DEL COMPILADOR: no
+// hay un segundo par de funciones con el que /api/payout/prepare pueda volver el PoP opt-in en vez
+// de obligatorio — el intento no compila (TS2305).
 //
 // Crypto: node:crypto (createHmac/timingSafeEqual).
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -37,21 +36,20 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-// ── Solana (HU-SOL-8 / WKH-211) — el challenge PoP ed25519, hoy el ÚNICO ──────────────────────────
+// ── HU-SOL-8 / WKH-211 — el challenge PoP ed25519 ─────────────────────────────────────────────────
 // El challenge ata un network-id CAIP-2 (solana:devnet | solana:mainnet) — anti-replay cross-cluster
 // (CD-3). Reusa secret()/sign()/isRecord() privados.
 
 export interface SolanaPopChallenge {
   address: string; // base58 canónico (PublicKey.toBase58), case-sensitive (CD-8)
-  networkId: string; // CAIP-2: "solana:devnet" | "solana:mainnet" (CD-3) — REEMPLAZA a chainId
-  nonce: string; // 32 hex (mismo randomBytes(16).toString('hex') que EVM)
+  networkId: string; // CAIP-2: "solana:devnet" | "solana:mainnet" (CD-3) — identifica el cluster
+  nonce: string; // 32 hex (randomBytes(16).toString('hex'))
   exp: number; // epoch SEGUNDOS
 }
 
 /**
- * SSOT del mensaje Solana (CD-6). 5 líneas \n-separadas, SIN newline final. Mirror estructural de
- * buildPopMessage pero con `network:` en vez de `chainId:`. El cliente lo firma VERBATIM; el emisor
- * (challenge/route) y el verificador (submit/prepare) llaman a ESTA misma función ⇒ byte-idéntico.
+ * SSOT del mensaje (CD-6). 5 líneas \n-separadas, SIN newline final. El cliente lo firma VERBATIM; el
+ * emisor (challenge/route) y el verificador (prepare) llaman a ESTA misma función ⇒ byte-idéntico.
  */
 export function buildSolanaPopMessage(p: SolanaPopChallenge): string {
   return `Chaski Proof-of-Possession\naddress: ${p.address}\nnetwork: ${p.networkId}\nnonce: ${p.nonce}\nexpires: ${p.exp}`;

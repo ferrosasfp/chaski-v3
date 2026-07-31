@@ -81,11 +81,11 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 // vía el header `x-payment-chain` del gateway. Es OPCIONAL: ausente ⇒ no se manda el header y el
 // gateway usa su red default, que es el comportamiento previo (cero cambio si nadie la setea).
 //
-// Por qué existe: el saldo de una Agent Key es POR RED (`budget[chainId]`). Sin este header, una
-// key con saldo en avalanche-fuji contra un gateway cuya default es kite-ozone-testnet recibe
-// 403 INSUFFICIENT_BUDGET aunque tenga fondos — el caller no tenía forma de decir dónde cobrarle.
-// Medido 2026-07-26: "chain 2368 (kite-ozone-testnet) balance is 0; no x-payment-chain header
-// sent, used default 'kite-ozone-testnet'; chains with balance: avalanche-fuji (6.793)".
+// Por qué existe: el saldo de una Agent Key es POR RED. Sin este header, una key con saldo en
+// `solana-devnet` contra un gateway cuya red default es OTRA recibe 403 INSUFFICIENT_BUDGET aunque
+// tenga fondos — el caller no tenía forma de decir dónde cobrarle. La forma del error del gateway es
+// "balance is 0; no x-payment-chain header sent, used default '<red>'; chains with balance:
+// solana-devnet (6.793)": nombra la red que sí tiene saldo, que es justamente la que había que pedir.
 function readGatewayConfig(): {
   url: string;
   key: string;

@@ -75,9 +75,9 @@ function createSolanaWallet(): SolanaWalletAdapter {
 }
 
 export function createContainer(): Container {
-  // WKH-320 — PRIMERA línea, antes de cualquier `new`. Chaski ya no tiene interruptor de VM en el
-  // código, pero las envs EVM viven FUERA del código (panel de Vercel) y nadie avisa cuando quedan
-  // huérfanas. Es la única pieza de esta HU que no se resuelve por construcción.
+  // PRIMERA línea, antes de cualquier `new`. La configuración de un camino de settlement que este
+  // código ya no tiene vive FUERA del código (panel del proveedor de hosting) y nadie avisa cuando
+  // queda huérfana: es lo único que no se resuelve por construcción, así que se resuelve fail-loud.
   assertNoEvmResidue();
   const clock = new SystemClock();
   const ids = new CryptoIds();
@@ -96,18 +96,11 @@ export function createContainer(): Container {
   const payouts = useA2a ? new A2aPayoutGateway() : new FallbackPayoutGateway();
   const payoutAuthority = new HttpPayoutAuthorityGateway(); // autoridad server-side (WKH-180)
   const refund = new LedgerRefundGateway(); // refund-on-failure ledger-only (WKH-186/AC-8, CD-8)
-  // WKH-320: ya no hay dispatcher por VM porque ya no hay una segunda VM. La wallet es SIEMPRE el
-  // adapter Solana. El estado "wallet EVM" dejó de ser expresable: no hay ternario que pueda elegirla.
+  // La wallet es SIEMPRE el adapter Solana: no hay selección posible, y por eso no hay ternario.
   const wallet = createSolanaWallet();
   // HU-SOL-13 (WKH-216) — guard fail-loud money-path Solana. Con el flag ON exige mint+facilitator
   // configurados (client-safe, NEXT_PUBLIC_); la release-authority se resuelve SERVER-SIDE (nunca en
   // el bundle browser, CD-6). Flag OFF → nunca entra acá.
-  //
-  // WKH-320: se van los dos guards de mutua exclusión con EVM (`solana_vm_excludes_eip3009` y
-  // `solana_settle_requires_solana_vm`). No es que se hayan relajado: la condición que vigilaban
-  // dejó de ser expresable. No hay una VM que pueda no ser Solana, y no hay un flag EIP-3009 con el
-  // cual colisionar. Un interruptor de VM residual en el entorno lo caza assertNoEvmResidue(),
-  // que es un control que SÍ puede dispararse.
   const solanaSettleOn = process.env.NEXT_PUBLIC_SOLANA_SETTLE_ENABLED === "true";
   if (solanaSettleOn) {
     resolveSolanaUsdcMint(); // fail-loud si falta/malformado
@@ -120,7 +113,7 @@ export function createContainer(): Container {
     ? { prepare: new HttpSolanaPayoutPrepareGateway(), gateway: new HttpSolanaSettlementGateway() }
     : undefined;
   // Refund trustless (AC-6/CD-10): válvula de recuperación (lee on-chain y aborta si no es
-  // refundeable). WKH-320: siempre presente — antes dependía de que la VM activa fuera Solana.
+  // refundeable). SIEMPRE presente: no hay configuración que la pueda apagar.
   const solanaRefund = new SolanaEscrowRefundGateway(wallet);
 
   return {

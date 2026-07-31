@@ -21,7 +21,7 @@ const req: PayoutSubmit = {
   expectedReceivePen: Money.of(368.65, "PEN"),
   beneficiary: { name: "Ana", country: "PE", method: "yape", destination: "999999999" },
   kycVerificationId: "fallback-910e0084",
-  address: "0x1111111111111111111111111111111111111111",
+  address: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
   idempotencyKey: "idem-0001",
 };
 

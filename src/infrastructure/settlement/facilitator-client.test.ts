@@ -1,6 +1,5 @@
 // Tests — facilitator-client (HU-SOL-9 / WKH-208). T4: verifySolanaSettlement construye el envelope
-// x402 base58 que _parseSolanaInput del adaptador Solana espera (verify-only, sin mutar la rama
-// EIP-3009). T5: regresión byte-idéntica de broadcastSettle (payload EIP-3009 intacto, AC-2).
+// x402 base58 que el facilitator espera (verify-only: la tx ya está finalizada cuando llegamos acá).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type SolanaSettleInput,
@@ -67,7 +66,7 @@ describe("verifySolanaSettlement (HU-SOL-9, AC-3) — envelope base58 verify-onl
     expect(sentBody.accepted.extra).toBeUndefined(); // SIN assetTransferMethod (no aplica a SPL)
     expect(sentBody.payload.signature).toBe(SIGNATURE); // base58
     expect(sentBody.payload.reference).toBe(REFERENCE); // base58
-    expect("authorization" in sentBody.payload).toBe(false); // NO objeto authorization EIP-3009
+    expect("authorization" in sentBody.payload).toBe(false); // el envelope NO lleva objeto authorization
   });
 
   it("200 + signature base58 válida ⇒ { ok:true, signature }", async () => {
@@ -128,7 +127,3 @@ describe("verifySolanaSettlement (HU-SOL-9, AC-3) — envelope base58 verify-onl
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
-
-// WKH-320: acá abajo vivía la regresión byte-idéntica de broadcastSettle — que el payload EIP-3009
-// enviado al /settle del facilitator (network eip155:<chainId>, extra.assetTransferMethod, el objeto
-// `authorization`) no cambiara ni un byte. Se fue con el broadcast que verificaba.

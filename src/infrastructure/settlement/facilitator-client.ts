@@ -10,9 +10,7 @@
 // ⚠️ CD-10: la respuesta 200 de este cliente NO es verificación on-chain propia. El facilitador ECOA
 // campos de nuestro input, así que de la respuesta sólo se toma la signature.
 //
-// WKH-320: acá vivía `broadcastSettle` (el BROADCAST del transferWithAuthorization EIP-3009 firmado)
-// con su input EVM y su enum. Se fue con el camino que transmitía. Lo que queda es la mitad Solana,
-// que es VERIFY-ONLY: la tx ya está finalizada on-chain cuando llegamos acá.
+// Este cliente es VERIFY-ONLY: la tx ya está finalizada on-chain cuando llegamos acá.
 //
 // CD-5/CD-18: cero escritura on-chain propia — delegamos en el /settle auditado de wasiai-facilitator.
 // CD-6: se consume ÚNICAMENTE como servicio HTTP; PROHIBIDO importar su código.

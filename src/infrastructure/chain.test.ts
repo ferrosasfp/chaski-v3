@@ -5,10 +5,6 @@ import {
   resolveSolanaUsdcMint,
 } from "./chain";
 
-// WKH-320: este archivo probaba además el resolver de chainId EVM (default fail-safe 84532), la
-// config de red de Base (canonicalUsdc + domain EIP-712), resolveUsdcAddress, el dispatcher
-// resolveActiveNetworkConfig y resolveActiveVm. Todo eso se fue con la VM que describía.
-
 afterEach(() => {
   delete process.env.NEXT_PUBLIC_SOLANA_USDC_MINT;
   delete process.env.SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY;

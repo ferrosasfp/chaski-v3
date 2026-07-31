@@ -2,8 +2,8 @@
 // caller pide un challenge para SU address; el server lo firma (HMAC PAYOUT_POP_SECRET, server-only
 // SIN NEXT_PUBLIC_ — CD-8) con un nonce + expiración + network-id CAIP-2, y devuelve el popMessage
 // que la wallet debe firmar VERBATIM.
-// El nonce NO se quema (DT-5). Hasta WKH-320 lo quemaba /api/a2a/payout/submit, que era EVM y se
-// eliminó; hoy el anti-replay dentro del TTL es del facilitator. Residual R-3 de WKH-320.
+// El nonce NO se quema (DT-5): el anti-replay dentro del TTL es responsabilidad del facilitator, que
+// es quien exige y verifica el popProof. Residual R-3 documentado.
 //
 // TODO defensivo: NUNCA 500 crudo. Sin secreto → 501 (no configurado, skip total del mecanismo).
 // address malformada / body no-record → 400. NO fetchea Didit, NO lee estado KYC, NO escribe Upstash.
@@ -55,8 +55,6 @@ export async function POST(req: Request): Promise<Response> {
   const rawAddress = typeof body.address === "string" ? body.address : "";
 
   // HU-SOL-8/CD-3: challenge ed25519 con network-id CAIP-2 (server-side, NUNCA del body).
-  // WKH-320: acá había un dispatch por VM con una rama EVM que validaba la address con un validador
-  // hexadecimal y emitía un challenge atado a un chainId numérico. Se fue con la VM que servía.
   let addr: string;
   try {
     addr = canonicalizeAddress(rawAddress); // base58 32 bytes (CD-8)

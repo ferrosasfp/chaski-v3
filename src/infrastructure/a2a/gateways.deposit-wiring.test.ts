@@ -39,7 +39,7 @@ describe("A2aPayoutGateway — wiring depositAddress (WKH-211/WKH-212, CD-10)", 
   it("acepta un result con depositAddress string (isValidPayoutShape) y lo mapea a PayoutRecord (sin romper el contrato del submit)", async () => {
     vi.stubGlobal(
       "fetch",
-      okJson({ result: result({ depositAddress: "0x4444444444444444444444444444444444444444" }) }),
+      okJson({ result: result({ depositAddress: "So11111111111111111111111111111111111111112" }) }),
     );
     const rec = await new A2aPayoutGateway().submit(payoutReq);
     // PayoutRecord NO cambia (el submit no usa depositAddress; el prepare lo lee del result crudo).

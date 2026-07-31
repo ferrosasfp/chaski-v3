@@ -120,14 +120,8 @@ export interface PayoutAuthorityGateway {
 // Residual NO cerrado por esta HU: si el browser se cierra entre el settle on-chain y el estado
 // terminal, la remesa queda HUÉRFANA con el principal REALMENTE adentro. No hay reconciliación
 // automática; la evidencia server-side para reconciliar a mano vive en el SettlementLedger (WKH-207).
-//
-// WKH-320: acá vivía el envelope EIP-3009 (Eip3009Authorization) y el andamiaje de tipos multi-VM
-// (EvmAuthorization / SolanaAuthorization / VmAuthorization). El andamiaje existía para discriminar
-// entre DOS VMs; con una sola VM no discrimina nada, y su brazo Solana era un placeholder [TBD
-// HU-SOL-2] sin un solo consumidor. Los puertos Solana REALES —los de acá abajo— son los que el
-// money-path usa.
 
-// ── HU-SOL-5 (WKH-207*) — widening ADITIVO del WalletPort para el path Solana ──────
+// ── HU-SOL-5 (WKH-207*) — WalletPort del path Solana ──────
 /** Datos del escrow que el CALLER (HU-SOL-13) resuelve y pasa a la wallet Solana. base58. */
 export interface SolanaEscrowDeposit {
   beneficiary: string; // Pubkey base58 — destino de la remesa (release). Resuelto por HU-SOL-13.
@@ -143,9 +137,9 @@ export interface SolanaPrincipalAuthorization {
 }
 
 // ── HU-SOL-13 (WKH-216) — puertos del money-path Solana no-custodial (escrow Anchor) ──────────────
-// ADITIVOS: NO tocan ningún tipo EVM (CD-2/CD-14). El use-case recibe `solana` como 9º param OPCIONAL
-// (mutuamente excluyente con `settlement?` EVM). Cuando el container NO inyecta `solana` (EVM/demo),
-// estas interfaces no participan ⇒ el path EVM queda byte-idéntico POR CONSTRUCCIÓN.
+// El use-case recibe `solana` como parámetro OPCIONAL: el container lo inyecta SOLO con el flag de
+// settlement encendido y los envs validados. Sin inyección (modo demo) estas interfaces no participan
+// y el use-case fail-closea explícitamente (DT-8) en vez de seguir de largo.
 export type SolanaSettlementFailureReason =
   | "solana_settle_unavailable" // red caída / facilitator no configurado
   | "solana_settle_rejected" // CR-1 del deposit rechazó (422 SPONSOR_REJECTED)
@@ -154,8 +148,8 @@ export type SolanaSettlementFailureReason =
   | "solana_settle_unverified"; // shape de respuesta inválido
 
 // Broadcast del `deposit` Solana vía la ruta server-only /api/settle/solana-sponsor → facilitator
-// (HU-SOL-14). NUNCA reusa PrincipalSettlementGateway (EIP-3009-shaped) ni su regex 0x… (CD-13): la
-// signature de respuesta es base58. Corre en el CLIENTE (el browser jamás llama al facilitator directo).
+// (HU-SOL-14). La signature de respuesta es base58: validarla con una regex hexadecimal la rechazaría
+// siempre (CD-13). Corre en el CLIENTE (el browser jamás llama al facilitator directo).
 export interface SolanaSettlementGateway {
   settle(input: {
     partialSignedTx: string; // base64 (= SolanaPrincipalAuthorization.partialSignedTx)
@@ -343,7 +337,7 @@ export interface SettlementLedger {
     quoteId: string;
     idempotencyKey: string;
     depositAddress: string; // → columna receiver_address (NO columna nueva)
-    // chainId EVM. Con vm:'solana' el ledger lo IGNORA y escribe network_id (CAIP-2) + chain_id NULL:
+    // chainId numérico, heredado del schema. Con vm:'solana' el ledger lo IGNORA y escribe network_id (CAIP-2) + chain_id NULL:
     // Solana no tiene chainId numérico y el CHECK de la DB lo prohíbe (ver vmNetworkColumns).
     chainId: number;
     senderAddress: string;
@@ -368,7 +362,7 @@ export interface SettlementLedger {
     quoteId: string;
     idempotencyKey: string;
     txHash: string;
-    chainId: number; // EVM. Con vm:'solana' se ignora ⇒ network_id + chain_id NULL (ver arriba).
+    chainId: number; // heredado del schema. Con vm:'solana' se ignora ⇒ network_id + chain_id NULL (ver arriba).
     senderAddress: string;
     receiverAddress: string;
     valueMinor: number;

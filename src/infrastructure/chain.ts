@@ -1,8 +1,5 @@
-// Infrastructure — config de red env-driven (CD-5). ÚNICA fuente de la red para el adapter Solana
-// de WalletPort. PROHIBIDO hardcodear el cluster o el mint en un adapter y config en el otro.
-// WKH-320: Chaski es una DApp Solana. Este archivo tenía además un dispatcher multi-VM y toda la
-// config de Base (chainId, objetos Chain de la lib EVM, USDC ERC-20, RPC de Base); se eliminó junto
-// con la VM que describía. Ya no hay `resolveActiveVm()` porque ya no hay una segunda VM que resolver.
+// Infrastructure — config de red env-driven (CD-5). ÚNICA fuente de la red para el adapter de
+// WalletPort. PROHIBIDO hardcodear el cluster o el mint en un adapter y config en el otro.
 import { type Cluster, clusterApiUrl, PublicKey } from "@solana/web3.js";
 
 // ── Solana (WKH-206 / HU-SOL-1) ───────────────────────────────────────────────────

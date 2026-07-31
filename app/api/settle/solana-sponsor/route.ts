@@ -5,7 +5,7 @@
 //
 // TODO en guards fail-closed: nunca 500 crudo, nunca se ecoa el motivo del facilitador (CD-12
 // no-oracle), nunca se expone la API key / base URL al cliente (CD-6). Guard-order: flag → config →
-// body → formato → forward → map. Mismo espíritu que /api/settle/principal (EVM), byte-idéntico intacto.
+// body → formato → forward → map.
 import { NextResponse } from "next/server";
 import { getSettlementLedger } from "../../../../src/infrastructure/persistence/supabase-settlement-ledger";
 import { logLedgerWriteFailure } from "../../../../src/infrastructure/persistence/ledger-write-failure";

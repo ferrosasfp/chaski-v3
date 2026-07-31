@@ -1,15 +1,5 @@
 // Tests — ConfirmAndSend: el ORDEN de los guards del camino no-custodial (WKH-211 / HU-SOL-13).
 //
-// WKH-320 (T6): este archivo estaba escrito sobre los fakes EVM (FakeWallet con envelope eip3009,
-// FakeSettlementGateway, FakePayoutPrepareGateway) y sobre el 7º param `settlement`. Se REESCRIBIÓ
-// sobre los fakes Solana. No es un archivo nuevo ni un archivo borrado: es el MISMO invariante
-// —el orden— clavado sobre el único camino que queda.
-//
-// El caso "C5: settle ok pero res.to ≠ depositAddress" NO se porta: probaba el detector de drift
-// cliente↔server de la cola EIP-3009, que comparaba un `to` leído de la cadena contra el
-// depositAddress atestado. El settle Solana devuelve una signature, no un `to`, así que no hay nada
-// equivalente que comparar. Va declarado como cobertura que se pierde con su camino.
-//
 // Orden que se clava: confirm → autoridad → expiry → prepare → authorizePrincipal → settle →
 // markPrincipalIn → markPayoutSubmitted. Un guard movido de lugar pone esto rojo.
 import { describe, expect, it, vi } from "vitest";

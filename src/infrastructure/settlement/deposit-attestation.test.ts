@@ -8,10 +8,7 @@ import {
 } from "./deposit-attestation";
 
 const NOW_MS = Date.parse("2026-07-18T12:00:00.000Z");
-// ── T1 (HU-SOL-9 / WKH-208, AC-1/AC-5): atestación de depósito Solana.
-// WKH-320: acá arriba vivía el describe de la atestación EVM (DepositAttestation con
-// depositAddress 0x + chainId). Probaba que un depositAddress no se pudiera inyectar sin el secreto
-// HMAC en el camino EIP-3009. Se fue con ese camino.
+// ── T1 (HU-SOL-9 / WKH-208, AC-1/AC-5): atestación de depósito.
 const BENEFICIARY = "So11111111111111111111111111111111111111112"; // base58 pubkey válida
 const AUTHORITY = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"; // base58 pubkey válida
 

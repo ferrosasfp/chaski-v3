@@ -1,201 +1,204 @@
+[Español](README.es.md)
+
 # Chaski
 
-App de remesas cripto a fiat, no custodial. El que envía conecta su wallet, el principal
-queda bloqueado en un escrow on chain, y recién cuando el pago en destino está confirmado
-la autoridad de release lo libera. El operador nunca tiene la custodia del dinero.
+Chaski is a crypto to fiat remittance app that never takes custody of the money. The sender connects
+a wallet and the principal is locked in an escrow account on Solana. A release authority can move it
+only to the beneficiary that was fixed at deposit time, and only once the payout in the destination
+country is confirmed. If that never happens, the sender signs a refund and takes their own funds back
+without anyone's permission. The escrow is an Anchor program on devnet, with no real money involved.
 
-El principal viaja por **Solana**. El escrow es un programa **Anchor** en devnet, sin plata
-real. El settlement lo coordina un facilitator, que es el único servicio que transmite a la
-red: esta app firma y verifica, nunca broadcastea por su cuenta.
+> **Status.** Devnet. The repo's default configuration moves nothing: settlement sits behind a flag
+> that ships off, and the fiat payout runs against a mock adapter. See
+> [Configuration](#configuration) for exactly which switch turns on what.
 
-> **Estado.** Devnet, sin dinero real. La configuración por defecto del repo no mueve
-> fondos: el settlement está detrás de una flag que arranca apagada. Ver
-> [Configuración](#configuración) para el detalle de qué enciende qué.
+## What works today, and what does not
 
-## Qué hace hoy y qué no
+Working on devnet:
 
-Funcionando en devnet:
+- The full product flow: amount with a rate preview, wallet connection, identity verification,
+  review, confirmation, tracking and receipt.
+- Non custodial deposit into the escrow, signed by the sender's wallet. The transaction is paid by a
+  sponsoring fee payer, so the user never needs SOL.
+- Release and refund against the escrow. The release authority runs server side and its private key
+  does not live in this repo.
+- An on chain index of a sender's escrows, so a remittance whose local identifier was lost can still
+  be recovered.
+- A settlement ledger in Postgres that records the network of every row as a CAIP-2 identifier
+  (`solana:devnet`). The column also keeps a legacy discriminator, because it describes rows that
+  were already written: pruning code is not the same as rewriting the history of a database.
 
-- Flujo completo de producto: monto con preview de tasa, conexión de wallet, verificación
-  de identidad, revisión, confirmación, seguimiento y recibo.
-- Depósito no custodial al escrow Anchor en Solana devnet, firmado por la wallet del que
-  envía. La transacción la paga un fee payer patrocinador, así que el usuario no necesita SOL.
-- Release y refund contra el escrow, con la autoridad de release del lado del servidor. La
-  clave privada de esa autoridad no vive en este repo.
-- Índice on chain de escrows por remesa, para poder recuperar una operación cuyo
-  identificador local se perdió.
-- Ledger de settlement en Postgres, que registra la red de cada fila como identificador
-  CAIP-2 (`solana:devnet`). La columna conserva además un discriminador heredado, porque
-  describe filas ya escritas: podar código no es reescribir la historia de la base.
+Under construction or deliberately off:
 
-En construcción o apagado a propósito:
+- The fiat payout runs against a mock adapter by default. The real adapter exists and is wired, but
+  it requires provider credentials that are not in this repo.
+- None of this points at mainnet. The smoke script aborts if the cluster is not devnet.
 
-- El desembolso a fiat corre contra un adaptador mock por defecto. El adaptador real existe
-  y está cableado, pero exige credenciales de proveedor que no están en este repo.
-- Nada de esto apunta a mainnet. El script de smoke aborta si el cluster no es devnet.
+## The money path
 
-## Correr el proyecto
+The escrow is an Anchor program deployed on devnet:
 
-Requiere Node 22 (probado en 22.22.0).
+```
+DR5GoMT7sAKzD6wZMKJPeknS3Y6fzgZUNevi7xiESE4x
+```
+
+Six instructions: `deposit`, `release`, `refund`, `close`, `register_escrow`, `deregister_escrow`.
+
+Per remittance state lives in a PDA derived from `[b"escrow", sender, remittance_id]`, where
+`remittance_id` is a 16 byte array. The funds live in the associated token account of that PDA for
+the mint, so the vault address is a function of the escrow account and cannot be pointed elsewhere.
+
+The cycle:
+
+1. The app asks the server for the deposit parameters. If the release authority pubkey is not
+   configured, the server answers 503 instead of continuing.
+2. The sender's wallet signs `deposit`, which takes `beneficiary`, `authority`, `amount` and
+   `deadline` as arguments. The USDC leaves the sender's account and lands in the escrow vault. The
+   operator never touches it.
+3. The facilitator co-signs as fee payer and broadcasts, so the user needs no SOL. Requesting that
+   sponsorship requires proof of possession of the key: an ed25519 signature over a server issued
+   challenge, bound to the network through its CAIP-2 identifier so it cannot be replayed against
+   another cluster.
+4. Once the payout in the destination country is confirmed, the release authority signs `release`.
+   `sender`, `beneficiary` and `mint` are `has_one` constrained against the escrow account, so the
+   destination is the one fixed at deposit time and the authority cannot redirect the funds.
+5. If something fails, the sender signs `refund` and the principal goes back to whoever deposited it,
+   with no other signature required. The program rejects it unless the escrow is in the `Deposited`
+   state and the deadline has passed (`EscrowNotDeposited` 6002, `DeadlineNotReached` 6003).
+
+### The IDL is pinned by hash
+
+The program IDL is vendored at `src/infrastructure/solana/escrow-idl.ts` and its canonical SHA-256 is
+fixed in `contracts/idl/escrow-idl.hash.test.ts`, which runs on every `npm test`. The same test also
+pins the program id and the positional account order of `deposit`, `refund` and `register_escrow`. If
+someone hand edits the vendored IDL, or the deployed program reorders its accounts, the suite goes red
+before a transaction gets rejected in production. Re pinning is an explicit decision with its entry in
+`contracts/CONTRACT-VERSIONS.md`, never a silent drift. The pinned value matches the one held by
+`wasiai-facilitator`.
+
+### Devnet smoke
+
+`npm run smoke:solana` runs the whole cycle against already deployed services. It is deliberately
+uncomfortable to run:
+
+- It aborts before any call unless `SMOKE_ALLOW_REAL=true`. It does not run in CI.
+- Every input is an environment variable. There is no hardcoded URL, key, cluster or mint. If one is
+  missing it aborts and prints the variable's name, never its value.
+- The cluster is a `devnet` constant in the script. There is no fallback to mainnet.
+
+## Running it
+
+Requires Node 22 (tested on 22.22.0).
 
 ```bash
 git clone https://github.com/ferrosasfp/chaski-v3.git
 cd chaski-v3
 npm install --legacy-peer-deps
-cp .env.example .env.local     # todo vacío arranca en modo demo, sin mover fondos
+cp .env.example .env.local     # everything empty starts in demo mode and moves no funds
 npm run dev                    # http://localhost:3000
 ```
 
-El árbol de dependencias mezcla React 19 con paquetes que todavía declaran peers de React 18,
-por eso el `--legacy-peer-deps`.
+The dependency tree mixes React 19 with packages that still declare React 18 peers, hence
+`--legacy-peer-deps`.
 
 ### Scripts
 
-| Comando | Qué hace |
+| Command | What it does |
 |---|---|
-| `npm run dev` | Next en desarrollo |
-| `npm run build` | Build de producción |
-| `npm start` | Sirve el build |
-| `npm run typecheck` | `tsc --noEmit` sobre la app |
-| `npm run typecheck:scripts` | `tsc --noEmit` sobre `scripts/`, que queda fuera del build de Next |
-| `npm test` | `vitest run`, la suite completa |
-| `npm run test:core` | Solo dominio y aplicación, sin infraestructura ni componentes |
-| `npm run qa` | La puerta completa: lint, los dos typechecks y la suite |
-| `npm run smoke:solana` | Smoke end to end contra devnet. Opt in, ver abajo |
+| `npm run dev` | Next in development |
+| `npm run build` | Production build |
+| `npm start` | Serves the build |
+| `npm run typecheck` | `tsc --noEmit` over the app |
+| `npm run typecheck:scripts` | `tsc --noEmit` over `scripts/`, which is outside the Next build |
+| `npm test` | `vitest run`, the whole suite |
+| `npm run test:core` | Domain and application only, no infrastructure or components |
+| `npm run qa` | The full gate: lint, both typechecks and the suite |
+| `npm run smoke:solana` | End to end smoke against devnet. Opt in, see above |
 | `npm run lint` | `biome lint src app scripts` |
 
 ## Tests
 
-**692 casos en 57 archivos**, todos en verde. Se reparten en:
+**692 cases across 57 files**, all green. They break down as:
 
-- Dominio y aplicación con dobles de prueba, sin red ni wallet ni navegador. Ahí viven las
-  invariantes del camino del dinero: no se confirma sin identidad verificada y cotización
-  vigente, la cotización vencida falla cerrado, la máquina de estados no admite saltos.
-- Rutas de API, adaptadores de infraestructura y componentes con Testing Library.
-- Contract tests contra copias pinneadas del output de cada servicio externo
-  (`contracts/`). Si un proveedor cambia la forma de su respuesta y alguien re vendorea la
-  copia, el test del consumidor se pone rojo en vez de romperse en producción.
-- El IDL del programa de escrow está pinneado por hash canónico
-  (`contracts/idl/escrow-idl.hash.test.ts`): si alguien edita el IDL vendoreado a mano, o el
-  programa on chain cambia el orden de sus cuentas, la suite se pone roja antes de que una
-  transacción se rechace en producción.
-- Una garantía repo wide (`src/composition/no-evm-surface.test.ts`): recorre `src/`, `app/`,
-  `scripts/` y `contracts/` en cada corrida y **falla si vuelve a aparecer superficie de otra
-  máquina virtual** — un import de una librería de otra cadena, un validador de direcciones
-  hexadecimales, un interruptor de VM, o una de las rutas eliminadas de vuelta en el árbol.
-  Que este repo sea sólo Solana no depende de que alguien se acuerde: lo sostiene un test.
+- Domain and application with test doubles, no network, wallet or browser. That is where the money
+  path invariants live: nothing is confirmed without a verified identity and a live quote, an expired
+  quote fails closed, the state machine admits no jumps.
+- API routes, infrastructure adapters and components with Testing Library.
+- Contract tests against pinned copies of each external service's output (`contracts/`). If a provider
+  changes the shape of its response and someone re vendors the copy, the consumer's test goes red
+  instead of breaking in production.
+- The escrow IDL pinned by canonical hash (`contracts/idl/escrow-idl.hash.test.ts`), described above.
+- A repo wide guarantee (`src/composition/no-evm-surface.test.ts`) that this app cannot acquire a
+  second execution environment. It walks `src/`, `app/`, `scripts/` and `contracts/` on every run and
+  fails on the import shaped patterns that would reintroduce one. Being a Solana application is not a
+  matter of anyone remembering: a test holds it in place.
 
 ```bash
 npm test          # 692 tests
 npm run qa        # typechecks + tests
 ```
 
-## El camino del dinero en Solana
+## Architecture
 
-El escrow es un programa Anchor en devnet:
-
-```
-DR5GoMT7sAKzD6wZMKJPeknS3Y6fzgZUNevi7xiESE4x
-```
-
-Seis instrucciones: `deposit`, `release`, `refund`, `close`, `register_escrow`,
-`deregister_escrow`. El estado por remesa vive en una PDA derivada del identificador de la
-remesa, y los fondos en un vault asociado a esa PDA.
-
-El ciclo:
-
-1. La app pide al servidor los parámetros del depósito. Si la pubkey de la autoridad de
-   release no está configurada, responde 503 en vez de seguir.
-2. La wallet del que envía firma la instrucción `deposit`. El USDC sale de su cuenta y queda
-   en el vault del escrow. El operador no lo toca.
-3. El facilitator cofirma como fee payer y hace el broadcast, así el usuario no necesita SOL.
-   Para pedir ese patrocinio hay que probar posesión de la clave con una firma ed25519 sobre
-   un desafío, atado a la red vía CAIP-2 para que no se pueda reusar en otro cluster.
-4. Con el pago en destino confirmado, la autoridad de release ejecuta `release`. Si algo
-   falla, `refund` devuelve el principal a quien lo depositó, sin permiso de nadie más.
-
-### IDL pinneado
-
-El IDL del programa está copiado en `src/infrastructure/solana/escrow-idl.ts` y su hash
-SHA-256 canónico está fijado en `contracts/idl/canonical-hash.ts`. El test
-`contracts/idl/escrow-idl.hash.test.ts` compara uno contra otro en cada corrida: si alguien
-edita el IDL a mano, la suite se pone roja. Re pinnear es una decisión explícita, con su
-entrada en la bitácora de `contracts/CONTRACT-VERSIONS.md`, nunca un drift silencioso.
-
-### Smoke de devnet
-
-`npm run smoke:solana` corre el ciclo completo contra servicios ya desplegados. Está
-deliberadamente incómodo de ejecutar:
-
-- Aborta antes de cualquier llamada si no está `SMOKE_ALLOW_REAL=true`. No corre en CI.
-- Todas sus entradas son variables de entorno. No hay ninguna URL, key, cluster ni mint
-  hardcodeados. Si falta una, aborta e imprime el nombre de la variable, nunca su valor.
-- El cluster es `devnet` como constante del script. No hay fallback a mainnet.
-
-## Arquitectura
-
-Clean Architecture, con la regla de dependencia apuntando hacia adentro.
+Clean Architecture, with the dependency rule pointing inward.
 
 ```
 presentation   ->  application (use cases + ports)  ->  domain
-infrastructure ->  implementa los ports, se inyecta en el composition root
+infrastructure ->  implements the ports, injected at the composition root
 ```
 
-- **`src/domain/`** puro, sin dependencias. `Money` en unidades menores, cero floats.
-  `Remittance` con la máquina de estados (`created`, `kyc_pending`, `kyc_passed`, `quoted`,
-  `confirmed`, `principal_in`, `payout_submitted`, `settled`, `refunded`, y los estados de
-  fallo) y las invariantes de negocio.
-- **`src/application/`** los use cases y los ports que necesitan. Dependen solo de las
-  interfaces, nunca de un adaptador concreto.
-- **`src/infrastructure/`** los adaptadores: wallet Solana, escrow, settlement, atestaciones,
-  ledger en Postgres, identidad, rate limiting, clientes de los agentes.
-- **`src/composition/container.ts`** el único lugar que conoce clases concretas. Ahí viven
-  los guards que hacen que una configuración incoherente rompa al arrancar y no en medio de
-  una transferencia.
-- **`app/`** el shell de Next y las rutas de API server only, que son las que hablan con los
-  servicios externos con las keys del lado del servidor.
+- **`src/domain/`** is pure, with no dependencies. `Money` in minor units, zero floats. `Remittance`
+  with the state machine (`created`, `kyc_pending`, `kyc_passed`, `quoted`, `confirmed`,
+  `principal_in`, `payout_submitted`, `settled`, `refunded`, plus the failure states) and the business
+  invariants.
+- **`src/application/`** holds the use cases and the ports they need. They depend on interfaces only,
+  never on a concrete adapter.
+- **`src/infrastructure/`** holds the adapters: wallet, escrow, settlement, attestations, Postgres
+  ledger, identity, rate limiting, agent clients.
+- **`src/composition/container.ts`** is the only place that knows concrete classes. That is where the
+  guards live that make an incoherent configuration break at startup rather than mid transfer.
+- **`app/`** is the Next shell and the server only API routes, the ones that talk to external services
+  with server side keys.
 
-Que el dominio no sepa nada de React ni de `@solana/web3.js` es lo que permite probar el
-camino del dinero con dobles, en milisegundos, sin navegador.
+The domain knowing nothing about React or `@solana/web3.js` is what makes it possible to test the
+money path with doubles, in milliseconds, without a browser.
 
-El agente que cotiza el FX se resuelve en tiempo de ejecución: la app le pregunta al gateway
-A2A por la capability que necesita y llama al agente que le devuelve, sin URL ni slug fijos
-en el código, con una agent key propia del lado del servidor. Es fail closed, así que si el
-gateway no responde la operación corta en vez de caer a una llamada directa. Ese camino está
-detrás de una flag y arranca apagado.
+The agent that quotes the FX rate is resolved at run time: the app asks the A2A gateway for the
+capability it needs and calls whatever agent comes back, with no fixed URL or slug in the code and
+with its own server side agent key. It is fail closed, so if the gateway does not answer the operation
+stops instead of falling back to a direct call. That path sits behind a flag and ships off.
 
-La verificación de identidad y el desembolso todavía se integran punto a punto, no por el
-gateway. Llevarlos al mismo riel es trabajo pendiente, y el desembolso además tiene que
-preservar la atestación que ata la dirección de depósito a la remesa.
+Identity verification and the payout are still integrated point to point rather than through the
+gateway. Moving them onto the same rail is pending work, and the payout additionally has to preserve
+the attestation that binds the deposit address to the remittance.
 
-## Configuración
+## Configuration
 
-Todas las variables están documentadas en `.env.example`. El criterio de diseño es que
-**cada default sea el seguro**: con el archivo vacío la app levanta en modo demo y no mueve
-fondos.
+Every variable is documented in `.env.example`. The design rule is that **every default is the safe
+one**: with an empty file the app comes up in demo mode and moves no funds.
 
-| Variable | Default | Efecto |
+| Variable | Default | Effect |
 |---|---|---|
-| `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED` | apagado | Enciende depósito al escrow y patrocinio de gas |
-| `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` | `fallback` | `a2a` o `a2a-gateway` usan los agentes reales |
+| `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED` | off | Enables the escrow deposit and gas sponsorship |
+| `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` | `fallback` | `a2a` or `a2a-gateway` use the real agents |
 
-Los guards del composition root son fail loud. Encender el camino Solana sin mint o sin la
-pubkey del facilitator hace que la app no arranque. La idea es que un error de configuración
-se vea al desplegar y no cuando hay dinero en tránsito.
+The composition root guards are fail loud. Turning settlement on without a mint or without the
+facilitator pubkey stops the app from starting at all. The point is that a configuration mistake shows
+up at deploy time and not while money is in flight.
 
-Hay un guard más, y su alcance es deliberado: el composition root aborta si encuentra
-variables de entorno de un camino de settlement que ya no existe en este código. Vive fuera
-del código, en el panel del proveedor de hosting, que es el único lugar donde esa
-configuración puede quedar huérfana sin que nadie se entere.
+There is one more guard, and its scope is deliberate: the composition root refuses to start if it
+finds environment variables belonging to a settlement path this code does not have. That configuration
+lives outside the code, in the hosting provider's dashboard, which is the only place where it can be
+left orphaned without anyone noticing.
 
-Las migraciones de la base están en `supabase/migrations/`.
+Database migrations live in `supabase/migrations/`.
 
 ## Stack
 
-Next 16 con App Router, React 19, TypeScript en modo estricto, Tailwind, Vitest.
-`@coral-xyz/anchor`, `@solana/web3.js` y `@solana/wallet-adapter-*` para Solana; `tweetnacl`
-y `bs58` para la prueba de posesión ed25519.
+Next 16 with the App Router, React 19, TypeScript in strict mode, Tailwind, Vitest. `@coral-xyz/anchor`,
+`@solana/web3.js` and `@solana/wallet-adapter-*` for Solana, `tweetnacl` and `bs58` for the ed25519
+proof of possession.
 
-## Licencia
+## License
 
-MIT. Ver [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

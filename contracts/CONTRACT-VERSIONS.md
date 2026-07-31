@@ -12,18 +12,13 @@ driftea su shape y se re-vendorea la copia, el test del consumer se pone **ROJO*
 | `vendored/kyc-validator.output.fixture.ts` | `wasiai-remittance-agents` | `src/contracts/kyc-validator.output.fixture.ts` | 2026-07-22 | shape-guard **forward-looking** (test-only) |
 | `vendored/cashout-payout.output.fixture.ts` | `wasiai-remittance-agents` | `src/contracts/cashout-payout.output.fixture.ts` | 2026-07-22 | `isValidPayoutShape` (`A2aPayoutGateway.submit`) |
 
-## WKH-320 — se retira el fixture del `/settle` EIP-3009
+## Ancla de serialización del settlement
 
-Este registro tenía una cuarta fila (`vendored/settle-eip3009.body.fixture.ts`, del
-`wasiai-facilitator`) y una sección entera que arbitraba, por CD-4, el `nonce` determinístico del
-body que armaba `broadcastSettle()`. Las dos se retiran junto con el camino que congelaban: Chaski
-ya no transmite un `transferWithAuthorization`, así que no hay body del consumer que comparar.
-
-Lo mismo aplica al corpus `contracts/golden/`, que desapareció entero (4 payloads EVM + su README).
-**El ancla de serialización que sobrevive es más fuerte que la que se fue**: el pin por hash
-canónico del IDL del escrow (`contracts/idl/escrow-idl.hash.test.ts`), que corre en cada `npm test`,
-compara contra el mismo valor pinneado en `wasiai-facilitator`, y además fija el program id y el
-orden posicional de las cuentas de `deposit`, `refund` y `register_escrow`.
+Chaski **no arma ni transmite** el body de la transacción de settlement: eso es del facilitator. Por
+eso no hay fixture de consumer que comparar para ese salto. El ancla equivalente es el **pin por
+hash canónico del IDL del escrow** (`contracts/idl/escrow-idl.hash.test.ts`), que corre en cada
+`npm test`, compara contra el mismo valor pinneado en `wasiai-facilitator`, y además fija el program
+id y el orden posicional de las cuentas de `deposit`, `refund` y `register_escrow`.
 
 ## Deuda técnica — sincronización cross-repo (Missing Input #1)
 

@@ -1,26 +1,13 @@
 // Tests — ConfirmAndSend: los guards que corren ANTES de tocar el money-path.
 //
-// WKH-320 — QUÉ SE FUE DE ACÁ Y POR QUÉ (CD-10/CD-22). Este archivo tenía 28 tests; sobreviven los
-// que prueban caminos que TODAVÍA EXISTEN. Se borraron, cada uno declarando qué probaba:
+// Alcance de este archivo: SÓLO los guards previos (identidad verificada, autoridad de payout,
+// vigencia de la cotización). El paso `payouts.submit` NO se ejerce acá porque es estructuralmente
+// inalcanzable: sin `solana` inyectado el use-case corta en el tapón fail-closed DT-8, probado en
+// confirm-and-send.solana.test.ts. DT-11: el port PayoutGateway sigue vivo — TrackRemittance usa
+// `payouts.status()`.
 //
-//  · el happy-path del "modo demo" (authority true → payouts.submit → payout_submitted/settled, la
-//    propagación de la provenance del payout, el expectedReceivePen lockeado que recibía submit, y
-//    la address que recibía submit): probaban el PASO 4 del use-case, `this.payouts.submit`, que
-//    sólo se alcanzaba con `solana === undefined` Y `settlement === undefined`. Post-poda no existe
-//    configuración del repo en la que ese paso se ejecute: sin `solana` inyectado corta el tapón
-//    DT-8 (probado en confirm-and-send.solana.test.ts). Es estructuralmente inalcanzable, no "poco
-//    usado". DT-11: el port PayoutGateway y A2aPayoutGateway NO se tocan — TrackRemittance sigue
-//    usando payouts.status(); lo que dejó de existir es el CALL-SITE de submit().
-//  · la reconciliación del payout (deliveredPen fuera/dentro de tolerancia, submit que lanza,
-//    submit status failed): misma razón, todas colgaban del resultado de payouts.submit.
-//  · el segundo re-check de vigencia post-firma (guard 3.5, "vence DURANTE la firma"): ese guard se
-//    borró y va declarado como PÉRDIDA (R-2). Vivía en la cola EVM y NUNCA corrió sobre Solana — la
-//    rama Solana retornaba antes de llegar. Es pérdida de un control ya muerto, no de cobertura real.
-//  · el settle real EIP-3009 (C1-C6), la marca `principal_settled_refund_manual` y el PoP opt-in del
-//    use-case: se fueron con el camino EIP-3009, el envelope de la wallet y el 8º param `pop`.
-//
-// El camino vivo (prepare → firma → settle Solana) se prueba en confirm-and-send.solana.test.ts, y
-// el ORDEN de sus guards en confirm-and-send.reorder.test.ts.
+// El camino completo (prepare → firma → settle) se prueba en confirm-and-send.solana.test.ts, y el
+// ORDEN de sus guards en confirm-and-send.reorder.test.ts.
 import { describe, expect, it, vi } from "vitest";
 import { Money } from "../../domain/money";
 import { type KycVerification, type Quote, Remittance } from "../../domain/remittance";

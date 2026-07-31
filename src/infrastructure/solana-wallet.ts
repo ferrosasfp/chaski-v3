@@ -36,7 +36,7 @@ const MAX_RECOVERY_CANDIDATES = 10;
 export class SolanaWalletAdapter implements WalletPort {
   private address: string | null = null;
 
-  // HU-SOL-20/AC-2: resolver OPCIONAL del remittanceId durable server-side. Ausente (EVM/demo, o
+  // HU-SOL-20/AC-2: resolver OPCIONAL del remittanceId durable server-side. Ausente (modo demo o
   // wiring viejo) ⇒ `refundEscrow` sin id explícito falla fail-loud con `escrow_id_unavailable`; el
   // path con id presente NUNCA lo consulta (AC-6 byte-idéntico).
   constructor(private readonly remittanceIdResolver?: SolanaRemittanceIdResolver) {}

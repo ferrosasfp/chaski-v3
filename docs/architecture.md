@@ -57,8 +57,8 @@ Los ports viven en `src/application/ports.ts`. Los principales:
 | `Clock`, `IdGenerator` | Tiempo e identificadores, inyectados para poder testear |
 
 `WalletPort` no filtra nada de la cadena hacia arriba: el use case pide una firma y recibe un
-envelope opaco. Esa frontera es la que permitió, en WKH-320, sacar una máquina virtual entera
-sin tocar una línea del dominio ni de los use cases más allá de sus dependencias inyectadas.
+envelope opaco. Por eso el dominio y los use cases se prueban enteros con dobles, sin RPC ni wallet,
+y un cambio en la capa de firma no llega a tocarlos.
 
 ## `src/infrastructure/`
 

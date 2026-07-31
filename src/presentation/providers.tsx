@@ -1,6 +1,6 @@
 "use client";
-// WKH-320: Chaski es una DApp Solana. El árbol de providers Solana se monta SIEMPRE, vía next/dynamic
-// (chunk aislado, ssr:false). Ya no hay dispatcher por VM porque ya no hay una segunda VM.
+// El árbol de providers de Solana se monta SIEMPRE, vía next/dynamic (chunk aislado, ssr:false).
+// No hay nada que despachar: no hay una segunda opción.
 import dynamic from "next/dynamic";
 
 const SolanaProviders = dynamic(() => import("./solana/solana-providers"), { ssr: false });

@@ -1,13 +1,9 @@
-// Tests — createContainer (T2, WKH-320 / AC-3.1).
+// Tests — createContainer (T2, AC-3.1).
 //
-// QUÉ SE FUE DE ACÁ Y POR QUÉ (CD-10/CD-22): este archivo probaba el guard fail-loud de EIP-3009
-// (adapter=a2a + receiver + usdc + formato del receiver, 6 casos), el cableado del
-// HttpSettlementGateway/HttpPayoutPrepareGateway con el flag ON, y el dispatcher de wallet por VM
-// (VM=solana → SolanaWalletAdapter; VM inválida → unsupported_vm). Los tres grupos probaban ramas
-// que ya no existen: no hay flag EIP-3009, no hay gateways EVM que cablear, y no hay una VM que
-// pueda no ser Solana. Lo que los reemplaza está abajo, y es más fuerte: el estado peligroso dejó
-// de ser expresable, y lo único que NO se resuelve por construcción —una env EVM huérfana en el
-// panel de Vercel— lo caza assertNoEvmResidue().
+// Qué se clava acá: que la wallet que arma el container es SIEMPRE el SolanaWalletAdapter (no hay
+// selección posible), y que una configuración residual de settlement en el entorno —lo único que no
+// se resuelve por construcción, porque vive en el panel del proveedor de hosting— hace que el
+// container NO arranque (assertNoEvmResidue).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -74,7 +70,7 @@ describe("createContainer — assertNoEvmResidue es la PRIMERA línea (AC-3.3)",
     expect(() => createContainer()).toThrow("NEXT_PUBLIC_VM");
   });
 
-  it("también con NEXT_PUBLIC_EIP3009_ENABLED, que antes ENCENDÍA un camino y ahora lo bloquea", () => {
+  it("también con NEXT_PUBLIC_EIP3009_ENABLED: su sola presencia BLOQUEA el arranque", () => {
     vi.stubEnv("NEXT_PUBLIC_EIP3009_ENABLED", "true");
     expect(() => createContainer()).toThrow("evm_config_residue");
   });

@@ -24,13 +24,12 @@ export class ConfirmAndSend {
     private readonly refund: RefundGateway,
     // HU-SOL-13 (WKH-216) — 6º param OPCIONAL `solana`. Gateway+prepare viajan ACOPLADOS:
     // `solana !== undefined ⇔ modo real` (invariante anti-fail-open: un `prepare?` suelto que quede
-    // undefined saltearía el binding EN SILENCIO). El container lo inyecta SOLO con el flag Solana ON
-    // y los envs validados. El use-case NUNCA lee process.env (CD-14).
+    // undefined saltearía el binding EN SILENCIO). El container lo inyecta SOLO con el flag de
+    // settlement ON y los envs validados. El use-case NUNCA lee process.env (CD-14).
     //
-    // WKH-320: era el 9º param y convivía con `settlement?` (EVM) y `pop?`. Al quedar como camino
-    // único, su ausencia ya no cae a un camino alternativo — cae al vacío. Por eso ahora hay un tapón
-    // fail-closed explícito al entrar al bloque (DT-8): sin él, `execute()` llegaría al final y
-    // devolvería la remesa 'confirmed' SIN haber movido nada.
+    // Su ausencia NO cae a un modo alternativo: cae al vacío. Por eso hay un tapón fail-closed
+    // explícito al entrar al bloque (DT-8); sin él, `execute()` llegaría al final y devolvería la
+    // remesa 'confirmed' SIN haber movido nada.
     private readonly solana?: {
       prepare: SolanaPayoutPrepareGateway;
       gateway: SolanaSettlementGateway;
@@ -106,9 +105,9 @@ export class ConfirmAndSend {
       return r;
     }
 
-    // 2.6 Rama SOLANA no-custodial (HU-SOL-13/AC-1) — CAMINO ÚNICO (WKH-320). Antes era una de dos
-    //     ramas; ahora es la única, así que su ausencia ya no cae a un camino alternativo: cae al vacío.
-    // DT-8 (WKH-320) — tapón fail-closed. Sin `solana` inyectado (flag apagado / envs faltantes) el
+    // 2.6 Settlement no-custodial contra el escrow (HU-SOL-13/AC-1). Es el CAMINO ÚNICO: su ausencia
+    //     no cae a un modo alternativo, cae al vacío.
+    // DT-8 — tapón fail-closed. Sin `solana` inyectado (flag apagado / envs faltantes) el
     // use-case llegaría al final y devolvería la remesa 'confirmed' SIN haber movido nada: un no-op
     // silencioso en el money-path. Reusa el reason estable `settlement_unavailable` y failAndRefund,
     // sin enums nuevos y sin leer una sola env (CD-13/CD-14 intactos).

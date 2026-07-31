@@ -59,8 +59,9 @@ function preparedPlaceholderTxHash(idempotencyKey: string): string {
   return `prepared:${idempotencyKey}`;
 }
 
-/** WKH-320 — el `chainId` del port sigue siendo `number` (CD-11: NO se re-tipa el port ni la columna).
- *  Los callers vivos son todos Solana y no tienen un chainId que pasar: mandan esta constante, que
+/** El `chainId` del port sigue siendo `number` (CD-11: NO se re-tipa el port ni la columna, porque
+ *  la columna describe filas ya escritas). Ningún caller vivo tiene un chainId que pasar: mandan
+ *  esta constante, que
  *  `vmNetworkColumns` DESCARTA en la rama "solana" (escribe `chain_id: null`). Es un relleno inerte
  *  con nombre, no un chainId 0 que se persista en ningún lado. */
 export const CHAIN_ID_NOT_APPLICABLE = 0;
@@ -76,9 +77,9 @@ export const CHAIN_ID_NOT_APPLICABLE = 0;
  *  que ser estructural, no una convención entre call-sites.
  *  `network_id` sale de resolveSolanaNetworkId() (CAIP-2, la MISMA fuente server-side que ata el PoP
  *  ed25519, el envelope x402 `solana:<cluster>` y el binding P4 de /solana/escrow/remittance-ids) —
- *  NUNCA del body, NUNCA un literal nuevo. `chainId` es un chainId EVM: en la rama Solana NO se
- *  escribe (no existe chainId numérico en Solana; escribirlo era el mislabel: filas base58 con el
- *  chainId de Avalanche). */
+ *  NUNCA del body, NUNCA un literal nuevo. `chainId` es el identificador numérico de red que usaba una
+ *  versión anterior de este servicio: acá NO se escribe (no hay chainId numérico en Solana, y
+ *  escribirlo era el mislabel — filas con address base58 etiquetadas con un id de otra red). */
 function vmNetworkColumns(
   vm: "evm" | "solana",
   chainId: number,
@@ -191,8 +192,9 @@ export class SupabaseSettlementLedger implements SettlementLedger {
         idempotency_key: input.idempotencyKey,
         tx_hash: preparedPlaceholderTxHash(input.idempotencyKey), // placeholder (NOT NULL); no hay settle aún
         // vm + (chain_id | network_id) en un solo lugar: acopladas por el CHECK de la DB (ver
-        // vmNetworkColumns). Antes esto era `chain_id: input.chainId` a secas ⇒ TODA fila de una remesa
-        // Solana quedaba vm='evm' con un chainId de Avalanche y una address base58.
+        // vmNetworkColumns). Una versión anterior de este servicio escribía `chain_id: input.chainId`
+        // a secas ⇒ TODA fila quedaba con el discriminador y el id de red heredados, y una address
+        // base58. Esas filas siguen en la tabla: por eso el discriminador no se puede podar.
         ...vmNetworkColumns(input.vm, input.chainId),
         sender_address: canonicalizeAddress(input.senderAddress),
         receiver_address: canonicalizeAddress(input.depositAddress), // el depositAddress ES el receiver

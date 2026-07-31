@@ -2,10 +2,8 @@ import { PublicKey } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 import { canonicalizeAddress } from "./address";
 
-// WKH-320: este archivo probaba además la rama `evm` de canonicalizeAddress (lowercase byte-idéntico,
-// NUNCA throw) y `addressEqualsVm` entero, con su paridad contra el comparador hexadecimal de viem.
-// Las dos cosas se fueron con la VM que describían: la firma ahora es de UN argumento y no hay rama
-// que elegir. Lo que sobrevive —y es lo que importaba— es el invariante CASE-SENSITIVE de HU-SOL-7.
+// El invariante que se clava acá es el CASE-SENSITIVE de HU-SOL-7: base58 no se lowercasea, y una
+// address que no sea una pubkey válida TIRA en vez de normalizarse en silencio.
 
 // Pubkey base58 válida y mixed-case (mint USDC devnet) — round-trip válido.
 const SOLANA_MIXED = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";

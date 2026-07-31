@@ -749,8 +749,8 @@ export function TrackView({
   refundGateway?: Container["solanaRefund"];
   sender: string | null;
 }) {
-  // HU-SOL-13 (AC-6/AC-7, CD-10): acción refund trustless. WKH-320: antes iba gateada por
-  // `resolveActiveVm() === "solana"`; ya no hay otra VM que la pueda apagar.
+  // HU-SOL-13 (AC-6/AC-7, CD-10): acción refund trustless. Siempre disponible: ninguna configuración
+  // la puede apagar.
   // Deadline on-chain = floor(Date.parse(quote.expiresAt)/1000) (fijado por HU-SOL-5, AH-14/NC-3). La UI
   // usa el mismo instante como proxy DEFENSIVO (defensa en profundidad): el guard AUTORITATIVO es la
   // lectura on-chain dentro de wallet.refundEscrow (aborta si status≠Deposited o now<deadline).

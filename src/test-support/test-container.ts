@@ -51,9 +51,8 @@ export interface TestContainerOverrides {
   payouts?: PayoutGateway; // default: new FakePayoutGateway()
   payoutAuthority?: PayoutAuthorityGateway; // default: new FakePayoutAuthorityGateway()
   refund?: RefundGateway; // default: new FakeRefundGateway() (regresión-neutral, WKH-186)
-  // WKH-320: el override `settlement` (gateway+prepare EIP-3009) y el `pop` se fueron con el camino
-  // EVM. El camino real Solana se arma con `useCases.confirmAndSend` (ver confirm-and-send.solana.test).
-  // HU-SOL-13: sin override queda UNDEFINED → la acción refund Solana NO se muestra.
+  // El settlement real se arma con `useCases.confirmAndSend` (ver confirm-and-send.solana.test).
+  // HU-SOL-13: sin override queda UNDEFINED → la acción de refund NO se muestra.
   solanaRefund?: SolanaEscrowRefundGateway;
   clock?: Clock; // default: new FixedClock()
   useCases?: Partial<Container>; // escape hatch (ej. resumeKyc stub para T3)

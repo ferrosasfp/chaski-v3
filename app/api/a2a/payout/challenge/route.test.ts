@@ -18,8 +18,7 @@ vi.mock("../../../../../src/infrastructure/rate-limit", async (importOriginal) =
 
 import { POST } from "./route";
 
-// WKH-320: la address del caller es base58. Este archivo probaba además la EMISIÓN EVM del challenge
-// (address normalizada a lowercase + `chainId: 84532` de la ENV) — se fue con la VM que la ataba.
+// La address del caller es base58, case-sensitive.
 const ADDR = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 
 function req(payload: unknown): Request {
@@ -47,9 +46,8 @@ describe("POST /api/a2a/payout/challenge (WKH-206)", () => {
     expect(await res.json()).toEqual({ error: "pop_not_configured" });
   });
 
-  // WKH-320: acá había un round-trip del challenge EVM (address lowercaseada + chainId 84532 de la
-  // ENV). El round-trip del challenge que SÍ se emite hoy —ed25519 con network-id CAIP-2— se prueba
-  // en el describe de abajo, contra la misma ruta.
+  // El round-trip del challenge que se emite —ed25519 con network-id CAIP-2— se prueba en el
+  // describe de abajo, contra la misma ruta.
 
   it("robustez: address malformada → 400, nunca 500", async () => {
     vi.stubEnv("PAYOUT_POP_SECRET", "test-secret");

@@ -12,9 +12,6 @@
 // Crypto: node:crypto (createHmac/timingSafeEqual). NO jsonwebtoken/jose.
 // SIN claim-once (DT-6): el binding es stateless — el escrow Anchor hace el 2º depósito imposible a
 // nivel programa (la PDA por remittanceId ya existe), no hace falta estado extra acá.
-//
-// WKH-320: la variante EVM (DepositAttestation con `depositAddress: 0x…` + chainId,
-// issueDepositAttestation, verifyDepositAttestation) se eliminó con el camino EIP-3009 que ataba.
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { canonicalizeAddress } from "../address";
 

@@ -133,16 +133,11 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // PR6 — proof-of-possession (WKH-206/HU-SOL-8). OBLIGATORIO: sin PAYOUT_POP_SECRET → 503 fail-closed
-  // (NUNCA skip). Stateless a propósito: el nonce NO se quema en este repo. Hasta WKH-320 lo quemaba
-  // /api/a2a/payout/submit (claimPopNonceOnce); esa ruta era EVM y se eliminó, así que hoy el
+  // (NUNCA skip), nunca opt-in. Stateless a propósito: el nonce NO se quema en este repo, así que el
   // anti-replay del PoP dentro de su TTL (10 min, pop-challenge.ts) es responsabilidad del
-  // facilitator, que es quien exige y verifica el popProof. Chaski YA NO tiene ese control.
-  // Residual R-3 de WKH-320: restituir el single-use en el path vivo = HU aparte.
-  //
-  // WKH-320: acá había un dispatch `if (vm === "solana") … else if (POP_SECRET) …`. El cuerpo que
-  // sobrevive es el del IF (PoP obligatorio, 503 sin secreto), NUNCA el del ELSE IF, que era el PoP
-  // opt-in del camino EVM: quedarse con ese habría convertido una prueba obligatoria en opcional y
-  // reabierto G5. Cualquier fallo cripto → 403 opaco (CD-4, no-oracle).
+  // facilitator, que es quien exige y verifica el popProof. Chaski NO tiene ese control.
+  // Residual R-3: restituir el single-use acá = HU aparte.
+  // Cualquier fallo cripto → 403 opaco (CD-4, no-oracle).
   const POP_SECRET = process.env.PAYOUT_POP_SECRET; // CD-14: dentro del handler
   // CD-2 / AC-3: OBLIGATORIO. Sin secreto → 503 fail-closed (NUNCA skip).
   if (!POP_SECRET) {
@@ -177,7 +172,7 @@ export async function POST(req: Request): Promise<Response> {
     return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
   }
   // P5 — ed25519 (AC-1/AC-2): mensaje reconstruido con la MISMA buildSolanaPopMessage (CD-6). SIN
-  // claim-once del nonce: ver la nota de arriba (residual R-3, WKH-320).
+  // claim-once del nonce: ver la nota de arriba (residual R-3).
   if (
     !verifySolanaPop({
       addressBase58: ch.address,
@@ -251,13 +246,12 @@ export async function POST(req: Request): Promise<Response> {
   const okResult = result as { payoutId: string | null; provenance?: unknown; depositAddress?: unknown };
   const depositAddress = typeof okResult.depositAddress === "string" ? okResult.depositAddress : "";
 
-  // PR8-PR11 — bloque de respuesta. WKH-320: acá había un dispatch por VM cuya rama EVM validaba el
-  // depositAddress con un validador hexadecimal y emitía la atestación EVM. Queda el camino Solana.
-  // 1. beneficiary = MISMO depositAddress del agente (DT-1). Vacío → mismo enum opaco que EVM.
+  // PR8-PR11 — bloque de respuesta.
+  // 1. beneficiary = MISMO depositAddress del agente (DT-1). Vacío → enum opaco.
   if (!depositAddress.trim()) {
     return NextResponse.json({ error: "prepare_no_deposit_address" }, { status: 502 });
   }
-  // base58 válido (AC-3, no-oráculo: MISMO enum que EVM, no distinguir motivo).
+  // base58 válido (AC-3, no-oráculo: MISMO enum que el caso vacío, no distinguir motivo).
   try {
     canonicalizeAddress(depositAddress);
   } catch {
@@ -297,7 +291,7 @@ export async function POST(req: Request): Promise<Response> {
         quoteId,
         idempotencyKey: typeof body.idempotencyKey === "string" ? body.idempotencyKey : `${remittanceId}:${quoteId}`,
         depositAddress,
-        chainId: CHAIN_ID_NOT_APPLICABLE, // WKH-320: no hay chainId en Solana; vmNetworkColumns lo descarta
+        chainId: CHAIN_ID_NOT_APPLICABLE, // no hay chainId numérico en Solana; vmNetworkColumns lo descarta
         senderAddress: address,
         payoutId: payoutIdSol,
         vm: "solana",

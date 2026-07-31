@@ -813,15 +813,15 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
 });
 
 // ── Identidad de red del INSERT: vm + (chain_id | network_id) ────────────────────────────────────────
-// El bug: el upsert escribía SÓLO chain_id (el chainId EVM configurado) y descartaba el `vm` en
-// silencio ⇒ toda fila de una remesa Solana quedaba vm='evm' + chainId de Avalanche con addresses
-// base58, y cualquier query que filtrara .eq('vm','solana') devolvía CERO filas SIEMPRE.
+// El bug: el upsert escribía SÓLO chain_id (el id numérico de red configurado) y descartaba el `vm`
+// en silencio ⇒ toda fila quedaba con el discriminador y el id de red heredados aunque su address
+// fuera base58, y cualquier query que filtrara .eq('vm','solana') devolvía CERO filas SIEMPRE.
 // Las dos mitades del arreglo (escribir `vm` y anular `chain_id`) van juntas o el CHECK de la DB
 // rechaza el insert — y ese rechazo lo traga el catch best-effort de la ruta (CD-17), o sea que se
 // pierde la evidencia durable con un log como única señal. Por eso se prueba con un doble que APLICA
 // el CHECK, no con un espía.
-const CHAIN_ID_EVM = 84532; // Base Sepolia (rama EVM)
-const CHAIN_ID_MISLABEL = 43113; // el chainId EVM que se escribía en las filas Solana (Avalanche Fuji)
+const CHAIN_ID_EVM = 84532; // id numérico de red de una versión anterior de este servicio
+const CHAIN_ID_MISLABEL = 43113; // el id numérico que se escribía, mal, en las filas de este servicio
 
 describe("identidad de red del ledger — vm + chain_id/network_id (CHECK 20260721)", () => {
   it("el doble APLICA el CHECK: reproduce los tres inserts medidos y RECHAZA las dos mitades desacopladas", () => {

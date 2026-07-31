@@ -20,7 +20,15 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 const BASE58_SIGNATURE = /^[1-9A-HJ-NP-Za-km-z]{43,90}$/;
 
 /** Mapa status/enum → reason estable. Fail-closed (CD-12): cualquier status/enum desconocido ⇒ un
- *  reason que BLOQUEA. Sin default permisivo (lección WKH-198). El enum de la route es nuestro. */
+ *  reason que BLOQUEA. Sin default permisivo (lección WKH-198). El enum de la route es nuestro.
+ *
+ *  ⚠️ El default era `solana_settle_rejected`, y eso decía DE MÁS. Bloquear está bien; el problema es
+ *  que "rejected" significa "el facilitator se negó ANTES de broadcastear", y aguas arriba el use-case
+ *  usa esa distinción para decidir si hace falta ir a mirar la cadena. Un 500 de nuestra propia route
+ *  puede ocurrir DESPUÉS del broadcast (route.ts:113 llama getSettlementLedger() fuera del try: si
+ *  tira, Next responde 500 con el depósito ya confirmado on-chain). Etiquetarlo "rejected" hacía que
+ *  nadie fuera a preguntar, y la plata quedaba adentro con la remesa diciendo que no había entrado.
+ *  Ahora lo desconocido cae en el bucket INDETERMINADO: bloquea igual, y no afirma lo que no sabe. */
 function mapErrorReason(status: number, error: unknown): SolanaSettlementFailureReason {
   if (typeof error === "string") {
     switch (error) {
@@ -40,9 +48,12 @@ function mapErrorReason(status: number, error: unknown): SolanaSettlementFailure
   }
   if (status === 422) return "solana_settle_rejected"; // CR-1 del deposit rechazó
   if (status === 429) return "solana_settle_rate_limited";
+  // 400/501: nuestra propia route cortó ANTES de reenviar (request inválido / settlement apagado).
+  // La tx no salió, y eso sí se puede afirmar.
+  if (status === 400 || status === 501) return "solana_settle_rejected";
   if (status === 409 || status === 502) return "solana_settle_broadcast_failed"; // blockhash/broadcast
   if (status === 503 || status === 504) return "solana_settle_unavailable";
-  return "solana_settle_rejected"; // 4xx/5xx desconocido ⇒ bloquear
+  return "solana_settle_unavailable"; // desconocido ⇒ bloquea, y NO afirma que el deposit no salió
 }
 
 /** Shape del 200. Validado explícitamente (CD-13): un 200 con shape raro NO puede volverse un

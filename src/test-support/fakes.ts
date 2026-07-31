@@ -347,19 +347,24 @@ export class FakePayoutAuthorityGateway implements PayoutAuthorityGateway {
   }
 }
 
-// Refund fake (WKH-186). Por default resuelve { refundTx:"refund-fake" } (regresión-neutral);
-// mode="reject" ejercita el best-effort de failAndRefund (queda en payout_failed si el refund falla).
+// Refund fake (WKH-186). Tres modos, uno por cada cosa que puede pasar de verdad:
+//   · "resolve"    — devolvió un comprobante REAL ("refund-fake"): alguien revirtió plata. Es el único
+//     caso que autoriza a escribir `refunded`.
+//   · "no-receipt" — devolvió null: el adapter NO revirtió nada (es lo que hace el LedgerRefundGateway
+//     que corre en producción). Sin este modo, los tests sólo ejercitaban un adapter que no existe.
+//   · "reject"     — lanzó: ejercita el best-effort de failAndRefund (queda en payout_failed).
 // Registra los inputs recibidos (molde de FakePayoutAuthorityGateway).
 export class FakeRefundGateway implements RefundGateway {
   public calls: Array<{ remittanceId: string; amountUsd: Money; reason: string }> = [];
-  constructor(private mode: "resolve" | "reject" = "resolve") {}
+  constructor(private mode: "resolve" | "reject" | "no-receipt" = "resolve") {}
   async creditBack(input: {
     remittanceId: string;
     amountUsd: Money;
     reason: string;
-  }): Promise<{ refundTx: string }> {
+  }): Promise<{ refundTx: string | null }> {
     this.calls.push(input);
     if (this.mode === "reject") throw new Error("refund_unavailable");
+    if (this.mode === "no-receipt") return { refundTx: null };
     return { refundTx: "refund-fake" };
   }
 }

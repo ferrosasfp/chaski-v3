@@ -1,4 +1,5 @@
 import type { Remittance } from "../../domain/remittance";
+import { isRealRefundReceipt } from "../refund-receipt";
 import type {
   Clock,
   PayoutAuthorityGateway,
@@ -63,6 +64,12 @@ export class ConfirmAndSend {
         amountUsd: r.snapshot.sendUsd,
         reason: effective,
       });
+      // ⚠️ Sin comprobante REAL no se escribe `refunded`. Antes se escribía siempre, con el string
+      // fabricado del adapter ledger-only adentro, y `refunded` es TERMINAL: la remesa quedaba con una
+      // referencia de reembolso inventada y sin ninguna salida (el botón de recuperar exige
+      // refundTx == null y el use-case de recuperación corta con refund_not_available). Quedarse en
+      // payout_failed no es un estado peor: es el único desde el que la persona puede sacar su plata.
+      if (!isRealRefundReceipt(refundTx)) return;
       r.markRefunded(refundTx, this.clock.nowIso());
       await this.repo.save(r);
     } catch {

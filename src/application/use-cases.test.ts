@@ -128,9 +128,13 @@ describe("Use-cases — money-path", () => {
 
   // WKH-320: antes este caso forzaba el fallo con un payout status:'failed' (paso 4, inalcanzable
   // post-poda). Se re-cablea sobre el settle, que es donde vive hoy el fallo del money-path.
-  // El invariante probado es el mismo: refund-on-failure avanza a refunded en el MISMO execute() y
-  // markRefunded sólo patchea refundTx, así que el failureReason sobrevive.
-  it("el settle falla → refunded, failureReason preservado (WKH-186 refund-on-failure)", async () => {
+  //
+  // ⚠️ LEER LA CONDICIÓN: este caso corre con un adapter de refund que SÍ devuelve un comprobante
+  // ("refund-fake"). Ése es el único escenario que autoriza `refunded`. El adapter que corre en
+  // PRODUCCIÓN (LedgerRefundGateway) no revierte nada y devuelve null, así que ahí la remesa se queda
+  // en payout_failed — recuperable — y sin ninguna referencia de reembolso. Ese otro caso está
+  // cubierto en confirm-and-send.money-path.test.ts; no lo leas de acá.
+  it("con un adapter que SÍ revierte, el settle falla → refunded, failureReason preservado (WKH-186)", async () => {
     const { create, startKyc, lock, confirm } = setup({
       solanaGateway: new FakeSolanaSettlementGateway({ ok: false, reason: "solana_settle_rejected" }),
     });

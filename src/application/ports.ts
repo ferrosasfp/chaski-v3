@@ -96,11 +96,23 @@ export interface PayoutGateway {
 
 // ── Refund-on-failure (WKH-186) ──────────────────────────────────────────────
 // Se dispara tras CADA markPayoutFailed (cierra el gap de remesas huérfanas en payout_failed).
-// El adapter default (LedgerRefundGateway) es LEDGER-ONLY: produce un refundTx sintético, NO
-// revierte ningún movimiento on-chain real (el clawback real es follow-up de Fase A). El `reason`
-// es un enum estable de la FSM — NUNCA PII (CD-5).
+// El `reason` es un enum estable de la FSM — NUNCA PII (CD-5).
+//
+// ⚠️ `refundTx: string | null` — el null NO es un detalle de tipos, es la corrección del bug más caro
+// de este archivo. El adapter default (LedgerRefundGateway) es LEDGER-ONLY: no revierte ningún
+// movimiento on-chain. Antes devolvía igual un string SINTÉTICO (`refund-ledger-…`), el use-case lo
+// escribía como `refundTx` y la remesa saltaba a `refunded` — que es TERMINAL. Resultado: la persona
+// leía una "referencia de reembolso" inventada mientras sus USDC seguían en el vault del escrow, y el
+// botón de recuperar (que exige refundTx == null) no aparecía nunca más.
+//   null  ⇒ NO se revirtió nada: no hay comprobante que mostrar y la remesa NO puede ir a `refunded`.
+//   string ⇒ un movimiento REAL con su tx. Sólo entonces se escribe el estado terminal.
+// Un adapter que devuelva un identificador fabricado vuelve a instalar la mentira: no lo hagas.
 export interface RefundGateway {
-  creditBack(input: { remittanceId: string; amountUsd: Money; reason: string }): Promise<{ refundTx: string }>;
+  creditBack(input: {
+    remittanceId: string;
+    amountUsd: Money;
+    reason: string;
+  }): Promise<{ refundTx: string | null }>;
 }
 
 // ── Autoridad de payout server-side (WKH-180) ────────────────────────────────
@@ -214,6 +226,25 @@ export interface SolanaEscrowRefundResult {
 }
 export interface SolanaEscrowRefundGateway {
   refund(input: { remittanceId: string; sender: string }): Promise<SolanaEscrowRefundResult>;
+}
+
+// El MISMO criterio de tres valores que EscrowRefundConfirmation, aplicado a la otra punta del
+// money-path: ¿el principal del sender entró al vault del escrow? Es la pregunta que el use-case se
+// hacía con un boolean, y con un boolean sólo podía contestar "no" cuando la verdad era "no pude
+// preguntar" — y sobre ese "no" escribía un reembolso que nunca ocurrió.
+//   · "deposited"     — la cadena muestra la cuenta del escrow. La plata está adentro: es recuperable.
+//   · "not_deposited" — sabemos que NO entró (el intento murió ANTES del broadcast, o la cadena probó
+//     que la tx ya no puede entrar). No hay nada que recuperar ni que reembolsar.
+//   · "unknown"       — no pudimos averiguarlo. NO se colapsa en ninguno de los otros dos: la remesa
+//     queda recuperable y a la persona se le dice, con esas palabras, que todavía no sabemos.
+export type PrincipalDepositState = "deposited" | "not_deposited" | "unknown";
+
+// Le pregunta A LA CADENA (no a un agente) si el depósito del principal está en el vault del escrow.
+// La verdad sobre el dinero vive en la cadena; los agentes son reemplazables y no pueden ser fuente de
+// esta respuesta. Deriva la PDA `escrow_state` de (sender, remittanceId): sin dependencias de ningún
+// slug, URL ni contrato de agente.
+export interface SolanaEscrowDepositProbe {
+  probeDeposit(input: { remittanceId: string; sender: string }): Promise<PrincipalDepositState>;
 }
 
 // HU-SOL-20/AC-2: resuelve los remittanceId del sender desde el store durable server-side cuando el

@@ -21,6 +21,8 @@ import {
   T0,
   beneficiary,
 } from "../../test-support/fakes";
+import type { RefundGateway } from "../ports";
+import { LedgerRefundGateway } from "../../infrastructure/refund/ledger-refund-gateway";
 import { ConfirmAndSend } from "./confirm-and-send";
 
 const passKyc: KycVerification = {
@@ -58,7 +60,9 @@ function build(
   prepare: FakeSolanaPayoutPrepareGateway,
   gateway: FakeSolanaSettlementGateway,
   _payouts?: FakePayoutGateway,
-  refund: FakeRefundGateway = new FakeRefundGateway(),
+  // RefundGateway (la interfaz), NO el fake: los tests tienen que poder cablear el adapter REAL de
+  // producción, que es el único que dice la verdad sobre si hubo reembolso.
+  refund: RefundGateway = new FakeRefundGateway(),
 ): ConfirmAndSend {
   return new ConfirmAndSend(
     wallet,
@@ -154,6 +158,35 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
     expect(out.snapshot.principalTx).toBeNull();
     expect(out.status).toBe("refunded");
     expect(out.snapshot.failureReason).toBe("solana_settle_unavailable");
+  });
+
+  // ── El comprobante que no existe ──────────────────────────────────────────────────────────────
+  // Con el adapter REAL (LedgerRefundGateway, el que corre en producción) no hay reembolso: no
+  // revierte nada. Antes devolvía igual un `refund-ledger-…` fabricado y la remesa terminaba en
+  // `refunded` — terminal — mostrándole a la persona una referencia de reembolso inventada.
+  it("adapter REAL sin comprobante ⇒ payout_failed con refundTx null, NUNCA refunded ni referencia inventada", async () => {
+    const repo = new InMemoryRepo();
+    const wallet = new FakeSolanaWallet();
+    const prepare = new FakeSolanaPayoutPrepareGateway();
+    const gateway = new FakeSolanaSettlementGateway({ ok: false, reason: "solana_settle_rejected" });
+    const id = await seedQuoted(repo);
+
+    const out = await build(
+      repo,
+      wallet,
+      prepare,
+      gateway,
+      new FakePayoutGateway(),
+      new LedgerRefundGateway(), // producción, no fake
+    ).execute({ remittanceId: id });
+
+    expect(out.status).toBe("payout_failed");
+    expect(out.status).not.toBe("refunded");
+    expect(out.snapshot.refundTx).toBeNull();
+    // Y nada con forma de comprobante fabricado quedó persistido.
+    const saved = await repo.get(id);
+    expect(saved?.snapshot.refundTx).toBeNull();
+    expect(saved?.snapshot.refundTx ?? "").not.toMatch(/refund-ledger-/);
   });
 
   it("T2/AC-1: sin envelope solana (wallet no arma el deposit) ⇒ settlement_unverified, sin broadcast", async () => {

@@ -84,10 +84,23 @@ function isValidSolanaPrepareShape(v: unknown): v is {
   return true;
 }
 
+/** Cuánto se espera al verificador antes de darlo por caído. Sin timeout, un fetch colgado deja la
+ *  pantalla esperando para siempre después de "Confirmar y enviar" y antes de que la wallet pida una
+ *  sola firma: la persona no ve ni un error ni un avance. Con timeout, el resultado es `unavailable`
+ *  (que bloquea) y la persona recibe un fallo en vez de un cuelgue. 10s: es un POST same-origin. */
+const ATTESTATION_TIMEOUT_MS = 10_000;
+
 /**
  * Pide a /api/payout/attestation que verifique el HMAC de la atestación y devuelva el
- * beneficiary+authority que están DENTRO del payload firmado. `null` = no se pudo verificar, por
- * el motivo que sea (red caída, 403, 503, shape raro): TODOS bloquean igual.
+ * beneficiary+authority que están DENTRO del payload firmado.
+ *
+ * TRES desenlaces, no dos (lección WKH-308: "no pude preguntar" NO es "no"):
+ *   · `verified`    ⇒ el server verificó la firma y devolvió lo que hay ADENTRO del payload firmado.
+ *   · `unverified`  ⇒ el server dijo que NO valida (403). Es una respuesta, y es negativa.
+ *   · `unavailable` ⇒ no hubo respuesta que leer (red caída, timeout, 503, un 200 ilegible). No dice
+ *     nada sobre la atestación. Bloquea igual, pero se reporta con su propio enum: colapsarlo con
+ *     `unverified` haría que un hipo de red se registre como "la firma no valida", que es una
+ *     acusación sobre algo que no se comprobó.
  *
  * Vive en el server porque el secreto vive en el server: `DEPOSIT_ATTESTATION_SECRET` no se manda
  * al browser, así que el browser no puede recalcular el HMAC por su cuenta. Decodificar el payload
@@ -104,28 +117,38 @@ async function verifyAttestation(
   attestation: string,
   remittanceId: string,
   quoteId: string,
-): Promise<{ beneficiary: string; authority: string } | null> {
+): Promise<
+  | { state: "verified"; beneficiary: string; authority: string }
+  | { state: "unverified" }
+  | { state: "unavailable" }
+> {
   let res: Response;
   try {
     res = await fetch("/api/payout/attestation", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ attestation, remittanceId, quoteId }),
+      // Un cuelgue del verificador NO puede colgar el flujo: sin esto, un fetch que nunca resuelve
+      // deja a la persona esperando sin error y sin firma que aprobar.
+      signal: AbortSignal.timeout(ATTESTATION_TIMEOUT_MS),
     });
   } catch {
-    return null; // red caída ⇒ no se verificó ⇒ no se usa (fail-closed)
+    return { state: "unavailable" }; // red caída / timeout ⇒ no se preguntó, no se acusa
   }
-  if (!res.ok) return null;
+  // 403 es LA respuesta negativa de la route (attestation_unverified). Cualquier otro no-ok
+  // (503 sin secreto, 5xx, 429) es la ruta diciendo que no pudo, no que no valida.
+  if (res.status === 403) return { state: "unverified" };
+  if (!res.ok) return { state: "unavailable" };
   let out: unknown;
   try {
     out = await res.json();
   } catch {
-    return null;
+    return { state: "unavailable" }; // 200 ilegible ⇒ no hay veredicto que leer
   }
-  if (!isRecord(out)) return null;
-  if (typeof out.beneficiary !== "string" || !out.beneficiary) return null;
-  if (typeof out.authority !== "string" || !out.authority) return null;
-  return { beneficiary: out.beneficiary, authority: out.authority };
+  if (!isRecord(out)) return { state: "unavailable" };
+  if (typeof out.beneficiary !== "string" || !out.beneficiary) return { state: "unavailable" };
+  if (typeof out.authority !== "string" || !out.authority) return { state: "unavailable" };
+  return { state: "verified", beneficiary: out.beneficiary, authority: out.authority };
 }
 
 /** Lee el `agent` que la route agrega al 200 (trazabilidad). Sin `slug` no hay identidad que
@@ -240,7 +263,12 @@ export class HttpSolanaPayoutPrepareGateway implements SolanaPayoutPrepareGatewa
     // lo certifica: se emitía una firma que nadie miraba. Fail-closed: si no valida, no hay
     // beneficiary que devolver y la remesa NO llega a la wallet.
     const attested = await verifyAttestation(body.attestation, input.remittanceId, input.quoteId);
-    if (!attested) return { ok: false, reason: "prepare_attestation_unverified" };
+    // Los dos bloquean; el enum los separa. "No pude preguntar" (red, timeout, 503) no se registra
+    // como "la firma no valida": la remesa fallada guarda el reason y ahí la diferencia importa.
+    if (attested.state === "unavailable") {
+      return { ok: false, reason: "prepare_attestation_unavailable" };
+    }
+    if (attested.state !== "verified") return { ok: false, reason: "prepare_attestation_unverified" };
     // Cinturón: el valor firmado y el entregado tienen que ser el MISMO. Comparación base58
     // case-sensitive (minusculizar reabre el aliasing). Un mismatch acá es exactamente el ataque
     // que la atestación existe para ver, así que se reporta con su propio enum en vez de colapsarlo

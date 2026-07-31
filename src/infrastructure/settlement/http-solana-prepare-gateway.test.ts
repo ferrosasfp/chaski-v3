@@ -341,6 +341,25 @@ describe("HttpSolanaPayoutPrepareGateway — el body que arma el cliente ES el q
     expect(out).toEqual({ ok: false, reason: "prepare_attestation_unverified" });
   });
 
+  // El `agent` es trazabilidad y se lee sin inventar nada: un agente que viene con slug y sin
+  // catálogo se guarda así. Rellenar `registry: ""` diría "el catálogo es vacío" en vez de "no lo
+  // dijo", que es la misma clase de afirmación de más que este archivo vino a corregir.
+  it("agent con slug y sin registry ⇒ el registry queda AUSENTE (no cadena vacía)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      tamperingFetch((b) => ({ ...b, agent: { slug: "remit-cashout-payout" } })),
+    );
+
+    const out = await new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet)).prepare(
+      prepareInput(),
+    );
+
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error("unreachable");
+    expect(out.result.agent).toEqual({ slug: "remit-cashout-payout" });
+    expect(out.result.agent).not.toHaveProperty("registry");
+  });
+
   // ── LÍMITE CONOCIDO de esta capa, clavado con su resultado real ───────────────────────────────
   //
   // Este test PASA con el código actual y tiene que pasar: no documenta un éxito, documenta hasta
@@ -390,27 +409,9 @@ describe("HttpSolanaPayoutPrepareGateway — el body que arma el cliente ES el q
     // al preparar (app/api/settle/solana-sponsor/route.ts, tests en su route.test.ts).
   });
 
-  // El `agent` es trazabilidad y se lee sin inventar nada: un agente que viene con slug y sin
-  // catálogo se guarda así. Rellenar `registry: ""` diría "el catálogo es vacío" en vez de "no lo
-  // dijo", que es la misma clase de afirmación de más que este archivo vino a corregir.
-  it("agent con slug y sin registry ⇒ el registry queda AUSENTE (no cadena vacía)", async () => {
-    vi.stubGlobal(
-      "fetch",
-      tamperingFetch((b) => ({ ...b, agent: { slug: "remit-cashout-payout" } })),
-    );
-
-    const out = await new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet)).prepare(
-      prepareInput(),
-    );
-
-    expect(out.ok).toBe(true);
-    if (!out.ok) throw new Error("unreachable");
-    expect(out.result.agent).toEqual({ slug: "remit-cashout-payout" });
-    expect(out.result.agent).not.toHaveProperty("registry");
-  });
-
-  // Si NO se puede verificar, no se usa. "No pude preguntar" no es "está bien".
-  it("el verificador caído (throw) ⇒ prepare_attestation_unverified, el beneficiary NO se usa", async () => {
+  // Si NO se puede verificar, no se usa. Y "no pude preguntar" tampoco es "no valida": bloquea igual
+  // pero con SU enum, porque es lo que queda escrito en la remesa fallada.
+  it("el verificador caído (throw) ⇒ prepare_attestation_unavailable, el beneficiary NO se usa", async () => {
     const inner = routeFetch(agentOk);
     vi.stubGlobal(
       "fetch",
@@ -424,7 +425,48 @@ describe("HttpSolanaPayoutPrepareGateway — el body que arma el cliente ES el q
       prepareInput(),
     );
 
-    expect(out).toEqual({ ok: false, reason: "prepare_attestation_unverified" });
+    expect(out).toEqual({ ok: false, reason: "prepare_attestation_unavailable" });
+  });
+
+  // Un 503 del verificador (la route no puede verificar: sin secreto responde así) NO es un veredicto
+  // sobre la firma. El 403, en cambio, SÍ lo es. Dos respuestas distintas ⇒ dos enums distintos.
+  it("503 del verificador ⇒ unavailable; 403 ⇒ unverified (no se colapsan)", async () => {
+    const casos: Array<[number, string]> = [
+      [503, "prepare_attestation_unavailable"],
+      [500, "prepare_attestation_unavailable"],
+      [403, "prepare_attestation_unverified"],
+    ];
+    for (const [status, reason] of casos) {
+      const inner = routeFetch(agentOk);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (String(url) === "/api/payout/attestation") {
+            return new Response(JSON.stringify({ error: "x" }), { status });
+          }
+          return inner(url, init);
+        }),
+      );
+
+      const out = await new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet)).prepare(
+        prepareInput(),
+      );
+
+      expect(out).toEqual({ ok: false, reason });
+    }
+  });
+
+  // El POST al verificador lleva timeout: un fetch colgado dejaba la pantalla esperando para siempre
+  // (sin error y sin firma que aprobar) porque este era el único fetch del flujo sin AbortSignal.
+  it("el POST a /api/payout/attestation viaja con AbortSignal (no puede colgarse para siempre)", async () => {
+    const fetchMock = routeFetch(agentOk);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet)).prepare(prepareInput());
+
+    const call = fetchMock.mock.calls.find((c) => String(c[0]) === "/api/payout/attestation");
+    if (!call) throw new Error("no se posteó la atestación");
+    expect((call[1] as RequestInit).signal).toBeInstanceOf(AbortSignal);
   });
 
   // La verificación ocurre ANTES de devolver el beneficiary, y el valor devuelto sale del payload

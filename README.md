@@ -12,6 +12,12 @@ without anyone's permission. The escrow is an Anchor program on devnet, with no 
 > that ships off, and the fiat payout runs against a mock adapter. See
 > [Configuration](#configuration) for exactly which switch turns on what.
 
+> **About the name.** The hosting project was created as `chaski-v2` and its name cannot be changed
+> from this repo, so the deployed site is served from `chaski-v2.vercel.app`. Same project as this
+> one, older name. The same string survives on purpose in the `id` field of `public/manifest.json`:
+> changing a PWA manifest `id` orphans existing installs, which is a worse outcome than a stale
+> string in a config file.
+
 ## What works today, and what does not
 
 Working on devnet:
@@ -43,6 +49,12 @@ DR5GoMT7sAKzD6wZMKJPeknS3Y6fzgZUNevi7xiESE4x
 ```
 
 Six instructions: `deposit`, `release`, `refund`, `close`, `register_escrow`, `deregister_escrow`.
+
+**That program's source is not in this repo.** There is no `.rs`, no `Anchor.toml` and no `Cargo.toml`
+here, and `contracts/` holds TypeScript contract tests, not Rust. The Anchor program lives in
+[`ferrosasfp/solana-programs`](https://github.com/ferrosasfp/solana-programs), at
+`programs/escrow/src/lib.rs`, and it is public. What this repo holds is the consumer side: the
+program's IDL, vendored and pinned by canonical hash, described below.
 
 Per remittance state lives in a PDA derived from `[b"escrow", sender, remittance_id]`, where
 `remittance_id` is a 16 byte array. The funds live in the associated token account of that PDA for
@@ -78,13 +90,25 @@ before a transaction gets rejected in production. Re pinning is an explicit deci
 
 ### Devnet smoke
 
-`npm run smoke:solana` runs the whole cycle against already deployed services. It is deliberately
-uncomfortable to run:
+`npm run smoke:solana` drives the deposit cycle against already deployed services: healthchecks, proof
+of possession, `/api/payout/prepare`, the `deposit` instruction signed by the sender, the gasless
+broadcast through the facilitator, and reading the escrow account on chain until it reports
+`Deposited`. It is deliberately uncomfortable to run:
 
 - It aborts before any call unless `SMOKE_ALLOW_REAL=true`. It does not run in CI.
-- Every input is an environment variable. There is no hardcoded URL, key, cluster or mint. If one is
-  missing it aborts and prints the variable's name, never its value.
-- The cluster is a `devnet` constant in the script. There is no fallback to mainnet.
+- The service URLs, the keys, the identifiers, the amount, the mint and the facilitator pubkey are all
+  environment variables, the eleven required ones listed and validated one by one in
+  `scripts/smoke-solana-e2e.ts:43-66` and documented in `.env.example`. If one is missing the script
+  aborts and prints the variable's name, never its value.
+- Two inputs are not variables, and that is the point of each. The cluster is the constant
+  `CLUSTER = "devnet"` (`:34`): there is no environment variable that can aim this script at mainnet.
+  The RPC endpoint does have a default: `SMOKE_SOLANA_RPC_URL` if you set it, otherwise
+  `clusterApiUrl("devnet")` (`:78`), which is the public devnet endpoint. `SMOKE_DEADLINE_SECONDS`
+  also defaults, to one hour.
+- Its last step, the fiat leg, is best effort and today it always warns: it posts to
+  `/api/a2a/payout/submit`, a route that no longer exists in this repo. That step is reported as
+  `WARN` and does not fail the run. The deposit evidence, which is what the smoke is for, is already
+  on chain by then.
 
 ## Running it
 
@@ -128,17 +152,35 @@ The dependency tree mixes React 19 with packages that still declare React 18 pee
   changes the shape of its response and someone re vendors the copy, the consumer's test goes red
   instead of breaking in production.
 - The escrow IDL pinned by canonical hash (`contracts/idl/escrow-idl.hash.test.ts`), described above.
-- A repo wide guarantee (`src/composition/no-evm-surface.test.ts`) that this app cannot acquire a
-  second execution environment. It walks `src/`, `app/`, `scripts/` and `contracts/` on every run and
-  fails on the import shaped patterns that would reintroduce one. Being a Solana application is not a
-  matter of anyone remembering: a test holds it in place.
+- A guard against the return of the EVM path this repo used to have
+  (`src/composition/no-evm-surface.test.ts`). It walks `src/`, `app/`, `scripts/` and `contracts/` on
+  every run and fails on a closed, enumerated list: imports of `viem` and its submodules, `wagmi` and
+  `@walletconnect/ethereum-provider`; the `NEXT_PUBLIC_VM` switch; the hex address validators
+  `isAddress(` and `isAddressEqual(`; and hand written `0x` 40 hex digit regexes. It also asserts that
+  those three packages are in neither `dependencies` nor `devDependencies`, and that nine deleted
+  routes and files are absent from the tree, `app/api/settle/principal` among them, checked as "the
+  directory does not exist" rather than "the handler returns 404".
+
+  That is its exact scope: it closes the doors the EVM path left by, so it cannot come back through
+  them by accident or by a merge. It is not a universal ban on every Ethereum library in existence.
+  An `npm i ethers` plus an import would pass it green, and so would `web3`, `@ethersproject/*` or
+  `thirdweb`. Covering a new name means adding it to the list, with its reason.
 
 ```bash
-npm test          # 692 tests
-npm run qa        # typechecks + tests
+npm test          # 692 tests across 57 files
+npm run qa        # lint + both typechecks + tests
 ```
 
+### CI
+
+`.github/workflows/ci.yml` runs `npm run lint`, `npm run typecheck`, `npm run typecheck:scripts`,
+`npm test` and `npm run build` on Node 22, on every push to `main` and on every pull request. The
+smoke script is deliberately not part of it: it is opt in and it moves USDC on devnet.
+
 ## Architecture
+
+Layer by layer detail, the full list of API routes and what the anti EVM guard does and does not
+cover: [`docs/architecture.md`](docs/architecture.md).
 
 Clean Architecture, with the dependency rule pointing inward.
 
@@ -174,8 +216,11 @@ the attestation that binds the deposit address to the remittance.
 
 ## Configuration
 
-Every variable is documented in `.env.example`. The design rule is that **every default is the safe
-one**: with an empty file the app comes up in demo mode and moves no funds.
+`.env.example` documents the variables read by `src/` and `app/`, plus the fourteen the devnet smoke
+script reads, in a section of its own at the end. It does not cover what the hosting platform injects
+by itself: `VERCEL_ENV` is the only one of those the code reads, and it is explained there too. The
+design rule is that **every default is the safe one**: with an empty file the app comes up in demo
+mode and moves no funds.
 
 | Variable | Default | Effect |
 |---|---|---|

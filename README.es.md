@@ -12,6 +12,12 @@ propia plata sin permiso de nadie. El escrow es un programa Anchor en devnet, si
 > de una flag que arranca apagada, y el desembolso a fiat corre contra un adaptador mock. Ver
 > [Configuración](#configuración) para el detalle de qué enciende qué.
 
+> **Sobre el nombre.** El proyecto de hosting se creó como `chaski-v2` y su nombre no se puede cambiar
+> desde este repo, así que el sitio desplegado se sirve en `chaski-v2.vercel.app`. Es el mismo
+> proyecto que este, con el nombre viejo. Esa misma cadena sobrevive a propósito en el campo `id` de
+> `public/manifest.json`: cambiar el `id` de un manifest PWA deja huérfanas las instalaciones
+> existentes, que es peor que una cadena vieja en un archivo de configuración.
+
 ## Qué hace hoy y qué no
 
 Funcionando en devnet:
@@ -43,6 +49,12 @@ DR5GoMT7sAKzD6wZMKJPeknS3Y6fzgZUNevi7xiESE4x
 ```
 
 Seis instrucciones: `deposit`, `release`, `refund`, `close`, `register_escrow`, `deregister_escrow`.
+
+**El código fuente de ese programa NO está en este repo.** Acá no hay ningún `.rs`, ni `Anchor.toml`,
+ni `Cargo.toml`, y `contracts/` tiene contract tests en TypeScript, no Rust. El programa Anchor vive
+en [`ferrosasfp/solana-programs`](https://github.com/ferrosasfp/solana-programs), en
+`programs/escrow/src/lib.rs`, y es público. Lo que sí vive acá es el lado consumidor: el IDL del
+programa, vendoreado y pinneado por hash canónico, como se describe abajo.
 
 El estado por remesa vive en una PDA derivada de `[b"escrow", sender, remittance_id]`, donde
 `remittance_id` es un array de 16 bytes. Los fondos viven en la associated token account de esa PDA
@@ -78,13 +90,25 @@ El valor pinneado coincide con el que tiene `wasiai-facilitator`.
 
 ### Smoke de devnet
 
-`npm run smoke:solana` corre el ciclo completo contra servicios ya desplegados. Está deliberadamente
-incómodo de ejecutar:
+`npm run smoke:solana` corre el ciclo del depósito contra servicios ya desplegados: healthchecks,
+prueba de posesión, `/api/payout/prepare`, la instrucción `deposit` firmada por el sender, el
+broadcast gasless vía el facilitator y la lectura de la cuenta de escrow on chain hasta que reporta
+`Deposited`. Está deliberadamente incómodo de ejecutar:
 
 - Aborta antes de cualquier llamada si no está `SMOKE_ALLOW_REAL=true`. No corre en CI.
-- Todas sus entradas son variables de entorno. No hay ninguna URL, key, cluster ni mint hardcodeados.
-  Si falta una, aborta e imprime el nombre de la variable, nunca su valor.
-- El cluster es una constante `devnet` del script. No hay fallback a mainnet.
+- Las URLs de los servicios, las keys, los identificadores, el monto, el mint y la pubkey del
+  facilitator son todas variables de entorno: son once requeridas, listadas y validadas una por una
+  en `scripts/smoke-solana-e2e.ts:43-66` y documentadas en `.env.example`. Si falta alguna, el script
+  aborta e imprime el nombre de la variable, nunca su valor.
+- Dos entradas NO son variables, y cada una tiene su motivo. El cluster es la constante
+  `CLUSTER = "devnet"` (`:34`): no hay variable de entorno que pueda apuntar este script a mainnet. El
+  endpoint de RPC sí tiene default: `SMOKE_SOLANA_RPC_URL` si la seteás, y si no
+  `clusterApiUrl("devnet")` (`:78`), que es el endpoint público de devnet. `SMOKE_DEADLINE_SECONDS`
+  también tiene default, una hora.
+- Su último paso, la pata fiat, es best effort y hoy siempre advierte: postea a
+  `/api/a2a/payout/submit`, una ruta que ya no existe en este repo. Ese paso se reporta como `WARN` y
+  no hace fallar la corrida. La evidencia del depósito, que es para lo que existe el smoke, ya está on
+  chain para entonces.
 
 ## Correr el proyecto
 
@@ -129,17 +153,35 @@ el `--legacy-peer-deps`.
   pone rojo en vez de romperse en producción.
 - El IDL del escrow pinneado por hash canónico (`contracts/idl/escrow-idl.hash.test.ts`), descrito
   arriba.
-- Una garantía repo wide (`src/composition/no-evm-surface.test.ts`) de que esta app no puede adquirir
-  un segundo entorno de ejecución. Recorre `src/`, `app/`, `scripts/` y `contracts/` en cada corrida y
-  falla contra los patrones de import que reintroducirían uno. Que esto sea una aplicación Solana no
-  depende de que alguien se acuerde: lo sostiene un test.
+- Un guard contra el regreso del camino EVM que este repo supo tener
+  (`src/composition/no-evm-surface.test.ts`). Recorre `src/`, `app/`, `scripts/` y `contracts/` en
+  cada corrida y falla contra una lista CERRADA y enumerada: imports de `viem` y sus submódulos, de
+  `wagmi` y de `@walletconnect/ethereum-provider`; el interruptor `NEXT_PUBLIC_VM`; los validadores de
+  address hexadecimal `isAddress(` e `isAddressEqual(`; y las regex `0x` de 40 dígitos hex escritas a
+  mano. Además asserta que esos tres paquetes no están ni en `dependencies` ni en `devDependencies`, y
+  que nueve rutas y archivos borrados no están en el árbol, `app/api/settle/principal` entre ellos,
+  comprobado como "el directorio no existe" y no como "el handler devuelve 404".
+
+  Ese es su alcance exacto: cierra las puertas por las que el camino EVM se fue, para que no pueda
+  volver por ellas ni por descuido ni por un merge. No es una prohibición universal de toda librería
+  Ethereum que exista. Un `npm i ethers` más un import lo pasa en verde, y lo mismo `web3`,
+  `@ethersproject/*` o `thirdweb`. Cubrir un nombre nuevo es agregarlo a la lista, con su motivo.
 
 ```bash
-npm test          # 692 tests
-npm run qa        # typechecks + tests
+npm test          # 692 tests en 57 archivos
+npm run qa        # lint + los dos typechecks + tests
 ```
 
+### CI
+
+`.github/workflows/ci.yml` corre `npm run lint`, `npm run typecheck`, `npm run typecheck:scripts`,
+`npm test` y `npm run build` sobre Node 22, en cada push a `main` y en cada pull request. El script de
+smoke queda deliberadamente afuera: es opt in y mueve USDC en devnet.
+
 ## Arquitectura
+
+Detalle capa por capa, la lista completa de rutas de API y qué cubre y qué NO cubre el guard anti EVM:
+[`docs/architecture.md`](docs/architecture.md).
 
 Clean Architecture, con la regla de dependencia apuntando hacia adentro.
 
@@ -176,8 +218,11 @@ que ata la dirección de depósito a la remesa.
 
 ## Configuración
 
-Todas las variables están documentadas en `.env.example`. El criterio de diseño es que **cada default
-sea el seguro**: con el archivo vacío la app levanta en modo demo y no mueve fondos.
+`.env.example` documenta las variables que leen `src/` y `app/`, más las catorce que lee el script de
+smoke de devnet, en una sección propia al final. No cubre lo que inyecta sola la plataforma de
+hosting: `VERCEL_ENV` es la única de esas que el código lee, y también está explicada ahí. El criterio
+de diseño es que **cada default sea el seguro**: con el archivo vacío la app levanta en modo demo y no
+mueve fondos.
 
 | Variable | Default | Efecto |
 |---|---|---|

@@ -1,5 +1,5 @@
 // Infrastructure — adapters A2A (WKH-186). Llaman a los agentes remit-* (remit-corridor-fx /
-// remit-cashout-payout) a través de las API routes server-only de chaski-v2 (/api/a2a/*), espejando
+// remit-cashout-payout) a través de las API routes server-only de esta app (/api/a2a/*), espejando
 // DiditKycGateway→/api/kyc/* y HttpPayoutAuthorityGateway→/api/payout/validate. El gateway NUNCA
 // fetchea el agente directo (el REMIT_AGENTS_BASE_URL vive SOLO en el server, CD-9). Se cablean con
 // el flag NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER="a2a"; el default sigue siendo Fallback (mock).

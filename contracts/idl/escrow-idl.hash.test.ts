@@ -6,11 +6,19 @@ import { canonicalSha256 } from "./canonical-hash";
 
 // Pinneada y verificada en F2 sobre los 3 IDL reales (todos canonicalizan igual, address DR5G).
 // Re-pinneo SOLO con SDD explícito, jamás por drift silencioso (ver CONTRACT-VERSIONS.md).
+// RE-PIN 2026-08-01 — ventana de custodia. Motivo, medido con un diff instrucción por instrucción
+// contra el IDL nuevo: (a) `close` suma la cuenta `sender_ata` (el barrido del vault) y (b) entran
+// los errores 6006 DeadlineTooSoon, 6007 DeadlineTooFar y 6008 ReleaseWindowClosed. NINGÚN código
+// existente se renumeró ni se borró, y `deposit`, `refund`, `release`, `register_escrow` y
+// `deregister_escrow` conservan discriminador, cuentas y args, así que el re-pin es compatible en
+// las dos direcciones para todo lo que este repo realmente invoca (`close` no lo invoca nadie acá).
+// EscrowStatus sigue con 3 variantes, o sea que el decode de la cuenta no se mueve.
+// Valor idéntico al pineado en wasiai-facilitator (src/chains/escrow-idl.hash.test.ts).
+// Anterior: 4bcc34a997396d360ab996ea5bb1015ffdd8a1d357d3f4b4cffcbfe8ea98d12b.
 // RE-PIN 2026-07-28 — HU-SOL-20 / R2b (SDD solana-programs/doc/sdd/002-escrow-remittance-id-recovery
 // /sdd.md §4.10 DT-9). Motivo: R1 agregó register_escrow + deregister_escrow, la cuenta EscrowIndex
-// y el error 6005. Valor idéntico al pineado en wasiai-facilitator (R2a, src/chains/
-// escrow-idl.hash.test.ts). Anterior: aa53c03f159f7381cedf598cfd1b9e0b12d34dcdb2ae3240e9c14b288225fb71.
-const ESCROW_IDL_SHA256 = "4bcc34a997396d360ab996ea5bb1015ffdd8a1d357d3f4b4cffcbfe8ea98d12b";
+// y el error 6005. Anterior: aa53c03f159f7381cedf598cfd1b9e0b12d34dcdb2ae3240e9c14b288225fb71.
+const ESCROW_IDL_SHA256 = "fb64c937dbdab7a58045e663a85724808c4539707fedbdf244e11a28dbe5c071";
 
 describe("escrow IDL — hash canónico (WKH-227 / AC-2, AC-3)", () => {
   // AC-2 (siempre corre): si alguien edita escrow-idl.ts a mano sin re-pinnear → ROJO.

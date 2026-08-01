@@ -6,7 +6,7 @@ import { Connection, Keypair, PublicKey, Transaction } from "@solana/web3.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Money } from "../domain/money";
 import type { Quote } from "../domain/remittance";
-import { SolanaWalletAdapter } from "./solana-wallet";
+import { CUSTODY_WINDOW_SECS, SolanaWalletAdapter } from "./solana-wallet";
 import { solanaWalletBridge } from "./solana-wallet-bridge";
 
 const VALID_B58 = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // base58 válido (mixed-case)
@@ -220,17 +220,63 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     expect(signSpy).not.toHaveBeenCalled();
   });
 
-  it("AC-8/CD-SDD-3: amount = String(send.minor) (u64), deadline = floor(expiresAt/1000), sin float", async () => {
+  it("AC-8/CD-SDD-3: amount = String(send.minor) (u64), deadline = now + CUSTODY_WINDOW_SECS, sin float", async () => {
     const adapter = await connectedAdapter();
     const quote = makeQuote({ expiresAt: "2099-06-15T12:00:00.000Z" });
+    const before = Math.floor(Date.now() / 1000);
     await adapter.authorizePrincipal(quote, "rem-ac8", escrowDeposit());
+    const after = Math.floor(Date.now() / 1000);
 
     const data = firstIx(capturedTx(signSpy)).data;
     // layout borsh: 8 disc + 16 remittance_id + 32 beneficiary + 32 authority + 8 amount(LE) + 8 deadline(LE)
     const amount = data.readBigUInt64LE(8 + 16 + 32 + 32);
     const deadline = data.readBigInt64LE(8 + 16 + 32 + 32 + 8);
     expect(amount).toBe(BigInt(quote.send.minor));
-    expect(deadline).toBe(BigInt(Math.floor(Date.parse(quote.expiresAt) / 1000)));
+    // Cableado: el deadline es el ahora del cliente más la constante, no otra cosa. Ventana
+    // [before, after] porque el reloj corre entre que arranca el test y que se arma la ix.
+    expect(deadline).toBeGreaterThanOrEqual(BigInt(before + CUSTODY_WINDOW_SECS));
+    expect(deadline).toBeLessThanOrEqual(BigInt(after + CUSTODY_WINDOW_SECS));
+  });
+
+  // Este test NO importa la constante a propósito. Los 3600/86400 están escritos a mano porque son
+  // los del PROGRAMA (`programs/escrow/src/lib.rs`:111 y :119 en el repo `solana-programs`), y lo
+  // que tiene que sostener es que nuestro número cae adentro de los suyos. Un test que comparara
+  // contra CUSTODY_WINDOW_SECS probaría el cableado y aplaudiría igual si alguien la pusiera en 600.
+  it("el deadline cae dentro de la ventana que el programa acepta: [now+3600, now+86400]", async () => {
+    const adapter = await connectedAdapter();
+    const before = Math.floor(Date.now() / 1000);
+    await adapter.authorizePrincipal(makeQuote(), "rem-ventana", escrowDeposit());
+    const after = Math.floor(Date.now() / 1000);
+
+    const data = firstIx(capturedTx(signSpy)).data;
+    const deadline = Number(data.readBigInt64LE(8 + 16 + 32 + 32 + 8));
+
+    // Piso: contra el `after`, que es el peor caso del reloj del validador si la tx entra ya mismo.
+    expect(deadline - after).toBeGreaterThanOrEqual(3600); // MIN_CUSTODY_SECS → DeadlineTooSoon
+    expect(deadline - before).toBeLessThanOrEqual(86_400); // MAX_CUSTODY_SECS → DeadlineTooFar
+    // Y con margen real sobre el piso: pedir exactamente 3600 pierde toda tx que tarde en entrar.
+    expect(deadline - after).toBeGreaterThanOrEqual(3600 + 900);
+  });
+
+  // La regresión concreta: el deadline salía de `quote.expiresAt` y el TTL de la cotización es de
+  // 10 minutos, o sea DEBAJO del piso del programa. Con esa versión el programa rechazaba todos los
+  // depósitos con DeadlineTooSoon. Una cotización que vence en 10 minutos ya no cambia el deadline.
+  it("una cotización que vence en 10 minutos NO acorta el deadline (el bug del DeadlineTooSoon)", async () => {
+    const adapter = await connectedAdapter();
+    const diezMinutos = new Date(Date.now() + 10 * 60_000).toISOString();
+    await adapter.authorizePrincipal(
+      makeQuote({ expiresAt: diezMinutos }),
+      "rem-ttl-corto",
+      escrowDeposit(),
+    );
+    const after = Math.floor(Date.now() / 1000);
+
+    const data = firstIx(capturedTx(signSpy)).data;
+    const deadline = Number(data.readBigInt64LE(8 + 16 + 32 + 32 + 8));
+
+    expect(deadline - after).toBeGreaterThanOrEqual(3600); // habría sido ~600 antes del fix
+    // Y explícitamente: el deadline NO es el de la cotización.
+    expect(deadline).not.toBe(Math.floor(Date.parse(diezMinutos) / 1000));
   });
 
   it("AC-8: expiresAt inválido → throw quote_expires_at_invalid", async () => {

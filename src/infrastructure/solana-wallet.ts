@@ -38,6 +38,33 @@ import { solanaWalletBridge } from "./solana-wallet-bridge";
 // created_at desc, así que 10 cubre de sobra un escrow reciente perdido y acota a UNA sola llamada RPC.
 const MAX_RECOVERY_CANDIDATES = 10;
 
+/**
+ * Ventana de custodia que este cliente le pide al escrow: 2 horas.
+ *
+ * QUÉ ES: cuánto tiempo tiene el operador para completar la pata fiat antes de que el sender pueda
+ * recuperar su plata. Mientras la ventana está abierta manda el operador (`release`); una vez
+ * cerrada manda el sender (`refund`). El programa exige que el depósito caiga dentro de
+ * `[now + 3600, now + 86400]` (`MIN_CUSTODY_SECS` / `MAX_CUSTODY_SECS`, `programs/escrow/src/lib.rs`
+ * :111 y :119 del repo `solana-programs`), y rechaza con `DeadlineTooSoon` / `DeadlineTooFar`.
+ *
+ * POR QUÉ NO SALE DE `quote.expiresAt`, que es de donde salía antes: son dos cosas distintas que se
+ * habían confundido. `expiresAt` dice cuándo vence la TASA; la ventana dice cuánto tiempo tiene el
+ * operador para entregar. El TTL de la cotización es de 10 minutos
+ * (`wasiai-remittance-agents/src/providers/fx.ts:170`), o sea DEBAJO del piso del programa: usarlo
+ * como deadline hace que el programa rechace todos los depósitos.
+ *
+ * POR QUÉ 2 h Y NO EL PISO EXACTO DE 1 h: el `now` de esa comparación es el reloj del VALIDADOR
+ * cuando la tx se ejecuta, no el del cliente cuando la arma. Pedir exactamente el piso es una
+ * carrera que pierde toda tx que tarde más de cero segundos en entrar. Las ~1 h de margen absorben
+ * la latencia de la firma del usuario, el partial-sign del facilitator y el desfasaje de relojes.
+ *
+ * PROVISORIO, igual que las dos constantes del programa y por la misma razón: el número que lo
+ * fijaría es la medición del tiempo real de la pata fiat del proveedor, extremo a extremo, y hoy
+ * ese número no existe. Subirlo alarga lo que el sender espera para poder recuperar su plata;
+ * bajarlo achica el margen del operador. No tocar sin esa medición.
+ */
+export const CUSTODY_WINDOW_SECS = 2 * 60 * 60;
+
 // Cuánto esperamos a que la cadena responda si el refund entró, antes de dejar de preguntar. Vencido,
 // el resultado es INDETERMINADO (nunca un éxito, nunca un fracaso): la tx puede seguir viva. 30 s es
 // menos que la vida útil de un blockhash (~60-90 s), así que "se acabó la espera" jamás significa
@@ -199,8 +226,14 @@ export class SolanaWalletAdapter implements WalletPort, SolanaEscrowDepositProbe
     // ── Args canónicos (AC-8/CD-SDD-3) — String(...) NO Number(...) ──
     const remittanceIdBytes = this.remittanceIdToBytes16(remittanceId); // [u8;16] determinístico
     const amount = new anchor.BN(String(quote.send.minor)); // u64, sin floats
+    // El guard de vencimiento de la cotización ya corrió aguas arriba (`confirm-and-send.ts`:197,
+    // orden CAS → autoridad → expiry → prepare → firma). Éste lo repite localmente para que la
+    // wallet nunca firme sobre una cotización con fecha ilegible, venga de donde venga el llamador.
+    // Ya NO alimenta el deadline: ver CUSTODY_WINDOW_SECS.
     if (!isParseableIso(quote.expiresAt)) throw new Error("quote_expires_at_invalid");
-    const deadline = new anchor.BN(String(Math.floor(Date.parse(quote.expiresAt) / 1000))); // i64 unix seconds
+    const deadline = new anchor.BN(
+      String(Math.floor(Date.now() / 1000) + CUSTODY_WINDOW_SECS),
+    ); // i64 unix seconds
 
     // ── PDAs / ATAs (AC-1) ──
     const [escrowStatePda] = PublicKey.findProgramAddressSync(

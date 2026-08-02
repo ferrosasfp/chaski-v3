@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
     connected: false,
     connecting: false,
     signMessage: undefined as ((m: Uint8Array) => Promise<Uint8Array>) | undefined,
+    signTransaction: undefined as ((t: unknown) => Promise<unknown>) | undefined,
   },
   modal: { visible: false, setVisible: (_v: boolean) => {} },
   /** Captura los props que SolanaProviders le pasa a WalletProvider (para probar el cableado). */
@@ -66,7 +67,13 @@ function watchPending(): { outcome: () => string | null } {
 
 beforeEach(() => {
   solanaWalletBridge.reset();
-  h.wallet = { publicKey: null, connected: false, connecting: false, signMessage: undefined };
+  h.wallet = {
+    publicKey: null,
+    connected: false,
+    connecting: false,
+    signMessage: undefined,
+    signTransaction: undefined,
+  };
   h.modal = { visible: false, setVisible: () => {} };
   h.walletProviderProps = {};
 });
@@ -118,6 +125,35 @@ describe("SolanaWalletBridgeSync — el auto-cierre del modal vs una conexión e
     });
 
     expect(p.outcome()).toBe("wallet_connect_cancelled");
+  });
+});
+
+// El firmante de TRANSACCIONES nunca estuvo cableado: el bridge decía "lo registra el sync
+// component" y el único `registerSignTransaction()` del repo vivía en los tests, que se lo pasaban a
+// mano. O sea que los tests probaban el DOBLE y no el cableado, y en el navegador
+// `signTransaction()` tiraba `wallet_sign_not_available` siempre: el depósito al escrow no se podía
+// firmar desde la app en ninguna plataforma. Estos dos tests montan el árbol REAL y NO registran
+// nada a mano: es la única forma de que el cableado ausente se vea.
+describe("SolanaWalletBridgeSync — el firmante de transacciones sale del árbol, no del test", () => {
+  it("T-SIGN-1: montar el árbol deja el bridge capaz de firmar la tx del depósito", async () => {
+    const firmada = { firmada: true };
+    const spy = vi.fn(async () => firmada);
+    h.wallet = { ...h.wallet, signTransaction: spy };
+
+    render(<SolanaWalletBridgeSync />);
+
+    const tx = { deposito: 1 };
+    // ⬅️ Antes de este arreglo, acá tiraba `wallet_sign_not_available`.
+    await expect(solanaWalletBridge.signTransaction(tx)).resolves.toBe(firmada);
+    expect(spy).toHaveBeenCalledWith(tx);
+  });
+
+  it("T-SIGN-2: si la wallet NO expone signTransaction, sigue siendo fail-loud", async () => {
+    // El par que impide 'arreglarlo' registrando cualquier cosa: sin firmante real de la wallet, el
+    // bridge tiene que negarse, JAMÁS firmar con otra clave.
+    h.wallet = { ...h.wallet, signTransaction: undefined };
+    render(<SolanaWalletBridgeSync />);
+    await expect(solanaWalletBridge.signTransaction({})).rejects.toThrow("wallet_sign_not_available");
   });
 });
 

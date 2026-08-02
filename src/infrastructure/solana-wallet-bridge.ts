@@ -48,7 +48,12 @@ class SolanaWalletBridge {
     this.openModalHandle();
   }
 
-  /** HU-SOL-5: registrado por el sync component (captura useWallet().signTransaction). */
+  /** HU-SOL-5: lo registra el sync component (captura `useWallet().signTransaction`).
+   *  Esta frase fue FALSA durante toda la vida del archivo y nadie lo notó, porque afirmaba un
+   *  cableado que no existía: el único llamador era el propio test, que se lo pasaba a mano. Ahora
+   *  hay un test que monta el árbol REAL y verifica el cableado, no el doble
+   *  (`solana-providers.test.tsx`, T-SIGN-1/2). Si volvés a leer esta frase, no le creas: mirá ese
+   *  test. */
   registerSignTransaction(fn: SignTransactionFn): void {
     this.signTxHandle = fn;
   }

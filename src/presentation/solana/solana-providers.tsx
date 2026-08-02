@@ -18,7 +18,7 @@ import "@solana/wallet-adapter-react-ui/styles.css";
  *  Exportado SÓLO para el test de la carrera del auto-cierre del modal (ver abajo): montarlo suelto
  *  es la única forma de controlar `visible`/`connecting` cuadro por cuadro. */
 export function SolanaWalletBridgeSync(): null {
-  const { publicKey, connected, connecting, signMessage } = useWallet();
+  const { publicKey, connected, connecting, signMessage, signTransaction } = useWallet();
   const { setVisible, visible } = useWalletModal();
 
   // Registra el handle imperativo openModal (capturado desde useWalletModal).
@@ -31,6 +31,20 @@ export function SolanaWalletBridgeSync(): null {
   useEffect(() => {
     if (signMessage) solanaWalletBridge.registerSignMessage((bytes) => signMessage(bytes));
   }, [signMessage]);
+
+  // HU-SOL-5: el gemelo del de arriba, para FIRMAR LA TRANSACCIÓN del depósito.
+  //
+  // ⚠️ ESTE EFECTO NO EXISTÍA. El bridge decía "registrado por el sync component" y nadie lo
+  // registraba: el único `registerSignTransaction()` del repo vivía en los tests, que se lo pasan a
+  // mano y por eso pasaban. En el navegador `signTransaction()` tiraba `wallet_sign_not_available`
+  // SIEMPRE, así que el depósito al escrow no se podía firmar desde la app en ninguna plataforma. No
+  // se veía porque el flujo se cortaba antes, en el prepare del payout.
+  useEffect(() => {
+    if (signTransaction)
+      solanaWalletBridge.registerSignTransaction((tx) =>
+        signTransaction(tx as Parameters<NonNullable<typeof signTransaction>>[0]),
+      );
+  }, [signTransaction]);
 
   // Empuja el estado en cada cambio. base58 OPACO (CD-3): publicKey.toBase58(), SIN toLowerCase.
   useEffect(() => {

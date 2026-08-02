@@ -107,8 +107,20 @@ export async function resolvePayoutAuthority(
     }
 
     return { authorized: true, httpStatus: 200 }; // SIN `reason` (preserva {authorized:true})
-  } catch {
+  } catch (err) {
     // fetch throw (timeout/DNS/reset) o JSON malformado → 502 fail-closed, misma forma que !res.ok.
+    //
+    // 🔴 POR QUÉ ESTE LOG NO ES OPCIONAL. Este `catch` estaba VACÍO, y eso convirtió un fallo real en
+    // uno indiagnosticable: el 2026-08-02 el flujo de un recorrido manual murió acá con 502, no llegó
+    // a pedir la firma, y al ir a los logs no había NADA. El mismo paso, repetido minutos después,
+    // devolvió 200. Sin rastro no se puede distinguir un timeout de un DNS de un JSON roto, y las
+    // tres se arreglan distinto.
+    //
+    // Value-free por contrato (CD-4/CD-7): SÓLO el `name` del error. Nunca el message (puede traer la
+    // URL con el verificationId), nunca el body, nunca la dirección ni el vendor_data.
+    console.warn("[payout-authority] kyc_reauth_failed:", {
+      errorName: err instanceof Error ? err.name : "unknown",
+    });
     return { authorized: false, reason: "kyc_reauth_failed", httpStatus: 502 };
   }
 }

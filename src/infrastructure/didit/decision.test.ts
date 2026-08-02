@@ -19,7 +19,7 @@ describe("mapDiditDecision — Didit decision → modelo Chaski", () => {
         },
       ],
     };
-    const r = mapDiditDecision(raw);
+    const r = mapDiditDecision(raw, "live");
     expect(r.approved).toBe(true);
     expect(r.payoutAllowed).toBe(true);
     expect(r.terminal).toBe(true);
@@ -35,7 +35,7 @@ describe("mapDiditDecision — Didit decision → modelo Chaski", () => {
   });
 
   it("Declined → no aprobado, no payoutAllowed, terminal, riesgo alto", () => {
-    const r = mapDiditDecision({ status: "Declined", session_id: "s2", id_verifications: [] });
+    const r = mapDiditDecision({ status: "Declined", session_id: "s2", id_verifications: [] }, "live");
     expect(r.approved).toBe(false);
     expect(r.payoutAllowed).toBe(false);
     expect(r.terminal).toBe(true);
@@ -44,13 +44,13 @@ describe("mapDiditDecision — Didit decision → modelo Chaski", () => {
   });
 
   it("In Progress → NO terminal (la DApp sigue poll-eando)", () => {
-    const r = mapDiditDecision({ status: "In Progress", session_id: "s3" });
+    const r = mapDiditDecision({ status: "In Progress", session_id: "s3" }, "live");
     expect(r.terminal).toBe(false);
     expect(r.approved).toBe(false);
   });
 
   it("defensivo: payload vacío / campos ausentes no rompen", () => {
-    const r = mapDiditDecision({});
+    const r = mapDiditDecision({}, "live");
     expect(r.status).toBe("In Progress");
     expect(r.terminal).toBe(false);
     expect(r.identity).toBeNull();
@@ -62,9 +62,9 @@ describe("mapDiditDecision — Didit decision → modelo Chaski", () => {
       status: "Approved",
       session_id: "s6",
       vendor_data: "0xSender",
-    });
+    }, "live");
     expect(withVendor.vendorData).toBe("0xSender");
-    const withoutVendor = mapDiditDecision({ status: "Approved", session_id: "s7" });
+    const withoutVendor = mapDiditDecision({ status: "Approved", session_id: "s7" }, "live");
     expect(withoutVendor.vendorData).toBe("");
   });
 
@@ -73,7 +73,7 @@ describe("mapDiditDecision — Didit decision → modelo Chaski", () => {
       status: "Approved",
       session_id: "s5",
       id_verifications: [{ first_name: "JUAN", last_name: "PEREZ", last_name_2: "GOMEZ" }],
-    });
+    }, "live");
     expect(r.identity?.lastNameMaternal).toBe("GOMEZ");
     expect(r.identity?.documentType).toBe("DNI"); // default cuando falta
   });
@@ -81,24 +81,24 @@ describe("mapDiditDecision — Didit decision → modelo Chaski", () => {
 
 describe("resolveRiskLevel (vía mapDiditDecision) — señal AML defensiva (AC-9/10/11, CD-3)", () => {
   it("AC-9: risk_level fino reconocido ('medium') se PRESERVA en vez de colapsar a binario", () => {
-    const r = mapDiditDecision({ status: "Approved", session_id: "s", risk_level: "medium" });
+    const r = mapDiditDecision({ status: "Approved", session_id: "s", risk_level: "medium" }, "live");
     expect(r.riskLevel).toBe("medium");
   });
 
   it("AC-9: 'high' explícito en un Approved gana sobre el 'low' binario", () => {
-    const r = mapDiditDecision({ status: "Approved", session_id: "s", risk_level: "high" });
+    const r = mapDiditDecision({ status: "Approved", session_id: "s", risk_level: "high" }, "live");
     expect(r.riskLevel).toBe("high");
   });
 
   it("AC-10: sin campo risk_level → fallback binario (Approved→low, Declined→high), sin regresión", () => {
-    expect(mapDiditDecision({ status: "Approved", session_id: "s" }).riskLevel).toBe("low");
-    expect(mapDiditDecision({ status: "Declined", session_id: "s" }).riskLevel).toBe("high");
+    expect(mapDiditDecision({ status: "Approved", session_id: "s" }, "live").riskLevel).toBe("low");
+    expect(mapDiditDecision({ status: "Declined", session_id: "s" }, "live").riskLevel).toBe("high");
   });
 
   it("AC-11: valor no reconocido ('extreme') → fallback binario, NUNCA un 4to valor (CD-3)", () => {
-    const approved = mapDiditDecision({ status: "Approved", session_id: "s", risk_level: "extreme" });
+    const approved = mapDiditDecision({ status: "Approved", session_id: "s", risk_level: "extreme" }, "live");
     expect(approved.riskLevel).toBe("low"); // cae al binario, no propaga "extreme"
-    const declined = mapDiditDecision({ status: "Declined", session_id: "s", risk_level: "extreme" });
+    const declined = mapDiditDecision({ status: "Declined", session_id: "s", risk_level: "extreme" }, "live");
     expect(declined.riskLevel).toBe("high");
     expect(["low", "medium", "high"]).toContain(approved.riskLevel);
   });
@@ -139,7 +139,7 @@ describe("maskIdentity — defensa en profundidad (WKH-179 AC-3, CD-8)", () => {
 
 describe("maskDecision — compone sobre la decisión", () => {
   it("identity nula → null (no rompe)", () => {
-    const raw = mapDiditDecision({ status: "In Progress" });
+    const raw = mapDiditDecision({ status: "In Progress" }, "live");
     expect(maskDecision(raw).identity).toBeNull();
   });
 
@@ -147,9 +147,40 @@ describe("maskDecision — compone sobre la decisión", () => {
     const raw = mapDiditDecision({
       status: "Approved",
       id_verifications: [{ document_number: "44556677", first_name: "Ana" }],
-    });
+    }, "live");
     const masked = maskDecision(raw);
     expect(masked.identity?.documentNumber).toBe("****6677");
     expect(masked.identity?.firstName).toBe("Ana");
+  });
+});
+
+// ── El origen de la etiqueta (KYC simulado vs real) ──────────────────────────────────────────────
+// Estos tests NO son sobre un string. Son sobre el único eje que impide que una verificación que
+// nadie hizo desbloquee un desembolso real: el consumidor autoritativo es `REAL_KYC_PROVENANCES` en
+// wasiai-remittance-agents, que contiene SÓLO "didit". Si esta etiqueta se derivara mal, el agente
+// de payout no tendría forma de notarlo.
+describe("provenance — sale del ambiente declarado, nunca de un literal", () => {
+  const approved = { status: "Approved", session_id: "s-prov", vendor_data: "wallet-1" };
+
+  it("live ⇒ didit (la etiqueta que la allowlist del agente acepta)", () => {
+    expect(mapDiditDecision(approved, "live").provenance).toBe("didit");
+  });
+
+  it("mock ⇒ didit-mock, y NO es la etiqueta real", () => {
+    const p = mapDiditDecision(approved, "mock").provenance;
+    expect(p).toBe("didit-mock");
+    // La aserción que importa: distinta de la real. Escrita como desigualdad a propósito, para que
+    // un futuro `provenance: "didit"` en la rama mock rompa acá aunque el literal de arriba cambie.
+    expect(p).not.toBe(mapDiditDecision(approved, "live").provenance);
+  });
+
+  it("el ambiente NO cambia nada más de la decisión: sólo la etiqueta de origen", () => {
+    const live = mapDiditDecision(approved, "live");
+    const mock = mapDiditDecision(approved, "mock");
+    // Si el mock también moviera `approved` o `payoutAllowed`, el gate se estaría abriendo por dos
+    // ejes a la vez y la etiqueta dejaría de ser la única cosa que los separa.
+    expect({ ...live, provenance: "" }).toEqual({ ...mock, provenance: "" });
+    expect(mock.approved).toBe(true);
+    expect(mock.payoutAllowed).toBe(true);
   });
 });

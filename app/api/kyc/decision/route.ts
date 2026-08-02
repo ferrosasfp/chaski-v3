@@ -5,7 +5,11 @@
 // → 400 → 401 → recién Didit (nunca fetch a Didit sin autorización, CD-2).
 import { NextResponse } from "next/server";
 import { mapDiditDecision, maskDecision } from "../../../../src/infrastructure/didit/decision";
-import { resolveDiditBaseUrl } from "../../../../src/infrastructure/didit/didit-env";
+import {
+  resolveDiditBaseUrl,
+  resolveDiditEnvironment,
+  type DiditEnvironment,
+} from "../../../../src/infrastructure/didit/didit-env";
 import { verifySessionToken } from "../../../../src/infrastructure/kyc-auth";
 
 export async function GET(req: Request): Promise<Response> {
@@ -28,8 +32,13 @@ export async function GET(req: Request): Promise<Response> {
 
   // Ambiente de Didit: fail-closed y LAZY (después de los guards, CD-2 intacto). Sin DIDIT_ENV no
   // se resuelve host → 500 de MISCONFIG (no 502): el problema es nuestro, no de Didit.
+  // El MISMO ambiente resuelve el host y etiqueta la decisión. Que salgan de la misma lectura es
+  // el punto: si el host es el mock, la etiqueta dice mock, y no hay forma de que uno diga una cosa
+  // y la otra diga otra.
   let base: string;
+  let environment: DiditEnvironment;
   try {
+    environment = resolveDiditEnvironment();
     base = resolveDiditBaseUrl();
   } catch {
     // Etiqueta value-free: el mensaje del throw nombra la env, pero NO se filtra al cliente.
@@ -45,5 +54,5 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   const decision = await res.json();
-  return NextResponse.json(maskDecision(mapDiditDecision(decision)));
+  return NextResponse.json(maskDecision(mapDiditDecision(decision, environment)));
 }

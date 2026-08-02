@@ -9,7 +9,11 @@
 //   con key → formato → ambiente (DIDIT_ENV, fail-closed) → Didit → mapeo → ownership
 // Nunca fetch a Didit antes de pasar los guards.
 import { mapDiditDecision } from "../didit/decision";
-import { resolveDiditBaseUrl } from "../didit/didit-env";
+import {
+  resolveDiditBaseUrl,
+  resolveDiditEnvironment,
+  type DiditEnvironment,
+} from "../didit/didit-env";
 import { canonicalizeAddress } from "../address";
 
 export interface PayoutAuthorityDecision {
@@ -54,7 +58,9 @@ export async function resolvePayoutAuthority(
   // caída" y manda a ops a mirar a Didit. Esto es MISCONFIG NUESTRA → 503 con su propio reason.
   // Fail-closed igual: nunca autoriza (CD-4).
   let base: string;
+  let environment: DiditEnvironment;
   try {
+    environment = resolveDiditEnvironment();
     base = resolveDiditBaseUrl();
   } catch {
     return { authorized: false, reason: "kyc_authority_misconfigured", httpStatus: 503 };
@@ -75,7 +81,9 @@ export async function resolvePayoutAuthority(
       return { authorized: false, reason: "kyc_reauth_failed", httpStatus: 502 };
     }
 
-    const d = mapDiditDecision(await res.json());
+    // El ambiente sale de la MISMA resolución que eligió el host de arriba: si se consultó al mock,
+    // la decisión queda etiquetada `didit-mock` y el agente de desembolso la trata como simulada.
+    const d = mapDiditDecision(await res.json(), environment);
 
     // Solo "Approved" autoriza (CD-A5: reusa mapDiditDecision, no re-implementa status → approved).
     if (d.status !== "Approved") {

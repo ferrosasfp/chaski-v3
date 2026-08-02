@@ -28,8 +28,10 @@ import {
   escrowFundsKnowledge,
   escrowKnowledgeCopy,
   escrowRefundError,
+  type FlowError,
   humanError,
   isDemoMode,
+  shortErrorCode,
   statusDisplay,
 } from "./flow-vm";
 import { cn } from "./cn";
@@ -78,7 +80,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
   const c = useMemo(() => container ?? createContainer(), [container]);
   const [step, setStep] = useState<Step>("send");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<FlowError | null>(null);
 
   // form
   const [amount, setAmount] = useState("400");
@@ -177,7 +179,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
         } else {
           setRem(res.snapshot);
           setStep("verify");
-          setError("La verificación no pasó. Probá de nuevo.");
+          setError({ message: "La verificación no pasó. Probá de nuevo." });
         }
         return;
       }
@@ -211,7 +213,11 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
     try {
       await fn();
     } catch (e) {
-      setError(e instanceof Error ? humanError(e.message) : "Algo salió mal");
+      setError(
+        e instanceof Error
+          ? { message: humanError(e.message), code: shortErrorCode(e.message) }
+          : { message: "Algo salió mal" },
+      );
     } finally {
       setBusy(false);
     }
@@ -297,7 +303,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
       setRem(res.snapshot);
       if (res.snapshot.status !== "kyc_passed") {
         setScanStage(0);
-        setError("No pudimos verificar tu identidad. Intentá de nuevo.");
+        setError({ message: "No pudimos verificar tu identidad. Intentá de nuevo." });
         return;
       }
       setScanStage(4);
@@ -825,7 +831,12 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
 
       {error ? (
         <div className="mt-4 rounded-xl border border-cochineal/20 bg-cochineal/5 px-4 py-3 text-sm text-cochineal-ink">
-          {error}
+          {error.message}
+          {error.code ? (
+            <span className="mt-1 block break-all font-mono text-[11px] opacity-60">
+              {error.code}
+            </span>
+          ) : null}
         </div>
       ) : null}
     </main>

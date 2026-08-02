@@ -194,6 +194,31 @@ export function escrowRefundError(code: string): string {
   return "No pudimos recuperar los fondos. Intentá de nuevo.";
 }
 
+/** Mensaje humano + el código interno que lo originó. Van JUNTOS en un solo estado a propósito: con
+ *  dos `useState` separados podían quedar desincronizados y mostrar el código de un fallo viejo
+ *  debajo del mensaje de uno nuevo. */
+export type FlowError = { message: string; code?: string };
+
+/** Cota de lo que se muestra en pantalla como código. `humanError()` recibe el `message` de
+ *  cualquier Error, y algunos traen texto largo de una librería o de un fetch. */
+const MAX_CODE_LEN = 80;
+
+/**
+ * El código corto que se muestra debajo del mensaje humano.
+ *
+ * Existe porque `humanError()` tiene un default ("Algo salió mal") y ese default BORRABA la única
+ * pista de qué falló: un reporte desde un celular llegaba sin nada que buscar en el código. Mostrar
+ * el código no es filtrar nada sensible, los códigos de este flujo son etiquetas fijas del dominio.
+ *
+ * Devuelve `undefined` para un mensaje vacío: es preferible no mostrar nada a mostrar un renglón en
+ * blanco que parece un error de render.
+ */
+export function shortErrorCode(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  return trimmed.length > MAX_CODE_LEN ? `${trimmed.slice(0, MAX_CODE_LEN)}…` : trimmed;
+}
+
 /** Traduce un código de error interno a copy humano para la UI. */
 export function humanError(code: string): string {
   if (code.includes("quote_expired") || code.includes("QUOTE_STALE"))
@@ -205,6 +230,25 @@ export function humanError(code: string): string {
     return "No se detectó una wallet instalada. Instalá o desbloqueá tu wallet.";
   if (code.includes("no_account") || code.includes("wallet_not_connected"))
     return "Reconectá o desbloqueá tu wallet para continuar.";
+  // Familia wallet_*: hasta acá TODOS estos códigos caían en el default "Algo salió mal", que es lo
+  // que veía quien intentaba conectar desde el celular. Cada rama nombra una causa distinta; ninguna
+  // afirma más de lo que la librería nos dice.
+  if (code.includes("wallet_connect_cancelled"))
+    return "Se cerró el selector de wallet sin conectar. Podés volver a intentarlo cuando quieras.";
+  if (code.includes("wallet_connect_timeout"))
+    return "La wallet tardó demasiado en responder. Probá de nuevo.";
+  if (code.includes("wallet_window_closed"))
+    return "Se cerró la ventana de la wallet antes de terminar. Probá de nuevo.";
+  if (code.includes("wallet_window_blocked"))
+    return "El navegador bloqueó la ventana de la wallet. Permití las ventanas emergentes para este sitio.";
+  // NO decimos "la rechazaste": la librería usa el mismo error para el rechazo de la persona y para
+  // un fallo interno de la wallet. Nombramos las dos y no elegimos.
+  if (code.includes("wallet_connect_failed"))
+    return "La wallet no llegó a conectarse. Puede que la conexión se haya rechazado, o que la wallet haya fallado. Probá de nuevo.";
+  if (code.includes("wallet_bridge_not_mounted") || code.includes("wallet_sign_not_available"))
+    return "La wallet todavía no está lista. Recargá la página y probá de nuevo.";
+  if (code.includes("wallet_error"))
+    return "La wallet devolvió un error que no reconocemos. Probá de nuevo.";
   if (code.includes("kyc")) return "No pudimos verificar tu identidad.";
   if (code.includes("payout")) return "No se pudo entregar. Si te cobramos, te reembolsamos.";
   return "Algo salió mal. Intentá de nuevo.";

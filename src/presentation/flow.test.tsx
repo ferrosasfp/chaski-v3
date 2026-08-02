@@ -329,6 +329,42 @@ it("T-AC5b: en confirm, si el quote venció, 'Recotizar tasa' re-cotiza SIN re-e
   expect(screen.getByText(/Identidad verificada/)).toBeInTheDocument(); // el KYC se conservó
 });
 
+// ── T-CODE — el error que se ve en pantalla deja rastro de QUÉ falló ──────────
+// Motivo: un reporte desde un celular llegó como "Algo salió mal. Intentá de nuevo." y el código
+// que lo originó no quedaba en ningún lado, ni en pantalla ni en consola. El fallo era real y la
+// superficie no decía nada. Estos dos tests fijan que el código viaje SIEMPRE, y el segundo es el
+// que importa: justamente cuando no sabemos traducirlo es cuando más falta hace verlo.
+function rejectingWith(code: string) {
+  return { execute: async () => { throw new Error(code); } } as unknown as ConfirmAndSend;
+}
+
+it("T-CODE-1: un código conocido muestra su copy propio Y el código", async () => {
+  render(
+    <RemittanceFlow
+      container={buildTestContainer({ useCases: { confirmAndSend: rejectingWith("wallet_connect_cancelled") } })}
+    />,
+  );
+  await goToConfirm();
+  fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
+
+  expect(await screen.findByText(/selector de wallet/)).toBeInTheDocument();
+  expect(screen.getByText("wallet_connect_cancelled")).toBeInTheDocument();
+});
+
+it("T-CODE-2: un código DESCONOCIDO cae al genérico pero el código sigue a la vista", async () => {
+  render(
+    <RemittanceFlow
+      container={buildTestContainer({ useCases: { confirmAndSend: rejectingWith("chirimoya_invertida") } })}
+    />,
+  );
+  await goToConfirm();
+  fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
+
+  expect(await screen.findByText("Algo salió mal. Intentá de nuevo.")).toBeInTheDocument();
+  // ⬅️ Esto es lo que faltaba: sin el código, el reporte de campo no era diagnosticable.
+  expect(screen.getByText("chirimoya_invertida")).toBeInTheDocument();
+});
+
 // ── T-AC6 — AC-6: resume con quote vigente → confirm SIN re-cotizar ───────────
 it("T-AC6: resume 'passed' con quote vigente navega a confirm SIN re-cotizar", async () => {
   const snapshot = passedSnapshot(1478.15, 3.7, "2099-01-01T00:00:00.000Z"); // vigente en tiempo real

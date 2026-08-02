@@ -9,5 +9,9 @@
   "background_color": "#FBFAF7",
   "theme_color": "#CB2A54",
   "description": "Mandá plata a tu familia en Perú con solo pedirlo.",
-  "icons": []
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
 }

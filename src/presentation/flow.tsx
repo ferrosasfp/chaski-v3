@@ -729,6 +729,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                 <div className="my-2 h-px bg-line" />
                 <Row label="Recibe en" value={`${methodLabel(rem.beneficiary.method)} · ${rem.beneficiary.destination}`} />
               </Card>
+              <AgentPlanCard />
               <Button disabled={busy} onClick={onContinue}>
                 Continuar <ArrowRight className="h-4 w-4" />
               </Button>
@@ -1106,6 +1107,99 @@ export function RefundAction({
  * ver el comentario largo en el cálculo de `showRefund`. No se reemplazó por otra hora estimada
  * porque no tenemos ninguna que sea verdadera en esta capa; se reemplazó por decir qué sabemos.
  */
+// ── Quién va a atender esta remesa ───────────────────────────────────────────────────────────────
+// Lo que hace a Chaski distinto de una app de remesas no es la pantalla: es que los pasos no están
+// cableados a un proveedor, se piden por CAPACIDAD y los resuelve un catálogo abierto. Eso pasaba y
+// no se veía. Esta tarjeta lo muestra ANTES de aprobar, con los datos del catálogo en vivo.
+//
+// Tres decisiones de honestidad, y las tres tienen su contraparte en `/api/a2a/plan`:
+//  · Se dice POR DÓNDE corre hoy cada paso. Con el carril del gateway apagado, la app llama a su
+//    agente punto a punto, que puede ser otro: mostrar la elección del catálogo como si fuera la
+//    que va a correr sería una pantalla que mide una cosa y afirma otra.
+//  · `verified` se muestra tal cual. Hoy los tres dicen que no. Pintar un tilde sería la mentira
+//    más fácil de acá.
+//  · La identidad NO aparece como agente: hoy es una integración directa con el proveedor. La
+//    tercera fila sería la más vendible y es la que no existe.
+function AgentPlanCard() {
+  type Step = {
+    capability: string;
+    label: string;
+    agent: { id: string; description: string; priceUsdc: number | null; verified: boolean; registry: string } | null;
+    transport: "gateway" | "punto-a-punto";
+  };
+  const [plan, setPlan] = useState<{ steps: Step[]; totalUsdc: number } | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/a2a/plan");
+        if (!res.ok) throw new Error("plan_unavailable");
+        const d = (await res.json()) as { steps: Step[]; totalUsdc: number };
+        if (alive) setPlan(d);
+      } catch {
+        if (alive) setFailed(true); // no se inventa un plan: se dice que no se pudo
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  if (failed) {
+    return (
+      <Card>
+        <p className="text-sm font-semibold">Quién va a atender tu envío</p>
+        <p className="mt-1 text-xs text-stone">
+          No pudimos consultar el catálogo ahora. Tu envío sigue igual: esto es informativo.
+        </p>
+      </Card>
+    );
+  }
+  if (!plan) return null;
+
+  return (
+    <Card>
+      <p className="text-sm font-semibold">Quién va a atender tu envío</p>
+      <p className="mt-1 text-xs text-stone">
+        Ninguno de estos pasos está atado a una empresa fija. Chaski pide una capacidad y el catálogo
+        abierto responde quién la cumple, así que esta lista puede cambiar sola.
+      </p>
+      <div className="mt-3 space-y-2">
+        {plan.steps.map((s) => (
+          <div key={s.capability} className="rounded-lg border border-line px-3 py-2">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-sm font-medium">{s.label}</span>
+              <span className="tabular text-sm">
+                {s.agent?.priceUsdc != null ? `${s.agent.priceUsdc} USDC` : "sin precio publicado"}
+              </span>
+            </div>
+            {s.agent ? (
+              <p className="mt-0.5 text-xs text-stone">
+                {s.agent.id}
+                {s.agent.verified ? " · verificado" : " · sin verificar"}
+                {s.transport === "gateway" ? " · elegido por capacidad" : " · hoy se llama directo"}
+              </p>
+            ) : (
+              <p className="mt-0.5 text-xs text-stone">
+                El catálogo no ofrece a nadie para esta capacidad ahora mismo.
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 flex items-baseline justify-between">
+        <span className="text-xs text-stone">Lo que cobran los agentes</span>
+        <span className="tabular text-sm font-semibold">{plan.totalUsdc} USDC</span>
+      </div>
+      <p className="mt-2 text-xs text-stone">
+        Tu identidad no pasa por el catálogo: se verifica con el proveedor directo.
+      </p>
+    </Card>
+  );
+}
+
 function RefundWindowNote() {
   return (
     <p className="text-xs text-stone">

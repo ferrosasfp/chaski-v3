@@ -780,6 +780,14 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                   </p>
                 </div>
               ) : null}
+              {/* 🔴 TAMBIÉN ACÁ, Y NO ES DUPLICACIÓN. La tarjeta vivía sólo en `review`, y `review`
+                  es la pantalla que el flujo SALTEA cuando el KYC ya está hecho: con la identidad
+                  recordada se va de `connect` directo a `confirm`. O sea que el preview existía y la
+                  persona que ya se verificó una vez NO lo veía nunca, que es justamente la que más
+                  veces va a usar la app. Lo encontró el founder recorriéndola, no un test.
+                  Va en las DOS pantallas donde se aprueba, porque las dos son "el último momento
+                  antes de comprometerse" según por dónde hayas entrado. */}
+              <AgentPlanCard />
               {error ? (
                 <Button variant="outline" disabled={busy} onClick={onRelock}>
                   {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Recotizar tasa"}

@@ -850,21 +850,27 @@ export function TrackView({
 }) {
   // HU-SOL-13 (AC-6/AC-7, CD-10): acción refund trustless. Siempre disponible: ninguna configuración
   // la puede apagar.
-  // Deadline on-chain = floor(Date.parse(quote.expiresAt)/1000) (fijado por HU-SOL-5, AH-14/NC-3). La UI
-  // usa el mismo instante como proxy DEFENSIVO (defensa en profundidad): el guard AUTORITATIVO es la
-  // lectura on-chain dentro de wallet.refundEscrow (aborta si status≠Deposited o now<deadline).
-  const deadlineReached = rem.quote ? Date.now() >= Date.parse(rem.quote.expiresAt) : false;
+  //
+  // ESTA PANTALLA NO SABE CUÁNDO SE ABRE LA VENTANA, y decirlo es el arreglo. Hasta el 2026-08-01 el
+  // deadline del escrow ERA `quote.expiresAt`, así que la UI lo usaba como proxy y acertaba. Ese día
+  // el deadline pasó a ser `now + CUSTODY_WINDOW_SECS` (2 h) al construir el depósito, y la cotización
+  // sigue venciendo a los 10 minutos: el proxy quedó adelantado casi dos horas. Habilitaba el botón
+  // antes de tiempo y, peor, `RefundLockedNotice` renderizaba esa hora equivocada como un instante
+  // concreto ("a partir de las 14:35"). Nadie perdía plata, pero la pantalla afirmaba en falso cuándo
+  // alguien podía recuperar la suya.
+  //
+  // El instante real vive en la cuenta del escrow y esta capa no lo lee. Mientras no lo lea, la
+  // respuesta honesta es no adivinarlo: se ofrece la acción y decide el guard AUTORITATIVO, que es la
+  // lectura on-chain dentro de `wallet.refundEscrow` (aborta con `refund_before_deadline` si
+  // `status≠Deposited` o `now<deadline`, ANTES de firmar y sin gastar comisión). Preguntarle a la
+  // cadena es barato; inventar una hora no.
+  //
   // Refundeable: el deposit entró y aún no se recuperó/entregó (escrow potencialmente Deposited on-chain).
   const refundeable =
     rem.status === "principal_in" ||
     rem.status === "payout_submitted" ||
     rem.status === "payout_failed";
-  const showRefund =
-    refundeable && rem.refundTx == null && deadlineReached && !!recover && !!sender;
-  // Misma condición SALVO el deadline: existe la salida, todavía no está abierta. Se muestra en vez
-  // de esconderse, con la hora en que se abre.
-  const refundLocked =
-    refundeable && rem.refundTx == null && !deadlineReached && !!recover && !!sender && !!rem.quote;
+  const showRefund = refundeable && rem.refundTx == null && !!recover && !!sender;
 
   // AC-1 (WKH-200): payout_failed/refunded NO están en `order` → idx=-1 renderizaría la vista
   // optimista ("en camino", steps grises). Branch temprano a una vista honesta de fallo/reembolso.
@@ -881,9 +887,10 @@ export function TrackView({
     // lado. Ahora se dice lo que es, y se ofrece la salida.
     const principalInEscrow = rem.failureReason === PRINCIPAL_SETTLED_REFUND_MANUAL;
     const principalUnknown = rem.failureReason === PRINCIPAL_STATE_UNKNOWN;
-    // ¿Hay una salida a la vista? (el botón, habilitado o esperando el deadline). Si no la hay, el
-    // texto no puede mandar a apretar un botón que no está.
-    const recoveryOffered = showRefund || refundLocked;
+    // ¿Hay una salida a la vista? Si no la hay, el texto no puede mandar a apretar un botón que no
+    // está. Ya no hay un segundo estado "esperando el deadline": esta capa no sabe cuándo vence, así
+    // que o se ofrece la acción o no hay ninguna.
+    const recoveryOffered = showRefund;
     return (
       <Card className="space-y-3">
         <p className="text-sm font-semibold">
@@ -922,14 +929,15 @@ export function TrackView({
           <p className="text-xs text-stone">Referencia de reembolso: {rem.refundTx}</p>
         ) : null}
         {showRefund && recover && sender ? (
-          <RefundAction
-            remittanceId={rem.id}
-            sender={sender}
-            recover={recover}
-            onRecovered={onRecovered}
-          />
-        ) : refundLocked && rem.quote ? (
-          <RefundLockedNotice availableAt={rem.quote.expiresAt} />
+          <div className="space-y-2">
+            <RefundAction
+              remittanceId={rem.id}
+              sender={sender}
+              recover={recover}
+              onRecovered={onRecovered}
+            />
+            <RefundWindowNote />
+          </div>
         ) : null}
       </Card>
     );
@@ -1000,14 +1008,15 @@ export function TrackView({
         </p>
       ) : null}
       {showRefund && recover && sender ? (
-        <RefundAction
-          remittanceId={rem.id}
-          sender={sender}
-          recover={recover}
-          onRecovered={onRecovered}
-        />
-      ) : refundLocked && rem.quote ? (
-        <RefundLockedNotice availableAt={rem.quote.expiresAt} />
+        <div className="space-y-2">
+          <RefundAction
+            remittanceId={rem.id}
+            sender={sender}
+            recover={recover}
+            onRecovered={onRecovered}
+          />
+          <RefundWindowNote />
+        </div>
       ) : null}
     </Card>
   );
@@ -1089,21 +1098,20 @@ export function RefundAction({
 // El botón sigue deshabilitado hasta el deadline — el programa Anchor rechaza un refund anterior
 // (DeadlineNotReached) y el adapter aborta antes de firmar: acá no se debilita ningún guard, se
 // muestra cuándo deja de aplicar.
-function RefundLockedNotice({ availableAt }: { availableAt: string }) {
-  const when = Number.isNaN(Date.parse(availableAt))
-    ? null
-    : new Date(availableAt).toLocaleTimeString("es-PE", { hour: "2-digit", minute: "2-digit" });
+/**
+ * La leyenda que acompaña a "Recuperar fondos".
+ *
+ * Antes esto era `RefundLockedNotice` y recibía un `availableAt` para escribir una hora concreta
+ * ("a partir de las 14:35"). Esa hora salía de `quote.expiresAt` y desde el 2026-08-01 está mal:
+ * ver el comentario largo en el cálculo de `showRefund`. No se reemplazó por otra hora estimada
+ * porque no tenemos ninguna que sea verdadera en esta capa; se reemplazó por decir qué sabemos.
+ */
+function RefundWindowNote() {
   return (
-    <div className="space-y-2">
-      <Button variant="outline" disabled>
-        Recuperar fondos
-      </Button>
-      <p className="text-xs text-stone">
-        {when
-          ? `Podés recuperar tus USDC a partir de las ${when}. Hasta esa hora el contrato no lo permite.`
-          : "Vas a poder recuperar tus USDC cuando venza el plazo del contrato."}
-      </p>
-    </div>
+    <p className="text-xs text-stone">
+      El plazo se fija cuando depositás y dura unas 2 horas. Si todavía no venció, el botón te lo
+      dice sin firmar nada ni cobrarte comisión.
+    </p>
   );
 }
 

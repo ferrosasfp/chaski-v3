@@ -966,20 +966,35 @@ describe("HU-SOL-13 — acción refund en TrackView (T7)", () => {
     expect(screen.getByRole("button", { name: /Recuperar fondos/ })).toBeInTheDocument();
   });
 
-  // AC-7 sigue intacto (pre-deadline no se puede refundear: el programa Anchor rechaza y el adapter
-  // aborta antes de firmar). Lo que cambió es que la salida DEJA DE ESTAR ESCONDIDA: antes no se
-  // renderizaba nada y la persona miraba un spinner sin saber que existía ni cuándo se abría.
-  it("AC-7: now<deadline (expiresAt futuro) ⇒ el botón está VISIBLE pero deshabilitado, y no toca la cadena", async () => {
+  // AC-7 sigue intacto y NO se prueba acá: el guard real (pre-deadline ⇒ abortar antes de firmar y
+  // sin broadcastear) vive en el adapter, `solana-wallet.refund.test.ts`, contra un escrow leído de
+  // la cadena. `FakeSolanaEscrowRefundGateway` no modela el deadline: siempre resuelve. O sea que
+  // este test NUNCA probó el guard, probó el proxy que la UI hacía por su cuenta.
+  //
+  // Ese proxy salía de `quote.expiresAt` y era correcto mientras el deadline del escrow FUERA ese
+  // instante. El 2026-08-01 dejó de serlo (deadline = depósito + 2 h, cotización = 10 min), así que
+  // la pantalla habilitaba el botón temprano y, peor, escribía la hora equivocada como un instante
+  // concreto. Lo que este test sostiene ahora es lo único que esta capa puede sostener con verdad:
+  // ofrece la salida y NO inventa una hora.
+  it("con el plazo sin vencer, la pantalla ofrece la salida y NO promete una hora concreta", async () => {
     const gateway = new FakeSolanaEscrowRefundGateway();
-    const rem = solanaPayoutSubmittedSnapshot("2099-01-01T00:00:00.000Z"); // futuro ⇒ pre-deadline
+    const expiresAt = "2099-01-01T00:00:00.000Z"; // cotización con vencimiento futuro
+    const rem = solanaPayoutSubmittedSnapshot(expiresAt);
     const { recover } = await seededRecovery(rem, gateway);
     render(<LiveTrackView initial={rem} recover={recover} />);
 
-    const btn = screen.getByRole("button", { name: /Recuperar fondos/ });
-    expect(btn).toBeDisabled();
-    expect(screen.getByText(/Podés recuperar tus USDC a partir de las/)).toBeInTheDocument();
-    fireEvent.click(btn); // el guard no se debilita: el click no dispara NADA
-    expect(gateway.calls).toHaveLength(0);
+    expect(screen.getByRole("button", { name: /Recuperar fondos/ })).toBeEnabled();
+    expect(screen.getByText(/El plazo se fija cuando depositás/)).toBeInTheDocument();
+
+    // LA REGRESIÓN QUE ESTE TEST EXISTE PARA CAZAR. No alcanza con mirar el copy viejo: se asertea
+    // que el instante de la COTIZACIÓN no aparezca renderizado en ninguna forma, porque volver a
+    // derivar de ahí es exactamente el bug, se escriba con las palabras que se escriba.
+    const horaDeLaCotizacion = new Date(expiresAt).toLocaleTimeString("es-PE", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    expect(screen.queryByText(new RegExp(horaDeLaCotizacion))).not.toBeInTheDocument();
+    expect(screen.queryByText(/a partir de las/)).not.toBeInTheDocument();
   });
 
   // ── El refund que la cadena todavía no confirmó ────────────────────────────────────────────────

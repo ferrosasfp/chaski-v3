@@ -1252,6 +1252,44 @@ describe("los tildes del tracking no marcan como hecho lo que está en curso", (
     expect(container.querySelectorAll(".animate-pulse")).toHaveLength(0);
   });
 
+  // ── La tarjeta del desembolso en curso ────────────────────────────────────────────────────────
+  // Esta pantalla es la que la persona mira más tiempo, y es la que el founder pidió que se viera
+  // "más vendedora". Se rehizo, y estos tests son el límite de hasta dónde puede embellecerse.
+  //
+  // 🔴 EL RIESGO CONCRETO QUE VIGILAN. Este proyecto YA tuvo una pantalla que afirmaba "entregado"
+  // sin consultar nada, mostrando el monto COTIZADO como si fuera el entregado. Se sacó. La presión
+  // de hacer la pantalla más linda es exactamente la que la traería de vuelta, así que lo que se
+  // assertea no es el diseño: es que el TIEMPO VERBAL siga siendo futuro y que la advertencia siga
+  // estando. Las dos son lo único que separa esta tarjeta de aquella.
+  it("el desembolso en curso muestra el monto en FUTURO y conserva la advertencia", () => {
+    const rem = buildFlowSnapshot("payout_submitted", "transfi");
+    render(<TrackView rem={rem} recover={undefined} sender={null} onRecovered={() => {}} />);
+
+    expect(screen.getByText(/va a recibir/)).toBeInTheDocument(); // futuro, no "recibió"
+    // La advertencia NO es opcional: sin ella la tarjeta afirma una entrega que nadie confirmó.
+    expect(screen.getByText(/Todavía no tenemos la confirmación/)).toBeInTheDocument();
+    expect(screen.getByText(/tus USDC ya están en el contrato/i)).toBeInTheDocument();
+    // Y nunca el verbo en pasado sobre la llegada del dinero.
+    expect(screen.queryByText(/ya recibió/i)).toBeNull();
+    expect(screen.queryByText(/le llegó/i)).toBeNull();
+  });
+
+  it("el sello de entorno de prueba sale de la proveniencia REAL del desembolso, no de una bandera", () => {
+    const simulado = buildFlowSnapshot("payout_submitted", "local-fallback");
+    const { unmount } = render(
+      <TrackView rem={simulado} recover={undefined} sender={null} onRecovered={() => {}} />,
+    );
+    expect(screen.getByText(/Entorno de prueba/)).toBeInTheDocument();
+    expect(screen.getByText(/no se movió dinero real/)).toBeInTheDocument();
+    unmount();
+
+    // Con un desembolso REAL el sello desaparece SOLO, porque cambió el dato y no porque alguien se
+    // haya acordado de sacarlo. Ese es el punto de derivarlo de `payoutProvenance`.
+    const real = buildFlowSnapshot("payout_submitted", "transfi");
+    render(<TrackView rem={real} recover={undefined} sender={null} onRecovered={() => {}} />);
+    expect(screen.queryByText(/Entorno de prueba/)).toBeNull();
+  });
+
   it("en payout_submitted el encabezado no promete movimiento y avisa que el paso es manual", () => {
     const rem = buildFlowSnapshot("payout_submitted", "transfi");
     render(<TrackView rem={rem} recover={undefined} sender={null} onRecovered={() => {}} />);

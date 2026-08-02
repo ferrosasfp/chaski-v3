@@ -15,6 +15,17 @@ export const metadata: Metadata = {
   description:
     "Mandá plata a tu familia en Perú con solo pedirlo. Reciben soles en su Yape, rápido y claro.",
   manifest: "/manifest.json",
+  // Los genera scripts/generate-icons.py desde la geometría de ChaskiMark. Sin esto el sitio no
+  // tenía NINGÚN icono (/favicon.ico daba 404 y el manifiesto traía "icons": []), y toda wallet o
+  // navegador que pide el icono de la app mostraba un recuadro vacío al lado del dominio.
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/icon-192.png", type: "image/png", sizes: "192x192" },
+      { url: "/icon-512.png", type: "image/png", sizes: "512x512" },
+    ],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180" }],
+  },
   appleWebApp: { capable: true, statusBarStyle: "default", title: "Chaski" },
 };
 

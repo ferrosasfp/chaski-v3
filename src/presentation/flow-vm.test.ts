@@ -13,6 +13,7 @@ import {
   escrowKnowledgeCopy,
   escrowRefundError,
   humanError,
+  shortErrorCode,
   isDemoMode,
   statusDisplay,
 } from "./flow-vm";
@@ -348,5 +349,60 @@ describe("flow-vm — humanError", () => {
     expect(humanError("kyc_not_authorized")).toBe("No pudimos verificar tu identidad.");
     // == humanError("kyc_not_approved"): el colapso del oráculo es invisible al cliente legítimo.
     expect(humanError("kyc_not_authorized")).toBe(humanError("kyc_not_approved"));
+  });
+
+  // Todos estos códigos EXISTEN en el bridge y en el traductor de WalletError desde antes, y sin
+  // embargo caían al default. Un reporte desde un celular llegaba como "Algo salió mal" y no había
+  // forma de saber cuál de los seis había sido.
+  const GENERICO = "Algo salió mal. Intentá de nuevo.";
+  it.each([
+    ["wallet_connect_cancelled", "selector de wallet"],
+    ["wallet_connect_timeout", "tardó demasiado"],
+    ["wallet_window_closed", "ventana de la wallet"],
+    ["wallet_window_blocked", "ventanas emergentes"],
+    ["wallet_connect_failed", "no llegó a conectarse"],
+    ["wallet_bridge_not_mounted", "todavía no está lista"],
+    ["wallet_sign_not_available", "todavía no está lista"],
+    ["wallet_error:WalletFuturoError", "no reconocemos"],
+  ])("familia wallet_*: %s ya no cae al genérico", (code, fragmento) => {
+    expect(humanError(code)).toContain(fragmento);
+    expect(humanError(code)).not.toBe(GENERICO);
+  });
+
+  it("los códigos de wallet NO se pisan entre sí: seis causas, seis mensajes distintos", () => {
+    // Sin esto, un `includes("wallet")` temprano pasaría los ocho tests de arriba colapsándolos.
+    const mensajes = [
+      "wallet_connect_cancelled",
+      "wallet_connect_timeout",
+      "wallet_window_closed",
+      "wallet_window_blocked",
+      "wallet_connect_failed",
+      "wallet_bridge_not_mounted",
+    ].map(humanError);
+    expect(new Set(mensajes).size).toBe(mensajes.length);
+  });
+
+  it("no_wallet y wallet_not_connected conservan su copy previo (no los pisó la familia nueva)", () => {
+    expect(humanError("no_wallet")).toContain("wallet instalada");
+    expect(humanError("wallet_not_connected")).toContain("Reconectá");
+  });
+});
+
+describe("flow-vm — shortErrorCode", () => {
+  it("devuelve el código tal cual para un código normal del dominio", () => {
+    expect(shortErrorCode("wallet_connect_cancelled")).toBe("wallet_connect_cancelled");
+  });
+
+  it("un mensaje vacío o en blanco no produce un renglón vacío en pantalla", () => {
+    expect(shortErrorCode("")).toBeUndefined();
+    expect(shortErrorCode("   ")).toBeUndefined();
+  });
+
+  it("acota un mensaje largo en vez de volcarlo entero en la UI", () => {
+    const largo = "x".repeat(500);
+    const out = shortErrorCode(largo);
+    expect(out).toBeDefined();
+    expect(out!.length).toBeLessThanOrEqual(81); // 80 + el carácter de elisión
+    expect(out!.endsWith("…")).toBe(true);
   });
 });

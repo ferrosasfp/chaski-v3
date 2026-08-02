@@ -97,10 +97,19 @@ class SolanaWalletBridge {
 
   /** El sync component la llama cuando el modal se cierra sin conectar (best-effort cancel). */
   cancelConnection(): void {
+    this.failConnection("wallet_connect_cancelled");
+  }
+
+  /** Corta la espera con una causa CONCRETA. La llama el sync component desde `onError` de
+   *  WalletProvider, que es la única fuente que sabe POR QUÉ falló (wallet rechazada, no instalada,
+   *  ventana cerrada). Sin esto, cualquier fallo de conexión terminaba en el timeout de 120 s o en
+   *  un `wallet_connect_cancelled` genérico, y la UI no podía decir nada útil. No-op si no hay
+   *  espera en curso: un error de una wallet que nadie está esperando no debe inventar un rechazo. */
+  failConnection(code: string): void {
     const rej = this.pendingReject;
     if (!rej) return;
     this.clearPending();
-    rej(new Error("wallet_connect_cancelled"));
+    rej(new Error(code));
   }
 
   /** Test-only: resetea el singleton entre tests. */

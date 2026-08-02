@@ -1002,12 +1002,7 @@ export function TrackView({
           );
         })}
       </ol>
-      {waitingOnPerson ? (
-        <p className="text-xs text-stone">
-          Este paso no avanza solo: la entrega la libera una persona del equipo, así que puede quedarse
-          acá un buen rato. Si preferís no esperar, podés recuperar tus USDC.
-        </p>
-      ) : null}
+      {waitingOnPerson ? <PayoutInProgress rem={rem} /> : null}
       {showRefund && recover && sender ? (
         <div className="space-y-2">
           <RefundAction
@@ -1094,11 +1089,70 @@ export function RefundAction({
   );
 }
 
-// La recuperación con su condición A LA VISTA. Antes, pre-deadline, no se renderizaba NADA: la persona
-// miraba un spinner sin saber que existía una salida ni cuándo se abría (10 minutos, los del quote).
-// El botón sigue deshabilitado hasta el deadline — el programa Anchor rechaza un refund anterior
-// (DeadlineNotReached) y el adapter aborta antes de firmar: acá no se debilita ningún guard, se
-// muestra cuándo deja de aplicar.
+/**
+ * El desembolso, en curso. Es la pantalla que la persona mira más tiempo.
+ *
+ * QUÉ CAMBIÓ Y POR QUÉ. Antes acá había una sola línea gris: "este paso no avanza solo, la entrega la
+ * libera una persona del equipo, puede quedarse acá un buen rato, si preferís no esperar podés
+ * recuperar tus USDC". Todo eso es CIERTO y se conserva abajo. El problema era el orden: lo primero
+ * que leía la persona era una disculpa y una invitación a cancelar, cuando lo que acababa de pasar es
+ * que su plata entró al escrow y la orden de pago salió. El dato importante estaba al final.
+ *
+ * 🔴 LO QUE ESTA PANTALLA NO DICE, Y NO ES UN OLVIDO. No dice "entregado", no dice "le llegó a tu
+ * familia", y no pinta ningún tilde verde de entrega. Este proyecto ya tuvo esa pantalla: el modo
+ * demo afirmaba "entregado" sin consultar nada y mostraba el monto COTIZADO como si fuera el
+ * entregado. Se sacó, y volver a ponerla con mejor tipografía sería el mismo bug con otro nombre.
+ * Lo que se muestra es lo que efectivamente pasó: el proveedor aceptó la orden y está procesando.
+ * El verbo es el de lo que sabemos.
+ *
+ * El sello de entorno de prueba sale de `isDemoMode`, que mira la proveniencia REAL del desembolso
+ * (`payoutProvenance`), no una bandera de presentación: si algún día el desembolso es real, el sello
+ * desaparece solo porque el dato cambió, no porque alguien se haya acordado de sacarlo.
+ */
+function PayoutInProgress({ rem }: { rem: RemittanceState }) {
+  const simulado = isDemoMode(rem);
+  return (
+    <div className="space-y-3">
+      <div className="rounded-xl bg-sand px-4 py-3 text-center">
+        <p className="text-xs text-stone">{rem.beneficiary.name} va a recibir</p>
+        <p className="tabular text-3xl font-extrabold text-verde">
+          {rem.quote ? rem.quote.receive.format() : "—"}
+        </p>
+        <p className="mt-1 text-xs text-stone">
+          en {methodLabel(rem.beneficiary.method)} · {rem.beneficiary.destination}
+        </p>
+      </div>
+      <div className="flex items-start gap-2.5">
+        {/* 🔴 RELOJ QUIETO, NUNCA UN SPINNER. Mi primera versión de esta tarjeta puso un spinner y el
+            test lo tumbó, con razón: hay una decisión deliberada de que en este paso NADA gire,
+            porque un spinner dice "trabajando" y lo que pasa es "esperando". Es el mismo criterio
+            que el icono del paso en la lista de arriba. */}
+        <Clock3 className="mt-0.5 h-4 w-4 shrink-0 text-cochineal" />
+        <div>
+          <p className="text-sm font-medium">El proveedor está procesando el desembolso</p>
+          {/* Las dos mitades honestas, JUNTO al titular y no escondidas más abajo. La segunda es la
+              frase que estaba antes: este paso no avanza solo. Se conserva el hecho y cambia el
+              lugar, porque enterrarlo sería prometer un automatismo que no existe. */}
+          <p className="mt-0.5 text-xs text-stone">
+            Tus USDC ya están en el contrato, a tu nombre. Todavía no tenemos la confirmación de que
+            el dinero llegó a destino, así que no te lo vamos a decir hasta tenerla.
+          </p>
+          <p className="mt-1 text-xs text-stone">
+            Este paso no avanza solo: la entrega la libera una persona del equipo, así que puede
+            quedarse acá un buen rato. Si preferís no esperar, podés recuperar tus USDC.
+          </p>
+        </div>
+      </div>
+      {simulado ? (
+        <p className="rounded-lg border border-dashed border-stone/40 px-3 py-2 text-xs text-stone">
+          <strong>Entorno de prueba.</strong> El desembolso es simulado: no se movió dinero real hacia
+          ninguna cuenta bancaria. El depósito en la cadena sí es real y se puede ver en el explorador.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * La leyenda que acompaña a "Recuperar fondos".
  *

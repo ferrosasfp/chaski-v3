@@ -171,9 +171,18 @@ export type SolanaSettlementFailureReason =
   | "solana_settle_beneficiary_unconfirmed"
   // SDD 037 — el facilitator NO reconoció a quien firma como el dueño de la transacción, o el
   // mensaje que la persona firmó no describe esta transacción (403). Es un RECHAZO, no una
-  // indisponibilidad: reintentar con la misma tx da exactamente lo mismo. Por eso no cae en
-  // `unavailable` — el input que separa a los dos es una red caída (reintentar puede andar) contra
-  // una firma que no autoriza (reintentar nunca va a andar).
+  // indisponibilidad: reintentar con la misma tx da lo mismo MIENTRAS LA CONFIGURACIÓN DEL
+  // FACILITATOR NO CAMBIE. Por eso no cae en `unavailable`: el input que separa a los dos es una
+  // red caída (reintentar puede andar) contra una firma que no autoriza.
+  //
+  // ⚠️ EL "NO CAMBIE" NO ES UN ADORNO, y hay una rama concreta que lo falsea (AR MNR-2): el
+  // facilitator devuelve ESTE MISMO 403 y ESTE MISMO enum cuando le falta la env
+  // `SOLANA_SPONSOR_NETWORK_ID` (marcador `NETWORK_ID_UNSET` en su log). Esa env es una acción del
+  // founder que puede llegar DESPUÉS del deploy, y en esa ventana reintentar más tarde SÍ anda. O
+  // sea: un 403 acá no prueba que la billetera de la persona esté mal, puede ser el servidor mal
+  // configurado. Del lado del cliente los dos casos son indistinguibles A PROPÓSITO (CD-12,
+  // no-oracle); quien los separa es el marcador `guard` del log del facilitator. Antes de buscar el
+  // bug en la wallet de alguien, mirar ese log.
   | "solana_settle_sender_proof_invalid"
   | "solana_settle_unverified"; // shape de respuesta inválido
 

@@ -289,9 +289,14 @@ export class SolanaWalletAdapter implements WalletPort, SolanaEscrowDepositProbe
     // ── SDD 037 — SEGUNDO prompt de billetera (Guard B) ────────────────────────────────────────
     // La persona ya firmó la transacción; ahora firma un TEXTO que dice, en palabras, qué está
     // autorizando. No es redundante: la firma de la transacción prueba posesión de la llave, este
-    // mensaje prueba consentimiento sobre ESTE monto, ESTE token y ESTA red. Sin él, una firma de
-    // transacción capturada alcanza para pedirle al facilitator que patrocine cualquier cosa.
-    // PROHIBIDO fusionarlo con el prompt anterior: son dos preguntas distintas.
+    // mensaje prueba consentimiento sobre ESTE depósito y ESTE momento. Sin él, una firma de
+    // transacción capturada alcanza para que un tercero pida el patrocinio de un depósito que
+    // nunca autorizó. PROHIBIDO fusionarlo con el prompt anterior: son dos preguntas distintas.
+    //
+    // Lo que este mensaje NO agrega, para que nadie le atribuya de más (CR MNR-1): no defiende el
+    // monto ni el token. Los dos viven adentro de los bytes que la wallet ya firmó, así que
+    // cambiarlos rompe la firma de la TRANSACCIÓN y lo corta Guard A del lado del facilitator, con
+    // Guard B caído o no. Ver `sponsor-pop-message.ts` para el detalle medido.
     const senderSigEntry = signed.signatures.find((s) => s.publicKey.equals(senderPk));
     const senderSigBytes = senderSigEntry?.signature;
     if (!senderSigBytes) {

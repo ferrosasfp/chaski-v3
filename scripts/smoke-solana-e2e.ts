@@ -20,7 +20,6 @@
 //    de la ix `deposit` de `solana-wallet.ts`. NO reimplementa el discriminator ni "miente" el shape.
 //  - Runtime `tsx` (`npm run smoke:solana`). Typecheck aislado vía `tsconfig.scripts.json`. NO se ejecuta
 //    en F3: sólo typechea/lintea. Sus piezas puras viven en `smoke-helpers.ts` y SÍ tienen tests.
-import { createHmac } from "node:crypto";
 import bs58 from "bs58";
 import nacl from "tweetnacl";
 import { sha256 } from "@noble/hashes/sha256";
@@ -35,6 +34,8 @@ import {
 import * as anchor from "@coral-xyz/anchor";
 import type { Idl, Provider } from "@coral-xyz/anchor";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { buildSponsorPopMessage } from "../src/infrastructure/auth/sponsor-pop-message";
+import { resolveSolanaNetworkId } from "../src/infrastructure/chain";
 import { escrowIdl } from "../src/infrastructure/solana/escrow-idl";
 import {
   computeReleaseAttestation,
@@ -63,7 +64,6 @@ const REQUIRED_ENVS = [
   "SMOKE_AMOUNT_USD", // monto en USD (se convierte a minor units USDC de 6 decimales)
   "SMOKE_SOLANA_USDC_MINT", // mint USDC devnet (base58), necesario para construir la ix `deposit`
   "SMOKE_SOLANA_FACILITATOR_PUBKEY", // pubkey devnet del facilitator (feePayer gasless), cofirma server-side
-  "SMOKE_SPONSOR_POP_SECRET", // secreto compartido con el facilitator (== SOLANA_SPONSOR_POP_SECRET) para el popProof
   "SMOKE_FACILITATOR_API_KEY", // Bearer del facilitator (== su FACILITATOR_API_KEY) para POST /solana/escrow/release
   "SMOKE_ESCROW_RELEASE_ATTESTATION_SECRET", // secreto del HMAC del release (== SOLANA_ESCROW_RELEASE_ATTESTATION_SECRET)
 ] as const;
@@ -111,8 +111,6 @@ const USDC_MINT = requireEnv("SMOKE_SOLANA_USDC_MINT");
 // Pubkey del facilitator (feePayer gasless). Se resuelve UPFRONT (antes de cualquier fetch con side-effect,
 // p.ej. /api/payout/prepare que crea una orden de desembolso) para abortar fail-loud sin efectos.
 const FACILITATOR_PUBKEY = requireEnv("SMOKE_SOLANA_FACILITATOR_PUBKEY");
-// Secreto del popProof del sponsor (== SOLANA_SPONSOR_POP_SECRET del facilitator). SECRETO, nunca se imprime.
-const SPONSOR_POP_SECRET = requireEnv("SMOKE_SPONSOR_POP_SECRET");
 // Bearer del facilitator (== FACILITATOR_API_KEY). SECRETO, nunca se imprime.
 const FACILITATOR_API_KEY = requireEnv("SMOKE_FACILITATOR_API_KEY");
 // Secreto del HMAC del release (== SOLANA_ESCROW_RELEASE_ATTESTATION_SECRET del facilitator). SECRETO.
@@ -403,7 +401,29 @@ async function main(): Promise<void> {
   const partialSignedTx = tx
     .serialize({ requireAllSignatures: false, verifySignatures: false })
     .toString("base64");
-  ok(4, "ix deposit construida + partial-firmada por el sender (escrow escrowIdl)");
+
+  // ── SDD 037 — Guard B: el mensaje canónico que el facilitator va a reconstruir ────────────────
+  // Se arma con el MISMO builder que usa la wallet en producción (CD-7: un solo lugar por repo).
+  // La línea `tx` lleva la firma que `tx.partialSign(sender)` acaba de dejar puesta: eso ata esta
+  // autorización a ESTA transacción y a ninguna otra.
+  const senderTxSig = tx.signatures.find((s) => s.publicKey.equals(senderPk))?.signature;
+  if (!senderTxSig) return fail(4, "la tx quedó sin la firma del sender (partialSign no firmó)");
+  // Nombre distinto del `popMessage` del leg de payout (checkpoint 2) A PROPÓSITO: son dos
+  // mecanismos con dominios de mensaje distintos, y confundirlos es exactamente lo que el separador
+  // de dominio `WasiAI Sponsor Request v1` viene a impedir.
+  const sponsorPopMessage = buildSponsorPopMessage({
+    sender: senderAddr,
+    networkId: resolveSolanaNetworkId(),
+    remittanceId: REMITTANCE_ID,
+    amountMinor: amountMinorUnits.toString(),
+    mint: USDC_MINT,
+    txSignatureB58: bs58.encode(new Uint8Array(senderTxSig)),
+  });
+  const sponsorPopSignature = bs58.encode(
+    nacl.sign.detached(new TextEncoder().encode(sponsorPopMessage), sender.secretKey),
+  );
+
+  ok(4, "ix deposit construida + partial-firmada por el sender (escrow escrowIdl) + mensaje canónico firmado");
 
   // ── Checkpoint 5: POST /api/settle/solana-sponsor (broadcast gasless vía facilitator) ───────────
   //    DEPENDE del checkpoint 3, y ahora de verdad: con el ledger encendido, el settle compara el
@@ -422,8 +442,11 @@ async function main(): Promise<void> {
         reference: reference.toBase58(),
         sender: senderAddr,
         remittanceId: REMITTANCE_ID,
-        // popProof = HMAC-SHA256(sender, SOLANA_SPONSOR_POP_SECRET).hex, verbatim a verifySponsorPop del facilitator.
-        popProof: createHmac("sha256", SPONSOR_POP_SECRET).update(senderAddr).digest("hex"),
+        // SDD 037 — firma ed25519 REAL del mensaje canónico, con la MISMA keypair que firmó la tx.
+        // Ya no hay ningún secreto compartido con el facilitator: lo que autoriza es la posesión de
+        // la billetera, y este smoke la tiene de verdad. Si esto diera 403, la hipótesis #1 es que
+        // los builders de los dos repos difieren en un byte, no que el facilitator esté roto.
+        popSignature: sponsorPopSignature,
       }),
       signal: AbortSignal.timeout(30_000),
     });

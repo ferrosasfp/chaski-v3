@@ -187,7 +187,7 @@ export interface SolanaSettlementGateway {
     sender: string; // base58 wallet del depositor
     remittanceId: string; // server-only, trazabilidad
     // SDD 037 — OBLIGATORIO, y el `string` sin `?` es la barrera del compilador: quitar este campo
-    // de un `settle()` no compila. Reemplaza al `popProof` HMAC, que era opcional y cuyo secreto
+    // de un `settle()` no compila. Reemplaza a la prueba HMAC anterior, que era opcional y cuyo secreto
     // compartido permitía fabricar una prueba válida para cualquier billetera.
     popSignature: string;
   }): Promise<

@@ -60,7 +60,7 @@ export async function POST(req: Request): Promise<Response> {
   ) {
     return NextResponse.json({ error: "solana_settle_invalid_request" }, { status: 400 });
   }
-  // SDD 037 — `popSignature` va SIEMPRE (ya no condicional): reemplazó al popProof HMAC, que era
+  // SDD 037 — `popSignature` va SIEMPRE (ya no condicional): reemplazó a la prueba HMAC anterior, que era
   // opcional porque dependía de un secreto compartido que ya no existe.
   const forwardBody: Record<string, unknown> = {
     partialSignedTx,

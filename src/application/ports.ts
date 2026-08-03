@@ -147,6 +147,10 @@ export interface SolanaPrincipalAuthorization {
   vm: "solana";
   partialSignedTx: string; // tx legacy serializada base64, partial-signed (feePayer=facilitator, firma wallet-only)
   reference: string; // Pubkey base58 de la reference (trazabilidad)
+  // SDD 037 — firma ed25519 (base58, 64 bytes) del mensaje canónico de patrocinio. Es el SEGUNDO
+  // prompt de billetera: la persona firma un texto legible que dice qué autoriza, y el facilitator
+  // reconstruye ese texto desde la transacción. Obligatorio: sin él el facilitator responde 403.
+  popSignature: string;
 }
 
 // ── HU-SOL-13 (WKH-216) — puertos del money-path Solana no-custodial (escrow Anchor) ──────────────
@@ -165,6 +169,12 @@ export type SolanaSettlementFailureReason =
   // El servidor no pudo COMPARAR el destino: no hay dirección registrada para esta remesa/sender, o
   // de la tx no se puede leer ninguna. No afirma que el destino esté mal, afirma que no se comprobó.
   | "solana_settle_beneficiary_unconfirmed"
+  // SDD 037 — el facilitator NO reconoció a quien firma como el dueño de la transacción, o el
+  // mensaje que la persona firmó no describe esta transacción (403). Es un RECHAZO, no una
+  // indisponibilidad: reintentar con la misma tx da exactamente lo mismo. Por eso no cae en
+  // `unavailable` — el input que separa a los dos es una red caída (reintentar puede andar) contra
+  // una firma que no autoriza (reintentar nunca va a andar).
+  | "solana_settle_sender_proof_invalid"
   | "solana_settle_unverified"; // shape de respuesta inválido
 
 // Broadcast del `deposit` Solana vía la ruta server-only /api/settle/solana-sponsor → facilitator
@@ -176,7 +186,10 @@ export interface SolanaSettlementGateway {
     reference: string; // base58 (= SolanaPrincipalAuthorization.reference)
     sender: string; // base58 wallet del depositor
     remittanceId: string; // server-only, trazabilidad
-    popProof?: string; // PoP (HU-SOL-8) — wire-format founder-gated ([NC-2]); mockeado en unit-test
+    // SDD 037 — OBLIGATORIO, y el `string` sin `?` es la barrera del compilador: quitar este campo
+    // de un `settle()` no compila. Reemplaza al `popProof` HMAC, que era opcional y cuyo secreto
+    // compartido permitía fabricar una prueba válida para cualquier billetera.
+    popSignature: string;
   }): Promise<
     | { ok: true; signature: string } // base58 tx signature YA broadcasteada+confirmada
     | { ok: false; reason: SolanaSettlementFailureReason }

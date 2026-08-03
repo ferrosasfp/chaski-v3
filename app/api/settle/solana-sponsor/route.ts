@@ -20,6 +20,10 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,90}$/;
 // base64 estándar (partialSignedTx serializada).
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+// SDD 037 — el popSignature es base58 de EXACTAMENTE 64 bytes, que en base58 caen siempre en 86-88
+// caracteres. Rango cerrado y no el BASE58 genérico de arriba: acá se conoce el largo exacto del dato,
+// y aceptar 32 caracteres dejaría pasar un pubkey donde va una firma.
+const BASE58_SIGNATURE_64 = /^[1-9A-HJ-NP-Za-km-z]{86,88}$/;
 
 export async function POST(req: Request): Promise<Response> {
   // S1 — PRIMER guard. CD-5: la HU construye, NO enciende. Flag OFF ⇒ 501 (ningún forward).
@@ -39,7 +43,7 @@ export async function POST(req: Request): Promise<Response> {
   if (!isRecord(parsed)) {
     return NextResponse.json({ error: "solana_settle_invalid_request" }, { status: 400 });
   }
-  const { partialSignedTx, reference, sender, remittanceId, popProof } = parsed;
+  const { partialSignedTx, reference, sender, remittanceId, popSignature } = parsed;
   if (
     typeof partialSignedTx !== "string" ||
     !BASE64.test(partialSignedTx) ||
@@ -48,15 +52,23 @@ export async function POST(req: Request): Promise<Response> {
     typeof sender !== "string" ||
     !BASE58.test(sender) ||
     typeof remittanceId !== "string" ||
-    !remittanceId.trim()
+    !remittanceId.trim() ||
+    // SDD 037 — obligatorio y con forma verificada acá. No es "validar por validar": un
+    // `popSignature` ausente o deforme se corta en este server, sin gastar el forward ni el Bearer.
+    typeof popSignature !== "string" ||
+    !BASE58_SIGNATURE_64.test(popSignature)
   ) {
     return NextResponse.json({ error: "solana_settle_invalid_request" }, { status: 400 });
   }
-  // popProof: el /solana/sponsor de HU-SOL-14 lo exige (z.string().min(1)). La provisión real (HU-SOL-8)
-  // y su wire-format son founder-gated ([NC-2]); acá se forwardea tal cual (fail-closed en el facilitator
-  // si falta). Sólo se envía si vino como string.
-  const forwardBody: Record<string, unknown> = { partialSignedTx, reference, sender, remittanceId };
-  if (typeof popProof === "string" && popProof.trim()) forwardBody.popProof = popProof;
+  // SDD 037 — `popSignature` va SIEMPRE (ya no condicional): reemplazó al popProof HMAC, que era
+  // opcional porque dependía de un secreto compartido que ya no existe.
+  const forwardBody: Record<string, unknown> = {
+    partialSignedTx,
+    reference,
+    sender,
+    remittanceId,
+    popSignature,
+  };
 
   // ── S3.5 · EL DESTINO: contra lo que el SERVIDOR registró al preparar ────────────────────────────
   //
@@ -149,19 +161,26 @@ export async function POST(req: Request): Promise<Response> {
     const status =
       res.status === 422
         ? 422 // SPONSOR_REJECTED (CR-1 del deposit)
-        : res.status === 429
-          ? 429
-          : res.status === 409 || res.status === 502
-            ? 502 // blockhash expirado / broadcast falló
-            : 503; // 5xx/otro ⇒ unavailable
+        : // SDD 037 — el facilitator no reconoció la firma como autorización de esta tx. Se propaga
+          // como 403 y NO como 503: un rechazo no es una indisponibilidad, y confundirlos manda a la
+          // persona a reintentar algo que va a fallar igual todas las veces.
+          res.status === 403
+          ? 403
+          : res.status === 429
+            ? 429
+            : res.status === 409 || res.status === 502
+              ? 502 // blockhash expirado / broadcast falló
+              : 503; // 5xx/otro ⇒ unavailable
     const error =
       status === 422
         ? "solana_settle_rejected"
-        : status === 429
-          ? "solana_settle_rate_limited"
-          : status === 502
-            ? "solana_settle_broadcast_failed"
-            : "solana_settle_unavailable";
+        : status === 403
+          ? "solana_settle_sender_proof_invalid"
+          : status === 429
+            ? "solana_settle_rate_limited"
+            : status === 502
+              ? "solana_settle_broadcast_failed"
+              : "solana_settle_unavailable";
     return NextResponse.json({ error }, { status });
   }
 

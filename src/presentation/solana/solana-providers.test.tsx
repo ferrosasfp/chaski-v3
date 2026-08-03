@@ -157,6 +157,42 @@ describe("SolanaWalletBridgeSync — el firmante de transacciones sale del árbo
   });
 });
 
+// El firmante de MENSAJES tenía exactamente el mismo agujero que su gemelo de arriba, y se midió
+// igual: borrando el efecto `registerSignMessage` de `solana-providers.tsx` la suite entera quedaba
+// en 915/915 y `npm run qa` en exit 0. Los cuatro tests que lo ejercitan se registran el handle a
+// mano (`solana-wallet.test.ts`, `solana-deposit-beneficiary.test.ts`), así que prueban el DOBLE y
+// no el cableado. Importa más que antes: el SDD 037 convirtió `signMessage` en paso OBLIGATORIO del
+// money-path (`solana-wallet.ts`, dentro de `authorizePrincipal`), o sea que sin este efecto el
+// depósito no se puede autorizar desde el navegador en ninguna plataforma. Estos dos montan el árbol
+// REAL y NO registran nada a mano.
+describe("SolanaWalletBridgeSync — el firmante de mensajes sale del árbol, no del test", () => {
+  it("T-SIGN-3: montar el árbol deja el bridge capaz de firmar el mensaje de patrocinio", async () => {
+    const firma = new Uint8Array([1, 2, 3]);
+    const spy = vi.fn(async () => firma);
+    // El beforeEach deja `signMessage: undefined`, así que hay que ponerlo ACÁ y antes del render:
+    // el efecto sólo registra si la wallet lo expone.
+    h.wallet = { ...h.wallet, signMessage: spy };
+
+    render(<SolanaWalletBridgeSync />);
+
+    const mensaje = new TextEncoder().encode("WasiAI Sponsor Request v1");
+    // ⬅️ Sin el efecto de cableado, acá tira `wallet_sign_not_available`.
+    await expect(solanaWalletBridge.signMessage(mensaje)).resolves.toBe(firma);
+    expect(spy).toHaveBeenCalledWith(mensaje);
+  });
+
+  it("T-SIGN-4: si la wallet NO expone signMessage, sigue siendo fail-loud", async () => {
+    // El par que impide 'arreglarlo' registrando cualquier cosa: sin firmante real de la wallet, el
+    // bridge tiene que negarse. Firmar el mensaje de patrocinio con otra clave sería peor que no
+    // firmarlo: el facilitator lo verifica contra el pubkey que sale de la transacción.
+    h.wallet = { ...h.wallet, signMessage: undefined };
+    render(<SolanaWalletBridgeSync />);
+    await expect(solanaWalletBridge.signMessage(new Uint8Array([0]))).rejects.toThrow(
+      "wallet_sign_not_available",
+    );
+  });
+});
+
 describe("SolanaProviders — cableado de onError", () => {
   it("T-ERR-1: le pasa un onError a WalletProvider que corta la espera con la causa real", async () => {
     const p = watchPending();

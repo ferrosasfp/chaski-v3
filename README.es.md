@@ -73,23 +73,37 @@ Decir "se movió USDC" sobre esas firmas sería falso, así que acá no se dice.
 **El depósito es la pieza más sólida, y la salvedad importa.** La instrucción entra en la cadena, la
 wallet del que envía es la única que firma la transferencia, y un fee payer patrocinador cubre las fees
 así el usuario nunca necesita SOL. Lo que prueba la firma de arriba es que eso funciona cuando lo
-maneja el script de smoke. Desde el navegador hoy no entra, por el motivo del párrafo siguiente: la
-wallet sólo firma parcialmente, y el depósito no existe en la cadena hasta que alguien lo broadcastea.
+maneja el script de smoke. Si entra desde un navegador **todavía no está verificado**: el bloqueo de
+protocolo que describe el párrafo siguiente ya no está, pero nadie recorrió la vuelta completa con una
+extensión de wallet real. Esa prueba es la W7 del SDD 037 y sigue pendiente, así que lo honesto es decir
+"sin verificar", no "anda" y tampoco "no anda".
 
-**La confirmación desde el navegador no completa el broadcast.** La primera mitad de esto ya se
-arregló: el cliente ahora firma una prueba de posesión antes de pedirle al servidor que cree la orden de
-payout, así que el flujo ya no muere antes de que la wallet pida una sola firma. La segunda mitad sigue
-cortada, y es la misma transacción que el depósito, que es por lo que los dos son un solo problema y no
-dos. Para broadcastearla, el facilitator exige un `popProof` que es obligatorio en su schema
-([`solana-sponsor.ts:59`](https://github.com/ferrosasfp/wasiai-facilitator/blob/main/src/routes/solana-sponsor.ts))
-y es un HMAC sobre un secreto compartido entre servidores. El camino cliente de Chaski no lo calcula: la
-llamada en `src/application/use-cases/confirm-and-send.ts:156-161` manda cuatro campos y `popProof` no
-es uno de ellos, y la ruta que reenvía sólo lo pasa si llegó
-(`app/api/settle/solana-sponsor/route.ts:57`). El motivo por el que no alcanza con agregarlo es la parte
-interesante: un navegador no puede guardar un secreto compartido entre servidores sin filtrarlo. Así
-que el arreglo es un cambio de protocolo y no una línea que falta: reemplazar ese HMAC por una firma de
-la misma wallet que ya está firmando el depósito un paso antes. Ese reemplazo es el trabajo abierto de
-esta pata, y no está en esta rama.
+**El bloqueo de la pata de confirmación era un secreto compartido, y ya no está.** La primera mitad se
+había arreglado antes: el cliente firma una prueba de posesión antes de pedirle al servidor que cree la
+orden de payout, así que el flujo ya no muere antes de que la wallet pida una sola firma. La segunda
+mitad era el broadcast del depósito, y estaba bloqueada por diseño y no por una línea que faltara: el
+facilitator autorizaba el patrocinio con un HMAC sobre un secreto compartido entre servidores, y un
+navegador no puede guardar un secreto entre servidores sin filtrarlo. Quien tuviera ese secreto además
+podía fabricar una prueba válida para cualquier billetera, que es la peor mitad del mismo problema.
+
+El SDD 037 reemplazó ese HMAC por una firma de la propia billetera. La persona firma un mensaje legible
+que nombra la remesa, el monto, el token y la red, más la firma de la transacción exacta que se va a
+patrocinar; el facilitator reconstruye ese mensaje línea por línea desde la transacción y desde su
+propia config, y lo verifica con ed25519. No queda ningún secreto compartido: la clave que valida es el
+pubkey del que envía, leído de la instrucción `deposit` y no del body del request. En concreto: el
+schema del facilitator ahora exige `popSignature`
+([`solana-sponsor.ts`](https://github.com/ferrosasfp/wasiai-facilitator/blob/main/src/routes/solana-sponsor.ts)),
+un request con el viejo `popProof` recibe un 400 sin que se firme nada, el cliente manda `popSignature`
+en el `settle()` (`src/application/use-cases/confirm-and-send.ts`), y la ruta que reenvía
+(`app/api/settle/solana-sponsor/route.ts`) corta con 400 si falta o viene deforme, antes de gastar el
+forward. Ese reemplazo es esta rama, no trabajo abierto.
+
+Lo que sí queda abierto en esta pata es la vuelta completa desde el navegador (la W7 de arriba) y una
+pieza de configuración: el facilitator necesita `SOLANA_SPONSOR_NETWORK_ID` seteada, y mientras no lo
+esté rechaza todo pedido de patrocinio. El orden en que se despliegan los dos repos no importa, porque
+el camino hoy está muerto en las dos direcciones: un cliente viejo manda `popProof` y se lleva un 400
+sin que se firme nada, y un cliente nuevo manda una firma que el servidor viejo ignora y muere en el
+mismo 400.
 
 **El release corre, pero nada decide cuándo correrlo.** La instrucción está implementada, restringida y
 probada on chain, como muestra la tabla de arriba. Lo que no existe, en ninguno de los tres repos, es un

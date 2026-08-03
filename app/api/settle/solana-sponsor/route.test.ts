@@ -11,11 +11,18 @@ const { getLedgerMock } = vi.hoisted(() => ({ getLedgerMock: vi.fn(() => null as
 vi.mock("../../../../src/infrastructure/persistence/supabase-settlement-ledger", () => ({
   getSettlementLedger: getLedgerMock,
 }));
-import { FakeSettlementLedger, FAKE_SOLANA_BENEFICIARY, FAKE_SOLANA_REFERENCE, FAKE_SOLANA_SIGNATURE } from "../../../../src/test-support/fakes";
+import {
+  FakeSettlementLedger,
+  FAKE_SOLANA_BENEFICIARY,
+  FAKE_SOLANA_POP_SIGNATURE,
+  FAKE_SOLANA_REFERENCE,
+  FAKE_SOLANA_SIGNATURE,
+} from "../../../../src/test-support/fakes";
 import { POST } from "./route";
 
 const SENDER = FAKE_SOLANA_BENEFICIARY; // base58 devnet (44 chars)
 const REFERENCE = FAKE_SOLANA_REFERENCE; // base58 (43 chars)
+const POP_SIGNATURE = FAKE_SOLANA_POP_SIGNATURE; // base58 de 64 bytes (SDD 037)
 const API_KEY = "sol-secret-key-123";
 const BASE = "https://facilitator.test";
 
@@ -64,6 +71,7 @@ function body(over: Record<string, unknown> = {}) {
     reference: REFERENCE,
     sender: SENDER,
     remittanceId: "rem-sol-1",
+    popSignature: POP_SIGNATURE,
     ...over,
   };
 }
@@ -162,6 +170,14 @@ describe("POST /api/settle/solana-sponsor (HU-SOL-13)", () => {
       { remittanceId: "" },
       { remittanceId: "   " },
       { remittanceId: 42 },
+      // SDD 037 — el popSignature es obligatorio y con forma verificada: sin él, o con un largo que
+      // no es el de una firma ed25519, se corta acá sin gastar el forward ni el Bearer.
+      { popSignature: undefined },
+      { popSignature: null },
+      { popSignature: 42 },
+      { popSignature: "" },
+      { popSignature: "0OIl-no-base58-0OIl-0OIl-0OIl-0OIl-0OIl-0OIl-0OIl-0OIl-0OIl-0OIl-0OIl-0OIl-0OIl-0OIl-0OI" },
+      { popSignature: SENDER }, // un pubkey base58 valido, pero de 43-44 chars: NO es una firma
     ];
     for (const over of cases) {
       const res = await POST(req(body(over)));
@@ -174,7 +190,7 @@ describe("POST /api/settle/solana-sponsor (HU-SOL-13)", () => {
   // ── (d) el Bearer se inyecta SERVER-SIDE; el secreto NUNCA se expone al cliente ──
   it("AC-1/CD-6: el forward al facilitador lleva Authorization Bearer (server-side) al endpoint /solana/sponsor", async () => {
     facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
-    await POST(req(body({ popProof: "pop-proof-xyz" })));
+    await POST(req(body()));
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe(`${BASE}/solana/sponsor`);
@@ -185,7 +201,7 @@ describe("POST /api/settle/solana-sponsor (HU-SOL-13)", () => {
     expect(sent.reference).toBe(REFERENCE);
     expect(sent.sender).toBe(SENDER);
     expect(sent.remittanceId).toBe("rem-sol-1");
-    expect(sent.popProof).toBe("pop-proof-xyz");
+    expect(sent.popSignature).toBe(POP_SIGNATURE);
   });
 
   it("CD-6/CD-12: 200 OK ⇒ devuelve SOLO la signature; la API key y la base URL NUNCA se ecoan al cliente", async () => {
@@ -209,6 +225,10 @@ describe("POST /api/settle/solana-sponsor (HU-SOL-13)", () => {
       [409, 502, "solana_settle_broadcast_failed"],
       [502, 502, "solana_settle_broadcast_failed"],
       [500, 503, "solana_settle_unavailable"],
+      // SDD 037 — el 403 del facilitator se propaga como 403 con enum PROPIO. Antes caía en el
+      // `else` de abajo y salía como 503 `unavailable`, que le decía a la persona "el servicio no
+      // está" cuando lo que pasó es que su firma no autoriza esa transacción.
+      [403, 403, "solana_settle_sender_proof_invalid"],
     ];
     for (const [upstream, expected, error] of map) {
       facilitatorResponds(upstream, { message: "internal facilitator detail LEAK" });
@@ -218,6 +238,16 @@ describe("POST /api/settle/solana-sponsor (HU-SOL-13)", () => {
       expect(json).toEqual({ error });
       expect(JSON.stringify(json)).not.toContain("LEAK");
     }
+  });
+
+  it("★ SDD 037: el 403 del facilitador NO se confunde con una indisponibilidad", async () => {
+    facilitatorResponds(403, {
+      error: { code: "SPONSOR_SENDER_PROOF_INVALID", message: "sender signature does not authorize this transaction" },
+    });
+    const res = await POST(req(body()));
+    // El enum PRIMERO: si esto muriera en "expected 503 to be 403", quien rompa el mapeo no ve qué rompió.
+    expect(await res.json()).toEqual({ error: "solana_settle_sender_proof_invalid" });
+    expect(res.status).toBe(403);
   });
 
   it("fail-closed: fetch throw/timeout ⇒ 503 solana_settle_unavailable (nunca un 500 crudo)", async () => {

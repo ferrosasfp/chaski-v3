@@ -113,6 +113,7 @@ function firstIx(tx: Transaction) {
 
 describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
   let signSpy: ReturnType<typeof vi.fn>;
+  let signMessageSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     vi.stubEnv("NEXT_PUBLIC_SOLANA_USDC_MINT", MINT_B58);
@@ -126,8 +127,21 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     vi.spyOn(Connection.prototype, "sendRawTransaction").mockResolvedValue("sig-never" as never);
     vi.spyOn(Connection.prototype, "sendTransaction").mockResolvedValue("sig-never" as never);
     // Bridge signTransaction fake — partial-sign SÓLO wallet: devuelve la MISMA tx (AC-2).
-    signSpy = vi.fn(async (tx: unknown) => tx);
+    //
+    // ⚠️ SDD 037: este fake antes devolvía la tx SIN firmarla, o sea que simulaba una wallet que
+    // dice "listo" y no firma nada. Nadie lo notaba porque nada leía la firma. Ahora el adapter la
+    // necesita para armar la línea `tx:` del mensaje canónico, así que el fake firma DE VERDAD con
+    // SENDER_KP. El test dejó de aceptar una wallet que no hace su trabajo.
+    signSpy = vi.fn(async (tx: unknown) => {
+      (tx as Transaction).partialSign(SENDER_KP);
+      return tx;
+    });
     solanaWalletBridge.registerSignTransaction(signSpy);
+    // SDD 037 — SEGUNDO prompt: la wallet firma además el mensaje canónico (ed25519 real).
+    signMessageSpy = vi.fn(async (bytes: Uint8Array) =>
+      nacl.sign.detached(bytes, SENDER_KP.secretKey),
+    );
+    solanaWalletBridge.registerSignMessage(signMessageSpy);
   });
 
   afterEach(() => {
@@ -164,6 +178,73 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     expect(keyStrs).toContain(vault.toBase58()); // vault ATA
     expect(keyStrs).toContain(senderAta.toBase58()); // sender_ata
     expect(keyStrs).toContain(SENDER_B58); // sender (signer)
+  });
+
+  // ── SDD 037 — Guard B: el SEGUNDO prompt de billetera ──────────────────────────────────────────
+  //
+  // La persona firma la transacción y DESPUÉS un texto que dice qué autoriza. Son dos preguntas
+  // distintas: la primera prueba posesión de la llave, la segunda prueba consentimiento sobre este
+  // monto, este token y esta red. Sin la segunda, una firma de transacción capturada alcanza para
+  // pedirle al facilitator que patrocine cualquier cosa.
+  it("★ SDD 037: signMessage se llama UNA vez, con el mensaje canónico EXACTO", async () => {
+    const adapter = await connectedAdapter();
+    const rid = "rem-037";
+    const quote = makeQuote();
+    await adapter.authorizePrincipal(quote, rid, escrowDeposit());
+
+    expect(signMessageSpy).toHaveBeenCalledTimes(1);
+
+    // El mensaje esperado se reconstruye acá A MANO, línea por línea, NUNCA llamando al builder
+    // (CD-9): un assert contra el builder se movería junto con el mutante y pasaría siempre.
+    const signedTx = capturedTx(signSpy);
+    const senderSig = signedTx.signatures.find((s) => s.publicKey.equals(SENDER_KP.publicKey))
+      ?.signature;
+    expect(senderSig).toBeTruthy();
+    const expectedMessage =
+      "WasiAI Sponsor Request v1\n" +
+      `sender: ${SENDER_B58}\n` +
+      "network: solana:devnet\n" +
+      `remittance: ${rid}\n` +
+      `amount: ${String(quote.send.minor)}\n` +
+      `mint: ${MINT_B58}\n` +
+      `tx: ${bs58.encode(new Uint8Array(senderSig as Uint8Array))}`;
+
+    const sentBytes = signMessageSpy.mock.calls[0]?.[0] as Uint8Array;
+    expect(new TextDecoder().decode(sentBytes)).toBe(expectedMessage);
+  });
+
+  it("★ SDD 037: el envelope trae popSignature, y es una firma REAL del sender sobre ese mensaje", async () => {
+    const adapter = await connectedAdapter();
+    const rid = "rem-037-envelope";
+    const quote = makeQuote();
+    const res = await adapter.authorizePrincipal(quote, rid, escrowDeposit());
+
+    const popSignature = res.solana?.popSignature;
+    expect(typeof popSignature).toBe("string");
+    expect(bs58.decode(popSignature as string)).toHaveLength(64);
+
+    // Verificación de punta a punta: la firma que sale del envelope valida contra el pubkey del
+    // sender y contra los bytes que efectivamente se le pidió firmar. Es lo que el facilitator hace.
+    const sentBytes = signMessageSpy.mock.calls[0]?.[0] as Uint8Array;
+    expect(
+      nacl.sign.detached.verify(
+        sentBytes,
+        bs58.decode(popSignature as string),
+        SENDER_KP.publicKey.toBytes(),
+      ),
+    ).toBe(true);
+  });
+
+  it("★ SDD 037: si la wallet devuelve la tx SIN firmar, corta fail-loud y NO pide el segundo prompt", async () => {
+    // Una wallet que dice "listo" sin firmar no puede producir un patrocinio: seguir armaría un
+    // mensaje con la línea `tx` vacía, le pediría a la persona un segundo prompt inútil y el
+    // servidor lo rechazaría igual. Mejor cortar acá y decir por qué.
+    signSpy.mockImplementation(async (tx: unknown) => tx); // no firma
+    const adapter = await connectedAdapter();
+    await expect(
+      adapter.authorizePrincipal(makeQuote(), "rem-037-nosig", escrowDeposit()),
+    ).rejects.toThrow("sender_signature_missing");
+    expect(signMessageSpy).not.toHaveBeenCalled();
   });
 
   it("AC-2/CD-SDD-5: feePayer = facilitator; firma SÓLO la wallet (bridge) 1×", async () => {

@@ -50,6 +50,11 @@ const SETTLE_REASONS_BEFORE_BROADCAST: readonly SolanaSettlementFailureReason[] 
   "solana_settle_rate_limited",
   "solana_settle_beneficiary_mismatch",
   "solana_settle_beneficiary_unconfirmed",
+  // SDD 037 — el 403 del facilitator sale de sus guards de autorización, que corren ANTES de
+  // resolver la key del feePayer, antes de reservar cap diario y antes de `cosignAndBroadcast`.
+  // La transacción no salió, y eso sí se puede afirmar. Fuera de esta lista, cada firma rechazada
+  // dispararía una consulta a la cadena para preguntar por una tx que nunca se transmitió.
+  "solana_settle_sender_proof_invalid",
 ];
 
 /**
@@ -262,6 +267,7 @@ export class ConfirmAndSend {
         reference: solana.reference,
         sender: address ?? "",
         remittanceId: s.id,
+        popSignature: solana.popSignature,
       });
     } catch {
       await this.failAfterBroadcast(r, "solana_settle_unavailable", s.id, address ?? "");

@@ -65,7 +65,13 @@ class SolanaWalletBridge {
     return this.signTxHandle(tx);
   }
 
-  /** HU-SOL-8: registrado por el sync component (captura useWallet().signMessage). */
+  /** HU-SOL-8: lo registra el sync component (captura `useWallet().signMessage`).
+   *  Esta frase decía exactamente lo mismo que la de `registerSignTransaction` de arriba, sin la
+   *  advertencia y sin ningún test que la respaldara — y se midió que era igual de barata: borrando
+   *  el efecto de `solana-providers.tsx` la suite quedaba 915/915 verde y `npm run qa` en exit 0.
+   *  Ahora hay un test que monta el árbol REAL y no registra nada a mano
+   *  (`solana-providers.test.tsx`, T-SIGN-3/4). Si volvés a leer esta frase, no le creas: mirá ese
+   *  test. */
   registerSignMessage(fn: SignMessageFn): void {
     this.signMsgHandle = fn;
   }

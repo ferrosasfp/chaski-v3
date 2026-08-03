@@ -133,10 +133,18 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // PR6 — proof-of-possession (WKH-206/HU-SOL-8). OBLIGATORIO: sin PAYOUT_POP_SECRET → 503 fail-closed
-  // (NUNCA skip), nunca opt-in. Stateless a propósito: el nonce NO se quema en este repo, así que el
-  // anti-replay del PoP dentro de su TTL (10 min, pop-challenge.ts) es responsabilidad del
-  // facilitator, que es quien exige y verifica el popProof. Chaski NO tiene ese control.
-  // Residual R-3: restituir el single-use acá = HU aparte.
+  // (NUNCA skip), nunca opt-in. Stateless a propósito: el nonce NO se quema en este repo.
+  //
+  // ⚠️ QUÉ SIGNIFICA ESO, sin adornos (corregido por SDD 037). Acá decía que el anti-replay dentro
+  // del TTL "es responsabilidad del facilitator, que es quien exige y verifica la prueba". Eso era
+  // falso por dos motivos: aquella prueba HMAC del facilitator pertenecía al leg de PATROCINIO, no
+  // a este, y además ya no existe (la reemplazó una firma ed25519 sin secreto compartido). El
+  // facilitator nunca vio este challenge ni puede quemar este nonce.
+  //
+  // Lo cierto es que NADIE quema el nonce: dentro de los 10 minutos de TTL (pop-challenge.ts) un
+  // par (challenge, firma) capturado se puede reenviar a esta ruta. El input que lo demuestra:
+  // repetir el mismo request dos veces dentro de la ventana — las dos pasan. Residual R-3;
+  // restituir el single-use acá es una HU aparte.
   // Cualquier fallo cripto → 403 opaco (CD-4, no-oracle).
   const POP_SECRET = process.env.PAYOUT_POP_SECRET; // CD-14: dentro del handler
   // CD-2 / AC-3: OBLIGATORIO. Sin secreto → 503 fail-closed (NUNCA skip).

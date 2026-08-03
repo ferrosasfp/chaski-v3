@@ -2,8 +2,12 @@
 // caller pide un challenge para SU address; el server lo firma (HMAC PAYOUT_POP_SECRET, server-only
 // SIN NEXT_PUBLIC_ — CD-8) con un nonce + expiración + network-id CAIP-2, y devuelve el popMessage
 // que la wallet debe firmar VERBATIM.
-// El nonce NO se quema (DT-5): el anti-replay dentro del TTL es responsabilidad del facilitator, que
-// es quien exige y verifica el popProof. Residual R-3 documentado.
+// El nonce NO se quema (DT-5). Acá decía que el anti-replay dentro del TTL "es responsabilidad del
+// facilitator, que es quien exige y verifica la prueba": es falso, y el SDD 037 lo corrige. Aquella
+// prueba pertenecía al leg de PATROCINIO (otro mecanismo, otro dominio de mensaje) y además fue
+// borrada. El facilitator nunca ve ESTE challenge y no puede quemar ESTE nonce. Lo cierto: nadie lo
+// quema, así que dentro del TTL de 10 minutos un par (challenge, firma) capturado se puede reenviar.
+// Residual R-3 documentado.
 //
 // TODO defensivo: NUNCA 500 crudo. Sin secreto → 501 (no configurado, skip total del mecanismo).
 // address malformada / body no-record → 400. NO fetchea Didit, NO lee estado KYC, NO escribe Upstash.

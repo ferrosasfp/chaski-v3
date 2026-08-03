@@ -61,11 +61,22 @@ function mapErrorReason(status: number, error: unknown): SolanaSettlementFailure
       case "solana_settle_beneficiary_unregistered":
       case "solana_settle_deposit_unreadable":
         return "solana_settle_beneficiary_unconfirmed";
+      // SDD 037 — el facilitator no reconoció la firma como autorización de esta tx. Reason PROPIO
+      // y NO `unavailable`: un rechazo no es una indisponibilidad. Reintentar con la misma tx da
+      // siempre lo mismo, así que tratarlo como "el servicio no está" mandaría a la persona a
+      // esperar por algo que no va a cambiar solo.
+      case "solana_settle_sender_proof_invalid":
+        return "solana_settle_sender_proof_invalid";
       // enum NUEVO / desconocido cae abajo: bloquea igual.
       default:
         break;
     }
   }
+  // SDD 037 — el 403 sale de los guards del facilitator, que corren antes de firmar y antes de
+  // reservar cap. Va ANTES del `unavailable` del final a propósito: sin esta rama, un 403 sin enum
+  // reconocible caería al bucket indeterminado y dispararía una consulta a la cadena por una tx que
+  // nunca se transmitió.
+  if (status === 403) return "solana_settle_sender_proof_invalid";
   if (status === 422) return "solana_settle_rejected"; // CR-1 del deposit rechazó
   if (status === 429) return "solana_settle_rate_limited";
   // 400/501: nuestra propia route cortó ANTES de reenviar (request inválido / settlement apagado).
@@ -90,7 +101,7 @@ export class HttpSolanaSettlementGateway implements SolanaSettlementGateway {
     reference: string;
     sender: string;
     remittanceId: string;
-    popProof?: string;
+    popSignature: string;
   }): Promise<
     | { ok: true; signature: string }
     | { ok: false; reason: SolanaSettlementFailureReason }
@@ -105,9 +116,9 @@ export class HttpSolanaSettlementGateway implements SolanaSettlementGateway {
           reference: input.reference,
           sender: input.sender,
           remittanceId: input.remittanceId, // server-only, trazabilidad
-          // popProof: undefined ⇒ JSON.stringify lo omite. La provisión real del PoP (HU-SOL-8) y su
-          // wire-format son founder-gated ([NC-2]); en unit-test se mockea.
-          popProof: input.popProof,
+          // SDD 037 — va SIEMPRE, ya no condicional: es la firma del mensaje que la persona leyó y
+          // aprobó. Si falta, la route corta con 400 y el facilitator con 403.
+          popSignature: input.popSignature,
         }),
       });
     } catch {

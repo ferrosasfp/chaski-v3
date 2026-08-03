@@ -26,9 +26,11 @@ import type {
 } from "../application/ports";
 import type { Quote } from "../domain/remittance";
 import { isParseableIso } from "../domain/remittance";
+import { buildSponsorPopMessage } from "./auth/sponsor-pop-message";
 import {
   resolveSolanaFacilitatorPubkey,
   resolveSolanaNetworkConfig,
+  resolveSolanaNetworkId,
   resolveSolanaRpcUrlPublic,
   resolveSolanaUsdcMint,
 } from "./chain";
@@ -284,9 +286,42 @@ export class SolanaWalletAdapter implements WalletPort, SolanaEscrowDepositProbe
       .toString("base64");
     // AC-3/CD-SDD-1: NUNCA connection.sendRawTransaction / sendTransaction acá.
 
+    // ── SDD 037 — SEGUNDO prompt de billetera (Guard B) ────────────────────────────────────────
+    // La persona ya firmó la transacción; ahora firma un TEXTO que dice, en palabras, qué está
+    // autorizando. No es redundante: la firma de la transacción prueba posesión de la llave, este
+    // mensaje prueba consentimiento sobre ESTE depósito y ESTE momento. Sin él, una firma de
+    // transacción capturada alcanza para que un tercero pida el patrocinio de un depósito que
+    // nunca autorizó. PROHIBIDO fusionarlo con el prompt anterior: son dos preguntas distintas.
+    //
+    // Lo que este mensaje NO agrega, para que nadie le atribuya de más (CR MNR-1): no defiende el
+    // monto ni el token. Los dos viven adentro de los bytes que la wallet ya firmó, así que
+    // cambiarlos rompe la firma de la TRANSACCIÓN y lo corta Guard A del lado del facilitator, con
+    // Guard B caído o no. Ver `sponsor-pop-message.ts` para el detalle medido.
+    const senderSigEntry = signed.signatures.find((s) => s.publicKey.equals(senderPk));
+    const senderSigBytes = senderSigEntry?.signature;
+    if (!senderSigBytes) {
+      // Fail-loud, coherente con los guards de arriba: sin la firma de la wallet no hay nada que
+      // autorizar, y seguir armaría un mensaje con la línea `tx` vacía que el servidor va a rechazar.
+      throw new Error("sender_signature_missing");
+    }
+    const popMessage = buildSponsorPopMessage({
+      sender: senderPk.toBase58(),
+      networkId: resolveSolanaNetworkId(),
+      remittanceId,
+      amountMinor: String(quote.send.minor),
+      mint: mintPk.toBase58(),
+      txSignatureB58: bs58.encode(new Uint8Array(senderSigBytes)),
+    });
+    const popSignature = await this.signMessage(popMessage);
+
     return {
       tx: serialized,
-      solana: { vm: "solana", partialSignedTx: serialized, reference: reference.toBase58() },
+      solana: {
+        vm: "solana",
+        partialSignedTx: serialized,
+        reference: reference.toBase58(),
+        popSignature,
+      },
     };
   }
 

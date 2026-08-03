@@ -6,6 +6,7 @@
 // constante escrita dos veces. Si el escritor cambia el orden de los args de la ix, o cambia el IDL,
 // o pasa a tx versionada, este archivo se pone rojo.
 import { Connection, Keypair, PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
+import nacl from "tweetnacl";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Money } from "../../domain/money";
 import type { Quote } from "../../domain/remittance";
@@ -37,7 +38,16 @@ function quote(): Quote {
 /** La tx REAL que arma la wallet de producción, serializada como la manda el cliente. */
 async function realDepositTx(beneficiary: string): Promise<string> {
   solanaWalletBridge.setState({ publicKey: SENDER_KP.publicKey.toBase58(), connected: true });
-  solanaWalletBridge.registerSignTransaction(async (tx: unknown) => tx);
+  // SDD 037 — la wallet fake firma DE VERDAD: el adapter necesita la firma de la tx para armar el
+  // mensaje canónico del segundo prompt. Antes devolvía la tx sin tocar, o sea que este test corría
+  // contra una wallet que decía "listo" sin firmar nada.
+  solanaWalletBridge.registerSignTransaction(async (tx: unknown) => {
+    (tx as Transaction).partialSign(SENDER_KP);
+    return tx;
+  });
+  solanaWalletBridge.registerSignMessage(async (bytes: Uint8Array) =>
+    nacl.sign.detached(bytes, SENDER_KP.secretKey),
+  );
   const adapter = new SolanaWalletAdapter();
   await adapter.connect();
   const res = await adapter.authorizePrincipal(quote(), "rem-read-1", {

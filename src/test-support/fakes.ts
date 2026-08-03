@@ -691,6 +691,10 @@ export const FAKE_SOLANA_BENEFICIARY = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJD
 export const FAKE_SOLANA_AUTHORITY = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"; // base58 (release-authority)
 export const FAKE_SOLANA_SIGNATURE = bs58.encode(new Uint8Array(64).fill(7)); // signature base58 válida (64 bytes)
 export const FAKE_SOLANA_REFERENCE = "So11111111111111111111111111111111111111112"; // base58 reference
+// SDD 037 — popSignature sintético: base58 de 64 bytes, el largo REAL de una firma ed25519. Se usa el
+// mismo criterio que FAKE_SOLANA_SIGNATURE (bs58 de 64 bytes) y no un string corto, porque la ruta
+// valida el largo (86-88 chars) y un fake más corto haría pasar tests contra un 400 imposible en prod.
+export const FAKE_SOLANA_POP_SIGNATURE = bs58.encode(new Uint8Array(64).fill(9));
 
 // FakeSolanaWallet — WalletPort cuya authorizePrincipal devuelve el envelope `solana` (HU-SOL-5), para
 // probar el money-path de ConfirmAndSend sin @solana/web3.js. Registra el 3er arg `deposit` recibido:
@@ -707,6 +711,7 @@ export class FakeSolanaWallet implements WalletPort {
     vm: "solana",
     partialSignedTx: "AQID", // base64 sintético
     reference: FAKE_SOLANA_REFERENCE,
+    popSignature: FAKE_SOLANA_POP_SIGNATURE,
   }) {
     this.solana = solana;
   }
@@ -795,7 +800,7 @@ export class FakeSolanaSettlementGateway implements SolanaSettlementGateway {
     reference: string;
     sender: string;
     remittanceId: string;
-    popProof?: string;
+    popSignature: string;
   }> = [];
   constructor(
     private readonly result: FakeSolanaSettleResult = { ok: true, signature: FAKE_SOLANA_SIGNATURE },
@@ -806,7 +811,7 @@ export class FakeSolanaSettlementGateway implements SolanaSettlementGateway {
     reference: string;
     sender: string;
     remittanceId: string;
-    popProof?: string;
+    popSignature: string;
   }): Promise<FakeSolanaSettleResult> {
     this.calls.push(input);
     if (this.mode === "reject") throw new Error("solana_settle_boom");

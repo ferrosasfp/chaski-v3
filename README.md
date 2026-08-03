@@ -71,23 +71,36 @@ false, so it is not said here.
 **The deposit is the strongest piece, and the caveat matters.** The instruction lands on chain, the
 sender's wallet is the only signer of the transfer, and a sponsoring fee payer covers the fees so the
 user never needs SOL. What the signature above proves is that this works when the smoke script drives
-it. From the browser it does not land today, for the reason in the next paragraph: the wallet only
-partial signs, and the deposit does not exist on chain until somebody broadcasts it.
+it. Whether it lands from a browser is **not verified yet**: the protocol blocker described in the next
+paragraph was removed, but nobody has driven the round trip with a real wallet extension. That test is
+W7 of SDD 037 and it is still pending, so the honest statement is "unverified", not "it works" and not
+"it does not work".
 
-**The confirmation from the browser does not complete the broadcast.** The first half of this was
-fixed: the client now signs a proof of possession before asking the server to create the payout order,
-so the flow no longer dies before the wallet is ever prompted. The second half is still cut, and it is
-the same transaction as the deposit, which is why the two are one problem and not two. To broadcast it,
-the facilitator requires a `popProof` that is mandatory in its schema
-([`solana-sponsor.ts:59`](https://github.com/ferrosasfp/wasiai-facilitator/blob/main/src/routes/solana-sponsor.ts))
-and is an HMAC over a secret shared between servers. Chaski's client path does not compute it: the call
-at `src/application/use-cases/confirm-and-send.ts:156-161` sends four fields and `popProof` is not one
-of them, and the forwarding route only passes it along if it arrived
-(`app/api/settle/solana-sponsor/route.ts:57`). The reason it cannot simply be added is the interesting
-part: a browser cannot hold a server to server shared secret without leaking it. So the fix is a change
-of protocol rather than a missing line, replacing that HMAC with a signature from the same wallet that
-is already signing the deposit one step earlier. That replacement is the open work on this leg, and it
-is not in this branch.
+**The blocker on the confirmation leg was a shared secret, and it is gone.** The first half was fixed
+earlier: the client signs a proof of possession before asking the server to create the payout order, so
+the flow no longer dies before the wallet is ever prompted. The second half was the broadcast of the
+deposit, and it was blocked by design rather than by a missing line: the facilitator authorized
+sponsorship with an HMAC over a secret shared between servers, and a browser cannot hold a server to
+server secret without leaking it. Whoever held that secret could also mint a valid proof for any
+wallet, which is the worse half of the same problem.
+
+SDD 037 replaced that HMAC with a signature from the wallet itself. The person signs a readable message
+that names the remittance, the amount, the token and the network, plus the signature of the very
+transaction being sponsored; the facilitator rebuilds that message line by line from the transaction
+and its own configuration, and verifies it with ed25519. There is no shared secret left: the key that
+validates is the sender's own public key, read out of the deposit instruction rather than out of the
+request body. Concretely, the facilitator's schema now requires `popSignature`
+([`solana-sponsor.ts`](https://github.com/ferrosasfp/wasiai-facilitator/blob/main/src/routes/solana-sponsor.ts)),
+a request carrying the old `popProof` gets a 400 with nothing signed, the client sends `popSignature`
+in `settle()` (`src/application/use-cases/confirm-and-send.ts`), and the forwarding route
+(`app/api/settle/solana-sponsor/route.ts`) rejects a missing or malformed one with a 400 before
+spending the forward. That replacement is this branch, not open work.
+
+What stays open on this leg is the browser round trip itself (W7 above), and one piece of configuration:
+the facilitator needs `SOLANA_SPONSOR_NETWORK_ID` set, and while it is unset every sponsorship request
+is refused. The order in which the two repos deploy does not matter, because the path is dead today in
+either direction: an old client sends `popProof` and gets a 400 without anything being signed, and a new
+client sends a signature to a server that ignores it and dies on the same 400.
 
 **The release runs, but nothing decides when to run it.** The instruction is implemented, constrained
 and proven on chain, as the table above shows. What does not exist, in any of the three repos, is a

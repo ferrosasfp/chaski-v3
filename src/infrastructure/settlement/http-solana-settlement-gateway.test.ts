@@ -5,11 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpSolanaSettlementGateway } from "./http-solana-settlement-gateway";
 
 const SIGNATURE = bs58.encode(new Uint8Array(64).fill(7)); // signature base58 válida (64 bytes)
+const POP_SIGNATURE = bs58.encode(new Uint8Array(64).fill(9)); // firma ed25519 base58 (64 bytes)
 const input = {
   partialSignedTx: "AQIDBAU=", // base64
   reference: "So11111111111111111111111111111111111111112", // base58
   sender: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", // base58
   remittanceId: "rem-1",
+  popSignature: POP_SIGNATURE,
 };
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -38,6 +40,29 @@ describe("HttpSolanaSettlementGateway (HU-SOL-13)", () => {
     expect(sent.partialSignedTx).toBe(input.partialSignedTx);
     expect(sent.reference).toBe(input.reference);
     expect(sent.remittanceId).toBe("rem-1");
+    // SDD 037 — la firma del mensaje canónico viaja SIEMPRE. Sin ella el facilitator responde 403.
+    expect(sent.popSignature).toBe(POP_SIGNATURE);
+  });
+
+  // ── T-C1 (M13) — un rechazo NO es una indisponibilidad ──────────────────────────────────────────
+  // El mutante que este test mata es "dejar el 403 como estaba", o sea cayendo al `unavailable` del
+  // final del mapa. La diferencia importa aguas arriba: `unavailable` manda a preguntarle a la cadena
+  // por una transacción que nunca se transmitió, y le dice a la persona "el servicio no está" cuando
+  // lo que pasó es que su firma no autoriza esa transacción, y reintentar va a fallar igual.
+  it("★ T-C1: el 403 del facilitator ⇒ solana_settle_sender_proof_invalid, NO solana_settle_unavailable", async () => {
+    responds(403, { error: "solana_settle_sender_proof_invalid" });
+    const r = await new HttpSolanaSettlementGateway().settle(input);
+    // El enum PRIMERO: si el test muriera en "expected 503 to be 403", quien rompa el guard no ve qué rompió.
+    expect(r).toEqual({ ok: false, reason: "solana_settle_sender_proof_invalid" });
+    expect(r).not.toEqual({ ok: false, reason: "solana_settle_unavailable" });
+  });
+
+  it("★ T-C1b: un 403 SIN enum reconocible también cae en el reason propio, no en unavailable", async () => {
+    // Cubre el caso en que un intermediario devuelve 403 con un cuerpo que no es nuestro enum: el
+    // status por sí solo ya prueba que el facilitator cortó antes de transmitir.
+    responds(403, {});
+    const r = await new HttpSolanaSettlementGateway().settle(input);
+    expect(r).toEqual({ ok: false, reason: "solana_settle_sender_proof_invalid" });
   });
 
   it("mapea 422/429/409/502/503 a su SolanaSettlementFailureReason (fail-closed)", async () => {

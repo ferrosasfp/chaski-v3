@@ -420,20 +420,38 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     expect(priceIx.data.readBigUInt64LE(1)).toBe(10_000n);
   });
 
-  it("T3 (AC-1/AC-3, CD-1): las 3 ix ya estaban puestas cuando la billetera firmó", async () => {
+  it("T3 (AC-1/AC-3, CD-1): las 3 ix ya estaban puestas EN EL MOMENTO en que la billetera firmó", async () => {
+    // El spy del beforeEach guarda la REFERENCIA de la tx, y el adapter la sigue teniendo en la mano:
+    // cualquier assert sobre `capturedTx(signSpy)` mide el estado FINAL, no el estado al firmar. Un
+    // adapter que agregara las ComputeBudget después de `signTransaction` pasaría ese assert igual
+    // (comprobado: el mutante M3 lo sobrevivía). Por eso acá se toma una FOTO de la lista de
+    // instrucciones dentro del propio callback, antes de firmar.
+    let snapshot: Array<{ programId: string; kind: number }> = [];
+    const snapshotSpy = vi.fn(async (tx: unknown) => {
+      const t = tx as Transaction;
+      snapshot = t.instructions.map((i) => ({
+        programId: i.programId.toBase58(),
+        kind: i.data.readUInt8(0),
+      }));
+      t.partialSign(SENDER_KP); // el fake sigue firmando de verdad (CD-9)
+      return tx;
+    });
+    solanaWalletBridge.registerSignTransaction(snapshotSpy);
+
     const adapter = await connectedAdapter();
     await adapter.authorizePrincipal(makeQuote(), "rem-cb-antes", escrowDeposit());
 
-    // La tx que se le pasó a signTransaction es la MISMA referencia que el adapter siguió usando, así
-    // que "estaba" se mide sobre el objeto capturado en el momento de la llamada: si el adapter
-    // agregara una ix después de firmar, este assert seguiría verde y por eso T4 mide la firma.
-    expect(signSpy).toHaveBeenCalledTimes(1);
-    const tx = capturedTx(signSpy);
-    expect(tx.instructions).toHaveLength(3);
-    expect(
-      tx.instructions.filter((i) => i.programId.equals(ComputeBudgetProgram.programId)),
-    ).toHaveLength(2);
-    expect(depositIx(tx).programId.toBase58()).toBe(ESCROW_PROGRAM_ID);
+    expect(snapshotSpy).toHaveBeenCalledTimes(1);
+    expect(snapshot).toHaveLength(3);
+    expect(snapshot[0]).toEqual({
+      programId: ComputeBudgetProgram.programId.toBase58(),
+      kind: CB_SET_LIMIT,
+    });
+    expect(snapshot[1]).toEqual({
+      programId: ComputeBudgetProgram.programId.toBase58(),
+      kind: CB_SET_PRICE,
+    });
+    expect(snapshot[2]?.programId).toBe(ESCROW_PROGRAM_ID);
   });
 
   it("T4 (AC-3): agregar una ix DESPUÉS de firmar invalida la firma del sender", async () => {

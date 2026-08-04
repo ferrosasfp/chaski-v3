@@ -25,6 +25,9 @@ const h = vi.hoisted(() => ({
     connecting: false,
     signMessage: undefined as ((m: Uint8Array) => Promise<Uint8Array>) | undefined,
     signTransaction: undefined as ((t: unknown) => Promise<unknown>) | undefined,
+    // La lista viva de adapters que expone `useWallet()`. Vacía por defecto: estos tests son sobre la
+    // carrera del modal y el cableado de los firmantes, no sobre la detección.
+    wallets: [] as Array<{ readyState: string }>,
   },
   modal: { visible: false, setVisible: (_v: boolean) => {} },
   /** Captura los props que SolanaProviders le pasa a WalletProvider (para probar el cableado). */
@@ -73,6 +76,7 @@ beforeEach(() => {
     connecting: false,
     signMessage: undefined,
     signTransaction: undefined,
+    wallets: [],
   };
   h.modal = { visible: false, setVisible: () => {} };
   h.walletProviderProps = {};

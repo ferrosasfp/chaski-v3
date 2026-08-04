@@ -160,7 +160,26 @@ export interface SolanaPrincipalAuthorization {
 // settlement encendido y los envs validados. Sin inyección (modo demo) estas interfaces no participan
 // y el use-case fail-closea explícitamente (DT-8) en vez de seguir de largo.
 export type SolanaSettlementFailureReason =
-  | "solana_settle_unavailable" // red caída / facilitator no configurado
+  // Bucket INDETERMINADO. Cubre la red caída del cliente, el facilitator no configurado, cualquier
+  // 5xx que no sepamos ubicar Y el timeout de 15 s del `fetch` al facilitator
+  // (app/api/settle/solana-sponsor/route.ts:156-163). Ese último es el que le fija el significado a
+  // todo el enum: es POSTERIOR al broadcast, así que de acá NO se puede afirmar que la plata no se
+  // movió. Se le pregunta a la cadena.
+  | "solana_settle_unavailable"
+  // Nuestra propia route no pudo CONSULTAR el registro de direcciones preparadas y cortó ahí mismo
+  // (503 del bloque S3.5, route.ts:126-133). Reason PROPIO, y no `unavailable`, aunque las dos
+  // frases humanas empiecen igual ("el servicio no está"): lo que los separa no es la causa, es
+  // DÓNDE se cortó. Éste sale ANTES del `fetch` al facilitator, en una rama que no forwardea, no
+  // gasta rate-limit y no escribe una fila; o sea que "la transacción no se transmitió" se lee del
+  // orden de la route, no se supone. `unavailable` incluye el timeout de ESE MISMO fetch, que es
+  // posterior y donde el depósito pudo haber entrado perfectamente.
+  //
+  // ⚠️ POR ESO NO PUEDEN COMPARTIR ENUM. Con uno solo hay que elegir un único trato para los dos, y
+  // las dos elecciones son malas: tratarlos como indeterminados hace que la app diga "no sabemos si
+  // te cobramos" de algo que sí sabe, y tratarlos como probados hace que afirme "no se movió nada"
+  // sobre una transacción que pudo haber salido. La segunda es la peligrosa, y es la que un enum
+  // compartido metido en SETTLE_REASONS_BEFORE_BROADCAST produciría.
+  | "solana_settle_ledger_unavailable"
   | "solana_settle_rejected" // CR-1 del deposit rechazó (422 SPONSOR_REJECTED)
   | "solana_settle_rate_limited" // 429
   | "solana_settle_broadcast_failed" // 409/502 (blockhash expirado / broadcast falló)

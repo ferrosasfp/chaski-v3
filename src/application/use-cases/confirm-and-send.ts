@@ -66,6 +66,32 @@ export const WALLET_ADDRESS_UNAVAILABLE = "wallet_address_unavailable";
  */
 export const SOLANA_SENDER_SOL_INSUFFICIENT = "solana_sender_sol_insufficient";
 
+/**
+ * Marca estable del 503 con el que NUESTRA route corta cuando no puede consultar el registro de
+ * direcciones preparadas (bloque S3.5, `app/api/settle/solana-sponsor/route.ts`:126-133).
+ *
+ * POR QUÉ TIENE CÓDIGO PROPIO, y no alcanzaba con el que ya había. La route emite ese 503 en la
+ * rama del `catch` de `listPreparedDepositAddresses`, que está ANTES del `fetch` al facilitator
+ * (route.ts:156): no hubo forward, no se gastó rate-limit, no se escribió una fila. La transacción
+ * nunca salió, y eso no es una suposición sino el orden del archivo. Pero el gateway HTTP lo
+ * colapsaba con `solana_settle_unavailable`, que ADEMÁS cubre el timeout de 15 s de ese mismo
+ * fetch, o sea un caso posterior al broadcast. Como no se pueden tratar igual, mandaba a la cadena:
+ * el probe no encontraba la cuenta (nunca existió), contestaba "unknown", y la pantalla terminaba
+ * en "No sabemos todavía si te cobramos… Puede que tus USDC estén en el escrow o que nunca hayan
+ * salido de tu wallet". La app decía no saber algo que sabía, sobre la plata de alguien.
+ *
+ * ⚠️ EL ARREGLO BARATO ERA PEOR QUE EL BUG. Meter `solana_settle_unavailable` en
+ * SETTLE_REASONS_BEFORE_BROADCAST arrastraría el timeout, y ahí la app afirmaría "no se movió nada"
+ * sobre una transacción que el facilitator pudo haber broadcasteado y confirmado. Equivocarse hacia
+ * "no sabemos" cuesta un diagnóstico pobre; equivocarse hacia "no salió" cuesta que alguien deje de
+ * buscar unos USDC que están en el vault.
+ *
+ * Lo que este código afirma, y nada más: la route cortó antes de reenviar. NO dice que el
+ * facilitator esté caído, ni que el destino esté mal, ni que se haya cobrado algo.
+ */
+export const SOLANA_SETTLE_LEDGER_UNAVAILABLE: SolanaSettlementFailureReason =
+  "solana_settle_ledger_unavailable";
+
 /** Reasons del settle que PRUEBAN que el depósito nunca salió hacia la cadena, porque la respuesta
  *  viene de un punto ANTERIOR al broadcast:
  *    · solana_settle_rejected (422): el facilitator se negó a esponsorear (la tx nunca tuvo firma
@@ -79,6 +105,9 @@ export const SOLANA_SENDER_SOL_INSUFFICIENT = "solana_sender_sol_insufficient";
  *      `beneficiary_mismatch` es el único de todo el catálogo que describe un ataque en curso.
  *      Sobrescribirlo con "no sabemos" o con "resolución manual" vuelve invisible al ataque en la
  *      única superficie donde queda escrito (failureReason de la remesa).
+ *    · solana_settle_ledger_unavailable (503): el MISMO guard S3.5, en su rama de "no pude
+ *      preguntarle a la DB". Sale del `catch` de route.ts:126-133, que también está antes del
+ *      `fetch`. Ver SOLANA_SETTLE_LEDGER_UNAVAILABLE para por qué necesitó reason propio.
  *  TODO LO DEMÁS es indeterminado y NO se puede leer como "no pasó": un timeout de 15 s (503), un 502,
  *  o un 200 con shape raro son compatibles con un depósito perfectamente confirmado del otro lado.
  *  Para esos se va a preguntarle a la cadena, que es la única fuente autoritativa.
@@ -86,12 +115,19 @@ export const SOLANA_SENDER_SOL_INSUFFICIENT = "solana_sender_sol_insufficient";
  *  ⚠️ REGLA PARA EL PRÓXIMO REASON QUE SE AGREGUE a SolanaSettlementFailureReason: si lo emite
  *  /api/settle/solana-sponsor ANTES de su `fetch` al facilitator, va en esta lista; si puede salir
  *  de después (o de un intermediario), NO va. El default de no estar acá es el seguro (se pregunta),
- *  pero no es gratis: cuesta el reason. */
+ *  pero no es gratis: cuesta el reason.
+ *
+ *  ⚠️ Y EL COROLARIO QUE YA SE COBRÓ UNA VEZ: la regla se aplica a un REASON, no a un status ni a
+ *  una frase. `solana_settle_unavailable` NO va acá y no puede ir nunca mientras siga siendo el
+ *  reason del timeout de 15 s, por más que uno de los casos que hoy cubre (o que cubrió) se corte
+ *  antes del forward. Cuando un reason mezcla los dos lados, lo que hay que agregar es un reason
+ *  nuevo, no una entrada más en esta lista. */
 const SETTLE_REASONS_BEFORE_BROADCAST: readonly SolanaSettlementFailureReason[] = [
   "solana_settle_rejected",
   "solana_settle_rate_limited",
   "solana_settle_beneficiary_mismatch",
   "solana_settle_beneficiary_unconfirmed",
+  SOLANA_SETTLE_LEDGER_UNAVAILABLE,
   // SDD 037 — el 403 del facilitator sale de sus guards de autorización, que corren ANTES de
   // resolver la key del feePayer, antes de reservar cap diario y antes de `cosignAndBroadcast`.
   // La transacción no salió, y eso sí se puede afirmar. Fuera de esta lista, cada firma rechazada

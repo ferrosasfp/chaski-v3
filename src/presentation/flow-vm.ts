@@ -276,6 +276,14 @@ export function humanError(code: string): string {
   // que no puede quedar desactualizado respecto de lo que el código exige.
   if (code.includes("solana_sender_sol_insufficient"))
     return `Te falta SOL en la wallet: necesitás al menos ${formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT)} SOL para crear las cuentas del escrow. La comisión de red la pagamos nosotros, pero ese depósito de las cuentas sale de tu wallet. Cargá SOL y volvé a intentar: no se movió ningún USDC.`;
+  // Nuestro servidor no pudo consultar el registro de direcciones preparadas y cortó ANTES de
+  // reenviar la transacción (route.ts:126-133, antes del fetch de la línea 156). Sin frase propia
+  // caía en el default "Algo salió mal", que no dice ni que la plata está quieta ni que reintentar
+  // sirve. Y antes de tener reason propio era peor: salía por "No sabemos todavía si te cobramos",
+  // o sea que la pantalla dudaba de algo que el código sabía con certeza.
+  // No promete un reembolso porque no hay nada que reembolsar, y nombra la única acción útil.
+  if (code.includes("solana_settle_ledger_unavailable"))
+    return "No pudimos comprobar la dirección de destino, así que cortamos el envío antes de transmitir nada: no se movió ningún USDC de tu wallet. Es una falla temporal nuestra, probá de nuevo en un rato.";
   if (code.includes("wallet_bridge_not_mounted") || code.includes("wallet_sign_not_available"))
     return "La wallet todavía no está lista. Recargá la página y probá de nuevo.";
   if (code.includes("wallet_error"))

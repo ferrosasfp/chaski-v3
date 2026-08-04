@@ -53,6 +53,7 @@ function ledgerWith(payoutId: string, status: SettlementLedgerStatus): FakeSettl
     status,
     attempts: 0,
     payoutId,
+    payoutProvenance: null, // fila vieja del ledger: la proveniencia NO consta
     lastError: null,
     createdAt: T0,
     updatedAt: T0,

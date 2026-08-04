@@ -41,6 +41,7 @@ function ledgerWithStale(n: number): FakeSettlementLedger {
       status: "principal_in",
       attempts: 0,
       payoutId: null,
+      payoutProvenance: null, // fila varada de otra época: la proveniencia NO consta
       lastError: null,
       createdAt: OLD,
       updatedAt: OLD,
@@ -201,6 +202,7 @@ describe("POST /api/admin/reconcile-orphans (WKH-207)", () => {
         chainId: 84532,
         senderAddress: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
         payoutId: `transfi-po-${i}`,
+        payoutProvenance: "transfi",
         vm: "evm",
       });
     }
@@ -287,6 +289,7 @@ describe("POST /api/admin/reconcile-orphans (WKH-207)", () => {
       chainId: 84532,
       senderAddress: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
       payoutId: "transfi-po-x",
+      payoutProvenance: "transfi",
       vm: "evm",
     });
     await ledger.recordPrincipalIn({

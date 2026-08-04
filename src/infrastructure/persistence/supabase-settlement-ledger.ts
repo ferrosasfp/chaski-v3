@@ -27,7 +27,7 @@ const TABLE = "remittance_settlements";
 
 // Columnas de la tabla en snake_case. value_minor se selecciona con ::text (CD-12).
 const SELECT_COLS =
-  "id, remittance_id, quote_id, idempotency_key, tx_hash, chain_id, sender_address, receiver_address, value_minor::text, status, attempts, payout_id, last_error, created_at, updated_at";
+  "id, remittance_id, quote_id, idempotency_key, tx_hash, chain_id, sender_address, receiver_address, value_minor::text, status, attempts, payout_id, payout_provenance, last_error, created_at, updated_at";
 
 // Estados NO-terminales candidatos a varado (AC-4). Mirror del índice parcial de la migración
 // (idx_remit_settle_stale ... where status in ('principal_in','submitted','forward_error')).
@@ -57,6 +57,23 @@ const WEBHOOK_UPDATABLE_STATUSES: readonly SettlementLedgerStatus[] = [
  *  todavía NO tiene evidencia real. Si esto se duplica, el rellenado de evidencia deja de encontrarla. */
 function preparedPlaceholderTxHash(idempotencyKey: string): string {
   return `prepared:${idempotencyKey}`;
+}
+
+/** Valor de la columna `payout_provenance` a partir de la proveniencia que declaró el agente.
+ *
+ *  Se persiste la CADENA TAL CUAL, no un booleano derivado: el dato tiene más de dos valores
+ *  ('transfi', 'devnet-stub', 'local-fallback', 'n/a', y los que traiga un proveedor futuro), y
+ *  colapsarlo en `is_simulated` sería el mismo error que este cambio arregla, más chico — la fila
+ *  volvería a no poder decir QUIÉN desembolsó, sólo una opinión nuestra sobre si contaba.
+ *
+ *  Vacío/whitespace ⇒ NULL. `""` es lo que produce la ruta cuando el agente NO declaró proveniencia
+ *  (prepare/route.ts hace `typeof ... === "string" ? ... : ""`), y guardarlo como `''` inventaría una
+ *  proveniencia llamada "cadena vacía". NULL ya significa exactamente eso en esta columna: no consta.
+ *
+ *  PROHIBIDO rellenar acá un default ('transfi', 'unknown', lo que sea): una proveniencia inventada por
+ *  el que ESCRIBE la evidencia no es evidencia. La ausencia se persiste como ausencia. */
+function provenanceColumn(declared: string): string | null {
+  return declared.trim() ? declared : null;
 }
 
 /** El `chainId` del port sigue siendo `number` (CD-11: NO se re-tipa el port ni la columna, porque
@@ -110,6 +127,9 @@ interface RawRow {
   status: SettlementLedgerStatus;
   attempts: number;
   payout_id: string | null;
+  // Migración 20260804. NULL en toda fila anterior a ella (y en las que el agente no declaró
+  // proveniencia): "no consta", NUNCA "real". Ver SettlementRecord.payoutProvenance.
+  payout_provenance: string | null;
   last_error: string | null;
   created_at: string;
   updated_at: string;
@@ -157,6 +177,12 @@ function mapRow(r: RawRow): SettlementRecord {
     status: r.status,
     attempts: r.attempts,
     payoutId: r.payout_id,
+    // Normalizado a null en vez de pasar el crudo: las filas llegan `as unknown as RawRow[]` (PostgREST
+    // no está tipado), así que un `undefined` (columna ausente porque la migración 20260804 todavía no
+    // se aplicó) se colaría con tipo `string | null` mintiendo. Y `undefined` DESAPARECE en
+    // JSON.stringify: la respuesta admin quedaría sin el campo, que se lee igual que "no lo miré".
+    // null dice "no consta" de forma explícita, que es la única lectura honesta de los dos casos.
+    payoutProvenance: typeof r.payout_provenance === "string" ? r.payout_provenance : null,
     lastError: r.last_error,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -174,6 +200,7 @@ export class SupabaseSettlementLedger implements SettlementLedger {
     chainId: number;
     senderAddress: string;
     payoutId: string;
+    payoutProvenance: string; // OBLIGATORIO (candado de compilación) — ver el port y provenanceColumn
     vm: "evm" | "solana";
   }): Promise<void> {
     // WKH-211/AC-8: registra la orden TransFi creada en prepare (ANTES del principal_in on-chain), para
@@ -185,6 +212,15 @@ export class SupabaseSettlementLedger implements SettlementLedger {
     // WKH-213: esta fila YA NO es un callejón sin salida. recordPrincipalIn se re-keyeó a
     // idempotency_key con MERGE, así que el settle COMPLETA esta misma fila (hash/monto reales →
     // 'principal_in') en vez de intentar insertar una nueva y morir contra uq_remit_settle_idem.
+    //
+    // payout_provenance (migración 20260804): la proveniencia que DECLARÓ el agente. Sin ella, la fila
+    // de una orden simulada era indistinguible de una real — mismo 'prepared', misma address base58,
+    // mismo payout_id, mismo network_id CAIP-2 — y lo único que las separaba era el prefijo `fb-` del
+    // payoutId, una convención incidental del proveedor simulado que nadie se comprometió a mantener.
+    // El día que ese formato cambie, una tabla llamada "evidencia money-path" deja de poder contestar
+    // si movió plata. Requiere la migración YA APLICADA: escribir una columna inexistente devuelve
+    // PGRST204 ⇒ esta función tira ⇒ el best-effort de la route (CD-17) se lo traga y se pierde la fila
+    // ENTERA, no sólo la proveniencia. Ver la cabecera del _up: migración PRIMERO, código DESPUÉS.
     const { error } = await this.client.from(TABLE).upsert(
       {
         remittance_id: input.remittanceId,
@@ -201,6 +237,7 @@ export class SupabaseSettlementLedger implements SettlementLedger {
         value_minor: "0", // desconocido en prepare; el real llega en recordPrincipalIn
         status: "prepared",
         payout_id: input.payoutId,
+        payout_provenance: provenanceColumn(input.payoutProvenance),
       },
       { onConflict: "idempotency_key", ignoreDuplicates: true },
     );

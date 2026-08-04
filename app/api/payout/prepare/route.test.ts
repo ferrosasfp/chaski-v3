@@ -433,6 +433,74 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
     expect(JSON.stringify(arg)).not.toContain("999888777");
   });
 
+  // ── El CANDADO de la proveniencia ────────────────────────────────────────────────────────────────
+  // El bug: `provenanceSol` se leía del result del agente (route.ts), se mandaba en el 200 y NO se le
+  // pasaba al ledger — estaba a UNA LÍNEA de distancia. Consecuencia: toda fila de una orden simulada
+  // quedaba indistinguible de una real, y la tabla de "evidencia money-path" no podía contestar si
+  // había movido plata.
+  //
+  // El candado tiene DOS mitades, y hacen falta las dos:
+  //   · COMPILACIÓN: `payoutProvenance: string` (sin `?`) en el port ⇒ BORRAR el pase no compila.
+  //     Eso ya mata el bug exacto que ocurrió, pero no mata al que hardcodea un valor.
+  //   · ESTOS TESTS: lo que llega al ledger es EL MISMO valor que el 200 le cuenta al browser, y
+  //     CAMBIA cuando el agente dice otra cosa. Un literal fijo en el call-site se pone rojo acá.
+  describe("PR10 — la proveniencia que declara el agente LLEGA al ledger (candado)", () => {
+    it("agente 'transfi' ⇒ el ledger recibe 'transfi', el MISMO valor que sale en el 200", async () => {
+      getLedgerMock.mockReturnValue(ledgerMock);
+      agentResponds(200, agentResult({ provenance: "transfi" }));
+      const res = await POST(req(bodyOf()));
+      expect(res.status).toBe(200);
+      const arg = ledgerMock.recordOrderPrepared.mock.calls[0]![0] as Record<string, unknown>;
+      expect(arg.payoutProvenance).toBe("transfi");
+      expect(arg.payoutProvenance).toBe((await res.json()).provenance); // ni una copia ni un recálculo
+    });
+
+    it("agente 'devnet-stub' ⇒ el ledger recibe 'devnet-stub' (NO un literal fijo del call-site)", async () => {
+      getLedgerMock.mockReturnValue(ledgerMock);
+      agentResponds(200, agentResult({ provenance: "devnet-stub" }));
+      const res = await POST(req(bodyOf()));
+      expect(res.status).toBe(200);
+      const arg = ledgerMock.recordOrderPrepared.mock.calls[0]![0] as Record<string, unknown>;
+      // Esta es la assertion que MUERE si alguien clava "transfi" en la llamada al ledger, que es
+      // exactamente la forma en que este bug puede volver sin romper la compilación.
+      expect(
+        arg.payoutProvenance,
+        "el ledger tiene que recibir lo que DIJO el agente, no un valor decidido en el call-site",
+      ).toBe("devnet-stub");
+      expect(arg.payoutProvenance).toBe((await res.json()).provenance);
+    });
+
+    it("dos órdenes con proveniencias distintas ⇒ el ledger recibe valores DISTINTOS (no una constante)", async () => {
+      getLedgerMock.mockReturnValue(ledgerMock);
+      agentResponds(200, agentResult({ provenance: "transfi" }));
+      expect((await POST(req(bodyOf()))).status).toBe(200);
+      agentResponds(200, agentResult({ provenance: "local-fallback" }));
+      expect((await POST(req(bodyOf()))).status).toBe(200);
+      const first = ledgerMock.recordOrderPrepared.mock.calls[0]![0] as Record<string, unknown>;
+      const second = ledgerMock.recordOrderPrepared.mock.calls[1]![0] as Record<string, unknown>;
+      expect(first.payoutProvenance).not.toBe(second.payoutProvenance);
+      expect([first.payoutProvenance, second.payoutProvenance]).toEqual(["transfi", "local-fallback"]);
+    });
+
+    it("el agente NO declara proveniencia ⇒ el ledger recibe '' (ausencia), no un default inventado", async () => {
+      getLedgerMock.mockReturnValue(ledgerMock);
+      agentResponds(200, agentResult({ provenance: undefined }));
+      const res = await POST(req(bodyOf()));
+      expect(res.status).toBe(200);
+      const arg = ledgerMock.recordOrderPrepared.mock.calls[0]![0] as Record<string, unknown>;
+      expect(arg.payoutProvenance).toBe(""); // el ledger lo persiste como NULL: "no consta"
+    });
+
+    it("una proveniencia NO string (el agente mandó basura) ⇒ '' y el 200 sigue saliendo", async () => {
+      getLedgerMock.mockReturnValue(ledgerMock);
+      agentResponds(200, agentResult({ provenance: 42 }));
+      const res = await POST(req(bodyOf()));
+      expect(res.status).toBe(200); // el money-path no se rompe por una etiqueta
+      const arg = ledgerMock.recordOrderPrepared.mock.calls[0]![0] as Record<string, unknown>;
+      expect(arg.payoutProvenance).toBe("");
+    });
+  });
+
   it("CD-17: ledger ON + recordOrderPrepared throw → prepare responde 200 igual (best-effort)", async () => {
     getLedgerMock.mockReturnValue(ledgerMock);
     ledgerMock.recordOrderPrepared.mockRejectedValue(new Error("db down"));

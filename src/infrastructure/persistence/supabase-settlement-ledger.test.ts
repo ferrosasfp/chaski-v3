@@ -257,6 +257,8 @@ const COLUMN_DEFAULTS: Record<string, unknown> = {
   status: "principal_in",
   attempts: 0,
   payout_id: null,
+  // Migración 20260804: nullable, SIN default ⇒ la fila que nadie escribe nace NULL ("no consta").
+  payout_provenance: null,
   last_error: null,
   created_at: "2026-07-28T00:00:00.000Z",
   updated_at: "2026-07-28T00:00:00.000Z",
@@ -920,6 +922,7 @@ describe("identidad de red del ledger — vm + chain_id/network_id (CHECK 202607
       chainId: CHAIN_ID_MISLABEL, // el caller sigue pasando un chainId EVM: el ledger lo IGNORA
       senderAddress: SOL_A,
       payoutId: "p-1",
+      payoutProvenance: "transfi",
       vm: "solana",
     });
     expect(rejected).toEqual([]); // si el write violara el CHECK, la fila NO existiría en prod
@@ -984,6 +987,7 @@ describe("identidad de red del ledger — vm + chain_id/network_id (CHECK 202607
         chainId: CHAIN_ID_EVM,
         senderAddress: sender,
         payoutId: "p-x",
+        payoutProvenance: "transfi",
         vm,
       });
       await ledger.recordPrincipalIn({
@@ -1035,6 +1039,7 @@ function prepareInput(over: Record<string, unknown> = {}) {
     chainId: CHAIN_ID_NOT_APPLICABLE,
     senderAddress: SENDER_SOL,
     payoutId: "transfi-po-1",
+    payoutProvenance: "transfi", // orden REAL por default; los tests de proveniencia lo sobreescriben
     vm: "solana" as const,
     ...over,
   };
@@ -1255,6 +1260,7 @@ describe("WKH-213/R3 — el settle escribe al ledger", () => {
       chainId: CHAIN_ID_MISLABEL, // el caller pasa un chainId EVM: el ledger lo IGNORA en Solana
       senderAddress: SOL_A,
       payoutId: "transfi-po-sol",
+      payoutProvenance: "transfi",
       vm: "solana" as const,
     };
   }
@@ -1501,5 +1507,142 @@ describe("getSupabaseServerClient (WKH-207 BLQ-MED-1 — null-safe ante URL inv�
     const client = getSupabaseServerClient();
     expect(client).not.toBeNull();
     expect(client?.from).toBeTypeOf("function");
+  });
+});
+
+// ── La evidencia tiene que poder contestar "¿esto movió plata?" ───────────────────────────────────
+// Antes de la columna payout_provenance, una orden SIMULADA y una REAL escribían filas idénticas en
+// forma: mismo status 'prepared', misma clase de receiver_address (base58 válida), mismo payout_id
+// presente, mismo network_id CAIP-2, mismo tx_hash placeholder, mismo value_minor '0'. Lo único que
+// las separaba era el prefijo del payoutId (`fb-`, src/infrastructure/fallback/gateways.ts:115), que
+// es una convención INCIDENTAL del proveedor simulado: nadie se comprometió a mantenerla, ningún
+// lector la declara, y el día que cambie la evidencia deja de distinguir sin que nada se ponga rojo.
+describe("payout_provenance — una orden simulada y una real dejan filas DISTINGUIBLES", () => {
+  /** Columnas que identifican a la fila (tienen que diferir sí o sí: dos órdenes son dos órdenes) o
+   *  que la DB genera. NO participan de "¿esta fila movió plata?". */
+  const IDENTITY_COLS = ["id", "remittance_id", "quote_id", "idempotency_key", "tx_hash", "payout_id"];
+  const shapeOf = (row: Record<string, unknown>): Record<string, unknown> =>
+    Object.fromEntries(Object.entries(row).filter(([k]) => !IDENTITY_COLS.includes(k)));
+
+  /** Dos órdenes preparadas en la MISMA tabla: una real y una simulada. Los payoutId se eligen SIN
+   *  ningún marcador (`po-a` / `po-b`): si el test se apoyara en un prefijo, estaría clavando la
+   *  convención que este cambio vino a reemplazar. */
+  async function twoOrders(realProvenance: string, simulatedProvenance: string) {
+    const { client, rows, rejected } = makeTableClient();
+    const ledger = new SupabaseSettlementLedger(client);
+    await ledger.recordOrderPrepared(
+      prepareInput({
+        remittanceId: "rem-real",
+        quoteId: "q-real",
+        idempotencyKey: "rem-real:q-real",
+        payoutId: "po-a",
+        payoutProvenance: realProvenance,
+      }),
+    );
+    await ledger.recordOrderPrepared(
+      prepareInput({
+        remittanceId: "rem-sim",
+        quoteId: "q-sim",
+        idempotencyKey: "rem-sim:q-sim",
+        payoutId: "po-b",
+        payoutProvenance: simulatedProvenance,
+      }),
+    );
+    expect(rejected).toEqual([]);
+    expect(rows.length).toBe(2);
+    return { real: rows[0]!, simulated: rows[1]! };
+  }
+
+  it("la fila simulada y la real difieren en payout_provenance, y en NADA MÁS que no sea su identidad", async () => {
+    const { real, simulated } = await twoOrders("transfi", "devnet-stub");
+
+    // 1. El campo DECLARADO separa las dos filas, y guarda la cadena TAL CUAL (no un booleano: el dato
+    //    tiene más de dos valores y colapsarlo perdería QUIÉN desembolsó).
+    expect(real.payout_provenance).toBe("transfi");
+    expect(simulated.payout_provenance).toBe("devnet-stub");
+
+    // 2. Y esta es la mitad que prueba que hacía falta: SIN ese campo, las dos filas son la MISMA cosa.
+    //    Si alguien "arregla" esto guardando un booleano derivado o dejando de escribir la columna,
+    //    los dos shapes vuelven a ser iguales y el expect de abajo se pone rojo.
+    const { payout_provenance: _r, ...realShape } = shapeOf(real);
+    const { payout_provenance: _s, ...simShape } = shapeOf(simulated);
+    expect(
+      simShape,
+      "sacando la proveniencia, una orden simulada y una real son indistinguibles: por eso la columna existe",
+    ).toEqual(realShape);
+    expect(shapeOf(simulated)).not.toEqual(shapeOf(real)); // con ella, ya no
+  });
+
+  it("el discriminador NO es el prefijo del payoutId: con ids sin marcador, la fila sigue diciendo cuál es cuál", async () => {
+    const { real, simulated } = await twoOrders("transfi", "local-fallback");
+    // Ningún payout_id lleva `fb-` ni ninguna otra pista, y aun así la evidencia contesta.
+    expect(String(real.payout_id)).not.toContain("fb-");
+    expect(String(simulated.payout_id)).not.toContain("fb-");
+    expect(real.payout_provenance).not.toBe(simulated.payout_provenance);
+  });
+
+  it("el agente NO declaró proveniencia ⇒ NULL ('no consta'), NUNCA '' ni un default fabricado", async () => {
+    const { client, rows } = makeTableClient();
+    // "" es EXACTAMENTE lo que produce la ruta cuando el result del agente no trae `provenance`.
+    await new SupabaseSettlementLedger(client).recordOrderPrepared(
+      prepareInput({ payoutProvenance: "" }),
+    );
+    expect(rows[0]?.payout_provenance).toBeNull(); // no consta ≠ una proveniencia llamada ""
+    expect(rows[0]?.payout_provenance).not.toBe("");
+    expect(rows[0]?.payout_provenance).not.toBe("transfi"); // jamás rellenar un default: sería inventar evidencia
+  });
+
+  it("whitespace es tan poco declarativo como el vacío ⇒ NULL", async () => {
+    const { client, rows } = makeTableClient();
+    await new SupabaseSettlementLedger(client).recordOrderPrepared(
+      prepareInput({ payoutProvenance: "   " }),
+    );
+    expect(rows[0]?.payout_provenance).toBeNull();
+  });
+
+  it("no-regresión: el resto de la fila 'prepared' queda EXACTAMENTE igual que antes de la columna", async () => {
+    const { client, rows, rejected } = makeTableClient();
+    await new SupabaseSettlementLedger(client).recordOrderPrepared(prepareInput());
+    expect(rejected).toEqual([]);
+    const row = rows[0]!;
+    expect(row.status).toBe("prepared");
+    expect(row.tx_hash).toBe("prepared:rem-1:q-1"); // placeholder determinístico intacto
+    expect(row.value_minor).toBe("0"); // el monto sigue siendo desconocido en prepare
+    expect(row.payout_id).toBe("transfi-po-1");
+    expect(row.receiver_address).toBe(DEPOSIT_SOL);
+    expect(row.sender_address).toBe(SENDER_SOL);
+    expect(row.vm).toBe("solana");
+    expect(row.network_id).toBe(resolveSolanaNetworkId());
+    expect(row.chain_id).toBeNull();
+    expect(row.attempts).toBe(0);
+    expect(row.last_error).toBeNull();
+  });
+
+  it("la lectura DEVUELVE la proveniencia: sin esto la evidencia se escribe y nadie puede consultarla", async () => {
+    const { client } = makeTableClient();
+    const ledger = new SupabaseSettlementLedger(client);
+    await ledger.recordOrderPrepared(prepareInput({ payoutProvenance: "devnet-stub" }));
+    const { records } = await ledger.listPreparedOrphans({
+      olderThanIso: "2030-01-01T00:00:00.000Z",
+      limit: 10,
+    });
+    expect(records).toHaveLength(1);
+    expect(records[0]?.payoutProvenance).toBe("devnet-stub");
+  });
+
+  it("una fila ANTERIOR a la migración se lee como null ('no consta'), NO como undefined ni como real", async () => {
+    // Fila vieja: la columna existe en el esquema pero nadie la escribió (y antes de la migración
+    // PostgREST ni siquiera la devolvería). Los dos casos tienen que llegar al mismo `null` explícito:
+    // un `undefined` DESAPARECE en JSON.stringify y la respuesta admin quedaría sin el campo.
+    const { client } = makeTableClient([
+      { remittance_id: "rem-old", quote_id: "q-old", idempotency_key: "rem-old:q-old", tx_hash: "prepared:rem-old:q-old", chain_id: null, network_id: "solana:devnet", vm: "solana", sender_address: SENDER_SOL, receiver_address: DEPOSIT_SOL, value_minor: "0", status: "prepared" },
+    ]);
+    const { records } = await new SupabaseSettlementLedger(client).listPreparedOrphans({
+      olderThanIso: "2030-01-01T00:00:00.000Z",
+      limit: 10,
+    });
+    expect(records[0]?.payoutProvenance).toBeNull();
+    expect(records[0]).toHaveProperty("payoutProvenance"); // presente y explícito, no ausente
+    expect(JSON.parse(JSON.stringify(records[0])).payoutProvenance).toBeNull(); // sobrevive al JSON
   });
 });

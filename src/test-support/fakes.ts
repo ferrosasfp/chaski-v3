@@ -438,6 +438,7 @@ export class FakeSettlementLedger implements SettlementLedger {
     chainId: number;
     senderAddress: string;
     payoutId: string;
+    payoutProvenance: string;
     vm: "evm" | "solana";
   }): Promise<void> {
     // WKH-211: registra la orden preparada. Upsert por idempotency_key (retry = una sola fila). El
@@ -461,6 +462,10 @@ export class FakeSettlementLedger implements SettlementLedger {
       status: "prepared",
       attempts: 0,
       payoutId: input.payoutId,
+      // Espeja provenanceColumn() del ledger real: la cadena TAL CUAL, y vacío/whitespace ⇒ null
+      // ("no consta"). Si el doble guardara `''` donde la DB guarda NULL, un test podría "probar" una
+      // distinción que en producción no existe.
+      payoutProvenance: input.payoutProvenance.trim() ? input.payoutProvenance : null,
       lastError: null,
       createdAt: this.nowIso,
       updatedAt: this.nowIso,
@@ -546,6 +551,10 @@ export class FakeSettlementLedger implements SettlementLedger {
       status: "principal_in",
       attempts: 0,
       payoutId: null,
+      // Paso 4 (no hubo prepare): el settle NO conoce la proveniencia del desembolso — nadie se la
+      // dijo. null = no consta, igual que en la DB (el INSERT del ledger real tampoco nombra la
+      // columna). Fabricar un valor acá sería evidencia inventada.
+      payoutProvenance: null,
       lastError: null,
       createdAt: this.nowIso,
       updatedAt: this.nowIso,

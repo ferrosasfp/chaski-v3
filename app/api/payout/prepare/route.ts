@@ -359,6 +359,12 @@ export async function POST(req: Request): Promise<Response> {
         chainId: CHAIN_ID_NOT_APPLICABLE, // no hay chainId numérico en Solana; vmNetworkColumns lo descarta
         senderAddress: address,
         payoutId: payoutIdSol,
+        // La MISMA `provenanceSol` que sale en el 200 (abajo), no una copia ni un recálculo. Este pase
+        // faltaba: el valor se leía del agente, se le contaba al browser y NO se guardaba, así que la
+        // fila de una orden simulada quedaba idéntica en forma a una real y la evidencia no podía
+        // contestar si había movido plata. Es un `string` obligatorio en el port justamente para que
+        // borrar esta línea NO compile.
+        payoutProvenance: provenanceSol,
         vm: "solana",
       });
     } catch (e) {

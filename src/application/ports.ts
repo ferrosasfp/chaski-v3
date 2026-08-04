@@ -423,6 +423,16 @@ export interface SettlementRecord {
   status: SettlementLedgerStatus;
   attempts: number;
   payoutId: string | null;
+  // Proveniencia del desembolso DECLARADA por el agente en el prepare, tal cual la dijo
+  // ('transfi' | 'devnet-stub' | 'local-fallback' | …). Es lo que permite preguntarle a una fila si
+  // movió plata SIN mirarle el prefijo del payoutId, que es una convención incidental del proveedor
+  // simulado (`fb-`) y no un dato declarado.
+  // `null` = NO CONSTA: fila anterior a la migración 20260804 (no se puede backfillear: el dato no se
+  // guardó en ningún lado) o el agente no la declaró. NO se lee como "real" — la única afirmación que
+  // habilita esta columna es la positiva, y sólo con un valor de la allow-list de proveniencias reales
+  // (hoy `REAL_PAYOUT_PROVENANCES` = {"transfi"}, src/presentation/flow-vm.ts). Todo lo demás, `null`
+  // incluido, es "no probado".
+  payoutProvenance: string | null;
   lastError: string | null;
   createdAt: string;
   updatedAt: string;
@@ -465,6 +475,13 @@ export interface SettlementLedger {
     chainId: number;
     senderAddress: string;
     payoutId: string;
+    // OBLIGATORIO, y `string` sin `?` A PROPÓSITO: es el candado de compilación. La proveniencia que
+    // devuelve el agente estaba a UNA LÍNEA de este call-site (prepare/route.ts la leía, la mandaba en
+    // el 200 y no se la pasaba al ledger), y por eso toda fila simulada quedó indistinguible de una
+    // real. Con el campo opcional, borrar el pase volvería a compilar y el bug volvería igual.
+    // Pasar `""` es legítimo y significa "el agente no la declaró" ⇒ el ledger persiste NULL (no
+    // consta). Lo que NO es legítimo es fabricar un valor: esta columna es evidencia, no una etiqueta.
+    payoutProvenance: string;
     vm: "evm" | "solana";
   }): Promise<void>;
   // settle route (AC-1): COMPLETA la fila 'prepared' de esta remesa a 'principal_in' con la evidencia

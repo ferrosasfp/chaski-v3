@@ -79,13 +79,33 @@ describe("contract solana-sponsor-limits (AC-4) — lo que Chaski emite CABE en 
     const limit = resolveSolanaComputeUnitLimit();
     const price = resolveSolanaComputeUnitPriceMicroLamports();
 
+    // Este test depende a la vez de la fórmula copiada Y de los valores que Chaski emite, así que
+    // un rojo acá tiene DOS causas posibles y el diff numérico solo no las distingue. El mensaje
+    // las nombra: T7 y T8 llevan mensajes ricos por el mismo motivo.
+    const porQue = (esperado: number, firmantes: number) =>
+      `El fee derivado dejó de ser ${esperado} lamports con ${firmantes} firmante(s). DOS causas ` +
+      `posibles, y hay que distinguirlas antes de tocar nada: (a) se movió la fórmula copiada en ` +
+      `vendored/solana-sponsor-limits.fixture.ts:49-57 (o su BASE_FEE_LAMPORTS_PER_SIG) y hay que ` +
+      `re-verificarla contra cr1.ts:328-331 del facilitator; o (b) se re-derivó legítimamente el ` +
+      `límite/precio en chain.ts (hoy ${limit} CU × ${price} µL/CU) y este literal quedó viejo. ` +
+      `En el caso (b) el número nuevo hay que recalcularlo A MANO, nunca copiarlo del rojo: ` +
+      `pegar el "received" convierte este test en un guard que se compara consigo mismo.`;
+
     // A mano: priority = ceil(120.000 × 10.000 / 1e6) = 1.200 lamports.
     //         2 firmantes → 5000×2 + 1.200 = 11.200. 1 firmante → 5000 + 1.200 = 6.200.
-    expect(deriveFeeUpperBoundLamports(limit, price, 2)).toBe(11_200);
-    expect(deriveFeeUpperBoundLamports(limit, price, 1)).toBe(6_200);
+    expect(deriveFeeUpperBoundLamports(limit, price, 2), porQue(11_200, 2)).toBe(11_200);
+    expect(deriveFeeUpperBoundLamports(limit, price, 1), porQue(6_200, 1)).toBe(6_200);
     // Las dos formas pasan el tope agregado, así que el conteo de firmantes no decide el veredicto.
-    expect(11_200).toBeLessThanOrEqual(SOLANA_SPONSOR_LIMITS.maxFeeLamports);
-    expect(6_200).toBeLessThanOrEqual(SOLANA_SPONSOR_LIMITS.maxFeeLamports);
+    // Se assertea el valor DERIVADO, no el literal: `expect(11_200).toBeLessThanOrEqual(...)` sería
+    // correcto sólo porque vitest aborta en el primer fallo, y se LEE como el antipatrón del guard
+    // que se compara consigo mismo. Además, el caso de 1 firmante no lo cubre ningún otro test
+    // (T7 y T8 derivan siempre con 2).
+    expect(deriveFeeUpperBoundLamports(limit, price, 2)).toBeLessThanOrEqual(
+      SOLANA_SPONSOR_LIMITS.maxFeeLamports,
+    );
+    expect(deriveFeeUpperBoundLamports(limit, price, 1)).toBeLessThanOrEqual(
+      SOLANA_SPONSOR_LIMITS.maxFeeLamports,
+    );
   });
 
   it("T9b: la fórmula copiada redondea la propina hacia ARRIBA y trata numSigners=0 como 1", () => {

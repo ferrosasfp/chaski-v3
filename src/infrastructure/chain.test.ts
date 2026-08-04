@@ -95,10 +95,12 @@ describe("resolveSolanaComputeUnit* — los valores derivados que Chaski emite (
     expect(resolveSolanaComputeUnitPriceMicroLamports()).toBe(10_000);
   });
 
-  it("los dos son enteros positivos (el layout de las ix los serializa como u32/u64 sin signo)", () => {
-    for (const value of [resolveSolanaComputeUnitLimit(), resolveSolanaComputeUnitPriceMicroLamports()]) {
-      expect(Number.isInteger(value)).toBe(true);
-      expect(value).toBeGreaterThan(0);
-    }
-  });
+  // BORRADO a propósito (CR MNR-3): acá había un tercer `it` que verificaba "los dos son enteros
+  // positivos". No podía ponerse rojo por su cuenta — cualquier valor que rompiera "entero positivo"
+  // rompe primero a los dos asserts de arriba, que congelan el valor exacto. Era un verde que se
+  // leía como cobertura y no cubría nada. Lo que aquel test decía querer proteger —que el layout
+  // serializa u32/u64 sin signo— sí está cubierto, pero sobre los BYTES y no sobre el número:
+  // `solana-wallet.test.ts` T2 (`readUInt32LE(1)` / `readBigUInt64LE(1)`) y T12 (sobre el payload
+  // que se postea). Si mañana los resolvers dejan de ser constantes, ese test de forma vuelve a
+  // tener sentido; hoy no.
 });

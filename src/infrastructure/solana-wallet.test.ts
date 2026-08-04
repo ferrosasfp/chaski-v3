@@ -385,7 +385,13 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
   const CB_SET_LIMIT = 2;
   const CB_SET_PRICE = 3;
 
-  it("T1 (AC-1/AC-5): la tx lleva 3 ix — [SetComputeUnitLimit, SetComputeUnitPrice, deposit], en ese orden", async () => {
+  // T1 cubre la mitad ESPACIAL del AC-1 (cuáles ix, en qué posiciones). La mitad TEMPORAL —"antes
+  // de firmar"— NO la cubre: mide `capturedTx(signSpy)`, que es el estado FINAL de la tx, y un
+  // adapter que agregara las ComputeBudget después de `signTransaction` pasaría este test igual.
+  // Esa mitad la cubre T3, y sólo T3. Así fue como el mutante M3 sobrevivió la primera vuelta: el
+  // claim temporal repartido entre dos tests, y nadie notó que uno no hacía su mitad. Si algún día
+  // se toca T3, esta mitad del AC-1 se queda sin cobertura.
+  it("T1 (AC-1 mitad espacial / AC-5): la tx lleva 3 ix — [SetComputeUnitLimit, SetComputeUnitPrice, deposit], en ese orden — el 'antes de firmar' lo cubre T3", async () => {
     const adapter = await connectedAdapter();
     await adapter.authorizePrincipal(makeQuote(), "rem-cb-orden", escrowDeposit());
 

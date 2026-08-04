@@ -126,8 +126,39 @@ export class SolanaWalletAdapter implements WalletPort, SolanaEscrowDepositProbe
     return this.address;
   }
 
+  /**
+   * La address del sender. Devuelve lo que cacheó `connect()` y, si no hay nada, LA REHIDRATA DESDE
+   * EL BRIDGE.
+   *
+   * ⚠️ EL FALLBACK NO ES DEFENSIVO: cubre un camino que el flujo recorre SIEMPRE. `this.address` vive
+   * sólo en memoria y se escribe sólo en `connect()`, así que una recarga de la página lo borra — y hay
+   * una navegación completa en el medio del flujo: el KYC se va a Didit y vuelve
+   * (`flow.tsx`:296-300). Al volver, el resume salta derecho al paso `confirm` sin pasar por
+   * `connect()` (`flow.tsx`:157-178). Antes de este fallback, ahí `getAddress()` contestaba `null`.
+   *
+   * El bridge SÍ sobrevive a esa recarga, y no porque persista nada: lo repuebla el sync component
+   * desde `useWallet()` en cuanto `autoConnect` reconecta (`solana-providers.tsx`:50-55 y :107).
+   * Leerlo es leer un objeto en memoria: NO abre el modal de wallet, NO pide una firma, NO llama a
+   * `connect()`. Si autoConnect todavía no terminó, el estado dice `connected:false` y esto contesta
+   * `null` — que es la verdad en ese instante, y el llamador ya la sabe distinguir.
+   *
+   * NO cachea lo que rehidrata, a propósito: la fuente de verdad es el bridge. Si la wallet se
+   * desconecta a mitad del flujo, la llamada siguiente vuelve a dar `null` (fail-loud) en lugar de una
+   * address vieja que ya no puede firmar nada.
+   *
+   * Valida base58 igual que `connect()`: lo que no puede entrar por una puerta tampoco entra por la
+   * otra.
+   */
   async getAddress(): Promise<string | null> {
-    return this.address; // el MISMO base58 case-sensitive (AC-6)
+    if (this.address) return this.address; // el MISMO base58 case-sensitive (AC-6)
+    const { connected, publicKey } = solanaWalletBridge.getState();
+    if (!connected || !publicKey) return null; // sin conexión viva no hay address que devolver
+    try {
+      new PublicKey(publicKey); // espeja el guard de connect():124 — base58 válido o nada
+    } catch {
+      return null;
+    }
+    return publicKey; // OPACO, SIN toLowerCase (CD-3)
   }
 
   /** [u8;16] DETERMINÍSTICO desde remittanceId: `sha256(remittanceId)` truncado a 16 bytes

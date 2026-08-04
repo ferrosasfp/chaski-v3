@@ -45,6 +45,54 @@ describe("SolanaWalletAdapter", () => {
     expect(await adapter.getAddress()).toBeNull(); // no cacheó nada
   });
 
+  // ── Rehidratación tras la recarga ────────────────────────────────────────────────────────────────
+  // El daño que cubren estos cuatro: el KYC navega a Didit y vuelve, lo que MATA el `address` en
+  // memoria del adapter. El resume salta derecho a `confirm` sin volver a pasar por `connect()`, así
+  // que `getAddress()` contestaba `null`, el use-case mandaba `address: ""` y la autoridad de payout
+  // moría canonicalizando el vacío → 502 `kyc_reauth_failed`. Un fallo local disfrazado de caída del
+  // proveedor de identidad, y el flujo se cortaba ANTES de pedir la firma.
+  it("SIN connect(): con el bridge ya conectado (autoConnect tras la recarga) getAddress() devuelve la address", async () => {
+    const openSpy = vi.fn();
+    solanaWalletBridge.registerOpenModal(openSpy);
+    // Lo que hace el sync component solo al remontar el árbol: empujar lo que dice useWallet().
+    solanaWalletBridge.setState({ publicKey: VALID_B58, connected: true });
+
+    const adapter = new SolanaWalletAdapter(); // instancia nueva: el cache en memoria se perdió
+
+    expect(await adapter.getAddress()).toBe(VALID_B58); // sin transformación (CD-3)
+    // Y lo consiguió sin molestar a nadie: cero modales, que es lo que lo hace usable a mitad de flujo.
+    expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it("bridge con publicKey pero connected:false ⇒ null (no hay conexión viva que respalde esa address)", async () => {
+    solanaWalletBridge.setState({ publicKey: VALID_B58, connected: false });
+    const adapter = new SolanaWalletAdapter();
+    expect(await adapter.getAddress()).toBeNull();
+  });
+
+  it("bridge con base58 deforme ⇒ null: la rehidratación valida igual que connect() (CD-SDD-5)", async () => {
+    solanaWalletBridge.setState({ publicKey: "0OIl-not-base58", connected: true });
+    const adapter = new SolanaWalletAdapter();
+    expect(await adapter.getAddress()).toBeNull();
+  });
+
+  it("la rehidratación NO cachea: si la wallet se desconecta, la llamada siguiente vuelve a null", async () => {
+    solanaWalletBridge.setState({ publicKey: VALID_B58, connected: true });
+    const adapter = new SolanaWalletAdapter();
+    expect(await adapter.getAddress()).toBe(VALID_B58);
+    // La persona desconecta desde Phantom → el sync component empuja el estado nuevo.
+    solanaWalletBridge.setState({ publicKey: null, connected: false });
+    expect(await adapter.getAddress()).toBeNull(); // fail-loud, NO una address vieja que ya no firma
+  });
+
+  it("connect() gana sobre el bridge: la address cacheada sobrevive a un bridge que se vació", async () => {
+    solanaWalletBridge.setState({ publicKey: VALID_B58, connected: true });
+    const adapter = new SolanaWalletAdapter();
+    await adapter.connect();
+    solanaWalletBridge.setState({ publicKey: null, connected: false });
+    expect(await adapter.getAddress()).toBe(VALID_B58); // candado: el path viejo no cambió
+  });
+
   it("modal cerrado sin conectar → waitForConnection rechaza → connect() throw", async () => {
     solanaWalletBridge.registerOpenModal(() => {});
     const adapter = new SolanaWalletAdapter();

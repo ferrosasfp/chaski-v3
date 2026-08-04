@@ -14,8 +14,9 @@
 //    corre en F3/CI por accidente, es founder-gated (runbook paso 7).
 //  - ENV-DRIVEN 100% (AC-5/CD-4): CERO hardcodes de URLs/keys/cluster/mint. Toda env ausente produce
 //    fail-loud (exit≠0) con el NOMBRE de la var, NUNCA su valor. NUNCA imprime secretos.
-//  - CERO PLATA REAL (CD-6): SOLO devnet; PROHIBIDO cualquier default/fallback a mainnet-beta. Y si el
-//    `provenance` del prepare dice que el payout sería REAL, el checkpoint 3 ABORTA (ver ahí).
+//  - CERO PLATA REAL (CD-6): SOLO devnet; PROHIBIDO cualquier default/fallback a mainnet-beta. Y el
+//    checkpoint 3 SIGUE sólo si el `provenance` del prepare es una de las proveniencias no-reales
+//    conocidas (allowlist en `smoke-helpers.ts`): real, desconocida o ausente ABORTAN (ver ahí).
 //  - REUSA los building-blocks del repo (CD-7): `escrowIdl` (copia pinneada) + el patrón de construcción
 //    de la ix `deposit` de `solana-wallet.ts`. NO reimplementa el discriminator ni "miente" el shape.
 //  - Runtime `tsx` (`npm run smoke:solana`). Typecheck aislado vía `tsconfig.scripts.json`. NO se ejecuta
@@ -44,6 +45,7 @@ import {
 import { escrowIdl } from "../src/infrastructure/solana/escrow-idl";
 import { CUSTODY_WINDOW_SECS } from "../src/infrastructure/solana-wallet";
 import {
+  classifyPayoutProvenance,
   computeReleaseAttestation,
   isBase58Signature,
   parseNumericEnv,
@@ -153,10 +155,6 @@ const DEADLINE_SECONDS = requireNumericEnv(
   process.env.SMOKE_DEADLINE_SECONDS ?? String(CUSTODY_WINDOW_SECS),
   { integer: true, min: PROGRAM_MIN_CUSTODY_SECS, max: PROGRAM_MAX_CUSTODY_SECS },
 );
-
-/** El único `provenance` que significa desembolso fiat REAL (fuente: src/presentation/flow-vm.ts:7).
- *  Cualquier otro valor ("devnet-stub", "local-fallback", "n/a", …) es mock. */
-const REAL_PAYOUT_PROVENANCE = "transfi";
 
 function ok(step: number, msg: string): void {
   console.log(`OK [${step}] ${msg}`);
@@ -363,23 +361,26 @@ async function main(): Promise<void> {
   }
   ok(3, "prepare devolvió shape Solana válido (base58)");
 
-  // La PROVENANCE es el único dato del ciclo que dice si la pata fiat es real o mock. No es una
-  // advertencia al pasar: es parte del resultado, y se imprime como tal.
+  // La PROVENANCE es el único dato del ciclo que dice algo sobre si la pata fiat es real o mock. No es
+  // una advertencia al pasar: es parte del resultado, y se imprime como tal.
+  //
+  // El veredicto lo da `classifyPayoutProvenance` (smoke-helpers.ts, con tests), que compara contra la
+  // MISMA allowlist que producción (`REAL_PAYOUT_PROVENANCES`, src/presentation/flow-vm.ts:22) y contra
+  // la lista de proveniencias no-reales conocidas. Fail-closed: cualquier `kind` que no sea "no-real"
+  // aborta, así que un valor nuevo o con otra capitalización corta la corrida en vez de colarse.
+  //
+  // ⚠️ Este guard llega TARDE y hay que decirlo: la orden de payout ya fue creada por el agente en el
+  // prepare de arriba. Abortar acá no la impide; decide si la corrida sigue y si el operador se entera.
   console.log("------------------------------------------------------------");
   console.log(`>>> PATA FIAT: provenance del payout = "${provenance}"  (payoutId: ${payoutId})`);
-  if (provenance === REAL_PAYOUT_PROVENANCE) {
-    // Fail-closed (CD-6): "transfi" significa desembolso REAL. El alcance autorizado es devnet sin
-    // dinero real, así que acá se corta. La orden ya se creó del lado del agente: ABORTAR es lo menos
-    // malo que se puede hacer, y por eso el mensaje lo dice en vez de seguir como si nada.
-    console.log("    Ese valor significa DESEMBOLSO FIAT REAL.");
+  const provenanceVerdict = classifyPayoutProvenance(provenance);
+  if (provenanceVerdict.kind !== "no-real") {
     return fail(
       3,
-      `provenance="${REAL_PAYOUT_PROVENANCE}" implica desembolso fiat REAL, fuera del alcance devnet autorizado. La orden ya fue creada del lado del agente: revisala a mano`,
+      `${provenanceVerdict.reason}. La orden ya fue creada del lado del agente (payoutId: ${payoutId}): revisala a mano`,
     );
   }
-  console.log(`    "${provenance}" NO es un desembolso real: el único valor que significa fiat real`);
-  console.log("    es \"transfi\" (fuente: src/presentation/flow-vm.ts:7). O sea que la pata fiat de");
-  console.log("    esta corrida está en MOCK y no se movió ni se moverá dinero fiat.");
+  console.log(`    ${provenanceVerdict.reason}.`);
   console.log("------------------------------------------------------------");
 
   // ── Checkpoint 4: construir + partial-firmar la ix `deposit` reusando escrowIdl (CD-7) ──────────

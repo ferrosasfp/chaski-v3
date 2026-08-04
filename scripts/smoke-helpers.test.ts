@@ -1,11 +1,15 @@
 // Tests de las piezas puras del smoke (`scripts/smoke-helpers.ts`). El smoke en sí NO se testea acá:
 // toca la red y exige credenciales. Lo que sí se puede clavar es lo que se puede equivocar en
 // silencio: el formato del HMAC del release, la validación de una env numérica y la de una signature.
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import * as anchor from "@coral-xyz/anchor";
 import { describe, expect, it } from "vitest";
+import { REAL_PAYOUT_PROVENANCES, isPayoutDemo } from "../src/presentation/flow-vm";
 import {
+  KNOWN_NON_REAL_PAYOUT_PROVENANCES,
+  classifyPayoutProvenance,
   computeReleaseAttestation,
   encodeReleaseAttestationMessage,
   isBase58Signature,
@@ -206,5 +210,173 @@ describe("el default del deadline del smoke sale de producción, no de un litera
 
   it("no vuelve al literal que perdía la carrera", () => {
     expect(src).not.toContain('process.env.SMOKE_DEADLINE_SECONDS ?? "3600"');
+  });
+});
+
+describe("classifyPayoutProvenance — el guard que era una denylist de un solo valor", () => {
+  // QUÉ ESTABA MAL, para que no vuelva: el smoke abortaba sólo con `provenance === "transfi"`. Eso es
+  // una DENYLIST de UN valor sobre un dato que elige un agente remoto, o sea "cualquier string".
+  // Producción usa el mismo dato como ALLOWLIST (`REAL_PAYOUT_PROVENANCES`, flow-vm.ts:22). Con la
+  // denylist, "transfi-v2" o "TransFi" seguían de largo Y el script IMPRIMÍA que la pata fiat estaba
+  // en mock. Los casos de abajo son exactamente esos.
+
+  it("un valor de la allowlist REAL de producción aborta, y el motivo dice por qué", () => {
+    const v = classifyPayoutProvenance("transfi");
+    expect(v.kind).toBe("real");
+    expect(v.kind).not.toBe("no-real"); // "no-real" es lo ÚNICO que deja seguir la corrida
+    expect(v.reason).toContain("REAL_PAYOUT_PROVENANCES");
+    expect(v.reason).toContain("src/presentation/flow-vm.ts:22");
+  });
+
+  it("TODO valor de REAL_PAYOUT_PROVENANCES aborta (si producción suma un proveedor, entra solo)", () => {
+    // Este es el test que se pone rojo si alguien saca "transfi" del Set de producción: la lista deja
+    // de estar vacía de sentido y el guard deja de estar cableado a ella.
+    expect(REAL_PAYOUT_PROVENANCES.size).toBeGreaterThan(0);
+    for (const real of REAL_PAYOUT_PROVENANCES) {
+      expect(classifyPayoutProvenance(real).kind).toBe("real");
+    }
+  });
+
+  it("un proveedor real NUEVO o una variante de versión NO se declara mock: aborta", () => {
+    // Con la denylist vieja los tres pasaban de largo y el script imprimía "no se moverá dinero fiat".
+    for (const desconocida of ["transfi-v2", "algo-nuevo", "wise", "transfi2", "TRANSFI"]) {
+      const v = classifyPayoutProvenance(desconocida);
+      expect(v.kind).toBe("desconocida");
+      expect(v.reason).toContain(desconocida);
+      expect(v.reason).toContain("no se puede descartar que sea un desembolso real");
+    }
+  });
+
+  it("otra capitalización: aborta como DESCONOCIDA, sin normalizar (misma comparación que producción)", () => {
+    // Decisión y su motivo: NO se pasa a minúsculas. Producción compara exacto (`Set.has`,
+    // flow-vm.ts:27), así que normalizar acá haría que las dos capas opinaran distinto del MISMO
+    // string. No hace falta para la seguridad: con la allowlist, "TransFi" tampoco está entre las
+    // no-reales conocidas y aborta igual. Las dos capas caen de su lado seguro sin contradecirse.
+    expect(REAL_PAYOUT_PROVENANCES.has("TransFi")).toBe(false); // producción: no es "real"…
+    expect(isPayoutDemo("TransFi")).toBe(true); //                 …y por eso sobre-avisa (banner demo)
+    expect(classifyPayoutProvenance("TransFi").kind).toBe("desconocida"); // el smoke: aborta
+    expect(classifyPayoutProvenance("Transfi").kind).toBe("desconocida");
+    expect(classifyPayoutProvenance(" transfi").kind).toBe("desconocida"); // con espacio tampoco pasa
+  });
+
+  it("las proveniencias no-reales conocidas siguen dejando correr el smoke", () => {
+    expect([...KNOWN_NON_REAL_PAYOUT_PROVENANCES]).toEqual([
+      "local-fallback",
+      "devnet-stub",
+      "n/a",
+    ]);
+    for (const mock of KNOWN_NON_REAL_PAYOUT_PROVENANCES) {
+      expect(classifyPayoutProvenance(mock).kind).toBe("no-real");
+    }
+  });
+
+  it("ausente / vacío / null: ABORTA, porque falta de dato no es prueba de simulación", () => {
+    // Decisión explícita. `""` no significa "mock": significa "el agente no declaró proveniencia"
+    // (supabase-settlement-ledger.ts:69-71 lo guarda como NULL por ese mismo motivo). Tratarlo como
+    // mock sería el mismo error que este cambio arregla, con otra ropa. Además el smoke YA abortaba
+    // con "" antes de este cambio, por el shape-check del checkpoint 3: acá no se afloja nada.
+    for (const ausente of [undefined, null, "", "   "]) {
+      const v = classifyPayoutProvenance(ausente);
+      expect(v.kind).toBe("ausente");
+      expect(v.reason).toContain("no declaró");
+    }
+  });
+
+  it("el motivo del caso que SIGUE no promete nada universal ni futuro", () => {
+    // La frase vieja era: «el único valor que significa fiat real es "transfi" […] no se movió ni se
+    // moverá dinero fiat». Dos afirmaciones que el script no puede sostener: una universal sobre un
+    // dominio abierto, y una sobre el futuro de un sistema ajeno. La nueva acota lo que afirma.
+    const reason = classifyPayoutProvenance("devnet-stub").reason;
+    expect(reason).not.toContain("el único valor");
+    expect(reason).not.toContain("no se moverá");
+    expect(reason).toContain("Eso es TODO lo que afirma este chequeo");
+    expect(reason).toContain("No dice qué hizo el agente con la orden de payout");
+  });
+});
+
+describe("el guard de la proveniencia está CABLEADO al smoke (no es una función suelta)", () => {
+  const smokeSrc = readFileSync(
+    fileURLToPath(new URL("./smoke-solana-e2e.ts", import.meta.url)),
+    "utf8",
+  );
+
+  it("el checkpoint 3 llama al clasificador y sigue SÓLO con 'no-real'", () => {
+    expect(smokeSrc).toContain("classifyPayoutProvenance(provenance)");
+    expect(smokeSrc).toContain('provenanceVerdict.kind !== "no-real"');
+  });
+
+  it("no volvió la denylist de un solo valor ni una copia del Set de producción", () => {
+    // Una segunda copia de la lista es exactamente cómo se desincronizan las dos capas: el único
+    // acceso al conjunto real es el import de flow-vm, así que NINGUNA línea de código (los
+    // comentarios sí pueden nombrarlo) puede traer el valor escrito a mano.
+    const helpersSrc = readFileSync(
+      fileURLToPath(new URL("./smoke-helpers.ts", import.meta.url)),
+      "utf8",
+    );
+    const codeLines = (src: string): string[] =>
+      src.split("\n").filter((l) => {
+        const t = l.trimStart();
+        return !(t.startsWith("//") || t.startsWith("*") || t.startsWith("/*"));
+      });
+    const offenders = [...codeLines(smokeSrc), ...codeLines(helpersSrc)].filter((l) =>
+      /transfi/i.test(l),
+    );
+    expect(offenders).toEqual([]);
+    expect(smokeSrc).not.toContain('provenance === "transfi"');
+    expect(helpersSrc).toContain(
+      'import { REAL_PAYOUT_PROVENANCES } from "../src/presentation/flow-vm"',
+    );
+  });
+
+  it("la frase que afirmaba de más ya no se imprime en ningún lado del script", () => {
+    expect(smokeSrc).not.toContain("el único valor que significa fiat real");
+    expect(smokeSrc).not.toContain("no se movió ni se moverá dinero fiat");
+  });
+
+  it("cada `flow-vm.ts:NN` citado en scripts/ apunta a la línea que dice (candado anti-drift)", () => {
+    // El hallazgo traía este detalle: el script citaba `flow-vm.ts:7` y la constante estaba en la 17.
+    // Una cita a mano se desactualiza sola; esto lo vuelve mecánico.
+    const flowVm = readFileSync(
+      fileURLToPath(new URL("../src/presentation/flow-vm.ts", import.meta.url)),
+      "utf8",
+    ).split("\n");
+    const cites: string[] = [];
+    for (const file of ["./smoke-helpers.ts", "./smoke-solana-e2e.ts"]) {
+      const src = readFileSync(fileURLToPath(new URL(file, import.meta.url)), "utf8");
+      for (const m of src.matchAll(/flow-vm\.ts:(\d+)/g)) {
+        const n = Number(m[1]);
+        const line = flowVm[n - 1] ?? "";
+        cites.push(`${file}:${n} → ${line.trim()}`);
+      }
+    }
+    expect(cites.length).toBeGreaterThan(0);
+    for (const cite of cites) {
+      expect(cite).toMatch(/REAL_PAYOUT_PROVENANCES/);
+    }
+  });
+});
+
+describe("el smoke CARGA bajo `tsx`, que es el runtime con el que corre de verdad", () => {
+  // ⚠️ POR QUÉ ESTO CORRE UN PROCESO EN VEZ DE IMPORTAR: bajo vitest (Vite) el interop de módulos se
+  // resuelve distinto que bajo `tsx` (Node ESM). Ya pasó en este mismo archivo con `anchor.BN`: verde
+  // en vitest, `TypeError` en la corrida real. El guard nuevo agregó un import de `scripts/` hacia
+  // `src/presentation/flow-vm`, y que ese import resuelva bajo Vite NO prueba que resuelva bajo tsx.
+  // Lo único que lo prueba es cargarlo con tsx, y eso es barato: el smoke `process.exit(1)` en su
+  // primer statement si falta el opt-in, DESPUÉS de evaluar todos los imports y ANTES de cualquier red.
+  it("sin SMOKE_ALLOW_REAL llega al abort del opt-in (o sea: todo el grafo de imports cargó)", () => {
+    const res = spawnSync(
+      fileURLToPath(new URL("../node_modules/.bin/tsx", import.meta.url)),
+      [fileURLToPath(new URL("./smoke-solana-e2e.ts", import.meta.url))],
+      {
+        encoding: "utf8",
+        timeout: 60_000,
+        env: { ...process.env, SMOKE_ALLOW_REAL: "" }, // nunca "true": no toca la red ni crea órdenes
+      },
+    );
+    const out = `${res.stdout ?? ""}${res.stderr ?? ""}`;
+    // El exit 1 solo NO alcanza: un import roto también sale 1. Lo que distingue es el mensaje.
+    expect(out).toContain("SMOKE aborted: SMOKE_ALLOW_REAL !== 'true'");
+    expect(out).not.toMatch(/ERR_MODULE_NOT_FOUND|Cannot find module|SyntaxError/);
+    expect(res.status).toBe(1);
   });
 });

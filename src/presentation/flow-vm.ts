@@ -13,8 +13,13 @@ import {
 
 /** Proveniencias de payout que representan un desembolso REAL (allowlist fail-safe, CD-8). Cualquier
  *  valor desconocido/typo cae del lado seguro → muestra el banner (over-warn), nunca lo oculta.
- *  Exemplar: REAL_KYC_PROVENANCES = new Set(["didit"]) en el agente KYC. */
-const REAL_PAYOUT_PROVENANCES = new Set(["transfi"]);
+ *  Exemplar: REAL_KYC_PROVENANCES = new Set(["didit"]) en el agente KYC.
+ *
+ *  Se EXPORTA (y no se copia a ningún lado) porque el smoke de devnet decide con este mismo conjunto
+ *  si abortar: `scripts/smoke-helpers.ts` lo importa. Un segundo Set con los mismos valores es
+ *  exactamente cómo se desincronizan las dos capas. La comparación es EXACTA (`Set.has`), acá y allá:
+ *  "TransFi" NO está en el conjunto. */
+export const REAL_PAYOUT_PROVENANCES: ReadonlySet<string> = new Set(["transfi"]);
 
 /** true si la proveniencia del payout indica un desembolso NO real (mock). `null`/`undefined`
  *  (remesa sin payout aún / legacy) → false (no fuerza el banner por ausencia de dato). */

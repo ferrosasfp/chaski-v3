@@ -343,7 +343,11 @@ export class ConfirmAndSend {
       await this.failAndRefund(r, "settlement_unverified", "not_deposited");
       return r;
     }
-    // 3. BROADCAST del deposit vía el facilitator (gasless, /api/settle/solana-sponsor → /solana/sponsor).
+    // 3. BROADCAST del deposit vía el facilitator (/api/settle/solana-sponsor → /solana/sponsor). El
+    //    facilitator pone la COMISIÓN DE RED, y sólo eso: acá decía "gasless" a secas, y el ALQUILER
+    //    (rent) de las cuentas que crea el deposit sale de la billetera del remitente (`payer =
+    //    sender`). Por eso hay un guard de rent más arriba: la palabra que estaba acá era justamente
+    //    la que hacía pensar que ese guard no hacía falta.
     //
     //    ⚠️ DESDE ACÁ LA TX YA SALIÓ DE NUESTRAS MANOS. Lo que decía este comentario era: "el deposit no
     //    se confirmó, o no podemos saberlo: fail-closed igual". Las dos mitades no son lo mismo y

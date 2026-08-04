@@ -20,6 +20,7 @@ import {
   PRINCIPAL_SETTLED_REFUND_MANUAL,
   PRINCIPAL_STATE_UNKNOWN,
   SOLANA_SENDER_SOL_INSUFFICIENT,
+  SOLANA_SETTLE_LEDGER_UNAVAILABLE,
   WALLET_ADDRESS_UNAVAILABLE,
 } from "../application/use-cases/confirm-and-send";
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
@@ -926,6 +927,14 @@ export function TrackView({
     // del use-case, no una promesa. Decirlo con las palabras de un payout fallido ("si te cobramos,
     // te reembolsamos") deja esperando un reembolso que no existe.
     const prepareRejected = isPrepareRejection(rem.failureReason);
+    // Y el cuarto que tampoco es un fallo de entrega: nuestro servidor no pudo consultar el registro
+    // de direcciones preparadas y cortó ANTES de reenviar la transacción al facilitator
+    // (route.ts:126-133, antes del fetch de la 156). Hasta que este reason existió, esta causa salía
+    // por el PEOR camino de todos: el use-case la mandaba a preguntarle a la cadena, la cadena no
+    // encontraba una cuenta que nunca se creó, y la pantalla decía "No sabemos todavía si te
+    // cobramos". Dudar en voz alta sobre la plata de alguien cuando el código tiene la certeza es
+    // más caro que un diagnóstico pobre: manda a buscar unos USDC que nunca se movieron.
+    const settleLedgerUnavailable = rem.failureReason === SOLANA_SETTLE_LEDGER_UNAVAILABLE;
     // ¿Hay una salida a la vista? Si no la hay, el texto no puede mandar a apretar un botón que no
     // está. Ya no hay un segundo estado "esperando el deadline": esta capa no sabe cuándo vence, así
     // que o se ofrece la acción o no hay ninguna.
@@ -941,6 +950,8 @@ export function TrackView({
               ? "Reconectá tu wallet"
               : prepareRejected
                 ? "No pudimos preparar el envío"
+                : settleLedgerUnavailable
+                ? "No llegamos a enviar tu depósito"
                 : principalUnknown
                 ? "No sabemos todavía si te cobramos"
                 : principalInEscrow
@@ -956,6 +967,8 @@ export function TrackView({
               ? humanError(WALLET_ADDRESS_UNAVAILABLE)
               : prepareRejected
                 ? "El agente de pagos rechazó esta remesa antes de que firmaras nada: no se movió ningún USDC de tu wallet. Empezá de nuevo con una cotización fresca."
+                : settleLedgerUnavailable
+                ? humanError(SOLANA_SETTLE_LEDGER_UNAVAILABLE)
                 : principalUnknown
                 ? "Se cortó la comunicación mientras enviábamos tu depósito, y la cadena tampoco nos contestó. Puede que tus USDC estén en el escrow o que nunca hayan salido de tu wallet: todavía no lo sabemos. Nadie te reembolsó nada."
                 : principalInEscrow

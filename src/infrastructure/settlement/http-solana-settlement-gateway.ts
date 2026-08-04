@@ -40,17 +40,25 @@ function mapErrorReason(status: number, error: unknown): SolanaSettlementFailure
         return "solana_settle_rate_limited";
       case "solana_settle_broadcast_failed":
         return "solana_settle_broadcast_failed";
+      // El 503 del timeout de 15 s del fetch al facilitator, y el del facilitator caído. POSTERIOR
+      // al broadcast: la tx pudo haber entrado. Bucket indeterminado, aguas arriba se pregunta.
       case "solana_settle_unavailable":
-      // "no pude preguntarle al ledger" (503 de S3.5): reintentable, y NO se traduce a un rechazo.
-      // LÍMITE CONOCIDO, y es del lado seguro: este caso se corta ANTES del forward (la route no
-      // llegó al fetch), o sea que "no entró" es un hecho; pero comparte reason con el 503 del
-      // timeout, que SÍ es posterior al broadcast. Aguas arriba, entonces, se lo trata como
-      // indeterminado: se le pregunta a la cadena. El costo máximo es una consulta de más y, si esa
-      // consulta también se cae, decirle a la persona "todavía no sabemos" cuando podríamos decirle
-      // "no salió". Nunca al revés: de acá no sale un cobro ni un comprobante de reembolso.
-      // Separarlos pide un reason propio en SolanaSettlementFailureReason; queda anotado, no hecho.
-      case "solana_settle_ledger_unavailable":
         return "solana_settle_unavailable";
+      // "no pude preguntarle al ledger" (503 de S3.5): reintentable, y NO se traduce a un rechazo.
+      //
+      // ⚠️ ACÁ CAÍA EN `solana_settle_unavailable` POR FALLTHROUGH, y eso costaba una mentira. Este
+      // caso se corta ANTES del forward (la route no llegó al fetch), así que "no entró" es un
+      // hecho; pero al compartir reason con el 503 del timeout —que SÍ es posterior al broadcast—
+      // aguas arriba tenía que tratarse como indeterminado, ir a preguntarle a la cadena y, cuando
+      // la cadena no encontraba la cuenta (porque nunca existió), terminar en "No sabemos todavía
+      // si te cobramos". O sea: la app decía que no sabía algo que sí sabía.
+      //
+      // Con reason propio cada uno recibe el trato que su origen justifica, y NINGUNO se relaja:
+      // éste entra en SETTLE_REASONS_BEFORE_BROADCAST y el del timeout se queda afuera. Fusionarlos
+      // de nuevo obliga a elegir un solo trato para los dos, y la elección barata (meter el enum
+      // compartido en la lista) afirma "no se movió nada" sobre una tx que pudo haber salido.
+      case "solana_settle_ledger_unavailable":
+        return "solana_settle_ledger_unavailable";
       // S3.5 del settle: el destino se comparó contra lo que el servidor registró al preparar y NO
       // coincide. Se mapea a un reason propio en vez de caer al 409 → broadcast_failed de abajo, que
       // diría "no se pudo transmitir" sobre una tx que nunca se intentó transmitir.

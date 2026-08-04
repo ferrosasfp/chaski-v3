@@ -30,6 +30,7 @@ import {
   ConfirmAndSend,
   PRINCIPAL_SETTLED_REFUND_MANUAL,
   PRINCIPAL_STATE_UNKNOWN,
+  SOLANA_SETTLE_LEDGER_UNAVAILABLE,
 } from "./confirm-and-send";
 import { RecoverEscrowFunds } from "./recover-escrow-funds";
 
@@ -454,6 +455,62 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
       expect(out.snapshot.refundTx).toBeNull();
       expect(out.snapshot.principalTx).toBeNull();
     }
+  });
+
+  // ── EL TERCER REASON DEL GUARD S3.5: "no pude preguntarle al ledger" ──────────────────────────
+  // Sale del catch de `listPreparedDepositAddresses` (route.ts:126-133), que está ANTES del fetch al
+  // facilitator: no hubo forward, no hay tx viajando. Antes de tener reason propio compartía enum
+  // con el timeout de 15 s y por eso caía afuera de la lista: se le preguntaba a la cadena, la
+  // cadena no encontraba una cuenta que nunca se creó, y la remesa terminaba con
+  // PRINCIPAL_STATE_UNKNOWN. Este test es EL candado de que el reason esté en la lista: sacarlo de
+  // SETTLE_REASONS_BEFORE_BROADCAST vuelve a llamar al probe y vuelve a pisar el reason.
+  it("★ ledger_unavailable ⇒ NO se pregunta a la cadena y el reason sobrevive: la route cortó antes del forward", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedQuoted(repo);
+    // El probe contesta "deposited" a propósito: si alguien lo llamara, PISARÍA el reason con la
+    // marca de resolución manual y la pantalla mandaría a recuperar unos USDC que nunca salieron.
+    const probe = new FakeSolanaEscrowDepositProbe("deposited");
+    const gateway = new FakeSolanaSettlementGateway({
+      ok: false,
+      reason: SOLANA_SETTLE_LEDGER_UNAVAILABLE,
+    });
+
+    const out = await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id });
+
+    expect(probe.calls).toHaveLength(0);
+    expect(out.snapshot.failureReason).toBe(SOLANA_SETTLE_LEDGER_UNAVAILABLE);
+    expect(out.snapshot.failureReason).not.toBe(PRINCIPAL_STATE_UNKNOWN); // ni "no sabemos"
+    expect(out.snapshot.failureReason).not.toBe(PRINCIPAL_SETTLED_REFUND_MANUAL); // ni "está adentro"
+    expect(out.snapshot.principalTx).toBeNull();
+    expect(out.snapshot.refundTx).toBeNull();
+  });
+
+  // ── EL CANDADO QUE PROTEGE AL OTRO LADO, y es el más importante de los dos ─────────────────────
+  // El atajo tentador para arreglar lo de arriba era meter `solana_settle_unavailable` en
+  // SETTLE_REASONS_BEFORE_BROADCAST. Ese enum ES el del timeout de 15 s del fetch al facilitator, o
+  // sea un corte POSTERIOR al broadcast: con el atajo, una remesa cuyo depósito la cadena confirma
+  // pasaría a decir "no entró". Este test lo mata explícitamente, y por eso mira el desenlace más
+  // caro: probe = "deposited". Si el mutante entra, `failureReason` deja de ser la marca de
+  // resolución manual y quien tenga USDC en el vault deja de tener quién se lo diga.
+  it("★ MUTANTE: si `solana_settle_unavailable` entrara en la lista, el timeout de 15 s afirmaría en falso", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedQuoted(repo);
+    const probe = new FakeSolanaEscrowDepositProbe("deposited");
+    const gateway = new FakeSolanaSettlementGateway({
+      ok: false,
+      reason: "solana_settle_unavailable", // el 503 del timeout, POSTERIOR al broadcast
+    });
+
+    const out = await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id });
+
+    // Se le preguntó a la cadena. Con el enum compartido en la lista, esto sería 0.
+    expect(probe.calls).toHaveLength(1);
+    // Y lo que quedó escrito es lo que la cadena contestó, NO el reason del settle.
+    expect(out.snapshot.failureReason).toBe(PRINCIPAL_SETTLED_REFUND_MANUAL);
+    expect(out.snapshot.failureReason).not.toBe("solana_settle_unavailable");
+    // El reason nuevo tampoco se filtra acá: son dos enums distintos y este flujo usa el compartido.
+    expect(out.snapshot.failureReason).not.toBe(SOLANA_SETTLE_LEDGER_UNAVAILABLE);
+    expect(out.status).toBe("payout_failed"); // recuperable: la plata está en el vault
   });
 
   // El cierre del círculo: el caso indeterminado tiene que dejar a la persona PODER recuperar. Antes

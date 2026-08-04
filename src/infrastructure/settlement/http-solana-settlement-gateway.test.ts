@@ -87,11 +87,43 @@ describe("HttpSolanaSettlementGateway (HU-SOL-13)", () => {
       [409, "solana_settle_beneficiary_mismatch", "solana_settle_beneficiary_mismatch"],
       [409, "solana_settle_beneficiary_unregistered", "solana_settle_beneficiary_unconfirmed"],
       [400, "solana_settle_deposit_unreadable", "solana_settle_beneficiary_unconfirmed"],
-      [503, "solana_settle_ledger_unavailable", "solana_settle_unavailable"],
+      [503, "solana_settle_ledger_unavailable", "solana_settle_ledger_unavailable"],
     ];
     for (const [status, error, reason] of cases) {
       responds(status, { error });
       expect(await new HttpSolanaSettlementGateway().settle(input)).toEqual({ ok: false, reason });
+    }
+  });
+
+  // ── El 503 de S3.5 y el 503 del timeout comparten status, y NO significan lo mismo ──────────────
+  // Los dos llegan como 503 desde /api/settle/solana-sponsor y hasta acá caían en el MISMO reason
+  // (había un fallthrough del `case` de arriba). Pero uno sale del catch de la consulta al ledger,
+  // que está ANTES del fetch al facilitator (route.ts:126-133), y el otro sale del timeout de 15 s
+  // de ESE fetch (route.ts:156-163), o sea después del broadcast. Aguas arriba el primero puede
+  // afirmar "no salió" y el segundo no puede: si vuelven a colapsar acá, la distinción se pierde en
+  // el único punto donde todavía existe la información de dónde se cortó.
+  it("★ el 503 del ledger (pre-forward) NO colapsa con el 503 del timeout (post-broadcast)", async () => {
+    responds(503, { error: "solana_settle_ledger_unavailable" });
+    const ledger = await new HttpSolanaSettlementGateway().settle(input);
+    expect(ledger).toEqual({ ok: false, reason: "solana_settle_ledger_unavailable" });
+    expect(ledger).not.toEqual({ ok: false, reason: "solana_settle_unavailable" });
+
+    responds(503, { error: "solana_settle_unavailable" });
+    const timeout = await new HttpSolanaSettlementGateway().settle(input);
+    expect(timeout).toEqual({ ok: false, reason: "solana_settle_unavailable" });
+    expect(timeout).not.toEqual({ ok: false, reason: "solana_settle_ledger_unavailable" });
+  });
+
+  // El lado seguro del mapa: un 503 cuyo cuerpo no podemos leer NO se promueve al reason que afirma
+  // "no salió". Sin enum reconocible no sabemos si lo puso la route antes del forward o un
+  // intermediario después, así que queda indeterminado y aguas arriba se le pregunta a la cadena.
+  it("★ un 503 sin enum legible NO se lee como el corte pre-forward", async () => {
+    for (const body of [{}, { error: "otra_cosa" }] as const) {
+      responds(503, body);
+      expect(await new HttpSolanaSettlementGateway().settle(input)).toEqual({
+        ok: false,
+        reason: "solana_settle_unavailable",
+      });
     }
   });
 

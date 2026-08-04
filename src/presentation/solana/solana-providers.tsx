@@ -3,6 +3,7 @@
 // providers.tsx). Único archivo que importa la lib + su CSS (seam AC-3). El sync component empuja
 // el estado de useWallet() al singleton React-free y registra openModal.
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import { WalletReadyState } from "@solana/wallet-adapter-base";
 import { ConnectionProvider, WalletProvider, useWallet } from "@solana/wallet-adapter-react";
 import { WalletModalProvider, useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { PhantomWalletAdapter, SolflareWalletAdapter } from "@solana/wallet-adapter-wallets";
@@ -18,7 +19,7 @@ import "@solana/wallet-adapter-react-ui/styles.css";
  *  Exportado SÓLO para el test de la carrera del auto-cierre del modal (ver abajo): montarlo suelto
  *  es la única forma de controlar `visible`/`connecting` cuadro por cuadro. */
 export function SolanaWalletBridgeSync(): null {
-  const { publicKey, connected, connecting, signMessage, signTransaction } = useWallet();
+  const { publicKey, connected, connecting, signMessage, signTransaction, wallets } = useWallet();
   const { setVisible, visible } = useWalletModal();
 
   // Registra el handle imperativo openModal (capturado desde useWalletModal).
@@ -45,6 +46,25 @@ export function SolanaWalletBridgeSync(): null {
         signTransaction(tx as Parameters<NonNullable<typeof signTransaction>>[0]),
       );
   }, [signTransaction]);
+
+  // ¿Alguna wallet se INYECTÓ en esta pestaña? `wallets` es la lista viva que arma WalletProviderBase
+  // y se re-emite en cada `readyStateChange` (WalletProviderBase.js:104-118), así que esto sigue a la
+  // detección asíncrona de la librería en vez de congelar una foto del montaje.
+  //
+  // El criterio es `Installed` y NADA MÁS. `Loadable` NO sirve para esto: Solflare reporta `Loadable`
+  // SIEMPRE, hasta en un escritorio sin ninguna extensión (medido), y Phantom reporta `Loadable` en
+  // iOS sólo para poder redirigir a su universal link. O sea que "hay algo Loadable" no distingue el
+  // caso que nos importa. `Installed` significa exactamente una cosa: encontramos la API de una wallet
+  // en el scope global de ESTE navegador.
+  //
+  // Y por eso NO se mira el user agent. La pregunta que importa es "¿hay wallet acá?", no "¿es un
+  // celular?": un celular DENTRO del navegador de Phantom inyecta igual que un escritorio con la
+  // extensión (medido: `Phantom=Installed` con user agent de Android), y ahí no hay nada que avisar.
+  useEffect(() => {
+    solanaWalletBridge.setWalletAvailability(
+      wallets.some((w) => w.readyState === WalletReadyState.Installed) ? "injected" : "none",
+    );
+  }, [wallets]);
 
   // Empuja el estado en cada cambio. base58 OPACO (CD-3): publicKey.toBase58(), SIN toLowerCase.
   useEffect(() => {

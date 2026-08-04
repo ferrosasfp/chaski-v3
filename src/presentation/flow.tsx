@@ -6,10 +6,12 @@ import {
   Camera,
   Check,
   Clock3,
+  ExternalLink,
   IdCard,
   Loader2,
   ScanFace,
   ShieldCheck,
+  Smartphone,
   Wallet,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -39,6 +41,7 @@ import {
   statusDisplay,
 } from "./flow-vm";
 import { cn } from "./cn";
+import { phantomBrowseUrl, useWalletAvailability } from "./wallet-availability"; // el aviso de "acá no hay wallet" (NoWalletHere)
 import { Button, Card, ChaskiMark, Field, Pill, Row, Stepper, TextInput } from "./ui";
 
 // WKH-187: el quote se muestra ANTES del KYC. Orden: send→connect→review(pre-KYC)→verify→confirm(post-KYC)→track→done.
@@ -638,6 +641,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                   </p>
                 </div>
               </Card>
+              <NoWalletHere />
               <Button disabled={busy} onClick={onConnect}>
                 {busy ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -844,6 +848,61 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
         </div>
       ) : null}
     </main>
+  );
+}
+
+/**
+ * El aviso que faltaba en la pantalla de conectar.
+ *
+ * QUÉ PASABA ANTES (medido, no supuesto, con la librería real en jsdom y user agent de Android sin
+ * wallet inyectada): tocar "Conectar wallet" abre el selector de la librería, que lista Phantom aunque
+ * su `readyState` sea `NotDetected`. Al tocar Phantom, `WalletProviderBase` sale en silencio porque el
+ * readyState no es `Installed` ni `Loadable` (`WalletProviderBase.js`:166-172): no intenta conectar y
+ * no emite ningún error. 150 ms después el selector se cierra solo y lo único que la persona lee es
+ * "Se cerró el selector de wallet sin conectar", que le atribuye una acción que no hizo. El copy de
+ * `no_wallet` (`flow-vm.ts`:251) NO aparece nunca por ese camino, porque nadie llega a tirar
+ * `WalletNotReadyError`.
+ *
+ * QUÉ AFIRMA ESTE TEXTO Y QUÉ NO: sólo que en ESTE navegador no hay una wallet expuesta. No dice, y no
+ * puede decir, si la persona tiene Phantom instalada: en el celular Phantom está instalada y no se
+ * inyecta salvo adentro de su propio navegador, así que "no tenés Phantom" sería falso justo para
+ * quien sí la tiene. Ver `SolanaWalletAvailability` en `solana-wallet-bridge.ts`.
+ *
+ * CON WALLET INYECTADA NO RENDERIZA NADA, y tampoco con "unknown": el escritorio con la extensión y el
+ * celular DENTRO del navegador de Phantom quedan byte-idénticos a como estaban.
+ */
+function NoWalletHere() {
+  const availability = useWalletAvailability();
+  if (availability !== "none") return null;
+  // Sólo se llega acá en el navegador (en el servidor la disponibilidad es "unknown"), pero el guard
+  // deja el componente seguro de renderizar en cualquier contexto.
+  const href = typeof window !== "undefined" ? window.location.href : "";
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  return (
+    <div className="space-y-3 rounded-xl2 border border-line bg-sand/60 p-4">
+      <div className="flex items-center gap-2">
+        <Smartphone className="h-4 w-4 text-cochineal" />
+        <p className="text-sm font-bold">No vemos ninguna wallet en este navegador</p>
+      </div>
+      <p className="text-sm text-stone">
+        Esto no dice si tenés una wallet instalada: dice que en este navegador no hay ninguna
+        disponible.
+      </p>
+      <p className="text-sm text-stone">
+        En el celular, Phantom solo se conecta desde su propio navegador. Si ya la tenés en este
+        dispositivo, abrí Chaski adentro de Phantom.
+      </p>
+      <a
+        href={phantomBrowseUrl(href, origin)}
+        rel="noreferrer"
+        className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-cochineal/30 bg-card px-4 text-[15px] font-semibold text-cochineal"
+      >
+        <ExternalLink className="h-4 w-4" /> Abrir Chaski en Phantom
+      </a>
+      <p className="text-xs text-stone">
+        Si estás en una computadora, instalá la extensión de Phantom o Solflare y recargá la página.
+      </p>
+    </div>
   );
 }
 

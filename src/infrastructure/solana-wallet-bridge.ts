@@ -9,6 +9,23 @@ export interface SolanaWalletState {
   connected: boolean;
 }
 
+/**
+ * ¿Hay alguna wallet INYECTADA en este contexto de navegación?
+ *
+ * Son TRES valores y no dos, a propósito. Lo único que un navegador puede medir es si alguna wallet
+ * expuso su API en el scope global de ESTA pestaña (`WalletReadyState.Installed`, ver
+ * `@solana/wallet-adapter-base/lib/cjs/adapter.js`:37). Eso NO es lo mismo que "la persona tiene una
+ * wallet instalada en el dispositivo": en el celular Phantom está instalada y no se inyecta salvo
+ * adentro de su propio navegador. Cualquier copy que se apoye en esto tiene que hablar del navegador,
+ * nunca del dispositivo.
+ *
+ * · "unknown"  — todavía no lo medimos (el árbol de providers no montó, o corriendo en el servidor).
+ *                Es el valor inicial y NO habilita a afirmar nada.
+ * · "injected" — al menos un adapter llegó a `Installed`.
+ * · "none"     — ninguno. Sólo dice que acá no hay una wallet expuesta.
+ */
+export type SolanaWalletAvailability = "unknown" | "injected" | "none";
+
 type OpenModalFn = () => void;
 /** HU-SOL-5: firma parcial la tx con la wallet conectada. `tx` opaco (`unknown`) para NO importar
  *  @solana/web3.js types acá (preserva el seam React-free de HU-SOL-4). El sync component captura
@@ -20,6 +37,8 @@ type SignMessageFn = (message: Uint8Array) => Promise<Uint8Array>;
 
 class SolanaWalletBridge {
   private state: SolanaWalletState = { publicKey: null, connected: false };
+  private availability: SolanaWalletAvailability = "unknown";
+  private availabilityListeners = new Set<() => void>();
   private openModalHandle: OpenModalFn | null = null;
   private signTxHandle: SignTransactionFn | null = null;
   private signMsgHandle: SignMessageFn | null = null;
@@ -35,6 +54,32 @@ class SolanaWalletBridge {
 
   getState(): SolanaWalletState {
     return this.state;
+  }
+
+  /**
+   * Lo empuja el sync component leyendo `useWallet().wallets[].readyState`, que es el ÚNICO lugar del
+   * sistema que sabe si alguna wallet se inyectó. Vive acá y no en el árbol React para que la pantalla
+   * pueda leerlo sin importar `@solana/wallet-adapter-*` (mismo seam que el resto del bridge).
+   */
+  setWalletAvailability(next: SolanaWalletAvailability): void {
+    if (this.availability === next) return; // sin cambio no hay a quién avisarle
+    this.availability = next;
+    for (const listener of this.availabilityListeners) listener();
+  }
+
+  getWalletAvailability(): SolanaWalletAvailability {
+    return this.availability;
+  }
+
+  /** Suscripción para `useSyncExternalStore`. La detección de wallets es ASÍNCRONA (la librería
+   *  poliza el scope global cada segundo, `scopePollingDetectionStrategy`), así que leer una sola vez
+   *  al renderizar podría congelar un "todavía no la vimos" que un instante después deja de ser
+   *  cierto. Devuelve el desuscriptor. */
+  subscribeWalletAvailability(listener: () => void): () => void {
+    this.availabilityListeners.add(listener);
+    return () => {
+      this.availabilityListeners.delete(listener);
+    };
   }
 
   /** Registrado por el sync component (captura useWalletModal().setVisible). */
@@ -123,10 +168,12 @@ class SolanaWalletBridge {
     rej(new Error(code));
   }
 
-  /** Test-only: resetea el singleton entre tests. */
+  /** Test-only: resetea el singleton entre tests. NO borra los listeners: desuscribirse es trabajo
+   *  del `useEffect` de quien se suscribió, y vaciarlos acá dejaría muda a una pantalla montada. */
   reset(): void {
     this.clearPending();
     this.state = { publicKey: null, connected: false };
+    this.setWalletAvailability("unknown"); // vuelve a "no lo medimos", nunca a un "no hay"
     this.openModalHandle = null;
     this.signTxHandle = null; // HU-SOL-5: aditivo, limpia el handle entre tests
     this.signMsgHandle = null; // HU-SOL-8: aditivo, limpia el handle entre tests

@@ -92,9 +92,13 @@ describe("POST /api/payout/validate — autoridad server-side (WKH-180)", () => 
   });
 
   // ── Didit real ──────────────────────────────────────────────────────────────
-  it("key + Didit Approved → 200 authorized:true (AC-1)", async () => {
+  // El fixture DECLARA vendor_data: sin él, esta sesión no tiene binding y con el ownership
+  // fail-closed ya no autoriza. Antes pasaba igual, y eso escondía el bug: el test que decía
+  // "Approved → authorized:true" en realidad estaba ejercitando el bypass, no el camino real
+  // (la DApp siempre manda vendorData = senderAddress — kyc-gateway.ts:23).
+  it("key + Didit Approved (con binding) → 200 authorized:true (AC-1)", async () => {
     vi.stubEnv("DIDIT_API_KEY", "test-key");
-    vi.stubGlobal("fetch", diditOk({ status: "Approved", session_id: VID }));
+    vi.stubGlobal("fetch", diditOk({ status: "Approved", session_id: VID, vendor_data: ADDR }));
     const res = await POST(req({ verificationId: VID, address: ADDR }));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ authorized: true });
@@ -134,6 +138,8 @@ describe("POST /api/payout/validate — autoridad server-side (WKH-180)", () => 
     expect(await res.json()).toEqual({ authorized: false, reason: "kyc_not_authorized" });
   });
 
+  // CANDADO DE NO-REGRESIÓN: éste es el camino de la DApp (kyc-gateway.ts:23 manda siempre
+  // vendorData = senderAddress). Si el fail-closed de abajo alguna vez lo rompe, se rompe la demo.
   it("vendor_data match exacto (base58 case-sensitive) → true", async () => {
     vi.stubEnv("DIDIT_API_KEY", "test-key");
     vi.stubGlobal("fetch", diditOk({ status: "Approved", session_id: VID, vendor_data: ADDR }));
@@ -142,12 +148,54 @@ describe("POST /api/payout/validate — autoridad server-side (WKH-180)", () => 
     expect(await res.json()).toEqual({ authorized: true });
   });
 
-  it("vendor_data ausente → true (residual documentado)", async () => {
+  // Este test reemplaza a uno que afirmaba lo contrario ("vendor_data ausente → true (residual
+  // documentado)"). No era un residual: era un bypass entero, reproducido contra producción el
+  // 2026-08-04 — POST /api/kyc/session {} (público, sin credenciales) → sesión con vendor vacío →
+  // aprobada por el mock → /api/payout/validate autorizaba CUALQUIER address. Tres direcciones sin
+  // relación entre sí pasaron las tres.
+  it("vendor_data ausente → NO autorizado (fail-closed: sin binding no hay autorización)", async () => {
     vi.stubEnv("DIDIT_API_KEY", "test-key");
     vi.stubGlobal("fetch", diditOk({ status: "Approved", session_id: VID }));
     const res = await POST(req({ verificationId: VID, address: ADDR }));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ authorized: true });
+    expect(await res.json()).toEqual({ authorized: false, reason: "kyc_not_authorized" });
+  });
+
+  // vendor_data ausente + address ARBITRARIA: el input exacto del bypass medido. Tres addresses sin
+  // ninguna relación con la sesión; ninguna puede autorizar. Con el `!== ""` viejo, las tres daban
+  // authorized:true.
+  it.each([
+    ["system program", "11111111111111111111111111111111"],
+    ["wrapped SOL", "So11111111111111111111111111111111111111112"],
+    ["address de terceros", "4AvAjt5ZQxRhCLwLXNLQHmwEfWCF5upBCPDvNqZFy7Hg"],
+  ])(
+    "vendor_data ausente + address ajena (%s) → NO autorizado (el bypass reproducido en prod)",
+    async (_label, foreignAddress) => {
+      vi.stubEnv("DIDIT_API_KEY", "test-key");
+      vi.stubGlobal("fetch", diditOk({ status: "Approved", session_id: VID }));
+      const res = await POST(req({ verificationId: VID, address: foreignAddress }));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ authorized: false, reason: "kyc_not_authorized" });
+    },
+  );
+
+  // El colapso no-oracle de WKH-205 tiene que seguir cubriendo este caso nuevo: "sesión sin binding"
+  // no puede ser distinguible de "sesión rechazada". Por eso el reason es kyc_ownership_mismatch
+  // (que ya está en el switch de validate/route.ts:64) y no uno nuevo, que caería al default y
+  // saldría crudo.
+  it("vendor_data ausente es BYTE-IDÉNTICO a Declined (no abre un oráculo nuevo)", async () => {
+    vi.stubEnv("DIDIT_API_KEY", "test-key");
+
+    vi.stubGlobal("fetch", diditOk({ status: "Approved", session_id: VID }));
+    const noBinding = await POST(req({ verificationId: VID, address: ADDR }));
+    const noBindingBody = await noBinding.json();
+
+    vi.stubGlobal("fetch", diditOk({ status: "Declined", session_id: VID }));
+    const declined = await POST(req({ verificationId: VID, address: ADDR }));
+    const declinedBody = await declined.json();
+
+    expect(noBinding.status).toBe(declined.status);
+    expect(noBindingBody).toEqual(declinedBody);
   });
 
   // ── Cero PII / key server-only ───────────────────────────────────────────────

@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  resolveSolanaComputeUnitLimit,
+  resolveSolanaComputeUnitPriceMicroLamports,
   resolveSolanaNetworkConfig,
   resolveSolanaReleaseAuthorityPubkey,
   resolveSolanaUsdcMint,
@@ -75,5 +77,28 @@ describe("resolveSolanaReleaseAuthorityPubkey — env-driven fail-loud (AC-4/AC-
     expect(() => resolveSolanaReleaseAuthorityPubkey()).toThrow(
       "solana_release_authority_not_configured",
     );
+  });
+});
+
+// ── T11 (WKH-321 / SDD 038, AC-2): los valores de ComputeBudget que Chaski DECLARA en el depósito ──
+//
+// Los dos números van escritos A MANO. Un assert que llamara al propio resolver (o que importara una
+// constante compartida) se movería junto con el mutante y pasaría siempre: verificaría el cableado,
+// no el valor. Su derivación completa vive en el JSDoc de cada resolver (regla R-CU / R-PRICE); acá
+// sólo se congela el resultado.
+describe("resolveSolanaComputeUnit* — los valores derivados que Chaski emite (WKH-321)", () => {
+  it("el límite declarado es 120.000 CU", () => {
+    expect(resolveSolanaComputeUnitLimit()).toBe(120_000);
+  });
+
+  it("el precio declarado es 10.000 µL/CU", () => {
+    expect(resolveSolanaComputeUnitPriceMicroLamports()).toBe(10_000);
+  });
+
+  it("los dos son enteros positivos (el layout de las ix los serializa como u32/u64 sin signo)", () => {
+    for (const value of [resolveSolanaComputeUnitLimit(), resolveSolanaComputeUnitPriceMicroLamports()]) {
+      expect(Number.isInteger(value)).toBe(true);
+      expect(value).toBeGreaterThan(0);
+    }
   });
 });

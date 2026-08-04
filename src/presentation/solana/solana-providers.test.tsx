@@ -210,11 +210,17 @@ describe("SolanaProviders — cableado de onError", () => {
     expect(typeof onError).toBe("function");
 
     // La lib entrega el WalletError acá y en ningún otro lado.
+    //
+    // El error inyectado era `WalletNotReadyError`, que ya no tiene código propio: su copy afirmaba
+    // qué wallet había instalada en el dispositivo y nadie podía leerlo (la app no llama
+    // `useWallet().connect()`, el único disparador de esa excepción). Se cambió por uno que SÍ
+    // tiene traducción, porque lo que este test prueba es el cableado con una causa concreta: con un
+    // nombre que cae en la rama de los desconocidos, un `onError` que no tradujera nada pasaría igual.
     await act(async () => {
-      onError?.(Object.assign(new Error("boom"), { name: "WalletNotReadyError" }));
+      onError?.(Object.assign(new Error("boom"), { name: "WalletWindowClosedError" }));
     });
 
-    expect(p.outcome()).toBe("no_wallet");
+    expect(p.outcome()).toBe("wallet_window_closed");
   });
 
   it("T-ERR-2: un error de wallet sin espera en curso no inventa un rechazo", async () => {

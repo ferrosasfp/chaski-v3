@@ -248,8 +248,21 @@ export function humanError(code: string): string {
   // CD-5: ANTES de includes("kyc") — el string "kyc_pending_unavailable" contiene "kyc".
   if (code.includes("kyc_pending_unavailable") || code.includes("pending_unavailable"))
     return "No pudimos preparar la verificación. Probá de nuevo.";
-  if (code.includes("no_wallet"))
-    return "No se detectó una wallet instalada. Instalá o desbloqueá tu wallet.";
+  // ⚠️ ACÁ VIVÍA EL COPY DE `no_wallet`: "No se detectó una wallet instalada. Instalá o desbloqueá tu
+  // wallet." Se borró por las dos razones a la vez, y cada una alcanzaba sola.
+  //
+  // 1. AFIRMABA SOBRE EL DISPOSITIVO. Un navegador no puede saber qué hay instalado en el teléfono:
+  //    sólo si alguna wallet expuso su API en ESTE contexto. Quien tiene Phantom en el celular y abre
+  //    Chaski en Chrome leía una frase falsa. Lo que sí se puede decir vive en `NoWalletHere`
+  //    (`flow.tsx`), que habla del navegador y no del aparato.
+  // 2. NADIE PODÍA LEERLA. `no_wallet` sale de un solo lugar (`walletErrorCode`, mapeando
+  //    `WalletNotReadyError`) y esa excepción no tiene productor en esta app: la app nunca llama
+  //    `useWallet().connect()` (única fuente del throw de `WalletProviderBase.js`:238), y el efecto de
+  //    autoConnect ya exige `Installed || Loadable` antes de invocar al adapter, que es exactamente la
+  //    condición que el adapter volvería a chequear para tirarla. El mapeo se borró junto con esta
+  //    rama (`solana/wallet-error-code.ts`): si la librería alguna vez la emite, cae en
+  //    `wallet_error:WalletNotReadyError` y el código se muestra en pantalla, que es lo que ese módulo
+  //    promete para un nombre que no conocemos.
   if (code.includes("no_account") || code.includes("wallet_not_connected"))
     return "Reconectá o desbloqueá tu wallet para continuar.";
   // Familia wallet_*: hasta acá TODOS estos códigos caían en el default "Algo salió mal", que es lo
@@ -257,8 +270,14 @@ export function humanError(code: string): string {
   // afirma más de lo que la librería nos dice.
   if (code.includes("wallet_connect_cancelled"))
     return "Se cerró el selector de wallet sin conectar. Podés volver a intentarlo cuando quieras.";
+  // "La wallet tardó demasiado en responder" afirmaba que alguien le preguntó a una wallet, y este
+  // código tiene DOS productores: `WalletTimeoutError` de la librería (ahí sí hubo una wallet lenta) y
+  // el timeout propio del bridge (`solana-wallet-bridge.ts`:146-150), que salta al vencerse la espera
+  // aunque la persona haya dejado el selector abierto sin elegir ninguna. En ese segundo caso no hubo
+  // ninguna wallet a la que culpar. El texto dice lo único cierto en los dos: la conexión no se cerró
+  // a tiempo.
   if (code.includes("wallet_connect_timeout"))
-    return "La wallet tardó demasiado en responder. Probá de nuevo.";
+    return "La conexión no se completó a tiempo. Probá de nuevo.";
   if (code.includes("wallet_window_closed"))
     return "Se cerró la ventana de la wallet antes de terminar. Probá de nuevo.";
   if (code.includes("wallet_window_blocked"))
@@ -294,6 +313,16 @@ export function humanError(code: string): string {
   if (code.includes("wallet_error"))
     return "La wallet devolvió un error que no reconocemos. Probá de nuevo.";
   if (code.includes("kyc")) return "No pudimos verificar tu identidad.";
-  if (code.includes("payout")) return "No se pudo entregar. Si te cobramos, te reembolsamos.";
+  // ⚠️ ACÁ SE PROMETÍA UN REEMBOLSO QUE NO EXISTE: "Si te cobramos, te reembolsamos". El adapter de
+  // refund por defecto (`LedgerRefundGateway`) no mueve un peso y devuelve `refundTx: null` a
+  // propósito; el use-case ni siquiera escribe `refunded` sin comprobante real
+  // (`confirm-and-send.ts`:218-221). Sacar los USDC del vault es o el refund trustless que firma la
+  // propia persona, o la release-authority a mano. O sea que nadie devuelve nada solo.
+  //
+  // Es el texto que MÁS se lee de este archivo: TrackView lo usa como último recurso para cualquier
+  // `payout_failed` cuyo reason no reconozca (`flow.tsx`:1035), justo cuando no sabemos dónde está la
+  // plata. Prometer un reembolso ahí manda a esperar sentado en vez de a la única acción que sirve.
+  if (code.includes("payout"))
+    return "No se pudo entregar. No hay un reembolso automático: si tus USDC entraron al escrow, los sacás vos firmando desde tu wallet.";
   return "Algo salió mal. Intentá de nuevo.";
 }

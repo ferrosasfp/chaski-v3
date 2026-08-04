@@ -327,9 +327,36 @@ describe("flow-vm: escrowRefundError", () => {
 });
 
 describe("flow-vm — humanError", () => {
-  it("AC-5: no_wallet → copy específico (≠ genérico)", () => {
-    expect(humanError("no_wallet")).toContain("wallet instalada");
-    expect(humanError("no_wallet")).not.toBe("Algo salió mal. Intentá de nuevo.");
+  // Este test reemplaza al que exigía `humanError("no_wallet")).toContain("wallet instalada")`.
+  // Aquel copy se borró: afirmaba sobre lo instalado en el dispositivo (que el navegador no puede
+  // saber) y encima no tenía productor. Lo que se fija ahora es que NINGÚN mensaje de este traductor
+  // vuelva a hablar de lo que hay instalado, porque el próximo que lo escriba va a estar cometiendo
+  // el mismo error con otras palabras.
+  it("ningún mensaje afirma qué wallet hay instalada en el dispositivo", () => {
+    const codigos = [
+      "no_wallet",
+      "no_account",
+      "wallet_not_connected",
+      "wallet_connect_cancelled",
+      "wallet_connect_timeout",
+      "wallet_window_closed",
+      "wallet_window_blocked",
+      "wallet_connect_failed",
+      "wallet_bridge_not_mounted",
+      "wallet_error:WalletNotReadyError",
+      "cualquier_otra_cosa",
+    ];
+    for (const c of codigos) {
+      expect(humanError(c)).not.toMatch(/instalad/i);
+      expect(humanError(c)).not.toMatch(/no ten[ée]s/i);
+    }
+  });
+
+  // Y la contraparte: borrada la rama, el código huérfano cae al genérico. Se assertea el literal
+  // exacto para que reintroducir cualquier copy propio de `no_wallet` ponga esto en rojo y obligue a
+  // volver a justificar por qué existe una frase que nadie puede leer.
+  it("no_wallet quedó sin rama propia: cae al genérico", () => {
+    expect(humanError("no_wallet")).toBe("Algo salió mal. Intentá de nuevo.");
   });
 
   it("AC-6: no_account / wallet_not_connected → reconectar", () => {
@@ -404,9 +431,48 @@ describe("flow-vm — humanError", () => {
     expect(humanError("a2a_quote_unavailable")).toBe("Algo salió mal. Intentá de nuevo.");
   });
 
+  // ── El reembolso que no existe ────────────────────────────────────────────────────────────────
+  // El copy de `payout` decía "Si te cobramos, te reembolsamos" y es el ÚLTIMO recurso de TrackView
+  // para cualquier payout_failed cuyo reason no reconozca: el caso en que menos se sabe dónde está la
+  // plata es justo donde se prometía devolverla. En este repo nada devuelve nada solo: el adapter de
+  // refund por defecto responde `refundTx: null` (LedgerRefundGateway) y el use-case no escribe
+  // `refunded` sin comprobante real. La salida es que la persona firme el refund del escrow.
+  //
+  // El test es específico a propósito. Los tests que ya existían para las ramas propias del fallo
+  // (settle-reason-on-screen / flow) sólo comprueban `queryByText(/te reembolsamos/) === null`, o sea
+  // que quedaron verdes con sólo borrar la promesa de ACÁ, sin comprobar que el reemplazo diga algo.
+  it("el copy de payout no promete un reembolso automático, y sí nombra la salida que existe", () => {
+    const copy = humanError("payout_failed");
+    expect(copy).toBe(
+      "No se pudo entregar. No hay un reembolso automático: si tus USDC entraron al escrow, los sacás vos firmando desde tu wallet.",
+    );
+    expect(copy).not.toMatch(/te reembolsamos/i);
+    // Sin em dashes en el copy que ve la persona.
+    expect(copy).not.toContain("—");
+  });
+
+  // Toda la tabla de una: ninguna frase de este traductor puede prometer que alguien devuelve plata.
+  // Escrito sobre `humanError` entero y no sobre un código, porque el riesgo no es que vuelva a esta
+  // rama, es que aparezca en la próxima que alguien agregue.
+  it("ninguna frase de humanError promete que nosotros devolvemos la plata", () => {
+    const codigos = [
+      "payout_failed",
+      "payout_rejected",
+      "kyc_rejected",
+      "quote_expired",
+      "solana_settle_ledger_unavailable",
+      "solana_sender_sol_insufficient",
+      "wallet_address_unavailable",
+      "otra_cosa",
+    ];
+    for (const c of codigos) {
+      expect(humanError(c)).not.toMatch(/te (reembolsamos|devolvemos)/i);
+    }
+  });
+
   it("kyc genérico y payout siguen mapeando a su copy", () => {
     expect(humanError("kyc_rejected")).toBe("No pudimos verificar tu identidad.");
-    expect(humanError("payout_failed")).toContain("reembolsamos");
+    expect(humanError("payout_failed")).toContain("No se pudo entregar");
     expect(humanError("otra_cosa")).toBe("Algo salió mal. Intentá de nuevo.");
   });
 
@@ -422,7 +488,7 @@ describe("flow-vm — humanError", () => {
   const GENERICO = "Algo salió mal. Intentá de nuevo.";
   it.each([
     ["wallet_connect_cancelled", "selector de wallet"],
-    ["wallet_connect_timeout", "tardó demasiado"],
+    ["wallet_connect_timeout", "no se completó a tiempo"],
     ["wallet_window_closed", "ventana de la wallet"],
     ["wallet_window_blocked", "ventanas emergentes"],
     ["wallet_connect_failed", "no llegó a conectarse"],
@@ -447,9 +513,17 @@ describe("flow-vm — humanError", () => {
     expect(new Set(mensajes).size).toBe(mensajes.length);
   });
 
-  it("no_wallet y wallet_not_connected conservan su copy previo (no los pisó la familia nueva)", () => {
-    expect(humanError("no_wallet")).toContain("wallet instalada");
+  it("wallet_not_connected conserva su copy previo (no lo pisó la familia nueva)", () => {
     expect(humanError("wallet_not_connected")).toContain("Reconectá");
+  });
+
+  // El timeout tiene DOS productores y sólo uno de ellos habló con una wallet: el otro es el reloj del
+  // propio bridge, que salta con el selector abierto y ninguna wallet elegida. Echarle la culpa a "la
+  // wallet" es inventar un actor.
+  it("el timeout de conexión no le atribuye la demora a una wallet que quizá nadie eligió", () => {
+    const msg = humanError("wallet_connect_timeout");
+    expect(msg).toBe("La conexión no se completó a tiempo. Probá de nuevo.");
+    expect(msg).not.toMatch(/la wallet (tard|no respond)/i);
   });
 });
 

@@ -8,7 +8,15 @@
 /** Nombres que la lib asigna en `error.name` (ver @solana/wallet-adapter-base/errors). */
 const KNOWN_CODES: Readonly<Record<string, string>> = {
   // Reusamos los códigos que `humanError()` ya sabía traducir, para no duplicar copy.
-  WalletNotReadyError: "no_wallet",
+  //
+  // ⚠️ `WalletNotReadyError` NO está acá, y su ausencia es deliberada. Mapeaba a `no_wallet`, cuyo copy
+  // afirmaba sobre lo instalado en el dispositivo (imposible de saber desde el navegador) y además no
+  // tenía forma de aparecer: esta app nunca llama `useWallet().connect()`, que es el único disparador
+  // del throw de `WalletProviderBase.js`:238, y el efecto de autoConnect exige `Installed || Loadable`
+  // antes de tocar al adapter — o sea, filtra de antemano la condición que haría tirar esa excepción.
+  // Sin entrada acá, un `WalletNotReadyError` cae en `wallet_error:WalletNotReadyError`: la persona lee
+  // que la wallet devolvió un error que no reconocemos y el código queda a la vista para diagnosticar.
+  // Eso es exactamente lo que promete el docblock de `walletErrorCode` para cualquier nombre nuevo.
   WalletNotConnectedError: "wallet_not_connected",
   WalletDisconnectedError: "wallet_not_connected",
   WalletTimeoutError: "wallet_connect_timeout",

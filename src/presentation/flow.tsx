@@ -28,6 +28,7 @@ import {
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
 import { isPrepareRejection } from "../application/agent-rejections"; // hallazgo #75: rechazo del agente ≠ payout fallido
 import { resolveSolanaNetworkConfig } from "../infrastructure/chain"; // HU-SOL-13: cluster Solana activo (env-driven)
+import { CUSTODY_WINDOW_SECS } from "../infrastructure/solana-wallet"; // la MISMA constante que fija el deadline del depósito
 import {
   deliveredDisplay,
   escrowFundsAtRisk,
@@ -75,6 +76,18 @@ const SCAN_STEPS = [
   "Revisando listas de seguridad (AML)",
 ];
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * El sello del modo demo. Decía "Modo demo (sin dinero real)" y esa segunda mitad es falsa acá mismo:
+ * la tarjeta del desembolso (`PayoutInProgress`) dice, dos pantallas más adelante, que "el depósito en
+ * la cadena sí es real". Los USDC del escrow son tokens reales que se ven en el explorador; lo
+ * simulado son los pasos que no llegan a un partner de verdad.
+ *
+ * El texto nuevo dice exactamente lo que `isDemoMode` mide (la cotización, la verificación o el
+ * desembolso vinieron de un fallback local) y ni un gramo más. UNA sola constante para los dos lugares
+ * que lo muestran: eran dos literales idénticos y nada impedía que uno se corrigiera y el otro no.
+ */
+const DEMO_PILL = "Modo demo (con pasos simulados)";
 
 // WKH-188: timing del resume-loop de KYC, alineado al estándar de UX (SDD §5.1).
 // Escape < límite de atención 10 s (NN/g); poll total 20 s dentro del rango 15-30 s de
@@ -489,7 +502,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
 
       {rem && isDemoMode(rem) && (step === "review" || step === "confirm" || step === "track" || step === "verify") ? (
         <div className="mb-4 flex items-center justify-center">
-          <Pill tone="warn">Modo demo (sin dinero real)</Pill>
+          <Pill tone="warn">{DEMO_PILL}</Pill>
         </div>
       ) : null}
 
@@ -498,8 +511,12 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
           <Loader2 className="mx-auto mt-6 h-8 w-8 animate-spin text-cochineal" />
           <div>
             <p className="text-base font-bold">Verificando tu identidad…</p>
+            {/* "con Didit" se cayó: con `DIDIT_ENV=mock` la persona vuelve de `/kyc-simulado`, que es
+                una página nuestra, y este overlay le decía que estábamos hablando con un proveedor que
+                nadie llamó. Esta pantalla no puede distinguir las dos configuraciones (el navegador no
+                ve `DIDIT_ENV`), así que dice lo que vale en las dos. */}
             <p className="mx-auto mt-1 max-w-xs text-sm text-stone">
-              Estamos confirmando tu verificación con Didit. Un segundo.
+              Estamos confirmando tu verificación. Un segundo.
             </p>
           </div>
           {showResumeEscape ? (
@@ -546,10 +563,16 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                     />
                   </div>
                 </Field>
+                {/* "la comisión se lleva todo y tu familia no recibiría nada" tenía un input que la
+                    falsifica: con $4 (por debajo del mínimo de $5) y una comisión de medio dólar
+                    quedan $3,50 y la familia recibiría unos S/13, no nada. La aritmética sólo da cero
+                    bien abajo del mínimo, y la pantalla la afirmaba para todo el rango. Lo que sí es
+                    cierto en todo el rango es lo que hace el efecto de arriba: por debajo del mínimo
+                    no se pide cotización. */}
                 {belowMinimum ? (
                   <p className="mt-2 text-xs font-medium text-cochineal" role="alert">
-                    El mínimo para enviar es ${MIN_SEND_USD}. Por debajo de eso la comisión se
-                    lleva todo y tu familia no recibiría nada.
+                    El mínimo para enviar es ${MIN_SEND_USD}. Por debajo de eso no cotizamos el
+                    envío.
                   </p>
                 ) : null}
                 <div className="mt-4 rounded-xl bg-verde-bg px-4 py-3">
@@ -557,9 +580,15 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                   <p className="tabular text-2xl font-extrabold text-verde">
                     {preview ? preview.receive.format() : "—"}
                   </p>
+                  {/* "llega en ~N min" prometía una entrega que este sistema no puede cumplir hoy: la
+                      release del vault la dispara una persona a mano y la propia pantalla de
+                      seguimiento avisa que "puede quedarse acá un buen rato". El número no se borra
+                      (es un dato del corredor y sirve para comparar), se le pone dueño: lo estima él,
+                      no lo promete Chaski. Mismo criterio en las filas de review y confirm. */}
                   {preview ? (
                     <p className="mt-0.5 text-xs text-verde/70">
-                      1 USD ≈ S/ {preview.rate.toFixed(3)} · llega en ~{preview.etaMinutes} min
+                      1 USD ≈ S/ {preview.rate.toFixed(3)} · el corredor estima ~{preview.etaMinutes}{" "}
+                      min
                     </p>
                   ) : null}
                 </div>
@@ -628,9 +657,15 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                 </div>
                 <div>
                   <p className="text-base font-bold">Conectá tu wallet</p>
+                  {/* "Chaski nunca toca tu plata" es un absoluto y hay quien lo falsifica: el escrow
+                      tiene una release-authority, operada por el equipo, que puede liberar el vault
+                      hacia el pago (ver `confirm-and-send.ts`:190-196). Lo que sí es verificable, y es
+                      lo que hace a esto no custodial, es DÓNDE quedan los USDC: en una cuenta del
+                      contrato (ATA de la PDA `escrow_state`, `solana-wallet.ts`:288), nunca en una
+                      billetera de Chaski. */}
                   <p className="mx-auto mt-1 max-w-xs text-sm text-stone">
-                    Firmás el envío desde tu billetera con USDC. Chaski nunca toca tu plata, solo la
-                    dirige.
+                    Firmás el envío desde tu billetera con USDC. Tus USDC van a un contrato en
+                    Solana, no a una cuenta de Chaski.
                   </p>
                 </div>
                 <div className="rounded-xl bg-verde-bg px-4 py-2.5 text-left">
@@ -661,10 +696,20 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                   <ShieldCheck className="h-5 w-5" />
                   <p className="text-sm font-semibold">Verificación única</p>
                 </div>
+                {/* Dos frases se cayeron acá y por motivos distintos.
+                    · "Lo hace Didit, un verificador certificado": con `DIDIT_ENV=mock` no lo hace
+                      Didit, lo hace `/kyc-simulado`, que es una página nuestra que no verifica nada. Y
+                      esta pantalla no puede distinguir las dos configuraciones, porque el navegador no
+                      ve `DIDIT_ENV` y todavía no existe ninguna decisión con `provenance`.
+                    · "Tus datos no se comparten": sin decir con quién, no hay forma de falsearla ni de
+                      cumplirla, y además es falsa en el único sentido literal (el documento y la
+                      selfie van al verificador; ese es el punto). Lo que sí está probado es el límite
+                      concreto: el body que sale hacia los agentes no lleva `kyc` ni `identity`
+                      (`a2a/gateway-client.test.ts`, T-A6.1). Eso es lo que dice ahora. */}
                 <p className="text-sm text-stone">
                   Por ley, verificamos tu identidad <b>una sola vez</b>. Escaneás tu DNI y te sacás
-                  una selfie. Lo hace <b>Didit</b>, un verificador certificado. Tus datos no se
-                  comparten.
+                  una selfie. Tu documento y tu selfie no se comparten con los agentes que cotizan y
+                  pagan.
                 </p>
                 {scanStage === 0 ? (
                   <div className="flex items-center justify-center gap-3 rounded-xl border border-dashed border-line bg-sand/60 py-7">
@@ -739,7 +784,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                 <Row label="Enviás" value={rem.sendUsd.format()} />
                 <Row label="Comisión" value={rem.quote.feeUsd.format()} />
                 <Row label="Tipo de cambio" value={`S/ ${rem.quote.rate.toFixed(3)}`} />
-                <Row label="Llega en" value={`~${rem.quote.etaMinutes} min`} />
+                <Row label="Estimado del corredor" value={`~${rem.quote.etaMinutes} min`} />
                 <div className="my-2 h-px bg-line" />
                 <Row label="Recibe en" value={`${methodLabel(rem.beneficiary.method)} · ${rem.beneficiary.destination}`} />
               </Card>
@@ -777,7 +822,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                 <Row label="Enviás" value={rem.sendUsd.format()} />
                 <Row label="Comisión" value={rem.quote.feeUsd.format()} />
                 <Row label="Tipo de cambio" value={`S/ ${rem.quote.rate.toFixed(3)}`} />
-                <Row label="Llega en" value={`~${rem.quote.etaMinutes} min`} />
+                <Row label="Estimado del corredor" value={`~${rem.quote.etaMinutes} min`} />
                 <div className="my-2 h-px bg-line" />
                 <Row label="Recibe en" value={`${methodLabel(rem.beneficiary.method)} · ${rem.beneficiary.destination}`} />
               </Card>
@@ -1251,12 +1296,22 @@ function PayoutInProgress({ rem }: { rem: RemittanceState }) {
             que el icono del paso en la lista de arriba. */}
         <Clock3 className="mt-0.5 h-4 w-4 shrink-0 text-cochineal" />
         <div>
-          <p className="text-sm font-medium">El proveedor está procesando el desembolso</p>
+          {/* "El proveedor está procesando el desembolso" contradecía al comentario de TRACK_STEPS
+              quince líneas más arriba, que dice de este mismo estado: "Nadie está pagando todavía".
+              En `payout_submitted` lo único que pasó es que el agente aceptó crear la orden; los USDC
+              siguen en el vault y el release lo dispara una persona a mano. El verbo ahora es el de
+              lo que sabemos: aceptó. */}
+          <p className="text-sm font-medium">El proveedor aceptó la orden de pago</p>
           {/* Las dos mitades honestas, JUNTO al titular y no escondidas más abajo. La segunda es la
               frase que estaba antes: este paso no avanza solo. Se conserva el hecho y cambia el
-              lugar, porque enterrarlo sería prometer un automatismo que no existe. */}
+              lugar, porque enterrarlo sería prometer un automatismo que no existe.
+              "Tus USDC ya están en el contrato" (presente, continuo) afirmaba más que `principalTx`,
+              que prueba un hecho PASADO: la cadena confirmó que el depósito entró. Nadie volvió a
+              mirar el vault desde entonces, y de hecho el historial de esta misma remesa lo dice con
+              todas las letras ("No comprobamos si tus USDC siguen en el escrow", vía
+              `escrowFundsKnowledge` → `unverified`). Dos pantallas no pueden contar dos historias. */}
           <p className="mt-0.5 text-xs text-stone">
-            Tus USDC ya están en el contrato, a tu nombre. Todavía no tenemos la confirmación de que
+            Vimos entrar tus USDC al contrato, a tu nombre. Todavía no tenemos la confirmación de que
             el dinero llegó a destino, así que no te lo vamos a decir hasta tenerla.
           </p>
           <p className="mt-1 text-xs text-stone">
@@ -1265,10 +1320,17 @@ function PayoutInProgress({ rem }: { rem: RemittanceState }) {
           </p>
         </div>
       </div>
+      {/* El sello dice lo que la CONDICIÓN mide, y no una cosa distinta. `isDemoMode` es un OR de tres
+          proveniencias (cotización, verificación, desembolso), así que se prende también cuando el
+          desembolso es real y lo simulado fue la cotización. En esa combinación el texto viejo afirmaba
+          dos cosas falsas de una: que el desembolso era simulado y que no se había movido dinero hacia
+          ninguna cuenta bancaria, con TransFi habiendo pagado. Decir cuál de los tres pasos fue el
+          simulado exigiría distinguirlos acá; se dice menos y no se inventa la distinción. */}
       {simulado ? (
         <p className="rounded-lg border border-dashed border-stone/40 px-3 py-2 text-xs text-stone">
-          <strong>Entorno de prueba.</strong> El desembolso es simulado: no se movió dinero real hacia
-          ninguna cuenta bancaria. El depósito en la cadena sí es real y se puede ver en el explorador.
+          <strong>Entorno de prueba.</strong> Al menos uno de los pasos de este envío (la cotización,
+          la verificación o el desembolso) es simulado. El depósito en la cadena sí es real y se puede
+          ver en el explorador.
         </p>
       ) : null}
     </div>
@@ -1338,9 +1400,14 @@ function AgentPlanCard() {
   return (
     <Card>
       <p className="text-sm font-semibold">Quién va a atender tu envío</p>
+      {/* "Ninguno de estos pasos está atado a una empresa fija" queda desmentido tres renglones más
+          abajo por el propio detalle de cada fila: la que dice "hoy se llama directo" ES un paso
+          cableado a un agente concreto. La frase de arriba pasa a describir el modelo (pedimos
+          capacidades) sin afirmar que hoy los tres corran por ahí, que es justo lo que cada fila ya
+          responde una por una. */}
       <p className="mt-1 text-xs text-stone">
-        Ninguno de estos pasos está atado a una empresa fija. Chaski pide una capacidad y el catálogo
-        abierto responde quién la cumple, así que esta lista puede cambiar sola.
+        Chaski pide capacidades, no empresas: el catálogo abierto responde quién las cumple, así que
+        esta lista puede cambiar sola. Abajo, por dónde corre hoy cada paso.
       </p>
       <div className="mt-3 space-y-2">
         {plan.steps.map((s) => (
@@ -1376,11 +1443,18 @@ function AgentPlanCard() {
   );
 }
 
+// El "2 horas" estaba escrito a mano al lado de una constante que lo decide. Hoy coincide; el día que
+// alguien mueva `CUSTODY_WINDOW_SECS` la frase pasa a ser falsa sin que nada se ponga rojo, que es
+// exactamente cómo nació el bug de la hora inventada que este archivo ya arregló una vez. Se deriva
+// del MISMO valor que el depósito escribe como deadline (`solana-wallet.ts`:277-281), así que no puede
+// desincronizarse. No agrega peso al bundle: `container.ts`:43 ya importa este módulo.
+const CUSTODY_WINDOW_HOURS = CUSTODY_WINDOW_SECS / 3600;
+
 function RefundWindowNote() {
   return (
     <p className="text-xs text-stone">
-      El plazo se fija cuando depositás y dura unas 2 horas. Si todavía no venció, el botón te lo
-      dice sin firmar nada ni cobrarte comisión.
+      El plazo se fija cuando depositás y dura unas {CUSTODY_WINDOW_HOURS} horas. Si todavía no
+      venció, el botón te lo dice sin firmar nada ni cobrarte comisión.
     </p>
   );
 }
@@ -1563,7 +1637,7 @@ export function Receipt({ rem, onNew }: { rem: RemittanceState; onNew: () => voi
         )}
         {isDemoMode(rem) ? (
           <div className="mt-3 flex items-center justify-center">
-            <Pill tone="warn">Modo demo (sin dinero real)</Pill>
+            <Pill tone="warn">{DEMO_PILL}</Pill>
           </div>
         ) : null}
       </Card>

@@ -4,7 +4,6 @@ import { walletErrorCode } from "./wallet-error-code";
 
 describe("walletErrorCode", () => {
   it("reusa los códigos que la UI ya sabía traducir, en vez de inventar sinónimos", () => {
-    expect(walletErrorCode({ name: "WalletNotReadyError" })).toBe("no_wallet");
     expect(walletErrorCode({ name: "WalletNotConnectedError" })).toBe("wallet_not_connected");
     expect(walletErrorCode({ name: "WalletDisconnectedError" })).toBe("wallet_not_connected");
     expect(walletErrorCode({ name: "WalletTimeoutError" })).toBe("wallet_connect_timeout");
@@ -37,6 +36,23 @@ describe("walletErrorCode", () => {
     const copy = humanError(walletErrorCode({ name: "WalletConnectionError" }));
     expect(copy).not.toMatch(/rechazaste|cancelaste/i);
     expect(copy).toMatch(/rechazado|falla|fallado/i);
+  });
+
+  // `WalletNotReadyError` YA NO tiene entrada propia, y este test lo fija. Su código mapeaba a
+  // `no_wallet`, cuyo copy afirmaba qué wallet había instalada en el dispositivo (el navegador no lo
+  // puede saber) y encima nadie podía leerlo: la app no llama `useWallet().connect()`, y el efecto de
+  // autoConnect exige `Installed || Loadable` antes de tocar al adapter, que es la misma condición que
+  // el adapter volvería a chequear para tirar esa excepción.
+  //
+  // Lo que se conserva es lo diagnosticable: el nombre sobrevive dentro del código que se muestra en
+  // pantalla, igual que cualquier error nuevo de la librería.
+  it("WalletNotReadyError sale por la rama de los nombres que no conocemos, con el nombre intacto", () => {
+    expect(walletErrorCode({ name: "WalletNotReadyError" })).toBe(
+      "wallet_error:WalletNotReadyError",
+    );
+    expect(humanError(walletErrorCode({ name: "WalletNotReadyError" }))).toContain(
+      "no reconocemos",
+    );
   });
 
   // El contrato con la otra mitad: si alguien agrega un código acá y se olvida del copy, esto se

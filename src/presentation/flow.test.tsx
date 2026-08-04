@@ -131,9 +131,9 @@ it("T1: modo demo muestra el monto del quote (no S/0.00) y el banner 'Modo demo'
 
   await goToReview();
 
-  // (b) banner "Modo demo — sin dinero real" presente, una sola vez.
+  // (b) el sello del modo demo presente, una sola vez.
   const banners = await screen.findAllByText(
-    /Modo demo \(sin dinero real\)/,
+    /Modo demo \(con pasos simulados\)/,
     {},
     { timeout: 6000 },
   );
@@ -799,7 +799,11 @@ it("T-AC4: en step verify con quote demo (fallback) el banner 'Modo demo' es vis
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ })); // review → verify
 
   expect(await screen.findByRole("button", { name: /Escanear DNI \+ selfie/ })).toBeInTheDocument();
-  const banners = await screen.findAllByText(/Modo demo \(sin dinero real\)/, {}, { timeout: 6000 });
+  const banners = await screen.findAllByText(
+    /Modo demo \(con pasos simulados\)/,
+    {},
+    { timeout: 6000 },
+  );
   expect(banners.length).toBeGreaterThanOrEqual(1);
 });
 
@@ -1346,10 +1350,48 @@ describe("los tildes del tracking no marcan como hecho lo que está en curso", (
     expect(screen.getByText(/va a recibir/)).toBeInTheDocument(); // futuro, no "recibió"
     // La advertencia NO es opcional: sin ella la tarjeta afirma una entrega que nadie confirmó.
     expect(screen.getByText(/Todavía no tenemos la confirmación/)).toBeInTheDocument();
-    expect(screen.getByText(/tus USDC ya están en el contrato/i)).toBeInTheDocument();
+    expect(screen.getByText(/vimos entrar tus USDC al contrato/i)).toBeInTheDocument();
     // Y nunca el verbo en pasado sobre la llegada del dinero.
     expect(screen.queryByText(/ya recibió/i)).toBeNull();
     expect(screen.queryByText(/le llegó/i)).toBeNull();
+  });
+
+  // ── Las dos frases de esta tarjeta que afirmaban de más ───────────────────────────────────────
+  //
+  // Las dos se contradecían con algo escrito en ESTE MISMO archivo, que es la señal más barata de que
+  // una frase afirma de más:
+  //  · "El proveedor está procesando el desembolso" vs el comentario de TRACK_STEPS, quince líneas
+  //    más arriba: "Nadie está pagando todavía". En payout_submitted lo único que pasó es que el
+  //    agente aceptó crear la orden; los USDC siguen en el vault y el release lo dispara una persona.
+  //  · "Tus USDC ya están en el contrato" (presente) vs lo que la MISMA remesa dice en el historial:
+  //    "No comprobamos si tus USDC siguen en el escrow" (escrowFundsKnowledge → unverified). Lo único
+  //    probado es el hecho pasado que respalda `principalTx`: la cadena confirmó que el depósito entró.
+  it("la tarjeta del desembolso no afirma que alguien esté pagando ni que los USDC sigan ahí ahora", () => {
+    const rem = buildFlowSnapshot("payout_submitted", "transfi");
+    render(<TrackView rem={rem} recover={undefined} sender={null} onRecovered={() => {}} />);
+
+    expect(screen.getByText("El proveedor aceptó la orden de pago")).toBeInTheDocument();
+    // Nadie está procesando ni pagando: el paso lo destraba una persona del equipo.
+    expect(screen.queryByText(/est[áa] procesando/i)).toBeNull();
+    expect(screen.queryByText(/est[áa] pagando/i)).toBeNull();
+    // Y el estado del vault se dice en pasado (lo vimos entrar), no en presente (siguen ahí).
+    expect(screen.queryByText(/USDC ya est[áa]n en el contrato/i)).toBeNull();
+    expect(screen.queryByText(/siguen en el contrato/i)).toBeNull();
+  });
+
+  // El sello del entorno de prueba se prende con `isDemoMode`, que es un OR de TRES proveniencias.
+  // Decía "El desembolso es simulado: no se movió dinero real hacia ninguna cuenta bancaria", o sea
+  // afirmaba cuál de los tres pasos había sido, y con la cotización simulada + un desembolso REAL las
+  // dos mitades eran falsas a la vez. El texto ahora dice lo que la condición mide.
+  it("el sello de prueba no elige cuál de los tres pasos fue el simulado", () => {
+    const simulado = buildFlowSnapshot("payout_submitted", "local-fallback");
+    render(<TrackView rem={simulado} recover={undefined} sender={null} onRecovered={() => {}} />);
+
+    expect(screen.getByText(/Al menos uno de los pasos de este envío/)).toBeInTheDocument();
+    expect(screen.queryByText(/El desembolso es simulado/)).toBeNull();
+    expect(screen.queryByText(/no se movió dinero real/)).toBeNull();
+    // Lo que SÍ se conserva, porque es verdad y es lo que distingue esta demo de una maqueta.
+    expect(screen.getByText(/El depósito en la cadena sí es real/)).toBeInTheDocument();
   });
 
   it("el sello de entorno de prueba sale de la proveniencia REAL del desembolso, no de una bandera", () => {
@@ -1358,7 +1400,7 @@ describe("los tildes del tracking no marcan como hecho lo que está en curso", (
       <TrackView rem={simulado} recover={undefined} sender={null} onRecovered={() => {}} />,
     );
     expect(screen.getByText(/Entorno de prueba/)).toBeInTheDocument();
-    expect(screen.getByText(/no se movió dinero real/)).toBeInTheDocument();
+    expect(screen.getByText(/Al menos uno de los pasos de este envío/)).toBeInTheDocument();
     unmount();
 
     // Con un desembolso REAL el sello desaparece SOLO, porque cambió el dato y no porque alguien se

@@ -920,6 +920,7 @@ describe("identidad de red del ledger — vm + chain_id/network_id (CHECK 202607
       chainId: CHAIN_ID_MISLABEL, // el caller sigue pasando un chainId EVM: el ledger lo IGNORA
       senderAddress: SOL_A,
       payoutId: "p-1",
+      payoutProvenance: "transfi",
       vm: "solana",
     });
     expect(rejected).toEqual([]); // si el write violara el CHECK, la fila NO existiría en prod
@@ -984,6 +985,7 @@ describe("identidad de red del ledger — vm + chain_id/network_id (CHECK 202607
         chainId: CHAIN_ID_EVM,
         senderAddress: sender,
         payoutId: "p-x",
+        payoutProvenance: "transfi",
         vm,
       });
       await ledger.recordPrincipalIn({
@@ -1035,6 +1037,7 @@ function prepareInput(over: Record<string, unknown> = {}) {
     chainId: CHAIN_ID_NOT_APPLICABLE,
     senderAddress: SENDER_SOL,
     payoutId: "transfi-po-1",
+    payoutProvenance: "transfi", // orden REAL por default; los tests de proveniencia lo sobreescriben
     vm: "solana" as const,
     ...over,
   };
@@ -1255,6 +1258,7 @@ describe("WKH-213/R3 — el settle escribe al ledger", () => {
       chainId: CHAIN_ID_MISLABEL, // el caller pasa un chainId EVM: el ledger lo IGNORA en Solana
       senderAddress: SOL_A,
       payoutId: "transfi-po-sol",
+      payoutProvenance: "transfi",
       vm: "solana" as const,
     };
   }

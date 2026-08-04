@@ -22,6 +22,7 @@ describe("órdenes huérfanas 'prepared' (WKH-211, in-memory)", () => {
       chainId: 84532,
       senderAddress: SENDER,
       payoutId: "transfi-po-1",
+      payoutProvenance: "transfi",
       vm: "evm" as const,
     });
     const row = [...ledger.store.values()][0]!;
@@ -44,6 +45,7 @@ describe("órdenes huérfanas 'prepared' (WKH-211, in-memory)", () => {
       chainId: 84532,
       senderAddress: SENDER,
       payoutId: "transfi-po-1",
+      payoutProvenance: "transfi",
       vm: "evm" as const,
     });
     // Aunque sea vieja, 'prepared' NO está en el stale-set (principal_in/submitted/forward_error).
@@ -65,6 +67,7 @@ describe("órdenes huérfanas 'prepared' (WKH-211, in-memory)", () => {
       chainId: 84532,
       senderAddress: SENDER,
       payoutId: "transfi-po-1",
+      payoutProvenance: "transfi",
       vm: "evm" as const,
     });
     await ledger.recordPrincipalIn({
@@ -122,6 +125,7 @@ describe("órdenes huérfanas 'prepared' (WKH-211, in-memory)", () => {
       chainId: 84532,
       senderAddress: SENDER,
       payoutId: "transfi-po-1",
+      payoutProvenance: "transfi",
       vm: "evm" as const,
     };
     await ledger.recordOrderPrepared(input);
@@ -163,6 +167,7 @@ describe("SupabaseSettlementLedger.recordOrderPrepared (WKH-211)", () => {
       chainId: 84532,
       senderAddress: SENDER,
       payoutId: "transfi-po-1",
+      payoutProvenance: "transfi",
       vm: "evm" as const,
     });
     const [row, opts] = upsertArgs[0]! as [Record<string, unknown>, Record<string, unknown>];
@@ -186,6 +191,7 @@ describe("SupabaseSettlementLedger.recordOrderPrepared (WKH-211)", () => {
         chainId: 84532,
         senderAddress: SENDER,
         payoutId: "transfi-po-1",
+        payoutProvenance: "transfi",
         vm: "evm",
       }),
     ).rejects.toThrow(/ledger_record_order_prepared_failed/);

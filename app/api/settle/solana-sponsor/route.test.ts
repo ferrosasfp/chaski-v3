@@ -280,6 +280,7 @@ describe("POST /api/settle/solana-sponsor (HU-SOL-13)", () => {
       chainId: 43113,
       senderAddress: SENDER,
       payoutId: "transfi-po-sol",
+      payoutProvenance: "transfi",
       vm: "solana",
     });
     return ledger;

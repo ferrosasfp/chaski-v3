@@ -140,6 +140,11 @@ export async function POST(req: Request): Promise<Response> {
           remittanceId: r.remittanceId,
           quoteId: r.quoteId,
           payoutId: r.payoutId,
+          // Qué proveedor dijo el agente que iba a desembolsar. Es lo que separa una orden que hay que
+          // ir a cancelar del lado del proveedor de una simulada que no existe en ningún lado, sin
+          // tener que adivinarlo por el prefijo del payoutId. `null` = no consta (fila previa a la
+          // migración 20260804, o el agente no la declaró): NO se lee como real.
+          payoutProvenance: r.payoutProvenance,
           createdAt: r.createdAt,
         })),
       },

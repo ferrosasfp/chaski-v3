@@ -23,6 +23,7 @@ import {
   WALLET_ADDRESS_UNAVAILABLE,
 } from "../application/use-cases/confirm-and-send";
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
+import { isPrepareRejection } from "../application/agent-rejections"; // hallazgo #75: rechazo del agente ≠ payout fallido
 import { resolveSolanaNetworkConfig } from "../infrastructure/chain"; // HU-SOL-13: cluster Solana activo (env-driven)
 import {
   deliveredDisplay,
@@ -919,6 +920,12 @@ export function TrackView({
     // pudo entregarse. Si te cobramos, te reembolsamos" deja esperando un reembolso que no existe, por
     // una causa que se arregla cargando unos centavos de SOL.
     const senderSolMissing = rem.failureReason === SOLANA_SENDER_SOL_INSUFFICIENT;
+    // Y el tercero que tampoco es un fallo de entrega: el agente de payout RECHAZÓ crear la orden.
+    // El prepare corre antes de `authorizePrincipal` (confirm-and-send.ts:313-333), o sea antes de
+    // que la wallet firme nada, así que "no se movió ningún USDC" es un hecho que se lee del orden
+    // del use-case, no una promesa. Decirlo con las palabras de un payout fallido ("si te cobramos,
+    // te reembolsamos") deja esperando un reembolso que no existe.
+    const prepareRejected = isPrepareRejection(rem.failureReason);
     // ¿Hay una salida a la vista? Si no la hay, el texto no puede mandar a apretar un botón que no
     // está. Ya no hay un segundo estado "esperando el deadline": esta capa no sabe cuándo vence, así
     // que o se ofrece la acción o no hay ninguna.
@@ -932,7 +939,9 @@ export function TrackView({
               ? "Te falta SOL en la wallet"
               : walletAddressMissing
               ? "Reconectá tu wallet"
-              : principalUnknown
+              : prepareRejected
+                ? "No pudimos preparar el envío"
+                : principalUnknown
                 ? "No sabemos todavía si te cobramos"
                 : principalInEscrow
                   ? "Tus USDC quedaron en el escrow"
@@ -945,7 +954,9 @@ export function TrackView({
               ? humanError(SOLANA_SENDER_SOL_INSUFFICIENT)
               : walletAddressMissing
               ? humanError(WALLET_ADDRESS_UNAVAILABLE)
-              : principalUnknown
+              : prepareRejected
+                ? "El agente de pagos rechazó esta remesa antes de que firmaras nada: no se movió ningún USDC de tu wallet. Empezá de nuevo con una cotización fresca."
+                : principalUnknown
                 ? "Se cortó la comunicación mientras enviábamos tu depósito, y la cadena tampoco nos contestó. Puede que tus USDC estén en el escrow o que nunca hayan salido de tu wallet: todavía no lo sabemos. Nadie te reembolsó nada."
                 : principalInEscrow
                   ? "Tu depósito entró al escrow y el envío no siguió. Los USDC siguen ahí, a tu nombre. Nadie te los reembolsó: los recuperás vos, firmando desde tu wallet."

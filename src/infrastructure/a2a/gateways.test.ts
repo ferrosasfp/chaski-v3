@@ -100,6 +100,61 @@ describe("A2aQuoteGateway (AC-3)", () => {
     await expect(new A2aQuoteGateway().requestQuote(quoteReq)).rejects.toThrow("a2a_quote_unavailable");
   });
 
+  // Hallazgo #75 — el cliente tiene que PROPAGAR la distinción que la route ahora hace. Si estos
+  // enums se colapsan acá, la separación del server no llega a ninguna pantalla: `humanError()` sólo
+  // ve el `message` del Error que sale de este método.
+  function rejects(body: unknown, status = 400) {
+    return vi.fn(async () => ({ ok: false, status, json: async () => body }));
+  }
+
+  it("#75: rechazo por mínimo ⇒ throw fx_amount_below_minimum (NO a2a_quote_unavailable)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      rejects({ error: "a2a_quote_rejected", reason: "fx_amount_below_minimum" }),
+    );
+    await expect(new A2aQuoteGateway().requestQuote(quoteReq)).rejects.toThrow(
+      "fx_amount_below_minimum",
+    );
+  });
+
+  it("#75: rechazo por techo ⇒ throw fx_amount_above_maximum (NO a2a_quote_unavailable)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      rejects({ error: "a2a_quote_rejected", reason: "fx_amount_above_maximum" }),
+    );
+    await expect(new A2aQuoteGateway().requestQuote(quoteReq)).rejects.toThrow(
+      "fx_amount_above_maximum",
+    );
+  });
+
+  it("#75: rechazo colapsado (sin reason) ⇒ throw a2a_quote_rejected, que tampoco es 'unavailable'", async () => {
+    vi.stubGlobal("fetch", rejects({ error: "a2a_quote_rejected" }));
+    await expect(new A2aQuoteGateway().requestQuote(quoteReq)).rejects.toThrow(
+      "a2a_quote_rejected",
+    );
+  });
+
+  // Un `reason` que NO está en la allow-list no se propaga aunque la route se lo mande: el cliente
+  // filtra igual que el server. Sin esto, un server comprometido o driftado podría hacer que este
+  // adapter tire un string arbitrario que después se muestra en pantalla como código.
+  it("#75: reason fuera de la allow-list ⇒ cae al enum de familia, nunca el string crudo", async () => {
+    vi.stubGlobal(
+      "fetch",
+      rejects({ error: "a2a_quote_rejected", reason: "sarasa_inventada" }),
+    );
+    await expect(new A2aQuoteGateway().requestQuote(quoteReq)).rejects.toThrow(
+      "a2a_quote_rejected",
+    );
+  });
+
+  // CANDADO: la infraestructura caída sigue diciendo lo de siempre.
+  it("#75 CANDADO: 502 sin body de rechazo ⇒ sigue siendo a2a_quote_unavailable", async () => {
+    vi.stubGlobal("fetch", rejects({ error: "a2a_upstream_error" }, 502));
+    await expect(new A2aQuoteGateway().requestQuote(quoteReq)).rejects.toThrow(
+      "a2a_quote_unavailable",
+    );
+  });
+
   it("AC-5: shape inválido → throw a2a_quote_bad_shape", async () => {
     vi.stubGlobal("fetch", okJson({ result: { quoteId: "x" } }));
     await expect(new A2aQuoteGateway().requestQuote(quoteReq)).rejects.toThrow("a2a_quote_bad_shape");

@@ -3,6 +3,11 @@
 // app/api/payout/validate: sin base → 501; TODO en try/catch (nunca 500 crudo); cero PII (CD-5:
 // el body del request no se ecoa en errores). Espejo del A2aQuoteGateway cliente.
 import { NextResponse } from "next/server";
+import {
+  QUOTE_REJECTED,
+  RELAYABLE_QUOTE_REJECTIONS,
+  relayableRejection,
+} from "../../../../src/application/agent-rejections";
 import { isParseableIso } from "../../../../src/domain/remittance";
 import {
   FX_MIN_REPUTATION,
@@ -13,6 +18,42 @@ import {
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
+}
+
+/**
+ * ¿Este status del agente es un RECHAZO del pedido, o el agente que no pudo atenderlo?
+ *
+ * 400 y 422 son los dos únicos que prueban que el agente leyó el body y lo negó. Todo lo demás
+ * (401/403 = nuestra credencial, 404 = la ruta, 429 = su rate-limit, 5xx = él caído) es un problema
+ * de infraestructura NUESTRO o SUYO, no del monto que escribió la persona, y sigue saliendo por el
+ * 502 de siempre. Meter un 403 acá diría "revisá tu pedido" cuando lo que hay que revisar es la
+ * credencial del server.
+ */
+function isAgentRejectionStatus(status: number): boolean {
+  return status === 400 || status === 422;
+}
+
+/**
+ * Lee el enum del rechazo del body de error del agente, con la lista de relayables como filtro.
+ *
+ * Escanea tres claves porque el contrato de error del agente NO está vendoreado (ver
+ * `contracts/CONTRACT-VERSIONS.md`: el fixture pinneado es el del OUTPUT feliz) y adivinar una sola
+ * sería apostar. Escanear de más es inofensivo: lo que decide qué sale es la allow-list, no la
+ * clave. Un body ilegible o un enum desconocido ⇒ el enum de familia, nunca el string crudo.
+ */
+async function readQuoteRejection(res: Response): Promise<string> {
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    return QUOTE_REJECTED; // el agente rechazó y no dijo por qué de forma legible
+  }
+  if (!isRecord(body)) return QUOTE_REJECTED;
+  for (const raw of [body.error, body.code, body.reason]) {
+    const mapped = relayableRejection(QUOTE_REJECTED, raw, RELAYABLE_QUOTE_REJECTIONS);
+    if (mapped !== QUOTE_REJECTED) return mapped;
+  }
+  return QUOTE_REJECTED;
 }
 
 // Shape mínimo esperado del result del agente (validación defensiva, sin any).
@@ -67,6 +108,14 @@ export async function POST(req: Request): Promise<Response> {
         },
       ],
     });
+    // ⚠️ ESTA RAMA SIGUE COLAPSADA, Y ES DELIBERADO. La separación rechazo/caída que sí se hizo en
+    // la rama punto-a-punto de abajo NO se replicó acá: `payment_required` (402, la Agent Key sin
+    // saldo), `no_agent_match` (422) y `unavailable` siguen saliendo por el mismo
+    // `a2a_unavailable`. Lo que lo impide es CD-8, que es una directiva, no una omisión: el detalle
+    // granular del gateway va al log y nunca al body. Y no es sólo texto — hay un test que lo
+    // clava (`route.test.ts`, "el detalle SÓLO al log": `Object.keys(json)` debe ser `["error"]`).
+    // Además, lo que un 402 filtraría no es un dato del pedido de quien llama sino del estado
+    // operativo nuestro. Abrir esto necesita su propio SDD que revise CD-8, no un parche acá.
     if (!r.ok) {
       logGatewayFailure("quote", r);
       if (r.code === "not_configured")
@@ -96,7 +145,22 @@ export async function POST(req: Request): Promise<Response> {
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(10_000),
     });
-    if (!res.ok) return NextResponse.json({ error: "a2a_upstream_error" }, { status: 502 });
+    // Un rechazo del agente NO es el agente caído. Acá salían los dos por el mismo 502
+    // `a2a_upstream_error`, y por eso un envío de 2 dólares se leía en pantalla como una caída (ver
+    // la medición en `src/application/agent-rejections.ts`). El 400 dice lo que es: el pedido llegó,
+    // se entendió y se negó, así que reintentar igual no lo va a arreglar — hay que cambiar el monto.
+    // El `reason` viaja SÓLO si está en la allow-list; lo demás sale colapsado (CD-5: nunca se ecoa
+    // el body del request ni texto libre del agente).
+    if (!res.ok) {
+      if (isAgentRejectionStatus(res.status)) {
+        const reason = await readQuoteRejection(res);
+        return NextResponse.json(
+          reason === QUOTE_REJECTED ? { error: QUOTE_REJECTED } : { error: QUOTE_REJECTED, reason },
+          { status: 400 },
+        );
+      }
+      return NextResponse.json({ error: "a2a_upstream_error" }, { status: 502 });
+    }
     const { result } = (await res.json()) as { result: unknown };
     if (!isValidQuoteResult(result)) {
       return NextResponse.json({ error: "a2a_bad_shape" }, { status: 502 });

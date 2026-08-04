@@ -33,6 +33,7 @@
 // de TransFi por orden) y la respuesta Solana-shaped del server (`{beneficiary, authority, ...}` base58)
 // son founder-gated — hasta que el agente remit-cashout-payout exponga el destino Solana. El binding/
 // atestación queda listo. Este gateway se unit-testea con un mock (FakeSolanaPayoutPrepareGateway).
+import { PREPARE_REJECTION_ENUMS } from "../../application/agent-rejections";
 import type { AgentRef, Beneficiary } from "../../domain/remittance";
 import type { PopSigner, SolanaPayoutPrepareGateway } from "../../application/ports";
 
@@ -60,6 +61,12 @@ function mapErrorReason(status: number, error: unknown): string {
       default:
         break;
     }
+    // Familia rechazo-del-agente (422). Se propagan 1:1 igual que los de arriba, pero se listan
+    // aparte y desde la constante compartida en vez de a mano: son el enum que la route deriva del
+    // `reason` del agente, y escribirlos otra vez acá es cómo se desincronizan las dos puntas.
+    // Sin este bloque caerían en el `prepare_rejected` de abajo, que es el default de "4xx que no
+    // reconozco" — o sea, exactamente el aplanamiento que este arreglo vino a deshacer.
+    if (PREPARE_REJECTION_ENUMS.includes(error)) return error;
   }
   if (status === 429 || status === 503 || status === 504) return "prepare_unavailable";
   return "prepare_rejected"; // 4xx/5xx desconocido ⇒ bloquear

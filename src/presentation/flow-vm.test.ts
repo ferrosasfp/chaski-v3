@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Money } from "../domain/money";
+import { MIN_SEND_USD } from "../domain/remittance";
 import type { RemittanceState, RemittanceStatus } from "../domain/remittance";
 import {
   PRINCIPAL_SETTLED_REFUND_MANUAL,
@@ -368,6 +369,39 @@ describe("flow-vm — humanError", () => {
     expect(copy).not.toBe("Algo salió mal. Intentá de nuevo.");
     // No comparte mensaje con "no pudo entregarse": la persona no tiene que esperar ningún reembolso.
     expect(copy).not.toBe(humanError("payout_failed"));
+  });
+
+  // Hallazgo #75 — las tres causas de rechazo de cotización caían en "Algo salió mal. Intentá de
+  // nuevo", que para un monto fuera de rango es un consejo activamente equivocado: intentar de nuevo
+  // con el mismo monto vuelve a fallar exactamente igual.
+  it("#75: mínimo, techo y rechazo genérico tienen copy PROPIO y DISTINTO entre sí", () => {
+    const bajo = humanError("fx_amount_below_minimum");
+    const alto = humanError("fx_amount_above_maximum");
+    const generico = humanError("a2a_quote_rejected");
+    for (const copy of [bajo, alto, generico]) {
+      expect(copy).not.toBe("Algo salió mal. Intentá de nuevo.");
+      // Tampoco comparten mensaje con la caída real, que es lo que decían antes de esto.
+      expect(copy).not.toBe(humanError("a2a_quote_unavailable"));
+    }
+    expect(new Set([bajo, alto, generico]).size).toBe(3);
+  });
+
+  it("#75: el copy del mínimo sale de MIN_SEND_USD, no de un número escrito a mano", () => {
+    // Si alguien cambia la constante y no el copy, esto sigue verde; si alguien escribe el 5 a mano,
+    // se pone rojo el día que la política cambie. Mismo criterio que el copy del rent en SOL.
+    expect(humanError("fx_amount_below_minimum")).toContain(String(MIN_SEND_USD));
+  });
+
+  // Del techo NO tenemos copia local del número (la autoridad es el agente), así que el copy no
+  // puede inventarlo. Lo que sí tiene que hacer es no prometer uno.
+  it("#75: el copy del techo no publica un número que no tenemos", () => {
+    const copy = humanError("fx_amount_above_maximum");
+    expect(copy).toContain("máximo");
+    expect(copy).not.toMatch(/\d/);
+  });
+
+  it("CANDADO #75: a2a_quote_unavailable (agente caído) NO se lleva el copy de un rechazo", () => {
+    expect(humanError("a2a_quote_unavailable")).toBe("Algo salió mal. Intentá de nuevo.");
   });
 
   it("kyc genérico y payout siguen mapeando a su copy", () => {

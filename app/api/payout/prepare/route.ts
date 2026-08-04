@@ -13,6 +13,10 @@
 // → PR8 fail-closed (nunca se atesta sin address confirmada).
 import { NextResponse } from "next/server";
 import {
+  LOGGABLE_PREPARE_REJECTIONS,
+  prepareRejectionEnum,
+} from "../../../../src/application/agent-rejections";
+import {
   buildSolanaPopMessage,
   verifySolanaPopChallenge,
 } from "../../../../src/infrastructure/auth/pop-challenge";
@@ -62,6 +66,35 @@ function isValidPayoutResult(v: unknown): boolean {
   if (!(typeof v.reason === "string" || v.reason === null)) return false;
   if (v.payoutId === null && v.status !== "failed" && v.status !== "blocked") return false;
   return true;
+}
+
+/**
+ * ¿El agente RECHAZÓ la orden? `status` failed/blocked es la respuesta del agente diciendo que no
+ * la creó, y `reason` es por qué.
+ *
+ * Acá está el corazón del hallazgo #75 del lado del desembolso: `reason` se validaba de TIPO en
+ * `isValidPayoutResult` (línea 62) y su VALOR no lo leía nadie. El resultado era que
+ * `kyc_gate_not_passed`, `quote_amount_mismatch`, `quote_unresolvable`,
+ * `kyc_identity_claim_missing` y "el provider es mock" salían los cinco por el mismo
+ * `prepare_no_deposit_address` — un enum que además describe mal a cuatro de los cinco: el agente
+ * no es que no nos dio la dirección, es que decidió no crear la orden.
+ *
+ * El mock queda AFUERA a propósito y sigue muriendo en PR8: contesta `status:"submitted"` con
+ * `depositAddress:null`, que no es un rechazo sino una respuesta incompleta. Ahí
+ * `prepare_no_deposit_address` sí describe lo que pasó.
+ *
+ * Devuelve `null` si no hubo rechazo. Si lo hubo, `{ enum, logged }`: el enum es lo que sale al
+ * browser (filtrado por la allow-list de relayables) y `logged` es lo que va al log del server
+ * (lista cerrada más amplia; lo desconocido se anota como `unmapped` en vez de ecoarse crudo).
+ */
+function readPayoutRejection(v: unknown): { enum: string; logged: string } | null {
+  if (!isRecord(v)) return null;
+  if (v.status !== "failed" && v.status !== "blocked") return null;
+  const raw = v.reason;
+  return {
+    enum: prepareRejectionEnum(raw),
+    logged: typeof raw === "string" && LOGGABLE_PREPARE_REJECTIONS.includes(raw) ? raw : "unmapped",
+  };
 }
 
 export async function POST(req: Request): Promise<Response> {
@@ -258,6 +291,22 @@ export async function POST(req: Request): Promise<Response> {
   // devuelve depositAddress:null → AQUÍ muere (AC-7 fail-closed): NUNCA se atesta sin address confirmada.
   if (!isValidPayoutResult(result)) {
     return NextResponse.json({ error: "prepare_upstream_error" }, { status: 502 });
+  }
+  // PR8b — el agente RECHAZÓ la orden. Va ANTES del guard de depositAddress porque si no, un
+  // rechazo perfectamente explicado (el agente dijo POR QUÉ) sale disfrazado de "no nos dio
+  // dirección". 422 y no 502: el pedido llegó, se entendió y se negó, así que reintentarlo igual no
+  // lo arregla. Nada se atestó, nada se escribió en el ledger y NINGUNA firma se pidió: el prepare
+  // corre antes de `authorizePrincipal` (confirm-and-send.ts:313-333).
+  const rejection = readPayoutRejection(result);
+  if (rejection) {
+    // Sólo enums (CD-5/CD-9): ni el beneficiary, ni la BASE, ni el body del request. El detalle que
+    // NO sale al browser (p. ej. `kyc_gate_not_passed`, colapsado a propósito — ver
+    // agent-rejections.ts) sí queda acá, que es donde el operador puede leerlo.
+    console.warn("[payout-prepare] agent_rejected", {
+      reason: rejection.logged,
+      relayed: rejection.enum,
+    });
+    return NextResponse.json({ error: rejection.enum }, { status: 422 });
   }
   const okResult = result as { payoutId: string | null; provenance?: unknown; depositAddress?: unknown };
   const depositAddress = typeof okResult.depositAddress === "string" ? okResult.depositAddress : "";

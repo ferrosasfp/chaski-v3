@@ -8,6 +8,7 @@
 // Hoy la ÚNICA ruta viva de este par es /api/a2a/quote. La del payout (/api/a2a/payout/submit) la
 // borró WKH-320; ver el comentario de A2aPayoutGateway.submit, que es lo único que quedó de ese lado.
 // El payout del camino Solana lo arma el server en /api/payout/prepare, no este adapter.
+import { QUOTE_REJECTED, RELAYABLE_QUOTE_REJECTIONS } from "../../application/agent-rejections";
 import { Money } from "../../domain/money";
 import { isParseableIso } from "../../domain/remittance";
 import type { AgentRef, Quote } from "../../domain/remittance";
@@ -79,6 +80,28 @@ function mapResultToQuote(result: RawQuoteResult, req: QuoteRequest, agent?: Age
   };
 }
 
+/**
+ * ¿El 4xx que devolvió la route es un RECHAZO del agente, y con qué detalle?
+ *
+ * Devuelve el código a tirar, o `undefined` si esto no fue un rechazo (⇒ el caller sigue con
+ * `a2a_quote_unavailable`, que es lo que decía antes para TODO no-2xx). El enum de la route es
+ * nuestro y su body es `{ error, reason? }`: se lee `reason` si vino, y si no el `error` de
+ * familia. Nada de texto libre — los dos campos ya salieron filtrados por una allow-list del lado
+ * del server (`agent-rejections.ts`).
+ */
+async function readQuoteRejection(res: Response): Promise<string | undefined> {
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    return undefined; // body ilegible ⇒ no podemos afirmar que fue un rechazo
+  }
+  if (!isRecord(body) || body.error !== QUOTE_REJECTED) return undefined;
+  return typeof body.reason === "string" && RELAYABLE_QUOTE_REJECTIONS.includes(body.reason)
+    ? body.reason
+    : QUOTE_REJECTED;
+}
+
 export class A2aQuoteGateway implements QuoteGateway {
   async requestQuote(req: QuoteRequest): Promise<Quote> {
     const res = await fetch("/api/a2a/quote", {
@@ -90,7 +113,14 @@ export class A2aQuoteGateway implements QuoteGateway {
         payoutMethod: req.method,
       }),
     });
-    if (!res.ok) throw new Error("a2a_quote_unavailable"); // AC-5, PII-free
+    // Un rechazo del agente y una caída del agente ya no comparten error. Acá TODO no-2xx era
+    // `a2a_quote_unavailable`, que `humanError()` no reconocía y terminaba en "Algo salió mal.
+    // Intentá de nuevo" — un consejo activamente equivocado para un monto fuera de rango, porque
+    // intentar de nuevo con el mismo monto vuelve a fallar. El código que se tira es el enum que ya
+    // filtró el server; este adapter no interpreta ni traduce nada (AC-5, PII-free).
+    if (!res.ok) {
+      throw new Error((await readQuoteRejection(res)) ?? "a2a_quote_unavailable");
+    }
     const { result, agent } = (await res.json()) as { result: unknown; agent?: unknown };
     if (!isValidQuoteShape(result)) throw new Error("a2a_quote_bad_shape");
     return mapResultToQuote(result, req, readAgentRef(agent));

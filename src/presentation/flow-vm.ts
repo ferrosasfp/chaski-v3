@@ -1,4 +1,5 @@
 import type { Money } from "../domain/money";
+import { MIN_SEND_USD } from "../domain/remittance";
 import type { RemittanceState, RemittanceStatus } from "../domain/remittance";
 import {
   PRINCIPAL_SETTLED_REFUND_MANUAL,
@@ -227,6 +228,18 @@ export function shortErrorCode(raw: string): string | undefined {
 export function humanError(code: string): string {
   if (code.includes("quote_expired") || code.includes("QUOTE_STALE"))
     return "La tasa cambió. Revisá el nuevo monto.";
+  // Familia rechazo-de-cotización. Los tres caían en el default "Algo salió mal. Intentá de nuevo",
+  // que para un monto fuera de rango es un consejo equivocado: intentar de nuevo con el mismo monto
+  // vuelve a fallar. El texto nombra la causa y la única acción que la arregla.
+  // El mínimo se formatea desde la MISMA constante que usa el guard de la pantalla, así que no
+  // puede quedar desactualizado respecto de lo que el flujo exige. Del techo no hay copia local: el
+  // agente es la autoridad y no publicamos un número que no tenemos.
+  if (code.includes("fx_amount_below_minimum"))
+    return `El monto es menor al mínimo que acepta este corredor. Probá con ${MIN_SEND_USD} dólares o más.`;
+  if (code.includes("fx_amount_above_maximum"))
+    return "El monto supera el máximo que este corredor acepta por envío. Probá con un monto menor.";
+  if (code.includes("a2a_quote_rejected"))
+    return "No pudimos cotizar este envío: el corredor lo rechazó. Probá con otro monto.";
   // CD-5: ANTES de includes("kyc") — el string "kyc_pending_unavailable" contiene "kyc".
   if (code.includes("kyc_pending_unavailable") || code.includes("pending_unavailable"))
     return "No pudimos preparar la verificación. Probá de nuevo.";

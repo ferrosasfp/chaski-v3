@@ -1167,6 +1167,29 @@ describe("los tres casos, dichos con palabras distintas", () => {
     expect(screen.queryByText(/verificar tu identidad/)).toBeNull();
   });
 
+  // Hallazgo #75 — el rechazo del agente de payout tampoco es un fallo de entrega. El prepare corre
+  // ANTES de authorizePrincipal (confirm-and-send.ts:313-333), o sea antes de que la wallet firme
+  // nada: "no se movió ningún USDC" es un hecho que se lee del orden del use-case. Decirlo con las
+  // palabras del payout fallido ("si te cobramos, te reembolsamos") deja esperando un reembolso que
+  // no existe, por una causa que se arregla re-cotizando.
+  it.each([
+    "prepare_agent_rejected",
+    "prepare_quote_amount_mismatch",
+    "prepare_quote_unresolvable",
+    "prepare_kyc_identity_claim_missing",
+  ])("RECHAZADO EN PREPARE (%s): no promete reembolso y dice que no se movió nada", async (reason) => {
+    const rem = failedWith(reason);
+    const { recover } = await seededRecovery(rem, new FakeSolanaEscrowRefundGateway());
+    render(<LiveTrackView initial={rem} recover={recover} />);
+
+    expect(screen.getByText(/No pudimos preparar el envío/)).toBeInTheDocument();
+    expect(screen.getByText(/no se movió ningún USDC/)).toBeInTheDocument();
+    // Ni el fallo de entrega, ni el reembolso prometido, ni la incertidumbre sobre el cobro.
+    expect(screen.queryByText(/No pudo entregarse/)).toBeNull();
+    expect(screen.queryByText(/te reembolsamos/)).toBeNull();
+    expect(screen.queryByText(/No sabemos todavía/)).toBeNull();
+  });
+
   it("NO ENTRÓ: sigue siendo el fallo de siempre, sin inventar un tercer estado", async () => {
     const rem = failedWith("solana_settle_rejected");
     const { recover } = await seededRecovery(rem, new FakeSolanaEscrowRefundGateway());

@@ -281,6 +281,26 @@ export interface SolanaEscrowDepositProbe {
   probeDeposit(input: { remittanceId: string; sender: string }): Promise<PrincipalDepositState>;
 }
 
+// El saldo de SOL del sender, con los MISMOS tres valores que el resto del money-path y por la misma
+// razón: preguntarle a un RPC es una medición, y una medición puede no ocurrir.
+//   · { status: "known", lamports } — pudimos preguntar y esto es lo que contestó la cadena.
+//   · { status: "unknown" }         — NO pudimos preguntar (RPC caído, timeout, respuesta ilegible).
+//     No dice que el saldo sea cero ni que sea suficiente: dice que no lo sabemos. Colapsarlo en
+//     "insuficiente" convertiría una caída de infraestructura en una acusación a la billetera de la
+//     persona, que es exactamente el error que este repo ya cometió dos veces.
+// No es un `number | null` a propósito: un `null` obliga a cada llamador a acordarse de qué significa,
+// y ya vimos qué pasa cuando alguien lo lee como "0".
+export type SolanaSenderSolBalance = { status: "known"; lamports: number } | { status: "unknown" };
+
+// Le pregunta a la cadena cuánto SOL tiene el sender. Existe porque el depósito NO es gasless para él:
+// el fee de red lo paga el facilitator, pero el rent de las cuentas que crea la ix `deposit`
+// (`payer = sender`) sale de su billetera. Ver `solana-escrow-rent.ts` para el número y su derivación.
+// `lamports` va como `number` (es lo que devuelve `connection.getBalance`); el saldo de una billetera
+// individual está órdenes de magnitud por debajo de Number.MAX_SAFE_INTEGER.
+export interface SolanaSenderSolBalanceProbe {
+  probeSenderSolBalance(input: { sender: string }): Promise<SolanaSenderSolBalance>;
+}
+
 // HU-SOL-20/AC-2: resuelve los remittanceId del sender desde el store durable server-side cuando el
 // cliente los perdió (localStorage vacío / otro dispositivo). Devuelve [] si el mecanismo está
 // apagado o no verificado — NUNCA lanza por "no hay nada".

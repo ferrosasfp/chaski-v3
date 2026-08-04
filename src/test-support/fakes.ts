@@ -42,6 +42,8 @@ import type {
   SolanaEscrowRefundResult,
   SolanaPayoutPrepareGateway,
   SolanaPrincipalAuthorization,
+  SolanaSenderSolBalance,
+  SolanaSenderSolBalanceProbe,
   SolanaSettlementFailureReason,
   SolanaSettlementGateway,
   WalletPort,
@@ -850,6 +852,26 @@ export class FakeSolanaEscrowDepositProbe implements SolanaEscrowDepositProbe {
     this.calls.push(input);
     if (this.mode === "reject") throw new Error("escrow_probe_boom");
     return this.state;
+  }
+}
+
+// FakeSolanaSenderSolBalanceProbe: la respuesta de LA CADENA a "¿cuánto SOL tiene el remitente?".
+// Default = MUY por encima del umbral de rent, para que todos los tests que no van sobre este guard
+// sigan recorriendo el camino completo sin cambiar una línea. Los tres modos que hacen falta:
+//   · new FakeSolanaSenderSolBalanceProbe(0)          ⇒ saldo medido e insuficiente
+//   · new FakeSolanaSenderSolBalanceProbe(u, "unknown") ⇒ pudimos preguntar y no supimos (RPC raro)
+//   · new FakeSolanaSenderSolBalanceProbe(u, "reject")  ⇒ NO pudimos preguntar (el probe tira)
+export class FakeSolanaSenderSolBalanceProbe implements SolanaSenderSolBalanceProbe {
+  public calls: Array<{ sender: string }> = [];
+  constructor(
+    private readonly lamports: number = 1_000_000_000, // 1 SOL: de sobra para el rent
+    private readonly mode: "resolve" | "unknown" | "reject" = "resolve",
+  ) {}
+  async probeSenderSolBalance(input: { sender: string }): Promise<SolanaSenderSolBalance> {
+    this.calls.push(input);
+    if (this.mode === "reject") throw new Error("sol_balance_probe_boom");
+    if (this.mode === "unknown") return { status: "unknown" };
+    return { status: "known", lamports: this.lamports };
   }
 }
 

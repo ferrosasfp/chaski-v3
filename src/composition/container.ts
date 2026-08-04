@@ -122,11 +122,15 @@ export function createContainer(): Container {
   // Es la fuente autoritativa de si el principal entró cuando el settle no nos dio respuesta. No se
   // cablea ningún agente acá a propósito: un agente es reemplazable por otro mejor vía discovery, la
   // cadena no, y la verdad sobre el dinero tiene que colgar de lo que no se reemplaza.
+  // `senderBalance` = el MISMO adapter otra vez, por la misma razón que `probe`: la pregunta "¿cuánto
+  // SOL tiene esta billetera?" se la hace la cadena, no un agente. Existe porque el depósito NO es
+  // gasless para el remitente (el fee lo paga el facilitator, el rent de las cuentas del escrow no).
   const solana = solanaSettleOn
     ? {
         prepare: new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet)),
         gateway: new HttpSolanaSettlementGateway(),
         probe: wallet,
+        senderBalance: wallet,
       }
     : undefined;
   // Refund trustless (AC-6/CD-10): válvula de recuperación (lee on-chain y aborta si no es

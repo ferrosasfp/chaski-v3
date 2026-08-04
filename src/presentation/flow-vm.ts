@@ -5,6 +5,10 @@ import {
   PRINCIPAL_STATE_UNKNOWN,
 } from "../application/use-cases/confirm-and-send";
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
+import {
+  SENDER_MIN_LAMPORTS_FOR_DEPOSIT,
+  formatLamportsAsSol,
+} from "../application/solana-escrow-rent";
 
 /** Proveniencias de payout que representan un desembolso REAL (allowlist fail-safe, CD-8). Cualquier
  *  valor desconocido/typo cae del lado seguro → muestra el banner (over-warn), nunca lo oculta.
@@ -251,6 +255,14 @@ export function humanError(code: string): string {
   // lo único que se puede afirmar del dinero: el corte fue antes de mover nada.
   if (code.includes("wallet_address_unavailable"))
     return "No pudimos leer la dirección de tu wallet. Reconectala y volvé a intentar: no se movió ningún USDC.";
+  // Le falta SOL para el rent de las cuentas del escrow. El texto tiene que decir tres cosas que antes
+  // no decía ninguna: cuánto hace falta, por qué hace falta (el fee lo paga WasiAI, el rent no), y que
+  // no se movió nada. Sin esto, esta causa salía por el peor camino posible: "No sabemos todavía si te
+  // cobramos", que es lo que la pantalla dice cuando el depósito puede estar en el escrow.
+  // El número NO está escrito a mano: se formatea desde la MISMA constante que compara el guard, así
+  // que no puede quedar desactualizado respecto de lo que el código exige.
+  if (code.includes("solana_sender_sol_insufficient"))
+    return `Te falta SOL en la wallet: necesitás al menos ${formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT)} SOL para crear las cuentas del escrow. La comisión de red la pagamos nosotros, pero ese depósito de las cuentas sale de tu wallet. Cargá SOL y volvé a intentar: no se movió ningún USDC.`;
   if (code.includes("wallet_bridge_not_mounted") || code.includes("wallet_sign_not_available"))
     return "La wallet todavía no está lista. Recargá la página y probá de nuevo.";
   if (code.includes("wallet_error"))

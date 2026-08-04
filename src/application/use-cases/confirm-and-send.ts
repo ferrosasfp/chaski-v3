@@ -1,5 +1,6 @@
 import type { Remittance } from "../../domain/remittance";
 import { isRealRefundReceipt } from "../refund-receipt";
+import { SENDER_MIN_LAMPORTS_FOR_DEPOSIT } from "../solana-escrow-rent";
 import type {
   Clock,
   PayoutAuthorityGateway,
@@ -8,6 +9,8 @@ import type {
   RemittanceRepository,
   SolanaEscrowDepositProbe,
   SolanaPayoutPrepareGateway,
+  SolanaSenderSolBalance,
+  SolanaSenderSolBalanceProbe,
   SolanaSettlementFailureReason,
   SolanaSettlementGateway,
   WalletPort,
@@ -40,6 +43,28 @@ export const PRINCIPAL_STATE_UNKNOWN = "principal_state_unknown";
  * llamada de red del money-path, así que "no se movió nada" es un hecho, no una suposición.
  */
 export const WALLET_ADDRESS_UNAVAILABLE = "wallet_address_unavailable";
+
+/**
+ * Marca estable de otra causa LOCAL y anterior a todo: la wallet del remitente no tiene el SOL que la
+ * ix `deposit` necesita para crear las cuentas del escrow.
+ *
+ * POR QUÉ TIENE CÓDIGO PROPIO, y por qué éste es el peor diagnóstico posible sin él. El depósito NO es
+ * gasless para el remitente: el fee de red lo paga el facilitator (feePayer), pero el rent de
+ * `escrow_state`, del vault y del `escrow_index` sale de su billetera (`payer = sender` en el contexto
+ * `Deposit` del programa). Alguien con USDC de sobra y 0,004 SOL de menos recorría, antes de este
+ * guard, TODO el camino: dos prompts de billetera, CR-1 aprobando, el facilitator co-firmando, el
+ * preflight del validador rechazando por rent insuficiente, cuatro reintentos, un 502
+ * `SPONSOR_BROADCAST_FAILED` que llega como `solana_settle_broadcast_failed` — que NO está en
+ * SETTLE_REASONS_BEFORE_BROADCAST, así que va a preguntarle a la cadena — y la cadena no encuentra la
+ * cuenta, contesta "unknown", y la pantalla termina diciendo "No sabemos todavía si te cobramos".
+ * Nada se movió, y la causa era que faltaban ~0,004 SOL.
+ *
+ * Lo que este código afirma, y nada más: cuando lo consultamos, el saldo de SOL del remitente estaba
+ * por debajo de lo que cuesta crear las cuentas. NO dice que el envío haya fallado, ni que se haya
+ * cobrado nada: el guard corta ANTES del prepare y ANTES de la primera firma, así que "no se movió
+ * nada" es un hecho.
+ */
+export const SOLANA_SENDER_SOL_INSUFFICIENT = "solana_sender_sol_insufficient";
 
 /** Reasons del settle que PRUEBAN que el depósito nunca salió hacia la cadena, porque la respuesta
  *  viene de un punto ANTERIOR al broadcast:
@@ -98,10 +123,15 @@ export class ConfirmAndSend {
     // `probe` viaja en el MISMO bundle y es REQUERIDO por la misma razón que prepare y gateway: un
     // `probe?` suelto que quedara undefined haría que el use-case dejara de preguntarle a la cadena EN
     // SILENCIO, y volvería a tratar "no pude preguntar" como "no pasó".
+    // `senderBalance` viaja en el MISMO bundle, y es REQUERIDO por una razón distinta a la de los
+    // otros tres: no es fail-open lo que evita, es que el chequeo desaparezca sin que nadie lo note.
+    // Un `senderBalance?` que quedara undefined haría que el guard de rent no corriera EN SILENCIO y
+    // el flujo volvería, sin ruido, al 502 indiagnosticable que este guard vino a matar.
     private readonly solana?: {
       prepare: SolanaPayoutPrepareGateway;
       gateway: SolanaSettlementGateway;
       probe: SolanaEscrowDepositProbe;
+      senderBalance: SolanaSenderSolBalanceProbe;
     },
   ) {}
 
@@ -188,6 +218,18 @@ export class ConfirmAndSend {
     }
   }
 
+  /** Le pregunta a la cadena cuánto SOL tiene el sender. Cualquier tropiezo (RPC caído, timeout,
+   *  respuesta ilegible) es "unknown": no pudimos preguntar. Sin `solana` inyectado no hay a quién
+   *  preguntarle, y tampoco hay depósito que armar. */
+  private async probeSenderSol(sender: string): Promise<SolanaSenderSolBalance> {
+    if (!this.solana) return { status: "unknown" };
+    try {
+      return await this.solana.senderBalance.probeSenderSolBalance({ sender });
+    } catch {
+      return { status: "unknown" };
+    }
+  }
+
   async execute(input: { remittanceId: string }): Promise<Remittance> {
     const r = await this.repo.get(input.remittanceId);
     if (!r) throw new Error("remittance_not_found");
@@ -242,6 +284,31 @@ export class ConfirmAndSend {
     if (!this.solana) {
       await this.failAndRefund(r, "settlement_unavailable", "not_deposited");
       return r;
+    }
+    // GUARD DE RENT — ¿le alcanza el SOL al remitente para las cuentas que crea el depósito? El fee lo paga
+    //     el facilitator, el RENT de `escrow_state` + vault + `escrow_index` NO: sale de la billetera
+    //     de quien envía (`payer = sender`). Ver `solana-escrow-rent.ts` para el número y su
+    //     derivación, y `SOLANA_SENDER_SOL_INSUFFICIENT` para qué se veía antes en la pantalla.
+    //
+    //     ⚠️ CORRE ACÁ, ANTES DEL PREPARE, y eso importa: prepare crea una orden de payout real
+    //     server-side. Cortar después dejaría una orden huérfana por una causa que ya sabíamos.
+    //
+    //     ⚠️ "NO PUDE PREGUNTAR" DEJA SEGUIR, Y ES DELIBERADO. Este guard NO custodia dinero: el que
+    //     custodia es el runtime de Solana, que rechaza la transacción si el rent no alcanza, y sigue
+    //     ahí con este chequeo caído. Lo único que aporta es un diagnóstico temprano y barato. Por eso
+    //     su modo de fallo tiene que ser el que menos daño hace: con un RPC caído, bloquear convertiría
+    //     una caída de infraestructura en "no tenés saldo" y dejaría a TODO el mundo sin poder enviar
+    //     (incluida la demo), acusando a billeteras que están perfectas. Dejar seguir, en cambio,
+    //     devuelve exactamente el comportamiento de hoy: se intenta y la cadena decide. El costo de
+    //     equivocarse por este lado es un mal diagnóstico ocasional; por el otro, es la caída total del
+    //     producto ante un RPC lento.
+    //
+    //     Fail-open acá NO contradice el fail-closed del resto del money-path: los otros guards son los
+    //     únicos que impiden mover valor sin autorizar, éste no impide nada que la cadena no impida ya.
+    const senderSol = await this.probeSenderSol(address);
+    if (senderSol.status === "known" && senderSol.lamports < SENDER_MIN_LAMPORTS_FOR_DEPOSIT) {
+      await this.failAndRefund(r, SOLANA_SENDER_SOL_INSUFFICIENT, "not_deposited");
+      return r; // NO se prepara el payout, NO se le pide una sola firma a la wallet
     }
     // 1. PREPARE server-side (análogo a 2.7): resuelve beneficiary+authority SERVER-SIDE (NUNCA del
     //    body; AC-1/CD-7). Fallo ⇒ falla ANTES de firmar: la tx nunca salió, el deposit NO entró.

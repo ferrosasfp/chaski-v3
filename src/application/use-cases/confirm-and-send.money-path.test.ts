@@ -15,6 +15,7 @@ import {
   FakeSolanaEscrowDepositProbe,
   FakeSolanaEscrowRefundGateway,
   FakeSolanaPayoutPrepareGateway,
+  FakeSolanaSenderSolBalanceProbe,
   FakeSolanaSettlementGateway,
   FakeSolanaWallet,
   FixedClock,
@@ -73,6 +74,10 @@ function build(
   // La respuesta de la cadena a "¿entró el principal?". Default "not_deposited" = lo que pasa en los
   // casos que cortan antes del broadcast; los casos donde la tx YA salió pasan el suyo explícito.
   probe: FakeSolanaEscrowDepositProbe = new FakeSolanaEscrowDepositProbe("not_deposited"),
+  // El saldo de SOL del remitente. Default = 1 SOL, muy por encima del rent de las cuentas del escrow:
+  // ningún test de este archivo va sobre el guard de rent, así que todos siguen recorriendo el camino
+  // completo. Los que SÍ van sobre el guard viven en confirm-and-send.sol-balance.test.ts.
+  senderBalance: FakeSolanaSenderSolBalanceProbe = new FakeSolanaSenderSolBalanceProbe(),
 ): ConfirmAndSend {
   return new ConfirmAndSend(
     wallet,
@@ -80,7 +85,7 @@ function build(
     new FixedClock(),
     new FakePayoutAuthorityGateway({ authorized: true }),
     refund,
-    { prepare, gateway, probe },
+    { prepare, gateway, probe, senderBalance },
   );
 }
 

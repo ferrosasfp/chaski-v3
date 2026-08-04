@@ -19,6 +19,7 @@ import { createContainer, type Container } from "../composition/container";
 import {
   PRINCIPAL_SETTLED_REFUND_MANUAL,
   PRINCIPAL_STATE_UNKNOWN,
+  SOLANA_SENDER_SOL_INSUFFICIENT,
   WALLET_ADDRESS_UNAVAILABLE,
 } from "../application/use-cases/confirm-and-send";
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
@@ -913,6 +914,11 @@ export function TrackView({
     // ("si te cobramos, te reembolsamos") deja a la persona esperando un reembolso que no existe, en
     // vez de mandarla a lo único que lo arregla, que es reconectar la wallet.
     const walletAddressMissing = rem.failureReason === WALLET_ADDRESS_UNAVAILABLE;
+    // Y el otro que tampoco es un fallo de entrega: la wallet no tenía el SOL del rent de las cuentas
+    // del escrow, así que el corte fue antes del prepare y antes de la primera firma. Decirlo como "No
+    // pudo entregarse. Si te cobramos, te reembolsamos" deja esperando un reembolso que no existe, por
+    // una causa que se arregla cargando unos centavos de SOL.
+    const senderSolMissing = rem.failureReason === SOLANA_SENDER_SOL_INSUFFICIENT;
     // ¿Hay una salida a la vista? Si no la hay, el texto no puede mandar a apretar un botón que no
     // está. Ya no hay un segundo estado "esperando el deadline": esta capa no sabe cuándo vence, así
     // que o se ofrece la acción o no hay ninguna.
@@ -922,7 +928,9 @@ export function TrackView({
         <p className="text-sm font-semibold">
           {recoveredBySender
             ? "Recuperaste tus fondos"
-            : walletAddressMissing
+            : senderSolMissing
+              ? "Te falta SOL en la wallet"
+              : walletAddressMissing
               ? "Reconectá tu wallet"
               : principalUnknown
                 ? "No sabemos todavía si te cobramos"
@@ -933,7 +941,9 @@ export function TrackView({
         <p className="text-sm text-stone">
           {recoveredBySender
             ? "Los USDC volvieron a tu wallet. Esta remesa no se entregó."
-            : walletAddressMissing
+            : senderSolMissing
+              ? humanError(SOLANA_SENDER_SOL_INSUFFICIENT)
+              : walletAddressMissing
               ? humanError(WALLET_ADDRESS_UNAVAILABLE)
               : principalUnknown
                 ? "Se cortó la comunicación mientras enviábamos tu depósito, y la cadena tampoco nos contestó. Puede que tus USDC estén en el escrow o que nunca hayan salido de tu wallet: todavía no lo sabemos. Nadie te reembolsó nada."

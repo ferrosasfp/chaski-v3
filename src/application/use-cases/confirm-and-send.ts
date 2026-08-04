@@ -24,6 +24,23 @@ export const PRINCIPAL_SETTLED_REFUND_MANUAL = "principal_settled_refund_manual"
  *  a la persona con esas palabras en vez de inventarle un reembolso. */
 export const PRINCIPAL_STATE_UNKNOWN = "principal_state_unknown";
 
+/**
+ * Marca estable de una causa LOCAL, trivial y anterior a todo: este cliente no tiene la dirección de
+ * la wallet, así que no hay a quién autorizar ni con qué firmar.
+ *
+ * POR QUÉ TIENE CÓDIGO PROPIO. Sin este guard, `address` viajaba como `""` hasta la autoridad de
+ * payout, que canonicaliza base58 y tira con el vacío (`address.ts`:13-19); el catch de
+ * `authority.ts`:135 convierte cualquier throw en 502 `kyc_reauth_failed`, o sea "el proveedor de
+ * identidad falló". Es un diagnóstico FALSO, y caro: manda a mirar a Didit, o a reintentar el KYC,
+ * cuando lo único que hay que hacer es reconectar la wallet. Coincide con el 502 indiagnosticable de
+ * un recorrido manual del 2026-08-02.
+ *
+ * Lo que este código afirma, y nada más: no pudimos leer la address. NO dice que el KYC haya fallado,
+ * ni que la autoridad esté caída, ni que se haya movido plata — el guard corta ANTES de la primera
+ * llamada de red del money-path, así que "no se movió nada" es un hecho, no una suposición.
+ */
+export const WALLET_ADDRESS_UNAVAILABLE = "wallet_address_unavailable";
+
 /** Reasons del settle que PRUEBAN que el depósito nunca salió hacia la cadena, porque la respuesta
  *  viene de un punto ANTERIOR al broadcast:
  *    · solana_settle_rejected (422): el facilitator se negó a esponsorear (la tx nunca tuvo firma
@@ -188,9 +205,19 @@ export class ConfirmAndSend {
     //    forjado en localStorage — CD-2/AC-6). confirmed → payout_failed es transición válida
     //    (remittance.ts:65) → se falla sin pull del principal on-chain, sin mover plata del sender.
     const address = await this.wallet.getAddress();
+    // ⚠️ SIN DIRECCIÓN NO SE LLAMA A LA AUTORIDAD. Acá salía `address ?? ""` derecho al gateway, y ese
+    // `""` no llegaba a ningún lado bueno: la autoridad lo canonicaliza, revienta, y el fallo vuelve
+    // como 502 `kyc_reauth_failed`. Una causa local se presentaba como una caída del proveedor de
+    // identidad. Este guard no debilita nada aguas abajo — el ownership check de `authority.ts`:130
+    // sigue siendo fail-closed y sigue rechazando lo que rechazaba; lo único que cambia es que un
+    // caso que ese guard nunca debió tener que atender ya no llega hasta él.
+    if (address == null || address.trim() === "") {
+      await this.failAndRefund(r, WALLET_ADDRESS_UNAVAILABLE);
+      return r; // NO se consulta la autoridad, NO se prepara el payout, NO se firma nada
+    }
     const auth = await this.authority.authorize({
       verificationId: kyc.verificationId,
-      address: address ?? "",
+      address,
     });
     if (!auth.authorized) {
       await this.failAndRefund(r, auth.reason ?? "kyc_reauth_failed");
@@ -224,7 +251,7 @@ export class ConfirmAndSend {
         remittanceId: s.id,
         quoteId: quote.quoteId,
         kycVerificationId: kyc.verificationId,
-        address: address ?? "", // misma coerción que authority.authorize()
+        address, // ya garantizado no vacío por el guard de arriba (era `address ?? ""`)
         amountUsd: s.sendUsd.major,
         beneficiary: s.beneficiary,
         idempotencyKey: `${s.id}:${quote.quoteId}`,
@@ -265,12 +292,12 @@ export class ConfirmAndSend {
       res = await this.solana.gateway.settle({
         partialSignedTx: solana.partialSignedTx,
         reference: solana.reference,
-        sender: address ?? "",
+        sender: address,
         remittanceId: s.id,
         popSignature: solana.popSignature,
       });
     } catch {
-      await this.failAfterBroadcast(r, "solana_settle_unavailable", s.id, address ?? "");
+      await this.failAfterBroadcast(r, "solana_settle_unavailable", s.id, address);
       return r;
     }
     if (!res.ok) {
@@ -280,7 +307,7 @@ export class ConfirmAndSend {
         await this.failAndRefund(r, res.reason, "not_deposited");
         return r;
       }
-      await this.failAfterBroadcast(r, res.reason, s.id, address ?? "");
+      await this.failAfterBroadcast(r, res.reason, s.id, address);
       return r;
     }
     // 4. markPrincipalIn con la signature base58 VERIFICADA on-chain por /solana/sponsor. Luego

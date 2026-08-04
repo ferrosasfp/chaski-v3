@@ -245,6 +245,12 @@ export function humanError(code: string): string {
   // un fallo interno de la wallet. Nombramos las dos y no elegimos.
   if (code.includes("wallet_connect_failed"))
     return "La wallet no llegó a conectarse. Puede que la conexión se haya rechazado, o que la wallet haya fallado. Probá de nuevo.";
+  // No pudimos leer la dirección de la wallet. Es local y es trivial, y sin embargo antes se decía
+  // como "No pudimos verificar tu identidad" (la autoridad de payout devolvía kyc_reauth_failed al
+  // canonicalizar un string vacío). El texto nombra la causa real y la acción que la arregla, y dice
+  // lo único que se puede afirmar del dinero: el corte fue antes de mover nada.
+  if (code.includes("wallet_address_unavailable"))
+    return "No pudimos leer la dirección de tu wallet. Reconectala y volvé a intentar: no se movió ningún USDC.";
   if (code.includes("wallet_bridge_not_mounted") || code.includes("wallet_sign_not_available"))
     return "La wallet todavía no está lista. Recargá la página y probá de nuevo.";
   if (code.includes("wallet_error"))

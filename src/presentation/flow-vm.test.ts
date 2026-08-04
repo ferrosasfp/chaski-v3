@@ -339,6 +339,18 @@ describe("flow-vm — humanError", () => {
     expect(humanError("kyc_pending_unavailable")).not.toBe("No pudimos verificar tu identidad.");
   });
 
+  // La causa más barata de todas tenía el mensaje más caro: sin dirección de wallet, la autoridad de
+  // payout devolvía kyc_reauth_failed y la pantalla decía "No pudimos verificar tu identidad". Manda a
+  // rehacer el KYC a alguien que sólo tiene que reconectar la wallet.
+  it("wallet_address_unavailable: nombra la wallet, no la identidad, y no cae al genérico", () => {
+    const copy = humanError("wallet_address_unavailable");
+    expect(copy).toContain("dirección de tu wallet");
+    expect(copy).toContain("Reconectala");
+    expect(copy).toContain("no se movió ningún USDC"); // lo único afirmable sobre el dinero
+    expect(copy).not.toBe("Algo salió mal. Intentá de nuevo.");
+    expect(copy).not.toBe(humanError("kyc_reauth_failed")); // ya no comparte mensaje con el disfraz
+  });
+
   it("kyc genérico y payout siguen mapeando a su copy", () => {
     expect(humanError("kyc_rejected")).toBe("No pudimos verificar tu identidad.");
     expect(humanError("payout_failed")).toContain("reembolsamos");

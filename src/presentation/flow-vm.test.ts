@@ -7,6 +7,10 @@ import {
 } from "../application/use-cases/confirm-and-send";
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
 import {
+  SENDER_MIN_LAMPORTS_FOR_DEPOSIT,
+  formatLamportsAsSol,
+} from "../application/solana-escrow-rent";
+import {
   deliveredDisplay,
   escrowFundsAtRisk,
   escrowFundsKnowledge,
@@ -349,6 +353,21 @@ describe("flow-vm — humanError", () => {
     expect(copy).toContain("no se movió ningún USDC"); // lo único afirmable sobre el dinero
     expect(copy).not.toBe("Algo salió mal. Intentá de nuevo.");
     expect(copy).not.toBe(humanError("kyc_reauth_failed")); // ya no comparte mensaje con el disfraz
+  });
+
+  // La otra causa barata con el mensaje más caro: sin SOL para el rent de las cuentas del escrow, el
+  // camino largo terminaba en "No sabemos todavía si te cobramos" (PRINCIPAL_STATE_UNKNOWN), o sea el
+  // mensaje que la pantalla reserva para cuando el dinero PUEDE estar en el escrow. Faltaban centavos.
+  it("solana_sender_sol_insufficient: nombra el faltante en SOL y no se confunde con un fallo de entrega", () => {
+    const copy = humanError("solana_sender_sol_insufficient");
+    expect(copy).toContain("SOL");
+    // El número sale de la MISMA constante que compara el guard: si alguien cambia el umbral y no el
+    // copy, esto sigue verde; si alguien escribe el número a mano en el copy, esto se pone rojo.
+    expect(copy).toContain(formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT));
+    expect(copy).toContain("no se movió ningún USDC"); // lo único afirmable sobre el dinero
+    expect(copy).not.toBe("Algo salió mal. Intentá de nuevo.");
+    // No comparte mensaje con "no pudo entregarse": la persona no tiene que esperar ningún reembolso.
+    expect(copy).not.toBe(humanError("payout_failed"));
   });
 
   it("kyc genérico y payout siguen mapeando a su copy", () => {

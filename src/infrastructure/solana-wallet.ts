@@ -22,6 +22,8 @@ import type {
   SolanaEscrowRefundResult,
   SolanaPrincipalAuthorization,
   SolanaRemittanceIdResolver,
+  SolanaSenderSolBalance,
+  SolanaSenderSolBalanceProbe,
   WalletPort,
 } from "../application/ports";
 import type { Quote } from "../domain/remittance";
@@ -75,6 +77,12 @@ export const CUSTODY_WINDOW_SECS = 2 * 60 * 60;
 // "la tx ya no puede entrar".
 const REFUND_CONFIRM_TIMEOUT_MS = 30_000;
 
+/** Techo de la consulta de saldo de SOL. Es una lectura simple (sin firma ni confirmación) que corre
+ *  dentro del camino que la persona espera mirando la pantalla, y su resultado sólo sirve para dar un
+ *  mejor mensaje de error: no puede costar más de lo que ahorra. Vencido el techo, el resultado es
+ *  "no pudimos preguntar", nunca "no tiene saldo". */
+const SOL_BALANCE_PROBE_TIMEOUT_MS = 5_000;
+
 /** Marca interna: la tx ENTRÓ en un bloque y el programa la revirtió. Es un "no" MEDIDO, no una
  *  indeterminación, y por eso viaja como excepción y no como uno de los tres valores. */
 class RefundTxReverted extends Error {}
@@ -95,7 +103,9 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   }
 }
 
-export class SolanaWalletAdapter implements WalletPort, SolanaEscrowDepositProbe {
+export class SolanaWalletAdapter
+  implements WalletPort, SolanaEscrowDepositProbe, SolanaSenderSolBalanceProbe
+{
   private address: string | null = null;
 
   // HU-SOL-20/AC-2: resolver OPCIONAL del remittanceId durable server-side. Ausente (modo demo o
@@ -426,6 +436,43 @@ export class SolanaWalletAdapter implements WalletPort, SolanaEscrowDepositProbe
       return "deposited";
     } catch {
       return "unknown"; // no pudimos preguntar; NO es una respuesta negativa
+    }
+  }
+
+  /**
+   * ¿Cuánto SOL tiene el remitente? Es la pregunta que nadie hacía: un grep de `getBalance` en este
+   * repo no devolvía nada, así que alguien con 0 SOL llegaba a firmar igual y descubría el problema
+   * cuatro reintentos después, como un 502 sin diagnóstico.
+   *
+   * Devuelve los DOS valores que existen, sin colapsarlos:
+   *   · { known, lamports } — la cadena contestó.
+   *   · { unknown }         — no pudimos preguntar: RPC caído, respuesta ilegible, o la consulta tardó
+   *     más que el techo de acá abajo. NO es "tiene cero". Quien lo consume ya sabe que con esto no
+   *     puede afirmar nada sobre la billetera de la persona.
+   *
+   * EL TECHO DE TIEMPO NO ES DECORATIVO: esta consulta se agrega al camino que la persona recorre
+   * apretando un botón. Sin techo, un RPC colgado dejaría el flujo esperando por un dato que sólo
+   * sirve para mejorar un mensaje de error. 5 s es holgado para un `getBalance` (una lectura simple,
+   * sin firma ni confirmación) y sigue siendo mucho menos que los 15 s del settle.
+   */
+  async probeSenderSolBalance(input: { sender: string }): Promise<SolanaSenderSolBalance> {
+    const senderB58 = input.sender?.trim() ? input.sender : ((await this.getAddress()) ?? "");
+    if (!senderB58) return { status: "unknown" }; // sin address no hay a quién consultarle el saldo
+    try {
+      const { PublicKey: PublicKeyLazy, Connection } = await import("@solana/web3.js");
+      const senderPk = new PublicKeyLazy(senderB58); // valida base58 (CD-SDD-7)
+      const connection = new Connection(
+        resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), // client-safe
+      );
+      const lamports = await withTimeout(
+        connection.getBalance(senderPk),
+        SOL_BALANCE_PROBE_TIMEOUT_MS,
+      );
+      // Un RPC que contesta algo que no es un número finito no contestó: no se inventa un cero.
+      if (typeof lamports !== "number" || !Number.isFinite(lamports)) return { status: "unknown" };
+      return { status: "known", lamports };
+    } catch {
+      return { status: "unknown" }; // no pudimos preguntar; NO es un saldo de cero
     }
   }
 

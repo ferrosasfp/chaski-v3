@@ -1,7 +1,15 @@
 // Server-side: broadcast del `deposit` Solana no-custodial (HU-SOL-13/AC-1, CD-6). Reenvía la tx
 // partial-firmada por la wallet al facilitator (POST {FACILITATOR_BASE_URL}/solana/sponsor de
-// HU-SOL-14), que la cofirma con el feePayer y la broadcastea (gasless). El browser NUNCA llama al
+// HU-SOL-14), que la cofirma con el feePayer y la broadcastea. El browser NUNCA llama al
 // facilitator directo: el Authorization Bearer se añade ACÁ, server-side (CD-6).
+//
+// ⚠️ ACÁ DECÍA "(gasless)", Y NO LO ES PARA QUIEN ENVÍA. El patrocinio cubre UNA de las dos cosas que
+// se pagan: la COMISIÓN DE RED, porque el facilitator es el feePayer. El ALQUILER (rent) de las
+// cuentas que crea la ix `deposit` lo paga el SENDER, que es el `payer` de sus `init`
+// (`solana-programs/programs/escrow/src/lib.rs`). Medido en devnet sobre las 3 transacciones
+// patrocinadas que existen: feePayer -10.000 lamports, remitente -4.002.000. Una billetera con USDC
+// y sin SOL no puede depositar, y la palabra "gasless" a secas hacía pensar lo contrario. El número
+// que hace falta y su derivación viven en `src/application/solana-escrow-rent.ts`.
 //
 // TODO en guards fail-closed: nunca 500 crudo, nunca se ecoa el motivo del facilitador (CD-12
 // no-oracle), nunca se expone la API key / base URL al cliente (CD-6). Guard-order: flag → config →

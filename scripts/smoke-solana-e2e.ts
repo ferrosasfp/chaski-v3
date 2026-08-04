@@ -25,6 +25,7 @@ import nacl from "tweetnacl";
 import { sha256 } from "@noble/hashes/sha256";
 import {
   clusterApiUrl,
+  ComputeBudgetProgram,
   Connection,
   Keypair,
   PublicKey,
@@ -35,7 +36,11 @@ import * as anchor from "@coral-xyz/anchor";
 import type { Idl, Provider } from "@coral-xyz/anchor";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { buildSponsorPopMessage } from "../src/infrastructure/auth/sponsor-pop-message";
-import { resolveSolanaNetworkId } from "../src/infrastructure/chain";
+import {
+  resolveSolanaComputeUnitLimit,
+  resolveSolanaComputeUnitPriceMicroLamports,
+  resolveSolanaNetworkId,
+} from "../src/infrastructure/chain";
 import { escrowIdl } from "../src/infrastructure/solana/escrow-idl";
 import {
   computeReleaseAttestation,
@@ -393,8 +398,21 @@ async function main(): Promise<void> {
     .remainingAccounts([{ pubkey: reference, isSigner: false, isWritable: false }])
     .instruction();
 
+  // ── ComputeBudget (WKH-321 / SDD 038) — la MISMA forma que emite producción ────────────────────
+  // Los valores salen de los MISMOS resolvers que usa `solana-wallet.ts`, nunca de literales
+  // copiados: si acá se duplicaran los números, el contract test cubriría un valor y el smoke
+  // mandaría otro, que es el bug de fondo de esta HU en miniatura. Este script postea al MISMO
+  // endpoint que producción (`POST /api/settle/solana-sponsor`), así que un smoke desalineado
+  // validaría una transacción que la DApp ya no emite.
+  const limitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: resolveSolanaComputeUnitLimit() });
+  const priceIx = ComputeBudgetProgram.setComputeUnitPrice({
+    microLamports: resolveSolanaComputeUnitPriceMicroLamports(),
+  });
+
   const { blockhash } = await connection.getLatestBlockhash();
-  const tx = new Transaction().add(ix);
+  // CD-1: las dos van ANTES del partialSign de abajo. Agregar una ix después de firmar recompila el
+  // mensaje y la firma del sender deja de validar (y arrastra al mensaje canónico de SDD 037).
+  const tx = new Transaction().add(limitIx, priceIx, ix); // MISMA forma que solana-wallet.ts:305
   tx.feePayer = facilitatorPk; // el facilitator cofirma/paga el fee (gasless) en el sponsor
   tx.recentBlockhash = blockhash;
   tx.partialSign(sender); // partial-sign SÓLO con la wallet del sender (nunca broadcastea acá)

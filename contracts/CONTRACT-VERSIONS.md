@@ -10,6 +10,7 @@ driftea su shape y se re-vendorea la copia, el test del consumer se pone **ROJO*
 |--------------------|-------------|----------------|------|--------------------|
 | `vendored/corridor-fx.output.fixture.ts` | `wasiai-remittance-agents` | `src/contracts/corridor-fx.output.fixture.ts` | 2026-07-22 | `isValidQuoteResult` (handler `POST` de `app/api/a2a/quote/route.ts`) + `isValidQuoteShape` (`A2aQuoteGateway`) |
 | `vendored/kyc-validator.output.fixture.ts` | `wasiai-remittance-agents` | `src/contracts/kyc-validator.output.fixture.ts` | 2026-07-22 | shape-guard **forward-looking** (test-only) |
+| `vendored/solana-sponsor-limits.fixture.ts` | `wasiai-facilitator` | `src/infra/env.ts` (3 defaults) + `src/methods/solana-sponsor/cr1.ts` (fórmula del fee) | 2026-08-03 | `contracts.solana-sponsor-limits.test.ts` vs `resolveSolanaComputeUnitLimit` / `resolveSolanaComputeUnitPriceMicroLamports` (`src/infrastructure/chain.ts`) |
 
 ## Contrato retirado: `cashout-payout` (2026-07-31)
 
@@ -57,6 +58,35 @@ drift pasa silencioso hasta que alguien re-vendorea.
 **test-only** que espeja `KycAgentOutput` (keys + typeof) — existe sólo para mantener la simetría con
 los otros 2 contratos y cerrar el loop de drift, sin inventar un consumer productivo. CD-7: el fixture
 NO lleva PII (`travelRuleData` / `legalId` / `documentNumber`).
+
+## Topes del sponsor Solana — `vendored/solana-sponsor-limits.fixture.ts`
+
+Pin de los **3 topes anti-drenaje** que el facilitator aplica a la transacción de depósito
+patrocinada, más una **copia de la fórmula del fee**. A diferencia de los otros fixtures, acá no se
+replaya un *shape*: se asserta que los valores que **Chaski emite** (`resolveSolanaComputeUnitLimit`
+y `resolveSolanaComputeUnitPriceMicroLamports`, `src/infrastructure/chain.ts`) **caben** en los topes
+pinneados, y con la política de margen del 50 %.
+
+### Bitácora del pin
+
+| Fecha | Valores pinneados | SDD que lo autoriza | Motivo |
+|-------|-------------------|---------------------|--------|
+| 2026-08-03 | `maxComputeUnits` 300000 (`env.ts:214`), `maxPriorityFeeMicroLamports` 50000 (`env.ts:215`), `maxFeeLamports` 100000 (`env.ts:218`) | **WKH-321 / SDD 038** | Primer pin de los 3 topes del sponsor Solana. Chaski pasó a declarar sus propias ix `ComputeBudget` (120 000 CU / 10 000 µL·CU⁻¹) y necesita un guard que se ponga rojo si esos valores dejan de caber. |
+
+### Los 3 huecos que este pin NO atrapa
+
+Están escritos completos en el encabezado del propio fixture. Resumidos:
+
+1. **Es una copia, no una lectura.** Si el facilitator BAJA un default en `env.ts` y nadie
+   re-vendorea, el CI de chaski-v3 sigue verde y el 422 vuelve en producción.
+2. **Pinnea defaults del código, no configuración de despliegue.** Un override de Railway más bajo
+   que el default (p. ej. `SOLANA_SPONSOR_MAX_COMPUTE_UNITS < 120000`) no lo detecta.
+3. **No sigue cambios de la FÓRMULA del fee** (`cr1.ts:328-331`): si el provider la cambia, la copia
+   local queda vieja y el fee derivado acá deja de ser el que el facilitator calcula.
+
+La frescura la sostiene una persona (el AR/CR re-lee `wasiai-facilitator/src/infra/env.ts:214-218` y
+compara citando `archivo:línea`), **no un assert contra el reloj**: un test que se pone rojo un día
+en que nadie tocó nada entrena al equipo a ignorar el rojo.
 
 ## `ESCROW_IDL_SHA256`
 

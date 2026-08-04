@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  resolveSolanaComputeUnitLimit,
+  resolveSolanaComputeUnitPriceMicroLamports,
   resolveSolanaNetworkConfig,
   resolveSolanaReleaseAuthorityPubkey,
   resolveSolanaUsdcMint,
@@ -76,4 +78,29 @@ describe("resolveSolanaReleaseAuthorityPubkey — env-driven fail-loud (AC-4/AC-
       "solana_release_authority_not_configured",
     );
   });
+});
+
+// ── T11 (WKH-321 / SDD 038, AC-2): los valores de ComputeBudget que Chaski DECLARA en el depósito ──
+//
+// Los dos números van escritos A MANO. Un assert que llamara al propio resolver (o que importara una
+// constante compartida) se movería junto con el mutante y pasaría siempre: verificaría el cableado,
+// no el valor. Su derivación completa vive en el JSDoc de cada resolver (regla R-CU / R-PRICE); acá
+// sólo se congela el resultado.
+describe("resolveSolanaComputeUnit* — los valores derivados que Chaski emite (WKH-321)", () => {
+  it("el límite declarado es 120.000 CU", () => {
+    expect(resolveSolanaComputeUnitLimit()).toBe(120_000);
+  });
+
+  it("el precio declarado es 10.000 µL/CU", () => {
+    expect(resolveSolanaComputeUnitPriceMicroLamports()).toBe(10_000);
+  });
+
+  // BORRADO a propósito (CR MNR-3): acá había un tercer `it` que verificaba "los dos son enteros
+  // positivos". No podía ponerse rojo por su cuenta — cualquier valor que rompiera "entero positivo"
+  // rompe primero a los dos asserts de arriba, que congelan el valor exacto. Era un verde que se
+  // leía como cobertura y no cubría nada. Lo que aquel test decía querer proteger —que el layout
+  // serializa u32/u64 sin signo— sí está cubierto, pero sobre los BYTES y no sobre el número:
+  // `solana-wallet.test.ts` T2 (`readUInt32LE(1)` / `readBigUInt64LE(1)`) y T12 (sobre el payload
+  // que se postea). Si mañana los resolvers dejan de ser constantes, ese test de forma vuelve a
+  // tener sentido; hoy no.
 });

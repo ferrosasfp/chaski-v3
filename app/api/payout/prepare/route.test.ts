@@ -40,10 +40,15 @@ import { verifySolanaDepositAttestation } from "../../../../src/infrastructure/s
 // WKH-304/CD-11: el par (capacidad, piso) se assertea contra las MISMAS constantes que consume la
 // route y que consume submit — nunca contra literales copiados en el test.
 import {
+  FX_MIN_REPUTATION,
   PAYOUT_CAPABILITY,
   PAYOUT_MIN_REPUTATION,
 } from "../../../../src/infrastructure/a2a/gateway-client";
 import { POST } from "./route";
+// El leg de FX, para poder afirmar la ASIMETRÍA en una sola corrida (ver el candado del carril de
+// estreno al final del archivo). Se importa la route, no se la re-implementa: un test que copiara
+// las constraints de FX a mano seguiría verde el día que alguien se las saque de verdad.
+import { POST as QUOTE_POST } from "../../a2a/quote/route";
 
 // WKH-320: la ruta dejó de tener dispatch por VM. El caller manda una address base58 y el PoP es
 // OBLIGATORIO, así que el body por defecto de TODOS los tests de guard-order lleva un PoP ed25519
@@ -809,6 +814,150 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       const rawBody = composeInit!.body as string;
       expect(rawBody).not.toContain("kyc-verification");
       expect(rawBody).not.toContain("identity");
+    });
+
+    // ── CANDADO: el leg de payout NUNCA pide el carril de estreno ─────────────────────────────
+    //
+    // Hasta acá lo único que sostenía esta decisión era un comentario en la route (route.ts:211,
+    // "CD-5: NUNCA omitir") y dos asserts colgados del happy path (T-A5.1, arriba). Eso alcanza
+    // contra un descuido y NO alcanza contra el escenario que de verdad va a pasar, que está medido
+    // y es este: el día que se encienda `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER=a2a-gateway`, el agente
+    // de payout del catálogo no llega al piso (hoy no tiene ninguna task liquidada ⇒ cuenta 0) y el
+    // gateway contesta 422 no_agent_match. El leg muere fail-closed, que es lo correcto, y el
+    // arreglo tentador es de una línea: copiar `allow_trial: true` del leg de FX. Ese es
+    // exactamente el cambio que abre el agujero, y el 422 no lo hace ver más chico.
+    //
+    // Por eso los tres casos de abajo miran cosas distintas: el happy path (que ya estaba, con la
+    // grafía camelCase cubierta), EL 422 (que no lo miraba nadie: un retry-con-carril tras el
+    // rechazo dejaba la suite entera verde) y la asimetría contra FX en la MISMA corrida, para que
+    // "unificar los dos legs" tampoco sea un cambio silencioso.
+    describe("candado del carril de estreno (allow_trial) en el leg del PRINCIPAL", () => {
+      const POR_QUE =
+        "el leg de payout NO puede pedir el carril de estreno: el agente que gana ESTE step elige " +
+        "la dirección A DONDE VA EL PRINCIPAL de la persona, y el carril admite justamente a quien " +
+        "no tiene ninguna task liquidada. En el leg de FX sí va, a propósito: una cotización mala se " +
+        "ve antes de que se firme nada, un desembolso mal dirigido no vuelve. Si llegaste hasta acá " +
+        "por un 422 no_agent_match, ese 422 se arregla del lado del catálogo (que el agente de " +
+        "payout acumule historial liquidado, o corregir su standing degradado), NO agregando la clave.";
+
+      /** Cualquier grafía de la clave del carril: allow_trial / allowTrial / allow-trial. */
+      const TRIAL_KEY = /^allow[_-]?trial$/i;
+
+      /** Rutas de TODAS las claves del carril dentro de un valor, a cualquier profundidad. */
+      function trialKeyPaths(value: unknown, path = "$"): string[] {
+        if (Array.isArray(value)) return value.flatMap((v, i) => trialKeyPaths(v, `${path}[${i}]`));
+        if (typeof value === "object" && value !== null) {
+          return Object.entries(value).flatMap(([k, v]) =>
+            TRIAL_KEY.test(k) ? [`${path}.${k}`] : trialKeyPaths(v, `${path}.${k}`),
+          );
+        }
+        return [];
+      }
+
+      /** Escanea el body de /compose SALVO el `input` de cada step. El `input` es el body del caller
+       *  TAL CUAL (route.ts:212): una clave con ese nombre ahí la puso quien llamó, no este leg, y el
+       *  gateway sólo lee el carril dentro de `constraints`. Todo lo demás del body SÍ se escanea,
+       *  así que la clave no se salva escondiéndola a nivel step ni a nivel raíz. */
+      function trialKeysSentTo(rawBody: string): string[] {
+        const parsed = JSON.parse(rawBody) as Record<string, unknown>;
+        const steps = Array.isArray(parsed.steps) ? parsed.steps : [];
+        return trialKeyPaths({
+          ...parsed,
+          steps: steps.map((s) =>
+            typeof s === "object" && s !== null && !Array.isArray(s)
+              ? Object.fromEntries(Object.entries(s).filter(([k]) => k !== "input"))
+              : s,
+          ),
+        });
+      }
+
+      /** Captura el body de CADA /compose (no sólo el último): un retry manda dos. */
+      function captureComposeBodies(opts: Parameters<typeof gwRouter>[0] = {}) {
+        const bodies: string[] = [];
+        gwRouter({ ...opts, captureCompose: (init) => bodies.push(init?.body as string) });
+        return bodies;
+      }
+
+      /** El body del /compose nº `i`. Tira si no hubo tantas llamadas: un candado que inspecciona
+       *  un body inexistente pasaría por las razones equivocadas. */
+      function composeBody(bodies: string[], i: number): string {
+        const raw = bodies[i];
+        if (typeof raw !== "string") throw new Error(`no hubo un /compose #${i + 1} que inspeccionar`);
+        return raw;
+      }
+
+      it("prepare feliz ⇒ el /compose del payout no lleva el carril en NINGUNA grafía", async () => {
+        setGatewayEnv();
+        const bodies = captureComposeBodies();
+        const res = await POST(req(bodyOf()));
+        expect(res.status).toBe(200);
+        expect(bodies).toHaveLength(1);
+        expect(trialKeysSentTo(composeBody(bodies, 0)), POR_QUE).toEqual([]);
+      });
+
+      // EL caso nuevo. Un `if (r.code === "no_agent_match") reintentar con allow_trial` deja verde
+      // todo lo demás: T-A3.4 sólo mira que el 502 salga y que no se llame al agente directo (las
+      // dos cosas siguen siendo ciertas con el retry puesto), y T-A5.1 nunca ve un 422.
+      it("el gateway contesta 422 no_agent_match ⇒ NINGÚN /compose lleva el carril (ni un reintento)", async () => {
+        setGatewayEnv();
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        const bodies = captureComposeBodies({
+          status: 422,
+          body: { error: "no candidates", code: "no_agent_match", reason: "no_candidates", step: 0 },
+        });
+        const res = await POST(req(bodyOf()));
+        // El 422 se propaga como 502 opaco y el leg NO se destraba solo.
+        expect(res.status).toBe(502);
+        expect(await res.json()).toEqual({ error: "prepare_upstream_error" });
+        expect(bodies.length).toBeGreaterThan(0); // hubo /compose: el escaneo de abajo mira algo real
+        for (const [i, raw] of bodies.entries()) {
+          expect(trialKeysSentTo(raw), `${POR_QUE} (intento #${i + 1} del /compose)`).toEqual([]);
+        }
+      });
+
+      // La asimetría, afirmada en UNA corrida: no es "el carril está prohibido", es "el carril va en
+      // el leg que cotiza y no en el que desembolsa". Sin la mitad de FX, el candado se podría
+      // satisfacer apagando el carril en los dos lados, que no es la decisión que se tomó.
+      it("misma corrida: FX SÍ pide el carril y payout NO", async () => {
+        setGatewayEnv();
+        vi.stubEnv("WASIAI_A2A_FX_CAPABILITY", undefined);
+        vi.stubEnv("WASIAI_A2A_PAYOUT_CAPABILITY", undefined);
+        const fxResult = {
+          quoteId: "q-lock-1",
+          rate: 3.7,
+          feeUsd: 0.5,
+          netDeliveredLocal: 1478.15,
+          etaMinutes: 30,
+          expiresAt: "2026-07-09T18:10:00.000Z",
+          provenance: "remit-corridor-fx",
+        };
+        // (a) payout
+        const payoutBodies = captureComposeBodies();
+        expect((await POST(req(bodyOf()))).status).toBe(200);
+        // (b) FX, con el MISMO fetch mockeado
+        const fxBodies = captureComposeBodies({ output: fxResult });
+        const fxRes = await QUOTE_POST(
+          new Request("http://localhost/api/a2a/quote", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ amountUsd: 400, destCountry: "PE", payoutMethod: "yape" }),
+          }),
+        );
+        expect(fxRes.status).toBe(200);
+
+        expect(payoutBodies).toHaveLength(1);
+        expect(fxBodies).toHaveLength(1);
+        const payoutStep = JSON.parse(composeBody(payoutBodies, 0)).steps[0];
+        const fxStep = JSON.parse(composeBody(fxBodies, 0)).steps[0];
+        expect(payoutStep.capability).toBe(PAYOUT_CAPABILITY);
+        expect(payoutStep.constraints, POR_QUE).toEqual({ min_reputation: PAYOUT_MIN_REPUTATION });
+        // Y el otro lado de la misma decisión: el carril de FX sigue encendido, con su piso al lado
+        // (sin `min_reputation` el gateway ni siquiera lee `allow_trial` — ver FX_MIN_REPUTATION).
+        expect(
+          fxStep.constraints,
+          "el leg de FX SÍ pide el carril de estreno a propósito: si esto se puso rojo, el candado del payout no es la causa y apagar el carril de FX no es el arreglo",
+        ).toEqual({ min_reputation: FX_MIN_REPUTATION, allow_trial: true });
+      });
     });
   });
 });

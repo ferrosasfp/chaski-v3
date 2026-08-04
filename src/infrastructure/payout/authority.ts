@@ -6,7 +6,8 @@
 // Guard-order (CD-A1), idéntico al original:
 //   sin key + prod → 503 fail-loud (nunca autoriza por default — CD-4)
 //   sin key + no-prod → simulación { authorized:true, simulated_dev } (el demo sigue andando)
-//   con key → formato → ambiente (DIDIT_ENV, fail-closed) → Didit → mapeo → ownership
+//   con key → formato → ambiente (DIDIT_ENV, fail-closed) → Didit → mapeo → ownership (fail-closed:
+//     sin vendor_data declarado NO autoriza — ver el bloque largo sobre el bypass medido en prod)
 // Nunca fetch a Didit antes de pasar los guards.
 import { mapDiditDecision } from "../didit/decision";
 import {
@@ -90,19 +91,43 @@ export async function resolvePayoutAuthority(
       return { authorized: false, reason: "kyc_not_approved", httpStatus: 200 };
     }
 
-    // Ownership best-effort: vendor_data (= senderAddress) vs address del caller. La comparación es
-    // CASE-SENSITIVE porque la canonicalización es base58 (CD-7): lowercasear acá abriría una colisión.
-    // Si Didit NO eco-a vendor_data (d.vendorData === "") → se omite (residual documentado).
-    // MNR-B: este binding ownership solo tiene FUERZA REAL cuando `address` proviene de un caller
-    // AUTENTICADO (sesión firmada / SIWE) — no de un endpoint público, donde `address` y
-    // `vendor_data` son ambos caller-controlados, así que un replay de un verificationId Approved
-    // robado con address=vendorData (dato conocido) pasaría este check. Este módulo YA NO sirve
-    // sólo al endpoint advisory /api/payout/validate: desde WKH-202 también alimenta el endpoint
-    // ACTION /api/a2a/payout/submit, que es PÚBLICO → el residual SOBREVIVE al money-path
-    // (SDD §8/R1) y el riesgo ya NO es nulo. Hoy lo acota que el payout corre en PAYOUT_ALLOW_MOCK
-    // (no desembolsa real). El check queda como defensa best-effort; el hardening completo
-    // (binding a sesión firmada / SIWE) = follow-up.
-    if (d.vendorData !== "" && canonicalizeAddress(d.vendorData) !== canonicalizeAddress(address)) {
+    // Ownership FAIL-CLOSED: autorizar EXIGE que Didit eco-e un vendor_data (= senderAddress) y que
+    // canonicalice igual que la `address` del caller. La comparación es CASE-SENSITIVE porque la
+    // canonicalización es base58 (CD-7): lowercasear acá abriría una colisión.
+    //
+    // 🔴 vendor_data VACÍO ya NO autoriza. Acá decía que ese caso "se omite (residual documentado)",
+    // y eso describía como residual lo que era un bypass completo. Medido contra PRODUCCIÓN el
+    // 2026-08-04: crear la sesión es un POST público sin credenciales — `POST /api/kyc/session {}`
+    // devuelve 200 con la url trayendo `&vendor=` vacío; a los ~9 s el mock la aprueba; y entonces
+    // `POST /api/payout/validate {verificationId, address:X}` respondía {"authorized":true} para
+    // CUALQUIER X. Se probaron tres direcciones sin ninguna relación entre sí
+    // (11111111111111111111111111111111, So1111…1112, 4AvAjt…Fy7Hg): las tres autorizadas.
+    //
+    // Cerrarlo no toca el camino de la DApp: kyc-gateway.ts:23 manda SIEMPRE
+    // `vendorData: req.senderAddress`, y con vendor_data declarado el guard ya funcionaba — medido
+    // en vivo el mismo día: vendor=4AvAjt… + address=4AvAjt… → {"authorized":true}; vendor=4AvAjt…
+    // + address=So1111… → {"authorized":false,"reason":"kyc_not_authorized"}. Lo único que se cierra
+    // es el caso que ningún caller legítimo produce.
+    //
+    // El reason es `kyc_ownership_mismatch` y NO uno nuevo, a propósito: los dos consumidores tienen
+    // switch cerrado y un reason desconocido cae al `default` de cada uno con la forma equivocada.
+    // validate/route.ts:69 lo devolvería tal cual → distinguible de `kyc_not_authorized`, que es
+    // exactamente el oráculo que WKH-205 colapsó; prepare/route.ts:129 lo mapearía a 502
+    // `payout_authority_unavailable`, que le dice a quien llama "la autoridad se cayó, reintentá"
+    // cuando lo cierto es "no estás autorizado". Semánticamente tampoco hace falta distinguirlos:
+    // bajo fail-closed, binding ausente y binding que no coincide son el mismo veredicto — no se
+    // pudo establecer que esa address sea la dueña de esa verificación.
+    //
+    // Lo que este check SIGUE sin cubrir (MNR-B, residual VIGENTE): `address` llega desde un endpoint
+    // PÚBLICO, así que address y vendor_data son ambos caller-controlados. Un verificationId Approved
+    // robado y replayado con address = el vendor_data de esa misma sesión pasa este check. Ya no
+    // alcanza con no declarar nada, pero sigue alcanzando con conocer el par. El binding a una sesión
+    // firmada / SIWE, que es lo que lo cerraría, sigue siendo follow-up.
+    //
+    // El orden del `||` importa: con vendorData === "" se corta antes, así canonicalizeAddress("")
+    // nunca corre (throwearía → el catch de abajo lo convertiría en un 502 "Didit falló", que sería
+    // un diagnóstico falso).
+    if (d.vendorData === "" || canonicalizeAddress(d.vendorData) !== canonicalizeAddress(address)) {
       return { authorized: false, reason: "kyc_ownership_mismatch", httpStatus: 200 };
     }
 

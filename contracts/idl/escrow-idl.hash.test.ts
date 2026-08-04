@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { escrowIdl } from "../../src/infrastructure/solana/escrow-idl"; // SIN extensión (bundler)
 import { canonicalSha256 } from "./canonical-hash";
@@ -91,5 +92,52 @@ describe("escrow IDL — hash canónico (WKH-227 / AC-2, AC-3)", () => {
       "escrow_index",
       "system_program",
     ]);
+  });
+
+  // ── AC-DOC — el documento publicado NO puede separarse de la constante ─────────────────────────
+  // Por qué existe: el re-pin del 2026-08-01 (commit 8c8527b) movió ESCROW_IDL_SHA256 acá y dejó
+  // CONTRACT-VERSIONS.md publicando el hash del 2026-07-28. Nadie lo vio: el CR de SDD 038 revisó esa
+  // misma línea y la aprobó por ser "byte-idéntica a main" (cr-report.md:57), que es exactamente lo
+  // que pasa cuando el doc se quedó atrás. La regla escrita en prosa ("re-pinneá también el doc") ya
+  // estaba en el archivo y no alcanzó. Esto la vuelve mecánica.
+  //
+  // Deliberadamente NO es best-effort: el doc vive en este repo, así que si no se puede leer o no
+  // parsea, eso es un fallo, no un skip. Un checkpoint que se salta solo cuando su insumo falta es un
+  // OK regalado.
+  describe("AC-DOC: CONTRACT-VERSIONS.md publica exactamente la constante pinneada", () => {
+    const DOC_PATH = fileURLToPath(new URL("../CONTRACT-VERSIONS.md", import.meta.url));
+    const HEADING = "## `ESCROW_IDL_SHA256`";
+
+    /** El texto del doc desde el encabezado de la sección hasta el final. Tira si no está. */
+    function readPinSection(): string {
+      const md = readFileSync(DOC_PATH, "utf8"); // sólo LECTURA
+      const start = md.indexOf(HEADING);
+      if (start < 0) throw new Error(`CONTRACT-VERSIONS.md: no existe la sección ${HEADING}`);
+      return md.slice(start);
+    }
+
+    it("el valor del bloque de código de la sección == ESCROW_IDL_SHA256", () => {
+      const headline = /```\n([0-9a-f]{64})\n```/.exec(readPinSection());
+      if (!headline) {
+        throw new Error(
+          `CONTRACT-VERSIONS.md: la sección ${HEADING} no tiene un bloque con un sha256 de 64 hex`,
+        );
+      }
+      expect(headline[1]).toBe(ESCROW_IDL_SHA256);
+    });
+
+    it("la ÚLTIMA fila de la bitácora == ESCROW_IDL_SHA256 (el re-pin quedó registrado)", () => {
+      // El bloque de arriba se puede editar sin dejar rastro de por qué cambió. La bitácora es el
+      // registro auditable, y también se desincroniza: se chequea aparte.
+      const rows = [
+        ...readPinSection().matchAll(/^\| (\d{4}-\d{2}-\d{2}) \| `([0-9a-f]{64})` \|/gm),
+      ];
+      if (rows.length < 2) {
+        throw new Error(
+          `CONTRACT-VERSIONS.md: la bitácora de re-pinneos tiene ${rows.length} fila(s) parseables; se esperaban >= 2`,
+        );
+      }
+      expect(rows[rows.length - 1]?.[2]).toBe(ESCROW_IDL_SHA256);
+    });
   });
 });

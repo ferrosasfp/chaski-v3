@@ -71,10 +71,20 @@ false, so it is not said here.
 **The deposit is the strongest piece, and the caveat matters.** The instruction lands on chain, the
 sender's wallet is the only signer of the transfer, and a sponsoring fee payer covers the fees so the
 user never needs SOL. What the signature above proves is that this works when the smoke script drives
-it. Whether it lands from a browser is **not verified yet**: the protocol blocker described in the next
-paragraph was removed, but nobody has driven the round trip with a real wallet extension. That test is
-W7 of SDD 037 and it is still pending, so the honest statement is "unverified", not "it works" and not
-"it does not work".
+it. Whether it lands from a browser is **not yet verified in the custody window with a real wallet
+extension**: the protocol blocker described in the next paragraph was removed, and the implementation
+is complete. That end-to-end browser round trip is W7 of SDD 038 and it is still pending, so the
+honest statement is "unverified by the full-cycle test", not "it works" and not "it does not work".
+
+**Chaski now emits ComputeBudget instructions on deposit (WKH-321).** The `deposit` transaction
+carries two instructions before the escrow call: `setComputeUnitLimit` and `setComputeUnitPrice`,
+computed by resolvers in `src/infrastructure/solana-wallet.ts:82-95`. This reduces the probability
+that a wallet such as Phantom adds conflicting priority fees that exceed the facilitator's allowance
+(measured on devnet at 50,000 units): if a wallet attempts to prepend its own ComputeBudget and
+Phantom rejects the duplicate after already signing (as the code assumes), the deposit fails with
+clear evidence. That assumption is not contractual: the behavior is observed on third-party wallets,
+not guaranteed. The deposit has never landed on chain with these instructions yet; the path they
+unblock is not exercised in production.
 
 **The blocker on the confirmation leg was a shared secret, and it is gone.** The first half was fixed
 earlier: the client signs a proof of possession before asking the server to create the payout order, so
@@ -95,6 +105,18 @@ a request carrying the old `popProof` gets a 400 with nothing signed, the client
 in `settle()` (`src/application/use-cases/confirm-and-send.ts`), and the forwarding route
 (`app/api/settle/solana-sponsor/route.ts`) rejects a missing or malformed one with a 400 before
 spending the forward. That replacement is this branch, not open work.
+
+**Two security gaps were closed in the confirmation flow (2026-08-04).** The KYC flow could open a
+session without a binding to the sender's wallet address; `/api/payout/validate` would then authorize
+any address presented by an unauthenticated caller. This was reproduced in production: a public POST
+with an empty body created a session with no `vendor_data`, the mock approved it, and three unrelated
+addresses each passed validation. The endpoint now fails closed: `vendor_data` must match the address
+or the authorization is refused (WKH-180, reviewed in `app/api/payout/validate/route.test.ts:156-180`).
+The second fix: the confirmation endpoint now verifies that the wallet address exists before querying
+the payout authority. If the KYC session has no address, `confirm-and-send` returns `wallet_address_unavailable`
+instead of letting an empty address travel to the authority, which would convert a trivial local state
+error into a false 502 ("identity provider failed"). The guard of ownership remains: the authority
+still fail-closes and still rejects exactly what it did before.
 
 What stays open on this leg is the browser round trip itself (W7 above), and one piece of configuration:
 the facilitator needs `SOLANA_SPONSOR_NETWORK_ID` set, and while it is unset every sponsorship request
@@ -143,8 +165,10 @@ The cycle:
 2. The sender's wallet signs `deposit`, which takes `beneficiary`, `authority`, `amount` and `deadline`
    as arguments. The principal leaves the sender's account and lands in the escrow vault. The operator
    never touches it.
-3. The facilitator co-signs as fee payer and broadcasts, so the user needs no SOL. This is the step that
-   is currently cut from the browser, for the reason described above.
+3. The facilitator co-signs as fee payer and broadcasts, so the user's wallet does not need SOL for
+   network fees. The account rent for the escrow PDA and its token vault (approximately 0.004 SOL per
+   remittance, measured on devnet) is paid from the deposit. This is the step that is currently cut
+   from the browser, for the reason described above.
 4. Once the payout in the destination country is confirmed, the release authority signs `release`.
    `sender`, `beneficiary` and `mint` are `has_one` constrained against the escrow account, so the
    destination is the one fixed at deposit time and the authority cannot redirect the funds. Nothing
@@ -166,10 +190,11 @@ before a transaction gets rejected in production. Re pinning is an explicit deci
 ### Devnet smoke
 
 `npm run smoke:solana` drives the full on chain cycle against already deployed services: healthchecks,
-proof of possession, `/api/payout/prepare`, the `deposit` instruction signed by the sender, the gasless
-broadcast through the facilitator, the escrow verification (status, vault balance and beneficiary), the
-release against the facilitator, and re-reading the chain until the escrow is released and the vault is
-empty. It is deliberately uncomfortable to run:
+proof of possession, `/api/payout/prepare`, the `deposit` instruction signed by the sender, the
+broadcast through the facilitator (network fees paid by facilitator, account rent paid by sender), the
+escrow verification (status, vault balance and beneficiary), the release against the facilitator, and
+re-reading the chain until the escrow is released and the vault is empty. It is deliberately
+uncomfortable to run:
 
 - It aborts before any call unless `SMOKE_ALLOW_REAL=true`. It does not run in CI.
 - Service URLs, keys, identifiers, amount, mint and the facilitator pubkey are all environment

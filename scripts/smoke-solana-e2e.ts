@@ -42,10 +42,12 @@ import {
   resolveSolanaNetworkId,
 } from "../src/infrastructure/chain";
 import { escrowIdl } from "../src/infrastructure/solana/escrow-idl";
+import { CUSTODY_WINDOW_SECS } from "../src/infrastructure/solana-wallet";
 import {
   computeReleaseAttestation,
   isBase58Signature,
   parseNumericEnv,
+  resolveAnchorBn,
   usdToUsdcMinorUnits,
 } from "./smoke-helpers";
 
@@ -87,7 +89,7 @@ function requireEnv(name: string): string {
 function requireNumericEnv(
   name: string,
   raw: string | undefined,
-  opts: { readonly integer?: boolean; readonly min?: number } = {},
+  opts: { readonly integer?: boolean; readonly min?: number; readonly max?: number } = {},
 ): number {
   const r = parseNumericEnv(name, raw, opts);
   if (!r.ok) {
@@ -122,11 +124,34 @@ const FACILITATOR_API_KEY = requireEnv("SMOKE_FACILITATOR_API_KEY");
 // Ver el checkpoint 7: tenerlo es EXACTAMENTE lo que hace que la atestación de este script no pruebe
 // nada de la pata fiat.
 const ESCROW_RELEASE_ATTESTATION_SECRET = requireEnv("SMOKE_ESCROW_RELEASE_ATTESTATION_SECRET");
-// Ventana del deadline del escrow (i64 unix seconds). Default 1h; env-overridable. NO es secreto.
+// Rieles exteriores del deadline, tal como los exige el programa desplegado:
+// `deadline >= now + MIN_CUSTODY_SECS` y `deadline <= now + MAX_CUSTODY_SECS`
+// (`solana-programs/programs/escrow/src/lib.rs:121` y `:129`, `require!` en `:156` y `:160`).
+// Escritos a mano y no importados A PROPÓSITO: viven en otro repo, y una copia que se pueda comparar
+// contra el original es lo que permite notar que el original se movió.
+const PROGRAM_MIN_CUSTODY_SECS = 3600;
+const PROGRAM_MAX_CUSTODY_SECS = 86400;
+
+// Ventana del deadline del escrow (i64 unix seconds). NO es secreto.
+//
+// El default era `3600`, o sea EXACTAMENTE el piso del programa, y con ese valor el depósito no podía
+// entrar nunca: el `now` que el programa compara es el del VALIDADOR al ejecutar, no el del cliente al
+// firmar, así que `now_cliente + 3600` ya está por debajo de `now_validador + 3600` apenas pasa un
+// segundo, y la ix muere con `DeadlineTooSoon`. Es la misma carrera que el commit 8c8527b arregló en
+// producción; el default del smoke se quedó atrás.
+//
+// Ahora el default ES el de producción (`CUSTODY_WINDOW_SECS`, 2 h), importado y no copiado, por el
+// mismo motivo que las ix de ComputeBudget del checkpoint 4: un smoke que manda un valor distinto al
+// de la DApp valida una transacción que la DApp no emite.
+//
+// El `min`/`max` no son decoración: sin ellos un override fuera de rango se descubre como un rechazo
+// opaco del programa en el checkpoint 5, en vez de como un fail-loud local que nombra la env. Ojo:
+// `min` es el piso del programa, y pedir exactamente el piso PIERDE la carrera de arriba — pasa la
+// validación local y falla on-chain. Por eso el default está muy por encima.
 const DEADLINE_SECONDS = requireNumericEnv(
   "SMOKE_DEADLINE_SECONDS",
-  process.env.SMOKE_DEADLINE_SECONDS ?? "3600",
-  { integer: true, min: 1 },
+  process.env.SMOKE_DEADLINE_SECONDS ?? String(CUSTODY_WINDOW_SECS),
+  { integer: true, min: PROGRAM_MIN_CUSTODY_SECS, max: PROGRAM_MAX_CUSTODY_SECS },
 );
 
 /** El único `provenance` que significa desembolso fiat REAL (fuente: src/presentation/flow-vm.ts:7).
@@ -366,8 +391,12 @@ async function main(): Promise<void> {
 
   const remittanceIdBytes = remittanceIdToBytes16(REMITTANCE_ID); // [u8;16] determinístico
   const amountMinorUnits = usdToUsdcMinorUnits(AMOUNT_USD); // USDC 6 dec (helper testeado)
-  const amount = new anchor.BN(amountMinorUnits.toString()); // u64
-  const deadline = new anchor.BN(String(Math.floor(Date.now() / 1000) + DEADLINE_SECONDS)); // i64
+  // `anchor.BN` NO se puede usar directo: bajo `tsx` (Node ESM cargando el CJS de anchor 0.30.1) ese
+  // export nombrado es `undefined` y el smoke moría acá con `TypeError: anchor.BN is not a
+  // constructor`, sin pasar nunca del checkpoint 3. `resolveAnchorBn` mira las dos formas del módulo.
+  const BN = resolveAnchorBn(anchor);
+  const amount = new BN(amountMinorUnits.toString()); // u64
+  const deadline = new BN(String(Math.floor(Date.now() / 1000) + DEADLINE_SECONDS)); // i64
 
   const [escrowStatePda] = PublicKey.findProgramAddressSync(
     [Buffer.from("escrow"), senderPk.toBuffer(), Buffer.from(remittanceIdBytes)],
@@ -629,7 +658,33 @@ async function main(): Promise<void> {
   ok(9, "ciclo on-chain devnet cerrado (deposit, vault, release). Pata fiat: FUERA DE ALCANCE, no verificada");
 }
 
+/**
+ * Marcos de pila del error, recortados a los que apuntan a ESTE repo.
+ *
+ * Por qué esto y no `e.message`: CD-4 prohíbe imprimir valores, y el mensaje de una excepción de
+ * librería puede arrastrar el dato que la causó (una clave mal decodificada, por ejemplo). Un marco
+ * de pila es `función (archivo:línea:columna)`: nombra el LUGAR y nunca un valor.
+ *
+ * Por qué hacía falta: la única salida ante un error inesperado era `SMOKE aborted (unexpected):
+ * TypeError`. Eso no nombra ni el archivo ni la línea ni el checkpoint, y es parte de por qué el fallo
+ * del checkpoint 4 sobrevivió sin diagnosticar.
+ */
+function ownStackFrames(e: unknown, max = 3): string[] {
+  if (!(e instanceof Error) || typeof e.stack !== "string") return [];
+  return e.stack
+    .split("\n")
+    .filter((l) => l.trimStart().startsWith("at "))
+    .filter((l) => l.includes("/scripts/") || l.includes("/src/"))
+    .slice(0, max)
+    .map((l) => l.trim());
+}
+
 main().catch((e) => {
   console.error(`SMOKE aborted (unexpected): ${e instanceof Error ? e.name : "error"}`);
+  const frames = ownStackFrames(e);
+  if (frames.length === 0) {
+    console.error("  (sin marcos de pila propios; el mensaje se omite a propósito, ver CD-4)");
+  }
+  for (const f of frames) console.error(`  ${f}`);
   process.exit(1);
 });

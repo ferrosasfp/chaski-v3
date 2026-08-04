@@ -60,7 +60,7 @@ export type NumericEnvResult = { ok: true; value: number } | { ok: false; reason
 export function parseNumericEnv(
   name: string,
   raw: string | undefined,
-  opts: { readonly integer?: boolean; readonly min?: number } = {},
+  opts: { readonly integer?: boolean; readonly min?: number; readonly max?: number } = {},
 ): NumericEnvResult {
   if (typeof raw !== "string" || !raw.trim()) {
     return { ok: false, reason: `env requerida ausente o vacía: ${name}` };
@@ -75,6 +75,9 @@ export function parseNumericEnv(
   if (opts.min !== undefined && value < opts.min) {
     return { ok: false, reason: `env fuera de rango: ${name} (se esperaba >= ${opts.min})` };
   }
+  if (opts.max !== undefined && value > opts.max) {
+    return { ok: false, reason: `env fuera de rango: ${name} (se esperaba <= ${opts.max})` };
+  }
   return { ok: true, value };
 }
 
@@ -82,4 +85,46 @@ export function parseNumericEnv(
  *  que un monto con más de 6 decimales no se cuela como fracción de unidad menor. */
 export function usdToUsdcMinorUnits(amountUsd: number): bigint {
   return BigInt(Math.round(amountUsd * 1_000_000));
+}
+
+/** Lo ÚNICO que el smoke necesita de `BN`: construirlo desde un string decimal (u64 / i64). Anchor
+ *  serializa leyendo la instancia, así que no hace falta modelar el resto de su superficie. Se declara
+ *  acá porque `bn.js` no trae tipos propios y el repo prohíbe `any` explícito. */
+export type BnConstructor = new (value: string) => object;
+
+/** Lectura de una propiedad de un valor desconocido sin castear a `any`. */
+function readProp(source: unknown, key: string): unknown {
+  if (typeof source !== "object" || source === null) return undefined;
+  return (source as Record<string, unknown>)[key];
+}
+
+/**
+ * Resuelve el constructor `BN` desde el módulo `@coral-xyz/anchor`, mirando las DOS formas que ese
+ * módulo toma según quién lo cargue.
+ *
+ * El bug que cierra (medido, no supuesto): `@coral-xyz/anchor` 0.30.1 publica `main` CJS y re-exporta
+ * `BN` con `export { default as BN } from "bn.js"`. Cuando Node carga ese CJS desde un módulo ESM
+ * —que es exactamente lo que pasa al correr el smoke con `tsx`— el lexer de exports nombrados NO ve
+ * ese re-export, así que `anchor.BN` queda `undefined` mientras `anchor.default.BN` sí es la función.
+ * El smoke moría con `TypeError: anchor.BN is not a constructor` en el checkpoint 4, o sea que NUNCA
+ * pasó del 3. Bajo un bundler (webpack en la DApp, Vite en vitest) el export nombrado SÍ existe.
+ *
+ * Por eso se prueban las dos en orden y no se elige una "según el entorno": preguntar por el entorno
+ * es adivinar; preguntar por la forma del módulo es medir.
+ *
+ * ⚠️ Un test que corra bajo vitest NO puede reproducir la falla original: bajo Vite `anchor.BN` existe.
+ * Ese es el motivo de que esta función reciba el módulo por parámetro — así el test puede pasarle las
+ * dos formas a mano en vez de depender de la que le toque al runner.
+ */
+export function resolveAnchorBn(anchorModule: unknown): BnConstructor {
+  const named = readProp(anchorModule, "BN"); // bundler (webpack / Vite)
+  if (typeof named === "function") return named as BnConstructor;
+
+  const viaDefault = readProp(readProp(anchorModule, "default"), "BN"); // Node ESM → CJS (tsx)
+  if (typeof viaDefault === "function") return viaDefault as BnConstructor;
+
+  throw new Error(
+    "no se pudo resolver el constructor BN de @coral-xyz/anchor: ni el export nombrado `BN` ni " +
+      "`default.BN` son funciones. Si anchor cambió de versión, revisar cómo re-exporta bn.js.",
+  );
 }

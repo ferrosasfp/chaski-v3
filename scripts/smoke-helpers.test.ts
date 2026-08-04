@@ -1,12 +1,16 @@
 // Tests de las piezas puras del smoke (`scripts/smoke-helpers.ts`). El smoke en sí NO se testea acá:
 // toca la red y exige credenciales. Lo que sí se puede clavar es lo que se puede equivocar en
 // silencio: el formato del HMAC del release, la validación de una env numérica y la de una signature.
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import * as anchor from "@coral-xyz/anchor";
 import { describe, expect, it } from "vitest";
 import {
   computeReleaseAttestation,
   encodeReleaseAttestationMessage,
   isBase58Signature,
   parseNumericEnv,
+  resolveAnchorBn,
   usdToUsdcMinorUnits,
 } from "./smoke-helpers";
 
@@ -101,11 +105,106 @@ describe("parseNumericEnv", () => {
     expect(parseNumericEnv("X", "0", { min: 1 }).ok).toBe(false);
     expect(parseNumericEnv("X", "1", { integer: true, min: 1 })).toEqual({ ok: true, value: 1 });
   });
+
+  it("aplica max: un deadline por encima del techo del programa muere ACÁ, no on-chain", () => {
+    // Sin `max`, un SMOKE_DEADLINE_SECONDS mayor a MAX_CUSTODY_SECS (86400) se descubría como un
+    // rechazo opaco del programa recién en el checkpoint 5.
+    expect(parseNumericEnv("SMOKE_DEADLINE_SECONDS", "86401", { max: 86400 }).ok).toBe(false);
+    expect(parseNumericEnv("SMOKE_DEADLINE_SECONDS", "86400", { max: 86400 })).toEqual({
+      ok: true,
+      value: 86400,
+    });
+    const r = parseNumericEnv("SMOKE_DEADLINE_SECONDS", "999999", { max: 86400 });
+    expect(r.ok === false && r.reason).toContain("SMOKE_DEADLINE_SECONDS");
+    expect(r.ok === false && r.reason).not.toContain("999999"); // CD-4: nunca el valor
+  });
 });
 
 describe("usdToUsdcMinorUnits", () => {
   it("convierte a 6 decimales", () => {
     expect(usdToUsdcMinorUnits(10)).toBe(10_000_000n);
     expect(usdToUsdcMinorUnits(0.5)).toBe(500_000n);
+  });
+});
+
+describe("resolveAnchorBn — el import que tenía trabado al smoke en el checkpoint 3", () => {
+  // ⚠️ LEER ANTES DE "SIMPLIFICAR" ESTOS TESTS.
+  //
+  // Bajo vitest (Vite) `anchor.BN` es una función, así que un test que sólo hiciera
+  // `expect(typeof anchor.BN).toBe("function")` pasaría en verde y NO diría nada del bug: el smoke
+  // corre con `tsx` (Node ESM cargando el CJS de anchor), y AHÍ `anchor.BN` es `undefined`. Medido en
+  // los dos runtimes, no deducido. Por eso los casos de abajo le pasan a la función las DOS formas del
+  // módulo a mano: así el test dice lo mismo corra donde corra.
+  const fakeBn = function FakeBN(): void {
+    /* sólo importa que sea `function` */
+  };
+
+  it("forma BUNDLER (webpack/Vite): toma el export nombrado", () => {
+    expect(resolveAnchorBn({ BN: fakeBn })).toBe(fakeBn);
+  });
+
+  it("forma tsx/Node ESM→CJS: sin export nombrado, lo saca de `default` (ESTE era el caso roto)", () => {
+    // Réplica exacta del namespace que Node arma para anchor 0.30.1: `BorshAccountsCoder` y `Program`
+    // sí viajan como nombrados, `BN` no, y `default` es el `module.exports` entero.
+    const nodeShape = {
+      BorshAccountsCoder: fakeBn,
+      Program: fakeBn,
+      default: { BN: fakeBn, BorshAccountsCoder: fakeBn, Program: fakeBn },
+    };
+    expect(resolveAnchorBn(nodeShape)).toBe(fakeBn);
+  });
+
+  it("si BN no está en ninguna de las dos formas, TIRA en vez de devolver undefined", () => {
+    // Devolver `undefined` es lo que producía `TypeError: anchor.BN is not a constructor` tres líneas
+    // más abajo, sin nombrar la causa. El error tiene que apuntar a anchor, no a una línea cualquiera.
+    expect(() => resolveAnchorBn({ Program: fakeBn })).toThrow(/@coral-xyz\/anchor/);
+    expect(() => resolveAnchorBn({ BN: "no soy una función" })).toThrow(/BN/);
+    expect(() => resolveAnchorBn(null)).toThrow();
+    expect(() => resolveAnchorBn(undefined)).toThrow();
+  });
+
+  it("contra el módulo REAL devuelve un BN construible desde string decimal", () => {
+    const BN = resolveAnchorBn(anchor);
+    expect(new BN("123456789012345678901234567890").toString()).toBe(
+      "123456789012345678901234567890",
+    );
+  });
+
+  it("el smoke NO vuelve a usar `anchor.BN` directo (lo único que puede vigilar esto es el fuente)", () => {
+    // No hay test de comportamiento que atrape esta regresión: bajo vitest `anchor.BN` funciona, así
+    // que un smoke que volviera a `new anchor.BN(...)` daría verde acá y rojo con `tsx`. Lo único
+    // observable desde el runner es el texto del script.
+    const src = readFileSync(
+      fileURLToPath(new URL("./smoke-solana-e2e.ts", import.meta.url)),
+      "utf8",
+    );
+    const offenders = src
+      .split("\n")
+      .map((line, i) => ({ n: i + 1, line }))
+      .filter(({ line }) => /\bnew\s+anchor\.BN\b/.test(line) && !line.trimStart().startsWith("//"));
+    expect(offenders.map((o) => `${o.n}: ${o.line.trim()}`)).toEqual([]);
+    // Y que efectivamente pase por el resolver (si alguien borra la llamada, esto se pone rojo).
+    expect(src).toContain("resolveAnchorBn(anchor)");
+  });
+});
+
+describe("el default del deadline del smoke sale de producción, no de un literal", () => {
+  // El segundo muro, después del import: el default era `"3600"`, el piso EXACTO del programa
+  // (`MIN_CUSTODY_SECS`, solana-programs/programs/escrow/src/lib.rs:121). El `now` que el programa
+  // compara es el del validador al EJECUTAR, así que `now_cliente + 3600` ya está por debajo apenas
+  // pasa un segundo y el depósito muere con `DeadlineTooSoon`. Producción arregló esa carrera
+  // (CUSTODY_WINDOW_SECS = 2 h, con su propio test en solana-wallet.test.ts:378-392) y el smoke se
+  // quedó con el valor viejo.
+  //
+  // Esto se vigila leyendo el fuente porque el default vive en el módulo del smoke, y ese módulo
+  // `process.exit(1)` en su primer statement: importarlo desde un test mata al runner.
+  const src = readFileSync(fileURLToPath(new URL("./smoke-solana-e2e.ts", import.meta.url)), "utf8");
+
+  it("usa CUSTODY_WINDOW_SECS de producción como default", () => {
+    expect(src).toContain("process.env.SMOKE_DEADLINE_SECONDS ?? String(CUSTODY_WINDOW_SECS)");
+  });
+
+  it("no vuelve al literal que perdía la carrera", () => {
+    expect(src).not.toContain('process.env.SMOKE_DEADLINE_SECONDS ?? "3600"');
   });
 });

@@ -38,8 +38,9 @@ route del money-path por una razón de tooling, y eso merece su propio SDD.
 Chaski **no arma ni transmite** el body de la transacción de settlement: eso es del facilitator. Por
 eso no hay fixture de consumer que comparar para ese salto. El ancla equivalente es el **pin por
 hash canónico del IDL del escrow** (`contracts/idl/escrow-idl.hash.test.ts`), que corre en cada
-`npm test`, compara contra el mismo valor pinneado en `wasiai-facilitator`, y además fija el program
-id y el orden posicional de las cuentas de `deposit`, `refund` y `register_escrow`.
+`npm test` y fija el program id y el orden posicional de las cuentas de `deposit`, `refund` y
+`register_escrow`. `wasiai-facilitator` pinnea **el mismo valor**, pero ningún test lo compara con
+este: son repos separados y no hay CI cross-repo (ver la tabla de la sección `ESCROW_IDL_SHA256`).
 
 ## Deuda técnica — sincronización cross-repo (Missing Input #1)
 
@@ -91,8 +92,12 @@ en que nadie tocó nada entrena al equipo a ignorar el rojo.
 ## `ESCROW_IDL_SHA256`
 
 ```
-4bcc34a997396d360ab996ea5bb1015ffdd8a1d357d3f4b4cffcbfe8ea98d12b
+fb64c937dbdab7a58045e663a85724808c4539707fedbdf244e11a28dbe5c071
 ```
+
+Este valor **no se mantiene a mano**: `escrow-idl.hash.test.ts` lee este bloque y lo compara contra
+la constante pinneada (ver "Cómo se sostiene sincronizado", abajo). Si alguien re-pinnea el código y
+no toca este archivo, `npm test` se pone ROJO.
 
 ### Bitácora de re-pinneos
 
@@ -100,21 +105,44 @@ en que nadie tocó nada entrena al equipo a ignorar el rojo.
 |-------|------|---------------------|--------|
 | 2026-07-22 | `aa53c03f159f7381cedf598cfd1b9e0b12d34dcdb2ae3240e9c14b288225fb71` | WKH-227 / HU-SOL-24 (pin inicial) | Congelar el IDL del escrow tal como estaba deployado (4 ix, `EscrowState`). |
 | 2026-07-28 | `4bcc34a997396d360ab996ea5bb1015ffdd8a1d357d3f4b4cffcbfe8ea98d12b` | **HU-SOL-20 / R2b** — `solana-programs/doc/sdd/002-escrow-remittance-id-recovery/sdd.md` §4.10 (DT-9), §5 paso R2, gate G5 | R1 amplió el programa: **+2 instrucciones** (`register_escrow`, `deregister_escrow`), **+1 account type** (`EscrowIndex`) y **+1 error** (`6005 EscrowIndexFull`). |
+| 2026-08-01 | `fb64c937dbdab7a58045e663a85724808c4539707fedbdf244e11a28dbe5c071` | **Ventana de custodia** — `doc/sdd/_arquitectura-desacople-verificable/plan-v2-ventana-de-custodia.md` (tren W4+W5, línea 621), commit `8c8527b` | El programa sumó la ventana de custodia: `close` agrega la cuenta `sender_ata` (barrido del vault) y entran los errores `6006 DeadlineTooSoon`, `6007 DeadlineTooFar` y `6008 ReleaseWindowClosed`. Ningún código se renumeró ni se borró; `deposit`, `refund`, `release`, `register_escrow` y `deregister_escrow` conservan discriminador, cuentas y args, y `EscrowStatus` sigue con 3 variantes. |
 
-Este re-pinneo **no es drift**: es el SDD explícito que exige el párrafo de abajo. Verificado antes de
-re-pinnear que las **4 instrucciones preexistentes** (`deposit`, `release`, `refund`, `close`) siguen
-canonicalizando **byte-idénticas** (mismo discriminador, mismas cuentas en el mismo orden, mismos args),
-que el tipo `EscrowState` y su discriminador de cuenta **no cambiaron** (8 campos, sin padding) y que el
-`address` sigue siendo `DR5GoMT7sAKzD6wZMKJPeknS3Y6fzgZUNevi7xiESE4x` (upgrade in-place, CD-15). El
-valor es **idéntico** al pineado por R2a en `wasiai-facilitator` (`src/chains/escrow-idl.hash.test.ts`).
+Cada uno de esos re-pinneos **no es drift**: cada fila cita el artefacto que lo autoriza, que es lo que
+exige el párrafo de abajo. Verificado antes de re-pinnear (2026-07-28) que las **4 instrucciones
+preexistentes** (`deposit`, `release`, `refund`, `close`) seguían canonicalizando **byte-idénticas**
+(mismo discriminador, mismas cuentas en el mismo orden, mismos args), que el tipo `EscrowState` y su
+discriminador de cuenta **no cambiaron** (8 campos, sin padding) y que el `address` sigue siendo
+`DR5GoMT7sAKzD6wZMKJPeknS3Y6fzgZUNevi7xiESE4x` (upgrade in-place, CD-15). El mismo diff instrucción por
+instrucción se hizo para el re-pin del 2026-08-01 y está en el encabezado de
+`idl/escrow-idl.hash.test.ts:9-20`.
+
+Los **tres** artefactos del ecosistema canonicalizan a `fb64c937…`, medido el 2026-08-04 con
+`canonicalSha256` (no de memoria): la copia de chaski (`src/infrastructure/solana/escrow-idl.ts`), el
+sibling que emite el compilador (`solana-programs/target/idl/escrow.json`, que es la fuente de verdad
+del programa desplegado) y el pin del otro consumer
+(`wasiai-facilitator/src/chains/escrow-idl.hash.test.ts:30`).
+
+### Cómo se sostiene sincronizado (y qué queda a mano)
+
+| Par a comparar | Qué lo chequea | Rojo automático |
+|----------------|----------------|-----------------|
+| IDL vendoreado de chaski ↔ constante pinneada | `idl/escrow-idl.hash.test.ts` AC-2 | **Sí**, siempre |
+| IDL de `solana-programs` (fuente de verdad) ↔ constante pinneada | `idl/escrow-idl.hash.test.ts` AC-3 | Sólo si el sibling existe en el workspace (best-effort, `it.skip` limpio si no) |
+| **Este documento ↔ constante pinneada** | `idl/escrow-idl.hash.test.ts` AC-DOC | **Sí**, siempre |
+| Constante pinneada en chaski ↔ constante pinneada en `wasiai-facilitator` | **nadie**: repos separados, sin CI cross-repo | No — es revisión humana (misma deuda que la sección "Missing Input #1") |
+
+El AC-DOC existe porque escribir "acordate de actualizar el doc" no funcionó: el re-pin del 2026-08-01
+movió la constante en el test y dejó este archivo publicando el hash del 2026-07-28, y el drift
+sobrevivió a un CR (`doc/sdd/038-wkh-321-chaski-computebudget-deposito/cr-report.md:57` llegó a citar la
+línea vieja como "byte-idéntica a main", que era cierto y era justamente el problema). El test lee el
+bloque de código de arriba y la última fila de la bitácora, y los compara contra la constante: **si
+divergen, `npm test` falla**. Esa es la única razón por la que este número se puede creer.
 
 ⚠️ El hash **no** se calcula con `sha256sum` (hashea bytes, no JSON canónico) ni con Python
 (`json.dumps` escapa los no-ASCII como `\uXXXX` y `JSON.stringify` no; el IDL tiene `docs` con
 acentos ⇒ hash distinto sobre el mismo archivo). Usar `canonicalSha256` de `idl/canonical-hash.ts`.
 
-SHA-256 canónico (claves ordenadas) del IDL del escrow. Verificado en F2 sobre los 3 IDL reales del
-ecosistema (chaski `src/infrastructure/solana/escrow-idl.ts`, el sibling `solana-programs/target/idl/escrow.json`
-y el del facilitator) — **los 3 canonicalizan igual**, address `DR5GoMT7sAKzD6wZMKJPeknS3Y6fzgZUNevi7xiESE4x`.
-El test `idl/escrow-idl.hash.test.ts` compara el IDL pinneado en chaski contra esta constante (AC-2,
-siempre) y, best-effort, contra el sibling (AC-3, skip limpio si no existe). **Re-pinneo SOLO con SDD
-explícito**, jamás por drift silencioso: si alguien edita `escrow-idl.ts` a mano el test se pone ROJO.
+Es el SHA-256 canónico (claves ordenadas) del IDL del escrow, address
+`DR5GoMT7sAKzD6wZMKJPeknS3Y6fzgZUNevi7xiESE4x`. **Re-pinneo SOLO con artefacto explícito que lo
+autorice** (una fila en la bitácora de arriba), jamás por drift silencioso: si alguien edita
+`escrow-idl.ts` a mano el test se pone ROJO.

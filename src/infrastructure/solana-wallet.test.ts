@@ -528,6 +528,50 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     expect(new Set(kinds).size).toBe(kinds.length);
     expect(kinds).toEqual([CB_SET_LIMIT, CB_SET_PRICE]);
   });
+
+  // T12 — el ÚNICO test que mira el PAYLOAD. T1..T6 assertan sobre `capturedTx(signSpy)`, que es el
+  // objeto que Chaski le ENTREGA a la billetera. Lo que producción serializa y postea es lo que la
+  // billetera DEVUELVE (`solana-wallet.ts:309-312`), y en producción puede ser otro objeto: el
+  // adapter serializa `signed`, no `tx`. Si una billetera real agrega sus propias ComputeBudget
+  // —el escenario que esta HU declara que NO puede impedir (sdd.md §11.1)—, Chaski postea esa tx
+  // sin chistar y ninguno de los seis se entera, porque todos miran el objeto de entrada.
+  //
+  // Este test cierra ese hueco: deserializa el base64 del envelope, o sea los MISMOS bytes que
+  // viajan al facilitator, y verifica ahí las 3 ix con sus valores. Verificado por mutación: con un
+  // fake de billetera que devuelve una tx con una ComputeBudget de más (lo que se sospecha que hace
+  // Phantom), T12 muere y T1..T6 siguen verdes.
+  //
+  // Lo que T12 NO prueba: qué hace una Phantom real. Prueba qué postea Chaski dado lo que la
+  // billetera devuelve — que es la mitad que sí se puede verificar desde acá.
+  it("T12 (AC-5, payload): la tx que se POSTEA trae exactamente [limit 120.000, price 10.000, deposit]", async () => {
+    const adapter = await connectedAdapter();
+    const res = await adapter.authorizePrincipal(makeQuote(), "rem-cb-payload", escrowDeposit());
+
+    const posted = Transaction.from(Buffer.from(res.solana?.partialSignedTx ?? "", "base64"));
+
+    // 3, ni una más: una cuarta ix de ComputeBudget en el payload ⇒ TOO_MANY_COMPUTE_BUDGET_IX /
+    // DUP_* del lado del facilitator (cr1.ts:131-156), que es el 422 que esta HU vino a cerrar.
+    expect(posted.instructions).toHaveLength(3);
+    const [limitIx, priceIx, businessIx] = posted.instructions;
+    if (!limitIx || !priceIx || !businessIx) throw new Error("missing_instruction");
+
+    // Los valores van como literales A MANO, igual que en T2: un assert contra los resolvers se
+    // movería junto con el mutante y pasaría siempre.
+    expect(limitIx.programId.equals(ComputeBudgetProgram.programId)).toBe(true);
+    expect(limitIx.data.readUInt8(0)).toBe(CB_SET_LIMIT);
+    expect(limitIx.data.readUInt32LE(1)).toBe(120_000);
+    expect(priceIx.programId.equals(ComputeBudgetProgram.programId)).toBe(true);
+    expect(priceIx.data.readUInt8(0)).toBe(CB_SET_PRICE);
+    expect(priceIx.data.readBigUInt64LE(1)).toBe(10_000n);
+    expect(businessIx.programId.toBase58()).toBe(ESCROW_PROGRAM_ID);
+
+    // Y ninguna ComputeBudget de más la busque donde la busque, no sólo en las dos primeras
+    // posiciones: una billetera puede APPENDEAR igual que anteponer.
+    const cbKinds = posted.instructions
+      .filter((i) => i.programId.equals(ComputeBudgetProgram.programId))
+      .map((i) => i.data.readUInt8(0));
+    expect(cbKinds).toEqual([CB_SET_LIMIT, CB_SET_PRICE]);
+  });
 });
 
 // ── HU-SOL-8 (WKH-211) — signMessage real base58 browser-safe (CD-SDD-3) ────────────────────────────

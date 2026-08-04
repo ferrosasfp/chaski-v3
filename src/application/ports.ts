@@ -125,7 +125,9 @@ export interface PayoutAuthorization {
   reason?: string; // "kyc_not_approved" | "kyc_reauth_failed" | "kyc_ownership_mismatch" | "kyc_authority_error" | "kyc_authority_unavailable" | ...
 }
 export interface PayoutAuthorityGateway {
-  // address es NO-opcional (CD-A3); el use-case pasa getAddress() ?? "".
+  // address es NO-opcional (CD-A3). El use-case pasaba `getAddress() ?? ""`, y ese `""` terminaba
+  // reventando la canonicalización del otro lado y volviendo como 502 "el KYC falló". Ahora corta
+  // antes con `wallet_address_unavailable` (confirm-and-send.ts) y acá SIEMPRE llega una address real.
   authorize(input: { verificationId: string; address: string }): Promise<PayoutAuthorization>;
 }
 

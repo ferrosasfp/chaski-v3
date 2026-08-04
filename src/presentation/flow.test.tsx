@@ -13,6 +13,7 @@ import type { ConfirmAndSend } from "../application/use-cases/confirm-and-send";
 import {
   PRINCIPAL_SETTLED_REFUND_MANUAL,
   PRINCIPAL_STATE_UNKNOWN,
+  WALLET_ADDRESS_UNAVAILABLE,
 } from "../application/use-cases/confirm-and-send";
 import type { TrackRemittance } from "../application/use-cases/track-remittance";
 import { Money } from "../domain/money";
@@ -1146,6 +1147,24 @@ describe("los tres casos, dichos con palabras distintas", () => {
     expect(screen.getByText(/Los USDC siguen ahí, a tu nombre/)).toBeInTheDocument();
     expect(screen.queryByText(/Referencia de reembolso/)).toBeNull();
     expect(screen.getByRole("button", { name: /Recuperar fondos/ })).toBeEnabled();
+  });
+
+  // El cuarto caso, que ni siquiera es un fallo de entrega: no teníamos la dirección de la wallet, así
+  // que el corte fue antes de la primera llamada de red. Antes se decía "No pudo entregarse. Si te
+  // cobramos, te reembolsamos" — o sea, se dejaba a la persona esperando un reembolso inexistente en
+  // vez de mandarla a lo único que lo arregla.
+  it("SIN ADDRESS: manda a reconectar la wallet, no a esperar un reembolso", async () => {
+    const rem = failedWith(WALLET_ADDRESS_UNAVAILABLE);
+    const { recover } = await seededRecovery(rem, new FakeSolanaEscrowRefundGateway());
+    render(<LiveTrackView initial={rem} recover={recover} />);
+
+    expect(screen.getByText(/Reconectá tu wallet/)).toBeInTheDocument();
+    expect(screen.getByText(/dirección de tu wallet/)).toBeInTheDocument();
+    expect(screen.getByText(/no se movió ningún USDC/)).toBeInTheDocument();
+    // Ni el fallo de entrega, ni el reembolso prometido, ni la identidad puesta en duda.
+    expect(screen.queryByText(/No pudo entregarse/)).toBeNull();
+    expect(screen.queryByText(/te reembolsamos/)).toBeNull();
+    expect(screen.queryByText(/verificar tu identidad/)).toBeNull();
   });
 
   it("NO ENTRÓ: sigue siendo el fallo de siempre, sin inventar un tercer estado", async () => {

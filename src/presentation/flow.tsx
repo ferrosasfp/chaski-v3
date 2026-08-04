@@ -19,6 +19,7 @@ import { createContainer, type Container } from "../composition/container";
 import {
   PRINCIPAL_SETTLED_REFUND_MANUAL,
   PRINCIPAL_STATE_UNKNOWN,
+  WALLET_ADDRESS_UNAVAILABLE,
 } from "../application/use-cases/confirm-and-send";
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
 import { resolveSolanaNetworkConfig } from "../infrastructure/chain"; // HU-SOL-13: cluster Solana activo (env-driven)
@@ -907,6 +908,11 @@ export function TrackView({
     // lado. Ahora se dice lo que es, y se ofrece la salida.
     const principalInEscrow = rem.failureReason === PRINCIPAL_SETTLED_REFUND_MANUAL;
     const principalUnknown = rem.failureReason === PRINCIPAL_STATE_UNKNOWN;
+    // Y el que ni siquiera es un fallo de entrega: nunca tuvimos la dirección de la wallet, así que el
+    // corte fue antes de la primera llamada de red. Decirlo con las palabras de un payout fallido
+    // ("si te cobramos, te reembolsamos") deja a la persona esperando un reembolso que no existe, en
+    // vez de mandarla a lo único que lo arregla, que es reconectar la wallet.
+    const walletAddressMissing = rem.failureReason === WALLET_ADDRESS_UNAVAILABLE;
     // ¿Hay una salida a la vista? Si no la hay, el texto no puede mandar a apretar un botón que no
     // está. Ya no hay un segundo estado "esperando el deadline": esta capa no sabe cuándo vence, así
     // que o se ofrece la acción o no hay ninguna.
@@ -916,20 +922,24 @@ export function TrackView({
         <p className="text-sm font-semibold">
           {recoveredBySender
             ? "Recuperaste tus fondos"
-            : principalUnknown
-              ? "No sabemos todavía si te cobramos"
-              : principalInEscrow
-                ? "Tus USDC quedaron en el escrow"
-                : "No pudo entregarse"}
+            : walletAddressMissing
+              ? "Reconectá tu wallet"
+              : principalUnknown
+                ? "No sabemos todavía si te cobramos"
+                : principalInEscrow
+                  ? "Tus USDC quedaron en el escrow"
+                  : "No pudo entregarse"}
         </p>
         <p className="text-sm text-stone">
           {recoveredBySender
             ? "Los USDC volvieron a tu wallet. Esta remesa no se entregó."
-            : principalUnknown
-              ? "Se cortó la comunicación mientras enviábamos tu depósito, y la cadena tampoco nos contestó. Puede que tus USDC estén en el escrow o que nunca hayan salido de tu wallet: todavía no lo sabemos. Nadie te reembolsó nada."
-              : principalInEscrow
-                ? "Tu depósito entró al escrow y el envío no siguió. Los USDC siguen ahí, a tu nombre. Nadie te los reembolsó: los recuperás vos, firmando desde tu wallet."
-                : humanError("payout_failed")}
+            : walletAddressMissing
+              ? humanError(WALLET_ADDRESS_UNAVAILABLE)
+              : principalUnknown
+                ? "Se cortó la comunicación mientras enviábamos tu depósito, y la cadena tampoco nos contestó. Puede que tus USDC estén en el escrow o que nunca hayan salido de tu wallet: todavía no lo sabemos. Nadie te reembolsó nada."
+                : principalInEscrow
+                  ? "Tu depósito entró al escrow y el envío no siguió. Los USDC siguen ahí, a tu nombre. Nadie te los reembolsó: los recuperás vos, firmando desde tu wallet."
+                  : humanError("payout_failed")}
         </p>
         {(principalUnknown || principalInEscrow) && recoveryOffered ? (
           <p className="text-sm text-stone">

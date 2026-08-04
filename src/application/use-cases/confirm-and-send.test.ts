@@ -113,6 +113,81 @@ describe("ConfirmAndSend — enforcement autoridad server-side (WKH-180)", () =>
   });
 });
 
+// ── La address que no está ────────────────────────────────────────────────────────────────────────
+// El daño: `address` viajaba como `""` hasta la autoridad de payout, que lo canonicaliza (base58) y
+// tira; el catch de authority.ts lo convierte en 502 `kyc_reauth_failed`. O sea que "no tengo la
+// dirección de la wallet" — local, trivial, y con cero plata movida — se leía como "el proveedor de
+// identidad falló", y el flujo moría sin llegar a pedir la firma. Es el 502 indiagnosticable del
+// recorrido manual del 2026-08-02.
+describe("ConfirmAndSend — sin address de wallet no se le pregunta a la autoridad", () => {
+  it("getAddress()→null ⇒ wallet_address_unavailable, NUNCA kyc_reauth_failed", async () => {
+    const repo = new InMemoryRepo();
+    const wallet = new FakeSolanaWallet();
+    vi.spyOn(wallet, "getAddress").mockResolvedValue(null); // la recarga borró el cache en memoria
+    const authorizeSpy = vi.spyOn(wallet, "authorizePrincipal");
+    const authority = new FakePayoutAuthorityGateway({ authorized: true });
+    const id = await seedQuoted(repo);
+
+    const out = await new ConfirmAndSend(
+      wallet,
+      repo,
+      new FixedClock(),
+      authority,
+      new FakeRefundGateway(),
+    ).execute({ remittanceId: id });
+
+    expect(out.snapshot.failureReason).toBe("wallet_address_unavailable");
+    // Lo que este test protege de verdad: que la causa NO se disfrace de la otra.
+    expect(out.snapshot.failureReason).not.toBe("kyc_reauth_failed");
+    // Y que el corte sea ANTES de la primera llamada de red: nadie consultó a la autoridad…
+    expect(authority.calls).toEqual([]);
+    expect(authorizeSpy).not.toHaveBeenCalled(); // …ni se le pidió una firma a la wallet
+    expect(out.snapshot.principalTx).toBeNull(); // …ni se movió un USDC
+  });
+
+  it("getAddress()→'   ' (blanco) ⇒ mismo corte: un espacio no es una dirección", async () => {
+    const repo = new InMemoryRepo();
+    const wallet = new FakeSolanaWallet();
+    vi.spyOn(wallet, "getAddress").mockResolvedValue("   ");
+    const authority = new FakePayoutAuthorityGateway({ authorized: true });
+    const id = await seedQuoted(repo);
+
+    const out = await new ConfirmAndSend(
+      wallet,
+      repo,
+      new FixedClock(),
+      authority,
+      new FakeRefundGateway(),
+    ).execute({ remittanceId: id });
+
+    expect(out.snapshot.failureReason).toBe("wallet_address_unavailable");
+    expect(authority.calls).toEqual([]);
+  });
+
+  // CANDADO DE NO-REGRESIÓN del camino feliz: con la address presente el guard no existe. La autoridad
+  // recibe la address REAL y el flujo sigue hasta donde llegaba antes (acá, el tapón DT-8 por no tener
+  // `solana` inyectado). Si este test se pone rojo, el guard se comió el camino de la demo.
+  it("con address presente: la autoridad se llama con ella y el flujo avanza igual que antes", async () => {
+    const repo = new InMemoryRepo();
+    const wallet = new FakeSolanaWallet();
+    const authority = new FakePayoutAuthorityGateway({ authorized: true });
+    const id = await seedQuoted(repo);
+
+    const out = await new ConfirmAndSend(
+      wallet,
+      repo,
+      new FixedClock(),
+      authority,
+      new FakeRefundGateway(),
+    ).execute({ remittanceId: id });
+
+    expect(authority.calls).toEqual([{ verificationId: "v-1", address: FAKE_SOLANA_BENEFICIARY }]);
+    // Pasó el guard de address Y el de autoridad: muere después, en el tapón fail-closed de siempre.
+    expect(out.snapshot.failureReason).toBe("settlement_unavailable");
+    expect(out.snapshot.failureReason).not.toBe("wallet_address_unavailable");
+  });
+});
+
 describe("ConfirmAndSend — re-check de vigencia del quote (M2/AC-5)", () => {
   it("AC-5: el quote vence ENTRE confirm y la firma (ScriptedClock) → refunded, SIN firma", async () => {
     const repo = new InMemoryRepo();

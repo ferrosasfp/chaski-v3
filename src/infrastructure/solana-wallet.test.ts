@@ -2,7 +2,7 @@ import { sha256 } from "@noble/hashes/sha256";
 import nacl from "tweetnacl";
 import bs58 from "bs58";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
-import { Connection, Keypair, PublicKey, Transaction } from "@solana/web3.js";
+import { ComputeBudgetProgram, Connection, Keypair, PublicKey, Transaction } from "@solana/web3.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Money } from "../domain/money";
 import type { Quote } from "../domain/remittance";
@@ -105,9 +105,13 @@ function capturedTx(spy: ReturnType<typeof vi.fn>): Transaction {
   if (!call) throw new Error("signTransaction_not_called");
   return call[0] as Transaction;
 }
-function firstIx(tx: Transaction) {
-  const ix = tx.instructions[0];
-  if (!ix) throw new Error("no_instruction");
+/** Localiza la ix `deposit` por programId, NUNCA por índice. Copia del patrón del lector de
+ *  producción (settlement/solana-deposit-beneficiary.ts:47). Un test que la busca por índice
+ *  codifica "el deposit es la primera instrucción" como si fuera un invariante, y no lo es:
+ *  WKH-321 antepuso dos ComputeBudget y la billetera puede anteponer más. */
+function depositIx(tx: Transaction) {
+  const ix = tx.instructions.find((i) => i.programId.equals(new PublicKey(ESCROW_PROGRAM_ID)));
+  if (!ix) throw new Error("deposit_ix_not_found");
   return ix;
 }
 
@@ -158,7 +162,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     const rid = "rem-ac1";
     await adapter.authorizePrincipal(makeQuote(), rid, escrowDeposit());
 
-    const ix = firstIx(capturedTx(signSpy));
+    const ix = depositIx(capturedTx(signSpy));
     expect(ix.programId.toBase58()).toBe(ESCROW_PROGRAM_ID);
     expect(Array.from(ix.data.subarray(0, 8))).toEqual(DEPOSIT_DISCRIMINATOR);
 
@@ -270,14 +274,14 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     expect(() => new PublicKey(res.solana?.reference ?? "")).not.toThrow(); // reference base58 válido
     // el serializado deserializa a la MISMA ix (deposit)
     const back = Transaction.from(Buffer.from(res.solana?.partialSignedTx ?? "", "base64"));
-    expect(firstIx(back).programId.toBase58()).toBe(ESCROW_PROGRAM_ID);
+    expect(depositIx(back).programId.toBase58()).toBe(ESCROW_PROGRAM_ID);
   });
 
   it("AC-4/CD-SDD-6: reference como remainingAccount no-signer/no-writable, al final del set", async () => {
     const adapter = await connectedAdapter();
     const res = await adapter.authorizePrincipal(makeQuote(), "rem-ac4", escrowDeposit());
 
-    const ix = firstIx(capturedTx(signSpy));
+    const ix = depositIx(capturedTx(signSpy));
     const last = ix.keys[ix.keys.length - 1];
     if (!last) throw new Error("no_reference_key");
     expect(last.pubkey.toBase58()).toBe(res.solana?.reference); // reference es el último account
@@ -308,7 +312,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     await adapter.authorizePrincipal(quote, "rem-ac8", escrowDeposit());
     const after = Math.floor(Date.now() / 1000);
 
-    const data = firstIx(capturedTx(signSpy)).data;
+    const data = depositIx(capturedTx(signSpy)).data;
     // layout borsh: 8 disc + 16 remittance_id + 32 beneficiary + 32 authority + 8 amount(LE) + 8 deadline(LE)
     const amount = data.readBigUInt64LE(8 + 16 + 32 + 32);
     const deadline = data.readBigInt64LE(8 + 16 + 32 + 32 + 8);
@@ -329,7 +333,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     await adapter.authorizePrincipal(makeQuote(), "rem-ventana", escrowDeposit());
     const after = Math.floor(Date.now() / 1000);
 
-    const data = firstIx(capturedTx(signSpy)).data;
+    const data = depositIx(capturedTx(signSpy)).data;
     const deadline = Number(data.readBigInt64LE(8 + 16 + 32 + 32 + 8));
 
     // Piso: contra el `after`, que es el peor caso del reloj del validador si la tx entra ya mismo.
@@ -352,7 +356,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     );
     const after = Math.floor(Date.now() / 1000);
 
-    const data = firstIx(capturedTx(signSpy)).data;
+    const data = depositIx(capturedTx(signSpy)).data;
     const deadline = Number(data.readBigInt64LE(8 + 16 + 32 + 32 + 8));
 
     expect(deadline - after).toBeGreaterThanOrEqual(3600); // habría sido ~600 antes del fix
@@ -365,6 +369,146 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     await expect(
       adapter.authorizePrincipal(makeQuote({ expiresAt: "not-a-date" }), "rem-bad", escrowDeposit()),
     ).rejects.toThrow("quote_expires_at_invalid");
+  });
+
+  // ── WKH-321 / SDD 038 — Chaski declara SU presupuesto de cómputo ──────────────────────────────
+  //
+  // Qué cubren estos tests: QUÉ EMITE Chaski — cuáles instrucciones, en qué orden, con qué valores,
+  // y que las tres estaban adentro de lo que la billetera firmó. Qué NO cubren, porque no se puede
+  // cubrir desde acá: qué hace después una billetera real con esa transacción. Si Phantom agrega
+  // igual las suyas, el facilitator responde otro 422 (TOO_MANY_COMPUTE_BUDGET_IX / DUP_*), no un
+  // éxito; eso sólo lo cierra un recorrido manual con una wallet real.
+  //
+  // Los discriminadores 2 (SetComputeUnitLimit) y 3 (SetComputeUnitPrice) van como literales A MANO:
+  // son el layout del programa ComputeBudget, no un detalle de nuestra librería, y derivarlos de la
+  // librería haría que el test se moviera junto con ella.
+  const CB_SET_LIMIT = 2;
+  const CB_SET_PRICE = 3;
+
+  it("T1 (AC-1/AC-5): la tx lleva 3 ix — [SetComputeUnitLimit, SetComputeUnitPrice, deposit], en ese orden", async () => {
+    const adapter = await connectedAdapter();
+    await adapter.authorizePrincipal(makeQuote(), "rem-cb-orden", escrowDeposit());
+
+    const tx = capturedTx(signSpy);
+    expect(tx.instructions).toHaveLength(3);
+
+    const [limitIx, priceIx, businessIx] = tx.instructions;
+    if (!limitIx || !priceIx || !businessIx) throw new Error("missing_instruction");
+
+    // Posición 0: el LÍMITE. Posicional a propósito: acá se verifica el ORDEN, no se localiza el deposit.
+    expect(limitIx.programId.equals(ComputeBudgetProgram.programId)).toBe(true);
+    expect(limitIx.data.readUInt8(0)).toBe(CB_SET_LIMIT);
+    // Posición 1: el PRECIO.
+    expect(priceIx.programId.equals(ComputeBudgetProgram.programId)).toBe(true);
+    expect(priceIx.data.readUInt8(0)).toBe(CB_SET_PRICE);
+    // Posición 2: el negocio.
+    expect(businessIx.programId.toBase58()).toBe(ESCROW_PROGRAM_ID);
+  });
+
+  it("T2 (AC-2): los valores emitidos son 120.000 CU y 10.000 µL/CU", async () => {
+    const adapter = await connectedAdapter();
+    await adapter.authorizePrincipal(makeQuote(), "rem-cb-valores", escrowDeposit());
+
+    const tx = capturedTx(signSpy);
+    const [limitIx, priceIx] = tx.instructions;
+    if (!limitIx || !priceIx) throw new Error("missing_instruction");
+
+    // Literales A MANO, NUNCA llamando a los resolvers: un assert contra el resolver se mueve junto
+    // con el mutante y pasa siempre (mismo criterio que el test del mensaje canónico de SDD 037).
+    // Layout: u8 discriminador + u32 units (limit) / u64 microLamports (price).
+    expect(limitIx.data.readUInt32LE(1)).toBe(120_000);
+    expect(priceIx.data.readBigUInt64LE(1)).toBe(10_000n);
+  });
+
+  it("T3 (AC-1/AC-3, CD-1): las 3 ix ya estaban puestas cuando la billetera firmó", async () => {
+    const adapter = await connectedAdapter();
+    await adapter.authorizePrincipal(makeQuote(), "rem-cb-antes", escrowDeposit());
+
+    // La tx que se le pasó a signTransaction es la MISMA referencia que el adapter siguió usando, así
+    // que "estaba" se mide sobre el objeto capturado en el momento de la llamada: si el adapter
+    // agregara una ix después de firmar, este assert seguiría verde y por eso T4 mide la firma.
+    expect(signSpy).toHaveBeenCalledTimes(1);
+    const tx = capturedTx(signSpy);
+    expect(tx.instructions).toHaveLength(3);
+    expect(
+      tx.instructions.filter((i) => i.programId.equals(ComputeBudgetProgram.programId)),
+    ).toHaveLength(2);
+    expect(depositIx(tx).programId.toBase58()).toBe(ESCROW_PROGRAM_ID);
+  });
+
+  it("T4 (AC-3): agregar una ix DESPUÉS de firmar invalida la firma del sender", async () => {
+    const adapter = await connectedAdapter();
+    await adapter.authorizePrincipal(makeQuote(), "rem-cb-firma", escrowDeposit());
+
+    const tx = capturedTx(signSpy);
+    const senderSig = tx.signatures.find((s) => s.publicKey.equals(SENDER_KP.publicKey))?.signature;
+    if (!senderSig) throw new Error("sender_signature_missing");
+
+    // 1) Tal como salió: la firma VALIDA sobre el mensaje compilado con las 3 ix.
+    expect(
+      nacl.sign.detached.verify(
+        tx.serializeMessage(),
+        new Uint8Array(senderSig),
+        SENDER_KP.publicKey.toBytes(),
+      ),
+    ).toBe(true);
+
+    // 2) Se agrega una ix SIN CUENTAS (otra ComputeBudget). Tiene que ser sin cuentas: si trajera un
+    //    firmante nuevo, `_compile()` de web3.js resetea `signatures` a null en silencio y el test
+    //    estaría midiendo un null, no una firma inválida.
+    tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 111_111 }));
+
+    // 3) La MISMA firma ya no valida: serializeMessage() recompiló el mensaje y los bytes cambiaron.
+    //    Esa es la razón mecánica por la que las dos ComputeBudget van ANTES de signTransaction.
+    expect(
+      nacl.sign.detached.verify(
+        tx.serializeMessage(),
+        new Uint8Array(senderSig),
+        SENDER_KP.publicKey.toBytes(),
+      ),
+    ).toBe(false);
+  });
+
+  it("T5 (AC-6, no-regresión): la ix deposit se localiza por programId y llega intacta", async () => {
+    const adapter = await connectedAdapter();
+    const rid = "rem-cb-deposit-intacto";
+    await adapter.authorizePrincipal(makeQuote(), rid, escrowDeposit());
+
+    // Localizada por programId, NO por índice: con las ComputeBudget adelante, el `deposit` ya no
+    // está en la posición 0 y un lector posicional leería la instrucción equivocada.
+    const ix = depositIx(capturedTx(signSpy));
+    expect(Array.from(ix.data.subarray(0, 8))).toEqual(DEPOSIT_DISCRIMINATOR);
+    expect(ix.keys).toHaveLength(9); // 8 del IDL + reference
+
+    const programId = new PublicKey(ESCROW_PROGRAM_ID);
+    const bytes = remittanceIdBytes16(rid);
+    const [escrowStatePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("escrow"), SENDER_KP.publicKey.toBuffer(), Buffer.from(bytes)],
+      programId,
+    );
+    const mintPk = new PublicKey(MINT_B58);
+    const keyStrs = ix.keys.map((k) => k.pubkey.toBase58());
+    expect(keyStrs).toContain(escrowStatePda.toBase58()); // escrow_state PDA
+    expect(keyStrs).toContain(getAssociatedTokenAddressSync(mintPk, escrowStatePda, true).toBase58()); // vault
+    expect(keyStrs).toContain(getAssociatedTokenAddressSync(mintPk, SENDER_KP.publicKey).toBase58()); // sender_ata
+    expect(keyStrs).toContain(SENDER_B58); // sender (signer)
+  });
+
+  it("T6 (AC-5): a lo sumo 2 ix ComputeBudget, sin repetidas y sin ninguna fuera de {limit, price}", async () => {
+    const adapter = await connectedAdapter();
+    await adapter.authorizePrincipal(makeQuote(), "rem-cb-forma", escrowDeposit());
+
+    const cbIx = capturedTx(signSpy).instructions.filter((i) =>
+      i.programId.equals(ComputeBudgetProgram.programId),
+    );
+    expect(cbIx.length).toBeLessThanOrEqual(2); // >2 ⇒ TOO_MANY_COMPUTE_BUDGET_IX del lado del facilitator
+
+    const kinds = cbIx.map((i) => i.data.readUInt8(0));
+    // Ninguna RequestUnits (0) ni RequestHeapFrame (1) ni desconocida ⇒ UNSUPPORTED_COMPUTE_BUDGET_IX.
+    for (const kind of kinds) expect([CB_SET_LIMIT, CB_SET_PRICE]).toContain(kind);
+    // Sin repetidas ⇒ DUP_COMPUTE_UNIT_LIMIT / DUP_COMPUTE_UNIT_PRICE.
+    expect(new Set(kinds).size).toBe(kinds.length);
+    expect(kinds).toEqual([CB_SET_LIMIT, CB_SET_PRICE]);
   });
 });
 

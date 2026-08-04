@@ -28,6 +28,8 @@ import type { Quote } from "../domain/remittance";
 import { isParseableIso } from "../domain/remittance";
 import { buildSponsorPopMessage } from "./auth/sponsor-pop-message";
 import {
+  resolveSolanaComputeUnitLimit,
+  resolveSolanaComputeUnitPriceMicroLamports,
   resolveSolanaFacilitatorPubkey,
   resolveSolanaNetworkConfig,
   resolveSolanaNetworkId,
@@ -213,7 +215,7 @@ export class SolanaWalletAdapter implements WalletPort, SolanaEscrowDepositProbe
 
     // ── lazy-import (DT-SDD-8, patrón wallet.ts:200) ──
     const web3 = await import("@solana/web3.js");
-    const { PublicKey, Transaction, Connection, Keypair } = web3;
+    const { PublicKey, Transaction, Connection, Keypair, ComputeBudgetProgram } = web3;
     const anchor = await import("@coral-xyz/anchor");
     const { getAssociatedTokenAddressSync } = await import("@solana/spl-token");
     const { escrowIdl } = await import("./solana/escrow-idl"); // la copia pinneada (W0.4)
@@ -274,9 +276,33 @@ export class SolanaWalletAdapter implements WalletPort, SolanaEscrowDepositProbe
       .remainingAccounts([{ pubkey: reference, isSigner: false, isWritable: false }]) // AC-4
       .instruction();
 
+    // ── ComputeBudget: Chaski declara SU presupuesto (WKH-321 / SDD 038) ──────────────────────────
+    // Antes de esta HU la tx salía con UNA sola instrucción y la billetera inyectaba las suyas
+    // (375.000 µL/CU), 7,5x por encima del tope POR UNIDAD del facilitator
+    // (SOLANA_SPONSOR_MAX_PRIORITY_FEE_MICROLAMPORTS = 50.000, wasiai-facilitator/src/infra/env.ts:215)
+    // -> 422 PRIORITY_FEE_ABOVE_MAX (cr1.ts:159-160). Emitir las nuestras hace que el valor que Chaski
+    // declara deje de depender de la billetera. Lo que esto NO hace: impedir que la billetera igual
+    // agregue las suyas — eso no lo puede prohibir ni el protocolo ni la librería. Si lo hace, el
+    // rechazo es DISTINTO (TOO_MANY_COMPUTE_BUDGET_IX / DUP_*, cr1.ts:131-156), no un éxito.
+    // Los valores y su derivación viven en chain.ts (resolveSolanaComputeUnit*): 120.000 CU sale de
+    // 79.826 CU (peor caso sobre 28 corridas, solana-programs/tests/escrow-index.ts:725-731) x 1,5.
+    // CD-1: las dos van ANTES de signTransaction. Agregar una ix DESPUÉS de firmar recompila el
+    // mensaje y la firma ed25519 del sender deja de validar (y arrastra al mensaje canónico de
+    // SDD 037, que lleva esa firma adentro).
+    const limitIx = ComputeBudgetProgram.setComputeUnitLimit({
+      units: resolveSolanaComputeUnitLimit(),
+    });
+    const priceIx = ComputeBudgetProgram.setComputeUnitPrice({
+      microLamports: resolveSolanaComputeUnitPriceMicroLamports(),
+    });
+
     // ── feePayer + blockhash + partial-sign + serializar (AC-2/AC-3) ──
     const { blockhash } = await connection.getLatestBlockhash();
-    const tx = new Transaction().add(ix);
+    // Orden [limit, price, deposit]: convención y legibilidad (el límite es lo que el precio
+    // multiplica). CR-1 NO lo exige — filtra las ix de ComputeBudget por programId (cr1.ts:106-107) y
+    // toma businessIx[0] del array ya filtrado (:115). Se documenta para que nadie lo cambie creyendo
+    // que da igual, y para que nadie lo defienda creyendo que el validador lo impone.
+    const tx = new Transaction().add(limitIx, priceIx, ix); // [limit, price, deposit] — ver CD-1
     tx.feePayer = new PublicKey(resolveSolanaFacilitatorPubkey()); // AC-2: facilitator paga el fee de red
     tx.recentBlockhash = blockhash;
 

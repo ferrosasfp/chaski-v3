@@ -162,6 +162,91 @@ describe("HttpSolanaPayoutPrepareGateway — el body que arma el cliente ES el q
     expect(out.result.payoutId).toBe("transfi-po-1");
   });
 
+  // ── Hallazgo #75, de punta a punta ──────────────────────────────────────────────────────────────
+  // Acá se prueba lo único que importa de verdad: que el enum que la route deriva del `reason` del
+  // agente LLEGUE al `reason` que el use-case persiste en la remesa. Si el cliente lo colapsa, la
+  // separación del server no existe para ninguna pantalla. El caso es real: antes de esto, los
+  // cuatro rechazos del agente terminaban en `prepare_no_deposit_address`.
+  function agentRejectsWith(reason: string | null): () => Response {
+    return () =>
+      new Response(
+        JSON.stringify({
+          result: {
+            status: "blocked",
+            payoutId: null,
+            deliveredLocal: null,
+            txRef: null,
+            reason,
+            provenance: "transfi",
+            depositAddress: null,
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+  }
+
+  it.each([
+    ["quote_amount_mismatch", "prepare_quote_amount_mismatch"],
+    ["quote_unresolvable", "prepare_quote_unresolvable"],
+    ["kyc_identity_claim_missing", "prepare_kyc_identity_claim_missing"],
+    ["kyc_gate_not_passed", "prepare_agent_rejected"], // colapsado a propósito (no-oráculo)
+  ])("#75: el rechazo %s del agente llega al cliente como %s", async (reason, esperado) => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal("fetch", routeFetch(agentRejectsWith(reason)));
+    const out = await new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet)).prepare(
+      prepareInput(),
+    );
+    expect(out).toEqual({ ok: false, reason: esperado });
+  });
+
+  // El default del cliente para "4xx que no reconozco" es `prepare_rejected`. Si alguien saca el
+  // bloque de la allow-list, los cuatro casos de arriba caen ahí y vuelven a ser indistinguibles
+  // entre sí — verdes en un test que sólo mirara `ok:false`. Este los compara.
+  it("#75: los rechazos NO caen en el default `prepare_rejected` ni comparten reason entre sí", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const reasons: string[] = [];
+    for (const r of ["quote_amount_mismatch", "quote_unresolvable", "kyc_identity_claim_missing"]) {
+      vi.stubGlobal("fetch", routeFetch(agentRejectsWith(r)));
+      const out = await new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet)).prepare(
+        prepareInput(),
+      );
+      if (out.ok) throw new Error("unreachable");
+      reasons.push(out.reason);
+    }
+    expect(reasons).not.toContain("prepare_rejected");
+    expect(reasons).not.toContain("prepare_no_deposit_address");
+    expect(new Set(reasons).size).toBe(3);
+  });
+
+  // CANDADO: la respuesta INCOMPLETA (el mock: submitted + sin dirección) no es un rechazo y sigue
+  // saliendo por el enum que la describe bien.
+  it("#75 CANDADO: el provider mock sigue dando prepare_no_deposit_address", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routeFetch(
+        () =>
+          new Response(
+            JSON.stringify({
+              result: {
+                status: "submitted",
+                payoutId: "transfi-po-1",
+                deliveredLocal: null,
+                txRef: null,
+                reason: null,
+                provenance: "transfi",
+                depositAddress: null,
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+    const out = await new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet)).prepare(
+      prepareInput(),
+    );
+    expect(out).toEqual({ ok: false, reason: "prepare_no_deposit_address" });
+  });
+
   // El challenge se pide ANTES del prepare y para la MISMA address del body. Si alguien firmara para
   // otra address, P3 de la route la rechazaría; este test clava el orden y el argumento.
   it("pide el challenge para la MISMA address que viaja en el body, y ANTES del prepare", async () => {

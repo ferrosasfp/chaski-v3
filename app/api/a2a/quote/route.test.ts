@@ -85,6 +85,127 @@ describe("POST /api/a2a/quote — proxy server-only a remit-corridor-fx (WKH-186
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Hallazgo #75 — un RECHAZO del agente no es el agente caído.
+//
+// Medido en producción el 2026-08-04: `{"amountUsd":2}` y `{"amountUsd":50000}` devolvían los dos
+// 502 `a2a_upstream_error`, cuando el agente había contestado 400 `fx_amount_below_minimum` y 400
+// `fx_amount_above_maximum`. Cada `it` de acá abajo muere si esa causa vuelve a colapsar en el enum
+// viejo, y el último candado muere si un fallo de infraestructura genuino deja de ser 502.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("POST /api/a2a/quote — rechazo del agente ≠ agente caído (hallazgo #75)", () => {
+  /** Agente que contesta un no-2xx con el body de error dado. */
+  function agentRejects(status: number, body: unknown) {
+    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status, json: async () => body })),
+    );
+  }
+
+  it("monto BAJO EL MÍNIMO ⇒ 400 a2a_quote_rejected + reason fx_amount_below_minimum (no 502)", async () => {
+    agentRejects(400, { error: "fx_amount_below_minimum", minSendUsd: 5 });
+    const res = await POST(req({ amountUsd: 2, destCountry: "PE", payoutMethod: "yape" }));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "a2a_quote_rejected",
+      reason: "fx_amount_below_minimum",
+    });
+  });
+
+  it("monto SOBRE EL TECHO ⇒ 400 a2a_quote_rejected + reason fx_amount_above_maximum (no 502)", async () => {
+    agentRejects(400, { error: "fx_amount_above_maximum", maxSendUsd: 10000 });
+    const res = await POST(req({ amountUsd: 50000, destCountry: "PE", payoutMethod: "yape" }));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "a2a_quote_rejected",
+      reason: "fx_amount_above_maximum",
+    });
+  });
+
+  // Las dos causas nuevas tienen que ser distinguibles ENTRE SÍ, no sólo del 502. Un mapeo que las
+  // colapsara a un único enum de rechazo pasaría los dos `it` de arriba por separado si el enum
+  // fuera el mismo; este las corre juntas y compara.
+  it("mínimo y techo NO comparten enum (las dos causas se distinguen entre sí)", async () => {
+    agentRejects(400, { error: "fx_amount_below_minimum" });
+    const bajo = (await (await POST(req({ amountUsd: 2 }))).json()) as { reason?: string };
+    agentRejects(400, { error: "fx_amount_above_maximum" });
+    const alto = (await (await POST(req({ amountUsd: 50000 }))).json()) as { reason?: string };
+    expect(bajo.reason).not.toBe(alto.reason);
+  });
+
+  // El agente rechaza pero con un enum que este código no conoce: sale el enum de FAMILIA, sin el
+  // reason. La allow-list es lo que decide, y un string crudo del agente NUNCA llega al browser.
+  it("rechazo con enum desconocido ⇒ 400 a2a_quote_rejected SIN reason (allow-list, cero eco crudo)", async () => {
+    agentRejects(400, { error: "fx_corredor_en_mantenimiento", detalle: "texto libre del agente" });
+    const res = await POST(req({ amountUsd: 400 }));
+    expect(res.status).toBe(400);
+    const raw = await res.text();
+    expect(JSON.parse(raw)).toEqual({ error: "a2a_quote_rejected" });
+    expect(raw).not.toContain("fx_corredor_en_mantenimiento");
+    expect(raw).not.toContain("texto libre");
+  });
+
+  it("el enum del rechazo se lee de `code`/`reason` además de `error` (el contrato de error no está vendoreado)", async () => {
+    agentRejects(422, { code: "fx_amount_below_minimum" });
+    expect(await (await POST(req({ amountUsd: 2 }))).json()).toEqual({
+      error: "a2a_quote_rejected",
+      reason: "fx_amount_below_minimum",
+    });
+    agentRejects(422, { reason: "fx_amount_above_maximum" });
+    expect(await (await POST(req({ amountUsd: 99999 }))).json()).toEqual({
+      error: "a2a_quote_rejected",
+      reason: "fx_amount_above_maximum",
+    });
+  });
+
+  it("rechazo con body ILEGIBLE ⇒ sigue siendo 400 (rechazo), nunca 502 ni 500 crudo", async () => {
+    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status: 400,
+        json: async () => {
+          throw new Error("<html>bad gateway page</html>");
+        },
+      })),
+    );
+    const res = await POST(req({ amountUsd: 2 }));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "a2a_quote_rejected" });
+  });
+
+  // ── CANDADO DE NO-REGRESIÓN ────────────────────────────────────────────────────────────────────
+  // Un fallo de infraestructura GENUINO sigue siendo 502. Si alguien "arregla" la separación
+  // mandando todo no-2xx por la rama de rechazo, esto se pone rojo: un 503 del agente NO es culpa
+  // del monto que escribió la persona, y decirle "revisá tu pedido" la manda a corregir algo que
+  // está bien. 401/403/404 están por la misma razón: son credenciales/ruta NUESTRAS, no su pedido.
+  it.each([500, 502, 503, 504, 401, 403, 404, 429])(
+    "CANDADO: status %i del agente ⇒ sigue siendo 502 a2a_upstream_error",
+    async (status) => {
+      agentRejects(status, { error: "fx_amount_below_minimum" }); // aunque el body mienta
+      const res = await POST(req({ amountUsd: 2 }));
+      expect(res.status).toBe(502);
+      expect(await res.json()).toEqual({ error: "a2a_upstream_error" });
+    },
+  );
+
+  it("CANDADO: timeout/DNS (fetch throw) ⇒ sigue siendo 502 a2a_unavailable", async () => {
+    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("aborted");
+      }),
+    );
+    const res = await POST(req({ amountUsd: 2 }));
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "a2a_unavailable" });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // WKH-218 + WKH-304 — modo de transporte "a2a-gateway": el quote se pide por CAPACIDAD a
 // POST /compose y el gateway resuelve. Ya NO hay /discover ni slug esperado: los tests que
 // asertaban la llamada a /discover se portaron al contrato nuevo (no se borró ningún caso).

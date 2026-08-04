@@ -295,6 +295,118 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
     expect((await POST(req(bodyOf()))).status).toBe(502);
   });
 
+  // ── Hallazgo #75 — cinco causas, un enum ───────────────────────────────────
+  // `prepare_no_deposit_address` cubría los cuatro rechazos del agente (que llegan en su campo
+  // `reason`, validado de TIPO en route.ts:62 y nunca leído) MÁS el provider mock. Cada `it` de acá
+  // muere si su causa vuelve a colapsar; el último candado muere si el mock deja de ser 502.
+  describe("rechazo del agente ≠ 'no nos dio dirección' (hallazgo #75)", () => {
+    /** Rechazo del agente: 200 con status blocked/failed + su reason. NO trae depositAddress. */
+    function agentRejects(reason: string | null, status: "failed" | "blocked" = "blocked") {
+      agentResponds(200, agentResult({ status, payoutId: null, depositAddress: null, reason }));
+    }
+
+    it.each([
+      ["quote_amount_mismatch", "prepare_quote_amount_mismatch"],
+      ["quote_unresolvable", "prepare_quote_unresolvable"],
+      ["kyc_identity_claim_missing", "prepare_kyc_identity_claim_missing"],
+    ])("reason %s del agente ⇒ 422 %s (ya no prepare_no_deposit_address)", async (reason, enumo) => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      agentRejects(reason);
+      const res = await POST(req(bodyOf()));
+      expect(res.status).toBe(422);
+      expect(await res.json()).toEqual({ error: enumo });
+    });
+
+    // Las tres causas relayables tienen que ser distinguibles ENTRE SÍ, no sólo del enum viejo. Un
+    // mapeo que las volviera a colapsar (a `prepare_agent_rejected`, por ejemplo) pasaría los `it`
+    // de arriba si el enum esperado fuera el mismo; este los corre juntos y compara.
+    it("las tres causas relayables NO comparten enum entre sí", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const enums: string[] = [];
+      for (const reason of [
+        "quote_amount_mismatch",
+        "quote_unresolvable",
+        "kyc_identity_claim_missing",
+      ]) {
+        agentRejects(reason);
+        const json = (await (await POST(req(bodyOf()))).json()) as { error: string };
+        enums.push(json.error);
+      }
+      expect(new Set(enums).size).toBe(3);
+    });
+
+    // ⚠️ COLAPSADO A PROPÓSITO. `kyc_gate_not_passed` es un VEREDICTO sobre una verificación de
+    // identidad: la familia exacta que WKH-205 cerró en /api/payout/validate. Sale como el enum de
+    // familia — pero 422 y no 502, así que la mitad que importaba (rechazo, no caída) sí se dice.
+    it("kyc_gate_not_passed sale COLAPSADO en prepare_agent_rejected (no-oráculo, WKH-205)", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      agentRejects("kyc_gate_not_passed");
+      const res = await POST(req(bodyOf()));
+      expect(res.status).toBe(422);
+      const raw = await res.text();
+      expect(JSON.parse(raw)).toEqual({ error: "prepare_agent_rejected" });
+      expect(raw).not.toContain("kyc_gate_not_passed"); // el veredicto NO viaja al browser
+    });
+
+    // ...pero el operador SÍ tiene que poder distinguirlo, y para eso está el log. Mismo patrón que
+    // logGatewayFailure: sólo enums, nunca el beneficiary ni la BASE.
+    it("el detalle colapsado SÍ queda en el log del server (sólo enums, cero PII)", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      agentRejects("kyc_gate_not_passed");
+      await POST(req(bodyOf()));
+      const logged = JSON.stringify(warn.mock.calls[0]);
+      expect(logged).toContain("kyc_gate_not_passed");
+      expect(logged).toContain("prepare_agent_rejected");
+      expect(logged).not.toContain("Mamá");
+      expect(logged).not.toContain("999888777");
+    });
+
+    // Un reason que este código no conoce NO se ecoa crudo: se anota `unmapped` (señal útil: "llegó
+    // algo que no conozco") y el body sale colapsado. Es el log el que queda value-free POR
+    // CONSTRUCCIÓN, no por confiar en que el otro repo nunca mande texto libre.
+    it.each([null, "reason_que_no_conocemos", "texto libre con el 999888777 adentro"])(
+      "reason desconocido (%s) ⇒ 422 colapsado y log `unmapped`, nunca el string crudo",
+      async (reason) => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        agentRejects(reason);
+        const res = await POST(req(bodyOf()));
+        expect(res.status).toBe(422);
+        expect(await res.json()).toEqual({ error: "prepare_agent_rejected" });
+        const logged = JSON.stringify(warn.mock.calls[0]);
+        expect(logged).toContain("unmapped");
+        expect(logged).not.toContain("999888777");
+      },
+    );
+
+    it("status failed (no sólo blocked) también cuenta como rechazo", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      agentRejects("quote_unresolvable", "failed");
+      const res = await POST(req(bodyOf()));
+      expect(res.status).toBe(422);
+      expect(await res.json()).toEqual({ error: "prepare_quote_unresolvable" });
+    });
+
+    // ── CANDADO DE NO-REGRESIÓN ──────────────────────────────────────────────
+    // La quinta causa NO es un rechazo y no puede irse con las otras cuatro: el provider mock
+    // contesta `status:"submitted"` con `depositAddress:null`, o sea una respuesta INCOMPLETA. Ahí
+    // `prepare_no_deposit_address` describe bien lo que pasó y tiene que seguir siendo 502.
+    it("CANDADO: el mock (submitted + depositAddress null) SIGUE siendo 502 prepare_no_deposit_address", async () => {
+      agentResponds(200, agentResult({ depositAddress: null }));
+      const res = await POST(req(bodyOf()));
+      expect(res.status).toBe(502);
+      expect(await res.json()).toEqual({ error: "prepare_no_deposit_address" });
+    });
+
+    it("CANDADO: el agente caído (502/timeout) SIGUE siendo 502 prepare_upstream_error", async () => {
+      agentResponds(502, {});
+      expect((await POST(req(bodyOf()))).status).toBe(502);
+      fetchMock.mockRejectedValue(new Error("timeout"));
+      const to = await POST(req(bodyOf()));
+      expect(to.status).toBe(502);
+      expect(await to.json()).toEqual({ error: "prepare_upstream_error" });
+    });
+  });
+
   it("PR8: shape del agente inválido (status raro) → 502 prepare_upstream_error", async () => {
     agentResponds(200, agentResult({ status: "weird" }));
     const res = await POST(req(bodyOf()));

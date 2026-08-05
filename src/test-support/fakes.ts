@@ -891,9 +891,22 @@ export class FakeSolanaSenderSolBalanceProbe implements SolanaSenderSolBalancePr
   }
 }
 
-export const beneficiary = (method: PayoutMethod = "yape") => ({
+/** Un CCI peruano válido (20 dígitos) para llenar el formulario en los tests de UI. Uno solo para
+ *  todos los archivos: eran seis literales `"999888777"` sueltos, y un celular ya no pasa el gate. */
+export const TEST_CCI = "00219300445566778899";
+
+/**
+ * El beneficiario por defecto es el que la app CREA hoy: depósito a cuenta bancaria con un CCI de
+ * 20 dígitos. Era `"yape"` con un celular, y eso dejó de representar cualquier remesa nueva cuando
+ * la primera pantalla dejó de ofrecer Yape.
+ *
+ * El parámetro se queda, y con destino coherente por método: `beneficiary("yape")` es cómo se
+ * construye una remesa VIEJA, guardada antes del cambio, para probar que el historial y el recibo
+ * la siguen leyendo. Sin él no habría forma de escribir ese test.
+ */
+export const beneficiary = (method: PayoutMethod = "bank_cci") => ({
   name: "Mamá",
   country: "PE",
   method,
-  destination: "999888777",
+  destination: method === "bank_cci" ? TEST_CCI : "999888777",
 });

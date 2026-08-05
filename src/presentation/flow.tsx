@@ -15,8 +15,21 @@ import {
   Wallet,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { KycVerification, Quote, RemittanceState, PayoutMethod } from "../domain/remittance";
-import { MIN_SEND_USD, Remittance, TERMINAL_STATUSES } from "../domain/remittance"; // WKH-187: rehydrate/isQuoteStillValid en el resume (CD-11) · WKH-314: mínimo enviable
+import type {
+  KycVerification,
+  OfferedPayoutMethod,
+  PayoutMethod,
+  Quote,
+  RemittanceState,
+} from "../domain/remittance";
+import {
+  MIN_SEND_USD,
+  OFFERED_PAYOUT_METHODS,
+  Remittance,
+  TERMINAL_STATUSES,
+  cciDigits,
+  isValidCci,
+} from "../domain/remittance"; // WKH-187: rehydrate/isQuoteStillValid en el resume (CD-11) · WKH-314: mínimo enviable
 import { createContainer, type Container } from "../composition/container";
 import {
   PRINCIPAL_SETTLED_REFUND_MANUAL,
@@ -69,11 +82,15 @@ const STEP_INDEX: Record<Step, number> = {
   history: 0, // fuera de la línea del flujo; el stepper no la representa
 };
 
-const METHODS: { id: PayoutMethod; label: string }[] = [
-  { id: "yape", label: "Yape" },
-  { id: "plin", label: "Plin" },
-  { id: "bank_cci", label: "Banco (CCI)" },
-];
+/**
+ * Cómo se anuncia cada método QUE SE OFRECE. El `Record` sobre `OfferedPayoutMethod` (y no sobre
+ * `PayoutMethod`) es el que sostiene la regla: agregar `"yape"` a `OFFERED_PAYOUT_METHODS` sin
+ * poder pagarle a nadie por Yape deja este mapa incompleto y el build no compila. La pantalla
+ * ofrecía tres botones y dos de esos carriles no existen en ninguna parte del sistema.
+ */
+const OFFERED_METHOD_COPY: Record<OfferedPayoutMethod, string> = {
+  bank_cci: "Depósito a su cuenta bancaria en Perú",
+};
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -105,7 +122,10 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
   // form
   const [amount, setAmount] = useState("400");
   const [recipient, setRecipient] = useState("");
-  const [method, setMethod] = useState<PayoutMethod>("yape");
+  // El método de desembolso dejó de ser una elección: se ofrece uno solo (OFFERED_PAYOUT_METHODS),
+  // así que no hay nada que guardar en estado. Era `useState("yape")`, o sea que el valor por
+  // defecto de toda remesa nueva era el único carril por el que este sistema no puede pagar.
+  const method: OfferedPayoutMethod = OFFERED_PAYOUT_METHODS[0];
   const [destination, setDestination] = useState("");
   const [scanStage, setScanStage] = useState(0); // 0 idle · 1-3 escaneando · 4 verificado
 
@@ -141,7 +161,9 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
       }
     }, 300);
     return () => clearTimeout(t);
-  }, [amountNum, method, c]);
+    // `method` ya no está en las deps porque dejó de ser estado: mientras se ofrezca un solo método
+    // su valor es el mismo en todos los renders. Si vuelve a haber elección, vuelve a la lista.
+  }, [amountNum, c]);
 
   // Retomar el KYC al volver del redirect de Didit (móvil, misma pestaña). Corre una vez al montar:
   // si hay un KYC pendiente, consulta la decisión (reintenta si Didit aún procesa) y sigue el flujo.
@@ -247,7 +269,9 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
     guard(async () => {
       const r = await c.createRemittance.execute({
         amountUsd: amountNum,
-        beneficiary: { name: recipient, country: "PE", method, destination },
+        // `cciDigits` y no el crudo: los espacios y los guiones son del papel del banco, no del
+        // número. Se guarda lo que el partner necesita, y así el recibo muestra lo mismo que viajó.
+        beneficiary: { name: recipient, country: "PE", method, destination: cciDigits(destination) },
       });
       setRem(r.snapshot);
       setScanStage(0);
@@ -457,8 +481,12 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
   // entregaría cero. El agente lo rechaza igual (es él quien protege); esto es para que la
   // persona se entere ANTES de poner el nombre, el KYC y la plata, no después.
   const belowMinimum = amountNum > 0 && amountNum < MIN_SEND_USD;
+  // El destino ya no es "cualquier cosa no vacía". Ese control alcanzaba cuando la pantalla también
+  // ofrecía Yape y Plin, donde un celular de 9 dígitos era un destino legítimo. Ahora el único
+  // carril es el depósito bancario: un CCI que no tiene 20 dígitos no es un CCI, y dejarlo pasar
+  // termina en una persona que depositó USDC contra una cuenta que no existe.
   const canSend =
-    amountNum >= MIN_SEND_USD && Boolean(recipient.trim()) && Boolean(destination.trim());
+    amountNum >= MIN_SEND_USD && Boolean(recipient.trim()) && isValidCci(destination);
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col px-5 pb-10 pt-6">
@@ -613,33 +641,43 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                     placeholder="Nombre de tu familiar"
                   />
                 </Field>
+                {/* Era un selector de tres botones (Yape · Plin · Banco) y dos de esos carriles no
+                    existen: no hay integración de pago por Yape ni por Plin en ninguna capa, así
+                    que elegirlos llevaba a una remesa que nadie podía desembolsar. Con una sola
+                    opción un selector tampoco corresponde: un botón que ya está elegido y no se
+                    puede des-elegir sigue diciendo "acá hay una decisión tuya". Se reemplaza por
+                    la afirmación de lo que pasa, que es lo único que la pantalla puede sostener. */}
                 <div>
                   <span className="mb-1.5 block text-sm font-medium text-stone">¿Cómo recibe?</span>
-                  <div className="grid grid-cols-3 gap-2">
-                    {METHODS.map((m) => (
-                      <button
-                        key={m.id}
-                        type="button"
-                        onClick={() => setMethod(m.id)}
-                        className={
-                          method === m.id
-                            ? "rounded-xl border-2 border-cochineal bg-cochineal/5 py-2.5 text-sm font-semibold text-cochineal-ink"
-                            : "rounded-xl border border-line bg-card py-2.5 text-sm font-medium text-stone"
-                        }
-                      >
-                        {m.label}
-                      </button>
-                    ))}
-                  </div>
+                  {OFFERED_PAYOUT_METHODS.map((m) => (
+                    <p
+                      key={m}
+                      className="rounded-xl border border-line bg-sand px-3.5 py-2.5 text-sm font-semibold text-ink"
+                    >
+                      {OFFERED_METHOD_COPY[m]}
+                    </p>
+                  ))}
+                  <p className="mt-1.5 text-xs text-stone">
+                    Chaski no manda a Yape ni a Plin. Deposita a una cuenta bancaria.
+                  </p>
                 </div>
-                <Field label={method === "bank_cci" ? "CCI del banco" : "Número de celular"}>
+                <Field label="CCI de su cuenta">
                   <TextInput
                     value={destination}
                     onChange={(e) => setDestination(e.target.value)}
-                    placeholder={method === "bank_cci" ? "002-193-..." : "999 888 777"}
-                    inputMode={method === "bank_cci" ? "numeric" : "tel"}
+                    placeholder="002 193 004455667788 99"
+                    inputMode="numeric"
                   />
                 </Field>
+                {/* El aviso aparece recién cuando hay algo escrito: en blanco no hay error todavía,
+                    hay un campo sin empezar. Cuenta los dígitos en vez de decir "inválido" porque
+                    el error típico es pegar el número de cuenta (que no es el CCI) o un celular. */}
+                {destination.trim() && !isValidCci(destination) ? (
+                  <p className="text-xs font-medium text-cochineal-ink">
+                    Un CCI tiene 20 dígitos y este tiene {cciDigits(destination).length}. Los
+                    espacios y los guiones no cuentan.
+                  </p>
+                ) : null}
               </Card>
 
               <Button disabled={!canSend || busy} onClick={onSend}>
@@ -1978,6 +2016,13 @@ function shortTx(tx: string): string {
   return tx.length <= 16 ? tx : `${tx.slice(0, 8)}…${tx.slice(-8)}`;
 }
 
+/**
+ * ⚠️ Las ramas `yape` y `plin` NO son código muerto y no se borran junto con el selector. El
+ * historial y el recibo leen remesas guardadas ANTES de este cambio, en el localStorage de cada
+ * persona, y algunas dicen `method: "yape"`. Colapsar esto a "cuenta bancaria" haría que una
+ * remesa vieja se describiera con un destino que no fue el suyo, que es la misma clase de mentira
+ * que sacó a Yape de la primera pantalla. Lo que se ofrece cambió; lo que ya pasó, no.
+ */
 function methodLabel(m: PayoutMethod): string {
   return m === "yape" ? "Yape" : m === "plin" ? "Plin" : "cuenta bancaria";
 }

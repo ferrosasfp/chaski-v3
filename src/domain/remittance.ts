@@ -3,13 +3,54 @@
 
 import type { Money } from "./money";
 
+/**
+ * Todo método de desembolso que este sistema sabe LEER y transportar. No es la lista de lo que la
+ * interfaz ofrece: eso es `OFFERED_PAYOUT_METHODS`, y hoy es más chico.
+ *
+ * ⚠️ `"yape"` y `"plin"` NO se sacan de acá aunque la primera pantalla ya no los ofrezca, y no es
+ * por prolijidad: el estado de cada persona vive en el localStorage de su navegador, así que hay
+ * remesas ya guardadas con `method: "yape"`. Borrar el valor del tipo no borra esos datos, sólo
+ * deja de tipar la lectura, y el historial y el recibo pasan a nombrar mal una remesa que ya
+ * ocurrió. El transporte (gateway A2A, `/api/payout/prepare`, el agente de desembolso) sigue
+ * siendo agnóstico del método y por eso tampoco hay nada que desmantelar ahí.
+ */
 export type PayoutMethod = "yape" | "plin" | "bank_cci";
+
+/**
+ * Lo que la interfaz OFRECE hoy. Una sola entrada, y esa es la afirmación: Chaski deposita a
+ * cuenta bancaria peruana (CCI) y no manda a Yape ni a Plin, porque no hay forma de pagar por
+ * esos carriles. El día que exista, se agrega acá y la pantalla lo ofrece sin tocar nada más.
+ *
+ * Está separado de `PayoutMethod` para que las dos preguntas no compartan respuesta: "¿qué puedo
+ * leer?" (todo lo que se guardó alguna vez) no es "¿qué puedo prometer?" (sólo lo que se entrega).
+ */
+export const OFFERED_PAYOUT_METHODS = ["bank_cci"] as const;
+export type OfferedPayoutMethod = (typeof OFFERED_PAYOUT_METHODS)[number];
+
+/** Dígitos de un CCI peruano: 3 de banco + 3 de oficina + 12 de cuenta + 2 de control. */
+export const CCI_DIGITS = 20;
+
+/** Los dígitos de un CCI tal como se escribió: el papel del banco lo imprime con espacios y
+ *  guiones, y ninguno de los dos es parte del número. Fuente única del "qué es un CCI" junto con
+ *  `isValidCci` (mismo rol que `isParseableIso` para las fechas: predicado puro, sin I/O). */
+export function cciDigits(raw: string): string {
+  return raw.replace(/\D/g, "");
+}
+
+/** ¿`raw` es un CCI peruano? Chequea LARGO, no existencia: un CCI de 20 dígitos inventado pasa
+ *  este control, y el banco lo rechaza después. Lo que sí ataja es lo que la pantalla vieja
+ *  aceptaba sin chistar por ofrecer también Yape: un celular de 9 dígitos como destino de un
+ *  depósito bancario. */
+export function isValidCci(raw: string): boolean {
+  return cciDigits(raw).length === CCI_DIGITS;
+}
 
 export interface Beneficiary {
   name: string;
   country: string; // "PE"
   method: PayoutMethod;
-  destination: string; // celular (Yape/Plin) o CCI (banco)
+  /** CCI de 20 dígitos para `bank_cci`. Las remesas guardadas con `yape`/`plin` traen un celular. */
+  destination: string;
 }
 
 /**

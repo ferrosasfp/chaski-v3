@@ -18,6 +18,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { RemittanceFlow } from "./flow";
 import { buildTestContainer } from "../test-support/test-container";
+import { TEST_CCI } from "../test-support/fakes";
 
 vi.mock("framer-motion", () => ({
   AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
@@ -61,7 +62,7 @@ async function verLaTarjeta(steps: PlanStep[], totalUsdc: number): Promise<void>
   fireEvent.change(screen.getByPlaceholderText("Nombre de tu familiar"), {
     target: { value: "Mamá" },
   });
-  fireEvent.change(screen.getByPlaceholderText("999 888 777"), { target: { value: "999888777" } });
+  fireEvent.change(screen.getByPlaceholderText("002 193 004455667788 99"), { target: { value: TEST_CCI } });
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
   fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
   await screen.findByText(/Revisá el envío/);

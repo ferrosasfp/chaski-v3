@@ -24,6 +24,7 @@ import { RemittanceFlow } from "./flow";
 import { phantomBrowseUrl } from "./wallet-availability";
 import { solanaWalletBridge } from "../infrastructure/solana-wallet-bridge";
 import { buildTestContainer } from "../test-support/test-container";
+import { TEST_CCI } from "../test-support/fakes";
 
 // El barrel `@solana/wallet-adapter-wallets` arrastra el adapter de Ledger, que no resuelve bajo
 // vitest. Se reemplaza por los adapters REALES de sus propios paquetes: lo único que se saltea es el
@@ -158,7 +159,7 @@ function irAlPasoConectar(): void {
   fireEvent.change(screen.getByPlaceholderText("Nombre de tu familiar"), {
     target: { value: "Mamá" },
   });
-  fireEvent.change(screen.getByPlaceholderText("999 888 777"), { target: { value: "999888777" } });
+  fireEvent.change(screen.getByPlaceholderText("002 193 004455667788 99"), { target: { value: TEST_CCI } });
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
 }
 

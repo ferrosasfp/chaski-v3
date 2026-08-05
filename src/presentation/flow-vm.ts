@@ -263,6 +263,35 @@ export function escrowRefundError(code: string): string {
   return "No pudimos recuperar los fondos. Intentá de nuevo.";
 }
 
+/**
+ * Copy de los errores de la puerta "Recuperar un envío perdido" (la recuperación SIN remittanceId).
+ *
+ * Existe porque el MISMO código significa dos cosas distintas según por dónde se entró, y la más
+ * cara es `escrow_not_found`:
+ *
+ *  · En la acción normal el id es conocido, así que "no encontramos un depósito tuyo en el escrow"
+ *    habla de UNA remesa concreta y la frase de `escrowRefundError` es correcta.
+ *  · Acá el id no existe: se le pide la lista al store durable server-side y se sondean hasta
+ *    `maxCandidates` PDAs on-chain (`solana-wallet.ts`:207-242). `escrow_not_found` sale de DOS
+ *    situaciones que no se distinguen desde afuera: el servidor no devolvió ningún id, o ninguno de
+ *    los sondeados estaba `Deposited`. Ninguna de las dos prueba que la persona no tenga fondos.
+ *
+ * Por eso la frase habla de lo que MIRAMOS, no de lo que la persona tiene. `maxCandidates` entra por
+ * parámetro y no como un número escrito acá: el llamador pasa la MISMA constante que sondea
+ * (`MAX_RECOVERY_CANDIDATES`), así que el copy no puede quedar diciendo un número que el código dejó
+ * de usar.
+ */
+export function lostEscrowRecoveryError(code: string, maxCandidates: number): string {
+  if (code.includes("escrow_not_found"))
+    return `No encontramos escrows abiertos para esta billetera. Esto no dice que no tengas fondos: dice que ninguno de los últimos ${maxCandidates} envíos que el servidor tiene guardados de esta billetera está abierto en el contrato.`;
+  // "No pudimos preguntar" no es "no hay nada". `escrow_id_unavailable` = esta pantalla no tiene el
+  // resolver cableado; `escrow_recovery_unavailable` = el endpoint contestó algo que no es 200/403/501
+  // (`http-solana-remittance-id-resolver.ts`:27). En los dos casos no llegamos a mirar la cadena.
+  if (code.includes("escrow_id_unavailable") || code.includes("escrow_recovery_unavailable"))
+    return "No pudimos consultar el registro de envíos. Esto no es una respuesta sobre tus fondos: no llegamos a preguntar. Probá de nuevo en un rato.";
+  return escrowRefundError(code);
+}
+
 /** Mensaje humano + el código interno que lo originó. Van JUNTOS en un solo estado a propósito: con
  *  dos `useState` separados podían quedar desincronizados y mostrar el código de un fallo viejo
  *  debajo del mensaje de uno nuevo. */

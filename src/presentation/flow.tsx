@@ -29,7 +29,11 @@ import {
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
 import { isPrepareRejection } from "../application/agent-rejections"; // hallazgo #75: rechazo del agente ≠ payout fallido
 import { resolveSolanaNetworkConfig } from "../infrastructure/chain"; // HU-SOL-13: cluster Solana activo (env-driven)
-import { CUSTODY_WINDOW_SECS } from "../infrastructure/solana-wallet"; // la MISMA constante que fija el deadline del depósito
+import type { EscrowRefundConfirmation } from "../application/ports";
+import {
+  CUSTODY_WINDOW_SECS, // la MISMA constante que fija el deadline del depósito
+  MAX_RECOVERY_CANDIDATES, // la MISMA constante que sondea el fallback de recuperación
+} from "../infrastructure/solana-wallet";
 import {
   deliveredDisplay,
   escrowFundsAtRisk,
@@ -41,6 +45,7 @@ import {
   isDemoMode,
   isKycDemo,
   kycOriginNotice,
+  lostEscrowRecoveryError,
   shortErrorCode,
   statusDisplay,
 } from "./flow-vm";
@@ -288,10 +293,21 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
   // scopeado por dueño (repo.list): sin saber quién sos no hay lista que mostrar, y adivinarla sería
   // mostrarle a alguien las remesas de otro. Con la wallet ya conectada (autoConnect) `connect()` no
   // abre ningún modal: lee el estado del bridge y devuelve la misma address.
+  // Quién es el dueño de lo que se va a listar o recuperar. Con la wallet ya conectada (autoConnect)
+  // `connect()` no abre ningún modal: lee el estado del bridge y devuelve la misma address.
+  //
+  // La recuperación de un envío perdido la necesita por un motivo distinto al del historial: el
+  // endpoint del store durable exige una prueba de posesión FIRMADA POR ESA address, así que sin
+  // wallet conectada no hay a quién preguntarle.
+  const resolveSender = useCallback(async () => {
+    const addr = address ?? (await c.connectWallet.execute()).address;
+    setAddress(addr);
+    return addr;
+  }, [address, c]);
+
   const openHistory = () =>
     guard(async () => {
-      const addr = address ?? (await c.connectWallet.execute()).address;
-      setAddress(addr);
+      const addr = await resolveSender();
       setHistory(await c.listHistory.execute(addr));
       setStep("history");
     });
@@ -649,6 +665,11 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
               >
                 Ver mis envíos
               </button>
+
+              {/* La otra puerta, y la que no existía: la lista de arriba sale del almacenamiento de
+                  ESTE navegador. Si se borró, o si la persona entra desde otro dispositivo, ahí no
+                  hay nada y sus USDC pueden seguir en el vault. */}
+              <LostEscrowRecovery refund={c.solanaRefund} resolveSender={resolveSender} />
             </div>
           )}
 
@@ -1305,18 +1326,142 @@ export function RefundAction({
       <Button variant="outline" onClick={onRefund} disabled={busy}>
         {busy ? "Recuperando…" : sent ? "Volver a intentar" : "Recuperar fondos"}
       </Button>
-      {sent ? (
+      {sent ? <RefundSentNotice confirmation={sent.confirmation} refundTx={sent.refundTx} /> : null}
+      {err ? <p className="text-xs text-cochineal-ink">{err}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * Lo que se dice de una orden de recuperación ENVIADA y todavía no confirmada.
+ *
+ * Se extrajo a un componente porque ahora lo usan las DOS puertas de recuperación (la de una remesa
+ * conocida y la del envío perdido), y las dos tienen que decir exactamente lo mismo: el RPC aceptó la
+ * transacción, que no es que la plata haya vuelto. El verbo es el de lo que sabemos.
+ */
+function RefundSentNotice({
+  confirmation,
+  refundTx,
+}: {
+  confirmation: Exclude<EscrowRefundConfirmation, "confirmed">;
+  refundTx: string;
+}) {
+  return (
+    <div className="space-y-1">
+      {/* "Enviamos la orden", NUNCA "volvieron". */}
+      <p className="text-xs font-semibold text-ink">Enviamos la orden de recuperación</p>
+      <p className="text-xs text-stone">
+        {confirmation === "pending"
+          ? "Todavía no la vemos confirmada en la cadena. Puede entrar en un rato, o puede no haber entrado. Hasta que se confirme no sabemos si tus USDC volvieron."
+          : "No pudimos consultar la cadena para saber si entró. Nadie sabe todavía si tus USDC volvieron; no es que hayan fallado."}
+      </p>
+      <p className="text-xs text-stone">Orden enviada: {refundTx}</p>
+    </div>
+  );
+}
+
+/**
+ * La puerta que faltaba: recuperar un envío que este dispositivo no conoce.
+ *
+ * 🔴 QUÉ ARREGLA. La recuperación durable ya estaba ENTERA y no tenía ni un consumidor. El endpoint
+ * `POST /api/solana/escrow/remittance-ids` está vivo en producción (responde 403 sin PoP), el adapter
+ * resuelve el id ausente contra ese store y sondea hasta `MAX_RECOVERY_CANDIDATES` PDAs
+ * (`solana-wallet.ts`:207-242), y el gateway está cableado en el container (`container.ts`:138). Pero
+ * la interfaz sólo llamaba a `recoverEscrowFunds`, que arranca con `repo.get(remittanceId)` y tira
+ * `remittance_not_found` (`recover-escrow-funds.ts`:49-50). O sea: quien borró los datos del navegador
+ * o entra desde otro dispositivo no tenía NINGÚN camino, con el código para dárselo ya escrito.
+ *
+ * POR QUÉ NO PASA POR `RecoverEscrowFunds`. Ese use-case existe para ESCRIBIR el resultado en la
+ * remesa, y acá no hay remesa local que escribir: es justamente el caso en que no existe. Se llama al
+ * gateway, que es lo único que puede resolver el id contra el servidor.
+ *
+ * QUÉ SE DICE ANTES DE ABRIR NINGÚN DIÁLOGO, y por qué es la mitad del arreglo: esto pide DOS firmas
+ * a la billetera por motivos distintos (una prueba de posesión, que es un texto, y después la
+ * transacción del refund). Una app que abre el diálogo de firma sin haber dicho qué se firma y para
+ * qué entrena a la gente a firmar cualquier cosa. Por eso el texto va primero y la acción después.
+ */
+export function LostEscrowRecovery({
+  refund,
+  resolveSender,
+}: {
+  /** El gateway SUELTO, no el use-case: es el único que acepta la llamada sin `remittanceId`. */
+  refund?: Container["solanaRefund"];
+  /** Devuelve la address del sender, conectando la wallet si hace falta (el PoP la exige). */
+  resolveSender: () => Promise<string>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [sent, setSent] = useState<{
+    confirmation: Exclude<EscrowRefundConfirmation, "confirmed">;
+    refundTx: string;
+  } | null>(null);
+  const [recovered, setRecovered] = useState<string | null>(null); // refundTx CONFIRMADO en la cadena
+
+  const onRecover = useCallback(async () => {
+    if (!refund) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const sender = await resolveSender();
+      // SIN `remittanceId`: es la firma que dispara la resolución contra el store durable.
+      const res = await refund.refund({ sender });
+      if (res.confirmation === "confirmed") {
+        setSent(null);
+        setRecovered(res.refundTx);
+        return;
+      }
+      setSent({ confirmation: res.confirmation, refundTx: res.refundTx });
+    } catch (e) {
+      // El copy de ESTA puerta, no el de la otra: acá "no encontramos nada" no puede leerse como
+      // "no tenés fondos" (ver `lostEscrowRecoveryError`).
+      setErr(
+        lostEscrowRecoveryError(e instanceof Error ? e.message : "", MAX_RECOVERY_CANDIDATES),
+      );
+    } finally {
+      setBusy(false);
+    }
+  }, [refund, resolveSender]);
+
+  // Sin gateway no hay puerta que ofrecer. El container real siempre lo cablea; el de tests no.
+  if (!refund) return null;
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="w-full text-center text-sm font-semibold text-cochineal underline underline-offset-2"
+      >
+        Recuperar un envío perdido
+      </button>
+    );
+  }
+
+  return (
+    <div className="space-y-3 rounded-xl2 border border-line bg-sand/60 p-4">
+      <p className="text-sm font-bold">Recuperar un envío perdido</p>
+      <p className="text-sm text-stone">
+        Si borraste los datos del navegador o entrás desde otro dispositivo, tus envíos no aparecen
+        en "Ver mis envíos". Los buscamos preguntándole al servidor por tu billetera.
+      </p>
+      <p className="text-sm text-stone">
+        Tu billetera te va a pedir una firma para probar que es tuya: es un texto, no mueve fondos y
+        no paga comisión de red. Si encontramos un escrow abierto te va a pedir una segunda firma, y
+        esa sí es la transacción que saca tus USDC; su comisión de red la pagás vos.
+      </p>
+      <Button variant="outline" onClick={onRecover} disabled={busy}>
+        {busy ? "Buscando…" : "Buscar mis escrows"}
+      </Button>
+      {recovered ? (
         <div className="space-y-1">
-          {/* "Enviamos la orden", NUNCA "volvieron": el verbo tiene que ser el de lo que sabemos. */}
-          <p className="text-xs font-semibold text-ink">Enviamos la orden de recuperación</p>
-          <p className="text-xs text-stone">
-            {sent.confirmation === "pending"
-              ? "Todavía no la vemos confirmada en la cadena. Puede entrar en un rato, o puede no haber entrado. Hasta que se confirme no sabemos si tus USDC volvieron."
-              : "No pudimos consultar la cadena para saber si entró. Nadie sabe todavía si tus USDC volvieron; no es que hayan fallado."}
-          </p>
-          <p className="text-xs text-stone">Orden enviada: {sent.refundTx}</p>
+          <p className="text-xs font-semibold text-ink">Recuperaste tus fondos</p>
+          {/* La MISMA frase que el historial usa para ese hecho, no una segunda versión. */}
+          <p className="text-xs text-stone">{escrowKnowledgeCopy("returned")}</p>
+          <p className="text-xs text-stone">Comprobante: {recovered}</p>
         </div>
       ) : null}
+      {sent ? <RefundSentNotice confirmation={sent.confirmation} refundTx={sent.refundTx} /> : null}
       {err ? <p className="text-xs text-cochineal-ink">{err}</p> : null}
     </div>
   );

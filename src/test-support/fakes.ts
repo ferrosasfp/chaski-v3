@@ -835,15 +835,22 @@ export class FakeSolanaSettlementGateway implements SolanaSettlementGateway {
 // `confirmation` los dos casos en que la cadena no confirmó (pending/unknown): sin ese tercer valor no
 // se puede testear que la app deje de afirmar que la plata volvió.
 export class FakeSolanaEscrowRefundGateway implements SolanaEscrowRefundGateway {
-  public calls: Array<{ remittanceId: string; sender: string }> = [];
+  // `remittanceId` OPCIONAL: es lo que hace testeable la recuperación DURABLE (sin id, el adapter lo
+  // resuelve contra el store server-side). Un test que quiera probar esa puerta tiene que poder
+  // afirmar que la llamada salió SIN id, y con el tipo viejo no podía ni construirla.
+  public calls: Array<{ remittanceId?: string; sender: string }> = [];
   constructor(
     private readonly refundTx: string = FAKE_SOLANA_SIGNATURE,
     private readonly mode: "resolve" | "reject" = "resolve",
     private readonly confirmation: EscrowRefundConfirmation = "confirmed",
+    // El error que tira en modo "reject". Default = el de siempre, así que los tests que ya existían
+    // quedan byte-idénticos; los códigos reales del camino sin id (`escrow_not_found`,
+    // `escrow_recovery_unavailable`) se inyectan acá.
+    private readonly rejectWith: string = "solana_refund_boom",
   ) {}
-  async refund(input: { remittanceId: string; sender: string }): Promise<SolanaEscrowRefundResult> {
+  async refund(input: { remittanceId?: string; sender: string }): Promise<SolanaEscrowRefundResult> {
     this.calls.push(input);
-    if (this.mode === "reject") throw new Error("solana_refund_boom");
+    if (this.mode === "reject") throw new Error(this.rejectWith);
     return { refundTx: this.refundTx, confirmation: this.confirmation };
   }
 }

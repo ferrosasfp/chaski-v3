@@ -31,12 +31,17 @@ import { Remittance, type RemittanceState, toPersistedIdentity } from "../domain
 import { RecoverEscrowFunds } from "../application/use-cases/recover-escrow-funds";
 import type { ResumeKyc } from "../application/use-cases/resume-kyc";
 import {
+  FakeKycGateway,
   FakeSolanaEscrowRefundGateway,
   FixedClock,
   InMemoryRepo,
   T0,
   beneficiary,
 } from "../test-support/fakes";
+import {
+  KYC_PROVENANCE_LIVE,
+  KYC_PROVENANCE_MOCK,
+} from "../infrastructure/didit/decision";
 
 // CD-8 / DT-7: framer-motion pass-through (mismo mock que flow.test.tsx). jsdom no implementa
 // requestAnimationFrame y sin esto los steps del flujo nunca montan.
@@ -74,6 +79,29 @@ async function irARevisar(): Promise<void> {
   irAConectar();
   fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
   await screen.findByText(/Revisá el envío/);
+}
+
+/**
+ * send → connect → review → verify → confirm, con la proveniencia de KYC que se le pida.
+ *
+ * `provenance` va como `string | undefined` A PROPÓSITO y sin default: `undefined` es uno de los casos
+ * que hay que probar (una decisión que llega sin declarar de dónde salió), y un default lo taparía.
+ *
+ * La cotización la da `FakeQuoteGateway` (`provenance: "fake"`), que NO es `local-fallback`: la pata
+ * del quote queda apagada en los cuatro casos, así que lo único que puede prender el sello acá es la
+ * pata del KYC. Es lo que hace que estos tests midan lo que dicen medir.
+ */
+async function irAConfirmarConKyc(provenance: string | undefined): Promise<void> {
+  render(
+    <RemittanceFlow container={buildTestContainer({ kyc: new FakeKycGateway({ provenance }) })} />,
+  );
+  fillSend();
+  fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+  await screen.findByText(/Revisá el envío/);
+  fireEvent.click(await screen.findByRole("button", { name: /Continuar/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Escanear DNI \+ selfie/ }));
+  await screen.findByRole("button", { name: /Confirmar y enviar/ });
 }
 
 /** Una remesa en `payout_failed` SIN reason conocido: el caso que cae al copy genérico de payout. */
@@ -336,5 +364,143 @@ describe("estilo del copy", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Continuar/ }));
     await screen.findByRole("button", { name: /Escanear DNI \+ selfie/ });
     expect(document.body.textContent ?? "").not.toContain("—");
+
+    // `confirm` faltaba, y es donde se acaba de escribir la tarjeta de identidad (sección 10).
+    fireEvent.click(screen.getByRole("button", { name: /Escanear DNI \+ selfie/ }));
+    await screen.findByRole("button", { name: /Confirmar y enviar/ });
+    expect(document.body.textContent ?? "").not.toContain("—");
   });
 });
+
+// ── 10. La identidad del paso `confirm`, y el sello que no se prendía ────────────────────────────
+//
+// EL BUG, tal cual lo iba a ver el founder recorriendo la demo: con `DIDIT_ENV=mock` la decisión llega
+// con `provenance: "didit-mock"` (decision.ts:22 y :91), pero `isDemoMode` sólo reconocía como
+// simulado el literal `"local-fallback"`. En `confirm` todavía no existe `payoutProvenance`, así que
+// no había nada más que prendiera el OR: la pantalla escribía "Identidad verificada: María Elena
+// Quispe Mamani · DNI ••••6677" sobre datos inventados, SIN un solo sello de demo. Un revisor que ve
+// eso concluye que la app da por buena una identidad falsa.
+//
+// LA DIRECCIÓN ES LA MITAD DEL ARREGLO. La detección vieja era "es demo si la proveniencia es
+// exactamente este valor conocido", o sea que todo lo desconocido se leía como REAL. Ahora es una
+// allowlist (`REAL_KYC_PROVENANCES`, misma dirección que `REAL_PAYOUT_PROVENANCES`): sólo lo
+// verificado como real cuenta como real, y todo lo demás sobre-avisa. Los cuatro tests de acá abajo
+// prueban las cuatro entradas posibles de esa decisión, y el de "una proveniencia que nadie conoce"
+// es el que muere si alguien la vuelve a invertir a denylist.
+describe("la identidad del paso confirm", () => {
+  it("KYC real (allowlist): badge verde, sin sello de demo", async () => {
+    await irAConfirmarConKyc(KYC_PROVENANCE_LIVE);
+
+    expect(screen.getByText(/Identidad verificada/)).toBeInTheDocument();
+    expect(screen.getByText(/Test Quispe Mamani/)).toBeInTheDocument();
+    // Éste es el caso que NO tiene que cambiar: sin sello, como hasta hoy.
+    expect(screen.queryByText(/Modo demo/)).toBeNull();
+    expect(screen.queryByText(/Identidad sin verificar/)).toBeNull();
+  });
+
+  // EL test de esta HU: el KYC simulado que la demo usa de verdad.
+  it("KYC simulado (didit-mock): el sello se prende en confirm y la pantalla no afirma una verificación", async () => {
+    await irAConfirmarConKyc(KYC_PROVENANCE_MOCK);
+
+    // (a) el sello, que antes no aparecía hasta `track` y sólo si el payout era mock.
+    expect(screen.getAllByText(/Modo demo \(con pasos simulados\)/)).toHaveLength(1);
+    // (b) la frase que afirmaba una verificación que no ocurrió, muerta.
+    expect(screen.queryByText(/Identidad verificada/)).toBeNull();
+    // (c) lo que sí se puede afirmar: el origen, en crudo, para que la frase sea falsable a la vista.
+    expect(screen.getByText(/Identidad sin verificar/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Estos datos salieron de "didit-mock", que no está en la lista de verificadores reales/),
+    ).toBeInTheDocument();
+    // (d) los datos siguen a la vista: el problema era lo que se AFIRMABA de ellos, no mostrarlos.
+    expect(screen.getByText(/Test Quispe Mamani/)).toBeInTheDocument();
+    // (e) el barrido de em dashes también cubre esta pantalla, que antes no visitaba.
+    expect(document.body.textContent ?? "").not.toContain("—");
+  });
+
+  // El test que mata la denylist. Con la dirección vieja ("es demo si es exactamente X") una
+  // proveniencia nueva o con un typo se leía como REAL y la pantalla volvía a afirmar de más.
+  it("una proveniencia de KYC que no conocemos también prende el sello (sobre-avisa)", async () => {
+    await irAConfirmarConKyc("verificador-nuevo-2027");
+
+    expect(screen.getAllByText(/Modo demo \(con pasos simulados\)/)).toHaveLength(1);
+    expect(screen.queryByText(/Identidad verificada/)).toBeNull();
+    // No dice "es simulada", porque de un valor desconocido no lo sabemos. Dice lo comprobable.
+    expect(
+      screen.getByText(/Estos datos salieron de "verificador-nuevo-2027", que no está en la lista de verificadores reales/),
+    ).toBeInTheDocument();
+  });
+
+  // La decisión explícita sobre el dato que falta: ausencia NO es prueba de que sea real. Los dos
+  // casos son alcanzables sin inventar nada (`kyc-gateway.ts`:42 castea el JSON sin validar;
+  // `kyc-store.ts`:86 rehidrata snapshots viejos con un spread), y comparten la frase porque un
+  // `""` y un campo ausente dicen lo mismo: nadie declaró el origen.
+  it.each([
+    ["ausente", undefined],
+    ["vacía", ""],
+  ])("proveniencia de KYC %s: prende el sello y lo dice sin inventar un origen", async (_caso, p) => {
+    await irAConfirmarConKyc(p);
+
+    expect(screen.getAllByText(/Modo demo \(con pasos simulados\)/)).toHaveLength(1);
+    expect(screen.queryByText(/Identidad verificada/)).toBeNull();
+    expect(
+      screen.getByText(/Estos datos no dicen de qué verificador salieron/),
+    ).toBeInTheDocument();
+    // Y NO se fabrica un origen entre comillas para un valor que no existe.
+    expect(screen.queryByText(/Estos datos salieron de/)).toBeNull();
+  });
+
+  // 🔴 `confirm` no era el único paso afectado, y esto lo prueba. El sello de `track` se prendía SOLO
+  // por la pata del payout: con el KYC simulado y un desembolso REAL (`transfi`), la remesa entera
+  // quedaba sin ningún aviso también en seguimiento, y lo mismo en el recibo (`Receipt`, flow.tsx:1676,
+  // que llama al mismo `isDemoMode`). Es la combinación hacia la que apunta el proyecto: payout real
+  // primero, KYC real después.
+  it("el KYC simulado también prende el sello en track, con un desembolso REAL", () => {
+    const r = Remittance.create("rem-kyc-mock", beneficiary(), Money.of(400, "USDC"), T0);
+    r.attachQuote(
+      {
+        quoteId: "q",
+        send: Money.of(400, "USDC"),
+        receive: Money.of(1478.15, "PEN"),
+        feeUsd: Money.of(0.5, "USDC"),
+        rate: 3.7,
+        etaMinutes: 30,
+        expiresAt: "2099-01-01T00:00:00.000Z",
+        provenance: "didit",
+      },
+      T0,
+    );
+    r.startKyc(T0, "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
+    r.applyKyc(
+      {
+        verificationId: "v-1",
+        approved: true,
+        payoutAllowed: true,
+        riskLevel: "low",
+        provenance: KYC_PROVENANCE_MOCK,
+        identity: toPersistedIdentity({
+          firstName: "Test",
+          lastNamePaternal: "Quispe",
+          lastNameMaternal: "Mamani",
+          documentType: "DNI",
+          documentNumber: "12345678",
+          dateOfBirth: "1990-01-01",
+          nationality: "PE",
+        }),
+      },
+      T0,
+    );
+    r.confirm(T0);
+    r.markPrincipalIn("0xp", T0);
+    r.markPayoutSubmitted("p1", T0, "transfi"); // desembolso REAL: la pata del payout NO prende nada
+
+    render(
+      <TrackView rem={r.snapshot} recover={undefined} sender={null} onRecovered={() => {}} />,
+    );
+
+    expect(screen.getByText(/Entorno de prueba/)).toBeInTheDocument();
+    expect(screen.getByText(/no está confirmado como real/)).toBeInTheDocument();
+    // Y no se elige cuál de los tres pasos fue: acá el desembolso SÍ es real.
+    expect(screen.queryByText(/es simulado\./)).toBeNull();
+  });
+});
+

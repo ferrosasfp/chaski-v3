@@ -20,8 +20,15 @@ import {
   humanError,
   shortErrorCode,
   isDemoMode,
+  isKycDemo,
+  kycOriginNotice,
+  REAL_KYC_PROVENANCES,
   statusDisplay,
 } from "./flow-vm";
+import {
+  KYC_PROVENANCE_LIVE,
+  KYC_PROVENANCE_MOCK,
+} from "../infrastructure/didit/decision";
 
 // WKH-320: acá abajo vivía el describe de isFallbackWalletAddress (WKH-184 AC-7/AC-9), que probaba
 // que la UI detectara la wallet demo por su address y, entre otras cosas, que la detección fuera
@@ -275,6 +282,53 @@ describe("flow-vm — isDemoMode", () => {
     expect(isDemoMode(rem)).toBe(true);
   });
 
+  // 🔴 EL CASO QUE FALTABA. `didit-mock` es lo que produce `mapDiditDecision` con `DIDIT_ENV=mock`
+  // (decision.ts:91), o sea la configuración con la que se recorre la demo, y la condición vieja
+  // (`=== "local-fallback"`) lo leía como una verificación REAL. En `confirm` todavía no hay
+  // `payoutProvenance`, así que nada prendía el sello y la pantalla afirmaba una identidad verificada.
+  // El literal se IMPORTA de donde se produce: si alguien renombra la etiqueta, este test no queda
+  // probando un valor que ya nadie emite.
+  it("kyc.provenance didit-mock (DIDIT_ENV=mock) → true, sin payout todavía", () => {
+    const rem = {
+      quote: { provenance: "didit" },
+      kyc: { provenance: KYC_PROVENANCE_MOCK },
+    } as RemittanceState;
+    expect(isDemoMode(rem)).toBe(true);
+  });
+
+  // La dirección: allowlist, no denylist. Lo desconocido sobre-avisa.
+  it("una proveniencia de KYC desconocida → true (lo que no está en la allowlist no es real)", () => {
+    const rem = {
+      quote: { provenance: "didit" },
+      kyc: { provenance: "verificador-nuevo-2027" },
+    } as RemittanceState;
+    expect(isDemoMode(rem)).toBe(true);
+  });
+
+  // Ausencia de dato NO es prueba de que sea real, y acá es lo contrario que en el payout: un KYC que
+  // existe y no declara origen ya está siendo mostrado en pantalla como la identidad de la persona.
+  it("kyc presente con provenance ausente o vacía → true", () => {
+    const ausente = {
+      quote: { provenance: "didit" },
+      kyc: {},
+    } as RemittanceState;
+    expect(isDemoMode(ausente)).toBe(true);
+
+    const vacia = {
+      quote: { provenance: "didit" },
+      kyc: { provenance: "" },
+    } as RemittanceState;
+    expect(isDemoMode(vacia)).toBe(true);
+  });
+
+  // El contraste con el caso de arriba: SIN kyc no hay ninguna identidad que la pantalla pueda estar
+  // afirmando de más. Es lo que impide que el sello se prenda en `send`/`connect`/`review` por un dato
+  // que todavía no existe.
+  it("rem sin kyc (null/ausente) y con el resto real → false", () => {
+    expect(isDemoMode({ quote: { provenance: "didit" }, kyc: null } as RemittanceState)).toBe(false);
+    expect(isDemoMode({ quote: { provenance: "didit" } } as RemittanceState)).toBe(false);
+  });
+
   it("T-AC3b (AC-3/5): payout real transfi / null / ausente (quote/kyc reales) → false", () => {
     const real = {
       quote: { provenance: "didit" },
@@ -295,6 +349,48 @@ describe("flow-vm — isDemoMode", () => {
       kyc: { provenance: "didit" },
     } as RemittanceState; // payoutProvenance undefined (legacy) → false
     expect(isDemoMode(absent)).toBe(false);
+  });
+});
+
+describe("flow-vm — la allowlist del KYC (dirección de seguridad)", () => {
+  // El conjunto NO se compara contra un literal escrito acá: se compara contra la constante que
+  // PRODUCE la etiqueta. Es lo que prueba el cableado en vez de repetir el valor (un segundo Set con
+  // los mismos strings es exactamente cómo se desincronizan las dos capas).
+  it("la allowlist contiene la etiqueta que produce mapDiditDecision para `live`, y sólo esa", () => {
+    expect(REAL_KYC_PROVENANCES.has(KYC_PROVENANCE_LIVE)).toBe(true);
+    expect([...REAL_KYC_PROVENANCES]).toEqual([KYC_PROVENANCE_LIVE]);
+    // Y la etiqueta del mock NO está: es la propiedad de la que cuelga todo el arreglo.
+    expect(REAL_KYC_PROVENANCES.has(KYC_PROVENANCE_MOCK)).toBe(false);
+  });
+
+  it("isKycDemo: sólo la allowlist es real; comparación EXACTA (un espacio de más ya no lo es)", () => {
+    expect(isKycDemo(KYC_PROVENANCE_LIVE)).toBe(false);
+    expect(isKycDemo(KYC_PROVENANCE_MOCK)).toBe(true);
+    expect(isKycDemo("local-fallback")).toBe(true);
+    expect(isKycDemo("fake")).toBe(true);
+    expect(isKycDemo("lo-que-sea")).toBe(true);
+    expect(isKycDemo(" didit")).toBe(true); // exacta, como en REAL_PAYOUT_PROVENANCES
+    expect(isKycDemo("Didit")).toBe(true);
+    expect(isKycDemo("")).toBe(true);
+    expect(isKycDemo(null)).toBe(true);
+    expect(isKycDemo(undefined)).toBe(true);
+  });
+
+  it("kycOriginNotice: dice el origen crudo cuando existe, y nombra la ausencia cuando no", () => {
+    expect(kycOriginNotice(KYC_PROVENANCE_MOCK)).toBe(
+      'Estos datos salieron de "didit-mock", que no está en la lista de verificadores reales.',
+    );
+    // Ni ausente ni vacío ni sólo-espacios fabrican un origen entre comillas.
+    const sinOrigen =
+      "Estos datos no dicen de qué verificador salieron, así que no podemos llamarlos verificados.";
+    expect(kycOriginNotice(undefined)).toBe(sinOrigen);
+    expect(kycOriginNotice(null)).toBe(sinOrigen);
+    expect(kycOriginNotice("")).toBe(sinOrigen);
+    expect(kycOriginNotice("   ")).toBe(sinOrigen);
+    // Y no afirma que los datos sean falsos ni que nadie los haya mirado.
+    for (const p of [KYC_PROVENANCE_MOCK, "", "raro"]) {
+      expect(kycOriginNotice(p)).not.toMatch(/falso|inventad|nadie/i);
+    }
   });
 });
 

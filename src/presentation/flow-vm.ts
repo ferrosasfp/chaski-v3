@@ -10,10 +10,12 @@ import {
   SENDER_MIN_LAMPORTS_FOR_DEPOSIT,
   formatLamportsAsSol,
 } from "../application/solana-escrow-rent";
+import { KYC_PROVENANCE_LIVE } from "../infrastructure/didit/decision";
 
 /** Proveniencias de payout que representan un desembolso REAL (allowlist fail-safe, CD-8). Cualquier
  *  valor desconocido/typo cae del lado seguro → muestra el banner (over-warn), nunca lo oculta.
- *  Exemplar: REAL_KYC_PROVENANCES = new Set(["didit"]) en el agente KYC.
+ *  Exemplar: REAL_KYC_PROVENANCES = new Set(["didit"]) en el agente KYC. La misma dirección se aplica
+ *  al KYC más abajo, en `REAL_KYC_PROVENANCES` de este archivo.
  *
  *  Se EXPORTA (y no se copia a ningún lado) porque el smoke de devnet decide con este mismo conjunto
  *  si abortar: `scripts/smoke-helpers.ts` lo importa. Un segundo Set con los mismos valores es
@@ -27,11 +29,68 @@ export function isPayoutDemo(p: string | null | undefined): boolean {
   return p != null && !REAL_PAYOUT_PROVENANCES.has(p);
 }
 
-/** "Modo demo" ⇔ algún dato del flujo vino del fallback local (no Didit / no partner real). */
+/**
+ * Proveniencias de KYC que representan una verificación REAL (allowlist fail-safe, misma dirección
+ * que `REAL_PAYOUT_PROVENANCES`). El valor NO se escribe a mano acá: se importa de la MISMA constante
+ * que lo produce (`decision.ts`), así que un rename del literal rompe la compilación en vez de dejar
+ * esta lista apuntando a un valor que ya nadie emite.
+ *
+ * 🔴 POR QUÉ ES UNA ALLOWLIST Y NO UN `=== "local-fallback"`. Acá vivía la comparación contra el
+ * único valor simulado CONOCIDO, o sea que todo lo desconocido se leía como real. Con `DIDIT_ENV=mock`
+ * la decisión llega con `didit-mock` (decision.ts:22 y :91, vía `DiditKycGateway`, que sólo cae al
+ * fallback si el server contesta 501): el sello de demo no se prendía y la pantalla de `confirm`
+ * escribía "Identidad verificada" sobre datos que nadie verificó. Invertida la dirección, lo
+ * desconocido SOBRE-AVISA: un valor nuevo, un typo o una proveniencia que este archivo no conoce
+ * prende el sello, que es el error gratis. El error caro es el otro.
+ *
+ * El consumidor autoritativo del lado del dinero sigue siendo `REAL_KYC_PROVENANCES` de
+ * `wasiai-remittance-agents/src/providers/kyc.ts` (es el que abre el desembolso). Este conjunto es
+ * el de la PANTALLA y no decide nada del money-path: sólo decide qué se puede afirmar en pantalla.
+ */
+export const REAL_KYC_PROVENANCES: ReadonlySet<string> = new Set([KYC_PROVENANCE_LIVE]);
+
+/**
+ * true si la verificación de identidad NO se puede afirmar como real.
+ *
+ * ⚠️ AUSENTE O VACÍA CUENTA COMO NO REAL, y es lo contrario de `isPayoutDemo`. La diferencia no es un
+ * descuido: `payoutProvenance` ausente significa "esta remesa todavía no tiene payout", un estado
+ * normal del que no hay nada que avisar. Un `KycVerification` que EXISTE y no declara de dónde salió
+ * es otra cosa: es un objeto que la pantalla ya está mostrando como identidad de la persona. Ausencia
+ * de dato no es prueba de que sea real. Es alcanzable en producción por dos caminos, no hipotéticos:
+ * `kyc-gateway.ts`:42 castea la respuesta HTTP sin validar (`provenance` puede no venir), y
+ * `kyc-store.ts`:86 / `persistence.ts`:64 rehidratan snapshots viejos con un spread, así que un
+ * snapshot guardado antes de que el campo existiera vuelve con `undefined`.
+ *
+ * Quién NO llega acá: una remesa sin KYC (`rem.kyc == null`). Eso lo filtra `isDemoMode`, porque ahí
+ * no hay ninguna verificación que la pantalla pueda estar afirmando de más.
+ */
+export function isKycDemo(p: string | null | undefined): boolean {
+  return typeof p !== "string" || !REAL_KYC_PROVENANCES.has(p);
+}
+
+/**
+ * La frase que dice POR QUÉ esta identidad no se muestra como verificada. Nunca afirma que los datos
+ * sean falsos ni que nadie los haya mirado: afirma lo ÚNICO comprobable con un input concreto, que su
+ * origen no está en `REAL_KYC_PROVENANCES`. Con `didit-mock` sale el valor tal cual, que es lo que
+ * hace la frase falsable a simple vista.
+ *
+ * El `provenance` se muestra en claro a propósito: es una etiqueta de configuración de un conjunto
+ * chico (mismo criterio que el eco de `DIDIT_ENV` en `didit-env.ts`:76-81), nunca un secreto ni PII.
+ */
+export function kycOriginNotice(p: string | null | undefined): string {
+  const raw = typeof p === "string" ? p.trim() : "";
+  if (!raw)
+    return "Estos datos no dicen de qué verificador salieron, así que no podemos llamarlos verificados.";
+  return `Estos datos salieron de "${raw}", que no está en la lista de verificadores reales.`;
+}
+
+/** "Modo demo" ⇔ alguno de los tres pasos del flujo no está confirmado como real: la cotización vino
+ *  del fallback local, la verificación no salió de un verificador de la allowlist, o el desembolso no
+ *  salió de un partner de la allowlist. */
 export function isDemoMode(rem: RemittanceState): boolean {
   return (
     rem.quote?.provenance === "local-fallback" ||
-    rem.kyc?.provenance === "local-fallback" ||
+    (rem.kyc != null && isKycDemo(rem.kyc.provenance)) ||
     isPayoutDemo(rem.payoutProvenance)
   );
 }

@@ -10,12 +10,13 @@ import {
   IdCard,
   Loader2,
   ScanFace,
+  ShieldAlert,
   ShieldCheck,
   Smartphone,
   Wallet,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Quote, RemittanceState, PayoutMethod } from "../domain/remittance";
+import type { KycVerification, Quote, RemittanceState, PayoutMethod } from "../domain/remittance";
 import { MIN_SEND_USD, Remittance, TERMINAL_STATUSES } from "../domain/remittance"; // WKH-187: rehydrate/isQuoteStillValid en el resume (CD-11) · WKH-314: mínimo enviable
 import { createContainer, type Container } from "../composition/container";
 import {
@@ -38,6 +39,8 @@ import {
   type FlowError,
   humanError,
   isDemoMode,
+  isKycDemo,
+  kycOriginNotice,
   shortErrorCode,
   statusDisplay,
 } from "./flow-vm";
@@ -83,8 +86,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * la cadena sí es real". Los USDC del escrow son tokens reales que se ven en el explorador; lo
  * simulado son los pasos que no llegan a un partner de verdad.
  *
- * El texto nuevo dice exactamente lo que `isDemoMode` mide (la cotización, la verificación o el
- * desembolso vinieron de un fallback local) y ni un gramo más. UNA sola constante para los dos lugares
+ * El texto nuevo dice lo que `isDemoMode` mide (alguno de los tres pasos, cotización / verificación /
+ * desembolso, no está confirmado como real) y ni un gramo más. UNA sola constante para los dos lugares
  * que lo muestran: eran dos literales idénticos y nada impedía que uno se corrigiera y el otro no.
  */
 const DEMO_PILL = "Modo demo (con pasos simulados)";
@@ -826,19 +829,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                 <div className="my-2 h-px bg-line" />
                 <Row label="Recibe en" value={`${methodLabel(rem.beneficiary.method)} · ${rem.beneficiary.destination}`} />
               </Card>
-              {rem.kyc?.identity ? (
-                <div className="flex items-center gap-2.5 rounded-xl bg-verde-bg px-4 py-2.5">
-                  <BadgeCheck className="h-4 w-4 shrink-0 text-verde" />
-                  <p className="text-xs text-verde/90">
-                    Identidad verificada:{" "}
-                    <b>
-                      {rem.kyc.identity.firstName} {rem.kyc.identity.lastNamePaternal}{" "}
-                      {rem.kyc.identity.lastNameMaternal}
-                    </b>{" "}
-                    · {rem.kyc.identity.documentType} ••••{rem.kyc.identity.documentNumberLast4}
-                  </p>
-                </div>
-              ) : null}
+              {rem.kyc ? <IdentityBadge kyc={rem.kyc} /> : null}
               {/* 🔴 TAMBIÉN ACÁ, Y NO ES DUPLICACIÓN. La tarjeta vivía sólo en `review`, y `review`
                   es la pantalla que el flujo SALTEA cuando el KYC ya está hecho: con la identidad
                   recordada se va de `connect` directo a `confirm`. O sea que el preview existía y la
@@ -893,6 +884,50 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
         </div>
       ) : null}
     </main>
+  );
+}
+
+/**
+ * La tarjeta de identidad del paso `confirm`.
+ *
+ * 🔴 QUÉ ARREGLA. Esto era un solo bloque verde con un tilde que decía "Identidad verificada:" y los
+ * datos al lado, SIEMPRE, pasara lo que pasara con la verificación. Con `DIDIT_ENV=mock` (la
+ * configuración con la que se recorre la demo) la decisión llega con `provenance: "didit-mock"`, o sea
+ * datos de una verificación que no existió, y la pantalla los presentaba como verificados. Peor: el
+ * sello de "Modo demo" tampoco se prendía, porque `isDemoMode` sólo reconocía `local-fallback`. Quien
+ * mirara esa pantalla veía una app dando por buena una identidad inventada, sin un solo aviso.
+ *
+ * QUÉ AFIRMA CADA RAMA. La verde afirma una verificación, y por eso exige que el origen esté en
+ * `REAL_KYC_PROVENANCES` (comparación exacta, `Set.has`). La otra NO afirma que los datos sean falsos
+ * ni que nadie los haya mirado: dice que no podemos llamarlos verificados y muestra el origen crudo,
+ * que es lo que hace la frase falsable de un vistazo. Lo desconocido cae en la segunda: sobre-avisar
+ * es el error gratis.
+ *
+ * Los DATOS se muestran en las dos ramas. Sacarlos escondería a quién está por enviar la persona, que
+ * es el motivo por el que esta tarjeta existe. Lo que cambia es qué se afirma de ellos.
+ */
+function IdentityBadge({ kyc }: { kyc: KycVerification }) {
+  const id = kyc.identity;
+  if (!id) return null;
+  const nombre = `${id.firstName} ${id.lastNamePaternal} ${id.lastNameMaternal}`;
+  const documento = `${id.documentType} ••••${id.documentNumberLast4}`;
+  if (isKycDemo(kyc.provenance)) {
+    return (
+      <div className="flex items-start gap-2.5 rounded-xl border border-dashed border-stone/40 bg-sand/60 px-4 py-2.5">
+        <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-stone" />
+        <p className="text-xs text-stone">
+          Identidad sin verificar: <b>{nombre}</b> · {documento}. {kycOriginNotice(kyc.provenance)}
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center gap-2.5 rounded-xl bg-verde-bg px-4 py-2.5">
+      <BadgeCheck className="h-4 w-4 shrink-0 text-verde" />
+      <p className="text-xs text-verde/90">
+        Identidad verificada: <b>{nombre}</b> · {documento}
+      </p>
+    </div>
   );
 }
 
@@ -1325,12 +1360,15 @@ function PayoutInProgress({ rem }: { rem: RemittanceState }) {
           desembolso es real y lo simulado fue la cotización. En esa combinación el texto viejo afirmaba
           dos cosas falsas de una: que el desembolso era simulado y que no se había movido dinero hacia
           ninguna cuenta bancaria, con TransFi habiendo pagado. Decir cuál de los tres pasos fue el
-          simulado exigiría distinguirlos acá; se dice menos y no se inventa la distinción. */}
+          simulado exigiría distinguirlos acá; se dice menos y no se inventa la distinción.
+          Y ya no dice "es simulado": dos de las tres patas (verificación y desembolso) son allowlists,
+          así que esto también se prende con una proveniencia DESCONOCIDA, de la que no sabemos si es
+          simulada. Lo que la condición mide es que no está confirmada como real, y es lo que dice. */}
       {simulado ? (
         <p className="rounded-lg border border-dashed border-stone/40 px-3 py-2 text-xs text-stone">
           <strong>Entorno de prueba.</strong> Al menos uno de los pasos de este envío (la cotización,
-          la verificación o el desembolso) es simulado. El depósito en la cadena sí es real y se puede
-          ver en el explorador.
+          la verificación o el desembolso) no está confirmado como real. El depósito en la cadena sí
+          es real y se puede ver en el explorador.
         </p>
       ) : null}
     </div>

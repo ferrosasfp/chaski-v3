@@ -27,9 +27,11 @@ import {
   ESCROW_REFUNDED_BY_SENDER,
   RecoverEscrowFunds,
 } from "../application/use-cases/recover-escrow-funds";
+import { KYC_PROVENANCE_LIVE } from "../infrastructure/didit/decision";
 import {
   FAKE_SOLANA_BENEFICIARY,
   FAKE_SOLANA_SIGNATURE,
+  FakeKycGateway,
   FakeKycStore,
   FakeSolanaEscrowRefundGateway,
   FakeSolanaWallet,
@@ -296,9 +298,15 @@ it("T-AC4: KYC-once → tras conectar va directo a confirm (sin review ni escane
   expect(screen.queryByRole("button", { name: /Escanear DNI \+ selfie/ })).toBeNull();
 });
 
+// El badge VERDE afirma una verificación, así que sólo sale con una proveniencia de la allowlist
+// (`REAL_KYC_PROVENANCES`). El default de `FakeKycGateway` es "fake", que no está en ella y por eso
+// ahora cae en la tarjeta de "sin verificar": estos dos tests hablan del camino verificado, así que
+// declaran el origen real. La constante se IMPORTA de donde se produce, no se escribe "didit" acá.
+const kycRealGateway = () => new FakeKycGateway({ provenance: KYC_PROVENANCE_LIVE });
+
 // ── T-AC8 — AC-8: confirm muestra el badge de identidad junto al quote ────────
 it("T-AC8: el paso confirm muestra el badge de identidad (rem.kyc.identity) junto al quote", async () => {
-  render(<RemittanceFlow container={buildTestContainer()} />);
+  render(<RemittanceFlow container={buildTestContainer({ kyc: kycRealGateway() })} />);
 
   await goToConfirm();
 
@@ -315,7 +323,11 @@ it("T-AC5b: en confirm, si el quote venció, 'Recotizar tasa' re-cotiza SIN re-e
       throw new Error("confirm_quote_expired");
     },
   } as unknown as ConfirmAndSend;
-  render(<RemittanceFlow container={buildTestContainer({ useCases: { confirmAndSend: rejecting } })} />);
+  render(
+    <RemittanceFlow
+      container={buildTestContainer({ kyc: kycRealGateway(), useCases: { confirmAndSend: rejecting } })}
+    />,
+  );
 
   await goToConfirm();
   fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));

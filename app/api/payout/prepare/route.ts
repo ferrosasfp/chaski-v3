@@ -29,6 +29,7 @@ import {
 import { canonicalizeAddress } from "../../../../src/infrastructure/address";
 import {
   PAYOUT_CAPABILITY,
+  PAYOUT_DIRECT_AGENT_SLUG,
   PAYOUT_MIN_REPUTATION,
   logGatewayFailure,
   runViaGateway,
@@ -266,7 +267,9 @@ export async function POST(req: Request): Promise<Response> {
     // crudo, NUNCA ecoa el beneficiary.
     let res: Response;
     try {
-      res = await fetch(`${BASE}/api/agents/remit-cashout-payout/invoke`, {
+      // El slug sale de la MISMA constante que el preview muestra como "quién corre hoy" (ver
+      // PAYOUT_DIRECT_AGENT_SLUG): eran dos literales sin relación y la pantalla nombraba otro.
+      res = await fetch(`${BASE}/api/agents/${PAYOUT_DIRECT_AGENT_SLUG}/invoke`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body), // idempotencyKey/beneficiary forwardeados tal cual (CD-10/CD-5)

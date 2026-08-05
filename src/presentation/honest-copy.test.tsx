@@ -100,7 +100,7 @@ async function irAConfirmarConKyc(provenance: string | undefined): Promise<void>
   fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
   await screen.findByText(/Revisá el envío/);
   fireEvent.click(await screen.findByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Escanear DNI \+ selfie/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Verificar mi identidad/ }));
   await screen.findByRole("button", { name: /Confirmar y enviar/ });
 }
 
@@ -182,7 +182,7 @@ describe("paso de identidad", () => {
   it("no nombra al verificador como un hecho ni promete un 'no se comparte' sin destinatario", async () => {
     await irARevisar();
     fireEvent.click(await screen.findByRole("button", { name: /Continuar/ }));
-    await screen.findByRole("button", { name: /Escanear DNI \+ selfie/ });
+    await screen.findByRole("button", { name: /Verificar mi identidad/ });
 
     expect(
       screen.getByText(/no se comparten con los agentes que cotizan y pagan/),
@@ -191,6 +191,38 @@ describe("paso de identidad", () => {
     expect(screen.queryByText(/Tus datos no se comparten\./)).toBeNull();
     expect(screen.queryByText(/verificador certificado/i)).toBeNull();
     expect(screen.queryByText(/Lo hace/)).toBeNull();
+  });
+
+  // 🔴 LA TERCERA FRASE DE LA MISMA TARJETA, y la única que describía una ACCIÓN FÍSICA.
+  // "Escaneás tu DNI y te sacás una selfie" es falsa con `DIDIT_ENV=mock`, que es la configuración de
+  // producción: medido el 2026-08-05, `POST /api/kyc/session` devuelve un `url` que apunta a
+  // `/kyc-simulado`, una página nuestra que no pide ni un dato y lo declara en pantalla.
+  it("no promete un escaneo que el entorno puede no hacer, ni en la frase ni en el botón", async () => {
+    await irARevisar();
+    fireEvent.click(await screen.findByRole("button", { name: /Continuar/ }));
+    await screen.findByRole("button", { name: /Verificar mi identidad/ });
+
+    // Lo que sí vale en las dos configuraciones.
+    expect(screen.getByText(/verificamos tu identidad/)).toBeInTheDocument();
+    // La acción física, muerta en las dos partes donde estaba.
+    expect(screen.queryByText(/Escaneás tu DNI/)).toBeNull();
+    expect(screen.queryByText(/te sacás una selfie/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Escanear DNI/ })).toBeNull();
+  });
+
+  // La barra de progreso de tres pasos era doblemente inventada: `setScanStage` sólo se llama con
+  // 0, 1 y 4 (las etapas 2 y 3 no las alcanza nadie), y entre la 1 y la 4 lo único que ocurre es una
+  // llamada a `startKyc`. Nadie escanea, nadie mira una cara y nadie consulta una lista AML.
+  it("mientras arranca no narra tres etapas de un verificador que no se está ejecutando", async () => {
+    await irARevisar();
+    fireEvent.click(await screen.findByRole("button", { name: /Continuar/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Verificar mi identidad/ }));
+
+    expect(screen.queryByText(/Escaneando tu documento/)).toBeNull();
+    expect(screen.queryByText(/Verificando tu rostro/)).toBeNull();
+    expect(screen.queryByText(/Revisando listas de seguridad/)).toBeNull();
+    // Lo que queda es lo único que ocurre de verdad, y su desenlace.
+    expect(await screen.findByText(/Tu verificación volvió aprobada/)).toBeInTheDocument();
   });
 });
 
@@ -333,6 +365,8 @@ describe("la tarjeta de quién atiende el envío", () => {
           registry: "wasiai",
         },
         transport: "punto-a-punto" as const,
+        // Quién corre hoy, dicho por el server. Acá coincide con el del catálogo.
+        runsTodayAgentId: "remit-corridor-fx",
       },
     ];
     vi.stubGlobal(
@@ -345,7 +379,7 @@ describe("la tarjeta de quién atiende el envío", () => {
       expect(await screen.findByText(/Chaski pide capacidades, no empresas/)).toBeInTheDocument();
       expect(screen.queryByText(/Ninguno de estos pasos está atado a una empresa fija/)).toBeNull();
       // La fila sigue diciendo la verdad incómoda que la frase de arriba negaba.
-      expect(screen.getByText(/hoy se llama directo/)).toBeInTheDocument();
+      expect(screen.getByText(/Hoy se llama directo a remit-corridor-fx/)).toBeInTheDocument();
     } finally {
       vi.unstubAllGlobals();
     }
@@ -362,11 +396,11 @@ describe("estilo del copy", () => {
     expect(document.body.textContent ?? "").not.toContain("—");
 
     fireEvent.click(await screen.findByRole("button", { name: /Continuar/ }));
-    await screen.findByRole("button", { name: /Escanear DNI \+ selfie/ });
+    await screen.findByRole("button", { name: /Verificar mi identidad/ });
     expect(document.body.textContent ?? "").not.toContain("—");
 
     // `confirm` faltaba, y es donde se acaba de escribir la tarjeta de identidad (sección 10).
-    fireEvent.click(screen.getByRole("button", { name: /Escanear DNI \+ selfie/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Verificar mi identidad/ }));
     await screen.findByRole("button", { name: /Confirmar y enviar/ });
     expect(document.body.textContent ?? "").not.toContain("—");
   });

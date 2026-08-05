@@ -3,7 +3,6 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowRight,
   BadgeCheck,
-  Camera,
   Check,
   Clock3,
   ExternalLink,
@@ -29,7 +28,11 @@ import {
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
 import { isPrepareRejection } from "../application/agent-rejections"; // hallazgo #75: rechazo del agente ≠ payout fallido
 import { resolveSolanaNetworkConfig } from "../infrastructure/chain"; // HU-SOL-13: cluster Solana activo (env-driven)
-import { CUSTODY_WINDOW_SECS } from "../infrastructure/solana-wallet"; // la MISMA constante que fija el deadline del depósito
+import type { EscrowRefundConfirmation } from "../application/ports";
+import {
+  CUSTODY_WINDOW_SECS, // la MISMA constante que fija el deadline del depósito
+  MAX_RECOVERY_CANDIDATES, // la MISMA constante que sondea el fallback de recuperación
+} from "../infrastructure/solana-wallet";
 import {
   deliveredDisplay,
   escrowFundsAtRisk,
@@ -41,6 +44,7 @@ import {
   isDemoMode,
   isKycDemo,
   kycOriginNotice,
+  lostEscrowRecoveryError,
   shortErrorCode,
   statusDisplay,
 } from "./flow-vm";
@@ -71,13 +75,6 @@ const METHODS: { id: PayoutMethod; label: string }[] = [
   { id: "bank_cci", label: "Banco (CCI)" },
 ];
 
-// Etapas del escaneo Didit (documento → selfie/liveness → screening AML). Simuladas en demo;
-// en real es la sesión hospedada de Didit que extrae la identidad del documento.
-const SCAN_STEPS = [
-  "Escaneando tu documento",
-  "Verificando tu rostro (selfie)",
-  "Revisando listas de seguridad (AML)",
-];
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
@@ -288,10 +285,21 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
   // scopeado por dueño (repo.list): sin saber quién sos no hay lista que mostrar, y adivinarla sería
   // mostrarle a alguien las remesas de otro. Con la wallet ya conectada (autoConnect) `connect()` no
   // abre ningún modal: lee el estado del bridge y devuelve la misma address.
+  // Quién es el dueño de lo que se va a listar o recuperar. Con la wallet ya conectada (autoConnect)
+  // `connect()` no abre ningún modal: lee el estado del bridge y devuelve la misma address.
+  //
+  // La recuperación de un envío perdido la necesita por un motivo distinto al del historial: el
+  // endpoint del store durable exige una prueba de posesión FIRMADA POR ESA address, así que sin
+  // wallet conectada no hay a quién preguntarle.
+  const resolveSender = useCallback(async () => {
+    const addr = address ?? (await c.connectWallet.execute()).address;
+    setAddress(addr);
+    return addr;
+  }, [address, c]);
+
   const openHistory = () =>
     guard(async () => {
-      const addr = address ?? (await c.connectWallet.execute()).address;
-      setAddress(addr);
+      const addr = await resolveSender();
       setHistory(await c.listHistory.execute(addr));
       setStep("history");
     });
@@ -649,6 +657,11 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
               >
                 Ver mis envíos
               </button>
+
+              {/* La otra puerta, y la que no existía: la lista de arriba sale del almacenamiento de
+                  ESTE navegador. Si se borró, o si la persona entra desde otro dispositivo, ahí no
+                  hay nada y sus USDC pueden seguir en el vault. */}
+              <LostEscrowRecovery refund={c.solanaRefund} resolveSender={resolveSender} />
             </div>
           )}
 
@@ -699,7 +712,8 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                   <ShieldCheck className="h-5 w-5" />
                   <p className="text-sm font-semibold">Verificación única</p>
                 </div>
-                {/* Dos frases se cayeron acá y por motivos distintos.
+                {/* TRES frases se cayeron acá, y la tercera es de la misma familia que las dos
+                    primeras. Las dos primeras, del barrido anterior:
                     · "Lo hace Didit, un verificador certificado": con `DIDIT_ENV=mock` no lo hace
                       Didit, lo hace `/kyc-simulado`, que es una página nuestra que no verifica nada. Y
                       esta pantalla no puede distinguir las dos configuraciones, porque el navegador no
@@ -708,11 +722,19 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                       cumplirla, y además es falsa en el único sentido literal (el documento y la
                       selfie van al verificador; ese es el punto). Lo que sí está probado es el límite
                       concreto: el body que sale hacia los agentes no lleva `kyc` ni `identity`
-                      (`a2a/gateway-client.test.ts`, T-A6.1). Eso es lo que dice ahora. */}
+                      (`a2a/gateway-client.test.ts`, T-A6.1). Eso es lo que dice ahora.
+                    · "Escaneás tu DNI y te sacás una selfie": la que quedó, y la única que describía
+                      una ACCIÓN FÍSICA. Con `DIDIT_ENV=mock` la persona aterriza en `/kyc-simulado`,
+                      que no pide ni un dato y lo dice con todas las letras. Medido contra producción
+                      el 2026-08-05: `POST /api/kyc/session` devuelve un `url` que apunta a
+                      `/kyc-simulado`, o sea que ésa ES la configuración con la que se recorre la demo.
+                      Se borra, con el mismo criterio que las dos vecinas: la pantalla no puede
+                      distinguir las dos configuraciones, así que dice sólo lo que vale en las dos. Lo
+                      que la persona va a tener que hacer lo decide el verificador, y este componente
+                      no sabe cuál está configurado. */}
                 <p className="text-sm text-stone">
-                  Por ley, verificamos tu identidad <b>una sola vez</b>. Escaneás tu DNI y te sacás
-                  una selfie. Tu documento y tu selfie no se comparten con los agentes que cotizan y
-                  pagan.
+                  Por ley, verificamos tu identidad <b>una sola vez</b>. Tu documento y tu selfie no
+                  se comparten con los agentes que cotizan y pagan.
                 </p>
                 {scanStage === 0 ? (
                   <div className="flex items-center justify-center gap-3 rounded-xl border border-dashed border-line bg-sand/60 py-7">
@@ -721,41 +743,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                     <ScanFace className="h-8 w-8 text-stone" />
                   </div>
                 ) : (
-                  <ol className="space-y-2.5 rounded-xl bg-sand/60 px-4 py-3.5">
-                    {SCAN_STEPS.map((s, i) => {
-                      const stageNo = i + 1;
-                      const done = scanStage > stageNo || scanStage === 4;
-                      const active = scanStage === stageNo;
-                      return (
-                        <li key={s} className="flex items-center gap-2.5">
-                          <span
-                            className={
-                              done
-                                ? "flex h-5 w-5 items-center justify-center rounded-full bg-verde text-white"
-                                : active
-                                  ? "flex h-5 w-5 items-center justify-center rounded-full bg-cochineal text-white"
-                                  : "flex h-5 w-5 items-center justify-center rounded-full bg-line"
-                            }
-                          >
-                            {done ? (
-                              <Check className="h-3 w-3" />
-                            ) : active ? (
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                            ) : null}
-                          </span>
-                          <span
-                            className={
-                              done || active
-                                ? "text-sm font-medium text-ink"
-                                : "text-sm text-stone"
-                            }
-                          >
-                            {s}
-                          </span>
-                        </li>
-                      );
-                    })}
-                  </ol>
+                  <VerificationProgress approved={scanStage >= 4} />
                 )}
               </Card>
               <Button disabled={busy} onClick={onVerify}>
@@ -763,7 +751,11 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
                   <>
-                    <Camera className="h-4 w-4" /> Escanear DNI + selfie
+                    {/* La MISMA promesa que la frase de arriba, y en el elemento más grande de la
+                        pantalla: "Escanear DNI + selfie" describe una acción física que con el
+                        verificador simulado no ocurre. Lo que este botón hace en las dos
+                        configuraciones es arrancar la verificación, y eso es lo que dice. */}
+                    <ShieldCheck className="h-4 w-4" /> Verificar mi identidad
                   </>
                 )}
               </Button>
@@ -888,6 +880,45 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
 }
 
 /**
+ * Lo que pasa mientras la verificación arranca, dicho como lo que es.
+ *
+ * 🔴 ACÁ HABÍA UNA BARRA DE PROGRESO INVENTADA, y de dos maneras a la vez. `SCAN_STEPS` listaba tres
+ * etapas ("Escaneando tu documento" / "Verificando tu rostro (selfie)" / "Revisando listas de
+ * seguridad (AML)") que se pintaban una tras otra.
+ *
+ * 1. Las etapas 2 y 3 NO EXISTEN. `setScanStage` sólo se llama con 0, 1 y 4 en todo este archivo, así
+ *    que la segunda y la tercera fila nunca se prendían: se quedaban grises para siempre y saltaban
+ *    directo a un tilde verde. Nadie las midió porque nadie las testeaba.
+ * 2. Entre la etapa 1 y la 4 lo único que ocurre es UNA llamada a `startKyc`. Con `DIDIT_ENV=mock`
+ *    (la configuración de producción, medida el 2026-08-05: la sesión resuelve a `/kyc-simulado`)
+ *    nadie escanea un documento, nadie mira una cara y nadie consulta una lista AML. La pantalla
+ *    narraba tres pasos de un verificador que no se estaba ejecutando.
+ *
+ * Lo que queda es lo único que vale en las dos configuraciones: estamos esperando la respuesta, y
+ * después sabemos si volvió aprobada. `approved` sale de `scanStage === 4`, que este archivo setea
+ * SÓLO después de comprobar `snapshot.status === "kyc_passed"`. No dice "verificada": de eso se ocupa
+ * `IdentityBadge` en la pantalla siguiente, que sí mira la proveniencia.
+ */
+function VerificationProgress({ approved }: { approved: boolean }) {
+  return (
+    <div className="flex items-center gap-2.5 rounded-xl bg-sand/60 px-4 py-3.5">
+      <span
+        className={
+          approved
+            ? "flex h-5 w-5 items-center justify-center rounded-full bg-verde text-white"
+            : "flex h-5 w-5 items-center justify-center rounded-full bg-cochineal text-white"
+        }
+      >
+        {approved ? <Check className="h-3 w-3" /> : <Loader2 className="h-3 w-3 animate-spin" />}
+      </span>
+      <span className="text-sm font-medium text-ink">
+        {approved ? "Tu verificación volvió aprobada" : "Preparando tu verificación"}
+      </span>
+    </div>
+  );
+}
+
+/**
  * La tarjeta de identidad del paso `confirm`.
  *
  * 🔴 QUÉ ARREGLA. Esto era un solo bloque verde con un tilde que decía "Identidad verificada:" y los
@@ -986,6 +1017,20 @@ function NoWalletHere() {
   );
 }
 
+/**
+ * Las dos frases que acompañan al botón cuando NO SABEMOS si el depósito entró. Se pide, y decide la
+ * cadena.
+ *
+ * Viven en constantes y no en un literal por pantalla porque ahora las usan DOS estados distintos, y
+ * por el mismo motivo: `payout_failed` con `PRINCIPAL_STATE_UNKNOWN` (perdimos la respuesta del settle
+ * y la cadena tampoco contestó) y `confirmed` (la persona firmó y nadie registró el desenlace). La
+ * duda es la misma y la salida es la misma. Dos literales idénticos es exactamente cómo uno se
+ * corrige y el otro se queda viejo.
+ */
+const RECOVERY_ASK_WHEN_UNKNOWN =
+  "Pedí que vuelvan con el botón de acá abajo: si están en el escrow, vuelven a tu wallet; si nunca salieron, no hay nada que devolver.";
+const RECOVERY_NEEDS_WALLET = "Para recuperarlos, conectá la misma wallet con la que enviaste.";
+
 const TRACK_STEPS: { key: RemittanceState["status"][]; label: string; manual?: boolean }[] = [
   { key: ["confirmed", "principal_in"], label: "Fondos en camino" },
   // "Pagando a tu familiar" decía más de lo que pasa: en payout_submitted la orden con el partner
@@ -1028,8 +1073,17 @@ export function TrackView({
   // `status≠Deposited` o `now<deadline`, ANTES de firmar y sin gastar comisión). Preguntarle a la
   // cadena es barato; inventar una hora no.
   //
-  // Refundeable: el deposit entró y aún no se recuperó/entregó (escrow potencialmente Deposited on-chain).
+  // Refundeable: el deposit puede haber entrado y aún no se recuperó/entregó (escrow potencialmente
+  // Deposited on-chain).
+  //
+  // ⚠️ `confirmed` NO ESTABA ACÁ, y era el agujero: es el estado en el que la persona ya firmó la
+  // autorización y nadie registró el desenlace (los hasta 15 s del timeout del settle más el
+  // broadcast). El historial SÍ lo listaba y SÍ lo declaraba abrible, porque `escrowFundsKnowledge` lo
+  // clasifica como `unverified` (flow-vm.ts:201): la persona leía "No comprobamos si tus USDC siguen
+  // en el escrow", tocaba "Ver seguimiento", y aterrizaba en una pantalla sin ninguna acción. Sus USDC
+  // pueden estar en el vault.
   const refundeable =
+    rem.status === "confirmed" ||
     rem.status === "principal_in" ||
     rem.status === "payout_submitted" ||
     rem.status === "payout_failed";
@@ -1115,15 +1169,10 @@ export function TrackView({
                   : humanError("payout_failed")}
         </p>
         {(principalUnknown || principalInEscrow) && recoveryOffered ? (
-          <p className="text-sm text-stone">
-            Pedí que vuelvan con el botón de acá abajo: si están en el escrow, vuelven a tu wallet; si
-            nunca salieron, no hay nada que devolver.
-          </p>
+          <p className="text-sm text-stone">{RECOVERY_ASK_WHEN_UNKNOWN}</p>
         ) : null}
         {(principalUnknown || principalInEscrow) && !recoveryOffered ? (
-          <p className="text-sm text-stone">
-            Para recuperarlos, conectá la misma wallet con la que enviaste.
-          </p>
+          <p className="text-sm text-stone">{RECOVERY_NEEDS_WALLET}</p>
         ) : null}
         {/* Sólo se muestra un comprobante que EXISTE. El adapter ledger-only devuelve null y esta
             línea no se renderiza: un identificador fabricado al lado de la palabra reembolso es peor
@@ -1156,6 +1205,11 @@ export function TrackView({
   // una persona a mano. Un encabezado que late y dice "en camino" es una animación afirmando lo que
   // el sistema no hace.
   const waitingOnPerson = rem.status === "payout_submitted";
+  // `confirmed` = firmamos la autorización del depósito y nunca registramos el desenlace. Es la MISMA
+  // duda que `PRINCIPAL_STATE_UNKNOWN` unas líneas más arriba, así que se dice con las MISMAS frases:
+  // qué sabemos (la del historial, derivada de `escrowFundsKnowledge`, para que las dos pantallas no
+  // cuenten dos historias) y qué se puede hacer.
+  const depositUnknown = rem.status === "confirmed";
   return (
     <Card className="space-y-4">
       <div className="flex items-center gap-2.5">
@@ -1205,6 +1259,14 @@ export function TrackView({
         })}
       </ol>
       {waitingOnPerson ? <PayoutInProgress rem={rem} /> : null}
+      {depositUnknown ? (
+        <div className="space-y-1">
+          <p className="text-sm text-stone">{escrowKnowledgeCopy(escrowFundsKnowledge(rem))}</p>
+          <p className="text-sm text-stone">
+            {showRefund ? RECOVERY_ASK_WHEN_UNKNOWN : RECOVERY_NEEDS_WALLET}
+          </p>
+        </div>
+      ) : null}
       {showRefund && recover && sender ? (
         <div className="space-y-2">
           <RefundAction
@@ -1274,18 +1336,142 @@ export function RefundAction({
       <Button variant="outline" onClick={onRefund} disabled={busy}>
         {busy ? "Recuperando…" : sent ? "Volver a intentar" : "Recuperar fondos"}
       </Button>
-      {sent ? (
+      {sent ? <RefundSentNotice confirmation={sent.confirmation} refundTx={sent.refundTx} /> : null}
+      {err ? <p className="text-xs text-cochineal-ink">{err}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * Lo que se dice de una orden de recuperación ENVIADA y todavía no confirmada.
+ *
+ * Se extrajo a un componente porque ahora lo usan las DOS puertas de recuperación (la de una remesa
+ * conocida y la del envío perdido), y las dos tienen que decir exactamente lo mismo: el RPC aceptó la
+ * transacción, que no es que la plata haya vuelto. El verbo es el de lo que sabemos.
+ */
+function RefundSentNotice({
+  confirmation,
+  refundTx,
+}: {
+  confirmation: Exclude<EscrowRefundConfirmation, "confirmed">;
+  refundTx: string;
+}) {
+  return (
+    <div className="space-y-1">
+      {/* "Enviamos la orden", NUNCA "volvieron". */}
+      <p className="text-xs font-semibold text-ink">Enviamos la orden de recuperación</p>
+      <p className="text-xs text-stone">
+        {confirmation === "pending"
+          ? "Todavía no la vemos confirmada en la cadena. Puede entrar en un rato, o puede no haber entrado. Hasta que se confirme no sabemos si tus USDC volvieron."
+          : "No pudimos consultar la cadena para saber si entró. Nadie sabe todavía si tus USDC volvieron; no es que hayan fallado."}
+      </p>
+      <p className="text-xs text-stone">Orden enviada: {refundTx}</p>
+    </div>
+  );
+}
+
+/**
+ * La puerta que faltaba: recuperar un envío que este dispositivo no conoce.
+ *
+ * 🔴 QUÉ ARREGLA. La recuperación durable ya estaba ENTERA y no tenía ni un consumidor. El endpoint
+ * `POST /api/solana/escrow/remittance-ids` está vivo en producción (responde 403 sin PoP), el adapter
+ * resuelve el id ausente contra ese store y sondea hasta `MAX_RECOVERY_CANDIDATES` PDAs
+ * (`solana-wallet.ts`:207-242), y el gateway está cableado en el container (`container.ts`:138). Pero
+ * la interfaz sólo llamaba a `recoverEscrowFunds`, que arranca con `repo.get(remittanceId)` y tira
+ * `remittance_not_found` (`recover-escrow-funds.ts`:49-50). O sea: quien borró los datos del navegador
+ * o entra desde otro dispositivo no tenía NINGÚN camino, con el código para dárselo ya escrito.
+ *
+ * POR QUÉ NO PASA POR `RecoverEscrowFunds`. Ese use-case existe para ESCRIBIR el resultado en la
+ * remesa, y acá no hay remesa local que escribir: es justamente el caso en que no existe. Se llama al
+ * gateway, que es lo único que puede resolver el id contra el servidor.
+ *
+ * QUÉ SE DICE ANTES DE ABRIR NINGÚN DIÁLOGO, y por qué es la mitad del arreglo: esto pide DOS firmas
+ * a la billetera por motivos distintos (una prueba de posesión, que es un texto, y después la
+ * transacción del refund). Una app que abre el diálogo de firma sin haber dicho qué se firma y para
+ * qué entrena a la gente a firmar cualquier cosa. Por eso el texto va primero y la acción después.
+ */
+export function LostEscrowRecovery({
+  refund,
+  resolveSender,
+}: {
+  /** El gateway SUELTO, no el use-case: es el único que acepta la llamada sin `remittanceId`. */
+  refund?: Container["solanaRefund"];
+  /** Devuelve la address del sender, conectando la wallet si hace falta (el PoP la exige). */
+  resolveSender: () => Promise<string>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [sent, setSent] = useState<{
+    confirmation: Exclude<EscrowRefundConfirmation, "confirmed">;
+    refundTx: string;
+  } | null>(null);
+  const [recovered, setRecovered] = useState<string | null>(null); // refundTx CONFIRMADO en la cadena
+
+  const onRecover = useCallback(async () => {
+    if (!refund) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const sender = await resolveSender();
+      // SIN `remittanceId`: es la firma que dispara la resolución contra el store durable.
+      const res = await refund.refund({ sender });
+      if (res.confirmation === "confirmed") {
+        setSent(null);
+        setRecovered(res.refundTx);
+        return;
+      }
+      setSent({ confirmation: res.confirmation, refundTx: res.refundTx });
+    } catch (e) {
+      // El copy de ESTA puerta, no el de la otra: acá "no encontramos nada" no puede leerse como
+      // "no tenés fondos" (ver `lostEscrowRecoveryError`).
+      setErr(
+        lostEscrowRecoveryError(e instanceof Error ? e.message : "", MAX_RECOVERY_CANDIDATES),
+      );
+    } finally {
+      setBusy(false);
+    }
+  }, [refund, resolveSender]);
+
+  // Sin gateway no hay puerta que ofrecer. El container real siempre lo cablea; el de tests no.
+  if (!refund) return null;
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="w-full text-center text-sm font-semibold text-cochineal underline underline-offset-2"
+      >
+        Recuperar un envío perdido
+      </button>
+    );
+  }
+
+  return (
+    <div className="space-y-3 rounded-xl2 border border-line bg-sand/60 p-4">
+      <p className="text-sm font-bold">Recuperar un envío perdido</p>
+      <p className="text-sm text-stone">
+        Si borraste los datos del navegador o entrás desde otro dispositivo, tus envíos no aparecen
+        en "Ver mis envíos". Los buscamos preguntándole al servidor por tu billetera.
+      </p>
+      <p className="text-sm text-stone">
+        Tu billetera te va a pedir una firma para probar que es tuya: es un texto, no mueve fondos y
+        no paga comisión de red. Si encontramos un escrow abierto te va a pedir una segunda firma, y
+        esa sí es la transacción que saca tus USDC; su comisión de red la pagás vos.
+      </p>
+      <Button variant="outline" onClick={onRecover} disabled={busy}>
+        {busy ? "Buscando…" : "Buscar mis escrows"}
+      </Button>
+      {recovered ? (
         <div className="space-y-1">
-          {/* "Enviamos la orden", NUNCA "volvieron": el verbo tiene que ser el de lo que sabemos. */}
-          <p className="text-xs font-semibold text-ink">Enviamos la orden de recuperación</p>
-          <p className="text-xs text-stone">
-            {sent.confirmation === "pending"
-              ? "Todavía no la vemos confirmada en la cadena. Puede entrar en un rato, o puede no haber entrado. Hasta que se confirme no sabemos si tus USDC volvieron."
-              : "No pudimos consultar la cadena para saber si entró. Nadie sabe todavía si tus USDC volvieron; no es que hayan fallado."}
-          </p>
-          <p className="text-xs text-stone">Orden enviada: {sent.refundTx}</p>
+          <p className="text-xs font-semibold text-ink">Recuperaste tus fondos</p>
+          {/* La MISMA frase que el historial usa para ese hecho, no una segunda versión. */}
+          <p className="text-xs text-stone">{escrowKnowledgeCopy("returned")}</p>
+          <p className="text-xs text-stone">Comprobante: {recovered}</p>
         </div>
       ) : null}
+      {sent ? <RefundSentNotice confirmation={sent.confirmation} refundTx={sent.refundTx} /> : null}
       {err ? <p className="text-xs text-cochineal-ink">{err}</p> : null}
     </div>
   );
@@ -1396,12 +1582,21 @@ function PayoutInProgress({ rem }: { rem: RemittanceState }) {
 //    más fácil de acá.
 //  · La identidad NO aparece como agente: hoy es una integración directa con el proveedor. La
 //    tercera fila sería la más vendible y es la que no existe.
+//
+// 🔴 Y EL QUE FALTABA: se dice QUIÉN corre, no sólo por dónde. Medido contra producción el
+// 2026-08-05, `GET /api/a2a/plan` devolvía `remit-corridor-fx-solana` y `remit-cashout-payout-solana`
+// y esta tarjeta los mostraba con "hoy se llama directo", mientras `POST /api/a2a/quote` contestaba
+// `result.slug = "remit-corridor-fx"`. Son slugs distintos: la pantalla nombraba a quien NO corre y
+// encima afirmaba que ese era el que se llamaba directo. Cuando el catálogo y la ejecución divergen,
+// esta tarjeta lo DICE, no elige uno de los dos en silencio.
 function AgentPlanCard() {
   type Step = {
     capability: string;
     label: string;
     agent: { id: string; description: string; priceUsdc: number | null; verified: boolean; registry: string } | null;
     transport: "gateway" | "punto-a-punto";
+    /** Quién corre hoy cuando se sabe. `null` en el carril del gateway: ahí se elige al ejecutar. */
+    runsTodayAgentId?: string | null;
   };
   const [plan, setPlan] = useState<{ steps: Step[]; totalUsdc: number } | null>(null);
   const [failed, setFailed] = useState(false);
@@ -1457,11 +1652,17 @@ function AgentPlanCard() {
               </span>
             </div>
             {s.agent ? (
-              <p className="mt-0.5 text-xs text-stone">
-                {s.agent.id}
-                {s.agent.verified ? " · verificado" : " · sin verificar"}
-                {s.transport === "gateway" ? " · elegido por capacidad" : " · hoy se llama directo"}
-              </p>
+              <>
+                <p className="mt-0.5 text-xs text-stone">
+                  El catálogo ofrece a {s.agent.id}
+                  {s.agent.verified ? " · verificado" : " · sin verificar"}
+                </p>
+                <AgentRunsToday
+                  agentId={s.agent.id}
+                  transport={s.transport}
+                  runsTodayAgentId={s.runsTodayAgentId}
+                />
+              </>
             ) : (
               <p className="mt-0.5 text-xs text-stone">
                 El catálogo no ofrece a nadie para esta capacidad ahora mismo.
@@ -1471,13 +1672,87 @@ function AgentPlanCard() {
         ))}
       </div>
       <div className="mt-3 flex items-baseline justify-between">
-        <span className="text-xs text-stone">Lo que cobran los agentes</span>
+        <span className="text-xs text-stone">Precio publicado en el catálogo</span>
         <span className="tabular text-sm font-semibold">{plan.totalUsdc} USDC</span>
       </div>
+      <p className="mt-1 text-xs text-stone">
+        {plan.steps.some((s) => s.transport === "punto-a-punto")
+          ? AGENT_PRICE_NOTE_DIRECT
+          : AGENT_PRICE_NOTE_GATEWAY}
+      </p>
       <p className="mt-2 text-xs text-stone">
         Tu identidad no pasa por el catálogo: se verifica con el proveedor directo.
       </p>
     </Card>
+  );
+}
+
+/**
+ * Qué es ese número, y quién lo cobraría.
+ *
+ * 🔴 ACÁ DECÍA "Lo que cobran los agentes", y nadie lo cobra. En el carril punto a punto las dos rutas
+ * hacen un `fetch` liso: sin x402, sin `Authorization`, sin Agent Key (`a2a/quote/route.ts`:142 y
+ * `payout/prepare/route.ts`:269). Verificado en vivo el 2026-08-05: un `POST /api/a2a/quote` contra
+ * producción devuelve 200 sin ningún pago. El número, encima, es el precio de catálogo de agentes que
+ * pueden no ser los que corren, que es lo que cada fila ya dice una por una.
+ *
+ * El dato no se borra (sirve para comparar lo que el catálogo publica): se le pone dueño y tiempo
+ * verbal, que es el mismo criterio con el que ya se arregló el "llega en ~30 min".
+ *
+ * Las dos frases separadas porque los dos carriles cobran distinto y el `transport` los distingue:
+ * con el gateway el fee del agente lo liquida el gateway contra la Agent Key de Chaski
+ * (`gateway-client.ts`, header `x-a2a-key`), o sea que ahí sí se paga, sólo que no lo paga la persona
+ * ni sale de lo que envía. Una sola frase para los dos casos tendría que ser falsa en uno.
+ */
+const AGENT_PRICE_NOTE_DIRECT =
+  "Es lo que estos agentes publican en el catálogo, no lo que se cobra en este envío: por el carril de hoy la app los llama sin ningún pago y contestan igual.";
+const AGENT_PRICE_NOTE_GATEWAY =
+  "Es lo que estos agentes publican en el catálogo. Por el carril del gateway ese fee lo paga Chaski con su Agent Key al ejecutar el paso, y no se suma a lo que enviás.";
+
+/**
+ * La línea que dice QUIÉN corre hoy este paso. Cuatro casos, y ninguno colapsa en otro.
+ *
+ * · Carril del gateway: no se llama a ningún slug, se pide la capacidad y el gateway resuelve AL
+ *   EJECUTAR. El agente que el catálogo lista primero hoy puede no ser el que corra, así que la línea
+ *   no lo nombra: sería inventar una certeza.
+ * · El servidor no mandó el campo (respuesta de una versión anterior, durante un deploy): no sabemos,
+ *   y se dice. Callar dejaría la fila leyéndose como si el del catálogo fuera el que corre, que es
+ *   exactamente el bug.
+ * · Coincide con el del catálogo: se dice que corre ese, y punto.
+ * · NO coincide: el caso que esta HU vino a arreglar. Se nombran LOS DOS y se dice cuál es cuál.
+ *   Elegir uno en silencio, en cualquiera de las dos direcciones, es una pantalla que mide una cosa y
+ *   afirma otra.
+ */
+function AgentRunsToday({
+  agentId,
+  transport,
+  runsTodayAgentId,
+}: {
+  agentId: string;
+  transport: "gateway" | "punto-a-punto";
+  runsTodayAgentId?: string | null;
+}) {
+  if (transport === "gateway") {
+    return (
+      <p className="mt-0.5 text-xs text-stone">
+        Hoy este paso corre por el gateway, que elige al ejecutar: puede tocarle otro.
+      </p>
+    );
+  }
+  if (typeof runsTodayAgentId !== "string" || !runsTodayAgentId) {
+    return (
+      <p className="mt-0.5 text-xs text-stone">
+        No sabemos a qué agente se llama hoy en este paso.
+      </p>
+    );
+  }
+  if (runsTodayAgentId === agentId) {
+    return <p className="mt-0.5 text-xs text-stone">Hoy se llama directo a {agentId}.</p>;
+  }
+  return (
+    <p className="mt-0.5 text-xs font-medium text-cochineal-ink">
+      Hoy no corre ese: la app llama directo a {runsTodayAgentId}, que está cableado en el código.
+    </p>
   );
 }
 

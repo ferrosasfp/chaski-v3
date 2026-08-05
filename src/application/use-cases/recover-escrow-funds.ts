@@ -25,8 +25,24 @@ import type {
 export const ESCROW_REFUNDED_BY_SENDER = "escrow_refunded_by_sender";
 
 /** Estados desde los que el escrow puede tener fondos y la FSM permite llegar a `refunded`.
- *  `settled`/`refunded` no están: son terminales y no hay transición de salida (remittance.ts:94-96). */
-const RECOVERABLE: readonly RemittanceStatus[] = ["principal_in", "payout_submitted", "payout_failed"];
+ *  `settled`/`refunded` no están: son terminales y no hay transición de salida (remittance.ts:129/131).
+ *
+ *  ⚠️ `confirmed` FALTABA, y era la ventana más cara de las cuatro. Es el estado en el que la persona
+ *  YA firmó la autorización del depósito y nadie llegó a registrar el desenlace: dura los hasta 15 s
+ *  del timeout del settle más el broadcast, y quien cierre el navegador ahí puede tener sus USDC en el
+ *  vault. `escrowFundsKnowledge` ya lo clasificaba como `unverified` (flow-vm.ts:201), o sea que el
+ *  historial lo listaba, lo declaraba abrible y lo mandaba al seguimiento, y ahí no había ninguna
+ *  acción: la pantalla decía "no comprobamos si tus USDC siguen en el escrow" y no ofrecía preguntarlo.
+ *
+ *  La FSM lo permite sin tocar nada: `confirmed → payout_failed` (remittance.ts:126) y
+ *  `payout_failed → refunded` (remittance.ts:130), que son exactamente las dos transiciones que este
+ *  use-case hace más abajo. */
+const RECOVERABLE: readonly RemittanceStatus[] = [
+  "confirmed",
+  "principal_in",
+  "payout_submitted",
+  "payout_failed",
+];
 
 /** Lo que sabe el caller cuando esto vuelve. `remittance` sólo está en `refunded` (terminal) cuando
  *  `confirmation === "confirmed"`; en los otros dos casos vuelve INTACTA y sigue siendo recuperable,

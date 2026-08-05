@@ -122,7 +122,7 @@ async function goToReview(): Promise<void> {
 async function goToConfirm(): Promise<void> {
   await goToReview();
   fireEvent.click(await screen.findByRole("button", { name: /Continuar/ })); // CTA review → verify
-  fireEvent.click(await screen.findByRole("button", { name: /Escanear DNI \+ selfie/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Verificar mi identidad/ }));
   await screen.findByRole("button", { name: /Confirmar y enviar/ }); // paso confirm
 }
 
@@ -263,7 +263,7 @@ it("T-AC1/T-REORDER: tras conectar, el paso review muestra el quote (S/ concreto
   expect(receive).toBeInTheDocument();
   expect(receive.textContent).not.toBe("S/0.00");
   // (b) todavía NO hay UI de KYC (ni escaneo ni badge de identidad).
-  expect(screen.queryByRole("button", { name: /Escanear DNI \+ selfie/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Verificar mi identidad/ })).toBeNull();
   expect(screen.queryByText(/Identidad verificada/)).toBeNull();
 });
 
@@ -274,10 +274,10 @@ it("T-AC2: el review tiene 'Continuar'; el escaneo aparece recién tras el tap (
   await goToReview();
 
   // (a) el review pre-KYC no muestra el escaneo.
-  expect(screen.queryByRole("button", { name: /Escanear DNI \+ selfie/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Verificar mi identidad/ })).toBeNull();
   // (b) tras tapear "Continuar" recién aparece el escaneo (paso verify).
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-  expect(await screen.findByRole("button", { name: /Escanear DNI \+ selfie/ })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: /Verificar mi identidad/ })).toBeInTheDocument();
 });
 
 // ── T-AC4 — AC-4: KYC-once salta review+verify y va directo a confirm ─────────
@@ -295,7 +295,7 @@ it("T-AC4: KYC-once → tras conectar va directo a confirm (sin review ni escane
   expect(screen.getByText(/Identidad verificada/)).toBeInTheDocument();
   expect(screen.getByText(/^S\/[\d,]+\.\d{2}$/)).toBeInTheDocument();
   // (b) nunca pasó por el escaneo de DNI.
-  expect(screen.queryByRole("button", { name: /Escanear DNI \+ selfie/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Verificar mi identidad/ })).toBeNull();
 });
 
 // El badge VERDE afirma una verificación, así que sólo sale con una proveniencia de la allowlist
@@ -338,7 +338,7 @@ it("T-AC5b: en confirm, si el quote venció, 'Recotizar tasa' re-cotiza SIN re-e
 
   // (b) tras re-cotizar seguimos en confirm (vuelve el CTA de enviar), NUNCA al escaneo de DNI.
   expect(await screen.findByRole("button", { name: /Confirmar y enviar/ })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: /Escanear DNI \+ selfie/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Verificar mi identidad/ })).toBeNull();
   expect(screen.getByText(/Identidad verificada/)).toBeInTheDocument(); // el KYC se conservó
 });
 
@@ -413,7 +413,7 @@ it("T-REQUOTE: resume 'passed' con quote vencido auto re-cotiza, muestra el mont
   // (b) muestra el monto NUEVO (S/1,500.00), no el viejo.
   expect(screen.getByText("S/1,500.00")).toBeInTheDocument();
   // (c) sin re-escaneo de DNI: el KYC se conservó.
-  expect(screen.queryByRole("button", { name: /Escanear DNI \+ selfie/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Verificar mi identidad/ })).toBeNull();
   expect(screen.getByText(/Identidad verificada/)).toBeInTheDocument();
 });
 
@@ -603,7 +603,7 @@ describe("WKH-188 resume escape (fake timers aislados, CD-10)", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(screen.getByRole("button", { name: /Escanear DNI \+ selfie/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Verificar mi identidad/ })).toBeInTheDocument();
     expect(screen.getByText(/La verificación no pasó/)).toBeInTheDocument();
 
     // El escape NUNCA aparece (el overlay `resuming` nunca estuvo activo el tiempo suficiente).
@@ -810,7 +810,7 @@ it("T-AC4: en step verify con quote demo (fallback) el banner 'Modo demo' es vis
   await goToReview(); // quote fallback → isDemoMode true
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ })); // review → verify
 
-  expect(await screen.findByRole("button", { name: /Escanear DNI \+ selfie/ })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: /Verificar mi identidad/ })).toBeInTheDocument();
   const banners = await screen.findAllByText(
     /Modo demo \(con pasos simulados\)/,
     {},

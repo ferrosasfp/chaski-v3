@@ -23,8 +23,10 @@
 // más vendible del preview.
 import { NextResponse } from "next/server";
 import {
+  FX_DIRECT_AGENT_SLUG,
   FX_QUOTE_CAPABILITY,
   PAYOUT_CAPABILITY,
+  PAYOUT_DIRECT_AGENT_SLUG,
 } from "../../../../src/infrastructure/a2a/gateway-client";
 
 /** Un paso del plan, tal como se le muestra a la persona. Sin URLs, sin claves, sin PII. */
@@ -35,6 +37,20 @@ interface PlanStep {
   agent: { id: string; description: string; priceUsdc: number | null; verified: boolean; registry: string } | null;
   /** Por dónde corre HOY, no por dónde podría correr. */
   transport: "gateway" | "punto-a-punto";
+  /**
+   * QUIÉN corre hoy, cuando se sabe. Y se sabe en UN solo caso: el carril punto a punto, donde el
+   * slug está cableado en la URL que la route invoca. Sale de la MISMA constante que ese fetch usa.
+   *
+   * `null` con `transport: "gateway"` NO es un dato faltante: es el hecho. Ahí no se llama a ningún
+   * slug, se pide una capacidad y el gateway resuelve AL EJECUTAR, así que el agente que el catálogo
+   * lista primero hoy puede no ser el que corra. Rellenarlo con el `agent.id` sería exactamente la
+   * pantalla que mide una cosa y afirma otra.
+   *
+   * Por qué existe este campo: medido contra producción el 2026-08-05, `agent.id` daba
+   * `remit-corridor-fx-solana` y `remit-cashout-payout-solana`, mientras las rutas llamaban a
+   * `remit-corridor-fx` y `remit-cashout-payout`. La tarjeta nombraba a quien no corre.
+   */
+  runsTodayAgentId: string | null;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -89,8 +105,20 @@ export async function GET(): Promise<Response> {
   ]);
 
   const steps: PlanStep[] = [
-    { capability: fxCapability, label: "Cotizar el cambio", agent: fx, transport },
-    { capability: payoutCapability, label: "Entregar el dinero", agent: payout, transport },
+    {
+      capability: fxCapability,
+      label: "Cotizar el cambio",
+      agent: fx,
+      transport,
+      runsTodayAgentId: viaGateway ? null : FX_DIRECT_AGENT_SLUG,
+    },
+    {
+      capability: payoutCapability,
+      label: "Entregar el dinero",
+      agent: payout,
+      transport,
+      runsTodayAgentId: viaGateway ? null : PAYOUT_DIRECT_AGENT_SLUG,
+    },
   ];
 
   // El total suma SÓLO lo que tiene precio conocido, y se dice cuántos quedaron afuera. Un total que

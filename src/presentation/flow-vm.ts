@@ -263,6 +263,35 @@ export function escrowRefundError(code: string): string {
   return "No pudimos recuperar los fondos. Intentá de nuevo.";
 }
 
+/**
+ * Copy de los errores de la puerta "Recuperar un envío perdido" (la recuperación SIN remittanceId).
+ *
+ * Existe porque el MISMO código significa dos cosas distintas según por dónde se entró, y la más
+ * cara es `escrow_not_found`:
+ *
+ *  · En la acción normal el id es conocido, así que "no encontramos un depósito tuyo en el escrow"
+ *    habla de UNA remesa concreta y la frase de `escrowRefundError` es correcta.
+ *  · Acá el id no existe: se le pide la lista al store durable server-side y se sondean hasta
+ *    `maxCandidates` PDAs on-chain (`solana-wallet.ts`:207-242). `escrow_not_found` sale de DOS
+ *    situaciones que no se distinguen desde afuera: el servidor no devolvió ningún id, o ninguno de
+ *    los sondeados estaba `Deposited`. Ninguna de las dos prueba que la persona no tenga fondos.
+ *
+ * Por eso la frase habla de lo que MIRAMOS, no de lo que la persona tiene. `maxCandidates` entra por
+ * parámetro y no como un número escrito acá: el llamador pasa la MISMA constante que sondea
+ * (`MAX_RECOVERY_CANDIDATES`), así que el copy no puede quedar diciendo un número que el código dejó
+ * de usar.
+ */
+export function lostEscrowRecoveryError(code: string, maxCandidates: number): string {
+  if (code.includes("escrow_not_found"))
+    return `No encontramos escrows abiertos para esta billetera. Esto no dice que no tengas fondos: dice que ninguno de los últimos ${maxCandidates} envíos que el servidor tiene guardados de esta billetera está abierto en el contrato.`;
+  // "No pudimos preguntar" no es "no hay nada". `escrow_id_unavailable` = esta pantalla no tiene el
+  // resolver cableado; `escrow_recovery_unavailable` = el endpoint contestó algo que no es 200/403/501
+  // (`http-solana-remittance-id-resolver.ts`:27). En los dos casos no llegamos a mirar la cadena.
+  if (code.includes("escrow_id_unavailable") || code.includes("escrow_recovery_unavailable"))
+    return "No pudimos consultar el registro de envíos. Esto no es una respuesta sobre tus fondos: no llegamos a preguntar. Probá de nuevo en un rato.";
+  return escrowRefundError(code);
+}
+
 /** Mensaje humano + el código interno que lo originó. Van JUNTOS en un solo estado a propósito: con
  *  dos `useState` separados podían quedar desincronizados y mostrar el código de un fallo viejo
  *  debajo del mensaje de uno nuevo. */
@@ -352,13 +381,17 @@ export function humanError(code: string): string {
   if (code.includes("wallet_address_unavailable"))
     return "No pudimos leer la dirección de tu wallet. Reconectala y volvé a intentar: no se movió ningún USDC.";
   // Le falta SOL para el rent de las cuentas del escrow. El texto tiene que decir tres cosas que antes
-  // no decía ninguna: cuánto hace falta, por qué hace falta (el fee lo paga WasiAI, el rent no), y que
-  // no se movió nada. Sin esto, esta causa salía por el peor camino posible: "No sabemos todavía si te
-  // cobramos", que es lo que la pantalla dice cuando el depósito puede estar en el escrow.
+  // no decía ninguna: cuánto hace falta, por qué hace falta (el fee del depósito lo paga WasiAI, el
+  // rent no), y que no se movió nada. Sin esto, esta causa salía por el peor camino posible: "No
+  // sabemos todavía si te cobramos", que es lo que la pantalla dice cuando el depósito puede estar en
+  // el escrow.
   // El número NO está escrito a mano: se formatea desde la MISMA constante que compara el guard, así
   // que no puede quedar desactualizado respecto de lo que el código exige.
+  // "La comisión de red la pagamos nosotros" a secas pasó a ser falso cuando el umbral incorporó la
+  // comisión del refund: ésa la paga el sender (`refundEscrow` fija `tx.feePayer = senderPk`), y es
+  // parte de lo que se le está pidiendo que cargue. El texto ahora dice cuál de las dos es cuál.
   if (code.includes("solana_sender_sol_insufficient"))
-    return `Te falta SOL en la wallet: necesitás al menos ${formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT)} SOL para crear las cuentas del escrow. La comisión de red la pagamos nosotros, pero ese depósito de las cuentas sale de tu wallet. Cargá SOL y volvé a intentar: no se movió ningún USDC.`;
+    return `Te falta SOL en la wallet: necesitás al menos ${formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT)} SOL. La comisión de red del depósito la pagamos nosotros; de tu wallet salen el alquiler de las cuentas del escrow y la comisión de la transacción con la que podrías recuperar tus USDC. Cargá SOL y volvé a intentar: no se movió ningún USDC.`;
   // Nuestro servidor no pudo consultar el registro de direcciones preparadas y cortó ANTES de
   // reenviar la transacción (route.ts:126-133, antes del fetch de la línea 156). Sin frase propia
   // caía en el default "Algo salió mal", que no dice ni que la plata está quieta ni que reintentar

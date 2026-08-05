@@ -19,6 +19,26 @@
 export const FX_QUOTE_CAPABILITY = "remittance-fx-quote";
 export const PAYOUT_CAPABILITY = "remittance-payout";
 
+/**
+ * Los agentes que el CARRIL PUNTO A PUNTO llama de verdad, cableados por URL.
+ *
+ * 🔴 POR QUÉ ESTÁN ACÁ Y NO EN CADA ROUTE. Vivían como literales sueltos en las dos rutas que los
+ * invocan (`a2a/quote/route.ts` y `payout/prepare/route.ts`), y la tarjeta que la persona ve antes de
+ * aprobar mostraba los del catálogo. Medido contra producción el 2026-08-05:
+ * `GET /api/a2a/plan` devuelve `remit-corridor-fx-solana` y `remit-cashout-payout-solana`, y
+ * `POST /api/a2a/quote` responde `result.slug = "remit-corridor-fx"`. Son slugs DISTINTOS, y la
+ * pantalla nombraba al que no corre.
+ *
+ * Con una sola fuente, el preview puede decir quién corre hoy sin que nadie tenga que acordarse de
+ * sincronizar dos archivos. Si el carril punto a punto cambia de agente, el preview cambia solo.
+ *
+ * ⚠️ SÓLO VALEN PARA EL CARRIL PUNTO A PUNTO. Con `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER=a2a-gateway`
+ * NADIE llama a estos slugs: se pide la CAPACIDAD y el gateway resuelve al ejecutar. Usarlos para
+ * afirmar quién corre en ese carril sería el mismo bug al revés.
+ */
+export const FX_DIRECT_AGENT_SLUG = "remit-corridor-fx";
+export const PAYOUT_DIRECT_AGENT_SLUG = "remit-cashout-payout";
+
 /** Piso de confianza del leg de payout (AC-5 / CD-5). Constante de código, NO env: una env con
  *  default ausente es un piso que se apaga solo (nadie la setea en un entorno nuevo, min_reputation
  *  queda undefined, el filtro no filtra y el control desaparece sin que falle nada). NO es un control

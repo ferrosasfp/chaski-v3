@@ -8,8 +8,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { HistoryView, RemittanceFlow, ResetWarning } from "./flow";
-import { escrowFundsKnowledge } from "./flow-vm";
+import { HistoryView, RemittanceFlow, ResetWarning, TrackView } from "./flow";
+import { escrowFundsKnowledge, escrowKnowledgeCopy } from "./flow-vm";
 import { buildTestContainer } from "../test-support/test-container";
 import { Money } from "../domain/money";
 import {
@@ -94,6 +94,18 @@ function inEscrowSnapshot(id: string, expiresAt = "2026-07-10T00:00:00.000Z"): R
   r.applyKyc(passKyc, T0);
   r.confirm(T0);
   r.markPayoutFailed(PRINCIPAL_SETTLED_REFUND_MANUAL, T0);
+  return r.snapshot;
+}
+
+/**
+ * La ventana del navegador cerrado en el peor momento: la persona firmó la autorización del depósito
+ * y NADIE registró el desenlace. Son los hasta 15 s del timeout del settle más el broadcast. No hay
+ * `principalTx` (markPrincipalIn nunca corrió) ni `failureReason`: lo único que hay es `confirmed`.
+ */
+function confirmedSnapshot(id: string, expiresAt = "2026-07-10T00:00:00.000Z"): RemittanceState {
+  const r = quotedRemittance(id, expiresAt);
+  r.applyKyc(passKyc, T0);
+  r.confirm(T0);
   return r.snapshot;
 }
 
@@ -199,6 +211,65 @@ describe("una remesa con fondos en el escrow siempre es alcanzable desde la inte
     const after = (await repo.get("rem-1"))?.snapshot;
     expect(after?.failureReason).toBe(PRINCIPAL_SETTLED_REFUND_MANUAL);
     expect(after && escrowFundsKnowledge(after)).not.toBe("in-escrow");
+  });
+
+  // 🔴 EL CALLEJÓN SIN SALIDA QUE ESTA HU CIERRA. `escrowFundsKnowledge` clasifica `confirmed` como
+  // `unverified` (flow-vm.ts:201), así que el historial SÍ lo listaba, SÍ decía "No comprobamos si tus
+  // USDC siguen en el escrow" y SÍ ofrecía "Ver seguimiento". Del otro lado de esa puerta no había
+  // ningún botón: `refundeable` no incluía `confirmed`. La persona leía que no sabíamos dónde estaba
+  // su plata y no tenía cómo pedir que volviera.
+  it("una remesa `confirmed` (navegador cerrado tras firmar) llega hasta 'Recuperar fondos'", async () => {
+    const { repo, gateway, container } = await seededFlow([confirmedSnapshot("rem-1")]);
+    render(<RemittanceFlow container={container} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    expect(await screen.findByText(/Tus envíos/)).toBeInTheDocument();
+    // La promesa que el historial ya hacía y el seguimiento no cumplía.
+    expect(screen.getByText(/No comprobamos si tus USDC siguen en el escrow/)).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole("button", { name: /Ver seguimiento/ }));
+    const recuperar = await screen.findByRole("button", { name: /Recuperar fondos/ });
+    expect(recuperar).toBeEnabled();
+    fireEvent.click(recuperar);
+    await waitFor(() => expect(gateway.calls).toHaveLength(1));
+    expect(gateway.calls[0]).toEqual({ remittanceId: "rem-1", sender: FAKE_SOLANA_BENEFICIARY });
+    await waitFor(async () => expect((await repo.get("rem-1"))?.status).toBe("refunded"));
+  });
+
+  // El copy de ese estado NO se inventó: es el mismo que ya existía para `PRINCIPAL_STATE_UNKNOWN`,
+  // porque la duda es la misma (no sabemos si entró) y la salida es la misma (se pide y decide la
+  // cadena). Este test compara las dos pantallas: si alguien reescribe una sola, se pone rojo.
+  it("el seguimiento de `confirmed` dice lo mismo que el historial y ofrece la misma salida", async () => {
+    const { container } = await seededFlow([confirmedSnapshot("rem-1")]);
+    render(<RemittanceFlow container={container} />);
+    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Ver seguimiento/ }));
+    await screen.findByRole("button", { name: /Recuperar fondos/ });
+
+    // (a) qué sabemos: la MISMA frase que el historial (vía escrowKnowledgeCopy/escrowFundsKnowledge).
+    expect(
+      screen.getByText(escrowKnowledgeCopy(escrowFundsKnowledge(confirmedSnapshot("x")))),
+    ).toBeInTheDocument();
+    // (b) qué hacer: la frase reusada del caso `principalUnknown`, sin prometer que hay fondos.
+    expect(
+      screen.getByText(/si están en el escrow, vuelven a tu wallet; si nunca salieron, no hay nada que devolver/),
+    ).toBeInTheDocument();
+  });
+
+  // Sin wallet conectada no hay botón, y entonces el texto NO puede mandar a apretar uno que no está.
+  it("sin wallet conectada, `confirmed` manda a reconectar en vez de a un botón inexistente", () => {
+    render(
+      <TrackView
+        rem={confirmedSnapshot("rem-1")}
+        recover={undefined}
+        sender={null}
+        onRecovered={() => {}}
+      />,
+    );
+
+    expect(screen.getByText(/conectá la misma wallet con la que enviaste/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Recuperar fondos/ })).toBeNull();
+    expect(screen.queryByText(/Pedí que vuelvan con el botón/)).toBeNull();
   });
 
   it("lista TODAS las remesas del dueño, no sólo la última", async () => {

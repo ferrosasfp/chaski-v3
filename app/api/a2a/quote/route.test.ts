@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { FX_DIRECT_AGENT_SLUG } from "../../../../src/infrastructure/a2a/gateway-client";
 import { POST } from "./route";
 
 const BASE = "https://agents.example.com";
@@ -46,6 +47,24 @@ describe("POST /api/a2a/quote — proxy server-only a remit-corridor-fx (WKH-186
     const raw = await res.text();
     expect(raw).not.toContain(BASE);
     expect(JSON.parse(raw)).toEqual({ result: validResult });
+  });
+
+  // El test de arriba clava el VALOR del slug; éste clava el CABLEADO. Son cosas distintas: el preview
+  // de `/api/a2a/plan` dice "hoy corre X" leyendo `FX_DIRECT_AGENT_SLUG`, y esa afirmación sólo vale si
+  // ESTA route llama a esa misma constante. Cuando eran dos literales sueltos, la pantalla terminó
+  // nombrando `remit-corridor-fx-solana` mientras acá se llamaba a `remit-corridor-fx`.
+  it("la URL sale de la MISMA constante que el preview publica como 'quién corre hoy'", async () => {
+    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
+    const urls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        urls.push(String(url));
+        return { ok: true, json: async () => ({ result: validResult }) };
+      }),
+    );
+    await POST(req({ amountUsd: 400, destCountry: "PE", payoutMethod: "yape" }));
+    expect(urls).toEqual([`${BASE}/api/agents/${FX_DIRECT_AGENT_SLUG}/invoke`]);
   });
 
   it("agente !ok → 502 a2a_upstream_error (nunca 500)", async () => {

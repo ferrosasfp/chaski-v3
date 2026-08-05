@@ -42,7 +42,11 @@ import { solanaWalletBridge } from "./solana-wallet-bridge";
 
 // HU-SOL-20/AC-2: tope de candidatos que el fallback sondea on-chain. Los ids vienen ordenados por
 // created_at desc, así que 10 cubre de sobra un escrow reciente perdido y acota a UNA sola llamada RPC.
-const MAX_RECOVERY_CANDIDATES = 10;
+//
+// Se EXPORTA porque el copy de "no encontramos nada" tiene que decir sobre CUÁNTOS envíos miramos, y
+// escribir un 10 a mano al lado de la constante que lo decide es exactamente cómo nació la hora
+// inventada que `RefundWindowNote` ya tuvo que arreglar una vez.
+export const MAX_RECOVERY_CANDIDATES = 10;
 
 /**
  * Ventana de custodia que este cliente le pide al escrow: 2 horas.

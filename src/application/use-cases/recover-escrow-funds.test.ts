@@ -16,7 +16,9 @@ import {
 } from "../../test-support/fakes";
 import { ESCROW_REFUNDED_BY_SENDER, RecoverEscrowFunds } from "./recover-escrow-funds";
 
-function snapshotAt(stage: "principal_in" | "payout_submitted" | "payout_failed" | "settled"): RemittanceState {
+function snapshotAt(
+  stage: "confirmed" | "principal_in" | "payout_submitted" | "payout_failed" | "settled",
+): RemittanceState {
   const r = Remittance.create("rem-1", beneficiary(), Money.of(400, "USDC"), T0);
   r.attachQuote(
     {
@@ -44,6 +46,9 @@ function snapshotAt(stage: "principal_in" | "payout_submitted" | "payout_failed"
     T0,
   );
   r.confirm(T0);
+  // La ventana que este use-case no cubría: firmamos la autorización del depósito y nadie registró el
+  // desenlace. Sin `markPrincipalIn` no hay `principalTx`, que es justo por lo que no sabemos nada.
+  if (stage === "confirmed") return r.snapshot;
   r.markPrincipalIn("solana-sig", T0);
   if (stage === "principal_in") return r.snapshot;
   if (stage === "payout_failed") {
@@ -83,6 +88,22 @@ describe("RecoverEscrowFunds — el refund exitoso deja rastro", () => {
     expect(r.snapshot.refundTx).toBe(FAKE_SOLANA_SIGNATURE);
     const saved = await repo.get("rem-1");
     expect(saved?.status).toBe("refunded"); // lo que sobrevive a la recarga
+    expect(saved?.snapshot.refundTx).toBe(FAKE_SOLANA_SIGNATURE);
+    expect(saved?.snapshot.failureReason).toBe(ESCROW_REFUNDED_BY_SENDER);
+  });
+
+  // El estado que quedaba afuera de RECOVERABLE, y el que deja a alguien sin salida: cerró el
+  // navegador entre la firma y el registro del desenlace. Sus USDC pueden estar en el vault y el
+  // use-case cortaba antes de preguntarle a la cadena.
+  it("desde confirmed: llega a la cadena y persiste refunded (la ventana del navegador cerrado)", async () => {
+    const { repo, gateway, uc } = await setup("confirmed");
+
+    const res = await uc.execute(input);
+
+    expect(gateway.calls).toHaveLength(1); // preguntó: ANTES cortaba con refund_not_available
+    expect(res.confirmation).toBe("confirmed");
+    const saved = await repo.get("rem-1");
+    expect(saved?.status).toBe("refunded"); // confirmed → payout_failed → refunded, las dos en la FSM
     expect(saved?.snapshot.refundTx).toBe(FAKE_SOLANA_SIGNATURE);
     expect(saved?.snapshot.failureReason).toBe(ESCROW_REFUNDED_BY_SENDER);
   });

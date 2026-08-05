@@ -986,6 +986,20 @@ function NoWalletHere() {
   );
 }
 
+/**
+ * Las dos frases que acompañan al botón cuando NO SABEMOS si el depósito entró. Se pide, y decide la
+ * cadena.
+ *
+ * Viven en constantes y no en un literal por pantalla porque ahora las usan DOS estados distintos, y
+ * por el mismo motivo: `payout_failed` con `PRINCIPAL_STATE_UNKNOWN` (perdimos la respuesta del settle
+ * y la cadena tampoco contestó) y `confirmed` (la persona firmó y nadie registró el desenlace). La
+ * duda es la misma y la salida es la misma. Dos literales idénticos es exactamente cómo uno se
+ * corrige y el otro se queda viejo.
+ */
+const RECOVERY_ASK_WHEN_UNKNOWN =
+  "Pedí que vuelvan con el botón de acá abajo: si están en el escrow, vuelven a tu wallet; si nunca salieron, no hay nada que devolver.";
+const RECOVERY_NEEDS_WALLET = "Para recuperarlos, conectá la misma wallet con la que enviaste.";
+
 const TRACK_STEPS: { key: RemittanceState["status"][]; label: string; manual?: boolean }[] = [
   { key: ["confirmed", "principal_in"], label: "Fondos en camino" },
   // "Pagando a tu familiar" decía más de lo que pasa: en payout_submitted la orden con el partner
@@ -1028,8 +1042,17 @@ export function TrackView({
   // `status≠Deposited` o `now<deadline`, ANTES de firmar y sin gastar comisión). Preguntarle a la
   // cadena es barato; inventar una hora no.
   //
-  // Refundeable: el deposit entró y aún no se recuperó/entregó (escrow potencialmente Deposited on-chain).
+  // Refundeable: el deposit puede haber entrado y aún no se recuperó/entregó (escrow potencialmente
+  // Deposited on-chain).
+  //
+  // ⚠️ `confirmed` NO ESTABA ACÁ, y era el agujero: es el estado en el que la persona ya firmó la
+  // autorización y nadie registró el desenlace (los hasta 15 s del timeout del settle más el
+  // broadcast). El historial SÍ lo listaba y SÍ lo declaraba abrible, porque `escrowFundsKnowledge` lo
+  // clasifica como `unverified` (flow-vm.ts:201): la persona leía "No comprobamos si tus USDC siguen
+  // en el escrow", tocaba "Ver seguimiento", y aterrizaba en una pantalla sin ninguna acción. Sus USDC
+  // pueden estar en el vault.
   const refundeable =
+    rem.status === "confirmed" ||
     rem.status === "principal_in" ||
     rem.status === "payout_submitted" ||
     rem.status === "payout_failed";
@@ -1115,15 +1138,10 @@ export function TrackView({
                   : humanError("payout_failed")}
         </p>
         {(principalUnknown || principalInEscrow) && recoveryOffered ? (
-          <p className="text-sm text-stone">
-            Pedí que vuelvan con el botón de acá abajo: si están en el escrow, vuelven a tu wallet; si
-            nunca salieron, no hay nada que devolver.
-          </p>
+          <p className="text-sm text-stone">{RECOVERY_ASK_WHEN_UNKNOWN}</p>
         ) : null}
         {(principalUnknown || principalInEscrow) && !recoveryOffered ? (
-          <p className="text-sm text-stone">
-            Para recuperarlos, conectá la misma wallet con la que enviaste.
-          </p>
+          <p className="text-sm text-stone">{RECOVERY_NEEDS_WALLET}</p>
         ) : null}
         {/* Sólo se muestra un comprobante que EXISTE. El adapter ledger-only devuelve null y esta
             línea no se renderiza: un identificador fabricado al lado de la palabra reembolso es peor
@@ -1156,6 +1174,11 @@ export function TrackView({
   // una persona a mano. Un encabezado que late y dice "en camino" es una animación afirmando lo que
   // el sistema no hace.
   const waitingOnPerson = rem.status === "payout_submitted";
+  // `confirmed` = firmamos la autorización del depósito y nunca registramos el desenlace. Es la MISMA
+  // duda que `PRINCIPAL_STATE_UNKNOWN` unas líneas más arriba, así que se dice con las MISMAS frases:
+  // qué sabemos (la del historial, derivada de `escrowFundsKnowledge`, para que las dos pantallas no
+  // cuenten dos historias) y qué se puede hacer.
+  const depositUnknown = rem.status === "confirmed";
   return (
     <Card className="space-y-4">
       <div className="flex items-center gap-2.5">
@@ -1205,6 +1228,14 @@ export function TrackView({
         })}
       </ol>
       {waitingOnPerson ? <PayoutInProgress rem={rem} /> : null}
+      {depositUnknown ? (
+        <div className="space-y-1">
+          <p className="text-sm text-stone">{escrowKnowledgeCopy(escrowFundsKnowledge(rem))}</p>
+          <p className="text-sm text-stone">
+            {showRefund ? RECOVERY_ASK_WHEN_UNKNOWN : RECOVERY_NEEDS_WALLET}
+          </p>
+        </div>
+      ) : null}
       {showRefund && recover && sender ? (
         <div className="space-y-2">
           <RefundAction

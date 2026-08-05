@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  FX_DIRECT_AGENT_SLUG,
+  PAYOUT_DIRECT_AGENT_SLUG,
+} from "../../../../src/infrastructure/a2a/gateway-client";
 import { GET } from "./route";
 
 const BASE = "https://gateway.test";
@@ -110,5 +114,50 @@ describe("GET /api/a2a/plan — el preview de quién atiende la remesa", () => {
     stubCatalog({ "remittance-fx-quote": [card("fx", 0.03)] });
     const on = (await (await GET()).json()) as { steps: Array<{ transport: string }> };
     expect(on.steps.every((s) => s.transport === "gateway")).toBe(true);
+  });
+});
+
+// ── Quién corre hoy, no sólo por dónde ───────────────────────────────────────────────────────────
+//
+// 🔴 EL BUG MEDIDO (producción, 2026-08-05): este endpoint devolvía `remit-corridor-fx-solana` y
+// `remit-cashout-payout-solana`, y la tarjeta los mostraba con "hoy se llama directo". Pero
+// `POST /api/a2a/quote` contestaba `result.slug = "remit-corridor-fx"`, y `payout/prepare` llama a
+// `remit-cashout-payout`. Son slugs distintos: la pantalla nombraba a quien NO corre.
+describe("GET /api/a2a/plan — quién corre hoy cada paso", () => {
+  it("en punto-a-punto declara el slug REAL que las rutas invocan, no el del catálogo", async () => {
+    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", BASE);
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "fallback");
+    // Exactamente lo que devuelve el catálogo en vivo, con el sufijo `-solana`.
+    stubCatalog({
+      "remittance-fx-quote": [card("remit-corridor-fx-solana", 0.03)],
+      "remittance-payout": [card("remit-cashout-payout-solana", 0.03)],
+    });
+
+    const body = (await (await GET()).json()) as {
+      steps: Array<{ agent: { id: string } | null; runsTodayAgentId: string | null }>;
+    };
+
+    // El slug sale de la MISMA constante que el `fetch` de cada route usa.
+    expect(body.steps[0]?.runsTodayAgentId).toBe(FX_DIRECT_AGENT_SLUG);
+    expect(body.steps[1]?.runsTodayAgentId).toBe(PAYOUT_DIRECT_AGENT_SLUG);
+    // Y la divergencia, que es el hecho que la pantalla tiene que poder decir.
+    expect(body.steps[0]?.runsTodayAgentId).not.toBe(body.steps[0]?.agent?.id);
+    expect(body.steps[1]?.runsTodayAgentId).not.toBe(body.steps[1]?.agent?.id);
+  });
+
+  // En el carril del gateway NO se llama a ningún slug: se pide la capacidad y el gateway resuelve al
+  // ejecutar. Rellenar el campo con el `agent.id` sería el mismo bug al revés.
+  it("en el carril del gateway NO nombra a nadie: ahí se elige al ejecutar", async () => {
+    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", BASE);
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gateway");
+    stubCatalog({
+      "remittance-fx-quote": [card("remit-corridor-fx-solana", 0.03)],
+      "remittance-payout": [card("remit-cashout-payout-solana", 0.03)],
+    });
+
+    const body = (await (await GET()).json()) as {
+      steps: Array<{ runsTodayAgentId: string | null }>;
+    };
+    expect(body.steps.every((s) => s.runsTodayAgentId === null)).toBe(true);
   });
 });

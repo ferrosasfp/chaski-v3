@@ -1572,12 +1572,21 @@ function PayoutInProgress({ rem }: { rem: RemittanceState }) {
 //    más fácil de acá.
 //  · La identidad NO aparece como agente: hoy es una integración directa con el proveedor. La
 //    tercera fila sería la más vendible y es la que no existe.
+//
+// 🔴 Y EL QUE FALTABA: se dice QUIÉN corre, no sólo por dónde. Medido contra producción el
+// 2026-08-05, `GET /api/a2a/plan` devolvía `remit-corridor-fx-solana` y `remit-cashout-payout-solana`
+// y esta tarjeta los mostraba con "hoy se llama directo", mientras `POST /api/a2a/quote` contestaba
+// `result.slug = "remit-corridor-fx"`. Son slugs distintos: la pantalla nombraba a quien NO corre y
+// encima afirmaba que ese era el que se llamaba directo. Cuando el catálogo y la ejecución divergen,
+// esta tarjeta lo DICE, no elige uno de los dos en silencio.
 function AgentPlanCard() {
   type Step = {
     capability: string;
     label: string;
     agent: { id: string; description: string; priceUsdc: number | null; verified: boolean; registry: string } | null;
     transport: "gateway" | "punto-a-punto";
+    /** Quién corre hoy cuando se sabe. `null` en el carril del gateway: ahí se elige al ejecutar. */
+    runsTodayAgentId?: string | null;
   };
   const [plan, setPlan] = useState<{ steps: Step[]; totalUsdc: number } | null>(null);
   const [failed, setFailed] = useState(false);
@@ -1633,11 +1642,17 @@ function AgentPlanCard() {
               </span>
             </div>
             {s.agent ? (
-              <p className="mt-0.5 text-xs text-stone">
-                {s.agent.id}
-                {s.agent.verified ? " · verificado" : " · sin verificar"}
-                {s.transport === "gateway" ? " · elegido por capacidad" : " · hoy se llama directo"}
-              </p>
+              <>
+                <p className="mt-0.5 text-xs text-stone">
+                  El catálogo ofrece a {s.agent.id}
+                  {s.agent.verified ? " · verificado" : " · sin verificar"}
+                </p>
+                <AgentRunsToday
+                  agentId={s.agent.id}
+                  transport={s.transport}
+                  runsTodayAgentId={s.runsTodayAgentId}
+                />
+              </>
             ) : (
               <p className="mt-0.5 text-xs text-stone">
                 El catálogo no ofrece a nadie para esta capacidad ahora mismo.
@@ -1654,6 +1669,53 @@ function AgentPlanCard() {
         Tu identidad no pasa por el catálogo: se verifica con el proveedor directo.
       </p>
     </Card>
+  );
+}
+
+/**
+ * La línea que dice QUIÉN corre hoy este paso. Cuatro casos, y ninguno colapsa en otro.
+ *
+ * · Carril del gateway: no se llama a ningún slug, se pide la capacidad y el gateway resuelve AL
+ *   EJECUTAR. El agente que el catálogo lista primero hoy puede no ser el que corra, así que la línea
+ *   no lo nombra: sería inventar una certeza.
+ * · El servidor no mandó el campo (respuesta de una versión anterior, durante un deploy): no sabemos,
+ *   y se dice. Callar dejaría la fila leyéndose como si el del catálogo fuera el que corre, que es
+ *   exactamente el bug.
+ * · Coincide con el del catálogo: se dice que corre ese, y punto.
+ * · NO coincide: el caso que esta HU vino a arreglar. Se nombran LOS DOS y se dice cuál es cuál.
+ *   Elegir uno en silencio, en cualquiera de las dos direcciones, es una pantalla que mide una cosa y
+ *   afirma otra.
+ */
+function AgentRunsToday({
+  agentId,
+  transport,
+  runsTodayAgentId,
+}: {
+  agentId: string;
+  transport: "gateway" | "punto-a-punto";
+  runsTodayAgentId?: string | null;
+}) {
+  if (transport === "gateway") {
+    return (
+      <p className="mt-0.5 text-xs text-stone">
+        Hoy este paso corre por el gateway, que elige al ejecutar: puede tocarle otro.
+      </p>
+    );
+  }
+  if (typeof runsTodayAgentId !== "string" || !runsTodayAgentId) {
+    return (
+      <p className="mt-0.5 text-xs text-stone">
+        No sabemos a qué agente se llama hoy en este paso.
+      </p>
+    );
+  }
+  if (runsTodayAgentId === agentId) {
+    return <p className="mt-0.5 text-xs text-stone">Hoy se llama directo a {agentId}.</p>;
+  }
+  return (
+    <p className="mt-0.5 text-xs font-medium text-cochineal-ink">
+      Hoy no corre ese: la app llama directo a {runsTodayAgentId}, que está cableado en el código.
+    </p>
   );
 }
 

@@ -333,6 +333,8 @@ describe("la tarjeta de quién atiende el envío", () => {
           registry: "wasiai",
         },
         transport: "punto-a-punto" as const,
+        // Quién corre hoy, dicho por el server. Acá coincide con el del catálogo.
+        runsTodayAgentId: "remit-corridor-fx",
       },
     ];
     vi.stubGlobal(
@@ -345,7 +347,7 @@ describe("la tarjeta de quién atiende el envío", () => {
       expect(await screen.findByText(/Chaski pide capacidades, no empresas/)).toBeInTheDocument();
       expect(screen.queryByText(/Ninguno de estos pasos está atado a una empresa fija/)).toBeNull();
       // La fila sigue diciendo la verdad incómoda que la frase de arriba negaba.
-      expect(screen.getByText(/hoy se llama directo/)).toBeInTheDocument();
+      expect(screen.getByText(/Hoy se llama directo a remit-corridor-fx/)).toBeInTheDocument();
     } finally {
       vi.unstubAllGlobals();
     }

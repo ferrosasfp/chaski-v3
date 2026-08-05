@@ -10,6 +10,7 @@ import {
 } from "../../../../src/application/agent-rejections";
 import { isParseableIso } from "../../../../src/domain/remittance";
 import {
+  FX_DIRECT_AGENT_SLUG,
   FX_MIN_REPUTATION,
   FX_QUOTE_CAPABILITY,
   logGatewayFailure,
@@ -139,7 +140,9 @@ export async function POST(req: Request): Promise<Response> {
   const BASE = process.env.REMIT_AGENTS_BASE_URL; // server-only (CD-9), leído en runtime
   if (!BASE) return NextResponse.json({ error: "a2a_not_configured" }, { status: 501 });
   try {
-    const res = await fetch(`${BASE}/api/agents/remit-corridor-fx/invoke`, {
+    // El slug sale de la MISMA constante que el preview muestra como "quién corre hoy": eran dos
+    // literales sin relación, y la pantalla terminó nombrando a un agente distinto del que se llama.
+    const res = await fetch(`${BASE}/api/agents/${FX_DIRECT_AGENT_SLUG}/invoke`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),

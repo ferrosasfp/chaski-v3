@@ -272,9 +272,11 @@ describe("POST /api/webhooks/transfi (WKH-210)", () => {
     expect(ledger.store.get("id-1")?.status).toBe("settled");
   });
 
-  // CONVERTIDO (WKH-325): una fila 'prepared' significa que el settle nunca aterrizó ⇒ NUNCA hubo un
-  // depósito nuestro. Es el desenlace en el que el operador no tiene nada que hacer, y por eso lleva su
-  // propio literal en vez del enum plano que compartía con los otros dos.
+  // CONVERTIDO (WKH-325): una fila 'prepared' significa que el settle NO dejó registro ⇒ el ledger no
+  // sabe de ningún depósito nuestro. NO prueba que no lo haya habido: un write best-effort que falla de
+  // forma transitoria deja la fila acá y sólo emite un console.warn (residuo #5 del auto-blindaje). La
+  // clasificación es state-based y por eso lleva su propio literal en vez del enum plano que compartía
+  // con los otros dos.
   it("R1/T-2a: fund_failed sobre una fila 'prepared' ⇒ failed con transfi_fund_failed_no_principal", async () => {
     const ledger = ledgerWith("p-1", "prepared");
     getLedgerMock.mockReturnValue(ledger);

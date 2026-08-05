@@ -5,7 +5,10 @@
 // 'submitted', es porque el proveedor confirmó `asset_deposited`. Esa inferencia es correcta HOY
 // porque `recordWebhookOutcome` es el ÚNICO escritor de 'submitted' en producción. No es una
 // propiedad del tipo: es un hecho del árbol, y un hecho del árbol se degrada sin que nada se ponga
-// rojo. Estos dos tests son lo que hace que degradarlo cueste un rojo.
+// rojo. Estos dos tests son lo que hace que el caso OBVIO de degradarlo cueste un rojo — el caso
+// obvio y nada más. El barrido es TEXTUAL: un alias de tres líneas lo esquiva, y no prueba ausencia.
+// El límite está enunciado entero, sin eufemismos, en el comentario de T-1d (más abajo); este
+// encabezado NO lo hereda por estar arriba, así que tampoco promete más que él.
 //
 // LA EXCLUSIÓN ES POR RUTA EXACTA del propio archivo, NUNCA por un glob `*.test.ts`: excluir por glob
 // cegaría el barrido justo donde más código hay. Se saltean `*.test.*` y `test-support/` porque un

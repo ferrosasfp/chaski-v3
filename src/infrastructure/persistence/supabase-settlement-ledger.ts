@@ -50,8 +50,12 @@ const STALE_STATUSES: readonly SettlementLedgerStatus[] = [
  *  antes de que el settle aterrice, o sin que aterrice nunca) pero NO es re-procesable por el
  *  reconcile. Compartir la constante era el bug: el webhook heredaba el conjunto del reconcile y
  *  dejaba las 'prepared' congeladas para siempre. Sigue sin incluir estados terminales
- *  (settled/failed) ni manual_review ⇒ nunca degrada ni reclasifica (DT-2b). */
-const WEBHOOK_UPDATABLE_STATUSES: readonly SettlementLedgerStatus[] = [
+ *  (settled/failed) ni manual_review ⇒ nunca degrada ni reclasifica (DT-2b).
+ *  EXPORTADA a propósito (WKH-325/MNR-2): el invariante "la unión de WEBHOOK_FAILURE_CLASSES es
+ *  exactamente este conjunto" lo asserta T-INV, y antes lo comparaba contra un array escrito a mano
+ *  que no tenía forma de enterarse si ESTA constante cambiaba. El único consumidor de producción
+ *  sigue siendo este archivo. */
+export const WEBHOOK_UPDATABLE_STATUSES: readonly SettlementLedgerStatus[] = [
   ...STALE_STATUSES,
   "prepared",
 ];

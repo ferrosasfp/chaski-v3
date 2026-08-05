@@ -19,7 +19,7 @@
 import { NextResponse } from "next/server";
 import type { WebhookOutcome } from "../../../../src/application/ports";
 import { getSettlementLedger } from "../../../../src/infrastructure/persistence/supabase-settlement-ledger";
-import { LEDGER_ALERT_PREFIX } from "../../../../src/infrastructure/persistence/ledger-alert";
+import { logLedgerAlert } from "../../../../src/infrastructure/persistence/ledger-alert";
 import { claimWebhookEventOnce } from "../../../../src/infrastructure/webhooks/webhook-event-store";
 import {
   extractEventId,
@@ -99,7 +99,9 @@ export async function POST(req: Request): Promise<Response> {
   //     UNA sola alerta, y una re-entrega produce CERO (las filas ya están en 'failed', fuera de todos
   //     los conjuntos). CD-7: sólo el payoutId, nada más.
   if (outcome.classified && outcome.failures.includes("principal_released")) {
-    console.error(`${LEDGER_ALERT_PREFIX} transfi_fund_failed_principal_released`, { payoutId });
+    // Vía logLedgerAlert, no un console.error con el prefijo pegado a mano: el formato de la línea
+    // sobre la que alerta producción tiene UN solo emisor (WKH-325/MNR-6).
+    logLedgerAlert("transfi_fund_failed_principal_released", { payoutId });
   }
 
   // 9. Claim best-effort DESPUÉS del éxito de la mutación (CD-4 re-encuadrado). Solo dedup/telemetría:

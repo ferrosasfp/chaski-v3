@@ -7,6 +7,7 @@ import { PublicKey } from "@solana/web3.js";
 import {
   CHAIN_ID_NOT_APPLICABLE,
   SupabaseSettlementLedger,
+  WEBHOOK_UPDATABLE_STATUSES,
   getSettlementLedger,
 } from "./supabase-settlement-ledger";
 import { __resetSupabaseClient, getSupabaseServerClient } from "./supabase-server";
@@ -247,6 +248,9 @@ function vmNetIdViolation(row: Record<string, unknown>): DbViolation | null {
 //   · remittance_settlements_vm_netid_chk / _vm_chk  → 23514
 //   · NOT NULL de las columnas obligatorias          → 23502
 //   · defaults de columna (vm='evm', attempts=0, …)
+//   · atomicidad del UPDATE multi-fila            → o se escriben TODAS las filas que matchean, o
+//     ninguna (WKH-325/MNR-5: modelarlo fila-por-fila dejaba la primera escrita cuando la segunda
+//     violaba la unique, que es un estado que Postgres nunca deja ver).
 // Verbos soportados: upsert(onConflict/ignoreDuplicates), update(+select devolviendo las filas
 // mutadas), select(+count exact), eq, in, lt, order, limit, maybeSingle, single.
 const NOT_NULL_COLUMNS = [
@@ -306,6 +310,27 @@ function makeTableClient(seed: Record<string, unknown>[] = []): {
         return { code: "23505", constraint: "uq_remit_settle_txhash", message: "duplicate tx_hash" };
       }
       if (r.idempotency_key === candidate.idempotency_key) {
+        return { code: "23505", constraint: "uq_remit_settle_idem", message: "duplicate idem" };
+      }
+    }
+    return null;
+  };
+  /** Unicidad evaluada sobre la imagen POSTERIOR del statement completo (todas las filas que el
+   *  UPDATE matchea, ya aplicadas). Postgres chequea el índice único al cierre del statement, así que
+   *  dos filas del MISMO UPDATE que aterrizan en el mismo tx_hash colisionan ENTRE SÍ. El modelo
+   *  fila-por-fila sólo veía esa colisión de rebote (porque ya había escrito la primera), y por eso
+   *  no podía distinguirse de un statement que escribe la primera y aborta en la segunda. */
+  const uniqueViolationIn = (
+    image: Record<string, unknown>[],
+    selfIdx: number,
+    next: Record<string, unknown>,
+  ): DbViolation | null => {
+    for (const [j, other] of image.entries()) {
+      if (j === selfIdx) continue;
+      if (other.tx_hash === next.tx_hash) {
+        return { code: "23505", constraint: "uq_remit_settle_txhash", message: "duplicate tx_hash" };
+      }
+      if (other.idempotency_key === next.idempotency_key) {
         return { code: "23505", constraint: "uq_remit_settle_idem", message: "duplicate idem" };
       }
     }
@@ -410,19 +435,24 @@ function makeTableClient(seed: Record<string, unknown>[] = []): {
           return resolve({ data: null, error: null });
         }
         if (mode === "update" && pending) {
-          const updated: Record<string, unknown>[] = [];
-          for (const r of matched) {
-            const next = { ...r, ...pending };
-            const violation = rowViolation(next) ?? uniqueViolation(next, r.id);
+          // ATÓMICO. Un UPDATE multi-fila es UN solo statement: si CUALQUIERA de las filas que
+          // matchea viola una restricción, el statement entero se revierte y NINGUNA queda escrita.
+          // El modelo anterior asignaba fila por fila y abortaba a mitad, o sea que dejaba la primera
+          // mutada — un estado que la DB real nunca produce, y sobre el que un test podía afirmar.
+          // Se valida TODA la imagen posterior antes de tocar una sola fila.
+          const matchedIds = new Set(matched.map((r) => r.id));
+          const image = rows.map((r) => (matchedIds.has(r.id) ? { ...r, ...pending } : { ...r }));
+          for (const [i, next] of image.entries()) {
+            if (!matchedIds.has(next.id)) continue;
+            const violation = rowViolation(next) ?? uniqueViolationIn(image, i, next);
             if (violation) {
               rejected.push(violation);
-              return resolve({ data: null, error: violation });
+              return resolve({ data: null, error: violation }); // cero mutaciones
             }
-            Object.assign(r, pending);
-            updated.push(r);
           }
+          for (const r of matched) Object.assign(r, pending);
           // PostgREST devuelve las filas mutadas SOLO si se encadenó .select().
-          return resolve({ data: selectCols ? updated.map(project) : null, error: null });
+          return resolve({ data: selectCols ? matched.map(project) : null, error: null });
         }
         let out = [...matched];
         if (orderBy) {
@@ -444,6 +474,24 @@ function makeTableClient(seed: Record<string, unknown>[] = []): {
   };
   return { client: client as unknown as SupabaseClient, rows, rejected };
 }
+/** Envuelve un cliente para que `effect()` corra JUSTO ANTES del n-ésimo `from()`, o sea EN MEDIO de
+ *  dos round-trips de un mismo método. Es la única forma de expresar una carrera contra un doble
+ *  secuencial: sin esto, los guards que protegen la ventana entre dos queries (el CAS del paso 2, el
+ *  `.in(status)` del paso 3) no tienen ningún test que pueda ponerse rojo si se borran. */
+function withRaceBeforeNthFrom(
+  inner: SupabaseClient,
+  nth: number,
+  effect: () => void,
+): SupabaseClient {
+  let n = 0;
+  const from = (table: string): unknown => {
+    n += 1;
+    if (n === nth) effect();
+    return (inner as unknown as { from: (t: string) => unknown }).from(table);
+  };
+  return { from } as unknown as SupabaseClient;
+}
+
 // Direcciones de depósito distintas por fila: si la lectura devolviera la de otra fila (o la de otro
 // sender), el valor devuelto lo delata en vez de coincidir por casualidad.
 const DEPOSIT_A_OLD = "So11111111111111111111111111111111111111112";
@@ -1284,8 +1332,10 @@ describe("WKH-213/R1 — el webhook puede sacar una fila de 'prepared'", () => {
 
   // T-2a (AC-2) — convertido: antes el caller pasaba `error:"transfi_fund_failed"` y el test afirmaba
   // que se persistía tal cual. Ahora el caller no puede pasarlo y el literal lo DERIVA el ledger del
-  // estado previo. Una fila 'prepared' significa que nunca hubo depósito nuestro.
-  it("T-2a (AC-2): 'prepared' + webhook 'failed' ⇒ transfi_fund_failed_no_principal (nunca hubo depósito nuestro)", async () => {
+  // estado previo. Una fila 'prepared' significa que el ledger NO registró un depósito nuestro — NO
+  // que no lo haya habido (residuo #5 del auto-blindaje: un write best-effort que falla de forma
+  // transitoria deja la fila acá). Lo que este test fija es la clasificación, que es state-based.
+  it("T-2a (AC-2): 'prepared' + webhook 'failed' ⇒ transfi_fund_failed_no_principal (sin depósito REGISTRADO)", async () => {
     const { client, rows } = makeTableClient();
     const ledger = new SupabaseSettlementLedger(client);
     await ledger.recordOrderPrepared(prepareInput());
@@ -1469,6 +1519,12 @@ describe("WKH-325 — los tres desenlaces del fund_failed (AC-1/2/3/5/6)", () =>
     expect([...union].sort()).toEqual(
       ["forward_error", "prepared", "principal_in", "submitted"].sort(),
     );
+    // (b2) …y contra la constante REAL, importada de su módulo (WKH-325/MNR-2). El comentario de
+    //      webhook-failure-classes.ts decía que (b) ataba esta constante, y era falso: (b) es un
+    //      literal a mano y WEBHOOK_UPDATABLE_STATUSES ni siquiera estaba exportada, así que un dev
+    //      que la cambiara y greppeara "T-INV" llegaba a un test que se quedaba verde. Los dos
+    //      asserts se necesitan: (b) caza que la unión driftee, (b2) caza que driftee la constante.
+    expect([...union].sort()).toEqual([...WEBHOOK_UPDATABLE_STATUSES].sort());
     // (c) ningún terminal adentro ⇒ AC-6/CD-3 se cumplen por construcción, no por un chequeo extra.
     for (const t of ["failed", "settled", "manual_review"]) expect(union).not.toContain(t);
     // (d) golden literal de los tres arrays, escrito a mano.
@@ -1593,21 +1649,8 @@ describe("WKH-213/R3 — el settle escribe al ledger", () => {
 
   // El CAS del UPDATE (`.eq("status","prepared")`) NO es redundante con el filtro del SELECT: protege
   // la ventana ENTRE los dos round-trips. Un doble secuencial no puede expresar esa carrera, así que
-  // se inyecta el interleaving a mano — sin este test, borrar el CAS no rompe nada y el guard muere.
-  function withRaceBeforeNthFrom(
-    inner: SupabaseClient,
-    nth: number,
-    effect: () => void,
-  ): SupabaseClient {
-    let n = 0;
-    const from = (table: string): unknown => {
-      n += 1;
-      if (n === nth) effect();
-      return (inner as unknown as { from: (t: string) => unknown }).from(table);
-    };
-    return { from } as unknown as SupabaseClient;
-  }
-
+  // se inyecta el interleaving a mano (withRaceBeforeNthFrom, arriba) — sin este test, borrar el CAS
+  // no rompe nada y el guard muere.
   it("CARRERA: si el webhook mueve la fila ENTRE el select y el update, el CAS evita la degradación", async () => {
     const { client, rows } = makeTableClient();
     await new SupabaseSettlementLedger(client).recordOrderPrepared(solPrepared());
@@ -1682,6 +1725,27 @@ describe("WKH-325 — los cinco desenlaces de recordSolanaPrincipalIn (AC-8/AC-9
       ...over,
     };
   }
+  /** Una fila de (remesa, sender) ARBITRARIOS, con su propio placeholder de prepare y su propia
+   *  idempotency_key. Existe porque `solRow()` describe UNA sola remesa de UN solo sender, y con un
+   *  solo actor en la tabla ningún filtro por actor puede fallar: los mutantes que borran
+   *  `.eq("remittance_id", …)` o `.eq("sender_address", …)` de los pasos 3/4/5 sobreviven no porque
+   *  el código esté bien, sino porque el fixture no tiene con qué refutarlos (WKH-325/BLQ-1). */
+  function solRowOf(
+    remittanceId: string,
+    sender: string,
+    quoteId: string,
+    over: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return solRow({
+      remittance_id: remittanceId,
+      sender_address: sender,
+      quote_id: quoteId,
+      idempotency_key: `${remittanceId}:${quoteId}`,
+      tx_hash: `prepared:${remittanceId}:${quoteId}`,
+      payout_id: `transfi-po-${remittanceId}-${quoteId}`,
+      ...over,
+    });
+  }
   const record = (client: SupabaseClient, signature = SIG) =>
     new SupabaseSettlementLedger(client).recordSolanaPrincipalIn({
       remittanceId: "rem-1",
@@ -1753,19 +1817,109 @@ describe("WKH-325 — los cinco desenlaces de recordSolanaPrincipalIn (AC-8/AC-9
   // uq_remit_settle_txhash rechaza y la función TIRA. No se silencia y no rompe el money-path (el
   // try/catch del sponsor lo traga y lo grita). No se "arregla" acá porque arreglarlo pide elegir a
   // cuál de las dos filas pertenece el depósito, y esa elección no tiene fuente verificada.
-  it("T-9c (residuo declarado): dos filas de la misma remesa con placeholder ⇒ tira 23505 en vez de escribir a ciegas", async () => {
-    const { client } = makeTableClient([
-      solRow({ status: "submitted" }),
-      solRow({
-        status: "forward_error",
-        quote_id: "q-2",
-        idempotency_key: "rem-1:q-2",
-        tx_hash: "prepared:rem-1:q-2",
-      }),
+  it("T-9c (residuo declarado): dos filas de la misma remesa con placeholder ⇒ tira 23505 SIN escribir ninguna de las dos", async () => {
+    const { client, rows } = makeTableClient([
+      solRowOf("rem-1", SOL_A, "q-1", { status: "submitted" }),
+      solRowOf("rem-1", SOL_A, "q-2", { status: "forward_error" }),
     ]);
     await expect(record(client)).rejects.toThrow(
       /ledger_record_solana_principal_in_failed:23505/,
     );
+    // "en vez de escribir a ciegas" es la afirmación del nombre, y ahora se verifica: el UPDATE
+    // multi-fila es UN statement, así que la primera fila NO queda con la signature y la segunda
+    // rechazada. Este assert sólo es honesto porque el doble modela esa atomicidad (ver makeTableClient).
+    expect(rows.map((r) => r.tx_hash)).toEqual(["prepared:rem-1:q-1", "prepared:rem-1:q-2"]);
+  });
+
+  // ── Scoping de los pasos 3/4/5: DOS remesas y DOS senders ───────────────────────────────────────
+  // Los cinco tests de arriba usan una tabla con un solo actor, y con un solo actor un filtro por
+  // actor no puede fallar: borrar `.eq("sender_address")` o `.eq("remittance_id")` de los pasos que
+  // esta HU crea dejaba la suite ENTERA en verde (WKH-325/BLQ-1). Acá la tabla tiene siempre una fila
+  // que NO es la del caller, y cada test fija que la escritura toca EXACTAMENTE una fila: la suya.
+  describe("BLQ-1 — cada paso escribe/lee SÓLO la fila de (esta remesa, este sender)", () => {
+    it("T-SCOPE-a: con una fila ajena por remesa y otra por sender, el paso 3 completa UNA sola", async () => {
+      const { client, rows } = makeTableClient([
+        solRowOf("rem-1", SOL_A, "q-1", { status: "submitted" }), // la del caller
+        solRowOf("rem-1", SOL_B, "q-B", { status: "submitted" }), // MISMA remesa, OTRO sender
+        solRowOf("rem-2", SOL_A, "q-2", { status: "submitted" }), // MISMO sender, OTRA remesa
+      ]);
+      expect(await record(client)).toBe("evidence_filled");
+      expect(rows[0]?.tx_hash).toBe(SIG); // la suya SÍ
+      expect(rows[1]?.tx_hash).toBe("prepared:rem-1:q-B"); // la del otro sender, intacta
+      expect(rows[2]?.tx_hash).toBe("prepared:rem-2:q-2"); // la de la otra remesa, intacta
+      expect(ledgerAlerts().length).toBe(1);
+    });
+
+    it("T-SCOPE-b (CD-9/IDOR): sin fila propia, la fila de OTRO sender en la MISMA remesa no se toca ni se cuenta", async () => {
+      const { client, rows } = makeTableClient([
+        solRowOf("rem-1", SOL_B, "q-B", { status: "submitted" }),
+      ]);
+      // El caller es SOL_A y no tiene fila: el desenlace honesto es "no hay NINGÚN registro mío".
+      // Si el paso 3 perdiera su owner-filter, la signature de A caería sobre la fila de B; si lo
+      // perdiera el paso 5, el desenlace pasaría a 'unrecorded_conflict' por evidencia ajena.
+      expect(await record(client)).toBe("unrecorded_no_row");
+      expect(rows[0]?.tx_hash).toBe("prepared:rem-1:q-B");
+      expect(rows[0]?.status).toBe("submitted");
+      expect(ledgerAlerts().length).toBe(1);
+      expect(ledgerAlerts()[0]).toContain("solana_principal_in_no_row");
+    });
+
+    it("T-SCOPE-c: sin fila propia, la fila del MISMO sender en OTRA remesa no recibe esta signature", async () => {
+      const { client, rows } = makeTableClient([
+        solRowOf("rem-2", SOL_A, "q-2", { status: "submitted" }),
+      ]);
+      // Sin el `.eq("remittance_id")` del paso 3 esto no es un tema de permisos: es evidencia
+      // CRUZADA. La signature del settle de rem-1 quedaría escrita como el tx_hash de rem-2, en
+      // silencio y pasando la unique, porque hay exactamente una fila candidata.
+      expect(await record(client)).toBe("unrecorded_no_row");
+      expect(rows[0]?.tx_hash).toBe("prepared:rem-2:q-2");
+      expect(ledgerAlerts().length).toBe(1);
+      expect(ledgerAlerts()[0]).toContain("solana_principal_in_no_row");
+    });
+
+    it("T-SCOPE-d: la firma persistida en la fila de OTRO sender NO cuenta como 'ya registrada'", async () => {
+      const { client } = makeTableClient([
+        solRowOf("rem-1", SOL_B, "q-B", { status: "submitted", tx_hash: SIG }),
+      ]);
+      // El paso 4 ('already_recorded') es el único desenlace SIN alerta. Si leyera filas ajenas, un
+      // depósito sin registro propio se reportaría como registrado y el remittanceId se perdería en
+      // silencio — exactamente el defecto que esta HU vino a cerrar.
+      expect(await record(client)).toBe("unrecorded_no_row");
+      expect(ledgerAlerts().length).toBe(1);
+      expect(ledgerAlerts()[0]).toContain("solana_principal_in_no_row");
+    });
+
+    // MUT-H — el `.in("status", NON_PREPARED_STATUSES)` del paso 3 sólo se distingue de su ausencia
+    // bajo una carrera: un `prepare` que aterriza ENTRE el paso 1 y el paso 3. Sin la carrera el
+    // filtro es equivalente a nada (si el paso 1 no encontró una 'prepared', tampoco la encuentra el
+    // paso 3), y por eso ningún test secuencial puede matarlo.
+    it("T-SCOPE-e (MUT-H): un prepare que aterriza a mitad NO recibe la signature de este settle", async () => {
+      const { client, rows } = makeTableClient([
+        solRowOf("rem-1", SOL_A, "q-1", { status: "prepared" }),
+      ]);
+      // from() #1 = SELECT del paso 1 (encuentra la 'prepared'); #2 = UPDATE del paso 2. Justo antes
+      // del #2 el webhook mueve la fila a 'submitted' (el CAS falla ⇒ 0 filas) y una recotización
+      // inserta una fila 'prepared' NUEVA. El paso 3 tiene que completar la vieja y NO tocar la nueva:
+      // su placeholder es lo que permite que un settle posterior la ascienda.
+      const raced = withRaceBeforeNthFrom(client, 2, () => {
+        for (const r of rows) r.status = "submitted"; // hay exactamente una fila en este punto
+        rows.push({
+          id: "seed-late",
+          ...COLUMN_DEFAULTS,
+          ...solRowOf("rem-1", SOL_A, "q-late", { status: "prepared" }),
+        });
+      });
+      const out = await new SupabaseSettlementLedger(raced).recordSolanaPrincipalIn({
+        remittanceId: "rem-1",
+        senderAddress: SOL_A,
+        signature: SIG,
+      });
+      expect(out).toBe("evidence_filled");
+      expect(rows[0]?.tx_hash).toBe(SIG); // la que perdió la carrera SÍ recibe la evidencia
+      expect(rows[0]?.status).toBe("submitted"); // el paso 3 no lleva `status` en el patch
+      expect(rows[1]?.tx_hash).toBe("prepared:rem-1:q-late"); // la nueva conserva su placeholder
+      expect(rows[1]?.status).toBe("prepared");
+    });
   });
 });
 

@@ -24,6 +24,8 @@
 // NUNCA loguea PII (CD-7): esta tabla no persiste beneficiary/documento, y el mensaje que propaga el
 // ledger es un enum estable `ledger_<op>_failed:<code>`. El `message` se trunca por prolijidad.
 
+import { LEDGER_ALERT_PREFIX } from "./ledger-alert";
+
 /** Alta = mirar hoy (bug nuestro o código sin mapear). Transitoria = infra que se recupera sola. */
 export type LedgerWriteFailureSeverity = "high" | "transient";
 
@@ -89,7 +91,7 @@ export function logLedgerWriteFailure(op: string, err: unknown): void {
   const message = err instanceof Error ? err.message.slice(0, MAX_MESSAGE_CHARS) : "";
   if (severity === "high") {
     // Bug nuestro o código sin mapear: la escritura durable NO ocurrió (evidencia perdida).
-    console.error(`[ledger][ALERT] ${op}_failed`, { code, kind, severity, message });
+    console.error(`${LEDGER_ALERT_PREFIX} ${op}_failed`, { code, kind, severity, message });
     return;
   }
   console.warn(`[ledger] ${op}_failed`, { code, kind, severity, message });

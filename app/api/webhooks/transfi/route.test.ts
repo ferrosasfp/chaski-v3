@@ -150,7 +150,11 @@ describe("POST /api/webhooks/transfi (WKH-210)", () => {
     expect(ledger.store.get("id-1")?.status).toBe("settled");
   });
 
-  it("AC-5/CD-3: fund_failed ⇒ status failed + lastError enum estable; el reason crudo NUNCA llega al ledger", async () => {
+  // T-4a/T-4b del lado del estado de la fila — CONVERTIDO (WKH-325). Antes afirmaba el enum PLANO
+  // `transfi_fund_failed`, que era el mismo para los tres desenlaces. Ahora la fila venía en
+  // 'submitted' (el proveedor confirmó asset_deposited ⇒ el release ya entró), que es el ÚNICO caso
+  // con pérdida del principal, y el literal lo dice.
+  it("AC-5/CD-3: fund_failed sobre 'submitted' ⇒ failed + el literal del desenlace con pérdida; el reason crudo NUNCA llega al ledger", async () => {
     const ledger = ledgerWith("p-1", "submitted");
     getLedgerMock.mockReturnValue(ledger);
     const raw = JSON.stringify({
@@ -162,7 +166,7 @@ describe("POST /api/webhooks/transfi (WKH-210)", () => {
     expect(res.status).toBe(200);
     const row = ledger.store.get("id-1");
     expect(row?.status).toBe("failed");
-    expect(row?.lastError).toBe("transfi_fund_failed"); // enum estable, no el reason
+    expect(row?.lastError).toBe("transfi_fund_failed_principal_released"); // enum estable, no el reason
     expect(row?.lastError).not.toContain("Juan"); // el reason crudo jamás persiste
   });
 
@@ -268,13 +272,18 @@ describe("POST /api/webhooks/transfi (WKH-210)", () => {
     expect(ledger.store.get("id-1")?.status).toBe("settled");
   });
 
-  it("R1: fund_failed sobre una fila 'prepared' ⇒ failed con last_error enum estable", async () => {
+  // CONVERTIDO (WKH-325): una fila 'prepared' significa que el settle NO dejó registro ⇒ el ledger no
+  // sabe de ningún depósito nuestro. NO prueba que no lo haya habido: un write best-effort que falla de
+  // forma transitoria deja la fila acá y sólo emite un console.warn (residuo #5 del auto-blindaje). La
+  // clasificación es state-based y por eso lleva su propio literal en vez del enum plano que compartía
+  // con los otros dos.
+  it("R1/T-2a: fund_failed sobre una fila 'prepared' ⇒ failed con transfi_fund_failed_no_principal", async () => {
     const ledger = ledgerWith("p-1", "prepared");
     getLedgerMock.mockReturnValue(ledger);
     const raw = JSON.stringify({ orderId: "p-1", status: "fund_failed" });
     await POST(makeReq(raw, sign(raw)).req);
     expect(ledger.store.get("id-1")?.status).toBe("failed");
-    expect(ledger.store.get("id-1")?.lastError).toBe("transfi_fund_failed");
+    expect(ledger.store.get("id-1")?.lastError).toBe("transfi_fund_failed_no_principal");
   });
 
   // ── claim best-effort: NO revierte una mutación ya exitosa ──────────────────
@@ -365,5 +374,242 @@ describe("POST /api/webhooks/transfi (WKH-210)", () => {
     const res = await POST(makeReq(raw, sign(raw)).req);
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: "webhook_bad_request" });
+  });
+});
+
+// ── WKH-325 · la alerta del desenlace con pérdida del principal (AC-4) + el golden de AC-7 ──────────
+describe("POST /api/webhooks/transfi — alerta de principal liberado (WKH-325)", () => {
+  let errSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.stubEnv("TRANSFI_WEBHOOK_SECRET", SECRET);
+    getLedgerMock.mockReset();
+    claimMock.mockReset();
+    claimMock.mockResolvedValue({ ok: true });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
+    errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  /** Cuenta las alertas del ledger emitidas hasta acá. LA MISMA función se usa para los casos que
+   *  deben dar 1 y para los que deben dar 0: un `toBe(0)` sobre un spy que nunca capturó nada mediría
+   *  cero y pasaría en verde sin decir nada (CD-13). */
+  const alertCount = (): number =>
+    errSpy.mock.calls.filter((c) => String(c[0]).includes("[ledger][ALERT]")).length;
+
+  /** Segunda fila con el MISMO payout_id: una remesa recotizada genera una fila por quoteId. */
+  function addRow(
+    ledger: FakeSettlementLedger,
+    id: string,
+    payoutId: string,
+    status: SettlementLedgerStatus,
+  ): void {
+    ledger.store.set(id, {
+      id,
+      remittanceId: "rem-1",
+      quoteId: `q-${id}`,
+      idempotencyKey: `rem-1:q-${id}`,
+      txHash: `0xtx-${id}`,
+      chainId: null,
+      senderAddress: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+      receiverAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      valueMinor: "400000000",
+      status,
+      attempts: 0,
+      payoutId,
+      payoutProvenance: null,
+      lastError: null,
+      createdAt: T0,
+      updatedAt: T0,
+    });
+  }
+
+  const fundFailed = (payoutId = "ord-1") =>
+    JSON.stringify({ orderId: payoutId, status: "fund_failed" });
+
+  // T-4a — CD-13: los TRES casos en el MISMO `it`, con el MISMO spy y el MISMO contador. El `0` no
+  // puede pasar por una captura vacía porque el mismo contador produce el `1` cinco líneas antes.
+  it("T-4a (AC-4/CD-13): 'submitted' ⇒ 1 alerta; 'prepared' ⇒ 0; 'principal_in' ⇒ 0", async () => {
+    getLedgerMock.mockReturnValue(ledgerWith("ord-1", "submitted"));
+    await POST(makeReq(fundFailed(), sign(fundFailed())).req);
+    expect(alertCount()).toBe(1);
+
+    errSpy.mockClear();
+    getLedgerMock.mockReturnValue(ledgerWith("ord-1", "prepared"));
+    await POST(makeReq(fundFailed(), sign(fundFailed())).req);
+    expect(alertCount()).toBe(0);
+
+    errSpy.mockClear();
+    getLedgerMock.mockReturnValue(ledgerWith("ord-1", "principal_in"));
+    await POST(makeReq(fundFailed(), sign(fundFailed())).req);
+    expect(alertCount()).toBe(0);
+  });
+
+  it("T-4b (AC-4/CD-7): el evento se llama transfi_fund_failed_principal_released y el 2º argumento es EXACTAMENTE {payoutId}", async () => {
+    getLedgerMock.mockReturnValue(ledgerWith("ord-1", "submitted"));
+    await POST(makeReq(fundFailed(), sign(fundFailed())).req);
+    const call = errSpy.mock.calls.find((c) => String(c[0]).includes("[ledger][ALERT]"));
+    expect(call).toBeDefined();
+    expect(String(call?.[0])).toContain("transfi_fund_failed_principal_released");
+    // Ni montos, ni addresses, ni el status previo, ni conteos de filas: SÓLO el identificador de
+    // correlación. Un `toEqual` sobre el objeto entero es lo que caza una clave de más.
+    expect(call?.[1]).toEqual({ payoutId: "ord-1" });
+  });
+
+  it("T-4c (AC-4): el MISMO body entregado DOS veces ⇒ 1 alerta EN TOTAL (la 2ª no reclasifica nada)", async () => {
+    getLedgerMock.mockReturnValue(ledgerWith("ord-1", "submitted"));
+    await POST(makeReq(fundFailed(), sign(fundFailed())).req);
+    await POST(makeReq(fundFailed(), sign(fundFailed())).req);
+    expect(alertCount()).toBe(1);
+  });
+
+  it("T-4d (DT-6): DOS filas del mismo payoutId ('prepared' + 'submitted') ⇒ dos last_error distintos y UNA sola alerta", async () => {
+    const ledger = ledgerWith("ord-1", "prepared"); // id-1
+    addRow(ledger, "id-2", "ord-1", "submitted");
+    getLedgerMock.mockReturnValue(ledger);
+    await POST(makeReq(fundFailed(), sign(fundFailed())).req);
+    expect(ledger.store.get("id-1")?.lastError).toBe("transfi_fund_failed_no_principal");
+    expect(ledger.store.get("id-2")?.lastError).toBe("transfi_fund_failed_principal_released");
+    expect(alertCount()).toBe(1); // por EVENTO, no por fila
+  });
+
+  it("T-7a (AC-7): la rama no-failed conserva su patch de HOY — un solo update con EXACTAMENTE {status, updated_at}", async () => {
+    for (const provider of ["asset_deposited", "fund_settled"]) {
+      const ledger = ledgerWith("ord-1", "principal_in");
+      const spy = vi.spyOn(ledger, "recordWebhookOutcome");
+      getLedgerMock.mockReturnValue(ledger);
+      const raw = JSON.stringify({ orderId: "ord-1", status: provider });
+      const res = await POST(makeReq(raw, sign(raw)).req);
+      expect(res.status).toBe(200);
+      expect(spy).toHaveBeenCalledTimes(1);
+      // El caller ya NO puede pasar last_error: el parámetro no existe en el port (candado de
+      // compilación). Lo que este test fija es que tampoco aparece por otro lado.
+      expect(Object.keys(spy.mock.calls[0]?.[0] ?? {}).sort()).toEqual(["payoutId", "status"]);
+      expect(ledger.store.get("id-1")?.lastError).toBeNull();
+      expect(await spy.mock.results[0]?.value).toEqual({ classified: false });
+    }
+  });
+
+  // T-7b — GOLDEN de los OCHO caminos de respuesta, con status Y cuerpo exactos. Son ocho, no seis:
+  // el #3 (501 webhook_not_enabled, ledger apagado) es el que quedaba sin vigilar en un golden, y es
+  // justo el que un fail-open parcial convertiría en otra cosa sin que nadie lo viera.
+  it("T-7b (AC-7): los OCHO caminos de respuesta responden [501,401,501,400,200,200,503,200] con sus cuerpos exactos", async () => {
+    const withLedger = (status: SettlementLedgerStatus = "submitted") => {
+      getLedgerMock.mockReturnValue(ledgerWith("ord-1", status));
+    };
+    const body = (o: Record<string, unknown>) => JSON.stringify(o);
+
+    const cases: Array<{
+      name: string;
+      setup: () => void;
+      raw: string;
+      sig: (raw: string) => string | null;
+      status: number;
+      json: unknown;
+    }> = [
+      {
+        name: "1 · sin TRANSFI_WEBHOOK_SECRET",
+        setup: () => {
+          vi.stubEnv("TRANSFI_WEBHOOK_SECRET", "");
+          withLedger();
+        },
+        raw: body({ orderId: "ord-1", status: "fund_settled" }),
+        sig: sign,
+        status: 501,
+        json: { error: "webhook_not_configured" },
+      },
+      {
+        name: "2 · HMAC ausente",
+        setup: withLedger,
+        raw: body({ orderId: "ord-1", status: "fund_settled" }),
+        sig: () => null,
+        status: 401,
+        json: { error: "webhook_unauthorized" },
+      },
+      {
+        name: "3 · ledger apagado (getSettlementLedger ⇒ null)",
+        setup: () => getLedgerMock.mockReturnValue(null),
+        raw: body({ orderId: "ord-1", status: "fund_settled" }),
+        sig: sign,
+        status: 501,
+        json: { error: "webhook_not_enabled" },
+      },
+      {
+        name: "4 · JSON roto",
+        setup: withLedger,
+        raw: "no soy json {",
+        sig: sign,
+        status: 400,
+        json: { error: "webhook_bad_request" },
+      },
+      {
+        name: "5 · sin candidato de payoutId",
+        setup: withLedger,
+        raw: body({ status: "fund_settled" }),
+        sig: sign,
+        status: 200,
+        json: { ok: true, ignored: "no_payout_id" },
+      },
+      {
+        name: "6 · status no mapeado",
+        setup: withLedger,
+        raw: body({ orderId: "ord-1", status: "expired" }),
+        sig: sign,
+        status: 200,
+        json: { ok: true, ignored: "unmapped_status" },
+      },
+      {
+        name: "7 · el ledger tira",
+        setup: () => {
+          const ledger = ledgerWith("ord-1", "submitted");
+          vi.spyOn(ledger, "recordWebhookOutcome").mockRejectedValue(new Error("db down"));
+          getLedgerMock.mockReturnValue(ledger);
+        },
+        raw: body({ orderId: "ord-1", status: "fund_settled" }),
+        sig: sign,
+        status: 503,
+        json: { error: "webhook_unavailable" },
+      },
+      {
+        name: "8 · camino feliz",
+        setup: withLedger,
+        raw: body({ orderId: "ord-1", status: "fund_settled" }),
+        sig: sign,
+        status: 200,
+        json: { ok: true },
+      },
+    ];
+
+    const got: number[] = [];
+    for (const c of cases) {
+      vi.stubEnv("TRANSFI_WEBHOOK_SECRET", SECRET);
+      getLedgerMock.mockReset();
+      c.setup();
+      const res = await POST(makeReq(c.raw, c.sig(c.raw)).req);
+      expect({ name: c.name, status: res.status, json: await res.json() }).toEqual({
+        name: c.name,
+        status: c.status,
+        json: c.json,
+      });
+      got.push(res.status);
+    }
+    expect(got).toEqual([501, 401, 501, 400, 200, 200, 503, 200]);
+  });
+
+  it("T-11a (AC-11): recordWebhookOutcome rechaza ⇒ 503 webhook_unavailable y el claim NO se llama (la key no se quema)", async () => {
+    const ledger = ledgerWith("ord-1", "submitted");
+    vi.spyOn(ledger, "recordWebhookOutcome").mockRejectedValue(new Error("db down"));
+    getLedgerMock.mockReturnValue(ledger);
+    const raw = fundFailed();
+    const res = await POST(makeReq(raw, sign(raw)).req);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "webhook_unavailable" });
+    expect(claimMock).not.toHaveBeenCalled();
+    // Y no alerta: sin desenlace clasificado no hay nada que afirmar.
+    expect(alertCount()).toBe(0);
   });
 });

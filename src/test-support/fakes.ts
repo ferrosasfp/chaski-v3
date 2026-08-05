@@ -45,9 +45,13 @@ import type {
   SolanaSenderSolBalance,
   SolanaSenderSolBalanceProbe,
   SolanaSettlementFailureReason,
+  SolanaPrincipalInOutcome,
   SolanaSettlementGateway,
   WalletPort,
+  WebhookFailureClass,
+  WebhookOutcome,
 } from "../application/ports";
+import { WEBHOOK_FAILURE_CLASSES } from "../infrastructure/persistence/webhook-failure-classes";
 
 export const T0 = "2026-07-09T18:00:00.000Z";
 export const QUOTE_EXPIRES = "2026-07-09T18:10:00.000Z"; // T0 + 10 min
@@ -392,14 +396,17 @@ const STALE_STATUSES: readonly SettlementLedgerStatus[] = [
   "forward_error",
 ];
 
-/** Conjunto mutable por el webhook (R1) = STALE_STATUSES + 'prepared'. Espeja
- *  WEBHOOK_UPDATABLE_STATUSES del ledger real; DISTINTO del conjunto del reconcile a propósito. */
-const WEBHOOK_UPDATABLE_STATUSES: readonly SettlementLedgerStatus[] = [
-  ...STALE_STATUSES,
-  "prepared",
-];
+/** Conjunto mutable por el webhook (R1) = la UNIÓN de los tres conjuntos de clasificación del ledger
+ *  real (WKH-325). Se DERIVA de WEBHOOK_FAILURE_CLASSES en vez de re-declararse: si un conjunto del
+ *  ledger cambia y el fake no, los tests dejan de decir la verdad sobre producción.
+ *  ⚠️ STALE_STATUSES de arriba SIGUE siendo propio: lo usa listStale y es otro conjunto a propósito. */
+const WEBHOOK_UPDATABLE_STATUSES: readonly SettlementLedgerStatus[] = WEBHOOK_FAILURE_CLASSES.flatMap(
+  (s) => [...s.previousStatuses],
+);
 
-/** Mismo placeholder determinístico que escribe el ledger real en una fila 'prepared'. */
+/** Mismo placeholder determinístico que escribe el ledger real en una fila 'prepared'. NO se importa
+ *  la constante del ledger real a propósito: arrastraría @supabase/supabase-js y el cliente server-only
+ *  adentro de los dobles, que existen para probar SIN infra. */
 function preparedPlaceholderTxHash(idempotencyKey: string): string {
   return `prepared:${idempotencyKey}`;
 }
@@ -565,29 +572,58 @@ export class FakeSettlementLedger implements SettlementLedger {
     remittanceId: string;
     senderAddress: string;
     signature: string;
-  }): Promise<void> {
-    // WKH-213/R3 — espeja al ledger real: ancla la signature a la fila 'prepared' MÁS RECIENTE de esta
-    // remesa y este sender (owner-scoped). Sin fila preparada: NO-OP (no hay quote_id/value_minor
-    // honestos que insertar). El índice único de tx_hash también aplica acá.
+  }): Promise<SolanaPrincipalInOutcome> {
+    // WKH-213/R3 + WKH-325 — espeja los CINCO pasos del ledger real, en el mismo orden. Antes había
+    // un solo desenlace escrito y un NO-OP mudo; el mudo era indistinguible de un éxito.
+    // Lo que este doble NO modela: las tres ALERTAS. Las emite el ledger real (logLedgerAlert) y los
+    // tests que las cuentan corren contra el ledger real sobre la tabla en memoria, no contra este
+    // doble — acá el desenlace tipado ES la señal, y asertarlo no pide espiar la consola.
+    // El índice único de tx_hash sigue aplicando en las dos escrituras.
     const owner = canonicalizeAddress(input.senderAddress);
-    const candidates = [...this.store.values()]
-      .filter(
-        (r) =>
-          r.remittanceId === input.remittanceId &&
-          r.senderAddress === owner &&
-          r.status === "prepared",
-      )
-      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
-    const row = candidates[0];
-    if (!row) return;
-    this.assertUnique(
-      { txHash: input.signature, idempotencyKey: row.idempotencyKey },
-      "ledger_record_solana_principal_in_failed",
-      row.id,
+    const mine = (r: SettlementRecord): boolean =>
+      r.remittanceId === input.remittanceId && r.senderAddress === owner;
+
+    // P1/P2 — ascenso de la fila 'prepared' MÁS RECIENTE (CAS: sólo desde 'prepared').
+    const prepared = [...this.store.values()]
+      .filter((r) => mine(r) && r.status === "prepared")
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))[0];
+    if (prepared) {
+      this.assertUnique(
+        { txHash: input.signature, idempotencyKey: prepared.idempotencyKey },
+        "ledger_record_solana_principal_in_failed",
+        prepared.id,
+      );
+      prepared.txHash = input.signature;
+      prepared.status = "principal_in";
+      prepared.updatedAt = this.nowIso;
+      return "ascended";
+    }
+
+    // P3 — evidencia ADITIVA sobre filas que ya salieron de 'prepared': se completa el tx_hash SÓLO
+    //      si sigue siendo el placeholder del prepare, y el `status` NO se toca.
+    const stale = [...this.store.values()].filter(
+      (r) => mine(r) && r.status !== "prepared" && r.txHash.startsWith("prepared:"),
     );
-    row.txHash = input.signature;
-    row.status = "principal_in";
-    row.updatedAt = this.nowIso;
+    if (stale.length > 0) {
+      for (const r of stale) {
+        this.assertUnique(
+          { txHash: input.signature, idempotencyKey: r.idempotencyKey },
+          "ledger_record_solana_principal_in_failed",
+          r.id,
+        );
+        r.txHash = input.signature;
+        r.updatedAt = this.nowIso;
+      }
+      return "evidence_filled";
+    }
+
+    // P4 — ¿NUESTRA firma ya está persistida? Retry benigno ⇒ NO-OP sin señal de alarma.
+    if ([...this.store.values()].some((r) => mine(r) && r.txHash === input.signature)) {
+      return "already_recorded";
+    }
+    // P5 — hay fila con evidencia de OTRA cosa, o no hay fila en absoluto.
+    if ([...this.store.values()].some(mine)) return "unrecorded_conflict";
+    return "unrecorded_no_row";
   }
 
   async recordPayoutOutcome(input: {
@@ -682,18 +718,38 @@ export class FakeSettlementLedger implements SettlementLedger {
   async recordWebhookOutcome(input: {
     payoutId: string;
     status: SettlementLedgerStatus;
-    error?: string | null;
-  }): Promise<void> {
-    for (const r of this.store.values()) {
-      // NO owner-scoped (CD-12): correlaciona solo por payoutId. Filtro no-terminal = DT-2b: nunca
-      // degrada un estado terminal ni reclasifica manual_review. WKH-213/R1: el conjunto incluye
-      // 'prepared' (el proveedor puede avisar antes de que el settle aterrice, o sin que aterrice).
-      if (r.payoutId === input.payoutId && WEBHOOK_UPDATABLE_STATUSES.includes(r.status)) {
-        r.status = input.status;
-        if (input.error !== undefined) r.lastError = input.error;
-        r.updatedAt = this.nowIso;
+  }): Promise<WebhookOutcome> {
+    // NO owner-scoped (CD-12): correlaciona solo por payoutId. Filtro no-terminal = DT-2b: nunca
+    // degrada un estado terminal ni reclasifica manual_review. WKH-213/R1: el conjunto incluye
+    // 'prepared' (el proveedor puede avisar antes de que el settle aterrice, o sin que aterrice).
+    //
+    // WKH-325 — la rama NO-failed es la de siempre (patch {status, updated_at}, sin last_error). La
+    // rama 'failed' clasifica CADA fila por SU estado previo, igual que los tres UPDATEs disjuntos del
+    // ledger real, y ACUMULA las clases: dos filas del mismo payoutId en estados previos distintos
+    // producen dos last_error distintos y dos clases.
+    if (input.status !== "failed") {
+      for (const r of this.store.values()) {
+        if (r.payoutId === input.payoutId && WEBHOOK_UPDATABLE_STATUSES.includes(r.status)) {
+          r.status = input.status;
+          r.updatedAt = this.nowIso;
+        }
       }
+      return { classified: false };
     }
+    const failures: WebhookFailureClass[] = [];
+    for (const spec of WEBHOOK_FAILURE_CLASSES) {
+      let matched = false;
+      for (const r of this.store.values()) {
+        if (r.payoutId === input.payoutId && spec.previousStatuses.includes(r.status)) {
+          r.status = "failed";
+          r.lastError = spec.lastError;
+          r.updatedAt = this.nowIso;
+          matched = true;
+        }
+      }
+      if (matched) failures.push(spec.failureClass);
+    }
+    return { classified: true, failures };
   }
 }
 

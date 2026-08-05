@@ -220,6 +220,20 @@ export async function POST(req: Request): Promise<Response> {
       // best-effort, NUNCA rompe (CD-17) — control de flujo INTACTO, sólo cambia la señal.
       logLedgerWriteFailure("recordSolanaPrincipalIn", e);
     }
+  } else {
+    // WKH-325 — el ledger apagado apaga DOS cosas a la vez, y hasta acá eso sólo estaba dicho en el
+    // comentario de S3.5. Este depósito se broadcasteó SIN el chequeo de destino y SIN registro
+    // durable: el remittanceId, que es el único argumento con el que se pide el refund on-chain, queda
+    // sólo en el localStorage del navegador. Va en el `else` y después de validar la signature, así
+    // que sale exactamente una vez por 200 y cero veces en cualquier otra respuesta.
+    // HUECO DECLARADO: el camino de arriba que responde 502 solana_settle_broadcast_failed (el
+    // facilitator contestó ok pero su body no trae una signature legible) NO emite esta alerta, aunque
+    // la tx pudo haberse broadcasteado. Sin signature no se puede afirmar que hubo depósito, y una
+    // alerta que afirma un depósito no verificado sería peor que el silencio.
+    // El prefijo [settle][ALERT] queda con dos ocurrencias literales en este archivo, a propósito:
+    // factorizarlo obligaría a editar la de S3.5, que es un guard de seguridad que este cambio no
+    // toca. Se declara, no se disimula. CD-7: sólo el remittanceId.
+    console.error("[settle][ALERT] solana_settle_unrecorded_deposit", { remittanceId });
   }
 
   return NextResponse.json({ signature }, { status: 200 });

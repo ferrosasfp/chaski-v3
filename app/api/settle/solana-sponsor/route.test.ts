@@ -415,9 +415,87 @@ describe("POST /api/settle/solana-sponsor (HU-SOL-13)", () => {
 
   it("flag OFF (ledger null) ⇒ respuesta byte-idéntica, sin tocar la DB", async () => {
     getLedgerMock.mockReturnValue(null);
+    vi.spyOn(console, "error").mockImplementation(() => {});
     facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
     const res = await POST(req(body()));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ signature: FAKE_SOLANA_SIGNATURE });
+  });
+
+  // ── WKH-325 · AC-10 · el ledger apagado apaga DOS cosas, y hasta acá eso sólo estaba en un comentario
+  // Con el ledger apagado este depósito se broadcastea SIN el chequeo de destino de S3.5 y SIN registro
+  // durable: el remittanceId, único argumento del refund on-chain, queda sólo en el navegador.
+  describe("AC-10 — alerta de depósito sin registro (WKH-325)", () => {
+    let errSpy: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    });
+    /** Alertas del settle emitidas hasta acá. LA MISMA función cuenta los casos de 1 y los de 0
+     *  (CD-13): un `toBe(0)` sobre un spy vacío mediría cero y pasaría sin decir nada. */
+    const settleAlertCount = (): number =>
+      errSpy.mock.calls.filter((c) => String(c[0]).includes("[settle][ALERT]")).length;
+
+    // T-10a — los DOS casos en el MISMO `it`, con el MISMO spy y el MISMO contador.
+    it("T-10a (CD-13): ledger apagado + 200 ⇒ 1 alerta; ledger encendido + 200 ⇒ 0", async () => {
+      getLedgerMock.mockReturnValue(null);
+      facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
+      expect((await POST(req(body()))).status).toBe(200);
+      expect(settleAlertCount()).toBe(1);
+
+      errSpy.mockClear();
+      getLedgerMock.mockReturnValue(await ledgerWithPreparedSolana());
+      facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
+      expect((await POST(req(body()))).status).toBe(200);
+      expect(settleAlertCount()).toBe(0);
+    });
+
+    it("T-10b (CD-7): el argumento de la alerta es EXACTAMENTE {remittanceId}", async () => {
+      getLedgerMock.mockReturnValue(null);
+      facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
+      await POST(req(body()));
+      const call = errSpy.mock.calls.find((c) => String(c[0]).includes("[settle][ALERT]"));
+      expect(String(call?.[0])).toContain("solana_settle_unrecorded_deposit");
+      // Ni la signature, ni el sender, ni el monto: sólo el identificador de correlación.
+      expect(call?.[1]).toEqual({ remittanceId: "rem-sol-1" });
+    });
+
+    it.each([422, 403, 429, 502, 503])(
+      "T-10c: ledger apagado + facilitator %i ⇒ 0 alertas (SÓLO el 200 alerta)",
+      async (upstream) => {
+        getLedgerMock.mockReturnValue(null);
+        facilitatorResponds(upstream, { error: "nope" });
+        await POST(req(body()));
+        expect(settleAlertCount()).toBe(0);
+        // Presencia en el mismo canal: con un 200 el mismo contador SÍ da 1 (T-10a), así que este 0
+        // no puede venir de un spy que no captura nada.
+      },
+    );
+
+    // T-10d — HUECO DECLARADO, no un caso cubierto. Este camino responde 502 porque el body del
+    // facilitator no trae una signature legible, PERO la tx pudo haberse broadcasteado igual. NO emite
+    // la alerta a propósito: sin signature no se puede afirmar que hubo depósito, y una alerta que
+    // afirma un depósito no verificado es peor que el silencio. Que nadie lea este 0 como "cubierto".
+    it("T-10d (hueco declarado): ledger apagado + 200 SIN signature legible ⇒ 502 y 0 alertas", async () => {
+      getLedgerMock.mockReturnValue(null);
+      facilitatorResponds(200, { noSignature: true });
+      const res = await POST(req(body()));
+      expect(res.status).toBe(502);
+      expect(await res.json()).toEqual({ error: "solana_settle_broadcast_failed" });
+      expect(settleAlertCount()).toBe(0);
+    });
+
+    it("T-11b (AC-11/CD-1): el ledger devuelve un error de integridad ⇒ el sponsor responde 200 igual", async () => {
+      const ledger = await ledgerWithPreparedSolana();
+      vi.spyOn(ledger, "recordSolanaPrincipalIn").mockRejectedValue(
+        new Error("ledger_record_solana_principal_in_failed:23514"),
+      );
+      getLedgerMock.mockReturnValue(ledger);
+      facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
+      const res = await POST(req(body()));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ signature: FAKE_SOLANA_SIGNATURE });
+      // La excepción NO se silencia: se degrada a señal (el best-effort la traga y la grita).
+      expect(errSpy.mock.calls.some((c) => String(c[0]).includes("[ledger][ALERT]"))).toBe(true);
+    });
   });
 });

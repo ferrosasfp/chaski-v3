@@ -7,10 +7,17 @@ import { PublicKey } from "@solana/web3.js";
 import {
   CHAIN_ID_NOT_APPLICABLE,
   SupabaseSettlementLedger,
+  WEBHOOK_UPDATABLE_STATUSES,
   getSettlementLedger,
 } from "./supabase-settlement-ledger";
 import { __resetSupabaseClient, getSupabaseServerClient } from "./supabase-server";
 import { resolveSolanaNetworkId } from "../chain";
+import {
+  TRANSFI_FUND_FAILED_NO_PRINCIPAL,
+  TRANSFI_FUND_FAILED_PRINCIPAL_IN_ESCROW,
+  TRANSFI_FUND_FAILED_PRINCIPAL_RELEASED,
+  WEBHOOK_FAILURE_CLASSES,
+} from "./webhook-failure-classes";
 
 // Registra cada método del builder + resuelve un resultado por cada from() (queue). El builder es
 // thenable ⇒ `await builder` resuelve el resultado asignado a ese from().
@@ -21,6 +28,7 @@ interface Calls {
   update: unknown[][];
   eq: unknown[][];
   in: unknown[][];
+  like: unknown[][]; // WKH-325: P3 de recordSolanaPrincipalIn filtra por el prefijo del placeholder
   lt: unknown[][];
   limit: unknown[][];
   single: unknown[][];
@@ -41,6 +49,7 @@ function makeClient(
     update: [],
     eq: [],
     in: [],
+    like: [],
     lt: [],
     limit: [],
     single: [],
@@ -63,6 +72,7 @@ function makeClient(
       builder.update = chain("update");
       builder.eq = chain("eq");
       builder.in = chain("in");
+      builder.like = chain("like");
       builder.lt = chain("lt");
       builder.limit = chain("limit");
       builder.single = chain("single");
@@ -238,6 +248,9 @@ function vmNetIdViolation(row: Record<string, unknown>): DbViolation | null {
 //   · remittance_settlements_vm_netid_chk / _vm_chk  → 23514
 //   · NOT NULL de las columnas obligatorias          → 23502
 //   · defaults de columna (vm='evm', attempts=0, …)
+//   · atomicidad del UPDATE multi-fila            → o se escriben TODAS las filas que matchean, o
+//     ninguna (WKH-325/MNR-5: modelarlo fila-por-fila dejaba la primera escrita cuando la segunda
+//     violaba la unique, que es un estado que Postgres nunca deja ver).
 // Verbos soportados: upsert(onConflict/ignoreDuplicates), update(+select devolviendo las filas
 // mutadas), select(+count exact), eq, in, lt, order, limit, maybeSingle, single.
 const NOT_NULL_COLUMNS = [
@@ -302,6 +315,27 @@ function makeTableClient(seed: Record<string, unknown>[] = []): {
     }
     return null;
   };
+  /** Unicidad evaluada sobre la imagen POSTERIOR del statement completo (todas las filas que el
+   *  UPDATE matchea, ya aplicadas). Postgres chequea el índice único al cierre del statement, así que
+   *  dos filas del MISMO UPDATE que aterrizan en el mismo tx_hash colisionan ENTRE SÍ. El modelo
+   *  fila-por-fila sólo veía esa colisión de rebote (porque ya había escrito la primera), y por eso
+   *  no podía distinguirse de un statement que escribe la primera y aborta en la segunda. */
+  const uniqueViolationIn = (
+    image: Record<string, unknown>[],
+    selfIdx: number,
+    next: Record<string, unknown>,
+  ): DbViolation | null => {
+    for (const [j, other] of image.entries()) {
+      if (j === selfIdx) continue;
+      if (other.tx_hash === next.tx_hash) {
+        return { code: "23505", constraint: "uq_remit_settle_txhash", message: "duplicate tx_hash" };
+      }
+      if (other.idempotency_key === next.idempotency_key) {
+        return { code: "23505", constraint: "uq_remit_settle_idem", message: "duplicate idem" };
+      }
+    }
+    return null;
+  };
   const client = {
     from: vi.fn(() => {
       type Filter = (r: Record<string, unknown>) => boolean;
@@ -339,6 +373,15 @@ function makeTableClient(seed: Record<string, unknown>[] = []): {
       });
       builder.in = vi.fn((col: string, vals: unknown[]) => {
         filters.push((r) => vals.includes(r[col]));
+        return builder;
+      });
+      builder.like = vi.fn((col: string, pattern: string) => {
+        // CD-17 — este doble implementa SÓLO el patrón `prefijo%`. Ante cualquier otra forma TIRA, en
+        // vez de fingir que la modela: "un doble que no modela una restricción de la DB prueba la
+        // fantasía que el doble implementa" (fakes.ts).
+        if (!/^[^%_]+%$/.test(pattern)) throw new Error(`fake_like_unsupported_pattern:${pattern}`);
+        const prefix = pattern.slice(0, -1);
+        filters.push((r) => typeof r[col] === "string" && (r[col] as string).startsWith(prefix));
         return builder;
       });
       builder.lt = vi.fn((col: string, val: unknown) => {
@@ -392,19 +435,24 @@ function makeTableClient(seed: Record<string, unknown>[] = []): {
           return resolve({ data: null, error: null });
         }
         if (mode === "update" && pending) {
-          const updated: Record<string, unknown>[] = [];
-          for (const r of matched) {
-            const next = { ...r, ...pending };
-            const violation = rowViolation(next) ?? uniqueViolation(next, r.id);
+          // ATÓMICO. Un UPDATE multi-fila es UN solo statement: si CUALQUIERA de las filas que
+          // matchea viola una restricción, el statement entero se revierte y NINGUNA queda escrita.
+          // El modelo anterior asignaba fila por fila y abortaba a mitad, o sea que dejaba la primera
+          // mutada — un estado que la DB real nunca produce, y sobre el que un test podía afirmar.
+          // Se valida TODA la imagen posterior antes de tocar una sola fila.
+          const matchedIds = new Set(matched.map((r) => r.id));
+          const image = rows.map((r) => (matchedIds.has(r.id) ? { ...r, ...pending } : { ...r }));
+          for (const [i, next] of image.entries()) {
+            if (!matchedIds.has(next.id)) continue;
+            const violation = rowViolation(next) ?? uniqueViolationIn(image, i, next);
             if (violation) {
               rejected.push(violation);
-              return resolve({ data: null, error: violation });
+              return resolve({ data: null, error: violation }); // cero mutaciones
             }
-            Object.assign(r, pending);
-            updated.push(r);
           }
+          for (const r of matched) Object.assign(r, pending);
           // PostgREST devuelve las filas mutadas SOLO si se encadenó .select().
-          return resolve({ data: selectCols ? updated.map(project) : null, error: null });
+          return resolve({ data: selectCols ? matched.map(project) : null, error: null });
         }
         let out = [...matched];
         if (orderBy) {
@@ -426,6 +474,24 @@ function makeTableClient(seed: Record<string, unknown>[] = []): {
   };
   return { client: client as unknown as SupabaseClient, rows, rejected };
 }
+/** Envuelve un cliente para que `effect()` corra JUSTO ANTES del n-ésimo `from()`, o sea EN MEDIO de
+ *  dos round-trips de un mismo método. Es la única forma de expresar una carrera contra un doble
+ *  secuencial: sin esto, los guards que protegen la ventana entre dos queries (el CAS del paso 2, el
+ *  `.in(status)` del paso 3) no tienen ningún test que pueda ponerse rojo si se borran. */
+function withRaceBeforeNthFrom(
+  inner: SupabaseClient,
+  nth: number,
+  effect: () => void,
+): SupabaseClient {
+  let n = 0;
+  const from = (table: string): unknown => {
+    n += 1;
+    if (n === nth) effect();
+    return (inner as unknown as { from: (t: string) => unknown }).from(table);
+  };
+  return { from } as unknown as SupabaseClient;
+}
+
 // Direcciones de depósito distintas por fila: si la lectura devolviera la de otra fila (o la de otro
 // sender), el valor devuelto lo delata en vez de coincidir por casualidad.
 const DEPOSIT_A_OLD = "So11111111111111111111111111111111111111112";
@@ -658,16 +724,71 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
     expect(updatable).not.toContain("manual_review");
   });
 
-  it("WKH-210/DT-8: status failed persiste last_error enum estable (transfi_fund_failed), nunca el reason crudo", async () => {
-    const { client, calls } = makeClient([{ data: null, error: null }]);
+  // T-5a (AC-5) — LA FORMA DE LAS TRES QUERIES de la rama 'failed'. Convertido del test WKH-210/DT-8:
+  // antes afirmaba que el `last_error` que llegaba por parámetro se persistía tal cual; ahora el caller
+  // ya no puede pasarlo (el parámetro se eliminó del port) y lo que hay que fijar es que los TRES
+  // UPDATEs salen con SU conjunto de estados previos en el WHERE.
+  it("T-5a (AC-5/CD-2): la rama 'failed' hace TRES updates disjuntos, cada uno con su .in(status) y su last_error, y NINGÚN select precede al primer update", async () => {
+    const { client, calls } = makeClient([
+      { data: [{ id: "a" }], error: null },
+      { data: [], error: null },
+      { data: [], error: null },
+    ]);
     const ledger = new SupabaseSettlementLedger(client);
-    await ledger.recordWebhookOutcome({
-      payoutId: "p-2",
+    await ledger.recordWebhookOutcome({ payoutId: "p-2", status: "failed" });
+
+    expect(calls.update.length).toBe(3);
+    expect(calls.in.map((c) => c[1])).toEqual([
+      ["prepared"],
+      ["principal_in", "forward_error"],
+      ["submitted"],
+    ]);
+    expect(calls.update.map((c) => (c[0] as Record<string, unknown>).last_error)).toEqual([
+      "transfi_fund_failed_no_principal",
+      "transfi_fund_failed_principal_in_escrow",
+      "transfi_fund_failed_principal_released",
+    ]);
+    // Los tres escriben 'failed' y correlacionan por payout_id, jamás por sender_address (CD-12).
+    for (const c of calls.update) expect((c[0] as Record<string, unknown>).status).toBe("failed");
+    expect(calls.eq.every((c) => c[0] === "payout_id")).toBe(true);
+    // CD-2 — el `.select("id")` existe para saber SI matcheó, no para leer estado: pide "id" y nada
+    // más, y va DESPUÉS del update. Un select previo al primer update sería la lectura prohibida.
+    expect(calls.select).toEqual([["id"], ["id"], ["id"]]);
+    // Y son EXACTAMENTE 3 round-trips: 3 from(), 3 update, 3 select. No hay lugar para un cuarto
+    // viaje que lea el estado previo antes de escribir — un `select` previo haría este número 4.
+    expect(calls.from.length).toBe(3);
+  });
+
+  // T-5b (CD-2, transversal) — la forma OPERATIVA de "el estado previo no se lee": ninguna lista de
+  // columnas de NINGÚN select de estos dos métodos puede contener la subcadena "status".
+  it("T-5b (CD-2): ni recordWebhookOutcome ni recordSolanaPrincipalIn seleccionan JAMÁS la columna status", async () => {
+    const webhook = makeClient([
+      { data: [], error: null },
+      { data: [], error: null },
+      { data: [], error: null },
+    ]);
+    await new SupabaseSettlementLedger(webhook.client).recordWebhookOutcome({
+      payoutId: "p-5b",
       status: "failed",
-      error: "transfi_fund_failed",
     });
-    const patch = calls.update[0]?.[0] as Record<string, unknown>;
-    expect(patch.last_error).toBe("transfi_fund_failed");
+    const solana = makeClient([
+      { data: [], error: null }, // P1: sin fila 'prepared'
+      { data: [], error: null }, // P3: 0 filas
+      { data: [], error: null }, // P4: no es nuestra firma
+      { data: [], error: null }, // P5: no hay fila
+    ]);
+    await new SupabaseSettlementLedger(solana.client).recordSolanaPrincipalIn({
+      remittanceId: "rem-5b",
+      senderAddress: SOL_A,
+      signature: "5".repeat(64),
+    });
+    // Presencia ANTES que ausencia (CD-13): si no hubiera select alguno, el assert de abajo mediría
+    // cero y pasaría en verde sin decir nada.
+    expect(webhook.calls.select.length).toBeGreaterThan(0);
+    expect(solana.calls.select.length).toBeGreaterThan(0);
+    for (const call of [...webhook.calls.select, ...solana.calls.select]) {
+      expect(String(call[0])).not.toContain("status");
+    }
   });
 
   it("WKH-210/AC-8: 0-match (payoutId inexistente) no lanza (Supabase no reporta error en UPDATE 0-row)", async () => {
@@ -675,7 +796,7 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
     const ledger = new SupabaseSettlementLedger(client);
     await expect(
       ledger.recordWebhookOutcome({ payoutId: "no-existe", status: "settled" }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ classified: false });
   });
 
   it("WKH-210: error de Supabase ⇒ throw ledger_record_webhook_outcome_failed:*", async () => {
@@ -1209,17 +1330,19 @@ describe("WKH-213/R1 — el webhook puede sacar una fila de 'prepared'", () => {
     expect(rows[0]?.status).toBe("settled");
   });
 
-  it("'prepared' + webhook 'failed' ⇒ failed con last_error enum estable (NUNCA el motivo crudo)", async () => {
+  // T-2a (AC-2) — convertido: antes el caller pasaba `error:"transfi_fund_failed"` y el test afirmaba
+  // que se persistía tal cual. Ahora el caller no puede pasarlo y el literal lo DERIVA el ledger del
+  // estado previo. Una fila 'prepared' significa que el ledger NO registró un depósito nuestro — NO
+  // que no lo haya habido (residuo #5 del auto-blindaje: un write best-effort que falla de forma
+  // transitoria deja la fila acá). Lo que este test fija es la clasificación, que es state-based.
+  it("T-2a (AC-2): 'prepared' + webhook 'failed' ⇒ transfi_fund_failed_no_principal (sin depósito REGISTRADO)", async () => {
     const { client, rows } = makeTableClient();
     const ledger = new SupabaseSettlementLedger(client);
     await ledger.recordOrderPrepared(prepareInput());
-    await ledger.recordWebhookOutcome({
-      payoutId: "transfi-po-1",
-      status: "failed",
-      error: "transfi_fund_failed",
-    });
+    const out = await ledger.recordWebhookOutcome({ payoutId: "transfi-po-1", status: "failed" });
     expect(rows[0]?.status).toBe("failed");
-    expect(rows[0]?.last_error).toBe("transfi_fund_failed");
+    expect(rows[0]?.last_error).toBe("transfi_fund_failed_no_principal");
+    expect(out).toEqual({ classified: true, failures: ["no_principal"] });
   });
 
   it.each([
@@ -1246,6 +1369,220 @@ describe("WKH-213/R1 — el webhook puede sacar una fila de 'prepared'", () => {
       status: "submitted",
     });
     expect(rows[0]?.status).toBe(expected); // sin cambios
+  });
+});
+
+// ── WKH-325 · un `fund_failed` tapa TRES situaciones, y el estado previo de la fila las separa ──────
+// Todo lo de acá mide el ESTADO FINAL DE LA FILA contra la tabla en memoria: lo que un operador lee
+// para decidir si escalar es la columna `last_error`, no la forma de la query.
+describe("WKH-325 — los tres desenlaces del fund_failed (AC-1/2/3/5/6)", () => {
+  /** Una fila del ledger en el estado previo pedido, correlacionada por el MISMO payout_id.
+   *  `n` da tx_hash/idempotency_key distintos para no chocar con los índices únicos. */
+  function rowInStatus(status: string, n = 1, payoutId = "ord-1"): Record<string, unknown> {
+    return {
+      remittance_id: `rem-${n}`,
+      quote_id: `q-${n}`,
+      idempotency_key: `rem-${n}:q-${n}`,
+      tx_hash: `prepared:rem-${n}:q-${n}`,
+      chain_id: CHAIN_ID_EVM,
+      sender_address: SENDER_SOL,
+      receiver_address: DEPOSIT_SOL,
+      value_minor: "400000000",
+      status,
+      payout_id: payoutId,
+    };
+  }
+  /** El MISMO body de webhook para todos los casos: lo único que cambia entre ellos es el estado
+   *  previo de la fila. Si el literal dependiera del body, esto no podría distinguir nada. */
+  const FUND_FAILED = { payoutId: "ord-1", status: "failed" as const };
+
+  it("T-1a (AC-1): una fila 'submitted' (el proveedor confirmó asset_deposited) ⇒ transfi_fund_failed_principal_released", async () => {
+    const { client, rows } = makeTableClient([rowInStatus("submitted")]);
+    await new SupabaseSettlementLedger(client).recordWebhookOutcome(FUND_FAILED);
+    expect(rows[0]?.status).toBe("failed");
+    expect(rows[0]?.last_error).toBe("transfi_fund_failed_principal_released");
+  });
+
+  it("T-1b (AC-1): esa MISMA llamada devuelve {classified:true, failures:['principal_released']}", async () => {
+    const { client } = makeTableClient([rowInStatus("submitted")]);
+    const out = await new SupabaseSettlementLedger(client).recordWebhookOutcome(FUND_FAILED);
+    expect(out).toEqual({ classified: true, failures: ["principal_released"] });
+  });
+
+  // T-2b — golden de literales. EXCEPCIÓN ÚNICA Y DECLARADA de la regla "los tres literales viven en
+  // webhook-failure-classes.ts y ningún otro archivo los escribe a mano": acá se escriben literalmente
+  // UNA vez, para que renombrar un enum sea una decisión visible en un diff en vez de un drift mudo.
+  it("T-2b (AC-2): los tres literales exportados son exactamente los esperados", () => {
+    expect(TRANSFI_FUND_FAILED_NO_PRINCIPAL).toBe("transfi_fund_failed_no_principal");
+    expect(TRANSFI_FUND_FAILED_PRINCIPAL_IN_ESCROW).toBe("transfi_fund_failed_principal_in_escrow");
+    expect(TRANSFI_FUND_FAILED_PRINCIPAL_RELEASED).toBe("transfi_fund_failed_principal_released");
+  });
+
+  it("T-3a (AC-3): tres filas ('submitted','prepared','principal_in') y EL MISMO body ⇒ TRES last_error DISTINTOS", async () => {
+    const { client, rows } = makeTableClient([
+      rowInStatus("submitted", 1),
+      rowInStatus("prepared", 2),
+      rowInStatus("principal_in", 3),
+    ]);
+    await new SupabaseSettlementLedger(client).recordWebhookOutcome(FUND_FAILED);
+    const errors = rows.map((r) => r.last_error);
+    // Presencia antes que distinción: si ninguna fila se hubiera clasificado, el Set tendría un solo
+    // elemento (null) y el size !== 3 lo delataría igual, pero esto lo dice de frente.
+    expect(errors.every((e) => typeof e === "string")).toBe(true);
+    expect(new Set(errors).size).toBe(3);
+  });
+
+  it("T-3b (AC-3): 'forward_error' produce el MISMO literal que 'principal_in' (los dos son plata en el escrow) ⇒ 4 filas, 3 valores", async () => {
+    const { client, rows } = makeTableClient([
+      rowInStatus("submitted", 1),
+      rowInStatus("prepared", 2),
+      rowInStatus("principal_in", 3),
+      rowInStatus("forward_error", 4),
+    ]);
+    await new SupabaseSettlementLedger(client).recordWebhookOutcome(FUND_FAILED);
+    const byStatus = (n: number) => rows.find((r) => r.remittance_id === `rem-${n}`)?.last_error;
+    expect(byStatus(4)).toBe(byStatus(3)); // forward_error ≡ principal_in
+    expect(byStatus(4)).not.toBe(byStatus(1));
+    expect(byStatus(4)).not.toBe(byStatus(2));
+    expect(new Set(rows.map((r) => r.last_error)).size).toBe(3);
+  });
+
+  it.each(["settled", "failed", "manual_review"])(
+    "T-6a (AC-6/CD-3): una fila '%s' (terminal) NO cambia de status NI de last_error, y no se clasifica",
+    async (terminal) => {
+      const { client, rows } = makeTableClient([rowInStatus(terminal)]);
+      const before = { ...rows[0] };
+      const out = await new SupabaseSettlementLedger(client).recordWebhookOutcome(FUND_FAILED);
+      expect(rows[0]?.status).toBe(terminal);
+      expect(rows[0]?.last_error).toBe(before.last_error); // null si era null
+      expect(out).toEqual({ classified: true, failures: [] });
+    },
+  );
+
+  it("T-6b (DT-6): DOS filas del mismo payout_id en estados previos distintos ⇒ DOS last_error distintos y DOS clases en una sola llamada", async () => {
+    const { client, rows } = makeTableClient([
+      rowInStatus("prepared", 1),
+      rowInStatus("submitted", 2),
+    ]);
+    const out = await new SupabaseSettlementLedger(client).recordWebhookOutcome(FUND_FAILED);
+    expect(rows[0]?.last_error).toBe("transfi_fund_failed_no_principal");
+    expect(rows[1]?.last_error).toBe("transfi_fund_failed_principal_released");
+    expect(out).toEqual({
+      classified: true,
+      failures: ["no_principal", "principal_released"],
+    });
+  });
+
+  it("T-6c (fallo parcial): si el 2º UPDATE tira, la clasificación del 1º QUEDA y el retry completa el resto sin pisarla", async () => {
+    const { client, rows } = makeTableClient([
+      rowInStatus("prepared", 1),
+      rowInStatus("principal_in", 2),
+      rowInStatus("submitted", 3),
+    ]);
+    // Falla SOLO el 2º from() de la primera pasada (el UPDATE de la clase principal_in_escrow).
+    let n = 0;
+    const flaky = {
+      from: (t: string) => {
+        n += 1;
+        if (n === 2) throw new Error("boom:08006");
+        return (client as unknown as { from: (t: string) => unknown }).from(t);
+      },
+    } as unknown as SupabaseClient;
+    await expect(
+      new SupabaseSettlementLedger(flaky).recordWebhookOutcome(FUND_FAILED),
+    ).rejects.toThrow(/boom/);
+    // U1 ya aplicó: esa fila quedó final y correcta.
+    expect(rows[0]?.status).toBe("failed");
+    expect(rows[0]?.last_error).toBe("transfi_fund_failed_no_principal");
+    expect(rows[1]?.status).toBe("principal_in"); // U2 no llegó a correr
+    // El retry (lo que hace TransFi ante el 503) completa el resto SIN re-escribir la primera.
+    const out = await new SupabaseSettlementLedger(client).recordWebhookOutcome(FUND_FAILED);
+    expect(out).toEqual({
+      classified: true,
+      failures: ["principal_in_escrow", "principal_released"],
+    });
+    expect(rows[0]?.last_error).toBe("transfi_fund_failed_no_principal"); // intacta
+    expect(rows[1]?.last_error).toBe("transfi_fund_failed_principal_in_escrow");
+    expect(rows[2]?.last_error).toBe("transfi_fund_failed_principal_released");
+  });
+
+  // T-INV (DT-2) — los invariantes de los que depende que el orden no importe. (b) y (d) se comparan
+  // contra fuentes INDEPENDIENTES a propósito: un invariante que sólo se compara contra su propia
+  // fuente aplaude cualquier cosa.
+  it("T-INV (DT-2): los tres conjuntos son disjuntos, su unión es exactamente el set mutable por el webhook, y ninguno contiene un terminal", () => {
+    const sets = WEBHOOK_FAILURE_CLASSES.map((s) => s.previousStatuses);
+    const union = sets.flatMap((s) => [...s]);
+    // (a) disjunción: si dos conjuntos compartieran un status, el Set sería más chico que la suma.
+    expect(union.length).toBe(new Set(union).size);
+    // (b) la unión es el set mutable por el webhook — escrito acá a mano como fuente INDEPENDIENTE
+    //     (es el mismo valor que el test WKH-210/CD-12 lee de la query real de la rama no-failed).
+    expect([...union].sort()).toEqual(
+      ["forward_error", "prepared", "principal_in", "submitted"].sort(),
+    );
+    // (b2) …y contra la constante REAL, importada de su módulo (WKH-325/MNR-2). El comentario de
+    //      webhook-failure-classes.ts decía que (b) ataba esta constante, y era falso: (b) es un
+    //      literal a mano y WEBHOOK_UPDATABLE_STATUSES ni siquiera estaba exportada, así que un dev
+    //      que la cambiara y greppeara "T-INV" llegaba a un test que se quedaba verde. Los dos
+    //      asserts se necesitan: (b) caza que la unión driftee, (b2) caza que driftee la constante.
+    expect([...union].sort()).toEqual([...WEBHOOK_UPDATABLE_STATUSES].sort());
+    // (c) ningún terminal adentro ⇒ AC-6/CD-3 se cumplen por construcción, no por un chequeo extra.
+    for (const t of ["failed", "settled", "manual_review"]) expect(union).not.toContain(t);
+    // (d) golden literal de los tres arrays, escrito a mano.
+    expect(sets).toEqual([["prepared"], ["principal_in", "forward_error"], ["submitted"]]);
+  });
+
+  it("T-ORD (DT-2): aplicar los tres UPDATEs en orden INVERSO produce el MISMO estado final", async () => {
+    const seed = () => [
+      rowInStatus("prepared", 1),
+      rowInStatus("principal_in", 2),
+      rowInStatus("forward_error", 3),
+      rowInStatus("submitted", 4),
+    ];
+    const shape = (rs: Record<string, unknown>[]) =>
+      rs.map((r) => ({ rid: r.remittance_id, status: r.status, lastError: r.last_error }));
+
+    // (1) La implementación real (orden declarado).
+    const real = makeTableClient(seed());
+    await new SupabaseSettlementLedger(real.client).recordWebhookOutcome(FUND_FAILED);
+
+    /** Los mismos tres UPDATEs, en el orden que se le pase. Se prueba contra la implementación real
+     *  ANTES de usarlo para el orden inverso: si este helper no reprodujera exactamente lo que hace el
+     *  ledger, la comparación de abajo no diría nada del código de producción. */
+    async function applyInOrder(
+      specs: readonly (typeof WEBHOOK_FAILURE_CLASSES)[number][],
+    ): Promise<Record<string, unknown>[]> {
+      const { client, rows } = makeTableClient(seed());
+      for (const spec of specs) {
+        const q = (client as unknown as { from: (t: string) => Record<string, unknown> }).from(
+          "remittance_settlements",
+        );
+        const upd = (q.update as (p: unknown) => Record<string, unknown>)({
+          status: "failed",
+          last_error: spec.lastError,
+          updated_at: "2026-08-05T00:00:00.000Z",
+        });
+        const byPayout = (upd.eq as (c: string, v: unknown) => Record<string, unknown>)(
+          "payout_id",
+          "ord-1",
+        );
+        const byStatus = (byPayout.in as (c: string, v: unknown[]) => Record<string, unknown>)(
+          "status",
+          [...spec.previousStatuses],
+        );
+        await (byStatus.select as (c: string) => Promise<unknown>)("id");
+      }
+      return rows;
+    }
+
+    // (2) El helper en el orden DECLARADO tiene que dar lo mismo que la implementación real.
+    expect(shape(await applyInOrder(WEBHOOK_FAILURE_CLASSES))).toEqual(shape(real.rows));
+    // (3) Y en el orden INVERSO, también: ningún conjunto contiene 'failed', así que una fila mutada
+    //     por un UPDATE sale de todos los demás y el orden no puede cambiar el resultado.
+    expect(shape(await applyInOrder([...WEBHOOK_FAILURE_CLASSES].reverse()))).toEqual(
+      shape(real.rows),
+    );
+    // Y no es vacuo: el estado final tiene los TRES literales presentes.
+    expect(new Set(real.rows.map((r) => r.last_error)).size).toBe(3);
   });
 });
 
@@ -1312,21 +1649,8 @@ describe("WKH-213/R3 — el settle escribe al ledger", () => {
 
   // El CAS del UPDATE (`.eq("status","prepared")`) NO es redundante con el filtro del SELECT: protege
   // la ventana ENTRE los dos round-trips. Un doble secuencial no puede expresar esa carrera, así que
-  // se inyecta el interleaving a mano — sin este test, borrar el CAS no rompe nada y el guard muere.
-  function withRaceBeforeNthFrom(
-    inner: SupabaseClient,
-    nth: number,
-    effect: () => void,
-  ): SupabaseClient {
-    let n = 0;
-    const from = (table: string): unknown => {
-      n += 1;
-      if (n === nth) effect();
-      return (inner as unknown as { from: (t: string) => unknown }).from(table);
-    };
-    return { from } as unknown as SupabaseClient;
-  }
-
+  // se inyecta el interleaving a mano (withRaceBeforeNthFrom, arriba) — sin este test, borrar el CAS
+  // no rompe nada y el guard muere.
   it("CARRERA: si el webhook mueve la fila ENTRE el select y el update, el CAS evita la degradación", async () => {
     const { client, rows } = makeTableClient();
     await new SupabaseSettlementLedger(client).recordOrderPrepared(solPrepared());
@@ -1335,13 +1659,18 @@ describe("WKH-213/R3 — el settle escribe al ledger", () => {
     const raced = withRaceBeforeNthFrom(client, 2, () => {
       rows[0]!.status = "settled";
     });
-    await new SupabaseSettlementLedger(raced).recordSolanaPrincipalIn({
+    const out = await new SupabaseSettlementLedger(raced).recordSolanaPrincipalIn({
       remittanceId: "rem-sol",
       senderAddress: SOL_A,
       signature: SOL_SIGNATURE,
     });
     expect(rows[0]?.status).toBe("settled"); // el UPDATE no encontró 'prepared' ⇒ no degradó
-    expect(rows[0]?.tx_hash).toBe("prepared:rem-sol:q-sol"); // tampoco escribió sobre una fila cerrada
+    // WKH-325 — CONVERTIDO. Antes esto afirmaba que el tx_hash seguía siendo el placeholder, o sea que
+    // la signature del depósito se PERDÍA por haber perdido la carrera. El status sigue sin degradarse
+    // (eso es lo que el CAS protege y no cambió), pero la evidencia ahora es ADITIVA: el paso 3
+    // completa el tx_hash porque seguía siendo un placeholder de prepare, sin tocar el status.
+    expect(rows[0]?.tx_hash).toBe(SOL_SIGNATURE);
+    expect(out).toBe("evidence_filled");
   });
 
   it("CAS: si el webhook ya la movió a terminal, la signature NO degrada el estado", async () => {
@@ -1355,6 +1684,242 @@ describe("WKH-213/R3 — el settle escribe al ledger", () => {
       signature: SOL_SIGNATURE,
     });
     expect(rows[0]?.status).toBe("settled");
+  });
+});
+
+// ── WKH-325 · el `return` mudo se convierte en CINCO desenlaces, y tres de ellos gritan ─────────────
+// El remittanceId es el único argumento con el que se pide un refund on-chain y no vive en ninguna
+// cuenta de la cadena. Antes, "no había fila 'prepared'" era un `return` sin señal, indistinguible de
+// un éxito. Acá se cuentan las alertas con el MISMO helper sobre el MISMO spy en cada test, para que
+// un `toBe(0)` no pueda pasar midiendo una captura vacía (CD-13).
+describe("WKH-325 — los cinco desenlaces de recordSolanaPrincipalIn (AC-8/AC-9)", () => {
+  const SIG = "5".repeat(64); // base58 (dígitos válidos en el alfabeto)
+  const OTHER_SIG = "6".repeat(64);
+  let errSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    errSpy.mockRestore();
+  });
+  /** Alertas del ledger emitidas hasta acá. Es la MISMA función para los casos de 1 y los de 0. */
+  const ledgerAlerts = (): string[] =>
+    errSpy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((s) => s.includes("[ledger][ALERT]"));
+
+  function solRow(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      remittance_id: "rem-1",
+      quote_id: "q-1",
+      idempotency_key: "rem-1:q-1",
+      tx_hash: "prepared:rem-1:q-1",
+      chain_id: null,
+      network_id: resolveSolanaNetworkId(),
+      vm: "solana",
+      sender_address: SOL_A,
+      receiver_address: SOL_B,
+      value_minor: "400000000",
+      status: "prepared",
+      payout_id: "transfi-po-1",
+      ...over,
+    };
+  }
+  /** Una fila de (remesa, sender) ARBITRARIOS, con su propio placeholder de prepare y su propia
+   *  idempotency_key. Existe porque `solRow()` describe UNA sola remesa de UN solo sender, y con un
+   *  solo actor en la tabla ningún filtro por actor puede fallar: los mutantes que borran
+   *  `.eq("remittance_id", …)` o `.eq("sender_address", …)` de los pasos 3/4/5 sobreviven no porque
+   *  el código esté bien, sino porque el fixture no tiene con qué refutarlos (WKH-325/BLQ-1). */
+  function solRowOf(
+    remittanceId: string,
+    sender: string,
+    quoteId: string,
+    over: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return solRow({
+      remittance_id: remittanceId,
+      sender_address: sender,
+      quote_id: quoteId,
+      idempotency_key: `${remittanceId}:${quoteId}`,
+      tx_hash: `prepared:${remittanceId}:${quoteId}`,
+      payout_id: `transfi-po-${remittanceId}-${quoteId}`,
+      ...over,
+    });
+  }
+  const record = (client: SupabaseClient, signature = SIG) =>
+    new SupabaseSettlementLedger(client).recordSolanaPrincipalIn({
+      remittanceId: "rem-1",
+      senderAddress: SOL_A,
+      signature,
+    });
+
+  it("T-8a (AC-8): fila 'failed' con el placeholder intacto ⇒ 1 alerta, el status SIGUE 'failed', desenlace evidence_filled", async () => {
+    const { client, rows } = makeTableClient([solRow({ status: "failed" })]);
+    const out = await record(client);
+    expect(out).toBe("evidence_filled");
+    expect(rows[0]?.status).toBe("failed"); // NO se degrada un terminal (CD-3)
+    expect(rows[0]?.tx_hash).toBe(SIG); // la evidencia SÍ se completa
+    expect(ledgerAlerts().length).toBe(1);
+    expect(ledgerAlerts()[0]).toContain("solana_principal_in_late_evidence");
+  });
+
+  it("T-8b (AC-8): SIN ninguna fila de (remittanceId, sender) ⇒ 1 alerta solana_principal_in_no_row y CERO escrituras", async () => {
+    const { client, rows, rejected } = makeTableClient();
+    const out = await record(client);
+    expect(out).toBe("unrecorded_no_row");
+    expect(rows).toEqual([]); // jamás inventa una fila (quote_id/value_minor son NOT NULL)
+    expect(rejected).toEqual([]);
+    expect(ledgerAlerts().length).toBe(1);
+    expect(ledgerAlerts()[0]).toContain("solana_principal_in_no_row");
+  });
+
+  // T-8c — CD-13: el par presencia/ausencia en el MISMO `it`, con el MISMO spy y el MISMO helper. El
+  // `0` no puede pasar por una captura vacía, porque el mismo contador produce el `1` dos líneas abajo.
+  it("T-8c (CD-13): el camino feliz ('prepared' ⇒ ascenso) NO alerta; el caso 'failed' SÍ", async () => {
+    const feliz = makeTableClient([solRow()]);
+    const out = await record(feliz.client);
+    expect(out).toBe("ascended");
+    expect(feliz.rows[0]?.status).toBe("principal_in");
+    expect(ledgerAlerts().length).toBe(0);
+
+    const roto = makeTableClient([solRow({ status: "failed" })]);
+    expect(await record(roto.client)).toBe("evidence_filled");
+    expect(ledgerAlerts().length).toBe(1);
+  });
+
+  it("T-9a (AC-9): fila 'submitted' con placeholder ⇒ tx_hash completado, status intacto y updated_at avanzado", async () => {
+    const { client, rows } = makeTableClient([
+      solRow({ status: "submitted", updated_at: "2020-01-01T00:00:00.000Z" }),
+    ]);
+    expect(await record(client)).toBe("evidence_filled");
+    expect(rows[0]?.tx_hash).toBe(SIG);
+    expect(rows[0]?.status).toBe("submitted"); // el patch de P3 NO contiene `status`
+    expect(String(rows[0]?.updated_at) > "2020-01-01T00:00:00.000Z").toBe(true);
+  });
+
+  it("T-9b (AC-9): con evidencia REAL ya escrita, NO se pisa — sin alerta si la firma es la nuestra, CON alerta si es otra", async () => {
+    // (a) NUESTRA firma ya persistida: retry benigno del sponsor ⇒ NO-OP y CERO alertas.
+    const mine = makeTableClient([solRow({ status: "submitted", tx_hash: SIG })]);
+    expect(await record(mine.client)).toBe("already_recorded");
+    expect(mine.rows[0]?.tx_hash).toBe(SIG);
+    expect(ledgerAlerts().length).toBe(0);
+
+    // (b) la fila tiene evidencia de OTRA cosa: NO se pisa (el .like del paso 3 no matchea) y grita.
+    const other = makeTableClient([solRow({ status: "submitted", tx_hash: OTHER_SIG })]);
+    expect(await record(other.client)).toBe("unrecorded_conflict");
+    expect(other.rows[0]?.tx_hash).toBe(OTHER_SIG); // evidencia verificada on-chain, INTACTA
+    expect(ledgerAlerts().length).toBe(1);
+    expect(ledgerAlerts()[0]).toContain("solana_principal_in_evidence_conflict");
+  });
+
+  // T-9c — RESIDUO DECLARADO, no un caso resuelto. Una remesa recotizada puede tener DOS filas fuera
+  // de 'prepared' con el placeholder intacto: el paso 3 matchea las dos, el índice único
+  // uq_remit_settle_txhash rechaza y la función TIRA. No se silencia y no rompe el money-path (el
+  // try/catch del sponsor lo traga y lo grita). No se "arregla" acá porque arreglarlo pide elegir a
+  // cuál de las dos filas pertenece el depósito, y esa elección no tiene fuente verificada.
+  it("T-9c (residuo declarado): dos filas de la misma remesa con placeholder ⇒ tira 23505 SIN escribir ninguna de las dos", async () => {
+    const { client, rows } = makeTableClient([
+      solRowOf("rem-1", SOL_A, "q-1", { status: "submitted" }),
+      solRowOf("rem-1", SOL_A, "q-2", { status: "forward_error" }),
+    ]);
+    await expect(record(client)).rejects.toThrow(
+      /ledger_record_solana_principal_in_failed:23505/,
+    );
+    // "en vez de escribir a ciegas" es la afirmación del nombre, y ahora se verifica: el UPDATE
+    // multi-fila es UN statement, así que la primera fila NO queda con la signature y la segunda
+    // rechazada. Este assert sólo es honesto porque el doble modela esa atomicidad (ver makeTableClient).
+    expect(rows.map((r) => r.tx_hash)).toEqual(["prepared:rem-1:q-1", "prepared:rem-1:q-2"]);
+  });
+
+  // ── Scoping de los pasos 3/4/5: DOS remesas y DOS senders ───────────────────────────────────────
+  // Los cinco tests de arriba usan una tabla con un solo actor, y con un solo actor un filtro por
+  // actor no puede fallar: borrar `.eq("sender_address")` o `.eq("remittance_id")` de los pasos que
+  // esta HU crea dejaba la suite ENTERA en verde (WKH-325/BLQ-1). Acá la tabla tiene siempre una fila
+  // que NO es la del caller, y cada test fija que la escritura toca EXACTAMENTE una fila: la suya.
+  describe("BLQ-1 — cada paso escribe/lee SÓLO la fila de (esta remesa, este sender)", () => {
+    it("T-SCOPE-a: con una fila ajena por remesa y otra por sender, el paso 3 completa UNA sola", async () => {
+      const { client, rows } = makeTableClient([
+        solRowOf("rem-1", SOL_A, "q-1", { status: "submitted" }), // la del caller
+        solRowOf("rem-1", SOL_B, "q-B", { status: "submitted" }), // MISMA remesa, OTRO sender
+        solRowOf("rem-2", SOL_A, "q-2", { status: "submitted" }), // MISMO sender, OTRA remesa
+      ]);
+      expect(await record(client)).toBe("evidence_filled");
+      expect(rows[0]?.tx_hash).toBe(SIG); // la suya SÍ
+      expect(rows[1]?.tx_hash).toBe("prepared:rem-1:q-B"); // la del otro sender, intacta
+      expect(rows[2]?.tx_hash).toBe("prepared:rem-2:q-2"); // la de la otra remesa, intacta
+      expect(ledgerAlerts().length).toBe(1);
+    });
+
+    it("T-SCOPE-b (CD-9/IDOR): sin fila propia, la fila de OTRO sender en la MISMA remesa no se toca ni se cuenta", async () => {
+      const { client, rows } = makeTableClient([
+        solRowOf("rem-1", SOL_B, "q-B", { status: "submitted" }),
+      ]);
+      // El caller es SOL_A y no tiene fila: el desenlace honesto es "no hay NINGÚN registro mío".
+      // Si el paso 3 perdiera su owner-filter, la signature de A caería sobre la fila de B; si lo
+      // perdiera el paso 5, el desenlace pasaría a 'unrecorded_conflict' por evidencia ajena.
+      expect(await record(client)).toBe("unrecorded_no_row");
+      expect(rows[0]?.tx_hash).toBe("prepared:rem-1:q-B");
+      expect(rows[0]?.status).toBe("submitted");
+      expect(ledgerAlerts().length).toBe(1);
+      expect(ledgerAlerts()[0]).toContain("solana_principal_in_no_row");
+    });
+
+    it("T-SCOPE-c: sin fila propia, la fila del MISMO sender en OTRA remesa no recibe esta signature", async () => {
+      const { client, rows } = makeTableClient([
+        solRowOf("rem-2", SOL_A, "q-2", { status: "submitted" }),
+      ]);
+      // Sin el `.eq("remittance_id")` del paso 3 esto no es un tema de permisos: es evidencia
+      // CRUZADA. La signature del settle de rem-1 quedaría escrita como el tx_hash de rem-2, en
+      // silencio y pasando la unique, porque hay exactamente una fila candidata.
+      expect(await record(client)).toBe("unrecorded_no_row");
+      expect(rows[0]?.tx_hash).toBe("prepared:rem-2:q-2");
+      expect(ledgerAlerts().length).toBe(1);
+      expect(ledgerAlerts()[0]).toContain("solana_principal_in_no_row");
+    });
+
+    it("T-SCOPE-d: la firma persistida en la fila de OTRO sender NO cuenta como 'ya registrada'", async () => {
+      const { client } = makeTableClient([
+        solRowOf("rem-1", SOL_B, "q-B", { status: "submitted", tx_hash: SIG }),
+      ]);
+      // El paso 4 ('already_recorded') es el único desenlace SIN alerta. Si leyera filas ajenas, un
+      // depósito sin registro propio se reportaría como registrado y el remittanceId se perdería en
+      // silencio — exactamente el defecto que esta HU vino a cerrar.
+      expect(await record(client)).toBe("unrecorded_no_row");
+      expect(ledgerAlerts().length).toBe(1);
+      expect(ledgerAlerts()[0]).toContain("solana_principal_in_no_row");
+    });
+
+    // MUT-H — el `.in("status", NON_PREPARED_STATUSES)` del paso 3 sólo se distingue de su ausencia
+    // bajo una carrera: un `prepare` que aterriza ENTRE el paso 1 y el paso 3. Sin la carrera el
+    // filtro es equivalente a nada (si el paso 1 no encontró una 'prepared', tampoco la encuentra el
+    // paso 3), y por eso ningún test secuencial puede matarlo.
+    it("T-SCOPE-e (MUT-H): un prepare que aterriza a mitad NO recibe la signature de este settle", async () => {
+      const { client, rows } = makeTableClient([
+        solRowOf("rem-1", SOL_A, "q-1", { status: "prepared" }),
+      ]);
+      // from() #1 = SELECT del paso 1 (encuentra la 'prepared'); #2 = UPDATE del paso 2. Justo antes
+      // del #2 el webhook mueve la fila a 'submitted' (el CAS falla ⇒ 0 filas) y una recotización
+      // inserta una fila 'prepared' NUEVA. El paso 3 tiene que completar la vieja y NO tocar la nueva:
+      // su placeholder es lo que permite que un settle posterior la ascienda.
+      const raced = withRaceBeforeNthFrom(client, 2, () => {
+        for (const r of rows) r.status = "submitted"; // hay exactamente una fila en este punto
+        rows.push({
+          id: "seed-late",
+          ...COLUMN_DEFAULTS,
+          ...solRowOf("rem-1", SOL_A, "q-late", { status: "prepared" }),
+        });
+      });
+      const out = await new SupabaseSettlementLedger(raced).recordSolanaPrincipalIn({
+        remittanceId: "rem-1",
+        senderAddress: SOL_A,
+        signature: SIG,
+      });
+      expect(out).toBe("evidence_filled");
+      expect(rows[0]?.tx_hash).toBe(SIG); // la que perdió la carrera SÍ recibe la evidencia
+      expect(rows[0]?.status).toBe("submitted"); // el paso 3 no lleva `status` en el patch
+      expect(rows[1]?.tx_hash).toBe("prepared:rem-1:q-late"); // la nueva conserva su placeholder
+      expect(rows[1]?.status).toBe("prepared");
+    });
   });
 });
 

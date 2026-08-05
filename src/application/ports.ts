@@ -406,6 +406,29 @@ export type SettlementLedgerStatus =
   | 'forward_error'
   | 'manual_review';
 
+// Las tres situaciones que se esconden hoy detrás de UN solo `fund_failed` del proveedor. La clase la
+// determina el ESTADO PREVIO de la fila (que viaja en el WHERE del UPDATE, nunca se lee antes), y cada
+// una pide una acción distinta de una persona. La tabla que las define vive en
+// infrastructure/persistence/webhook-failure-classes.ts.
+export type WebhookFailureClass = "no_principal" | "principal_in_escrow" | "principal_released";
+
+// Desenlace de recordWebhookOutcome. `classified:false` = el evento no era un `failed` (el camino
+// submitted/settled no clasifica nada). `failures` puede traer MÁS DE UNA clase: un payout_id
+// correlaciona con una fila por quoteId, y dos filas en estados previos distintos se clasifican cada
+// una por el suyo. Vacío = ninguna fila cambió (re-delivery: ya están todas en 'failed').
+export type WebhookOutcome =
+  | { readonly classified: false }
+  | { readonly classified: true; readonly failures: readonly WebhookFailureClass[] };
+
+// Los CINCO desenlaces de recordSolanaPrincipalIn. Antes eran dos (escribió / `return` mudo), y el
+// mudo era indistinguible de un éxito.
+export type SolanaPrincipalInOutcome =
+  | "ascended" // la fila 'prepared' subió a principal_in con la signature
+  | "evidence_filled" // la fila ya no estaba en 'prepared'; se completó el tx_hash sin tocar status
+  | "already_recorded" // NUESTRA signature ya estaba persistida (retry benigno) ⇒ NO-OP, sin alerta
+  | "unrecorded_conflict" // existe fila pero tiene evidencia de OTRA cosa: la nuestra se pierde
+  | "unrecorded_no_row"; // no hay fila: el depósito NO tiene registro durable
+
 export interface SettlementRecord {
   id: string;
   remittanceId: string;
@@ -527,11 +550,31 @@ export interface SettlementLedger {
   // conserva el de la fila 'prepared'; el resto (quote_id, receiver, payout_id) ya está ahí.
   // OWNER-SCOPED por sender_address (base58 canónico, CD-9/CD-10). NO inserta si no hay fila
   // preparada: sin ella no hay quote_id/value_minor honestos para las columnas NOT NULL.
+  //
+  // WKH-325 — CINCO desenlaces, y tres de ellos ALERTAN. El `remittanceId` es el único argumento con
+  // el que se pide un refund on-chain y no vive en ninguna cuenta de la cadena: su única copia durable
+  // la escribe el prepare (best-effort), y el depósito es el segundo momento natural para volver a
+  // escribirla. Antes esto tenía un `return` mudo cuando no había fila 'prepared', y ese no-escribir
+  // era INDISTINGUIBLE de un éxito. Contrato, en orden:
+  //   1. 'ascended'            — la fila 'prepared' de este owner subió a 'principal_in' con la
+  //                              signature (CAS: sólo desde 'prepared', jamás degrada un terminal).
+  //   2. 'evidence_filled'     — la fila ya salió de 'prepared' (el webhook llegó primero). La
+  //                              evidencia es ADITIVA: se completa el tx_hash SÓLO si sigue siendo el
+  //                              placeholder del prepare, y el `status` NO se toca. ALERTA.
+  //   3. 'already_recorded'    — NUESTRA signature ya está persistida (retry del sponsor). NO-OP y
+  //                              SIN alerta: la evidencia SÍ está.
+  //   4. 'unrecorded_conflict' — hay fila de esta remesa y este sender, pero con evidencia de otra
+  //                              cosa: la nuestra no queda escrita. ALERTA.
+  //   5. 'unrecorded_no_row'   — no hay ninguna fila: el depósito no tiene registro durable. ALERTA.
+  // Las alertas las emite la implementación (no el caller): la ruta del sponsor responde 200 en los
+  // cinco casos, así que un valor de retorno que nadie ramifica no puede ser el que sostenga la señal.
+  // El desenlace igual se devuelve tipado porque es lo que los tests asertan sin espiar la consola.
+  // NINGÚN paso lee la columna `status`: todo estado previo que importa viaja en el WHERE.
   recordSolanaPrincipalIn(input: {
     remittanceId: string;
     senderAddress: string; // base58 del depositor (canonicalizeAddress(...,'solana'))
     signature: string; // base58 — el equivalente Solana del txHash
-  }): Promise<void>;
+  }): Promise<SolanaPrincipalInOutcome>;
   // submit route (AC-3): UPDATE owner-scoped por (idempotencyKey, senderAddress).
   recordPayoutOutcome(input: {
     idempotencyKey: string;
@@ -601,11 +644,18 @@ export interface SettlementLedger {
   // cuyo settle nunca aterrizó y la fila se quedaba en 'prepared' para siempre. 'prepared' es
   // no-terminal por definición ⇒ pertenece al conjunto. NO se agrega a STALE_STATUSES (ese conjunto es
   // el del reconcile/listStale: una 'prepared' no se re-procesa ni existe en el índice parcial de la DB).
+  //
+  // WKH-325 — el `last_error` YA NO lo pasa el caller. El parámetro `error` se ELIMINÓ a propósito y
+  // no quedó opcional: dejarlo permitía que un call-site re-introdujera el enum plano
+  // ("transfi_fund_failed" para los tres desenlaces) sin que nada se pusiera rojo; sacarlo lo convierte
+  // en un error de compilación. Ahora el literal lo deriva la implementación del ESTADO PREVIO de cada
+  // fila, que viaja en el WHERE de tres UPDATEs disjuntos (CAS, sin lectura previa).
+  // El desenlace se devuelve porque el caller SÍ ramifica sobre él: la única alerta del endpoint se
+  // emite exactamente cuando aparece la clase 'principal_released'.
   recordWebhookOutcome(input: {
     payoutId: string;
     status: SettlementLedgerStatus; // solo 'submitted' | 'settled' | 'failed' (post-mapeo)
-    error?: string | null;          // enum estable, NUNCA el motivo crudo (DT-8/CD-3)
-  }): Promise<void>;
+  }): Promise<WebhookOutcome>;
 }
 
 // ── Utilidades inyectables (nada de Date.now/Math.random en el dominio) ──────

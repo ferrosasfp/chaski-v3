@@ -17,7 +17,9 @@
 // key ⇒ el retry de TransFi re-entrega el MISMO evento y lo re-muta idempotentemente, sin perder la
 // transición. El claim quedó como dedup best-effort (evita trabajo redundante); ya NO gatea la mutación.
 import { NextResponse } from "next/server";
+import type { WebhookOutcome } from "../../../../src/application/ports";
 import { getSettlementLedger } from "../../../../src/infrastructure/persistence/supabase-settlement-ledger";
+import { LEDGER_ALERT_PREFIX } from "../../../../src/infrastructure/persistence/ledger-alert";
 import { claimWebhookEventOnce } from "../../../../src/infrastructure/webhooks/webhook-event-store";
 import {
   extractEventId,
@@ -78,14 +80,26 @@ export async function POST(req: Request): Promise<Response> {
   //    terminal. last_error es un enum estable, NUNCA el reason crudo (DT-8/CD-3). Un DB-throw ⇒ 503
   //    (NUNCA 500) SIN quemar la key: el retry de TransFi re-muta el MISMO evento sin perder la
   //    transición (esto es lo que el orden claim-antes-de-mutar rompía).
+  //    WKH-325: el last_error YA NO lo elige este call-site. Lo deriva el ledger del estado previo de
+  //    cada fila, que es lo único que distingue "nunca hubo depósito nuestro" de "el principal está en
+  //    el escrow" de "el release ya entró". El desenlace vuelve tipado.
+  let outcome: WebhookOutcome;
   try {
-    await ledger.recordWebhookOutcome({
-      payoutId,
-      status: mapped,
-      error: mapped === "failed" ? "transfi_fund_failed" : undefined,
-    });
+    outcome = await ledger.recordWebhookOutcome({ payoutId, status: mapped });
   } catch {
     return NextResponse.json({ error: "webhook_unavailable" }, { status: 503 });
+  }
+
+  // 8b. La ÚNICA alerta de este endpoint, y sólo en el desenlace que cuesta el principal. NO afirma
+  //     que el principal se perdió: afirma que el proveedor confirmó haber visto los USDC
+  //     (asset_deposited ⇒ 'submitted') y DESPUÉS avisó que el fiat no salió. La verificación on-chain
+  //     del release la hace una persona; esto es el pedido de que la haga.
+  //     Va ANTES del claim para que no dependa de que Upstash conteste. Es POR EVENTO, no por fila:
+  //     dos filas del mismo payout_id en estados previos distintos producen dos last_error distintos y
+  //     UNA sola alerta, y una re-entrega produce CERO (las filas ya están en 'failed', fuera de todos
+  //     los conjuntos). CD-7: sólo el payoutId, nada más.
+  if (outcome.classified && outcome.failures.includes("principal_released")) {
+    console.error(`${LEDGER_ALERT_PREFIX} transfi_fund_failed_principal_released`, { payoutId });
   }
 
   // 9. Claim best-effort DESPUÉS del éxito de la mutación (CD-4 re-encuadrado). Solo dedup/telemetría:

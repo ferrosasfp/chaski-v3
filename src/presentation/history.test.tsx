@@ -29,6 +29,7 @@ import {
   FakeSolanaWallet,
   InMemoryRepo,
   T0,
+  TEST_CCI,
   beneficiary,
 } from "../test-support/fakes";
 
@@ -431,8 +432,8 @@ describe("el botón que borra avisa lo que se lleva", () => {
     fireEvent.change(screen.getByPlaceholderText("Nombre de tu familiar"), {
       target: { value: "Mamá" },
     });
-    fireEvent.change(screen.getByPlaceholderText("999 888 777"), {
-      target: { value: "999888777" },
+    fireEvent.change(screen.getByPlaceholderText("002 193 004455667788 99"), {
+      target: { value: TEST_CCI },
     });
     fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
     fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));

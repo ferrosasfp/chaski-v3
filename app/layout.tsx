@@ -12,8 +12,12 @@ const hanken = Hanken_Grotesk({
 
 export const metadata: Metadata = {
   title: "Chaski — mandá plata a Perú",
+  // Decía "Reciben soles en su Yape" y es el texto que sale en Google y en toda vista previa de un
+  // enlace compartido. Chaski no manda a Yape: deposita a una cuenta bancaria peruana (CCI), y
+  // desde este cambio la primera pantalla tampoco lo ofrece. La descripción nombra el mismo destino
+  // que la pantalla, así que las dos se rompen juntas si algún día divergen.
   description:
-    "Mandá plata a tu familia en Perú con solo pedirlo. Reciben soles en su Yape, rápido y claro.",
+    "Mandá plata a tu familia en Perú con solo pedirlo. Reciben soles depositados en su cuenta bancaria.",
   manifest: "/manifest.json",
   // Los genera scripts/generate-icons.py desde la geometría de ChaskiMark. Sin esto el sitio no
   // tenía NINGÚN icono (/favicon.ico daba 404 y el manifiesto traía "icons": []), y toda wallet o

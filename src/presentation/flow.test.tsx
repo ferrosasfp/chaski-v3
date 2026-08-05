@@ -39,6 +39,7 @@ import {
   InMemoryRepo,
   QUOTE_EXPIRES,
   T0,
+  TEST_CCI,
   beneficiary,
 } from "../test-support/fakes";
 
@@ -101,11 +102,11 @@ vi.mock("framer-motion", () => ({
 afterEach(() => cleanup());
 
 // ── Helpers de navegación (WKH-187: send → connect → review(pre-KYC) → verify → confirm) ──────
-function fillSend(recipient = "Mamá", destination = "999888777"): void {
+function fillSend(recipient = "Mamá", destination = TEST_CCI): void {
   fireEvent.change(screen.getByPlaceholderText("Nombre de tu familiar"), {
     target: { value: recipient },
   });
-  fireEvent.change(screen.getByPlaceholderText("999 888 777"), {
+  fireEvent.change(screen.getByPlaceholderText("002 193 004455667788 99"), {
     target: { value: destination },
   });
 }
@@ -229,7 +230,7 @@ it("T4: '¿No sos vos?' aparece solo con una address conectada", async () => {
 it("T5: 'Borrar igual' limpia address + PII del beneficiario y vuelve a 'send'", async () => {
   render(<RemittanceFlow container={buildTestContainer()} />);
 
-  fillSend("Mamá", "999888777");
+  fillSend("Mamá", TEST_CCI);
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
   fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
 
@@ -246,7 +247,7 @@ it("T5: 'Borrar igual' limpia address + PII del beneficiario y vuelve a 'send'",
 
   // (c) recipient limpio · (d) destino limpio · (e) monto vuelve al default "400".
   const recipientInput = screen.getByPlaceholderText("Nombre de tu familiar") as HTMLInputElement;
-  const destinationInput = screen.getByPlaceholderText("999 888 777") as HTMLInputElement;
+  const destinationInput = screen.getByPlaceholderText("002 193 004455667788 99") as HTMLInputElement;
   expect(recipientInput.value).toBe("");
   expect(destinationInput.value).toBe("");
   expect(amountInput.value).toBe("400");

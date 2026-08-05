@@ -7,6 +7,16 @@ import { canonicalSha256 } from "./canonical-hash";
 
 // Pinneada y verificada en F2 sobre los 3 IDL reales (todos canonicalizan igual, address DR5G).
 // Re-pinneo SOLO con SDD explícito, jamás por drift silencioso (ver CONTRACT-VERSIONS.md).
+// RE-PIN 2026-08-05 — despliegue en devnet (slot 481495859, binario verificado byte a byte contra
+// el artefacto local). Motivo, medido con un diff normalizado del IDL entero (claves ordenadas):
+// la ÚNICA diferencia es que `close` suma una SÉPTIMA cuenta, `escrow_index`, `optional: true`, al
+// final de la lista (después de `token_program`). Ningún discriminador se movió: los 6 de las
+// instrucciones y los 2 de las cuentas (`EscrowIndex`, `EscrowState`) son idénticos. `deposit`,
+// `release`, `refund`, `register_escrow` y `deregister_escrow` conservan cuentas, orden y args.
+// Los errores siguen siendo 6000..6008, sin renumerar ni borrar. `EscrowStatus` sigue con 3
+// variantes, así que el decode de la cuenta no se mueve.
+// Valor idéntico al pineado en wasiai-facilitator (src/chains/escrow-idl.hash.test.ts).
+// Anterior: fb64c937dbdab7a58045e663a85724808c4539707fedbdf244e11a28dbe5c071.
 // RE-PIN 2026-08-01 — ventana de custodia. Motivo, medido con un diff instrucción por instrucción
 // contra el IDL nuevo: (a) `close` suma la cuenta `sender_ata` (el barrido del vault) y (b) entran
 // los errores 6006 DeadlineTooSoon, 6007 DeadlineTooFar y 6008 ReleaseWindowClosed. NINGÚN código
@@ -19,7 +29,7 @@ import { canonicalSha256 } from "./canonical-hash";
 // RE-PIN 2026-07-28 — HU-SOL-20 / R2b (SDD solana-programs/doc/sdd/002-escrow-remittance-id-recovery
 // /sdd.md §4.10 DT-9). Motivo: R1 agregó register_escrow + deregister_escrow, la cuenta EscrowIndex
 // y el error 6005. Anterior: aa53c03f159f7381cedf598cfd1b9e0b12d34dcdb2ae3240e9c14b288225fb71.
-const ESCROW_IDL_SHA256 = "fb64c937dbdab7a58045e663a85724808c4539707fedbdf244e11a28dbe5c071";
+const ESCROW_IDL_SHA256 = "bfbdfe5aedd55d68e6dda4663b5d26daada815c99db03df34a1601fe4a4d3922";
 
 describe("escrow IDL — hash canónico (WKH-227 / AC-2, AC-3)", () => {
   // AC-2 (siempre corre): si alguien edita escrow-idl.ts a mano sin re-pinnear → ROJO.

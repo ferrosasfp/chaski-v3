@@ -3,7 +3,6 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowRight,
   BadgeCheck,
-  Camera,
   Check,
   Clock3,
   ExternalLink,
@@ -76,13 +75,6 @@ const METHODS: { id: PayoutMethod; label: string }[] = [
   { id: "bank_cci", label: "Banco (CCI)" },
 ];
 
-// Etapas del escaneo Didit (documento → selfie/liveness → screening AML). Simuladas en demo;
-// en real es la sesión hospedada de Didit que extrae la identidad del documento.
-const SCAN_STEPS = [
-  "Escaneando tu documento",
-  "Verificando tu rostro (selfie)",
-  "Revisando listas de seguridad (AML)",
-];
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
@@ -720,7 +712,8 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                   <ShieldCheck className="h-5 w-5" />
                   <p className="text-sm font-semibold">Verificación única</p>
                 </div>
-                {/* Dos frases se cayeron acá y por motivos distintos.
+                {/* TRES frases se cayeron acá, y la tercera es de la misma familia que las dos
+                    primeras. Las dos primeras, del barrido anterior:
                     · "Lo hace Didit, un verificador certificado": con `DIDIT_ENV=mock` no lo hace
                       Didit, lo hace `/kyc-simulado`, que es una página nuestra que no verifica nada. Y
                       esta pantalla no puede distinguir las dos configuraciones, porque el navegador no
@@ -729,11 +722,19 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                       cumplirla, y además es falsa en el único sentido literal (el documento y la
                       selfie van al verificador; ese es el punto). Lo que sí está probado es el límite
                       concreto: el body que sale hacia los agentes no lleva `kyc` ni `identity`
-                      (`a2a/gateway-client.test.ts`, T-A6.1). Eso es lo que dice ahora. */}
+                      (`a2a/gateway-client.test.ts`, T-A6.1). Eso es lo que dice ahora.
+                    · "Escaneás tu DNI y te sacás una selfie": la que quedó, y la única que describía
+                      una ACCIÓN FÍSICA. Con `DIDIT_ENV=mock` la persona aterriza en `/kyc-simulado`,
+                      que no pide ni un dato y lo dice con todas las letras. Medido contra producción
+                      el 2026-08-05: `POST /api/kyc/session` devuelve un `url` que apunta a
+                      `/kyc-simulado`, o sea que ésa ES la configuración con la que se recorre la demo.
+                      Se borra, con el mismo criterio que las dos vecinas: la pantalla no puede
+                      distinguir las dos configuraciones, así que dice sólo lo que vale en las dos. Lo
+                      que la persona va a tener que hacer lo decide el verificador, y este componente
+                      no sabe cuál está configurado. */}
                 <p className="text-sm text-stone">
-                  Por ley, verificamos tu identidad <b>una sola vez</b>. Escaneás tu DNI y te sacás
-                  una selfie. Tu documento y tu selfie no se comparten con los agentes que cotizan y
-                  pagan.
+                  Por ley, verificamos tu identidad <b>una sola vez</b>. Tu documento y tu selfie no
+                  se comparten con los agentes que cotizan y pagan.
                 </p>
                 {scanStage === 0 ? (
                   <div className="flex items-center justify-center gap-3 rounded-xl border border-dashed border-line bg-sand/60 py-7">
@@ -742,41 +743,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                     <ScanFace className="h-8 w-8 text-stone" />
                   </div>
                 ) : (
-                  <ol className="space-y-2.5 rounded-xl bg-sand/60 px-4 py-3.5">
-                    {SCAN_STEPS.map((s, i) => {
-                      const stageNo = i + 1;
-                      const done = scanStage > stageNo || scanStage === 4;
-                      const active = scanStage === stageNo;
-                      return (
-                        <li key={s} className="flex items-center gap-2.5">
-                          <span
-                            className={
-                              done
-                                ? "flex h-5 w-5 items-center justify-center rounded-full bg-verde text-white"
-                                : active
-                                  ? "flex h-5 w-5 items-center justify-center rounded-full bg-cochineal text-white"
-                                  : "flex h-5 w-5 items-center justify-center rounded-full bg-line"
-                            }
-                          >
-                            {done ? (
-                              <Check className="h-3 w-3" />
-                            ) : active ? (
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                            ) : null}
-                          </span>
-                          <span
-                            className={
-                              done || active
-                                ? "text-sm font-medium text-ink"
-                                : "text-sm text-stone"
-                            }
-                          >
-                            {s}
-                          </span>
-                        </li>
-                      );
-                    })}
-                  </ol>
+                  <VerificationProgress approved={scanStage >= 4} />
                 )}
               </Card>
               <Button disabled={busy} onClick={onVerify}>
@@ -784,7 +751,11 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
                   <>
-                    <Camera className="h-4 w-4" /> Escanear DNI + selfie
+                    {/* La MISMA promesa que la frase de arriba, y en el elemento más grande de la
+                        pantalla: "Escanear DNI + selfie" describe una acción física que con el
+                        verificador simulado no ocurre. Lo que este botón hace en las dos
+                        configuraciones es arrancar la verificación, y eso es lo que dice. */}
+                    <ShieldCheck className="h-4 w-4" /> Verificar mi identidad
                   </>
                 )}
               </Button>
@@ -905,6 +876,45 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
         </div>
       ) : null}
     </main>
+  );
+}
+
+/**
+ * Lo que pasa mientras la verificación arranca, dicho como lo que es.
+ *
+ * 🔴 ACÁ HABÍA UNA BARRA DE PROGRESO INVENTADA, y de dos maneras a la vez. `SCAN_STEPS` listaba tres
+ * etapas ("Escaneando tu documento" / "Verificando tu rostro (selfie)" / "Revisando listas de
+ * seguridad (AML)") que se pintaban una tras otra.
+ *
+ * 1. Las etapas 2 y 3 NO EXISTEN. `setScanStage` sólo se llama con 0, 1 y 4 en todo este archivo, así
+ *    que la segunda y la tercera fila nunca se prendían: se quedaban grises para siempre y saltaban
+ *    directo a un tilde verde. Nadie las midió porque nadie las testeaba.
+ * 2. Entre la etapa 1 y la 4 lo único que ocurre es UNA llamada a `startKyc`. Con `DIDIT_ENV=mock`
+ *    (la configuración de producción, medida el 2026-08-05: la sesión resuelve a `/kyc-simulado`)
+ *    nadie escanea un documento, nadie mira una cara y nadie consulta una lista AML. La pantalla
+ *    narraba tres pasos de un verificador que no se estaba ejecutando.
+ *
+ * Lo que queda es lo único que vale en las dos configuraciones: estamos esperando la respuesta, y
+ * después sabemos si volvió aprobada. `approved` sale de `scanStage === 4`, que este archivo setea
+ * SÓLO después de comprobar `snapshot.status === "kyc_passed"`. No dice "verificada": de eso se ocupa
+ * `IdentityBadge` en la pantalla siguiente, que sí mira la proveniencia.
+ */
+function VerificationProgress({ approved }: { approved: boolean }) {
+  return (
+    <div className="flex items-center gap-2.5 rounded-xl bg-sand/60 px-4 py-3.5">
+      <span
+        className={
+          approved
+            ? "flex h-5 w-5 items-center justify-center rounded-full bg-verde text-white"
+            : "flex h-5 w-5 items-center justify-center rounded-full bg-cochineal text-white"
+        }
+      >
+        {approved ? <Check className="h-3 w-3" /> : <Loader2 className="h-3 w-3 animate-spin" />}
+      </span>
+      <span className="text-sm font-medium text-ink">
+        {approved ? "Tu verificación volvió aprobada" : "Preparando tu verificación"}
+      </span>
+    </div>
   );
 }
 

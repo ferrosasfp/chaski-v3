@@ -131,3 +131,32 @@ describe("la tarjeta dice quién corre, no sólo quién ofrece", () => {
     expect(document.body.textContent ?? "").not.toContain("—");
   });
 });
+
+// ── El precio que nadie cobra ────────────────────────────────────────────────────────────────────
+//
+// Decía "Lo que cobran los agentes: 0.06 USDC". En el carril punto a punto las dos rutas hacen un
+// `fetch` liso (sin x402, sin `Authorization`, sin Agent Key) y el agente contesta 200: verificado en
+// vivo contra producción el 2026-08-05. Nadie cobra eso, y encima es el precio de catálogo de agentes
+// que pueden no ser los que corren.
+describe("el precio dice qué es y quién lo cobraría", () => {
+  it("en punto-a-punto no afirma un cobro: dice que se llama sin pago", async () => {
+    await verLaTarjeta([paso()], 0.06);
+
+    expect(screen.getByText("Precio publicado en el catálogo")).toBeInTheDocument();
+    expect(screen.getByText("0.06 USDC")).toBeInTheDocument(); // el dato se conserva
+    expect(
+      screen.getByText(/la app los llama sin ningún pago y contestan igual/),
+    ).toBeInTheDocument();
+    // La frase vieja, que afirmaba un cobro que no ocurre.
+    expect(screen.queryByText("Lo que cobran los agentes")).toBeNull();
+  });
+
+  // El otro carril SÍ paga, y por eso no puede compartir la frase: ahí el fee lo liquida el gateway
+  // contra la Agent Key de Chaski. Decir "no se cobra" también ahí sería el mismo error al revés.
+  it("en el carril del gateway dice quién paga, en vez de decir que no se cobra", async () => {
+    await verLaTarjeta([paso({ transport: "gateway", runsTodayAgentId: null })], 0.06);
+
+    expect(screen.getByText(/lo paga Chaski con su Agent Key al ejecutar el paso/)).toBeInTheDocument();
+    expect(screen.queryByText(/los llama sin ningún pago/)).toBeNull();
+  });
+});

@@ -1662,15 +1662,42 @@ function AgentPlanCard() {
         ))}
       </div>
       <div className="mt-3 flex items-baseline justify-between">
-        <span className="text-xs text-stone">Lo que cobran los agentes</span>
+        <span className="text-xs text-stone">Precio publicado en el catálogo</span>
         <span className="tabular text-sm font-semibold">{plan.totalUsdc} USDC</span>
       </div>
+      <p className="mt-1 text-xs text-stone">
+        {plan.steps.some((s) => s.transport === "punto-a-punto")
+          ? AGENT_PRICE_NOTE_DIRECT
+          : AGENT_PRICE_NOTE_GATEWAY}
+      </p>
       <p className="mt-2 text-xs text-stone">
         Tu identidad no pasa por el catálogo: se verifica con el proveedor directo.
       </p>
     </Card>
   );
 }
+
+/**
+ * Qué es ese número, y quién lo cobraría.
+ *
+ * 🔴 ACÁ DECÍA "Lo que cobran los agentes", y nadie lo cobra. En el carril punto a punto las dos rutas
+ * hacen un `fetch` liso: sin x402, sin `Authorization`, sin Agent Key (`a2a/quote/route.ts`:142 y
+ * `payout/prepare/route.ts`:269). Verificado en vivo el 2026-08-05: un `POST /api/a2a/quote` contra
+ * producción devuelve 200 sin ningún pago. El número, encima, es el precio de catálogo de agentes que
+ * pueden no ser los que corren, que es lo que cada fila ya dice una por una.
+ *
+ * El dato no se borra (sirve para comparar lo que el catálogo publica): se le pone dueño y tiempo
+ * verbal, que es el mismo criterio con el que ya se arregló el "llega en ~30 min".
+ *
+ * Las dos frases separadas porque los dos carriles cobran distinto y el `transport` los distingue:
+ * con el gateway el fee del agente lo liquida el gateway contra la Agent Key de Chaski
+ * (`gateway-client.ts`, header `x-a2a-key`), o sea que ahí sí se paga, sólo que no lo paga la persona
+ * ni sale de lo que envía. Una sola frase para los dos casos tendría que ser falsa en uno.
+ */
+const AGENT_PRICE_NOTE_DIRECT =
+  "Es lo que estos agentes publican en el catálogo, no lo que se cobra en este envío: por el carril de hoy la app los llama sin ningún pago y contestan igual.";
+const AGENT_PRICE_NOTE_GATEWAY =
+  "Es lo que estos agentes publican en el catálogo. Por el carril del gateway ese fee lo paga Chaski con su Agent Key al ejecutar el paso, y no se suma a lo que enviás.";
 
 /**
  * La línea que dice QUIÉN corre hoy este paso. Cuatro casos, y ninguno colapsa en otro.

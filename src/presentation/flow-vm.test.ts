@@ -492,6 +492,12 @@ describe("flow-vm — humanError", () => {
     expect(copy).not.toBe("Algo salió mal. Intentá de nuevo.");
     // No comparte mensaje con "no pudo entregarse": la persona no tiene que esperar ningún reembolso.
     expect(copy).not.toBe(humanError("payout_failed"));
+    // El umbral ahora incluye la comisión del refund, que la paga el SENDER (`refundEscrow` fija
+    // `tx.feePayer = senderPk`). "La comisión de red la pagamos nosotros" a secas pasó a ser falso:
+    // el texto tiene que decir cuál de las dos comisiones es cuál, o le está pidiendo a la persona
+    // que cargue un costo que la misma frase le dice que no paga.
+    expect(copy).toContain("comisión de red del depósito la pagamos nosotros");
+    expect(copy).toContain("la comisión de la transacción con la que podrías recuperar tus USDC");
   });
 
   // Hallazgo #75 — las tres causas de rechazo de cotización caían en "Algo salió mal. Intentá de

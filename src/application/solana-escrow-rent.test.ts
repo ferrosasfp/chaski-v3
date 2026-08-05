@@ -1,0 +1,89 @@
+// EL UMBRAL DE SOL, CONTRA LA CADENA Y CONTRA EL IDL.
+//
+// El umbral viejo (9.000.000 lamports) sumaba el rent de `EscrowIndex`, una cuenta que el depósito NO
+// crea. Pedía 2,25× lo que el primer depósito de una billetera nueva costó de verdad (4.002.000
+// lamports, medido en cadena) y podía voltear una demo en vivo con un "te falta SOL" falso. Y aun
+// pidiendo de más, no cubría la comisión del refund, que el propio archivo declaraba como no cubierta:
+// quien depositaba con lo justo se quedaba sin con qué firmar su propia recuperación.
+//
+// Estos tests atan el número a sus DOS fuentes verificables: la medición en cadena y el IDL pinneado.
+// Un test que sólo comparara la constante contra sí misma no probaría nada.
+import { describe, expect, it } from "vitest";
+import { escrowIdl } from "../infrastructure/solana/escrow-idl";
+import {
+  LAMPORTS_PER_SOL,
+  SENDER_MIN_LAMPORTS_FOR_DEPOSIT,
+  formatLamportsAsSol,
+} from "./solana-escrow-rent";
+
+/** Lo que el remitente `8tJVcM2J` pagó de verdad en su PRIMER depósito, medido en devnet. */
+const MEASURED_FIRST_DEPOSIT_LAMPORTS = 4_002_000;
+/** Rent de `EscrowIndex` (558 bytes), medido por la suite del programa. La cuenta que NO se crea acá. */
+const ESCROW_INDEX_RENT_LAMPORTS = 4_774_560;
+
+describe("el umbral de SOL sale del costo REAL del depósito", () => {
+  // 🔴 EL test. Si alguien vuelve a sumar el rent del índice, el umbral pasa de 4.100.000 a más de
+  // 8.700.000 y este límite se rompe.
+  it("no supera por mucho lo que el primer depósito costó en cadena", () => {
+    expect(SENDER_MIN_LAMPORTS_FOR_DEPOSIT).toBeGreaterThanOrEqual(MEASURED_FIRST_DEPOSIT_LAMPORTS);
+    // Cota dura: hasta un 10% por encima de lo medido. El viejo pedía 2,25×.
+    expect(SENDER_MIN_LAMPORTS_FOR_DEPOSIT).toBeLessThanOrEqual(
+      Math.round(MEASURED_FIRST_DEPOSIT_LAMPORTS * 1.1),
+    );
+  });
+
+  it("NO incluye el rent de EscrowIndex, que ninguna transacción de Chaski paga", () => {
+    // Si estuviera adentro, el umbral tendría que cubrir la suma de los dos.
+    expect(SENDER_MIN_LAMPORTS_FOR_DEPOSIT).toBeLessThan(
+      MEASURED_FIRST_DEPOSIT_LAMPORTS + ESCROW_INDEX_RENT_LAMPORTS,
+    );
+  });
+
+  // La fuente de por qué el índice no entra: el IDL. No es una opinión sobre el programa, es su
+  // contrato. Si un día `deposit` empieza a tocar `escrow_index`, este test se pone rojo y el umbral
+  // hay que re-derivarlo.
+  it("la ix `deposit` no toca `escrow_index` (por eso su rent no es un sumando)", () => {
+    const idl = escrowIdl as unknown as {
+      instructions: Array<{ name: string; accounts: Array<{ name: string }> }>;
+    };
+    const deposit = idl.instructions.find((i) => i.name === "deposit");
+    expect(deposit).toBeDefined();
+    const names = deposit?.accounts.map((a) => a.name) ?? [];
+    expect(names).toHaveLength(8);
+    expect(names).not.toContain("escrow_index");
+    // Y la que sí la crea existe, así que el `not.toContain` de arriba no pasa por un rename.
+    const register = idl.instructions.find((i) => i.name === "register_escrow");
+    expect(register?.accounts.map((a) => a.name)).toContain("escrow_index");
+  });
+
+  // Lo que el umbral viejo declaraba como NO cubierto y dejaba a la persona sin salida: si deposita
+  // con lo justo, después no tiene con qué firmar su propia recuperación.
+  it("cubre la comisión del refund, que la paga el sender", () => {
+    const margenSobreElDeposito = SENDER_MIN_LAMPORTS_FOR_DEPOSIT - MEASURED_FIRST_DEPOSIT_LAMPORTS;
+    // 5.000 de comisión base (1 firma) + 75.000 de propina inyectada por la billetera.
+    expect(margenSobreElDeposito).toBeGreaterThanOrEqual(80_000);
+  });
+});
+
+describe("el número que se le muestra a la persona nunca pide menos que el guard", () => {
+  // Con `toFixed(3)` el umbral de 4.100.000 se mostraba como "0,004": la persona cargaba 0,004 SOL
+  // (4.000.000 lamports), hacía exactamente lo que la pantalla le pidió, y volvía a chocar con el
+  // mismo error.
+  it("el texto del umbral, leído de vuelta a lamports, alcanza para pasar el guard", () => {
+    const texto = formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT);
+    const lamportsQueCargaria = Number(texto.replace(",", ".")) * LAMPORTS_PER_SOL;
+    expect(lamportsQueCargaria).toBeGreaterThanOrEqual(SENDER_MIN_LAMPORTS_FOR_DEPOSIT);
+  });
+
+  it("redondea hacia arriba, nunca hacia abajo", () => {
+    expect(formatLamportsAsSol(4_100_000)).toBe("0,0041"); // exacto, sin inflar
+    expect(formatLamportsAsSol(4_100_001)).toBe("0,0042"); // un lamport de más ya sube el display
+    expect(formatLamportsAsSol(1)).toBe("0,0001"); // nunca "0,0000"
+    expect(formatLamportsAsSol(0)).toBe("0,0000");
+  });
+
+  it("usa coma decimal (es-PE), no punto", () => {
+    expect(formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT)).toContain(",");
+    expect(formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT)).not.toContain(".");
+  });
+});

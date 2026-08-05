@@ -381,13 +381,17 @@ export function humanError(code: string): string {
   if (code.includes("wallet_address_unavailable"))
     return "No pudimos leer la dirección de tu wallet. Reconectala y volvé a intentar: no se movió ningún USDC.";
   // Le falta SOL para el rent de las cuentas del escrow. El texto tiene que decir tres cosas que antes
-  // no decía ninguna: cuánto hace falta, por qué hace falta (el fee lo paga WasiAI, el rent no), y que
-  // no se movió nada. Sin esto, esta causa salía por el peor camino posible: "No sabemos todavía si te
-  // cobramos", que es lo que la pantalla dice cuando el depósito puede estar en el escrow.
+  // no decía ninguna: cuánto hace falta, por qué hace falta (el fee del depósito lo paga WasiAI, el
+  // rent no), y que no se movió nada. Sin esto, esta causa salía por el peor camino posible: "No
+  // sabemos todavía si te cobramos", que es lo que la pantalla dice cuando el depósito puede estar en
+  // el escrow.
   // El número NO está escrito a mano: se formatea desde la MISMA constante que compara el guard, así
   // que no puede quedar desactualizado respecto de lo que el código exige.
+  // "La comisión de red la pagamos nosotros" a secas pasó a ser falso cuando el umbral incorporó la
+  // comisión del refund: ésa la paga el sender (`refundEscrow` fija `tx.feePayer = senderPk`), y es
+  // parte de lo que se le está pidiendo que cargue. El texto ahora dice cuál de las dos es cuál.
   if (code.includes("solana_sender_sol_insufficient"))
-    return `Te falta SOL en la wallet: necesitás al menos ${formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT)} SOL para crear las cuentas del escrow. La comisión de red la pagamos nosotros, pero ese depósito de las cuentas sale de tu wallet. Cargá SOL y volvé a intentar: no se movió ningún USDC.`;
+    return `Te falta SOL en la wallet: necesitás al menos ${formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT)} SOL. La comisión de red del depósito la pagamos nosotros; de tu wallet salen el alquiler de las cuentas del escrow y la comisión de la transacción con la que podrías recuperar tus USDC. Cargá SOL y volvé a intentar: no se movió ningún USDC.`;
   // Nuestro servidor no pudo consultar el registro de direcciones preparadas y cortó ANTES de
   // reenviar la transacción (route.ts:126-133, antes del fetch de la línea 156). Sin frase propia
   // caía en el default "Algo salió mal", que no dice ni que la plata está quieta ni que reintentar

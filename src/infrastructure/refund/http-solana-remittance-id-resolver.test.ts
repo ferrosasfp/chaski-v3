@@ -141,3 +141,61 @@ describe("HttpSolanaRemittanceIdResolver.lookupBySender — los TRES desenlaces"
     }
   });
 });
+
+// 🔴 3er fix-pack (AR/BLQ-MED-1) — el TERCER salto del camino de recuperación que enumera C-3.
+// Los otros dos (el ledger y la ruta) ya tienen su candado con fixture LOCAL (T-330-5a / T-330-5b).
+// Éste es el que traduce la respuesta HTTP a la lista de remittanceId con la que la persona pide el
+// refund trustless de su escrow, y hasta este `describe` estaba candeado SÓLO por el literal
+// `status: "prepared"` del fixture de T-R0-11 (`:40`) — un fixture escrito para probar la FORMA del
+// POST, que nadie tiene motivo de mantener en 'prepared'.
+//
+// 🟩 MEDIDO por el AR sobre `b0be6fd`: cambiando ese literal a `"principal_in"` e insertando en
+// `http-solana-remittance-id-resolver.ts:43` un `.filter((r) => r.status !== "prepared")` antes del
+// `.map`, la suite completa quedaba `90 passed / 1391 passed`, EXIT=0 — VERDE ENTERA. Y el mutante
+// solo (sin tocar el literal) moría por `T-R0-11`, que es un test sobre el cuerpo del POST: quien
+// leyera ese rojo aprendía que rompió el request, NO que dejó irrecuperable un depósito real.
+// Ése es exactamente el defecto que esta HU existe para matar, un salto más abajo.
+//
+// El fixture de acá es LOCAL y propio: no comparte una sola constante con los `describe` de arriba.
+describe("HttpSolanaRemittanceIdResolver — 3er salto de C-3: la fila 'prepared' del depósito real (WKH-330/AC-5)", () => {
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("T-330-5c: conserva el remittanceId de la fila 'prepared' — es el depósito real cuyo write falló, y sin ese id no hay refund", async () => {
+    // Fixture LOCAL: el par exacto que importa, y nada más.
+    //   · WRITE_FALLIDO es la fila de WKH-330: el depósito OCURRIÓ on-chain (la signature está
+    //     verificada) y el write que la movía a 'principal_in' falló por infra (SQLSTATE clase 08),
+    //     así que quedó en 'prepared'. 'prepared' dice "no hay depósito REGISTRADO", que NO es lo
+    //     mismo que "no hubo depósito".
+    //   · TERMINAL es una fila normal, y está para que el assert de abajo no pueda pasar por la vía
+    //     de que el resolver devuelva todo o se rompa.
+    const WRITE_FALLIDO = "rem-330-resolver-write-fallido";
+    const TERMINAL = "rem-330-resolver-settled";
+    fetchMock.mockResolvedValue(
+      jsonRes(200, {
+        remittanceIds: [
+          { remittanceId: WRITE_FALLIDO, status: "prepared", createdAt: "2026-08-06T00:00:00.000Z" },
+          { remittanceId: TERMINAL, status: "settled", createdAt: "2026-08-05T00:00:00.000Z" },
+        ],
+      }),
+    );
+
+    const out = await new HttpSolanaRemittanceIdResolver(popOk()).lookupBySender(SENDER);
+    // Si el desenlace dejara de ser `answered`, `ids` queda `[]` y el assert nombrado de abajo es el
+    // que se pone rojo — que es lo que se quiere: el rojo tiene que hablar de la recuperación.
+    const ids = out.outcome === "answered" ? [...out.remittanceIds] : [];
+
+    expect(
+      ids,
+      "el resolver dejó de devolver el remittanceId de la fila 'prepared': el depósito real cuyo write falló se volvió irrecuperable desde el navegador y la persona no puede pedir el refund trustless de su escrow",
+    ).toContain(WRITE_FALLIDO);
+    // Control de no-vacuidad: el filtro que se persigue descarta 'prepared' y deja pasar el resto, así
+    // que sin este assert un resolver que devolviera SIEMPRE `[WRITE_FALLIDO]` también pasaría.
+    expect(ids).toContain(TERMINAL);
+  });
+});

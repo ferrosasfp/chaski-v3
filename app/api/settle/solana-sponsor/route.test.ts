@@ -566,12 +566,16 @@ describe("POST /api/settle/solana-sponsor (HU-SOL-13)", () => {
     // el payload no podría tener ninguna otra clave, o sea que habría que BORRAR code/kind/severity/
     // message — que son el diagnóstico entero (sin `code` no se distingue un 08006, la red, de un
     // 23514, un bug nuestro). Sería una regresión de diagnóstico dentro de una HU de diagnóstico.
-    // Se usa `toMatchObject` MÁS un assert explícito de ausencia de PII, porque `toMatchObject` deja
-    // de vigilar lo que NO está y `toEqual` lo vigilaba gratis: sin la segunda mitad, el desvío
-    // debilitaría el AC en vez de corregirlo.
+    // Se usa `toMatchObject` MÁS un `toEqual` sobre las CLAVES del payload, porque `toMatchObject`
+    // deja de vigilar lo que NO está y `toEqual` lo vigilaba gratis: sin esa segunda mitad el desvío
+    // debilitaría el AC en vez de corregirlo. La lista blanca es el reemplazo de lo que se perdió; la
+    // lista negra de nombres, más abajo, es diagnóstico y no la sustituye (AR/BLQ-BAJO-2).
     // Refutación del desvío: escribir el `toEqual({ remittanceId, signature })` literal y ver que
     // sólo pasa si el payload pierde las cuatro claves de diagnóstico.
-    it("T-330-2 (AC-2): el payload de la alerta trae la signature y el remittanceId, conserva el diagnóstico, y NO trae PII", async () => {
+    // ⚠️ Lo que este `it` verifica es UNA corrida con UN error (`08006`): que en ESE payload el juego
+    // de claves sea exactamente el previsto y que ningún valor sea la address del sender. NO es una
+    // prueba de que `logLedgerWriteFailure` no pueda filtrar PII por otro call-site o con otro error.
+    it("T-330-2 (AC-2): el payload de la alerta trae la signature y el remittanceId, conserva el diagnóstico, y sus claves son exactamente las seis previstas", async () => {
       const ledger = await ledgerWithPreparedSolana();
       vi.spyOn(ledger, "recordSolanaPrincipalIn").mockRejectedValue(
         new Error("ledger_record_solana_principal_in_failed:08006"),
@@ -597,10 +601,26 @@ describe("POST /api/settle/solana-sponsor (HU-SOL-13)", () => {
       // El diagnóstico NO se perdió (esto es lo que el `toEqual` de la letra habría borrado).
       expect(payload).toMatchObject({ code: "08006", severity: "transient" });
 
-      // CD-6 · ausencia de PII, por CLAVE y por VALOR. El de VALOR es el que importa: un
-      // `not.toContain("senderAddress")` sobre las claves pasa igual si la address viaja bajo otro
-      // nombre. Refutación: agregar `{ x: SENDER }` a la correlación de solana-sponsor/route.ts:221 —
-      // el assert de claves lo deja pasar y el de valor lo caza.
+      // CD-6 · ausencia de PII. 🔴 3er fix-pack (AR/BLQ-BAJO-2): la LISTA BLANCA es la mitad que
+      // faltaba. §2.2 aprobó cambiar el `toEqual({remittanceId, signature})` de la letra de AC-2 por
+      // `toMatchObject` CON LA CONDICIÓN de que un assert explícito devolviera lo que `toEqual`
+      // vigilaba gratis: que ninguna clave IMPREVISTA entre al payload. Lo que se escribió primero fue
+      // sólo una lista NEGRA de 7 nombres, y una lista negra no vigila lo que nadie enumeró.
+      // 🟩 MEDIDO por el AR sobre `b0be6fd`: agregando `montoUsd: "1234.56", beneficiaryDoc: "12345678"`
+      // a la correlación de solana-sponsor/route.ts:221, la suite quedaba `1391 passed`, EXIT=0 —
+      // VERDE. El monto y el documento del beneficiario viajaban al log y nada se ponía rojo, contra
+      // CD-6, que dice NUNCA montos ni beneficiary.
+      // El payload que emite ledger-write-failure.ts:133 es `{ ...correlation, code, kind, severity,
+      // message }`, así que ESTAS SEIS son todas las claves legítimas. Una clave nueva obliga a pasar
+      // por acá, que es el punto: el assert no adivina si es PII, obliga a que alguien lo decida.
+      expect(
+        Object.keys(payload).sort(),
+        "el payload de la alerta ganó o perdió una clave: si es nueva, nadie verificó que no sea PII (CD-6 prohíbe sender, montos y beneficiary), y este assert existe para que esa decisión no sea implícita",
+      ).toEqual(["code", "kind", "message", "remittanceId", "severity", "signature"].sort());
+
+      // Diagnóstico (NO reemplaza a la lista blanca de arriba): por CLAVE y por VALOR, nombra los
+      // sospechosos concretos para que el rojo diga QUÉ se filtró y no sólo que algo cambió. El de
+      // VALOR caza lo que ninguna lista de nombres puede: un `{ x: SENDER }` bajo cualquier clave.
       for (const k of [
         "senderAddress",
         "sender_address",

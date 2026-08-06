@@ -36,7 +36,18 @@
 //      :191, la edición fue neutra en líneas) y supabase-settlement-ledger.test.ts, que estaba en
 //      :1309 en 4541789 y hoy está en :1366 porque esta misma HU insertó un test más arriba —
 //      buscarla por su texto, «No está en la cola de varadas», no por el número.
-//   3. NO mira `doc/`, `migrations/`, ni ningún archivo que no sea .ts/.tsx.
+//   3. El barrido NO cubre el repo: cubre EXACTAMENTE `SCAN_DIRS` (la const de más abajo en este
+//      mismo archivo — se cita por NOMBRE y no por número a propósito: escribir acá el `:NN` ya se
+//      desfasó una vez al crecer este mismo encabezado; hoy vale `["src","app","scripts"]`)
+//      y sólo los `.ts`/`.tsx` (`SCAN_EXTS`), menos lo de `SKIP_DIRS`. Todo lo demás queda afuera, y
+//      no es una lista corta: quedan afuera `contracts/` (los programas Anchor y sus comentarios) y
+//      `supabase/` (las migraciones .sql, que sí llevan comentarios sobre el ciclo de vida de estas
+//      filas), además de `doc/`, `migrations/` y cualquier extensión que no sea .ts/.tsx. 🟩 Medido
+//      con el MISMO regex al cerrar WKH-330: `contracts/` 9 archivos / 0 hits y `supabase/` 5
+//      archivos / 0 hits, así que hoy no hay nada que corregir ahí — pero ese 0 es una FOTO que este
+//      test no vuelve a medir nunca. ⛔ No leer la regla como "los directorios
+//      que faltan son estos dos": la regla es `SCAN_DIRS`, y esta enumeración envejece con cada
+//      directorio nuevo del repo (CD-N7). Para saber qué se barre, leer `SCAN_DIRS`, no este párrafo.
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -97,7 +108,13 @@ function findClaims(): Hit[] {
   return hits;
 }
 
-describe("AC-4 — ningún archivo de producción afirma que 'prepared' implica que el principal no entró", () => {
+// ⚠️ El nombre de este `describe` nombra el MECANISMO (un barrido textual con un regex), NUNCA su
+// resultado. La versión anterior decía "ningún archivo de producción afirma que…", que es la promesa
+// de exhaustividad que el agujero #1 del encabezado (`:26`) declara ilegítima: vitest imprime el path
+// completo del `describe`, así que lo que un lector del verde veía era la promesa y no el agujero.
+// Exemplar del repo que ya lo resuelve: webhook-outcome-writers.static.test.ts:61 (neutro, sin
+// universal). AR/BLQ-BAJO-1.
+describe("WKH-330 / AC-4 — barrido textual de la frase «el principal … nunca entró» en producción", () => {
   it("el barrido no es vacuo: encuentra archivos y el regex matchea la frase que persigue", () => {
     // Sin esto, un `toEqual([])` sobre una lista vacía por un walk roto pasaría sin decir nada.
     // 50 es un PISO, no la medición: al escribir esto el barrido veía 88 archivos de producción, y
@@ -111,7 +128,7 @@ describe("AC-4 — ningún archivo de producción afirma que 'prepared' implica 
     expect([...dosLineas.matchAll(CLAIM_RE)]).toHaveLength(1);
   });
 
-  it("T-330-4 (AC-4): cero afirmaciones de ese tipo en src/, app/ y scripts/ de producción", () => {
+  it("T-330-4 (AC-4): cero hits del regex en los .ts/.tsx de producción bajo SCAN_DIRS", () => {
     const hits = findClaims();
     // El assert nombra los sitios, no sólo el número: un `expected 2 to be 0` no le dice a nadie
     // dónde mirar. La frase cauta que corresponde es "no hay depósito REGISTRADO", que no afirma

@@ -585,7 +585,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
 
   // T12 — el ÚNICO test que mira el PAYLOAD. T1..T6 assertan sobre `capturedTx(signSpy)`, que es el
   // objeto que Chaski le ENTREGA a la billetera. Lo que producción serializa y postea es lo que la
-  // billetera DEVUELVE (`remainingAccounts`, `solana-wallet.ts:375`), y en producción puede ser otro objeto: el
+  // billetera DEVUELVE (`remainingAccounts`, `solana-wallet.ts:399`), y en producción puede ser otro objeto: el
   // adapter serializa `signed`, no `tx`. Si una billetera real agrega sus propias ComputeBudget
   // —el escenario que esta HU declara que NO puede impedir (sdd.md §11.1)—, Chaski postea esa tx
   // sin chistar y ninguno de los seis se entera, porque todos miran el objeto de entrada.

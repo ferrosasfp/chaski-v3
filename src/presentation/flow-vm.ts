@@ -274,7 +274,7 @@ export function escrowRefundError(code: string): string {
  *  · En la acción normal el id es conocido, así que "no encontramos un depósito tuyo en el escrow"
  *    habla de UNA remesa concreta y la frase de `escrowRefundError` es correcta.
  *  · Acá el id no existe: se le pide la lista al store durable server-side y se sondean hasta
- *    `maxCandidates` PDAs on-chain (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:277`). `escrow_not_found` sale de DOS
+ *    `maxCandidates` PDAs on-chain (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:286`). `escrow_not_found` sale de DOS
  *    situaciones que no se distinguen desde afuera: el servidor no devolvió ningún id, o ninguno de
  *    los sondeados estaba `Deposited`. Ninguna de las dos prueba que la persona no tenga fondos.
  *
@@ -284,14 +284,84 @@ export function escrowRefundError(code: string): string {
  * de usar.
  */
 export function lostEscrowRecoveryError(code: string, maxCandidates: number): string {
+  // 🔴 LA FASE DE LA TRANSACCIÓN, PRIMERA (AR/BLQ-BAJO-1). Esta puerta pide DOS firmas: la de posesión
+  // (adentro del resolver) y la de la orden de devolución. Las dos las escribe la misma billetera con
+  // el mismo texto, así que la regexp de abajo NO puede distinguirlas: la fase la etiqueta
+  // `refundEscrow` con este código, que es lo único que llega acá pudiendo decir cuál de las dos fue.
+  // Para llegar a emitirse hicieron falta las cuatro cosas que este texto afirma: se firmó la
+  // posesión, el servidor contestó, se miró la cadena, y había un escrow de esta billetera abierto y
+  // vencido. Decir "no llegamos a preguntar" acá sería falso, y encima tiraría la información útil.
+  if (code.includes("escrow_refund_signature_incomplete"))
+    return "Encontramos un envío tuyo todavía abierto en el escrow y ya vencido, así que se puede recuperar. Lo que no se completó es la segunda firma, la de la orden que devuelve tus USDC a tu billetera. Volvé a intentar y aceptá esa segunda firma.";
+  // PRIMERA a propósito, y es seguro: ninguno de los tres literales que esta regexp reconoce contiene
+  // la subcadena `escrow_not_found`, así que no le roba casos a la rama de abajo. Eso no se supone:
+  // lo vigila el control de orden de ramas en `flow-vm.test.ts`, que exige que `escrow_not_found`
+  // siga saliendo por su texto. Sin ese control, ensanchar esta regexp sería invisible.
+  // ⚠️ El string lo escribe la wallet y no lo controlamos ("User rejected the request." en Phantom).
+  // La regexp está DUPLICADA de `escrowRentDiscoveryError` a propósito (CD-2 prohíbe tocar esa
+  // función para extraerla a una constante). Que las dos no diverjan lo vigila el guard de CD-12.
+  if (/user rejected|wallet_connect_cancelled|wallet_sign_not_available/i.test(code))
+    return "No se completó la firma que prueba que la billetera es tuya, así que no llegamos a preguntar. Esto no es una respuesta sobre tus fondos: volvé a intentar y aceptá la firma.";
   if (code.includes("escrow_not_found"))
     return `No encontramos escrows abiertos para esta billetera. Esto no dice que no tengas fondos: dice que ninguno de los últimos ${maxCandidates} envíos que el servidor tiene guardados de esta billetera está abierto en el contrato.`;
-  // "No pudimos preguntar" no es "no hay nada". `escrow_id_unavailable` = esta pantalla no tiene el
-  // resolver cableado; `escrow_recovery_unavailable` = el endpoint contestó algo que no es 200/403/501
-  // (`escrow_recovery_unavailable`, `http-solana-remittance-id-resolver.ts:40`). En los dos casos no llegamos a mirar la cadena.
+  // "No pudimos preguntar" no es "no hay nada". Cinco productores llegan acá, no dos.
+  // `escrow_id_unavailable` = esta pantalla no tiene el resolver cableado. `escrow_recovery_unavailable`
+  // llega con CUATRO orígenes: el endpoint contestó algo que no es 200/403/501
+  // (`escrow_recovery_unavailable`, `http-solana-remittance-id-resolver.ts:40`), y los TRES `not_asked`
+  // que el refund empezó a propagar en WKH-331 con el motivo pegado al código
+  // (`pop_disabled` / `registry_disabled` / `pop_rejected`). Los cuatro se dicen IGUAL: la persona no
+  // puede hacer nada distinto con cada uno, y el motivo NO se interpola en el texto (CD-5). En los
+  // cinco casos no llegamos a mirar la cadena.
   if (code.includes("escrow_id_unavailable") || code.includes("escrow_recovery_unavailable"))
     return "No pudimos consultar el registro de envíos. Esto no es una respuesta sobre tus fondos: no llegamos a preguntar. Probá de nuevo en un rato.";
-  return escrowRefundError(code);
+  // 🔴 LA FASE DE LA CONEXIÓN, que salía por la red de seguridad diciendo "no sabemos hasta dónde
+  // llegamos" (AR/MNR-9). Acá SÍ sabemos: no se llegó a nada. Esta puerta arranca con
+  // `resolveSender()` → `connectWallet.execute()` → `SolanaWalletAdapter.connect()`, y estos códigos
+  // salen todos de ese método ANTES de que exista una address con la que preguntarle nada al registro
+  // (`connect`, `solana-wallet.ts:169`): `wallet_bridge_not_mounted` lo tira `openModal` si el árbol
+  // de providers no montó; los otros cuatro rechazan `waitForConnection`, tres de ellos vía
+  // `walletErrorCode` desde el `onError` del provider (`failConnection`, `solana-providers.tsx:106`)
+  // e `invalid_address` desde el chequeo base58 del propio adapter.
+  //
+  // 🔴 EL POPUP BLOQUEADO VA APARTE, y no es cosmético: para esa causa "probá de nuevo en un rato" —lo
+  // que decía la red de seguridad— es un callejón sin salida. Reintentar con el bloqueador puesto
+  // vuelve a fallar siempre; lo único que lo destraba es permitir las ventanas emergentes.
+  if (code.includes("wallet_window_blocked"))
+    return "El navegador bloqueó la ventana de tu billetera, así que no llegamos a preguntar. Esto no es una respuesta sobre tus fondos: permití las ventanas emergentes para este sitio y volvé a intentar.";
+  // ⚠️ DOS CÓDIGOS DE LA MISMA FAMILIA QUE NO ENTRAN ACÁ, a propósito:
+  //  · `wallet_not_connected` sale de `connect()` también, pero ya tiene copy propio y accionable por
+  //    la enumeración de abajo ("Reconectá o desbloqueá tu wallet"), que no afirma nada sobre fondos.
+  //  · `wallet_error:<Nombre>` (un error de la librería que no sabemos nombrar) se queda en la red de
+  //    seguridad: es justo el caso en que "no sabemos hasta dónde llegamos" es lo cierto, y afirmar la
+  //    fase apoyándose en qué errores puede inventar mañana una dependencia sería afirmar de más.
+  // Y `no_wallet` NO se enumera porque no tiene productor: su mapeo se borró (ver `humanError` más
+  // abajo), y un `WalletNotReadyError` sale hoy como `wallet_error:WalletNotReadyError`.
+  if (
+    /wallet_bridge_not_mounted|wallet_connect_timeout|wallet_window_closed|wallet_connect_failed|invalid_address/.test(
+      code,
+    )
+  )
+    return "No llegamos a conectar tu billetera, así que no llegamos a preguntar. Esto no es una respuesta sobre tus fondos: conectá la billetera y volvé a intentar.";
+  // Lo que SÍ es una respuesta sobre el dinero, y por eso sigue saliendo por `escrowRefundError`. Va
+  // enumerado y no como un `else`: es la lista de códigos sobre los que se puede afirmar algo.
+  // `refund_tx_failed` no lo reconoce esa función y cae a su default, que para ESE código es cierto:
+  // `confirmRefund` sólo lo tira habiendo MEDIDO que la tx entró en un bloque y revirtió, y que el
+  // escrow no quedó Refunded. Ahí "no pudimos recuperar los fondos" es exactamente lo que pasó.
+  if (
+    /escrow_not_deposited|refund_before_deadline|wallet_not_connected|no_account|refund_tx_failed/.test(
+      code,
+    )
+  )
+    return escrowRefundError(code);
+  // 🔴 LA RED DE SEGURIDAD, que antes no existía (AR/MNR-3). Acá caía el default de `escrowRefundError`
+  // ("No pudimos recuperar los fondos. Intentá de nuevo."), y por acá salen desenlaces que son un "no
+  // llegamos a preguntar" y no un fracaso: `pop_challenge_unavailable` (el 429 del rate-limit del
+  // challenge, que se saca con dos clicks seguidos en "Buscar", y el 503 fail-closed) y el
+  // "Failed to fetch" del navegador sin red. Ninguno de los dos sabe si la plata está o no.
+  // Este texto tampoco puede irse al otro extremo: no afirma que no preguntamos (puede haber fallado
+  // después de preguntar, incluso después de firmar), afirma lo único cierto, que no sabemos dónde se
+  // cortó. Los códigos que SÍ responden sobre el dinero ya salieron arriba.
+  return "Algo se cortó antes de terminar. No sabemos hasta dónde llegamos, así que esto no es una respuesta sobre tus fondos. Probá de nuevo en un rato.";
 }
 
 // ── WKH-327 · el copy del cierre de cuentas ─────────────────────────────────────────────────────────
@@ -354,7 +424,7 @@ export function escrowRentExplainer(voice: "discovery" | "remittance"): {
  *
  * ⚠️ El texto de "confirmed" NO menciona los USDC, y es una regla, no una omisión: lo único que la
  * ausencia de `escrow_state` prueba es que las dos cuentas se cerraron. A dónde fue la plata no lo
- * dice — es la misma trampa que `probeEscrowRefunded` ya tiene escrita (`probeEscrowRefunded`, `solana-wallet.ts:692`).
+ * dice — es la misma trampa que `probeEscrowRefunded` ya tiene escrita (`probeEscrowRefunded`, `solana-wallet.ts:736`).
  */
 export function escrowCloseSentCopy(confirmation: "confirmed" | "pending" | "unknown"): string {
   if (confirmation === "confirmed")

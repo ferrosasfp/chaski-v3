@@ -17,7 +17,9 @@ import {
   escrowFundsKnowledge,
   escrowKnowledgeCopy,
   escrowRefundError,
+  escrowRentDiscoveryError,
   humanError,
+  lostEscrowRecoveryError,
   shortErrorCode,
   isDemoMode,
   isKycDemo,
@@ -29,6 +31,9 @@ import {
   KYC_PROVENANCE_LIVE,
   KYC_PROVENANCE_MOCK,
 } from "../infrastructure/didit/decision";
+// El número que el copy dice sale de la MISMA constante que el refund sondea, nunca de un literal
+// escrito acá: así el test no puede quedar afirmando un número que el código dejó de usar.
+import { MAX_RECOVERY_CANDIDATES } from "../infrastructure/solana-wallet";
 
 // WKH-320: acá abajo vivía el describe de isFallbackWalletAddress (WKH-184 AC-7/AC-9), que probaba
 // que la UI detectara la wallet demo por su address y, entre otras cosas, que la detección fuera
@@ -420,6 +425,208 @@ describe("flow-vm: escrowRefundError", () => {
       "No pudimos recuperar los fondos. Intentá de nuevo.",
     );
   });
+});
+
+// Los TRES literales van escritos a mano, uno por uno, y no salen de la regexp ni de ninguna de las
+// dos funciones que este bloque vigila (CD-12). Un guard que deriva sus inputs de lo que vigila se
+// aplaude a sí mismo: cualquier cambio en la regexp cambiaría también los inputs y el test seguiría
+// verde. "User rejected the request." es el texto que escribe Phantom; los otros dos son los códigos
+// que emite nuestro propio bridge (`solana-wallet-bridge.ts`).
+const LITERALES_DE_FIRMA_NO_COMPLETADA = [
+  "User rejected the request.",
+  "wallet_connect_cancelled",
+  "wallet_sign_not_available",
+] as const;
+
+describe("flow-vm: lostEscrowRecoveryError — la firma no completada no es un fracaso (WKH-331/AC-5)", () => {
+  // Hasta WKH-331 estos tres códigos no matcheaban ninguna rama y caían al default heredado de
+  // `escrowRefundError`: "No pudimos recuperar los fondos. Intentá de nuevo.". O sea que a alguien que
+  // cerró el popup de la firma se le decía que la recuperación de sus fondos había fracasado, cuando
+  // lo único que pasó es que no se llegó a preguntarle nada al registro.
+  for (const literal of LITERALES_DE_FIRMA_NO_COMPLETADA) {
+    it(`"${literal}" se dice como "no llegamos a preguntar", NO como un fracaso`, () => {
+      const copy = lostEscrowRecoveryError(literal, MAX_RECOVERY_CANDIDATES);
+      expect(copy).toContain("no llegamos a preguntar");
+      expect(copy).toContain("aceptá la firma");
+      expect(copy).not.toBe("No pudimos recuperar los fondos. Intentá de nuevo.");
+    });
+  }
+
+  // La OTRA firma de esta puerta (AR/BLQ-BAJO-1). El código lo etiqueta `refundEscrow` y es lo único
+  // que distingue la fase, porque la billetera escribe el mismo texto para las dos. Acá se fija que la
+  // rama de la posesión no se lo lleve puesto; que el código salga DE VERDAD del adapter cuando la
+  // firma de la orden se rechaza lo mide `refund-perdido-junta.test.ts` con el adapter real.
+  it("escrow_refund_signature_incomplete NO se dice como la firma de posesión", () => {
+    const copy = lostEscrowRecoveryError(
+      "escrow_refund_signature_incomplete",
+      MAX_RECOVERY_CANDIDATES,
+    );
+    expect(copy).toContain("segunda firma");
+    expect(copy).not.toContain("no llegamos a preguntar");
+    expect(copy).not.toBe("No pudimos recuperar los fondos. Intentá de nuevo.");
+  });
+
+  // 🔴 EL CONTROL DE ORDEN DE RAMAS. La rama de AC-5 se insertó PRIMERA, delante de la de
+  // `escrow_not_found`. Una regexp un poco más ancha le robaría casos a la rama de abajo sin romper
+  // ningún otro test: la pantalla pasaría a decir "no llegamos a preguntar" también cuando el servidor
+  // SÍ contestó, que es la sobre-corrección exacta que esta HU tiene que no cometer. Este test es lo
+  // que la hace visible al nivel del copy (su gemelo de integración es el caso E).
+  it("escrow_not_found SIGUE saliendo por su texto, que la rama nueva no le roba", () => {
+    const copy = lostEscrowRecoveryError("escrow_not_found", MAX_RECOVERY_CANDIDATES);
+    expect(copy).toContain("No encontramos escrows abiertos");
+    expect(copy).toContain(`los últimos ${MAX_RECOVERY_CANDIDATES} envíos`);
+    expect(copy).not.toContain("aceptá la firma");
+  });
+
+  // 🔴 EL CONTROL DE ARRIBA PROTEGÍA UN SOLO CÓDIGO, Y NO ALCANZA (AR/MNR-1). Medido: ensanchando la
+  // regexp a `/rejected|cancelled|wallet_sign_not_available/i` la suite COMPLETA quedaba verde
+  // (89 archivos, 1354 tests). Con esa regexp `escrow_recovery_unavailable:pop_rejected` —el 403, o sea
+  // la prueba de posesión que el servidor no verificó— cae en la rama de la firma, y la pantalla pasa
+  // de "No pudimos consultar el registro" a "aceptá la firma", que manda a la persona a re-firmar algo
+  // que sí firmó. `escrow_not_found` no lo detectaba porque no contiene "rejected" ni "cancelled".
+  //
+  // Los códigos van escritos a mano, uno por uno, y no salen de ninguna de las funciones vigiladas
+  // (mismo criterio que `LITERALES_DE_FIRMA_NO_COMPLETADA`). Son los que emite `refundEscrow`
+  // (`solana-wallet.ts`, `resolveRemittanceIdFromLedger`) con el motivo pegado.
+  const CODIGOS_DEL_REGISTRO_MUDO = [
+    "escrow_recovery_unavailable:pop_disabled",
+    "escrow_recovery_unavailable:registry_disabled",
+    "escrow_recovery_unavailable:pop_rejected", // ⚠️ contiene "rejected": el que se colaba
+    "escrow_id_unavailable",
+  ] as const;
+
+  for (const code of CODIGOS_DEL_REGISTRO_MUDO) {
+    it(`"${code}" sale por el texto del registro, NO por el de la firma`, () => {
+      const copy = lostEscrowRecoveryError(code, MAX_RECOVERY_CANDIDATES);
+      // La aserción positiva es la que distingue: las DOS copias contienen "no llegamos a preguntar",
+      // así que pedir esa subcadena no separa nada. "el registro de envíos" está sólo en ésta.
+      expect(copy).toContain("No pudimos consultar el registro de envíos");
+      expect(copy).not.toContain("aceptá la firma");
+      expect(copy).not.toContain("segunda firma");
+    });
+  }
+});
+
+// 🔴 LA RED DE SEGURIDAD DE ESTA FUNCIÓN, QUE NO EXISTÍA (AR/MNR-3). Los códigos que el guard no
+// reconoce caían a `escrowRefundError`, cuyo default dice "No pudimos recuperar los fondos. Intentá de
+// nuevo." Medido: por ahí salían TRES desenlaces que son "no llegamos a preguntar", no "fracasamos":
+//   · `pop_challenge_unavailable` — el 429 del rate-limit del challenge (dos clicks seguidos en
+//     "Buscar" alcanzan) y el 503 fail-closed, los dos desde `http-pop-signer.ts:23`;
+//   · `Failed to fetch` — el navegador sin red, que es el mensaje que escribe `fetch`.
+// La asimetría que lo delata: `escrowRentDiscoveryError` DECLARA su red de seguridad ("si algún día no
+// matchea, cae al default de abajo, que TAMBIÉN dice no llegamos a preguntar"). Acá esa red no existía
+// y el comentario copiado no lo advertía.
+describe("flow-vm: el default de lostEscrowRecoveryError no llama fracaso a un 'no preguntamos' (AR/MNR-3)", () => {
+  const NO_LLEGAMOS_A_PREGUNTAR = [
+    "pop_challenge_unavailable", // 429 del rate-limit del challenge / 503 fail-closed
+    "Failed to fetch", // el navegador sin red (lo escribe fetch, no nosotros)
+    "un_codigo_que_todavia_no_existe", // el que venga mañana: la red atrapa lo desconocido
+  ] as const;
+
+  for (const code of NO_LLEGAMOS_A_PREGUNTAR) {
+    it(`"${code}" no se dice como un fracaso de la recuperación`, () => {
+      const copy = lostEscrowRecoveryError(code, MAX_RECOVERY_CANDIDATES);
+      expect(copy).not.toBe("No pudimos recuperar los fondos. Intentá de nuevo.");
+      expect(copy).toContain("no es una respuesta sobre tus fondos");
+      // Y tampoco puede irse al otro extremo afirmando que miramos algo.
+      expect(copy).not.toContain(`los últimos ${MAX_RECOVERY_CANDIDATES} envíos`);
+    });
+  }
+
+  // ⚠️ EL CONTRAPESO, sin el cual lo de arriba es la sobre-corrección simétrica. `refund_tx_failed` NO
+  // es un "no preguntamos": `confirmRefund` sólo lo tira cuando MIDIÓ que la tx entró en un bloque y
+  // revirtió, y que el escrow no quedó Refunded. Ahí "no pudimos recuperar los fondos" es cierto, y
+  // decirle a esa persona "no llegamos a preguntar" sería el mismo error en el otro sentido.
+  it("refund_tx_failed SÍ se dice como un fracaso: es un 'no' medido en la cadena", () => {
+    expect(lostEscrowRecoveryError("refund_tx_failed", MAX_RECOVERY_CANDIDATES)).toBe(
+      "No pudimos recuperar los fondos. Intentá de nuevo.",
+    );
+  });
+
+  // Los otros tres que siguen saliendo por `escrowRefundError` porque SÍ son respuestas sobre el
+  // dinero: el escrow ya no está depositado, todavía no venció, o la wallet se desconectó.
+  it("los códigos que SÍ responden sobre los fondos conservan su copy", () => {
+    expect(lostEscrowRecoveryError("escrow_not_deposited", MAX_RECOVERY_CANDIDATES)).toContain(
+      "ya no está en el escrow",
+    );
+    expect(lostEscrowRecoveryError("refund_before_deadline", MAX_RECOVERY_CANDIDATES)).toContain(
+      "después del vencimiento",
+    );
+    expect(lostEscrowRecoveryError("wallet_not_connected", MAX_RECOVERY_CANDIDATES)).toContain(
+      "Reconectá",
+    );
+  });
+});
+
+// 🔴 LA FASE DE LA CONEXIÓN, que decía "no sabemos" sabiendo (AR/MNR-9). Medido con probe: estos
+// códigos salían por la red de seguridad ("Algo se cortó antes de terminar. No sabemos hasta dónde
+// llegamos"), y para ellos eso es tan falso como el defecto que la HU cierra, sólo que en el otro
+// sentido: los cinco los tira el adapter de la wallet (`connect`, `solana-wallet.ts:169`), que corre
+// ANTES de que exista una address con la que preguntarle nada al registro. No se abrió la billetera,
+// no se firmó, no se preguntó. Es preexistente: antes de WKH-331 decían "No pudimos recuperar los
+// fondos", que era peor.
+describe("flow-vm: los códigos de la fase de conexión dicen que no se preguntó (AR/MNR-9)", () => {
+  // Escritos a mano, uno por uno, y no derivados de la regexp que vigilan.
+  const CÓDIGOS_DE_LA_CONEXIÓN = [
+    "wallet_bridge_not_mounted", // el árbol de providers no montó: `openModal` ni se pudo llamar
+    "wallet_connect_timeout", // la espera venció (lib o bridge)
+    "wallet_window_closed", // se cerró la ventana de la wallet sin conectar
+    "wallet_window_blocked", // el navegador bloqueó el popup
+    "invalid_address", // la wallet devolvió algo que no es base58
+  ] as const;
+
+  for (const code of CÓDIGOS_DE_LA_CONEXIÓN) {
+    it(`"${code}" se dice como "no llegamos a preguntar", no como "no sabemos"`, () => {
+      const copy = lostEscrowRecoveryError(code, MAX_RECOVERY_CANDIDATES);
+      expect(copy).toContain("no llegamos a preguntar");
+      expect(copy).toContain("no es una respuesta sobre tus fondos");
+      expect(copy).not.toContain("No sabemos hasta dónde llegamos");
+      expect(copy).not.toBe("No pudimos recuperar los fondos. Intentá de nuevo.");
+      // Y no se van al otro extremo: no afirman haber mirado nada ni mandan a re-firmar.
+      expect(copy).not.toContain(`los últimos ${MAX_RECOVERY_CANDIDATES} envíos`);
+      expect(copy).not.toContain("aceptá la firma");
+      expect(copy).not.toContain("segunda firma");
+    });
+  }
+
+  // ⚠️ EL POPUP BLOQUEADO, aparte. Su acción no puede ser "probá de nuevo en un rato": con el
+  // bloqueador puesto el reintento falla siempre. Este test es lo que pone en rojo meterlo en la rama
+  // genérica de arriba.
+  it("wallet_window_blocked dice qué destraba, y no manda a esperar", () => {
+    const copy = lostEscrowRecoveryError("wallet_window_blocked", MAX_RECOVERY_CANDIDATES);
+    expect(copy).toContain("ventanas emergentes");
+    expect(copy).not.toContain("Probá de nuevo en un rato");
+  });
+
+  // 🔴 EL CONTROL, sin el cual la rama nueva podría habérselas llevado todas. Un error de la librería
+  // que no sabemos nombrar NO se rutea acá: para ése la red de seguridad dice lo cierto. Y
+  // `wallet_not_connected`, que sale del mismo `connect()`, conserva su copy accionable de siempre.
+  it("un wallet_error desconocido sigue cayendo en la red de seguridad", () => {
+    expect(lostEscrowRecoveryError("wallet_error:AlgoQueLaLibNoTenía", MAX_RECOVERY_CANDIDATES)).toBe(
+      "Algo se cortó antes de terminar. No sabemos hasta dónde llegamos, así que esto no es una respuesta sobre tus fondos. Probá de nuevo en un rato.",
+    );
+  });
+});
+
+describe("flow-vm: las DOS funciones responden igual a la firma no completada (WKH-331/CD-12)", () => {
+  // 🔴 POR QUÉ ESTE GUARD EXISTE. La regexp está escrita DOS veces a propósito: extraerla a una
+  // constante compartida obligaría a editar `escrowRentDiscoveryError`, que CD-2 prohíbe tocar. El
+  // precio de duplicar es que las dos pueden divergir en silencio, y esto es lo que se pone rojo
+  // cuando lo hacen, sin tocar la función protegida.
+  //
+  // ⚠️ La segunda subcadena NO es decorativa. El default de `escrowRentDiscoveryError` también dice
+  // "no llegamos a preguntar", así que con esa sola aserción este test pasaría aunque la rama de la
+  // firma no existiera en ninguna de las dos. "aceptá la firma" aparece SÓLO en esa rama.
+  for (const literal of LITERALES_DE_FIRMA_NO_COMPLETADA) {
+    it(`"${literal}": el refund perdido y el descubrimiento de cerrables dicen lo mismo`, () => {
+      const refund = lostEscrowRecoveryError(literal, MAX_RECOVERY_CANDIDATES);
+      const descubrimiento = escrowRentDiscoveryError(literal);
+      for (const copy of [refund, descubrimiento]) {
+        expect(copy).toContain("no llegamos a preguntar");
+        expect(copy).toContain("aceptá la firma");
+      }
+    });
+  }
 });
 
 describe("flow-vm — humanError", () => {

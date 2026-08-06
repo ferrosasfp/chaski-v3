@@ -12,7 +12,7 @@
 //
 // El layout NO se hardcodea: se decodifica con el BorshInstructionCoder de anchor sobre la MISMA
 // copia pinneada del IDL que usa el escritor (solana/escrow-idl.ts, la que arma la ix en
-// `authorizePrincipal`, `solana-wallet.ts:316`). Si el IDL cambia de forma, el lector cambia con él, y el test que decodifica
+// `authorizePrincipal`, `solana-wallet.ts:340`). Si el IDL cambia de forma, el lector cambia con él, y el test que decodifica
 // la salida REAL de authorizePrincipal se pone rojo si dejan de coincidir.
 import type { Idl } from "@coral-xyz/anchor";
 
@@ -40,7 +40,7 @@ export async function readDepositBeneficiary(
 
     const raw = Buffer.from(partialSignedTxB64, "base64");
     // `Transaction.from` valida el wire-format legacy y tira ante basura. Una tx VERSIONADA (v0) no
-    // deserializa acá y cae a `unreadable`: hoy el escritor arma una legacy (`authorizePrincipal`, `solana-wallet.ts:316`) y
+    // deserializa acá y cae a `unreadable`: hoy el escritor arma una legacy (`authorizePrincipal`, `solana-wallet.ts:340`) y
     // el día que eso cambie tiene que fallar ruidoso, no pasar de largo sin comparar nada.
     const tx = Transaction.from(raw);
     const programId = new PublicKey((escrowIdl as { address: string }).address);

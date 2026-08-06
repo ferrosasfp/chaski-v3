@@ -6,6 +6,7 @@ import * as anchor from "@coral-xyz/anchor";
 import type { Idl } from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, type Transaction } from "@solana/web3.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RemittanceIdLookup, SolanaRemittanceIdResolver } from "../application/ports";
 import { SolanaEscrowRefundGateway } from "./refund/solana-escrow-refund-gateway";
 import { SolanaWalletAdapter } from "./solana-wallet";
 import { escrowIdl } from "./solana/escrow-idl";
@@ -384,7 +385,7 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
     vi.restoreAllMocks();
   });
 
-  async function connectedWith(resolver?: { listBySender: ReturnType<typeof vi.fn> }) {
+  async function connectedWith(resolver?: SolanaRemittanceIdResolver) {
     solanaWalletBridge.setState({ publicKey: SENDER_B58, connected: true });
     const adapter = new SolanaWalletAdapter(resolver);
     await adapter.connect();
@@ -394,12 +395,12 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
   // ── T-R0-9 · AC-6 byte-idéntico: con id presente el resolver NI SE ROZA ──────────────────────────
   it("T-R0-9 (AC-6): con remittanceId presente el resolver NO se invoca (0 llamadas) y el refund sale igual", async () => {
     await mockChain({ "rem-refund-ok": "deposited" });
-    const listBySender = vi.fn(async () => ["rem-otro"]);
-    const adapter = await connectedWith({ listBySender });
+    const lookupBySender = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: ["rem-otro"] }));
+    const adapter = await connectedWith({ lookupBySender });
 
     const out = await adapter.refundEscrow("rem-refund-ok");
     expect(out.refundTx).toBe("refund-sig-recovered");
-    expect(listBySender).toHaveBeenCalledTimes(0); // el path que ya funcionaba no consulta nada
+    expect(lookupBySender).toHaveBeenCalledTimes(0); // el path que ya funcionaba no consulta nada
     // Y refundeó EXACTAMENTE el id pedido (no el que devolvería el resolver).
     const ix = capturedTx(signSpy).instructions[0];
     if (!ix) throw new Error("no_instruction");
@@ -408,26 +409,26 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
 
   it("T-R0-9: un remittanceId vacío/whitespace NO cuenta como presente (cae al fallback)", async () => {
     await mockChain({ "rem-recovered": "deposited" });
-    const listBySender = vi.fn(async () => ["rem-recovered"]);
-    const adapter = await connectedWith({ listBySender });
+    const lookupBySender = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: ["rem-recovered"] }));
+    const adapter = await connectedWith({ lookupBySender });
     await expect(adapter.refundEscrow("   ")).resolves.toEqual({
       refundTx: "refund-sig-recovered",
       confirmation: "confirmed",
     });
-    expect(listBySender).toHaveBeenCalledTimes(1);
+    expect(lookupBySender).toHaveBeenCalledTimes(1);
   });
 
   // ── T-R0-10 · AC-2: elige el candidato Deposited leyendo la cadena ───────────────────────────────
   it("T-R0-10 (AC-2/CD-10): sin id, con 2 candidatos (1º Released, 2º Deposited) ⇒ refundea el 2º; feePayer=sender", async () => {
     await mockChain({ "rem-released": "released", "rem-deposited": "deposited" });
     // Orden created_at desc tal como llega del ledger: el primero NO es refundeable.
-    const listBySender = vi.fn(async () => ["rem-released", "rem-deposited"]);
-    const adapter = await connectedWith({ listBySender });
+    const lookupBySender = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: ["rem-released", "rem-deposited"] }));
+    const adapter = await connectedWith({ lookupBySender });
 
     const out = await adapter.refundEscrow(); // ← sin remittanceId: el caso que hoy pierde la plata
     expect(out.refundTx).toBe("refund-sig-recovered");
-    expect(listBySender).toHaveBeenCalledTimes(1);
-    expect(listBySender).toHaveBeenCalledWith(SENDER_B58);
+    expect(lookupBySender).toHaveBeenCalledTimes(1);
+    expect(lookupBySender).toHaveBeenCalledWith(SENDER_B58);
 
     const tx = capturedTx(signSpy);
     // CD-10: el sender paga el fee y firma — NUNCA la release-authority ni el facilitator.
@@ -443,18 +444,23 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
 
   it("T-R0-10: UNA sola llamada RPC batch para todos los candidatos (no N getAccountInfo)", async () => {
     await mockChain({ "rem-1": "released", "rem-2": "released", "rem-3": "deposited" });
-    const listBySender = vi.fn(async () => ["rem-1", "rem-2", "rem-3"]);
-    const adapter = await connectedWith({ listBySender });
+    const lookupBySender = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: ["rem-1", "rem-2", "rem-3"] }));
+    const adapter = await connectedWith({ lookupBySender });
     await adapter.refundEscrow();
     const batch = vi.mocked(Connection.prototype.getMultipleAccountsInfo);
     expect(batch).toHaveBeenCalledTimes(1);
     expect((batch.mock.calls[0]?.[0] as PublicKey[] | undefined)?.length).toBe(3);
   });
 
-  it("T-R0-10: 0 candidatos en el ledger ⇒ escrow_not_found, SIN firmar ni broadcastear", async () => {
+  // 🔴 EL CONTROL UNITARIO DE AC-3 (WKH-331). Hasta esta HU el doble de acá era `async () => []`: una
+  // lista vacía que no decía de dónde venía, y que por construcción representaba igual de bien "el
+  // servidor contestó que no hay nada" que "nunca preguntamos". Ahora dice `answered`, y recién ahí el
+  // nombre del test es cierto. Sus tres `expect` no se debilitan: son lo que se pone rojo si el
+  // arreglo se pasa de largo y convierte también este caso en un "no llegamos a preguntar".
+  it("T-R0-10: 0 candidatos en el ledger, con el servidor CONTESTANDO ⇒ escrow_not_found, SIN firmar ni broadcastear", async () => {
     await mockChain({});
-    const listBySender = vi.fn(async () => []);
-    const adapter = await connectedWith({ listBySender });
+    const lookupBySender = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: [] }));
+    const adapter = await connectedWith({ lookupBySender });
     await expect(adapter.refundEscrow()).rejects.toThrow("escrow_not_found");
     expect(signSpy).not.toHaveBeenCalled();
     expect(sendSpy).not.toHaveBeenCalled();
@@ -462,8 +468,8 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
 
   it("T-R0-10: candidatos que existen pero NINGUNO está Deposited ⇒ escrow_not_found, sin firmar", async () => {
     await mockChain({ "rem-a": "released", "rem-b": "released" });
-    const listBySender = vi.fn(async () => ["rem-a", "rem-b"]);
-    const adapter = await connectedWith({ listBySender });
+    const lookupBySender = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: ["rem-a", "rem-b"] }));
+    const adapter = await connectedWith({ lookupBySender });
     await expect(adapter.refundEscrow()).rejects.toThrow("escrow_not_found");
     expect(signSpy).not.toHaveBeenCalled();
     expect(sendSpy).not.toHaveBeenCalled();
@@ -471,8 +477,8 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
 
   it("T-R0-10: candidatos cuya PDA no existe on-chain se saltan (null ⇒ no candidata)", async () => {
     await mockChain({ "rem-real": "deposited" }); // "rem-fantasma" no tiene cuenta
-    const listBySender = vi.fn(async () => ["rem-fantasma", "rem-real"]);
-    const adapter = await connectedWith({ listBySender });
+    const lookupBySender = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: ["rem-fantasma", "rem-real"] }));
+    const adapter = await connectedWith({ lookupBySender });
     await adapter.refundEscrow();
     const ix = capturedTx(signSpy).instructions[0];
     if (!ix) throw new Error("no_instruction");
@@ -482,12 +488,35 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
   it("T-R0-10: sondea como máximo 10 candidatos (tope de la recuperación)", async () => {
     const ids = Array.from({ length: 14 }, (_, i) => `rem-${i}`);
     await mockChain({ "rem-13": "deposited" }); // el refundeable queda FUERA del tope
-    const listBySender = vi.fn(async () => ids);
-    const adapter = await connectedWith({ listBySender });
+    const lookupBySender = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: ids }));
+    const adapter = await connectedWith({ lookupBySender });
     await expect(adapter.refundEscrow()).rejects.toThrow("escrow_not_found");
     const batch = vi.mocked(Connection.prototype.getMultipleAccountsInfo);
     expect((batch.mock.calls[0]?.[0] as PublicKey[] | undefined)?.length).toBe(10);
   });
+
+  // ── WKH-331 · AC-1 + CD-7: los TRES desenlaces en que no se llegó a preguntar ────────────────────
+  // 🔴 Se leen JUNTO al control de arriba (`answered` con lista vacía). Los cuatro terminan sin ningún
+  // candidato, y sólo aquél puede decir `escrow_not_found`: es el único en que el servidor contestó.
+  // Los tres de acá salen por un código propio, y el corte tiene que ocurrir ANTES de tocar la cadena
+  // y ANTES de pedir ninguna firma — eso se AFIRMA, no se supone.
+  for (const reason of ["pop_disabled", "registry_disabled", "pop_rejected"] as const) {
+    it(`T-R0-10 (AC-1): el resolver no pudo preguntar (${reason}) ⇒ escrow_recovery_unavailable:${reason}, 🚫 nunca escrow_not_found`, async () => {
+      await mockChain({});
+      const lookupBySender = vi.fn(
+        async (): Promise<RemittanceIdLookup> => ({ outcome: "not_asked", reason }),
+      );
+      const adapter = await connectedWith({ lookupBySender });
+
+      // El prefijo es el que el copy reconoce; la cola distingue los tres desenlaces acá y en ningún
+      // otro lado: la pantalla descarta el código (AR/MNR-4). O sea que este `expect` es el único
+      // lugar donde el motivo se mira, y por eso se exige entero y no sólo el prefijo.
+      await expect(adapter.refundEscrow()).rejects.toThrow(`escrow_recovery_unavailable:${reason}`);
+      expect(vi.mocked(Connection.prototype.getMultipleAccountsInfo)).not.toHaveBeenCalled();
+      expect(signSpy).not.toHaveBeenCalled();
+      expect(sendSpy).not.toHaveBeenCalled();
+    });
+  }
 
   it("T-R0-10 (fail-loud): sin resolver inyectado y sin id ⇒ escrow_id_unavailable (nunca silencioso)", async () => {
     await mockChain({ "rem-x": "deposited" });
@@ -509,7 +538,7 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
     vi.spyOn(Connection.prototype, "getAccountInfo").mockImplementation(
       (async (k: PublicKey) => (k.toBase58() === pda ? accountInfo(deposited) : null)) as never,
     );
-    const adapter = await connectedWith({ listBySender: vi.fn(async () => [id]) });
+    const adapter = await connectedWith({ lookupBySender: vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: [id] })) });
     await expect(adapter.refundEscrow()).rejects.toThrow("refund_before_deadline");
     expect(sendSpy).not.toHaveBeenCalled();
   });
@@ -534,7 +563,9 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
     vi.spyOn(Connection.prototype, "getAccountInfo").mockImplementation(
       (async (k: PublicKey) => (k.toBase58() === goodPda ? accountInfo(good) : null)) as never,
     );
-    const adapter = await connectedWith({ listBySender: vi.fn(async () => ["rem-basura", "rem-sana"]) });
+    const adapter = await connectedWith({
+      lookupBySender: vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: ["rem-basura", "rem-sana"] })),
+    });
     await expect(adapter.refundEscrow()).resolves.toEqual({
       refundTx: "refund-sig-recovered",
       confirmation: "confirmed",
@@ -544,11 +575,45 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
     expect(ix.keys[2]!.pubkey.toBase58()).toBe(goodPda);
   });
 
+  // ── WKH-331 · AR/BLQ-BAJO-1: CUÁL de las dos firmas no se completó ───────────────────────────────
+  // 🔴 En la recuperación hay DOS firmas (posesión adentro del resolver, orden acá) y la billetera
+  // escribe el MISMO texto para las dos. Sin etiquetar la fase, el copy de la pantalla dice "no
+  // llegamos a preguntar" cuando ya preguntamos, miramos y encontramos un escrow abierto. Lo que sale
+  // por acá es lo único que puede distinguirlas. La junta con el copy la mide
+  // `refund-perdido-junta.test.ts`.
+  it("T-R0-11 (AR/BLQ-BAJO-1): sin id, la firma de la ORDEN rechazada ⇒ escrow_refund_signature_incomplete", async () => {
+    await mockChain({ "rem-deposited": "deposited" });
+    signSpy.mockRejectedValue(new Error("User rejected the request."));
+    const adapter = await connectedWith({
+      lookupBySender: vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: ["rem-deposited"] })),
+    });
+
+    await expect(adapter.refundEscrow()).rejects.toThrow("escrow_refund_signature_incomplete");
+    // Y no se llegó a broadcastear nada: la etiqueta habla de una firma que no ocurrió, no de una tx.
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  // El otro lado de CD-4/AC-6: con el id presente hay UNA sola firma, no hay ambigüedad que resolver,
+  // y el camino que ya funcionaba propaga EXACTAMENTE lo que propagaba. Sin este control, el etiquetado
+  // de arriba podría tragarse el mensaje de la billetera también donde nadie lo pidió.
+  it("T-R0-11 (CD-4): con id presente la firma rechazada propaga el texto de la billetera SIN re-etiquetar", async () => {
+    await mockChain({ "rem-deposited": "deposited" });
+    signSpy.mockRejectedValue(new Error("User rejected the request."));
+    const adapter = await connectedWith({
+      lookupBySender: vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: ["rem-otro"] })),
+    });
+
+    await expect(adapter.refundEscrow("rem-deposited")).rejects.toThrow("User rejected the request.");
+    await expect(adapter.refundEscrow("rem-deposited")).rejects.not.toThrow(
+      "escrow_refund_signature_incomplete",
+    );
+  });
+
   it("sin wallet conectada y sin id ⇒ wallet_not_connected ANTES de consultar el resolver", async () => {
-    const listBySender = vi.fn(async () => ["rem-1"]);
-    const adapter = new SolanaWalletAdapter({ listBySender }); // sin connect
+    const lookupBySender = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: ["rem-1"] }));
+    const adapter = new SolanaWalletAdapter({ lookupBySender }); // sin connect
     await expect(adapter.refundEscrow()).rejects.toThrow("wallet_not_connected");
-    expect(listBySender).not.toHaveBeenCalled();
+    expect(lookupBySender).not.toHaveBeenCalled();
   });
 
   // El gateway es el único camino de la UI hacia refundEscrow: si no propagara el `remittanceId`

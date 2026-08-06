@@ -274,12 +274,36 @@ export class SolanaWalletAdapter
   // Sondea hasta MAX_RECOVERY_CANDIDATES PDAs en UNA sola llamada RPC y devuelve el PRIMER escrow con
   // status Deposited (los ids llegan ordenados por created_at desc). El resultado es solo un CANDIDATO:
   // el caller vuelve a leer la cuenta elegida y re-aplica los guards autoritativos (status/deadline).
+  //
+  // 🔴 QUÉ SE ARREGLÓ ACÁ (WKH-331). Esto consumía un método que devolvía `string[]`, y sobre la lista
+  // vacía tiraba `escrow_not_found`. Cuatro condiciones distintas llegaban con esa misma forma: el
+  // mecanismo de PoP apagado, el registro apagado, el PoP rechazado y —la única legítima— el servidor
+  // contestando que no hay ids. La pantalla las decía todas igual, afirmando haber mirado los últimos
+  // MAX_RECOVERY_CANDIDATES envíos de la persona en los tres casos en que no se preguntó nada.
+  // Ahora se consume `lookupBySender`, que las separa, y los tres `not_asked` salen por un código
+  // propio. La CUARTA sigue saliendo por `escrow_not_found`, a propósito: ahí el servidor sí contestó
+  // y la frase de la pantalla es cierta. Espeja a (`listCloseable`, `:1071`), que ya hacía esto.
   private async resolveRemittanceIdFromLedger(senderB58: string): Promise<string> {
     const resolver = this.remittanceIdResolver;
-    if (!resolver) throw new Error("escrow_id_unavailable"); // fail-loud: no hay de dónde recuperar
-    const ids = await resolver.listBySender(senderB58);
-    if (ids.length === 0) throw new Error("escrow_not_found"); // nada durable para este sender
-    const candidates = ids.slice(0, MAX_RECOVERY_CANDIDATES);
+    // Mismo guard que `listCloseable`: sin el método no se adivina, y un doble de JS que no lo tenga
+    // deja de reventar con un TypeError opaco.
+    if (!resolver?.lookupBySender) throw new Error("escrow_id_unavailable");
+    const lookup = await resolver.lookupBySender(senderB58);
+    // El `reason` va pegado al código: el prefijo es lo que el copy reconoce y la cola es lo que
+    // distingue los tres desenlaces. El copy NO lo interpola (CD-5). El código NO puede contener
+    // `escrow_not_found`: `lostEscrowRecoveryError` evalúa esa subcadena primero y el arreglo saldría
+    // por la frase que vino a sacar (CD-1).
+    // ⚠️ ESTA COLA HOY NO LA LEE NADIE EN PRODUCCIÓN, y la prosa vieja decía que viajaba "para el
+    // diagnóstico" (AR/MNR-4). El único consumidor de este camino es `LostEscrowRecovery`, que guarda
+    // sólo el mensaje ya traducido (`flow.tsx`, el `catch` de `onRecover`) y descarta el código; no hay
+    // log ni telemetría. O sea: el motivo es distinguible por un test, no por alguien mirando un error.
+    if (lookup.outcome === "not_asked") {
+      throw new Error(`escrow_recovery_unavailable:${lookup.reason}`);
+    }
+    // Corte temprano y no caída al `throw` de abajo: dejarlo caer haría un batch RPC de cero cuentas,
+    // y si ese RPC fallara, "el servidor contestó que no hay nada" se convertiría en un error de red.
+    if (lookup.remittanceIds.length === 0) throw new Error("escrow_not_found"); // el servidor contestó
+    const candidates = lookup.remittanceIds.slice(0, MAX_RECOVERY_CANDIDATES);
 
     const web3 = await import("@solana/web3.js");
     const { PublicKey: PublicKeyLazy, Connection } = web3;
@@ -562,10 +586,12 @@ export class SolanaWalletAdapter
     if (!senderB58) throw new Error("wallet_not_connected");
 
     // HU-SOL-20/AC-2: id presente ⇒ NO se consulta el resolver (AC-6). Ausente/vacío ⇒ recuperación.
-    const escrowId =
-      typeof remittanceId === "string" && remittanceId.trim().length > 0
-        ? remittanceId
-        : await this.resolveRemittanceIdFromLedger(senderB58);
+    // 🔴 `idPedido` no es sólo trazabilidad: dice CUÁNTAS firmas pide esta llamada. Con el id presente
+    // hay UNA (la de la transacción, más abajo). Sin él, el resolver pide primero la de posesión, y
+    // recién después viene la de la transacción. Esa diferencia es la que hace falta al firmar.
+    const idPedido =
+      typeof remittanceId === "string" && remittanceId.trim().length > 0 ? remittanceId : undefined;
+    const escrowId = idPedido ?? (await this.resolveRemittanceIdFromLedger(senderB58));
 
     // ── lazy-import (patrón authorizePrincipal, DT-SDD-8) ──
     const web3 = await import("@solana/web3.js");
@@ -625,7 +651,25 @@ export class SolanaWalletAdapter
     const tx = new Transaction().add(ix);
     tx.feePayer = senderPk; // AC-6/CD-10: el sender paga el fee y firma (NUNCA la release-authority)
     tx.recentBlockhash = blockhash;
-    const signed = (await solanaWalletBridge.signTransaction(tx)) as Web3Transaction; // firma SÓLO el sender
+    // 🔴 LA SEGUNDA FIRMA DE ESTA LLAMADA, cuando el id se resolvió contra el registro (AR/BLQ-BAJO-1).
+    // La primera fue la de posesión, adentro del resolver. Las dos las escribe la MISMA billetera con
+    // el MISMO texto ("User rejected the request." en Phantom), así que sin etiquetar acá la fase,
+    // `lostEscrowRecoveryError` no puede distinguirlas y termina diciendo "no llegamos a preguntar"
+    // justo cuando preguntamos, el servidor contestó, miramos la cadena y encontramos un escrow
+    // abierto y vencido: los dos guards autoritativos de arriba ya pasaron para llegar hasta acá.
+    // Con el id presente NO se re-etiqueta: ahí hay una sola firma, no hay ambigüedad que resolver, y
+    // el camino que ya funcionaba propaga exactamente lo que propagaba (AC-6/CD-4).
+    // El texto original de la billetera NO se conserva en el código a propósito: en esta pantalla el
+    // código se descarta (`flow.tsx` guarda sólo el mensaje traducido), así que arrastrarlo sería
+    // prometer un diagnóstico que nadie lee. Lo que se pierde es la distinción entre "la persona
+    // canceló" y "el handle de firma no está montado", que el copy de las dos fases ya conflaciona.
+    let signed: Web3Transaction;
+    try {
+      signed = (await solanaWalletBridge.signTransaction(tx)) as Web3Transaction; // firma SÓLO el sender
+    } catch (e) {
+      if (idPedido !== undefined) throw e; // una sola firma en juego: nada que desambiguar
+      throw new Error("escrow_refund_signature_incomplete");
+    }
     const signature = await connection.sendRawTransaction(
       signed.serialize(), // requireAllSignatures=true por default (el sender es el único signer)
     );
@@ -724,11 +768,11 @@ export class SolanaWalletAdapter
    * devuelve siempre. Que NINGUNA instrucción la cierre **no se pudo verificar** desde este repo: el
    * IDL no expresa las constraints `close = ...` de Anchor.
    *
-   * POR QUÉ EXIGE `remittanceId` Y `refundEscrow` NO: el fallback de refund (`refundEscrow`, `:559`,
-   * que llama a `resolveRemittanceIdFromLedger`, `:277`) elige UNO entre N y actúa sobre él, porque
+   * POR QUÉ EXIGE `remittanceId` Y `refundEscrow` NO: el fallback de refund (`refundEscrow`, `:583`,
+   * que llama a `resolveRemittanceIdFromLedger`, `:286`) elige UNO entre N y actúa sobre él, porque
    * "recuperar mis USDC" tiene un objetivo natural — el escrow que todavía tiene plata. Para `close` no
    * existe ese "el": todos los terminales son igual de cerrables, y elegir uno en silencio le cerraría
-   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1027`) devuelve la
+   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1071`) devuelve la
    * LISTA y elige ella.
    *
    * ⚠️ POR QUÉ EL LISTER NO TIENE GATEWAY Y EL CIERRE SÍ (apartamiento declarado del SDD §4.1/§4.2,
@@ -751,7 +795,7 @@ export class SolanaWalletAdapter
    * qué código emite Anchor exactamente en ese caso: haría falta un `close` real que revierta.
    *
    * NO declara ComputeBudget, a diferencia de `authorizePrincipal`
-   * (`ComputeBudgetProgram.setComputeUnitLimit`, `:403`): aquello existía por el
+   * (`ComputeBudgetProgram.setComputeUnitLimit`, `:427`): aquello existía por el
    * tope POR UNIDAD del facilitator, y acá el feePayer es el sender — no hay tope de nadie que
    * respetar. Y el número que haría falta (el consumo de CU de `close`) no existe: los 120.000 de
    * `resolveSolanaComputeUnitLimit` salen del peor caso de `deposit`. Declarar un límite por debajo del
@@ -917,10 +961,10 @@ export class SolanaWalletAdapter
    * ¿Entró el `close`? Devuelve el tri-estado y TIRA `close_tx_failed` sólo cuando medimos que la tx
    * entró y revirtió Y la cuenta sigue ahí.
    *
-   * ⚠️ DOS DIVERGENCIAS DELIBERADAS respecto de `confirmRefund`, `:648`. Están escritas acá para
+   * ⚠️ DOS DIVERGENCIAS DELIBERADAS respecto de `confirmRefund`, `:692`. Están escritas acá para
    * que nadie las "armonice" de vuelta en un code review:
    *
-   * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`confirmRefund`, `:648`), SIN leer nada.
+   * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`confirmRefund`, `:692`), SIN leer nada.
    *    Éste NO puede: AC-5 exige que el alquiler volvió se afirme *sólo después de leer que la cuenta
    *    ya no existe*. Un `confirmTransaction` sin `err` prueba que la tx ENTRÓ; leer la ausencia es lo
    *    que prueba que hizo lo que queríamos. El input que pone en rojo cualquier atajo acá: un doble
@@ -1005,7 +1049,7 @@ export class SolanaWalletAdapter
    * PoP obligatorio) con una sonda ON-CHAIN, así que incluye envíos que NO están en el `localStorage`
    * de este navegador — que es exactamente la gente que hoy no tiene ningún camino hacia su alquiler.
    *
-   * Espeja `resolveRemittanceIdFromLedger`, `:277`, en su disciplina: fail-loud sin resolver, tope
+   * Espeja `resolveRemittanceIdFromLedger`, `:286`, en su disciplina: fail-loud sin resolver, tope
    * de candidatos, UNA sola llamada RPC batch, y un `decode` en try/catch para que una cuenta deforme
    * no rompa la recuperación entera. Tres diferencias, cada una con su razón:
    *
@@ -1026,8 +1070,9 @@ export class SolanaWalletAdapter
    */
   async listCloseable(input: { sender: string }): Promise<readonly CloseableEscrow[]> {
     const resolver = this.remittanceIdResolver;
-    // Fail-loud, nunca silencioso. Y sin fallback a `listBySender`, a propósito: ese método colapsa
-    // los tres `not_asked` en `[]` y usarlo acá reintroduciría el bloqueante entero.
+    // Fail-loud, nunca silencioso. No hay a qué caer de vuelta: el método que devolvía `string[]` y
+    // colapsaba los tres `not_asked` en `[]` se borró del puerto en WKH-331, y el refund consume el
+    // mismo `lookupBySender` que esto. Un doble que quiera fingir "no pude preguntar" tiene que decirlo.
     if (!resolver?.lookupBySender) throw new Error("escrow_id_unavailable");
     const lookup = await resolver.lookupBySender(input.sender);
     // El `reason` viaja en el código para el diagnóstico; el copy NO lo interpola (CD-5) y colapsa los

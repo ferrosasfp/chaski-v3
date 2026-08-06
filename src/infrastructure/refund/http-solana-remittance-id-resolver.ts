@@ -15,8 +15,8 @@
 //
 // 🔴 LAS TRES PRIMERAS NO SON "no hay nada": son "no llegamos a preguntar", y colapsarlas en una lista
 // vacía hace que la pantalla afirme haber mirado 20 envíos cuando no miró ninguno. Eso se midió
-// palabra por palabra y es el bloqueante que este archivo cierra. `listBySender` las sigue colapsando
-// a `[]` a propósito y con su razón escrita abajo.
+// palabra por palabra y es el bloqueante que este archivo cierra. El método que las colapsaba a `[]`
+// para el refund se borró en WKH-331: hoy esta clase expone un solo método, y devuelve el desenlace.
 import type {
   PopSigner,
   RemittanceIdLookup,
@@ -43,17 +43,5 @@ export class HttpSolanaRemittanceIdResolver implements SolanaRemittanceIdResolve
       .map((r) => (typeof r.remittanceId === "string" ? r.remittanceId : ""))
       .filter((s) => s.length > 0);
     return { outcome: "answered", remittanceIds }; // el servidor contestó, aunque sea con nada
-  }
-
-  /**
-   * ⚠️ COLAPSA los tres `not_asked` en `[]`, y eso es una PÉRDIDA de información que se conserva a
-   * propósito: su único llamador es el fallback del refund (HU-SOL-20/AC-2), que está fuera del
-   * alcance de WKH-327. Se implementa SOBRE `lookupBySender` para que las dos no puedan divergir —
-   * el mapeo `not_asked ⇒ []` es byte-equivalente al comportamiento previo de este método.
-   * Que el refund no distinga los tres desenlaces queda DECLARADO acá, no arreglado.
-   */
-  async listBySender(sender: string): Promise<string[]> {
-    const lookup = await this.lookupBySender(sender);
-    return lookup.outcome === "answered" ? [...lookup.remittanceIds] : [];
   }
 }

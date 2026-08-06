@@ -218,7 +218,7 @@ export async function POST(req: Request): Promise<Response> {
       await ledger.recordSolanaPrincipalIn({ remittanceId, senderAddress: sender, signature });
     } catch (e) {
       // best-effort, NUNCA rompe (CD-17) — control de flujo INTACTO, sólo cambia la señal.
-      logLedgerWriteFailure("recordSolanaPrincipalIn", e);
+      logLedgerWriteFailure("recordSolanaPrincipalIn", e, { remittanceId, signature });
     }
   } else {
     // WKH-325 — el ledger apagado apaga DOS cosas a la vez, y hasta acá eso sólo estaba dicho en el

@@ -427,8 +427,14 @@ describe("POST /api/settle/solana-sponsor (HU-SOL-13)", () => {
   // durable: el remittanceId, único argumento del refund on-chain, queda sólo en el navegador.
   describe("AC-10 — alerta de depósito sin registro (WKH-325)", () => {
     let errSpy: ReturnType<typeof vi.spyOn>;
+    // warnSpy: lo agrega WKH-330. Hasta acá este describe no espiaba console.warn, y sin espiarlo no
+    // se puede afirmar que un fallo NO salió por ese canal. Silenciarlo no cambia ningún assert
+    // previo: ningún test de este describe mira console.warn (refutación: `command grep -n
+    // 'console, "warn"' app/api/settle/solana-sponsor/route.test.ts` — el único otro está afuera).
+    let warnSpy: ReturnType<typeof vi.spyOn>;
     beforeEach(() => {
       errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     });
     /** Alertas del settle emitidas hasta acá. LA MISMA función cuenta los casos de 1 y los de 0
      *  (CD-13): un `toBe(0)` sobre un spy vacío mediría cero y pasaría sin decir nada. */
@@ -496,6 +502,140 @@ describe("POST /api/settle/solana-sponsor (HU-SOL-13)", () => {
       expect(await res.json()).toEqual({ signature: FAKE_SOLANA_SIGNATURE });
       // La excepción NO se silencia: se degrada a señal (el best-effort la traga y la grita).
       expect(errSpy.mock.calls.some((c) => String(c[0]).includes("[ledger][ALERT]"))).toBe(true);
+    });
+
+    // ══ WKH-330 ══════════════════════════════════════════════════════════════════════════════════
+    // Un 08006 (SQLSTATE clase 08 = connection exception) es, por CLASE, infra transitoria, y hasta
+    // acá salía por console.warn. Pero cuando el que falla es recordSolanaPrincipalIn, el write que
+    // no ocurrió viene DESPUÉS de un depósito real con signature verificada: la fila queda en
+    // 'prepared', igual que una donde nunca entró nada.
+    //
+    // ⚠️ Lo que estos dos tests verifican es el CANAL y el CONTENIDO de una línea de log. NO
+    // verifican que alguien se entere: no hay ninguna herramienta de observabilidad en este repo ni
+    // ninguna regla sobre este prefijo. La línea queda encontrable con un grep, nada más.
+
+    /** Llamadas a console.error con el prefijo del ledger Y el `op` pedido. Se filtra POR OP a
+     *  propósito: contar todos los [ledger][ALERT] mezclaría ops distintos del mismo request. */
+    const ledgerAlertCount = (op: string): number =>
+      errSpy.mock.calls.filter(
+        (c) => String(c[0]).includes("[ledger][ALERT]") && String(c[0]).includes(`${op}_failed`),
+      ).length;
+    /** Ídem sobre console.warn. NO se usa `expect(warnSpy).not.toHaveBeenCalled()`: eso es más fuerte
+     *  que el AC y se rompería con cualquier warn ajeno del request. */
+    const ledgerWarnCount = (op: string): number =>
+      warnSpy.mock.calls.filter((c) => String(c[0]).includes(`${op}_failed`)).length;
+
+    // T-330-1 (AC-1) — los DOS ops en el MISMO `it`, con los MISMOS dos contadores (CD-13). Así
+    // ninguno de los cuatro números es un cero medido sobre un spy que no captura nada: cada contador
+    // da 1 en una fase y 0 en la otra.
+    it("T-330-1 (AC-1): 08006 en recordSolanaPrincipalIn ⇒ canal ERROR; el MISMO 08006 en listPreparedDepositAddresses sigue en WARN", async () => {
+      // ── Fase A · control positivo del contador de warn (y de que la elevación NO es global) ──
+      // listPreparedDepositAddresses NO está en ALWAYS_ALERT_OPS: su 08006 sigue siendo un warn.
+      const ledgerA = await ledgerWithPreparedSolana();
+      vi.spyOn(ledgerA, "listPreparedDepositAddresses").mockRejectedValue(
+        new Error("ledger_list_prepared_deposit_addresses_failed:08006"),
+      );
+      getLedgerMock.mockReturnValue(ledgerA);
+      facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
+      expect((await POST(req(body()))).status).toBe(503);
+      expect(ledgerWarnCount("listPreparedDepositAddresses")).toBe(1);
+      expect(ledgerAlertCount("listPreparedDepositAddresses")).toBe(0);
+
+      // ── Fase B · el caso de la HU ──
+      errSpy.mockClear();
+      warnSpy.mockClear();
+      const ledgerB = await ledgerWithPreparedSolana();
+      vi.spyOn(ledgerB, "recordSolanaPrincipalIn").mockRejectedValue(
+        new Error("ledger_record_solana_principal_in_failed:08006"),
+      );
+      getLedgerMock.mockReturnValue(ledgerB);
+      facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
+      const res = await POST(req(body()));
+
+      // AC-6/CD-2: el persist es best-effort. Sin este assert el test no distingue "gritó" de
+      // "gritó y rompió el money-path".
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ signature: FAKE_SOLANA_SIGNATURE });
+
+      expect(ledgerAlertCount("recordSolanaPrincipalIn")).toBe(1);
+      expect(ledgerWarnCount("recordSolanaPrincipalIn")).toBe(0);
+    });
+
+    // T-330-2 (AC-2) — DESVÍO DECLARADO respecto de la letra del AC.
+    // El AC pedía `toEqual({ remittanceId, signature })`. `toEqual` es igualdad EXACTA: para pasar,
+    // el payload no podría tener ninguna otra clave, o sea que habría que BORRAR code/kind/severity/
+    // message — que son el diagnóstico entero (sin `code` no se distingue un 08006, la red, de un
+    // 23514, un bug nuestro). Sería una regresión de diagnóstico dentro de una HU de diagnóstico.
+    // Se usa `toMatchObject` MÁS un `toEqual` sobre las CLAVES del payload, porque `toMatchObject`
+    // deja de vigilar lo que NO está y `toEqual` lo vigilaba gratis: sin esa segunda mitad el desvío
+    // debilitaría el AC en vez de corregirlo. La lista blanca es el reemplazo de lo que se perdió; la
+    // lista negra de nombres, más abajo, es diagnóstico y no la sustituye (AR/BLQ-BAJO-2).
+    // Refutación del desvío: escribir el `toEqual({ remittanceId, signature })` literal y ver que
+    // sólo pasa si el payload pierde las cuatro claves de diagnóstico.
+    // ⚠️ Lo que este `it` verifica es UNA corrida con UN error (`08006`): que en ESE payload el juego
+    // de claves sea exactamente el previsto y que ningún valor sea la address del sender. NO es una
+    // prueba de que `logLedgerWriteFailure` no pueda filtrar PII por otro call-site o con otro error.
+    it("T-330-2 (AC-2): el payload de la alerta trae la signature y el remittanceId, conserva el diagnóstico, y sus claves son exactamente las seis previstas", async () => {
+      const ledger = await ledgerWithPreparedSolana();
+      vi.spyOn(ledger, "recordSolanaPrincipalIn").mockRejectedValue(
+        new Error("ledger_record_solana_principal_in_failed:08006"),
+      );
+      getLedgerMock.mockReturnValue(ledger);
+      facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
+      expect((await POST(req(body()))).status).toBe(200);
+
+      const call = errSpy.mock.calls.find(
+        (c) =>
+          String(c[0]).includes("[ledger][ALERT]") &&
+          String(c[0]).includes("recordSolanaPrincipalIn_failed"),
+      );
+      expect(call).toBeDefined(); // sin esto, un `payload` undefined haría vacuos los asserts de abajo
+      const payload = call?.[1] as Record<string, unknown>;
+
+      // El espíritu de AC-2: la signature tiene que estar, porque es lo único que prueba el hecho
+      // on-chain, y el remittanceId, que es el argumento del refund.
+      expect(payload).toMatchObject({
+        remittanceId: "rem-sol-1",
+        signature: FAKE_SOLANA_SIGNATURE,
+      });
+      // El diagnóstico NO se perdió (esto es lo que el `toEqual` de la letra habría borrado).
+      expect(payload).toMatchObject({ code: "08006", severity: "transient" });
+
+      // CD-6 · ausencia de PII. 🔴 3er fix-pack (AR/BLQ-BAJO-2): la LISTA BLANCA es la mitad que
+      // faltaba. §2.2 aprobó cambiar el `toEqual({remittanceId, signature})` de la letra de AC-2 por
+      // `toMatchObject` CON LA CONDICIÓN de que un assert explícito devolviera lo que `toEqual`
+      // vigilaba gratis: que ninguna clave IMPREVISTA entre al payload. Lo que se escribió primero fue
+      // sólo una lista NEGRA de 7 nombres, y una lista negra no vigila lo que nadie enumeró.
+      // 🟩 MEDIDO por el AR sobre `b0be6fd`: agregando `montoUsd: "1234.56", beneficiaryDoc: "12345678"`
+      // a la correlación de solana-sponsor/route.ts:221, la suite quedaba `1391 passed`, EXIT=0 —
+      // VERDE. El monto y el documento del beneficiario viajaban al log y nada se ponía rojo, contra
+      // CD-6, que dice NUNCA montos ni beneficiary.
+      // El payload que emite ledger-write-failure.ts:133 es `{ ...correlation, code, kind, severity,
+      // message }`, así que ESTAS SEIS son todas las claves legítimas. Una clave nueva obliga a pasar
+      // por acá, que es el punto: el assert no adivina si es PII, obliga a que alguien lo decida.
+      expect(
+        Object.keys(payload).sort(),
+        "el payload de la alerta ganó o perdió una clave: si es nueva, nadie verificó que no sea PII (CD-6 prohíbe sender, montos y beneficiary), y este assert existe para que esa decisión no sea implícita",
+      ).toEqual(["code", "kind", "message", "remittanceId", "severity", "signature"].sort());
+
+      // Diagnóstico (NO reemplaza a la lista blanca de arriba): por CLAVE y por VALOR, nombra los
+      // sospechosos concretos para que el rojo diga QUÉ se filtró y no sólo que algo cambió. El de
+      // VALOR caza lo que ninguna lista de nombres puede: un `{ x: SENDER }` bajo cualquier clave.
+      for (const k of [
+        "senderAddress",
+        "sender_address",
+        "sender",
+        "valueMinor",
+        "value_minor",
+        "beneficiary",
+        "receiver_address",
+      ]) {
+        expect(Object.keys(payload)).not.toContain(k);
+      }
+      expect(JSON.stringify(payload)).not.toContain(SENDER);
+      expect(String(call?.[0])).not.toContain(SENDER);
+      // CD-6: la signature NO es PII — ya viaja al browser en la respuesta 200 de este mismo route.
+      expect(SENDER).not.toBe(FAKE_SOLANA_SIGNATURE); // el assert de valor no es vacuo
     });
   });
 });

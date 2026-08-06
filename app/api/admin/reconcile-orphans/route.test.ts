@@ -188,7 +188,7 @@ describe("POST /api/admin/reconcile-orphans (WKH-207)", () => {
 
   // ── WKH-213 · las 'prepared' huérfanas viajan DENTRO de esta misma respuesta ─────────────────────
   // No hay cola nueva: el operador ya consulta este endpoint. Las 'prepared' son visibilidad pura
-  // (cero mutación: su principal nunca entró).
+  // (cero mutación: no hay depósito REGISTRADO — que no es lo mismo que sin depósito, WKH-330).
   /** Ledger con N órdenes 'prepared' nacidas `ageSeconds` atrás (reloj = created_at, no updated_at). */
   async function ledgerWithPrepared(n: number, ageSeconds: number): Promise<FakeSettlementLedger> {
     const born = new Date(Date.now() - ageSeconds * 1000).toISOString();

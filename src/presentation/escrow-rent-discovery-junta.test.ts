@@ -45,7 +45,6 @@ afterEach(() => {
 async function mensajeRealDelRpcCaido(): Promise<string> {
   process.env.NEXT_PUBLIC_SOLANA_RPC_URL = RPC_MUERTO;
   const adapter = new SolanaWalletAdapter({
-    listBySender: async () => ["rem-a", "rem-b"],
     // El servidor CONTESTÓ con dos ids: este archivo mide el desenlace del RPC, no el del registro.
     // Los tres desenlaces en que el registro no contesta los mide `escrow-rent-registro-mudo.test.tsx`
     // con el resolver REAL, que es el único que puede producirlos.

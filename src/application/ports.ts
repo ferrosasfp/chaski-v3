@@ -403,20 +403,20 @@ export type RemittanceIdLookup =
 // cliente los perdió (localStorage vacío / otro dispositivo).
 export interface SolanaRemittanceIdResolver {
   /**
-   * ⚠️ COLAPSA los tres `not_asked` de arriba en `[]`. Lo usa el fallback del REFUND (HU-SOL-20/AC-2,
-   * `solana-wallet.ts:resolveRemittanceIdFromLedger`), que sobre `[]` tira `escrow_not_found`. Que ese
-   * camino no distinga los tres desenlaces es PREEXISTENTE a WKH-327 y queda declarado, no arreglado:
-   * tocar el refund está fuera del alcance de esta HU. Para el descubrimiento de cerrables (AC-8) se
-   * usa `lookupBySender`, que sí los distingue.
+   * UN SOLO MÉTODO, y ése es el punto (WKH-331). La interfaz tenía dos: éste y un `listBySender` que
+   * devolvía `string[]`. Un `string[]` no tiene forma de expresar el tercer desenlace: "no llegamos a
+   * preguntar" tenía que viajar disfrazado de lista vacía, y los dos consumidores heredaban esa
+   * confusión sin que nada en el tipo la señalara. Mientras el método existió, escribir un doble ciego
+   * era gratis (`{ listBySender: async () => [] }` compilaba) y escribir uno honesto era imposible.
+   *
+   * El tipo que separa los tres es (`RemittanceIdLookup`, `:398`), acá arriba, y su docblock dice
+   * cuáles son y por qué las tres degradaciones son más probables que un fallo de red.
+   *
+   * Lo verificable hoy: en esta interfaz no quedó ningún método capaz de expresar el colapso, así que
+   * un doble que quiera representar "no pude preguntar" está obligado a escribir el `outcome`. Eso es
+   * una propiedad del tipo, no una promesa sobre el futuro del código que lo consume.
    */
-  listBySender(sender: string): Promise<string[]>;
-  /**
-   * La misma consulta con sus TRES desenlaces separados. Opcional en el TIPO porque los dobles del
-   * refund implementan sólo `listBySender`; quien la necesita (`listCloseable`) NO la defaultea a
-   * nada: si falta, tira `escrow_id_unavailable` fail-loud. Un fallback a `listBySender` acá volvería
-   * a colapsar los tres desenlaces en silencio, que es exactamente el bug que este método cierra.
-   */
-  lookupBySender?(sender: string): Promise<RemittanceIdLookup>;
+  lookupBySender(sender: string): Promise<RemittanceIdLookup>;
 }
 
 // ── Wallet (DApp: el sender CONECTA su wallet = login, y firma el depósito en el escrow) ──

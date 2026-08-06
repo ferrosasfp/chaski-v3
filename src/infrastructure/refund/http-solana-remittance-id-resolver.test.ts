@@ -1,6 +1,11 @@
 // Tests — HttpSolanaRemittanceIdResolver (HU-SOL-20/AC-2, T-R0-11). Firma el PoP ANTES de pedir (el
-// endpoint lo exige, CD-16) y degrada a [] cuando el mecanismo está apagado o no verificado, sin
-// lanzar. `fetch` stubeado: cero red.
+// endpoint lo exige, CD-16) y devuelve `not_asked/<motivo>` cuando el mecanismo está apagado o no
+// verificado, sin lanzar. `fetch` stubeado: cero red.
+//
+// WKH-331: el método que devolvía `string[]` y colapsaba los tres `not_asked` en `[]` ya no existe,
+// así que estos casos consultan la primitiva. Ninguno se perdió en la migración: la que era única de
+// cada uno (la forma del POST, los cinco status que lanzan, el shape deforme, el filtro de no-strings)
+// se conservó tal cual, y los dos que sólo repetían lo que el segundo `describe` ya prueba se borraron.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PopSigner } from "../../application/ports";
 import { HttpSolanaRemittanceIdResolver } from "./http-solana-remittance-id-resolver";
@@ -38,8 +43,8 @@ describe("HttpSolanaRemittanceIdResolver (HU-SOL-20/AC-2)", () => {
       }),
     );
     const pop = popOk();
-    const out = await new HttpSolanaRemittanceIdResolver(pop).listBySender(SENDER);
-    expect(out).toEqual(["rem-A1", "rem-A2"]);
+    const out = await new HttpSolanaRemittanceIdResolver(pop).lookupBySender(SENDER);
+    expect(out).toEqual({ outcome: "answered", remittanceIds: ["rem-A1", "rem-A2"] });
 
     // El PoP se pide para EL MISMO sender que se consulta (si no, el endpoint responde 403).
     expect(pop.prove).toHaveBeenCalledWith(SENDER);
@@ -53,37 +58,21 @@ describe("HttpSolanaRemittanceIdResolver (HU-SOL-20/AC-2)", () => {
     });
   });
 
-  it("T-R0-11: prove() → null (PoP apagado server-side) ⇒ [] y NI SE LLAMA al endpoint", async () => {
-    const pop: PopSigner = { prove: vi.fn(async () => null) };
-    const out = await new HttpSolanaRemittanceIdResolver(pop).listBySender(SENDER);
-    expect(out).toEqual([]);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("T-R0-11: 501 (ledger apagado) y 403 (no verificado) ⇒ [] sin lanzar", async () => {
-    for (const status of [501, 403]) {
-      fetchMock.mockResolvedValue(jsonRes(status, { error: "x" }));
-      await expect(new HttpSolanaRemittanceIdResolver(popOk()).listBySender(SENDER)).resolves.toEqual(
-        [],
-      );
-    }
-  });
-
   it("T-R0-11: cualquier otro !ok (429/502/503) ⇒ LANZA escrow_recovery_unavailable (fail-loud)", async () => {
     for (const status of [400, 429, 500, 502, 503]) {
       fetchMock.mockResolvedValue(jsonRes(status, { error: "x" }));
       await expect(
-        new HttpSolanaRemittanceIdResolver(popOk()).listBySender(SENDER),
+        new HttpSolanaRemittanceIdResolver(popOk()).lookupBySender(SENDER),
       ).rejects.toThrow("escrow_recovery_unavailable");
     }
   });
 
-  it("T-R0-11: 200 con shape deforme ⇒ [] (nunca undefined/NaN aguas abajo)", async () => {
+  it("T-R0-11: 200 con shape deforme ⇒ answered con lista vacía (nunca undefined/NaN aguas abajo)", async () => {
     for (const body of [{}, { remittanceIds: [] }, { remittanceIds: [{}, { remittanceId: 7 }, { remittanceId: "" }] }]) {
       fetchMock.mockResolvedValue(jsonRes(200, body));
-      await expect(new HttpSolanaRemittanceIdResolver(popOk()).listBySender(SENDER)).resolves.toEqual(
-        [],
-      );
+      await expect(
+        new HttpSolanaRemittanceIdResolver(popOk()).lookupBySender(SENDER),
+      ).resolves.toEqual({ outcome: "answered", remittanceIds: [] });
     }
   });
 
@@ -91,16 +80,16 @@ describe("HttpSolanaRemittanceIdResolver (HU-SOL-20/AC-2)", () => {
     fetchMock.mockResolvedValue(
       jsonRes(200, { remittanceIds: [{ remittanceId: null }, { remittanceId: "rem-ok" }] }),
     );
-    await expect(new HttpSolanaRemittanceIdResolver(popOk()).listBySender(SENDER)).resolves.toEqual([
-      "rem-ok",
-    ]);
+    await expect(
+      new HttpSolanaRemittanceIdResolver(popOk()).lookupBySender(SENDER),
+    ).resolves.toEqual({ outcome: "answered", remittanceIds: ["rem-ok"] });
   });
 });
 
-// 🔴 2º fix-pack (AR/BLQ-MED-2). Los tests de arriba clavan el COLAPSO a `[]`, que es el contrato del
-// refund. Los de acá clavan que el colapso NO es la única lectura posible: el mismo intercambio HTTP
-// tiene tres desenlaces distintos de "el servidor contestó que no hay nada", y `lookupBySender` los
-// separa. Sin estos, un cambio que devolviera `answered/[]` en el 501 pasaría toda la suite de arriba.
+// 🔴 2º fix-pack (AR/BLQ-MED-2). Los de acá clavan que "lista vacía" NO es la única lectura posible
+// de un intercambio que no trajo ids: hay tres desenlaces distintos de "el servidor contestó que no
+// hay nada", y son los que separan poder afirmar algo sobre la billetera de alguien de no poder. Sin
+// estos, un cambio que devolviera `answered/[]` en el 501 pasaría los casos de arriba sin romper nada.
 describe("HttpSolanaRemittanceIdResolver.lookupBySender — los TRES desenlaces", () => {
   beforeEach(() => {
     fetchMock = vi.fn();
@@ -150,20 +139,5 @@ describe("HttpSolanaRemittanceIdResolver.lookupBySender — los TRES desenlaces"
         new HttpSolanaRemittanceIdResolver(popOk()).lookupBySender(SENDER),
       ).rejects.toThrow("escrow_recovery_unavailable");
     }
-  });
-
-  // `listBySender` se implementa SOBRE `lookupBySender`, así que hay una forma de que divergieran:
-  // que el colapso dejara de ser el mismo. Esto lo clava para los tres motivos.
-  it("y `listBySender` sigue colapsando los tres a [] (el contrato del refund, intacto)", async () => {
-    for (const status of [501, 403]) {
-      fetchMock.mockResolvedValue(jsonRes(status, { error: "x" }));
-      await expect(
-        new HttpSolanaRemittanceIdResolver(popOk()).listBySender(SENDER),
-      ).resolves.toEqual([]);
-    }
-    const popOff: PopSigner = { prove: vi.fn(async () => null) };
-    await expect(new HttpSolanaRemittanceIdResolver(popOff).listBySender(SENDER)).resolves.toEqual(
-      [],
-    );
   });
 });

@@ -127,10 +127,13 @@ describe("createContainer — money-path Solana (HU-SOL-13)", () => {
         refund(i: { remittanceId?: string; sender: string }): Promise<{ refundTx: string }>;
       };
       expect(gw).toBeDefined();
-      // 501 ⇒ prove() null ⇒ resolver devuelve [] ⇒ escrow_not_found (nunca un crash de wiring).
+      // 501 ⇒ prove() null ⇒ el resolver contesta `not_asked/pop_disabled` ⇒ el refund lo propaga con
+      // el motivo pegado (nunca un crash de wiring). El desenlace cambió en WKH-331: antes ese mismo
+      // 501 se colapsaba a una lista vacía y salía `escrow_not_found`, o sea que el cableado que este
+      // test verifica terminaba en la frase que afirma haber mirado envíos que nadie pidió.
       await expect(
         gw.refund({ sender: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU" }),
-      ).rejects.toThrow("escrow_not_found");
+      ).rejects.toThrow("escrow_recovery_unavailable:pop_disabled");
       // Prueba de que el PopSigner diferido SE construyó con el propio adapter y corrió.
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/a2a/payout/challenge");

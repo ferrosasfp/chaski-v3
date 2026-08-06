@@ -106,14 +106,20 @@ function buscarConElContainerReal() {
 //     armoniza este copy con el de WKH-327, que es lo que el SDD pide.
 //
 // Las dos fallas son la misma: un predicado que aproxima "afirmar" con la FORMA del texto. La igualdad
-// exacta no aproxima nada. No admite nada agregado atrás (mata la variante laxa) y convierte una
-// reescritura en un cambio deliberado de ESTE literal (en vez de un rojo que no señala nada real).
-// Es lo que ya hace `refund_tx_failed` en `flow-vm.test.ts`, donde no hay variante que sobreviva.
+// exacta no aproxima nada. Es lo que ya hace `refund_tx_failed` en `flow-vm.test.ts`, donde no hay
+// variante que sobreviva.
 //
-// ⚠️ El literal va escrito a mano acá y NO importado de `flow-vm.ts`: un oráculo que sale de la misma
-// función que vigila se aplaude a sí mismo — cualquier reescritura, hedge incluido, quedaría verde. El
-// precio es que cambiar el copy pide editar este literal, y ése es exactamente el costo que tiene que
-// tener una decisión de redacción sobre el dinero: el diff muestra el texto nuevo entero.
+// ⚠️ EL LITERAL VA ESCRITO A MANO ACÁ Y NO IMPORTADO DE `flow-vm.ts`, y ésa es la decisión que define
+// qué vigila esto. Un oráculo que sale de la misma función que vigila se aplaude a sí mismo: con el
+// texto compartido, las tres variantes de abajo aplicadas SOBRE la constante quedarían verdes.
+//
+// ⚠️ Y LO QUE ESTO CUESTA, MEDIDO, para que nadie lo descubra de golpe: reescribir el copy en
+// `flow-vm.ts` y NO tocar este literal deja 2 rojos (esta igualdad y la del caso E). No es el rojo
+// de MNR-7: aquél decía "no matcheás esta regexp con este verbo" contra un texto correcto; éste
+// imprime el texto viejo y el nuevo enteros y se arregla reescribiendo ESTE literal, sin relajar
+// ningún predicado. Medido: reescrito el copy en el estilo del hermano de WKH-327 y actualizado este
+// literal en la misma pasada, la suite queda verde (89 archivos / 1381 tests). Ése es el costo de una
+// decisión de redacción sobre el dinero: dos ediciones y un diff que muestra el texto nuevo entero.
 // El NÚMERO sí sale de la constante que sondea, para que el copy no pueda quedar diciendo un número
 // que el código dejó de usar.
 const COPY_LEGÍTIMO_DEL_NO_ENCONTRAMOS =
@@ -131,11 +137,13 @@ const COPY_LEGÍTIMO_DEL_NO_ENCONTRAMOS =
 // prohibidas, y NO se declara completa.
 //
 // ⚠️ QUÉ SOSTIENE CARGA, MEDIDO (re-AR/MNR-8). La versión anterior de este comentario decía que la
-// lista "no se puede achicar gratis". Es falso para 24 de los 25: borrar `/puede que/i`, borrar
-// `/no hayamos/i` o dejar 2 de 25 deja la suite entera verde. El único patrón con control es
-// `/no llegamos/i` — borrarlo pone en rojo la copia de la firma no completada, que es la única de las
-// cinco que no dice "no pudimos". Los otros 24 son cobertura preventiva sin control: están para el
-// texto que alguien escriba mañana, no porque algo los ejercite hoy.
+// lista "no se puede achicar gratis" porque borrar un patrón pondría en rojo el otro lado. Es falso
+// para 24 de los 25, y se midió patrón por patrón: borrar `/puede que/i` deja la suite verde, borrar
+// `/no hayamos/i` también, y dejar SÓLO `/no llegamos/i` + `/no pudimos/i` (23 borrados) también.
+// El único patrón con control es `/no llegamos/i`: borrarlo pone en rojo exactamente un caso, el de
+// "User rejected the request.", que es la única de las cinco copias que no dice "no pudimos". Los
+// otros 24 son cobertura preventiva SIN control: están para el texto que alguien escriba mañana, no
+// porque algo los ejercite hoy. Achicar la lista es gratis para la suite; el costo es el de mañana.
 const MARCAS_DE_DUDA: readonly RegExp[] = [
   /puede que/i,
   /puede ser/i,

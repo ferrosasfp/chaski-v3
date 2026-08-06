@@ -6,6 +6,7 @@
 
 import type { Container } from "../composition/container";
 import { PreviewQuote } from "../application/use-cases/preview-quote";
+import { CloseEscrowAccounts } from "../application/use-cases/close-escrow-accounts";
 import { RecoverEscrowFunds } from "../application/use-cases/recover-escrow-funds";
 import { CreateRemittance } from "../application/use-cases/create-remittance";
 import { ConnectWallet } from "../application/use-cases/connect-wallet";
@@ -27,6 +28,8 @@ import type {
   QuoteGateway,
   RefundGateway,
   RemittanceRepository,
+  SolanaCloseableEscrowLister,
+  SolanaEscrowCloseGateway,
   SolanaEscrowRefundGateway,
   WalletPort,
 } from "../application/ports";
@@ -56,6 +59,10 @@ export interface TestContainerOverrides {
   // El settlement real se arma con `useCases.confirmAndSend` (ver confirm-and-send.money-path.test).
   // HU-SOL-13: sin override queda UNDEFINED → la acción de refund NO se muestra.
   solanaRefund?: SolanaEscrowRefundGateway;
+  // WKH-327: sin override quedan UNDEFINED ⇒ ni la acción de cierre ni la puerta de descubrimiento se
+  // muestran. Es la misma disciplina que `solanaRefund`: un test que no los inyecta no los ve.
+  solanaClose?: SolanaEscrowCloseGateway;
+  solanaCloseableEscrows?: SolanaCloseableEscrowLister;
   clock?: Clock; // default: new FixedClock()
   // Repo COMPARTIDO por todos los use-cases (default: new InMemoryRepo()). Se inyecta para poder
   // SEMBRARLO antes de renderizar: es la única forma de testear el historial, que por definición
@@ -95,6 +102,9 @@ export function buildTestContainer(o: TestContainerOverrides = {}): Container {
     recoverEscrowFunds: o.solanaRefund
       ? new RecoverEscrowFunds(repo, clock, o.solanaRefund)
       : undefined,
+    // WKH-327: NO toca repo ni clock — el use-case del cierre no persiste nada (AC-10).
+    closeEscrowAccounts: o.solanaClose ? new CloseEscrowAccounts(o.solanaClose) : undefined,
+    solanaCloseableEscrows: o.solanaCloseableEscrows,
   };
   return { ...base, ...(o.useCases ?? {}) };
 }

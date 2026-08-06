@@ -87,6 +87,39 @@
 // toca la ix `deposit`, o sin una medición nueva: es lo único que lo determina.
 export const SENDER_MIN_LAMPORTS_FOR_DEPOSIT = 4_100_000;
 
+// ── WKH-327 · el mismo alquiler, ahora mirado desde el lado que lo DEVUELVE ─────────────────────────
+// Estos tres números NO son nuevos: son exactamente los sumandos que la derivación de acá arriba ya
+// escribió (`:29-42`), extraídos a constantes porque a partir de esta HU hay una segunda pregunta que
+// los necesita — cuánto recupera la persona al cerrar las cuentas. Escribirlos de nuevo en la UI es
+// cómo la cifra de pantalla y la derivación empiezan a divergir sin que nada se ponga rojo.
+//
+// ⛔ Ninguno de estos se suma a SENDER_MIN_LAMPORTS_FOR_DEPOSIT ni lo modifica.
+
+/** `EscrowState`, 154 bytes. Fuente: `:30-32` (solana-programs/README.md:345, medido por la suite del
+ *  programa contra el banco in-process). */
+export const ESCROW_STATE_RENT_LAMPORTS = 1_962_720;
+
+/** ATA del vault, 165 bytes. Fuente: `:33-38` — sale de la resta de la medición en cadena
+ *  (4.002.000 − 1.962.720) y coincide con el rent-exempt canónico de una token account SPL. */
+export const ESCROW_VAULT_RENT_LAMPORTS = 2_039_280;
+
+/**
+ * Lo que la ix `close` le devuelve al remitente: el alquiler de LAS DOS cuentas que el `deposit` creó
+ * con `payer = sender`. Fuente del subtotal: `:39-42`, donde ya está dicho que 4.002.000 COINCIDE
+ * EXACTO con lo medido en cadena para el primer depósito de una billetera nueva.
+ *
+ * ⛔ NO incluye el alquiler de `EscrowIndex` (4.774.560 lamports) y no es un olvido: no existe
+ * instrucción que cierre esa cuenta, así que ese alquiler NO vuelve. Ver `:16-25` y `:83-84`.
+ */
+export const ESCROW_DEPOSIT_RENT_LAMPORTS =
+  ESCROW_STATE_RENT_LAMPORTS + ESCROW_VAULT_RENT_LAMPORTS;
+
+/** 5.000 lamports por firma. Fuente: `:51-56` — el depósito tiene 2 firmas y midió 10.000 en cadena.
+ *  La tx de `close` tiene UNA sola (el sender es el único signer). Lo que este número NO cubre: la
+ *  propina que inyecta la billetera, que es una incógnita declarada (`:80-82`) y que `close` tampoco
+ *  acota, porque no declara ComputeBudget. Por eso el copy no promete un neto. */
+export const SOLANA_BASE_FEE_PER_SIGNATURE_LAMPORTS = 5_000;
+
 /** Lamports por SOL. Constante del protocolo (1 SOL = 10^9 lamports). */
 export const LAMPORTS_PER_SOL = 1_000_000_000;
 
@@ -112,5 +145,34 @@ const LAMPORTS_PER_DISPLAY_UNIT = LAMPORTS_PER_SOL / SOL_DISPLAY_FACTOR;
  */
 export function formatLamportsAsSol(lamports: number): string {
   const units = Math.ceil(lamports / LAMPORTS_PER_DISPLAY_UNIT);
+  return (units / SOL_DISPLAY_FACTOR).toFixed(SOL_DISPLAY_DECIMALS).replace(".", ",");
+}
+
+/**
+ * El MISMO formateo, redondeando hacia ABAJO. WKH-327.
+ *
+ * POR QUÉ EXISTE UNA SEGUNDA FUNCIÓN Y NO UN PARÁMETRO: el sentido del redondeo no es una preferencia
+ * de estilo, depende de si el número es algo que se PIDE o algo que se RECIBE, y son dos decisiones
+ * distintas que conviene no poder mezclar en un call-site.
+ *   · `formatLamportsAsSol` redondea ARRIBA porque le dice a alguien cuánto cargar, y pedir de más es
+ *     el error gratis (ver su docblock, `:105-108`).
+ *   · Ésta redondea ABAJO porque el número es lo que la persona va a COBRAR, y redondear hacia arriba
+ *     lo que alguien va a cobrar es prometer de más.
+ *
+ * EL CASO CONCRETO, medido: `formatLamportsAsSol(ESCROW_DEPOSIT_RENT_LAMPORTS)` devuelve "0,0041"
+ * sobre un valor real de 0,004002 SOL — sobreestima 2,4% lo que la persona recupera. Y "0,0041" es
+ * EXACTAMENTE la misma cadena que devuelve `formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT)`, así
+ * que un test de copy que assertara "0,0041" pasaría igual con la constante equivocada adentro. Con el
+ * floor la cifra es "0,0040" y las dos cadenas se separan: eso es lo que vuelve al test capaz de
+ * distinguir. Ver el test `formatLamportsAsSolFloor(...) !== formatLamportsAsSol(...)`.
+ *
+ * LO QUE EL FLOOR CUESTA, dicho: subestima 0,000002 SOL (0,05%). Es el error barato — quedarse corto
+ * en lo que se promete devolver.
+ *
+ * El `floor` corre sobre ENTEROS (lamports por unidad de display), nunca sobre el flotante en SOL, por
+ * la misma razón de representación binaria que su hermana.
+ */
+export function formatLamportsAsSolFloor(lamports: number): string {
+  const units = Math.floor(lamports / LAMPORTS_PER_DISPLAY_UNIT);
   return (units / SOL_DISPLAY_FACTOR).toFixed(SOL_DISPLAY_DECIMALS).replace(".", ",");
 }

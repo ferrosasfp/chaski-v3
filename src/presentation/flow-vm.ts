@@ -7,8 +7,10 @@ import {
 } from "../application/use-cases/confirm-and-send";
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
 import {
+  ESCROW_DEPOSIT_RENT_LAMPORTS,
   SENDER_MIN_LAMPORTS_FOR_DEPOSIT,
   formatLamportsAsSol,
+  formatLamportsAsSolFloor,
 } from "../application/solana-escrow-rent";
 import { KYC_PROVENANCE_LIVE } from "../infrastructure/didit/decision";
 
@@ -290,6 +292,100 @@ export function lostEscrowRecoveryError(code: string, maxCandidates: number): st
   if (code.includes("escrow_id_unavailable") || code.includes("escrow_recovery_unavailable"))
     return "No pudimos consultar el registro de envíos. Esto no es una respuesta sobre tus fondos: no llegamos a preguntar. Probá de nuevo en un rato.";
   return escrowRefundError(code);
+}
+
+// ── WKH-327 · el copy del cierre de cuentas ─────────────────────────────────────────────────────────
+/**
+ * Qué recupera la persona al cerrar, en su idioma.
+ *
+ * 🔴 La cifra sale de `formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_LAMPORTS)`, NUNCA de un literal.
+ * Un "0,0040" escrito a mano es lo que permite que la constante y el copy diverjan sin que nada se
+ * ponga rojo. Y el FLOOR no es un detalle de estilo: `formatLamportsAsSol` (ceil) devuelve "0,0041"
+ * para este mismo valor, que es EXACTAMENTE la misma cadena que el umbral del depósito — o sea que con
+ * el ceil el copy sobreestima 2,4% lo que la persona cobra, y además un test no puede distinguir si se
+ * formateó la constante correcta.
+ *
+ * Lo que este texto NO dice, a propósito:
+ *  · No dice "recuperá tu alquiler" a secas: dice CUÁLES dos cuentas.
+ *  · No suma ni nombra el `EscrowIndex` en la cifra. Lo menciona aparte, como lo que NO vuelve.
+ *  · No promete un neto. Dice que hay comisión y que NO sabemos cuánto agrega la billetera: la propina
+ *    que inyecta es una incógnita declarada del propio repo (`solana-escrow-rent.ts:80-82`) y esta
+ *    acción además no declara ComputeBudget, así que tampoco hay un techo de CU que la acote.
+ */
+export function escrowRentExplainer(): {
+  title: string;
+  body: string;
+  notRecovered: string;
+} {
+  const monto = formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_LAMPORTS);
+  return {
+    title: "Recuperá tu depósito de red",
+    body: `Cuando enviaste, Solana retuvo ${monto} SOL tuyos para mantener abiertas las dos cuentas de ese envío: la del contrato y la que guardó tus USDC. Ese depósito es tuyo y vuelve a tu billetera al cerrarlas. Este envío ya terminó, así que se pueden cerrar. Vas a firmar una transacción y la red te va a cobrar su comisión por hacerla; cuánto exactamente lo decide tu billetera y no lo sabemos de antemano.`,
+    notRecovered:
+      "Hay una tercera cuenta, el índice de tu billetera, que no se cierra con esto y cuyo depósito no vuelve. Es una sola vez por billetera, no una por envío.",
+  };
+}
+
+/**
+ * El desenlace del cierre, con sus TRES valores separados.
+ *
+ * ⚠️ El texto de "confirmed" NO menciona los USDC, y es una regla, no una omisión: lo único que la
+ * ausencia de `escrow_state` prueba es que las dos cuentas se cerraron. A dónde fue la plata no lo
+ * dice — es la misma trampa que `probeEscrowRefunded` ya tiene escrita (`solana-wallet.ts:633-635`).
+ */
+export function escrowCloseSentCopy(confirmation: "confirmed" | "pending" | "unknown"): string {
+  if (confirmation === "confirmed")
+    return "Listo: las dos cuentas de ese envío están cerradas y su depósito volvió a tu billetera.";
+  if (confirmation === "pending")
+    return "Mandamos la orden de cierre y la red todavía no nos confirma que entró. No es un fallo: puede entrar en el próximo bloque. Podés volver a intentar en un rato.";
+  return "Mandamos la orden de cierre y no pudimos preguntarle a la red si entró. No sabemos si las cuentas se cerraron; volvé a intentar más tarde.";
+}
+
+/**
+ * Copy de los errores del cierre.
+ *
+ * ⚠️ `escrow_account_absent` NO es un error y su texto no lo trata como tal. Son DOS situaciones
+ * indistinguibles desde el cliente — las cuentas ya se cerraron, o nunca llegaron a crearse — y en las
+ * dos no hay alquiler que recuperar acá y nada salió mal. El texto nombra las dos y no dice "error" ni
+ * "no pudimos": decir que algo falló cuando no falló nada le hace buscar un problema que no existe.
+ */
+export function escrowCloseError(code: string): string {
+  if (code.includes("escrow_not_terminal"))
+    return "Este envío todavía está en curso, así que sus cuentas no se pueden cerrar. Esto no dice dónde están tus USDC.";
+  if (code.includes("escrow_account_absent"))
+    return "No hay cuentas abiertas para este envío: o ya se cerraron, o nunca llegaron a crearse. No hay depósito de red que recuperar acá.";
+  // Los TRES inputs que producen este código (RPC caído, techo de tiempo vencido, bytes que no
+  // decodifican) están colapsados a propósito aguas abajo: la persona no puede hacer nada distinto con
+  // cada uno. Lo que sí importa decirle es que NO se firmó nada.
+  if (code.includes("escrow_index_probe_failed"))
+    return "No pudimos consultar la red para preparar el cierre, así que no firmamos nada. No se movió nada de tu billetera. Probá de nuevo en un rato.";
+  if (code.includes("close_not_sender"))
+    return "Este envío se firmó con otra billetera. El depósito de red vuelve a la que lo pagó, así que hay que conectar esa.";
+  if (code.includes("close_tx_failed"))
+    return "La red rechazó el cierre. Tu depósito sigue donde estaba y podés volver a intentar.";
+  if (code.includes("escrow_state_unreadable"))
+    return "No pudimos leer las cuentas de este envío, así que no firmamos nada. Probá de nuevo en un rato.";
+  if (code.includes("wallet_not_connected") || code.includes("no_account"))
+    return "Reconectá o desbloqueá tu wallet para continuar.";
+  return "No pudimos cerrar las cuentas de este envío. Intentá de nuevo.";
+}
+
+/**
+ * Copy del DESCUBRIMIENTO de envíos cerrables (AC-8).
+ *
+ * `maxCandidates` entra por parámetro y no como número escrito acá, por la misma razón que en
+ * `lostEscrowRecoveryError`: el llamador pasa la MISMA constante que sondea
+ * (`MAX_CLOSEABLE_CANDIDATES`), así que el copy no puede quedar diciendo un número que el código dejó
+ * de usar.
+ *
+ * 🔴 La distinción que este copy tiene que sostener: una lista vacía es una RESPUESTA de la cadena;
+ * una excepción es "no llegamos a preguntar". Colapsarlas en "no tenés nada" es afirmar sobre las
+ * cuentas de alguien a partir de nuestra propia falla.
+ */
+export function escrowRentDiscoveryError(code: string, maxCandidates: number): string {
+  if (code.includes("escrow_id_unavailable") || code.includes("escrow_recovery_unavailable"))
+    return "No pudimos consultar el registro de envíos. Esto no es una respuesta sobre tus cuentas: no llegamos a preguntar.";
+  return `No encontramos envíos terminados con cuentas abiertas para esta billetera. Miramos los últimos ${maxCandidates} envíos que el servidor tiene guardados de ella.`;
 }
 
 /** Mensaje humano + el código interno que lo originó. Van JUNTOS en un solo estado a propósito: con

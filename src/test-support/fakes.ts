@@ -39,6 +39,10 @@ import type {
   SettlementRecord,
   SolanaEscrowDepositProbe,
   SolanaEscrowRefundGateway,
+  SolanaEscrowCloseGateway,
+  SolanaEscrowCloseResult,
+  SolanaCloseableEscrowLister,
+  CloseableEscrow,
   SolanaEscrowRefundResult,
   SolanaPayoutPrepareGateway,
   SolanaPrincipalAuthorization,
@@ -908,6 +912,42 @@ export class FakeSolanaEscrowRefundGateway implements SolanaEscrowRefundGateway 
     this.calls.push(input);
     if (this.mode === "reject") throw new Error(this.rejectWith);
     return { refundTx: this.refundTx, confirmation: this.confirmation };
+  }
+}
+
+// FakeSolanaEscrowCloseGateway — WKH-327. Mismo shape que su hermano de refund, y `calls` existe por
+// la misma razón que allá: hay guards cuyo único síntoma observable es que el gateway NO se llamó.
+// Un test que sólo mire el mensaje de error da verde con un mutante que llame al gateway y DESPUÉS
+// tire — o sea que firma una tx que no debía existir y recién ahí se queja.
+export class FakeSolanaEscrowCloseGateway implements SolanaEscrowCloseGateway {
+  public calls: Array<{ remittanceId: string; sender: string }> = [];
+  constructor(
+    private readonly closeTx: string = FAKE_SOLANA_SIGNATURE,
+    private readonly mode: "resolve" | "reject" = "resolve",
+    private readonly confirmation: EscrowRefundConfirmation = "confirmed",
+    private readonly rejectWith: string = "close_tx_failed",
+  ) {}
+  async close(input: { remittanceId: string; sender: string }): Promise<SolanaEscrowCloseResult> {
+    this.calls.push(input);
+    if (this.mode === "reject") throw new Error(this.rejectWith);
+    return { closeTx: this.closeTx, confirmation: this.confirmation };
+  }
+}
+
+// FakeSolanaCloseableEscrowLister — WKH-327/AC-8. `mode="reject"` NO es un adorno: es el único modo
+// que distingue "la cadena contestó y no hay nada" de "no llegamos a preguntar", y esa distinción es
+// justamente la que el copy tiene que respetar. Una lista vacía es una respuesta; una excepción no.
+export class FakeSolanaCloseableEscrowLister implements SolanaCloseableEscrowLister {
+  public calls: Array<{ sender: string }> = [];
+  constructor(
+    private readonly result: readonly CloseableEscrow[] = [],
+    private readonly mode: "resolve" | "reject" = "resolve",
+    private readonly rejectWith: string = "escrow_recovery_unavailable",
+  ) {}
+  async listCloseable(input: { sender: string }): Promise<readonly CloseableEscrow[]> {
+    this.calls.push(input);
+    if (this.mode === "reject") throw new Error(this.rejectWith);
+    return this.result;
   }
 }
 

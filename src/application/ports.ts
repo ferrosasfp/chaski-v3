@@ -292,6 +292,53 @@ export interface SolanaEscrowRefundGateway {
   refund(input: { remittanceId?: string; sender: string }): Promise<SolanaEscrowRefundResult>;
 }
 
+// WKH-327 — CERRAR las cuentas del escrow y recuperar el alquiler que el remitente pagó al depositar.
+//
+// Reusa `EscrowRefundConfirmation` con la palabra "refund" adentro del nombre, y es deliberado: ese
+// tipo describe un CONTRATO (tres valores, "no pudimos preguntar" separado de "todavía no"), no un
+// caso de uso. El nombre habla de su primer uso. Renombrarlo a algo neutro tocaría los imports de
+// `recover-escrow-funds.ts`, `solana-wallet.ts`, `refund/solana-escrow-refund-gateway.ts` y
+// `flow.tsx`, o sea que metería esta HU en el diff del camino de refund — que es exactamente lo que
+// AC-9 exige dejar sin un solo cambio de comportamiento. Un alias crearía dos nombres para el mismo
+// contrato, que es como se empieza a divergir.
+export interface SolanaEscrowCloseResult {
+  closeTx: string; // base58 — la tx que el RPC aceptó (existe incluso sin confirmar)
+  // CD-7: TRES valores, nunca un boolean. "confirmed" acá significa una cosa muy acotada: leímos que
+  // `escrow_state` YA NO EXISTE en cadena, o sea que las dos cuentas se cerraron. NO dice a dónde fue
+  // la plata (la ausencia no prueba eso) y por eso el copy del éxito no menciona los USDC.
+  confirmation: EscrowRefundConfirmation;
+}
+export interface SolanaEscrowCloseGateway {
+  /**
+   * `remittanceId` es REQUERIDO, al revés que en `refund`, y no es una asimetría por descuido.
+   *
+   * El refund sin id elige UNO entre N candidatos porque "recuperar mis USDC" tiene un objetivo
+   * natural: el escrow que todavía tiene plata adentro. Para `close` no existe ese "el" — todos los
+   * escrows terminales son igual de cerrables — así que elegir uno en silencio le cerraría a la
+   * persona una cuenta que no eligió. El descubrimiento (`SolanaCloseableEscrowLister`) devuelve la
+   * LISTA y la elección es de ella.
+   */
+  close(input: { remittanceId: string; sender: string }): Promise<SolanaEscrowCloseResult>;
+}
+
+// Un escrow que la CADENA dice que está terminal, o sea con sus dos cuentas todavía abiertas y su
+// alquiler todavía inmovilizado. AC-8: la lista se arma cruzando los ids que el servidor tiene
+// guardados con una sonda on-chain, así que incluye envíos que NO están en el `localStorage` de este
+// navegador — que es justamente la gente que hoy no tiene ningún camino.
+export interface CloseableEscrow {
+  remittanceId: string;
+  status: "released" | "refunded";
+}
+export interface SolanaCloseableEscrowLister {
+  /**
+   * 🚫 NUNCA devuelve `[]` para decir "no pudimos preguntar": si el RPC o el resolver fallan, TIRA.
+   * Una lista vacía significa una sola cosa — la cadena contestó y no hay nada cerrable. Colapsar las
+   * dos es el error que `lostEscrowRecoveryError` ya tuvo que documentar en el copy: "no llegamos a
+   * preguntar" no es "no tenés nada".
+   */
+  listCloseable(input: { sender: string }): Promise<readonly CloseableEscrow[]>;
+}
+
 // El MISMO criterio de tres valores que EscrowRefundConfirmation, aplicado a la otra punta del
 // money-path: ¿el principal del sender entró al vault del escrow? Es la pregunta que el use-case se
 // hacía con un boolean, y con un boolean sólo podía contestar "no" cuando la verdad era "no pude

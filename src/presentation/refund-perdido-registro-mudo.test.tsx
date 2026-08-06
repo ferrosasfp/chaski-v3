@@ -110,8 +110,12 @@ function buscarConElContainerReal() {
 // variante que sobreviva.
 //
 // ⚠️ EL LITERAL VA ESCRITO A MANO ACÁ Y NO IMPORTADO DE `flow-vm.ts`, y ésa es la decisión que define
-// qué vigila esto. Un oráculo que sale de la misma función que vigila se aplaude a sí mismo: con el
-// texto compartido, las tres variantes de abajo aplicadas SOBRE la constante quedarían verdes.
+// qué vigila esto. Un oráculo que sale de la misma función que vigila se aplaude a sí mismo, y esto
+// NO es una intuición: se armó el diseño alternativo (una `copyNoEncontramos()` exportada por
+// `flow-vm.ts` e importada acá) con la variante de alcance post-hoc metida ADENTRO de la constante, y
+// las dos igualdades —ésta y la del caso E— quedaron VERDES. El único rojo de esa corrida fue el
+// literal de veredicto conocido de más abajo, que también está escrito a mano. O sea: lo único que vio
+// el hedge fue texto escrito a mano.
 //
 // ⚠️ Y LO QUE ESTO CUESTA, MEDIDO, para que nadie lo descubra de golpe: reescribir el copy en
 // `flow-vm.ts` y NO tocar este literal deja 2 rojos (esta igualdad y la del caso E). No es el rojo

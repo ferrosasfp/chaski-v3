@@ -507,6 +507,57 @@ describe("flow-vm: lostEscrowRecoveryError — la firma no completada no es un f
   }
 });
 
+// 🔴 LA RED DE SEGURIDAD DE ESTA FUNCIÓN, QUE NO EXISTÍA (AR/MNR-3). Los códigos que el guard no
+// reconoce caían a `escrowRefundError`, cuyo default dice "No pudimos recuperar los fondos. Intentá de
+// nuevo." Medido: por ahí salían TRES desenlaces que son "no llegamos a preguntar", no "fracasamos":
+//   · `pop_challenge_unavailable` — el 429 del rate-limit del challenge (dos clicks seguidos en
+//     "Buscar" alcanzan) y el 503 fail-closed, los dos desde `http-pop-signer.ts:23`;
+//   · `Failed to fetch` — el navegador sin red, que es el mensaje que escribe `fetch`.
+// La asimetría que lo delata: `escrowRentDiscoveryError` DECLARA su red de seguridad ("si algún día no
+// matchea, cae al default de abajo, que TAMBIÉN dice no llegamos a preguntar"). Acá esa red no existía
+// y el comentario copiado no lo advertía.
+describe("flow-vm: el default de lostEscrowRecoveryError no llama fracaso a un 'no preguntamos' (AR/MNR-3)", () => {
+  const NO_LLEGAMOS_A_PREGUNTAR = [
+    "pop_challenge_unavailable", // 429 del rate-limit del challenge / 503 fail-closed
+    "Failed to fetch", // el navegador sin red (lo escribe fetch, no nosotros)
+    "un_codigo_que_todavia_no_existe", // el que venga mañana: la red atrapa lo desconocido
+  ] as const;
+
+  for (const code of NO_LLEGAMOS_A_PREGUNTAR) {
+    it(`"${code}" no se dice como un fracaso de la recuperación`, () => {
+      const copy = lostEscrowRecoveryError(code, MAX_RECOVERY_CANDIDATES);
+      expect(copy).not.toBe("No pudimos recuperar los fondos. Intentá de nuevo.");
+      expect(copy).toContain("no es una respuesta sobre tus fondos");
+      // Y tampoco puede irse al otro extremo afirmando que miramos algo.
+      expect(copy).not.toContain(`los últimos ${MAX_RECOVERY_CANDIDATES} envíos`);
+    });
+  }
+
+  // ⚠️ EL CONTRAPESO, sin el cual lo de arriba es la sobre-corrección simétrica. `refund_tx_failed` NO
+  // es un "no preguntamos": `confirmRefund` sólo lo tira cuando MIDIÓ que la tx entró en un bloque y
+  // revirtió, y que el escrow no quedó Refunded. Ahí "no pudimos recuperar los fondos" es cierto, y
+  // decirle a esa persona "no llegamos a preguntar" sería el mismo error en el otro sentido.
+  it("refund_tx_failed SÍ se dice como un fracaso: es un 'no' medido en la cadena", () => {
+    expect(lostEscrowRecoveryError("refund_tx_failed", MAX_RECOVERY_CANDIDATES)).toBe(
+      "No pudimos recuperar los fondos. Intentá de nuevo.",
+    );
+  });
+
+  // Los otros tres que siguen saliendo por `escrowRefundError` porque SÍ son respuestas sobre el
+  // dinero: el escrow ya no está depositado, todavía no venció, o la wallet se desconectó.
+  it("los códigos que SÍ responden sobre los fondos conservan su copy", () => {
+    expect(lostEscrowRecoveryError("escrow_not_deposited", MAX_RECOVERY_CANDIDATES)).toContain(
+      "ya no está en el escrow",
+    );
+    expect(lostEscrowRecoveryError("refund_before_deadline", MAX_RECOVERY_CANDIDATES)).toContain(
+      "después del vencimiento",
+    );
+    expect(lostEscrowRecoveryError("wallet_not_connected", MAX_RECOVERY_CANDIDATES)).toContain(
+      "Reconectá",
+    );
+  });
+});
+
 describe("flow-vm: las DOS funciones responden igual a la firma no completada (WKH-331/CD-12)", () => {
   // 🔴 POR QUÉ ESTE GUARD EXISTE. La regexp está escrita DOS veces a propósito: extraerla a una
   // constante compartida obligaría a editar `escrowRentDiscoveryError`, que CD-2 prohíbe tocar. El

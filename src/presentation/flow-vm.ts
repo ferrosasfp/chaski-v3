@@ -310,11 +310,30 @@ export function lostEscrowRecoveryError(code: string, maxCandidates: number): st
   // (`escrow_recovery_unavailable`, `http-solana-remittance-id-resolver.ts:40`), y los TRES `not_asked`
   // que el refund empezó a propagar en WKH-331 con el motivo pegado al código
   // (`pop_disabled` / `registry_disabled` / `pop_rejected`). Los cuatro se dicen IGUAL: la persona no
-  // puede hacer nada distinto con cada uno, y el motivo viaja en el código para el diagnóstico, no en
-  // el texto (CD-5). En los cinco casos no llegamos a mirar la cadena.
+  // puede hacer nada distinto con cada uno, y el motivo NO se interpola en el texto (CD-5). En los
+  // cinco casos no llegamos a mirar la cadena.
   if (code.includes("escrow_id_unavailable") || code.includes("escrow_recovery_unavailable"))
     return "No pudimos consultar el registro de envíos. Esto no es una respuesta sobre tus fondos: no llegamos a preguntar. Probá de nuevo en un rato.";
-  return escrowRefundError(code);
+  // Lo que SÍ es una respuesta sobre el dinero, y por eso sigue saliendo por `escrowRefundError`. Va
+  // enumerado y no como un `else`: es la lista de códigos sobre los que se puede afirmar algo.
+  // `refund_tx_failed` no lo reconoce esa función y cae a su default, que para ESE código es cierto:
+  // `confirmRefund` sólo lo tira habiendo MEDIDO que la tx entró en un bloque y revirtió, y que el
+  // escrow no quedó Refunded. Ahí "no pudimos recuperar los fondos" es exactamente lo que pasó.
+  if (
+    /escrow_not_deposited|refund_before_deadline|wallet_not_connected|no_account|refund_tx_failed/.test(
+      code,
+    )
+  )
+    return escrowRefundError(code);
+  // 🔴 LA RED DE SEGURIDAD, que antes no existía (AR/MNR-3). Acá caía el default de `escrowRefundError`
+  // ("No pudimos recuperar los fondos. Intentá de nuevo."), y por acá salen desenlaces que son un "no
+  // llegamos a preguntar" y no un fracaso: `pop_challenge_unavailable` (el 429 del rate-limit del
+  // challenge, que se saca con dos clicks seguidos en "Buscar", y el 503 fail-closed) y el
+  // "Failed to fetch" del navegador sin red. Ninguno de los dos sabe si la plata está o no.
+  // Este texto tampoco puede irse al otro extremo: no afirma que no preguntamos (puede haber fallado
+  // después de preguntar, incluso después de firmar), afirma lo único cierto, que no sabemos dónde se
+  // cortó. Los códigos que SÍ responden sobre el dinero ya salieron arriba.
+  return "Algo se cortó antes de terminar. No sabemos hasta dónde llegamos, así que esto no es una respuesta sobre tus fondos. Probá de nuevo en un rato.";
 }
 
 // ── WKH-327 · el copy del cierre de cuentas ─────────────────────────────────────────────────────────

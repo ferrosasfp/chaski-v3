@@ -573,6 +573,40 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
     expect(ix.keys[2]!.pubkey.toBase58()).toBe(goodPda);
   });
 
+  // ── WKH-331 · AR/BLQ-BAJO-1: CUÁL de las dos firmas no se completó ───────────────────────────────
+  // 🔴 En la recuperación hay DOS firmas (posesión adentro del resolver, orden acá) y la billetera
+  // escribe el MISMO texto para las dos. Sin etiquetar la fase, el copy de la pantalla dice "no
+  // llegamos a preguntar" cuando ya preguntamos, miramos y encontramos un escrow abierto. Lo que sale
+  // por acá es lo único que puede distinguirlas. La junta con el copy la mide
+  // `refund-perdido-junta.test.ts`.
+  it("T-R0-11 (AR/BLQ-BAJO-1): sin id, la firma de la ORDEN rechazada ⇒ escrow_refund_signature_incomplete", async () => {
+    await mockChain({ "rem-deposited": "deposited" });
+    signSpy.mockRejectedValue(new Error("User rejected the request."));
+    const adapter = await connectedWith({
+      lookupBySender: vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: ["rem-deposited"] })),
+    });
+
+    await expect(adapter.refundEscrow()).rejects.toThrow("escrow_refund_signature_incomplete");
+    // Y no se llegó a broadcastear nada: la etiqueta habla de una firma que no ocurrió, no de una tx.
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  // El otro lado de CD-4/AC-6: con el id presente hay UNA sola firma, no hay ambigüedad que resolver,
+  // y el camino que ya funcionaba propaga EXACTAMENTE lo que propagaba. Sin este control, el etiquetado
+  // de arriba podría tragarse el mensaje de la billetera también donde nadie lo pidió.
+  it("T-R0-11 (CD-4): con id presente la firma rechazada propaga el texto de la billetera SIN re-etiquetar", async () => {
+    await mockChain({ "rem-deposited": "deposited" });
+    signSpy.mockRejectedValue(new Error("User rejected the request."));
+    const adapter = await connectedWith({
+      lookupBySender: vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: ["rem-otro"] })),
+    });
+
+    await expect(adapter.refundEscrow("rem-deposited")).rejects.toThrow("User rejected the request.");
+    await expect(adapter.refundEscrow("rem-deposited")).rejects.not.toThrow(
+      "escrow_refund_signature_incomplete",
+    );
+  });
+
   it("sin wallet conectada y sin id ⇒ wallet_not_connected ANTES de consultar el resolver", async () => {
     const lookupBySender = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: ["rem-1"] }));
     const adapter = new SolanaWalletAdapter({ lookupBySender }); // sin connect

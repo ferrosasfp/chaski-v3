@@ -282,7 +282,7 @@ export class SolanaWalletAdapter
   // MAX_RECOVERY_CANDIDATES envíos de la persona en los tres casos en que no se preguntó nada.
   // Ahora se consume `lookupBySender`, que las separa, y los tres `not_asked` salen por un código
   // propio. La CUARTA sigue saliendo por `escrow_not_found`, a propósito: ahí el servidor sí contestó
-  // y la frase de la pantalla es cierta. Espeja a (`listCloseable`, `:1046`), que ya hacía esto.
+  // y la frase de la pantalla es cierta. Espeja a (`listCloseable`, `:1066`), que ya hacía esto.
   private async resolveRemittanceIdFromLedger(senderB58: string): Promise<string> {
     const resolver = this.remittanceIdResolver;
     // Mismo guard que `listCloseable`: sin el método no se adivina, y un doble de JS que no lo tenga
@@ -581,10 +581,12 @@ export class SolanaWalletAdapter
     if (!senderB58) throw new Error("wallet_not_connected");
 
     // HU-SOL-20/AC-2: id presente ⇒ NO se consulta el resolver (AC-6). Ausente/vacío ⇒ recuperación.
-    const escrowId =
-      typeof remittanceId === "string" && remittanceId.trim().length > 0
-        ? remittanceId
-        : await this.resolveRemittanceIdFromLedger(senderB58);
+    // 🔴 `idPedido` no es sólo trazabilidad: dice CUÁNTAS firmas pide esta llamada. Con el id presente
+    // hay UNA (la de la transacción, más abajo). Sin él, el resolver pide primero la de posesión, y
+    // recién después viene la de la transacción. Esa diferencia es la que hace falta al firmar.
+    const idPedido =
+      typeof remittanceId === "string" && remittanceId.trim().length > 0 ? remittanceId : undefined;
+    const escrowId = idPedido ?? (await this.resolveRemittanceIdFromLedger(senderB58));
 
     // ── lazy-import (patrón authorizePrincipal, DT-SDD-8) ──
     const web3 = await import("@solana/web3.js");
@@ -644,7 +646,25 @@ export class SolanaWalletAdapter
     const tx = new Transaction().add(ix);
     tx.feePayer = senderPk; // AC-6/CD-10: el sender paga el fee y firma (NUNCA la release-authority)
     tx.recentBlockhash = blockhash;
-    const signed = (await solanaWalletBridge.signTransaction(tx)) as Web3Transaction; // firma SÓLO el sender
+    // 🔴 LA SEGUNDA FIRMA DE ESTA LLAMADA, cuando el id se resolvió contra el registro (AR/BLQ-BAJO-1).
+    // La primera fue la de posesión, adentro del resolver. Las dos las escribe la MISMA billetera con
+    // el MISMO texto ("User rejected the request." en Phantom), así que sin etiquetar acá la fase,
+    // `lostEscrowRecoveryError` no puede distinguirlas y termina diciendo "no llegamos a preguntar"
+    // justo cuando preguntamos, el servidor contestó, miramos la cadena y encontramos un escrow
+    // abierto y vencido: los dos guards autoritativos de arriba ya pasaron para llegar hasta acá.
+    // Con el id presente NO se re-etiqueta: ahí hay una sola firma, no hay ambigüedad que resolver, y
+    // el camino que ya funcionaba propaga exactamente lo que propagaba (AC-6/CD-4).
+    // El texto original de la billetera NO se conserva en el código a propósito: en esta pantalla el
+    // código se descarta (`flow.tsx` guarda sólo el mensaje traducido), así que arrastrarlo sería
+    // prometer un diagnóstico que nadie lee. Lo que se pierde es la distinción entre "la persona
+    // canceló" y "el handle de firma no está montado", que el copy de las dos fases ya conflaciona.
+    let signed: Web3Transaction;
+    try {
+      signed = (await solanaWalletBridge.signTransaction(tx)) as Web3Transaction; // firma SÓLO el sender
+    } catch (e) {
+      if (idPedido !== undefined) throw e; // una sola firma en juego: nada que desambiguar
+      throw new Error("escrow_refund_signature_incomplete");
+    }
     const signature = await connection.sendRawTransaction(
       signed.serialize(), // requireAllSignatures=true por default (el sender es el único signer)
     );
@@ -747,7 +767,7 @@ export class SolanaWalletAdapter
    * que llama a `resolveRemittanceIdFromLedger`, `:286`) elige UNO entre N y actúa sobre él, porque
    * "recuperar mis USDC" tiene un objetivo natural — el escrow que todavía tiene plata. Para `close` no
    * existe ese "el": todos los terminales son igual de cerrables, y elegir uno en silencio le cerraría
-   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1046`) devuelve la
+   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1066`) devuelve la
    * LISTA y elige ella.
    *
    * ⚠️ POR QUÉ EL LISTER NO TIENE GATEWAY Y EL CIERRE SÍ (apartamiento declarado del SDD §4.1/§4.2,
@@ -936,10 +956,10 @@ export class SolanaWalletAdapter
    * ¿Entró el `close`? Devuelve el tri-estado y TIRA `close_tx_failed` sólo cuando medimos que la tx
    * entró y revirtió Y la cuenta sigue ahí.
    *
-   * ⚠️ DOS DIVERGENCIAS DELIBERADAS respecto de `confirmRefund`, `:667`. Están escritas acá para
+   * ⚠️ DOS DIVERGENCIAS DELIBERADAS respecto de `confirmRefund`, `:687`. Están escritas acá para
    * que nadie las "armonice" de vuelta en un code review:
    *
-   * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`confirmRefund`, `:667`), SIN leer nada.
+   * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`confirmRefund`, `:687`), SIN leer nada.
    *    Éste NO puede: AC-5 exige que el alquiler volvió se afirme *sólo después de leer que la cuenta
    *    ya no existe*. Un `confirmTransaction` sin `err` prueba que la tx ENTRÓ; leer la ausencia es lo
    *    que prueba que hizo lo que queríamos. El input que pone en rojo cualquier atajo acá: un doble

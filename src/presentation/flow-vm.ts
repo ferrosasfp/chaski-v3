@@ -284,6 +284,15 @@ export function escrowRefundError(code: string): string {
  * de usar.
  */
 export function lostEscrowRecoveryError(code: string, maxCandidates: number): string {
+  // 🔴 LA FASE DE LA TRANSACCIÓN, PRIMERA (AR/BLQ-BAJO-1). Esta puerta pide DOS firmas: la de posesión
+  // (adentro del resolver) y la de la orden de devolución. Las dos las escribe la misma billetera con
+  // el mismo texto, así que la regexp de abajo NO puede distinguirlas: la fase la etiqueta
+  // `refundEscrow` con este código, que es lo único que llega acá pudiendo decir cuál de las dos fue.
+  // Para llegar a emitirse hicieron falta las cuatro cosas que este texto afirma: se firmó la
+  // posesión, el servidor contestó, se miró la cadena, y había un escrow de esta billetera abierto y
+  // vencido. Decir "no llegamos a preguntar" acá sería falso, y encima tiraría la información útil.
+  if (code.includes("escrow_refund_signature_incomplete"))
+    return "Encontramos un envío tuyo todavía abierto en el escrow y ya vencido, así que se puede recuperar. Lo que no se completó es la segunda firma, la de la orden que devuelve tus USDC a tu billetera. Volvé a intentar y aceptá esa segunda firma.";
   // PRIMERA a propósito, y es seguro: ninguno de los tres literales que esta regexp reconoce contiene
   // la subcadena `escrow_not_found`, así que no le roba casos a la rama de abajo. Eso no se supone:
   // lo vigila el control de orden de ramas en `flow-vm.test.ts`, que exige que `escrow_not_found`
@@ -368,7 +377,7 @@ export function escrowRentExplainer(voice: "discovery" | "remittance"): {
  *
  * ⚠️ El texto de "confirmed" NO menciona los USDC, y es una regla, no una omisión: lo único que la
  * ausencia de `escrow_state` prueba es que las dos cuentas se cerraron. A dónde fue la plata no lo
- * dice — es la misma trampa que `probeEscrowRefunded` ya tiene escrita (`probeEscrowRefunded`, `solana-wallet.ts:711`).
+ * dice — es la misma trampa que `probeEscrowRefunded` ya tiene escrita (`probeEscrowRefunded`, `solana-wallet.ts:731`).
  */
 export function escrowCloseSentCopy(confirmation: "confirmed" | "pending" | "unknown"): string {
   if (confirmation === "confirmed")

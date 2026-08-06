@@ -37,8 +37,8 @@ const SELECT_COLS =
 // Estados NO-terminales candidatos a varado (AC-4). Mirror del índice parcial de la migración
 // (idx_remit_settle_stale ... where status in ('principal_in','submitted','forward_error')).
 // NO agregar 'prepared' acá: rompería el mirror del índice parcial y haría que el reconcile
-// re-procesara órdenes cuyo principal NUNCA entró (CD-6). Las 'prepared' se listan aparte
-// (listPreparedOrphans) con su propio umbral.
+// re-procesara órdenes SIN depósito REGISTRADO (CD-6) — que no es lo mismo que sin depósito: un
+// write transitorio fallido (WKH-330) las deja así. Se listan aparte (listPreparedOrphans).
 const STALE_STATUSES: readonly SettlementLedgerStatus[] = [
   "principal_in",
   "submitted",

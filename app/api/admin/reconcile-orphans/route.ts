@@ -120,11 +120,11 @@ export async function POST(req: Request): Promise<Response> {
 
   // 5. Solo conteos agregados (CD-7): NUNCA PII/montos/addresses de terceros. `failed` = filas cuyo
   //    markOutcome tiró (batch parcial → 200, NUNCA 500).
-  // `preparedOrphans`: sólo VISIBILIDAD, cero mutación — una 'prepared' no se re-procesa (su principal
-  // nunca entró; cancelar la orden del proveedor es DT-5, fuera de este endpoint).
+  // `preparedOrphans`: sólo VISIBILIDAD, cero mutación — una 'prepared' no se re-procesa acá. Dice que
+  // NO hay depósito REGISTRADO, no que no lo hubo: un write transitorio fallido (WKH-330) la deja así.
   //   · total     = conteo EXACTO de coincidencias, NO items.length (que está capado por MAX_LIMIT).
   //   · truncated = hay más de las que entran en la página ⇒ el operador sabe que está viendo un corte.
-  //   · items     = IDs operativos para actuar (payoutId es lo que se cancela del lado del proveedor).
+  //   · items     = IDs de correlación; el payoutId identifica la orden del proveedor, NO manda cancelarla.
   //     NUNCA addresses ni montos: el operador no los necesita y esta respuesta va a logs (CD-7).
   return NextResponse.json(
     {

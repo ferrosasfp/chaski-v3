@@ -825,6 +825,63 @@ describe("SupabaseSettlementLedger (WKH-207)", () => {
     expect(JSON.stringify(out)).not.toContain("rem-B1");
   });
 
+  // ══ WKH-330 · AC-5 ═══════════════════════════════════════════════════════════════════════════════
+  // Que esta query NO filtre por `status` es lo único que hace recuperable el remittanceId de un
+  // depósito REAL cuyo registro falló. Ese es el caso entero de esta HU: el settle Solana broadcastea,
+  // la signature queda verificada on-chain, el write 'prepared' → 'principal_in' falla por infra
+  // (SQLSTATE clase 08) y la fila se queda en 'prepared'. Si esta lista dejara de devolver las
+  // 'prepared', la persona pierde el ÚNICO argumento con el que pide el refund trustless de su
+  // escrow — un depósito real se vuelve irrecuperable por una caída de DB de treinta segundos.
+  //
+  // ⚠️ FIXTURE LOCAL, NO solRows(). Medido sobre el commit base: cambiando los literales "prepared"
+  // de solRows() y del fixture de la ruta, y borrando el camino de recuperación al mismo tiempo, la
+  // suite ENTERA quedaba verde. O sea que el candado existía por accidente, no porque alguien lo
+  // afirmara. Un fixture local con su propia fila 'prepared' es lo que lo vuelve intencional.
+  // Refutación de que sirva: poner `.eq("status", "principal_in")` en la cadena de
+  // listRemittanceIdsBySender y ver este test rojo con ESTE mensaje, no con uno que hable de IDOR.
+  it("T-330-5a (AC-5): un depósito REAL cuyo write falló queda en 'prepared' y su remittanceId DEBE seguir siendo recuperable (sin él no hay refund)", async () => {
+    const SENDER_LOCAL = SOL_A;
+    // La fila del depósito real cuyo registro falló: el settle broadcasteó, la firma existe, y el
+    // write que la movía a 'principal_in' tiró 08006. Sigue en 'prepared'.
+    const DEPOSITO_REAL_SIN_REGISTRAR = "rem-330-write-fallido";
+    const filasLocales: FakeLedgerRow[] = [
+      {
+        remittance_id: DEPOSITO_REAL_SIN_REGISTRAR,
+        status: "prepared",
+        created_at: "2026-08-06T10:00:00.000Z",
+        sender_address: SENDER_LOCAL,
+        vm: "solana",
+        value_minor: "0",
+        receiver_address: DEPOSIT_A_OLD,
+      },
+      {
+        remittance_id: "rem-330-ok",
+        status: "settled",
+        created_at: "2026-08-06T09:00:00.000Z",
+        sender_address: SENDER_LOCAL,
+        vm: "solana",
+        value_minor: "0",
+        receiver_address: DEPOSIT_A_NEW,
+      },
+    ];
+    const { client } = makeBehaviorClient(filasLocales);
+    const out = await new SupabaseSettlementLedger(client).listRemittanceIdsBySender({
+      senderAddress: SENDER_LOCAL,
+      vm: "solana",
+      limit: 20,
+    });
+    const ids = out.map((r) => r.remittanceId);
+    expect(
+      ids,
+      "la lista dejó de devolver la fila 'prepared': el remittanceId de un depósito real cuyo write falló se volvió irrecuperable y la persona no puede pedir el refund",
+    ).toContain(DEPOSITO_REAL_SIN_REGISTRAR);
+    // El status viaja: quien consume decide. Filtrar acá sería decidir por él, y decidir mal.
+    expect(out.find((r) => r.remittanceId === DEPOSITO_REAL_SIN_REGISTRAR)?.status).toBe("prepared");
+    // El caso no es vacuo: la fila terminal del mismo sender también está, así que un `toContain`
+    // que pasara por devolver todo no se distingue de uno que pasa por devolver lo correcto.
+    expect(ids).toEqual([DEPOSITO_REAL_SIN_REGISTRAR, "rem-330-ok"]); // created_at DESC
+  });
+
   it("T-R0-1 (§4.2): NO filtra por la columna `vm` — las filas LEGACY Solana dicen 'evm'", async () => {
     // Las filas del doble llevan vm:'evm' (fiel a las filas ya escritas: el escritor no seteaba `vm`).
     // Si la query agregara `.eq('vm','solana')`, esto devolvería [] y el fallback de AC-2 no protegería nada.
@@ -1306,7 +1363,7 @@ describe("WKH-213/R2 — el settle completa la fila 'prepared' (estado final de 
     const ledger = new SupabaseSettlementLedger(client);
     await ledger.recordOrderPrepared(prepareInput());
     expect(rows[0]?.status).toBe("prepared");
-    // No está en la cola de varadas (su principal NUNCA entró: no se re-procesa — CD-6).
+    // No está en la cola de varadas (una 'prepared' no se re-procesa — CD-6; su registro, no el mundo).
     expect(await ledger.listStale({ olderThanIso: "2030-01-01T00:00:00.000Z", limit: 50 })).toEqual(
       [],
     );

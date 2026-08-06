@@ -291,6 +291,47 @@ describe("POST /api/solana/escrow/remittance-ids (HU-SOL-20/AC-2)", () => {
     expect(listMock).not.toHaveBeenCalled();
   });
 
+  // ══ WKH-330 · AC-5 ═══════════════════════════════════════════════════════════════════════════════
+  // Esta ruta es la superficie por la que una persona recupera su remittanceId probando posesión de su
+  // wallet. Si filtrara las 'prepared', el caso de esta HU quedaría sin salida: el settle Solana
+  // broadcasteó, la signature está verificada on-chain, el write 'prepared' → 'principal_in' falló por
+  // infra, y la fila quedó en 'prepared'. Ese remittanceId es el ÚNICO argumento del refund trustless.
+  //
+  // ⚠️ FIXTURE LOCAL, NO el ROWS compartido de arriba. Medido sobre el commit base: cambiando los
+  // literales "prepared" de ROWS y del fixture del ledger, y borrando este camino al mismo tiempo, la
+  // suite ENTERA quedaba verde — el candado existía sólo porque dos strings de fixture decían
+  // "prepared", no porque alguien lo afirmara.
+  // Refutación de que sirva: poner `refs.filter((r) => r.status !== "prepared")` en el 200 de
+  // app/api/solana/escrow/remittance-ids/route.ts y ver este test rojo con ESTE mensaje. Sin él, los
+  // únicos rojos de ese mutante se llaman "IDOR", y quien los lea aprende que rompió el aislamiento
+  // entre senders, no que dejó irrecuperable un depósito real.
+  it("T-330-5b (AC-5): la ruta devuelve la 'prepared' de un depósito REAL cuyo write falló — sin ese id la persona no puede pedir el refund", async () => {
+    const DEPOSITO_REAL_SIN_REGISTRAR = "rem-330-write-fallido";
+    // Fixture LOCAL: sólo estas dos filas, ambas del mismo sender PoP-verificado.
+    const filasLocales = [
+      {
+        remittanceId: DEPOSITO_REAL_SIN_REGISTRAR,
+        status: "prepared",
+        createdAt: "2026-08-06T10:00:00.000Z",
+      },
+      { remittanceId: "rem-330-ok", status: "settled", createdAt: "2026-08-06T09:00:00.000Z" },
+    ];
+    listMock.mockResolvedValue(filasLocales);
+    getLedgerMock.mockReturnValue({ listRemittanceIdsBySender: listMock });
+
+    const res = await POST(req({ sender: SENDER_A, ...realPop(KP_A) }));
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { remittanceIds: Array<{ remittanceId: string }> };
+    const ids = json.remittanceIds.map((r) => r.remittanceId);
+    expect(
+      ids,
+      "la ruta dejó de devolver la fila 'prepared': el remittanceId de un depósito real cuyo write falló se volvió irrecuperable y la persona no puede pedir el refund trustless de su escrow",
+    ).toContain(DEPOSITO_REAL_SIN_REGISTRAR);
+    // El status llega al cliente sin recortar: quien consume decide, la ruta no decide por él.
+    expect(json.remittanceIds).toEqual(filasLocales);
+  });
+
   it("la query que lanza ⇒ 502 opaco, NUNCA 500 crudo ni eco del error.code de Postgres", async () => {
     listMock.mockRejectedValue(new Error("ledger_list_by_sender_failed:PGRST301"));
     getLedgerMock.mockReturnValue({ listRemittanceIdsBySender: listMock });

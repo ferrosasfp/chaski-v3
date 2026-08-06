@@ -93,6 +93,85 @@ describe("logLedgerWriteFailure — canal por severidad, sin cambiar el control 
     warn.mockRestore();
   });
 
+  // ══ WKH-330 · AC-3 — la elevación es POR `op`, y el guard tiene que estar anclado en ops REALES ══
+  //
+  // El test de acá arriba usa el `op` "recordPrincipalIn". Medido: NINGÚN código de producción pasa
+  // nunca ese string. Refutación: `command grep -rn 'logLedgerWriteFailure(' src/ app/ scripts/ |
+  // command grep -v '\.test\.'` devuelve exactamente tres call-sites, y sus ops son
+  // "listPreparedDepositAddresses", "recordSolanaPrincipalIn" y "recordOrderPrepared". O sea que ese
+  // test vigila un literal que nadie emite, no la política. Prueba de que no alcanza: agregar
+  // "recordOrderPrepared" a ALWAYS_ALERT_OPS deja la suite ENTERA verde sin los dos tests de abajo.
+  //
+  // Los dos que siguen se anclan en 2 de los 3 ops reales — los que NO deben elevarse. El tercero
+  // (recordSolanaPrincipalIn, el que SÍ se eleva) está cubierto en
+  // app/api/settle/solana-sponsor/route.test.ts, donde además se ve el request completo.
+
+  it("T-330-3a (AC-3): 'recordOrderPrepared' NO está elevado — su 08006 sigue en warn", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    logLedgerWriteFailure("recordOrderPrepared", ledgerErr("08006"));
+    expect(error).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).not.toContain("[ALERT]");
+    expect(warn.mock.calls[0]?.[1]).toMatchObject({ code: "08006", severity: "transient" });
+    // El mismo op con un 23514 SÍ grita (el contador de `error` no es un cero de un spy sordo):
+    error.mockClear();
+    warn.mockClear();
+    logLedgerWriteFailure("recordOrderPrepared", ledgerErr("23514"));
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+    error.mockRestore();
+    warn.mockRestore();
+  });
+
+  it("T-330-3b (AC-3): 'listPreparedDepositAddresses' NO está elevado — su 08006 sigue en warn", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    logLedgerWriteFailure("listPreparedDepositAddresses", ledgerErr("08006"));
+    expect(error).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).not.toContain("[ALERT]");
+    error.mockClear();
+    warn.mockClear();
+    logLedgerWriteFailure("listPreparedDepositAddresses", ledgerErr("23514"));
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+    error.mockRestore();
+    warn.mockRestore();
+  });
+
+  it("T-330-3c (AC-3): la rama warn NO recibe la correlación — su payload queda como antes de WKH-330", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    logLedgerWriteFailure("recordOrderPrepared", ledgerErr("08006"), {
+      remittanceId: "rem-x",
+      signature: "sig-x",
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
+    // Igualdad EXACTA a propósito: acá sí se puede, porque la rama warn no agrega claves. Es lo que
+    // impide que AC-3 se rompa de costado filtrando correlación por un canal que no la pidió.
+    expect(warn.mock.calls[0]?.[1]).toEqual({
+      code: "08006",
+      kind: "infra_transient",
+      severity: "transient",
+      message: "ledger_record_order_prepared_failed:08006",
+    });
+    warn.mockRestore();
+  });
+
+  it("T-330-3d (AC-2/M6): la correlación NO puede pisar el diagnóstico", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Un call-site que mandara `code` en la correlación no debe poder mentir sobre el código real:
+    // por eso `...correlation` se expande PRIMERO en el objeto. Refutación: invertir el orden a
+    // `{ code, kind, severity, message, ...correlation }` y ver este test en rojo.
+    logLedgerWriteFailure("recordSolanaPrincipalIn", ledgerErr("08006"), {
+      code: "mentira",
+      severity: "trivial",
+    });
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error.mock.calls[0]?.[1]).toMatchObject({ code: "08006", severity: "transient" });
+    error.mockRestore();
+  });
+
   it("desconocido ⇒ grita por console.error (default alto)", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

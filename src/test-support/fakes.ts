@@ -42,6 +42,7 @@ import type {
   SolanaEscrowCloseGateway,
   SolanaEscrowCloseResult,
   SolanaCloseableEscrowLister,
+  ConnectedWalletProbe,
   CloseableEscrow,
   SolanaEscrowRefundResult,
   SolanaPayoutPrepareGateway,
@@ -931,6 +932,26 @@ export class FakeSolanaEscrowCloseGateway implements SolanaEscrowCloseGateway {
     this.calls.push(input);
     if (this.mode === "reject") throw new Error(this.rejectWith);
     return { closeTx: this.closeTx, confirmation: this.confirmation };
+  }
+}
+
+// FakeConnectedWallet — WKH-327 (fix-pack AR/BLQ-BAJO-1). Quién está conectado AHORA.
+//
+// ⚠️ ESTE DOBLE NO PRUEBA EL CABLEADO Y NO PUEDE HACERLO. Sirve para los tests UNITARIOS del guard,
+// donde lo que se ejercita es la comparación. Que el use-case reciba de verdad la billetera VIVA en
+// producción lo prueba OTRO test, que monta el árbol real contra el `solanaWalletBridge`
+// (`escrow-rent-recovery.test.tsx`, el describe del cambio de billetera). Si algún día ese test
+// desaparece, este doble vuelve a aplaudirse solo.
+export class FakeConnectedWallet implements ConnectedWalletProbe {
+  public calls = 0;
+  constructor(private address: string | null) {}
+  /** Cambia la billetera conectada, como cambiar de cuenta en Phantom sin recargar. */
+  switchTo(address: string | null): void {
+    this.address = address;
+  }
+  async getConnectedAddress(): Promise<string | null> {
+    this.calls++;
+    return this.address;
   }
 }
 

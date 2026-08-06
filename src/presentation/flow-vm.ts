@@ -371,21 +371,50 @@ export function escrowCloseError(code: string): string {
 }
 
 /**
- * Copy del DESCUBRIMIENTO de envíos cerrables (AC-8).
+ * Copy del DESCUBRIMIENTO de envíos cerrables (AC-8), cuando la cadena SÍ contestó y no hay nada.
+ *
+ * Es la ÚNICA función de este par que puede afirmar algo sobre las cuentas de la persona, y por eso
+ * es la única que se llama desde el camino feliz de `listCloseable` (la lista vacía). Si te encontrás
+ * queriendo llamarla desde un `catch`, la respuesta es no: ahí no miramos nada.
  *
  * `maxCandidates` entra por parámetro y no como número escrito acá, por la misma razón que en
  * `lostEscrowRecoveryError`: el llamador pasa la MISMA constante que sondea
  * (`MAX_CLOSEABLE_CANDIDATES`), así que el copy no puede quedar diciendo un número que el código dejó
  * de usar.
- *
- * 🔴 La distinción que este copy tiene que sostener: una lista vacía es una RESPUESTA de la cadena;
- * una excepción es "no llegamos a preguntar". Colapsarlas en "no tenés nada" es afirmar sobre las
- * cuentas de alguien a partir de nuestra propia falla.
  */
-export function escrowRentDiscoveryError(code: string, maxCandidates: number): string {
+export function escrowRentDiscoveryEmpty(maxCandidates: number): string {
+  return `No encontramos envíos terminados con cuentas abiertas para esta billetera. Miramos los últimos ${maxCandidates} envíos que el servidor tiene guardados de ella.`;
+}
+
+/**
+ * Copy del DESCUBRIMIENTO cuando NO llegamos a preguntar (AC-8).
+ *
+ * 🔴 POR QUÉ ESTA FUNCIÓN NO PUEDE DECIR "no encontramos", NUNCA, POR NINGÚN CÓDIGO. Acá se entra
+ * sólo desde un `catch`, y una excepción significa que la consulta no terminó: no hay ninguna
+ * observación sobre las cuentas de la persona que se pueda reportar. `listCloseable` propaga a
+ * propósito (`solana-wallet.ts`, razón 3 de su docblock: "🚫 SI EL RPC LANZA, PROPAGA. NUNCA devuelve
+ * []") y ese trabajo se tira a la basura si el copy vuelve a colapsar los dos desenlaces.
+ *
+ * ⚠️ ESTO ESTUVO AL REVÉS Y ASÍ SE ESCAPÓ (AR/BLQ-MED-1). La función reconocía DOS códigos y todo lo
+ * demás caía a un `return` final que decía "No encontramos envíos terminados… Miramos los últimos 20".
+ * Medido: con el RPC apuntado a un puerto muerto, el mensaje que el adapter propaga de verdad es
+ * `"fetch failed"` — que no contiene ninguno de los dos códigos. O sea que la pantalla afirmaba haber
+ * mirado 20 envíos justo cuando no había mirado ninguno. El default ahora es el desenlace honesto, y
+ * los códigos conocidos sólo AFINAN de qué consulta hablamos.
+ *
+ * El código de la wallet NO se interpola (CD-5): esto es enum→copy fijo, igual que `escrowCloseError`.
+ */
+export function escrowRentDiscoveryError(code: string): string {
+  // El rechazo de la firma de posesión. La persona cerró el popup: no es una falla nuestra ni de la
+  // red, y decirle "no pudimos consultar" la manda a esperar a que algo se arregle solo.
+  // ⚠️ El string lo escribe la wallet y no lo controlamos ("User rejected the request." en Phantom).
+  // Si algún día no matchea, cae al default de abajo, que TAMBIÉN dice "no llegamos a preguntar": la
+  // rama es una mejora del mensaje, nunca lo que sostiene la honestidad.
+  if (/user rejected|wallet_connect_cancelled|wallet_sign_not_available/i.test(code))
+    return "No se completó la firma que prueba que la billetera es tuya, así que no llegamos a preguntar. Esto no es una respuesta sobre tus cuentas: volvé a intentar y aceptá la firma.";
   if (code.includes("escrow_id_unavailable") || code.includes("escrow_recovery_unavailable"))
     return "No pudimos consultar el registro de envíos. Esto no es una respuesta sobre tus cuentas: no llegamos a preguntar.";
-  return `No encontramos envíos terminados con cuentas abiertas para esta billetera. Miramos los últimos ${maxCandidates} envíos que el servidor tiene guardados de ella.`;
+  return "No pudimos consultar la red para buscar tus envíos. Esto no es una respuesta sobre tus cuentas: no llegamos a preguntar.";
 }
 
 /** Mensaje humano + el código interno que lo originó. Van JUNTOS en un solo estado a propósito: con

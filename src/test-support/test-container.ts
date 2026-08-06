@@ -103,7 +103,13 @@ export function buildTestContainer(o: TestContainerOverrides = {}): Container {
       ? new RecoverEscrowFunds(repo, clock, o.solanaRefund)
       : undefined,
     // WKH-327: NO toca repo ni clock — el use-case del cierre no persiste nada (AC-10).
-    closeEscrowAccounts: o.solanaClose ? new CloseEscrowAccounts(o.solanaClose) : undefined,
+    // El 2º argumento sale del MISMO `wallet` que usa el resto del container, no de un doble aparte:
+    // si un test cambia la wallet conectada, el guard de AC-7 tiene que verlo por el mismo lado.
+    closeEscrowAccounts: o.solanaClose
+      ? new CloseEscrowAccounts(o.solanaClose, {
+          getConnectedAddress: () => wallet.getAddress(),
+        })
+      : undefined,
     solanaCloseableEscrows: o.solanaCloseableEscrows,
   };
   return { ...base, ...(o.useCases ?? {}) };

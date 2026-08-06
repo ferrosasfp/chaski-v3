@@ -55,6 +55,7 @@ import {
   escrowCloseError,
   escrowCloseSentCopy,
   escrowRefundError,
+  escrowRentDiscoveryEmpty,
   escrowRentDiscoveryError,
   escrowRentExplainer,
   type FlowError,
@@ -1456,7 +1457,10 @@ export function CloseEscrowAction({
     setBusy(true);
     setErr(null);
     try {
-      const res = await close.execute({ remittanceId, sender, connectedAddress: sender });
+      // NO se le pasa `connectedAddress`: acá vivía `connectedAddress: sender`, la misma variable, y
+      // el guard de AC-7 quedaba comparándose consigo mismo (AR/BLQ-BAJO-1). La billetera conectada
+      // ahora se la pregunta el use-case al bridge en el momento del click.
+      const res = await close.execute({ remittanceId, sender });
       setDone(res.confirmation);
     } catch (e) {
       // enum→copy fijo, sin PII (CD-5). El código crudo NUNCA se interpola en la pantalla.
@@ -1668,17 +1672,17 @@ export function EscrowRentRecovery({
       setSender(who);
       setFound(list);
       // Una lista vacía es una RESPUESTA de la cadena, y se dice con las palabras de una respuesta.
-      // El caso "no llegamos a preguntar" viaja por el catch y tiene su propia frase.
+      // El caso "no llegamos a preguntar" viaja por el catch y tiene su propia frase. Las DOS frases
+      // salen ahora de DOS funciones distintas y no de un parámetro: cuando eran una sola, cualquier
+      // código que el guard no reconociera caía en la que afirma haber mirado (AR/BLQ-MED-1).
       if (list.length === 0) {
-        setErr(escrowRentDiscoveryError("", MAX_CLOSEABLE_CANDIDATES));
+        setErr(escrowRentDiscoveryEmpty(MAX_CLOSEABLE_CANDIDATES));
       }
     } catch (e) {
-      // 🔴 Acá NO se puede decir "no tenés nada": no llegamos a mirar. El tope entra por la MISMA
-      // constante que se sondea, así que el copy no puede quedar diciendo un número que el código dejó
-      // de usar.
-      setErr(
-        escrowRentDiscoveryError(e instanceof Error ? e.message : "", MAX_CLOSEABLE_CANDIDATES),
-      );
+      // 🔴 Acá NO se puede decir "no tenés nada": no llegamos a mirar. Y tampoco entra el tope de
+      // candidatos, porque nombrar "los últimos 20 envíos" es contar lo que se miró, y no se miró
+      // ninguno.
+      setErr(escrowRentDiscoveryError(e instanceof Error ? e.message : ""));
       setFound(null);
     } finally {
       setBusy(false);

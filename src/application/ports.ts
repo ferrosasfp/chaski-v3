@@ -407,6 +407,31 @@ export interface WalletPort {
   signMessage(message: string): Promise<string>;
 }
 
+// ── Quién está conectado AHORA (WKH-327, fix-pack AR/BLQ-BAJO-1) ─────────────
+/**
+ * La billetera VIVA, no una copia.
+ *
+ * 🔴 POR QUÉ ES UN PUERTO PROPIO Y NO `Pick<WalletPort, "getAddress">`. Son preguntas distintas:
+ * `getAddress()` contesta "quién es el sender de este flujo" y para eso devuelve primero lo que
+ * cacheó `connect()` (`solana-wallet.ts`, el `if (this.address)`), que es lo correcto para firmar el
+ * depósito de una remesa que ya empezó. Esto de acá contesta "quién está conectado en este
+ * instante", que es la única pregunta que sirve para decidir si la firma que estamos por pedir puede
+ * prosperar — y para eso un cache es exactamente la respuesta equivocada.
+ *
+ * 🔴 POR QUÉ EXISTE. El guard de AC-7 recibía la dirección contra la que comparar DESDE EL LLAMADOR,
+ * y el único llamador de producción le pasaba la misma variable que estaba validando
+ * (`connectedAddress: sender`): `x === x`, una rama falsa inalcanzable y 4 tests que probaban el
+ * doble. Que el dato entre por el puerto y no por el argumento hace que esa forma no se pueda
+ * volver a escribir.
+ *
+ * `null` significa "no hay ninguna billetera conectada", NUNCA "no pudimos preguntar": leer esto no
+ * toca la red ni abre ningún diálogo, es leer un objeto en memoria que el árbol de React mantiene al
+ * día.
+ */
+export interface ConnectedWalletProbe {
+  getConnectedAddress(): Promise<string | null>;
+}
+
 // ── Proof-of-Possession (WKH-206) ────────────────────────────────────────────
 // Obtiene un challenge server-emitido para `address` y lo firma con la wallet. El use-case adjunta el
 // { challenge, signature } al submit; el server (guard 7) recupera al firmante y exige == address.

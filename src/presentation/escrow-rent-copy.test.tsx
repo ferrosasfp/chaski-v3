@@ -29,7 +29,11 @@ import {
   escrowRentExplainer,
 } from "./flow-vm";
 import { CloseEscrowAccounts } from "../application/use-cases/close-escrow-accounts";
-import { FAKE_SOLANA_BENEFICIARY, FakeSolanaEscrowCloseGateway } from "../test-support/fakes";
+import {
+  FAKE_SOLANA_BENEFICIARY,
+  FakeConnectedWallet,
+  FakeSolanaEscrowCloseGateway,
+} from "../test-support/fakes";
 import type { RemittanceState } from "../domain/remittance";
 
 afterEach(cleanup);
@@ -38,7 +42,10 @@ const sender = FAKE_SOLANA_BENEFICIARY;
 const OTRA_BILLETERA = "8tJVcM2JmYcMNCcNFYtUpXVWvKNTfnrCEwLuTRHpF9dQ";
 
 function useCase(): CloseEscrowAccounts {
-  return new CloseEscrowAccounts(new FakeSolanaEscrowCloseGateway());
+  // Este archivo va sobre el COPY: la billetera conectada es la del remitente para que el camino no
+  // se corte antes de renderizar nada. Que el guard vea de verdad la billetera viva se prueba en
+  // `escrow-rent-recovery.test.tsx`, contra el bridge real.
+  return new CloseEscrowAccounts(new FakeSolanaEscrowCloseGateway(), new FakeConnectedWallet(sender));
 }
 
 /** El subárbol del componente de cierre, y NADA más del documento (ver la cabecera). */
@@ -74,11 +81,22 @@ describe("AC-6: la cifra que se promete es la del alquiler que vuelve, no la de 
     expect(card.getByText(/0,0040/)).toBeInTheDocument();
 
     const texto = subarbolDelCierre().textContent ?? "";
-    // ⚠️ CADA número equivocado se asserta en SUS DOS grafías, la del ceil y la del floor, y esto
-    // costó un mutante que sobrevivió. La lista original ("0,0041", "0,0048", "0,0088") sale de la
-    // tabla medida con `formatLamportsAsSol` (ceil); la implementación usa el FLOOR, y con el floor el
-    // índice se escribe "0,0047" y la suma "0,0087". Un mutante que AGREGABA la suma del índice
+    // ⚠️ QUÉ CUBRE ESTA LISTA Y QUÉ NO — la versión corregida de una frase que afirmaba de más
+    // (AR/MNR-1). Los números que enumera se assertan en SUS DOS grafías, la del ceil y la del floor,
+    // y eso costó un mutante que sobrevivió: la lista original ("0,0041", "0,0048", "0,0088") salía de
+    // la tabla medida con `formatLamportsAsSol` (ceil), la implementación usa el FLOOR, y con el floor
+    // el índice se escribe "0,0047" y la suma "0,0087". Un mutante que AGREGABA la suma del índice
     // formateada con el floor pasó los cinco `not.toContain` de la lista vieja en verde.
+    //
+    // 🔴 LO QUE ESTA LISTA NO PUEDE CERRAR, medido y declarado: la BANDA. Con floor y 4 decimales,
+    // TODO el intervalo [4.000.000, 4.099.999] se escribe "0,0040", así que ningún assert sobre el
+    // texto puede distinguir el alquiler de un valor vecino dentro de la banda. Mutante aplicado de
+    // verdad (`ESCROW_DEPOSIT_RENT_LAMPORTS + 5_000`): SOBREVIVE la suite completa, 1297/0. Y la salida
+    // sugerida —assertar la identidad de la expresión, `toContain(formatLamportsAsSolFloor(RENT))`—
+    // TAMPOCO lo mata: también da "0,0040", medido en verde con el mutante puesto. Cerrar la banda
+    // pediría que la pantalla mostrara más precisión de la que un humano necesita, así que queda
+    // DECLARADO: dentro de la banda la persona ve exactamente lo mismo, y lo que no tiene red es una
+    // futura "mejora" que le sume la comisión a la cifra.
     expect(texto).not.toContain("0,0041"); // ceil del alquiler, y también el umbral de depósito
     expect(texto).not.toContain("0,0048"); // ceil del alquiler del EscrowIndex
     expect(texto).not.toContain("0,0047"); // floor del mismo

@@ -16,24 +16,39 @@ import { afterEach, describe, expect, it } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EscrowRentRecovery } from "./flow";
-import { MAX_CLOSEABLE_CANDIDATES } from "../infrastructure/solana-wallet";
+import { MAX_CLOSEABLE_CANDIDATES, SolanaWalletAdapter } from "../infrastructure/solana-wallet";
+import { solanaWalletBridge } from "../infrastructure/solana-wallet-bridge";
 import { CloseEscrowAccounts } from "../application/use-cases/close-escrow-accounts";
 import {
+  MENSAJE_FIRMA_RECHAZADA_SIN_MEDIR,
+  MENSAJE_RPC_CAIDO_MEDIDO,
+} from "../test-support/rpc-caido";
+import {
   FAKE_SOLANA_BENEFICIARY,
+  FakeConnectedWallet,
   FakeSolanaCloseableEscrowLister,
   FakeSolanaEscrowCloseGateway,
 } from "../test-support/fakes";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  solanaWalletBridge.reset();
+});
 
 const sender = FAKE_SOLANA_BENEFICIARY;
+const OTRA_BILLETERA = "8tJVcM2JmYcMNCcNFYtUpXVWvKNTfnrCEwLuTRHpF9dQ";
 const resolveSender = async () => sender;
 
 function abrirPuerta(lister: FakeSolanaCloseableEscrowLister) {
   render(
     <EscrowRentRecovery
       lister={lister}
-      close={new CloseEscrowAccounts(new FakeSolanaEscrowCloseGateway())}
+      close={
+        new CloseEscrowAccounts(
+          new FakeSolanaEscrowCloseGateway(),
+          new FakeConnectedWallet(sender),
+        )
+      }
       resolveSender={resolveSender}
     />,
   );
@@ -79,6 +94,11 @@ describe("AC-8: alcanza envíos que este navegador no conoce", () => {
   // 🔴 La distinción que este archivo existe para sostener. Una lista vacía es una RESPUESTA; una
   // excepción es nuestra propia falla. Decir "no tenés nada" sobre lo segundo es afirmar sobre las
   // cuentas de alguien a partir de que nosotros no pudimos mirar.
+  //
+  // ⚠️ EL CASO DE ABAJO ERA EL ÚNICO Y NO ALCANZABA (AR/BLQ-MED-1): `escrow_recovery_unavailable` es
+  // uno de los dos códigos que el guard del copy SÍ reconocía, o sea que el fixture elegido esquivaba
+  // justo el agujero. Los mensajes que el adapter propaga DE VERDAD están en el `it` siguiente y su
+  // string sale de una constante medida, no de una elección.
   it("el lister LANZANDO dice 'no llegamos a preguntar', nunca 'no encontramos'", () => {
     const lister = new FakeSolanaCloseableEscrowLister([], "reject", "escrow_recovery_unavailable");
     abrirPuerta(lister);
@@ -91,6 +111,29 @@ describe("AC-8: alcanza envíos que este navegador no conoce", () => {
       expect(screen.getByText(/no es una respuesta sobre tus cuentas/)).toBeInTheDocument();
     });
   });
+
+  // 🔴 Los mensajes que NO son códigos nuestros — los que el bloqueante mostraba como "no tenés nada".
+  // El primero lo mide `escrow-rent-discovery-junta.test.ts` corriendo el adapter real contra un RPC
+  // muerto; el segundo es el de la wallet cuando la persona cierra el popup de la firma de posesión.
+  for (const [quePaso, mensaje] of [
+    ["el RPC no contesta", MENSAJE_RPC_CAIDO_MEDIDO],
+    ["la persona cerró el popup de la firma", MENSAJE_FIRMA_RECHAZADA_SIN_MEDIR],
+  ] as const) {
+    it(`${quePaso} ⇒ la pantalla NO afirma haber mirado ningún envío`, () => {
+      abrirPuerta(new FakeSolanaCloseableEscrowLister([], "reject", mensaje));
+
+      fireEvent.click(screen.getByRole("button", { name: /Buscar envíos con cuentas abiertas/ }));
+
+      return waitFor(() => {
+        expect(screen.getByText(/no llegamos a preguntar/)).toBeInTheDocument();
+        expect(screen.queryByText(/No encontramos envíos terminados/)).not.toBeInTheDocument();
+        // Y tampoco el número: "los últimos 20 envíos" es contar lo que se miró, y no se miró nada.
+        expect(
+          screen.queryByText(new RegExp(`últimos ${MAX_CLOSEABLE_CANDIDATES} envíos`)),
+        ).not.toBeInTheDocument();
+      });
+    });
+  }
 
   it("sin lister cableado la puerta no se ofrece (no hay botón que no lleve a nada)", () => {
     render(<EscrowRentRecovery resolveSender={resolveSender} />);
@@ -119,5 +162,92 @@ describe("AC-8: qué se dice ANTES de abrir ningún diálogo de firma", () => {
     expect(texto).not.toContain("0,0088"); // ceil de la misma
     // Y nombra aparte la cuenta que NO se cierra.
     expect(screen.getByText(/tercera cuenta/)).toBeInTheDocument();
+  });
+});
+
+/**
+ * AC-7 CONTRA EL ÁRBOL REAL — el cambio de billetera entre "Buscar" y "Cerrar y recuperar"
+ * (fix-pack AR/BLQ-BAJO-1).
+ *
+ * 🔴 POR QUÉ ACÁ NO HAY NINGÚN DOBLE DE BILLETERA, y es todo el punto. El guard de AC-7 recibía la
+ * dirección conectada del llamador, y el único call-site de producción le pasaba
+ * `connectedAddress: sender` — la MISMA variable. Su rama falsa no existía en producción, y los cuatro
+ * tests que la ejercitaban construían el input a mano: probaban el doble, no el cableado. Inyectar acá
+ * dos direcciones distintas sería repetir exactamente ese error con otra forma.
+ *
+ * Así que las DOS direcciones salen del mismo lugar del que salen en producción: el
+ * `solanaWalletBridge` real, leído por el `SolanaWalletAdapter` real. La divergencia se produce del
+ * único modo en que se produce de verdad — cambiando de cuenta en la wallet sin recargar la página.
+ *
+ * Y hay una razón concreta para que el adapter esté acá y no un doble: `getAddress()` NO sirve para
+ * esto. Devuelve el cache de `connect()`, así que después del cambio de cuenta sigue contestando la
+ * billetera vieja. Este test recorre ese cache (llama a `connect()` con A antes de cambiar a B), o sea
+ * que se pondría rojo si el guard se apoyara en `getAddress()`.
+ */
+describe("AC-7 cableado: cambiar de billetera después de buscar NO ofrece una firma imposible", () => {
+  const A = FAKE_SOLANA_BENEFICIARY;
+  const B = OTRA_BILLETERA;
+
+  /** Monta la puerta con el adapter REAL como fuente de "quién está conectado". */
+  function montarConBridge(gw: FakeSolanaEscrowCloseGateway) {
+    solanaWalletBridge.setState({ publicKey: A, connected: true });
+    const adapter = new SolanaWalletAdapter();
+    render(
+      <EscrowRentRecovery
+        lister={new FakeSolanaCloseableEscrowLister([{ remittanceId: "rem-x", status: "released" }])}
+        close={new CloseEscrowAccounts(gw, adapter)}
+        // La misma puerta que producción: `resolveSender` sale de la wallet, no de una constante del
+        // test. Con el bridge ya conectado, `connect()` no abre ningún modal (lee el estado y cachea).
+        resolveSender={() => adapter.connect()}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /Recuperar el depósito de red de envíos anteriores/ }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Buscar envíos con cuentas abiertas/ }));
+  }
+
+  it("busco con A, cambio a B en la wallet, y el cierre se rechaza SIN llamar al gateway", async () => {
+    const gw = new FakeSolanaEscrowCloseGateway();
+    montarConBridge(gw);
+    const cerrar = await screen.findByRole("button", { name: /Cerrar y recuperar/ });
+
+    // La persona cambia de cuenta en Phantom. Nada re-renderiza la lista: `sender` sigue congelado en A.
+    solanaWalletBridge.setState({ publicKey: B, connected: true });
+    fireEvent.click(cerrar);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Este envío se firmó con otra billetera/)).toBeInTheDocument();
+    });
+    // 🔴 La aserción que importa: CERO llamadas al gateway ⇒ cero diálogos de firma. Un guard que
+    // avisara DESPUÉS de construir y pedir la firma pasaría el `getByText` de arriba igual.
+    expect(gw.calls).toHaveLength(0);
+  });
+
+  it("control positivo: sin cambiar de billetera, el cierre SÍ llega al gateway con A", async () => {
+    const gw = new FakeSolanaEscrowCloseGateway();
+    montarConBridge(gw);
+    const cerrar = await screen.findByRole("button", { name: /Cerrar y recuperar/ });
+
+    fireEvent.click(cerrar);
+
+    await waitFor(() => {
+      expect(gw.calls).toEqual([{ remittanceId: "rem-x", sender: A }]);
+    });
+  });
+
+  it("si la wallet se desconecta entre buscar y cerrar ⇒ 'reconectá', no 'es de otra billetera'", async () => {
+    const gw = new FakeSolanaEscrowCloseGateway();
+    montarConBridge(gw);
+    const cerrar = await screen.findByRole("button", { name: /Cerrar y recuperar/ });
+
+    solanaWalletBridge.setState({ publicKey: null, connected: false });
+    fireEvent.click(cerrar);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Reconectá o desbloqueá tu wallet/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Este envío se firmó con otra billetera/)).not.toBeInTheDocument();
+    expect(gw.calls).toHaveLength(0);
   });
 });

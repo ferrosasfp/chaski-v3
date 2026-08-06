@@ -175,7 +175,10 @@ export function createContainer(): Container {
     forgetKyc: new ForgetKyc(kycStore, kycPending, repo),
     solanaRefund, // HU-SOL-13: refund trustless del escrow
     recoverEscrowFunds: new RecoverEscrowFunds(repo, clock, solanaRefund),
-    closeEscrowAccounts: new CloseEscrowAccounts(solanaClose), // WKH-327
+    // WKH-327. El 2º argumento es el MISMO adapter: el guard de AC-7 le pregunta a la billetera VIVA
+    // quién está conectado en el instante del click, en vez de recibirlo del llamador (que le pasaba
+    // la misma variable que estaba validando — AR/BLQ-BAJO-1).
+    closeEscrowAccounts: new CloseEscrowAccounts(solanaClose, wallet),
     solanaCloseableEscrows: wallet, // WKH-327/AC-8: el descubrimiento se lo pregunta a la cadena
   };
 }

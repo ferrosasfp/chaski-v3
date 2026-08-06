@@ -16,6 +16,7 @@ import type {
 import type { Idl, Provider } from "@coral-xyz/anchor";
 import type {
   CloseableEscrow,
+  ConnectedWalletProbe,
   EscrowRefundConfirmation,
   PrincipalDepositState,
   SolanaEscrowDeposit,
@@ -148,7 +149,10 @@ export class SolanaWalletAdapter
     SolanaSenderSolBalanceProbe,
     // WKH-327/AC-8: el descubrimiento de cerrables se le pregunta a la CADENA, no a un agente, así
     // que vive en el mismo adapter que ya es `probe` y `senderBalance` por la misma razón.
-    SolanaCloseableEscrowLister
+    SolanaCloseableEscrowLister,
+    // WKH-327 (fix-pack AR/BLQ-BAJO-1): quién está conectado AHORA. Mismo adapter otra vez porque el
+    // bridge que sabe la respuesta ya es suyo.
+    ConnectedWalletProbe
 {
   private address: string | null = null;
 
@@ -196,15 +200,37 @@ export class SolanaWalletAdapter
    * `connect()`. Si autoConnect todavía no terminó, el estado dice `connected:false` y esto contesta
    * `null` — que es la verdad en ese instante, y el llamador ya la sabe distinguir.
    *
-   * NO cachea lo que rehidrata, a propósito: la fuente de verdad es el bridge. Si la wallet se
-   * desconecta a mitad del flujo, la llamada siguiente vuelve a dar `null` (fail-loud) en lugar de una
-   * address vieja que ya no puede firmar nada.
+   * NO cachea lo que rehidrata, a propósito: la fuente de verdad es el bridge.
+   *
+   * ⚠️ LO QUE ESTA FUNCIÓN NO ES, y hace falta decirlo porque el nombre invita a creerlo: NO es "quién
+   * está conectado ahora". Mientras `connect()` haya corrido en esta pestaña, devuelve el cache y no
+   * mira el bridge — o sea que si la persona cambia de cuenta en Phantom, esto sigue contestando la
+   * vieja. Para decidir si una firma que estamos por pedir puede prosperar, la pregunta correcta es
+   * `getConnectedAddress()` de acá abajo.
    *
    * Valida base58 igual que `connect()`: lo que no puede entrar por una puerta tampoco entra por la
    * otra.
    */
   async getAddress(): Promise<string | null> {
     if (this.address) return this.address; // el MISMO base58 case-sensitive (AC-6)
+    return this.getConnectedAddress(); // sin cache, la verdad la tiene el bridge
+  }
+
+  /**
+   * WKH-327 (fix-pack AR/BLQ-BAJO-1) — quién está conectado EN ESTE INSTANTE, sin pasar por el cache.
+   *
+   * Es la mitad "viva" de `getAddress()`: el mismo código que ya corría cuando no había cache, ahora
+   * con nombre propio y alcanzable siempre. La diferencia importa una sola vez y es la que motiva
+   * todo esto: buscar con la billetera A, cambiar a B en Phantom sin recargar, y apretar "Cerrar y
+   * recuperar". `getAddress()` contesta A (cache de `connect()`), esto contesta B, y sólo con B el
+   * guard de AC-7 puede decir que no ANTES de abrir un diálogo de firma que B no puede satisfacer.
+   *
+   * Leer el bridge NO toca la red, NO abre el modal y NO pide ninguna firma: es un objeto en memoria
+   * que el sync component mantiene al día desde `useWallet()` (`solana/solana-providers.tsx`). Si el
+   * árbol todavía no montó, o la wallet se desconectó, contesta `null` — que es "no hay nadie
+   * conectado", no "no pudimos preguntar".
+   */
+  async getConnectedAddress(): Promise<string | null> {
     const { connected, publicKey } = solanaWalletBridge.getState();
     if (!connected || !publicKey) return null; // sin conexión viva no hay address que devolver
     try {

@@ -8,10 +8,23 @@
 // sólo hace el acto es el primer paso para que un test termine asertando el beneficio sin medirlo. El
 // beneficio se nombra en el copy, que es donde se puede decir con sus condiciones.
 import { canonicalizeAddress } from "../../infrastructure/address";
-import type { SolanaEscrowCloseGateway, SolanaEscrowCloseResult } from "../ports";
+import type {
+  ConnectedWalletProbe,
+  SolanaEscrowCloseGateway,
+  SolanaEscrowCloseResult,
+} from "../ports";
 
 export class CloseEscrowAccounts {
-  constructor(private readonly escrow: SolanaEscrowCloseGateway) {}
+  constructor(
+    private readonly escrow: SolanaEscrowCloseGateway,
+    // 🔴 La dirección conectada entra POR ACÁ y no por el argumento de `execute`, y ésa es la
+    // corrección entera de AR/BLQ-BAJO-1. Cuando entraba por argumento, el único call-site de
+    // producción pasaba `connectedAddress: sender` — la MISMA variable — y la comparación de abajo
+    // era `x === x`: una rama falsa que no existía en producción y cuatro tests que la ejercitaban
+    // construyendo el input a mano. Con el dato viniendo de un puerto, esa forma no se puede volver
+    // a escribir desde el llamador.
+    private readonly connected: ConnectedWalletProbe,
+  ) {}
 
   /**
    * NO persiste nada y NO toca el repositorio, a diferencia de `RecoverEscrowFunds`. No hay estado que
@@ -22,11 +35,23 @@ export class CloseEscrowAccounts {
   async execute(input: {
     remittanceId: string;
     sender: string;
-    connectedAddress: string;
   }): Promise<SolanaEscrowCloseResult> {
     // ── AC-7 · guard ANTES de tocar el gateway ──────────────────────────────────────────────────
     // El alquiler vuelve a la billetera que lo PAGÓ (`close = sender` en el programa), así que pedirle
     // el cierre a otra billetera no es sólo inútil: hace firmar una tx que la cadena va a rechazar.
+    //
+    // Se le pregunta a la billetera VIVA en este instante, no a una copia. El `sender` que llega por
+    // argumento es la billetera que PAGÓ el alquiler de ese envío, y en la puerta de descubrimiento
+    // (`flow.tsx`, `EscrowRentRecovery`) queda congelado desde que se apretó "Buscar": cambiar de
+    // cuenta en Phantom sin recargar no lo mueve. Los dos datos son distintos por naturaleza y ésa es
+    // la razón de que este guard exista.
+    //
+    // `null` ⇒ no hay ninguna billetera conectada. Fail-closed con `wallet_not_connected`, que tiene
+    // su propio copy ("Reconectá o desbloqueá tu wallet"), y NO `close_not_sender`: decirle a alguien
+    // que su envío es de otra billetera cuando lo que pasa es que no hay ninguna conectada lo manda a
+    // buscar un problema que no tiene.
+    const connectedAddress = await this.connected.getConnectedAddress();
+    if (connectedAddress == null) throw new Error("wallet_not_connected");
     //
     // 🚫 La comparación NUNCA es con `.toLowerCase()` (CD-13). base58 es CASE-SENSITIVE: dos
     // capitalizaciones distintas son dos addresses distintas, y bajarlas a minúsculas fabrica
@@ -42,7 +67,7 @@ export class CloseEscrowAccounts {
     // pasar.
     let sameOwner: boolean;
     try {
-      sameOwner = canonicalizeAddress(input.sender) === canonicalizeAddress(input.connectedAddress);
+      sameOwner = canonicalizeAddress(input.sender) === canonicalizeAddress(connectedAddress);
     } catch {
       sameOwner = false;
     }

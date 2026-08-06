@@ -21,9 +21,18 @@
 // el día uno con la frase falsa intacta. Refutación: leer las dos formas contra el mismo archivo.
 //
 // ⚠️ LO QUE ESTE CANDADO **NO** CIERRA — enunciado, no insinuado:
-//   1. Es un barrido TEXTUAL. NO prueba ausencia semántica: una reformulación con otras palabras
-//      ("la plata no llegó", "sin fondos entrantes") lo esquiva y este test sigue verde. Caza el caso
-//      OBVIO y nada más. ⛔ Nadie puede leer su verde como "ninguna afirmación de este tipo existe".
+//   1. Es un barrido TEXTUAL, y lo textual es MÁS angosto de lo que suena. Son DOS evasiones, no una:
+//      (a) SEMÁNTICA — una reformulación con otras palabras ("la plata no llegó", "sin fondos
+//          entrantes") lo esquiva y este test sigue verde.
+//      (b) ORTOGRÁFICA — el regex enumera formas EXACTAS. Cubre las 6 capitalizaciones de la negación
+//          (ver `NEGACIONES` más abajo), pero una capitalización mixta (`nUNCA`, `nO`) lo esquiva
+//          igual, y lo mismo cualquier variante de `principal`/`entr` que no sea la escrita.
+//      🔴 La rama (b) NO estaba declarada acá y costó un bloqueante: el regex cubría `NUNCA` y `nunca`
+//      pero de `no` sólo la minúscula, así que `principal NO entró` —el caso OBVIO, y exactamente como
+//      lo escribe supabase/migrations/20260718T000000_add_prepared_status.sql:5— pasaba de largo con
+//      este guard en verde. La lección no es "faltaba una mayúscula": es que declarar la evasión
+//      semántica y callar la ortográfica hacía leer el verde como más fuerte de lo que era
+//      (CR/BLQ-BAJO-3). ⛔ Nadie puede leer su verde como "ninguna afirmación de este tipo existe".
 //   2. NO mira los `*.test.*` ni `*.spec.*` ni `test-support/`: un escritor de test no es un escritor
 //      de producción, que es lo que este canario vigila. Al cerrar WKH-330 quedó vivo exactamente un
 //      sitio de test con esta frase, y quedó vivo A PROPÓSITO:
@@ -81,10 +90,39 @@ function walk(dir: string, out: string[] = []): string[] {
 
 const FILES = SCAN_DIRS.flatMap((d) => walk(path.join(ROOT, d)));
 
-/** "principal … (NUNCA|nunca|no) entr[ó|a|ado]". El `[^.;]{0,60}?` deja pasar el salto de línea y el
- *  `//` de la línea siguiente, que es exactamente lo que el barrido por línea no ve. Se corta en `.`
- *  y `;` para no cruzar de una oración a otra y fabricar un match que nadie escribió. */
-const CLAIM_RE = /principal[^.;]{0,60}?(NUNCA|nunca|no)\s+entr/g;
+/** "principal … (NUNCA|Nunca|nunca|NO|No|no) entr[ó|a|ado]". El `[^.;]{0,60}?` deja pasar el salto de
+ *  línea y el `//` de la línea siguiente, que es exactamente lo que el barrido por línea no ve. Se
+ *  corta en `.` y `;` para no cruzar de una oración a otra y fabricar un match que nadie escribió.
+ *
+ *  🔴 LA NEGACIÓN VA ENUMERADA EN SUS 6 CAPITALIZACIONES. La versión anterior escribía
+ *  `(NUNCA|nunca|no)`: cubría las DOS capitalizaciones de "nunca" pero de "no" sólo la minúscula, así
+ *  que `NO entró`, `No entró` y `Nunca entró` pasaban de largo con este guard en verde. No es
+ *  hipotético — el propio repo escribe esa afirmación con `NO` en mayúscula:
+ *  supabase/migrations/20260718T000000_add_prepared_status.sql:5 dice "el principal aún NO entró
+ *  on-chain" (queda fuera de SCAN_DIRS por el agujero #3, pero prueba que ese es el estilo de énfasis
+ *  del repo). Refutación: escribir la frase con `NO` mayúscula en un archivo de producción y correr
+ *  T-330-4 con el regex viejo ⇒ verde entera. CR/BLQ-BAJO-3.
+ *
+ *  🟩 POR QUÉ ENUMERAR Y NO PONER EL FLAG `i` — MEDIDO, no elegido por gusto. El flag `i` no ampliaría
+ *  sólo la negación: también `principal` y `entr`, que no son de lo que trata el arreglo. Sobre los 88
+ *  archivos que este guard barre, las tres variantes (vieja, enumerada, flag `i`) dan 0 hits, o sea
+ *  que ahí la pregunta NO se contesta; sobre un corpus ANCHO de 471 archivos (src/ app/ scripts/
+ *  supabase/ contracts/ doc/, incluidos tests y .md) sí se ve: la enumeración agrega 3 hits sobre el
+ *  regex viejo y los 3 son la frase perseguida (uno es la migración de arriba), y el flag `i` agrega
+ *  2 MÁS, de los cuales uno matchea dentro de un IDENTIFICADOR y no en prosa: el comentario
+ *  «NUNCA markPrincipalIn: no entró un peso.» de confirm-and-send.money-path.test.ts (hoy `:567`,
+ *  buscarlo por su texto). El match es «PrincipalIn: no entr», o sea que el ancla `principal` la pone
+ *  el identificador `markPrincipalIn`, no el sustantivo. Ese es el falso positivo que el flag `i`
+ *  compra, y en este repo `principalIn`/`PrincipalIn` es un identificador frecuente.
+ *
+ *  ⛔ Lo que la enumeración NO cubre, dicho y no insinuado: capitalizaciones mixtas (`nUNCA`, `nO`,
+ *  `NUnca`). Es una apuesta a que nadie las escribe, no una cobertura. Está en el agujero #1(b). */
+const CLAIM_RE = /principal[^.;]{0,60}?(NUNCA|Nunca|nunca|NO|No|no)\s+entr/g;
+
+/** Las 6 capitalizaciones que `CLAIM_RE` declara cubrir. Vive afuera del `it` porque el assert de
+ *  no-vacuidad las recorre una por una: si mañana alguien saca una del regex, el test se cae diciendo
+ *  CUÁL sacó, en vez de quedarse verde como quedó hasta el CR. */
+const NEGACIONES = ["NUNCA", "Nunca", "nunca", "NO", "No", "no"] as const;
 
 interface Hit {
   rel: string;
@@ -110,7 +148,9 @@ function findClaims(): Hit[] {
 
 // ⚠️ El nombre de este `describe` nombra el MECANISMO (un barrido textual con un regex), NUNCA su
 // resultado. La versión anterior decía "ningún archivo de producción afirma que…", que es la promesa
-// de exhaustividad que el agujero #1 del encabezado (`:26`) declara ilegítima: vitest imprime el path
+// de exhaustividad que el **agujero #1** del encabezado declara ilegítima (se cita por NOMBRE y no por
+// `:NN`: acá decía `:26` y mi propia edición del agujero #1 lo corrió — es la TERCERA vez en esta HU
+// que una auto-cita numérica de este archivo se desfasa sola). Vitest imprime el path
 // completo del `describe`, así que lo que un lector del verde veía era la promesa y no el agujero.
 // Exemplar del repo que ya lo resuelve: webhook-outcome-writers.static.test.ts:61 (neutro, sin
 // universal). AR/BLQ-BAJO-1.
@@ -126,6 +166,24 @@ describe("WKH-330 / AC-4 — barrido textual de la frase «el principal … nunc
     const dosLineas = "// una 'prepared' no se re-procesa (su principal\n  // nunca entró; cancelar)";
     expect([...unaLinea.matchAll(CLAIM_RE)]).toHaveLength(1);
     expect([...dosLineas.matchAll(CLAIM_RE)]).toHaveLength(1);
+    // 🔴 Y LAS 6 CAPITALIZACIONES DE LA NEGACIÓN, UNA POR UNA. Los dos asserts de arriba prueban SÓLO
+    // minúscula, así que el regex perdió `NO`/`No`/`Nunca` sin que nada se pusiera rojo y el guard dio
+    // verde con la frase falsa escrita en el estilo de énfasis más común del repo (CR/BLQ-BAJO-3).
+    // Esto es el candado DEL ARREGLO: no alcanza con ampliar el regex si el que lo vigila mira una
+    // sola capitalización. El texto de la sonda es el de la migración
+    // 20260718T000000_add_prepared_status.sql:5, que ya escribe esta afirmación con `NO`.
+    for (const negacion of NEGACIONES) {
+      const enUnaLinea = `// una 'prepared': el principal aún ${negacion} entró on-chain`;
+      const cruzandoLinea = `// una 'prepared' no se re-procesa (su principal\n  // ${negacion} entró; cancelar)`;
+      expect(
+        [...enUnaLinea.matchAll(CLAIM_RE)],
+        `la negación «${negacion}» en una línea se le escapa a CLAIM_RE`,
+      ).toHaveLength(1);
+      expect(
+        [...cruzandoLinea.matchAll(CLAIM_RE)],
+        `la negación «${negacion}» cruzando el salto de línea se le escapa a CLAIM_RE`,
+      ).toHaveLength(1);
+    }
   });
 
   it("T-330-4 (AC-4): cero hits del regex en los .ts/.tsx de producción bajo SCAN_DIRS", () => {

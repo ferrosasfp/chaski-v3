@@ -7,9 +7,17 @@ out/
 next-env.d.ts
 
 # env (NUNCA commitear las keys)
-.env
-.env.local
-.env*.local
+#
+# El patron es "ignorar TODO lo que empiece con .env, y despues rescatar los
+# ejemplos". Al reves no funciona: el 2026-08-05 un respaldo llamado
+# `.env.local.bak-2026-08-05` NO quedo ignorado, porque `.env*.local` exige
+# TERMINAR en `.local` y ese archivo terminaba en la fecha. Quedo suelto en el
+# arbol de un repo publico con 29 lineas de secretos, a un `git add -A` de
+# viajar. Enumerar los sufijos peligrosos es una lista que siempre esta
+# incompleta; enumerar los seguros es una lista corta y cerrada.
+.env*
+!.env.example
+!.env*.example
 
 # vercel
 .vercel

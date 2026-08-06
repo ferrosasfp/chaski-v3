@@ -1675,6 +1675,9 @@ export function EscrowRentRecovery({
       // El caso "no llegamos a preguntar" viaja por el catch y tiene su propia frase. Las DOS frases
       // salen ahora de DOS funciones distintas y no de un parámetro: cuando eran una sola, cualquier
       // código que el guard no reconociera caía en la que afirma haber mirado (AR/BLQ-MED-1).
+      // Y que este `[]` sea de verdad una respuesta lo sostiene `listCloseable`, que ahora tira ante
+      // las tres degradaciones del registro en vez de dejarlas llegar hasta acá disfrazadas de lista
+      // vacía (AR/BLQ-MED-2). Esta rama no puede verificar esa premisa: la hereda.
       if (list.length === 0) {
         setErr(escrowRentDiscoveryEmpty(MAX_CLOSEABLE_CANDIDATES));
       }

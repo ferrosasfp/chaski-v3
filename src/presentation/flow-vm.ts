@@ -377,6 +377,14 @@ export function escrowCloseError(code: string): string {
  * es la única que se llama desde el camino feliz de `listCloseable` (la lista vacía). Si te encontrás
  * queriendo llamarla desde un `catch`, la respuesta es no: ahí no miramos nada.
  *
+ * ⚠️ DE QUÉ PREMISA CUELGA ESTA FRASE, dicho porque ya se rompió una vez (AR/BLQ-MED-2). "La lista
+ * vacía = el servidor contestó y no hay nada" es cierto SÓLO porque `listCloseable` consume
+ * `lookupBySender`, que separa "contestó" de "no llegamos a preguntar", y tira ante lo segundo. Antes
+ * consumía `listBySender`, que colapsa las tres degradaciones del resolver (PoP apagado, registro
+ * apagado, PoP rechazado) en `[]`, y esta frase salía en pantalla —medida, textual— sin que nadie
+ * hubiera mirado ni un envío. Si alguien vuelve a alimentar esta función desde un `[]` que no probó
+ * ser una respuesta, el texto vuelve a mentir sin que se rompa nada.
+ *
  * `maxCandidates` entra por parámetro y no como número escrito acá, por la misma razón que en
  * `lostEscrowRecoveryError`: el llamador pasa la MISMA constante que sondea
  * (`MAX_CLOSEABLE_CANDIDATES`), así que el copy no puede quedar diciendo un número que el código dejó
@@ -412,6 +420,10 @@ export function escrowRentDiscoveryError(code: string): string {
   // rama es una mejora del mensaje, nunca lo que sostiene la honestidad.
   if (/user rejected|wallet_connect_cancelled|wallet_sign_not_available/i.test(code))
     return "No se completó la firma que prueba que la billetera es tuya, así que no llegamos a preguntar. Esto no es una respuesta sobre tus cuentas: volvé a intentar y aceptá la firma.";
+  // Acá caen también los tres códigos `escrow_recovery_unavailable:<motivo>` que el descubrimiento
+  // emite cuando el registro no nos contestó (PoP apagado / registro apagado / PoP rechazado). Los
+  // tres se dicen IGUAL a propósito: la persona no puede hacer nada distinto con cada uno, y el motivo
+  // viaja en el código para el diagnóstico. El motivo NO se interpola en el texto (CD-5).
   if (code.includes("escrow_id_unavailable") || code.includes("escrow_recovery_unavailable"))
     return "No pudimos consultar el registro de envíos. Esto no es una respuesta sobre tus cuentas: no llegamos a preguntar.";
   return "No pudimos consultar la red para buscar tus envíos. Esto no es una respuesta sobre tus cuentas: no llegamos a preguntar.";

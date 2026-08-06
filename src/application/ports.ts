@@ -378,11 +378,45 @@ export interface SolanaSenderSolBalanceProbe {
   probeSenderSolBalance(input: { sender: string }): Promise<SolanaSenderSolBalance>;
 }
 
+/**
+ * Preguntarle al registro durable por los envíos de una billetera tiene TRES desenlaces, no dos
+ * (WKH-327, 2º fix-pack — AR/BLQ-MED-2). `string[]` sólo puede expresar dos: "esta lista" y "ninguno".
+ * El tercero —"no llegamos a preguntar"— entraba disfrazado del segundo.
+ *
+ * · `answered`   — el servidor contestó. `remittanceIds` puede estar vacío, y ESO SÍ es una respuesta
+ *                  sobre la billetera: es el único caso en que se puede afirmar algo sobre ella.
+ * · `not_asked`  — no hubo consulta que contestara. `reason` dice cuál de las tres:
+ *      - `pop_disabled`      el mecanismo de prueba de posesión está apagado server-side (501 en el
+ *                            challenge) ⇒ nunca se llegó ni a pedir los ids;
+ *      - `registry_disabled` el registro durable está apagado o sin envs (501 en el endpoint de ids);
+ *      - `pop_rejected`      la prueba de posesión no verificó (403): challenge vencido, skew, nonce.
+ *
+ * Las tres las dispara una BANDERA DE CONFIGURACIÓN y no una caída de red, así que son más probables
+ * que un fallo, no menos: con el registro apagado le pasan a todo el mundo en todas las búsquedas.
+ */
+export type RemittanceIdLookupBlocked = "pop_disabled" | "registry_disabled" | "pop_rejected";
+export type RemittanceIdLookup =
+  | { readonly outcome: "answered"; readonly remittanceIds: readonly string[] }
+  | { readonly outcome: "not_asked"; readonly reason: RemittanceIdLookupBlocked };
+
 // HU-SOL-20/AC-2: resuelve los remittanceId del sender desde el store durable server-side cuando el
-// cliente los perdió (localStorage vacío / otro dispositivo). Devuelve [] si el mecanismo está
-// apagado o no verificado — NUNCA lanza por "no hay nada".
+// cliente los perdió (localStorage vacío / otro dispositivo).
 export interface SolanaRemittanceIdResolver {
+  /**
+   * ⚠️ COLAPSA los tres `not_asked` de arriba en `[]`. Lo usa el fallback del REFUND (HU-SOL-20/AC-2,
+   * `solana-wallet.ts:resolveRemittanceIdFromLedger`), que sobre `[]` tira `escrow_not_found`. Que ese
+   * camino no distinga los tres desenlaces es PREEXISTENTE a WKH-327 y queda declarado, no arreglado:
+   * tocar el refund está fuera del alcance de esta HU. Para el descubrimiento de cerrables (AC-8) se
+   * usa `lookupBySender`, que sí los distingue.
+   */
   listBySender(sender: string): Promise<string[]>;
+  /**
+   * La misma consulta con sus TRES desenlaces separados. Opcional en el TIPO porque los dobles del
+   * refund implementan sólo `listBySender`; quien la necesita (`listCloseable`) NO la defaultea a
+   * nada: si falta, tira `escrow_id_unavailable` fail-loud. Un fallback a `listBySender` acá volvería
+   * a colapsar los tres desenlaces en silencio, que es exactamente el bug que este método cierra.
+   */
+  lookupBySender?(sender: string): Promise<RemittanceIdLookup>;
 }
 
 // ── Wallet (DApp: el sender CONECTA su wallet = login, y firma el depósito en el escrow) ──
@@ -421,8 +455,14 @@ export interface WalletPort {
  * 🔴 POR QUÉ EXISTE. El guard de AC-7 recibía la dirección contra la que comparar DESDE EL LLAMADOR,
  * y el único llamador de producción le pasaba la misma variable que estaba validando
  * (`connectedAddress: sender`): `x === x`, una rama falsa inalcanzable y 4 tests que probaban el
- * doble. Que el dato entre por el puerto y no por el argumento hace que esa forma no se pueda
- * volver a escribir.
+ * doble. Que el dato entre por el puerto y no por el argumento saca esa forma del alcance del
+ * LLAMADOR.
+ *
+ * ⚠️ Y LA DEJA AL ALCANCE DEL CABLEADO, que es adónde se mudó el riesgo (AR/MNR-5). Esta interfaz
+ * tiene UN método, así que `{ getConnectedAddress: () => wallet.getAddress() }` la satisface y
+ * devuelve el CACHE de `connect()` — la respuesta equivocada, escrita en una línea del composition
+ * root, compilando. Medido: con esa línea puesta, la suite entera daba verde. La red que lo detecta
+ * es un test sobre el container (`container.test.ts`, el describe de AC-7), no sobre esta interfaz.
  *
  * `null` significa "no hay ninguna billetera conectada", NUNCA "no pudimos preguntar": leer esto no
  * toca la red ni abre ningún diálogo, es leer un objeto en memoria que el árbol de React mantiene al

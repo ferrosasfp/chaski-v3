@@ -10,10 +10,21 @@
 // Así que este string NO se escribe a ojo: lo MIDE `escrow-rent-discovery-junta.test.ts`, corriendo el
 // `SolanaWalletAdapter` real con el RPC apuntado a un puerto muerto, y ese test se pone rojo si
 // @solana/web3.js cambia lo que dice. Los tests de UI parten de acá porque en jsdom el adapter no se
-// puede correr entero: `PublicKey.findProgramAddressSync` falla con "Uint8Array expected" (el `Buffer`
-// de Node no es `instanceof Uint8Array` en el realm de jsdom y @noble/hashes lo rechaza), o sea que la
-// derivación de la PDA se cae ANTES de llegar a la red.
-export const MENSAJE_RPC_CAIDO_MEDIDO = "fetch failed";
+// puede correr entero: la derivación de la PDA se cae ANTES de llegar a la red. Medido en los dos
+// niveles: `findProgramAddressSync` (lo que el código llama) propaga "Unable to find a viable program
+// address nonce", y la causa de adentro —medida aparte sobre `createProgramAddressSync`, que el loop
+// de la otra se traga— es "Uint8Array expected" (el `Buffer` de Node no es `instanceof Uint8Array` en
+// el realm de jsdom y @noble/hashes lo rechaza).
+//
+// 🔴 EL NOMBRE DICE "NODE" Y NO ES UN DETALLE (AR/MNR-6). `"fetch failed"` es el string de **undici**,
+// o sea el de Node. Producción es un navegador, y qué dice un navegador real cuando el `fetch` al RPC
+// falla NO SE PUDO VERIFICAR acá (requiere un navegador de verdad): Chrome y Firefox emiten otros
+// textos. O sea que este candado NO pinnea el mensaje de producción, y no hace falta que lo haga: el
+// copy no depende de esta constante ni de ninguna lista de códigos. `escrowRentDiscoveryError` tiene
+// el desenlace honesto como DEFAULT, y eso está asertado como propiedad sobre entradas arbitrarias
+// (`escrow-rent-discovery-junta.test.ts`, el barrido de 8 entradas). Esta constante sirve para una
+// sola cosa: que los tests de UI partan de un string que alguien midió, en vez de uno elegido a mano.
+export const MENSAJE_RPC_CAIDO_NODE_MEDIDO = "fetch failed";
 
 /** El mensaje con el que la wallet reporta que la persona cerró el popup de la firma de posesión.
  *  ⚠️ Este NO está medido contra una wallet real y no puede estarlo acá (requiere una extensión en un

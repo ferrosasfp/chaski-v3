@@ -21,7 +21,7 @@ import { solanaWalletBridge } from "../infrastructure/solana-wallet-bridge";
 import { CloseEscrowAccounts } from "../application/use-cases/close-escrow-accounts";
 import {
   MENSAJE_FIRMA_RECHAZADA_SIN_MEDIR,
-  MENSAJE_RPC_CAIDO_MEDIDO,
+  MENSAJE_RPC_CAIDO_NODE_MEDIDO,
 } from "../test-support/rpc-caido";
 import {
   FAKE_SOLANA_BENEFICIARY,
@@ -116,7 +116,7 @@ describe("AC-8: alcanza envíos que este navegador no conoce", () => {
   // El primero lo mide `escrow-rent-discovery-junta.test.ts` corriendo el adapter real contra un RPC
   // muerto; el segundo es el de la wallet cuando la persona cierra el popup de la firma de posesión.
   for (const [quePaso, mensaje] of [
-    ["el RPC no contesta", MENSAJE_RPC_CAIDO_MEDIDO],
+    ["el RPC no contesta", MENSAJE_RPC_CAIDO_NODE_MEDIDO],
     ["la persona cerró el popup de la firma", MENSAJE_FIRMA_RECHAZADA_SIN_MEDIR],
   ] as const) {
     it(`${quePaso} ⇒ la pantalla NO afirma haber mirado ningún envío`, () => {

@@ -21,8 +21,15 @@ export class CloseEscrowAccounts {
     // corrección entera de AR/BLQ-BAJO-1. Cuando entraba por argumento, el único call-site de
     // producción pasaba `connectedAddress: sender` — la MISMA variable — y la comparación de abajo
     // era `x === x`: una rama falsa que no existía en producción y cuatro tests que la ejercitaban
-    // construyendo el input a mano. Con el dato viniendo de un puerto, esa forma no se puede volver
-    // a escribir desde el llamador.
+    // construyendo el input a mano.
+    //
+    // ⚠️ QUÉ CIERRA ESTE CAMBIO Y QUÉ NO, con precisión (AR/MNR-5). Cierra la forma tautológica DESDE
+    // EL LLAMADOR: `flow.tsx` recibe el use-case ya construido y no puede elegir qué le entra por acá.
+    // NO cierra el CABLEADO: `ConnectedWalletProbe` es una interfaz de un método, así que el composition
+    // root puede pasarle `{ getConnectedAddress: () => wallet.getAddress() }` —el cache de `connect()`—
+    // y reintroducir el bug entero sin que nada deje de compilar. Eso se midió (la suite completa daba
+    // verde con esa línea puesta) y por eso hay un test sobre la línea del container, no sobre este
+    // argumento. El riesgo se mudó de lugar; no desapareció.
     private readonly connected: ConnectedWalletProbe,
   ) {}
 

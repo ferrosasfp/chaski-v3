@@ -139,3 +139,76 @@ describe("createContainer — money-path Solana (HU-SOL-13)", () => {
     }
   });
 });
+
+/**
+ * WKH-327/AC-7 — EL CABLEADO del guard del cierre (2º fix-pack, AR/MNR-5).
+ *
+ * 🔴 POR QUÉ ESTE DESCRIBE EXISTE. El fix del guard tautológico sacó la dirección conectada del
+ * argumento y la puso detrás de un puerto, y eso cierra la forma equivocada DESDE EL LLAMADOR. Lo que
+ * no cierra es el cableado: `ConnectedWalletProbe` tiene un solo método, así que cualquier objeto
+ * literal lo satisface, y el que devuelve el CACHE (`wallet.getAddress()`) reintroduce el bloqueante
+ * entero acá, en una línea. Se midió: con esa línea puesta, la suite entera daba 1297/1297 y `tsc`
+ * exit 0. El test de AC-7 que sí lo mataría construye el use-case a mano, así que no toca esta línea.
+ *
+ * Acá el objeto bajo prueba es el `closeEscrowAccounts` QUE DEVUELVE `createContainer()`, no uno
+ * construido por el test. Y las dos direcciones salen del `solanaWalletBridge` real, del mismo modo en
+ * que divergen de verdad: cambiando de cuenta en la wallet sin recargar la página.
+ */
+describe("createContainer — WKH-327/AC-7: el cierre pregunta por la billetera VIVA, no por el cache", () => {
+  const A = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+  const B = "8tJVcM2JmYcMNCcNFYtUpXVWvKNTfnrCEwLuTRHpF9dQ";
+
+  /** Deja el container con `connect()` YA CORRIDO con A: sin eso no hay cache que exponga la
+   *  diferencia, y el mutante del cache sobreviviría por no tener nada que cachear. */
+  function containerConectadoCon(address: string) {
+    // Un puerto cerrado en loopback: si el guard dejara pasar, el gateway se cae al instante y en
+    // local. CERO I/O fuera de la máquina (CD-11) y ninguna firma posible: el bridge no tiene handle.
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_RPC_URL", "http://127.0.0.1:1/");
+    solanaWalletBridge.setState({ publicKey: address, connected: true });
+    const c = createContainer();
+    const wallet = (c.connectWallet as unknown as { wallet: SolanaWalletAdapter }).wallet;
+    return { c, wallet };
+  }
+
+  it("busco con A, cambio a B en la wallet, y el cierre del container lo VE (close_not_sender)", async () => {
+    const { c, wallet } = containerConectadoCon(A);
+    await wallet.connect(); // recorre el cache de connect(), igual que producción
+
+    // La persona cambia de cuenta en Phantom. `sender` sigue congelado en A (es de quién pagó).
+    solanaWalletBridge.setState({ publicKey: B, connected: true });
+
+    await expect(
+      c.closeEscrowAccounts?.execute({ remittanceId: "rem-x", sender: A }),
+    ).rejects.toThrow("close_not_sender");
+  });
+
+  // 🔴 EL CONTROL SIN EL CUAL EL DE ARRIBA NO PRUEBA NADA: si `close_not_sender` fuera el desenlace de
+  // cualquier ejecución (por ejemplo, porque el probe devolviera siempre null o basura), el test de
+  // arriba pasaría igual. Sin cambiar de billetera, el guard NO frena y el fallo que sale es el del
+  // gateway contra el RPC muerto.
+  it("CONTROL: sin cambiar de billetera el guard deja pasar, y el fallo ya no es del guard", async () => {
+    const { c, wallet } = containerConectadoCon(A);
+    await wallet.connect();
+
+    let mensaje = "NO LANZÓ";
+    try {
+      await c.closeEscrowAccounts?.execute({ remittanceId: "rem-x", sender: A });
+    } catch (e) {
+      mensaje = e instanceof Error ? e.message : String(e);
+    }
+    expect(mensaje).not.toBe("NO LANZÓ"); // el RPC muerto tiene que hacerse notar
+    expect(mensaje).not.toContain("close_not_sender");
+    expect(mensaje).not.toContain("wallet_not_connected");
+  });
+
+  it("y si la wallet se DESCONECTA, el container lo ve como 'no hay nadie', no como otra billetera", async () => {
+    const { c, wallet } = containerConectadoCon(A);
+    await wallet.connect();
+
+    solanaWalletBridge.setState({ publicKey: null, connected: false });
+
+    await expect(
+      c.closeEscrowAccounts?.execute({ remittanceId: "rem-x", sender: A }),
+    ).rejects.toThrow("wallet_not_connected");
+  });
+});

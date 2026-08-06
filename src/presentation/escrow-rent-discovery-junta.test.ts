@@ -15,14 +15,20 @@
 // no contesta y le pasa al copy REAL lo que salga de ahí.
 //
 // ⚠️ NO renderiza React a propósito, y no es una omisión: en jsdom el adapter no llega a la red porque
-// `PublicKey.findProgramAddressSync` falla con "Uint8Array expected" (el `Buffer` de Node no es
-// `instanceof Uint8Array` en ese realm, y @noble/hashes lo rechaza). Medido. La mitad de UI la cubre
-// `escrow-rent-recovery.test.tsx`, que parte del MISMO string a través de `MENSAJE_RPC_CAIDO_MEDIDO`,
-// y la aserción de acá abajo es lo que impide que esa constante se desactualice en silencio.
+// la derivación de la PDA se cae ANTES. MEDIDO en los dos niveles, porque el mensaje de afuera no es
+// el de adentro (la prosa vieja de acá citaba el de adentro como si fuera el de afuera — AR/MNR-6):
+//   · lo que PROPAGA `listCloseable` (o sea `PublicKey.findProgramAddressSync`, que es lo que el
+//     código llama):        "Unable to find a viable program address nonce"
+//   · la causa de adentro, medida aparte sobre `PublicKey.createProgramAddressSync`, que es la que el
+//     loop de la de arriba se traga 255 veces:  "Uint8Array expected"
+// La mitad de UI la cubre `escrow-rent-recovery.test.tsx`, que parte del MISMO string a través de
+// `MENSAJE_RPC_CAIDO_NODE_MEDIDO`, y la aserción de acá abajo es lo que impide que esa constante se
+// desactualice en silencio.
 import { afterEach, describe, expect, it } from "vitest";
+import type { RemittanceIdLookup } from "../application/ports";
 import { SolanaWalletAdapter } from "../infrastructure/solana-wallet";
 import { escrowRentDiscoveryEmpty, escrowRentDiscoveryError } from "./flow-vm";
-import { MENSAJE_RPC_CAIDO_MEDIDO } from "../test-support/rpc-caido";
+import { MENSAJE_RPC_CAIDO_NODE_MEDIDO } from "../test-support/rpc-caido";
 import { FAKE_SOLANA_BENEFICIARY } from "../test-support/fakes";
 
 // Un puerto cerrado en loopback: la conexión se rechaza al instante y NO sale ningún paquete a
@@ -38,7 +44,16 @@ afterEach(() => {
 /** Corre el adapter REAL con el RPC caído y devuelve el mensaje que propagó. */
 async function mensajeRealDelRpcCaido(): Promise<string> {
   process.env.NEXT_PUBLIC_SOLANA_RPC_URL = RPC_MUERTO;
-  const adapter = new SolanaWalletAdapter({ listBySender: async () => ["rem-a", "rem-b"] });
+  const adapter = new SolanaWalletAdapter({
+    listBySender: async () => ["rem-a", "rem-b"],
+    // El servidor CONTESTÓ con dos ids: este archivo mide el desenlace del RPC, no el del registro.
+    // Los tres desenlaces en que el registro no contesta los mide `escrow-rent-registro-mudo.test.tsx`
+    // con el resolver REAL, que es el único que puede producirlos.
+    lookupBySender: async (): Promise<RemittanceIdLookup> => ({
+      outcome: "answered",
+      remittanceIds: ["rem-a", "rem-b"],
+    }),
+  });
   try {
     await adapter.listCloseable({ sender: FAKE_SOLANA_BENEFICIARY });
   } catch (e) {
@@ -71,7 +86,7 @@ describe("la junta: lo que el adapter propaga de verdad, dicho por el copy de ve
   it("el string del que parten los tests de UI es el que el adapter produce HOY (candado)", async () => {
     // Si @solana/web3.js o Node cambian lo que dice un fetch fallido, este test se pone rojo y hay que
     // actualizar la constante — en vez de que los tests de UI sigan verdes sobre un string muerto.
-    expect(await mensajeRealDelRpcCaido()).toBe(MENSAJE_RPC_CAIDO_MEDIDO);
+    expect(await mensajeRealDelRpcCaido()).toBe(MENSAJE_RPC_CAIDO_NODE_MEDIDO);
   });
 
   // El control sin el cual los tres de arriba no prueban nada: la frase "No encontramos" SIGUE
@@ -82,7 +97,7 @@ describe("la junta: lo que el adapter propaga de verdad, dicho por el copy de ve
     expect(vacio).toContain("No encontramos envíos terminados");
     expect(vacio).toContain("Miramos los últimos 20 envíos");
     expect(vacio).not.toContain("no llegamos a preguntar");
-    expect(vacio).not.toBe(escrowRentDiscoveryError(MENSAJE_RPC_CAIDO_MEDIDO));
+    expect(vacio).not.toBe(escrowRentDiscoveryError(MENSAJE_RPC_CAIDO_NODE_MEDIDO));
   });
 
   // 🔴 El barrido que reemplaza a la lista de códigos reconocidos. El bug era una allowlist: sólo dos
@@ -90,10 +105,14 @@ describe("la junta: lo que el adapter propaga de verdad, dicho por el copy de ve
   // vale es "ningún mensaje del catch puede afirmar sobre las cuentas", y se asserta como propiedad.
   it("NINGÚN mensaje que llegue al catch dice 'No encontramos', ni el vacío ni uno desconocido", () => {
     const entradas = [
-      MENSAJE_RPC_CAIDO_MEDIDO,
+      MENSAJE_RPC_CAIDO_NODE_MEDIDO,
       "failed to get info about accounts 8tJV…: TypeError: fetch failed",
       "escrow_id_unavailable",
       "escrow_recovery_unavailable",
+      // Los tres códigos del 2º fix-pack: el registro no nos contestó (AR/BLQ-MED-2).
+      "escrow_recovery_unavailable:pop_disabled",
+      "escrow_recovery_unavailable:registry_disabled",
+      "escrow_recovery_unavailable:pop_rejected",
       "User rejected the request.",
       "429 Too Many Requests",
       "",
@@ -112,6 +131,6 @@ describe("la junta: lo que el adapter propaga de verdad, dicho por el copy de ve
   it("el rechazo de la firma de posesión se dice distinto de una falla de red", () => {
     const rechazo = escrowRentDiscoveryError("User rejected the request.");
     expect(rechazo).toContain("aceptá la firma");
-    expect(rechazo).not.toBe(escrowRentDiscoveryError(MENSAJE_RPC_CAIDO_MEDIDO));
+    expect(rechazo).not.toBe(escrowRentDiscoveryError(MENSAJE_RPC_CAIDO_NODE_MEDIDO));
   });
 });

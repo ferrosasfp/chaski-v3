@@ -178,6 +178,15 @@ export function createContainer(): Container {
     // WKH-327. El 2º argumento es el MISMO adapter: el guard de AC-7 le pregunta a la billetera VIVA
     // quién está conectado en el instante del click, en vez de recibirlo del llamador (que le pasaba
     // la misma variable que estaba validando — AR/BLQ-BAJO-1).
+    //
+    // 🔴 ESTA LÍNEA ES DONDE VIVE EL RIESGO AHORA, y por eso tiene test propio (AR/MNR-5).
+    // `ConnectedWalletProbe` es una interfaz de UN método: `{ getConnectedAddress: () =>
+    // wallet.getAddress() }` la satisface, compila, y devuelve el CACHE de `connect()` — o sea que
+    // reintroduce el bloqueante entero desde acá. Se midió: con esa forma escrita, la suite daba
+    // 1297/1297 y `tsc` exit 0, porque el test de AC-7 construye el use-case a mano y no toca el
+    // cableado. La red que faltaba está en `container.test.ts` (el describe de AC-7), que ejercita el
+    // `closeEscrowAccounts` QUE ESTA LÍNEA DEVUELVE contra el bridge real: con `getAddress()` puesto,
+    // se pone rojo.
     closeEscrowAccounts: new CloseEscrowAccounts(solanaClose, wallet),
     solanaCloseableEscrows: wallet, // WKH-327/AC-8: el descubrimiento se lo pregunta a la cadena
   };

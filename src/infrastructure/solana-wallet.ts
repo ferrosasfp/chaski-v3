@@ -999,15 +999,31 @@ export class SolanaWalletAdapter
    *  3. 🚫 SI EL RPC LANZA, PROPAGA. NUNCA devuelve `[]`. "No pudimos preguntar" no es "no tenés
    *     nada", y colapsarlos afirma sobre las cuentas de alguien a partir de nuestra propia falla. Una
    *     lista vacía significa UNA sola cosa: la cadena contestó y no hay nada cerrable.
+   *
+   * 🔴 Y LA MISMA REGLA CONTRA EL SERVIDOR PROPIO, que es lo que faltaba (2º fix-pack AR/BLQ-MED-2).
+   * La razón 3 se cumplía contra el RPC y se rompía una capa antes: el resolver colapsaba en `[]` sus
+   * tres degradaciones (PoP apagado, registro apagado, PoP rechazado), y esa lista vacía llegaba acá
+   * indistinguible de la legítima. Por eso ahora se consume `lookupBySender`, que las separa, y un
+   * `not_asked` SALE POR EL MISMO `throw` que un RPC caído. Sin resolver, o con un resolver que no
+   * sepa contestar los tres desenlaces, esto NO adivina: tira `escrow_id_unavailable`.
    */
   async listCloseable(input: { sender: string }): Promise<readonly CloseableEscrow[]> {
     const resolver = this.remittanceIdResolver;
-    if (!resolver) throw new Error("escrow_id_unavailable"); // fail-loud, nunca silencioso
-    const ids = await resolver.listBySender(input.sender);
+    // Fail-loud, nunca silencioso. Y sin fallback a `listBySender`, a propósito: ese método colapsa
+    // los tres `not_asked` en `[]` y usarlo acá reintroduciría el bloqueante entero.
+    if (!resolver?.lookupBySender) throw new Error("escrow_id_unavailable");
+    const lookup = await resolver.lookupBySender(input.sender);
+    // El `reason` viaja en el código para el diagnóstico; el copy NO lo interpola (CD-5) y colapsa los
+    // tres en una sola frase, porque la persona no puede hacer nada distinto con cada uno.
+    if (lookup.outcome === "not_asked") {
+      throw new Error(`escrow_recovery_unavailable:${lookup.reason}`);
+    }
     // El tope es del SERVIDOR (`remittance-ids/route.ts:32`, MAX_IDS = 20): pedir más no puede
     // devolver más. Un remitente con más filas no ve las más viejas — declarado, no mitigado (L-8).
-    const candidates = ids.slice(0, MAX_CLOSEABLE_CANDIDATES);
-    if (candidates.length === 0) return []; // el servidor CONTESTÓ y no tiene nada de esta billetera
+    const candidates = lookup.remittanceIds.slice(0, MAX_CLOSEABLE_CANDIDATES);
+    // `answered` es lo único que llega hasta acá, así que esto sí es una respuesta del servidor sobre
+    // esta billetera — y es la única premisa de la que cuelga la frase "no encontramos" de la pantalla.
+    if (candidates.length === 0) return [];
 
     const web3 = await import("@solana/web3.js");
     const { PublicKey: PublicKeyLazy, Connection } = web3;

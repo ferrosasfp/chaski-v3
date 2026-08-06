@@ -6,7 +6,6 @@
 
 import type { Container } from "../composition/container";
 import { PreviewQuote } from "../application/use-cases/preview-quote";
-import { CloseEscrowAccounts } from "../application/use-cases/close-escrow-accounts";
 import { RecoverEscrowFunds } from "../application/use-cases/recover-escrow-funds";
 import { CreateRemittance } from "../application/use-cases/create-remittance";
 import { ConnectWallet } from "../application/use-cases/connect-wallet";
@@ -29,7 +28,6 @@ import type {
   RefundGateway,
   RemittanceRepository,
   SolanaCloseableEscrowLister,
-  SolanaEscrowCloseGateway,
   SolanaEscrowRefundGateway,
   WalletPort,
 } from "../application/ports";
@@ -59,9 +57,16 @@ export interface TestContainerOverrides {
   // El settlement real se arma con `useCases.confirmAndSend` (ver confirm-and-send.money-path.test).
   // HU-SOL-13: sin override queda UNDEFINED → la acción de refund NO se muestra.
   solanaRefund?: SolanaEscrowRefundGateway;
-  // WKH-327: sin override quedan UNDEFINED ⇒ ni la acción de cierre ni la puerta de descubrimiento se
-  // muestran. Es la misma disciplina que `solanaRefund`: un test que no los inyecta no los ve.
-  solanaClose?: SolanaEscrowCloseGateway;
+  // WKH-327: sin override queda UNDEFINED ⇒ la puerta de descubrimiento no se muestra. Es la misma
+  // disciplina que `solanaRefund`: un test que no lo inyecta no lo ve.
+  //
+  // 🔴 NO HAY `solanaClose` ACÁ, y su ausencia es la decisión (2º fix-pack, AR/MNR-5). La había, con
+  // `closeEscrowAccounts: new CloseEscrowAccounts(o.solanaClose, { getConnectedAddress: () =>
+  // wallet.getAddress() })`. Eso es el CACHE de `connect()` — exactamente lo que el docblock de
+  // `ConnectedWalletProbe` llama "la respuesta equivocada" — y encima era código muerto: ningún test
+  // seteaba el override, así que la línea nunca corría y nadie la podía ver mal. Un ejemplo
+  // equivocado esperando a que alguien lo copie. Los tests del cierre montan el use-case con el probe
+  // que corresponda (`escrow-rent-recovery.test.tsx` usa el adapter real contra el bridge).
   solanaCloseableEscrows?: SolanaCloseableEscrowLister;
   clock?: Clock; // default: new FixedClock()
   // Repo COMPARTIDO por todos los use-cases (default: new InMemoryRepo()). Se inyecta para poder
@@ -101,14 +106,6 @@ export function buildTestContainer(o: TestContainerOverrides = {}): Container {
     // leer el estado persistido después, que es justo lo que el bug no hacía.
     recoverEscrowFunds: o.solanaRefund
       ? new RecoverEscrowFunds(repo, clock, o.solanaRefund)
-      : undefined,
-    // WKH-327: NO toca repo ni clock — el use-case del cierre no persiste nada (AC-10).
-    // El 2º argumento sale del MISMO `wallet` que usa el resto del container, no de un doble aparte:
-    // si un test cambia la wallet conectada, el guard de AC-7 tiene que verlo por el mismo lado.
-    closeEscrowAccounts: o.solanaClose
-      ? new CloseEscrowAccounts(o.solanaClose, {
-          getConnectedAddress: () => wallet.getAddress(),
-        })
       : undefined,
     solanaCloseableEscrows: o.solanaCloseableEscrows,
   };

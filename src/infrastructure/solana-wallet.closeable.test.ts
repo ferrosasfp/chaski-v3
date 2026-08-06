@@ -10,6 +10,11 @@ import * as anchor from "@coral-xyz/anchor";
 import type { Idl } from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  RemittanceIdLookup,
+  RemittanceIdLookupBlocked,
+  SolanaRemittanceIdResolver,
+} from "../application/ports";
 import { MAX_CLOSEABLE_CANDIDATES, SolanaWalletAdapter } from "./solana-wallet";
 import { escrowIdl } from "./solana/escrow-idl";
 import { solanaWalletBridge } from "./solana-wallet-bridge";
@@ -66,7 +71,28 @@ function mockBatch(byPda: Map<string, Buffer>): void {
   );
 }
 
-async function connectedWith(resolver?: { listBySender: ReturnType<typeof vi.fn> }) {
+/** Un resolver doble con sus DOS métodos coherentes entre sí: `listBySender` colapsa lo mismo que
+ *  colapsa el resolver real. Se construyen juntos para que un test no pueda armar un doble que
+ *  contesta una cosa por un método y otra por el otro. */
+function resolverQueContesta(ids: readonly string[]) {
+  return {
+    lookupBySender: vi.fn(
+      async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: ids }),
+    ),
+    listBySender: vi.fn(async () => [...ids]),
+  };
+}
+
+/** El resolver NO pudo preguntar. Su `listBySender` devuelve `[]` — que es exactamente el disfraz que
+ *  `listCloseable` ya no puede usar, y por eso estos tests existen. */
+function resolverQueNoPudoPreguntar(reason: RemittanceIdLookupBlocked) {
+  return {
+    lookupBySender: vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "not_asked", reason })),
+    listBySender: vi.fn(async () => [] as string[]),
+  };
+}
+
+async function connectedWith(resolver?: SolanaRemittanceIdResolver) {
   solanaWalletBridge.setState({ publicKey: SENDER_B58, connected: true });
   const adapter = new SolanaWalletAdapter(resolver);
   await adapter.connect();
@@ -86,13 +112,15 @@ describe("SolanaWalletAdapter.listCloseable (WKH-327/AC-8)", () => {
       // "rem-sin-cuenta" no está en el mapa ⇒ el batch devuelve null para su PDA
     ]);
     mockBatch(byPda);
-    const listBySender = vi.fn(async () => ["rem-en-curso", "rem-liberado", "rem-sin-cuenta"]);
-    const adapter = await connectedWith({ listBySender });
+    const resolver = resolverQueContesta(["rem-en-curso", "rem-liberado", "rem-sin-cuenta"]);
+    const adapter = await connectedWith(resolver);
 
     await expect(adapter.listCloseable({ sender: SENDER_B58 })).resolves.toEqual([
       { remittanceId: "rem-liberado", status: "released" },
     ]);
-    expect(listBySender).toHaveBeenCalledWith(SENDER_B58);
+    expect(resolver.lookupBySender).toHaveBeenCalledWith(SENDER_B58);
+    // Y NO por el método que colapsa: el descubrimiento pregunta por el que distingue los tres.
+    expect(resolver.listBySender).not.toHaveBeenCalled();
   });
 
   it("Refunded también es cerrable, y se reporta como tal (no todo cae en 'released')", async () => {
@@ -102,7 +130,7 @@ describe("SolanaWalletAdapter.listCloseable (WKH-327/AC-8)", () => {
         [pdaOf("rem-b").toBase58(), await encodeEscrowState("released")],
       ]),
     );
-    const adapter = await connectedWith({ listBySender: vi.fn(async () => ["rem-a", "rem-b"]) });
+    const adapter = await connectedWith(resolverQueContesta(["rem-a", "rem-b"]));
 
     await expect(adapter.listCloseable({ sender: SENDER_B58 })).resolves.toEqual([
       { remittanceId: "rem-a", status: "refunded" },
@@ -123,7 +151,7 @@ describe("SolanaWalletAdapter.listCloseable (WKH-327/AC-8)", () => {
     vi.spyOn(Connection.prototype, "getMultipleAccountsInfo").mockImplementation((async () => {
       throw new Error("rpc_down");
     }) as never);
-    const adapter = await connectedWith({ listBySender: vi.fn(async () => ["rem-a"]) });
+    const adapter = await connectedWith(resolverQueContesta(["rem-a"]));
 
     await expect(adapter.listCloseable({ sender: SENDER_B58 })).rejects.toThrow("rpc_down");
   });
@@ -132,7 +160,7 @@ describe("SolanaWalletAdapter.listCloseable (WKH-327/AC-8)", () => {
   // cadena habiendo contestado. Sin este caso, "propaga" y "devuelve []" no estarían separados.
   it("si la cadena contesta y ninguno es terminal ⇒ lista VACÍA (que no es lo mismo que lanzar)", async () => {
     mockBatch(new Map([[pdaOf("rem-a").toBase58(), await encodeEscrowState("deposited")]]));
-    const adapter = await connectedWith({ listBySender: vi.fn(async () => ["rem-a"]) });
+    const adapter = await connectedWith(resolverQueContesta(["rem-a"]));
 
     await expect(adapter.listCloseable({ sender: SENDER_B58 })).resolves.toEqual([]);
   });
@@ -140,7 +168,7 @@ describe("SolanaWalletAdapter.listCloseable (WKH-327/AC-8)", () => {
   it("sondea como máximo MAX_CLOSEABLE_CANDIDATES pubkeys en UNA sola llamada batch", async () => {
     const ids = Array.from({ length: 25 }, (_, i) => `rem-${i}`);
     mockBatch(new Map());
-    const adapter = await connectedWith({ listBySender: vi.fn(async () => ids) });
+    const adapter = await connectedWith(resolverQueContesta(ids));
 
     await adapter.listCloseable({ sender: SENDER_B58 });
     const batch = vi.mocked(Connection.prototype.getMultipleAccountsInfo);
@@ -161,9 +189,9 @@ describe("SolanaWalletAdapter.listCloseable (WKH-327/AC-8)", () => {
         [pdaOf("rem-sana-2").toBase58(), await encodeEscrowState("refunded")],
       ]),
     );
-    const adapter = await connectedWith({
-      listBySender: vi.fn(async () => ["rem-basura", "rem-sana-1", "rem-sana-2"]),
-    });
+    const adapter = await connectedWith(
+      resolverQueContesta(["rem-basura", "rem-sana-1", "rem-sana-2"]),
+    );
 
     await expect(adapter.listCloseable({ sender: SENDER_B58 })).resolves.toEqual([
       { remittanceId: "rem-sana-1", status: "released" },
@@ -173,9 +201,25 @@ describe("SolanaWalletAdapter.listCloseable (WKH-327/AC-8)", () => {
 
   it("el servidor no tiene ids para esta billetera ⇒ [] sin tocar la cadena", async () => {
     const batch = vi.spyOn(Connection.prototype, "getMultipleAccountsInfo");
-    const adapter = await connectedWith({ listBySender: vi.fn(async () => []) });
+    const adapter = await connectedWith(resolverQueContesta([]));
 
     await expect(adapter.listCloseable({ sender: SENDER_B58 })).resolves.toEqual([]);
     expect(batch).not.toHaveBeenCalled();
   });
+
+  // 🔴 2º fix-pack (AR/BLQ-MED-2). El test de arriba y los TRES de abajo se leen juntos: los cuatro
+  // terminan sin ningún candidato, y sólo el de arriba puede devolver `[]`. Los tres de acá son "no
+  // llegamos a preguntar" y salen por el MISMO `throw` que un RPC caído — la propiedad que faltaba.
+  for (const reason of ["pop_disabled", "registry_disabled", "pop_rejected"] as const) {
+    it(`el resolver no pudo preguntar (${reason}) ⇒ LANZA, 🚫 nunca []`, async () => {
+      const batch = vi.spyOn(Connection.prototype, "getMultipleAccountsInfo");
+      const adapter = await connectedWith(resolverQueNoPudoPreguntar(reason));
+
+      // El código lleva el motivo pegado para el diagnóstico; el prefijo es el que el copy reconoce.
+      await expect(adapter.listCloseable({ sender: SENDER_B58 })).rejects.toThrow(
+        `escrow_recovery_unavailable:${reason}`,
+      );
+      expect(batch).not.toHaveBeenCalled(); // no se preguntó nada, ni al servidor ni a la cadena
+    });
+  }
 });

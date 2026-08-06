@@ -174,7 +174,8 @@ function errorCodeOf(body: unknown): string {
 }
 
 /** [u8;16] DETERMINÍSTICO desde remittanceId: sha256(utf8(remittanceId))[:16], MISMA derivación que
- *  solana-wallet.ts:61 (reproducible server-side para re-derivar la PDA escrow_state). NUNCA Math.random. */
+ *  (`remittanceIdToBytes16`, `solana-wallet.ts:249`), reproducible server-side para re-derivar la
+ *  PDA escrow_state. NUNCA Math.random. */
 function remittanceIdToBytes16(remittanceId: string): Uint8Array {
   return Uint8Array.from(sha256(new TextEncoder().encode(remittanceId)).subarray(0, 16));
 }
@@ -412,7 +413,7 @@ async function main(): Promise<void> {
   // Resuelto/validado UPFRONT (módulo): acá sólo se parsea a PublicKey (sin fetch previo con side-effect).
   const facilitatorPk = new PublicKey(FACILITATOR_PUBKEY);
   const program = new anchor.Program(escrowIdl as unknown as Idl, { connection } as Provider);
-  // `escrowIdl as Idl` es el IDL genérico ⇒ acceso vía shape loose (patrón solana-wallet.ts:117).
+  // `escrowIdl as Idl` es el IDL genérico ⇒ acceso vía shape loose (patrón `program.methods`, `solana-wallet.ts:372`).
   const methods = program.methods as unknown as {
     deposit: (...args: unknown[]) => {
       accounts: (a: Record<string, PublicKey>) => {

@@ -69,7 +69,7 @@ export interface Container {
   recoverEscrowFunds?: RecoverEscrowFunds;
   // WKH-327: cerrar las dos cuentas del escrow para que vuelva el alquiler que el remitente pagó al
   // depositar. SIEMPRE presente en el container real, sin ninguna flag que lo apague — por la misma
-  // razón que `solanaRefund` (`:136-137`): es una válvula de recuperación de plata de la persona, y una
+  // razón que `solanaRefund`, `:150`: es una válvula de recuperación de plata de la persona, y una
   // configuración que la pueda apagar es una configuración que algún día la va a apagar. Opcional en el
   // TIPO sólo para que el test-container pueda pasar undefined, igual que sus dos vecinos de arriba.
   closeEscrowAccounts?: CloseEscrowAccounts;

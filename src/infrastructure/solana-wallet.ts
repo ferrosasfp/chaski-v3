@@ -191,8 +191,8 @@ export class SolanaWalletAdapter
    * ⚠️ EL FALLBACK NO ES DEFENSIVO: cubre un camino que el flujo recorre SIEMPRE. `this.address` vive
    * sólo en memoria y se escribe sólo en `connect()`, así que una recarga de la página lo borra — y hay
    * una navegación completa en el medio del flujo: el KYC se va a Didit y vuelve
-   * (`flow.tsx`:296-300). Al volver, el resume salta derecho al paso `confirm` sin pasar por
-   * `connect()` (`flow.tsx`:157-178). Antes de este fallback, ahí `getAddress()` contestaba `null`.
+   * (`flow.tsx:221-227`). Al volver, el resume salta derecho al paso `confirm` sin pasar por
+   * `connect()` (`flow.tsx:163-184`). Antes de este fallback, ahí `getAddress()` contestaba `null`.
    *
    * El bridge SÍ sobrevive a esa recarga, y no porque persista nada: lo repuebla el sync component
    * desde `useWallet()` en cuanto `autoConnect` reconecta (`solana-providers.tsx`:50-55 y :107).
@@ -718,13 +718,28 @@ export class SolanaWalletAdapter
    * con `payer = sender` en el `deposit`) y `close = sender` en el programa.
    *
    * Qué recupera: los 4.002.000 lamports del `EscrowState` (1.962.720) + la ATA del vault (2.039.280).
-   * Qué NO recupera: el alquiler del `EscrowIndex` — no hay instrucción que cierre esa cuenta.
+   * Qué NO recupera: el alquiler del `EscrowIndex`. Lo verificable desde acá es que esta ix la declara
+   * como cuenta OPCIONAL (`escrow-idl.ts`, y el test de `solana-escrow-rent.test.ts`), o sea que hay
+   * un `close` válido que ni la recibe, así que su alquiler no puede estar en la cifra que `close`
+   * devuelve siempre. Que NINGUNA instrucción la cierre **no se pudo verificar** desde este repo: el
+   * IDL no expresa las constraints `close = ...` de Anchor.
    *
-   * POR QUÉ EXIGE `remittanceId` Y `refundEscrow` NO: el fallback de refund (`:498-502` + `:211-246`)
-   * elige UNO entre N y actúa sobre él, porque "recuperar mis USDC" tiene un objetivo natural — el
-   * escrow que todavía tiene plata. Para `close` no existe ese "el": todos los terminales son igual de
-   * cerrables, y elegir uno en silencio le cerraría a la persona una cuenta que no eligió. El
-   * descubrimiento (`listCloseableEscrows`) devuelve la LISTA y elige ella.
+   * POR QUÉ EXIGE `remittanceId` Y `refundEscrow` NO: el fallback de refund (`refundEscrow`, `:559`,
+   * que llama a `resolveRemittanceIdFromLedger`, `:277`) elige UNO entre N y actúa sobre él, porque
+   * "recuperar mis USDC" tiene un objetivo natural — el escrow que todavía tiene plata. Para `close` no
+   * existe ese "el": todos los terminales son igual de cerrables, y elegir uno en silencio le cerraría
+   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1027`) devuelve la
+   * LISTA y elige ella.
+   *
+   * ⚠️ POR QUÉ EL LISTER NO TIENE GATEWAY Y EL CIERRE SÍ (apartamiento declarado del SDD §4.1/§4.2,
+   * detectado en CR/MNR-3; el SDD lo llamaba `listCloseableEscrows` y ese símbolo nunca existió). El
+   * cierre pasa por `SolanaEscrowCloseGateway` porque el use-case `CloseEscrowAccounts` tiene lógica
+   * propia —el guard de AC-7 contra la billetera viva— y el gateway es lo que le deja un puerto que
+   * doblar. El descubrimiento no tiene use-case: la pantalla le hace UNA pregunta a la cadena y
+   * muestra la respuesta, así que el adapter implementa el puerto `SolanaCloseableEscrowLister`
+   * directamente y el container lo cablea crudo (`container.ts`, `solanaCloseableEscrows: wallet`),
+   * igual que `probeDeposit` y `probeSenderSolBalance`. Un gateway ahí sería una capa que sólo
+   * reenvía.
    *
    * 🩸 Si alguna vez ves un 3012 (`AccountNotInitialized`): NO asumas que es el índice. `close` no
    * lleva `associated_token_program` y el programa exige `sender_ata` YA inicializada
@@ -735,7 +750,8 @@ export class SolanaWalletAdapter
    * cuenta opcional se puede pisar. Esta HU NO mitiga ese riesgo; lo declara. **No se pudo verificar**
    * qué código emite Anchor exactamente en ese caso: haría falta un `close` real que revierta.
    *
-   * NO declara ComputeBudget, a diferencia de `authorizePrincipal` (`:324-342`): aquello existía por el
+   * NO declara ComputeBudget, a diferencia de `authorizePrincipal`
+   * (`ComputeBudgetProgram.setComputeUnitLimit`, `:403`): aquello existía por el
    * tope POR UNIDAD del facilitator, y acá el feePayer es el sender — no hay tope de nadie que
    * respetar. Y el número que haría falta (el consumo de CU de `close`) no existe: los 120.000 de
    * `resolveSolanaComputeUnitLimit` salen del peor caso de `deposit`. Declarar un límite por debajo del
@@ -901,10 +917,10 @@ export class SolanaWalletAdapter
    * ¿Entró el `close`? Devuelve el tri-estado y TIRA `close_tx_failed` sólo cuando medimos que la tx
    * entró y revirtió Y la cuenta sigue ahí.
    *
-   * ⚠️ DOS DIVERGENCIAS DELIBERADAS respecto de `confirmRefund` (`:582-622`). Están escritas acá para
+   * ⚠️ DOS DIVERGENCIAS DELIBERADAS respecto de `confirmRefund`, `:648`. Están escritas acá para
    * que nadie las "armonice" de vuelta en un code review:
    *
-   * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`:607`), SIN leer nada.
+   * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`confirmRefund`, `:648`), SIN leer nada.
    *    Éste NO puede: AC-5 exige que el alquiler volvió se afirme *sólo después de leer que la cuenta
    *    ya no existe*. Un `confirmTransaction` sin `err` prueba que la tx ENTRÓ; leer la ausencia es lo
    *    que prueba que hizo lo que queríamos. El input que pone en rojo cualquier atajo acá: un doble
@@ -948,13 +964,14 @@ export class SolanaWalletAdapter
    * Lo que la ausencia prueba: que las dos cuentas se cerraron. `close = sender` aparece UNA SOLA VEZ
    * en todo el programa (`solana-programs/programs/escrow/src/lib.rs:679`, leído en F2) y no hay otra
    * instrucción que borre esa cuenta. Lo que la ausencia NO prueba: a dónde fue la plata — la misma
-   * trampa que `probeEscrowRefunded` ya tiene escrita (`:633-635`). Por eso el copy del éxito NO
+   * trampa que `probeEscrowRefunded` ya tiene escrita, `:692`. Por eso el copy del éxito NO
    * menciona los USDC (CD-15).
    *
    * ⚠️ El commitment "confirmed" es EXPLÍCITO y no es decorativo. Medido en la librería instalada: el
    * constructor de `Connection` deja `this._commitment = void 0` salvo que le pasen algo
    * (`node_modules/@solana/web3.js/lib/index.cjs.js:5985-6090`) y `_buildArgs` sólo adjunta
-   * `commitment` si `override || this._commitment` es truthy (`:8769-8781`). O sea: sin este argumento
+   * `commitment` si `override || this._commitment` es truthy (mismo archivo, `:8769-8781`; la cita
+   * relativa es del CJS de la librería, NO de este archivo). O sea: sin este argumento
    * la lectura NO manda commitment y la decisión queda del lado del RPC, cuyo default documentado es
    * `finalized` — que corre por detrás del `confirmed` con el que confirmamos la tx dos líneas arriba.
    * Sin este argumento, un `close` genuinamente exitoso reportaría "pending" casi siempre, y "pending"
@@ -988,7 +1005,7 @@ export class SolanaWalletAdapter
    * PoP obligatorio) con una sonda ON-CHAIN, así que incluye envíos que NO están en el `localStorage`
    * de este navegador — que es exactamente la gente que hoy no tiene ningún camino hacia su alquiler.
    *
-   * Espeja `resolveRemittanceIdFromLedger` (`:211-246`) en su disciplina: fail-loud sin resolver, tope
+   * Espeja `resolveRemittanceIdFromLedger`, `:277`, en su disciplina: fail-loud sin resolver, tope
    * de candidatos, UNA sola llamada RPC batch, y un `decode` en try/catch para que una cuenta deforme
    * no rompa la recuperación entera. Tres diferencias, cada una con su razón:
    *

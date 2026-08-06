@@ -205,7 +205,7 @@ export class HttpSolanaPayoutPrepareGateway implements SolanaPayoutPrepareGatewa
     // PoP (WKH-206/HU-SOL-8) ANTES del POST. La route pide `popChallenge`+`popSignature` (PR6) y sin
     // ellos devuelve 403 `payout_pop_unverified` — un error que la persona veía DESPUÉS de apretar
     // "Confirmar y enviar" y ANTES de que la wallet le pidiera una sola firma. El mecanismo ya existía
-    // y ya corría en producción en el camino de refund (http-solana-remittance-id-resolver.ts:19);
+    // y ya corría en producción en el camino de refund (`pop.prove`, `http-solana-remittance-id-resolver.ts:30`);
     // lo único que faltaba era usarlo también acá.
     //
     // `prove(input.address)` firma para la MISMA address que viaja en el body: P3 de la route compara

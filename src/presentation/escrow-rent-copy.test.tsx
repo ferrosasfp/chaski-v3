@@ -75,7 +75,7 @@ function remesa(overrides: Partial<RemittanceState> = {}): RemittanceState {
 
 describe("AC-6: la cifra que se promete es la del alquiler que vuelve, no la de al lado", () => {
   it("muestra 0,0040 y NO muestra ninguno de los tres números equivocados", () => {
-    render(<CloseEscrowAction remittanceId="rem-1" sender={sender} close={useCase()} />);
+    render(<CloseEscrowAction remittanceId="rem-1" sender={sender} close={useCase()} explainer="own" />);
     const card = within(subarbolDelCierre());
 
     expect(card.getByText(/0,0040/)).toBeInTheDocument();
@@ -107,7 +107,7 @@ describe("AC-6: la cifra que se promete es la del alquiler que vuelve, no la de 
   });
 
   it("nombra LAS DOS cuentas que se cierran, no 'tu alquiler' a secas (CD-3)", () => {
-    render(<CloseEscrowAction remittanceId="rem-1" sender={sender} close={useCase()} />);
+    render(<CloseEscrowAction remittanceId="rem-1" sender={sender} close={useCase()} explainer="own" />);
     const texto = subarbolDelCierre().textContent ?? "";
     expect(texto).toContain("dos cuentas");
     expect(texto).toContain("la del contrato");
@@ -115,7 +115,7 @@ describe("AC-6: la cifra que se promete es la del alquiler que vuelve, no la de 
   });
 
   it("menciona APARTE la tercera cuenta que NO se cierra y cuyo depósito no vuelve", () => {
-    render(<CloseEscrowAction remittanceId="rem-1" sender={sender} close={useCase()} />);
+    render(<CloseEscrowAction remittanceId="rem-1" sender={sender} close={useCase()} explainer="own" />);
     const texto = subarbolDelCierre().textContent ?? "";
     expect(texto).toContain("tercera cuenta");
     expect(texto).toContain("índice");
@@ -123,10 +123,27 @@ describe("AC-6: la cifra que se promete es la del alquiler que vuelve, no la de 
     // Y NO la suma a la cifra: eso es lo que asserta el test de arriba por ausencia de "0,0088".
   });
 
-  it("NO promete un neto: dice que hay comisión y que no sabemos cuánto (CD-3)", () => {
-    const { body } = escrowRentExplainer();
-    expect(body).toContain("comisión");
-    expect(body).toContain("no lo sabemos de antemano");
+  // LAS DOS voces, no una: el fix de CR/BLQ-BAJO-1 partió el `body` en "discovery" y "remittance", y
+  // una promesa de neto que se colara en la voz nueva no la vería un test que sólo mira la vieja.
+  it.each(["discovery", "remittance"] as const)(
+    "voz %s: NO promete un neto, dice que hay comisión y que no sabemos cuánto (CD-3)",
+    (voice) => {
+      const { body } = escrowRentExplainer(voice);
+      expect(body).toContain("comisión");
+      expect(body).toContain("no lo sabemos de antemano");
+      // Y las dos nombran LAS DOS cuentas y la cifra del floor, que son hechos del mecanismo.
+      expect(body).toContain("la que guardó tus USDC");
+      expect(body).toContain("0,0040");
+    },
+  );
+
+  // 🔴 El hallazgo, clavado en la función y no sólo en la pantalla: la voz de la PUERTA no puede
+  // afirmar nada sobre un envío, porque cuando se monta todavía no se buscó ninguno.
+  it("la voz 'discovery' no afirma que ningún envío haya terminado; la 'remittance' sí puede", () => {
+    expect(escrowRentExplainer("discovery").body).not.toContain("Este envío ya terminó");
+    expect(escrowRentExplainer("discovery").body).not.toContain("de ese envío");
+    // Control positivo: la afirmación existe y vive donde SÍ hay un envío elegido.
+    expect(escrowRentExplainer("remittance").body).toContain("Este envío ya terminó");
   });
 });
 

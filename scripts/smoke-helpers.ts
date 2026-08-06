@@ -179,7 +179,7 @@ export type PayoutProvenanceVerdict = {
  * smoke lee este dato, la orden de payout YA fue creada por el agente. Este veredicto no la impide;
  * decide si la corrida sigue y si el operador se entera. Por eso lo único inaceptable es que mienta.
  *
- * Comparación EXACTA, la misma que `Set.has` en flow-vm.ts:31. No se normaliza a minúsculas a
+ * Comparación EXACTA, la misma que (`REAL_PAYOUT_PROVENANCES.has`, `flow-vm.ts:31`). No se normaliza a minúsculas a
  * propósito: si acá "TransFi" fuera "real" y en producción es "desconocido", las dos capas
  * discreparían sobre el mismo string. Con la allowlist no hace falta, porque "TransFi" tampoco está
  * entre las no-reales conocidas y termina abortando igual, sólo que como "desconocida".

@@ -113,11 +113,43 @@ describe("el alquiler que `close` devuelve sale de la misma derivación que el u
     expect(ESCROW_DEPOSIT_RENT_LAMPORTS).toBe(MEASURED_FIRST_DEPOSIT_LAMPORTS);
   });
 
-  it("NO incluye el alquiler de EscrowIndex: esa cuenta no la cierra ninguna instrucción", () => {
-    expect(ESCROW_DEPOSIT_RENT_LAMPORTS).toBeLessThan(
-      MEASURED_FIRST_DEPOSIT_LAMPORTS + ESCROW_INDEX_RENT_LAMPORTS,
-    );
-    expect(ESCROW_DEPOSIT_RENT_LAMPORTS).not.toBe(ESCROW_INDEX_RENT_LAMPORTS);
+  // 🔴 ESTE TEST TENÍA UN NOMBRE QUE AFIRMABA MÁS QUE SU CUERPO Y UNA ASERCIÓN QUE NO PODÍA FALLAR
+  // (fix-pack CR/MNR-4, CD-17). Decía "esa cuenta no la cierra ninguna instrucción" —una afirmación
+  // sobre el programa— y asertaba `ESCROW_DEPOSIT_RENT_LAMPORTS < MEASURED_FIRST_DEPOSIT_LAMPORTS +
+  // 4_774_560`. Como el `it` de arriba clava que los dos primeros son el MISMO número, eso es
+  // `X < X + 4_774_560`: tautológicamente verdadero para cualquier X. Ningún valor de la constante lo
+  // ponía rojo.
+  //
+  // Se eligió ACHICAR EL NOMBRE Y AGRANDAR EL CUERPO, en ese orden y por esta razón: "ninguna
+  // instrucción cierra `escrow_index`" **no se puede verificar desde el IDL**, que no expresa las
+  // constraints `close = ...` de Anchor. Probarlo pediría leer `solana-programs/`, que está fuera del
+  // alcance de este repo. Un nombre que promete lo que ninguna aserción puede tocar es exactamente lo
+  // que CD-17 prohíbe, así que el nombre ahora dice lo que las aserciones de abajo sí prueban.
+  //
+  // Lo que SÍ prueba, y puede ponerse rojo: la ix `close` declara `escrow_index` como cuenta
+  // OPCIONAL, o sea que existe un `close` válido que ni siquiera la recibe. Una cuenta que la
+  // instrucción puede no recibir no puede ser la fuente de un alquiler que esa instrucción devuelve
+  // SIEMPRE, que es lo que esta constante afirma. Si algún día `close` la vuelve obligatoria, esto se
+  // pone rojo y el número hay que re-derivarlo.
+  //
+  // ⚠️ Y NO SE LE AGREGÓ UNA ASERCIÓN ARITMÉTICA, a propósito. Cualquier `expect` sobre el VALOR de
+  // `ESCROW_DEPOSIT_RENT_LAMPORTS` acá sería una tercera copia del pin que ya hacen los dos `it` de
+  // arriba (`:102-107` y `:112-114`): no existe un input que la ponga roja dejando esos dos en verde.
+  // Repetir un pin con otra redacción no agrega cobertura, agrega la ilusión de tenerla.
+  it("la ix `close` declara `escrow_index` OPCIONAL: se puede cerrar sin esa cuenta", () => {
+    const idl = escrowIdl as unknown as {
+      instructions: Array<{
+        name: string;
+        accounts: Array<{ name: string; optional?: boolean }>;
+      }>;
+    };
+    const close = idl.instructions.find((i) => i.name === "close");
+    expect(close).toBeDefined();
+    const escrowIndex = close?.accounts.find((a) => a.name === "escrow_index");
+    // Control positivo: la cuenta EXISTE en la ix, así que el `optional` de abajo no da verde por un
+    // `undefined` de un rename silencioso.
+    expect(escrowIndex).toBeDefined();
+    expect(escrowIndex?.optional).toBe(true);
   });
 
   it("el umbral del depósito NO se movió (sigue sin sumarle nada de esto)", () => {

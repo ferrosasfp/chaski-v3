@@ -1024,7 +1024,7 @@ function IdentityBadge({ kyc }: { kyc: KycVerification }) {
  * readyState no es `Installed` ni `Loadable` (`WalletProviderBase.js`:166-172): no intenta conectar y
  * no emite ningún error. 150 ms después el selector se cierra solo y lo único que la persona lee es
  * "Se cerró el selector de wallet sin conectar", que le atribuye una acción que no hizo. El copy de
- * `no_wallet` (`flow-vm.ts`:251) NO aparece nunca por ese camino, porque nadie llega a tirar
+ * `no_wallet` (`flow-vm.ts:253`) NO aparece nunca por ese camino, porque nadie llega a tirar
  * `WalletNotReadyError`.
  *
  * QUÉ AFIRMA ESTE TEXTO Y QUÉ NO: sólo que en ESTE navegador no hay una wallet expuesta. No dice, y no
@@ -1136,7 +1136,7 @@ export function TrackView({
   // ⚠️ `confirmed` NO ESTABA ACÁ, y era el agujero: es el estado en el que la persona ya firmó la
   // autorización y nadie registró el desenlace (los hasta 15 s del timeout del settle más el
   // broadcast). El historial SÍ lo listaba y SÍ lo declaraba abrible, porque `escrowFundsKnowledge` lo
-  // clasifica como `unverified` (flow-vm.ts:201): la persona leía "No comprobamos si tus USDC siguen
+  // clasifica como `unverified` (`escrowFundsKnowledge`, `flow-vm.ts:190`): la persona leía "No comprobamos si tus USDC siguen
   // en el escrow", tocaba "Ver seguimiento", y aterrizaba en una pantalla sin ninguna acción. Sus USDC
   // pueden estar en el vault.
   const refundeable =
@@ -1272,7 +1272,7 @@ export function TrackView({
         {/* WKH-327: acá la app ya sabe que hay un escrow de esta persona, así que cubre el caso
             "acabo de recuperar mis fondos y ahora cierro las cuentas" sin ningún descubrimiento. */}
         {showClose && closeEscrow && sender ? (
-          <CloseEscrowAction remittanceId={rem.id} sender={sender} close={closeEscrow} />
+          <CloseEscrowAction remittanceId={rem.id} sender={sender} close={closeEscrow} explainer="own" />
         ) : null}
       </Card>
     );
@@ -1363,7 +1363,7 @@ export function TrackView({
       ) : null}
       {/* WKH-327 — ver el comentario del otro punto de montaje. */}
       {showClose && closeEscrow && sender ? (
-        <CloseEscrowAction remittanceId={rem.id} sender={sender} close={closeEscrow} />
+        <CloseEscrowAction remittanceId={rem.id} sender={sender} close={closeEscrow} explainer="own" />
       ) : null}
     </Card>
   );
@@ -1439,19 +1439,31 @@ export function RefundAction({
 //
 // El desenlace NO confirmado es efímero, igual que en `RefundAction` y por la misma razón: afirmaría
 // un final que nadie verificó. En `confirmed` muestra el copy de éxito y deja de ofrecer el botón.
+//
+// 🔴 `explainer` ES OBLIGATORIO Y NO UN BOOLEANO CON DEFAULT (fix-pack CR/MNR-1). Este componente
+// montaba el bloque explicativo SIEMPRE, y la puerta de descubrimiento lo monta una vez arriba y
+// después mapea un `CloseEscrowAction` por cerrable: el mismo párrafo de cuatro líneas aparecía N+1
+// veces (medido: 4 con 3 cerrables; con el tope de 20, 21 veces). Ningún test lo veía porque todos
+// usaban listas de 0 o 1 elemento y `toContain`, que es insensible a la multiplicidad.
+// Un default habría dejado el N+1 exactamente donde estaba para el próximo call-site en lista.
 export function CloseEscrowAction({
   remittanceId,
   sender,
   close,
+  explainer: explainerMode,
 }: {
   remittanceId: string;
   sender: string;
   close: NonNullable<Container["closeEscrowAccounts"]>;
+  /** "own": el componente se explica solo (va suelto en `TrackView`). "inherited": el bloque ya está
+   *  montado por quien lo contiene, y repetirlo por ítem es la duplicación de MNR-1. */
+  explainer: "own" | "inherited";
 }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState<"confirmed" | "pending" | "unknown" | null>(null);
-  const explainer = escrowRentExplainer();
+  // La voz concreta: acá SÍ hay un envío elegido y terminado (ver `escrowRentExplainer`).
+  const explainer = escrowRentExplainer("remittance");
 
   const onClose = useCallback(async () => {
     setBusy(true);
@@ -1472,9 +1484,13 @@ export function CloseEscrowAction({
 
   return (
     <div className="space-y-2" data-testid="close-escrow-action">
-      <p className="text-sm font-semibold">{explainer.title}</p>
-      <p className="text-sm text-stone">{explainer.body}</p>
-      <p className="text-xs text-stone">{explainer.notRecovered}</p>
+      {explainerMode === "own" ? (
+        <>
+          <p className="text-sm font-semibold">{explainer.title}</p>
+          <p className="text-sm text-stone">{explainer.body}</p>
+          <p className="text-xs text-stone">{explainer.notRecovered}</p>
+        </>
+      ) : null}
       {done !== "confirmed" ? (
         <Button variant="outline" onClick={onClose} disabled={busy}>
           {busy ? "Cerrando…" : done ? "Volver a intentar" : "Cerrar y recuperar"}
@@ -1520,7 +1536,8 @@ function RefundSentNotice({
  * 🔴 QUÉ ARREGLA. La recuperación durable ya estaba ENTERA y no tenía ni un consumidor. El endpoint
  * `POST /api/solana/escrow/remittance-ids` está vivo en producción (responde 403 sin PoP), el adapter
  * resuelve el id ausente contra ese store y sondea hasta `MAX_RECOVERY_CANDIDATES` PDAs
- * (`solana-wallet.ts`:207-242), y el gateway está cableado en el container (`container.ts`:138). Pero
+ * (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:277`), y el gateway está cableado en el
+ * container (`solanaRefund`, `container.ts:150`). Pero
  * la interfaz sólo llamaba a `recoverEscrowFunds`, que arranca con `repo.get(remittanceId)` y tira
  * `remittance_not_found` (`recover-escrow-funds.ts`:49-50). O sea: quien borró los datos del navegador
  * o entra desde otro dispositivo no tenía NINGÚN camino, con el código para dárselo ya escrito.
@@ -1660,7 +1677,11 @@ export function EscrowRentRecovery({
   const [err, setErr] = useState<string | null>(null);
   const [sender, setSender] = useState<string | null>(null);
   const [found, setFound] = useState<readonly CloseableEscrow[] | null>(null);
-  const explainer = escrowRentExplainer();
+  // 🔴 La voz GENÉRICA, y es el fix de CR/BLQ-BAJO-1: este bloque se monta al ABRIR la puerta, cuando
+  // todavía no se buscó nada. Con la voz de `CloseEscrowAction` la pantalla decía "Este envío ya
+  // terminó, así que se pueden cerrar" sin que existiera ningún envío, y si el descubrimiento fallaba
+  // lo decía JUNTO con "no llegamos a preguntar".
+  const explainer = escrowRentExplainer("discovery");
 
   const onSearch = useCallback(async () => {
     if (!lister) return;
@@ -1725,7 +1746,13 @@ export function EscrowRentRecovery({
           {found.map((e) => (
             <div key={e.remittanceId} className="space-y-1 border-t border-line pt-2">
               <p className="text-xs text-stone">Envío {e.remittanceId}</p>
-              <CloseEscrowAction remittanceId={e.remittanceId} sender={sender} close={close} />
+              {/* "inherited": el explicativo ya está montado arriba, UNA vez para toda la lista. */}
+              <CloseEscrowAction
+                remittanceId={e.remittanceId}
+                sender={sender}
+                close={close}
+                explainer="inherited"
+              />
             </div>
           ))}
         </div>
@@ -2017,8 +2044,8 @@ function AgentRunsToday({
 // El "2 horas" estaba escrito a mano al lado de una constante que lo decide. Hoy coincide; el día que
 // alguien mueva `CUSTODY_WINDOW_SECS` la frase pasa a ser falsa sin que nada se ponga rojo, que es
 // exactamente cómo nació el bug de la hora inventada que este archivo ya arregló una vez. Se deriva
-// del MISMO valor que el depósito escribe como deadline (`solana-wallet.ts`:277-281), así que no puede
-// desincronizarse. No agrega peso al bundle: `container.ts`:43 ya importa este módulo.
+// del MISMO valor que el depósito escribe como deadline (`CUSTODY_WINDOW_SECS`, `solana-wallet.ts:350`), así que no puede
+// desincronizarse. No agrega peso al bundle: (`SolanaWalletAdapter`, `container.ts:46`) ya importa este módulo.
 const CUSTODY_WINDOW_HOURS = CUSTODY_WINDOW_SECS / 3600;
 
 function RefundWindowNote() {

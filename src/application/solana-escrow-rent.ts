@@ -108,8 +108,12 @@ export const ESCROW_VAULT_RENT_LAMPORTS = 2_039_280;
  * con `payer = sender`. Fuente del subtotal: `:39-42`, donde ya está dicho que 4.002.000 COINCIDE
  * EXACTO con lo medido en cadena para el primer depósito de una billetera nueva.
  *
- * ⛔ NO incluye el alquiler de `EscrowIndex` (4.774.560 lamports) y no es un olvido: no existe
- * instrucción que cierre esa cuenta, así que ese alquiler NO vuelve. Ver `:16-25` y `:83-84`.
+ * ⛔ NO incluye el alquiler de `EscrowIndex` (4.774.560 lamports) y no es un olvido. Lo que sostiene
+ * la exclusión, y es lo verificable: la ix `close` declara `escrow_index` como cuenta OPCIONAL en el
+ * IDL, así que existe un `close` válido que ni la recibe y su alquiler no puede estar en lo que
+ * `close` devuelve siempre (test en `solana-escrow-rent.test.ts`). Que ninguna instrucción del
+ * programa cierre esa cuenta **no se pudo verificar** desde este repo: el IDL no expresa las
+ * constraints `close = ...` de Anchor. Ver `:16-25` y `:83-84`.
  */
 export const ESCROW_DEPOSIT_RENT_LAMPORTS =
   ESCROW_STATE_RENT_LAMPORTS + ESCROW_VAULT_RENT_LAMPORTS;
@@ -155,7 +159,7 @@ export function formatLamportsAsSol(lamports: number): string {
  * de estilo, depende de si el número es algo que se PIDE o algo que se RECIBE, y son dos decisiones
  * distintas que conviene no poder mezclar en un call-site.
  *   · `formatLamportsAsSol` redondea ARRIBA porque le dice a alguien cuánto cargar, y pedir de más es
- *     el error gratis (ver su docblock, `:105-108`).
+ *     el error gratis (ver su docblock, `formatLamportsAsSol`, `:150`).
  *   · Ésta redondea ABAJO porque el número es lo que la persona va a COBRAR, y redondear hacia arriba
  *     lo que alguien va a cobrar es prometer de más.
  *

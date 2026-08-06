@@ -166,6 +166,99 @@ describe("AC-8: qué se dice ANTES de abrir ningún diálogo de firma", () => {
 });
 
 /**
+ * LA VOZ DE LA PUERTA (fix-pack CR/BLQ-BAJO-1).
+ *
+ * 🔴 EL INPUT QUE LO PONE ROJO ES EL MONTAJE, no una interacción. `escrowRentExplainer` está escrito
+ * en la voz de UN envío concreto y ya terminado ("las dos cuentas de ese envío", "Este envío ya
+ * terminó, así que se pueden cerrar"), y esa voz es correcta en `CloseEscrowAction`, donde hay un
+ * `remittanceId`. La puerta lo montaba con el MISMO texto antes de que existiera ninguna selección:
+ * afirmaba un hecho sobre una remesa que todavía no se había buscado. Y cuando el descubrimiento
+ * fallaba, la pantalla decía las dos cosas a la vez — "Este envío ya terminó" y "no llegamos a
+ * preguntar".
+ *
+ * Ningún test lo veía porque todos entraban por "Buscar": el defecto vive ANTES de apretar el botón.
+ */
+describe("la puerta no afirma nada sobre un envío que todavía no se buscó", () => {
+  const CONCRETAS = ["Este envío ya terminó", "de ese envío"] as const;
+
+  it("recién abierta, con el botón sin apretar, no hay ninguna frase de envío concreto", () => {
+    // La lista tiene contenido a propósito: si algún día el componente buscara solo, este test
+    // seguiría siendo sobre el montaje y no sobre una lista vacía.
+    abrirPuerta(
+      new FakeSolanaCloseableEscrowLister([{ remittanceId: "rem-x", status: "released" }]),
+    );
+    const texto = document.body.textContent ?? "";
+    for (const frase of CONCRETAS) expect([frase, texto.includes(frase)]).toEqual([frase, false]);
+    // Control positivo: el bloque explicativo SÍ está montado, o sea que los `false` de arriba no
+    // pasan por una pantalla vacía.
+    expect(texto).toContain("Recuperá tu depósito de red");
+    expect(texto).toContain("0,0040");
+  });
+
+  // El caso B del hallazgo: el registro apagado es el camino de fallo MÁS probable (lo prende una
+  // bandera de configuración, no una caída), y ahí la pantalla decía las dos cosas juntas.
+  it("con el registro apagado dice 'no llegamos a preguntar' y NADA sobre un envío terminado", async () => {
+    abrirPuerta(
+      new FakeSolanaCloseableEscrowLister(
+        [],
+        "reject",
+        "escrow_recovery_unavailable:registry_disabled",
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Buscar envíos con cuentas abiertas/ }));
+
+    await screen.findByText(/no llegamos a preguntar/);
+    const texto = document.body.textContent ?? "";
+    for (const frase of CONCRETAS) expect([frase, texto.includes(frase)]).toEqual([frase, false]);
+  });
+});
+
+/** Cuántas veces aparece `frase` en `texto`. `toContain` es insensible a la multiplicidad, que es
+ *  exactamente lo que dejó pasar la duplicación de abajo. */
+function veces(texto: string, frase: string): number {
+  return texto.split(frase).length - 1;
+}
+
+/**
+ * EL BLOQUE EXPLICATIVO, UNA SOLA VEZ (fix-pack CR/MNR-1).
+ *
+ * 🔴 POR QUÉ ESTE TEST USA TRES CERRABLES Y NO UNO. La puerta monta el explicativo, y `CloseEscrowAction`
+ * lo montaba OTRA VEZ, una por envío de la lista: N+1 copias del mismo párrafo. Con el tope de 20
+ * cerrables el mismo texto aparecía 21 veces. Ningún test lo veía porque todos usaban listas de 0 o 1
+ * elemento —donde N+1 = 2 y nadie contaba— y `toContain`, que da verde con cualquier multiplicidad.
+ * El input que lo pone rojo es una lista de VARIOS.
+ */
+describe("con varios cerrables, el explicativo no se repite una vez por envío", () => {
+  it("tres cerrables ⇒ el párrafo aparece UNA vez, y los tres botones de cierre están", async () => {
+    abrirPuerta(
+      new FakeSolanaCloseableEscrowLister([
+        { remittanceId: "rem-a", status: "released" },
+        { remittanceId: "rem-b", status: "refunded" },
+        { remittanceId: "rem-c", status: "released" },
+      ]),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Buscar envíos con cuentas abiertas/ }));
+    await screen.findByText(/rem-c/);
+
+    // Control positivo primero: los TRES envíos se ofrecen. Sin esto, un conteo de 1 podría venir de
+    // que la lista no se renderizó, que es como un test de "no se repite" deja de probar nada.
+    expect(screen.getAllByRole("button", { name: /Cerrar y recuperar/ })).toHaveLength(3);
+
+    const texto = document.body.textContent ?? "";
+    // Frases que están en LAS DOS voces del explicativo, así que el conteo detecta la duplicación
+    // venga del lado que venga.
+    for (const frase of [
+      "Recuperá tu depósito de red",
+      "la que guardó tus USDC",
+      "0,0040",
+      "Hay una tercera cuenta",
+    ]) {
+      expect([frase, veces(texto, frase)]).toEqual([frase, 1]);
+    }
+  });
+});
+
+/**
  * AC-7 CONTRA EL ÁRBOL REAL — el cambio de billetera entre "Buscar" y "Cerrar y recuperar"
  * (fix-pack AR/BLQ-BAJO-1).
  *

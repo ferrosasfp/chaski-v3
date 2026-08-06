@@ -40,7 +40,7 @@ function remittanceIdBytes16(remittanceId: string): Uint8Array {
   return Uint8Array.from(sha256(new TextEncoder().encode(remittanceId)).subarray(0, 16));
 }
 
-/** La MISMA derivación que `deriveEscrowState` (solana-wallet.ts:192-203). */
+/** La MISMA derivación que `deriveEscrowState`, `solana-wallet.ts:258`. */
 function escrowStatePdaOf(remittanceId: string): PublicKey {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("escrow"), SENDER_KP.publicKey.toBuffer(), Buffer.from(remittanceIdBytes16(remittanceId))],
@@ -389,7 +389,7 @@ describe("SolanaWalletAdapter.closeEscrow (WKH-327)", () => {
 
   it("AC-5: confirmación limpia + la cuenta SIGUE AHÍ ⇒ 'pending', NUNCA 'confirmed' (M4)", async () => {
     // Acá `confirmClose` se aparta de `confirmRefund` a propósito: aquél devuelve "confirmed" apenas la
-    // tx confirma sin error (solana-wallet.ts:607), SIN leer nada. AC-5 exige leer la AUSENCIA. Un
+    // tx confirma sin error (`confirmRefund`, `solana-wallet.ts:648`), SIN leer nada. AC-5 exige leer la AUSENCIA. Un
     // `confirmTransaction` sin `err` prueba que la tx entró; leer la ausencia prueba que hizo lo que
     // queríamos. Este es el único test que separa las dos cosas.
     const REM = "rem-no-cerro";

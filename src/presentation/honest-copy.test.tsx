@@ -157,7 +157,7 @@ function remesaConFalloDesconocido(): RemittanceState {
 // (confirm-and-send.ts:190-196). O sea que Chaski SÍ puede mover esos USDC.
 //
 // Lo verificable, y lo que de verdad hace a esto no custodial, es DÓNDE quedan: en una cuenta del
-// contrato (ATA de la PDA `escrowStatePda`, `solana-wallet.ts:373`), nunca en una billetera de Chaski.
+// contrato (ATA de la PDA `escrowStatePda`, `solana-wallet.ts:378`), nunca en una billetera de Chaski.
 describe("conectar wallet", () => {
   it("no promete que Chaski nunca toca la plata; dice dónde queda", async () => {
     irAConectar();

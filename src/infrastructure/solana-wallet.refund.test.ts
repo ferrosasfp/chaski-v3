@@ -508,7 +508,9 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
       );
       const adapter = await connectedWith({ lookupBySender });
 
-      // El código lleva el motivo pegado para el diagnóstico; el prefijo es el que el copy reconoce.
+      // El prefijo es el que el copy reconoce; la cola distingue los tres desenlaces acá y en ningún
+      // otro lado: la pantalla descarta el código (AR/MNR-4). O sea que este `expect` es el único
+      // lugar donde el motivo se mira, y por eso se exige entero y no sólo el prefijo.
       await expect(adapter.refundEscrow()).rejects.toThrow(`escrow_recovery_unavailable:${reason}`);
       expect(vi.mocked(Connection.prototype.getMultipleAccountsInfo)).not.toHaveBeenCalled();
       expect(signSpy).not.toHaveBeenCalled();

@@ -2059,7 +2059,7 @@ function AgentRunsToday({
 // El "2 horas" estaba escrito a mano al lado de una constante que lo decide. Hoy coincide; el día que
 // alguien mueva `CUSTODY_WINDOW_SECS` la frase pasa a ser falsa sin que nada se ponga rojo, que es
 // exactamente cómo nació el bug de la hora inventada que este archivo ya arregló una vez. Se deriva
-// del MISMO valor que el depósito escribe como deadline (`CUSTODY_WINDOW_SECS`, `solana-wallet.ts:369`), así que no puede
+// del MISMO valor que el depósito escribe como deadline (`CUSTODY_WINDOW_SECS`, `solana-wallet.ts:374`), así que no puede
 // desincronizarse. No agrega peso al bundle: (`SolanaWalletAdapter`, `container.ts:46`) ya importa este módulo.
 const CUSTODY_WINDOW_HOURS = CUSTODY_WINDOW_SECS / 3600;
 

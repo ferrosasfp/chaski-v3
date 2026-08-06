@@ -452,6 +452,20 @@ describe("flow-vm: lostEscrowRecoveryError — la firma no completada no es un f
     });
   }
 
+  // La OTRA firma de esta puerta (AR/BLQ-BAJO-1). El código lo etiqueta `refundEscrow` y es lo único
+  // que distingue la fase, porque la billetera escribe el mismo texto para las dos. Acá se fija que la
+  // rama de la posesión no se lo lleve puesto; que el código salga DE VERDAD del adapter cuando la
+  // firma de la orden se rechaza lo mide `refund-perdido-junta.test.ts` con el adapter real.
+  it("escrow_refund_signature_incomplete NO se dice como la firma de posesión", () => {
+    const copy = lostEscrowRecoveryError(
+      "escrow_refund_signature_incomplete",
+      MAX_RECOVERY_CANDIDATES,
+    );
+    expect(copy).toContain("segunda firma");
+    expect(copy).not.toContain("no llegamos a preguntar");
+    expect(copy).not.toBe("No pudimos recuperar los fondos. Intentá de nuevo.");
+  });
+
   // 🔴 EL CONTROL DE ORDEN DE RAMAS. La rama de AC-5 se insertó PRIMERA, delante de la de
   // `escrow_not_found`. Una regexp un poco más ancha le robaría casos a la rama de abajo sin romper
   // ningún otro test: la pantalla pasaría a decir "no llegamos a preguntar" también cuando el servidor
@@ -463,6 +477,34 @@ describe("flow-vm: lostEscrowRecoveryError — la firma no completada no es un f
     expect(copy).toContain(`los últimos ${MAX_RECOVERY_CANDIDATES} envíos`);
     expect(copy).not.toContain("aceptá la firma");
   });
+
+  // 🔴 EL CONTROL DE ARRIBA PROTEGÍA UN SOLO CÓDIGO, Y NO ALCANZA (AR/MNR-1). Medido: ensanchando la
+  // regexp a `/rejected|cancelled|wallet_sign_not_available/i` la suite COMPLETA quedaba verde
+  // (89 archivos, 1354 tests). Con esa regexp `escrow_recovery_unavailable:pop_rejected` —el 403, o sea
+  // la prueba de posesión que el servidor no verificó— cae en la rama de la firma, y la pantalla pasa
+  // de "No pudimos consultar el registro" a "aceptá la firma", que manda a la persona a re-firmar algo
+  // que sí firmó. `escrow_not_found` no lo detectaba porque no contiene "rejected" ni "cancelled".
+  //
+  // Los códigos van escritos a mano, uno por uno, y no salen de ninguna de las funciones vigiladas
+  // (mismo criterio que `LITERALES_DE_FIRMA_NO_COMPLETADA`). Son los que emite `refundEscrow`
+  // (`solana-wallet.ts`, `resolveRemittanceIdFromLedger`) con el motivo pegado.
+  const CODIGOS_DEL_REGISTRO_MUDO = [
+    "escrow_recovery_unavailable:pop_disabled",
+    "escrow_recovery_unavailable:registry_disabled",
+    "escrow_recovery_unavailable:pop_rejected", // ⚠️ contiene "rejected": el que se colaba
+    "escrow_id_unavailable",
+  ] as const;
+
+  for (const code of CODIGOS_DEL_REGISTRO_MUDO) {
+    it(`"${code}" sale por el texto del registro, NO por el de la firma`, () => {
+      const copy = lostEscrowRecoveryError(code, MAX_RECOVERY_CANDIDATES);
+      // La aserción positiva es la que distingue: las DOS copias contienen "no llegamos a preguntar",
+      // así que pedir esa subcadena no separa nada. "el registro de envíos" está sólo en ésta.
+      expect(copy).toContain("No pudimos consultar el registro de envíos");
+      expect(copy).not.toContain("aceptá la firma");
+      expect(copy).not.toContain("segunda firma");
+    });
+  }
 });
 
 describe("flow-vm: las DOS funciones responden igual a la firma no completada (WKH-331/CD-12)", () => {

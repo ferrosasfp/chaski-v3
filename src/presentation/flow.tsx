@@ -6,9 +6,7 @@ import {
   Check,
   Clock3,
   ExternalLink,
-  IdCard,
   Loader2,
-  ScanFace,
   ShieldAlert,
   ShieldCheck,
   Smartphone,
@@ -774,11 +772,28 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                   Por ley, verificamos tu identidad <b>una sola vez</b>. Tu documento y tu selfie no
                   se comparten con los agentes que cotizan y pagan.
                 </p>
+                {/* LA CUARTA DE LA MISMA FAMILIA, y la que sobrevivió al barrido de arriba porque no
+                    era una frase. Acá había `IdCard → ArrowRight → ScanFace`: documento, flecha, cara
+                    escaneada. Es la MISMA promesa que se borró del párrafo y del botón ("escaneás tu
+                    DNI y te sacás una selfie"), dibujada en vez de escrita, y en el elemento más
+                    grande del recuadro. Con `DIDIT_ENV=mock` la persona aterriza en `/kyc-simulado`,
+                    que no le pide ni un dato: nadie escanea nada, y esa es la configuración con la
+                    que se recorre la demo hoy.
+                    Y NO se arregla mostrando un dibujo por modo: `DIDIT_ENV` se lee server-side y no
+                    tiene variante `NEXT_PUBLIC_` (`didit-env.ts:66`), así que este componente no sabe
+                    qué verificador está configurado — el mismo límite que ya está anotado para las
+                    frases vecinas. Queda un ícono que vale en las dos configuraciones: el escudo de
+                    "verificación", el mismo del título de la tarjeta y del botón que la arranca. No
+                    afirma ninguna acción física, y no cierra la puerta a mostrar el escaneo el día
+                    que exista una señal client-visible del modo (eso sería otra HU, no ésta).
+                    El `data-testid` es el ancla del test que mata este defecto
+                    (`honest-copy.test.tsx`, "el recuadro del paso verify no dibuja el escaneo"). */}
                 {scanStage === 0 ? (
-                  <div className="flex items-center justify-center gap-3 rounded-xl border border-dashed border-line bg-sand/60 py-7">
-                    <IdCard className="h-8 w-8 text-stone" />
-                    <ArrowRight className="h-4 w-4 text-stone/60" />
-                    <ScanFace className="h-8 w-8 text-stone" />
+                  <div
+                    data-testid="verify-idle-icon"
+                    className="flex items-center justify-center rounded-xl border border-dashed border-line bg-sand/60 py-7"
+                  >
+                    <ShieldCheck className="h-8 w-8 text-stone" />
                   </div>
                 ) : (
                   <VerificationProgress approved={scanStage >= 4} />

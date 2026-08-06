@@ -23,6 +23,7 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { IdCard, ScanFace } from "lucide-react";
 import { RemittanceFlow, TrackView } from "./flow";
 import { buildTestContainer } from "../test-support/test-container";
 import { TEST_CCI } from "../test-support/fakes";
@@ -169,6 +170,43 @@ describe("conectar wallet", () => {
   });
 });
 
+/**
+ * El TRAZO de un `<svg>`: sus hijos con todos sus atributos, en orden de dibujo.
+ *
+ * POR QUÉ ESTO Y NO EL NOMBRE DEL ÍCONO. Un test que busque el string "ScanFace" (o la clase
+ * `lucide-scan-face` que lucide le pone al `<svg>`) es frágil por los dos lados: se rompe solo si
+ * lucide renombra sus clases, y se lo saltea cualquiera que reimporte el mismo ícono con otro alias
+ * (`import { ScanFace as Foto }`) o que copie sus paths a un componente propio. Ninguna de esas dos
+ * cosas cambia lo único que la persona ve, que es EL DIBUJO.
+ *
+ * Así que el ancla es el dibujo: se renderiza el ícono prohibido acá mismo, se le saca la huella, y
+ * se busca esa huella en la pantalla. Si el pictograma de "documento" o el de "cara escaneada" vuelve
+ * a aparecer en el paso `verify` (importado, aliaseado o copiado a mano), la huella coincide y esto se
+ * pone rojo. Si lucide cambia el dibujo de sus íconos, la huella cambia de los dos lados a la vez y el
+ * test sigue midiendo lo mismo.
+ */
+function trazo(svg: Element): string {
+  return Array.from(svg.children)
+    .map((hijo) => {
+      const attrs = Array.from(hijo.attributes)
+        .map((a) => `${a.name}=${a.value}`)
+        .sort()
+        .join(",");
+      return `${hijo.tagName}[${attrs}]`;
+    })
+    .join("|");
+}
+
+/** La huella de un ícono, renderizado y desmontado acá para no ensuciar el `screen` del flujo. */
+function trazoDe(icono: React.ReactElement): string {
+  const { container, unmount } = render(icono);
+  const svg = container.querySelector("svg");
+  if (!svg) throw new Error("el ícono no renderizó ningún <svg>");
+  const huella = trazo(svg);
+  unmount();
+  return huella;
+}
+
 // ── 2. El paso de identidad: quién verifica y qué se comparte ────────────────────────────────────
 //
 // Dos frases distintas, un mismo error.
@@ -209,6 +247,37 @@ describe("paso de identidad", () => {
     expect(screen.queryByText(/Escaneás tu DNI/)).toBeNull();
     expect(screen.queryByText(/te sacás una selfie/)).toBeNull();
     expect(screen.queryByRole("button", { name: /Escanear DNI/ })).toBeNull();
+  });
+
+  // 🔴 LA MISMA PROMESA, MOVIDA AL DIBUJO. La frase y el botón se arreglaron; el recuadro de arriba
+  // seguía dibujando `IdCard → ArrowRight → ScanFace`, o sea documento, flecha, cara escaneada: la
+  // acción física que la frase dejó de prometer, contada en pictogramas. Con `DIDIT_ENV=mock` la
+  // persona aterriza en `/kyc-simulado`, que no pide ni un dato, así que ese dibujo es falso en la
+  // configuración con la que se recorre la demo.
+  //
+  // Y NO SE ARREGLA CONDICIONÁNDOLO POR MODO: `DIDIT_ENV` es server-only, sin variante
+  // `NEXT_PUBLIC_` (`didit-env.ts:66`), así que esta pantalla no puede saber qué verificador está
+  // configurado. Igual que las tres frases vecinas, el ícono tiene que ser cierto en las dos.
+  it("el recuadro del paso verify no dibuja el escaneo de documento+rostro que la frase dejó de prometer", async () => {
+    // Las huellas se sacan ANTES de montar el flujo, para que estos renders no se crucen con `screen`.
+    const prohibidos: ReadonlyArray<readonly [string, string]> = [
+      ["IdCard (documento)", trazoDe(<IdCard />)],
+      ["ScanFace (cara escaneada)", trazoDe(<ScanFace />)],
+    ];
+
+    await irARevisar();
+    fireEvent.click(await screen.findByRole("button", { name: /Continuar/ }));
+    await screen.findByRole("button", { name: /Verificar mi identidad/ });
+
+    const dibujados = Array.from(document.querySelectorAll("svg")).map(trazo);
+    for (const [nombre, huella] of prohibidos) {
+      expect(dibujados, `el paso verify sigue dibujando ${nombre}`).not.toContain(huella);
+    }
+
+    // El fix no puede ser vaciar el recuadro: sigue habiendo UN ícono ahí, y uno solo (dos o tres
+    // vuelven a armar una secuencia, que es la forma en que este defecto contaba la acción física).
+    const recuadro = screen.getByTestId("verify-idle-icon");
+    expect(recuadro.querySelectorAll("svg")).toHaveLength(1);
   });
 
   // La barra de progreso de tres pasos era doblemente inventada: `setScanStage` sólo se llama con

@@ -216,7 +216,7 @@ describe("el default del deadline del smoke sale de producción, no de un litera
 describe("classifyPayoutProvenance — el guard que era una denylist de un solo valor", () => {
   // QUÉ ESTABA MAL, para que no vuelva: el smoke abortaba sólo con `provenance === "transfi"`. Eso es
   // una DENYLIST de UN valor sobre un dato que elige un agente remoto, o sea "cualquier string".
-  // Producción usa el mismo dato como ALLOWLIST (`REAL_PAYOUT_PROVENANCES`, flow-vm.ts:24). Con la
+  // Producción usa el mismo dato como ALLOWLIST (`REAL_PAYOUT_PROVENANCES`, `flow-vm.ts:26`). Con la
   // denylist, "transfi-v2" o "TransFi" seguían de largo Y el script IMPRIMÍA que la pata fiat estaba
   // en mock. Los casos de abajo son exactamente esos.
 
@@ -225,7 +225,7 @@ describe("classifyPayoutProvenance — el guard que era una denylist de un solo 
     expect(v.kind).toBe("real");
     expect(v.kind).not.toBe("no-real"); // "no-real" es lo ÚNICO que deja seguir la corrida
     expect(v.reason).toContain("REAL_PAYOUT_PROVENANCES");
-    expect(v.reason).toContain("src/presentation/flow-vm.ts:24");
+    expect(v.reason).toContain("src/presentation/flow-vm.ts:26");
   });
 
   it("TODO valor de REAL_PAYOUT_PROVENANCES aborta (si producción suma un proveedor, entra solo)", () => {
@@ -248,8 +248,8 @@ describe("classifyPayoutProvenance — el guard que era una denylist de un solo 
   });
 
   it("otra capitalización: aborta como DESCONOCIDA, sin normalizar (misma comparación que producción)", () => {
-    // Decisión y su motivo: NO se pasa a minúsculas. Producción compara exacto (`Set.has`,
-    // flow-vm.ts:29), así que normalizar acá haría que las dos capas opinaran distinto del MISMO
+    // Decisión y su motivo: NO se pasa a minúsculas. Producción compara exacto
+    // (`REAL_PAYOUT_PROVENANCES.has`, `flow-vm.ts:31`), así que normalizar acá haría que las dos capas opinaran distinto del MISMO
     // string. No hace falta para la seguridad: con la allowlist, "TransFi" tampoco está entre las
     // no-reales conocidas y aborta igual. Las dos capas caen de su lado seguro sin contradecirse.
     expect(REAL_PAYOUT_PROVENANCES.has("TransFi")).toBe(false); // producción: no es "real"…

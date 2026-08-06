@@ -4,7 +4,8 @@
 //
 // Qué había, medido antes del cambio:
 //   · `flow.tsx` mostraba tres botones: Yape · Plin · Banco (CCI).
-//   · El valor por defecto de toda remesa nueva era `"yape"` (flow.tsx:108).
+//   · El valor por defecto de toda remesa nueva era `"yape"` (en `flow.tsx`; ese código ya no existe,
+//     así que la cita va por símbolo y no por línea).
 //   · `app/layout.tsx` decía, en la descripción que ve Google, "Reciben soles en su Yape".
 // No existe integración de pago por Yape ni por Plin en NINGUNA capa de este repo: el agente de
 // desembolso deposita a cuenta bancaria. Los dos botones y la descripción prometían un carril que

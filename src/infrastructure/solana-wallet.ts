@@ -15,6 +15,8 @@ import type {
 } from "@solana/web3.js";
 import type { Idl, Provider } from "@coral-xyz/anchor";
 import type {
+  CloseableEscrow,
+  ConnectedWalletProbe,
   EscrowRefundConfirmation,
   PrincipalDepositState,
   SolanaEscrowDeposit,
@@ -24,6 +26,7 @@ import type {
   SolanaRemittanceIdResolver,
   SolanaSenderSolBalance,
   SolanaSenderSolBalanceProbe,
+  SolanaCloseableEscrowLister,
   WalletPort,
 } from "../application/ports";
 import type { Quote } from "../domain/remittance";
@@ -47,6 +50,25 @@ import { solanaWalletBridge } from "./solana-wallet-bridge";
 // escribir un 10 a mano al lado de la constante que lo decide es exactamente cómo nació la hora
 // inventada que `RefundWindowNote` ya tuvo que arreglar una vez.
 export const MAX_RECOVERY_CANDIDATES = 10;
+
+// WKH-327/AC-8: tope de candidatos que el descubrimiento de CERRABLES sondea on-chain.
+//
+// NO es un número inventado ni una copia de MAX_RECOVERY_CANDIDATES: es el techo DURO que aplica el
+// servidor (`app/api/solana/escrow/remittance-ids/route.ts:32`, `MAX_IDS = 20`), así que pedir más no
+// puede devolver más. Pedir menos sí perdería filas que el servidor sí tenía.
+//
+// POR QUÉ NO REUSA MAX_RECOVERY_CANDIDATES = 10: su derivación escrita (arriba) habla de "un escrow
+// reciente perdido", que es la pregunta del refund — hay UN objetivo natural y está cerca en el tiempo.
+// La pregunta del alquiler es otra: mira toda la historia recuperable, porque cada envío terminado dejó
+// sus dos cuentas abiertas y todas valen lo mismo.
+//
+// Se EXPORTA por la misma razón que su vecina: el copy de "no encontramos nada" tiene que decir sobre
+// CUÁNTOS envíos miramos, y escribir un 20 a mano al lado de la constante que lo decide es cómo el copy
+// termina diciendo un número que el código dejó de usar.
+//
+// LÍMITE, dicho (L-8): un remitente con más de 20 filas en el ledger NO ve las más viejas, y esta HU no
+// recupera ese alquiler. Subirlo requiere tocar el servidor, que está fuera de alcance.
+export const MAX_CLOSEABLE_CANDIDATES = 20;
 
 /**
  * Ventana de custodia que este cliente le pide al escrow: 2 horas.
@@ -87,9 +109,22 @@ const REFUND_CONFIRM_TIMEOUT_MS = 30_000;
  *  "no pudimos preguntar", nunca "no tiene saldo". */
 const SOL_BALANCE_PROBE_TIMEOUT_MS = 5_000;
 
+/** WKH-327/AC-3 — techo de la sonda de la PDA `["escrow-index", sender]`. Mismo número y MISMA razón
+ *  que SOL_BALANCE_PROBE_TIMEOUT_MS de acá arriba: es una lectura simple (sin firma ni confirmación)
+ *  que corre dentro del camino que la persona espera mirando la pantalla.
+ *
+ *  Sin este techo, un `getAccountInfo` colgado (el RPC público que acepta la conexión y no contesta)
+ *  deja a la persona mirando "Cerrando…" para siempre. Vencido el techo el resultado es "no pudimos
+ *  preguntar", que ACÁ significa abortar sin firmar: ver `probeEscrowIndex`. */
+const ESCROW_INDEX_PROBE_TIMEOUT_MS = 5_000;
+
 /** Marca interna: la tx ENTRÓ en un bloque y el programa la revirtió. Es un "no" MEDIDO, no una
  *  indeterminación, y por eso viaja como excepción y no como uno de los tres valores. */
 class RefundTxReverted extends Error {}
+
+/** Hermano exacto de RefundTxReverted, para el camino de `close`. Separado y no reusado: son dos
+ *  transacciones distintas y mezclarlas haría que un `instanceof` de un camino atrape al del otro. */
+class CloseTxReverted extends Error {}
 
 /** Corre `p` con un techo de tiempo. El perdedor de la carrera queda con handler (Promise.race los
  *  attachea a los dos), así que no genera un rejection sin manejar; el timer se limpia siempre. */
@@ -108,7 +143,16 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 }
 
 export class SolanaWalletAdapter
-  implements WalletPort, SolanaEscrowDepositProbe, SolanaSenderSolBalanceProbe
+  implements
+    WalletPort,
+    SolanaEscrowDepositProbe,
+    SolanaSenderSolBalanceProbe,
+    // WKH-327/AC-8: el descubrimiento de cerrables se le pregunta a la CADENA, no a un agente, así
+    // que vive en el mismo adapter que ya es `probe` y `senderBalance` por la misma razón.
+    SolanaCloseableEscrowLister,
+    // WKH-327 (fix-pack AR/BLQ-BAJO-1): quién está conectado AHORA. Mismo adapter otra vez porque el
+    // bridge que sabe la respuesta ya es suyo.
+    ConnectedWalletProbe
 {
   private address: string | null = null;
 
@@ -147,8 +191,8 @@ export class SolanaWalletAdapter
    * ⚠️ EL FALLBACK NO ES DEFENSIVO: cubre un camino que el flujo recorre SIEMPRE. `this.address` vive
    * sólo en memoria y se escribe sólo en `connect()`, así que una recarga de la página lo borra — y hay
    * una navegación completa en el medio del flujo: el KYC se va a Didit y vuelve
-   * (`flow.tsx`:296-300). Al volver, el resume salta derecho al paso `confirm` sin pasar por
-   * `connect()` (`flow.tsx`:157-178). Antes de este fallback, ahí `getAddress()` contestaba `null`.
+   * (`flow.tsx:221-227`). Al volver, el resume salta derecho al paso `confirm` sin pasar por
+   * `connect()` (`flow.tsx:163-184`). Antes de este fallback, ahí `getAddress()` contestaba `null`.
    *
    * El bridge SÍ sobrevive a esa recarga, y no porque persista nada: lo repuebla el sync component
    * desde `useWallet()` en cuanto `autoConnect` reconecta (`solana-providers.tsx`:50-55 y :107).
@@ -156,15 +200,37 @@ export class SolanaWalletAdapter
    * `connect()`. Si autoConnect todavía no terminó, el estado dice `connected:false` y esto contesta
    * `null` — que es la verdad en ese instante, y el llamador ya la sabe distinguir.
    *
-   * NO cachea lo que rehidrata, a propósito: la fuente de verdad es el bridge. Si la wallet se
-   * desconecta a mitad del flujo, la llamada siguiente vuelve a dar `null` (fail-loud) en lugar de una
-   * address vieja que ya no puede firmar nada.
+   * NO cachea lo que rehidrata, a propósito: la fuente de verdad es el bridge.
+   *
+   * ⚠️ LO QUE ESTA FUNCIÓN NO ES, y hace falta decirlo porque el nombre invita a creerlo: NO es "quién
+   * está conectado ahora". Mientras `connect()` haya corrido en esta pestaña, devuelve el cache y no
+   * mira el bridge — o sea que si la persona cambia de cuenta en Phantom, esto sigue contestando la
+   * vieja. Para decidir si una firma que estamos por pedir puede prosperar, la pregunta correcta es
+   * `getConnectedAddress()` de acá abajo.
    *
    * Valida base58 igual que `connect()`: lo que no puede entrar por una puerta tampoco entra por la
    * otra.
    */
   async getAddress(): Promise<string | null> {
     if (this.address) return this.address; // el MISMO base58 case-sensitive (AC-6)
+    return this.getConnectedAddress(); // sin cache, la verdad la tiene el bridge
+  }
+
+  /**
+   * WKH-327 (fix-pack AR/BLQ-BAJO-1) — quién está conectado EN ESTE INSTANTE, sin pasar por el cache.
+   *
+   * Es la mitad "viva" de `getAddress()`: el mismo código que ya corría cuando no había cache, ahora
+   * con nombre propio y alcanzable siempre. La diferencia importa una sola vez y es la que motiva
+   * todo esto: buscar con la billetera A, cambiar a B en Phantom sin recargar, y apretar "Cerrar y
+   * recuperar". `getAddress()` contesta A (cache de `connect()`), esto contesta B, y sólo con B el
+   * guard de AC-7 puede decir que no ANTES de abrir un diálogo de firma que B no puede satisfacer.
+   *
+   * Leer el bridge NO toca la red, NO abre el modal y NO pide ninguna firma: es un objeto en memoria
+   * que el sync component mantiene al día desde `useWallet()` (`solana/solana-providers.tsx`). Si el
+   * árbol todavía no montó, o la wallet se desconectó, contesta `null` — que es "no hay nadie
+   * conectado", no "no pudimos preguntar".
+   */
+  async getConnectedAddress(): Promise<string | null> {
     const { connected, publicKey } = solanaWalletBridge.getState();
     if (!connected || !publicKey) return null; // sin conexión viva no hay address que devolver
     try {
@@ -641,6 +707,377 @@ export class SolanaWalletAdapter
     } catch {
       return "unknown"; // no pudimos leer (RPC caído / bytes indecodificables): no sabemos, y se dice
     }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  // WKH-327 — `close`: recuperar el alquiler de las dos cuentas del depósito
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  /**
+   * Construye, firma y broadcastea la ix `close` del escrow. El SENDER firma y paga el fee, igual que
+   * en `refundEscrow` y por la misma razón: es SU alquiler el que vuelve (las dos cuentas se crearon
+   * con `payer = sender` en el `deposit`) y `close = sender` en el programa.
+   *
+   * Qué recupera: los 4.002.000 lamports del `EscrowState` (1.962.720) + la ATA del vault (2.039.280).
+   * Qué NO recupera: el alquiler del `EscrowIndex`. Lo verificable desde acá es que esta ix la declara
+   * como cuenta OPCIONAL (`escrow-idl.ts`, y el test de `solana-escrow-rent.test.ts`), o sea que hay
+   * un `close` válido que ni la recibe, así que su alquiler no puede estar en la cifra que `close`
+   * devuelve siempre. Que NINGUNA instrucción la cierre **no se pudo verificar** desde este repo: el
+   * IDL no expresa las constraints `close = ...` de Anchor.
+   *
+   * POR QUÉ EXIGE `remittanceId` Y `refundEscrow` NO: el fallback de refund (`refundEscrow`, `:559`,
+   * que llama a `resolveRemittanceIdFromLedger`, `:277`) elige UNO entre N y actúa sobre él, porque
+   * "recuperar mis USDC" tiene un objetivo natural — el escrow que todavía tiene plata. Para `close` no
+   * existe ese "el": todos los terminales son igual de cerrables, y elegir uno en silencio le cerraría
+   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1027`) devuelve la
+   * LISTA y elige ella.
+   *
+   * ⚠️ POR QUÉ EL LISTER NO TIENE GATEWAY Y EL CIERRE SÍ (apartamiento declarado del SDD §4.1/§4.2,
+   * detectado en CR/MNR-3; el SDD lo llamaba `listCloseableEscrows` y ese símbolo nunca existió). El
+   * cierre pasa por `SolanaEscrowCloseGateway` porque el use-case `CloseEscrowAccounts` tiene lógica
+   * propia —el guard de AC-7 contra la billetera viva— y el gateway es lo que le deja un puerto que
+   * doblar. El descubrimiento no tiene use-case: la pantalla le hace UNA pregunta a la cadena y
+   * muestra la respuesta, así que el adapter implementa el puerto `SolanaCloseableEscrowLister`
+   * directamente y el container lo cablea crudo (`container.ts`, `solanaCloseableEscrows: wallet`),
+   * igual que `probeDeposit` y `probeSenderSolBalance`. Un gateway ahí sería una capa que sólo
+   * reenvía.
+   *
+   * 🩸 Si alguna vez ves un 3012 (`AccountNotInitialized`): NO asumas que es el índice. `close` no
+   * lleva `associated_token_program` y el programa exige `sender_ata` YA inicializada
+   * (`solana-programs/programs/escrow/src/lib.rs:695-700`, leído en F2), así que una ATA de USDC
+   * inexistente del remitente produce EL MISMO código. El error no desambigua las dos causas. Antes de
+   * "arreglar" la construcción de `escrowIndex` (que probablemente esté bien), verificá la ATA:
+   * arreglar lo que no está roto acá significa meter un cambio en el único lugar donde el footgun de la
+   * cuenta opcional se puede pisar. Esta HU NO mitiga ese riesgo; lo declara. **No se pudo verificar**
+   * qué código emite Anchor exactamente en ese caso: haría falta un `close` real que revierta.
+   *
+   * NO declara ComputeBudget, a diferencia de `authorizePrincipal`
+   * (`ComputeBudgetProgram.setComputeUnitLimit`, `:403`): aquello existía por el
+   * tope POR UNIDAD del facilitator, y acá el feePayer es el sender — no hay tope de nadie que
+   * respetar. Y el número que haría falta (el consumo de CU de `close`) no existe: los 120.000 de
+   * `resolveSolanaComputeUnitLimit` salen del peor caso de `deposit`. Declarar un límite por debajo del
+   * consumo real hace que la tx falle.
+   */
+  async closeEscrow(
+    remittanceId: string,
+    sender?: string,
+  ): Promise<{ closeTx: string; confirmation: EscrowRefundConfirmation }> {
+    // ── GUARDS fail-loud — ANTES de leer/construir/firmar nada ──
+    const senderB58 = sender ?? (await this.getAddress());
+    if (!senderB58) throw new Error("wallet_not_connected");
+    // Sin fallback al ledger, a propósito (ver el docblock). Un id vacío/whitespace NO cuenta.
+    if (typeof remittanceId !== "string" || remittanceId.trim().length === 0) {
+      throw new Error("escrow_id_required");
+    }
+
+    // ── lazy-import (patrón authorizePrincipal / refundEscrow, DT-SDD-8) ──
+    const web3 = await import("@solana/web3.js");
+    const { PublicKey, Transaction, Connection } = web3;
+    const anchor = await import("@coral-xyz/anchor");
+    const { getAssociatedTokenAddressSync } = await import("@solana/spl-token");
+    const { escrowIdl } = await import("./solana/escrow-idl");
+
+    const senderPk = new PublicKey(senderB58); // valida base58 (CD-SDD-7)
+    const programId = new PublicKey((escrowIdl as { address: string }).address); // DR5G…SE4x
+
+    // Misma derivación que deposit/refund (fuente única, AH-9): no pueden divergir.
+    const { pda: escrowStatePda, bytes: remittanceIdBytes } = this.deriveEscrowState(
+      senderPk,
+      programId,
+      remittanceId,
+    );
+
+    const connection = new Connection(
+      resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), // client-safe
+    );
+
+    // ── LECTURA AUTORITATIVA del EscrowState (AC-4/AC-10) ──
+    const info = await connection.getAccountInfo(escrowStatePda);
+    // AC-10: la cuenta ausente NO es un error. Son DOS situaciones indistinguibles desde acá — ya se
+    // cerró (un intento anterior de esta misma persona) o nunca existió (nunca hubo depósito con ese
+    // id) — y en las dos no hay alquiler que recuperar acá y NADA salió mal. El copy nombra las dos.
+    if (!info) throw new Error("escrow_account_absent");
+    const coder = new anchor.BorshAccountsCoder(escrowIdl as unknown as Idl);
+    let state: { mint: InstanceType<typeof PublicKey>; status: Record<string, unknown> };
+    try {
+      state = coder.decode("EscrowState", info.data) as {
+        mint: InstanceType<typeof PublicKey>;
+        status: Record<string, unknown>;
+      };
+    } catch {
+      throw new Error("escrow_state_unreadable"); // bytes ajenos al layout: no sabemos qué es
+    }
+    const statusKey = Object.keys(state.status)[0]; // { Released: {} } | { Refunded: {} } | ...
+    // AC-4: el programa exige estado terminal. Esto es el guard AUTORITATIVO (la cadena), no el de la
+    // UI. Deposited ⇒ el envío sigue en curso y sus cuentas no se pueden cerrar. Este `throw` NO dice
+    // dónde está la plata, y el copy tampoco.
+    if (statusKey !== "Released" && statusKey !== "Refunded") throw new Error("escrow_not_terminal");
+    const mintPk = state.mint; // el mint ON-CHAIN (autoritativo), NUNCA del cliente
+
+    // ── SONDA DEL ÍNDICE (AC-1/AC-2/AC-3) — ANTES de armar y ANTES de firmar ──
+    // El orden importa: acá todavía no hay tx que abortar. Si esto corriera después de la firma,
+    // "no pudimos preguntar" costaría una firma que la persona ya dio para nada.
+    const idx = await this.probeEscrowIndex(connection, senderPk, programId, coder);
+    if (idx.status === "unknown") throw new Error("escrow_index_probe_failed"); // AC-3
+
+    // ── Build ix `close` (AH-2/AH-3) ──
+    const vault = getAssociatedTokenAddressSync(mintPk, escrowStatePda, /*allowOwnerOffCurve*/ true);
+    const senderAta = getAssociatedTokenAddressSync(mintPk, senderPk);
+    const program = new anchor.Program(escrowIdl as unknown as Idl, { connection } as Provider);
+    const methods = program.methods as unknown as {
+      close: (...args: unknown[]) => {
+        accounts: (a: Record<string, InstanceType<typeof PublicKey> | null>) => {
+          instruction: () => Promise<TransactionInstruction>;
+        };
+      };
+    };
+    const ix = await methods
+      .close(Array.from(remittanceIdBytes))
+      .accounts({
+        sender: senderPk,
+        mint: mintPk,
+        escrowState: escrowStatePda,
+        vault,
+        senderAta,
+        // 🔴 CD-1 + CD-11 — la clave va SIEMPRE, y "sin índice" se escribe `null` EXPLÍCITO.
+        // Se escribe con un ternario sobre `idx.status` y NO con `idx.pda ?? null` porque `pda` sólo
+        // existe en la rama "present" de la unión discriminada: un `??` sobre un campo opcional es
+        // exactamente el camino por el que `undefined` llega a esta clave. Y está MEDIDO
+        // (solana-wallet.close.test.ts, describe de caracterización) que `escrowIndex: undefined`
+        // manda la PDA IGUAL, idéntico a omitir la clave — con TypeScript sin quejarse.
+        // token_program lo resuelve anchor (address fija en el IDL).
+        escrowIndex: idx.status === "present" ? idx.pda : null,
+      })
+      .instruction();
+
+    // ── feePayer=SENDER + blockhash + sign SENDER + broadcast SENDER (espeja refundEscrow) ──
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+    const tx = new Transaction().add(ix);
+    tx.feePayer = senderPk; // el sender paga el fee y firma: es SU alquiler el que vuelve
+    tx.recentBlockhash = blockhash;
+    const signed = (await solanaWalletBridge.signTransaction(tx)) as Web3Transaction;
+    const signature = await connection.sendRawTransaction(signed.serialize());
+
+    const confirmation = await this.confirmClose(connection, escrowStatePda, signature, {
+      blockhash,
+      lastValidBlockHeight,
+    });
+    return { closeTx: signature, confirmation };
+  }
+
+  /**
+   * ¿Existe la PDA `["escrow-index", sender]` y es realmente el índice de ESTE sender? Tres respuestas
+   * SEPARADAS (AC-3), porque colapsarlas a `PublicKey | null` es el bug: "no pudimos preguntar"
+   * pasaría a leerse como "no existe", y eso arma una tx con `escrowIndex: null` que puede dejar una
+   * entrada colgada en el índice — el cap monótono que esa cuenta existe para evitar
+   * (`solana/escrow-idl.ts:290-296`).
+   *
+   * El retorno es una unión DISCRIMINADA y no `{ pda?: PublicKey }` a propósito (CD-11): con un campo
+   * opcional, el call-site puede escribir `idx.pda ?? null` y meter `undefined` en la clave, que está
+   * medido que manda la PDA igual.
+   *
+   * Los TRES inputs que producen "unknown" — RPC caído, techo vencido, bytes indecodificables —
+   * colapsan aguas arriba en UN solo código (`escrow_index_probe_failed`). Se dice acá para que nadie
+   * lea ese código como un diagnóstico fino: la persona no puede hacer nada distinto con cada uno.
+   */
+  private async probeEscrowIndex(
+    connection: Web3Connection,
+    senderPk: InstanceType<typeof PublicKey>,
+    programId: InstanceType<typeof PublicKey>,
+    coder: { decode(name: string, data: Buffer): unknown },
+  ): Promise<
+    | { status: "present"; pda: InstanceType<typeof PublicKey> }
+    | { status: "absent" }
+    | { status: "unknown" }
+  > {
+    const [pda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("escrow-index"), senderPk.toBuffer()],
+      programId,
+    );
+    let info: Awaited<ReturnType<Web3Connection["getAccountInfo"]>>;
+    try {
+      // withTimeout y no un `await` pelado: un getAccountInfo colgado dejaría a la persona mirando un
+      // botón en "Cerrando…" para siempre.
+      info = await withTimeout(connection.getAccountInfo(pda), ESCROW_INDEX_PROBE_TIMEOUT_MS);
+    } catch {
+      return { status: "unknown" }; // RPC caído o techo vencido: NO es "no existe"
+    }
+    if (info === null) return { status: "absent" }; // la cadena CONTESTÓ: no existe
+    try {
+      coder.decode("EscrowIndex", info.data);
+    } catch {
+      // El decode no es decorativo: distingue "el índice de este sender" de "una cuenta que cayó en esa
+      // dirección y no es lo que creemos". Meter una cuenta ESCRIBIBLE que no podemos identificar en
+      // una tx del money-path es peor que no mandarla.
+      return { status: "unknown" };
+    }
+    return { status: "present", pda };
+  }
+
+  /**
+   * ¿Entró el `close`? Devuelve el tri-estado y TIRA `close_tx_failed` sólo cuando medimos que la tx
+   * entró y revirtió Y la cuenta sigue ahí.
+   *
+   * ⚠️ DOS DIVERGENCIAS DELIBERADAS respecto de `confirmRefund`, `:648`. Están escritas acá para
+   * que nadie las "armonice" de vuelta en un code review:
+   *
+   * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`confirmRefund`, `:648`), SIN leer nada.
+   *    Éste NO puede: AC-5 exige que el alquiler volvió se afirme *sólo después de leer que la cuenta
+   *    ya no existe*. Un `confirmTransaction` sin `err` prueba que la tx ENTRÓ; leer la ausencia es lo
+   *    que prueba que hizo lo que queríamos. El input que pone en rojo cualquier atajo acá: un doble
+   *    con `confirmTransaction` OK y `getAccountInfo` que sigue devolviendo la cuenta tiene que dar
+   *    "pending" (test "AC-5: confirmación limpia + la cuenta SIGUE AHÍ ⇒ 'pending'").
+   * 2. La lectura de ausencia lleva commitment "confirmed" EXPLÍCITO; la del refund no lleva ninguno.
+   *    Ver `probeEscrowClosed`.
+   */
+  private async confirmClose(
+    connection: Web3Connection,
+    escrowStatePda: InstanceType<typeof PublicKey>,
+    signature: string,
+    ctx: { blockhash: string; lastValidBlockHeight: number },
+  ): Promise<EscrowRefundConfirmation> {
+    let reverted = false;
+    try {
+      const res = await withTimeout(
+        connection.confirmTransaction(
+          { signature, blockhash: ctx.blockhash, lastValidBlockHeight: ctx.lastValidBlockHeight },
+          "confirmed",
+        ),
+        this.confirmTimeoutMs,
+      );
+      if (res?.value?.err) throw new CloseTxReverted("close_tx_failed");
+      // ⚠️ Acá NO se devuelve "confirmed". Sigue de largo a la sonda (divergencia 1).
+    } catch (err) {
+      reverted = err instanceof CloseTxReverted;
+    }
+
+    const probed = await this.probeEscrowClosed(connection, escrowStatePda);
+    if (probed === "confirmed") return "confirmed"; // la cuenta ya no está: se cerró
+    // Revirtió Y la cuenta sigue ahí ⇒ un "no" medido. Si la cuenta NO estuviera, un intento anterior
+    // de esta misma persona ya la cerró y reportar fallo sería la mentira vieja al revés.
+    if (reverted) throw new Error("close_tx_failed");
+    return probed; // "pending" | "unknown" — la persona sigue pudiendo reintentar
+  }
+
+  /**
+   * Lee la AUSENCIA de `escrow_state` y responde SÓLO lo que ve.
+   *
+   * Lo que la ausencia prueba: que las dos cuentas se cerraron. `close = sender` aparece UNA SOLA VEZ
+   * en todo el programa (`solana-programs/programs/escrow/src/lib.rs:679`, leído en F2) y no hay otra
+   * instrucción que borre esa cuenta. Lo que la ausencia NO prueba: a dónde fue la plata — la misma
+   * trampa que `probeEscrowRefunded` ya tiene escrita, `:692`. Por eso el copy del éxito NO
+   * menciona los USDC (CD-15).
+   *
+   * ⚠️ El commitment "confirmed" es EXPLÍCITO y no es decorativo. Medido en la librería instalada: el
+   * constructor de `Connection` deja `this._commitment = void 0` salvo que le pasen algo
+   * (`node_modules/@solana/web3.js/lib/index.cjs.js:5985-6090`) y `_buildArgs` sólo adjunta
+   * `commitment` si `override || this._commitment` es truthy (mismo archivo, `:8769-8781`; la cita
+   * relativa es del CJS de la librería, NO de este archivo). O sea: sin este argumento
+   * la lectura NO manda commitment y la decisión queda del lado del RPC, cuyo default documentado es
+   * `finalized` — que corre por detrás del `confirmed` con el que confirmamos la tx dos líneas arriba.
+   * Sin este argumento, un `close` genuinamente exitoso reportaría "pending" casi siempre, y "pending"
+   * no es gratis: le dice a la persona "no sabemos" sobre algo que a ese nivel sí sabemos.
+   *
+   * Lo que este argumento CUESTA, dicho: `confirmed` no es `finalized`, así que un rollback de ese slot
+   * devolvería las cuentas. Es asimétrico a favor — un rollback RESTITUYE el alquiler y la persona
+   * puede volver a cerrar; lo que se pierde es exactitud del mensaje durante esa ventana.
+   *
+   * 🔴 **No se pudo verificar** contra un RPC real que un `getAccountInfo(pda,"confirmed")`
+   * inmediatamente posterior a un `confirmTransaction(...,"confirmed")` vea el efecto. Ningún doble de
+   * test puede matar el mutante que borra este argumento: el mock ignora el segundo parámetro y
+   * devuelve lo mismo con o sin él. Su detección es del code review, y el único input que lo probaría
+   * es un `close` real contra devnet.
+   */
+  private async probeEscrowClosed(
+    connection: Web3Connection,
+    escrowStatePda: InstanceType<typeof PublicKey>,
+  ): Promise<EscrowRefundConfirmation> {
+    try {
+      const info = await connection.getAccountInfo(escrowStatePda, "confirmed");
+      return info === null ? "confirmed" : "pending";
+    } catch {
+      return "unknown"; // no pudimos preguntar: no sabemos, y se dice
+    }
+  }
+
+  /**
+   * WKH-327/AC-8 — ¿qué envíos de esta billetera están terminados y todavía tienen sus dos cuentas
+   * abiertas? Cruza los ids que el servidor tiene guardados (`POST /api/solana/escrow/remittance-ids`,
+   * PoP obligatorio) con una sonda ON-CHAIN, así que incluye envíos que NO están en el `localStorage`
+   * de este navegador — que es exactamente la gente que hoy no tiene ningún camino hacia su alquiler.
+   *
+   * Espeja `resolveRemittanceIdFromLedger`, `:277`, en su disciplina: fail-loud sin resolver, tope
+   * de candidatos, UNA sola llamada RPC batch, y un `decode` en try/catch para que una cuenta deforme
+   * no rompa la recuperación entera. Tres diferencias, cada una con su razón:
+   *
+   *  1. Devuelve LA LISTA COMPLETA, no el primero. Para `close` no hay "el" escrow: todos los
+   *     terminales son igual de cerrables y la elección es de la persona.
+   *  2. El filtro es `Released | Refunded`, no `Deposited`. Es el mismo predicado que el programa
+   *     aplica: ofrecer un `Deposited` haría firmar una tx que la cadena revierte.
+   *  3. 🚫 SI EL RPC LANZA, PROPAGA. NUNCA devuelve `[]`. "No pudimos preguntar" no es "no tenés
+   *     nada", y colapsarlos afirma sobre las cuentas de alguien a partir de nuestra propia falla. Una
+   *     lista vacía significa UNA sola cosa: la cadena contestó y no hay nada cerrable.
+   *
+   * 🔴 Y LA MISMA REGLA CONTRA EL SERVIDOR PROPIO, que es lo que faltaba (2º fix-pack AR/BLQ-MED-2).
+   * La razón 3 se cumplía contra el RPC y se rompía una capa antes: el resolver colapsaba en `[]` sus
+   * tres degradaciones (PoP apagado, registro apagado, PoP rechazado), y esa lista vacía llegaba acá
+   * indistinguible de la legítima. Por eso ahora se consume `lookupBySender`, que las separa, y un
+   * `not_asked` SALE POR EL MISMO `throw` que un RPC caído. Sin resolver, o con un resolver que no
+   * sepa contestar los tres desenlaces, esto NO adivina: tira `escrow_id_unavailable`.
+   */
+  async listCloseable(input: { sender: string }): Promise<readonly CloseableEscrow[]> {
+    const resolver = this.remittanceIdResolver;
+    // Fail-loud, nunca silencioso. Y sin fallback a `listBySender`, a propósito: ese método colapsa
+    // los tres `not_asked` en `[]` y usarlo acá reintroduciría el bloqueante entero.
+    if (!resolver?.lookupBySender) throw new Error("escrow_id_unavailable");
+    const lookup = await resolver.lookupBySender(input.sender);
+    // El `reason` viaja en el código para el diagnóstico; el copy NO lo interpola (CD-5) y colapsa los
+    // tres en una sola frase, porque la persona no puede hacer nada distinto con cada uno.
+    if (lookup.outcome === "not_asked") {
+      throw new Error(`escrow_recovery_unavailable:${lookup.reason}`);
+    }
+    // El tope es del SERVIDOR (`remittance-ids/route.ts:32`, MAX_IDS = 20): pedir más no puede
+    // devolver más. Un remitente con más filas no ve las más viejas — declarado, no mitigado (L-8).
+    const candidates = lookup.remittanceIds.slice(0, MAX_CLOSEABLE_CANDIDATES);
+    // `answered` es lo único que llega hasta acá, así que esto sí es una respuesta del servidor sobre
+    // esta billetera — y es la única premisa de la que cuelga la frase "no encontramos" de la pantalla.
+    if (candidates.length === 0) return [];
+
+    const web3 = await import("@solana/web3.js");
+    const { PublicKey: PublicKeyLazy, Connection } = web3;
+    const anchor = await import("@coral-xyz/anchor");
+    const { escrowIdl } = await import("./solana/escrow-idl");
+
+    const senderPk = new PublicKeyLazy(input.sender); // valida base58 (CD-SDD-7)
+    const programId = new PublicKeyLazy((escrowIdl as { address: string }).address);
+    const pdas = candidates.map((id) => this.deriveEscrowState(senderPk, programId, id).pda);
+
+    const connection = new Connection(
+      resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), // client-safe
+    );
+    // UNA sola llamada RPC para los N candidatos. Sin try/catch a propósito: ver la razón 3 del
+    // docblock. Si esto lanza, el error sube y el copy dice "no llegamos a preguntar".
+    const infos = await connection.getMultipleAccountsInfo(pdas);
+    const closeableCoder = new anchor.BorshAccountsCoder(escrowIdl as unknown as Idl);
+
+    const out: CloseableEscrow[] = [];
+    for (let i = 0; i < candidates.length; i++) {
+      const acc = infos[i];
+      if (!acc) continue; // la cuenta ya se cerró, o nunca existió: no hay alquiler que recuperar
+      let statusKey: string | undefined;
+      try {
+        const state = closeableCoder.decode("EscrowState", acc.data) as {
+          status: Record<string, unknown>;
+        };
+        statusKey = Object.keys(state.status)[0];
+      } catch {
+        continue; // cuenta deforme/ajena al layout: se descarta, NUNCA rompe la lista entera
+      }
+      // Sólo los terminales. `Deposited` queda afuera: el envío sigue en curso y `close` lo rechaza.
+      if (statusKey === "Released") out.push({ remittanceId: candidates[i]!, status: "released" });
+      else if (statusKey === "Refunded")
+        out.push({ remittanceId: candidates[i]!, status: "refunded" });
+    }
+    return out;
   }
 
   // HU-SOL-8 (AC-1/CD-6/CD-SDD-3): firma REAL del proof-of-possession. El caller (http-pop-signer) pasa

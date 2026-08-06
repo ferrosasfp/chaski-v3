@@ -104,6 +104,45 @@ describe("escrow IDL — hash canónico (WKH-227 / AC-2, AC-3)", () => {
     ]);
   });
 
+  // WKH-327 / H-4 — `close` NO estaba en el pin posicional de arriba, y hasta esta HU no lo construía
+  // nadie. A partir de ahora sí: `closeEscrow` (solana-wallet.ts) arma la ix y sus tests assertan sobre
+  // el ÍNDICE 6 (`escrow_index`), que es la cuenta opcional. Sin este candado, un re-pin futuro que
+  // reordenara las cuentas de `close` dejaría la app rota en silencio: el hash cambiaría, el re-pin lo
+  // actualizaría, y ahí terminaría la conversación.
+  //
+  // Esto NO es re-pinnear (CD-9): no toca ESCROW_IDL_SHA256 ni el IDL vendoreado. Sale verde desde el
+  // minuto cero. El input que lo pone en rojo: mover `escrow_index` de la posición 6, sacarle
+  // `optional: true`, o cambiar el discriminador de `close`.
+  it("WKH-327/H-4: close conserva su discriminador y sus 7 cuentas en orden, con la 7ª opcional", () => {
+    type IxView = {
+      name: string;
+      discriminator: number[];
+      accounts: ReadonlyArray<{ name: string; optional?: boolean; writable?: boolean }>;
+    };
+    const ix = escrowIdl.instructions as unknown as ReadonlyArray<IxView>;
+    const closeIx = ix.find((i) => i.name === "close");
+    if (!closeIx) throw new Error("el IDL no declara la instrucción `close`");
+
+    expect(closeIx.discriminator).toEqual([98, 165, 201, 177, 108, 65, 206, 96]);
+    expect(closeIx.accounts.map((a) => a.name)).toEqual([
+      "sender",
+      "mint",
+      "escrow_state",
+      "vault",
+      "sender_ata",
+      "token_program",
+      "escrow_index",
+    ]);
+
+    // La premisa de AC-1/AC-2: la cuenta del índice 6 es la OPCIONAL y es escribible. Si dejara de ser
+    // opcional, `escrowIndex: null` no sería un valor válido y todo el camino de AC-1 se cae.
+    const seventh = closeIx.accounts[6];
+    if (!seventh) throw new Error("close no tiene una 7ª cuenta");
+    expect(seventh.name).toBe("escrow_index");
+    expect(seventh.optional).toBe(true);
+    expect(seventh.writable).toBe(true);
+  });
+
   // ── AC-DOC — el documento publicado NO puede separarse de la constante ─────────────────────────
   // Por qué existe: el re-pin del 2026-08-01 (commit 8c8527b) movió ESCROW_IDL_SHA256 acá y dejó
   // CONTRACT-VERSIONS.md publicando el hash del 2026-07-28. Nadie lo vio: el CR de SDD 038 revisó esa

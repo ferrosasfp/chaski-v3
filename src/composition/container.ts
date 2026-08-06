@@ -11,12 +11,14 @@ import { ForgetKyc } from "../application/use-cases/forget-kyc";
 import { ListHistory } from "../application/use-cases/list-history";
 import { LockQuote } from "../application/use-cases/lock-quote";
 import { PreviewQuote } from "../application/use-cases/preview-quote";
+import { CloseEscrowAccounts } from "../application/use-cases/close-escrow-accounts";
 import { RecoverEscrowFunds } from "../application/use-cases/recover-escrow-funds";
 import { ResumeKyc } from "../application/use-cases/resume-kyc";
 import { StartKyc } from "../application/use-cases/start-kyc";
 import { TrackRemittance } from "../application/use-cases/track-remittance";
 import type {
   PopSigner,
+  SolanaCloseableEscrowLister,
   SolanaEscrowRefundGateway as SolanaEscrowRefundPort,
 } from "../application/ports";
 import { A2aPayoutGateway, A2aQuoteGateway } from "../infrastructure/a2a/gateways";
@@ -35,6 +37,7 @@ import { LocalKycPendingStore } from "../infrastructure/kyc-pending-store";
 import { HttpPayoutAuthorityGateway } from "../infrastructure/payout/payout-authority-gateway";
 import { LedgerRefundGateway } from "../infrastructure/refund/ledger-refund-gateway";
 import { HttpSolanaRemittanceIdResolver } from "../infrastructure/refund/http-solana-remittance-id-resolver";
+import { SolanaEscrowCloseGateway } from "../infrastructure/escrow/solana-escrow-close-gateway";
 import { SolanaEscrowRefundGateway } from "../infrastructure/refund/solana-escrow-refund-gateway";
 import { HttpSolanaPayoutPrepareGateway } from "../infrastructure/settlement/http-solana-prepare-gateway";
 import { HttpSolanaSettlementGateway } from "../infrastructure/settlement/http-solana-settlement-gateway";
@@ -64,6 +67,15 @@ export interface Container {
   // reportar como fallada una recuperación exitosa. Opcional por la misma razón que solanaRefund:
   // el test-container lo deja pasar undefined y la UI ya maneja su ausencia.
   recoverEscrowFunds?: RecoverEscrowFunds;
+  // WKH-327: cerrar las dos cuentas del escrow para que vuelva el alquiler que el remitente pagó al
+  // depositar. SIEMPRE presente en el container real, sin ninguna flag que lo apague — por la misma
+  // razón que `solanaRefund`, `:150`: es una válvula de recuperación de plata de la persona, y una
+  // configuración que la pueda apagar es una configuración que algún día la va a apagar. Opcional en el
+  // TIPO sólo para que el test-container pueda pasar undefined, igual que sus dos vecinos de arriba.
+  closeEscrowAccounts?: CloseEscrowAccounts;
+  // El descubrimiento de cerrables (AC-8): la UI necesita LISTAR antes de poder cerrar, porque los
+  // envíos que no están en el localStorage de este navegador no tienen ningún otro camino.
+  solanaCloseableEscrows?: SolanaCloseableEscrowLister;
 }
 
 // HU-SOL-20/AC-2 — arma el SolanaWalletAdapter CON su resolver de remittanceId en un solo paso (sin setter,
@@ -136,6 +148,11 @@ export function createContainer(): Container {
   // Refund trustless (AC-6/CD-10): válvula de recuperación (lee on-chain y aborta si no es
   // refundeable). SIEMPRE presente: no hay configuración que la pueda apagar.
   const solanaRefund = new SolanaEscrowRefundGateway(wallet);
+  // WKH-327 — cierre de las cuentas del escrow. SIEMPRE presente y sin flag, por la misma razón que
+  // `solanaRefund` de acá arriba: el alquiler inmovilizado es plata de la persona, no de la plataforma.
+  // `solanaCloseableEscrows` es el MISMO adapter otra vez (como `probe` y `senderBalance`): la pregunta
+  // "¿qué escrows míos siguen abiertos?" se la contesta la cadena, no un agente.
+  const solanaClose = new SolanaEscrowCloseGateway(wallet);
 
   return {
     previewQuote: new PreviewQuote(quotes),
@@ -158,6 +175,20 @@ export function createContainer(): Container {
     forgetKyc: new ForgetKyc(kycStore, kycPending, repo),
     solanaRefund, // HU-SOL-13: refund trustless del escrow
     recoverEscrowFunds: new RecoverEscrowFunds(repo, clock, solanaRefund),
+    // WKH-327. El 2º argumento es el MISMO adapter: el guard de AC-7 le pregunta a la billetera VIVA
+    // quién está conectado en el instante del click, en vez de recibirlo del llamador (que le pasaba
+    // la misma variable que estaba validando — AR/BLQ-BAJO-1).
+    //
+    // 🔴 ESTA LÍNEA ES DONDE VIVE EL RIESGO AHORA, y por eso tiene test propio (AR/MNR-5).
+    // `ConnectedWalletProbe` es una interfaz de UN método: `{ getConnectedAddress: () =>
+    // wallet.getAddress() }` la satisface, compila, y devuelve el CACHE de `connect()` — o sea que
+    // reintroduce el bloqueante entero desde acá. Se midió: con esa forma escrita, la suite daba
+    // 1297/1297 y `tsc` exit 0, porque el test de AC-7 construye el use-case a mano y no toca el
+    // cableado. La red que faltaba está en `container.test.ts` (el describe de AC-7), que ejercita el
+    // `closeEscrowAccounts` QUE ESTA LÍNEA DEVUELVE contra el bridge real: con `getAddress()` puesto,
+    // se pone rojo.
+    closeEscrowAccounts: new CloseEscrowAccounts(solanaClose, wallet),
+    solanaCloseableEscrows: wallet, // WKH-327/AC-8: el descubrimiento se lo pregunta a la cadena
   };
 }
 

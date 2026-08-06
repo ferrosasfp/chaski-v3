@@ -283,13 +283,60 @@ export interface SolanaEscrowRefundGateway {
    *
    * El adapter ya lo soportaba (HU-SOL-20/AC-2): sin id lo resuelve contra el store server-side
    * (`POST /api/solana/escrow/remittance-ids`, PoP obligatorio) y sondea hasta
-   * MAX_RECOVERY_CANDIDATES PDAs on-chain (`solana-wallet.ts`:207-242). Este puerto lo declaraba
+   * MAX_RECOVERY_CANDIDATES PDAs on-chain (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:277`). Este puerto lo declaraba
    * REQUERIDO, así que ningún consumidor tipado podía usar ese camino: la única forma de llegar al
    * refund desde la interfaz era `RecoverEscrowFunds`, que arranca con `repo.get(remittanceId)` y
    * tira `remittance_not_found` (`recover-escrow-funds.ts`:49-50). O sea que quien borró los datos
    * del navegador, o entra desde otro dispositivo, no tenía ningún camino.
    */
   refund(input: { remittanceId?: string; sender: string }): Promise<SolanaEscrowRefundResult>;
+}
+
+// WKH-327 — CERRAR las cuentas del escrow y recuperar el alquiler que el remitente pagó al depositar.
+//
+// Reusa `EscrowRefundConfirmation` con la palabra "refund" adentro del nombre, y es deliberado: ese
+// tipo describe un CONTRATO (tres valores, "no pudimos preguntar" separado de "todavía no"), no un
+// caso de uso. El nombre habla de su primer uso. Renombrarlo a algo neutro tocaría los imports de
+// `recover-escrow-funds.ts`, `solana-wallet.ts`, `refund/solana-escrow-refund-gateway.ts` y
+// `flow.tsx`, o sea que metería esta HU en el diff del camino de refund — que es exactamente lo que
+// AC-9 exige dejar sin un solo cambio de comportamiento. Un alias crearía dos nombres para el mismo
+// contrato, que es como se empieza a divergir.
+export interface SolanaEscrowCloseResult {
+  closeTx: string; // base58 — la tx que el RPC aceptó (existe incluso sin confirmar)
+  // CD-7: TRES valores, nunca un boolean. "confirmed" acá significa una cosa muy acotada: leímos que
+  // `escrow_state` YA NO EXISTE en cadena, o sea que las dos cuentas se cerraron. NO dice a dónde fue
+  // la plata (la ausencia no prueba eso) y por eso el copy del éxito no menciona los USDC.
+  confirmation: EscrowRefundConfirmation;
+}
+export interface SolanaEscrowCloseGateway {
+  /**
+   * `remittanceId` es REQUERIDO, al revés que en `refund`, y no es una asimetría por descuido.
+   *
+   * El refund sin id elige UNO entre N candidatos porque "recuperar mis USDC" tiene un objetivo
+   * natural: el escrow que todavía tiene plata adentro. Para `close` no existe ese "el" — todos los
+   * escrows terminales son igual de cerrables — así que elegir uno en silencio le cerraría a la
+   * persona una cuenta que no eligió. El descubrimiento (`SolanaCloseableEscrowLister`) devuelve la
+   * LISTA y la elección es de ella.
+   */
+  close(input: { remittanceId: string; sender: string }): Promise<SolanaEscrowCloseResult>;
+}
+
+// Un escrow que la CADENA dice que está terminal, o sea con sus dos cuentas todavía abiertas y su
+// alquiler todavía inmovilizado. AC-8: la lista se arma cruzando los ids que el servidor tiene
+// guardados con una sonda on-chain, así que incluye envíos que NO están en el `localStorage` de este
+// navegador — que es justamente la gente que hoy no tiene ningún camino.
+export interface CloseableEscrow {
+  remittanceId: string;
+  status: "released" | "refunded";
+}
+export interface SolanaCloseableEscrowLister {
+  /**
+   * 🚫 NUNCA devuelve `[]` para decir "no pudimos preguntar": si el RPC o el resolver fallan, TIRA.
+   * Una lista vacía significa una sola cosa — la cadena contestó y no hay nada cerrable. Colapsar las
+   * dos es el error que `lostEscrowRecoveryError` ya tuvo que documentar en el copy: "no llegamos a
+   * preguntar" no es "no tenés nada".
+   */
+  listCloseable(input: { sender: string }): Promise<readonly CloseableEscrow[]>;
 }
 
 // El MISMO criterio de tres valores que EscrowRefundConfirmation, aplicado a la otra punta del
@@ -331,11 +378,45 @@ export interface SolanaSenderSolBalanceProbe {
   probeSenderSolBalance(input: { sender: string }): Promise<SolanaSenderSolBalance>;
 }
 
+/**
+ * Preguntarle al registro durable por los envíos de una billetera tiene TRES desenlaces, no dos
+ * (WKH-327, 2º fix-pack — AR/BLQ-MED-2). `string[]` sólo puede expresar dos: "esta lista" y "ninguno".
+ * El tercero —"no llegamos a preguntar"— entraba disfrazado del segundo.
+ *
+ * · `answered`   — el servidor contestó. `remittanceIds` puede estar vacío, y ESO SÍ es una respuesta
+ *                  sobre la billetera: es el único caso en que se puede afirmar algo sobre ella.
+ * · `not_asked`  — no hubo consulta que contestara. `reason` dice cuál de las tres:
+ *      - `pop_disabled`      el mecanismo de prueba de posesión está apagado server-side (501 en el
+ *                            challenge) ⇒ nunca se llegó ni a pedir los ids;
+ *      - `registry_disabled` el registro durable está apagado o sin envs (501 en el endpoint de ids);
+ *      - `pop_rejected`      la prueba de posesión no verificó (403): challenge vencido, skew, nonce.
+ *
+ * Las tres las dispara una BANDERA DE CONFIGURACIÓN y no una caída de red, así que son más probables
+ * que un fallo, no menos: con el registro apagado le pasan a todo el mundo en todas las búsquedas.
+ */
+export type RemittanceIdLookupBlocked = "pop_disabled" | "registry_disabled" | "pop_rejected";
+export type RemittanceIdLookup =
+  | { readonly outcome: "answered"; readonly remittanceIds: readonly string[] }
+  | { readonly outcome: "not_asked"; readonly reason: RemittanceIdLookupBlocked };
+
 // HU-SOL-20/AC-2: resuelve los remittanceId del sender desde el store durable server-side cuando el
-// cliente los perdió (localStorage vacío / otro dispositivo). Devuelve [] si el mecanismo está
-// apagado o no verificado — NUNCA lanza por "no hay nada".
+// cliente los perdió (localStorage vacío / otro dispositivo).
 export interface SolanaRemittanceIdResolver {
+  /**
+   * ⚠️ COLAPSA los tres `not_asked` de arriba en `[]`. Lo usa el fallback del REFUND (HU-SOL-20/AC-2,
+   * `solana-wallet.ts:resolveRemittanceIdFromLedger`), que sobre `[]` tira `escrow_not_found`. Que ese
+   * camino no distinga los tres desenlaces es PREEXISTENTE a WKH-327 y queda declarado, no arreglado:
+   * tocar el refund está fuera del alcance de esta HU. Para el descubrimiento de cerrables (AC-8) se
+   * usa `lookupBySender`, que sí los distingue.
+   */
   listBySender(sender: string): Promise<string[]>;
+  /**
+   * La misma consulta con sus TRES desenlaces separados. Opcional en el TIPO porque los dobles del
+   * refund implementan sólo `listBySender`; quien la necesita (`listCloseable`) NO la defaultea a
+   * nada: si falta, tira `escrow_id_unavailable` fail-loud. Un fallback a `listBySender` acá volvería
+   * a colapsar los tres desenlaces en silencio, que es exactamente el bug que este método cierra.
+   */
+  lookupBySender?(sender: string): Promise<RemittanceIdLookup>;
 }
 
 // ── Wallet (DApp: el sender CONECTA su wallet = login, y firma el depósito en el escrow) ──
@@ -358,6 +439,37 @@ export interface WalletPort {
   // WKH-206: firma un mensaje arbitrario con la key de la wallet conectada. Lo usa el PopSigner para
   // probar posesión de `address`. En demo devuelve una firma simbólica (AC-5).
   signMessage(message: string): Promise<string>;
+}
+
+// ── Quién está conectado AHORA (WKH-327, fix-pack AR/BLQ-BAJO-1) ─────────────
+/**
+ * La billetera VIVA, no una copia.
+ *
+ * 🔴 POR QUÉ ES UN PUERTO PROPIO Y NO `Pick<WalletPort, "getAddress">`. Son preguntas distintas:
+ * `getAddress()` contesta "quién es el sender de este flujo" y para eso devuelve primero lo que
+ * cacheó `connect()` (`solana-wallet.ts`, el `if (this.address)`), que es lo correcto para firmar el
+ * depósito de una remesa que ya empezó. Esto de acá contesta "quién está conectado en este
+ * instante", que es la única pregunta que sirve para decidir si la firma que estamos por pedir puede
+ * prosperar — y para eso un cache es exactamente la respuesta equivocada.
+ *
+ * 🔴 POR QUÉ EXISTE. El guard de AC-7 recibía la dirección contra la que comparar DESDE EL LLAMADOR,
+ * y el único llamador de producción le pasaba la misma variable que estaba validando
+ * (`connectedAddress: sender`): `x === x`, una rama falsa inalcanzable y 4 tests que probaban el
+ * doble. Que el dato entre por el puerto y no por el argumento saca esa forma del alcance del
+ * LLAMADOR.
+ *
+ * ⚠️ Y LA DEJA AL ALCANCE DEL CABLEADO, que es adónde se mudó el riesgo (AR/MNR-5). Esta interfaz
+ * tiene UN método, así que `{ getConnectedAddress: () => wallet.getAddress() }` la satisface y
+ * devuelve el CACHE de `connect()` — la respuesta equivocada, escrita en una línea del composition
+ * root, compilando. Medido: con esa línea puesta, la suite entera daba verde. La red que lo detecta
+ * es un test sobre el container (`container.test.ts`, el describe de AC-7), no sobre esta interfaz.
+ *
+ * `null` significa "no hay ninguna billetera conectada", NUNCA "no pudimos preguntar": leer esto no
+ * toca la red ni abre ningún diálogo, es leer un objeto en memoria que el árbol de React mantiene al
+ * día.
+ */
+export interface ConnectedWalletProbe {
+  getConnectedAddress(): Promise<string | null>;
 }
 
 // ── Proof-of-Possession (WKH-206) ────────────────────────────────────────────

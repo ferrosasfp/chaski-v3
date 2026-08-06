@@ -39,9 +39,10 @@ import {
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
 import { isPrepareRejection } from "../application/agent-rejections"; // hallazgo #75: rechazo del agente ≠ payout fallido
 import { resolveSolanaNetworkConfig } from "../infrastructure/chain"; // HU-SOL-13: cluster Solana activo (env-driven)
-import type { EscrowRefundConfirmation } from "../application/ports";
+import type { CloseableEscrow, EscrowRefundConfirmation } from "../application/ports";
 import {
   CUSTODY_WINDOW_SECS, // la MISMA constante que fija el deadline del depósito
+  MAX_CLOSEABLE_CANDIDATES, // la MISMA constante que sondea el descubrimiento de cerrables
   MAX_RECOVERY_CANDIDATES, // la MISMA constante que sondea el fallback de recuperación
 } from "../infrastructure/solana-wallet";
 import {
@@ -49,7 +50,12 @@ import {
   escrowFundsAtRisk,
   escrowFundsKnowledge,
   escrowKnowledgeCopy,
+  escrowCloseError,
+  escrowCloseSentCopy,
   escrowRefundError,
+  escrowRentDiscoveryEmpty,
+  escrowRentDiscoveryError,
+  escrowRentExplainer,
   type FlowError,
   humanError,
   isDemoMode,
@@ -698,6 +704,14 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                   ESTE navegador. Si se borró, o si la persona entra desde otro dispositivo, ahí no
                   hay nada y sus USDC pueden seguir en el vault. */}
               <LostEscrowRecovery refund={c.solanaRefund} resolveSender={resolveSender} />
+              {/* WKH-327/AC-8 — la otra pregunta a la misma cadena: qué envíos TERMINADOS siguen con
+                  sus cuentas abiertas. Va al lado y NO adentro de la puerta de arriba: aquélla promete
+                  encontrar escrows ABIERTOS, y un escrow terminal no está abierto. */}
+              <EscrowRentRecovery
+                lister={c.solanaCloseableEscrows}
+                close={c.closeEscrowAccounts}
+                resolveSender={resolveSender}
+              />
             </div>
           )}
 
@@ -904,6 +918,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
             <TrackView
               rem={rem}
               recover={c.recoverEscrowFunds}
+              closeEscrow={c.closeEscrowAccounts}
               sender={address}
               onRecovered={setRem}
             />
@@ -1024,7 +1039,7 @@ function IdentityBadge({ kyc }: { kyc: KycVerification }) {
  * readyState no es `Installed` ni `Loadable` (`WalletProviderBase.js`:166-172): no intenta conectar y
  * no emite ningún error. 150 ms después el selector se cierra solo y lo único que la persona lee es
  * "Se cerró el selector de wallet sin conectar", que le atribuye una acción que no hizo. El copy de
- * `no_wallet` (`flow-vm.ts`:251) NO aparece nunca por ese camino, porque nadie llega a tirar
+ * `no_wallet` (`flow-vm.ts:253`) NO aparece nunca por ese camino, porque nadie llega a tirar
  * `WalletNotReadyError`.
  *
  * QUÉ AFIRMA ESTE TEXTO Y QUÉ NO: sólo que en ESTE navegador no hay una wallet expuesta. No dice, y no
@@ -1099,6 +1114,7 @@ const TRACK_STEPS: { key: RemittanceState["status"][]; label: string; manual?: b
 export function TrackView({
   rem,
   recover,
+  closeEscrow,
   sender,
   onRecovered,
 }: {
@@ -1106,6 +1122,9 @@ export function TrackView({
   // El use-case, NO el gateway suelto: el gateway devuelve una signature y nada más, y de ahí salía
   // el bug de que un refund exitoso no dejaba rastro en el estado.
   recover?: Container["recoverEscrowFunds"];
+  // WKH-327: el use-case del cierre, por la misma razón — acá vive el guard de AC-7 (que la billetera
+  // conectada sea la que pagó el alquiler), y saltearlo pasando el gateway suelto lo dejaría afuera.
+  closeEscrow?: Container["closeEscrowAccounts"];
   sender: string | null;
   onRecovered: (snapshot: RemittanceState) => void;
 }) {
@@ -1132,7 +1151,7 @@ export function TrackView({
   // ⚠️ `confirmed` NO ESTABA ACÁ, y era el agujero: es el estado en el que la persona ya firmó la
   // autorización y nadie registró el desenlace (los hasta 15 s del timeout del settle más el
   // broadcast). El historial SÍ lo listaba y SÍ lo declaraba abrible, porque `escrowFundsKnowledge` lo
-  // clasifica como `unverified` (flow-vm.ts:201): la persona leía "No comprobamos si tus USDC siguen
+  // clasifica como `unverified` (`escrowFundsKnowledge`, `flow-vm.ts:190`): la persona leía "No comprobamos si tus USDC siguen
   // en el escrow", tocaba "Ver seguimiento", y aterrizaba en una pantalla sin ninguna acción. Sus USDC
   // pueden estar en el vault.
   const refundeable =
@@ -1141,6 +1160,27 @@ export function TrackView({
     rem.status === "payout_submitted" ||
     rem.status === "payout_failed";
   const showRefund = refundeable && rem.refundTx == null && !!recover && !!sender;
+
+  // WKH-327 — ¿se le ofrece cerrar las cuentas y recuperar el alquiler?
+  //
+  // ⚠️ ESTE GUARD ES DEFENSA EN PROFUNDIDAD, NO LA GARANTÍA. Escribirlo así importa: si alguien lo lee
+  // como "la garantía", lo va a relajar el día que moleste. El guard AUTORITATIVO es la lectura
+  // on-chain del paso 7 de `closeEscrow`, que aborta con `escrow_not_terminal` ANTES de firmar. Esta
+  // capa NO lee la cadena — la misma disciplina que el comentario de acá arriba deja escrita para el
+  // refund: esta pantalla no sabe el instante real, así que no lo adivina.
+  //
+  // AC-4 (client-side): sólo los DOS estados de la FSM que se corresponden con un escrow terminal en
+  // cadena — `settled` con `Released` (el operador liberó al beneficiario) y `refunded` con `Refunded`
+  // (la persona recuperó sus USDC). `payout_failed` NO va, y es el caso que hay que mirar dos veces: un
+  // envío que falló puede tener el principal TODAVÍA adentro del escrow, o sea `Deposited`, que es
+  // justo lo que `close` rechaza. Ofrecerlo ahí haría firmar una tx que la cadena revierte.
+  //
+  // AC-7 (client-side): no se ofrece sin `sender`, ni si la remesa tiene `ownerAddress` y NO coincide
+  // con la billetera conectada. 🚫 La comparación es base58 ESTRICTO, nunca `.toLowerCase()` (CD-13):
+  // base58 es case-sensitive y bajarlo a minúsculas fabrica colisiones entre addresses distintas.
+  const closeableStatus = rem.status === "refunded" || rem.status === "settled";
+  const senderOwnsIt = !!sender && (rem.ownerAddress == null || rem.ownerAddress === sender);
+  const showClose = closeableStatus && senderOwnsIt && !!closeEscrow && !!sender;
 
   // AC-1 (WKH-200): payout_failed/refunded NO están en `order` → idx=-1 renderizaría la vista
   // optimista ("en camino", steps grises). Branch temprano a una vista honesta de fallo/reembolso.
@@ -1244,6 +1284,11 @@ export function TrackView({
             <RefundWindowNote />
           </div>
         ) : null}
+        {/* WKH-327: acá la app ya sabe que hay un escrow de esta persona, así que cubre el caso
+            "acabo de recuperar mis fondos y ahora cierro las cuentas" sin ningún descubrimiento. */}
+        {showClose && closeEscrow && sender ? (
+          <CloseEscrowAction remittanceId={rem.id} sender={sender} close={closeEscrow} explainer="own" />
+        ) : null}
       </Card>
     );
   }
@@ -1331,6 +1376,10 @@ export function TrackView({
           <RefundWindowNote />
         </div>
       ) : null}
+      {/* WKH-327 — ver el comentario del otro punto de montaje. */}
+      {showClose && closeEscrow && sender ? (
+        <CloseEscrowAction remittanceId={rem.id} sender={sender} close={closeEscrow} explainer="own" />
+      ) : null}
     </Card>
   );
 }
@@ -1395,6 +1444,79 @@ export function RefundAction({
   );
 }
 
+// WKH-327 — "Cerrar y recuperar": cierra las dos cuentas que el depósito dejó abiertas para que vuelva
+// el alquiler que la persona pagó. El SENDER firma y paga el fee (es SU alquiler).
+//
+// DIFERENCIA CONTRA `RefundAction`, y es deliberada: esto NO llama a `onRecovered` ni escribe estado.
+// No hay estado que escribir (AC-10) — "estas cuentas ya están cerradas" se lee de la AUSENCIA de
+// `escrow_state` en cadena, no de la FSM, así que agregarle un campo a la remesa sería inventar una
+// segunda fuente de verdad que se puede desincronizar de la única que manda.
+//
+// El desenlace NO confirmado es efímero, igual que en `RefundAction` y por la misma razón: afirmaría
+// un final que nadie verificó. En `confirmed` muestra el copy de éxito y deja de ofrecer el botón.
+//
+// 🔴 `explainer` ES OBLIGATORIO Y NO UN BOOLEANO CON DEFAULT (fix-pack CR/MNR-1). Este componente
+// montaba el bloque explicativo SIEMPRE, y la puerta de descubrimiento lo monta una vez arriba y
+// después mapea un `CloseEscrowAction` por cerrable: el mismo párrafo de cuatro líneas aparecía N+1
+// veces (medido: 4 con 3 cerrables; con el tope de 20, 21 veces). Ningún test lo veía porque todos
+// usaban listas de 0 o 1 elemento y `toContain`, que es insensible a la multiplicidad.
+// Un default habría dejado el N+1 exactamente donde estaba para el próximo call-site en lista.
+export function CloseEscrowAction({
+  remittanceId,
+  sender,
+  close,
+  explainer: explainerMode,
+}: {
+  remittanceId: string;
+  sender: string;
+  close: NonNullable<Container["closeEscrowAccounts"]>;
+  /** "own": el componente se explica solo (va suelto en `TrackView`). "inherited": el bloque ya está
+   *  montado por quien lo contiene, y repetirlo por ítem es la duplicación de MNR-1. */
+  explainer: "own" | "inherited";
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [done, setDone] = useState<"confirmed" | "pending" | "unknown" | null>(null);
+  // La voz concreta: acá SÍ hay un envío elegido y terminado (ver `escrowRentExplainer`).
+  const explainer = escrowRentExplainer("remittance");
+
+  const onClose = useCallback(async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      // NO se le pasa `connectedAddress`: acá vivía `connectedAddress: sender`, la misma variable, y
+      // el guard de AC-7 quedaba comparándose consigo mismo (AR/BLQ-BAJO-1). La billetera conectada
+      // ahora se la pregunta el use-case al bridge en el momento del click.
+      const res = await close.execute({ remittanceId, sender });
+      setDone(res.confirmation);
+    } catch (e) {
+      // enum→copy fijo, sin PII (CD-5). El código crudo NUNCA se interpola en la pantalla.
+      setErr(escrowCloseError(e instanceof Error ? e.message : ""));
+    } finally {
+      setBusy(false);
+    }
+  }, [close, remittanceId, sender]);
+
+  return (
+    <div className="space-y-2" data-testid="close-escrow-action">
+      {explainerMode === "own" ? (
+        <>
+          <p className="text-sm font-semibold">{explainer.title}</p>
+          <p className="text-sm text-stone">{explainer.body}</p>
+          <p className="text-xs text-stone">{explainer.notRecovered}</p>
+        </>
+      ) : null}
+      {done !== "confirmed" ? (
+        <Button variant="outline" onClick={onClose} disabled={busy}>
+          {busy ? "Cerrando…" : done ? "Volver a intentar" : "Cerrar y recuperar"}
+        </Button>
+      ) : null}
+      {done ? <p className="text-sm text-stone">{escrowCloseSentCopy(done)}</p> : null}
+      {err ? <p className="text-xs text-cochineal-ink">{err}</p> : null}
+    </div>
+  );
+}
+
 /**
  * Lo que se dice de una orden de recuperación ENVIADA y todavía no confirmada.
  *
@@ -1429,7 +1551,8 @@ function RefundSentNotice({
  * 🔴 QUÉ ARREGLA. La recuperación durable ya estaba ENTERA y no tenía ni un consumidor. El endpoint
  * `POST /api/solana/escrow/remittance-ids` está vivo en producción (responde 403 sin PoP), el adapter
  * resuelve el id ausente contra ese store y sondea hasta `MAX_RECOVERY_CANDIDATES` PDAs
- * (`solana-wallet.ts`:207-242), y el gateway está cableado en el container (`container.ts`:138). Pero
+ * (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:277`), y el gateway está cableado en el
+ * container (`solanaRefund`, `container.ts:150`). Pero
  * la interfaz sólo llamaba a `recoverEscrowFunds`, que arranca con `repo.get(remittanceId)` y tira
  * `remittance_not_found` (`recover-escrow-funds.ts`:49-50). O sea: quien borró los datos del navegador
  * o entra desde otro dispositivo no tenía NINGÚN camino, con el código para dárselo ya escrito.
@@ -1525,6 +1648,130 @@ export function LostEscrowRecovery({
         </div>
       ) : null}
       {sent ? <RefundSentNotice confirmation={sent.confirmation} refundTx={sent.refundTx} /> : null}
+      {err ? <p className="text-xs text-cochineal-ink">{err}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * WKH-327/AC-8 — la puerta para recuperar el alquiler de envíos que este dispositivo no conoce.
+ *
+ * POR QUÉ VIVE ACÁ Y NO EN OTRO LADO — las tres razones, con lo que se rompería si se hiciera distinto:
+ *
+ *  1. NO en `HistoryView`. Esa pantalla declara, en su propio comentario, que NO consulta la cadena, y
+ *     toda su honestidad ("son los envíos guardados en este dispositivo") se apoya en eso. Meterle una
+ *     lectura on-chain cambia lo que la pantalla ES. Además el historial está scopeado por
+ *     `localStorage` y AC-8 exige justamente cubrir lo que NO está ahí.
+ *  2. NO adentro de `LostEscrowRecovery`. Esa puerta promete encontrar escrows ABIERTOS con tus USDC, y
+ *     su copy de "no encontré nada" lo dice medido: "ninguno de los últimos N envíos… está ABIERTO en
+ *     el contrato" (`flow-vm.ts`, `lostEscrowRecoveryError`). Un escrow terminal NO está abierto: meter
+ *     los cerrables ahí volvería FALSA una frase que hoy es verdadera. Son dos preguntas distintas a la
+ *     misma cadena.
+ *  3. SÍ en `send`, al lado: es donde aterriza toda recarga y adonde vuelve "Enviar otra", y ya está
+ *     `resolveSender`, que es lo que el PoP del endpoint exige. Cero mecanismo nuevo.
+ *
+ * QUÉ SE DICE ANTES DE ABRIR NINGÚN DIÁLOGO, igual que su vecina y por la misma razón: acá también hay
+ * DOS firmas por motivos distintos (la prueba de posesión, que es un texto, y después la transacción
+ * del cierre). Una app que abre el diálogo de firma sin haber dicho qué se firma y para qué entrena a
+ * la gente a firmar cualquier cosa.
+ */
+export function EscrowRentRecovery({
+  lister,
+  close,
+  resolveSender,
+}: {
+  /** El lister, que es el adapter: la pregunta "¿qué escrows míos siguen abiertos?" es de la cadena. */
+  lister?: Container["solanaCloseableEscrows"];
+  /** El use-case, NO el gateway suelto: acá vive el guard de AC-7. */
+  close?: Container["closeEscrowAccounts"];
+  /** Devuelve la address del sender, conectando la wallet si hace falta (el PoP la exige). */
+  resolveSender: () => Promise<string>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [sender, setSender] = useState<string | null>(null);
+  const [found, setFound] = useState<readonly CloseableEscrow[] | null>(null);
+  // 🔴 La voz GENÉRICA, y es el fix de CR/BLQ-BAJO-1: este bloque se monta al ABRIR la puerta, cuando
+  // todavía no se buscó nada. Con la voz de `CloseEscrowAction` la pantalla decía "Este envío ya
+  // terminó, así que se pueden cerrar" sin que existiera ningún envío, y si el descubrimiento fallaba
+  // lo decía JUNTO con "no llegamos a preguntar".
+  const explainer = escrowRentExplainer("discovery");
+
+  const onSearch = useCallback(async () => {
+    if (!lister) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const who = await resolveSender();
+      const list = await lister.listCloseable({ sender: who });
+      setSender(who);
+      setFound(list);
+      // Una lista vacía es una RESPUESTA de la cadena, y se dice con las palabras de una respuesta.
+      // El caso "no llegamos a preguntar" viaja por el catch y tiene su propia frase. Las DOS frases
+      // salen ahora de DOS funciones distintas y no de un parámetro: cuando eran una sola, cualquier
+      // código que el guard no reconociera caía en la que afirma haber mirado (AR/BLQ-MED-1).
+      // Y que este `[]` sea de verdad una respuesta lo sostiene `listCloseable`, que ahora tira ante
+      // las tres degradaciones del registro en vez de dejarlas llegar hasta acá disfrazadas de lista
+      // vacía (AR/BLQ-MED-2). Esta rama no puede verificar esa premisa: la hereda.
+      if (list.length === 0) {
+        setErr(escrowRentDiscoveryEmpty(MAX_CLOSEABLE_CANDIDATES));
+      }
+    } catch (e) {
+      // 🔴 Acá NO se puede decir "no tenés nada": no llegamos a mirar. Y tampoco entra el tope de
+      // candidatos, porque nombrar "los últimos 20 envíos" es contar lo que se miró, y no se miró
+      // ninguno.
+      setErr(escrowRentDiscoveryError(e instanceof Error ? e.message : ""));
+      setFound(null);
+    } finally {
+      setBusy(false);
+    }
+  }, [lister, resolveSender]);
+
+  // Sin lister no hay puerta que ofrecer. El container real siempre lo cablea; el de tests no.
+  if (!lister) return null;
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="w-full text-center text-sm font-semibold text-cochineal underline underline-offset-2"
+      >
+        Recuperar el depósito de red de envíos anteriores
+      </button>
+    );
+  }
+
+  return (
+    <div className="space-y-3 rounded-xl2 border border-line bg-sand/60 p-4">
+      <p className="text-sm font-bold">{explainer.title}</p>
+      <p className="text-sm text-stone">{explainer.body}</p>
+      <p className="text-xs text-stone">{explainer.notRecovered}</p>
+      <p className="text-sm text-stone">
+        Tu billetera te va a pedir una firma para probar que es tuya: es un texto, no mueve fondos y
+        no paga comisión de red. Después, por cada envío que cierres, te va a pedir la firma de esa
+        transacción, y su comisión de red la pagás vos.
+      </p>
+      <Button variant="outline" onClick={onSearch} disabled={busy}>
+        {busy ? "Buscando…" : "Buscar envíos con cuentas abiertas"}
+      </Button>
+      {found && found.length > 0 && close && sender ? (
+        <div className="space-y-3">
+          {found.map((e) => (
+            <div key={e.remittanceId} className="space-y-1 border-t border-line pt-2">
+              <p className="text-xs text-stone">Envío {e.remittanceId}</p>
+              {/* "inherited": el explicativo ya está montado arriba, UNA vez para toda la lista. */}
+              <CloseEscrowAction
+                remittanceId={e.remittanceId}
+                sender={sender}
+                close={close}
+                explainer="inherited"
+              />
+            </div>
+          ))}
+        </div>
+      ) : null}
       {err ? <p className="text-xs text-cochineal-ink">{err}</p> : null}
     </div>
   );
@@ -1812,8 +2059,8 @@ function AgentRunsToday({
 // El "2 horas" estaba escrito a mano al lado de una constante que lo decide. Hoy coincide; el día que
 // alguien mueva `CUSTODY_WINDOW_SECS` la frase pasa a ser falsa sin que nada se ponga rojo, que es
 // exactamente cómo nació el bug de la hora inventada que este archivo ya arregló una vez. Se deriva
-// del MISMO valor que el depósito escribe como deadline (`solana-wallet.ts`:277-281), así que no puede
-// desincronizarse. No agrega peso al bundle: `container.ts`:43 ya importa este módulo.
+// del MISMO valor que el depósito escribe como deadline (`CUSTODY_WINDOW_SECS`, `solana-wallet.ts:350`), así que no puede
+// desincronizarse. No agrega peso al bundle: (`SolanaWalletAdapter`, `container.ts:46`) ya importa este módulo.
 const CUSTODY_WINDOW_HOURS = CUSTODY_WINDOW_SECS / 3600;
 
 function RefundWindowNote() {

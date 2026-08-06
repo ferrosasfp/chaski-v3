@@ -7,8 +7,10 @@ import {
 } from "../application/use-cases/confirm-and-send";
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
 import {
+  ESCROW_DEPOSIT_RENT_LAMPORTS,
   SENDER_MIN_LAMPORTS_FOR_DEPOSIT,
   formatLamportsAsSol,
+  formatLamportsAsSolFloor,
 } from "../application/solana-escrow-rent";
 import { KYC_PROVENANCE_LIVE } from "../infrastructure/didit/decision";
 
@@ -272,7 +274,7 @@ export function escrowRefundError(code: string): string {
  *  · En la acción normal el id es conocido, así que "no encontramos un depósito tuyo en el escrow"
  *    habla de UNA remesa concreta y la frase de `escrowRefundError` es correcta.
  *  · Acá el id no existe: se le pide la lista al store durable server-side y se sondean hasta
- *    `maxCandidates` PDAs on-chain (`solana-wallet.ts`:207-242). `escrow_not_found` sale de DOS
+ *    `maxCandidates` PDAs on-chain (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:277`). `escrow_not_found` sale de DOS
  *    situaciones que no se distinguen desde afuera: el servidor no devolvió ningún id, o ninguno de
  *    los sondeados estaba `Deposited`. Ninguna de las dos prueba que la persona no tenga fondos.
  *
@@ -286,10 +288,168 @@ export function lostEscrowRecoveryError(code: string, maxCandidates: number): st
     return `No encontramos escrows abiertos para esta billetera. Esto no dice que no tengas fondos: dice que ninguno de los últimos ${maxCandidates} envíos que el servidor tiene guardados de esta billetera está abierto en el contrato.`;
   // "No pudimos preguntar" no es "no hay nada". `escrow_id_unavailable` = esta pantalla no tiene el
   // resolver cableado; `escrow_recovery_unavailable` = el endpoint contestó algo que no es 200/403/501
-  // (`http-solana-remittance-id-resolver.ts`:27). En los dos casos no llegamos a mirar la cadena.
+  // (`escrow_recovery_unavailable`, `http-solana-remittance-id-resolver.ts:40`). En los dos casos no llegamos a mirar la cadena.
   if (code.includes("escrow_id_unavailable") || code.includes("escrow_recovery_unavailable"))
     return "No pudimos consultar el registro de envíos. Esto no es una respuesta sobre tus fondos: no llegamos a preguntar. Probá de nuevo en un rato.";
   return escrowRefundError(code);
+}
+
+// ── WKH-327 · el copy del cierre de cuentas ─────────────────────────────────────────────────────────
+/**
+ * Qué recupera la persona al cerrar, en su idioma.
+ *
+ * 🔴 La cifra sale de `formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_LAMPORTS)`, NUNCA de un literal.
+ * Un "0,0040" escrito a mano es lo que permite que la constante y el copy diverjan sin que nada se
+ * ponga rojo. Y el FLOOR no es un detalle de estilo: `formatLamportsAsSol` (ceil) devuelve "0,0041"
+ * para este mismo valor, que es EXACTAMENTE la misma cadena que el umbral del depósito — o sea que con
+ * el ceil el copy sobreestima 2,4% lo que la persona cobra, y además un test no puede distinguir si se
+ * formateó la constante correcta.
+ *
+ * Lo que este texto NO dice, a propósito:
+ *  · No dice "recuperá tu alquiler" a secas: dice CUÁLES dos cuentas.
+ *  · No suma ni nombra el `EscrowIndex` en la cifra. Lo menciona aparte, como lo que NO vuelve.
+ *  · No promete un neto. Dice que hay comisión y que NO sabemos cuánto agrega la billetera: la propina
+ *    que inyecta es una incógnita declarada del propio repo (`solana-escrow-rent.ts:80-82`) y esta
+ *    acción además no declara ComputeBudget, así que tampoco hay un techo de CU que la acote.
+ *
+ * 🔴 POR QUÉ HAY DOS VOCES Y POR QUÉ EL PARÁMETRO NO TIENE DEFAULT (fix-pack CR/BLQ-BAJO-1). Este
+ * texto tenía UN solo `body`, escrito en la voz de un envío concreto y ya terminado ("las dos cuentas
+ * de ese envío", "Este envío ya terminó, así que se pueden cerrar"). Es correcto en `CloseEscrowAction`,
+ * que recibe un `remittanceId`. Pero la PUERTA de descubrimiento lo monta antes de que exista ninguna
+ * selección: ahí no hay envío del que hablar, y la frase afirmaba un hecho sobre una remesa que
+ * todavía no se había buscado. Peor: cuando el descubrimiento fallaba, la pantalla quedaba diciendo
+ * las dos cosas juntas, "Este envío ya terminó" y "no llegamos a preguntar".
+ *
+ * Por eso `voice` es OBLIGATORIO y no un booleano con default: un default elige por el call-site nuevo,
+ * y el call-site nuevo es exactamente donde se coló este bug. Quien monte este texto tiene que decir si
+ * ya tiene un envío o todavía no.
+ *
+ *  · "remittance" — hay UN envío elegido y ya terminado. Pasado, y afirma sobre él.
+ *  · "discovery"  — todavía no hay ninguno. Presente general: describe el mecanismo y la CONDICIÓN
+ *                   ("sólo se pueden cerrar las de un envío que ya terminó"), sin afirmar que la haya
+ *                   cumplido nadie.
+ *
+ * Lo que NO cambia entre las dos, y es deliberado: la cifra, las dos cuentas nombradas, la comisión
+ * declarada como desconocida y el `notRecovered`. Esos son hechos del mecanismo, no de un envío.
+ */
+export function escrowRentExplainer(voice: "discovery" | "remittance"): {
+  title: string;
+  body: string;
+  notRecovered: string;
+} {
+  const monto = formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_LAMPORTS);
+  return {
+    title: "Recuperá tu depósito de red",
+    body:
+      voice === "remittance"
+        ? `Cuando enviaste, Solana retuvo ${monto} SOL tuyos para mantener abiertas las dos cuentas de ese envío: la del contrato y la que guardó tus USDC. Ese depósito es tuyo y vuelve a tu billetera al cerrarlas. Este envío ya terminó, así que se pueden cerrar. Vas a firmar una transacción y la red te va a cobrar su comisión por hacerla; cuánto exactamente lo decide tu billetera y no lo sabemos de antemano.`
+        : `Cada envío deja abiertas dos cuentas en Solana, la del contrato y la que guardó tus USDC, y por mantenerlas la red retiene ${monto} SOL tuyos. Ese depósito es tuyo y vuelve a tu billetera cuando esas cuentas se cierran, y sólo se pueden cerrar las de un envío que ya terminó. Por cada uno que cierres vas a firmar una transacción y la red te va a cobrar su comisión por hacerla; cuánto exactamente lo decide tu billetera y no lo sabemos de antemano.`,
+    notRecovered:
+      "Hay una tercera cuenta, el índice de tu billetera, que no se cierra con esto y cuyo depósito no vuelve. Es una sola vez por billetera, no una por envío.",
+  };
+}
+
+/**
+ * El desenlace del cierre, con sus TRES valores separados.
+ *
+ * ⚠️ El texto de "confirmed" NO menciona los USDC, y es una regla, no una omisión: lo único que la
+ * ausencia de `escrow_state` prueba es que las dos cuentas se cerraron. A dónde fue la plata no lo
+ * dice — es la misma trampa que `probeEscrowRefunded` ya tiene escrita (`probeEscrowRefunded`, `solana-wallet.ts:692`).
+ */
+export function escrowCloseSentCopy(confirmation: "confirmed" | "pending" | "unknown"): string {
+  if (confirmation === "confirmed")
+    return "Listo: las dos cuentas de ese envío están cerradas y su depósito volvió a tu billetera.";
+  if (confirmation === "pending")
+    return "Mandamos la orden de cierre y la red todavía no nos confirma que entró. No es un fallo: puede entrar en el próximo bloque. Podés volver a intentar en un rato.";
+  return "Mandamos la orden de cierre y no pudimos preguntarle a la red si entró. No sabemos si las cuentas se cerraron; volvé a intentar más tarde.";
+}
+
+/**
+ * Copy de los errores del cierre.
+ *
+ * ⚠️ `escrow_account_absent` NO es un error y su texto no lo trata como tal. Son DOS situaciones
+ * indistinguibles desde el cliente — las cuentas ya se cerraron, o nunca llegaron a crearse — y en las
+ * dos no hay alquiler que recuperar acá y nada salió mal. El texto nombra las dos y no dice "error" ni
+ * "no pudimos": decir que algo falló cuando no falló nada le hace buscar un problema que no existe.
+ */
+export function escrowCloseError(code: string): string {
+  if (code.includes("escrow_not_terminal"))
+    return "Este envío todavía está en curso, así que sus cuentas no se pueden cerrar. Esto no dice dónde están tus USDC.";
+  if (code.includes("escrow_account_absent"))
+    return "No hay cuentas abiertas para este envío: o ya se cerraron, o nunca llegaron a crearse. No hay depósito de red que recuperar acá.";
+  // Los TRES inputs que producen este código (RPC caído, techo de tiempo vencido, bytes que no
+  // decodifican) están colapsados a propósito aguas abajo: la persona no puede hacer nada distinto con
+  // cada uno. Lo que sí importa decirle es que NO se firmó nada.
+  if (code.includes("escrow_index_probe_failed"))
+    return "No pudimos consultar la red para preparar el cierre, así que no firmamos nada. No se movió nada de tu billetera. Probá de nuevo en un rato.";
+  if (code.includes("close_not_sender"))
+    return "Este envío se firmó con otra billetera. El depósito de red vuelve a la que lo pagó, así que hay que conectar esa.";
+  if (code.includes("close_tx_failed"))
+    return "La red rechazó el cierre. Tu depósito sigue donde estaba y podés volver a intentar.";
+  if (code.includes("escrow_state_unreadable"))
+    return "No pudimos leer las cuentas de este envío, así que no firmamos nada. Probá de nuevo en un rato.";
+  if (code.includes("wallet_not_connected") || code.includes("no_account"))
+    return "Reconectá o desbloqueá tu wallet para continuar.";
+  return "No pudimos cerrar las cuentas de este envío. Intentá de nuevo.";
+}
+
+/**
+ * Copy del DESCUBRIMIENTO de envíos cerrables (AC-8), cuando la cadena SÍ contestó y no hay nada.
+ *
+ * Es la ÚNICA función de este par que puede afirmar algo sobre las cuentas de la persona, y por eso
+ * es la única que se llama desde el camino feliz de `listCloseable` (la lista vacía). Si te encontrás
+ * queriendo llamarla desde un `catch`, la respuesta es no: ahí no miramos nada.
+ *
+ * ⚠️ DE QUÉ PREMISA CUELGA ESTA FRASE, dicho porque ya se rompió una vez (AR/BLQ-MED-2). "La lista
+ * vacía = el servidor contestó y no hay nada" es cierto SÓLO porque `listCloseable` consume
+ * `lookupBySender`, que separa "contestó" de "no llegamos a preguntar", y tira ante lo segundo. Antes
+ * consumía `listBySender`, que colapsa las tres degradaciones del resolver (PoP apagado, registro
+ * apagado, PoP rechazado) en `[]`, y esta frase salía en pantalla —medida, textual— sin que nadie
+ * hubiera mirado ni un envío. Si alguien vuelve a alimentar esta función desde un `[]` que no probó
+ * ser una respuesta, el texto vuelve a mentir sin que se rompa nada.
+ *
+ * `maxCandidates` entra por parámetro y no como número escrito acá, por la misma razón que en
+ * `lostEscrowRecoveryError`: el llamador pasa la MISMA constante que sondea
+ * (`MAX_CLOSEABLE_CANDIDATES`), así que el copy no puede quedar diciendo un número que el código dejó
+ * de usar.
+ */
+export function escrowRentDiscoveryEmpty(maxCandidates: number): string {
+  return `No encontramos envíos terminados con cuentas abiertas para esta billetera. Miramos los últimos ${maxCandidates} envíos que el servidor tiene guardados de ella.`;
+}
+
+/**
+ * Copy del DESCUBRIMIENTO cuando NO llegamos a preguntar (AC-8).
+ *
+ * 🔴 POR QUÉ ESTA FUNCIÓN NO PUEDE DECIR "no encontramos", NUNCA, POR NINGÚN CÓDIGO. Acá se entra
+ * sólo desde un `catch`, y una excepción significa que la consulta no terminó: no hay ninguna
+ * observación sobre las cuentas de la persona que se pueda reportar. `listCloseable` propaga a
+ * propósito (`solana-wallet.ts`, razón 3 de su docblock: "🚫 SI EL RPC LANZA, PROPAGA. NUNCA devuelve
+ * []") y ese trabajo se tira a la basura si el copy vuelve a colapsar los dos desenlaces.
+ *
+ * ⚠️ ESTO ESTUVO AL REVÉS Y ASÍ SE ESCAPÓ (AR/BLQ-MED-1). La función reconocía DOS códigos y todo lo
+ * demás caía a un `return` final que decía "No encontramos envíos terminados… Miramos los últimos 20".
+ * Medido: con el RPC apuntado a un puerto muerto, el mensaje que el adapter propaga de verdad es
+ * `"fetch failed"` — que no contiene ninguno de los dos códigos. O sea que la pantalla afirmaba haber
+ * mirado 20 envíos justo cuando no había mirado ninguno. El default ahora es el desenlace honesto, y
+ * los códigos conocidos sólo AFINAN de qué consulta hablamos.
+ *
+ * El código de la wallet NO se interpola (CD-5): esto es enum→copy fijo, igual que `escrowCloseError`.
+ */
+export function escrowRentDiscoveryError(code: string): string {
+  // El rechazo de la firma de posesión. La persona cerró el popup: no es una falla nuestra ni de la
+  // red, y decirle "no pudimos consultar" la manda a esperar a que algo se arregle solo.
+  // ⚠️ El string lo escribe la wallet y no lo controlamos ("User rejected the request." en Phantom).
+  // Si algún día no matchea, cae al default de abajo, que TAMBIÉN dice "no llegamos a preguntar": la
+  // rama es una mejora del mensaje, nunca lo que sostiene la honestidad.
+  if (/user rejected|wallet_connect_cancelled|wallet_sign_not_available/i.test(code))
+    return "No se completó la firma que prueba que la billetera es tuya, así que no llegamos a preguntar. Esto no es una respuesta sobre tus cuentas: volvé a intentar y aceptá la firma.";
+  // Acá caen también los tres códigos `escrow_recovery_unavailable:<motivo>` que el descubrimiento
+  // emite cuando el registro no nos contestó (PoP apagado / registro apagado / PoP rechazado). Los
+  // tres se dicen IGUAL a propósito: la persona no puede hacer nada distinto con cada uno, y el motivo
+  // viaja en el código para el diagnóstico. El motivo NO se interpola en el texto (CD-5).
+  if (code.includes("escrow_id_unavailable") || code.includes("escrow_recovery_unavailable"))
+    return "No pudimos consultar el registro de envíos. Esto no es una respuesta sobre tus cuentas: no llegamos a preguntar.";
+  return "No pudimos consultar la red para buscar tus envíos. Esto no es una respuesta sobre tus cuentas: no llegamos a preguntar.";
 }
 
 /** Mensaje humano + el código interno que lo originó. Van JUNTOS en un solo estado a propósito: con
@@ -412,7 +572,7 @@ export function humanError(code: string): string {
   // propia persona, o la release-authority a mano. O sea que nadie devuelve nada solo.
   //
   // Es el texto que MÁS se lee de este archivo: TrackView lo usa como último recurso para cualquier
-  // `payout_failed` cuyo reason no reconozca (`flow.tsx`:1035), justo cuando no sabemos dónde está la
+  // `payout_failed` cuyo reason no reconozca (`humanError`, `flow.tsx:1262`), justo cuando no sabemos dónde está la
   // plata. Prometer un reembolso ahí manda a esperar sentado en vez de a la única acción que sirve.
   if (code.includes("payout"))
     return "No se pudo entregar. No hay un reembolso automático: si tus USDC entraron al escrow, los sacás vos firmando desde tu wallet.";

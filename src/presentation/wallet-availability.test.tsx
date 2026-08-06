@@ -9,7 +9,7 @@
 //     ni `Loadable` (`WalletProviderBase.js`:166-172): no intenta conectar y no emite ningún error
 //   · 150 ms después el selector se cierra solo y la espera termina en `wallet_connect_cancelled`
 // O sea que la persona leía "Se cerró el selector de wallet sin conectar", que le atribuye una acción
-// que no hizo, y el copy de `no_wallet` (`flow-vm.ts`:251) NUNCA aparecía por ese camino.
+// que no hizo, y el copy de `no_wallet` (`flow-vm.ts:253`) NUNCA aparecía por ese camino.
 //
 // Dos capas, a propósito:
 //   (B) CABLEADO — monta el árbol de providers REAL y NO llama a `setWalletAvailability` a mano. Es lo

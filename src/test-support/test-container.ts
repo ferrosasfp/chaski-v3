@@ -1,5 +1,5 @@
 // Test-support — arma un Container con los 11 dobles de fakes.ts para renderizar RemittanceFlow
-// bajo RTL sin infra real (WKH-185). Imita el orden de construcción de container.ts:57-69,
+// bajo RTL sin infra real (WKH-185). Imita el orden de construcción de (`Container`, `container.ts:49`),
 // compartiendo repo/clock/ids entre use-cases (createRemittance → startKyc → lockQuote operan
 // sobre el mismo estado). Overrides a nivel gateway y escape-hatch a nivel use-case (useCases).
 // CD-11: cero I/O real acá (la única excepción, FallbackQuoteGateway, la inyecta el test).
@@ -27,6 +27,7 @@ import type {
   QuoteGateway,
   RefundGateway,
   RemittanceRepository,
+  SolanaCloseableEscrowLister,
   SolanaEscrowRefundGateway,
   WalletPort,
 } from "../application/ports";
@@ -56,6 +57,17 @@ export interface TestContainerOverrides {
   // El settlement real se arma con `useCases.confirmAndSend` (ver confirm-and-send.money-path.test).
   // HU-SOL-13: sin override queda UNDEFINED → la acción de refund NO se muestra.
   solanaRefund?: SolanaEscrowRefundGateway;
+  // WKH-327: sin override queda UNDEFINED ⇒ la puerta de descubrimiento no se muestra. Es la misma
+  // disciplina que `solanaRefund`: un test que no lo inyecta no lo ve.
+  //
+  // 🔴 NO HAY `solanaClose` ACÁ, y su ausencia es la decisión (2º fix-pack, AR/MNR-5). La había, con
+  // `closeEscrowAccounts: new CloseEscrowAccounts(o.solanaClose, { getConnectedAddress: () =>
+  // wallet.getAddress() })`. Eso es el CACHE de `connect()` — exactamente lo que el docblock de
+  // `ConnectedWalletProbe` llama "la respuesta equivocada" — y encima era código muerto: ningún test
+  // seteaba el override, así que la línea nunca corría y nadie la podía ver mal. Un ejemplo
+  // equivocado esperando a que alguien lo copie. Los tests del cierre montan el use-case con el probe
+  // que corresponda (`escrow-rent-recovery.test.tsx` usa el adapter real contra el bridge).
+  solanaCloseableEscrows?: SolanaCloseableEscrowLister;
   clock?: Clock; // default: new FixedClock()
   // Repo COMPARTIDO por todos los use-cases (default: new InMemoryRepo()). Se inyecta para poder
   // SEMBRARLO antes de renderizar: es la única forma de testear el historial, que por definición
@@ -95,6 +107,7 @@ export function buildTestContainer(o: TestContainerOverrides = {}): Container {
     recoverEscrowFunds: o.solanaRefund
       ? new RecoverEscrowFunds(repo, clock, o.solanaRefund)
       : undefined,
+    solanaCloseableEscrows: o.solanaCloseableEscrows,
   };
   return { ...base, ...(o.useCases ?? {}) };
 }

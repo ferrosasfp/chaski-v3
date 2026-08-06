@@ -157,7 +157,7 @@ function remesaConFalloDesconocido(): RemittanceState {
 // (confirm-and-send.ts:190-196). O sea que Chaski SÍ puede mover esos USDC.
 //
 // Lo verificable, y lo que de verdad hace a esto no custodial, es DÓNDE quedan: en una cuenta del
-// contrato (ATA de la PDA `escrow_state`, solana-wallet.ts:288), nunca en una billetera de Chaski.
+// contrato (ATA de la PDA `escrowStatePda`, `solana-wallet.ts:354`), nunca en una billetera de Chaski.
 describe("conectar wallet", () => {
   it("no promete que Chaski nunca toca la plata; dice dónde queda", async () => {
     irAConectar();
@@ -555,7 +555,7 @@ describe("la identidad del paso confirm", () => {
 
   // 🔴 `confirm` no era el único paso afectado, y esto lo prueba. El sello de `track` se prendía SOLO
   // por la pata del payout: con el KYC simulado y un desembolso REAL (`transfi`), la remesa entera
-  // quedaba sin ningún aviso también en seguimiento, y lo mismo en el recibo (`Receipt`, flow.tsx:1676,
+  // quedaba sin ningún aviso también en seguimiento, y lo mismo en el recibo (`Receipt`, `flow.tsx:2220`,
   // que llama al mismo `isDemoMode`). Es la combinación hacia la que apunta el proyecto: payout real
   // primero, KYC real después.
   it("el KYC simulado también prende el sello en track, con un desembolso REAL", () => {

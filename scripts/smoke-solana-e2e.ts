@@ -413,7 +413,7 @@ async function main(): Promise<void> {
   // Resuelto/validado UPFRONT (módulo): acá sólo se parsea a PublicKey (sin fetch previo con side-effect).
   const facilitatorPk = new PublicKey(FACILITATOR_PUBKEY);
   const program = new anchor.Program(escrowIdl as unknown as Idl, { connection } as Provider);
-  // `escrowIdl as Idl` es el IDL genérico ⇒ acceso vía shape loose (patrón `program.methods`, `solana-wallet.ts:372`).
+  // `escrowIdl as Idl` es el IDL genérico ⇒ acceso vía shape loose (patrón `program.methods`, `solana-wallet.ts:391`).
   const methods = program.methods as unknown as {
     deposit: (...args: unknown[]) => {
       accounts: (a: Record<string, PublicKey>) => {

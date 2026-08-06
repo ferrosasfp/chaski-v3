@@ -284,11 +284,25 @@ export function escrowRefundError(code: string): string {
  * de usar.
  */
 export function lostEscrowRecoveryError(code: string, maxCandidates: number): string {
+  // PRIMERA a propósito, y es seguro: ninguno de los tres literales que esta regexp reconoce contiene
+  // la subcadena `escrow_not_found`, así que no le roba casos a la rama de abajo. Eso no se supone:
+  // lo vigila el control de orden de ramas en `flow-vm.test.ts`, que exige que `escrow_not_found`
+  // siga saliendo por su texto. Sin ese control, ensanchar esta regexp sería invisible.
+  // ⚠️ El string lo escribe la wallet y no lo controlamos ("User rejected the request." en Phantom).
+  // La regexp está DUPLICADA de `escrowRentDiscoveryError` a propósito (CD-2 prohíbe tocar esa
+  // función para extraerla a una constante). Que las dos no diverjan lo vigila el guard de CD-12.
+  if (/user rejected|wallet_connect_cancelled|wallet_sign_not_available/i.test(code))
+    return "No se completó la firma que prueba que la billetera es tuya, así que no llegamos a preguntar. Esto no es una respuesta sobre tus fondos: volvé a intentar y aceptá la firma.";
   if (code.includes("escrow_not_found"))
     return `No encontramos escrows abiertos para esta billetera. Esto no dice que no tengas fondos: dice que ninguno de los últimos ${maxCandidates} envíos que el servidor tiene guardados de esta billetera está abierto en el contrato.`;
-  // "No pudimos preguntar" no es "no hay nada". `escrow_id_unavailable` = esta pantalla no tiene el
-  // resolver cableado; `escrow_recovery_unavailable` = el endpoint contestó algo que no es 200/403/501
-  // (`escrow_recovery_unavailable`, `http-solana-remittance-id-resolver.ts:40`). En los dos casos no llegamos a mirar la cadena.
+  // "No pudimos preguntar" no es "no hay nada". Cinco productores llegan acá, no dos.
+  // `escrow_id_unavailable` = esta pantalla no tiene el resolver cableado. `escrow_recovery_unavailable`
+  // llega con CUATRO orígenes: el endpoint contestó algo que no es 200/403/501
+  // (`escrow_recovery_unavailable`, `http-solana-remittance-id-resolver.ts:40`), y los TRES `not_asked`
+  // que el refund empezó a propagar en WKH-331 con el motivo pegado al código
+  // (`pop_disabled` / `registry_disabled` / `pop_rejected`). Los cuatro se dicen IGUAL: la persona no
+  // puede hacer nada distinto con cada uno, y el motivo viaja en el código para el diagnóstico, no en
+  // el texto (CD-5). En los cinco casos no llegamos a mirar la cadena.
   if (code.includes("escrow_id_unavailable") || code.includes("escrow_recovery_unavailable"))
     return "No pudimos consultar el registro de envíos. Esto no es una respuesta sobre tus fondos: no llegamos a preguntar. Probá de nuevo en un rato.";
   return escrowRefundError(code);

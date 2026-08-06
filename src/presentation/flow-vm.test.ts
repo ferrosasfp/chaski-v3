@@ -17,7 +17,9 @@ import {
   escrowFundsKnowledge,
   escrowKnowledgeCopy,
   escrowRefundError,
+  escrowRentDiscoveryError,
   humanError,
+  lostEscrowRecoveryError,
   shortErrorCode,
   isDemoMode,
   isKycDemo,
@@ -29,6 +31,9 @@ import {
   KYC_PROVENANCE_LIVE,
   KYC_PROVENANCE_MOCK,
 } from "../infrastructure/didit/decision";
+// El número que el copy dice sale de la MISMA constante que el refund sondea, nunca de un literal
+// escrito acá: así el test no puede quedar afirmando un número que el código dejó de usar.
+import { MAX_RECOVERY_CANDIDATES } from "../infrastructure/solana-wallet";
 
 // WKH-320: acá abajo vivía el describe de isFallbackWalletAddress (WKH-184 AC-7/AC-9), que probaba
 // que la UI detectara la wallet demo por su address y, entre otras cosas, que la detección fuera
@@ -420,6 +425,65 @@ describe("flow-vm: escrowRefundError", () => {
       "No pudimos recuperar los fondos. Intentá de nuevo.",
     );
   });
+});
+
+// Los TRES literales van escritos a mano, uno por uno, y no salen de la regexp ni de ninguna de las
+// dos funciones que este bloque vigila (CD-12). Un guard que deriva sus inputs de lo que vigila se
+// aplaude a sí mismo: cualquier cambio en la regexp cambiaría también los inputs y el test seguiría
+// verde. "User rejected the request." es el texto que escribe Phantom; los otros dos son los códigos
+// que emite nuestro propio bridge (`solana-wallet-bridge.ts`).
+const LITERALES_DE_FIRMA_NO_COMPLETADA = [
+  "User rejected the request.",
+  "wallet_connect_cancelled",
+  "wallet_sign_not_available",
+] as const;
+
+describe("flow-vm: lostEscrowRecoveryError — la firma no completada no es un fracaso (WKH-331/AC-5)", () => {
+  // Hasta WKH-331 estos tres códigos no matcheaban ninguna rama y caían al default heredado de
+  // `escrowRefundError`: "No pudimos recuperar los fondos. Intentá de nuevo.". O sea que a alguien que
+  // cerró el popup de la firma se le decía que la recuperación de sus fondos había fracasado, cuando
+  // lo único que pasó es que no se llegó a preguntarle nada al registro.
+  for (const literal of LITERALES_DE_FIRMA_NO_COMPLETADA) {
+    it(`"${literal}" se dice como "no llegamos a preguntar", NO como un fracaso`, () => {
+      const copy = lostEscrowRecoveryError(literal, MAX_RECOVERY_CANDIDATES);
+      expect(copy).toContain("no llegamos a preguntar");
+      expect(copy).toContain("aceptá la firma");
+      expect(copy).not.toBe("No pudimos recuperar los fondos. Intentá de nuevo.");
+    });
+  }
+
+  // 🔴 EL CONTROL DE ORDEN DE RAMAS. La rama de AC-5 se insertó PRIMERA, delante de la de
+  // `escrow_not_found`. Una regexp un poco más ancha le robaría casos a la rama de abajo sin romper
+  // ningún otro test: la pantalla pasaría a decir "no llegamos a preguntar" también cuando el servidor
+  // SÍ contestó, que es la sobre-corrección exacta que esta HU tiene que no cometer. Este test es lo
+  // que la hace visible al nivel del copy (su gemelo de integración es el caso E).
+  it("escrow_not_found SIGUE saliendo por su texto, que la rama nueva no le roba", () => {
+    const copy = lostEscrowRecoveryError("escrow_not_found", MAX_RECOVERY_CANDIDATES);
+    expect(copy).toContain("No encontramos escrows abiertos");
+    expect(copy).toContain(`los últimos ${MAX_RECOVERY_CANDIDATES} envíos`);
+    expect(copy).not.toContain("aceptá la firma");
+  });
+});
+
+describe("flow-vm: las DOS funciones responden igual a la firma no completada (WKH-331/CD-12)", () => {
+  // 🔴 POR QUÉ ESTE GUARD EXISTE. La regexp está escrita DOS veces a propósito: extraerla a una
+  // constante compartida obligaría a editar `escrowRentDiscoveryError`, que CD-2 prohíbe tocar. El
+  // precio de duplicar es que las dos pueden divergir en silencio, y esto es lo que se pone rojo
+  // cuando lo hacen, sin tocar la función protegida.
+  //
+  // ⚠️ La segunda subcadena NO es decorativa. El default de `escrowRentDiscoveryError` también dice
+  // "no llegamos a preguntar", así que con esa sola aserción este test pasaría aunque la rama de la
+  // firma no existiera en ninguna de las dos. "aceptá la firma" aparece SÓLO en esa rama.
+  for (const literal of LITERALES_DE_FIRMA_NO_COMPLETADA) {
+    it(`"${literal}": el refund perdido y el descubrimiento de cerrables dicen lo mismo`, () => {
+      const refund = lostEscrowRecoveryError(literal, MAX_RECOVERY_CANDIDATES);
+      const descubrimiento = escrowRentDiscoveryError(literal);
+      for (const copy of [refund, descubrimiento]) {
+        expect(copy).toContain("no llegamos a preguntar");
+        expect(copy).toContain("aceptá la firma");
+      }
+    });
+  }
 });
 
 describe("flow-vm — humanError", () => {

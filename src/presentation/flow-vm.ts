@@ -572,7 +572,7 @@ export function humanError(code: string): string {
   // propia persona, o la release-authority a mano. O sea que nadie devuelve nada solo.
   //
   // Es el texto que MÁS se lee de este archivo: TrackView lo usa como último recurso para cualquier
-  // `payout_failed` cuyo reason no reconozca (`humanError`, `flow.tsx:1247`), justo cuando no sabemos dónde está la
+  // `payout_failed` cuyo reason no reconozca (`humanError`, `flow.tsx:1262`), justo cuando no sabemos dónde está la
   // plata. Prometer un reembolso ahí manda a esperar sentado en vez de a la única acción que sirve.
   if (code.includes("payout"))
     return "No se pudo entregar. No hay un reembolso automático: si tus USDC entraron al escrow, los sacás vos firmando desde tu wallet.";

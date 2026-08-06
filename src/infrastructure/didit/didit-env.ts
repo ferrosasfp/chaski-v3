@@ -80,28 +80,75 @@ export function resolveDiditEnvironment(): DiditEnvironment {
         "su modo de prueba es el free tier sobre el host real, vía DIDIT_API_KEY/DIDIT_WORKFLOW_ID)",
     );
   }
-  if (raw === "live" && isNonProductionVercelScope()) {
-    // El vector REAL de este incidente: un deploy de preview/development hereda las envs de
-    // producción (es el default de Vercel) y empieza a crear verificaciones reales con PII real.
-    // Local/CI (sin VERCEL_ENV) NO cae acá: ahí el free tier contra el host real es un flujo
-    // legítimo y documentado (`.env.example`), y bloquearlo volvería inusable el guard.
-    throw new Error(
-      `didit_env_live_outside_vercel_production: DIDIT_ENV=live con VERCEL_ENV=${process.env.VERCEL_ENV} ` +
-        "— un deploy que NO es el de producción no crea verificaciones reales con PII. Seteá " +
-        "DIDIT_ENV=live SOLO en el scope Production de Vercel (en Preview: mock + DIDIT_BASE_URL).",
-    );
+  if (raw === "live") {
+    assertLiveIsAllowedHere();
   }
   return raw;
 }
 
 /**
- * `true` cuando corremos DENTRO de Vercel en un scope que NO es producción (preview/development).
- * Fuera de Vercel (local, CI, self-host) `VERCEL_ENV` está AUSENTE → `false`: ese entorno no se
- * bloquea (mismo criterio de prod-detection que ya usa `authority.ts`, ver `.env.example`).
+ * Declaración EXPLÍCITA del operador para correr `live` fuera de Vercel (el free tier local contra
+ * el host real, que `.env.example` documenta). Sólo se consulta cuando NO hay señal de Vercel: ver
+ * `assertLiveIsAllowedHere()`.
  */
-function isNonProductionVercelScope(): boolean {
+const ALLOW_LIVE_OUTSIDE_VERCEL_ENV = "DIDIT_ALLOW_LIVE_OUTSIDE_VERCEL";
+
+/**
+ * ¿Este entorno puede hablarle al Didit REAL? Lanza si no.
+ *
+ * 🔴 LA SEÑAL DE ENTORNO TIENE TRES ESTADOS, NO DOS. Acá había un `isNonProductionVercelScope()`
+ * que devolvía un `boolean`, y por eso colapsaba "estoy en producción" con "no sé dónde estoy":
+ * con `VERCEL_ENV` AUSENTE devolvía `false` y el guard DEJABA PASAR `live`. La combinación exacta
+ * que lo disparaba: `DIDIT_ENV=live` + `VERCEL_ENV` sin setear, o sea `next dev`, `next start` en
+ * un contenedor, un script del repo, un cron — todo lo que corre fuera de Vercel. Ahí, con una
+ * `DIDIT_API_KEY` real puesta, `/api/kyc/session` creaba verificaciones DE VERDAD contra la cuenta
+ * productiva: documentos y caras de personas reales.
+ *
+ *   · presente y `"production"`  → SÍ. El único scope de Vercel que le habla a Didit.
+ *   · presente y otra cosa       → NO. Preview/development heredan las envs de producción (es el
+ *                                  default de Vercel): el vector que este guard ya cubría.
+ *   · AUSENTE / vacía            → NO SE PUDO ESTABLECER el entorno ⇒ NO. La ausencia de una señal
+ *                                  no es un permiso.
+ *
+ * El criterio no es nuevo en este módulo: es EXACTAMENTE el de `resolveDiditEnvironment()` un nivel
+ * más arriba (líneas 65-74), donde `DIDIT_ENV` sin setear LANZA en vez de asumir un ambiente. Su
+ * test es `didit-env.test.ts:21`. Acá se aplica el mismo principio a la otra señal.
+ *
+ * ⚠️ POR QUÉ `VERCEL_ENV` Y NO `NODE_ENV` (no lo "unifiques" con el módulo hermano de
+ * wasiai-remittance-agents sin leer esto): esto es una app Next.js en Vercel, y ahí `NODE_ENV` vale
+ * `"production"` TAMBIÉN en los deploys de preview. `NODE_ENV` no puede distinguir preview de
+ * producción; `VERCEL_ENV` sí. Lo que estaba mal no era elegir `VERCEL_ENV`: era tratar su AUSENCIA
+ * como permiso.
+ *
+ * El flujo local con el free tier NO desaparece — deja de ser una inferencia y pasa a ser una
+ * declaración: `DIDIT_ALLOW_LIVE_OUTSIDE_VERCEL=true` (el literal exacto; ni `TRUE`, ni `1`, ni
+ * `yes`). Se ignora DENTRO de Vercel a propósito: si también valiera ahí, setearla por error en el
+ * panel reabriría el agujero de preview.
+ */
+function assertLiveIsAllowedHere(): void {
   const scope = process.env.VERCEL_ENV?.trim();
-  return scope !== undefined && scope !== "" && scope !== "production";
+
+  if (scope) {
+    if (scope !== "production") {
+      throw new Error(
+        `didit_env_live_outside_vercel_production: DIDIT_ENV=live con VERCEL_ENV=${scope} ` +
+          "— un deploy que NO es el de producción no crea verificaciones reales con PII. Seteá " +
+          "DIDIT_ENV=live SOLO en el scope Production de Vercel (en Preview: mock + DIDIT_BASE_URL).",
+      );
+    }
+    return;
+  }
+
+  // Sin señal de Vercel. Fail-closed salvo declaración explícita del operador.
+  if (process.env[ALLOW_LIVE_OUTSIDE_VERCEL_ENV] === "true") return;
+
+  throw new Error(
+    "didit_env_live_without_vercel_scope: DIDIT_ENV=live pero VERCEL_ENV está ausente o vacía, así " +
+      "que no se puede establecer en qué entorno corre esto (script, contenedor, `next dev`, cron). " +
+      "Sin esa certeza NO se habilita el verificador de identidad real. Para el free tier local " +
+      `declaralo: ${ALLOW_LIVE_OUTSIDE_VERCEL_ENV}=true (el literal exacto). Si no querés tocar ` +
+      "Didit: DIDIT_ENV=mock + DIDIT_BASE_URL.",
+  );
 }
 
 /**

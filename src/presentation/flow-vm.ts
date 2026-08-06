@@ -314,6 +314,34 @@ export function lostEscrowRecoveryError(code: string, maxCandidates: number): st
   // cinco casos no llegamos a mirar la cadena.
   if (code.includes("escrow_id_unavailable") || code.includes("escrow_recovery_unavailable"))
     return "No pudimos consultar el registro de envíos. Esto no es una respuesta sobre tus fondos: no llegamos a preguntar. Probá de nuevo en un rato.";
+  // 🔴 LA FASE DE LA CONEXIÓN, que salía por la red de seguridad diciendo "no sabemos hasta dónde
+  // llegamos" (AR/MNR-9). Acá SÍ sabemos: no se llegó a nada. Esta puerta arranca con
+  // `resolveSender()` → `connectWallet.execute()` → `SolanaWalletAdapter.connect()`, y estos códigos
+  // salen todos de ese método ANTES de que exista una address con la que preguntarle nada al registro
+  // (`connect`, `solana-wallet.ts:169`): `wallet_bridge_not_mounted` lo tira `openModal` si el árbol
+  // de providers no montó; los otros cuatro rechazan `waitForConnection`, tres de ellos vía
+  // `walletErrorCode` desde el `onError` del provider (`failConnection`, `solana-providers.tsx:106`)
+  // e `invalid_address` desde el chequeo base58 del propio adapter.
+  //
+  // 🔴 EL POPUP BLOQUEADO VA APARTE, y no es cosmético: para esa causa "probá de nuevo en un rato" —lo
+  // que decía la red de seguridad— es un callejón sin salida. Reintentar con el bloqueador puesto
+  // vuelve a fallar siempre; lo único que lo destraba es permitir las ventanas emergentes.
+  if (code.includes("wallet_window_blocked"))
+    return "El navegador bloqueó la ventana de tu billetera, así que no llegamos a preguntar. Esto no es una respuesta sobre tus fondos: permití las ventanas emergentes para este sitio y volvé a intentar.";
+  // ⚠️ DOS CÓDIGOS DE LA MISMA FAMILIA QUE NO ENTRAN ACÁ, a propósito:
+  //  · `wallet_not_connected` sale de `connect()` también, pero ya tiene copy propio y accionable por
+  //    la enumeración de abajo ("Reconectá o desbloqueá tu wallet"), que no afirma nada sobre fondos.
+  //  · `wallet_error:<Nombre>` (un error de la librería que no sabemos nombrar) se queda en la red de
+  //    seguridad: es justo el caso en que "no sabemos hasta dónde llegamos" es lo cierto, y afirmar la
+  //    fase apoyándose en qué errores puede inventar mañana una dependencia sería afirmar de más.
+  // Y `no_wallet` NO se enumera porque no tiene productor: su mapeo se borró (ver `humanError` más
+  // abajo), y un `WalletNotReadyError` sale hoy como `wallet_error:WalletNotReadyError`.
+  if (
+    /wallet_bridge_not_mounted|wallet_connect_timeout|wallet_window_closed|wallet_connect_failed|invalid_address/.test(
+      code,
+    )
+  )
+    return "No llegamos a conectar tu billetera, así que no llegamos a preguntar. Esto no es una respuesta sobre tus fondos: conectá la billetera y volvé a intentar.";
   // Lo que SÍ es una respuesta sobre el dinero, y por eso sigue saliendo por `escrowRefundError`. Va
   // enumerado y no como un `else`: es la lista de códigos sobre los que se puede afirmar algo.
   // `refund_tx_failed` no lo reconoce esa función y cae a su default, que para ESE código es cierto:

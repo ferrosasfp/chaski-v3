@@ -558,6 +558,56 @@ describe("flow-vm: el default de lostEscrowRecoveryError no llama fracaso a un '
   });
 });
 
+// 🔴 LA FASE DE LA CONEXIÓN, que decía "no sabemos" sabiendo (AR/MNR-9). Medido con probe: estos
+// códigos salían por la red de seguridad ("Algo se cortó antes de terminar. No sabemos hasta dónde
+// llegamos"), y para ellos eso es tan falso como el defecto que la HU cierra, sólo que en el otro
+// sentido: los cinco los tira el adapter de la wallet (`connect`, `solana-wallet.ts:169`), que corre
+// ANTES de que exista una address con la que preguntarle nada al registro. No se abrió la billetera,
+// no se firmó, no se preguntó. Es preexistente: antes de WKH-331 decían "No pudimos recuperar los
+// fondos", que era peor.
+describe("flow-vm: los códigos de la fase de conexión dicen que no se preguntó (AR/MNR-9)", () => {
+  // Escritos a mano, uno por uno, y no derivados de la regexp que vigilan.
+  const CÓDIGOS_DE_LA_CONEXIÓN = [
+    "wallet_bridge_not_mounted", // el árbol de providers no montó: `openModal` ni se pudo llamar
+    "wallet_connect_timeout", // la espera venció (lib o bridge)
+    "wallet_window_closed", // se cerró la ventana de la wallet sin conectar
+    "wallet_window_blocked", // el navegador bloqueó el popup
+    "invalid_address", // la wallet devolvió algo que no es base58
+  ] as const;
+
+  for (const code of CÓDIGOS_DE_LA_CONEXIÓN) {
+    it(`"${code}" se dice como "no llegamos a preguntar", no como "no sabemos"`, () => {
+      const copy = lostEscrowRecoveryError(code, MAX_RECOVERY_CANDIDATES);
+      expect(copy).toContain("no llegamos a preguntar");
+      expect(copy).toContain("no es una respuesta sobre tus fondos");
+      expect(copy).not.toContain("No sabemos hasta dónde llegamos");
+      expect(copy).not.toBe("No pudimos recuperar los fondos. Intentá de nuevo.");
+      // Y no se van al otro extremo: no afirman haber mirado nada ni mandan a re-firmar.
+      expect(copy).not.toContain(`los últimos ${MAX_RECOVERY_CANDIDATES} envíos`);
+      expect(copy).not.toContain("aceptá la firma");
+      expect(copy).not.toContain("segunda firma");
+    });
+  }
+
+  // ⚠️ EL POPUP BLOQUEADO, aparte. Su acción no puede ser "probá de nuevo en un rato": con el
+  // bloqueador puesto el reintento falla siempre. Este test es lo que pone en rojo meterlo en la rama
+  // genérica de arriba.
+  it("wallet_window_blocked dice qué destraba, y no manda a esperar", () => {
+    const copy = lostEscrowRecoveryError("wallet_window_blocked", MAX_RECOVERY_CANDIDATES);
+    expect(copy).toContain("ventanas emergentes");
+    expect(copy).not.toContain("Probá de nuevo en un rato");
+  });
+
+  // 🔴 EL CONTROL, sin el cual la rama nueva podría habérselas llevado todas. Un error de la librería
+  // que no sabemos nombrar NO se rutea acá: para ése la red de seguridad dice lo cierto. Y
+  // `wallet_not_connected`, que sale del mismo `connect()`, conserva su copy accionable de siempre.
+  it("un wallet_error desconocido sigue cayendo en la red de seguridad", () => {
+    expect(lostEscrowRecoveryError("wallet_error:AlgoQueLaLibNoTenía", MAX_RECOVERY_CANDIDATES)).toBe(
+      "Algo se cortó antes de terminar. No sabemos hasta dónde llegamos, así que esto no es una respuesta sobre tus fondos. Probá de nuevo en un rato.",
+    );
+  });
+});
+
 describe("flow-vm: las DOS funciones responden igual a la firma no completada (WKH-331/CD-12)", () => {
   // 🔴 POR QUÉ ESTE GUARD EXISTE. La regexp está escrita DOS veces a propósito: extraerla a una
   // constante compartida obligaría a editar `escrowRentDiscoveryError`, que CD-2 prohíbe tocar. El

@@ -83,26 +83,59 @@ function buscarConElContainerReal() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
-// LA PROPIEDAD DEL CASO E, QUE NO ES UNA CITA (fix-pack AR/MNR-2)
+// EL COPY LEGÍTIMO SE FIJA POR IGUALDAD EXACTA (fix-pack re-AR/MNR-6 + MNR-7)
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
-// 🔴 QUÉ PASÓ. El caso E vigilaba el RUTEO, no la AFIRMACIÓN. El AR escribió una variante del copy
-// legítimo que conservaba las CUATRO subcadenas ancladas en este archivo y en
-// `lost-escrow-recovery.test.tsx`, y decía "puede que no hayamos podido mirar ninguno de los últimos N
-// envíos": la sobre-corrección exacta que esta HU existe para no cometer. Suite COMPLETA verde,
-// 89 archivos / 1359 tests. La aserción negativa estaba atada a un literal (`no llegamos a preguntar`)
-// y el hedge se escribió con otras palabras.
+// 🔴 POR QUÉ NO ALCANZAN LAS PROPIEDADES, medido DOS veces en direcciones opuestas.
 //
-// Agregar una quinta subcadena no arregla nada: ya está demostrado que se puede escribir alrededor de
-// cuatro. Lo que no puede perderse no es una cita, son DOS propiedades del texto:
+// Primero fueron cuatro subcadenas ancladas, y el AR escribió alrededor de las cuatro una variante que
+// decía "puede que no hayamos podido mirar ninguno de los últimos N envíos" — la sobre-corrección
+// exacta que esta HU existe para no cometer — con la suite COMPLETA verde. Se reemplazaron por dos
+// propiedades del texto (cero marcas de duda epistémica + afirmación en indicativo con el número), y
+// el re-AR volvió a escribir alrededor de las DOS:
 //
-//   (1) ni una marca de duda sobre lo que NOSOTROS hicimos, y
-//   (2) una afirmación en INDICATIVO sobre lo que encontramos, con el número de lo mirado.
+//   · DEMASIADO LAXA: la propiedad de las marcas es un chequeo de PRESENCIA, así que todo hedge puesto
+//     DESPUÉS de la afirmación es invisible. "…y eso vale sólo para los que llegamos a revisar: la
+//     lista del servidor vino incompleta y varios quedaron sin mirar", pegado al final del copy
+//     legítimo, no trae ninguna de las 25 marcas, deja el indicativo intacto y conserva las cuatro
+//     subcadenas. Suite completa verde: 1371.
+//   · DEMASIADO ESTRICTA: la otra propiedad era una regexp con la sintaxis y el VERBO del copy de hoy
+//     (`ninguno de los últimos N envíos[^.]*\sestá\s`). Reescribir el texto en el estilo del hermano
+//     de WKH-327 ("miramos los últimos N envíos, y ninguno está abierto"), o cambiar sólo `está` por
+//     `sigue`, daba rojo: dos textos MÁS afirmativos que el actual, castigados por la redacción. Un
+//     guard que se pone rojo contra la redacción correcta se relaja la primera vez que alguien
+//     armoniza este copy con el de WKH-327, que es lo que el SDD pide.
 //
-// (1) es una clase cerrada del español (los modalizadores epistémicos con los que se hedgea), no una
-// lista de frases prohibidas. NO se declara completa: se declara suficiente para matar la variante
-// medida y su vecindario, y el bloque "el predicado discrimina" de más abajo lo COMPRUEBA en vez de
-// afirmarlo. Y no se puede achicar gratis: las copias de la familia "no preguntamos" tienen que
-// seguir trayendo al menos una marca, así que borrar un patrón de acá pone en rojo el otro lado.
+// Las dos fallas son la misma: un predicado que aproxima "afirmar" con la FORMA del texto. La igualdad
+// exacta no aproxima nada. No admite nada agregado atrás (mata la variante laxa) y convierte una
+// reescritura en un cambio deliberado de ESTE literal (en vez de un rojo que no señala nada real).
+// Es lo que ya hace `refund_tx_failed` en `flow-vm.test.ts`, donde no hay variante que sobreviva.
+//
+// ⚠️ El literal va escrito a mano acá y NO importado de `flow-vm.ts`: un oráculo que sale de la misma
+// función que vigila se aplaude a sí mismo — cualquier reescritura, hedge incluido, quedaría verde. El
+// precio es que cambiar el copy pide editar este literal, y ése es exactamente el costo que tiene que
+// tener una decisión de redacción sobre el dinero: el diff muestra el texto nuevo entero.
+// El NÚMERO sí sale de la constante que sondea, para que el copy no pueda quedar diciendo un número
+// que el código dejó de usar.
+const COPY_LEGÍTIMO_DEL_NO_ENCONTRAMOS =
+  `No encontramos escrows abiertos para esta billetera. Esto no dice que no tengas fondos: dice que ` +
+  `ninguno de los últimos ${MAX_RECOVERY_CANDIDATES} envíos que el servidor tiene guardados de esta ` +
+  `billetera está abierto en el contrato.`;
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// LAS MARCAS DE DUDA, QUE SIGUEN VIGILANDO EL OTRO LADO
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// Las cinco copias de la familia "no preguntamos" NO tienen una constante única que fijar (son cinco
+// desenlaces con dos textos distintos), y lo que no pueden perder es el matiz: tienen que traer al
+// menos una marca de duda sobre lo que NOSOTROS hicimos. Para eso siguen sirviendo. Es una clase
+// cerrada del español (los modalizadores epistémicos con los que se hedgea), no una lista de frases
+// prohibidas, y NO se declara completa.
+//
+// ⚠️ QUÉ SOSTIENE CARGA, MEDIDO (re-AR/MNR-8). La versión anterior de este comentario decía que la
+// lista "no se puede achicar gratis". Es falso para 24 de los 25: borrar `/puede que/i`, borrar
+// `/no hayamos/i` o dejar 2 de 25 deja la suite entera verde. El único patrón con control es
+// `/no llegamos/i` — borrarlo pone en rojo la copia de la firma no completada, que es la única de las
+// cinco que no dice "no pudimos". Los otros 24 son cobertura preventiva sin control: están para el
+// texto que alguien escriba mañana, no porque algo los ejercite hoy.
 const MARCAS_DE_DUDA: readonly RegExp[] = [
   /puede que/i,
   /puede ser/i,
@@ -135,18 +168,6 @@ const MARCAS_DE_DUDA: readonly RegExp[] = [
 function dudasEn(texto: string): string[] {
   return MARCAS_DE_DUDA.filter((m) => m.test(texto)).map(String);
 }
-
-// (2) La forma de la afirmación, no su redacción: un predicado en INDICATIVO sobre los envíos que se
-// miraron, con el número que se miró. El indicativo es el punto: "está abierto" afirma; "esté abierto"
-// o "puede estar abierto" es exactamente cómo se hedgea sin usar ninguna marca de la lista de arriba.
-//
-// ⚠️ Sin `\b` alrededor de "está", y no es un descuido: el `\b` de JavaScript es ASCII, así que entre
-// "á" y un espacio NO hay frontera de palabra y el patrón no matchea NUNCA. Escrito con `\b` este
-// control quedaba rojo contra el copy correcto, que es la manera de perder media hora arreglando un
-// bug que fabricó la herramienta de medición. Los `\s` sí están definidos para este caso.
-const AFIRMACIÓN_SOBRE_LO_MIRADO = new RegExp(
-  `ninguno de los últimos ${MAX_RECOVERY_CANDIDATES} envíos[^.]*\\sestá\\s`,
-);
 
 /** La aserción del bloqueante: la pantalla NO afirma haber mirado ningún envío. */
 async function laPantallaNoAfirmaHaberMirado() {
@@ -236,49 +257,80 @@ describe("AC-3: el CONTROL, sin el cual los cuatro de arriba no prueban nada", (
     expect(msg).toHaveTextContent(`los últimos ${MAX_RECOVERY_CANDIDATES} envíos`);
     expect(screen.queryByText(/no llegamos a preguntar/)).not.toBeInTheDocument();
 
-    // 🔴 Y LA PROPIEDAD, sobre el texto que la pantalla renderizó de verdad (AR/MNR-2). Las tres
-    // líneas de arriba las satisface una variante que hedgea con otras palabras; éstas no.
-    const texto = msg.textContent ?? "";
-    expect(dudasEn(texto)).toEqual([]);
-    expect(texto).toMatch(AFIRMACIÓN_SOBRE_LO_MIRADO);
+    // 🔴 Y LA IGUALDAD, sobre el texto que la pantalla renderizó de verdad (re-AR/MNR-6). Las tres
+    // líneas de arriba las satisface cualquier variante que hedgee alrededor de ellas; ésta no
+    // satisface ninguna: lo que se ve es EXACTAMENTE el copy vetado, sin una palabra agregada ni
+    // adelante ni atrás, en ningún punto del camino (rama, mapeador, render).
+    expect(msg.textContent).toBe(COPY_LEGÍTIMO_DEL_NO_ENCONTRAMOS);
   });
 });
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
-// EL PREDICADO DISCRIMINA (y la lista de marcas no se puede achicar gratis)
+// LAS TRES VARIANTES MEDIDAS, Y POR DÓNDE SE COLABA CADA UNA
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
-// Sin este bloque, `dudasEn` podría quedar vacío o `AFIRMACIÓN_SOBRE_LO_MIRADO` podría matchear
-// cualquier cosa, y el caso E volvería a pasar sin vigilar nada. Acá el predicado se corre contra
-// entradas de veredicto CONOCIDO: el copy legítimo real (producido por la función, no copiado), la
-// variante que el AR midió sobreviviendo, y las copias de la familia "no preguntamos".
-describe("AR/MNR-2: el predicado del caso E distingue afirmar de matizar", () => {
-  // ⚠️ Este literal es la variante EXACTA que el AR aplicó en `flow-vm.ts` y con la que la suite
-  // completa quedó verde. No está acá como copy alternativo: está como entrada de veredicto conocido.
-  // Si algún día `dudasEn` deja de verla, el caso E dejó de proteger lo que dice proteger.
-  const VARIANTE_DEL_AR_QUE_SOBREVIVIÓ =
+// Acá viven las tres variantes del copy legítimo que ALGUIEN APLICÓ DE VERDAD en `flow-vm.ts` y que
+// dejaron la suite completa verde en su momento. No están como copy alternativo: son entradas de
+// veredicto conocido, y cada una entró por una puerta distinta. Si mañana el guard vuelve a ser un
+// predicado sobre la forma del texto, este bloque dice contra qué tiene que medirse.
+describe("re-AR/MNR-6: la igualdad exacta rechaza las TRES variantes que las propiedades dejaban pasar", () => {
+  // (1) La primera del AR: hedge epistémico ADELANTE de la afirmación. Conservaba las cuatro
+  //     subcadenas ancladas, y por eso pasaba cuando el guard eran cuatro `toContain`.
+  const VARIANTE_1_HEDGE_ADELANTE =
     `No encontramos escrows abiertos para esta billetera. Esto no dice que no tengas fondos: ` +
     `puede que no hayamos podido mirar ninguno de los últimos ${MAX_RECOVERY_CANDIDATES} envíos que ` +
     `el servidor tiene guardados de esta billetera.`;
 
-  it("el copy legítimo REAL pasa las dos propiedades", () => {
-    const legítimo = lostEscrowRecoveryError("escrow_not_found", MAX_RECOVERY_CANDIDATES);
-    expect(dudasEn(legítimo)).toEqual([]);
-    expect(legítimo).toMatch(AFIRMACIÓN_SOBRE_LO_MIRADO);
+  // (2) La que se escribió al calibrar la propiedad (2): SUBJUNTIVO. Hedgea sin usar ni una palabra de
+  //     `MARCAS_DE_DUDA` — cambia "está abierto" por "esté abierto" y ya no afirma nada.
+  const VARIANTE_2_SUBJUNTIVO =
+    `No encontramos escrows abiertos para esta billetera. Esto no dice que no tengas fondos: dice que ` +
+    `ninguno de los últimos ${MAX_RECOVERY_CANDIDATES} envíos que el servidor tiene guardados de esta ` +
+    `billetera esté abierto en el contrato.`;
+
+  // (3) La del re-AR: restricción de alcance POST-HOC. Cero marcas, indicativo intacto, las cuatro
+  //     subcadenas enteras — porque el matiz va DESPUÉS. Contra un chequeo de PRESENCIA es invisible.
+  const VARIANTE_3_ALCANCE_POST_HOC =
+    `No encontramos escrows abiertos para esta billetera. Esto no dice que no tengas fondos: dice que ` +
+    `ninguno de los últimos ${MAX_RECOVERY_CANDIDATES} envíos que el servidor tiene guardados de esta ` +
+    `billetera está abierto en el contrato, y eso vale sólo para los que llegamos a revisar: la lista ` +
+    `del servidor vino incompleta y varios quedaron sin mirar.`;
+
+  // ⚠️ Las tres van escritas ENTERAS y no derivadas del literal de arriba con un `.replace()`. Una
+  // derivación se convierte en no-op cuando el copy cambia, y entonces la variante pasaría a ser
+  // idéntica al copy legítimo: el `not.toBe` de abajo quedaría rojo por la herramienta y no por el
+  // código, que es exactamente el rojo que no señala nada real del que este fix-pack viene saliendo.
+
+  it("el copy legítimo REAL es EXACTAMENTE el literal vetado", () => {
+    expect(lostEscrowRecoveryError("escrow_not_found", MAX_RECOVERY_CANDIDATES)).toBe(
+      COPY_LEGÍTIMO_DEL_NO_ENCONTRAMOS,
+    );
   });
 
-  it("la variante que el AR midió sobreviviendo falla las DOS, no una", () => {
-    expect(dudasEn(VARIANTE_DEL_AR_QUE_SOBREVIVIÓ).length).toBeGreaterThan(0);
-    expect(VARIANTE_DEL_AR_QUE_SOBREVIVIÓ).not.toMatch(AFIRMACIÓN_SOBRE_LO_MIRADO);
-    // Y conserva las cuatro subcadenas que estaban ancladas: por eso pasaba.
-    expect(VARIANTE_DEL_AR_QUE_SOBREVIVIÓ).toContain("No encontramos escrows abiertos");
-    expect(VARIANTE_DEL_AR_QUE_SOBREVIVIÓ).toContain("Esto no dice que no tengas fondos");
-    expect(VARIANTE_DEL_AR_QUE_SOBREVIVIÓ).toContain(`últimos ${MAX_RECOVERY_CANDIDATES} envíos`);
-    expect(VARIANTE_DEL_AR_QUE_SOBREVIVIÓ).not.toContain("no llegamos a preguntar");
+  for (const [nombre, variante] of [
+    ["hedge adelante", VARIANTE_1_HEDGE_ADELANTE],
+    ["subjuntivo", VARIANTE_2_SUBJUNTIVO],
+    ["alcance post-hoc", VARIANTE_3_ALCANCE_POST_HOC],
+  ] as const) {
+    it(`la variante "${nombre}" NO es el copy legítimo, y conserva lo que estaba anclado`, () => {
+      expect(variante).not.toBe(COPY_LEGÍTIMO_DEL_NO_ENCONTRAMOS);
+      // Por qué hizo falta la igualdad: las tres pasaban las cuatro citas que había antes.
+      expect(variante).toContain("No encontramos escrows abiertos");
+      expect(variante).toContain("Esto no dice que no tengas fondos");
+      expect(variante).toContain(`últimos ${MAX_RECOVERY_CANDIDATES} envíos`);
+      expect(variante).not.toContain("no llegamos a preguntar");
+    });
+  }
+
+  // 🔴 EL CONTROL DE PRECISIÓN DE LA LISTA. Sin esto, `MARCAS_DE_DUDA` podría ensancharse hasta marcar
+  // cualquier texto (un `/no/i` alcanzaría) y las aserciones de abajo seguirían verdes sin vigilar
+  // nada. El copy legítimo AFIRMA: ninguna marca puede verlo.
+  it("ninguna marca de duda marca al copy legítimo", () => {
+    expect(dudasEn(COPY_LEGÍTIMO_DEL_NO_ENCONTRAMOS)).toEqual([]);
   });
 
-  // 🔴 EL OTRO LADO, que es lo que hace cara la lista. Las copias de los desenlaces en que NO se
-  // preguntó tienen que traer al menos una marca de duda: borrar un patrón de `MARCAS_DE_DUDA` para
-  // dejar pasar un copy hedgeado en el caso E pone en rojo acá. Los códigos van escritos a mano.
+  // 🔴 EL OTRO LADO, que es para lo que sigue existiendo la lista. Las copias de los desenlaces en que
+  // NO se preguntó tienen que traer al menos una marca de duda, y no pueden afirmar haber mirado
+  // ningún envío. Los códigos van escritos a mano.
   for (const code of [
     "User rejected the request.",
     "escrow_recovery_unavailable:pop_disabled",
@@ -289,7 +341,8 @@ describe("AR/MNR-2: el predicado del caso E distingue afirmar de matizar", () =>
     it(`"${code}" se dice matizando, y el predicado lo ve`, () => {
       const copy = lostEscrowRecoveryError(code, MAX_RECOVERY_CANDIDATES);
       expect(dudasEn(copy).length).toBeGreaterThan(0);
-      expect(copy).not.toMatch(AFIRMACIÓN_SOBRE_LO_MIRADO);
+      // La afirmación del caso E no se cuela acá bajo ninguna redacción: es el número de lo mirado.
+      expect(copy).not.toContain(`últimos ${MAX_RECOVERY_CANDIDATES} envíos`);
     });
   }
 });

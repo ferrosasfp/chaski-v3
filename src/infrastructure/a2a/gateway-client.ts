@@ -148,7 +148,20 @@ export type GatewayFailure = {
   step?: number;
   /** `code` / `error_code` REAL del gateway, sin traducir. */
   gatewayCode?: string;
-  /** `reason` del 422: 'no_candidates' | 'excluded_by_scope'. */
+  /**
+   * `reason` del 422. Son CUATRO, no dos, y la lista corta de acá era la que dejaba creer que
+   * `no_agent_match` significaba una sola cosa (AR/BLQ-MED-1). MEDIDOS en
+   * `wasiai-a2a/src/services/capability-resolver.ts:69-80`:
+   * `no_candidates` | `excluded_by_scope` | `excluded_by_reputation` | `reputation_unavailable`.
+   *
+   * 🔴 El cuarto NO habla de los agentes: dice que el gateway no pudo leer el historial, o sea "no
+   * pude preguntar". Quien ramifique por este campo tiene que separarlo de los otros tres
+   * (`noAgentMeansNobodyFits`, `src/application/agent-rejections.ts`). Se lee para DECIDIR; nunca se
+   * ecoa al browser (CD-5/CD-8).
+   *
+   * `undefined` es un estado real: significa que el 422 no lo dijo (otra versión del gateway, un
+   * proxy), no que no haya motivo. Tratarlo como "no hay quién" sería inventar el dato.
+   */
   reason?: string;
   /** Mensaje del gateway. SERVER-ONLY: prohibido ecoarlo al browser y prohibido loguearlo (CD-8/CD-9). */
   message?: string;

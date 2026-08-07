@@ -992,6 +992,56 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       expect(Object.keys(jsonSinAgente)).toEqual(["error"]);
     });
 
+    // T-13.4 (AR fix-pack BLQ-MED-1) — el 422 colapsa CUATRO motivos, y uno es "no pude preguntar".
+    //
+    // 🔴 QUÉ MIDE, con el input concreto. `mapErrorStatus` traduce todo 422 a `no_agent_match`, pero
+    // el gateway manda además un `reason`. `reputation_unavailable` significa que el gateway NO PUDO
+    // LEER el historial (medido en `capability-resolver.ts`), o sea que no sabe si hay agentes que
+    // califiquen. El copy del 422 nuevo afirma dos cosas —"no hay ningún proveedor" y "volver a
+    // intentar no cambia el resultado"— que para ese motivo son las DOS falsas, y la segunda encima
+    // desaconseja lo único que puede funcionar. Antes de la HU salía por el copy genérico ("Algo
+    // salió mal, intentá de nuevo"), que era vago y CIERTO: colapsarlo fue una regresión de precisión.
+    //
+    // Los dos casos van en el MISMO `it` y se comparan entre sí a propósito: un test que sólo mirara
+    // `reputation_unavailable` daría verde aunque los cuatro motivos salieran iguales.
+    //
+    // CD-17: mismo `setGatewayEnv()` y mismo `getVerdictStoreMock` del `beforeEach` que T-13.1.
+    it("T-13.4/AR: `reputation_unavailable` NO se dice como 'no hay proveedor' (sale por el 502 de caída)", async () => {
+      setGatewayEnv();
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      // (a) el gateway SÍ evaluó y no hay nadie.
+      gwRouter({ status: 422, body: { code: "no_agent_match", reason: "no_candidates", step: 0 } });
+      const resNadie = await POST(req(bodyOf()));
+      const jsonNadie = (await resNadie.json()) as Record<string, unknown>;
+
+      // (b) el gateway NO PUDO evaluar: mismo status, mismo `code`, otro `reason`.
+      const noSabe = gwRouter({
+        status: 422,
+        body: { code: "no_agent_match", reason: "reputation_unavailable", step: 0 },
+      });
+      const resNoSabe = await POST(req(bodyOf()));
+      const jsonNoSabe = (await resNoSabe.json()) as Record<string, unknown>;
+
+      expect(resNadie.status).toBe(422);
+      expect(jsonNadie).toEqual({ error: "prepare_no_agent_for_capability" });
+      expect(resNoSabe.status).toBe(502);
+      expect(jsonNoSabe).toEqual({ error: "prepare_upstream_error" });
+      expect(resNadie.status).not.toBe(resNoSabe.status);
+
+      // Y un 422 SIN `reason` tampoco habilita la afirmación fuerte: no saber por qué no es lo mismo
+      // que saber que no hay nadie (fail-closed hacia el copy vago y cierto).
+      gwRouter({ status: 422, body: { code: "no_agent_match", step: 0 } });
+      const resMudo = await POST(req(bodyOf()));
+      expect(resMudo.status).toBe(502);
+
+      // CD-5/CD-8 intactos: el `reason` se usó para DECIDIR y no se ecoó. Una sola clave, y no dice
+      // "reputation".
+      expect(Object.keys(jsonNoSabe)).toEqual(["error"]);
+      expect(JSON.stringify(jsonNoSabe)).not.toContain("reputation");
+      expect(noSabe.agentCalls).toHaveLength(0);
+    });
+
     it("T-A3.6: flag encendido + envs del gateway ausentes ⇒ 501 prepare_not_configured y CERO fetch", async () => {
       vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gateway");
       vi.stubEnv("WASIAI_A2A_GATEWAY_URL", "");

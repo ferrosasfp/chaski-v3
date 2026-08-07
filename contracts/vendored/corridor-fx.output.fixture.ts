@@ -6,7 +6,10 @@
 //
 // Salida REAL de runCorridorFx({ amountUsd: 100 }) con el fallback FX (local-fallback). AC-5: FIAT
 // (rate/feeUsd/netDeliveredLocal) queda `number`, NO se convierte a string/bigint. El consumer sólo
-// exige el subconjunto RawQuoteResult (gateways.ts:19-27); `slug`/`localCurrency` son extra ignorados.
+// exige el subconjunto (`RawQuoteResult`, `../../src/infrastructure/a2a/gateways.ts:28-36`);
+// `slug`/`localCurrency` son extra ignorados. La cita iba SIN ancla y apuntaba a `:19-27`: WKH-332
+// insertó líneas arriba y el número quedó viejo sin que nada lo viera. Anclada, la vigila
+// `citas-ancladas.test.ts`.
 export const corridorFxVendoredFixture = {
   slug: "remit-corridor-fx",
   rate: 3.705,

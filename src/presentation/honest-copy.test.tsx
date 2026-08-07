@@ -555,7 +555,7 @@ describe("la identidad del paso confirm", () => {
 
   // 🔴 `confirm` no era el único paso afectado, y esto lo prueba. El sello de `track` se prendía SOLO
   // por la pata del payout: con el KYC simulado y un desembolso REAL (`transfi`), la remesa entera
-  // quedaba sin ningún aviso también en seguimiento, y lo mismo en el recibo (`Receipt`, `flow.tsx:2351`,
+  // quedaba sin ningún aviso también en seguimiento, y lo mismo en el recibo (`Receipt`, `flow.tsx:2373`,
   // que llama al mismo `isDemoMode`). Es la combinación hacia la que apunta el proyecto: payout real
   // primero, KYC real después.
   it("el KYC simulado también prende el sello en track, con un desembolso REAL", () => {

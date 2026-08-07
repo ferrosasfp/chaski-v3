@@ -444,6 +444,53 @@ describe("POST /api/a2a/quote — modo a2a-gateway (WKH-218 / WKH-304)", () => {
     expect(caido.directCalls).toHaveLength(0);
   });
 
+  // T-13.5 (AR fix-pack BLQ-MED-1) — el leg de FX, mismo agujero: el 422 no es un solo desenlace.
+  //
+  // `reputation_unavailable` es "el gateway no pudo leer el historial" (MEDIDO en
+  // `wasiai-a2a/src/services/capability-resolver.ts`), no "no hay nadie". El copy del enum nuevo dice
+  // "no hay ningún proveedor que pueda cotizar" y "volver a intentar no cambia el resultado": las dos
+  // mitades son falsas para ese motivo, y la segunda desaconseja el reintento que sí puede servir.
+  // El 502 genérico ("Algo salió mal, probá de nuevo") es vago y CIERTO, así que ahí vuelve.
+  it("T-13.5/AR: `reputation_unavailable` NO sale como 'no hay proveedor' — vuelve al 502 genérico", async () => {
+    setGatewayEnv();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const nadie = gwRouter({
+      status: 422,
+      compose: () => ({ code: "no_agent_match", reason: "no_candidates", step: 0 }),
+    });
+    vi.stubGlobal("fetch", nadie.fn);
+    const resNadie = await POST(req({ amountUsd: 400 }));
+    const jsonNadie = await resNadie.json();
+
+    // Mismo status, mismo `code`, otro `reason`: lo único que cambia es lo que el gateway SABE.
+    const noSabe = gwRouter({
+      status: 422,
+      compose: () => ({ code: "no_agent_match", reason: "reputation_unavailable", step: 0 }),
+    });
+    vi.stubGlobal("fetch", noSabe.fn);
+    const resNoSabe = await POST(req({ amountUsd: 400 }));
+    const jsonNoSabe = await resNoSabe.json();
+
+    expect(resNadie.status).toBe(422);
+    expect(jsonNadie).toEqual({ error: "a2a_no_agent_for_capability" });
+    expect(resNoSabe.status).toBe(502);
+    expect(jsonNoSabe).toEqual({ error: "a2a_unavailable" });
+    expect(resNadie.status).not.toBe(resNoSabe.status);
+
+    // Un 422 sin `reason` tampoco habilita la afirmación fuerte.
+    const mudo = gwRouter({ status: 422, compose: () => ({ code: "no_agent_match", step: 0 }) });
+    vi.stubGlobal("fetch", mudo.fn);
+    expect((await POST(req({ amountUsd: 400 }))).status).toBe(502);
+
+    // CD-5/CD-8: se ramificó por el `reason` y NO se ecoó. Al log sí va, que es donde el operador lo
+    // necesita para saber que el problema no está en el catálogo.
+    expect(Object.keys(jsonNoSabe)).toEqual(["error"]);
+    expect(JSON.stringify(jsonNoSabe)).not.toContain("reputation");
+    expect(JSON.stringify(warn.mock.calls)).toContain("reputation_unavailable");
+    expect(noSabe.directCalls).toHaveLength(0);
+  });
+
   it("gateway not_configured (falta WASIAI_A2A_GATEWAY_URL) ⇒ 501, sin fetch", async () => {
     vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gateway");
     vi.stubEnv("WASIAI_A2A_GATEWAY_URL", "");

@@ -7,6 +7,7 @@ import {
   QUOTE_NO_AGENT_FOR_CAPABILITY,
   QUOTE_REJECTED,
   RELAYABLE_QUOTE_REJECTIONS,
+  noAgentMeansNobodyFits,
   relayableRejection,
 } from "../../../../src/application/agent-rejections";
 import { isParseableIso } from "../../../../src/domain/remittance";
@@ -126,7 +127,13 @@ export async function POST(req: Request): Promise<Response> {
       logGatewayFailure("quote", r);
       if (r.code === "not_configured")
         return NextResponse.json({ error: "a2a_not_configured" }, { status: 501 });
-      if (r.code === "no_agent_match")
+      // 🔴 El `code` NO alcanza (AR/BLQ-MED-1): el 422 colapsa cuatro motivos y uno es
+      // `reputation_unavailable`, o sea "el gateway no pudo leer el historial". Para ése, "no hay
+      // ningún proveedor que pueda cotizar" es una afirmación que no podemos hacer, y "reintentar no
+      // cambia el resultado" desaconseja lo único que puede funcionar. Ese cae al 502 de abajo, que
+      // dice "algo salió mal, probá de nuevo" — vago y CIERTO. El `reason` se usa para ramificar,
+      // nunca se ecoa: el body sigue teniendo exactamente una clave.
+      if (r.code === "no_agent_match" && noAgentMeansNobodyFits(r.reason))
         return NextResponse.json({ error: QUOTE_NO_AGENT_FOR_CAPABILITY }, { status: 422 });
       return NextResponse.json({ error: "a2a_unavailable" }, { status: 502 });
     }

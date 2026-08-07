@@ -27,6 +27,7 @@ import {
   ESCROW_REFUNDED_BY_SENDER,
   RecoverEscrowFunds,
 } from "../application/use-cases/recover-escrow-funds";
+import { PREPARE_NO_AGENT_FOR_CAPABILITY } from "../application/agent-rejections";
 import { KYC_PROVENANCE_LIVE } from "../infrastructure/didit/decision";
 import { ConnectWallet } from "../application/use-cases/connect-wallet";
 import {
@@ -1254,6 +1255,35 @@ describe("los tres casos, dichos con palabras distintas", () => {
     expect(screen.queryByText(/No pudo entregarse/)).toBeNull();
     expect(screen.queryByText(/te reembolsamos/)).toBeNull();
     expect(screen.queryByText(/No sabemos todavía/)).toBeNull();
+  });
+
+  // AR fix-pack BLQ-ALTO-1 — el quinto caso, y el que la HU había dejado sin llegar a la pantalla.
+  //
+  // 🔴 QUÉ MIDE, con el input concreto. `prepare_no_agent_for_capability` NO está en
+  // `PREPARE_REJECTION_ENUMS` (a propósito: nadie rechazó nada, no hubo agente), así que el `it.each`
+  // de acá arriba no lo cubre. Sin la rama propia caía al `else` de `TrackView`, o sea a
+  // `humanError("payout_failed")`, y la persona leía "No pudo entregarse" + "si tus USDC entraron al
+  // escrow, los sacás vos firmando desde tu wallet" para un corte que ocurre ANTES de que la
+  // billetera firme nada. Este `it` se pone rojo si alguien borra la rama: el título vuelve a ser
+  // "No pudo entregarse" y aparece la frase del escrow.
+  //
+  // El único llamador del enum vivía en `flow-vm.test.ts`, o sea que el copy existía y ningún camino
+  // de producto lo alcanzaba. Por eso este test RENDERIZA `TrackView` en vez de llamar a `humanError`.
+  it("SIN AGENTE PARA LA CAPACIDAD: no lo dice como un fallo de entrega ni manda a buscar plata al escrow", async () => {
+    const rem = failedWith(PREPARE_NO_AGENT_FOR_CAPABILITY);
+    const { recover } = await seededRecovery(rem, new FakeSolanaEscrowRefundGateway());
+    render(<LiveTrackView initial={rem} recover={recover} />);
+
+    expect(screen.getByText(/No hay quién entregue este envío/)).toBeInTheDocument();
+    expect(screen.getByText(/no hay ningún proveedor/)).toBeInTheDocument();
+    expect(screen.getByText(/No se movió ningún USDC/)).toBeInTheDocument();
+    // Y ninguna de las tres frases de los OTROS desenlaces: ni el fallo de entrega, ni el reembolso
+    // prometido, ni la invitación a sacar del escrow unos USDC que nunca entraron.
+    expect(screen.queryByText(/No pudo entregarse/)).toBeNull();
+    expect(screen.queryByText(/te reembolsamos/)).toBeNull();
+    expect(screen.queryByText(/los sacás vos/)).toBeNull();
+    // Ni el copy de la familia hermana: acá no hubo ningún agente que rechazara nada.
+    expect(screen.queryByText(/El agente de pagos rechazó/)).toBeNull();
   });
 
   it("NO ENTRÓ: sigue siendo el fallo de siempre, sin inventar un tercer estado", async () => {

@@ -196,8 +196,11 @@ describe("GET /api/a2a/plan — descubre con las MISMAS constraints que la ejecu
   // T-14.1
   it("T-14.1: el leg de payout manda min_reputation; el de FX manda min_reputation Y allowTrial", async () => {
     const { fx, payout } = await queriesDeUnPlan();
-    expect(payout.searchParams.get("min_reputation")).toBe("2");
-    expect(fx.searchParams.get("min_reputation")).toBe("2");
+    // AR/MNR-2: los pisos salen de las CONSTANTES, no de un "2" clavado acá. Un `2` escrito a mano en
+    // el test hace que mover un piso (algo que CD-12 prohíbe hoy, pero que algún día se decidirá con
+    // su propio SDD) ponga rojo este `it` por una razón que no es la que dice vigilar.
+    expect(payout.searchParams.get("min_reputation")).toBe(String(PAYOUT_MIN_REPUTATION));
+    expect(fx.searchParams.get("min_reputation")).toBe(String(FX_MIN_REPUTATION));
     expect(fx.searchParams.get("allowTrial")).toBe("true");
     // La asimetría es deliberada y por eso se asserta: admitir a un agente sin historial liquidado
     // para COTIZAR cuesta una cotización mala; para ENTREGAR EL DINERO cuesta el dinero.
@@ -250,6 +253,15 @@ describe("GET /api/a2a/plan — descubre con las MISMAS constraints que la ejecu
     expect(fuente).toContain("minReputation: FX_MIN_REPUTATION");
     expect(fuente).toContain("minReputation: PAYOUT_MIN_REPUTATION");
     expect(fuente).not.toMatch(/minReputation:\s*\d/);
+    // 🔴 AR/MNR-1 — Y EL OTRO SITIO, QUE ESTE MISMO TEST NO MIRABA. Las dos líneas de arriba vigilan
+    // `LegConstraints`; la query la ARMA `buildDiscoverUrl`, que es otro lugar y admite su propio
+    // literal. El mutante que sobrevivía (M5b), MEDIDO: reemplazar en `buildDiscoverUrl` el
+    // `String(c.minReputation)` por un `"2"` entre comillas deja los dos `toContain` de arriba en
+    // verde (los identificadores siguen apareciendo en `LegConstraints`), la comparación de valores
+    // también (las constantes VALEN 2 hoy), y la query sale igual. O sea: el acoplamiento se rompía
+    // y ningún test lo veía. Estas dos líneas lo cierran en el sitio donde el número se escribe.
+    expect(fuente).toContain("min_reputation: String(c.minReputation)");
+    expect(fuente).not.toMatch(/min_reputation:\s*["'`]?\d/);
   });
 
   it("y las constraints con las que se preguntó VIAJAN en la respuesta, para que la tarjeta las pueda afirmar", async () => {

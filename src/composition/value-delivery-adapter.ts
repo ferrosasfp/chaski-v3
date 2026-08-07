@@ -15,8 +15,11 @@
 // esta función no las ve.
 
 /**
- * Los valores aceptados. Es una unión cerrada a propósito: un `string` suelto vuelve a permitir que
- * un typo se interprete en silencio.
+ * 🔴 LA ÚNICA LISTA. No hay una segunda en ningún otro archivo, y ese es el punto.
+ *
+ * El tipo se DERIVA de este array (`(typeof …)[number]`), así que agregar o sacar un valor mueve el
+ * conjunto aceptado Y la unión de tipos en la misma edición. La alternativa —un `type` escrito a
+ * mano al lado de un `Set` escrito a mano— es la que produjo el bug de abajo.
  *
  * 🔴 `"a2a"` ES TRANSITORIO Y SALE EN W3 DE ESTA MISMA HU, en el MISMO diff que borra el carril
  * punto a punto de `app/api/a2a/quote/route.ts` y `app/api/payout/prepare/route.ts`. NO es un
@@ -24,14 +27,59 @@
  * "usá los gateways A2A reales". Si saliera del conjunto mientras la env vale `"a2a"`, la app
  * dejaría de arrancar con la configuración vigente (mutante M2, que `container.test.ts:38` mata).
  * Cuando el carril viejo se borre, `"a2a"` pasa a TIRAR: en ese árbol ya no nombra ningún camino.
+ *
+ * Sacarlo de acá pone en rojo el `case "a2a"` de `usesRealGateways` con un error de `tsc`
+ * (TS2678: el literal no es comparable con la unión), o sea que W3 NO PUEDE sacar el valor y
+ * olvidarse del mapeo: el compilador lo frena.
  */
-export type ValueDeliveryAdapter = "a2a-gateway" | "a2a" | "fallback";
-
-const ACCEPTED: ReadonlySet<string> = new Set<ValueDeliveryAdapter>([
+export const VALUE_DELIVERY_ADAPTERS = [
   "a2a-gateway", // el carril real por gateway (WKH-218)
-  "a2a", // 🔴 TRANSITORIO — sale en W3 (ver el docblock de ValueDeliveryAdapter)
+  "a2a", // 🔴 TRANSITORIO — sale en W3 (ver el docblock de este array)
   "fallback", // el demo con mocks, nombrado a propósito y no un accidente
-]);
+] as const;
+
+/**
+ * Los valores aceptados. Es una unión cerrada a propósito: un `string` suelto vuelve a permitir que
+ * un typo se interprete en silencio.
+ */
+export type ValueDeliveryAdapter = (typeof VALUE_DELIVERY_ADAPTERS)[number];
+
+const ACCEPTED: ReadonlySet<string> = new Set<string>(VALUE_DELIVERY_ADAPTERS);
+
+/**
+ * ¿Este adapter cablea los gateways A2A REALES, o los simuladores?
+ *
+ * ── POR QUÉ ESTA FUNCIÓN EXISTE, Y NO ES UNA ENVOLTURA DECORATIVA (AR/BLQ-ALTO-2) ────────────────
+ *
+ * El guard de arriba cierra "un valor ILEGAL no cablea el mock". No cerraba nada sobre los valores
+ * LEGALES: qué hace cada uno vivía en una segunda expresión, en otro archivo, sin guarda y sin test
+ * de valor. `container.ts` decía, literalmente:
+ *
+ *     const useA2a = adapter === "a2a" || adapter === "a2a-gateway";
+ *
+ * o sea la lista otra vez, escrita a mano. MEDIDO por el AR: borrando `adapter === "a2a" ||` de esa
+ * línea la suite COMPLETA daba 1580/1580 en verde, y con la env en `"a2a"` —la de producción— el
+ * container cableaba `FallbackQuoteGateway`. Exactamente el estado que este módulo declara
+ * imposible: los simuladores, en silencio, con todo verde.
+ *
+ * Dos cosas lo cierran ahora, y ninguna es disciplina:
+ *  1. El `switch` es EXHAUSTIVO sobre la unión derivada de `VALUE_DELIVERY_ADAPTERS`. Agregar un
+ *     valor al array sin decir a qué cablea deja esta función devolviendo `undefined` contra un tipo
+ *     de retorno `boolean` ⇒ `tsc` rojo. Sacar un valor deja un `case` incomparable ⇒ `tsc` rojo.
+ *  2. `container.test.ts` recorre `VALUE_DELIVERY_ADAPTERS` y asserta QUÉ CLASE queda cableada para
+ *     cada valor, no que no tire. Input que lo pone en rojo: devolver `false` en el `case "a2a"`.
+ */
+export function usesRealGateways(adapter: ValueDeliveryAdapter): boolean {
+  switch (adapter) {
+    case "a2a-gateway":
+      return true;
+    // 🔴 Sale en W3 junto con el valor. Mientras exista, cablea lo REAL: es la env de producción.
+    case "a2a":
+      return true;
+    case "fallback":
+      return false;
+  }
+}
 
 /**
  * Traduce el valor crudo de la env al adapter, o TIRA.

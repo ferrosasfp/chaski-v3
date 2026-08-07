@@ -153,6 +153,51 @@ export const PREPARE_NO_AGENT_FOR_CAPABILITY = "prepare_no_agent_for_capability"
 export const QUOTE_NO_AGENT_FOR_CAPABILITY = "a2a_no_agent_for_capability";
 
 /**
+ * ── EL 422 NO ES UN SOLO DESENLACE: SON CUATRO, Y UNO ES "NO PUDE PREGUNTAR" (AR/BLQ-MED-1) ───────
+ *
+ * `mapErrorStatus` traduce TODO 422 a `no_agent_match`, pero el gateway manda además un `reason` que
+ * viaja intacto en `GatewayFailure.reason`. Los cuatro valores que emite hoy, MEDIDOS en
+ * `wasiai-a2a/src/services/capability-resolver.ts:69-80`:
+ *
+ *   · `no_candidates`          — ninguna capacidad de ese nombre en el catálogo
+ *   · `excluded_by_scope`      — los hay, pero nuestra credencial no los alcanza
+ *   · `excluded_by_reputation` — los hay, y ninguno llega al piso
+ *   · `reputation_unavailable` — 🔴 EL GATEWAY NO PUDO LEER EL HISTORIAL. Su propio docblock allá:
+ *     *"acá no sabemos si llegan. Un reintento PUEDE resolverlo; bajar el piso, no."*
+ *
+ * Los tres primeros son hechos sobre el CATÁLOGO y el copy de esta HU los dice bien. El cuarto es un
+ * hecho sobre el GATEWAY, y para él las dos mitades de ese copy son FALSAS: no dice "no hay ningún
+ * proveedor" —no lo sabemos— y "volver a intentar no cambia el resultado" desaconseja exactamente lo
+ * único que puede funcionar. Colapsarlos era una REGRESIÓN DE PRECISIÓN: antes salía por el copy
+ * genérico ("Algo salió mal. Intentá de nuevo"), que para ese caso era vago y CORRECTO.
+ *
+ * 🔴 LA DIRECCIÓN DEL DEFAULT ES LA DECISIÓN, y es fail-closed hacia lo vago: sólo los reasons de
+ * esta allowlist habilitan la afirmación fuerte. Un `reason` ausente (un 422 de un proxy, de un
+ * middleware o de una versión del gateway que no lo mande) o uno que no conozcamos NO la habilita, y
+ * sale por el enum de caída. El costo de equivocarse hacia acá es un diagnóstico pobre; hacia el
+ * otro lado es una frase falsa sobre el catálogo, que es el bug que esta HU vino a cerrar.
+ *
+ * Es la misma técnica que `prepareRejectionEnum` (arriba): se RAMIFICA por el valor del otro lado,
+ * NUNCA se lo ecoa. Lo que sale al browser sigue siendo una palabra nuestra, y el body sigue
+ * teniendo exactamente una clave (CD-8).
+ */
+export const NO_AGENT_REASONS_MEANING_NOBODY: readonly string[] = [
+  "no_candidates",
+  "excluded_by_scope",
+  "excluded_by_reputation",
+];
+
+/**
+ * ¿Este 422 dice "no hay quién", o dice "no pude averiguarlo"?
+ *
+ * Input que la pone en rojo: `reason: "reputation_unavailable"` devolviendo `true` — ahí la pantalla
+ * volvería a afirmar que no hay proveedor y a desaconsejar el reintento que sí sirve.
+ */
+export function noAgentMeansNobodyFits(reason: unknown): boolean {
+  return typeof reason === "string" && NO_AGENT_REASONS_MEANING_NOBODY.includes(reason);
+}
+
+/**
  * ¿Este `failureReason` de una remesa viene de un rechazo del agente de payout en el PREPARE?
  *
  * Existe para la UI, y lo que habilita es una afirmación de hecho: el prepare corre ANTES de

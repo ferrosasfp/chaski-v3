@@ -22,6 +22,7 @@ import { NextResponse } from "next/server";
 import {
   LOGGABLE_PREPARE_REJECTIONS,
   PREPARE_NO_AGENT_FOR_CAPABILITY,
+  noAgentMeansNobodyFits,
   prepareRejectionEnum,
 } from "../../../../src/application/agent-rejections";
 import {
@@ -382,7 +383,14 @@ export async function POST(req: Request): Promise<Response> {
       // encontrar a nadie, y el 502 invitaba justamente a eso. Es el ÚNICO code que se abre: el resto
       // —incluido `payment_required`, que hablaría de nuestro saldo y no del pedido de quien llama—
       // sigue colapsado en `prepare_upstream_error`. Un enum nuestro no es un eco del gateway (CD-5).
-      if (r.code === "no_agent_match")
+      //
+      // 🔴 Y NO ALCANZA CON EL `code` (AR/BLQ-MED-1). El 422 colapsa CUATRO motivos, y uno de ellos
+      // —`reputation_unavailable`— es "el gateway no pudo leer el historial", o sea "no pude
+      // preguntar". Para ese, decir "no hay ningún proveedor" y "reintentar no cambia el resultado"
+      // es falso en las dos mitades, y desaconseja lo único que funciona. Sale por el enum de caída,
+      // que ya dice lo correcto. El `reason` se USA para ramificar y NUNCA se ecoa (CD-5/CD-8): el
+      // body sigue teniendo una sola clave, y esa clave es una palabra nuestra.
+      if (r.code === "no_agent_match" && noAgentMeansNobodyFits(r.reason))
         return NextResponse.json(
           { error: PREPARE_NO_AGENT_FOR_CAPABILITY },
           { status: 422 },

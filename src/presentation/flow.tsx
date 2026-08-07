@@ -37,7 +37,10 @@ import {
   WALLET_ADDRESS_UNAVAILABLE,
 } from "../application/use-cases/confirm-and-send";
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
-import { isPrepareRejection } from "../application/agent-rejections"; // hallazgo #75: rechazo del agente ≠ payout fallido
+import {
+  PREPARE_NO_AGENT_FOR_CAPABILITY,
+  isPrepareRejection,
+} from "../application/agent-rejections"; // hallazgo #75: rechazo del agente ≠ payout fallido
 import { resolveSolanaNetworkConfig } from "../infrastructure/chain"; // HU-SOL-13: cluster Solana activo (env-driven)
 import type {
   CloseableEscrow,
@@ -1259,6 +1262,21 @@ export function TrackView({
     // del use-case, no una promesa. Decirlo con las palabras de un payout fallido ("si te cobramos,
     // te reembolsamos") deja esperando un reembolso que no existe.
     const prepareRejected = isPrepareRejection(rem.failureReason);
+    // Y el quinto, que es el que esta HU trajo y que NO es ninguno de los anteriores: NINGÚN agente
+    // resolvió la capacidad de desembolso, o sea que no hubo agente que rechazara nada.
+    //
+    // 🔴 POR QUÉ TIENE SU PROPIA RAMA Y NO ENTRA EN `isPrepareRejection` (AR/BLQ-ALTO-1). Sin esto,
+    // el enum caía al `else` de abajo, o sea a `humanError("payout_failed")`: "No se pudo entregar…
+    // si tus USDC entraron al escrow, los sacás vos firmando desde tu wallet". Esa frase manda a
+    // buscar plata a un lugar donde no hay plata — el corte ocurre en el prepare, ANTES de
+    // `authorizePrincipal` (`confirm-and-send.ts`:384-388), o sea antes de que la billetera firme
+    // nada. Es la misma clase de defecto que WKH-333 dejó documentada para `flow-vm.ts`:701-707.
+    // Y tampoco puede entrar a la familia de `prepareRejected`, porque ese copy afirma "El agente de
+    // pagos rechazó esta remesa": acá no hubo agente al que atribuirle un acto.
+    //
+    // El cuerpo sale de `humanError`, no de un literal, para que la frase viva en UN solo lugar
+    // (mismo patrón que `senderSolMissing` de acá arriba).
+    const noAgentForCapability = rem.failureReason === PREPARE_NO_AGENT_FOR_CAPABILITY;
     // Y el cuarto que tampoco es un fallo de entrega: nuestro servidor no pudo consultar el registro
     // de direcciones preparadas y cortó ANTES de reenviar la transacción al facilitator
     // (route.ts:126-133, antes del fetch de la 156). Hasta que este reason existió, esta causa salía
@@ -1282,6 +1300,8 @@ export function TrackView({
               ? "Reconectá tu wallet"
               : prepareRejected
                 ? "No pudimos preparar el envío"
+                : noAgentForCapability
+                ? "No hay quién entregue este envío"
                 : settleLedgerUnavailable
                 ? "No llegamos a enviar tu depósito"
                 : principalUnknown
@@ -1299,6 +1319,8 @@ export function TrackView({
               ? humanError(WALLET_ADDRESS_UNAVAILABLE)
               : prepareRejected
                 ? "El agente de pagos rechazó esta remesa antes de que firmaras nada: no se movió ningún USDC de tu wallet. Empezá de nuevo con una cotización fresca."
+                : noAgentForCapability
+                ? humanError(PREPARE_NO_AGENT_FOR_CAPABILITY)
                 : settleLedgerUnavailable
                 ? humanError(SOLANA_SETTLE_LEDGER_UNAVAILABLE)
                 : principalUnknown
@@ -1598,7 +1620,7 @@ function RefundSentNotice({
  * `POST /api/solana/escrow/remittance-ids` está vivo en producción (responde 403 sin PoP), el adapter
  * resuelve el id ausente contra ese store y sondea hasta `MAX_RECOVERY_CANDIDATES` PDAs
  * (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:286`), y el gateway está cableado en el
- * container (`solanaRefund`, `container.ts:162`). Pero
+ * container (`solanaRefund`, `container.ts:169`). Pero
  * la interfaz sólo llamaba a `recoverEscrowFunds`, que arranca con `repo.get(remittanceId)` y tira
  * `remittance_not_found` (`recover-escrow-funds.ts`:49-50). O sea: quien borró los datos del navegador
  * o entra desde otro dispositivo no tenía NINGÚN camino, con el código para dárselo ya escrito.

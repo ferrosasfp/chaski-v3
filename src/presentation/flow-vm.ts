@@ -681,6 +681,13 @@ export function humanError(code: string): string {
   // Y NINGUNA de las dos dice quién era el agente ni por qué no calificó: no lo sabemos, no hubo
   // agente. Prometer ese detalle sería la clase de frase que esta HU vino a sacar de la pantalla.
   //
+  // 🔴 LAS DOS AFIRMAN "no hay ningún proveedor", Y ESA AFIRMACIÓN LA SOSTIENE LA ROUTE, NO ESTE
+  // ARCHIVO (AR/BLQ-MED-1). El 422 del gateway colapsa cuatro motivos y uno —`reputation_unavailable`—
+  // significa "no pude leer el historial", o sea que NO sabemos si hay proveedor. Las dos rutas
+  // filtran por `noAgentMeansNobodyFits` (`src/application/agent-rejections.ts`) antes de emitir
+  // estos enums; ese motivo sale por el enum de caída. Input que vuelve falsa la frase de acá abajo:
+  // borrar ese filtro de `prepare/route.ts` o de `quote/route.ts` — T-13.4 y T-13.5 se ponen rojos.
+  //
   // Son DOS ramas y no una compartida porque los dos legs cortan en momentos distintos del flujo: el
   // de FX antes de que exista una cotización, el del desembolso con la cotización ya en pantalla. Una
   // sola frase para los dos tendría que ser vaga en uno de los dos.
@@ -696,7 +703,7 @@ export function humanError(code: string): string {
   // propia persona, o la release-authority a mano. O sea que nadie devuelve nada solo.
   //
   // Es el texto que MÁS se lee de este archivo: TrackView lo usa como último recurso para cualquier
-  // `payout_failed` cuyo reason no reconozca (`humanError`, `flow.tsx:1308`), justo cuando no sabemos dónde está la
+  // `payout_failed` cuyo reason no reconozca (`humanError`, `flow.tsx:1330`), justo cuando no sabemos dónde está la
   // plata. Prometer un reembolso ahí manda a esperar sentado en vez de a la única acción que sirve.
   // WKH-333 — VA ANTES del catch-all de `payout`, y arregla un defecto de copy PREEXISTENTE que este
   // cambio vuelve mucho más alcanzable. `payout_not_authorized` no contiene "kyc", así que caía en el

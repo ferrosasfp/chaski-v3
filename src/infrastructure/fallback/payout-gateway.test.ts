@@ -3,7 +3,7 @@
 //
 // Lo que se clava acá: que el adapter que corre cuando NO hay backend de value-delivery no puede
 // producir un "entregado". No es prolijidad — con el flag de settlement Solana encendido y este
-// adapter cableado (`NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`, `container.ts:108`, la configuración de devnet de hoy), ese "settled" fabricado
+// adapter cableado (`NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`, `container.ts:114`, la configuración de devnet de hoy), ese "settled" fabricado
 // llegaba a una remesa con los USDC dentro del vault del escrow.
 import { describe, expect, it } from "vitest";
 import { Money } from "../../domain/money";

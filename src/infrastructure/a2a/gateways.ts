@@ -138,7 +138,7 @@ export class A2aPayoutGateway implements PayoutGateway {
    * cuando lo que falta es una ruta que nadie va a levantar. El nombre del error es el diagnóstico.
    *
    * Por qué la clase sigue viva: `status()` SÍ se usa en producción (`TrackRemittance` lo llama vía el
-   * puerto `PayoutGateway`, `track-remittance.ts:8`) y el container la cablea (`NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`, `container.ts:108`). Lo
+   * puerto `PayoutGateway`, `track-remittance.ts:8`) y el container la cablea (`NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`, `container.ts:114`). Lo
    * muerto es este método, no el adapter. Y hoy NADIE lo invoca: el único consumidor del puerto es
    * `TrackRemittance`, que sólo llama a `status()`.
    *

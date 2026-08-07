@@ -61,6 +61,43 @@ describe("createContainer — se construye SIN leer ninguna env EVM (AC-3.1)", (
   });
 });
 
+// T-3.2 (WKH-332 / AC-3 / CD-3) — el test que cierra el peligro.
+//
+// CD-17: este `describe` depende del `beforeEach` de arriba (que BORRA las envs EVM), porque sin él
+// `assertNoEvmResidue` podría tirar por otro motivo y el test daría verde por la razón equivocada.
+// Por eso cada `it` de acá asserta el MENSAJE `value_delivery_adapter_invalido`, no un throw pelado.
+//
+// Qué mide, con el input concreto: con la bandera en un valor no reconocido, `createContainer()`
+// TIRA en vez de devolver un container cuyo `previewQuote` cotiza de mock. La afirmación falsable es
+// la segunda mitad: si alguien cambia el `throw` de `resolveValueDeliveryAdapter` por un
+// `return "fallback"` (mutante M1), estos `it` se ponen rojos.
+describe("createContainer — un valor no reconocido de la bandera NUNCA cablea el mock (AC-3)", () => {
+  it("un typo de una letra ('a2a-gatewayy') ⇒ el container TIRA, y el error nombra la variable", () => {
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gatewayy");
+    expect(() => createContainer()).toThrow("value_delivery_adapter_invalido");
+    expect(() => createContainer()).toThrow("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER");
+  });
+
+  it("la env presente y VACÍA ('') ⇒ el container TIRA (no es una ausencia: es una key en blanco)", () => {
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "");
+    expect(() => createContainer()).toThrow("value_delivery_adapter_invalido");
+  });
+
+  // 🔴 LA MITAD QUE IMPORTA. Un `expect().toThrow()` solo no distingue "tiró" de "tiró y además no
+  // dejó nada construido": lo que el bug producía era un container ENTERO y funcional, con los
+  // simuladores adentro. Acá se asserta que no hay ningún container que devolver.
+  it("y no devuelve NINGÚN container: no hay un previewQuote de mock del otro lado del throw", () => {
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gatewayy");
+    let construido: unknown = "no-se-asigno";
+    try {
+      construido = createContainer();
+    } catch {
+      /* esperado */
+    }
+    expect(construido).toBe("no-se-asigno");
+  });
+});
+
 describe("createContainer — assertNoEvmResidue es la PRIMERA línea (AC-3.3)", () => {
   // Va antes de cualquier `new`: un deploy con config EVM huérfana no arranca, en vez de arrancar
   // a medias con la mitad del grafo construido.

@@ -23,6 +23,7 @@ import type {
 } from "../application/ports";
 import { A2aPayoutGateway, A2aQuoteGateway } from "../infrastructure/a2a/gateways";
 import { HttpPopSigner } from "../infrastructure/auth/http-pop-signer";
+import { HttpKycVerdictGateway } from "../infrastructure/kyc/http-kyc-verdict-gateway";
 import {
   resolveSolanaFacilitatorPubkey,
   resolveSolanaUsdcMint,
@@ -34,7 +35,6 @@ import {
   FallbackQuoteGateway,
 } from "../infrastructure/fallback/gateways";
 import { LocalKycPendingStore } from "../infrastructure/kyc-pending-store";
-import { HttpPayoutAuthorityGateway } from "../infrastructure/payout/payout-authority-gateway";
 import { LedgerRefundGateway } from "../infrastructure/refund/ledger-refund-gateway";
 import { HttpSolanaRemittanceIdResolver } from "../infrastructure/refund/http-solana-remittance-id-resolver";
 import { SolanaEscrowCloseGateway } from "../infrastructure/escrow/solana-escrow-close-gateway";
@@ -69,7 +69,7 @@ export interface Container {
   recoverEscrowFunds?: RecoverEscrowFunds;
   // WKH-327: cerrar las dos cuentas del escrow para que vuelva el alquiler que el remitente pagó al
   // depositar. SIEMPRE presente en el container real, sin ninguna flag que lo apague — por la misma
-  // razón que `solanaRefund`, `:150`: es una válvula de recuperación de plata de la persona, y una
+  // razón que `solanaRefund`, `:156`: es una válvula de recuperación de plata de la persona, y una
   // configuración que la pueda apagar es una configuración que algún día la va a apagar. Opcional en el
   // TIPO sólo para que el test-container pueda pasar undefined, igual que sus dos vecinos de arriba.
   closeEscrowAccounts?: CloseEscrowAccounts;
@@ -112,7 +112,13 @@ export function createContainer(): Container {
   // key → Didit real; si no (501) → simulación. No depende del inlineado NEXT_PUBLIC del cliente.
   const kyc = new DiditKycGateway(new FallbackKycGateway());
   const payouts = useA2a ? new A2aPayoutGateway() : new FallbackPayoutGateway();
-  const payoutAuthority = new HttpPayoutAuthorityGateway(); // autoridad server-side (WKH-180)
+  // 🔴 WKH-333/DT-20 — acá se construía `payoutAuthority = new HttpPayoutAuthorityGateway()` y se
+  // inyectaba en `ConfirmAndSend`. Ese pre-check se eliminó: el cliente ya no tiene el
+  // `verificationId`, y la re-consulta que importa la hace `/api/payout/prepare` server-side, detrás
+  // del PoP y con el identificador sacado de su propia fila.
+  // El PUERTO y la route `/api/payout/validate` SE CONSERVAN a propósito (residual R-6, declarado):
+  // borrarlos agrandaría el diff de una HU de money-path sin cerrar nada. Lo que queda es un adapter
+  // sin consumidor de producción, y eso está escrito acá para que se vea.
   const refund = new LedgerRefundGateway(); // refund-on-failure ledger-only (WKH-186/AC-8, CD-8)
   // La wallet es SIEMPRE el SolanaWalletAdapter: no hay selección posible, y por eso no hay ternario.
   const wallet = createSolanaWallet();
@@ -157,7 +163,13 @@ export function createContainer(): Container {
   return {
     previewQuote: new PreviewQuote(quotes),
     createRemittance: new CreateRemittance(repo, clock, ids),
-    connectWallet: new ConnectWallet(wallet, kycStore),
+    // WKH-333/AC-20 — la 3ª dependencia es el gateway del veredicto server-side, y ESTA LÍNEA es
+    // donde vive el riesgo: si acá no se inyecta nada, `ConnectWallet` sigue compilando y la suite
+    // sigue verde (el use-case se construye a mano en su propio test), pero el backfill no corre en
+    // NINGÚN camino real y toda persona ya verificada llega a `prepare` sin fila. Por eso tiene test
+    // propio en `container.test.ts` (T-CABLE-1), que ejercita el `connectWallet` QUE ESTA LÍNEA
+    // DEVUELVE. Es el MISMO HttpPopSigner sobre la MISMA wallet que ya usan el prepare y el refund.
+    connectWallet: new ConnectWallet(wallet, kycStore, new HttpKycVerdictGateway(new HttpPopSigner(wallet))),
     startKyc: new StartKyc(kyc, kycStore, kycPending, repo, clock),
     resumeKyc: new ResumeKyc(kyc, kycStore, kycPending, repo, clock),
     lockQuote: new LockQuote(quotes, repo, clock),
@@ -165,7 +177,6 @@ export function createContainer(): Container {
       wallet,
       repo,
       clock,
-      payoutAuthority,
       refund,
       solana, // HU-SOL-13: undefined con el flag off ⇒ el tapón DT-8 del use-case falla fail-closed
     ),

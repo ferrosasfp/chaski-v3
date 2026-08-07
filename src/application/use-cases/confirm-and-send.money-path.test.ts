@@ -9,7 +9,6 @@ import {
   FAKE_SOLANA_AUTHORITY,
   FAKE_SOLANA_BENEFICIARY,
   FAKE_SOLANA_SIGNATURE,
-  FakePayoutAuthorityGateway,
   FakePayoutGateway,
   FakeRefundGateway,
   FakeSolanaEscrowDepositProbe,
@@ -84,7 +83,6 @@ function build(
     wallet,
     repo,
     new FixedClock(),
-    new FakePayoutAuthorityGateway({ authorized: true }),
     refund,
     { prepare, gateway, probe, senderBalance },
   );
@@ -555,7 +553,6 @@ describe("ConfirmAndSend — DT-8: sin `solana` inyectado (WKH-320)", () => {
       wallet,
       repo,
       new FixedClock(),
-      new FakePayoutAuthorityGateway({ authorized: true }),
       refund,
       // sin 6º arg: flag apagado / envs faltantes
     ).execute({ remittanceId: id });
@@ -581,7 +578,6 @@ describe("ConfirmAndSend — DT-8: sin `solana` inyectado (WKH-320)", () => {
         new FakeSolanaWallet(),
         repo,
         new FixedClock(),
-        new FakePayoutAuthorityGateway({ authorized: true }),
         new FakeRefundGateway(),
       ).execute({ remittanceId: id }),
     ).resolves.toBeDefined();

@@ -215,3 +215,57 @@ describe("createContainer — WKH-327/AC-7: el cierre pregunta por la billetera 
     ).rejects.toThrow("wallet_not_connected");
   });
 });
+
+// ── WKH-333/AC-20 · CD-21 — EL CABLEADO DEL VEREDICTO ────────────────────────────────────────────
+//
+// 🔴 POR QUÉ ESTE DESCRIBE EXISTE Y NO ALCANZA CON `connect-wallet.test.ts`. Ese archivo construye el
+// use-case A MANO y le pasa un gateway. Si `container.ts` no inyectara ninguno, `ConnectWallet` sigue
+// compilando (el 3er parámetro es opcional, para que el demo quede byte-idéntico) y la suite entera
+// queda VERDE — mientras el relleno de la fila del veredicto no corre en ningún camino real y toda
+// persona ya verificada llega a `prepare` sin fila. Es exactamente el caso que 041/MNR-5 midió: con
+// el cableado roto, `tsc` daba exit 0 y los tests del use-case pasaban.
+//
+// Lo que se ejercita acá es el `connectWallet` QUE EL CONTAINER DEVUELVE, contra la red real.
+describe("createContainer — WKH-333/AC-20: el connectWallet REAL consulta el veredicto", () => {
+  it("T-CABLE-1: el `connectWallet` del container tiene un gateway de veredicto cableado", () => {
+    const c = createContainer();
+    const gw = (c.connectWallet as unknown as { verdictGateway?: unknown }).verdictGateway;
+    expect(
+      gw,
+      "el container NO inyecta el gateway del veredicto: `ConnectWallet` compila igual (el " +
+        "parámetro es opcional a propósito) y la suite queda verde, pero el relleno de la fila no " +
+        "corre en ningún camino real ⇒ toda persona ya verificada llega a pagar sin fila y se corta",
+    ).toBeDefined();
+  });
+
+  it("T-CABLE-1b: ese gateway PIDE el veredicto de verdad — no es un doble que siempre dice `not_asked`", async () => {
+    // El mutante M-21 es inyectar un gateway inerte. Un `toBeDefined()` solo no lo mata: hay que
+    // EJERCITARLO. Se apagan las dos redes de las que depende (el emisor del challenge y el endpoint
+    // del veredicto) y se afirma que el `connectWallet` del container las TOCA.
+    const calls: string[] = [];
+    const fetchMock = vi.fn(async (url: string) => {
+      calls.push(String(url));
+      // 501 en el emisor del challenge ⇒ `prove()` devuelve null ⇒ `pop_disabled` sin pedir nada más.
+      return new Response(JSON.stringify({ error: "pop_not_configured" }), { status: 501 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    // La billetera del container necesita el bridge conectado; sin él, `connect()` tira antes de
+    // llegar al gateway. Mismo mecanismo que usa el describe de WKH-327 más arriba.
+    solanaWalletBridge.setState({
+      publicKey: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+      connected: true,
+    });
+
+    const c = createContainer();
+    const out = await c.connectWallet.execute();
+
+    expect(
+      calls.some((u) => u.includes("/api/a2a/payout/challenge")),
+      "el connectWallet del container NO pidió un challenge: el gateway cableado no consulta nada " +
+        "(un doble inerte pasaría este container sin que nadie se entere)",
+    ).toBe(true);
+    // Y el desenlace es el honesto: el mecanismo está apagado server-side, no "no hay veredicto".
+    expect(out.serverVerdict).toEqual({ outcome: "not_asked", reason: "pop_disabled" });
+    vi.unstubAllGlobals();
+  });
+});

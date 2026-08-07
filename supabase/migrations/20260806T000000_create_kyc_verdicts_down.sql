@@ -1,0 +1,32 @@
+-- 20260806T000000_create_kyc_verdicts_down.sql — reversa de 20260806T000000_create_kyc_verdicts.sql.
+-- NO aplicar: la aplica el founder (accion gated, classifier). Base: bdwv. PROHIBIDO caldz (mainnet).
+--
+-- 🔴 ESTE `down` ES DESTRUCTIVO Y CORTA EL MONEY-PATH. No es simetrico con el `up`.
+--
+-- Con `KYC_VERDICT_STORE_ENABLED=true`, esta tabla ES la fuente del identificador que
+-- `app/api/payout/prepare/route.ts` le presenta a la autoridad de KYC al preparar un desembolso. El
+-- backend YA NO acepta el `kycVerificationId` del cliente (AC-16/CD-26): si no hay fila, corta con
+-- `prepare_kyc_verdict_missing` (403) y NO hay camino de respaldo, ni transitorio ni gateado por env.
+--
+-- ⇒ Ejecutar este `down` con el flag ENCENDIDO deja a TODA la gente ya verificada sin poder pagar,
+--   hasta que cada persona vuelva a pasar por la verificacion de identidad completa. El dato no se
+--   puede reconstruir desde el navegador: el veredicto server-side es justamente lo que reemplazo al
+--   `localStorage`, y el `verification_id` de un navegador viejo no autoriza por si solo (AC-8: hay
+--   que re-consultar a la autoridad, y solo se persiste si vuelve autorizada).
+--
+-- ⇒ Y APAGAR EL FLAG NO ALCANZA. Aca decia que con `KYC_VERDICT_STORE_ENABLED` ausente/OFF nadie lee
+--   la tabla y `prepare` conserva su comportamiento actual: es FALSO y esta medido
+--   (AR/BLQ-ALTO-1, candado en `app/api/payout/prepare/route.flag-off.test.ts`). Con el flag apagado
+--   la factory devuelve null, si, pero entonces `prepare` no tiene de donde sacar el identificador
+--   —el del cliente ya no se acepta (CD-26)— y responde 503 a TODO pagador. O sea que el paso 2 de la
+--   version anterior de este bloque ("verificar que un pago completo funciona con el flag apagado")
+--   no se podia cumplir NUNCA, y por eso este `down` era inejecutable con seguridad.
+--
+-- Orden seguro para revertir, y en este orden:
+--   1. RE-DESPLEGAR EL CODIGO ANTERIOR a WKH-333 (el que acepta el `kycVerificationId` del cliente).
+--      Esto es lo que devuelve la capacidad de pagar; apagar el flag no lo hace.
+--   2. Verificar que un pago completo funciona con ese codigo.
+--   3. `KYC_VERDICT_STORE_ENABLED` a ausente/OFF (con el codigo viejo desplegado ya es inocuo: nadie
+--      lo lee).
+--   4. Recien entonces, este `down`.
+drop table if exists public.kyc_verdicts;

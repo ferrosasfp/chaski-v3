@@ -6,7 +6,7 @@
 // Eso significa exactamente una cosa: que ESTE gate no bloquea. Acá decía "el demo local sigue
 // llegando a Entregado", y era falso: con el flag de settlement Solana apagado la remesa muere dos
 // pasos más adelante, en el tapón DT-8 de ConfirmAndSend (sin `solana` inyectado → failAndRefund
-// con `settlement_unavailable` → payout_failed → refunded, confirm-and-send.ts:114-117). Nunca
+// con `settlement_unavailable` → payout_failed → refunded, confirm-and-send.ts:329-332). Nunca
 // llegaba a "Entregado" por este camino, y desde el fix del FallbackPayoutGateway tampoco por el
 // otro. Un comentario que promete un final feliz apaga la búsqueda justo donde había que mirar.
 // Exemplar: kyc-gateway.ts.

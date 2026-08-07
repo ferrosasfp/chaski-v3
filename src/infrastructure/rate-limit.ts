@@ -103,6 +103,21 @@ export const ESCROW_RECOVERY_RL: RouteRateLimitConfig = {
   },
 };
 
+// KYC VERDICT IP 10/"10 m" (sin addr): WKH-333/AC-5. Mismo perfil y misma razón que ESCROW_RECOVERY:
+// el endpoint verifica un PoP ed25519 (HMAC + firma = CPU) ANTES de tocar la base, así que el limiter
+// corre ANTES de parsear el body — la address todavía no existe acá y por eso es IP-only. Bucket
+// propio (no comparte contador con kyc/validate/challenge): un límite compartido dejaría que el
+// tráfico legítimo de un endpoint apague el otro.
+export const KYC_VERDICT_RL: RouteRateLimitConfig = {
+  bucketPrefix: "kyc:verdict:rl",
+  ip: {
+    envMax: "KYC_VERDICT_RL_IP_MAX",
+    defMax: 10,
+    envWindow: "KYC_VERDICT_RL_IP_WINDOW",
+    defWindow: "10 m",
+  },
+};
+
 interface Limiters {
   ip: Ratelimit;
   address?: Ratelimit; // ausente cuando cfg.addr no está (IP-only)
@@ -176,7 +191,7 @@ function retryAfterFrom(reset: number): number {
 // su entry MÁS A LA IZQUIERDA es spoofeable, y tomarlo (como antes) permitía evadir el límite por IP
 // rotando el header. Por eso XFF es SOLO último recurso y, de usarlo, tomamos el valor MÁS A LA
 // DERECHA (el que agrega el proxy de confianza más cercano), nunca el leftmost.
-// WKH-205: extraído byte-idéntico de kyc/session/route.ts:19-31 (la copia de kyc/session queda, dup
+// WKH-205: extraído byte-idéntico de kyc/session/route.ts:37-49 (la copia de kyc/session queda, dup
 // documentada — CD-11) para que las rutas nuevas (validate/challenge) reusen la misma fuente.
 export function clientIp(req: Request): string {
   const trusted =

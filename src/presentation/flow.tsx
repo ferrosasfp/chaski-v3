@@ -39,7 +39,12 @@ import {
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
 import { isPrepareRejection } from "../application/agent-rejections"; // hallazgo #75: rechazo del agente ≠ payout fallido
 import { resolveSolanaNetworkConfig } from "../infrastructure/chain"; // HU-SOL-13: cluster Solana activo (env-driven)
-import type { CloseableEscrow, EscrowRefundConfirmation } from "../application/ports";
+import type {
+  CloseableEscrow,
+  EscrowRefundConfirmation,
+  KycVerdictLookup,
+  WalletPossessionProof,
+} from "../application/ports";
 import {
   CUSTODY_WINDOW_SECS, // la MISMA constante que fija el deadline del depósito
   MAX_CLOSEABLE_CANDIDATES, // la MISMA constante que sondea el descubrimiento de cerrables
@@ -137,6 +142,12 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
   const [preview, setPreview] = useState<Quote | null>(null);
   const [rem, setRem] = useState<RemittanceState | null>(null);
   const [address, setAddress] = useState<string | null>(null);
+  // WKH-333: el veredicto de KYC que el servidor ya contestó al conectar. NO es un guard: sólo decide
+  // si se gasta un cupo de Didit (el guard del dinero es `prepare`, server-side).
+  const [serverVerdict, setServerVerdict] = useState<KycVerdictLookup | undefined>(undefined);
+  // La prueba de posesión que se firmó al conectar. Viaja hasta la creación de la sesión de Didit
+  // (WKH-333/R-1) para que no haga falta un SEGUNDO prompt de billetera por el mismo motivo.
+  const [kycProof, setKycProof] = useState<WalletPossessionProof | undefined>(undefined);
   const [resuming, setResuming] = useState(false); // retomando KYC al volver de Didit
   const [timedOut, setTimedOut] = useState(false); // el resume-loop agotó el timeout
   const [confirmReset, setConfirmReset] = useState(false); // control "¿No sos vos?" (WKH-184)
@@ -286,15 +297,45 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
   const onConnect = () =>
     guard(async () => {
       if (!rem) return;
-      const { address: addr, rememberedKyc } = await c.connectWallet.execute();
+      const {
+        address: addr,
+        rememberedKyc,
+        serverVerdict,
+        kycProof: proof,
+      } = await c.connectWallet.execute();
       setAddress(addr);
+      // WKH-333/AC-20: el veredicto server-side lo resolvió `ConnectWallet`, que es el único momento
+      // que corre en TODOS los caminos. Se guarda para pasárselo a `startKyc` sin pedir una segunda
+      // firma de billetera.
+      setServerVerdict(serverVerdict);
+      setKycProof(proof);
       // WKH-187/CD-12: cotizá SIEMPRE apenas conecta (created→quoted), ANTES de cualquier KYC.
       // El quote queda visible en el paso `review` pre-KYC (AC-1).
       const locked = await c.lockQuote.execute({ remittanceId: rem.id });
       setRem(locked.snapshot);
-      if (rememberedKyc && rememberedKyc.approved && rememberedKyc.payoutAllowed) {
+      // 🔴 AR/BLQ-MED-1 — si el servidor CONTESTÓ que no hay veredicto utilizable, el atajo KYC-once
+      // no se toma. `StartKyc` tiene el mismo guard y es el que vale (defensa en profundidad); acá se
+      // repite por una razón concreta y medible: si se llamara igual, `StartKyc` devolvería
+      // `redirect` y esta función descarta la URL (mirá el `else` de abajo) ⇒ se crearía una sesión
+      // de Didit que nadie usa, y la pantalla de verificación crearía una SEGUNDA. Un cupo del tier
+      // gratuito por cada persona en esta situación, que es justo lo que la HU vino a ahorrar.
+      const servidorDiceQueNoHayFila = serverVerdict?.outcome === "absent";
+      if (
+        !servidorDiceQueNoHayFila &&
+        rememberedKyc &&
+        rememberedKyc.approved &&
+        rememberedKyc.payoutAllowed
+      ) {
         // KYC-once: esta wallet ya está verificada → salta review+verify, directo a confirmar (AC-4).
-        const res = await c.startKyc.execute({ remittanceId: rem.id, address: addr });
+        // ⚠️ Va la variable LOCAL, no el estado: `setServerVerdict` de arriba no se ve dentro de este
+        // mismo closure (React no actualiza el estado de forma sincrónica). Leer `serverVerdict` acá
+        // daría siempre `undefined` y el salteo nunca ocurriría.
+        const res = await c.startKyc.execute({
+          remittanceId: rem.id,
+          address: addr,
+          serverVerdict,
+          kycProof: proof,
+        });
         if (res.kind === "done") {
           setRem(res.snapshot);
           setStep("confirm");
@@ -351,6 +392,11 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
         remittanceId: rem.id,
         address: address ?? "",
         callbackUrl,
+        // Acá SÍ el estado: este handler corre en otro evento, así que el valor que `onConnect`
+        // guardó ya está commiteado. Es el mismo veredicto, no una segunda consulta ni una segunda
+        // firma de billetera.
+        serverVerdict,
+        kycProof,
       });
       if (res.kind === "redirect") {
         // Redirect en la MISMA pestaña a Didit (suave en móvil). La página navega y se retoma
@@ -725,7 +771,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                   <p className="text-base font-bold">Conectá tu wallet</p>
                   {/* "Chaski nunca toca tu plata" es un absoluto y hay quien lo falsifica: el escrow
                       tiene una release-authority, operada por el equipo, que puede liberar el vault
-                      hacia el pago (ver `confirm-and-send.ts`:190-196). Lo que sí es verificable, y es
+                      hacia el pago (ver `confirm-and-send.ts`:191-197). Lo que sí es verificable, y es
                       lo que hace a esto no custodial, es DÓNDE quedan los USDC: en una cuenta del
                       contrato (ATA de la PDA `escrow_state`, `solana-wallet.ts`:288), nunca en una
                       billetera de Chaski. */}
@@ -1103,7 +1149,7 @@ const TRACK_STEPS: { key: RemittanceState["status"][]; label: string; manual?: b
   { key: ["confirmed", "principal_in"], label: "Fondos en camino" },
   // "Pagando a tu familiar" decía más de lo que pasa: en payout_submitted la orden con el partner
   // está creada y los USDC siguen en el vault del escrow, esperando un release que hoy dispara una
-  // persona a mano (ver confirm-and-send.ts:173-182). Nadie está pagando todavía.
+  // persona a mano (ver confirm-and-send.ts:174-183). Nadie está pagando todavía.
   // `manual`: este paso NO avanza solo. Arreglar la etiqueta no alcanzaba — el spinner que giraba
   // encima seguía afirmando progreso, y giraba para siempre.
   { key: ["payout_submitted"], label: "Preparando el pago a tu familiar", manual: true },
@@ -1151,7 +1197,7 @@ export function TrackView({
   // ⚠️ `confirmed` NO ESTABA ACÁ, y era el agujero: es el estado en el que la persona ya firmó la
   // autorización y nadie registró el desenlace (los hasta 15 s del timeout del settle más el
   // broadcast). El historial SÍ lo listaba y SÍ lo declaraba abrible, porque `escrowFundsKnowledge` lo
-  // clasifica como `unverified` (`escrowFundsKnowledge`, `flow-vm.ts:190`): la persona leía "No comprobamos si tus USDC siguen
+  // clasifica como `unverified` (`escrowFundsKnowledge`, `flow-vm.ts:194`): la persona leía "No comprobamos si tus USDC siguen
   // en el escrow", tocaba "Ver seguimiento", y aterrizaba en una pantalla sin ninguna acción. Sus USDC
   // pueden estar en el vault.
   const refundeable =
@@ -1208,7 +1254,7 @@ export function TrackView({
     // una causa que se arregla cargando unos centavos de SOL.
     const senderSolMissing = rem.failureReason === SOLANA_SENDER_SOL_INSUFFICIENT;
     // Y el tercero que tampoco es un fallo de entrega: el agente de payout RECHAZÓ crear la orden.
-    // El prepare corre antes de `authorizePrincipal` (confirm-and-send.ts:313-333), o sea antes de
+    // El prepare corre antes de `authorizePrincipal` (confirm-and-send.ts:381-386), o sea antes de
     // que la wallet firme nada, así que "no se movió ningún USDC" es un hecho que se lee del orden
     // del use-case, no una promesa. Decirlo con las palabras de un payout fallido ("si te cobramos,
     // te reembolsamos") deja esperando un reembolso que no existe.
@@ -1552,7 +1598,7 @@ function RefundSentNotice({
  * `POST /api/solana/escrow/remittance-ids` está vivo en producción (responde 403 sin PoP), el adapter
  * resuelve el id ausente contra ese store y sondea hasta `MAX_RECOVERY_CANDIDATES` PDAs
  * (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:286`), y el gateway está cableado en el
- * container (`solanaRefund`, `container.ts:150`). Pero
+ * container (`solanaRefund`, `container.ts:156`). Pero
  * la interfaz sólo llamaba a `recoverEscrowFunds`, que arranca con `repo.get(remittanceId)` y tira
  * `remittance_not_found` (`recover-escrow-funds.ts`:49-50). O sea: quien borró los datos del navegador
  * o entra desde otro dispositivo no tenía NINGÚN camino, con el código para dárselo ya escrito.
@@ -1992,7 +2038,7 @@ function AgentPlanCard() {
  *
  * 🔴 ACÁ DECÍA "Lo que cobran los agentes", y nadie lo cobra. En el carril punto a punto las dos rutas
  * hacen un `fetch` liso: sin x402, sin `Authorization`, sin Agent Key (`a2a/quote/route.ts`:142 y
- * `payout/prepare/route.ts`:269). Verificado en vivo el 2026-08-05: un `POST /api/a2a/quote` contra
+ * `payout/prepare/route.ts`:368). Verificado en vivo el 2026-08-05: un `POST /api/a2a/quote` contra
  * producción devuelve 200 sin ningún pago. El número, encima, es el precio de catálogo de agentes que
  * pueden no ser los que corren, que es lo que cada fila ya dice una por una.
  *
@@ -2059,7 +2105,7 @@ function AgentRunsToday({
 // El "2 horas" estaba escrito a mano al lado de una constante que lo decide. Hoy coincide; el día que
 // alguien mueva `CUSTODY_WINDOW_SECS` la frase pasa a ser falsa sin que nada se ponga rojo, que es
 // exactamente cómo nació el bug de la hora inventada que este archivo ya arregló una vez. Se deriva
-// del MISMO valor que el depósito escribe como deadline (`CUSTODY_WINDOW_SECS`, `solana-wallet.ts:374`), así que no puede
+// del MISMO valor que el depósito escribe como deadline (`CUSTODY_WINDOW_SECS`, `solana-wallet.ts:379`), así que no puede
 // desincronizarse. No agrega peso al bundle: (`SolanaWalletAdapter`, `container.ts:46`) ya importa este módulo.
 const CUSTODY_WINDOW_HOURS = CUSTODY_WINDOW_SECS / 3600;
 
@@ -2074,7 +2120,7 @@ function RefundWindowNote() {
 
 // La advertencia del botón que BORRA. "¿No sos vos?" llama a ForgetKyc, que además de olvidar el
 // KYC hace repo.clearByOwner(address): borra TODAS las remesas del dueño del almacenamiento local
-// (forget-kyc.ts:25). Su copy decía sólo "esto borra tu verificación", así que ya mentía por omisión
+// (forget-kyc.ts:36). Su copy decía sólo "esto borra tu verificación", así que ya mentía por omisión
 // antes de esta HU. Ahora que las remesas son alcanzables desde el historial, ese borrado se lleva
 // puesto el único camino que existe hacia una remesa con USDC en el escrow.
 //

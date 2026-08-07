@@ -59,7 +59,7 @@ export const REAL_KYC_PROVENANCES: ReadonlySet<string> = new Set([KYC_PROVENANCE
  * normal del que no hay nada que avisar. Un `KycVerification` que EXISTE y no declara de dónde salió
  * es otra cosa: es un objeto que la pantalla ya está mostrando como identidad de la persona. Ausencia
  * de dato no es prueba de que sea real. Es alcanzable en producción por dos caminos, no hipotéticos:
- * `kyc-gateway.ts`:42 castea la respuesta HTTP sin validar (`provenance` puede no venir), y
+ * `kyc-gateway.ts`:52 castea la respuesta HTTP sin validar (`provenance` puede no venir), y
  * `kyc-store.ts`:86 / `persistence.ts`:64 rehidratan snapshots viejos con un spread, así que un
  * snapshot guardado antes de que el campo existiera vuelve con `undefined`.
  *
@@ -157,14 +157,14 @@ export function statusDisplay(status: RemittanceStatus): {
  * - `in-escrow`  los USDC están en el vault, a nombre de la persona. Lo respalda
  *                `PRINCIPAL_SETTLED_REFUND_MANUAL`, que ConfirmAndSend escribe SÓLO cuando el probe
  *                le contestó `"deposited"`, y ese probe le pregunta A LA CADENA
- *                (confirm-and-send.ts:113-118 + ports.ts `SolanaEscrowDepositProbe`). Es el segundo
+ *                (confirm-and-send.ts:112-117 + ports.ts `SolanaEscrowDepositProbe`). Es el segundo
  *                hecho de la cadena que un snapshot puede contener, y llegó con el fix del reembolso
  *                fabricado: antes esta remesa no existía como estado propio.
  * - `unverified` se autorizó o entró un depósito y NADIE leyó el vault desde entonces, o lo leímos y
  *                la cadena no contestó (`PRINCIPAL_STATE_UNKNOWN`). Puede haber USDC ahí o no.
  * - `no-deposit` sabemos que el depósito NO salió: nunca se autorizó, o el intento murió ANTES del
  *                broadcast y eso está probado (SETTLE_REASONS_BEFORE_BROADCAST en
- *                confirm-and-send.ts:48-53, que incluye `solana_settle_beneficiary_mismatch`). No
+ *                confirm-and-send.ts:47-52, que incluye `solana_settle_beneficiary_mismatch`). No
  *                hay plata en juego y por eso es el único valor que NO ofrece camino de recuperación.
  *
  * ⚠️ TRES COSAS QUE PARECEN PRUEBA Y NO LO SON. Si "simplificás" esto usándolas, la pantalla vuelve
@@ -177,7 +177,11 @@ export function statusDisplay(status: RemittanceStatus): {
  *    honestidad del de al lado.
  * 2. `status === "settled"` NO prueba que el vault se liberó. `settled` dice que el partner de payout
  *    reportó haber entregado los PEN; la release del vault la dispara hoy una persona a mano y este
- *    repo no la llama nunca (confirm-and-send.ts:283-292). Son dos hechos distintos y sólo tenemos
+ *    repo no la llama nunca — y eso es una AUSENCIA, así que no se prueba con un número de línea
+ *    sino con el comando que la refutaría:
+ *    `command grep -rn "release(\|releaseEscrow\|buildRelease\|releaseIx" src/ app/ --include=*.ts --include=*.tsx`
+ *    devuelve CERO líneas (exit 1) — no existe ningún call-site del leg de release del escrow.
+ *    Son dos hechos distintos y sólo tenemos
  *    el primero, así que una remesa entregada también cae en `unverified`.
  * 3. Un `failureReason` de depósito NO sigue valiendo después de un `refunded`. `principal_settled_
  *    refund_manual` describe el depósito de ANTES de que la persona lo recuperara, y RecoverEscrowFunds
@@ -424,7 +428,7 @@ export function escrowRentExplainer(voice: "discovery" | "remittance"): {
  *
  * ⚠️ El texto de "confirmed" NO menciona los USDC, y es una regla, no una omisión: lo único que la
  * ausencia de `escrow_state` prueba es que las dos cuentas se cerraron. A dónde fue la plata no lo
- * dice — es la misma trampa que `probeEscrowRefunded` ya tiene escrita (`probeEscrowRefunded`, `solana-wallet.ts:736`).
+ * dice — es la misma trampa que `probeEscrowRefunded` ya tiene escrita (`probeEscrowRefunded`, `solana-wallet.ts:741`).
  */
 export function escrowCloseSentCopy(confirmation: "confirmed" | "pending" | "unknown"): string {
   if (confirmation === "confirmed")
@@ -634,16 +638,50 @@ export function humanError(code: string): string {
     return "La wallet todavía no está lista. Recargá la página y probá de nuevo.";
   if (code.includes("wallet_error"))
     return "La wallet devolvió un error que no reconocemos. Probá de nuevo.";
+  // WKH-333 — VA ANTES del catch-all de `kyc`, porque `prepare_kyc_verdict_missing` contiene "kyc" y
+  // caería ahí. "No pudimos verificar tu identidad" es cierto pero no dice la ACCIÓN. Pasa cuando el
+  // servidor no tiene fila del veredicto para la dirección que firmó (AC-17). El corte es ANTES del
+  // prepare y ANTES de la primera firma, así que "no se movió ningún USDC" es un hecho del orden de
+  // la ruta, no un consuelo.
+  //
+  // 🔴 LA ACCIÓN CAMBIÓ TRAS MEDIR QUIÉN LLEGA ACÁ (AR/BLQ-MED-1). Decía "Necesitamos verificar tu
+  // identidad otra vez desde esta billetera", y para la mayoría de quienes ven este mensaje eso es un
+  // consejo caro y equivocado: son personas YA verificadas cuya fila no se rellenó porque no hubo
+  // firma al conectar (rechazada, emisor apagado, 429 del limiter). Para ellas el arreglo es
+  // reconectar y aceptar la firma — ahí el backfill re-consulta a la autoridad con la pista del
+  // navegador y escribe la fila SIN gastar otra verificación. Volver a escanear el documento es el
+  // segundo intento, no el primero, y por eso va segundo en la frase.
+  //
+  // 🔴 Y LA PROMESA SE CAMBIÓ POR SU CONDICIÓN (CR/MNR-1). Decía "con eso alcanza en casi todos los
+  // casos": eso es una afirmación sobre la POBLACIÓN de quienes ven el mensaje, nada la mide, y decae
+  // sola a medida que cambia la mezcla de gente. Ahora dice CUÁNDO alcanza —"si ya te verificaste
+  // antes desde esta billetera"—, que es una condición que la persona puede evaluar sobre sí misma y
+  // que es exactamente la que hace funcionar al backfill: sin una verificación previa ATADA a esta
+  // dirección, la autoridad devuelve `kyc_ownership_mismatch` y no hay fila que rescatar.
+  if (code.includes("prepare_kyc_verdict_missing"))
+    return "Volvé a conectar tu billetera y aceptá la firma que te pide: si ya te verificaste antes desde esta billetera, con eso alcanza. Si te lo vuelve a pedir, vas a tener que verificar tu identidad otra vez. No se movió ningún USDC.";
+  // Misma familia, otra causa: no pudimos CONSULTAR el registro (no que no estés verificado). Se
+  // distingue a propósito — mandar a re-verificarse por una caída nuestra es un consejo equivocado.
+  if (code.includes("prepare_kyc_verdict_unavailable"))
+    return "No pudimos comprobar tu verificación de identidad. No se movió ningún USDC: es una falla temporal nuestra, probá de nuevo en un rato.";
   if (code.includes("kyc")) return "No pudimos verificar tu identidad.";
   // ⚠️ ACÁ SE PROMETÍA UN REEMBOLSO QUE NO EXISTE: "Si te cobramos, te reembolsamos". El adapter de
   // refund por defecto (`LedgerRefundGateway`) no mueve un peso y devuelve `refundTx: null` a
   // propósito; el use-case ni siquiera escribe `refunded` sin comprobante real
-  // (`confirm-and-send.ts`:218-221). Sacar los USDC del vault es o el refund trustless que firma la
+  // (`confirm-and-send.ts`:219-222). Sacar los USDC del vault es o el refund trustless que firma la
   // propia persona, o la release-authority a mano. O sea que nadie devuelve nada solo.
   //
   // Es el texto que MÁS se lee de este archivo: TrackView lo usa como último recurso para cualquier
-  // `payout_failed` cuyo reason no reconozca (`humanError`, `flow.tsx:1262`), justo cuando no sabemos dónde está la
+  // `payout_failed` cuyo reason no reconozca (`humanError`, `flow.tsx:1308`), justo cuando no sabemos dónde está la
   // plata. Prometer un reembolso ahí manda a esperar sentado en vez de a la única acción que sirve.
+  // WKH-333 — VA ANTES del catch-all de `payout`, y arregla un defecto de copy PREEXISTENTE que este
+  // cambio vuelve mucho más alcanzable. `payout_not_authorized` no contiene "kyc", así que caía en el
+  // catch-all de abajo y la persona leía "si tus USDC entraron al escrow, los sacás vos firmando" —
+  // hablando de USDC en el escrow cuando NO SE MOVIÓ NADA: la ruta corta en su guard de autoridad,
+  // que está antes del forward al agente y antes de `authorizePrincipal`, o sea antes de la primera
+  // firma de la billetera. Mandaba a buscar plata a un lugar donde no hay plata.
+  if (code.includes("payout_not_authorized"))
+    return "Tu verificación de identidad no autoriza este envío. No se movió ningún USDC de tu wallet.";
   if (code.includes("payout"))
     return "No se pudo entregar. No hay un reembolso automático: si tus USDC entraron al escrow, los sacás vos firmando desde tu wallet.";
   return "Algo salió mal. Intentá de nuevo.";

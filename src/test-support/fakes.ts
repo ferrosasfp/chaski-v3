@@ -307,14 +307,25 @@ export class FakePopSigner implements PopSigner {
 
 export class FakeKycStore implements KycStore {
   private m = new Map<string, KycVerification>();
+  private saved = new Map<string, number>();
   async get(address: string): Promise<KycVerification | null> {
     return this.m.get(canonicalizeAddress(address)) ?? null;
   }
   async save(address: string, kyc: KycVerification): Promise<void> {
     this.m.set(canonicalizeAddress(address), kyc);
+    this.saved.set(canonicalizeAddress(address), Date.now());
   }
   async clear(address: string): Promise<void> {
     this.m.delete(canonicalizeAddress(address));
+    this.saved.delete(canonicalizeAddress(address));
+  }
+  // WKH-333/AC-8. Este doble NO aplica TTL en `get()` (nunca lo aplicó), así que acá no puede
+  // reproducir la diferencia get/peek: ésa se mide contra LocalKycStore (T-STORE-1/2). Lo que sí
+  // aporta es la PISTA que el backfill consume.
+  async peek(address: string): Promise<{ verification: KycVerification; savedAt: number } | null> {
+    const v = this.m.get(canonicalizeAddress(address));
+    if (!v) return null;
+    return { verification: v, savedAt: this.saved.get(canonicalizeAddress(address)) ?? 0 };
   }
 }
 
@@ -332,6 +343,10 @@ export class ThrowingSaveKycStore implements KycStore {
   async clear(address: string): Promise<void> {
     this.m.delete(canonicalizeAddress(address));
   }
+  async peek(address: string): Promise<{ verification: KycVerification; savedAt: number } | null> {
+    const v = this.m.get(canonicalizeAddress(address));
+    return v ? { verification: v, savedAt: 0 } : null;
+  }
 }
 
 // Doble que SIEMPRE falla en clear() (simula localStorage roto) para el test defensivo de WKH-184:
@@ -346,6 +361,10 @@ export class ThrowingClearKycStore implements KycStore {
   }
   async clear(_address: string): Promise<void> {
     throw new Error("kyc_store_unavailable");
+  }
+  async peek(address: string): Promise<{ verification: KycVerification; savedAt: number } | null> {
+    const v = this.m.get(canonicalizeAddress(address));
+    return v ? { verification: v, savedAt: 0 } : null;
   }
 }
 
@@ -826,7 +845,6 @@ export class FakeSolanaPayoutPrepareGateway implements SolanaPayoutPrepareGatewa
   public calls: Array<{
     remittanceId: string;
     quoteId: string;
-    kycVerificationId: string;
     address: string;
     amountUsd: number;
     beneficiary: unknown;
@@ -845,10 +863,14 @@ export class FakeSolanaPayoutPrepareGateway implements SolanaPayoutPrepareGatewa
     },
     private readonly mode: "resolve" | "reject" = "resolve",
   ) {}
+  // ⚠️ ESTE DOBLE NO LO CAZA `tsc`, y está medido: borrar un campo de la interfaz produce TS2353 en
+  // los call-sites con literal de objeto, pero NO produce error en una clase que lo implementa
+  // declarando el campo extra en su parámetro (bivarianza de métodos). O sea que dejar acá un
+  // `kycVerificationId: string` compilaría, y el doble seguiría afirmando una forma que el puerto ya
+  // no tiene. Se saca a mano; el cierre es el `grep`, no el typechecker (CD-27).
   async prepare(input: {
     remittanceId: string;
     quoteId: string;
-    kycVerificationId: string;
     address: string;
     amountUsd: number;
     beneficiary: import("../domain/remittance").Beneficiary;

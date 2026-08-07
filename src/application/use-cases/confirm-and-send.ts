@@ -3,7 +3,6 @@ import { isRealRefundReceipt } from "../refund-receipt";
 import { SENDER_MIN_LAMPORTS_FOR_DEPOSIT } from "../solana-escrow-rent";
 import type {
   Clock,
-  PayoutAuthorityGateway,
   PrincipalDepositState,
   RefundGateway,
   RemittanceRepository,
@@ -33,7 +32,7 @@ export const PRINCIPAL_STATE_UNKNOWN = "principal_state_unknown";
  *
  * POR QUÉ TIENE CÓDIGO PROPIO. Sin este guard, `address` viajaba como `""` hasta la autoridad de
  * payout, que canonicaliza base58 y tira con el vacío (`address.ts`:13-19); el catch de
- * `authority.ts`:135 convierte cualquier throw en 502 `kyc_reauth_failed`, o sea "el proveedor de
+ * `authority.ts`:155 convierte cualquier throw en 502 `kyc_reauth_failed`, o sea "el proveedor de
  * identidad falló". Es un diagnóstico FALSO, y caro: manda a mirar a Didit, o a reintentar el KYC,
  * cuando lo único que hay que hacer es reconectar la wallet. Coincide con el 502 indiagnosticable de
  * un recorrido manual del 2026-08-02.
@@ -137,8 +136,11 @@ const SETTLE_REASONS_BEFORE_BROADCAST: readonly SolanaSettlementFailureReason[] 
 
 /**
  * Confirmación + envío. El corazón del money-path (value-delivery orquestado en el cliente):
- * confirm (invariante DURA) → autoridad server-side → re-check de vigencia → prepare server-side →
- * depósito en el escrow (wallet) → broadcast vía facilitator → principal_in → payout_submitted.
+ * confirm (invariante DURA) → re-check de vigencia → prepare server-side → depósito en el escrow
+ * (wallet) → broadcast vía facilitator → principal_in → payout_submitted.
+ * ⚠️ Entre "confirm" y "re-check" decía "autoridad server-side", y ese paso **ya no existe acá**:
+ * WKH-333/DT-20 lo eliminó de este use-case y lo mudó a `/api/payout/prepare`, donde corre detrás de
+ * la prueba de posesión y con el identificador de la fila del dueño probado (AR/BLQ-BAJO-1).
  * Cada paso persiste (idempotencia/recuperación). Un fallo de payout → payout_failed (→ refund).
  */
 export class ConfirmAndSend {
@@ -146,7 +148,9 @@ export class ConfirmAndSend {
     private readonly wallet: WalletPort,
     private readonly repo: RemittanceRepository,
     private readonly clock: Clock,
-    private readonly authority: PayoutAuthorityGateway,
+    // 🔴 WKH-333/DT-20 — el 4º parámetro ERA `authority: PayoutAuthorityGateway`, y se ELIMINÓ. No es
+    // una limpieza: es la consecuencia obligada de que el cliente ya no tenga el `verificationId`.
+    // Ver el bloque largo donde estaba el pre-check, más abajo en `execute()`.
     private readonly refund: RefundGateway,
     // HU-SOL-13 (WKH-216) — 6º param OPCIONAL `solana`. Gateway+prepare viajan ACOPLADOS:
     // `solana !== undefined ⇔ modo real` (invariante anti-fail-open: un `prepare?` suelto que quede
@@ -278,33 +282,45 @@ export class ConfirmAndSend {
     const kyc = s.kyc;
     if (!quote || !kyc) throw new Error("invariant_violation_missing_quote_or_kyc");
 
-    // 2. Autoridad server-side de payout (WKH-180): re-valida contra Didit ANTES de mover valor.
-    //    El override server-side gana SIEMPRE sobre el estado client-side (kyc.approved podría estar
-    //    forjado en localStorage — CD-2/AC-6). confirmed → payout_failed es transición válida
-    //    (remittance.ts:65) → se falla sin pull del principal on-chain, sin mover plata del sender.
+    // 2. 🔴 ACÁ VIVÍA EL PRE-CHECK DE AUTORIDAD DE PAYOUT, Y SE ELIMINÓ (WKH-333/DT-20).
+    //
+    //    NO ES UNA OPTIMIZACIÓN. Con el veredicto server-side, este cliente ya NO TIENE el
+    //    `verificationId` (`kyc.verificationId` es `null` para quien saltea por la fila del
+    //    servidor). El pre-check habría mandado `""`, la autoridad devuelve `invalid_verification_id`,
+    //    y la remesa moriría en `failAndRefund` SIEMPRE. Había que resolverlo sí o sí.
+    //
+    //    QUÉ SE PIERDE, MEDIDO — nada de lo que protegía:
+    //      · Es la MISMA función (`resolvePayoutAuthority`) que `/api/payout/prepare` vuelve a llamar
+    //        unas líneas más abajo, y esa segunda llamada es ESTRICTAMENTE MÁS FUERTE: corre detrás
+    //        de la prueba de posesión, con el identificador sacado de la fila del dueño probado, y
+    //        con el mismo ownership check contra el `vendor_data` que Didit ecoa.
+    //      · Entre este punto y el `prepare` NO SE MUEVE VALOR: la primera firma de la billetera es
+    //        `authorizePrincipal`, que está DESPUÉS del prepare. En el medio sólo hay lecturas
+    //        (re-check de vigencia del quote, sonda de SOL del remitente).
+    //      · Cada remesa pasa de DOS consultas a Didit a UNA. Eso no es un comentario: lo asserta
+    //        T-CS-2 con un contador sobre el espía.
+    //
+    //    QUÉ CAMBIA Y HAY QUE MIRAR: los `reason` que llegaban de la autoridad en este punto
+    //    (`kyc_not_approved`, `kyc_ownership_mismatch`, `kyc_authority_unavailable`, `simulated_dev`)
+    //    dejan de producirse acá. Los que salen ahora son los de `prepare` (`payout_not_authorized`,
+    //    `prepare_kyc_verdict_missing`, `payout_authority_unavailable`), y `flow-vm.ts` les dio copy
+    //    propio para que ninguno prometa USDC en el escrow cuando el corte fue anterior a la firma.
+    //
+    //    El guard de address se CONSERVA tal cual: sigue cortando antes de la primera llamada de red
+    //    del money-path, y "no se movió nada" sigue siendo un hecho y no una suposición.
     const address = await this.wallet.getAddress();
-    // ⚠️ SIN DIRECCIÓN NO SE LLAMA A LA AUTORIDAD. Acá salía `address ?? ""` derecho al gateway, y ese
-    // `""` no llegaba a ningún lado bueno: la autoridad lo canonicaliza, revienta, y el fallo vuelve
-    // como 502 `kyc_reauth_failed`. Una causa local se presentaba como una caída del proveedor de
-    // identidad. Este guard no debilita nada aguas abajo — el ownership check de `authority.ts`:130
-    // sigue siendo fail-closed y sigue rechazando lo que rechazaba; lo único que cambia es que un
-    // caso que ese guard nunca debió tener que atender ya no llega hasta él.
     if (address == null || address.trim() === "") {
       await this.failAndRefund(r, WALLET_ADDRESS_UNAVAILABLE);
-      return r; // NO se consulta la autoridad, NO se prepara el payout, NO se firma nada
-    }
-    const auth = await this.authority.authorize({
-      verificationId: kyc.verificationId,
-      address,
-    });
-    if (!auth.authorized) {
-      await this.failAndRefund(r, auth.reason ?? "kyc_reauth_failed");
-      return r; // NO se autoriza el principal, NO se submitea el payout
+      return r; // NO se prepara el payout, NO se firma nada
     }
 
     // 2.5 Re-check de vigencia del quote (M2/AC-5, CD-2): la ventana confirm→firma es de minutos
     //     (firma real en la wallet). Si el quote venció ENTRE confirm y firma → payout_failed SIN
-    //     authorizePrincipal ni settle (orden de guards: CAS → autoridad → expiry → prepare → firma).
+    //     authorizePrincipal ni settle. Orden de guards: confirm → address → expiry → rent → prepare
+    //     → firma. ⚠️ Acá decía "CAS → autoridad → expiry → …", y **el paso "autoridad" ya no existe
+    //     en este use-case**: lo eliminó WKH-333/DT-20 y se mudó entero a `/api/payout/prepare`. La
+    //     lista que manda es la de `confirm-and-send.reorder.test.ts:3-4`, que es la que se pone roja
+    //     si el orden cambia (AR/BLQ-BAJO-1).
     const nowRecheck = this.clock.nowIso();
     if (!r.isQuoteStillValid(nowRecheck)) {
       await this.failAndRefund(r, "quote_expired_before_submit");
@@ -353,7 +369,9 @@ export class ConfirmAndSend {
       prep = await this.solana.prepare.prepare({
         remittanceId: s.id,
         quoteId: quote.quoteId,
-        kycVerificationId: kyc.verificationId,
+        // 🔴 SIN `kycVerificationId` (WKH-333/AC-14'). El servidor lo saca de la fila de esta misma
+        // `address`, después de que la billetera pruebe que es suya. Reintroducirlo acá no compila:
+        // el campo se borró del puerto a propósito (CD-27).
         address, // ya garantizado no vacío por el guard de arriba (era `address ?? ""`)
         amountUsd: s.sendUsd.major,
         beneficiary: s.beneficiary,

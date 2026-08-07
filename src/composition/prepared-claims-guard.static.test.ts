@@ -36,7 +36,7 @@
 //   2. NO mira los `*.test.*` ni `*.spec.*` ni `test-support/`: un escritor de test no es un escritor
 //      de producción, que es lo que este canario vigila. Al cerrar WKH-330 quedó vivo exactamente un
 //      sitio de test con esta frase, y quedó vivo A PROPÓSITO:
-//      src/application/use-cases/confirm-and-send.reorder.test.ts:160 — ahí la afirmación es
+//      src/application/use-cases/confirm-and-send.reorder.test.ts:223 — ahí la afirmación es
 //      VERDADERA: ese test corta antes de cualquier firma (authorizeSpy nunca se llama, principalTx
 //      queda null, el resultado es prepare_no_deposit_address), así que en ese escenario el principal
 //      efectivamente nunca entró. Reemplazarla por la frase cauta sería cambiar una verdad por una

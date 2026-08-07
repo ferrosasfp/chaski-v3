@@ -1,11 +1,11 @@
-// Infrastructure — KycStore. Recuerda la verificación KYC por dirección de wallet (KYC-once).
-// localStorage en browser, in-memory en SSR. KycVerification es plano (sin Money) → JSON directo.
+// Infrastructure — KycStore. CACHÉ DE DISPOSITIVO del veredicto (era la fuente de verdad; ver `peek`).
 import { type KycVerification, type PersistedIdentity, toPersistedIdentity } from "../domain/remittance";
 import type { KycStore } from "../application/ports";
 import { canonicalizeAddress } from "./address";
+import { KYC_CLIENT_HINT_TTL_DAYS } from "./kyc-verdict-ttl";
 
 const KEY = "chaski.kyc.v1";
-const KYC_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 días — revisión AML periódica; promovible a NEXT_PUBLIC_KYC_TTL_DAYS
+const KYC_TTL_MS = KYC_CLIENT_HINT_TTL_DAYS * 24 * 60 * 60 * 1000; // CD-23: el número vive allá, no acá
 
 // Shape persistido: Record<address, { v: KycVerification; savedAt: number }>. El wrapper agrega
 // el timestamp para el TTL. Snapshots legacy (bare KycVerification sin savedAt) se tratan como
@@ -93,6 +93,30 @@ export class LocalKycStore implements KycStore {
     if (!entry) return null; // ausente o legacy bare descartado → null (AC-4 defensivo)
     if (Date.now() - entry.savedAt > KYC_TTL_MS) return null; // expirado → fuerza re-verify
     return entry.v;
+  }
+
+  /**
+   * La entry cruda de esta dirección, SIN aplicar el TTL. **Sólo la usa el backfill** (WKH-333/AC-8).
+   *
+   * 🔴 POR QUÉ NO ALCANZABA CON `get()`, medido en el código de arriba: `get()` devuelve `null` a los
+   * 181 días, así que el `verificationId` de una entry vencida es HOY inalcanzable — y esa entry es
+   * EXACTAMENTE la población que el backfill salva. Con `get()`, quien se verificó hace 200 días
+   * llegaría a `prepare` sin fila y se cortaría (AC-17) teniendo un identificador perfectamente
+   * re-consultable guardado en su propio navegador.
+   *
+   * ⚠️ Esto NO relaja ninguna política de vencimiento y no puede autorizar nada por sí solo. Lo único
+   * que devuelve es una PISTA de por dónde preguntarle a la autoridad de KYC (`ports.ts` lo dice sin
+   * vueltas: los booleanos del localStorage son atacante-controlables). Quien lo consume re-consulta
+   * a Didit y persiste **sólo si vuelve autorizada** (AC-8/CD-24). El `savedAt` viaja para que el
+   * consumidor pueda decidir, no porque acá se decida algo.
+   *
+   * `get()` queda byte-idéntico a propósito: el caché de dispositivo sigue venciendo a los
+   * KYC_CLIENT_HINT_TTL_DAYS días para todos los demás caminos (T-STORE-1).
+   */
+  async peek(address: string): Promise<{ verification: KycVerification; savedAt: number } | null> {
+    const entry = this.read()[canonicalizeAddress(address)];
+    if (!entry) return null;
+    return { verification: entry.v, savedAt: entry.savedAt }; // SIN chequeo de TTL: ver arriba
   }
 
   async save(address: string, kyc: KycVerification): Promise<void> {

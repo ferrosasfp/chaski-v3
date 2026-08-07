@@ -17,7 +17,7 @@
  * ── DOS LISTAS, Y NO ES BUROCRACIA ───────────────────────────────────────────────────────────────
  * Un `reason` puede ser seguro de LOGUEAR y a la vez inseguro de DEVOLVER. El body de una ruta
  * pública es un oráculo para cualquiera que la sondee, y este repo ya colapsó a propósito los tres
- * veredictos de KYC en uno solo por esa razón (WKH-205, `app/api/payout/validate/route.ts`:66).
+ * veredictos de KYC en uno solo por esa razón (WKH-205, `app/api/payout/validate/route.ts`:78).
  * El criterio que separa las dos listas, escrito para que se pueda aplicar a un reason nuevo:
  *
  *   · RELAYABLE — el rechazo habla del PEDIDO QUE HIZO QUIEN LLAMA: su monto, su cotización, un
@@ -40,7 +40,7 @@ export const QUOTE_REJECTED = "a2a_quote_rejected";
  * Rechazos de `remit-corridor-fx` que SÍ se devuelven al browser.
  *
  * Los dos hablan del monto que mandó quien llama contra una política pública del corredor: el
- * mínimo ya está copiado en el cliente (`MIN_SEND_USD`, `src/domain/remittance.ts`:160) y se
+ * mínimo ya está copiado en el cliente (`MIN_SEND_USD`, `src/domain/remittance.ts`:208) y se
  * muestra en pantalla, así que devolverlo no publica nada nuevo. Del techo no había copia local:
  * antes de esto un envío por encima del máximo era indistinguible de una caída.
  */
@@ -120,7 +120,7 @@ export function relayableRejection(
  * ¿Este `failureReason` de una remesa viene de un rechazo del agente de payout en el PREPARE?
  *
  * Existe para la UI, y lo que habilita es una afirmación de hecho: el prepare corre ANTES de
- * `authorizePrincipal` (`confirm-and-send.ts`:313-333), o sea antes de que la wallet firme nada.
+ * `authorizePrincipal` (`confirm-and-send.ts`:381-386), o sea antes de que la wallet firme nada.
  * Cuando el corte es acá, "no se movió ningún USDC" no es un consuelo: es un hecho verificable
  * leyendo el orden del use-case.
  */

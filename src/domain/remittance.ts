@@ -137,7 +137,14 @@ export function toPersistedIdentity(id: VerifiedIdentity): PersistedIdentity {
 }
 
 export interface KycVerification {
-  verificationId: string;
+  /** `null` ⇒ el veredicto vive en el SERVIDOR y este navegador no lo tiene (WKH-333). Es un estado
+   *  normal desde que el identificador dejó de viajar por la red: quien saltea la verificación por
+   *  una fila server-side nunca lo ve. Después de WKH-333 no queda ningún lector de producción — lo
+   *  usaban `confirm-and-send.ts` (pre-check de autoridad y payload del prepare) y los dos se
+   *  eliminaron. PROHIBIDO fabricar un valor para rellenarlo, por el mismo criterio que
+   *  `provenanceColumn` en el ledger: un dato inventado por el que ESCRIBE la evidencia no es
+   *  evidencia. Si hace falta el identificador, se lo pide el servidor a su propia fila. */
+  verificationId: string | null;
   approved: boolean;
   payoutAllowed: boolean;
   riskLevel: "low" | "medium" | "high";

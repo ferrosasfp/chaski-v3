@@ -67,7 +67,11 @@ const REQUIRED_ENVS = [
   "SMOKE_FACILITATOR_URL", // base URL del wasiai-facilitator (healthcheck + POST /solana/escrow/release)
   "SMOKE_REMIT_URL", // base URL de wasiai-remittance-agents (healthcheck)
   "SMOKE_SENDER_SECRET_KEY", // keypair devnet base58 del sender que firma el deposit (SECRETO, nunca se imprime)
-  "SMOKE_KYC_VERIFICATION_ID", // verificationId de Didit (lo VERIFICA el prepare server-side, ver checkpoint 3)
+  // 🔴 `SMOKE_KYC_VERIFICATION_ID` SALIÓ DE ACÁ (WKH-333, fix-pack AR/MNR-2). El prepare ya no acepta
+  // el identificador de la verificación desde el cliente: lo saca de la fila de la dirección
+  // PoP-verificada (AC-16/CD-26). Seguir exigiendo esta env hacía creer al runbook que el smoke
+  // controla con qué verificación se autoriza, y no la mira nadie. Lo que decide ahora está escrito
+  // en el checkpoint 3.
   "SMOKE_REMITTANCE_ID", // id de la remesa (ata la PDA escrow_state + la atestación)
   "SMOKE_QUOTE_ID", // id de la cotización
   "SMOKE_AMOUNT_USD", // monto en USD (se convierte a minor units USDC de 6 decimales)
@@ -107,7 +111,6 @@ const CHASKI_URL = requireEnv("SMOKE_CHASKI_URL").replace(/\/$/, "");
 const FACILITATOR_URL = requireEnv("SMOKE_FACILITATOR_URL").replace(/\/$/, "");
 const REMIT_URL = requireEnv("SMOKE_REMIT_URL").replace(/\/$/, "");
 const SENDER_SECRET_KEY = requireEnv("SMOKE_SENDER_SECRET_KEY");
-const KYC_VERIFICATION_ID = requireEnv("SMOKE_KYC_VERIFICATION_ID");
 const REMITTANCE_ID = requireEnv("SMOKE_REMITTANCE_ID");
 const QUOTE_ID = requireEnv("SMOKE_QUOTE_ID");
 // Monto en USD: numérico y > 0. Antes era un string que se pasaba por `Number()` sin chequear.
@@ -271,10 +274,17 @@ async function main(): Promise<void> {
   //    firma es un problema de la CLAVE. Envolver las dos en un solo try/catch hacía que una secret key
   //    inválida se reportara como "challenge inalcanzable", y se buscaba el bug en el lugar equivocado.
   //
-  //    Nota sobre el KYC: NO hay checkpoint local que valide `SMOKE_KYC_VERIFICATION_ID`. `requireEnv`
-  //    ya garantizó que no está vacía, y nada más se puede afirmar desde acá: quien la verifica de
-  //    verdad es el prepare server-side (guard PR5, `resolvePayoutAuthority` contra Didit), y un id
-  //    inválido muere ahí con 400/403. Un checkpoint local sería un OK regalado.
+  //    🔴 Nota sobre el KYC, REESCRITA EN WKH-333 (fix-pack AR/MNR-2). Acá decía que el smoke manda
+  //    `SMOKE_KYC_VERIFICATION_ID` y que "quien la verifica de verdad es el prepare server-side". Ya
+  //    no: el prepare IGNORA por completo cualquier identificador que venga del cliente (AC-16/CD-26)
+  //    y usa el de la fila de `kyc_verdicts` indexada por la dirección PoP-verificada. O sea que lo
+  //    que decide si este checkpoint pasa no es ninguna env de este script, sino que
+  //    `SMOKE_SENDER_SECRET_KEY` corresponda a una dirección que YA tenga fila de veredicto.
+  //    Los dos modos de falla nuevos, para no buscar el bug en el lugar equivocado:
+  //      · 403 `prepare_kyc_verdict_missing`    ⇒ esa dirección no tiene fila (nunca se verificó
+  //        atada a ella, o el backfill no corrió).
+  //      · 503 `prepare_kyc_verdict_unavailable` ⇒ `KYC_VERDICT_STORE_ENABLED` está apagada en el
+  //        deployment, o la base no contesta. NO es un problema del sender.
   let sender: Keypair;
   try {
     sender = Keypair.fromSecretKey(bs58.decode(SENDER_SECRET_KEY)); // SECRETO, nunca se imprime
@@ -331,7 +341,6 @@ async function main(): Promise<void> {
       body: JSON.stringify({
         remittanceId: REMITTANCE_ID,
         quoteId: QUOTE_ID,
-        kycVerificationId: KYC_VERIFICATION_ID,
         address: senderAddr,
         amountUsd: AMOUNT_USD,
         idempotencyKey,
@@ -413,7 +422,7 @@ async function main(): Promise<void> {
   // Resuelto/validado UPFRONT (módulo): acá sólo se parsea a PublicKey (sin fetch previo con side-effect).
   const facilitatorPk = new PublicKey(FACILITATOR_PUBKEY);
   const program = new anchor.Program(escrowIdl as unknown as Idl, { connection } as Provider);
-  // `escrowIdl as Idl` es el IDL genérico ⇒ acceso vía shape loose (patrón `program.methods`, `solana-wallet.ts:396`).
+  // `escrowIdl as Idl` es el IDL genérico ⇒ acceso vía shape loose (patrón `program.methods`, `solana-wallet.ts:401`).
   const methods = program.methods as unknown as {
     deposit: (...args: unknown[]) => {
       accounts: (a: Record<string, PublicKey>) => {

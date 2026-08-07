@@ -3,7 +3,7 @@
 // ⚠️ CD-11: server-only. PROHIBIDO importarlo desde cualquier módulo "use client" / componente /
 // browser — usa SUPABASE_SERVICE_ROLE_KEY (BYPASSRLS), que NUNCA debe llegar al bundle del cliente.
 //
-// Patrón exemplar: rate-limit.ts:107-140 (factory lazy memoizada null-safe). Lee las envs DENTRO de
+// Patrón exemplar: rate-limit.ts:122-155 (factory lazy memoizada null-safe). Lee las envs DENTRO de
 // la función en runtime (CD-14) y devuelve null si faltan ⇒ el ledger se apaga con gracia
 // (byte-idéntico, AC-2/AC-10). NO lee envs en el top-level del módulo.
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";

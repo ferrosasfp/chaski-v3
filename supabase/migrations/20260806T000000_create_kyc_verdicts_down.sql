@@ -1,0 +1,25 @@
+-- 20260806T000000_create_kyc_verdicts_down.sql — reversa de 20260806T000000_create_kyc_verdicts.sql.
+-- NO aplicar: la aplica el founder (accion gated, classifier). Base: bdwv. PROHIBIDO caldz (mainnet).
+--
+-- 🔴 ESTE `down` ES DESTRUCTIVO Y CORTA EL MONEY-PATH. No es simetrico con el `up`.
+--
+-- Con `KYC_VERDICT_STORE_ENABLED=true`, esta tabla ES la fuente del identificador que
+-- `app/api/payout/prepare/route.ts` le presenta a la autoridad de KYC al preparar un desembolso. El
+-- backend YA NO acepta el `kycVerificationId` del cliente (AC-16/CD-26): si no hay fila, corta con
+-- `prepare_kyc_verdict_missing` (403) y NO hay camino de respaldo, ni transitorio ni gateado por env.
+--
+-- ⇒ Ejecutar este `down` con el flag ENCENDIDO deja a TODA la gente ya verificada sin poder pagar,
+--   hasta que cada persona vuelva a pasar por la verificacion de identidad completa. El dato no se
+--   puede reconstruir desde el navegador: el veredicto server-side es justamente lo que reemplazo al
+--   `localStorage`, y el `verification_id` de un navegador viejo no autoriza por si solo (AC-8: hay
+--   que re-consultar a la autoridad, y solo se persiste si vuelve autorizada).
+--
+-- ⇒ SOLO es seguro con `KYC_VERDICT_STORE_ENABLED` ausente/OFF. Con el flag apagado, la factory
+--   `getKycVerdictStore()` devuelve null, nadie lee ni escribe la tabla, y `prepare` conserva su
+--   comportamiento actual.
+--
+-- Orden seguro para revertir, y en este orden:
+--   1. `KYC_VERDICT_STORE_ENABLED` a ausente/OFF, y esperar a que el deploy tome efecto.
+--   2. Verificar que un pago completo funciona con el flag apagado.
+--   3. Recien entonces, este `down`.
+drop table if exists public.kyc_verdicts;

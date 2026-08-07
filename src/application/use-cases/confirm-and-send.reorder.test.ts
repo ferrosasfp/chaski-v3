@@ -1,7 +1,19 @@
 // Tests — ConfirmAndSend: el ORDEN de los guards del camino no-custodial (WKH-211 / HU-SOL-13).
 //
-// Orden que se clava: confirm → autoridad → expiry → prepare → authorizePrincipal → settle →
+// Orden que se clava: confirm → expiry → rent → prepare → authorizePrincipal → settle →
 // markPrincipalIn → markPayoutSubmitted. Un guard movido de lugar pone esto rojo.
+//
+// ⚠️ ESTA CADENA CAMBIÓ EN WKH-333 (DT-20), Y ES EL CAMBIO QUE ESTE ARCHIVO EXISTE PARA DETECTAR.
+// Decía `confirm → autoridad → expiry → prepare → …`, y "autoridad" SALIÓ: el pre-check que
+// `ConfirmAndSend` hacía contra el proveedor de identidad se eliminó del use-case. No es que el guard
+// se relajó — es que se MUDÓ, entero, a `/api/payout/prepare`, donde corre server-side, detrás de la
+// prueba de posesión de la billetera y con el identificador sacado de la fila del dueño probado, o
+// sea estrictamente más fuerte que acá. El caso que lo probaba se reescribió más abajo con esa razón
+// al lado; no se borró.
+//
+// Lo que este archivo sigue clavando, y no cambió: NINGÚN guard que corría antes de `prepare` corre
+// después. Crear una orden de payout real es irreversible del lado del proveedor, así que todo lo que
+// puede decir que no tiene que decirlo antes.
 import { describe, expect, it, vi } from "vitest";
 import { Money } from "../../domain/money";
 import { type KycVerification, type Quote, Remittance } from "../../domain/remittance";
@@ -9,7 +21,6 @@ import {
   FAKE_SOLANA_AUTHORITY,
   FAKE_SOLANA_BENEFICIARY,
   FAKE_SOLANA_SIGNATURE,
-  FakePayoutAuthorityGateway,
   FakePayoutGateway,
   FakeRefundGateway,
   FakeSolanaEscrowDepositProbe,
@@ -54,6 +65,15 @@ async function seedQuoted(repo: InMemoryRepo): Promise<string> {
   return "r-1";
 }
 
+/** El número de orden de la PRIMERA invocación de un espía. Lanza si nunca se llamó, en vez de
+ *  comparar `undefined` (que en JS produce `NaN` y hace que cualquier `toBeLessThan` falle por el
+ *  motivo equivocado). Concentra además el `!` que TypeScript exige acá. */
+function firstCallOrder(spy: { mock: { invocationCallOrder: number[] } }): number {
+  const n = spy.mock.invocationCallOrder[0];
+  if (n === undefined) throw new Error("el espía nunca se invocó");
+  return n;
+}
+
 describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-211 / HU-SOL-13)", () => {
   it("AC-1: orden = prepare → authorizePrincipal → settle; el escrow firmado es el de prepare", async () => {
     const repo = new InMemoryRepo();
@@ -69,19 +89,14 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       wallet,
       repo,
       new FixedClock(),
-      new FakePayoutAuthorityGateway(),
       new FakeRefundGateway(),
       { prepare, gateway, probe: new FakeSolanaEscrowDepositProbe(),
         senderBalance: new FakeSolanaSenderSolBalanceProbe() },
     ).execute({ remittanceId: id });
 
     // Orden REAL de invocación: prepare ANTES de firmar ANTES de settle.
-    expect(prepareSpy.mock.invocationCallOrder[0]!).toBeLessThan(
-      authorizeSpy.mock.invocationCallOrder[0]!,
-    );
-    expect(authorizeSpy.mock.invocationCallOrder[0]!).toBeLessThan(
-      settleSpy.mock.invocationCallOrder[0]!,
-    );
+    expect(firstCallOrder(prepareSpy)).toBeLessThan(firstCallOrder(authorizeSpy));
+    expect(firstCallOrder(authorizeSpy)).toBeLessThan(firstCallOrder(settleSpy));
     // AC-1: authorizePrincipal recibió el beneficiary+authority RESUELTOS SERVER-SIDE por prepare,
     // nunca algo del body. Si alguien invirtiera la fuente, esto se pone rojo.
     expect(authorizeSpy.mock.calls[0]![2]).toEqual({
@@ -90,24 +105,74 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
     });
   });
 
-  it("la AUTORIDAD corre ANTES que prepare: authority false ⇒ prepare NUNCA se invoca", async () => {
+  // ⚠️ ESTE CASO CAMBIÓ DE EXPECTATIVA EN WKH-333 (DT-20). Se llamaba "la AUTORIDAD corre ANTES que
+  // prepare: authority false ⇒ prepare NUNCA se invoca" y afirmaba, con un
+  // `FakePayoutAuthorityGateway({authorized:false, reason:"kyc_not_approved"})`, que el use-case
+  // cortaba antes de crear la orden. Hoy ese pre-check no existe: `prepare` SÍ se invoca, y es la
+  // route la que corta —con el mismo fail-closed y dos guards más— antes de crear ninguna orden real.
+  //
+  // ⛔ NO SE BORRÓ. Se reescribió para clavar la propiedad que sí sigue siendo del use-case y que sí
+  // se puede perder acá: que `prepare` es lo PRIMERO que toca la red del money-path, y que todo lo
+  // que el use-case puede decidir solo lo decide ANTES. El caso "authority false ⇒ no se crea la
+  // orden" vive ahora en `app/api/payout/prepare/route.test.ts` (T-PR-9), que es donde el guard está.
+  it("prepare es la PRIMERA llamada de red del money-path: nada lo precede salvo guards locales", async () => {
+    const repo = new InMemoryRepo();
+    const prepare = new FakeSolanaPayoutPrepareGateway();
+    const prepareSpy = vi.spyOn(prepare, "prepare");
+    const wallet = new FakeSolanaWallet();
+    const authorizeSpy = vi.spyOn(wallet, "authorizePrincipal");
+    const gateway = new FakeSolanaSettlementGateway();
+    const settleSpy = vi.spyOn(gateway, "settle");
+    const id = await seedQuoted(repo);
+
+    await new ConfirmAndSend(
+      wallet,
+      repo,
+      new FixedClock(),
+      new FakeRefundGateway(),
+      { prepare, gateway, probe: new FakeSolanaEscrowDepositProbe(),
+        senderBalance: new FakeSolanaSenderSolBalanceProbe() },
+    ).execute({ remittanceId: id });
+
+    expect(prepareSpy).toHaveBeenCalledTimes(1);
+    // Y sigue corriendo ANTES de que la billetera firme y ANTES del broadcast: si esto se invirtiera,
+    // se le pediría la firma a la persona para una orden que todavía no existe.
+    expect(
+      firstCallOrder(prepareSpy),
+      "se le pidió la firma a la billetera ANTES de crear la orden de payout",
+    ).toBeLessThan(firstCallOrder(authorizeSpy));
+    expect(firstCallOrder(prepareSpy)).toBeLessThan(firstCallOrder(settleSpy));
+  });
+
+  // T-CS-2 (§0.5) — UNA sola consulta al proveedor de identidad por remesa, no dos.
+  //
+  // ⚠️ QUÉ SE MIDE ACÁ, exactamente: que el use-case produce UN SOLO call-site capaz de disparar esa
+  // consulta (el `prepare` server-side). NO se cuentan peticiones HTTP contra Didit: eso no es
+  // observable desde un test de use-case y NO SE PUDO VERIFICAR por ejecución de red. Antes había
+  // dos: el pre-check de `ConfirmAndSend` (vía `HttpPayoutAuthorityGateway` → /api/payout/validate →
+  // resolvePayoutAuthority) y el de la route de prepare. El primero ya no puede existir: su gateway
+  // no está en el constructor, y el `@ts-expect-error` de `confirm-and-send.test.ts` (T-CS-1) es el
+  // candado de compilación que lo impide.
+  it("T-CS-2: una remesa completa dispara UNA sola consulta a la autoridad de KYC, no dos", async () => {
     const repo = new InMemoryRepo();
     const prepare = new FakeSolanaPayoutPrepareGateway();
     const prepareSpy = vi.spyOn(prepare, "prepare");
     const id = await seedQuoted(repo);
 
-    const out = await new ConfirmAndSend(
+    await new ConfirmAndSend(
       new FakeSolanaWallet(),
       repo,
       new FixedClock(),
-      new FakePayoutAuthorityGateway({ authorized: false, reason: "kyc_not_approved" }),
       new FakeRefundGateway(),
       { prepare, gateway: new FakeSolanaSettlementGateway(), probe: new FakeSolanaEscrowDepositProbe(),
         senderBalance: new FakeSolanaSenderSolBalanceProbe() },
     ).execute({ remittanceId: id });
 
-    expect(prepareSpy).not.toHaveBeenCalled(); // no se crea una orden real sin autoridad
-    expect(out.snapshot.failureReason).toBe("kyc_not_approved");
+    expect(
+      prepareSpy.mock.calls.length,
+      "la remesa disparó más de un camino hacia la autoridad de KYC: cada uno gasta un cupo del " +
+        "tier gratuito del proveedor, y el primero usaba un identificador que el navegador ya no tiene",
+    ).toBe(1);
   });
 
   it("el EXPIRY corre ANTES que prepare: quote vencido ⇒ prepare NUNCA se invoca", async () => {
@@ -121,7 +186,6 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       new FakeSolanaWallet(),
       repo,
       clock,
-      new FakePayoutAuthorityGateway(),
       new FakeRefundGateway(),
       { prepare, gateway: new FakeSolanaSettlementGateway(), probe: new FakeSolanaEscrowDepositProbe(),
         senderBalance: new FakeSolanaSenderSolBalanceProbe() },
@@ -149,7 +213,6 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       wallet,
       repo,
       new FixedClock(),
-      new FakePayoutAuthorityGateway(),
       refund,
       { prepare, gateway, probe: new FakeSolanaEscrowDepositProbe(),
         senderBalance: new FakeSolanaSenderSolBalanceProbe() },
@@ -172,7 +235,6 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       new FakeSolanaWallet(),
       repo,
       new FixedClock(),
-      new FakePayoutAuthorityGateway(),
       new FakeRefundGateway(),
       {
         prepare: new FakeSolanaPayoutPrepareGateway(),
@@ -204,7 +266,6 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       new FakeSolanaWallet(),
       repo,
       new FixedClock(),
-      new FakePayoutAuthorityGateway(),
       new FakeRefundGateway(),
       { prepare: new FakeSolanaPayoutPrepareGateway(), gateway, probe: new FakeSolanaEscrowDepositProbe(),
         senderBalance: new FakeSolanaSenderSolBalanceProbe() },

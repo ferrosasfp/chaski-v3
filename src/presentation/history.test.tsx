@@ -215,7 +215,7 @@ describe("una remesa con fondos en el escrow siempre es alcanzable desde la inte
   });
 
   // 🔴 EL CALLEJÓN SIN SALIDA QUE ESTA HU CIERRA. `escrowFundsKnowledge` clasifica `confirmed` como
-  // `unverified` (`escrowFundsKnowledge`, `flow-vm.ts:190`), así que el historial SÍ lo listaba, SÍ decía "No comprobamos si tus
+  // `unverified` (`escrowFundsKnowledge`, `flow-vm.ts:194`), así que el historial SÍ lo listaba, SÍ decía "No comprobamos si tus
   // USDC siguen en el escrow" y SÍ ofrecía "Ver seguimiento". Del otro lado de esa puerta no había
   // ningún botón: `refundeable` no incluía `confirmed`. La persona leía que no sabíamos dónde estaba
   // su plata y no tenía cómo pedir que volviera.
@@ -368,7 +368,7 @@ describe("el historial dice lo que sabe, y del vault no sabe nada", () => {
 
 // ── El botón que borra ────────────────────────────────────────────────────────────────────────────
 // "¿No sos vos?" llama a ForgetKyc, que hace repo.clearByOwner: borra TODAS las remesas del dueño del
-// almacenamiento local (forget-kyc.ts:25). Su copy hablaba sólo de la verificación, así que ya mentía
+// almacenamiento local (forget-kyc.ts:36). Su copy hablaba sólo de la verificación, así que ya mentía
 // por omisión. Mientras no había historial el daño era invisible; ahora se lleva puesto el único
 // camino que existe hacia una remesa con USDC en el escrow.
 describe("el botón que borra avisa lo que se lleva", () => {

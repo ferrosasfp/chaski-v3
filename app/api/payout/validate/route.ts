@@ -53,7 +53,19 @@ export async function POST(req: Request): Promise<Response> {
     }
   }
 
-  const { httpStatus, ...rest } = await resolvePayoutAuthority({ verificationId, address });
+  // 🔴 `provenance` y `riskLevel` SE DESCARTAN ACÁ, y no es prolijidad. WKH-333 los agregó a
+  // `PayoutAuthorityDecision` para el backfill del veredicto (server-side, CD-24), y este `...rest`
+  // los habría publicado tal cual: esta route es un POST PÚBLICO, así que cualquiera que presentara
+  // un par (verificationId, address) válido se llevaría además la clasificación de riesgo de esa
+  // persona y si su verificación fue real o simulada — dos datos que nunca salieron de acá.
+  // MEDIDO: el test "respuesta nunca contiene identity/documentNumber ni el API key (AC-7, CD-A8)"
+  // se puso rojo con `{authorized:true, provenance:"didit-mock", riskLevel:"low"}` antes de este
+  // descarte. Sacar los campos de la decisión no era opción: el backfill los necesita y duplicar el
+  // guard-order en una segunda función sería la divergencia que WKH-202/DT-1 prohíbe.
+  const { httpStatus, provenance: _p, riskLevel: _r, ...rest } = await resolvePayoutAuthority({
+    verificationId,
+    address,
+  });
 
   // AC-1/AC-2/DT-1: colapso no-oracle SOLO de los reasons subject → 1 código + status 200 fijo,
   // indistinguibles. Técnicos (502/503) y authorized:true pasan por el rest-spread intacto (CD-2).

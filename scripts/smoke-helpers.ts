@@ -139,7 +139,7 @@ export function resolveAnchorBn(anchorModule: unknown): BnConstructor {
 /**
  * Proveniencias que ESTE script reconoce como NO reales. Es una ALLOWLIST: sólo estos valores dejan
  * seguir la corrida; cualquier otro aborta. No pretende ser "todo lo que existe" — el `provenance`
- * lo elige un agente REMOTO (`src/infrastructure/settlement/http-solana-prepare-gateway.ts:296` lo
+ * lo elige un agente REMOTO (`src/infrastructure/settlement/http-solana-prepare-gateway.ts:298` lo
  * copia del body sin normalizar), o sea que el dominio del dato es "cualquier string".
  *
  * De dónde sale cada valor:

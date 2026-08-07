@@ -31,6 +31,22 @@ export interface KycRequest {
   purpose: string;
   callbackUrl?: string; // a dónde vuelve Didit tras el escaneo (misma pestaña)
   senderAddress?: string; // wallet del sender → rate-limit por address (WKH-179)
+  // WKH-333/R-1 — prueba de posesión de la billetera. OPCIONALES EN EL TIPO, OBLIGATORIAS EN LA
+  // ROUTE, exactamente por el criterio que este archivo ya aplica a `settlementAttestation` y al
+  // PoP del payout: el demo (sin DIDIT_API_KEY) sale con 501 ANTES del bloque de prueba y tiene que
+  // seguir byte-idéntico, así que el tipo no puede exigirlas. NO es fail-open: el enforcement vive
+  // en el SERVER (`app/api/kyc/session/route.ts`, bloque S5 → 403), y omitirlas no ayuda al atacante.
+  //
+  // 🔴 POR QUÉ EXISTEN. Sin esto, `vendor_data` salía del BODY: cualquiera podía crear una sesión de
+  // verificación atada a la dirección de OTRA persona y aprobarla con su propio documento. Didit
+  // ecoa esa dirección, y `app/api/kyc/decision/route.ts` escribía la fila del veredicto A NOMBRE DE
+  // LA VÍCTIMA. Con el veredicto server-side esa fila ES la fuente de autoridad del pago, así que la
+  // víctima pasaría a pagar bajo la identidad de otro sin forma de notarlo.
+  //
+  // Es la MISMA prueba que `ConnectWallet` ya obtuvo para leer el veredicto (viaja en
+  // `KycVerdictEnsureResult.proof`) ⇒ CERO prompts de billetera nuevos.
+  popChallenge?: string;
+  popSignature?: string;
 }
 // start() puede resolver directo (simulación) o pedir un redirect (Didit real).
 // authToken (WKH-179): token HMAC NUESTRO que ata la sesión al caller (NO el sessionToken de Didit).
@@ -66,7 +82,11 @@ export interface PayoutSubmit {
   amountUsd: number;
   expectedReceivePen: Money; // PEN lockeado que el usuario confirmó (M3/AC-6); NO reemplaza amountUsd
   beneficiary: Beneficiary;
-  kycVerificationId: string;
+  // 🔴 WKH-333 — `kycVerificationId` SE ELIMINÓ de acá también. MEDIDO: `PayoutSubmit` no tiene un
+  // solo call-site de producción (`command grep -rn "\.submit(" src/ app/` sólo devuelve tests) y
+  // `app/api/a2a/payout/submit/route.ts` no existe. Se saca igual, y no por prolijidad: mientras el
+  // campo esté declarado, el día que alguien reviva este puerto lo va a rellenar desde el cliente
+  // —que es exactamente el token al portador que esta HU sacó de la red— y `tsc` no va a decir nada.
   // WKH-202/DT-2: el server re-valida ownership (vendor_data de Didit) — NO-opcional (CD-4): un
   // address opcional sería fail-open.
   address: string;
@@ -231,10 +251,20 @@ export interface SolanaSettlementGateway {
 // (release-authority pubkey, resolveSolanaReleaseAuthorityPubkey). El use-case pasa ambos a
 // authorizePrincipal para que la wallet arme la ix `deposit` del escrow (no una transferencia directa).
 export interface SolanaPayoutPrepareGateway {
+  // 🔴 WKH-333 — `kycVerificationId` SE ELIMINÓ de este input, y no quedó opcional. El backend saca
+  // ese identificador de SU PROPIA fila, indexada por la dirección PoP-verificada (AC-16/CD-26), así
+  // que un cliente que lo mande no está aportando un dato: está proponiendo con qué verificación de
+  // identidad se lo autoriza. Dejarlo opcional permitiría que un call-site futuro lo reintrodujera
+  // sin que nada se pusiera rojo; sacarlo lo convierte en un ERROR DE COMPILACIÓN.
+  //
+  // ⚠️ LO QUE `tsc` NO CAZA, medido: borrar el campo de esta interfaz produce TS2353 en los
+  // call-sites con literal de objeto, pero NO produce error en una clase que lo implementa
+  // declarando el campo extra en su parámetro (bivarianza de métodos en TypeScript). El cierre real
+  // son DOS comandos: `tsc --noEmit` **y**
+  // `command grep -rn "kycVerificationId" src/ app/ --include=*.ts --include=*.tsx`.
   prepare(input: {
     remittanceId: string;
     quoteId: string;
-    kycVerificationId: string;
     address: string;
     amountUsd: number;
     beneficiary: Beneficiary;
@@ -409,7 +439,7 @@ export interface SolanaRemittanceIdResolver {
    * confusión sin que nada en el tipo la señalara. Mientras el método existió, escribir un doble ciego
    * era gratis (`{ listBySender: async () => [] }` compilaba) y escribir uno honesto era imposible.
    *
-   * El tipo que separa los tres es (`RemittanceIdLookup`, `:398`), acá arriba, y su docblock dice
+   * El tipo que separa los tres es (`RemittanceIdLookup`, `:428`), acá arriba, y su docblock dice
    * cuáles son y por qué las tres degradaciones son más probables que un fallo de red.
    *
    * Lo verificable hoy: en esta interfaz no quedó ningún método capaz de expresar el colapso, así que
@@ -490,6 +520,120 @@ export interface KycStore {
   get(address: string): Promise<KycVerification | null>;
   save(address: string, kyc: KycVerification): Promise<void>;
   clear(address: string): Promise<void>; // reset explícito del KYC-once de esa address (WKH-184)
+  // WKH-333/AC-8 — la entry CRUDA, sin aplicar el TTL. SÓLO la usa el backfill: `get()` devuelve
+  // null a los 181 días, así que el verificationId de una entry vencida (justo la población que el
+  // backfill salva) es inalcanzable por ahí. No autoriza nada: es una pista de por dónde preguntarle
+  // a la autoridad. Ver el docblock de `LocalKycStore.peek`.
+  peek(address: string): Promise<{ verification: KycVerification; savedAt: number } | null>;
+}
+
+// ── Veredicto de KYC persistido server-side (WKH-333) ────────────────────────
+// Mueve el veredicto de `localStorage` (por dispositivo, por navegador) a una fila durable, y hace
+// que el backend saque el `verification_id` de SU PROPIA fila en vez de aceptarlo del cliente.
+
+/** La fila, tal cual se persiste. SIN PII (CD-2): ni nombre, ni tipo/número de documento (ni sus
+ *  últimos 4), ni fecha de nacimiento, ni nacionalidad. Y SIN columna de vencimiento (CD-7): viaja
+ *  `verifiedAt`, que es el HECHO, y el vencimiento se computa al leer (AC-2). */
+export interface KycVerdictRecord {
+  /** Dirección base58 CASE-SENSITIVE, ya canonicalizada. Es la llave y el guard de ownership. */
+  senderAddress: string;
+  /** 🔴 CREDENCIAL del money-path: es lo que el backend le presenta a la autoridad de KYC al pagar.
+   *  PROHIBIDO devolverlo en cualquier respuesta HTTP, a nadie, ni siquiera al dueño PoP-verificado
+   *  (AC-6/CD-9), y PROHIBIDO loguearlo (CD-13). */
+  verificationId: string;
+  approved: boolean;
+  riskLevel: "low" | "medium" | "high";
+  /** CRUDA, como la declaró el proveedor. NO se colapsa en un booleano `isSimulated`: el dato tiene
+   *  más de dos valores y la allow-list vive en el LECTOR (AC-11). */
+  provenance: string;
+  /** ISO-8601. El HECHO: cuándo se verificó. */
+  verifiedAt: string;
+}
+
+/** Desenlace de la escritura. TRES valores y no un booleano, porque el del medio es el que sostiene
+ *  CD-25: re-escribir el MISMO `verification_id` (la route de decisión se pollea hasta 8 veces) NO
+ *  puede mover `verified_at`, o el veredicto no vencería nunca mientras alguien recargue la página.
+ *    · 'inserted'         — no había fila para esta dirección.
+ *    · 'replaced'         — había una con OTRO verification_id: es OTRA verificación ⇒ `verified_at`
+ *                           se mueve, porque el hecho es nuevo.
+ *    · 'already_recorded' — misma dirección, MISMO verification_id ⇒ NO-OP, `verified_at` intacto. */
+export type KycVerdictWriteOutcome = "inserted" | "replaced" | "already_recorded";
+
+/** Repositorio server-only del veredicto. Toda operación es OWNER-SCOPED por `senderAddress`
+ *  (CD-5): el cliente Supabase usa el service key y BYPASSEA RLS, así que ese filtro es el guard
+ *  REAL, no una optimización. */
+export interface KycVerdictStore {
+  /** La fila de ESTA dirección, o `null` si no hay. Devuelve el `verificationId` porque el consumidor
+   *  server-side lo necesita para hablar con la autoridad — NUNCA para responderlo. */
+  get(senderAddress: string): Promise<KycVerdictRecord | null>;
+  /** Escritura CAS, sin lectura previa (mismo contrato que el ledger de evidencia). */
+  put(record: KycVerdictRecord): Promise<KycVerdictWriteOutcome>;
+}
+
+/**
+ * Lo que el CLIENTE obtiene al preguntar por su veredicto. **TRES desenlaces, y ninguno es un
+ * `boolean`** (CD-16).
+ *
+ * La distinción que sostiene el tipo es la que un booleano no puede expresar:
+ *   · `usable`    — hay veredicto vigente, aprobado y de proveniencia real. Se puede saltear la
+ *                   sesión de Didit (AC-7').
+ *   · `absent`    — SE PREGUNTÓ y la respuesta fue que no sirve, con el motivo. Que la fila esté
+ *                   vencida es una respuesta, no un silencio.
+ *   · `not_asked` — NO SE LLEGÓ A PREGUNTAR. El mecanismo de prueba de posesión está apagado, la
+ *                   persona no firmó, la tabla está apagada, o la prueba no verificó. Las cuatro las
+ *                   dispara una BANDERA o una decisión de la persona, así que son MÁS probables que
+ *                   un fallo de red, no menos.
+ *
+ * 🔴 Colapsar `not_asked` en `absent` (M-19) no rompe nada visible: los dos terminan creando la
+ * sesión de Didit. Lo que rompe es la capacidad de saber por qué se gastó el cupo, y en el momento en
+ * que alguien use `usable` como default de "no pude preguntar", la persona se queda sin verificación
+ * y sin poder pagar. Los tres se escriben.
+ *
+ * ⚠️ `verificationId` NO está acá y no puede estar (AC-6): este tipo cruza la red hacia el navegador.
+ */
+export type KycVerdictAbsentReason = "absent" | "expired" | "simulated" | "not_approved";
+export type KycVerdictNotAskedReason =
+  | "pop_disabled"
+  | "pop_rejected"
+  | "pop_declined"
+  | "store_disabled";
+export type KycVerdictLookup =
+  | {
+      readonly outcome: "usable";
+      readonly verdict: {
+        readonly riskLevel: "low" | "medium" | "high";
+        readonly provenance: string;
+        readonly verifiedAt: string;
+      };
+    }
+  | { readonly outcome: "absent"; readonly reason: KycVerdictAbsentReason }
+  | { readonly outcome: "not_asked"; readonly reason: KycVerdictNotAskedReason };
+
+/** Prueba de posesión ya obtenida: challenge server-emitido + firma de la billetera. Existe como tipo
+ *  propio porque VIAJA: la misma prueba que autoriza la lectura del veredicto autoriza después la
+ *  creación de la sesión de KYC, y ése es todo el punto — una sola firma por sesión. */
+export interface WalletPossessionProof {
+  readonly challenge: string;
+  readonly signature: string;
+}
+
+/** Lo que devuelve `ensure`: el veredicto Y la prueba que se usó para obtenerlo.
+ *
+ *  🔴 LA PRUEBA VIAJA A PROPÓSITO (WKH-333/R-1). `/api/kyc/session` también la exige, y si el
+ *  gateway de la sesión firmara por su cuenta, la persona vería DOS prompts de billetera en el mismo
+ *  flujo por el mismo motivo. El nonce del challenge no se quema en este repo (residual R-3
+ *  documentado en `prepare/route.ts`), así que el mismo par sirve dentro de su TTL. `undefined`
+ *  cuando no se llegó a firmar (mecanismo apagado, o la persona dijo que no). */
+export interface KycVerdictEnsureResult {
+  readonly lookup: KycVerdictLookup;
+  readonly proof?: WalletPossessionProof;
+}
+
+/** Adapter CLIENTE del veredicto. `ensure` = leer y, si falta, backfillear en el mismo viaje.
+ *  `candidateVerificationId` es la PISTA del navegador (de `KycStore.peek`): el servidor NUNCA le
+ *  cree, la re-consulta contra la autoridad y persiste sólo si vuelve autorizada (AC-8). */
+export interface KycVerdictGateway {
+  ensure(address: string, candidateVerificationId?: string): Promise<KycVerdictEnsureResult>;
 }
 
 // ── Persistencia (historial/estado — aislado del demo) ───────────────────────

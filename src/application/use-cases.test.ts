@@ -15,7 +15,6 @@ import {
   FakeKycGateway,
   FakeKycPendingStore,
   FakeKycStore,
-  FakePayoutAuthorityGateway,
   FakePayoutGateway,
   FakeQuoteGateway,
   FakeRefundGateway,
@@ -62,7 +61,7 @@ function setup(opts?: {
     startKyc: new StartKyc(kycGw, kycStore, pending, repo, clock),
     resumeKyc: new ResumeKyc(kycGw, kycStore, pending, repo, clock),
     lock: new LockQuote(new FakeQuoteGateway(), repo, clock),
-    confirm: new ConfirmAndSend(wallet, repo, clock, new FakePayoutAuthorityGateway(), new FakeRefundGateway(), {
+    confirm: new ConfirmAndSend(wallet, repo, clock, new FakeRefundGateway(), {
       prepare: new FakeSolanaPayoutPrepareGateway(),
       gateway: opts?.solanaGateway ?? new FakeSolanaSettlementGateway(),
       probe: new FakeSolanaEscrowDepositProbe(),

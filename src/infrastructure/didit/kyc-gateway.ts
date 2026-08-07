@@ -18,9 +18,19 @@ export class DiditKycGateway implements KycGateway {
     const sres = await fetch("/api/kyc/session", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      // vendorData = address del sender → rate-limit por address (WKH-179). callback lo IGNORA
-      // la ruta (se reconstruye server-side, M6) pero se manda por compat.
-      body: JSON.stringify({ callback: req.callbackUrl, vendorData: req.senderAddress }),
+      // vendorData = address del sender. ⚠️ WKH-333/R-1: la ruta YA NO lo usa como `vendor_data` de
+      // la sesión — usa la dirección del challenge PoP-verificado. Se sigue mandando porque la ruta
+      // lo usa como hint del rate-limit por address (WKH-179), que corre ANTES del bloque cripto y
+      // donde un valor forjable ya era forjable antes. `callback` lo IGNORA la ruta (se reconstruye
+      // server-side, M6) pero se manda por compat.
+      body: JSON.stringify({
+        callback: req.callbackUrl,
+        vendorData: req.senderAddress,
+        // La prueba que obtuvo `ConnectWallet`. Sin ella la ruta responde 403 (con DIDIT_API_KEY
+        // presente); en el demo, la ruta sale con 501 antes y cae a la simulación de abajo.
+        popChallenge: req.popChallenge,
+        popSignature: req.popSignature,
+      }),
     });
     if (sres.status === 501) return this.fallback.start(req); // sin Didit → simulación
     if (!sres.ok) throw new Error("didit_session_failed");

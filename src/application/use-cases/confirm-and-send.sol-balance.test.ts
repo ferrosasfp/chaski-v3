@@ -16,7 +16,6 @@ import { type KycVerification, type Quote, Remittance } from "../../domain/remit
 import {
   FAKE_SOLANA_BENEFICIARY,
   FAKE_SOLANA_SIGNATURE,
-  FakePayoutAuthorityGateway,
   FakeRefundGateway,
   FakeSolanaEscrowDepositProbe,
   FakeSolanaPayoutPrepareGateway,
@@ -72,7 +71,6 @@ function build(
     wallet,
     repo,
     new FixedClock(),
-    new FakePayoutAuthorityGateway({ authorized: true }),
     // "no-receipt" = lo que hace el adapter REAL de producción (LedgerRefundGateway): no fabrica un
     // comprobante de reembolso, así que la remesa queda en payout_failed CON su reason a la vista. Con
     // el fake que sí lo fabrica, el estado terminal sería `refunded` y el reason quedaría tapado detrás

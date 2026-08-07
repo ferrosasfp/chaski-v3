@@ -82,7 +82,7 @@ describe("FallbackPayoutGateway — no fabrica hechos sobre plata ajena", () => 
       amountUsd: 400,
       expectedReceivePen: Money.of(1478.15, "PEN"),
       beneficiary: beneficiary(),
-      kycVerificationId: "v-1",
+      // WKH-333: el campo se eliminó de `PayoutSubmit` (ver ports.ts).
       address: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
       idempotencyKey: "rem-1:q",
     });

@@ -2,8 +2,26 @@
 // nunca llega al browser. POST /v3/session/ con header x-api-key. Env-gated (501 si no hay key).
 // WKH-179: rate-limit por IP + address ANTES de llamar a Didit (financial-DoS, A2); callback
 // reconstruido server-side (ignora body.callback, M6); emite el token HMAC de sesión (B1).
-// Guard-order: 501 → 500 → rate-limit → callback server-side → Didit → issue token (CD-2).
+// Guard-order: 501 → 500 → rate-limit → PoP → callback server-side → Didit → issue token (CD-2).
+//
+// 🔴 WKH-333/R-1 — `vendor_data` YA NO SALE DEL BODY. Salía, y eso permitía crear una sesión de
+// verificación atada a la dirección de OTRA persona y aprobarla con el documento propio: Didit ecoa
+// esa dirección y `app/api/kyc/decision/route.ts` escribía la fila del veredicto A NOMBRE DE LA
+// VÍCTIMA. Mientras el pago usaba el identificador del localStorage de cada uno, esa fila ajena era
+// inerte. Con el veredicto server-side, esa fila ES la fuente de autoridad del pago —y el paso 1 del
+// CAS la REEMPLAZA si ya había una legítima—, así que la víctima pasaría a pagar bajo la identidad de
+// otro sin forma de notarlo. Por eso R-1 entra en esta HU y no queda como sucesora.
+//
+// Residual que esto NO cierra, y es idéntico a hoy: quien controla la dirección puede escanear el
+// documento de otra persona. Eso es un problema del verificador de identidad, no de este binding.
 import { NextResponse } from "next/server";
+import {
+  buildSolanaPopMessage,
+  verifySolanaPopChallenge,
+} from "../../../../src/infrastructure/auth/pop-challenge";
+import { verifySolanaPop } from "../../../../src/infrastructure/auth/pop-verify-solana";
+import { resolveSolanaNetworkId } from "../../../../src/infrastructure/chain";
+import { canonicalizeAddress } from "../../../../src/infrastructure/address";
 import { resolveDiditBaseUrl } from "../../../../src/infrastructure/didit/didit-env";
 import { issueSessionToken } from "../../../../src/infrastructure/kyc-auth";
 import { checkKycRateLimit } from "../../../../src/infrastructure/rate-limit";
@@ -50,7 +68,12 @@ export async function POST(req: Request): Promise<Response> {
     return NextResponse.json({ error: "didit_env_misconfigured" }, { status: 500 });
   }
 
-  const body = (await req.json().catch(() => ({}))) as { vendorData?: string; callback?: string };
+  const body = (await req.json().catch(() => ({}))) as {
+    vendorData?: string;
+    callback?: string;
+    popChallenge?: unknown;
+    popSignature?: unknown;
+  };
 
   // Rate-limit ANTES de cualquier fetch a Didit (CD-2). Fail-closed si Upstash no está (503).
   const rl = await checkKycRateLimit({ ip: clientIp(req), address: body.vendorData });
@@ -64,6 +87,70 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
+  // ── S5 — PRUEBA DE POSESIÓN DE LA BILLETERA (WKH-333/AC-19, CD-29) ──────────────────────────────
+  //
+  // POSICIÓN, y ninguna de las dos cosas es cosmética:
+  //   · DESPUÉS del rate-limit. Este bloque hace HMAC + ed25519, o sea CPU. Ponerlo antes del limiter
+  //     abriría una ventana de CPU-DoS. Es el mismo orden que ya resolvieron
+  //     `app/api/a2a/payout/challenge/route.ts` y `app/api/solana/escrow/remittance-ids/route.ts`.
+  //   · DESPUÉS del 501 de `DIDIT_API_KEY`. Sin key la ruta ya salió arriba con 501 y
+  //     `DiditKycGateway.start` cae a la simulación ⇒ EL DEMO QUEDA BYTE-IDÉNTICO (AC-12). Si este
+  //     bloque estuviera antes, el demo empezaría a exigir una firma de billetera que hoy no pide.
+  //
+  // El limiter de arriba sigue usando `body.vendorData` como hint, igual que antes: moverlo a la
+  // dirección probada lo pondría después del cripto. No se debilita nada —ese valor ya era forjable
+  // antes de esta HU— y se declara acá para que no parezca un descuido.
+  //
+  // CUALQUIERA de los cinco fallos colapsa en el MISMO 403 con el MISMO cuerpo (no-oracle).
+  const POP_SECRET = process.env.PAYOUT_POP_SECRET; // CD-14: dentro del handler
+  if (!POP_SECRET) {
+    // Sin secreto no se puede verificar NINGUNA prueba ⇒ fail-closed. NO es opcional dejarlo: sin
+    // este guard, `verifySolanaPopChallenge` tira "PAYOUT_POP_SECRET missing" y sale un 500 crudo.
+    // Un deployment CON key de Didit y SIN este secreto no puede atar la sesión a nadie, así que no
+    // debe crear ninguna.
+    return NextResponse.json({ error: "kyc_session_unavailable" }, { status: 503 });
+  }
+  const popChallenge = body.popChallenge;
+  const popSignature = body.popSignature;
+  // P1 — presencia + tipo.
+  if (
+    typeof popChallenge !== "string" ||
+    !popChallenge.trim() ||
+    typeof popSignature !== "string" ||
+    !popSignature.trim()
+  ) {
+    return NextResponse.json({ error: "kyc_session_unverified" }, { status: 403 });
+  }
+  // P2 — HMAC + exp + tipos colapsan en null.
+  const ch = verifySolanaPopChallenge(popChallenge, Date.now());
+  if (!ch) {
+    return NextResponse.json({ error: "kyc_session_unverified" }, { status: 403 });
+  }
+  // P3 — la dirección del challenge tiene que ser base58 canonicalizable. NO se la compara contra
+  // `body.vendorData`: comparar el valor probado contra un valor que el caller escribió no agrega
+  // nada, y confundir ambos es exactamente el guard-que-se-mira-al-espejo que CD-18 prohíbe. Lo que
+  // vale es `ch.address`, y es la única que se usa de acá en adelante.
+  let provedAddress: string;
+  try {
+    provedAddress = canonicalizeAddress(ch.address);
+  } catch {
+    return NextResponse.json({ error: "kyc_session_unverified" }, { status: 403 });
+  }
+  // P4 — binding CAIP-2: el network-id del token vs el resuelto server-side, NUNCA del body.
+  if (ch.networkId !== resolveSolanaNetworkId()) {
+    return NextResponse.json({ error: "kyc_session_unverified" }, { status: 403 });
+  }
+  // P5 — ed25519 sobre el mensaje reconstruido con la MISMA buildSolanaPopMessage.
+  if (
+    !verifySolanaPop({
+      addressBase58: ch.address,
+      message: buildSolanaPopMessage(ch),
+      signatureBase58: popSignature,
+    })
+  ) {
+    return NextResponse.json({ error: "kyc_session_unverified" }, { status: 403 });
+  }
+
   // Callback server-side: se IGNORA body.callback por completo (M6). Sin base URL → sin callback
   // (Didit muestra su pantalla default; el resume anda por localStorage).
   const callbackBase = process.env.KYC_CALLBACK_BASE_URL;
@@ -74,7 +161,10 @@ export async function POST(req: Request): Promise<Response> {
     headers: { "content-type": "application/json", "x-api-key": apiKey },
     body: JSON.stringify({
       workflow_id: workflowId,
-      vendor_data: body.vendorData,
+      // 🔴 LA DIRECCIÓN PROBADA, NUNCA `body.vendorData` (AC-19/CD-29). Este valor es el que Didit
+      // ecoa en la decisión y con el que se escribe la fila del veredicto: si saliera del body,
+      // cualquiera podría hacer que la fila de otra persona quede a su nombre (o al revés).
+      vendor_data: provedAddress,
       callback,
     }),
     signal: AbortSignal.timeout(10_000),

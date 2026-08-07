@@ -35,7 +35,6 @@ import {
 import type { SolanaSettlementFailureReason } from "../application/ports";
 import {
   FAKE_SOLANA_BENEFICIARY,
-  FakePayoutAuthorityGateway,
   FakeRefundGateway,
   FakeSolanaEscrowDepositProbe,
   FakeSolanaPayoutPrepareGateway,
@@ -92,7 +91,6 @@ async function runSettleFailure(
     new FakeSolanaWallet(),
     repo,
     new FixedClock(),
-    new FakePayoutAuthorityGateway({ authorized: true }),
     new FakeRefundGateway("no-receipt"), // el adapter de producción no revierte nada
     {
       prepare: new FakeSolanaPayoutPrepareGateway(),

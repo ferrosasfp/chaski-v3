@@ -71,7 +71,7 @@ function prepareInput() {
   return {
     remittanceId: "rem-1",
     quoteId: "q-400",
-    kycVerificationId: "v-1",
+    // WKH-333: el gateway ya NO envía el identificador; lo resuelve la route desde su fila.
     address: ADDR,
     amountUsd: 400,
     beneficiary,

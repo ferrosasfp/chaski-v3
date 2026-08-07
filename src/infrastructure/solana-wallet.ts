@@ -365,7 +365,7 @@ export class SolanaWalletAdapter
     // ── Args canónicos (AC-8/CD-SDD-3) — String(...) NO Number(...) ──
     const remittanceIdBytes = this.remittanceIdToBytes16(remittanceId); // [u8;16] determinístico
     const amount = new anchor.BN(String(quote.send.minor)); // u64, sin floats
-    // El guard de vencimiento de la cotización ya corrió aguas arriba (`confirm-and-send.ts`:197,
+    // El guard de vencimiento de la cotización ya corrió aguas arriba (`confirm-and-send.ts`:198,
     // orden CAS → autoridad → expiry → prepare → firma). Éste lo repite localmente para que la
     // wallet nunca firme sobre una cotización con fecha ilegible, venga de donde venga el llamador.
     // Ya NO alimenta el deadline: ver CUSTODY_WINDOW_SECS.

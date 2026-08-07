@@ -183,7 +183,6 @@ export class HttpSolanaPayoutPrepareGateway implements SolanaPayoutPrepareGatewa
   async prepare(input: {
     remittanceId: string;
     quoteId: string;
-    kycVerificationId: string;
     address: string;
     amountUsd: number;
     beneficiary: Beneficiary;
@@ -233,7 +232,10 @@ export class HttpSolanaPayoutPrepareGateway implements SolanaPayoutPrepareGatewa
         body: JSON.stringify({
           remittanceId: input.remittanceId,
           quoteId: input.quoteId,
-          kycVerificationId: input.kycVerificationId,
+          // 🔴 SIN `kycVerificationId` (WKH-333/AC-14'). La route lo resuelve desde su propia fila,
+          // indexada por la dirección que el PoP de acá abajo prueba. Un cliente que lo mandara no
+          // aportaría un dato: propondría con qué verificación de identidad se lo autoriza — y la
+          // route lo pisa igual (AC-16), así que mandarlo sólo sería ruido en la red.
           address: input.address,
           amountUsd: input.amountUsd,
           beneficiary: input.beneficiary, // viaja al server; NUNCA se loguea (CD-5)

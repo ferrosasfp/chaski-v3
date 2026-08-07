@@ -181,7 +181,10 @@ describe("flow-vm — escrowFundsKnowledge", () => {
   });
 
   // TRAMPA 2: `settled` dice que el partner entregó los PEN. La release del vault la dispara una
-  // persona a mano y este repo no la llama nunca (confirm-and-send.ts:283-292): son dos hechos
+  // persona a mano y este repo no la llama nunca. Es una AUSENCIA, así que se refuta con un
+  // comando y no con un `archivo:línea`:
+  // `command grep -rn "release(\|releaseEscrow\|buildRelease\|releaseIx" src/ app/ --include=*.ts --include=*.tsx`
+  // devuelve CERO líneas (exit 1). Son dos hechos
   // distintos y sólo tenemos el primero.
   it("`settled` NO afirma que el vault se liberó: sigue siendo 'unverified'", () => {
     expect(escrowFundsKnowledge(rem({ status: "settled", principalTx: "sig" }))).toBe("unverified");
@@ -852,5 +855,55 @@ describe("flow-vm — shortErrorCode", () => {
     expect(out).toBeDefined();
     expect(out!.length).toBeLessThanOrEqual(81); // 80 + el carácter de elisión
     expect(out!.endsWith("…")).toBe(true);
+  });
+});
+
+// ── WKH-333 · T-COPY-1/2 — el copy de los dos cortes nuevos del money-path (M-35) ────────────────
+//
+// `humanError` matchea POR SUBSTRING y gana el primero que coincide. Los dos códigos de abajo caían
+// en catch-alls que decían cosas falsas sobre la plata de la persona.
+describe("humanError — los cortes de KYC del prepare no prometen USDC en el escrow (WKH-333)", () => {
+  // ── T-COPY-1 ───────────────────────────────────────────────────────────────────────────────────
+  it("T-COPY-1: `prepare_kyc_verdict_missing` tiene copy propio y NO habla de USDC en el escrow (M-35)", () => {
+    const msg = humanError("prepare_kyc_verdict_missing");
+    // El corte es ANTES del prepare y ANTES de la primera firma: no se movió nada, y eso es un hecho
+    // del orden de la ruta, no un consuelo.
+    expect(
+      msg,
+      "el mensaje manda a la persona a sacar del escrow unos USDC que nunca salieron de su " +
+        "billetera: el corte ocurre antes de que se le pida una sola firma",
+    ).not.toContain("escrow");
+    expect(msg).toContain("No se movió ningún USDC");
+    // Y NO cae en el catch-all genérico de `kyc`, que es cierto pero no dice la acción.
+    expect(msg).not.toBe(humanError("kyc_algo_generico"));
+  });
+
+  // ── T-COPY-2 ───────────────────────────────────────────────────────────────────────────────────
+  it("T-COPY-2: `payout_not_authorized` tiene copy propio y NO promete USDC en el escrow (M-35)", () => {
+    const msg = humanError("payout_not_authorized");
+    expect(
+      msg,
+      "el defecto preexistente sigue: `payout_not_authorized` no contiene 'kyc', así que caía en el " +
+        "catch-all de `payout` y le decía a la persona 'si tus USDC entraron al escrow, los sacás " +
+        "vos firmando' — hablando de plata en el escrow cuando el corte es anterior a la firma",
+    ).not.toContain("escrow");
+    expect(msg).toContain("No se movió ningún USDC");
+    expect(msg).not.toBe(humanError("payout_algo_generico"));
+  });
+
+  it("T-COPY-3: 'no pude comprobar' NO se confunde con 'no estás verificado'", () => {
+    // Mandar a re-verificarse a alguien porque NUESTRA base se cayó es un consejo equivocado.
+    const caida = humanError("prepare_kyc_verdict_unavailable");
+    const sinFila = humanError("prepare_kyc_verdict_missing");
+    expect(caida).not.toBe(sinFila);
+    expect(caida).toContain("No se movió ningún USDC");
+    expect(caida).not.toContain("escrow");
+  });
+
+  it("T-COPY-4: los catch-alls que ya existían NO cambiaron", () => {
+    expect(humanError("kyc_algo_generico")).toBe("No pudimos verificar tu identidad.");
+    expect(humanError("payout_algo_generico")).toBe(
+      "No se pudo entregar. No hay un reembolso automático: si tus USDC entraron al escrow, los sacás vos firmando desde tu wallet.",
+    );
   });
 });

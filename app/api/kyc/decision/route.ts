@@ -4,7 +4,14 @@
 // documentNumber se enmascara en la respuesta (defensa en profundidad). Guard-order: 501 → 500
 // → 400 → 401 → recién Didit (nunca fetch a Didit sin autorización, CD-2).
 import { NextResponse } from "next/server";
-import { mapDiditDecision, maskDecision } from "../../../../src/infrastructure/didit/decision";
+import {
+  type DiditDecisionResult,
+  mapDiditDecision,
+  maskDecision,
+} from "../../../../src/infrastructure/didit/decision";
+import { canonicalizeAddress } from "../../../../src/infrastructure/address";
+import { getKycVerdictStore } from "../../../../src/infrastructure/persistence/supabase-kyc-verdicts";
+import { logLedgerAlert } from "../../../../src/infrastructure/persistence/ledger-alert";
 import {
   resolveDiditBaseUrl,
   resolveDiditEnvironment,
@@ -54,5 +61,60 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   const decision = await res.json();
-  return NextResponse.json(maskDecision(mapDiditDecision(decision, environment)));
+  const mapped = mapDiditDecision(decision, environment);
+  await persistKycVerdict(mapped);
+  return NextResponse.json(maskDecision(mapped));
+}
+
+/**
+ * WKH-333/AC-1 — persiste el veredicto cuando la verificación llega a un desenlace terminal APROBADO.
+ *
+ * POR QUÉ ACÁ Y NO EN `resume-kyc.ts`. Ese use-case corre en el BROWSER (`container.ts`, "Container
+ * compartido (browser)"). Escribir desde ahí sería el navegador diciéndole al servidor "esta
+ * dirección está verificada", que es exactamente lo que `ports.ts` prohíbe: los booleanos del
+ * localStorage son atacante-controlables. Acá, en cambio, las cinco cosas que la fila necesita
+ * —terminal, verificationId, approved, riskLevel, provenance, vendorData— salen de `mapDiditDecision`
+ * sobre la respuesta que Didit acaba de dar, server-side.
+ *
+ * BEST-EFFORT y sin PII (AC-9/CD-2/CD-13):
+ *   · La respuesta HTTP es BYTE-IDÉNTICA pase lo que pase con la escritura. Que la evidencia no quede
+ *     no puede cambiar el desenlace del KYC de una persona.
+ *   · Un fallo emite UNA alerta por el MISMO canal que el ledger de evidencia (`logLedgerAlert`), y
+ *     VALUE-FREE: ni el verification_id, ni la dirección, ni ningún campo de la fila. Interpolar el
+ *     prefijo a mano en un `console.error` rompería la garantía que ese módulo documenta.
+ *   · `vendorData` vacío ⇒ NO se escribe. Es el mismo fail-closed que el ownership check de
+ *     `authority.ts`: sin binding declarado no se puede afirmar de QUIÉN es esta verificación, y una
+ *     fila a nombre equivocado es peor que ninguna fila (con el flag encendido, esa fila es la fuente
+ *     de autoridad de un pago).
+ *   · IDEMPOTENTE sin mover `verified_at`: esta route se pollea hasta 8 veces por verificación
+ *     (`flow.tsx`, RESUME_MAX_POLLS). El contrato CAS del store devuelve 'already_recorded' y NO
+ *     toca la fecha (CD-25); si la moviera, quien deje la pestaña recargando no vencería nunca.
+ *
+ * `verifiedAt` es el momento en que ESTE servidor observó el desenlace terminal. Es lo único que este
+ * código midió: la fecha del escaneo no viaja en la decisión de Didit.
+ */
+async function persistKycVerdict(mapped: DiditDecisionResult): Promise<void> {
+  if (!mapped.terminal || !mapped.approved) return;
+  const store = getKycVerdictStore();
+  if (!store) return; // flag OFF o envs ausentes ⇒ byte-idéntico a hoy (AC-12)
+  if (!mapped.vendorData) return; // fail-closed: sin binding no se escribe
+  let owner: string;
+  try {
+    owner = canonicalizeAddress(mapped.vendorData);
+  } catch {
+    return; // vendor_data que no es una address ⇒ tampoco hay binding
+  }
+  try {
+    await store.put({
+      senderAddress: owner,
+      verificationId: mapped.verificationId,
+      approved: true,
+      riskLevel: mapped.riskLevel,
+      provenance: mapped.provenance, // CRUDA (AC-11): el juicio vive en el lector
+      verifiedAt: new Date().toISOString(),
+    });
+  } catch {
+    // Value-free por contrato: sólo la etiqueta de la rama. Nada de la fila (CD-13).
+    logLedgerAlert("kyc_verdict_write_failed", { stage: "kyc_decision_route" });
+  }
 }

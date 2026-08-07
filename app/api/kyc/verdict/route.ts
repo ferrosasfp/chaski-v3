@@ -1,0 +1,255 @@
+// Server-side: consulta (y backfill) del VEREDICTO de KYC de una dirección (WKH-333/AC-5..AC-13).
+//
+// Devuelve si la persona tiene una verificación de identidad vigente y utilizable, SIN devolver nunca
+// el `verification_id` — ni en el 200, ni en ningún error, ni al dueño PoP-verificado (AC-6/CD-9).
+// Ese identificador es una CREDENCIAL del money-path: es lo que el backend le presenta a la autoridad
+// de KYC al pagar, y lo único que WKH-333 cambia de fondo es que deja de viajar por la red.
+//
+// Guard-order fail-closed (envs en runtime, CD-14): V1 secreto PoP → V2 rate-limit → V3 body →
+// V4 PoP P1..P5 → V5 store → V6 TTL → V7 lectura owner-scoped → V8 backfill → V9 200.
+// Exemplar: app/api/solana/escrow/remittance-ids/route.ts:39-137.
+//
+// 🔴 V5 Y V6 VAN DESPUÉS DEL PoP, y no es cosmético. Si el chequeo del flag fuese antes, un caller
+// ANÓNIMO distinguiría "la tabla no está encendida" (501) de "está encendida y no sos vos" (403), y
+// eso ya es medio oráculo. Es exactamente lo que el exemplar resolvió en sus líneas 117-121.
+//
+// 🔴 V7 CONSULTA CON `ch.address`, NUNCA CON `body.sender`. `body.sender` sólo existe para poder
+// rechazar temprano lo malformado; el valor que toca la base es el del challenge PoP-verificado
+// (CD-18). Comparar un valor consigo mismo es el bloqueante que 041 documentó dos veces.
+//
+// TODO defensivo: NUNCA 500 crudo, NUNCA eco del `error.code` de Postgres, NUNCA PII.
+import { NextResponse } from "next/server";
+import type { KycVerdictRecord, KycVerdictStore } from "../../../../src/application/ports";
+import {
+  buildSolanaPopMessage,
+  verifySolanaPopChallenge,
+} from "../../../../src/infrastructure/auth/pop-challenge";
+import { verifySolanaPop } from "../../../../src/infrastructure/auth/pop-verify-solana";
+import { resolveSolanaNetworkId } from "../../../../src/infrastructure/chain";
+import { canonicalizeAddress } from "../../../../src/infrastructure/address";
+import { getKycVerdictStore } from "../../../../src/infrastructure/persistence/supabase-kyc-verdicts";
+import { resolveKycVerdictTtlDays } from "../../../../src/infrastructure/kyc-verdict-ttl-env";
+import { isVerdictExpired } from "../../../../src/infrastructure/kyc-verdict-ttl";
+import { resolvePayoutAuthority } from "../../../../src/infrastructure/payout/authority";
+import {
+  KYC_VERDICT_RL,
+  checkRouteRateLimit,
+  clientIp,
+} from "../../../../src/infrastructure/rate-limit";
+// ⚠️ ÚNICA importación de `src/presentation/**` desde una route de este repo, y es deliberada:
+// `isKycDemo` es la allow-list de proveniencias reales, y el propio archivo dice por qué un segundo
+// Set con los mismos valores es "exactamente cómo se desincronizan las dos capas". El módulo no es
+// "use client" y ya lo importa `scripts/smoke-helpers.ts`, así que no arrastra nada de React.
+// Refutación de que sigue siendo una sola fuente: `command grep -rn "isKycDemo" src/ app/ scripts/`.
+import { isKycDemo } from "../../../../src/presentation/flow-vm";
+
+// Excluye arrays (mirror de prepare/route.ts).
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+// `no-store` en TODA respuesta: el veredicto de identidad de una persona no se cachea en ningún
+// intermediario, ni el 200 ni el 403.
+function json(body: unknown, status: number, headers: Record<string, string> = {}): Response {
+  return NextResponse.json(body, {
+    status,
+    headers: { "Cache-Control": "no-store", ...headers },
+  });
+}
+
+export async function POST(req: Request): Promise<Response> {
+  // V1 — sin secreto no se puede verificar NINGÚN PoP ⇒ 503 fail-closed. Sin esto el endpoint
+  // degradaría a IDOR abierto sobre el estado de verificación de identidad de cualquiera.
+  const POP_SECRET = process.env.PAYOUT_POP_SECRET; // CD-14: dentro del handler
+  if (!POP_SECRET) {
+    return json({ error: "kyc_verdict_unavailable" }, 503);
+  }
+
+  // V2 — rate-limit IP-only, TRAS V1 y ANTES de parsear/verificar: el bloque de abajo hace HMAC +
+  // ed25519, o sea CPU, y sin límite eso es un DoS barato. IP-only porque el body todavía no existe.
+  const rl = await checkRouteRateLimit(KYC_VERDICT_RL, { ip: clientIp(req) });
+  if (rl.unavailable) {
+    return json({ error: "kyc_verdict_unavailable" }, 503); // fail-closed
+  }
+  if (!rl.ok) {
+    return json({ error: "kyc_verdict_rate_limited" }, 429, {
+      "Retry-After": String(rl.retryAfter ?? 60),
+    });
+  }
+
+  // V3 — body null-safe: `req.json()` RESUELVE `null` para el body literal `null` (el .catch NO
+  // dispara); isRecord cubre null y los no-objeto por igual.
+  const parsed: unknown = await req.json().catch(() => null);
+  const body: Record<string, unknown> = isRecord(parsed) ? parsed : {};
+  const rawSender = typeof body.sender === "string" ? body.sender : "";
+  let sender: string;
+  try {
+    sender = canonicalizeAddress(rawSender);
+  } catch {
+    return json({ error: "kyc_verdict_invalid_request" }, 400);
+  }
+
+  // V4 — proof-of-possession Solana OBLIGATORIO. Copiado del bloque P1..P5 del money-path
+  // (prepare/route.ts). CUALQUIERA de los cinco fallos colapsa en el MISMO 403, con el MISMO cuerpo:
+  // distinguirlos convertiría este endpoint en un oráculo del motivo (no-oracle).
+  const popChallenge = body.popChallenge;
+  const popSignature = body.popSignature;
+  // P1 — presencia + tipo.
+  if (
+    typeof popChallenge !== "string" ||
+    !popChallenge.trim() ||
+    typeof popSignature !== "string" ||
+    !popSignature.trim()
+  ) {
+    return json({ error: "kyc_verdict_unverified" }, 403);
+  }
+  // P2 — HMAC + exp + tipos colapsan en null.
+  const ch = verifySolanaPopChallenge(popChallenge, Date.now());
+  if (!ch) {
+    return json({ error: "kyc_verdict_unverified" }, 403);
+  }
+  // P3 — address match (base58 case-sensitive): el challenge tiene que ser DE ESTE sender. Sin esto,
+  // un caller presentaría el challenge+firma de la wallet A y pediría el veredicto de la wallet B.
+  try {
+    if (canonicalizeAddress(ch.address) !== sender) {
+      return json({ error: "kyc_verdict_unverified" }, 403);
+    }
+  } catch {
+    return json({ error: "kyc_verdict_unverified" }, 403);
+  }
+  // P4 — binding CAIP-2: el network-id del token vs el resuelto server-side, NUNCA del body.
+  if (ch.networkId !== resolveSolanaNetworkId()) {
+    return json({ error: "kyc_verdict_unverified" }, 403);
+  }
+  // P5 — ed25519 sobre el mensaje reconstruido con la MISMA buildSolanaPopMessage.
+  if (
+    !verifySolanaPop({
+      addressBase58: ch.address,
+      message: buildSolanaPopMessage(ch),
+      signatureBase58: popSignature,
+    })
+  ) {
+    return json({ error: "kyc_verdict_unverified" }, 403);
+  }
+
+  // Desde acá, y sólo desde acá, el caller probó que la billetera es suya. Todo lo que sigue habla
+  // exclusivamente de SU propia situación, así que ya no hay oráculo posible.
+  const owner = canonicalizeAddress(ch.address); // ← la PoP-verificada, NUNCA body.sender (CD-18)
+
+  // V5 — el store DESPUÉS del PoP (ver la cabecera).
+  const store = getKycVerdictStore();
+  if (!store) {
+    return json({ error: "kyc_verdict_not_enabled" }, 501);
+  }
+
+  // V6 — el TTL DESPUÉS del PoP, por la misma razón que V5. Fail-loud: una configuración de
+  // vencimiento inválida NO degrada a un default (AC-4/CD-8), corta.
+  let ttlDays: ReturnType<typeof resolveKycVerdictTtlDays>;
+  try {
+    ttlDays = resolveKycVerdictTtlDays();
+  } catch {
+    // El mensaje del throw nombra la env y el valor; NO se filtra al cliente.
+    return json({ error: "kyc_verdict_misconfigured" }, 503);
+  }
+
+  // V7 — lectura OWNER-SCOPED con la dirección PoP-verificada.
+  let record: Awaited<ReturnType<typeof store.get>>;
+  try {
+    record = await store.get(owner);
+  } catch {
+    // NUNCA 500 crudo, NUNCA eco del error.code de Postgres.
+    return json({ error: "kyc_verdict_unavailable" }, 502);
+  }
+
+  // V8 — BACKFILL, sólo si no hay fila. El navegador aporta una PISTA (`candidateVerificationId`) y
+  // nada más: por dónde preguntar. NO se le cree — el propio `ports.ts` dice que los booleanos del
+  // localStorage son atacante-controlables. Se re-consulta a la autoridad con la dirección
+  // PoP-VERIFICADA, y la autoridad compara el `vendor_data` que Didit ecoa contra esa dirección.
+  if (!record) {
+    const candidate =
+      typeof body.candidateVerificationId === "string" ? body.candidateVerificationId.trim() : "";
+    if (candidate) {
+      record = await backfill(store, candidate, owner);
+    }
+  }
+
+  // V9 — 200 con el juicio aplicado. SIN `verificationId` en ninguna rama (AC-6).
+  if (!record) return json({ verdict: null, reason: "absent" }, 200);
+  // Orden del juicio: primero lo que dijo la autoridad (`approved`), después de dónde salió
+  // (`provenance`), y al final la vigencia. Los tres viajan sólo detrás del PoP, o sea sólo al dueño,
+  // y existen para que la pantalla pueda decir "tu verificación venció" sin inventarlo.
+  if (!record.approved) return json({ verdict: null, reason: "not_approved" }, 200);
+  // AC-11: una proveniencia fuera del conjunto real cuenta como simulada AL LEER. Fail-safe: una
+  // etiqueta desconocida (un proveedor nuevo, un typo) sobre-avisa, que es el error gratis.
+  if (isKycDemo(record.provenance)) return json({ verdict: null, reason: "simulated" }, 200);
+  if (isVerdictExpired(record.verifiedAt, ttlDays, Date.now())) {
+    return json({ verdict: null, reason: "expired" }, 200);
+  }
+  return json(
+    {
+      verdict: {
+        riskLevel: record.riskLevel,
+        provenance: record.provenance,
+        verifiedAt: record.verifiedAt,
+      },
+    },
+    200,
+  );
+}
+
+/**
+ * Backfill (AC-8): re-consulta la autoridad con la pista del navegador y persiste **sólo si vuelve
+ * autorizada**. Devuelve la fila recién escrita, o `null` si no hubo nada que escribir.
+ *
+ * 🔴 PROHIBIDO persistir a partir del booleano del navegador (AC-8) y PROHIBIDO persistir cuando la
+ * autorización vino de la rama `simulated_dev` de `authority.ts` (CD-24): esa rama autoriza SIN
+ * consultar a Didit — existe para que el demo local ande — y una fila escrita desde ahí sería, con
+ * el flag encendido, fuente de autoridad de un pago real.
+ *
+ * `verifiedAt` es **el momento en que la autoridad confirmó la verificación**, que es lo único que
+ * este código midió. NO es la fecha del escaneo original: ese dato no viaja por `resolvePayoutAuthority`.
+ * Consecuencia declarada, y no es gratis: para quien se verificó hace mucho, el backfill reinicia el
+ * reloj del vencimiento. Se acepta porque la autoridad —que es quien sabe, y que tiene su propio
+ * estado terminal `Kyc Expired`— acaba de decir que sí, ahora.
+ *
+ * Best-effort: si la escritura falla, se sigue como si no hubiera fila. Nunca rompe la respuesta.
+ */
+async function backfill(
+  store: KycVerdictStore,
+  candidateVerificationId: string,
+  owner: string,
+): Promise<KycVerdictRecord | null> {
+  let decision: Awaited<ReturnType<typeof resolvePayoutAuthority>>;
+  try {
+    decision = await resolvePayoutAuthority({
+      verificationId: candidateVerificationId,
+      address: owner, // la PoP-verificada: la autoridad compara el vendor_data ecoado contra ESTA
+    });
+  } catch {
+    return null; // la autoridad no contestó ⇒ no se escribe nada
+  }
+  // Las tres condiciones son conjuntas y ninguna es redundante:
+  //   · authorized      — la autoridad dijo que sí.
+  //   · reason ausente  — `simulated_dev` también viene con authorized:true (CD-24).
+  //   · provenance      — sin proveniencia declarada no hay qué persistir sin inventarlo.
+  if (!decision.authorized) return null;
+  if (decision.reason === "simulated_dev") return null;
+  if (!decision.provenance || !decision.riskLevel) return null;
+
+  const record: KycVerdictRecord = {
+    senderAddress: owner,
+    verificationId: candidateVerificationId,
+    approved: true,
+    riskLevel: decision.riskLevel,
+    provenance: decision.provenance,
+    verifiedAt: new Date().toISOString(), // ver el docblock: es cuándo la autoridad lo confirmó
+  };
+  try {
+    await store.put(record);
+  } catch {
+    // La fila no quedó, pero la respuesta de esta llamada es la misma que si hubiera quedado: el
+    // caller ya tiene el veredicto en la mano y el próximo `ensure` reintenta.
+    return record;
+  }
+  return record;
+}

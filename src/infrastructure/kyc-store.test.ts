@@ -132,6 +132,45 @@ describe("LocalKycStore — TTL 180 días", () => {
     vi.setSystemTime(new Date(base.getTime() + 181 * DAY_MS));
     expect(await store.get(A)).toBeNull();
   });
+
+  // ── T-STORE-1 (WKH-333) — `get()` queda BYTE-IDÉNTICO tras la poda ───────────────────────────
+  it("T-STORE-1: a los 181 días `get()` sigue devolviendo null (M-24)", async () => {
+    vi.useFakeTimers();
+    const base = new Date("2026-01-01T00:00:00.000Z");
+    vi.setSystemTime(base);
+    const store = new LocalKycStore();
+    await store.save(A, kyc);
+    vi.setSystemTime(new Date(base.getTime() + 181 * DAY_MS));
+    expect(
+      await store.get(A),
+      "`get()` dejó de aplicar el TTL del caché de dispositivo: el flujo saltearía la verificación " +
+        "apoyado en un veredicto que el servidor ya considera vencido, y la persona llegaría a pagar " +
+        "sin fila utilizable",
+    ).toBeNull();
+  });
+
+  // ── T-STORE-2 (WKH-333/AC-8) — `peek()` NO aplica el TTL, y ése es todo el punto ─────────────
+  it("T-STORE-2: a los 181 días `peek()` SÍ devuelve la entry vencida (M-24b)", async () => {
+    vi.useFakeTimers();
+    const base = new Date("2026-01-01T00:00:00.000Z");
+    vi.setSystemTime(base);
+    const store = new LocalKycStore();
+    await store.save(A, kyc);
+    vi.setSystemTime(new Date(base.getTime() + 181 * DAY_MS));
+    const peeked = await store.peek(A);
+    expect(
+      peeked?.verification.verificationId,
+      "`peek()` aplicó el TTL: el backfill nunca alcanza a la población que existe para salvar " +
+        "—quien se verificó hace más de 180 días— y esa gente llega a `prepare` sin fila teniendo " +
+        "el identificador guardado en su propio navegador",
+    ).toBe("v-1");
+    expect(peeked?.savedAt).toBe(base.getTime());
+  });
+
+  it("T-STORE-2b: `peek()` de una address nunca guardada devuelve null", async () => {
+    const store = new LocalKycStore();
+    expect(await store.peek(D)).toBeNull();
+  });
 });
 
 describe("LocalKycStore — scrub comprensivo de PII legacy (MNR-1)", () => {

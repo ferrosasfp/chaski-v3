@@ -38,7 +38,6 @@ import {
   FakeKycStore,
   FakeKycPendingStore,
   FakePayoutGateway,
-  FakePayoutAuthorityGateway,
   FakeRefundGateway,
   FixedClock,
   SeqIds,
@@ -86,7 +85,10 @@ export function buildTestContainer(o: TestContainerOverrides = {}): Container {
   const kycStore = o.kycStore ?? new FakeKycStore();
   const pending = o.pending ?? new FakeKycPendingStore();
   const payouts = o.payouts ?? new FakePayoutGateway();
-  const payoutAuthority = o.payoutAuthority ?? new FakePayoutAuthorityGateway();
+  // WKH-333/DT-20: el doble de la autoridad ya NO se construye acá — `ConfirmAndSend` dejó de
+  // recibirla. La OPCIÓN `o.payoutAuthority` se conserva en el tipo para no romper llamadores,
+  // y se descarta explícitamente para que quede escrito que no llega a ningún lado.
+  void o.payoutAuthority;
   const refund = o.refund ?? new FakeRefundGateway();
 
   const base: Container = {
@@ -96,7 +98,10 @@ export function buildTestContainer(o: TestContainerOverrides = {}): Container {
     startKyc: new StartKyc(kyc, kycStore, pending, repo, clock),
     resumeKyc: new ResumeKyc(kyc, kycStore, pending, repo, clock),
     lockQuote: new LockQuote(quotes, repo, clock),
-    confirmAndSend: new ConfirmAndSend(wallet, repo, clock, payoutAuthority, refund),
+    // WKH-333/DT-20: `payoutAuthority` ya NO se inyecta. El pre-check de autoridad que lo usaba se
+    // eliminó del use-case; la opción `o.payoutAuthority` se conserva para los tests que todavía
+    // construyen el doble, pero ya no llega a ningún lado desde acá.
+    confirmAndSend: new ConfirmAndSend(wallet, repo, clock, refund),
     trackRemittance: new TrackRemittance(payouts, repo, clock, refund),
     listHistory: new ListHistory(repo),
     abandonPendingKyc: new AbandonPendingKyc(pending),

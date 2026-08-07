@@ -21,6 +21,18 @@ export interface PayoutAuthorityDecision {
   authorized: boolean;
   reason?: string; // AUSENTE cuando authorized:true por Didit real (preserva {authorized:true})
   httpStatus: number; // 200 | 400 | 502 | 503 — el status que /api/payout/validate YA devuelve hoy
+  // WKH-333 — ADITIVOS y OPCIONALES. Se pueblan ÚNICAMENTE en la rama de autorización por Didit REAL
+  // (el `return` del final del try). Ningún consumidor de hoy los lee, así que el comportamiento
+  // observable de esta función queda idéntico en las cinco ramas (AC-10', T-AUTH-1 lo compara
+  // `authorized`/`reason`/`httpStatus` contra lo de hoy).
+  //
+  // Existen para el backfill del veredicto (AC-8): persistir una fila EXIGE saber de qué proveniencia
+  // salió la decisión, y `didit-mock` no puede escribirse como si fuera real. Que sean opcionales es
+  // lo que hace que "la rama que autorizó no declaró proveniencia" sea representable — y esa rama NO
+  // escribe (CD-24). Un `provenance: string` obligatorio habría obligado a rellenar un default en las
+  // otras cuatro ramas, que es justamente inventar el dato que hay que verificar.
+  provenance?: string;
+  riskLevel?: "low" | "medium" | "high";
 }
 
 /** Recibe strings YA normalizados (el parseo del body y la coerción a "" quedan en cada route). */
@@ -103,7 +115,7 @@ export async function resolvePayoutAuthority(
     // CUALQUIER X. Se probaron tres direcciones sin ninguna relación entre sí
     // (11111111111111111111111111111111, So1111…1112, 4AvAjt…Fy7Hg): las tres autorizadas.
     //
-    // Cerrarlo no toca el camino de la DApp: kyc-gateway.ts:23 manda SIEMPRE
+    // Cerrarlo no toca el camino de la DApp: kyc-gateway.ts:28 manda SIEMPRE
     // `vendorData: req.senderAddress`, y con vendor_data declarado el guard ya funcionaba — medido
     // en vivo el mismo día: vendor=4AvAjt… + address=4AvAjt… → {"authorized":true}; vendor=4AvAjt…
     // + address=So1111… → {"authorized":false,"reason":"kyc_not_authorized"}. Lo único que se cierra
@@ -111,8 +123,8 @@ export async function resolvePayoutAuthority(
     //
     // El reason es `kyc_ownership_mismatch` y NO uno nuevo, a propósito: los dos consumidores tienen
     // switch cerrado y un reason desconocido cae al `default` de cada uno con la forma equivocada.
-    // validate/route.ts:69 lo devolvería tal cual → distinguible de `kyc_not_authorized`, que es
-    // exactamente el oráculo que WKH-205 colapsó; prepare/route.ts:129 lo mapearía a 502
+    // validate/route.ts:81 lo devolvería tal cual → distinguible de `kyc_not_authorized`, que es
+    // exactamente el oráculo que WKH-205 colapsó; prepare/route.ts:300 lo mapearía a 502
     // `payout_authority_unavailable`, que le dice a quien llama "la autoridad se cayó, reintentá"
     // cuando lo cierto es "no estás autorizado". Semánticamente tampoco hace falta distinguirlos:
     // bajo fail-closed, binding ausente y binding que no coincide son el mismo veredicto — no se
@@ -131,7 +143,15 @@ export async function resolvePayoutAuthority(
       return { authorized: false, reason: "kyc_ownership_mismatch", httpStatus: 200 };
     }
 
-    return { authorized: true, httpStatus: 200 }; // SIN `reason` (preserva {authorized:true})
+    // SIN `reason` (preserva {authorized:true}). `provenance`/`riskLevel` son ADITIVOS (WKH-333) y
+    // salen de la MISMA `mapDiditDecision` de arriba, no de un recálculo: es la única rama del
+    // guard-order donde la decisión vino de Didit REAL y hay algo verificado que declarar.
+    return {
+      authorized: true,
+      httpStatus: 200,
+      provenance: d.provenance,
+      riskLevel: d.riskLevel,
+    };
   } catch (err) {
     // fetch throw (timeout/DNS/reset) o JSON malformado → 502 fail-closed, misma forma que !res.ok.
     //

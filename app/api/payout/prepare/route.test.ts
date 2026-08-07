@@ -17,6 +17,15 @@ vi.mock("../../../../src/infrastructure/payout/authority", () => ({
   resolvePayoutAuthority: authorityMock,
 }));
 
+// WKH-333 — store del veredicto de KYC. Default `null` (flag OFF), que es lo que hace que TODOS los
+// tests de arriba corran exactamente como antes de esta HU: sin store no hay fila que buscar y la
+// ruta conserva su camino actual. Eso NO es una comodidad del test, es el AC-12, y tiene su propio
+// caso explícito (T-PR-12).
+const { getVerdictStoreMock } = vi.hoisted(() => ({ getVerdictStoreMock: vi.fn() }));
+vi.mock("../../../../src/infrastructure/persistence/supabase-kyc-verdicts", () => ({
+  getKycVerdictStore: getVerdictStoreMock,
+}));
+
 // Ledger: default null (flag OFF ⇒ byte-idéntico). Un test lo apunta a un mock.
 const { ledgerMock, getLedgerMock } = vi.hoisted(() => ({
   ledgerMock: { recordOrderPrepared: vi.fn() },
@@ -153,6 +162,8 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
     ledgerMock.recordOrderPrepared.mockResolvedValue(undefined);
     getLedgerMock.mockReset();
     getLedgerMock.mockReturnValue(null);
+    getVerdictStoreMock.mockReset();
+    getVerdictStoreMock.mockReturnValue(null); // WKH-333: flag OFF por default
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
   });
@@ -222,10 +233,15 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
   // ── PR4 — formato (CD-9) ───────────────────────────────────────────────────
   it("PR4/CD-9: body null literal → 400 (nunca 500); campos faltantes/address malformada → 400, NINGÚN fetch", async () => {
     expect((await POST(rawReq("null"))).status).toBe(400);
+    // ⚠️ CAMBIÓ EN WKH-333: `{ kycVerificationId: "" }` SALIÓ de esta lista. Exigirlo en el guard de
+    // formato era exigirle al cliente un dato que ya no le corresponde tener, y rechazar por su
+    // ausencia sería un camino de respaldo escondido dentro de un guard de formato. Hoy el valor del
+    // body se lee para DESCARTARLO (AC-16) y el identificador sale de la fila del dueño
+    // PoP-verificado; que un cliente lo mande, lo mande vacío o no lo mande es indistinguible, y eso
+    // se asserta en T-PR-8.
     for (const over of [
       { remittanceId: "" },
       { quoteId: "" },
-      { kycVerificationId: "" },
       { address: "0xNOPE" },
       { address: 123 },
     ]) {
@@ -1139,5 +1155,316 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
         ).toEqual({ min_reputation: FX_MIN_REPUTATION, allow_trial: true });
       });
     });
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-333 — el backend deja de aceptar el identificador de la verificación (AC-16, AC-17, AC-18)
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// ⚠️ CÓMO SE MIDE "una llamada a Didit" en este archivo: `resolvePayoutAuthority` está mockeada, y es
+// el ÚNICO punto de esta ruta que le habla al proveedor de identidad (su implementación real hace el
+// `GET /v3/session/{id}/decision/`). Contar sus invocaciones es contar las consultas a Didit que esta
+// ruta produce. NO se cuentan peticiones HTTP reales: eso NO SE PUDO VERIFICAR desde un test.
+describe("POST /api/payout/prepare — el identificador sale de la fila, no del cliente (WKH-333)", () => {
+  const OTHER_KP = nacl.sign.keyPair();
+  const OTHER_ADDR = bs58.encode(OTHER_KP.publicKey);
+
+  /** Mini-store HONESTO: filtra por `senderAddress` como lo hace el `.eq(...)` de Postgres. Con un
+   *  `vi.fn().mockResolvedValue(fila)`, quitarle el filtro por dueño a la ruta (M-29) dejaría estos
+   *  tests en verde y el IDOR entraría con la suite aplaudiendo (CD-17). */
+  function honestVerdictStore(rows: Array<{ senderAddress: string; verificationId: string }>) {
+    const get = vi.fn(async (sender: string) => {
+      const hit = rows.find((r) => r.senderAddress === sender);
+      return hit
+        ? {
+            senderAddress: hit.senderAddress,
+            verificationId: hit.verificationId,
+            approved: true,
+            riskLevel: "low" as const,
+            provenance: "didit",
+            verifiedAt: "2026-08-01T00:00:00.000Z",
+          }
+        : null;
+    });
+    return { get, put: vi.fn() };
+  }
+
+  // ⚠️ ESTE `beforeEach` REPLICA el del describe de arriba a propósito: este bloque es hermano, no
+  // anidado, así que no hereda nada. Sin esto, `issueSolanaPopChallenge` tira "PAYOUT_POP_SECRET
+  // missing" al armar el body y los 11 casos fallan por el andamiaje, no por lo que miden.
+  /** El input con el que se consultó la autoridad en la llamada `n`. Concentra el acceso porque el
+   *  `!` es la única forma que TypeScript acepta (un `?.` encadenado dispara
+   *  `noUnsafeOptionalChaining`, que en este repo es ERROR de lint). */
+  function authorityInput(n = 0): { verificationId: string; address: string } {
+    const call = authorityMock.mock.calls[n];
+    if (!call) throw new Error("no se consultó a la autoridad");
+    return call[0] as { verificationId: string; address: string };
+  }
+
+  beforeEach(() => {
+    KP = nacl.sign.keyPair();
+    ADDR = bs58.encode(KP.publicKey);
+    AUTHORITY = bs58.encode(nacl.sign.keyPair().publicKey);
+    vi.stubEnv("REMIT_AGENTS_BASE_URL", "https://agents.test");
+    vi.stubEnv("DEPOSIT_ATTESTATION_SECRET", "test-deposit-secret");
+    vi.stubEnv("SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY", AUTHORITY);
+    vi.stubEnv("VERCEL_ENV", "");
+    vi.stubEnv("PAYOUT_POP_SECRET", "pop-secret");
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "");
+    checkRouteRateLimitMock.mockReset();
+    checkRouteRateLimitMock.mockResolvedValue({ ok: true });
+    authorityMock.mockReset();
+    authorityMock.mockResolvedValue({ authorized: true, httpStatus: 200 });
+    ledgerMock.recordOrderPrepared.mockReset();
+    ledgerMock.recordOrderPrepared.mockResolvedValue(undefined);
+    getLedgerMock.mockReset();
+    getLedgerMock.mockReturnValue(null);
+    getVerdictStoreMock.mockReset();
+    getVerdictStoreMock.mockReturnValue(null);
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    agentResponds(200, agentResult());
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  // ── T-PR-2 — AC-18 / M-25 ──────────────────────────────────────────────────────────────────────
+  it("T-PR-2: sin PAYOUT_POP_SECRET ⇒ 503, y NO se consulta a la autoridad de KYC", async () => {
+    // El challenge se EMITE con secreto (el emisor lo necesita) y se PRESENTA sin él, igual que el
+    // exemplar de remittance-ids: lo que se prueba es el guard de la ruta, no el del emisor.
+    const body = bodyOf();
+    vi.stubEnv("PAYOUT_POP_SECRET", "");
+    const res = await POST(req(body));
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "payout_pop_unavailable" });
+    expect(
+      authorityMock,
+      "un deployment que NO PUEDE verificar posesión igual gastó una consulta al proveedor de " +
+        "identidad: eso es cupo nuestro que cualquiera drena con un `curl`",
+    ).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // ── T-PR-3 — AC-18 ────────────────────────────────────────────────────────────────────────────
+  it("T-PR-3: sin PoP ⇒ 403 payout_pop_unverified, y CERO consultas a la autoridad", async () => {
+    const { popChallenge, popSignature, ...noPop } = bodyOf();
+    void popChallenge;
+    void popSignature;
+    const res = await POST(req(noPop));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "payout_pop_unverified" });
+    expect(authorityMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // ── T-PR-4 — 🔴 EL ORÁCULO QUE SE CIERRA (§0.4) ───────────────────────────────────────────────
+  it("T-PR-4: un id INVENTADO y uno REAL, los dos sin PoP ⇒ respuestas IDÉNTICAS byte a byte y CERO consultas a Didit", async () => {
+    // Antes de WKH-333, este mismo par de requests era distinguible y cada uno provocaba un fetch a
+    // Didit: un id que existía y no autorizaba volvía 403 `payout_not_authorized`, y uno inventado
+    // volvía 502 `payout_authority_unavailable` (la autoridad no lo reconocía). O sea que esta ruta
+    // le contestaba a CUALQUIERA si un identificador de verificación existe o no, detrás de nada más
+    // que el rate-limit por IP, y encima nos gastaba cupo del proveedor en cada intento.
+    //
+    // El aserto es la INDISTINGUIBILIDAD, comparada entre las dos respuestas y no contra un literal:
+    // si mañana el enum cambia, este test sigue midiendo lo que importa.
+    getVerdictStoreMock.mockReturnValue(
+      honestVerdictStore([{ senderAddress: ADDR, verificationId: "did-REAL-de-esta-address" }]),
+    );
+    // Así respondía la autoridad ante un id inexistente: el 502 era el que delataba.
+    authorityMock.mockResolvedValue({ authorized: false, reason: undefined, httpStatus: 502 });
+
+    const { popChallenge, popSignature, ...anon } = bodyOf();
+    void popChallenge;
+    void popSignature;
+
+    const inventado = await POST(req({ ...anon, kycVerificationId: "did-QUE-NO-EXISTE-EN-NINGUN-LADO" }));
+    const bodyInventado = await inventado.text();
+    const real = await POST(req({ ...anon, kycVerificationId: "did-REAL-de-esta-address" }));
+    const bodyReal = await real.text();
+
+    expect(
+      { status: real.status, body: bodyReal },
+      "las dos respuestas se distinguen: esta ruta vuelve a ser un oráculo que le dice a cualquier " +
+        "anónimo si un identificador de verificación de identidad existe y en qué estado está",
+    ).toEqual({ status: inventado.status, body: bodyInventado });
+
+    expect(
+      authorityMock.mock.calls.length,
+      "un caller anónimo provocó una consulta al proveedor de identidad: además del oráculo, es " +
+        "cupo del tier gratuito que se drena con un bucle de `curl`",
+    ).toBe(0);
+    expect(fetchMock).not.toHaveBeenCalled(); // ni una orden de payout creada
+  });
+
+  // ── T-PR-6 — CD-18 / M-26 ─────────────────────────────────────────────────────────────────────
+  it("T-PR-6: PoP de A presentado con `address` de B ⇒ 403, sin autoridad y sin leer la fila", async () => {
+    const store = honestVerdictStore([
+      { senderAddress: ADDR, verificationId: "did-de-A" },
+      { senderAddress: OTHER_ADDR, verificationId: "did-de-B" },
+    ]);
+    getVerdictStoreMock.mockReturnValue(store);
+    // El PoP lo firma A (bodyOf lo arma con KP/ADDR) y el body declara la address de B.
+    const res = await POST(req({ ...bodyOf(), address: OTHER_ADDR }));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "payout_pop_unverified" });
+    expect(
+      store.get,
+      "se leyó el veredicto de una dirección que el caller no probó poseer: eso es el IDOR que la " +
+        "prueba de posesión existe para cerrar",
+    ).not.toHaveBeenCalled();
+    expect(authorityMock).not.toHaveBeenCalled();
+  });
+
+  // ── T-PR-7 — AC-16 ────────────────────────────────────────────────────────────────────────────
+  it("T-PR-7: con PoP y fila, la autoridad recibe el identificador DE LA FILA", async () => {
+    getVerdictStoreMock.mockReturnValue(
+      honestVerdictStore([{ senderAddress: ADDR, verificationId: "did-de-la-fila" }]),
+    );
+    const res = await POST(req(bodyOf()));
+    expect(res.status).toBe(200);
+    expect(authorityMock).toHaveBeenCalledWith({
+      verificationId: "did-de-la-fila",
+      address: ADDR,
+    });
+  });
+
+  // ── T-PR-8 — AC-16 / M-27, M-28 ───────────────────────────────────────────────────────────────
+  it("T-PR-8: el `kycVerificationId` del body se IGNORA — aunque sea el de otra persona (M-27, M-28)", async () => {
+    getVerdictStoreMock.mockReturnValue(
+      honestVerdictStore([
+        { senderAddress: ADDR, verificationId: "did-de-A" },
+        { senderAddress: OTHER_ADDR, verificationId: "did-de-B" },
+      ]),
+    );
+    // A firma el PoP y manda en el body el identificador de B. Si la ruta lo usara, A pagaría bajo la
+    // verificación de identidad de B.
+    const res = await POST(req(bodyOf({ kycVerificationId: "did-de-B" })));
+    expect(res.status).toBe(200);
+    const call = authorityInput();
+    expect(
+      call.verificationId,
+      "la autoridad recibió el identificador que vino en el body: quien tenga el de otra persona " +
+        "—de un log, de la red, de un navegador ajeno— puede cobrar bajo la verificación de esa persona",
+    ).toBe("did-de-A");
+    expect(call.address).toBe(ADDR);
+
+    // Y mandarlo VACÍO, o no mandarlo, da exactamente lo mismo: el valor del cliente no participa.
+    authorityMock.mockClear();
+    await POST(req(bodyOf({ kycVerificationId: "" })));
+    expect(authorityInput().verificationId).toBe("did-de-A");
+    authorityMock.mockClear();
+    const { kycVerificationId, ...sinCampo } = bodyOf();
+    void kycVerificationId;
+    await POST(req(sinCampo));
+    expect(authorityInput().verificationId).toBe("did-de-A");
+  });
+
+  // ── T-PR-9 — AC-17 / M-28, M-31 ───────────────────────────────────────────────────────────────
+  it("T-PR-9: con PoP y SIN fila ⇒ 403 prepare_kyc_verdict_missing, sin forward, sin atestación, sin ledger", async () => {
+    getVerdictStoreMock.mockReturnValue(honestVerdictStore([])); // la dirección no tiene fila
+    getLedgerMock.mockReturnValue(ledgerMock);
+    const res = await POST(req(bodyOf()));
+    expect(
+      res.status,
+      "sin fila utilizable la ruta siguió adelante: o creó una orden de payout con un identificador " +
+        "que no verificó nadie, o cayó a un camino de respaldo con el valor del cliente",
+    ).toBe(403);
+    expect(await res.json()).toEqual({ error: "prepare_kyc_verdict_missing" });
+    expect(authorityMock).not.toHaveBeenCalled();
+    expect(fetchMock, "se creó una orden de payout REAL sin veredicto").not.toHaveBeenCalled();
+    expect(ledgerMock.recordOrderPrepared).not.toHaveBeenCalled();
+  });
+
+  it("T-PR-9b: si la lectura de la fila FALLA ⇒ 503, y NO se confunde con 'no estás verificado'", async () => {
+    // "No pude preguntar" no es "no hay". Mandar a re-verificarse a alguien porque nuestra base se
+    // cayó es un consejo equivocado, y el copy de flow-vm.ts los distingue por eso.
+    getVerdictStoreMock.mockReturnValue({
+      get: vi.fn(async () => {
+        throw new Error("kyc_verdict_read_failed:42P01");
+      }),
+      put: vi.fn(),
+    });
+    const res = await POST(req(bodyOf()));
+    expect(res.status).toBe(503);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({ error: "prepare_kyc_verdict_unavailable" });
+    expect(text, "se ecoó el SQLSTATE de Postgres al cliente").not.toContain("42P01");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // ── T-PR-10 — CD-5 / M-29 ─────────────────────────────────────────────────────────────────────
+  it("T-PR-10: con DOS dueños en el store, el identificador que llega a la autoridad es el del caller", async () => {
+    const store = honestVerdictStore([
+      { senderAddress: OTHER_ADDR, verificationId: "did-de-B" },
+      { senderAddress: ADDR, verificationId: "did-de-A" },
+    ]);
+    getVerdictStoreMock.mockReturnValue(store);
+    await POST(req(bodyOf()));
+    // El VALOR con el que se consultó la base, no sólo que se consultó.
+    expect(store.get).toHaveBeenCalledWith(ADDR);
+    expect(
+      authorityInput().verificationId,
+      "el filtro por dueño no aisló nada: la ruta autorizó con la verificación de identidad de otra " +
+        "billetera",
+    ).toBe("did-de-A");
+  });
+
+  // ── T-PR-11 — AC-16 / M-30 ────────────────────────────────────────────────────────────────────
+  it("T-PR-11: el payload forwardeado lleva el id DE LA FILA — en LAS DOS ramas de transporte", async () => {
+    getVerdictStoreMock.mockReturnValue(
+      honestVerdictStore([{ senderAddress: ADDR, verificationId: "did-de-la-fila" }]),
+    );
+
+    // ── rama punto-a-punto ──
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "");
+    await POST(req(bodyOf({ kycVerificationId: "did-QUE-EL-CLIENTE-PROPUSO" })));
+    const p2pInit = fetchMock.mock.calls[0]?.[1] as { body: string };
+    const p2pBody = JSON.parse(p2pInit.body) as Record<string, unknown>;
+    expect(
+      p2pBody.kycVerificationId,
+      "la rama punto-a-punto le reenvió al agente el identificador que propuso el cliente",
+    ).toBe("did-de-la-fila");
+
+    // ── rama gateway ──
+    // Se ejercita la MISMA ruta con el otro transporte. El aserto se repite a propósito: si mañana
+    // alguien sanea sólo una de las dos, la misma ruta autorizaría distinto según una env de
+    // transporte, y eso no puede pasar en silencio (M-30).
+    fetchMock.mockClear();
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gateway");
+    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", "https://gateway.test");
+    vi.stubEnv("WASIAI_A2A_AGENT_KEY", "ak_prepare_secret");
+    let composeBody = "";
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.includes("/compose")) composeBody = String(init?.body ?? "");
+      return new Response(JSON.stringify({ success: true, steps: [{ output: agentResult() }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const gwRes = await POST(req(bodyOf({ kycVerificationId: "did-QUE-EL-CLIENTE-PROPUSO" })));
+    expect(gwRes.status, "la rama del gateway no llegó a forwardear").toBe(200);
+    expect(composeBody, "no se capturó el /compose del gateway").not.toBe("");
+    expect(
+      composeBody,
+      "la rama del gateway le reenvió al agente el identificador que propuso el cliente",
+    ).toContain("did-de-la-fila");
+    expect(composeBody).not.toContain("did-QUE-EL-CLIENTE-PROPUSO");
+  });
+
+  // ── T-PR-12 — AC-12 / §8.5.i ──────────────────────────────────────────────────────────────────
+  it("T-PR-12: con el flag APAGADO la ruta conserva su comportamiento actual (nadie se queda sin pagar)", async () => {
+    getVerdictStoreMock.mockReturnValue(null); // KYC_VERDICT_STORE_ENABLED ausente
+    const res = await POST(req(bodyOf()));
+    expect(
+      res.status,
+      "con el flag apagado la ruta cortó igual: encender esta HU dejaría de ser reversible, y el " +
+        "orden de despliegue (migración → código → flag) depende justamente de que apagarla baste",
+    ).toBe(200);
+    // Y NO se corta por `prepare_kyc_verdict_missing`: sin store no hay fila que buscar.
+    expect(authorityMock).toHaveBeenCalledTimes(1);
   });
 });

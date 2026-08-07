@@ -22,7 +22,8 @@ const payoutReq: PayoutSubmit = {
   amountUsd: 400,
   expectedReceivePen: Money.of(1478.15, "PEN"),
   beneficiary: { name: "Mamá", country: "PE", method: "yape", destination: "999888777" },
-  kycVerificationId: "v-1",
+  // WKH-333: `kycVerificationId` se eliminó de `PayoutSubmit`. El backend saca ese identificador
+  // de su propia fila; un cliente ya no puede proponerlo (CD-26/CD-27).
   address: "0xSender", // WKH-202/DT-2
   idempotencyKey: "r-1:cfx-1",
 };

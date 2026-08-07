@@ -154,7 +154,7 @@ function remesaConFalloDesconocido(): RemittanceState {
 //
 // "Chaski nunca toca tu plata, solo la dirige" es un absoluto, y hay quien lo falsifica: el escrow
 // tiene una release-authority operada por el equipo, que puede liberar el vault hacia el pago
-// (confirm-and-send.ts:190-196). O sea que Chaski SÍ puede mover esos USDC.
+// (confirm-and-send.ts:191-197). O sea que Chaski SÍ puede mover esos USDC.
 //
 // Lo verificable, y lo que de verdad hace a esto no custodial, es DÓNDE quedan: en una cuenta del
 // contrato (ATA de la PDA `escrowStatePda`, `solana-wallet.ts:378`), nunca en una billetera de Chaski.
@@ -535,7 +535,7 @@ describe("la identidad del paso confirm", () => {
   });
 
   // La decisión explícita sobre el dato que falta: ausencia NO es prueba de que sea real. Los dos
-  // casos son alcanzables sin inventar nada (`kyc-gateway.ts`:42 castea el JSON sin validar;
+  // casos son alcanzables sin inventar nada (`kyc-gateway.ts`:52 castea el JSON sin validar;
   // `kyc-store.ts`:86 rehidrata snapshots viejos con un spread), y comparten la frase porque un
   // `""` y un campo ausente dicen lo mismo: nadie declaró el origen.
   it.each([
@@ -555,7 +555,7 @@ describe("la identidad del paso confirm", () => {
 
   // 🔴 `confirm` no era el único paso afectado, y esto lo prueba. El sello de `track` se prendía SOLO
   // por la pata del payout: con el KYC simulado y un desembolso REAL (`transfi`), la remesa entera
-  // quedaba sin ningún aviso también en seguimiento, y lo mismo en el recibo (`Receipt`, `flow.tsx:2220`,
+  // quedaba sin ningún aviso también en seguimiento, y lo mismo en el recibo (`Receipt`, `flow.tsx:2254`,
   // que llama al mismo `isDemoMode`). Es la combinación hacia la que apunta el proyecto: payout real
   // primero, KYC real después.
   it("el KYC simulado también prende el sello en track, con un desembolso REAL", () => {

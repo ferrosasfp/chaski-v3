@@ -14,12 +14,19 @@
 --   `localStorage`, y el `verification_id` de un navegador viejo no autoriza por si solo (AC-8: hay
 --   que re-consultar a la autoridad, y solo se persiste si vuelve autorizada).
 --
--- ⇒ SOLO es seguro con `KYC_VERDICT_STORE_ENABLED` ausente/OFF. Con el flag apagado, la factory
---   `getKycVerdictStore()` devuelve null, nadie lee ni escribe la tabla, y `prepare` conserva su
---   comportamiento actual.
+-- ⇒ Y APAGAR EL FLAG NO ALCANZA. Aca decia que con `KYC_VERDICT_STORE_ENABLED` ausente/OFF nadie lee
+--   la tabla y `prepare` conserva su comportamiento actual: es FALSO y esta medido
+--   (AR/BLQ-ALTO-1, candado en `app/api/payout/prepare/route.flag-off.test.ts`). Con el flag apagado
+--   la factory devuelve null, si, pero entonces `prepare` no tiene de donde sacar el identificador
+--   —el del cliente ya no se acepta (CD-26)— y responde 503 a TODO pagador. O sea que el paso 2 de la
+--   version anterior de este bloque ("verificar que un pago completo funciona con el flag apagado")
+--   no se podia cumplir NUNCA, y por eso este `down` era inejecutable con seguridad.
 --
 -- Orden seguro para revertir, y en este orden:
---   1. `KYC_VERDICT_STORE_ENABLED` a ausente/OFF, y esperar a que el deploy tome efecto.
---   2. Verificar que un pago completo funciona con el flag apagado.
---   3. Recien entonces, este `down`.
+--   1. RE-DESPLEGAR EL CODIGO ANTERIOR a WKH-333 (el que acepta el `kycVerificationId` del cliente).
+--      Esto es lo que devuelve la capacidad de pagar; apagar el flag no lo hace.
+--   2. Verificar que un pago completo funciona con ese codigo.
+--   3. `KYC_VERDICT_STORE_ENABLED` a ausente/OFF (con el codigo viejo desplegado ya es inocuo: nadie
+--      lo lee).
+--   4. Recien entonces, este `down`.
 drop table if exists public.kyc_verdicts;

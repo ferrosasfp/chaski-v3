@@ -28,6 +28,16 @@ vi.mock("../persistence/supabase-settlement-ledger", () => ({
   CHAIN_ID_NOT_APPLICABLE: 0,
 }));
 
+// 🔴 WKH-333 (fix-pack AR/BLQ-ALTO-1) — el store del veredicto, con la fila del caller. Sin esto la
+// factory REAL devuelve `null` (la env `KYC_VERDICT_STORE_ENABLED` no está en el ambiente de test) y
+// la route corta con 503 ANTES de llegar al forward: los 17 casos de este archivo medirían el flag
+// apagado en vez de medir que el body del gateway calza con lo que la route exige, que es lo único
+// que este archivo existe para medir. El doble filtra por dueño de verdad (CD-17).
+const { getVerdictStoreMock } = vi.hoisted(() => ({ getVerdictStoreMock: vi.fn() }));
+vi.mock("../persistence/supabase-kyc-verdicts", () => ({
+  getKycVerdictStore: getVerdictStoreMock,
+}));
+
 import bs58 from "bs58";
 import nacl from "tweetnacl";
 import type { PopSigner } from "../../application/ports";
@@ -140,6 +150,22 @@ describe("HttpSolanaPayoutPrepareGateway — el body que arma el cliente ES el q
     checkRouteRateLimitMock.mockResolvedValue({ ok: true });
     authorityMock.mockReset();
     authorityMock.mockResolvedValue({ authorized: true, httpStatus: 200 });
+    getVerdictStoreMock.mockReset();
+    getVerdictStoreMock.mockReturnValue({
+      get: vi.fn(async (sender: string) =>
+        sender === ADDR
+          ? {
+              senderAddress: ADDR,
+              verificationId: "did-de-la-fila",
+              approved: true,
+              riskLevel: "low" as const,
+              provenance: "didit",
+              verifiedAt: "2026-08-01T00:00:00.000Z",
+            }
+          : null,
+      ),
+      put: vi.fn(),
+    });
   });
   afterEach(() => {
     vi.unstubAllEnvs();

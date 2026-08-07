@@ -282,7 +282,7 @@ export class SolanaWalletAdapter
   // MAX_RECOVERY_CANDIDATES envíos de la persona en los tres casos en que no se preguntó nada.
   // Ahora se consume `lookupBySender`, que las separa, y los tres `not_asked` salen por un código
   // propio. La CUARTA sigue saliendo por `escrow_not_found`, a propósito: ahí el servidor sí contestó
-  // y la frase de la pantalla es cierta. Espeja a (`listCloseable`, `:1071`), que ya hacía esto.
+  // y la frase de la pantalla es cierta. Espeja a (`listCloseable`, `:1076`), que ya hacía esto.
   private async resolveRemittanceIdFromLedger(senderB58: string): Promise<string> {
     const resolver = this.remittanceIdResolver;
     // Mismo guard que `listCloseable`: sin el método no se adivina, y un doble de JS que no lo tenga
@@ -365,9 +365,14 @@ export class SolanaWalletAdapter
     // ── Args canónicos (AC-8/CD-SDD-3) — String(...) NO Number(...) ──
     const remittanceIdBytes = this.remittanceIdToBytes16(remittanceId); // [u8;16] determinístico
     const amount = new anchor.BN(String(quote.send.minor)); // u64, sin floats
-    // El guard de vencimiento de la cotización ya corrió aguas arriba (`confirm-and-send.ts`:198,
-    // orden CAS → autoridad → expiry → prepare → firma). Éste lo repite localmente para que la
-    // wallet nunca firme sobre una cotización con fecha ilegible, venga de donde venga el llamador.
+    // El guard de vencimiento de la cotización ya corrió aguas arriba, en el bloque `2.5 Re-check de
+    // vigencia del quote` de `confirm-and-send.ts` (orden: confirm → address → expiry → rent →
+    // prepare → firma). ⚠️ DOS COSAS ESTABAN MAL ACÁ (AR/BLQ-BAJO-1): la cita apuntaba a `:198`, que
+    // es el docblock del refund-knowledge y NO el guard de expiry —ya estaba equivocada antes de esta
+    // HU, y el chequeo de drift la renumeró conservando el error—, y el orden nombraba un paso
+    // "autoridad" que WKH-333/DT-20 eliminó de ese use-case. Por eso ahora se cita el BLOQUE por su
+    // nombre y no un número de línea. Éste lo repite localmente para que la wallet nunca firme sobre
+    // una cotización con fecha ilegible, venga de donde venga el llamador.
     // Ya NO alimenta el deadline: ver CUSTODY_WINDOW_SECS.
     if (!isParseableIso(quote.expiresAt)) throw new Error("quote_expires_at_invalid");
     const deadline = new anchor.BN(
@@ -768,11 +773,11 @@ export class SolanaWalletAdapter
    * devuelve siempre. Que NINGUNA instrucción la cierre **no se pudo verificar** desde este repo: el
    * IDL no expresa las constraints `close = ...` de Anchor.
    *
-   * POR QUÉ EXIGE `remittanceId` Y `refundEscrow` NO: el fallback de refund (`refundEscrow`, `:583`,
+   * POR QUÉ EXIGE `remittanceId` Y `refundEscrow` NO: el fallback de refund (`refundEscrow`, `:588`,
    * que llama a `resolveRemittanceIdFromLedger`, `:286`) elige UNO entre N y actúa sobre él, porque
    * "recuperar mis USDC" tiene un objetivo natural — el escrow que todavía tiene plata. Para `close` no
    * existe ese "el": todos los terminales son igual de cerrables, y elegir uno en silencio le cerraría
-   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1071`) devuelve la
+   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1076`) devuelve la
    * LISTA y elige ella.
    *
    * ⚠️ POR QUÉ EL LISTER NO TIENE GATEWAY Y EL CIERRE SÍ (apartamiento declarado del SDD §4.1/§4.2,
@@ -795,7 +800,7 @@ export class SolanaWalletAdapter
    * qué código emite Anchor exactamente en ese caso: haría falta un `close` real que revierta.
    *
    * NO declara ComputeBudget, a diferencia de `authorizePrincipal`
-   * (`ComputeBudgetProgram.setComputeUnitLimit`, `:427`): aquello existía por el
+   * (`ComputeBudgetProgram.setComputeUnitLimit`, `:432`): aquello existía por el
    * tope POR UNIDAD del facilitator, y acá el feePayer es el sender — no hay tope de nadie que
    * respetar. Y el número que haría falta (el consumo de CU de `close`) no existe: los 120.000 de
    * `resolveSolanaComputeUnitLimit` salen del peor caso de `deposit`. Declarar un límite por debajo del
@@ -961,10 +966,10 @@ export class SolanaWalletAdapter
    * ¿Entró el `close`? Devuelve el tri-estado y TIRA `close_tx_failed` sólo cuando medimos que la tx
    * entró y revirtió Y la cuenta sigue ahí.
    *
-   * ⚠️ DOS DIVERGENCIAS DELIBERADAS respecto de `confirmRefund`, `:692`. Están escritas acá para
+   * ⚠️ DOS DIVERGENCIAS DELIBERADAS respecto de `confirmRefund`, `:697`. Están escritas acá para
    * que nadie las "armonice" de vuelta en un code review:
    *
-   * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`confirmRefund`, `:692`), SIN leer nada.
+   * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`confirmRefund`, `:697`), SIN leer nada.
    *    Éste NO puede: AC-5 exige que el alquiler volvió se afirme *sólo después de leer que la cuenta
    *    ya no existe*. Un `confirmTransaction` sin `err` prueba que la tx ENTRÓ; leer la ausencia es lo
    *    que prueba que hizo lo que queríamos. El input que pone en rojo cualquier atajo acá: un doble

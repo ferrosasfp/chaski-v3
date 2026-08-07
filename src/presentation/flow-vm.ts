@@ -428,7 +428,7 @@ export function escrowRentExplainer(voice: "discovery" | "remittance"): {
  *
  * ⚠️ El texto de "confirmed" NO menciona los USDC, y es una regla, no una omisión: lo único que la
  * ausencia de `escrow_state` prueba es que las dos cuentas se cerraron. A dónde fue la plata no lo
- * dice — es la misma trampa que `probeEscrowRefunded` ya tiene escrita (`probeEscrowRefunded`, `solana-wallet.ts:736`).
+ * dice — es la misma trampa que `probeEscrowRefunded` ya tiene escrita (`probeEscrowRefunded`, `solana-wallet.ts:741`).
  */
 export function escrowCloseSentCopy(confirmation: "confirmed" | "pending" | "unknown"): string {
   if (confirmation === "confirmed")
@@ -639,12 +639,20 @@ export function humanError(code: string): string {
   if (code.includes("wallet_error"))
     return "La wallet devolvió un error que no reconocemos. Probá de nuevo.";
   // WKH-333 — VA ANTES del catch-all de `kyc`, porque `prepare_kyc_verdict_missing` contiene "kyc" y
-  // caería ahí. "No pudimos verificar tu identidad" es cierto pero no dice la ACCIÓN, y la acción acá
-  // es concreta: volver a verificarse desde ESTA billetera. Pasa cuando el servidor no tiene fila del
-  // veredicto para la dirección que firmó (AC-17). El corte es ANTES del prepare y ANTES de la primera
-  // firma, así que "no se movió ningún USDC" es un hecho del orden de la ruta, no un consuelo.
+  // caería ahí. "No pudimos verificar tu identidad" es cierto pero no dice la ACCIÓN. Pasa cuando el
+  // servidor no tiene fila del veredicto para la dirección que firmó (AC-17). El corte es ANTES del
+  // prepare y ANTES de la primera firma, así que "no se movió ningún USDC" es un hecho del orden de
+  // la ruta, no un consuelo.
+  //
+  // 🔴 LA ACCIÓN CAMBIÓ TRAS MEDIR QUIÉN LLEGA ACÁ (AR/BLQ-MED-1). Decía "Necesitamos verificar tu
+  // identidad otra vez desde esta billetera", y para la mayoría de quienes ven este mensaje eso es un
+  // consejo caro y equivocado: son personas YA verificadas cuya fila no se rellenó porque no hubo
+  // firma al conectar (rechazada, emisor apagado, 429 del limiter). Para ellas el arreglo es
+  // reconectar y aceptar la firma — ahí el backfill re-consulta a la autoridad con la pista del
+  // navegador y escribe la fila SIN gastar otra verificación. Volver a escanear el documento es el
+  // segundo intento, no el primero, y por eso va segundo en la frase.
   if (code.includes("prepare_kyc_verdict_missing"))
-    return "Necesitamos verificar tu identidad otra vez desde esta billetera. No se movió ningún USDC.";
+    return "Volvé a conectar tu billetera y aceptá la firma que te pide: con eso alcanza en casi todos los casos. Si te lo vuelve a pedir, vas a tener que verificar tu identidad otra vez. No se movió ningún USDC.";
   // Misma familia, otra causa: no pudimos CONSULTAR el registro (no que no estés verificado). Se
   // distingue a propósito — mandar a re-verificarse por una caída nuestra es un consejo equivocado.
   if (code.includes("prepare_kyc_verdict_unavailable"))
@@ -657,7 +665,7 @@ export function humanError(code: string): string {
   // propia persona, o la release-authority a mano. O sea que nadie devuelve nada solo.
   //
   // Es el texto que MÁS se lee de este archivo: TrackView lo usa como último recurso para cualquier
-  // `payout_failed` cuyo reason no reconozca (`humanError`, `flow.tsx:1296`), justo cuando no sabemos dónde está la
+  // `payout_failed` cuyo reason no reconozca (`humanError`, `flow.tsx:1308`), justo cuando no sabemos dónde está la
   // plata. Prometer un reembolso ahí manda a esperar sentado en vez de a la única acción que sirve.
   // WKH-333 — VA ANTES del catch-all de `payout`, y arregla un defecto de copy PREEXISTENTE que este
   // cambio vuelve mucho más alcanzable. `payout_not_authorized` no contiene "kyc", así que caía en el

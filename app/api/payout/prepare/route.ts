@@ -178,6 +178,12 @@ export async function POST(req: Request): Promise<Response> {
   // arriba, los tres casos dan el MISMO 403 y NINGUNO toca a Didit. Eso no es un comentario: lo
   // asserta T-PR-4 comparando las dos respuestas byte a byte y contando las llamadas al fetch.
   //
+  // ⛔ LO QUE CIERRA ES **ESTA RUTA**, NO EL SISTEMA (AR/MNR-1). El mismo oráculo sigue abierto en
+  // `app/api/payout/validate/route.ts`, que es público y no pide PoP: un `verificationId` real
+  // devuelve 200 `kyc_not_authorized` y uno inventado devuelve 502, con fetch a Didit en los dos
+  // casos. Es PREEXISTENTE y está declarado Out of Scope (R-6). El balance de esta HU es que quedan
+  // dos superficies menos una, no cero.
+  //
   // NINGÚN GUARD QUEDA MÁS DÉBIL. Lo único observable que cambia además: un deployment con
   // DIDIT_API_KEY y sin PAYOUT_POP_SECRET ahora responde 503 en vez de 400/403 — y ese deployment
   // ya no podía completar un pago igual, porque el PoP lo cortaba dos guards después.
@@ -252,34 +258,55 @@ export async function POST(req: Request): Promise<Response> {
   // Eso no es un oráculo: para llegar hasta acá el caller ya probó posesión de la dirección, así que
   // sólo se entera de su propia situación.
   //
-  // ⚠️ CON EL FLAG APAGADO ESTA RUTA NO CAMBIA DE COMPORTAMIENTO: sin store no hay fila que buscar y
-  // se sigue el camino de hoy. Por eso el flag es lo último que se enciende (CD-30).
-  let rowVerificationId: string;
+  // 🔴 `KYC_VERDICT_STORE_ENABLED` NO ES UN KILL-SWITCH. ES UN INTERRUPTOR DE UNA SOLA DIRECCIÓN, Y
+  // APAGARLO CORTA LOS PAGOS. Acá decía "con el flag apagado esta ruta no cambia de comportamiento",
+  // y era FALSO — medido con la autoridad REAL en el lazo (AR/BLQ-ALTO-1): sin store, el `""` que se
+  // le pasaba a `resolvePayoutAuthority` cae en su guard de formato (`authority.ts:58-60` y `:65-67`,
+  // las dos ramas) ⇒ `invalid_verification_id` ⇒ **400 a TODO pagador legítimo**, sin consultar
+  // siquiera a la autoridad. El candado de esa medición es
+  // `app/api/payout/prepare/route.flag-off.test.ts`, que NO mockea la autoridad.
+  //
+  // No se arregla, se DECLARA: la alternativa era aceptar el id del cliente mientras el flag esté
+  // apagado, y eso es exactamente lo que CD-26 prohíbe ("ni gateado por env, ni transitorio"). O sea
+  // que el flag OFF no puede significar "como antes", porque "como antes" es el agujero.
+  //
+  // Consecuencias, escritas para que nadie las descubra en producción:
+  //   · El orden de despliegue es migración → **flag ON** → deploy del código (§11 del Story File,
+  //     corregido). Encender un flag para código que todavía no está desplegado es setear la variable
+  //     en el proveedor: NADIE la lee hasta que el deploy la levante, y el deploy la levanta ya
+  //     encendida. Al revés (deploy y después flag) hay una ventana de corte total.
+  //   · El rollback NO es apagar el flag: es re-desplegar el código anterior. Recién ahí el flag OFF
+  //     es inocuo, y recién ahí el `_down` de la migración es ejecutable.
   const verdictStore = getKycVerdictStore();
-  if (verdictStore) {
-    let row: Awaited<ReturnType<typeof verdictStore.get>>;
-    try {
-      // OWNER-SCOPED con `ch.address`, la PoP-VERIFICADA — NUNCA `body.address` (CD-18). Son iguales
-      // en el camino legítimo porque P3 los comparó, y aun así se usa la del challenge: la del body
-      // es un valor que el caller escribió, la del challenge es una que firmó.
-      row = await verdictStore.get(canonicalizeAddress(ch.address));
-    } catch {
-      // NUNCA 500 crudo, NUNCA eco del error.code de Postgres. No poder preguntar NO es "no hay":
-      // se corta con el enum de "no pudimos comprobar", no con el de "no estás verificado".
-      return NextResponse.json({ error: "prepare_kyc_verdict_unavailable" }, { status: 503 });
-    }
-    if (!row) {
-      // AC-17: sin fila NO se crea ninguna orden, no se atesta nada y no se escribe en el ledger.
-      return NextResponse.json({ error: "prepare_kyc_verdict_missing" }, { status: 403 });
-    }
-    rowVerificationId = row.verificationId;
-  } else {
-    // Flag apagado / envs de Supabase ausentes ⇒ comportamiento de hoy. El `""` que sigue hace que
-    // la autoridad devuelva `invalid_verification_id` → 400, que es exactamente lo que esta ruta
-    // respondía antes ante un body sin identificador. NO es un respaldo: no acepta ningún valor del
-    // cliente, simplemente no tiene ninguno que ofrecer.
-    rowVerificationId = "";
+  if (!verdictStore) {
+    // No hay dónde preguntar ⇒ no hay identificador que presentar, y no existe otro lugar de donde
+    // sacarlo. 503 y NO 400: el pedido del caller está bien; lo que falta es configuración nuestra, y
+    // un 400 le echaría la culpa al que llama. Comparte enum con el fallo de lectura de abajo a
+    // propósito: los dos dicen "no pudimos comprobar", que es lo que pasó en los dos.
+    return NextResponse.json({ error: "prepare_kyc_verdict_unavailable" }, { status: 503 });
   }
+  let row: Awaited<ReturnType<typeof verdictStore.get>>;
+  try {
+    // OWNER-SCOPED con `ch.address`, la PoP-VERIFICADA — NUNCA `body.address` (CD-18). Son iguales
+    // en el camino legítimo porque P3 los comparó, y aun así se usa la del challenge: la del body
+    // es un valor que el caller escribió, la del challenge es una que firmó.
+    row = await verdictStore.get(canonicalizeAddress(ch.address));
+  } catch {
+    // NUNCA 500 crudo, NUNCA eco del error.code de Postgres. No poder preguntar NO es "no hay":
+    // se corta con el enum de "no pudimos comprobar", no con el de "no estás verificado".
+    return NextResponse.json({ error: "prepare_kyc_verdict_unavailable" }, { status: 503 });
+  }
+  if (!row) {
+    // AC-17: sin fila NO se crea ninguna orden, no se atesta nada y no se escribe en el ledger.
+    return NextResponse.json({ error: "prepare_kyc_verdict_missing" }, { status: 403 });
+  }
+  // ⚠️ LO QUE ESTE `if (!row)` **NO** MIRA, y conviene tenerlo escrito (AR/MNR-3): la VIGENCIA. Una
+  // fila vencida según `KYC_VERDICT_TTL_DAYS` se usa igual acá. No es un descuido: el que decide si
+  // este pago procede es la autoridad, tres líneas más abajo, que re-consulta a Didit en cada pago
+  // (CD-12) y tiene su propio estado terminal de vencimiento. ⇒ `KYC_VERDICT_TTL_DAYS` es política
+  // de PANTALLA (cuándo `/api/kyc/verdict` deja de decir "usable" y la persona vuelve a verificarse),
+  // NO política de pago. Bajarlo a 180 no le corta el pago a nadie; subirlo a 730 no se lo habilita.
+  const rowVerificationId = row.verificationId;
 
   // PR6' — autoridad server-side (WKH-202): re-consulta la decisión REAL de Didit. Nunca confía en
   // los booleanos del caller. Mismo switch fail-closed que submit.
@@ -325,8 +352,9 @@ export async function POST(req: Request): Promise<Response> {
   // sobreviva, y el test lo asserta en las DOS ramas por separado (T-PR-11 / M-30) precisamente para
   // que una futura división en dos sitios no pueda regresar en silencio.
   //
-  // Con el flag apagado, `rowVerificationId` es `""` y la ruta ya cortó en la autoridad antes de
-  // llegar hasta acá (400 invalid_verification_id), así que no se forwardea un identificador vacío.
+  // `rowVerificationId` acá SIEMPRE viene de una fila que existe: si no había store se cortó con 503
+  // y si no había fila se cortó con 403, las dos cosas arriba. No hay ninguna rama que llegue hasta
+  // este renglón con un identificador vacío o propuesto por el cliente.
   const forwardBody = { ...body, kycVerificationId: rowVerificationId };
   let result: unknown;
   // QUIÉN dio el depositAddress. `undefined` = no lo sabemos (rama punto-a-punto: ahí el agente lo

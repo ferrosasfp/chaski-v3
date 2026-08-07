@@ -3,7 +3,15 @@
 // Devuelve si la persona tiene una verificación de identidad vigente y utilizable, SIN devolver nunca
 // el `verification_id` — ni en el 200, ni en ningún error, ni al dueño PoP-verificado (AC-6/CD-9).
 // Ese identificador es una CREDENCIAL del money-path: es lo que el backend le presenta a la autoridad
-// de KYC al pagar, y lo único que WKH-333 cambia de fondo es que deja de viajar por la red.
+// de KYC al pagar.
+//
+// ⚠️ ACÁ DECÍA que "lo único que WKH-333 cambia de fondo es que deja de viajar por la red", y es
+// medible y falso (AR/MNR-4): sigue viajando en los dos sentidos, servidor→navegador en el
+// `GET /api/kyc/decision` y navegador→servidor como `candidateVerificationId` de ESTE endpoint. Lo
+// cierto, y es otra cosa: deja de ATRAVESAR UN CONTROL DEL MONEY-PATH. Ya no es un token al portador
+// que autoriza un desembolso por el solo hecho de presentarlo; el que autoriza sale de la fila del
+// dueño PoP-verificado. Que además viaje menos sería una consecuencia deseable, y no es la que se
+// consiguió.
 //
 // Guard-order fail-closed (envs en runtime, CD-14): V1 secreto PoP → V2 rate-limit → V3 body →
 // V4 PoP P1..P5 → V5 store → V6 TTL → V7 lectura owner-scoped → V8 backfill → V9 200.
@@ -211,6 +219,15 @@ export async function POST(req: Request): Promise<Response> {
  * Consecuencia declarada, y no es gratis: para quien se verificó hace mucho, el backfill reinicia el
  * reloj del vencimiento. Se acepta porque la autoridad —que es quien sabe, y que tiene su propio
  * estado terminal `Kyc Expired`— acaba de decir que sí, ahora.
+ *
+ * 🔴 CUÁNTO ES "REINICIAR EL RELOJ", CON NÚMEROS (AR/MNR-6). El tiempo efectivo entre el escaneo real
+ * y el vencimiento server-side es **Δ + TTL**, donde Δ es la antigüedad de la verificación cuando
+ * corre este backfill. Con el TTL por defecto de 365 días y una pista de 300 días de antigüedad, son
+ * **~665 días** desde que la persona mostró el documento. ⛔ Y ese Δ **no tiene techo en NUESTRO
+ * código**: `LocalKycStore.peek()` no aplica TTL a propósito, así que una pista de cualquier edad
+ * dispara el backfill. El único techo lo pone la autoridad, el día que deje de contestar `Approved`
+ * para esa sesión. Quien fije la política de vencimiento tiene que fijarla sabiendo esto: el número
+ * que le importa a un auditor no es el TTL, es Δ + TTL.
  *
  * Best-effort: si la escritura falla, se sigue como si no hubiera fila. Nunca rompe la respuesta.
  */

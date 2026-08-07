@@ -132,6 +132,71 @@ describe("StartKyc — sólo un veredicto USABLE saltea la sesión de Didit (WKH
     });
   }
 
+  // ── T-SK-6 — EL CASO CRUZADO: local APROBADO × los 9 desenlaces (AR/BLQ-MED-1) ────────────────
+  //
+  // 🔴 LA COMBINACIÓN QUE NO CORRÍA NADIE, Y ERA LA QUE IMPORTABA. `T-SK-1` corre local-aprobado sin
+  // `serverVerdict`; `T-SK-3..5` corren los 9 desenlaces con el store local VACÍO. La población real
+  // de esta HU es justamente la otra: gente YA verificada en su navegador (local aprobado) que
+  // todavía no tiene fila en el servidor. Medido por el AR: con local aprobado, `StartKyc` salía con
+  // `done` ANTES de mirar `serverVerdict`, así que `absent` —el servidor pudo preguntar y dijo que no
+  // hay fila usable— tampoco creaba sesión, y `flow.tsx` mandaba de `connect` a `confirm` sin mostrar
+  // nunca la pantalla de verificación. Callejón: pagar cortaba con AC-17 y la única pantalla que
+  // podía arreglarlo era inalcanzable.
+  //
+  // La regla que se clava acá, y las dos mitades son igual de importantes:
+  //   · `absent/*`   ⇒ SÍ se crea la sesión. El servidor CONTESTÓ que no hay fila, el backfill ya
+  //                    falló, y sólo una verificación nueva escribe una.
+  //   · `not_asked/*` y ausente ⇒ NO se crea. No sabemos nada del servidor, y forzar el escaneo no
+  //                    produciría fila igual (sin prueba la sesión va sin atar; con la tabla apagada
+  //                    no hay dónde escribir). Sería gastar un cupo del tier gratuito para nada.
+  const localAprobado = {
+    verificationId: "did-local",
+    approved: true,
+    payoutAllowed: true,
+    riskLevel: "low" as const,
+    provenance: "didit",
+    identity: null,
+  };
+  const cruzado: Array<[string, KycVerdictLookup | undefined, boolean]> = [
+    ["absent/absent", { outcome: "absent", reason: "absent" }, true],
+    ["absent/expired", { outcome: "absent", reason: "expired" }, true],
+    ["absent/simulated", { outcome: "absent", reason: "simulated" }, true],
+    ["absent/not_approved", { outcome: "absent", reason: "not_approved" }, true],
+    ["not_asked/pop_disabled", { outcome: "not_asked", reason: "pop_disabled" }, false],
+    ["not_asked/pop_rejected", { outcome: "not_asked", reason: "pop_rejected" }, false],
+    ["not_asked/pop_declined", { outcome: "not_asked", reason: "pop_declined" }, false],
+    ["not_asked/store_disabled", { outcome: "not_asked", reason: "store_disabled" }, false],
+    ["ausente (undefined)", undefined, false],
+    ["usable", USABLE, false],
+  ];
+  for (const [label, sv, esperaSesion] of cruzado) {
+    it(`T-SK-6: local APROBADO + \`${label}\` ⇒ ${esperaSesion ? "SÍ" : "NO"} se crea sesión`, async () => {
+      const store = new FakeKycStore();
+      await store.save(ADDR, localAprobado);
+      const { repo, uc, startSpy } = build(store);
+      const id = await seed(repo);
+      const res = await uc.execute({ remittanceId: id, address: ADDR, serverVerdict: sv });
+      if (esperaSesion) {
+        expect(
+          startSpy,
+          `el servidor CONTESTÓ \`${label}\` —o sea que no hay fila utilizable— y el caché de este ` +
+            "navegador salteó igual la verificación: la persona va a llegar a pagar sin fila, se va " +
+            "a cortar con AC-17, y la pantalla que lo arreglaría no se le muestra nunca porque el " +
+            "flujo salta de conectar a confirmar",
+        ).toHaveBeenCalledTimes(1);
+        expect(res.kind).toBe("redirect");
+      } else {
+        expect(
+          startSpy,
+          `\`${label}\` no dice que falte la fila, y aun así se gastó un cupo del proveedor: para ` +
+            "los cuatro `not_asked` una sesión nueva NO produce fila (sin prueba va sin atar, con la " +
+            "tabla apagada no hay dónde escribirla), así que es un escaneo que no arregla nada",
+        ).not.toHaveBeenCalled();
+        expect(res.kind).toBe("done");
+      }
+    });
+  }
+
   // ── R-1: la prueba de posesión viaja hasta la creación de la sesión ────────────────────────────
   it("la prueba de posesión obtenida al conectar viaja a `kyc.start` (R-1, cero prompts nuevos)", async () => {
     const { repo, uc, startSpy } = build();

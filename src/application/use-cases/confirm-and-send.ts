@@ -136,8 +136,11 @@ const SETTLE_REASONS_BEFORE_BROADCAST: readonly SolanaSettlementFailureReason[] 
 
 /**
  * Confirmación + envío. El corazón del money-path (value-delivery orquestado en el cliente):
- * confirm (invariante DURA) → autoridad server-side → re-check de vigencia → prepare server-side →
- * depósito en el escrow (wallet) → broadcast vía facilitator → principal_in → payout_submitted.
+ * confirm (invariante DURA) → re-check de vigencia → prepare server-side → depósito en el escrow
+ * (wallet) → broadcast vía facilitator → principal_in → payout_submitted.
+ * ⚠️ Entre "confirm" y "re-check" decía "autoridad server-side", y ese paso **ya no existe acá**:
+ * WKH-333/DT-20 lo eliminó de este use-case y lo mudó a `/api/payout/prepare`, donde corre detrás de
+ * la prueba de posesión y con el identificador de la fila del dueño probado (AR/BLQ-BAJO-1).
  * Cada paso persiste (idempotencia/recuperación). Un fallo de payout → payout_failed (→ refund).
  */
 export class ConfirmAndSend {
@@ -313,7 +316,11 @@ export class ConfirmAndSend {
 
     // 2.5 Re-check de vigencia del quote (M2/AC-5, CD-2): la ventana confirm→firma es de minutos
     //     (firma real en la wallet). Si el quote venció ENTRE confirm y firma → payout_failed SIN
-    //     authorizePrincipal ni settle (orden de guards: CAS → autoridad → expiry → prepare → firma).
+    //     authorizePrincipal ni settle. Orden de guards: confirm → address → expiry → rent → prepare
+    //     → firma. ⚠️ Acá decía "CAS → autoridad → expiry → …", y **el paso "autoridad" ya no existe
+    //     en este use-case**: lo eliminó WKH-333/DT-20 y se mudó entero a `/api/payout/prepare`. La
+    //     lista que manda es la de `confirm-and-send.reorder.test.ts:3-4`, que es la que se pone roja
+    //     si el orden cambia (AR/BLQ-BAJO-1).
     const nowRecheck = this.clock.nowIso();
     if (!r.isQuoteStillValid(nowRecheck)) {
       await this.failAndRefund(r, "quote_expired_before_submit");

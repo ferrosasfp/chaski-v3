@@ -47,11 +47,18 @@ export class StartKyc {
      *
      * 🔴 SÓLO `usable` saltea. `not_asked` (las cuatro razones) y `absent` (las cuatro) siguen al
      * camino de hoy: "no pude preguntar" NO es "ya está verificada" (CD-16, M-19).
+     *
+     * 🔴 Y `absent` hace UNA COSA MÁS desde el fix-pack (AR/BLQ-MED-1): también DESACTIVA el atajo
+     * del caché local de más abajo. Es el único desenlace que puede: es el único donde el servidor
+     * pudo preguntar y contestó que no hay fila utilizable.
      */
     serverVerdict?: KycVerdictLookup;
     /** WKH-333/R-1 — la prueba de posesión que `ConnectWallet` ya obtuvo. Viaja hasta
-     *  `/api/kyc/session`, que la exige para atar la sesión a una dirección PROBADA en vez de a un
-     *  valor del body. Ausente ⇒ la ruta responde 403 (con key) o cae al demo (sin key). */
+     *  `/api/kyc/session`, que la usa para ATAR la sesión a una dirección PROBADA en vez de a un
+     *  valor del body.
+     *  ⚠️ Acá decía "Ausente ⇒ la ruta responde 403 (con key)", y ese 403 era el bloqueante
+     *  AR/BLQ-ALTO-2: dejaba sin poder verificarse a quien rechazara la firma. Hoy, ausente ⇒ la
+     *  sesión se crea igual pero SIN ATAR, así que no produce fila del veredicto (CD-15/AC-13). */
     kycProof?: WalletPossessionProof;
   }): Promise<StartKycResult> {
     const r = await this.repo.get(input.remittanceId);
@@ -60,9 +67,27 @@ export class StartKyc {
 
     r.startKyc(this.clock.nowIso(), input.address);
 
+    // 🔴 EL SERVIDOR CONTESTÓ QUE NO HAY VEREDICTO UTILIZABLE (AR/BLQ-MED-1). `absent` es la única
+    // familia de desenlaces donde el servidor PUDO preguntar y la respuesta fue "no hay fila usable"
+    // (no existe / venció / es simulada / no fue aprobada), y donde el backfill de `ConnectWallet` ya
+    // intentó y no alcanzó. En esa situación el caché de este navegador NO puede saltear nada: la
+    // persona llegaría a `prepare` sin fila y se cortaría con AC-17 — y como el corto-circuito de acá
+    // abajo devuelve `done`, `flow.tsx` la manda de `connect` derecho a `confirm` y **la pantalla de
+    // verificación no se muestra nunca**. Ese era el callejón sin salida que midió el AR.
+    //
+    // ⚠️ LOS CUATRO `not_asked` NO ENTRAN ACÁ, y no es una omisión — es que forzar una sesión no los
+    // ayudaría. Medido, uno por uno: sin prueba de posesión (`pop_declined`, `pop_disabled`) la
+    // sesión de Didit se crea SIN ATAR y `decision/route.ts` no escribe ninguna fila
+    // (`if (!mapped.vendorData) return`); con la tabla apagada (`store_disabled`) tampoco hay dónde
+    // escribirla; y con la prueba rechazada (`pop_rejected`) el remedio es un challenge nuevo, no un
+    // escaneo nuevo. Mandarlos a re-verificarse gastaría un cupo del tier gratuito y los dejaría
+    // exactamente donde estaban. Para esos cuatro, la salida es reconectar y aceptar la firma, y eso
+    // lo dice el copy de `prepare_kyc_verdict_missing` (flow-vm.ts).
+    const servidorDiceQueNoHayFila = input.serverVerdict?.outcome === "absent";
+
     // KYC-once: reusar la verificación recordada para esta wallet si ya pasó.
     const remembered = await this.kycStore.get(input.address);
-    if (remembered && remembered.approved && remembered.payoutAllowed) {
+    if (remembered?.approved && remembered.payoutAllowed && !servidorDiceQueNoHayFila) {
       r.applyKyc(remembered, this.clock.nowIso());
       await this.repo.save(r);
       return { kind: "done", snapshot: r.snapshot };

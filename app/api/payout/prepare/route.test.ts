@@ -17,10 +17,18 @@ vi.mock("../../../../src/infrastructure/payout/authority", () => ({
   resolvePayoutAuthority: authorityMock,
 }));
 
-// WKH-333 — store del veredicto de KYC. Default `null` (flag OFF), que es lo que hace que TODOS los
-// tests de arriba corran exactamente como antes de esta HU: sin store no hay fila que buscar y la
-// ruta conserva su camino actual. Eso NO es una comodidad del test, es el AC-12, y tiene su propio
-// caso explícito (T-PR-12).
+// WKH-333 — store del veredicto de KYC.
+//
+// 🔴 EL DEFAULT CAMBIÓ EN EL FIX-PACK DEL AR (BLQ-ALTO-1), y la razón importa. Era `null` (flag OFF)
+// "para que TODOS los tests de arriba corran exactamente como antes de esta HU". Esa premisa era
+// falsa: con el flag apagado la ruta NO conserva su camino: no tiene de dónde sacar el identificador
+// (el del cliente no se acepta, CD-26) y corta con 503. Con el default en `null`, los 55 casos de
+// guard-order de este archivo pasaban a medir el corte por flag apagado en vez del guard que cada uno
+// dice medir.
+// Ahora el default es una fila REAL de la address del caller (ver `storeConFilaDe`), o sea el estado
+// de producción con el flag encendido. Los casos que cortan ANTES de PR5.5 no lo tocan nunca; los que
+// llegan más allá miden lo que dicen medir. El flag apagado tiene sus dos casos propios: `T-PR-12` acá
+// y `route.flag-off.test.ts`, este último con la autoridad REAL.
 const { getVerdictStoreMock } = vi.hoisted(() => ({ getVerdictStoreMock: vi.fn() }));
 vi.mock("../../../../src/infrastructure/persistence/supabase-kyc-verdicts", () => ({
   getKycVerdictStore: getVerdictStoreMock,
@@ -110,6 +118,34 @@ function agentResponds(status: number, result: unknown): void {
       }),
   );
 }
+/** Mini-store HONESTO: filtra por `senderAddress` como lo hace el `.eq(...)` de Postgres. Con un
+ *  `vi.fn().mockResolvedValue(fila)`, quitarle el filtro por dueño a la ruta (M-29) dejaría estos
+ *  tests en verde y el IDOR entraría con la suite aplaudiendo (CD-17).
+ *  Vive a nivel de módulo porque los DOS `describe` de este archivo lo usan: el de abajo para sus
+ *  casos, y el de arriba como default del `beforeEach` (ver la nota del `vi.mock`). */
+function honestVerdictStore(rows: Array<{ senderAddress: string; verificationId: string }>) {
+  const get = vi.fn(async (sender: string) => {
+    const hit = rows.find((r) => r.senderAddress === sender);
+    return hit
+      ? {
+          senderAddress: hit.senderAddress,
+          verificationId: hit.verificationId,
+          approved: true,
+          riskLevel: "low" as const,
+          provenance: "didit",
+          verifiedAt: "2026-08-01T00:00:00.000Z",
+        }
+      : null;
+  });
+  return { get, put: vi.fn() };
+}
+
+/** El default de los dos `beforeEach`: el caller TIENE su fila. `ADDR` se regenera en cada test, así
+ *  que esto se llama adentro del `beforeEach` y no una vez a nivel de módulo. */
+function storeConFilaDe(address: string) {
+  return honestVerdictStore([{ senderAddress: address, verificationId: "did-de-la-fila-default" }]);
+}
+
 function agentResult(over: Record<string, unknown> = {}) {
   return {
     status: "submitted",
@@ -163,7 +199,9 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
     getLedgerMock.mockReset();
     getLedgerMock.mockReturnValue(null);
     getVerdictStoreMock.mockReset();
-    getVerdictStoreMock.mockReturnValue(null); // WKH-333: flag OFF por default
+    // WKH-333 + AR/BLQ-ALTO-1: el caller TIENE su fila (flag encendido = producción). Ver la nota
+    // larga del `vi.mock` de este módulo, arriba.
+    getVerdictStoreMock.mockReturnValue(storeConFilaDe(ADDR));
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
   });
@@ -568,6 +606,10 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       authorityPubkey = bs58.encode(nacl.sign.keyPair().publicKey); // CD-10: NUNCA base58 a mano
       vi.stubEnv("PAYOUT_POP_SECRET", "pop-secret"); // OBLIGATORIO en Solana para pasar PR6
       vi.stubEnv("SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY", authorityPubkey);
+      // Este bloque firma con SU PROPIO keypair, no con el `ADDR` del `beforeEach` de arriba, así que
+      // necesita su propia fila: el store del default está indexado por dueño y NO le devolvería
+      // ninguna (que es justamente lo que hay que preservar — ver M-29).
+      getVerdictStoreMock.mockReturnValue(storeConFilaDe(callerAddr));
     });
 
     it("AC-1: PoP válido + depositAddress base58 → 200 shape Solana; la atestación VERIFICA", async () => {
@@ -858,6 +900,8 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       const SOL_BENEFICIARY = "So11111111111111111111111111111111111111112";
       setGatewayEnv();
       vi.stubEnv("SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY", authorityPubkey);
+      // Caller propio ⇒ fila propia (el store del default filtra por dueño y no le daría ninguna).
+      getVerdictStoreMock.mockReturnValue(storeConFilaDe(callerAddr));
 
       // (i) el agente que gana la capacidad devuelve base58 ⇒ 200 con atestación Solana REAL.
       gwRouter({ output: agentResult({ depositAddress: SOL_BENEFICIARY }) });
@@ -1170,25 +1214,7 @@ describe("POST /api/payout/prepare — el identificador sale de la fila, no del 
   const OTHER_KP = nacl.sign.keyPair();
   const OTHER_ADDR = bs58.encode(OTHER_KP.publicKey);
 
-  /** Mini-store HONESTO: filtra por `senderAddress` como lo hace el `.eq(...)` de Postgres. Con un
-   *  `vi.fn().mockResolvedValue(fila)`, quitarle el filtro por dueño a la ruta (M-29) dejaría estos
-   *  tests en verde y el IDOR entraría con la suite aplaudiendo (CD-17). */
-  function honestVerdictStore(rows: Array<{ senderAddress: string; verificationId: string }>) {
-    const get = vi.fn(async (sender: string) => {
-      const hit = rows.find((r) => r.senderAddress === sender);
-      return hit
-        ? {
-            senderAddress: hit.senderAddress,
-            verificationId: hit.verificationId,
-            approved: true,
-            riskLevel: "low" as const,
-            provenance: "didit",
-            verifiedAt: "2026-08-01T00:00:00.000Z",
-          }
-        : null;
-    });
-    return { get, put: vi.fn() };
-  }
+  // `honestVerdictStore` vive a nivel de módulo (arriba): lo comparten los dos `describe`.
 
   // ⚠️ ESTE `beforeEach` REPLICA el del describe de arriba a propósito: este bloque es hermano, no
   // anidado, así que no hereda nada. Sin esto, `issueSolanaPopChallenge` tira "PAYOUT_POP_SECRET
@@ -1221,7 +1247,7 @@ describe("POST /api/payout/prepare — el identificador sale de la fila, no del 
     getLedgerMock.mockReset();
     getLedgerMock.mockReturnValue(null);
     getVerdictStoreMock.mockReset();
-    getVerdictStoreMock.mockReturnValue(null);
+    getVerdictStoreMock.mockReturnValue(storeConFilaDe(ADDR)); // ver la nota del `vi.mock`
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     agentResponds(200, agentResult());
@@ -1455,16 +1481,32 @@ describe("POST /api/payout/prepare — el identificador sale de la fila, no del 
     expect(composeBody).not.toContain("did-QUE-EL-CLIENTE-PROPUSO");
   });
 
-  // ── T-PR-12 — AC-12 / §8.5.i ──────────────────────────────────────────────────────────────────
-  it("T-PR-12: con el flag APAGADO la ruta conserva su comportamiento actual (nadie se queda sin pagar)", async () => {
+  // ── T-PR-12 — AC-12 / §8.5.i · 🔴 REESCRITO POR AR/BLQ-ALTO-1 ─────────────────────────────────
+  //
+  // ⚠️ ESTE TEST AFIRMABA LO CONTRARIO, Y ERA UN MOCK QUE MENTÍA. Decía "con el flag APAGADO la ruta
+  // conserva su comportamiento actual (nadie se queda sin pagar)" y esperaba **200**. Pasaba en verde
+  // sólo porque este archivo mockea el módulo entero de la autoridad (`:15-18`) con
+  // `{authorized:true}`: con la autoridad REAL, el `""` que la ruta le pasaba sin store caía en su
+  // guard de formato y devolvía 400 a TODO pagador legítimo. O sea que el test existía justamente
+  // para custodiar "nadie se queda sin pagar" y custodiaba la afirmación equivocada.
+  //
+  // No se borra: se corrige y se le pone al lado la razón. El candado con la dependencia REAL vive en
+  // `route.flag-off.test.ts`, que no mockea la autoridad — sin eso, esta decisión no tendría candado.
+  it("T-PR-12: con el flag APAGADO la ruta CORTA con 503 y no crea ninguna orden (AR/BLQ-ALTO-1)", async () => {
     getVerdictStoreMock.mockReturnValue(null); // KYC_VERDICT_STORE_ENABLED ausente
     const res = await POST(req(bodyOf()));
     expect(
       res.status,
-      "con el flag apagado la ruta cortó igual: encender esta HU dejaría de ser reversible, y el " +
-        "orden de despliegue (migración → código → flag) depende justamente de que apagarla baste",
-    ).toBe(200);
-    // Y NO se corta por `prepare_kyc_verdict_missing`: sin store no hay fila que buscar.
-    expect(authorityMock).toHaveBeenCalledTimes(1);
+      "sin store, la ruta siguió adelante: o consultó a la autoridad con un identificador que no " +
+        "salió de ninguna fila, o cayó a un camino de respaldo con el valor del cliente (CD-26)",
+    ).toBe(503);
+    expect(await res.json()).toEqual({ error: "prepare_kyc_verdict_unavailable" });
+    // 400 sería mentirle al que llama: su pedido está bien, lo que falta es configuración nuestra.
+    expect(res.status).not.toBe(400);
+    expect(
+      authorityMock,
+      "se gastó una consulta al proveedor de identidad con un identificador vacío",
+    ).not.toHaveBeenCalled();
+    expect(fetchMock, "se creó una orden de payout REAL sin veredicto").not.toHaveBeenCalled();
   });
 });

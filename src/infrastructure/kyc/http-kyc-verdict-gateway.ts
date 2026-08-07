@@ -61,6 +61,11 @@ export class HttpKycVerdictGateway implements KycVerdictGateway {
     } catch {
       // La causa típica y esperable: la persona vio el prompt de la billetera y dijo que no. NO es un
       // error del sistema y NO puede impedir verificarse (CD-15): se sigue por el camino de hoy.
+      // ⚠️ ESTA FRASE ERA FALSA CUANDO SE ESCRIBIÓ, y el test que la vuelve verdadera es
+      // `connect-wallet.kyc-session.test.ts`: `/api/kyc/session` exigía la prueba, así que este
+      // desenlace terminaba en `throw didit_session_failed` y la persona no podía verificarse
+      // (AR/BLQ-ALTO-2). Hoy esa ruta crea la sesión sin atar cuando no hay prueba. La frase se
+      // conserva porque ahora describe lo que pasa, con un input que lo mide.
       return { lookup: { outcome: "not_asked", reason: "pop_declined" } };
     }
     if (!proof) return { lookup: { outcome: "not_asked", reason: "pop_disabled" } };

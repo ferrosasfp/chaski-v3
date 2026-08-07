@@ -31,11 +31,15 @@ export interface KycRequest {
   purpose: string;
   callbackUrl?: string; // a dónde vuelve Didit tras el escaneo (misma pestaña)
   senderAddress?: string; // wallet del sender → rate-limit por address (WKH-179)
-  // WKH-333/R-1 — prueba de posesión de la billetera. OPCIONALES EN EL TIPO, OBLIGATORIAS EN LA
-  // ROUTE, exactamente por el criterio que este archivo ya aplica a `settlementAttestation` y al
-  // PoP del payout: el demo (sin DIDIT_API_KEY) sale con 501 ANTES del bloque de prueba y tiene que
-  // seguir byte-idéntico, así que el tipo no puede exigirlas. NO es fail-open: el enforcement vive
-  // en el SERVER (`app/api/kyc/session/route.ts`, bloque S5 → 403), y omitirlas no ayuda al atacante.
+  // WKH-333/R-1 — prueba de posesión de la billetera. OPCIONALES EN EL TIPO **Y** EN LA ROUTE, y eso
+  // último es un arreglo, no una concesión: acá decía "OBLIGATORIAS EN LA ROUTE … bloque S5 → 403", y
+  // ese 403 dejaba a quien rechazaba la firma SIN PODER INICIAR EL KYC, contra CD-15/AC-13
+  // (AR/BLQ-ALTO-2). Lo que la prueba decide no es SI se crea la sesión, sino si la sesión queda
+  // ATADA a una dirección: sin prueba se crea sin atar, y una sesión sin atar no produce fila del
+  // veredicto (`decision/route.ts` corta con `if (!mapped.vendorData)`). NO es fail-open: omitirlas
+  // no le da al atacante ninguna capacidad —lo que el atacante querría es atar la sesión a la
+  // dirección de otro, y eso exige la firma de esa billetera—, y el demo (sin DIDIT_API_KEY) sale con
+  // 501 antes de todo esto y sigue byte-idéntico.
   //
   // 🔴 POR QUÉ EXISTEN. Sin esto, `vendor_data` salía del BODY: cualquiera podía crear una sesión de
   // verificación atada a la dirección de OTRA persona y aprobarla con su propio documento. Didit
@@ -439,7 +443,7 @@ export interface SolanaRemittanceIdResolver {
    * confusión sin que nada en el tipo la señalara. Mientras el método existió, escribir un doble ciego
    * era gratis (`{ listBySender: async () => [] }` compilaba) y escribir uno honesto era imposible.
    *
-   * El tipo que separa los tres es (`RemittanceIdLookup`, `:428`), acá arriba, y su docblock dice
+   * El tipo que separa los tres es (`RemittanceIdLookup`, `:432`), acá arriba, y su docblock dice
    * cuáles son y por qué las tres degradaciones son más probables que un fallo de red.
    *
    * Lo verificable hoy: en esta interfaz no quedó ningún método capaz de expresar el colapso, así que

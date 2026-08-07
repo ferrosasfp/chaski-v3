@@ -258,16 +258,52 @@ describe("POST /api/kyc/session — el vendor_data sale del PoP, no del body (WK
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  // ── T-SE-2 — AC-19 / M-33 ─────────────────────────────────────────────────────────────────────
-  it("T-SE-2: con key y SIN PoP ⇒ 403 kyc_session_unverified, y NO se crea sesión en Didit", async () => {
+  // ── T-SE-2 — AC-19 / M-33 · 🔴 REESCRITO POR AR/BLQ-ALTO-2 ────────────────────────────────────
+  //
+  // ⚠️ ESTE TEST ASSERTABA EL COMPORTAMIENTO QUE ROMPÍA CD-15. Decía "con key y SIN PoP ⇒ 403
+  // kyc_session_unverified" y estaba verde: la ruta efectivamente contestaba 403, y ese 403 llegaba
+  // a `DiditKycGateway.start`, que lo convertía en `throw didit_session_failed` ⇒ la persona que
+  // rechazaba la firma al conectar NO PODÍA VERIFICARSE. O sea que el candado custodiaba el daño.
+  //
+  // Lo que se clava ahora es la regla verdadera, y es MÁS fuerte que la anterior en lo que importa:
+  // sin prueba la sesión se crea (CD-15/AC-13) pero **no queda atada a nada**, y en particular NO
+  // queda atada al valor del body. M-33 ("saltear el PoP cuando el body trae vendorData") sigue
+  // muriendo acá, y muere por el aserto que importa: a Didit no le llega `body.vendorData`.
+  it("T-SE-2: con key y SIN PoP ⇒ la sesión SE CREA, pero SIN atar (el body no ata) (M-33)", async () => {
     const fetchMock = fetchOk();
     const res = await POST(req({ vendorData: ADDR_A }));
+    expect(
+      res.status,
+      "sin prueba de posesión la ruta cortó: rechazar la firma de la billetera deja a la persona sin " +
+        "poder INICIAR el KYC, que es exactamente lo que CD-15 prohíbe",
+    ).toBe(200);
+    const sent = sentToDidit(fetchMock) as unknown as { vendor_data?: string };
+    expect(
+      sent.vendor_data,
+      "la sesión quedó atada a la dirección que vino en el body: quien la mande puede hacer que la " +
+        "fila del veredicto de OTRA persona quede a su nombre, y esa fila es la que autoriza el pago",
+    ).toBeUndefined();
+    // Y sin `vendor_data`, `app/api/kyc/decision/route.ts` no escribe ninguna fila (fail-closed,
+    // T-DEC-3): la sesión sin atar no puede producir autoridad de pago para nadie.
+  });
+
+  it("T-SE-2b: una prueba PRESENTADA y ROTA sigue dando 403, y NO crea sesión", async () => {
+    // La distinción que hace el arreglo: no presentar prueba es el camino de hoy; presentar una que
+    // no verifica es un intento fallido. Si esto se pusiera verde con 200, cualquiera con un
+    // challenge vencido obtendría una sesión y el guard sería decorativo.
+    const fetchMock = fetchOk();
+    const res = await POST(req({ vendorData: ADDR_A, popChallenge: "roto", popSignature: "roto" }));
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: "kyc_session_unverified" });
-    expect(
-      fetchMock,
-      "se creó una verificación de identidad REAL atada a una dirección que nadie probó poseer",
-    ).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("T-SE-2c: prueba a medias (challenge sin firma) ⇒ 403, no se trata como ausencia", async () => {
+    const fetchMock = fetchOk();
+    const { popChallenge } = realPop(KP_A);
+    const res = await POST(req({ vendorData: ADDR_A, popChallenge }));
+    expect(res.status).toBe(403);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   // ── T-SE-3 — AC-19 / M-32: EL CASO DEL ATAQUE ─────────────────────────────────────────────────
@@ -324,11 +360,17 @@ describe("POST /api/kyc/session — el vendor_data sale del PoP, no del body (WK
   });
 
   // ── T-SE-5 — M-4b: los cinco fallos son indistinguibles entre sí ──────────────────────────────
+  //
+  // ⚠️ EL CASO P1 CAMBIÓ CON AR/BLQ-ALTO-2, y el porqué es el arreglo mismo. Era "sin challenge/firma",
+  // que ya NO es un fallo: no presentar prueba es el camino de hoy y devuelve 200 sin atar (T-SE-2).
+  // Lo que este test custodia —que los cinco fallos de una prueba PRESENTADA sean indistinguibles— no
+  // cambió, así que P1 pasa a ser la prueba INCOMPLETA, que es su forma de fallar hoy. Dejarlo como
+  // estaba habría puesto rojo el test correcto por medir un caso que dejó de pertenecer al conjunto.
   it("T-SE-5: los 5 fallos del PoP dan el MISMO status y el MISMO cuerpo, comparados entre sí (M-4b)", async () => {
     fetchOk();
     const good = realPop(KP_A);
     const inputs: Array<[string, Record<string, unknown>]> = [
-      ["P1 · sin challenge/firma", { vendorData: ADDR_A }],
+      ["P1 · challenge presente, firma ausente", { vendorData: ADDR_A, popChallenge: good.popChallenge }],
       ["P2 · challenge con HMAC roto", { popChallenge: "no-es-un-token", popSignature: good.popSignature }],
       ["P3 · challenge de A firmado por B", { ...realPop(KP_B, KP_A) }],
       [

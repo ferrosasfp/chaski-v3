@@ -876,6 +876,17 @@ describe("humanError — los cortes de KYC del prepare no prometen USDC en el es
     expect(msg).toContain("No se movió ningún USDC");
     // Y NO cae en el catch-all genérico de `kyc`, que es cierto pero no dice la acción.
     expect(msg).not.toBe(humanError("kyc_algo_generico"));
+    // 🔴 Y LA ACCIÓN ES LA QUE ARREGLA EL CASO MÁS FRECUENTE (AR/BLQ-MED-1). Quien ve este mensaje
+    // suele ser alguien YA verificado cuya fila no se rellenó porque no hubo firma al conectar. Para
+    // esa persona, "verificá tu identidad otra vez" es un consejo caro y equivocado: reconectar y
+    // firmar dispara el backfill, que escribe la fila sin gastar otra verificación. Si el copy vuelve
+    // a mandar primero al escaneo, esto se pone rojo.
+    expect(
+      msg,
+      "el copy manda a re-verificar la identidad sin nombrar antes la acción barata que arregla el " +
+        "caso típico: reconectar la billetera y aceptar la firma (ahí corre el backfill)",
+    ).toContain("aceptá la firma");
+    expect(msg.indexOf("firma")).toBeLessThan(msg.indexOf("verificar tu identidad"));
   });
 
   // ── T-COPY-2 ───────────────────────────────────────────────────────────────────────────────────

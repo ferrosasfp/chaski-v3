@@ -28,6 +28,7 @@ import {
   RecoverEscrowFunds,
 } from "../application/use-cases/recover-escrow-funds";
 import { KYC_PROVENANCE_LIVE } from "../infrastructure/didit/decision";
+import { ConnectWallet } from "../application/use-cases/connect-wallet";
 import {
   FAKE_SOLANA_BENEFICIARY,
   FAKE_SOLANA_SIGNATURE,
@@ -35,6 +36,7 @@ import {
   FakeKycStore,
   FakeSolanaEscrowRefundGateway,
   FakeSolanaWallet,
+  FakeWallet,
   FixedClock,
   InMemoryRepo,
   QUOTE_EXPIRES,
@@ -297,6 +299,53 @@ it("T-AC4: KYC-once → tras conectar va directo a confirm (sin review ni escane
   expect(screen.getByText(/^S\/[\d,]+\.\d{2}$/)).toBeInTheDocument();
   // (b) nunca pasó por el escaneo de DNI.
   expect(screen.queryByRole("button", { name: /Verificar mi identidad/ })).toBeNull();
+});
+
+// ── T-AC4b — WKH-333 / AR/BLQ-MED-1: el atajo KYC-once NO se toma si el servidor dijo que no hay fila
+//
+// 🔴 QUÉ PASABA SIN ESTE GUARD, y por qué el daño es de dinero aunque el guard sea de pantalla. El
+// atajo manda de `connect` a `confirm` salteando la verificación. Para alguien verificado en ESTE
+// navegador pero SIN fila server-side (`absent`), eso significa llegar a pagar y comerse el corte de
+// AC-17 sin que la pantalla que lo arreglaría se le muestre nunca. El guard de verdad está en
+// `StartKyc` (T-SK-6); ÉSTE evita además gastar un cupo del proveedor: si acá se llamara a `startKyc`,
+// devolvería `redirect` y `onConnect` DESCARTA esa URL, así que la sesión creada no la usa nadie y la
+// pantalla de verificación crearía una segunda.
+it("T-AC4b: local verificado + el servidor dice `absent` ⇒ va a review, y NO se crea sesión de Didit", async () => {
+  const kycStore = new FakeKycStore();
+  await kycStore.save("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", passKyc);
+  const wallet = new FakeWallet();
+  const kyc = new FakeKycGateway({}, true); // redirect=true ⇒ crear sesión sería observable
+  const startSpy = vi.spyOn(kyc, "start");
+  // Gateway del veredicto que CONTESTA: no hay fila utilizable para esta billetera.
+  const verdictGw = {
+    async ensure() {
+      return { lookup: { outcome: "absent", reason: "absent" } } as const;
+    },
+  };
+  const container = buildTestContainer({
+    kycStore,
+    wallet,
+    kyc,
+    useCases: { connectWallet: new ConnectWallet(wallet, kycStore, verdictGw) },
+  });
+  render(<RemittanceFlow container={container} />);
+
+  fillSend();
+  fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+
+  // Aterriza en review (la CTA "Continuar" del paso review), NO en confirm.
+  expect(
+    await screen.findByRole("button", { name: /Continuar/ }),
+    "el atajo KYC-once se tomó igual con el servidor diciendo que no hay fila: la persona llega a " +
+      "pagar sin fila, se corta con AC-17, y la pantalla de verificación no se le muestra nunca",
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Confirmar y enviar/ })).toBeNull();
+  expect(
+    startSpy,
+    "se creó una sesión de verificación en el connect: `onConnect` descarta la URL del redirect, así " +
+      "que ese cupo del proveedor se gasta y no lo usa nadie",
+  ).not.toHaveBeenCalled();
 });
 
 // El badge VERDE afirma una verificación, así que sólo sale con una proveniencia de la allowlist

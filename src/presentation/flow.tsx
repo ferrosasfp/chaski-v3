@@ -313,7 +313,19 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
       // El quote queda visible en el paso `review` pre-KYC (AC-1).
       const locked = await c.lockQuote.execute({ remittanceId: rem.id });
       setRem(locked.snapshot);
-      if (rememberedKyc && rememberedKyc.approved && rememberedKyc.payoutAllowed) {
+      // 🔴 AR/BLQ-MED-1 — si el servidor CONTESTÓ que no hay veredicto utilizable, el atajo KYC-once
+      // no se toma. `StartKyc` tiene el mismo guard y es el que vale (defensa en profundidad); acá se
+      // repite por una razón concreta y medible: si se llamara igual, `StartKyc` devolvería
+      // `redirect` y esta función descarta la URL (mirá el `else` de abajo) ⇒ se crearía una sesión
+      // de Didit que nadie usa, y la pantalla de verificación crearía una SEGUNDA. Un cupo del tier
+      // gratuito por cada persona en esta situación, que es justo lo que la HU vino a ahorrar.
+      const servidorDiceQueNoHayFila = serverVerdict?.outcome === "absent";
+      if (
+        !servidorDiceQueNoHayFila &&
+        rememberedKyc &&
+        rememberedKyc.approved &&
+        rememberedKyc.payoutAllowed
+      ) {
         // KYC-once: esta wallet ya está verificada → salta review+verify, directo a confirmar (AC-4).
         // ⚠️ Va la variable LOCAL, no el estado: `setServerVerdict` de arriba no se ve dentro de este
         // mismo closure (React no actualiza el estado de forma sincrónica). Leer `serverVerdict` acá
@@ -2093,7 +2105,7 @@ function AgentRunsToday({
 // El "2 horas" estaba escrito a mano al lado de una constante que lo decide. Hoy coincide; el día que
 // alguien mueva `CUSTODY_WINDOW_SECS` la frase pasa a ser falsa sin que nada se ponga rojo, que es
 // exactamente cómo nació el bug de la hora inventada que este archivo ya arregló una vez. Se deriva
-// del MISMO valor que el depósito escribe como deadline (`CUSTODY_WINDOW_SECS`, `solana-wallet.ts:374`), así que no puede
+// del MISMO valor que el depósito escribe como deadline (`CUSTODY_WINDOW_SECS`, `solana-wallet.ts:379`), así que no puede
 // desincronizarse. No agrega peso al bundle: (`SolanaWalletAdapter`, `container.ts:46`) ya importa este módulo.
 const CUSTODY_WINDOW_HOURS = CUSTODY_WINDOW_SECS / 3600;
 

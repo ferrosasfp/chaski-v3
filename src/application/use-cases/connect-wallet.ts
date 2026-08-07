@@ -20,8 +20,22 @@ import type {
  * verificación ni se muestra. Conectar es el único momento que corre en TODOS los caminos.
  *
  * COSTO DE UX, DICHO: una firma de billetera al conectar. Hoy conectar no pide ninguna. Se elige ese
- * momento porque para cuando la persona llega a pagar, la fila ya existe. Si RECHAZA la firma, el
- * desenlace es `not_asked/pop_declined` y todo sigue como hoy (AC-13/CD-15).
+ * momento porque para cuando la persona llega a pagar, la fila ya existe.
+ *
+ * 🔴 QUÉ PASA SI RECHAZA LA FIRMA — corregido tras medirlo (AR/BLQ-ALTO-2). Acá decía "el desenlace
+ * es `not_asked/pop_declined` y todo sigue como hoy". La primera mitad es cierta; la segunda era
+ * FALSA: `/api/kyc/session` exigía la misma prueba, devolvía 403 y `DiditKycGateway.start` lo
+ * convertía en un throw, así que rechazar la firma dejaba a la persona sin poder ni empezar el KYC.
+ * Hoy sí es cierta, y el candado es `connect-wallet.kyc-session.test.ts`, que arranca acá con un
+ * `prove()` que rechaza y termina midiendo que la sesión de Didit SE CREA.
+ *
+ * Lo que NO se arregla, y se dice: esa sesión se crea **sin atar** a ninguna dirección, así que no
+ * produce fila del veredicto. Para PAGAR va a hacer falta una firma igual (`prepare` exige PoP desde
+ * WKH-206). Y la salida depende de si esta billetera tuvo alguna vez una verificación ATADA: si la
+ * tuvo, reconectar y aceptar la firma alcanza —este mismo `ensure()` rellena la fila desde la pista
+ * del navegador, sin gastar otra verificación—; si su única verificación es la que se hizo sin
+ * firmar, el backfill NO la rescata (la autoridad rechaza un `vendor_data` vacío) y hay que
+ * verificarse de nuevo. El razonamiento completo está en `app/api/kyc/session/route.ts`, bloque S5.
  */
 export class ConnectWallet {
   constructor(

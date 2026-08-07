@@ -416,3 +416,68 @@ describe("POST /api/kyc/session — el vendor_data sale del PoP, no del body (WK
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+// ── T-SE-7 — CR/BLQ-BAJO-2: el 502 de Didit nombra CUÁL de sus causas fue ─────────────────────────
+//
+// 🔴 QUÉ PROBLEMA CIERRA, Y POR QUÉ ES UN TEST DE OBSERVABILIDAD. `app/api/kyc/session/route.ts` no
+// tenía UNA sola línea de log —`command grep -n "logger\.\|console\." app/api/kyc/session/route.ts`
+// devolvía exit 1— y su 502 colapsa TODO fallo del proveedor. El modo de falla que introdujo esta HU
+// (que Didit rechace el body SIN `vendor_data`, o sea el camino sin atar de AR/BLQ-ALTO-2) se veía
+// EXACTAMENTE igual que una caída de Didit, un `workflow_id` inválido o un rate-limit suyo: "suben
+// los 502", sin causa nombrable. Es el multiplicador de CR/BLQ-MED-1, porque el supuesto que ese
+// hallazgo dejó apoyado en documentación —no en una llamada real— se manifestaría justo acá.
+describe("POST /api/kyc/session — el 502 de Didit nombra su causa, y sin PII (WKH-333/CR-BLQ-BAJO-2)", () => {
+  function fetchFail(status: number) {
+    const m = vi.fn(async (_url: string, init?: RequestInit) => {
+      void init;
+      return { ok: false, status, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", m);
+    return m;
+  }
+
+  it("T-SE-7: sesión SIN atar rechazada por Didit ⇒ el log dice `atada:false` + el status upstream", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchFail(400);
+    const res = await POST(req({ vendorData: ADDR_A })); // SIN PoP ⇒ sesión sin atar
+    expect(res.status).toBe(502);
+    expect(
+      warn,
+      "el rechazo de Didit a una sesión SIN `vendor_data` —el modo de falla propio de esta HU— sale " +
+        "por el mismo 502 mudo que una caída del proveedor: el incidente no tendría causa nombrable",
+    ).toHaveBeenCalledWith("[kyc-session] didit_session_failed", { atada: false, upstream: 400 });
+  });
+
+  it("T-SE-7b: sesión ATADA rechazada ⇒ `atada:true`, y la DIRECCIÓN no aparece en ningún lado", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchFail(503);
+    const res = await POST(req({ ...realPop(KP_A) }));
+    expect(res.status).toBe(502);
+    expect(
+      warn,
+      "`atada` quedó constante: un log que dice lo mismo pase lo que pase no distingue nada, que es " +
+        "el estado del que este candado saca a la ruta",
+    ).toHaveBeenCalledWith("[kyc-session] didit_session_failed", { atada: true, upstream: 503 });
+    // VALUE-FREE (CD-2/CD-9): `atada` es un booleano DERIVADO de si hubo dirección probada. Si alguien
+    // "mejora" el log poniendo la dirección —o el vendor_data, o el challenge— esto se pone rojo.
+    expect(
+      JSON.stringify(warn.mock.calls),
+      "el log filtró la dirección de la billetera: es el identificador de la persona en este flujo y " +
+        "termina en los logs del proveedor de hosting, fuera de la base que tiene el filtro por dueño",
+    ).not.toContain(ADDR_A);
+  });
+
+  it("T-SE-7c: en el camino FELIZ no se emite nada — este log NO cuenta las sesiones sin atar", async () => {
+    // Clava el LÍMITE que el docblock de la ruta declara, para que nadie se apoye en esta línea para
+    // dimensionar el consumo de cupo por la deduplicación que Didit pierde cuando falta `vendor_data`.
+    // Sólo hay señal en el FALLO. Si algún día se quiere medir el camino feliz, hay que agregar otra.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, json: async () => DIDIT_OK })),
+    );
+    const res = await POST(req({ vendorData: ADDR_A })); // sin atar, y exitosa
+    expect(res.status).toBe(200);
+    expect(warn.mock.calls.filter((c) => String(c[0]).startsWith("[kyc-session]"))).toEqual([]);
+  });
+});

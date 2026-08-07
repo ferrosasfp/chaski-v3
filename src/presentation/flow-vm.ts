@@ -651,8 +651,15 @@ export function humanError(code: string): string {
   // reconectar y aceptar la firma — ahí el backfill re-consulta a la autoridad con la pista del
   // navegador y escribe la fila SIN gastar otra verificación. Volver a escanear el documento es el
   // segundo intento, no el primero, y por eso va segundo en la frase.
+  //
+  // 🔴 Y LA PROMESA SE CAMBIÓ POR SU CONDICIÓN (CR/MNR-1). Decía "con eso alcanza en casi todos los
+  // casos": eso es una afirmación sobre la POBLACIÓN de quienes ven el mensaje, nada la mide, y decae
+  // sola a medida que cambia la mezcla de gente. Ahora dice CUÁNDO alcanza —"si ya te verificaste
+  // antes desde esta billetera"—, que es una condición que la persona puede evaluar sobre sí misma y
+  // que es exactamente la que hace funcionar al backfill: sin una verificación previa ATADA a esta
+  // dirección, la autoridad devuelve `kyc_ownership_mismatch` y no hay fila que rescatar.
   if (code.includes("prepare_kyc_verdict_missing"))
-    return "Volvé a conectar tu billetera y aceptá la firma que te pide: con eso alcanza en casi todos los casos. Si te lo vuelve a pedir, vas a tener que verificar tu identidad otra vez. No se movió ningún USDC.";
+    return "Volvé a conectar tu billetera y aceptá la firma que te pide: si ya te verificaste antes desde esta billetera, con eso alcanza. Si te lo vuelve a pedir, vas a tener que verificar tu identidad otra vez. No se movió ningún USDC.";
   // Misma familia, otra causa: no pudimos CONSULTAR el registro (no que no estés verificado). Se
   // distingue a propósito — mandar a re-verificarse por una caída nuestra es un consejo equivocado.
   if (code.includes("prepare_kyc_verdict_unavailable"))

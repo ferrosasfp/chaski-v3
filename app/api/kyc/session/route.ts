@@ -139,9 +139,34 @@ export async function POST(req: Request): Promise<Response> {
     (typeof popChallenge === "string" && popChallenge.trim() !== "") ||
     (typeof popSignature === "string" && popSignature.trim() !== "");
 
-  // `undefined` ⇒ sesión SIN atar. `JSON.stringify` omite la clave y Didit acepta la sesión sin
-  // `vendor_data` (medido en producción el 2026-08-04 y documentado en `payout/authority.ts`: un
-  // `POST /api/kyc/session {}` devolvía 200 con `&vendor=` vacío).
+  // `undefined` ⇒ sesión SIN atar: `JSON.stringify` OMITE la clave (no manda `null`). Es la MISMA
+  // forma de onda que ya salía antes de esta HU — `9beb814` mandaba `vendor_data: body.vendorData`,
+  // que con un `POST {}` también omite la clave. Lo que cambia es el ORIGEN del valor, no el body.
+  //
+  // 🔴 DE DÓNDE SALE QUE DIDIT ACEPTE ESO, con la precisión que costó un bloqueante (CR/BLQ-MED-1).
+  // Acá decía "medido en producción el 2026-08-04 y documentado en `payout/authority.ts`", y esa
+  // fuente dice otra cosa: su propio texto aclara que "a los ~9 s **el mock** la aprueba"
+  // (authority.ts:113). El `base` de este fetch lo resuelve `resolveDiditBaseUrl()`, cuyo eje `mock`
+  // apunta a "un endpoint NUESTRO (mock local / CI)" (didit-env.ts:34-35) ⇒ aquel 200 con `&vendor=`
+  // vacío LO DEVOLVIÓ NUESTRO MOCK, no Didit. La frase era cierta del deployment e inexacta del
+  // proveedor, y esa diferencia es justamente la que hacía que nadie corriera la sonda.
+  //
+  // LO QUE SOSTIENE EL SUPUESTO HOY: la referencia pública de Didit para `POST /v3/session/` declara
+  // `vendor_data` como `(string, optional)`, y su ÚNICO campo requerido es `workflow_id`
+  // (docs.didit.me/sessions-api/create-session, consultada el 2026-08-07).
+  // ⚠️ Eso es DOCUMENTACIÓN, NO una llamada real contra el endpoint vivo: no se corrió ninguna.
+  // Escribir "medido contra Didit" sería repetir el error de arriba. En los tests el proveedor es un
+  // doble que devuelve 200 sea cual sea el body, así que AC-13/CD-15 NO están verificados contra el
+  // proveedor real. La sonda que lo cerraría queda OPCIONAL para el founder (peor caso: 1
+  // verificación de las 500 del tier gratuito) y está escrita en `doc/sdd/046-…/fix-pack-cr.md` §2.
+  //
+  // 🔴 COSTO REAL DEL CAMINO SIN ATAR, que hasta ahora no estaba escrito en ningún lado. La misma
+  // referencia recomienda mandar SIEMPRE `vendor_data` "to reduce noise in duplicate detection":
+  // omitirlo desactiva la idempotencia y la deduplicación entre sesiones. ⇒ quien rechaza la firma
+  // varias veces genera verificaciones que Didit ya NO colapsa, y CADA UNA consume del tier de 500.
+  // NO se arregla acá y NO se inventa un centinela: cualquier valor que no sea la dirección PROBADA
+  // reabre R-1, que costó un bloqueante cerrar. Un identificador de sesión no adivinable sería
+  // diseño nuevo, y va a HU aparte.
   let provedAddress: string | undefined;
 
   if (popPresentado) {
@@ -213,6 +238,32 @@ export async function POST(req: Request): Promise<Response> {
   });
 
   if (!res.ok) {
+    // 🔴 EL MODO DE FALLA PROPIO DE ESTA HU ERA INDETECTABLE (CR/BLQ-BAJO-2). Este 502 colapsa TODO
+    // fallo de Didit: una caída del proveedor, un `workflow_id` inválido, un rate-limit suyo — y
+    // también el que introdujo esta HU, que es que rechace el body SIN `vendor_data` (el camino sin
+    // atar). Desde afuera los cuatro se ven idénticos ("suben los 502") y este archivo no tenía UNA
+    // sola línea de log, así que el supuesto de arriba, si algún día deja de valer, se manifestaría
+    // como un incidente sin causa nombrable. Es el multiplicador de CR/BLQ-MED-1, y por eso el log
+    // entra en el mismo fix-pack que la corrección de esa frase.
+    //
+    // VALUE-FREE, y las dos palabras cuentan (CD-2/CD-9): `atada` es un BOOLEANO DERIVADO de si hubo
+    // dirección probada — NUNCA la dirección. No viaja el `vendor_data`, ni el body, ni el challenge,
+    // ni la firma, ni nada del PoP. `upstream` es el status del proveedor, que además ya sale en la
+    // respuesta, así que no agrega superficie. Un salto de 502 con `atada:false` y `upstream:4xx`
+    // nombra su causa solo; con `atada:true` o `upstream:5xx` apunta al proveedor.
+    //
+    // ⚠️ LO QUE ESTE LOG NO MIDE, dicho para que nadie se apoye en él de más: sólo se emite en el
+    // camino de FALLO. NO cuenta cuántas sesiones sin atar se crean con éxito, así que NO sirve para
+    // dimensionar el consumo de cupo por deduplicación perdida que se documenta más arriba. Eso
+    // necesitaría una señal en el camino feliz, y no está.
+    //
+    // `console.warn` con prefijo de ruta, igual que `[payout-prepare] agent_rejected`. NO se usa
+    // `logLedgerAlert`: ese canal es el del ledger de evidencia y su módulo declara tener exactamente
+    // dos emisores; esto no es una escritura de evidencia que faltó.
+    console.warn("[kyc-session] didit_session_failed", {
+      atada: provedAddress !== undefined,
+      upstream: res.status,
+    });
     return NextResponse.json({ error: "didit_session_failed", upstream: res.status }, { status: 502 });
   }
 

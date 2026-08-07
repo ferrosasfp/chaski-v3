@@ -13,8 +13,22 @@
 // migración es defensa en profundidad ante un cliente con anon-key, no el guard.
 //
 // Factory getKycVerdictStore(): null si KYC_VERDICT_STORE_ENABLED !== "true" O el cliente Supabase es
-// null (envs ausentes) ⇒ el endpoint responde 501 y `prepare` conserva su comportamiento actual
-// (AC-12). La env se lee DENTRO de la factory, en runtime (CD-14).
+// null (envs ausentes) ⇒ el endpoint del veredicto responde 501. La env se lee DENTRO de la factory,
+// en runtime (CD-14).
+//
+// 🔴 Y NO: `prepare` NO "conserva su comportamiento actual". Acá decía exactamente esa frase, y este
+// es el QUINTO sitio donde sobrevivió después de que se midiera falsa (AR/BLQ-ALTO-1; la encontró acá
+// CR/BLQ-BAJO-1). Es el peor lugar posible para que sobreviviera: este archivo produce el `null` y es
+// el ÚNICO lector de la env, o sea exactamente donde aterriza quien greppee el flag en medio de un
+// incidente. Leer "prepare conserva su comportamiento actual", apagar el flag y cortar el money-path
+// entero es un movimiento de un solo paso.
+//
+// LO MEDIDO: sin store, `prepare` no tiene de dónde sacar el identificador de la verificación —el del
+// cliente ya NO se acepta (CD-26), y eso es la HU entera— y responde **503 a TODO pagador**. El
+// candado es `app/api/payout/prepare/route.flag-off.test.ts`, que NO mockea la autoridad de KYC.
+// ⇒ APAGAR ESTE FLAG NO ES UN ROLLBACK: ES UN CORTE. El rollback es re-desplegar el código anterior a
+// WKH-333 y RECIÉN ENTONCES apagarlo. Coincide con `.env.example` (sección WKH-333) y con el `_down`
+// de `20260806T000000_create_kyc_verdicts.sql`, que dicen lo mismo.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { KycVerdictRecord, KycVerdictStore, KycVerdictWriteOutcome } from "../../application/ports";
 import { canonicalizeAddress } from "../address";
@@ -128,9 +142,22 @@ export class SupabaseKycVerdictStore implements KycVerdictStore {
 
 /**
  * Factory del store. `null` cuando KYC_VERDICT_STORE_ENABLED !== "true" (flag OFF) **o** el cliente
- * Supabase es `null` (envs ausentes) ⇒ el endpoint de veredicto responde 501 y `prepare` conserva su
- * comportamiento actual (AC-12). La env se lee en runtime (CD-14): a nivel de módulo quedaría
- * congelada en el build y el flag no se podría apagar sin re-deployar.
+ * Supabase es `null` (envs ausentes).
+ *
+ * 🔴 CONSECUENCIA DEL `null`, MEDIDA (CR/BLQ-BAJO-1 — SEXTO sitio de la frase que AR/BLQ-ALTO-1
+ * demolió): el endpoint del veredicto responde 501 **y `prepare` responde 503 a TODO pagador**. Acá
+ * decía "y `prepare` conserva su comportamiento actual (AC-12)", y es FALSO desde el fix-pack del AR.
+ * Candado: `app/api/payout/prepare/route.flag-off.test.ts`.
+ *
+ * POR QUÉ LA ENV SE LEE EN RUNTIME (CD-14) — la justificación TAMBIÉN cambió, y hay que decirlo.
+ * Decía "a nivel de módulo quedaría congelada en el build y el flag no se podría apagar sin
+ * re-deployar": apagar el flag ya no es una operación que nadie quiera hacer sola —corta los pagos—,
+ * así que esa razón dejó de sostenerse sola. La que SÍ se sostiene es la INVERSA, y es el paso 3 del
+ * orden de despliegue (§11 del Story File): el flag se ENCIENDE en el proveedor con el código todavía
+ * sin desplegar, y el deploy tiene que levantar ese valor YA encendido. Congelarlo en el build es lo
+ * que rompería ese orden y reabriría la ventana de corte total. Que además se pueda apagar sin
+ * re-deployar es un efecto secundario, no el propósito, y sólo es seguro DESPUÉS de haber
+ * re-desplegado el código anterior a WKH-333.
  */
 export function getKycVerdictStore(): KycVerdictStore | null {
   if (process.env.KYC_VERDICT_STORE_ENABLED !== "true") return null;

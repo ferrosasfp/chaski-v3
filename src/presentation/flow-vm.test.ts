@@ -887,6 +887,17 @@ describe("humanError — los cortes de KYC del prepare no prometen USDC en el es
         "caso típico: reconectar la billetera y aceptar la firma (ahí corre el backfill)",
     ).toContain("aceptá la firma");
     expect(msg.indexOf("firma")).toBeLessThan(msg.indexOf("verificar tu identidad"));
+    // 🔴 Y LA PROMESA ES UNA CONDICIÓN, NO UNA ESTADÍSTICA (CR/MNR-1). Decía "con eso alcanza en casi
+    // todos los casos": una afirmación sobre la POBLACIÓN de quienes leen el mensaje, que nada mide y
+    // que decae sola cuando cambia la mezcla de gente. Ahora dice CUÁNDO alcanza, y esa condición es
+    // exactamente la que hace funcionar al backfill (sin verificación previa ATADA a esta dirección,
+    // la autoridad devuelve `kyc_ownership_mismatch` y no hay fila que rescatar).
+    expect(
+      msg,
+      "el copy volvió a prometer un resultado por frecuencia ('casi todos los casos') en vez de " +
+        "nombrar la condición que la persona puede evaluar sobre sí misma",
+    ).not.toContain("casi todos");
+    expect(msg).toContain("si ya te verificaste antes desde esta billetera");
   });
 
   // ── T-COPY-2 ───────────────────────────────────────────────────────────────────────────────────

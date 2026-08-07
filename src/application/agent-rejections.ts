@@ -117,6 +117,42 @@ export function relayableRejection(
 }
 
 /**
+ * ── "NO HAY QUIÉN" ES UN DESENLACE PROPIO, NI UN RECHAZO NI UNA CAÍDA (WKH-332/AC-13) ────────────
+ *
+ * El gateway resuelve la capacidad al ejecutar. Cuando NINGÚN agente la cumple bajo las constraints
+ * del step, contesta 422 y el cliente lo trae como `no_agent_match` (`gateway-client.ts`, el `case
+ * 422` de `mapErrorStatus`). Hasta acá eso salía colapsado en `prepare_upstream_error` / `a2a_unavailable`,
+ * o sea con las palabras de "el otro lado se cayó", y la pantalla invitaba a reintentar. Reintentar
+ * no crea un agente: la misma llamada, un segundo después, vuelve a no encontrar a nadie.
+ *
+ * ⚠️ POR QUÉ NO ENTRAN EN NINGUNA DE LAS DOS LISTAS DE ARRIBA. Las listas RELAYABLE / SÓLO-LOG
+ * clasifican el `reason` que un AGENTE devolvió tras LEER el pedido. Acá no hubo agente: nadie leyó
+ * nada. Aplicarles el criterio de esas listas sería clasificar una respuesta que no existe.
+ *
+ * Y por eso mismo tampoco entran en `PREPARE_REJECTION_ENUMS`: esa constante habilita el copy *"El
+ * agente de pagos rechazó esta remesa"* (`flow.tsx`, la rama `prepareRejected`), y esa frase sería
+ * FALSA acá — afirmaría un acto de un agente que nunca fue elegido. Es la misma clase de error que
+ * esta HU vino a cerrar, sólo que del lado del texto.
+ *
+ * Lo que sí comparten con esa familia es el HECHO que habilita la segunda mitad del copy: el prepare
+ * corre ANTES de `authorizePrincipal` (`confirm-and-send.ts`:384-388), o sea antes de que la wallet
+ * firme nada. "No se movió ningún USDC" no es un consuelo: se lee del orden del use-case.
+ *
+ * 🔴 Un enum propio NUESTRO no es un eco del gateway (CD-5): no viaja el `message`, ni la URL, ni el
+ * `reason` del otro lado. Viaja UNA palabra nuestra, elegida por nosotros, para un desenlace nuestro.
+ * Y sólo se abre `no_agent_match`: `payment_required` (402, la Agent Key sin saldo) SIGUE colapsado
+ * en el enum de caída a propósito, porque lo que un 402 filtraría no es un dato del pedido de quien
+ * llama sino del estado operativo nuestro.
+ *
+ * ⚠️ NINGUNO DE LOS DOS CONTIENE LAS SUBCADENAS "kyc" NI "payout", y eso NO es casualidad:
+ * `humanError` decide por `code.includes(...)` en cascada con dos catch-all al final, así que un
+ * enum que las contuviera quedaría tragado por el copy equivocado. `prepare_no_agent_for_capability`
+ * empieza con "prepare", no con "payout". T-13.3 lo custodia como propiedad, no como comentario.
+ */
+export const PREPARE_NO_AGENT_FOR_CAPABILITY = "prepare_no_agent_for_capability";
+export const QUOTE_NO_AGENT_FOR_CAPABILITY = "a2a_no_agent_for_capability";
+
+/**
  * ¿Este `failureReason` de una remesa viene de un rechazo del agente de payout en el PREPARE?
  *
  * Existe para la UI, y lo que habilita es una afirmación de hecho: el prepare corre ANTES de

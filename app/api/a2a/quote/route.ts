@@ -4,6 +4,7 @@
 // el body del request no se ecoa en errores). Espejo del A2aQuoteGateway cliente.
 import { NextResponse } from "next/server";
 import {
+  QUOTE_NO_AGENT_FOR_CAPABILITY,
   QUOTE_REJECTED,
   RELAYABLE_QUOTE_REJECTIONS,
   relayableRejection,
@@ -109,18 +110,24 @@ export async function POST(req: Request): Promise<Response> {
         },
       ],
     });
-    // ⚠️ ESTA RAMA SIGUE COLAPSADA, Y ES DELIBERADO. La separación rechazo/caída que sí se hizo en
-    // la rama punto-a-punto de abajo NO se replicó acá: `payment_required` (402, la Agent Key sin
-    // saldo), `no_agent_match` (422) y `unavailable` siguen saliendo por el mismo
-    // `a2a_unavailable`. Lo que lo impide es CD-8, que es una directiva, no una omisión: el detalle
-    // granular del gateway va al log y nunca al body. Y no es sólo texto — hay un test que lo
-    // clava (`route.test.ts`, "el detalle SÓLO al log": `Object.keys(json)` debe ser `["error"]`).
-    // Además, lo que un 402 filtraría no es un dato del pedido de quien llama sino del estado
-    // operativo nuestro. Abrir esto necesita su propio SDD que revise CD-8, no un parche acá.
+    // ⚠️ ESTA RAMA SIGUE MAYORMENTE COLAPSADA, Y ES DELIBERADO. `payment_required` (402, la Agent
+    // Key sin saldo) y `unavailable` siguen saliendo los dos por `a2a_unavailable`. Lo que lo impide
+    // es CD-8, que es una directiva y no una omisión: el detalle granular del gateway va al log y
+    // nunca al body. Y no es sólo texto — hay un test que lo clava (`route.test.ts`, "el detalle
+    // SÓLO al log": `Object.keys(json)` debe ser `["error"]`). Además, lo que un 402 filtraría no es
+    // un dato del pedido de quien llama sino del estado operativo nuestro.
+    //
+    // 🔴 SE ABRE UNO SOLO: `no_agent_match` (WKH-332/AC-13). No es un eco del gateway (CD-5) —no
+    // viaja su `message`, ni su `reason`, ni la URL—: es UNA palabra nuestra para un desenlace
+    // nuestro, y el body sigue teniendo exactamente una clave. Se abre porque "ninguna capacidad
+    // resolvió" no se arregla reintentando, y el 502 invitaba justamente a eso: la misma llamada, un
+    // segundo después, vuelve a no encontrar a nadie. Abrir el 402 sigue necesitando su propio SDD.
     if (!r.ok) {
       logGatewayFailure("quote", r);
       if (r.code === "not_configured")
         return NextResponse.json({ error: "a2a_not_configured" }, { status: 501 });
+      if (r.code === "no_agent_match")
+        return NextResponse.json({ error: QUOTE_NO_AGENT_FOR_CAPABILITY }, { status: 422 });
       return NextResponse.json({ error: "a2a_unavailable" }, { status: 502 });
     }
     if (!isValidQuoteResult(r.outputs[0]))

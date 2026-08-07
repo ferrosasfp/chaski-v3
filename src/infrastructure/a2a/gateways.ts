@@ -8,7 +8,11 @@
 // Hoy la ÚNICA ruta viva de este par es /api/a2a/quote. La del payout (/api/a2a/payout/submit) la
 // borró WKH-320; ver el comentario de A2aPayoutGateway.submit, que es lo único que quedó de ese lado.
 // El payout del camino Solana lo arma el server en /api/payout/prepare, no este adapter.
-import { QUOTE_REJECTED, RELAYABLE_QUOTE_REJECTIONS } from "../../application/agent-rejections";
+import {
+  QUOTE_NO_AGENT_FOR_CAPABILITY,
+  QUOTE_REJECTED,
+  RELAYABLE_QUOTE_REJECTIONS,
+} from "../../application/agent-rejections";
 import { Money } from "../../domain/money";
 import { isParseableIso } from "../../domain/remittance";
 import type { AgentRef, Quote } from "../../domain/remittance";
@@ -96,7 +100,14 @@ async function readQuoteRejection(res: Response): Promise<string | undefined> {
   } catch {
     return undefined; // body ilegible ⇒ no podemos afirmar que fue un rechazo
   }
-  if (!isRecord(body) || body.error !== QUOTE_REJECTED) return undefined;
+  if (!isRecord(body)) return undefined;
+  // WKH-332/AC-13 — "no hay quién" NO es un rechazo (nadie leyó el pedido), pero SÍ tiene que llegar
+  // al caller con su propio nombre. Sin este renglón el 422 de la route caía en el `undefined` de
+  // abajo, el caller tiraba `a2a_quote_unavailable` y la pantalla volvía a decir "el otro lado se
+  // cayó, probá de nuevo" — o sea que el enum nuevo existiría en la route y no lo vería nadie. Se
+  // propaga 1:1 y sin `reason`: es un enum NUESTRO, no un eco del gateway.
+  if (body.error === QUOTE_NO_AGENT_FOR_CAPABILITY) return QUOTE_NO_AGENT_FOR_CAPABILITY;
+  if (body.error !== QUOTE_REJECTED) return undefined;
   return typeof body.reason === "string" && RELAYABLE_QUOTE_REJECTIONS.includes(body.reason)
     ? body.reason
     : QUOTE_REJECTED;

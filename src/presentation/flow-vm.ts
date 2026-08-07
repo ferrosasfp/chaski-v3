@@ -664,6 +664,30 @@ export function humanError(code: string): string {
   // distingue a propósito — mandar a re-verificarse por una caída nuestra es un consejo equivocado.
   if (code.includes("prepare_kyc_verdict_unavailable"))
     return "No pudimos comprobar tu verificación de identidad. No se movió ningún USDC: es una falla temporal nuestra, probá de nuevo en un rato.";
+  // WKH-332/AC-13 — NO HAY QUIÉN. Es el tercer desenlace, y hasta acá se decía con las palabras de
+  // los otros dos: salía por `prepare_upstream_error` / `a2a_unavailable`, o sea "el otro lado se
+  // cayó", y el copy invitaba a reintentar. Reintentar no crea un agente. Las dos frases dicen las
+  // dos cosas que hay que decir: (1) que volver a intentar igual no cambia nada, y (2) que no se
+  // movió ningún USDC — que acá NO es un consuelo sino un hecho del orden de la ruta: el prepare
+  // corre antes de `authorizePrincipal` (`confirm-and-send.ts`:384-388), o sea antes de la primera
+  // firma de la billetera.
+  //
+  // ⚠️ VAN ANTES de los dos catch-all de abajo (`kyc` y `payout`) a propósito. Los enums elegidos no
+  // contienen ninguna de esas dos subcadenas —`prepare_no_agent_for_capability` empieza con
+  // "prepare"—, así que hoy la posición no cambia el resultado; lo que la vuelve load-bearing es el
+  // día que alguien renombre un enum. T-13.3 clava la propiedad (los enums no contienen "kyc" ni
+  // "payout") en vez del orden, porque la propiedad es lo que un input concreto puede romper.
+  //
+  // Y NINGUNA de las dos dice quién era el agente ni por qué no calificó: no lo sabemos, no hubo
+  // agente. Prometer ese detalle sería la clase de frase que esta HU vino a sacar de la pantalla.
+  //
+  // Son DOS ramas y no una compartida porque los dos legs cortan en momentos distintos del flujo: el
+  // de FX antes de que exista una cotización, el del desembolso con la cotización ya en pantalla. Una
+  // sola frase para los dos tendría que ser vaga en uno de los dos.
+  if (code.includes("prepare_no_agent_for_capability"))
+    return "Ahora mismo no hay ningún proveedor que pueda entregar este envío. No se movió ningún USDC de tu wallet. Volver a intentar ahora no cambia el resultado: probá más tarde.";
+  if (code.includes("a2a_no_agent_for_capability"))
+    return "Ahora mismo no hay ningún proveedor que pueda cotizar este envío, así que no llegamos a darte un precio. No se movió ningún USDC de tu wallet. Volver a intentar ahora no cambia el resultado: probá más tarde.";
   if (code.includes("kyc")) return "No pudimos verificar tu identidad.";
   // ⚠️ ACÁ SE PROMETÍA UN REEMBOLSO QUE NO EXISTE: "Si te cobramos, te reembolsamos". El adapter de
   // refund por defecto (`LedgerRefundGateway`) no mueve un peso y devuelve `refundTx: null` a

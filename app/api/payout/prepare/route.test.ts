@@ -856,30 +856,53 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
     });
 
     // T-A3.4 — EL test de la HU. Si esto pasa a verde con un fallback puesto, la HU no hizo nada.
-    it("T-A3.4 ANTI-FALLBACK: 422 / 503 / throw del gateway ⇒ 502 prepare_upstream_error, CERO llamadas al agente, CERO ledger, body = { error }", async () => {
+    //
+    // ⚠️ WKH-332/AC-13 — EL STATUS Y EL ENUM ESPERADOS PASARON A SER POR CASO, Y LA RAZÓN ES QUE UNO
+    // DE LOS TRES CAMBIÓ DE VEREDICTO. El 422 `no_agent_match` ya no sale como una caída: "nadie
+    // cumple la capacidad" no se arregla reintentando y el 502 invitaba a eso. Los otros dos siguen
+    // en 502 `prepare_upstream_error`, byte por byte. Lo que este `it` custodia —CERO fallback al
+    // agente directo, CERO ledger, body de UNA sola clave— NO cambió y se sigue asertando para los
+    // TRES casos por igual: si alguien fuera a colar un fallback, este test se pone rojo lo mismo.
+    it("T-A3.4 ANTI-FALLBACK: 422 / 503 / throw del gateway ⇒ corte fail-closed, CERO llamadas al agente, CERO ledger, body = { error }", async () => {
       setGatewayEnv();
       getLedgerMock.mockReturnValue(ledgerMock);
       vi.spyOn(console, "warn").mockImplementation(() => {});
-      const cases: { label: string; opts: Parameters<typeof gwRouter>[0] }[] = [
+      const cases: {
+        label: string;
+        opts: Parameters<typeof gwRouter>[0];
+        /** El status que la RUTA devuelve (distinto del `opts.status`, que es el del gateway). */
+        esperado: number;
+        error: string;
+      }[] = [
         {
           label: "422 no_agent_match (nadie cumple la capacidad con el piso)",
           opts: {
             status: 422,
             body: { error: "no candidates", code: "no_agent_match", reason: "no_candidates", step: 0 },
           },
+          // Desenlace PROPIO (AC-13): no es una caída, y decirlo como caída invitaba a reintentar.
+          esperado: 422,
+          error: "prepare_no_agent_for_capability",
         },
         {
           label: "503 registry_unavailable",
           opts: { status: 503, body: { error: "registry down", error_code: "REGISTRY_UNAVAILABLE" } },
+          esperado: 502,
+          error: "prepare_upstream_error",
         },
-        { label: "throw de red", opts: { composeThrows: true } },
+        {
+          label: "throw de red",
+          opts: { composeThrows: true },
+          esperado: 502,
+          error: "prepare_upstream_error",
+        },
       ];
       for (const c of cases) {
         const { agentCalls } = gwRouter(c.opts);
         const res = await POST(req(bodyOf()));
-        expect(res.status, c.label).toBe(502);
+        expect(res.status, c.label).toBe(c.esperado);
         const json = (await res.json()) as Record<string, unknown>;
-        expect(json, c.label).toEqual({ error: "prepare_upstream_error" });
+        expect(json, c.label).toEqual({ error: c.error });
         // CD-8: el body es EXACTAMENTE { error } — ni detail, ni code, ni el message del gateway.
         expect(Object.keys(json), c.label).toEqual(["error"]);
         // CD-1: jamás se creó la orden por el otro camino.
@@ -924,6 +947,49 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       const badJson = (await bad.json()) as Record<string, unknown>;
       expect(badJson).toEqual({ error: "prepare_no_deposit_address" });
       expect(badJson).not.toHaveProperty("attestation");
+    });
+
+    // ── T-13.1 (WKH-332 / AC-13) — "no hay quién" deja de decirse como "el otro lado se cayó" ────
+    //
+    // 🔴 LOS DOS DESENLACES EN EL MISMO `it`, Y ESO ES EL TEST. Un `it` que sólo mirara el 422 nuevo
+    // daría verde aunque los dos casos salieran por el mismo enum: lo que AC-13 pide no es que exista
+    // un 422, es que "ninguna capacidad resolvió" y "el gateway se cayó" dejen de ser indistinguibles
+    // para quien mira la pantalla. Reintentar arregla la segunda y no puede arreglar la primera.
+    //
+    // CD-17: depende del `setGatewayEnv()` de este `describe` y del `getVerdictStoreMock` de su
+    // `beforeEach`; sin la fila del veredicto la ruta corta en 403 ANTES de llegar al forward y el
+    // test daría verde sin haber ejercitado nada de lo que dice ejercitar.
+    it("T-13.1/AC-13: no_agent_match ⇒ 422 con enum propio; una caída ⇒ sigue siendo 502, comparados entre sí", async () => {
+      setGatewayEnv();
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      // (a) el gateway dice que NINGÚN agente cumple la capacidad bajo el piso del step.
+      const sinAgente = gwRouter({
+        status: 422,
+        body: { code: "no_agent_match", reason: "no_candidates", step: 0 },
+      });
+      const resSinAgente = await POST(req(bodyOf()));
+      const jsonSinAgente = (await resSinAgente.json()) as Record<string, unknown>;
+
+      // (b) el gateway se cayó. CD-22: sólo se abrió `no_agent_match`; todo lo demás sigue en 502.
+      const caido = gwRouter({ status: 503, body: { code: "unavailable" } });
+      const resCaido = await POST(req(bodyOf()));
+      const jsonCaido = (await resCaido.json()) as Record<string, unknown>;
+
+      expect(resSinAgente.status).toBe(422);
+      expect(jsonSinAgente).toEqual({ error: "prepare_no_agent_for_capability" });
+      expect(resCaido.status).toBe(502);
+      expect(jsonCaido).toEqual({ error: "prepare_upstream_error" });
+
+      // La comparación explícita: cualquier mutante que mapee los dos al mismo lado muere acá.
+      expect(resSinAgente.status).not.toBe(resCaido.status);
+      expect(jsonSinAgente.error).not.toBe(jsonCaido.error);
+
+      // CD-1/CD-5, intactos: ni un fetch punto-a-punto, y el body sigue con UNA sola clave (nada del
+      // `message`, el `reason` ni la URL del gateway se ecoa al browser).
+      expect(sinAgente.agentCalls).toHaveLength(0);
+      expect(caido.agentCalls).toHaveLength(0);
+      expect(Object.keys(jsonSinAgente)).toEqual(["error"]);
     });
 
     it("T-A3.6: flag encendido + envs del gateway ausentes ⇒ 501 prepare_not_configured y CERO fetch", async () => {
@@ -1146,9 +1212,12 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
           body: { error: "no candidates", code: "no_agent_match", reason: "no_candidates", step: 0 },
         });
         const res = await POST(req(bodyOf()));
-        // El 422 se propaga como 502 opaco y el leg NO se destraba solo.
-        expect(res.status).toBe(502);
-        expect(await res.json()).toEqual({ error: "prepare_upstream_error" });
+        // WKH-332/AC-13 — el veredicto de ESTE assert cambió (era 502 `prepare_upstream_error`): el
+        // 422 ahora sale con enum propio, porque "no hay quién" no se arregla reintentando y decirlo
+        // con las palabras de una caída invitaba justamente a eso. Lo que este `it` custodia NO
+        // cambió y es lo de abajo: el leg NO se destraba solo agregando el carril de estreno.
+        expect(res.status).toBe(422);
+        expect(await res.json()).toEqual({ error: "prepare_no_agent_for_capability" });
         expect(bodies.length).toBeGreaterThan(0); // hubo /compose: el escaneo de abajo mira algo real
         for (const [i, raw] of bodies.entries()) {
           expect(trialKeysSentTo(raw), `${POR_QUE} (intento #${i + 1} del /compose)`).toEqual([]);

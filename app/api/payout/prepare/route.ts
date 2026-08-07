@@ -21,6 +21,7 @@
 import { NextResponse } from "next/server";
 import {
   LOGGABLE_PREPARE_REJECTIONS,
+  PREPARE_NO_AGENT_FOR_CAPABILITY,
   prepareRejectionEnum,
 } from "../../../../src/application/agent-rejections";
 import {
@@ -375,6 +376,17 @@ export async function POST(req: Request): Promise<Response> {
       logGatewayFailure("payout-prepare", r);
       // CD-1: JAMÁS cae al fetch punto-a-punto de abajo. No hay orden, no hay atestación, no hay
       // ledger. Un fallback silencioso acá crearía la orden con OTRO agente y atestaría SU dirección.
+      //
+      // WKH-332/AC-13 — "ninguna capacidad resolvió" sale con enum PROPIO y 422, no con el 502 de una
+      // caída. Reintentar no crea un agente: la misma llamada, un segundo después, vuelve a no
+      // encontrar a nadie, y el 502 invitaba justamente a eso. Es el ÚNICO code que se abre: el resto
+      // —incluido `payment_required`, que hablaría de nuestro saldo y no del pedido de quien llama—
+      // sigue colapsado en `prepare_upstream_error`. Un enum nuestro no es un eco del gateway (CD-5).
+      if (r.code === "no_agent_match")
+        return NextResponse.json(
+          { error: PREPARE_NO_AGENT_FOR_CAPABILITY },
+          { status: 422 },
+        );
       return NextResponse.json(
         { error: r.code === "not_configured" ? "prepare_not_configured" : "prepare_upstream_error" },
         { status: r.code === "not_configured" ? 501 : 502 },

@@ -377,7 +377,15 @@ describe("POST /api/a2a/quote — modo a2a-gateway (WKH-218 / WKH-304)", () => {
 
   // (portado de "/discover agents:[] (vacío) ⇒ 502") — el vacío del discover ya no existe: hoy el
   // "no hay agente para esa capacidad" es un 422 no_agent_match del gateway, y sigue sin fallback.
-  it("AC-2/AC-4 ESTRELLA: 422 no_agent_match ⇒ 502 opaco, cero punto-a-punto, y el detalle SÓLO al log", async () => {
+  // 🔴 T-13.2 (WKH-332/AC-13) — ESTE CASO CAMBIÓ DE VEREDICTO, Y LA RAZÓN VA ESCRITA.
+  //
+  // Hasta acá este `it` clavaba `502 a2a_unavailable`, o sea que "ninguna capacidad resolvió" salía
+  // con las palabras de una caída y la pantalla invitaba a reintentar. Reintentar no crea un agente:
+  // la misma llamada, un segundo después, vuelve a no encontrar a nadie. Ahora sale 422 con enum
+  // PROPIO. Lo que NO cambió, y por eso se conserva línea por línea abajo: el body sigue teniendo
+  // exactamente una clave, sigue sin haber ningún fetch punto-a-punto, y el `message` del gateway
+  // sigue sin loguearse. Un enum nuestro no es un eco del gateway (CD-5).
+  it("T-13.2/AC-13: 422 no_agent_match ⇒ 422 con enum PROPIO, cero punto-a-punto, y el detalle SÓLO al log", async () => {
     setGatewayEnv();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { fn, directCalls } = gwRouter({
@@ -391,9 +399,9 @@ describe("POST /api/a2a/quote — modo a2a-gateway (WKH-218 / WKH-304)", () => {
     });
     vi.stubGlobal("fetch", fn);
     const res = await POST(req({ amountUsd: 400 }));
-    expect(res.status).toBe(502);
+    expect(res.status).toBe(422);
     const json = await res.json();
-    expect(json).toEqual({ error: "a2a_unavailable" });
+    expect(json).toEqual({ error: "a2a_no_agent_for_capability" });
     expect(Object.keys(json)).toEqual(["error"]); // CD-8: cero eco del gateway en el body
     expect(directCalls).toHaveLength(0); // cero fallback silencioso
     // CD-9/AC-2: el operador SÍ puede distinguir "no hay agente" de "gateway caído", pero por log.
@@ -401,6 +409,39 @@ describe("POST /api/a2a/quote — modo a2a-gateway (WKH-218 / WKH-304)", () => {
     expect(logged).toContain("no_agent_match");
     expect(logged).toContain("no_candidates");
     expect(logged).not.toContain("no agent matched capability"); // el message del gateway NO se loguea
+  });
+
+  // 🔴 LOS DOS DESENLACES EN EL MISMO `it`, COMPARADOS ENTRE SÍ. Un test que sólo mire el caso nuevo
+  // no prueba que se DISTINGAN: pasaría igual con los dos mapeados al mismo enum. Lo que AC-13 pide
+  // no es que exista un 422, es que "no hay quién" y "el otro lado se cayó" dejen de decirse igual.
+  it("T-13.2/AC-13: no_agent_match y una caída del gateway NO comparten ni status ni enum", async () => {
+    setGatewayEnv();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const sinAgente = gwRouter({
+      status: 422,
+      compose: () => ({ code: "no_agent_match", reason: "no_candidates", step: 0 }),
+    });
+    vi.stubGlobal("fetch", sinAgente.fn);
+    const resSinAgente = await POST(req({ amountUsd: 400 }));
+    const jsonSinAgente = await resSinAgente.json();
+
+    // 503 del gateway ⇒ `unavailable` en el cliente ⇒ el 502 de siempre, INTACTO (CD-22: sólo se
+    // abrió `no_agent_match`; `payment_required` y el resto siguen colapsados).
+    const caido = gwRouter({ status: 503, compose: () => ({ code: "unavailable" }) });
+    vi.stubGlobal("fetch", caido.fn);
+    const resCaido = await POST(req({ amountUsd: 400 }));
+    const jsonCaido = await resCaido.json();
+
+    expect(resSinAgente.status).toBe(422);
+    expect(jsonSinAgente).toEqual({ error: "a2a_no_agent_for_capability" });
+    expect(resCaido.status).toBe(502);
+    expect(jsonCaido).toEqual({ error: "a2a_unavailable" });
+    // La comparación explícita: el mutante que mapee los dos al mismo lado muere acá.
+    expect(resSinAgente.status).not.toBe(resCaido.status);
+    expect(jsonSinAgente.error).not.toBe(jsonCaido.error);
+    expect(sinAgente.directCalls).toHaveLength(0);
+    expect(caido.directCalls).toHaveLength(0);
   });
 
   it("gateway not_configured (falta WASIAI_A2A_GATEWAY_URL) ⇒ 501, sin fetch", async () => {

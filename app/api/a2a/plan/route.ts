@@ -24,17 +24,59 @@
 import { NextResponse } from "next/server";
 import {
   FX_DIRECT_AGENT_SLUG,
+  FX_MIN_REPUTATION,
   FX_QUOTE_CAPABILITY,
   PAYOUT_CAPABILITY,
   PAYOUT_DIRECT_AGENT_SLUG,
+  PAYOUT_MIN_REPUTATION,
 } from "../../../../src/infrastructure/a2a/gateway-client";
+
+/** Lo que el catálogo dice de quien atendería este paso. Sin URLs, sin claves, sin PII. */
+type PlanAgent = {
+  id: string;
+  description: string;
+  priceUsdc: number | null;
+  verified: boolean;
+  registry: string;
+};
+
+/**
+ * Las constraints con las que se PREGUNTÓ, tal cual, para que la tarjeta pueda afirmar "bajo el piso
+ * de este paso" y esa frase sea falsable mirando la respuesta y no leyendo el código.
+ *
+ * Los nombres van en camelCase porque son NUESTRO contrato con NUESTRA UI. En el cable a `/discover`
+ * son otros y no coinciden entre sí: el piso viaja como `min_reputation` (snake, alias explícito de
+ * esa API) y el carril de estreno como `allowTrial` (camel, y SÓLO camel — `allow_trial` no está
+ * entre los parámetros aceptados y produce 400). Ver `buildDiscoverUrl`.
+ */
+type LegConstraints = { minReputation: number; allowTrial?: true };
 
 /** Un paso del plan, tal como se le muestra a la persona. Sin URLs, sin claves, sin PII. */
 interface PlanStep {
   capability: string;
   label: string;
-  /** `null` = el catálogo no ofrece a nadie para esta capacidad. Se dice, no se esconde. */
-  agent: { id: string; description: string; priceUsdc: number | null; verified: boolean; registry: string } | null;
+  /** `null` = no hay agente que mostrar. `availability` dice POR QUÉ, que no es lo mismo. */
+  agent: PlanAgent | null;
+  /**
+   * 🔴 POR QUÉ ESTE CAMPO EXISTE (WKH-332/AC-14, CD-18). `agent: null` colapsaba cuatro desenlaces
+   * distintos en uno, y la pantalla afirmaba UNO solo de los cuatro: *"El catálogo no ofrece a nadie
+   * para esta capacidad ahora mismo"*. O sea que un 500 del gateway, un body ilegible o un timeout de
+   * red NUESTRO se leían como una afirmación de hecho SOBRE EL CATÁLOGO.
+   *
+   * · `ofrecido`        — 200, lista con al menos un card legible. Es el único caso con `agent`.
+   * · `sin-candidatos`  — 200 y el catálogo contestó que NO hay nadie que cumpla el piso de este paso.
+   *                       Es una respuesta, y por eso se puede afirmar.
+   * · `no-consultado`   — no pudimos preguntar, o no entendimos la respuesta. NO se puede afirmar NADA
+   *                       sobre el catálogo desde acá.
+   *
+   * "No pude preguntar" no es "no pasó". Con las constraints puestas (AC-14) `no-consultado` se vuelve
+   * MÁS alcanzable, no menos: un nombre de parámetro equivocado en la query da 400, y un 400 cae en
+   * `!res.ok`. Colapsarlo en `sin-candidatos` sería agrandar una mentira mientras se dice que se la
+   * está arreglando.
+   */
+  availability: "ofrecido" | "sin-candidatos" | "no-consultado";
+  /** Con qué se preguntó. Las MISMAS constraints que la ejecución manda a `/compose` (AC-14). */
+  constraints: LegConstraints;
   /** Por dónde corre HOY, no por dónde podría correr. */
   transport: "gateway" | "punto-a-punto";
   /**
@@ -57,32 +99,80 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
 }
 
-/** Lee del catálogo quién cumple una capacidad. Devuelve `null` ante cualquier duda: un preview que
- *  inventa un agente es peor que uno que dice que no pudo averiguarlo. */
-async function discoverFor(base: string, capability: string): Promise<PlanStep["agent"]> {
+/** El resultado de preguntarle al catálogo. Unión discriminada porque las tres ramas se dicen
+ *  distinto en pantalla, y hasta WKH-332 las cuatro salidas colapsaban en un `null`. */
+type Discovery =
+  | { availability: "ofrecido"; agent: PlanAgent }
+  | { availability: "sin-candidatos"; agent: null }
+  | { availability: "no-consultado"; agent: null };
+
+const SIN_CANDIDATOS = { availability: "sin-candidatos", agent: null } as const;
+const NO_CONSULTADO = { availability: "no-consultado", agent: null } as const;
+
+/**
+ * Arma la URL de `/discover` con las MISMAS constraints que la ejecución manda a `/compose` (AC-14).
+ *
+ * 🔴 LOS NOMBRES DE LOS PARÁMETROS NO SON LOS DE `/compose`, Y UN TYPO ACÁ NO FALLA: MIENTE.
+ * `/discover` valida los nombres contra un conjunto cerrado y responde 400 `UNKNOWN_DISCOVER_PARAM`
+ * ante cualquiera que no esté. Un 400 cae en `!res.ok`, o sea en `no-consultado`, así que un typo se
+ * lee en pantalla como "no pudimos consultar el catálogo" sobre una capacidad que sí tiene agente.
+ *
+ * · el piso va como `min_reputation` (snake). Es un ALIAS explícito de esa API, no una casualidad.
+ * · el carril de estreno va como `allowTrial` (CAMEL, y sólo camel). `allow_trial` —el nombre que SÍ
+ *   usa `/compose`— NO está en el conjunto aceptado por `/discover`. Verificado leyendo
+ *   `ALLOWED_DISCOVER_PARAMS` en el gateway: contiene `allowTrial`, `min_reputation` y `minReputation`,
+ *   y no contiene `allow_trial`. CD-21 lo prohíbe y T-14.2 lo custodia.
+ *
+ * `URLSearchParams` se encarga del encoding: el `encodeURIComponent` a mano de antes cubría un solo
+ * parámetro y ahora son tres.
+ */
+function buildDiscoverUrl(base: string, capability: string, c: LegConstraints): string {
+  const qs = new URLSearchParams({
+    capabilities: capability, // 🔴 PLURAL. El singular no filtra y devuelve el catálogo entero.
+    min_reputation: String(c.minReputation),
+  });
+  if (c.allowTrial) qs.set("allowTrial", "true");
+  return `${base}/discover?${qs.toString()}`;
+}
+
+/** Le pregunta al catálogo quién cumple una capacidad BAJO LAS CONSTRAINTS DE ESE LEG, y distingue
+ *  "el catálogo dijo que no hay nadie" de "no pudimos preguntar". Un preview que inventa un agente es
+ *  peor que uno que dice que no pudo averiguarlo, y uno que confunde las dos cosas es peor que los dos. */
+async function discoverFor(
+  base: string,
+  capability: string,
+  constraints: LegConstraints,
+): Promise<Discovery> {
   try {
-    const res = await fetch(`${base}/discover?capabilities=${encodeURIComponent(capability)}`, {
+    const res = await fetch(buildDiscoverUrl(base, capability, constraints), {
       signal: AbortSignal.timeout(8_000),
     });
-    if (!res.ok) return null;
+    // El catálogo contestó mal (incluido el 400 de un nombre de parámetro equivocado). No sabemos.
+    if (!res.ok) return NO_CONSULTADO;
     const body: unknown = await res.json();
-    if (!isRecord(body)) return null;
+    if (!isRecord(body)) return NO_CONSULTADO; // body ilegible: tampoco sabemos
     const list = body.agents;
-    if (!Array.isArray(list) || list.length === 0) return null;
+    // Un `agents` que no es lista es un body que no entendimos, y eso NO es "no hay nadie".
+    if (!Array.isArray(list)) return NO_CONSULTADO;
+    // 🔴 LA ÚNICA RAMA QUE PUEDE AFIRMAR ALGO SOBRE EL CATÁLOGO: contestó 200 y la lista vino vacía.
+    if (list.length === 0) return SIN_CANDIDATOS;
     const a: unknown = list[0]; // el catálogo ya devuelve ordenado por su propio ranking
-    if (!isRecord(a) || typeof a.id !== "string") return null;
+    if (!isRecord(a) || typeof a.id !== "string") return NO_CONSULTADO; // card ilegible
     return {
-      id: a.id,
-      description: typeof a.description === "string" ? a.description : "",
-      // `null` ≠ 0. Un agente sin precio publicado NO se muestra como gratis.
-      priceUsdc: typeof a.priceUsdc === "number" ? a.priceUsdc : null,
-      // Se muestra tal cual viene. Hoy los tres dicen `false`, y esa es la verdad del catálogo:
-      // nadie los verificó todavía. Pintarlos de verificados sería la mentira más fácil de esta pantalla.
-      verified: a.verified === true,
-      registry: typeof a.registry === "string" ? a.registry : "desconocido",
+      availability: "ofrecido",
+      agent: {
+        id: a.id,
+        description: typeof a.description === "string" ? a.description : "",
+        // `null` ≠ 0. Un agente sin precio publicado NO se muestra como gratis.
+        priceUsdc: typeof a.priceUsdc === "number" ? a.priceUsdc : null,
+        // Se muestra tal cual viene. Hoy los tres dicen `false`, y esa es la verdad del catálogo:
+        // nadie los verificó todavía. Pintarlos de verificados sería la mentira más fácil de esta pantalla.
+        verified: a.verified === true,
+        registry: typeof a.registry === "string" ? a.registry : "desconocido",
+      },
     };
   } catch {
-    return null;
+    return NO_CONSULTADO; // timeout, DNS, red nuestra. Nada de esto habla del catálogo.
   }
 }
 
@@ -99,23 +189,37 @@ export async function GET(): Promise<Response> {
   const fxCapability = process.env.WASIAI_A2A_FX_CAPABILITY ?? FX_QUOTE_CAPABILITY;
   const payoutCapability = process.env.WASIAI_A2A_PAYOUT_CAPABILITY ?? PAYOUT_CAPABILITY;
 
+  // 🔴 LAS CONSTRAINTS SALEN DE LAS MISMAS CONSTANTES QUE LA EJECUCIÓN (AC-14 / CD-21). Escribir el
+  // número a mano acá haría que el día que alguien mueva un piso, el preview siga preguntando por el
+  // viejo y muestre un agente que la ejecución va a rechazar. Con el import, el preview se mueve solo.
+  // Los pisos NO son env y no pueden serlo: ver PAYOUT_MIN_REPUTATION en gateway-client.ts.
+  const fxConstraints: LegConstraints = { minReputation: FX_MIN_REPUTATION, allowTrial: true };
+  // El leg del PRINCIPAL no pide el carril de estreno, y esa asimetría es deliberada: admitir a un
+  // agente sin historial liquidado para cotizar cuesta una cotización mala; para entregar el dinero
+  // cuesta el dinero. La ejecución tampoco lo pide.
+  const payoutConstraints: LegConstraints = { minReputation: PAYOUT_MIN_REPUTATION };
+
   const [fx, payout] = await Promise.all([
-    discoverFor(base, fxCapability),
-    discoverFor(base, payoutCapability),
+    discoverFor(base, fxCapability, fxConstraints),
+    discoverFor(base, payoutCapability, payoutConstraints),
   ]);
 
   const steps: PlanStep[] = [
     {
       capability: fxCapability,
       label: "Cotizar el cambio",
-      agent: fx,
+      agent: fx.agent,
+      availability: fx.availability,
+      constraints: fxConstraints,
       transport,
       runsTodayAgentId: viaGateway ? null : FX_DIRECT_AGENT_SLUG,
     },
     {
       capability: payoutCapability,
       label: "Entregar el dinero",
-      agent: payout,
+      agent: payout.agent,
+      availability: payout.availability,
+      constraints: payoutConstraints,
       transport,
       runsTodayAgentId: viaGateway ? null : PAYOUT_DIRECT_AGENT_SLUG,
     },

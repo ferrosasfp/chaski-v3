@@ -48,6 +48,8 @@ type PlanStep = {
     verified: boolean;
     registry: string;
   } | null;
+  availability?: "ofrecido" | "sin-candidatos" | "no-consultado";
+  constraints?: { minReputation: number; allowTrial?: true };
   transport: "gateway" | "punto-a-punto";
   runsTodayAgentId?: string | null;
 };
@@ -79,6 +81,8 @@ const paso = (over: Partial<PlanStep> = {}): PlanStep => ({
     verified: false,
     registry: "self-published",
   },
+  availability: "ofrecido",
+  constraints: { minReputation: 2, allowTrial: true },
   transport: "punto-a-punto",
   runsTodayAgentId: "remit-corridor-fx",
   ...over,
@@ -159,5 +163,76 @@ describe("el precio dice qué es y quién lo cobraría", () => {
 
     expect(screen.getByText(/lo paga Chaski con su Agent Key al ejecutar el paso/)).toBeInTheDocument();
     expect(screen.queryByText(/los llama sin ningún pago/)).toBeNull();
+  });
+});
+
+// ── T-14.5 · AC-14 / CD-18 · tres estados, tres frases, y una que NO puede acusar al catálogo ────
+//
+// 🔴 EL BUG QUE CIERRA, MEDIDO en el árbol previo a WKH-332: la tarjeta tenía UNA sola frase para el
+// caso sin agente —"El catálogo no ofrece a nadie para esta capacidad ahora mismo"— y `discoverFor`
+// llegaba a ese caso por CUATRO caminos, de los cuales tres no dicen nada del catálogo (un 500, un
+// body ilegible, un timeout de red nuestro). La pantalla convertía una falla nuestra en una
+// afirmación de hecho sobre el otro.
+//
+// CD-17: este `describe` depende del `afterEach` del tope del archivo (`cleanup` + `unstubAllGlobals`)
+// y del `vi.mock("framer-motion")` de módulo. Sin el `cleanup`, `getByText` encuentra la tarjeta del
+// `it` anterior y el test da verde por el DOM equivocado.
+describe("T-14.5: los tres estados llegan a pantalla con tres textos distintos", () => {
+  const sinAgente = (over: Partial<PlanStep> = {}): PlanStep =>
+    paso({ agent: null, ...over });
+
+  it("`sin-candidatos` afirma que el catálogo no ofrece a nadie, Y NOMBRA EL PISO que lo explica", async () => {
+    await verLaTarjeta(
+      [sinAgente({ availability: "sin-candidatos", constraints: { minReputation: 2 } })],
+      0,
+    );
+    // El catálogo CONTESTÓ, así que acá sí se puede afirmar. Y se nombra el piso porque el piso es la
+    // razón por la que la lista puede venir vacía teniendo el catálogo agentes para esa capacidad.
+    expect(screen.getByText(/El catálogo no ofrece a nadie para esta capacidad/)).toBeInTheDocument();
+    expect(screen.getByText(/con al menos 2 de reputación/)).toBeInTheDocument();
+  });
+
+  it("🔴 `no-consultado` NO contiene 'no ofrece a nadie': no se puede afirmar lo que no se preguntó", async () => {
+    await verLaTarjeta([sinAgente({ availability: "no-consultado" })], 0);
+
+    expect(screen.getByText(/No pudimos consultar el catálogo para este paso/)).toBeInTheDocument();
+    // El candado de CD-18, sobre el DOM entero y no sobre un nodo: la subcadena no puede aparecer en
+    // NINGUNA parte de la tarjeta cuando el estado es "no pudimos preguntar".
+    expect(document.body.textContent ?? "").not.toContain("no ofrece a nadie");
+  });
+
+  it("y el campo AUSENTE (server viejo durante un deploy) cae del lado que no afirma nada", async () => {
+    await verLaTarjeta([sinAgente({ availability: undefined })], 0);
+    expect(screen.getByText(/No pudimos consultar el catálogo para este paso/)).toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toContain("no ofrece a nadie");
+  });
+
+  // 🔴 EL `it` QUE MATA A M4. Los dos estados renderizados y comparados ENTRE SÍ: colapsarlos deja
+  // verde a cualquier test que mire un solo estado por vez.
+  it("las dos frases son DISTINTAS entre sí (colapsarlas es el mutante M4)", async () => {
+    await verLaTarjeta([sinAgente({ availability: "sin-candidatos", constraints: { minReputation: 2 } })], 0);
+    const textoSinCandidatos = document.body.textContent ?? "";
+    cleanup();
+    await verLaTarjeta([sinAgente({ availability: "no-consultado" })], 0);
+    const textoNoConsultado = document.body.textContent ?? "";
+
+    expect(textoSinCandidatos).toContain("no ofrece a nadie");
+    expect(textoNoConsultado).not.toContain("no ofrece a nadie");
+    expect(textoNoConsultado).toContain("No pudimos consultar el catálogo");
+    expect(textoSinCandidatos).not.toContain("No pudimos consultar el catálogo");
+  });
+
+  // AC-14, la mitad que se ve: la tarjeta DICE con qué se preguntó, y el número sale de la respuesta.
+  // Se renderiza en `review`, o sea ANTES del KYC (`verLaTarjeta` llega hasta esa pantalla).
+  it("dice con qué piso se consultó, y el número sale de la respuesta y no de un literal", async () => {
+    await verLaTarjeta([paso({ constraints: { minReputation: 2, allowTrial: true } })], 0.03);
+    expect(
+      screen.getByText(/se consultó con el mismo piso de reputación con el que corre el envío \(2\)/),
+    ).toBeInTheDocument();
+  });
+
+  it("si el server no manda las constraints, la frase del piso NO se muestra (no se afirma sin dato)", async () => {
+    await verLaTarjeta([paso({ constraints: undefined })], 0.03);
+    expect(document.body.textContent ?? "").not.toContain("piso de reputación con el que corre");
   });
 });

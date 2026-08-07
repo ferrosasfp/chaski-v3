@@ -1940,6 +1940,16 @@ function AgentPlanCard() {
     capability: string;
     label: string;
     agent: { id: string; description: string; priceUsdc: number | null; verified: boolean; registry: string } | null;
+    /**
+     * POR QUÉ no alcanza con `agent === null` (WKH-332/AC-14, CD-18). `null` colapsaba cuatro
+     * desenlaces y esta tarjeta afirmaba UNO: *"El catálogo no ofrece a nadie…"*. Un 500 del gateway
+     * o un timeout de red nuestro se leían como un hecho SOBRE EL CATÁLOGO. Opcional en el tipo
+     * porque durante un deploy el server puede ser todavía el de la versión anterior; ese caso cae en
+     * la rama de "no pudimos consultar", que es la que no afirma nada.
+     */
+    availability?: "ofrecido" | "sin-candidatos" | "no-consultado";
+    /** Con qué constraints se preguntó. Es lo que hace falsable la frase "bajo el piso de este paso". */
+    constraints?: { minReputation: number; allowTrial?: true };
     transport: "gateway" | "punto-a-punto";
     /** Quién corre hoy cuando se sabe. `null` en el carril del gateway: ahí se elige al ejecutar. */
     runsTodayAgentId?: string | null;
@@ -2010,9 +2020,7 @@ function AgentPlanCard() {
                 />
               </>
             ) : (
-              <p className="mt-0.5 text-xs text-stone">
-                El catálogo no ofrece a nadie para esta capacidad ahora mismo.
-              </p>
+              <AgentUnavailable availability={s.availability} constraints={s.constraints} />
             )}
           </div>
         ))}
@@ -2026,10 +2034,87 @@ function AgentPlanCard() {
           ? AGENT_PRICE_NOTE_DIRECT
           : AGENT_PRICE_NOTE_GATEWAY}
       </p>
+      <PlanConstraintsNote steps={plan.steps} />
       <p className="mt-2 text-xs text-stone">
         Tu identidad no pasa por el catálogo: se verifica con el proveedor directo.
       </p>
     </Card>
+  );
+}
+
+/**
+ * Dice CON QUÉ se preguntó, y es la mitad de AC-14 que se ve en pantalla.
+ *
+ * 🔴 QUÉ ARREGLA, MEDIDO sobre el árbol previo a WKH-332: el preview llamaba a
+ * `/discover?capabilities=X` sin ninguna constraint, mientras la ejecución mandaba
+ * `min_reputation: 2`. Esta tarjeta podía mostrar un agente que el envío iba a rechazar, y la persona
+ * aprobaba mirando a alguien que no la iba a atender.
+ *
+ * El número NO está escrito acá: sale de `constraints` de la respuesta, o sea de lo que se preguntó
+ * de verdad. Si el server no lo manda (una versión anterior durante un deploy) la frase no se
+ * muestra: una afirmación sobre el piso que no se puede sostener con el dato es peor que no decir
+ * nada. Input que la deja en blanco: un `steps[]` sin `constraints`.
+ */
+function PlanConstraintsNote({
+  steps,
+}: {
+  steps: Array<{ constraints?: { minReputation: number } }>;
+}) {
+  const pisos = steps
+    .map((s) => s.constraints?.minReputation)
+    .filter((n): n is number => typeof n === "number");
+  if (steps.length === 0 || pisos.length !== steps.length) return null;
+  const min = Math.min(...pisos);
+  const max = Math.max(...pisos);
+  return (
+    <p className="mt-2 text-xs text-stone">
+      Esta lista se consultó con el mismo piso de reputación con el que corre el envío
+      {min === max ? ` (${min})` : ` (entre ${min} y ${max}, según el paso)`}: no es una vidriera más
+      amplia que lo que se va a ejecutar.
+    </p>
+  );
+}
+
+/**
+ * La línea que se muestra cuando NO hay agente que mostrar. Dos motivos distintos, dos frases
+ * distintas, y la diferencia entre ellas es el punto de este componente (WKH-332/AC-14, CD-18).
+ *
+ * 🔴 ACÁ HABÍA UNA SOLA FRASE —"El catálogo no ofrece a nadie para esta capacidad ahora mismo"— y se
+ * mostraba también cuando el catálogo no había contestado nada. O sea que un 500 del gateway, un
+ * body ilegible o un timeout de red NUESTRO salían en pantalla como una afirmación de hecho sobre el
+ * catálogo. "No pude preguntar" no es "no pasó", y decirlo igual convierte una falla nuestra en una
+ * acusación al otro.
+ *
+ * · `sin-candidatos` — el catálogo CONTESTÓ (200) y la lista vino vacía. Se puede afirmar, y se
+ *   nombra el piso, porque el piso es la razón por la que la lista puede venir vacía teniendo el
+ *   catálogo agentes para esa capacidad. El número sale de `constraints`, o sea de lo que se
+ *   preguntó de verdad, no de un literal escrito acá.
+ * · `no-consultado` (y el campo AUSENTE, que es un server viejo durante un deploy) — no se afirma
+ *   NADA sobre el catálogo. Esta frase NO puede contener "no ofrece a nadie": T-14.5 lo custodia.
+ */
+function AgentUnavailable({
+  availability,
+  constraints,
+}: {
+  availability?: "ofrecido" | "sin-candidatos" | "no-consultado";
+  constraints?: { minReputation: number; allowTrial?: true };
+}) {
+  if (availability === "sin-candidatos") {
+    return (
+      <p className="mt-0.5 text-xs text-stone">
+        El catálogo no ofrece a nadie para esta capacidad
+        {typeof constraints?.minReputation === "number"
+          ? ` con al menos ${constraints.minReputation} de reputación, que es el piso de este paso`
+          : ""}
+        .
+      </p>
+    );
+  }
+  return (
+    <p className="mt-0.5 text-xs text-stone">
+      No pudimos consultar el catálogo para este paso. No sabemos quién lo atiende, y eso no dice nada
+      sobre si hay alguien.
+    </p>
   );
 }
 

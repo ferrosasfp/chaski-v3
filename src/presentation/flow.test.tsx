@@ -1520,3 +1520,39 @@ describe("HU-SOL-13 / WKH-320 — BLQ-MED-1: RemittanceFlow completo renderiza (
     expect(screen.queryByText(/Sin aislamiento por wallet/)).toBeNull();
   });
 });
+
+// ── T-6.1 — AC-6 · un proveniencia DESCONOCIDA cae del lado de "sin verificar" ────────────────────
+//
+// 🔴 QUÉ CONSERVA, y por qué esta HU lo mide en vez de darlo por hecho. `REAL_KYC_PROVENANCES` es una
+// ALLOWLIST: lo desconocido NO se puede afirmar como verificado. Antes acá vivía la comparación
+// contra el único valor simulado CONOCIDO, o sea que todo lo demás se leía como real, y con
+// `DIDIT_ENV=mock` la pantalla escribía "Identidad verificada" sobre datos que nadie verificó.
+//
+// WKH-332 va exactamente en la dirección de que mañana la verificación la atienda un agente
+// DESCUBIERTO, o sea un emisor de `provenance` que este archivo no conoce hoy. Ese es el input de
+// este test: si la dirección de la allowlist se invirtiera —o si alguien la volviera env, que está
+// prohibido por el mismo motivo que los pisos de reputación—, un agente nuevo prendería el badge
+// verde el día que aparezca, sin que nada falle.
+//
+// CD-17: depende del `vi.mock("framer-motion")` de módulo y de los helpers `goToConfirm` /
+// `buildTestContainer` de este archivo. Se corre en la suite completa, no solo.
+it("T-6.1: un `provenance` que no está en la allowlist ⇒ NO 'Identidad verificada', sí el origen crudo", async () => {
+  const agenteNuevo = "cualquier-agente-nuevo";
+  render(
+    <RemittanceFlow
+      container={buildTestContainer({ kyc: new FakeKycGateway({ provenance: agenteNuevo }) })}
+    />,
+  );
+
+  await goToConfirm();
+
+  // (a) el badge verde NO sale: afirmar una verificación exige estar en la allowlist.
+  expect(screen.queryByText(/Identidad verificada/)).toBeNull();
+  // (b) sale la tarjeta que dice que no se puede afirmar...
+  expect(screen.getByText(/Identidad sin verificar/)).toBeInTheDocument();
+  // (c) ...y NOMBRA el origen crudo, en vez de esconderlo. Sin esto la pantalla diría "no verificada"
+  //     sin dar con qué discutirlo, y quien opera no sabría qué emisor mirar.
+  expect(screen.getByText(new RegExp(agenteNuevo))).toBeInTheDocument();
+  // (d) y los datos siguen mostrándose: "no verificada" no es "falsa".
+  expect(screen.getByText(/Test Quispe Mamani/)).toBeInTheDocument();
+});

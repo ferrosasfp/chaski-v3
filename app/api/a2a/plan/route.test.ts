@@ -311,6 +311,42 @@ describe("GET /api/a2a/plan — descubre con las MISMAS constraints que la ejecu
     expect(fuente).not.toMatch(/min_reputation:\s*["'`]?\d/);
   });
 
+  // 🔴 T-336.6 (estático) — UNA COPY DE USUARIO SOSTIENE UNA DECISIÓN DE LÓGICA, Y NADA LAS ATABA.
+  //
+  // `flow.tsx` elige entre las dos notas de precio buscando el paso de la cotización POR SU `label`
+  // (`FX_STEP_LABEL`), porque la `capability` sale de una env overrideable y no sirve de llave. O sea
+  // que un string de copy EN ESPAÑOL decide qué afirma la pantalla sobre quién paga el fee. Las dos
+  // copias del literal viven en archivos distintos y **nada las ataba**.
+  //
+  // ⚠️ EL ROJO SILENCIOSO, MEDIDO (CR/BLQ-MED-1, reproducido en este árbol antes de escribir esto):
+  // renombrar el `label` de la route a `"Cotizar el tipo de cambio"` da 5 rojos, y los 5 caen ACÁ
+  // (T-336.1 ×3, T-336.3 ×2) — ninguno en `flow.tsx` ni en `agent-plan-card.test.tsx`. Aplicando el
+  // arreglo natural y mínimo que haría cualquiera —actualizar los dos `expect(...label)` de este
+  // archivo a la copy nueva— la suite vuelve a 102 files / 1630 PASS con `flow.tsx` conservando el
+  // literal VIEJO. Y ahí el `find` devuelve `undefined`, la nota se elige por la rama de abajo, y la
+  // pantalla vuelve a afirmar de más. Renombrar una copy en español no puede tener ese efecto en una
+  // familia de HUs cuyo objeto ES reescribir copy.
+  //
+  // ⚠️ Y NO ALCANZA CON COMPARAR: si las dos regex dejaran de matchear, `undefined === undefined`
+  // pasaría en verde y el candado quedaría aplaudiendo el vacío. Por eso los dos `toBeTypeOf` de
+  // antes de la comparación: son la parte que impide que este test se compare consigo mismo.
+  //
+  // ⚠️ Este candado NO clava la copy: renombrar las DOS a la vez lo deja verde a propósito. Lo que
+  // clava es el ACOPLAMIENTO, igual que T-14.3 con los pisos de reputación.
+  it("T-336.6 (estático): el `label` del leg de FX es el MISMO literal en la route y en `flow.tsx`", () => {
+    const enLaRoute = /capability: fxCapability,\s*\n\s*label: "([^"]+)"/.exec(
+      readFileSync(path.resolve(process.cwd(), "app/api/a2a/plan/route.ts"), "utf8"),
+    )?.[1];
+    const enElCliente = /const FX_STEP_LABEL = "([^"]+)";/.exec(
+      readFileSync(path.resolve(process.cwd(), "src/presentation/flow.tsx"), "utf8"),
+    )?.[1];
+    // Sin estos dos, un cambio de forma (no de valor) dejaría el candado vacío y en verde.
+    expect(enLaRoute, "la route ya no declara el `label` del leg de FX donde el candado lo busca").toBeTypeOf("string");
+    expect(enElCliente, "`flow.tsx` ya no declara `FX_STEP_LABEL` donde el candado lo busca").toBeTypeOf("string");
+    // El invariante: el cliente busca por el MISMO string que el server escribe.
+    expect(enElCliente).toBe(enLaRoute);
+  });
+
   it("y las constraints con las que se preguntó VIAJAN en la respuesta, para que la tarjeta las pueda afirmar", async () => {
     vi.stubEnv("WASIAI_A2A_GATEWAY_URL", BASE);
     stubCatalog({ "remittance-fx-quote": [card("fx", 0.03)] });

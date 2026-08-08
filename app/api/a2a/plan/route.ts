@@ -246,7 +246,7 @@ export async function GET(): Promise<Response> {
   // route. Lo que sigue siendo cierto de ella es lo de arriba —cero throws, cualquier string cae en
   // `"demo"`, siempre 200—; lo que la tupla afirmaba ahora lo afirma el test, por leg:
   // Input que pone en rojo la inversión del mapeo del ADAPTER: (`transport`, `route.test.ts:141`).
-  // Input que pone en rojo relajar el `=== "true"` del SETTLE: (`transport`, `route.test.ts:482`).
+  // Input que pone en rojo relajar el `=== "true"` del SETTLE: (`transport`, `route.test.ts:518`).
   const fxTransport: PlanStep["transport"] =
     process.env.NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER === "a2a-gateway" ? "gateway" : "demo";
   const payoutTransport: PlanStep["transport"] =

@@ -172,7 +172,7 @@ valor pinneado coincide con el que tiene
 
 `npm run smoke:solana` corre el ciclo on chain completo contra servicios ya desplegados: healthchecks,
 prueba de posesión, `/api/payout/prepare`, la instrucción `deposit` firmada por el sender, el broadcast
-gasless vía el facilitator, la verificación del escrow (estado, saldo del vault y beneficiario), el
+patrocinado por el facilitator, que cubre la comisión de red y no el alquiler de cuentas, la verificación del escrow (estado, saldo del vault y beneficiario), el
 release contra el facilitator y la relectura de la cadena hasta ver el escrow liberado y el vault en
 cero. Está deliberadamente incómodo de ejecutar:
 

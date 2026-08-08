@@ -2090,11 +2090,17 @@ function AgentPlanCard() {
         <span className="text-xs text-stone">Precio publicado en el catálogo</span>
         <span className="tabular text-sm font-semibold">{plan.totalUsdc} USDC</span>
       </div>
-      <p className="mt-1 text-xs text-stone">
-        {plan.steps.find((s) => s.label === FX_STEP_LABEL)?.transport === "demo"
-          ? AGENT_PRICE_NOTE_DEMO
-          : AGENT_PRICE_NOTE_GATEWAY}
-      </p>
+      {/* El leg de la COTIZACIÓN elige la nota, porque la nota habla de la cotización. Si NO se lo
+          puede identificar, no se afirma NADA: ver el docblock de `AGENT_PRICE_NOTE_*`. */}
+      {(() => {
+        const cotizacion = plan.steps.find((s) => s.label === FX_STEP_LABEL);
+        if (cotizacion === undefined) return null;
+        return (
+          <p className="mt-1 text-xs text-stone">
+            {cotizacion.transport === "demo" ? AGENT_PRICE_NOTE_DEMO : AGENT_PRICE_NOTE_GATEWAY}
+          </p>
+        );
+      })()}
       <PlanConstraintsNote steps={plan.steps} />
       <p className="mt-2 text-xs text-stone">
         Tu identidad no pasa por el catálogo: se verifica con el proveedor directo.
@@ -2228,11 +2234,35 @@ function AgentUnavailable({
  *
  * ⚠️ Y ES EL `label`, NO LA `capability`, y eso es medible: la capacidad es ENV-OVERRIDEABLE
  * (`route.ts:255` es `process.env.WASIAI_A2A_FX_CAPABILITY ?? FX_QUOTE_CAPABILITY`, y
- * `.env.example:174` documenta ese override como soportado). Un `find` por `"remittance-fx-quote"`
+ * `.env.example:181` documenta ese override como soportado). Un `find` por `"remittance-fx-quote"`
  * devolvería `undefined` en cualquier entorno con el override puesto y la tarjeta caería SIEMPRE en la
  * nota del gateway, en silencio. El `label` es un literal de la route (`route.ts:276`), no sale de
  * ninguna env. Input que pone en rojo el índice posicional: un plan con los pasos al revés
  * (T-R1e en `agent-plan-card.test.tsx`).
+ *
+ * 🔴 PERO ESTO ES UNA COPY DE USUARIO SOSTENIENDO UNA DECISIÓN DE LÓGICA, y hay que decirlo acá porque
+ * es el único lugar donde el próximo lector lo va a leer. **Este literal está DUPLICADO**: la otra copia
+ * es el `label` que escribe la route (`route.ts:276`), y son dos archivos distintos.
+ *
+ * Input concreto que rompía las dos, MEDIDO (CR/BLQ-MED-1): renombrar el `label` de la route a
+ * `"Cotizar el tipo de cambio"` da 5 rojos y **los 5 caen en `app/api/a2a/plan/route.test.ts`**
+ * (T-336.1 ×3, T-336.3 ×2), ninguno acá. Actualizando esos dos asserts —el arreglo natural y mínimo—
+ * la suite vuelve a **102 files / 1630 PASS** con este literal quedándose viejo, y ahí el `find` da
+ * `undefined` para siempre. En una familia de HUs cuyo objeto es reescribir copy, eso pasa.
+ *
+ * ✅ Lo ata **T-336.6 (estático)** en `app/api/a2a/plan/route.test.ts`: extrae el literal de los DOS
+ * archivos y exige que sean el MISMO. Renombrar una sola de las dos ⇒ rojo; renombrar las dos ⇒ verde,
+ * porque lo que se custodia es el acoplamiento y no la copy. Es el patrón de T-14.3 con los pisos de
+ * reputación, en el mismo archivo.
+ *
+ * ⚠️ Y LA RAMA `undefined` NO AFIRMA NADA, a propósito. Si ningún paso trae este `label`, el consumidor
+ * (`AgentPlanCard`) **no renderiza la nota**: `undefined === "demo"` era `false` y caía en
+ * `AGENT_PRICE_NOTE_GATEWAY`, o sea en la afirmación MÁS FUERTE de las dos —que el fee *"lo paga Chaski
+ * con su Agent Key al ejecutar el paso"*— justo cuando no se sabe de qué leg se está hablando. Eso es
+ * al revés del criterio de este archivo: `no-consultado` y el campo ausente **no afirman NADA sobre el
+ * catálogo** (ver el docblock de `AgentUnavailable`). Callar es lo único cierto en los cuatro
+ * cuadrantes, y una nota que falta es un síntoma visible; una nota falsa no. **No se agrega una tercera
+ * frase** porque sería copy nueva, o sea una decisión de UX, no un arreglo. Lo custodia T-R1g.
  */
 const FX_STEP_LABEL = "Cotizar el cambio";
 
@@ -2263,7 +2293,7 @@ const AGENT_PRICE_NOTE_GATEWAY =
  * ✅ EL RESIDUAL DE CR2 SE CERRÓ EN WKH-336. Acá decía *"la bandera NO decide la ENTREGA, así que con el
  *   settle en `true` la fila del payout dice de más"*, y era cierto: el preview pegaba el `transport` del
  *   adapter a los dos pasos. Ya no. Lo custodia T-336.1 (`transport`,
- *   `../../app/api/a2a/plan/route.test.ts:482` para la otra mitad, el `=== "true"` literal del settle).
+ *   `../../app/api/a2a/plan/route.test.ts:518` para la otra mitad, el `=== "true"` literal del settle).
  *
  * ⚠️ LO QUE SIGUE ABIERTO, Y NO ES LO MISMO (H1 de WKH-336). Las dos frases de abajo se renderizan
  *   IGUALES para los dos pasos, y la de `demo` dice *"lo simula"*. Para la cotización es exacto. Para la

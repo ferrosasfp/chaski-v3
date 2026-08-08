@@ -277,7 +277,7 @@ describe("el precio dice qué es y quién lo cobraría", () => {
   });
 
   // T-R1f — AR/MNR-2, la otra mitad: la llave es el `label` y NO la `capability`, porque la capacidad
-  // sale de una env overrideable (`route.ts:255`, `.env.example:174`). Un `find` por
+  // sale de una env overrideable (`route.ts:255`, `.env.example:181`). Un `find` por
   // `"remittance-fx-quote"` devolvería `undefined` con el override puesto y la nota caería SIEMPRE en la
   // del gateway, en silencio. Acá la capacidad es la overrideada y la nota tiene que seguir siendo la
   // del demo.
@@ -291,6 +291,36 @@ describe("el precio dice qué es y quién lo cobraría", () => {
     );
     expect(screen.getByText(LA_ARMO_LA_APP)).toBeInTheDocument();
     expect(document.body.textContent ?? "").not.toMatch(LO_PAGA_CHASKI);
+  });
+
+  // ── T-R1g · CR/BLQ-MED-1 · si no se puede identificar el leg de la cotización, NO SE AFIRMA NADA ──
+  //
+  // 🔴 LA RAMA QUE NO CUBRÍA NADIE. `paso()` pone el `label` por default, y los SEIS casos T-R1a..f lo
+  // incluyen, así que ningún test entraba nunca al `find(...) === undefined`. Y esa rama caía en
+  // `AGENT_PRICE_NOTE_GATEWAY` —la afirmación MÁS FUERTE de las dos, la que dice que el fee se paga—
+  // justo cuando no se sabe de qué leg se habla. Al revés del criterio del archivo: `no-consultado` y el
+  // campo ausente NO afirman nada sobre el catálogo (docblock de `AgentUnavailable`).
+  //
+  // Es alcanzable por drift, no por el server de hoy: si el `label` de `route.ts:276` se renombra y
+  // `FX_STEP_LABEL` se queda viejo, TODO plano de producción entra por acá. T-336.6 lo impide; este `it`
+  // custodia que, si igual pasara, la pantalla CALLE en vez de afirmar de más.
+  //
+  // Lo que mata: volver a `…?.transport === "demo" ? DEMO : GATEWAY` sin la guarda ⇒ se renderiza la
+  // nota del gateway y el segundo assert se pone rojo. MEDIDO.
+  it("T-R1g: si ningún paso trae el label de la cotización, no se renderiza NINGUNA de las dos notas", async () => {
+    await verLaTarjeta(
+      [
+        paso({ label: "Cotizar el tipo de cambio", transport: "demo" }), // el label renombrado
+        payout("gateway"),
+      ],
+      0.06,
+    );
+    // La tarjeta sí se renderizó y el dato del precio se conserva: no es un test que pase por DOM vacío.
+    expect(screen.getByText("Precio publicado en el catálogo")).toBeInTheDocument();
+    expect(screen.getByText("0.06 USDC")).toBeInTheDocument();
+    // Y ninguna de las dos notas afirma nada.
+    expect(document.body.textContent ?? "").not.toMatch(LO_PAGA_CHASKI);
+    expect(document.body.textContent ?? "").not.toMatch(LA_ARMO_LA_APP);
   });
 });
 

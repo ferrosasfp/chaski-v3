@@ -13,21 +13,19 @@
 // no falla, muestra cualquier cosa, así que el nombre del parámetro no se toca sin volver a medirlo.
 //
 // 🔴 LO QUE ESTA RUTA NO HACE, y es la mitad del trabajo: no afirma que estos agentes vayan a correr.
-// El carril del gateway está detrás de `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`, y con la bandera apagada
-// la app llama a su agente punto a punto, que puede ser OTRO. Decir "el gateway elige X" mientras
-// producción llama a Y sería exactamente la clase de pantalla que mide una cosa y afirma otra. Por eso
-// cada paso viaja con su `transport` y la interfaz lo dice.
+// El catálogo lista a quien mejor rankea AHORA; el gateway resuelve AL EJECUTAR, y puede tocarle otro.
+// Y con `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` en `"fallback"` no corre ningún agente: corren los
+// simuladores del container. Decir "el gateway elige X" en ese modo sería la clase de pantalla que
+// mide una cosa y afirma otra. Por eso cada paso viaja con su `transport` y la interfaz lo dice.
 //
 // La identidad NO figura como agente A PROPÓSITO: hoy Chaski habla con el proveedor de verificación
 // directo, no a través de un agente del catálogo. Inventar una tercera fila sería fabricar la parte
 // más vendible del preview.
 import { NextResponse } from "next/server";
 import {
-  FX_DIRECT_AGENT_SLUG,
   FX_MIN_REPUTATION,
   FX_QUOTE_CAPABILITY,
   PAYOUT_CAPABILITY,
-  PAYOUT_DIRECT_AGENT_SLUG,
   PAYOUT_MIN_REPUTATION,
 } from "../../../../src/infrastructure/a2a/gateway-client";
 
@@ -77,23 +75,29 @@ interface PlanStep {
   availability: "ofrecido" | "sin-candidatos" | "no-consultado";
   /** Con qué se preguntó. Las MISMAS constraints que la ejecución manda a `/compose` (AC-14). */
   constraints: LegConstraints;
-  /** Por dónde corre HOY, no por dónde podría correr. */
-  transport: "gateway" | "punto-a-punto";
   /**
-   * QUIÉN corre hoy, cuando se sabe. Y se sabe en UN solo caso: el carril punto a punto, donde el
-   * slug está cableado en la URL que la route invoca. Sale de la MISMA constante que ese fetch usa.
+   * Por dónde corre HOY, no por dónde podría correr.
    *
-   * `null` con `transport: "gateway"` NO es un dato faltante: es el hecho. Ahí no se llama a ningún
-   * slug, se pide una capacidad y el gateway resuelve AL EJECUTAR, así que el agente que el catálogo
-   * lista primero hoy puede no ser el que corra. Rellenarlo con el `agent.id` sería exactamente la
-   * pantalla que mide una cosa y afirma otra.
+   * 🔴 EL DOMINIO CAMBIÓ EN WKH-332/W3, Y SOBREVIVIR ES LA DECISIÓN. El work-item mandaba borrar este
+   * campo junto con `runsTodayAgentId`; se cumplió la primera mitad y no la segunda, y el motivo es
+   * falsable: `"fallback"` sigue siendo un valor legal de `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`, y con
+   * él NO corre ningún agente — el container cablea `FallbackQuoteGateway`/`FallbackPayoutGateway`,
+   * que son simuladores locales. Sin este campo, en ese modo la tarjeta afirmaría *"Hoy este paso
+   * corre por el gateway, que elige al ejecutar"* mientras corre un mock. Esa es, exactamente, la
+   * pantalla que mide una cosa y afirma otra: el bug que la tarjeta existe para cerrar.
    *
-   * Por qué existe este campo: medido contra producción el 2026-08-05, `agent.id` daba
-   * `remit-corridor-fx-solana` y `remit-cashout-payout-solana`, mientras las rutas llamaban a
-   * `remit-corridor-fx` y `remit-cashout-payout`. La tarjeta nombraba a quien no corre.
+   * `"punto-a-punto"` desapareció con el carril que nombraba. Se deriva del VALOR DE LA BANDERA, y
+   * nunca de un nombre de agente: no queda ninguno del que derivarlo.
    */
-  runsTodayAgentId: string | null;
+  transport: "gateway" | "demo";
 }
+
+// 🔴 ACÁ ESTABA `runsTodayAgentId`, Y MURIÓ EN W3 POR FALTA DE FUENTE, no por gusto. Su único valor
+// posible eran las dos constantes de slug del carril punto a punto, y ese carril ya no existe. En el
+// carril del gateway el campo siempre valió `null` —ahí no se llama a ningún slug, se pide una
+// capacidad y el gateway resuelve AL EJECUTAR—, así que lo único que se pierde es el `null`.
+// ⛔ Rellenarlo con el `agent.id` del catálogo sería reintroducir el bug al revés: el catálogo lista
+// a quien mejor rankea HOY, no a quien va a correr.
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
@@ -183,8 +187,11 @@ export async function GET(): Promise<Response> {
     // averiguarlo" y "no interviene nadie" son cosas distintas y no se dicen igual.
     return NextResponse.json({ error: "gateway_not_configured" }, { status: 501 });
   }
-  const viaGateway = process.env.NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER === "a2a-gateway";
-  const transport: PlanStep["transport"] = viaGateway ? "gateway" : "punto-a-punto";
+  // El único valor de la bandera que cablea agentes reales es `"a2a-gateway"`; el otro legal es
+  // `"fallback"` (y su ausencia, que cae en él), que cablea simuladores. Un valor no reconocido no
+  // llega hasta acá: `resolveValueDeliveryAdapter` tira en el arranque del container.
+  const transport: PlanStep["transport"] =
+    process.env.NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER === "a2a-gateway" ? "gateway" : "demo";
 
   const fxCapability = process.env.WASIAI_A2A_FX_CAPABILITY ?? FX_QUOTE_CAPABILITY;
   const payoutCapability = process.env.WASIAI_A2A_PAYOUT_CAPABILITY ?? PAYOUT_CAPABILITY;
@@ -212,7 +219,6 @@ export async function GET(): Promise<Response> {
       availability: fx.availability,
       constraints: fxConstraints,
       transport,
-      runsTodayAgentId: viaGateway ? null : FX_DIRECT_AGENT_SLUG,
     },
     {
       capability: payoutCapability,
@@ -221,7 +227,6 @@ export async function GET(): Promise<Response> {
       availability: payout.availability,
       constraints: payoutConstraints,
       transport,
-      runsTodayAgentId: viaGateway ? null : PAYOUT_DIRECT_AGENT_SLUG,
     },
   ];
 

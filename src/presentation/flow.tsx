@@ -1972,20 +1972,19 @@ function PayoutInProgress({ rem }: { rem: RemittanceState }) {
 // no se veía. Esta tarjeta lo muestra ANTES de aprobar, con los datos del catálogo en vivo.
 //
 // Tres decisiones de honestidad, y las tres tienen su contraparte en `/api/a2a/plan`:
-//  · Se dice POR DÓNDE corre hoy cada paso. Con el carril del gateway apagado, la app llama a su
-//    agente punto a punto, que puede ser otro: mostrar la elección del catálogo como si fuera la
-//    que va a correr sería una pantalla que mide una cosa y afirma otra.
+//  · Se dice POR DÓNDE corre hoy cada paso. Con la bandera en `"fallback"` no corre ningún agente:
+//    corren los simuladores del container. Mostrar la elección del catálogo como si fuera la que va
+//    a correr sería una pantalla que mide una cosa y afirma otra.
 //  · `verified` se muestra tal cual. Hoy los tres dicen que no. Pintar un tilde sería la mentira
 //    más fácil de acá.
 //  · La identidad NO aparece como agente: hoy es una integración directa con el proveedor. La
 //    tercera fila sería la más vendible y es la que no existe.
 //
-// 🔴 Y EL QUE FALTABA: se dice QUIÉN corre, no sólo por dónde. Medido contra producción el
-// 2026-08-05, `GET /api/a2a/plan` devolvía `remit-corridor-fx-solana` y `remit-cashout-payout-solana`
-// y esta tarjeta los mostraba con "hoy se llama directo", mientras `POST /api/a2a/quote` contestaba
-// `result.slug = "remit-corridor-fx"`. Son slugs distintos: la pantalla nombraba a quien NO corre y
-// encima afirmaba que ese era el que se llamaba directo. Cuando el catálogo y la ejecución divergen,
-// esta tarjeta lo DICE, no elige uno de los dos en silencio.
+// 🔴 ACÁ HABÍA UNA CUARTA DECISIÓN —"se dice QUIÉN corre, no sólo por dónde"— Y SE FUE EN W3 CON SU
+// FUENTE. Existía porque la tarjeta y la ejecución nombraban agentes DISTINTOS: el catálogo listaba
+// uno y la app llamaba por URL a otro, así que la pantalla nombraba a quien no corría. La reparación
+// de entonces fue decirlo; la de esta HU es que no pueda volver a pasar, porque ya no hay ninguna URL
+// con un nombre adentro. Lo que queda por decir es POR DÓNDE, y eso es lo que cada fila dice.
 function AgentPlanCard() {
   type Step = {
     capability: string;
@@ -2001,9 +2000,14 @@ function AgentPlanCard() {
     availability?: "ofrecido" | "sin-candidatos" | "no-consultado";
     /** Con qué constraints se preguntó. Es lo que hace falsable la frase "bajo el piso de este paso". */
     constraints?: { minReputation: number; allowTrial?: true };
-    transport: "gateway" | "punto-a-punto";
-    /** Quién corre hoy cuando se sabe. `null` en el carril del gateway: ahí se elige al ejecutar. */
-    runsTodayAgentId?: string | null;
+    /**
+     * Por dónde corre hoy. `"punto-a-punto"` salió del dominio en W3 junto con el carril; `"demo"` no
+     * es un valor nuevo por gusto: es el modo `"fallback"` de la bandera, donde el paso lo corre un
+     * simulador y afirmar "corre por el gateway" sería falso.
+     */
+    transport: "gateway" | "demo";
+    /** 🔴 `runsTodayAgentId` YA NO VIENE. Murió con el carril que lo poblaba (W3): su único valor
+     *  posible era el slug cableado en el `fetch`, y ese `fetch` no existe. */
   };
   const [plan, setPlan] = useState<{ steps: Step[]; totalUsdc: number } | null>(null);
   const [failed, setFailed] = useState(false);
@@ -2040,11 +2044,11 @@ function AgentPlanCard() {
   return (
     <Card>
       <p className="text-sm font-semibold">Quién va a atender tu envío</p>
-      {/* "Ninguno de estos pasos está atado a una empresa fija" queda desmentido tres renglones más
-          abajo por el propio detalle de cada fila: la que dice "hoy se llama directo" ES un paso
-          cableado a un agente concreto. La frase de arriba pasa a describir el modelo (pedimos
-          capacidades) sin afirmar que hoy los tres corran por ahí, que es justo lo que cada fila ya
-          responde una por una. */}
+      {/* "Ninguno de estos pasos está atado a una empresa fija" quedaba desmentido tres renglones
+          más abajo por el propio detalle de cada fila: la que decía "hoy se llama directo a X" ERA un
+          paso cableado a un agente concreto. Esa fila ya no existe (W3), y aun así la frase de arriba
+          sigue describiendo el MODELO (pedimos capacidades) sin afirmar que hoy los tres corran por
+          ahí: en modo demo no corre ninguno, y eso lo dice cada fila una por una. */}
       <p className="mt-1 text-xs text-stone">
         Chaski pide capacidades, no empresas: el catálogo abierto responde quién las cumple, así que
         esta lista puede cambiar sola. Abajo, por dónde corre hoy cada paso.
@@ -2064,11 +2068,7 @@ function AgentPlanCard() {
                   El catálogo ofrece a {s.agent.id}
                   {s.agent.verified ? " · verificado" : " · sin verificar"}
                 </p>
-                <AgentRunsToday
-                  agentId={s.agent.id}
-                  transport={s.transport}
-                  runsTodayAgentId={s.runsTodayAgentId}
-                />
+                <AgentRunsToday transport={s.transport} />
               </>
             ) : (
               <AgentUnavailable availability={s.availability} constraints={s.constraints} />
@@ -2081,8 +2081,8 @@ function AgentPlanCard() {
         <span className="tabular text-sm font-semibold">{plan.totalUsdc} USDC</span>
       </div>
       <p className="mt-1 text-xs text-stone">
-        {plan.steps.some((s) => s.transport === "punto-a-punto")
-          ? AGENT_PRICE_NOTE_DIRECT
+        {plan.steps.some((s) => s.transport === "demo")
+          ? AGENT_PRICE_NOTE_DEMO
           : AGENT_PRICE_NOTE_GATEWAY}
       </p>
       <PlanConstraintsNote steps={plan.steps} />
@@ -2172,48 +2172,45 @@ function AgentUnavailable({
 /**
  * Qué es ese número, y quién lo cobraría.
  *
- * 🔴 ACÁ DECÍA "Lo que cobran los agentes", y nadie lo cobra. En el carril punto a punto las dos rutas
- * hacen un `fetch` liso: sin x402, sin `Authorization`, sin Agent Key (`a2a/quote/route.ts`:142 y
- * `payout/prepare/route.ts`:368). Verificado en vivo el 2026-08-05: un `POST /api/a2a/quote` contra
- * producción devuelve 200 sin ningún pago. El número, encima, es el precio de catálogo de agentes que
- * pueden no ser los que corren, que es lo que cada fila ya dice una por una.
+ * 🔴 ACÁ DECÍA "Lo que cobran los agentes", y no siempre lo cobra alguien. El número es el precio que
+ * los agentes PUBLICAN en el catálogo, y el catálogo lista a quien mejor rankea ahora, que puede no
+ * ser quien corra. El dato no se borra (sirve para comparar lo que el catálogo publica): se le pone
+ * dueño y tiempo verbal, que es el mismo criterio con el que ya se arregló el "llega en ~30 min".
  *
- * El dato no se borra (sirve para comparar lo que el catálogo publica): se le pone dueño y tiempo
- * verbal, que es el mismo criterio con el que ya se arregló el "llega en ~30 min".
+ * 🔴 LAS DOS FRASES DE ANTES ERAN "gateway" y "punto a punto"; ahora son "gateway" y "demo", y la
+ * segunda cambió de contenido, no sólo de nombre. La vieja decía *"la app los llama sin ningún pago y
+ * contestan igual"*, que describía el carril punto a punto —un `fetch` liso a un agente real, sin
+ * x402 y sin Agent Key—. Ese carril se borró en W3, así que la frase pasó a ser falsa: con la bandera
+ * en `"fallback"` no se llama a NINGÚN agente, corren los simuladores del container. Una sola frase
+ * para los dos casos tendría que ser falsa en uno.
  *
- * Las dos frases separadas porque los dos carriles cobran distinto y el `transport` los distingue:
- * con el gateway el fee del agente lo liquida el gateway contra la Agent Key de Chaski
+ * Con el gateway el fee del agente lo liquida el gateway contra la Agent Key de Chaski
  * (`gateway-client.ts`, header `x-a2a-key`), o sea que ahí sí se paga, sólo que no lo paga la persona
- * ni sale de lo que envía. Una sola frase para los dos casos tendría que ser falsa en uno.
+ * ni sale de lo que envía.
  */
-const AGENT_PRICE_NOTE_DIRECT =
-  "Es lo que estos agentes publican en el catálogo, no lo que se cobra en este envío: por el carril de hoy la app los llama sin ningún pago y contestan igual.";
+const AGENT_PRICE_NOTE_DEMO =
+  "Es lo que estos agentes publican en el catálogo, no lo que se cobra en este envío: esta app está en modo demo y no llama a ninguno de ellos.";
 const AGENT_PRICE_NOTE_GATEWAY =
   "Es lo que estos agentes publican en el catálogo. Por el carril del gateway ese fee lo paga Chaski con su Agent Key al ejecutar el paso, y no se suma a lo que enviás.";
 
 /**
- * La línea que dice QUIÉN corre hoy este paso. Cuatro casos, y ninguno colapsa en otro.
+ * La línea que dice POR DÓNDE corre hoy este paso. Dos casos, y ninguno nombra a un agente.
  *
- * · Carril del gateway: no se llama a ningún slug, se pide la capacidad y el gateway resuelve AL
- *   EJECUTAR. El agente que el catálogo lista primero hoy puede no ser el que corra, así que la línea
- *   no lo nombra: sería inventar una certeza.
- * · El servidor no mandó el campo (respuesta de una versión anterior, durante un deploy): no sabemos,
- *   y se dice. Callar dejaría la fila leyéndose como si el del catálogo fuera el que corre, que es
- *   exactamente el bug.
- * · Coincide con el del catálogo: se dice que corre ese, y punto.
- * · NO coincide: el caso que esta HU vino a arreglar. Se nombran LOS DOS y se dice cuál es cuál.
- *   Elegir uno en silencio, en cualquiera de las dos direcciones, es una pantalla que mide una cosa y
- *   afirma otra.
+ * 🔴 ERAN CUATRO Y QUEDARON DOS (WKH-332/W3, AC-7). Los dos que se fueron —"Hoy se llama directo a X"
+ * y "Hoy no corre ese: la app llama directo a Y"— sólo podían escribirse si existía un slug cableado
+ * en el código, y ese carril se borró. No se reemplazaron por un texto equivalente: la afirmación
+ * dejó de ser sostenible, así que la frase se fue con ella.
+ *
+ * · `gateway`: no se llama a ningún slug, se pide la capacidad y el gateway resuelve AL EJECUTAR. El
+ *   agente que el catálogo lista primero hoy puede no ser el que corra, así que la línea no lo
+ *   nombra: sería inventar una certeza.
+ * · `demo`: la bandera está en `"fallback"` y este paso NO lo corre ningún agente, lo corre un
+ *   simulador local del propio navegador. Decir "corre por el gateway" acá sería falso, y por eso
+ *   `transport` sobrevivió al borrado en vez de morir con `runsTodayAgentId`.
+ *   Input que lo pone en rojo: `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` sin setear y esta línea diciendo
+ *   que el paso corre por el gateway.
  */
-function AgentRunsToday({
-  agentId,
-  transport,
-  runsTodayAgentId,
-}: {
-  agentId: string;
-  transport: "gateway" | "punto-a-punto";
-  runsTodayAgentId?: string | null;
-}) {
+function AgentRunsToday({ transport }: { transport: "gateway" | "demo" }) {
   if (transport === "gateway") {
     return (
       <p className="mt-0.5 text-xs text-stone">
@@ -2221,19 +2218,9 @@ function AgentRunsToday({
       </p>
     );
   }
-  if (typeof runsTodayAgentId !== "string" || !runsTodayAgentId) {
-    return (
-      <p className="mt-0.5 text-xs text-stone">
-        No sabemos a qué agente se llama hoy en este paso.
-      </p>
-    );
-  }
-  if (runsTodayAgentId === agentId) {
-    return <p className="mt-0.5 text-xs text-stone">Hoy se llama directo a {agentId}.</p>;
-  }
   return (
     <p className="mt-0.5 text-xs font-medium text-cochineal-ink">
-      Hoy no corre ese: la app llama directo a {runsTodayAgentId}, que está cableado en el código.
+      Hoy este paso no lo corre ningún agente: esta app está en modo demo y lo simula.
     </p>
   );
 }

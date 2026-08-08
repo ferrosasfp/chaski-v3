@@ -2,9 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  FX_DIRECT_AGENT_SLUG,
   FX_MIN_REPUTATION,
-  PAYOUT_DIRECT_AGENT_SLUG,
   PAYOUT_MIN_REPUTATION,
 } from "../../../../src/infrastructure/a2a/gateway-client";
 import { GET } from "./route";
@@ -105,64 +103,82 @@ describe("GET /api/a2a/plan — el preview de quién atiende la remesa", () => {
     expect(body.steps.every((s) => s.agent === null)).toBe(true);
   });
 
-  it("declara el transporte REAL: con el carril apagado dice punto-a-punto", async () => {
+  // 🔴 EL DOMINIO DE `transport` CAMBIÓ EN W3: `"punto-a-punto"` salió con el carril y entró `"demo"`.
+  // El eje del test NO cambia —el campo dice por dónde corre HOY, no por dónde podría—, y sigue
+  // comparando los dos valores en la MISMA corrida: un `transport` hardcodeado a `"gateway"` (que es
+  // lo que pasaría si alguien "simplificara" el campo) pone en rojo la primera mitad.
+  it("declara el transporte REAL: con la bandera en fallback dice demo, con el gateway dice gateway", async () => {
     vi.stubEnv("WASIAI_A2A_GATEWAY_URL", BASE);
     vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "fallback");
     stubCatalog({ "remittance-fx-quote": [card("fx", 0.03)] });
     const off = (await (await GET()).json()) as { steps: Array<{ transport: string }> };
-    // Con la bandera apagada la app llama a su agente directo, que puede ser OTRO. Afirmar que lo
-    // elige el catálogo sería una pantalla que mide una cosa y afirma otra.
-    expect(off.steps.every((s) => s.transport === "punto-a-punto")).toBe(true);
+    // Con la bandera en "fallback" NO corre ningún agente: corren los simuladores del container.
+    // Decir "gateway" ahí sería una pantalla que mide una cosa y afirma otra.
+    expect(off.steps.every((s) => s.transport === "demo")).toBe(true);
+    // Y el valor del carril borrado no puede volver por ninguna puerta.
+    expect(JSON.stringify(off)).not.toContain("punto-a-punto");
 
     vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gateway");
     stubCatalog({ "remittance-fx-quote": [card("fx", 0.03)] });
     const on = (await (await GET()).json()) as { steps: Array<{ transport: string }> };
     expect(on.steps.every((s) => s.transport === "gateway")).toBe(true);
   });
+
+  // La env AUSENTE cae del lado del demo, igual que en el container (`resolveValueDeliveryAdapter`
+  // traduce `undefined` a `"fallback"`). Sin este caso, un deployment sin la env vería la tarjeta
+  // afirmando que el paso corre por el gateway mientras corre un simulador.
+  it("la bandera AUSENTE también dice demo, no gateway", async () => {
+    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", BASE);
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", undefined as unknown as string);
+    stubCatalog({ "remittance-fx-quote": [card("fx", 0.03)] });
+    const body = (await (await GET()).json()) as { steps: Array<{ transport: string }> };
+    expect(body.steps.every((s) => s.transport === "demo")).toBe(true);
+  });
 });
 
-// ── Quién corre hoy, no sólo por dónde ───────────────────────────────────────────────────────────
+// ── QUIÉN CORRE HOY: EL CAMPO MURIÓ, Y LO QUE QUEDA ES EL CANDADO DE SU AUSENCIA ─────────────────
 //
-// 🔴 EL BUG MEDIDO (producción, 2026-08-05): este endpoint devolvía `remit-corridor-fx-solana` y
-// `remit-cashout-payout-solana`, y la tarjeta los mostraba con "hoy se llama directo". Pero
-// `POST /api/a2a/quote` contestaba `result.slug = "remit-corridor-fx"`, y `payout/prepare` llama a
-// `remit-cashout-payout`. Son slugs distintos: la pantalla nombraba a quien NO corre.
-describe("GET /api/a2a/plan — quién corre hoy cada paso", () => {
-  it("en punto-a-punto declara el slug REAL que las rutas invocan, no el del catálogo", async () => {
-    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", BASE);
-    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "fallback");
-    // Exactamente lo que devuelve el catálogo en vivo, con el sufijo `-solana`.
-    stubCatalog({
-      "remittance-fx-quote": [card("remit-corridor-fx-solana", 0.03)],
-      "remittance-payout": [card("remit-cashout-payout-solana", 0.03)],
-    });
-
-    const body = (await (await GET()).json()) as {
-      steps: Array<{ agent: { id: string } | null; runsTodayAgentId: string | null }>;
-    };
-
-    // El slug sale de la MISMA constante que el `fetch` de cada route usa.
-    expect(body.steps[0]?.runsTodayAgentId).toBe(FX_DIRECT_AGENT_SLUG);
-    expect(body.steps[1]?.runsTodayAgentId).toBe(PAYOUT_DIRECT_AGENT_SLUG);
-    // Y la divergencia, que es el hecho que la pantalla tiene que poder decir.
-    expect(body.steps[0]?.runsTodayAgentId).not.toBe(body.steps[0]?.agent?.id);
-    expect(body.steps[1]?.runsTodayAgentId).not.toBe(body.steps[1]?.agent?.id);
+// 🔴 DOS `it` MURIERON ACÁ (WKH-332/W3), y con ellos el campo que medían:
+//   · "en punto-a-punto declara el slug REAL que las rutas invocan" — comparaba `runsTodayAgentId`
+//     contra las dos constantes de slug. Las constantes se borraron con el `fetch` que las usaba, así
+//     que el test no tiene contra qué comparar: su assert no se puede ni escribir.
+//   · "en el carril del gateway NO nombra a nadie" — asertaba `runsTodayAgentId === null`, o sea el
+//     único valor que ese campo podía tomar post-flip. Comprobar que un campo inexistente es `null`
+//     no prueba nada.
+// Lo que los reemplaza es un `it` de AUSENCIA, que es la propiedad que AC-2/AC-7 necesitan: el
+// contrato de esta ruta no puede volver a llevar un nombre de agente que afirme QUIÉN corre.
+describe("GET /api/a2a/plan — el contrato ya no puede decir QUIÉN corre", () => {
+  it("ni con el gateway ni en demo aparece `runsTodayAgentId` en la respuesta", async () => {
+    for (const flag of ["a2a-gateway", "fallback"]) {
+      vi.stubEnv("WASIAI_A2A_GATEWAY_URL", BASE);
+      vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", flag);
+      stubCatalog({
+        "remittance-fx-quote": [card("un-proveedor-de-fx", 0.03)],
+        "remittance-payout": [card("un-proveedor-de-payout", 0.03)],
+      });
+      const raw = await (await GET()).text();
+      const body = JSON.parse(raw) as { steps: Array<Record<string, unknown>> };
+      expect(body.steps.length, flag).toBe(2);
+      // Sobre el TEXTO y sobre las claves: `toHaveProperty` en `undefined` pasaría si alguien mandara
+      // la clave con valor `undefined`, que `JSON.stringify` borra pero que el tipo aceptaría.
+      expect(raw, flag).not.toContain("runsTodayAgentId");
+      for (const step of body.steps) {
+        expect(Object.keys(step), flag).not.toContain("runsTodayAgentId");
+      }
+    }
   });
 
-  // En el carril del gateway NO se llama a ningún slug: se pide la capacidad y el gateway resuelve al
-  // ejecutar. Rellenar el campo con el `agent.id` sería el mismo bug al revés.
-  it("en el carril del gateway NO nombra a nadie: ahí se elige al ejecutar", async () => {
+  // El agente del catálogo SÍ sigue viajando, y eso es lo que la HU vino a habilitar: la tarjeta
+  // puede decir "el catálogo ofrece a X" sin afirmar que X vaya a correr. Borrar `agent` habría sido
+  // tirar el premio.
+  it("`agent` sigue viajando: decir quién OFRECE no es decir quién CORRE", async () => {
     vi.stubEnv("WASIAI_A2A_GATEWAY_URL", BASE);
     vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gateway");
-    stubCatalog({
-      "remittance-fx-quote": [card("remit-corridor-fx-solana", 0.03)],
-      "remittance-payout": [card("remit-cashout-payout-solana", 0.03)],
-    });
-
+    stubCatalog({ "remittance-fx-quote": [card("un-proveedor-de-fx", 0.03)] });
     const body = (await (await GET()).json()) as {
-      steps: Array<{ runsTodayAgentId: string | null }>;
+      steps: Array<{ agent: { id: string } | null }>;
     };
-    expect(body.steps.every((s) => s.runsTodayAgentId === null)).toBe(true);
+    expect(body.steps[0]?.agent?.id).toBe("un-proveedor-de-fx");
   });
 });
 

@@ -16,12 +16,9 @@ describe("resolveValueDeliveryAdapter — los valores que PASAN", () => {
     expect(resolveValueDeliveryAdapter("fallback")).toBe("fallback");
   });
 
-  // 🔴 TRANSITORIO. Este `it` cambia de bando en W3, cuando `"a2a"` salga del conjunto en el MISMO
-  // diff que borra el carril punto a punto. Hoy pasa porque hoy `"a2a"` es el valor con el que corre
-  // producción y cablea los gateways A2A REALES, no los mocks.
-  it("'a2a' PASA todavía: es el valor vigente en producción y sale del conjunto recién en W3", () => {
-    expect(resolveValueDeliveryAdapter("a2a")).toBe("a2a");
-  });
+  // 🔴 EL `it` DE `"a2a"` CAMBIÓ DE BANDO EN W3 Y VIVE ABAJO, entre los que TIRAN. No se borró: el
+  // valor sigue existiendo en entornos configurados antes del flip, y lo que hay que custodiar es
+  // que ahí falle ruidoso en vez de reinterpretarse como "fallback".
 
   it("la env AUSENTE (undefined) cae al default documentado en .env.example:144 → 'fallback'", () => {
     expect(resolveValueDeliveryAdapter(undefined)).toBe("fallback");
@@ -34,6 +31,13 @@ describe("resolveValueDeliveryAdapter — los valores que TIRAN (AC-3: fail-loud
   // configuración —alguien la escribió— y no la ausencia deliberada que el default cubre.
   it("la env PRESENTE Y VACÍA ('') tira, aunque undefined no tire", () => {
     expect(() => resolveValueDeliveryAdapter("")).toThrow("value_delivery_adapter_invalido");
+  });
+
+  // 🔴 EL VALOR VIEJO. Hasta W3 `"a2a"` era el nombre del carril punto a punto y pasaba; ese carril
+  // ya no existe, así que el valor no nombra ningún camino. El input que importa es un entorno que
+  // quedó con la env vieja: acá TIRA, y no cae a los simuladores en silencio.
+  it("'a2a' —el valor del carril borrado— TIRA: ya no nombra ningún transporte", () => {
+    expect(() => resolveValueDeliveryAdapter("a2a")).toThrow("value_delivery_adapter_invalido");
   });
 
   it("un typo de una sola letra ('a2a-gatewayy') tira en vez de caer al mock", () => {

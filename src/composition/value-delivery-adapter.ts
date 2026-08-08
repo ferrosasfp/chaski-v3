@@ -21,26 +21,22 @@
  * conjunto aceptado Y la unión de tipos en la misma edición. La alternativa —un `type` escrito a
  * mano al lado de un `Set` escrito a mano— es la que produjo el bug de abajo.
  *
- * 🔴 `"a2a"` ES TRANSITORIO Y SALE EN W3 DE ESTA MISMA HU, en el MISMO diff que borra el carril
- * punto a punto de `app/api/a2a/quote/route.ts` y `app/api/payout/prepare/route.ts`. NO es un
- * olvido, y NO se puede sacar antes: hoy `"a2a"` es el valor con el que corre producción y significa
- * "usá los gateways A2A reales". Si saliera del conjunto mientras la env vale `"a2a"`, la app
- * dejaría de arrancar con la configuración vigente (mutante M2).
+ * 🔴 `"a2a"` YA NO ESTÁ, Y SALIÓ EN EL MISMO COMMIT QUE BORRÓ EL CARRIL PUNTO A PUNTO (W3). Era el
+ * nombre del transporte que llamaba a los agentes por su slug desde `app/api/a2a/quote/route.ts` y
+ * `app/api/payout/prepare/route.ts`. Ese código ya no existe, así que el valor no nombra ningún
+ * camino: pasa a TIRAR. Sacarlo antes —con el carril todavía vivo y la env de producción en `"a2a"`—
+ * habría dejado la app sin arrancar con la configuración vigente; sacarlo después habría dejado una
+ * ventana en la que `"a2a"` no era reconocido Y se traducía a "no uses los gateways reales", o sea
+ * los simuladores en silencio. Por eso las dos ediciones son una sola.
  *
- * ⚠️ A M2 NO LO MATA NINGÚN TEST, Y ACÁ DECÍA QUE SÍ (CR/MNR-1). Este renglón afirmaba que lo mataba
- * `container.test.ts:38`, una cita sin ancla que además apunta a un `});`. Lo que lo mata es `tsc`,
- * antes de que corra un solo test: sacar `"a2a"` de este array deja huérfano el `case` de
- * (`usesRealGateways`, `:78`) y eso es TS2678. Un test no llega a ejecutarse en un árbol que no
- * compila, así que atribuirle el kill a un `it` describe mal quién está sosteniendo el invariante.
- * Cuando el carril viejo se borre, `"a2a"` pasa a TIRAR: en ese árbol ya no nombra ningún camino.
- *
- * Sacarlo de acá pone en rojo el `case "a2a"` de `usesRealGateways` con un error de `tsc`
- * (TS2678: el literal no es comparable con la unión), o sea que W3 NO PUEDE sacar el valor y
- * olvidarse del mapeo: el compilador lo frena.
+ * ⚠️ QUIÉN SOSTIENE EL INVARIANTE, Y NO ES UN TEST (CR/MNR-1). Es `tsc`, antes de que corra un solo
+ * test: sacar un valor de este array deja huérfano su `case` en (`usesRealGateways`, `:74`) ⇒ TS2678,
+ * y deja su fila de la tabla `CABLEADO` de `container.test.ts` como propiedad de más ⇒ TS2353. Un
+ * test no llega a ejecutarse en un árbol que no compila. Input que lo pone en rojo: borrar el `case`
+ * o la fila sin borrar el valor, o al revés — cualquiera de las dos mitades sola deja `tsc` rojo.
  */
 export const VALUE_DELIVERY_ADAPTERS = [
   "a2a-gateway", // el carril real por gateway (WKH-218)
-  "a2a", // 🔴 TRANSITORIO — sale en W3 (ver el docblock de este array)
   "fallback", // el demo con mocks, nombrado a propósito y no un accidente
 ] as const;
 
@@ -73,14 +69,11 @@ const ACCEPTED: ReadonlySet<string> = new Set<string>(VALUE_DELIVERY_ADAPTERS);
  *     valor al array sin decir a qué cablea deja esta función devolviendo `undefined` contra un tipo
  *     de retorno `boolean` ⇒ `tsc` rojo. Sacar un valor deja un `case` incomparable ⇒ `tsc` rojo.
  *  2. `container.test.ts` recorre `VALUE_DELIVERY_ADAPTERS` y asserta QUÉ CLASE queda cableada para
- *     cada valor, no que no tire. Input que lo pone en rojo: devolver `false` en el `case "a2a"`.
+ *     cada valor, no que no tire. Input que lo pone en rojo: `false` en el `case "a2a-gateway"`.
  */
 export function usesRealGateways(adapter: ValueDeliveryAdapter): boolean {
   switch (adapter) {
     case "a2a-gateway":
-      return true;
-    // 🔴 Sale en W3 junto con el valor. Mientras exista, cablea lo REAL: es la env de producción.
-    case "a2a":
       return true;
     case "fallback":
       return false;

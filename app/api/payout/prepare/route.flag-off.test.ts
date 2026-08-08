@@ -12,7 +12,8 @@
 //   · el rate-limit (sin Upstash env el limiter real es fail-closed 503 y ningún caso llegaría);
 //   · la factory del store (es EL FLAG: es la variable independiente del experimento);
 //   · `fetch`, que acá sirve DOS destinos distintos y los cuenta por separado — el `GET
-//     /v3/session/{id}/decision/` que hace la autoridad de verdad, y el `POST …/invoke` del agente.
+//     /v3/session/{id}/decision/` que hace la autoridad de verdad, y el `POST {GW}/compose` del
+//     gateway (antes de WKH-332/W3 era el `POST …/invoke` del agente por su slug: ese carril se borró).
 //
 // La afirmación que este archivo clava, y que ningún otro test puede clavar: **con el flag apagado
 // nadie puede pagar**, y **con el flag encendido y fila, un pagador legítimo paga** — las dos medidas
@@ -122,12 +123,14 @@ describe("prepare + autoridad REAL — la semántica del flag OFF (AR/BLQ-ALTO-1
   beforeEach(() => {
     KP = nacl.sign.keyPair();
     ADDR = bs58.encode(KP.publicKey);
-    vi.stubEnv("REMIT_AGENTS_BASE_URL", "https://agents.test");
     vi.stubEnv("DEPOSIT_ATTESTATION_SECRET", "test-deposit-secret");
     vi.stubEnv("SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY", bs58.encode(nacl.sign.keyPair().publicKey));
     vi.stubEnv("VERCEL_ENV", "");
     vi.stubEnv("PAYOUT_POP_SECRET", "pop-secret");
-    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "");
+    // W3: hay UN transporte y hay que configurarlo. Antes acá se stubeaba la base de los agentes y el
+    // flag en "" para forzar el carril punto a punto; los dos se fueron con ese carril.
+    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", "https://gateway.test");
+    vi.stubEnv("WASIAI_A2A_AGENT_KEY", "ak_flag_off_secret");
     // 🔴 CON key: es lo que hace que la autoridad REAL tome su camino de producción (consultar a
     // Didit) en vez de la rama `simulated_dev`. Sin esto el test mediría el demo, no el money-path.
     vi.stubEnv("DIDIT_API_KEY", "didit-key");
@@ -148,17 +151,23 @@ describe("prepare + autoridad REAL — la semántica del flag OFF (AR/BLQ-ALTO-1
           { status: 200, headers: { "content-type": "application/json" } },
         );
       }
+      // El gateway relayando el output del agente que resolvió la capacidad (forma de `POST /compose`).
       return new Response(
         JSON.stringify({
-          result: {
-            status: "submitted",
-            payoutId: "transfi-po-1",
-            deliveredLocal: null,
-            txRef: null,
-            reason: null,
-            provenance: "transfi",
-            depositAddress: DEPOSIT,
-          },
+          success: true,
+          steps: [
+            {
+              output: {
+                status: "submitted",
+                payoutId: "transfi-po-1",
+                deliveredLocal: null,
+                txRef: null,
+                reason: null,
+                provenance: "transfi",
+                depositAddress: DEPOSIT,
+              },
+            },
+          ],
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
@@ -212,7 +221,7 @@ describe("prepare + autoridad REAL — la semántica del flag OFF (AR/BLQ-ALTO-1
         "está bien y lo que falta es una variable de entorno nuestra",
     ).toBe(503);
     expect(await res.json()).toEqual({ error: "prepare_kyc_verdict_unavailable" });
-    // Y NADA salió a la red: ni a la autoridad, ni al agente. Un corte que igual gasta cupo del
+    // Y NADA salió a la red: ni a la autoridad, ni al gateway. Un corte que igual gasta cupo del
     // proveedor de identidad sería el peor de los dos mundos.
     expect(urls, "el corte por flag apagado igual salió a la red").toEqual([]);
   });

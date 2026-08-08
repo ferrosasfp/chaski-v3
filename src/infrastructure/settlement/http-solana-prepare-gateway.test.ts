@@ -106,8 +106,8 @@ function routeFetch(agent: () => Response) {
     // sería probar que el cliente llama a algo, no que la firma sirve para algo.
     if (target === "/api/payout/attestation") return ATTESTATION_POST(request);
     if (target === "/api/payout/prepare") {
-      // Dentro del handler, el fetch al agente usa la MISMA función global: se distingue por URL
-      // absoluta (BASE) y se responde con el result del agente.
+      // Dentro del handler, el forward al gateway usa la MISMA función global: se distingue por ser
+      // una URL absoluta ({GW}/compose) y se responde con el output que el gateway relaya.
       const outer = globalThis.fetch;
       vi.stubGlobal("fetch", async () => agent());
       try {
@@ -146,21 +146,26 @@ function prepareRespondsWith(status: number, body: unknown) {
   });
 }
 
+/** El output del agente, envuelto como lo entrega `POST /compose` (WKH-332/W3). Antes era `{ result }`,
+ *  la respuesta del agente invocado por su slug; ese carril se borró y la route ya no sabe leerlo.
+ *  Lo que este archivo mide —que el body que arma el cliente ES el que la route acepta— no cambia. */
+function composeRelays(output: unknown): Response {
+  return new Response(JSON.stringify({ success: true, steps: [{ output }] }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 function agentOk(): Response {
-  return new Response(
-    JSON.stringify({
-      result: {
-        status: "submitted",
-        payoutId: "transfi-po-1",
-        deliveredLocal: null,
-        txRef: null,
-        reason: null,
-        provenance: "transfi",
-        depositAddress: DEPOSIT,
-      },
-    }),
-    { status: 200, headers: { "content-type": "application/json" } },
-  );
+  return composeRelays({
+    status: "submitted",
+    payoutId: "transfi-po-1",
+    deliveredLocal: null,
+    txRef: null,
+    reason: null,
+    provenance: "transfi",
+    depositAddress: DEPOSIT,
+  });
 }
 
 describe("HttpSolanaPayoutPrepareGateway — el body que arma el cliente ES el que la route acepta", () => {
@@ -168,12 +173,14 @@ describe("HttpSolanaPayoutPrepareGateway — el body que arma el cliente ES el q
     KP = nacl.sign.keyPair();
     ADDR = bs58.encode(KP.publicKey);
     AUTHORITY = bs58.encode(nacl.sign.keyPair().publicKey);
-    vi.stubEnv("REMIT_AGENTS_BASE_URL", "https://agents.test");
     vi.stubEnv("DEPOSIT_ATTESTATION_SECRET", "test-deposit-secret");
     vi.stubEnv("SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY", AUTHORITY);
     vi.stubEnv("VERCEL_ENV", "");
     vi.stubEnv("PAYOUT_POP_SECRET", "pop-secret");
-    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "");
+    // W3: la route tiene UN transporte y hay que configurarlo. Antes acá se stubeaba la base de los
+    // agentes y el flag en "" para forzar el carril punto a punto; los dos se fueron con ese carril.
+    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", "https://gateway.test");
+    vi.stubEnv("WASIAI_A2A_AGENT_KEY", "ak_prepare_gateway_test");
     checkRouteRateLimitMock.mockReset();
     checkRouteRateLimitMock.mockResolvedValue({ ok: true });
     authorityMock.mockReset();
@@ -223,20 +230,15 @@ describe("HttpSolanaPayoutPrepareGateway — el body que arma el cliente ES el q
   // cuatro rechazos del agente terminaban en `prepare_no_deposit_address`.
   function agentRejectsWith(reason: string | null): () => Response {
     return () =>
-      new Response(
-        JSON.stringify({
-          result: {
-            status: "blocked",
-            payoutId: null,
-            deliveredLocal: null,
-            txRef: null,
-            reason,
-            provenance: "transfi",
-            depositAddress: null,
-          },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
+      composeRelays({
+        status: "blocked",
+        payoutId: null,
+        deliveredLocal: null,
+        txRef: null,
+        reason,
+        provenance: "transfi",
+        depositAddress: null,
+      });
   }
 
   it.each([
@@ -277,22 +279,16 @@ describe("HttpSolanaPayoutPrepareGateway — el body que arma el cliente ES el q
   it("#75 CANDADO: el provider mock sigue dando prepare_no_deposit_address", async () => {
     vi.stubGlobal(
       "fetch",
-      routeFetch(
-        () =>
-          new Response(
-            JSON.stringify({
-              result: {
-                status: "submitted",
-                payoutId: "transfi-po-1",
-                deliveredLocal: null,
-                txRef: null,
-                reason: null,
-                provenance: "transfi",
-                depositAddress: null,
-              },
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          ),
+      routeFetch(() =>
+        composeRelays({
+          status: "submitted",
+          payoutId: "transfi-po-1",
+          deliveredLocal: null,
+          txRef: null,
+          reason: null,
+          provenance: "transfi",
+          depositAddress: null,
+        }),
       ),
     );
     const out = await new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet)).prepare(

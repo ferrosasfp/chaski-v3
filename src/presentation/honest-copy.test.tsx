@@ -417,26 +417,29 @@ describe("el overlay que retoma la verificación", () => {
 
 // ── 8. La tarjeta de quién atiende el envío ──────────────────────────────────────────────────────
 //
-// "Ninguno de estos pasos está atado a una empresa fija" queda desmentido por el detalle de cada
-// fila: la que dice "hoy se llama directo" ES un paso cableado a un agente concreto. La frase de
-// arriba pasa a describir el modelo sin afirmar que hoy los tres corran por ahí, que es justo lo que
-// cada fila responde una por una.
+// "Ninguno de estos pasos está atado a una empresa fija" quedaba desmentido por el detalle de cada
+// fila: la que decía "hoy se llama directo a X" ERA un paso cableado a un agente concreto. Esa fila
+// se fue con el carril (WKH-332/W3), y la frase de arriba sigue describiendo el MODELO sin afirmar
+// que hoy los pasos corran por ahí — porque en modo demo no corre ninguno, y eso lo dice cada fila.
+//
+// ⚠️ EL `it` CAMBIÓ DE ASSERT, y el motivo va escrito: verificaba la PRESENCIA de "Hoy se llama
+// directo a", que es una de las dos frases que AC-7 ahora prohíbe. Lo que sobrevive del test es su
+// eje real —que la frase de arriba no NIEGUE lo que la fila afirma— y para eso se usa el estado que
+// hoy sí puede contradecirla: `demo`, donde la fila dice que el paso lo corre un simulador.
 describe("la tarjeta de quién atiende el envío", () => {
-  it("no niega que hoy haya pasos cableados: eso lo responde cada fila", async () => {
+  it("no niega lo que cada fila afirma: en demo la fila dice que el paso se simula", async () => {
     const steps = [
       {
         capability: "fx.quote",
         label: "Cotización",
         agent: {
-          id: "remit-corridor-fx",
+          id: "un-proveedor-de-fx",
           description: "",
           priceUsdc: 0.5,
           verified: false,
           registry: "wasiai",
         },
-        transport: "punto-a-punto" as const,
-        // Quién corre hoy, dicho por el server. Acá coincide con el del catálogo.
-        runsTodayAgentId: "remit-corridor-fx",
+        transport: "demo" as const,
       },
     ];
     vi.stubGlobal(
@@ -449,7 +452,11 @@ describe("la tarjeta de quién atiende el envío", () => {
       expect(await screen.findByText(/Chaski pide capacidades, no empresas/)).toBeInTheDocument();
       expect(screen.queryByText(/Ninguno de estos pasos está atado a una empresa fija/)).toBeNull();
       // La fila sigue diciendo la verdad incómoda que la frase de arriba negaba.
-      expect(screen.getByText(/Hoy se llama directo a remit-corridor-fx/)).toBeInTheDocument();
+      expect(
+        screen.getByText(/esta app está en modo demo y lo simula/),
+      ).toBeInTheDocument();
+      // Y las dos frases que AC-7 prohíbe no vuelven por acá.
+      expect(document.body.textContent ?? "").not.toContain("Hoy se llama directo a");
     } finally {
       vi.unstubAllGlobals();
     }

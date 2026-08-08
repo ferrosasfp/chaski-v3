@@ -37,9 +37,14 @@ describe("createContainer — se construye SIN leer ninguna env EVM (AC-3.1)", (
     expect(() => createContainer()).not.toThrow();
   });
 
-  it("el flag de value-delivery sigue funcionando (a2a) sin ninguna env EVM", () => {
+  // 🔴 ESTE `it` SE INVIRTIÓ EN W3, NO SE BORRÓ (WKH-332). Decía `.not.toThrow()` y era el centinela
+  // de que `"a2a"` —la env con la que corría producción— siguiera cableando los gateways REALES
+  // mientras el carril punto a punto existía. Ese carril ya no existe, así que `"a2a"` no nombra
+  // ningún camino y pasó a TIRAR. Se conserva invertido porque lo que hay que custodiar ahora es lo
+  // contrario: que el valor viejo NO se reinterprete en silencio como "fallback" (los simuladores).
+  it("el flag en el valor viejo ('a2a') YA NO nombra ningún carril: TIRA, no cae al mock", () => {
     vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a");
-    expect(() => createContainer()).not.toThrow();
+    expect(() => createContainer()).toThrow("value_delivery_adapter_invalido");
   });
 
   // El ternario `solanaWallet ?? pickWallet()` era el punto donde una wallet EVM podía entrar. Ya no
@@ -114,7 +119,7 @@ describe("createContainer — un valor no reconocido de la bandera NUNCA cablea 
 //   · La tabla es un `Record<ValueDeliveryAdapter, …>`, o sea EXHAUSTIVA POR TIPO. Un valor nuevo en
 //     `VALUE_DELIVERY_ADAPTERS` sin fila acá es `tsc` rojo, no un test que se olvidó.
 //   · Los casos se recorren desde `VALUE_DELIVERY_ADAPTERS`, no desde una lista copiada. Cuando W3
-//     saque `"a2a"` del array, este `it.each` deja de correrlo solo y la fila de la tabla queda como
+//     sacó `"a2a"` del array, este `it.each` dejó de correrlo solo y la fila de la tabla quedó como
 //     error de tipo — que es exactamente el momento de máxima probabilidad de romper el invariante.
 //   · Asserta la CLASE construida, no la ausencia de throw.
 //
@@ -126,9 +131,9 @@ describe("createContainer — cada valor LEGAL de la bandera cablea la clase que
     { quotes: new () => unknown; payouts: new () => unknown }
   > = {
     "a2a-gateway": { quotes: A2aQuoteGateway, payouts: A2aPayoutGateway },
-    // 🔴 Mientras `"a2a"` exista, cablea lo REAL. Es la env con la que corre producción hoy: si esta
-    // fila dijera Fallback*, estaría describiendo el bug en vez de prohibirlo.
-    a2a: { quotes: A2aQuoteGateway, payouts: A2aPayoutGateway },
+    // 🔴 ACÁ HABÍA UNA FILA `a2a` Y SE FUE EN EL MISMO COMMIT QUE EL VALOR (W3). El tipo del Record
+    // es `ValueDeliveryAdapter`, así que dejarla habría sido TS2353: la tabla no puede sobrevivir al
+    // valor, ni el valor a la tabla.
     fallback: { quotes: FallbackQuoteGateway, payouts: FallbackPayoutGateway },
   };
 
@@ -148,8 +153,11 @@ describe("createContainer — cada valor LEGAL de la bandera cablea la clase que
   // La otra mitad, y es la que mata al mutante: "es un A2aQuoteGateway" no excluye que también
   // pasara por el mock si alguien hiciera herencia. Se asserta la NEGATIVA sobre la clase del otro
   // carril, que es la afirmación que el bug volvía falsa.
-  it("con la bandera en 'a2a' NO hay ningún simulador adentro del container", () => {
-    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a");
+  // W3 movió el valor de este `it` de `"a2a"` a `"a2a-gateway"`: es el único que queda cableando lo
+  // real, y el que la env de producción usa desde el flip. El caso `"a2a"` no desapareció, cambió de
+  // pregunta y vive arriba, asertando que TIRA.
+  it("con la bandera en 'a2a-gateway' NO hay ningún simulador adentro del container", () => {
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gateway");
     const c = createContainer();
     expect((c.previewQuote as unknown as { quotes: unknown }).quotes).not.toBeInstanceOf(
       FallbackQuoteGateway,

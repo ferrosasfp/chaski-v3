@@ -19,25 +19,14 @@
 export const FX_QUOTE_CAPABILITY = "remittance-fx-quote";
 export const PAYOUT_CAPABILITY = "remittance-payout";
 
-/**
- * Los agentes que el CARRIL PUNTO A PUNTO llama de verdad, cableados por URL.
- *
- * 🔴 POR QUÉ ESTÁN ACÁ Y NO EN CADA ROUTE. Vivían como literales sueltos en las dos rutas que los
- * invocan (`a2a/quote/route.ts` y `payout/prepare/route.ts`), y la tarjeta que la persona ve antes de
- * aprobar mostraba los del catálogo. Medido contra producción el 2026-08-05:
- * `GET /api/a2a/plan` devuelve `remit-corridor-fx-solana` y `remit-cashout-payout-solana`, y
- * `POST /api/a2a/quote` responde `result.slug = "remit-corridor-fx"`. Son slugs DISTINTOS, y la
- * pantalla nombraba al que no corre.
- *
- * Con una sola fuente, el preview puede decir quién corre hoy sin que nadie tenga que acordarse de
- * sincronizar dos archivos. Si el carril punto a punto cambia de agente, el preview cambia solo.
- *
- * ⚠️ SÓLO VALEN PARA EL CARRIL PUNTO A PUNTO. Con `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER=a2a-gateway`
- * NADIE llama a estos slugs: se pide la CAPACIDAD y el gateway resuelve al ejecutar. Usarlos para
- * afirmar quién corre en ese carril sería el mismo bug al revés.
- */
-export const FX_DIRECT_AGENT_SLUG = "remit-corridor-fx";
-export const PAYOUT_DIRECT_AGENT_SLUG = "remit-cashout-payout";
+// 🔴 ACÁ VIVÍAN LAS DOS CONSTANTES DE SLUG, Y SE FUERON CON EL CARRIL QUE LAS USABA (WKH-332/W3).
+// Eran los nombres de los dos agentes que las rutas invocaban por URL, y existían para que el preview
+// pudiera decir "hoy se llama directo a X" leyendo la MISMA constante que el `fetch`. Ese `fetch` ya
+// no existe en ninguna de las dos rutas, así que no hay ningún "hoy se llama directo a" que sostener:
+// se pide la capacidad y el gateway resuelve AL EJECUTAR. Reintroducir un slug acá —aunque fuera sólo
+// para poblar la pantalla— volvería a nombrar a un agente que puede no ser el que corra, que es
+// exactamente el bug que esta HU cerró (CD-1). El candado que lo impide es
+// `src/composition/agent-slug-residue.static.test.ts`.
 
 /** Piso de confianza del leg de payout (AC-5 / CD-5). Constante de código, NO env: una env con
  *  default ausente es un piso que se apaga solo (nadie la setea en un entorno nuevo, min_reputation

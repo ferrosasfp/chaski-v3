@@ -16,7 +16,15 @@
 // El catálogo lista a quien mejor rankea AHORA; el gateway resuelve AL EJECUTAR, y puede tocarle otro.
 // Y con `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` en `"fallback"` la COTIZACIÓN la arma un simulador del
 // container (`FallbackQuoteGateway`, `container.ts:123`). Decir "el gateway elige X" con ese adapter
-// sería la pantalla que mide una cosa y afirma otra. Por eso cada paso viaja con su `transport`.
+// sería la pantalla que mide una cosa y afirma otra.
+//
+// POR ESO CADA PASO VIAJA CON SU `transport`: no es un campo por paso para adornar, es que CADA LEG LO
+// DERIVA DE SU PROPIA BANDERA (WKH-336). La cotización, del adapter
+// (`resolveValueDeliveryAdapter`, `container.ts:114`); la entrega, del settle
+// (`solanaSettleOn`, `container.ts:141`), que es la que decide si el envío pasa por el carril Solana
+// real. Con el settle en `"true"` y el adapter en `"fallback"` los dos pasos traen valores DISTINTOS
+// —`"demo"` la cotización, `"gateway"` la entrega—, así que un `transport` único para los dos no
+// alcanzaba: eso es lo que WKH-336 cerró.
 //
 // La identidad NO figura como agente A PROPÓSITO: hoy Chaski habla con el proveedor de verificación
 // directo, no a través de un agente del catálogo. Inventar una tercera fila sería fabricar la parte
@@ -86,8 +94,34 @@ interface PlanStep {
    * pollea estado (`this.payouts`, `track-remittance.ts:47`). Sin este campo la tarjeta afirmaría *"corre
    * por el gateway, que elige al ejecutar"* mientras la cotización la da un mock: mide una cosa y afirma otra.
    *
-   * `"punto-a-punto"` desapareció con el carril que nombraba. Se deriva del VALOR DE LA BANDERA, y
+   * `"punto-a-punto"` desapareció con el carril que nombraba. Se deriva de un VALOR DE BANDERA, y
    * nunca de un nombre de agente: no queda ninguno del que derivarlo.
+   *
+   * 🔴 SON DOS BANDERAS, UNA POR LEG, Y ESO ES WKH-336. Acá decía *"LA bandera"*, en singular, y era
+   * falso: el campo tiene DOS fuentes y cada paso lee la suya.
+   * · `"Cotizar el cambio"` ← el adapter (`resolveValueDeliveryAdapter`, `container.ts:114`).
+   *   `"demo"` acá = la cotización la arma un simulador local.
+   * · `"Entregar el dinero"` ← el settle (`solanaSettleOn`, `container.ts:141`).
+   *   El adapter NO decide este leg: con el settle en `"true"` el envío postea a
+   *   `/api/payout/prepare` y ahí se compone contra el gateway con cualquier valor del adapter.
+   *
+   * ⚠️ `"demo"` EN LA ENTREGA NO QUIERE DECIR QUE SE SIMULE. Quiere decir settle apagado, y con el
+   * settle apagado la entrega no corre ni la simula nadie: `ConfirmAndSend` FALLA CERRADO antes de
+   * intentar nada (`this.solana`, `confirm-and-send.ts:336` ⇒ `settlement_unavailable` +
+   * `not_deposited`). No existe ningún camino de código donde el payout se ejecute contra un mock y
+   * complete. La frase que se renderiza para `"demo"` dice *"lo simula"* y en este leg es imprecisa:
+   * es un residual DECLARADO (H1 de WKH-336), y corregirlo exige un TERCER valor de este campo con su
+   * propia frase, o sea otra HU.
+   *
+   * ⚠️ Y ESTE CAMPO NO DICE NADA DEL SEGUIMIENTO POST-ENVÍO. Leerlo como si lo dijera es exactamente la
+   * confusión que produjo WKH-337, así que queda escrito acá: el estado posterior cuelga de OTRA
+   * variable: el puerto de payouts, que lo cablea EL ADAPTER (`payouts`, `container.ts:127`) y que
+   * consume `TrackRemittance` (`trackRemittance`, `container.ts:196`).
+   * Con `settle="true"` + `adapter="fallback"` este campo dice `"gateway"` en la entrega —y es cierto,
+   * el payout es real—, pero el `.status()` que lo pollea es el simulador
+   * (`this.payouts`, `track-remittance.ts:47`), que devuelve `"submitted"` no-terminal para siempre
+   * (`status`, `../../../../src/infrastructure/fallback/gateways.ts:123`), así que la remesa no
+   * transicionaría nunca a `settled`. Eso es WKH-337 y NO se corrige acá.
    */
   transport: "gateway" | "demo";
 }
@@ -187,22 +221,36 @@ export async function GET(): Promise<Response> {
     // averiguarlo" y "no interviene nadie" son cosas distintas y no se dicen igual.
     return NextResponse.json({ error: "gateway_not_configured" }, { status: 501 });
   }
-  // El único valor de la bandera que cablea agentes reales es `"a2a-gateway"`; el otro legal es
-  // `"fallback"` (y su ausencia, que cae en él), que cablea simuladores.
+  // UNA BANDERA POR LEG, y ninguna de las dos decide el leg de la otra (WKH-336).
+  // · El único valor del ADAPTER que cablea agentes reales para la cotización es `"a2a-gateway"`; el
+  //   otro legal es `"fallback"` (y su ausencia, que cae en él), que cablea simuladores.
+  // · Y el SETTLE se compara contra `"true"` LITERAL, byte por byte igual que `container.ts:141` y que
+  //   `app/api/settle/solana-sponsor/route.ts:38`. Nada de truthiness, nada de `.toLowerCase()`, nada
+  //   de `!== "false"`: si la app entiende `"TRUE"` como apagado, el preview tiene que decir lo mismo.
+  //   Un preview más permisivo que el código que ejecuta afirmaría que la entrega corre por el gateway
+  //   mientras `container.ts:141` la deja apagada.
   //
   // ⚠️ ACÁ DECÍA *"un valor no reconocido no llega hasta acá: `resolveValueDeliveryAdapter` tira en el
   // arranque del container"*, Y ERA FALSO PARA TODA INVOCACIÓN DE ESTA RUTA (AR/BLQ-MED-1). Este
-  // handler NO valida la bandera: la lee cruda y **cualquier** string que no sea `"a2a-gateway"` cae
-  // en `"demo"` y devuelve 200. MEDIDO con una sonda sobre este mismo `GET` (2026-08-07, descartada
-  // después): `"a2a-gateway"` ⇒ 200 `["gateway","gateway"]`; `"fallback"`, `"a2a"`, `"a2a-gatewayy"` y
-  // `"A2A-GATEWAY"` ⇒ 200 `["demo","demo"]` los cuatro. Cinco valores, cero throws.
-  // Quien tira con un valor ilegal es `createContainer()`, en el composition root del CLIENTE. Este
-  // GET no pasa por ahí —no lo importa, y el repo no tiene `middleware.ts`—, así que un `curl` llega
-  // igual. Lo que el `transport` describe es qué va a cablear LA APP PROPIA, no una garantía sobre
-  // quién llamó. Input que lo pone en rojo si alguien invierte el mapeo: (`transport`,
-  // `route.test.ts:117`) y (`transport`, `route.test.ts:135`).
-  const transport: PlanStep["transport"] =
+  // handler NO valida NINGUNA de las dos banderas: las lee crudas, cualquier string que no sea el
+  // valor exacto cae en `"demo"` y devuelve 200. Quien tira con un valor ilegal del adapter es
+  // `createContainer()`, en el composition root del CLIENTE. Este GET no pasa por ahí —no lo importa, y
+  // el repo no tiene `middleware.ts`—, así que un `curl` llega igual. Lo que el `transport` describe es
+  // qué va a cablear LA APP PROPIA, no una garantía sobre quién llamó.
+  //
+  // 🕐 EL DATO MEDIDO, CON SU DUEÑO Y SU TIEMPO VERBAL. Una sonda sobre este mismo `GET` (orquestador,
+  // 2026-08-07) devolvió: `"a2a-gateway"` ⇒ 200 `["gateway","gateway"]`; `"fallback"`, `"a2a"`,
+  // `"a2a-gatewayy"` y `"A2A-GATEWAY"` ⇒ 200 `["demo","demo"]` los cuatro. Cinco valores, cero throws.
+  // ⚠️ Esa sonda corrió sobre el árbol ANTERIOR a la derivación por leg, cuando los dos pasos
+  // compartían un valor único, y NO declaró el valor del settle: sus tuplas ya no describen esta
+  // route. Lo que sigue siendo cierto de ella es lo de arriba —cero throws, cualquier string cae en
+  // `"demo"`, siempre 200—; lo que la tupla afirmaba ahora lo afirma el test, por leg:
+  // Input que pone en rojo la inversión del mapeo del ADAPTER: (`transport`, `route.test.ts:141`).
+  // Input que pone en rojo relajar el `=== "true"` del SETTLE: (`transport`, `route.test.ts:482`).
+  const fxTransport: PlanStep["transport"] =
     process.env.NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER === "a2a-gateway" ? "gateway" : "demo";
+  const payoutTransport: PlanStep["transport"] =
+    process.env.NEXT_PUBLIC_SOLANA_SETTLE_ENABLED === "true" ? "gateway" : "demo";
 
   const fxCapability = process.env.WASIAI_A2A_FX_CAPABILITY ?? FX_QUOTE_CAPABILITY;
   const payoutCapability = process.env.WASIAI_A2A_PAYOUT_CAPABILITY ?? PAYOUT_CAPABILITY;
@@ -229,7 +277,7 @@ export async function GET(): Promise<Response> {
       agent: fx.agent,
       availability: fx.availability,
       constraints: fxConstraints,
-      transport,
+      transport: fxTransport,
     },
     {
       capability: payoutCapability,
@@ -237,7 +285,7 @@ export async function GET(): Promise<Response> {
       agent: payout.agent,
       availability: payout.availability,
       constraints: payoutConstraints,
-      transport,
+      transport: payoutTransport,
     },
   ];
 

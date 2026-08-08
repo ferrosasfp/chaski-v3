@@ -104,35 +104,66 @@ describe("GET /api/a2a/plan — el preview de quién atiende la remesa", () => {
   });
 
   // 🔴 EL DOMINIO DE `transport` CAMBIÓ EN W3: `"punto-a-punto"` salió con el carril y entró `"demo"`.
-  // El eje del test NO cambia —el campo dice por dónde corre HOY, no por dónde podría—, y sigue
-  // comparando los dos valores en la MISMA corrida: un `transport` hardcodeado a `"gateway"` (que es
-  // lo que pasaría si alguien "simplificara" el campo) pone en rojo la primera mitad.
-  it("declara el transporte REAL: con la bandera en fallback dice demo, con el gateway dice gateway", async () => {
+  //
+  // 🔴 Y EL EJE DEL TEST SÍ CAMBIÓ, EN WKH-336. Acá decía *"el eje del test NO cambia"*, y dejó de ser
+  // cierto: este `it` variaba UNA env (el adapter) y miraba los dos pasos con un `.every()`. Ahora hay
+  // DOS ejes —el adapter y `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED`— y la granularidad es POR PASO, porque
+  // cada leg deriva su transporte de SU propia bandera. La matriz completa de los dos ejes vive en el
+  // `describe` del final del archivo (T-336.1…4); acá queda el caso que compara los DOS valores del
+  // campo en la MISMA corrida, que es el eje que sí valía y que NO se pierde.
+  //
+  // ⚠️ LA REESCRITURA NO ES UNA RELAJACIÓN, Y ES VERIFICABLE RENGLÓN POR RENGLÓN: el kill-set nuevo
+  // contiene al viejo y le suma cuatro mutantes.
+  //
+  //   | Mutante en `plan/route.ts`                                  | ¿lo mataba el viejo? | ¿el nuevo? |
+  //   | M1 `transport` clavado en `"gateway"` para los dos           | sí                   | sí (T-336.2, T-336.5) |
+  //   | M2 `transport` clavado en `"demo"` para los dos              | sí                   | sí (T-336.1, T-336.3) |
+  //   | M3 mapeo del adapter invertido                               | sí                   | sí (T-336.3, T-336.5) |
+  //   | M4 los DOS legs derivan del ADAPTER (= el defecto de WKH-336)| NO — era el verde    | sí (T-336.1) |
+  //   | M5 los DOS legs derivan del SETTLE                           | sí                   | sí (T-336.3) |
+  //   | M6 el leg de entrega usa truthiness / `!== "false"`          | NO — nunca variaba el settle | sí (T-336.2: `"false"`, `"1"`) |
+  //   | M7 el leg de entrega compara case-insensitive                | NO                   | sí (T-336.2: `"TRUE"`) |
+  //   | M8 se vuelve a colapsar en un solo `transport` compartido    | NO — `.every()` es ciego a eso | sí (T-336.1, T-336.5, per-step) |
+  //
+  // El paréntesis de abajo —*"la ENTREGA no la decide esta bandera"*— era un comentario y pasó a ser
+  // un hecho verificado: lo mide T-336.1.
+  it("T-336.5: el adapter mueve la COTIZACIÓN y no la entrega, con los dos valores en la MISMA corrida", async () => {
     vi.stubEnv("WASIAI_A2A_GATEWAY_URL", BASE);
     vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "fallback");
+    // CD-12: las DOS envs se fijan explícitamente. `undefined as unknown as string` BORRA la env, que
+    // es la ausencia real; `""` sería *presente y vacía* y es otro caso (T-336.2 lo cubre aparte).
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_SETTLE_ENABLED", undefined as unknown as string);
     stubCatalog({ "remittance-fx-quote": [card("fx", 0.03)] });
     const off = (await (await GET()).json()) as { steps: Array<{ transport: string }> };
-    // Con la bandera en "fallback" la cotización la arma un simulador del container: decir "gateway"
-    // ahí sería una pantalla que mide una cosa y afirma otra. (La ENTREGA no la decide esta bandera.)
-    expect(off.steps.every((s) => s.transport === "demo")).toBe(true);
+    // Con el adapter en "fallback" la cotización la arma un simulador del container: decir "gateway"
+    // ahí sería una pantalla que mide una cosa y afirma otra. La ENTREGA no la decide esta bandera —
+    // la decide el settle, y acá está ausente, así que también cae en "demo", por OTRO motivo.
+    expect(off.steps[0]?.transport).toBe("demo");
+    expect(off.steps[1]?.transport).toBe("demo");
     // Y el valor del carril borrado no puede volver por ninguna puerta.
     expect(JSON.stringify(off)).not.toContain("punto-a-punto");
 
     vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gateway");
     stubCatalog({ "remittance-fx-quote": [card("fx", 0.03)] });
     const on = (await (await GET()).json()) as { steps: Array<{ transport: string }> };
-    expect(on.steps.every((s) => s.transport === "gateway")).toBe(true);
+    // El adapter movió SÓLO la cotización: el settle sigue ausente y la entrega sigue en "demo". Si
+    // alguien volviera a pegar un valor único a los dos pasos (M8), la segunda línea se pone roja.
+    expect(on.steps[0]?.transport).toBe("gateway");
+    expect(on.steps[1]?.transport).toBe("demo");
   });
 
   // La env AUSENTE cae del lado del demo, igual que en el container (`resolveValueDeliveryAdapter`
   // traduce `undefined` a `"fallback"`). Sin este caso, un deployment sin la env vería la tarjeta
-  // afirmando que el paso corre por el gateway mientras un simulador local cotiza.
-  it("la bandera AUSENTE también dice demo, no gateway", async () => {
+  // afirmando que el paso corre por el gateway mientras un simulador local cotiza. Se mira POR PASO
+  // (CD-4): un `.every()` acá no distinguiría "los dos comparten valor" de "cada uno deriva del suyo".
+  it("las DOS banderas ausentes dicen demo en los DOS pasos, no gateway", async () => {
     vi.stubEnv("WASIAI_A2A_GATEWAY_URL", BASE);
     vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", undefined as unknown as string);
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_SETTLE_ENABLED", undefined as unknown as string);
     stubCatalog({ "remittance-fx-quote": [card("fx", 0.03)] });
     const body = (await (await GET()).json()) as { steps: Array<{ transport: string }> };
-    expect(body.steps.every((s) => s.transport === "demo")).toBe(true);
+    expect(body.steps[0]?.transport).toBe("demo");
+    expect(body.steps[1]?.transport).toBe("demo");
   });
 });
 
@@ -376,5 +407,111 @@ describe("GET /api/a2a/plan — los tres estados de disponibilidad (AC-14 / CD-1
     expect(vacio.steps[0]?.availability).toBe("sin-candidatos");
     expect(caido.steps[0]?.availability).toBe("no-consultado");
     expect(vacio.steps[0]?.availability).not.toBe(caido.steps[0]?.availability);
+  });
+});
+
+// ── WKH-336 · CADA LEG DERIVA SU TRANSPORTE DE SU PROPIA BANDERA ──────────────────────────────────
+//
+// 🔴 EL DEFECTO QUE ESTOS `it` MIDEN, Y POR QUÉ NINGÚN TEST ANTERIOR PODÍA VERLO. La route calculaba
+// UN `transport` desde `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` y lo pegaba a los DOS pasos. Pero quién
+// decide si la ENTREGA la corre un agente real es la OTRA bandera,
+// `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED` (`solanaSettleOn`, `container.ts:141`): con el settle en
+// `"true"` el envío postea a `/api/payout/prepare`, y ese POST compone contra el gateway con
+// CUALQUIER valor del adapter (`it.each`, `../../payout/prepare/route.test.ts:1296`). O sea que con
+// `settle="true"` + `adapter="fallback"` la fila "Entregar el dinero" decía "modo demo" mientras se
+// llamaba a un agente real y se le cobraba.
+//
+// ⚠️ POR QUÉ NINGÚN ASSERT DE ACÁ USA `.every()` (CD-4). `steps.every((s) => s.transport === X)` no
+// puede distinguir *"los dos steps comparten un valor"* de *"cada uno deriva del suyo y hoy
+// coinciden"*: es ciego exactamente al defecto que esta HU cierra. Cada assert nombra su índice —
+// `steps[0]` = "Cotizar el cambio" (FX), `steps[1]` = "Entregar el dinero" (payout).
+//
+// ⚠️ LAS DOS ENVS SE STUBEAN EN CADA CASO (CD-12), y `undefined` y `""` son casos DISTINTOS:
+// `stubEnv(nombre, undefined as unknown as string)` BORRA la env (ausencia real), mientras `""` es
+// *presente y vacía*. Apoyarse en la ausencia por defecto haría que el resultado dependiera de lo que
+// la shell exporte (`quote/route.test.ts:97-100` lo documenta medido).
+describe("GET /api/a2a/plan — cada leg deriva su transporte de SU bandera (WKH-336)", () => {
+  /** Un plan con las DOS envs fijadas explícitamente. `undefined` = env BORRADA (CD-12). */
+  async function planCon(adapter: string | undefined, settle: string | undefined) {
+    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", BASE);
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", adapter as unknown as string);
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_SETTLE_ENABLED", settle as unknown as string);
+    stubCatalog({
+      "remittance-fx-quote": [card("un-proveedor-de-fx", 0.03)],
+      "remittance-payout": [card("un-proveedor-de-payout", 0.03)],
+    });
+    return (await (await GET()).json()) as {
+      steps: Array<{ label: string; transport: string }>;
+    };
+  }
+
+  // T-336.1 — AC-1. El rojo pre-fix, y es el único `it` de la matriz que mata el defecto de la HU
+  // (M4: los DOS legs derivando del adapter). Los dos asserts van en el MISMO `it` a propósito: es lo
+  // único que prueba que los legs se DISTINGUEN. Uno que sólo mirara `steps[1]` quedaría verde con un
+  // `transport` clavado en `"gateway"` para los dos.
+  it.each(["fallback", undefined, ""])(
+    "T-336.1: settle=\"true\" + adapter=%s ⇒ la ENTREGA dice gateway y la COTIZACIÓN dice demo",
+    async (adapter) => {
+      const body = await planCon(adapter, "true");
+      expect(body.steps[1]?.label).toBe("Entregar el dinero");
+      expect(body.steps[1]?.transport).toBe("gateway");
+      expect(body.steps[0]?.label).toBe("Cotizar el cambio");
+      expect(body.steps[0]?.transport).toBe("demo");
+    },
+  );
+
+  // T-336.2 — AC-2. El candado de CD-3: la comparación es `=== "true"` LITERAL, igual que
+  // `container.ts:141`. Cada valor de esta lista mata una relajación concreta: `"false"` y `"1"` matan
+  // la truthiness (`Boolean(env)`) y el `!== "false"`; `"TRUE"` mata el `.toLowerCase()`. Si el
+  // preview entendiera `"TRUE"` como encendido diría que la entrega corre por el gateway mientras
+  // `container.ts:141` la deja apagada: la pantalla mediría una cosa y afirmaría otra.
+  it.each([
+    [undefined, "fallback"],
+    [undefined, "a2a-gateway"],
+    ["", "fallback"],
+    ["", "a2a-gateway"],
+    ["false", "fallback"],
+    ["false", "a2a-gateway"],
+    ["1", "fallback"],
+    ["1", "a2a-gateway"],
+    ["TRUE", "fallback"],
+    ["TRUE", "a2a-gateway"],
+  ])("T-336.2: settle=%s (no es \"true\") + adapter=%s ⇒ la ENTREGA dice demo", async (settle, adapter) => {
+    const body = await planCon(adapter, settle);
+    expect(body.steps[1]?.label).toBe("Entregar el dinero");
+    expect(body.steps[1]?.transport).toBe("demo");
+  });
+
+  // T-336.3 — AC-3. El leg de la COTIZACIÓN sigue derivando ESTRICTAMENTE del adapter: mata un `&&`
+  // de las dos banderas (que apagaría el FX cuando el settle está apagado) y la inversión del mapeo
+  // del adapter. El segundo caso además fija el cuadrante nuevo que esta HU vuelve alcanzable:
+  // gateway en la cotización y demo en la entrega, en la MISMA respuesta.
+  it.each(["true", undefined])(
+    "T-336.3: adapter=\"a2a-gateway\" + settle=%s ⇒ la COTIZACIÓN dice gateway igual",
+    async (settle) => {
+      const body = await planCon("a2a-gateway", settle);
+      expect(body.steps[0]?.label).toBe("Cotizar el cambio");
+      expect(body.steps[0]?.transport).toBe("gateway");
+      if (settle === undefined) expect(body.steps[1]?.transport).toBe("demo");
+    },
+  );
+
+  // T-336.4 — AC-4. El shape NO cambia: un `transport: "gateway" | "demo"` por paso, sin campos
+  // nuevos y sin unión ampliada. Es lo que hace que `flow.tsx` no necesite ningún cambio de lógica de
+  // render (`<AgentRunsToday transport={s.transport} />` ya itera por paso). Mata un
+  // `transportSource` agregado "para explicar", un tercer valor tipo `"unavailable"` y un `transport`
+  // que desaparece de un step.
+  it.each([
+    ["a2a-gateway", "true"],
+    ["a2a-gateway", undefined],
+    ["fallback", "true"],
+    ["fallback", undefined],
+  ])("T-336.4: adapter=%s + settle=%s ⇒ el shape de los DOS steps es el mismo de siempre", async (adapter, settle) => {
+    const body = await planCon(adapter, settle);
+    const esperado = ["capability", "label", "agent", "availability", "constraints", "transport"];
+    expect(Object.keys(body.steps[0] ?? {})).toEqual(esperado);
+    expect(Object.keys(body.steps[1] ?? {})).toEqual(esperado);
+    expect(["gateway", "demo"]).toContain(body.steps[0]?.transport);
+    expect(["gateway", "demo"]).toContain(body.steps[1]?.transport);
   });
 });

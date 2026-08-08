@@ -11,13 +11,12 @@ import {
   NO_AGENT_REASONS_MEANING_NOBODY,
   PREPARE_REJECTED,
   PREPARE_REJECTION_ENUMS,
+  QUOTE_NO_AGENT_FOR_CAPABILITY,
   QUOTE_REJECTED,
   RELAYABLE_PREPARE_REJECTIONS,
-  RELAYABLE_QUOTE_REJECTIONS,
   isPrepareRejection,
   noAgentMeansNobodyFits,
   prepareRejectionEnum,
-  relayableRejection,
 } from "./agent-rejections";
 
 describe("agent-rejections — la allow-list decide, no el agente", () => {
@@ -39,24 +38,30 @@ describe("agent-rejections — la allow-list decide, no el agente", () => {
     );
   });
 
+  // ⚠️ LA MITAD DE FX DE ESTE `it.each` SE FUE EN WKH-332/W4. Comprobaba
+  // `relayableRejection(QUOTE_REJECTED, raw, RELAYABLE_QUOTE_REJECTIONS)`, y las dos cosas —el helper y
+  // la lista— se borraron con el canal que las alimentaba: el `reason` del agente de FX llegaba en el
+  // body de error del carril punto a punto, que W3 borró. Lo que se conserva es la mitad del payout,
+  // cuyo `reason` sí llega dentro del 200 de `/compose`.
   it.each([null, undefined, 42, {}, "", "reason_inventado", "KYC_GATE_NOT_PASSED"])(
     "un reason no relayable (%s) NUNCA sale crudo: cae al enum de familia",
     (raw) => {
       expect(prepareRejectionEnum(raw)).toBe(PREPARE_REJECTED);
-      expect(relayableRejection(QUOTE_REJECTED, raw, RELAYABLE_QUOTE_REJECTIONS)).toBe(
-        QUOTE_REJECTED,
-      );
     },
   );
 
-  it("los relayables del quote se propagan tal cual (son el enum del agente, sin traducir)", () => {
-    for (const r of RELAYABLE_QUOTE_REJECTIONS) {
-      expect(relayableRejection(QUOTE_REJECTED, r, RELAYABLE_QUOTE_REJECTIONS)).toBe(r);
-    }
-    expect(RELAYABLE_QUOTE_REJECTIONS).toEqual([
-      "fx_amount_below_minimum",
-      "fx_amount_above_maximum",
-    ]);
+  // 🔴 `it` INVERTIDO, no borrado: era "los relayables del quote se propagan tal cual (son el enum del
+  // agente, sin traducir)", y clavaba que `RELAYABLE_QUOTE_REJECTIONS` fuera exactamente
+  // `["fx_amount_below_minimum", "fx_amount_above_maximum"]` y que esos valores viajaran CRUDOS al
+  // browser. Esa es la propiedad que AC-5 prohíbe. Lo que queda es el enum de FAMILIA y el candado de
+  // que sea una palabra NUESTRA: si alguien lo cambia por el vocabulario del agente, esto se pone rojo.
+  it("AC-5: el enum de familia del quote es una palabra NUESTRA, no el vocabulario del agente", () => {
+    expect(QUOTE_REJECTED).toBe("a2a_quote_rejected");
+    // `fx_` es el prefijo privado del agente de FX. Un enum nuestro no puede llevarlo, porque el que
+    // atienda la capacidad mañana puede usar otro prefijo o ninguno.
+    expect(QUOTE_REJECTED).not.toContain("fx_");
+    // Y ninguno de los dos enums que la app emite hoy por ese leg lo lleva tampoco.
+    expect(QUOTE_NO_AGENT_FOR_CAPABILITY).not.toContain("fx_");
   });
 
   it("los relayables del payout salen prefijados y todos entran en PREPARE_REJECTION_ENUMS", () => {

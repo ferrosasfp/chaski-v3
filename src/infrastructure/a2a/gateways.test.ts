@@ -103,33 +103,27 @@ describe("A2aQuoteGateway (AC-3)", () => {
     await expect(new A2aQuoteGateway().requestQuote(quoteReq)).rejects.toThrow("a2a_quote_unavailable");
   });
 
-  // Hallazgo #75 — el cliente tiene que PROPAGAR la distinción que la route ahora hace. Si estos
-  // enums se colapsan acá, la separación del server no llega a ninguna pantalla: `humanError()` sólo
-  // ve el `message` del Error que sale de este método.
+  // Hallazgo #75 — el cliente tiene que PROPAGAR la distinción que la route hace. Si el enum se
+  // colapsa acá, la separación del server no llega a ninguna pantalla: `humanError()` sólo ve el
+  // `message` del Error que sale de este método.
   function rejects(body: unknown, status = 400) {
     return vi.fn(async () => ({ ok: false, status, json: async () => body }));
   }
 
-  it("#75: rechazo por mínimo ⇒ throw fx_amount_below_minimum (NO a2a_quote_unavailable)", async () => {
-    vi.stubGlobal(
-      "fetch",
-      rejects({ error: "a2a_quote_rejected", reason: "fx_amount_below_minimum" }),
-    );
-    await expect(new A2aQuoteGateway().requestQuote(quoteReq)).rejects.toThrow(
-      "fx_amount_below_minimum",
-    );
-  });
-
-  it("#75: rechazo por techo ⇒ throw fx_amount_above_maximum (NO a2a_quote_unavailable)", async () => {
-    vi.stubGlobal(
-      "fetch",
-      rejects({ error: "a2a_quote_rejected", reason: "fx_amount_above_maximum" }),
-    );
-    await expect(new A2aQuoteGateway().requestQuote(quoteReq)).rejects.toThrow(
-      "fx_amount_above_maximum",
-    );
-  });
-
+  // 🔴 DOS `it` MURIERON ACÁ EN WKH-332/W4, Y ES LA MITAD VISIBLE DE LA REGRESIÓN DE AC-4:
+  //   · "#75: rechazo por mínimo ⇒ throw fx_amount_below_minimum"
+  //   · "#75: rechazo por techo ⇒ throw fx_amount_above_maximum"
+  // Los dos exigían que el `reason` del agente —`fx_*`, su vocabulario PRIVADO— viajara CRUDO desde el
+  // body de la route hasta el `Error` que lee la pantalla. La route ya no lo emite: el carril que leía
+  // el body de error del agente se borró en W3 y `/compose` manda el step fallado sin `code` y sin
+  // `reason`. Con la allow-list borrada (W4), este adapter ya no tiene con qué filtrar porque no tiene
+  // qué filtrar. Portarlos habría sido exigir un dato que no existe.
+  //
+  // Lo que se conserva es el enum de FAMILIA y —lo que importa— el CANDADO de que un `reason` que
+  // llegue igual NO se propague. Ese sí sigue siendo alcanzable: un server driftado, una versión
+  // anterior de la route durante un deploy o un intermediario pueden mandar la clave, y el adapter
+  // tiene que colapsarla. Antes eso se probaba con un valor inventado; ahora se prueba con los DOS
+  // valores reales de la allow-list borrada, que es el input que de verdad importa.
   it("#75: rechazo colapsado (sin reason) ⇒ throw a2a_quote_rejected, que tampoco es 'unavailable'", async () => {
     vi.stubGlobal("fetch", rejects({ error: "a2a_quote_rejected" }));
     await expect(new A2aQuoteGateway().requestQuote(quoteReq)).rejects.toThrow(
@@ -137,18 +131,19 @@ describe("A2aQuoteGateway (AC-3)", () => {
     );
   });
 
-  // Un `reason` que NO está en la allow-list no se propaga aunque la route se lo mande: el cliente
-  // filtra igual que el server. Sin esto, un server comprometido o driftado podría hacer que este
-  // adapter tire un string arbitrario que después se muestra en pantalla como código.
-  it("#75: reason fuera de la allow-list ⇒ cae al enum de familia, nunca el string crudo", async () => {
-    vi.stubGlobal(
-      "fetch",
-      rejects({ error: "a2a_quote_rejected", reason: "sarasa_inventada" }),
-    );
-    await expect(new A2aQuoteGateway().requestQuote(quoteReq)).rejects.toThrow(
-      "a2a_quote_rejected",
-    );
-  });
+  // 🔴 AC-5 — NINGÚN `reason` se propaga, ni siquiera los que la allow-list borrada admitía. Sin este
+  // `it`, reintroducir el filtro sería un cambio silencioso: el adapter volvería a tirar `fx_*` y la
+  // pantalla volvería a mostrar el vocabulario de un agente que puede no ser el que corrió.
+  it.each(["fx_amount_below_minimum", "fx_amount_above_maximum", "sarasa_inventada"])(
+    "AC-5: el reason '%s' NO se propaga: cae al enum de familia, nunca el string crudo",
+    async (reason) => {
+      vi.stubGlobal("fetch", rejects({ error: "a2a_quote_rejected", reason }));
+      const err = await new A2aQuoteGateway().requestQuote(quoteReq).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toBe("a2a_quote_rejected");
+      expect((err as Error).message).not.toContain(reason);
+    },
+  );
 
   // ── CR/BLQ-MED-1 · EL CABLEADO DE AC-13, NO LA RAMA QUE PINTA ───────────────────────────────────
   //

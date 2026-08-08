@@ -1,6 +1,6 @@
 // Infrastructure — SolanaPayoutPrepareGateway sobre NUESTRA ruta server-only /api/payout/prepare
 // (HU-SOL-13/AC-1). Corre en el CLIENTE: llama SIEMPRE a /api/payout/prepare y JAMÁS al agente directo
-// (REMIT_AGENTS_BASE_URL vive server-side, CD-6).
+// (no conoce ninguna URL de agente ni de gateway: la capacidad la resuelve el server, CD-6).
 //
 // Adjunta el proof-of-possession ed25519 (WKH-206) que la route exige en PR6: pide el challenge a
 // /api/a2a/payout/challenge vía PopSigner, lo firma con la wallet conectada y lo manda en el mismo
@@ -31,7 +31,8 @@
 //
 // [NC-1]/[NC-2] (founder-gated, FUERA de F3): la resolución REAL del beneficiary (deposit-address Solana
 // de TransFi por orden) y la respuesta Solana-shaped del server (`{beneficiary, authority, ...}` base58)
-// son founder-gated — hasta que el agente remit-cashout-payout exponga el destino Solana. El binding/
+// son founder-gated — hasta que el agente que resuelva `remittance-payout` exponga el destino Solana.
+// (Cuál agente sea no lo elige este repo: lo resuelve el gateway al ejecutar.) El binding/
 // atestación queda listo. Este gateway se unit-testea con un mock (FakeSolanaPayoutPrepareGateway).
 import {
   PREPARE_NO_AGENT_FOR_CAPABILITY,

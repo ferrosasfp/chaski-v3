@@ -54,7 +54,7 @@ const KEY = "ak_secret";
 const composeOk = { success: true, steps: [{ output: validResult }] };
 
 /** Router que separa la llamada al gateway (/compose) del fetch DIRECTO al agente.
- *  directCalls > 0 ⇒ hubo fallback punto-a-punto (prohibido, CD-1). */
+ *  directCalls > 0 ⇒ alguien reintrodujo un fetch fuera del gateway (prohibido, CD-1/AC-1). */
 function gwRouter(
   opts: {
     compose?: () => unknown;
@@ -402,4 +402,87 @@ describe("POST /api/a2a/quote — modo a2a-gateway (WKH-218 / WKH-304)", () => {
       expect(urls.some((u) => u.includes("/api/agents/"))).toBe(false);
     },
   );
+});
+
+// ── T-5.1 · AC-5 · CERO VOCABULARIO PRIVADO DEL AGENTE EN EL BODY ────────────────────────────────
+//
+// 🔴 QUÉ AFIRMACIÓN CLAVA, Y POR QUÉ SOBRE `res.text()` Y NO SOBRE EL JSON PARSEADO. `fx_` es el
+// prefijo con el que UN agente concreto nombra sus rechazos (`fx_amount_below_minimum`), y hasta esta
+// HU viajaba al browser: la route lo leía del body de error del agente invocado por su slug y lo
+// relayaba en la clave `reason`. Un assert sobre `Object.keys(json)` o sobre `json.error` sólo mira
+// donde uno se acuerda de mirar; sobre el TEXTO CRUDO de la respuesta se mira todo — clave, valor, una
+// clave anidada, un campo que alguien agregue mañana.
+//
+// Se recorre el UNIVERSO de desenlaces que esta route puede producir, no el camino feliz: si `fx_`
+// vuelve, va a volver por una rama de error, que es de donde venía.
+//
+// CD-17: este `describe` depende del `afterEach` del tope del archivo (`vi.restoreAllMocks`).
+describe("T-5.1/AC-5: ninguna respuesta de /api/a2a/quote lleva el vocabulario privado del agente", () => {
+  function conGateway() {
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gateway");
+    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", GW);
+    vi.stubEnv("WASIAI_A2A_AGENT_KEY", KEY);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  }
+
+  // Cada fila es un desenlace REAL de la route. El `fx_amount_below_minimum` que el gateway pone en su
+  // cuerpo de error es a propósito: es exactamente el dato que la route no puede relayar (CD-8), y sin
+  // ponerlo en el input este test no probaría que no sale — probaría que no había nada que saliera.
+  const DESENLACES: Array<{ label: string; router: () => { fn: ReturnType<typeof vi.fn> } }> = [
+    {
+      label: "200 feliz",
+      router: () => gwRouter({}),
+    },
+    {
+      label: "422 no_agent_match",
+      router: () =>
+        gwRouter({ status: 422, compose: () => ({ code: "no_agent_match", reason: "no_candidates" }) }),
+    },
+    {
+      label: "400 del gateway con el reason del agente adentro",
+      router: () =>
+        gwRouter({
+          status: 400,
+          compose: () => ({
+            success: false,
+            error: "Step 1 failed: fx_amount_below_minimum",
+            reason: "fx_amount_below_minimum",
+            code: "fx_amount_below_minimum",
+          }),
+        }),
+    },
+    {
+      label: "500 del gateway",
+      router: () => gwRouter({ status: 500, compose: () => ({ error: "fx_amount_above_maximum" }) }),
+    },
+    {
+      label: "200 con shape inválido",
+      router: () =>
+        gwRouter({ compose: () => ({ success: true, steps: [{ output: { quoteId: "x" } }] }) }),
+    },
+  ];
+
+  it.each(DESENLACES)("en '$label' el TEXTO de la respuesta no contiene `fx_`", async ({ router }) => {
+    conGateway();
+    const { fn } = router();
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req({ amountUsd: 2, destCountry: "PE", payoutMethod: "yape" }));
+    const raw = await res.text();
+    expect(raw, `la respuesta ecoó el vocabulario privado del agente: ${raw}`).not.toContain("fx_");
+    // Y la mitad que hace falsable la de arriba: la respuesta NO es vacía, así que el `not.toContain`
+    // no está pasando por no haber nada que mirar.
+    expect(raw.length).toBeGreaterThan(2);
+  });
+
+  // El caso 501, que no pasa por el gateway y por eso va aparte (no hay router que montar).
+  it("y tampoco en el 501 por gateway sin configurar", async () => {
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gateway");
+    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", "");
+    vi.stubEnv("WASIAI_A2A_AGENT_KEY", "");
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal("fetch", vi.fn());
+    const res = await POST(req({ amountUsd: 2 }));
+    expect(res.status).toBe(501);
+    expect(await res.text()).not.toContain("fx_");
+  });
 });

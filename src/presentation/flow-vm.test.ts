@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { Money } from "../domain/money";
-import { MIN_SEND_USD } from "../domain/remittance";
 import type { RemittanceState, RemittanceStatus } from "../domain/remittance";
 import {
   PRINCIPAL_SETTLED_REFUND_MANUAL,
@@ -714,33 +713,39 @@ describe("flow-vm — humanError", () => {
     expect(copy).toContain("la comisión de la transacción con la que podrías recuperar tus USDC");
   });
 
-  // Hallazgo #75 — las tres causas de rechazo de cotización caían en "Algo salió mal. Intentá de
-  // nuevo", que para un monto fuera de rango es un consejo activamente equivocado: intentar de nuevo
-  // con el mismo monto vuelve a fallar exactamente igual.
-  it("#75: mínimo, techo y rechazo genérico tienen copy PROPIO y DISTINTO entre sí", () => {
-    const bajo = humanError("fx_amount_below_minimum");
-    const alto = humanError("fx_amount_above_maximum");
+  // 🔴 TRES `it` DEL HALLAZGO #75 MURIERON EN WKH-332/W4, Y ES LA MITAD VISIBLE DE LA REGRESIÓN DE
+  // AC-4. Eran:
+  //   · "mínimo, techo y rechazo genérico tienen copy PROPIO y DISTINTO entre sí"
+  //   · "el copy del mínimo sale de MIN_SEND_USD, no de un número escrito a mano"
+  //   · "el copy del techo no publica un número que no tenemos"
+  // Los tres asertaban el copy de `fx_amount_below_minimum` / `fx_amount_above_maximum`, que es el
+  // vocabulario PRIVADO de un agente. Llegaba a la app porque el carril punto a punto leía el body de
+  // error del agente; borrado el carril, ningún productor puede emitirlos (`/compose` manda el step
+  // fallado sin `code` y sin `reason`). Un test que siguiera exigiendo ese copy estaría exigiendo una
+  // frase para un input que no puede ocurrir, y el copy correspondiente haría que la pantalla parezca
+  // capaz de nombrar la causa. No se portan: se declaran, y su declaración ejecutable es T-4.1'
+  // (al final de este archivo), que asserta que el copy del corte NO promete distinguir la causa.
+  //
+  // Lo que SÍ sobrevive es el enum de FAMILIA, que es una palabra nuestra y no del agente, y el
+  // candado que lo separa de la caída. Los dos `it` de abajo son eso.
+  it("#75: el rechazo genérico de cotización NO comparte copy con la caída ni con el default", () => {
     const generico = humanError("a2a_quote_rejected");
-    for (const copy of [bajo, alto, generico]) {
-      expect(copy).not.toBe("Algo salió mal. Intentá de nuevo.");
-      // Tampoco comparten mensaje con la caída real, que es lo que decían antes de esto.
-      expect(copy).not.toBe(humanError("a2a_quote_unavailable"));
+    expect(generico).not.toBe("Algo salió mal. Intentá de nuevo.");
+    expect(generico).not.toBe(humanError("a2a_quote_unavailable"));
+    // Y no promete la causa que ya no llega: no nombra el mínimo ni el máximo ni un número.
+    expect(generico).not.toContain("mínimo");
+    expect(generico).not.toContain("máximo");
+    expect(generico).not.toMatch(/\d/);
+  });
+
+  // 🔴 EL CANDADO DE AC-5: el vocabulario privado del agente no vuelve al mapa de copy por la puerta
+  // de atrás. Si alguien reintroduce una rama `fx_*`, estos dos códigos dejan de caer en el default y
+  // esto se pone rojo. Input concreto que lo pone en rojo: volver a agregar
+  // `if (code.includes("fx_amount_below_minimum")) return "…"`.
+  it("AC-5: `fx_*` (vocabulario privado del agente) NO tiene copy propio: cae en el default", () => {
+    for (const code of ["fx_amount_below_minimum", "fx_amount_above_maximum"]) {
+      expect(humanError(code), code).toBe("Algo salió mal. Intentá de nuevo.");
     }
-    expect(new Set([bajo, alto, generico]).size).toBe(3);
-  });
-
-  it("#75: el copy del mínimo sale de MIN_SEND_USD, no de un número escrito a mano", () => {
-    // Si alguien cambia la constante y no el copy, esto sigue verde; si alguien escribe el 5 a mano,
-    // se pone rojo el día que la política cambie. Mismo criterio que el copy del rent en SOL.
-    expect(humanError("fx_amount_below_minimum")).toContain(String(MIN_SEND_USD));
-  });
-
-  // Del techo NO tenemos copia local del número (la autoridad es el agente), así que el copy no
-  // puede inventarlo. Lo que sí tiene que hacer es no prometer uno.
-  it("#75: el copy del techo no publica un número que no tenemos", () => {
-    const copy = humanError("fx_amount_above_maximum");
-    expect(copy).toContain("máximo");
-    expect(copy).not.toMatch(/\d/);
   });
 
   it("CANDADO #75: a2a_quote_unavailable (agente caído) NO se lleva el copy de un rechazo", () => {

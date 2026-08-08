@@ -1,6 +1,11 @@
 /**
- * Vocabulario de los RECHAZOS DE NEGOCIO de los agentes remit-*: las respuestas en que el agente
- * LEYÓ el pedido y lo negó. No son lo mismo que el agente caído, y hasta acá se decían igual.
+ * Vocabulario de los RECHAZOS DE NEGOCIO: las respuestas en que el agente que atendió el paso LEYÓ el
+ * pedido y lo negó. No son lo mismo que el agente caído, y hasta acá se decían igual.
+ *
+ * 🔴 ACÁ SE NOMBRABAN DOS AGENTES POR SU SLUG, Y DESDE WKH-332 NO SE PUEDE (AC-2). Este repo pide
+ * CAPACIDADES: `remittance-fx-quote` y `remittance-payout`. Quién las cumple lo resuelve el gateway
+ * AL EJECUTAR, así que una familia de rechazos que dijera "el agente X rechazó" estaría nombrando a
+ * alguien que puede no haber sido. Las familias se nombran por la capacidad, que es lo que sí sabemos.
  *
  * QUÉ ESTABA MAL, medido en producción el 2026-08-04 contra `/api/a2a/quote`:
  *
@@ -32,30 +37,41 @@
  * perdido, y el enum de familia ya dice la mitad que importaba (rechazo, no caída).
  */
 
-/** Familia: `remit-corridor-fx` rechazó la cotización. Enum que sale al browser SIEMPRE que el
- *  agente conteste un rechazo, con o sin `reason` relayable al lado. */
+/** Familia: quien atendió la capacidad `remittance-fx-quote` rechazó la cotización. Enum que sale al
+ *  browser SIEMPRE que llegue un rechazo de ese leg.
+ *
+ *  ⚠️ HOY NINGÚN PRODUCTOR DE ESTA APP LO EMITE, y eso está escrito acá para que no se lea como un
+ *  camino vivo. Lo emitía la rama punto a punto de `/api/a2a/quote`, que leía el body de error del
+ *  agente; WKH-332/W3 la borró y por `/compose` el step fallado viaja sin `code` y sin `reason`. Se
+ *  conserva porque el valor SÍ puede llegar desde el almacenamiento local: una remesa guardada antes
+ *  de ese deploy tiene este enum en su `failureReason`, y `humanError` le sigue dando copy propio.
+ *  El desenlace estructural está pedido en WKH-335 (`wasiai-a2a`, otro repo). */
 export const QUOTE_REJECTED = "a2a_quote_rejected";
 
-/**
- * Rechazos de `remit-corridor-fx` que SÍ se devuelven al browser.
- *
- * Los dos hablan del monto que mandó quien llama contra una política pública del corredor: el
- * mínimo ya está copiado en el cliente (`MIN_SEND_USD`, `src/domain/remittance.ts`:208) y se
- * muestra en pantalla, así que devolverlo no publica nada nuevo. Del techo no había copia local:
- * antes de esto un envío por encima del máximo era indistinguible de una caída.
- */
-export const RELAYABLE_QUOTE_REJECTIONS: readonly string[] = [
-  "fx_amount_below_minimum",
-  "fx_amount_above_maximum",
-];
+// 🔴 ACÁ VIVÍA `RELAYABLE_QUOTE_REJECTIONS` = ["fx_amount_below_minimum", "fx_amount_above_maximum"],
+// Y SE FUE CON SU ÚNICO CAMINO (WKH-332/W4, AC-5). Era la allow-list de los `reason` del agente de FX
+// que se relayaban al browser, y `fx_*` es su vocabulario PRIVADO. Los dos lectores que tenía —el
+// `readQuoteRejection` de la route y el de `gateways.ts`— filtraban el `reason` que llegaba en el body
+// de error del agente invocado por su slug. Ese carril no existe, así que la lista no filtra nada: no
+// hay `reason` que llegar. Dejarla habría sido una allow-list de un canal cerrado, o sea un control
+// que se lee como activo y no mira nada.
+// ⛔ Reintroducirla exigiría que `/compose` mande el desenlace estructural (WKH-335, otro repo). Hasta
+// entonces, AC-4 está declarado NO CUMPLIDO y el candado que lo deja escrito es T-4.1' en
+// `src/presentation/flow-vm.test.ts`.
 
-/** Familia: `remit-cashout-payout` rechazó crear la orden. Enum que sale al browser SIEMPRE. */
+/** Familia: quien atendió la capacidad `remittance-payout` rechazó crear la orden. Enum que sale al
+ *  browser SIEMPRE. */
 export const PREPARE_REJECTED = "prepare_agent_rejected";
 
 /**
- * Rechazos de `remit-cashout-payout` que SÍ se devuelven al browser. Los tres hablan del pedido de
- * quien llama: su cotización (monto que no coincide / cotización que ya no resuelve) y un campo de
+ * Rechazos del leg de `remittance-payout` que SÍ se devuelven al browser. Los tres hablan del pedido
+ * de quien llama: su cotización (monto que no coincide / cotización que ya no resuelve) y un campo de
  * identidad que su propio request no traía.
+ *
+ * ⚠️ A DIFERENCIA DE LA LISTA DE FX, ESTA SIGUE VIVA, y la asimetría no es un descuido: el agente de
+ * payout contesta su rechazo en el `output` del step (`status: "blocked"` + `reason`), o sea DENTRO
+ * del 200 de `/compose`, que sí llega intacto. El de FX lo contestaba con un status HTTP de error, que
+ * es justamente lo que el gateway colapsa.
  *
  * ⚠️ `kyc_gate_not_passed` NO está en esta lista, y su ausencia es la decisión, no un olvido. Es un
  * VEREDICTO sobre una verificación de identidad, o sea la familia exacta que WKH-205 colapsó del
@@ -106,15 +122,14 @@ export const LOGGABLE_PREPARE_REJECTIONS: readonly string[] = [
   "kyc_gate_not_passed",
 ];
 
-/** El reason tal como se propaga al cliente: el detalle del agente si es relayable, y si no el
- *  enum de familia. NUNCA el string crudo de un reason desconocido. */
-export function relayableRejection(
-  family: string,
-  raw: unknown,
-  relayable: readonly string[],
-): string {
-  return typeof raw === "string" && relayable.includes(raw) ? raw : family;
-}
+// 🔴 ACÁ VIVÍA `relayableRejection(family, raw, relayable)` Y SE FUE CON LA LISTA QUE FILTRABA
+// (WKH-332/W4). Era el helper genérico que decidía si un `reason` del agente se propagaba crudo o
+// colapsado, y su ÚNICO llamador de producción era el `readQuoteRejection` de `/api/a2a/quote`, que se
+// borró en W3. MEDIDO al borrarla: los llamadores que quedaban estaban todos en `*.test.*`, y este
+// repo tiene escrito por qué eso no cuenta — si todos los call-sites de una función están en tests, la
+// función no existe en producción y su verde no habla del código.
+// El equivalente del leg de payout, `prepareRejectionEnum` (abajo), SÍ tiene llamador y se queda: ese
+// `reason` llega dentro del 200 de `/compose`, no en un status HTTP de error.
 
 /**
  * ── "NO HAY QUIÉN" ES UN DESENLACE PROPIO, NI UN RECHAZO NI UNA CAÍDA (WKH-332/AC-13) ────────────

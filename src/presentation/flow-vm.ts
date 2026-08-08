@@ -1,5 +1,4 @@
 import type { Money } from "../domain/money";
-import { MIN_SEND_USD } from "../domain/remittance";
 import type { RemittanceState, RemittanceStatus } from "../domain/remittance";
 import {
   PRINCIPAL_SETTLED_REFUND_MANUAL,
@@ -32,10 +31,23 @@ export function isPayoutDemo(p: string | null | undefined): boolean {
 }
 
 /**
- * Proveniencias de KYC que representan una verificación REAL (allowlist fail-safe, misma dirección
- * que `REAL_PAYOUT_PROVENANCES`). El valor NO se escribe a mano acá: se importa de la MISMA constante
- * que lo produce (`decision.ts`), así que un rename del literal rompe la compilación en vez de dejar
- * esta lista apuntando a un valor que ya nadie emite.
+ * Los ORÍGENES DE VERIFICACIÓN QUE PODEMOS AFIRMAR (allowlist fail-safe, misma dirección que
+ * `REAL_PAYOUT_PROVENANCES`). El valor NO se escribe a mano acá: se importa de la MISMA constante que
+ * lo produce (`decision.ts`), así que un rename del literal rompe la compilación en vez de dejar esta
+ * lista apuntando a un valor que ya nadie emite.
+ *
+ * 🔴 EL RE-ENCUADRE DE WKH-332/W4, Y ES DE SIGNIFICADO, NO DE DIRECCIÓN. Este conjunto se leía como
+ * "qué proveedor usamos", una lista de nuestros integrados. Con el catálogo abierto esa lectura invita
+ * al error exacto que CD-7 prohíbe: pensar que si el gateway eligió a alguien, ese alguien "verifica".
+ * Lo que la lista significa es lo otro: de qué orígenes podemos AFIRMAR en pantalla que hubo una
+ * verificación. Nada más.
+ *
+ * ⛔ PROHIBIDO volverla env (mismo motivo que los pisos de reputación: una env con default ausente es
+ * un control que se apaga solo en un entorno nuevo, sin que falle nada).
+ * ⛔ PROHIBIDO derivar "es real" de que el gateway haya elegido al agente, de su `verified` o de su
+ * reputación: `verified` y `reputation` los AUTO-REPORTA el propio card del agente, y el gateway sólo
+ * los neutraliza cuando el step viaja con `min_reputation` (CD-7). Un desconocido que declara
+ * `verified: true` no verificó a nadie.
  *
  * 🔴 POR QUÉ ES UNA ALLOWLIST Y NO UN `=== "local-fallback"`. Acá vivía la comparación contra el
  * único valor simulado CONOCIDO, o sea que todo lo desconocido se leía como real. Con `DIDIT_ENV=mock`
@@ -555,16 +567,26 @@ export function shortErrorCode(raw: string): string | undefined {
 export function humanError(code: string): string {
   if (code.includes("quote_expired") || code.includes("QUOTE_STALE"))
     return "La tasa cambió. Revisá el nuevo monto.";
-  // Familia rechazo-de-cotización. Los tres caían en el default "Algo salió mal. Intentá de nuevo",
-  // que para un monto fuera de rango es un consejo equivocado: intentar de nuevo con el mismo monto
-  // vuelve a fallar. El texto nombra la causa y la única acción que la arregla.
-  // El mínimo se formatea desde la MISMA constante que usa el guard de la pantalla, así que no
-  // puede quedar desactualizado respecto de lo que el flujo exige. Del techo no hay copia local: el
-  // agente es la autoridad y no publicamos un número que no tenemos.
-  if (code.includes("fx_amount_below_minimum"))
-    return `El monto es menor al mínimo que acepta este corredor. Probá con ${MIN_SEND_USD} dólares o más.`;
-  if (code.includes("fx_amount_above_maximum"))
-    return "El monto supera el máximo que este corredor acepta por envío. Probá con un monto menor.";
+  // 🔴 ACÁ VIVÍAN DOS RAMAS `fx_*` Y SE FUERON EN WKH-332/W4 (AC-5), con la regresión declarada.
+  //
+  // Eran el copy de `fx_amount_below_minimum` ("Probá con N dólares o más") y de
+  // `fx_amount_above_maximum`. `fx_*` es el vocabulario PRIVADO de un agente concreto, y llegaba acá
+  // porque el carril punto a punto leía el body de error del agente y relayaba su `reason`. Ese
+  // carril se borró: por `/compose` el step fallado viaja SIN `code` y SIN `reason`, así que NINGÚN
+  // productor puede emitir esos códigos. Dejar el copy habría hecho que la pantalla PAREZCA capaz de
+  // nombrar la causa de un rechazo de monto cuando AC-4 está declarado NO CUMPLIDO — una promesa que
+  // el código no puede sostener, que es peor que la regresión.
+  //
+  // ⚠️ CONSECUENCIA DECLARADA, no descubierta en producción: una remesa guardada ANTES de este deploy
+  // puede tener `failureReason: "fx_amount_below_minimum"` en el almacenamiento local. Esa remesa
+  // ahora lee el default genérico en vez del copy del mínimo. Es la misma regresión de AC-4 aplicada
+  // al historial, y se acepta por la misma razón: el alternativo es una frase que afirma más que el
+  // dato. El guard de la PANTALLA sigue impidiendo el envío por debajo del mínimo antes de cotizar
+  // (`MIN_SEND_USD`), así que el caso nuevo se corta antes de llegar a un rechazo.
+  //
+  // El enum de FAMILIA sí se queda: `a2a_quote_rejected` es una palabra NUESTRA, no del agente, y es
+  // lo único que una remesa vieja puede traer que siga siendo cierto (el corredor rechazó, sin decir
+  // por qué).
   if (code.includes("a2a_quote_rejected"))
     return "No pudimos cotizar este envío: el corredor lo rechazó. Probá con otro monto.";
   // CD-5: ANTES de includes("kyc") — el string "kyc_pending_unavailable" contiene "kyc".

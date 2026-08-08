@@ -824,7 +824,7 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
   // ESTE es el único leg del money-path que cambia de transporte: el que crea la orden y cuyo
   // depositAddress termina FIRMADO en la DepositAttestation. Por eso la propiedad que más se
   // testea acá no es el happy path, es la NEGATIVA: un fallo del gateway no puede, bajo ninguna
-  // circunstancia, terminar creando la orden por el camino punto-a-punto.
+  // circunstancia, terminar creando la orden por otro camino: desde W3 no hay ninguno.
   describe("PR7 por gateway — el único transporte (WKH-304, borrado del carril en WKH-332)", () => {
     // `GW` y `GW_KEY` viven a nivel de módulo desde W3: el `beforeEach` raíz también los necesita.
     // `AGENT_URL` —la URL del agente con su slug adentro— se BORRÓ con el carril que la usaba: no hay

@@ -112,8 +112,8 @@ describe("GET /api/a2a/plan — el preview de quién atiende la remesa", () => {
     vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "fallback");
     stubCatalog({ "remittance-fx-quote": [card("fx", 0.03)] });
     const off = (await (await GET()).json()) as { steps: Array<{ transport: string }> };
-    // Con la bandera en "fallback" NO corre ningún agente: corren los simuladores del container.
-    // Decir "gateway" ahí sería una pantalla que mide una cosa y afirma otra.
+    // Con la bandera en "fallback" la cotización la arma un simulador del container: decir "gateway"
+    // ahí sería una pantalla que mide una cosa y afirma otra. (La ENTREGA no la decide esta bandera.)
     expect(off.steps.every((s) => s.transport === "demo")).toBe(true);
     // Y el valor del carril borrado no puede volver por ninguna puerta.
     expect(JSON.stringify(off)).not.toContain("punto-a-punto");

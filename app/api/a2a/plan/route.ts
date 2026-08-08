@@ -14,9 +14,9 @@
 //
 // 🔴 LO QUE ESTA RUTA NO HACE, y es la mitad del trabajo: no afirma que estos agentes vayan a correr.
 // El catálogo lista a quien mejor rankea AHORA; el gateway resuelve AL EJECUTAR, y puede tocarle otro.
-// Y con `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` en `"fallback"` no corre ningún agente: corren los
-// simuladores del container. Decir "el gateway elige X" en ese modo sería la clase de pantalla que
-// mide una cosa y afirma otra. Por eso cada paso viaja con su `transport` y la interfaz lo dice.
+// Y con `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` en `"fallback"` la COTIZACIÓN la arma un simulador del
+// container (`FallbackQuoteGateway`, `container.ts:123`). Decir "el gateway elige X" con ese adapter
+// sería la pantalla que mide una cosa y afirma otra. Por eso cada paso viaja con su `transport`.
 //
 // La identidad NO figura como agente A PROPÓSITO: hoy Chaski habla con el proveedor de verificación
 // directo, no a través de un agente del catálogo. Inventar una tercera fila sería fabricar la parte
@@ -81,10 +81,10 @@ interface PlanStep {
    * 🔴 EL DOMINIO CAMBIÓ EN WKH-332/W3, Y SOBREVIVIR ES LA DECISIÓN. El work-item mandaba borrar este
    * campo junto con `runsTodayAgentId`; se cumplió la primera mitad y no la segunda, y el motivo es
    * falsable: `"fallback"` sigue siendo un valor legal de `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`, y con
-   * él NO corre ningún agente — el container cablea `FallbackQuoteGateway`/`FallbackPayoutGateway`,
-   * que son simuladores locales. Sin este campo, en ese modo la tarjeta afirmaría *"Hoy este paso
-   * corre por el gateway, que elige al ejecutar"* mientras corre un mock. Esa es, exactamente, la
-   * pantalla que mide una cosa y afirma otra: el bug que la tarjeta existe para cerrar.
+   * él la COTIZACIÓN la arma un simulador local (`FallbackQuoteGateway`, `container.ts:123`). El otro
+   * adapter que cablea, `FallbackPayoutGateway`, NO ejecuta el payout: su único consumidor de producción
+   * pollea estado (`this.payouts`, `track-remittance.ts:47`). Sin este campo la tarjeta afirmaría *"corre
+   * por el gateway, que elige al ejecutar"* mientras la cotización la da un mock: mide una cosa y afirma otra.
    *
    * `"punto-a-punto"` desapareció con el carril que nombraba. Se deriva del VALOR DE LA BANDERA, y
    * nunca de un nombre de agente: no queda ninguno del que derivarlo.

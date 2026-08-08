@@ -422,7 +422,7 @@ describe("el overlay que retoma la verificación", () => {
 // "Ninguno de estos pasos está atado a una empresa fija" quedaba desmentido por el detalle de cada
 // fila: la que decía "hoy se llama directo a X" ERA un paso cableado a un agente concreto. Esa fila
 // se fue con el carril (WKH-332/W3), y la frase de arriba sigue describiendo el MODELO sin afirmar
-// que hoy los pasos corran por ahí — porque en modo demo no corre ninguno, y eso lo dice cada fila.
+// que hoy los pasos corran por ahí — cada fila lo dice por su cuenta, y en demo la cotización la arma la app.
 //
 // ⚠️ EL `it` CAMBIÓ DE ASSERT, y el motivo va escrito: verificaba la PRESENCIA de "Hoy se llama
 // directo a", que es una de las dos frases que AC-7 ahora prohíbe. Lo que sobrevive del test es su

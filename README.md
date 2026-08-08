@@ -39,11 +39,11 @@ Where that stands today, in present tense:
 
 - **There is no point to point path any more.** This bullet said it was the active one, calling a known
   base URL. WKH-332 deleted that rail: by default the app wires the demo gateways and calls no agent.
-- **By capability is the only transport; what ships off is the wiring, not the routes.**
+- **By capability is the only transport, and this flag does not switch it off.**
   `app/api/a2a/quote/route.ts:91-96` and `app/api/payout/prepare/route.ts:391-395` send a `capability`,
   plus a reputation floor on each leg, and let the gateway choose. `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`
-  picks what the client container wires, not what these routes do: they never read it. The cut that
-  needs no redeploy is dropping the gateway URL or key: both answer 501 with no fetch.
+  picks two client adapters, the quote and the payout STATUS, and neither is the payout that moves money;
+  these routes never read it. Drop the gateway URL or key and both answer 501 with no fetch.
 - **It is fail closed on purpose.** If the gateway does not answer, the operation stops. It never falls
   back to a direct call, because a silent fallback would create the payout order with a different agent
   than the one the rest of the flow was built around.
@@ -315,7 +315,7 @@ in demo mode and moves no funds.
 | Variable | Default | Effect |
 |---|---|---|
 | `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED` | off | Enables the escrow deposit and gas sponsorship |
-| `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` | `fallback` | Two legal values, and nothing else: `fallback` (demo gateways, moves no funds) and `a2a-gateway` (asks the gateway for a capability and it resolves the agent). Any other value throws at startup, `a2a` included: that was the point to point rail and WKH-332 deleted it, so an environment still set to it fails loud instead of quietly wiring the simulators |
+| `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` | `fallback` | Two legal values, and nothing else: `fallback` (demo gateways: a simulated quote and a mocked payout status; this is not the flag that keeps funds still, `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED` is) and `a2a-gateway` (asks the gateway for a capability and it resolves the agent). Any other value throws at startup, `a2a` included: that was the point to point rail and WKH-332 deleted it, so an environment still set to it fails loud instead of quietly wiring the simulators |
 
 The composition root guards are fail loud. Turning settlement on without a mint or without the
 facilitator pubkey stops the app from starting at all. The point is that a configuration mistake shows

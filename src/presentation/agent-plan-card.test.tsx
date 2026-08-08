@@ -15,8 +15,8 @@
 // ningún estado (T-7.1).
 //
 // El otro hallazgo de la misma tarjeta: "Lo que cobran los agentes: 0.06 USDC". Con la bandera en
-// `"fallback"` no se llama a ningún agente (corren los simuladores del container), así que ese precio
-// no se le cobra a nadie; por el gateway sí se paga, y lo paga Chaski con su Agent Key.
+// `"fallback"` la COTIZACIÓN la arma un simulador del container (`FallbackQuoteGateway`,
+// `container.ts:123`), así que ese precio no lo cobra nadie; por el gateway lo paga Chaski con su Agent Key.
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
@@ -156,8 +156,8 @@ describe("T-7.1: la tarjeta ya no puede afirmar que un paso corra por un agente 
 // Decía "Lo que cobran los agentes: 0.06 USDC", y el precio es el de CATÁLOGO de agentes que pueden
 // no ser los que corren. La frase del modo demo cambió de contenido en W3, no sólo de nombre: decía
 // "la app los llama sin ningún pago y contestan igual", que describía el `fetch` liso del carril punto
-// a punto contra un agente REAL. Borrado ese carril, con la bandera en `"fallback"` no se llama a
-// ningún agente, así que la frase vieja pasó a ser falsa.
+// a punto contra un agente REAL. Borrado ese carril, la frase vieja pasó a ser falsa; y la que la
+// reemplazó —*"no llama a ninguno de ellos"*— también, porque esta bandera no decide la ENTREGA (CR2).
 describe("el precio dice qué es y quién lo cobraría", () => {
   it("en modo demo no afirma un cobro, y no afirma que se llame a nadie", async () => {
     await verLaTarjeta([paso({ transport: "demo" })], 0.06);
@@ -165,12 +165,12 @@ describe("el precio dice qué es y quién lo cobraría", () => {
     expect(screen.getByText("Precio publicado en el catálogo")).toBeInTheDocument();
     expect(screen.getByText("0.06 USDC")).toBeInTheDocument(); // el dato se conserva
     expect(
-      screen.getByText(/esta app está en modo demo y no llama a ninguno de ellos/),
+      screen.getByText(/la cotización que estás aprobando la armó la app, no ellos/),
     ).toBeInTheDocument();
     // La frase vieja, que afirmaba un cobro que no ocurre.
     expect(screen.queryByText("Lo que cobran los agentes")).toBeNull();
-    // Y la frase del carril borrado, que afirmaba una llamada real sin pago.
-    expect(document.body.textContent ?? "").not.toContain("los llama sin ningún pago");
+    // Y las dos que se fueron: la del carril borrado, y la que generalizaba a TODOS los agentes (CR2).
+    expect(document.body.textContent ?? "").not.toMatch(/los llama sin ningún pago|no llama a ninguno de ellos/);
   });
 
   // El otro carril SÍ paga, y por eso no puede compartir la frase: ahí el fee lo liquida el gateway
@@ -179,7 +179,7 @@ describe("el precio dice qué es y quién lo cobraría", () => {
     await verLaTarjeta([paso()], 0.06);
 
     expect(screen.getByText(/lo paga Chaski con su Agent Key al ejecutar el paso/)).toBeInTheDocument();
-    expect(document.body.textContent ?? "").not.toContain("modo demo y no llama");
+    expect(document.body.textContent ?? "").not.toContain("la armó la app, no ellos");
   });
 });
 

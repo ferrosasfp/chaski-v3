@@ -169,8 +169,8 @@ antes de que se le pida un documento.
 `src/composition/container.ts` corre primero el guard de residuo y después decide, leyendo el
 entorno, dos cosas y nada más:
 
-- Qué adaptador de cotización y desembolso se usa: el de demo (`fallback`, el default) o el que le pide
-  capacidades al gateway (`a2a-gateway`), vía `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` (`container.ts:114`).
+- Qué adaptador de cotización y de ESTADO del payout se usa: el de demo (`fallback`, el default) o el que
+  le pide capacidades al gateway (`a2a-gateway`), vía `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` (`container.ts:114`).
   Son los dos únicos legales: `a2a`, el carril punto a punto, se borró en WKH-332 y hoy TIRA al arrancar.
 - Si el settlement Solana está encendido, vía `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED` (`container.ts:141`).
 

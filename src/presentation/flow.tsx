@@ -1972,9 +1972,9 @@ function PayoutInProgress({ rem }: { rem: RemittanceState }) {
 // no se veía. Esta tarjeta lo muestra ANTES de aprobar, con los datos del catálogo en vivo.
 //
 // Tres decisiones de honestidad, y las tres tienen su contraparte en `/api/a2a/plan`:
-//  · Se dice POR DÓNDE corre hoy cada paso. Con la bandera en `"fallback"` no corre ningún agente:
-//    corren los simuladores del container. Mostrar la elección del catálogo como si fuera la que va
-//    a correr sería una pantalla que mide una cosa y afirma otra.
+//  · Se dice POR DÓNDE corre hoy cada paso. Con la bandera en `"fallback"` la COTIZACIÓN la arma un
+//    simulador del container (`FallbackQuoteGateway`, `container.ts:123`); la ENTREGA no la decide esta
+//    bandera. Mostrar la elección del catálogo como la que va a correr sería medir una cosa y afirmar otra.
 //  · `verified` se muestra tal cual. Hoy los tres dicen que no. Pintar un tilde sería la mentira
 //    más fácil de acá.
 //  · La identidad NO aparece como agente: hoy es una integración directa con el proveedor. La
@@ -2048,7 +2048,7 @@ function AgentPlanCard() {
           más abajo por el propio detalle de cada fila: la que decía "hoy se llama directo a X" ERA un
           paso cableado a un agente concreto. Esa fila ya no existe (W3), y aun así la frase de arriba
           sigue describiendo el MODELO (pedimos capacidades) sin afirmar que hoy los tres corran por
-          ahí: en modo demo no corre ninguno, y eso lo dice cada fila una por una. */}
+          ahí: cada fila lo dice por su cuenta, y en demo la cotización no la da ningún agente. */}
       <p className="mt-1 text-xs text-stone">
         Chaski pide capacidades, no empresas: el catálogo abierto responde quién las cumple, así que
         esta lista puede cambiar sola. Abajo, por dónde corre hoy cada paso.
@@ -2180,16 +2180,16 @@ function AgentUnavailable({
  * 🔴 LAS DOS FRASES DE ANTES ERAN "gateway" y "punto a punto"; ahora son "gateway" y "demo", y la
  * segunda cambió de contenido, no sólo de nombre. La vieja decía *"la app los llama sin ningún pago y
  * contestan igual"*, que describía el carril punto a punto —un `fetch` liso a un agente real, sin
- * x402 y sin Agent Key—. Ese carril se borró en W3, así que la frase pasó a ser falsa: con la bandera
- * en `"fallback"` no se llama a NINGÚN agente, corren los simuladores del container. Una sola frase
- * para los dos casos tendría que ser falsa en uno.
- *
- * Con el gateway el fee del agente lo liquida el gateway contra la Agent Key de Chaski
- * (`gateway-client.ts`, header `x-a2a-key`), o sea que ahí sí se paga, sólo que no lo paga la persona
- * ni sale de lo que envía.
+ * x402 y sin Agent Key—. Ese carril se borró en W3 y la frase se fue con él.
+ * 🔴 Y LA QUE LA REEMPLAZÓ TAMBIÉN ERA FALSA (CR2/BLQ-ALTO-1). Decía *"no llama a ninguno de ellos"*, y esta
+ * bandera cablea la cotización y el ESTADO del payout (`FallbackQuoteGateway`, `container.ts:123`), NO la entrega:
+ * esa la cablea `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED` (`solanaSettleOn`, `container.ts:159`). Con el settle en `true`
+ * y esta en `"fallback"` el envío llama igual a `/api/payout/prepare`, y ese POST compone contra el gateway: 200
+ * y un solo fetch a `/compose` (T-1.2, MEDIDO: `app/api/payout/prepare/route.test.ts:1296`). Por eso la frase habla
+ * SÓLO de la cotización. Con el gateway el fee lo liquida el gateway contra la Agent Key de Chaski (header `x-a2a-key`): ahí sí se paga, y no lo paga la persona.
  */
 const AGENT_PRICE_NOTE_DEMO =
-  "Es lo que estos agentes publican en el catálogo, no lo que se cobra en este envío: esta app está en modo demo y no llama a ninguno de ellos.";
+  "Es lo que estos agentes publican en el catálogo, no lo que se cobra en este envío: no se suma a lo que enviás, y la cotización que estás aprobando la armó la app, no ellos.";
 const AGENT_PRICE_NOTE_GATEWAY =
   "Es lo que estos agentes publican en el catálogo. Por el carril del gateway ese fee lo paga Chaski con su Agent Key al ejecutar el paso, y no se suma a lo que enviás.";
 
@@ -2204,11 +2204,11 @@ const AGENT_PRICE_NOTE_GATEWAY =
  * · `gateway`: no se llama a ningún slug, se pide la capacidad y el gateway resuelve AL EJECUTAR. El
  *   agente que el catálogo lista primero hoy puede no ser el que corra, así que la línea no lo
  *   nombra: sería inventar una certeza.
- * · `demo`: la bandera está en `"fallback"` y este paso NO lo corre ningún agente, lo corre un
- *   simulador local del propio navegador. Decir "corre por el gateway" acá sería falso, y por eso
- *   `transport` sobrevivió al borrado en vez de morir con `runsTodayAgentId`.
- *   Input que lo pone en rojo: `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` sin setear y esta línea diciendo
- *   que el paso corre por el gateway.
+ * · `demo`: la bandera está en `"fallback"`, así que la COTIZACIÓN la arma un simulador local del navegador
+ *   (`FallbackQuoteGateway`, `container.ts:123`); decir "corre por el gateway" acá sería falso, y por eso
+ *   `transport` sobrevivió al borrado. Input que lo pone en rojo: la bandera sin setear y esta línea diciendo
+ *   que el paso corre por el gateway. ⚠️ RESIDUAL DECLARADO (CR2): la bandera NO decide la ENTREGA, así que
+ *   con el settle en `true` la fila del payout dice de más. Medido: `app/api/payout/prepare/route.test.ts:1296`.
  */
 function AgentRunsToday({ transport }: { transport: "gateway" | "demo" }) {
   if (transport === "gateway") {

@@ -2091,7 +2091,7 @@ function AgentPlanCard() {
         <span className="tabular text-sm font-semibold">{plan.totalUsdc} USDC</span>
       </div>
       <p className="mt-1 text-xs text-stone">
-        {plan.steps[0]?.transport === "demo"
+        {plan.steps.find((s) => s.label === FX_STEP_LABEL)?.transport === "demo"
           ? AGENT_PRICE_NOTE_DEMO
           : AGENT_PRICE_NOTE_GATEWAY}
       </p>
@@ -2217,6 +2217,25 @@ function AgentUnavailable({
  * (`this.solana`, `../application/use-cases/confirm-and-send.ts:336`). Cerrarlo exige separar la nota por
  * leg, que es una decisión de UX nueva.
  */
+/**
+ * La llave del leg de la COTIZACIÓN, y por qué es el `label` y no la capacidad (AR/MNR-2).
+ *
+ * 🔴 ACÁ HABÍA UN ÍNDICE POSICIONAL (`plan.steps[0]`) para elegir una nota cuya semántica es *"el leg de
+ * la cotización"*. Hoy el orden del server está clavado —el array es un literal de dos elementos y
+ * `route.test.ts` asserta el `label` de cada índice—, pero esta tarjeta FABRICA sus arrays en los tests,
+ * así que ningún test verifica que la suposición del cliente coincida con el orden del server: la
+ * fragilidad no la cubría nadie. Se elige por la llave semántica que el payload ya trae.
+ *
+ * ⚠️ Y ES EL `label`, NO LA `capability`, y eso es medible: la capacidad es ENV-OVERRIDEABLE
+ * (`route.ts:255` es `process.env.WASIAI_A2A_FX_CAPABILITY ?? FX_QUOTE_CAPABILITY`, y
+ * `.env.example:174` documenta ese override como soportado). Un `find` por `"remittance-fx-quote"`
+ * devolvería `undefined` en cualquier entorno con el override puesto y la tarjeta caería SIEMPRE en la
+ * nota del gateway, en silencio. El `label` es un literal de la route (`route.ts:276`), no sale de
+ * ninguna env. Input que pone en rojo el índice posicional: un plan con los pasos al revés
+ * (T-R1e en `agent-plan-card.test.tsx`).
+ */
+const FX_STEP_LABEL = "Cotizar el cambio";
+
 const AGENT_PRICE_NOTE_DEMO =
   "Es lo que estos agentes publican en el catálogo, no lo que se cobra en este envío: no se suma a lo que enviás, y la cotización que estás aprobando la armó la app, no ellos.";
 const AGENT_PRICE_NOTE_GATEWAY =

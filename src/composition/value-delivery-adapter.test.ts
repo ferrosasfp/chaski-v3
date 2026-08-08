@@ -20,7 +20,12 @@ describe("resolveValueDeliveryAdapter — los valores que PASAN", () => {
   // valor sigue existiendo en entornos configurados antes del flip, y lo que hay que custodiar es
   // que ahí falle ruidoso en vez de reinterpretarse como "fallback".
 
-  it("la env AUSENTE (undefined) cae al default documentado en .env.example:144 → 'fallback'", () => {
+  // ⚠️ La cita vive en el NOMBRE de un `it`, no en un comentario, así que `citas-ancladas.test.ts` no la
+  // ve (`esComentario()` la salta) y `.env.example` tampoco lo escanea nadie: la única defensa es abrir
+  // la línea. Estaba en `:144`, que en el árbol previo a WKH-336 ya era off-by-one dentro del mismo
+  // párrafo, y esa HU la degradó a apuntar a la documentación de OTRA bandera (AR/BLQ-BAJO-1). Medida
+  // con `sed -n '155p' .env.example` sobre este árbol.
+  it("la env AUSENTE (undefined) cae al default documentado en .env.example:155 → 'fallback'", () => {
     expect(resolveValueDeliveryAdapter(undefined)).toBe("fallback");
   });
 });

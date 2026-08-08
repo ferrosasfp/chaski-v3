@@ -296,7 +296,7 @@ demo y no mueve fondos.
 
 | Variable | Default | Efecto |
 |---|---|---|
-| `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED` | apagado | Enciende el depósito al escrow y el patrocinio de gas |
+| `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED` | apagado | Tres efectos, no uno. Enciende el depósito al escrow y el patrocinio de gas, y desde WKH-336 además decide lo que la tarjeta del preview AFIRMA sobre la entrega: la fila "Entregar el dinero" deriva su transporte de esta bandera y no de `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`. Con el adapter en `fallback` y esta en `"true"` las dos filas dicen cosas distintas, y está bien: el payout sí pasa por el gateway. Apagada, la entrega no corre y tampoco se simula: falla cerrado con `settlement_unavailable` |
 | `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` | `fallback` | Dos valores legales y ninguno más: `fallback` (gateways demo: cotización simulada y ESTADO del payout mockeado; no es esta bandera la que deja quieta la plata, es `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED`) y `a2a-gateway` (le pide una capacidad al gateway y el gateway resuelve el agente). Cualquier otro valor TIRA al arrancar, incluido `a2a`: era el carril punto a punto y WKH-332 lo borró, así que un entorno que quedó en ese valor falla ruidoso en vez de cablear los simuladores en silencio |
 
 Los guards del composition root son fail loud. Encender el settlement sin mint o sin la pubkey del

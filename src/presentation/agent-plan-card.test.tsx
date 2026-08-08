@@ -16,9 +16,9 @@
 //
 // El otro hallazgo de la misma tarjeta: "Lo que cobran los agentes: 0.06 USDC".
 //
-// ⚠️ ESE NÚMERO ES LA SUMA DE LOS DOS PASOS, y por eso ninguna frase sobre él puede hablar de un solo
-// leg (WKH-336/AR/BLQ-MED-1). Acá decía *"ese precio no lo cobra nadie"* apoyándose SÓLO en el adapter
-// en `"fallback"`, y es falso para la mitad del número: `totalUsdc` suma los dos steps
+// ⚠️ ESE NÚMERO SUMA LOS STEPS CON PRECIO PUBLICADO, y por eso ninguna frase sobre él puede hablar de un
+// solo leg (WKH-336/AR/BLQ-MED-1). Acá decía *"ese precio no lo cobra nadie"* apoyándose SÓLO en el
+// adapter en `"fallback"`, y es falso para parte del número: es `withPrice` el que filtra y suma
 // (`route.ts:294-295`) y cada leg deriva su transporte de SU bandera. Con `adapter="fallback"` +
 // `settle="true"` el leg de ENTREGA viaja en `"gateway"` y ahí el fee del payout SÍ se paga, contra la
 // Agent Key de Chaski. Lo que sí es cierto en los cuatro cuadrantes: **no se le cobra a la persona, no
@@ -334,7 +334,7 @@ describe("el precio dice qué es y quién lo cobraría", () => {
     // La tarjeta sí se renderizó y el dato del precio se conserva: no es un test que pase por DOM vacío.
     expect(screen.getByText("Precio publicado en el catálogo")).toBeInTheDocument();
     expect(screen.getByText("0.06 USDC")).toBeInTheDocument();
-    // Y ninguna de las dos notas afirma nada.
+    // Y ninguna de las TRES notas afirma nada (WKH-338 agregó la acotada; los dos asserts la alcanzan).
     expect(document.body.textContent ?? "").not.toMatch(LO_PAGA_CHASKI);
     expect(document.body.textContent ?? "").not.toMatch(LA_ARMO_LA_APP);
   });
@@ -377,7 +377,12 @@ describe("el precio dice qué es y quién lo cobraría", () => {
     // No-vacuidad: si el selector alguna vez capturara otro nodo, o si la nota quedara vacía, esto lo
     // dice en vez de dejar pasar una comparación entre dos strings vacíos. El fragmento elegido está en
     // las TRES notas y fuera de la cláusula que cambia, así que no se rompe con el fix.
-    expect(t).toContain("no se suma a lo que enviás");
+    // ⚠️ EL FRAGMENTO PERDIÓ EL "no" INICIAL EN AR/MNR-3, y no es un descuido: la nota acotada pasó a
+    // decir *"y ninguno de estos precios se suma a lo que enviás"*, así que *"no se suma a lo que
+    // enviás"* ya no está en las tres. Lo que se conserva es la parte común, que sigue estando fuera de
+    // toda cláusula que esta familia de HUs toque. No debilita nada: quien aísla el nodo es el selector
+    // de arriba más el `toHaveLength(1)`; esto sólo contesta "¿el nodo dice algo?".
+    expect(t).toContain("se suma a lo que enviás");
     return t;
   }
 
@@ -445,7 +450,11 @@ describe("el precio dice qué es y quién lo cobraría", () => {
     {
       caso: "2 · (gateway, demo) · adapter real + settle apagado",
       steps: [fx("gateway"), payout("demo")],
-      requiere: "el fee de la cotización lo paga Chaski con su Agent Key al ejecutar el paso",
+      // 🔴 EL `requiere` DE ESTE CUADRANTE INCLUYE LA ÚLTIMA CLÁUSULA A PROPÓSITO (AR/MNR-3). Sin ella,
+      // volver a *"…, y no se suma a lo que enviás"* —acotando la GARANTÍA junto con la ATRIBUCIÓN—
+      // pasaría en verde, y eso pierde información cierta para las dos patas en los cuatro cuadrantes.
+      requiere:
+        "el fee de la cotización lo paga Chaski con su Agent Key al ejecutar el paso, y ninguno de estos precios se suma a lo que enviás",
       // Lo que el defecto hacía: atribuir el pago del TOTAL cuando la mitad no la paga nadie.
       prohibe: "ese fee lo paga Chaski",
     },
@@ -463,11 +472,49 @@ describe("el precio dice qué es y quién lo cobraría", () => {
     },
   ];
 
-  // Prohibidas en los CUATRO cuadrantes. Las cuatro primeras meten la nota a hablar de la pata que no
-  // garantiza nada (CD-8, y contradirían la fila de `AgentRunsToday`); las dos últimas afirmarían QUÉ
-  // SUMA el número (CD-9), y eso es falsable: `totalUsdc` suma sólo los legs con precio conocido
-  // (`withPrice`, `../../app/api/a2a/plan/route.ts:294`), y un leg puede venir con `priceUsdc: null`.
-  const PROHIBIDAS_EN_TODOS = ["nadie", "no corre", "se simula", "no lo paga", "sumando", "los dos pasos", "—"];
+  // 🔴 ESTA LISTA **ES** I4 + I5 + I6 DEL SDD, ENTERAS, Y SE ACTUALIZA CON ELLAS. No es una selección.
+  //
+  // Acá había SIETE de las doce, y las cinco que faltaban incluían las TRES que DEFINEN CD-8 —`entrega`,
+  // `Entregar`, `payout`—, o sea la restricción a la que el SDD le dedica una sección entera
+  // (AR/BLQ-MED-2). MEDIDO con la lista corta: agregarle a la nota acotada
+  // ` El fee de la entrega no está incluido en este total.` daba **1643 PASS** en verde, y esa frase
+  // viola CD-8 **y es falsa** (el total sí lo incluye); agregarle ` El número es la suma de las dos
+  // patas.` también daba verde, y es falsa con un leg en `priceUsdc: null`. O sea que la regresión que
+  // esta HU vino a cerrar podía volver **sin un solo rojo**. Una guarda que enumera a mano un
+  // subconjunto de su propia especificación no es una guarda: es una muestra.
+  //
+  // Por grupo, y por qué cada palabra está:
+  //   · **I4 / CD-8** — `entrega`, `Entregar`, `payout`, `nadie`, `no corre`, `se simula`, `no lo paga`:
+  //     cualquiera de las siete mete la nota a hablar de la pata que NO garantiza nada, y eso alcanza
+  //     para prohibirla. `no corre` además CONTRADIRÍA a la fila de `AgentRunsToday`, que en ese mismo
+  //     cuadrante dice que el paso *"se simula"* (H1 de WKH-336, residual de otra HU y no de ésta). Y
+  //     `se simula` está por lo contrario: no contradiría a la fila, la REPETIRÍA, adoptando en la nota
+  //     una imprecisión que esta HU declaró y no cerró.
+  //   · **I5** — `—`: el em dash es regla absoluta del repo. Redundante con el `it.each` de arriba a
+  //     propósito: ahí se mide sobre el body, acá sobre el nodo.
+  //   · **I6 / CD-9** — `sumando`, `la suma de`, `los dos pasos`, `ambos pasos`: afirmarían QUÉ SUMA el
+  //     número, y eso es falsable. Lo suma (`withPrice`, `../../app/api/a2a/plan/route.ts:294`), que
+  //     filtra por precio conocido, y un leg puede venir con `priceUsdc: null`.
+  //
+  // ⚠️ Si I4 o I6 crecen, **esta lista crece con ellas en el mismo commit**. Sin esta línea escrita, la
+  // próxima ampliación del SDD vuelve a dejar la guarda corta y en verde, que es exactamente lo que pasó.
+  const PROHIBIDAS_EN_TODOS = [
+    // I4 / CD-8
+    "entrega",
+    "Entregar",
+    "payout",
+    "nadie",
+    "no corre",
+    "se simula",
+    "no lo paga",
+    // I5
+    "—",
+    // I6 / CD-9
+    "sumando",
+    "la suma de",
+    "los dos pasos",
+    "ambos pasos",
+  ];
 
   it.each(CUADRANTES)(
     "T-338.3 · cuadrante $caso: la nota afirma lo de su pata y nada de la otra",

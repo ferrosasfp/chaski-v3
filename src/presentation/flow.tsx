@@ -2090,11 +2090,11 @@ function AgentPlanCard() {
         <span className="text-xs text-stone">Precio publicado en el catálogo</span>
         <span className="tabular text-sm font-semibold">{plan.totalUsdc} USDC</span>
       </div>
-      {/* La nota se elige leyendo LOS DOS legs, porque habla del número y el número cubre a los dos.
-          La regla es "sólo se afirma lo que la pata garantiza": si la ENTREGA no garantiza nada, la
-          atribución se acota nombrando la pata de la COTIZACIÓN, y de la otra no se dice nada. Si el leg
-          de la cotización no se puede identificar, no se afirma NADA y no se renderiza nota: ver el
-          docblock de `AGENT_PRICE_NOTE_*`. */}
+      {/* La nota se elige leyendo LOS DOS legs, porque habla del número, y el número suma los steps con
+          precio publicado. La regla es "sólo se afirma lo que la pata garantiza": si la ENTREGA no
+          garantiza nada, la atribución se acota nombrando la pata de la COTIZACIÓN, y de la otra no se
+          dice nada. Si el leg de la cotización no se puede identificar, no se afirma NADA y no se
+          renderiza nota: ver el docblock de `AGENT_PRICE_NOTE_*`. */}
       {(() => {
         const cotizacion = plan.steps.find((s) => s.label === FX_STEP_LABEL);
         if (cotizacion === undefined) return null;
@@ -2242,7 +2242,7 @@ function AgentUnavailable({
  * agregar *"y el fee de la entrega no lo paga nadie, porque ese paso no corre"*. Es verdad
  * (`this.solana`, `../application/use-cases/confirm-and-send.ts:336`) y está PROHIBIDO escribirlo: en
  * ese mismo cuadrante, tres renglones más arriba en la MISMA tarjeta, la fila de la entrega dice
- * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:2397`). Ese *"lo simula"* es impreciso
+ * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:2409`). Ese *"lo simula"* es impreciso
  * —con el settle apagado la entrega no se simula, se corta— pero es **H1 de WKH-336**, residual de otra
  * HU que exige un TERCER valor de `transport` con su propia frase, y WKH-338 no lo cierra. Si la nota
  * dijera *"la entrega no corre"* mientras la fila dice *"lo simula"*, la tarjeta se contradiría a sí
@@ -2311,8 +2311,8 @@ const FX_STEP_LABEL = "Cotizar el cambio";
  * La llave del leg de ENTREGA, y por qué hace falta una segunda (WKH-338).
  *
  * La nota de precio dejó de poder elegirse mirando un solo leg: su cláusula sobre quién paga el fee
- * habla del NÚMERO, y el número cubre a las dos patas. Así que para saber qué se puede afirmar hay que
- * poder identificar las dos, y esta es la llave de la segunda.
+ * habla del NÚMERO, y el número suma los steps con precio publicado, o sea que cubre a las DOS patas
+ * sólo cuando las dos publican precio. Para afirmar algo hay que identificarlas, y ésta es la segunda.
  *
  * ⚠️ ES EL `label` Y NO LA `capability`, por la misma razón medible que `FX_STEP_LABEL`: la capacidad es
  * ENV-OVERRIDEABLE (`payoutCapability`, `../../app/api/a2a/plan/route.ts:256` es
@@ -2349,8 +2349,20 @@ const AGENT_PRICE_NOTE_DEMO =
   "Es lo que estos agentes publican en el catálogo: no se suma a lo que enviás, y la cotización que estás aprobando la armó la app, no ellos.";
 const AGENT_PRICE_NOTE_GATEWAY =
   "Es lo que estos agentes publican en el catálogo. Por el carril del gateway ese fee lo paga Chaski con su Agent Key al ejecutar el paso, y no se suma a lo que enviás.";
+// 🔴 LA ÚLTIMA CLÁUSULA DICE "ninguno de estos precios" Y NO "no", Y ESO ES EL ARREGLO DE AR/MNR-3.
+// Decía *"…, y no se suma a lo que enviás"*, y al acotar la atribución a la pata de la cotización el
+// sujeto de ESA garantía se acotó con ella: se leía como que sólo el fee de la cotización no se le suma
+// a la persona. La garantía es más ancha y es **cierta en los cuatro cuadrantes para las DOS patas** (lo
+// dice el encabezado de `agent-plan-card.test.tsx`: *"no se le cobra a la persona, no se suma a lo que
+// envía"*), así que acotarla era perder información cierta y verificable. Acotar la ATRIBUCIÓN no obliga
+// a acotar la GARANTÍA: son dos afirmaciones distintas sobre el mismo número.
+// ⚠️ Y el sujeto es "estos precios", en plural, y NO "esto": *"nada de esto"* deja el antecedente
+// ambiguo entre el fee de la cotización —el sujeto inmediatamente anterior— y los precios de catálogo,
+// que es justo la ambigüedad que hizo perder la información. "estos precios" lo ata al sujeto plural de
+// la primera oración (*"estos agentes publican"*). Y no afirma QUÉ suma el número (CD-9): habla de los
+// precios que se muestran, no de la composición del total. Lo custodia T-338.3 en el cuadrante 2.
 const AGENT_PRICE_NOTE_GATEWAY_SOLO_FX =
-  "Es lo que estos agentes publican en el catálogo. Por el carril del gateway, el fee de la cotización lo paga Chaski con su Agent Key al ejecutar el paso, y no se suma a lo que enviás.";
+  "Es lo que estos agentes publican en el catálogo. Por el carril del gateway, el fee de la cotización lo paga Chaski con su Agent Key al ejecutar el paso, y ninguno de estos precios se suma a lo que enviás.";
 
 /**
  * La línea que dice POR DÓNDE corre hoy este paso. Dos casos, y ninguno nombra a un agente.

@@ -313,10 +313,10 @@ describe("GET /api/a2a/plan — descubre con las MISMAS constraints que la ejecu
 
   // 🔴 T-336.6 (estático) — UNA COPY DE USUARIO SOSTIENE UNA DECISIÓN DE LÓGICA, Y NADA LAS ATABA.
   //
-  // `flow.tsx` elige entre las dos notas de precio buscando el paso de la cotización POR SU `label`
-  // (`FX_STEP_LABEL`), porque la `capability` sale de una env overrideable y no sirve de llave. O sea
-  // que un string de copy EN ESPAÑOL decide qué afirma la pantalla sobre quién paga el fee. Las dos
-  // copias del literal viven en archivos distintos y **nada las ataba**.
+  // `flow.tsx` elige entre sus TRES notas buscando DOS pasos POR SU `label` —`FX_STEP_LABEL` y
+  // `PAYOUT_STEP_LABEL`—, porque la `capability` sale de una env overrideable y no sirve de llave. O sea
+  // que dos strings de copy EN ESPAÑOL deciden qué afirma la pantalla sobre quién paga el fee, y las copias
+  // de cada uno viven en archivos distintos y **nada las ataba**. (Decía "las dos notas" y "el paso": era cierto en `2000a73` y WKH-338 lo falsificó. CR/BLQ-MED-2.)
   //
   // ⚠️ EL ROJO SILENCIOSO, MEDIDO (CR/BLQ-MED-1, reproducido en este árbol antes de escribir esto):
   // renombrar el `label` de la route a `"Cotizar el tipo de cambio"` da 5 rojos, y los 5 caen ACÁ

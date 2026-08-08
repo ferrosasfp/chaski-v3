@@ -313,7 +313,7 @@ describe("el precio dice qué es y quién lo cobraría", () => {
   //
   // 🔴 LA RAMA QUE NO CUBRÍA NADIE. `paso()` pone el `label` por default, y los SEIS casos T-R1a..f lo
   // incluyen, así que ningún test entraba nunca al `find(...) === undefined`. Y esa rama caía en
-  // `AGENT_PRICE_NOTE_GATEWAY` —la afirmación MÁS FUERTE de las dos, la que dice que el fee se paga—
+  // `AGENT_PRICE_NOTE_GATEWAY` —la afirmación MÁS FUERTE de todas, la que dice que el fee se paga—
   // justo cuando no se sabe de qué leg se habla. Al revés del criterio del archivo: `no-consultado` y el
   // campo ausente NO afirman nada sobre el catálogo (docblock de `AgentUnavailable`).
   //
@@ -323,7 +323,7 @@ describe("el precio dice qué es y quién lo cobraría", () => {
   //
   // Lo que mata: volver a `…?.transport === "demo" ? DEMO : GATEWAY` sin la guarda ⇒ se renderiza la
   // nota del gateway y el segundo assert se pone rojo. MEDIDO.
-  it("T-R1g: si ningún paso trae el label de la cotización, no se renderiza NINGUNA de las dos notas", async () => {
+  it("T-R1g: si ningún paso trae el label de la cotización, no se renderiza NINGUNA de las tres notas", async () => {
     await verLaTarjeta(
       [
         paso({ label: "Cotizar el tipo de cambio", transport: "demo" }), // el label renombrado
@@ -375,14 +375,29 @@ describe("el precio dice qué es y quién lo cobraría", () => {
     const [nodo] = nodos;
     const t = nodo?.textContent ?? "";
     // No-vacuidad: si el selector alguna vez capturara otro nodo, o si la nota quedara vacía, esto lo
-    // dice en vez de dejar pasar una comparación entre dos strings vacíos. El fragmento elegido está en
-    // las TRES notas y fuera de la cláusula que cambia, así que no se rompe con el fix.
-    // ⚠️ EL FRAGMENTO PERDIÓ EL "no" INICIAL EN AR/MNR-3, y no es un descuido: la nota acotada pasó a
-    // decir *"y ninguno de estos precios se suma a lo que enviás"*, así que *"no se suma a lo que
-    // enviás"* ya no está en las tres. Lo que se conserva es la parte común, que sigue estando fuera de
-    // toda cláusula que esta familia de HUs toque. No debilita nada: quien aísla el nodo es el selector
-    // de arriba más el `toHaveLength(1)`; esto sólo contesta "¿el nodo dice algo?".
-    expect(t).toContain("se suma a lo que enviás");
+    // dice en vez de dejar pasar una comparación entre dos strings vacíos.
+    //
+    // 🔴 ACÁ HUBO UN ASSERT DEBILITADO CON UN COMENTARIO AL LADO QUE DECÍA QUE NO DEBILITABA NADA
+    // (CR/BLQ-MED-1). El fragmento era `"no se suma a lo que enviás"`; AR/MNR-3 cambió la cola de la
+    // nota acotada a *"y ninguno de estos precios se suma a lo que enviás"*, el assert se puso rojo, y
+    // lo resolví borrándole el `"no"` para que pasara: quedó `"se suma a lo que enviás"`, que es
+    // subcadena de las dos formas y por lo tanto **no distingue la garantía de su inverso**. Al lado
+    // escribí dos cosas FALSAS: que el fragmento estaba *"fuera de la cláusula que cambia"* —es su
+    // COLA, por eso se había puesto rojo— y que *"no debilita nada"*.
+    // MEDIDO por el CR, mutante línea-neutro sobre el literal: invertir la garantía de la nota GATEWAY
+    // (`y no se suma…` ⇒ `y se suma…`) daba **3 rojos** antes de mi cambio y **102 files / 1643 PASS en
+    // VERDE** después; ídem sobre la nota DEMO. O sea: la nota del cuadrante de producción podía afirmar
+    // el INVERSO EXACTO de una garantía de dinero y la suite entera callaba. Un assert que se relaja
+    // para que pase deja de ser un assert; y el comentario que dice que no se relajó es peor que el
+    // relajamiento, porque apaga la revisión que lo habría encontrado.
+    //
+    // El fragmento de ahora es el ARRANQUE de la nota, que es lo único común a las tres y que NO es
+    // parte de ninguna cláusula que esta familia de HUs toque (la de atribución ni la de garantía). Y
+    // NO se reusa `publican en el catálogo`, que ya es el ancla del selector de arriba: un assert que
+    // repite la condición del selector no puede fallar cuando el selector acierta, así que no mediría
+    // nada. **La garantía NO se verifica acá**: la verifica `garantia` en cada uno de los cuatro
+    // cuadrantes de T-338.3, con su forma exacta y negada.
+    expect(t).toContain("Es lo que estos agentes");
     return t;
   }
 
@@ -438,13 +453,34 @@ describe("el precio dice qué es y quién lo cobraría", () => {
   // ⚠️ LOS CUATRO ESTÁN, NO SÓLO EL NUEVO: una nota que dijera SIEMPRE la más débil también arreglaría el
   // cuadrante 2, y sería una pérdida de información cierta en el cuadrante 1, el de las dos banderas
   // encendidas, donde Chaski sí paga los dos fees.
-  const CUADRANTES: Array<{ caso: string; steps: PlanStep[]; requiere: string; prohibe: string }> = [
+  // 🔴 `garantia` ES UN CAMPO APARTE DE `requiere`, Y ES LA CLÁUSULA DE DINERO (CR/BLQ-MED-1).
+  //
+  // La última cláusula de las tres notas dice que el número **NO** se le suma a lo que la persona envía.
+  // Es la única afirmación de la tarjeta que habla de la plata de la persona, y es cierta en los cuatro
+  // cuadrantes para las dos patas. **No la cubría ningún `requiere`** en los cuadrantes 1, 3 y 4: los
+  // tres pedían sólo la atribución o el *"la armó la app"*. MEDIDO: invertirla (`no se suma` ⇒
+  // `se suma`) daba **102 files / 1643 PASS en verde**, tanto en la nota GATEWAY como en la DEMO.
+  //
+  // Va en un campo propio y no pegada al `requiere` por dos razones: (a) su forma **difiere entre notas**
+  // —la acotada dice *"ninguno de estos precios se suma"* por AR/MNR-3 y las otras dos *"no se suma"*—,
+  // así que un fragmento único no puede cubrir las tres; (b) que sea un campo obligatorio del tipo
+  // significa que **una nota nueva no se puede agregar a esta tabla sin declarar su garantía**, que es
+  // exactamente el agujero por el que pasó la nota acotada.
+  const CUADRANTES: Array<{
+    caso: string;
+    steps: PlanStep[];
+    requiere: string;
+    garantia: string;
+    prohibe: string;
+  }> = [
     {
       caso: "1 · (gateway, gateway) · adapter real + settle encendido",
       steps: [fx("gateway"), payout("gateway")],
       // Acá "ese fee" ES el total y es VERDADERO: con los dos legs por el gateway Chaski paga los dos
       // fees. Por eso esta nota no se acota: acotarla perdería información cierta y verificable.
       requiere: "ese fee lo paga Chaski con su Agent Key al ejecutar el paso",
+      // El cuadrante de producción. Z1 es invertir esta cláusula acá.
+      garantia: "y no se suma a lo que enviás.",
       prohibe: "la cotización que estás aprobando la armó la app, no ellos",
     },
     {
@@ -455,6 +491,8 @@ describe("el precio dice qué es y quién lo cobraría", () => {
       // pasaría en verde, y eso pierde información cierta para las dos patas en los cuatro cuadrantes.
       requiere:
         "el fee de la cotización lo paga Chaski con su Agent Key al ejecutar el paso, y ninguno de estos precios se suma a lo que enviás",
+      // La forma acotada de la garantía, con su sujeto plural explícito.
+      garantia: "y ninguno de estos precios se suma a lo que enviás.",
       // Lo que el defecto hacía: atribuir el pago del TOTAL cuando la mitad no la paga nadie.
       prohibe: "ese fee lo paga Chaski",
     },
@@ -462,12 +500,15 @@ describe("el precio dice qué es y quién lo cobraría", () => {
       caso: "3 · (demo, gateway) · adapter en fallback + settle encendido",
       steps: [fx("demo"), payout("gateway")],
       requiere: "la cotización que estás aprobando la armó la app, no ellos",
+      // En la nota DEMO la garantía va pegada a los dos puntos, no a un "y". Z2 es invertirla acá.
+      garantia: "catálogo: no se suma a lo que enviás,",
       prohibe: "lo paga Chaski",
     },
     {
       caso: "4 · (demo, demo) · adapter en fallback + settle apagado",
       steps: [fx("demo"), payout("demo")],
       requiere: "la cotización que estás aprobando la armó la app, no ellos",
+      garantia: "catálogo: no se suma a lo que enviás,",
       prohibe: "lo paga Chaski",
     },
   ];
@@ -495,9 +536,27 @@ describe("el precio dice qué es y quién lo cobraría", () => {
   //   · **I6 / CD-9** — `sumando`, `la suma de`, `los dos pasos`, `ambos pasos`: afirmarían QUÉ SUMA el
   //     número, y eso es falsable. Lo suma (`withPrice`, `../../app/api/a2a/plan/route.ts:294`), que
   //     filtra por precio conocido, y un leg puede venir con `priceUsdc: null`.
+  //   · **I6, ampliación medida (CR/MNR-1)** — `cubre a las`, `cubre a los`, `cubre las dos`: es el
+  //     MISMO argumento de I6 escrito sin la palabra "suma". No es una paráfrasis hipotética: es la
+  //     formulación LITERAL que el AR acabó de borrar de `flow.tsx` por falsa, en DOS sitios
+  //     (*"el número cubre a los dos"* y *"el número cubre a las dos patas"*), y que esta guarda dejaba
+  //     pasar. Estaba prohibiendo `payout` —una palabra que nunca apareció en una nota— y permitiendo la
+  //     que ya apareció falsa dos veces el mismo día.
   //
   // ⚠️ Si I4 o I6 crecen, **esta lista crece con ellas en el mismo commit**. Sin esta línea escrita, la
   // próxima ampliación del SDD vuelve a dejar la guarda corta y en verde, que es exactamente lo que pasó.
+  //
+  // 🔴 EL TECHO DE ESTA GUARDA, DECLARADO Y NO TAPADO (CR/MNR-1, TD-GUARDA-LITERAL). Esto compara
+  // SUBCADENAS, así que **no puede cubrir paráfrasis**, y enumerarlas no escala. MEDIDO por el CR:
+  // agregarle a la nota `" El segundo paso lo ejecuta la propia app."` viola CD-8 y **sobrevive en
+  // verde**, porque no contiene ninguno de los literales de la lista. No se cierra acá, y no porque sea
+  // difícil: cerrarlo es capacidad nueva.
+  // ⚠️ **Y la salida futura ya existe fuera de la suite, medida**: el grupo `que-cubre-el-numero` de
+  // `doc/sdd/049-wkh-338-nota-de-precio-atribucion-parcial-del-fee/barrido-familia.cjs` agrupa **por
+  // ARGUMENTO y no por frase**, y el CR verificó que SÍ cae sobre `" El número cubre a las dos patas."`.
+  // O sea que el criterio está escrito; lo que falta es cablearlo a la suite, y eso es otra HU. Hasta
+  // entonces ese barrido **se invoca a mano** y no corre en `npm test`: no te apoyes en el verde de acá
+  // para afirmar que la nota no habla de la otra pata.
   const PROHIBIDAS_EN_TODOS = [
     // I4 / CD-8
     "entrega",
@@ -514,17 +573,29 @@ describe("el precio dice qué es y quién lo cobraría", () => {
     "la suma de",
     "los dos pasos",
     "ambos pasos",
+    // I6, la ampliación de CR/MNR-1: el mismo argumento con el verbo "cubrir" en vez de "sumar".
+    "cubre a las",
+    "cubre a los",
+    "cubre las dos",
   ];
 
+  // 🔴 EL TÍTULO DICE LO QUE ESTE `it` MIDE, Y ANTES NO (CR/MNR-1). Decía *"la nota afirma lo de su pata
+  // y nada de la otra"*, que es la INTENCIÓN (CD-8) y no el mecanismo: lo que mide es que la nota traiga
+  // su atribución y su garantía, y que no contenga 15 literales. *"Nada de la otra"* es más de lo que
+  // puede verificar —el techo está declarado arriba, con el mutante que sobrevive— y un título que
+  // promete más que su cuerpo hace que el próximo lector no busque el agujero.
   it.each(CUADRANTES)(
-    "T-338.3 · cuadrante $caso: la nota afirma lo de su pata y nada de la otra",
-    async ({ steps, requiere, prohibe }) => {
+    "T-338.3 · cuadrante $caso: la nota trae su atribución y su garantía, y ninguno de los literales prohibidos",
+    async ({ steps, requiere, garantia, prohibe }) => {
       await verLaTarjeta(steps, 0.06);
       // 🔴 SOBRE EL NODO, NUNCA SOBRE EL BODY. `"nadie"` aparece LEGÍTIMAMENTE en otro nodo de esta misma
       // tarjeta (*"El catálogo no ofrece a nadie…"*, asserteado más abajo en este archivo), así que un
       // `not.toContain("nadie")` sobre `document.body` sería un FALSO ROJO.
       const nota = textoDeLaNota();
       expect(nota).toContain(requiere);
+      // La cláusula de dinero, con su forma NEGADA y exacta. Es lo único de la tarjeta que habla de la
+      // plata de la persona, y es el assert que faltaba en los cuadrantes 1, 3 y 4 (CR/BLQ-MED-1).
+      expect(nota).toContain(garantia);
       expect(nota).not.toContain(prohibe);
       for (const prohibida of PROHIBIDAS_EN_TODOS) expect(nota).not.toContain(prohibida);
     },

@@ -2250,8 +2250,8 @@ function AgentUnavailable({
  * afirma"*, en `honest-copy.test.tsx:432`. Es el mismo criterio que este archivo ya escribió dos veces:
  * se dice menos y no se inventa la distinción.
  *
- * ⚠️ LO QUE TAMPOCO SE CERRÓ: el singular. Las tres notas dicen *"al ejecutar el paso"*, y con las dos
- * banderas encendidas son DOS los pasos cuyos fees Chaski paga. Es una imprecisión heredada de
+ * ⚠️ LO QUE TAMPOCO SE CERRÓ: el singular. Las DOS notas que atribuyen el pago dicen *"al ejecutar el
+ * paso"*, y con las dos banderas encendidas Chaski paga DOS. (La del demo no atribuye.) Heredada de
  * WKH-336 y queda DECLARADA: tocar ese fragmento rompería los ocho asserts de
  * `agent-plan-card.test.tsx` que lo matchean, o sea reduciría la cobertura para arreglar la redacción.
  *

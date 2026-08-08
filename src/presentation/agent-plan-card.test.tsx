@@ -16,9 +16,9 @@
 //
 // El otro hallazgo de la misma tarjeta: "Lo que cobran los agentes: 0.06 USDC".
 //
-// ⚠️ ESE NÚMERO ES LA SUMA DE LOS DOS PASOS, y por eso ninguna frase sobre él puede hablar de un solo
-// leg (WKH-336/AR/BLQ-MED-1). Acá decía *"ese precio no lo cobra nadie"* apoyándose SÓLO en el adapter
-// en `"fallback"`, y es falso para la mitad del número: `totalUsdc` suma los dos steps
+// ⚠️ ESE NÚMERO SUMA LOS STEPS CON PRECIO PUBLICADO, y por eso ninguna frase sobre él puede hablar de un
+// solo leg (WKH-336/AR/BLQ-MED-1). Acá decía *"ese precio no lo cobra nadie"* apoyándose SÓLO en el
+// adapter en `"fallback"`, y es falso para parte del número: es `withPrice` el que filtra y suma
 // (`route.ts:294-295`) y cada leg deriva su transporte de SU bandera. Con `adapter="fallback"` +
 // `settle="true"` el leg de ENTREGA viaja en `"gateway"` y ahí el fee del payout SÍ se paga, contra la
 // Agent Key de Chaski. Lo que sí es cierto en los cuatro cuadrantes: **no se le cobra a la persona, no
@@ -162,8 +162,24 @@ describe("T-7.1: la tarjeta ya no puede afirmar que un paso corra por un agente 
     expect(document.body.textContent ?? "").not.toContain("corre por el gateway");
   });
 
-  it("no mete un em dash", async () => {
-    await verLaTarjeta([paso()], 0.03);
+  // 🔴 ESTE `it` MONTABA UN SOLO PLANO, Y LA REGLA ES ABSOLUTA (WKH-338/W2.5). Montaba `[paso()]`, o sea
+  // el cuadrante (gateway, gateway), y desde que la nota de precio se elige por los DOS legs hay TRES
+  // notas posibles: con un solo montaje las otras dos no las barría nadie y un em dash entraba en ellas
+  // sin que nada se pusiera rojo. Acá el `document.body` SÍ sirve, y es la excepción: es un assert de
+  // AUSENCIA global, no una comparación entre dos copys.
+  it.each([
+    ["gateway", "gateway"],
+    ["gateway", "demo"],
+    ["demo", "gateway"],
+    ["demo", "demo"],
+  ] as const)("no mete un em dash (cotización=%s, entrega=%s)", async (transporteFx, transporteEntrega) => {
+    await verLaTarjeta(
+      [
+        paso({ transport: transporteFx }),
+        paso({ capability: "remittance-payout", label: "Entregar el dinero", transport: transporteEntrega }),
+      ],
+      0.06,
+    );
     expect(document.body.textContent ?? "").not.toContain("—");
   });
 });
@@ -297,7 +313,7 @@ describe("el precio dice qué es y quién lo cobraría", () => {
   //
   // 🔴 LA RAMA QUE NO CUBRÍA NADIE. `paso()` pone el `label` por default, y los SEIS casos T-R1a..f lo
   // incluyen, así que ningún test entraba nunca al `find(...) === undefined`. Y esa rama caía en
-  // `AGENT_PRICE_NOTE_GATEWAY` —la afirmación MÁS FUERTE de las dos, la que dice que el fee se paga—
+  // `AGENT_PRICE_NOTE_GATEWAY` —la afirmación MÁS FUERTE de todas, la que dice que el fee se paga—
   // justo cuando no se sabe de qué leg se habla. Al revés del criterio del archivo: `no-consultado` y el
   // campo ausente NO afirman nada sobre el catálogo (docblock de `AgentUnavailable`).
   //
@@ -307,7 +323,7 @@ describe("el precio dice qué es y quién lo cobraría", () => {
   //
   // Lo que mata: volver a `…?.transport === "demo" ? DEMO : GATEWAY` sin la guarda ⇒ se renderiza la
   // nota del gateway y el segundo assert se pone rojo. MEDIDO.
-  it("T-R1g: si ningún paso trae el label de la cotización, no se renderiza NINGUNA de las dos notas", async () => {
+  it("T-R1g: si ningún paso trae el label de la cotización, no se renderiza NINGUNA de las tres notas", async () => {
     await verLaTarjeta(
       [
         paso({ label: "Cotizar el tipo de cambio", transport: "demo" }), // el label renombrado
@@ -318,9 +334,290 @@ describe("el precio dice qué es y quién lo cobraría", () => {
     // La tarjeta sí se renderizó y el dato del precio se conserva: no es un test que pase por DOM vacío.
     expect(screen.getByText("Precio publicado en el catálogo")).toBeInTheDocument();
     expect(screen.getByText("0.06 USDC")).toBeInTheDocument();
-    // Y ninguna de las dos notas afirma nada.
+    // Y ninguna de las TRES notas afirma nada (WKH-338 agregó la acotada; los dos asserts la alcanzan).
     expect(document.body.textContent ?? "").not.toMatch(LO_PAGA_CHASKI);
     expect(document.body.textContent ?? "").not.toMatch(LA_ARMO_LA_APP);
+  });
+
+  // ── T-338 · WKH-338 · la nota se elige leyendo LOS DOS legs, y sólo afirma lo que su pata garantiza ──
+  //
+  // 🔴 EL DEFECTO QUE ESTOS CASOS MIDEN. T-R1 dejó el selector mirando SÓLO el leg de la cotización, y
+  // eso cerró la cláusula sobre quién armó la cotización pero no la otra: la nota GATEWAY dice que
+  // *"ese fee"* —el total, o sea la suma de los steps que publican precio (`withPrice`,
+  // `../../app/api/a2a/plan/route.ts:294`), que con las dos patas con precio son las dos— lo paga
+  // Chaski. En el cuadrante
+  // `adapter="a2a-gateway"` + settle apagado la mitad de ese número es el fee de un paso que no se va a
+  // ejecutar: el envío falla cerrado antes de intentarlo (`this.solana`,
+  // `../application/use-cases/confirm-and-send.ts:336`). Ahora la nota se acota NOMBRANDO la pata de la
+  // cotización, y de la entrega no dice nada.
+  //
+  // ⚠️ DE LA ENTREGA NO DICE NADA A PROPÓSITO, Y NO ES UN OLVIDO. Decir *"la entrega no corre"* sería
+  // cierto y contradiría, tres renglones más arriba en la MISMA tarjeta, la fila que renderiza
+  // `AgentRunsToday` con *"esta app está en modo demo y lo simula"*. Esa imprecisión es H1 de WKH-336,
+  // de otra HU, y hay un `it` cuyo eje literal es que la tarjeta no se contradiga a sí misma
+  // (`honest-copy.test.tsx:432`). De la pata que no garantiza nada, la nota no dice nada.
+
+  // 🔴 POR QUÉ EL HELPER AÍSLA EL NODO Y NO MIRA EL `document.body`, Y ES LA TRAMPA DE ESTA HU. Los
+  // cuadrantes (gateway, gateway) y (gateway, demo) YA DIFIEREN en el body, hoy, sin ningún fix: la fila
+  // de la ENTREGA dice *"corre por el gateway, que elige al ejecutar"* en el primero y *"esta app está
+  // en modo demo y lo simula"* en el segundo, y las dos están asserteadas en este archivo (`:151` y
+  // `:276`). Un T-338.1 escrito sobre `document.body.textContent` daría VERDE HOY —los bodies difieren
+  // por la FILA, no por la NOTA— y sería decorativo para siempre: no podría detectar ni el defecto ni su
+  // regresión. Por eso todo lo que compara notas compara ESTE nodo.
+  function textoDeLaNota(): string {
+    const nodos = screen.getAllByText(/publican en el catálogo/);
+    // La tarjeta se monta en DOS pantallas (`AgentPlanCard`, `flow.tsx:902` en `review` y `flow.tsx:948`
+    // en `confirm`) y `verLaTarjeta` para en `review`, así que hoy hay UN nodo. Un `cleanup()` olvidado
+    // entre dos renders del mismo `it` deja DOS, y sin este assert se compararía la nota del render
+    // ANTERIOR y el test daría verde por el DOM equivocado. Es el riesgo que este archivo ya declara en
+    // el `describe` de abajo (CD-17).
+    expect(nodos).toHaveLength(1);
+    const [nodo] = nodos;
+    const t = nodo?.textContent ?? "";
+    // No-vacuidad: si el selector alguna vez capturara otro nodo, o si la nota quedara vacía, esto lo
+    // dice en vez de dejar pasar una comparación entre dos strings vacíos.
+    //
+    // 🔴 ACÁ HUBO UN ASSERT DEBILITADO CON UN COMENTARIO AL LADO QUE DECÍA QUE NO DEBILITABA NADA
+    // (CR/BLQ-MED-1). El fragmento era `"no se suma a lo que enviás"`; AR/MNR-3 cambió la cola de la
+    // nota acotada a *"y ninguno de estos precios se suma a lo que enviás"*, el assert se puso rojo, y
+    // lo resolví borrándole el `"no"` para que pasara: quedó `"se suma a lo que enviás"`, que es
+    // subcadena de las dos formas y por lo tanto **no distingue la garantía de su inverso**. Al lado
+    // escribí dos cosas FALSAS: que el fragmento estaba *"fuera de la cláusula que cambia"* —es su
+    // COLA, por eso se había puesto rojo— y que *"no debilita nada"*.
+    // MEDIDO por el CR, mutante línea-neutro sobre el literal: invertir la garantía de la nota GATEWAY
+    // (`y no se suma…` ⇒ `y se suma…`) daba **3 rojos** antes de mi cambio y **102 files / 1643 PASS en
+    // VERDE** después; ídem sobre la nota DEMO. O sea: la nota del cuadrante de producción podía afirmar
+    // el INVERSO EXACTO de una garantía de dinero y la suite entera callaba. Un assert que se relaja
+    // para que pase deja de ser un assert; y el comentario que dice que no se relajó es peor que el
+    // relajamiento, porque apaga la revisión que lo habría encontrado.
+    //
+    // El fragmento de ahora es el ARRANQUE de la nota, que es lo único común a las tres y que NO es
+    // parte de ninguna cláusula que esta familia de HUs toque (la de atribución ni la de garantía). Y
+    // NO se reusa `publican en el catálogo`, que ya es el ancla del selector de arriba: un assert que
+    // repite la condición del selector no puede fallar cuando el selector acierta, así que no mediría
+    // nada. **La garantía NO se verifica acá**: la verifica `garantia` en cada uno de los cuatro
+    // cuadrantes de T-338.3, con su forma exacta y negada.
+    expect(t).toContain("Es lo que estos agentes");
+    return t;
+  }
+
+  // T-338.1 · AC-1 — los dos cuadrantes del gateway NO pueden compartir la nota.
+  //
+  // Molde: render → capturar → `cleanup()` → render → capturar → comparar, el mismo del `it` que mata a
+  // M4 más abajo en este archivo. Lo que mata: que el selector vuelva a mirar sólo
+  // `cotizacion.transport` (M1, o sea el árbol previo a esta HU) ⇒ los dos textos son el MISMO string.
+  it("T-338.1: con la entrega por el gateway y con la entrega apagada la nota NO es la misma", async () => {
+    await verLaTarjeta([fx("gateway"), payout("gateway")], 0.06);
+    const conEntregaPorGateway = textoDeLaNota();
+    cleanup();
+    await verLaTarjeta([fx("gateway"), payout("demo")], 0.06);
+    const conEntregaApagada = textoDeLaNota();
+
+    expect(conEntregaApagada).not.toBe(conEntregaPorGateway);
+    // Y el test no puede pasar por haber ROTO la atribución en vez de acotarla: las DOS siguen diciendo
+    // quién paga. Es la mitad de AC-3 que se puede afirmar acá sin tocar los asserts de T-R1a..g.
+    expect(conEntregaPorGateway).toContain("lo paga Chaski con su Agent Key al ejecutar el paso");
+    expect(conEntregaApagada).toContain("lo paga Chaski con su Agent Key al ejecutar el paso");
+  });
+
+  // T-338.5 · AC-4 (extensión) — la DIRECCIÓN del default cuando el leg de entrega no se identifica.
+  //
+  // El leg de entrega EXISTE en el plan, pero con un `label` que la llave del cliente no matchea, así
+  // que el `find` devuelve `undefined`: es el cuadrante degenerado por drift del literal. Lo que mata:
+  // escribir `entrega?.transport !== "demo"` en vez de `=== "gateway"` (M2). Con `undefined` ese `!==`
+  // es `true` y la tarjeta caería en la afirmación MÁS FUERTE —que el fee del total se paga— justo
+  // cuando no se sabe nada de la entrega. Cuando falta información la nota se DEBILITA, nunca se
+  // fortalece.
+  //
+  // ⚠️ Las dos notas de referencia se CAPTURAN renderizando, no se copian a mano: un literal copiado se
+  // queda viejo el día que la copy cambie y el test se compararía consigo mismo.
+  it("T-338.5: si el leg de la entrega trae otro `label`, la nota es la MÁS DÉBIL y no la del total", async () => {
+    await verLaTarjeta([fx("gateway"), payout("gateway")], 0.06);
+    const cuadrante1 = textoDeLaNota();
+    cleanup();
+    await verLaTarjeta([fx("gateway"), payout("demo")], 0.06);
+    const cuadrante2 = textoDeLaNota();
+    cleanup();
+    await verLaTarjeta(
+      [fx("gateway"), paso({ capability: "remittance-payout", label: "Entregar la plata", transport: "gateway" })],
+      0.06,
+    );
+    const sinPoderIdentificarLaEntrega = textoDeLaNota();
+
+    expect(sinPoderIdentificarLaEntrega).not.toBe(cuadrante1);
+    expect(sinPoderIdentificarLaEntrega).toBe(cuadrante2);
+  });
+
+  // T-338.3 · AC-2 — los CUATRO cuadrantes, cada uno con lo que su nota tiene que decir y lo que no.
+  //
+  // ⚠️ LOS CUATRO ESTÁN, NO SÓLO EL NUEVO: una nota que dijera SIEMPRE la más débil también arreglaría el
+  // cuadrante 2, y sería una pérdida de información cierta en el cuadrante 1, el de las dos banderas
+  // encendidas, donde Chaski sí paga los dos fees.
+  // 🔴 `garantia` ES UN CAMPO APARTE DE `requiere`, Y ES LA CLÁUSULA DE DINERO (CR/BLQ-MED-1).
+  //
+  // La última cláusula de las tres notas dice que el número **NO** se le suma a lo que la persona envía.
+  // Es la única afirmación de la tarjeta que habla de la plata de la persona, y es cierta en los cuatro
+  // cuadrantes para las dos patas. **No la cubría ningún `requiere`** en los cuadrantes 1, 3 y 4: los
+  // tres pedían sólo la atribución o el *"la armó la app"*. MEDIDO: invertirla (`no se suma` ⇒
+  // `se suma`) daba **102 files / 1643 PASS en verde**, tanto en la nota GATEWAY como en la DEMO.
+  //
+  // Va en un campo propio y no pegada al `requiere` por dos razones: (a) su forma **difiere entre notas**
+  // —la acotada dice *"ninguno de estos precios se suma"* por AR/MNR-3 y las otras dos *"no se suma"*—,
+  // así que un fragmento único no puede cubrir las tres; (b) que sea un campo obligatorio del tipo
+  // significa que **una nota nueva no se puede agregar a esta tabla sin declarar su garantía**, que es
+  // exactamente el agujero por el que pasó la nota acotada.
+  const CUADRANTES: Array<{
+    caso: string;
+    steps: PlanStep[];
+    requiere: string;
+    garantia: string;
+    prohibe: string;
+  }> = [
+    {
+      caso: "1 · (gateway, gateway) · adapter real + settle encendido",
+      steps: [fx("gateway"), payout("gateway")],
+      // Acá "ese fee" ES el total y es VERDADERO: con los dos legs por el gateway Chaski paga los dos
+      // fees. Por eso esta nota no se acota: acotarla perdería información cierta y verificable.
+      requiere: "ese fee lo paga Chaski con su Agent Key al ejecutar el paso",
+      // El cuadrante de producción. Z1 es invertir esta cláusula acá.
+      garantia: "y no se suma a lo que enviás.",
+      prohibe: "la cotización que estás aprobando la armó la app, no ellos",
+    },
+    {
+      caso: "2 · (gateway, demo) · adapter real + settle apagado",
+      steps: [fx("gateway"), payout("demo")],
+      // 🔴 EL `requiere` DE ESTE CUADRANTE INCLUYE LA ÚLTIMA CLÁUSULA A PROPÓSITO (AR/MNR-3). Sin ella,
+      // volver a *"…, y no se suma a lo que enviás"* —acotando la GARANTÍA junto con la ATRIBUCIÓN—
+      // pasaría en verde, y eso pierde información cierta para las dos patas en los cuatro cuadrantes.
+      requiere:
+        "el fee de la cotización lo paga Chaski con su Agent Key al ejecutar el paso, y ninguno de estos precios se suma a lo que enviás",
+      // La forma acotada de la garantía, con su sujeto plural explícito.
+      garantia: "y ninguno de estos precios se suma a lo que enviás.",
+      // Lo que el defecto hacía: atribuir el pago del TOTAL cuando la mitad no la paga nadie.
+      prohibe: "ese fee lo paga Chaski",
+    },
+    {
+      caso: "3 · (demo, gateway) · adapter en fallback + settle encendido",
+      steps: [fx("demo"), payout("gateway")],
+      requiere: "la cotización que estás aprobando la armó la app, no ellos",
+      // En la nota DEMO la garantía va pegada a los dos puntos, no a un "y". Z2 es invertirla acá.
+      garantia: "catálogo: no se suma a lo que enviás,",
+      prohibe: "lo paga Chaski",
+    },
+    {
+      caso: "4 · (demo, demo) · adapter en fallback + settle apagado",
+      steps: [fx("demo"), payout("demo")],
+      requiere: "la cotización que estás aprobando la armó la app, no ellos",
+      garantia: "catálogo: no se suma a lo que enviás,",
+      prohibe: "lo paga Chaski",
+    },
+  ];
+
+  // 🔴 ESTA LISTA **ES** I4 + I5 + I6 DEL SDD, ENTERAS, Y SE ACTUALIZA CON ELLAS. No es una selección.
+  //
+  // Acá había SIETE de las doce, y las cinco que faltaban incluían las TRES que DEFINEN CD-8 —`entrega`,
+  // `Entregar`, `payout`—, o sea la restricción a la que el SDD le dedica una sección entera
+  // (AR/BLQ-MED-2). MEDIDO con la lista corta: agregarle a la nota acotada
+  // ` El fee de la entrega no está incluido en este total.` daba **1643 PASS** en verde, y esa frase
+  // viola CD-8 **y es falsa** (el total sí lo incluye); agregarle ` El número es la suma de las dos
+  // patas.` también daba verde, y es falsa con un leg en `priceUsdc: null`. O sea que la regresión que
+  // esta HU vino a cerrar podía volver **sin un solo rojo**. Una guarda que enumera a mano un
+  // subconjunto de su propia especificación no es una guarda: es una muestra.
+  //
+  // Por grupo, y por qué cada palabra está:
+  //   · **I4 / CD-8** — `entrega`, `Entregar`, `payout`, `nadie`, `no corre`, `se simula`, `no lo paga`:
+  //     cualquiera de las siete mete la nota a hablar de la pata que NO garantiza nada, y eso alcanza
+  //     para prohibirla. `no corre` además CONTRADIRÍA a la fila de `AgentRunsToday`, que en ese mismo
+  //     cuadrante dice que el paso *"se simula"* (H1 de WKH-336, residual de otra HU y no de ésta). Y
+  //     `se simula` está por lo contrario: no contradiría a la fila, la REPETIRÍA, adoptando en la nota
+  //     una imprecisión que esta HU declaró y no cerró.
+  //   · **I5** — `—`: el em dash es regla absoluta del repo. Redundante con el `it.each` de arriba a
+  //     propósito: ahí se mide sobre el body, acá sobre el nodo.
+  //   · **I6 / CD-9** — `sumando`, `la suma de`, `los dos pasos`, `ambos pasos`: afirmarían QUÉ SUMA el
+  //     número, y eso es falsable. Lo suma (`withPrice`, `../../app/api/a2a/plan/route.ts:294`), que
+  //     filtra por precio conocido, y un leg puede venir con `priceUsdc: null`.
+  //   · **I6, ampliación medida (CR/MNR-1)** — `cubre a las`, `cubre a los`, `cubre las dos`: es el
+  //     MISMO argumento de I6 escrito sin la palabra "suma". No es una paráfrasis hipotética: es la
+  //     formulación LITERAL que el AR acabó de borrar de `flow.tsx` por falsa, en DOS sitios
+  //     (*"el número cubre a los dos"* y *"el número cubre a las dos patas"*), y que esta guarda dejaba
+  //     pasar. Estaba prohibiendo `payout` —una palabra que nunca apareció en una nota— y permitiendo la
+  //     que ya apareció falsa dos veces el mismo día.
+  //
+  // ⚠️ Si I4 o I6 crecen, **esta lista crece con ellas en el mismo commit**. Sin esta línea escrita, la
+  // próxima ampliación del SDD vuelve a dejar la guarda corta y en verde, que es exactamente lo que pasó.
+  //
+  // 🔴 EL TECHO DE ESTA GUARDA, DECLARADO Y NO TAPADO (CR/MNR-1, TD-GUARDA-LITERAL). Esto compara
+  // SUBCADENAS, así que **no puede cubrir paráfrasis**, y enumerarlas no escala. MEDIDO por el CR:
+  // agregarle a la nota `" El segundo paso lo ejecuta la propia app."` viola CD-8 y **sobrevive en
+  // verde**, porque no contiene ninguno de los literales de la lista. No se cierra acá, y no porque sea
+  // difícil: cerrarlo es capacidad nueva.
+  // ⚠️ **Y la salida futura ya existe fuera de la suite, medida**: el grupo `que-cubre-el-numero` de
+  // `doc/sdd/049-wkh-338-nota-de-precio-atribucion-parcial-del-fee/barrido-familia.cjs` agrupa **por
+  // ARGUMENTO y no por frase**, y el CR verificó que SÍ cae sobre `" El número cubre a las dos patas."`.
+  // O sea que el criterio está escrito; lo que falta es cablearlo a la suite, y eso es otra HU. Hasta
+  // entonces ese barrido **se invoca a mano** y no corre en `npm test`: no te apoyes en el verde de acá
+  // para afirmar que la nota no habla de la otra pata.
+  const PROHIBIDAS_EN_TODOS = [
+    // I4 / CD-8
+    "entrega",
+    "Entregar",
+    "payout",
+    "nadie",
+    "no corre",
+    "se simula",
+    "no lo paga",
+    // I5
+    "—",
+    // I6 / CD-9
+    "sumando",
+    "la suma de",
+    "los dos pasos",
+    "ambos pasos",
+    // I6, la ampliación de CR/MNR-1: el mismo argumento con el verbo "cubrir" en vez de "sumar".
+    "cubre a las",
+    "cubre a los",
+    "cubre las dos",
+  ];
+
+  // 🔴 EL TÍTULO DICE LO QUE ESTE `it` MIDE, Y ANTES NO (CR/MNR-1). Decía *"la nota afirma lo de su pata
+  // y nada de la otra"*, que es la INTENCIÓN (CD-8) y no el mecanismo: lo que mide es que la nota traiga
+  // su atribución y su garantía, y que no contenga 15 literales. *"Nada de la otra"* es más de lo que
+  // puede verificar —el techo está declarado arriba, con el mutante que sobrevive— y un título que
+  // promete más que su cuerpo hace que el próximo lector no busque el agujero.
+  it.each(CUADRANTES)(
+    "T-338.3 · cuadrante $caso: la nota trae su atribución y su garantía, y ninguno de los literales prohibidos",
+    async ({ steps, requiere, garantia, prohibe }) => {
+      await verLaTarjeta(steps, 0.06);
+      // 🔴 SOBRE EL NODO, NUNCA SOBRE EL BODY. `"nadie"` aparece LEGÍTIMAMENTE en otro nodo de esta misma
+      // tarjeta (*"El catálogo no ofrece a nadie…"*, asserteado más abajo en este archivo), así que un
+      // `not.toContain("nadie")` sobre `document.body` sería un FALSO ROJO.
+      const nota = textoDeLaNota();
+      expect(nota).toContain(requiere);
+      // La cláusula de dinero, con su forma NEGADA y exacta. Es lo único de la tarjeta que habla de la
+      // plata de la persona, y es el assert que faltaba en los cuadrantes 1, 3 y 4 (CR/BLQ-MED-1).
+      expect(nota).toContain(garantia);
+      expect(nota).not.toContain(prohibe);
+      for (const prohibida of PROHIBIDAS_EN_TODOS) expect(nota).not.toContain(prohibida);
+    },
+  );
+
+  // T-338.4 · H-1 de WKH-338 · la cláusula ELIDIDA de la nota DEMO.
+  //
+  // 🔴 QUÉ SE BORRÓ Y POR QUÉ, MEDIDO. La nota DEMO decía *"Es lo que estos agentes publican en el
+  // catálogo, **no lo que se cobra en este envío**: …"*. Esa cláusula del medio es la variante ELIDIDA
+  // del claim que el AR de WKH-336 ya refutó una vez —*"nadie lo cobra"*, acotado entonces a *"la persona
+  // no lo paga"*—: no dice quién no cobra, así que se lee como que el número no se cobra a nadie. Y esta
+  // nota se muestra en el cuadrante (demo, gateway) —adapter en `"fallback"`, settle encendido—, donde el
+  // fee de la ENTREGA sí se cobra, contra la Agent Key de Chaski (`solanaSettleOn`,
+  // `../composition/container.ts:141`). La cláusula que sigue —*"no se suma a lo que enviás"*— ya dice lo
+  // verdadero y acotado a la persona, así que la de arriba no aporta y puede leerse falsa: se borra, no
+  // se reescribe.
+  //
+  // Lo que mata (M7): conservar la cláusula ⇒ este `it` en rojo. Y la supresión NO toca
+  // `"la armó la app, no ellos"`, así que ninguno de los asserts de `LA_ARMO_LA_APP` se mueve.
+  it("T-338.4: la nota del demo no afirma que el número no se cobre en este envío", async () => {
+    await verLaTarjeta([fx("demo"), payout("gateway")], 0.06);
+    expect(textoDeLaNota()).not.toContain("no lo que se cobra en este envío");
   });
 });
 

@@ -13,7 +13,7 @@ import type {
   RemittanceState,
 } from "../domain/remittance";
 
-// ── Quote (agente remit-corridor-fx) ─────────────────────────────────────────
+// ── Quote (capacidad `remittance-fx-quote`) ──────────────────────────────────
 export interface QuoteRequest {
   amountUsd: number;
   method: PayoutMethod;
@@ -80,7 +80,7 @@ export interface KycPendingStore {
   clear(): Promise<void>;
 }
 
-// ── Payout / value-delivery (agente remit-cashout-payout + partner) ──────────
+// ── Payout / value-delivery (capacidad `remittance-payout` + partner) ────────
 export interface PayoutSubmit {
   quoteId: string;
   amountUsd: number;
@@ -282,7 +282,7 @@ export interface SolanaPayoutPrepareGateway {
           attestation: string;
           payoutId: string;
           provenance: string;
-          /** QUIÉN dio este `beneficiary`. Ausente ⟹ el transporte no lo informó (punto-a-punto). */
+          /** QUIÉN dio este `beneficiary`. Ausente ⟹ el gateway no lo dijo de forma legible. */
           agent?: AgentRef;
         };
       }

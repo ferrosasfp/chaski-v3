@@ -7,7 +7,7 @@
 //     `escrow_recovery_unverified` sin PoP),
 //   · `refundEscrow()` acepta el id ausente y lo resuelve contra ese endpoint sondeando hasta
 //     `MAX_RECOVERY_CANDIDATES` PDAs (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:286`),
-//   · el gateway está cableado en el composition root (`solanaRefund`, `container.ts:156`).
+//   · el gateway está cableado en el composition root (`solanaRefund`, `container.ts:169`).
 // Y la interfaz llamaba únicamente a `recoverEscrowFunds`, que arranca con `repo.get(remittanceId)` y
 // tira `remittance_not_found` (`recover-escrow-funds.ts`:49-50). O sea: quien borró los datos del
 // navegador, o entra desde otro dispositivo, no tenía NINGÚN camino hacia sus USDC.

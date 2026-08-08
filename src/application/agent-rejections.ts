@@ -1,6 +1,11 @@
 /**
- * Vocabulario de los RECHAZOS DE NEGOCIO de los agentes remit-*: las respuestas en que el agente
- * LEYÓ el pedido y lo negó. No son lo mismo que el agente caído, y hasta acá se decían igual.
+ * Vocabulario de los RECHAZOS DE NEGOCIO: las respuestas en que el agente que atendió el paso LEYÓ el
+ * pedido y lo negó. No son lo mismo que el agente caído, y hasta acá se decían igual.
+ *
+ * 🔴 ACÁ SE NOMBRABAN DOS AGENTES POR SU SLUG, Y DESDE WKH-332 NO SE PUEDE (AC-2). Este repo pide
+ * CAPACIDADES: `remittance-fx-quote` y `remittance-payout`. Quién las cumple lo resuelve el gateway
+ * AL EJECUTAR, así que una familia de rechazos que dijera "el agente X rechazó" estaría nombrando a
+ * alguien que puede no haber sido. Las familias se nombran por la capacidad, que es lo que sí sabemos.
  *
  * QUÉ ESTABA MAL, medido en producción el 2026-08-04 contra `/api/a2a/quote`:
  *
@@ -32,30 +37,41 @@
  * perdido, y el enum de familia ya dice la mitad que importaba (rechazo, no caída).
  */
 
-/** Familia: `remit-corridor-fx` rechazó la cotización. Enum que sale al browser SIEMPRE que el
- *  agente conteste un rechazo, con o sin `reason` relayable al lado. */
+/** Familia: quien atendió la capacidad `remittance-fx-quote` rechazó la cotización. Enum que sale al
+ *  browser SIEMPRE que llegue un rechazo de ese leg.
+ *
+ *  ⚠️ HOY NINGÚN PRODUCTOR DE ESTA APP LO EMITE, y eso está escrito acá para que no se lea como un
+ *  camino vivo. Lo emitía la rama punto a punto de `/api/a2a/quote`, que leía el body de error del
+ *  agente; WKH-332/W3 la borró y por `/compose` el step fallado viaja sin `code` y sin `reason`. Se
+ *  conserva porque el valor SÍ puede llegar desde el almacenamiento local: una remesa guardada antes
+ *  de ese deploy tiene este enum en su `failureReason`, y `humanError` le sigue dando copy propio.
+ *  El desenlace estructural está pedido en WKH-335 (`wasiai-a2a`, otro repo). */
 export const QUOTE_REJECTED = "a2a_quote_rejected";
 
-/**
- * Rechazos de `remit-corridor-fx` que SÍ se devuelven al browser.
- *
- * Los dos hablan del monto que mandó quien llama contra una política pública del corredor: el
- * mínimo ya está copiado en el cliente (`MIN_SEND_USD`, `src/domain/remittance.ts`:208) y se
- * muestra en pantalla, así que devolverlo no publica nada nuevo. Del techo no había copia local:
- * antes de esto un envío por encima del máximo era indistinguible de una caída.
- */
-export const RELAYABLE_QUOTE_REJECTIONS: readonly string[] = [
-  "fx_amount_below_minimum",
-  "fx_amount_above_maximum",
-];
+// 🔴 ACÁ VIVÍA `RELAYABLE_QUOTE_REJECTIONS` = ["fx_amount_below_minimum", "fx_amount_above_maximum"],
+// Y SE FUE CON SU ÚNICO CAMINO (WKH-332/W4, AC-5). Era la allow-list de los `reason` del agente de FX
+// que se relayaban al browser, y `fx_*` es su vocabulario PRIVADO. Los dos lectores que tenía —el
+// `readQuoteRejection` de la route y el de `gateways.ts`— filtraban el `reason` que llegaba en el body
+// de error del agente invocado por su slug. Ese carril no existe, así que la lista no filtra nada: no
+// hay `reason` que llegar. Dejarla habría sido una allow-list de un canal cerrado, o sea un control
+// que se lee como activo y no mira nada.
+// ⛔ Reintroducirla exigiría que `/compose` mande el desenlace estructural (WKH-335, otro repo). Hasta
+// entonces, AC-4 está declarado NO CUMPLIDO y el candado que lo deja escrito es T-4.1' en
+// `src/presentation/flow-vm.test.ts`.
 
-/** Familia: `remit-cashout-payout` rechazó crear la orden. Enum que sale al browser SIEMPRE. */
+/** Familia: quien atendió la capacidad `remittance-payout` rechazó crear la orden. Enum que sale al
+ *  browser SIEMPRE. */
 export const PREPARE_REJECTED = "prepare_agent_rejected";
 
 /**
- * Rechazos de `remit-cashout-payout` que SÍ se devuelven al browser. Los tres hablan del pedido de
- * quien llama: su cotización (monto que no coincide / cotización que ya no resuelve) y un campo de
+ * Rechazos del leg de `remittance-payout` que SÍ se devuelven al browser. Los tres hablan del pedido
+ * de quien llama: su cotización (monto que no coincide / cotización que ya no resuelve) y un campo de
  * identidad que su propio request no traía.
+ *
+ * ⚠️ A DIFERENCIA DE LA LISTA DE FX, ESTA SIGUE VIVA, y la asimetría no es un descuido: el agente de
+ * payout contesta su rechazo en el `output` del step (`status: "blocked"` + `reason`), o sea DENTRO
+ * del 200 de `/compose`, que sí llega intacto. El de FX lo contestaba con un status HTTP de error, que
+ * es justamente lo que el gateway colapsa.
  *
  * ⚠️ `kyc_gate_not_passed` NO está en esta lista, y su ausencia es la decisión, no un olvido. Es un
  * VEREDICTO sobre una verificación de identidad, o sea la familia exacta que WKH-205 colapsó del
@@ -106,14 +122,94 @@ export const LOGGABLE_PREPARE_REJECTIONS: readonly string[] = [
   "kyc_gate_not_passed",
 ];
 
-/** El reason tal como se propaga al cliente: el detalle del agente si es relayable, y si no el
- *  enum de familia. NUNCA el string crudo de un reason desconocido. */
-export function relayableRejection(
-  family: string,
-  raw: unknown,
-  relayable: readonly string[],
-): string {
-  return typeof raw === "string" && relayable.includes(raw) ? raw : family;
+// 🔴 ACÁ VIVÍA `relayableRejection(family, raw, relayable)` Y SE FUE CON LA LISTA QUE FILTRABA
+// (WKH-332/W4). Era el helper genérico que decidía si un `reason` del agente se propagaba crudo o
+// colapsado, y su ÚNICO llamador de producción era el `readQuoteRejection` de `/api/a2a/quote`, que se
+// borró en W3. MEDIDO al borrarla: los llamadores que quedaban estaban todos en `*.test.*`, y este
+// repo tiene escrito por qué eso no cuenta — si todos los call-sites de una función están en tests, la
+// función no existe en producción y su verde no habla del código.
+// El equivalente del leg de payout, `prepareRejectionEnum` (abajo), SÍ tiene llamador y se queda: ese
+// `reason` llega dentro del 200 de `/compose`, no en un status HTTP de error.
+
+/**
+ * ── "NO HAY QUIÉN" ES UN DESENLACE PROPIO, NI UN RECHAZO NI UNA CAÍDA (WKH-332/AC-13) ────────────
+ *
+ * El gateway resuelve la capacidad al ejecutar. Cuando NINGÚN agente la cumple bajo las constraints
+ * del step, contesta 422 y el cliente lo trae como `no_agent_match` (`gateway-client.ts`, el `case
+ * 422` de `mapErrorStatus`). Hasta acá eso salía colapsado en `prepare_upstream_error` / `a2a_unavailable`,
+ * o sea con las palabras de "el otro lado se cayó", y la pantalla invitaba a reintentar. Reintentar
+ * no crea un agente: la misma llamada, un segundo después, vuelve a no encontrar a nadie.
+ *
+ * ⚠️ POR QUÉ NO ENTRAN EN NINGUNA DE LAS DOS LISTAS DE ARRIBA. Las listas RELAYABLE / SÓLO-LOG
+ * clasifican el `reason` que un AGENTE devolvió tras LEER el pedido. Acá no hubo agente: nadie leyó
+ * nada. Aplicarles el criterio de esas listas sería clasificar una respuesta que no existe.
+ *
+ * Y por eso mismo tampoco entran en `PREPARE_REJECTION_ENUMS`: esa constante habilita el copy *"El
+ * agente de pagos rechazó esta remesa"* (`flow.tsx`, la rama `prepareRejected`), y esa frase sería
+ * FALSA acá — afirmaría un acto de un agente que nunca fue elegido. Es la misma clase de error que
+ * esta HU vino a cerrar, sólo que del lado del texto.
+ *
+ * Lo que sí comparten con esa familia es el HECHO que habilita la segunda mitad del copy: el prepare
+ * corre ANTES de `authorizePrincipal` (`confirm-and-send.ts`:384-388), o sea antes de que la wallet
+ * firme nada. "No se movió ningún USDC" no es un consuelo: se lee del orden del use-case.
+ *
+ * 🔴 Un enum propio NUESTRO no es un eco del gateway (CD-5): no viaja el `message`, ni la URL, ni el
+ * `reason` del otro lado. Viaja UNA palabra nuestra, elegida por nosotros, para un desenlace nuestro.
+ * Y sólo se abre `no_agent_match`: `payment_required` (402, la Agent Key sin saldo) SIGUE colapsado
+ * en el enum de caída a propósito, porque lo que un 402 filtraría no es un dato del pedido de quien
+ * llama sino del estado operativo nuestro.
+ *
+ * ⚠️ NINGUNO DE LOS DOS CONTIENE LAS SUBCADENAS "kyc" NI "payout", y eso NO es casualidad:
+ * `humanError` decide por `code.includes(...)` en cascada con dos catch-all al final, así que un
+ * enum que las contuviera quedaría tragado por el copy equivocado. `prepare_no_agent_for_capability`
+ * empieza con "prepare", no con "payout". T-13.3 lo custodia como propiedad, no como comentario.
+ */
+export const PREPARE_NO_AGENT_FOR_CAPABILITY = "prepare_no_agent_for_capability";
+export const QUOTE_NO_AGENT_FOR_CAPABILITY = "a2a_no_agent_for_capability";
+
+/**
+ * ── EL 422 NO ES UN SOLO DESENLACE: SON CUATRO, Y UNO ES "NO PUDE PREGUNTAR" (AR/BLQ-MED-1) ───────
+ *
+ * `mapErrorStatus` traduce TODO 422 a `no_agent_match`, pero el gateway manda además un `reason` que
+ * viaja intacto en `GatewayFailure.reason`. Los cuatro valores que emite hoy, MEDIDOS en
+ * `wasiai-a2a/src/services/capability-resolver.ts:69-80`:
+ *
+ *   · `no_candidates`          — ninguna capacidad de ese nombre en el catálogo
+ *   · `excluded_by_scope`      — los hay, pero nuestra credencial no los alcanza
+ *   · `excluded_by_reputation` — los hay, y ninguno llega al piso
+ *   · `reputation_unavailable` — 🔴 EL GATEWAY NO PUDO LEER EL HISTORIAL. Su propio docblock allá:
+ *     *"acá no sabemos si llegan. Un reintento PUEDE resolverlo; bajar el piso, no."*
+ *
+ * Los tres primeros son hechos sobre el CATÁLOGO y el copy de esta HU los dice bien. El cuarto es un
+ * hecho sobre el GATEWAY, y para él las dos mitades de ese copy son FALSAS: no dice "no hay ningún
+ * proveedor" —no lo sabemos— y "volver a intentar no cambia el resultado" desaconseja exactamente lo
+ * único que puede funcionar. Colapsarlos era una REGRESIÓN DE PRECISIÓN: antes salía por el copy
+ * genérico ("Algo salió mal. Intentá de nuevo"), que para ese caso era vago y CORRECTO.
+ *
+ * 🔴 LA DIRECCIÓN DEL DEFAULT ES LA DECISIÓN, y es fail-closed hacia lo vago: sólo los reasons de
+ * esta allowlist habilitan la afirmación fuerte. Un `reason` ausente (un 422 de un proxy, de un
+ * middleware o de una versión del gateway que no lo mande) o uno que no conozcamos NO la habilita, y
+ * sale por el enum de caída. El costo de equivocarse hacia acá es un diagnóstico pobre; hacia el
+ * otro lado es una frase falsa sobre el catálogo, que es el bug que esta HU vino a cerrar.
+ *
+ * Es la misma técnica que `prepareRejectionEnum` (arriba): se RAMIFICA por el valor del otro lado,
+ * NUNCA se lo ecoa. Lo que sale al browser sigue siendo una palabra nuestra, y el body sigue
+ * teniendo exactamente una clave (CD-8).
+ */
+export const NO_AGENT_REASONS_MEANING_NOBODY: readonly string[] = [
+  "no_candidates",
+  "excluded_by_scope",
+  "excluded_by_reputation",
+];
+
+/**
+ * ¿Este 422 dice "no hay quién", o dice "no pude averiguarlo"?
+ *
+ * Input que la pone en rojo: `reason: "reputation_unavailable"` devolviendo `true` — ahí la pantalla
+ * volvería a afirmar que no hay proveedor y a desaconsejar el reintento que sí sirve.
+ */
+export function noAgentMeansNobodyFits(reason: unknown): boolean {
+  return typeof reason === "string" && NO_AGENT_REASONS_MEANING_NOBODY.includes(reason);
 }
 
 /**

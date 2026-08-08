@@ -39,13 +39,13 @@ payout, no una rama en un switch acá adentro.
 
 Dónde está eso hoy, en presente:
 
-- **El camino activo es punto a punto.** Con la configuración por defecto, la cotización y la pata de
-  payout llaman a una base URL conocida. Funciona, y es el transporte sobre el que corre el flujo.
-- **El carril por capacidad existe y arranca apagado.** Es código real, no un plan:
-  `app/api/a2a/quote/route.ts:46-64` y `app/api/payout/prepare/route.ts:194-213` mandan una `capability`
-  al gateway y lo dejan elegir el agente. La pata de payout además lleva un piso de reputación como
-  constraint. Las dos ramas están detrás de `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER=a2a-gateway`, que no es
-  el default.
+- **Ya no hay camino punto a punto.** Este bullet decía que era el activo y que llamaba a una base URL
+  conocida. WKH-332 borró ese carril: por defecto la app cablea los gateways demo y no llama a ningún agente.
+- **Por capacidad es el único transporte, y esta bandera no lo apaga.**
+  `app/api/a2a/quote/route.ts:91-96` y `app/api/payout/prepare/route.ts:391-395` mandan una `capability`,
+  con un piso de reputación en cada pata, y el gateway elige. `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` cablea
+  dos adapters del CLIENTE, la cotización y el ESTADO del payout, y ninguno es el que mueve la plata; estas
+  routes no la leen. Sacale al gateway la URL o la key y las dos ROUTES contestan 501 sin un solo fetch.
 - **Es fail closed a propósito.** Si el gateway no responde, la operación corta. Nunca cae a una llamada
   directa, porque un fallback silencioso crearía la orden de payout con un agente distinto del que el
   resto del flujo tomó como propio.
@@ -297,7 +297,7 @@ demo y no mueve fondos.
 | Variable | Default | Efecto |
 |---|---|---|
 | `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED` | apagado | Enciende el depósito al escrow y el patrocinio de gas |
-| `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` | `fallback` | `a2a` usa los agentes reales punto a punto, `a2a-gateway` los resuelve por capacidad |
+| `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` | `fallback` | Dos valores legales y ninguno más: `fallback` (gateways demo: cotización simulada y ESTADO del payout mockeado; no es esta bandera la que deja quieta la plata, es `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED`) y `a2a-gateway` (le pide una capacidad al gateway y el gateway resuelve el agente). Cualquier otro valor TIRA al arrancar, incluido `a2a`: era el carril punto a punto y WKH-332 lo borró, así que un entorno que quedó en ese valor falla ruidoso en vez de cablear los simuladores en silencio |
 
 Los guards del composition root son fail loud. Encender el settlement sin mint o sin la pubkey del
 facilitator hace que la app no arranque. La idea es que un error de configuración se vea al desplegar y

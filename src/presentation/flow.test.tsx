@@ -27,6 +27,7 @@ import {
   ESCROW_REFUNDED_BY_SENDER,
   RecoverEscrowFunds,
 } from "../application/use-cases/recover-escrow-funds";
+import { PREPARE_NO_AGENT_FOR_CAPABILITY } from "../application/agent-rejections";
 import { KYC_PROVENANCE_LIVE } from "../infrastructure/didit/decision";
 import { ConnectWallet } from "../application/use-cases/connect-wallet";
 import {
@@ -964,7 +965,12 @@ describe("WKH-200 poll stop (fake timers)", () => {
 // isFallbackWalletAddress (flow-vm, Scope OUT) que no canonicaliza el FALLBACK EVM en base58. deadline
 // on-chain = floor(Date.parse(expiresAt)/1000); la UI compara contra Date.now() (proxy defensivo). Pasado
 // ⇒ CTA visible; futuro ⇒ oculta. El guard AUTORITATIVO vive on-chain en wallet.refundEscrow.
-function solanaPayoutSubmittedSnapshot(expiresAt: string): RemittanceState {
+
+/** Confirmada y NADA MÁS: `principalTx` sigue en null, o sea que la billetera todavía no firmó
+ *  ningún depósito. Es el punto exacto en el que corta el `prepare`
+ *  (`failAndRefund`, `../application/use-cases/confirm-and-send.ts:385`, con `"not_deposited"`), o sea que es la única
+ *  forma que tiene una remesa cuyo `failureReason` es un fallo ANTERIOR a la primera firma. */
+function solanaConfirmedSnapshot(expiresAt: string): RemittanceState {
   const r = Remittance.create("rem-1", beneficiary(), Money.of(400, "USDC"), T0);
   r.attachQuote(
     {
@@ -982,6 +988,11 @@ function solanaPayoutSubmittedSnapshot(expiresAt: string): RemittanceState {
   r.startKyc(T0, FAKE_SOLANA_BENEFICIARY);
   r.applyKyc(passKyc, T0);
   r.confirm(T0);
+  return r.snapshot;
+}
+
+function solanaPayoutSubmittedSnapshot(expiresAt: string): RemittanceState {
+  const r = Remittance.rehydrate(solanaConfirmedSnapshot(expiresAt));
   r.markPrincipalIn("solana-sig", T0);
   r.markPayoutSubmitted("transfi-sol-po-1", T0, "transfi");
   return r.snapshot;
@@ -1188,6 +1199,19 @@ describe("los tres casos, dichos con palabras distintas", () => {
     return base.snapshot;
   }
 
+  /** Igual, pero SIN depósito: parte de `confirmed`, así que `principalTx` queda en null y
+   *  `escrowFundsKnowledge` da "no-deposit". `failedWith` parte de `payout_submitted`, o sea de una
+   *  remesa que YA pasó por `markPrincipalIn`: usarla para un corte ANTERIOR a la primera firma
+   *  describe una remesa con depósito y le hace decir a la pantalla que no lo hubo (CR/BLQ-BAJO-1). */
+  function failedBeforeDepositWith(
+    reason: string,
+    expiresAt = "2026-07-10T00:00:00.000Z",
+  ): RemittanceState {
+    const base = Remittance.rehydrate(solanaConfirmedSnapshot(expiresAt));
+    base.markPayoutFailed(reason, T0);
+    return base.snapshot;
+  }
+
   it("NO SABEMOS: lo dice con esas palabras, no lo llama fallo ni reembolso", async () => {
     const rem = failedWith(PRINCIPAL_STATE_UNKNOWN);
     const { recover } = await seededRecovery(rem, new FakeSolanaEscrowRefundGateway());
@@ -1255,6 +1279,83 @@ describe("los tres casos, dichos con palabras distintas", () => {
     expect(screen.queryByText(/te reembolsamos/)).toBeNull();
     expect(screen.queryByText(/No sabemos todavía/)).toBeNull();
   });
+
+  // AR fix-pack BLQ-ALTO-1 — el quinto caso, y el que la HU había dejado sin llegar a la pantalla.
+  //
+  // 🔴 QUÉ MIDE, con el input concreto. `prepare_no_agent_for_capability` NO está en
+  // `PREPARE_REJECTION_ENUMS` (a propósito: nadie rechazó nada, no hubo agente), así que el `it.each`
+  // de acá arriba no lo cubre. Sin la rama propia caía al `else` de `TrackView`, o sea a
+  // `humanError("payout_failed")`, y la persona leía "No pudo entregarse" + "si tus USDC entraron al
+  // escrow, los sacás vos firmando desde tu wallet" para un corte que ocurre ANTES de que la
+  // billetera firme nada. Este `it` se pone rojo si alguien borra la rama: el título vuelve a ser
+  // "No pudo entregarse" y aparece la frase del escrow.
+  //
+  // El único llamador del enum vivía en `flow-vm.test.ts`, o sea que el copy existía y ningún camino
+  // de producto lo alcanzaba. Por eso este test RENDERIZA `TrackView` en vez de llamar a `humanError`.
+  it("SIN AGENTE PARA LA CAPACIDAD: no lo dice como un fallo de entrega ni manda a buscar plata al escrow", async () => {
+    const rem = failedBeforeDepositWith(PREPARE_NO_AGENT_FOR_CAPABILITY);
+    const { recover } = await seededRecovery(rem, new FakeSolanaEscrowRefundGateway());
+    render(<LiveTrackView initial={rem} recover={recover} />);
+
+    expect(screen.getByText(/No hay quién entregue este envío/)).toBeInTheDocument();
+    expect(screen.getByText(/no hay ningún proveedor/)).toBeInTheDocument();
+    expect(screen.getByText(/No se movió ningún USDC/)).toBeInTheDocument();
+    // Y ninguna de las tres frases de los OTROS desenlaces: ni el fallo de entrega, ni el reembolso
+    // prometido, ni la invitación a sacar del escrow unos USDC que nunca entraron.
+    expect(screen.queryByText(/No pudo entregarse/)).toBeNull();
+    expect(screen.queryByText(/te reembolsamos/)).toBeNull();
+    expect(screen.queryByText(/los sacás vos/)).toBeNull();
+    // Ni el copy de la familia hermana: acá no hubo ningún agente que rechazara nada.
+    expect(screen.queryByText(/El agente de pagos rechazó/)).toBeNull();
+  });
+
+  // 🔴 CR/BLQ-BAJO-1 — LA TARJETA NO PUEDE CONTRADECIRSE SOBRE LA PLATA DE LA PERSONA.
+  //
+  // Lo que el CR midió en el DOM, en UNA sola tarjeta y en este orden: *"No se movió ningún USDC de
+  // tu wallet"* → botón **"Recuperar fondos"** → *"El plazo se fija cuando depositás y dura unas 2
+  // horas"*. Una afirmación categórica sobre que no hubo depósito, y a tres nodos de distancia una
+  // acción y un plazo que sólo existen si lo hubo.
+  //
+  // El `it` de acá arriba no podía verlo: sólo mira TEXTO, y el botón no es texto de la tarjeta.
+  it("CR/BLQ-BAJO-1: si afirma que no se movió nada, NO ofrece recuperar ni habla de un plazo", async () => {
+    const rem = failedBeforeDepositWith(PREPARE_NO_AGENT_FOR_CAPABILITY);
+    const { recover } = await seededRecovery(rem, new FakeSolanaEscrowRefundGateway());
+    render(<LiveTrackView initial={rem} recover={recover} />);
+
+    // La afirmación categórica sigue estando (es el hecho que sostiene el orden del use-case)…
+    expect(screen.getByText(/No se movió ningún USDC/)).toBeInTheDocument();
+    // …y por eso lo que se va es lo que la desmentía.
+    expect(screen.queryByRole("button", { name: /Recuperar fondos/ })).toBeNull();
+    expect(screen.queryByText(/El plazo se fija cuando depositás/)).toBeNull();
+  });
+
+  // La otra dirección, que es la que impide "arreglarlo" tapando el botón siempre: con un depósito
+  // que NO se puede descartar (`principalTx` puesto), la tarjeta deja de afirmar en categórico y el
+  // botón vuelve. Sin este `it`, un `showRefund` que ignorara `escrowFundsKnowledge` pasaría igual —
+  // y esa versión esconde la única salida hacia unos USDC que sí pueden estar en el escrow.
+  it("CR/BLQ-BAJO-1 (candado): con depósito que no se puede descartar, vuelve el botón y se va la afirmación", async () => {
+    const rem = failedWith(PREPARE_NO_AGENT_FOR_CAPABILITY); // parte de payout_submitted ⇒ principalTx
+    const { recover } = await seededRecovery(rem, new FakeSolanaEscrowRefundGateway());
+    render(<LiveTrackView initial={rem} recover={recover} />);
+
+    expect(screen.getByRole("button", { name: /Recuperar fondos/ })).toBeEnabled();
+    expect(screen.queryByText(/No se movió ningún USDC/)).toBeNull();
+    expect(screen.queryByText(/No hay quién entregue este envío/)).toBeNull();
+    // Y lo que dice en su lugar es el copy CONDICIONAL, que con el botón al lado no se contradice.
+    expect(screen.getByText(/si tus USDC entraron al escrow/)).toBeInTheDocument();
+  });
+
+  // Y la familia hermana queda INTACTA: se excluyó de `showRefund`, no de `refundeable`.
+  it.each(["prepare_agent_rejected", "prepare_quote_unresolvable", WALLET_ADDRESS_UNAVAILABLE])(
+    "CR/BLQ-BAJO-1 (candado): %s conserva su botón de recuperar",
+    async (reason) => {
+      const rem = failedWith(reason);
+      const { recover } = await seededRecovery(rem, new FakeSolanaEscrowRefundGateway());
+      render(<LiveTrackView initial={rem} recover={recover} />);
+
+      expect(screen.getByRole("button", { name: /Recuperar fondos/ })).toBeEnabled();
+    },
+  );
 
   it("NO ENTRÓ: sigue siendo el fallo de siempre, sin inventar un tercer estado", async () => {
     const rem = failedWith("solana_settle_rejected");
@@ -1519,4 +1620,40 @@ describe("HU-SOL-13 / WKH-320 — BLQ-MED-1: RemittanceFlow completo renderiza (
     // El banner "Sin aislamiento por wallet" ya no existe (se fue con isFallbackWalletAddress).
     expect(screen.queryByText(/Sin aislamiento por wallet/)).toBeNull();
   });
+});
+
+// ── T-6.1 — AC-6 · un proveniencia DESCONOCIDA cae del lado de "sin verificar" ────────────────────
+//
+// 🔴 QUÉ CONSERVA, y por qué esta HU lo mide en vez de darlo por hecho. `REAL_KYC_PROVENANCES` es una
+// ALLOWLIST: lo desconocido NO se puede afirmar como verificado. Antes acá vivía la comparación
+// contra el único valor simulado CONOCIDO, o sea que todo lo demás se leía como real, y con
+// `DIDIT_ENV=mock` la pantalla escribía "Identidad verificada" sobre datos que nadie verificó.
+//
+// WKH-332 va exactamente en la dirección de que mañana la verificación la atienda un agente
+// DESCUBIERTO, o sea un emisor de `provenance` que este archivo no conoce hoy. Ese es el input de
+// este test: si la dirección de la allowlist se invirtiera —o si alguien la volviera env, que está
+// prohibido por el mismo motivo que los pisos de reputación—, un agente nuevo prendería el badge
+// verde el día que aparezca, sin que nada falle.
+//
+// CD-17: depende del `vi.mock("framer-motion")` de módulo y de los helpers `goToConfirm` /
+// `buildTestContainer` de este archivo. Se corre en la suite completa, no solo.
+it("T-6.1: un `provenance` que no está en la allowlist ⇒ NO 'Identidad verificada', sí el origen crudo", async () => {
+  const agenteNuevo = "cualquier-agente-nuevo";
+  render(
+    <RemittanceFlow
+      container={buildTestContainer({ kyc: new FakeKycGateway({ provenance: agenteNuevo }) })}
+    />,
+  );
+
+  await goToConfirm();
+
+  // (a) el badge verde NO sale: afirmar una verificación exige estar en la allowlist.
+  expect(screen.queryByText(/Identidad verificada/)).toBeNull();
+  // (b) sale la tarjeta que dice que no se puede afirmar...
+  expect(screen.getByText(/Identidad sin verificar/)).toBeInTheDocument();
+  // (c) ...y NOMBRA el origen crudo, en vez de esconderlo. Sin esto la pantalla diría "no verificada"
+  //     sin dar con qué discutirlo, y quien opera no sabría qué emisor mirar.
+  expect(screen.getByText(new RegExp(agenteNuevo))).toBeInTheDocument();
+  // (d) y los datos siguen mostrándose: "no verificada" no es "falsa".
+  expect(screen.getByText(/Test Quispe Mamani/)).toBeInTheDocument();
 });

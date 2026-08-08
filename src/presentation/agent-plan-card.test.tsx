@@ -1,17 +1,22 @@
 // @vitest-environment jsdom
 //
-// LA TARJETA QUE NOMBRABA A QUIEN NO CORRE.
+// LA TARJETA QUE NOMBRABA A QUIEN NO CORRE — y que en WKH-332 dejó de poder nombrar a nadie.
 //
-// Medido contra producción el 2026-08-05:
-//   · `GET /api/a2a/plan` → `remit-corridor-fx-solana` y `remit-cashout-payout-solana`
-//   · `POST /api/a2a/quote` → `result.slug = "remit-corridor-fx"`
-//   · `payout/prepare` llama a `remit-cashout-payout` (route.ts:269)
-// Son slugs DISTINTOS. La tarjeta mostraba el del catálogo con la coletilla "hoy se llama directo",
-// o sea que afirmaba, del agente equivocado, justamente lo que era falso de él.
+// 🔴 ACÁ HABÍA TRES CITAS AL CARRIL PUNTO A PUNTO Y SE BORRARON, NO SE RENUMERARON (AC-10). Una de
+// ellas decía que `payout/prepare` llama a un agente por su slug, con el número de línea del `fetch`.
+// Ese `fetch` no existe: renumerarla habría dejado una cita perfecta a la nada, que es peor que
+// ninguna porque entrena a no seguirlas.
 //
-// El otro hallazgo de la misma tarjeta: "Lo que cobran los agentes: 0.06 USDC". En el carril punto a
-// punto las dos rutas hacen un `fetch` liso, sin x402, sin `Authorization` y sin Agent Key, y el
-// agente contesta 200 igual (verificado en vivo). Ese precio no se le cobra a nadie.
+// LO QUE ESTE ARCHIVO MIDE HOY. La tarjeta llegó a mostrar el agente del catálogo con la coletilla
+// "hoy se llama directo", mientras la ejecución llamaba a un slug DISTINTO cableado en una URL. La
+// reparación de WKH-330 fue decir los dos; la de esta HU es que la afirmación ya no se pueda hacer,
+// porque no queda ninguna URL con un nombre adentro. Lo que la tarjeta dice ahora es POR DÓNDE corre
+// el paso —gateway o demo—, y estos tests clavan que las dos frases viejas NO están en el DOM en
+// ningún estado (T-7.1).
+//
+// El otro hallazgo de la misma tarjeta: "Lo que cobran los agentes: 0.06 USDC". Con la bandera en
+// `"fallback"` la COTIZACIÓN la arma un simulador del container (`FallbackQuoteGateway`,
+// `container.ts:123`), así que ese precio no lo cobra nadie; por el gateway lo paga Chaski con su Agent Key.
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
@@ -48,8 +53,11 @@ type PlanStep = {
     verified: boolean;
     registry: string;
   } | null;
-  transport: "gateway" | "punto-a-punto";
-  runsTodayAgentId?: string | null;
+  availability?: "ofrecido" | "sin-candidatos" | "no-consultado";
+  constraints?: { minReputation: number; allowTrial?: true };
+  /** W3: `"punto-a-punto"` salió del dominio con el carril; `"demo"` es el modo `"fallback"`.
+   *  `runsTodayAgentId` se fue del tipo porque se fue del contrato: no hay fuente que lo llene. */
+  transport: "gateway" | "demo";
 };
 
 /** Monta el flujo hasta `review`, que es donde vive la tarjeta, con el plan que se le indique. */
@@ -79,52 +87,62 @@ const paso = (over: Partial<PlanStep> = {}): PlanStep => ({
     verified: false,
     registry: "self-published",
   },
-  transport: "punto-a-punto",
-  runsTodayAgentId: "remit-corridor-fx",
+  availability: "ofrecido",
+  constraints: { minReputation: 2, allowTrial: true },
+  // El default pasó a ser el carril REAL, que es el de producción desde el flip. Antes era
+  // `"punto-a-punto"` y hoy ese valor no existe.
+  transport: "gateway",
   ...over,
 });
 
-describe("la tarjeta dice quién corre, no sólo quién ofrece", () => {
-  // 🔴 EL test. Con los dos slugs reales de producción, la fila tiene que nombrar a los DOS y decir
-  // cuál es cuál. Elegir uno en silencio, en cualquiera de las dos direcciones, es el bug.
-  it("cuando el catálogo y la ejecución divergen, nombra a los dos", async () => {
+// ── T-7.1 · AC-7 ─────────────────────────────────────────────────────────────────────────────────
+//
+// 🔴 TRES `it` MURIERON ACÁ, Y CADA UNO CON SU RAZÓN ESCRITA (WKH-332/W3):
+//   · "cuando el catálogo y la ejecución divergen, nombra a los dos" — la divergencia era entre el
+//     agente del catálogo y el slug cableado en el `fetch`. Sin slug no hay dos cosas que comparar.
+//   · "cuando coinciden, lo dice sin inventar una divergencia" — ídem.
+//   · "si el server no dice quién corre, lo dice" — custodiaba el version-skew de `runsTodayAgentId`,
+//     un campo que dejó de existir en el contrato.
+// Los tres asertaban la PRESENCIA de las dos frases que AC-7 ahora prohíbe. Portarlos habría sido
+// conservar el invariante viejo; lo que los reemplaza es el `it` de abajo, que asserta su AUSENCIA en
+// TODOS los estados, no en uno.
+describe("T-7.1: la tarjeta ya no puede afirmar que un paso corra por un agente nombrado", () => {
+  // Los cuatro estados que la tarjeta sabe pintar con un agente presente o ausente. Se recorren todos
+  // a propósito: un test que mirara un solo estado dejaría verde la frase sobreviviendo en otro.
+  const ESTADOS: Array<{ label: string; step: PlanStep }> = [
+    { label: "gateway + agente ofrecido", step: paso() },
+    { label: "demo + agente ofrecido", step: paso({ transport: "demo" }) },
+    {
+      label: "sin candidatos",
+      step: paso({ agent: null, availability: "sin-candidatos", constraints: { minReputation: 2 } }),
+    },
+    { label: "no consultado", step: paso({ agent: null, availability: "no-consultado" }) },
+  ];
+
+  it.each(ESTADOS)("en '$label' el DOM no dice 'Hoy se llama directo a' ni 'Hoy no corre ese'", async ({ step }) => {
+    await verLaTarjeta([step], 0.03);
+    const dom = document.body.textContent ?? "";
+    expect(dom).not.toContain("Hoy se llama directo a");
+    expect(dom).not.toContain("Hoy no corre ese");
+    // Y la tarjeta SÍ se renderizó: sin esto el test pasaría con la tarjeta ausente del DOM.
+    expect(screen.getByText(/Quién va a atender tu envío/)).toBeInTheDocument();
+  });
+
+  // El carril real: se dice que el gateway elige al ejecutar, sin nombrar a quién.
+  it("en el carril del gateway dice que se elige al ejecutar, sin nombrar a nadie como el que corre", async () => {
     await verLaTarjeta([paso()], 0.03);
-
-    expect(screen.getByText(/El catálogo ofrece a remit-corridor-fx-solana/)).toBeInTheDocument();
-    expect(
-      screen.getByText(/Hoy no corre ese: la app llama directo a remit-corridor-fx/),
-    ).toBeInTheDocument();
-    // Y no queda la frase vieja, que le atribuía al del catálogo la llamada directa.
-    expect(screen.queryByText(/remit-corridor-fx-solana · hoy se llama directo/)).toBeNull();
-  });
-
-  it("cuando coinciden, lo dice sin inventar una divergencia", async () => {
-    await verLaTarjeta(
-      [paso({ agent: { ...paso().agent!, id: "remit-corridor-fx" } })],
-      0.03,
-    );
-
-    expect(screen.getByText(/Hoy se llama directo a remit-corridor-fx\./)).toBeInTheDocument();
-    expect(screen.queryByText(/Hoy no corre ese/)).toBeNull();
-  });
-
-  // En el carril del gateway NADIE llama a un slug: se pide la capacidad y el gateway resuelve al
-  // ejecutar. Nombrar al del catálogo ahí sería inventar una certeza.
-  it("en el carril del gateway no nombra a ninguno: ahí se elige al ejecutar", async () => {
-    await verLaTarjeta([paso({ transport: "gateway", runsTodayAgentId: null })], 0.03);
-
     expect(screen.getByText(/corre por el gateway, que elige al ejecutar/)).toBeInTheDocument();
-    expect(screen.queryByText(/Hoy se llama directo/)).toBeNull();
-    expect(screen.queryByText(/Hoy no corre ese/)).toBeNull();
+    // El agente del catálogo SÍ se nombra, y eso es correcto: la frase dice "el catálogo ofrece a",
+    // no "corre". La distinción es el punto de AC-7.
+    expect(screen.getByText(/El catálogo ofrece a remit-corridor-fx-solana/)).toBeInTheDocument();
   });
 
-  // Version skew: un server viejo no manda el campo. Callar dejaría la fila leyéndose como si el del
-  // catálogo fuera el que corre, que es exactamente el bug que esta HU cierra.
-  it("si el server no dice quién corre, lo dice: no asume que sea el del catálogo", async () => {
-    await verLaTarjeta([paso({ runsTodayAgentId: undefined })], 0.03);
-
-    expect(screen.getByText(/No sabemos a qué agente se llama hoy en este paso/)).toBeInTheDocument();
-    expect(screen.queryByText(/Hoy se llama directo/)).toBeNull();
+  // 🔴 EL MODO DEMO, que es la razón por la que `transport` sobrevivió al borrado (DT-8). Sin este
+  // campo la fila diría "corre por el gateway" mientras un simulador local cotiza.
+  it("en modo demo NO dice que el paso corra por el gateway: dice que lo simula", async () => {
+    await verLaTarjeta([paso({ transport: "demo" })], 0.03);
+    expect(screen.getByText(/esta app está en modo demo y lo simula/)).toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toContain("corre por el gateway");
   });
 
   it("no mete un em dash", async () => {
@@ -135,29 +153,103 @@ describe("la tarjeta dice quién corre, no sólo quién ofrece", () => {
 
 // ── El precio que nadie cobra ────────────────────────────────────────────────────────────────────
 //
-// Decía "Lo que cobran los agentes: 0.06 USDC". En el carril punto a punto las dos rutas hacen un
-// `fetch` liso (sin x402, sin `Authorization`, sin Agent Key) y el agente contesta 200: verificado en
-// vivo contra producción el 2026-08-05. Nadie cobra eso, y encima es el precio de catálogo de agentes
-// que pueden no ser los que corren.
+// Decía "Lo que cobran los agentes: 0.06 USDC", y el precio es el de CATÁLOGO de agentes que pueden
+// no ser los que corren. La frase del modo demo cambió de contenido en W3, no sólo de nombre: decía
+// "la app los llama sin ningún pago y contestan igual", que describía el `fetch` liso del carril punto
+// a punto contra un agente REAL. Borrado ese carril, la frase vieja pasó a ser falsa; y la que la
+// reemplazó —*"no llama a ninguno de ellos"*— también, porque esta bandera no decide la ENTREGA (CR2).
 describe("el precio dice qué es y quién lo cobraría", () => {
-  it("en punto-a-punto no afirma un cobro: dice que se llama sin pago", async () => {
-    await verLaTarjeta([paso()], 0.06);
+  it("en modo demo no afirma un cobro, y no afirma que se llame a nadie", async () => {
+    await verLaTarjeta([paso({ transport: "demo" })], 0.06);
 
     expect(screen.getByText("Precio publicado en el catálogo")).toBeInTheDocument();
     expect(screen.getByText("0.06 USDC")).toBeInTheDocument(); // el dato se conserva
     expect(
-      screen.getByText(/la app los llama sin ningún pago y contestan igual/),
+      screen.getByText(/la cotización que estás aprobando la armó la app, no ellos/),
     ).toBeInTheDocument();
     // La frase vieja, que afirmaba un cobro que no ocurre.
     expect(screen.queryByText("Lo que cobran los agentes")).toBeNull();
+    // Y las dos que se fueron: la del carril borrado, y la que generalizaba a TODOS los agentes (CR2).
+    expect(document.body.textContent ?? "").not.toMatch(/los llama sin ningún pago|no llama a ninguno de ellos/);
   });
 
   // El otro carril SÍ paga, y por eso no puede compartir la frase: ahí el fee lo liquida el gateway
   // contra la Agent Key de Chaski. Decir "no se cobra" también ahí sería el mismo error al revés.
   it("en el carril del gateway dice quién paga, en vez de decir que no se cobra", async () => {
-    await verLaTarjeta([paso({ transport: "gateway", runsTodayAgentId: null })], 0.06);
+    await verLaTarjeta([paso()], 0.06);
 
     expect(screen.getByText(/lo paga Chaski con su Agent Key al ejecutar el paso/)).toBeInTheDocument();
-    expect(screen.queryByText(/los llama sin ningún pago/)).toBeNull();
+    expect(document.body.textContent ?? "").not.toContain("la armó la app, no ellos");
+  });
+});
+
+// ── T-14.5 · AC-14 / CD-18 · tres estados, tres frases, y una que NO puede acusar al catálogo ────
+//
+// 🔴 EL BUG QUE CIERRA, MEDIDO en el árbol previo a WKH-332: la tarjeta tenía UNA sola frase para el
+// caso sin agente —"El catálogo no ofrece a nadie para esta capacidad ahora mismo"— y `discoverFor`
+// llegaba a ese caso por CUATRO caminos, de los cuales tres no dicen nada del catálogo (un 500, un
+// body ilegible, un timeout de red nuestro). La pantalla convertía una falla nuestra en una
+// afirmación de hecho sobre el otro.
+//
+// CD-17: este `describe` depende del `afterEach` del tope del archivo (`cleanup` + `unstubAllGlobals`)
+// y del `vi.mock("framer-motion")` de módulo. Sin el `cleanup`, `getByText` encuentra la tarjeta del
+// `it` anterior y el test da verde por el DOM equivocado.
+describe("T-14.5: los tres estados llegan a pantalla con tres textos distintos", () => {
+  const sinAgente = (over: Partial<PlanStep> = {}): PlanStep =>
+    paso({ agent: null, ...over });
+
+  it("`sin-candidatos` afirma que el catálogo no ofrece a nadie, Y NOMBRA EL PISO que lo explica", async () => {
+    await verLaTarjeta(
+      [sinAgente({ availability: "sin-candidatos", constraints: { minReputation: 2 } })],
+      0,
+    );
+    // El catálogo CONTESTÓ, así que acá sí se puede afirmar. Y se nombra el piso porque el piso es la
+    // razón por la que la lista puede venir vacía teniendo el catálogo agentes para esa capacidad.
+    expect(screen.getByText(/El catálogo no ofrece a nadie para esta capacidad/)).toBeInTheDocument();
+    expect(screen.getByText(/con al menos 2 de reputación/)).toBeInTheDocument();
+  });
+
+  it("🔴 `no-consultado` NO contiene 'no ofrece a nadie': no se puede afirmar lo que no se preguntó", async () => {
+    await verLaTarjeta([sinAgente({ availability: "no-consultado" })], 0);
+
+    expect(screen.getByText(/No pudimos consultar el catálogo para este paso/)).toBeInTheDocument();
+    // El candado de CD-18, sobre el DOM entero y no sobre un nodo: la subcadena no puede aparecer en
+    // NINGUNA parte de la tarjeta cuando el estado es "no pudimos preguntar".
+    expect(document.body.textContent ?? "").not.toContain("no ofrece a nadie");
+  });
+
+  it("y el campo AUSENTE (server viejo durante un deploy) cae del lado que no afirma nada", async () => {
+    await verLaTarjeta([sinAgente({ availability: undefined })], 0);
+    expect(screen.getByText(/No pudimos consultar el catálogo para este paso/)).toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toContain("no ofrece a nadie");
+  });
+
+  // 🔴 EL `it` QUE MATA A M4. Los dos estados renderizados y comparados ENTRE SÍ: colapsarlos deja
+  // verde a cualquier test que mire un solo estado por vez.
+  it("las dos frases son DISTINTAS entre sí (colapsarlas es el mutante M4)", async () => {
+    await verLaTarjeta([sinAgente({ availability: "sin-candidatos", constraints: { minReputation: 2 } })], 0);
+    const textoSinCandidatos = document.body.textContent ?? "";
+    cleanup();
+    await verLaTarjeta([sinAgente({ availability: "no-consultado" })], 0);
+    const textoNoConsultado = document.body.textContent ?? "";
+
+    expect(textoSinCandidatos).toContain("no ofrece a nadie");
+    expect(textoNoConsultado).not.toContain("no ofrece a nadie");
+    expect(textoNoConsultado).toContain("No pudimos consultar el catálogo");
+    expect(textoSinCandidatos).not.toContain("No pudimos consultar el catálogo");
+  });
+
+  // AC-14, la mitad que se ve: la tarjeta DICE con qué se preguntó, y el número sale de la respuesta.
+  // Se renderiza en `review`, o sea ANTES del KYC (`verLaTarjeta` llega hasta esa pantalla).
+  it("dice con qué piso se consultó, y el número sale de la respuesta y no de un literal", async () => {
+    await verLaTarjeta([paso({ constraints: { minReputation: 2, allowTrial: true } })], 0.03);
+    expect(
+      screen.getByText(/se consultó con el mismo piso de reputación con el que corre el envío \(2\)/),
+    ).toBeInTheDocument();
+  });
+
+  it("si el server no manda las constraints, la frase del piso NO se muestra (no se afirma sin dato)", async () => {
+    await verLaTarjeta([paso({ constraints: undefined })], 0.03);
+    expect(document.body.textContent ?? "").not.toContain("piso de reputación con el que corre");
   });
 });

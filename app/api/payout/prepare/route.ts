@@ -1,12 +1,24 @@
-// Server-side: PREPARE del payout no-custodial (WKH-211 / HU-SOL-11, AC-1/AC-7). Crea la orden TransFi
-// (invoca al agente remit-cashout-payout) y emite la SolanaDepositAttestation HMAC que ata el
-// beneficiary (deposit-address) y la release-authority a ESTA remesa ANTES de que el cliente firme
-// (Opción B, DT-1). La wallet arma la ix `deposit` del escrow contra ese beneficiary atestado.
+// Server-side: PREPARE del payout no-custodial (WKH-211 / HU-SOL-11, AC-1/AC-7). Crea la orden
+// pidiendo la CAPACIDAD `remittance-payout` al gateway —nunca un agente por su nombre— y emite la
+// SolanaDepositAttestation HMAC que ata el beneficiary (deposit-address) y la release-authority a
+// ESTA remesa ANTES de que el cliente firme (Opción B, DT-1). La wallet arma la ix `deposit` del
+// escrow contra ese beneficiary atestado.
 //
 // Compone challenge/route.ts (emisor HMAC del PoP) + los guards de autoridad WKH-202 y PoP WKH-206.
-// Guard-order fail-closed (envs leídas en runtime, CD-14): 501-BASE → 503-secreto → rate-limit →
-// formato → PoP → fila del veredicto → autoridad → forward → shape+depositAddress → attest →
-// ledger → 200.
+// Guard-order fail-closed (envs leídas en runtime, CD-14): 503-secreto → rate-limit → formato → PoP
+// → fila del veredicto → autoridad → forward → shape+depositAddress → attest → ledger → 200.
+//
+// 🔴 PR1 MURIÓ EN WKH-332/W3, Y ES EL ÚNICO GUARD QUE SE FUE (AC-9). Era el primero de la lista:
+// `if (!REMIT_AGENTS_BASE_URL) → 501 prepare_not_configured`. Se va porque su env se va: esa base
+// era la URL contra la que se armaba `{BASE}/api/agents/<slug>/invoke`, y ese fetch ya no existe.
+// SU AUSENCIA NO DESTAPA NADA, y no es una promesa sino dos hechos verificables:
+//   · El 501 por "falta configuración" SIGUE EXISTIENDO, sólo que ahora lo produce la config que de
+//     verdad se usa: `runViaGateway` corta con `not_configured` SIN hacer ningún fetch cuando falta
+//     `WASIAI_A2A_GATEWAY_URL`, y el bloque PR7 de abajo lo traduce al mismo 501.
+//   · Ningún otro guard dependía de `BASE`: el único lector que quedaba era el `fetch` del `else`
+//     borrado. Input que lo pone en rojo: T-9.2, que corre sin `REMIT_AGENTS_BASE_URL` y exige que
+//     la ruta NO devuelva 501 por eso, y sin `WASIAI_A2A_GATEWAY_URL` y exige que SÍ, sin fetch.
+// El resto del orden queda idéntico en lógica y en posición relativa.
 //
 // 🔴 EL PoP Y LA AUTORIDAD INTERCAMBIARON POSICIÓN EN WKH-333, y son los ÚNICOS dos bloques que se
 // movieron (más uno nuevo insertado entre ellos). El motivo, y qué cierra, está escrito arriba de
@@ -14,13 +26,15 @@
 // cualquiera y esta ruta le contestaba distinto según ese identificador existiera o no, gastándonos
 // un fetch al proveedor de identidad en cada intento.
 //
-// TODO defensivo: NUNCA 500 crudo; errores = enums opacos, PII-free; NUNCA ecoa BASE ni el beneficiary
-// (CD-5). REMIT_AGENTS_BASE_URL vive SOLO acá (server-only, SIN NEXT_PUBLIC_). El depositAddress real
-// (no-null) exige el agente con TRANSFI_ADAPTER_READY=true (cross-repo WKH-212); el mock devuelve null
-// → PR8 fail-closed (nunca se atesta sin address confirmada).
+// TODO defensivo: NUNCA 500 crudo; errores = enums opacos, PII-free; NUNCA ecoa la URL del gateway ni
+// el beneficiary (CD-5). El depositAddress real (no-null) exige que quien resuelva la capacidad tenga
+// TRANSFI_ADAPTER_READY=true (cross-repo WKH-212); el mock devuelve null → PR8 fail-closed (nunca se
+// atesta sin address confirmada).
 import { NextResponse } from "next/server";
 import {
   LOGGABLE_PREPARE_REJECTIONS,
+  PREPARE_NO_AGENT_FOR_CAPABILITY,
+  noAgentMeansNobodyFits,
   prepareRejectionEnum,
 } from "../../../../src/application/agent-rejections";
 import {
@@ -36,7 +50,6 @@ import {
 import { canonicalizeAddress } from "../../../../src/infrastructure/address";
 import {
   PAYOUT_CAPABILITY,
-  PAYOUT_DIRECT_AGENT_SLUG,
   PAYOUT_MIN_REPUTATION,
   logGatewayFailure,
   runViaGateway,
@@ -107,10 +120,6 @@ function readPayoutRejection(v: unknown): { enum: string; logged: string } | nul
 }
 
 export async function POST(req: Request): Promise<Response> {
-  // PR1 — sin backend del agente no hay orden que crear. PRIMERO (intacto respecto de submit:66).
-  const BASE = process.env.REMIT_AGENTS_BASE_URL; // server-only (CD-9), leído en runtime
-  if (!BASE) return NextResponse.json({ error: "prepare_not_configured" }, { status: 501 });
-
   // PR2 — prepare SOLO existe en el path real: sin el secreto NO puede atestar → 503 fail-closed (NUNCA
   // fail-open). Diferencia DELIBERADA con el submit (que skipea local sin secreto): el demo nunca llama
   // a prepare con los flags OFF (no se cablea) ⇒ AC-5 intacto.
@@ -339,83 +348,88 @@ export async function POST(req: Request): Promise<Response> {
     }
   }
 
-  // PR7 — forward al agente (crea la orden TransFi). Transporte según adapter (WKH-304, DT-3/CD-3).
-  // El adapter se lee ACÁ y no antes: PR1-PR6 corren SIEMPRE e idénticos con el flag prendido o
-  // apagado (CD-3) — el cambio de transporte no puede mover un solo guard de lugar.
-  // Este es el ÚNICO leg del money-path que cambia de transporte: el `result` que sale de acá va al
-  // MISMO PR8 (validador del depositAddress) y al MISMO PR9 (emisor de la atestación) que ya existían.
-  // El transporte NO participa de ninguno de los dos (CD-10): el piso de reputación sube el piso, no
-  // reemplaza esas dos capas, que son independientes de QUÉ agente respondió.
-  // 🔴 PAYLOAD SANEADO (WKH-333/AC-16). Se arma UNA vez, ANTES del `if`, y lo usan LAS DOS ramas de
-  // transporte. El `kycVerificationId` del cliente —si vino— queda PISADO por el de la fila: el
-  // spread pone `...body` primero justo para eso. No hay ninguna rama donde el valor del caller
-  // sobreviva, y el test lo asserta en las DOS ramas por separado (T-PR-11 / M-30) precisamente para
-  // que una futura división en dos sitios no pueda regresar en silencio.
+  // PR7 — forward al agente (crea la orden TransFi). UN SOLO transporte: el gateway (WKH-332/AC-1).
+  // El `else` que hacía `fetch({BASE}/api/agents/<slug>/invoke)` se BORRÓ acá, y con él la lectura de
+  // `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` que elegía entre los dos.
+  //
+  // ⚠️ ACÁ DECÍA que con `"fallback"` *"nadie llega hasta acá"*, Y ERA FALSO (AR/BLQ-MED-1). Este
+  // handler NO lee esa bandera ni importa `createContainer`, y el repo no tiene `middleware.ts`: no
+  // hay ningún valor de esa env que lo detenga. La contra-evidencia está en este mismo commit:
+  // (`it.each`, `route.test.ts:1296`) corre con la bandera en `"fallback"` y en `undefined`, y en los
+  // dos casos el POST devuelve **200** y forwardea a `${GW}/compose`. Lo cierto es más chico: con
+  // `"fallback"` el container del CLIENTE cablea los simuladores de COTIZACIÓN y de ESTADO. ⚠️ Y NO que *"la UI propia no llama
+  // a este endpoint"*: eso decía y era FALSO (CR2). Con `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED=true` la llama la UI, por `solana.prepare`.
+  // 🔴 Y ESO CAMBIA EL ROLLBACK. §9 del Story File nombra el flip a `"fallback"` como la palanca. No
+  // corta este handler: sigue creando órdenes TransFi y gastando la Agent Key de Chaski. Lo que sí lo
+  // corta sin re-desplegar es sacarle la config del gateway ⇒ `not_configured` ⇒ el 501 de más abajo.
+  // El `result` que sale de acá va al MISMO PR8 (validador del depositAddress) y al MISMO PR9 (emisor
+  // de la atestación) que ya existían. El transporte NO participa de ninguno de los dos (CD-10): el
+  // piso de reputación sube el piso, no reemplaza esas dos capas, que son independientes de QUÉ
+  // agente respondió.
+  // 🔴 PAYLOAD SANEADO (WKH-333/AC-16). El `kycVerificationId` del cliente —si vino— queda PISADO por
+  // el de la fila: el spread pone `...body` primero justo para eso. Se armaba una vez para las DOS
+  // ramas de transporte; ahora hay una sola y sigue siendo el único objeto que se forwardea.
+  // ⚠️ ACÁ DECÍA *"no hay ningún camino por el que el valor del caller sobreviva"*, y §16 prohíbe esa
+  // clase de afirmación de imposibilidad: es una propiedad de TODO el archivo enunciada desde una
+  // línea, y no la sostiene nada de este renglón. La frase que reemplazó citaba su candado y la nueva
+  // se lo había comido (AR/MNR-3). El candado es **T-PR-11 / M-30**: (`composeBody`,
+  // `route.test.ts:1739`). MEDIDO (está en el verde de la suite): un POST con
+  // `kycVerificationId: "did-QUE-EL-CLIENTE-PROPUSO"` en el body produce un `/compose` que contiene
+  // `did-de-la-fila` y NO contiene el valor del caller. Y el input que lo pone en ROJO ya está MEDIDO
+  // (lo aplicó y revirtió el CR; acá no se muta una route de plata): invertir este spread a
+  // `{ kycVerificationId: …, ...body }` da DOS rojos, (`toBeLessThan`,
+  // `kyc-verification-id-guard.static.test.ts:150`) y (`toContain`, `route.test.ts:1738`).
   //
   // `rowVerificationId` acá SIEMPRE viene de una fila que existe: si no había store se cortó con 503
   // y si no había fila se cortó con 403, las dos cosas arriba. No hay ninguna rama que llegue hasta
   // este renglón con un identificador vacío o propuesto por el cliente.
   const forwardBody = { ...body, kycVerificationId: rowVerificationId };
-  let result: unknown;
-  // QUIÉN dio el depositAddress. `undefined` = no lo sabemos (rama punto-a-punto: ahí el agente lo
-  // fija la URL, no lo elige nadie). Viaja al 200 para que la remesa pueda decir de dónde salió la
-  // dirección contra la que la persona firmó. NO participa de ningún guard.
+  // QUIÉN dio el depositAddress. `undefined` = el gateway no lo dijo de forma legible. Viaja al 200
+  // para que la remesa pueda decir de dónde salió la dirección contra la que la persona firmó. NO
+  // participa de ningún guard.
   let resolvedAgent: Record<string, unknown> | undefined;
-  if (process.env.NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER === "a2a-gateway") {
-    const r = await runViaGateway({
-      steps: [
-        {
-          capability: process.env.WASIAI_A2A_PAYOUT_CAPABILITY ?? PAYOUT_CAPABILITY,
-          constraints: { min_reputation: PAYOUT_MIN_REPUTATION }, // CD-5: NUNCA omitir
-          input: forwardBody, // saneado: el kycVerificationId es el de la fila, no el del cliente
-        },
-      ],
-    });
-    if (!r.ok) {
-      logGatewayFailure("payout-prepare", r);
-      // CD-1: JAMÁS cae al fetch punto-a-punto de abajo. No hay orden, no hay atestación, no hay
-      // ledger. Un fallback silencioso acá crearía la orden con OTRO agente y atestaría SU dirección.
+  const r = await runViaGateway({
+    steps: [
+      {
+        capability: process.env.WASIAI_A2A_PAYOUT_CAPABILITY ?? PAYOUT_CAPABILITY,
+        constraints: { min_reputation: PAYOUT_MIN_REPUTATION }, // CD-5: NUNCA omitir
+        input: forwardBody, // saneado: el kycVerificationId es el de la fila, no el del cliente
+      },
+    ],
+  });
+  if (!r.ok) {
+    logGatewayFailure("payout-prepare", r);
+    // CD-1: no hay ningún fetch de respaldo al que caer, y esa es la propiedad, no una omisión. No
+    // hay orden, no hay atestación, no hay ledger. Un fallback silencioso acá crearía la orden con
+    // OTRO agente y atestaría SU dirección.
+    //
+    // WKH-332/AC-13 — "ninguna capacidad resolvió" sale con enum PROPIO y 422, no con el 502 de una
+    // caída. Reintentar no crea un agente: la misma llamada, un segundo después, vuelve a no
+    // encontrar a nadie, y el 502 invitaba justamente a eso. Es el ÚNICO code que se abre: el resto
+    // —incluido `payment_required`, que hablaría de nuestro saldo y no del pedido de quien llama—
+    // sigue colapsado en `prepare_upstream_error`. Un enum nuestro no es un eco del gateway (CD-5).
+    //
+    // 🔴 Y NO ALCANZA CON EL `code` (AR/BLQ-MED-1). El 422 colapsa CUATRO motivos, y uno de ellos
+    // —`reputation_unavailable`— es "el gateway no pudo leer el historial", o sea "no pude
+    // preguntar". Para ese, decir "no hay ningún proveedor" y "reintentar no cambia el resultado"
+    // es falso en las dos mitades, y desaconseja lo único que funciona. Sale por el enum de caída,
+    // que ya dice lo correcto. El `reason` se USA para ramificar y NUNCA se ecoa (CD-5/CD-8): el
+    // body sigue teniendo una sola clave, y esa clave es una palabra nuestra.
+    if (r.code === "no_agent_match" && noAgentMeansNobodyFits(r.reason))
       return NextResponse.json(
-        { error: r.code === "not_configured" ? "prepare_not_configured" : "prepare_upstream_error" },
-        { status: r.code === "not_configured" ? 501 : 502 },
+        { error: PREPARE_NO_AGENT_FOR_CAPABILITY },
+        { status: 422 },
       );
-    }
-    result = r.outputs[0];
-    // El gateway SÍ dice a quién eligió (`steps[i].agent`); hasta acá se descartaba. Si no lo dijo
-    // de forma legible queda undefined y la remesa lo va a decir así, sin rellenar.
-    const chosen = r.agents[0];
-    if (chosen) resolvedAgent = { ...chosen };
-  } else {
-    // ── rama punto-a-punto EXISTENTE, sin cambios de lógica (CD-15) ──
-    // idempotencyKey intacto (CD-10). Todo en try/catch: timeout/DNS/parse → 502 opaco, NUNCA 500
-    // crudo, NUNCA ecoa el beneficiary.
-    let res: Response;
-    try {
-      // El slug sale de la MISMA constante que el preview muestra como "quién corre hoy" (ver
-      // PAYOUT_DIRECT_AGENT_SLUG): eran dos literales sin relación y la pantalla nombraba otro.
-      res = await fetch(`${BASE}/api/agents/${PAYOUT_DIRECT_AGENT_SLUG}/invoke`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        // MISMO objeto saneado que la rama del gateway (CD-10/CD-5). Si acá volviera `body`, el
-        // agente recibiría el identificador que mandó el cliente en esta rama y el de la fila en la
-        // otra: la misma ruta autorizando distinto según una env de transporte.
-        body: JSON.stringify(forwardBody),
-        signal: AbortSignal.timeout(10_000),
-      });
-    } catch {
-      return NextResponse.json({ error: "prepare_upstream_error" }, { status: 502 });
-    }
-    if (!res.ok) {
-      return NextResponse.json({ error: "prepare_upstream_error" }, { status: 502 });
-    }
-
-    try {
-      const json = (await res.json()) as { result?: unknown };
-      result = json.result;
-    } catch {
-      return NextResponse.json({ error: "prepare_upstream_error" }, { status: 502 });
-    }
+    return NextResponse.json(
+      { error: r.code === "not_configured" ? "prepare_not_configured" : "prepare_upstream_error" },
+      { status: r.code === "not_configured" ? 501 : 502 },
+    );
   }
+  const result: unknown = r.outputs[0];
+  // El gateway SÍ dice a quién eligió (`steps[i].agent`); hasta acá se descartaba. Si no lo dijo
+  // de forma legible queda undefined y la remesa lo va a decir así, sin rellenar.
+  const chosen = r.agents[0];
+  if (chosen) resolvedAgent = { ...chosen };
 
   // PR8 — valida el shape + EXIGE depositAddress string no-vacío + base58 canónico. El mock del agente
   // devuelve depositAddress:null → AQUÍ muere (AC-7 fail-closed): NUNCA se atesta sin address confirmada.

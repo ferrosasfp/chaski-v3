@@ -1,6 +1,6 @@
 // Infrastructure — SolanaPayoutPrepareGateway sobre NUESTRA ruta server-only /api/payout/prepare
 // (HU-SOL-13/AC-1). Corre en el CLIENTE: llama SIEMPRE a /api/payout/prepare y JAMÁS al agente directo
-// (REMIT_AGENTS_BASE_URL vive server-side, CD-6).
+// (no conoce ninguna URL de agente ni de gateway: la capacidad la resuelve el server, CD-6).
 //
 // Adjunta el proof-of-possession ed25519 (WKH-206) que la route exige en PR6: pide el challenge a
 // /api/a2a/payout/challenge vía PopSigner, lo firma con la wallet conectada y lo manda en el mismo
@@ -31,9 +31,13 @@
 //
 // [NC-1]/[NC-2] (founder-gated, FUERA de F3): la resolución REAL del beneficiary (deposit-address Solana
 // de TransFi por orden) y la respuesta Solana-shaped del server (`{beneficiary, authority, ...}` base58)
-// son founder-gated — hasta que el agente remit-cashout-payout exponga el destino Solana. El binding/
+// son founder-gated — hasta que el agente que resuelva `remittance-payout` exponga el destino Solana.
+// (Cuál agente sea no lo elige este repo: lo resuelve el gateway al ejecutar.) El binding/
 // atestación queda listo. Este gateway se unit-testea con un mock (FakeSolanaPayoutPrepareGateway).
-import { PREPARE_REJECTION_ENUMS } from "../../application/agent-rejections";
+import {
+  PREPARE_NO_AGENT_FOR_CAPABILITY,
+  PREPARE_REJECTION_ENUMS,
+} from "../../application/agent-rejections";
 import type { AgentRef, Beneficiary } from "../../domain/remittance";
 import type { PopSigner, SolanaPayoutPrepareGateway } from "../../application/ports";
 
@@ -57,6 +61,12 @@ function mapErrorReason(status: number, error: unknown): string {
       case "payout_pop_unavailable":
       case "prepare_upstream_error":
       case "prepare_no_deposit_address":
+      // WKH-332/AC-13 — 422 "ninguna capacidad resolvió". Va acá y NO en PREPARE_REJECTION_ENUMS a
+      // propósito: esa constante habilita el copy "El agente de pagos rechazó esta remesa", y acá no
+      // hubo agente que rechazara nada. Sin este `case` caería en el `prepare_rejected` de abajo —el
+      // default de "4xx que no reconozco"— y el enum nuevo no lo vería nadie: existiría en la route
+      // y la pantalla seguiría diciendo "Algo salió mal".
+      case PREPARE_NO_AGENT_FOR_CAPABILITY:
         return error; // enum estable de la route → se propaga 1:1
       default:
         break;
@@ -219,7 +229,7 @@ export class HttpSolanaPayoutPrepareGateway implements SolanaPayoutPrepareGatewa
     }
     if (!proof) {
       // `null` = el emisor respondió 501: el server NO tiene PAYOUT_POP_SECRET. La route lee ESA MISMA
-      // env y respondería 503 `payout_pop_unavailable` (route.ts:143-145). Cortamos acá con el enum
+      // env y respondería 503 `payout_pop_unavailable` (route.ts:214-217). Cortamos acá con el enum
       // idéntico en vez de gastar un POST y un token de rate-limit en un rechazo ya determinado.
       return { ok: false, reason: "payout_pop_unavailable" };
     }

@@ -1,5 +1,4 @@
 import type { Money } from "../domain/money";
-import { MIN_SEND_USD } from "../domain/remittance";
 import type { RemittanceState, RemittanceStatus } from "../domain/remittance";
 import {
   PRINCIPAL_SETTLED_REFUND_MANUAL,
@@ -32,10 +31,23 @@ export function isPayoutDemo(p: string | null | undefined): boolean {
 }
 
 /**
- * Proveniencias de KYC que representan una verificación REAL (allowlist fail-safe, misma dirección
- * que `REAL_PAYOUT_PROVENANCES`). El valor NO se escribe a mano acá: se importa de la MISMA constante
- * que lo produce (`decision.ts`), así que un rename del literal rompe la compilación en vez de dejar
- * esta lista apuntando a un valor que ya nadie emite.
+ * Los ORÍGENES DE VERIFICACIÓN QUE PODEMOS AFIRMAR (allowlist fail-safe, misma dirección que
+ * `REAL_PAYOUT_PROVENANCES`). El valor NO se escribe a mano acá: se importa de la MISMA constante que
+ * lo produce (`decision.ts`), así que un rename del literal rompe la compilación en vez de dejar esta
+ * lista apuntando a un valor que ya nadie emite.
+ *
+ * 🔴 EL RE-ENCUADRE DE WKH-332/W4, Y ES DE SIGNIFICADO, NO DE DIRECCIÓN. Este conjunto se leía como
+ * "qué proveedor usamos", una lista de nuestros integrados. Con el catálogo abierto esa lectura invita
+ * al error exacto que CD-7 prohíbe: pensar que si el gateway eligió a alguien, ese alguien "verifica".
+ * Lo que la lista significa es lo otro: de qué orígenes podemos AFIRMAR en pantalla que hubo una
+ * verificación. Nada más.
+ *
+ * ⛔ PROHIBIDO volverla env (mismo motivo que los pisos de reputación: una env con default ausente es
+ * un control que se apaga solo en un entorno nuevo, sin que falle nada).
+ * ⛔ PROHIBIDO derivar "es real" de que el gateway haya elegido al agente, de su `verified` o de su
+ * reputación: `verified` y `reputation` los AUTO-REPORTA el propio card del agente, y el gateway sólo
+ * los neutraliza cuando el step viaja con `min_reputation` (CD-7). Un desconocido que declara
+ * `verified: true` no verificó a nadie.
  *
  * 🔴 POR QUÉ ES UNA ALLOWLIST Y NO UN `=== "local-fallback"`. Acá vivía la comparación contra el
  * único valor simulado CONOCIDO, o sea que todo lo desconocido se leía como real. Con `DIDIT_ENV=mock`
@@ -555,16 +567,26 @@ export function shortErrorCode(raw: string): string | undefined {
 export function humanError(code: string): string {
   if (code.includes("quote_expired") || code.includes("QUOTE_STALE"))
     return "La tasa cambió. Revisá el nuevo monto.";
-  // Familia rechazo-de-cotización. Los tres caían en el default "Algo salió mal. Intentá de nuevo",
-  // que para un monto fuera de rango es un consejo equivocado: intentar de nuevo con el mismo monto
-  // vuelve a fallar. El texto nombra la causa y la única acción que la arregla.
-  // El mínimo se formatea desde la MISMA constante que usa el guard de la pantalla, así que no
-  // puede quedar desactualizado respecto de lo que el flujo exige. Del techo no hay copia local: el
-  // agente es la autoridad y no publicamos un número que no tenemos.
-  if (code.includes("fx_amount_below_minimum"))
-    return `El monto es menor al mínimo que acepta este corredor. Probá con ${MIN_SEND_USD} dólares o más.`;
-  if (code.includes("fx_amount_above_maximum"))
-    return "El monto supera el máximo que este corredor acepta por envío. Probá con un monto menor.";
+  // 🔴 ACÁ VIVÍAN DOS RAMAS `fx_*` Y SE FUERON EN WKH-332/W4 (AC-5), con la regresión declarada.
+  //
+  // Eran el copy de `fx_amount_below_minimum` ("Probá con N dólares o más") y de
+  // `fx_amount_above_maximum`. `fx_*` es el vocabulario PRIVADO de un agente concreto, y llegaba acá
+  // porque el carril punto a punto leía el body de error del agente y relayaba su `reason`. Ese
+  // carril se borró: por `/compose` el step fallado viaja SIN `code` y SIN `reason`, así que NINGÚN
+  // productor puede emitir esos códigos. Dejar el copy habría hecho que la pantalla PAREZCA capaz de
+  // nombrar la causa de un rechazo de monto cuando AC-4 está declarado NO CUMPLIDO — una promesa que
+  // el código no puede sostener, que es peor que la regresión.
+  //
+  // ⚠️ CONSECUENCIA DECLARADA, no descubierta en producción: una remesa guardada ANTES de este deploy
+  // puede tener `failureReason: "fx_amount_below_minimum"` en el almacenamiento local. Esa remesa
+  // ahora lee el default genérico en vez del copy del mínimo. Es la misma regresión de AC-4 aplicada
+  // al historial, y se acepta por la misma razón: el alternativo es una frase que afirma más que el
+  // dato. El guard de la PANTALLA sigue impidiendo el envío por debajo del mínimo antes de cotizar
+  // (`MIN_SEND_USD`), así que el caso nuevo se corta antes de llegar a un rechazo.
+  //
+  // El enum de FAMILIA sí se queda: `a2a_quote_rejected` es una palabra NUESTRA, no del agente, y es
+  // lo único que una remesa vieja puede traer que siga siendo cierto (el corredor rechazó, sin decir
+  // por qué).
   if (code.includes("a2a_quote_rejected"))
     return "No pudimos cotizar este envío: el corredor lo rechazó. Probá con otro monto.";
   // CD-5: ANTES de includes("kyc") — el string "kyc_pending_unavailable" contiene "kyc".
@@ -664,6 +686,37 @@ export function humanError(code: string): string {
   // distingue a propósito — mandar a re-verificarse por una caída nuestra es un consejo equivocado.
   if (code.includes("prepare_kyc_verdict_unavailable"))
     return "No pudimos comprobar tu verificación de identidad. No se movió ningún USDC: es una falla temporal nuestra, probá de nuevo en un rato.";
+  // WKH-332/AC-13 — NO HAY QUIÉN. Es el tercer desenlace, y hasta acá se decía con las palabras de
+  // los otros dos: salía por `prepare_upstream_error` / `a2a_unavailable`, o sea "el otro lado se
+  // cayó", y el copy invitaba a reintentar. Reintentar no crea un agente. Las dos frases dicen las
+  // dos cosas que hay que decir: (1) que volver a intentar igual no cambia nada, y (2) que no se
+  // movió ningún USDC — que acá NO es un consuelo sino un hecho del orden de la ruta: el prepare
+  // corre antes de `authorizePrincipal` (`confirm-and-send.ts`:384-388), o sea antes de la primera
+  // firma de la billetera.
+  //
+  // ⚠️ VAN ANTES de los dos catch-all de abajo (`kyc` y `payout`) a propósito. Los enums elegidos no
+  // contienen ninguna de esas dos subcadenas —`prepare_no_agent_for_capability` empieza con
+  // "prepare"—, así que hoy la posición no cambia el resultado; lo que la vuelve load-bearing es el
+  // día que alguien renombre un enum. T-13.3 clava la propiedad (los enums no contienen "kyc" ni
+  // "payout") en vez del orden, porque la propiedad es lo que un input concreto puede romper.
+  //
+  // Y NINGUNA de las dos dice quién era el agente ni por qué no calificó: no lo sabemos, no hubo
+  // agente. Prometer ese detalle sería la clase de frase que esta HU vino a sacar de la pantalla.
+  //
+  // 🔴 LAS DOS AFIRMAN "no hay ningún proveedor", Y ESA AFIRMACIÓN LA SOSTIENE LA ROUTE, NO ESTE
+  // ARCHIVO (AR/BLQ-MED-1). El 422 del gateway colapsa cuatro motivos y uno —`reputation_unavailable`—
+  // significa "no pude leer el historial", o sea que NO sabemos si hay proveedor. Las dos rutas
+  // filtran por `noAgentMeansNobodyFits` (`src/application/agent-rejections.ts`) antes de emitir
+  // estos enums; ese motivo sale por el enum de caída. Input que vuelve falsa la frase de acá abajo:
+  // borrar ese filtro de `prepare/route.ts` o de `quote/route.ts` — T-13.4 y T-13.5 se ponen rojos.
+  //
+  // Son DOS ramas y no una compartida porque los dos legs cortan en momentos distintos del flujo: el
+  // de FX antes de que exista una cotización, el del desembolso con la cotización ya en pantalla. Una
+  // sola frase para los dos tendría que ser vaga en uno de los dos.
+  if (code.includes("prepare_no_agent_for_capability"))
+    return "Ahora mismo no hay ningún proveedor que pueda entregar este envío. No se movió ningún USDC de tu wallet. Volver a intentar ahora no cambia el resultado: probá más tarde.";
+  if (code.includes("a2a_no_agent_for_capability"))
+    return "Ahora mismo no hay ningún proveedor que pueda cotizar este envío, así que no llegamos a darte un precio. No se movió ningún USDC de tu wallet. Volver a intentar ahora no cambia el resultado: probá más tarde.";
   if (code.includes("kyc")) return "No pudimos verificar tu identidad.";
   // ⚠️ ACÁ SE PROMETÍA UN REEMBOLSO QUE NO EXISTE: "Si te cobramos, te reembolsamos". El adapter de
   // refund por defecto (`LedgerRefundGateway`) no mueve un peso y devuelve `refundTx: null` a
@@ -672,7 +725,7 @@ export function humanError(code: string): string {
   // propia persona, o la release-authority a mano. O sea que nadie devuelve nada solo.
   //
   // Es el texto que MÁS se lee de este archivo: TrackView lo usa como último recurso para cualquier
-  // `payout_failed` cuyo reason no reconozca (`humanError`, `flow.tsx:1308`), justo cuando no sabemos dónde está la
+  // `payout_failed` cuyo reason no reconozca (`humanError`, `flow.tsx:1359`), justo cuando no sabemos dónde está la
   // plata. Prometer un reembolso ahí manda a esperar sentado en vez de a la única acción que sirve.
   // WKH-333 — VA ANTES del catch-all de `payout`, y arregla un defecto de copy PREEXISTENTE que este
   // cambio vuelve mucho más alcanzable. `payout_not_authorized` no contiene "kyc", así que caía en el

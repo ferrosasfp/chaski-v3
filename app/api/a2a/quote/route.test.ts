@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FX_DIRECT_AGENT_SLUG } from "../../../../src/infrastructure/a2a/gateway-client";
+import { NO_AGENT_REASONS_MEANING_NOBODY } from "../../../../src/application/agent-rejections";
 import { POST } from "./route";
-
-const BASE = "https://agents.example.com";
 
 function req(payload: unknown): Request {
   return new Request("http://localhost/api/a2a/quote", {
@@ -19,210 +17,32 @@ const validResult = {
   netDeliveredLocal: 1478.15,
   etaMinutes: 30,
   expiresAt: "2026-07-09T18:10:00.000Z",
-  provenance: "remit-corridor-fx",
+  provenance: "fx-quote-provider",
 };
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("POST /api/a2a/quote — proxy server-only a remit-corridor-fx (WKH-186)", () => {
-  it("sin REMIT_AGENTS_BASE_URL → 501 a2a_not_configured, fetch NOT called (CD-9)", async () => {
-    vi.stubEnv("REMIT_AGENTS_BASE_URL", "");
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    const res = await POST(req({ amountUsd: 400, destCountry: "PE", payoutMethod: "yape" }));
-    expect(res.status).toBe(501);
-    expect(await res.json()).toEqual({ error: "a2a_not_configured" });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("con base + agente ok → 200 { result }, NO ecoa la base (CD-9)", async () => {
-    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
-    const fetchMock = vi.fn(async (url: string) => {
-      expect(url).toBe(`${BASE}/api/agents/remit-corridor-fx/invoke`);
-      return { ok: true, json: async () => ({ result: validResult }) };
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const res = await POST(req({ amountUsd: 400, destCountry: "PE", payoutMethod: "yape" }));
-    expect(res.status).toBe(200);
-    const raw = await res.text();
-    expect(raw).not.toContain(BASE);
-    expect(JSON.parse(raw)).toEqual({ result: validResult });
-  });
-
-  // El test de arriba clava el VALOR del slug; éste clava el CABLEADO. Son cosas distintas: el preview
-  // de `/api/a2a/plan` dice "hoy corre X" leyendo `FX_DIRECT_AGENT_SLUG`, y esa afirmación sólo vale si
-  // ESTA route llama a esa misma constante. Cuando eran dos literales sueltos, la pantalla terminó
-  // nombrando `remit-corridor-fx-solana` mientras acá se llamaba a `remit-corridor-fx`.
-  it("la URL sale de la MISMA constante que el preview publica como 'quién corre hoy'", async () => {
-    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
-    const urls: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        urls.push(String(url));
-        return { ok: true, json: async () => ({ result: validResult }) };
-      }),
-    );
-    await POST(req({ amountUsd: 400, destCountry: "PE", payoutMethod: "yape" }));
-    expect(urls).toEqual([`${BASE}/api/agents/${FX_DIRECT_AGENT_SLUG}/invoke`]);
-  });
-
-  it("agente !ok → 502 a2a_upstream_error (nunca 500)", async () => {
-    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
-    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) })));
-    const res = await POST(req({ amountUsd: 400 }));
-    expect(res.status).toBe(502);
-    expect(await res.json()).toEqual({ error: "a2a_upstream_error" });
-  });
-
-  it("shape inválido del agente → 502 a2a_bad_shape", async () => {
-    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
-    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ result: { quoteId: "x" } }) })));
-    const res = await POST(req({ amountUsd: 400 }));
-    expect(res.status).toBe(502);
-    expect(await res.json()).toEqual({ error: "a2a_bad_shape" });
-  });
-
-  it("WKH-198 AC-4: expiresAt no-parseable del agente → 502 a2a_bad_shape (CD-9)", async () => {
-    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
-    vi.stubGlobal("fetch", vi.fn(async () => ({
-      ok: true,
-      json: async () => ({ result: { ...validResult, expiresAt: "not-a-date" } }),
-    })));
-    const res = await POST(req({ amountUsd: 400, destCountry: "PE", payoutMethod: "yape" }));
-    expect(res.status).toBe(502);
-    expect(await res.json()).toEqual({ error: "a2a_bad_shape" });
-  });
-
-  it("fetch throw (timeout/DNS) → 502 a2a_unavailable, NO 500 crudo", async () => {
-    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
-    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("aborted"); }));
-    const res = await POST(req({ amountUsd: 400 }));
-    expect(res.status).toBe(502);
-    expect(await res.json()).toEqual({ error: "a2a_unavailable" });
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Hallazgo #75 — un RECHAZO del agente no es el agente caído.
+// 🔴 ACÁ VIVÍAN LOS 15 TESTS DEL CARRIL PUNTO A PUNTO, Y MURIERON CON ÉL (WKH-332/W3).
 //
-// Medido en producción el 2026-08-04: `{"amountUsd":2}` y `{"amountUsd":50000}` devolvían los dos
-// 502 `a2a_upstream_error`, cuando el agente había contestado 400 `fx_amount_below_minimum` y 400
-// `fx_amount_above_maximum`. Cada `it` de acá abajo muere si esa causa vuelve a colapsar en el enum
-// viejo, y el último candado muere si un fallo de infraestructura genuino deja de ser 502.
-// ─────────────────────────────────────────────────────────────────────────────
-describe("POST /api/a2a/quote — rechazo del agente ≠ agente caído (hallazgo #75)", () => {
-  /** Agente que contesta un no-2xx con el body de error dado. */
-  function agentRejects(status: number, body: unknown) {
-    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
-    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({ ok: false, status, json: async () => body })),
-    );
-  }
+// Eran dos `describe`: "proxy server-only al agente <slug>" (7 `it`) y "rechazo del agente ≠ agente
+// caído (hallazgo #75)" (8 `it`, contando el `it.each` de 8 statuses como uno). LOS DOS ejercitaban
+// el `fetch({base}/api/agents/<slug>/invoke)` que esta HU borró, así que no hay forma de portarlos:
+// no queda ninguna respuesta HTTP de un agente que la route lea. Lo que probaban, y dónde quedó:
+//
+//  · "sin la base de los agentes → 501": el 501 sigue existiendo y ahora lo produce la config que de
+//    verdad se usa. Lo cubre "gateway not_configured (falta WASIAI_A2A_GATEWAY_URL) ⇒ 501, sin fetch".
+//  · "la URL sale de la MISMA constante que el preview publica": no hay constante ni URL con un
+//    nombre adentro. Lo que la reemplaza es un candado ESTÁTICO, no un `it`:
+//    `src/composition/agent-slug-residue.static.test.ts` (T-2.1).
+//  · shape inválido / expiresAt no-parseable / fetch que tira: sobreviven enteros en el describe del
+//    gateway ("gateway shape inválido ⇒ 502 a2a_bad_shape", "/compose inalcanzable (throw) ⇒ 502").
+//  · 🔴 EL HALLAZGO #75 DEL LADO DE FX SE PIERDE, Y VA DECLARADO, NO DISIMULADO. Distinguir "el
+//    agente rechazó el monto" de "el agente se cayó" exigía leer su `400 fx_amount_below_minimum`, y
+//    por `/compose` ese enum NO LLEGA: el step fallado viaja sin `code` y sin `reason`. Es la
+//    regresión de AC-4, declarada NO CUMPLIDA por decisión del founder, con `WKH-335` abierta en
+//    `wasiai-a2a` para que el desenlace vuelva a llegar estructural. El candado que deja escrito que
+//    el copy YA NO promete distinguir la causa es T-4.1', en `src/presentation/flow-vm.test.ts`.
 
-  it("monto BAJO EL MÍNIMO ⇒ 400 a2a_quote_rejected + reason fx_amount_below_minimum (no 502)", async () => {
-    agentRejects(400, { error: "fx_amount_below_minimum", minSendUsd: 5 });
-    const res = await POST(req({ amountUsd: 2, destCountry: "PE", payoutMethod: "yape" }));
-    expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({
-      error: "a2a_quote_rejected",
-      reason: "fx_amount_below_minimum",
-    });
-  });
-
-  it("monto SOBRE EL TECHO ⇒ 400 a2a_quote_rejected + reason fx_amount_above_maximum (no 502)", async () => {
-    agentRejects(400, { error: "fx_amount_above_maximum", maxSendUsd: 10000 });
-    const res = await POST(req({ amountUsd: 50000, destCountry: "PE", payoutMethod: "yape" }));
-    expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({
-      error: "a2a_quote_rejected",
-      reason: "fx_amount_above_maximum",
-    });
-  });
-
-  // Las dos causas nuevas tienen que ser distinguibles ENTRE SÍ, no sólo del 502. Un mapeo que las
-  // colapsara a un único enum de rechazo pasaría los dos `it` de arriba por separado si el enum
-  // fuera el mismo; este las corre juntas y compara.
-  it("mínimo y techo NO comparten enum (las dos causas se distinguen entre sí)", async () => {
-    agentRejects(400, { error: "fx_amount_below_minimum" });
-    const bajo = (await (await POST(req({ amountUsd: 2 }))).json()) as { reason?: string };
-    agentRejects(400, { error: "fx_amount_above_maximum" });
-    const alto = (await (await POST(req({ amountUsd: 50000 }))).json()) as { reason?: string };
-    expect(bajo.reason).not.toBe(alto.reason);
-  });
-
-  // El agente rechaza pero con un enum que este código no conoce: sale el enum de FAMILIA, sin el
-  // reason. La allow-list es lo que decide, y un string crudo del agente NUNCA llega al browser.
-  it("rechazo con enum desconocido ⇒ 400 a2a_quote_rejected SIN reason (allow-list, cero eco crudo)", async () => {
-    agentRejects(400, { error: "fx_corredor_en_mantenimiento", detalle: "texto libre del agente" });
-    const res = await POST(req({ amountUsd: 400 }));
-    expect(res.status).toBe(400);
-    const raw = await res.text();
-    expect(JSON.parse(raw)).toEqual({ error: "a2a_quote_rejected" });
-    expect(raw).not.toContain("fx_corredor_en_mantenimiento");
-    expect(raw).not.toContain("texto libre");
-  });
-
-  it("el enum del rechazo se lee de `code`/`reason` además de `error` (el contrato de error no está vendoreado)", async () => {
-    agentRejects(422, { code: "fx_amount_below_minimum" });
-    expect(await (await POST(req({ amountUsd: 2 }))).json()).toEqual({
-      error: "a2a_quote_rejected",
-      reason: "fx_amount_below_minimum",
-    });
-    agentRejects(422, { reason: "fx_amount_above_maximum" });
-    expect(await (await POST(req({ amountUsd: 99999 }))).json()).toEqual({
-      error: "a2a_quote_rejected",
-      reason: "fx_amount_above_maximum",
-    });
-  });
-
-  it("rechazo con body ILEGIBLE ⇒ sigue siendo 400 (rechazo), nunca 502 ni 500 crudo", async () => {
-    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({
-        ok: false,
-        status: 400,
-        json: async () => {
-          throw new Error("<html>bad gateway page</html>");
-        },
-      })),
-    );
-    const res = await POST(req({ amountUsd: 2 }));
-    expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: "a2a_quote_rejected" });
-  });
-
-  // ── CANDADO DE NO-REGRESIÓN ────────────────────────────────────────────────────────────────────
-  // Un fallo de infraestructura GENUINO sigue siendo 502. Si alguien "arregla" la separación
-  // mandando todo no-2xx por la rama de rechazo, esto se pone rojo: un 503 del agente NO es culpa
-  // del monto que escribió la persona, y decirle "revisá tu pedido" la manda a corregir algo que
-  // está bien. 401/403/404 están por la misma razón: son credenciales/ruta NUESTRAS, no su pedido.
-  it.each([500, 502, 503, 504, 401, 403, 404, 429])(
-    "CANDADO: status %i del agente ⇒ sigue siendo 502 a2a_upstream_error",
-    async (status) => {
-      agentRejects(status, { error: "fx_amount_below_minimum" }); // aunque el body mienta
-      const res = await POST(req({ amountUsd: 2 }));
-      expect(res.status).toBe(502);
-      expect(await res.json()).toEqual({ error: "a2a_upstream_error" });
-    },
-  );
-
-  it("CANDADO: timeout/DNS (fetch throw) ⇒ sigue siendo 502 a2a_unavailable", async () => {
-    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        throw new Error("aborted");
-      }),
-    );
-    const res = await POST(req({ amountUsd: 2 }));
-    expect(res.status).toBe(502);
-    expect(await res.json()).toEqual({ error: "a2a_unavailable" });
-  });
-});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WKH-218 + WKH-304 — modo de transporte "a2a-gateway": el quote se pide por CAPACIDAD a
@@ -234,7 +54,7 @@ const KEY = "ak_secret";
 const composeOk = { success: true, steps: [{ output: validResult }] };
 
 /** Router que separa la llamada al gateway (/compose) del fetch DIRECTO al agente.
- *  directCalls > 0 ⇒ hubo fallback punto-a-punto (prohibido, CD-1). */
+ *  directCalls > 0 ⇒ alguien reintrodujo un fetch fuera del gateway (prohibido, CD-1/AC-1). */
 function gwRouter(
   opts: {
     compose?: () => unknown;
@@ -255,7 +75,7 @@ function gwRouter(
         json: async () => opts.compose?.() ?? composeOk,
       };
     }
-    directCalls.push(url); // {BASE}/api/agents/.../invoke — el punto-a-punto que NUNCA debe ocurrir
+    directCalls.push(url); // cualquier URL que no sea /compose — con W3 ya no debería existir ninguna
     return { ok: true, status: 200, json: async () => ({ result: validResult }) };
   });
   return { fn, directCalls };
@@ -266,12 +86,14 @@ describe("POST /api/a2a/quote — modo a2a-gateway (WKH-218 / WKH-304)", () => {
     vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gateway");
     vi.stubEnv("WASIAI_A2A_GATEWAY_URL", GW);
     vi.stubEnv("WASIAI_A2A_AGENT_KEY", KEY);
-    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE); // seteada, pero el gateway NO debe usarla (DT-A2A-9)
+    // 🔴 ACÁ SE STUBEABA TAMBIÉN LA BASE DE LOS AGENTES, "seteada pero que el gateway no debe usar".
+    // Ya no hay nada que no usar: la env se borró del código en W3 y ningún test de este archivo la
+    // stubea. Que los 16 `it` pasen sin ella es la evidencia de runtime de que la route no la lee.
   }
 
   // (portado del caso "AC-1: /discover + /compose") — ahora el único request es /compose y lo que
   // viaja es la CAPACIDAD, no un nombre de agente.
-  it("AC-1: gateway → ÚNICO fetch a {GW}/compose con la capability (cero /discover, cero {BASE}/api/agents)", async () => {
+  it("AC-1: gateway → ÚNICO fetch a {GW}/compose con la capability (cero /discover, cero /api/agents/)", async () => {
     setGatewayEnv();
     // Ausencia REAL de la env (stubEnv(…, undefined) la BORRA) ⇒ default del código (CD-14). Ojo:
     // el `??` de la route sólo cae al default con la env ausente, no con la env en "" — por eso el
@@ -309,7 +131,7 @@ describe("POST /api/a2a/quote — modo a2a-gateway (WKH-218 / WKH-304)", () => {
           {
             output: validResult,
             agent: {
-              slug: "remit-corridor-fx",
+              slug: "fx-provider-elegido-por-el-gateway",
               registry: "WasiAI",
               invokeUrl: "https://interno.example.com/invoke", // NO debe salir
               trial: { granted: true, under_min_reputation: 2 },
@@ -328,7 +150,7 @@ describe("POST /api/a2a/quote — modo a2a-gateway (WKH-218 / WKH-304)", () => {
     expect(JSON.parse(raw)).toEqual({
       result: validResult,
       agent: {
-        slug: "remit-corridor-fx",
+        slug: "fx-provider-elegido-por-el-gateway",
         registry: "WasiAI",
         capability: "remittance-fx-quote",
         trial: true,
@@ -371,13 +193,20 @@ describe("POST /api/a2a/quote — modo a2a-gateway (WKH-218 / WKH-304)", () => {
     const res = await POST(req({ amountUsd: 400 }));
     expect(res.status).toBe(502);
     expect(await res.json()).toEqual({ error: "a2a_unavailable" });
-    expect(directCalls).not.toContain(`${BASE}/api/agents/remit-corridor-fx/invoke`);
     expect(directCalls).toHaveLength(0);
   });
 
   // (portado de "/discover agents:[] (vacío) ⇒ 502") — el vacío del discover ya no existe: hoy el
   // "no hay agente para esa capacidad" es un 422 no_agent_match del gateway, y sigue sin fallback.
-  it("AC-2/AC-4 ESTRELLA: 422 no_agent_match ⇒ 502 opaco, cero punto-a-punto, y el detalle SÓLO al log", async () => {
+  // 🔴 T-13.2 (WKH-332/AC-13) — ESTE CASO CAMBIÓ DE VEREDICTO, Y LA RAZÓN VA ESCRITA.
+  //
+  // Hasta acá este `it` clavaba `502 a2a_unavailable`, o sea que "ninguna capacidad resolvió" salía
+  // con las palabras de una caída y la pantalla invitaba a reintentar. Reintentar no crea un agente:
+  // la misma llamada, un segundo después, vuelve a no encontrar a nadie. Ahora sale 422 con enum
+  // PROPIO. Lo que NO cambió, y por eso se conserva línea por línea abajo: el body sigue teniendo
+  // exactamente una clave, sigue sin haber ningún fetch punto-a-punto, y el `message` del gateway
+  // sigue sin loguearse. Un enum nuestro no es un eco del gateway (CD-5).
+  it("T-13.2/AC-13: 422 no_agent_match ⇒ 422 con enum PROPIO, cero punto-a-punto, y el detalle SÓLO al log", async () => {
     setGatewayEnv();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { fn, directCalls } = gwRouter({
@@ -391,9 +220,9 @@ describe("POST /api/a2a/quote — modo a2a-gateway (WKH-218 / WKH-304)", () => {
     });
     vi.stubGlobal("fetch", fn);
     const res = await POST(req({ amountUsd: 400 }));
-    expect(res.status).toBe(502);
+    expect(res.status).toBe(422);
     const json = await res.json();
-    expect(json).toEqual({ error: "a2a_unavailable" });
+    expect(json).toEqual({ error: "a2a_no_agent_for_capability" });
     expect(Object.keys(json)).toEqual(["error"]); // CD-8: cero eco del gateway en el body
     expect(directCalls).toHaveLength(0); // cero fallback silencioso
     // CD-9/AC-2: el operador SÍ puede distinguir "no hay agente" de "gateway caído", pero por log.
@@ -402,6 +231,118 @@ describe("POST /api/a2a/quote — modo a2a-gateway (WKH-218 / WKH-304)", () => {
     expect(logged).toContain("no_candidates");
     expect(logged).not.toContain("no agent matched capability"); // el message del gateway NO se loguea
   });
+
+  // 🔴 LOS DOS DESENLACES EN EL MISMO `it`, COMPARADOS ENTRE SÍ. Un test que sólo mire el caso nuevo
+  // no prueba que se DISTINGAN: pasaría igual con los dos mapeados al mismo enum. Lo que AC-13 pide
+  // no es que exista un 422, es que "no hay quién" y "el otro lado se cayó" dejen de decirse igual.
+  it("T-13.2/AC-13: no_agent_match y una caída del gateway NO comparten ni status ni enum", async () => {
+    setGatewayEnv();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const sinAgente = gwRouter({
+      status: 422,
+      compose: () => ({ code: "no_agent_match", reason: "no_candidates", step: 0 }),
+    });
+    vi.stubGlobal("fetch", sinAgente.fn);
+    const resSinAgente = await POST(req({ amountUsd: 400 }));
+    const jsonSinAgente = await resSinAgente.json();
+
+    // 503 del gateway ⇒ `unavailable` en el cliente ⇒ el 502 de siempre, INTACTO (CD-22: sólo se
+    // abrió `no_agent_match`; `payment_required` y el resto siguen colapsados).
+    const caido = gwRouter({ status: 503, compose: () => ({ code: "unavailable" }) });
+    vi.stubGlobal("fetch", caido.fn);
+    const resCaido = await POST(req({ amountUsd: 400 }));
+    const jsonCaido = await resCaido.json();
+
+    expect(resSinAgente.status).toBe(422);
+    expect(jsonSinAgente).toEqual({ error: "a2a_no_agent_for_capability" });
+    expect(resCaido.status).toBe(502);
+    expect(jsonCaido).toEqual({ error: "a2a_unavailable" });
+    // La comparación explícita: el mutante que mapee los dos al mismo lado muere acá.
+    expect(resSinAgente.status).not.toBe(resCaido.status);
+    expect(jsonSinAgente.error).not.toBe(jsonCaido.error);
+    expect(sinAgente.directCalls).toHaveLength(0);
+    expect(caido.directCalls).toHaveLength(0);
+  });
+
+  // T-13.5 (AR fix-pack BLQ-MED-1) — el leg de FX, mismo agujero: el 422 no es un solo desenlace.
+  //
+  // `reputation_unavailable` es "el gateway no pudo leer el historial" (MEDIDO en
+  // `wasiai-a2a/src/services/capability-resolver.ts`), no "no hay nadie". El copy del enum nuevo dice
+  // "no hay ningún proveedor que pueda cotizar" y "volver a intentar no cambia el resultado": las dos
+  // mitades son falsas para ese motivo, y la segunda desaconseja el reintento que sí puede servir.
+  // El 502 genérico ("Algo salió mal, probá de nuevo") es vago y CIERTO, así que ahí vuelve.
+  it("T-13.5/AR: `reputation_unavailable` NO sale como 'no hay proveedor' — vuelve al 502 genérico", async () => {
+    setGatewayEnv();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const nadie = gwRouter({
+      status: 422,
+      compose: () => ({ code: "no_agent_match", reason: "no_candidates", step: 0 }),
+    });
+    vi.stubGlobal("fetch", nadie.fn);
+    const resNadie = await POST(req({ amountUsd: 400 }));
+    const jsonNadie = await resNadie.json();
+
+    // Mismo status, mismo `code`, otro `reason`: lo único que cambia es lo que el gateway SABE.
+    const noSabe = gwRouter({
+      status: 422,
+      compose: () => ({ code: "no_agent_match", reason: "reputation_unavailable", step: 0 }),
+    });
+    vi.stubGlobal("fetch", noSabe.fn);
+    const resNoSabe = await POST(req({ amountUsd: 400 }));
+    const jsonNoSabe = await resNoSabe.json();
+
+    expect(resNadie.status).toBe(422);
+    expect(jsonNadie).toEqual({ error: "a2a_no_agent_for_capability" });
+    expect(resNoSabe.status).toBe(502);
+    expect(jsonNoSabe).toEqual({ error: "a2a_unavailable" });
+    expect(resNadie.status).not.toBe(resNoSabe.status);
+
+    // Un 422 sin `reason` tampoco habilita la afirmación fuerte.
+    const mudo = gwRouter({ status: 422, compose: () => ({ code: "no_agent_match", step: 0 }) });
+    vi.stubGlobal("fetch", mudo.fn);
+    expect((await POST(req({ amountUsd: 400 }))).status).toBe(502);
+
+    // CD-5/CD-8: se ramificó por el `reason` y NO se ecoó. Al log sí va, que es donde el operador lo
+    // necesita para saber que el problema no está en el catálogo.
+    expect(Object.keys(jsonNoSabe)).toEqual(["error"]);
+    expect(JSON.stringify(jsonNoSabe)).not.toContain("reputation");
+    expect(JSON.stringify(warn.mock.calls)).toContain("reputation_unavailable");
+    expect(noSabe.directCalls).toHaveLength(0);
+  });
+
+  // T-13.6 (CR/BLQ-MED-2) — LOS TRES VALORES DE LA ALLOWLIST, EJERCITADOS CONTRA LA ROUTE.
+  //
+  // Los dos `it` de arriba usan `no_candidates` y nada más. `excluded_by_scope` y
+  // `excluded_by_reputation` estaban en la constante y no los ejercitaba ninguna route: cada uno de
+  // ellos SÍ tiene que salir por el enum de AC-13, y `excluded_by_reputation` es el 422 más probable
+  // en producción con los pisos de reputación en 2.
+  //
+  // Se recorre la CONSTANTE, no una lista copiada: un valor nuevo entra a este `each` solo. Lo que
+  // este `each` NO puede ver es el BORRADO de un valor (deja de correrse y sigue verde); eso lo mata
+  // la tabla del universo en `src/application/agent-rejections.test.ts`.
+  it.each(NO_AGENT_REASONS_MEANING_NOBODY)(
+    "T-13.6/AC-13: el 422 con reason '%s' sale por el enum propio, no por el de caída",
+    async (reason) => {
+      setGatewayEnv();
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const { fn, directCalls } = gwRouter({
+        status: 422,
+        compose: () => ({ code: "no_agent_match", reason, step: 0 }),
+      });
+      vi.stubGlobal("fetch", fn);
+
+      const res = await POST(req({ amountUsd: 400 }));
+      const json = await res.json();
+
+      expect(res.status).toBe(422);
+      expect(json).toEqual({ error: "a2a_no_agent_for_capability" });
+      expect(Object.keys(json)).toEqual(["error"]); // CD-8: cero eco del gateway en el body
+      expect(JSON.stringify(json)).not.toContain(reason); // se ramifica por el reason, no se ecoa
+      expect(directCalls).toHaveLength(0);
+    },
+  );
 
   it("gateway not_configured (falta WASIAI_A2A_GATEWAY_URL) ⇒ 501, sin fetch", async () => {
     vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gateway");
@@ -427,39 +368,121 @@ describe("POST /api/a2a/quote — modo a2a-gateway (WKH-218 / WKH-304)", () => {
     expect(await res.json()).toEqual({ error: "a2a_bad_shape" });
   });
 
-  it("AC-6: flag='a2a' (no gateway) ⇒ punto-a-punto byte-idéntico ({BASE}/api/agents/remit-corridor-fx/invoke)", async () => {
-    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a"); // no gateway
-    vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
-    const fetchMock = vi.fn(async (url: string) => {
-      expect(url).toBe(`${BASE}/api/agents/remit-corridor-fx/invoke`); // el path de siempre
-      return { ok: true, json: async () => ({ result: validResult }) };
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const res = await POST(req({ amountUsd: 400, destCountry: "PE", payoutMethod: "yape" }));
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ result: validResult });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  // T-A4.1 — byte-identidad flag OFF: aunque las envs del gateway estén SETEADAS, con el flag ≠
-  // "a2a-gateway" el gateway se IGNORA por completo (CD-15). "construye, no enciende".
-  // El assert es sobre /compose: con /discover borrado, asertar que NO se llama a /discover pasa
-  // trivialmente y deja de proteger nada.
-  it.each(["fallback", "a2a", undefined])(
-    "T-A4.1: flag=%s + WASIAI_A2A_* seteadas ⇒ gateway IGNORADO (fetch al {BASE}/api/agents/...)",
+  // T-1.1 (WKH-332/AC-1) — EL CANDADO DEL TRANSPORTE ÚNICO.
+  //
+  // 🔴 QUÉ REEMPLAZA, Y POR QUÉ NO ES EL MISMO TEST CON OTRO NOMBRE. Acá había dos `it` que asertaban
+  // lo CONTRARIO: "flag='a2a' ⇒ punto-a-punto byte-idéntico" y T-A4.1 "flag=fallback|a2a|ausente ⇒ el
+  // gateway se IGNORA y se hace el fetch al agente por su slug". Los dos clavaban que existiera un
+  // segundo transporte alcanzable por una env, que es exactamente lo que esta HU borró: portarlos
+  // habría sido conservar el invariante viejo. Se invierten, y el eje que sobrevive es el que importa:
+  // NINGÚN valor de la bandera produce un fetch a un agente por su nombre.
+  //
+  // Que `directCalls` sea 0 no es una tautología del router: `gwRouter` empuja a `directCalls` TODA
+  // URL que no contenga "/compose", así que un fetch a cualquier otra parte lo pondría rojo.
+  //
+  // ⚠️ `"a2a"` NO está en esta lista, y no por olvido: post-W3 ese valor ni siquiera llega a la route
+  // —`createContainer()` tira antes—, y esta route ya no lee la bandera. Su caso vive donde importa:
+  // `src/composition/value-delivery-adapter.test.ts` y `src/composition/container.test.ts`.
+  it.each(["a2a-gateway", "fallback", undefined])(
+    "T-1.1: con la bandera en %s el ÚNICO fetch es {GW}/compose — cero /api/agents/",
     async (flag) => {
-      if (flag === undefined) vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "");
+      if (flag === undefined) vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", undefined as unknown as string);
       else vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", flag);
-      vi.stubEnv("WASIAI_A2A_GATEWAY_URL", GW); // seteadas, pero NO deben usarse
+      vi.stubEnv("WASIAI_A2A_GATEWAY_URL", GW);
       vi.stubEnv("WASIAI_A2A_AGENT_KEY", KEY);
-      vi.stubEnv("REMIT_AGENTS_BASE_URL", BASE);
       const { fn, directCalls } = gwRouter({});
       vi.stubGlobal("fetch", fn);
       const res = await POST(req({ amountUsd: 400, destCountry: "PE", payoutMethod: "yape" }));
       expect(res.status).toBe(200);
       const urls = fn.mock.calls.map((c) => c[0] as string);
-      expect(urls.some((u) => u.includes("/compose"))).toBe(false); // gateway NUNCA tocado
-      expect(directCalls).toEqual([`${BASE}/api/agents/remit-corridor-fx/invoke`]);
+      expect(urls).toHaveLength(1);
+      expect(urls[0]).toContain("/compose");
+      expect(directCalls).toHaveLength(0);
+      // El eje de AC-1 dicho como texto: la subcadena del carril viejo no aparece en NINGUNA URL.
+      expect(urls.some((u) => u.includes("/api/agents/"))).toBe(false);
     },
   );
+});
+
+// ── T-5.1 · AC-5 · CERO VOCABULARIO PRIVADO DEL AGENTE EN EL BODY ────────────────────────────────
+//
+// 🔴 QUÉ AFIRMACIÓN CLAVA, Y POR QUÉ SOBRE `res.text()` Y NO SOBRE EL JSON PARSEADO. `fx_` es el
+// prefijo con el que UN agente concreto nombra sus rechazos (`fx_amount_below_minimum`), y hasta esta
+// HU viajaba al browser: la route lo leía del body de error del agente invocado por su slug y lo
+// relayaba en la clave `reason`. Un assert sobre `Object.keys(json)` o sobre `json.error` sólo mira
+// donde uno se acuerda de mirar; sobre el TEXTO CRUDO de la respuesta se mira todo — clave, valor, una
+// clave anidada, un campo que alguien agregue mañana.
+//
+// Se recorre el UNIVERSO de desenlaces que esta route puede producir, no el camino feliz: si `fx_`
+// vuelve, va a volver por una rama de error, que es de donde venía.
+//
+// CD-17: este `describe` depende del `afterEach` del tope del archivo (`vi.restoreAllMocks`).
+describe("T-5.1/AC-5: ninguna respuesta de /api/a2a/quote lleva el vocabulario privado del agente", () => {
+  function conGateway() {
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gateway");
+    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", GW);
+    vi.stubEnv("WASIAI_A2A_AGENT_KEY", KEY);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  }
+
+  // Cada fila es un desenlace REAL de la route. El `fx_amount_below_minimum` que el gateway pone en su
+  // cuerpo de error es a propósito: es exactamente el dato que la route no puede relayar (CD-8), y sin
+  // ponerlo en el input este test no probaría que no sale — probaría que no había nada que saliera.
+  const DESENLACES: Array<{ label: string; router: () => { fn: ReturnType<typeof vi.fn> } }> = [
+    {
+      label: "200 feliz",
+      router: () => gwRouter({}),
+    },
+    {
+      label: "422 no_agent_match",
+      router: () =>
+        gwRouter({ status: 422, compose: () => ({ code: "no_agent_match", reason: "no_candidates" }) }),
+    },
+    {
+      label: "400 del gateway con el reason del agente adentro",
+      router: () =>
+        gwRouter({
+          status: 400,
+          compose: () => ({
+            success: false,
+            error: "Step 1 failed: fx_amount_below_minimum",
+            reason: "fx_amount_below_minimum",
+            code: "fx_amount_below_minimum",
+          }),
+        }),
+    },
+    {
+      label: "500 del gateway",
+      router: () => gwRouter({ status: 500, compose: () => ({ error: "fx_amount_above_maximum" }) }),
+    },
+    {
+      label: "200 con shape inválido",
+      router: () =>
+        gwRouter({ compose: () => ({ success: true, steps: [{ output: { quoteId: "x" } }] }) }),
+    },
+  ];
+
+  it.each(DESENLACES)("en '$label' el TEXTO de la respuesta no contiene `fx_`", async ({ router }) => {
+    conGateway();
+    const { fn } = router();
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req({ amountUsd: 2, destCountry: "PE", payoutMethod: "yape" }));
+    const raw = await res.text();
+    expect(raw, `la respuesta ecoó el vocabulario privado del agente: ${raw}`).not.toContain("fx_");
+    // Y la mitad que hace falsable la de arriba: la respuesta NO es vacía, así que el `not.toContain`
+    // no está pasando por no haber nada que mirar.
+    expect(raw.length).toBeGreaterThan(2);
+  });
+
+  // El caso 501, que no pasa por el gateway y por eso va aparte (no hay router que montar).
+  it("y tampoco en el 501 por gateway sin configurar", async () => {
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gateway");
+    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", "");
+    vi.stubEnv("WASIAI_A2A_AGENT_KEY", "");
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal("fetch", vi.fn());
+    const res = await POST(req({ amountUsd: 2 }));
+    expect(res.status).toBe(501);
+    expect(await res.text()).not.toContain("fx_");
+  });
 });

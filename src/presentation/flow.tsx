@@ -37,7 +37,10 @@ import {
   WALLET_ADDRESS_UNAVAILABLE,
 } from "../application/use-cases/confirm-and-send";
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
-import { isPrepareRejection } from "../application/agent-rejections"; // hallazgo #75: rechazo del agente ≠ payout fallido
+import {
+  PREPARE_NO_AGENT_FOR_CAPABILITY,
+  isPrepareRejection,
+} from "../application/agent-rejections"; // hallazgo #75: rechazo del agente ≠ payout fallido
 import { resolveSolanaNetworkConfig } from "../infrastructure/chain"; // HU-SOL-13: cluster Solana activo (env-driven)
 import type {
   CloseableEscrow,
@@ -1197,7 +1200,7 @@ export function TrackView({
   // ⚠️ `confirmed` NO ESTABA ACÁ, y era el agujero: es el estado en el que la persona ya firmó la
   // autorización y nadie registró el desenlace (los hasta 15 s del timeout del settle más el
   // broadcast). El historial SÍ lo listaba y SÍ lo declaraba abrible, porque `escrowFundsKnowledge` lo
-  // clasifica como `unverified` (`escrowFundsKnowledge`, `flow-vm.ts:194`): la persona leía "No comprobamos si tus USDC siguen
+  // clasifica como `unverified` (`escrowFundsKnowledge`, `flow-vm.ts:206`): la persona leía "No comprobamos si tus USDC siguen
   // en el escrow", tocaba "Ver seguimiento", y aterrizaba en una pantalla sin ninguna acción. Sus USDC
   // pueden estar en el vault.
   const refundeable =
@@ -1205,7 +1208,33 @@ export function TrackView({
     rem.status === "principal_in" ||
     rem.status === "payout_submitted" ||
     rem.status === "payout_failed";
-  const showRefund = refundeable && rem.refundTx == null && !!recover && !!sender;
+  // 🔴 CR/BLQ-BAJO-1 — LA TARJETA SE CONTRADECÍA SOBRE LA PLATA DE LA PERSONA, Y ESTE ES EL TÉRMINO
+  // QUE LO CIERRA. Con `prepare_no_agent_for_capability` el DOM de UNA misma tarjeta decía, en este
+  // orden: *"No se movió ningún USDC de tu wallet"* → botón **"Recuperar fondos"** → *"El plazo se
+  // fija cuando depositás y dura unas 2 horas"*. Las dos mitades no pueden ser ciertas a la vez: o no
+  // hay depósito, o hay uno con un plazo corriendo.
+  //
+  // Se elige TAPAR EL BOTÓN y no suavizar el copy, porque de las dos afirmaciones la del copy es la
+  // que se puede sostener: el prepare corre ANTES de `authorizePrincipal`
+  // (`failAndRefund`, `../application/use-cases/confirm-and-send.ts:385`, con `"not_deposited"`), o sea antes de que la
+  // billetera firme nada. Suavizarla a la forma condicional de la familia de `payout_failed` ("si tus
+  // USDC entraron al escrow…") cambiaría un hecho verificable por una duda inventada, que es
+  // exactamente el defecto que esta HU vino a sacar de la pantalla.
+  //
+  // ⚠️ Y NO SE APOYA EN EL `failureReason` A SECAS. El hecho lo afirma `escrowFundsKnowledge`, que es
+  // la MISMA función con la que el historial decide qué decir de esa plata: así las dos pantallas no
+  // pueden contar dos historias. Si algún día una remesa llega acá con este reason y un depósito que
+  // no se puede descartar, este `&&` da `false` y la tarjeta vuelve entera a la familia de
+  // `payout_failed` — copy condicional Y botón, que también es coherente. Lo que no puede volver a
+  // pasar es la afirmación categórica al lado del botón.
+  //
+  // Se excluye de `showRefund` y NO de `refundeable`: la familia hermana (`prepareRejected`,
+  // `senderSolMissing`, `walletAddressMissing`) queda intacta.
+  const noAgentForCapability =
+    rem.failureReason === PREPARE_NO_AGENT_FOR_CAPABILITY &&
+    escrowFundsKnowledge(rem) === "no-deposit";
+  const showRefund =
+    refundeable && rem.refundTx == null && !!recover && !!sender && !noAgentForCapability;
 
   // WKH-327 — ¿se le ofrece cerrar las cuentas y recuperar el alquiler?
   //
@@ -1259,6 +1288,24 @@ export function TrackView({
     // del use-case, no una promesa. Decirlo con las palabras de un payout fallido ("si te cobramos,
     // te reembolsamos") deja esperando un reembolso que no existe.
     const prepareRejected = isPrepareRejection(rem.failureReason);
+    // Y el quinto, que es el que esta HU trajo y que NO es ninguno de los anteriores: NINGÚN agente
+    // resolvió la capacidad de desembolso, o sea que no hubo agente que rechazara nada.
+    //
+    // 🔴 POR QUÉ TIENE SU PROPIA RAMA Y NO ENTRA EN `isPrepareRejection` (AR/BLQ-ALTO-1). Sin esto,
+    // el enum caía al `else` de abajo, o sea a `humanError("payout_failed")`: "No se pudo entregar…
+    // si tus USDC entraron al escrow, los sacás vos firmando desde tu wallet". Esa frase manda a
+    // buscar plata a un lugar donde no hay plata — el corte ocurre en el prepare, ANTES de
+    // `authorizePrincipal` (`confirm-and-send.ts`:384-388), o sea antes de que la billetera firme
+    // nada. Es la misma clase de defecto que WKH-333 dejó documentada para `flow-vm.ts`:701-707.
+    // Y tampoco puede entrar a la familia de `prepareRejected`, porque ese copy afirma "El agente de
+    // pagos rechazó esta remesa": acá no hubo agente al que atribuirle un acto.
+    //
+    // El cuerpo sale de `humanError`, no de un literal, para que la frase viva en UN solo lugar
+    // (mismo patrón que `senderSolMissing` de acá arriba).
+    //
+    // ⚠️ `noAgentForCapability` SE CALCULA ARRIBA, junto a `showRefund` (CR/BLQ-BAJO-1): el mismo
+    // término que habilita este copy es el que tapa el botón de recuperar, y por eso no puede vivir
+    // acá abajo. Leé ahí por qué además exige `escrowFundsKnowledge(rem) === "no-deposit"`.
     // Y el cuarto que tampoco es un fallo de entrega: nuestro servidor no pudo consultar el registro
     // de direcciones preparadas y cortó ANTES de reenviar la transacción al facilitator
     // (route.ts:126-133, antes del fetch de la 156). Hasta que este reason existió, esta causa salía
@@ -1282,6 +1329,8 @@ export function TrackView({
               ? "Reconectá tu wallet"
               : prepareRejected
                 ? "No pudimos preparar el envío"
+                : noAgentForCapability
+                ? "No hay quién entregue este envío"
                 : settleLedgerUnavailable
                 ? "No llegamos a enviar tu depósito"
                 : principalUnknown
@@ -1299,6 +1348,8 @@ export function TrackView({
               ? humanError(WALLET_ADDRESS_UNAVAILABLE)
               : prepareRejected
                 ? "El agente de pagos rechazó esta remesa antes de que firmaras nada: no se movió ningún USDC de tu wallet. Empezá de nuevo con una cotización fresca."
+                : noAgentForCapability
+                ? humanError(PREPARE_NO_AGENT_FOR_CAPABILITY)
                 : settleLedgerUnavailable
                 ? humanError(SOLANA_SETTLE_LEDGER_UNAVAILABLE)
                 : principalUnknown
@@ -1598,7 +1649,7 @@ function RefundSentNotice({
  * `POST /api/solana/escrow/remittance-ids` está vivo en producción (responde 403 sin PoP), el adapter
  * resuelve el id ausente contra ese store y sondea hasta `MAX_RECOVERY_CANDIDATES` PDAs
  * (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:286`), y el gateway está cableado en el
- * container (`solanaRefund`, `container.ts:156`). Pero
+ * container (`solanaRefund`, `container.ts:169`). Pero
  * la interfaz sólo llamaba a `recoverEscrowFunds`, que arranca con `repo.get(remittanceId)` y tira
  * `remittance_not_found` (`recover-escrow-funds.ts`:49-50). O sea: quien borró los datos del navegador
  * o entra desde otro dispositivo no tenía NINGÚN camino, con el código para dárselo ya escrito.
@@ -1921,28 +1972,42 @@ function PayoutInProgress({ rem }: { rem: RemittanceState }) {
 // no se veía. Esta tarjeta lo muestra ANTES de aprobar, con los datos del catálogo en vivo.
 //
 // Tres decisiones de honestidad, y las tres tienen su contraparte en `/api/a2a/plan`:
-//  · Se dice POR DÓNDE corre hoy cada paso. Con el carril del gateway apagado, la app llama a su
-//    agente punto a punto, que puede ser otro: mostrar la elección del catálogo como si fuera la
-//    que va a correr sería una pantalla que mide una cosa y afirma otra.
+//  · Se dice POR DÓNDE corre hoy cada paso. Con la bandera en `"fallback"` la COTIZACIÓN la arma un
+//    simulador del container (`FallbackQuoteGateway`, `container.ts:123`); la ENTREGA no la decide esta
+//    bandera. Mostrar la elección del catálogo como la que va a correr sería medir una cosa y afirmar otra.
 //  · `verified` se muestra tal cual. Hoy los tres dicen que no. Pintar un tilde sería la mentira
 //    más fácil de acá.
 //  · La identidad NO aparece como agente: hoy es una integración directa con el proveedor. La
 //    tercera fila sería la más vendible y es la que no existe.
 //
-// 🔴 Y EL QUE FALTABA: se dice QUIÉN corre, no sólo por dónde. Medido contra producción el
-// 2026-08-05, `GET /api/a2a/plan` devolvía `remit-corridor-fx-solana` y `remit-cashout-payout-solana`
-// y esta tarjeta los mostraba con "hoy se llama directo", mientras `POST /api/a2a/quote` contestaba
-// `result.slug = "remit-corridor-fx"`. Son slugs distintos: la pantalla nombraba a quien NO corre y
-// encima afirmaba que ese era el que se llamaba directo. Cuando el catálogo y la ejecución divergen,
-// esta tarjeta lo DICE, no elige uno de los dos en silencio.
+// 🔴 ACÁ HABÍA UNA CUARTA DECISIÓN —"se dice QUIÉN corre, no sólo por dónde"— Y SE FUE EN W3 CON SU
+// FUENTE. Existía porque la tarjeta y la ejecución nombraban agentes DISTINTOS: el catálogo listaba
+// uno y la app llamaba por URL a otro, así que la pantalla nombraba a quien no corría. La reparación
+// de entonces fue decirlo; la de esta HU es que no pueda volver a pasar, porque ya no hay ninguna URL
+// con un nombre adentro. Lo que queda por decir es POR DÓNDE, y eso es lo que cada fila dice.
 function AgentPlanCard() {
   type Step = {
     capability: string;
     label: string;
     agent: { id: string; description: string; priceUsdc: number | null; verified: boolean; registry: string } | null;
-    transport: "gateway" | "punto-a-punto";
-    /** Quién corre hoy cuando se sabe. `null` en el carril del gateway: ahí se elige al ejecutar. */
-    runsTodayAgentId?: string | null;
+    /**
+     * POR QUÉ no alcanza con `agent === null` (WKH-332/AC-14, CD-18). `null` colapsaba cuatro
+     * desenlaces y esta tarjeta afirmaba UNO: *"El catálogo no ofrece a nadie…"*. Un 500 del gateway
+     * o un timeout de red nuestro se leían como un hecho SOBRE EL CATÁLOGO. Opcional en el tipo
+     * porque durante un deploy el server puede ser todavía el de la versión anterior; ese caso cae en
+     * la rama de "no pudimos consultar", que es la que no afirma nada.
+     */
+    availability?: "ofrecido" | "sin-candidatos" | "no-consultado";
+    /** Con qué constraints se preguntó. Es lo que hace falsable la frase "bajo el piso de este paso". */
+    constraints?: { minReputation: number; allowTrial?: true };
+    /**
+     * Por dónde corre hoy. `"punto-a-punto"` salió del dominio en W3 junto con el carril; `"demo"` no
+     * es un valor nuevo por gusto: es el modo `"fallback"` de la bandera, donde el paso lo corre un
+     * simulador y afirmar "corre por el gateway" sería falso.
+     */
+    transport: "gateway" | "demo";
+    /** 🔴 `runsTodayAgentId` YA NO VIENE. Murió con el carril que lo poblaba (W3): su único valor
+     *  posible era el slug cableado en el `fetch`, y ese `fetch` no existe. */
   };
   const [plan, setPlan] = useState<{ steps: Step[]; totalUsdc: number } | null>(null);
   const [failed, setFailed] = useState(false);
@@ -1979,11 +2044,11 @@ function AgentPlanCard() {
   return (
     <Card>
       <p className="text-sm font-semibold">Quién va a atender tu envío</p>
-      {/* "Ninguno de estos pasos está atado a una empresa fija" queda desmentido tres renglones más
-          abajo por el propio detalle de cada fila: la que dice "hoy se llama directo" ES un paso
-          cableado a un agente concreto. La frase de arriba pasa a describir el modelo (pedimos
-          capacidades) sin afirmar que hoy los tres corran por ahí, que es justo lo que cada fila ya
-          responde una por una. */}
+      {/* "Ninguno de estos pasos está atado a una empresa fija" quedaba desmentido tres renglones
+          más abajo por el propio detalle de cada fila: la que decía "hoy se llama directo a X" ERA un
+          paso cableado a un agente concreto. Esa fila ya no existe (W3), y aun así la frase de arriba
+          sigue describiendo el MODELO (pedimos capacidades) sin afirmar que hoy los tres corran por
+          ahí: cada fila lo dice por su cuenta, y en demo la cotización no la da ningún agente. */}
       <p className="mt-1 text-xs text-stone">
         Chaski pide capacidades, no empresas: el catálogo abierto responde quién las cumple, así que
         esta lista puede cambiar sola. Abajo, por dónde corre hoy cada paso.
@@ -2003,16 +2068,10 @@ function AgentPlanCard() {
                   El catálogo ofrece a {s.agent.id}
                   {s.agent.verified ? " · verificado" : " · sin verificar"}
                 </p>
-                <AgentRunsToday
-                  agentId={s.agent.id}
-                  transport={s.transport}
-                  runsTodayAgentId={s.runsTodayAgentId}
-                />
+                <AgentRunsToday transport={s.transport} />
               </>
             ) : (
-              <p className="mt-0.5 text-xs text-stone">
-                El catálogo no ofrece a nadie para esta capacidad ahora mismo.
-              </p>
+              <AgentUnavailable availability={s.availability} constraints={s.constraints} />
             )}
           </div>
         ))}
@@ -2022,10 +2081,11 @@ function AgentPlanCard() {
         <span className="tabular text-sm font-semibold">{plan.totalUsdc} USDC</span>
       </div>
       <p className="mt-1 text-xs text-stone">
-        {plan.steps.some((s) => s.transport === "punto-a-punto")
-          ? AGENT_PRICE_NOTE_DIRECT
+        {plan.steps.some((s) => s.transport === "demo")
+          ? AGENT_PRICE_NOTE_DEMO
           : AGENT_PRICE_NOTE_GATEWAY}
       </p>
+      <PlanConstraintsNote steps={plan.steps} />
       <p className="mt-2 text-xs text-stone">
         Tu identidad no pasa por el catálogo: se verifica con el proveedor directo.
       </p>
@@ -2034,50 +2094,123 @@ function AgentPlanCard() {
 }
 
 /**
+ * Dice CON QUÉ se preguntó, y es la mitad de AC-14 que se ve en pantalla.
+ *
+ * 🔴 QUÉ ARREGLA, MEDIDO sobre el árbol previo a WKH-332: el preview llamaba a
+ * `/discover?capabilities=X` sin ninguna constraint, mientras la ejecución mandaba
+ * `min_reputation: 2`. Esta tarjeta podía mostrar un agente que el envío iba a rechazar, y la persona
+ * aprobaba mirando a alguien que no la iba a atender.
+ *
+ * El número NO está escrito acá: sale de `constraints` de la respuesta, o sea de lo que se preguntó
+ * de verdad. Si el server no lo manda (una versión anterior durante un deploy) la frase no se
+ * muestra: una afirmación sobre el piso que no se puede sostener con el dato es peor que no decir
+ * nada. Input que la deja en blanco: un `steps[]` sin `constraints`.
+ */
+function PlanConstraintsNote({
+  steps,
+}: {
+  steps: Array<{ constraints?: { minReputation: number } }>;
+}) {
+  const pisos = steps
+    .map((s) => s.constraints?.minReputation)
+    .filter((n): n is number => typeof n === "number");
+  if (steps.length === 0 || pisos.length !== steps.length) return null;
+  const min = Math.min(...pisos);
+  const max = Math.max(...pisos);
+  return (
+    <p className="mt-2 text-xs text-stone">
+      Esta lista se consultó con el mismo piso de reputación con el que corre el envío
+      {min === max ? ` (${min})` : ` (entre ${min} y ${max}, según el paso)`}: no es una vidriera más
+      amplia que lo que se va a ejecutar.
+    </p>
+  );
+}
+
+/**
+ * La línea que se muestra cuando NO hay agente que mostrar. Dos motivos distintos, dos frases
+ * distintas, y la diferencia entre ellas es el punto de este componente (WKH-332/AC-14, CD-18).
+ *
+ * 🔴 ACÁ HABÍA UNA SOLA FRASE —"El catálogo no ofrece a nadie para esta capacidad ahora mismo"— y se
+ * mostraba también cuando el catálogo no había contestado nada. O sea que un 500 del gateway, un
+ * body ilegible o un timeout de red NUESTRO salían en pantalla como una afirmación de hecho sobre el
+ * catálogo. "No pude preguntar" no es "no pasó", y decirlo igual convierte una falla nuestra en una
+ * acusación al otro.
+ *
+ * · `sin-candidatos` — el catálogo CONTESTÓ (200) y la lista vino vacía. Se puede afirmar, y se
+ *   nombra el piso, porque el piso es la razón por la que la lista puede venir vacía teniendo el
+ *   catálogo agentes para esa capacidad. El número sale de `constraints`, o sea de lo que se
+ *   preguntó de verdad, no de un literal escrito acá.
+ * · `no-consultado` (y el campo AUSENTE, que es un server viejo durante un deploy) — no se afirma
+ *   NADA sobre el catálogo. Esta frase NO puede contener "no ofrece a nadie": T-14.5 lo custodia.
+ */
+function AgentUnavailable({
+  availability,
+  constraints,
+}: {
+  availability?: "ofrecido" | "sin-candidatos" | "no-consultado";
+  constraints?: { minReputation: number; allowTrial?: true };
+}) {
+  if (availability === "sin-candidatos") {
+    return (
+      <p className="mt-0.5 text-xs text-stone">
+        El catálogo no ofrece a nadie para esta capacidad
+        {typeof constraints?.minReputation === "number"
+          ? ` con al menos ${constraints.minReputation} de reputación, que es el piso de este paso`
+          : ""}
+        .
+      </p>
+    );
+  }
+  return (
+    <p className="mt-0.5 text-xs text-stone">
+      No pudimos consultar el catálogo para este paso. No sabemos quién lo atiende, y eso no dice nada
+      sobre si hay alguien.
+    </p>
+  );
+}
+
+/**
  * Qué es ese número, y quién lo cobraría.
  *
- * 🔴 ACÁ DECÍA "Lo que cobran los agentes", y nadie lo cobra. En el carril punto a punto las dos rutas
- * hacen un `fetch` liso: sin x402, sin `Authorization`, sin Agent Key (`a2a/quote/route.ts`:142 y
- * `payout/prepare/route.ts`:368). Verificado en vivo el 2026-08-05: un `POST /api/a2a/quote` contra
- * producción devuelve 200 sin ningún pago. El número, encima, es el precio de catálogo de agentes que
- * pueden no ser los que corren, que es lo que cada fila ya dice una por una.
+ * 🔴 ACÁ DECÍA "Lo que cobran los agentes", y no siempre lo cobra alguien. El número es el precio que
+ * los agentes PUBLICAN en el catálogo, y el catálogo lista a quien mejor rankea ahora, que puede no
+ * ser quien corra. El dato no se borra (sirve para comparar lo que el catálogo publica): se le pone
+ * dueño y tiempo verbal, que es el mismo criterio con el que ya se arregló el "llega en ~30 min".
  *
- * El dato no se borra (sirve para comparar lo que el catálogo publica): se le pone dueño y tiempo
- * verbal, que es el mismo criterio con el que ya se arregló el "llega en ~30 min".
- *
- * Las dos frases separadas porque los dos carriles cobran distinto y el `transport` los distingue:
- * con el gateway el fee del agente lo liquida el gateway contra la Agent Key de Chaski
- * (`gateway-client.ts`, header `x-a2a-key`), o sea que ahí sí se paga, sólo que no lo paga la persona
- * ni sale de lo que envía. Una sola frase para los dos casos tendría que ser falsa en uno.
+ * 🔴 LAS DOS FRASES DE ANTES ERAN "gateway" y "punto a punto"; ahora son "gateway" y "demo", y la
+ * segunda cambió de contenido, no sólo de nombre. La vieja decía *"la app los llama sin ningún pago y
+ * contestan igual"*, que describía el carril punto a punto —un `fetch` liso a un agente real, sin
+ * x402 y sin Agent Key—. Ese carril se borró en W3 y la frase se fue con él.
+ * 🔴 Y LA QUE LA REEMPLAZÓ TAMBIÉN ERA FALSA (CR2/BLQ-ALTO-1). Decía *"no llama a ninguno de ellos"*, y esta
+ * bandera cablea la cotización y el ESTADO del payout (`FallbackQuoteGateway`, `container.ts:123`), NO la entrega:
+ * esa la cablea `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED` (`solanaSettleOn`, `container.ts:159`). Con el settle en `true`
+ * y esta en `"fallback"` el envío llama igual a `/api/payout/prepare`, y ese POST compone contra el gateway: 200
+ * y un solo fetch a `/compose` (T-1.2, MEDIDO: `app/api/payout/prepare/route.test.ts:1296`). Por eso la frase habla
+ * SÓLO de la cotización. Con el gateway el fee lo liquida el gateway contra la Agent Key de Chaski (header `x-a2a-key`): ahí sí se paga, y no lo paga la persona.
  */
-const AGENT_PRICE_NOTE_DIRECT =
-  "Es lo que estos agentes publican en el catálogo, no lo que se cobra en este envío: por el carril de hoy la app los llama sin ningún pago y contestan igual.";
+const AGENT_PRICE_NOTE_DEMO =
+  "Es lo que estos agentes publican en el catálogo, no lo que se cobra en este envío: no se suma a lo que enviás, y la cotización que estás aprobando la armó la app, no ellos.";
 const AGENT_PRICE_NOTE_GATEWAY =
   "Es lo que estos agentes publican en el catálogo. Por el carril del gateway ese fee lo paga Chaski con su Agent Key al ejecutar el paso, y no se suma a lo que enviás.";
 
 /**
- * La línea que dice QUIÉN corre hoy este paso. Cuatro casos, y ninguno colapsa en otro.
+ * La línea que dice POR DÓNDE corre hoy este paso. Dos casos, y ninguno nombra a un agente.
  *
- * · Carril del gateway: no se llama a ningún slug, se pide la capacidad y el gateway resuelve AL
- *   EJECUTAR. El agente que el catálogo lista primero hoy puede no ser el que corra, así que la línea
- *   no lo nombra: sería inventar una certeza.
- * · El servidor no mandó el campo (respuesta de una versión anterior, durante un deploy): no sabemos,
- *   y se dice. Callar dejaría la fila leyéndose como si el del catálogo fuera el que corre, que es
- *   exactamente el bug.
- * · Coincide con el del catálogo: se dice que corre ese, y punto.
- * · NO coincide: el caso que esta HU vino a arreglar. Se nombran LOS DOS y se dice cuál es cuál.
- *   Elegir uno en silencio, en cualquiera de las dos direcciones, es una pantalla que mide una cosa y
- *   afirma otra.
+ * 🔴 ERAN CUATRO Y QUEDARON DOS (WKH-332/W3, AC-7). Los dos que se fueron —"Hoy se llama directo a X"
+ * y "Hoy no corre ese: la app llama directo a Y"— sólo podían escribirse si existía un slug cableado
+ * en el código, y ese carril se borró. No se reemplazaron por un texto equivalente: la afirmación
+ * dejó de ser sostenible, así que la frase se fue con ella.
+ *
+ * · `gateway`: no se llama a ningún slug, se pide la capacidad y el gateway resuelve AL EJECUTAR. El
+ *   agente que el catálogo lista primero hoy puede no ser el que corra, así que la línea no lo
+ *   nombra: sería inventar una certeza.
+ * · `demo`: la bandera está en `"fallback"`, así que la COTIZACIÓN la arma un simulador local del navegador
+ *   (`FallbackQuoteGateway`, `container.ts:123`); decir "corre por el gateway" acá sería falso, y por eso
+ *   `transport` sobrevivió al borrado. Input que lo pone en rojo: la bandera sin setear y esta línea diciendo
+ *   que el paso corre por el gateway. ⚠️ RESIDUAL DECLARADO (CR2): la bandera NO decide la ENTREGA, así que
+ *   con el settle en `true` la fila del payout dice de más. Medido: `app/api/payout/prepare/route.test.ts:1296`.
  */
-function AgentRunsToday({
-  agentId,
-  transport,
-  runsTodayAgentId,
-}: {
-  agentId: string;
-  transport: "gateway" | "punto-a-punto";
-  runsTodayAgentId?: string | null;
-}) {
+function AgentRunsToday({ transport }: { transport: "gateway" | "demo" }) {
   if (transport === "gateway") {
     return (
       <p className="mt-0.5 text-xs text-stone">
@@ -2085,19 +2218,9 @@ function AgentRunsToday({
       </p>
     );
   }
-  if (typeof runsTodayAgentId !== "string" || !runsTodayAgentId) {
-    return (
-      <p className="mt-0.5 text-xs text-stone">
-        No sabemos a qué agente se llama hoy en este paso.
-      </p>
-    );
-  }
-  if (runsTodayAgentId === agentId) {
-    return <p className="mt-0.5 text-xs text-stone">Hoy se llama directo a {agentId}.</p>;
-  }
   return (
     <p className="mt-0.5 text-xs font-medium text-cochineal-ink">
-      Hoy no corre ese: la app llama directo a {runsTodayAgentId}, que está cableado en el código.
+      Hoy este paso no lo corre ningún agente: esta app está en modo demo y lo simula.
     </p>
   );
 }
@@ -2106,7 +2229,7 @@ function AgentRunsToday({
 // alguien mueva `CUSTODY_WINDOW_SECS` la frase pasa a ser falsa sin que nada se ponga rojo, que es
 // exactamente cómo nació el bug de la hora inventada que este archivo ya arregló una vez. Se deriva
 // del MISMO valor que el depósito escribe como deadline (`CUSTODY_WINDOW_SECS`, `solana-wallet.ts:379`), así que no puede
-// desincronizarse. No agrega peso al bundle: (`SolanaWalletAdapter`, `container.ts:46`) ya importa este módulo.
+// desincronizarse. No agrega peso al bundle: (`SolanaWalletAdapter`, `container.ts:47`) ya importa este módulo.
 const CUSTODY_WINDOW_HOURS = CUSTODY_WINDOW_SECS / 3600;
 
 function RefundWindowNote() {

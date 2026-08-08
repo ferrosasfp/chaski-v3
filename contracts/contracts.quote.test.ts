@@ -1,5 +1,5 @@
-// WKH-227 / HU-SOL-24 — contract test (AC-1). Replaya el fixture VENDOREADO del provider
-// remit-corridor-fx contra los DOS validadores del consumer:
+// WKH-227 / HU-SOL-24 — contract test (AC-1). Replaya el fixture VENDOREADO del provider de FX
+// contra los DOS validadores del consumer:
 //   (a) el handler POST de app/api/a2a/quote/route.ts (isValidQuoteResult, vía el handler — CD-8: NUNCA
 //       se importa/exporta el helper de un route.ts de Next).
 //   (b) A2aQuoteGateway.requestQuote (isValidQuoteShape, gateways.ts).
@@ -23,15 +23,24 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+/** El fixture del provider, envuelto como lo entrega `POST /compose` (WKH-332/W3: es el único
+ *  transporte, y el handler ya no lee `{ result }` de un agente invocado por su slug). Lo que el
+ *  contract test mide sigue siendo el MISMO: que el shape del provider pase `isValidQuoteResult`. */
+function composeWith(output: unknown): Response {
+  return jsonResponse({ success: true, steps: [{ output }] });
+}
+
 describe("contract quote (AC-1) — handler POST vs fixture vendoreado", () => {
   beforeEach(() => {
-    vi.stubEnv("REMIT_AGENTS_BASE_URL", "https://agent.test");
+    // W3: la ruta ya no lee la base de los agentes; lo que necesita configurado es el gateway.
+    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", "https://gateway.test");
+    vi.stubEnv("WASIAI_A2A_AGENT_KEY", "ak_contract_test");
   });
 
   it("fixture CANÓNICO ⇒ isValidQuoteResult pasa ⇒ 200", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => jsonResponse({ result: corridorFxVendoredFixture })),
+      vi.fn(async () => composeWith(corridorFxVendoredFixture)),
     );
     const res = await POST(
       new Request("http://x", { method: "POST", body: JSON.stringify({ amountUsd: 100 }) }),
@@ -44,7 +53,7 @@ describe("contract quote (AC-1) — handler POST vs fixture vendoreado", () => {
     // un campo del contrato sin actualizar al consumer.
     const { feeUsd: _drop, ...rest } = corridorFxVendoredFixture;
     const drifted = { ...rest, feeUsd2: 0.5 };
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ result: drifted })));
+    vi.stubGlobal("fetch", vi.fn(async () => composeWith(drifted)));
     const res = await POST(
       new Request("http://x", { method: "POST", body: JSON.stringify({ amountUsd: 100 }) }),
     );
@@ -68,7 +77,7 @@ describe("contract quote (AC-1) — A2aQuoteGateway vs fixture vendoreado", () =
   it("DRIFT (feeUsd → feeUsd2) ⇒ isValidQuoteShape falla ⇒ throw a2a_quote_bad_shape", async () => {
     const { feeUsd: _drop, ...rest } = corridorFxVendoredFixture;
     const drifted = { ...rest, feeUsd2: 0.5 };
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ result: drifted })));
+    vi.stubGlobal("fetch", vi.fn(async () => composeWith(drifted)));
     await expect(new A2aQuoteGateway().requestQuote(req)).rejects.toThrow("a2a_quote_bad_shape");
   });
 });

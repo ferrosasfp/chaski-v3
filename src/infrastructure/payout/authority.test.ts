@@ -2,7 +2,7 @@
 //
 // Por qué no alcanza con los de app/api/payout/validate/route.test.ts: esa ruta COLAPSA los tres
 // reasons subject a `kyc_not_authorized` (WKH-205), así que desde ahí es imposible ver CUÁL reason
-// devolvió la autoridad. Y el reason importa: `prepare/route.ts:300` despacha sobre él con un switch
+// devolvió la autoridad. Y el reason importa: `prepare/route.ts:347` despacha sobre él con un switch
 // cerrado, y un reason que no esté en ese switch cae al default → 502 "la autoridad se cayó" en vez
 // de 403 "no autorizado". Estos tests fijan el reason exacto.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -45,7 +45,7 @@ describe("resolvePayoutAuthority — ownership fail-closed", () => {
 
   // El reason del caso "sin binding" es el MISMO que el del caso "binding distinto". Es deliberado:
   // agregar un reason nuevo rompería los dos switches cerrados aguas abajo (validate/route.ts:74,
-  // prepare/route.ts:300). Si alguien lo separa, este test se pone rojo y hay que revisar los dos.
+  // prepare/route.ts:347). Si alguien lo separa, este test se pone rojo y hay que revisar los dos.
   it("vendor_data distinto → authorized:false kyc_ownership_mismatch (200), MISMO reason que sin binding", async () => {
     vi.stubGlobal("fetch", diditOk({ status: "Approved", session_id: VID, vendor_data: OTHER }));
     expect(await resolvePayoutAuthority({ verificationId: VID, address: ADDR })).toEqual({

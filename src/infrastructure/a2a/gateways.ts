@@ -1,14 +1,18 @@
-// Infrastructure: adapters A2A (WKH-186). Llaman a los agentes remit-* a través de las API routes
-// server-only de esta app (/api/a2a/*), espejando DiditKycGateway→/api/kyc/* y
-// HttpPayoutAuthorityGateway→/api/payout/validate. El gateway NUNCA fetchea el agente directo (el
-// REMIT_AGENTS_BASE_URL vive SOLO en el server, CD-9). Se cablean con el flag
-// NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER="a2a"; el default sigue siendo Fallback (mock).
+// Infrastructure: adapters A2A (WKH-186). Piden CAPACIDADES a través de las API routes server-only de
+// esta app (/api/a2a/*), espejando DiditKycGateway→/api/kyc/* y
+// HttpPayoutAuthorityGateway→/api/payout/validate. Este adapter corre en el BROWSER y no conoce
+// ninguna URL de agente ni de gateway: sólo llama a su propia route, que resuelve la capacidad
+// server-side (CD-9). Se cablean con el flag NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER en `"a2a-gateway"`; el
+// default sigue siendo Fallback (mock), y cualquier otro valor TIRA en el arranque del container.
 // CD-5: errores estables y PII-free (nunca interpolan beneficiary).
 //
 // Hoy la ÚNICA ruta viva de este par es /api/a2a/quote. La del payout (/api/a2a/payout/submit) la
 // borró WKH-320; ver el comentario de A2aPayoutGateway.submit, que es lo único que quedó de ese lado.
 // El payout del camino Solana lo arma el server en /api/payout/prepare, no este adapter.
-import { QUOTE_REJECTED, RELAYABLE_QUOTE_REJECTIONS } from "../../application/agent-rejections";
+import {
+  QUOTE_NO_AGENT_FOR_CAPABILITY,
+  QUOTE_REJECTED,
+} from "../../application/agent-rejections";
 import { Money } from "../../domain/money";
 import { isParseableIso } from "../../domain/remittance";
 import type { AgentRef, Quote } from "../../domain/remittance";
@@ -96,10 +100,35 @@ async function readQuoteRejection(res: Response): Promise<string | undefined> {
   } catch {
     return undefined; // body ilegible ⇒ no podemos afirmar que fue un rechazo
   }
-  if (!isRecord(body) || body.error !== QUOTE_REJECTED) return undefined;
-  return typeof body.reason === "string" && RELAYABLE_QUOTE_REJECTIONS.includes(body.reason)
-    ? body.reason
-    : QUOTE_REJECTED;
+  if (!isRecord(body)) return undefined;
+  // WKH-332/AC-13 — "no hay quién" NO es un rechazo (nadie leyó el pedido), pero SÍ tiene que llegar
+  // al caller con su propio nombre. Sin este renglón el 422 de la route caía en el `undefined` de
+  // abajo, el caller tiraba `a2a_quote_unavailable` y la pantalla volvía a decir "el otro lado se
+  // cayó, probá de nuevo" — o sea que el enum nuevo existiría en la route y no lo vería nadie. Se
+  // propaga 1:1 y sin `reason`: es un enum NUESTRO, no un eco del gateway.
+  if (body.error === QUOTE_NO_AGENT_FOR_CAPABILITY) return QUOTE_NO_AGENT_FOR_CAPABILITY;
+  // ⚠️ ESTE `if` LEE UN ENUM QUE NINGÚN PRODUCTOR DE ESTA APP EMITE (AR/MNR-1). Es la MISMA
+  // declaración que ya lleva el docblock de su constante
+  // (`QUOTE_REJECTED`, `../../application/agent-rejections.ts:49`), escrita también acá, un nivel
+  // arriba, porque acá es donde se lee. MEDIDO: el universo de `error`
+  // que `app/api/a2a/quote/route.ts` puede devolver hoy son cuatro y `a2a_quote_rejected` no está entre
+  // ellos — `a2a_not_configured` (`:116`), el enum de no-agente (`:124`), `a2a_unavailable` (`:125`) y
+  // `a2a_bad_shape` (`:128`).
+  // ⛔ Y AUN ASÍ NO ES CÓDIGO MUERTO, que es la razón por la que W4 borró la allow-list y NO borró esto:
+  // el body puede traer este enum desde un server driftado, desde una versión anterior de la route
+  // durante un deploy o desde un intermediario, y desde el `failureReason` de una remesa guardada antes
+  // del deploy de W3. ESO —y no un camino vivo de la route— es lo que miden los 4 casos de
+  // (`rejects`, `gateways.test.ts:128`) y (`rejects`, `gateways.test.ts:140`): que si el enum llega, se
+  // colapse sin propagar `reason`. El desenlace estructural está pedido en WKH-335 (otro repo).
+  if (body.error !== QUOTE_REJECTED) return undefined;
+  // 🔴 ACÁ SE LEÍA `body.reason` FILTRADO POR `RELAYABLE_QUOTE_REJECTIONS`, Y ESE FILTRO SE FUE EN
+  // WKH-332/W4 CON EL CANAL QUE LO ALIMENTABA (AC-5). El `reason` sólo existía en la respuesta del
+  // carril punto a punto, que leía el body de error del agente invocado por su slug: la route ya no lo
+  // emite y `/compose` no lo trae. Un filtro sobre un campo que nunca viene no filtra, aparenta. Lo
+  // que queda es el enum de FAMILIA, que es una palabra nuestra.
+  // Input que lo pone en rojo si alguien vuelve a relayar el vocabulario del agente: el candado
+  // "AC-5: `fx_*` … cae en el default" de `src/presentation/flow-vm.test.ts`.
+  return QUOTE_REJECTED;
 }
 
 export class A2aQuoteGateway implements QuoteGateway {
@@ -138,7 +167,7 @@ export class A2aPayoutGateway implements PayoutGateway {
    * cuando lo que falta es una ruta que nadie va a levantar. El nombre del error es el diagnóstico.
    *
    * Por qué la clase sigue viva: `status()` SÍ se usa en producción (`TrackRemittance` lo llama vía el
-   * puerto `PayoutGateway`, `track-remittance.ts:8`) y el container la cablea (`NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`, `container.ts:108`). Lo
+   * puerto `PayoutGateway`, `track-remittance.ts:8`) y el container la cablea (`NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`, `container.ts:114`). Lo
    * muerto es este método, no el adapter. Y hoy NADIE lo invoca: el único consumidor del puerto es
    * `TrackRemittance`, que sólo llama a `status()`.
    *

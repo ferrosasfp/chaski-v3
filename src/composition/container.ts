@@ -3,6 +3,7 @@
 // use-cases ni UI (dependency inversion). Es el mismo principio que las factories del backend.
 
 import { assertNoEvmResidue } from "./evm-residue-guard";
+import { resolveValueDeliveryAdapter, usesRealGateways } from "./value-delivery-adapter";
 import { AbandonPendingKyc } from "../application/use-cases/abandon-pending-kyc";
 import { ConfirmAndSend } from "../application/use-cases/confirm-and-send";
 import { ConnectWallet } from "../application/use-cases/connect-wallet";
@@ -69,7 +70,7 @@ export interface Container {
   recoverEscrowFunds?: RecoverEscrowFunds;
   // WKH-327: cerrar las dos cuentas del escrow para que vuelva el alquiler que el remitente pagó al
   // depositar. SIEMPRE presente en el container real, sin ninguna flag que lo apague — por la misma
-  // razón que `solanaRefund`, `:156`: es una válvula de recuperación de plata de la persona, y una
+  // razón que `solanaRefund`, `:169`: es una válvula de recuperación de plata de la persona, y una
   // configuración que la pueda apagar es una configuración que algún día la va a apagar. Opcional en el
   // TIPO sólo para que el test-container pueda pasar undefined, igual que sus dos vecinos de arriba.
   closeEscrowAccounts?: CloseEscrowAccounts;
@@ -103,10 +104,22 @@ export function createContainer(): Container {
   const kycStore = new LocalKycStore();
   const kycPending = new LocalKycPendingStore();
   // Flag de composición value-delivery (WKH-186/AC-1/AC-2, DT-4): un solo flag cablea quote+payout
-  // (evita quote-real + payout-mock). Default "fallback" → demo byte-idéntico (mock). "a2a" → los
-  // agentes remit-* reales vía las API routes server-only.
-  const adapter = process.env.NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER; // "fallback"(default) | "a2a"
-  const useA2a = adapter === "a2a" || adapter === "a2a-gateway"; // WKH-218: gateway también usa los A2a gateways cliente
+  // (evita quote-real + payout-mock). Default "fallback" → demo byte-idéntico (mock).
+  //
+  // WKH-332/AC-3: el valor NO se compara crudo. Con la env en "a2a-gatewayy" la comparación directa
+  // daba `false` ⇒ se cableaban los Fallback*Gateway (los simuladores) sin que nada fallara. Ahora
+  // pasa por la unión cerrada y un valor no reconocido TIRA acá. La lectura de `process.env` queda
+  // EN ESTA LÍNEA como member expression literal a propósito: Next sólo inlinea eso en el bundle del
+  // cliente, y adentro del helper no lo sería (mismo motivo que evm-residue-guard.ts).
+  const adapter = resolveValueDeliveryAdapter(process.env.NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER);
+  // WKH-218: el carril por gateway también usa los A2a*Gateway cliente.
+  //
+  // 🔴 ACÁ ESTABA LA SEGUNDA LISTA (AR/BLQ-ALTO-2). Decía `adapter === "a2a" || adapter ===
+  // "a2a-gateway"`: los mismos valores del conjunto cerrado, escritos otra vez, sin nada que los
+  // atara. MEDIDO: borrando `adapter === "a2a" ||` la suite entera quedaba verde y, con la env en
+  // "a2a" (la de producción), el container cableaba los Fallback*Gateway. El mapeo vive ahora en
+  // `usesRealGateways`, junto a la lista, con un switch exhaustivo que `tsc` obliga a mantener.
+  const useA2a = usesRealGateways(adapter);
   const quotes = useA2a ? new A2aQuoteGateway() : new FallbackQuoteGateway();
   // Server-truth: SIEMPRE el gateway Didit, con la simulación como fallback. Si el server tiene
   // key → Didit real; si no (501) → simulación. No depende del inlineado NEXT_PUBLIC del cliente.

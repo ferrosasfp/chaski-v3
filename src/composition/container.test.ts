@@ -7,9 +7,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { A2aPayoutGateway, A2aQuoteGateway } from "../infrastructure/a2a/gateways";
+import { FallbackPayoutGateway, FallbackQuoteGateway } from "../infrastructure/fallback/gateways";
 import { SolanaWalletAdapter } from "../infrastructure/solana-wallet";
 import { solanaWalletBridge } from "../infrastructure/solana-wallet-bridge";
 import { createContainer } from "./container";
+import { VALUE_DELIVERY_ADAPTERS, type ValueDeliveryAdapter } from "./value-delivery-adapter";
 
 // Las envs EVM tienen que estar AUSENTES para que el container arranque (assertNoEvmResidue).
 const EVM_ENVS = [
@@ -34,9 +37,14 @@ describe("createContainer — se construye SIN leer ninguna env EVM (AC-3.1)", (
     expect(() => createContainer()).not.toThrow();
   });
 
-  it("el flag de value-delivery sigue funcionando (a2a) sin ninguna env EVM", () => {
+  // 🔴 ESTE `it` SE INVIRTIÓ EN W3, NO SE BORRÓ (WKH-332). Decía `.not.toThrow()` y era el centinela
+  // de que `"a2a"` —la env con la que corría producción— siguiera cableando los gateways REALES
+  // mientras el carril punto a punto existía. Ese carril ya no existe, así que `"a2a"` no nombra
+  // ningún camino y pasó a TIRAR. Se conserva invertido porque lo que hay que custodiar ahora es lo
+  // contrario: que el valor viejo NO se reinterprete en silencio como "fallback" (los simuladores).
+  it("el flag en el valor viejo ('a2a') YA NO nombra ningún carril: TIRA, no cae al mock", () => {
     vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a");
-    expect(() => createContainer()).not.toThrow();
+    expect(() => createContainer()).toThrow("value_delivery_adapter_invalido");
   });
 
   // El ternario `solanaWallet ?? pickWallet()` era el punto donde una wallet EVM podía entrar. Ya no
@@ -58,6 +66,105 @@ describe("createContainer — se construye SIN leer ninguna env EVM (AC-3.1)", (
   // T2 — `pickWallet` no es "una función que no se llama": el MÓDULO no existe.
   it("AC-3.1: el módulo de la wallet EVM no existe en el árbol (pickWallet no es importable)", () => {
     expect(existsSync(path.resolve(process.cwd(), "src/infrastructure/wallet.ts"))).toBe(false);
+  });
+});
+
+// T-3.2 (WKH-332 / AC-3 / CD-3) — el test que cierra el peligro.
+//
+// CD-17: este `describe` depende del `beforeEach` de arriba (que BORRA las envs EVM), porque sin él
+// `assertNoEvmResidue` podría tirar por otro motivo y el test daría verde por la razón equivocada.
+// Por eso cada `it` de acá asserta el MENSAJE `value_delivery_adapter_invalido`, no un throw pelado.
+//
+// Qué mide, con el input concreto: con la bandera en un valor no reconocido, `createContainer()`
+// TIRA en vez de devolver un container cuyo `previewQuote` cotiza de mock. La afirmación falsable es
+// la segunda mitad: si alguien cambia el `throw` de `resolveValueDeliveryAdapter` por un
+// `return "fallback"` (mutante M1), estos `it` se ponen rojos.
+describe("createContainer — un valor no reconocido de la bandera NUNCA cablea el mock (AC-3)", () => {
+  it("un typo de una letra ('a2a-gatewayy') ⇒ el container TIRA, y el error nombra la variable", () => {
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gatewayy");
+    expect(() => createContainer()).toThrow("value_delivery_adapter_invalido");
+    expect(() => createContainer()).toThrow("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER");
+  });
+
+  it("la env presente y VACÍA ('') ⇒ el container TIRA (no es una ausencia: es una key en blanco)", () => {
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "");
+    expect(() => createContainer()).toThrow("value_delivery_adapter_invalido");
+  });
+
+  // 🔴 LA MITAD QUE IMPORTA. Un `expect().toThrow()` solo no distingue "tiró" de "tiró y además no
+  // dejó nada construido": lo que el bug producía era un container ENTERO y funcional, con los
+  // simuladores adentro. Acá se asserta que no hay ningún container que devolver.
+  it("y no devuelve NINGÚN container: no hay un previewQuote de mock del otro lado del throw", () => {
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gatewayy");
+    let construido: unknown = "no-se-asigno";
+    try {
+      construido = createContainer();
+    } catch {
+      /* esperado */
+    }
+    expect(construido).toBe("no-se-asigno");
+  });
+});
+
+// T-3.3 (WKH-332 / AC-3 / CD-3 · AR fix-pack BLQ-ALTO-2) — QUÉ CLASE QUEDA CABLEADA POR CADA VALOR.
+//
+// 🔴 QUÉ AGUJERO CIERRA, MEDIDO POR EL AR. T-3.2 (arriba) prueba que un valor ILEGAL tira. No probaba
+// NADA sobre los legales: el mapeo valor→clase vivía en una segunda lista escrita a mano en
+// `container.ts` (`adapter === "a2a" || adapter === "a2a-gateway"`). Borrando `adapter === "a2a" ||`
+// de esa expresión, la suite COMPLETA daba 1580/1580 verde y, con la env en "a2a" —la de
+// producción—, el container cableaba `FallbackQuoteGateway`. O sea los simuladores, en silencio, con
+// el árbol entero en verde. Un test que sólo mira el `throw` no puede ver eso.
+//
+// Cómo se cierra, y por qué no alcanza con "agregar tres `it`":
+//   · La tabla es un `Record<ValueDeliveryAdapter, …>`, o sea EXHAUSTIVA POR TIPO. Un valor nuevo en
+//     `VALUE_DELIVERY_ADAPTERS` sin fila acá es `tsc` rojo, no un test que se olvidó.
+//   · Los casos se recorren desde `VALUE_DELIVERY_ADAPTERS`, no desde una lista copiada. Cuando W3
+//     sacó `"a2a"` del array, este `it.each` dejó de correrlo solo y la fila de la tabla quedó como
+//     error de tipo — que es exactamente el momento de máxima probabilidad de romper el invariante.
+//   · Asserta la CLASE construida, no la ausencia de throw.
+//
+// CD-17: depende del `beforeEach` de arriba, que BORRA las envs EVM; sin él `assertNoEvmResidue`
+// podría tirar y todos estos casos darían rojo por la razón equivocada.
+describe("createContainer — cada valor LEGAL de la bandera cablea la clase que dice (AC-3)", () => {
+  const CABLEADO: Record<
+    ValueDeliveryAdapter,
+    { quotes: new () => unknown; payouts: new () => unknown }
+  > = {
+    "a2a-gateway": { quotes: A2aQuoteGateway, payouts: A2aPayoutGateway },
+    // 🔴 ACÁ HABÍA UNA FILA `a2a` Y SE FUE EN EL MISMO COMMIT QUE EL VALOR (W3). El tipo del Record
+    // es `ValueDeliveryAdapter`, así que dejarla habría sido TS2353: la tabla no puede sobrevivir al
+    // valor, ni el valor a la tabla.
+    fallback: { quotes: FallbackQuoteGateway, payouts: FallbackPayoutGateway },
+  };
+
+  it.each(VALUE_DELIVERY_ADAPTERS)(
+    "con la bandera en '%s' el container cablea las clases declaradas, no las del otro carril",
+    (valor) => {
+      vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", valor);
+      const c = createContainer();
+      const esperado = CABLEADO[valor];
+      const quotes = (c.previewQuote as unknown as { quotes: unknown }).quotes;
+      const payouts = (c.trackRemittance as unknown as { payouts: unknown }).payouts;
+      expect(quotes).toBeInstanceOf(esperado.quotes);
+      expect(payouts).toBeInstanceOf(esperado.payouts);
+    },
+  );
+
+  // La otra mitad, y es la que mata al mutante: "es un A2aQuoteGateway" no excluye que también
+  // pasara por el mock si alguien hiciera herencia. Se asserta la NEGATIVA sobre la clase del otro
+  // carril, que es la afirmación que el bug volvía falsa.
+  // W3 movió el valor de este `it` de `"a2a"` a `"a2a-gateway"`: es el único que queda cableando lo
+  // real, y el que la env de producción usa desde el flip. El caso `"a2a"` no desapareció, cambió de
+  // pregunta y vive arriba, asertando que TIRA.
+  it("con la bandera en 'a2a-gateway' NO hay ningún simulador adentro del container", () => {
+    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gateway");
+    const c = createContainer();
+    expect((c.previewQuote as unknown as { quotes: unknown }).quotes).not.toBeInstanceOf(
+      FallbackQuoteGateway,
+    );
+    expect((c.trackRemittance as unknown as { payouts: unknown }).payouts).not.toBeInstanceOf(
+      FallbackPayoutGateway,
+    );
   });
 });
 

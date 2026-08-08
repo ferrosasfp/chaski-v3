@@ -108,11 +108,30 @@ function rawReq(raw: string): Request {
 }
 
 let fetchMock: ReturnType<typeof vi.fn>;
-// mockImplementation (NO mockResolvedValue): el body de un Response se consume en la 1ª lectura.
+
+// Las envs del ÚNICO transporte. Suben a nivel de módulo en WKH-332/W3 porque ahora las necesita el
+// `beforeEach` raíz: antes el default de los ~50 casos de guard-order era el carril punto a punto y
+// el gateway se configuraba sólo dentro de su propio describe.
+const GW = "https://gateway.test";
+const GW_KEY = "ak_prepare_secret";
+
+/**
+ * El agente contesta — POR EL GATEWAY, que es el único transporte desde W3.
+ *
+ * 🔴 QUÉ CAMBIÓ Y POR QUÉ NO ES COSMÉTICO. Este helper devolvía `{ result }` con el status pedido,
+ * que era la respuesta del `fetch({BASE}/api/agents/<slug>/invoke)`. Ese fetch no existe más, así
+ * que un mock con esa forma haría que los ~50 casos de guard-order de este archivo midieran un
+ * `bad_response` del cliente del gateway en vez del guard que cada uno dice medir. Ahora envuelve el
+ * mismo `result` en la forma de `POST /compose` (`{ success:true, steps:[{ output }] }`), que es lo
+ * que `runViaGateway` sabe leer.
+ *
+ * `status` sigue significando lo mismo para el llamador: el status HTTP de la respuesta upstream. Un
+ * 502 sigue saliendo por `prepare_upstream_error` (antes por `!res.ok`, ahora por `unavailable`).
+ */
 function agentResponds(status: number, result: unknown): void {
   fetchMock.mockImplementation(
     async () =>
-      new Response(JSON.stringify({ result }), {
+      new Response(JSON.stringify({ success: true, steps: [{ output: result }] }), {
         status,
         headers: { "content-type": "application/json" },
       }),
@@ -181,15 +200,18 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
     KP = nacl.sign.keyPair();
     ADDR = bs58.encode(KP.publicKey); // pubkey del firmante = address del caller (P3)
     AUTHORITY = bs58.encode(nacl.sign.keyPair().publicKey); // CD-10: NUNCA base58 a mano
-    vi.stubEnv("REMIT_AGENTS_BASE_URL", "https://agents.test");
     vi.stubEnv("DEPOSIT_ATTESTATION_SECRET", "test-deposit-secret");
     vi.stubEnv("SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY", AUTHORITY);
     vi.stubEnv("VERCEL_ENV", ""); // local/CI por default
     vi.stubEnv("PAYOUT_POP_SECRET", "pop-secret"); // PR6 OBLIGATORIO (WKH-320): nunca skip
-    // WKH-304: PR7 ahora LEE este flag. Sin stubearlo, las suites de arriba dependerían del ambiente
-    // (un NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER=a2a-gateway exportado en la shell las mandaría al
-    // gateway). "" ⇒ camino punto-a-punto determinista, byte-idéntico al de antes de esta HU.
-    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "");
+    // 🔴 ACÁ SE STUBEABA LA BASE DE LOS AGENTES Y EL FLAG DE TRANSPORTE EN "" (WKH-332/W3).
+    // Las dos se fueron: PR1 ya no existe (la env se borró del código) y PR7 ya no lee el flag —hay
+    // un solo transporte—. Lo que hace falta configurar ahora es el gateway, porque sin él TODOS los
+    // casos que llegan hasta PR7 cortarían con 501 `not_configured` y medirían eso en vez del guard
+    // que cada uno dice medir. Que ningún `it` de este archivo stubee la env vieja es la evidencia de
+    // runtime de que la ruta dejó de leerla.
+    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", GW);
+    vi.stubEnv("WASIAI_A2A_AGENT_KEY", GW_KEY);
     checkRouteRateLimitMock.mockReset();
     checkRouteRateLimitMock.mockResolvedValue({ ok: true });
     authorityMock.mockReset();
@@ -229,20 +251,46 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
     expect(att?.beneficiary).toBe(DEPOSIT);
     expect(att?.authority).toBe(AUTHORITY); // CD-9: de la ENV server-side, NUNCA del body
     expect(att?.cluster).toBe("devnet");
-    // NUNCA ecoa BASE ni el beneficiary (CD-5).
+    // NUNCA ecoa la URL del transporte ni el beneficiary (CD-5). Antes acá se buscaba la base de los
+    // agentes; se busca el gateway, que es la URL que la ruta realmente tiene en la mano — un assert
+    // contra una cadena que ya no existe en ninguna parte pasa siempre y no protege nada.
     const raw = JSON.stringify(json);
-    expect(raw).not.toContain("agents.test");
+    expect(raw).not.toContain(GW);
     expect(raw).not.toContain("Mamá");
     expect(raw).not.toContain("999888777");
   });
 
-  // ── PR1/PR2 — config (AC-7) ────────────────────────────────────────────────
-  it("PR1: sin REMIT_AGENTS_BASE_URL → 501 prepare_not_configured, NINGÚN fetch", async () => {
-    vi.stubEnv("REMIT_AGENTS_BASE_URL", "");
-    const res = await POST(req(bodyOf()));
-    expect(res.status).toBe(501);
-    expect(await res.json()).toEqual({ error: "prepare_not_configured" });
-    expect(fetchMock).not.toHaveBeenCalled();
+  // ── PR2 — config (AC-7) ────────────────────────────────────────────────────
+  //
+  // T-9.2 (WKH-332/AC-9) — LA MUERTE DE PR1, ASSERTADA EN LAS DOS DIRECCIONES.
+  //
+  // 🔴 ACÁ ESTABA `it("PR1: sin la base de los agentes → 501 …")`, y se INVIRTIÓ, no se borró. PR1 era
+  // el primer guard de la ruta y era el único que se va con esta HU: leía la env de la base de los
+  // agentes remit-*, que existía para armar la URL con el slug adentro. Sin ese fetch, el guard
+  // custodiaba una configuración que nadie usa, o sea que devolvía 501 a un deployment que podía
+  // pagar perfectamente.
+  //
+  // Las dos mitades son necesarias y ninguna alcanza sola: la primera prueba que el guard SE FUE, la
+  // segunda que su MOTIVO —"sin configuración no se crea ninguna orden"— sigue en pie y ahora lo
+  // sostiene la config que de verdad se usa. Sin la segunda, borrar PR1 sería aflojar un fail-closed.
+  it("T-9.2: la base de los agentes remit-* dejó de ser un guard, y el 501 lo produce la config que SÍ se usa", async () => {
+    // (a) sin la env vieja —ni stubeada ni presente— la ruta llega al forward y devuelve 200.
+    agentResponds(200, agentResult());
+    const sinBaseVieja = await POST(req(bodyOf()));
+    expect(
+      sinBaseVieja.status,
+      "la ruta volvió a exigir la env del carril borrado: eso es un 501 a un deployment que puede pagar",
+    ).toBe(200);
+
+    // (b) sin la URL del gateway —la única configuración de transporte que queda— SÍ corta con 501,
+    // y SIN un solo fetch: `runViaGateway` resuelve `not_configured` antes de tocar la red.
+    fetchMock.mockClear();
+    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", "");
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const sinGateway = await POST(req(bodyOf()));
+    expect(sinGateway.status).toBe(501);
+    expect(await sinGateway.json()).toEqual({ error: "prepare_not_configured" });
+    expect(fetchMock, "se intentó un fetch con el transporte sin configurar").not.toHaveBeenCalled();
   });
 
   it("PR2: sin DEPOSIT_ATTESTATION_SECRET → 503 prepare_unavailable (fail-closed, NUNCA fail-open)", async () => {
@@ -251,6 +299,100 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: "prepare_unavailable" });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // ── T-9.1 · AC-9 / CD-4 · EL GUARD-ORDER, MEDIDO COMO SECUENCIA Y NO COMO PROSA ────────────────
+  //
+  // 🔴 QUÉ AGUJERO CIERRA, Y POR QUÉ NO ALCANZABAN LOS `it` QUE YA ESTABAN. El orden de los guards
+  // estaba custodiado a pedazos: cada `it` mira un corte y asserta "y no se llamó a X". Eso caza que
+  // un guard DESAPAREZCA, y NO caza que dos guards INTERCAMBIEN posición cuando los dos siguen
+  // cortando. El caso concreto: mover el bloque de la fila del veredicto (PR5.5, el que WKH-333 dejó
+  // y que CD-13 prohíbe tocar) DESPUÉS de la consulta a la autoridad. Los dos siguen ahí, los dos
+  // siguen cortando, y la ruta pasa a gastar un fetch al proveedor de identidad por cada intento de
+  // un caller que no tiene fila — que es exactamente el oráculo que WKH-333 cerró.
+  //
+  // Cómo se mide: cada doble empuja su nombre a un log compartido, y se asserta la SECUENCIA. Un
+  // intercambio de dos bloques cambia el array aunque los dos status finales sean los mismos.
+  //
+  // CD-17: depende del `beforeEach` de este describe (que resetea los tres dobles y configura el
+  // gateway). Los tres primeros casos se corren en el MISMO `it` a propósito: comparados entre sí,
+  // no cada uno contra su propia expectativa.
+  it("T-9.1: el orden observable de los cortes es 503-secreto → rate-limit → formato → PoP → fila → autoridad → forward", async () => {
+    const orden: string[] = [];
+    checkRouteRateLimitMock.mockImplementation(async () => {
+      orden.push("rate-limit");
+      return { ok: true };
+    });
+    const store = {
+      get: vi.fn(async (sender: string) => {
+        orden.push("fila-del-veredicto");
+        return sender === ADDR
+          ? {
+              senderAddress: ADDR,
+              verificationId: "did-de-la-fila-default",
+              approved: true,
+              riskLevel: "low" as const,
+              provenance: "didit",
+              verifiedAt: "2026-08-01T00:00:00.000Z",
+            }
+          : null;
+      }),
+      put: vi.fn(),
+    };
+    getVerdictStoreMock.mockReturnValue(store);
+    authorityMock.mockImplementation(async () => {
+      orden.push("autoridad");
+      return { authorized: true, httpStatus: 200 };
+    });
+    fetchMock.mockImplementation(async () => {
+      orden.push("forward");
+      return new Response(JSON.stringify({ success: true, steps: [{ output: agentResult() }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    // (a) EL CAMINO COMPLETO: la secuencia entera, en orden, sin repeticiones.
+    const ok = await POST(req(bodyOf()));
+    expect(ok.status).toBe(200);
+    expect(
+      orden,
+      "el guard-order cambió: dos bloques intercambiaron posición aunque los dos sigan cortando",
+    ).toEqual(["rate-limit", "fila-del-veredicto", "autoridad", "forward"]);
+
+    // (b) SIN SECRETO ⇒ 503 ANTES del rate-limit. El rate-limit consume una cuota de Upstash: un
+    // deployment que no puede atestar no tiene por qué gastarla.
+    orden.length = 0;
+    vi.stubEnv("DEPOSIT_ATTESTATION_SECRET", "");
+    const sinSecreto = await POST(req(bodyOf()));
+    expect(sinSecreto.status).toBe(503);
+    expect(orden, "el 503 por falta de secreto corrió DESPUÉS del rate-limit").toEqual([]);
+    vi.stubEnv("DEPOSIT_ATTESTATION_SECRET", "test-deposit-secret");
+
+    // (c) PoP INVÁLIDO ⇒ 403 ANTES de tocar el store del veredicto. Se cuenta la llamada al doble, no
+    // se infiere del status: un 403 puede salir igual habiendo leído la fila.
+    orden.length = 0;
+    const popRoto = await POST(req(bodyOf({ popSignature: "3".repeat(88) })));
+    expect(popRoto.status).toBe(403);
+    expect(orden, "el PoP inválido llegó a leer la fila del veredicto").toEqual(["rate-limit"]);
+
+    // (d) SIN FILA ⇒ 403 ANTES de cualquier consulta a la autoridad. Es la mitad que mata al mutante
+    // M8: con PR5.5 corrido después de la autoridad, acá aparecería "autoridad" en el log.
+    orden.length = 0;
+    getVerdictStoreMock.mockReturnValue({
+      get: vi.fn(async () => {
+        orden.push("fila-del-veredicto");
+        return null;
+      }),
+      put: vi.fn(),
+    });
+    const sinFila = await POST(req(bodyOf()));
+    expect(sinFila.status).toBe(403);
+    expect(
+      orden,
+      "sin fila la ruta igual consultó al proveedor de identidad: eso es cupo nuestro que cualquiera " +
+        "drena con un curl, y el oráculo que WKH-333 cerró",
+    ).toEqual(["rate-limit", "fila-del-veredicto"]);
   });
 
   // ── PR3 — rate-limit (AC-6) ────────────────────────────────────────────────
@@ -351,7 +493,10 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
 
   // ── Hallazgo #75 — cinco causas, un enum ───────────────────────────────────
   // `prepare_no_deposit_address` cubría los cuatro rechazos del agente (que llegan en su campo
-  // `reason`, validado de TIPO en route.ts:62 y nunca leído) MÁS el provider mock. Cada `it` de acá
+  // (`reason`, `route.ts:88`), validado de TIPO y nunca leído) MÁS el provider mock. Acá decía
+  // `route.ts:62`, sin ancla, y esa línea es el cuerpo de `isRecord`: dice `typeof v === "object"`,
+  // o sea que un lector apurado ve un `typeof` y da la cita por buena sin haber comprobado nada
+  // (CR/MNR-1). Cada `it` de acá
   // muere si su causa vuelve a colapsar; el último candado muere si el mock deja de ser 502.
   describe("rechazo del agente ≠ 'no nos dio dirección' (hallazgo #75)", () => {
     /** Rechazo del agente: 200 con status blocked/failed + su reason. NO trae depositAddress. */
@@ -619,7 +764,7 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       );
       expect(res.status).toBe(200);
       const json = (await res.json()) as Record<string, unknown>;
-      // Shape EXACTO de isValidSolanaPrepareShape (http-solana-prepare-gateway.ts:48).
+      // Shape EXACTO de isValidSolanaPrepareShape (http-solana-prepare-gateway.ts:87).
       expect(json.beneficiary).toBe(SOL_BENEFICIARY);
       expect(json.authority).toBe(authorityPubkey);
       expect(json.payoutId).toBe("transfi-po-1");
@@ -630,11 +775,11 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       expect(att?.beneficiary).toBe(SOL_BENEFICIARY);
       expect(att?.authority).toBe(authorityPubkey);
       expect(att?.cluster).toBe("devnet");
-      // NUNCA ecoa PII del beneficiary ni la BASE (CD-5).
+      // NUNCA ecoa PII del beneficiary ni la URL del transporte (CD-5).
       const raw = JSON.stringify(json);
       expect(raw).not.toContain("Mamá");
       expect(raw).not.toContain("999888777");
-      expect(raw).not.toContain("agents.test");
+      expect(raw).not.toContain(GW);
     });
 
     it("AC-2: authority env ausente/malformada → 503 prepare_solana_authority_unavailable", async () => {
@@ -661,7 +806,7 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       }
     });
 
-    it("AC-3: depositAddress base58 válido pero payoutId ausente (vacío/whitespace) → 502 prepare_no_deposit_address (guard route.ts:272-275)", async () => {
+    it("AC-3: depositAddress base58 válido pero payoutId ausente (vacío/whitespace) → 502 prepare_no_deposit_address (guard route.ts:469-473)", async () => {
       // payoutId="" pasa isValidPayoutResult (status submitted) pero muere en el guard fail-closed:
       // no se atesta una orden sin id trackeable. (payoutId=null+submitted lo caza antes PR8 → upstream_error.)
       for (const badPayoutId of ["", "   "]) {
@@ -679,22 +824,19 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
   // ESTE es el único leg del money-path que cambia de transporte: el que crea la orden y cuyo
   // depositAddress termina FIRMADO en la DepositAttestation. Por eso la propiedad que más se
   // testea acá no es el happy path, es la NEGATIVA: un fallo del gateway no puede, bajo ninguna
-  // circunstancia, terminar creando la orden por el camino punto-a-punto.
-  describe("rama a2a-gateway de PR7 (WKH-304)", () => {
-    const GW = "https://gateway.test";
-    const GW_KEY = "ak_prepare_secret";
-    const AGENT_URL = "https://agents.test/api/agents/remit-cashout-payout/invoke";
+  // circunstancia, terminar creando la orden por otro camino: desde W3 no hay ninguno.
+  describe("PR7 por gateway — el único transporte (WKH-304, borrado del carril en WKH-332)", () => {
+    // `GW` y `GW_KEY` viven a nivel de módulo desde W3: el `beforeEach` raíz también los necesita.
+    // `AGENT_URL` —la URL del agente con su slug adentro— se BORRÓ con el carril que la usaba: no hay
+    // ninguna URL que este archivo pueda construir con un nombre de agente adentro.
 
     function setGatewayEnv() {
-      vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gateway");
       vi.stubEnv("WASIAI_A2A_GATEWAY_URL", GW);
       vi.stubEnv("WASIAI_A2A_AGENT_KEY", GW_KEY);
-      // REMIT_AGENTS_BASE_URL sigue seteada por el beforeEach raíz: PR1 la exige byte-idéntico
-      // (DT-A2A-9) aunque el forward ya no la use para el transporte.
     }
 
-    /** Router de fetch: separa el /compose del gateway del fetch DIRECTO al agente.
-     *  agentCalls.length > 0 ⇒ hubo fallback punto-a-punto (prohibido, CD-1). */
+    /** Router de fetch: el /compose del gateway contra CUALQUIER otra URL.
+     *  agentCalls.length > 0 ⇒ alguien reintrodujo un fetch a un agente (prohibido, CD-1/AC-1). */
     function gwRouter(
       opts: {
         output?: unknown;
@@ -717,7 +859,7 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
             headers: { "content-type": "application/json" },
           });
         }
-        agentCalls.push(url); // el punto-a-punto que NUNCA debe ocurrir en modo gateway
+        agentCalls.push(url); // cualquier fetch que no sea /compose: con W3 no debería existir ninguno
         return new Response(JSON.stringify({ result: agentResult() }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -745,10 +887,9 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       const urls = fetchMock.mock.calls.map((c) => c[0] as string);
       expect(urls).toEqual([`${GW}/compose`]);
       expect(agentCalls).toHaveLength(0);
-      // Ni la URL del gateway ni la del agente ni el PII salen en la respuesta (CD-5/CD-8).
+      // Ni la URL del gateway ni el PII salen en la respuesta (CD-5/CD-8).
       const raw = JSON.stringify(json);
       expect(raw).not.toContain(GW);
-      expect(raw).not.toContain("agents.test");
       expect(raw).not.toContain("999888777");
     });
 
@@ -856,36 +997,61 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
     });
 
     // T-A3.4 — EL test de la HU. Si esto pasa a verde con un fallback puesto, la HU no hizo nada.
-    it("T-A3.4 ANTI-FALLBACK: 422 / 503 / throw del gateway ⇒ 502 prepare_upstream_error, CERO llamadas al agente, CERO ledger, body = { error }", async () => {
+    //
+    // ⚠️ WKH-332/AC-13 — EL STATUS Y EL ENUM ESPERADOS PASARON A SER POR CASO, Y LA RAZÓN ES QUE UNO
+    // DE LOS TRES CAMBIÓ DE VEREDICTO. El 422 `no_agent_match` ya no sale como una caída: "nadie
+    // cumple la capacidad" no se arregla reintentando y el 502 invitaba a eso. Los otros dos siguen
+    // en 502 `prepare_upstream_error`, byte por byte. Lo que este `it` custodia —CERO fallback al
+    // agente directo, CERO ledger, body de UNA sola clave— NO cambió y se sigue asertando para los
+    // TRES casos por igual: si alguien fuera a colar un fallback, este test se pone rojo lo mismo.
+    it("T-A3.4 ANTI-FALLBACK: 422 / 503 / throw del gateway ⇒ corte fail-closed, CERO llamadas al agente, CERO ledger, body = { error }", async () => {
       setGatewayEnv();
       getLedgerMock.mockReturnValue(ledgerMock);
       vi.spyOn(console, "warn").mockImplementation(() => {});
-      const cases: { label: string; opts: Parameters<typeof gwRouter>[0] }[] = [
+      const cases: {
+        label: string;
+        opts: Parameters<typeof gwRouter>[0];
+        /** El status que la RUTA devuelve (distinto del `opts.status`, que es el del gateway). */
+        esperado: number;
+        error: string;
+      }[] = [
         {
           label: "422 no_agent_match (nadie cumple la capacidad con el piso)",
           opts: {
             status: 422,
             body: { error: "no candidates", code: "no_agent_match", reason: "no_candidates", step: 0 },
           },
+          // Desenlace PROPIO (AC-13): no es una caída, y decirlo como caída invitaba a reintentar.
+          esperado: 422,
+          error: "prepare_no_agent_for_capability",
         },
         {
           label: "503 registry_unavailable",
           opts: { status: 503, body: { error: "registry down", error_code: "REGISTRY_UNAVAILABLE" } },
+          esperado: 502,
+          error: "prepare_upstream_error",
         },
-        { label: "throw de red", opts: { composeThrows: true } },
+        {
+          label: "throw de red",
+          opts: { composeThrows: true },
+          esperado: 502,
+          error: "prepare_upstream_error",
+        },
       ];
       for (const c of cases) {
         const { agentCalls } = gwRouter(c.opts);
         const res = await POST(req(bodyOf()));
-        expect(res.status, c.label).toBe(502);
+        expect(res.status, c.label).toBe(c.esperado);
         const json = (await res.json()) as Record<string, unknown>;
-        expect(json, c.label).toEqual({ error: "prepare_upstream_error" });
+        expect(json, c.label).toEqual({ error: c.error });
         // CD-8: el body es EXACTAMENTE { error } — ni detail, ni code, ni el message del gateway.
         expect(Object.keys(json), c.label).toEqual(["error"]);
-        // CD-1: jamás se creó la orden por el otro camino.
+        // CD-1/AC-1: jamás se creó la orden por otro camino. El assert pasó de "no se llamó a ESA
+        // URL" (la del agente por su slug, que ya no se puede construir) a la propiedad que la
+        // reemplaza y es más fuerte: ninguna URL emitida contiene la subcadena del carril borrado.
         expect(agentCalls, c.label).toHaveLength(0);
         expect(
-          fetchMock.mock.calls.map((x) => x[0] as string).includes(AGENT_URL),
+          fetchMock.mock.calls.map((x) => x[0] as string).some((u) => u.includes("/api/agents/")),
           c.label,
         ).toBe(false);
       }
@@ -924,6 +1090,99 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       const badJson = (await bad.json()) as Record<string, unknown>;
       expect(badJson).toEqual({ error: "prepare_no_deposit_address" });
       expect(badJson).not.toHaveProperty("attestation");
+    });
+
+    // ── T-13.1 (WKH-332 / AC-13) — "no hay quién" deja de decirse como "el otro lado se cayó" ────
+    //
+    // 🔴 LOS DOS DESENLACES EN EL MISMO `it`, Y ESO ES EL TEST. Un `it` que sólo mirara el 422 nuevo
+    // daría verde aunque los dos casos salieran por el mismo enum: lo que AC-13 pide no es que exista
+    // un 422, es que "ninguna capacidad resolvió" y "el gateway se cayó" dejen de ser indistinguibles
+    // para quien mira la pantalla. Reintentar arregla la segunda y no puede arreglar la primera.
+    //
+    // CD-17: depende del `setGatewayEnv()` de este `describe` y del `getVerdictStoreMock` de su
+    // `beforeEach`; sin la fila del veredicto la ruta corta en 403 ANTES de llegar al forward y el
+    // test daría verde sin haber ejercitado nada de lo que dice ejercitar.
+    it("T-13.1/AC-13: no_agent_match ⇒ 422 con enum propio; una caída ⇒ sigue siendo 502, comparados entre sí", async () => {
+      setGatewayEnv();
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      // (a) el gateway dice que NINGÚN agente cumple la capacidad bajo el piso del step.
+      const sinAgente = gwRouter({
+        status: 422,
+        body: { code: "no_agent_match", reason: "no_candidates", step: 0 },
+      });
+      const resSinAgente = await POST(req(bodyOf()));
+      const jsonSinAgente = (await resSinAgente.json()) as Record<string, unknown>;
+
+      // (b) el gateway se cayó. CD-22: sólo se abrió `no_agent_match`; todo lo demás sigue en 502.
+      const caido = gwRouter({ status: 503, body: { code: "unavailable" } });
+      const resCaido = await POST(req(bodyOf()));
+      const jsonCaido = (await resCaido.json()) as Record<string, unknown>;
+
+      expect(resSinAgente.status).toBe(422);
+      expect(jsonSinAgente).toEqual({ error: "prepare_no_agent_for_capability" });
+      expect(resCaido.status).toBe(502);
+      expect(jsonCaido).toEqual({ error: "prepare_upstream_error" });
+
+      // La comparación explícita: cualquier mutante que mapee los dos al mismo lado muere acá.
+      expect(resSinAgente.status).not.toBe(resCaido.status);
+      expect(jsonSinAgente.error).not.toBe(jsonCaido.error);
+
+      // CD-1/CD-5, intactos: ni un fetch punto-a-punto, y el body sigue con UNA sola clave (nada del
+      // `message`, el `reason` ni la URL del gateway se ecoa al browser).
+      expect(sinAgente.agentCalls).toHaveLength(0);
+      expect(caido.agentCalls).toHaveLength(0);
+      expect(Object.keys(jsonSinAgente)).toEqual(["error"]);
+    });
+
+    // T-13.4 (AR fix-pack BLQ-MED-1) — el 422 colapsa CUATRO motivos, y uno es "no pude preguntar".
+    //
+    // 🔴 QUÉ MIDE, con el input concreto. `mapErrorStatus` traduce todo 422 a `no_agent_match`, pero
+    // el gateway manda además un `reason`. `reputation_unavailable` significa que el gateway NO PUDO
+    // LEER el historial (medido en `capability-resolver.ts`), o sea que no sabe si hay agentes que
+    // califiquen. El copy del 422 nuevo afirma dos cosas —"no hay ningún proveedor" y "volver a
+    // intentar no cambia el resultado"— que para ese motivo son las DOS falsas, y la segunda encima
+    // desaconseja lo único que puede funcionar. Antes de la HU salía por el copy genérico ("Algo
+    // salió mal, intentá de nuevo"), que era vago y CIERTO: colapsarlo fue una regresión de precisión.
+    //
+    // Los dos casos van en el MISMO `it` y se comparan entre sí a propósito: un test que sólo mirara
+    // `reputation_unavailable` daría verde aunque los cuatro motivos salieran iguales.
+    //
+    // CD-17: mismo `setGatewayEnv()` y mismo `getVerdictStoreMock` del `beforeEach` que T-13.1.
+    it("T-13.4/AR: `reputation_unavailable` NO se dice como 'no hay proveedor' (sale por el 502 de caída)", async () => {
+      setGatewayEnv();
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      // (a) el gateway SÍ evaluó y no hay nadie.
+      gwRouter({ status: 422, body: { code: "no_agent_match", reason: "no_candidates", step: 0 } });
+      const resNadie = await POST(req(bodyOf()));
+      const jsonNadie = (await resNadie.json()) as Record<string, unknown>;
+
+      // (b) el gateway NO PUDO evaluar: mismo status, mismo `code`, otro `reason`.
+      const noSabe = gwRouter({
+        status: 422,
+        body: { code: "no_agent_match", reason: "reputation_unavailable", step: 0 },
+      });
+      const resNoSabe = await POST(req(bodyOf()));
+      const jsonNoSabe = (await resNoSabe.json()) as Record<string, unknown>;
+
+      expect(resNadie.status).toBe(422);
+      expect(jsonNadie).toEqual({ error: "prepare_no_agent_for_capability" });
+      expect(resNoSabe.status).toBe(502);
+      expect(jsonNoSabe).toEqual({ error: "prepare_upstream_error" });
+      expect(resNadie.status).not.toBe(resNoSabe.status);
+
+      // Y un 422 SIN `reason` tampoco habilita la afirmación fuerte: no saber por qué no es lo mismo
+      // que saber que no hay nadie (fail-closed hacia el copy vago y cierto).
+      gwRouter({ status: 422, body: { code: "no_agent_match", step: 0 } });
+      const resMudo = await POST(req(bodyOf()));
+      expect(resMudo.status).toBe(502);
+
+      // CD-5/CD-8 intactos: el `reason` se usó para DECIDIR y no se ecoó. Una sola clave, y no dice
+      // "reputation".
+      expect(Object.keys(jsonNoSabe)).toEqual(["error"]);
+      expect(JSON.stringify(jsonNoSabe)).not.toContain("reputation");
+      expect(noSabe.agentCalls).toHaveLength(0);
     });
 
     it("T-A3.6: flag encendido + envs del gateway ausentes ⇒ 501 prepare_not_configured y CERO fetch", async () => {
@@ -980,22 +1239,27 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
     // T-A5.2 — capas INDEPENDIENTES. El piso no es un control de seguridad: no verifica que la
     // dirección sea del agente ni que sea válida. Con el piso puesto, PR8 rechaza exactamente igual
     // que sin él, y si mañana el piso se sube, se baja o se saca, esto no cambia.
-    it("T-A5.2: el piso NO reemplaza a PR8 — depositAddress inválido da el MISMO 502 con el flag encendido que apagado", async () => {
-      // (a) flag apagado (camino punto-a-punto de siempre)
-      agentResponds(200, agentResult({ depositAddress: "0xNOT_AN_ADDRESS" }));
-      const off = await POST(req(bodyOf()));
-      const offJson = await off.json();
-
-      // (b) flag encendido, con el piso viajando en el step
+    // ⚠️ ESTE TEST COMPARABA DOS TRANSPORTES Y AHORA HAY UNO (WKH-332/W3). La mitad (a) stubeaba el
+    // flag en "" y ejercitaba el carril punto a punto; ese carril se borró, así que la comparación
+    // quedaría comparando el gateway contra sí mismo — un guard que se compara consigo mismo aplaude
+    // cualquier cosa. Lo que SÍ sigue siendo falsable es la propiedad de fondo: con el piso viajando
+    // en el step, PR8 rechaza igual. El input que lo pone en rojo: mover el guard del depositAddress
+    // adentro de un `if` que dependa de las constraints.
+    it("T-A5.2: el piso NO reemplaza a PR8 — un depositAddress inválido corta con 502 igual, con el piso puesto", async () => {
       setGatewayEnv();
-      gwRouter({ output: agentResult({ depositAddress: "0xNOT_AN_ADDRESS" }) });
-      const on = await POST(req(bodyOf()));
-      const onJson = await on.json();
-
-      expect(off.status).toBe(502);
-      expect(on.status).toBe(off.status);
-      expect(onJson).toEqual(offJson);
-      expect(onJson).toEqual({ error: "prepare_no_deposit_address" });
+      let composeInit: RequestInit | undefined;
+      gwRouter({
+        output: agentResult({ depositAddress: "0xNOT_AN_ADDRESS" }),
+        captureCompose: (init) => (composeInit = init),
+      });
+      const res = await POST(req(bodyOf()));
+      const json = await res.json();
+      // El piso VIAJÓ (si no, este test probaría que PR8 corta sin piso, que es otra cosa).
+      expect(JSON.parse(composeInit!.body as string).steps[0].constraints).toEqual({
+        min_reputation: PAYOUT_MIN_REPUTATION,
+      });
+      expect(res.status).toBe(502);
+      expect(json).toEqual({ error: "prepare_no_deposit_address" });
     });
 
     // T-A5.2b — espejo del anterior con el SHAPE roto en vez de la dirección rota. isValidPayoutResult
@@ -1003,41 +1267,45 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
     // vuelve a mirar `status`. El gate corre para las DOS ramas de transporte; sin este test se podía
     // desactivarlo sólo en la de gateway y la suite entera quedaba verde — justo en el transporte
     // donde el que responde ya no es una URL fija sino el agente que eligió el gateway.
-    it("T-A5.2b: shape inválido del result da el MISMO 502 prepare_upstream_error con el flag encendido que apagado, y NUNCA atesta", async () => {
-      // (a) flag apagado (camino punto-a-punto de siempre)
-      agentResponds(200, agentResult({ status: "weird" }));
-      const off = await POST(req(bodyOf()));
-      const offJson = (await off.json()) as Record<string, unknown>;
-
-      // (b) flag encendido: el gate de shape tiene que correr IGUAL en la rama de gateway
+    // ⚠️ MISMA REESCRITURA QUE T-A5.2: la mitad "flag apagado" ejercitaba el carril borrado. Lo que
+    // sobrevive es la propiedad, que es la que importa en el transporte donde el que responde ya no
+    // es una URL fija sino el agente que eligió el gateway: `isValidPayoutResult` es lo ÚNICO que
+    // exige `status ∈ {submitted,settled,failed,blocked}`, y después de PR8 nadie vuelve a mirarlo.
+    it("T-A5.2b: shape inválido del result ⇒ 502 prepare_upstream_error, y NUNCA atesta", async () => {
       setGatewayEnv();
       gwRouter({ output: agentResult({ status: "weird" }) });
-      const on = await POST(req(bodyOf()));
-      const onJson = (await on.json()) as Record<string, unknown>;
-
-      expect(off.status).toBe(502);
-      expect(on.status).toBe(off.status);
-      expect(onJson).toEqual(offJson);
-      expect(onJson).toEqual({ error: "prepare_upstream_error" });
-      expect(onJson).not.toHaveProperty("attestation");
+      const res = await POST(req(bodyOf()));
+      const json = (await res.json()) as Record<string, unknown>;
+      expect(res.status).toBe(502);
+      expect(json).toEqual({ error: "prepare_upstream_error" });
+      expect(json).not.toHaveProperty("attestation");
     });
 
-    // T-A4.1 (mitad P) — "construye, no enciende": con el flag ≠ a2a-gateway el gateway se ignora
-    // aunque sus envs estén seteadas. El assert es sobre /compose (con el discovery borrado, asertar
-    // que no se llama a /discover pasa trivialmente y deja de proteger nada).
-    it.each(["fallback", "a2a", undefined])(
-      "T-A4.1: flag=%s + WASIAI_A2A_* seteadas ⇒ gateway IGNORADO (fetch al agente punto-a-punto)",
+    // T-1.2 (WKH-332/AC-1) — 🔴 ESTE TEST SE INVIRTIÓ, Y LA INVERSIÓN ES EL PUNTO.
+    //
+    // Era T-A4.1: `it.each(["fallback","a2a",undefined])` asertando que con el flag ≠ "a2a-gateway"
+    // el gateway se IGNORA y se hace el fetch al agente por su slug (`expect(agentCalls).toEqual(
+    // [AGENT_URL])`). O sea: clavaba que el segundo transporte fuera alcanzable por una env. Eso es
+    // exactamente lo que esta HU borró, así que portar el test habría sido conservar el invariante
+    // viejo con nombre nuevo. Ahora asserta lo contrario, y para los mismos valores del flag: NINGUNO
+    // produce un fetch a `/api/agents/`.
+    //
+    // ⚠️ `"a2a"` sale de la lista y no por olvido: post-W3 la app no arranca con ese valor
+    // (`createContainer()` tira), y esta ruta ya no lee la bandera. Su caso vive donde importa,
+    // en `src/composition/value-delivery-adapter.test.ts` y `src/composition/container.test.ts`.
+    it.each(["a2a-gateway", "fallback", undefined])(
+      "T-1.2: con la bandera en %s el prepare NO hace NINGÚN fetch a /api/agents/",
       async (flag) => {
-        if (flag === undefined) vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "");
+        if (flag === undefined)
+          vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", undefined as unknown as string);
         else vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", flag);
-        vi.stubEnv("WASIAI_A2A_GATEWAY_URL", GW); // seteadas, pero NO deben usarse
-        vi.stubEnv("WASIAI_A2A_AGENT_KEY", GW_KEY);
         const { agentCalls } = gwRouter();
         const res = await POST(req(bodyOf()));
         expect(res.status).toBe(200);
         const urls = fetchMock.mock.calls.map((c) => c[0] as string);
-        expect(urls.some((u) => u.includes("/compose"))).toBe(false);
-        expect(agentCalls).toEqual([AGENT_URL]);
+        expect(urls).toEqual([`${GW}/compose`]);
+        expect(agentCalls).toHaveLength(0);
+        expect(urls.some((u) => u.includes("/api/agents/"))).toBe(false);
       },
     );
 
@@ -1058,7 +1326,7 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
 
     // ── CANDADO: el leg de payout NUNCA pide el carril de estreno ─────────────────────────────
     //
-    // Hasta acá lo único que sostenía esta decisión era un comentario en la route (route.ts:211,
+    // Hasta acá lo único que sostenía esta decisión era un comentario en la route (route.ts:395,
     // "CD-5: NUNCA omitir") y dos asserts colgados del happy path (T-A5.1, arriba). Eso alcanza
     // contra un descuido y NO alcanza contra el escenario que de verdad va a pasar, que está medido
     // y es este: el día que se encienda `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER=a2a-gateway`, el agente
@@ -1095,7 +1363,7 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       }
 
       /** Escanea el body de /compose SALVO el `input` de cada step. El `input` es el body del caller
-       *  TAL CUAL (route.ts:212): una clave con ese nombre ahí la puso quien llamó, no este leg, y el
+       *  TAL CUAL (route.ts:396): una clave con ese nombre ahí la puso quien llamó, no este leg, y el
        *  gateway sólo lee el carril dentro de `constraints`. Todo lo demás del body SÍ se escanea,
        *  así que la clave no se salva escondiéndola a nivel step ni a nivel raíz. */
       function trialKeysSentTo(rawBody: string): string[] {
@@ -1146,9 +1414,12 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
           body: { error: "no candidates", code: "no_agent_match", reason: "no_candidates", step: 0 },
         });
         const res = await POST(req(bodyOf()));
-        // El 422 se propaga como 502 opaco y el leg NO se destraba solo.
-        expect(res.status).toBe(502);
-        expect(await res.json()).toEqual({ error: "prepare_upstream_error" });
+        // WKH-332/AC-13 — el veredicto de ESTE assert cambió (era 502 `prepare_upstream_error`): el
+        // 422 ahora sale con enum propio, porque "no hay quién" no se arregla reintentando y decirlo
+        // con las palabras de una caída invitaba justamente a eso. Lo que este `it` custodia NO
+        // cambió y es lo de abajo: el leg NO se destraba solo agregando el carril de estreno.
+        expect(res.status).toBe(422);
+        expect(await res.json()).toEqual({ error: "prepare_no_agent_for_capability" });
         expect(bodies.length).toBeGreaterThan(0); // hubo /compose: el escaneo de abajo mira algo real
         for (const [i, raw] of bodies.entries()) {
           expect(trialKeysSentTo(raw), `${POR_QUE} (intento #${i + 1} del /compose)`).toEqual([]);
@@ -1232,12 +1503,12 @@ describe("POST /api/payout/prepare — el identificador sale de la fila, no del 
     KP = nacl.sign.keyPair();
     ADDR = bs58.encode(KP.publicKey);
     AUTHORITY = bs58.encode(nacl.sign.keyPair().publicKey);
-    vi.stubEnv("REMIT_AGENTS_BASE_URL", "https://agents.test");
     vi.stubEnv("DEPOSIT_ATTESTATION_SECRET", "test-deposit-secret");
     vi.stubEnv("SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY", AUTHORITY);
     vi.stubEnv("VERCEL_ENV", "");
     vi.stubEnv("PAYOUT_POP_SECRET", "pop-secret");
-    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "");
+    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", GW); // W3: un solo transporte, y hay que configurarlo
+    vi.stubEnv("WASIAI_A2A_AGENT_KEY", GW_KEY);
     checkRouteRateLimitMock.mockReset();
     checkRouteRateLimitMock.mockResolvedValue({ ok: true });
     authorityMock.mockReset();
@@ -1440,29 +1711,16 @@ describe("POST /api/payout/prepare — el identificador sale de la fila, no del 
   });
 
   // ── T-PR-11 — AC-16 / M-30 ────────────────────────────────────────────────────────────────────
-  it("T-PR-11: el payload forwardeado lleva el id DE LA FILA — en LAS DOS ramas de transporte", async () => {
+  // ⚠️ EL TÍTULO DECÍA "en LAS DOS ramas de transporte" Y AHORA HAY UNA (WKH-332/W3). La mitad
+  // punto-a-punto se borró junto con el `else` de la route. Lo que M-30 vigilaba —que una futura
+  // división en dos sitios de saneo no pudiera regresar en silencio— ya no puede ocurrir por
+  // construcción: `forwardBody` se arma UNA vez y hay un solo consumidor. La propiedad que queda es
+  // la que importa y sigue siendo falsable: lo que sale al gateway lleva el id DE LA FILA, y el que
+  // propuso el cliente no aparece en ninguna parte del body.
+  it("T-PR-11: el payload forwardeado al gateway lleva el id DE LA FILA, no el que propuso el cliente", async () => {
     getVerdictStoreMock.mockReturnValue(
       honestVerdictStore([{ senderAddress: ADDR, verificationId: "did-de-la-fila" }]),
     );
-
-    // ── rama punto-a-punto ──
-    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "");
-    await POST(req(bodyOf({ kycVerificationId: "did-QUE-EL-CLIENTE-PROPUSO" })));
-    const p2pInit = fetchMock.mock.calls[0]?.[1] as { body: string };
-    const p2pBody = JSON.parse(p2pInit.body) as Record<string, unknown>;
-    expect(
-      p2pBody.kycVerificationId,
-      "la rama punto-a-punto le reenvió al agente el identificador que propuso el cliente",
-    ).toBe("did-de-la-fila");
-
-    // ── rama gateway ──
-    // Se ejercita la MISMA ruta con el otro transporte. El aserto se repite a propósito: si mañana
-    // alguien sanea sólo una de las dos, la misma ruta autorizaría distinto según una env de
-    // transporte, y eso no puede pasar en silencio (M-30).
-    fetchMock.mockClear();
-    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gateway");
-    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", "https://gateway.test");
-    vi.stubEnv("WASIAI_A2A_AGENT_KEY", "ak_prepare_secret");
     let composeBody = "";
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (url.includes("/compose")) composeBody = String(init?.body ?? "");

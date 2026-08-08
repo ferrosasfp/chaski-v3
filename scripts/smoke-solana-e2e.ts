@@ -375,7 +375,7 @@ async function main(): Promise<void> {
   // una advertencia al pasar: es parte del resultado, y se imprime como tal.
   //
   // El veredicto lo da `classifyPayoutProvenance` (smoke-helpers.ts, con tests), que compara contra la
-  // MISMA allowlist que producción (`REAL_PAYOUT_PROVENANCES`, src/presentation/flow-vm.ts:26) y contra
+  // MISMA allowlist que producción (`REAL_PAYOUT_PROVENANCES`, src/presentation/flow-vm.ts:25) y contra
   // la lista de proveniencias no-reales conocidas. Fail-closed: cualquier `kind` que no sea "no-real"
   // aborta, así que un valor nuevo o con otra capitalización corta la corrida en vez de colarse.
   //

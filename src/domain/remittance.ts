@@ -95,7 +95,7 @@ export interface Quote {
   etaMinutes: number;
   expiresAt: string; // ISO
   provenance: string;
-  /** Quién cotizó (leg de FX). Ausente cuando el transporte no lo informa (rama punto-a-punto). */
+  /** Quién cotizó (leg de FX). Ausente ⟹ el gateway no dijo a quién eligió de forma legible. */
   agent?: AgentRef;
 }
 
@@ -194,7 +194,8 @@ export function isParseableIso(value: string): boolean {
 /**
  * WKH-314 — monto mínimo enviable, en USD. Es EXPERIENCIA DE USO, no la protección.
  *
- * ⚠️ LA AUTORIDAD ES EL AGENTE (`remit-corridor-fx`), no este número. Allá el mínimo es
+ * ⚠️ LA AUTORIDAD ES EL AGENTE QUE RESUELVA LA CAPACIDAD DE FX, no este número. Cuál agente es no
+ * lo decide este repo: se pide `remittance-fx-quote` y el gateway resuelve al ejecutar. Allá el mínimo es
  * configurable (`FX_MIN_SEND_USD`) y está atado a la comisión, de modo que no pueda existir
  * una comisión que lo anule. Acá vive una copia para que la interfaz no habilite un envío que
  * el agente va a rechazar: sin esto, la persona escribía 40 centavos, leía "tu familia recibe
@@ -262,7 +263,7 @@ export interface RemittanceState {
   payoutProvenance: string | null; // proveniencia del payout (real vs mock) — propagada desde PayoutRecord (WKH-200)
   /**
    * Quién atendió el leg de PAYOUT, o sea quién dio el `depositAddress` contra el que la persona
-   * firmó el principal. `null` = no lo sabemos (rama punto-a-punto, o el gateway no lo informó).
+   * firmó el principal. `null` = no lo sabemos (el gateway no dijo a quién eligió de forma legible).
    * NUNCA se rellena con un valor plausible: no saberlo es un estado legítimo y se dice así.
    */
   payoutAgent: AgentRef | null;

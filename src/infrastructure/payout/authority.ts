@@ -124,7 +124,7 @@ export async function resolvePayoutAuthority(
     // El reason es `kyc_ownership_mismatch` y NO uno nuevo, a propósito: los dos consumidores tienen
     // switch cerrado y un reason desconocido cae al `default` de cada uno con la forma equivocada.
     // validate/route.ts:81 lo devolvería tal cual → distinguible de `kyc_not_authorized`, que es
-    // exactamente el oráculo que WKH-205 colapsó; prepare/route.ts:300 lo mapearía a 502
+    // exactamente el oráculo que WKH-205 colapsó; prepare/route.ts:347 lo mapearía a 502
     // `payout_authority_unavailable`, que le dice a quien llama "la autoridad se cayó, reintentá"
     // cuando lo cierto es "no estás autorizado". Semánticamente tampoco hace falta distinguirlos:
     // bajo fail-closed, binding ausente y binding que no coincide son el mismo veredicto — no se

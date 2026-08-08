@@ -1,16 +1,17 @@
-// Server-side: proxy al agente remit-corridor-fx (WKH-186). REMIT_AGENTS_BASE_URL vive SOLO acá
-// (CD-9, SIN NEXT_PUBLIC_): nunca llega al cliente; la ruta sólo devuelve { result }. Patrón de
-// app/api/payout/validate: sin base → 501; TODO en try/catch (nunca 500 crudo); cero PII (CD-5:
-// el body del request no se ecoa en errores). Espejo del A2aQuoteGateway cliente.
+// Server-side: el leg de FX de la remesa, pedido POR CAPACIDAD (WKH-186, reescrito en WKH-332/W3).
+// Esta ruta NO nombra ningún agente y no tiene forma de hacerlo: manda `remittance-fx-quote` al
+// gateway y el gateway resuelve quién la cumple. El `fetch({BASE}/api/agents/<slug>/invoke)` y la env
+// `REMIT_AGENTS_BASE_URL` que lo alimentaba se BORRARON — un camino apagado por una bandera sigue
+// siendo un camino, y era el que llamaba a un agente por su nombre (AC-1/CD-1).
+// Sin gateway configurado → 501; cero 500 crudo; cero PII (CD-5: el body del request no se ecoa en
+// errores). Espejo del A2aQuoteGateway cliente.
 import { NextResponse } from "next/server";
 import {
-  QUOTE_REJECTED,
-  RELAYABLE_QUOTE_REJECTIONS,
-  relayableRejection,
+  QUOTE_NO_AGENT_FOR_CAPABILITY,
+  noAgentMeansNobodyFits,
 } from "../../../../src/application/agent-rejections";
 import { isParseableIso } from "../../../../src/domain/remittance";
 import {
-  FX_DIRECT_AGENT_SLUG,
   FX_MIN_REPUTATION,
   FX_QUOTE_CAPABILITY,
   logGatewayFailure,
@@ -21,41 +22,13 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
 }
 
-/**
- * ¿Este status del agente es un RECHAZO del pedido, o el agente que no pudo atenderlo?
- *
- * 400 y 422 son los dos únicos que prueban que el agente leyó el body y lo negó. Todo lo demás
- * (401/403 = nuestra credencial, 404 = la ruta, 429 = su rate-limit, 5xx = él caído) es un problema
- * de infraestructura NUESTRO o SUYO, no del monto que escribió la persona, y sigue saliendo por el
- * 502 de siempre. Meter un 403 acá diría "revisá tu pedido" cuando lo que hay que revisar es la
- * credencial del server.
- */
-function isAgentRejectionStatus(status: number): boolean {
-  return status === 400 || status === 422;
-}
-
-/**
- * Lee el enum del rechazo del body de error del agente, con la lista de relayables como filtro.
- *
- * Escanea tres claves porque el contrato de error del agente NO está vendoreado (ver
- * `contracts/CONTRACT-VERSIONS.md`: el fixture pinneado es el del OUTPUT feliz) y adivinar una sola
- * sería apostar. Escanear de más es inofensivo: lo que decide qué sale es la allow-list, no la
- * clave. Un body ilegible o un enum desconocido ⇒ el enum de familia, nunca el string crudo.
- */
-async function readQuoteRejection(res: Response): Promise<string> {
-  let body: unknown;
-  try {
-    body = await res.json();
-  } catch {
-    return QUOTE_REJECTED; // el agente rechazó y no dijo por qué de forma legible
-  }
-  if (!isRecord(body)) return QUOTE_REJECTED;
-  for (const raw of [body.error, body.code, body.reason]) {
-    const mapped = relayableRejection(QUOTE_REJECTED, raw, RELAYABLE_QUOTE_REJECTIONS);
-    if (mapped !== QUOTE_REJECTED) return mapped;
-  }
-  return QUOTE_REJECTED;
-}
+// 🔴 ACÁ VIVÍAN `isAgentRejectionStatus` Y `readQuoteRejection`, Y SE FUERON CON SU ÚNICO LLAMADOR
+// (WKH-332/W3). Los dos leían la respuesta HTTP del agente invocado por su slug: el primero decidía
+// si un 400/422 suyo era un rechazo del pedido, el segundo sacaba el `reason` de su body con
+// `RELAYABLE_QUOTE_REJECTIONS` como filtro. Por el gateway no hay respuesta del agente que leer —
+// `/compose` devuelve el step fallado sin `code` ni `reason` (es lo que WKH-335 abre en el otro
+// repo), así que no hay nada que filtrar. El borrado NO es cosmético: dejarlos sin llamador daba 3
+// errores de `noUnusedVariables` en biome, medido.
 
 // Shape mínimo esperado del result del agente (validación defensiva, sin any).
 function isValidQuoteResult(v: unknown): boolean {
@@ -73,10 +46,9 @@ function isValidQuoteResult(v: unknown): boolean {
 }
 
 export async function POST(req: Request): Promise<Response> {
-  const adapter = process.env.NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER; // "fallback"(default) | "a2a" | "a2a-gateway"
   const body = await req.json().catch(() => ({}));
 
-  // WKH-218 + WKH-304: 3er modo de transporte. Pide la CAPACIDAD al gateway wasiai-a2a vía POST
+  // WKH-218 + WKH-304: el ÚNICO transporte. Pide la CAPACIDAD al gateway wasiai-a2a vía POST
   // /compose (CD-7: /compose, NO /orchestrate) y es el GATEWAY el que resuelve qué agente la cumple:
   // acá ya no se descubre ni se elige agente por nombre, ni se cae al primero de la lista (CD-1).
   //
@@ -94,83 +66,73 @@ export async function POST(req: Request): Promise<Response> {
   //
   // Lo que este pedido NO reemplaza: isValidQuoteResult, que corta con 502 si el agente que gana el
   // ranking devuelve otro shape. El piso sube el piso, no valida la respuesta.
-  // Fail-closed SIN fallback punto-a-punto (CD-1/AC-4): cualquier error del gateway corta con 502/501
-  // opaco; NUNCA cae al fetch({BASE}/...) de abajo. El detalle granular del fallo va al log
-  // (logGatewayFailure, sólo enums — CD-9), NUNCA al body de la respuesta (CD-8). Con el flag ≠
-  // "a2a-gateway" (default) esta rama no se entra ⇒ la rama punto-a-punto queda byte-idéntica (CD-15).
-  if (adapter === "a2a-gateway") {
-    const r = await runViaGateway({
-      steps: [
-        {
-          capability: process.env.WASIAI_A2A_FX_CAPABILITY ?? FX_QUOTE_CAPABILITY,
-          // Las dos claves juntas o ninguna: ver FX_MIN_REPUTATION.
-          constraints: { min_reputation: FX_MIN_REPUTATION, allow_trial: true },
-          input: body as Record<string, unknown>, // el body TAL CUAL (CD-8)
-        },
-      ],
-    });
-    // ⚠️ ESTA RAMA SIGUE COLAPSADA, Y ES DELIBERADO. La separación rechazo/caída que sí se hizo en
-    // la rama punto-a-punto de abajo NO se replicó acá: `payment_required` (402, la Agent Key sin
-    // saldo), `no_agent_match` (422) y `unavailable` siguen saliendo por el mismo
-    // `a2a_unavailable`. Lo que lo impide es CD-8, que es una directiva, no una omisión: el detalle
-    // granular del gateway va al log y nunca al body. Y no es sólo texto — hay un test que lo
-    // clava (`route.test.ts`, "el detalle SÓLO al log": `Object.keys(json)` debe ser `["error"]`).
-    // Además, lo que un 402 filtraría no es un dato del pedido de quien llama sino del estado
-    // operativo nuestro. Abrir esto necesita su propio SDD que revise CD-8, no un parche acá.
-    if (!r.ok) {
-      logGatewayFailure("quote", r);
-      if (r.code === "not_configured")
-        return NextResponse.json({ error: "a2a_not_configured" }, { status: 501 });
-      return NextResponse.json({ error: "a2a_unavailable" }, { status: 502 });
-    }
-    if (!isValidQuoteResult(r.outputs[0]))
-      return NextResponse.json({ error: "a2a_bad_shape" }, { status: 502 });
-    // QUIÉN cotizó. El gateway lo dice en `steps[0].agent` y hasta acá se tiraba. Sigue sin
-    // viajar ni la URL ni PII: sólo el slug/registry/capability del agente elegido, que es
-    // exactamente lo que hace auditable una elección hecha server-side. Ausente ⇒ no se manda la
-    // clave, y la remesa queda diciendo "no sé quién", que es la verdad.
-    const chosen = r.agents[0];
-    return NextResponse.json(
-      { result: r.outputs[0], ...(chosen ? { agent: chosen } : {}) },
-      { status: 200 },
-    );
-  }
-
-  // --- rama punto-a-punto / mock: BYTE-IDÉNTICA al actual (BASE, fetch, isValidQuoteResult) ---
-  const BASE = process.env.REMIT_AGENTS_BASE_URL; // server-only (CD-9), leído en runtime
-  if (!BASE) return NextResponse.json({ error: "a2a_not_configured" }, { status: 501 });
-  try {
-    // El slug sale de la MISMA constante que el preview muestra como "quién corre hoy": eran dos
-    // literales sin relación, y la pantalla terminó nombrando a un agente distinto del que se llama.
-    const res = await fetch(`${BASE}/api/agents/${FX_DIRECT_AGENT_SLUG}/invoke`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(10_000),
-    });
-    // Un rechazo del agente NO es el agente caído. Acá salían los dos por el mismo 502
-    // `a2a_upstream_error`, y por eso un envío de 2 dólares se leía en pantalla como una caída (ver
-    // la medición en `src/application/agent-rejections.ts`). El 400 dice lo que es: el pedido llegó,
-    // se entendió y se negó, así que reintentar igual no lo va a arreglar — hay que cambiar el monto.
-    // El `reason` viaja SÓLO si está en la allow-list; lo demás sale colapsado (CD-5: nunca se ecoa
-    // el body del request ni texto libre del agente).
-    if (!res.ok) {
-      if (isAgentRejectionStatus(res.status)) {
-        const reason = await readQuoteRejection(res);
-        return NextResponse.json(
-          reason === QUOTE_REJECTED ? { error: QUOTE_REJECTED } : { error: QUOTE_REJECTED, reason },
-          { status: 400 },
-        );
-      }
-      return NextResponse.json({ error: "a2a_upstream_error" }, { status: 502 });
-    }
-    const { result } = (await res.json()) as { result: unknown };
-    if (!isValidQuoteResult(result)) {
-      return NextResponse.json({ error: "a2a_bad_shape" }, { status: 502 });
-    }
-    return NextResponse.json({ result }, { status: 200 }); // sólo el result (nunca BASE ni PII)
-  } catch {
-    // timeout/DNS/parse → 502 opaco (nunca 500 crudo, nunca ecoa el body)
+  // Fail-closed SIN fallback punto-a-punto (CD-1/AC-1): cualquier error del gateway corta con 502/501
+  // opaco. Ya no hay un "abajo" al que caer: el `else` con el `fetch({BASE}/api/agents/<slug>/invoke)`
+  // se BORRÓ en WKH-332/W3, y con él la última forma que tenía esta ruta de llamar a un agente por su
+  // nombre. El detalle granular del fallo va al log (logGatewayFailure, sólo enums — CD-9), NUNCA al
+  // body de la respuesta (CD-8).
+  //
+  // 🔴 ESTA RUTA YA NO LEE `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`, y no es una omisión. Había un solo
+  // motivo para leerla —elegir entre dos transportes— y ahora hay uno.
+  //
+  // ⚠️ Y NO LEERLA SIGNIFICA QUE LA BANDERA NO PUEDE DETENER A ESTA RUTA (AR/BLQ-MED-1). Acá decía que
+  // con `"fallback"` *"nadie llega hasta acá"* y que *"un valor no reconocido tampoco llega"*. Las dos
+  // eran falsas para cualquier invocación server-side, y la segunda se BORRA: no tiene versión cierta.
+  // Lo cierto es más chico y es esto: con `"fallback"` el container del CLIENTE cablea
+  // `FallbackQuoteGateway` (`usesRealGateways`, `../../../../src/composition/value-delivery-adapter.ts:74`)
+  // y la UI propia no llama a este endpoint; el endpoint NO lee la bandera y le contesta igual a quien
+  // sea. Input que lo demuestra, en este repo: (`it.each`, `route.test.ts:386`) corre con la bandera en
+  // `"fallback"` y en `undefined`, y en los dos casos exige 200 y un único fetch a `${GW}/compose`.
+  //
+  // 🔴 POR QUÉ NO ES UN DETALLE: §9 del Story File nombra el flip de esa bandera como la palanca de
+  // rollback. Poner `"fallback"` NO corta esta ruta —sigue componiendo y gastando la Agent Key—. Lo
+  // que sí la corta sin re-desplegar es sacarle la config del gateway: con la URL o la key ausentes la
+  // config resuelve a `null` (`not_configured`, `gateway-client.ts:225`) ⇒ el 501 de abajo, sin fetch.
+  const r = await runViaGateway({
+    steps: [
+      {
+        capability: process.env.WASIAI_A2A_FX_CAPABILITY ?? FX_QUOTE_CAPABILITY,
+        // Las dos claves juntas o ninguna: ver FX_MIN_REPUTATION.
+        constraints: { min_reputation: FX_MIN_REPUTATION, allow_trial: true },
+        input: body as Record<string, unknown>, // el body TAL CUAL (CD-8)
+      },
+    ],
+  });
+  // ⚠️ ESTA RAMA SIGUE MAYORMENTE COLAPSADA, Y ES DELIBERADO. `payment_required` (402, la Agent
+  // Key sin saldo) y `unavailable` siguen saliendo los dos por `a2a_unavailable`. Lo que lo impide
+  // es CD-8, que es una directiva y no una omisión: el detalle granular del gateway va al log y
+  // nunca al body. Y no es sólo texto — hay un test que lo clava (`route.test.ts`, "el detalle
+  // SÓLO al log": `Object.keys(json)` debe ser `["error"]`). Además, lo que un 402 filtraría no es
+  // un dato del pedido de quien llama sino del estado operativo nuestro.
+  //
+  // 🔴 SE ABRE UNO SOLO: `no_agent_match` (WKH-332/AC-13). No es un eco del gateway (CD-5) —no
+  // viaja su `message`, ni su `reason`, ni la URL—: es UNA palabra nuestra para un desenlace
+  // nuestro, y el body sigue teniendo exactamente una clave. Se abre porque "ninguna capacidad
+  // resolvió" no se arregla reintentando, y el 502 invitaba justamente a eso: la misma llamada, un
+  // segundo después, vuelve a no encontrar a nadie. Abrir el 402 sigue necesitando su propio SDD.
+  if (!r.ok) {
+    logGatewayFailure("quote", r);
+    if (r.code === "not_configured")
+      return NextResponse.json({ error: "a2a_not_configured" }, { status: 501 });
+    // 🔴 El `code` NO alcanza (AR/BLQ-MED-1): el 422 colapsa cuatro motivos y uno es
+    // `reputation_unavailable`, o sea "el gateway no pudo leer el historial". Para ése, "no hay
+    // ningún proveedor que pueda cotizar" es una afirmación que no podemos hacer, y "reintentar no
+    // cambia el resultado" desaconseja lo único que puede funcionar. Ese cae al 502 de abajo, que
+    // dice "algo salió mal, probá de nuevo" — vago y CIERTO. El `reason` se usa para ramificar,
+    // nunca se ecoa: el body sigue teniendo exactamente una clave.
+    if (r.code === "no_agent_match" && noAgentMeansNobodyFits(r.reason))
+      return NextResponse.json({ error: QUOTE_NO_AGENT_FOR_CAPABILITY }, { status: 422 });
     return NextResponse.json({ error: "a2a_unavailable" }, { status: 502 });
   }
+  if (!isValidQuoteResult(r.outputs[0]))
+    return NextResponse.json({ error: "a2a_bad_shape" }, { status: 502 });
+  // QUIÉN cotizó. El gateway lo dice en `steps[0].agent` y hasta acá se tiraba. Sigue sin
+  // viajar ni la URL ni PII: sólo el slug/registry/capability del agente elegido, que es
+  // exactamente lo que hace auditable una elección hecha server-side. Ausente ⇒ no se manda la
+  // clave, y la remesa queda diciendo "no sé quién", que es la verdad.
+  const chosen = r.agents[0];
+  return NextResponse.json(
+    { result: r.outputs[0], ...(chosen ? { agent: chosen } : {}) },
+    { status: 200 },
+  );
 }

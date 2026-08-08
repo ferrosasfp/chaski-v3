@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { Money } from "../domain/money";
-import { MIN_SEND_USD } from "../domain/remittance";
 import type { RemittanceState, RemittanceStatus } from "../domain/remittance";
 import {
   PRINCIPAL_SETTLED_REFUND_MANUAL,
   PRINCIPAL_STATE_UNKNOWN,
 } from "../application/use-cases/confirm-and-send";
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
+import {
+  PREPARE_NO_AGENT_FOR_CAPABILITY,
+  QUOTE_NO_AGENT_FOR_CAPABILITY,
+} from "../application/agent-rejections";
 import {
   SENDER_MIN_LAMPORTS_FOR_DEPOSIT,
   formatLamportsAsSol,
@@ -710,33 +713,39 @@ describe("flow-vm — humanError", () => {
     expect(copy).toContain("la comisión de la transacción con la que podrías recuperar tus USDC");
   });
 
-  // Hallazgo #75 — las tres causas de rechazo de cotización caían en "Algo salió mal. Intentá de
-  // nuevo", que para un monto fuera de rango es un consejo activamente equivocado: intentar de nuevo
-  // con el mismo monto vuelve a fallar exactamente igual.
-  it("#75: mínimo, techo y rechazo genérico tienen copy PROPIO y DISTINTO entre sí", () => {
-    const bajo = humanError("fx_amount_below_minimum");
-    const alto = humanError("fx_amount_above_maximum");
+  // 🔴 TRES `it` DEL HALLAZGO #75 MURIERON EN WKH-332/W4, Y ES LA MITAD VISIBLE DE LA REGRESIÓN DE
+  // AC-4. Eran:
+  //   · "mínimo, techo y rechazo genérico tienen copy PROPIO y DISTINTO entre sí"
+  //   · "el copy del mínimo sale de MIN_SEND_USD, no de un número escrito a mano"
+  //   · "el copy del techo no publica un número que no tenemos"
+  // Los tres asertaban el copy de `fx_amount_below_minimum` / `fx_amount_above_maximum`, que es el
+  // vocabulario PRIVADO de un agente. Llegaba a la app porque el carril punto a punto leía el body de
+  // error del agente; borrado el carril, ningún productor puede emitirlos (`/compose` manda el step
+  // fallado sin `code` y sin `reason`). Un test que siguiera exigiendo ese copy estaría exigiendo una
+  // frase para un input que no puede ocurrir, y el copy correspondiente haría que la pantalla parezca
+  // capaz de nombrar la causa. No se portan: se declaran, y su declaración ejecutable es T-4.1'
+  // (al final de este archivo), que asserta que el copy del corte NO promete distinguir la causa.
+  //
+  // Lo que SÍ sobrevive es el enum de FAMILIA, que es una palabra nuestra y no del agente, y el
+  // candado que lo separa de la caída. Los dos `it` de abajo son eso.
+  it("#75: el rechazo genérico de cotización NO comparte copy con la caída ni con el default", () => {
     const generico = humanError("a2a_quote_rejected");
-    for (const copy of [bajo, alto, generico]) {
-      expect(copy).not.toBe("Algo salió mal. Intentá de nuevo.");
-      // Tampoco comparten mensaje con la caída real, que es lo que decían antes de esto.
-      expect(copy).not.toBe(humanError("a2a_quote_unavailable"));
+    expect(generico).not.toBe("Algo salió mal. Intentá de nuevo.");
+    expect(generico).not.toBe(humanError("a2a_quote_unavailable"));
+    // Y no promete la causa que ya no llega: no nombra el mínimo ni el máximo ni un número.
+    expect(generico).not.toContain("mínimo");
+    expect(generico).not.toContain("máximo");
+    expect(generico).not.toMatch(/\d/);
+  });
+
+  // 🔴 EL CANDADO DE AC-5: el vocabulario privado del agente no vuelve al mapa de copy por la puerta
+  // de atrás. Si alguien reintroduce una rama `fx_*`, estos dos códigos dejan de caer en el default y
+  // esto se pone rojo. Input concreto que lo pone en rojo: volver a agregar
+  // `if (code.includes("fx_amount_below_minimum")) return "…"`.
+  it("AC-5: `fx_*` (vocabulario privado del agente) NO tiene copy propio: cae en el default", () => {
+    for (const code of ["fx_amount_below_minimum", "fx_amount_above_maximum"]) {
+      expect(humanError(code), code).toBe("Algo salió mal. Intentá de nuevo.");
     }
-    expect(new Set([bajo, alto, generico]).size).toBe(3);
-  });
-
-  it("#75: el copy del mínimo sale de MIN_SEND_USD, no de un número escrito a mano", () => {
-    // Si alguien cambia la constante y no el copy, esto sigue verde; si alguien escribe el 5 a mano,
-    // se pone rojo el día que la política cambie. Mismo criterio que el copy del rent en SOL.
-    expect(humanError("fx_amount_below_minimum")).toContain(String(MIN_SEND_USD));
-  });
-
-  // Del techo NO tenemos copia local del número (la autoridad es el agente), así que el copy no
-  // puede inventarlo. Lo que sí tiene que hacer es no prometer uno.
-  it("#75: el copy del techo no publica un número que no tenemos", () => {
-    const copy = humanError("fx_amount_above_maximum");
-    expect(copy).toContain("máximo");
-    expect(copy).not.toMatch(/\d/);
   });
 
   it("CANDADO #75: a2a_quote_unavailable (agente caído) NO se lleva el copy de un rechazo", () => {
@@ -927,5 +936,110 @@ describe("humanError — los cortes de KYC del prepare no prometen USDC en el es
     expect(humanError("payout_algo_generico")).toBe(
       "No se pudo entregar. No hay un reembolso automático: si tus USDC entraron al escrow, los sacás vos firmando desde tu wallet.",
     );
+  });
+});
+
+// ── T-13.3 / T-4.1' (WKH-332) ────────────────────────────────────────────────────────────────────
+//
+// CD-17: este `describe` no depende de ningún `beforeEach`. `humanError` es una función pura de un
+// string, y por eso se puede afirmar cada frase con un input concreto y nada más.
+describe("T-13.3 / AC-13: 'no hay quién' no se dice con las palabras de una caída", () => {
+  // Los tres textos comparados ENTRE SÍ y no cada uno contra un literal: lo que AC-13 pide no es que
+  // exista una frase nueva, es que tres desenlaces distintos dejen de leerse igual. Un mutante que
+  // los mapee al mismo copy muere acá y no en un `toBe` suelto.
+  it("T-13.3: el copy de 'no hay agente' ≠ el de una caída ≠ el genérico de último recurso", () => {
+    const sinAgente = humanError("prepare_no_agent_for_capability");
+    const caida = humanError("prepare_upstream_error");
+    const generico = humanError("un_codigo_que_nadie_mapeo");
+
+    expect(generico).toBe("Algo salió mal. Intentá de nuevo."); // el default, clavado
+    expect(sinAgente).not.toBe(caida);
+    expect(sinAgente).not.toBe(generico);
+    expect(caida).toBe(generico); // `prepare_upstream_error` sigue cayendo al default: NO se tocó
+  });
+
+  it("T-13.3: y afirma que no se movió ningún USDC, que es un HECHO del orden de la ruta", () => {
+    // No es un consuelo: el prepare corre ANTES de `authorizePrincipal` en `confirm-and-send.ts`,
+    // o sea antes de la primera firma de la billetera. Se lee del orden del use-case.
+    expect(humanError("prepare_no_agent_for_capability")).toContain("No se movió ningún USDC");
+    expect(humanError("a2a_no_agent_for_capability")).toContain("No se movió ningún USDC");
+  });
+
+  it("T-13.3: y NO invita a reintentar igual — reintentar no crea un agente", () => {
+    for (const code of ["prepare_no_agent_for_capability", "a2a_no_agent_for_capability"]) {
+      const copy = humanError(code);
+      expect(copy, code).toContain("no cambia el resultado");
+      // El copy genérico de este archivo es "Intentá de nuevo." (sin condición). Acá esa frase no
+      // puede aparecer suelta: es el consejo activamente equivocado para este desenlace.
+      expect(copy, code).not.toContain("Intentá de nuevo.");
+    }
+  });
+
+  it("T-13.3: los dos legs no comparten copy — cortan en momentos distintos del flujo", () => {
+    expect(humanError("prepare_no_agent_for_capability")).not.toBe(
+      humanError("a2a_no_agent_for_capability"),
+    );
+    expect(humanError("prepare_no_agent_for_capability")).toContain("entregar");
+    expect(humanError("a2a_no_agent_for_capability")).toContain("cotizar");
+  });
+
+  // 🔴 LA PROPIEDAD QUE HACE QUE LA POSICIÓN EN LA CASCADA NO IMPORTE, Y POR ESO SE TESTEA ELLA Y NO
+  // EL ORDEN. `humanError` decide por `code.includes(...)` en cascada, con dos catch-all al final
+  // (`kyc` y `payout`). Un enum que contuviera cualquiera de esas dos subcadenas quedaría tragado por
+  // el copy equivocado si alguien moviera su rama hacia abajo. Los enums elegidos no las contienen —
+  // `prepare_no_agent_for_capability` empieza con "prepare", no con "payout"— y eso es lo que un
+  // input concreto puede romper: renombrarlo a `payout_no_agent_for_capability` pone esto en rojo.
+  it("T-13.3: ninguno de los dos enums contiene 'kyc' ni 'payout' (o el catch-all se los comería)", () => {
+    for (const code of [PREPARE_NO_AGENT_FOR_CAPABILITY, QUOTE_NO_AGENT_FOR_CAPABILITY]) {
+      expect(code, code).not.toContain("kyc");
+      expect(code, code).not.toContain("payout");
+    }
+    // Y la consecuencia observable de esa propiedad: ninguno se lleva el copy de los catch-all.
+    expect(humanError(PREPARE_NO_AGENT_FOR_CAPABILITY)).not.toBe(
+      "No pudimos verificar tu identidad.",
+    );
+    expect(humanError(PREPARE_NO_AGENT_FOR_CAPABILITY)).not.toBe(humanError("payout_failed"));
+  });
+});
+
+// ── T-4.1' — AC-4 QUEDA NO CUMPLIDO, Y ACÁ ESTÁ ESCRITO ──────────────────────────────────────────
+//
+// 🔴 ESTE TEST NO CUMPLE AC-4: LO DECLARA. AC-4 pedía distinguir en pantalla un RECHAZO del agente de
+// FX (por ejemplo, un monto por debajo del mínimo del corredor) de una CAÍDA del agente. Por el
+// carril del gateway eso es inalcanzable hoy, y no por falta de ganas:
+//
+//   · `/compose` devuelve el step fallado SIN `code` y SIN `reason`; el único portador de la causa es
+//     el `message`, que es TEXTO LIBRE.
+//   · Parsear ese texto está prohibido (`gateway-client.ts`), y ecoarlo al browser también: es
+//     server-only por CD-8/CD-9.
+//   · `mapErrorStatus` colapsa "el agente negó el pedido" y "el agente se cayó" en `step_failed`.
+//
+// Lo que este test asserta es que el copy resultante NO PROMETE distinguir la causa. Una frase que
+// dijera "el monto está fuera de rango" sobre un `step_failed` sería una afirmación que el código no
+// puede sostener, y sería peor que la regresión. La salida estructural está anotada como WKH-335 en
+// `wasiai-a2a` (otro repo, Scope OUT de esta HU).
+//
+// ⚠️ ESTO ES UNA REGRESIÓN DECLARADA, NO UN AC CUBIERTO. Por el carril del gateway, un envío por
+// debajo del mínimo del corredor vuelve a leerse en pantalla como una caída del sistema.
+describe("T-4.1': AC-4 NO CUMPLIDO — el corte por rechazo del agente de FX no promete distinguir la causa", () => {
+  it("un `step_failed` del gateway cae en el copy genérico, y ese copy no nombra ninguna causa", () => {
+    const copy = humanError("step_failed");
+    // La regresión, medida: es el default de último recurso. No dice "monto", no dice "mínimo", no
+    // dice "máximo", no dice "el agente rechazó". No puede: no le llegó el dato.
+    expect(copy).toBe("Algo salió mal. Intentá de nuevo.");
+    expect(copy).not.toContain("mínimo");
+    expect(copy).not.toContain("máximo");
+    expect(copy).not.toContain("monto");
+    expect(copy).not.toContain("rechaz");
+  });
+
+  // La asimetría con AC-13, que es lo que hace que esto sea una decisión y no una omisión: el otro
+  // desenlace SÍ llega estructural (422 ⇒ `no_agent_match`), y por eso SÍ tiene copy propio. La
+  // diferencia no es de esfuerzo: es de qué dato existe del otro lado del cable.
+  it("y la asimetría con AC-13 es la que explica por qué uno se pudo y el otro no", () => {
+    // Este llega con un code estructural del gateway ⇒ copy propio.
+    expect(humanError("a2a_no_agent_for_capability")).not.toBe("Algo salió mal. Intentá de nuevo.");
+    // Este no ⇒ default. Si algún día WKH-335 aterriza, ESTE `expect` es el que hay que dar vuelta.
+    expect(humanError("step_failed")).toBe("Algo salió mal. Intentá de nuevo.");
   });
 });

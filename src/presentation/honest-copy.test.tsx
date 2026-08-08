@@ -21,6 +21,8 @@
 //     ("el desembolso es simulado" desde un OR de tres proveniencias).
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import path from "node:path";
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { IdCard, ScanFace } from "lucide-react";
@@ -417,26 +419,29 @@ describe("el overlay que retoma la verificación", () => {
 
 // ── 8. La tarjeta de quién atiende el envío ──────────────────────────────────────────────────────
 //
-// "Ninguno de estos pasos está atado a una empresa fija" queda desmentido por el detalle de cada
-// fila: la que dice "hoy se llama directo" ES un paso cableado a un agente concreto. La frase de
-// arriba pasa a describir el modelo sin afirmar que hoy los tres corran por ahí, que es justo lo que
-// cada fila responde una por una.
+// "Ninguno de estos pasos está atado a una empresa fija" quedaba desmentido por el detalle de cada
+// fila: la que decía "hoy se llama directo a X" ERA un paso cableado a un agente concreto. Esa fila
+// se fue con el carril (WKH-332/W3), y la frase de arriba sigue describiendo el MODELO sin afirmar
+// que hoy los pasos corran por ahí — cada fila lo dice por su cuenta, y en demo la cotización la arma la app.
+//
+// ⚠️ EL `it` CAMBIÓ DE ASSERT, y el motivo va escrito: verificaba la PRESENCIA de "Hoy se llama
+// directo a", que es una de las dos frases que AC-7 ahora prohíbe. Lo que sobrevive del test es su
+// eje real —que la frase de arriba no NIEGUE lo que la fila afirma— y para eso se usa el estado que
+// hoy sí puede contradecirla: `demo`, donde la fila dice que el paso lo corre un simulador.
 describe("la tarjeta de quién atiende el envío", () => {
-  it("no niega que hoy haya pasos cableados: eso lo responde cada fila", async () => {
+  it("no niega lo que cada fila afirma: en demo la fila dice que el paso se simula", async () => {
     const steps = [
       {
         capability: "fx.quote",
         label: "Cotización",
         agent: {
-          id: "remit-corridor-fx",
+          id: "un-proveedor-de-fx",
           description: "",
           priceUsdc: 0.5,
           verified: false,
           registry: "wasiai",
         },
-        transport: "punto-a-punto" as const,
-        // Quién corre hoy, dicho por el server. Acá coincide con el del catálogo.
-        runsTodayAgentId: "remit-corridor-fx",
+        transport: "demo" as const,
       },
     ];
     vi.stubGlobal(
@@ -449,7 +454,11 @@ describe("la tarjeta de quién atiende el envío", () => {
       expect(await screen.findByText(/Chaski pide capacidades, no empresas/)).toBeInTheDocument();
       expect(screen.queryByText(/Ninguno de estos pasos está atado a una empresa fija/)).toBeNull();
       // La fila sigue diciendo la verdad incómoda que la frase de arriba negaba.
-      expect(screen.getByText(/Hoy se llama directo a remit-corridor-fx/)).toBeInTheDocument();
+      expect(
+        screen.getByText(/esta app está en modo demo y lo simula/),
+      ).toBeInTheDocument();
+      // Y las dos frases que AC-7 prohíbe no vuelven por acá.
+      expect(document.body.textContent ?? "").not.toContain("Hoy se llama directo a");
     } finally {
       vi.unstubAllGlobals();
     }
@@ -555,7 +564,7 @@ describe("la identidad del paso confirm", () => {
 
   // 🔴 `confirm` no era el único paso afectado, y esto lo prueba. El sello de `track` se prendía SOLO
   // por la pata del payout: con el KYC simulado y un desembolso REAL (`transfi`), la remesa entera
-  // quedaba sin ningún aviso también en seguimiento, y lo mismo en el recibo (`Receipt`, `flow.tsx:2266`,
+  // quedaba sin ningún aviso también en seguimiento, y lo mismo en el recibo (`Receipt`, `flow.tsx:2389`,
   // que llama al mismo `isDemoMode`). Es la combinación hacia la que apunta el proyecto: payout real
   // primero, KYC real después.
   it("el KYC simulado también prende el sello en track, con un desembolso REAL", () => {
@@ -608,3 +617,198 @@ describe("la identidad del paso confirm", () => {
   });
 });
 
+
+// ── T-15.1 / T-16.1 · AC-15 y AC-16 · BARRIDOS DE PROSA ──────────────────────────────────────────
+//
+// Estos dos `it` no miran el DOM: miran el ÁRBOL. Van en este archivo porque es el que ya tiene la
+// disciplina de "cada frase falsable con un input concreto", y lo que vigilan es exactamente eso —
+// dos afirmaciones concretas que el código NO puede sostener y que ya se escribieron una vez.
+//
+// 🔴 LOS DOS SON CANARIOS, Y HAY QUE DECIRLO ASÍ: al 2026-08-07 el árbol NO tiene ninguna de las dos
+// frases, así que su verde de HOY no prueba que alguien las haya borrado. Lo que prueban es que si
+// mañana alguien las escribe, la suite se cae. Por eso cada uno lleva su assert de NO-VACUIDAD: se
+// planta la frase prohibida en un string y se comprueba que el matcher la caza. Sin eso, un `needle`
+// mal escrito daría cero hits para siempre y el candado sería decorativo.
+describe("barridos de prosa (AC-15 / AC-16)", () => {
+  const ROOT = process.cwd();
+  const SCAN_DIRS = ["src", "app"];
+  const SCAN_EXTS = new Set([".ts", ".tsx"]);
+  const SKIP_DIRS = new Set(["node_modules", ".next", "doc", "migrations"]);
+  const SELF = path.resolve(ROOT, "src/presentation/honest-copy.test.tsx");
+
+  function walk(dir: string, out: string[] = []): string[] {
+    if (!existsSync(dir)) return out;
+    for (const entry of readdirSync(dir)) {
+      const full = path.join(dir, entry);
+      if (statSync(full).isDirectory()) {
+        if (!SKIP_DIRS.has(entry)) walk(full, out);
+      } else if (SCAN_EXTS.has(path.extname(entry)) && path.resolve(full) !== SELF) {
+        out.push(full);
+      }
+    }
+    return out;
+  }
+
+  const ARBOL: Array<{ rel: string; lineas: string[] }> = SCAN_DIRS.flatMap((d) =>
+    walk(path.join(ROOT, d)).map((full) => ({
+      rel: path.relative(ROOT, full),
+      lineas: readFileSync(full, "utf8").split("\n"),
+    })),
+  );
+
+  /** Toda línea del árbol que cumpla el predicado, con su ubicación. */
+  function lineasQue(pred: (linea: string) => boolean): string[] {
+    const out: string[] = [];
+    for (const { rel, lineas } of ARBOL) {
+      lineas.forEach((l, i) => {
+        if (pred(l)) out.push(`${rel}:${i + 1}  «${l.trim()}»`);
+      });
+    }
+    return out;
+  }
+
+  it("el barrido no es vacuo: ve el árbol entero", () => {
+    // Piso, no medición: descarta "el walk devolvió (casi) nada", que es cómo estos dos `it` se
+    // volverían decorativos sin ponerse rojos.
+    expect(ARBOL.length).toBeGreaterThan(50);
+  });
+
+  // ── T-15.1 · AC-15 ─────────────────────────────────────────────────────────────────────────────
+  //
+  // LA AFIRMACIÓN PROHIBIDA, con su contra-evidencia MEDIDA: que el `inputSchema` que el agente
+  // publica en su AgentCard describa TODO lo que ese agente exige para atender. No lo describe. El
+  // agente de payout del catálogo publica 6 campos requeridos y ADEMÁS exige `senderIdentity`, y su
+  // `quoteId` tiene que ser uno real que vence a los ~10 minutos. Escribir que el schema alcanza haría
+  // creer que un cliente que lo cumple va a ser atendido, y no es cierto.
+  //
+  // Por qué el barrido busca el par (schema, suficiencia) y no la palabra `inputSchema` sola: la
+  // palabra por sí misma es legítima —se puede hablar del schema sin afirmar que alcance—. Lo que no
+  // se puede es decir que sea completo, suficiente o que describa todo.
+  // ⚠️ `"completo"` NO ESTÁ EN ESTA LISTA COMO SUBCADENA SUELTA, Y ES UN BUG QUE ESTE TEST YA CAZÓ:
+  // `"incompleto"` la contiene, así que la frase CORRECTA (*"el inputSchema del card es incompleto"*)
+  // daba un falso positivo. Se piden las formas afirmativas con su verbo delante.
+  const SUFICIENCIA = [
+    "suficiente",
+    "alcanza",
+    "describe todo",
+    "todos los campos",
+    "es completo",
+    "está completo",
+    "esta completo",
+  ];
+  function afirmaSuficienciaDelSchema(linea: string): boolean {
+    const l = linea.toLowerCase();
+    const hablaDelSchema = l.includes("inputschema") || l.includes("input schema");
+    return hablaDelSchema && SUFICIENCIA.some((s) => l.includes(s));
+  }
+
+  it("T-15.1/AC-15: ninguna prosa afirma que el `inputSchema` del catálogo sea suficiente", () => {
+    // NO-VACUIDAD primero: el matcher tiene que cazar la frase prohibida plantada a mano. Si esto se
+    // pusiera rojo, el `expect` de abajo estaría dando verde por no mirar nada.
+    expect(
+      afirmaSuficienciaDelSchema(
+        "// el inputSchema del catálogo describe todo lo que el agente exige",
+      ),
+      "el matcher de T-15.1 dejó de cazar la frase prohibida: el barrido de abajo es decorativo",
+    ).toBe(true);
+    expect(afirmaSuficienciaDelSchema("// el inputSchema del card es incompleto (WKH-334)")).toBe(
+      false,
+    );
+
+    expect(
+      lineasQue(afirmaSuficienciaDelSchema),
+      "una prosa afirma que el `inputSchema` publicado alcanza para invocar la capacidad. No alcanza: " +
+        "el agente de payout publica 6 requeridos y además exige `senderIdentity`, y el `quoteId` tiene " +
+        "que ser real y vence a los ~10 min (WKH-334, otro repo). Cumplir el schema NO garantiza ser " +
+        "atendido, y esta app no se rompe por eso porque `prepare` reenvía el body entero",
+    ).toEqual([]);
+  });
+
+  // ── T-16.1 · AC-16 ─────────────────────────────────────────────────────────────────────────────
+  //
+  // DOS afirmaciones prohibidas, y las dos se escribieron de verdad antes de WKH-333:
+  //   (a) que el veredicto de KYC viva SÓLO en el navegador. La tabla `kyc_verdicts` está aplicada a
+  //       producción y `prepare` saca el identificador de SU PROPIA fila.
+  //   (b) que `KYC_VERDICT_STORE_ENABLED` sea un kill-switch. MEDIDO con la autoridad real en el lazo:
+  //       apagarlo devuelve 503 a TODO pagador legítimo. Es un interruptor de una sola dirección.
+  //
+  // 🔴 EL BARRIDO NO PUEDE PEDIR CERO MENCIONES DE "kill-switch", Y ESO ES EL PUNTO. Hoy hay tres, y
+  // las tres son correctas porque NIEGAN la afirmación: el docblock de `prepare/route.ts` que grita
+  // que NO lo es, y dos de `route.flag-off.test.ts`, que es el candado que lo mide. Un barrido que
+  // pidiera cero se pondría verde borrando la advertencia y su test — apagar la vigilancia para que la
+  // medición se vea linda. Así que lo que se prohíbe es la mención AFIRMATIVA: toda línea que nombre
+  // el término tiene que negarlo o invertirlo en la misma línea.
+  const NIEGA = ["no es", "no lo es", "nunca", "invertido", "no un kill", "no es un kill"];
+  function afirmaQueEsKillSwitch(linea: string): boolean {
+    const l = linea.toLowerCase();
+    if (!l.includes("kill-switch") && !l.includes("kill switch")) return false;
+    return !NIEGA.some((n) => l.includes(n));
+  }
+  function diceQueElVeredictoViveSoloEnElNavegador(linea: string): boolean {
+    const l = linea.toLowerCase();
+    const hablaDelVeredicto =
+      l.includes("veredicto") || l.includes("verdict") || l.includes("kycverificationid");
+    const dicheSoloNavegador =
+      (l.includes("sólo en el navegador") ||
+        l.includes("solo en el navegador") ||
+        l.includes("sólo en el browser") ||
+        l.includes("solo en el browser")) &&
+      !l.includes("ya no") &&
+      !l.includes("dejó de");
+    return hablaDelVeredicto && dicheSoloNavegador;
+  }
+
+  it("T-16.1/AC-16: nadie llama kill-switch a `KYC_VERDICT_STORE_ENABLED` sin negarlo en la misma línea", () => {
+    // NO-VACUIDAD: la frase afirmativa se caza, la negada no.
+    expect(afirmaQueEsKillSwitch("// KYC_VERDICT_STORE_ENABLED es el kill-switch del KYC")).toBe(
+      true,
+    );
+    expect(afirmaQueEsKillSwitch("// `KYC_VERDICT_STORE_ENABLED` NO ES UN KILL-SWITCH.")).toBe(
+      false,
+    );
+    // Y el barrido tiene que ESTAR VIENDO las tres menciones negadas: si dejara de verlas, el
+    // predicado estaría filtrando por otra cosa y su cero no diría nada.
+    const menciones = lineasQue((l) => l.toLowerCase().includes("kill-switch"));
+    expect(
+      menciones.length,
+      "desaparecieron las menciones que NIEGAN el kill-switch: alguien borró la advertencia de " +
+        "`prepare/route.ts` o el candado de `route.flag-off.test.ts`, y este barrido se puso verde por eso",
+    ).toBeGreaterThanOrEqual(3);
+
+    expect(
+      lineasQue(afirmaQueEsKillSwitch),
+      "una prosa llama kill-switch a `KYC_VERDICT_STORE_ENABLED` sin negarlo. Medido con la autoridad " +
+        "REAL en el lazo: apagarlo devuelve 503 a TODO pagador legítimo, porque la ruta se queda sin " +
+        "fila de dónde sacar el identificador y no hay camino de respaldo (CD-26). El rollback no es " +
+        "apagar el flag: es re-desplegar el código anterior",
+    ).toEqual([]);
+  });
+
+  it("T-16.1/AC-16: ninguna prosa dice que el veredicto de KYC viva SÓLO en el navegador", () => {
+    // NO-VACUIDAD.
+    expect(
+      diceQueElVeredictoViveSoloEnElNavegador(
+        "// el veredicto de KYC vive sólo en el navegador de la persona",
+      ),
+    ).toBe(true);
+    expect(
+      diceQueElVeredictoViveSoloEnElNavegador(
+        "// el veredicto ya no vive sólo en el navegador: hay fila en Postgres",
+      ),
+    ).toBe(false);
+    // Y el falso positivo que este predicado tiene que NO producir, medido: hay una línea del árbol
+    // que dice que el `remittanceId` queda sólo en el navegador, y eso es CIERTO y no habla del KYC.
+    expect(
+      diceQueElVeredictoViveSoloEnElNavegador(
+        "// el remittanceId, único argumento del refund on-chain, queda sólo en el navegador.",
+      ),
+    ).toBe(false);
+
+    expect(
+      lineasQue(diceQueElVeredictoViveSoloEnElNavegador),
+      "una prosa dice que el veredicto de KYC vive sólo en el navegador. La tabla `kyc_verdicts` está " +
+        "aplicada a producción y `prepare` saca el identificador de SU PROPIA fila (bloque PR5.5): el " +
+        "del cliente se lee para descartarlo",
+    ).toEqual([]);
+  });
+});

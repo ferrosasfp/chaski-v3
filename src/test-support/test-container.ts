@@ -1,5 +1,5 @@
 // Test-support — arma un Container con los 11 dobles de fakes.ts para renderizar RemittanceFlow
-// bajo RTL sin infra real (WKH-185). Imita el orden de construcción de (`Container`, `container.ts:49`),
+// bajo RTL sin infra real (WKH-185). Imita el orden de construcción de (`Container`, `container.ts:50`),
 // compartiendo repo/clock/ids entre use-cases (createRemittance → startKyc → lockQuote operan
 // sobre el mismo estado). Overrides a nivel gateway y escape-hatch a nivel use-case (useCases).
 // CD-11: cero I/O real acá (la única excepción, FallbackQuoteGateway, la inyecta el test).

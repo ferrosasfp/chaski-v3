@@ -40,6 +40,8 @@ vi.mock("../persistence/supabase-kyc-verdicts", () => ({
 
 import bs58 from "bs58";
 import nacl from "tweetnacl";
+import { PREPARE_NO_AGENT_FOR_CAPABILITY } from "../../application/agent-rejections";
+import { humanError } from "../../presentation/flow-vm";
 import type { PopSigner } from "../../application/ports";
 import { HttpPopSigner } from "../auth/http-pop-signer";
 import { HttpSolanaPayoutPrepareGateway } from "./http-solana-prepare-gateway";
@@ -104,8 +106,8 @@ function routeFetch(agent: () => Response) {
     // sería probar que el cliente llama a algo, no que la firma sirve para algo.
     if (target === "/api/payout/attestation") return ATTESTATION_POST(request);
     if (target === "/api/payout/prepare") {
-      // Dentro del handler, el fetch al agente usa la MISMA función global: se distingue por URL
-      // absoluta (BASE) y se responde con el result del agente.
+      // Dentro del handler, el forward al gateway usa la MISMA función global: se distingue por ser
+      // una URL absoluta ({GW}/compose) y se responde con el output que el gateway relaya.
       const outer = globalThis.fetch;
       vi.stubGlobal("fetch", async () => agent());
       try {
@@ -118,21 +120,52 @@ function routeFetch(agent: () => Response) {
   });
 }
 
+/** Igual que `routeFetch` para el PoP (el challenge sale del emisor REAL, así que la firma que viaja
+ *  es una de verdad), pero la respuesta de `/api/payout/prepare` la escribe el test: sirve para
+ *  entrar por un status+body EXACTOS de la route sin tener que levantarle la configuración que los
+ *  produce. Nada más está mockeado: el que interpreta ese body es el gateway de producción. */
+function prepareRespondsWith(status: number, body: unknown) {
+  return vi.fn(async (url: string, init?: RequestInit) => {
+    const target = String(url);
+    if (target === "/api/a2a/payout/challenge") {
+      return CHALLENGE_POST(
+        new Request(`http://localhost${target}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: init?.body as string,
+        }),
+      );
+    }
+    if (target === "/api/payout/prepare") {
+      return new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected fetch: ${target}`);
+  });
+}
+
+/** El output del agente, envuelto como lo entrega `POST /compose` (WKH-332/W3). Antes era `{ result }`,
+ *  la respuesta del agente invocado por su slug; ese carril se borró y la route ya no sabe leerlo.
+ *  Lo que este archivo mide —que el body que arma el cliente ES el que la route acepta— no cambia. */
+function composeRelays(output: unknown): Response {
+  return new Response(JSON.stringify({ success: true, steps: [{ output }] }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 function agentOk(): Response {
-  return new Response(
-    JSON.stringify({
-      result: {
-        status: "submitted",
-        payoutId: "transfi-po-1",
-        deliveredLocal: null,
-        txRef: null,
-        reason: null,
-        provenance: "transfi",
-        depositAddress: DEPOSIT,
-      },
-    }),
-    { status: 200, headers: { "content-type": "application/json" } },
-  );
+  return composeRelays({
+    status: "submitted",
+    payoutId: "transfi-po-1",
+    deliveredLocal: null,
+    txRef: null,
+    reason: null,
+    provenance: "transfi",
+    depositAddress: DEPOSIT,
+  });
 }
 
 describe("HttpSolanaPayoutPrepareGateway — el body que arma el cliente ES el que la route acepta", () => {
@@ -140,12 +173,14 @@ describe("HttpSolanaPayoutPrepareGateway — el body que arma el cliente ES el q
     KP = nacl.sign.keyPair();
     ADDR = bs58.encode(KP.publicKey);
     AUTHORITY = bs58.encode(nacl.sign.keyPair().publicKey);
-    vi.stubEnv("REMIT_AGENTS_BASE_URL", "https://agents.test");
     vi.stubEnv("DEPOSIT_ATTESTATION_SECRET", "test-deposit-secret");
     vi.stubEnv("SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY", AUTHORITY);
     vi.stubEnv("VERCEL_ENV", "");
     vi.stubEnv("PAYOUT_POP_SECRET", "pop-secret");
-    vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "");
+    // W3: la route tiene UN transporte y hay que configurarlo. Antes acá se stubeaba la base de los
+    // agentes y el flag en "" para forzar el carril punto a punto; los dos se fueron con ese carril.
+    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", "https://gateway.test");
+    vi.stubEnv("WASIAI_A2A_AGENT_KEY", "ak_prepare_gateway_test");
     checkRouteRateLimitMock.mockReset();
     checkRouteRateLimitMock.mockResolvedValue({ ok: true });
     authorityMock.mockReset();
@@ -195,20 +230,15 @@ describe("HttpSolanaPayoutPrepareGateway — el body que arma el cliente ES el q
   // cuatro rechazos del agente terminaban en `prepare_no_deposit_address`.
   function agentRejectsWith(reason: string | null): () => Response {
     return () =>
-      new Response(
-        JSON.stringify({
-          result: {
-            status: "blocked",
-            payoutId: null,
-            deliveredLocal: null,
-            txRef: null,
-            reason,
-            provenance: "transfi",
-            depositAddress: null,
-          },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
+      composeRelays({
+        status: "blocked",
+        payoutId: null,
+        deliveredLocal: null,
+        txRef: null,
+        reason,
+        provenance: "transfi",
+        depositAddress: null,
+      });
   }
 
   it.each([
@@ -249,28 +279,54 @@ describe("HttpSolanaPayoutPrepareGateway — el body que arma el cliente ES el q
   it("#75 CANDADO: el provider mock sigue dando prepare_no_deposit_address", async () => {
     vi.stubGlobal(
       "fetch",
-      routeFetch(
-        () =>
-          new Response(
-            JSON.stringify({
-              result: {
-                status: "submitted",
-                payoutId: "transfi-po-1",
-                deliveredLocal: null,
-                txRef: null,
-                reason: null,
-                provenance: "transfi",
-                depositAddress: null,
-              },
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          ),
+      routeFetch(() =>
+        composeRelays({
+          status: "submitted",
+          payoutId: "transfi-po-1",
+          deliveredLocal: null,
+          txRef: null,
+          reason: null,
+          provenance: "transfi",
+          depositAddress: null,
+        }),
       ),
     );
     const out = await new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet)).prepare(
       prepareInput(),
     );
     expect(out).toEqual({ ok: false, reason: "prepare_no_deposit_address" });
+  });
+
+  // ── CR/BLQ-MED-1 · EL CABLEADO DE AC-13, NO LA RAMA QUE PINTA ───────────────────────────────────
+  //
+  // 🔴 QUÉ AGUJERO CIERRA, MEDIDO. `http-solana-prepare-gateway.ts`:68 es la ÚNICA línea que lleva el
+  // enum de AC-13 desde el body del 422 de la route hasta el `failureReason` de la remesa. Mutándola
+  // línea-neutra a `case ${PREPARE_NO_AGENT_FOR_CAPABILITY}_x:` (con backticks), `tsc` daba exit 0 y
+  // la suite COMPLETA 1587/1587 verde, con el enum cayendo al default `prepare_rejected` y la
+  // pantalla diciendo "Algo salió mal. Intentá de nuevo." — el copy de ANTES de la HU.
+  //
+  // Los tests que había no podían verlo: `flow.test.tsx` INYECTA el `failureReason` en el estado de
+  // la remesa y `flow-vm.test.ts` llama a `humanError(...)` con el string a mano. Los dos prueban que
+  // la rama pinta; ninguno prueba que el motivo llegue (`tests-que-registran-el-doble-no-prueban-el-cableado`).
+  //
+  // El `reason` que sale de acá es literalmente lo que `ConfirmAndSend` persiste como `failureReason`
+  // (`failAndRefund`, `../../application/use-cases/confirm-and-send.ts:385`), y `TrackView` ramifica
+  // por esa MISMA constante — por eso se compara contra la constante y no contra un literal.
+  it("CABLEADO/AC-13: el 422 de la route llega al reason que se persiste, y de ahí al copy de 'no hay quién'", async () => {
+    vi.stubGlobal("fetch", prepareRespondsWith(422, { error: PREPARE_NO_AGENT_FOR_CAPABILITY }));
+
+    const out = await new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet)).prepare(
+      prepareInput(),
+    );
+
+    expect(out).toEqual({ ok: false, reason: PREPARE_NO_AGENT_FOR_CAPABILITY });
+    if (out.ok) throw new Error("unreachable");
+    // Y lo que la persona lee al final del cable. Sin la línea 68 esto es el genérico.
+    expect(humanError(out.reason)).toContain("no hay ningún proveedor");
+    expect(humanError(out.reason)).not.toBe("Algo salió mal. Intentá de nuevo.");
+    // La otra mitad: no cayó al default de "4xx que no reconozco", que es a dónde iba sin el `case`.
+    expect(out.reason).not.toBe("prepare_rejected");
+    expect(humanError(out.reason)).not.toBe(humanError("prepare_rejected"));
   });
 
   // El challenge se pide ANTES del prepare y para la MISMA address del body. Si alguien firmara para

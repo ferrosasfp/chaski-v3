@@ -314,7 +314,7 @@ in demo mode and moves no funds.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED` | off | Enables the escrow deposit and gas sponsorship |
+| `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED` | off | Three effects, not one. It enables the escrow deposit and the gas sponsorship, and since WKH-336 it also decides what the preview card claims about the delivery step: the "Send the money" row derives its transport from this flag, not from `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`. So with the adapter on `fallback` and this one on `"true"` the two rows say different things, which is correct: the payout does go through the gateway. When it is off the delivery does not run and is not simulated either, it fails closed with `settlement_unavailable` |
 | `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` | `fallback` | Two legal values, and nothing else: `fallback` (demo gateways: a simulated quote and a mocked payout status; this is not the flag that keeps funds still, `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED` is) and `a2a-gateway` (asks the gateway for a capability and it resolves the agent). Any other value throws at startup, `a2a` included: that was the point to point rail and WKH-332 deleted it, so an environment still set to it fails loud instead of quietly wiring the simulators |
 
 The composition root guards are fail loud. Turning settlement on without a mint or without the

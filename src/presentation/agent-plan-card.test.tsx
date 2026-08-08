@@ -14,9 +14,22 @@
 // el paso —gateway o demo—, y estos tests clavan que las dos frases viejas NO están en el DOM en
 // ningún estado (T-7.1).
 //
-// El otro hallazgo de la misma tarjeta: "Lo que cobran los agentes: 0.06 USDC". Con la bandera en
-// `"fallback"` la COTIZACIÓN la arma un simulador del container (`FallbackQuoteGateway`,
-// `container.ts:123`), así que ese precio no lo cobra nadie; por el gateway lo paga Chaski con su Agent Key.
+// El otro hallazgo de la misma tarjeta: "Lo que cobran los agentes: 0.06 USDC".
+//
+// ⚠️ ESE NÚMERO ES LA SUMA DE LOS DOS PASOS, y por eso ninguna frase sobre él puede hablar de un solo
+// leg (WKH-336/AR/BLQ-MED-1). Acá decía *"ese precio no lo cobra nadie"* apoyándose SÓLO en el adapter
+// en `"fallback"`, y es falso para la mitad del número: `totalUsdc` suma los dos steps
+// (`route.ts:294-295`) y cada leg deriva su transporte de SU bandera. Con `adapter="fallback"` +
+// `settle="true"` el leg de ENTREGA viaja en `"gateway"` y ahí el fee del payout SÍ se paga, contra la
+// Agent Key de Chaski. Lo que sí es cierto en los cuatro cuadrantes: **no se le cobra a la persona, no
+// se suma a lo que envía**. Por leg:
+//   · COTIZACIÓN: con el adapter en `"fallback"` la arma un simulador del container
+//     (`FallbackQuoteGateway`, `container.ts:123`) y ese fee no lo cobra nadie; con el adapter en
+//     `"a2a-gateway"` lo paga Chaski con su Agent Key.
+//   · ENTREGA: lo decide el settle, no el adapter (`solanaSettleOn`, `container.ts:141`). Con el settle
+//     en `"true"` se paga contra la Agent Key aunque el adapter esté en `"fallback"`; con el settle
+//     apagado no lo paga nadie, porque el envío no corre: falla cerrado (`this.solana`,
+//     `../application/use-cases/confirm-and-send.ts:336`).
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
@@ -55,7 +68,11 @@ type PlanStep = {
   } | null;
   availability?: "ofrecido" | "sin-candidatos" | "no-consultado";
   constraints?: { minReputation: number; allowTrial?: true };
-  /** W3: `"punto-a-punto"` salió del dominio con el carril; `"demo"` es el modo `"fallback"`.
+  /** W3: `"punto-a-punto"` salió del dominio con el carril. Y `"demo"` NO significa lo mismo en los
+   *  dos pasos (WKH-336): en la COTIZACIÓN es el adapter en `"fallback"`
+   *  (`resolveValueDeliveryAdapter`, `../composition/container.ts:114`), y en la ENTREGA es el settle
+   *  Solana apagado (`solanaSettleOn`, `../composition/container.ts:141`), donde el envío no se simula
+   *  sino que falla cerrado. Por eso un plan de test puede traer los dos valores a la vez.
    *  `runsTodayAgentId` se fue del tipo porque se fue del contrato: no hay fuente que lo llene. */
   transport: "gateway" | "demo";
 };
@@ -151,13 +168,20 @@ describe("T-7.1: la tarjeta ya no puede afirmar que un paso corra por un agente 
   });
 });
 
-// ── El precio que nadie cobra ────────────────────────────────────────────────────────────────────
+// ── El precio que la persona no paga ─────────────────────────────────────────────────────────────
+//
+// ⚠️ ESTE TÍTULO DECÍA *"El precio que nadie cobra"*, que es la variante MÁS CORTA del argumento de
+// arriba y era ambigua entre dos cosas distintas (WKH-336/AR/BLQ-MED-1): *"no se le cobra a la
+// persona"*, que es cierto en los cuatro cuadrantes, y *"nadie lo cobra"*, que es FALSO con
+// `adapter="fallback"` + `settle="true"` —ahí el leg de entrega va por el gateway y su fee se paga
+// contra la Agent Key de Chaski—. Se acota a lo que se puede sostener: la persona no lo paga.
 //
 // Decía "Lo que cobran los agentes: 0.06 USDC", y el precio es el de CATÁLOGO de agentes que pueden
 // no ser los que corren. La frase del modo demo cambió de contenido en W3, no sólo de nombre: decía
 // "la app los llama sin ningún pago y contestan igual", que describía el `fetch` liso del carril punto
 // a punto contra un agente REAL. Borrado ese carril, la frase vieja pasó a ser falsa; y la que la
-// reemplazó —*"no llama a ninguno de ellos"*— también, porque esta bandera no decide la ENTREGA (CR2).
+// reemplazó —*"no llama a ninguno de ellos"*— también, porque el ADAPTER no decide la ENTREGA (CR2):
+// esa la decide el settle, y WKH-336 cerró ese residual.
 describe("el precio dice qué es y quién lo cobraría", () => {
   it("en modo demo no afirma un cobro, y no afirma que se llame a nadie", async () => {
     await verLaTarjeta([paso({ transport: "demo" })], 0.06);
@@ -180,6 +204,123 @@ describe("el precio dice qué es y quién lo cobraría", () => {
 
     expect(screen.getByText(/lo paga Chaski con su Agent Key al ejecutar el paso/)).toBeInTheDocument();
     expect(document.body.textContent ?? "").not.toContain("la armó la app, no ellos");
+  });
+
+  // ── T-R1 · WKH-336/R1 · la nota habla de la COTIZACIÓN, así que la elige el leg de la cotización ──
+  //
+  // 🔴 EL DEFECTO QUE ESTOS CUATRO CASOS MIDEN, y es uno que WKH-336 volvió alcanzable. El selector era
+  // `plan.steps.some((s) => s.transport === "demo")`: preguntaba *"¿ALGÚN paso es demo?"* para elegir
+  // entre dos notas cuya diferencia es una afirmación sobre la COTIZACIÓN (*"la cotización que estás
+  // aprobando la armó la app, no ellos"*). Mientras el preview pegaba un `transport` único a los dos
+  // pasos eso era inocuo: nunca discrepaban. Al derivar por leg apareció el cuadrante
+  // `["gateway","demo"]` —adapter en el carril real, settle Solana apagado—, donde el `.some()` se
+  // activa POR LA PATA DE ENTREGA y muestra una nota que dice que la cotización la armó la app,
+  // mientras la armó el gateway. Ahora el selector mira `steps[0]`.
+  //
+  // ⚠️ LOS CUATRO CASOS ESTÁN, NO SÓLO EL NUEVO. Un test que sólo mirara el cuadrante mixto no probaría
+  // que la elección sigue siendo la MISMA en los tres viejos, que es la mitad de la obligación: un
+  // selector que devolviera siempre la nota GATEWAY también lo pasaría.
+  //
+  // Lo que mata el mutante: revertir a `.some((s) => s.transport === "demo")` deja los tres primeros
+  // casos verdes y pone ROJO el cuarto (el mixto), porque ahí `.some()` es `true` y esta app mostraría
+  // `AGENT_PRICE_NOTE_DEMO`. MEDIDO.
+  const LA_ARMO_LA_APP = /la cotización que estás aprobando la armó la app, no ellos/;
+  const LO_PAGA_CHASKI = /lo paga Chaski con su Agent Key al ejecutar el paso/;
+  const fx = (t: "gateway" | "demo") => paso({ label: "Cotizar el cambio", transport: t });
+  const payout = (t: "gateway" | "demo") =>
+    paso({ capability: "remittance-payout", label: "Entregar el dinero", transport: t });
+
+  it("T-R1a: los dos legs en gateway ⇒ la nota del gateway (adapter real + settle encendido)", async () => {
+    await verLaTarjeta([fx("gateway"), payout("gateway")], 0.06);
+    expect(screen.getByText(LO_PAGA_CHASKI)).toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toMatch(LA_ARMO_LA_APP);
+  });
+
+  it("T-R1b: la cotización en demo y la entrega en gateway ⇒ la nota del demo (settle encendido, adapter en fallback)", async () => {
+    await verLaTarjeta([fx("demo"), payout("gateway")], 0.06);
+    expect(screen.getByText(LA_ARMO_LA_APP)).toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toMatch(LO_PAGA_CHASKI);
+  });
+
+  it("T-R1c: los dos legs en demo ⇒ la nota del demo", async () => {
+    await verLaTarjeta([fx("demo"), payout("demo")], 0.06);
+    expect(screen.getByText(LA_ARMO_LA_APP)).toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toMatch(LO_PAGA_CHASKI);
+  });
+
+  // 🔴 EL CUADRANTE QUE WKH-336 VOLVIÓ ALCANZABLE, y el único que el `.some()` contestaba mal.
+  it("T-R1d: la cotización en gateway y la entrega en demo ⇒ NO puede decir que la cotización la armó la app", async () => {
+    await verLaTarjeta([fx("gateway"), payout("demo")], 0.06);
+    expect(document.body.textContent ?? "").not.toMatch(LA_ARMO_LA_APP);
+    expect(screen.getByText(LO_PAGA_CHASKI)).toBeInTheDocument();
+    // Y la fila de la ENTREGA sigue diciendo lo suyo: la nota de precio no borra el transporte por paso.
+    // ⚠️ Esta línea asserta el STRING QUE HOY SE RENDERIZA, no que la entrega se simule: con el settle
+    // apagado no se simula, se corta (`this.solana`, `../application/use-cases/confirm-and-send.ts:336`).
+    // Esa imprecisión es H1 de WKH-336, declarada y no corregida porque exige un tercer `transport`.
+    expect(screen.getByText(/esta app está en modo demo y lo simula/)).toBeInTheDocument();
+  });
+
+  // T-R1e — AR/MNR-2. La nota se elige por la LLAVE del leg, no por la POSICIÓN en el array.
+  //
+  // Lo que mata: volver a `plan.steps[0]?.transport`. Con los pasos al revés ese índice devuelve el leg
+  // de ENTREGA, que acá está en `"demo"`, y la tarjeta afirmaría que la cotización la armó la app
+  // mientras la armó el gateway. MEDIDO: con el índice posicional este `it` es el único que se pone
+  // rojo, y T-R1a..d siguen verdes (por eso el caso hace falta: el orden normal no lo distingue).
+  //
+  // ⚠️ El orden del server hoy está clavado (`route.ts:273-290` es un literal de dos elementos), así que
+  // este `it` no reproduce un bug alcanzable HOY: clava la suposición del cliente, que es lo que no
+  // estaba cubierto porque este archivo fabrica sus propios arrays.
+  it("T-R1e: con los pasos al REVÉS la nota sigue saliendo del leg de la cotización, no del primero", async () => {
+    await verLaTarjeta([payout("demo"), fx("gateway")], 0.06);
+    expect(screen.getByText(LO_PAGA_CHASKI)).toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toMatch(LA_ARMO_LA_APP);
+  });
+
+  // T-R1f — AR/MNR-2, la otra mitad: la llave es el `label` y NO la `capability`, porque la capacidad
+  // sale de una env overrideable (`route.ts:255`, `.env.example:181`). Un `find` por
+  // `"remittance-fx-quote"` devolvería `undefined` con el override puesto y la nota caería SIEMPRE en la
+  // del gateway, en silencio. Acá la capacidad es la overrideada y la nota tiene que seguir siendo la
+  // del demo.
+  it("T-R1f: con la capacidad overrideada por env la nota sigue saliendo del leg de la cotización", async () => {
+    await verLaTarjeta(
+      [
+        paso({ capability: "fx-quote-de-otro-catalogo", label: "Cotizar el cambio", transport: "demo" }),
+        payout("gateway"),
+      ],
+      0.06,
+    );
+    expect(screen.getByText(LA_ARMO_LA_APP)).toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toMatch(LO_PAGA_CHASKI);
+  });
+
+  // ── T-R1g · CR/BLQ-MED-1 · si no se puede identificar el leg de la cotización, NO SE AFIRMA NADA ──
+  //
+  // 🔴 LA RAMA QUE NO CUBRÍA NADIE. `paso()` pone el `label` por default, y los SEIS casos T-R1a..f lo
+  // incluyen, así que ningún test entraba nunca al `find(...) === undefined`. Y esa rama caía en
+  // `AGENT_PRICE_NOTE_GATEWAY` —la afirmación MÁS FUERTE de las dos, la que dice que el fee se paga—
+  // justo cuando no se sabe de qué leg se habla. Al revés del criterio del archivo: `no-consultado` y el
+  // campo ausente NO afirman nada sobre el catálogo (docblock de `AgentUnavailable`).
+  //
+  // Es alcanzable por drift, no por el server de hoy: si el `label` de `route.ts:276` se renombra y
+  // `FX_STEP_LABEL` se queda viejo, TODO plano de producción entra por acá. T-336.6 lo impide; este `it`
+  // custodia que, si igual pasara, la pantalla CALLE en vez de afirmar de más.
+  //
+  // Lo que mata: volver a `…?.transport === "demo" ? DEMO : GATEWAY` sin la guarda ⇒ se renderiza la
+  // nota del gateway y el segundo assert se pone rojo. MEDIDO.
+  it("T-R1g: si ningún paso trae el label de la cotización, no se renderiza NINGUNA de las dos notas", async () => {
+    await verLaTarjeta(
+      [
+        paso({ label: "Cotizar el tipo de cambio", transport: "demo" }), // el label renombrado
+        payout("gateway"),
+      ],
+      0.06,
+    );
+    // La tarjeta sí se renderizó y el dato del precio se conserva: no es un test que pase por DOM vacío.
+    expect(screen.getByText("Precio publicado en el catálogo")).toBeInTheDocument();
+    expect(screen.getByText("0.06 USDC")).toBeInTheDocument();
+    // Y ninguna de las dos notas afirma nada.
+    expect(document.body.textContent ?? "").not.toMatch(LO_PAGA_CHASKI);
+    expect(document.body.textContent ?? "").not.toMatch(LA_ARMO_LA_APP);
   });
 });
 

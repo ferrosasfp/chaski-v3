@@ -1972,9 +1972,11 @@ function PayoutInProgress({ rem }: { rem: RemittanceState }) {
 // no se veía. Esta tarjeta lo muestra ANTES de aprobar, con los datos del catálogo en vivo.
 //
 // Tres decisiones de honestidad, y las tres tienen su contraparte en `/api/a2a/plan`:
-//  · Se dice POR DÓNDE corre hoy cada paso. Con la bandera en `"fallback"` la COTIZACIÓN la arma un
-//    simulador del container (`FallbackQuoteGateway`, `container.ts:123`); la ENTREGA no la decide esta
-//    bandera. Mostrar la elección del catálogo como la que va a correr sería medir una cosa y afirmar otra.
+//  · Se dice POR DÓNDE corre hoy cada paso, Y CADA UNO LO DERIVA DE SU PROPIA BANDERA (WKH-336): la
+//    COTIZACIÓN del adapter (`resolveValueDeliveryAdapter`, `container.ts:114`) —en `"fallback"` la arma
+//    un simulador (`FallbackQuoteGateway`, `container.ts:123`)—; la ENTREGA del settle Solana
+//    (`solanaSettleOn`, `container.ts:141`). Pueden traer valores distintos en la misma respuesta, y
+//    mostrar la elección del catálogo como la que va a correr sería medir una cosa y afirmar otra.
 //  · `verified` se muestra tal cual. Hoy los tres dicen que no. Pintar un tilde sería la mentira
 //    más fácil de acá.
 //  · La identidad NO aparece como agente: hoy es una integración directa con el proveedor. La
@@ -2001,9 +2003,17 @@ function AgentPlanCard() {
     /** Con qué constraints se preguntó. Es lo que hace falsable la frase "bajo el piso de este paso". */
     constraints?: { minReputation: number; allowTrial?: true };
     /**
-     * Por dónde corre hoy. `"punto-a-punto"` salió del dominio en W3 junto con el carril; `"demo"` no
-     * es un valor nuevo por gusto: es el modo `"fallback"` de la bandera, donde el paso lo corre un
-     * simulador y afirmar "corre por el gateway" sería falso.
+     * Por dónde corre hoy ESTE paso. `"punto-a-punto"` salió del dominio en W3 junto con el carril, y
+     * `"demo"` NO significa lo mismo en los dos pasos (WKH-336), porque cada leg deriva de su propia
+     * bandera:
+     * · en la COTIZACIÓN, `"demo"` = el adapter está en `"fallback"` y la arma un simulador local
+     *   (`resolveValueDeliveryAdapter`, `container.ts:114`);
+     * · en la ENTREGA, `"demo"` = el settle Solana está apagado (`solanaSettleOn`,
+     *   `container.ts:141`), y ahí no hay simulador: el envío FALLA CERRADO antes de intentar nada
+     *   (`this.solana`, `../application/use-cases/confirm-and-send.ts:336` ⇒ `settlement_unavailable`).
+     *   La frase renderizada para `"demo"` dice *"lo simula"*: en este leg es imprecisa, y es un
+     *   residual declarado (H1 de WKH-336) porque corregirla exige un TERCER valor de este campo.
+     * En los dos casos afirmar "corre por el gateway" sería falso, que es para lo que existe el campo.
      */
     transport: "gateway" | "demo";
     /** 🔴 `runsTodayAgentId` YA NO VIENE. Murió con el carril que lo poblaba (W3): su único valor
@@ -2080,11 +2090,17 @@ function AgentPlanCard() {
         <span className="text-xs text-stone">Precio publicado en el catálogo</span>
         <span className="tabular text-sm font-semibold">{plan.totalUsdc} USDC</span>
       </div>
-      <p className="mt-1 text-xs text-stone">
-        {plan.steps.some((s) => s.transport === "demo")
-          ? AGENT_PRICE_NOTE_DEMO
-          : AGENT_PRICE_NOTE_GATEWAY}
-      </p>
+      {/* El leg de la COTIZACIÓN elige la nota, porque la nota habla de la cotización. Si NO se lo
+          puede identificar, no se afirma NADA: ver el docblock de `AGENT_PRICE_NOTE_*`. */}
+      {(() => {
+        const cotizacion = plan.steps.find((s) => s.label === FX_STEP_LABEL);
+        if (cotizacion === undefined) return null;
+        return (
+          <p className="mt-1 text-xs text-stone">
+            {cotizacion.transport === "demo" ? AGENT_PRICE_NOTE_DEMO : AGENT_PRICE_NOTE_GATEWAY}
+          </p>
+        );
+      })()}
       <PlanConstraintsNote steps={plan.steps} />
       <p className="mt-2 text-xs text-stone">
         Tu identidad no pasa por el catálogo: se verifica con el proveedor directo.
@@ -2183,11 +2199,73 @@ function AgentUnavailable({
  * x402 y sin Agent Key—. Ese carril se borró en W3 y la frase se fue con él.
  * 🔴 Y LA QUE LA REEMPLAZÓ TAMBIÉN ERA FALSA (CR2/BLQ-ALTO-1). Decía *"no llama a ninguno de ellos"*, y esta
  * bandera cablea la cotización y el ESTADO del payout (`FallbackQuoteGateway`, `container.ts:123`), NO la entrega:
- * esa la cablea `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED` (`solanaSettleOn`, `container.ts:159`). Con el settle en `true`
+ * esa la cablea `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED` (`solanaSettleOn`, `container.ts:141`). Con el settle en `true`
  * y esta en `"fallback"` el envío llama igual a `/api/payout/prepare`, y ese POST compone contra el gateway: 200
- * y un solo fetch a `/compose` (T-1.2, MEDIDO: `app/api/payout/prepare/route.test.ts:1296`). Por eso la frase habla
- * SÓLO de la cotización. Con el gateway el fee lo liquida el gateway contra la Agent Key de Chaski (header `x-a2a-key`): ahí sí se paga, y no lo paga la persona.
+ * y un solo fetch a `/compose` (T-1.2, MEDIDO: `it.each`, `../../app/api/payout/prepare/route.test.ts:1296`). Por
+ * eso la frase habla SÓLO de la cotización. Con el gateway el fee lo liquida el gateway contra la Agent Key de
+ * Chaski (header `x-a2a-key`): ahí sí se paga, y no lo paga la persona.
+ *
+ * 🔴 Y EL SELECTOR TENÍA QUE MIRAR EL LEG DEL QUE LA FRASE HABLA (WKH-336/R1). Era
+ * `plan.steps.some((s) => s.transport === "demo")`: preguntaba *"¿ALGÚN paso es demo?"* para elegir una
+ * nota cuya segunda cláusula afirma algo de la COTIZACIÓN (*"la cotización que estás aprobando la armó la
+ * app, no ellos"*). Mientras los dos pasos compartían un `transport` único eso era inocuo. Al derivar por
+ * leg apareció el cuadrante `adapter="a2a-gateway"` + settle apagado ⇒ `steps[0]="gateway"`,
+ * `steps[1]="demo"` ⇒ el `.some()` se activaba POR LA ENTREGA y mostraba la nota que dice que la
+ * cotización la armó la app, cuando la armó el gateway (`A2aQuoteGateway`, `container.ts:123`). Ahora
+ * mira `steps[0]`, que es el leg de la cotización, y en los otros tres cuadrantes elige exactamente la
+ * misma nota que antes. Input que lo pone en rojo si alguien vuelve al `.some()`: un plan
+ * `["gateway","demo"]` y esta nota diciendo que la cotización la armó la app — T-R1 en
+ * `agent-plan-card.test.tsx`.
+ *
+ * ⚠️ RESIDUAL DECLARADO (WKH-338): esto arregla la cláusula sobre la COTIZACIÓN, no la otra mitad. En
+ * ese mismo cuadrante la nota GATEWAY dice que el fee *"lo paga Chaski con su Agent Key al ejecutar el
+ * paso"*, y para el leg de ENTREGA con el settle apagado no lo paga nadie porque el envío falla cerrado
+ * (`this.solana`, `../application/use-cases/confirm-and-send.ts:336`). Cerrarlo exige separar la nota por
+ * leg, que es una decisión de UX nueva.
  */
+/**
+ * La llave del leg de la COTIZACIÓN, y por qué es el `label` y no la capacidad (AR/MNR-2).
+ *
+ * 🔴 ACÁ HABÍA UN ÍNDICE POSICIONAL (`plan.steps[0]`) para elegir una nota cuya semántica es *"el leg de
+ * la cotización"*. Hoy el orden del server está clavado —el array es un literal de dos elementos y
+ * `route.test.ts` asserta el `label` de cada índice—, pero esta tarjeta FABRICA sus arrays en los tests,
+ * así que ningún test verifica que la suposición del cliente coincida con el orden del server: la
+ * fragilidad no la cubría nadie. Se elige por la llave semántica que el payload ya trae.
+ *
+ * ⚠️ Y ES EL `label`, NO LA `capability`, y eso es medible: la capacidad es ENV-OVERRIDEABLE
+ * (`route.ts:255` es `process.env.WASIAI_A2A_FX_CAPABILITY ?? FX_QUOTE_CAPABILITY`, y
+ * `.env.example:181` documenta ese override como soportado). Un `find` por `"remittance-fx-quote"`
+ * devolvería `undefined` en cualquier entorno con el override puesto y la tarjeta caería SIEMPRE en la
+ * nota del gateway, en silencio. El `label` es un literal de la route (`route.ts:276`), no sale de
+ * ninguna env. Input que pone en rojo el índice posicional: un plan con los pasos al revés
+ * (T-R1e en `agent-plan-card.test.tsx`).
+ *
+ * 🔴 PERO ESTO ES UNA COPY DE USUARIO SOSTENIENDO UNA DECISIÓN DE LÓGICA, y hay que decirlo acá porque
+ * es el único lugar donde el próximo lector lo va a leer. **Este literal está DUPLICADO**: la otra copia
+ * es el `label` que escribe la route (`route.ts:276`), y son dos archivos distintos.
+ *
+ * Input concreto que rompía las dos, MEDIDO (CR/BLQ-MED-1): renombrar el `label` de la route a
+ * `"Cotizar el tipo de cambio"` da 5 rojos y **los 5 caen en `app/api/a2a/plan/route.test.ts`**
+ * (T-336.1 ×3, T-336.3 ×2), ninguno acá. Actualizando esos dos asserts —el arreglo natural y mínimo—
+ * la suite vuelve a **102 files / 1630 PASS** con este literal quedándose viejo, y ahí el `find` da
+ * `undefined` para siempre. En una familia de HUs cuyo objeto es reescribir copy, eso pasa.
+ *
+ * ✅ Lo ata **T-336.6 (estático)** en `app/api/a2a/plan/route.test.ts`: extrae el literal de los DOS
+ * archivos y exige que sean el MISMO. Renombrar una sola de las dos ⇒ rojo; renombrar las dos ⇒ verde,
+ * porque lo que se custodia es el acoplamiento y no la copy. Es el patrón de T-14.3 con los pisos de
+ * reputación, en el mismo archivo.
+ *
+ * ⚠️ Y LA RAMA `undefined` NO AFIRMA NADA, a propósito. Si ningún paso trae este `label`, el consumidor
+ * (`AgentPlanCard`) **no renderiza la nota**: `undefined === "demo"` era `false` y caía en
+ * `AGENT_PRICE_NOTE_GATEWAY`, o sea en la afirmación MÁS FUERTE de las dos —que el fee *"lo paga Chaski
+ * con su Agent Key al ejecutar el paso"*— justo cuando no se sabe de qué leg se está hablando. Eso es
+ * al revés del criterio de este archivo: `no-consultado` y el campo ausente **no afirman NADA sobre el
+ * catálogo** (ver el docblock de `AgentUnavailable`). Callar es lo único cierto en los cuatro
+ * cuadrantes, y una nota que falta es un síntoma visible; una nota falsa no. **No se agrega una tercera
+ * frase** porque sería copy nueva, o sea una decisión de UX, no un arreglo. Lo custodia T-R1g.
+ */
+const FX_STEP_LABEL = "Cotizar el cambio";
+
 const AGENT_PRICE_NOTE_DEMO =
   "Es lo que estos agentes publican en el catálogo, no lo que se cobra en este envío: no se suma a lo que enviás, y la cotización que estás aprobando la armó la app, no ellos.";
 const AGENT_PRICE_NOTE_GATEWAY =
@@ -2204,11 +2282,26 @@ const AGENT_PRICE_NOTE_GATEWAY =
  * · `gateway`: no se llama a ningún slug, se pide la capacidad y el gateway resuelve AL EJECUTAR. El
  *   agente que el catálogo lista primero hoy puede no ser el que corra, así que la línea no lo
  *   nombra: sería inventar una certeza.
- * · `demo`: la bandera está en `"fallback"`, así que la COTIZACIÓN la arma un simulador local del navegador
- *   (`FallbackQuoteGateway`, `container.ts:123`); decir "corre por el gateway" acá sería falso, y por eso
- *   `transport` sobrevivió al borrado. Input que lo pone en rojo: la bandera sin setear y esta línea diciendo
- *   que el paso corre por el gateway. ⚠️ RESIDUAL DECLARADO (CR2): la bandera NO decide la ENTREGA, así que
- *   con el settle en `true` la fila del payout dice de más. Medido: `app/api/payout/prepare/route.test.ts:1296`.
+ * · `demo`: decir "corre por el gateway" acá sería falso, y por eso `transport` sobrevivió al borrado.
+ *   ⚠️ PERO `demo` NO SIGNIFICA LO MISMO EN LOS DOS PASOS, porque cada leg deriva de su propia bandera
+ *   (WKH-336). En la COTIZACIÓN significa que el adapter está en `"fallback"` y la arma un simulador
+ *   local del navegador (`FallbackQuoteGateway`, `container.ts:123`). En la ENTREGA significa que el
+ *   settle Solana está apagado (`solanaSettleOn`, `container.ts:141`). Input que pone en rojo el uso de
+ *   una sola bandera para los dos: settle en `"true"` + adapter en `"fallback"`, que tiene que dar
+ *   `["demo","gateway"]` — T-336.1 en `app/api/a2a/plan/route.test.ts`.
+ *
+ * ✅ EL RESIDUAL DE CR2 SE CERRÓ EN WKH-336. Acá decía *"la bandera NO decide la ENTREGA, así que con el
+ *   settle en `true` la fila del payout dice de más"*, y era cierto: el preview pegaba el `transport` del
+ *   adapter a los dos pasos. Ya no. Lo custodia T-336.1 (`transport`,
+ *   `../../app/api/a2a/plan/route.test.ts:518` para la otra mitad, el `=== "true"` literal del settle).
+ *
+ * ⚠️ LO QUE SIGUE ABIERTO, Y NO ES LO MISMO (H1 de WKH-336). Las dos frases de abajo se renderizan
+ *   IGUALES para los dos pasos, y la de `demo` dice *"lo simula"*. Para la cotización es exacto. Para la
+ *   ENTREGA es impreciso al revés de lo que se leería: con el settle apagado la entrega no se simula, no
+ *   corre — `ConfirmAndSend` falla cerrado antes de intentar nada (`this.solana`,
+ *   `../application/use-cases/confirm-and-send.ts:336` ⇒ `settlement_unavailable`). No se corrige acá
+ *   porque exige un TERCER valor de `transport` con su propia frase, y hoy los dos strings de abajo están
+ *   asserteados literalmente en tres sitios: cambiarlos a medias pone rojos tests ajenos.
  */
 function AgentRunsToday({ transport }: { transport: "gateway" | "demo" }) {
   if (transport === "gateway") {

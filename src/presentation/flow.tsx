@@ -2242,7 +2242,7 @@ function AgentUnavailable({
  * agregar *"y el fee de la entrega no lo paga nadie, porque ese paso no corre"*. Es verdad
  * (`this.solana`, `../application/use-cases/confirm-and-send.ts:336`) y está PROHIBIDO escribirlo: en
  * ese mismo cuadrante, tres renglones más arriba en la MISMA tarjeta, la fila de la entrega dice
- * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:2389`). Ese *"lo simula"* es impreciso
+ * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:2397`). Ese *"lo simula"* es impreciso
  * —con el settle apagado la entrega no se simula, se corta— pero es **H1 de WKH-336**, residual de otra
  * HU que exige un TERCER valor de `transport` con su propia frase, y WKH-338 no lo cierra. Si la nota
  * dijera *"la entrega no corre"* mientras la fila dice *"lo simula"*, la tarjeta se contradiría a sí
@@ -2337,8 +2337,16 @@ const FX_STEP_LABEL = "Cotizar el cambio";
  */
 const PAYOUT_STEP_LABEL = "Entregar el dinero";
 
+// 🔴 ACÁ DECÍA ", no lo que se cobra en este envío", Y SE BORRÓ (WKH-338/H-1). Era la variante ELIDIDA
+// del claim que el AR de WKH-336 ya refutó una vez —*"nadie lo cobra"*, acotado entonces a *"la persona
+// no lo paga"*—: no dice quién no cobra, así que se lee como que el número no se le cobra a nadie. Y esta
+// nota se muestra también en el cuadrante adapter en `"fallback"` + settle ENCENDIDO, donde el fee de la
+// ENTREGA sí se cobra, contra la Agent Key de Chaski (`solanaSettleOn`, `container.ts:141`). La cláusula
+// que sigue —"no se suma a lo que enviás"— ya dice lo verdadero y acotado a la persona, así que la de
+// arriba no aportaba y podía leerse falsa. Es una SUPRESIÓN, no una reescritura: no toca "la armó la app,
+// no ellos", que es lo que los asserts de este texto matchean. Lo custodia T-338.4.
 const AGENT_PRICE_NOTE_DEMO =
-  "Es lo que estos agentes publican en el catálogo, no lo que se cobra en este envío: no se suma a lo que enviás, y la cotización que estás aprobando la armó la app, no ellos.";
+  "Es lo que estos agentes publican en el catálogo: no se suma a lo que enviás, y la cotización que estás aprobando la armó la app, no ellos.";
 const AGENT_PRICE_NOTE_GATEWAY =
   "Es lo que estos agentes publican en el catálogo. Por el carril del gateway ese fee lo paga Chaski con su Agent Key al ejecutar el paso, y no se suma a lo que enviás.";
 const AGENT_PRICE_NOTE_GATEWAY_SOLO_FX =

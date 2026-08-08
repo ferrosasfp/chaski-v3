@@ -482,6 +482,25 @@ describe("el precio dice qué es y quién lo cobraría", () => {
       for (const prohibida of PROHIBIDAS_EN_TODOS) expect(nota).not.toContain(prohibida);
     },
   );
+
+  // T-338.4 · H-1 de WKH-338 · la cláusula ELIDIDA de la nota DEMO.
+  //
+  // 🔴 QUÉ SE BORRÓ Y POR QUÉ, MEDIDO. La nota DEMO decía *"Es lo que estos agentes publican en el
+  // catálogo, **no lo que se cobra en este envío**: …"*. Esa cláusula del medio es la variante ELIDIDA
+  // del claim que el AR de WKH-336 ya refutó una vez —*"nadie lo cobra"*, acotado entonces a *"la persona
+  // no lo paga"*—: no dice quién no cobra, así que se lee como que el número no se cobra a nadie. Y esta
+  // nota se muestra en el cuadrante (demo, gateway) —adapter en `"fallback"`, settle encendido—, donde el
+  // fee de la ENTREGA sí se cobra, contra la Agent Key de Chaski (`solanaSettleOn`,
+  // `../composition/container.ts:141`). La cláusula que sigue —*"no se suma a lo que enviás"*— ya dice lo
+  // verdadero y acotado a la persona, así que la de arriba no aporta y puede leerse falsa: se borra, no
+  // se reescribe.
+  //
+  // Lo que mata (M7): conservar la cláusula ⇒ este `it` en rojo. Y la supresión NO toca
+  // `"la armó la app, no ellos"`, así que ninguno de los asserts de `LA_ARMO_LA_APP` se mueve.
+  it("T-338.4: la nota del demo no afirma que el número no se cobre en este envío", async () => {
+    await verLaTarjeta([fx("demo"), payout("gateway")], 0.06);
+    expect(textoDeLaNota()).not.toContain("no lo que se cobra en este envío");
+  });
 });
 
 // ── T-14.5 · AC-14 / CD-18 · tres estados, tres frases, y una que NO puede acusar al catálogo ────

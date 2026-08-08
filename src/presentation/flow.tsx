@@ -2090,16 +2090,26 @@ function AgentPlanCard() {
         <span className="text-xs text-stone">Precio publicado en el catálogo</span>
         <span className="tabular text-sm font-semibold">{plan.totalUsdc} USDC</span>
       </div>
-      {/* El leg de la COTIZACIÓN elige la nota, porque la nota habla de la cotización. Si NO se lo
-          puede identificar, no se afirma NADA: ver el docblock de `AGENT_PRICE_NOTE_*`. */}
+      {/* La nota se elige leyendo LOS DOS legs, porque habla del número y el número cubre a los dos.
+          La regla es "sólo se afirma lo que la pata garantiza": si la ENTREGA no garantiza nada, la
+          atribución se acota nombrando la pata de la COTIZACIÓN, y de la otra no se dice nada. Si el leg
+          de la cotización no se puede identificar, no se afirma NADA y no se renderiza nota: ver el
+          docblock de `AGENT_PRICE_NOTE_*`. */}
       {(() => {
         const cotizacion = plan.steps.find((s) => s.label === FX_STEP_LABEL);
         if (cotizacion === undefined) return null;
-        return (
-          <p className="mt-1 text-xs text-stone">
-            {cotizacion.transport === "demo" ? AGENT_PRICE_NOTE_DEMO : AGENT_PRICE_NOTE_GATEWAY}
-          </p>
-        );
+        const entrega = plan.steps.find((s) => s.label === PAYOUT_STEP_LABEL);
+        // ⚠️ ES `=== "gateway"` Y NO `!== "demo"`, y la dirección ES la decisión. Un `?.` seguido de un
+        // `!==` elige un default en silencio: con `entrega === undefined` daría `true` y caería en la
+        // afirmación MÁS FUERTE —que se paga el fee del total— justo cuando no se sabe nada de la
+        // entrega. Con `=== "gateway"` un `entrega` ausente da `false` y cae en la MÁS DÉBIL.
+        const nota =
+          cotizacion.transport === "demo"
+            ? AGENT_PRICE_NOTE_DEMO
+            : entrega?.transport === "gateway"
+              ? AGENT_PRICE_NOTE_GATEWAY
+              : AGENT_PRICE_NOTE_GATEWAY_SOLO_FX;
+        return <p className="mt-1 text-xs text-stone">{nota}</p>;
       })()}
       <PlanConstraintsNote steps={plan.steps} />
       <p className="mt-2 text-xs text-stone">
@@ -2217,11 +2227,40 @@ function AgentUnavailable({
  * `["gateway","demo"]` y esta nota diciendo que la cotización la armó la app — T-R1 en
  * `agent-plan-card.test.tsx`.
  *
- * ⚠️ RESIDUAL DECLARADO (WKH-338): esto arregla la cláusula sobre la COTIZACIÓN, no la otra mitad. En
- * ese mismo cuadrante la nota GATEWAY dice que el fee *"lo paga Chaski con su Agent Key al ejecutar el
- * paso"*, y para el leg de ENTREGA con el settle apagado no lo paga nadie porque el envío falla cerrado
- * (`this.solana`, `../application/use-cases/confirm-and-send.ts:336`). Cerrarlo exige separar la nota por
- * leg, que es una decisión de UX nueva.
+ * ✅ ESE RESIDUAL LO CERRÓ WKH-338, Y ACÁ ESTÁ QUÉ SE CERRÓ Y QUÉ NO. Lo que estaba abierto: WKH-336
+ * arregló la cláusula sobre quién ARMÓ la cotización, y dejó la otra mitad —la cláusula sobre quién PAGA
+ * el fee— hablando de *"ese fee"*, o sea del NÚMERO, que suma los steps con precio publicado
+ * (`withPrice`, `../../app/api/a2a/plan/route.ts:294`) y por lo tanto cubre a las DOS patas cuando las
+ * dos publican precio. En el cuadrante `adapter="a2a-gateway"` + settle apagado, parte de ese número es
+ * el fee de un paso que no se va a ejecutar: el envío falla cerrado antes de intentarlo (`this.solana`,
+ * `../application/use-cases/confirm-and-send.ts:336`). La salida es atribución POR PATA, en modo
+ * *"sólo se afirma lo que la pata garantiza"*: son tres notas, y la del cuadrante con las DOS banderas
+ * encendidas —los dos legs por el gateway— no cambió una letra, porque ahí *"ese fee"* es cierto y
+ * acotarla perdería información verificable.
+ *
+ * ⚠️ Y DE LA ENTREGA, LA NOTA ACOTADA NO DICE NADA. A PROPÓSITO, Y NO SE "COMPLETA". Lo natural sería
+ * agregar *"y el fee de la entrega no lo paga nadie, porque ese paso no corre"*. Es verdad
+ * (`this.solana`, `../application/use-cases/confirm-and-send.ts:336`) y está PROHIBIDO escribirlo: en
+ * ese mismo cuadrante, tres renglones más arriba en la MISMA tarjeta, la fila de la entrega dice
+ * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:2389`). Ese *"lo simula"* es impreciso
+ * —con el settle apagado la entrega no se simula, se corta— pero es **H1 de WKH-336**, residual de otra
+ * HU que exige un TERCER valor de `transport` con su propia frase, y WKH-338 no lo cierra. Si la nota
+ * dijera *"la entrega no corre"* mientras la fila dice *"lo simula"*, la tarjeta se contradiría a sí
+ * misma en pantalla, y hay un `it` cuyo eje literal es exactamente eso: *"no niega lo que cada fila
+ * afirma"*, en `honest-copy.test.tsx:432`. Es el mismo criterio que este archivo ya escribió dos veces:
+ * se dice menos y no se inventa la distinción.
+ *
+ * ⚠️ LO QUE TAMPOCO SE CERRÓ: el singular. Las tres notas dicen *"al ejecutar el paso"*, y con las dos
+ * banderas encendidas son DOS los pasos cuyos fees Chaski paga. Es una imprecisión heredada de
+ * WKH-336 y queda DECLARADA: tocar ese fragmento rompería los ocho asserts de
+ * `agent-plan-card.test.tsx` que lo matchean, o sea reduciría la cobertura para arreglar la redacción.
+ *
+ * 🔴 EL INPUT QUE PONE EN ROJO EL SELECTOR NUEVO, y es el que W1 vio rojo antes del fix: renderizar la
+ * tarjeta dos veces, con `[fx("gateway"), payout("gateway")]` y con `[fx("gateway"), payout("demo")]`,
+ * y comparar el NODO de la nota entre las dos. Si el selector vuelve a mirar sólo el leg de la
+ * cotización, los dos textos son el MISMO string. Es T-338.1, y compara el nodo y no el
+ * `document.body` porque los dos cuadrantes YA difieren en el body por la FILA de la entrega: sobre el
+ * body el test daría verde hoy y sería decorativo para siempre.
  */
 /**
  * La llave del leg de la COTIZACIÓN, y por qué es el `label` y no la capacidad (AR/MNR-2).
@@ -2257,19 +2296,53 @@ function AgentUnavailable({
  *
  * ⚠️ Y LA RAMA `undefined` NO AFIRMA NADA, a propósito. Si ningún paso trae este `label`, el consumidor
  * (`AgentPlanCard`) **no renderiza la nota**: `undefined === "demo"` era `false` y caía en
- * `AGENT_PRICE_NOTE_GATEWAY`, o sea en la afirmación MÁS FUERTE de las dos —que el fee *"lo paga Chaski
+ * `AGENT_PRICE_NOTE_GATEWAY`, o sea en la afirmación MÁS FUERTE de todas —que el fee *"lo paga Chaski
  * con su Agent Key al ejecutar el paso"*— justo cuando no se sabe de qué leg se está hablando. Eso es
  * al revés del criterio de este archivo: `no-consultado` y el campo ausente **no afirman NADA sobre el
  * catálogo** (ver el docblock de `AgentUnavailable`). Callar es lo único cierto en los cuatro
- * cuadrantes, y una nota que falta es un síntoma visible; una nota falsa no. **No se agrega una tercera
- * frase** porque sería copy nueva, o sea una decisión de UX, no un arreglo. Lo custodia T-R1g.
+ * cuadrantes, y una nota que falta es un síntoma visible; una nota falsa no. **A ESTA RAMA no se le
+ * agrega una frase** porque sería copy nueva, o sea una decisión de UX, no un arreglo. Lo custodia
+ * T-R1g. (WKH-338 agregó una tercera nota, pero para el cuadrante en que la COTIZACIÓN sí se
+ * identifica y la ENTREGA no garantiza nada: esta rama sigue sin renderizar nada.)
  */
 const FX_STEP_LABEL = "Cotizar el cambio";
+
+/**
+ * La llave del leg de ENTREGA, y por qué hace falta una segunda (WKH-338).
+ *
+ * La nota de precio dejó de poder elegirse mirando un solo leg: su cláusula sobre quién paga el fee
+ * habla del NÚMERO, y el número cubre a las dos patas. Así que para saber qué se puede afirmar hay que
+ * poder identificar las dos, y esta es la llave de la segunda.
+ *
+ * ⚠️ ES EL `label` Y NO LA `capability`, por la misma razón medible que `FX_STEP_LABEL`: la capacidad es
+ * ENV-OVERRIDEABLE (`payoutCapability`, `../../app/api/a2a/plan/route.ts:256` es
+ * `process.env.WASIAI_A2A_PAYOUT_CAPABILITY ?? PAYOUT_CAPABILITY`, y `.env.example:182` documenta ese
+ * override como soportado). Un `find` por `"remittance-payout"` devolvería `undefined` en cualquier
+ * entorno con el override puesto, y la nota se elegiría por la rama del default en silencio. El `label`
+ * es un literal de la route (`label`, `../../app/api/a2a/plan/route.ts:284`), no sale de ninguna env.
+ *
+ * ⚠️ Y EL DRIFT DE ESTE LITERAL NO PESA LO MISMO QUE EL DE `FX_STEP_LABEL`, que es la razón por la que el
+ * candado de abajo es defensa en profundidad y no la línea de verdad. Si el `label` de la route se
+ * renombra y ESTE se queda viejo, el `find` da `undefined` ⇒ la nota cae en
+ * `AGENT_PRICE_NOTE_GATEWAY_SOLO_FX`, la afirmación MÁS DÉBIL de las tres: sub-afirma, no miente. El
+ * drift de `FX_STEP_LABEL`, en cambio, apaga la nota entera. Ninguno de los dos produce una afirmación
+ * falsa, y eso es deliberado: la dirección del default es que cuando falta información la nota se
+ * debilita. Lo custodia T-338.5 en `agent-plan-card.test.tsx`.
+ *
+ * ✅ Lo ata **T-338.2 (estático)** en `app/api/a2a/plan/route.test.ts`, con la misma forma que T-336.6:
+ * extrae el literal de los DOS archivos y exige que sean el MISMO, con dos `toBeTypeOf("string")` antes
+ * de la comparación para que el candado no quede aplaudiendo `undefined === undefined`. Renombrar una
+ * sola de las dos copias ⇒ rojo; renombrar las dos ⇒ verde a propósito, porque lo que se custodia es el
+ * ACOPLAMIENTO y no la copy.
+ */
+const PAYOUT_STEP_LABEL = "Entregar el dinero";
 
 const AGENT_PRICE_NOTE_DEMO =
   "Es lo que estos agentes publican en el catálogo, no lo que se cobra en este envío: no se suma a lo que enviás, y la cotización que estás aprobando la armó la app, no ellos.";
 const AGENT_PRICE_NOTE_GATEWAY =
   "Es lo que estos agentes publican en el catálogo. Por el carril del gateway ese fee lo paga Chaski con su Agent Key al ejecutar el paso, y no se suma a lo que enviás.";
+const AGENT_PRICE_NOTE_GATEWAY_SOLO_FX =
+  "Es lo que estos agentes publican en el catálogo. Por el carril del gateway, el fee de la cotización lo paga Chaski con su Agent Key al ejecutar el paso, y no se suma a lo que enviás.";
 
 /**
  * La línea que dice POR DÓNDE corre hoy este paso. Dos casos, y ninguno nombra a un agente.

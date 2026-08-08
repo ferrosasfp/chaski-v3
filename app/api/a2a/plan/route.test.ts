@@ -551,3 +551,46 @@ describe("GET /api/a2a/plan — cada leg deriva su transporte de SU bandera (WKH
     expect(["gateway", "demo"]).toContain(body.steps[1]?.transport);
   });
 });
+
+// ── T-338.2 · WKH-338/AC-5 · el `label` del leg de ENTREGA también está DUPLICADO ────────────────
+//
+// Desde WKH-338 el cliente busca DOS legs por su `label`, no uno: la nota de precio se elige leyendo la
+// cotización Y la entrega, porque la cláusula sobre quién paga el fee habla del NÚMERO, y el número suma
+// los steps con precio publicado (`withPrice`, `route.ts:294`). Así que ahora hay una segunda copy de usuario
+// sosteniendo una decisión de lógica, y con ella un segundo par de literales que se pueden
+// desincronizar: `label: "Entregar el dinero"` en esta route y `PAYOUT_STEP_LABEL` en
+// `../../../../src/presentation/flow.tsx`.
+//
+// ⚠️ LO QUE ESTE CANDADO NO ES: la línea de verdad. El drift de ESTE literal no produce una afirmación
+// falsa —el `find` devuelve `undefined` y la nota cae en la MÁS DÉBIL de las tres, que sub-afirma—, a
+// diferencia del de `FX_STEP_LABEL`, que apaga la nota entera. Eso ya lo custodia T-338.5 en
+// `src/presentation/agent-plan-card.test.tsx`, desde el lado del comportamiento. Esto es defensa en
+// profundidad: avisa del desacople ANTES de que degrade la copy en silencio.
+//
+// ⚠️ Y NO ALCANZA CON COMPARAR, por la misma razón que en T-336.6: si las dos regex dejaran de matchear,
+// `undefined === undefined` pasaría en verde y el candado quedaría aplaudiendo el vacío. Por eso los dos
+// `toBeTypeOf` van ANTES de la comparación.
+//
+// ⚠️ Este candado NO clava la copy: renombrar las DOS a la vez lo deja verde a propósito. Lo que clava es
+// el ACOPLAMIENTO. MEDIDO (M6): renombrar el `label` sólo en `flow.tsx` ⇒ este `it` en rojo.
+describe("T-338.2: el `label` del leg de ENTREGA está acoplado entre la route y el cliente", () => {
+  it("T-338.2 (estático): el `label` del leg de ENTREGA es el MISMO literal en la route y en `flow.tsx`", () => {
+    const enLaRoute = /capability: payoutCapability,\s*\n\s*label: "([^"]+)"/.exec(
+      readFileSync(path.resolve(process.cwd(), "app/api/a2a/plan/route.ts"), "utf8"),
+    )?.[1];
+    const enElCliente = /const PAYOUT_STEP_LABEL = "([^"]+)";/.exec(
+      readFileSync(path.resolve(process.cwd(), "src/presentation/flow.tsx"), "utf8"),
+    )?.[1];
+    // Sin estos dos, un cambio de forma (no de valor) dejaría el candado vacío y en verde.
+    expect(
+      enLaRoute,
+      "la route ya no declara el `label` del leg de ENTREGA donde el candado lo busca",
+    ).toBeTypeOf("string");
+    expect(
+      enElCliente,
+      "`flow.tsx` ya no declara `PAYOUT_STEP_LABEL` donde el candado lo busca",
+    ).toBeTypeOf("string");
+    // El invariante: el cliente busca por el MISMO string que el server escribe.
+    expect(enElCliente).toBe(enLaRoute);
+  });
+});

@@ -73,10 +73,21 @@ export async function POST(req: Request): Promise<Response> {
   // body de la respuesta (CD-8).
   //
   // 🔴 ESTA RUTA YA NO LEE `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`, y no es una omisión. Había un solo
-  // motivo para leerla —elegir entre dos transportes— y ahora hay uno. Quién decide si esta ruta se
-  // llama o no sigue siendo esa bandera, pero un paso antes: con `"fallback"` el container cablea
-  // `FallbackQuoteGateway` y nadie llega hasta acá (`usesRealGateways`, `../../../../src/composition/value-delivery-adapter.ts:74`).
-  // Un valor no reconocido tampoco llega: `resolveValueDeliveryAdapter` tira en el arranque.
+  // motivo para leerla —elegir entre dos transportes— y ahora hay uno.
+  //
+  // ⚠️ Y NO LEERLA SIGNIFICA QUE LA BANDERA NO PUEDE DETENER A ESTA RUTA (AR/BLQ-MED-1). Acá decía que
+  // con `"fallback"` *"nadie llega hasta acá"* y que *"un valor no reconocido tampoco llega"*. Las dos
+  // eran falsas para cualquier invocación server-side, y la segunda se BORRA: no tiene versión cierta.
+  // Lo cierto es más chico y es esto: con `"fallback"` el container del CLIENTE cablea
+  // `FallbackQuoteGateway` (`usesRealGateways`, `../../../../src/composition/value-delivery-adapter.ts:74`)
+  // y la UI propia no llama a este endpoint; el endpoint NO lee la bandera y le contesta igual a quien
+  // sea. Input que lo demuestra, en este repo: (`it.each`, `route.test.ts:386`) corre con la bandera en
+  // `"fallback"` y en `undefined`, y en los dos casos exige 200 y un único fetch a `${GW}/compose`.
+  //
+  // 🔴 POR QUÉ NO ES UN DETALLE: §9 del Story File nombra el flip de esa bandera como la palanca de
+  // rollback. Poner `"fallback"` NO corta esta ruta —sigue componiendo y gastando la Agent Key—. Lo
+  // que sí la corta sin re-desplegar es sacarle la config del gateway: con la URL o la key ausentes la
+  // config resuelve a `null` (`not_configured`, `gateway-client.ts:225`) ⇒ el 501 de abajo, sin fetch.
   const r = await runViaGateway({
     steps: [
       {

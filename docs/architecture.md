@@ -169,16 +169,17 @@ antes de que se le pida un documento.
 `src/composition/container.ts` corre primero el guard de residuo y después decide, leyendo el
 entorno, dos cosas y nada más:
 
-- Qué adaptador de cotización y desembolso se usa: el de demo (`fallback`, el default) o el que llama
-  a los agentes (`a2a` / `a2a-gateway`), vía `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` (`container.ts:90-96`).
-- Si el settlement Solana está encendido, vía `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED` (`container.ts:104`).
+- Qué adaptador de cotización y desembolso se usa: el de demo (`fallback`, el default) o el que le pide
+  capacidades al gateway (`a2a-gateway`), vía `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` (`container.ts:114`).
+  Son los dos únicos legales: `a2a`, el carril punto a punto, se borró en WKH-332 y hoy TIRA al arrancar.
+- Si el settlement Solana está encendido, vía `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED` (`container.ts:141`).
 
 La wallet no está en esa lista, y es el punto: no se decide, se construye.
 
 Los guards son fail loud y corren en construcción, no en tiempo de firma. Una configuración
 incoherente rompe al arrancar la app. Los casos cubiertos:
 
-- Settlement Solana encendido sin mint, o sin la pubkey del facilitator (`container.ts:105-108`).
+- Settlement Solana encendido sin mint, o sin la pubkey del facilitator (`container.ts:142-145`).
 - Configuración de un camino de settlement que este código ya no tiene. Ese es el único guard que no
   se resuelve por construcción: esa configuración vive fuera del código, en el panel del proveedor de
   hosting, y ahí puede quedar huérfana sin que nadie se entere.

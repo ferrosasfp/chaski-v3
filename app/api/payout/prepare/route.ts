@@ -350,17 +350,35 @@ export async function POST(req: Request): Promise<Response> {
 
   // PR7 — forward al agente (crea la orden TransFi). UN SOLO transporte: el gateway (WKH-332/AC-1).
   // El `else` que hacía `fetch({BASE}/api/agents/<slug>/invoke)` se BORRÓ acá, y con él la lectura de
-  // `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` que elegía entre los dos. Quién decide si esta ruta se llama
-  // sigue siendo esa bandera, un paso antes y en otro archivo: con `"fallback"` el container cablea
-  // los simuladores y nadie llega hasta acá.
+  // `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` que elegía entre los dos.
+  //
+  // ⚠️ ACÁ DECÍA que con `"fallback"` *"nadie llega hasta acá"*, Y ERA FALSO (AR/BLQ-MED-1). Este
+  // handler NO lee esa bandera ni importa `createContainer`, y el repo no tiene `middleware.ts`: no
+  // hay ningún valor de esa env que lo detenga. La contra-evidencia está en este mismo commit:
+  // (`it.each`, `route.test.ts:1296`) corre con la bandera en `"fallback"` y en `undefined`, y en los
+  // dos casos el POST devuelve **200** y forwardea a `${GW}/compose`. Lo cierto es más chico: con
+  // `"fallback"` el container del CLIENTE cablea los simuladores y la UI propia no llama a este
+  // endpoint; un caller que sí lo llame llega igual.
+  // 🔴 Y ESO CAMBIA EL ROLLBACK. §9 del Story File nombra el flip a `"fallback"` como la palanca. No
+  // corta este handler: sigue creando órdenes TransFi y gastando la Agent Key de Chaski. Lo que sí lo
+  // corta sin re-desplegar es sacarle la config del gateway ⇒ `not_configured` ⇒ el 501 de más abajo.
   // El `result` que sale de acá va al MISMO PR8 (validador del depositAddress) y al MISMO PR9 (emisor
   // de la atestación) que ya existían. El transporte NO participa de ninguno de los dos (CD-10): el
   // piso de reputación sube el piso, no reemplaza esas dos capas, que son independientes de QUÉ
   // agente respondió.
   // 🔴 PAYLOAD SANEADO (WKH-333/AC-16). El `kycVerificationId` del cliente —si vino— queda PISADO por
   // el de la fila: el spread pone `...body` primero justo para eso. Se armaba una vez para las DOS
-  // ramas de transporte; ahora hay una sola y sigue siendo el único objeto que se forwardea, así que
-  // no hay ningún camino por el que el valor del caller sobreviva.
+  // ramas de transporte; ahora hay una sola y sigue siendo el único objeto que se forwardea.
+  // ⚠️ ACÁ DECÍA *"no hay ningún camino por el que el valor del caller sobreviva"*, y §16 prohíbe esa
+  // clase de afirmación de imposibilidad: es una propiedad de TODO el archivo enunciada desde una
+  // línea, y no la sostiene nada de este renglón. La frase que reemplazó citaba su candado y la nueva
+  // se lo había comido (AR/MNR-3). El candado es **T-PR-11 / M-30**: (`composeBody`,
+  // `route.test.ts:1739`). MEDIDO (está en el verde de la suite): un POST con
+  // `kycVerificationId: "did-QUE-EL-CLIENTE-PROPUSO"` en el body produce un `/compose` que contiene
+  // `did-de-la-fila` y NO contiene el valor del caller. DERIVADO —no lo mutamos, es el guard de una
+  // route de plata— el input que lo pondría en rojo: invertir este spread a
+  // `{ kycVerificationId: …, ...body }`, que además rompe (`toBeLessThan`,
+  // `kyc-verification-id-guard.static.test.ts:150`).
   //
   // `rowVerificationId` acá SIEMPRE viene de una fila que existe: si no había store se cortó con 503
   // y si no había fila se cortó con 403, las dos cosas arriba. No hay ninguna rama que llegue hasta

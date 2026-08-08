@@ -107,6 +107,19 @@ async function readQuoteRejection(res: Response): Promise<string | undefined> {
   // cayó, probá de nuevo" — o sea que el enum nuevo existiría en la route y no lo vería nadie. Se
   // propaga 1:1 y sin `reason`: es un enum NUESTRO, no un eco del gateway.
   if (body.error === QUOTE_NO_AGENT_FOR_CAPABILITY) return QUOTE_NO_AGENT_FOR_CAPABILITY;
+  // ⚠️ ESTE `if` LEE UN ENUM QUE NINGÚN PRODUCTOR DE ESTA APP EMITE (AR/MNR-1). Es la MISMA
+  // declaración que ya lleva el docblock de su constante
+  // (`QUOTE_REJECTED`, `../../application/agent-rejections.ts:49`), escrita también acá, un nivel
+  // arriba, porque acá es donde se lee. MEDIDO: el universo de `error`
+  // que `app/api/a2a/quote/route.ts` puede devolver hoy son cuatro y `a2a_quote_rejected` no está entre
+  // ellos — `a2a_not_configured` (`:116`), el enum de no-agente (`:124`), `a2a_unavailable` (`:125`) y
+  // `a2a_bad_shape` (`:128`).
+  // ⛔ Y AUN ASÍ NO ES CÓDIGO MUERTO, que es la razón por la que W4 borró la allow-list y NO borró esto:
+  // el body puede traer este enum desde un server driftado, desde una versión anterior de la route
+  // durante un deploy o desde un intermediario, y desde el `failureReason` de una remesa guardada antes
+  // del deploy de W3. ESO —y no un camino vivo de la route— es lo que miden los 4 casos de
+  // (`rejects`, `gateways.test.ts:128`) y (`rejects`, `gateways.test.ts:140`): que si el enum llega, se
+  // colapse sin propagar `reason`. El desenlace estructural está pedido en WKH-335 (otro repo).
   if (body.error !== QUOTE_REJECTED) return undefined;
   // 🔴 ACÁ SE LEÍA `body.reason` FILTRADO POR `RELAYABLE_QUOTE_REJECTIONS`, Y ESE FILTRO SE FUE EN
   // WKH-332/W4 CON EL CANAL QUE LO ALIMENTABA (AC-5). El `reason` sólo existía en la respuesta del

@@ -107,7 +107,7 @@ export class FallbackPayoutGateway implements PayoutGateway {
   //
   // Este adapter no tiene backend al que preguntarle: lo que sabe del payout es NADA. El estado que
   // refleja "nada" es el no-terminal, con la razón explícita — mismo criterio que
-  // A2aPayoutGateway.status() (a2a/gateways.ts:168-187): no saber NO es evidencia de entrega, ni de
+  // A2aPayoutGateway.status() (a2a/gateways.ts:181-200): no saber NO es evidencia de entrega, ni de
   // fallo. TrackRemittance no transiciona con "submitted" ⇒ la remesa queda donde está, visible y
   // recuperable, en vez de mentir en cualquiera de las dos direcciones.
   async submit(req: PayoutSubmit): Promise<PayoutRecord> {

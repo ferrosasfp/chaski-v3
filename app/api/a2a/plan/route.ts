@@ -188,8 +188,19 @@ export async function GET(): Promise<Response> {
     return NextResponse.json({ error: "gateway_not_configured" }, { status: 501 });
   }
   // El único valor de la bandera que cablea agentes reales es `"a2a-gateway"`; el otro legal es
-  // `"fallback"` (y su ausencia, que cae en él), que cablea simuladores. Un valor no reconocido no
-  // llega hasta acá: `resolveValueDeliveryAdapter` tira en el arranque del container.
+  // `"fallback"` (y su ausencia, que cae en él), que cablea simuladores.
+  //
+  // ⚠️ ACÁ DECÍA *"un valor no reconocido no llega hasta acá: `resolveValueDeliveryAdapter` tira en el
+  // arranque del container"*, Y ERA FALSO PARA TODA INVOCACIÓN DE ESTA RUTA (AR/BLQ-MED-1). Este
+  // handler NO valida la bandera: la lee cruda y **cualquier** string que no sea `"a2a-gateway"` cae
+  // en `"demo"` y devuelve 200. MEDIDO con una sonda sobre este mismo `GET` (2026-08-07, descartada
+  // después): `"a2a-gateway"` ⇒ 200 `["gateway","gateway"]`; `"fallback"`, `"a2a"`, `"a2a-gatewayy"` y
+  // `"A2A-GATEWAY"` ⇒ 200 `["demo","demo"]` los cuatro. Cinco valores, cero throws.
+  // Quien tira con un valor ilegal es `createContainer()`, en el composition root del CLIENTE. Este
+  // GET no pasa por ahí —no lo importa, y el repo no tiene `middleware.ts`—, así que un `curl` llega
+  // igual. Lo que el `transport` describe es qué va a cablear LA APP PROPIA, no una garantía sobre
+  // quién llamó. Input que lo pone en rojo si alguien invierte el mapeo: (`transport`,
+  // `route.test.ts:117`) y (`transport`, `route.test.ts:135`).
   const transport: PlanStep["transport"] =
     process.env.NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER === "a2a-gateway" ? "gateway" : "demo";
 

@@ -55,7 +55,11 @@ type PlanStep = {
   } | null;
   availability?: "ofrecido" | "sin-candidatos" | "no-consultado";
   constraints?: { minReputation: number; allowTrial?: true };
-  /** W3: `"punto-a-punto"` salió del dominio con el carril; `"demo"` es el modo `"fallback"`.
+  /** W3: `"punto-a-punto"` salió del dominio con el carril. Y `"demo"` NO significa lo mismo en los
+   *  dos pasos (WKH-336): en la COTIZACIÓN es el adapter en `"fallback"`
+   *  (`resolveValueDeliveryAdapter`, `../composition/container.ts:114`), y en la ENTREGA es el settle
+   *  Solana apagado (`solanaSettleOn`, `../composition/container.ts:141`), donde el envío no se simula
+   *  sino que falla cerrado. Por eso un plan de test puede traer los dos valores a la vez.
    *  `runsTodayAgentId` se fue del tipo porque se fue del contrato: no hay fuente que lo llene. */
   transport: "gateway" | "demo";
 };
@@ -180,6 +184,57 @@ describe("el precio dice qué es y quién lo cobraría", () => {
 
     expect(screen.getByText(/lo paga Chaski con su Agent Key al ejecutar el paso/)).toBeInTheDocument();
     expect(document.body.textContent ?? "").not.toContain("la armó la app, no ellos");
+  });
+
+  // ── T-R1 · WKH-336/R1 · la nota habla de la COTIZACIÓN, así que la elige el leg de la cotización ──
+  //
+  // 🔴 EL DEFECTO QUE ESTOS CUATRO CASOS MIDEN, y es uno que WKH-336 volvió alcanzable. El selector era
+  // `plan.steps.some((s) => s.transport === "demo")`: preguntaba *"¿ALGÚN paso es demo?"* para elegir
+  // entre dos notas cuya diferencia es una afirmación sobre la COTIZACIÓN (*"la cotización que estás
+  // aprobando la armó la app, no ellos"*). Mientras el preview pegaba un `transport` único a los dos
+  // pasos eso era inocuo: nunca discrepaban. Al derivar por leg apareció el cuadrante
+  // `["gateway","demo"]` —adapter en el carril real, settle Solana apagado—, donde el `.some()` se
+  // activa POR LA PATA DE ENTREGA y muestra una nota que dice que la cotización la armó la app,
+  // mientras la armó el gateway. Ahora el selector mira `steps[0]`.
+  //
+  // ⚠️ LOS CUATRO CASOS ESTÁN, NO SÓLO EL NUEVO. Un test que sólo mirara el cuadrante mixto no probaría
+  // que la elección sigue siendo la MISMA en los tres viejos, que es la mitad de la obligación: un
+  // selector que devolviera siempre la nota GATEWAY también lo pasaría.
+  //
+  // Lo que mata el mutante: revertir a `.some((s) => s.transport === "demo")` deja los tres primeros
+  // casos verdes y pone ROJO el cuarto (el mixto), porque ahí `.some()` es `true` y esta app mostraría
+  // `AGENT_PRICE_NOTE_DEMO`. MEDIDO.
+  const LA_ARMO_LA_APP = /la cotización que estás aprobando la armó la app, no ellos/;
+  const LO_PAGA_CHASKI = /lo paga Chaski con su Agent Key al ejecutar el paso/;
+  const fx = (t: "gateway" | "demo") => paso({ label: "Cotizar el cambio", transport: t });
+  const payout = (t: "gateway" | "demo") =>
+    paso({ capability: "remittance-payout", label: "Entregar el dinero", transport: t });
+
+  it("T-R1a: los dos legs en gateway ⇒ la nota del gateway (adapter real + settle encendido)", async () => {
+    await verLaTarjeta([fx("gateway"), payout("gateway")], 0.06);
+    expect(screen.getByText(LO_PAGA_CHASKI)).toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toMatch(LA_ARMO_LA_APP);
+  });
+
+  it("T-R1b: la cotización en demo y la entrega en gateway ⇒ la nota del demo (settle encendido, adapter en fallback)", async () => {
+    await verLaTarjeta([fx("demo"), payout("gateway")], 0.06);
+    expect(screen.getByText(LA_ARMO_LA_APP)).toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toMatch(LO_PAGA_CHASKI);
+  });
+
+  it("T-R1c: los dos legs en demo ⇒ la nota del demo", async () => {
+    await verLaTarjeta([fx("demo"), payout("demo")], 0.06);
+    expect(screen.getByText(LA_ARMO_LA_APP)).toBeInTheDocument();
+    expect(document.body.textContent ?? "").not.toMatch(LO_PAGA_CHASKI);
+  });
+
+  // 🔴 EL CUADRANTE QUE WKH-336 VOLVIÓ ALCANZABLE, y el único que el `.some()` contestaba mal.
+  it("T-R1d: la cotización en gateway y la entrega en demo ⇒ NO puede decir que la cotización la armó la app", async () => {
+    await verLaTarjeta([fx("gateway"), payout("demo")], 0.06);
+    expect(document.body.textContent ?? "").not.toMatch(LA_ARMO_LA_APP);
+    expect(screen.getByText(LO_PAGA_CHASKI)).toBeInTheDocument();
+    // Y la fila de la ENTREGA sigue diciendo lo suyo: la nota de precio no borra el transporte por paso.
+    expect(screen.getByText(/esta app está en modo demo y lo simula/)).toBeInTheDocument();
   });
 });
 

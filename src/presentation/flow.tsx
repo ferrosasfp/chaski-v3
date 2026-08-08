@@ -1208,7 +1208,33 @@ export function TrackView({
     rem.status === "principal_in" ||
     rem.status === "payout_submitted" ||
     rem.status === "payout_failed";
-  const showRefund = refundeable && rem.refundTx == null && !!recover && !!sender;
+  // 🔴 CR/BLQ-BAJO-1 — LA TARJETA SE CONTRADECÍA SOBRE LA PLATA DE LA PERSONA, Y ESTE ES EL TÉRMINO
+  // QUE LO CIERRA. Con `prepare_no_agent_for_capability` el DOM de UNA misma tarjeta decía, en este
+  // orden: *"No se movió ningún USDC de tu wallet"* → botón **"Recuperar fondos"** → *"El plazo se
+  // fija cuando depositás y dura unas 2 horas"*. Las dos mitades no pueden ser ciertas a la vez: o no
+  // hay depósito, o hay uno con un plazo corriendo.
+  //
+  // Se elige TAPAR EL BOTÓN y no suavizar el copy, porque de las dos afirmaciones la del copy es la
+  // que se puede sostener: el prepare corre ANTES de `authorizePrincipal`
+  // (`failAndRefund`, `../application/use-cases/confirm-and-send.ts:385`, con `"not_deposited"`), o sea antes de que la
+  // billetera firme nada. Suavizarla a la forma condicional de la familia de `payout_failed` ("si tus
+  // USDC entraron al escrow…") cambiaría un hecho verificable por una duda inventada, que es
+  // exactamente el defecto que esta HU vino a sacar de la pantalla.
+  //
+  // ⚠️ Y NO SE APOYA EN EL `failureReason` A SECAS. El hecho lo afirma `escrowFundsKnowledge`, que es
+  // la MISMA función con la que el historial decide qué decir de esa plata: así las dos pantallas no
+  // pueden contar dos historias. Si algún día una remesa llega acá con este reason y un depósito que
+  // no se puede descartar, este `&&` da `false` y la tarjeta vuelve entera a la familia de
+  // `payout_failed` — copy condicional Y botón, que también es coherente. Lo que no puede volver a
+  // pasar es la afirmación categórica al lado del botón.
+  //
+  // Se excluye de `showRefund` y NO de `refundeable`: la familia hermana (`prepareRejected`,
+  // `senderSolMissing`, `walletAddressMissing`) queda intacta.
+  const noAgentForCapability =
+    rem.failureReason === PREPARE_NO_AGENT_FOR_CAPABILITY &&
+    escrowFundsKnowledge(rem) === "no-deposit";
+  const showRefund =
+    refundeable && rem.refundTx == null && !!recover && !!sender && !noAgentForCapability;
 
   // WKH-327 — ¿se le ofrece cerrar las cuentas y recuperar el alquiler?
   //
@@ -1276,7 +1302,10 @@ export function TrackView({
     //
     // El cuerpo sale de `humanError`, no de un literal, para que la frase viva en UN solo lugar
     // (mismo patrón que `senderSolMissing` de acá arriba).
-    const noAgentForCapability = rem.failureReason === PREPARE_NO_AGENT_FOR_CAPABILITY;
+    //
+    // ⚠️ `noAgentForCapability` SE CALCULA ARRIBA, junto a `showRefund` (CR/BLQ-BAJO-1): el mismo
+    // término que habilita este copy es el que tapa el botón de recuperar, y por eso no puede vivir
+    // acá abajo. Leé ahí por qué además exige `escrowFundsKnowledge(rem) === "no-deposit"`.
     // Y el cuarto que tampoco es un fallo de entrega: nuestro servidor no pudo consultar el registro
     // de direcciones preparadas y cortó ANTES de reenviar la transacción al facilitator
     // (route.ts:126-133, antes del fetch de la 156). Hasta que este reason existió, esta causa salía

@@ -8,12 +8,14 @@
 import { describe, expect, it } from "vitest";
 import {
   LOGGABLE_PREPARE_REJECTIONS,
+  NO_AGENT_REASONS_MEANING_NOBODY,
   PREPARE_REJECTED,
   PREPARE_REJECTION_ENUMS,
   QUOTE_REJECTED,
   RELAYABLE_PREPARE_REJECTIONS,
   RELAYABLE_QUOTE_REJECTIONS,
   isPrepareRejection,
+  noAgentMeansNobodyFits,
   prepareRejectionEnum,
   relayableRejection,
 } from "./agent-rejections";
@@ -86,4 +88,73 @@ describe("agent-rejections — la allow-list decide, no el agente", () => {
   it.each(PREPARE_REJECTION_ENUMS)("isPrepareRejection(%s) es true", (reason) => {
     expect(isPrepareRejection(reason)).toBe(true);
   });
+});
+
+// ── CR/BLQ-MED-2 — LOS TRES VALORES DE LA ALLOWLIST, NO UNO ──────────────────────────────────────
+//
+// 🔴 QUÉ AGUJERO CIERRA, MEDIDO. Los tests de las dos routes sólo ejercitaban `no_candidates`.
+// Borrando `"excluded_by_scope"` y `"excluded_by_reputation"` de `NO_AGENT_REASONS_MEANING_NOBODY`,
+// `tsc` daba exit 0 y la suite COMPLETA 1587/1587 verde. Con esa mutación puesta, un rechazo por
+// piso de reputación —el 422 MÁS probable en producción con los pisos en 2— vuelve a salir 502 y la
+// pantalla dice "Algo salió mal" para un caso que SÍ es "no hay quién": la misma regresión de
+// precisión que esta HU vino a cerrar, en el sentido contrario.
+//
+// 🔴 POR QUÉ HAY DOS `it.each` Y NO UNO. Un `it.each(NO_AGENT_REASONS_MEANING_NOBODY)` recorre la
+// constante, que es lo que hace falta para que agregar un valor lo ponga a prueba solo — pero NO
+// mata el borrado: al sacar un valor, su caso deja de correrse y el `each` sigue verde aplaudiéndose.
+// Lo que mata el borrado es recorrer el UNIVERSO del otro lado con el veredicto esperado por fila:
+// ahí el valor borrado tiene una fila que espera `true` y recibe `false`.
+//
+// El universo es exhaustivo por TIPO (`Record<Reason, boolean>` sobre una unión), así que un `reason`
+// nuevo del gateway sin fila acá es `tsc` rojo y no un caso que alguien se olvidó — misma técnica que
+// (`CABLEADO`, `../composition/container.test.ts:124`).
+describe("noAgentMeansNobodyFits — el 422 son CUATRO desenlaces y sólo tres dicen 'no hay quién'", () => {
+  // Los cuatro `reason` que el gateway puede mandar en un 422, MEDIDOS en
+  // `wasiai-a2a/src/services/capability-resolver.ts:69-80`. Esto NO es una copia de la constante que
+  // se prueba: es el contrato del OTRO repo, que es contra lo único que la allowlist se puede medir.
+  type ReasonDelGateway =
+    | "no_candidates"
+    | "excluded_by_scope"
+    | "excluded_by_reputation"
+    | "reputation_unavailable";
+  const DICE_QUE_NO_HAY_NADIE: Record<ReasonDelGateway, boolean> = {
+    no_candidates: true, // no hay ninguna capacidad de ese nombre en el catálogo
+    excluded_by_scope: true, // las hay, y nuestra credencial no las alcanza
+    excluded_by_reputation: true, // las hay, y ninguna llega al piso
+    // 🔴 El que NO es un hecho sobre el catálogo: el gateway no pudo leer el historial. Para éste las
+    // dos mitades del copy de AC-13 son falsas, y la segunda desaconseja el reintento que sí sirve.
+    reputation_unavailable: false,
+  };
+
+  it.each(Object.entries(DICE_QUE_NO_HAY_NADIE))(
+    "reason '%s' del gateway ⇒ noAgentMeansNobodyFits = %s",
+    (reason, esperado) => {
+      expect(noAgentMeansNobodyFits(reason)).toBe(esperado);
+    },
+  );
+
+  // La otra mitad: la allowlist no puede crecer con un reason que el gateway no emite. Sin esto,
+  // agregarle "sarasa" la dejaría verde (ninguna fila de arriba la mira).
+  it("la allowlist es un SUBCONJUNTO del universo medido: no inventa reasons", () => {
+    for (const r of NO_AGENT_REASONS_MEANING_NOBODY) {
+      expect(Object.keys(DICE_QUE_NO_HAY_NADIE)).toContain(r);
+    }
+  });
+
+  it.each(NO_AGENT_REASONS_MEANING_NOBODY)(
+    "todo lo que está en la allowlist habilita la afirmación fuerte (%s)",
+    (reason) => {
+      expect(noAgentMeansNobodyFits(reason)).toBe(true);
+    },
+  );
+
+  // 🔴 LA DIRECCIÓN DEL DEFAULT, que es la decisión: sólo la allowlist habilita "no hay proveedor".
+  // Un 422 sin `reason` (un proxy, un middleware, una versión del gateway que no lo mande) o con uno
+  // desconocido NO la habilita y sale por el enum de caída, que es vago y CIERTO.
+  it.each([undefined, null, "", 42, {}, "sarasa_inventada", "NO_CANDIDATES", "no_candidates "])(
+    "un reason ausente o desconocido (%s) NO habilita la afirmación fuerte",
+    (raw) => {
+      expect(noAgentMeansNobodyFits(raw)).toBe(false);
+    },
+  );
 });

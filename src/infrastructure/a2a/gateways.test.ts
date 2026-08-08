@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Money } from "../../domain/money";
+import { QUOTE_NO_AGENT_FOR_CAPABILITY } from "../../application/agent-rejections";
+import { humanError } from "../../presentation/flow-vm";
 import type { PayoutSubmit, QuoteRequest } from "../../application/ports";
 import { A2aPayoutGateway, A2aQuoteGateway } from "./gateways";
 
@@ -146,6 +148,40 @@ describe("A2aQuoteGateway (AC-3)", () => {
     await expect(new A2aQuoteGateway().requestQuote(quoteReq)).rejects.toThrow(
       "a2a_quote_rejected",
     );
+  });
+
+  // ── CR/BLQ-MED-1 · EL CABLEADO DE AC-13, NO LA RAMA QUE PINTA ───────────────────────────────────
+  //
+  // 🔴 QUÉ AGUJERO CIERRA, MEDIDO. `gateways.ts`:109 es la ÚNICA línea que lleva el enum de AC-13
+  // desde el body del 422 de la route hasta `humanError`. Mutándola línea-neutra a
+  // `body.error === ${QUOTE_NO_AGENT_FOR_CAPABILITY}_x` (con backticks), `tsc` daba exit 0 y la
+  // suite COMPLETA 1587/1587 verde, y lo que la persona leía era "Algo salió mal. Intentá de nuevo."
+  // — el copy de ANTES de la HU. Los tests que había NO podían verlo: los de `flow-vm.test.ts`
+  // llaman a `humanError(...)` con el string escrito a mano, y el de `flow.test.tsx` inyecta el
+  // `failureReason` directo en el estado de la remesa. Los dos prueban que la RAMA pinta; ninguno
+  // prueba que el motivo LLEGUE. Es la lección `tests-que-registran-el-doble-no-prueban-el-cableado`.
+  //
+  // Por eso este `it` arranca en el 422 tal como la route lo escribe (`{error:"a2a_no_agent_for_capability"}`,
+  // (`a2a_no_agent_for_capability`, `../../../app/api/a2a/quote/route.test.ts:405`)) y termina en la frase que se lee en
+  // pantalla. Lo único NO mockeado en el medio es el gateway de producción.
+  it("CABLEADO/AC-13: el 422 de la route llega hasta el copy de 'no hay quién', sin pasar por el genérico", async () => {
+    vi.stubGlobal("fetch", rejects({ error: QUOTE_NO_AGENT_FOR_CAPABILITY }, 422));
+
+    const err = await new A2aQuoteGateway()
+      .requestQuote(quoteReq)
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    const code = (err as Error).message;
+    expect(code).toBe(QUOTE_NO_AGENT_FOR_CAPABILITY);
+    // Y lo que la persona lee al final del cable. Sin la línea 109 esto es el genérico.
+    expect(humanError(code)).toContain("no hay ningún proveedor");
+    expect(humanError(code)).not.toBe("Algo salió mal. Intentá de nuevo.");
+    // La otra mitad: el enum de caída sigue siendo OTRO. Un mutante que mapeara los dos al mismo
+    // string dejaría verdes los dos asserts de arriba.
+    expect(code).not.toBe("a2a_quote_unavailable");
+    expect(humanError(code)).not.toBe(humanError("a2a_quote_unavailable"));
   });
 
   // CANDADO: la infraestructura caída sigue diciendo lo de siempre.

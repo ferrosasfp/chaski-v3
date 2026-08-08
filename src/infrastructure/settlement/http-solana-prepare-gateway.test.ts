@@ -40,6 +40,8 @@ vi.mock("../persistence/supabase-kyc-verdicts", () => ({
 
 import bs58 from "bs58";
 import nacl from "tweetnacl";
+import { PREPARE_NO_AGENT_FOR_CAPABILITY } from "../../application/agent-rejections";
+import { humanError } from "../../presentation/flow-vm";
 import type { PopSigner } from "../../application/ports";
 import { HttpPopSigner } from "../auth/http-pop-signer";
 import { HttpSolanaPayoutPrepareGateway } from "./http-solana-prepare-gateway";
@@ -113,6 +115,32 @@ function routeFetch(agent: () => Response) {
       } finally {
         vi.stubGlobal("fetch", outer);
       }
+    }
+    throw new Error(`unexpected fetch: ${target}`);
+  });
+}
+
+/** Igual que `routeFetch` para el PoP (el challenge sale del emisor REAL, así que la firma que viaja
+ *  es una de verdad), pero la respuesta de `/api/payout/prepare` la escribe el test: sirve para
+ *  entrar por un status+body EXACTOS de la route sin tener que levantarle la configuración que los
+ *  produce. Nada más está mockeado: el que interpreta ese body es el gateway de producción. */
+function prepareRespondsWith(status: number, body: unknown) {
+  return vi.fn(async (url: string, init?: RequestInit) => {
+    const target = String(url);
+    if (target === "/api/a2a/payout/challenge") {
+      return CHALLENGE_POST(
+        new Request(`http://localhost${target}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: init?.body as string,
+        }),
+      );
+    }
+    if (target === "/api/payout/prepare") {
+      return new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
     }
     throw new Error(`unexpected fetch: ${target}`);
   });
@@ -271,6 +299,38 @@ describe("HttpSolanaPayoutPrepareGateway — el body que arma el cliente ES el q
       prepareInput(),
     );
     expect(out).toEqual({ ok: false, reason: "prepare_no_deposit_address" });
+  });
+
+  // ── CR/BLQ-MED-1 · EL CABLEADO DE AC-13, NO LA RAMA QUE PINTA ───────────────────────────────────
+  //
+  // 🔴 QUÉ AGUJERO CIERRA, MEDIDO. `http-solana-prepare-gateway.ts`:68 es la ÚNICA línea que lleva el
+  // enum de AC-13 desde el body del 422 de la route hasta el `failureReason` de la remesa. Mutándola
+  // línea-neutra a `case ${PREPARE_NO_AGENT_FOR_CAPABILITY}_x:` (con backticks), `tsc` daba exit 0 y
+  // la suite COMPLETA 1587/1587 verde, con el enum cayendo al default `prepare_rejected` y la
+  // pantalla diciendo "Algo salió mal. Intentá de nuevo." — el copy de ANTES de la HU.
+  //
+  // Los tests que había no podían verlo: `flow.test.tsx` INYECTA el `failureReason` en el estado de
+  // la remesa y `flow-vm.test.ts` llama a `humanError(...)` con el string a mano. Los dos prueban que
+  // la rama pinta; ninguno prueba que el motivo llegue (`tests-que-registran-el-doble-no-prueban-el-cableado`).
+  //
+  // El `reason` que sale de acá es literalmente lo que `ConfirmAndSend` persiste como `failureReason`
+  // (`failAndRefund`, `../../application/use-cases/confirm-and-send.ts:385`), y `TrackView` ramifica
+  // por esa MISMA constante — por eso se compara contra la constante y no contra un literal.
+  it("CABLEADO/AC-13: el 422 de la route llega al reason que se persiste, y de ahí al copy de 'no hay quién'", async () => {
+    vi.stubGlobal("fetch", prepareRespondsWith(422, { error: PREPARE_NO_AGENT_FOR_CAPABILITY }));
+
+    const out = await new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet)).prepare(
+      prepareInput(),
+    );
+
+    expect(out).toEqual({ ok: false, reason: PREPARE_NO_AGENT_FOR_CAPABILITY });
+    if (out.ok) throw new Error("unreachable");
+    // Y lo que la persona lee al final del cable. Sin la línea 68 esto es el genérico.
+    expect(humanError(out.reason)).toContain("no hay ningún proveedor");
+    expect(humanError(out.reason)).not.toBe("Algo salió mal. Intentá de nuevo.");
+    // La otra mitad: no cayó al default de "4xx que no reconozco", que es a dónde iba sin el `case`.
+    expect(out.reason).not.toBe("prepare_rejected");
+    expect(humanError(out.reason)).not.toBe(humanError("prepare_rejected"));
   });
 
   // El challenge se pide ANTES del prepare y para la MISMA address del body. Si alguien firmara para

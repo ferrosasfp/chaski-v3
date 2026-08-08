@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { NO_AGENT_REASONS_MEANING_NOBODY } from "../../../../src/application/agent-rejections";
 import { FX_DIRECT_AGENT_SLUG } from "../../../../src/infrastructure/a2a/gateway-client";
 import { POST } from "./route";
 
@@ -490,6 +491,38 @@ describe("POST /api/a2a/quote — modo a2a-gateway (WKH-218 / WKH-304)", () => {
     expect(JSON.stringify(warn.mock.calls)).toContain("reputation_unavailable");
     expect(noSabe.directCalls).toHaveLength(0);
   });
+
+  // T-13.6 (CR/BLQ-MED-2) — LOS TRES VALORES DE LA ALLOWLIST, EJERCITADOS CONTRA LA ROUTE.
+  //
+  // Los dos `it` de arriba usan `no_candidates` y nada más. `excluded_by_scope` y
+  // `excluded_by_reputation` estaban en la constante y no los ejercitaba ninguna route: cada uno de
+  // ellos SÍ tiene que salir por el enum de AC-13, y `excluded_by_reputation` es el 422 más probable
+  // en producción con los pisos de reputación en 2.
+  //
+  // Se recorre la CONSTANTE, no una lista copiada: un valor nuevo entra a este `each` solo. Lo que
+  // este `each` NO puede ver es el BORRADO de un valor (deja de correrse y sigue verde); eso lo mata
+  // la tabla del universo en `src/application/agent-rejections.test.ts`.
+  it.each(NO_AGENT_REASONS_MEANING_NOBODY)(
+    "T-13.6/AC-13: el 422 con reason '%s' sale por el enum propio, no por el de caída",
+    async (reason) => {
+      setGatewayEnv();
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const { fn, directCalls } = gwRouter({
+        status: 422,
+        compose: () => ({ code: "no_agent_match", reason, step: 0 }),
+      });
+      vi.stubGlobal("fetch", fn);
+
+      const res = await POST(req({ amountUsd: 400 }));
+      const json = await res.json();
+
+      expect(res.status).toBe(422);
+      expect(json).toEqual({ error: "a2a_no_agent_for_capability" });
+      expect(Object.keys(json)).toEqual(["error"]); // CD-8: cero eco del gateway en el body
+      expect(JSON.stringify(json)).not.toContain(reason); // se ramifica por el reason, no se ecoa
+      expect(directCalls).toHaveLength(0);
+    },
+  );
 
   it("gateway not_configured (falta WASIAI_A2A_GATEWAY_URL) ⇒ 501, sin fetch", async () => {
     vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", "a2a-gateway");

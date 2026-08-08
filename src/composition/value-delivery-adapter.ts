@@ -25,7 +25,13 @@
  * punto a punto de `app/api/a2a/quote/route.ts` y `app/api/payout/prepare/route.ts`. NO es un
  * olvido, y NO se puede sacar antes: hoy `"a2a"` es el valor con el que corre producción y significa
  * "usá los gateways A2A reales". Si saliera del conjunto mientras la env vale `"a2a"`, la app
- * dejaría de arrancar con la configuración vigente (mutante M2, que `container.test.ts:38` mata).
+ * dejaría de arrancar con la configuración vigente (mutante M2).
+ *
+ * ⚠️ A M2 NO LO MATA NINGÚN TEST, Y ACÁ DECÍA QUE SÍ (CR/MNR-1). Este renglón afirmaba que lo mataba
+ * `container.test.ts:38`, una cita sin ancla que además apunta a un `});`. Lo que lo mata es `tsc`,
+ * antes de que corra un solo test: sacar `"a2a"` de este array deja huérfano el `case` de
+ * (`usesRealGateways`, `:78`) y eso es TS2678. Un test no llega a ejecutarse en un árbol que no
+ * compila, así que atribuirle el kill a un `it` describe mal quién está sosteniendo el invariante.
  * Cuando el carril viejo se borre, `"a2a"` pasa a TIRAR: en ese árbol ya no nombra ningún camino.
  *
  * Sacarlo de acá pone en rojo el `case "a2a"` de `usesRealGateways` con un error de `tsc`
@@ -90,7 +96,7 @@ export function usesRealGateways(adapter: ValueDeliveryAdapter): boolean {
  * `""` (env PRESENTE Y VACÍA) ⇒ TIRA, y la distinción con `undefined` no es cosmética: `vercel env
  * pull` escribe VACÍO lo que no puede leer, así que un `""` es una key que alguien escribió y quedó
  * en blanco —una mala configuración— y no una ausencia deliberada. Este repo ya declara esa
- * diferencia en `quote/route.test.ts:276-279`.
+ * diferencia en (`stubEnv`, `../../app/api/a2a/quote/route.test.ts:277-280`).
  *
  * @param raw el valor tal cual sale de `process.env.NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`. Se recibe
  *   por parámetro y NO se lee acá adentro: Next sólo inlinea `process.env.NEXT_PUBLIC_X` cuando

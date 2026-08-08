@@ -191,8 +191,8 @@ export class SolanaWalletAdapter
    * ⚠️ EL FALLBACK NO ES DEFENSIVO: cubre un camino que el flujo recorre SIEMPRE. `this.address` vive
    * sólo en memoria y se escribe sólo en `connect()`, así que una recarga de la página lo borra — y hay
    * una navegación completa en el medio del flujo: el KYC se va a Didit y vuelve
-   * (`flow.tsx:221-227`). Al volver, el resume salta derecho al paso `confirm` sin pasar por
-   * `connect()` (`flow.tsx:163-184`). Antes de este fallback, ahí `getAddress()` contestaba `null`.
+   * (`window.location.href`, `flow.tsx:407`). Al volver, el resume salta derecho a `confirm` sin
+   * pasar por `connect()` (`setStep`, `flow.tsx:222`). Antes, ahí `getAddress()` contestaba `null`.
    *
    * El bridge SÍ sobrevive a esa recarga, y no porque persista nada: lo repuebla el sync component
    * desde `useWallet()` en cuanto `autoConnect` reconecta (`solana-providers.tsx`:50-55 y :107).

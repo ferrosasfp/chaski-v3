@@ -139,7 +139,7 @@ export function resolveAnchorBn(anchorModule: unknown): BnConstructor {
 /**
  * Proveniencias que ESTE script reconoce como NO reales. Es una ALLOWLIST: sólo estos valores dejan
  * seguir la corrida; cualquier otro aborta. No pretende ser "todo lo que existe" — el `provenance`
- * lo elige un agente REMOTO (`provenance`, `src/infrastructure/settlement/http-solana-prepare-gateway.ts:307`
+ * lo elige un agente REMOTO (`provenance`, `src/infrastructure/settlement/http-solana-prepare-gateway.ts:308`
  * lo copia del body sin normalizar), o sea que el dominio del dato es "cualquier string". La cita iba
  * SIN ancla y decía `:298`: WKH-332 insertó líneas arriba y quedó vieja en silencio.
  *
@@ -171,7 +171,7 @@ export type PayoutProvenanceVerdict = {
  *
  * QUÉ ARREGLA (y por qué la dirección importa): antes esto era `provenance === "transfi"` — una
  * DENYLIST de UN valor. Producción usa el mismo dato como ALLOWLIST de lo real
- * (`REAL_PAYOUT_PROVENANCES`, src/presentation/flow-vm.ts:26), donde lo desconocido cae del lado que
+ * (`REAL_PAYOUT_PROVENANCES`, src/presentation/flow-vm.ts:25), donde lo desconocido cae del lado que
  * sobre-avisa. Con la denylist, en cambio, un segundo proveedor real, un "TransFi" con mayúscula o
  * un "transfi-v2" pasaban de largo Y ADEMÁS el script imprimía que la pata fiat estaba en mock. Acá
  * la dirección queda igual que en producción: lo que no se reconoce como no-real, aborta.
@@ -180,7 +180,7 @@ export type PayoutProvenanceVerdict = {
  * smoke lee este dato, la orden de payout YA fue creada por el agente. Este veredicto no la impide;
  * decide si la corrida sigue y si el operador se entera. Por eso lo único inaceptable es que mienta.
  *
- * Comparación EXACTA, la misma que (`REAL_PAYOUT_PROVENANCES.has`, `flow-vm.ts:31`). No se normaliza a minúsculas a
+ * Comparación EXACTA, la misma que (`REAL_PAYOUT_PROVENANCES.has`, `flow-vm.ts:30`). No se normaliza a minúsculas a
  * propósito: si acá "TransFi" fuera "real" y en producción es "desconocido", las dos capas
  * discreparían sobre el mismo string. Con la allowlist no hace falta, porque "TransFi" tampoco está
  * entre las no-reales conocidas y termina abortando igual, sólo que como "desconocida".
@@ -208,7 +208,7 @@ export function classifyPayoutProvenance(
       kind: "real",
       reason:
         `provenance="${provenance}" está en REAL_PAYOUT_PROVENANCES ` +
-        "(src/presentation/flow-vm.ts:26), el conjunto que producción trata como desembolso fiat " +
+        "(src/presentation/flow-vm.ts:25), el conjunto que producción trata como desembolso fiat " +
         "REAL. El alcance autorizado de este smoke es devnet sin dinero real",
     };
   }
@@ -227,7 +227,7 @@ export function classifyPayoutProvenance(
     kind: "desconocida",
     reason:
       `provenance="${provenance}" no está ni en REAL_PAYOUT_PROVENANCES ` +
-      `(src/presentation/flow-vm.ts:26) ni entre las no-reales conocidas (${known}). La comparación ` +
+      `(src/presentation/flow-vm.ts:25) ni entre las no-reales conocidas (${known}). La comparación ` +
       "es exacta, igual que en producción: un proveedor nuevo, un typo o la misma palabra con otra " +
       "capitalización caen acá. Se aborta porque no se puede descartar que sea un desembolso real",
   };

@@ -30,7 +30,7 @@ export const ESCROW_REFUNDED_BY_SENDER = "escrow_refunded_by_sender";
  *  ⚠️ `confirmed` FALTABA, y era la ventana más cara de las cuatro. Es el estado en el que la persona
  *  YA firmó la autorización del depósito y nadie llegó a registrar el desenlace: dura los hasta 15 s
  *  del timeout del settle más el broadcast, y quien cierre el navegador ahí puede tener sus USDC en el
- *  vault. `escrowFundsKnowledge` ya lo clasificaba como `unverified` (`escrowFundsKnowledge`, `flow-vm.ts:194`), o sea que el
+ *  vault. `escrowFundsKnowledge` ya lo clasificaba como `unverified` (`escrowFundsKnowledge`, `flow-vm.ts:206`), o sea que el
  *  historial lo listaba, lo declaraba abrible y lo mandaba al seguimiento, y ahí no había ninguna
  *  acción: la pantalla decía "no comprobamos si tus USDC siguen en el escrow" y no ofrecía preguntarlo.
  *

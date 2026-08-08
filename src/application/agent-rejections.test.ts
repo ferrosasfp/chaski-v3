@@ -112,7 +112,7 @@ describe("agent-rejections — la allow-list decide, no el agente", () => {
 //
 // El universo es exhaustivo por TIPO (`Record<Reason, boolean>` sobre una unión), así que un `reason`
 // nuevo del gateway sin fila acá es `tsc` rojo y no un caso que alguien se olvidó — misma técnica que
-// (`CABLEADO`, `../composition/container.test.ts:124`).
+// (`CABLEADO`, `../composition/container.test.ts:129`).
 describe("noAgentMeansNobodyFits — el 422 son CUATRO desenlaces y sólo tres dicen 'no hay quién'", () => {
   // Los cuatro `reason` que el gateway puede mandar en un 422, MEDIDOS en
   // `wasiai-a2a/src/services/capability-resolver.ts:69-80`. Esto NO es una copia de la constante que

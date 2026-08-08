@@ -493,7 +493,7 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
 
   // ── Hallazgo #75 — cinco causas, un enum ───────────────────────────────────
   // `prepare_no_deposit_address` cubría los cuatro rechazos del agente (que llegan en su campo
-  // (`reason`, `route.ts:77`), validado de TIPO y nunca leído) MÁS el provider mock. Acá decía
+  // (`reason`, `route.ts:88`), validado de TIPO y nunca leído) MÁS el provider mock. Acá decía
   // `route.ts:62`, sin ancla, y esa línea es el cuerpo de `isRecord`: dice `typeof v === "object"`,
   // o sea que un lector apurado ve un `typeof` y da la cita por buena sin haber comprobado nada
   // (CR/MNR-1). Cada `it` de acá
@@ -764,7 +764,7 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       );
       expect(res.status).toBe(200);
       const json = (await res.json()) as Record<string, unknown>;
-      // Shape EXACTO de isValidSolanaPrepareShape (http-solana-prepare-gateway.ts:48).
+      // Shape EXACTO de isValidSolanaPrepareShape (http-solana-prepare-gateway.ts:87).
       expect(json.beneficiary).toBe(SOL_BENEFICIARY);
       expect(json.authority).toBe(authorityPubkey);
       expect(json.payoutId).toBe("transfi-po-1");
@@ -806,7 +806,7 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       }
     });
 
-    it("AC-3: depositAddress base58 válido pero payoutId ausente (vacío/whitespace) → 502 prepare_no_deposit_address (guard route.ts:272-275)", async () => {
+    it("AC-3: depositAddress base58 válido pero payoutId ausente (vacío/whitespace) → 502 prepare_no_deposit_address (guard route.ts:451-455)", async () => {
       // payoutId="" pasa isValidPayoutResult (status submitted) pero muere en el guard fail-closed:
       // no se atesta una orden sin id trackeable. (payoutId=null+submitted lo caza antes PR8 → upstream_error.)
       for (const badPayoutId of ["", "   "]) {
@@ -1326,7 +1326,7 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
 
     // ── CANDADO: el leg de payout NUNCA pide el carril de estreno ─────────────────────────────
     //
-    // Hasta acá lo único que sostenía esta decisión era un comentario en la route (route.ts:211,
+    // Hasta acá lo único que sostenía esta decisión era un comentario en la route (route.ts:377,
     // "CD-5: NUNCA omitir") y dos asserts colgados del happy path (T-A5.1, arriba). Eso alcanza
     // contra un descuido y NO alcanza contra el escenario que de verdad va a pasar, que está medido
     // y es este: el día que se encienda `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER=a2a-gateway`, el agente
@@ -1363,7 +1363,7 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       }
 
       /** Escanea el body de /compose SALVO el `input` de cada step. El `input` es el body del caller
-       *  TAL CUAL (route.ts:212): una clave con ese nombre ahí la puso quien llamó, no este leg, y el
+       *  TAL CUAL (route.ts:378): una clave con ese nombre ahí la puso quien llamó, no este leg, y el
        *  gateway sólo lee el carril dentro de `constraints`. Todo lo demás del body SÍ se escanea,
        *  así que la clave no se salva escondiéndola a nivel step ni a nivel raíz. */
       function trialKeysSentTo(rawBody: string): string[] {

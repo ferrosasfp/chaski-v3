@@ -229,7 +229,7 @@ export class HttpSolanaPayoutPrepareGateway implements SolanaPayoutPrepareGatewa
     }
     if (!proof) {
       // `null` = el emisor respondió 501: el server NO tiene PAYOUT_POP_SECRET. La route lee ESA MISMA
-      // env y respondería 503 `payout_pop_unavailable` (route.ts:143-145). Cortamos acá con el enum
+      // env y respondería 503 `payout_pop_unavailable` (route.ts:214-217). Cortamos acá con el enum
       // idéntico en vez de gastar un POST y un token de rate-limit en un rechazo ya determinado.
       return { ok: false, reason: "payout_pop_unavailable" };
     }

@@ -1200,7 +1200,7 @@ export function TrackView({
   // ⚠️ `confirmed` NO ESTABA ACÁ, y era el agujero: es el estado en el que la persona ya firmó la
   // autorización y nadie registró el desenlace (los hasta 15 s del timeout del settle más el
   // broadcast). El historial SÍ lo listaba y SÍ lo declaraba abrible, porque `escrowFundsKnowledge` lo
-  // clasifica como `unverified` (`escrowFundsKnowledge`, `flow-vm.ts:194`): la persona leía "No comprobamos si tus USDC siguen
+  // clasifica como `unverified` (`escrowFundsKnowledge`, `flow-vm.ts:206`): la persona leía "No comprobamos si tus USDC siguen
   // en el escrow", tocaba "Ver seguimiento", y aterrizaba en una pantalla sin ninguna acción. Sus USDC
   // pueden estar en el vault.
   const refundeable =

@@ -215,7 +215,7 @@ describe("una remesa con fondos en el escrow siempre es alcanzable desde la inte
   });
 
   // 🔴 EL CALLEJÓN SIN SALIDA QUE ESTA HU CIERRA. `escrowFundsKnowledge` clasifica `confirmed` como
-  // `unverified` (`escrowFundsKnowledge`, `flow-vm.ts:194`), así que el historial SÍ lo listaba, SÍ decía "No comprobamos si tus
+  // `unverified` (`escrowFundsKnowledge`, `flow-vm.ts:206`), así que el historial SÍ lo listaba, SÍ decía "No comprobamos si tus
   // USDC siguen en el escrow" y SÍ ofrecía "Ver seguimiento". Del otro lado de esa puerta no había
   // ningún botón: `refundeable` no incluía `confirmed`. La persona leía que no sabíamos dónde estaba
   // su plata y no tenía cómo pedir que volviera.

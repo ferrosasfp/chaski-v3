@@ -375,10 +375,10 @@ export async function POST(req: Request): Promise<Response> {
   // se lo había comido (AR/MNR-3). El candado es **T-PR-11 / M-30**: (`composeBody`,
   // `route.test.ts:1739`). MEDIDO (está en el verde de la suite): un POST con
   // `kycVerificationId: "did-QUE-EL-CLIENTE-PROPUSO"` en el body produce un `/compose` que contiene
-  // `did-de-la-fila` y NO contiene el valor del caller. DERIVADO —no lo mutamos, es el guard de una
-  // route de plata— el input que lo pondría en rojo: invertir este spread a
-  // `{ kycVerificationId: …, ...body }`, que además rompe (`toBeLessThan`,
-  // `kyc-verification-id-guard.static.test.ts:150`).
+  // `did-de-la-fila` y NO contiene el valor del caller. Y el input que lo pone en ROJO ya está MEDIDO
+  // (lo aplicó y revirtió el CR; acá no se muta una route de plata): invertir este spread a
+  // `{ kycVerificationId: …, ...body }` da DOS rojos, (`toBeLessThan`,
+  // `kyc-verification-id-guard.static.test.ts:150`) y (`toContain`, `route.test.ts:1738`).
   //
   // `rowVerificationId` acá SIEMPRE viene de una fila que existe: si no había store se cortó con 503
   // y si no había fila se cortó con 403, las dos cosas arriba. No hay ninguna rama que llegue hasta

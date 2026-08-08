@@ -41,11 +41,11 @@ Dónde está eso hoy, en presente:
 
 - **Ya no hay camino punto a punto.** Este bullet decía que era el activo y que llamaba a una base URL
   conocida. WKH-332 borró ese carril: por defecto la app cablea los gateways demo y no llama a ningún agente.
-- **Por capacidad es el único transporte, y arranca apagado.** Es código real, no un plan:
-  `app/api/a2a/quote/route.ts:91-96` y `app/api/payout/prepare/route.ts:391-395` mandan una `capability`
-  al gateway y lo dejan elegir el agente. La pata de payout además lleva un piso de reputación como
-  constraint. Las dos patas están detrás de `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER=a2a-gateway`, que no es
-  el default.
+- **Por capacidad es el único transporte; lo que arranca apagado es el cableado, no las routes.**
+  `app/api/a2a/quote/route.ts:91-96` y `app/api/payout/prepare/route.ts:391-395` mandan una `capability`,
+  con un piso de reputación en cada pata, y el gateway elige. `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` decide
+  qué cablea el container del CLIENTE, no qué hacen estas routes: no la leen. El corte que no necesita
+  re-deploy es sacarle la URL o la key del gateway: las dos contestan 501 sin un solo fetch.
 - **Es fail closed a propósito.** Si el gateway no responde, la operación corta. Nunca cae a una llamada
   directa, porque un fallback silencioso crearía la orden de payout con un agente distinto del que el
   resto del flujo tomó como propio.

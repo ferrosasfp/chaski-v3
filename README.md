@@ -39,11 +39,11 @@ Where that stands today, in present tense:
 
 - **There is no point to point path any more.** This bullet said it was the active one, calling a known
   base URL. WKH-332 deleted that rail: by default the app wires the demo gateways and calls no agent.
-- **By capability is the only transport, and it ships off.** It is real code, not a plan:
-  `app/api/a2a/quote/route.ts:91-96` and `app/api/payout/prepare/route.ts:391-395` send a `capability`
-  to the gateway and let it choose the agent. The payout leg additionally carries a reputation floor as
-  a constraint. Both legs are behind `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER=a2a-gateway`, which is not
-  the default.
+- **By capability is the only transport; what ships off is the wiring, not the routes.**
+  `app/api/a2a/quote/route.ts:91-96` and `app/api/payout/prepare/route.ts:391-395` send a `capability`,
+  plus a reputation floor on each leg, and let the gateway choose. `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`
+  picks what the client container wires, not what these routes do: they never read it. The cut that
+  needs no redeploy is dropping the gateway URL or key: both answer 501 with no fetch.
 - **It is fail closed on purpose.** If the gateway does not answer, the operation stops. It never falls
   back to a direct call, because a silent fallback would create the payout order with a different agent
   than the one the rest of the flow was built around.

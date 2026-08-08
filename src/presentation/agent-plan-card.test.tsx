@@ -138,7 +138,7 @@ describe("T-7.1: la tarjeta ya no puede afirmar que un paso corra por un agente 
   });
 
   // 🔴 EL MODO DEMO, que es la razón por la que `transport` sobrevivió al borrado (DT-8). Sin este
-  // campo la fila diría "corre por el gateway" mientras corre un simulador local.
+  // campo la fila diría "corre por el gateway" mientras un simulador local cotiza.
   it("en modo demo NO dice que el paso corra por el gateway: dice que lo simula", async () => {
     await verLaTarjeta([paso({ transport: "demo" })], 0.03);
     expect(screen.getByText(/esta app está en modo demo y lo simula/)).toBeInTheDocument();

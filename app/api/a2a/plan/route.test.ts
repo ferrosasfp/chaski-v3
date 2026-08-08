@@ -126,7 +126,7 @@ describe("GET /api/a2a/plan — el preview de quién atiende la remesa", () => {
 
   // La env AUSENTE cae del lado del demo, igual que en el container (`resolveValueDeliveryAdapter`
   // traduce `undefined` a `"fallback"`). Sin este caso, un deployment sin la env vería la tarjeta
-  // afirmando que el paso corre por el gateway mientras corre un simulador.
+  // afirmando que el paso corre por el gateway mientras un simulador local cotiza.
   it("la bandera AUSENTE también dice demo, no gateway", async () => {
     vi.stubEnv("WASIAI_A2A_GATEWAY_URL", BASE);
     vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", undefined as unknown as string);

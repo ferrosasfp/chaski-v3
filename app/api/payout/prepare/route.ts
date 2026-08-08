@@ -357,8 +357,8 @@ export async function POST(req: Request): Promise<Response> {
   // hay ningún valor de esa env que lo detenga. La contra-evidencia está en este mismo commit:
   // (`it.each`, `route.test.ts:1296`) corre con la bandera en `"fallback"` y en `undefined`, y en los
   // dos casos el POST devuelve **200** y forwardea a `${GW}/compose`. Lo cierto es más chico: con
-  // `"fallback"` el container del CLIENTE cablea los simuladores y la UI propia no llama a este
-  // endpoint; un caller que sí lo llame llega igual.
+  // `"fallback"` el container del CLIENTE cablea los simuladores de COTIZACIÓN y de ESTADO. ⚠️ Y NO que *"la UI propia no llama
+  // a este endpoint"*: eso decía y era FALSO (CR2). Con `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED=true` la llama la UI, por `solana.prepare`.
   // 🔴 Y ESO CAMBIA EL ROLLBACK. §9 del Story File nombra el flip a `"fallback"` como la palanca. No
   // corta este handler: sigue creando órdenes TransFi y gastando la Agent Key de Chaski. Lo que sí lo
   // corta sin re-desplegar es sacarle la config del gateway ⇒ `not_configured` ⇒ el 501 de más abajo.

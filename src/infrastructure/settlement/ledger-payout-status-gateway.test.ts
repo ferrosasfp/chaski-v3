@@ -142,8 +142,10 @@ describe("T-337.2 (AC-2): toda degradación cae al NO-TERMINAL, jamás a settled
   // tres campos y no el tercero es la asimetría que abre la puerta, y la puerta da al mismo lugar que
   // DT-6: `isPayoutDemo(123)` es `true` (`123 != null` ✓ y `!has(123)` ✓), así que un `provenance`
   // numérico propagado al agregado prendería "Modo demo" sobre una remesa REAL y liquidada.
-  it("AR/MNR-1: un `provenance` que no es un string no-vacío ⇒ no-terminal, y NO se propaga", async () => {
-    for (const provenance of [123, null, undefined, "", true, {}, ["transfi"]]) {
+  it("AR/MNR-1 + CR/MNR-4: un `provenance` que no está en la ALLOWLIST ⇒ no-terminal, y NO se propaga", async () => {
+    // CR/MNR-4: se agregan los que pasan el filtro de TIPO y NO están en la allowlist. "TransFi" con
+    // mayúscula es el caso que la comparación exacta rechaza a propósito, y el que medía el CR.
+    for (const provenance of [123, null, undefined, "", true, {}, ["transfi"], "TransFi", "transfi ", "local-fallback", "TRANSFI"]) {
       stubFetch(async () => ok({ payout: { outcome: "known", status: "settled", provenance } }));
       const rec = await gateway({}).status(PAYOUT);
       expect(rec.status, `provenance=${JSON.stringify(provenance)}`).toBe("submitted");
@@ -189,12 +191,23 @@ describe("T-337.3 (AC-3): una proveniencia que no está en la allowlist no puede
     },
   );
 
-  it("y si el server AFIRMARA `known` con una proveniencia de demo, el gateway la propaga TAL CUAL sin inventar", async () => {
-    // Este caso no lo puede producir la ruta (filtra antes), y se mide igual: lo que NO puede pasar es
-    // que el cliente rellene un default. Si algún día el server cambia, el valor que viaja es el suyo.
+  // 🔴 CR/MNR-4 — ESTE `it` CAMBIÓ DE PREGUNTA, Y HACIA EL LADO SEGURO. Antes decía: "si el server
+  // AFIRMARA `known` con una proveniencia de demo, el gateway la propaga TAL CUAL sin inventar", y
+  // asertaba `rec.provenance === "local-fallback"`. Con la validación contra la allowlist ese caso ya no
+  // llega a `known`: se RECHAZA.
+  //
+  // CD-11 · «¿qué mutante dejaría de morir si lo cambio así?» El mutante que el assert viejo mataba era
+  // *"el cliente rellena un default en vez de usar el valor del server"* (p. ej. hardcodear `"transfi"`).
+  // **Sigue muriendo, y con MÁS fuerza**: ahora se assertea que el record NO trae la proveniencia ajena
+  // (no la propaga) **Y** que NO trae una de la allowlist (no la inventa) **Y** que el desenlace es
+  // no-terminal. El `it` quedó igual de fuerte o más, no más corto — que es la señal de que el cambio es
+  // el correcto.
+  it("una proveniencia de demo en un `known` del server se RECHAZA: ni se propaga ni se inventa otra", async () => {
     stubFetch(async () => ok({ payout: { outcome: "known", status: "settled", provenance: "local-fallback" } }));
     const rec = await gateway({}).status(PAYOUT);
-    expect(rec.provenance).toBe("local-fallback");
+    expect(rec.status, "un desembolso que no podemos afirmar real no puede liquidar la remesa").toBe("submitted");
+    expect(rec.provenance, "no se propaga la proveniencia ajena").not.toBe("local-fallback");
+    expect(rec.provenance, "y NO se rellena un default de la allowlist: eso sería inventar").not.toBe("transfi");
   });
 });
 

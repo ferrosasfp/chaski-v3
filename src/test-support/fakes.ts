@@ -14,7 +14,7 @@ import { canonicalizeAddress } from "../infrastructure/address";
 // WKH-337: la allowlist de proveniencias REALES se IMPORTA (no se copia). El docblock de la constante
 // dice por qué: "un segundo Set con los mismos valores es exactamente cómo se desincronizan las dos
 // capas". Precedente de import fuera de `presentation/`: `scripts/smoke-helpers.ts`.
-import { REAL_PAYOUT_PROVENANCES } from "../presentation/flow-vm";
+import { REAL_PAYOUT_PROVENANCES } from "../domain/payout-provenance"; // CR/MNR-4: capas
 import type {
   Clock,
   EscrowRefundConfirmation,

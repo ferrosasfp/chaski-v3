@@ -166,10 +166,10 @@ export class A2aPayoutGateway implements PayoutGateway {
    * que un 502 transitorio del agente. Eso manda a buscar el problema a la red y al deploy del agente,
    * cuando lo que falta es una ruta que nadie va a levantar. El nombre del error es el diagnóstico.
    *
-   * Por qué la clase sigue viva: `status()` SÍ se usa en producción (`TrackRemittance` lo llama vía el
-   * puerto `PayoutGateway`, `track-remittance.ts:8`) y el container la cablea (`NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`, `container.ts:114`). Lo
-   * muerto es este método, no el adapter. Y hoy NADIE lo invoca: el único consumidor del puerto es
-   * `TrackRemittance`, que sólo llama a `status()`.
+   * Por qué NO se borró, que no es lo mismo que estar viva (CR/BLQ-MED-1): acá decía que `status()` "SÍ
+   * se usa en producción" y que "el container la cablea", y WKH-337 volvió falsas las DOS mitades. MEDIDO:
+   * cero apariciones de `A2aPayoutGateway` en `container.ts`, y `useA2a` tiene UN solo consumidor, las
+   * quotes (`quotes`, `../../composition/container.ts:123`). Hoy cablea (`payouts`, `../../composition/container.ts:127`). Se conserva por R-2.
    *
    * Si algún día vuelve a hacer falta un submit desde el cliente, hay que construir la ruta primero.
    * Este throw es lo que impide que se "arregle" apuntándolo a cualquier otro lado.

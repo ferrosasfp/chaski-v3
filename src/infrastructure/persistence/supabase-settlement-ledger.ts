@@ -22,7 +22,7 @@ import type {
   WebhookFailureClass,
   WebhookOutcome,
 } from "../../application/ports";
-import { REAL_PAYOUT_PROVENANCES } from "../../presentation/flow-vm"; // WKH-337, ver `lookupPayoutOutcome`
+import { REAL_PAYOUT_PROVENANCES } from "../../domain/payout-provenance"; // CR/MNR-4: capas, ya no presentation
 import { getSupabaseServerClient } from "./supabase-server";
 import { logLedgerAlert } from "./ledger-alert";
 import { WEBHOOK_FAILURE_CLASSES } from "./webhook-failure-classes";

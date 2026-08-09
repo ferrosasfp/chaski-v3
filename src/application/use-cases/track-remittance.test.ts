@@ -12,6 +12,7 @@ import {
 } from "../../test-support/fakes";
 import { LedgerRefundGateway } from "../../infrastructure/refund/ledger-refund-gateway";
 import { TrackRemittance } from "./track-remittance";
+import type { PayoutGateway, PayoutRecord } from "../ports";
 
 const passKyc: KycVerification = {
   verificationId: "v-1",
@@ -318,5 +319,81 @@ describe("TrackRemittance + el ledger (WKH-337)", () => {
       expect(refund.calls, "un 'no sé' no puede disparar un credit-back").toHaveLength(0);
       vi.unstubAllGlobals();
     }
+  });
+});
+
+// ── 🔴 CR · DEFENSA EN PROFUNDIDAD: el record tiene que hablar del payout que se pidió ───────────────
+//
+// POR QUÉ EXISTE ESTA LÍNEA, Y POR QUÉ NACE CON TEST. `TrackRemittance` confiaba en que
+// `payouts.status(s.payoutId)` devolviera un record DE ESE payout, y WKH-337/AR-BLQ-ALTO-1 fue
+// exactamente su violación: un caché sin clave en el gateway devolvía el desenlace de OTRA remesa, y
+// como `settled` no está en `RECOVERABLE` el remitente perdía su único camino a sus USDC.
+//
+// Ese bug se arregló EN EL GATEWAY (la clave del memo es un tipo brandeado). Esta guarda es la segunda
+// línea: hace que NINGÚN gateway futuro pueda producir el mismo daño desde acá. Sin este test la guarda
+// nacería mutation-dead — el blast radius medido por el CR es 0 tests, porque todos los dobles echoean
+// el `payoutId` que se les pide, así que nada la ejercita por accidente.
+describe("TrackRemittance — un record de OTRO payout no toca la remesa (CR)", () => {
+  /** Doble que MIENTE sobre de qué payout habla: devuelve un terminal con un `payoutId` ajeno. */
+  const gatewayMentiroso = (rec: Partial<PayoutRecord>): PayoutGateway => ({
+    submit: async () => {
+      throw new Error("no se usa");
+    },
+    status: async () => ({
+      payoutId: "payout-de-OTRA-remesa",
+      status: "settled",
+      deliveredPen: null,
+      txRef: null,
+      failureReason: null,
+      provenance: "transfi",
+      ...rec,
+    }),
+  });
+
+  it("un `settled` cuyo payoutId NO es el de la remesa la deja en `payout_submitted`", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedSubmitted(repo);
+    const refund = new FakeRefundGateway();
+    const out = await new TrackRemittance(
+      gatewayMentiroso({}),
+      repo,
+      new FixedClock(),
+      refund,
+    ).execute({ remittanceId: id });
+
+    expect(
+      out.status,
+      "la remesa se liquidó con el desenlace de OTRO payout: `settled` es irreversible (no está en " +
+        "RECOVERABLE), así que esto le quita al remitente su único camino a sus USDC",
+    ).toBe("payout_submitted");
+    expect(out.snapshot.payoutProvenance).toBeNull(); // no se pisó nada
+    expect(refund.calls).toHaveLength(0);
+  });
+
+  it("y un `failed` ajeno tampoco dispara el credit-back", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedSubmitted(repo);
+    const refund = new FakeRefundGateway();
+    const out = await new TrackRemittance(
+      gatewayMentiroso({ status: "failed", failureReason: "payout_failed_provider" }),
+      repo,
+      new FixedClock(),
+      refund,
+    ).execute({ remittanceId: id });
+    expect(out.status).toBe("payout_submitted");
+    expect(refund.calls, "un desenlace ajeno no puede mover plata de esta remesa").toHaveLength(0);
+  });
+
+  it("el control positivo: con el payoutId CORRECTO la guarda no estorba", async () => {
+    // Sin esto, borrar la guarda y además romper el camino feliz daría verde en los dos `it` de arriba.
+    const repo = new InMemoryRepo();
+    const id = await seedSubmitted(repo);
+    const out = await new TrackRemittance(
+      gatewayMentiroso({ payoutId: "p-1" }), // el que `seedSubmitted` usa
+      repo,
+      new FixedClock(),
+      new FakeRefundGateway(),
+    ).execute({ remittanceId: id });
+    expect(out.status).toBe("settled");
   });
 });

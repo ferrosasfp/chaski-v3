@@ -90,8 +90,8 @@ interface PlanStep {
    * campo junto con `runsTodayAgentId`; se cumplió la primera mitad y no la segunda, y el motivo es
    * falsable: `"fallback"` sigue siendo un valor legal de `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`, y con
    * él la COTIZACIÓN la arma un simulador local (`FallbackQuoteGateway`, `container.ts:123`). El otro
-   * adapter que cableaba, `FallbackPayoutGateway`, ya no se cablea (WKH-337): su consumidor de producción
-   * pollea estado (`this.payouts`, `track-remittance.ts:47`). Sin este campo la tarjeta afirmaría *"corre
+   * adapter que cableaba, `FallbackPayoutGateway`, ya no se cablea (WKH-337) y NO tiene consumidor de
+   * producción: sólo se construye en su propio test. Sin este campo la tarjeta afirmaría *"corre
    * por el gateway, que elige al ejecutar"* mientras la cotización la da un mock: mide una cosa y afirma otra.
    *
    * `"punto-a-punto"` desapareció con el carril que nombraba. Se deriva de un VALOR DE BANDERA, y

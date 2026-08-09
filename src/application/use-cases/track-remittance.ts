@@ -45,6 +45,12 @@ export class TrackRemittance {
     if (r.isTerminal || !s.payoutId || s.status !== "payout_submitted") return r;
 
     const rec = await this.payouts.status(s.payoutId);
+    // 🔴 DEFENSA EN PROFUNDIDAD (CR, autorizado). El record TIENE que hablar del payout que se pidió.
+    // Este use-case confiaba en eso, y WKH-337/AR-BLQ-ALTO-1 fue exactamente su violación: un caché sin
+    // clave en el gateway devolvía el desenlace de OTRA remesa, y como `settled` no está en
+    // `RECOVERABLE` el remitente perdía su único camino a sus USDC. Eso se arregló en el gateway; esta
+    // línea hace que NINGÚN gateway futuro pueda volver a producir ese daño desde acá.
+    if (rec.payoutId !== s.payoutId) return r;
     if (rec.status === "settled") {
       // MNR-D: la reconciliación va DENTRO de un try/catch — simétrico con ConfirmAndSend. Si
       // isDeliveredWithinReceiveTolerance lanzara (ej. reconcile_currency_mismatch por monedas

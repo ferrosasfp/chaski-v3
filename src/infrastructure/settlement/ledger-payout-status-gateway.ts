@@ -21,6 +21,7 @@
 // (`PopProofReader`, `../../application/ports.ts:150`), así que `tsc` lo impide. Es el patrón estructural
 // de WKH-338 (el invariante como forma del tipo). ⛔ PROHIBIDO pasarle un `PopSigner` "para
 // simplificar": reintroduce el defecto entero, y no compila.
+import { isRealPayoutProvenance } from "../../domain/payout-provenance";
 import type {
   Clock,
   PayoutGateway,
@@ -207,8 +208,16 @@ export class LedgerPayoutStatusGateway implements PayoutGateway {
     // `{"outcome":"known","status":"settled","provenance":123}`: el número viajaba tal cual al agregado,
     // y `isPayoutDemo(123)` es `true` (`123 != null` ✓ y `!has(123)` ✓) ⇒ **banner "Modo demo" sobre una
     // remesa REAL y liquidada**. Es DT-6 otra vez, por otra puerta: no por el `""` sino por el tipo.
-    // Un `provenance` que no es un string no es una proveniencia ⇒ no sabemos de qué desembolso habla.
-    if (typeof payout.provenance !== "string" || payout.provenance.length === 0) {
+    //
+    // 🔴 CR/MNR-4 — Y SE VALIDA CONTRA LA ALLOWLIST, NO SÓLO POR TIPO. Antes bastaba un string no vacío,
+    // mientras `outcome` y `status` se validan contra conjuntos CERRADOS (`:199`, `:202`). MEDIDO con
+    // `provenance: "TransFi"` (mayúscula, que la comparación exacta rechaza a propósito): pasaba, la
+    // remesa quedaba `settled` e `isPayoutDemo("TransFi")` es `true` ⇒ el MISMO banner sobre una remesa
+    // real. Hoy no es alcanzable porque la ruta filtra antes, pero apoyar esta garantía en el
+    // comportamiento de otro archivo a dos saltos es exactamente la clase de premisa que DT-6 dice que
+    // caduca. Acá se decide con el conjunto, que es la única fuente (`isRealPayoutProvenance`,
+    // `../../domain/payout-provenance.ts:31`).
+    if (!isRealPayoutProvenance(payout.provenance)) {
       return this.recordar(clave, noSe(payoutId, "payout_status_unknown"), ahoraMs);
     }
 
@@ -221,7 +230,7 @@ export class LedgerPayoutStatusGateway implements PayoutGateway {
     // Y de moneda (`isDeliveredWithinReceiveTolerance` TIRA `reconcile_currency_mismatch`).
     // Consecuencia, ya descrita por el propio use-case: con `deliveredPen: null` la guarda de
     // reconciliación es falsa ⇒ `markSettled(null)` byte-idéntico
-    // (`markSettled`, `../../application/use-cases/track-remittance.ts:55`). Cero lógica nueva.
+    // (`markSettled`, `../../application/use-cases/track-remittance.ts:61`). Cero lógica nueva.
     //
     // 🔴 `provenance` es LA DE LA FILA, jamás `""` (DT-6). La ruta sólo la devuelve cuando está en la
     // allowlist de proveniencias reales, así que este valor no puede prender el banner de demo.

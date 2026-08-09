@@ -15,6 +15,10 @@
 // aprobar, la carrera se perdía SIEMPRE.
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// El enum REAL, a propósito: este archivo NO mockea `@solana/wallet-adapter-base`, así que los tests de
+// la gracia usan los mismos valores que la librería le pone a cada adapter. Con strings escritos a mano
+// un typo pasaría desapercibido y el criterio quedaría sin vigilar.
+import { WalletReadyState } from "@solana/wallet-adapter-base";
 import { solanaWalletBridge } from "../../infrastructure/solana-wallet-bridge";
 
 // Estado mutable de los hooks, compartido con las factorías de vi.mock (hoisted).
@@ -234,5 +238,170 @@ describe("SolanaProviders — cableado de onError", () => {
     expect(() =>
       onError?.(Object.assign(new Error("boom"), { name: "WalletConnectionError" })),
     ).not.toThrow();
+  });
+});
+
+// ── WKH-341 / D-5 — la OTRA carrera: la de la disponibilidad ───────────────────────────────────────
+//
+// EL DEFECTO, medido en la fuente de la librería y no supuesto. El efecto de disponibilidad escribía
+// `"none"` en el PRIMER render tras el montaje si ningún adapter reportaba `Installed`. Y en ese primer
+// render la lista de Wallet Standard es la foto SÍNCRONA de
+// node_modules/@solana/wallet-standard-wallet-adapter-react/src/useStandardWalletAdapters.ts:10: las
+// altas llegan después, por `on('register')` (:12-26). O sea que un teléfono DENTRO del navegador de
+// Phantom veía "no vemos ninguna wallet" en la única puerta de entrada de la app, y lo veía antes de
+// que hubiera con qué decirlo.
+//
+// El arreglo es una gracia corta anclada al MONTAJE (dos efectos, ver `solana-providers.tsx`). Estos
+// siete tests clavan, en orden de importancia:
+//   1. que después de la gracia el aviso SÍ aparece (T-341-7/8) — sin esto el arreglo sería "nunca
+//      avisar", que rompe justo el caso que AC-5 protege;
+//   2. que la pared NO se desliza con cada `readyStateChange` (T-341-9);
+//   3. que un alta tardía cancela el aviso sin pasar por `"none"` (T-341-10/11);
+//   4. que el criterio sigue siendo `Installed` y NADA más (T-341-12);
+//   5. que antes de la gracia el estado es `"unknown"`, no `"none"` (T-341-13).
+//
+// ⚠️ CD-8 — POR QUÉ LOS NÚMEROS VAN LITERALES (`1499`, `1500`) Y NO SE IMPORTA `WALLET_GRACE_MS`.
+// Un test que avanzara el reloj por la propia constante que vigila pasaría con CUALQUIER valor,
+// incluidos diez minutos: sería un guard que se compara consigo mismo y aplaudiría cualquier cosa. En
+// este repo eso ya pasó y tiene su lección escrita. La frontera 1499/1500 está en literales a
+// propósito, y si alguien mueve la constante estos tests se ponen rojos — que es todo el punto.
+//
+// ⚠️ NADA DE DORMIR: se avanza un reloj FALSO. Ningún test de este bloque tarda 1.5 s de verdad.
+//
+// 📋 T-341-15 (AC-8) — SIN TEST, Y ESTE ES EL MOTIVO. El AC pedía verificar que
+// `@solana-mobile/wallet-adapter-mobile` esté presente (es lo que hace que Wallet Standard registre la
+// wallet en un teléfono). MEDIDO: está presente, instalado ANIDADO en
+// node_modules/@solana/wallet-adapter-react/node_modules/@solana-mobile/wallet-adapter-mobile/. La
+// sonda válida es la del consumidor —`require.resolve(pkg, {paths:["node_modules/@solana/wallet-adapter-react/lib/cjs"]})`
+// resuelve, y `require("@solana/wallet-adapter-react")` carga OK—. Las sondas que miran sólo la raíz
+// (`ls node_modules/@solana-mobile/…`, o un `require.resolve` desde la raíz) dicen "ausente" y están
+// EQUIVOCADAS: sólo miden la posición hoisted. No hay test porque un test que resolviera ese paquete
+// no protegería ninguna línea del código de esta HU: vigilaría el árbol de npm, no el nuestro.
+describe("SolanaWalletBridgeSync — la gracia antes de afirmar 'acá no hay ninguna wallet'", () => {
+  // Local a este describe para NO contaminar los T-RACE-*/T-SIGN-*/T-ERR- de arriba, que corren con
+  // timers reales. Los hooks anidados corren antes que el `afterEach` de archivo.
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Monta el sync component con una lista de adapters dada y el reloj ya falseado. */
+  function montar(readyStates: string[]) {
+    vi.useFakeTimers();
+    h.wallet = { ...h.wallet, wallets: readyStates.map((readyState) => ({ readyState })) };
+    return render(<SolanaWalletBridgeSync />);
+  }
+
+  /** Cambia la lista de adapters con una identidad NUEVA (es lo que dispara el efecto A). */
+  async function cambiarWallets(
+    rerender: (ui: React.ReactElement) => void,
+    readyStates: string[],
+  ) {
+    await act(async () => {
+      h.wallet = { ...h.wallet, wallets: readyStates.map((readyState) => ({ readyState })) };
+      rerender(<SolanaWalletBridgeSync />);
+    });
+  }
+
+  async function avanzar(ms: number) {
+    await act(async () => {
+      vi.advanceTimersByTime(ms);
+    });
+  }
+
+  it("T-341-7 (AC-5): sin ninguna wallet, pasada la gracia el aviso SÍ aparece", async () => {
+    // 🔴 EL TEST QUE PROTEGE LA PUERTA DE ENTRADA. Es el que impide "arreglar" D-5 no avisando nunca.
+    // INPUT QUE LO PONE EN ROJO: borrar el efecto B (el del setTimeout); o implementar la variante
+    // descartada de "esperar a que la lista cambie al menos una vez" — en un escritorio pelado no
+    // llega NINGÚN cambio nunca y el estado quedaría en `"unknown"` para siempre.
+    montar([]);
+    await avanzar(1500);
+    expect(solanaWalletBridge.getWalletAvailability()).toBe("none");
+  });
+
+  it("T-341-8 (AC-5): la frontera — a 1499 ms todavía no se afirma nada, a 1500 sí", async () => {
+    // Los números van LITERALES, no importados de `WALLET_GRACE_MS` (CD-8, ver el docblock de arriba).
+    // INPUT QUE LO PONE EN ROJO: subir la gracia a 5000 ⇒ a 1500 sigue en `"unknown"`. Y bajarla a 0
+    // ⇒ a 1499 ya es `"none"`. Los dos lados de la pared quedan clavados.
+    montar([]);
+    await avanzar(1499);
+    expect(solanaWalletBridge.getWalletAvailability()).toBe("unknown");
+    await avanzar(1);
+    expect(solanaWalletBridge.getWalletAvailability()).toBe("none");
+  });
+
+  it("T-341-9 (AC-5): la pared NO se desliza con cada cambio de la lista de adapters", async () => {
+    // 🔴 ESTE ES EL TEST DEL MECANISMO, no del resultado. La identidad de `wallets` cambia en cada
+    // `readyStateChange` (WalletProviderBase.js:104-118). Si el timer se re-armara —un `clearTimeout`
+    // en el cleanup de `[wallets]`— el retraso total pasaría a depender de cuántas transiciones emita
+    // la librería, y con dos cambios el aviso llegaría a t=2500 en vez de t=1500.
+    // INPUT QUE LO PONE EN ROJO: exactamente esa versión con `clearTimeout` en el cleanup de
+    // `[wallets]` ⇒ a t=1500 sigue en `"unknown"`.
+    const { rerender } = montar([]);
+    await avanzar(500);
+    await cambiarWallets(rerender, [WalletReadyState.NotDetected]);
+    await avanzar(500); // t = 1000
+    await cambiarWallets(rerender, [WalletReadyState.NotDetected, WalletReadyState.Loadable]);
+    expect(solanaWalletBridge.getWalletAvailability()).toBe("unknown");
+    await avanzar(500); // t = 1500 EXACTO
+    expect(solanaWalletBridge.getWalletAvailability()).toBe("none");
+  });
+
+  it("T-341-10 (AC-6): un alta DENTRO de la gracia nunca deja pasar por 'none'", async () => {
+    // Lo que este test observa no es el estado final, es el CAMINO: `subscribeWalletAvailability`
+    // registra cada transición, así que un destello de `"none"` de un solo cuadro se ve igual.
+    // INPUT QUE LO PONE EN ROJO: el código anterior a esta HU, que escribía
+    // `hayInstalada ? "injected" : "none"` en el primer efecto ⇒ el camino arranca con `"none"`.
+    const transiciones: string[] = [];
+    const desuscribir = solanaWalletBridge.subscribeWalletAvailability(() => {
+      transiciones.push(solanaWalletBridge.getWalletAvailability());
+    });
+    try {
+      const { rerender } = montar([]);
+      await avanzar(800);
+      await cambiarWallets(rerender, [WalletReadyState.Installed]);
+      expect(solanaWalletBridge.getWalletAvailability()).toBe("injected");
+      // Y la gracia que ya estaba en curso no lo pisa cuando vence.
+      await avanzar(2200); // t = 3000
+      expect(solanaWalletBridge.getWalletAvailability()).toBe("injected");
+      expect(transiciones).not.toContain("none");
+      expect(transiciones).toContain("injected");
+    } finally {
+      desuscribir();
+    }
+  });
+
+  it("T-341-11 (AC-6): un alta DESPUÉS de la gracia corrige el aviso sin remontar nada", async () => {
+    // Sin esto, alguien que abre la app en el navegador de Phantom, ve el aviso y recién entonces
+    // instala/desbloquea la wallet quedaría con el cartel puesto hasta recargar. No hay interacción ni
+    // remontaje en este test: sólo llega el alta.
+    // INPUT QUE LO PONE EN ROJO: cambiar las deps del efecto A de `[wallets]` a `[]` ⇒ queda clavado
+    // en `"none"`.
+    const { rerender } = montar([]);
+    await avanzar(1500);
+    expect(solanaWalletBridge.getWalletAvailability()).toBe("none");
+    await cambiarWallets(rerender, [WalletReadyState.Installed]);
+    expect(solanaWalletBridge.getWalletAvailability()).toBe("injected");
+  });
+
+  it("T-341-12 (CD-1): `Loadable` NO cuenta como wallet presente", async () => {
+    // 🔴 EL PAR OBLIGATORIO. Sin este test, T-341-10 se pasa "arreglando" D-5 con
+    // `readyState !== NotDetected`, y eso borraría el aviso en TODO dispositivo: Solflare fija
+    // `Loadable` en su CONSTRUCTOR
+    // (node_modules/@solana/wallet-adapter-solflare/lib/cjs/adapter.js:67-69), o sea que hay un
+    // `Loadable` en la lista incluso en un escritorio sin ninguna extensión instalada.
+    // INPUT QUE LO PONE EN ROJO: aceptar `Loadable` en el criterio ⇒ da `"injected"`.
+    montar([WalletReadyState.Loadable]);
+    await avanzar(1500);
+    expect(solanaWalletBridge.getWalletAvailability()).toBe("none");
+  });
+
+  it("T-341-13 (CD-2): antes de la gracia el estado es 'unknown', que no afirma nada", async () => {
+    // `"unknown"` es lo que hace que `NoWalletHere` NO pinte: su guard es
+    // `if (availability !== "none") return null;` (`flow.tsx:1111`). Este test clava que el arreglo
+    // preserva ese tercer valor en vez de colapsarlo a un "no hay" prematuro.
+    // INPUT QUE LO PONE EN ROJO: escribir `"none"` de arranque (el código anterior a esta HU).
+    montar([]);
+    expect(solanaWalletBridge.getWalletAvailability()).toBe("unknown");
+    expect(solanaWalletBridge.getWalletAvailability()).not.toBe("none");
   });
 });

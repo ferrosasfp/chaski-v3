@@ -104,7 +104,7 @@ afterEach(() => {
 });
 
 // ── (B) CABLEADO: la condición sale de la librería, no de un doble ────────────────────────────────
-async function montarArbolYLeerDisponibilidad(): Promise<string> {
+async function montarArbolYLeerDisponibilidad(esperaMs = 1200): Promise<string> {
   const { default: SolanaProviders } = await import("./solana/solana-providers");
   await act(async () => {
     render(
@@ -116,7 +116,7 @@ async function montarArbolYLeerDisponibilidad(): Promise<string> {
   // La detección de la librería es asíncrona (poliza el scope global cada segundo,
   // `scopePollingDetectionStrategy`), así que se le da tiempo a más de un tick.
   await act(async () => {
-    await new Promise((r) => setTimeout(r, 1200));
+    await new Promise((r) => setTimeout(r, esperaMs));
   });
   return solanaWalletBridge.getWalletAvailability();
 }
@@ -125,7 +125,19 @@ describe("cableado: el árbol REAL empuja la disponibilidad, nadie la setea a ma
   it("T-CABLE-1: celular sin wallet inyectada ⇒ 'none'", async () => {
     setUserAgent(UA_ANDROID_CHROME);
     // ⬅️ Invertir la condición de `solana-providers.tsx` (Installed → !== Installed) mata este test.
-    expect(await montarArbolYLeerDisponibilidad()).toBe("none");
+    //
+    // La espera se subió de 1200 ms a 1700 (WKH-341/D-5). MEDIDO: con 1200 este test daba
+    // «expected 'unknown' to be 'none'». No es un flake ni un timeout de infra: desde D-5 el árbol NO
+    // afirma `"none"` en el primer efecto, espera una gracia de `WALLET_GRACE_MS` (1500 ms) anclada al
+    // montaje, porque el primer render trae la foto SÍNCRONA de la lista de wallets y un teléfono
+    // DENTRO de Phantom perdía esa carrera. O sea que a los 1200 ms el valor correcto es `"unknown"`.
+    //
+    // Estos 1700 ms son de reloj REAL a propósito, y es lo que hace valioso a este test: es el único
+    // que ejercita la librería de verdad (los adapters reales, el polling real) en vez de un reloj
+    // falso. Los tests de la frontera 1499/1500 viven en `solana-providers.test.tsx` (T-341-7/8) y ésos
+    // sí avanzan un reloj falso. Si alguien sube la gracia por encima de 1700, este test se pone rojo
+    // — y eso es correcto: querría decir que un teléfono sin wallet tarda más de 1.7 s en enterarse.
+    expect(await montarArbolYLeerDisponibilidad(1700)).toBe("none");
   });
 
   it("T-CABLE-2: celular DENTRO del navegador de Phantom ⇒ 'injected' (user agent de celular igual)", async () => {

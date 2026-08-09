@@ -15,6 +15,26 @@ import { solanaWalletBridge } from "../../infrastructure/solana-wallet-bridge";
 import { walletErrorCode } from "./wallet-error-code";
 import "@solana/wallet-adapter-react-ui/styles.css";
 
+/**
+ * Cuánto se espera, desde el MONTAJE, antes de poder afirmar "acá no hay ninguna wallet".
+ *
+ * ⚠️ ES UNA PERILLA DE UX, NO DE CORRECCIÓN, y así hay que leerla. Con 900 ms los ACs se cumplen
+ * igual porque el efecto A corrige en cuanto llega el alta; lo único que vuelve es el destello del
+ * aviso. Nada acá afirma que 1500 sea "el valor correcto".
+ *
+ * De dónde sale el número, medido: la detección de Phantom es `setInterval(detectAndDispose, 1000)`
+ * (node_modules/@solana/wallet-adapter-base/lib/cjs/adapter.js:92), o sea primer tick en t=1000.
+ * 1500 deja 500 ms de holgura.
+ *
+ * ⚠️ NO la unifiques con el poll de 1500 ms del seguimiento (`flow.tsx:525`). Coinciden en el número
+ * y no tienen nada que ver: ése mide cada cuánto se le pregunta al backend por una remesa viva.
+ *
+ * Los tests de la gracia NO importan esta constante: avanzan el reloj con `1499` y `1500` LITERALES.
+ * Un test que avanzara por la propia constante que vigila pasaría con cualquier valor, incluidos diez
+ * minutos — sería un guard que se compara consigo mismo (CD-8).
+ */
+export const WALLET_GRACE_MS = 1500;
+
 /** Suscribe useWallet()/useWalletModal() y empuja al singleton React-free. No renderiza DOM.
  *  Exportado SÓLO para el test de la carrera del auto-cierre del modal (ver abajo): montarlo suelto
  *  es la única forma de controlar `visible`/`connecting` cuadro por cuadro. */
@@ -60,11 +80,50 @@ export function SolanaWalletBridgeSync(): null {
   // Y por eso NO se mira el user agent. La pregunta que importa es "¿hay wallet acá?", no "¿es un
   // celular?": un celular DENTRO del navegador de Phantom inyecta igual que un escritorio con la
   // extensión (medido: `Phantom=Installed` con user agent de Android), y ahí no hay nada que avisar.
+  // 🔴 Y ACÁ ESTABA LA CARRERA, medida en la fuente de la librería y no supuesta. Este efecto escribía
+  // `"none"` en el PRIMER render tras el montaje si ningún adapter reportaba `Installed`. En ese primer
+  // render la lista de Wallet Standard es la foto SÍNCRONA de
+  // node_modules/@solana/wallet-standard-wallet-adapter-react/src/useStandardWalletAdapters.ts:10; las
+  // altas llegan después, por `on('register')` (:12-26). O sea que en un teléfono DENTRO del navegador
+  // de Phantom la app afirmaba "no vemos ninguna wallet" en su única puerta de entrada, y lo afirmaba
+  // antes de tener con qué.
+  //
+  // El arreglo es una gracia corta ANCLADA AL MONTAJE, en dos efectos:
+  //   · Efecto A (deps `[wallets]`): si hay `Installed` escribe `"injected"`; si no hay y la gracia YA
+  //     venció escribe `"none"`; si no hay y la gracia sigue en curso NO escribe nada, o sea deja el
+  //     `"unknown"` inicial, que es el valor que no habilita a afirmar nada (CD-2: `NoWalletHere` sólo
+  //     pinta con `"none"`).
+  //   · Efecto B (deps `[]`): UN solo `setTimeout` que marca la gracia como vencida y, si en ESE
+  //     instante no hay `Installed`, escribe `"none"`.
+  //
+  // EL TIMER NO SE RE-ARMA, y eso no es cosmético. Si el `clearTimeout` viviera en el cleanup de
+  // `[wallets]`, la pared se correría en cada cambio de identidad de `wallets`, y esa identidad cambia
+  // en cada `readyStateChange`
+  // (node_modules/@solana/wallet-adapter-react/lib/cjs/WalletProviderBase.js:104-118): el retraso total
+  // pasaría a depender de cuántas transiciones emita la librería. Por eso el efecto B lee un ref
+  // espejo (`hayInstaladaRef`) en vez de la closure de `wallets`. T-341-9 pone esa versión en rojo.
+  //
+  // EL CRITERIO SIGUE SIENDO `Installed` Y NADA MÁS. `Loadable` está prohibido acá: Solflare lo fija en
+  // su constructor (node_modules/@solana/wallet-adapter-solflare/lib/cjs/adapter.js:67-69), así que
+  // aceptarlo borraría el aviso en TODO dispositivo, no sólo en el que hoy pierde la carrera. T-341-12
+  // es el par que lo impide.
+  const hayInstaladaRef = useRef(false);
+  const graciaVencidaRef = useRef(false);
+
   useEffect(() => {
-    solanaWalletBridge.setWalletAvailability(
-      wallets.some((w) => w.readyState === WalletReadyState.Installed) ? "injected" : "none",
-    );
+    const hayInstalada = wallets.some((w) => w.readyState === WalletReadyState.Installed);
+    hayInstaladaRef.current = hayInstalada;
+    if (hayInstalada) solanaWalletBridge.setWalletAvailability("injected");
+    else if (graciaVencidaRef.current) solanaWalletBridge.setWalletAvailability("none");
   }, [wallets]);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      graciaVencidaRef.current = true;
+      if (!hayInstaladaRef.current) solanaWalletBridge.setWalletAvailability("none");
+    }, WALLET_GRACE_MS);
+    return () => clearTimeout(t);
+  }, []);
 
   // Empuja el estado en cada cambio. base58 OPACO (CD-3): publicKey.toBase58(), SIN toLowerCase.
   useEffect(() => {

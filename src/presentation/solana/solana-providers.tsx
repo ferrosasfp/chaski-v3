@@ -19,8 +19,21 @@ import "@solana/wallet-adapter-react-ui/styles.css";
  * Cuánto se espera, desde el MONTAJE, antes de poder afirmar "acá no hay ninguna wallet".
  *
  * ⚠️ ES UNA PERILLA DE UX, NO DE CORRECCIÓN, y así hay que leerla. Con 900 ms los ACs se cumplen
- * igual porque el efecto A corrige en cuanto llega el alta; lo único que vuelve es el destello del
- * aviso. Nada acá afirma que 1500 sea "el valor correcto".
+ * igual, porque el efecto A corrige en cuanto llega el alta. Nada acá afirma que 1500 sea "el valor
+ * correcto".
+ *
+ * 🔴 Y ACOTAR NO ES CERRAR: ESTA CONSTANTE NO ELIMINA EL DESTELLO DEL AVISO. Sólo lo evita para las
+ * altas que llegan ANTES de que la gracia venza. Para CUALQUIER alta posterior el destello sigue
+ * entero: el aviso se pinta y después se va. Y no hace falta una sonda aparte para verlo, es lo que
+ * asierta `T-341-11` en `solana-providers.test.tsx`: avanza el reloj a 1500 (⇒ `"none"`, o sea el
+ * aviso YA está en pantalla), y SÓLO DESPUÉS hace llegar el alta (⇒ `"injected"`). Con una wallet que
+ * aparece a t=1600 la persona lee "no vemos ninguna wallet" y después el cartel desaparece. Lo que
+ * 1500 compra es que el destello dure 0 ms cuando la detección cae en el primer tick (t=1000), contra
+ * los 1000 ms que duraba SIEMPRE antes de esta HU.
+ *
+ * O sea, y que el resumen diga lo mismo que la línea: lo que esta HU ELIMINÓ es el camino que
+ * afirmaba `"none"` en el PRIMER render sin haber medido nada. Lo que queda es un NÚMERO, y lo único
+ * que lo reinicia es el MONTAJE del árbol de providers.
  *
  * De dónde sale el número, medido: la detección de Phantom es `setInterval(detectAndDispose, 1000)`
  * (node_modules/@solana/wallet-adapter-base/lib/cjs/adapter.js:92), o sea primer tick en t=1000.

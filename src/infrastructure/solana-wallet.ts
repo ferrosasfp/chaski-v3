@@ -195,7 +195,7 @@ export class SolanaWalletAdapter
    * pasar por `connect()` (`setStep`, `flow.tsx:222`). Antes, ahí `getAddress()` contestaba `null`.
    *
    * El bridge SÍ sobrevive a esa recarga, y no porque persista nada: lo repuebla el sync component
-   * desde `useWallet()` en cuanto `autoConnect` reconecta (`solana-providers.tsx`:50-55 y :107).
+   * desde `useWallet()` en cuanto `autoConnect` reconecta (`setState`, `solana-providers.tsx:143`).
    * Leerlo es leer un objeto en memoria: NO abre el modal de wallet, NO pide una firma, NO llama a
    * `connect()`. Si autoConnect todavía no terminó, el estado dice `connected:false` y esto contesta
    * `null` — que es la verdad en ese instante, y el llamador ya la sabe distinguir.

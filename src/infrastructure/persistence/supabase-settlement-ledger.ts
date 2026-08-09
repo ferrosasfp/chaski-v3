@@ -666,7 +666,7 @@ export class SupabaseSettlementLedger implements SettlementLedger {
     // (`isPayoutDemo`, `../../presentation/flow-vm.ts:29`), así que su negación leería `null` —que es NO
     // CONSTA— como REAL. Es el inverso exacto de lo que manda la migración 20260804, y el input que lo
     // mide es cualquier fila anterior a ella: MEDIDO en `bdwv`, todas traen `payout_provenance: null`.
-    // La constante se IMPORTA (`REAL_PAYOUT_PROVENANCES`, `../../presentation/flow-vm.ts:25`): un
+    // La constante se IMPORTA (`REAL_PAYOUT_PROVENANCES`, `../../domain/payout-provenance.ts:20`): un
     // segundo Set con los mismos valores es exactamente cómo se desincronizan las dos capas, y lo dice
     // el docblock de la propia constante.
     for (const r of rows) {

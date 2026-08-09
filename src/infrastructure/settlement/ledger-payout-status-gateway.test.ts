@@ -177,7 +177,7 @@ describe("T-337.2 (AC-2): toda degradación cae al NO-TERMINAL, jamás a settled
 //
 // `null` es el caso MEDIDO en `bdwv`: toda remesa vieja lo trae, y NO es "simulada" ni "real" — el dato
 // no se guardó y la migración dice que no se puede backfillear. `"TransFi"` con mayúscula es el caso que
-// la comparación EXACTA rechaza a propósito (`REAL_PAYOUT_PROVENANCES`, `../../presentation/flow-vm.ts:25`).
+// la comparación EXACTA rechaza a propósito (`REAL_PAYOUT_PROVENANCES`, `../../domain/payout-provenance.ts:20`).
 describe("T-337.3 (AC-3): una proveniencia que no está en la allowlist no puede liquidar nada", () => {
   it.each([[null], ["local-fallback"], ["devnet-stub"], ["TransFi"], [""]])(
     "payout_provenance=%s (con la fila en 'settled') ⇒ el gateway devuelve no-terminal",

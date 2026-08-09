@@ -14,8 +14,7 @@
 // DENTRO de la factory en runtime (CD-14).
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
-  PayoutOutcomeLookup,
-  SenderRemittanceRef,
+  PayoutOutcomeLookup, SenderRemittanceRef, // WKH-337: en UNA línea, ver `lookupPayoutOutcome` más abajo
   SettlementLedger,
   SettlementLedgerStatus,
   SettlementRecord,
@@ -23,15 +22,11 @@ import type {
   WebhookFailureClass,
   WebhookOutcome,
 } from "../../application/ports";
-// WKH-337 — se IMPORTA, no se copia (R-5). Mover la constante desplazaría citas de `flow-vm.ts`, y un
-// segundo Set con los mismos valores es cómo se desincronizan las dos capas. Este módulo es
-// SERVER-ONLY, así que el import no arrastra nada nuevo al bundle del browser.
-import { REAL_PAYOUT_PROVENANCES } from "../../presentation/flow-vm";
+import { REAL_PAYOUT_PROVENANCES } from "../../presentation/flow-vm"; // WKH-337, ver `lookupPayoutOutcome`
 import { getSupabaseServerClient } from "./supabase-server";
 import { logLedgerAlert } from "./ledger-alert";
 import { WEBHOOK_FAILURE_CLASSES } from "./webhook-failure-classes";
-import { canonicalizeAddress } from "../address";
-import { resolveSolanaNetworkId } from "../chain";
+import { canonicalizeAddress } from "../address"; import { resolveSolanaNetworkId } from "../chain";
 
 const TABLE = "remittance_settlements";
 
@@ -627,6 +622,19 @@ export class SupabaseSettlementLedger implements SettlementLedger {
     payoutId: string;
     senderAddress: string;
   }): Promise<PayoutOutcomeLookup> {
+    // 🔴 POR QUÉ LOS DOS IMPORTS DE ESTA FUNCIÓN ESTÁN APRETADOS ARRIBA, Y NO LOS DESARMES. El header de
+    // este archivo tiene que ser LÍNEA-NEUTRA respecto de `07882f6`: seis citas `archivo:línea` apuntan a
+    // las líneas 40, 65, 69, 84 y 263 de acá, y viven en archivos fuera del Scope IN de esta HU
+    // (`scripts/smoke-helpers.ts`, `src/composition/prepared-claims-guard.static.test.ts`,
+    // `docs/architecture.md`). MEDIDO: con los imports en 5 líneas propias, el barrido de inbounds
+    // reportaba las SEIS como rotas. ⛔ Si necesitás agregar un import, buscá primero quién cita este
+    // archivo por número.
+    //
+    // `REAL_PAYOUT_PROVENANCES` se IMPORTA y no se copia (R-5): mover la constante desplazaría citas de
+    // `flow-vm.ts`, y un segundo Set con los mismos valores es cómo se desincronizan las dos capas — lo
+    // dice el docblock de la propia constante. Este módulo es SERVER-ONLY, así que el import no arrastra
+    // nada nuevo al bundle del browser.
+    //
     // WKH-337 — el desenlace que el webhook de TransFi ya escribe acá (`recordWebhookOutcome`, abajo)
     // y que hasta ahora no leía nadie. OWNER-SCOPED: el `.eq("sender_address", ...)` es el guard REAL
     // (el service key BYPASSEA RLS), y recibe la address que el PoP VERIFICÓ, nunca un crudo del body.

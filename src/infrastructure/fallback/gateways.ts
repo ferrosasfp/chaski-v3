@@ -1,6 +1,6 @@
 // Infrastructure — adapters FALLBACK (corren sin backend/keys: la DApp funciona end-to-end en demo).
 // Mismo principio que el provider-pattern del backend. NO mueven plata real (payout mock).
-// Los adapters REALES (que llaman a los agentes remit-* vía las API routes) van en ./a2a (post-sandbox).
+// El REAL de la cotización vive en ./a2a; el del ESTADO del payout, en ./settlement (WKH-337) y ya cableado.
 
 import { Money } from "../../domain/money";
 import {

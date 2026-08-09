@@ -409,7 +409,7 @@ describe("createContainer — WKH-333/AC-20: el connectWallet REAL consulta el v
 // ── WKH-337 · T-337.1 (AC-1) — el seguimiento LEE la fuente de verdad, en las TRES configuraciones ──
 //
 // 🔴 QUÉ AGUJERO CIERRA, Y POR QUÉ VA SOBRE EL CONTAINER REAL. Ningún test del repo podía ver el
-// defecto: los 71 de `flow.test.tsx` usan `buildTestContainer` (`FakePayoutGateway`,
+// defecto: los de `flow.test.tsx` usan `buildTestContainer` (WKH-339: decía "los 71" y eran 79 — un conteo a mano envejece con cualquier HU, el criterio no) (`FakePayoutGateway`,
 // `../test-support/test-container.ts:87`) y los de `track-remittance.test.ts` construyen el use-case a
 // mano. O sea que el ÚNICO consumidor de producción del puerto —`TrackRemittance` cableado por
 // `createContainer()`— no lo ejercitaba nadie contra un `fetch`. Con las dos implementaciones viejas

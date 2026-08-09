@@ -1689,7 +1689,7 @@ it("T-6.1: un `provenance` que no está en la allowlist ⇒ NO 'Identidad verifi
 //
 // Molde: `seededFlow` de `history.test.tsx:130`, que es el mismo camino ("Ver mis envíos" → "Ver
 // seguimiento"). Se reescribe acá en vez de importarse porque los helpers de ese archivo son locales.
-it("T-339.2 (AC-1): con la ventana de lectura apagada, el seguimiento ofrece volver a revisar", async () => {
+it("T-339.2 (AC-1): con la ventana de lectura apagada, el seguimiento ofrece revisar ahora", async () => {
   const repo = new InMemoryRepo();
   const rem = solanaPayoutSubmittedSnapshot("2026-07-10T00:00:00.000Z");
   await repo.save(Remittance.rehydrate(rem));
@@ -1715,8 +1715,10 @@ it("T-339.2 (AC-1): con la ventana de lectura apagada, el seguimiento ofrece vol
   // (b) y con dueño conocido: es lo que descarta el estado "sin billetera" como causa del rojo.
   expect(await screen.findByRole("button", { name: /Recuperar fondos/ })).toBeInTheDocument();
 
-  // (c) EL ASERTO. Existe un control accesible para volver a revisar. En presente: el gesto, no la
-  //     historia.
+  // (c) EL ASERTO. Existe un control accesible para revisar AHORA. En presente: el gesto, no la
+  //     historia. ⚠️ El nombre de este `it` y esta línea decían "volver a revisar", que es una de las
+  //     tres frases que el copy tiene PROHIBIDAS (implica que revisábamos antes). Lo cazó el eje
+  //     VECINDAD del barrido de familia, sobre prosa que escribí en esta misma pasada.
   expect(await screen.findByRole("button", { name: /revisar/i })).toBeInTheDocument();
 });
 

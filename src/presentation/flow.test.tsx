@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import React from "react";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -1755,6 +1757,12 @@ function signerQueGraba(store: InMemoryPopProofStore) {
 }
 
 describe("WKH-339 — los siete estados de la ventana de lectura, en pantalla", () => {
+  // ⚠️ EL `sessionStorage` SE LIMPIA ENTRE TESTS, y hace falta desde que el techo sobrevive al remonte
+  // (CR/BLQ-MED-2): sin esto, el primer `it` que agota los 3 intentos deja el contador puesto y los
+  // siguientes arrancan con el botón deshabilitado. Medido: 4 tests rojos por contaminación, ninguno por
+  // el comportamiento. Es la contracara honesta de persistir: el estado que sobrevive a un remonte también
+  // sobrevive a un `cleanup()`.
+  beforeEach(() => window.sessionStorage.clear());
   afterEach(cleanup);
   const rem = solanaPayoutSubmittedSnapshot("2026-07-10T00:00:00.000Z");
 
@@ -1799,9 +1807,11 @@ describe("WKH-339 — los siete estados de la ventana de lectura, en pantalla", 
   // ── T-339.7 (AC-4) · Estado 5: sin billetera se explica, y NO se ofrece el gesto ────────────────
   //
   // Mata a M12 (`sin-billetera` colapsa en `sin-prueba`): ofrecería "Revisar ahora" sin tener a quién
-  // pedirle la firma. ⚠️ Rama DEFENSIVA: que sea "alcanzable de verdad desde el historial" NO está
-  // medido —los dos sitios que ponen `step` en `"track"` pasan antes por `setAddress`— y la afirmación se
-  // sacó. Se cubre porque el tipo de `sender` admite `null`, no porque haya un camino conocido.
+  // pedirle la firma. ⚠️ Rama DEFENSIVA: que sea "alcanzable de verdad desde el historial" NO está medido
+  // y la afirmación se sacó. Se cubre porque el tipo de `sender` admite `null`, no porque haya un camino
+  // conocido. La evidencia correcta (CR/MNR-1, que corrigió la mía): `onOpenFromHistory` NO toca la
+  // address —sólo `setError`/`setRem`/`setStep`—, pero al historial se llega sólo por `openHistory`, que
+  // hace `await resolveSender()` antes de `setStep("history")`, y ése sí hace `setAddress`.
   it("T-339.7: `payout_submitted` SIN billetera ⇒ el texto de la wallet y NINGÚN botón de revisar", async () => {
     const { store, ventana } = ventanaDeTest();
     render(
@@ -2013,7 +2023,106 @@ describe("WKH-339 — los siete estados de la ventana de lectura, en pantalla", 
     ).toBe(3);
     // Y la pantalla lo dice en vez de quedarse con un botón que no hace nada.
     expect(screen.getByRole("button", { name: /revisar/i })).toBeDisabled();
-    expect(screen.getByText(/Volvé a abrir el seguimiento/)).toBeInTheDocument();
+    // ⛔ Y la copy NO le pide remontar: eso era pedirle la acción que reiniciaba el techo, y encima
+    //    mandaba a una salida que esta pantalla no tiene.
+    expect(screen.getByText(/Podés recuperar tus USDC en vez de esperar/)).toBeInTheDocument();
+    expect(screen.queryByText(/Volvé a abrir/)).toBeNull();
+    // Y no repite verbatim la frase que `PayoutInProgress` ya pone en esta misma vista: si la copiara,
+    // habría DOS nodos con el mismo texto (medido). Acá tiene que haber exactamente uno.
+    expect(screen.getAllByText(/Si preferís no esperar, podés recuperar tus USDC/)).toHaveLength(1);
+  });
+
+  // ── 🔴 T-339.4j (CR/BLQ-MED-2) · EL TECHO SOBREVIVE AL REMONTE ─────────────────────────────────────
+  //
+  // MEDIDO por el CR sobre el código anterior: 5 toques ⇒ 3 challenges · `unmount()` · `render()` ·
+  // 5 toques ⇒ **total 6**. Y el camino existe en producción, no es un montaje del test: recargar deja el
+  // flujo en `send` (el `step` no persiste) → "Ver mis envíos" → la entrada → `onOpenFromHistory` ⇒
+  // seguimiento montado de nuevo con el contador en 0. Y el almacén vacío por la recarga es justo el
+  // estado que MUESTRA el botón. La cuenta del CR llegaba a los 10 del cupo.
+  //
+  // ⚠️ Lo que este `it` mide es la MITIGACIÓN, no un límite: `sessionStorage` es por pestaña y una pestaña
+  // nueva lo reinicia. Está declarado así en el docblock de `leerIntentosGuardados`. El techo real por
+  // remitente sigue siendo WKH-340.
+  it("T-339.4j: tras `unmount()` + `render()`, el techo NO se reinicia (3 y no 6)", async () => {
+    window.sessionStorage.clear();
+    const { store, ventana } = ventanaDeTest();
+    void store;
+    const prove = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    const montar = () =>
+      render(
+        <TrackView
+          rem={rem}
+          sender={FAKE_SOLANA_BENEFICIARY}
+          onRecovered={() => {}}
+          revision={{ ventana, renovar: { prove } }}
+        />,
+      );
+
+    const primera = montar();
+    const btn1 = await screen.findByRole("button", { name: /revisar/i });
+    await act(async () => {
+      for (let i = 0; i < 5; i += 1) fireEvent.click(btn1);
+    });
+    expect(prove.mock.calls.length).toBe(3);
+
+    // El remonte, que es lo que hace una recarga + "Ver seguimiento".
+    primera.unmount();
+    montar();
+    const btn2 = await screen.findByRole("button", { name: /revisar/i });
+    await act(async () => {
+      for (let i = 0; i < 5; i += 1) fireEvent.click(btn2);
+    });
+
+    expect(
+      prove.mock.calls.length,
+      "el techo se reinició con el remonte: recargar y volver al seguimiento vuelve a habilitar 3 " +
+        "challenges, y con eso un solo remitente llega a los 10 del cupo de su IP",
+    ).toBe(3);
+    expect(btn2).toBeDisabled();
+    window.sessionStorage.clear();
+  });
+
+  // ── 🔴 T-339.4g'' (CR/BLQ-BAJO-2) · LA RÁFAGA SÍNCRONA, que es lo que separa el `ref` del `disabled` ──
+  //
+  // ⚠️ ESTE `it` YO LO ESCRIBÍ, LO VI DAR 1 EN VEZ DE 3, Y CONCLUÍ QUE NO ERA TESTEABLE. Era testeable:
+  // mi error fue el `await` entre clicks. `fireEvent.click` envuelve en `act()`, sí — pero **los `act()`
+  // anidados no flushean: sólo el más externo**. Metiendo los 6 clicks DENTRO de un único `act()`, los 6
+  // handlers corren antes de cualquier commit, que es exactamente el doble-tap real.
+  //
+  // MEDIDO por el CR y reproducido acá: **3 con la guarda del `ref`, 6 sin ella**. Y el `it` de arriba
+  // (que espera el re-render entre toques) pasa igual sin la guarda, porque ahí el `disabled` ya se
+  // aplicó ⇒ **sin este `it`, quitar el `return` temprano no lo mata nada**.
+  //
+  // Por qué el `ref` y no `useState`: en una ráfaga del mismo turno todas las closures ven el MISMO valor
+  // viejo del estado, así que un contador en `useState` no corta. El `ref` se incrementa sincrónicamente.
+  it("T-339.4g'': 6 clicks en UN solo `act()` (doble-tap) tampoco pasan de 3 challenges", async () => {
+    const { store, ventana } = ventanaDeTest();
+    void store;
+    const prove = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    render(
+      <TrackView
+        rem={rem}
+        sender={FAKE_SOLANA_BENEFICIARY}
+        onRecovered={() => {}}
+        revision={{ ventana, renovar: { prove } }}
+      />,
+    );
+    const btn = await screen.findByRole("button", { name: /revisar/i });
+
+    // ⛔ SIN `await` adentro: es lo que hace que los 6 handlers corran antes de cualquier re-render.
+    await act(async () => {
+      for (let i = 0; i < 6; i += 1) fireEvent.click(btn);
+    });
+
+    expect(
+      prove.mock.calls.length,
+      "una ráfaga síncrona atravesó el techo: o el contador es estado de React (todas las closures ven " +
+        "el valor viejo), o la única guarda es el `disabled`, que se aplica DESPUÉS del commit",
+    ).toBe(3);
   });
 
   // 🔴 T-339.4g' — EL TECHO CUENTA LOS ÉXITOS TAMBIÉN, no sólo los fallos.
@@ -2076,6 +2185,81 @@ describe("WKH-339 — los siete estados de la ventana de lectura, en pantalla", 
     }
   });
 
+  // ── 🔴 T-339.4i (CR/BLQ-BAJO-3) · NINGÚN TEMPORIZADOR PIDE UNA FIRMA — Y EL CANDADO NO MIRA EL RELOJ ──
+  //
+  // 🔴 EL AGUJERO QUE CIERRA, MEDIDO POR EL CR CON TRES VARIANTES DEL MISMO MUTANTE, todas con `tsc`
+  // exit 0 (`tsc` no puede impedirlo: las dos capacidades le llegan al MISMO componente en la MISMA prop):
+  //     `setInterval(prove, 0)`     ⇒ 57 tests rojos
+  //     `setInterval(prove, 1500)`  ⇒  1 test rojo
+  //     `setInterval(prove, 60000)` ⇒  0 tests rojos   ← el invariante CENTRAL de la HU, sin guarda
+  //
+  // O sea que un futuro *"auto-renovar cada 5 minutos"* compilaba, pasaba la suite entera, y cada persona
+  // recibía un popup que no pidió en medio de un payout. Los tests que lo cazaban sólo lo hacían porque
+  // el temporizador era RÁPIDO y ensuciaba sus propias aserciones — o sea por accidente.
+  //
+  // ⇒ este candado es ESTÁTICO y no depende del reloj: lee el archivo y exige que ningún cuerpo de
+  // `setInterval`/`setTimeout` de `flow.tsx` mencione `prove`. Es el mismo molde que los candados
+  // estáticos que este repo ya usa (`readFileSync` + asertar sobre el texto).
+  //
+  // ⚠️ QUÉ NO CUBRE, dicho para que su verde no se lea de más: mira el TEXTO del cuerpo del temporizador,
+  // así que un `setInterval(pedirFirmaIndirecta, 60000)` donde `prove` se llama dentro de esa función
+  // NOMBRADA pasaría. Esa forma la cubre el `it` de abajo, que avanza el reloj falso media hora. Los dos
+  // hacen falta: éste caza la forma directa a cualquier cadencia; ése caza la indirecta.
+  it("T-339.4i (estático): ningún `setInterval`/`setTimeout` de flow.tsx menciona `prove`", () => {
+    const src = readFileSync(path.resolve(process.cwd(), "src/presentation/flow.tsx"), "utf8");
+    const sospechosos: string[] = [];
+    for (const m of src.matchAll(/set(?:Interval|Timeout)\s*\(/g)) {
+      // Balanceo de paréntesis desde la apertura de la llamada: es el cuerpo COMPLETO del temporizador,
+      // no una ventana de N caracteres (una ventana fija se pasa de largo o se queda corta según el
+      // formateo, que es justo lo que un candado no puede depender de).
+      let i = (m.index ?? 0) + m[0].length;
+      let nivel = 1;
+      while (i < src.length && nivel > 0) {
+        if (src[i] === "(") nivel += 1;
+        else if (src[i] === ")") nivel -= 1;
+        i += 1;
+      }
+      const cuerpo = src.slice(m.index ?? 0, i);
+      if (/\bprove\b/.test(cuerpo)) sospechosos.push(cuerpo.slice(0, 160));
+    }
+    expect(
+      sospechosos,
+      "un temporizador de `flow.tsx` menciona `prove`: eso es un popup de billetera que la persona NO " +
+        "pidió, y a una cadencia lenta NINGÚN otro test lo ve. `tsc` no puede impedirlo — las dos " +
+        "capacidades llegan al mismo componente en la misma prop.",
+    ).toEqual([]);
+  });
+
+  // La otra mitad: la forma INDIRECTA, que el candado estático no ve. Se avanza el reloj falso media hora
+  // —360 ticks del control— sin ningún gesto, y `prove` no puede haber sido llamado ni una vez.
+  it("T-339.4i': media hora de reloj sin ningún gesto ⇒ CERO llamadas a `prove`", async () => {
+    vi.useFakeTimers();
+    try {
+      const { store, ventana } = ventanaDeTest();
+      void store;
+      const prove = vi.fn(async () => ({ challenge: "ch", signature: "sig" }));
+      render(
+        <TrackView
+          rem={rem}
+          sender={FAKE_SOLANA_BENEFICIARY}
+          onRecovered={() => {}}
+          revision={{ ventana, renovar: { prove } }}
+        />,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30 * 60 * 1000); // 30 min = 360 ticks de 5 s
+      });
+      expect(
+        prove,
+        "algo pidió una firma sin que la persona toque nada: el gesto es la ÚNICA fuente de un popup",
+      ).not.toHaveBeenCalled();
+      // Y el control sigue ofrecido: la ventana nunca se encendió porque nadie firmó.
+      expect(screen.getByRole("button", { name: /revisar/i })).toBeEnabled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // ── 🟡 T-339.4h (AR/BLQ-BAJO-1) · EL TEXTO DE UN FALLO VIEJO NO REAPARECE ──────────────────────────
   //
   // Medido por el AR: fallo de billetera ⇒ el texto queda · otro gesto de la app graba una prueba en el
@@ -2126,6 +2310,16 @@ describe("WKH-339 — los siete estados de la ventana de lectura, en pantalla", 
       await act(async () => {
         // `FixedClock` no tiene `avanzar`: se mueve con `set`. Cruzar el TTL de 8 min es lo que hace que
         // el bloque vuelva a aparecer, que es el escenario entero de este `it`.
+        //
+        // ⚠️ ESTE `8 * 60 * 1000` ES UN SEGUNDO LITERAL DE `POP_PROOF_TTL_MS` (CR/MNR-4), y se declara
+        // como se declaró el del tick (`VENTANA_CHECK_MS_EN_TEST`, más arriba en este archivo) en vez de
+        // dejarlo suelto: la constante de producción NO se exporta
+        // (`../infrastructure/auth/pop-proof-store.ts:40`), así que un test que quiera cruzar el plazo no
+        // tiene de dónde importarla. Falla del lado seguro —si alguien SUBE el TTL de producción, este
+        // `it` avanza de menos, el bloque no reaparece y se pone rojo— pero es un literal duplicado y hay
+        // que decirlo. ⛔ Y va escrito con la MISMA FORMA que el original a propósito: el candado del TTL
+        // matchea `(\d+) \* (\d+) \* (\d+)`, así que reescribirlo como `480_000` acá invitaría a
+        // "unificar" el de producción y eso pone el candado rojo.
         reloj.set(new Date(Date.parse(T0) + 8 * 60 * 1000).toISOString());
         await vi.advanceTimersByTimeAsync(5000);
       });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest"; import { WALLET_SIGN_MESSAGE_ERROR, laBilleteraFueTocada } from "./solana/wallet-error-code"; // WKH-339/CR: EN ESTA LÍNEA — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
 import { Money } from "../domain/money";
 import type { RemittanceState, RemittanceStatus } from "../domain/remittance";
 import {
@@ -28,8 +28,8 @@ import {
   isKycDemo,
   kycOriginNotice,
   REAL_KYC_PROVENANCES,
-  statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, REVISION_APAGADA, REVISION_GESTO, REVISION_FIRMANDO, REVISION_SIN_BILLETERA, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, // WKH-339: EN ESTA LÍNEA, no en líneas nuevas — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
-} from "./flow-vm";
+  statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, // WKH-339/CR: las otras 4 constantes YA NO se importan por nombre — el loop las DERIVA del módulo, que es el arreglo de BLQ-BAJO-1. Si vuelven acá por nombre, el loop volvió a ser una lista a mano. // WKH-339: EN ESTA LÍNEA, no en líneas nuevas — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
+} from "./flow-vm"; import * as MODULO_FLOW_VM from "./flow-vm"; // WKH-339/CR-BLQ-BAJO-1: el namespace entero, para DERIVAR la lista de copies en vez de escribirla. En esta línea para no desplazar `:520`
 import {
   KYC_PROVENANCE_LIVE,
   KYC_PROVENANCE_MOCK,
@@ -1104,37 +1104,56 @@ describe("WKH-339/AC-4 — lecturaSeguimiento: exactamente uno, y ninguno colaps
   // El copy, y las dos reglas que no se negocian. Se afirma la PROPIEDAD, no la frase: así reescribir el
   // texto está permitido y romper la regla no lo está.
   //
-  // 🔴 EL LOOP RECORRÍA 3 DE 6 COPIES, Y EL REGEX NO MATCHEABA UNA DE LAS TRES FRASES PROHIBIDAS. Medido
-  // por el AR: mutar `REVISION_FIRMANDO` a *"La ventana venció; dejamos de revisar. Confirmá en tu
-  // billetera…"* —que rompe LAS DOS prohibiciones de §5— dejaba la suite VERDE, porque esa constante no
-  // estaba en el loop. Y `"volver a revisar"` —que §5 prohíbe explícitamente, y que **yo mismo escribí**
-  // en el nombre de T-339.2 en la primera pasada— **no lo matcheaba el regex**.
+  // 🔴 LA LISTA SE DERIVA DEL MÓDULO, NO SE ESCRIBE — y las dos versiones anteriores muestran por qué.
   //
-  // ⇒ el loop se arma sobre TODAS las copies de la ventana, y la lista se declara con su criterio, no a
-  // mano por conveniencia: **toda constante `REVISION_*` que se renderice**. Si mañana aparece una
-  // séptima y no se agrega acá, eso es el agujero — y es el motivo de que el conteo esté asertado.
-  const COPIES_DE_LA_VENTANA = [
-    REVISION_APAGADA,
-    REVISION_GESTO,
-    REVISION_FIRMANDO,
-    REVISION_SIN_BILLETERA,
-    REVISION_MECANISMO_APAGADO,
-    REVISION_SIN_FIRMA,
-    REVISION_TECHO_ALCANZADO,
-  ];
+  // v1 (F3): el loop tenía 3 de 8 constantes. Mutar `REVISION_FIRMANDO` para romper las DOS
+  //          prohibiciones de §5 dejaba la suite VERDE, y el regex no matcheaba `"volver a revisar"`,
+  //          que es una de las tres frases prohibidas y que yo mismo había escrito.
+  // v2 (fix-pack AR): el loop pasó a 7 de 8 **y le puse un `toHaveLength(7)`**, o sea que
+  //          **CONGELÉ la omisión**: faltaba `REVISION_NO_SE_PUDO_PEDIR`, y medido por el CR, la misma
+  //          frase prohibida que mata a `REVISION_FIRMANDO` **sobrevivía la suite completa** en ella.
+  //          Un conteo literal contra una lista escrita a mano no detecta lo que se olvidó: lo fija.
+  //
+  // ⇒ v3: se DERIVA. El criterio —**toda exportación de `flow-vm` cuyo nombre empieza con `REVISION_`**—
+  // es lo único normativo, y es el mismo patrón que `deriveTables()` en el guardián de ownership de
+  // wasiai-a2a: estructural, no enumerativo. Una copy nueva entra al loop **sola**, y si alguien exporta
+  // un `REVISION_*` que no es un string, el `it` de abajo lo dice en vez de saltearlo.
+  const COPIES_DE_LA_VENTANA = Object.entries(MODULO_FLOW_VM)
+    .filter(([k]) => k.startsWith("REVISION_"))
+    .map(([k, v]) => [k, v] as const);
 
-  it("el loop de copy cubre TODAS las que se renderizan (si aparece una nueva, este `it` la reclama)", () => {
-    // El número es la mitad floja del control y por eso está acompañado: lo que importa es que ninguna
-    // constante quede afuera del loop de abajo. Un `>=` no serviría — el modo de fallo es OLVIDARSE.
-    expect(COPIES_DE_LA_VENTANA).toHaveLength(7);
-    expect(new Set(COPIES_DE_LA_VENTANA).size, "hay dos copies con el MISMO texto").toBe(7);
+  it("la lista de copies se DERIVA del módulo, y todas son strings no vacíos", () => {
+    // El número NO es el control (por eso es un piso y no una igualdad): el control es que la lista
+    // salga del módulo. Se asienta un piso para que borrar todas las copies no deje el loop vacío y
+    // verde, que es el otro modo de fallo de un loop derivado.
+    expect(COPIES_DE_LA_VENTANA.length).toBeGreaterThanOrEqual(8);
+    for (const [k, v] of COPIES_DE_LA_VENTANA) {
+      expect(typeof v, `${k} no es un string: el loop de abajo no lo estaría midiendo`).toBe("string");
+      expect((v as string).length, `${k} está vacío`).toBeGreaterThan(0);
+    }
+    // Y las 8 que la pantalla renderiza hoy están adentro, nombradas: es lo que hace falta para que un
+    // rename no las saque del loop en silencio.
+    const nombres = COPIES_DE_LA_VENTANA.map(([k]) => k);
+    for (const n of [
+      "REVISION_APAGADA",
+      "REVISION_GESTO",
+      "REVISION_FIRMANDO",
+      "REVISION_SIN_BILLETERA",
+      "REVISION_NO_SE_PUDO_PEDIR",
+      "REVISION_MECANISMO_APAGADO",
+      "REVISION_SIN_FIRMA",
+      "REVISION_TECHO_ALCANZADO",
+    ]) {
+      expect(nombres, `${n} dejó de exportarse o se renombró`).toContain(n);
+    }
   });
 
   it("ninguna copy de la ventana usa un verbo en pasado sobre haber revisado, ni dice 'venció'", () => {
-    for (const frase of COPIES_DE_LA_VENTANA) {
-      expect(frase, `"${frase}" afirma un pasado que el sistema no puede distinguir`).not.toMatch(
-        /venci|revisábamos|revisamos|dejamos de|estábamos|volver a revisar|volvé a revisar/i,
-      );
+    for (const [nombre, frase] of COPIES_DE_LA_VENTANA) {
+      expect(
+        frase,
+        `${nombre} ("${String(frase)}") afirma un pasado que el sistema no puede distinguir`,
+      ).not.toMatch(/venci|revisábamos|revisamos|dejamos de|estábamos|volver a revisar|volvé a revisar/i);
     }
   });
 
@@ -1204,15 +1223,68 @@ describe("WKH-339/AC-4 — lecturaSeguimiento: exactamente uno, y ninguno colaps
       expect(gestoDespuesDeProve({ tipo: "error", error: e })).toBe("sin-firma");
     });
 
-    // Y los que la librería tira ANTES de abrir el popup, que matchean la forma `Wallet…Error` y NO
-    // pueden entrar a `"sin-firma"` por la ventana.
-    it.each(["WalletNotConnectedError", "WalletDisconnectedError", "WalletNotReadyError"])(
-      "%s matchea la forma `Wallet…Error` pero ocurre ANTES del popup ⇒ no-se-pudo-pedir",
-      (name) => {
-        const e = new Error("x");
-        e.name = name;
-        expect(gestoDespuesDeProve({ tipo: "error", error: e })).toBe("no-se-pudo-pedir");
-      },
-    );
+    // ── 🔴 CR/BLQ-MED-1 · LA FAMILIA `Wallet…Error` COMPLETA, y NINGUNA acusa salvo una ──────────────
+    //
+    // El discriminante era `/^Wallet[A-Za-z]*Error$/` menos 5 excepciones escritas a mano, o sea una
+    // DENYLIST. MEDIDO con esa forma: **7 de estos 10 nombres daban `"sin-firma"`** sin que se hubiera
+    // abierto ningún popup. Los dos que más importan:
+    //   · `WalletAccountError` — el standard adapter lo tira en `adapter.js:400`, DOS líneas ANTES de
+    //     llamar a `signMessage` (`:402`). Y este repo YA lo clasificaba como fallo de conexión en
+    //     `KNOWN_CODES` (`./solana/wallet-error-code.ts`), o sea que dos módulos se contradecían.
+    //   · `WalletWindowBlockedError` — el popup lo bloqueó el NAVEGADOR: nunca se abrió.
+    // Y el que prueba que la dirección estaba invertida para toda la familia, no para una lista:
+    //   · `WalletFuturoError` — un nombre que la librería no tiene. Daba `"sin-firma"`, con el docblock
+    //     afirmando literalmente que "un nombre nuevo cae del lado que no culpa a nadie".
+    //
+    // ⇒ este `it.each` recorre la familia ENTERA de `errors.js` más un nombre inventado. La condición es
+    // positiva y de un solo nombre, así que el `it` de abajo no necesita mantenerse cuando la librería
+    // agregue errores: los nuevos ya caen del lado seguro por construcción.
+    it.each([
+      ["WalletAccountError", "el standard adapter lo tira en `adapter.js:400`, ANTES de firmar"],
+      ["WalletWindowBlockedError", "el popup lo bloqueó el navegador: nunca se abrió"],
+      ["WalletWindowClosedError", "la ventana se cerró; la librería no dice que hubo firma"],
+      ["WalletTimeoutError", "venció esperando, sin que la billetera confirme haber sido tocada"],
+      ["WalletConnectionError", "fallo de conexión"],
+      ["WalletPublicKeyError", "no se pudo leer la clave"],
+      ["WalletDisconnectionError", "fallo al desconectar"],
+      ["WalletNotConnectedError", "no había billetera conectada"],
+      ["WalletDisconnectedError", "se desconectó"],
+      ["WalletNotReadyError", "la wallet no estaba lista"],
+      ["WalletLoadError", "no cargó"],
+      ["WalletConfigError", "configuración"],
+      ["WalletSendTransactionError", "es de enviar una tx, no de firmar un mensaje"],
+      ["WalletSignTransactionError", "ídem: tx, no mensaje"],
+      ["WalletSignInError", "sign-in, que esta app no usa"],
+      ["WalletKeypairError", "keypair"],
+      ["WalletError", "la clase base, sin fase"],
+      ["WalletFuturoError", "🔴 UN NOMBRE QUE LA LIBRERÍA NO TIENE: el input que prueba la dirección"],
+    ])("%s ⇒ no-se-pudo-pedir (%s)", (name, _porQue) => {
+      const e = new Error("x");
+      e.name = name;
+      expect(
+        gestoDespuesDeProve({ tipo: "error", error: e }),
+        `${name} acusa a la persona de no completar una firma que la librería NO declara como suya`,
+      ).toBe("no-se-pudo-pedir");
+    });
+
+    // 🔴 Y EL CONTROL SIN EL CUAL EL `it.each` DE ARRIBA NO PRUEBA NADA: si el clasificador devolviera
+    // `"no-se-pudo-pedir"` SIEMPRE, las 18 filas pasarían igual. Éste exige que el único nombre de la
+    // allowlist SÍ llegue a `"sin-firma"`.
+    it("CONTROL: el único nombre de la allowlist sigue llegando a `sin-firma`", () => {
+      const e = new Error("User rejected the request.");
+      e.name = "WalletSignMessageError";
+      expect(gestoDespuesDeProve({ tipo: "error", error: e })).toBe("sin-firma");
+    });
+
+    // Y el nombre se lee de UN solo lugar: `wallet-error-code.ts`, que ya era dueño de la tabla. Un
+    // segundo literal `"WalletSignMessageError"` en otro archivo es el defecto que el CR nombró.
+    it("el nombre de la allowlist NO está escrito a mano acá: se importa del módulo que lo mide", () => {
+      expect(WALLET_SIGN_MESSAGE_ERROR).toBe("WalletSignMessageError");
+      const e = new Error("x");
+      e.name = WALLET_SIGN_MESSAGE_ERROR;
+      expect(laBilleteraFueTocada(e)).toBe(true);
+      expect(laBilleteraFueTocada(new TypeError("Failed to fetch"))).toBe(false);
+      expect(laBilleteraFueTocada("boom")).toBe(false);
+    });
   });
 });

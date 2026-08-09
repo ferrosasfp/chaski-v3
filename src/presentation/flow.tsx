@@ -1212,6 +1212,51 @@ const VENTANA_CHECK_MS = 5000;
  */
 const MAX_CHALLENGES_POR_MONTAJE = 3;
 
+/**
+ * WKH-339/CR-BLQ-MED-2 — dónde vive el contador para que el techo **sobreviva a un remonte**.
+ *
+ * ⛔⛔ ESTO **NO ES UN LÍMITE DE SEGURIDAD**, Y HAY QUE LEERLO ASÍ O ENGAÑA. `sessionStorage` es **por
+ * pestaña**: una pestaña nueva, otra ventana, o un navegador en incógnito lo reinician, y nada impide
+ * abrir diez. Lo único que esto acota es el **agotamiento ACCIDENTAL** — la persona que toca frustrada,
+ * recarga, y vuelve a tocar. Es una **barrera contra el uso normal repetido**, no contra nadie que quiera
+ * gastar el cupo.
+ *
+ * 🔴 EL TECHO REAL POR REMITENTE SIGUE SIENDO **WKH-340** (contar el cupo del challenge por sender en vez
+ * de por red compartida) Y **NO SE CIERRA ACÁ**: agregar el bucket por address no sube el techo por IP, y
+ * contar por sender exige parsear el body ANTES del limiter, o sea rehacer la derivación de CPU-DoS de la
+ * ruta. ⛔ No leas esta función como si cerrara ese riesgo.
+ *
+ * Se elige `sessionStorage` y no `localStorage` a propósito: aguanta la recarga —que es el camino medido—
+ * y **se limpia al cerrar la pestaña**, así que no deja a nadie sin gesto mañana. La clave lleva la
+ * address para que dos billeteras en la misma pestaña no compartan contador.
+ *
+ * ⚠️ Todo va en `try/catch` y detrás de `typeof window`: `sessionStorage` puede tirar (modo privado,
+ * cuota, iframe con storage bloqueado) y esto es una MITIGACIÓN — si falla, el comportamiento cae al
+ * techo por montaje que ya había, nunca a "sin techo" ni a una pantalla rota. Es el mismo molde que
+ * `LocalRepo` usa para `localStorage` (`../infrastructure/persistence.ts:86`).
+ */
+function claveIntentos(sender: string | null): string {
+  return `wkh339:revisiones:${sender ?? "sin-sender"}`;
+}
+function leerIntentosGuardados(sender: string | null): number {
+  if (typeof window === "undefined") return 0;
+  try {
+    const n = Number(window.sessionStorage.getItem(claveIntentos(sender)));
+    // Un valor ilegible NO abre la compuerta ni la cierra: cae a 0, que es el techo por montaje de antes.
+    return Number.isFinite(n) && n > 0 ? Math.min(n, MAX_CHALLENGES_POR_MONTAJE) : 0;
+  } catch {
+    return 0;
+  }
+}
+function guardarIntentos(sender: string | null, n: number): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(claveIntentos(sender), String(n));
+  } catch {
+    // Best-effort: sin persistencia el techo vuelve a ser por montaje, que es lo que había.
+  }
+}
+
 // Exportado para test directo (HU-SOL-13/T7): testear TrackView en aislamiento cubre exactamente la
 // acción refund (AC-6/AC-7) sin montar el flujo entero.
 export function TrackView({
@@ -1692,14 +1737,21 @@ function RevisionDelSeguimiento({
   // ⇒ el `ref` es la guarda (se incrementa sincrónicamente, en el mismo turno); el `useState` de al lado
   // existe SÓLO para que el render se entere, y el `disabled` es lo que lo hace visible. Los tres hacen
   // falta y ninguno reemplaza a los otros.
-  const intentosRef = useRef(0);
-  const [intentosUsados, setIntentosUsados] = useState(0);
+  //
+  // 🔴 Y SOBREVIVE AL REMONTE, porque un techo por montaje no era un techo (CR/BLQ-MED-2). MEDIDO antes:
+  // 5 toques ⇒ 3 challenges · `unmount()` · `render()` · 5 toques ⇒ **total 6**. Y el camino existe en
+  // producción: recargar deja el flujo en `send` (el `step` no persiste) → "Ver mis envíos" → la entrada
+  // → `onOpenFromHistory` ⇒ **seguimiento montado de nuevo, contador en 0**. Y el almacén vacío por la
+  // recarga es justamente el estado que MUESTRA el botón.
+  const intentosRef = useRef(leerIntentosGuardados(sender));
+  const [intentosUsados, setIntentosUsados] = useState(intentosRef.current);
   const sinIntentos = intentosUsados >= MAX_CHALLENGES_POR_MONTAJE;
   const onRevisar = useCallback(async () => {
     if (!sender) return;
     // Se cuenta ANTES de pedir: lo que consume el cupo de la IP es la request, no su desenlace.
     if (intentosRef.current >= MAX_CHALLENGES_POR_MONTAJE) return;
     intentosRef.current += 1;
+    guardarIntentos(sender, intentosRef.current);
     setIntentosUsados(intentosRef.current);
     onGesto("firmando");
     try {
@@ -2530,7 +2582,7 @@ function AgentUnavailable({
  * agregar *"y el fee de la entrega no lo paga nadie, porque ese paso no corre"*. Es verdad
  * (`this.solana`, `../application/use-cases/confirm-and-send.ts:336`) y está PROHIBIDO escribirlo: en
  * ese mismo cuadrante, tres renglones más arriba en la MISMA tarjeta, la fila de la entrega dice
- * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:2697`). Ese *"lo simula"* es impreciso
+ * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:2749`). Ese *"lo simula"* es impreciso
  * —con el settle apagado la entrega no se simula, se corta— pero es **H1 de WKH-336**, residual de otra
  * HU que exige un TERCER valor de `transport` con su propia frase, y WKH-338 no lo cierra. Si la nota
  * dijera *"la entrega no corre"* mientras la fila dice *"lo simula"*, la tarjeta se contradiría a sí

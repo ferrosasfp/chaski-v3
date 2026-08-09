@@ -4,7 +4,7 @@ import {
   PRINCIPAL_SETTLED_REFUND_MANUAL,
   PRINCIPAL_STATE_UNKNOWN,
 } from "../application/use-cases/confirm-and-send";
-import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
+import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds"; import { laBilleteraFueTocada } from "./solana/wallet-error-code"; // WKH-339/CR: EN ESTA LÍNEA, no en una nueva — `:25`, `:29`, `:30`, `:206` y `:253` de este archivo los cita otro por número
 import {
   ESCROW_DEPOSIT_RENT_LAMPORTS,
   SENDER_MIN_LAMPORTS_FOR_DEPOSIT,
@@ -725,7 +725,7 @@ export function humanError(code: string): string {
   // propia persona, o la release-authority a mano. O sea que nadie devuelve nada solo.
   //
   // Es el texto que MÁS se lee de este archivo: TrackView lo usa como último recurso para cualquier
-  // `payout_failed` cuyo reason no reconozca (`humanError`, `flow.tsx:1488`), justo cuando no sabemos dónde está la
+  // `payout_failed` cuyo reason no reconozca (`humanError`, `flow.tsx:1533`), justo cuando no sabemos dónde está la
   // plata. Prometer un reembolso ahí manda a esperar sentado en vez de a la única acción que sirve.
   // WKH-333 — VA ANTES del catch-all de `payout`, y arregla un defecto de copy PREEXISTENTE que este
   // cambio vuelve mucho más alcanzable. `payout_not_authorized` no contiene "kyc", así que caía en el
@@ -802,38 +802,23 @@ export type ResultadoDelGesto =
   | { readonly tipo: "error"; readonly error: unknown };
 
 /**
- * 🔴 LOS ERRORES QUE LA BILLETERA DECLARA COMO SUYOS, y la lista es una ALLOWLIST a propósito.
+ * 🔴 CÓMO SE DECIDE SI LA BILLETERA FUE TOCADA — y por qué la decisión NO vive en este archivo.
  *
- * `@solana/wallet-adapter-base` etiqueta cada excepción con su `name` en el constructor — MEDIDO:
- * `this.name = 'WalletSignMessageError'` en `node_modules/@solana/wallet-adapter-base/lib/cjs/errors.js:99`.
- * Ese `name` es lo único estructural que distingue "la billetera abrió su popup y algo pasó ahí" de
- * "no llegamos a la billetera". El MENSAJE no sirve: lo escribe un tercero, y este repo ya lo dejó
- * escrito — `MENSAJE_FIRMA_RECHAZADA_SIN_MEDIR` (`../test-support/rpc-caido.ts:33`) declara que el
- * texto de Phantom **no está medido y no puede estarlo** desde un test, y que el copy no depende de que
- * matchee. Acá se sigue esa misma dirección.
+ * `laBilleteraFueTocada` es una **allowlist de UN nombre** (`WalletSignMessageError`) y vive en
+ * `./solana/wallet-error-code.ts`, que ya era el dueño de la tabla de nombres de la librería. La razón
+ * está medida y es el hallazgo de fondo del CR: acá había un SEGUNDO clasificador del mismo `name`, con
+ * la forma `/^Wallet[A-Za-z]*Error$/` menos 5 excepciones —o sea una **denylist**— y los dos módulos se
+ * contradecían sobre el mismo dato (`KNOWN_CODES` lee `WalletAccountError` como fallo de CONEXIÓN; esto
+ * lo leía como firma no completada).
  *
- * ⚠️ Y ES UNA ALLOWLIST, NO UNA DENYLIST, porque el lado seguro está definido: si no reconocemos el
- * error, decir *"es de nuestro lado"* es como mucho **modesto**, y decir *"no completaste la firma"*
- * sería **acusar**. Un nombre nuevo de la librería cae del lado que no culpa a nadie.
+ * Lo que la denylist dejaba pasar, MEDIDO: **7 nombres** caían del lado que ACUSA sin que se hubiera
+ * abierto ningún popup, incluido `WalletWindowBlockedError` (el popup lo bloqueó el navegador) y
+ * **cualquier nombre nuevo** — un `WalletFuturoError` inventado daba `"sin-firma"`. O sea que la
+ * dirección fail-safe que este docblock declaraba estaba **invertida para toda la familia**.
+ *
+ * ⛔ NO vuelvas a decidir por `name` acá. Si hace falta otro nombre, va en `wallet-error-code.ts`, con su
+ * medición del adapter al lado.
  */
-const ERRORES_ANTES_DEL_POPUP: ReadonlySet<string> = new Set([
-  // Los que la librería tira SIN haber abierto nada. Van excluidos EXPLÍCITAMENTE, porque sus nombres
-  // sí matchean la forma `Wallet…Error` y sin esta lista entrarían a `"sin-firma"` por la ventana.
-  "WalletNotConnectedError",
-  "WalletDisconnectedError",
-  "WalletNotReadyError",
-  "WalletLoadError",
-  "WalletConfigError",
-]);
-
-function laBilleteraAbrioSuPopup(e: unknown): boolean {
-  const name =
-    e && typeof e === "object" && typeof (e as { name?: unknown }).name === "string"
-      ? (e as { name: string }).name
-      : "";
-  if (name === "" || ERRORES_ANTES_DEL_POPUP.has(name)) return false;
-  return /^Wallet[A-Za-z]*Error$/.test(name);
-}
 
 /**
  * Clasifica el desenlace del gesto. Función PURA: sin reloj, sin red, sin efectos.
@@ -845,10 +830,12 @@ function laBilleteraAbrioSuPopup(e: unknown): boolean {
 export function gestoDespuesDeProve(r: ResultadoDelGesto): GestoRenovacion {
   if (r.tipo === "prueba") return "idle";
   if (r.tipo === "null") return "mecanismo-apagado";
-  // ⛔ EL DEFAULT ES `"no-se-pudo-pedir"`, Y ESA DIRECCIÓN ES EL ARREGLO. Antes esto era un `else` que
-  // mandaba todo lo no reconocido a `"sin-firma"`, o sea que el caso más común —quedarse sin red— le
-  // achacaba a la persona una firma que nunca le pedimos.
-  return laBilleteraAbrioSuPopup(r.error) ? "sin-firma" : "no-se-pudo-pedir";
+  // ⛔ EL DEFAULT ES `"no-se-pudo-pedir"`, Y ESA DIRECCIÓN ES EL ARREGLO. Primero esto era un `else` que
+  // mandaba todo lo no reconocido a `"sin-firma"` (el caso más común —quedarse sin red— le achacaba a la
+  // persona una firma que nunca le pedimos). Después fue una denylist, que dejaba pasar 7 nombres y
+  // TODOS los futuros. Ahora la condición es positiva y de un solo nombre: se acusa sólo cuando la
+  // librería DECLARA que el error salió de haberle pedido la firma a la billetera.
+  return laBilleteraFueTocada(r.error) ? "sin-firma" : "no-se-pudo-pedir";
 }
 
 /**
@@ -860,8 +847,13 @@ export function gestoDespuesDeProve(r: ResultadoDelGesto): GestoRenovacion {
  *  2. `sender == null` ⇒ `"sin-billetera"`, Y VA ANTES DE MIRAR LA VENTANA. Colapsarla en `"sin-prueba"`
  *     ofrecería el gesto de firmar cuando no hay a quién pedirle la firma. ⚠️ Es una rama **DEFENSIVA**:
  *     acá se afirmaba que era "alcanzable de verdad… desde el historial sin haber conectado" y **no está
- *     medido** — los dos sitios que ponen `step` en `"track"` pasan antes por `setAddress`
- *     (`resolveSender`, `./flow.tsx:366`). Existe porque el tipo de `sender` admite `null`.
+ *     medido**. ⚠️ Y mi corrección anterior citaba mal la evidencia: decía que "los dos sitios que ponen
+ *     `step` en `track` pasan antes por `setAddress`", y eso es **falso** para `onOpenFromHistory` —
+ *     la garantía está UN SALTO ANTES: (`onOpenFromHistory`, `./flow.tsx:382`) sólo
+ *     hace `setError`/`setRem`/`setStep` —**no toca la address**—, pero a la pantalla de historial se
+ *     llega únicamente por `openHistory`, que hace `await resolveSender()` (y ése sí hace `setAddress`)
+ *     ANTES de `setStep("history")`. El otro sitio (`:427`, tras confirmar) llega con la wallet ya
+ *     conectada. Existe porque el tipo de `sender` admite `null`.
  *  3. `ventana === "vigente"` ⇒ `"mirando"`. La lectura corre; la pantalla no dice nada nuevo.
  *  4. Todo lo demás ⇒ `"sin-prueba"`. Es el default, y su dirección es la segura: ante la duda la
  *     pantalla OFRECE el gesto en vez de callarse. ⛔ Un default `"mirando"` es el mutante que hay que
@@ -912,11 +904,16 @@ export const REVISION_FIRMANDO = "Confirmá en tu billetera…";
  *  El gateway ya corta por su lado con `payout_status_no_wallet`.
  *
  *  ⚠️ ESTE ESTADO ES **DEFENSIVO**, y hay que decirlo así. Acá se afirmaba que era *"alcanzable de
- *  verdad: entrar al seguimiento desde el historial sin haber conectado"*, y **eso no está medido**: los
- *  dos únicos sitios que ponen `step` en `"track"` vienen precedidos de un `setAddress`
- *  (`resolveSender`, `./flow.tsx:366`), así que **nadie encontró el camino**. Se conserva porque la prop
- *  `sender` es `string | null` y el tipo admite el caso: la alternativa sería no cubrirlo y confiar en
- *  que ningún llamador futuro lo produzca. T-339.7 lo clava. Lo que se saca es la afirmación. */
+ *  verdad: entrar al seguimiento desde el historial sin haber conectado"*, y **eso no está medido**:
+ *  **nadie encontró el camino**. Se conserva porque la prop `sender` es `string | null` y el tipo admite
+ *  el caso: la alternativa sería no cubrirlo y confiar en que ningún llamador futuro lo produzca.
+ *  T-339.7 lo clava. Lo que se saca es la afirmación.
+ *
+ *  🔴 Y LA EVIDENCIA CORREGIDA (CR/MNR-1), porque mi primera corrección citaba mal: la garantía está UN SALTO ANTES: (`onOpenFromHistory`, `./flow.tsx:382`) sólo
+ *     hace `setError`/`setRem`/`setStep` —**no toca la address**—, pero a la pantalla de historial se
+ *     llega únicamente por `openHistory`, que hace `await resolveSender()` (y ése sí hace `setAddress`)
+ *     ANTES de `setStep("history")`. El otro sitio (`:427`, tras confirmar) llega con la wallet ya
+ *     conectada. */
 export const REVISION_SIN_BILLETERA =
   "Para revisar tenemos que saber que este envío es tuyo. Conectá la misma wallet con la que enviaste.";
 /** Estado 6 — no pudimos PEDIR la firma, y **reintentar puede servir más tarde** (400/5xx/429 del cupo,
@@ -934,7 +931,23 @@ export const REVISION_MECANISMO_APAGADO =
 /** Estado 7 — hubo popup y no se completó. ⛔ NO dice "la rechazaste": el error viene de la billetera y
  *  no distingue un rechazo de un fallo de la extensión. */
 export const REVISION_SIN_FIRMA = "La firma no se completó. Podés intentar de nuevo.";
-/** El techo del gesto se alcanzó. Ver `MAX_CHALLENGES_POR_MONTAJE` en `./flow.tsx`: no culpa a nadie y
- *  no promete un automatismo, dice qué queda por hacer. */
+/** El techo del gesto se alcanzó. Ver `MAX_CHALLENGES_POR_MONTAJE` en `./flow.tsx`.
+ *
+ *  🔴 ACÁ DECÍA *"Volvé a abrir el seguimiento para reintentar"*, Y ERA DOS DEFECTOS EN UNA FRASE
+ *  (CR/BLQ-MED-2 y CR/BLQ-BAJO-4):
+ *   · **le pedía a la persona justo la acción que REINICIA el techo**. El contador vivía por montaje, y
+ *     remontar el seguimiento lo volvía a 0 ⇒ la copy invitaba a vaciar el cupo de la IP. Una copy que
+ *     recomienda la acción que desarma la mitigación es peor que no tener mitigación.
+ *   · **mandaba a una salida que esta pantalla NO TIENE**: medido, el seguimiento no expone ningún
+ *     control de navegación (ni botón, ni `onBack`, ni "Ver mis envíos" — eso vive sólo en la pantalla de
+ *     envío). Desde acá la única forma de "volver a abrir" es RECARGAR, algo que la frase no nombraba.
+ *
+ *  ⇒ ahora **no da ninguna instrucción de remonte** y nombra una acción que **sí está en esta pantalla**.
+ *  No promete que reintentar funcione, no culpa a nadie, y no afirma nada del vault.
+ *
+ *  ⚠️ Y NO REPITE VERBATIM la frase de `PayoutInProgress` ("Si preferís no esperar, podés recuperar tus
+ *  USDC.", `flow.tsx:2329`), aunque nombre la misma acción. Mi primera versión la copiaba tal cual para
+ *  reusar copy ya vetada, y MEDIDO: `getByText` encontraba **dos** nodos, o sea que la pantalla le decía
+ *  lo mismo dos veces en el mismo lugar. Reusar copy vetada es bueno; duplicarla en la misma vista no. */
 export const REVISION_TECHO_ALCANZADO =
-  "Por ahora no podemos seguir intentando desde acá. Volvé a abrir el seguimiento para reintentar, o recuperá tus USDC.";
+  "Por ahora no podemos seguir intentando desde acá. Podés recuperar tus USDC en vez de esperar.";

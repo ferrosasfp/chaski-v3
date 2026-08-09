@@ -739,3 +739,40 @@ export function humanError(code: string): string {
     return "No se pudo entregar. No hay un reembolso automático: si tus USDC entraron al escrow, los sacás vos firmando desde tu wallet.";
   return "Algo salió mal. Intentá de nuevo.";
 }
+
+// ── WKH-339 · qué está haciendo la pantalla de seguimiento con la lectura del payout ───────────────
+//
+// ⛔ TODO ESTE BLOQUE VA AL FINAL DEL ARCHIVO, y no es prolijidad: `:7`, `:25`, `:29`, `:30`, `:206` y
+// `:253` de acá los cita otro archivo POR NÚMERO, y están todos arriba. Una inserción aguas arriba los
+// rota en silencio.
+//
+// ⚠️ Y NO HAY UN `import` NUEVO ARRIBA POR LA MISMA RAZÓN: `EstadoVentanaLectura` se referencia con un
+// `import type` INLINE, que no desplaza ni una línea. La alternativa —volver a escribir
+// `"vigente" | "sin-prueba"` acá— sería una SEGUNDA LISTA de los mismos valores sin nada que la ate al
+// original, que es el defecto que este repo ya cazó dos veces (la de `adapter === "a2a"` en
+// `container.ts` y la de las proveniencias). Un `import type` se borra en compilación, así que no crea
+// ningún ciclo en runtime.
+
+/** Los CUATRO estados de la lectura, y ninguno colapsa en otro.
+ *
+ *  · `"no-aplica"`  — la remesa no está en `payout_submitted`: no hay nada que leer.
+ *  · `"sin-billetera"` — está en `payout_submitted` pero no sabemos de quién es el envío. NO es
+ *    `"sin-prueba"`: no hay a quién pedirle la firma, así que ofrecer el gesto sería ofrecer un botón
+ *    que no puede funcionar. El gateway ya corta por su lado con `payout_status_no_wallet`
+ *    (`noSe`, `../infrastructure/settlement/ledger-payout-status-gateway.ts:148`).
+ *  · `"mirando"`    — la ventana está vigente: la lectura corre y la pantalla no tiene que decir nada
+ *    nuevo.
+ *  · `"sin-prueba"` — la ventana está apagada: la pantalla lo dice y ofrece el gesto. */
+export type LecturaSeguimiento = "no-aplica" | "sin-billetera" | "mirando" | "sin-prueba";
+
+/** El estado LOCAL del gesto de renovar, que se superpone SÓLO sobre `"sin-prueba"`.
+ *
+ *  🔴 SON CUATRO VALORES Y NO UN BOOLEANO, porque pedir la firma tiene TRES desenlaces y un booleano
+ *  ya perdió el tercero:
+ *   · `prove()` devuelve `null` (501, mecanismo apagado server-side) ⇒ NUNCA se abrió un popup;
+ *   · `prove()` tira `"pop_challenge_unavailable"` (400/5xx/429 del cupo) ⇒ NUNCA se abrió un popup;
+ *   · `prove()` tira cualquier otro mensaje ⇒ viene de `wallet.signMessage`: hubo popup y no se completó.
+ *  Los dos primeros son `"no-se-pudo-pedir"` y el tercero `"sin-firma"`. ⛔ Colapsarlos le diría "no
+ *  completaste la firma" a alguien que nunca vio un popup, o sea culparía a la persona por algo que
+ *  pasó de nuestro lado. */
+export type GestoRenovacion = "idle" | "firmando" | "no-se-pudo-pedir" | "sin-firma";

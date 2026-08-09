@@ -4,7 +4,7 @@ import {
   PRINCIPAL_SETTLED_REFUND_MANUAL,
   PRINCIPAL_STATE_UNKNOWN,
 } from "../application/use-cases/confirm-and-send";
-import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
+import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds"; import { laBilleteraFueTocada } from "./solana/wallet-error-code"; // WKH-339/CR: EN ESTA LÍNEA, no en una nueva — `:25`, `:29`, `:30`, `:206` y `:253` de este archivo los cita otro por número
 import {
   ESCROW_DEPOSIT_RENT_LAMPORTS,
   SENDER_MIN_LAMPORTS_FOR_DEPOSIT,
@@ -725,7 +725,7 @@ export function humanError(code: string): string {
   // propia persona, o la release-authority a mano. O sea que nadie devuelve nada solo.
   //
   // Es el texto que MÁS se lee de este archivo: TrackView lo usa como último recurso para cualquier
-  // `payout_failed` cuyo reason no reconozca (`humanError`, `flow.tsx:1359`), justo cuando no sabemos dónde está la
+  // `payout_failed` cuyo reason no reconozca (`humanError`, `flow.tsx:1533`), justo cuando no sabemos dónde está la
   // plata. Prometer un reembolso ahí manda a esperar sentado en vez de a la única acción que sirve.
   // WKH-333 — VA ANTES del catch-all de `payout`, y arregla un defecto de copy PREEXISTENTE que este
   // cambio vuelve mucho más alcanzable. `payout_not_authorized` no contiene "kyc", así que caía en el
@@ -739,3 +739,215 @@ export function humanError(code: string): string {
     return "No se pudo entregar. No hay un reembolso automático: si tus USDC entraron al escrow, los sacás vos firmando desde tu wallet.";
   return "Algo salió mal. Intentá de nuevo.";
 }
+
+// ── WKH-339 · qué está haciendo la pantalla de seguimiento con la lectura del payout ───────────────
+//
+// ⛔ TODO ESTE BLOQUE VA AL FINAL DEL ARCHIVO, y no es prolijidad: `:7`, `:25`, `:29`, `:30`, `:206` y
+// `:253` de acá los cita otro archivo POR NÚMERO, y están todos arriba. Una inserción aguas arriba los
+// rota en silencio.
+//
+// ⚠️ Y NO HAY UN `import` NUEVO ARRIBA POR LA MISMA RAZÓN: `EstadoVentanaLectura` se referencia con un
+// `import type` INLINE, que no desplaza ni una línea. La alternativa —volver a escribir
+// `"vigente" | "sin-prueba"` acá— sería una SEGUNDA LISTA de los mismos valores sin nada que la ate al
+// original, que es el defecto que este repo ya cazó dos veces (la de `adapter === "a2a"` en
+// `container.ts` y la de las proveniencias). Un `import type` se borra en compilación, así que no crea
+// ningún ciclo en runtime.
+
+/** Los CUATRO estados de la lectura, y ninguno colapsa en otro.
+ *
+ *  · `"no-aplica"`  — la remesa no está en `payout_submitted`: no hay nada que leer.
+ *  · `"sin-billetera"` — está en `payout_submitted` pero no sabemos de quién es el envío. NO es
+ *    `"sin-prueba"`: no hay a quién pedirle la firma, así que ofrecer el gesto sería ofrecer un botón
+ *    que no puede funcionar. El gateway ya corta por su lado con `payout_status_no_wallet`
+ *    (`noSe`, `../infrastructure/settlement/ledger-payout-status-gateway.ts:148`).
+ *  · `"mirando"`    — la ventana está vigente: la lectura corre y la pantalla no tiene que decir nada
+ *    nuevo.
+ *  · `"sin-prueba"` — la ventana está apagada: la pantalla lo dice y ofrece el gesto. */
+export type LecturaSeguimiento = "no-aplica" | "sin-billetera" | "mirando" | "sin-prueba";
+
+/** El estado LOCAL del gesto de renovar, que se superpone SÓLO sobre `"sin-prueba"`.
+ *
+ *  🔴 SON CINCO VALORES Y NO UN BOOLEANO, porque pedir la firma tiene **CUATRO** desenlaces y un
+ *  booleano perdería tres. Los cuatro están MEDIDOS en el árbol, no supuestos:
+ *   1. `prove()` devuelve `null` ⇐ 501 `pop_not_configured`: el mecanismo está apagado server-side.
+ *      **Nunca se abrió un popup**, y **reintentar NUNCA sirve** mientras el secreto no esté ⇒
+ *      `"mecanismo-apagado"`.
+ *   2. `prove()` tira `"pop_challenge_unavailable"` ⇐ 400 / 5xx / **429 del cupo**
+ *      (`pop_challenge_unavailable`, `../infrastructure/auth/http-pop-signer.ts:23`). **Nunca se abrió un
+ *      popup**, y reintentar **puede** servir más tarde ⇒ `"no-se-pudo-pedir"`.
+ *   3. `prove()` tira algo que **NO viene de la billetera**: el `TypeError` crudo de `fetch` cuando no
+ *      hay red (su docblock lo declara: *"o un fallo de red (fetch rechaza) ⇒ LANZA"*,
+ *      `../infrastructure/auth/http-pop-signer.ts:8`), o `wallet_sign_not_available`, que el bridge tira
+ *      **antes de cualquier popup** (`signMsgHandle`, `../infrastructure/solana-wallet-bridge.ts:127`), o
+ *      un `throw` que no es un `Error`. **Tampoco hubo popup** ⇒ `"no-se-pudo-pedir"`.
+ *   4. `prove()` tira un error **de la billetera**: hubo popup y no se completó ⇒ `"sin-firma"`.
+ *
+ *  🔴 EL CASO 3 ES EL QUE ESTA UNIÓN NO TENÍA, Y ERA EL MÁS COMÚN. El input más frecuente de una app de
+ *  remesas en celular es **perder conectividad**, y con un `else` que mandaba todo `throw` no reconocido
+ *  a `"sin-firma"` la pantalla le decía a la persona que **su** firma falló cuando lo que se cayó fue
+ *  **nuestra** red. ⛔ Colapsar cualquiera de los cuatro rompe la regla 2 del copy de más abajo. */
+export type GestoRenovacion =
+  | "idle"
+  | "firmando"
+  | "mecanismo-apagado"
+  | "no-se-pudo-pedir"
+  | "sin-firma";
+
+/** El desenlace crudo de `prove()`, en la forma que `gestoDespuesDeProve` puede clasificar sin efectos.
+ *  Es un objeto etiquetado y no un `unknown | null` porque `null` es un desenlace CON significado
+ *  (el 501) y no la ausencia de uno: un `unknown` los volvería indistinguibles. */
+export type ResultadoDelGesto =
+  | { readonly tipo: "prueba" }
+  | { readonly tipo: "null" }
+  | { readonly tipo: "error"; readonly error: unknown };
+
+/**
+ * 🔴 CÓMO SE DECIDE SI LA BILLETERA FUE TOCADA — y por qué la decisión NO vive en este archivo.
+ *
+ * `laBilleteraFueTocada` es una **allowlist de UN nombre** (`WalletSignMessageError`) y vive en
+ * `./solana/wallet-error-code.ts`, que ya era el dueño de la tabla de nombres de la librería. La razón
+ * está medida y es el hallazgo de fondo del CR: acá había un SEGUNDO clasificador del mismo `name`, con
+ * la forma `/^Wallet[A-Za-z]*Error$/` menos 5 excepciones —o sea una **denylist**— y los dos módulos se
+ * contradecían sobre el mismo dato (`KNOWN_CODES` lee `WalletAccountError` como fallo de CONEXIÓN; esto
+ * lo leía como firma no completada).
+ *
+ * Lo que la denylist dejaba pasar, MEDIDO: **7 nombres** caían del lado que ACUSA sin que se hubiera
+ * abierto ningún popup, incluido `WalletWindowBlockedError` (el popup lo bloqueó el navegador) y
+ * **cualquier nombre nuevo** — un `WalletFuturoError` inventado daba `"sin-firma"`. O sea que la
+ * dirección fail-safe que este docblock declaraba estaba **invertida para toda la familia**.
+ *
+ * ⛔ NO vuelvas a decidir por `name` acá. Si hace falta otro nombre, va en `wallet-error-code.ts`, con su
+ * medición del adapter al lado.
+ */
+
+/**
+ * Clasifica el desenlace del gesto. Función PURA: sin reloj, sin red, sin efectos.
+ *
+ * ⛔ VIVE ACÁ Y NO EN EL COMPONENTE, y es la razón por la que este arreglo se puede medir con inputs
+ * concretos en vez de con un render: los cuatro desenlaces son datos, y el `it` que los cubre puede
+ * pasarle un `TypeError` real sin montar nada.
+ */
+export function gestoDespuesDeProve(r: ResultadoDelGesto): GestoRenovacion {
+  if (r.tipo === "prueba") return "idle";
+  if (r.tipo === "null") return "mecanismo-apagado";
+  // ⛔ EL DEFAULT ES `"no-se-pudo-pedir"`, Y ESA DIRECCIÓN ES EL ARREGLO. Primero esto era un `else` que
+  // mandaba todo lo no reconocido a `"sin-firma"` (el caso más común —quedarse sin red— le achacaba a la
+  // persona una firma que nunca le pedimos). Después fue una denylist, que dejaba pasar 7 nombres y
+  // TODOS los futuros. Ahora la condición es positiva y de un solo nombre: se acusa sólo cuando la
+  // librería DECLARA que el error salió de haberle pedido la firma a la billetera.
+  return laBilleteraFueTocada(r.error) ? "sin-firma" : "no-se-pudo-pedir";
+}
+
+/**
+ * De qué está hablando la pantalla de seguimiento. Función PURA: sin reloj, sin efectos, sin `peek`.
+ *
+ * 🔴 EL ORDEN DE LAS CUATRO RAMAS ES LA DECISIÓN, y cada una tiene un input que la falsearía:
+ *  1. `status !== "payout_submitted"` ⇒ `"no-aplica"`. Es la única rama que no habla de la ventana: en
+ *     cualquier otro estado no hay un desenlace de payout que leer.
+ *  2. `sender == null` ⇒ `"sin-billetera"`, Y VA ANTES DE MIRAR LA VENTANA. Colapsarla en `"sin-prueba"`
+ *     ofrecería el gesto de firmar cuando no hay a quién pedirle la firma. ⚠️ Es una rama **DEFENSIVA**:
+ *     acá se afirmaba que era "alcanzable de verdad… desde el historial sin haber conectado" y **no está
+ *     medido**. ⚠️ Y mi corrección anterior citaba mal la evidencia: decía que "los dos sitios que ponen
+ *     `step` en `track` pasan antes por `setAddress`", y eso es **falso** para `onOpenFromHistory` —
+ *     la garantía está UN SALTO ANTES: (`onOpenFromHistory`, `./flow.tsx:382`) sólo
+ *     hace `setError`/`setRem`/`setStep` —**no toca la address**—, pero a la pantalla de historial se
+ *     llega únicamente por `openHistory`, que hace `await resolveSender()` (y ése sí hace `setAddress`)
+ *     ANTES de `setStep("history")`. El otro sitio (`:427`, tras confirmar) llega con la wallet ya
+ *     conectada. Existe porque el tipo de `sender` admite `null`.
+ *  3. `ventana === "vigente"` ⇒ `"mirando"`. La lectura corre; la pantalla no dice nada nuevo.
+ *  4. Todo lo demás ⇒ `"sin-prueba"`. Es el default, y su dirección es la segura: ante la duda la
+ *     pantalla OFRECE el gesto en vez de callarse. ⛔ Un default `"mirando"` es el mutante que hay que
+ *     matar: dejaría la pantalla afirmando que vigila justo cuando dejó de vigilar.
+ *
+ * ⚠️ NO recibe el `RemittanceState` entero sino los tres datos que decide, y es deliberado: así el `it`
+ * que la mide no tiene que construir un agregado, y así no puede aparecer una quinta rama que mire un
+ * campo que este razonamiento no nombra.
+ */
+export function lecturaSeguimiento(de: {
+  status: RemittanceStatus;
+  sender: string | null;
+  ventana: import("../composition/container").EstadoVentanaLectura;
+}): LecturaSeguimiento {
+  if (de.status !== "payout_submitted") return "no-aplica";
+  if (de.sender == null) return "sin-billetera";
+  if (de.ventana === "vigente") return "mirando";
+  return "sin-prueba";
+}
+
+// ── El copy, y las tres reglas que NO se negocian ───────────────────────────────────────────────────
+//
+// 1. 🔴 PRESENTE, SIN PASADO. La consulta COLAPSA "venció" con "nunca hubo", a propósito y por
+//    construcción (`peek`, `../infrastructure/auth/pop-proof-store.ts:70` devuelve `null` para los dos).
+//    El segundo caso es REAL: se entra al seguimiento desde el historial tras una recarga y el almacén,
+//    que es en memoria, está vacío desde el primer milisegundo. ⛔ Decir *"venció"* o *"dejamos de
+//    revisar"* sería afirmar una historia que el sistema NO puede distinguir. El input que falsea
+//    cualquier verbo en pasado es exactamente esa recarga.
+// 2. 🔴 NINGUNA CULPA A LA PERSONA. `prove()` tiene **CUATRO** desenlaces y **TRES** ocurren SIN que se
+//    haya abierto un popup: el 501, el 429/400/5xx, y todo lo que no viene de la billetera (el
+//    `TypeError` de `fetch` sin red, `wallet_sign_not_available`, un `throw` que no es `Error`). Decir
+//    *"no completaste la firma"* en cualquiera de los tres es FALSO. ⚠️ Acá decía "TRES desenlaces y dos
+//    de ellos", y el tercero —el más común de todos, quedarse sin red— caía en el copy que acusa.
+// 3. La pantalla no afirma que ESTÁ mirando. El criterio es "no puede afirmar que mira cuando dejó de
+//    mirar", no "tiene que afirmar que mira": una afirmación positiva nueva agranda la superficie
+//    falsable por cero beneficio, y sólo sería sostenible mientras la prueba viva.
+//
+// ⚠️ Lo normativo son esas tres reglas, NO las palabras. El texto lo puede reescribir el founder; las
+// tres reglas no.
+
+/** Estado 2 — la ventana está apagada. Presente puro: qué NO está pasando, sin contar qué pasó antes. */
+export const REVISION_APAGADA = "No estamos revisando si el envío ya se completó.";
+/** Estado 2 — el gesto. "Revisar ahora", no "volver a revisar": lo segundo afirma que revisamos antes. */
+export const REVISION_GESTO = "Revisar ahora";
+/** Estado 3 — mientras el popup está abierto. El botón queda `disabled`: un gesto, un challenge. */
+export const REVISION_FIRMANDO = "Confirmá en tu billetera…";
+/** Estado 5 — `payout_submitted` sin billetera conectada. SIN gesto: no hay a quién pedirle la firma.
+ *  El gateway ya corta por su lado con `payout_status_no_wallet`.
+ *
+ *  ⚠️ ESTE ESTADO ES **DEFENSIVO**, y hay que decirlo así. Acá se afirmaba que era *"alcanzable de
+ *  verdad: entrar al seguimiento desde el historial sin haber conectado"*, y **eso no está medido**:
+ *  **nadie encontró el camino**. Se conserva porque la prop `sender` es `string | null` y el tipo admite
+ *  el caso: la alternativa sería no cubrirlo y confiar en que ningún llamador futuro lo produzca.
+ *  T-339.7 lo clava. Lo que se saca es la afirmación.
+ *
+ *  🔴 Y LA EVIDENCIA CORREGIDA (CR/MNR-1), porque mi primera corrección citaba mal: la garantía está UN SALTO ANTES: (`onOpenFromHistory`, `./flow.tsx:382`) sólo
+ *     hace `setError`/`setRem`/`setStep` —**no toca la address**—, pero a la pantalla de historial se
+ *     llega únicamente por `openHistory`, que hace `await resolveSender()` (y ése sí hace `setAddress`)
+ *     ANTES de `setStep("history")`. El otro sitio (`:427`, tras confirmar) llega con la wallet ya
+ *     conectada. */
+export const REVISION_SIN_BILLETERA =
+  "Para revisar tenemos que saber que este envío es tuyo. Conectá la misma wallet con la que enviaste.";
+/** Estado 6 — no pudimos PEDIR la firma, y **reintentar puede servir más tarde** (400/5xx/429 del cupo,
+ *  o un fallo de red, o cualquier error que la billetera no declare como suyo). En todos NUNCA se abrió
+ *  un popup, así que la frase dice de qué lado está el problema en vez de culpar a la billetera. */
+export const REVISION_NO_SE_PUDO_PEDIR =
+  "Ahora mismo no podemos pedirle la firma a tu billetera. No es tu wallet: es de nuestro lado.";
+/** Estado 6b — el mecanismo está apagado server-side (501, sin `PAYOUT_POP_SECRET`), que es el DEFAULT
+ *  documentado. Comparte con el estado 6 el no culpar a nadie, y se separa en UNA cosa que importa:
+ *  acá **reintentar no sirve**, así que la frase no puede insinuar que más tarde sí. `"Ahora mismo"` a
+ *  secas lo insinuaba, y por eso esta copy dice explícitamente que volver a intentar no cambia el
+ *  resultado — la misma forma que `humanError` ya usa para los cortes que no se arreglan reintentando. */
+export const REVISION_MECANISMO_APAGADO =
+  "Ahora no podemos revisar este envío desde acá. No es tu wallet: es de nuestro lado, y volver a intentar no cambia el resultado.";
+/** Estado 7 — hubo popup y no se completó. ⛔ NO dice "la rechazaste": el error viene de la billetera y
+ *  no distingue un rechazo de un fallo de la extensión. */
+export const REVISION_SIN_FIRMA = "La firma no se completó. Podés intentar de nuevo.";
+/** El techo del gesto se alcanzó. Ver `MAX_CHALLENGES_POR_MONTAJE` en `./flow.tsx`.
+ *
+ *  🔴 ACÁ DECÍA *"Volvé a abrir el seguimiento para reintentar"*, Y ERA DOS DEFECTOS EN UNA FRASE
+ *  (CR/BLQ-MED-2 y CR/BLQ-BAJO-4):
+ *   · **le pedía a la persona justo la acción que REINICIA el techo**. El contador vivía por montaje, y
+ *     remontar el seguimiento lo volvía a 0 ⇒ la copy invitaba a vaciar el cupo de la IP. Una copy que
+ *     recomienda la acción que desarma la mitigación es peor que no tener mitigación.
+ *   · **mandaba a una salida que esta pantalla NO TIENE**: medido, el seguimiento no expone ningún
+ *     control de navegación (ni botón, ni `onBack`, ni "Ver mis envíos" — eso vive sólo en la pantalla de
+ *     envío). Desde acá la única forma de "volver a abrir" es RECARGAR, algo que la frase no nombraba.
+ *
+ *  ⇒ ahora **no da ninguna instrucción de remonte** y nombra una acción que **sí está en esta pantalla**.
+ *  No promete que reintentar funcione, no culpa a nadie, y no afirma nada del vault.
+ *
+ *  ⚠️ Y NO REPITE VERBATIM la frase de `PayoutInProgress` ("Si preferís no esperar, podés recuperar tus
+ *  USDC.", `flow.tsx:2277`), aunque nombre la misma acción. Mi primera versión la copiaba tal cual para
+ *  reusar copy ya vetada, y MEDIDO: `getByText` encontraba **dos** nodos, o sea que la pantalla le decía
+ *  lo mismo dos veces en el mismo lugar. Reusar copy vetada es bueno; duplicarla en la misma vista no. */
+export const REVISION_TECHO_ALCANZADO =
+  "Por ahora no podemos seguir intentando desde acá. Podés recuperar tus USDC en vez de esperar.";

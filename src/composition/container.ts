@@ -47,7 +47,7 @@ import { LocalRepo } from "../infrastructure/persistence";
 import { SolanaWalletAdapter } from "../infrastructure/solana-wallet";
 import { CryptoIds, SystemClock } from "../infrastructure/system";
 
-export interface Container {
+export interface Container extends VentanaYRenovacion { // WKH-339: 2 campos REQUERIDOS, ver el final del archivo
   previewQuote: PreviewQuote;
   createRemittance: CreateRemittance;
   connectWallet: ConnectWallet;
@@ -197,6 +197,28 @@ export function createContainer(): Container {
     listHistory: new ListHistory(repo),
     abandonPendingKyc: new AbandonPendingKyc(kycPending),
     forgetKyc: new ForgetKyc(kycStore, kycPending, repo),
+    // ── WKH-339 · las DOS capacidades de la ventana de lectura ────────────────────────────────────
+    //
+    // ⛔ ESTAS DOS ENTRADAS VAN ACÁ, DEBAJO DE `forgetKyc`, Y NO ES PROLIJIDAD. Este archivo es el que
+    // más citas por número recibe del repo: `:47`, `:50`, `:114`, `:123`, `:127`, `:141`, `:169` y
+    // `:196` los cita otro archivo, y todos están ARRIBA de esta línea. Una inserción aguas arriba los
+    // rota en silencio. Antes de mover esto, medí quién lo cita.
+    //
+    // `estado` NO se deriva de un segundo almacén ni de una copia del TTL: pregunta al MISMO
+    // `popProofs` que observa el gateway de seguimiento (`payouts`, `:127`), así que la comparación de
+    // los 8 minutos sigue viviendo en UN solo lugar —`peek`— y no hay un segundo literal de 480 s.
+    // ⚠️ `peek()` tiene un efecto secundario idempotente (borra la entrada vencida), y por eso esto se
+    // consulta desde un efecto con temporizador, nunca desde un render.
+    ventanaDeLectura: { estado: (a) => (popProofs.peek(a) ? "vigente" : "sin-prueba") },
+    // 🔴 EL 2º ARGUMENTO —`popProofs`— ES EL MECANISMO ENTERO, Y SIN ÉL ESTO COMPILA. El recorder de
+    // `HttpPopSigner` es OPCIONAL (`constructor`, `../infrastructure/auth/http-pop-signer.ts:14`), así
+    // que `new HttpPopSigner(wallet)` pasa `tsc`, pide el challenge, abre el popup, la persona firma…
+    // y NADIE se entera: la ventana queda en `"sin-prueba"` para siempre y el botón nunca desaparece.
+    // Es el mutante más peligroso de esta HU y el ÚNICO test del repo que lo ve es T-339.5, en
+    // `container.test.ts`, porque es el único que ejercita el objeto que ESTA LÍNEA devuelve.
+    // Mismo `wallet` y mismo `popProofs` que los otros tres gestos: el almacén es compartido a
+    // propósito, y que sea el MISMO es lo que `tsc` NO puede garantizar.
+    renovarVentana: new HttpPopSigner(wallet, popProofs),
     solanaRefund, // HU-SOL-13: refund trustless del escrow
     recoverEscrowFunds: new RecoverEscrowFunds(repo, clock, solanaRefund),
     // WKH-327. El 2º argumento es el MISMO adapter: el guard de AC-7 le pregunta a la billetera VIVA
@@ -221,4 +243,83 @@ let singleton: Container | null = null;
 export function getContainer(): Container {
   if (!singleton) singleton = createContainer();
   return singleton;
+}
+
+// ── WKH-339 · la ventana de lectura del seguimiento, y el gesto que la vuelve a encender ───────────
+//
+// 🔴 POR QUÉ ESTOS TRES TIPOS VIVEN ACÁ Y NO EN `ports.ts`, Y NO ES UNA PREFERENCIA DE UBICACIÓN.
+// `ports.ts` es donde vive `PopProofReader` (`PopProofReader`, `../application/ports.ts:150`), la
+// interfaz de UN método cuyo mecanismo entero es NO TENER `prove`: el gateway de seguimiento corre
+// dentro de un `setInterval` de 1500 ms y si pudiera pedir una firma abriría un popup por tick
+// (600 s ÷ 1,5 s = 400 firmas por sesión de 10 min). Ese invariante lo sostienen tres docblocks de
+// `ports.ts` que se leen juntos. Abrir ese archivo para meter un tipo de composición pone en juego esa
+// vecindad por cero beneficio: nadie de `application/` consume lo de abajo. Lo consumen el composition
+// root y la pantalla, que son exactamente las dos capas que se tocan acá.
+// ⛔ NO los "acomodes" en `ports.ts` después: el diff de esta HU deja `ports.ts` byte-idéntico a
+// propósito, y eso es lo que mantiene esos tres docblocks fuera de discusión.
+//
+// 🔴 LA DISTINCIÓN QUE ESTA HU AGREGA, Y QUE HAY QUE LEER JUNTO A ESOS DOCBLOCKS. Cuatro bloques del
+// árbol dicen que en el seguimiento *"no se puede pedir una firma"*:
+// `PopProofReader` (`../application/ports.ts:150`), el docblock de
+// `../infrastructure/auth/pop-proof-store.ts:3-18`, el de
+// `../infrastructure/auth/http-pop-signer.ts:31-48` y el de
+// `../infrastructure/settlement/ledger-payout-status-gateway.ts:17-23`.
+// **Los cuatro SIGUEN SIENDO CIERTOS, y son ciertos DEL GATEWAY**: es él el que corre en el
+// `setInterval`, y su aritmética de 400 popups no cambió en un solo dígito. Lo que ahora convive con
+// ellos es un CUARTO call-site **del cliente**: **el gateway no puede pedir una firma; la persona sí,
+// y sólo sobre su propio gesto** — un toque explícito, y **≤ 3 por MONTAJE del seguimiento, CONTADOS**
+// (`MAX_CHALLENGES_POR_MONTAJE`, `../presentation/flow.tsx:1213`), contra los 400 automáticos del ingenuo.
+// ⛔ Esos cuatro docblocks NO se relajaron ni se les borró una palabra de la aritmética: los cuatro
+// archivos son NO-TOUCH y tienen líneas citadas por número, así que agregarles esta distinción in situ
+// las habría desplazado. Vive acá, y acá es donde hay que buscarla.
+//
+// 🔴 Y SON TRES TIPOS SEPARADOS, DE UN MÉTODO CADA UNO, PORQUE LA SEPARACIÓN ES EL MECANISMO. Las dos
+// capacidades no se juntan en un solo puerto:
+//  · `VentanaDeLectura` NO tiene `prove` ⇒ **el OBJETO que informa el estado no puede firmar**. Y NO
+//    tiene `peek` ⇒ tampoco puede sacar la credencial del almacén y armarse un `fetch` a mano,
+//    salteándose el throttle de 20 s del gateway.
+//  · `PopSigner` (`PopSigner`, `../application/ports.ts:553`) NO tiene `estado` ni `peek` ⇒ **el OBJETO
+//    que firma no puede consultar el estado**, así que no puede "optimizar" saltándose el popup de una
+//    operación de dinero reusando una prueba guardada.
+// ⛔ UN SOLO PUERTO CON LOS DOS MÉTODOS ES UNA VIOLACIÓN, aunque `PopProofReader` quede intacto.
+//
+// ⚠️ Y ACÁ HAY QUE SER EXACTO SOBRE HASTA DÓNDE LLEGA `tsc`, porque la versión anterior de este párrafo
+// afirmaba de más. Decía que *"el camino de LECTURA no compila si intenta firmar"*, y **eso es falso**:
+// MEDIDO, un `setInterval` en `TrackView` que llame a `renovar.prove(...)` **compila con `tsc` exit 0**,
+// porque las dos capacidades le llegan al MISMO componente en la MISMA prop y nada le impide tomar la
+// otra. Lo que `tsc` garantiza es lo de arriba —**una capacidad por OBJETO**—, no una propiedad del
+// CAMINO. El riesgo del popup por tick **sí** está cubierto, pero **por tests** (con ese mutante caen 4
+// de `flow.test.tsx`), y esa diferencia importa: un tipo no se puede borrar sin que el compilador grite,
+// un test sí. ⇒ **la separación por objeto es estructural; que nadie firme desde el temporizador es una
+// propiedad vigilada por la suite.**
+
+/** En qué estado está la ventana de lectura del seguimiento PARA UNA ADDRESS.
+ *
+ *  DOS valores, y `"sin-prueba"` colapsa a propósito "venció" con "nunca hubo": el almacén no los
+ *  distingue (`peek`, `../infrastructure/auth/pop-proof-store.ts:70` devuelve `null` para los dos) y el
+ *  segundo caso es real, no teórico — se entra al seguimiento desde el historial tras una recarga y el
+ *  almacén, que es en memoria, está vacío desde el primer milisegundo. ⛔ Por eso ninguna copy que
+ *  cuelgue de `"sin-prueba"` puede decir "venció" ni usar un verbo en pasado sobre haber revisado:
+ *  sería afirmar una historia que el sistema NO puede distinguir. */
+export type EstadoVentanaLectura = "vigente" | "sin-prueba";
+
+/** PREGUNTAR EL ESTADO de la ventana. Un método, y `prove` NO está acá (ver el bloque de arriba).
+ *
+ *  ⚠️ EFECTO SECUNDARIO CONOCIDO Y ACEPTADO: `peek()` BORRA la entrada vencida
+ *  (`porAddress`, `../infrastructure/auth/pop-proof-store.ts:79`), así que esto es una consulta con un
+ *  efecto idempotente (borrar lo que ya venció). ⛔ Por eso se invoca desde un efecto con temporizador,
+ *  JAMÁS desde un render. */
+export interface VentanaDeLectura {
+  estado(address: string): EstadoVentanaLectura;
+}
+
+/** Las dos capacidades que el composition root expone, JUNTAS Y REQUERIDAS.
+ *
+ *  Requeridas (sin `?`) porque el cableado no puede quedar a la disciplina: así `tsc` obliga a
+ *  `createContainer()` **y** a `buildTestContainer()` a proveerlas. Lo que `tsc` NO puede garantizar es
+ *  que la ventana se arme sobre el MISMO almacén que observa el gateway — eso lo mata T-339.5, y es el
+ *  único test del repo que lo ve. */
+export interface VentanaYRenovacion {
+  ventanaDeLectura: VentanaDeLectura;
+  renovarVentana: PopSigner;
 }

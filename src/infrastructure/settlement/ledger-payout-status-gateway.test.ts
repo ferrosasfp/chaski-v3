@@ -10,6 +10,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Clock, PopProof, PopProofReader } from "../../application/ports";
 import { LedgerPayoutStatusGateway } from "./ledger-payout-status-gateway";
+// WKH-339/T-339.3: el almacén REAL, no el lector falso de `:29`. Lo que se mide es que el TTL se cruza
+// de verdad y que una grabación nueva lo reabre, y eso el doble no lo puede decir.
+import { InMemoryPopProofStore } from "../auth/pop-proof-store";
 
 const ADDR = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 const PAYOUT = "transfi-1";
@@ -452,5 +455,76 @@ describe("T-337.8 (estático, AC-6): ningún docblock del payout deja la lectura
       /no[-\s]terminal/i.test(texto),
       `${rel} ya no nombra el estado NO-TERMINAL, que es la dirección segura de todo este camino`,
     ).toBe(true);
+  });
+});
+
+// ── WKH-339 · T-339.3 (AC-3) — la ventana se apaga sola, y una grabación nueva la vuelve a abrir ────
+//
+// 🔴 QUÉ SE MIDE ACÁ Y NO SE PODÍA MEDIR ANTES. Los tests de arriba usan el lector falso (`lector`,
+// `:29`), que devuelve lo que se le dice: con él no se puede distinguir "la ventana venció" de "el
+// doble cambió de opinión". Este `it` usa el almacén REAL con el MISMO `RelojFijo` que el gateway, así
+// que el cruce de los 8 minutos lo produce el paso del reloj, no una decisión del test.
+//
+// ⛔ Y NO SE TOCA NINGÚN PLAZO PARA ESCRIBIRLO. `POP_PROOF_TTL_MS` sigue en `8 * 60 * 1000`; el test
+// avanza el reloj hasta cruzarlo. Un test que necesitara bajar el TTL para poder correr estaría
+// midiendo otro sistema.
+//
+// 🔴 NINGUNA DE LAS TRES LECTURAS PRODUCE UN TERMINAL, y es deliberado: el ledger contesta
+// `outcome:"unknown"` siempre. Los dos terminales (`settled` y `refunded`) son irreversibles para el
+// remitente —`settled` no está en `RECOVERABLE` y le cierra el camino a sus USDC— así que un test cuyo
+// tema es la ventana de lectura no tiene ninguna razón para hacer aparecer uno. Lo que separa una
+// lectura de una no-lectura acá es el `failureReason` y el contador de `fetch`, no el desenlace.
+//
+// ⚠️ EL MEMO DE 20 s, QUE ES LA TRAMPA DE ESTE TEST. `LEDGER_STATUS_MIN_INTERVAL_MS` es 20 000 ms
+// (`LEDGER_STATUS_MIN_INTERVAL_MS`, `./ledger-payout-status-gateway.ts:48`) y el gateway devuelve lo último leído POR CLAVE sin volver a consultar. Dos hechos que hacen
+// que la 3ª lectura sí ocurra, y los dos están medidos en el código, no supuestos:
+//   · la rama sin prueba (`if (!proof) return noSe(…)`) devuelve SIN pasar por `recordar`, así que la 2ª
+//     lectura NO refresca el memo;
+//   · cuando llega el gesto, el memo sigue teniendo la edad de la 1ª lectura, o sea 480 000 ms ≥ 20 000
+//     ⇒ el throttle está abierto y no hace falta avanzar el reloj otra vez.
+// Por eso la 3ª lectura se dispara SIN tocar el reloj: lo único que cambió es que hubo un gesto. Si el
+// memo se refrescara en la rama sin prueba, este `it` se pondría rojo — y tendría razón.
+describe("WKH-339/AC-3 — la ventana de 8 min se apaga sola y un gesto nuevo la reabre", () => {
+  it("record → lee · +480 s → no lee y no consulta la red · record (el gesto) → vuelve a leer", async () => {
+    const reloj = new RelojFijo();
+    const store = new InMemoryPopProofStore(reloj); // el MISMO reloj que el gateway
+    const f = stubFetch(async () => ok({ payout: { outcome: "unknown", reason: "not_terminal" } }));
+    const gw = new LedgerPayoutStatusGateway(wallet(ADDR), store, reloj);
+
+    // 1 · El gesto de la persona graba una prueba, y el seguimiento LEE.
+    store.record(ADDR, PROOF);
+    expect((await gw.status(PAYOUT)).failureReason).toBe("payout_status_unknown");
+    expect(f).toHaveBeenCalledTimes(1);
+
+    // 2 · Pasan los 8 minutos EXACTOS del TTL. La lectura se apaga sola: el gateway no consulta la red
+    //     y no fabrica nada. No miente: calla.
+    reloj.avanzar(8 * 60 * 1000);
+    const apagada = await gw.status(PAYOUT);
+    expect(apagada.failureReason).toBe("payout_status_no_proof");
+    expect(apagada.status).toBe("submitted"); // NO-TERMINAL: ni settled ni failed
+    expect(f, "sin prueba el gateway no puede pagar una request ni una verificación de firma").toHaveBeenCalledTimes(1);
+
+    // 3 · EL GESTO. Una prueba NUEVA (no la vieja estirada), y la lectura se reanuda SIN tocar el reloj.
+    store.record(ADDR, PROOF);
+    expect((await gw.status(PAYOUT)).failureReason).toBe("payout_status_unknown");
+    expect(f, "la grabación nueva reabrió la ventana: la 3ª lectura sí llegó a la red").toHaveBeenCalledTimes(2);
+  });
+
+  // La otra dirección, y es la que mata al mutante "peek extiende la ventana sola": sin ningún gesto
+  // nuevo, cruzar el TTL DOS veces sigue sin leer. Es el mismo eje que `pop-proof-store.test.ts:56`
+  // ("NO se auto-renueva sola"), pero medido desde el consumidor de producción.
+  it("sin gesto nuevo, la ventana NO se auto-renueva: la lectura sigue apagada", async () => {
+    const reloj = new RelojFijo();
+    const store = new InMemoryPopProofStore(reloj);
+    const f = stubFetch(async () => ok({ payout: { outcome: "unknown", reason: "not_terminal" } }));
+    const gw = new LedgerPayoutStatusGateway(wallet(ADDR), store, reloj);
+
+    store.record(ADDR, PROOF);
+    await gw.status(PAYOUT); // fetch 1
+    reloj.avanzar(8 * 60 * 1000);
+    expect((await gw.status(PAYOUT)).failureReason).toBe("payout_status_no_proof");
+    reloj.avanzar(8 * 60 * 1000); // otra ventana entera, y nadie firmó nada
+    expect((await gw.status(PAYOUT)).failureReason).toBe("payout_status_no_proof");
+    expect(f).toHaveBeenCalledTimes(1);
   });
 });

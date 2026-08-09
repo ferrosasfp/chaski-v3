@@ -1,10 +1,16 @@
 // @vitest-environment jsdom
 import React from "react";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Receipt, RemittanceFlow, TrackView } from "./flow";
 import { buildTestContainer } from "../test-support/test-container";
+// WKH-339: el almacén REAL para T-339.4/.6. La forma de `ventana`/`renovar` de abajo es la MISMA que
+// arma `container.ts` (un `peek` que decide, y un signer que graba en ESE almacén), así que lo que se
+// mide es el mecanismo y no un doble que dice lo que se le pide.
+import { InMemoryPopProofStore } from "../infrastructure/auth/pop-proof-store";
 import { FallbackQuoteGateway } from "../infrastructure/fallback/gateways";
 import type { ResumeKyc } from "../application/use-cases/resume-kyc";
 import type { AbandonPendingKyc } from "../application/use-cases/abandon-pending-kyc";
@@ -1656,4 +1662,756 @@ it("T-6.1: un `provenance` que no está en la allowlist ⇒ NO 'Identidad verifi
   expect(screen.getByText(new RegExp(agenteNuevo))).toBeInTheDocument();
   // (d) y los datos siguen mostrándose: "no verificada" no es "falsa".
   expect(screen.getByText(/Test Quispe Mamani/)).toBeInTheDocument();
+});
+
+// ── WKH-339 · T-339.2 (AC-1) — la ventana apagada tiene un gesto para volver a encenderse ─────────
+//
+// 🔴 QUÉ AGUJERO CIERRA. El seguimiento lee el desenlace del payout detrás de una prueba de posesión
+// que vale 8 minutos y que la lectura NO renueva: el gateway sólo la CONSULTA. Cuando se apaga, el
+// seguimiento deja de leer. Eso no miente —devuelve un estado no-terminal y la remesa se queda donde
+// está— pero la persona no tenía NINGÚN gesto para volver a encenderla. Esto lo mide.
+//
+// 🔴 POR QUÉ VA POR `RemittanceFlow` Y NO POR `<TrackView>` A MANO, y es la mitad del valor de este
+// test. Montar `TrackView` con la prop puesta a mano probaría que el componente sabe renderizar un
+// botón, y NO probaría lo único que se puede olvidar: que el composition root le pase la capacidad.
+// Los 22 mounts de `<TrackView` que ya existen en el repo pasan sin la prop y siguen pasando, así que
+// ninguno puede ver ese olvido. Éste sí: llega a la pantalla por el mismo camino que una persona.
+//
+// El estado inicial del almacén de pruebas es el CASO REAL, no un montaje: `buildTestContainer` arma
+// un `InMemoryPopProofStore` vacío, y una persona que recarga y entra desde el historial se encuentra
+// exactamente eso — nunca hubo prueba, no venció ninguna. Por eso el aserto NO busca la palabra
+// "venció" en ningún lado: buscar un gesto es falsable, buscar una historia que el sistema no puede
+// distinguir no lo es.
+//
+// ⚠️ EL `sender` NO ES `null` ACÁ, Y HAY QUE VERIFICARLO O EL ROJO ES POR EL MOTIVO EQUIVOCADO: con
+// `sender == null` la pantalla cae en el estado "sin billetera", que a propósito NO ofrece el gesto
+// (no hay a quién pedirle la firma), y el test quedaría rojo antes Y después del fix. `openHistory`
+// pasa por `resolveSender`, que hace `setAddress(addr)` (`resolveSender`, `./flow.tsx:366`), así que
+// al llegar al seguimiento `sender` es la address del dueño. El aserto (b) lo clava.
+//
+// Molde: `seededFlow` de `history.test.tsx:130`, que es el mismo camino ("Ver mis envíos" → "Ver
+// seguimiento"). Se reescribe acá en vez de importarse porque los helpers de ese archivo son locales.
+it("T-339.2 (AC-1): con la ventana de lectura apagada, el seguimiento ofrece revisar ahora", async () => {
+  const repo = new InMemoryRepo();
+  const rem = solanaPayoutSubmittedSnapshot("2026-07-10T00:00:00.000Z");
+  await repo.save(Remittance.rehydrate(rem));
+  // `FakeSolanaWallet` para que `connect()` devuelva FAKE_SOLANA_BENEFICIARY, que es el dueño de la
+  // remesa sembrada: sin eso el historial vendría vacío y no habría a dónde llegar.
+  // `solanaRefund` NO es decorativo: es lo que hace montar "Recuperar fondos", y ese botón es el
+  // instrumento del aserto (b) — sólo se renderiza con `sender` no nulo.
+  const container = buildTestContainer({
+    repo,
+    wallet: new FakeSolanaWallet(),
+    solanaRefund: new FakeSolanaEscrowRefundGateway(),
+  });
+
+  // Arranque en frío: el flujo monta en `send`. Es una recarga, y el almacén de pruebas está vacío
+  // desde el primer milisegundo. NO se graba ninguna prueba a propósito.
+  render(<RemittanceFlow container={container} />);
+  fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Ver seguimiento/ }));
+
+  // (a) llegamos al seguimiento de una remesa en `payout_submitted` (si esto falla, el test mide otra
+  //     cosa y el rojo de abajo no habla de la ventana).
+  expect(await screen.findByText(/El proveedor aceptó la orden de pago/)).toBeInTheDocument();
+  // (b) y con dueño conocido: es lo que descarta el estado "sin billetera" como causa del rojo.
+  expect(await screen.findByRole("button", { name: /Recuperar fondos/ })).toBeInTheDocument();
+
+  // (c) EL ASERTO. Existe un control accesible para revisar AHORA. En presente: el gesto, no la
+  //     historia. ⚠️ El nombre de este `it` y esta línea decían "volver a revisar", que es una de las
+  //     tres frases que el copy tiene PROHIBIDAS (implica que revisábamos antes). Lo cazó el eje
+  //     VECINDAD del barrido de familia, sobre prosa que escribí en esta misma pasada.
+  expect(await screen.findByRole("button", { name: /revisar/i })).toBeInTheDocument();
+});
+
+// ── WKH-339 · T-339.4 / T-339.6 / T-339.7 — los siete estados de la ventana en pantalla ─────────────
+//
+// 🔴 QUÉ SE MIDE ACÁ Y POR QUÉ SOBRE `TrackView` DIRECTO, no sobre `RemittanceFlow`. El cableado ya lo
+// mide T-339.2 (y T-339.5 al nivel del container). Lo que falta es lo que sólo se puede ejercitar
+// controlando los desenlaces de `prove()`, y ésos no se pueden inducir desde el flujo completo.
+//
+// `ventana` y `renovar` se arman con la MISMA forma que `container.ts`: un `peek` sobre un almacén real
+// decide el estado, y el signer graba EN ESE almacén. Así "el control desaparece al renovar" no es un
+// flag que el test setea: es la consecuencia de que `estado()` pase a `"vigente"`.
+// El tick del control, para los `it` con fake timers. ⚠️ Es un SEGUNDO LITERAL de `VENTANA_CHECK_MS`
+// (`flow.tsx`), que no está exportado. Se declara acá con su origen escrito en vez de dejarlo suelto: si
+// alguien cambia el de producción, estos `it` avanzan de menos y se ponen rojos, que es la dirección
+// correcta (fallan del lado de "no esperé lo suficiente", nunca del lado de dar por bueno un tick que no
+// ocurrió).
+const VENTANA_CHECK_MS_EN_TEST = 5000;
+
+function ventanaDeTest(clock = new FixedClock()) {
+  const store = new InMemoryPopProofStore(clock);
+  const estado = vi.fn((a: string) => (store.peek(a) ? ("vigente" as const) : ("sin-prueba" as const)));
+  return { store, ventana: { estado } };
+}
+/** El signer que SÍ graba, o sea el desenlace feliz de `prove()`. */
+function signerQueGraba(store: InMemoryPopProofStore) {
+  return {
+    prove: vi.fn(async (a: string) => {
+      const p = { challenge: "ch-339", signature: "sig-339" };
+      store.record(a, p);
+      return p;
+    }),
+  };
+}
+
+describe("WKH-339 — los siete estados de la ventana de lectura, en pantalla", () => {
+  // ⚠️ EL `sessionStorage` SE LIMPIA ENTRE TESTS, y hace falta desde que el techo sobrevive al remonte
+  // (CR/BLQ-MED-2): sin esto, el primer `it` que agota los 3 intentos deja el contador puesto y los
+  // siguientes arrancan con el botón deshabilitado. Medido: 4 tests rojos por contaminación, ninguno por
+  // el comportamiento. Es la contracara honesta de persistir: el estado que sobrevive a un remonte también
+  // sobrevive a un `cleanup()`.
+  beforeEach(() => window.sessionStorage.clear());
+  afterEach(cleanup);
+  const rem = solanaPayoutSubmittedSnapshot("2026-07-10T00:00:00.000Z");
+
+  // ── T-339.6 (AC-5) · Estado 1: con la ventana VIGENTE el render es el de siempre ────────────────
+  //
+  // Molde de `agent-plan-card.test.tsx:406`: render → capturar → `cleanup()` → render → capturar →
+  // comparar. ⚠️ El `cleanup()` NO es opcional: sin él quedan DOS árboles en el DOM y se compararía el
+  // render anterior consigo mismo.
+  //
+  // Mata a M2 (`estado()` devuelve `"sin-prueba"` siempre) y a M3 (el botón se renderiza sin mirar el
+  // estado): los dos harían aparecer el bloque nuevo con la ventana vigente, y el HTML dejaría de ser
+  // idéntico al de sin `revision`.
+  it("T-339.6: ventana VIGENTE ⇒ el HTML es byte-idéntico al de sin `revision` (nada nuevo en pantalla)", async () => {
+    // (1) el render de referencia: sin la prop, o sea exactamente el de antes de esta HU.
+    const { container: sinProp } = render(
+      <TrackView rem={rem} sender={FAKE_SOLANA_BENEFICIARY} onRecovered={() => {}} />,
+    );
+    const htmlSinProp = sinProp.innerHTML;
+    cleanup();
+
+    // (2) el mismo render, con la prop puesta y una prueba YA grabada ⇒ la ventana está vigente.
+    const { store, ventana } = ventanaDeTest();
+    store.record(FAKE_SOLANA_BENEFICIARY, { challenge: "ch", signature: "sig" });
+    const { container: conVentana } = render(
+      <TrackView
+        rem={rem}
+        sender={FAKE_SOLANA_BENEFICIARY}
+        onRecovered={() => {}}
+        revision={{ ventana, renovar: signerQueGraba(store) }}
+      />,
+    );
+    await waitFor(() => expect(ventana.estado).toHaveBeenCalled());
+
+    expect(
+      conVentana.innerHTML,
+      "con la ventana VIGENTE la pantalla muestra algo que antes no mostraba: o `estado()` no discrimina " +
+        "(M2), o el bloque nuevo se renderiza sin condicionar por el estado (M3)",
+    ).toBe(htmlSinProp);
+    expect(screen.queryByRole("button", { name: /revisar/i })).toBeNull();
+  });
+
+  // ── T-339.7 (AC-4) · Estado 5: sin billetera se explica, y NO se ofrece el gesto ────────────────
+  //
+  // Mata a M12 (`sin-billetera` colapsa en `sin-prueba`): ofrecería "Revisar ahora" sin tener a quién
+  // pedirle la firma. ⚠️ Rama DEFENSIVA: que sea "alcanzable de verdad desde el historial" NO está medido
+  // y la afirmación se sacó. Se cubre porque el tipo de `sender` admite `null`, no porque haya un camino
+  // conocido. La evidencia correcta (CR/MNR-1, que corrigió la mía): `onOpenFromHistory` NO toca la
+  // address —sólo `setError`/`setRem`/`setStep`—, pero al historial se llega sólo por `openHistory`, que
+  // hace `await resolveSender()` antes de `setStep("history")`, y ése sí hace `setAddress`.
+  it("T-339.7: `payout_submitted` SIN billetera ⇒ el texto de la wallet y NINGÚN botón de revisar", async () => {
+    const { store, ventana } = ventanaDeTest();
+    render(
+      <TrackView
+        rem={rem}
+        sender={null}
+        onRecovered={() => {}}
+        revision={{ ventana, renovar: signerQueGraba(store) }}
+      />,
+    );
+
+    expect(await screen.findByText(/Conectá la misma wallet con la que enviaste/)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /revisar/i }),
+      "se ofrece renovar sin billetera: no hay a quién pedirle la firma, así que es un botón que no " +
+        "puede funcionar",
+    ).toBeNull();
+    // Y no dice "no estamos revisando": la razón es otra, y decir la equivocada manda a hacer lo que no sirve.
+    expect(screen.queryByText(/No estamos revisando/)).toBeNull();
+  });
+
+  // ── T-339.4 (AC-4) · los CUATRO desenlaces de `prove()`, y ninguno culpa a quien no vio un popup ──
+  //
+  // 🔴 Mata a M6 (colapsar `null` con el `throw`): con 501 NUNCA se abrió un popup, así que decir "no
+  // completaste la firma" es FALSO. Y mata a M7 (el estado local no vuelve de `"firmando"`): el texto
+  // "Confirmá en tu billetera…" quedaría pegado después de que `prove()` resuelva.
+  it("T-339.4a: éxito ⇒ el control DESAPARECE (porque `estado()` pasó a vigente, no por un flag)", async () => {
+    const { store, ventana } = ventanaDeTest();
+    const renovar = signerQueGraba(store);
+    render(
+      <TrackView
+        rem={rem}
+        sender={FAKE_SOLANA_BENEFICIARY}
+        onRecovered={() => {}}
+        revision={{ ventana, renovar }}
+      />,
+    );
+
+    const btn = await screen.findByRole("button", { name: /revisar/i });
+    expect(screen.getByText(/No estamos revisando/)).toBeInTheDocument();
+    fireEvent.click(btn);
+
+    await waitFor(() => expect(renovar.prove).toHaveBeenCalledWith(FAKE_SOLANA_BENEFICIARY));
+    // El control se va solo, y con él el texto. Si esto no pasa, el botón queda para siempre y cada
+    // toque quema un challenge de un cupo de 10 por IP.
+    await waitFor(() => expect(screen.queryByRole("button", { name: /revisar/i })).toBeNull());
+    expect(screen.queryByText(/No estamos revisando/)).toBeNull();
+    expect(screen.queryByText(/Confirmá en tu billetera/)).toBeNull(); // M7: el texto no queda pegado
+  });
+
+  it("T-339.4b: `prove()` devuelve `null` (501) ⇒ 'es de nuestro lado' + 'no cambia el resultado', y NUNCA 'no completaste la firma'", async () => {
+    const { store, ventana } = ventanaDeTest();
+    void store;
+    render(
+      <TrackView
+        rem={rem}
+        sender={FAKE_SOLANA_BENEFICIARY}
+        onRecovered={() => {}}
+        revision={{ ventana, renovar: { prove: async () => null } }}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /revisar/i }));
+
+    expect(await screen.findByText(/es de nuestro lado/)).toBeInTheDocument();
+    // 🔴 EL ASERTO QUE MATA A M6. Con 501 el mecanismo está apagado server-side: no hubo popup, no hubo
+    // nada que la persona pudiera completar o rechazar.
+    expect(screen.queryByText(/La firma no se completó/)).toBeNull();
+    expect(screen.queryByText(/rechaz/i)).toBeNull();
+    // 🔴 Y LA DISTINCIÓN CON EL 429 (AR/MNR-2): con el mecanismo apagado —que es el DEFAULT documentado—
+    // reintentar NUNCA sirve, así que el copy no puede insinuar que más tarde sí. Un `"Ahora mismo"` a
+    // secas lo insinuaba. Este aserto es lo que impide volver a colapsar 6b con 6.
+    expect(screen.getByText(/no cambia el resultado/)).toBeInTheDocument();
+    // Y el control SIGUE ahí: la ventana no se encendió, así que la salida tiene que seguir ofrecida.
+    expect(screen.getByRole("button", { name: /revisar/i })).toBeEnabled();
+  });
+
+  it("T-339.4c: `throw 'pop_challenge_unavailable'` (400/5xx/**429 del cupo**) ⇒ el MISMO estado 6", async () => {
+    const { store, ventana } = ventanaDeTest();
+    void store;
+    render(
+      <TrackView
+        rem={rem}
+        sender={FAKE_SOLANA_BENEFICIARY}
+        onRecovered={() => {}}
+        revision={{
+          ventana,
+          renovar: {
+            prove: async () => {
+              throw new Error("pop_challenge_unavailable");
+            },
+          },
+        }}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /revisar/i }));
+
+    // Éste es el camino del 429 cuando dos personas comparten la IP, que es el riesgo declarado de la
+    // HU: el server rechazó ANTES de emitir el challenge ⇒ tampoco hubo popup.
+    expect(await screen.findByText(/es de nuestro lado/)).toBeInTheDocument();
+    expect(screen.queryByText(/La firma no se completó/)).toBeNull();
+  });
+
+  /** Monta el control con un `prove` que rechaza con `error`, y devuelve el DOM listo para leer. */
+  async function trasUnFalloDe(error: unknown) {
+    const { store, ventana } = ventanaDeTest();
+    void store;
+    render(
+      <TrackView
+        rem={rem}
+        sender={FAKE_SOLANA_BENEFICIARY}
+        onRecovered={() => {}}
+        revision={{
+          ventana,
+          renovar: {
+            prove: async () => {
+              throw error;
+            },
+          },
+        }}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /revisar/i }));
+  }
+
+  it("T-339.4d: un error que la billetera DECLARA como suyo ⇒ 'La firma no se completó'", async () => {
+    // La forma que produce producción, no una inventada: `@solana/wallet-adapter-base` etiqueta cada
+    // excepción con su `name` en el constructor (MEDIDO en
+    // `node_modules/@solana/wallet-adapter-base/lib/cjs/errors.js:99`). Ese `name` es lo ÚNICO
+    // estructural que dice "acá hubo un popup"; el mensaje lo escribe un tercero y este repo ya declaró
+    // que no está medido (`MENSAJE_FIRMA_RECHAZADA_SIN_MEDIR`, `../test-support/rpc-caido.ts:33`).
+    const e = new Error("User rejected the request.");
+    e.name = "WalletSignMessageError";
+    await trasUnFalloDe(e);
+
+    expect(await screen.findByText(/La firma no se completó/)).toBeInTheDocument();
+    // ⛔ Y no dice "la rechazaste", aunque el mensaje de la billetera diga "rejected": ese mensaje no
+    // distingue un rechazo de un fallo de la extensión, así que afirmarlo sería inventar la distinción.
+    expect(screen.queryByText(/rechaz/i)).toBeNull();
+    expect(screen.queryByText(/es de nuestro lado/)).toBeNull(); // no se colapsa con el estado 6
+  });
+
+  // ── 🔴 T-339.4f (AR/BLQ-MED-1) · LOS TRES INPUTS QUE LA PANTALLA LE ACHACABA A LA PERSONA ──────────
+  //
+  // Los tres están MEDIDOS en el árbol y los tres salían por el `else` que mandaba todo `throw` no
+  // reconocido a *"La firma no se completó"*. El primero es **el input más común de una app de remesas en
+  // celular**: quedarse sin red. La app le decía a la persona que SU firma falló cuando lo que se cayó
+  // fue NUESTRA red.
+  //
+  // ⚠️ Se miden en el DOM además de en `gestoDespuesDeProve` (que tiene su propio `describe` en
+  // `flow-vm.test.ts`), porque lo que el bloqueante describe es lo que la PERSONA LEE, y entre la función
+  // pura y la pantalla está el `catch` del handler — que es justo donde vivía el `else`.
+  it.each([
+    ["sin conexión / server caído / CORS: `fetch` rechaza con un TypeError crudo", new TypeError("Failed to fetch")],
+    ["el handle de firma no está montado: el bridge tira ANTES de cualquier popup", new Error("wallet_sign_not_available")],
+    ["un `throw` que no es `Error`: no hay `name` ni `message` que mirar", "boom"],
+  ])("T-339.4f: %s ⇒ 'es de nuestro lado', y NUNCA 'La firma no se completó'", async (_n, error) => {
+    await trasUnFalloDe(error);
+
+    expect(await screen.findByText(/es de nuestro lado/)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/La firma no se completó/),
+      "la pantalla le achaca a la persona una firma que nunca le pedimos: nunca se abrió un popup",
+    ).toBeNull();
+    expect(screen.queryByText(/rechaz/i)).toBeNull();
+    // Y reintentar SÍ puede servir más tarde (a diferencia del 501), así que el botón sigue disponible.
+    expect(screen.getByRole("button", { name: /revisar/i })).toBeEnabled();
+    expect(screen.queryByText(/no cambia el resultado/)).toBeNull();
+  });
+
+  // ── 🔴 T-339.4g (AR/BLQ-MED-2) · EL TECHO DE CHALLENGES EXISTE Y ES MEDIBLE ────────────────────────
+  //
+  // Los dos frenos que la aritmética invocaba —el `disabled` mientras firma y que el botón desaparece al
+  // renovar con éxito— NO acotan el camino de FALLO: tras un fallo el botón vuelve habilitado, no hay
+  // cooldown, y el copy del estado 7 INVITA a reintentar. MEDIDO antes del arreglo: **6 toques ⇒ 6
+  // challenges**, con el botón habilitado antes de cada uno.
+  //
+  // Y el daño no era teórico: `PAYOUT_CHALLENGE_RL` son 10 requests por "10 m" IP-only y COMPARTIDOS, y
+  // con el secreto seteado el limitador corre DESPUÉS del 501 ⇒ cada toque consume un token. Un solo
+  // remitente podía vaciar el cupo de su IP y tumbar el envío del vecino detrás del mismo NAT.
+  it("T-339.4g: 6 toques sobre un `prove` que falla consumen SÓLO 3 challenges, y el botón queda deshabilitado", async () => {
+    const { store, ventana } = ventanaDeTest();
+    void store;
+    const prove = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    render(
+      <TrackView
+        rem={rem}
+        sender={FAKE_SOLANA_BENEFICIARY}
+        onRecovered={() => {}}
+        revision={{ ventana, renovar: { prove } }}
+      />,
+    );
+
+    const btn = await screen.findByRole("button", { name: /revisar/i });
+
+    // (1) SEIS toques uno por uno, esperando el re-render entre cada par. Es el camino que el AR midió:
+    //     tras un fallo el botón vuelve habilitado y el copy invita a reintentar.
+    for (let i = 0; i < 6; i += 1) {
+      fireEvent.click(btn);
+      await waitFor(() => expect(prove.mock.calls.length).toBeLessThanOrEqual(3));
+    }
+    expect(
+      prove.mock.calls.length,
+      "el camino de FALLO no tiene techo: cada toque es un challenge de un cupo de 10 COMPARTIDO por IP, " +
+        "así que un solo remitente puede vaciar el cupo de su red y tumbar el envío del vecino",
+    ).toBe(3);
+    // Y la pantalla lo dice en vez de quedarse con un botón que no hace nada.
+    expect(screen.getByRole("button", { name: /revisar/i })).toBeDisabled();
+    // ⛔ Y la copy NO le pide remontar: eso era pedirle la acción que reiniciaba el techo, y encima
+    //    mandaba a una salida que esta pantalla no tiene.
+    expect(screen.getByText(/Podés recuperar tus USDC en vez de esperar/)).toBeInTheDocument();
+    expect(screen.queryByText(/Volvé a abrir/)).toBeNull();
+    // Y no repite verbatim la frase que `PayoutInProgress` ya pone en esta misma vista: si la copiara,
+    // habría DOS nodos con el mismo texto (medido). Acá tiene que haber exactamente uno.
+    expect(screen.getAllByText(/Si preferís no esperar, podés recuperar tus USDC/)).toHaveLength(1);
+  });
+
+  // ── 🔴 T-339.4j (CR/BLQ-MED-2) · EL TECHO SOBREVIVE AL REMONTE ─────────────────────────────────────
+  //
+  // MEDIDO por el CR sobre el código anterior: 5 toques ⇒ 3 challenges · `unmount()` · `render()` ·
+  // 5 toques ⇒ **total 6**. Y el camino existe en producción, no es un montaje del test: recargar deja el
+  // flujo en `send` (el `step` no persiste) → "Ver mis envíos" → la entrada → `onOpenFromHistory` ⇒
+  // seguimiento montado de nuevo con el contador en 0. Y el almacén vacío por la recarga es justo el
+  // estado que MUESTRA el botón. La cuenta del CR llegaba a los 10 del cupo.
+  //
+  // ⚠️ Lo que este `it` mide es la MITIGACIÓN, no un límite: `sessionStorage` es por pestaña y una pestaña
+  // nueva lo reinicia. Está declarado así en el docblock de `leerIntentosGuardados`. El techo real por
+  // remitente sigue siendo WKH-340.
+  it("T-339.4j: tras `unmount()` + `render()`, el techo NO se reinicia (3 y no 6)", async () => {
+    window.sessionStorage.clear();
+    const { store, ventana } = ventanaDeTest();
+    void store;
+    const prove = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    const montar = () =>
+      render(
+        <TrackView
+          rem={rem}
+          sender={FAKE_SOLANA_BENEFICIARY}
+          onRecovered={() => {}}
+          revision={{ ventana, renovar: { prove } }}
+        />,
+      );
+
+    const primera = montar();
+    const btn1 = await screen.findByRole("button", { name: /revisar/i });
+    await act(async () => {
+      for (let i = 0; i < 5; i += 1) fireEvent.click(btn1);
+    });
+    expect(prove.mock.calls.length).toBe(3);
+
+    // El remonte, que es lo que hace una recarga + "Ver seguimiento".
+    primera.unmount();
+    montar();
+    const btn2 = await screen.findByRole("button", { name: /revisar/i });
+    await act(async () => {
+      for (let i = 0; i < 5; i += 1) fireEvent.click(btn2);
+    });
+
+    expect(
+      prove.mock.calls.length,
+      "el techo se reinició con el remonte: recargar y volver al seguimiento vuelve a habilitar 3 " +
+        "challenges, y con eso un solo remitente llega a los 10 del cupo de su IP",
+    ).toBe(3);
+    expect(btn2).toBeDisabled();
+    window.sessionStorage.clear();
+  });
+
+  // ── 🔴 T-339.4g'' (CR/BLQ-BAJO-2) · LA RÁFAGA SÍNCRONA, que es lo que separa el `ref` del `disabled` ──
+  //
+  // ⚠️ ESTE `it` YO LO ESCRIBÍ, LO VI DAR 1 EN VEZ DE 3, Y CONCLUÍ QUE NO ERA TESTEABLE. Era testeable:
+  // mi error fue el `await` entre clicks. `fireEvent.click` envuelve en `act()`, sí — pero **los `act()`
+  // anidados no flushean: sólo el más externo**. Metiendo los 6 clicks DENTRO de un único `act()`, los 6
+  // handlers corren antes de cualquier commit, que es exactamente el doble-tap real.
+  //
+  // MEDIDO por el CR y reproducido acá: **3 con la guarda del `ref`, 6 sin ella**. Y el `it` de arriba
+  // (que espera el re-render entre toques) pasa igual sin la guarda, porque ahí el `disabled` ya se
+  // aplicó ⇒ **sin este `it`, quitar el `return` temprano no lo mata nada**.
+  //
+  // Por qué el `ref` y no `useState`: en una ráfaga del mismo turno todas las closures ven el MISMO valor
+  // viejo del estado, así que un contador en `useState` no corta. El `ref` se incrementa sincrónicamente.
+  it("T-339.4g'': 6 clicks en UN solo `act()` (doble-tap) tampoco pasan de 3 challenges", async () => {
+    const { store, ventana } = ventanaDeTest();
+    void store;
+    const prove = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    render(
+      <TrackView
+        rem={rem}
+        sender={FAKE_SOLANA_BENEFICIARY}
+        onRecovered={() => {}}
+        revision={{ ventana, renovar: { prove } }}
+      />,
+    );
+    const btn = await screen.findByRole("button", { name: /revisar/i });
+
+    // ⛔ SIN `await` adentro: es lo que hace que los 6 handlers corran antes de cualquier re-render.
+    await act(async () => {
+      for (let i = 0; i < 6; i += 1) fireEvent.click(btn);
+    });
+
+    expect(
+      prove.mock.calls.length,
+      "una ráfaga síncrona atravesó el techo: o el contador es estado de React (todas las closures ven " +
+        "el valor viejo), o la única guarda es el `disabled`, que se aplica DESPUÉS del commit",
+    ).toBe(3);
+  });
+
+  // 🔴 T-339.4g' — EL TECHO CUENTA LOS ÉXITOS TAMBIÉN, no sólo los fallos.
+  //
+  // Es la otra mitad de BLQ-MED-2 y una propiedad distinta de la de arriba: lo que consume el cupo de la
+  // IP es **la request**, no su desenlace, así que un contador que sólo mirara los fallos dejaría el
+  // techo abierto por el camino feliz. Acá cada intento graba una prueba (éxito), la ventana pasa a
+  // `"vigente"`, se la vence a mano y se vuelve a intentar: al cuarto ciclo ya no hay intentos.
+  //
+  // ⚠️ Y ES POR MONTAJE, no por sesión: remontar equivale a recargar, y una recarga ya vacía el almacén
+  // de pruebas. Ese es el escape que evita que el techo deje a alguien sin salida.
+  it("T-339.4g': el techo cuenta también los intentos EXITOSOS (lo que gasta el cupo es la request)", async () => {
+    vi.useFakeTimers();
+    try {
+      const reloj = new FixedClock();
+      const { store, ventana } = ventanaDeTest(reloj);
+      const prove = vi.fn(async (a: string) => {
+        const p = { challenge: "ch", signature: "sig" };
+        store.record(a, p);
+        return p;
+      });
+      render(
+        <TrackView
+          rem={rem}
+          sender={FAKE_SOLANA_BENEFICIARY}
+          onRecovered={() => {}}
+          revision={{ ventana, renovar: { prove } }}
+        />,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+
+      // Cuatro ciclos de "renovar con éxito y dejar vencer la prueba". El cuarto no puede pedir nada.
+      // ⚠️ Con fake timers hace falta avanzar el tick del control (5 s) para que la etiqueta se entere
+      // del cambio de ventana; el `FixedClock` es el que decide si la prueba venció.
+      for (let ciclo = 0; ciclo < 4; ciclo += 1) {
+        const btn = screen.getByRole("button", { name: /revisar/i });
+        if ((btn as HTMLButtonElement).disabled) break;
+        await act(async () => {
+          fireEvent.click(btn);
+        });
+        expect(screen.queryByText(/No estamos revisando/)).toBeNull(); // renovó: el bloque se fue
+        // Se vence la prueba recién grabada: el bloque vuelve a aparecer y con él el botón.
+        reloj.set(new Date(Date.parse(T0) + (ciclo + 1) * 9 * 60 * 1000).toISOString());
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(VENTANA_CHECK_MS_EN_TEST);
+        });
+        expect(screen.getByText(/No estamos revisando/)).toBeInTheDocument();
+      }
+
+      expect(
+        prove.mock.calls.length,
+        "el techo no cuenta los intentos exitosos: lo que consume el cupo de la IP es la request, no su " +
+          "desenlace, así que contar sólo los fallos deja el techo abierto por el camino feliz",
+      ).toBe(3);
+      expect(screen.getByRole("button", { name: /revisar/i })).toBeDisabled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // ── 🔴 T-339.4i (CR/BLQ-BAJO-3) · NINGÚN TEMPORIZADOR PIDE UNA FIRMA — Y EL CANDADO NO MIRA EL RELOJ ──
+  //
+  // 🔴 EL AGUJERO QUE CIERRA, MEDIDO POR EL CR CON TRES VARIANTES DEL MISMO MUTANTE, todas con `tsc`
+  // exit 0 (`tsc` no puede impedirlo: las dos capacidades le llegan al MISMO componente en la MISMA prop):
+  //     `setInterval(prove, 0)`     ⇒ 57 tests rojos
+  //     `setInterval(prove, 1500)`  ⇒  1 test rojo
+  //     `setInterval(prove, 60000)` ⇒  0 tests rojos   ← el invariante CENTRAL de la HU, sin guarda
+  //
+  // O sea que un futuro *"auto-renovar cada 5 minutos"* compilaba, pasaba la suite entera, y cada persona
+  // recibía un popup que no pidió en medio de un payout. Los tests que lo cazaban sólo lo hacían porque
+  // el temporizador era RÁPIDO y ensuciaba sus propias aserciones — o sea por accidente.
+  //
+  // ⇒ este candado es ESTÁTICO y no depende del reloj: lee el archivo y exige que ningún cuerpo de
+  // `setInterval`/`setTimeout` de `flow.tsx` mencione `prove`. Es el mismo molde que los candados
+  // estáticos que este repo ya usa (`readFileSync` + asertar sobre el texto).
+  //
+  // ⚠️ QUÉ NO CUBRE, dicho para que su verde no se lea de más: mira el TEXTO del cuerpo del temporizador,
+  // así que un `setInterval(pedirFirmaIndirecta, 60000)` donde `prove` se llama dentro de esa función
+  // NOMBRADA pasaría. Esa forma la cubre el `it` de abajo, que avanza el reloj falso media hora. Los dos
+  // hacen falta: éste caza la forma directa a cualquier cadencia; ése caza la indirecta.
+  it("T-339.4i (estático): ningún `setInterval`/`setTimeout` de flow.tsx menciona `prove`", () => {
+    const src = readFileSync(path.resolve(process.cwd(), "src/presentation/flow.tsx"), "utf8");
+    const sospechosos: string[] = [];
+    for (const m of src.matchAll(/set(?:Interval|Timeout)\s*\(/g)) {
+      // Balanceo de paréntesis desde la apertura de la llamada: es el cuerpo COMPLETO del temporizador,
+      // no una ventana de N caracteres (una ventana fija se pasa de largo o se queda corta según el
+      // formateo, que es justo lo que un candado no puede depender de).
+      let i = (m.index ?? 0) + m[0].length;
+      let nivel = 1;
+      while (i < src.length && nivel > 0) {
+        if (src[i] === "(") nivel += 1;
+        else if (src[i] === ")") nivel -= 1;
+        i += 1;
+      }
+      const cuerpo = src.slice(m.index ?? 0, i);
+      if (/\bprove\b/.test(cuerpo)) sospechosos.push(cuerpo.slice(0, 160));
+    }
+    expect(
+      sospechosos,
+      "un temporizador de `flow.tsx` menciona `prove`: eso es un popup de billetera que la persona NO " +
+        "pidió, y a una cadencia lenta NINGÚN otro test lo ve. `tsc` no puede impedirlo — las dos " +
+        "capacidades llegan al mismo componente en la misma prop.",
+    ).toEqual([]);
+  });
+
+  // La otra mitad: la forma INDIRECTA, que el candado estático no ve. Se avanza el reloj falso media hora
+  // —360 ticks del control— sin ningún gesto, y `prove` no puede haber sido llamado ni una vez.
+  it("T-339.4i': media hora de reloj sin ningún gesto ⇒ CERO llamadas a `prove`", async () => {
+    vi.useFakeTimers();
+    try {
+      const { store, ventana } = ventanaDeTest();
+      void store;
+      const prove = vi.fn(async () => ({ challenge: "ch", signature: "sig" }));
+      render(
+        <TrackView
+          rem={rem}
+          sender={FAKE_SOLANA_BENEFICIARY}
+          onRecovered={() => {}}
+          revision={{ ventana, renovar: { prove } }}
+        />,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30 * 60 * 1000); // 30 min = 360 ticks de 5 s
+      });
+      expect(
+        prove,
+        "algo pidió una firma sin que la persona toque nada: el gesto es la ÚNICA fuente de un popup",
+      ).not.toHaveBeenCalled();
+      // Y el control sigue ofrecido: la ventana nunca se encendió porque nadie firmó.
+      expect(screen.getByRole("button", { name: /revisar/i })).toBeEnabled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // ── 🟡 T-339.4h (AR/BLQ-BAJO-1) · EL TEXTO DE UN FALLO VIEJO NO REAPARECE ──────────────────────────
+  //
+  // Medido por el AR: fallo de billetera ⇒ el texto queda · otro gesto de la app graba una prueba en el
+  // MISMO almacén (por ejemplo "Recuperar fondos") ⇒ el bloque desaparece · se cruza el plazo ⇒ **el
+  // texto viejo VUELVE A APARECER**, dando como razón actual de que no estamos revisando un fallo de
+  // firma que ya no es la razón.
+  it("T-339.4h: tras un fallo, si otro gesto enciende la ventana, el texto viejo NO vuelve al vencerse", async () => {
+    vi.useFakeTimers();
+    try {
+      const reloj = new FixedClock();
+      const { store, ventana } = ventanaDeTest(reloj);
+      const e = new Error("User rejected the request.");
+      e.name = "WalletSignMessageError";
+      render(
+        <TrackView
+          rem={rem}
+          sender={FAKE_SOLANA_BENEFICIARY}
+          onRecovered={() => {}}
+          revision={{
+            ventana,
+            renovar: {
+              prove: async () => {
+                throw e;
+              },
+            },
+          }}
+        />,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+
+      // (1) el fallo deja su texto.
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /revisar/i }));
+      });
+      expect(screen.getByText(/La firma no se completó/)).toBeInTheDocument();
+
+      // (2) OTRO gesto de la app graba una prueba en el MISMO almacén (es lo que hace "Recuperar fondos").
+      //     El bloque desaparece porque la ventana pasó a `"vigente"`.
+      store.record(FAKE_SOLANA_BENEFICIARY, { challenge: "ch-otro", signature: "sig-otro" });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000); // un tick del control
+      });
+      expect(screen.queryByText(/La firma no se completó/)).toBeNull();
+
+      // (3) se cruza el plazo de la prueba y el bloque vuelve. ⛔ TIENE que volver SIN el texto viejo.
+      await act(async () => {
+        // `FixedClock` no tiene `avanzar`: se mueve con `set`. Cruzar el TTL de 8 min es lo que hace que
+        // el bloque vuelva a aparecer, que es el escenario entero de este `it`.
+        //
+        // ⚠️ ESTE `8 * 60 * 1000` ES UN SEGUNDO LITERAL DE `POP_PROOF_TTL_MS` (CR/MNR-4), y se declara
+        // como se declaró el del tick (`VENTANA_CHECK_MS_EN_TEST`, más arriba en este archivo) en vez de
+        // dejarlo suelto: la constante de producción NO se exporta
+        // (`../infrastructure/auth/pop-proof-store.ts:40`), así que un test que quiera cruzar el plazo no
+        // tiene de dónde importarla. Falla del lado seguro —si alguien SUBE el TTL de producción, este
+        // `it` avanza de menos, el bloque no reaparece y se pone rojo— pero es un literal duplicado y hay
+        // que decirlo. ⛔ Y va escrito con la MISMA FORMA que el original a propósito: el candado del TTL
+        // matchea `(\d+) \* (\d+) \* (\d+)`, así que reescribirlo como `480_000` acá invitaría a
+        // "unificar" el de producción y eso pone el candado rojo.
+        reloj.set(new Date(Date.parse(T0) + 8 * 60 * 1000).toISOString());
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+      expect(screen.getByText(/No estamos revisando/)).toBeInTheDocument();
+      expect(
+        screen.queryByText(/La firma no se completó/),
+        "el texto de un fallo viejo reaparece y se presenta como la razón ACTUAL de que no estemos revisando",
+      ).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // ── El botón `disabled` mientras firma, y el temporizador que se limpia ────────────────────────
+  //
+  // 🔴 Mata a M8 (el botón no se deshabilita): es uno de los DOS frenos estructurales que sostienen la
+  // aritmética del cupo — un gesto = como máximo UN challenge. Sin él, N toques = N popups y N
+  // challenges de un cupo de 10 por IP.
+  //
+  // 🔴 Y mata a M10 (el temporizador nunca se limpia): con fake timers, tras `unmount()` el contador de
+  // `estado()` no puede volver a moverse. Sin el `clearInterval` del cleanup, el `setInterval` sigue
+  // llamando a `peek()` —que BORRA entradas vencidas— sobre un componente desmontado.
+  it("T-339.4e: `disabled` mientras firma (un gesto = un challenge), y el temporizador muere en el unmount", async () => {
+    vi.useFakeTimers();
+    try {
+      const { store, ventana } = ventanaDeTest();
+      let liberar: (() => void) | null = null;
+      const enVuelo = new Promise<void>((res) => {
+        liberar = res;
+      });
+      const renovar = {
+        prove: vi.fn(async (a: string) => {
+          await enVuelo; // se queda en vuelo hasta que el test lo suelte
+          const p = { challenge: "ch", signature: "sig" };
+          store.record(a, p);
+          return p;
+        }),
+      };
+      const { unmount } = render(
+        <TrackView
+          rem={rem}
+          sender={FAKE_SOLANA_BENEFICIARY}
+          onRecovered={() => {}}
+          revision={{ ventana, renovar }}
+        />,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+
+      const btn = screen.getByRole("button", { name: /revisar/i });
+      await act(async () => {
+        fireEvent.click(btn);
+      });
+
+      // (1) EN VUELO: el botón está deshabilitado y el estado 3 se dice con su propio texto.
+      expect(
+        screen.getByRole("button", { name: /revisar/i }),
+        "el botón sigue habilitado mientras la firma está en vuelo: N toques = N popups y N challenges",
+      ).toBeDisabled();
+      expect(screen.getByText(/Confirmá en tu billetera/)).toBeInTheDocument();
+      expect(renovar.prove).toHaveBeenCalledTimes(1);
+
+      // (2) un segundo toque no puede pedir un segundo challenge.
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /revisar/i }));
+      });
+      expect(renovar.prove).toHaveBeenCalledTimes(1);
+
+      // (3) se suelta la firma y el control se va solo.
+      await act(async () => {
+        liberar?.();
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(screen.queryByRole("button", { name: /revisar/i })).toBeNull();
+
+      // (4) M10: tras el unmount, el temporizador no puede seguir preguntando.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20000); // 4 ticks de 5 s
+      });
+      const antes = ventana.estado.mock.calls.length;
+      unmount();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60000); // 12 ticks más si NO se limpiara
+      });
+      expect(
+        ventana.estado.mock.calls.length,
+        "el `setInterval` sobrevivió al unmount: sigue llamando a `peek()`, que BORRA entradas vencidas, " +
+          "sobre un componente que ya no existe",
+      ).toBe(antes);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -725,7 +725,7 @@ export function humanError(code: string): string {
   // propia persona, o la release-authority a mano. O sea que nadie devuelve nada solo.
   //
   // Es el texto que MÁS se lee de este archivo: TrackView lo usa como último recurso para cualquier
-  // `payout_failed` cuyo reason no reconozca (`humanError`, `flow.tsx:1359`), justo cuando no sabemos dónde está la
+  // `payout_failed` cuyo reason no reconozca (`humanError`, `flow.tsx:1445`), justo cuando no sabemos dónde está la
   // plata. Prometer un reembolso ahí manda a esperar sentado en vez de a la única acción que sirve.
   // WKH-333 — VA ANTES del catch-all de `payout`, y arregla un defecto de copy PREEXISTENTE que este
   // cambio vuelve mucho más alcanzable. `payout_not_authorized` no contiene "kyc", así que caía en el
@@ -776,3 +776,67 @@ export type LecturaSeguimiento = "no-aplica" | "sin-billetera" | "mirando" | "si
  *  completaste la firma" a alguien que nunca vio un popup, o sea culparía a la persona por algo que
  *  pasó de nuestro lado. */
 export type GestoRenovacion = "idle" | "firmando" | "no-se-pudo-pedir" | "sin-firma";
+
+/**
+ * De qué está hablando la pantalla de seguimiento. Función PURA: sin reloj, sin efectos, sin `peek`.
+ *
+ * 🔴 EL ORDEN DE LAS CUATRO RAMAS ES LA DECISIÓN, y cada una tiene un input que la falsearía:
+ *  1. `status !== "payout_submitted"` ⇒ `"no-aplica"`. Es la única rama que no habla de la ventana: en
+ *     cualquier otro estado no hay un desenlace de payout que leer.
+ *  2. `sender == null` ⇒ `"sin-billetera"`, Y VA ANTES DE MIRAR LA VENTANA. Colapsarla en `"sin-prueba"`
+ *     ofrecería el gesto de firmar cuando no hay a quién pedirle la firma. Es alcanzable de verdad:
+ *     entrar al seguimiento desde el historial sin haber conectado.
+ *  3. `ventana === "vigente"` ⇒ `"mirando"`. La lectura corre; la pantalla no dice nada nuevo.
+ *  4. Todo lo demás ⇒ `"sin-prueba"`. Es el default, y su dirección es la segura: ante la duda la
+ *     pantalla OFRECE el gesto en vez de callarse. ⛔ Un default `"mirando"` es el mutante que hay que
+ *     matar: dejaría la pantalla afirmando que vigila justo cuando dejó de vigilar.
+ *
+ * ⚠️ NO recibe el `RemittanceState` entero sino los tres datos que decide, y es deliberado: así el `it`
+ * que la mide no tiene que construir un agregado, y así no puede aparecer una quinta rama que mire un
+ * campo que este razonamiento no nombra.
+ */
+export function lecturaSeguimiento(de: {
+  status: RemittanceStatus;
+  sender: string | null;
+  ventana: import("../composition/container").EstadoVentanaLectura;
+}): LecturaSeguimiento {
+  if (de.status !== "payout_submitted") return "no-aplica";
+  if (de.sender == null) return "sin-billetera";
+  if (de.ventana === "vigente") return "mirando";
+  return "sin-prueba";
+}
+
+// ── El copy, y las tres reglas que NO se negocian ───────────────────────────────────────────────────
+//
+// 1. 🔴 PRESENTE, SIN PASADO. La consulta COLAPSA "venció" con "nunca hubo", a propósito y por
+//    construcción (`peek`, `../infrastructure/auth/pop-proof-store.ts:70` devuelve `null` para los dos).
+//    El segundo caso es REAL: se entra al seguimiento desde el historial tras una recarga y el almacén,
+//    que es en memoria, está vacío desde el primer milisegundo. ⛔ Decir *"venció"* o *"dejamos de
+//    revisar"* sería afirmar una historia que el sistema NO puede distinguir. El input que falsea
+//    cualquier verbo en pasado es exactamente esa recarga.
+// 2. 🔴 NINGUNA CULPA A LA PERSONA. `prove()` tiene TRES desenlaces y dos de ellos ocurren SIN que se
+//    haya abierto un popup (501 y 429/400/5xx). Decir *"no completaste la firma"* ahí es falso.
+// 3. La pantalla no afirma que ESTÁ mirando. El criterio es "no puede afirmar que mira cuando dejó de
+//    mirar", no "tiene que afirmar que mira": una afirmación positiva nueva agranda la superficie
+//    falsable por cero beneficio, y sólo sería sostenible mientras la prueba viva.
+//
+// ⚠️ Lo normativo son esas tres reglas, NO las palabras. El texto lo puede reescribir el founder; las
+// tres reglas no.
+
+/** Estado 2 — la ventana está apagada. Presente puro: qué NO está pasando, sin contar qué pasó antes. */
+export const REVISION_APAGADA = "No estamos revisando si el envío ya se completó.";
+/** Estado 2 — el gesto. "Revisar ahora", no "volver a revisar": lo segundo afirma que revisamos antes. */
+export const REVISION_GESTO = "Revisar ahora";
+/** Estado 3 — mientras el popup está abierto. El botón queda `disabled`: un gesto, un challenge. */
+export const REVISION_FIRMANDO = "Confirmá en tu billetera…";
+/** Estado 5 — `payout_submitted` sin billetera conectada. SIN gesto: no hay a quién pedirle la firma.
+ *  El gateway ya corta por su lado con `payout_status_no_wallet`. */
+export const REVISION_SIN_BILLETERA =
+  "Para revisar tenemos que saber que este envío es tuyo. Conectá la misma wallet con la que enviaste.";
+/** Estado 6 — no pudimos PEDIR la firma (501, o 400/5xx/429 del cupo). En los tres casos NUNCA se abrió
+ *  un popup, así que la frase dice de qué lado está el problema en vez de culpar a la billetera. */
+export const REVISION_NO_SE_PUDO_PEDIR =
+  "Ahora mismo no podemos pedirle la firma a tu billetera. No es tu wallet: es de nuestro lado.";
+/** Estado 7 — hubo popup y no se completó. ⛔ NO dice "la rechazaste": el error viene de la billetera y
+ *  no distingue un rechazo de un fallo de la extensión. */
+export const REVISION_SIN_FIRMA = "La firma no se completó. Podés intentar de nuevo.";

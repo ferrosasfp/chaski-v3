@@ -5,6 +5,10 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Receipt, RemittanceFlow, TrackView } from "./flow";
 import { buildTestContainer } from "../test-support/test-container";
+// WKH-339: el almacén REAL para T-339.4/.6. La forma de `ventana`/`renovar` de abajo es la MISMA que
+// arma `container.ts` (un `peek` que decide, y un signer que graba en ESE almacén), así que lo que se
+// mide es el mecanismo y no un doble que dice lo que se le pide.
+import { InMemoryPopProofStore } from "../infrastructure/auth/pop-proof-store";
 import { FallbackQuoteGateway } from "../infrastructure/fallback/gateways";
 import type { ResumeKyc } from "../application/use-cases/resume-kyc";
 import type { AbandonPendingKyc } from "../application/use-cases/abandon-pending-kyc";
@@ -1656,4 +1660,344 @@ it("T-6.1: un `provenance` que no está en la allowlist ⇒ NO 'Identidad verifi
   expect(screen.getByText(new RegExp(agenteNuevo))).toBeInTheDocument();
   // (d) y los datos siguen mostrándose: "no verificada" no es "falsa".
   expect(screen.getByText(/Test Quispe Mamani/)).toBeInTheDocument();
+});
+
+// ── WKH-339 · T-339.2 (AC-1) — la ventana apagada tiene un gesto para volver a encenderse ─────────
+//
+// 🔴 QUÉ AGUJERO CIERRA. El seguimiento lee el desenlace del payout detrás de una prueba de posesión
+// que vale 8 minutos y que la lectura NO renueva: el gateway sólo la CONSULTA. Cuando se apaga, el
+// seguimiento deja de leer. Eso no miente —devuelve un estado no-terminal y la remesa se queda donde
+// está— pero la persona no tenía NINGÚN gesto para volver a encenderla. Esto lo mide.
+//
+// 🔴 POR QUÉ VA POR `RemittanceFlow` Y NO POR `<TrackView>` A MANO, y es la mitad del valor de este
+// test. Montar `TrackView` con la prop puesta a mano probaría que el componente sabe renderizar un
+// botón, y NO probaría lo único que se puede olvidar: que el composition root le pase la capacidad.
+// Los 22 mounts de `<TrackView` que ya existen en el repo pasan sin la prop y siguen pasando, así que
+// ninguno puede ver ese olvido. Éste sí: llega a la pantalla por el mismo camino que una persona.
+//
+// El estado inicial del almacén de pruebas es el CASO REAL, no un montaje: `buildTestContainer` arma
+// un `InMemoryPopProofStore` vacío, y una persona que recarga y entra desde el historial se encuentra
+// exactamente eso — nunca hubo prueba, no venció ninguna. Por eso el aserto NO busca la palabra
+// "venció" en ningún lado: buscar un gesto es falsable, buscar una historia que el sistema no puede
+// distinguir no lo es.
+//
+// ⚠️ EL `sender` NO ES `null` ACÁ, Y HAY QUE VERIFICARLO O EL ROJO ES POR EL MOTIVO EQUIVOCADO: con
+// `sender == null` la pantalla cae en el estado "sin billetera", que a propósito NO ofrece el gesto
+// (no hay a quién pedirle la firma), y el test quedaría rojo antes Y después del fix. `openHistory`
+// pasa por `resolveSender`, que hace `setAddress(addr)` (`resolveSender`, `./flow.tsx:366`), así que
+// al llegar al seguimiento `sender` es la address del dueño. El aserto (b) lo clava.
+//
+// Molde: `seededFlow` de `history.test.tsx:130`, que es el mismo camino ("Ver mis envíos" → "Ver
+// seguimiento"). Se reescribe acá en vez de importarse porque los helpers de ese archivo son locales.
+it("T-339.2 (AC-1): con la ventana de lectura apagada, el seguimiento ofrece volver a revisar", async () => {
+  const repo = new InMemoryRepo();
+  const rem = solanaPayoutSubmittedSnapshot("2026-07-10T00:00:00.000Z");
+  await repo.save(Remittance.rehydrate(rem));
+  // `FakeSolanaWallet` para que `connect()` devuelva FAKE_SOLANA_BENEFICIARY, que es el dueño de la
+  // remesa sembrada: sin eso el historial vendría vacío y no habría a dónde llegar.
+  // `solanaRefund` NO es decorativo: es lo que hace montar "Recuperar fondos", y ese botón es el
+  // instrumento del aserto (b) — sólo se renderiza con `sender` no nulo.
+  const container = buildTestContainer({
+    repo,
+    wallet: new FakeSolanaWallet(),
+    solanaRefund: new FakeSolanaEscrowRefundGateway(),
+  });
+
+  // Arranque en frío: el flujo monta en `send`. Es una recarga, y el almacén de pruebas está vacío
+  // desde el primer milisegundo. NO se graba ninguna prueba a propósito.
+  render(<RemittanceFlow container={container} />);
+  fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Ver seguimiento/ }));
+
+  // (a) llegamos al seguimiento de una remesa en `payout_submitted` (si esto falla, el test mide otra
+  //     cosa y el rojo de abajo no habla de la ventana).
+  expect(await screen.findByText(/El proveedor aceptó la orden de pago/)).toBeInTheDocument();
+  // (b) y con dueño conocido: es lo que descarta el estado "sin billetera" como causa del rojo.
+  expect(await screen.findByRole("button", { name: /Recuperar fondos/ })).toBeInTheDocument();
+
+  // (c) EL ASERTO. Existe un control accesible para volver a revisar. En presente: el gesto, no la
+  //     historia.
+  expect(await screen.findByRole("button", { name: /revisar/i })).toBeInTheDocument();
+});
+
+// ── WKH-339 · T-339.4 / T-339.6 / T-339.7 — los siete estados de la ventana en pantalla ─────────────
+//
+// 🔴 QUÉ SE MIDE ACÁ Y POR QUÉ SOBRE `TrackView` DIRECTO, no sobre `RemittanceFlow`. El cableado ya lo
+// mide T-339.2 (y T-339.5 al nivel del container). Lo que falta es lo que sólo se puede ejercitar
+// controlando los desenlaces de `prove()`, y ésos no se pueden inducir desde el flujo completo.
+//
+// `ventana` y `renovar` se arman con la MISMA forma que `container.ts`: un `peek` sobre un almacén real
+// decide el estado, y el signer graba EN ESE almacén. Así "el control desaparece al renovar" no es un
+// flag que el test setea: es la consecuencia de que `estado()` pase a `"vigente"`.
+function ventanaDeTest(clock = new FixedClock()) {
+  const store = new InMemoryPopProofStore(clock);
+  const estado = vi.fn((a: string) => (store.peek(a) ? ("vigente" as const) : ("sin-prueba" as const)));
+  return { store, ventana: { estado } };
+}
+/** El signer que SÍ graba, o sea el desenlace feliz de `prove()`. */
+function signerQueGraba(store: InMemoryPopProofStore) {
+  return {
+    prove: vi.fn(async (a: string) => {
+      const p = { challenge: "ch-339", signature: "sig-339" };
+      store.record(a, p);
+      return p;
+    }),
+  };
+}
+
+describe("WKH-339 — los siete estados de la ventana de lectura, en pantalla", () => {
+  afterEach(cleanup);
+  const rem = solanaPayoutSubmittedSnapshot("2026-07-10T00:00:00.000Z");
+
+  // ── T-339.6 (AC-5) · Estado 1: con la ventana VIGENTE el render es el de siempre ────────────────
+  //
+  // Molde de `agent-plan-card.test.tsx:406`: render → capturar → `cleanup()` → render → capturar →
+  // comparar. ⚠️ El `cleanup()` NO es opcional: sin él quedan DOS árboles en el DOM y se compararía el
+  // render anterior consigo mismo.
+  //
+  // Mata a M2 (`estado()` devuelve `"sin-prueba"` siempre) y a M3 (el botón se renderiza sin mirar el
+  // estado): los dos harían aparecer el bloque nuevo con la ventana vigente, y el HTML dejaría de ser
+  // idéntico al de sin `revision`.
+  it("T-339.6: ventana VIGENTE ⇒ el HTML es byte-idéntico al de sin `revision` (nada nuevo en pantalla)", async () => {
+    // (1) el render de referencia: sin la prop, o sea exactamente el de antes de esta HU.
+    const { container: sinProp } = render(
+      <TrackView rem={rem} sender={FAKE_SOLANA_BENEFICIARY} onRecovered={() => {}} />,
+    );
+    const htmlSinProp = sinProp.innerHTML;
+    cleanup();
+
+    // (2) el mismo render, con la prop puesta y una prueba YA grabada ⇒ la ventana está vigente.
+    const { store, ventana } = ventanaDeTest();
+    store.record(FAKE_SOLANA_BENEFICIARY, { challenge: "ch", signature: "sig" });
+    const { container: conVentana } = render(
+      <TrackView
+        rem={rem}
+        sender={FAKE_SOLANA_BENEFICIARY}
+        onRecovered={() => {}}
+        revision={{ ventana, renovar: signerQueGraba(store) }}
+      />,
+    );
+    await waitFor(() => expect(ventana.estado).toHaveBeenCalled());
+
+    expect(
+      conVentana.innerHTML,
+      "con la ventana VIGENTE la pantalla muestra algo que antes no mostraba: o `estado()` no discrimina " +
+        "(M2), o el bloque nuevo se renderiza sin condicionar por el estado (M3)",
+    ).toBe(htmlSinProp);
+    expect(screen.queryByRole("button", { name: /revisar/i })).toBeNull();
+  });
+
+  // ── T-339.7 (AC-4) · Estado 5: sin billetera se explica, y NO se ofrece el gesto ────────────────
+  //
+  // Mata a M12 (`sin-billetera` colapsa en `sin-prueba`): ofrecería "Revisar ahora" sin tener a quién
+  // pedirle la firma. Es alcanzable de verdad — entrar al seguimiento desde el historial sin conectar.
+  it("T-339.7: `payout_submitted` SIN billetera ⇒ el texto de la wallet y NINGÚN botón de revisar", async () => {
+    const { store, ventana } = ventanaDeTest();
+    render(
+      <TrackView
+        rem={rem}
+        sender={null}
+        onRecovered={() => {}}
+        revision={{ ventana, renovar: signerQueGraba(store) }}
+      />,
+    );
+
+    expect(await screen.findByText(/Conectá la misma wallet con la que enviaste/)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /revisar/i }),
+      "se ofrece renovar sin billetera: no hay a quién pedirle la firma, así que es un botón que no " +
+        "puede funcionar",
+    ).toBeNull();
+    // Y no dice "no estamos revisando": la razón es otra, y decir la equivocada manda a hacer lo que no sirve.
+    expect(screen.queryByText(/No estamos revisando/)).toBeNull();
+  });
+
+  // ── T-339.4 (AC-4) · los TRES desenlaces de `prove()`, y ninguno culpa a quien no vio un popup ──
+  //
+  // 🔴 Mata a M6 (colapsar `null` con el `throw`): con 501 NUNCA se abrió un popup, así que decir "no
+  // completaste la firma" es FALSO. Y mata a M7 (el estado local no vuelve de `"firmando"`): el texto
+  // "Confirmá en tu billetera…" quedaría pegado después de que `prove()` resuelva.
+  it("T-339.4a: éxito ⇒ el control DESAPARECE (porque `estado()` pasó a vigente, no por un flag)", async () => {
+    const { store, ventana } = ventanaDeTest();
+    const renovar = signerQueGraba(store);
+    render(
+      <TrackView
+        rem={rem}
+        sender={FAKE_SOLANA_BENEFICIARY}
+        onRecovered={() => {}}
+        revision={{ ventana, renovar }}
+      />,
+    );
+
+    const btn = await screen.findByRole("button", { name: /revisar/i });
+    expect(screen.getByText(/No estamos revisando/)).toBeInTheDocument();
+    fireEvent.click(btn);
+
+    await waitFor(() => expect(renovar.prove).toHaveBeenCalledWith(FAKE_SOLANA_BENEFICIARY));
+    // El control se va solo, y con él el texto. Si esto no pasa, el botón queda para siempre y cada
+    // toque quema un challenge de un cupo de 10 por IP.
+    await waitFor(() => expect(screen.queryByRole("button", { name: /revisar/i })).toBeNull());
+    expect(screen.queryByText(/No estamos revisando/)).toBeNull();
+    expect(screen.queryByText(/Confirmá en tu billetera/)).toBeNull(); // M7: el texto no queda pegado
+  });
+
+  it("T-339.4b: `prove()` devuelve `null` (501) ⇒ 'es de nuestro lado', y NUNCA 'no completaste la firma'", async () => {
+    const { store, ventana } = ventanaDeTest();
+    void store;
+    render(
+      <TrackView
+        rem={rem}
+        sender={FAKE_SOLANA_BENEFICIARY}
+        onRecovered={() => {}}
+        revision={{ ventana, renovar: { prove: async () => null } }}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /revisar/i }));
+
+    expect(await screen.findByText(/es de nuestro lado/)).toBeInTheDocument();
+    // 🔴 EL ASERTO QUE MATA A M6. Con 501 el mecanismo está apagado server-side: no hubo popup, no hubo
+    // nada que la persona pudiera completar o rechazar.
+    expect(screen.queryByText(/La firma no se completó/)).toBeNull();
+    expect(screen.queryByText(/rechaz/i)).toBeNull();
+    // Y el control SIGUE ahí: la ventana no se encendió, así que la salida tiene que seguir ofrecida.
+    expect(screen.getByRole("button", { name: /revisar/i })).toBeEnabled();
+  });
+
+  it("T-339.4c: `throw 'pop_challenge_unavailable'` (400/5xx/**429 del cupo**) ⇒ el MISMO estado 6", async () => {
+    const { store, ventana } = ventanaDeTest();
+    void store;
+    render(
+      <TrackView
+        rem={rem}
+        sender={FAKE_SOLANA_BENEFICIARY}
+        onRecovered={() => {}}
+        revision={{
+          ventana,
+          renovar: {
+            prove: async () => {
+              throw new Error("pop_challenge_unavailable");
+            },
+          },
+        }}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /revisar/i }));
+
+    // Éste es el camino del 429 cuando dos personas comparten la IP, que es el riesgo declarado de la
+    // HU: el server rechazó ANTES de emitir el challenge ⇒ tampoco hubo popup.
+    expect(await screen.findByText(/es de nuestro lado/)).toBeInTheDocument();
+    expect(screen.queryByText(/La firma no se completó/)).toBeNull();
+  });
+
+  it("T-339.4d: `throw` con CUALQUIER otro mensaje (viene de la billetera) ⇒ 'La firma no se completó'", async () => {
+    const { store, ventana } = ventanaDeTest();
+    void store;
+    render(
+      <TrackView
+        rem={rem}
+        sender={FAKE_SOLANA_BENEFICIARY}
+        onRecovered={() => {}}
+        revision={{
+          ventana,
+          renovar: {
+            prove: async () => {
+              throw new Error("User rejected the request");
+            },
+          },
+        }}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /revisar/i }));
+
+    expect(await screen.findByText(/La firma no se completó/)).toBeInTheDocument();
+    // ⛔ Y no dice "la rechazaste", aunque el mensaje de la billetera diga "rejected": ese mensaje no
+    // distingue un rechazo de un fallo de la extensión, así que afirmarlo sería inventar la distinción.
+    expect(screen.queryByText(/rechaz/i)).toBeNull();
+    expect(screen.queryByText(/es de nuestro lado/)).toBeNull(); // no se colapsa con el estado 6
+  });
+
+  // ── El botón `disabled` mientras firma, y el temporizador que se limpia ────────────────────────
+  //
+  // 🔴 Mata a M8 (el botón no se deshabilita): es uno de los DOS frenos estructurales que sostienen la
+  // aritmética del cupo — un gesto = como máximo UN challenge. Sin él, N toques = N popups y N
+  // challenges de un cupo de 10 por IP.
+  //
+  // 🔴 Y mata a M10 (el temporizador nunca se limpia): con fake timers, tras `unmount()` el contador de
+  // `estado()` no puede volver a moverse. Sin el `clearInterval` del cleanup, el `setInterval` sigue
+  // llamando a `peek()` —que BORRA entradas vencidas— sobre un componente desmontado.
+  it("T-339.4e: `disabled` mientras firma (un gesto = un challenge), y el temporizador muere en el unmount", async () => {
+    vi.useFakeTimers();
+    try {
+      const { store, ventana } = ventanaDeTest();
+      let liberar: (() => void) | null = null;
+      const enVuelo = new Promise<void>((res) => {
+        liberar = res;
+      });
+      const renovar = {
+        prove: vi.fn(async (a: string) => {
+          await enVuelo; // se queda en vuelo hasta que el test lo suelte
+          const p = { challenge: "ch", signature: "sig" };
+          store.record(a, p);
+          return p;
+        }),
+      };
+      const { unmount } = render(
+        <TrackView
+          rem={rem}
+          sender={FAKE_SOLANA_BENEFICIARY}
+          onRecovered={() => {}}
+          revision={{ ventana, renovar }}
+        />,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+
+      const btn = screen.getByRole("button", { name: /revisar/i });
+      await act(async () => {
+        fireEvent.click(btn);
+      });
+
+      // (1) EN VUELO: el botón está deshabilitado y el estado 3 se dice con su propio texto.
+      expect(
+        screen.getByRole("button", { name: /revisar/i }),
+        "el botón sigue habilitado mientras la firma está en vuelo: N toques = N popups y N challenges",
+      ).toBeDisabled();
+      expect(screen.getByText(/Confirmá en tu billetera/)).toBeInTheDocument();
+      expect(renovar.prove).toHaveBeenCalledTimes(1);
+
+      // (2) un segundo toque no puede pedir un segundo challenge.
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /revisar/i }));
+      });
+      expect(renovar.prove).toHaveBeenCalledTimes(1);
+
+      // (3) se suelta la firma y el control se va solo.
+      await act(async () => {
+        liberar?.();
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(screen.queryByRole("button", { name: /revisar/i })).toBeNull();
+
+      // (4) M10: tras el unmount, el temporizador no puede seguir preguntando.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20000); // 4 ticks de 5 s
+      });
+      const antes = ventana.estado.mock.calls.length;
+      unmount();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60000); // 12 ticks más si NO se limpiara
+      });
+      expect(
+        ventana.estado.mock.calls.length,
+        "el `setInterval` sobrevivió al unmount: sigue llamando a `peek()`, que BORRA entradas vencidas, " +
+          "sobre un componente que ya no existe",
+      ).toBe(antes);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

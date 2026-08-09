@@ -28,7 +28,7 @@ import {
   isKycDemo,
   kycOriginNotice,
   REAL_KYC_PROVENANCES,
-  statusDisplay,
+  statusDisplay, lecturaSeguimiento, REVISION_APAGADA, REVISION_GESTO, REVISION_SIN_BILLETERA, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_FIRMA, // WKH-339: EN ESTA LÍNEA, no en líneas nuevas — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
 } from "./flow-vm";
 import {
   KYC_PROVENANCE_LIVE,
@@ -1041,5 +1041,81 @@ describe("T-4.1': AC-4 NO CUMPLIDO — el corte por rechazo del agente de FX no 
     expect(humanError("a2a_no_agent_for_capability")).not.toBe("Algo salió mal. Intentá de nuevo.");
     // Este no ⇒ default. Si algún día WKH-335 aterriza, ESTE `expect` es el que hay que dar vuelta.
     expect(humanError("step_failed")).toBe("Algo salió mal. Intentá de nuevo.");
+  });
+});
+
+// ── WKH-339 · T-339.1 (AC-4) — la derivación da EXACTAMENTE uno de los cuatro estados ───────────────
+//
+// 🔴 QUÉ MATA, caso por caso, y por eso es un `it.each` de los CUATRO y no de tres:
+//  · colapsar `"sin-billetera"` en `"sin-prueba"` ⇒ la pantalla ofrecería firmar sin tener a quién
+//    pedirle la firma. La fila 4 lo caza.
+//  · un default `"mirando"` ⇒ la pantalla afirmaría que vigila justo cuando dejó de vigilar. La fila 3.
+//  · leer el reloj adentro ⇒ la función dejaría de ser pura y el mismo input daría dos respuestas. Lo
+//    caza el `it` de idempotencia de más abajo, no el `it.each`.
+//
+// ⚠️ El `switch` exhaustivo que la consume vive en `flow.tsx`; lo que este archivo mide es la unión. Si
+// mañana aparece un quinto valor, `tsc` obliga a cubrirlo allá (estructural) y este `it.each` queda
+// corto (enumerativo) — por eso hay TAMBIÉN un aserto sobre el CONJUNTO de valores posibles.
+describe("WKH-339/AC-4 — lecturaSeguimiento: exactamente uno, y ninguno colapsa en otro", () => {
+  const SENDER = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+  const CASOS: Array<[string, Parameters<typeof lecturaSeguimiento>[0], string]> = [
+    [
+      "cualquier estado que no sea payout_submitted ⇒ no-aplica (no hay desenlace que leer)",
+      { status: "settled", sender: SENDER, ventana: "sin-prueba" },
+      "no-aplica",
+    ],
+    [
+      "payout_submitted + ventana vigente ⇒ mirando (la lectura corre, no hay nada nuevo que decir)",
+      { status: "payout_submitted", sender: SENDER, ventana: "vigente" },
+      "mirando",
+    ],
+    [
+      "payout_submitted + ventana apagada ⇒ sin-prueba (se ofrece el gesto)",
+      { status: "payout_submitted", sender: SENDER, ventana: "sin-prueba" },
+      "sin-prueba",
+    ],
+    [
+      "payout_submitted SIN billetera ⇒ sin-billetera, aunque la ventana esté apagada",
+      { status: "payout_submitted", sender: null, ventana: "sin-prueba" },
+      "sin-billetera",
+    ],
+  ];
+
+  it.each(CASOS)("%s", (_n, de, esperado) => {
+    expect(lecturaSeguimiento(de)).toBe(esperado);
+  });
+
+  // 🔴 LA FILA 4 OTRA VEZ, PERO CON LA VENTANA VIGENTE, que es lo que prueba que el ORDEN de las ramas
+  // es la decisión y no una casualidad del caso elegido: sin billetera NUNCA hay gesto, ni siquiera
+  // cuando la ventana está encendida.
+  it("sin billetera gana sobre la ventana: el `sender` se resuelve ANTES de mirar el estado", () => {
+    expect(lecturaSeguimiento({ status: "payout_submitted", sender: null, ventana: "vigente" })).toBe(
+      "sin-billetera",
+    );
+  });
+
+  // Pureza: mismo input, misma respuesta, sin importar cuándo se pregunte. Es lo que permite llamarla
+  // desde un render sin efectos secundarios — a diferencia de `estado()`, que sí los tiene.
+  it("es PURA: el mismo input da el mismo valor dos veces (no lee el reloj ni el almacén)", () => {
+    const de = { status: "payout_submitted" as const, sender: SENDER, ventana: "sin-prueba" as const };
+    expect(lecturaSeguimiento(de)).toBe(lecturaSeguimiento(de));
+  });
+
+  // El copy, y las dos reglas que no se negocian. Se afirma la PROPIEDAD, no la frase: así reescribir el
+  // texto está permitido y romper la regla no lo está.
+  it("ninguna copy de la ventana usa un verbo en pasado sobre haber revisado, ni dice 'venció'", () => {
+    for (const frase of [REVISION_APAGADA, REVISION_GESTO, REVISION_SIN_BILLETERA]) {
+      expect(frase, `"${frase}" afirma un pasado que el sistema no puede distinguir`).not.toMatch(
+        /venci|revisábamos|revisamos|dejamos de|estábamos/i,
+      );
+    }
+  });
+
+  it("ninguna copy del fallo culpa a la persona: los dos casos de 'no pudimos pedir' no la nombran", () => {
+    // Estado 6: con 501 o 429 NUNCA se abrió un popup ⇒ no puede decir que no se completó ni rechazó.
+    expect(REVISION_NO_SE_PUDO_PEDIR).not.toMatch(/rechaz|no complet|no firmaste/i);
+    expect(REVISION_NO_SE_PUDO_PEDIR).toMatch(/de nuestro lado/i);
+    // Estado 7: hubo popup, y aun así no dice "la rechazaste" — la billetera no distingue rechazo de fallo.
+    expect(REVISION_SIN_FIRMA).not.toMatch(/rechaz/i);
   });
 });

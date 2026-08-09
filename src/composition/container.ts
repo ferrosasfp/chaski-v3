@@ -47,7 +47,7 @@ import { LocalRepo } from "../infrastructure/persistence";
 import { SolanaWalletAdapter } from "../infrastructure/solana-wallet";
 import { CryptoIds, SystemClock } from "../infrastructure/system";
 
-export interface Container {
+export interface Container extends VentanaYRenovacion { // WKH-339: 2 campos REQUERIDOS, ver el final del archivo
   previewQuote: PreviewQuote;
   createRemittance: CreateRemittance;
   connectWallet: ConnectWallet;
@@ -197,6 +197,28 @@ export function createContainer(): Container {
     listHistory: new ListHistory(repo),
     abandonPendingKyc: new AbandonPendingKyc(kycPending),
     forgetKyc: new ForgetKyc(kycStore, kycPending, repo),
+    // ── WKH-339 · las DOS capacidades de la ventana de lectura ────────────────────────────────────
+    //
+    // ⛔ ESTAS DOS ENTRADAS VAN ACÁ, DEBAJO DE `forgetKyc`, Y NO ES PROLIJIDAD. Este archivo es el que
+    // más citas por número recibe del repo: `:47`, `:50`, `:114`, `:123`, `:127`, `:141`, `:169` y
+    // `:196` los cita otro archivo, y todos están ARRIBA de esta línea. Una inserción aguas arriba los
+    // rota en silencio. Antes de mover esto, medí quién lo cita.
+    //
+    // `estado` NO se deriva de un segundo almacén ni de una copia del TTL: pregunta al MISMO
+    // `popProofs` que observa el gateway de seguimiento (`payouts`, `:127`), así que la comparación de
+    // los 8 minutos sigue viviendo en UN solo lugar —`peek`— y no hay un segundo literal de 480 s.
+    // ⚠️ `peek()` tiene un efecto secundario idempotente (borra la entrada vencida), y por eso esto se
+    // consulta desde un efecto con temporizador, nunca desde un render.
+    ventanaDeLectura: { estado: (a) => (popProofs.peek(a) ? "vigente" : "sin-prueba") },
+    // 🔴 EL 2º ARGUMENTO —`popProofs`— ES EL MECANISMO ENTERO, Y SIN ÉL ESTO COMPILA. El recorder de
+    // `HttpPopSigner` es OPCIONAL (`constructor`, `../infrastructure/auth/http-pop-signer.ts:14`), así
+    // que `new HttpPopSigner(wallet)` pasa `tsc`, pide el challenge, abre el popup, la persona firma…
+    // y NADIE se entera: la ventana queda en `"sin-prueba"` para siempre y el botón nunca desaparece.
+    // Es el mutante más peligroso de esta HU y el ÚNICO test del repo que lo ve es T-339.5, en
+    // `container.test.ts`, porque es el único que ejercita el objeto que ESTA LÍNEA devuelve.
+    // Mismo `wallet` y mismo `popProofs` que los otros tres gestos: el almacén es compartido a
+    // propósito, y que sea el MISMO es lo que `tsc` NO puede garantizar.
+    renovarVentana: new HttpPopSigner(wallet, popProofs),
     solanaRefund, // HU-SOL-13: refund trustless del escrow
     recoverEscrowFunds: new RecoverEscrowFunds(repo, clock, solanaRefund),
     // WKH-327. El 2º argumento es el MISMO adapter: el guard de AC-7 le pregunta a la billetera VIVA

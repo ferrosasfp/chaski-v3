@@ -71,7 +71,7 @@ import {
   kycOriginNotice,
   lostEscrowRecoveryError,
   shortErrorCode,
-  statusDisplay,
+  statusDisplay, lecturaSeguimiento, type GestoRenovacion, REVISION_APAGADA, REVISION_FIRMANDO, REVISION_GESTO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_BILLETERA, REVISION_SIN_FIRMA, // WKH-339: EN ESTA LÍNEA. `flow.tsx:525` lo citan 5 archivos y NINGUNA de las 5 es una cita anclada ⇒ si se mueve, nada se pone rojo y los 5 comentarios rotan en silencio
 } from "./flow-vm";
 import { cn } from "./cn";
 import { phantomBrowseUrl, useWalletAvailability } from "./wallet-availability"; // el aviso de "acá no hay wallet" (NoWalletHere)
@@ -969,6 +969,13 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
               recover={c.recoverEscrowFunds}
               closeEscrow={c.closeEscrowAccounts}
               sender={address}
+              // WKH-339 — las DOS capacidades van JUNTAS o ninguna: preguntar el estado sin poder
+              // renovar deja la pantalla sin salida, y poder renovar sin saber el estado es el botón
+              // siempre visible que la aritmética del cupo rechaza. Los dos campos del Container son
+              // REQUERIDOS (sin `?`), así que `tsc` obliga a que esta línea exista. Lo que `tsc` NO
+              // puede garantizar es que sean el MISMO almacén que observa el gateway: eso lo mata
+              // T-339.5 en `container.test.ts`.
+              revision={{ ventana: c.ventanaDeLectura, renovar: c.renovarVentana }}
               onRecovered={setRem}
             />
           )}
@@ -1158,6 +1165,26 @@ const TRACK_STEPS: { key: RemittanceState["status"][]; label: string; manual?: b
   { key: ["payout_submitted"], label: "Preparando el pago a tu familiar", manual: true },
   { key: ["settled"], label: "Entregado" },
 ];
+/**
+ * WKH-339 — cada cuánto se le pregunta a la ventana en qué estado está. **5000 ms**, y el número está
+ * DERIVADO, no elegido:
+ *
+ * lo único que este temporizador cambia es UNA ETIQUETA. La cadencia que tiene que sombrear no es la
+ * del poll de la pantalla (1500 ms) sino la de la LECTURA, que es `LEDGER_STATUS_MIN_INTERVAL_MS` =
+ * 20 000 ms (`LEDGER_STATUS_MIN_INTERVAL_MS`, `../infrastructure/settlement/ledger-payout-status-gateway.ts:48`).
+ * Con 5000 ms la etiqueta nunca puede quedar vieja durante un ciclo entero de lectura
+ * (20 000 ÷ 5 000 = 4 chequeos por ciclo), y el costo por tick es UN `Map.get`: cero red, cero firma,
+ * cero I/O.
+ *
+ * ⛔ PROHIBIDO ponerlo en `1500` reusando el literal del poll. Con 1500 la pantalla funciona igual —
+ * por eso esto NO tiene test y la prohibición está escrita acá en vez de fingir un candado. El daño de
+ * hacerlo es crear un SEGUNDO literal de una cadencia AJENA, que es el punto ciego que el Auto-Blindaje
+ * de WKH-336 nombra; y `flow.tsx:525` (el literal del poll) ya lo citan 5 archivos por número. Un
+ * candado que comparara dos números que no tienen por qué ser iguales sería un guard que se compara
+ * consigo mismo.
+ */
+const VENTANA_CHECK_MS = 5000;
+
 // Exportado para test directo (HU-SOL-13/T7): testear TrackView en aislamiento cubre exactamente la
 // acción refund (AC-6/AC-7) sin montar el flujo entero.
 export function TrackView({
@@ -1166,6 +1193,7 @@ export function TrackView({
   closeEscrow,
   sender,
   onRecovered,
+  revision,
 }: {
   rem: RemittanceState;
   // El use-case, NO el gateway suelto: el gateway devuelve una signature y nada más, y de ahí salía
@@ -1176,6 +1204,32 @@ export function TrackView({
   closeEscrow?: Container["closeEscrowAccounts"];
   sender: string | null;
   onRecovered: (snapshot: RemittanceState) => void;
+  // ── WKH-339 · UNA prop, OPCIONAL, y las dos capacidades JUNTAS ─────────────────────────────────
+  //
+  // Es UNA sola prop porque las dos mitades no tienen sentido separadas: preguntar el estado sin poder
+  // renovar deja la pantalla sin salida, y poder renovar sin saber el estado es un botón siempre
+  // visible, que es lo que la aritmética del cupo del challenge rechaza.
+  //
+  // Es OPCIONAL, y con `revision === undefined` el render es BYTE-IDÉNTICO al de antes de esta HU. Eso
+  // es honesto, no una concesión: el copy de hoy NO afirma que esté revisando, así que su ausencia no
+  // deja ninguna afirmación falsa en pantalla. ⇒ los 22 mounts de `<TrackView` que ya existen en los
+  // tests NO se editan y siguen midiendo lo mismo.
+  //
+  // 🔴 LOS TIPOS SE DERIVAN DEL `Container`, NO SE IMPORTAN. Dos razones y las dos son medibles: un
+  // `import` nuevo arriba desplazaría `flow.tsx:525`, que 5 archivos citan por número y NINGUNA de las
+  // 5 es una cita anclada (el ancla `` `}, 1500);` `` empieza con `}` y el regex del candado exige
+  // `[A-Za-z_$]`) ⇒ si se mueve, nada se pone rojo y los 5 comentarios rotan en silencio. Y derivar del
+  // `Container` es además la única fuente: si mañana la firma de `estado` cambia, esto no compila.
+  // Es el mismo molde que `recover` y `closeEscrow` de acá arriba.
+  //
+  // ⛔ `ventana` NO tiene `prove` y `renovar` NO tiene `estado`, y eso es el mecanismo, no estilo:
+  // el camino de LECTURA no compila si intenta firmar (mata un popup por render o por tick), y el de
+  // FIRMA no puede consultar el estado (mata un signer que se "ahorre" el popup de una operación de
+  // dinero reusando una prueba guardada). ⛔ NO los unifiques en un solo objeto con los dos métodos.
+  revision?: {
+    readonly ventana: Container["ventanaDeLectura"];
+    readonly renovar: Container["renovarVentana"];
+  };
 }) {
   // HU-SOL-13 (AC-6/AC-7, CD-10): acción refund trustless. Siempre disponible: ninguna configuración
   // la puede apagar.
@@ -1256,6 +1310,38 @@ export function TrackView({
   const closeableStatus = rem.status === "refunded" || rem.status === "settled";
   const senderOwnsIt = !!sender && (rem.ownerAddress == null || rem.ownerAddress === sender);
   const showClose = closeableStatus && senderOwnsIt && !!closeEscrow && !!sender;
+
+  // ── WKH-339 · en qué estado está la ventana de lectura del seguimiento ───────────────────────────
+  //
+  // ⛔ VAN ACÁ, ANTES DEL `return` TEMPRANO DE ABAJO: son hooks, y después de una salida condicional
+  // React los llamaría un número distinto de veces según el estado de la remesa.
+  //
+  // 🔴 `estado()` SE CONSULTA DESDE EL EFECTO, JAMÁS DESDE EL RENDER, y no es una preferencia: `peek()`
+  // BORRA la entrada vencida (`porAddress`, `../infrastructure/auth/pop-proof-store.ts:79`), o sea que
+  // la consulta tiene un efecto secundario. Es idempotente (borra lo que ya venció), pero un render de
+  // React puede correr más de una vez y no puede tener efectos.
+  //
+  // `ventanaPort` se extrae a una variable propia para que la dependencia del efecto sea la CAPACIDAD y
+  // no el objeto `revision`, que el montaje construye nuevo en cada render: con `revision` en las
+  // dependencias el efecto se re-montaría en cada render y el `setInterval` se recrearía sin parar.
+  const ventanaPort = revision?.ventana;
+  const [ventana, setVentana] = useState<ReturnType<Container["ventanaDeLectura"]["estado"]>>(
+    "sin-prueba", // arranque en frío: el almacén es en memoria y está vacío. Es el caso real de una recarga.
+  );
+  const [gesto, setGesto] = useState<GestoRenovacion>("idle");
+  // Re-lee el estado AHORA. Se usa tras un gesto exitoso para que el control desaparezca en el acto en
+  // vez de esperar hasta el próximo tick — y desaparece porque `estado()` pasó a `"vigente"`, no porque
+  // alguien se acuerde de esconderlo.
+  const releerVentana = useCallback(() => {
+    if (ventanaPort && sender) setVentana(ventanaPort.estado(sender));
+  }, [ventanaPort, sender]);
+  useEffect(() => {
+    if (!ventanaPort || !sender) return;
+    const leer = () => setVentana(ventanaPort.estado(sender));
+    leer(); // la primera lectura no espera al primer tick: la pantalla no puede quedarse muda 5 s
+    const t = setInterval(leer, VENTANA_CHECK_MS);
+    return () => clearInterval(t); // sin esto el temporizador sobrevive al unmount (M10)
+  }, [ventanaPort, sender]);
 
   // AC-1 (WKH-200): payout_failed/refunded NO están en `order` → idx=-1 renderizaría la vista
   // optimista ("en camino", steps grises). Branch temprano a una vista honesta de fallo/reembolso.
@@ -1454,6 +1540,20 @@ export function TrackView({
         })}
       </ol>
       {waitingOnPerson ? <PayoutInProgress rem={rem} /> : null}
+      {/* WKH-339 — el bloque de la ventana de lectura. Va JUNTO a `PayoutInProgress` y NO adentro: ese
+          bloque quedó byte-idéntico a propósito (fue auditado, y el criterio es "la pantalla no puede
+          afirmar que mira cuando dejó de mirar", no "tiene que afirmar que mira"). Cuál de los estados
+          se muestra —o ninguno— lo decide una función PURA, no un `&&` armado acá. */}
+      {revision ? (
+        <RevisionDelSeguimiento
+          estado={lecturaSeguimiento({ status: rem.status, sender, ventana })}
+          gesto={gesto}
+          sender={sender}
+          renovar={revision.renovar}
+          onGesto={setGesto}
+          onRenovada={releerVentana}
+        />
+      ) : null}
       {depositUnknown ? (
         <div className="space-y-1">
           <p className="text-sm text-stone">{escrowKnowledgeCopy(escrowFundsKnowledge(rem))}</p>
@@ -1479,6 +1579,113 @@ export function TrackView({
       ) : null}
     </Card>
   );
+}
+
+/**
+ * WKH-339 — el bloque que dice en qué estado está la lectura del payout, y ofrece el gesto.
+ *
+ * 🔴 UN `switch` EXHAUSTIVO SOBRE LA UNIÓN, y el `never` del final es el mecanismo: el día que aparezca
+ * un quinto valor de `LecturaSeguimiento`, esto NO COMPILA. Es estructural, no enumerativo — una
+ * cadena de `&&` en el JSX habría dejado el valor nuevo sin renderizar nada, en silencio.
+ *
+ * 🔴 PEDIR LA FIRMA TIENE **TRES** DESENLACES, Y COLAPSARLOS CULPA A QUIEN NUNCA VIO UN POPUP. Los tres
+ * salen de `HttpPopSigner.prove` y están medidos en su código, no supuestos:
+ *   1. `null` ⇐ 501: el mecanismo está apagado server-side (sin `PAYOUT_POP_SECRET`). **Nunca se abrió
+ *      un popup.** Reintentar NO sirve.
+ *   2. `throw "pop_challenge_unavailable"` ⇐ 400 / 5xx / **429 del cupo de la IP** / 503: nuestro server
+ *      no pudo emitir el challenge (`pop_challenge_unavailable`, `../infrastructure/auth/http-pop-signer.ts:23`). **Nunca se
+ *      abrió un popup.** Reintentar puede servir más tarde.
+ *   3. `throw` con cualquier OTRO mensaje ⇐ viene de `wallet.signMessage`: hubo popup y no se completó.
+ * Los dos primeros son `"no-se-pudo-pedir"` y el tercero `"sin-firma"`. ⛔ Un booleano ya perdió el
+ * tercer valor: con 501 o 429 decir *"no completaste la firma"* es FALSO, y es culpar a la persona por
+ * algo que pasó de nuestro lado.
+ *
+ * ⚠️ EL 429 ES ALCANZABLE DE VERDAD, no un caso de borde. `PAYOUT_CHALLENGE_RL` es 10 requests por
+ * "10 m" **por IP y compartido** entre los cuatro gestos, y esta app es de remesas para LATAM: dos
+ * personas mandando desde la misma casa, oficina o cíber llegan al margen cero. Cuando pase, el peor
+ * caso es una MOLESTIA y no un daño: la pantalla cae en el estado 6, que no miente y no culpa a nadie;
+ * el refund trustless sigue disponible (`payout_submitted` **está** en `RECOVERABLE`); no se fabrica
+ * ningún terminal; y se recupera en la próxima ventana. La salida de verdad es contar el cupo por
+ * remitente, que es **WKH-340** y NO se cierra acá: agregar el bucket por address no sube el techo por
+ * IP, y contar por sender exige parsear el body ANTES del limiter, o sea rehacer la derivación de
+ * CPU-DoS de la ruta.
+ *
+ * ⛔ Y NADA DE ACÁ ESCRIBE EL AGREGADO. El gesto llama `prove()` —un challenge y una firma— y el
+ * observador escribe un `Map` en memoria. Ninguna rama puede producir `settled` ni `refunded`, que son
+ * los dos terminales irreversibles: `settled` no está en `RECOVERABLE` y le cerraría al remitente su
+ * único camino a sus USDC, para siempre.
+ */
+function RevisionDelSeguimiento({
+  estado,
+  gesto,
+  sender,
+  renovar,
+  onGesto,
+  onRenovada,
+}: {
+  estado: ReturnType<typeof lecturaSeguimiento>;
+  gesto: GestoRenovacion;
+  sender: string | null;
+  renovar: Container["renovarVentana"];
+  onGesto: (g: GestoRenovacion) => void;
+  onRenovada: () => void;
+}) {
+  const onRevisar = useCallback(async () => {
+    if (!sender) return;
+    onGesto("firmando");
+    try {
+      const prueba = await renovar.prove(sender);
+      // `null` NO es un fallo de la persona: es nuestro mecanismo apagado, y no hubo popup.
+      if (prueba === null) {
+        onGesto("no-se-pudo-pedir");
+        return;
+      }
+      // El gesto salió bien. El estado local vuelve a `idle` —el texto NO queda pegado— y se re-lee la
+      // ventana: el control desaparece porque `estado()` pasó a `"vigente"`.
+      onGesto("idle");
+      onRenovada();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "";
+      // La ÚNICA comparación que separa "no llegamos a preguntar" de "hubo popup y no se completó".
+      onGesto(msg === "pop_challenge_unavailable" ? "no-se-pudo-pedir" : "sin-firma");
+    }
+  }, [sender, renovar, onGesto, onRenovada]);
+
+  switch (estado) {
+    // Estado 1 (`mirando`) y el caso en que no hay nada que leer: NINGÚN texto nuevo. El criterio es
+    // que la pantalla no puede afirmar que mira cuando dejó de mirar, no que tenga que afirmar que mira.
+    case "no-aplica":
+    case "mirando":
+      return null;
+    // Estado 5 — sin billetera no hay a quién pedirle la firma, así que NO se ofrece el gesto. Ofrecerlo
+    // sería un botón que no puede funcionar; el gateway ya corta por su lado con `payout_status_no_wallet`.
+    case "sin-billetera":
+      return <p className="text-xs text-stone">{REVISION_SIN_BILLETERA}</p>;
+    // Estado 2 — la ventana está apagada. Presente puro: qué NO está pasando, sin contar qué pasó antes.
+    case "sin-prueba":
+      return (
+        <div className="space-y-2">
+          <p className="text-xs text-stone">{REVISION_APAGADA}</p>
+          {/* ⛔ `disabled` MIENTRAS FIRMA, y es uno de los dos frenos que sostienen la aritmética del
+              cupo: un gesto = como máximo UN challenge. Sin esto, N toques abren N popups y queman N
+              challenges de un cupo de 10 por IP. */}
+          <Button disabled={gesto === "firmando"} onClick={onRevisar}>
+            {REVISION_GESTO}
+          </Button>
+          {/* Estado 3 — el popup está abierto. Es texto propio y NO el label del botón, para que el
+              control siga siendo alcanzable por su nombre mientras está deshabilitado. */}
+          {gesto === "firmando" ? <p className="text-xs text-stone">{REVISION_FIRMANDO}</p> : null}
+          {gesto === "no-se-pudo-pedir" ? (
+            <p className="text-xs text-stone">{REVISION_NO_SE_PUDO_PEDIR}</p>
+          ) : null}
+          {gesto === "sin-firma" ? <p className="text-xs text-stone">{REVISION_SIN_FIRMA}</p> : null}
+        </div>
+      );
+  }
+  // ⛔ NO ES UN `default`, y la diferencia es la que hace que esto sea un candado: un `default` aceptaría
+  // cualquier valor nuevo de la unión y lo renderizaría como nada. Esta línea lo rechaza en `tsc`.
+  const nuncaLlega: never = estado;
+  return nuncaLlega;
 }
 
 // HU-SOL-13 (AC-6/CD-10): botón "Recuperar fondos" — el SENDER firma+broadcastea el refund del escrow
@@ -2242,7 +2449,7 @@ function AgentUnavailable({
  * agregar *"y el fee de la entrega no lo paga nadie, porque ese paso no corre"*. Es verdad
  * (`this.solana`, `../application/use-cases/confirm-and-send.ts:336`) y está PROHIBIDO escribirlo: en
  * ese mismo cuadrante, tres renglones más arriba en la MISMA tarjeta, la fila de la entrega dice
- * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:2409`). Ese *"lo simula"* es impreciso
+ * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:2616`). Ese *"lo simula"* es impreciso
  * —con el settle apagado la entrega no se simula, se corta— pero es **H1 de WKH-336**, residual de otra
  * HU que exige un TERCER valor de `transport` con su propia frase, y WKH-338 no lo cierra. Si la nota
  * dijera *"la entrega no corre"* mientras la fila dice *"lo simula"*, la tarjeta se contradiría a sí

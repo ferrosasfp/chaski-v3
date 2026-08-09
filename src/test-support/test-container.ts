@@ -4,7 +4,7 @@
 // sobre el mismo estado). Overrides a nivel gateway y escape-hatch a nivel use-case (useCases).
 // CD-11: cero I/O real acá (la única excepción, FallbackQuoteGateway, la inyecta el test).
 
-import type { Container } from "../composition/container";
+import type { Container } from "../composition/container"; import { InMemoryPopProofStore } from "../infrastructure/auth/pop-proof-store"; // WKH-339: el import va EN ESTA LÍNEA, no en una nueva, porque `container.test.ts:413` cita `test-container.ts:87` por número y una línea de más lo rota en silencio (mismo motivo que `flow-vm.ts:25`)
 import { PreviewQuote } from "../application/use-cases/preview-quote";
 import { RecoverEscrowFunds } from "../application/use-cases/recover-escrow-funds";
 import { CreateRemittance } from "../application/use-cases/create-remittance";
@@ -90,6 +90,9 @@ export function buildTestContainer(o: TestContainerOverrides = {}): Container {
   // y se descarta explícitamente para que quede escrito que no llega a ningún lado.
   void o.payoutAuthority;
   const refund = o.refund ?? new FakeRefundGateway();
+  // WKH-339: UN almacén para las dos capacidades de abajo. Se declara ACÁ y no arriba porque
+  // `container.test.ts:413` cita la línea 87 de este archivo (`const payouts = …`) por número.
+  const popProofs = new InMemoryPopProofStore(clock);
 
   const base: Container = {
     previewQuote: new PreviewQuote(quotes),
@@ -106,6 +109,22 @@ export function buildTestContainer(o: TestContainerOverrides = {}): Container {
     listHistory: new ListHistory(repo),
     abandonPendingKyc: new AbandonPendingKyc(pending),
     forgetKyc: new ForgetKyc(kycStore, pending, repo),
+    // ── WKH-339 · la ventana de lectura, sobre UN ÚNICO almacén ───────────────────────────────────
+    //
+    // 🔴 UNA SOLA INSTANCIA PARA LOS DOS CAMPOS, igual que en producción. Dos almacenes distintos
+    // compilarían igual, y el `renovarVentana` grabaría en uno mientras `ventanaDeLectura` leería del
+    // otro: el gesto nunca encendería nada. Que sea el MISMO es lo que `tsc` no puede garantizar.
+    //
+    // El default es LA VENTANA APAGADA, y es el caso real, no una comodidad del test: el almacén es en
+    // memoria y arranca vacío, que es exactamente lo que se encuentra alguien que recarga y entra al
+    // seguimiento desde el historial. Un test que quiera la ventana vigente tiene que GRABAR una
+    // prueba, o sea hacer lo que hace un gesto.
+    //
+    // ⚠️ `FixedClock` por default ⇒ el reloj no avanza solo. Una prueba grabada NO vence en el medio de
+    // un test, y eso es deseable: el cruce del TTL se mide en T-339.3, con un reloj que se avanza a
+    // mano, no por el paso del tiempo real de una corrida.
+    ventanaDeLectura: { estado: (a) => (popProofs.peek(a) ? "vigente" : "sin-prueba") },
+    renovarVentana: { prove: async (a) => { const p = { challenge: "c-test", signature: "s-test" }; popProofs.record(a, p); return p; } },
     solanaRefund: o.solanaRefund, // HU-SOL-13: undefined ⇒ la UI no muestra la acción refund
     // Se arma sobre el MISMO repo/clock que el resto: un test que dispara el refund tiene que poder
     // leer el estado persistido después, que es justo lo que el bug no hacía.

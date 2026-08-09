@@ -522,3 +522,79 @@ describe("createContainer — el seguimiento del payout lee el ledger (WKH-337/A
     },
   );
 });
+
+// ── WKH-339 · T-339.5 (AC-3 + AC-5) — EL TEST DE CABLEADO DE LA VENTANA DE LECTURA ──────────────────
+//
+// 🔴 ES EL ÚNICO TEST DEL REPO QUE VE DOS MUTANTES, Y LOS DOS COMPILAN. Por eso no alcanza con probar
+// los dos campos por separado ni con un `toBeDefined()`:
+//
+//  · M4 — `renovarVentana: new HttpPopSigner(wallet)`, SIN el 2º argumento. El recorder es OPCIONAL
+//    (`constructor`, `../infrastructure/auth/http-pop-signer.ts:14`), así que `tsc` da exit 0, la ruta
+//    del challenge se llama, el popup se abre, la persona firma… y NADIE graba nada. La ventana queda
+//    en `"sin-prueba"` para siempre: el botón nunca desaparece y cada toque quema un challenge del cupo.
+//  · M5 — la ventana se arma sobre un `new InMemoryPopProofStore(clock)` PROPIO en vez del que observa
+//    el gateway de seguimiento (`payouts`, `./container.ts:127`). También compila, también deja
+//    `estado()` en `"sin-prueba"` para siempre, y encima el gesto SÍ graba — en el almacén equivocado.
+//
+// Los dos son invisibles para `tsc` (los tipos se satisfacen), invisibles para los tests de
+// `flow.test.tsx` (usan `buildTestContainer`, que arma su propio par) e invisibles para
+// `http-pop-signer` (su test construye la clase a mano). Lo único que los ve es ejercitar los objetos
+// que `createContainer()` DEVUELVE, y afirmar que el gesto de uno cambia lo que contesta el otro.
+//
+// ⚠️ Lo que este test NO puede afirmar, y hay que decirlo: no verifica que el almacén sea el MISMO que
+// recibe `LedgerPayoutStatusGateway`, sino que los dos campos nuevos comparten uno. Un tercer almacén
+// compartido por los dos campos y ajeno al gateway pasaría este `it`. Lo que cubre ese hueco es que
+// `container.ts` construye UN solo `popProofs` (`:106`) y lo pasa a los tres lugares, y que agregar un
+// segundo `new InMemoryPopProofStore` en ese archivo es visible en el diff de cualquier revisión.
+describe("createContainer — WKH-339: el gesto de renovar enciende la ventana que la pantalla consulta", () => {
+  const SENDER = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+
+  it("T-339.5: `estado` arranca en `sin-prueba`, y tras `renovarVentana.prove()` pasa a `vigente`", async () => {
+    const urls: string[] = [];
+    const fetchMock = vi.fn(async (url: string) => {
+      urls.push(String(url));
+      // El challenge no se verifica de este lado: lo emite y lo comprueba el server. Acá sólo tiene que
+      // existir, para que el gesto produzca una prueba OBSERVABLE.
+      if (String(url).includes("/api/a2a/payout/challenge")) {
+        return Response.json({ popChallenge: "ch-339", popMessage: "msg-339" }, { status: 200 });
+      }
+      return Response.json({ error: "no deberia llamarse" }, { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    // Sin `registerSignMessage` la firma tira y el gesto no deja ninguna prueba que observar: sería un
+    // rojo por el motivo equivocado.
+    solanaWalletBridge.setState({ publicKey: SENDER, connected: true });
+    solanaWalletBridge.registerSignMessage(async () => new Uint8Array(64).fill(3));
+    try {
+      const c = createContainer();
+
+      // 1 · Arranque en frío: el almacén es en memoria y está vacío. Es el caso real de una recarga.
+      expect(
+        c.ventanaDeLectura.estado(SENDER),
+        "la ventana arranca ENCENDIDA sin que nadie haya firmado nada: el estado no cuelga del almacén",
+      ).toBe("sin-prueba");
+
+      // 2 · EL GESTO. Es el mismo `prove()` que los otros tres call-sites, y pide la firma CADA VEZ.
+      const prueba = await c.renovarVentana.prove(SENDER);
+      expect(prueba, "el gesto no produjo ninguna prueba: sin esto el paso 3 no dice nada").not.toBeNull();
+      expect(urls.some((u) => u.includes("/api/a2a/payout/challenge"))).toBe(true);
+
+      // 3 · EL ASERTO QUE MATA A M4 Y A M5. El objeto que CONSULTA el estado tiene que haberse enterado
+      //     de la prueba que produjo el objeto que FIRMA. Si son dos almacenes, o si el signer se armó
+      //     sin recorder, esto sigue en `"sin-prueba"` y todo lo demás pasa igual.
+      expect(
+        c.ventanaDeLectura.estado(SENDER),
+        "el gesto firmó pero la ventana sigue apagada: o `renovarVentana` se armó SIN el 2º argumento " +
+          "(el recorder es opcional ⇒ compila y no graba, M4), o la ventana lee un almacén DISTINTO " +
+          "del que el gesto escribe (M5). En los dos casos el botón 'Revisar ahora' no desaparece " +
+          "nunca y cada toque quema un challenge del cupo de la IP",
+      ).toBe("vigente");
+
+      // 4 · Y es POR ADDRESS, no un interruptor global: la prueba de una billetera no enciende la
+      //     ventana de otra. Sin esto, `estado: () => "vigente"` tras el primer gesto pasaría.
+      expect(c.ventanaDeLectura.estado("OtraBilleteraQueNadieFirmo")).toBe("sin-prueba");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

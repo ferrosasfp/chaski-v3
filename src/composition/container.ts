@@ -275,13 +275,23 @@ export function getContainer(): Container {
 //
 // 🔴 Y SON TRES TIPOS SEPARADOS, DE UN MÉTODO CADA UNO, PORQUE LA SEPARACIÓN ES EL MECANISMO. Las dos
 // capacidades no se juntan en un solo puerto:
-//  · `VentanaDeLectura` NO tiene `prove` ⇒ el camino de LECTURA no compila si intenta firmar. Mata a un
-//    render (o a un temporizador) que abra un popup. Y NO tiene `peek` ⇒ tampoco puede sacar la
-//    credencial del almacén y armarse un `fetch` a mano, salteándose el throttle de 20 s del gateway.
-//  · `PopSigner` (`PopSigner`, `../application/ports.ts:553`) NO tiene `estado` ni `peek` ⇒ el camino de
-//    FIRMA no puede consultar el estado, así que no puede "optimizar" saltándose el popup de una
+//  · `VentanaDeLectura` NO tiene `prove` ⇒ **el OBJETO que informa el estado no puede firmar**. Y NO
+//    tiene `peek` ⇒ tampoco puede sacar la credencial del almacén y armarse un `fetch` a mano,
+//    salteándose el throttle de 20 s del gateway.
+//  · `PopSigner` (`PopSigner`, `../application/ports.ts:553`) NO tiene `estado` ni `peek` ⇒ **el OBJETO
+//    que firma no puede consultar el estado**, así que no puede "optimizar" saltándose el popup de una
 //    operación de dinero reusando una prueba guardada.
 // ⛔ UN SOLO PUERTO CON LOS DOS MÉTODOS ES UNA VIOLACIÓN, aunque `PopProofReader` quede intacto.
+//
+// ⚠️ Y ACÁ HAY QUE SER EXACTO SOBRE HASTA DÓNDE LLEGA `tsc`, porque la versión anterior de este párrafo
+// afirmaba de más. Decía que *"el camino de LECTURA no compila si intenta firmar"*, y **eso es falso**:
+// MEDIDO, un `setInterval` en `TrackView` que llame a `renovar.prove(...)` **compila con `tsc` exit 0**,
+// porque las dos capacidades le llegan al MISMO componente en la MISMA prop y nada le impide tomar la
+// otra. Lo que `tsc` garantiza es lo de arriba —**una capacidad por OBJETO**—, no una propiedad del
+// CAMINO. El riesgo del popup por tick **sí** está cubierto, pero **por tests** (con ese mutante caen 4
+// de `flow.test.tsx`), y esa diferencia importa: un tipo no se puede borrar sin que el compilador grite,
+// un test sí. ⇒ **la separación por objeto es estructural; que nadie firme desde el temporizador es una
+// propiedad vigilada por la suite.**
 
 /** En qué estado está la ventana de lectura del seguimiento PARA UNA ADDRESS.
  *

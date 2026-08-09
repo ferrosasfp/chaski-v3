@@ -725,7 +725,7 @@ export function humanError(code: string): string {
   // propia persona, o la release-authority a mano. O sea que nadie devuelve nada solo.
   //
   // Es el texto que MÁS se lee de este archivo: TrackView lo usa como último recurso para cualquier
-  // `payout_failed` cuyo reason no reconozca (`humanError`, `flow.tsx:1445`), justo cuando no sabemos dónde está la
+  // `payout_failed` cuyo reason no reconozca (`humanError`, `flow.tsx:1488`), justo cuando no sabemos dónde está la
   // plata. Prometer un reembolso ahí manda a esperar sentado en vez de a la única acción que sirve.
   // WKH-333 — VA ANTES del catch-all de `payout`, y arregla un defecto de copy PREEXISTENTE que este
   // cambio vuelve mucho más alcanzable. `payout_not_authorized` no contiene "kyc", así que caía en el
@@ -767,15 +767,89 @@ export type LecturaSeguimiento = "no-aplica" | "sin-billetera" | "mirando" | "si
 
 /** El estado LOCAL del gesto de renovar, que se superpone SÓLO sobre `"sin-prueba"`.
  *
- *  🔴 SON CUATRO VALORES Y NO UN BOOLEANO, porque pedir la firma tiene TRES desenlaces y un booleano
- *  ya perdió el tercero:
- *   · `prove()` devuelve `null` (501, mecanismo apagado server-side) ⇒ NUNCA se abrió un popup;
- *   · `prove()` tira `"pop_challenge_unavailable"` (400/5xx/429 del cupo) ⇒ NUNCA se abrió un popup;
- *   · `prove()` tira cualquier otro mensaje ⇒ viene de `wallet.signMessage`: hubo popup y no se completó.
- *  Los dos primeros son `"no-se-pudo-pedir"` y el tercero `"sin-firma"`. ⛔ Colapsarlos le diría "no
- *  completaste la firma" a alguien que nunca vio un popup, o sea culparía a la persona por algo que
- *  pasó de nuestro lado. */
-export type GestoRenovacion = "idle" | "firmando" | "no-se-pudo-pedir" | "sin-firma";
+ *  🔴 SON CINCO VALORES Y NO UN BOOLEANO, porque pedir la firma tiene **CUATRO** desenlaces y un
+ *  booleano perdería tres. Los cuatro están MEDIDOS en el árbol, no supuestos:
+ *   1. `prove()` devuelve `null` ⇐ 501 `pop_not_configured`: el mecanismo está apagado server-side.
+ *      **Nunca se abrió un popup**, y **reintentar NUNCA sirve** mientras el secreto no esté ⇒
+ *      `"mecanismo-apagado"`.
+ *   2. `prove()` tira `"pop_challenge_unavailable"` ⇐ 400 / 5xx / **429 del cupo**
+ *      (`pop_challenge_unavailable`, `../infrastructure/auth/http-pop-signer.ts:23`). **Nunca se abrió un
+ *      popup**, y reintentar **puede** servir más tarde ⇒ `"no-se-pudo-pedir"`.
+ *   3. `prove()` tira algo que **NO viene de la billetera**: el `TypeError` crudo de `fetch` cuando no
+ *      hay red (su docblock lo declara: *"o un fallo de red (fetch rechaza) ⇒ LANZA"*,
+ *      `../infrastructure/auth/http-pop-signer.ts:8`), o `wallet_sign_not_available`, que el bridge tira
+ *      **antes de cualquier popup** (`signMsgHandle`, `../infrastructure/solana-wallet-bridge.ts:127`), o
+ *      un `throw` que no es un `Error`. **Tampoco hubo popup** ⇒ `"no-se-pudo-pedir"`.
+ *   4. `prove()` tira un error **de la billetera**: hubo popup y no se completó ⇒ `"sin-firma"`.
+ *
+ *  🔴 EL CASO 3 ES EL QUE ESTA UNIÓN NO TENÍA, Y ERA EL MÁS COMÚN. El input más frecuente de una app de
+ *  remesas en celular es **perder conectividad**, y con un `else` que mandaba todo `throw` no reconocido
+ *  a `"sin-firma"` la pantalla le decía a la persona que **su** firma falló cuando lo que se cayó fue
+ *  **nuestra** red. ⛔ Colapsar cualquiera de los cuatro rompe la regla 2 del copy de más abajo. */
+export type GestoRenovacion =
+  | "idle"
+  | "firmando"
+  | "mecanismo-apagado"
+  | "no-se-pudo-pedir"
+  | "sin-firma";
+
+/** El desenlace crudo de `prove()`, en la forma que `gestoDespuesDeProve` puede clasificar sin efectos.
+ *  Es un objeto etiquetado y no un `unknown | null` porque `null` es un desenlace CON significado
+ *  (el 501) y no la ausencia de uno: un `unknown` los volvería indistinguibles. */
+export type ResultadoDelGesto =
+  | { readonly tipo: "prueba" }
+  | { readonly tipo: "null" }
+  | { readonly tipo: "error"; readonly error: unknown };
+
+/**
+ * 🔴 LOS ERRORES QUE LA BILLETERA DECLARA COMO SUYOS, y la lista es una ALLOWLIST a propósito.
+ *
+ * `@solana/wallet-adapter-base` etiqueta cada excepción con su `name` en el constructor — MEDIDO:
+ * `this.name = 'WalletSignMessageError'` en `node_modules/@solana/wallet-adapter-base/lib/cjs/errors.js:99`.
+ * Ese `name` es lo único estructural que distingue "la billetera abrió su popup y algo pasó ahí" de
+ * "no llegamos a la billetera". El MENSAJE no sirve: lo escribe un tercero, y este repo ya lo dejó
+ * escrito — `MENSAJE_FIRMA_RECHAZADA_SIN_MEDIR` (`../test-support/rpc-caido.ts:33`) declara que el
+ * texto de Phantom **no está medido y no puede estarlo** desde un test, y que el copy no depende de que
+ * matchee. Acá se sigue esa misma dirección.
+ *
+ * ⚠️ Y ES UNA ALLOWLIST, NO UNA DENYLIST, porque el lado seguro está definido: si no reconocemos el
+ * error, decir *"es de nuestro lado"* es como mucho **modesto**, y decir *"no completaste la firma"*
+ * sería **acusar**. Un nombre nuevo de la librería cae del lado que no culpa a nadie.
+ */
+const ERRORES_ANTES_DEL_POPUP: ReadonlySet<string> = new Set([
+  // Los que la librería tira SIN haber abierto nada. Van excluidos EXPLÍCITAMENTE, porque sus nombres
+  // sí matchean la forma `Wallet…Error` y sin esta lista entrarían a `"sin-firma"` por la ventana.
+  "WalletNotConnectedError",
+  "WalletDisconnectedError",
+  "WalletNotReadyError",
+  "WalletLoadError",
+  "WalletConfigError",
+]);
+
+function laBilleteraAbrioSuPopup(e: unknown): boolean {
+  const name =
+    e && typeof e === "object" && typeof (e as { name?: unknown }).name === "string"
+      ? (e as { name: string }).name
+      : "";
+  if (name === "" || ERRORES_ANTES_DEL_POPUP.has(name)) return false;
+  return /^Wallet[A-Za-z]*Error$/.test(name);
+}
+
+/**
+ * Clasifica el desenlace del gesto. Función PURA: sin reloj, sin red, sin efectos.
+ *
+ * ⛔ VIVE ACÁ Y NO EN EL COMPONENTE, y es la razón por la que este arreglo se puede medir con inputs
+ * concretos en vez de con un render: los cuatro desenlaces son datos, y el `it` que los cubre puede
+ * pasarle un `TypeError` real sin montar nada.
+ */
+export function gestoDespuesDeProve(r: ResultadoDelGesto): GestoRenovacion {
+  if (r.tipo === "prueba") return "idle";
+  if (r.tipo === "null") return "mecanismo-apagado";
+  // ⛔ EL DEFAULT ES `"no-se-pudo-pedir"`, Y ESA DIRECCIÓN ES EL ARREGLO. Antes esto era un `else` que
+  // mandaba todo lo no reconocido a `"sin-firma"`, o sea que el caso más común —quedarse sin red— le
+  // achacaba a la persona una firma que nunca le pedimos.
+  return laBilleteraAbrioSuPopup(r.error) ? "sin-firma" : "no-se-pudo-pedir";
+}
 
 /**
  * De qué está hablando la pantalla de seguimiento. Función PURA: sin reloj, sin efectos, sin `peek`.
@@ -784,8 +858,10 @@ export type GestoRenovacion = "idle" | "firmando" | "no-se-pudo-pedir" | "sin-fi
  *  1. `status !== "payout_submitted"` ⇒ `"no-aplica"`. Es la única rama que no habla de la ventana: en
  *     cualquier otro estado no hay un desenlace de payout que leer.
  *  2. `sender == null` ⇒ `"sin-billetera"`, Y VA ANTES DE MIRAR LA VENTANA. Colapsarla en `"sin-prueba"`
- *     ofrecería el gesto de firmar cuando no hay a quién pedirle la firma. Es alcanzable de verdad:
- *     entrar al seguimiento desde el historial sin haber conectado.
+ *     ofrecería el gesto de firmar cuando no hay a quién pedirle la firma. ⚠️ Es una rama **DEFENSIVA**:
+ *     acá se afirmaba que era "alcanzable de verdad… desde el historial sin haber conectado" y **no está
+ *     medido** — los dos sitios que ponen `step` en `"track"` pasan antes por `setAddress`
+ *     (`resolveSender`, `./flow.tsx:366`). Existe porque el tipo de `sender` admite `null`.
  *  3. `ventana === "vigente"` ⇒ `"mirando"`. La lectura corre; la pantalla no dice nada nuevo.
  *  4. Todo lo demás ⇒ `"sin-prueba"`. Es el default, y su dirección es la segura: ante la duda la
  *     pantalla OFRECE el gesto en vez de callarse. ⛔ Un default `"mirando"` es el mutante que hay que
@@ -814,8 +890,11 @@ export function lecturaSeguimiento(de: {
 //    que es en memoria, está vacío desde el primer milisegundo. ⛔ Decir *"venció"* o *"dejamos de
 //    revisar"* sería afirmar una historia que el sistema NO puede distinguir. El input que falsea
 //    cualquier verbo en pasado es exactamente esa recarga.
-// 2. 🔴 NINGUNA CULPA A LA PERSONA. `prove()` tiene TRES desenlaces y dos de ellos ocurren SIN que se
-//    haya abierto un popup (501 y 429/400/5xx). Decir *"no completaste la firma"* ahí es falso.
+// 2. 🔴 NINGUNA CULPA A LA PERSONA. `prove()` tiene **CUATRO** desenlaces y **TRES** ocurren SIN que se
+//    haya abierto un popup: el 501, el 429/400/5xx, y todo lo que no viene de la billetera (el
+//    `TypeError` de `fetch` sin red, `wallet_sign_not_available`, un `throw` que no es `Error`). Decir
+//    *"no completaste la firma"* en cualquiera de los tres es FALSO. ⚠️ Acá decía "TRES desenlaces y dos
+//    de ellos", y el tercero —el más común de todos, quedarse sin red— caía en el copy que acusa.
 // 3. La pantalla no afirma que ESTÁ mirando. El criterio es "no puede afirmar que mira cuando dejó de
 //    mirar", no "tiene que afirmar que mira": una afirmación positiva nueva agranda la superficie
 //    falsable por cero beneficio, y sólo sería sostenible mientras la prueba viva.
@@ -830,13 +909,32 @@ export const REVISION_GESTO = "Revisar ahora";
 /** Estado 3 — mientras el popup está abierto. El botón queda `disabled`: un gesto, un challenge. */
 export const REVISION_FIRMANDO = "Confirmá en tu billetera…";
 /** Estado 5 — `payout_submitted` sin billetera conectada. SIN gesto: no hay a quién pedirle la firma.
- *  El gateway ya corta por su lado con `payout_status_no_wallet`. */
+ *  El gateway ya corta por su lado con `payout_status_no_wallet`.
+ *
+ *  ⚠️ ESTE ESTADO ES **DEFENSIVO**, y hay que decirlo así. Acá se afirmaba que era *"alcanzable de
+ *  verdad: entrar al seguimiento desde el historial sin haber conectado"*, y **eso no está medido**: los
+ *  dos únicos sitios que ponen `step` en `"track"` vienen precedidos de un `setAddress`
+ *  (`resolveSender`, `./flow.tsx:366`), así que **nadie encontró el camino**. Se conserva porque la prop
+ *  `sender` es `string | null` y el tipo admite el caso: la alternativa sería no cubrirlo y confiar en
+ *  que ningún llamador futuro lo produzca. T-339.7 lo clava. Lo que se saca es la afirmación. */
 export const REVISION_SIN_BILLETERA =
   "Para revisar tenemos que saber que este envío es tuyo. Conectá la misma wallet con la que enviaste.";
-/** Estado 6 — no pudimos PEDIR la firma (501, o 400/5xx/429 del cupo). En los tres casos NUNCA se abrió
+/** Estado 6 — no pudimos PEDIR la firma, y **reintentar puede servir más tarde** (400/5xx/429 del cupo,
+ *  o un fallo de red, o cualquier error que la billetera no declare como suyo). En todos NUNCA se abrió
  *  un popup, así que la frase dice de qué lado está el problema en vez de culpar a la billetera. */
 export const REVISION_NO_SE_PUDO_PEDIR =
   "Ahora mismo no podemos pedirle la firma a tu billetera. No es tu wallet: es de nuestro lado.";
+/** Estado 6b — el mecanismo está apagado server-side (501, sin `PAYOUT_POP_SECRET`), que es el DEFAULT
+ *  documentado. Comparte con el estado 6 el no culpar a nadie, y se separa en UNA cosa que importa:
+ *  acá **reintentar no sirve**, así que la frase no puede insinuar que más tarde sí. `"Ahora mismo"` a
+ *  secas lo insinuaba, y por eso esta copy dice explícitamente que volver a intentar no cambia el
+ *  resultado — la misma forma que `humanError` ya usa para los cortes que no se arreglan reintentando. */
+export const REVISION_MECANISMO_APAGADO =
+  "Ahora no podemos revisar este envío desde acá. No es tu wallet: es de nuestro lado, y volver a intentar no cambia el resultado.";
 /** Estado 7 — hubo popup y no se completó. ⛔ NO dice "la rechazaste": el error viene de la billetera y
  *  no distingue un rechazo de un fallo de la extensión. */
 export const REVISION_SIN_FIRMA = "La firma no se completó. Podés intentar de nuevo.";
+/** El techo del gesto se alcanzó. Ver `MAX_CHALLENGES_POR_MONTAJE` en `./flow.tsx`: no culpa a nadie y
+ *  no promete un automatismo, dice qué queda por hacer. */
+export const REVISION_TECHO_ALCANZADO =
+  "Por ahora no podemos seguir intentando desde acá. Volvé a abrir el seguimiento para reintentar, o recuperá tus USDC.";

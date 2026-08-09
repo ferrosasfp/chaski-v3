@@ -1731,6 +1731,13 @@ it("T-339.2 (AC-1): con la ventana de lectura apagada, el seguimiento ofrece rev
 // `ventana` y `renovar` se arman con la MISMA forma que `container.ts`: un `peek` sobre un almacén real
 // decide el estado, y el signer graba EN ESE almacén. Así "el control desaparece al renovar" no es un
 // flag que el test setea: es la consecuencia de que `estado()` pase a `"vigente"`.
+// El tick del control, para los `it` con fake timers. ⚠️ Es un SEGUNDO LITERAL de `VENTANA_CHECK_MS`
+// (`flow.tsx`), que no está exportado. Se declara acá con su origen escrito en vez de dejarlo suelto: si
+// alguien cambia el de producción, estos `it` avanzan de menos y se ponen rojos, que es la dirección
+// correcta (fallan del lado de "no esperé lo suficiente", nunca del lado de dar por bueno un tick que no
+// ocurrió).
+const VENTANA_CHECK_MS_EN_TEST = 5000;
+
 function ventanaDeTest(clock = new FixedClock()) {
   const store = new InMemoryPopProofStore(clock);
   const estado = vi.fn((a: string) => (store.peek(a) ? ("vigente" as const) : ("sin-prueba" as const)));
@@ -1792,7 +1799,9 @@ describe("WKH-339 — los siete estados de la ventana de lectura, en pantalla", 
   // ── T-339.7 (AC-4) · Estado 5: sin billetera se explica, y NO se ofrece el gesto ────────────────
   //
   // Mata a M12 (`sin-billetera` colapsa en `sin-prueba`): ofrecería "Revisar ahora" sin tener a quién
-  // pedirle la firma. Es alcanzable de verdad — entrar al seguimiento desde el historial sin conectar.
+  // pedirle la firma. ⚠️ Rama DEFENSIVA: que sea "alcanzable de verdad desde el historial" NO está
+  // medido —los dos sitios que ponen `step` en `"track"` pasan antes por `setAddress`— y la afirmación se
+  // sacó. Se cubre porque el tipo de `sender` admite `null`, no porque haya un camino conocido.
   it("T-339.7: `payout_submitted` SIN billetera ⇒ el texto de la wallet y NINGÚN botón de revisar", async () => {
     const { store, ventana } = ventanaDeTest();
     render(
@@ -1814,7 +1823,7 @@ describe("WKH-339 — los siete estados de la ventana de lectura, en pantalla", 
     expect(screen.queryByText(/No estamos revisando/)).toBeNull();
   });
 
-  // ── T-339.4 (AC-4) · los TRES desenlaces de `prove()`, y ninguno culpa a quien no vio un popup ──
+  // ── T-339.4 (AC-4) · los CUATRO desenlaces de `prove()`, y ninguno culpa a quien no vio un popup ──
   //
   // 🔴 Mata a M6 (colapsar `null` con el `throw`): con 501 NUNCA se abrió un popup, así que decir "no
   // completaste la firma" es FALSO. Y mata a M7 (el estado local no vuelve de `"firmando"`): el texto
@@ -1843,7 +1852,7 @@ describe("WKH-339 — los siete estados de la ventana de lectura, en pantalla", 
     expect(screen.queryByText(/Confirmá en tu billetera/)).toBeNull(); // M7: el texto no queda pegado
   });
 
-  it("T-339.4b: `prove()` devuelve `null` (501) ⇒ 'es de nuestro lado', y NUNCA 'no completaste la firma'", async () => {
+  it("T-339.4b: `prove()` devuelve `null` (501) ⇒ 'es de nuestro lado' + 'no cambia el resultado', y NUNCA 'no completaste la firma'", async () => {
     const { store, ventana } = ventanaDeTest();
     void store;
     render(
@@ -1862,6 +1871,10 @@ describe("WKH-339 — los siete estados de la ventana de lectura, en pantalla", 
     // nada que la persona pudiera completar o rechazar.
     expect(screen.queryByText(/La firma no se completó/)).toBeNull();
     expect(screen.queryByText(/rechaz/i)).toBeNull();
+    // 🔴 Y LA DISTINCIÓN CON EL 429 (AR/MNR-2): con el mecanismo apagado —que es el DEFAULT documentado—
+    // reintentar NUNCA sirve, así que el copy no puede insinuar que más tarde sí. Un `"Ahora mismo"` a
+    // secas lo insinuaba. Este aserto es lo que impide volver a colapsar 6b con 6.
+    expect(screen.getByText(/no cambia el resultado/)).toBeInTheDocument();
     // Y el control SIGUE ahí: la ventana no se encendió, así que la salida tiene que seguir ofrecida.
     expect(screen.getByRole("button", { name: /revisar/i })).toBeEnabled();
   });
@@ -1893,7 +1906,8 @@ describe("WKH-339 — los siete estados de la ventana de lectura, en pantalla", 
     expect(screen.queryByText(/La firma no se completó/)).toBeNull();
   });
 
-  it("T-339.4d: `throw` con CUALQUIER otro mensaje (viene de la billetera) ⇒ 'La firma no se completó'", async () => {
+  /** Monta el control con un `prove` que rechaza con `error`, y devuelve el DOM listo para leer. */
+  async function trasUnFalloDe(error: unknown) {
     const { store, ventana } = ventanaDeTest();
     void store;
     render(
@@ -1905,20 +1919,224 @@ describe("WKH-339 — los siete estados de la ventana de lectura, en pantalla", 
           ventana,
           renovar: {
             prove: async () => {
-              throw new Error("User rejected the request");
+              throw error;
             },
           },
         }}
       />,
     );
-
     fireEvent.click(await screen.findByRole("button", { name: /revisar/i }));
+  }
+
+  it("T-339.4d: un error que la billetera DECLARA como suyo ⇒ 'La firma no se completó'", async () => {
+    // La forma que produce producción, no una inventada: `@solana/wallet-adapter-base` etiqueta cada
+    // excepción con su `name` en el constructor (MEDIDO en
+    // `node_modules/@solana/wallet-adapter-base/lib/cjs/errors.js:99`). Ese `name` es lo ÚNICO
+    // estructural que dice "acá hubo un popup"; el mensaje lo escribe un tercero y este repo ya declaró
+    // que no está medido (`MENSAJE_FIRMA_RECHAZADA_SIN_MEDIR`, `../test-support/rpc-caido.ts:33`).
+    const e = new Error("User rejected the request.");
+    e.name = "WalletSignMessageError";
+    await trasUnFalloDe(e);
 
     expect(await screen.findByText(/La firma no se completó/)).toBeInTheDocument();
     // ⛔ Y no dice "la rechazaste", aunque el mensaje de la billetera diga "rejected": ese mensaje no
     // distingue un rechazo de un fallo de la extensión, así que afirmarlo sería inventar la distinción.
     expect(screen.queryByText(/rechaz/i)).toBeNull();
     expect(screen.queryByText(/es de nuestro lado/)).toBeNull(); // no se colapsa con el estado 6
+  });
+
+  // ── 🔴 T-339.4f (AR/BLQ-MED-1) · LOS TRES INPUTS QUE LA PANTALLA LE ACHACABA A LA PERSONA ──────────
+  //
+  // Los tres están MEDIDOS en el árbol y los tres salían por el `else` que mandaba todo `throw` no
+  // reconocido a *"La firma no se completó"*. El primero es **el input más común de una app de remesas en
+  // celular**: quedarse sin red. La app le decía a la persona que SU firma falló cuando lo que se cayó
+  // fue NUESTRA red.
+  //
+  // ⚠️ Se miden en el DOM además de en `gestoDespuesDeProve` (que tiene su propio `describe` en
+  // `flow-vm.test.ts`), porque lo que el bloqueante describe es lo que la PERSONA LEE, y entre la función
+  // pura y la pantalla está el `catch` del handler — que es justo donde vivía el `else`.
+  it.each([
+    ["sin conexión / server caído / CORS: `fetch` rechaza con un TypeError crudo", new TypeError("Failed to fetch")],
+    ["el handle de firma no está montado: el bridge tira ANTES de cualquier popup", new Error("wallet_sign_not_available")],
+    ["un `throw` que no es `Error`: no hay `name` ni `message` que mirar", "boom"],
+  ])("T-339.4f: %s ⇒ 'es de nuestro lado', y NUNCA 'La firma no se completó'", async (_n, error) => {
+    await trasUnFalloDe(error);
+
+    expect(await screen.findByText(/es de nuestro lado/)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/La firma no se completó/),
+      "la pantalla le achaca a la persona una firma que nunca le pedimos: nunca se abrió un popup",
+    ).toBeNull();
+    expect(screen.queryByText(/rechaz/i)).toBeNull();
+    // Y reintentar SÍ puede servir más tarde (a diferencia del 501), así que el botón sigue disponible.
+    expect(screen.getByRole("button", { name: /revisar/i })).toBeEnabled();
+    expect(screen.queryByText(/no cambia el resultado/)).toBeNull();
+  });
+
+  // ── 🔴 T-339.4g (AR/BLQ-MED-2) · EL TECHO DE CHALLENGES EXISTE Y ES MEDIBLE ────────────────────────
+  //
+  // Los dos frenos que la aritmética invocaba —el `disabled` mientras firma y que el botón desaparece al
+  // renovar con éxito— NO acotan el camino de FALLO: tras un fallo el botón vuelve habilitado, no hay
+  // cooldown, y el copy del estado 7 INVITA a reintentar. MEDIDO antes del arreglo: **6 toques ⇒ 6
+  // challenges**, con el botón habilitado antes de cada uno.
+  //
+  // Y el daño no era teórico: `PAYOUT_CHALLENGE_RL` son 10 requests por "10 m" IP-only y COMPARTIDOS, y
+  // con el secreto seteado el limitador corre DESPUÉS del 501 ⇒ cada toque consume un token. Un solo
+  // remitente podía vaciar el cupo de su IP y tumbar el envío del vecino detrás del mismo NAT.
+  it("T-339.4g: 6 toques sobre un `prove` que falla consumen SÓLO 3 challenges, y el botón queda deshabilitado", async () => {
+    const { store, ventana } = ventanaDeTest();
+    void store;
+    const prove = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    render(
+      <TrackView
+        rem={rem}
+        sender={FAKE_SOLANA_BENEFICIARY}
+        onRecovered={() => {}}
+        revision={{ ventana, renovar: { prove } }}
+      />,
+    );
+
+    const btn = await screen.findByRole("button", { name: /revisar/i });
+
+    // (1) SEIS toques uno por uno, esperando el re-render entre cada par. Es el camino que el AR midió:
+    //     tras un fallo el botón vuelve habilitado y el copy invita a reintentar.
+    for (let i = 0; i < 6; i += 1) {
+      fireEvent.click(btn);
+      await waitFor(() => expect(prove.mock.calls.length).toBeLessThanOrEqual(3));
+    }
+    expect(
+      prove.mock.calls.length,
+      "el camino de FALLO no tiene techo: cada toque es un challenge de un cupo de 10 COMPARTIDO por IP, " +
+        "así que un solo remitente puede vaciar el cupo de su red y tumbar el envío del vecino",
+    ).toBe(3);
+    // Y la pantalla lo dice en vez de quedarse con un botón que no hace nada.
+    expect(screen.getByRole("button", { name: /revisar/i })).toBeDisabled();
+    expect(screen.getByText(/Volvé a abrir el seguimiento/)).toBeInTheDocument();
+  });
+
+  // 🔴 T-339.4g' — EL TECHO CUENTA LOS ÉXITOS TAMBIÉN, no sólo los fallos.
+  //
+  // Es la otra mitad de BLQ-MED-2 y una propiedad distinta de la de arriba: lo que consume el cupo de la
+  // IP es **la request**, no su desenlace, así que un contador que sólo mirara los fallos dejaría el
+  // techo abierto por el camino feliz. Acá cada intento graba una prueba (éxito), la ventana pasa a
+  // `"vigente"`, se la vence a mano y se vuelve a intentar: al cuarto ciclo ya no hay intentos.
+  //
+  // ⚠️ Y ES POR MONTAJE, no por sesión: remontar equivale a recargar, y una recarga ya vacía el almacén
+  // de pruebas. Ese es el escape que evita que el techo deje a alguien sin salida.
+  it("T-339.4g': el techo cuenta también los intentos EXITOSOS (lo que gasta el cupo es la request)", async () => {
+    vi.useFakeTimers();
+    try {
+      const reloj = new FixedClock();
+      const { store, ventana } = ventanaDeTest(reloj);
+      const prove = vi.fn(async (a: string) => {
+        const p = { challenge: "ch", signature: "sig" };
+        store.record(a, p);
+        return p;
+      });
+      render(
+        <TrackView
+          rem={rem}
+          sender={FAKE_SOLANA_BENEFICIARY}
+          onRecovered={() => {}}
+          revision={{ ventana, renovar: { prove } }}
+        />,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+
+      // Cuatro ciclos de "renovar con éxito y dejar vencer la prueba". El cuarto no puede pedir nada.
+      // ⚠️ Con fake timers hace falta avanzar el tick del control (5 s) para que la etiqueta se entere
+      // del cambio de ventana; el `FixedClock` es el que decide si la prueba venció.
+      for (let ciclo = 0; ciclo < 4; ciclo += 1) {
+        const btn = screen.getByRole("button", { name: /revisar/i });
+        if ((btn as HTMLButtonElement).disabled) break;
+        await act(async () => {
+          fireEvent.click(btn);
+        });
+        expect(screen.queryByText(/No estamos revisando/)).toBeNull(); // renovó: el bloque se fue
+        // Se vence la prueba recién grabada: el bloque vuelve a aparecer y con él el botón.
+        reloj.set(new Date(Date.parse(T0) + (ciclo + 1) * 9 * 60 * 1000).toISOString());
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(VENTANA_CHECK_MS_EN_TEST);
+        });
+        expect(screen.getByText(/No estamos revisando/)).toBeInTheDocument();
+      }
+
+      expect(
+        prove.mock.calls.length,
+        "el techo no cuenta los intentos exitosos: lo que consume el cupo de la IP es la request, no su " +
+          "desenlace, así que contar sólo los fallos deja el techo abierto por el camino feliz",
+      ).toBe(3);
+      expect(screen.getByRole("button", { name: /revisar/i })).toBeDisabled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // ── 🟡 T-339.4h (AR/BLQ-BAJO-1) · EL TEXTO DE UN FALLO VIEJO NO REAPARECE ──────────────────────────
+  //
+  // Medido por el AR: fallo de billetera ⇒ el texto queda · otro gesto de la app graba una prueba en el
+  // MISMO almacén (por ejemplo "Recuperar fondos") ⇒ el bloque desaparece · se cruza el plazo ⇒ **el
+  // texto viejo VUELVE A APARECER**, dando como razón actual de que no estamos revisando un fallo de
+  // firma que ya no es la razón.
+  it("T-339.4h: tras un fallo, si otro gesto enciende la ventana, el texto viejo NO vuelve al vencerse", async () => {
+    vi.useFakeTimers();
+    try {
+      const reloj = new FixedClock();
+      const { store, ventana } = ventanaDeTest(reloj);
+      const e = new Error("User rejected the request.");
+      e.name = "WalletSignMessageError";
+      render(
+        <TrackView
+          rem={rem}
+          sender={FAKE_SOLANA_BENEFICIARY}
+          onRecovered={() => {}}
+          revision={{
+            ventana,
+            renovar: {
+              prove: async () => {
+                throw e;
+              },
+            },
+          }}
+        />,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+
+      // (1) el fallo deja su texto.
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /revisar/i }));
+      });
+      expect(screen.getByText(/La firma no se completó/)).toBeInTheDocument();
+
+      // (2) OTRO gesto de la app graba una prueba en el MISMO almacén (es lo que hace "Recuperar fondos").
+      //     El bloque desaparece porque la ventana pasó a `"vigente"`.
+      store.record(FAKE_SOLANA_BENEFICIARY, { challenge: "ch-otro", signature: "sig-otro" });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000); // un tick del control
+      });
+      expect(screen.queryByText(/La firma no se completó/)).toBeNull();
+
+      // (3) se cruza el plazo de la prueba y el bloque vuelve. ⛔ TIENE que volver SIN el texto viejo.
+      await act(async () => {
+        // `FixedClock` no tiene `avanzar`: se mueve con `set`. Cruzar el TTL de 8 min es lo que hace que
+        // el bloque vuelva a aparecer, que es el escenario entero de este `it`.
+        reloj.set(new Date(Date.parse(T0) + 8 * 60 * 1000).toISOString());
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+      expect(screen.getByText(/No estamos revisando/)).toBeInTheDocument();
+      expect(
+        screen.queryByText(/La firma no se completó/),
+        "el texto de un fallo viejo reaparece y se presenta como la razón ACTUAL de que no estemos revisando",
+      ).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // ── El botón `disabled` mientras firma, y el temporizador que se limpia ────────────────────────

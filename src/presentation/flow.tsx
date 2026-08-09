@@ -71,7 +71,7 @@ import {
   kycOriginNotice,
   lostEscrowRecoveryError,
   shortErrorCode,
-  statusDisplay, lecturaSeguimiento, type GestoRenovacion, REVISION_APAGADA, REVISION_FIRMANDO, REVISION_GESTO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_BILLETERA, REVISION_SIN_FIRMA, // WKH-339: EN ESTA LÍNEA. `flow.tsx:525` lo citan 5 archivos y NINGUNA de las 5 es una cita anclada ⇒ si se mueve, nada se pone rojo y los 5 comentarios rotan en silencio
+  statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, type GestoRenovacion, REVISION_APAGADA, REVISION_FIRMANDO, REVISION_GESTO, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_BILLETERA, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, // WKH-339: EN ESTA LÍNEA. `flow.tsx:525` lo citan 5 archivos y NINGUNA de las 5 es una cita anclada ⇒ si se mueve, nada se pone rojo y los 5 comentarios rotan en silencio
 } from "./flow-vm";
 import { cn } from "./cn";
 import { phantomBrowseUrl, useWalletAvailability } from "./wallet-availability"; // el aviso de "acá no hay wallet" (NoWalletHere)
@@ -1185,6 +1185,33 @@ const TRACK_STEPS: { key: RemittanceState["status"][]; label: string; manual?: b
  */
 const VENTANA_CHECK_MS = 5000;
 
+/**
+ * WKH-339 — cuántos challenges puede pedir el gesto de revisar, POR MONTAJE del seguimiento. **3**, y el
+ * número **no es nuevo**: es el techo que la aritmética de la HU ya declaraba. Lo que cambia es que
+ * ahora **se cuenta**, y por eso es un techo y no una expectativa.
+ *
+ * 🔴 POR QUÉ HACE FALTA CONTARLO. Los dos frenos que la aritmética invocaba eran el `disabled` mientras
+ * firma y que el botón desaparece al renovar con éxito. **Ninguno de los dos acota el camino de FALLO**:
+ * tras un fallo el botón vuelve a estar habilitado, no hay cooldown, y el copy del estado 7 **invita a
+ * reintentar**. MEDIDO antes de este arreglo: `prove` que rechaza, **6 toques ⇒ 6 challenges**.
+ *
+ * Y el daño no era teórico. `PAYOUT_CHALLENGE_RL` son **10 requests por "10 m", IP-only y compartidos**
+ * (`PAYOUT_CHALLENGE_RL`, `../infrastructure/rate-limit.ts:70`), y con el secreto seteado el limitador
+ * corre **después** del 501, así que cada toque consume un token. ⇒ **un solo remitente podía vaciar el
+ * cupo de su IP**, y el siguiente detrás del mismo NAT veía su envío caer por `prepare_unavailable`.
+ * Sin pérdida de principal —no se depositó nada— pero un envío caído por el uso normal de otra pantalla.
+ *
+ * De dónde sale el 3, y es la MISMA derivación que ya estaba: la ventana vive 480 s y una sola renovación
+ * la reabre entera ⇒ `⌈600 / 480⌉ = 2` dentro de una sesión de 10 min, **+1** por el arranque en frío
+ * (recarga / historial, cuando el almacén está vacío). ⇒ el camino legítimo cabe **exacto** en 3.
+ *
+ * ⛔ Es por MONTAJE y no por sesión, a propósito: remontar el seguimiento es lo mismo que recargar, y una
+ * recarga ya vacía el almacén de pruebas (es en memoria). Atarlo a algo más largo exigiría persistir un
+ * contador, o sea estado nuevo para acotar una molestia.
+ * ⛔ Y NO se toca `rate-limit.ts` ni ninguna env del cupo: el techo se acota del lado que lo consume.
+ */
+const MAX_CHALLENGES_POR_MONTAJE = 3;
+
 // Exportado para test directo (HU-SOL-13/T7): testear TrackView en aislamiento cubre exactamente la
 // acción refund (AC-6/AC-7) sin montar el flujo entero.
 export function TrackView({
@@ -1222,10 +1249,15 @@ export function TrackView({
   // `Container` es además la única fuente: si mañana la firma de `estado` cambia, esto no compila.
   // Es el mismo molde que `recover` y `closeEscrow` de acá arriba.
   //
-  // ⛔ `ventana` NO tiene `prove` y `renovar` NO tiene `estado`, y eso es el mecanismo, no estilo:
-  // el camino de LECTURA no compila si intenta firmar (mata un popup por render o por tick), y el de
-  // FIRMA no puede consultar el estado (mata un signer que se "ahorre" el popup de una operación de
-  // dinero reusando una prueba guardada). ⛔ NO los unifiques en un solo objeto con los dos métodos.
+  // ⛔ `ventana` NO tiene `prove` y `renovar` NO tiene `estado`, y eso es el mecanismo, no estilo: **el
+  // OBJETO que informa el estado no puede firmar** y **el OBJETO que firma no puede consultar el estado**
+  // (lo segundo mata a un signer que se "ahorre" el popup de una operación de dinero reusando una prueba
+  // guardada). ⛔ NO los unifiques en un solo objeto con los dos métodos.
+  //
+  // ⚠️ LO QUE `tsc` **NO** GARANTIZA, y acá se afirmaba que sí: que *"el camino de LECTURA no compile si
+  // intenta firmar"*. MEDIDO: un `setInterval` de este mismo componente que llame a `renovar.prove(...)`
+  // **compila, `tsc` exit 0** — las dos capacidades llegan juntas en esta prop y nada impide tomar la
+  // otra. Ese riesgo lo cubren los tests (con ese mutante caen 4 de `flow.test.tsx`), no los tipos.
   revision?: {
     readonly ventana: Container["ventanaDeLectura"];
     readonly renovar: Container["renovarVentana"];
@@ -1337,7 +1369,18 @@ export function TrackView({
   }, [ventanaPort, sender]);
   useEffect(() => {
     if (!ventanaPort || !sender) return;
-    const leer = () => setVentana(ventanaPort.estado(sender));
+    const leer = () => {
+      const v = ventanaPort.estado(sender);
+      setVentana(v);
+      // 🔴 EL TEXTO DE UN FALLO VIEJO NO PUEDE SOBREVIVIR A LA RAZÓN QUE LO PRODUJO. Sin esto, un fallo
+      // de firma dejaba su frase puesta; otro gesto de la app (por ejemplo "Recuperar fondos", que graba
+      // en el MISMO almacén) volvía la ventana `"vigente"` y escondía el bloque; y al cruzarse el plazo
+      // otra vez el bloque REAPARECÍA con el texto viejo, dando como razón actual de que no estamos
+      // revisando un fallo de firma que ya no es la razón. Se limpia en la transición a `"vigente"`.
+      // ⛔ NO se limpia durante `"firmando"`: ahí puede haber un popup abierto y su desenlace todavía va
+      // a escribir el estado local.
+      if (v === "vigente") setGesto((g) => (g === "firmando" ? g : "idle"));
+    };
     leer(); // la primera lectura no espera al primer tick: la pantalla no puede quedarse muda 5 s
     const t = setInterval(leer, VENTANA_CHECK_MS);
     return () => clearInterval(t); // sin esto el temporizador sobrevive al unmount (M10)
@@ -1588,17 +1631,28 @@ export function TrackView({
  * un quinto valor de `LecturaSeguimiento`, esto NO COMPILA. Es estructural, no enumerativo — una
  * cadena de `&&` en el JSX habría dejado el valor nuevo sin renderizar nada, en silencio.
  *
- * 🔴 PEDIR LA FIRMA TIENE **TRES** DESENLACES, Y COLAPSARLOS CULPA A QUIEN NUNCA VIO UN POPUP. Los tres
- * salen de `HttpPopSigner.prove` y están medidos en su código, no supuestos:
- *   1. `null` ⇐ 501: el mecanismo está apagado server-side (sin `PAYOUT_POP_SECRET`). **Nunca se abrió
- *      un popup.** Reintentar NO sirve.
+ * 🔴 PEDIR LA FIRMA TIENE **CUATRO** DESENLACES, Y COLAPSARLOS CULPA A QUIEN NUNCA VIO UN POPUP. Los
+ * cuatro salen de `HttpPopSigner.prove` y están medidos en su código, no supuestos:
+ *   1. `null` ⇐ 501: el mecanismo está apagado server-side (sin `PAYOUT_POP_SECRET`, que es el DEFAULT
+ *      documentado). **Nunca se abrió un popup**, y reintentar **NO sirve** ⇒ `"mecanismo-apagado"`.
  *   2. `throw "pop_challenge_unavailable"` ⇐ 400 / 5xx / **429 del cupo de la IP** / 503: nuestro server
  *      no pudo emitir el challenge (`pop_challenge_unavailable`, `../infrastructure/auth/http-pop-signer.ts:23`). **Nunca se
- *      abrió un popup.** Reintentar puede servir más tarde.
- *   3. `throw` con cualquier OTRO mensaje ⇐ viene de `wallet.signMessage`: hubo popup y no se completó.
- * Los dos primeros son `"no-se-pudo-pedir"` y el tercero `"sin-firma"`. ⛔ Un booleano ya perdió el
- * tercer valor: con 501 o 429 decir *"no completaste la firma"* es FALSO, y es culpar a la persona por
- * algo que pasó de nuestro lado.
+ *      abrió un popup**, y reintentar puede servir más tarde ⇒ `"no-se-pudo-pedir"`.
+ *   3. 🔴 `throw` de algo que **NO es de la billetera**: el `TypeError` crudo de `fetch` cuando no hay
+ *      red —su propio docblock lo declara, *"o un fallo de red (fetch rechaza) ⇒ LANZA"*
+ *      (`../infrastructure/auth/http-pop-signer.ts:8`)—, o `wallet_sign_not_available`, que el bridge tira
+ *      **antes de cualquier popup** (`signMsgHandle`, `../infrastructure/solana-wallet-bridge.ts:127`), o un
+ *      `throw` que no es un `Error`. **Tampoco hubo popup** ⇒ `"no-se-pudo-pedir"`.
+ *   4. `throw` de un error que la billetera **declara como suyo**: hubo popup y no se completó ⇒
+ *      `"sin-firma"`.
+ *
+ * 🔴 EL 3 ES EL QUE FALTABA, Y ERA EL MÁS COMÚN DE TODOS. Acá había un `else`: todo `throw` que no fuera
+ * `pop_challenge_unavailable` se trataba como *"hubo popup y no se completó"*. El input más frecuente de
+ * una app de remesas en celular es **perder conectividad**, y ahí la pantalla le decía a la persona que
+ * **su** firma falló cuando lo que se cayó fue **nuestra** red. ⛔ Un booleano perdería tres valores; un
+ * `else` perdía este. La clasificación vive ahora en `gestoDespuesDeProve` (`./flow-vm.ts`), con el
+ * default del lado que **no acusa**: sólo un `name` que la librería de wallets etiqueta como suyo llega a
+ * `"sin-firma"`.
  *
  * ⚠️ EL 429 ES ALCANZABLE DE VERDAD, no un caso de borde. `PAYOUT_CHALLENGE_RL` es 10 requests por
  * "10 m" **por IP y compartido** entre los cuatro gestos, y esta app es de remesas para LATAM: dos
@@ -1630,24 +1684,39 @@ function RevisionDelSeguimiento({
   onGesto: (g: GestoRenovacion) => void;
   onRenovada: () => void;
 }) {
+  // 🔴 EL TECHO SE HACE VALER CON UN `useRef`, NO CON ESTADO DE REACT, y la diferencia es lo único que
+  // lo vuelve un techo. MEDIDO: con un contador en `useState`, una ráfaga de clicks SÍNCRONOS (un
+  // doble-tap en celular, o dos eventos en el mismo batch) ve TODAS las closures con el MISMO valor
+  // viejo, así que las 6 pasan. Y el `disabled` tampoco alcanza solo: es una propiedad del DOM que se
+  // actualiza DESPUÉS del commit, o sea después de que la ráfaga ya salió.
+  // ⇒ el `ref` es la guarda (se incrementa sincrónicamente, en el mismo turno); el `useState` de al lado
+  // existe SÓLO para que el render se entere, y el `disabled` es lo que lo hace visible. Los tres hacen
+  // falta y ninguno reemplaza a los otros.
+  const intentosRef = useRef(0);
+  const [intentosUsados, setIntentosUsados] = useState(0);
+  const sinIntentos = intentosUsados >= MAX_CHALLENGES_POR_MONTAJE;
   const onRevisar = useCallback(async () => {
     if (!sender) return;
+    // Se cuenta ANTES de pedir: lo que consume el cupo de la IP es la request, no su desenlace.
+    if (intentosRef.current >= MAX_CHALLENGES_POR_MONTAJE) return;
+    intentosRef.current += 1;
+    setIntentosUsados(intentosRef.current);
     onGesto("firmando");
     try {
       const prueba = await renovar.prove(sender);
-      // `null` NO es un fallo de la persona: es nuestro mecanismo apagado, y no hubo popup.
-      if (prueba === null) {
-        onGesto("no-se-pudo-pedir");
-        return;
-      }
-      // El gesto salió bien. El estado local vuelve a `idle` —el texto NO queda pegado— y se re-lee la
-      // ventana: el control desaparece porque `estado()` pasó a `"vigente"`.
-      onGesto("idle");
-      onRenovada();
+      const siguiente = gestoDespuesDeProve(prueba === null ? { tipo: "null" } : { tipo: "prueba" });
+      onGesto(siguiente);
+      // Sólo el desenlace feliz re-lee la ventana. `"mecanismo-apagado"` no grabó nada.
+      if (siguiente === "idle") onRenovada();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "";
-      // La ÚNICA comparación que separa "no llegamos a preguntar" de "hubo popup y no se completó".
-      onGesto(msg === "pop_challenge_unavailable" ? "no-se-pudo-pedir" : "sin-firma");
+      // 🔴 LA CLASIFICACIÓN VIVE EN `gestoDespuesDeProve` (`flow-vm.ts`) Y NO ACÁ, y no es sólo prolijidad:
+      // acá había un `else` que mandaba TODO `throw` no reconocido a `"sin-firma"`, o sea a *"La firma no
+      // se completó"*. Eso es FALSO para el input más común de una app de remesas en celular —quedarse
+      // sin red, donde `fetch` rechaza con un `TypeError` crudo— y también para
+      // `wallet_sign_not_available`, que el bridge tira ANTES de cualquier popup. La pantalla le achacaba
+      // a la persona una firma que nunca le pedimos. Ahora el default es `"no-se-pudo-pedir"` y sólo un
+      // error que la billetera DECLARA como suyo llega a `"sin-firma"`.
+      onGesto(gestoDespuesDeProve({ tipo: "error", error: e }));
     }
   }, [sender, renovar, onGesto, onRenovada]);
 
@@ -1666,19 +1735,31 @@ function RevisionDelSeguimiento({
       return (
         <div className="space-y-2">
           <p className="text-xs text-stone">{REVISION_APAGADA}</p>
-          {/* ⛔ `disabled` MIENTRAS FIRMA, y es uno de los dos frenos que sostienen la aritmética del
-              cupo: un gesto = como máximo UN challenge. Sin esto, N toques abren N popups y queman N
-              challenges de un cupo de 10 por IP. */}
-          <Button disabled={gesto === "firmando"} onClick={onRevisar}>
+          {/* ⛔ `disabled` POR DOS RAZONES DISTINTAS, y las dos son frenos del cupo:
+              · MIENTRAS FIRMA ⇒ un gesto = como máximo UN challenge. Sin esto, N toques abren N popups.
+              · SIN INTENTOS ⇒ el techo de `MAX_CHALLENGES_POR_MONTAJE`. Sin esto el camino de FALLO no
+                tiene techo: el botón vuelve habilitado, el copy invita a reintentar, y 6 toques eran 6
+                challenges de un cupo de 10 COMPARTIDO POR IP.
+              ⚠️ El botón NO desaparece cuando se agota: se deshabilita y se dice por qué. Esconderlo
+              dejaría la pantalla sin explicar por qué ya no hay salida. */}
+          <Button disabled={gesto === "firmando" || sinIntentos} onClick={onRevisar}>
             {REVISION_GESTO}
           </Button>
           {/* Estado 3 — el popup está abierto. Es texto propio y NO el label del botón, para que el
               control siga siendo alcanzable por su nombre mientras está deshabilitado. */}
           {gesto === "firmando" ? <p className="text-xs text-stone">{REVISION_FIRMANDO}</p> : null}
+          {/* Estado 6b — el mecanismo está apagado: reintentar NO sirve, y la copy lo dice. Se separa del
+              6 porque son la diferencia entre "probá más tarde" y "esto no se arregla probando". */}
+          {gesto === "mecanismo-apagado" ? (
+            <p className="text-xs text-stone">{REVISION_MECANISMO_APAGADO}</p>
+          ) : null}
           {gesto === "no-se-pudo-pedir" ? (
             <p className="text-xs text-stone">{REVISION_NO_SE_PUDO_PEDIR}</p>
           ) : null}
           {gesto === "sin-firma" ? <p className="text-xs text-stone">{REVISION_SIN_FIRMA}</p> : null}
+          {sinIntentos && gesto !== "firmando" ? (
+            <p className="text-xs text-stone">{REVISION_TECHO_ALCANZADO}</p>
+          ) : null}
         </div>
       );
   }
@@ -2449,7 +2530,7 @@ function AgentUnavailable({
  * agregar *"y el fee de la entrega no lo paga nadie, porque ese paso no corre"*. Es verdad
  * (`this.solana`, `../application/use-cases/confirm-and-send.ts:336`) y está PROHIBIDO escribirlo: en
  * ese mismo cuadrante, tres renglones más arriba en la MISMA tarjeta, la fila de la entrega dice
- * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:2616`). Ese *"lo simula"* es impreciso
+ * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:2697`). Ese *"lo simula"* es impreciso
  * —con el settle apagado la entrega no se simula, se corta— pero es **H1 de WKH-336**, residual de otra
  * HU que exige un TERCER valor de `transport` con su propia frase, y WKH-338 no lo cierra. Si la nota
  * dijera *"la entrega no corre"* mientras la fila dice *"lo simula"*, la tarjeta se contradiría a sí

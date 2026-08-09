@@ -28,7 +28,7 @@ import {
   isKycDemo,
   kycOriginNotice,
   REAL_KYC_PROVENANCES,
-  statusDisplay, lecturaSeguimiento, REVISION_APAGADA, REVISION_GESTO, REVISION_SIN_BILLETERA, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_FIRMA, // WKH-339: EN ESTA LÍNEA, no en líneas nuevas — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
+  statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, REVISION_APAGADA, REVISION_GESTO, REVISION_FIRMANDO, REVISION_SIN_BILLETERA, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, // WKH-339: EN ESTA LÍNEA, no en líneas nuevas — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
 } from "./flow-vm";
 import {
   KYC_PROVENANCE_LIVE,
@@ -1103,19 +1103,116 @@ describe("WKH-339/AC-4 — lecturaSeguimiento: exactamente uno, y ninguno colaps
 
   // El copy, y las dos reglas que no se negocian. Se afirma la PROPIEDAD, no la frase: así reescribir el
   // texto está permitido y romper la regla no lo está.
+  //
+  // 🔴 EL LOOP RECORRÍA 3 DE 6 COPIES, Y EL REGEX NO MATCHEABA UNA DE LAS TRES FRASES PROHIBIDAS. Medido
+  // por el AR: mutar `REVISION_FIRMANDO` a *"La ventana venció; dejamos de revisar. Confirmá en tu
+  // billetera…"* —que rompe LAS DOS prohibiciones de §5— dejaba la suite VERDE, porque esa constante no
+  // estaba en el loop. Y `"volver a revisar"` —que §5 prohíbe explícitamente, y que **yo mismo escribí**
+  // en el nombre de T-339.2 en la primera pasada— **no lo matcheaba el regex**.
+  //
+  // ⇒ el loop se arma sobre TODAS las copies de la ventana, y la lista se declara con su criterio, no a
+  // mano por conveniencia: **toda constante `REVISION_*` que se renderice**. Si mañana aparece una
+  // séptima y no se agrega acá, eso es el agujero — y es el motivo de que el conteo esté asertado.
+  const COPIES_DE_LA_VENTANA = [
+    REVISION_APAGADA,
+    REVISION_GESTO,
+    REVISION_FIRMANDO,
+    REVISION_SIN_BILLETERA,
+    REVISION_MECANISMO_APAGADO,
+    REVISION_SIN_FIRMA,
+    REVISION_TECHO_ALCANZADO,
+  ];
+
+  it("el loop de copy cubre TODAS las que se renderizan (si aparece una nueva, este `it` la reclama)", () => {
+    // El número es la mitad floja del control y por eso está acompañado: lo que importa es que ninguna
+    // constante quede afuera del loop de abajo. Un `>=` no serviría — el modo de fallo es OLVIDARSE.
+    expect(COPIES_DE_LA_VENTANA).toHaveLength(7);
+    expect(new Set(COPIES_DE_LA_VENTANA).size, "hay dos copies con el MISMO texto").toBe(7);
+  });
+
   it("ninguna copy de la ventana usa un verbo en pasado sobre haber revisado, ni dice 'venció'", () => {
-    for (const frase of [REVISION_APAGADA, REVISION_GESTO, REVISION_SIN_BILLETERA]) {
+    for (const frase of COPIES_DE_LA_VENTANA) {
       expect(frase, `"${frase}" afirma un pasado que el sistema no puede distinguir`).not.toMatch(
-        /venci|revisábamos|revisamos|dejamos de|estábamos/i,
+        /venci|revisábamos|revisamos|dejamos de|estábamos|volver a revisar|volvé a revisar/i,
       );
     }
   });
 
-  it("ninguna copy del fallo culpa a la persona: los dos casos de 'no pudimos pedir' no la nombran", () => {
-    // Estado 6: con 501 o 429 NUNCA se abrió un popup ⇒ no puede decir que no se completó ni rechazó.
-    expect(REVISION_NO_SE_PUDO_PEDIR).not.toMatch(/rechaz|no complet|no firmaste/i);
-    expect(REVISION_NO_SE_PUDO_PEDIR).toMatch(/de nuestro lado/i);
+  it("ninguna copy del fallo culpa a la persona: los TRES casos de 'no pudimos pedir' no la nombran", () => {
+    // Estados 6 y 6b: con 501, con 429 y con un fallo de red NUNCA se abrió un popup ⇒ ninguna de las dos
+    // puede decir que la firma no se completó ni que se rechazó.
+    for (const frase of [REVISION_NO_SE_PUDO_PEDIR, REVISION_MECANISMO_APAGADO]) {
+      expect(frase).not.toMatch(/rechaz|no complet|no firmaste/i);
+      expect(frase, `"${frase}" no dice de qué lado está el problema`).toMatch(/de nuestro lado/i);
+    }
+    // Y la que separa 6b de 6: con el mecanismo apagado, reintentar NO sirve, y la copy no puede
+    // insinuar que más tarde sí.
+    expect(
+      REVISION_MECANISMO_APAGADO,
+      "el estado 6b no dice que reintentar no cambia nada: insinúa que más tarde funciona, y no es cierto",
+    ).toMatch(/no cambia el resultado/i);
     // Estado 7: hubo popup, y aun así no dice "la rechazaste" — la billetera no distingue rechazo de fallo.
     expect(REVISION_SIN_FIRMA).not.toMatch(/rechaz/i);
+    // El techo: no culpa a nadie y no promete un automatismo.
+    expect(REVISION_TECHO_ALCANZADO).not.toMatch(/rechaz|no complet|no firmaste|tu culpa/i);
+  });
+
+  // ── 🔴 LOS CUATRO DESENLACES DE `prove()`, con los inputs que el `else` viejo clasificaba mal ───────
+  //
+  // Este `describe` es el candado de AR/BLQ-MED-1. Antes, TODO `throw` que no fuera
+  // `pop_challenge_unavailable` iba a `"sin-firma"` (*"La firma no se completó"*), y los tres inputs de
+  // abajo —los tres MEDIDOS en el árbol— caían ahí sin que ningún test lo viera.
+  describe("WKH-339/AR-BLQ-MED-1 — gestoDespuesDeProve: el default NO acusa a la persona", () => {
+    it("una prueba ⇒ idle (y es el único desenlace que re-lee la ventana)", () => {
+      expect(gestoDespuesDeProve({ tipo: "prueba" })).toBe("idle");
+    });
+
+    it("`null` (501, el default documentado) ⇒ mecanismo-apagado, NO 'no-se-pudo-pedir'", () => {
+      // MNR-2: reintentar nunca sirve acá, así que no puede compartir estado con el 429.
+      expect(gestoDespuesDeProve({ tipo: "null" })).toBe("mecanismo-apagado");
+    });
+
+    it("`pop_challenge_unavailable` (400/5xx/429 del cupo) ⇒ no-se-pudo-pedir", () => {
+      expect(
+        gestoDespuesDeProve({ tipo: "error", error: new Error("pop_challenge_unavailable") }),
+      ).toBe("no-se-pudo-pedir");
+    });
+
+    // 🔴 LOS TRES INPUTS DEL BLOQUEANTE. Los tres decían "La firma no se completó."
+    it.each([
+      [
+        "TypeError('Failed to fetch') — sin conexión, server caído o CORS. `http-pop-signer.ts:8` declara que fetch rechaza y LANZA",
+        new TypeError("Failed to fetch"),
+      ],
+      [
+        "Error('wallet_sign_not_available') — el bridge lo tira ANTES de cualquier popup (`solana-wallet-bridge.ts:127`)",
+        new Error("wallet_sign_not_available"),
+      ],
+      ["un throw que no es Error ⇒ no hay ni `message` ni `name` que mirar", "boom"],
+    ])("%s ⇒ no-se-pudo-pedir (nunca hubo popup)", (_n, error) => {
+      expect(
+        gestoDespuesDeProve({ tipo: "error", error }),
+        "la pantalla le achaca a la persona una firma que nunca le pedimos",
+      ).toBe("no-se-pudo-pedir");
+    });
+
+    // El único camino a `"sin-firma"`: que la billetera DECLARE el error como suyo. El `name` no es una
+    // invención — MEDIDO en `node_modules/@solana/wallet-adapter-base/lib/cjs/errors.js:99`.
+    it("un WalletSignMessageError (la librería lo etiqueta en `name`) ⇒ sin-firma", () => {
+      const e = new Error("User rejected the request.");
+      e.name = "WalletSignMessageError";
+      expect(gestoDespuesDeProve({ tipo: "error", error: e })).toBe("sin-firma");
+    });
+
+    // Y los que la librería tira ANTES de abrir el popup, que matchean la forma `Wallet…Error` y NO
+    // pueden entrar a `"sin-firma"` por la ventana.
+    it.each(["WalletNotConnectedError", "WalletDisconnectedError", "WalletNotReadyError"])(
+      "%s matchea la forma `Wallet…Error` pero ocurre ANTES del popup ⇒ no-se-pudo-pedir",
+      (name) => {
+        const e = new Error("x");
+        e.name = name;
+        expect(gestoDespuesDeProve({ tipo: "error", error: e })).toBe("no-se-pudo-pedir");
+      },
+    );
   });
 });

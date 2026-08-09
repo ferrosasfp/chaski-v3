@@ -242,3 +242,97 @@ describe("submit() — el puerto lo declara, la producción no lo llama (R-3)", 
     ).rejects.toThrow("ledger_payout_status_gateway_is_read_only");
   });
 });
+
+// ── 🔴 T-337.8 (estático, AC-6) · los docblocks del payout, y el barrido por ARGUMENTO ──────────────
+//
+// QUÉ CUSTODIA, EN UNA LÍNEA: que ningún comentario del camino de payout siga afirmando que la lectura
+// del desenlace está PENDIENTE, y que los tres sigan conteniendo la cláusula fail-safe que esta HU
+// hereda en vez de superar.
+//
+// 🔴 EL UNIVERSO SE DERIVA, NO SE ESCRIBE A MANO (CD-10). Escribir acá los tres nombres de archivo sería
+// exactamente el punto ciego que esta familia de HUs ya pagó tres veces: la lista no cubre el adapter que
+// alguien agregue mañana. El criterio es "toda implementación de `PayoutGateway` del árbol, más el
+// composition root", y eso se calcula leyendo el árbol.
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import path from "node:path";
+
+describe("T-337.8 (estático, AC-6): ningún docblock del payout deja la lectura como pendiente", () => {
+  const RAIZ = process.cwd();
+  const leer = (rel: string) => readFileSync(path.resolve(RAIZ, rel), "utf8");
+  function tsDe(dir: string, acc: string[] = []): string[] {
+    for (const e of readdirSync(path.resolve(RAIZ, dir))) {
+      const rel = `${dir}/${e}`;
+      if (statSync(path.resolve(RAIZ, rel)).isDirectory()) {
+        if (e !== "node_modules") tsDe(rel, acc);
+      } else if (e.endsWith(".ts") && !e.endsWith(".test.ts")) acc.push(rel);
+    }
+    return acc;
+  }
+  // ⚠️ EL CRITERIO SE AJUSTÓ PORQUE EL BARRIDO ENCONTRÓ UN CASO QUE NO IMAGINÉ, y eso es la prueba de
+  // que derivar era lo correcto: la primera versión devolvía CUATRO archivos, y el cuarto era
+  // `src/test-support/fakes.ts` (`FakePayoutGateway`). Un doble de test no tiene que documentar el
+  // razonamiento fail-safe de producción — no lo aplica, lo simula para un test. El criterio queda
+  // "implementaciones de PRODUCCIÓN", que sigue siendo un criterio y no una lista: excluye el directorio
+  // de dobles, no tres nombres de archivo.
+  const IMPLEMENTACIONES = tsDe("src")
+    .filter((f) => leer(f).includes("implements PayoutGateway"))
+    .filter((f) => !f.startsWith("src/test-support/"));
+  const UNIVERSO = [...IMPLEMENTACIONES, "src/composition/container.ts"];
+
+  it("el universo derivado no se vació: 3 implementaciones de producción + el composition root", () => {
+    // Sin este piso, un rename de la interfaz dejaría `IMPLEMENTACIONES` en [] y los `it.each` de abajo
+    // no correrían NINGÚN caso — verde aplaudiendo el vacío, que es la forma en que un barrido deja de
+    // existir sin ponerse rojo.
+    expect(IMPLEMENTACIONES.length, `derivadas: ${IMPLEMENTACIONES.join(", ")}`).toBe(3);
+    expect(IMPLEMENTACIONES).toContain("src/infrastructure/settlement/ledger-payout-status-gateway.ts");
+  });
+
+  // El criterio, no una frase: `Fase A` es como este repo nombra "esto lo hace otra fase, todavía no
+  // está". Después de WKH-337 la lectura del desenlace SÍ está, así que ninguna de estas superficies
+  // puede seguir remitiendo a una fase futura para explicarla.
+  it.each(UNIVERSO)("%s no remite a una fase futura para la lectura del desenlace", (rel) => {
+    const lineas = leer(rel).split("\n");
+    const culpables = lineas
+      .map((l, i) => [i + 1, l] as const)
+      .filter(([, l]) => /\bFase\s+A\b/.test(l));
+    expect(
+      culpables.map(([n, l]) => `${rel}:${n} «${l.trim().slice(0, 90)}»`),
+      "esta superficie sigue diciendo que la lectura del payout la trae una fase posterior, y ya no es " +
+        "cierto: la construyó WKH-337",
+    ).toEqual([]);
+  });
+
+  // ⚠️ Y NO ALCANZA CON QUITAR LA FRASE VIEJA: quitarla deja el docblock describiendo un mundo donde la
+  // lectura no existe, sin decir dónde está. Los adapters SUPERSEDIDOS (toda implementación de
+  // producción que NO sea la del ledger — derivado, no una lista) tienen que NOMBRAR la que sí se cablea,
+  // porque son el lugar donde va a aterrizar quien busque por qué el seguimiento no settlea.
+  it.each(IMPLEMENTACIONES.filter((f) => !f.endsWith("ledger-payout-status-gateway.ts")))(
+    "%s nombra la lectura que SÍ se cablea (un docblock sin la frase vieja pero sin destino no ayuda)",
+    (rel) => {
+      expect(
+        leer(rel),
+        `${rel} ya no dice que esté pendiente, pero tampoco dice quién lo hace: quien llegue acá ` +
+          "buscando por qué el seguimiento no settlea se queda sin el próximo paso",
+      ).toContain("LedgerPayoutStatusGateway");
+    },
+  );
+
+  // La otra mitad, y es la que impide que "actualizar el comentario" se convierta en BORRARLO. El
+  // razonamiento fail-safe no es una limitación superada: es la garantía que protege el principal, y
+  // protege MÁS ahora que `settled` es alcanzable e irreversible.
+  it.each(IMPLEMENTACIONES)("%s CONSERVA la cláusula fail-safe (no saber ≠ falló, ≠ entregó)", (rel) => {
+    const texto = leer(rel);
+    // Se pide la forma del ARGUMENTO —"no saber no es evidencia" + "no-terminal"— no una frase exacta,
+    // para que reescribir la prosa esté permitido y borrar el razonamiento no lo esté.
+    expect(
+      /no\s+saber[^.]{0,120}(NO\s+es\s+evidencia|no\s+es\s+evidencia)/i.test(texto) ||
+        /NO\s+es\s+evidencia[^.]{0,120}(entrega|fall)/i.test(texto),
+      `${rel} perdió la cláusula "no saber NO es evidencia": sin ella, la próxima persona que toque ` +
+        "este archivo no tiene cómo saber por qué está prohibido fabricar un terminal",
+    ).toBe(true);
+    expect(
+      /no[-\s]terminal/i.test(texto),
+      `${rel} ya no nombra el estado NO-TERMINAL, que es la dirección segura de todo este camino`,
+    ).toBe(true);
+  });
+});

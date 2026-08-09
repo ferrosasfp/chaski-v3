@@ -1,6 +1,6 @@
-// Composition root — el ÚNICO lugar que conoce adapters concretos. Hoy cablea FALLBACK;
-// cuando llegue el sandbox (Fase A) se swappean por los adapters reales ACÁ — cero cambio en
-// use-cases ni UI (dependency inversion). Es el mismo principio que las factories del backend.
+// Composition root — el ÚNICO lugar que conoce adapters concretos: se swappean ACÁ, con cero cambio en
+// use-cases ni UI (dependency inversion). ⚠️ WKH-337/AC-6: acá decía "hoy cablea FALLBACK; cuando llegue
+// el sandbox se swappean por los adapters reales", y del payout ya NO es cierto (`payouts`, `:127`).
 
 import { assertNoEvmResidue } from "./evm-residue-guard";
 import { resolveValueDeliveryAdapter, usesRealGateways } from "./value-delivery-adapter";

@@ -109,7 +109,7 @@ export class FallbackPayoutGateway implements PayoutGateway {
   // refleja "nada" es el no-terminal, con la razón explícita — mismo criterio que
   // A2aPayoutGateway.status() (a2a/gateways.ts:181-200): no saber NO es evidencia de entrega, ni de
   // fallo. TrackRemittance no transiciona con "submitted" ⇒ la remesa queda donde está, visible y
-  // recuperable, en vez de mentir en cualquiera de las dos direcciones.
+  // recuperable, en vez de mentir en cualquiera de las dos direcciones. WKH-337 (AC-6) CONSTRUYÓ la lectura que faltaba —`LedgerPayoutStatusGateway` le pregunta al ledger, que es donde el webhook del proveedor YA escribe el desenlace— y es la que el container cablea hoy (`payouts`, `../../composition/container.ts:127`); esta clase quedó SIN consumidor de producción y no se borra (R-2). Lo que esa capacidad NO revierte es el razonamiento de arriba: sigue sin fabricar un terminal sobre incertidumbre, y ahora eso protege más que antes, porque `settled` pasó a ser alcanzable y es IRREVERSIBLE.
   async submit(req: PayoutSubmit): Promise<PayoutRecord> {
     return {
       payoutId: `fb-${req.idempotencyKey}`,

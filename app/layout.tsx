@@ -33,11 +33,20 @@ export const metadata: Metadata = {
   appleWebApp: { capable: true, statusBarStyle: "default", title: "Chaski" },
 };
 
+// Acá había `maximumScale: 1`, o sea un techo de zoom de 1x declarado para toda la app. Quien no ve
+// bien de cerca no podía agrandar NINGUNA pantalla de Chaski, ni el CCI que tiene que revisar antes
+// de mandar plata.
+//
+// Se OMITE, no se sube a `maximumScale: 5`: omitirlo deja el techo que trae el navegador; poner un
+// número pone un techo nuevo que nadie pidió. `initialScale: 1` se queda — fija el zoom de ENTRADA,
+// no el máximo.
+//
+// El candado es `app/viewport.test.ts` (T-341-1): se pone en rojo si `maximumScale` o
+// `user-scalable` vuelven a este bloque.
 export const viewport: Viewport = {
   themeColor: "#CB2A54",
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

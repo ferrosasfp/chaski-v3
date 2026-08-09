@@ -119,6 +119,41 @@ export interface PayoutGateway {
   status(payoutId: string): Promise<PayoutRecord>;
 }
 
+// ── Lectura del desenlace de un payout (WKH-337) ──────────────────────────────
+// CUATRO valores, y son cuatro a propósito: misma familia que `RemittanceIdLookup`, `:467` y
+// `SolanaPrincipalInOutcome`, `:720`. "No pude preguntar" NO es "no pasó", y ninguno de los cuatro
+// colapsa en otro sin perder la información que decide si se puede afirmar un desenlace.
+export type PayoutOutcomeUnknownReason =
+  | "no_row" // no hay fila para (payout_id, sender): el ledger estaba apagado al preparar,
+  //   o la escritura best-effort de recordOrderPrepared falló (residuo WKH-330)
+  | "not_terminal" // la fila existe y su status NO es settled/failed: el proveedor no avisó todavía
+  | "provenance_not_real" // la fila existe, pero su payout_provenance NO está en REAL_PAYOUT_PROVENANCES
+  //   (INCLUYE `null` = NO CONSTA, que es el caso de toda fila vieja)
+  | "conflicting_rows"; // 2+ filas del mismo payout_id con desenlaces distintos ⇒ no sabemos cuál vale
+
+export type PayoutOutcomeLookup =
+  | { readonly outcome: "known"; readonly status: "settled" | "failed"; readonly provenance: string }
+  | { readonly outcome: "unknown"; readonly reason: PayoutOutcomeUnknownReason };
+
+// ── Prueba de posesión OBSERVADA (WKH-337) ───────────────────────────────────
+// 🔴 `PopProofReader` NO TIENE `prove`, Y ESO ES EL PUNTO. El gateway de tracking corre dentro de un
+// setInterval de 1,5 s (`src/presentation/flow.tsx:525`): si pudiera pedir una firma, pediría un popup
+// de billetera cada 1,5 s (600 s ÷ 1,5 s = 400 firmas por sesión de 10 min). Que no pueda no depende de
+// que nadie lo llame — depende de que el método NO EXISTA en el tipo, así que `tsc` lo impide. Es el
+// mismo patrón estructural que el campo `garantia` obligatorio de WKH-338: el invariante como forma del
+// tipo, no como disciplina del que escribe.
+// ⛔ PROHIBIDO agregarle `prove` a esta interfaz "para simplificar": eso reintroduce el defecto entero.
+export interface PopProof {
+  readonly challenge: string;
+  readonly signature: string;
+}
+export interface PopProofReader {
+  peek(address: string): PopProof | null; // null si no hay, o si la que hay VENCIÓ
+}
+export interface PopProofRecorder {
+  record(address: string, proof: PopProof): void;
+}
+
 // ── Refund-on-failure (WKH-186) ──────────────────────────────────────────────
 // Se dispara tras CADA markPayoutFailed (cierra el gap de remesas huérfanas en payout_failed).
 // El `reason` es un enum estable de la FSM, NUNCA PII (CD-5).
@@ -888,6 +923,23 @@ export interface SettlementLedger {
     remittanceId: string;
     senderAddress: string;
   }): Promise<string[]>;
+  // WKH-337 — el desenlace del payout que el webhook de TransFi YA escribió acá
+  // (`recordWebhookOutcome`, abajo) y que hasta ahora no leía nadie. Es la fuente de verdad del
+  // seguimiento: las dos implementaciones de `PayoutGateway` son ciegas y lo declaran en su propio
+  // comentario, así que no hay ningún gateway "correcto" al que preguntarle.
+  //
+  // `senderAddress` es OBLIGATORIO y `string` SIN `?` (CD-14): el cliente Supabase usa el service key
+  // y BYPASSEA RLS, así que el `.eq('sender_address', …)` es el ÚNICO guard de ownership. Un opcional
+  // sería fail-open — y con un `payoutId` ajeno, un IDOR.
+  //
+  // 🔴 TIRA ante un error de query; NO devuelve `unknown`. Mismo criterio, y por el mismo motivo, que
+  // `listPreparedDepositAddresses` de acá arriba: un "no sé" producido por un fallo de infraestructura
+  // es INDISTINGUIBLE de un "no sé" real, y son dos desenlaces distintos para el caller. La conversión
+  // a 502 la hace la ruta, nunca esta capa.
+  lookupPayoutOutcome(input: {
+    payoutId: string;
+    senderAddress: string;
+  }): Promise<PayoutOutcomeLookup>;
   // reconcile (AC-6): incrementa attempts + set status/last_error. Por id.
   markOutcome(input: {
     id: string;

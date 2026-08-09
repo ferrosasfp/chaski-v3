@@ -11,6 +11,10 @@ import {
 } from "../domain/remittance";
 import { ConcurrentModificationError } from "../application/errors";
 import { canonicalizeAddress } from "../infrastructure/address";
+// WKH-337: la allowlist de proveniencias REALES se IMPORTA (no se copia). El docblock de la constante
+// dice por qué: "un segundo Set con los mismos valores es exactamente cómo se desincronizan las dos
+// capas". Precedente de import fuera de `presentation/`: `scripts/smoke-helpers.ts`.
+import { REAL_PAYOUT_PROVENANCES } from "../presentation/flow-vm";
 import type {
   Clock,
   EscrowRefundConfirmation,
@@ -25,6 +29,7 @@ import type {
   PayoutAuthorityGateway,
   PayoutAuthorization,
   PayoutGateway,
+  PayoutOutcomeLookup,
   PayoutRecord,
   PayoutSubmit,
   PopSigner,
@@ -721,6 +726,51 @@ export class FakeSettlementLedger implements SettlementLedger {
       .filter((r) => r.remittanceId === input.remittanceId && r.senderAddress === owner)
       .map((r) => r.receiverAddress)
       .filter((a) => typeof a === "string" && a.length > 0);
+  }
+
+  /** WKH-337 — MISMA clasificación que SupabaseSettlementLedger.lookupPayoutOutcome, en el mismo
+   *  orden, y owner-scoped por sender_address (el `.eq(...)` es el único guard: el service key
+   *  bypassea RLS). El doble FILTRA DE VERDAD a propósito: con un `mockResolvedValue` los tests de
+   *  aislamiento pasarían igual con el guard borrado, o sea aprobarían desde arriba sin mirar los
+   *  argumentos.
+   *
+   *  La membresía es POSITIVA (`REAL_PAYOUT_PROVENANCES.has(p ?? "")`) y la constante se IMPORTA de
+   *  `flow-vm.ts`: un segundo Set con los mismos valores es exactamente cómo se desincronizan las dos
+   *  capas. ⛔ PROHIBIDO `!isPayoutDemo(p)`: `isPayoutDemo(null)` es `false`, así que su negación
+   *  leería `null` (= NO CONSTA) como REAL, que es el inverso exacto del criterio.
+   *
+   *  El caso "no se pudo leer" NO se emula acá (igual que en listPreparedDepositAddresses): se prueba
+   *  con un spy que rechaza, que es lo que hace la DB real, y así el test no puede confundirlo con
+   *  ninguno de los cuatro `unknown`. */
+  async lookupPayoutOutcome(input: {
+    payoutId: string;
+    senderAddress: string;
+  }): Promise<PayoutOutcomeLookup> {
+    const owner = canonicalizeAddress(input.senderAddress);
+    const rows = [...this.store.values()].filter(
+      (r) => r.payoutId === input.payoutId && r.senderAddress === owner,
+    );
+    if (rows.length === 0) return { outcome: "unknown", reason: "no_row" };
+    const terminales = rows.filter((r) => r.status === "settled" || r.status === "failed");
+    const candidatas = terminales.filter((r) =>
+      REAL_PAYOUT_PROVENANCES.has(r.payoutProvenance ?? ""),
+    );
+    if (candidatas.length === 0) {
+      // Las DOS causas se distinguen: hay terminal pero sin proveniencia real, vs. nada terminal.
+      return {
+        outcome: "unknown",
+        reason: terminales.length > 0 ? "provenance_not_real" : "not_terminal",
+      };
+    }
+    const primera = candidatas[0]!;
+    if (candidatas.some((r) => r.status !== primera.status)) {
+      return { outcome: "unknown", reason: "conflicting_rows" };
+    }
+    return {
+      outcome: "known",
+      status: primera.status === "settled" ? "settled" : "failed",
+      provenance: primera.payoutProvenance ?? "",
+    };
   }
 
   async markOutcome(input: {

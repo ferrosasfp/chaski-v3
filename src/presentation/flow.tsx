@@ -563,14 +563,14 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                     type="button"
                     onClick={forgetAndDisconnect}
                     disabled={busy}
-                    className="font-semibold text-cochineal underline underline-offset-2"
+                    className="inline-flex min-h-[44px] items-center px-2 font-semibold text-cochineal underline underline-offset-2"
                   >
                     Borrar igual
                   </button>
                   <button
                     type="button"
                     onClick={() => setConfirmReset(false)}
-                    className="text-stone underline underline-offset-2"
+                    className="inline-flex min-h-[44px] items-center px-2 text-stone underline underline-offset-2"
                   >
                     Cancelar
                   </button>
@@ -580,7 +580,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
               <button
                 type="button"
                 onClick={onAskReset}
-                className="text-xs text-stone underline underline-offset-2"
+                className="inline-flex min-h-[44px] items-center px-2 text-xs text-stone underline underline-offset-2"
               >
                 ¿No sos vos?
               </button>
@@ -744,7 +744,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                 type="button"
                 onClick={openHistory}
                 disabled={busy}
-                className="w-full text-center text-sm font-semibold text-cochineal underline underline-offset-2 disabled:opacity-50"
+                className="inline-flex min-h-[52px] w-full items-center justify-center text-center text-sm font-semibold text-cochineal underline underline-offset-2 disabled:opacity-50"
               >
                 Ver mis envíos
               </button>
@@ -2054,7 +2054,7 @@ export function LostEscrowRecovery({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="w-full text-center text-sm font-semibold text-cochineal underline underline-offset-2"
+        className="inline-flex min-h-[52px] w-full items-center justify-center text-center text-sm font-semibold text-cochineal underline underline-offset-2"
       >
         Recuperar un envío perdido
       </button>
@@ -2173,7 +2173,7 @@ export function EscrowRentRecovery({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="w-full text-center text-sm font-semibold text-cochineal underline underline-offset-2"
+        className="inline-flex min-h-[52px] w-full items-center justify-center text-center text-sm font-semibold text-cochineal underline underline-offset-2"
       >
         Recuperar el depósito de red de envíos anteriores
       </button>

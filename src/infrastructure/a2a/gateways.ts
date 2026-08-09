@@ -166,10 +166,10 @@ export class A2aPayoutGateway implements PayoutGateway {
    * que un 502 transitorio del agente. Eso manda a buscar el problema a la red y al deploy del agente,
    * cuando lo que falta es una ruta que nadie va a levantar. El nombre del error es el diagnóstico.
    *
-   * Por qué la clase sigue viva: `status()` SÍ se usa en producción (`TrackRemittance` lo llama vía el
-   * puerto `PayoutGateway`, `track-remittance.ts:8`) y el container la cablea (`NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`, `container.ts:114`). Lo
-   * muerto es este método, no el adapter. Y hoy NADIE lo invoca: el único consumidor del puerto es
-   * `TrackRemittance`, que sólo llama a `status()`.
+   * Por qué NO se borró, que no es lo mismo que estar viva (CR/BLQ-MED-1): acá decía que `status()` "SÍ
+   * se usa en producción" y que "el container la cablea", y WKH-337 volvió falsas las DOS mitades. MEDIDO:
+   * cero apariciones de `A2aPayoutGateway` en `container.ts`, y `useA2a` tiene UN solo consumidor, las
+   * quotes (`quotes`, `../../composition/container.ts:123`). Hoy cablea (`payouts`, `../../composition/container.ts:127`). Se conserva por R-2.
    *
    * Si algún día vuelve a hacer falta un submit desde el cliente, hay que construir la ruta primero.
    * Este throw es lo que impide que se "arregle" apuntándolo a cualquier otro lado.
@@ -187,15 +187,38 @@ export class A2aPayoutGateway implements PayoutGateway {
     // "failed" acá false-refundearía un payout que pudo ser exitoso. Devolvemos un estado NO-TERMINAL
     // ("submitted", flag payout_status_unknown) ⇒ TrackRemittance NO transiciona a payout_failed ni
     // refundea sobre incertidumbre; la remesa queda RECUPERABLE. Principio: NUNCA refundear/fallar
-    // sobre un payout que no sabemos que falló. El fix real (polling async / persistir el estado del
-    // submit) es Fase A (AC-14).
+    // sobre un payout que no sabemos que falló.
+    //
+    // 🔴 WKH-337 (AC-6) — LA LECTURA QUE FALTABA YA EXISTE, Y ESTE RAZONAMIENTO NO SE REVIRTIÓ. Acá
+    // decía que el fix real quedaba para una fase posterior; ya no está pendiente. Pero el fix NO fue
+    // re-apuntar una bandera: este método y el de `FallbackPayoutGateway` eran los DOS ciegos, así que
+    // ninguna configuración discriminaba nada observable. Lo que se construyó es
+    // `LedgerPayoutStatusGateway`, que le pregunta al ledger —donde el webhook del proveedor YA escribía
+    // el desenlace y no lo leía nadie—, y es el que el container cablea
+    // (`payouts`, `../../composition/container.ts:127`). Esta clase quedó SIN consumidor de producción y
+    // NO se borra (R-2): comparte archivo con `A2aQuoteGateway`, que sí se cablea
+    // (`quotes`, `../../composition/container.ts:123`).
+    //
+    // ⚠️ Y EL PRINCIPIO DE ARRIBA PROTEGE MÁS QUE ANTES, no menos. Mientras nada llegaba a `settled` por
+    // polling, un terminal de más era cosmético. Hoy `settled` es alcanzable y es IRREVERSIBLE —no está
+    // en `RECOVERABLE` (`RECOVERABLE`, `../../application/use-cases/recover-escrow-funds.ts:40`) y no
+    // tiene transición de salida—, así que fabricar uno le quita al remitente su único camino a sus
+    // USDC. El gateway nuevo hereda esta regla entera: toda degradación cae al NO-TERMINAL.
     return {
       payoutId,
       status: "submitted",
       deliveredPen: null,
       txRef: null,
       failureReason: "payout_status_unknown",
-      provenance: "", // WKH-200: record fabricado (nunca settlea) → cosmético, no marca demo/real
+      // 🔴 WKH-337/DT-6 — ESTE `""` DEPENDE DE UNA PREMISA QUE HOY ES FALSA, y queda escrito acá porque
+      // el récord sigue siendo inalcanzable por OTRA razón (esta clase ya no se cablea, R-2). El
+      // "nunca settlea" era cierto mientras ningún gateway leyera el desenlace; ya no lo es. Y `""` NO es
+      // cosmético: `markSettled` PISA `payoutProvenance` con cualquier valor ≠ `undefined`
+      // (`markSettled`, `../../domain/remittance.ts:375`) e `isPayoutDemo("")` es `true` (`"" != null` ✓
+      // y `!has("")` ✓), así que un `""` que llegara al agregado prendería "Modo demo" sobre una remesa
+      // REAL recién liquidada. ⛔ Si alguien vuelve a cablear esta clase, esto es lo PRIMERO que hay que
+      // cambiar: el gateway del ledger usa `"n/a"` en sus ramas no-terminales por este mismo motivo.
+      provenance: "",
     };
   }
 }

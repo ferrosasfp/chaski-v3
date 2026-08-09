@@ -2208,7 +2208,7 @@ function AgentUnavailable({
  * contestan igual"*, que describía el carril punto a punto —un `fetch` liso a un agente real, sin
  * x402 y sin Agent Key—. Ese carril se borró en W3 y la frase se fue con él.
  * 🔴 Y LA QUE LA REEMPLAZÓ TAMBIÉN ERA FALSA (CR2/BLQ-ALTO-1). Decía *"no llama a ninguno de ellos"*, y esta
- * bandera cablea la cotización y el ESTADO del payout (`FallbackQuoteGateway`, `container.ts:123`), NO la entrega:
+ * bandera cablea la cotización (`FallbackQuoteGateway`, `container.ts:123`) —el ESTADO del payout ya no: WKH-337 lo lee del ledger—, NO la entrega:
  * esa la cablea `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED` (`solanaSettleOn`, `container.ts:141`). Con el settle en `true`
  * y esta en `"fallback"` el envío llama igual a `/api/payout/prepare`, y ese POST compone contra el gateway: 200
  * y un solo fetch a `/compose` (T-1.2, MEDIDO: `it.each`, `../../app/api/payout/prepare/route.test.ts:1296`). Por

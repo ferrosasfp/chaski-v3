@@ -5,14 +5,14 @@
 // se resuelve por construcción, porque vive en el panel del proveedor de hosting— hace que el
 // container NO arranque (assertNoEvmResidue).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync } from "node:fs";
-import path from "node:path";
+import { existsSync } from "node:fs"; import path from "node:path"; // WKH-337: en UNA línea para no correr (`CABLEADO`, `:129`)
 import { A2aPayoutGateway, A2aQuoteGateway } from "../infrastructure/a2a/gateways";
 import { FallbackPayoutGateway, FallbackQuoteGateway } from "../infrastructure/fallback/gateways";
 import { SolanaWalletAdapter } from "../infrastructure/solana-wallet";
 import { solanaWalletBridge } from "../infrastructure/solana-wallet-bridge";
 import { createContainer } from "./container";
 import { VALUE_DELIVERY_ADAPTERS, type ValueDeliveryAdapter } from "./value-delivery-adapter";
+import { LedgerPayoutStatusGateway } from "../infrastructure/settlement/ledger-payout-status-gateway";
 
 // Las envs EVM tienen que estar AUSENTES para que el container arranque (assertNoEvmResidue).
 const EVM_ENVS = [
@@ -127,16 +127,38 @@ describe("createContainer — un valor no reconocido de la bandera NUNCA cablea 
 // podría tirar y todos estos casos darían rojo por la razón equivocada.
 describe("createContainer — cada valor LEGAL de la bandera cablea la clase que dice (AC-3)", () => {
   const CABLEADO: Record<
+    // `payouts` admite un ctor con argumentos porque el gateway del ledger recibe wallet+pruebas+reloj;
+    // `quotes` sigue siendo `new ()` sin tocar (CD-3), que es lo que documenta que ésos no llevan deps.
     ValueDeliveryAdapter,
-    { quotes: new () => unknown; payouts: new () => unknown }
+    { quotes: new () => unknown; payouts: new (...args: never[]) => unknown }
   > = {
-    "a2a-gateway": { quotes: A2aQuoteGateway, payouts: A2aPayoutGateway },
+    "a2a-gateway": { quotes: A2aQuoteGateway, payouts: LedgerPayoutStatusGateway },
     // 🔴 ACÁ HABÍA UNA FILA `a2a` Y SE FUE EN EL MISMO COMMIT QUE EL VALOR (W3). El tipo del Record
     // es `ValueDeliveryAdapter`, así que dejarla habría sido TS2353: la tabla no puede sobrevivir al
     // valor, ni el valor a la tabla.
-    fallback: { quotes: FallbackQuoteGateway, payouts: FallbackPayoutGateway },
+    fallback: { quotes: FallbackQuoteGateway, payouts: LedgerPayoutStatusGateway },
   };
 
+  // 🔴 WKH-337 — LA COLUMNA `payouts` DICE LA MISMA CLASE EN LAS DOS FILAS, Y ESO ES EL INVARIANTE
+  // NUEVO, NO UNA TABLA A MEDIO LLENAR. Antes decía `A2aPayoutGateway` / `FallbackPayoutGateway`, o sea
+  // codificaba la premisa "el adapter decide el gateway de payout". Esa premisa ERA el defecto, y no se
+  // refuta con un argumento sino con una medición: las dos clases viejas no tienen un solo `fetch`, no
+  // usan el `payoutId` y devuelven siempre la misma constante, así que la bandera nunca discriminó nada
+  // OBSERVABLE en el seguimiento. Un test que espera dos clases distintas está custodiando una
+  // diferencia que no existe.
+  //
+  // CD-11 — «¿qué mutante dejaría de morir si lo cambio así?» contestado por escrito, assert por assert:
+  //   · `payouts: A2aPayoutGateway` (fila a2a-gateway) → el mutante que mataba era "el container cablea
+  //     el Fallback con la env en a2a-gateway". Con la clase única ese mutante SIGUE MURIENDO (Ledger no
+  //     es Fallback) y además muere uno que ANTES NO PODÍA MATAR: M11, re-cablear `payouts` con un
+  //     ternario sobre cualquier bandera — con la tabla vieja, un ternario era justamente lo que el test
+  //     EXIGÍA. El assert queda MÁS fuerte, no más corto.
+  //   · `payouts: FallbackPayoutGateway` (fila fallback) → idéntico razonamiento, simétrico.
+  //   · La columna `quotes` NO SE TOCA (CD-3): sigue byte a byte, con las dos clases distintas, porque
+  //     ahí la bandera SÍ decide y sí es observable.
+  // Lo que se agrega abajo es la NEGATIVA sobre las dos clases viejas, en LOS DOS cuadrantes: "es un
+  // LedgerPayoutStatusGateway" no excluiría por sí solo que alguien reintrodujera el ternario con
+  // herencia.
   it.each(VALUE_DELIVERY_ADAPTERS)(
     "con la bandera en '%s' el container cablea las clases declaradas, no las del otro carril",
     (valor) => {
@@ -147,6 +169,13 @@ describe("createContainer — cada valor LEGAL de la bandera cablea la clase que
       const payouts = (c.trackRemittance as unknown as { payouts: unknown }).payouts;
       expect(quotes).toBeInstanceOf(esperado.quotes);
       expect(payouts).toBeInstanceOf(esperado.payouts);
+      // T-337.7 · M11: ninguna bandera puede volver a elegir un gateway de payout CIEGO.
+      expect(
+        payouts,
+        `con la bandera en '${valor}' el seguimiento volvió a un gateway que no consulta nada: ` +
+          "cualquier ternario acá deja la remesa en `payout_submitted` para siempre",
+      ).not.toBeInstanceOf(A2aPayoutGateway);
+      expect(payouts).not.toBeInstanceOf(FallbackPayoutGateway);
     },
   );
 
@@ -375,4 +404,121 @@ describe("createContainer — WKH-333/AC-20: el connectWallet REAL consulta el v
     expect(out.serverVerdict).toEqual({ outcome: "not_asked", reason: "pop_disabled" });
     vi.unstubAllGlobals();
   });
+});
+
+// ── WKH-337 · T-337.1 (AC-1) — el seguimiento LEE la fuente de verdad, en las TRES configuraciones ──
+//
+// 🔴 QUÉ AGUJERO CIERRA, Y POR QUÉ VA SOBRE EL CONTAINER REAL. Ningún test del repo podía ver el
+// defecto: los 71 de `flow.test.tsx` usan `buildTestContainer` (`FakePayoutGateway`,
+// `../test-support/test-container.ts:87`) y los de `track-remittance.test.ts` construyen el use-case a
+// mano. O sea que el ÚNICO consumidor de producción del puerto —`TrackRemittance` cableado por
+// `createContainer()`— no lo ejercitaba nadie contra un `fetch`. Con las dos implementaciones viejas
+// (`A2aPayoutGateway`/`FallbackPayoutGateway`) este `it` es ROJO en los tres casos: las dos devuelven
+// `status:"submitted"` sin consultar nada, así que la remesa se queda en `payout_submitted` mientras la
+// fuente de verdad dice `settled`.
+//
+// Las TRES combinaciones (CD-4): `"fallback"`, `"a2a-gateway"` y la env AUSENTE. La bandera no puede
+// discriminar el seguimiento, y por eso el `it.each` no tiene una tabla de clases esperadas: la
+// afirmación es la MISMA para los tres.
+//
+// La prueba de posesión se OBSERVA, no se pide: el gesto es `connectWallet.execute()` —uno de los
+// call-sites de `prove()` que ya existen— y el gateway de tracking sólo LEE lo que ese gesto produjo.
+// ⛔ Por eso no hay ninguna llamada a `prove()` acá: si el tracking pudiera pedir una firma, pediría un
+// popup cada 1,5 s (`}, 1500);`, `../presentation/flow.tsx:525`).
+describe("createContainer — el seguimiento del payout lee el ledger (WKH-337/AC-1)", () => {
+  const SENDER = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+
+  /** Una remesa en `payout_submitted` DENTRO del repo que el container construyó — no en uno propio:
+   *  lo que se prueba es el cableado, y un repo inyectado a mano no lo tocaría.
+   *
+   *  🔴 LOS IMPORTS SON DINÁMICOS Y ES DELIBERADO, no una preferencia de estilo. Un `import` estático
+   *  arriba desplazaría (`CABLEADO`, `:129`), que `../application/agent-rejections.test.ts:115` cita por
+   *  número de línea — y ese archivo está fuera del Scope IN de esta HU. Medido: con los 5 imports
+   *  arriba, `citas-ancladas.test.ts` se puso rojo por esa cita. ⛔ No los "subas" sin re-medirla. */
+  async function seedSubmitted(c: ReturnType<typeof createContainer>): Promise<string> {
+    const { Money } = await import("../domain/money");
+    const { Remittance } = await import("../domain/remittance");
+    const { QUOTE_EXPIRES, T0, beneficiary } = await import("../test-support/fakes");
+    const repo = (c.trackRemittance as unknown as { repo: { save(r: unknown): Promise<void> } }).repo;
+    const r = Remittance.create("rem-337", beneficiary(), Money.of(400, "USDC"), T0);
+    r.attachQuote(
+      {
+        quoteId: "q-337",
+        send: Money.of(400, "USDC"),
+        receive: Money.of(1480, "PEN"),
+        feeUsd: Money.of(0.5, "USDC"),
+        rate: 3.7,
+        etaMinutes: 30,
+        expiresAt: QUOTE_EXPIRES,
+        provenance: "fake",
+      },
+      T0,
+    );
+    r.startKyc(T0, SENDER);
+    r.applyKyc(
+      {
+        verificationId: "v-337",
+        approved: true,
+        payoutAllowed: true,
+        riskLevel: "low",
+        provenance: "didit",
+        identity: null,
+      },
+      T0,
+    );
+    r.confirm(T0);
+    r.markPrincipalIn("prin-337", T0);
+    r.markPayoutSubmitted("payout-337", T0);
+    await repo.save(r);
+    return "rem-337";
+  }
+
+  it.each([["fallback"], ["a2a-gateway"], [undefined]])(
+    "con NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER=%s: el ledger dice `settled` ⇒ la remesa QUEDA en `settled`",
+    async (valor) => {
+      vi.stubEnv("NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER", valor as unknown as string);
+      const urls: string[] = [];
+      const fetchMock = vi.fn(async (url: string) => {
+        urls.push(String(url));
+        if (String(url).includes("/api/a2a/payout/challenge")) {
+          // El challenge NO se verifica de este lado: lo emite y lo comprueba el server. Acá sólo
+          // tiene que existir, para que el gesto produzca una prueba OBSERVABLE.
+          return Response.json({ popChallenge: "ch-337", popMessage: "msg-337" }, { status: 200 });
+        }
+        if (String(url).includes("/api/payout/status")) {
+          return Response.json(
+            { payout: { outcome: "known", status: "settled", provenance: "transfi" } },
+            { status: 200 },
+          );
+        }
+        return Response.json({ verdict: null, reason: "absent" }, { status: 200 });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      // La billetera del container necesita el bridge conectado Y su `signMessage` registrado: sin el
+      // segundo, `prove()` tira y el gesto no deja ninguna prueba que observar.
+      solanaWalletBridge.setState({ publicKey: SENDER, connected: true });
+      solanaWalletBridge.registerSignMessage(async () => new Uint8Array(64).fill(3));
+      try {
+        const c = createContainer();
+        const id = await seedSubmitted(c);
+        // EL GESTO. Cuelga de una acción de la persona (conectar), como los otros tres call-sites.
+        await c.connectWallet.execute();
+        const out = await c.trackRemittance.execute({ remittanceId: id });
+
+        expect(
+          urls.some((u) => u.includes("/api/payout/status")),
+          "el seguimiento NO le preguntó a nadie por el desenlace del payout: el gateway cableado " +
+            "devuelve una constante sin consultar el ledger, así que la remesa no puede salir de " +
+            "`payout_submitted` en NINGUNA configuración",
+        ).toBe(true);
+        expect(
+          out.status,
+          "el ledger (la fuente de verdad, alimentada por el webhook real) dice `settled` y la remesa " +
+            "sigue en `payout_submitted`: la persona ve 'Pago en curso' para siempre",
+        ).toBe("settled");
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 });

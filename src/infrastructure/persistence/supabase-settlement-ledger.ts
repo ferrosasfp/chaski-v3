@@ -14,7 +14,7 @@
 // DENTRO de la factory en runtime (CD-14).
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
-  SenderRemittanceRef,
+  PayoutOutcomeLookup, SenderRemittanceRef, // WKH-337: en UNA línea, ver `lookupPayoutOutcome` más abajo
   SettlementLedger,
   SettlementLedgerStatus,
   SettlementRecord,
@@ -22,11 +22,11 @@ import type {
   WebhookFailureClass,
   WebhookOutcome,
 } from "../../application/ports";
+import { REAL_PAYOUT_PROVENANCES } from "../../domain/payout-provenance"; // CR/MNR-4: capas, ya no presentation
 import { getSupabaseServerClient } from "./supabase-server";
 import { logLedgerAlert } from "./ledger-alert";
 import { WEBHOOK_FAILURE_CLASSES } from "./webhook-failure-classes";
-import { canonicalizeAddress } from "../address";
-import { resolveSolanaNetworkId } from "../chain";
+import { canonicalizeAddress } from "../address"; import { resolveSolanaNetworkId } from "../chain";
 
 const TABLE = "remittance_settlements";
 
@@ -616,6 +616,87 @@ export class SupabaseSettlementLedger implements SettlementLedger {
     return rows
       .map((r) => r.receiver_address)
       .filter((a): a is string => typeof a === "string" && a.length > 0);
+  }
+
+  async lookupPayoutOutcome(input: {
+    payoutId: string;
+    senderAddress: string;
+  }): Promise<PayoutOutcomeLookup> {
+    // 🔴 POR QUÉ LOS DOS IMPORTS DE ESTA FUNCIÓN ESTÁN APRETADOS ARRIBA, Y NO LOS DESARMES. El header de
+    // este archivo tiene que ser LÍNEA-NEUTRA respecto de `07882f6`: seis citas `archivo:línea` apuntan a
+    // las líneas 40, 65, 69, 84 y 263 de acá, y viven en archivos fuera del Scope IN de esta HU
+    // (`scripts/smoke-helpers.ts`, `src/composition/prepared-claims-guard.static.test.ts`,
+    // `docs/architecture.md`). MEDIDO: con los imports en 5 líneas propias, el barrido de inbounds
+    // reportaba las SEIS como rotas. ⛔ Si necesitás agregar un import, buscá primero quién cita este
+    // archivo por número.
+    //
+    // `REAL_PAYOUT_PROVENANCES` se IMPORTA y no se copia (R-5): mover la constante desplazaría citas de
+    // `flow-vm.ts`, y un segundo Set con los mismos valores es cómo se desincronizan las dos capas — lo
+    // dice el docblock de la propia constante. Este módulo es SERVER-ONLY, así que el import no arrastra
+    // nada nuevo al bundle del browser.
+    //
+    // WKH-337 — el desenlace que el webhook de TransFi ya escribe acá (`recordWebhookOutcome`, abajo)
+    // y que hasta ahora no leía nadie. OWNER-SCOPED: el `.eq("sender_address", ...)` es el guard REAL
+    // (el service key BYPASSEA RLS), y recibe la address que el PoP VERIFICÓ, nunca un crudo del body.
+    //
+    // El `select` es MÍNIMO a propósito (dos columnas): sin value_minor, sin address, sin tx_hash y sin
+    // last_error. Lo que no se lee no se puede filtrar por accidente hacia la respuesta (CD-16).
+    //
+    // TIRA ante cualquier error de la consulta: mismo criterio que `listPreparedDepositAddresses` de
+    // acá arriba. Devolver `unknown` sería indistinguible de un "no sé" REAL, y son dos desenlaces
+    // distintos para el caller (uno es 502 reintentable, el otro es "el proveedor todavía no avisó").
+    const { data, error } = await this.client
+      .from(TABLE)
+      .select("status, payout_provenance")
+      .eq("payout_id", input.payoutId)
+      .eq("sender_address", canonicalizeAddress(input.senderAddress)); // ← EL GUARD
+    if (error) throw new Error(`ledger_lookup_payout_outcome_failed:${error.code ?? "unknown"}`);
+    const rows = (data ?? []) as unknown as Array<{ status: unknown; payout_provenance: unknown }>;
+    if (rows.length === 0) return { outcome: "unknown", reason: "no_row" };
+
+    // Se recorre UNA sola vez y se acumulan las tres cosas que deciden: ¿hay alguna fila terminal?,
+    // ¿cuál es el desenlace de las que además tienen proveniencia REAL?, y ¿discordan entre sí? Sin
+    // índices ni `!`: no hay ningún acceso que haya que asegurar a mano.
+    let hayTerminal = false;
+    let desenlace: "settled" | "failed" | null = null;
+    let provenance = "";
+    let discordan = false;
+    // 🔴 LA MEMBRESÍA ES POSITIVA, y el `?? ""` es lo que la vuelve correcta para `null`.
+    // ⛔ PROHIBIDO escribir `!isPayoutDemo(p)`: `isPayoutDemo(null)` devuelve `false`
+    // (`isPayoutDemo`, `../../presentation/flow-vm.ts:29`), así que su negación leería `null` —que es NO
+    // CONSTA— como REAL. Es el inverso exacto de lo que manda la migración 20260804, y el input que lo
+    // mide es cualquier fila anterior a ella: MEDIDO en `bdwv`, todas traen `payout_provenance: null`.
+    // La constante se IMPORTA (`REAL_PAYOUT_PROVENANCES`, `../../domain/payout-provenance.ts:20`): un
+    // segundo Set con los mismos valores es exactamente cómo se desincronizan las dos capas, y lo dice
+    // el docblock de la propia constante.
+    for (const r of rows) {
+      const st = r.status === "settled" ? "settled" : r.status === "failed" ? "failed" : null;
+      if (st === null) continue;
+      hayTerminal = true;
+      const p = typeof r.payout_provenance === "string" ? r.payout_provenance : "";
+      if (!REAL_PAYOUT_PROVENANCES.has(p)) continue;
+      // `payout_id` NO tiene índice único en el schema, y el multi-fila está DECLARADO: un payout_id
+      // correlaciona con una fila por quoteId (`WebhookOutcome`, `../../application/ports.ts:714`). Con
+      // dos desenlaces reales y discordantes no sabemos cuál vale. ⛔ Quedarse con el primero sería
+      // fabricar un terminal a partir de una moneda al aire, y un `settled` de más es IRREVERSIBLE
+      // (`RECOVERABLE`, `../../application/use-cases/recover-escrow-funds.ts:40`).
+      if (desenlace !== null && desenlace !== st) discordan = true;
+      desenlace = st;
+      // 🔴 La proveniencia que viaja es la DE LA FILA, jamás `""`. Un `""` haría que una remesa REAL
+      // recién liquidada prenda el banner "Modo demo": `markSettled` PISA `payoutProvenance` con
+      // cualquier valor distinto de `undefined` (`markSettled`, `../../domain/remittance.ts:375`) y
+      // `isPayoutDemo("")` es `true` (`""` != null ✓ y `!has("")` ✓). Acá `p` ya pasó el filtro de la
+      // allowlist, así que NO puede ser `""` (hoy sólo puede ser `'transfi'`).
+      provenance = p;
+    }
+    if (desenlace === null) {
+      // Las DOS causas se distinguen porque piden acciones distintas: una fila terminal SIN
+      // proveniencia real no va a cambiar nunca (el dato no se guardó y no se puede backfillear); una
+      // fila no-terminal todavía puede llegar por el webhook.
+      return { outcome: "unknown", reason: hayTerminal ? "provenance_not_real" : "not_terminal" };
+    }
+    if (discordan) return { outcome: "unknown", reason: "conflicting_rows" };
+    return { outcome: "known", status: desenlace, provenance };
   }
 
   async markOutcome(input: {

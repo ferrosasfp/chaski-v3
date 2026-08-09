@@ -243,3 +243,28 @@ export async function checkKycRateLimit(input: RateLimitInput): Promise<RateLimi
 export function __resetKycRateLimitClient(): void {
   cache.clear();
 }
+
+// ── PAYOUT STATUS · WKH-337 ──────────────────────────────────────────────────────────────────────────
+// 🔴 VA AL FINAL DEL ARCHIVO Y NO CON LOS OTROS SEIS BUCKETS, A PROPÓSITO. `supabase-server.ts:6` cita
+// `rate-limit.ts:122-155` como su exemplar de factory lazy memoizada; insertar acá arriba desplazaría
+// ese rango y rompería la cita, y `supabase-server.ts` está fuera del Scope IN de esta HU. ⛔ No lo
+// "acomodes" con el grupo sin re-medir esa cita primero.
+//
+// IP 60/"10 m" (sin addr). El perfil es DISTINTO al del resto de la familia y la aritmética es la razón:
+//   · el cliente lee como máximo 1 vez cada 20 s (`LEDGER_STATUS_MIN_INTERVAL_MS`, throttle del
+//     gateway) ⇒ 600 s ÷ 20 s = 30 lecturas por sesión legítima de 10 min;
+//   · × 2 senders detrás de una misma IP/NAT = 60. Ese es el número, no un redondeo.
+// Por qué puede ser más alto que `DEPOSIT_PREPARE_RL` (10/"10 m"): esa ruta tiene EFECTO EXTERNO —"cada
+// prepare crea una orden TransFi real" (`:80`)— y ésta no tiene ninguno: sólo lee. Lo caro acá es la CPU
+// del HMAC + la verificación ed25519, y el limiter corre ANTES de pagarla.
+// IP-only por lo mismo que CHALLENGE/PREPARE/RECOVERY: corre antes de parsear el body, así que la
+// address todavía no existe en este punto.
+export const PAYOUT_STATUS_RL: RouteRateLimitConfig = {
+  bucketPrefix: "payout:status:rl",
+  ip: {
+    envMax: "PAYOUT_STATUS_RL_IP_MAX",
+    defMax: 60,
+    envWindow: "PAYOUT_STATUS_RL_IP_WINDOW",
+    defWindow: "10 m",
+  },
+};

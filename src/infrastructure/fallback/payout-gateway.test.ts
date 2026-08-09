@@ -3,8 +3,8 @@
 //
 // Lo que se clava acá: que el adapter que corre cuando NO hay backend de value-delivery no puede
 // producir un "entregado". No es prolijidad — con el flag de settlement Solana encendido y este
-// adapter cableado (`NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`, `container.ts:114`, la combinación que el repo documenta como default), ese "settled" fabricado
-// llegaba a una remesa con los USDC dentro del vault del escrow.
+// adapter cableado, ese "settled" fabricado llegaba a una remesa con los USDC dentro del vault del escrow.
+// ⚠️ WKH-337/MNR-2: ese adapter YA NO SE CABLEA en ninguna configuración (`payouts`, `../../composition/container.ts:127`). El test sigue siendo correcto; lo que caducó es su motivo.
 import { describe, expect, it } from "vitest";
 import { Money } from "../../domain/money";
 import { Remittance } from "../../domain/remittance";

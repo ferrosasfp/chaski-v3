@@ -22,7 +22,7 @@ import { KYC_PROVENANCE_LIVE } from "../infrastructure/didit/decision";
  *  si abortar: `scripts/smoke-helpers.ts` lo importa. Un segundo Set con los mismos valores es
  *  exactamente cómo se desincronizan las dos capas. La comparación es EXACTA (`Set.has`), acá y allá:
  *  "TransFi" NO está en el conjunto. */
-export const REAL_PAYOUT_PROVENANCES: ReadonlySet<string> = new Set(["transfi"]);
+import { REAL_PAYOUT_PROVENANCES } from "../domain/payout-provenance"; export { REAL_PAYOUT_PROVENANCES }; // CR/MNR-4: BAJÓ a domain/ (capas). Se importa Y se re-exporta en UNA línea: `isPayoutDemo` (`:30`) necesita el binding local, y las 4 citas a `:25` y el candado de `smoke-helpers.test.ts:327` no se pueden mover
 
 /** true si la proveniencia del payout indica un desembolso NO real (mock). `null`/`undefined`
  *  (remesa sin payout aún / legacy) → false (no fuerza el banner por ausencia de dato). */

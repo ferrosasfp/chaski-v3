@@ -2268,3 +2268,180 @@ describe("payout_provenance — una orden simulada y una real dejan filas DISTIN
     expect(JSON.parse(JSON.stringify(records[0])).payoutProvenance).toBeNull(); // sobrevive al JSON
   });
 });
+
+// ── WKH-337 · lookupPayoutOutcome — la lectura que el seguimiento no tenía ───────────────────────────
+//
+// 🔴 EL DOBLE APLICA LOS FILTROS DE VERDAD (`makeBehaviorClient`), y eso no es comodidad: con un
+// `mockResolvedValue([...])` los dos tests de aislamiento de acá abajo pasarían IGUAL con el
+// `.eq("sender_address", …)` borrado, o sea aprobarían desde arriba sin mirar los argumentos. Y su `eq`
+// TIRA `unknown_column` si la columna no existe, así que un `payout_provenence` mal escrito explota en
+// vez de convertirse en un filtro que se ignora.
+//
+// Lo que estos tests custodian es UNA cosa, y es la garantía de la HU: **sólo evidencia real produce un
+// desenlace terminal**. `settled` no está en `RECOVERABLE` (`RECOVERABLE`,
+// `../../application/use-cases/recover-escrow-funds.ts:40`) y no tiene transición de salida ⇒ un
+// `settled` fabricado le quita al remitente su único camino a sus USDC, para siempre.
+interface FilaPayout extends FakeLedgerRow {
+  payout_id: string | null;
+  payout_provenance: string | null;
+}
+const PAYOUT_A = "transfi-A";
+const PAYOUT_B = "transfi-B";
+/** Fila mínima: sólo importan payout_id, sender_address, status y payout_provenance. */
+function fila(over: Partial<FilaPayout> = {}): FilaPayout {
+  return {
+    remittance_id: "rem-1",
+    status: "settled",
+    created_at: "2026-08-01T00:00:00.000Z",
+    sender_address: SOL_A,
+    vm: "solana",
+    value_minor: "0",
+    receiver_address: "",
+    payout_id: PAYOUT_A,
+    payout_provenance: "transfi",
+    ...over,
+  };
+}
+async function lookup(rows: FilaPayout[], payoutId = PAYOUT_A, sender = SOL_A) {
+  const { client, selects } = makeBehaviorClient(rows);
+  const out = await new SupabaseSettlementLedger(client).lookupPayoutOutcome({
+    payoutId,
+    senderAddress: sender,
+  });
+  return { out, selects };
+}
+
+describe("lookupPayoutOutcome — los CUATRO 'no sé' y el único 'sí' (WKH-337)", () => {
+  it("AC-1: fila terminal con proveniencia REAL ⇒ known/settled, y la provenance es LA DE LA FILA", async () => {
+    const { out } = await lookup([fila()]);
+    expect(out).toEqual({ outcome: "known", status: "settled", provenance: "transfi" });
+    // 🔴 DT-6/M4: un `provenance: ""` acá prendería el banner "Modo demo" sobre una remesa REAL recién
+    // liquidada, porque `markSettled` PISA el campo con cualquier valor ≠ undefined e `isPayoutDemo("")`
+    // es `true`. El assert es sobre el VALOR, no sobre que la clave exista.
+    expect(out).not.toEqual(expect.objectContaining({ provenance: "" }));
+  });
+
+  it("AC-4: la misma lectura reconoce el `failed` real (no sólo el camino feliz)", async () => {
+    const { out } = await lookup([fila({ status: "failed" })]);
+    expect(out).toEqual({ outcome: "known", status: "failed", provenance: "transfi" });
+  });
+
+  it("no hay fila para ese payout ⇒ unknown/no_row (ledger apagado al preparar, o escritura best-effort que falló)", async () => {
+    const { out } = await lookup([fila({ payout_id: "otro-payout" })]);
+    expect(out).toEqual({ outcome: "unknown", reason: "no_row" });
+  });
+
+  it("la fila existe pero NO es terminal ⇒ unknown/not_terminal (el proveedor todavía no avisó)", async () => {
+    for (const status of ["prepared", "principal_in", "submitted", "forward_error"]) {
+      const { out } = await lookup([fila({ status })]);
+      expect(out, `status=${status}`).toEqual({ outcome: "unknown", reason: "not_terminal" });
+    }
+  });
+
+  // 🔴 AC-3 / M3 — LA MEMBRESÍA ES POSITIVA, Y ESTE ES EL TEST QUE LO MIDE.
+  // Los cinco valores van CON `status:'settled'`, o sea con la fila ya terminal: lo único que decide es
+  // la proveniencia. `null` es el caso medido en `bdwv` (toda remesa vieja) y NO es "simulada" ni
+  // "real": el dato no se guardó y la migración dice que no se puede backfillear.
+  // `"TransFi"` con mayúscula es el caso que la comparación EXACTA rechaza a propósito.
+  it.each([[null], ["local-fallback"], ["devnet-stub"], ["TransFi"], [""]])(
+    "payout_provenance=%s con status 'settled' ⇒ unknown/provenance_not_real (NUNCA un terminal)",
+    async (prov) => {
+      const { out } = await lookup([fila({ payout_provenance: prov })]);
+      expect(out).toEqual({ outcome: "unknown", reason: "provenance_not_real" });
+      expect(out).not.toEqual(expect.objectContaining({ outcome: "known" }));
+    },
+  );
+
+  // M9 — elegir la primera fila sería fabricar un desenlace terminal a partir de una moneda al aire.
+  it("2+ filas reales del MISMO payout_id con desenlaces DISTINTOS ⇒ unknown/conflicting_rows", async () => {
+    const { out } = await lookup([
+      fila({ remittance_id: "rem-1", status: "settled" }),
+      fila({ remittance_id: "rem-2", status: "failed" }),
+    ]);
+    expect(out).toEqual({ outcome: "unknown", reason: "conflicting_rows" });
+  });
+
+  it("2+ filas reales que COINCIDEN no son un conflicto: se afirma el desenlace común", async () => {
+    const { out } = await lookup([
+      fila({ remittance_id: "rem-1", status: "settled" }),
+      fila({ remittance_id: "rem-2", status: "settled" }),
+    ]);
+    expect(out).toEqual({ outcome: "known", status: "settled", provenance: "transfi" });
+  });
+
+  it("una fila REAL discordante y otra sin proveniencia real NO es conflicto: la segunda no es candidata", async () => {
+    // Sin el filtro de proveniencia ANTES del chequeo de conflicto, esto daría `conflicting_rows` y una
+    // remesa entregada de verdad se quedaría sin poder confirmarse por culpa de una fila simulada.
+    const { out } = await lookup([
+      fila({ remittance_id: "rem-1", status: "settled" }),
+      fila({ remittance_id: "rem-2", status: "failed", payout_provenance: "local-fallback" }),
+    ]);
+    expect(out).toEqual({ outcome: "known", status: "settled", provenance: "transfi" });
+  });
+
+  // ── M1 · el AISLAMIENTO, no la presencia del filtro ────────────────────────────────────────────────
+  it("M1: la fila de OTRO sender NO se ve, aunque el payout_id coincida exacto (IDOR)", async () => {
+    const { out } = await lookup([fila({ sender_address: SOL_B })], PAYOUT_A, SOL_A);
+    // Sin el `.eq("sender_address", …)` esto devolvería known/settled: el estado del payout de otro.
+    expect(out).toEqual({ outcome: "unknown", reason: "no_row" });
+  });
+
+  it("M1: con las filas de los DOS senders, cada uno ve SÓLO la suya", async () => {
+    const rows = [
+      fila({ remittance_id: "rem-A", sender_address: SOL_A, status: "settled" }),
+      fila({ remittance_id: "rem-B", sender_address: SOL_B, status: "failed" }),
+    ];
+    expect((await lookup(rows, PAYOUT_A, SOL_A)).out).toEqual({
+      outcome: "known",
+      status: "settled",
+      provenance: "transfi",
+    });
+    expect((await lookup(rows, PAYOUT_A, SOL_B)).out).toEqual({
+      outcome: "known",
+      status: "failed",
+      provenance: "transfi",
+    });
+  });
+
+  it("filtra por payout_id Y sender_address CANONICALIZADO (recorder: los argumentos exactos)", async () => {
+    const { client, calls } = makeClient([{ data: [], error: null }]);
+    await new SupabaseSettlementLedger(client).lookupPayoutOutcome({
+      payoutId: PAYOUT_B,
+      senderAddress: SOL_A,
+    });
+    expect(calls.eq).toContainEqual(["payout_id", PAYOUT_B]);
+    expect(calls.eq).toContainEqual(["sender_address", new PublicKey(SOL_A).toBase58()]);
+  });
+
+  it("CD-16: el select es MÍNIMO — ni value_minor, ni address, ni tx_hash, ni last_error", async () => {
+    const { selects } = await lookup([fila()]);
+    const sel = String(selects[0]);
+    expect(sel).toBe("status, payout_provenance");
+    for (const col of ["value_minor", "sender_address", "receiver_address", "tx_hash", "last_error", "remittance_id"]) {
+      expect(sel, `el select no puede traer ${col}: lo que no se lee no se filtra por accidente`).not.toContain(col);
+    }
+  });
+
+  // M8 — devolver `unknown` acá haría indistinguible un fallo de infraestructura de un "no sé" real, y
+  // son dos respuestas distintas de la ruta (502 reintentable vs 200 con el motivo).
+  it("M8/fail-loud: error del builder ⇒ THROW con el code, NUNCA un unknown y JAMÁS un known", async () => {
+    const { client } = makeClient([{ data: null, error: { code: "PGRST204" } }]);
+    await expect(
+      new SupabaseSettlementLedger(client).lookupPayoutOutcome({
+        payoutId: PAYOUT_A,
+        senderAddress: SOL_A,
+      }),
+    ).rejects.toThrow(/ledger_lookup_payout_outcome_failed:PGRST204/);
+  });
+
+  it("un senderAddress malformado TIRA antes de tocar la base (canonicalizeAddress fail-closed)", async () => {
+    const { client, calls } = makeClient([{ data: [], error: null }]);
+    await expect(
+      new SupabaseSettlementLedger(client).lookupPayoutOutcome({
+        payoutId: PAYOUT_A,
+        senderAddress: "no-es-base58-de-32-bytes",
+      }),
+    ).rejects.toThrow(/address_canonicalization_failed/);
+    expect(calls.eq).not.toContainEqual(["sender_address", "no-es-base58-de-32-bytes"]);
+  });
+});

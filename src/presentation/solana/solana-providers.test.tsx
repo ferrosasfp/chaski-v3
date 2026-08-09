@@ -397,11 +397,21 @@ describe("SolanaWalletBridgeSync — la gracia antes de afirmar 'acá no hay nin
 
   it("T-341-13 (CD-2): antes de la gracia el estado es 'unknown', que no afirma nada", async () => {
     // `"unknown"` es lo que hace que `NoWalletHere` NO pinte: su guard es
-    // `if (availability !== "none") return null;` (`flow.tsx:1111`). Este test clava que el arreglo
-    // preserva ese tercer valor en vez de colapsarlo a un "no hay" prematuro.
+    // `if (availability !== "none") return null;` (`flow.tsx:1111`).
+    //
+    // ⚠️ ESTE TEST CUBRE LA MITAD DEL AC, Y LA OTRA MITAD LA CUBRE OTRO. El Story File pedía además
+    // que "`NoWalletHere` no pinta". Este archivo NO puede probar eso: mockea entero el árbol de
+    // `@solana/wallet-adapter-*` y nunca renderiza la pantalla. La pata de PANTALLA está cubierta por
+    // (`T-UI-1`, `wallet-availability.test.tsx:179`), que renderiza el flujo real y asierta que con
+    // `"unknown"` el aviso NO está en el DOM y con `"none"` sí. Acá se prueba el VALOR, allá la
+    // PANTALLA — y hacen falta los dos.
+    //
+    // Acá vivía un `expect(...).not.toBe("none")` puesto inmediatamente después del `toBe("unknown")`.
+    // Se borró: era un assert que NO PODÍA FALLAR, y un assert que no puede fallar es peor que no
+    // tenerlo porque se cuenta como cobertura.
+    //
     // INPUT QUE LO PONE EN ROJO: escribir `"none"` de arranque (el código anterior a esta HU).
     montar([]);
     expect(solanaWalletBridge.getWalletAvailability()).toBe("unknown");
-    expect(solanaWalletBridge.getWalletAvailability()).not.toBe("none");
   });
 });

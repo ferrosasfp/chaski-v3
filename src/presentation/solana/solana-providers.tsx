@@ -22,22 +22,41 @@ import "@solana/wallet-adapter-react-ui/styles.css";
  * igual, porque el efecto A corrige en cuanto llega el alta. Nada acá afirma que 1500 sea "el valor
  * correcto".
  *
- * 🔴 Y ACOTAR NO ES CERRAR: ESTA CONSTANTE NO ELIMINA EL DESTELLO DEL AVISO. Sólo lo evita para las
- * altas que llegan ANTES de que la gracia venza. Para CUALQUIER alta posterior el destello sigue
- * entero: el aviso se pinta y después se va. Y no hace falta una sonda aparte para verlo, es lo que
- * asierta `T-341-11` en `solana-providers.test.tsx`: avanza el reloj a 1500 (⇒ `"none"`, o sea el
- * aviso YA está en pantalla), y SÓLO DESPUÉS hace llegar el alta (⇒ `"injected"`). Con una wallet que
- * aparece a t=1600 la persona lee "no vemos ninguna wallet" y después el cartel desaparece. Lo que
- * 1500 compra es que el destello dure 0 ms cuando la detección cae en el primer tick (t=1000), contra
- * los 1000 ms que duraba SIEMPRE antes de esta HU.
+ * 🔴 QUÉ HACE ESTA CONSTANTE, EN UN NÚMERO QUE SE PUEDE FALSIFICAR: **acorta el destello del aviso en
+ * hasta 1500 ms**, y lo elimina por completo cuando el alta llega dentro de la gracia. No lo cierra
+ * para siempre, y tampoco "lo deja entero": las dos lecturas extremas son falsas.
  *
- * O sea, y que el resumen diga lo mismo que la línea: lo que esta HU ELIMINÓ es el camino que
- * afirmaba `"none"` en el PRIMER render sin haber medido nada. Lo que queda es un NÚMERO, y lo único
- * que lo reinicia es el MONTAJE del árbol de providers.
+ * La cuenta, con `T` = el instante en que la wallet queda disponible:
+ *   · Antes de esta HU el aviso se pintaba desde el primer efecto, así que el destello duraba `T`.
+ *   · Ahora `"none"` no se escribe hasta 1500, así que dura `max(0, T - 1500)`.
+ *   · La mejora es `min(T, 1500)`: con `T=800` el destello pasa de 800 ms a **0**; con `T=1600` pasa de
+ *     1600 ms a **100 ms**. Nunca empeora.
  *
- * De dónde sale el número, medido: la detección de Phantom es `setInterval(detectAndDispose, 1000)`
- * (node_modules/@solana/wallet-adapter-base/lib/cjs/adapter.js:92), o sea primer tick en t=1000.
- * 1500 deja 500 ms de holgura.
+ * ⚠️ Y `T` NO ES "el tick de 1000 ms". `scopePollingDetectionStrategy` tiene CUATRO estrategias, no
+ * una (node_modules/@solana/wallet-adapter-base/lib/cjs/adapter.js:76-109): el `setInterval` de 1000
+ * (:92), `DOMContentLoaded` (:98), `load` (:105) y **una detección SÍNCRONA, ya (:109)**. `T` es el
+ * MÍNIMO entre esas cuatro y el `register` de Wallet Standard. Leer sólo `:76-99` corta justo antes de
+ * las dos que cambian la conclusión, y de ahí salía el número falso de "1000 ms siempre".
+ *
+ * El caso que más importa: `PhantomWalletAdapter` corre esa estrategia EN SU CONSTRUCTOR
+ * (node_modules/@solana/wallet-adapter-phantom/lib/cjs/adapter.js:74-80), y el constructor corre en
+ * (`PhantomWalletAdapter`, `:212`), o sea **durante el render y antes de todo efecto**. Si la API ya
+ * está inyectada en ese instante, la estrategia #4 la detecta síncronamente y `T = 0`: ahí el aviso no
+ * se mostraba ni antes ni ahora. Por eso "antes duraba 1000 ms SIEMPRE" era falso.
+ *
+ * EL RESIDUO QUE SIGUE EXISTIENDO, dicho sin adornos: para un alta POSTERIOR a la gracia el aviso **se
+ * muestra y después se corrige**, y eso es visible. Lo que la HU eliminó es el camino que afirmaba
+ * `"none"` en el PRIMER render sin haber medido nada; lo que queda es un número, y lo único que lo
+ * reinicia es el MONTAJE del árbol de providers.
+ *
+ * Las dos patas están medidas por dos tests distintos, y hacen falta las dos: `T-341-11`
+ * (`solana-providers.test.tsx`) prueba el VALOR —a 1500 el bridge dice `"none"`, y sólo después del
+ * alta `"injected"`—, y (`T-UI-1`, `wallet-availability.test.tsx:179`) prueba la PANTALLA —con
+ * `"unknown"` el aviso NO está en el DOM, con `"none"` sí—, que es lo que hace observable el guard de
+ * `flow.tsx:1111`. `T-341-11` no renderiza `NoWalletHere`, así que por sí solo NO prueba la pantalla.
+ *
+ * De dónde sale el 1500: el tick del `setInterval` es 1000, así que 1500 deja 500 ms de holgura sobre
+ * la estrategia más lenta de las cuatro. Es holgura sobre UNA de las cuatro, no una cota de `T`.
  *
  * ⚠️ NO la unifiques con el poll de 1500 ms del seguimiento (`flow.tsx:525`). Coinciden en el número
  * y no tienen nada que ver: ése mide cada cuánto se le pregunta al backend por una remesa viva.

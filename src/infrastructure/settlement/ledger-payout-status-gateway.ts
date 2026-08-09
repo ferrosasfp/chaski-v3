@@ -67,9 +67,48 @@ function noSe(payoutId: string, porQue: string): PayoutRecord {
   };
 }
 
+/**
+ * 🔴 LA CLAVE DEL MEMO, Y EL TIPO ES EL MECANISMO (AR/BLQ-ALTO-1).
+ *
+ * Acá había **un solo casillero sin clave** (`private ultima: {rec, atMs} | null`), y el throttle
+ * devolvía ese record a CUALQUIER `status()` que llegara dentro de los 20 s. Consecuencia MEDIDA, con
+ * una sola instancia del gateway —que es como la cablea `container.ts:127`— y un tick de 1,5 s de la
+ * pantalla en el medio:
+ *
+ *     track.execute({remittanceId:"R1"})  → R1 settled "transfi"     (el ledger dice known/settled)
+ *     reloj.avanzar(1500)
+ *     track.execute({remittanceId:"R2"})  → R2 settled "transfi"  ← HEREDADO, fetches=1
+ *     RecoverEscrowFunds({remittanceId:"R2"}) → refund_not_available
+ *
+ * O sea: una remesa cuyo payout NO se liquidó quedaba en `settled`, que no está en `RECOVERABLE`
+ * (`RECOVERABLE`, `../../application/use-cases/recover-escrow-funds.ts:40`) y no tiene transición de
+ * salida ⇒ **el remitente perdía para siempre el camino a sus USDC mientras la pantalla decía
+ * "Entregado"**. Y no venía de una rama de error, que es todo lo que el resto de esta clase blinda:
+ * venía del CACHÉ.
+ *
+ * ⛔ POR QUÉ NO ES UN `if` MÁS. Un memo indexado "acordándose" de comparar el `payoutId` depende de que
+ * el próximo que lo toque se acuerde. Así que la clave es un tipo BRANDEADO que **sólo** `claveDe()`
+ * puede construir: `Map<ClaveLectura, …>` no acepta un `string` pelado, así que **indexar el memo con
+ * un `payoutId` a secas no compila**. Es el patrón estructural de WKH-338 (el invariante como
+ * obligación del tipo) aplicado al caché.
+ *
+ * Y la clave lleva la ADDRESS además del `payoutId`, porque el defecto tenía una segunda cara medida:
+ * el chequeo de billetera estaba DESPUÉS del throttle, así que cambiar de wallet devolvía el record de
+ * la anterior (`A=settled B=settled fetches=1`). Que la address sea parte de la clave obliga a
+ * resolverla ANTES de consultar el memo — el orden ya no es una convención, es una dependencia de datos.
+ */
+declare const CLAVE_LECTURA: unique symbol;
+type ClaveLectura = string & { readonly [CLAVE_LECTURA]: true };
+/** El ÚNICO constructor de una clave. `\u0000` no puede aparecer en una address base58 ni en un
+ *  payout_id, así que no hay dos pares distintos que colisionen en la misma clave. */
+function claveDe(address: string, payoutId: string): ClaveLectura {
+  return `${address}\u0000${payoutId}` as ClaveLectura;
+}
+
 export class LedgerPayoutStatusGateway implements PayoutGateway {
-  /** Último desenlace leído + cuándo, para el throttle. `null` = todavía no se leyó nada. */
-  private ultima: { readonly rec: PayoutRecord; readonly atMs: number } | null = null;
+  /** Lo último leído POR (address, payoutId). Un `Map` y no un campo: el throttle es por payout, no
+   *  global. Se poda al escribir, así que no crece más allá de los payouts vivos de la sesión. */
+  private readonly memo = new Map<ClaveLectura, { readonly rec: PayoutRecord; readonly atMs: number }>();
 
   constructor(
     private readonly wallet: Pick<WalletPort, "getAddress">,
@@ -90,16 +129,24 @@ export class LedgerPayoutStatusGateway implements PayoutGateway {
 
   async status(payoutId: string): Promise<PayoutRecord> {
     const ahoraMs = Date.parse(this.clock.nowIso());
-    // 1 · THROTTLE. Se devuelve la última respuesta si todavía no pasó el intervalo. Un reloj ilegible
-    // (NaN) NO abre la compuerta: `NaN - x < y` es `false`, así que cae a leer de nuevo, que es el lado
-    // conservador (peor rendimiento, nunca un dato viejo presentado como nuevo).
-    if (this.ultima !== null && ahoraMs - this.ultima.atMs < LEDGER_STATUS_MIN_INTERVAL_MS) {
-      return this.ultima.rec;
-    }
 
-    // 2 · Sin billetera conectada no hay a quién preguntarle por SU payout. No-terminal.
+    // 1 · LA BILLETERA, ANTES DEL THROTTLE (AR/BLQ-ALTO-1). El orden ya no es una convención: la address
+    // es parte de la clave del memo, así que sin resolverla no hay nada que consultar. Leer el bridge NO
+    // toca la red, NO abre el modal y NO pide ninguna firma (`getConnectedAddress`,
+    // `../solana-wallet.ts:233`), así que adelantarlo no cuesta nada por tick.
+    // Sin billetera conectada no hay a quién preguntarle por SU payout ⇒ no-terminal, y **sin clave no
+    // se puede memoizar**: el tipo lo impide, que es justo lo que se quería.
     const address = await this.wallet.getAddress().catch(() => null);
     if (!address) return noSe(payoutId, "payout_status_no_wallet");
+    const clave = claveDe(address, payoutId);
+
+    // 2 · THROTTLE, POR CLAVE. Se devuelve lo último leído PARA ESTE payout Y ESTA address. Un reloj
+    // ilegible (NaN) NO abre la compuerta: `NaN - x < y` es `false`, así que cae a leer de nuevo, que es
+    // el lado conservador (peor rendimiento, nunca un dato viejo presentado como nuevo).
+    const memo = this.memo.get(clave);
+    if (memo !== undefined && ahoraMs - memo.atMs < LEDGER_STATUS_MIN_INTERVAL_MS) {
+      return memo.rec;
+    }
 
     // 3 · La prueba se LEE. ⛔ ACÁ NO SE PIDE NADA: no hay `prove` que llamar (ver el docblock).
     // Sin prueba —o con la ventana de 8 min vencida— el seguimiento simplemente NO LEE, y la remesa se
@@ -122,31 +169,40 @@ export class LedgerPayoutStatusGateway implements PayoutGateway {
     } catch {
       // La red falló. Eso NO dice nada del payout. ⛔ Tratarlo como `failed` false-refundearía un pago
       // que pudo ser exitoso (M5).
-      return this.recordar(noSe(payoutId, "payout_status_unreachable"), ahoraMs);
+      return this.recordar(clave, noSe(payoutId, "payout_status_unreachable"), ahoraMs);
     }
 
     // 4 · Desenlaces SEPARADOS y no colapsados, misma forma que
     // `../refund/http-solana-remittance-id-resolver.ts:38-40`. Los tres son causas distintas: uno es
     // config nuestra, otro es la prueba, el tercero es la base. Ninguno es un desenlace del payout.
-    if (res.status === 501) return this.recordar(noSe(payoutId, "payout_status_not_enabled"), ahoraMs);
-    if (res.status === 403) return this.recordar(noSe(payoutId, "payout_status_unverified"), ahoraMs);
-    if (res.status === 429) return this.recordar(noSe(payoutId, "payout_status_rate_limited"), ahoraMs);
-    if (!res.ok) return this.recordar(noSe(payoutId, "payout_status_unavailable"), ahoraMs);
+    if (res.status === 501) return this.recordar(clave, noSe(payoutId, "payout_status_not_enabled"), ahoraMs);
+    if (res.status === 403) return this.recordar(clave, noSe(payoutId, "payout_status_unverified"), ahoraMs);
+    if (res.status === 429) return this.recordar(clave, noSe(payoutId, "payout_status_rate_limited"), ahoraMs);
+    if (!res.ok) return this.recordar(clave, noSe(payoutId, "payout_status_unavailable"), ahoraMs);
 
     let payout: PayoutOutcomeLookup | undefined;
     try {
       payout = ((await res.json()) as { payout?: PayoutOutcomeLookup }).payout;
     } catch {
       // 200 con un body ilegible: el server contestó, pero no entendemos qué. No-terminal.
-      return this.recordar(noSe(payoutId, "payout_status_unreadable"), ahoraMs);
+      return this.recordar(clave, noSe(payoutId, "payout_status_unreadable"), ahoraMs);
     }
     // Un `outcome` que este cliente no reconoce cuenta como "no sé". ⛔ NO se asume `known` por
     // ausencia de campo (M6): eso convertiría un cambio de contrato en un `settled` fabricado.
     if (payout?.outcome !== "known") {
-      return this.recordar(noSe(payoutId, "payout_status_unknown"), ahoraMs);
+      return this.recordar(clave, noSe(payoutId, "payout_status_unknown"), ahoraMs);
     }
     if (payout.status !== "settled" && payout.status !== "failed") {
-      return this.recordar(noSe(payoutId, "payout_status_unknown"), ahoraMs);
+      return this.recordar(clave, noSe(payoutId, "payout_status_unknown"), ahoraMs);
+    }
+    // 🔴 AR/MNR-1 — Y EL `provenance` TAMBIÉN SE VALIDA, porque defender dos de los tres campos y no el
+    // tercero es la asimetría que abre la puerta. MEDIDO con
+    // `{"outcome":"known","status":"settled","provenance":123}`: el número viajaba tal cual al agregado,
+    // y `isPayoutDemo(123)` es `true` (`123 != null` ✓ y `!has(123)` ✓) ⇒ **banner "Modo demo" sobre una
+    // remesa REAL y liquidada**. Es DT-6 otra vez, por otra puerta: no por el `""` sino por el tipo.
+    // Un `provenance` que no es un string no es una proveniencia ⇒ no sabemos de qué desembolso habla.
+    if (typeof payout.provenance !== "string" || payout.provenance.length === 0) {
+      return this.recordar(clave, noSe(payoutId, "payout_status_unknown"), ahoraMs);
     }
 
     // 5 · EL ÚNICO camino a un terminal, y llega con evidencia server-side verificada.
@@ -163,6 +219,7 @@ export class LedgerPayoutStatusGateway implements PayoutGateway {
     // 🔴 `provenance` es LA DE LA FILA, jamás `""` (DT-6). La ruta sólo la devuelve cuando está en la
     // allowlist de proveniencias reales, así que este valor no puede prender el banner de demo.
     return this.recordar(
+      clave,
       {
         payoutId,
         status: payout.status,
@@ -177,9 +234,19 @@ export class LedgerPayoutStatusGateway implements PayoutGateway {
 
   /** Memoiza para el throttle. Se cachean TAMBIÉN los no-terminales a propósito: si no, un ledger caído
    *  o una prueba ausente harían que cada tick de 1,5 s reintentara, que es exactamente el patrón de
-   *  tráfico que el throttle existe para evitar. */
-  private recordar(rec: PayoutRecord, atMs: number): PayoutRecord {
-    this.ultima = { rec, atMs };
+   *  tráfico que el throttle existe para evitar.
+   *
+   *  🔴 EL PRIMER PARÁMETRO ES LA CLAVE Y ES OBLIGATORIO (AR/BLQ-ALTO-1). No se puede memoizar "lo
+   *  último" sin decir DE QUÉ: `ClaveLectura` sólo la construye `claveDe(address, payoutId)`, así que
+   *  guardar un record sin atarlo a su payout y a su dueño **no compila**. Antes esto era
+   *  `recordar(rec, atMs)` sobre un único casillero, y ahí vivía el bug. */
+  private recordar(clave: ClaveLectura, rec: PayoutRecord, atMs: number): PayoutRecord {
+    // Poda de lo vencido ANTES de escribir: el Map no puede crecer indefinidamente en una sesión larga,
+    // y una entrada vencida no le sirve a nadie (el throttle ya la descartaría al leerla).
+    for (const [k, v] of this.memo) {
+      if (atMs - v.atMs >= LEDGER_STATUS_MIN_INTERVAL_MS) this.memo.delete(k);
+    }
+    this.memo.set(clave, { rec, atMs });
     return rec;
   }
 }

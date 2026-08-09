@@ -138,6 +138,24 @@ describe("T-337.2 (AC-2): toda degradación cae al NO-TERMINAL, jamás a settled
     expect(rec.status).toBe("submitted");
   });
 
+  // 🔴 AR/MNR-1 — el `provenance` se valida IGUAL que el `outcome` y el `status`. Defender dos de los
+  // tres campos y no el tercero es la asimetría que abre la puerta, y la puerta da al mismo lugar que
+  // DT-6: `isPayoutDemo(123)` es `true` (`123 != null` ✓ y `!has(123)` ✓), así que un `provenance`
+  // numérico propagado al agregado prendería "Modo demo" sobre una remesa REAL y liquidada.
+  it("AR/MNR-1: un `provenance` que no es un string no-vacío ⇒ no-terminal, y NO se propaga", async () => {
+    for (const provenance of [123, null, undefined, "", true, {}, ["transfi"]]) {
+      stubFetch(async () => ok({ payout: { outcome: "known", status: "settled", provenance } }));
+      const rec = await gateway({}).status(PAYOUT);
+      expect(rec.status, `provenance=${JSON.stringify(provenance)}`).toBe("submitted");
+      expect(typeof rec.provenance, "el record siempre lleva una proveniencia STRING").toBe("string");
+      expect(rec.provenance).not.toBe("");
+      // Y lo que importa de verdad: lo que llegue al agregado no puede encender el banner de demo por
+      // ser de un tipo que nadie validó.
+      expect(rec.provenance).not.toBe(provenance);
+      vi.unstubAllGlobals();
+    }
+  });
+
   // M6 · un contrato que cambia no puede convertirse en un settled fabricado.
   it("M6: un body 200 SIN la clave `payout`, o con un `outcome` desconocido, es no-terminal", async () => {
     for (const body of [{}, { payout: null }, { payout: { outcome: "quizas" } }, { payout: { outcome: "known" } }, { payout: { outcome: "known", status: "en_camino", provenance: "transfi" } }]) {
@@ -231,6 +249,93 @@ describe("T-337.10: el throttle de 20 s (el poll tiene tick de 1,5 s)", () => {
     proof = PROOF; // el gesto
     reloj.avanzar(1500); // MENOS que el throttle
     expect((await gw.status(PAYOUT)).status).toBe("settled");
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── 🔴 AR/BLQ-ALTO-1 · LO MEMOIZADO PERTENECE A LO QUE SE PIDIÓ ─────────────────────────────────────
+//
+// LA PROPIEDAD QUE NO ESTABA ASERTADA EN NINGUNA PARTE, y por eso el bug pasó los cuatro tests de
+// T-337.10: todos usaban UN SOLO `payoutId`. Con un memo de un casillero sin clave, el throttle devolvía
+// el record de la remesa anterior a la siguiente que preguntara dentro de los 20 s.
+//
+// El daño MEDIDO, al nivel del use-case y con UNA instancia (como la cablea `container.ts:127`):
+//   R1 → known/settled ⇒ R1 `settled`; un tick de 1500 ms; R2 → unknown/not_terminal ⇒ **R2 `settled`**,
+//   `fetches=1`, y `RecoverEscrowFunds({R2})` ⇒ `refund_not_available`. O sea el remitente de R2 se
+//   quedaba sin camino a sus USDC PARA SIEMPRE, con la pantalla diciendo "Entregado".
+//
+// ⛔ Estos dos `it` son el candado de esa propiedad. El mutante que saca cualquiera de los dos
+// componentes de la clave (`payoutId` o `address` en `claveDe`) tiene que ponerlos ROJOS.
+describe("AR/BLQ-ALTO-1: el memo del throttle está indexado por (address, payoutId)", () => {
+  it("dos payoutId DISTINTOS contra UNA instancia: el segundo NO hereda el desenlace del primero", async () => {
+    const reloj = new RelojFijo();
+    // El doble contesta SEGÚN el payoutId que se le pide: si el gateway no discrimina, el segundo
+    // `status()` devuelve el record del primero sin que el doble se entere.
+    const f = vi.fn(async (_u: string, init?: RequestInit) => {
+      const { payoutId } = JSON.parse(String((init as RequestInit).body)) as { payoutId: string };
+      return payoutId === "payout-A"
+        ? ok({ payout: { outcome: "known", status: "settled", provenance: "transfi" } })
+        : ok({ payout: { outcome: "unknown", reason: "not_terminal" } });
+    });
+    vi.stubGlobal("fetch", f);
+    const gw = gateway({ reloj });
+
+    expect((await gw.status("payout-A")).status).toBe("settled");
+    reloj.avanzar(1500); // UN tick del `setInterval` de la pantalla, MUY por debajo del throttle
+    const b = await gw.status("payout-B");
+
+    expect(
+      b.status,
+      "el segundo payout HEREDÓ el desenlace del primero: el memo no está indexado, y un `settled` " +
+        "heredado es irreversible (no está en RECOVERABLE)",
+    ).toBe("submitted");
+    expect(b.payoutId).toBe("payout-B"); // y el record habla del payout que se pidió
+    expect(f, "cada payout distinto tiene que producir su propia lectura").toHaveBeenCalledTimes(2);
+    vi.unstubAllGlobals();
+  });
+
+  it("dos ADDRESSES distintas contra UNA instancia: cambiar de billetera no devuelve el record de la anterior", async () => {
+    // La segunda cara del defecto: el chequeo de billetera estaba DESPUÉS del throttle, así que el
+    // record de la wallet A se devolvía a la wallet B. Hoy la address es parte de la clave, y por eso
+    // hay que resolverla ANTES de consultar el memo.
+    const reloj = new RelojFijo();
+    const OTRA = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+    const f = vi.fn(async (_u: string, init?: RequestInit) => {
+      const { sender } = JSON.parse(String((init as RequestInit).body)) as { sender: string };
+      return sender === ADDR
+        ? ok({ payout: { outcome: "known", status: "settled", provenance: "transfi" } })
+        : ok({ payout: { outcome: "unknown", reason: "no_row" } });
+    });
+    vi.stubGlobal("fetch", f);
+    let quien = ADDR;
+    const gw = new LedgerPayoutStatusGateway(
+      { getAddress: async () => quien },
+      lector(PROOF),
+      reloj,
+    );
+
+    expect((await gw.status(PAYOUT)).status).toBe("settled");
+    quien = OTRA; // la persona cambió de billetera en Phantom, sin recargar
+    reloj.avanzar(1500);
+
+    expect(
+      (await gw.status(PAYOUT)).status,
+      "la billetera nueva recibió el desenlace de la anterior: el memo ignora de quién era",
+    ).toBe("submitted");
+    expect(f).toHaveBeenCalledTimes(2);
+    vi.unstubAllGlobals();
+  });
+
+  it("y el throttle SIGUE funcionando por clave: el MISMO par (address, payoutId) no re-lee", async () => {
+    // El control que impide "arreglarlo" borrando el memo: si esto se pone rojo, volvieron los 400
+    // requests por sesión.
+    const reloj = new RelojFijo();
+    const f = stubFetch(async () => ok({ payout: { outcome: "unknown", reason: "not_terminal" } }));
+    const gw = gateway({ reloj });
+    for (let i = 0; i < 10; i++) {
+      await gw.status(PAYOUT);
+      reloj.avanzar(1500);
+    }
     expect(f).toHaveBeenCalledTimes(1);
   });
 });

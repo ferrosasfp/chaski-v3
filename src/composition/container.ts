@@ -18,12 +18,12 @@ import { ResumeKyc } from "../application/use-cases/resume-kyc";
 import { StartKyc } from "../application/use-cases/start-kyc";
 import { TrackRemittance } from "../application/use-cases/track-remittance";
 import type {
-  PopSigner,
-  SolanaCloseableEscrowLister,
+  PopProofRecorder, PopSigner, SolanaCloseableEscrowLister,
   SolanaEscrowRefundGateway as SolanaEscrowRefundPort,
 } from "../application/ports";
-import { A2aPayoutGateway, A2aQuoteGateway } from "../infrastructure/a2a/gateways";
+import { A2aQuoteGateway } from "../infrastructure/a2a/gateways";
 import { HttpPopSigner } from "../infrastructure/auth/http-pop-signer";
+import { InMemoryPopProofStore } from "../infrastructure/auth/pop-proof-store";
 import { HttpKycVerdictGateway } from "../infrastructure/kyc/http-kyc-verdict-gateway";
 import {
   resolveSolanaFacilitatorPubkey,
@@ -31,10 +31,10 @@ import {
 } from "../infrastructure/chain";
 import { DiditKycGateway } from "../infrastructure/didit/kyc-gateway";
 import {
-  FallbackKycGateway,
-  FallbackPayoutGateway,
-  FallbackQuoteGateway,
+  FallbackKycGateway, // WKH-337/R-2: los dos *PayoutGateway* de este módulo y del de a2a quedaron sin
+  FallbackQuoteGateway, // consumidor de producción y NO se borran — sus docblocks lo dicen (AC-6).
 } from "../infrastructure/fallback/gateways";
+import { LedgerPayoutStatusGateway } from "../infrastructure/settlement/ledger-payout-status-gateway";
 import { LocalKycPendingStore } from "../infrastructure/kyc-pending-store";
 import { LedgerRefundGateway } from "../infrastructure/refund/ledger-refund-gateway";
 import { HttpSolanaRemittanceIdResolver } from "../infrastructure/refund/http-solana-remittance-id-resolver";
@@ -85,8 +85,8 @@ export interface Container {
 // construcción del PopSigner: `lazyPop.prove` recién se evalúa en tiempo de refund, cuando `adapter` ya
 // existe. Es el mismo wallet que firma el PoP y el que refundea — condición del endpoint, que exige que
 // el challenge sea de la MISMA address que pide sus ids.
-function createSolanaWallet(): SolanaWalletAdapter {
-  const lazyPop: PopSigner = { prove: (address) => new HttpPopSigner(adapter).prove(address) };
+function createSolanaWallet(proofs: PopProofRecorder): SolanaWalletAdapter { // WKH-337: el observador
+  const lazyPop: PopSigner = { prove: (a) => new HttpPopSigner(adapter, proofs).prove(a) }; // ídem
   const adapter: SolanaWalletAdapter = new SolanaWalletAdapter(
     new HttpSolanaRemittanceIdResolver(lazyPop),
   );
@@ -103,9 +103,9 @@ export function createContainer(): Container {
   const repo = new LocalRepo();
   const kycStore = new LocalKycStore();
   const kycPending = new LocalKycPendingStore();
-  // Flag de composición value-delivery (WKH-186/AC-1/AC-2, DT-4): un solo flag cablea quote+payout
-  // (evita quote-real + payout-mock). Default "fallback" → demo byte-idéntico (mock).
-  //
+  const popProofs = new InMemoryPopProofStore(clock); // WKH-337: OBSERVA las pruebas PoP de los gestos
+  // La wallet es SIEMPRE el SolanaWalletAdapter: no hay selección posible, y por eso no hay ternario.
+  const wallet = createSolanaWallet(popProofs);
   // WKH-332/AC-3: el valor NO se compara crudo. Con la env en "a2a-gatewayy" la comparación directa
   // daba `false` ⇒ se cableaban los Fallback*Gateway (los simuladores) sin que nada fallara. Ahora
   // pasa por la unión cerrada y un valor no reconocido TIRA acá. La lectura de `process.env` queda
@@ -124,7 +124,7 @@ export function createContainer(): Container {
   // Server-truth: SIEMPRE el gateway Didit, con la simulación como fallback. Si el server tiene
   // key → Didit real; si no (501) → simulación. No depende del inlineado NEXT_PUBLIC del cliente.
   const kyc = new DiditKycGateway(new FallbackKycGateway());
-  const payouts = useA2a ? new A2aPayoutGateway() : new FallbackPayoutGateway();
+  const payouts = new LedgerPayoutStatusGateway(wallet, popProofs, clock); // WKH-337/AC-6, ver `:136`
   // 🔴 WKH-333/DT-20 — acá se construía `payoutAuthority = new HttpPayoutAuthorityGateway()` y se
   // inyectaba en `ConfirmAndSend`. Ese pre-check se eliminó: el cliente ya no tiene el
   // `verificationId`, y la re-consulta que importa la hace `/api/payout/prepare` server-side, detrás
@@ -133,8 +133,8 @@ export function createContainer(): Container {
   // borrarlos agrandaría el diff de una HU de money-path sin cerrar nada. Lo que queda es un adapter
   // sin consumidor de producción, y eso está escrito acá para que se vea.
   const refund = new LedgerRefundGateway(); // refund-on-failure ledger-only (WKH-186/AC-8, CD-8)
-  // La wallet es SIEMPRE el SolanaWalletAdapter: no hay selección posible, y por eso no hay ternario.
-  const wallet = createSolanaWallet();
+  // 🔴 WKH-337/AC-6 — la bandera (`adapter`, `:114`) cablea la COTIZACIÓN y nada del seguimiento: default "fallback" ⇒ demo byte-idéntico. Acá decía que "un solo flag cablea quote+payout", y era falso.
+  // `payouts` (`:127`) NO cuelga de ninguna bandera y no hay ternario A PROPÓSITO: las dos implementaciones viejas eran CIEGAS, así que el flag nunca discriminó nada observable. Sin evidencia server-side verificada NUNCA fabrica un desenlace terminal.
   // HU-SOL-13 (WKH-216) — guard fail-loud money-path Solana. Con el flag ON exige mint+facilitator
   // configurados (client-safe, NEXT_PUBLIC_); la release-authority se resuelve SERVER-SIDE (nunca en
   // el bundle browser, CD-6). Flag OFF → nunca entra acá.
@@ -158,7 +158,7 @@ export function createContainer(): Container {
   // gasless para el remitente (el fee lo paga el facilitator, el rent de las cuentas del escrow no).
   const solana = solanaSettleOn
     ? {
-        prepare: new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet)),
+        prepare: new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet, popProofs)),
         gateway: new HttpSolanaSettlementGateway(),
         probe: wallet,
         senderBalance: wallet,
@@ -182,7 +182,7 @@ export function createContainer(): Container {
     // NINGÚN camino real y toda persona ya verificada llega a `prepare` sin fila. Por eso tiene test
     // propio en `container.test.ts` (T-CABLE-1), que ejercita el `connectWallet` QUE ESTA LÍNEA
     // DEVUELVE. Es el MISMO HttpPopSigner sobre la MISMA wallet que ya usan el prepare y el refund.
-    connectWallet: new ConnectWallet(wallet, kycStore, new HttpKycVerdictGateway(new HttpPopSigner(wallet))),
+    connectWallet: new ConnectWallet(wallet, kycStore, new HttpKycVerdictGateway(new HttpPopSigner(wallet, popProofs))),
     startKyc: new StartKyc(kyc, kycStore, kycPending, repo, clock),
     resumeKyc: new ResumeKyc(kyc, kycStore, kycPending, repo, clock),
     lockQuote: new LockQuote(quotes, repo, clock),

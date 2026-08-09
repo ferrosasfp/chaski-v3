@@ -478,7 +478,7 @@ export interface SolanaRemittanceIdResolver {
    * confusión sin que nada en el tipo la señalara. Mientras el método existió, escribir un doble ciego
    * era gratis (`{ listBySender: async () => [] }` compilaba) y escribir uno honesto era imposible.
    *
-   * El tipo que separa los tres es (`RemittanceIdLookup`, `:432`), acá arriba, y su docblock dice
+   * El tipo que separa los tres es (`RemittanceIdLookup`, `:467`), acá arriba, y su docblock dice
    * cuáles son y por qué las tres degradaciones son más probables que un fallo de red.
    *
    * Lo verificable hoy: en esta interfaz no quedó ningún método capaz de expresar el colapso, así que

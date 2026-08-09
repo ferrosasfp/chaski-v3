@@ -751,26 +751,28 @@ export class FakeSettlementLedger implements SettlementLedger {
       (r) => r.payoutId === input.payoutId && r.senderAddress === owner,
     );
     if (rows.length === 0) return { outcome: "unknown", reason: "no_row" };
-    const terminales = rows.filter((r) => r.status === "settled" || r.status === "failed");
-    const candidatas = terminales.filter((r) =>
-      REAL_PAYOUT_PROVENANCES.has(r.payoutProvenance ?? ""),
-    );
-    if (candidatas.length === 0) {
+    // MISMA forma que el ledger real (un solo recorrido, sin índices): si las dos divergieran, el doble
+    // dejaría de ser un espejo y los tests aprobarían un comportamiento que producción no tiene.
+    let hayTerminal = false;
+    let desenlace: "settled" | "failed" | null = null;
+    let provenance = "";
+    let discordan = false;
+    for (const r of rows) {
+      const st = r.status === "settled" ? "settled" : r.status === "failed" ? "failed" : null;
+      if (st === null) continue;
+      hayTerminal = true;
+      const p = r.payoutProvenance ?? "";
+      if (!REAL_PAYOUT_PROVENANCES.has(p)) continue;
+      if (desenlace !== null && desenlace !== st) discordan = true;
+      desenlace = st;
+      provenance = p;
+    }
+    if (desenlace === null) {
       // Las DOS causas se distinguen: hay terminal pero sin proveniencia real, vs. nada terminal.
-      return {
-        outcome: "unknown",
-        reason: terminales.length > 0 ? "provenance_not_real" : "not_terminal",
-      };
+      return { outcome: "unknown", reason: hayTerminal ? "provenance_not_real" : "not_terminal" };
     }
-    const primera = candidatas[0]!;
-    if (candidatas.some((r) => r.status !== primera.status)) {
-      return { outcome: "unknown", reason: "conflicting_rows" };
-    }
-    return {
-      outcome: "known",
-      status: primera.status === "settled" ? "settled" : "failed",
-      provenance: primera.payoutProvenance ?? "",
-    };
+    if (discordan) return { outcome: "unknown", reason: "conflicting_rows" };
+    return { outcome: "known", status: desenlace, provenance };
   }
 
   async markOutcome(input: {

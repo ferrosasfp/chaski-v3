@@ -188,3 +188,135 @@ describe("TrackRemittance — guard (idempotencia)", () => {
     expect(refund.calls).toHaveLength(0);
   });
 });
+
+// ── WKH-337 · el use-case contra el gateway REAL que lee el ledger ───────────────────────────────────
+//
+// 🔴 POR QUÉ ACÁ VA EL GATEWAY REAL Y NO `FakePayoutGateway`. Lo que estos dos tests custodian no es el
+// use-case (no cambió ni una línea) sino la COMPOSICIÓN: qué termina escrito en el agregado cuando el
+// desenlace viene del ledger. Con un doble de payout habría que escribir a mano el `PayoutRecord`, y
+// entonces el test afirmaría lo que yo tipeé en vez de lo que el gateway produce — que es exactamente
+// donde vive DT-6.
+import { LedgerPayoutStatusGateway } from "../../infrastructure/settlement/ledger-payout-status-gateway";
+import { RecoverEscrowFunds } from "./recover-escrow-funds";
+import { FakeSolanaEscrowRefundGateway } from "../../test-support/fakes";
+import { isDemoMode, isPayoutDemo } from "../../presentation/flow-vm";
+import { afterEach, vi } from "vitest";
+
+const SENDER_337 = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+
+/** El gateway REAL, con la prueba ya observada y el `fetch` de la ruta stubeado. */
+function gatewayDelLedger(payout: unknown): LedgerPayoutStatusGateway {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => Response.json({ payout }, { status: 200 })),
+  );
+  return new LedgerPayoutStatusGateway(
+    { getAddress: async () => SENDER_337 },
+    { peek: () => ({ challenge: "ch", signature: "sig" }) }, // OBSERVADA: el lector no tiene `prove`
+    new FixedClock(),
+  );
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("TrackRemittance + el ledger (WKH-337)", () => {
+  // ── 🔴 T-337.6 (AC-5 / DT-6) — la trampa de `provenance: ""` ────────────────────────────────────────
+  it("T-337.6: un `settled` REAL vía ledger NO prende 'Modo demo', y la proveniencia es 'transfi'", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedSubmitted(repo);
+    const payouts = gatewayDelLedger({ outcome: "known", status: "settled", provenance: "transfi" });
+    const out = await new TrackRemittance(payouts, repo, new FixedClock(), new LedgerRefundGateway()).execute({
+      remittanceId: id,
+    });
+    expect(out.status).toBe("settled");
+    // El valor que quedó escrito en el agregado, no el que el gateway devolvió: `markSettled` PISA el
+    // campo con cualquier valor distinto de `undefined`.
+    expect(out.snapshot.payoutProvenance).toBe("transfi");
+    // 🔴 EL ASSERT QUE MATA M4. Con `provenance: ""` en la rama `known`, `isPayoutDemo("")` es `true`
+    // (`"" != null` ✓ y `!has("")` ✓) ⇒ una remesa REAL recién liquidada prendería el banner "Modo demo".
+    expect(isPayoutDemo(out.snapshot.payoutProvenance)).toBe(false);
+    expect(
+      isDemoMode(out.snapshot),
+      "la remesa se liquidó con evidencia REAL del proveedor y la pantalla diría 'Modo demo'",
+    ).toBe(false);
+    // Y `deliveredPen` sigue null: el webhook no trae el monto entregado, así que no se inventa ninguno
+    // (H-1 declarada — el recibo dice "tiene que recibir", que es cierto).
+    expect(out.snapshot.deliveredPen).toBeNull();
+  });
+
+  it("una remesa vieja (payout_provenance null ⇒ provenance_not_real) se queda EXACTAMENTE como hoy", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedSubmitted(repo);
+    const payouts = gatewayDelLedger({ outcome: "unknown", reason: "provenance_not_real" });
+    const out = await new TrackRemittance(payouts, repo, new FixedClock(), new LedgerRefundGateway()).execute({
+      remittanceId: id,
+    });
+    expect(out.status).toBe("payout_submitted"); // "Pago en curso", igual que antes de esta HU
+    // Y el campo NO se pisó con nada: la ausencia de dato sigue siendo ausencia de dato.
+    expect(out.snapshot.payoutProvenance).toBeNull();
+  });
+
+  // ── 🔴 T-337.4 (AC-4) — el `failed` real, y la remesa SIGUE recuperable ─────────────────────────────
+  it("T-337.4: known/failed ⇒ payout_failed, el refund corre, y la remesa sigue en RECOVERABLE", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedSubmitted(repo);
+    const payouts = gatewayDelLedger({ outcome: "known", status: "failed", provenance: "transfi" });
+    const refund = new FakeRefundGateway("no-receipt"); // el adapter real es ledger-only: no revierte nada
+    const out = await new TrackRemittance(payouts, repo, new FixedClock(), refund).execute({
+      remittanceId: id,
+    });
+    expect(out.status).toBe("payout_failed");
+    expect(out.snapshot.failureReason).toBe("payout_failed_provider");
+    expect(refund.calls).toHaveLength(1); // el credit-back se intentó en el MISMO execute()
+
+    // 🔴 EL ASSERT QUE IMPORTA, Y ES EJECUTABLE EN VEZ DE UNA AFIRMACIÓN SOBRE UNA LISTA. No se compara
+    // el estado contra `RECOVERABLE` (que no se exporta): se corre el use-case que consulta ese guard y
+    // se afirma que NO corta. Si `payout_failed` dejara de ser recuperable, esto tira
+    // `refund_not_available` y la persona se queda sin camino a sus USDC.
+    const recover = new RecoverEscrowFunds(repo, new FixedClock(), new FakeSolanaEscrowRefundGateway());
+    await expect(
+      recover.execute({ remittanceId: id, sender: SENDER_337 }),
+      "una remesa cuyo payout FALLÓ tiene que seguir pudiendo recuperar el principal del escrow",
+    ).resolves.toMatchObject({ confirmation: "confirmed" });
+  });
+
+  it("y un `settled` real, en cambio, YA NO es recuperable — y eso es correcto, no un bug", async () => {
+    // El proveedor le entregó los PEN al beneficiario; devolverle el principal al remitente después de
+    // eso sería un doble gasto contra quien adelantó el fiat. Este assert está acá para que nadie
+    // "arregle" la dirección inversa: es el par del de arriba.
+    const repo = new InMemoryRepo();
+    const id = await seedSubmitted(repo);
+    const payouts = gatewayDelLedger({ outcome: "known", status: "settled", provenance: "transfi" });
+    await new TrackRemittance(payouts, repo, new FixedClock(), new LedgerRefundGateway()).execute({
+      remittanceId: id,
+    });
+    const recover = new RecoverEscrowFunds(repo, new FixedClock(), new FakeSolanaEscrowRefundGateway());
+    await expect(recover.execute({ remittanceId: id, sender: SENDER_337 })).rejects.toThrow(
+      "refund_not_available",
+    );
+  });
+
+  it("un no-terminal del ledger NO llama al refund ni mueve el estado (fail-safe, CD-1)", async () => {
+    for (const payout of [
+      { outcome: "unknown", reason: "no_row" },
+      { outcome: "unknown", reason: "not_terminal" },
+      { outcome: "unknown", reason: "conflicting_rows" },
+      { outcome: "unknown", reason: "provenance_not_real" },
+    ]) {
+      const repo = new InMemoryRepo();
+      const id = await seedSubmitted(repo);
+      const refund = new FakeRefundGateway();
+      const out = await new TrackRemittance(
+        gatewayDelLedger(payout),
+        repo,
+        new FixedClock(),
+        refund,
+      ).execute({ remittanceId: id });
+      expect(out.status, `payout=${JSON.stringify(payout)}`).toBe("payout_submitted");
+      expect(refund.calls, "un 'no sé' no puede disparar un credit-back").toHaveLength(0);
+      vi.unstubAllGlobals();
+    }
+  });
+});

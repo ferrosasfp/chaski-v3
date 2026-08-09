@@ -99,10 +99,17 @@ function noSe(payoutId: string, porQue: string): PayoutRecord {
  */
 declare const CLAVE_LECTURA: unique symbol;
 type ClaveLectura = string & { readonly [CLAVE_LECTURA]: true };
-/** El ÚNICO constructor de una clave. `\u0000` no puede aparecer en una address base58 ni en un
- *  payout_id, así que no hay dos pares distintos que colisionen en la misma clave. */
-function claveDe(address: string, payoutId: string): ClaveLectura {
-  return `${address}\u0000${payoutId}` as ClaveLectura;
+/**
+ * El ÚNICO constructor de una clave. `\u0000` no puede aparecer en una address base58 ni en un
+ * payout_id, así que no hay dos pares distintos que colisionen en la misma clave.
+ *
+ * ⚠️ RECIBE UN OBJETO CON NOMBRES, no dos strings posicionales, y es deliberado: con `claveDe(a, b)`
+ * los dos parámetros son `string` y **`tsc` no puede distinguir un intercambio**. MEDIDO: el mutante
+ * `claveDe(payoutId, payoutId)` COMPILABA (lo cazó un test, pero compilaba). Con las propiedades
+ * nombradas, dejar la address afuera es un error de compilación y no un argumento mal puesto.
+ */
+function claveDe(de: { address: string; payoutId: string }): ClaveLectura {
+  return `${de.address}\u0000${de.payoutId}` as ClaveLectura;
 }
 
 export class LedgerPayoutStatusGateway implements PayoutGateway {
@@ -138,7 +145,7 @@ export class LedgerPayoutStatusGateway implements PayoutGateway {
     // se puede memoizar**: el tipo lo impide, que es justo lo que se quería.
     const address = await this.wallet.getAddress().catch(() => null);
     if (!address) return noSe(payoutId, "payout_status_no_wallet");
-    const clave = claveDe(address, payoutId);
+    const clave = claveDe({ address, payoutId });
 
     // 2 · THROTTLE, POR CLAVE. Se devuelve lo último leído PARA ESTE payout Y ESTA address. Un reloj
     // ilegible (NaN) NO abre la compuerta: `NaN - x < y` es `false`, así que cae a leer de nuevo, que es
@@ -237,7 +244,7 @@ export class LedgerPayoutStatusGateway implements PayoutGateway {
    *  tráfico que el throttle existe para evitar.
    *
    *  🔴 EL PRIMER PARÁMETRO ES LA CLAVE Y ES OBLIGATORIO (AR/BLQ-ALTO-1). No se puede memoizar "lo
-   *  último" sin decir DE QUÉ: `ClaveLectura` sólo la construye `claveDe(address, payoutId)`, así que
+   *  último" sin decir DE QUÉ: `ClaveLectura` sólo la construye `claveDe({ address, payoutId })`, así que
    *  guardar un record sin atarlo a su payout y a su dueño **no compila**. Antes esto era
    *  `recordar(rec, atMs)` sobre un único casillero, y ahí vivía el bug. */
   private recordar(clave: ClaveLectura, rec: PayoutRecord, atMs: number): PayoutRecord {

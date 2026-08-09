@@ -40,14 +40,25 @@ import "@solana/wallet-adapter-react-ui/styles.css";
  *
  * El caso que más importa: `PhantomWalletAdapter` corre esa estrategia EN SU CONSTRUCTOR
  * (node_modules/@solana/wallet-adapter-phantom/lib/cjs/adapter.js:74-80), y el constructor corre en
- * (`PhantomWalletAdapter`, `:212`), o sea **durante el render y antes de todo efecto**. Si la API ya
+ * (`PhantomWalletAdapter`, `:228`), o sea **durante el render y antes de todo efecto**. Si la API ya
  * está inyectada en ese instante, la estrategia #4 la detecta síncronamente y `T = 0`: ahí el aviso no
  * se mostraba ni antes ni ahora. Por eso "antes duraba 1000 ms SIEMPRE" era falso.
  *
  * EL RESIDUO QUE SIGUE EXISTIENDO, dicho sin adornos: para un alta POSTERIOR a la gracia el aviso **se
- * muestra y después se corrige**, y eso es visible. Lo que la HU eliminó es el camino que afirmaba
- * `"none"` en el PRIMER render sin haber medido nada; lo que queda es un número, y lo único que lo
- * reinicia es el MONTAJE del árbol de providers.
+ * muestra y después se corrige**, y eso es visible.
+ *
+ * ⚠️ Y SEAMOS EXACTOS CON EL MECANISMO, porque es fácil venderlo de más: **la rama que escribe
+ * `"none"` NO se borró**. Sigue viva en (`setWalletAvailability`, `:165`), gateada por
+ * `graciaVencidaRef`, que lo flipea el `setTimeout` de (`WALLET_GRACE_MS`, `:172`). Lo que se eliminó
+ * es la escritura **INCONDICIONAL** del primer render, no la rama.
+ *
+ * La prueba de que es una compuerta y no un borrado, y es medible en una línea: inicializar ese ref en
+ * `true` (`graciaVencidaRef`, `:159`) restaura el pre-HU **sin agregar ni quitar una sola rama**, y mata
+ * exactamente los mismos cuatro tests (T-341-8/9/10/13) que mata revertir la rama a mano. Dos mutantes
+ * distintos con el mismo conjunto de muertos son el mismo comportamiento.
+ *
+ * Así que lo que queda es un número con una compuerta, y lo único que reinicia la compuerta es el
+ * MONTAJE del árbol de providers.
  *
  * Las dos patas están medidas por dos tests distintos, y hacen falta las dos: `T-341-11`
  * (`solana-providers.test.tsx`) prueba el VALOR —a 1500 el bridge dice `"none"`, y sólo después del
@@ -56,7 +67,12 @@ import "@solana/wallet-adapter-react-ui/styles.css";
  * `flow.tsx:1111`. `T-341-11` no renderiza `NoWalletHere`, así que por sí solo NO prueba la pantalla.
  *
  * De dónde sale el 1500: el tick del `setInterval` es 1000, así que 1500 deja 500 ms de holgura sobre
- * la estrategia más lenta de las cuatro. Es holgura sobre UNA de las cuatro, no una cota de `T`.
+ * **la única de las cuatro que tiene cota de retardo conocida tras la inyección** (a lo sumo 1000 ms
+ * después de que la API aparezca, esté el documento como esté). Las otras tres NO están acotadas
+ * respecto de la inyección: la síncrona sólo sirve si la API ya estaba al construir el adapter, y
+ * `DOMContentLoaded` (:98) y `load` (:105) cuelgan del ciclo de vida del documento, no de la wallet —
+ * `load` espera todos los subrecursos y puede disparar mucho después de 1500. Así que 1500 **no es
+ * holgura sobre "la más lenta"**, que sería falso, ni una cota de `T`.
  *
  * ⚠️ NO la unifiques con el poll de 1500 ms del seguimiento (`flow.tsx:525`). Coinciden en el número
  * y no tienen nada que ver: ése mide cada cuánto se le pregunta al backend por una remesa viva.

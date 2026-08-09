@@ -336,7 +336,7 @@ export function lostEscrowRecoveryError(code: string, maxCandidates: number): st
   // salen todos de ese método ANTES de que exista una address con la que preguntarle nada al registro
   // (`connect`, `solana-wallet.ts:169`): `wallet_bridge_not_mounted` lo tira `openModal` si el árbol
   // de providers no montó; los otros cuatro rechazan `waitForConnection`, tres de ellos vía
-  // `walletErrorCode` desde el `onError` del provider (`failConnection`, `solana-providers.tsx:197`)
+  // `walletErrorCode` desde el `onError` del provider (`failConnection`, `solana-providers.tsx:213`)
   // e `invalid_address` desde el chequeo base58 del propio adapter.
   //
   // 🔴 EL POPUP BLOQUEADO VA APARTE, y no es cosmético: para esa causa "probá de nuevo en un rato" —lo

@@ -946,7 +946,7 @@ export const REVISION_SIN_FIRMA = "La firma no se completó. Podés intentar de 
  *  No promete que reintentar funcione, no culpa a nadie, y no afirma nada del vault.
  *
  *  ⚠️ Y NO REPITE VERBATIM la frase de `PayoutInProgress` ("Si preferís no esperar, podés recuperar tus
- *  USDC.", `flow.tsx:2329`), aunque nombre la misma acción. Mi primera versión la copiaba tal cual para
+ *  USDC.", `flow.tsx:2277`), aunque nombre la misma acción. Mi primera versión la copiaba tal cual para
  *  reusar copy ya vetada, y MEDIDO: `getByText` encontraba **dos** nodos, o sea que la pantalla le decía
  *  lo mismo dos veces en el mismo lugar. Reusar copy vetada es bueno; duplicarla en la misma vista no. */
 export const REVISION_TECHO_ALCANZADO =

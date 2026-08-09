@@ -84,7 +84,7 @@ export function usesRealGateways(adapter: ValueDeliveryAdapter): boolean {
  * Traduce el valor crudo de la env al adapter, o TIRA.
  *
  * `undefined` (env AUSENTE) ⇒ `"fallback"`: es el default documentado en `.env.example`
- * (*"unset/'fallback' (default) → Fallback gateways (demo, payout MOCK)"*).
+ * (*"unset/'fallback' (default) → COTIZACIÓN simulada"*; decía "payout MOCK" y WKH-337 lo volvió falso).
  *
  * `""` (env PRESENTE Y VACÍA) ⇒ TIRA, y la distinción con `undefined` no es cosmética: `vercel env
  * pull` escribe VACÍO lo que no puede leer, así que un `""` es una key que alguien escribió y quedó

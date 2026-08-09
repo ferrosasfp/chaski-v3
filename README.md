@@ -42,7 +42,7 @@ Where that stands today, in present tense:
 - **By capability is the only transport, and this flag does not switch it off.**
   `app/api/a2a/quote/route.ts:91-96` and `app/api/payout/prepare/route.ts:391-395` send a `capability`,
   plus a reputation floor on each leg, and let the gateway choose. `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`
-  picks two client adapters, the quote and the payout STATUS, and neither is the payout that moves money;
+  picks ONE client adapter, the quote; the payout STATUS no longer hangs off it (WKH-337 reads it from the ledger);
   these routes never read it. Drop the gateway URL or key and both answer 501 with no fetch.
 - **It is fail closed on purpose.** If the gateway does not answer, the operation stops. It never falls
   back to a direct call, because a silent fallback would create the payout order with a different agent

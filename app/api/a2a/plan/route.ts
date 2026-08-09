@@ -90,7 +90,7 @@ interface PlanStep {
    * campo junto con `runsTodayAgentId`; se cumplió la primera mitad y no la segunda, y el motivo es
    * falsable: `"fallback"` sigue siendo un valor legal de `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`, y con
    * él la COTIZACIÓN la arma un simulador local (`FallbackQuoteGateway`, `container.ts:123`). El otro
-   * adapter que cablea, `FallbackPayoutGateway`, NO ejecuta el payout: su único consumidor de producción
+   * adapter que cableaba, `FallbackPayoutGateway`, ya no se cablea (WKH-337): su consumidor de producción
    * pollea estado (`this.payouts`, `track-remittance.ts:47`). Sin este campo la tarjeta afirmaría *"corre
    * por el gateway, que elige al ejecutar"* mientras la cotización la da un mock: mide una cosa y afirma otra.
    *
@@ -115,13 +115,13 @@ interface PlanStep {
    *
    * ⚠️ Y ESTE CAMPO NO DICE NADA DEL SEGUIMIENTO POST-ENVÍO. Leerlo como si lo dijera es exactamente la
    * confusión que produjo WKH-337, así que queda escrito acá: el estado posterior cuelga de OTRA
-   * variable: el puerto de payouts, que lo cablea EL ADAPTER (`payouts`, `container.ts:127`) y que
+   * variable: el puerto de payouts, que NO lo cablea ninguna bandera (`payouts`, `container.ts:127`) y que
    * consume `TrackRemittance` (`trackRemittance`, `container.ts:196`).
    * Con `settle="true"` + `adapter="fallback"` este campo dice `"gateway"` en la entrega —y es cierto,
-   * el payout es real—, pero el `.status()` que lo pollea es el simulador
-   * (`this.payouts`, `track-remittance.ts:47`), que devuelve `"submitted"` no-terminal para siempre
-   * (`status`, `../../../../src/infrastructure/fallback/gateways.ts:123`), así que la remesa no
-   * transicionaría nunca a `settled`. Eso es WKH-337 y NO se corrige acá.
+   * el payout es real—. 🔴 ACÁ DECÍA que el `.status()` que lo pollea es el simulador y que "la remesa no
+   * transicionaría nunca a `settled`. Eso es WKH-337 y NO se corrige acá": las dos mitades eran ciertas
+   * hasta que WKH-337 las corrigió. Hoy lo pollea `LedgerPayoutStatusGateway`, que lee el desenlace del
+   * ledger (`this.payouts`, `track-remittance.ts:47`), y la remesa SÍ puede llegar a `settled`.
    */
   transport: "gateway" | "demo";
 }

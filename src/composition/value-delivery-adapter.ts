@@ -4,7 +4,7 @@
 // EL MODO DE FALLA QUE ESTE ARCHIVO EXISTE PARA CERRAR, con su input concreto:
 // antes de esta HU `container.ts` derivaba `useA2a = adapter === "a2a" || adapter === "a2a-gateway"`.
 // Con la env en `"a2a-gatewayy"` (un typo de una letra) esa expresión da `false`, el container cablea
-// `FallbackQuoteGateway` / `FallbackPayoutGateway` —los simuladores— y la app NO falla: cotiza de
+// `FallbackQuoteGateway` —el simulador de la COTIZACIÓN; al de payout ya no lo cablea nadie (WKH-337)— y la app NO falla: cotiza de
 // mock y muestra la pantalla normal. Un default que degrada a simulación no falla, MIENTE.
 // Acá ese input tira. Input que pone en rojo la afirmación anterior: T-3.2 quedando verde después de
 // cambiar el `throw` de abajo por un `return "fallback"` (mutante M1).

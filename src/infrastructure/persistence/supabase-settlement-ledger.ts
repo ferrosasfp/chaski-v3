@@ -14,6 +14,7 @@
 // DENTRO de la factory en runtime (CD-14).
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
+  PayoutOutcomeLookup,
   SenderRemittanceRef,
   SettlementLedger,
   SettlementLedgerStatus,
@@ -22,6 +23,10 @@ import type {
   WebhookFailureClass,
   WebhookOutcome,
 } from "../../application/ports";
+// WKH-337 — se IMPORTA, no se copia (R-5). Mover la constante desplazaría citas de `flow-vm.ts`, y un
+// segundo Set con los mismos valores es cómo se desincronizan las dos capas. Este módulo es
+// SERVER-ONLY, así que el import no arrastra nada nuevo al bundle del browser.
+import { REAL_PAYOUT_PROVENANCES } from "../../presentation/flow-vm";
 import { getSupabaseServerClient } from "./supabase-server";
 import { logLedgerAlert } from "./ledger-alert";
 import { WEBHOOK_FAILURE_CLASSES } from "./webhook-failure-classes";
@@ -616,6 +621,71 @@ export class SupabaseSettlementLedger implements SettlementLedger {
     return rows
       .map((r) => r.receiver_address)
       .filter((a): a is string => typeof a === "string" && a.length > 0);
+  }
+
+  async lookupPayoutOutcome(input: {
+    payoutId: string;
+    senderAddress: string;
+  }): Promise<PayoutOutcomeLookup> {
+    // WKH-337 — el desenlace que el webhook de TransFi ya escribe acá (`recordWebhookOutcome`, abajo)
+    // y que hasta ahora no leía nadie. OWNER-SCOPED: el `.eq("sender_address", ...)` es el guard REAL
+    // (el service key BYPASSEA RLS), y recibe la address que el PoP VERIFICÓ, nunca un crudo del body.
+    //
+    // El `select` es MÍNIMO a propósito (dos columnas): sin value_minor, sin address, sin tx_hash y sin
+    // last_error. Lo que no se lee no se puede filtrar por accidente hacia la respuesta (CD-16).
+    //
+    // TIRA ante cualquier error de la consulta: mismo criterio que `listPreparedDepositAddresses` de
+    // acá arriba. Devolver `unknown` sería indistinguible de un "no sé" REAL, y son dos desenlaces
+    // distintos para el caller (uno es 502 reintentable, el otro es "el proveedor todavía no avisó").
+    const { data, error } = await this.client
+      .from(TABLE)
+      .select("status, payout_provenance")
+      .eq("payout_id", input.payoutId)
+      .eq("sender_address", canonicalizeAddress(input.senderAddress)); // ← EL GUARD
+    if (error) throw new Error(`ledger_lookup_payout_outcome_failed:${error.code ?? "unknown"}`);
+    const rows = (data ?? []) as unknown as Array<{ status: unknown; payout_provenance: unknown }>;
+    if (rows.length === 0) return { outcome: "unknown", reason: "no_row" };
+
+    const terminales = rows.filter((r) => r.status === "settled" || r.status === "failed");
+    // 🔴 LA MEMBRESÍA ES POSITIVA, y el `?? ""` es lo que la vuelve correcta para `null`.
+    // ⛔ PROHIBIDO escribir `!isPayoutDemo(p)`: `isPayoutDemo(null)` devuelve `false`
+    // (`isPayoutDemo`, `../../presentation/flow-vm.ts:29`), así que su negación leería `null` —que es NO
+    // CONSTA— como REAL. Es el inverso exacto de lo que manda la migración 20260804, y el input que lo
+    // mide es cualquier fila anterior a ella: MEDIDO en `bdwv`, todas traen `payout_provenance: null`.
+    // La constante se IMPORTA (`REAL_PAYOUT_PROVENANCES`, `../../presentation/flow-vm.ts:25`): un
+    // segundo Set con los mismos valores es exactamente cómo se desincronizan las dos capas, y lo dice
+    // el docblock de la propia constante.
+    const candidatas = terminales.filter((r) =>
+      REAL_PAYOUT_PROVENANCES.has(typeof r.payout_provenance === "string" ? r.payout_provenance : ""),
+    );
+    if (candidatas.length === 0) {
+      // Las DOS causas se distinguen porque piden acciones distintas: una fila terminal SIN
+      // proveniencia real no va a cambiar nunca (el dato no se guardó y no se puede backfillear); una
+      // fila no-terminal todavía puede llegar por el webhook.
+      return {
+        outcome: "unknown",
+        reason: terminales.length > 0 ? "provenance_not_real" : "not_terminal",
+      };
+    }
+    // `payout_id` NO tiene índice único en el schema, y el multi-fila está DECLARADO: un payout_id
+    // correlaciona con una fila por quoteId (`WebhookOutcome`, `../../application/ports.ts:714`). Con
+    // dos desenlaces reales y discordantes no sabemos cuál vale ⇒ `unknown`. ⛔ Elegir la primera fila
+    // sería fabricar un desenlace terminal a partir de una moneda al aire, y un `settled` de más es
+    // IRREVERSIBLE (`RECOVERABLE`, `../../application/use-cases/recover-escrow-funds.ts:40`).
+    const primera = candidatas[0]!;
+    if (candidatas.some((r) => r.status !== primera.status)) {
+      return { outcome: "unknown", reason: "conflicting_rows" };
+    }
+    // 🔴 La proveniencia que viaja es la DE LA FILA, jamás `""`. Un `""` acá haría que una remesa REAL
+    // recién liquidada prenda el banner "Modo demo": `markSettled` PISA `payoutProvenance` con
+    // cualquier valor distinto de `undefined` (`markSettled`, `../../domain/remittance.ts:379`) y
+    // `isPayoutDemo("")` es `true` (`""` != null ✓ y `!has("")` ✓). Por el filtro de acá arriba este
+    // valor SIEMPRE está en la allowlist (hoy `'transfi'`).
+    return {
+      outcome: "known",
+      status: primera.status === "settled" ? "settled" : "failed",
+      provenance: String(primera.payout_provenance),
+    };
   }
 
   async markOutcome(input: {

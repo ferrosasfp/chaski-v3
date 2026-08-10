@@ -52,6 +52,12 @@ import {
   beneficiary,
 } from "../test-support/fakes";
 
+// WKH-346 — la forma TRUNCADA que la pantalla muestra desde que el comprobante pasa por `TxProof`:
+// primeros 8 + `…` + últimos 8, o sea 17 caracteres contra los 87 del valor entero. Va escrita A MANO
+// y NO llamando a `shortTx`: un assert que la recalculara con la misma función que se está probando se
+// movería junto con el mutante (subir el umbral `tx.length <= 16`) y pasaría siempre.
+const SIGNATURE_CORTA = "99eUso3a…FzQyEQf8";
+
 // WKH-187: identidad reducida canónica (misma que FakeKycGateway) para snapshots de resume.
 const passIdentity = toPersistedIdentity({
   firstName: "Test",
@@ -1062,7 +1068,12 @@ describe("HU-SOL-13 — acción refund en TrackView (T7)", () => {
     // (1) la pantalla: ya no promete una entrega en curso.
     expect(await screen.findByText(/Recuperaste tus fondos/)).toBeInTheDocument();
     expect(screen.queryByText(/Tu chaski está en camino/)).toBeNull();
-    expect(screen.getByText(new RegExp(FAKE_SOLANA_SIGNATURE))).toBeInTheDocument();
+    // WKH-346: este assert pedía la firma ENTERA como texto y se puso rojo POR DISEÑO al truncarla —
+    // es la señal de que la HU funcionó, no una regresión. Lo que se verifica ahora es que la pantalla
+    // muestra la forma corta y que los 87 caracteres siguen vivos en el `href` del visor.
+    const enlace = screen.getByRole("link", { name: SIGNATURE_CORTA });
+    expect(enlace.getAttribute("href")).toContain(FAKE_SOLANA_SIGNATURE);
+    expect(screen.queryByText(new RegExp(FAKE_SOLANA_SIGNATURE))).toBeNull();
     // (2) y el botón desaparece: no se ofrece repetir una recuperación ya hecha.
     expect(screen.queryByRole("button", { name: /Recuperar fondos/ })).toBeNull();
     // (3) el estado PERSISTIDO, que es lo que sobrevive a la recarga.
@@ -1133,7 +1144,12 @@ describe("HU-SOL-13 — acción refund en TrackView (T7)", () => {
     expect(screen.queryByText(/Recuperaste tus fondos/)).toBeNull();
     expect(screen.queryByText(/volvieron a tu wallet/)).toBeNull();
     expect(screen.getByText(/Todavía no la vemos confirmada en la cadena/)).toBeInTheDocument();
-    expect(screen.getByText(new RegExp(FAKE_SOLANA_SIGNATURE))).toBeInTheDocument();
+    // WKH-346: rojo POR DISEÑO al truncar (ver el mismo cambio en el `it` de arriba). La orden que la
+    // cadena todavía no confirmó es justo el caso en que la persona necesita abrir el visor, así que
+    // acá el `href` no es un detalle: es la única vía para ir a mirar si entró.
+    const enlacePending = screen.getByRole("link", { name: SIGNATURE_CORTA });
+    expect(enlacePending.getAttribute("href")).toContain(FAKE_SOLANA_SIGNATURE);
+    expect(screen.queryByText(new RegExp(FAKE_SOLANA_SIGNATURE))).toBeNull();
     // El reintento sigue existiendo: es lo único que salva a la persona si la tx se cayó.
     expect(screen.getByRole("button", { name: /Volver a intentar/ })).toBeEnabled();
     // Y nada terminal quedó escrito.

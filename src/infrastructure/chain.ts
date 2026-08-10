@@ -183,3 +183,45 @@ export function resolveSolanaRpcUrl(): string | undefined {
 export function resolveSolanaRpcUrlPublic(cluster: Cluster): string {
   return process.env.NEXT_PUBLIC_SOLANA_RPC_URL || clusterApiUrl(cluster);
 }
+
+// ── WKH-346 — el enlace del comprobante al visor de transacciones ────────────────────────────────
+
+/** Base del visor de transacciones, y NADA MÁS que la base: la red NO va pegada acá.
+ *
+ *  POR QUÉ NO SALE DE `process.env` (decisión, no olvido): esto es el VISOR, no la red. Qué sitio se
+ *  le ofrece a la persona para auditar su transacción es una decisión de producto fija en código, y
+ *  vale el mismo criterio que los dos resolvers de ComputeBudget de arriba: un override por env
+ *  verificaría un dominio en CI y emitiría otro en producción. Lo que sí es configuración de red es
+ *  el cluster, y por eso el `?cluster=` NO está en este literal sino en la rama del `switch` de abajo,
+ *  que la config elige. Pegarlos en un solo string es el hardcode de red que este repo prohíbe. */
+const SOLANA_EXPLORER_TX_BASE = "https://explorer.solana.com/tx";
+
+/** URL del visor para UNA firma de transacción, con el cluster derivado de la config activa
+ *  (WKH-346 / AC-2). Formato ya usado por el repo en `scripts/smoke-solana-e2e.ts:567` y `:658`.
+ *
+ *  ⚠️ ESTA FUNCIÓN NO VALIDA LA FIRMA, y no es un olvido. Las **tres** vecinas de este archivo validan base58 con `new PublicKey(raw)`, y son éstas: `:133`, `:147`, `:164` (AR/MNR-1 — acá decía "cuatro", filtrado de los `default:`, que sí son cuatro y también van enumerados: `:37`, `:91`, `:122`, `:224`). NO va acá cuántas veces aparece el TEXTO `new PublicKey(` en el archivo, y el motivo está medido: un grep cuenta también las menciones de este propio comentario, así que ese total se desalinea con sólo editar el comentario. Ya pasó (QA, 10-ago): la versión anterior de esta línea daba un total y estaba mal por auto-mención. La defensa que sí aguanta es la de al lado: enumerar los sitios en vez de contarlos, que es exactamente por qué la afirmación sobre los `default:` sobrevivió a la misma trampa.
+ *  Copiar ese patrón acá rechazaría el **100 % de las firmas reales**: `PublicKey` exige 32 bytes y una firma ed25519 son 64, que en base58 miden **87 u 88 caracteres, y 88 en la mayoría de los casos** (AR/MNR-2 — acá decía "87" a secas, como si fuera propiedad de una firma).
+ *  Medido acá con el `bs58` del repo, 4000 valores aleatorios de 64 bytes: **3209 dieron 88 (80,2 %) y 791 dieron 87 (19,8 %)**. El largo depende del primer byte: con `1` da 87 y con `255` da 88.
+ *  Los **87** de `FAKE_SOLANA_SIGNATURE` (`fakes.ts:835`) son propiedad **del fixture** —es `new Uint8Array(64).fill(7)`—, no de "una firma", y por eso los sitios que lo usan ahora dicen "los 87 de `FAKE_SOLANA_SIGNATURE`" en vez de generalizar.
+ *  Además esto es presentación: una firma rara tiene que MOSTRARSE tal como la cadena la devolvió, no desaparecer detrás de un guard. Lo único que se le hace al valor es `encodeURIComponent`, igual que `phantomBrowseUrl` (`wallet-availability.ts:27`).
+ *
+ *  🔴 EL AGUJERO QUE ESTA FORMA NO CIERRA, escrito al lado del código y no sólo en el SDD.
+ *  Reemplazar este `switch` por la URL con el cluster pegado en un solo literal **no lo mata ningún
+ *  test**: el día que la config sea mainnet el enlace seguiría apuntando a devnet **en silencio**, y
+ *  la pantalla diría "transacción no encontrada" sobre plata que sí se movió. Es el mismo agujero que
+ *  `chain.test.ts:86-89` documenta para sus dos hermanas ("un assert que llamara al propio resolver
+ *  se movería junto con el mutante y pasaría siempre"). Lo que lo contiene es que el `switch` **tire**
+ *  en cuanto haya un segundo cluster, no un assert. Este mutante no tiene test y no lo puede tener.
+ *
+ *  🔴 Y LA MEDIA FRASE QUE FALTABA: QUÉ SE LLEVA PUESTO EL `throw` (AR/MNR-5). Esta función es la ÚNICA de las cuatro con `default: throw` de este archivo que corre en **posición de atributo JSX**: `href={resolveSolanaExplorerTxUrl(signature)}` (`resolveSolanaExplorerTxUrl`, `flow.tsx:3213`). Las otras tres corren fuera de render (`resolveSolanaNetworkId` en `solana-wallet.ts:475`, en 6 rutas de `app/api/**` y en el ledger; `resolveSolanaComputeUnitLimit` en `solana-wallet.ts:433`; `…PriceMicroLamports` en `solana-wallet.ts:436`), así que ahí un `throw` **rechaza una operación**. Acá **desmonta el árbol de React**, y medido: en esta app NO hay ningún error boundary que lo atrape (cero `error.tsx`, cero `global-error.tsx`, cero `componentDidCatch`, cero `getDerivedStateFromError`) ⇒ el costo es **la pantalla en blanco**, no una operación rechazada. ⛔ Eso NO es razón para envolver esto en un `try` ni para devolver un fallback: un fallback silencioso pintaría un enlace a la red equivocada, que es exactamente el modo de falla de arriba. Es una razón más para **DECIDIR** el valor de mainnet cuando llegue, en vez de heredarlo. Hoy no es bug vivo: `cluster` es el tipo literal `"devnet"` (`:8`), TypeScript estrecha el `switch` y el `default` es inalcanzable. */
+export function resolveSolanaExplorerTxUrl(signature: string): string {
+  const tx = `${SOLANA_EXPLORER_TX_BASE}/${encodeURIComponent(signature)}`;
+  switch (resolveSolanaNetworkConfig().cluster) {
+    case "devnet":
+      return `${tx}?cluster=devnet`;
+    // mainnet-beta → se DECIDE el parámetro (`?cluster=mainnet-beta`, o ninguno: es el default del
+    // visor). No se hereda en silencio el de devnet, que es exactamente el modo de falla de arriba.
+    default:
+      throw new Error("unsupported_solana_cluster"); // fail-loud (cluster futuro sin mapeo)
+  }
+}

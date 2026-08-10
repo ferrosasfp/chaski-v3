@@ -7,8 +7,8 @@
 // `text-xs`), contra los 52 px que el CTA del camino feliz ya tenía. Tres de esos seis son las ÚNICAS
 // puertas para recuperar plata:
 //   · "Ver mis envíos"                                    (`flow.tsx:747`)
-//   · "Recuperar un envío perdido"                        (`flow.tsx:2057`)
-//   · "Recuperar el depósito de red de envíos anteriores"  (`flow.tsx:2176`)
+//   · "Recuperar un envío perdido"                        (`flow.tsx:2143`)
+//   · "Recuperar el depósito de red de envíos anteriores"  (`flow.tsx:2293`)
 // Y otros tres viven apretados en una fila del header, uno de ellos destructivo:
 //   · "Borrar igual" (borra los datos locales)             (`flow.tsx:566`)
 //   · "Cancelar"                                           (`flow.tsx:573`)
@@ -102,7 +102,7 @@ function puertasDeRecuperarPlata(): Array<{ nombre: string; el: HTMLElement }> {
 describe("T-341-3 (AC-2): las tres puertas de recuperar plata declaran alto de toque", () => {
   it("las tres declaran min-h de 52 px o más", () => {
     // INPUT QUE LO PONE EN ROJO: borrarle la clase `min-h-[52px]` a cualquiera de las tres
-    // (`flow.tsx:747`, `:2057`, `:2176`) ⇒ `minHpx` no matchea ⇒ throw con el nombre del control.
+    // (`flow.tsx:747`, `:2143`, `:2293`) ⇒ `minHpx` no matchea ⇒ throw con el nombre del control.
     for (const { nombre, el } of puertasDeRecuperarPlata()) {
       expect(minHpx(el), nombre).toBeGreaterThanOrEqual(52);
     }

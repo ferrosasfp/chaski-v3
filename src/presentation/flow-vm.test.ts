@@ -28,7 +28,7 @@ import {
   isKycDemo,
   kycOriginNotice,
   REAL_KYC_PROVENANCES,
-  statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, // WKH-339/CR: las otras 4 constantes YA NO se importan por nombre — el loop las DERIVA del módulo, que es el arreglo de BLQ-BAJO-1. Si vuelven acá por nombre, el loop volvió a ser una lista a mano. // WKH-339: EN ESTA LÍNEA, no en líneas nuevas — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
+  esVentanaSinAbiertos, sinAbiertosCopy, statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, // WKH-339/CR: las otras 4 constantes YA NO se importan por nombre — el loop las DERIVA del módulo, que es el arreglo de BLQ-BAJO-1. Si vuelven acá por nombre, el loop volvió a ser una lista a mano. // WKH-339: EN ESTA LÍNEA, no en líneas nuevas — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
 } from "./flow-vm"; import * as MODULO_FLOW_VM from "./flow-vm"; // WKH-339/CR-BLQ-BAJO-1: el namespace entero, para DERIVAR la lista de copies en vez de escribirla. En esta línea para no desplazar `:520`
 import {
   KYC_PROVENANCE_LIVE,
@@ -1286,5 +1286,63 @@ describe("WKH-339/AC-4 — lecturaSeguimiento: exactamente uno, y ninguno colaps
       expect(laBilleteraFueTocada(new TypeError("Failed to fetch"))).toBe(false);
       expect(laBilleteraFueTocada("boom")).toBe(false);
     });
+  });
+});
+
+// ── T-346-19 (fix-pack AR/BLQ-BAJO-1): `esVentanaSinAbiertos`, el clasificador ÚNICO ─────────────
+//
+// 🔴 POR QUÉ ESTE PREDICADO DELEGA EN VEZ DE RE-CLASIFICAR. La alternativa obvia era
+// `code.includes("escrow_not_found")` dentro de `flow.tsx`, y este archivo ya tiene escrita la
+// advertencia contra exactamente esa duplicación en `:312-318`: una segunda copia de un clasificador
+// necesita un guard que alguien mantenga. Delegando, la PRECEDENCIA DE RAMAS de
+// `lostEscrowRecoveryError` vale para las dos respuestas sin ningún guard.
+//
+// ⛔ Y LO QUE ESTE TEST PROTEGE, que es el tri-estado: "no pude preguntar" NO es "no hay". Si esto
+// devolviera `true` para `escrow_recovery_unavailable`, la pantalla diría "ya no queda ninguno abierto"
+// después de una consulta que NUNCA llegó a mirar la cadena.
+describe("flow-vm — esVentanaSinAbiertos (WKH-346 fix-pack)", () => {
+  it("es true SÓLO para el código que dice que la ventana no tiene ninguno abierto", () => {
+    expect(esVentanaSinAbiertos("escrow_not_found", MAX_RECOVERY_CANDIDATES)).toBe(true);
+  });
+
+  // Los cinco productores de este código (`:323-332`) no afirman NADA sobre la ventana.
+  it.each([
+    ["escrow_recovery_unavailable"],
+    ["escrow_id_unavailable"],
+    ["user rejected the request"],
+    ["wallet_connect_cancelled"],
+    ["wallet_sign_not_available"],
+    ["escrow_refund_signature_incomplete"],
+    ["solana_refund_boom"],
+    [""],
+  ])("es false para %s", (code) => {
+    expect(esVentanaSinAbiertos(code, MAX_RECOVERY_CANDIDATES)).toBe(false);
+  });
+
+  // 🔴 EL CASO QUE UN `includes` POR SU CUENTA CONTRADICE. Un código que trae DOS subcadenas: la
+  // precedencia de `lostEscrowRecoveryError` hace ganar a la firma incompleta (`:310`) y al rechazo de
+  // la billetera (`:319`) ANTES que a `escrow_not_found` (`:321`). Delegando, el predicado no puede
+  // decir "la ventana está vacía" sobre un caso en que el copy dice otra cosa. Reimplementarlo con
+  // `includes("escrow_not_found")` pone estos dos asserts en rojo.
+  it("respeta la precedencia cuando un código trae DOS subcadenas", () => {
+    for (const code of [
+      "escrow_refund_signature_incomplete: escrow_not_found",
+      "user rejected — escrow_not_found",
+    ]) {
+      expect(esVentanaSinAbiertos(code, MAX_RECOVERY_CANDIDATES)).toBe(false);
+      // Y la prueba de que es la MISMA decisión: el copy tampoco es el de "no hay abiertos".
+      expect(lostEscrowRecoveryError(code, MAX_RECOVERY_CANDIDATES)).not.toBe(
+        sinAbiertosCopy(MAX_RECOVERY_CANDIDATES),
+      );
+    }
+  });
+
+  // La extracción del texto fue PURA: `sinAbiertosCopy` es exactamente lo que la función devolvía.
+  it("sinAbiertosCopy ES el texto que lostEscrowRecoveryError devuelve para escrow_not_found", () => {
+    expect(lostEscrowRecoveryError("escrow_not_found", MAX_RECOVERY_CANDIDATES)).toBe(
+      sinAbiertosCopy(MAX_RECOVERY_CANDIDATES),
+    );
+    // Y el número sale del parámetro, no de un literal: llamado con otro valor, el texto lo refleja.
+    expect(sinAbiertosCopy(7)).toContain("los últimos 7 envíos");
   });
 });

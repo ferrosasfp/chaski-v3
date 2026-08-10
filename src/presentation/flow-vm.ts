@@ -319,7 +319,7 @@ export function lostEscrowRecoveryError(code: string, maxCandidates: number): st
   if (/user rejected|wallet_connect_cancelled|wallet_sign_not_available/i.test(code))
     return "No se completó la firma que prueba que la billetera es tuya, así que no llegamos a preguntar. Esto no es una respuesta sobre tus fondos: volvé a intentar y aceptá la firma.";
   if (code.includes("escrow_not_found"))
-    return `No encontramos escrows abiertos para esta billetera. Esto no dice que no tengas fondos: dice que ninguno de los últimos ${maxCandidates} envíos que el servidor tiene guardados de esta billetera está abierto en el contrato.`;
+    return sinAbiertosCopy(maxCandidates); // el texto vive en el apéndice; `esVentanaSinAbiertos` lo reconoce delegando acá
   // "No pudimos preguntar" no es "no hay nada". Cinco productores llegan acá, no dos.
   // `escrow_id_unavailable` = esta pantalla no tiene el resolver cableado. `escrow_recovery_unavailable`
   // llega con CUATRO orígenes: el endpoint contestó algo que no es 200/403/501
@@ -946,8 +946,54 @@ export const REVISION_SIN_FIRMA = "La firma no se completó. Podés intentar de 
  *  No promete que reintentar funcione, no culpa a nadie, y no afirma nada del vault.
  *
  *  ⚠️ Y NO REPITE VERBATIM la frase de `PayoutInProgress` ("Si preferís no esperar, podés recuperar tus
- *  USDC.", `flow.tsx:2277`), aunque nombre la misma acción. Mi primera versión la copiaba tal cual para
+ *  USDC.", `flow.tsx:2394`), aunque nombre la misma acción. Mi primera versión la copiaba tal cual para
  *  reusar copy ya vetada, y MEDIDO: `getByText` encontraba **dos** nodos, o sea que la pantalla le decía
  *  lo mismo dos veces en el mismo lugar. Reusar copy vetada es bueno; duplicarla en la misma vista no. */
 export const REVISION_TECHO_ALCANZADO =
   "Por ahora no podemos seguir intentando desde acá. Podés recuperar tus USDC en vez de esperar.";
+
+/* ────────────────────────────────────────────────────────────────────────────────────────────────
+ * Apéndice WKH-346 (fix-pack AR/BLQ-BAJO-1). Va al FINAL a propósito: el cuerpo de este archivo
+ * tiene 4 citas ancladas con destino > `:322` (`:728`, `:852`, `:912`, `:949`) y un solo `Δ +1`
+ * arriba las rompería a las cuatro. Un apéndice desplaza 0.
+ * ──────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * El texto de `escrow_not_found` para la puerta "Recuperar un envío perdido", en UN solo lugar.
+ *
+ * Lo extraigo de `lostEscrowRecoveryError` (`:321-322`) porque ahora lo necesitan DOS consumidores:
+ * esa función, que lo devuelve, y `esVentanaSinAbiertos`, que lo usa para RECONOCER el desenlace
+ * "la ventana no tiene ningún escrow abierto" sin volver a clasificar el código.
+ *
+ * ⚠️ El valor de retorno de `lostEscrowRecoveryError("escrow_not_found", N)` NO cambia. Eso lo
+ * congelan `flow-vm.test.ts:481` y `refund-perdido-registro-mudo.test.tsx:316`, que siguen verdes
+ * sin tocarlos: son la red que prueba que esta extracción fue pura.
+ */
+export function sinAbiertosCopy(maxCandidates: number): string {
+  return `No encontramos escrows abiertos para esta billetera. Esto no dice que no tengas fondos: dice que ninguno de los últimos ${maxCandidates} envíos que el servidor tiene guardados de esta billetera está abierto en el contrato.`;
+}
+
+/**
+ * ¿Este código de error significa "en la ventana que miramos no hay NINGÚN escrow abierto"?
+ *
+ * 🔴 DELEGA a `lostEscrowRecoveryError` en vez de re-clasificar, y eso NO es estilo: es lo que hace
+ * imposible la divergencia. La alternativa obvia —`code.includes("escrow_not_found")` acá— es
+ * exactamente la duplicación contra la que este archivo ya escribió una advertencia en `:312-318`:
+ * una segunda copia de un clasificador necesita un guard que alguien mantenga, y el día que nadie lo
+ * mantenga las dos respuestas se contradicen.
+ *
+ * Delegando, la PRECEDENCIA DE RAMAS vale para las dos respuestas sin ningún guard:
+ * `lostEscrowRecoveryError` decide primero por `escrow_refund_signature_incomplete` (`:310`) y por
+ * `user rejected|wallet_connect_cancelled|wallet_sign_not_available` (`:319`), y esas dos GANAN antes
+ * que `escrow_not_found` (`:321`). Un predicado que hiciera el `includes` por su cuenta podría
+ * contradecir al copy el día que un código traiga dos de esas subcadenas a la vez.
+ *
+ * ⛔ Devuelve `false` para `escrow_recovery_unavailable` y para `escrow_id_unavailable`, y eso es
+ * deliberado: "no pude preguntar" NO es "no hay". Esos códigos llegan con cinco productores
+ * (`:323-332`) y NINGUNO afirma que la ventana esté vacía, así que la pantalla tiene que seguir
+ * diciendo que puede haber más. Colapsar los dos desenlaces es el error que este repo ya tiene
+ * documentado; `T-346-15` existe sólo para eso.
+ */
+export function esVentanaSinAbiertos(code: string, maxCandidates: number): boolean {
+  return lostEscrowRecoveryError(code, maxCandidates) === sinAbiertosCopy(maxCandidates);
+}

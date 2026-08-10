@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   resolveSolanaComputeUnitLimit,
   resolveSolanaComputeUnitPriceMicroLamports,
+  resolveSolanaExplorerTxUrl,
   resolveSolanaNetworkConfig,
   resolveSolanaReleaseAuthorityPubkey,
   resolveSolanaUsdcMint,
@@ -103,4 +104,41 @@ describe("resolveSolanaComputeUnit* — los valores derivados que Chaski emite (
   // `solana-wallet.test.ts` T2 (`readUInt32LE(1)` / `readBigUInt64LE(1)`) y T12 (sobre el payload
   // que se postea). Si mañana los resolvers dejan de ser constantes, ese test de forma vuelve a
   // tener sentido; hoy no.
+});
+
+// ── T-346-2 / T-346-3 (WKH-346, AC-2): la URL del visor que enlaza el comprobante ──
+//
+// La URL esperada va escrita ENTERA A MANO, por la misma razón que los dos números de T11 de acá
+// arriba (`:86-89`): un assert que la armara llamando al propio resolver —o interpolando la constante
+// de la base del visor— se movería junto con el mutante y pasaría siempre; verificaría el cableado y
+// no el valor. Acá se congelan las cuatro partes: dominio, ruta, firma y parámetro de cluster.
+//
+// La firma también va a mano y NO importada de `test-support/fakes`: son los 87 caracteres DE ESTE fixture. ⚠️ 87 no es "el largo de una firma" (AR/MNR-2): una firma ed25519 en base58 mide **87 u 88 caracteres, y 88 en la mayoría** (medido, 4000 muestras: 80,2 % dan 88). El nombre `SIGNATURE_87` describe a este valor, que sí mide 87.
+// Lo que estos tests tienen que clavar es que ninguno de esos caracteres se pierde en la URL, cualquiera sea el largo.
+// El truncado del texto VISIBLE es otra cosa (AC-1) y lo mide `tx-proof.test.tsx`.
+const SIGNATURE_87 =
+  "99eUso3aSbE9tqGSTXzo3TLfKb9RkMTURrHKQ1K7Zh3BbeqPevr5E1iCbpTjqHuTFLtfxTTD5ekfVuZFzQyEQf8";
+
+describe("resolveSolanaExplorerTxUrl — el enlace del comprobante (WKH-346)", () => {
+  it("emite la URL del visor con la firma COMPLETA y el cluster de la config activa", () => {
+    // INPUT QUE LO PONE EN ROJO: borrar el `?cluster=devnet` (M-4); cambiar el dominio; truncar la
+    // firma antes de interpolarla.
+    expect(resolveSolanaExplorerTxUrl(SIGNATURE_87)).toBe(
+      "https://explorer.solana.com/tx/99eUso3aSbE9tqGSTXzo3TLfKb9RkMTURrHKQ1K7Zh3BbeqPevr5E1iCbpTjqHuTFLtfxTTD5ekfVuZFzQyEQf8?cluster=devnet",
+    );
+    // Que los 87 estén enteros es el punto: no es el prefijo de una firma ya acortada.
+    expect(SIGNATURE_87).toHaveLength(87);
+  });
+
+  it("escapa la firma en vez de pegarla cruda (un valor raro no fabrica una query string)", () => {
+    // ⚠️ Base58 no tiene `/`, `?`, `=` ni `&`, así que con una firma legítima `encodeURIComponent` es
+    // la IDENTIDAD y sacarlo no rompería ningún assert del `it` de arriba. Por eso el input de este
+    // test es un valor que la cadena nunca devolvería: es la única forma de que el escape sea
+    // observable. Y por eso mismo este test NO prueba que las firmas reales necesiten escape.
+    //
+    // INPUT QUE LO PONE EN ROJO: sacar el `encodeURIComponent` del template.
+    expect(resolveSolanaExplorerTxUrl("a/b?c=1&d")).toBe(
+      "https://explorer.solana.com/tx/a%2Fb%3Fc%3D1%26d?cluster=devnet",
+    );
+  });
 });

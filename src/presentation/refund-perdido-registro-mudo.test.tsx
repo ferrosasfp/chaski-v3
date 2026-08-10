@@ -181,7 +181,28 @@ function dudasEn(texto: string): string[] {
   return MARCAS_DE_DUDA.filter((m) => m.test(texto)).map(String);
 }
 
-/** La aserción del bloqueante: la pantalla NO afirma haber mirado ningún envío. */
+/**
+ * La aserción del bloqueante: la pantalla NO afirma haber mirado ningún envío.
+ *
+ * 🔴 ALCANCE, Y ES MÁS CHICO QUE EL NOMBRE DE ESTA FUNCIÓN (WKH-346 fix-pack AR-2/MNR-4). Este guard
+ * vale **sólo cuando no se recuperó nada antes**, que es el caso de los tres tests de abajo: la primera
+ * búsqueda es la que falla.
+ *
+ * WKH-346 metió la subcadena `últimos ${MAX_RECOVERY_CANDIDATES} envíos` en el copy de
+ * `recoveryMoreEscrowsHint`, que se muestra cuando YA se recuperó al menos un escrow. Existe un estado
+ * alcanzable —y `T-346-15` lo EXIGE— donde la pantalla dice "no llegamos a preguntar" **y** contiene esa
+ * subcadena: recuperar uno y después recibir `escrow_recovery_unavailable`. Ahí el assert de más abajo
+ * fallaría, y no porque la pantalla afirme algo falso.
+ *
+ * ⚠️ Por qué NO es un bloqueante ni se relaja el guard: los dos textos dicen cosas distintas. El que
+ * WKH-331 prohibió afirmaba un **resultado** ("ninguno de los últimos N está abierto"); el nuevo
+ * describe el **mecanismo** ("cada búsqueda mira los últimos N"), y describir el alcance de la ventana
+ * no es afirmar haberla mirado. Lo que quedó ciego es este guard, en el caso que WKH-346 creó.
+ *
+ * ⛔ SI ALGUIEN AMPLÍA ESTOS TESTS a un escenario con una recuperación previa, este assert va a fallar
+ * por la razón equivocada. El arreglo NO es borrarlo: es acotarlo al bloque de error
+ * (`queryByText` sobre el nodo del error), no sobre todo el documento.
+ */
 async function laPantallaNoAfirmaHaberMirado() {
   await waitFor(() => {
     expect(screen.getByText(/no llegamos a preguntar/)).toBeInTheDocument();

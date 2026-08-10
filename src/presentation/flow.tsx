@@ -41,7 +41,7 @@ import {
   PREPARE_NO_AGENT_FOR_CAPABILITY,
   isPrepareRejection,
 } from "../application/agent-rejections"; // hallazgo #75: rechazo del agente ≠ payout fallido
-import { resolveSolanaNetworkConfig } from "../infrastructure/chain"; // HU-SOL-13: cluster Solana activo (env-driven)
+import { resolveSolanaExplorerTxUrl, resolveSolanaNetworkConfig } from "../infrastructure/chain"; // HU-SOL-13: cluster Solana activo (env-driven) · WKH-346: la URL del visor que enlaza el comprobante
 import type {
   CloseableEscrow,
   EscrowRefundConfirmation,
@@ -71,7 +71,7 @@ import {
   kycOriginNotice,
   lostEscrowRecoveryError,
   shortErrorCode,
-  statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, type GestoRenovacion, REVISION_APAGADA, REVISION_FIRMANDO, REVISION_GESTO, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_BILLETERA, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, // WKH-339: EN ESTA LÍNEA. `flow.tsx:525` lo citan 5 archivos y NINGUNA de las 5 es una cita anclada ⇒ si se mueve, nada se pone rojo y los 5 comentarios rotan en silencio
+  statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, type GestoRenovacion, REVISION_APAGADA, REVISION_FIRMANDO, REVISION_GESTO, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_BILLETERA, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, esVentanaSinAbiertos, // WKH-339: EN ESTA LÍNEA. `flow.tsx:525` lo citan 5 archivos y NINGUNA de las 5 es una cita anclada ⇒ si se mueve, nada se pone rojo y los 5 comentarios rotan en silencio · WKH-346 fix-pack: `esVentanaSinAbiertos` entra acá por lo mismo (Δ0)
 } from "./flow-vm";
 import { cn } from "./cn";
 import { phantomBrowseUrl, useWalletAvailability } from "./wallet-availability"; // el aviso de "acá no hay wallet" (NoWalletHere)
@@ -1542,7 +1542,7 @@ export function TrackView({
             línea no se renderiza: un identificador fabricado al lado de la palabra reembolso es peor
             que no decir nada. */}
         {rem.refundTx ? (
-          <p className="text-xs text-stone">Referencia de reembolso: {rem.refundTx}</p>
+          <p className="text-xs text-stone">Referencia de reembolso: <TxProof signature={rem.refundTx} /></p>
         ) : null}
         {showRefund && recover && sender ? (
           <div className="space-y-2">
@@ -1977,7 +1977,7 @@ function RefundSentNotice({
           ? "Todavía no la vemos confirmada en la cadena. Puede entrar en un rato, o puede no haber entrado. Hasta que se confirme no sabemos si tus USDC volvieron."
           : "No pudimos consultar la cadena para saber si entró. Nadie sabe todavía si tus USDC volvieron; no es que hayan fallado."}
       </p>
-      <p className="text-xs text-stone">Orden enviada: {refundTx}</p>
+      <p className="text-xs text-stone">Orden enviada: <TxProof signature={refundTx} /></p>
     </div>
   );
 }
@@ -2015,32 +2015,118 @@ export function LostEscrowRecovery({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [sent, setSent] = useState<{
-    confirmation: Exclude<EscrowRefundConfirmation, "confirmed">;
-    refundTx: string;
-  } | null>(null);
-  const [recovered, setRecovered] = useState<string | null>(null); // refundTx CONFIRMADO en la cadena
+  // 🔴 APPEND-ONLY TAMBIÉN ACÁ, y es el MISMO defecto en el casillero de al lado (AR-2/BLQ-BAJO-1).
+  // Esto era un `{confirmation, refundTx} | null` que el desenlace siguiente sobrescribía, y lo que
+  // guarda es la firma de un refund YA TRANSMITIDO cuyo desenlace NADIE conoce: `confirmation` es
+  // `"pending"` o `"unknown"` (`EscrowRefundConfirmation`, `ports.ts:339`). O sea EXACTAMENTE la firma
+  // que la persona necesita para ir al visor a averiguar si entró, y esta HU la volvió prominente y
+  // enlazable (`RefundSentNotice`, `:1964`, que la imprime como "Orden enviada:"). Medido antes del arreglo: con `pending` y después
+  // `confirmed`, la primera firma desaparecía del DOM; con dos `pending`, quedaba UN solo href.
+  //
+  // ⚠️ El `sender` va PEGADO a cada entrada, no aparte: es lo que hace que la pantalla no mezcle dos
+  // identidades (ver `duenio` abajo).
+  const [enviados, setEnviados] = useState<
+    readonly {
+      sender: string;
+      confirmation: Exclude<EscrowRefundConfirmation, "confirmed">;
+      refundTx: string;
+    }[]
+  >([]);
+  // 🔴 UNA LISTA APPEND-ONLY, Y LA FORMA DEL ESTADO **ES** EL ARREGLO (AR/BLQ-BAJO-1). Acá había un
+  // `useState<string | null>` que el segundo éxito SOBRESCRIBÍA: `SIG2` reemplazaba a `SIG1` y `SIG1`
+  // desaparecía del DOM. Y esta puerta existe justamente para escrows que el dispositivo NO conoce —
+  // `SIG1` no está en `localStorage`, no está en "Ver mis envíos", y esto es estado de componente —,
+  // así que se destruía la única evidencia en pantalla de un movimiento de dinero que ya ocurrió. La
+  // plata no se pierde (la cadena es autoritativa); se pierde la prueba que esta HU vino a hacer
+  // usable. La población afectada es EXACTAMENTE la que motivó la frase de AC-7: quien tiene dos o
+  // más envíos perdidos.
+  //
+  // De las cinco variantes evaluadas, acumular es la ÚNICA en la que "ningún comprobante ya mostrado
+  // desaparece" no depende de que nadie vuelva a tocar el disparador: con una lista append-only no hay
+  // edición de UNA línea que pierda un comprobante sin cambiar la forma del estado. Deshabilitar el
+  // botón tras el primer éxito lo cumplía también, pero borrando la feature que AC-7 existe para
+  // habilitar; persistir en `localStorage` cambia lo que esta puerta ES.
+  //
+  // ⚠️ ALCANCE EXACTO DE ESA GARANTÍA, y acá mi primera versión afirmaba de más (AR-2/BLQ-BAJO-1).
+  // Decía "imposible de violar POR CONSTRUCCIÓN", y eso valía para ESTA VARIABLE, no para el
+  // componente: al lado vivía `sent`, un casillero único con la firma de un refund ya transmitido, y se
+  // sobrescribía igual que `recovered` antes. La propiedad es de la FORMA de cada estado, y sólo cubre
+  // los estados que tienen esa forma. Hoy los DOS la tienen (`enviados` arriba), y por eso la frase se
+  // puede sostener para los dos comprobantes; lo que no se puede es deducirla del componente.
+  const [recuperados, setRecuperados] = useState<readonly { sender: string; refundTx: string }[]>([]);
+  // 🔴 EL SENDER cuya última búsqueda dijo "en la ventana que miramos no hay ninguno abierto", NO un
+  // booleano (AR-2/MNR-9). Como booleano, esto decidía con el `recuperados` de la identidad ANTERIOR:
+  // la billetera A recuperaba, se cambiaba de billetera, la B contestaba `escrow_not_found`, y la
+  // pantalla contaba como UN relato el comprobante de A y el cierre de ventana de B, suprimiendo el
+  // error de B con un éxito que no fue de B. Cada frase era cierta; el compuesto y el "esta billetera"
+  // no. Los códigos que NO lo prenden están enumerados en `esVentanaSinAbiertos`
+  // (`esVentanaSinAbiertos`, `flow-vm.ts:997`), en su docblock de `flow-vm.ts:991-995`.
+  const [sinAbiertos, setSinAbiertos] = useState<string | null>(null);
+  // La identidad de la ÚLTIMA búsqueda. Todo lo que la tarjeta muestra se filtra por acá: la frase de
+  // cierre dice "esta billetera", así que no puede estar al lado del comprobante de otra.
+  const [duenio, setDuenio] = useState<string | null>(null);
+
+  // Derivados puros, no estados nuevos que puedan quedar desincronizados.
+  const misRecuperados = recuperados.filter((r) => r.sender === duenio);
+  const misEnviados = enviados.filter((e) => e.sender === duenio);
+  // "No queda ninguno abierto" es el final EXITOSO del camino sólo si YA SE RECUPERÓ ALGO **DE ESTA
+  // MISMA BILLETERA**. Si no se recuperó nada, `escrow_not_found` en el primer click sigue siendo el
+  // error de siempre y se pinta como tal (regresión T-346-16); y si lo recuperado es de otra identidad,
+  // tampoco: para esta billetera no hubo ningún éxito en el que apoyarse.
+  const caminoTerminado =
+    duenio !== null && sinAbiertos === duenio && misRecuperados.length > 0;
 
   const onRecover = useCallback(async () => {
     if (!refund) return;
     setBusy(true);
     setErr(null);
+    // Se reinicia en CADA búsqueda porque describe a la ÚLTIMA: volvemos a preguntar, así que todavía
+    // no sabemos. ⛔ Lo que NO se reinicia acá es `recuperados` ni `enviados`: resetearlos es el bug de
+    // arriba formalizado, y haría desaparecer `SIG1` al hacer click, antes de saber nada.
+    setSinAbiertos(null);
+    // La identidad hace falta en el `catch` y `sender` vive dentro del `try`: si `resolveSender()` es lo
+    // que falla, no hay ninguna billetera a la que atribuirle la respuesta, y queda `null`.
+    let quien: string | null = null;
     try {
       const sender = await resolveSender();
+      quien = sender;
+      setDuenio(sender);
       // SIN `remittanceId`: es la firma que dispara la resolución contra el store durable.
       const res = await refund.refund({ sender });
       if (res.confirmation === "confirmed") {
-        setSent(null);
-        setRecovered(res.refundTx);
+        // Updater FUNCIONAL a propósito: así `recuperados` no entra en el array de deps de este
+        // `useCallback` y el camino que FIRMA queda byte-idéntico (CD-24 / AC-9). El `some` evita que
+        // una firma repetida duplique la `key` del `.map()` del render.
+        setRecuperados((prev) =>
+          prev.some((r) => r.refundTx === res.refundTx)
+            ? prev
+            : [...prev, { sender, refundTx: res.refundTx }],
+        );
         return;
       }
-      setSent({ confirmation: res.confirmation, refundTx: res.refundTx });
+      // ⛔ ACÁ NO VA NINGÚN `setEnviados([...])` NI NINGÚN reset: la orden anterior sigue sin desenlace
+      // conocido, así que su comprobante sigue siendo la única forma de averiguarlo.
+      // El `confirmation` se saca a un const ANTES del updater porque TypeScript pierde el estrechado
+      // del `return` de arriba dentro de una clausura: `res.confirmation` ahí vuelve a incluir
+      // `"confirmed"`, que este estado no acepta por tipo.
+      const sinDesenlace = res.confirmation;
+      setEnviados((prev) =>
+        prev.some((e) => e.refundTx === res.refundTx)
+          ? prev
+          : [...prev, { sender, confirmation: sinDesenlace, refundTx: res.refundTx }],
+      );
     } catch (e) {
       // El copy de ESTA puerta, no el de la otra: acá "no encontramos nada" no puede leerse como
       // "no tenés fondos" (ver `lostEscrowRecoveryError`).
-      setErr(
-        lostEscrowRecoveryError(e instanceof Error ? e.message : "", MAX_RECOVERY_CANDIDATES),
-      );
+      const code = e instanceof Error ? e.message : "";
+      setErr(lostEscrowRecoveryError(code, MAX_RECOVERY_CANDIDATES));
+      // 🔴 SÓLO este desenlace lo prende, y son TRES desenlaces y no dos: `escrow_recovery_unavailable`
+      // llega con cinco productores (`flow-vm.ts:323-332`) y NINGUNO dice que la ventana esté vacía, así
+      // que ahí la frase sigue siendo "puede haber más" — y es verdad, porque no llegamos a preguntar.
+      // Prenderlo para cualquier error es el mutante N-4, y lo mata `T-346-15`.
+      // Se guarda CUÁL billetera lo dijo: prenderlo sin identidad deja que el éxito de otra lo lea como
+      // el final de su camino (AR-2/MNR-9, mutante N-6).
+      if (quien !== null && esVentanaSinAbiertos(code, MAX_RECOVERY_CANDIDATES)) setSinAbiertos(quien);
     } finally {
       setBusy(false);
     }
@@ -2076,16 +2162,47 @@ export function LostEscrowRecovery({
       <Button variant="outline" onClick={onRecover} disabled={busy}>
         {busy ? "Buscando…" : "Buscar mis escrows"}
       </Button>
-      {recovered ? (
+      {/* 🔴 LAS DOS FRASES DEL FINAL VIVEN ADENTRO DE ESTE BLOQUE, y la POSICIÓN es la mitad del
+        * arreglo: montadas afuera, la tarjeta afirmaría "puede haber más envíos con fondos por
+        * recuperar" recién abierta la puerta, sin haberle preguntado nada a la cadena. Es la SEGUNDA
+        * encarnación del mismo defecto en este archivo: el CR de WKH-327 lo arregló en el componente
+        * INMEDIATAMENTE SIGUIENTE (`explainer`, `flow.tsx:2253`), a unas pocas decenas de líneas de
+        * donde nació este. ⚠️ Acá decía "48 líneas" y era una CIFRA QUE ENVEJECE SOLA: es una
+        * distancia, y mis propias inserciones la movieron a 60 sin que ningún barrido la cazara
+        * (AR-2/MNR-7). Lo que no envejece es la relación estructural, y es la que importa. Un test de
+        * PRESENCIA no lo ve; sólo lo ve uno que mire el DOM ANTES de buscar (`T-346-12`). */}
+      {misRecuperados.length > 0 ? (
         <div className="space-y-1">
           <p className="text-xs font-semibold text-ink">Recuperaste tus fondos</p>
-          {/* La MISMA frase que el historial usa para ese hecho, no una segunda versión. */}
+          {/* La MISMA frase que el historial usa para ese hecho, no una segunda versión. Sigue en
+              singular a propósito: "Recuperaste 2 envíos" es un número que SÍ sabemos, pero es alcance
+              nuevo y no lo pidió nadie. El encabezado funciona en singular y en plural. */}
           <p className="text-xs text-stone">{escrowKnowledgeCopy("returned")}</p>
-          <p className="text-xs text-stone">Comprobante: {recovered}</p>
+          {misRecuperados.map((r) => (
+            <p key={r.refundTx} className="text-xs text-stone">
+              Comprobante: <TxProof signature={r.refundTx} />
+            </p>
+          ))}
+          <p className="text-xs text-stone">
+            {caminoTerminado
+              ? recoveryWindowExhausted(MAX_RECOVERY_CANDIDATES)
+              : recoveryMoreEscrowsHint(MAX_RECOVERY_CANDIDATES)}
+          </p>
         </div>
       ) : null}
-      {sent ? <RefundSentNotice confirmation={sent.confirmation} refundTx={sent.refundTx} /> : null}
-      {err ? <p className="text-xs text-cochineal-ink">{err}</p> : null}
+      {/* UNA por orden transmitida, y no la última: cada una es una tx distinta cuyo desenlace nadie
+          conoce todavía. `RefundSentNotice` queda BYTE-IDÉNTICO — lo comparte con `RefundAction`
+          (`RefundAction`, `flow.tsx:1834`), que es camino AC-9 y no se toca. */}
+      {misEnviados.map((e) => (
+        <RefundSentNotice key={e.refundTx} confirmation={e.confirmation} refundTx={e.refundTx} />
+      ))}
+      {/* 🔴 `!caminoTerminado`: que la app informe "no queda ninguno abierto" DESPUÉS de haber
+          recuperado al menos uno es el final EXITOSO del camino, no un error, y por eso no se pinta con
+          el color del error. Sin esta guarda la tarjeta decía al mismo tiempo "Recuperaste tus fondos",
+          el comprobante, y en `text-cochineal-ink` que ninguno de los últimos N está abierto: la app
+          acababa de averiguar que terminó y seguía hablando como si algo hubiera fallado. ⛔ Con
+          `recuperados` vacío la guarda no aplica y el error se pinta igual que siempre (T-346-16). */}
+      {err && !caminoTerminado ? <p className="text-xs text-cochineal-ink">{err}</p> : null}
     </div>
   );
 }
@@ -2582,7 +2699,7 @@ function AgentUnavailable({
  * agregar *"y el fee de la entrega no lo paga nadie, porque ese paso no corre"*. Es verdad
  * (`this.solana`, `../application/use-cases/confirm-and-send.ts:336`) y está PROHIBIDO escribirlo: en
  * ese mismo cuadrante, tres renglones más arriba en la MISMA tarjeta, la fila de la entrega dice
- * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:2749`). Ese *"lo simula"* es impreciso
+ * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:2866`). Ese *"lo simula"* es impreciso
  * —con el settle apagado la entrega no se simula, se corta— pero es **H1 de WKH-336**, residual de otra
  * HU que exige un TERCER valor de `transport` con su propia frase, y WKH-338 no lo cierra. Si la nota
  * dijera *"la entrega no corre"* mientras la fila dice *"lo simula"*, la tarjeta se contradiría a sí
@@ -2956,9 +3073,9 @@ export function Receipt({ rem, onNew }: { rem: RemittanceState; onNew: () => voi
         <Row label="Estado" value={<Pill tone={status.tone}>{status.label}</Pill>} />
         {/* El único dato de esta pantalla que alguien verificó contra la cadena. */}
         {rem.principalTx ? (
-          <Row label="Depósito en Solana" value={shortTx(rem.principalTx)} />
+          <Row label="Depósito en Solana" value={<TxProof signature={rem.principalTx} />} />
         ) : null}
-        {rem.refundTx ? <Row label="Reembolso" value={shortTx(rem.refundTx)} /> : null}
+        {rem.refundTx ? <Row label="Reembolso" value={<TxProof signature={rem.refundTx} />} /> : null}
         <Row label="Referencia" value={rem.id.slice(0, 8)} />
       </Card>
       <Button variant="outline" onClick={onNew}>
@@ -2991,4 +3108,133 @@ function resetTo(
   setRem(null);
   setPreview(null);
   setStep("send");
+}
+
+/**
+ * WKH-346 / AC-7 — las DOS frases del final del camino de recuperación. Reemplazan a la constante
+ * `RECOVERY_MORE_ESCROWS_HINT` (AR/MNR-3), que prometía algo que la ventana no da.
+ *
+ * POR QUÉ NO LLEVAN LA CUENTA DE ESCROWS PENDIENTES, que sigue siendo el punto. La recuperación
+ * resuelve UN escrow por vez: `resolveRemittanceIdFromLedger` sondea hasta `MAX_RECOVERY_CANDIDATES`
+ * PDAs y devuelve el PRIMERO en estado `Deposited` (`solana-wallet.ts:333`, "el primero refundeable
+ * gana"). Su tipo de retorno es `Promise<string>`: **no expone cuántos quedan**. Así que "te quedan 2
+ * envíos" sería una afirmación que el código no respalda, y "no te queda ninguno" también. Contar los
+ * restantes es cambio de lógica y está fuera del alcance de esta HU. ⛔ CD-6 NO se relaja.
+ *
+ * 🔴 POR QUÉ SÍ LLEVAN EL TAMAÑO DE LA VENTANA, que es OTRO número (AR/MNR-3). Son dos cifras
+ * distintas y sólo una de las dos la sabe el código:
+ *  · cuántos escrows le QUEDAN a la persona ⇒ el código NO lo sabe. Prohibido decirlo.
+ *  · cuántos MIRA cada búsqueda ⇒ el código sí lo sabe, porque es la constante con la que sondea.
+ * La versión vieja decía 'volvé a apretar "Buscar mis escrows" para revisar los que falten', y con más
+ * de `MAX_RECOVERY_CANDIDATES` depósitos perdidos eso es falso: el orden es `created_at desc`, así que
+ * volver a apretar NUNCA alcanza a los más viejos que la ventana. El copy hermano de esta misma
+ * tarjeta ya nombra el número (`sinAbiertosCopy`, `flow-vm.ts:322`), así que el estándar del repo para
+ * esta pantalla es decirlo.
+ *
+ * POR QUÉ SON FUNCIONES Y NO CONSTANTES: `maxCandidates` entra por parámetro, con el molde exacto de
+ * `lostEscrowRecoveryError` (`flow-vm.ts:302`). El llamador pasa la MISMA constante que sondea, así
+ * que el copy no puede quedar diciendo un número que el código dejó de usar. Un `10` escrito a mano
+ * acá lo mata `T-346-17`, que las llama con un valor distinto del real.
+ */
+export function recoveryMoreEscrowsHint(maxCandidates: number): string {
+  return `Puede haber más envíos con fondos por recuperar. Volvé a apretar "Buscar mis escrows": cada búsqueda mira los últimos ${maxCandidates} envíos guardados de esta billetera, así que los más viejos que eso no van a aparecer.`;
+}
+
+/**
+ * El final EXITOSO del camino: la última búsqueda dijo que en la ventana no queda ninguno abierto, y
+ * antes se recuperó al menos uno. Ver `caminoTerminado` en `LostEscrowRecovery`.
+ *
+ * ⚠️ Esta frase NO dice "no te quedan envíos": dice que no queda ninguno **entre los que miramos**, y
+ * después dice qué NO significa. Es la misma voz que `sinAbiertosCopy` (`flow-vm.ts:322`): el hecho
+ * primero, el límite del hecho después.
+ */
+export function recoveryWindowExhausted(maxCandidates: number): string {
+  return `Ya no queda ninguno abierto entre los últimos ${maxCandidates} envíos guardados de esta billetera. Si tenés envíos más viejos que eso, esta búsqueda no llega a ellos.`;
+}
+
+/**
+ * WKH-346 — el comprobante de una transacción Solana: truncado, enlazado al visor y copiable.
+ *
+ * Los cinco sitios que le muestran una firma a la persona pasan por acá. Tres la imprimían ENTERA (87 u 88 caracteres, y 88 en la mayoría de los casos: una firma ed25519 son 64 bytes y su largo en base58 depende del primer byte. Medido, 4000 muestras: 80,2 % dan 88. Los 87 con los que se mide en los tests son propiedad de `FAKE_SOLANA_SIGNATURE`, no de una firma cualquiera — AR/MNR-2)
+ * y desbordaban la única columna de la app; los
+ * otros dos ya truncaban con `shortTx` (`shortTx`, `:3089`) y no llevaban a ninguna parte. Un solo
+ * componente en vez de cinco es lo que impide que el próximo sitio nazca con la tercera variante.
+ *
+ * 🔴 POR QUÉ VIVE ACÁ Y NO EN `src/presentation/tx-proof.tsx`, que era lo natural. Un archivo nuevo
+ * obliga a una sentencia `import` nueva ARRIBA de este archivo, y esa línea desplaza todo lo que viene
+ * después: **la mayoría de las referencias `flow.tsx:NNN` del árbol quedan apuntando a otra cosa, y la
+ * mayoría de ESAS sin que ningún test se ponga rojo**, porque el candado vigila una minoría. Como
+ * apéndice al final el desplazamiento es CERO.
+ *
+ * ⚠️ ACÁ HABÍA TRES NÚMEROS EN PRESENTE —"39 referencias, 27 sin test, el candado vigila 12"— Y LOS
+ * TRES ENVEJECIERON POR MI PROPIA MANO (AR-2/MNR-3): esta HU escribió referencias nuevas, así que
+ * medido al cierre son **48 / 31 / 17** (dos instrumentos independientes coinciden en el 17: mi barrido
+ * y el parser del propio candado). No los creas: **derivalos**, igual que `deriveTables()` en el otro
+ * repo. El comando está en `doc/sdd/052-wkh-346-comprobante-truncado-y-enlazado/story-file.md` §12.1bis.
+ * La DECISIÓN que estos números justifican no cambia —48 es peor que 39, y la minoría vigilada sigue
+ * siendo minoría—; lo que cambia es que una cifra en presente sobre el propio árbol se vuelve falsa sin
+ * que nadie la edite. Es una medición con fecha, no una preferencia de estilo. Mismo criterio de export que
+ * `Receipt` de este archivo: exportado para poder montarlo directo en un test, sin número de línea
+ * porque el nombre ya lo localiza y un número acá sería una cita más que envejece sola.
+ *
+ * 🔴 POR QUÉ EL BOTÓN DE COPIAR TIENE TRES ESTADOS Y NO DOS. `navigator.clipboard` puede ser
+ * `undefined` (contexto no seguro) y `writeText` puede RECHAZAR (permiso denegado, rarezas de iOS). Un
+ * control de dos estados que se pinta de "Copiado" en el `finally` afirma un hecho que no ocurrió, y
+ * sobre el único dato de esta pantalla que alguien puede verificar contra la cadena. Cuando falla, la
+ * pantalla lo dice; el `href` y el `title` siguen siendo las otras dos vías de recuperar el valor
+ * entero. Sin `setTimeout` que revierta a "idle": un temporizador agrega limpieza en `unmount`, un
+ * `setState` después de desmontar y un test con relojes falsos, todo para un revert cosmético.
+ *
+ * ⚠️ LO QUE ESTE COMPONENTE NO GARANTIZA. `break-all` y `min-h-[44px]` son NOMBRES DE CLASE: que
+ * produzcan el quiebre y los 44 px lo hace Tailwind y ningún test de esta HU lo mide (jsdom no hace
+ * layout). Y el copiado se probó contra un `navigator.clipboard` stubbeado: que Safari en iOS acepte
+ * `writeText` en este handler no se verificó — y por eso hay un tercer estado y no dos.
+ */
+export function TxProof({ signature }: { signature: string }) {
+  const [copia, setCopia] = useState<"idle" | "copiada" | "sin-copiar">("idle");
+  const copiar = async () => {
+    try {
+      // `?.` y no un `if`: sin API de portapapeles el `await undefined` no tira, así que el desenlace
+      // se decide igual que el rechazo — "no pudimos", nunca "copiado".
+      const escritura = navigator.clipboard?.writeText(signature);
+      if (escritura === undefined) {
+        setCopia("sin-copiar");
+        return;
+      }
+      await escritura;
+      setCopia("copiada");
+    } catch {
+      setCopia("sin-copiar"); // NUNCA "copiada" en un `finally`: sería afirmar un hecho que no ocurrió
+    }
+  };
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1.5 break-all" data-testid="tx-proof">
+      <a
+        href={resolveSolanaExplorerTxUrl(signature)}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={signature}
+        className="inline-flex items-center gap-1 text-cochineal underline underline-offset-2"
+      >
+        {shortTx(signature)}
+        <ExternalLink className="h-4 w-4 shrink-0" />
+      </a>
+      <button
+        type="button"
+        onClick={copiar}
+        className="inline-flex min-h-[44px] items-center gap-1 text-stone underline underline-offset-2"
+      >
+        {copia === "copiada" ? (
+          <>
+            Copiado
+            <Check className="h-4 w-4 shrink-0 text-verde" />
+          </>
+        ) : copia === "sin-copiar" ? (
+          "No pudimos copiar"
+        ) : (
+          "Copiar"
+        )}
+      </button>
+    </span>
+  );
 }

@@ -27,9 +27,9 @@
 // DERIVACIÓN DEL UMBRAL — cada sumando tiene una fuente, ninguno sale de una estimación:
 //
 //   ── lo que el DEPÓSITO le saca a la billetera ──────────────────────────────────────────────────
-//   EscrowState (154 bytes) ......... 1.962.720 lamports  ← solana-programs/README.md:345, "Rent
-//                                                            exemption, measured by the test suite
-//                                                            against the in-process bank"
+//   EscrowState (154 bytes) ......... 1.962.720 lamports  ← solana-programs/README.md, sección
+//                                                            "On-chain state": el renglón que dice
+//                                                            ese mismo número. Medido, no estimado.
 //   vault (ATA del mint, 165 bytes) . 2.039.280 lamports  ← el README lo da como "standard SPL" sin
 //                                                            número. Sale de la resta de la medición
 //                                                            en cadena: 4.002.000 - 1.962.720 =

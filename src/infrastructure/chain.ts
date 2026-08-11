@@ -49,7 +49,7 @@ export function resolveSolanaNetworkId(): string {
  *  DE DÓNDE SALE EL 79.826: es el peor caso sobre **28 corridas** de `deposit` + `register_escrow`
  *  en una sola tx, medido contra el banco in-process (rango 52.826..79.826 CU, en pasos de 1.500;
  *  la varianza es la búsqueda del bump canónico, ~1.500 CU por iteración extra de sha256).
- *  Evidencia: `solana-programs/tests/escrow-index.ts:725-731` y `solana-programs/README.md:348`
+ *  Evidencia: `solana-programs/tests/escrow-index.ts:725-731` y `solana-programs/README.md`, sección "On-chain state" (⚠️ antes se citaba `:348`, que el 2026-08-11 era una línea EN BLANCO)
  *  (la muestra publicada de 57.326 CU es UNA corrida, no el peor caso).
  *
  *  DOS HONESTIDADES QUE NO SE BORRAN AL REFACTORIZAR:

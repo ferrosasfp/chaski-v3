@@ -7,8 +7,8 @@
 // `text-xs`), contra los 52 px que el CTA del camino feliz ya tenía. Tres de esos seis son las ÚNICAS
 // puertas para recuperar plata:
 //   · "Ver mis envíos"                                    (`flow.tsx:747`)
-//   · "Recuperar un envío perdido"                        (`flow.tsx:2143`)
-//   · "Recuperar el depósito de red de envíos anteriores"  (`flow.tsx:2293`)
+//   · "Recuperar un envío perdido"                        (`flow.tsx:2173`)
+//   · "Recuperar el depósito de red de envíos anteriores"  (`flow.tsx:2323`)
 // Y otros tres viven apretados en una fila del header, uno de ellos destructivo:
 //   · "Borrar igual" (borra los datos locales)             (`flow.tsx:566`)
 //   · "Cancelar"                                           (`flow.tsx:573`)

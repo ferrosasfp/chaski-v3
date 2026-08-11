@@ -1844,23 +1844,49 @@ export function RefundAction({
 }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  // Lo enviado que la cadena TODAVÍA no confirmó. Deliberadamente efímero (no toca el estado
+  // Las órdenes enviadas que la cadena TODAVÍA no confirmó. Deliberadamente efímero (no toca el estado
   // persistido): afirmaría un final que nadie verificó, y `refunded` es terminal.
-  const [sent, setSent] = useState<{ confirmation: "pending" | "unknown"; refundTx: string } | null>(
-    null,
-  );
+  //
+  // 🔴 UNA LISTA APPEND-ONLY, Y LA FORMA DEL ESTADO **ES** EL ARREGLO. Acá había un
+  // `{confirmation, refundTx} | null` que "Volver a intentar" SOBRESCRIBÍA, y encima un `set…(null)` en
+  // el camino confirmado. Lo que guarda es la firma de un refund YA TRANSMITIDO cuyo desenlace NADIE
+  // conoce — `confirmation` sólo puede ser `"pending"` o `"unknown"` (`EscrowRefundConfirmation`,
+  // `ports.ts:339`) —, o sea EXACTAMENTE la firma que la persona necesita para ir al visor a averiguar
+  // si entró, y que no está en ningún otro lado: el use-case NO la persiste (sólo escribe `refundTx`
+  // cuando confirma), así que este array es su único ejemplar.
+  //
+  // Es el MISMO defecto que el fix-pack de WKH-346 arregló en la puerta de al lado
+  // (`LostEscrowRecovery`, `:2036`) y dejó declarado acá sin tocar, porque AC-9/CD-2 le prohibían este
+  // camino de firma. La propiedad "ningún comprobante ya mostrado desaparece" es de la FORMA de CADA
+  // estado y no del componente: de "aquella variable es append-only" no se deduce nada sobre esta.
+  const [enviados, setEnviados] = useState<
+    readonly { confirmation: Exclude<EscrowRefundConfirmation, "confirmed">; refundTx: string }[]
+  >([]);
   const onRefund = useCallback(async () => {
     setBusy(true);
     setErr(null);
     try {
       const res = await recover.execute({ remittanceId, sender });
       if (res.confirmation === "confirmed") {
-        setSent(null);
+        // ⛔ ACÁ NO VA NINGÚN `setEnviados([])`. Acá vivía un `setSent(null)`, y borraba la firma de una
+        // orden ANTERIOR cuyo desenlace nadie conoce: si esta confirmó, aquella probablemente no entró,
+        // pero "probablemente" no es un hecho que justifique destruir la única prueba de que se
+        // transmitió. Lo confirmado tiene su propio lugar durable (`refundTx` en la remesa).
         onRecovered(res.remittance.snapshot); // el estado nuevo manda: la pantalla deja de decir "en camino"
         return;
       }
       // Ni éxito ni fracaso: la orden salió y no sabemos si entró. El botón SIGUE acá.
-      setSent({ confirmation: res.confirmation, refundTx: res.refundTx });
+      // El `confirmation` se saca a un const ANTES del updater porque TypeScript pierde el estrechado
+      // del `return` de arriba dentro de una clausura: ahí `res.confirmation` vuelve a incluir
+      // `"confirmed"`, que este estado no acepta por tipo. Updater FUNCIONAL a propósito: así
+      // `enviados` no entra en el array de deps y el camino que FIRMA queda byte-idéntico. El `some`
+      // evita que un reintento que devuelva la MISMA firma duplique la `key` del `.map()`.
+      const sinDesenlace = res.confirmation;
+      setEnviados((prev) =>
+        prev.some((e) => e.refundTx === res.refundTx)
+          ? prev
+          : [...prev, { confirmation: sinDesenlace, refundTx: res.refundTx }],
+      );
     } catch (e) {
       // enum→copy fijo, sin PII (CD-5). Antes era UNA frase para todo, y con el caso indeterminado
       // esa frase mentía: "no encontramos depósito" no es "no pudimos recuperar tus fondos".
@@ -1873,9 +1899,13 @@ export function RefundAction({
   return (
     <div className="space-y-2">
       <Button variant="outline" onClick={onRefund} disabled={busy}>
-        {busy ? "Recuperando…" : sent ? "Volver a intentar" : "Recuperar fondos"}
+        {busy ? "Recuperando…" : enviados.length > 0 ? "Volver a intentar" : "Recuperar fondos"}
       </Button>
-      {sent ? <RefundSentNotice confirmation={sent.confirmation} refundTx={sent.refundTx} /> : null}
+      {/* UNA por orden transmitida, y no la última: cada una es una tx distinta cuyo desenlace nadie
+          conoce todavía, y la firma es lo único con lo que se puede ir a mirar la cadena. */}
+      {enviados.map((e) => (
+        <RefundSentNotice key={e.refundTx} confirmation={e.confirmation} refundTx={e.refundTx} />
+      ))}
       {err ? <p className="text-xs text-cochineal-ink">{err}</p> : null}
     </div>
   );
@@ -2020,7 +2050,7 @@ export function LostEscrowRecovery({
   // guarda es la firma de un refund YA TRANSMITIDO cuyo desenlace NADIE conoce: `confirmation` es
   // `"pending"` o `"unknown"` (`EscrowRefundConfirmation`, `ports.ts:339`). O sea EXACTAMENTE la firma
   // que la persona necesita para ir al visor a averiguar si entró, y esta HU la volvió prominente y
-  // enlazable (`RefundSentNotice`, `:1964`, que la imprime como "Orden enviada:"). Medido antes del arreglo: con `pending` y después
+  // enlazable (`RefundSentNotice`, `:1994`, que la imprime como "Orden enviada:"). Medido antes del arreglo: con `pending` y después
   // `confirmed`, la primera firma desaparecía del DOM; con dos `pending`, quedaba UN solo href.
   //
   // ⚠️ El `sender` va PEGADO a cada entrada, no aparte: es lo que hace que la pantalla no mezcle dos
@@ -2166,7 +2196,7 @@ export function LostEscrowRecovery({
         * arreglo: montadas afuera, la tarjeta afirmaría "puede haber más envíos con fondos por
         * recuperar" recién abierta la puerta, sin haberle preguntado nada a la cadena. Es la SEGUNDA
         * encarnación del mismo defecto en este archivo: el CR de WKH-327 lo arregló en el componente
-        * INMEDIATAMENTE SIGUIENTE (`explainer`, `flow.tsx:2253`), a unas pocas decenas de líneas de
+        * INMEDIATAMENTE SIGUIENTE (`explainer`, `flow.tsx:2283`), a unas pocas decenas de líneas de
         * donde nació este. ⚠️ Acá decía "48 líneas" y era una CIFRA QUE ENVEJECE SOLA: es una
         * distancia, y mis propias inserciones la movieron a 60 sin que ningún barrido la cazara
         * (AR-2/MNR-7). Lo que no envejece es la relación estructural, y es la que importa. Un test de
@@ -2191,8 +2221,8 @@ export function LostEscrowRecovery({
         </div>
       ) : null}
       {/* UNA por orden transmitida, y no la última: cada una es una tx distinta cuyo desenlace nadie
-          conoce todavía. `RefundSentNotice` queda BYTE-IDÉNTICO — lo comparte con `RefundAction`
-          (`RefundAction`, `flow.tsx:1834`), que es camino AC-9 y no se toca. */}
+          conoce todavía. `RefundSentNotice` sigue BYTE-IDÉNTICO y lo comparte con `RefundAction`
+          (`RefundAction`, `flow.tsx:1834`), que hoy acumula igual: WKH-346 no pudo (AC-9), otra HU sí. */}
       {misEnviados.map((e) => (
         <RefundSentNotice key={e.refundTx} confirmation={e.confirmation} refundTx={e.refundTx} />
       ))}
@@ -2699,7 +2729,7 @@ function AgentUnavailable({
  * agregar *"y el fee de la entrega no lo paga nadie, porque ese paso no corre"*. Es verdad
  * (`this.solana`, `../application/use-cases/confirm-and-send.ts:336`) y está PROHIBIDO escribirlo: en
  * ese mismo cuadrante, tres renglones más arriba en la MISMA tarjeta, la fila de la entrega dice
- * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:2866`). Ese *"lo simula"* es impreciso
+ * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:2896`). Ese *"lo simula"* es impreciso
  * —con el settle apagado la entrega no se simula, se corta— pero es **H1 de WKH-336**, residual de otra
  * HU que exige un TERCER valor de `transport` con su propia frase, y WKH-338 no lo cierra. Si la nota
  * dijera *"la entrega no corre"* mientras la fila dice *"lo simula"*, la tarjeta se contradiría a sí
@@ -3157,7 +3187,7 @@ export function recoveryWindowExhausted(maxCandidates: number): string {
  *
  * Los cinco sitios que le muestran una firma a la persona pasan por acá. Tres la imprimían ENTERA (87 u 88 caracteres, y 88 en la mayoría de los casos: una firma ed25519 son 64 bytes y su largo en base58 depende del primer byte. Medido, 4000 muestras: 80,2 % dan 88. Los 87 con los que se mide en los tests son propiedad de `FAKE_SOLANA_SIGNATURE`, no de una firma cualquiera — AR/MNR-2)
  * y desbordaban la única columna de la app; los
- * otros dos ya truncaban con `shortTx` (`shortTx`, `:3089`) y no llevaban a ninguna parte. Un solo
+ * otros dos ya truncaban con `shortTx` (`shortTx`, `:3119`) y no llevaban a ninguna parte. Un solo
  * componente en vez de cinco es lo que impide que el próximo sitio nazca con la tercera variante.
  *
  * 🔴 POR QUÉ VIVE ACÁ Y NO EN `src/presentation/tx-proof.tsx`, que era lo natural. Un archivo nuevo

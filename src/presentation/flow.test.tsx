@@ -5,7 +5,12 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import bs58 from "bs58";
 import { Receipt, RemittanceFlow, TrackView } from "./flow";
+import type {
+  SolanaEscrowRefundGateway,
+  SolanaEscrowRefundResult,
+} from "../application/ports";
 import { buildTestContainer } from "../test-support/test-container";
 // WKH-339: el almacén REAL para T-339.4/.6. La forma de `ventana`/`renovar` de abajo es la MISMA que
 // arma `container.ts` (un `peek` que decide, y un signer que graba en ESE almacén), así que lo que se
@@ -1028,10 +1033,44 @@ function LiveTrackView({
 // Arma el use-case real sobre un repo real, sembrado con la remesa. El único doble es el gateway
 // on-chain (no hay cadena en el test); todo lo demás corre de verdad, que es lo que hace falta para
 // que el test hable de la persistencia.
-async function seededRecovery(rem: RemittanceState, gateway: FakeSolanaEscrowRefundGateway) {
+async function seededRecovery(rem: RemittanceState, gateway: SolanaEscrowRefundGateway) {
   const repo = new InMemoryRepo();
   await repo.save(Remittance.rehydrate(rem));
   return { repo, recover: new RecoverEscrowFunds(repo, new FixedClock(), gateway) };
+}
+
+// La SEGUNDA firma, para los casos de dos devoluciones seguidas. Se construye igual que
+// `FAKE_SOLANA_SIGNATURE` (`fakes.ts:835`) con otro relleno, así que es base58 válido y DISTINTO; la
+// forma corta va A MANO por el mismo motivo que `SIGNATURE_CORTA` de arriba: recalcularla con
+// `shortTx` la movería junto con el mutante.
+const SEGUNDA_FIRMA = bs58.encode(new Uint8Array(64).fill(9));
+const SEGUNDA_CORTA = "BUguQsv2…m8XpSXRA";
+
+/**
+ * Un gateway que resuelve DISTINTO en llamadas sucesivas, que es lo único con lo que se puede
+ * ejercitar la acumulación de comprobantes. `FakeSolanaEscrowRefundGateway` devuelve SIEMPRE la misma
+ * firma, así que con él las dos órdenes serían la misma y el `some` del componente las colapsaría en
+ * una: el test daría verde con el bug puesto.
+ *
+ * 🔴 VIVE ACÁ Y NO EN `test-support/fakes.ts` A PROPÓSITO, por la misma razón que su gemelo de
+ * `lost-escrow-recovery.test.tsx`: ese módulo lo importan decenas de suites y agregarle un modo tiene
+ * el radio de explosión más grande del repo para cero beneficio.
+ *
+ * ⚠️ Y LO QUE ESTE DOBLE NO PRUEBA: que dos devoluciones REALES en cadena acumulen. Es memoria, en
+ * jsdom.
+ */
+class GatewayEnSecuencia implements SolanaEscrowRefundGateway {
+  public calls: Array<{ remittanceId?: string; sender: string }> = [];
+  constructor(private readonly guion: ReadonlyArray<SolanaEscrowRefundResult | string>) {}
+  async refund(input: { remittanceId?: string; sender: string }): Promise<SolanaEscrowRefundResult> {
+    this.calls.push(input);
+    // El último desenlace se repite si alguien aprieta una vez más: un `undefined` acá sería un
+    // TypeError que se lee como "la UI falló" cuando lo que faltó fue guion.
+    const paso = this.guion[Math.min(this.calls.length - 1, this.guion.length - 1)];
+    if (paso === undefined) throw new Error("guion_vacio");
+    if (typeof paso === "string") throw new Error(paso);
+    return paso;
+  }
 }
 
 describe("HU-SOL-13 — acción refund en TrackView (T7)", () => {
@@ -1205,6 +1244,85 @@ describe("HU-SOL-13 — acción refund en TrackView (T7)", () => {
   // fondos'". Probaba que la acción de refund NO se montara cuando la VM activa no era Solana — un
   // estado que dejó de ser expresable. Lo que queda probado arriba es lo que sí decide hoy si el
   // botón aparece: el deadline y el estado de la remesa, no la VM.
+});
+
+// ── El comprobante de una devolución transmitida no se pisa ──────────────────────────────────────
+//
+// 🔴 EL DEFECTO. `RefundAction` guardaba el desenlace en un casillero único
+// (`{confirmation, refundTx} | null`) y "Volver a intentar" lo SOBRESCRIBÍA. Lo que guarda es la firma
+// de una devolución YA TRANSMITIDA cuyo desenlace NADIE conoce (`"pending"` o `"unknown"`), o sea
+// exactamente aquella que PUEDE haber llegado y que la persona necesita para ir al visor a
+// averiguarlo. Y no vive en ningún otro lado: el use-case escribe `refundTx` en la remesa SÓLO cuando
+// la cadena confirma, así que de las órdenes sin desenlace este componente es el único ejemplar.
+//
+// Es el mismo defecto que el fix-pack de WKH-346 arregló en `LostEscrowRecovery` (T-346-20/21). Esa HU
+// lo detectó acá y no podía tocarlo: AC-9/CD-2 le prohibían editar el camino de firma.
+//
+// ⚠️ LO QUE ESTOS TESTS **NO** HACEN, y es deliberado: contar. Un `toHaveLength(N)` no distingue el
+// arreglo del bug si N ya era cierto antes. Lo que se afirma es IDENTIDAD y CONTENIDO — que el nodo
+// capturado tras el PRIMER click siga en el documento después del segundo, y que cada `href` conserve
+// SU firma entera.
+//
+// ⚠️ Y LO QUE NO CUBREN, declarado: la secuencia `pending` → `confirmed`. Ahí el use-case escribe
+// `refundTx` en la remesa, `showRefund` pasa a `false` y el componente entero se DESMONTA, así que la
+// firma de la orden anterior se pierde igual — con el arreglo y sin él. Eso no se arregla cambiando la
+// forma de este estado: hace falta persistir la orden transmitida, que es la capa de abajo.
+describe("la devolución transmitida: dos órdenes, dos comprobantes", () => {
+  afterEach(() => cleanup());
+
+  it("dos órdenes sin desenlace dejan LOS DOS comprobantes, y el primero sigue siendo el primero", async () => {
+    const gateway = new GatewayEnSecuencia([
+      { refundTx: FAKE_SOLANA_SIGNATURE, confirmation: "pending" },
+      { refundTx: SEGUNDA_FIRMA, confirmation: "unknown" },
+    ]);
+    const rem = solanaPayoutSubmittedSnapshot("2026-07-10T00:00:00.000Z");
+    const { recover } = await seededRecovery(rem, gateway);
+    render(<LiveTrackView initial={rem} recover={recover} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Recuperar fondos/ }));
+    const primero = await screen.findByRole("link", { name: SIGNATURE_CORTA });
+    fireEvent.click(await screen.findByRole("button", { name: /Volver a intentar/ }));
+    const segundo = await screen.findByRole("link", { name: SEGUNDA_CORTA });
+
+    // 🔴 EL ASSERT DEL DEFECTO: el nodo capturado tras el PRIMER click sigue vivo. Que el segundo
+    // aparezca no prueba nada — con el casillero único aparecía igual, pisando al primero.
+    expect(primero).toBeInTheDocument();
+    // Y cada uno conserva SU firma entera, que es lo único auditable contra la cadena: un `.map()` que
+    // reusara la misma firma para los dos pasaría el assert de arriba y caería acá.
+    expect(primero.getAttribute("href")).toContain(FAKE_SOLANA_SIGNATURE);
+    expect(segundo.getAttribute("href")).toContain(SEGUNDA_FIRMA);
+    // Cada orden sigue diciendo lo SUYO. Colapsar los dos desenlaces en uno sería contar "no pudimos
+    // preguntar" como "todavía no entró", que son cosas distintas.
+    expect(screen.getByText(/Todavía no la vemos confirmada en la cadena/)).toBeInTheDocument();
+    expect(screen.getByText(/No pudimos consultar la cadena/)).toBeInTheDocument();
+    // Y el camino que FIRMA no se cerró: la segunda orden salió de verdad.
+    expect(gateway.calls).toHaveLength(2);
+  });
+
+  // ⚠️ ESTE TEST NO DISTINGUE EL ARREGLO y se declara así: el código viejo también lo pasaba, porque el
+  // `catch` nunca tocó el casillero. Vigila la OTRA forma de perder el comprobante — un reset metido en
+  // el camino de error — que es la que quedaría sin nadie mirándola.
+  it("un error posterior NO borra el comprobante de la orden ya transmitida", async () => {
+    const gateway = new GatewayEnSecuencia([
+      { refundTx: FAKE_SOLANA_SIGNATURE, confirmation: "pending" },
+      "escrow_not_found",
+    ]);
+    const rem = solanaPayoutSubmittedSnapshot("2026-07-10T00:00:00.000Z");
+    const { recover } = await seededRecovery(rem, gateway);
+    render(<LiveTrackView initial={rem} recover={recover} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Recuperar fondos/ }));
+    const comprobante = await screen.findByRole("link", { name: SIGNATURE_CORTA });
+    fireEvent.click(await screen.findByRole("button", { name: /Volver a intentar/ }));
+
+    expect(await screen.findByText(/No encontramos un depósito tuyo en el escrow/)).toBeInTheDocument();
+    // El error es sobre el SEGUNDO intento; la orden del primero sigue transmitida y su firma es lo
+    // único con lo que se puede ir a mirar si entró. ⚠️ Y es un caso REAL, no hipotético: si la primera
+    // orden entró, la segunda falla con exactamente este código.
+    expect(comprobante).toBeInTheDocument();
+    expect(comprobante.getAttribute("href")).toContain(FAKE_SOLANA_SIGNATURE);
+    expect(screen.getByText(/Enviamos la orden de recuperación/)).toBeInTheDocument();
+  });
 });
 
 // ── Lo que la pantalla dice en cada uno de los tres casos ─────────────────────────────────────────

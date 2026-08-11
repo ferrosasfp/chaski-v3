@@ -47,7 +47,7 @@ import { canonicalSha256 } from "./canonical-hash";
 // RE-PIN 2026-07-28 — HU-SOL-20 / R2b (SDD solana-programs/doc/sdd/002-escrow-remittance-id-recovery
 // /sdd.md §4.10 DT-9). Motivo: R1 agregó register_escrow + deregister_escrow, la cuenta EscrowIndex
 // y el error 6005. Anterior: aa53c03f159f7381cedf598cfd1b9e0b12d34dcdb2ae3240e9c14b288225fb71.
-const ESCROW_IDL_SHA256 = "d295b7c74ff9a2ac758e24cc9e7d32d3c09d5943e1b137ef67f4f2692993c70e";
+const ESCROW_IDL_SHA256 = "cc2761266dcf8335a17562129de040805f37f69cfe654f5be472045ba7bfcd51";
 
 describe("escrow IDL — hash canónico (WKH-227 / AC-2, AC-3)", () => {
   // AC-2 (siempre corre): si alguien edita escrow-idl.ts a mano sin re-pinnear → ROJO.

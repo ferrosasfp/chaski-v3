@@ -16,19 +16,13 @@
 // habla con el Didit real. Un mock alcanzable en un entorno que se cree productivo es peor que no
 // tenerlo, porque el 404 es lo que hace verificable que está apagado.
 import { NextResponse } from "next/server";
-import { resolveDiditEnvironment } from "../../../../../src/infrastructure/didit/didit-env";
-
-/** `true` sólo si el operador DECLARÓ mock. Cualquier otra cosa (live, ausente, typo) ⇒ apagado. */
-function mockEnabled(): boolean {
-  try {
-    return resolveDiditEnvironment() === "mock";
-  } catch {
-    return false; // sin DIDIT_ENV no se asume nada, ni siquiera para un mock
-  }
-}
+// El gate vive en UN solo lugar y lo comparten esta ruta y `app/kyc-simulado/page.tsx`. Cuando estaba
+// acá adentro como función privada, la página no lo tenía y respondía con cualquier `DIDIT_ENV`: el
+// principio de esta cabecera se cumplía a medias sin que nada lo notara.
+import { mockDiditSurfaceEnabled } from "../../../../../src/infrastructure/didit/mock-surface-enabled";
 
 export async function POST(req: Request): Promise<Response> {
-  if (!mockEnabled()) {
+  if (!mockDiditSurfaceEnabled()) {
     return NextResponse.json({ error: "mock_didit_disabled" }, { status: 404 });
   }
 

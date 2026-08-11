@@ -4,17 +4,46 @@
 // Acá no se escanea nada, y la pantalla lo dice. Es deliberado que ESTA sea la pantalla y no un
 // formulario que pida datos: pedirlos daría a entender que se validan, y no se valida ninguno.
 //
-// Sólo existe cuando `DIDIT_ENV=mock`. Con el Didit real configurado, la ruta que emite el link ni
-// siquiera responde, así que nadie llega hasta acá.
+// 🔴 SÓLO RESPONDE CON `DIDIT_ENV=mock`, y eso ahora es un gate y no una esperanza.
+//
+// Lo que decía antes: *"la ruta que emite el link ni siquiera responde, así que nadie llega hasta
+// acá"*. La primera mitad es cierta — `app/api/mock-didit/v3/session/route.ts` devuelve 404 sin mock —
+// y la conclusión NO se sigue de ella: esto es una página, y una URL se escribe a mano. Medido el
+// 2026-08-11: este archivo no tenía ni una aparición de `DIDIT_ENV`, `process.env` ni `notFound`, así
+// que respondía con cualquier configuración, incluida la que habla con el Didit REAL. Una pantalla que
+// dice "la verificación se va a aprobar sola en unos segundos" servida por un despliegue que verifica
+// de verdad no es una página huérfana: describe un comportamiento que ese despliegue no tiene.
+//
+// El principio ya estaba escrito en la ruta hermana, y ahora lo cumplen las dos desde el MISMO lugar
+// (`mockDiditSurfaceEnabled`): *un mock alcanzable en un entorno que se cree productivo es peor que no
+// tenerlo, porque el 404 es lo que hace verificable que está apagado.*
+import { notFound } from "next/navigation";
 import Link from "next/link";
+import { mockDiditSurfaceEnabled } from "../../src/infrastructure/didit/mock-surface-enabled";
 
 export const metadata = { title: "Verificación simulada · Chaski" };
+
+// 🔴 SIN ESTO EL GATE SE EVALÚA UNA SOLA VEZ, AL COMPILAR. Medido el 2026-08-11: `npm run build`
+// marcaba esta ruta `○ (Static)`, o sea prerenderizada, así que `mockDiditSurfaceEnabled()` corría con
+// el `DIDIT_ENV` del BUILD y el resultado quedaba horneado en el HTML. Consecuencia concreta: pasar
+// `DIDIT_ENV` a `live` en el proveedor **no cerraría esta página** hasta un rebuild, y el 404 dejaría
+// de significar lo que la ruta hermana dice que significa. Es la misma familia de trampa que "un
+// redeploy no recompila las variables": la que hace que apagar algo no lo apague.
+//
+// `force-dynamic` mueve la decisión a cada request. El costo es no cachear una pantalla que existe sólo
+// en entorno de prueba, que es exactamente donde el caché no vale nada.
+export const dynamic = "force-dynamic";
 
 export default async function KycSimuladoPage({
   searchParams,
 }: {
   searchParams: Promise<{ session?: string; vendor?: string }>;
 }) {
+  // ⛔ ANTES de leer los parámetros y antes de renderizar nada: si el mock no está declarado, esta
+  // pantalla no existe. `notFound()` da el 404 de Next, o sea la misma respuesta observable que la ruta
+  // hermana, que es lo que hace verificable desde afuera que la superficie de prueba está apagada.
+  if (!mockDiditSurfaceEnabled()) notFound();
+
   const { session = "", vendor = "" } = await searchParams;
 
   return (

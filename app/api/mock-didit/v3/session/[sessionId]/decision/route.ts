@@ -15,24 +15,18 @@
 // toma el ambiente con el que se resolvió el host. No hay ninguna forma de que esta ruta se
 // etiquete como verificación real: no elige su etiqueta.
 import { NextResponse } from "next/server";
-import { resolveDiditEnvironment } from "../../../../../../../src/infrastructure/didit/didit-env";
+// Mismo gate que las otras dos superficies del mock, desde el MISMO lugar. Había TRES copias privadas
+// de esta función y una de las tres superficies —`app/kyc-simulado/page.tsx`— no tenía ninguna.
+import { mockDiditSurfaceEnabled } from "../../../../../../../src/infrastructure/didit/mock-surface-enabled";
 
 /** Cuánto "tarda" la verificación simulada. Corto, pero suficiente para ver el bucle de espera. */
 const MOCK_VERIFICATION_MS = 6_000;
-
-function mockEnabled(): boolean {
-  try {
-    return resolveDiditEnvironment() === "mock";
-  } catch {
-    return false;
-  }
-}
 
 export async function GET(
   req: Request,
   ctx: { params: Promise<{ sessionId: string }> },
 ): Promise<Response> {
-  if (!mockEnabled()) {
+  if (!mockDiditSurfaceEnabled()) {
     return NextResponse.json({ error: "mock_didit_disabled" }, { status: 404 });
   }
   if (!req.headers.get("x-api-key")) {

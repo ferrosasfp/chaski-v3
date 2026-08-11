@@ -3,7 +3,7 @@
 // providers.tsx). Único archivo que importa la lib + su CSS (seam AC-3). El sync component empuja
 // el estado de useWallet() al singleton React-free y registra openModal.
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { WalletReadyState } from "@solana/wallet-adapter-base"; import { configConexionSolana } from "../../infrastructure/solana/rpc-fetch"; // en UNA linea: la edicion es LINEA-NEUTRA a proposito (hay citas ancladas a este archivo)
+import { WalletReadyState } from "@solana/wallet-adapter-base";
 import { ConnectionProvider, WalletProvider, useWallet } from "@solana/wallet-adapter-react";
 import { WalletModalProvider, useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { PhantomWalletAdapter, SolflareWalletAdapter } from "@solana/wallet-adapter-wallets";
@@ -230,7 +230,7 @@ export default function SolanaProviders({ children }: { children: React.ReactNod
   );
   const onError = useWalletErrorHandler();
   return (
-    <ConnectionProvider endpoint={endpoint} config={configConexionSolana()}>
+    <ConnectionProvider endpoint={endpoint}>
       <WalletProvider wallets={wallets} autoConnect onError={onError}>
         <WalletModalProvider>
           <SolanaWalletBridgeSync />

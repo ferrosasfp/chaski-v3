@@ -185,7 +185,57 @@ pins the program id and the positional account order of `deposit`, `refund` and 
 someone hand edits the vendored IDL, or the deployed program reorders its accounts, the suite goes red
 before a transaction gets rejected in production. Re pinning is an explicit decision with its entry in
 `contracts/CONTRACT-VERSIONS.md`, never a silent drift. The pinned value matches the one held by
-[`wasiai-facilitator`](https://github.com/ferrosasfp/wasiai-facilitator).
+[`wasiai-facilitator`](https://github.com/ferrosasfp/wasiai-facilitator). Measured 2026-08-11 across
+four independent artifacts, this tree, the chain, the facilitator and `solana-programs`, all four
+canonicalise to `cc2761266dcf8335a17562129de040805f37f69cfe654f5be472045ba7bfcd51` over 16,020 bytes.
+
+### Security headers, and what they still do not protect
+
+The app serves `Content-Security-Policy` in **blocking** mode (`next.config.mjs`, policy built in
+`src/infrastructure/security/csp-policy.mjs`). A wrong CSP here does not show up as a broken page: it
+shows up **at signing time**, because the wallet adapter tree, the RPC and its WebSocket all open
+connections an incomplete policy blocks, and the person finds out with the transaction already built.
+
+So `connect-src` is **derived** from `NEXT_PUBLIC_SOLANA_RPC_URL`, the same variable the browser builds
+its `Connection` from, and it yields **two** origins from one URL: the `https://` for the JSON-RPC calls
+and the `wss://` for subscriptions. Omitting the second does not break sending, it breaks
+*confirmation*, which is the more confusing failure. `csp-policy.test.ts` greps the policy module's own
+text to forbid any hardcoded Solana hostname, so the two lists cannot drift apart.
+
+**How it was validated, because a passing test cannot answer this one.** The policy ran a first round in
+`Report-Only`, blocking nothing while the browser reported what it *would* have blocked, and the person
+who signs walked the whole app three times on 2026-08-11 (5, 12 and 11 dollars, deposit confirmed on
+chain each time). Result: **zero violations attributable to this app**, including zero on `connect-src`.
+
+Five violations did occur and **none were authorized**. All five come from the toolbar Vercel injects,
+which loads its own typeface from Google and needs `eval`. That they are not ours was measured, not
+assumed: `DM Sans`, `gstatic` and `eval(` appear nowhere in the repo, the served HTML or the client JS.
+Authorizing them would cost `'unsafe-eval'` plus three domains for every visitor, to accommodate a tool
+only a logged-in Vercel user sees. A test (`T-CSP-10`) forbids adding those four permissions, because
+"add the domain until it stops complaining" is the path of least resistance.
+
+⚠️ **What this does not protect.** `script-src` still carries `'unsafe-inline'`, because Next injects
+inline scripts to hydrate. With that permission present, `script-src` does **not** protect against
+injected-HTML XSS: it is the most important directive in the policy and today it is the weakest. Fixing
+it properly needs a per-request nonce, which needs the headers to move into middleware. It is declared in
+the code, not hidden, and it is queued work rather than a detail.
+
+### The RPC provider, and why its credential is public
+
+Since 2026-08-11 the app talks to a dedicated provider instead of the public devnet endpoint, which was
+returning HTTP 429 in bursts during a real walkthrough. The credential is **visible in the page by
+design**: `NEXT_PUBLIC_*` variables are inlined into the bundle at build time, so every visitor's browser
+must be able to use it and there is no way to hide it on a free tier. The control that does exist is a
+**domain allowlist** on the provider side, verified 2026-08-11 in both channels: the JSON-RPC calls and
+the WebSocket handshake each accept this app's origin and reject a foreign origin and an origin-less
+request. Its honest limit: it stops another *website* from using the key, not a script that sets the
+header by hand.
+
+⚠️ One consequence worth knowing before you reach for tooling: `getProgramAccounts` is **not available on
+that provider's free tier**, and the public endpoint rate-limits it. The app never calls it (its five
+methods are `getAccountInfo`, `getLatestBlockhash`, `getBalance`, `sendRawTransaction` and
+`confirmTransaction`, all verified working), but any script that enumerates program accounts has no
+endpoint to run against today.
 
 ### Devnet smoke
 

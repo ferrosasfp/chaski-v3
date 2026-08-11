@@ -113,6 +113,25 @@ sin vueltas: una remesa llega a `payout_submitted` con el dinero todavía sentad
 La pieza que falta no es la llamada on chain, es la que decide. Hasta que exista, la garantía del que
 envía es el refund, que no necesita la cooperación de nadie.
 
+**Se cerraron dos huecos de seguridad en el flujo de confirmación (2026-08-04).** El flujo de KYC podía
+abrir una sesión sin atadura a la dirección de billetera de quien envía; `/api/payout/validate` entonces
+autorizaba cualquier dirección presentada por un llamador no autenticado. Se reprodujo en producción: un
+POST público con el cuerpo vacío creó una sesión sin `vendor_data`, el mock la aprobó, y tres direcciones
+sin relación entre sí pasaron la validación. El endpoint ahora falla cerrado: `vendor_data` tiene que
+coincidir con la dirección o la autorización se rechaza (WKH-180, revisado en
+`app/api/payout/validate/route.test.ts:156-180`). El segundo arreglo: el endpoint de confirmación ahora
+verifica que la dirección de billetera exista antes de consultar a la autoridad de payout. Si la sesión
+de KYC no tiene dirección, `confirm-and-send` devuelve `wallet_address_unavailable` en vez de dejar que
+una dirección vacía viaje hasta la autoridad, que convertiría un error trivial de estado local en un 502
+falso ("falló el proveedor de identidad"). La guarda de propiedad sigue en pie: la autoridad sigue
+fallando cerrado y sigue rechazando exactamente lo que rechazaba antes.
+
+⚠️ **Este párrafo faltaba entero en esta traducción hasta el 2026-08-11**, mientras el README en inglés
+lo tenía. Medido comparando sección por sección: trece de catorce secciones estaban dentro del ±7%
+normal de una traducción, y esta caía al 74%. O sea que quien leyera el repo en español no veía trabajo
+de seguridad que sí existe, y el modo de falla de una traducción parcial es exactamente ése: no dice algo
+falso, omite. Por eso la comparación es por tamaño de sección y no por lectura.
+
 Dos cosas más que están apagadas por decisión y no por estar sin terminar:
 
 - El desembolso a fiat corre contra un adaptador mock por defecto. El adaptador real existe y está
@@ -166,7 +185,59 @@ pinnea además el program id y el orden posicional de las cuentas de `deposit`, 
 cuentas, la suite se pone roja antes de que una transacción se rechace en producción. Re pinnear es una
 decisión explícita con su entrada en `contracts/CONTRACT-VERSIONS.md`, nunca un drift silencioso. El
 valor pinneado coincide con el que tiene
-[`wasiai-facilitator`](https://github.com/ferrosasfp/wasiai-facilitator).
+[`wasiai-facilitator`](https://github.com/ferrosasfp/wasiai-facilitator). Medido el 2026-08-11 por cuatro
+caminos independientes: este árbol, la cadena, el facilitator y `solana-programs` canonizan los cuatro a
+`cc2761266dcf8335a17562129de040805f37f69cfe654f5be472045ba7bfcd51` sobre 16.020 bytes.
+
+### Cabeceras de seguridad, y qué es lo que todavía NO protegen
+
+La app sirve `Content-Security-Policy` en modo **bloqueo** (`next.config.mjs`, la política se arma en
+`src/infrastructure/security/csp-policy.mjs`). Una política mal puesta acá no se manifiesta como una
+página rota: se manifiesta **al firmar**, porque el árbol del wallet adapter, el RPC y su WebSocket abren
+conexiones que una política incompleta bloquea, y la persona lo descubre con la transacción ya armada.
+
+Por eso `connect-src` se **deriva** de `NEXT_PUBLIC_SOLANA_RPC_URL`, la misma variable con la que el
+navegador construye su `Connection`, y de una sola URL saca **dos** orígenes: el `https://` de las
+llamadas JSON-RPC y el `wss://` de las suscripciones. Omitir el segundo no rompe el envío, rompe la
+*confirmación*, que es el modo de falla más confuso. `csp-policy.test.ts` grepea el TEXTO del propio
+módulo de la política para prohibir cualquier host de Solana escrito a mano, así las dos listas no pueden
+separarse.
+
+**Cómo se validó, porque esto no lo puede contestar un test en verde.** La política corrió una primera
+vuelta en `Report-Only`, sin bloquear nada, mientras el navegador reportaba qué *habría* bloqueado, y la
+persona que firma recorrió la aplicación completa tres veces el 2026-08-11 (5, 12 y 11 dólares, con
+depósito confirmado en la cadena cada vez). Resultado: **cero violaciones atribuibles a esta app**,
+incluidas cero de `connect-src`.
+
+Sí hubo cinco violaciones y **ninguna se autorizó**. Las cinco las produce la barra que Vercel inyecta,
+que carga su propia tipografía de Google y necesita `eval`. Que no son nuestras está medido, no supuesto:
+`DM Sans`, `gstatic` y `eval(` no aparecen ni en el repo, ni en el HTML servido, ni en el JS del cliente.
+Autorizarlas costaría `'unsafe-eval'` más tres dominios para todos los visitantes, para acomodar una
+herramienta que sólo ve quien está logueado en Vercel. Un test (`T-CSP-10`) prohíbe agregar esos cuatro
+permisos, porque "agregar el dominio hasta que deje de quejarse" es el camino de menor resistencia.
+
+⚠️ **Lo que esto NO protege.** `script-src` sigue llevando `'unsafe-inline'`, porque Next inyecta scripts
+en línea para hidratar. Con ese permiso presente, `script-src` **no** protege contra XSS inyectado en el
+HTML: es la directiva más importante de la política y hoy es la más débil. Arreglarlo bien exige un nonce
+por request, que exige mover las cabeceras a un middleware. Está declarado en el código, no escondido, y
+es trabajo en cola y no un detalle.
+
+### El proveedor de RPC, y por qué su credencial es pública
+
+Desde el 2026-08-11 la app habla con un proveedor dedicado en vez del endpoint público de devnet, que
+estaba devolviendo HTTP 429 en ráfagas durante un recorrido real. La credencial está **a la vista en la
+página por diseño**: las variables `NEXT_PUBLIC_*` se incrustan en el bundle al compilar, así que el
+navegador de cada visitante tiene que poder usarla y no hay forma de esconderla en un plan gratuito. El
+control que sí existe es una **lista blanca de dominios** del lado del proveedor, verificada el
+2026-08-11 en los dos canales: tanto las llamadas JSON-RPC como el saludo del WebSocket aceptan el origen
+de esta app y rechazan un origen ajeno y una petición sin origen. Su límite honesto: impide que **otro
+sitio web** use la credencial, no que un script mande la cabecera a mano.
+
+⚠️ Una consecuencia que conviene saber antes de escribir herramientas: `getProgramAccounts` **no está
+disponible en el plan gratuito de ese proveedor**, y el endpoint público lo limita por cuota. La app nunca
+lo llama (sus cinco métodos son `getAccountInfo`, `getLatestBlockhash`, `getBalance`,
+`sendRawTransaction` y `confirmTransaction`, los cinco verificados funcionando), pero cualquier script que
+enumere cuentas de un programa hoy no tiene endpoint contra el que correr.
 
 ### Smoke de devnet
 

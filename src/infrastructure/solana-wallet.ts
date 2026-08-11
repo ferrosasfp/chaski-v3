@@ -282,7 +282,7 @@ export class SolanaWalletAdapter
   // MAX_RECOVERY_CANDIDATES envíos de la persona en los tres casos en que no se preguntó nada.
   // Ahora se consume `lookupBySender`, que las separa, y los tres `not_asked` salen por un código
   // propio. La CUARTA sigue saliendo por `escrow_not_found`, a propósito: ahí el servidor sí contestó
-  // y la frase de la pantalla es cierta. Espeja a (`listCloseable`, `:1076`), que ya hacía esto.
+  // y la frase de la pantalla es cierta. Espeja a (`listCloseable`, `:1104`), que ya hacía esto.
   private async resolveRemittanceIdFromLedger(senderB58: string): Promise<string> {
     const resolver = this.remittanceIdResolver;
     // Mismo guard que `listCloseable`: sin el método no se adivina, y un doble de JS que no lo tenga
@@ -387,6 +387,25 @@ export class SolanaWalletAdapter
     // vault: ATA del mint owned por la PDA escrow_state (off-curve). sender_ata: ATA del sender.
     const vault = getAssociatedTokenAddressSync(mintPk, escrowStatePda, /*allowOwnerOffCurve*/ true);
     const senderAta = getAssociatedTokenAddressSync(mintPk, senderPk);
+    // WKH-343 — beneficiary_ata: la NOVENA cuenta de `deposit`, índice 8. El programa desplegado la
+    // EXIGE, y Anchor tolera cuentas de más pero NO de menos: mientras el IDL vendoreado declaraba 8,
+    // esta ix salía con 8 y TODO depósito fallaba en producción.
+    //
+    // QUÉ ARREGLA QUÉ, medido y no supuesto, porque el reparto no es el intuitivo: lo que cierra la
+    // rotura es el IDL nuevo, NO esta línea. El IDL declara la cuenta con seeds derivables
+    // (`arg: beneficiary` + token program + `account: mint`, bajo el programa de ATA) y el resolver de
+    // anchor las sabe usar: sacando `beneficiaryAta` del `.accounts()` de abajo y dejando el IDL
+    // nuevo, la ix sigue saliendo con las 9 cuentas correctas y la suite entera queda verde. Y al
+    // revés no se salva: con el IDL viejo, pasarla explícita NO alcanza (el shape loose descarta un
+    // nombre que el IDL no declara) y la ix vuelve a salir con 8.
+    // Entonces por qué existe igual: por AR-MNR-1, la misma razón que escrow_state y vault, que
+    // también son derivables y también se pasan a mano — que la dirección no dependa de la versión
+    // del resolver. Es defensa en profundidad declarada, no el arreglo.
+    //
+    // SIN `allowOwnerOffCurve`: el dueño es el beneficiario, una cuenta normal ON-curve. El `true` de
+    // arriba es del vault y sólo porque SU dueño es una PDA; copiarlo acá aceptaría como beneficiario
+    // una pubkey que no puede firmar nunca, y esos fondos no los cobra nadie.
+    const beneficiaryAta = getAssociatedTokenAddressSync(mintPk, beneficiaryPk);
 
     // ── reference (AC-4/CD-SDD-13) — Pubkey único, @solana/web3.js, NO @solana/pay ──
     const reference = Keypair.generate().publicKey; // la privada se DESCARTA (nunca firma)
@@ -412,7 +431,16 @@ export class SolanaWalletAdapter
       // escrow_state/vault son PDAs derivables por anchor, pero se pasan EXPLÍCITOS (AR-MNR-1): más
       // robusto ante cambios de resolución de anchor y elimina el dead code. sender_ata NO es PDA.
       // programs (address fija en el IDL) los resuelve anchor.
-      .accounts({ sender: senderPk, mint: mintPk, escrowState: escrowStatePda, vault, senderAta })
+      // beneficiaryAta explícita por lo mismo (WKH-343). Ojo con la lectura fácil: NO es lo que
+      // arregla la rotura de producción — eso lo hace el IDL nuevo. Ver el bloque de su derivación.
+      .accounts({
+        sender: senderPk,
+        mint: mintPk,
+        escrowState: escrowStatePda,
+        vault,
+        senderAta,
+        beneficiaryAta,
+      })
       .remainingAccounts([{ pubkey: reference, isSigner: false, isWritable: false }]) // AC-4
       .instruction();
 
@@ -773,11 +801,11 @@ export class SolanaWalletAdapter
    * devuelve siempre. Que NINGUNA instrucción la cierre **no se pudo verificar** desde este repo: el
    * IDL no expresa las constraints `close = ...` de Anchor.
    *
-   * POR QUÉ EXIGE `remittanceId` Y `refundEscrow` NO: el fallback de refund (`refundEscrow`, `:588`,
+   * POR QUÉ EXIGE `remittanceId` Y `refundEscrow` NO: el fallback de refund (`refundEscrow`, `:616`,
    * que llama a `resolveRemittanceIdFromLedger`, `:286`) elige UNO entre N y actúa sobre él, porque
    * "recuperar mis USDC" tiene un objetivo natural — el escrow que todavía tiene plata. Para `close` no
    * existe ese "el": todos los terminales son igual de cerrables, y elegir uno en silencio le cerraría
-   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1076`) devuelve la
+   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1104`) devuelve la
    * LISTA y elige ella.
    *
    * ⚠️ POR QUÉ EL LISTER NO TIENE GATEWAY Y EL CIERRE SÍ (apartamiento declarado del SDD §4.1/§4.2,
@@ -800,7 +828,7 @@ export class SolanaWalletAdapter
    * qué código emite Anchor exactamente en ese caso: haría falta un `close` real que revierta.
    *
    * NO declara ComputeBudget, a diferencia de `authorizePrincipal`
-   * (`ComputeBudgetProgram.setComputeUnitLimit`, `:432`): aquello existía por el
+   * (`ComputeBudgetProgram.setComputeUnitLimit`, `:460`): aquello existía por el
    * tope POR UNIDAD del facilitator, y acá el feePayer es el sender — no hay tope de nadie que
    * respetar. Y el número que haría falta (el consumo de CU de `close`) no existe: los 120.000 de
    * `resolveSolanaComputeUnitLimit` salen del peor caso de `deposit`. Declarar un límite por debajo del
@@ -966,10 +994,10 @@ export class SolanaWalletAdapter
    * ¿Entró el `close`? Devuelve el tri-estado y TIRA `close_tx_failed` sólo cuando medimos que la tx
    * entró y revirtió Y la cuenta sigue ahí.
    *
-   * ⚠️ DOS DIVERGENCIAS DELIBERADAS respecto de `confirmRefund`, `:697`. Están escritas acá para
+   * ⚠️ DOS DIVERGENCIAS DELIBERADAS respecto de `confirmRefund`, `:725`. Están escritas acá para
    * que nadie las "armonice" de vuelta en un code review:
    *
-   * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`confirmRefund`, `:697`), SIN leer nada.
+   * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`confirmRefund`, `:725`), SIN leer nada.
    *    Éste NO puede: AC-5 exige que el alquiler volvió se afirme *sólo después de leer que la cuenta
    *    ya no existe*. Un `confirmTransaction` sin `err` prueba que la tx ENTRÓ; leer la ausencia es lo
    *    que prueba que hizo lo que queríamos. El input que pone en rojo cualquier atajo acá: un doble

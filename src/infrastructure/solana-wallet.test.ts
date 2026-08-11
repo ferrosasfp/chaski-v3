@@ -1,8 +1,8 @@
 import { sha256 } from "@noble/hashes/sha256";
 import nacl from "tweetnacl";
 import bs58 from "bs58";
-import { getAssociatedTokenAddressSync } from "@solana/spl-token";
-import { ComputeBudgetProgram, Connection, Keypair, PublicKey, Transaction } from "@solana/web3.js";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { ComputeBudgetProgram, Connection, Keypair, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Money } from "../domain/money";
 import type { Quote } from "../domain/remittance";
@@ -214,8 +214,8 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     expect(ix.programId.toBase58()).toBe(ESCROW_PROGRAM_ID);
     expect(Array.from(ix.data.subarray(0, 8))).toEqual(DEPOSIT_DISCRIMINATOR);
 
-    // accounts del IDL (8) + reference (1) = 9, sin alterar el set del IDL.
-    expect(ix.keys).toHaveLength(9);
+    // accounts del IDL (9 desde WKH-343) + reference (1) = 10, sin alterar el set del IDL.
+    expect(ix.keys).toHaveLength(10);
     const programId = new PublicKey(ESCROW_PROGRAM_ID);
     const bytes = remittanceIdBytes16(rid);
     const [escrowStatePda] = PublicKey.findProgramAddressSync(
@@ -230,6 +230,78 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     expect(keyStrs).toContain(vault.toBase58()); // vault ATA
     expect(keyStrs).toContain(senderAta.toBase58()); // sender_ata
     expect(keyStrs).toContain(SENDER_B58); // sender (signer)
+  });
+
+  // ── WKH-343 — la NOVENA cuenta del deposit, la que rompió producción ───────────────────────────
+  //
+  // Qué se rompió y por qué este test no es "contar hasta 9": el programa desplegado pasó a exigir
+  // `beneficiary_ata` en el índice 8; el IDL vendoreado declaraba 8 cuentas y no la incluía; Anchor
+  // completa las que faltan DESDE el IDL y tolera cuentas de más pero no de menos ⇒ la ix salía con 8
+  // y CADA depósito fallaba. Un assert de longitud sola no habría cazado nada de eso: el `reference`
+  // de los remainingAccounts ya hacía que la ix tuviera 9 keys ANTES del fix, así que "9" era el
+  // número de la versión ROTA. Por eso acá se asertea POSICIÓN por POSICIÓN contra pubkeys derivadas
+  // de forma independiente, y no un total.
+  //
+  // Los inputs que lo ponen en rojo, MEDIDOS uno por uno con el fix puesto, no deducidos:
+  //   1. revertir el IDL vendoreado a las 8 cuentas viejas → ROJO. Es la regresión de producción
+  //      exacta, y es la mutación que importa: el índice 8 pasa a ser el `reference`.
+  //   2. derivar la ATA del sender en vez del beneficiario → ROJO por el assert posicional.
+  //   3. mandarla con `mut` o como firmante → ROJO por los dos asserts de flags.
+  // Y uno que NO lo pone en rojo, escrito acá para que nadie lo descubra a los golpes: sacar
+  // `beneficiaryAta` del `.accounts()` del adapter deja este test VERDE, porque con el IDL nuevo el
+  // resolver de anchor deriva la cuenta solo. No es un agujero del test: es que el explícito es
+  // defensa en profundidad (AR-MNR-1) y el que sostiene la corrección es el IDL. Lo que candea el
+  // IDL es el caso 1 de arriba, más el pin de contracts/idl/escrow-idl.hash.test.ts.
+  it("★ WKH-343: la ix deposit lleva 9 cuentas del IDL y la del índice 8 es la ATA del BENEFICIARIO, no writable y no signer", async () => {
+    const adapter = await connectedAdapter();
+    const rid = "rem-wkh343";
+    await adapter.authorizePrincipal(makeQuote(), rid, escrowDeposit());
+
+    const ix = depositIx(capturedTx(signSpy));
+    const programId = new PublicKey(ESCROW_PROGRAM_ID);
+    const mintPk = new PublicKey(MINT_B58);
+    const beneficiaryPk = new PublicKey(BENEFICIARY_B58);
+    const [escrowStatePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("escrow"), SENDER_KP.publicKey.toBuffer(), Buffer.from(remittanceIdBytes16(rid))],
+      programId,
+    );
+    // Derivadas acá, no copiadas del adapter. La del beneficiario SIN allowOwnerOffCurve: su dueño es
+    // una cuenta on-curve, a diferencia del vault (dueño = PDA). Si el adapter usara `true` acá, la
+    // dirección sería la MISMA para un owner on-curve, así que ese error no lo caza esta línea: lo
+    // caza que el adapter no puede derivar una ATA de un owner off-curve sin el flag y tiraría.
+    const expected = [
+      SENDER_KP.publicKey.toBase58(), // 0 sender
+      mintPk.toBase58(), // 1 mint
+      escrowStatePda.toBase58(), // 2 escrow_state
+      getAssociatedTokenAddressSync(mintPk, escrowStatePda, true).toBase58(), // 3 vault
+      getAssociatedTokenAddressSync(mintPk, SENDER_KP.publicKey).toBase58(), // 4 sender_ata
+      TOKEN_PROGRAM_ID.toBase58(), // 5 token_program
+      ASSOCIATED_TOKEN_PROGRAM_ID.toBase58(), // 6 associated_token_program
+      SystemProgram.programId.toBase58(), // 7 system_program
+      getAssociatedTokenAddressSync(mintPk, beneficiaryPk).toBase58(), // 8 beneficiary_ata
+    ];
+    expect(ix.keys.slice(0, 9).map((k) => k.pubkey.toBase58())).toEqual(expected);
+
+    // Y que la novena NO sea ninguna de las otras ocho: sin esto, un adapter que repitiera el mint (o
+    // el sender_ata) en el índice 8 podría pasar si alguna derivación colapsara.
+    expect(new Set(expected).size).toBe(9);
+
+    // LOS FLAGS, que son la mitad de dinero del asunto. CR-1 acepta cuentas desde el índice 8 sólo si
+    // son no-signer y no-writable (wasiai-facilitator/src/methods/solana-sponsor/cr1.ts:284-288 →
+    // REMAINING_ACCOUNT_FLAGS_INVALID). Una `beneficiary_ata` writable haría rebotar el 100% de los
+    // depósitos patrocinados: cambiaría una rotura por dos.
+    const ninth = ix.keys[8];
+    if (!ninth) throw new Error("la ix deposit no tiene una 9ª cuenta");
+    expect(ninth.isWritable).toBe(false);
+    expect(ninth.isSigner).toBe(false);
+
+    // El `reference` (AC-4) sigue DESPUÉS, en el índice 9: la cuenta nueva no lo desplazó fuera ni lo
+    // pisó. Comprobado por descarte — es la única key que no está en las 9 del IDL.
+    const reference = ix.keys[9];
+    if (!reference) throw new Error("la ix deposit perdió el `reference`");
+    expect(expected).not.toContain(reference.pubkey.toBase58());
+    expect(reference.isWritable).toBe(false);
+    expect(reference.isSigner).toBe(false);
   });
 
   // ── SDD 037 — Guard B: el SEGUNDO prompt de billetera ──────────────────────────────────────────
@@ -550,7 +622,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     // está en la posición 0 y un lector posicional leería la instrucción equivocada.
     const ix = depositIx(capturedTx(signSpy));
     expect(Array.from(ix.data.subarray(0, 8))).toEqual(DEPOSIT_DISCRIMINATOR);
-    expect(ix.keys).toHaveLength(9); // 8 del IDL + reference
+    expect(ix.keys).toHaveLength(10); // 9 del IDL (WKH-343) + reference
 
     const programId = new PublicKey(ESCROW_PROGRAM_ID);
     const bytes = remittanceIdBytes16(rid);
@@ -585,7 +657,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
 
   // T12 — el ÚNICO test que mira el PAYLOAD. T1..T6 assertan sobre `capturedTx(signSpy)`, que es el
   // objeto que Chaski le ENTREGA a la billetera. Lo que producción serializa y postea es lo que la
-  // billetera DEVUELVE (`remainingAccounts`, `solana-wallet.ts:404`), y en producción puede ser otro objeto: el
+  // billetera DEVUELVE (`remainingAccounts`, `solana-wallet.ts:423`), y en producción puede ser otro objeto: el
   // adapter serializa `signed`, no `tx`. Si una billetera real agrega sus propias ComputeBudget
   // —el escenario que esta HU declara que NO puede impedir (sdd.md §11.1)—, Chaski postea esa tx
   // sin chistar y ninguno de los seis se entera, porque todos miran el objeto de entrada.

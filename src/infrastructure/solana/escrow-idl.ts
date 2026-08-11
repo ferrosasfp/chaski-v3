@@ -5,6 +5,13 @@
 // El `address` (DR5G…SE4x) es la ÚNICA fuente del program id (CD-SDD-4). El adapter lo castea a
 // anchor.Idl en runtime (lazy). Verificado contra AH-11: ix `deposit` discriminator
 // [242,35,198,137,82,225,242,182]; args remittance_id[u8;16]/beneficiary/authority/amount(u64)/deadline(i64).
+// WKH-343 — `deposit` pasa de 8 a NUEVE cuentas: entra `beneficiary_ata` en el ÍNDICE 8, sin `mut`
+// (writable=false, signer=false). El discriminador NO se movió. Anchor tolera cuentas de más y NO de
+// menos, así que mientras acá decía 8 la ix salía con 8 y el programa desplegado la rechazaba: este
+// archivo es lo que arregla la rotura (la cuenta trae seeds derivables y el resolver las usa; medido
+// sacándola del `.accounts()` del adapter, que sigue armando las 9). Y no writable: el facilitator admite
+// cuentas extra desde el índice 8 sólo si son no-signer y no-writable; mandarla `mut` haría que
+// CR-1 rechace el 100% de los depósitos patrocinados.
 export const escrowIdl = {
   "address": "DR5GoMT7sAKzD6wZMKJPeknS3Y6fzgZUNevi7xiESE4x",
   "metadata": {
@@ -361,13 +368,25 @@ export const escrowIdl = {
           "name": "mint",
           "docs": [
             "Acepta CUALQUIER mint, y es una decisión, no un olvido. El programa es infraestructura de",
-            "escrow genérica; \"qué token vale un dólar\" es política de producto y vive en el componente",
-            "que está en el camino crítico de todos los depósitos (el co-firmante off-chain, que se",
-            "niega a firmar un depósito con un mint inesperado). Clavarlo acá obligaría a dos builds,",
-            "dos IDL, dos hashes pinneados y un redespliegue para rotarlo.",
+            "escrow genérica; \"qué token vale un dólar\" es política de producto y vive aguas arriba, en",
+            "el componente que arma el depósito. Clavarlo acá obligaría a dos builds, dos IDL, dos hashes",
+            "pinneados y un redespliegue para rotarlo.",
+            "",
+            "⚠️ DÓNDE VIVE EL CONTROL, y hasta dónde llega: el co-firmante off-chain compara el mint del",
+            "depósito contra el que tiene configurado y se niega a firmar si no coincide. Ese control",
+            "EXISTE. Lo que no hace es cubrir todos los depósitos: cubre sólo los que pasan por él, y un",
+            "depósito construido y firmado por fuera del patrocinador no lo atraviesa. Para esos, el",
+            "programa acepta cualquier mint y nadie aguas arriba lo filtra.",
+            "",
+            "LO QUE ESTA STRUCT SÍ EXIGE, y es distinto de clavar el mint: que el mint sea CONSISTENTE",
+            "con un beneficiario capaz de recibirlo (ver `beneficiary_ata`, al final de esta struct). Es",
+            "un invariante RELACIONAL entre el mint y el destinatario, y por eso una constante global no",
+            "lo expresa: clavar el mint no habría prevenido el incidente de WKH-343 (los 4 depósitos",
+            "trabados estaban sobre el mint que el producto quiere usar) y además rechazaría ese mismo",
+            "token. Lo que se violó no fue `mint == X`.",
             "",
             "LA CONDICIÓN QUE DA VUELTA ESTA DECISIÓN, escrita para que se pueda comprobar: el día que",
-            "exista un barrido que descubra depósitos on-chain y los tome por buenos SIN esa co-firma,",
+            "exista un barrido que descubra depósitos on-chain y los tome por buenos SIN co-firma,",
             "el mint tiene que clavarse acá, porque ahí un depósito auto-fondeado con el mint de un",
             "atacante entraría a un camino de producto. Los enumeradores de hoy (EscrowIndex y el",
             "resolver de ids) sólo alimentan el refund, que es inofensivo.",
@@ -518,6 +537,95 @@ export const escrowIdl = {
         {
           "name": "system_program",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "beneficiary_ata",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "arg",
+                "path": "beneficiary"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
         }
       ],
       "args": [

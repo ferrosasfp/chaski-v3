@@ -7,6 +7,24 @@ import { canonicalSha256 } from "./canonical-hash";
 
 // Pinneada y verificada en F2 sobre los 3 IDL reales (todos canonicalizan igual, address DR5G).
 // Re-pinneo SOLO con SDD explícito, jamás por drift silencioso (ver CONTRACT-VERSIONS.md).
+// RE-PIN 2026-08-10 — WKH-343, despliegue en devnet (slot 482775110, binario verificado byte a byte
+// contra el artefacto local). Motivo, medido con un diff normalizado del IDL entero: la ÚNICA
+// diferencia es que `deposit` suma una NOVENA cuenta, `beneficiary_ata`, en el ÍNDICE 8, al final de
+// la lista (después de `system_program`), NO opcional, writable=false y signer=false. Ningún
+// discriminador se movió: los 6 de las instrucciones y los 2 de las cuentas (`EscrowIndex`,
+// `EscrowState`) son idénticos, y `deposit` conserva su discriminador y sus args. `close`, `refund`,
+// `release`, `register_escrow` y `deregister_escrow` conservan cuentas, orden y args. Los errores
+// siguen siendo 6000..6008 sin renumerar y `EscrowStatus` sigue con 3 variantes, así que el decode
+// de la cuenta no se mueve.
+// ⚠️ Este re-pin NO es compatible en las dos direcciones para lo que este repo invoca: el programa
+// desplegado EXIGE las 9 cuentas y Anchor tolera de más pero no de menos, así que con el IDL viejo
+// `authorizePrincipal` armaba la ix con 8 y TODO depósito fallaba. Por eso el fix del cliente
+// (mandar la cuenta explícita) viaja en el mismo commit que este re-pin.
+// ⚠️ NO alineado con wasiai-facilitator al momento de escribir esto: su pin sigue en `bfbdfe5a…`
+// (wasiai-facilitator/src/chains/escrow-idl.hash.test.ts:39). Es un pin de test, no un guard de
+// runtime; el guard que sí corre en el camino del dinero es CR-1, que acepta cuentas extra desde el
+// índice 8 si son no-signer y no-writable (src/methods/solana-sponsor/cr1.ts:284-288) — y ésta lo es.
+// Anterior: bfbdfe5aedd55d68e6dda4663b5d26daada815c99db03df34a1601fe4a4d3922.
 // RE-PIN 2026-08-05 — despliegue en devnet (slot 481495859, binario verificado byte a byte contra
 // el artefacto local). Motivo, medido con un diff normalizado del IDL entero (claves ordenadas):
 // la ÚNICA diferencia es que `close` suma una SÉPTIMA cuenta, `escrow_index`, `optional: true`, al
@@ -29,7 +47,7 @@ import { canonicalSha256 } from "./canonical-hash";
 // RE-PIN 2026-07-28 — HU-SOL-20 / R2b (SDD solana-programs/doc/sdd/002-escrow-remittance-id-recovery
 // /sdd.md §4.10 DT-9). Motivo: R1 agregó register_escrow + deregister_escrow, la cuenta EscrowIndex
 // y el error 6005. Anterior: aa53c03f159f7381cedf598cfd1b9e0b12d34dcdb2ae3240e9c14b288225fb71.
-const ESCROW_IDL_SHA256 = "bfbdfe5aedd55d68e6dda4663b5d26daada815c99db03df34a1601fe4a4d3922";
+const ESCROW_IDL_SHA256 = "d295b7c74ff9a2ac758e24cc9e7d32d3c09d5943e1b137ef67f4f2692993c70e";
 
 describe("escrow IDL — hash canónico (WKH-227 / AC-2, AC-3)", () => {
   // AC-2 (siempre corre): si alguien edita escrow-idl.ts a mano sin re-pinnear → ROJO.
@@ -69,7 +87,8 @@ describe("escrow IDL — hash canónico (WKH-227 / AC-2, AC-3)", () => {
       "release",
     ]);
 
-    // NO-REGRESIÓN (CD-8): deposit conserva discriminador y sus 8 cuentas posicionales.
+    // NO-REGRESIÓN (CD-8): deposit conserva discriminador y sus cuentas posicionales, ahora NUEVE
+    // (WKH-343 sumó `beneficiary_ata` al final; las 8 primeras no se movieron ni cambiaron de orden).
     expect(discOf("deposit")).toEqual([242, 35, 198, 137, 82, 225, 242, 182]);
     expect(accountsOf("deposit")).toEqual([
       "sender",
@@ -80,6 +99,7 @@ describe("escrow IDL — hash canónico (WKH-227 / AC-2, AC-3)", () => {
       "token_program",
       "associated_token_program",
       "system_program",
+      "beneficiary_ata",
     ]);
 
     // NO-REGRESIÓN: refund (el camino que R0 acaba de tocar) conserva discriminador y sus 7 cuentas.
@@ -141,6 +161,34 @@ describe("escrow IDL — hash canónico (WKH-227 / AC-2, AC-3)", () => {
     expect(seventh.name).toBe("escrow_index");
     expect(seventh.optional).toBe(true);
     expect(seventh.writable).toBe(true);
+  });
+
+  // WKH-343 — la NOVENA cuenta de `deposit` y, sobre todo, SUS FLAGS. El nombre y la posición ya los
+  // pinea el `it` de arriba; lo que se candea acá es que siga entrando SIN `mut`.
+  //
+  // Por qué merece su propio assert: si un re-pin futuro le pusiera `mut` en el programa, este repo
+  // seguiría armando la ix "bien" y el rojo aparecería recién en producción, del lado del
+  // facilitator. CR-1 acepta cuentas extra a partir del índice 8 sólo si son no-signer y no-writable
+  // (wasiai-facilitator/src/methods/solana-sponsor/cr1.ts:284-288 → `REMAINING_ACCOUNT_FLAGS_INVALID`),
+  // así que un `beneficiary_ata` writable haría rebotar el 100% de los depósitos patrocinados.
+  // El input que lo pone en rojo: agregarle `"writable": true` o `"signer": true` en el IDL.
+  it("WKH-343: deposit declara `beneficiary_ata` en el índice 8, no writable, no signer y NO opcional", () => {
+    type IxView = {
+      name: string;
+      accounts: ReadonlyArray<{ name: string; optional?: boolean; writable?: boolean; signer?: boolean }>;
+    };
+    const ix = escrowIdl.instructions as unknown as ReadonlyArray<IxView>;
+    const depositIx = ix.find((i) => i.name === "deposit");
+    if (!depositIx) throw new Error("el IDL no declara la instrucción `deposit`");
+
+    const ninth = depositIx.accounts[8];
+    if (!ninth) throw new Error("deposit no tiene una 9ª cuenta");
+    expect(ninth.name).toBe("beneficiary_ata");
+    // Anchor omite la clave cuando el flag es false, así que se compara contra "falsy declarado",
+    // no contra `false` literal: `toBe(false)` daría rojo por un IDL correcto.
+    expect(ninth.writable ?? false).toBe(false);
+    expect(ninth.signer ?? false).toBe(false);
+    expect(ninth.optional ?? false).toBe(false);
   });
 
   // ── AC-DOC — el documento publicado NO puede separarse de la constante ─────────────────────────

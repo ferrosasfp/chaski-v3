@@ -48,12 +48,22 @@ describe("el umbral de SOL sale del costo REAL del depósito", () => {
   // hay que re-derivarlo.
   it("la ix `deposit` no toca `escrow_index` (por eso su rent no es un sumando)", () => {
     const idl = escrowIdl as unknown as {
-      instructions: Array<{ name: string; accounts: Array<{ name: string }> }>;
+      instructions: Array<{ name: string; accounts: Array<{ name: string; writable?: boolean }> }>;
     };
     const deposit = idl.instructions.find((i) => i.name === "deposit");
     expect(deposit).toBeDefined();
     const names = deposit?.accounts.map((a) => a.name) ?? [];
-    expect(names).toHaveLength(8);
+    // 9 desde WKH-343. El número está acá a propósito, como alarma: si el set de cuentas de `deposit`
+    // cambia, el umbral hay que RE-DERIVARLO en vez de asumir que sigue valiendo. Se re-derivó para
+    // este cambio y NO se movió, y el motivo es verificable en la línea de abajo: `beneficiary_ata`
+    // entra NO writable, así que `deposit` no puede crearla — sólo exige que ya exista. Una cuenta
+    // que la ix no inicializa no le cobra rent a nadie, y menos al sender, que es de quien habla
+    // este umbral. Lo que sí cambia es una PRECONDICIÓN operativa: si el beneficiario no tiene ATA
+    // de ese mint, el depósito se rechaza. Eso no es plata del sender y por eso no entra acá.
+    expect(names).toHaveLength(9);
+    const beneficiaryAta = deposit?.accounts.find((a) => a.name === "beneficiary_ata");
+    expect(beneficiaryAta).toBeDefined();
+    expect(beneficiaryAta?.writable ?? false).toBe(false); // no writable ⇒ no la crea ⇒ no suma rent
     expect(names).not.toContain("escrow_index");
     // Y la que sí la crea existe, así que el `not.toContain` de arriba no pasa por un rename.
     const register = idl.instructions.find((i) => i.name === "register_escrow");

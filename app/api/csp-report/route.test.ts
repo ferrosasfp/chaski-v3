@@ -8,7 +8,14 @@
 // credenciales), no se pueda usar para nada: siempre 204, cuerpos acotados, y nada de lo que llega
 // alimenta una decisión.
 import { describe, expect, it, vi } from "vitest";
-import { POST, extraerViolaciones, resumirViolacion } from "./route";
+import { POST } from "./route";
+// Los helpers NO pueden vivir en el `route.ts`: Next valida los exports de una ruta EN EL BUILD y
+// cualquier export extra lo deja en ERROR. Medido el 2026-08-11: la suite y `tsc` en verde, el
+// despliegue caído. Viven en su propio módulo, que además es testeable.
+import {
+  extraerViolaciones,
+  resumirViolacion,
+} from "../../../src/infrastructure/security/csp-report-parse";
 
 /** Acceso al primer elemento sin `!`: con `noUncheckedIndexedAccess` el índice puede ser undefined,
  *  y un `!` acá esconde el caso en que `extraerViolaciones` devuelve vacío — que es justo el bug que
@@ -111,5 +118,20 @@ describe("candado · receptor de reportes de CSP", () => {
   it("T-RPT-10: la ruta es dinámica", async () => {
     const mod = await import("./route");
     expect((mod as { dynamic?: string }).dynamic).toBe("force-dynamic");
+  });
+
+  // ── Forma: la ruta NO exporta nada que Next rechace ─────────────────────────────────────────
+  // Este candado existe porque el defecto que rompió el despliegue del 2026-08-11 era invisible para
+  // la suite Y para `tsc`: sólo lo caza `next build`. Acá se vigila la CONDICIÓN (qué exporta el
+  // módulo) en vez de esperar el build, que tarda minutos y corre en otra máquina.
+  it("T-RPT-11: la ruta sólo exporta handlers y config — un export extra rompe el BUILD", async () => {
+    const mod = await import("./route");
+    const PERMITIDOS = new Set([
+      "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS",
+      "dynamic", "dynamicParams", "revalidate", "fetchCache", "runtime",
+      "preferredRegion", "maxDuration", "generateStaticParams",
+    ]);
+    const extras = Object.keys(mod).filter((k) => !PERMITIDOS.has(k));
+    expect(extras).toEqual([]);
   });
 });

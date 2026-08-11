@@ -1,13 +1,31 @@
 // La política de Content-Security-Policy de la DApp.
 //
-// ── POR QUÉ ARRANCA EN `Report-Only` ────────────────────────────────────────────────────────────
+// ── ESTA POLÍTICA BLOQUEA, Y SE VALIDÓ CON UN RECORRIDO REAL ANTES DE HACERLO ───────────────────
 //
 // Un CSP mal puesto en esta app no se manifiesta como una página rota: se manifiesta AL FIRMAR. El
 // árbol del wallet adapter, la conexión al RPC (incluido su WebSocket) y la ventana del proveedor de
 // identidad abren conexiones que una política incompleta bloquea, y el usuario lo descubre en el peor
-// momento posible — con la transacción armada. Por eso la primera vuelta NO bloquea nada: el
-// navegador sólo REPORTA qué habría bloqueado, contra `/api/csp-report`, y la política definitiva se
-// arma con ese dato en vez de con una lista de dominios sacada a mano del código.
+// momento posible — con la transacción armada. Por eso la primera vuelta corrió en `Report-Only`,
+// sin bloquear nada, y la persona que firma recorrió la aplicación completa mientras el navegador
+// reportaba qué HABRÍA bloqueado.
+//
+// RESULTADO DE ESE RECORRIDO (2026-08-11, cotización → 3 firmas → depósito de 12 USDC confirmado en
+// devnet): **cero violaciones atribuibles a esta aplicación.** En particular cero de `connect-src`,
+// que era el riesgo real — ni las llamadas JSON-RPC ni el WebSocket del RPC se bloquearon.
+//
+// ⚠️ SÍ HUBO CINCO VIOLACIONES, Y NINGUNA ES DE ACÁ: las cinco las produce la barra de herramientas
+// que Vercel inyecta (`vercel.live/_next-live/feedback/feedback.js`), que carga su propia tipografía
+// desde Google Fonts y necesita `eval`. Se comprobó que no son nuestras midiendo el repo: `DM Sans`
+// y `gstatic` no aparecen NI UNA VEZ en el código, el HTML servido ni el JS de la app, y ningún
+// chunk del cliente contiene `eval(`. La tipografía propia es Hanken Grotesk vía `next/font/google`,
+// que Next **auto-hospeda** al compilar — por eso `font-src 'self' data:` alcanza y no hubo ninguna
+// violación por ella.
+//
+// DECISIÓN, y es la parte que importa: **esas cinco NO se autorizan.** Autorizarlas costaría agregar
+// `fonts.googleapis.com`, `fonts.gstatic.com`, `vercel.live` y —lo más caro— `'unsafe-eval'`, o sea
+// debilitar permanentemente la política de TODOS los visitantes para acomodar una herramienta que
+// sólo ve quien está logueado en Vercel. La barra pierde su tipografía y su widget; la aplicación no
+// pierde nada. Si molesta, se apaga la barra en la configuración del proyecto.
 //
 // ── EL ORIGEN DEL RPC SE DERIVA, NO SE COPIA ────────────────────────────────────────────────────
 //
@@ -30,9 +48,12 @@
 // directiva más importante de la política y hoy es la más débil. Está así para que la primera vuelta
 // mida el resto sin ahogarse en ruido, y el nonce es el paso siguiente, no un detalle.
 //
-// ⚠️ Esta lista se escribió leyendo el bundle SERVIDO (los únicos orígenes externos que aparecen son
-// el RPC y `vercel.live`), no adivinando. Aun así es una hipótesis hasta que el recorrido real la
-// confirme: por eso `Report-Only`.
+// ⚠️ Y UNA CORRECCIÓN QUE VALE MÁS QUE LA LISTA: la primera versión de este archivo afirmaba que
+// "los únicos orígenes externos son el RPC y vercel.live", medido grepeando el bundle servido. **Era
+// incompleto y se presentó como completo.** Google Fonts no aparecía porque la tipografía se pide
+// desde un `<link>` del `<head>`, no desde el JavaScript: el método miraba el lugar equivocado. Lo
+// destapó el recorrido en `Report-Only`, que es exactamente para lo que existe ese modo. Grepear un
+// bundle NO enumera los orígenes de una página.
 
 /** Deriva `https://host` y `wss://host` de la URL del RPC. Devuelve `[]` si la URL no sirve. */
 export function rpcOrigins(rpcUrl) {
@@ -51,10 +72,12 @@ export function rpcOrigins(rpcUrl) {
 }
 
 /**
- * Arma el valor de la cabecera. `extraConnectSrc` existe para orígenes que no salen de una env
- * (hoy: la barra de Vercel), y se pasa explícito para que quede a la vista de quien lea el config.
+ * Arma el valor de la cabecera. `extraConnectSrc` existe para orígenes que no salen de una env, y se
+ * pasa explícito para que quede a la vista de quien lea el config. HOY NO SE USA.
  */
 export function buildCspPolicy({ rpcUrl, extraConnectSrc = [], reportUri = "/api/csp-report" } = {}) {
+  // `extraConnectSrc` queda para orígenes que no salgan de una env, y HOY VA VACÍO a propósito: lo
+  // único que había ahí era `vercel.live`, que resultó ser de la barra de Vercel y no de la app.
   const connect = ["'self'", ...rpcOrigins(rpcUrl), ...extraConnectSrc];
   const directivas = [
     // Todo lo que no tenga su propia directiva cae acá: mismo origen y nada más.

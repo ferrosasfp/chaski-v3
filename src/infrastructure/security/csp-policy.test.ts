@@ -9,8 +9,11 @@
 // 2. Que el WebSocket viaje junto al HTTPS. web3.js lo abre solo derivando el host de la misma URL;
 //    omitirlo NO rompe el envío, rompe la CONFIRMACIÓN, que es el modo de falla más confuso.
 // 3. Que una URL inválida no se convierta en un origen inventado.
-// 4. Que la cabecera siga siendo `Report-Only` mientras la política no esté verificada con un
-//    recorrido real — y que el día que se endurezca, sea una decisión y no un descuido.
+// 4. Que el MODO de la cabecera (bloquear vs. sólo reportar) sea una decisión escrita: T-CSP-9 lo
+//    afirma en una sola dirección, así que cambiarlo obliga a dar vuelta el test en el mismo commit.
+// 5. Que las violaciones del recorrido real NO se hayan autorizado por comodidad (T-CSP-10): la
+//    salida fácil es agregar el dominio hasta que el navegador deje de quejarse, y acá está
+//    prohibido tomarla sin volver a medir de QUIÉN es la violación.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -104,18 +107,46 @@ describe("candado · política de CSP", () => {
   // ── La cabecera y su destino viajan juntos ───────────────────────────────────────────────────
   it("T-CSP-8: next.config sirve el CSP y declara Reporting-Endpoints", () => {
     const src = leer("next.config.mjs");
-    expect(src).toContain("Content-Security-Policy-Report-Only");
+    // Se busca el PREFIJO, así este caso sobrevive el cambio de modo: lo que vigila es que la
+    // cabecera exista y que su valor venga de la política, no cuál de las dos variantes es. De qué
+    // variante se trata lo afirma T-CSP-9, que es el único lugar donde eso se declara.
+    expect(src).toContain("Content-Security-Policy");
     // Sin esta cabecera, `report-to csp` no apunta a ningún lado.
     expect(src).toContain("Reporting-Endpoints");
     expect(src).toContain("buildCspPolicy");
   });
 
-  // ── El estado declarado es Report-Only, y es DELIBERADO ──────────────────────────────────────
-  // Cuando se endurezca, este test se pone rojo y obliga a actualizarlo en el mismo commit. Es lo
-  // que impide que "activar el CSP" pase inadvertido, en cualquiera de las dos direcciones.
-  it("T-CSP-9: hoy NO bloquea — la clave es Report-Only y no la de bloqueo", () => {
+  // ── El estado declarado es BLOQUEO, y es DELIBERADO ─────────────────────────────────────────
+  // Este test tenía la afirmación INVERSA (que la clave fuera `Report-Only`) y se dio vuelta a mano
+  // en el commit que endureció la política, que es justo para lo que existe: obliga a que cambiar de
+  // modo sea una decisión escrita y no un descuido, en cualquiera de las dos direcciones.
+  it("T-CSP-9: la política BLOQUEA — la clave es la real, no la de sólo-reportar", () => {
     const src = leer("next.config.mjs");
-    expect(src).toContain('key: "Content-Security-Policy-Report-Only"');
-    expect(src).not.toMatch(/key:\s*"Content-Security-Policy"/);
+    expect(src).toMatch(/key:\s*"Content-Security-Policy"/);
+    expect(src).not.toContain('key: "Content-Security-Policy-Report-Only"');
+  });
+
+  // ── Lo que NO se autorizó, y tiene que seguir sin autorizarse ───────────────────────────────
+  // Las cinco violaciones del recorrido del 2026-08-11 las produce la barra que Vercel inyecta, no
+  // la app. Autorizarlas exigiría `'unsafe-eval'` y tres dominios más para todos los visitantes.
+  // Este test existe porque "agregar el dominio hasta que deje de quejarse" es el camino de menor
+  // resistencia, y acá está prohibido tomarlo sin volver a medir de quién es la violación.
+  it.each([
+    ["'unsafe-eval'", "script-src"],
+    ["https://fonts.googleapis.com", "style-src"],
+    ["https://fonts.gstatic.com", "font-src"],
+    ["https://vercel.live", "connect-src"],
+  ])("T-CSP-10: %s NO está autorizado en %s", (valor, dir) => {
+    const p = buildCspPolicy({ rpcUrl: "https://api.devnet.solana.com" });
+    expect(directiva(p, dir)).not.toContain(valor);
+  });
+
+  // La tipografía propia se auto-hospeda (`next/font/google`), y por eso `font-src 'self' data:`
+  // alcanzó sin una sola violación. Si alguien la cambia por un `<link>` externo, esto se pone rojo
+  // ANTES de que el CSP la bloquee en producción — que es el orden que importa.
+  it("T-CSP-11: la tipografía se pide por next/font, no por un link externo", () => {
+    const layout = leer("app/layout.tsx");
+    expect(layout).toContain("next/font/google");
+    expect(layout).not.toMatch(/fonts\.(googleapis|gstatic)\.com/);
   });
 });

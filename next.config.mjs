@@ -1,21 +1,20 @@
 import { buildCspPolicy } from "./src/infrastructure/security/csp-policy.mjs";
 
-// El CSP arranca en `Report-Only`: el navegador NO bloquea nada y sólo reporta qué habría bloqueado.
+// El CSP **BLOQUEA**. Estuvo en `Report-Only` una vuelta, la persona que firma recorrió la
+// aplicación completa, y el navegador no reportó ni una violación atribuible a esta app — cero de
+// `connect-src`, que era el riesgo real, ni en las llamadas al RPC ni en su WebSocket.
 //
-// POR QUÉ NO SE ACTIVA DE UNA. Una política incompleta en esta app no rompe la página, rompe LA
-// FIRMA: el wallet adapter, el WebSocket del RPC y la ventana del proveedor de identidad abren
-// conexiones que un `connect-src` corto bloquea, y eso se descubre con la transacción ya armada. La
-// lista de orígenes se puede leer del bundle —y se leyó—, pero leerla no prueba que esté completa.
-// La prueba es un recorrido real con la política mirando sin intervenir.
+// `report-uri` SIGUE ACTIVO en modo bloqueo, y eso no es redundante: si mañana aparece un origen
+// nuevo, la violación queda escrita en el log además de bloqueada, así que se diagnostica leyendo en
+// vez de adivinando.
 //
-// EL PASO SIGUIENTE, para que no quede a medias: cuando el recorrido no reporte violaciones nuevas,
-// esta clave pasa a `Content-Security-Policy` y hace falta OTRO recorrido corto que confirme que
-// sigue firmando. Dejar esto en `Report-Only` para siempre es tener la cabecera y no la protección.
+// LAS CINCO VIOLACIONES QUE SÍ HUBO NO SE AUTORIZARON, a propósito: las produce la barra que Vercel
+// inyecta, no la aplicación (medido: `DM Sans`, `gstatic` y `eval(` no aparecen en el repo, el HTML
+// servido ni el JS del cliente). Autorizarlas exigiría `'unsafe-eval'` y tres dominios más para
+// TODOS los visitantes, por una herramienta que sólo ve quien está logueado en Vercel. El detalle
+// está en `csp-policy.mjs`.
 const CSP = buildCspPolicy({
   rpcUrl: process.env.NEXT_PUBLIC_SOLANA_RPC_URL,
-  // `vercel.live` es la barra de herramientas de Vercel, que se inyecta en los despliegues y abre su
-  // propia conexión. Aparece en el bundle servido. No sale de ninguna env, así que va explícito.
-  extraConnectSrc: ["https://vercel.live"],
 });
 
 /** @type {import('next').NextConfig} */
@@ -36,7 +35,7 @@ const nextConfig = {
             key: "Reporting-Endpoints",
             value: 'csp="/api/csp-report"',
           },
-          { key: "Content-Security-Policy-Report-Only", value: CSP },
+          { key: "Content-Security-Policy", value: CSP },
         ],
       },
     ];

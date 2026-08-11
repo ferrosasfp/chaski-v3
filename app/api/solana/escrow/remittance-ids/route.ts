@@ -20,6 +20,7 @@ import {
 import { verifySolanaPop } from "../../../../../src/infrastructure/auth/pop-verify-solana";
 import { resolveSolanaNetworkId } from "../../../../../src/infrastructure/chain";
 import { canonicalizeAddress } from "../../../../../src/infrastructure/address";
+import { ESCROW_ID_LOOKUP_CEILING } from "../../../../../src/infrastructure/escrow-lookup-limits";
 import { getSettlementLedger } from "../../../../../src/infrastructure/persistence/supabase-settlement-ledger";
 import {
   ESCROW_RECOVERY_RL,
@@ -27,9 +28,15 @@ import {
   clientIp,
 } from "../../../../../src/infrastructure/rate-limit";
 
-// Límite duro server-side: un sender legítimo no necesita más para recuperar su escrow, y acota el
-// tamaño de la respuesta ante una cuenta con mucha historia.
-const MAX_IDS = 20;
+// Límite duro server-side: acota el tamaño de la respuesta ante una cuenta con mucha historia.
+//
+// 🔴 NO SE ESCRIBE UN LITERAL ACÁ. El valor sale de `ESCROW_ID_LOOKUP_CEILING`, que es el MISMO que
+// derivan los dos clientes (`MAX_RECOVERY_CANDIDATES` y `MAX_CLOSEABLE_CANDIDATES`). Cuando este
+// número vivía suelto en este archivo, el cliente del refund pedía 10 contra el 20 de acá y descartaba
+// en silencio hasta la mitad de las filas que esta route ya había mandado — en el camino que devuelve
+// el principal. `src/infrastructure/escrow-lookup-limits.test.ts` falla si alguien vuelve a escribirlo
+// a mano de cualquiera de los dos lados.
+const MAX_IDS = ESCROW_ID_LOOKUP_CEILING;
 
 // Excluye arrays (mirror de prepare/route.ts:74-76).
 function isRecord(v: unknown): v is Record<string, unknown> {

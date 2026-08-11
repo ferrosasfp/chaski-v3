@@ -41,34 +41,34 @@ import {
   resolveSolanaRpcUrlPublic,
   resolveSolanaUsdcMint,
 } from "./chain";
+import { ESCROW_ID_LOOKUP_CEILING } from "./escrow-lookup-limits";
 import { solanaWalletBridge } from "./solana-wallet-bridge";
 
-// HU-SOL-20/AC-2: tope de candidatos que el fallback sondea on-chain. Los ids vienen ordenados por
-// created_at desc, así que 10 cubre de sobra un escrow reciente perdido y acota a UNA sola llamada RPC.
+// HU-SOL-20/AC-2: tope de candidatos que el fallback del REFUND sondea on-chain — el camino que
+// devuelve el PRINCIPAL.
+//
+// 🔴 ANTES ERA 10, Y ESO DESCARTABA FILAS QUE EL SERVIDOR YA HABÍA MANDADO. La route corta en
+// `ESCROW_ID_LOOKUP_CEILING` (hoy 20) y este cliente pedía 10, así que hasta 10 ids llegaban y se
+// tiraban. La justificación escrita era que "10 cubre de sobra un escrow reciente perdido": eso es una
+// suposición sobre la conducta de la persona, no una restricción del sistema, y no costaba nada
+// levantarla — el sondeo es UNA sola llamada `getMultipleAccounts` para 10 o para 20. Peor todavía: el
+// camino del ALQUILER, que recupera centavos, sí miraba los 20. El más valioso miraba menos.
 //
 // Se EXPORTA porque el copy de "no encontramos nada" tiene que decir sobre CUÁNTOS envíos miramos, y
-// escribir un 10 a mano al lado de la constante que lo decide es exactamente cómo nació la hora
+// escribir el número a mano al lado de la constante que lo decide es exactamente cómo nació la hora
 // inventada que `RefundWindowNote` ya tuvo que arreglar una vez.
-export const MAX_RECOVERY_CANDIDATES = 10;
+export const MAX_RECOVERY_CANDIDATES = ESCROW_ID_LOOKUP_CEILING;
 
 // WKH-327/AC-8: tope de candidatos que el descubrimiento de CERRABLES sondea on-chain.
 //
-// NO es un número inventado ni una copia de MAX_RECOVERY_CANDIDATES: es el techo DURO que aplica el
-// servidor (`app/api/solana/escrow/remittance-ids/route.ts:32`, `MAX_IDS = 20`), así que pedir más no
-// puede devolver más. Pedir menos sí perdería filas que el servidor sí tenía.
+// Es el mismo techo, y ahora lo dice el código en vez de una prosa que pedía confianza: los dos derivan
+// de `ESCROW_ID_LOOKUP_CEILING` y `escrow-lookup-limits.test.ts` falla si alguno vuelve a escribir un
+// literal. Se conservan los DOS nombres a propósito, porque responden preguntas distintas y el copy de
+// cada pantalla cita el suyo; lo que no puede volver a pasar es que difieran sin que nadie lo note.
 //
-// POR QUÉ NO REUSA MAX_RECOVERY_CANDIDATES = 10: su derivación escrita (arriba) habla de "un escrow
-// reciente perdido", que es la pregunta del refund — hay UN objetivo natural y está cerca en el tiempo.
-// La pregunta del alquiler es otra: mira toda la historia recuperable, porque cada envío terminado dejó
-// sus dos cuentas abiertas y todas valen lo mismo.
-//
-// Se EXPORTA por la misma razón que su vecina: el copy de "no encontramos nada" tiene que decir sobre
-// CUÁNTOS envíos miramos, y escribir un 20 a mano al lado de la constante que lo decide es cómo el copy
-// termina diciendo un número que el código dejó de usar.
-//
-// LÍMITE, dicho (L-8): un remitente con más de 20 filas en el ledger NO ve las más viejas, y esta HU no
-// recupera ese alquiler. Subirlo requiere tocar el servidor, que está fuera de alcance.
-export const MAX_CLOSEABLE_CANDIDATES = 20;
+// LÍMITE, dicho (L-8): un remitente con más filas que el techo NO ve las más viejas por ninguno de los
+// dos caminos. Subirlo es una decisión de producto y se toma en un solo lugar.
+export const MAX_CLOSEABLE_CANDIDATES = ESCROW_ID_LOOKUP_CEILING;
 
 /**
  * Ventana de custodia que este cliente le pide al escrow: 2 horas.

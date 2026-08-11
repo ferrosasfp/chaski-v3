@@ -7,6 +7,7 @@ import type { Idl } from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, type Transaction } from "@solana/web3.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RemittanceIdLookup, SolanaRemittanceIdResolver } from "../application/ports";
+import { ESCROW_ID_LOOKUP_CEILING } from "./escrow-lookup-limits";
 import { SolanaEscrowRefundGateway } from "./refund/solana-escrow-refund-gateway";
 import { SolanaWalletAdapter } from "./solana-wallet";
 import { escrowIdl } from "./solana/escrow-idl";
@@ -485,14 +486,33 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
     expect(ix.keys[2]!.pubkey.toBase58()).toBe(pdaOf("rem-real").toBase58());
   });
 
-  it("T-R0-10: sondea como máximo 10 candidatos (tope de la recuperación)", async () => {
+  // 🔴 ESTE TEST AFIRMABA EL DEFECTO. Su versión anterior usaba 14 ids con el refundeable en el 13 y
+  // esperaba `escrow_not_found` "porque queda FUERA del tope", con el lote clavado en 10. O sea que
+  // pinneaba como correcto que la persona NO recuperara su principal teniendo la route ya devuelta la
+  // fila. El tope del cliente era 10 y el de la route 20: se descartaba la mitad, gratis, porque el
+  // sondeo es UNA sola llamada `getMultipleAccounts` para 10 o para 20.
+  it("T-R0-10a: un refundeable en la posición 13 de 14 SÍ se recupera (antes se descartaba)", async () => {
     const ids = Array.from({ length: 14 }, (_, i) => `rem-${i}`);
-    await mockChain({ "rem-13": "deposited" }); // el refundeable queda FUERA del tope
+    await mockChain({ "rem-13": "deposited" });
+    const lookupBySender = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: ids }));
+    const adapter = await connectedWith({ lookupBySender });
+    await adapter.refundEscrow(); // no tira: 14 <= ESCROW_ID_LOOKUP_CEILING
+    const ix = capturedTx(signSpy).instructions[0];
+    if (!ix) throw new Error("no_instruction");
+    expect(ix.keys[2]!.pubkey.toBase58()).toBe(pdaOf("rem-13").toBase58());
+  });
+
+  // El techo SIGUE existiendo y sigue teniendo un borde: lo que cambió es dónde está, no que no esté.
+  // Se afirma contra la constante y no contra un literal, porque un literal acá es la mitad del bug que
+  // este cambio arregla — el número tiene que venir del mismo lugar que lo decide.
+  it("T-R0-10b: más allá del techo el candidato no se sondea, y el lote es exactamente el techo", async () => {
+    const ids = Array.from({ length: ESCROW_ID_LOOKUP_CEILING + 4 }, (_, i) => `rem-${i}`);
+    await mockChain({ [`rem-${ESCROW_ID_LOOKUP_CEILING + 3}`]: "deposited" }); // fuera del techo
     const lookupBySender = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: ids }));
     const adapter = await connectedWith({ lookupBySender });
     await expect(adapter.refundEscrow()).rejects.toThrow("escrow_not_found");
     const batch = vi.mocked(Connection.prototype.getMultipleAccountsInfo);
-    expect((batch.mock.calls[0]?.[0] as PublicKey[] | undefined)?.length).toBe(10);
+    expect((batch.mock.calls[0]?.[0] as PublicKey[] | undefined)?.length).toBe(ESCROW_ID_LOOKUP_CEILING);
   });
 
   // ── WKH-331 · AC-1 + CD-7: los TRES desenlaces en que no se llegó a preguntar ────────────────────

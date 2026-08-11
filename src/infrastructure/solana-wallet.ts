@@ -6,8 +6,7 @@
 // Anchor, fija feePayer=facilitator, partial-signa SÓLO con la wallet (bridge) y devuelve la tx
 // serializada base64 — NUNCA broadcastea (CD-SDD-1, AC-3): el broadcast es del facilitator (HU-SOL-14).
 import { sha256 } from "@noble/hashes/sha256";
-import bs58 from "bs58";
-import { configConexionSolana } from "./solana/rpc-fetch";
+import bs58 from "bs58"; import { configConexionSolana } from "./solana/rpc-fetch"; // dos imports en UNA linea: la edicion tiene que ser LINEA-NEUTRA, ver nota
 import { PublicKey } from "@solana/web3.js";
 import type {
   Connection as Web3Connection,
@@ -316,8 +315,7 @@ export class SolanaWalletAdapter
     const pdas = candidates.map((id) => this.deriveEscrowState(senderPk, programId, id).pda);
 
     const connection = new Connection(
-      resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), // client-safe
-      configConexionSolana(), // reintento sobre 429: ver solana/rpc-fetch.ts
+      resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), configConexionSolana(), // client-safe · reintento 429: solana/rpc-fetch.ts
     );
     // UNA sola llamada RPC para los N candidatos (el nombre real de la API es getMultipleAccountsInfo).
     const infos = await connection.getMultipleAccountsInfo(pdas);
@@ -414,8 +412,7 @@ export class SolanaWalletAdapter
 
     // ── Build ix (AC-1/AC-4) — vía anchor Program (programId del idl.address) ──
     const connection = new Connection(
-      resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), // client-safe: NEXT_PUBLIC_SOLANA_RPC_URL ?? público (AR-MNR-2)
-      configConexionSolana(), // reintento sobre 429: ver solana/rpc-fetch.ts
+      resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), configConexionSolana(), // client-safe: NEXT_PUBLIC_SOLANA_RPC_URL ?? público (AR-MNR-2) · reintento 429: solana/rpc-fetch.ts
     );
     const program = new anchor.Program(escrowIdl as unknown as Idl, { connection } as Provider);
     // `escrowIdl as Idl` es el IDL genérico ⇒ `methods.deposit` no está tipado por-instrucción;
@@ -556,8 +553,7 @@ export class SolanaWalletAdapter
       const { pda } = this.deriveEscrowState(senderPk, programId, input.remittanceId);
 
       const connection = new Connection(
-        resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), // client-safe
-        configConexionSolana(), // reintento sobre 429: ver solana/rpc-fetch.ts
+        resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), configConexionSolana(), // client-safe · reintento 429: solana/rpc-fetch.ts
       );
       const info = await connection.getAccountInfo(pda);
       if (!info) return "unknown"; // ausencia ≠ prueba: la tx puede seguir en vuelo
@@ -593,8 +589,7 @@ export class SolanaWalletAdapter
       const { PublicKey: PublicKeyLazy, Connection } = await import("@solana/web3.js");
       const senderPk = new PublicKeyLazy(senderB58); // valida base58 (CD-SDD-7)
       const connection = new Connection(
-        resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), // client-safe
-        configConexionSolana(), // reintento sobre 429: ver solana/rpc-fetch.ts
+        resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), configConexionSolana(), // client-safe · reintento 429: solana/rpc-fetch.ts
       );
       const lamports = await withTimeout(
         connection.getBalance(senderPk),
@@ -649,8 +644,7 @@ export class SolanaWalletAdapter
     );
 
     const connection = new Connection(
-      resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), // client-safe
-      configConexionSolana(), // reintento sobre 429: ver solana/rpc-fetch.ts
+      resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), configConexionSolana(), // client-safe · reintento 429: solana/rpc-fetch.ts
     );
 
     // ── Read on-chain (autoritativo): status==Deposited && now>=deadline (AC-6/AC-7) ──
@@ -870,8 +864,7 @@ export class SolanaWalletAdapter
     );
 
     const connection = new Connection(
-      resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), // client-safe
-      configConexionSolana(), // reintento sobre 429: ver solana/rpc-fetch.ts
+      resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), configConexionSolana(), // client-safe · reintento 429: solana/rpc-fetch.ts
     );
 
     // ── LECTURA AUTORITATIVA del EscrowState (AC-4/AC-10) ──
@@ -1137,8 +1130,7 @@ export class SolanaWalletAdapter
     const pdas = candidates.map((id) => this.deriveEscrowState(senderPk, programId, id).pda);
 
     const connection = new Connection(
-      resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), // client-safe
-      configConexionSolana(), // reintento sobre 429: ver solana/rpc-fetch.ts
+      resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), configConexionSolana(), // client-safe · reintento 429: solana/rpc-fetch.ts
     );
     // UNA sola llamada RPC para los N candidatos. Sin try/catch a propósito: ver la razón 3 del
     // docblock. Si esto lanza, el error sube y el copy dice "no llegamos a preguntar".

@@ -197,7 +197,7 @@ describe("el default del deadline del smoke sale de producción, no de un litera
   // (`MIN_CUSTODY_SECS`, solana-programs/programs/escrow/src/lib.rs:121). El `now` que el programa
   // compara es el del validador al EJECUTAR, así que `now_cliente + 3600` ya está por debajo apenas
   // pasa un segundo y el depósito muere con `DeadlineTooSoon`. Producción arregló esa carrera
-  // (CUSTODY_WINDOW_SECS = 2 h, con su propio test en solana-wallet.test.ts:378-392) y el smoke se
+  // (CUSTODY_WINDOW_SECS = 2 h, con su propio test en (`CUSTODY_WINDOW_SECS`, `solana-wallet.test.ts:506`)) y el smoke se
   // quedó con el valor viejo.
   //
   // Esto se vigila leyendo el fuente porque el default vive en el módulo del smoke, y ese módulo

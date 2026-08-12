@@ -257,7 +257,7 @@ describe("recuperar un envío perdido: la puerta en el recorrido", () => {
 //
 // 🔴 EL DEFECTO. La pantalla decía "Recuperaste tus fondos" y nada más, y esta puerta resuelve UN
 // escrow por vez: `resolveRemittanceIdFromLedger` sondea hasta `MAX_RECOVERY_CANDIDATES` PDAs y
-// devuelve el PRIMERO en estado `Deposited` (`solana-wallet.ts:333`). Quien tenía dos envíos perdidos
+// devuelve el PRIMERO en estado (`Deposited`, `solana-wallet.ts:400`). Quien tenía dos envíos perdidos
 // se iba de la pantalla creyendo que había recuperado todo, y el segundo se quedaba en el vault.
 describe("recuperar un envío perdido: que puede haber más de uno", () => {
   it("dice que puede haber más envíos, SIN afirmar un número que el código no sabe", async () => {
@@ -405,7 +405,7 @@ describe("recuperar un envío perdido: dos búsquedas seguidas", () => {
 
   // ── T-346-15 · 🔴 EL TRI-ESTADO, que es lo que NO se puede colapsar ────────────────────────────
   //
-  // `escrow_recovery_unavailable` llega con CINCO productores (`flow-vm.ts:323-332`) y NINGUNO afirma
+  // `escrow_recovery_unavailable` llega con CINCO productores (`escrow_id_unavailable`, `flow-vm.ts:329`) y NINGUNO afirma
   // que la ventana esté vacía: el endpoint contestó algo que no es 200/403/501, o los tres `not_asked`
   // que el refund propaga desde WKH-331. En los cinco NO llegamos a mirar la cadena, así que "puede
   // haber más" sigue siendo VERDAD. Colapsarlo con `escrow_not_found` repetiría la lección que este

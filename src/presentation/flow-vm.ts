@@ -400,7 +400,7 @@ export function lostEscrowRecoveryError(code: string, maxCandidates: number): st
  *  · No dice "recuperá tu alquiler" a secas: dice CUÁLES dos cuentas.
  *  · No suma ni nombra el `EscrowIndex` en la cifra. Lo menciona aparte, como lo que NO vuelve.
  *  · No promete un neto. Dice que hay comisión y que NO sabemos cuánto agrega la billetera: la propina
- *    que inyecta es una incógnita declarada del propio repo (`solana-escrow-rent.ts:120-122`) y esta
+ *    que inyecta es una incógnita declarada del propio repo (`propina`, `solana-escrow-rent.ts:128`) y esta
  *    acción además no declara ComputeBudget, así que tampoco hay un techo de CU que la acote.
  *
  * 🔴 POR QUÉ HAY DOS VOCES Y POR QUÉ EL PARÁMETRO NO TIENE DEFAULT (fix-pack CR/BLQ-BAJO-1). Este
@@ -972,9 +972,17 @@ export const REVISION_TECHO_ALCANZADO =
  *   · EL PELIGRO ES EL OPUESTO: son OTROS archivos los que citan a este POR NÚMERO de línea, y a esos
  *     sí los rota cualquier inserción aguas arriba. Se enumeran con
  *     `grep -rn "flow-vm\.ts:[0-9]" src app scripts contracts`, que es el instrumento y no envejece.
- *     Medido en esta misma HU: WKH-347 rompió DOS de ellas —(`esVentanaSinAbiertos`, `:1121`) citada
- *     desde `flow.tsx`, y la de `sinAbiertosCopy` citada desde el copy hermano de la tarjeta— y fueron
- *     2 de las 5 líneas que hubo que arreglar. Un apéndice desplaza 0, y por eso sigue siendo apéndice.
+ *     🔴 ACÁ DECÍA "WKH-347 rompió DOS", y el número era mío y estaba mal (fix-pack r2, re-AR/MNR-3).
+ *     Corriendo ese grep contra `main` y contra la rama, los sitios rotos por esta HU fueron CINCO. Van
+ *     descritos y NO por número —escribir la lista de números acá sería repetir la lista vencida que
+ *     este mismo comentario sacó—: el docblock del `useState` de `sinAbiertos` en `flow.tsx`; las DOS
+ *     citas a `sinAbiertosCopy` de `flow.tsx` (el hint de "puede haber más" y la frase de cierre de
+ *     ventana), de las que el fix-pack r1 arregló una sola; y las dos al bloque de los CINCO productores
+ *     de `escrow_recovery_unavailable` —una en `flow.tsx`, otra en `lost-escrow-recovery.test.tsx`—, que
+ *     esta HU corrió cinco líneas hacia abajo al insertar las dos ramas del índice.
+ *     Un apéndice desplaza 0, y por eso sigue siendo apéndice; el resto del archivo NO, y por eso el
+ *     grep va ANTES de escribir y otra vez DESPUÉS del último hunk del commit. Medir a mitad es
+ *     exactamente cómo se rompe una cita con la edición siguiente, y acá pasó.
  *
  * ⚠️ Y LA OTRA FRASE IMPRECISA, dicha para no repetirla: acá vivía una lista de cuatro números
  * (`:728`, `:852`, `:912`, `:949`) y este comentario afirmaba que "ninguno de los cuatro seguía siendo
@@ -991,9 +999,17 @@ export const REVISION_TECHO_ALCANZADO =
  * "la ventana no tiene ningún escrow abierto" sin volver a clasificar el código.
  *
  * ⚠️ El valor de retorno de `lostEscrowRecoveryError("escrow_not_found", N)` NO cambia. Eso lo
- * congelan `flow-vm.test.ts:481` y el `it` "el copy legítimo REAL es EXACTAMENTE el literal vetado" de
- * `refund-perdido-registro-mudo.test.tsx:377` (decía `:316`, que es una línea de comentario: se nombra
- * el `it` además del número, que es lo único que no rota), y siguen verdes sin tocarlos.
+ * congelan (`lostEscrowRecoveryError`, `flow-vm.test.ts:481`) y
+ * (`lostEscrowRecoveryError`, `refund-perdido-registro-mudo.test.tsx:383`), el `it` "el copy legítimo
+ * REAL es EXACTAMENTE el literal vetado", y siguen verdes sin tocarlos.
+ *
+ * 🔴 ESTA CITA LA ROMPÍ DOS VECES SEGUIDAS, y la segunda fue con mi propia edición (fix-pack r2,
+ * re-AR/BLQ-BAJO-1). Primero apuntaba a `:316`, una línea de comentario. La corregí a `:377` midiendo
+ * bien y, EN EL MISMO COMMIT, inserté 5 líneas de comentario aguas arriba en ese archivo: `:377` pasó a
+ * ser también un comentario. Y quedó invisible porque la escribí en prosa suelta: sin la coma entre los
+ * dos backticks, `citas-ancladas.test.ts` no la mira y `npm test` da verde con la cita rota. Las dos
+ * lecciones, que son distintas: **anclá el formato** (§6, es lo que la vuelve verificable) y **re-medí
+ * después del ÚLTIMO hunk del commit**, no cuando la escribís.
  */
 export function sinAbiertosCopy(maxCandidates: number): string {
   return `No encontramos escrows abiertos para esta billetera. Esto no dice que no tengas fondos: dice que ninguno de los últimos ${maxCandidates} envíos que el servidor tiene guardados de esta billetera, ni ninguno de los que la cadena tiene registrados en el índice de esta billetera, está abierto en el contrato.`;

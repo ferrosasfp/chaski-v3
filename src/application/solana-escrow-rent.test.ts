@@ -22,6 +22,8 @@
 //
 // Estos tests atan el número a sus DOS fuentes verificables: la medición en cadena y el IDL pinneado.
 // Un test que sólo comparara la constante contra sí misma no probaría nada.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { escrowIdl } from "../infrastructure/solana/escrow-idl";
 import {
@@ -47,6 +49,12 @@ import {
  *  vigila convertiría las cotas de abajo en la constante comparándose consigo misma, que es justo lo
  *  que la cabecera de este archivo dice que no prueba nada. */
 const MEASURED_FIRST_DEPOSIT_LAMPORTS = 4_002_000;
+
+/** El umbral que este repo YA REVIRTIÓ una vez, y el que tenía antes de WKH-347. Los dos van a mano por
+ *  la misma razón que el de arriba: son HISTORIA, no valores que el módulo exporte hoy, así que
+ *  importarlos sería imposible y escribirlos es lo que permite comparar contra ellos. */
+const UMBRAL_REVERTIDO_LAMPORTS = 9_000_000;
+const UMBRAL_ANTERIOR_LAMPORTS = 4_100_000;
 
 describe("el umbral de SOL sale del costo REAL del depósito", () => {
   // 🔴 WKH-347 — ESTA COTA SE RE-DERIVÓ, NO SE DEBILITÓ, y la diferencia importa. Hasta acá medía el
@@ -74,18 +82,46 @@ describe("el umbral de SOL sale del costo REAL del depósito", () => {
   // línea que existe para no suavizar. Mientras el número viva sólo en prosa vuelve a envejecer solo, así
   // que acá queda atado a las dos constantes.
   //
-  // 🔴 EL INPUT QUE LO PONE EN ROJO: escribir en la prosa cualquier otro ratio sin mover el umbral, o
-  // mover el umbral sin re-escribir la prosa. Los dos casos rompen una de las dos cotas de abajo.
-  it("CR/BLQ-3: el ratio que la prosa declara (2,22×) es el que las constantes producen", () => {
-    const ratioContraElDeposito = SENDER_MIN_LAMPORTS_FOR_DEPOSIT / MEASURED_FIRST_DEPOSIT_LAMPORTS;
-    // 2,2175 redondea a 2,22 con dos decimales, que es el número que dice la prosa.
-    expect(Number(ratioContraElDeposito.toFixed(2))).toBe(2.22);
+  // 🔴 LA PRIMERA VERSIÓN DE ESTE TEST PROMETÍA EL DOBLE DE LO QUE COMPRABA (fix-pack r2, re-AR/MNR-2).
+  // Decía que lo ponía en rojo "escribir en la prosa cualquier otro ratio sin mover el umbral, o mover el
+  // umbral sin re-escribir la prosa", y sólo la segunda mitad era cierta: el test assertaba `2.22` como
+  // literal PROPIO y nunca leía el archivo de producción. MEDIDO: cambiando la prosa de `2,22×` a `1,05×`
+  // sin tocar ninguna constante, la suite completa quedaba en 1963 verdes.
+  //
+  // ⇒ Se eligió la opción (b): el test LEE la prosa de producción y la compara contra los ratios
+  // DERIVADOS de las constantes. Los dos números de esa lista salen del mismo denominador, así que se
+  // verifican los dos juntos y ninguno se escribe a mano acá.
+  //
+  // ⚠️ QUÉ LO VUELVE FRÁGIL Y POR QUÉ SE ACEPTA: el test depende de una FRASE ("× lo que el depósito
+  // cuesta"). Si alguien la reformula, esto se pone ROJO sin que el código esté mal. Es el lado barato
+  // del error —falla ruidoso, no aplaude en silencio— y el rojo dice exactamente qué hacer: o se conserva
+  // la frase, o se actualiza este test junto con la prosa. Lo que NO se puede es reescribir el ratio y que
+  // nadie se entere, que es lo que pasaba.
+  //
+  // 🚫 LO QUE ESTE TEST SIGUE SIN CUBRIR, dicho para que nadie le crea de más: sólo mira las
+  // apariciones con ESA frase. El "2,2× el costo real" del bloque histórico de arriba del archivo usa
+  // otra redacción y queda afuera a propósito (es una cita de lo que se creía en su momento, no una
+  // afirmación sobre el umbral de hoy). Y no mira la cabecera de ESTE archivo, que es prosa de test.
+  it("CR/BLQ-3: los ratios que la prosa de producción declara son los que las constantes producen", () => {
+    const fuente = readFileSync(join(__dirname, "solana-escrow-rent.ts"), "utf8");
+    const declarados = [...fuente.matchAll(/(\d+),(\d+)× lo que el depósito cuesta/g)].map(
+      (m) => Number(`${m[1]}.${m[2]}`),
+    );
+    // Control de que el barrido encontró algo: con la frase borrada, el `toEqual` de abajo pasaría con
+    // dos listas vacías y este test se aplaudiría solo.
+    expect(declarados).toHaveLength(2);
+    // Los DOS esperados, derivados y no escritos: el umbral de hoy y el 9.000.000 que este repo revirtió,
+    // los dos contra la MISMA medición en cadena. El orden es el de aparición en el archivo.
+    const dosDecimales = (n: number): number => Number(n.toFixed(2));
+    expect(declarados).toEqual([
+      dosDecimales(SENDER_MIN_LAMPORTS_FOR_DEPOSIT / MEASURED_FIRST_DEPOSIT_LAMPORTS), // 2,22
+      dosDecimales(UMBRAL_REVERTIDO_LAMPORTS / MEASURED_FIRST_DEPOSIT_LAMPORTS), // 2,25
+    ]);
     // Y el control que separa las dos comparaciones que la prosa mezclaba: 2,16 es el ratio contra el
-    // UMBRAL VIEJO (4.100.000), y no es el mismo número. Sin este assert, "2,22" y "2,16" podrían volver
-    // a leerse como la misma cosa.
-    const UMBRAL_ANTERIOR_LAMPORTS = 4_100_000; // el que este archivo describe en su cabecera
-    expect(Number((SENDER_MIN_LAMPORTS_FOR_DEPOSIT / UMBRAL_ANTERIOR_LAMPORTS).toFixed(2))).toBe(2.16);
-    expect(Number(ratioContraElDeposito.toFixed(2))).not.toBe(2.16);
+    // UMBRAL VIEJO, y no es el mismo número. Sin esto, "2,22" y "2,16" podrían volver a leerse como la
+    // misma cosa, que es exactamente el error que este `it` vino a cerrar.
+    expect(dosDecimales(SENDER_MIN_LAMPORTS_FOR_DEPOSIT / UMBRAL_ANTERIOR_LAMPORTS)).toBe(2.16);
+    expect(declarados).not.toContain(2.16);
   });
 
   // 🔴 T-347-13 — ESTE TEST CAMBIÓ DE SENTIDO A PROPÓSITO. Antes exigía que el umbral NO llegara a

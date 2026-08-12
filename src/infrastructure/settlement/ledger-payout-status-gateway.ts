@@ -140,8 +140,8 @@ export class LedgerPayoutStatusGateway implements PayoutGateway {
 
     // 1 · LA BILLETERA, ANTES DEL THROTTLE (AR/BLQ-ALTO-1). El orden ya no es una convención: la address
     // es parte de la clave del memo, así que sin resolverla no hay nada que consultar. Leer el bridge NO
-    // toca la red, NO abre el modal y NO pide ninguna firma (`getConnectedAddress`,
-    // `../solana-wallet.ts:233`), así que adelantarlo no cuesta nada por tick.
+    // toca la red, NO abre el modal y NO pide ninguna firma
+    // (`getConnectedAddress`, `../solana-wallet.ts:252`), así que adelantarlo no cuesta nada por tick.
     // Sin billetera conectada no hay a quién preguntarle por SU payout ⇒ no-terminal, y **sin clave no
     // se puede memoizar**: el tipo lo impide, que es justo lo que se quería.
     const address = await this.wallet.getAddress().catch(() => null);

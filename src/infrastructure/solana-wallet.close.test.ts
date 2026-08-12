@@ -538,7 +538,7 @@ describe("SolanaWalletAdapter.closeEscrow (WKH-327)", () => {
 // ésos usan `FakeSolanaEscrowCloseGateway` y nunca ejecutan esta clase. El use-case propagaba
 // perfectamente un valor que el gateway ya había falsificado.
 //
-// Es el mismo lugar donde vive su hermano de refund (`solana-wallet.refund.test.ts:556-568`) y por la
+// Es el mismo lugar donde vive su hermano de refund (`SolanaEscrowRefundGateway`, `solana-wallet.refund.test.ts:913`) y por la
 // misma razón: el gateway es una capa de una sola línea que nadie más ejercita.
 describe("SolanaEscrowCloseGateway — propaga el desenlace SIN ascenderlo", () => {
   for (const confirmation of ["confirmed", "pending", "unknown"] as const) {

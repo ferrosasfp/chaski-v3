@@ -1398,7 +1398,7 @@ describe("los tres casos, dichos con palabras distintas", () => {
   });
 
   // Hallazgo #75 — el rechazo del agente de payout tampoco es un fallo de entrega. El prepare corre
-  // ANTES de authorizePrincipal (confirm-and-send.ts:381-386), o sea antes de que la wallet firme
+  // ANTES de authorizePrincipal ((`prepare_unavailable`, `confirm-and-send.ts:394`)), o sea antes de que la wallet firme
   // nada: "no se movió ningún USDC" es un hecho que se lee del orden del use-case. Decirlo con las
   // palabras del payout fallido ("si te cobramos, te reembolsamos") deja esperando un reembolso que
   // no existe, por una causa que se arregla re-cotizando.

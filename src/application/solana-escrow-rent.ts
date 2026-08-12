@@ -225,7 +225,7 @@ export const ESCROW_DEPOSIT_RENT_LAMPORTS =
 
 /** 5.000 lamports por firma. Fuente: `:64-69` — el depósito tiene 2 firmas y midió 10.000 en cadena.
  *  La tx de `close` tiene UNA sola (el sender es el único signer). Lo que este número NO cubre: la
- *  propina que inyecta la billetera, que es una incógnita declarada (`:120-122`) y que `close` tampoco
+ *  propina que inyecta la billetera, que es una incógnita declarada (`propina`, `:128`) y que `close` tampoco
  *  acota, porque no declara ComputeBudget. Por eso el copy no promete un neto. */
 export const SOLANA_BASE_FEE_PER_SIGNATURE_LAMPORTS = 5_000;
 

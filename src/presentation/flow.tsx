@@ -1457,7 +1457,7 @@ export function TrackView({
     // una causa que se arregla cargando unos centavos de SOL.
     const senderSolMissing = rem.failureReason === SOLANA_SENDER_SOL_INSUFFICIENT;
     // Y el tercero que tampoco es un fallo de entrega: el agente de payout RECHAZÓ crear la orden.
-    // El prepare corre antes de `authorizePrincipal` (confirm-and-send.ts:381-386), o sea antes de
+    // El prepare corre antes de `authorizePrincipal` ((`prepare_unavailable`, `confirm-and-send.ts:394`)), o sea antes de
     // que la wallet firme nada, así que "no se movió ningún USDC" es un hecho que se lee del orden
     // del use-case, no una promesa. Decirlo con las palabras de un payout fallido ("si te cobramos,
     // te reembolsamos") deja esperando un reembolso que no existe.
@@ -2090,7 +2090,7 @@ export function LostEscrowRecovery({
   // pantalla contaba como UN relato el comprobante de A y el cierre de ventana de B, suprimiendo el
   // error de B con un éxito que no fue de B. Cada frase era cierta; el compuesto y el "esta billetera"
   // no. Los códigos que NO lo prenden están enumerados en `esVentanaSinAbiertos`
-  // (`esVentanaSinAbiertos`, `flow-vm.ts:1121`), en su docblock. ⚠️ Y desde el fix-pack de WKH-347 `escrow_index_absent` SÍ lo prende: es cierto (a ese código se llega con la ventana del servidor ya recorrida y sin ninguno abierto) y sin eso el cierre de ventana no se prendía para NINGUNA billetera existente. El motivo medido está en ese mismo docblock.
+  // (`esVentanaSinAbiertos`, `flow-vm.ts:1137`), en su docblock. ⚠️ Y desde el fix-pack de WKH-347 `escrow_index_absent` SÍ lo prende: es cierto (a ese código se llega con la ventana del servidor ya recorrida y sin ninguno abierto) y sin eso el cierre de ventana no se prendía para NINGUNA billetera existente. El motivo medido está en ese mismo docblock.
   const [sinAbiertos, setSinAbiertos] = useState<string | null>(null);
   // La identidad de la ÚLTIMA búsqueda. Todo lo que la tarjeta muestra se filtra por acá: la frase de
   // cierre dice "esta billetera", así que no puede estar al lado del comprobante de otra.
@@ -2150,10 +2150,10 @@ export function LostEscrowRecovery({
       // "no tenés fondos" (ver `lostEscrowRecoveryError`).
       const code = e instanceof Error ? e.message : "";
       setErr(lostEscrowRecoveryError(code, MAX_RECOVERY_CANDIDATES));
-      // 🔴 SÓLO este desenlace lo prende, y son TRES desenlaces y no dos: `escrow_recovery_unavailable`
-      // llega con cinco productores (`flow-vm.ts:323-332`) y NINGUNO dice que la ventana esté vacía, así
-      // que ahí la frase sigue siendo "puede haber más" — y es verdad, porque no llegamos a preguntar.
-      // Prenderlo para cualquier error es el mutante N-4, y lo mata `T-346-15`.
+      // 🔴 LO PRENDEN DOS DESENLACES Y NO UNO (fix-pack r2 de WKH-347: acá decía "SÓLO este desenlace" y el `if` de abajo ya había cambiado de dominio). Son `escrow_not_found` y `escrow_index_absent`: los dos significan "se miró y no hay ninguno abierto".
+      // Los demás NO, y el caro es `escrow_index_unreadable` — no pudimos leer la cadena, así que ahí "puede haber más" sigue siendo verdad. Igual `escrow_recovery_unavailable`, que llega con cinco
+      // productores (`escrow_id_unavailable`, `flow-vm.ts:329`) y ninguno afirma que la ventana esté vacía. Quién los separa es el predicado de abajo, delegando en el copy; no hay una lista de códigos acá.
+      // Prenderlo para cualquier error es el mutante N-4 y lo mata `T-346-15`; que el índice ausente SÍ entre lo prueban los tres `it` nuevos de `lost-escrow-recovery.test.tsx`.
       // Se guarda CUÁL billetera lo dijo: prenderlo sin identidad deja que el éxito de otra lo lea como
       // el final de su camino (AR-2/MNR-9, mutante N-6).
       if (quien !== null && esVentanaSinAbiertos(code, MAX_RECOVERY_CANDIDATES)) setSinAbiertos(quien);
@@ -3146,8 +3146,8 @@ function resetTo(
  *
  * POR QUÉ NO LLEVAN LA CUENTA DE ESCROWS PENDIENTES, que sigue siendo el punto. La recuperación
  * resuelve UN escrow por vez: `resolveRemittanceIdFromLedger` sondea hasta `MAX_RECOVERY_CANDIDATES`
- * PDAs y devuelve el PRIMERO en estado `Deposited` (`solana-wallet.ts:333`, "el primero refundeable
- * gana"). Su tipo de retorno es `Promise<string>`: **no expone cuántos quedan**. Así que "te quedan 2
+ * PDAs y devuelve el PRIMERO en estado (`Deposited`, `solana-wallet.ts:400`), la línea que dice "el
+ * primero refundeable gana". Su tipo de retorno es `Promise<string>`: **no expone cuántos quedan**. Así que "te quedan 2
  * envíos" sería una afirmación que el código no respalda, y "no te queda ninguno" también. Contar los
  * restantes es cambio de lógica y está fuera del alcance de esta HU. ⛔ CD-6 NO se relaja.
  *
@@ -3175,8 +3175,8 @@ export function recoveryMoreEscrowsHint(maxCandidates: number): string {
  * antes se recuperó al menos uno. Ver `caminoTerminado` en `LostEscrowRecovery`.
  *
  * ⚠️ Esta frase NO dice "no te quedan envíos": dice que no queda ninguno **entre los que miramos**, y
- * después dice qué NO significa. Es la misma voz que `sinAbiertosCopy` (`flow-vm.ts:322`): el hecho
- * primero, el límite del hecho después.
+ * después dice qué NO significa. Es la misma voz de (`sinAbiertosCopy`, `flow-vm.ts:327`): el hecho
+ * primero, el límite del hecho después. (Iba a `:322`, una línea de comentario, y sin la coma entre los dos backticks el candado ni la miraba: el arreglo son las dos mitades, el número Y el formato.)
  */
 export function recoveryWindowExhausted(maxCandidates: number): string {
   return `Ya no queda ninguno abierto entre los últimos ${maxCandidates} envíos guardados de esta billetera. Si tenés envíos más viejos que eso, esta búsqueda no llega a ellos.`;

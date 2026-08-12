@@ -37,3 +37,4 @@ doc/
 project-context.md
 docs/*
 !docs/architecture.md
+!docs/runbook-alertas-ledger.md

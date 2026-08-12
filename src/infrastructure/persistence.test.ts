@@ -318,3 +318,195 @@ describe("LocalRepo.read — defensivo AC-4 (snapshot legacy con PII cruda)", ()
     expect(await repo.get("whatever")).toBeNull();
   });
 });
+
+// ─── WKH-348 ─────────────────────────────────────────────────────────────────────────────────────
+// APPEND: todo lo de arriba (las 320 líneas originales) queda sin editar. Los fixtures y helpers de
+// arriba (`withOwner`, `seedQuote`, `A`, `B`, `Z`, `storage`) se reusan; los de acá abajo se agregan.
+//
+// 🔴 EL PROBLEMA QUE MIDEN ESTOS TESTS. `list()` canonicalizaba el `ownerAddress` de CADA entrada
+// dentro del predicado de un `.filter()`. `Array.prototype.filter` no atrapa excepciones del
+// predicado ⇒ UNA entrada guardada que no se puede atribuir hacía rechazar la promesa y el historial
+// entero desaparecía. `clearByOwner()` usaba el mismo predicado y tiraba igual, y `ForgetKyc` se
+// traga esa excepción, así que el reset decía "listo" sin haber borrado nada.
+//
+// ⛔ LO QUE ESTE CAMBIO NO HACE (AC-5): la entrada cuyo `ownerAddress` no canonicaliza NO se atribuye
+// a nadie, y por eso tampoco se borra. No se puede atribuir lo que no canonicaliza. Lo único que
+// cambia es que deja de tapar a las demás. Eso lo fija T-3b, que es de PRESERVACIÓN.
+//
+// Las TRES familias de veneno, cada una con su motivo de estar:
+//   · `P_EMPTY` — la cadena vacía: el valor que un productor podía persistir sin darse cuenta.
+//   · `P_EVM`   — el literal de `address.test.ts`, que ya prueba que tira. Es una address EVM legítima
+//                 (checksum EIP-55 válido), o sea el blob de alguien que venía de la rama EVM.
+//   · `P_B58`   — 44 caracteres del alfabeto base58 que NO son una pubkey. Es el input que un
+//                 pre-filtro por regex aceptaría, así que si alguien "optimiza" el predicado a un
+//                 regex, T-1b se pone rojo.
+const P_EMPTY = "";
+const P_EVM = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed";
+const P_B58 = "z".repeat(44);
+
+/**
+ * Gemelo de `withOwner` con destino de remesa VIEJA (`beneficiary("yape")` ⇒ celular, no el CCI de 20
+ * dígitos que usan todas las demás).
+ *
+ * POR QUÉ EXISTE: `withOwner` usa `beneficiary()` sin argumento, y ése devuelve el MISMO `destination`
+ * para todas las entradas. Asertar "el blob ya no contiene `beneficiary().destination`" después de un
+ * `clearByOwner(A)` sería imposible de poner en verde con `b1` todavía en el blob, y `b1` TIENE que
+ * seguir ahí (borrarlo sería el bug de AC-2). Con un destino distinto por dueño, la misma aserción
+ * mide las dos cosas: que la PII del owner purgado se fue Y que la del otro owner sigue.
+ */
+function withOwnerYape(id: string, owner: string): Remittance {
+  const r = Remittance.create(id, beneficiary("yape"), Money.of(400, "USDC"), NOW);
+  r.attachQuote(seedQuote, NOW);
+  r.startKyc(NOW, owner);
+  return r;
+}
+
+/** Entrada de blob CRUDO (Productor B): el único camino que puede existir en el `localStorage` del
+ *  founder y que no pasa por el dominio. Patrón del fixture `legacy` de más arriba. */
+function rawState(id: string, ownerAddress: unknown): Record<string, unknown> {
+  return {
+    id,
+    status: "kyc_pending",
+    beneficiary: beneficiary(),
+    sendUsd: { __m: [40000, "USDC"] },
+    quote: null,
+    kyc: null,
+    payoutId: null,
+    principalTx: null,
+    payoutTx: null,
+    refundTx: null,
+    deliveredPen: null,
+    failureReason: null,
+    ownerAddress,
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+}
+
+describe("LocalRepo.list — una entrada que no se puede atribuir deja de tapar a las demás (WKH-348/AC-1)", () => {
+  // ── T-1 ────────────────────────────────────────────────────────────────────────────────────────
+  // ROJO ANTES DEL CAMBIO: la promesa RECHAZA con `address_canonicalization_failed` en vez de
+  // resolver `["a1"]`. Cubre las dos familias de veneno en el mismo blob.
+  it("T-1: con veneno vacío y veneno EVM en el blob, list(A) devuelve las entradas de A", async () => {
+    const repo = new LocalRepo();
+    await repo.save(withOwner("a1", A));
+    await repo.save(withOwner("p1", P_EMPTY));
+    await repo.save(withOwner("p2", P_EVM));
+
+    expect((await repo.list(A)).map((s) => s.id)).toEqual(["a1"]);
+  });
+
+  // ── T-1b ───────────────────────────────────────────────────────────────────────────────────────
+  // ROJO ANTES DEL CAMBIO por la misma causa. Es el caso que separa la delegación de un pre-filtro
+  // por regex: `P_B58` pasa `^[1-9A-HJ-NP-Za-km-z]{32,44}$` y no es una pubkey.
+  it("T-1b: el veneno que PASA un regex de base58 tampoco tapa la lista", async () => {
+    const repo = new LocalRepo();
+    await repo.save(withOwner("a1", A));
+    await repo.save(withOwner("p1", P_EMPTY));
+    await repo.save(withOwner("p3", P_B58));
+
+    expect((await repo.list(A)).map((s) => s.id)).toEqual(["a1"]);
+  });
+
+  // ── T-2 ────────────────────────────────────────────────────────────────────────────────────────
+  // 🔴 EL CANDADO DEL SCOPE POR DUEÑO, medido CON VENENO PRESENTE (la combinación que no existía).
+  // ROJO ANTES DEL CAMBIO: rechaza. Si la tolerancia se volviera laxa —matchear de más, lowercasear,
+  // o atribuirle al que pregunta la entrada que no se puede atribuir— `list(A)` traería `b1` o `p*`.
+  // Es la protección IDOR de HU-SOL-7. Mutante que lo mata: m2 (`.toLowerCase()` en la comparación).
+  it("T-2: con 3 dueños y veneno en el blob, cada uno recibe EXACTAMENTE lo suyo y nada más", async () => {
+    const repo = new LocalRepo();
+    await repo.save(withOwner("a1", A));
+    await repo.save(withOwner("b1", B));
+    await repo.save(withOwner("p1", P_EMPTY));
+    await repo.save(withOwner("p2", P_EVM));
+    const abandoned = Remittance.create("x1", beneficiary(), Money.of(400, "USDC"), NOW); // sin startKyc
+    await repo.save(abandoned);
+
+    expect((await repo.list(A)).map((s) => s.id)).toEqual(["a1"]);
+    expect((await repo.list(B)).map((s) => s.id)).toEqual(["b1"]);
+    expect((await repo.list(Z)).map((s) => s.id)).toEqual([]);
+    // Variante de case de A: puede no canonicalizar (⇒ rechaza, AC-3) o canonicalizar a OTRA address
+    // (⇒ `[]`). Los dos desenlaces son aceptables y NO se asserta cuál: asertar uno sería afirmar
+    // algo que nadie midió. Lo que importa, y lo que se asserta, es que nunca devuelve lo ajeno.
+    const altCase = `${A.slice(0, 1)}${A[1] === A[1]!.toLowerCase() ? A[1]!.toUpperCase() : A[1]!.toLowerCase()}${A.slice(2)}`;
+    expect(altCase).not.toBe(A);
+    const leaked = await repo.list(altCase).catch(() => []);
+    expect(leaked.map((s) => s.id)).toEqual([]);
+  });
+
+  // ── T-6b ───────────────────────────────────────────────────────────────────────────────────────
+  // ROJO ANTES DEL CAMBIO. Productor B: el blob heredado, escrito por una versión anterior y sembrado
+  // acá SIN pasar por el dominio. Sin este test, el fix se probaría sólo contra veneno que entró por
+  // `withOwner`, y el blob del founder no entró por ahí.
+  it("T-6b: veneno sembrado por blob CRUDO (heredado) tampoco tapa la lista", async () => {
+    storage.setItem(KEY, JSON.stringify([rawState("a1", A), rawState("leg-evm", P_EVM)]));
+    const repo = new LocalRepo();
+
+    expect((await repo.list(A)).map((s) => s.id)).toEqual(["a1"]);
+  });
+
+  // ── T-4 ────────────────────────────────────────────────────────────────────────────────────────
+  // 🔴 PRESERVACIÓN: verde ANTES y DESPUÉS del cambio. No se disfraza de rojo.
+  // Mutantes que lo matan: m3 (envolver el cuerpo de `list()` en un try/catch → `[]`) y canonicalizar
+  // el `target` con la variante tolerante.
+  //
+  // POR QUÉ LA TOLERANCIA SE DETIENE ACÁ Y NO ES SIMETRÍA ROTA: en el `ownerAddress` de una entrada
+  // guardada, un valor malo es un DATO que no sabemos de quién es ⇒ excluirlo es decir "no sé". En el
+  // `target`, un valor malo es LA IDENTIDAD DEL QUE PREGUNTA ⇒ seguir sería adivinar de quién es la
+  // lista y devolvérsela a alguien.
+  it("T-4 (PRESERVACIÓN): el target sigue fail-closed, también con veneno ya en el blob", async () => {
+    const repo = new LocalRepo();
+    await repo.save(withOwner("a1", A));
+    await repo.save(withOwner("p1", P_EMPTY));
+
+    await expect(repo.list("no-base58-!!!")).rejects.toThrow("address_canonicalization_failed");
+    await expect(repo.list(P_EVM)).rejects.toThrow("address_canonicalization_failed");
+    await expect(repo.clearByOwner("")).rejects.toThrow("address_canonicalization_failed");
+  });
+});
+
+describe("LocalRepo.clearByOwner — el reset borra de verdad, y no borra lo que no puede atribuir (WKH-348/AC-2)", () => {
+  // ── T-3 ────────────────────────────────────────────────────────────────────────────────────────
+  // ROJO ANTES DEL CAMBIO: `clearByOwner` rechaza, y `ForgetKyc` se traga esa excepción ⇒ el reset
+  // decía "listo" sin haber borrado nada.
+  it("T-3: purga las entradas del owner (y su PII del blob) sin tocar al otro owner", async () => {
+    const repo = new LocalRepo();
+    await repo.save(withOwnerYape("a1", A)); // destino distinto ⇒ PII distinguible en el blob
+    await repo.save(withOwnerYape("a2", A));
+    await repo.save(withOwner("b1", B));
+    await repo.save(withOwner("p1", P_EMPTY));
+    const abandoned = Remittance.create("x1", beneficiary(), Money.of(400, "USDC"), NOW);
+    await repo.save(abandoned);
+
+    await expect(repo.clearByOwner(A)).resolves.toBeUndefined();
+
+    expect(await repo.list(A)).toEqual([]);
+    expect((await repo.list(B)).map((s) => s.id)).toEqual(["b1"]);
+    // La misma aserción mide las dos mitades: la PII del owner purgado se fue del blob real, y la del
+    // owner que nadie tocó sigue ahí (borrarla sería el bug de AC-2).
+    expect(storage.getItem(KEY)).not.toContain(beneficiary("yape").destination);
+    expect(storage.getItem(KEY)).toContain(beneficiary().destination);
+    // La entrada sin dueño sigue intacta (WKH-201/AC-2).
+    expect(await repo.get("x1")).not.toBeNull();
+  });
+
+  // ── T-3b ───────────────────────────────────────────────────────────────────────────────────────
+  // 🔴 PRESERVACIÓN: verde ANTES y DESPUÉS. Mutante que lo mata: m5 — un `clearByOwner` que borre
+  // también las entradas que no se pueden atribuir.
+  //
+  // POR QUÉ BORRARLA SERÍA UN BUG Y NO UNA LIMPIEZA: borrar lo que no se puede atribuir ES
+  // atribuirlo al que pidió el reset (AC-5), y destruye el único dato con el que algún día se podría
+  // atribuir. El costo está declarado como residual: si esa entrada contiene PII de un beneficiario,
+  // el reset NO la puede purgar.
+  it("T-3b (PRESERVACIÓN): el reset NO borra la entrada que no se puede atribuir", async () => {
+    const repo = new LocalRepo();
+    await repo.save(withOwnerYape("a1", A));
+    await repo.save(withOwner("p1", P_EMPTY));
+
+    await repo.clearByOwner(A).catch(() => {}); // antes del cambio rechaza; lo que se mide es el blob
+
+    const p1 = await repo.get("p1");
+    expect(p1).not.toBeNull();
+    expect(p1?.snapshot.ownerAddress).toBe(P_EMPTY);
+  });
+});

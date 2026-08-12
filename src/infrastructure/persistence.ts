@@ -10,7 +10,7 @@ import {
 } from "../domain/remittance";
 import { ConcurrentModificationError } from "../application/errors";
 import type { RemittanceRepository } from "../application/ports";
-import { canonicalizeAddress } from "./address";
+import { canonicalizeAddress, isOwnedBy } from "./address"; // WKH-348: el predicado, importado
 
 const KEY = "chaski.remittances.v1";
 
@@ -135,11 +135,11 @@ export class LocalRepo implements RemittanceRepository {
   }
 
   async list(address: string): Promise<RemittanceState[]> {
-    // Scope por wallet (AC-5/7): SOLO entries cuyo ownerAddress matchea (case-insensitive, CD-5);
-    // owner null (remesa abandonada sin verificar) → EXCLUIDO.
+    // Scope por wallet (AC-5/7): SOLO entries cuyo ownerAddress matchea, CASE-SENSITIVE (CD-1); sin
+    // owner o que no canonicaliza → EXCLUIDA, deja de tapar a las demás; el target, fail-closed (AC-3).
     const target = canonicalizeAddress(address);
     return [...this.read().values()]
-      .filter((s) => s.ownerAddress != null && canonicalizeAddress(s.ownerAddress) === target)
+      .filter((s) => isOwnedBy(s, target)) // WKH-348: el predicado es UNO y tolera la entrada mala
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
@@ -147,12 +147,14 @@ export class LocalRepo implements RemittanceRepository {
     // Reset (WKH-201): borra del blob real toda entry del owner conectado — mismo predicado que
     // list() (CD-1). Reusa read()/write() (CD-8: sin try/catch interno; el error de storage lo
     // absorbe ForgetKyc). Preserva otros owners y las entries ownerAddress === null.
+    // WKH-348/CD-18: la entrada que no se puede atribuir NO se borra. Borrar lo que no se puede
+    // atribuir ES atribuirlo a quien pidió el reset, y destruye el único dato con el que algún día se
+    // podría atribuir. Residual declarado: si esa entrada tiene PII de un beneficiario, el reset no
+    // la puede purgar. Purgarla exigiría atribuirla, que es exactamente lo que AC-5 prohíbe.
     const target = canonicalizeAddress(address);
     const map = this.read();
     for (const [id, s] of map) {
-      if (s.ownerAddress != null && canonicalizeAddress(s.ownerAddress) === target) {
-        map.delete(id);
-      }
+      if (isOwnedBy(s, target)) map.delete(id);
     }
     this.write(map);
   }

@@ -180,3 +180,36 @@ export function formatLamportsAsSolFloor(lamports: number): string {
   const units = Math.floor(lamports / LAMPORTS_PER_DISPLAY_UNIT);
   return (units / SOL_DISPLAY_FACTOR).toFixed(SOL_DISPLAY_DECIMALS).replace(".", ",");
 }
+
+// ── WKH-347 · el alquiler de la cuenta que el índice necesita ────────────────────────────────────
+
+/**
+ * Alquiler exento de renta de la cuenta `EscrowIndex`, que la ix `register_escrow` crea con
+ * `payer = sender`.
+ *
+ * LA DERIVACIÓN, que es lo que lo vuelve una suma y no un literal:
+ *
+ *     space      = 8 (discriminador de anchor) + EscrowIndex::INIT_SPACE      (lib.rs:840)
+ *     INIT_SPACE = 32 (sender) + 1 (version) + 1 (bump) + 4 (prefijo del Vec)
+ *                  + 16 × 32 (las entradas, `#[max_len(MAX_ENTRIES)]`)  = 550
+ *     ⇒ space    = 558 bytes
+ *     rent-exempt = (128 + 558) × 6960 = 4.774.560 lamports
+ *
+ * LA VALIDACIÓN QUE LO VUELVE UNA DERIVACIÓN Y NO UNA ESTIMACIÓN: la MISMA fórmula aplicada a
+ * `EscrowState` (154 bytes) da (128 + 154) × 6960 = 1.962.720, que es exactamente
+ * (`ESCROW_STATE_RENT_LAMPORTS`, `:100`), un número que salió de una medición en cadena y no de esta
+ * fórmula. Los dos caminos coinciden sobre un valor conocido-bueno. Sin esta validación, el 4.774.560
+ * sería un literal más.
+ *
+ * UNA SOLA VEZ POR REMITENTE, y por eso el segundo depósito y los siguientes no pagan nada: la cuenta
+ * es `init_if_needed` (`lib.rs:838`) y se aloja al tamaño MÁXIMO desde el principio
+ * (`#[max_len(MAX_ENTRIES)]`, `lib.rs:432`), así que no hay realloc ni alquiler incremental.
+ *
+ * ⛔ LO QUE NO VUELVE, y va dicho porque cambia lo que se le puede prometer a la persona: este
+ * alquiler NO está en (`ESCROW_DEPOSIT_RENT_LAMPORTS`, `:118`) y NO vuelve con el `close`. La cuenta
+ * `escrow_index` es OPCIONAL en la ix `close` y existe un `close` válido que ni la recibe, así que su
+ * alquiler no puede estar en lo que `close` devuelve siempre. Que ninguna instrucción del programa la
+ * cierre es lectura del RUST, no del IDL: el IDL no expresa las constraints `close = ...` de Anchor.
+ * ⇒ el copy de "cuánto recuperás al cerrar" NO cambia por esta constante.
+ */
+export const ESCROW_INDEX_RENT_LAMPORTS = 4_774_560;

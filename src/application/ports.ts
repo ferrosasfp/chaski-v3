@@ -352,7 +352,7 @@ export interface SolanaEscrowRefundGateway {
    *
    * El adapter ya lo soportaba (HU-SOL-20/AC-2): sin id lo resuelve contra el store server-side
    * (`POST /api/solana/escrow/remittance-ids`, PoP obligatorio) y sondea hasta
-   * MAX_RECOVERY_CANDIDATES PDAs on-chain (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:286`). Este puerto lo declaraba
+   * MAX_RECOVERY_CANDIDATES PDAs on-chain (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:323`). Este puerto lo declaraba
    * REQUERIDO, así que ningún consumidor tipado podía usar ese camino: la única forma de llegar al
    * refund desde la interfaz era `RecoverEscrowFunds`, que arranca con `repo.get(remittanceId)` y
    * tira `remittance_not_found` (`recover-escrow-funds.ts`:49-50). O sea que quien borró los datos
@@ -977,3 +977,58 @@ export interface Clock {
 export interface IdGenerator {
   newId(): string;
 }
+
+// ── WKH-347 · el índice on-chain de escrows del remitente ────────────────────────────────────────
+//
+// Se agregan ACÁ ABAJO, al final del archivo, y no al lado de sus parientes temáticos, por una razón
+// medida: hay citas ancladas que apuntan a líneas de este archivo por número (`Clock`, `:974` entre
+// ellas), y una inserción aguas arriba las desplaza a todas en silencio.
+
+/**
+ * Los 16 bytes que la CADENA consume para identificar un escrow, en hexadecimal minúscula de
+ * exactamente 32 caracteres.
+ *
+ * QUÉ ES: la seed de la PDA `["escrow", sender, id16]` y el argumento de `refund` y de `close`. Sale
+ * de `sha256(utf8(remittanceId))[0..16]`, que es una función de UN SOLO SENTIDO: del `id16` NO se
+ * vuelve al `remittanceId`. Por eso existe como tipo propio y no como "el id".
+ *
+ * ⛔ PROHIBIDO llamarlo `remittanceId` en una firma, un campo, una variable o un copy (CD-16). Un
+ * nombre de campo no es su semántica: un `id16` bautizado `remittanceId` invita a interpolarlo en una
+ * pantalla, mandarlo al registro durable o compararlo con el del `localStorage`, y las tres son
+ * falsas. Este alias NO lo impide por sí solo —es un `string`—; lo que lo impide en el camino que
+ * importa es que el resolver devuelva una unión DISCRIMINADA donde hay que nombrar el caso, en vez de
+ * una cadena pelada. Ver el retorno de `resolveRemittanceIdFromLedger` en `solana-wallet.ts`.
+ *
+ * POR QUÉ HEX Y NO `Uint8Array`, con las tres razones refutables:
+ *   1. Se compara con `===` y sirve de `key` de un `.map()` de React. Un `Uint8Array` no.
+ *   2. No lo puede mutar un consumidor. Un `Uint8Array` que viaja por un puerto sí.
+ *   3. Un doble de test lo escribe a mano sin importar `Buffer`.
+ * La conversión hex ↔ bytes vive en UN solo lugar, junto a la derivación de la PDA.
+ */
+export type EscrowId16 = string;
+
+/**
+ * Qué contestó el índice on-chain del remitente. CUATRO desenlaces, no tres y nunca dos.
+ *
+ * Colapsarlos es exactamente el defecto que esta HU no puede introducir, porque cada uno autoriza a
+ * decir cosas distintas:
+ *
+ * · `no_index`   — la cadena CONTESTÓ: la PDA `["escrow-index", sender]` no existe. ❌ NO autoriza a
+ *   decir "no tenés ningún envío perdido". Es compatible con TRES historias distintas: nunca
+ *   depositó; depositó antes de que se empezara a registrar; o depositó y en ese momento no se pudo
+ *   registrar. Y una billetera que cerró su único escrow pasándole el índice al `close` queda con el
+ *   índice EXISTENTE y VACÍO, no ausente, así que `no_index` tampoco prueba "nunca lo registramos".
+ * · `unreadable` — RPC caído, techo de tiempo vencido o bytes que no decodifican. ❌ NO autoriza a
+ *   decir absolutamente nada sobre los fondos: "no pude preguntar" no es "no".
+ * · `empty`      — el índice EXISTE y no lista ninguna entrada. Sólo autoriza a decir eso.
+ * · `candidates` — el índice existe y tiene entradas. Sigue el sondeo on-chain, que es el único
+ *   autoritativo sobre el estado de cada escrow: el índice NO lo es.
+ *
+ * Misma disciplina que (`RemittanceIdLookup`, `:467`) y (`SolanaSenderSolBalance`, `:439`): nunca
+ * `X | null`, el consumidor está obligado a nombrar el caso.
+ */
+export type EscrowIndexLookup =
+  | { readonly outcome: "no_index" }
+  | { readonly outcome: "unreadable" }
+  | { readonly outcome: "empty" }
+  | { readonly outcome: "candidates"; readonly entries: readonly EscrowId16[] };

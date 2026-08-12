@@ -1,12 +1,15 @@
 import { sha256 } from "@noble/hashes/sha256";
 import nacl from "tweetnacl";
 import bs58 from "bs58";
+import * as anchor from "@coral-xyz/anchor";
+import type { Idl, Provider } from "@coral-xyz/anchor";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
-import { ComputeBudgetProgram, Connection, Keypair, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import { ComputeBudgetProgram, Connection, Keypair, PublicKey, SystemProgram, Transaction, type TransactionInstruction } from "@solana/web3.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Money } from "../domain/money";
 import type { Quote } from "../domain/remittance";
 import { CUSTODY_WINDOW_SECS, SolanaWalletAdapter } from "./solana-wallet";
+import { escrowIdl } from "./solana/escrow-idl";
 import { solanaWalletBridge } from "./solana-wallet-bridge";
 
 const VALID_B58 = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // base58 válido (mixed-case)
@@ -657,7 +660,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
 
   // T12 — el ÚNICO test que mira el PAYLOAD. T1..T6 assertan sobre `capturedTx(signSpy)`, que es el
   // objeto que Chaski le ENTREGA a la billetera. Lo que producción serializa y postea es lo que la
-  // billetera DEVUELVE (`remainingAccounts`, `solana-wallet.ts:423`), y en producción puede ser otro objeto: el
+  // billetera DEVUELVE (`remainingAccounts`, `solana-wallet.ts:460`), y en producción puede ser otro objeto: el
   // adapter serializa `signed`, no `tx`. Si una billetera real agrega sus propias ComputeBudget
   // —el escenario que esta HU declara que NO puede impedir (sdd.md §11.1)—, Chaski postea esa tx
   // sin chistar y ninguno de los seis se entera, porque todos miran el objeto de entrada.
@@ -736,5 +739,115 @@ describe("SolanaWalletAdapter.signMessage (HU-SOL-8)", () => {
   it("bridge sin handle montado ⇒ throw wallet_sign_not_available (fail-loud)", async () => {
     const adapter = new SolanaWalletAdapter(); // bridge reseteado en afterEach, sin registerSignMessage
     await expect(adapter.signMessage(POP_MESSAGE)).rejects.toThrow("wallet_sign_not_available");
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// T-347-21 · WKH-347/W0.5 — CARACTERIZACIÓN de @coral-xyz/anchor 0.30.1 para `register_escrow`
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// Este describe NO prueba producción: prueba la LIBRERÍA, por el MISMO camino que usa producción
+// (`new anchor.Program(idl, { connection })` → `.methods.registerEscrow(...)` → `.accounts({...})` →
+// `.instruction()`). La `Connection` apunta a 127.0.0.1 y NUNCA se usa: acá no hay llamada de red.
+// Mismo criterio y misma forma que el describe de caracterización de `solana-wallet.close.test.ts`.
+//
+// POR QUÉ VA PRIMERO DE TODA LA HU: el nombre que anchor le da al método —`registerEscrow`, camelCase
+// de `register_escrow`— es un DATO de la librería, no una preferencia. Si un bump de anchor lo
+// cambiara, hace falta que reviente acá y no en el medio de una transacción a medio armar.
+//
+// LÍMITE, dicho: esto mide qué BYTES arma el cliente. NO mide qué hace el validador con ellos, ni que
+// el facilitator desplegado los acepte. Lo segundo es una precondición que vive en otro repo.
+//
+// La forma que se fija es exactamente la que el Check 4b de CR-1 acepta (b1..b6): programId, 24 bytes
+// de data, discriminador, 4 cuentas exactas, orden posicional y flags.
+describe("caracterización de @coral-xyz/anchor 0.30.1: la ix `register_escrow`", () => {
+  const REGISTER_ESCROW_DISCRIMINATOR = [200, 17, 194, 170, 224, 144, 127, 166];
+  const SYSTEM_PROGRAM_B58 = "11111111111111111111111111111111";
+  const REM_ID = "rem-caracterizacion-register";
+  const KP = Keypair.generate();
+
+  function escrowStatePdaOf(id: string): PublicKey {
+    return PublicKey.findProgramAddressSync(
+      [Buffer.from("escrow"), KP.publicKey.toBuffer(), Buffer.from(remittanceIdBytes16(id))],
+      new PublicKey(ESCROW_PROGRAM_ID),
+    )[0];
+  }
+  const escrowIndexPda = PublicKey.findProgramAddressSync(
+    [Buffer.from("escrow-index"), KP.publicKey.toBuffer()],
+    new PublicKey(ESCROW_PROGRAM_ID),
+  )[0];
+
+  async function buildRegister(): Promise<TransactionInstruction> {
+    const connection = new Connection("http://127.0.0.1:8899"); // nunca se usa: no hay llamada de red
+    const program = new anchor.Program(escrowIdl as unknown as Idl, { connection } as Provider);
+    const methods = program.methods as unknown as {
+      registerEscrow: (...args: unknown[]) => {
+        accounts: (a: Record<string, PublicKey>) => {
+          instruction: () => Promise<TransactionInstruction>;
+        };
+      };
+    };
+    // El fail-loud del NOMBRE: si anchor dejara de exponer `registerEscrow`, esto dice qué pasó en vez
+    // de reventar con un "no es una función" a diez líneas de distancia.
+    expect(typeof methods.registerEscrow).toBe("function");
+    return methods
+      .registerEscrow(Array.from(remittanceIdBytes16(REM_ID)))
+      .accounts({
+        sender: KP.publicKey,
+        escrowState: escrowStatePdaOf(REM_ID),
+        escrowIndex: escrowIndexPda,
+      })
+      .instruction();
+  }
+
+  it("T-347-21: programId, 24 bytes de data y el discriminador de `register_escrow`", async () => {
+    const ix = await buildRegister();
+    expect(ix.programId.toBase58()).toBe(ESCROW_PROGRAM_ID);
+    // 24 = 8 del discriminador + 16 del `remittance_id`. Ni uno más: un arg de más lo mueve.
+    expect(ix.data.length).toBe(24);
+    expect(Array.from(ix.data.subarray(0, 8))).toEqual(REGISTER_ESCROW_DISCRIMINATOR);
+    // Y que los 16 que siguen sean EL id16, no otro: sin esto el discriminador solo no ata nada.
+    expect(Array.from(ix.data.subarray(8))).toEqual(Array.from(remittanceIdBytes16(REM_ID)));
+  });
+
+  it("T-347-21: exactamente 4 cuentas, en el orden [sender, escrow_state, escrow_index, system_program]", async () => {
+    const ix = await buildRegister();
+    // Las pubkeys se derivan ACÁ, de forma independiente del builder, y se comparan posicionalmente.
+    // Nunca un total: `keys.length === 4` no distingue un orden invertido de uno correcto.
+    const esperadas = [
+      KP.publicKey.toBase58(),
+      escrowStatePdaOf(REM_ID).toBase58(),
+      escrowIndexPda.toBase58(),
+      SYSTEM_PROGRAM_B58,
+    ];
+    expect(ix.keys.map((k) => k.pubkey.toBase58())).toEqual(esperadas);
+    // Que dos derivaciones colapsadas no puedan pasar por cuatro cuentas distintas.
+    expect(new Set(esperadas).size).toBe(4);
+    // Y NINGUNA cuenta de más: `remainingAccounts` acá cae en SECOND_IX_ACCOUNTS_INVALID del lado del
+    // facilitator. El `reference` viaja como remaining del `deposit` y SÓLO de ahí.
+    expect(ix.keys).toHaveLength(4);
+  });
+
+  it("T-347-21: los flags — sender signer+writable, escrow_index writable, system_program ni una cosa ni la otra", async () => {
+    const ix = await buildRegister();
+    const [sender, escrowState, escrowIndex, systemProgram] = ix.keys;
+    if (!sender || !escrowState || !escrowIndex || !systemProgram) throw new Error("faltan cuentas");
+
+    expect(sender.isSigner).toBe(true);
+    expect(sender.isWritable).toBe(true);
+
+    // ⚠️ `escrow_state` se asserta NO-SIGNER y NO se asserta no-writable, y hay que decir por qué:
+    // en un mensaje legacy de Solana, signer y writable son propiedades DE LA TRANSACCIÓN, no de la
+    // instrucción, y en el round-trip `serialize → Transaction.from` los metas de una misma pubkey
+    // COLAPSAN A LA UNIÓN sobre todas las ix. `escrow_state` es legítimamente writable en el
+    // `deposit`, así que en la tx atómica SIEMPRE vuelve writable en la 2ª ix. Asertar no-writable
+    // acá rechazaría toda transacción legítima.
+    expect(escrowState.isSigner).toBe(false);
+
+    expect(escrowIndex.isWritable).toBe(true); // el `init_if_needed` la escribe
+    expect(escrowIndex.isSigner).toBe(false); // es una PDA: no puede firmar nunca
+
+    expect(systemProgram.isSigner).toBe(false);
+    expect(systemProgram.isWritable).toBe(false);
+    expect(systemProgram.pubkey.toBase58()).toBe(SYSTEM_PROGRAM_B58);
   });
 });

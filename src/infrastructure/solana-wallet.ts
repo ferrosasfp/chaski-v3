@@ -17,6 +17,7 @@ import type { Idl, Provider } from "@coral-xyz/anchor";
 import type {
   CloseableEscrow,
   ConnectedWalletProbe,
+  EscrowId16,
   EscrowRefundConfirmation,
   PrincipalDepositState,
   SolanaEscrowDeposit,
@@ -250,22 +251,58 @@ export class SolanaWalletAdapter
     return Uint8Array.from(sha256(new TextEncoder().encode(remittanceId)).subarray(0, 16));
   }
 
-  /** ÚNICA fuente de la derivación de la PDA `escrow_state` para el refund (seeds: "escrow" | sender |
-   *  remittanceId[u8;16]) — la usan el path normal y el fallback de recuperación (HU-SOL-20/AC-2), así
-   *  que no pueden divergir. Byte-idéntica a la de authorizePrincipal / cross-repo (AH-9).
-   *  `PublicKey.findProgramAddressSync` es estático: el import de módulo y el lazy-import resuelven a
-   *  la MISMA clase. */
+  /** La derivación de la PDA `escrow_state` DESDE UN `remittanceId` — la usan el path normal y el
+   *  fallback de recuperación (HU-SOL-20/AC-2), así que no pueden divergir. Hashea con
+   *  `remittanceIdToBytes16` y DELEGA los seeds en `deriveEscrowStateFromId16`, que a partir de
+   *  WKH-347 es LA fuente única: hay un segundo camino que llega con el `id16` y sin `remittanceId`
+   *  (el índice on-chain), y dos derivaciones separadas son dos PDAs que pueden divergir. */
   private deriveEscrowState(
     senderPk: InstanceType<typeof PublicKey>,
     programId: InstanceType<typeof PublicKey>,
     remittanceId: string,
   ): { pda: InstanceType<typeof PublicKey>; bytes: Uint8Array } {
-    const bytes = this.remittanceIdToBytes16(remittanceId); // [u8;16] determinístico
+    const id16 = this.id16FromBytes(this.remittanceIdToBytes16(remittanceId));
+    return this.deriveEscrowStateFromId16(senderPk, programId, id16);
+  }
+
+  /** WKH-347 — ÚNICA fuente de la derivación de la PDA `escrow_state` (seeds: "escrow" | sender |
+   *  id16[u8;16]). Byte-idéntica a la de authorizePrincipal / cross-repo (AH-9).
+   *  `PublicKey.findProgramAddressSync` es estático: el import de módulo y el lazy-import resuelven a
+   *  la MISMA clase.
+   *
+   *  Entra por `EscrowId16` y no por `remittanceId` porque hay UN camino que nunca tiene el segundo:
+   *  el que redescubre un escrow leyendo el índice on-chain. `sha256` no se invierte, así que ahí el
+   *  `remittanceId` no existe y no se puede inventar. */
+  private deriveEscrowStateFromId16(
+    senderPk: InstanceType<typeof PublicKey>,
+    programId: InstanceType<typeof PublicKey>,
+    id16: EscrowId16,
+  ): { pda: InstanceType<typeof PublicKey>; bytes: Uint8Array } {
+    const bytes = this.bytesFromId16(id16);
     const [pda] = PublicKey.findProgramAddressSync(
       [Buffer.from("escrow"), senderPk.toBuffer(), Buffer.from(bytes)],
       programId,
     );
     return { pda, bytes };
+  }
+
+  /** ÚNICO lugar donde los 16 bytes se vuelven un `EscrowId16` (hex minúscula, 32 chars). Mismo
+   *  criterio de fuente única que la derivación de la PDA de acá arriba: dos conversiones separadas
+   *  son dos formas de escribir el mismo id que después no se comparan con `===`. */
+  private id16FromBytes(bytes: Uint8Array | readonly number[]): EscrowId16 {
+    return Array.from(bytes)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  }
+
+  /** La vuelta. Fail-loud ante cualquier cosa que no sean 32 chars hex: un id16 deforme derivaría una
+   *  PDA que no es la de nadie, y el camino de recuperación diría "no encontramos nada" sobre una
+   *  búsqueda que nunca se hizo bien. */
+  private bytesFromId16(id16: EscrowId16): Uint8Array {
+    if (!/^[0-9a-f]{32}$/.test(id16)) throw new Error("escrow_id16_malformed");
+    const out = new Uint8Array(16);
+    for (let i = 0; i < 16; i++) out[i] = Number.parseInt(id16.slice(i * 2, i * 2 + 2), 16);
+    return out;
   }
 
   // HU-SOL-20/AC-2 — FALLBACK de recuperación: el caller no trajo el remittanceId (localStorage
@@ -282,7 +319,7 @@ export class SolanaWalletAdapter
   // MAX_RECOVERY_CANDIDATES envíos de la persona en los tres casos en que no se preguntó nada.
   // Ahora se consume `lookupBySender`, que las separa, y los tres `not_asked` salen por un código
   // propio. La CUARTA sigue saliendo por `escrow_not_found`, a propósito: ahí el servidor sí contestó
-  // y la frase de la pantalla es cierta. Espeja a (`listCloseable`, `:1104`), que ya hacía esto.
+  // y la frase de la pantalla es cierta. Espeja a (`listCloseable`, `:1141`), que ya hacía esto.
   private async resolveRemittanceIdFromLedger(senderB58: string): Promise<string> {
     const resolver = this.remittanceIdResolver;
     // Mismo guard que `listCloseable`: sin el método no se adivina, y un doble de JS que no lo tenga
@@ -801,11 +838,11 @@ export class SolanaWalletAdapter
    * devuelve siempre. Que NINGUNA instrucción la cierre **no se pudo verificar** desde este repo: el
    * IDL no expresa las constraints `close = ...` de Anchor.
    *
-   * POR QUÉ EXIGE `remittanceId` Y `refundEscrow` NO: el fallback de refund (`refundEscrow`, `:616`,
-   * que llama a `resolveRemittanceIdFromLedger`, `:286`) elige UNO entre N y actúa sobre él, porque
+   * POR QUÉ EXIGE `remittanceId` Y `refundEscrow` NO: el fallback de refund (`refundEscrow`, `:653`,
+   * que llama a `resolveRemittanceIdFromLedger`, `:323`) elige UNO entre N y actúa sobre él, porque
    * "recuperar mis USDC" tiene un objetivo natural — el escrow que todavía tiene plata. Para `close` no
    * existe ese "el": todos los terminales son igual de cerrables, y elegir uno en silencio le cerraría
-   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1104`) devuelve la
+   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1141`) devuelve la
    * LISTA y elige ella.
    *
    * ⚠️ POR QUÉ EL LISTER NO TIENE GATEWAY Y EL CIERRE SÍ (apartamiento declarado del SDD §4.1/§4.2,
@@ -828,7 +865,7 @@ export class SolanaWalletAdapter
    * qué código emite Anchor exactamente en ese caso: haría falta un `close` real que revierta.
    *
    * NO declara ComputeBudget, a diferencia de `authorizePrincipal`
-   * (`ComputeBudgetProgram.setComputeUnitLimit`, `:460`): aquello existía por el
+   * (`ComputeBudgetProgram.setComputeUnitLimit`, `:497`): aquello existía por el
    * tope POR UNIDAD del facilitator, y acá el feePayer es el sender — no hay tope de nadie que
    * respetar. Y el número que haría falta (el consumo de CU de `close`) no existe: los 120.000 de
    * `resolveSolanaComputeUnitLimit` salen del peor caso de `deposit`. Declarar un límite por debajo del
@@ -994,10 +1031,10 @@ export class SolanaWalletAdapter
    * ¿Entró el `close`? Devuelve el tri-estado y TIRA `close_tx_failed` sólo cuando medimos que la tx
    * entró y revirtió Y la cuenta sigue ahí.
    *
-   * ⚠️ DOS DIVERGENCIAS DELIBERADAS respecto de `confirmRefund`, `:725`. Están escritas acá para
+   * ⚠️ DOS DIVERGENCIAS DELIBERADAS respecto de `confirmRefund`, `:762`. Están escritas acá para
    * que nadie las "armonice" de vuelta en un code review:
    *
-   * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`confirmRefund`, `:725`), SIN leer nada.
+   * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`confirmRefund`, `:762`), SIN leer nada.
    *    Éste NO puede: AC-5 exige que el alquiler volvió se afirme *sólo después de leer que la cuenta
    *    ya no existe*. Un `confirmTransaction` sin `err` prueba que la tx ENTRÓ; leer la ausencia es lo
    *    que prueba que hizo lo que queríamos. El input que pone en rojo cualquier atajo acá: un doble
@@ -1082,7 +1119,7 @@ export class SolanaWalletAdapter
    * PoP obligatorio) con una sonda ON-CHAIN, así que incluye envíos que NO están en el `localStorage`
    * de este navegador — que es exactamente la gente que hoy no tiene ningún camino hacia su alquiler.
    *
-   * Espeja `resolveRemittanceIdFromLedger`, `:286`, en su disciplina: fail-loud sin resolver, tope
+   * Espeja `resolveRemittanceIdFromLedger`, `:323`, en su disciplina: fail-loud sin resolver, tope
    * de candidatos, UNA sola llamada RPC batch, y un `decode` en try/catch para que una cuenta deforme
    * no rompa la recuperación entera. Tres diferencias, cada una con su razón:
    *

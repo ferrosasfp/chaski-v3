@@ -428,7 +428,11 @@ describe("LocalRepo.list — una entrada que no se puede atribuir deja de tapar 
     // Variante de case de A: puede no canonicalizar (⇒ rechaza, AC-3) o canonicalizar a OTRA address
     // (⇒ `[]`). Los dos desenlaces son aceptables y NO se asserta cuál: asertar uno sería afirmar
     // algo que nadie midió. Lo que importa, y lo que se asserta, es que nunca devuelve lo ajeno.
-    const altCase = `${A.slice(0, 1)}${A[1] === A[1]!.toLowerCase() ? A[1]!.toUpperCase() : A[1]!.toLowerCase()}${A.slice(2)}`;
+    // Misma forma que el caso de arriba, `.catch(() => [])` incluido, con `charAt` en vez de `A[1]!`
+    // para no sumar tres avisos nuevos de `noNonNullAssertion`.
+    const c = A.charAt(1);
+    const altCase =
+      A.slice(0, 1) + (c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase()) + A.slice(2);
     expect(altCase).not.toBe(A);
     const leaked = await repo.list(altCase).catch(() => []);
     expect(leaked.map((s) => s.id)).toEqual([]);

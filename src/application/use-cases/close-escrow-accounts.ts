@@ -63,8 +63,8 @@ export class CloseEscrowAccounts {
     // 🚫 La comparación NUNCA es con `.toLowerCase()` (CD-13). base58 es CASE-SENSITIVE: dos
     // capitalizaciones distintas son dos addresses distintas, y bajarlas a minúsculas fabrica
     // colisiones — es la colisión IDOR que `canonicalizeAddress` existe para cerrar
-    // (`infrastructure/address.ts:5-7`). El comentario de `persistence.ts:138` dice "case-insensitive"
-    // y el código no lo es: si copiás la premisa de ese comentario, escribís un bug.
+    // (`infrastructure/address.ts:5-7`). El scope por dueño de `persistence.ts:138` es case-sensitive
+    // por lo mismo, y su comentario lo decía al revés hasta WKH-348: leé el código, no la premisa.
     //
     // Qué pasa con una address BASURA, decidido explícitamente y no dejado al azar:
     // `canonicalizeAddress` TIRA ante algo que no parsea (`address.ts:14-18`). Se traduce a

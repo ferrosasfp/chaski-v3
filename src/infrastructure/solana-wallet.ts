@@ -42,6 +42,7 @@ import {
   resolveSolanaRpcUrlPublic,
   resolveSolanaUsdcMint,
 } from "./chain";
+import { ESCROW_INDEX_MAX_ENTRIES } from "./escrow-index-limits";
 import { ESCROW_ID_LOOKUP_CEILING } from "./escrow-lookup-limits";
 import { solanaWalletBridge } from "./solana-wallet-bridge";
 
@@ -319,7 +320,7 @@ export class SolanaWalletAdapter
   // MAX_RECOVERY_CANDIDATES envíos de la persona en los tres casos en que no se preguntó nada.
   // Ahora se consume `lookupBySender`, que las separa, y los tres `not_asked` salen por un código
   // propio. La CUARTA sigue saliendo por `escrow_not_found`, a propósito: ahí el servidor sí contestó
-  // y la frase de la pantalla es cierta. Espeja a (`listCloseable`, `:1141`), que ya hacía esto.
+  // y la frase de la pantalla es cierta. Espeja a (`listCloseable`, `:1249`), que ya hacía esto.
   private async resolveRemittanceIdFromLedger(senderB58: string): Promise<string> {
     const resolver = this.remittanceIdResolver;
     // Mismo guard que `listCloseable`: sin el método no se adivina, y un doble de JS que no lo tenga
@@ -501,13 +502,97 @@ export class SolanaWalletAdapter
       microLamports: resolveSolanaComputeUnitPriceMicroLamports(),
     });
 
+    // ── WKH-347 · el escrow queda ENCONTRABLE desde la pubkey del remitente ────────────────────────
+    //
+    // QUÉ PROBLEMA ATACA, dicho sin exagerar: la derivación de la PDA del escrow es
+    // `["escrow", sender, id16]` y el `id16` sale de `sha256(remittanceId)`, así que el `remittanceId`
+    // es la ÚNICA entrada. Cuando la escritura del registro durable falla, ese id se pierde y no hay
+    // forma de volver a derivar la PDA. Registrar el escrow en el índice on-chain del remitente lo
+    // vuelve ENCONTRABLE desde su pubkey sola.
+    //
+    // ⛔ LO QUE NO HACE, y no se puede escribir de otra manera: NO vuelve imposible el depósito
+    // huérfano y NO evita que la escritura del registro durable falle. Esa escritura sigue igual de
+    // frágil que ayer. Lo único que cambia es que el escrow se puede volver a encontrar después.
+    //
+    // ── LA SONDA VA ACÁ, Y ESO ES PARTE DEL CONTRATO (CD-14) ─────────────────────────────────────
+    //  · 14.1 · el resultado queda en una `const` local YA RESUELTA, antes de la primera línea que
+    //    agrega instrucciones. Nunca un `.then()`, nunca una `Promise` guardada: si el `.add()`
+    //    corriera antes del `await`, la firma no cubriría las dos ix.
+    //  · 14.2 · PROHIBIDO memoizarlo en un campo del adapter. Este adapter es un SINGLETON del
+    //    container y la ocupación del índice cambia con cada registro: un valor memoizado es un dato
+    //    viejo decidiendo si se agrega una ix que puede REVERTIR EL DEPÓSITO COMPLETO.
+    //  · 14.3 · PROHIBIDO que el guard de saldo lea el índice por su cuenta. Hoy compara contra UN
+    //    número fijo y no lo lee; agregarle una lectura reintroduce el modo de falla que el umbral
+    //    único eliminó (dos lecturas separadas por una llamada de red que pueden divergir).
+    //
+    // El techo de la sonda son 5 s (ESCROW_INDEX_PROBE_TIMEOUT_MS) y son hasta 5 s ANTES del diálogo
+    // de firma. 🚫 PROHIBIDO subirlo "para mejorar la tasa de registro": el costo lo paga la persona
+    // mirando la pantalla.
+    const idxCoder = new anchor.BorshAccountsCoder(escrowIdl as unknown as Idl);
+    const idx = await this.probeEscrowIndex(connection, senderPk, programId, idxCoder);
+    // La decisión, con `idx` ya resuelto:
+    //   absent                                   ⇒ se registra (la ix crea el índice)
+    //   present con lugar                        ⇒ se registra
+    //   present y LLENO (>= ESCROW_INDEX_MAX_ENTRIES) ⇒ NO se registra
+    //   unknown                                  ⇒ NO se registra
+    //
+    // ⚠️ LA ASIMETRÍA CON `closeEscrow` ES DELIBERADA Y NO SE ARMONIZA. Allá `unknown` ABORTA, porque
+    // adivinar puede dejar una entrada colgada consumiendo un lugar del cupo y lo único que se pierde
+    // es un cierre reintentable. ACÁ DEGRADA, porque el costo de abortar es bloquear una remesa
+    // legítima por una falla de lectura NUESTRA: un RPC caído no puede impedirle a alguien mandar
+    // plata. Las dos mitades van escritas para que ningún review "corrija" una mirando la otra.
+    //
+    // Y el índice lleno tampoco aborta, por la misma razón: quien tenga 32 escrows abiertos sigue
+    // pudiendo depositar. Lo que pierde es que ESE depósito quede registrado, no el depósito.
+    const registrable =
+      idx.status === "absent" ||
+      (idx.status === "present" && idx.entries.length < ESCROW_INDEX_MAX_ENTRIES);
+    // 🔴 CD-10 — TODO lo nuevo vive adentro de este `if`, así que el camino de UNA ix de negocio no
+    // ejecuta ni una línea nueva y sale byte-idéntico al de antes de esta HU. Está medido contra un
+    // fixture pinneado del árbol previo, no prometido.
+    let regIx: TransactionInstruction | undefined;
+    if (registrable) {
+      const regMethods = program.methods as unknown as {
+        registerEscrow: (...args: unknown[]) => {
+          accounts: (a: Record<string, PublicKey>) => {
+            instruction: () => Promise<TransactionInstruction>;
+          };
+        };
+      };
+      const [escrowIndexPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("escrow-index"), senderPk.toBuffer()],
+        programId,
+      );
+      regIx = await regMethods
+        // El binding al `deposit` NO es opcional: el mismo sender, la MISMA `escrowStatePda` y los
+        // MISMOS `remittanceIdBytes` que la ix de posición 0. No se re-deriva nada — se usan las
+        // variables que ya están en el scope, que es lo que impide que las dos ix hablen de escrows
+        // distintos. SIN `.remainingAccounts(...)`: una cuenta de más acá la rechaza el facilitator.
+        .registerEscrow(Array.from(remittanceIdBytes))
+        // `sender`, `escrowState` y `escrowIndex` explícitos por el mismo criterio que el `deposit`:
+        // que la dirección no dependa de la versión del resolver de anchor. `systemProgram` tiene
+        // `address` fija en el IDL y lo resuelve anchor.
+        .accounts({ sender: senderPk, escrowState: escrowStatePda, escrowIndex: escrowIndexPda })
+        .instruction();
+    }
+
     // ── feePayer + blockhash + partial-sign + serializar (AC-2/AC-3) ──
     const { blockhash } = await connection.getLatestBlockhash();
     // Orden [limit, price, deposit]: convención y legibilidad (el límite es lo que el precio
     // multiplica). CR-1 NO lo exige — filtra las ix de ComputeBudget por programId (cr1.ts:106-107) y
     // toma businessIx[0] del array ya filtrado (:115). Se documenta para que nadie lo cambie creyendo
     // que da igual, y para que nadie lo defienda creyendo que el validador lo impone.
-    const tx = new Transaction().add(limitIx, priceIx, ix); // [limit, price, deposit] — ver CD-1
+    //
+    // 🔴 LO QUE SÍ ES UN INVARIANTE: el `deposit` va SIEMPRE en la posición 0 de las ix DE NEGOCIO, y
+    // el `register_escrow` DESPUÉS. Hay TRES actores que dependen de eso por POSICIÓN, no por
+    // discriminador: el CR-1 del facilitator, el Guard A de SDD 037 y NUESTRO PROPIO SERVIDOR
+    // (`tx.instructions.find`, `settlement/solana-deposit-beneficiary.ts:47`), que toma la primera ix
+    // del escrow y después exige que sea el `deposit`. Con el orden invertido ese lector devuelve
+    // `unreadable` y la route del settle responde 400: TODO depósito patrocinado falla en nuestro
+    // propio servidor, antes de que el facilitator vea nada. ⛔ PROHIBIDO invertirlo.
+    const tx = regIx
+      ? new Transaction().add(limitIx, priceIx, ix, regIx) // [limit, price, deposit, register] — CD-1
+      : new Transaction().add(limitIx, priceIx, ix); // [limit, price, deposit] — ver CD-1
     tx.feePayer = new PublicKey(resolveSolanaFacilitatorPubkey()); // AC-2: facilitator paga el fee de red
     tx.recentBlockhash = blockhash;
 
@@ -838,11 +923,11 @@ export class SolanaWalletAdapter
    * devuelve siempre. Que NINGUNA instrucción la cierre **no se pudo verificar** desde este repo: el
    * IDL no expresa las constraints `close = ...` de Anchor.
    *
-   * POR QUÉ EXIGE `remittanceId` Y `refundEscrow` NO: el fallback de refund (`refundEscrow`, `:653`,
-   * que llama a `resolveRemittanceIdFromLedger`, `:323`) elige UNO entre N y actúa sobre él, porque
+   * POR QUÉ EXIGE `remittanceId` Y `refundEscrow` NO: el fallback de refund (`refundEscrow`, `:738`,
+   * que llama a `resolveRemittanceIdFromLedger`, `:324`) elige UNO entre N y actúa sobre él, porque
    * "recuperar mis USDC" tiene un objetivo natural — el escrow que todavía tiene plata. Para `close` no
    * existe ese "el": todos los terminales son igual de cerrables, y elegir uno en silencio le cerraría
-   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1141`) devuelve la
+   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1249`) devuelve la
    * LISTA y elige ella.
    *
    * ⚠️ POR QUÉ EL LISTER NO TIENE GATEWAY Y EL CIERRE SÍ (apartamiento declarado del SDD §4.1/§4.2,
@@ -865,7 +950,7 @@ export class SolanaWalletAdapter
    * qué código emite Anchor exactamente en ese caso: haría falta un `close` real que revierta.
    *
    * NO declara ComputeBudget, a diferencia de `authorizePrincipal`
-   * (`ComputeBudgetProgram.setComputeUnitLimit`, `:497`): aquello existía por el
+   * (`ComputeBudgetProgram.setComputeUnitLimit`, `:498`): aquello existía por el
    * tope POR UNIDAD del facilitator, y acá el feePayer es el sender — no hay tope de nadie que
    * respetar. Y el número que haría falta (el consumo de CU de `close`) no existe: los 120.000 de
    * `resolveSolanaComputeUnitLimit` salen del peor caso de `deposit`. Declarar un límite por debajo del
@@ -992,6 +1077,19 @@ export class SolanaWalletAdapter
    * Los TRES inputs que producen "unknown" — RPC caído, techo vencido, bytes indecodificables —
    * colapsan aguas arriba en UN solo código (`escrow_index_probe_failed`). Se dice acá para que nadie
    * lea ese código como un diagnóstico fino: la persona no puede hacer nada distinto con cada uno.
+   *
+   * ⚠️ WKH-347 — A PARTIR DE ACÁ HAY DOS LLAMADORES, Y LE DAN A `unknown` DESENLACES OPUESTOS. No es
+   * una incoherencia y no hay que "armonizarla":
+   *   · `closeEscrow` ABORTA (`escrow_index_probe_failed`). Adivinar ahí puede dejar una entrada
+   *     colgada consumiendo un lugar del cupo, y lo único que se pierde abortando es un cierre que la
+   *     persona puede reintentar.
+   *   · `authorizePrincipal` DEGRADA: sale sin la 2ª ix. El costo de abortar ahí es otro y mucho más
+   *     alto — bloquear una remesa legítima por una falla de lectura NUESTRA. Un RPC caído no puede
+   *     impedirle a alguien mandar plata.
+   *
+   * La rama `present` transporta además las `entries` ya decodificadas: el decode ya se hacía y su
+   * resultado se tiraba, y hay dos preguntas que lo necesitan (¿queda cupo? ¿qué escrows redescubrir?).
+   * Sigue siendo una unión de TRES, discriminada y sin ningún campo opcional (CD-7).
    */
   private async probeEscrowIndex(
     connection: Web3Connection,
@@ -999,7 +1097,11 @@ export class SolanaWalletAdapter
     programId: InstanceType<typeof PublicKey>,
     coder: { decode(name: string, data: Buffer): unknown },
   ): Promise<
-    | { status: "present"; pda: InstanceType<typeof PublicKey> }
+    | {
+        status: "present";
+        pda: InstanceType<typeof PublicKey>;
+        entries: readonly EscrowId16[];
+      }
     | { status: "absent" }
     | { status: "unknown" }
   > {
@@ -1016,25 +1118,31 @@ export class SolanaWalletAdapter
       return { status: "unknown" }; // RPC caído o techo vencido: NO es "no existe"
     }
     if (info === null) return { status: "absent" }; // la cadena CONTESTÓ: no existe
+    let entries: readonly EscrowId16[];
     try {
-      coder.decode("EscrowIndex", info.data);
-    } catch {
       // El decode no es decorativo: distingue "el índice de este sender" de "una cuenta que cayó en esa
       // dirección y no es lo que creemos". Meter una cuenta ESCRIBIBLE que no podemos identificar en
       // una tx del money-path es peor que no mandarla.
+      const decoded = coder.decode("EscrowIndex", info.data) as {
+        entries: ReadonlyArray<Uint8Array | readonly number[]>;
+      };
+      // `entries` es `vec<[u8;16]>` en el IDL, o sea arrays de bytes. La conversión a `EscrowId16`
+      // pasa por el ÚNICO lugar de conversión que tiene este adapter.
+      entries = decoded.entries.map((e) => this.id16FromBytes(e));
+    } catch {
       return { status: "unknown" };
     }
-    return { status: "present", pda };
+    return { status: "present", pda, entries };
   }
 
   /**
    * ¿Entró el `close`? Devuelve el tri-estado y TIRA `close_tx_failed` sólo cuando medimos que la tx
    * entró y revirtió Y la cuenta sigue ahí.
    *
-   * ⚠️ DOS DIVERGENCIAS DELIBERADAS respecto de `confirmRefund`, `:762`. Están escritas acá para
+   * ⚠️ DOS DIVERGENCIAS DELIBERADAS respecto de `confirmRefund`, `:847`. Están escritas acá para
    * que nadie las "armonice" de vuelta en un code review:
    *
-   * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`confirmRefund`, `:762`), SIN leer nada.
+   * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`confirmRefund`, `:847`), SIN leer nada.
    *    Éste NO puede: AC-5 exige que el alquiler volvió se afirme *sólo después de leer que la cuenta
    *    ya no existe*. Un `confirmTransaction` sin `err` prueba que la tx ENTRÓ; leer la ausencia es lo
    *    que prueba que hizo lo que queríamos. El input que pone en rojo cualquier atajo acá: un doble
@@ -1119,7 +1227,7 @@ export class SolanaWalletAdapter
    * PoP obligatorio) con una sonda ON-CHAIN, así que incluye envíos que NO están en el `localStorage`
    * de este navegador — que es exactamente la gente que hoy no tiene ningún camino hacia su alquiler.
    *
-   * Espeja `resolveRemittanceIdFromLedger`, `:323`, en su disciplina: fail-loud sin resolver, tope
+   * Espeja `resolveRemittanceIdFromLedger`, `:324`, en su disciplina: fail-loud sin resolver, tope
    * de candidatos, UNA sola llamada RPC batch, y un `decode` en try/catch para que una cuenta deforme
    * no rompa la recuperación entera. Tres diferencias, cada una con su razón:
    *

@@ -352,7 +352,7 @@ export interface SolanaEscrowRefundGateway {
    *
    * El adapter ya lo soportaba (HU-SOL-20/AC-2): sin id lo resuelve contra el store server-side
    * (`POST /api/solana/escrow/remittance-ids`, PoP obligatorio) y sondea hasta
-   * MAX_RECOVERY_CANDIDATES PDAs on-chain (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:323`). Este puerto lo declaraba
+   * MAX_RECOVERY_CANDIDATES PDAs on-chain (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:324`). Este puerto lo declaraba
    * REQUERIDO, así que ningún consumidor tipado podía usar ese camino: la única forma de llegar al
    * refund desde la interfaz era `RecoverEscrowFunds`, que arranca con `repo.get(remittanceId)` y
    * tira `remittance_not_found` (`recover-escrow-funds.ts`:49-50). O sea que quien borró los datos

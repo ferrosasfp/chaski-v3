@@ -40,7 +40,7 @@ function remittanceIdBytes16(remittanceId: string): Uint8Array {
   return Uint8Array.from(sha256(new TextEncoder().encode(remittanceId)).subarray(0, 16));
 }
 
-/** La MISMA derivación que `deriveEscrowState`, `solana-wallet.ts:259`. */
+/** La MISMA derivación que `deriveEscrowState`, `solana-wallet.ts:260`. */
 function escrowStatePdaOf(remittanceId: string): PublicKey {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("escrow"), SENDER_KP.publicKey.toBuffer(), Buffer.from(remittanceIdBytes16(remittanceId))],
@@ -277,7 +277,11 @@ describe("SolanaWalletAdapter.closeEscrow (WKH-327)", () => {
 
   // ── AC-2 ────────────────────────────────────────────────────────────────────────────────────────
   // L-2: sólo la mitad CLIENTE de AC-2 es verificable acá. Que la entrada salga de `entries` exige un
-  // EscrowIndex existente en cadena, y este repo NUNCA emite `register_escrow`.
+  // EscrowIndex existente en cadena.
+  // 🔴 CORREGIDO EN WKH-347: acá decía "y este repo NUNCA emite `register_escrow`", y desde esa HU es
+  // FALSO — el depósito emite esa ix como segunda instrucción de negocio de la misma transacción. Lo
+  // que sigue siendo cierto, y es lo que sostiene el L-2, es que este test no ejecuta el programa: fija
+  // qué bytes arma el cliente, no qué hace el validador con ellos.
   it("AC-2: índice PRESENTE y decodificable ⇒ keys[6] es esa PDA y viene writable", async () => {
     const REM = "rem-con-indice";
     mockChain({
@@ -389,7 +393,7 @@ describe("SolanaWalletAdapter.closeEscrow (WKH-327)", () => {
 
   it("AC-5: confirmación limpia + la cuenta SIGUE AHÍ ⇒ 'pending', NUNCA 'confirmed' (M4)", async () => {
     // Acá `confirmClose` se aparta de `confirmRefund` a propósito: aquél devuelve "confirmed" apenas la
-    // tx confirma sin error (`confirmRefund`, `solana-wallet.ts:762`), SIN leer nada. AC-5 exige leer la AUSENCIA. Un
+    // tx confirma sin error (`confirmRefund`, `solana-wallet.ts:847`), SIN leer nada. AC-5 exige leer la AUSENCIA. Un
     // `confirmTransaction` sin `err` prueba que la tx entró; leer la ausencia prueba que hizo lo que
     // queríamos. Este es el único test que separa las dos cosas.
     const REM = "rem-no-cerro";

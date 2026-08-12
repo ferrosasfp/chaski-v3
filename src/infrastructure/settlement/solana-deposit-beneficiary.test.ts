@@ -80,6 +80,12 @@ describe("readDepositBeneficiary", () => {
       blockhash: BLOCKHASH,
       lastValidBlockHeight: 1,
     } as Awaited<ReturnType<Connection["getLatestBlockhash"]>>);
+    // 🔴 WKH-347 — SIN ESTO EL ESCRITOR REAL PEGA A LA RED. `authorizePrincipal` pasó a sondear la PDA
+    // `["escrow-index", sender]` antes de armar la tx, y sin mock cada uno de estos `it` esperaba los
+    // 5 s del techo de la sonda contra un RPC real y moría por timeout. `null` significa que la cadena
+    // CONTESTÓ que el índice no existe, o sea el caso de un remitente que deposita por primera vez:
+    // la tx sale con sus DOS ix de negocio, que es la forma que estos tests tienen que leer.
+    vi.spyOn(Connection.prototype, "getAccountInfo").mockResolvedValue(null);
   });
   afterEach(() => {
     solanaWalletBridge.reset();

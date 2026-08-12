@@ -91,7 +91,7 @@ function safeLocalStorage(): Storage | null {
 
 export class LocalRepo implements RemittanceRepository {
   private mem = new Map<string, RemittanceState>();
-
+  // 🔴 OJO: un elemento ilegible del blob deja este read() en un Map VACÍO. Residual completo abajo, en clearByOwner.
   private read(): Map<string, RemittanceState> {
     const ls = safeLocalStorage();
     if (!ls) return this.mem;
@@ -151,6 +151,17 @@ export class LocalRepo implements RemittanceRepository {
     // atribuir ES atribuirlo a quien pidió el reset, y destruye el único dato con el que algún día se
     // podría atribuir. Residual declarado: si esa entrada tiene PII de un beneficiario, el reset no
     // la puede purgar. Purgarla exigiría atribuirla, que es exactamente lo que AC-5 prohíbe.
+    //
+    // 🔴 Y el residual GEMELO, que es de read() y no de este filtro, escrito acá para que quede al lado
+    // del de arriba y no en un documento que no viaja con el repo: un elemento de este blob que NO sea
+    // un objeto (o un JSON válido que no sea un array) hace que read() devuelva un Map VACÍO, porque
+    // normalizeState tira al leer `s.kyc` y el catch de read() se lo come. Eso tapa el historial
+    // ENTERO, y el write() de acá abajo persiste ese vacío como "[]", así que esa remesa SE PIERDE.
+    // Input medido: `[<entrada válida>, null]`. NO es regresión (medido idéntico antes de WKH-348) y no
+    // tiene productor confirmado: write() nunca escribe `null`. Por eso lo que cambia WKH-348 vale SÓLO
+    // para la familia "ownerAddress que no canonicaliza"; esta otra familia sigue tapando todo.
+    // Cerrarla sería descartar el elemento ilegible y conservar los demás, que es la disciplina de
+    // `isEntry` en kyc-store, y es otra HU.
     const target = canonicalizeAddress(address);
     const map = this.read();
     for (const [id, s] of map) {

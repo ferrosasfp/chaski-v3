@@ -273,10 +273,20 @@ export async function POST(req: Request): Promise<Response> {
   //   · `solana_deposit_unindexed`        — se LEYÓ la tx y llevaba UNA sola ix de negocio. El escrow
   //     quedó fuera del índice del remitente. Es un HECHO medido sobre bytes firmados, y es el caso que
   //     esta constancia existe para contar.
-  //   · `solana_deposit_index_unreadable` — no se pudo determinar. Cubre las DOS formas de no saber: la
-  //     tx entera no se pudo deserializar, o se leyó pero su 2ª ix del escrow no se pudo nombrar. Se
-  //     emiten con el MISMO enum porque para un operador la acción es la misma (no se puede afirmar
-  //     nada), y ⛔ nunca con el enum de arriba, porque eso convertiría una ignorancia en una afirmación.
+  //   · `solana_deposit_index_unreadable` — el enum CONSERVADOR, y cubre TRES formas y no dos. Acá decía
+  //     "no se pudo determinar" a secas, y para una de las tres eso es más flojo que lo que se sabe
+  //     (fix-pack WKH-347, AR/MNR-7):
+  //       (a) la tx entera no se pudo deserializar ⇒ genuinamente no se sabe nada;
+  //       (b) hay una 2ª ix del escrow cuyo discriminador el IDL no conoce ⇒ genuinamente no se sabe;
+  //       (c) hay una 2ª ix del escrow que decodifica LIMPIO y NO es `register_escrow` (por ejemplo un
+  //           `[deposit, deregister_escrow]`) ⇒ acá sí quedó determinado que la tx NO registró, y este
+  //           enum lo reporta igual como "no se pudo determinar". Es deliberado y es el lado barato del
+  //           error: Chaski no puede emitir esa transacción (su escritor sólo agrega `register_escrow`),
+  //           así que (c) no tiene productor propio hoy, y afirmar `not_registered` sobre una forma que
+  //           no conocemos sería convertir una lectura parcial en un hecho. Si algún día el escritor
+  //           emite una segunda ix distinta, (c) pasa a tener productor y hay que separarlo de (a) y (b).
+  //     Los tres van con el MISMO enum porque para un operador la acción es la misma, y ⛔ nunca con el
+  //     enum de arriba, porque eso sí convertiría una ignorancia en una afirmación.
   //
   // ⛔ LO QUE ESTA CONSTANCIA HACE Y LO QUE NO HACE (CD-8 / L-4). HACE: que quede una línea GREPEABLE
   // con un prefijo que ya existía en este archivo. NO HACE: alertar a nadie — al día de esta HU no hay

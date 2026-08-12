@@ -332,7 +332,12 @@ describe("AC-3: el CONTROL, sin el cual los cuatro de arriba no prueban nada", (
     // (2) 🚫 Y NO AFIRMA. Ésta es la aserción que esta HU no puede perder en la otra dirección: decir
     // "No encontramos" cuando el índice no se leyó sería afirmar de más sobre los fondos de la persona.
     expect(screen.queryByText(/No encontramos escrows abiertos/)).not.toBeInTheDocument();
-    // (3) Ni se atribuye haber mirado la ventana del servidor como si eso cerrara la pregunta.
+    // (3) Ni se atribuye la VENTANA del servidor como si eso cerrara la pregunta. ⚠️ Ojo con el alcance
+    // exacto, que cambió en el fix-pack de esta HU (AR/BLQ-2): el copy de `escrow_index_unreadable` SÍ
+    // dice que el registro durable se consultó y no tenía ninguno abierto —es cierto, y negarlo era el
+    // defecto— pero NO nombra el número de la ventana, porque "ninguno de los últimos N" al lado de un
+    // índice que no se pudo leer se lee como una búsqueda terminada. Lo que este assert prohíbe es el
+    // NÚMERO, no la mención de la fuente.
     expect(
       screen.queryByText(new RegExp(`últimos ${MAX_RECOVERY_CANDIDATES} envíos`)),
     ).not.toBeInTheDocument();

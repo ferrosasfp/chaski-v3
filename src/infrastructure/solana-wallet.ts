@@ -315,7 +315,19 @@ export class SolanaWalletAdapter
 
   /** La vuelta. Fail-loud ante cualquier cosa que no sean 32 chars hex: un id16 deforme derivaría una
    *  PDA que no es la de nadie, y el camino de recuperación diría "no encontramos nada" sobre una
-   *  búsqueda que nunca se hizo bien. */
+   *  búsqueda que nunca se hizo bien.
+   *
+   *  ⚠️ `escrow_id16_malformed` HOY NO TIENE PRODUCTOR ALCANZABLE, Y NINGÚN TEST LO CUBRE (fix-pack
+   *  WKH-347, AR/MNR-6). Va dicho porque un docblock que afirma un comportamiento sin que nada lo
+   *  verifique es una promesa, no una propiedad. La razón por la que es inalcanzable es por CONSTRUCCIÓN
+   *  y se puede refutar con un input: el único lugar del adapter que fabrica un `EscrowId16` es
+   *  `id16FromBytes`, que emite siempre 32 caracteres hex minúscula (un `padStart(2,"0")` por byte sobre
+   *  16 bytes), y sus dos fuentes son `remittanceIdToBytes16` (sha256 truncado) y las `entries` del
+   *  `EscrowIndex` decodificado (`vec<[u8;16]>`, cota del layout). Ninguna puede producir otra forma.
+   *  ⇒ El guard queda porque `EscrowId16` es un alias de `string` y no lo protege el tipo: el día que un
+   *  `id16` entre por un puerto, por la URL o escrito a mano en un doble, este `throw` es lo único que
+   *  separa "no encontramos nada" de "buscamos en la PDA de nadie". Si le agregás ese productor, el test
+   *  va con él. */
   private bytesFromId16(id16: EscrowId16): Uint8Array {
     if (!/^[0-9a-f]{32}$/.test(id16)) throw new Error("escrow_id16_malformed");
     const out = new Uint8Array(16);
@@ -337,7 +349,7 @@ export class SolanaWalletAdapter
   // MAX_RECOVERY_CANDIDATES envíos de la persona en los tres casos en que no se preguntó nada.
   // Ahora se consume `lookupBySender`, que las separa, y los tres `not_asked` salen por un código
   // propio. La CUARTA sigue saliendo por `escrow_not_found`, a propósito: ahí el servidor sí contestó
-  // y la frase de la pantalla es cierta. Espeja a (`listCloseable`, `:1409`), que ya hacía esto.
+  // y la frase de la pantalla es cierta. Espeja a (`listCloseable`, `:1443`), que ya hacía esto.
   private async resolveRemittanceIdFromLedger(senderB58: string): Promise<string> {
     const resolver = this.remittanceIdResolver;
     // Mismo guard que `listCloseable`: sin el método no se adivina, y un doble de JS que no lo tenga
@@ -443,8 +455,23 @@ export class SolanaWalletAdapter
    * Recortarlas sería tirar candidatos del camino que devuelve el principal por un número que
    * pertenece a otro lado, que es el defecto que `escrow-lookup-limits.ts` ya documentó una vez.
    *
-   * El criterio de elección es el MISMO que el del camino del ledger: una sola llamada batch, una
+   * El criterio de elección es el mismo que el del camino del ledger: una sola llamada batch, una
    * cuenta que no decodifica se descarta y nunca rompe la recuperación, y el primero `Deposited` gana.
+   *
+   * 🔴 Y ESO ES UNA DUPLICACIÓN RESIDUAL DECLARADA, no una igualdad garantizada (fix-pack WKH-347,
+   * CR/MNR-3). Acá se AFIRMABA que los dos bucles coinciden y NADA lo verificaba: el bucle de selección
+   * de `escrowIndexCandidate` es un clon estructural del de `resolveRemittanceIdFromLedger`, y el día que
+   * alguien cambie uno —agregarle el chequeo de `deadline`, por ejemplo, o cambiar el criterio de
+   * empate— el otro se queda como está y este docblock queda mintiendo en silencio. No hay test que
+   * compare los dos bucles.
+   *
+   * ⛔ **DECIDÍ NO REFACTORIZAR EL MONEY-PATH A ESTA ALTURA**, y va con esas palabras. Compartir el bucle
+   * es lo correcto en abstracto y acá el costo es concreto: los dos caminos tienen tipos de entrada
+   * distintos (`remittanceId` contra `EscrowId16`), derivan la PDA por funciones distintas y devuelven
+   * cosas distintas, así que la extracción toca la función que elige QUÉ escrow se refundea, en el mismo
+   * diff que ya cambió su comportamiento y con el fix-pack de dos revisiones encima. La deuda queda
+   * anotada acá, en el sitio, y no en un backlog que nadie relee: **si tocás uno de los dos bucles, tocá
+   * el otro o borrá esta afirmación.**
    *
    * ⚠️ POR QUÉ ESTA FUNCIÓN ES UN MAPEADOR Y EL TRABAJO VIVE EN LA DE ABAJO. Los cuatro desenlaces son
    * cuatro, y todo lo que no sea uno de ellos es un QUINTO desenlace SIN NOMBRE. `probeEscrowIndex`
@@ -735,7 +762,7 @@ export class SolanaWalletAdapter
     // 🔴 LO QUE SÍ ES UN INVARIANTE: el `deposit` va SIEMPRE en la posición 0 de las ix DE NEGOCIO, y
     // el `register_escrow` DESPUÉS. Hay TRES actores que dependen de eso por POSICIÓN, no por
     // discriminador: el CR-1 del facilitator, el Guard A de SDD 037 y NUESTRO PROPIO SERVIDOR
-    // (`tx.instructions.filter`, `settlement/solana-deposit-beneficiary.ts:86`), que indexa la POSICIÓN
+    // (`tx.instructions.filter`, `settlement/solana-deposit-beneficiary.ts:106`), que indexa la POSICIÓN
     // 0 de las ix del escrow y después exige que sea el `deposit`. Con el orden invertido ese lector devuelve
     // `unreadable` y la route del settle responde 400: TODO depósito patrocinado falla en nuestro
     // propio servidor, antes de que el facilitator vea nada. ⛔ PROHIBIDO invertirlo.
@@ -1083,11 +1110,11 @@ export class SolanaWalletAdapter
    * devuelve siempre. Que NINGUNA instrucción la cierre **no se pudo verificar** desde este repo: el
    * IDL no expresa las constraints `close = ...` de Anchor.
    *
-   * POR QUÉ EXIGE `remittanceId` Y `refundEscrow` NO: el fallback de refund (`refundEscrow`, `:887`,
-   * que llama a `resolveRemittanceIdFromLedger`, `:341`) elige UNO entre N y actúa sobre él, porque
+   * POR QUÉ EXIGE `remittanceId` Y `refundEscrow` NO: el fallback de refund (`refundEscrow`, `:914`,
+   * que llama a `resolveRemittanceIdFromLedger`, `:353`) elige UNO entre N y actúa sobre él, porque
    * "recuperar mis USDC" tiene un objetivo natural — el escrow que todavía tiene plata. Para `close` no
    * existe ese "el": todos los terminales son igual de cerrables, y elegir uno en silencio le cerraría
-   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1409`) devuelve la
+   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1443`) devuelve la
    * LISTA y elige ella.
    *
    * ⚠️ POR QUÉ EL LISTER NO TIENE GATEWAY Y EL CIERRE SÍ (apartamiento declarado del SDD §4.1/§4.2,
@@ -1110,7 +1137,7 @@ export class SolanaWalletAdapter
    * qué código emite Anchor exactamente en ese caso: haría falta un `close` real que revierta.
    *
    * NO declara ComputeBudget, a diferencia de `authorizePrincipal`
-   * (`ComputeBudgetProgram.setComputeUnitLimit`, `:647`): aquello existía por el
+   * (`ComputeBudgetProgram.setComputeUnitLimit`, `:674`): aquello existía por el
    * tope POR UNIDAD del facilitator, y acá el feePayer es el sender — no hay tope de nadie que
    * respetar. Y el número que haría falta (el consumo de CU de `close`) no existe: los 120.000 de
    * `resolveSolanaComputeUnitLimit` salen del peor caso de `deposit`. Declarar un límite por debajo del
@@ -1238,14 +1265,21 @@ export class SolanaWalletAdapter
    * colapsan aguas arriba en UN solo código (`escrow_index_probe_failed`). Se dice acá para que nadie
    * lea ese código como un diagnóstico fino: la persona no puede hacer nada distinto con cada uno.
    *
-   * ⚠️ WKH-347 — A PARTIR DE ACÁ HAY DOS LLAMADORES, Y LE DAN A `unknown` DESENLACES OPUESTOS. No es
-   * una incoherencia y no hay que "armonizarla":
+   * ⚠️ WKH-347 — A PARTIR DE ACÁ HAY **TRES** LLAMADORES, Y LE DAN A `unknown` TRES DESENLACES
+   * DISTINTOS. No es una incoherencia y no hay que "armonizarla". 🔴 Acá decía DOS, y subcontar es
+   * exactamente lo que debilita a este docblock: existe para que nadie unifique la divergencia, y con un
+   * llamador sin enumerar la unificación parece más barata de lo que es (fix-pack WKH-347, AR/MNR-4).
    *   · `closeEscrow` ABORTA (`escrow_index_probe_failed`). Adivinar ahí puede dejar una entrada
    *     colgada consumiendo un lugar del cupo, y lo único que se pierde abortando es un cierre que la
    *     persona puede reintentar.
    *   · `authorizePrincipal` DEGRADA: sale sin la 2ª ix. El costo de abortar ahí es otro y mucho más
    *     alto — bloquear una remesa legítima por una falla de lectura NUESTRA. Un RPC caído no puede
    *     impedirle a alguien mandar plata.
+   *   · `escrowIndexCandidate` (el camino de RECUPERACIÓN, el tercero, agregado por esta HU) ABORTA con
+   *     OTRO código: `escrow_index_unreadable`, que llega hasta la pantalla con su copy propio. No
+   *     comparte el de `closeEscrow` a propósito — son dos acciones distintas para la persona— y no puede
+   *     degradar como `authorizePrincipal`, porque degradar acá sería contestar "no hay" sobre una
+   *     pregunta que no se pudo hacer.
    *
    * La rama `present` transporta además las `entries` ya decodificadas: el decode ya se hacía y su
    * resultado se tiraba, y hay dos preguntas que lo necesitan (¿queda cupo? ¿qué escrows redescubrir?).
@@ -1299,10 +1333,10 @@ export class SolanaWalletAdapter
    * ¿Entró el `close`? Devuelve el tri-estado y TIRA `close_tx_failed` sólo cuando medimos que la tx
    * entró y revirtió Y la cuenta sigue ahí.
    *
-   * ⚠️ DOS DIVERGENCIAS DELIBERADAS respecto de `confirmRefund`, `:1007`. Están escritas acá para
+   * ⚠️ DOS DIVERGENCIAS DELIBERADAS respecto de `confirmRefund`, `:1034`. Están escritas acá para
    * que nadie las "armonice" de vuelta en un code review:
    *
-   * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`confirmRefund`, `:1007`), SIN leer nada.
+   * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`confirmRefund`, `:1034`), SIN leer nada.
    *    Éste NO puede: AC-5 exige que el alquiler volvió se afirme *sólo después de leer que la cuenta
    *    ya no existe*. Un `confirmTransaction` sin `err` prueba que la tx ENTRÓ; leer la ausencia es lo
    *    que prueba que hizo lo que queríamos. El input que pone en rojo cualquier atajo acá: un doble
@@ -1387,7 +1421,7 @@ export class SolanaWalletAdapter
    * PoP obligatorio) con una sonda ON-CHAIN, así que incluye envíos que NO están en el `localStorage`
    * de este navegador — que es exactamente la gente que hoy no tiene ningún camino hacia su alquiler.
    *
-   * Espeja `resolveRemittanceIdFromLedger`, `:341`, en su disciplina: fail-loud sin resolver, tope
+   * Espeja `resolveRemittanceIdFromLedger`, `:353`, en su disciplina: fail-loud sin resolver, tope
    * de candidatos, UNA sola llamada RPC batch, y un `decode` en try/catch para que una cuenta deforme
    * no rompa la recuperación entera. Tres diferencias, cada una con su razón:
    *

@@ -10,8 +10,12 @@
 // `register_escrow` como segunda instrucción de negocio, así que CREA `EscrowIndex` de verdad y su
 // alquiler sale de la billetera del remitente. El sumando volvió porque cambió el hecho que lo hacía
 // falso, no porque el error viejo fuera correcto. El parecido con el 9.000.000 es real y está declarado
-// sin suavizar en el docblock de la constante, junto con lo que cuesta: le pide 2,16× a la mayoría de
-// los remitentes, que ya tienen índice y no van a pagar ese alquiler.
+// sin suavizar en el docblock de la constante, junto con lo que cuesta: le pide 2,22× lo que el depósito
+// cuesta (8.874.560 / 4.002.000, la medición en cadena) a la mayoría de los remitentes, que ya tienen
+// índice y no van a pagar ese alquiler.
+// 🔴 ACÁ DECÍA 2,16×, Y ESE NÚMERO ES OTRA COMPARACIÓN: 8.874.560 / 4.100.000, o sea contra el UMBRAL
+// ANTERIOR y no contra el costo del depósito. Suavizaba el costo justo donde se declara que no se
+// suaviza. Y el ratio ya no vive sólo en prosa: el `it` de más abajo lo asserta contra las constantes.
 //
 // Varios de los tests de abajo cambiaron de sentido por eso, y en cada uno está escrito por qué. Ninguno
 // se borró: un test que se borra al cambiar un número deja de vigilar el número.
@@ -57,8 +61,31 @@ describe("el umbral de SOL sale del costo REAL del depósito", () => {
     const peorCasoReal = MEASURED_FIRST_DEPOSIT_LAMPORTS + ESCROW_INDEX_RENT_LAMPORTS;
     expect(SENDER_MIN_LAMPORTS_FOR_DEPOSIT).toBeGreaterThanOrEqual(MEASURED_FIRST_DEPOSIT_LAMPORTS);
     // Cota dura: hasta un 10% por encima de lo medido. El de 9.000.000 pedía 2,25× el depósito solo
-    // SIN que ninguna cuenta lo justificara; éste pide 2,16× con una cuenta que la tx crea.
+    // SIN que ninguna cuenta lo justificara; éste pide 2,22× con una cuenta que la tx crea. Los DOS
+    // ratios están contra el MISMO denominador (`MEASURED_FIRST_DEPOSIT_LAMPORTS`), que es lo que los
+    // hace comparables: 9.000.000 / 4.002.000 = 2,2489 y 8.874.560 / 4.002.000 = 2,2175.
     expect(SENDER_MIN_LAMPORTS_FOR_DEPOSIT).toBeLessThanOrEqual(Math.round(peorCasoReal * 1.1));
+  });
+
+  // 🔴 FIX-PACK CR/BLQ-3 — EL RATIO DECLARADO SE ASSERTA, PORQUE NO LO VERIFICABA NADA. En el docblock
+  // de la constante (y en la cabecera de este archivo) decía 2,16×, y era falso: 2,16 es
+  // 8.874.560 / 4.100.000, o sea el ratio contra el UMBRAL ANTERIOR, no contra "lo que el depósito
+  // cuesta". La cifra correcta contra el costo del depósito es 2,22×, y estaba SUAVIZANDO justo en la
+  // línea que existe para no suavizar. Mientras el número viva sólo en prosa vuelve a envejecer solo, así
+  // que acá queda atado a las dos constantes.
+  //
+  // 🔴 EL INPUT QUE LO PONE EN ROJO: escribir en la prosa cualquier otro ratio sin mover el umbral, o
+  // mover el umbral sin re-escribir la prosa. Los dos casos rompen una de las dos cotas de abajo.
+  it("CR/BLQ-3: el ratio que la prosa declara (2,22×) es el que las constantes producen", () => {
+    const ratioContraElDeposito = SENDER_MIN_LAMPORTS_FOR_DEPOSIT / MEASURED_FIRST_DEPOSIT_LAMPORTS;
+    // 2,2175 redondea a 2,22 con dos decimales, que es el número que dice la prosa.
+    expect(Number(ratioContraElDeposito.toFixed(2))).toBe(2.22);
+    // Y el control que separa las dos comparaciones que la prosa mezclaba: 2,16 es el ratio contra el
+    // UMBRAL VIEJO (4.100.000), y no es el mismo número. Sin este assert, "2,22" y "2,16" podrían volver
+    // a leerse como la misma cosa.
+    const UMBRAL_ANTERIOR_LAMPORTS = 4_100_000; // el que este archivo describe en su cabecera
+    expect(Number((SENDER_MIN_LAMPORTS_FOR_DEPOSIT / UMBRAL_ANTERIOR_LAMPORTS).toFixed(2))).toBe(2.16);
+    expect(Number(ratioContraElDeposito.toFixed(2))).not.toBe(2.16);
   });
 
   // 🔴 T-347-13 — ESTE TEST CAMBIÓ DE SENTIDO A PROPÓSITO. Antes exigía que el umbral NO llegara a

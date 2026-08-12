@@ -290,7 +290,7 @@ export function escrowRefundError(code: string): string {
  *  · En la acción normal el id es conocido, así que "no encontramos un depósito tuyo en el escrow"
  *    habla de UNA remesa concreta y la frase de `escrowRefundError` es correcta.
  *  · Acá el id no existe: se le pide la lista al store durable server-side y se sondean hasta
- *    `maxCandidates` PDAs on-chain (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:341`). `escrow_not_found` sale de DOS
+ *    `maxCandidates` PDAs on-chain (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:353`). `escrow_not_found` sale de DOS
  *    situaciones que no se distinguen desde afuera: el servidor no devolvió ningún id, o ninguno de
  *    los sondeados estaba `Deposited`. Ninguna de las dos prueba que la persona no tenga fondos.
  *
@@ -321,7 +321,7 @@ export function lostEscrowRecoveryError(code: string, maxCandidates: number): st
   // WKH-347 — ANTES de `escrow_not_found` y con los textos en el apéndice (los `function` se hoistean).
   // Es seguro: ninguno de los dos literales contiene la subcadena `escrow_not_found`, así que no le
   // roban casos a la rama de abajo. Eso NO se supone: lo vigila el control de orden de ramas.
-  if (code.includes("escrow_index_absent")) return sinIndiceCopy();
+  if (code.includes("escrow_index_absent")) return sinIndiceCopy(maxCandidates);
   if (code.includes("escrow_index_unreadable")) return indiceIlegibleCopy();
   if (code.includes("escrow_not_found"))
     return sinAbiertosCopy(maxCandidates); // el texto vive en el apéndice; `esVentanaSinAbiertos` lo reconoce delegando acá
@@ -445,7 +445,7 @@ export function escrowRentExplainer(voice: "discovery" | "remittance"): {
  *
  * ⚠️ El texto de "confirmed" NO menciona los USDC, y es una regla, no una omisión: lo único que la
  * ausencia de `escrow_state` prueba es que las dos cuentas se cerraron. A dónde fue la plata no lo
- * dice — es la misma trampa que `probeEscrowRefunded` ya tiene escrita (`probeEscrowRefunded`, `solana-wallet.ts:1051`).
+ * dice — es la misma trampa que `probeEscrowRefunded` ya tiene escrita (`probeEscrowRefunded`, `solana-wallet.ts:1078`).
  */
 export function escrowCloseSentCopy(confirmation: "confirmed" | "pending" | "unknown"): string {
   if (confirmation === "confirmed")
@@ -958,16 +958,29 @@ export const REVISION_TECHO_ALCANZADO =
   "Por ahora no podemos seguir intentando desde acá. Podés recuperar tus USDC en vez de esperar.";
 
 /* ────────────────────────────────────────────────────────────────────────────────────────────────
- * Apéndice WKH-346 (fix-pack AR/BLQ-BAJO-1). Va al FINAL a propósito, y el motivo es mecánico: este
- * archivo tiene citas ancladas cuyo destino está en su propia mitad de abajo, y una inserción aguas
- * arriba las desplaza a TODAS de golpe. Un apéndice desplaza 0.
+ * Apéndice WKH-346 (fix-pack AR/BLQ-BAJO-1). Va al FINAL a propósito, y el motivo es mecánico. El
+ * criterio accionable no cambió: **antes de insertar líneas en el cuerpo de este archivo, corré
+ * `citas-ancladas.test.ts`**. Lo que cambió es el POR QUÉ, que es lo que va a usar el próximo editor.
  *
- * ⚠️ ACÁ HABÍA UNA LISTA DE CUATRO NÚMEROS ESCRITA A MANO, y para WKH-347 ya estaba VENCIDA: decía
- * `:728`, `:852`, `:912`, `:949`, y ninguno de los cuatro seguía siendo el sitio que nombraba. Nadie se
- * enteró porque esos números viven en prosa y ningún guard los mira. Se saca la lista y queda el
- * criterio, que es lo único que no envejece: **antes de insertar líneas en el cuerpo de este archivo,
- * corré `citas-ancladas.test.ts`** — ése sí enumera las citas de verdad, y en formato anclado, que es
- * el único que el candado puede verificar.
+ * 🔴 ACÁ EL MOTIVO ESTABA AL REVÉS (fix-pack WKH-347, CR/MNR-4), y va corregido porque un motivo
+ * invertido manda a mirar el lado equivocado:
+ *   · DECÍA que este archivo tiene citas ancladas cuyo destino está en su propia mitad de abajo, así
+ *     que una inserción aguas arriba las desplazaría a todas. **Falso, y se mide en un comando**: de
+ *     las citas ancladas de este archivo, NINGUNA apunta a este archivo — todas apuntan afuera
+ *     (`solana-wallet.ts`, `flow.tsx`, `http-pop-signer.ts`, …), y a esas no las mueve nada de lo que
+ *     se escriba acá. Insertar arriba no rompe ninguna cita PROPIA.
+ *   · EL PELIGRO ES EL OPUESTO: son OTROS archivos los que citan a este POR NÚMERO de línea, y a esos
+ *     sí los rota cualquier inserción aguas arriba. Se enumeran con
+ *     `grep -rn "flow-vm\.ts:[0-9]" src app scripts contracts`, que es el instrumento y no envejece.
+ *     Medido en esta misma HU: WKH-347 rompió DOS de ellas —(`esVentanaSinAbiertos`, `:1121`) citada
+ *     desde `flow.tsx`, y la de `sinAbiertosCopy` citada desde el copy hermano de la tarjeta— y fueron
+ *     2 de las 5 líneas que hubo que arreglar. Un apéndice desplaza 0, y por eso sigue siendo apéndice.
+ *
+ * ⚠️ Y LA OTRA FRASE IMPRECISA, dicha para no repetirla: acá vivía una lista de cuatro números
+ * (`:728`, `:852`, `:912`, `:949`) y este comentario afirmaba que "ninguno de los cuatro seguía siendo
+ * el sitio que nombraba". Re-medido sobre `main`: TRES de los cuatro seguían siendo líneas con una cita
+ * ancladas y todo, sólo que apuntando a `flow.tsx` y no a este archivo. La lista se saca igual —vive en
+ * prosa y ningún guard la mira—, pero el motivo es que envejece sola, no que estuviera toda mal.
  * ──────────────────────────────────────────────────────────────────────────────────────────────── */
 
 /**
@@ -978,8 +991,9 @@ export const REVISION_TECHO_ALCANZADO =
  * "la ventana no tiene ningún escrow abierto" sin volver a clasificar el código.
  *
  * ⚠️ El valor de retorno de `lostEscrowRecoveryError("escrow_not_found", N)` NO cambia. Eso lo
- * congelan `flow-vm.test.ts:481` y `refund-perdido-registro-mudo.test.tsx:316`, que siguen verdes
- * sin tocarlos: son la red que prueba que esta extracción fue pura.
+ * congelan `flow-vm.test.ts:481` y el `it` "el copy legítimo REAL es EXACTAMENTE el literal vetado" de
+ * `refund-perdido-registro-mudo.test.tsx:377` (decía `:316`, que es una línea de comentario: se nombra
+ * el `it` además del número, que es lo único que no rota), y siguen verdes sin tocarlos.
  */
 export function sinAbiertosCopy(maxCandidates: number): string {
   return `No encontramos escrows abiertos para esta billetera. Esto no dice que no tengas fondos: dice que ninguno de los últimos ${maxCandidates} envíos que el servidor tiene guardados de esta billetera, ni ninguno de los que la cadena tiene registrados en el índice de esta billetera, está abierto en el contrato.`;
@@ -989,24 +1003,50 @@ export function sinAbiertosCopy(maxCandidates: number): string {
  * WKH-347 — el índice on-chain de esta billetera NO EXISTE. La cadena contestó; no es que no pudimos
  * preguntar.
  *
+ * 🔴 ESTE DESENLACE TIENE DOS MITADES Y ACÁ LA DEL ÍNDICE TAPABA A LA DEL LEDGER (fix-pack WKH-347,
+ * AR/BLQ-1). El texto empezaba con "Eso pasa si nunca depositaste", y hay un input —pinneado en
+ * `solana-wallet.refund.test.ts`, el caso de dos remesas `Released`— en que el navegador tiene, en ese
+ * mismo instante, la respuesta del registro durable con envíos de esta billetera: nuestro propio dato
+ * refutaba la primera historia que la pantalla ofrecía. Y no es un borde: al desplegar, NINGUNA
+ * billetera existente tiene índice (la PDA se crea con el primer depósito posterior a esta HU), así
+ * que ésta pasa a ser la respuesta que ve la población entera.
+ *
+ * ⇒ EL TEXTO DICE LAS DOS MITADES, EN ORDEN: primero lo que el registro durable contestó (que es un
+ * hecho y no una hipótesis), después lo que la cadena contestó sobre el índice, y las tres historias al
+ * final, sin que la refutable vaya primera.
+ *
+ * 🔑 POR QUÉ SE PUEDE AFIRMAR LA PRIMERA MITAD SIN RECIBIR NINGÚN DATO NUEVO: este código tiene UN
+ * productor y está aguas abajo de una precondición. `escrow_index_absent` sólo se emite desde el camino
+ * del índice, y a ese camino se entra ÚNICAMENTE cuando el registro durable ya contestó y su ventana no
+ * tenía ningún escrow abierto (el `catch` que lo habilita filtra por `escrow_not_found`, y los tres
+ * `not_asked` pasan de largo con su propio código). O sea que "ya miramos los últimos N guardados y
+ * ninguno está abierto" es cierto en los DOS inputs que llegan acá: el servidor sin ids, y el servidor
+ * con ids de los que ninguno está `Deposited`. ⛔ Si alguien le agrega un segundo productor a este
+ * código, esta frase deja de estar sostenida y hay que volver acá.
+ *
  * 🔴 LAS TRES HISTORIAS QUE ESTE DESENLACE NO PUEDE DISTINGUIR, y por eso el texto las nombra a las
  * tres en vez de elegir una. Que la PDA no exista es compatible con:
- *   · nunca depositaste;
  *   · depositaste ANTES de que empezáramos a registrar en el índice (WKH-347 no existía);
  *   · depositaste después, y en ese momento no pudimos registrarlo (el índice estaba lleno, o la sonda
- *     no se pudo leer y el depósito salió sin la segunda instrucción).
- * Desde el navegador no hay forma de saber cuál es la de esta persona, así que prometer un diagnóstico
- * fino sería el mismo error que `probeEscrowIndex` ya tiene documentado.
+ *     no se pudo leer y el depósito salió sin la segunda instrucción);
+ *   · nunca depositaste.
+ * Desde el navegador no se puede saber cuál de las TRES es la de esta persona, así que prometer un
+ * diagnóstico fino sería el mismo error que `probeEscrowIndex` ya tiene documentado. Lo que sí se puede,
+ * y es lo que cambió, es no ofrecer primera la historia que nuestro propio dato ya matizó.
  *
- * 🔑 LA CLÁUSULA "o si en ese momento no pudimos registrarlo" NO ES RELLENO: es la única parte del copy
- * que le dice a la persona que la ausencia puede ser culpa NUESTRA y no suya. Existe por las dos ramas
- * en que el depósito sale sin registrar. ⛔ No la borres al pulir el texto.
+ * 🔑 LA CLÁUSULA "no pudimos registrarlo" NO ES RELLENO: es la única parte del copy que le dice a la
+ * persona que la ausencia puede ser culpa NUESTRA y no suya. Existe por las dos ramas en que el depósito
+ * sale sin registrar. ⛔ No la borres al pulir el texto.
+ *
+ * `maxCandidates` entra POR PARÁMETRO, igual que en `sinAbiertosCopy` y por la misma razón (CD-17): el
+ * llamador pasa la misma constante que sondea, así que el copy no puede quedar diciendo un número que el
+ * código dejó de usar.
  *
  * ⚠️ Y NO AFIRMA NADA SOBRE LOS FONDOS. "No hay índice" no es "no tenés nada": un depósito que no se
  * registró está igual de abierto en el contrato, con la plata adentro.
  */
-export function sinIndiceCopy(): string {
-  return "En la cadena no hay un índice de envíos para esta billetera. Eso pasa si nunca depositaste, y también si depositaste antes de que empezáramos a registrar, o si en ese momento no pudimos registrarlo. No es una respuesta sobre tus fondos.";
+export function sinIndiceCopy(maxCandidates: number): string {
+  return `Ya miramos los últimos ${maxCandidates} envíos que el servidor tiene guardados de esta billetera y ninguno está abierto en el contrato. En la cadena, además, no hay un índice de envíos de esta billetera: eso pasa si depositaste antes de que empezáramos a registrar, si en ese momento no pudimos registrarlo, o si nunca depositaste. No es una respuesta sobre tus fondos.`;
 }
 
 /**
@@ -1017,11 +1057,24 @@ export function sinIndiceCopy(): string {
  * sonda vencido, y bytes que no decodifican como `EscrowIndex`) colapsan en UN código a propósito: la
  * persona no puede hacer nada distinto con cada uno.
  *
+ * 🔴 ACÁ DECÍA "así que no llegamos a preguntar", Y ERA FALSO (fix-pack WKH-347, AR/BLQ-2). La regla del
+ * repo es que *no pude preguntar* no es *no*; su RECÍPROCA vale igual: **"pregunté una de las dos fuentes
+ * y me contestó" no es "no llegamos a preguntar"**. A este código sólo se llega después de que el
+ * registro durable contestó y su ventana no tenía ningún escrow abierto (misma precondición que
+ * `sinIndiceCopy` explica en detalle), así que la frase convertía una respuesta PARCIAL en una
+ * no-respuesta total y tiraba la mitad que sí teníamos. Ahora dice cuál fuente contestó y cuál quedó sin
+ * revisar.
+ *
+ * ⚠️ Y NO NOMBRA EL NÚMERO DE LA VENTANA, a diferencia de `sinIndiceCopy`, y no es una omisión: acá la
+ * búsqueda NO terminó, y "ninguno de los últimos N" al lado de un índice que no se pudo leer se lee como
+ * si la pregunta estuviera cerrada. Eso lo vigila un assert por ausencia en
+ * `refund-perdido-registro-mudo.test.tsx` (el caso E, que recorre esto de punta a punta en jsdom).
+ *
  * ⛔ NO puede decir "no encontramos", ni "no tenés", ni sugerir que la búsqueda terminó. La única cosa
  * accionable es reintentar, y es lo único que promete.
  */
 export function indiceIlegibleCopy(): string {
-  return "No pudimos leer tu índice de envíos en la cadena, así que no llegamos a preguntar. Esto no es una respuesta sobre tus fondos: probá de nuevo en un rato.";
+  return "El registro de envíos guardados de esta billetera ya lo consultamos y ahí no hay ninguno abierto. Lo que no pudimos leer es el índice de envíos que la cadena guarda de esta billetera, así que esa segunda fuente quedó sin revisar. Esto no es una respuesta sobre tus fondos: probá de nuevo en un rato.";
 }
 
 /**
@@ -1044,7 +1097,28 @@ export function indiceIlegibleCopy(): string {
  * (`:328-337`) y NINGUNO afirma que la ventana esté vacía, así que la pantalla tiene que seguir
  * diciendo que puede haber más. Colapsar los dos desenlaces es el error que este repo ya tiene
  * documentado; `T-346-15` existe sólo para eso.
+ *
+ * 🔴 SON DOS COPIAS ACEPTADAS Y NO UNA (fix-pack WKH-347, AR/BLQ-1), y el cambio es de COMPORTAMIENTO:
+ * `escrow_index_absent` también significa "en la ventana que miramos no hay ninguno abierto", así que
+ * ahora prende la tarjeta de cierre de WKH-346. Las dos razones, y las dos son medibles:
+ *   · **Es cierto.** A ese código se llega sólo después de que el registro durable contestó y su ventana
+ *     no tenía ningún escrow abierto; que además la cadena no tenga índice no agrega candidatos que
+ *     revisar. La tarjeta afirma exactamente eso y nada más ("ya no queda ninguno abierto ENTRE los
+ *     últimos N guardados"), así que no pasa a afirmar sobre los fondos.
+ *   · **Sin esto era una regresión para la población entera.** Al desplegar, ninguna billetera existente
+ *     tiene índice, así que TODA búsqueda posterior a una recuperación exitosa terminaba en
+ *     `escrow_index_absent` ⇒ la tarjeta no se prendía nunca y el final exitoso del camino se pintaba
+ *     como error. Antes de esta HU ese mismo click daba `escrow_not_found` y sí la prendía.
+ *
+ * ⛔ `escrow_index_unreadable` sigue dando `false`, y ahí está la línea: `absent` es una RESPUESTA de la
+ * cadena, `unreadable` es no haber podido preguntarle. El tri-estado se respeta en el predicado igual que
+ * en el copy.
+ *
+ * ⚠️ Y SIGUE DELEGANDO: no clasifica el `code`, compara el copy PRODUCIDO contra las dos copias que
+ * significan "se miró y no hay ninguno abierto". Un `code.includes("escrow_index_absent")` acá sería la
+ * duplicación contra la que este archivo ya escribió su advertencia.
  */
 export function esVentanaSinAbiertos(code: string, maxCandidates: number): boolean {
-  return lostEscrowRecoveryError(code, maxCandidates) === sinAbiertosCopy(maxCandidates);
+  const copy = lostEscrowRecoveryError(code, maxCandidates);
+  return copy === sinAbiertosCopy(maxCandidates) || copy === sinIndiceCopy(maxCandidates);
 }

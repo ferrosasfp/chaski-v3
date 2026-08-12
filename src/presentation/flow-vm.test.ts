@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"; import { WALLET_SIGN_MESSAGE_ERROR, laBilleteraFueTocada } from "./solana/wallet-error-code"; // WKH-339/CR: EN ESTA LÍNEA — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
+import { describe, expect, it, vi } from "vitest"; import { WALLET_SIGN_MESSAGE_ERROR, laBilleteraFueTocada } from "./solana/wallet-error-code"; // WKH-339/CR: EN ESTA LÍNEA — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
 import { Money } from "../domain/money";
 import type { RemittanceState, RemittanceStatus } from "../domain/remittance";
 import {
@@ -28,7 +28,7 @@ import {
   isKycDemo,
   kycOriginNotice,
   REAL_KYC_PROVENANCES,
-  esVentanaSinAbiertos, sinAbiertosCopy, statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, // WKH-339/CR: las otras 4 constantes YA NO se importan por nombre — el loop las DERIVA del módulo, que es el arreglo de BLQ-BAJO-1. Si vuelven acá por nombre, el loop volvió a ser una lista a mano. // WKH-339: EN ESTA LÍNEA, no en líneas nuevas — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
+  esVentanaSinAbiertos, sinAbiertosCopy, sinIndiceCopy, indiceIlegibleCopy, statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, // WKH-339/CR: las otras 4 constantes YA NO se importan por nombre — el loop las DERIVA del módulo, que es el arreglo de BLQ-BAJO-1. Si vuelven acá por nombre, el loop volvió a ser una lista a mano. // WKH-339: EN ESTA LÍNEA, no en líneas nuevas — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
 } from "./flow-vm"; import * as MODULO_FLOW_VM from "./flow-vm"; // WKH-339/CR-BLQ-BAJO-1: el namespace entero, para DERIVAR la lista de copies en vez de escribirla. En esta línea para no desplazar `:520`
 import {
   KYC_PROVENANCE_LIVE,
@@ -698,8 +698,12 @@ describe("flow-vm — humanError", () => {
   it("solana_sender_sol_insufficient: nombra el faltante en SOL y no se confunde con un fallo de entrega", () => {
     const copy = humanError("solana_sender_sol_insufficient");
     expect(copy).toContain("SOL");
-    // El número sale de la MISMA constante que compara el guard: si alguien cambia el umbral y no el
-    // copy, esto sigue verde; si alguien escribe el número a mano en el copy, esto se pone rojo.
+    // El número sale de la MISMA constante que compara el guard, así que el copy no puede quedar
+    // diciendo un valor distinto del que el guard exige.
+    // 🔴 ESTA LÍNEA DECÍA TAMBIÉN "si alguien escribe el número a mano en el copy, esto se pone rojo", Y
+    // ES FALSO (era PRE-EXISTENTE a WKH-347; lo cazó el fix-pack, CR/BLQ-4). Con el umbral real, la
+    // interpolación y un `0,0089` escrito a mano producen la MISMA cadena y este `toContain` pasa igual.
+    // Lo que sí caza el hardcode es T-347-14, que evalúa el copy con OTRO umbral.
     expect(copy).toContain(formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT));
     expect(copy).toContain("no se movió ningún USDC"); // lo único afirmable sobre el dinero
     expect(copy).not.toBe("Algo salió mal. Intentá de nuevo.");
@@ -1385,17 +1389,32 @@ describe("flow-vm — los desenlaces del índice on-chain (WKH-347)", () => {
     expect(ilegible).not.toContain("Algo se cortó antes de terminar");
   });
 
-  // 🔴 T-347-16 (segunda mitad) — `esVentanaSinAbiertos` devuelve `false` para los dos. No es un detalle:
-  // esa función es la que decide si la pantalla dice "la ventana no tiene ninguno abierto", y ni "no hay
-  // índice" ni "no pude leerlo" son eso. Sale gratis porque DELEGA en `lostEscrowRecoveryError`, y este
-  // test es lo que prueba que la delegación alcanzó, en vez de suponerlo.
-  it("T-347-16 (AC-11): esVentanaSinAbiertos es false para los dos códigos del índice", () => {
-    for (const code of CODIGOS_DEL_INDICE) {
-      expect(esVentanaSinAbiertos(code, MAX_RECOVERY_CANDIDATES)).toBe(false);
-    }
-    // Control positivo, sin el cual los dos `false` de arriba los daría cualquier función: el código que
-    // SÍ es "la ventana no tiene ninguno abierto" sigue dando `true`.
+  // 🔴 T-347-16 (segunda mitad) — LOS DOS CÓDIGOS SE SEPARAN ACÁ, y hasta el fix-pack los dos daban
+  // `false`. Eso era un defecto medido (AR/BLQ-1): al desplegar, ninguna billetera existente tiene
+  // índice, así que `escrow_index_absent` es lo que contesta TODA búsqueda posterior a una recuperación
+  // exitosa ⇒ la tarjeta de cierre de ventana de WKH-346 no se prendía para nadie, y el final exitoso
+  // del camino se pintaba con el color del error. Antes de esta HU ese mismo click daba
+  // `escrow_not_found` y sí la prendía.
+  //
+  // La línea es el TRI-ESTADO, no la comodidad: `absent` es una RESPUESTA de la cadena (y a ese código
+  // se llega con la ventana del servidor ya recorrida y sin ninguno abierto), `unreadable` es no haber
+  // podido preguntarle. El primero autoriza la tarjeta; el segundo no autoriza nada.
+  it("T-347-16 (AC-11/fix-pack): el índice AUSENTE prende el cierre de ventana; el ILEGIBLE no", () => {
+    expect(esVentanaSinAbiertos("escrow_index_absent", MAX_RECOVERY_CANDIDATES)).toBe(true);
+    expect(esVentanaSinAbiertos("escrow_index_unreadable", MAX_RECOVERY_CANDIDATES)).toBe(false);
+    // Control positivo y control negativo, sin los cuales lo de arriba lo daría media función: el código
+    // que SÍ es "la ventana no tiene ninguno abierto" sigue dando `true`, y "no llegamos a preguntar"
+    // sigue dando `false`.
     expect(esVentanaSinAbiertos("escrow_not_found", MAX_RECOVERY_CANDIDATES)).toBe(true);
+    expect(esVentanaSinAbiertos("escrow_recovery_unavailable:pop_disabled", MAX_RECOVERY_CANDIDATES)).toBe(
+      false,
+    );
+    // Y que sigue DELEGANDO en vez de re-clasificar: el predicado es cierto exactamente cuando el copy es
+    // una de las DOS copias que significan "se miró y no hay ninguno abierto". Con un
+    // `code.includes(...)` propio esta igualdad se puede violar sin que nada más se ponga rojo.
+    expect(lostEscrowRecoveryError("escrow_index_absent", MAX_RECOVERY_CANDIDATES)).toBe(
+      sinIndiceCopy(MAX_RECOVERY_CANDIDATES),
+    );
   });
 
   // 🔴 T-347-17 (AC-8/CD-8) — LO QUE ESTOS TEXTOS NO PUEDEN DECIR. Las tres frases prohibidas son las
@@ -1428,13 +1447,99 @@ describe("flow-vm — los desenlaces del índice on-chain (WKH-347)", () => {
     expect(copy).toContain("no pudimos registrarlo"); // 🔑 la que cierra la objeción del gate
   });
 
-  // 🔴 T-347-14 (CD-17) — EL NÚMERO DEL COPY SALE DE LA CONSTANTE, NO DE UN LITERAL. Es el guard contra
-  // que alguien escriba "0,0089" a mano en la pantalla: si el umbral se mueve, el texto se mueve con él.
-  it("T-347-14 (AC-7/CD-17): el texto del umbral se DERIVA de la constante, no está escrito a mano", () => {
-    const texto = formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT);
-    expect(texto).toBe("0,0089"); // el valor de hoy, para que el diff muestre el número que se movió
-    // Y la derivación: con OTRO valor el texto cambia. Un literal escrito a mano no lo haría.
-    expect(formatLamportsAsSol(4_100_000)).toBe("0,0041");
-    expect(formatLamportsAsSol(4_100_000)).not.toBe(texto);
+  // 🔴 FIX-PACK AR/BLQ-1 — LA MITAD DEL LEDGER NO SE PUEDE PERDER. El texto de índice ausente arrancaba
+  // con "Eso pasa si nunca depositaste", y hay un input pinneado (`solana-wallet.refund.test.ts`: el
+  // registro contesta `answered` con dos remesas `Released`) en que el navegador tiene, en ese mismo
+  // instante, el dato que matiza esa historia. La frase no era falsa por sí sola; lo falso era ofrecerla
+  // PRIMERA descartando lo que ya sabíamos.
+  //
+  // 🔴 EL MUTANTE QUE ESTO CAZA, y es el texto anterior tal cual: "En la cadena no hay un índice de
+  // envíos para esta billetera. Eso pasa si nunca depositaste, y también si...". Con él, los tres
+  // asserts de abajo se caen (no nombra la ventana del servidor, no nombra el número, y pone la historia
+  // refutable adelante). Sin ellos, T-347-17 lo dejaba pasar entero.
+  it("T-347-17 (fix-pack): el texto de índice ausente dice PRIMERO lo que el ledger contestó", () => {
+    const copy = sinIndiceCopy(MAX_RECOVERY_CANDIDATES);
+    // (1) La mitad del ledger está, y es una AFIRMACIÓN sobre lo que se recorrió, no una hipótesis.
+    expect(copy).toContain(`los últimos ${MAX_RECOVERY_CANDIDATES} envíos`);
+    expect(copy).toMatch(/ninguno está abierto/);
+    // (2) Va PRIMERO que la del índice. El orden es lo que la HU rompió y lo que este assert fija.
+    expect(copy.indexOf(`los últimos ${MAX_RECOVERY_CANDIDATES} envíos`)).toBeLessThan(
+      copy.indexOf("no hay un índice"),
+    );
+    // (3) Y la historia que nuestro propio dato puede refutar NO va primera de las tres.
+    expect(copy.indexOf("nunca depositaste")).toBeGreaterThan(copy.indexOf("no pudimos registrarlo"));
+    // (4) El número sale del PARÁMETRO y no de un literal (CD-17): con otro valor, otro texto.
+    expect(sinIndiceCopy(7)).toContain("los últimos 7 envíos");
+    expect(sinIndiceCopy(7)).not.toContain(`los últimos ${MAX_RECOVERY_CANDIDATES} envíos`);
+  });
+
+  // 🔴 FIX-PACK AR/BLQ-2 — "PREGUNTÉ UNA DE LAS DOS Y ME CONTESTÓ" NO ES "NO LLEGAMOS A PREGUNTAR". El
+  // texto decía literalmente "así que no llegamos a preguntar" en un input en que el registro durable
+  // había contestado: convertía una respuesta PARCIAL en una no-respuesta total. Es la recíproca de la
+  // regla que este repo ya tiene escrita, y se rompe igual de fácil.
+  //
+  // 🔴 EL MUTANTE QUE ESTO CAZA: volver al texto anterior ("No pudimos leer tu índice de envíos en la
+  // cadena, así que no llegamos a preguntar. ..."). Pone en rojo los asserts (1) y (2).
+  it("T-347-17 (fix-pack): el texto de índice ilegible NO niega haber preguntado, y dice cuál fuente falló", () => {
+    const copy = indiceIlegibleCopy();
+    // (1) No niega la pregunta que SÍ se hizo.
+    expect(copy).not.toContain("no llegamos a preguntar");
+    // (2) Nombra la fuente que contestó y la que no. Las dos mitades, no una.
+    expect(copy).toMatch(/registro de envíos guardados/);
+    expect(copy).toMatch(/no pudimos leer/i);
+    expect(copy).toMatch(/quedó sin revisar/);
+    // (3) Y lo que no puede perder: sigue sin afirmar sobre los fondos y sigue ofreciendo reintentar, que
+    // es lo único accionable cuando la falla es de lectura.
+    expect(copy).toMatch(/no es una respuesta sobre tus fondos/i);
+    expect(copy).toContain("probá de nuevo en un rato");
+    // (4) Y NO nombra el número de la ventana: acá la búsqueda no terminó, y "ninguno de los últimos N"
+    // al lado de un índice ilegible se lee como si la pregunta estuviera cerrada. El mismo control, de
+    // punta a punta, está en el caso E de `refund-perdido-registro-mudo.test.tsx`.
+    expect(copy).not.toContain(`los últimos ${MAX_RECOVERY_CANDIDATES} envíos`);
+    // (5) Es el copy que sale por el código, no uno paralelo que nadie usa.
+    expect(lostEscrowRecoveryError("escrow_index_unreadable", MAX_RECOVERY_CANDIDATES)).toBe(copy);
+  });
+
+  // 🔴 T-347-14 (CD-17) — EL NÚMERO DEL COPY SALE DE LA CONSTANTE, NO DE UN LITERAL.
+  //
+  // 🔴 ESTE TEST DECLARABA CAZAR UN MUTANTE QUE SOBREVIVÍA (fix-pack CR/BLQ-4). Sus tres asserts
+  // ejercitaban el FORMATEADOR (`formatLamportsAsSol` contra dos números) y no al productor del copy: no
+  // llamaban a `humanError` ni renderizaban nada. MEDIDO: reemplazando la interpolación de
+  // `solana_sender_sol_insufficient` por el literal `0,0089`, este test pasaba, el guard hermano de más
+  // arriba ("nombra el faltante en SOL y no se confunde con un fallo de entrega") pasaba, y la suite
+  // COMPLETA quedaba verde. Ningún test del repo cazaba el hardcode.
+  //
+  // ⚠️ Y EL ARREGLO OBVIO TAMPOCO ALCANZA, que es lo que hace falta escribir para que nadie lo "simplifique":
+  // `expect(humanError(...)).toContain(formatLamportsAsSol(SENDER_MIN))` es exactamente el guard de arriba
+  // y sobrevive igual, porque con el umbral REAL la interpolación y el literal producen la MISMA cadena.
+  // Un literal sólo se distingue de una derivación evaluando el copy con OTRO umbral, y eso pide
+  // re-importar el módulo con la constante cambiada. Es lo que hace la segunda mitad de este test.
+  it("T-347-14 (AC-7/CD-17): el copy del umbral SIGUE a la constante, y un literal escrito a mano lo pone en rojo", async () => {
+    // Primera mitad: hoy el copy dice el número que el guard compara.
+    expect(humanError("solana_sender_sol_insufficient")).toContain(
+      formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT),
+    );
+    expect(formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT)).toBe("0,0089"); // el valor de hoy, para que el diff lo muestre
+
+    // Segunda mitad: el MISMO copy, con OTRO umbral. El valor es arbitrario y da una cadena que no
+    // colisiona con ninguna de las que este flujo muestra; el esperado NO se escribe a mano, se formatea
+    // con la función real (que sigue siendo la de verdad: el mock cambia sólo la constante).
+    const OTRO_UMBRAL = 12_345_678;
+    vi.resetModules();
+    vi.doMock("../application/solana-escrow-rent", async (original) => ({
+      ...(await original<typeof import("../application/solana-escrow-rent")>()),
+      SENDER_MIN_LAMPORTS_FOR_DEPOSIT: OTRO_UMBRAL,
+    }));
+    try {
+      const { humanError: humanErrorConOtroUmbral } = await import("./flow-vm");
+      const copy = humanErrorConOtroUmbral("solana_sender_sol_insufficient");
+      expect(copy).toContain(formatLamportsAsSol(OTRO_UMBRAL));
+      // 🔴 EL ASSERT QUE MATA AL MUTANTE: con el número escrito a mano, el copy sigue diciendo "0,0089"
+      // aunque el umbral sea otro, y esta línea se pone roja.
+      expect(copy).not.toContain(formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT));
+    } finally {
+      vi.doUnmock("../application/solana-escrow-rent");
+      vi.resetModules();
+    }
   });
 });

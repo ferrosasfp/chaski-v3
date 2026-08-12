@@ -171,7 +171,7 @@ function capturedTx(spy: ReturnType<typeof vi.fn>): Transaction {
  *  primera y NO DISTINGUE un orden invertido: el mutante que las intercambia pasaba en verde. Y ese
  *  orden sí es un invariante, con TRES actores que dependen de él por posición: el CR-1 del
  *  facilitator, el Guard A de SDD 037 y nuestro propio servidor
- *  (`tx.instructions.filter`, `settlement/solana-deposit-beneficiary.ts:86`).
+ *  (`tx.instructions.filter`, `settlement/solana-deposit-beneficiary.ts:106`).
  *  ⇒ el orden RELATIVO entre las de negocio se asserta posicionalmente: `[0]` es el `deposit` y `[1]`
  *  el `register_escrow`. */
 function businessIx(tx: Transaction) {
@@ -738,7 +738,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
 
   // T12 — el ÚNICO test que mira el PAYLOAD. T1..T6 assertan sobre `capturedTx(signSpy)`, que es el
   // objeto que Chaski le ENTREGA a la billetera. Lo que producción serializa y postea es lo que la
-  // billetera DEVUELVE (`remainingAccounts`, `solana-wallet.ts:610`), y en producción puede ser otro objeto: el
+  // billetera DEVUELVE (`remainingAccounts`, `solana-wallet.ts:637`), y en producción puede ser otro objeto: el
   // adapter serializa `signed`, no `tx`. Si una billetera real agrega sus propias ComputeBudget
   // —el escenario que esta HU declara que NO puede impedir (sdd.md §11.1)—, Chaski postea esa tx
   // sin chistar y ninguno de los seis se entera, porque todos miran el objeto de entrada.

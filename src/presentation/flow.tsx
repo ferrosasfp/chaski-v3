@@ -2018,7 +2018,7 @@ function RefundSentNotice({
  * 🔴 QUÉ ARREGLA. La recuperación durable ya estaba ENTERA y no tenía ni un consumidor. El endpoint
  * `POST /api/solana/escrow/remittance-ids` está vivo en producción (responde 403 sin PoP), el adapter
  * resuelve el id ausente contra ese store y sondea hasta `MAX_RECOVERY_CANDIDATES` PDAs
- * (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:341`), y el gateway está cableado en el
+ * (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:353`), y el gateway está cableado en el
  * container (`solanaRefund`, `container.ts:169`). Pero
  * la interfaz sólo llamaba a `recoverEscrowFunds`, que arranca con `repo.get(remittanceId)` y tira
  * `remittance_not_found` (`recover-escrow-funds.ts`:49-50). O sea: quien borró los datos del navegador
@@ -2090,7 +2090,7 @@ export function LostEscrowRecovery({
   // pantalla contaba como UN relato el comprobante de A y el cierre de ventana de B, suprimiendo el
   // error de B con un éxito que no fue de B. Cada frase era cierta; el compuesto y el "esta billetera"
   // no. Los códigos que NO lo prenden están enumerados en `esVentanaSinAbiertos`
-  // (`esVentanaSinAbiertos`, `flow-vm.ts:1048`), en su docblock de `flow-vm.ts:1042-1046`.
+  // (`esVentanaSinAbiertos`, `flow-vm.ts:1121`), en su docblock. ⚠️ Y desde el fix-pack de WKH-347 `escrow_index_absent` SÍ lo prende: es cierto (a ese código se llega con la ventana del servidor ya recorrida y sin ninguno abierto) y sin eso el cierre de ventana no se prendía para NINGUNA billetera existente. El motivo medido está en ese mismo docblock.
   const [sinAbiertos, setSinAbiertos] = useState<string | null>(null);
   // La identidad de la ÚLTIMA búsqueda. Todo lo que la tarjeta muestra se filtra por acá: la frase de
   // cierre dice "esta billetera", así que no puede estar al lado del comprobante de otra.
@@ -2901,7 +2901,7 @@ function AgentRunsToday({ transport }: { transport: "gateway" | "demo" }) {
 // El "2 horas" estaba escrito a mano al lado de una constante que lo decide. Hoy coincide; el día que
 // alguien mueva `CUSTODY_WINDOW_SECS` la frase pasa a ser falsa sin que nada se ponga rojo, que es
 // exactamente cómo nació el bug de la hora inventada que este archivo ya arregló una vez. Se deriva
-// del MISMO valor que el depósito escribe como deadline (`CUSTODY_WINDOW_SECS`, `solana-wallet.ts:566`), así que no puede
+// del MISMO valor que el depósito escribe como deadline (`CUSTODY_WINDOW_SECS`, `solana-wallet.ts:593`), así que no puede
 // desincronizarse. No agrega peso al bundle: (`SolanaWalletAdapter`, `container.ts:47`) ya importa este módulo.
 const CUSTODY_WINDOW_HOURS = CUSTODY_WINDOW_SECS / 3600;
 

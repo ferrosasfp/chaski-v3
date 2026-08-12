@@ -352,7 +352,7 @@ export interface SolanaEscrowRefundGateway {
    *
    * El adapter ya lo soportaba (HU-SOL-20/AC-2): sin id lo resuelve contra el store server-side
    * (`POST /api/solana/escrow/remittance-ids`, PoP obligatorio) y sondea hasta
-   * MAX_RECOVERY_CANDIDATES PDAs on-chain (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:341`). Este puerto lo declaraba
+   * MAX_RECOVERY_CANDIDATES PDAs on-chain (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:353`). Este puerto lo declaraba
    * REQUERIDO, así que ningún consumidor tipado podía usar ese camino: la única forma de llegar al
    * refund desde la interfaz era `RecoverEscrowFunds`, que arranca con `repo.get(remittanceId)` y
    * tira `remittance_not_found` (`recover-escrow-funds.ts`:49-50). O sea que quien borró los datos
@@ -1007,28 +1007,21 @@ export interface IdGenerator {
  */
 export type EscrowId16 = string;
 
-/**
- * Qué contestó el índice on-chain del remitente. CUATRO desenlaces, no tres y nunca dos.
+/* ⛔ ACÁ VIVÍA `EscrowIndexLookup`, Y SE BORRÓ EN EL FIX-PACK DE WKH-347 (CR/MNR-1). Va dicho en vez de
+ * desaparecer sin rastro, porque el Story File (§7.3) pedía los cuatro desenlaces y hay que decir dónde
+ * quedaron. Los TRES motivos, cada uno medido:
  *
- * Colapsarlos es exactamente el defecto que esta HU no puede introducir, porque cada uno autoriza a
- * decir cosas distintas:
+ *   1. CERO consumidores en todo el árbol, ni de producción ni de tests. Un `grep -rn EscrowIndexLookup`
+ *      devolvía sólo su propia declaración.
+ *   2. Su vocabulario NO era el que producción emite. Declaraba `no_index | unreadable | empty |
+ *      candidates`, y los códigos que viajan de verdad son `escrow_index_absent |
+ *      escrow_index_unreadable | escrow_not_found`. O sea que documentaba un idioma que ningún código
+ *      habla, que es peor que no documentar nada.
+ *   3. Lo contradecía este mismo repo, quince líneas más arriba de donde se escribió: "un puerto
+ *      ensanchado que nadie usa es superficie muerta en el money-path".
  *
- * · `no_index`   — la cadena CONTESTÓ: la PDA `["escrow-index", sender]` no existe. ❌ NO autoriza a
- *   decir "no tenés ningún envío perdido". Es compatible con TRES historias distintas: nunca
- *   depositó; depositó antes de que se empezara a registrar; o depositó y en ese momento no se pudo
- *   registrar. Y una billetera que cerró su único escrow pasándole el índice al `close` queda con el
- *   índice EXISTENTE y VACÍO, no ausente, así que `no_index` tampoco prueba "nunca lo registramos".
- * · `unreadable` — RPC caído, techo de tiempo vencido o bytes que no decodifican. ❌ NO autoriza a
- *   decir absolutamente nada sobre los fondos: "no pude preguntar" no es "no".
- * · `empty`      — el índice EXISTE y no lista ninguna entrada. Sólo autoriza a decir eso.
- * · `candidates` — el índice existe y tiene entradas. Sigue el sondeo on-chain, que es el único
- *   autoritativo sobre el estado de cada escrow: el índice NO lo es.
- *
- * Misma disciplina que (`RemittanceIdLookup`, `:467`) y (`SolanaSenderSolBalance`, `:439`): nunca
- * `X | null`, el consumidor está obligado a nombrar el caso.
- */
-export type EscrowIndexLookup =
-  | { readonly outcome: "no_index" }
-  | { readonly outcome: "unreadable" }
-  | { readonly outcome: "empty" }
-  | { readonly outcome: "candidates"; readonly entries: readonly EscrowId16[] };
+ * DÓNDE ESTÁN AHORA LOS CUATRO DESENLACES, que es lo que §7.3 exigía de verdad (que EXISTAN y estén
+ * DISCRIMINADOS, no que haya un `type` en este archivo): en `resolveFromEscrowIndex` /
+ * `escrowIndexCandidate` de `src/infrastructure/solana-wallet.ts`, con los tres primeros como códigos de
+ * `Error` distintos y el cuarto siguiendo al sondeo on-chain. `EscrowId16` se QUEDA: tiene consumidores
+ * de producción. */

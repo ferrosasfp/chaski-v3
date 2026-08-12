@@ -626,6 +626,13 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
       // lugar donde el motivo se mira, y por eso se exige entero y no sólo el prefijo.
       await expect(adapter.refundEscrow()).rejects.toThrow(`escrow_recovery_unavailable:${reason}`);
       expect(vi.mocked(Connection.prototype.getMultipleAccountsInfo)).not.toHaveBeenCalled();
+      // 🔴 Y LA SEGUNDA FUENTE TAMPOCO SE TOCA, que es lo que este candado dice vigilar y NO vigilaba
+      // (fix-pack WKH-347, AR/MNR-2). El batch de arriba es cómo lee la cadena el camino del LEDGER; el
+      // del ÍNDICE arranca con un `getAccountInfo` sobre la PDA `["escrow-index", sender]`, y sobre ése
+      // no había ninguna aserción. MEDIDO: un mutante LÍNEA-NEUTRAL en `resolveEscrowTarget` que dejara
+      // pasar los `not_asked` a la segunda fuente dejaba esta suite —y `citas-ancladas`— enteras verdes.
+      // L-3 es un límite declarado del money-path: eso se AFIRMA, no se supone.
+      expect(vi.mocked(Connection.prototype.getAccountInfo)).not.toHaveBeenCalled();
       expect(signSpy).not.toHaveBeenCalled();
       expect(sendSpy).not.toHaveBeenCalled();
     });
@@ -668,29 +675,36 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
   // puede introducir.
   it("T-347-10 (AC-3/AC-11): índice ausente, ilegible y vacío dan TRES códigos distintos", async () => {
     const lookup = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: [] }));
+    // 🔴 LOS TRES ESPERADOS EN CONSTANTES, Y NO REPETIDOS (fix-pack WKH-347, CR/MNR-6). El assert de
+    // abajo construía su `Set` con tres literales PROPIOS, así que se comparaba consigo mismo: el
+    // copiar-pegar que decía cazar —dejar dos `rejects` esperando el mismo código— lo pasaba sin
+    // chistar, porque el `Set` no miraba lo que los `rejects` usan. Ahora es la MISMA referencia.
+    const AUSENTE = "escrow_index_absent";
+    const ILEGIBLE = "escrow_index_unreadable";
+    const VACIO = "escrow_not_found";
 
     // (a) la cadena CONTESTÓ: la PDA no existe. NO es "no tenés nada": también es compatible con
     // haber depositado antes de que se registrara, o con no haber podido registrar en su momento.
     await mockChain({});
     await expect((await connectedWith({ lookupBySender: lookup })).refundEscrow()).rejects.toThrow(
-      "escrow_index_absent",
+      AUSENTE,
     );
 
     // (b) NO se pudo preguntar. No dice absolutamente nada sobre los fondos.
     await mockChain({}, "throw");
     await expect((await connectedWith({ lookupBySender: lookup })).refundEscrow()).rejects.toThrow(
-      "escrow_index_unreadable",
+      ILEGIBLE,
     );
 
     // (c) el índice EXISTE y no lista nada. Recién acá se agotaron las dos fuentes.
     await mockChain({}, await encodeEscrowIndex([]));
     await expect((await connectedWith({ lookupBySender: lookup })).refundEscrow()).rejects.toThrow(
-      "escrow_not_found",
+      VACIO,
     );
 
-    // Y que los tres sean DISTINTOS entre sí, escrito como assert y no como lectura del test: un
-    // copiar-pegar que dejara dos iguales pasaría los tres `rejects` de arriba.
-    expect(new Set(["escrow_index_absent", "escrow_index_unreadable", "escrow_not_found"]).size).toBe(3);
+    // Y que los tres sean DISTINTOS entre sí, escrito como assert y no como lectura del test: sobre los
+    // MISMOS valores que los `rejects` de arriba consumieron, así que dos iguales se ven acá.
+    expect(new Set([AUSENTE, ILEGIBLE, VACIO]).size).toBe(3);
   });
 
   // T-347-10 (d) — EL QUINTO DESENLACE SIN NOMBRE. Los cuatro de §7.3 son cuatro, y todo lo que no sea

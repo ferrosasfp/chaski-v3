@@ -12,7 +12,7 @@
 //
 // El layout NO se hardcodea: se decodifica con el BorshInstructionCoder de anchor sobre la MISMA
 // copia pinneada del IDL que usa el escritor (solana/escrow-idl.ts, la que arma la ix en
-// `authorizePrincipal`, `solana-wallet.ts:527`). Si el IDL cambia de forma, el lector cambia con él, y el test que decodifica
+// `authorizePrincipal`, `solana-wallet.ts:554`). Si el IDL cambia de forma, el lector cambia con él, y el test que decodifica
 // la salida REAL de authorizePrincipal se pone rojo si dejan de coincidir.
 import type { Idl } from "@coral-xyz/anchor";
 
@@ -27,8 +27,11 @@ import type { Idl } from "@coral-xyz/anchor";
  *   · `registered`     — hay una 2ª ix de negocio del escrow y su discriminador es `register_escrow`.
  *   · `not_registered` — hay EXACTAMENTE una ix de negocio del escrow. El escrow quedó fuera del índice,
  *                        y eso es un hecho medido sobre los bytes firmados, no una sospecha.
- *   · `unreadable`     — hay una 2ª ix del escrow y no se pudo decodificar, o no es `register_escrow`.
- *                        ⛔ NO se puede reportar como `not_registered`.
+ *   · `unreadable`     — hay una 2ª ix del escrow y no se pudo decodificar, o decodifica limpio y NO es
+ *                        `register_escrow`. ⛔ NO se puede reportar como `not_registered`. ⚠️ Y el segundo
+ *                        caso NO es una ignorancia pura: ahí quedó determinado que la tx no registró, y se
+ *                        reporta conservador igual. El motivo, con su input y con qué lo volvería un
+ *                        problema, está escrito en la route que consume este campo.
  */
 export type DepositIndexRegistrationRead = "registered" | "not_registered" | "unreadable";
 
@@ -58,15 +61,27 @@ export async function readDepositBeneficiary(
   partialSignedTxB64: string,
 ): Promise<DepositBeneficiaryRead> {
   try {
-    // lazy-import (mismo patrón que solana-wallet.ts): estas libs no se cargan en el camino del flag
-    // apagado ni en el de un body inválido, que cortan antes.
+    // lazy-import (mismo patrón que solana-wallet.ts).
+    //
+    // 🔴 CUÁL FLAG, PORQUE HAY DOS Y LA FRASE DE ANTES NO LO DECÍA (fix-pack WKH-347, AR/MNR-3). Decía
+    // "estas libs no se cargan en el camino del flag apagado", sin nombrarlo, y bajo la lectura del flag
+    // del LEDGER eso es FALSO desde W4.2 de esta HU:
+    //   · `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED != "true"` ⇒ la route contesta 501 en su PRIMER guard, antes
+    //     de leer el body y antes de llamar acá. Ahí sí: estas libs no se cargan. Es el flag al que la
+    //     frase se refería.
+    //   · `getSettlementLedger() === null` (el ledger apagado, o sin envs de Supabase) ⇒ esta función SE
+    //     LLAMA IGUAL, porque la constancia de AC-10 tiene que existir también en ese camino y por eso el
+    //     decode se izó fuera del `if (ledger)`. O sea que con el ledger apagado los cuatro
+    //     `await import()` de acá abajo se ejecutan en cada POST válido. El costo está declarado en la
+    //     route, en el comentario del punto donde se la llama.
+    // Y el body inválido sí corta antes, en los dos casos.
     const { PublicKey, Transaction } = await import("@solana/web3.js");
     const anchor = await import("@coral-xyz/anchor");
     const { escrowIdl } = await import("../solana/escrow-idl");
 
     const raw = Buffer.from(partialSignedTxB64, "base64");
     // `Transaction.from` valida el wire-format legacy y tira ante basura. Una tx VERSIONADA (v0) no
-    // deserializa acá y cae a `unreadable`: hoy el escritor arma una legacy (`authorizePrincipal`, `solana-wallet.ts:527`) y
+    // deserializa acá y cae a `unreadable`: hoy el escritor arma una legacy (`authorizePrincipal`, `solana-wallet.ts:554`) y
     // el día que eso cambie tiene que fallar ruidoso, no pasar de largo sin comparar nada.
     const tx = Transaction.from(raw);
     const programId = new PublicKey((escrowIdl as { address: string }).address);
@@ -80,9 +95,14 @@ export async function readDepositBeneficiary(
     // que se ve en la posición de un elemento de array. Es la forma exacta del incidente del 10-ago, con
     // un tercer actor. Cubierto por T-347-20.
     //
-    // Se toma el ARRAY y se indexa, en vez del `.find()` de antes: desde WKH-347 la transacción puede
-    // llevar DOS ix del mismo programId, y `.find()` devuelve la primera sin distinguir un orden
-    // invertido de uno correcto. La posición ahora se afirma, no se asume.
+    // Se toma el ARRAY porque desde WKH-347 la transacción puede llevar DOS ix del mismo programId y hay
+    // que poder mirar la SEGUNDA (`escrowIxs[1]`, más abajo): eso con un `.find()` no se puede.
+    //
+    // ⚠️ LO QUE NO CAMBIÓ, Y ACÁ SE DECÍA QUE SÍ (fix-pack WKH-347, AR/MNR-1): el `[0]` de la línea de
+    // abajo NO es más estricto que el `.find()` de antes. `filter(p)[0]` y `find(p)` devuelven el MISMO
+    // elemento, por definición, así que ese cambio no distingue ningún orden invertido y no compra nada.
+    // Lo que hace fallar el orden invertido es el `decoded.name !== "deposit"` de más abajo, que ya
+    // estaba. Medido: revertir esta línea a `.find(...)` deja la suite entera verde.
     const escrowIxs = tx.instructions.filter((i) => i.programId.equals(programId));
     const ix = escrowIxs[0];
     if (!ix) return { state: "unreadable" }; // ninguna ix del escrow: no hay depósito que juzgar

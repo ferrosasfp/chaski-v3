@@ -100,9 +100,16 @@
 //
 // 🔴 LO QUE ESTE UMBRAL CUESTA, SIN SUAVIZARLO (es parte de la decisión G-2, no una nota al pie):
 //
-//   1. Le pide 2,16× lo que el depósito cuesta a la MAYORÍA de los remitentes, que ya tienen índice y
+//   1. Le pide 2,22× lo que el depósito cuesta a la MAYORÍA de los remitentes, que ya tienen índice y
 //      por lo tanto no van a pagar ese alquiler. El sobrepedido es real y afecta a todos menos al
-//      primer depósito de cada billetera.
+//      primer depósito de cada billetera. EL DENOMINADOR VA NOMBRADO, porque acá hay dos números que se
+//      parecen: es `MEASURED_FIRST_DEPOSIT_LAMPORTS` (4.002.000, la medición en cadena), y
+//      8.874.560 / 4.002.000 = 2,2175 ⇒ 2,22×.
+//      🔴 ACÁ DECÍA 2,16×, Y ERA FALSO EN LA LÍNEA QUE EXISTE PARA NO SUAVIZAR EL COSTO. Ese 2,16 sale
+//      de dividir por 4.100.000, o sea por el UMBRAL ANTERIOR, que es otra pregunta ("pide el doble que
+//      el umbral que había") y no "lo que el depósito cuesta". El punto 2 de acá abajo usa el
+//      denominador correcto, así que las dos cifras vivían en la misma lista con bases distintas.
+//      Y el ratio ya no es sólo prosa: lo asserta `solana-escrow-rent.test.ts` contra las constantes.
 //   2. 8.874.560 es prácticamente el 9.000.000 que este mismo archivo describe más arriba como "pedía
 //      2,25× lo que el depósito cuesta" y que ESTE REPO YA REVIRTIÓ UNA VEZ por eso. El parecido no es
 //      casualidad ni ironía: es el mismo orden de magnitud y el mismo riesgo de "te falta SOL" sobre
@@ -143,7 +150,7 @@
  *
  * LA VALIDACIÓN QUE LO VUELVE UNA DERIVACIÓN Y NO UNA ESTIMACIÓN: la MISMA fórmula aplicada a
  * `EscrowState` (154 bytes) da (128 + 154) × 6960 = 1.962.720, que es exactamente
- * (`ESCROW_STATE_RENT_LAMPORTS`, `:196`), un número que salió de una medición en cadena y no de esta
+ * (`ESCROW_STATE_RENT_LAMPORTS`, `:203`), un número que salió de una medición en cadena y no de esta
  * fórmula. Los dos caminos coinciden sobre un valor conocido-bueno. Sin esta validación, el 4.774.560
  * sería un literal más.
  *
@@ -153,7 +160,7 @@
  * igual lo pide siempre: ver el punto 4 de "lo que este umbral cuesta", más arriba.
  *
  * ⛔ LO QUE NO VUELVE, y va dicho porque cambia lo que se le puede prometer a la persona: este
- * alquiler NO está en (`ESCROW_DEPOSIT_RENT_LAMPORTS`, `:216`) y NO vuelve con el `close`. La cuenta
+ * alquiler NO está en (`ESCROW_DEPOSIT_RENT_LAMPORTS`, `:223`) y NO vuelve con el `close`. La cuenta
  * `escrow_index` es OPCIONAL en la ix `close` y existe un `close` válido que ni la recibe, así que su
  * alquiler no puede estar en lo que `close` devuelve siempre. Que ninguna instrucción del programa la
  * cierre es lectura del RUST, no del IDL: el IDL no expresa las constraints `close = ...` de Anchor.
@@ -164,7 +171,7 @@ export const ESCROW_INDEX_RENT_LAMPORTS = 4_774_560;
 /** Lo que el remitente `8tJVcM2J` pagó de verdad en su PRIMER depósito, medido en devnet: el subtotal
  *  de arriba. Se escribe como la MEDICIÓN y no como la suma de sus partes a propósito — son dos
  *  fuentes independientes del mismo número, y hay un test que verifica que coinciden con
- *  (`ESCROW_DEPOSIT_RENT_LAMPORTS`, `:216`). Si divergen, una de las dos está mal y hay que ir a ver
+ *  (`ESCROW_DEPOSIT_RENT_LAMPORTS`, `:223`). Si divergen, una de las dos está mal y hay que ir a ver
  *  cuál. */
 const MEASURED_FIRST_DEPOSIT_LAMPORTS = 4_002_000;
 
@@ -258,7 +265,7 @@ export function formatLamportsAsSol(lamports: number): string {
  * de estilo, depende de si el número es algo que se PIDE o algo que se RECIBE, y son dos decisiones
  * distintas que conviene no poder mezclar en un call-site.
  *   · `formatLamportsAsSol` redondea ARRIBA porque le dice a alguien cuánto cargar, y pedir de más es
- *     el error gratis (ver su docblock, `formatLamportsAsSol`, `:249`).
+ *     el error gratis (ver su docblock, `formatLamportsAsSol`, `:256`).
  *   · Ésta redondea ABAJO porque el número es lo que la persona va a COBRAR, y redondear hacia arriba
  *     lo que alguien va a cobrar es prometer de más.
  *

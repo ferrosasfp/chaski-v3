@@ -171,7 +171,7 @@ function capturedTx(spy: ReturnType<typeof vi.fn>): Transaction {
  *  primera y NO DISTINGUE un orden invertido: el mutante que las intercambia pasaba en verde. Y ese
  *  orden sí es un invariante, con TRES actores que dependen de él por posición: el CR-1 del
  *  facilitator, el Guard A de SDD 037 y nuestro propio servidor
- *  (`tx.instructions.find`, `settlement/solana-deposit-beneficiary.ts:47`).
+ *  (`tx.instructions.filter`, `settlement/solana-deposit-beneficiary.ts:86`).
  *  ⇒ el orden RELATIVO entre las de negocio se asserta posicionalmente: `[0]` es el `deposit` y `[1]`
  *  el `register_escrow`. */
 function businessIx(tx: Transaction) {

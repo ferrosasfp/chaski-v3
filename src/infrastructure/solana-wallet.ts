@@ -735,8 +735,8 @@ export class SolanaWalletAdapter
     // 🔴 LO QUE SÍ ES UN INVARIANTE: el `deposit` va SIEMPRE en la posición 0 de las ix DE NEGOCIO, y
     // el `register_escrow` DESPUÉS. Hay TRES actores que dependen de eso por POSICIÓN, no por
     // discriminador: el CR-1 del facilitator, el Guard A de SDD 037 y NUESTRO PROPIO SERVIDOR
-    // (`tx.instructions.find`, `settlement/solana-deposit-beneficiary.ts:47`), que toma la primera ix
-    // del escrow y después exige que sea el `deposit`. Con el orden invertido ese lector devuelve
+    // (`tx.instructions.filter`, `settlement/solana-deposit-beneficiary.ts:86`), que indexa la POSICIÓN
+    // 0 de las ix del escrow y después exige que sea el `deposit`. Con el orden invertido ese lector devuelve
     // `unreadable` y la route del settle responde 400: TODO depósito patrocinado falla en nuestro
     // propio servidor, antes de que el facilitator vea nada. ⛔ PROHIBIDO invertirlo.
     const tx = regIx

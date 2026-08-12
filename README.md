@@ -180,14 +180,17 @@ The cycle:
 ### The IDL is pinned by hash
 
 The program IDL is vendored at `src/infrastructure/solana/escrow-idl.ts` and its canonical SHA-256 is
-fixed in `contracts/idl/escrow-idl.hash.test.ts`, which runs on every `npm test`. The same test also
+fixed in `contracts/idl/escrow-idl.hash.test.ts`, which runs on every `npm test`. **"Canonical" here
+just means: sort every key first, then hash.** That way two copies that differ only in the order their
+keys were written still come out equal, while a real change to the contract does not. The same test also
 pins the program id and the positional account order of `deposit`, `refund` and `register_escrow`. If
 someone hand edits the vendored IDL, or the deployed program reorders its accounts, the suite goes red
 before a transaction gets rejected in production. Re pinning is an explicit decision with its entry in
 `contracts/CONTRACT-VERSIONS.md`, never a silent drift. The pinned value matches the one held by
 [`wasiai-facilitator`](https://github.com/ferrosasfp/wasiai-facilitator). Measured 2026-08-11 across
 four independent artifacts, this tree, the chain, the facilitator and `solana-programs`, all four
-canonicalise to `cc2761266dcf8335a17562129de040805f37f69cfe654f5be472045ba7bfcd51` over 16,020 bytes.
+come out to the same hash, `cc2761266dcf8335a17562129de040805f37f69cfe654f5be472045ba7bfcd51`, over the
+same 16,020 bytes.
 
 ### Security headers, and what they still do not protect
 

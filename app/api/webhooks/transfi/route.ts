@@ -20,6 +20,7 @@ import { NextResponse } from "next/server";
 import type { WebhookOutcome } from "../../../../src/application/ports";
 import { getSettlementLedger } from "../../../../src/infrastructure/persistence/supabase-settlement-ledger";
 import { logLedgerAlert } from "../../../../src/infrastructure/persistence/ledger-alert";
+import { TRANSFI_FUND_FAILED_PRINCIPAL_RELEASED } from "../../../../src/infrastructure/persistence/webhook-failure-classes";
 import { claimWebhookEventOnce } from "../../../../src/infrastructure/webhooks/webhook-event-store";
 import {
   extractEventId,
@@ -101,7 +102,12 @@ export async function POST(req: Request): Promise<Response> {
   if (outcome.classified && outcome.failures.includes("principal_released")) {
     // Vía logLedgerAlert, no un console.error con el prefijo pegado a mano: el formato de la línea
     // sobre la que alerta producción tiene UN solo emisor (WKH-325/MNR-6).
-    logLedgerAlert("transfi_fund_failed_principal_released", { payoutId });
+    // El nombre del evento sale de la constante, NO de un string clavado acá: es el string que un
+    // operador grepea y que una regla de alerta va a matchear, y `logLedgerAlert` lo recibe como
+    // `string` sin tipo que lo proteja. Duplicarlo lo dejaba a merced de un rename silencioso, que es
+    // justo lo que el docblock de webhook-failure-classes.ts pide evitar ("definidos ACÁ y en ningún
+    // otro lado"). Mismo valor que antes, medido: `transfi_fund_failed_principal_released`.
+    logLedgerAlert(TRANSFI_FUND_FAILED_PRINCIPAL_RELEASED, { payoutId });
   }
 
   // 9. Claim best-effort DESPUÉS del éxito de la mutación (CD-4 re-encuadrado). Solo dedup/telemetría:

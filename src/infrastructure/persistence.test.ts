@@ -338,11 +338,21 @@ describe("LocalRepo.read — defensivo AC-4 (snapshot legacy con PII cruda)", ()
 //   · `P_EVM`   — el literal de `address.test.ts`, que ya prueba que tira. Es una address EVM legítima
 //                 (checksum EIP-55 válido), o sea el blob de alguien que venía de la rama EVM.
 //   · `P_B58`   — 44 caracteres del alfabeto base58 que NO son una pubkey. Es el input que un
-//                 pre-filtro por regex aceptaría, así que si alguien "optimiza" el predicado a un
-//                 regex, T-1b se pone rojo.
+//                 pre-filtro por regex aceptaría y que `PublicKey` rechaza igual, así que un filtro
+//                 que canonicalice el `ownerAddress` DENTRO del `.filter()` detrás de un pre-filtro
+//                 por forma vuelve a tirar acá, y T-1b se pone rojo.
+//                 🔴 Corrección del fix-pack r1: lo que este input NO caza es reemplazar la delegación
+//                 de `canonicalOrNull` por `RE.test(raw) ? raw : null`. Medido: con ese mutante puesto,
+//                 T-1b y toda la suite quedan VERDES, porque el valor crudo sale del predicado y
+//                 tampoco matchea un target canónico. Ese mutante lo mata T-10 con un target crudo
+//                 (`address-owner-scope.test.ts`). Acá se decía que lo cazaba T-1b, y era falso.
 const P_EMPTY = "";
 const P_EVM = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed";
 const P_B58 = "z".repeat(44);
+// Un `createdAt` MÁS VIEJO que `NOW`, para que el `.sort()` de `list()` tenga dos valores distintos que
+// comparar (T-1c). El `expiresAt` de `seedQuote` sigue siendo posterior, así que la cotización no está
+// vencida y la transición del dominio es válida.
+const OLDER = "2026-07-10T00:00:00.000Z";
 
 /**
  * Gemelo de `withOwner` con destino de remesa VIEJA (`beneficiary("yape")` ⇒ celular, no el CCI de 20
@@ -351,13 +361,28 @@ const P_B58 = "z".repeat(44);
  * POR QUÉ EXISTE: `withOwner` usa `beneficiary()` sin argumento, y ése devuelve el MISMO `destination`
  * para todas las entradas. Asertar "el blob ya no contiene `beneficiary().destination`" después de un
  * `clearByOwner(A)` sería imposible de poner en verde con `b1` todavía en el blob, y `b1` TIENE que
- * seguir ahí (borrarlo sería el bug de AC-2). Con un destino distinto por dueño, la misma aserción
- * mide las dos cosas: que la PII del owner purgado se fue Y que la del otro owner sigue.
+ * seguir ahí (borrarlo sería el bug de AC-2). Con un destino distinto para las entradas de `A`, la
+ * aserción de que ese string se fue del blob mide la purga sin pelearse con `b1`.
+ *
+ * 🔴 Corrección del fix-pack r1 — el crédito estaba mal asignado: la mitad de PRESERVACIÓN NO la mide
+ * esa aserción. La mide la de `list(B)` en T-3. El `toContain` del CCI queda satisfecho también por
+ * `p1`, que se siembra con `withOwner` y por lo tanto lleva el mismo `TEST_CCI`, así que pasaría
+ * aunque `b1` hubiera desaparecido. Decirlo importa: si no, un revisor futuro borra la aserción de
+ * `list(B)` por redundante y se lleva la única que mide que al otro owner no se lo tocó.
  */
 function withOwnerYape(id: string, owner: string): Remittance {
   const r = Remittance.create(id, beneficiary("yape"), Money.of(400, "USDC"), NOW);
   r.attachQuote(seedQuote, NOW);
   r.startKyc(NOW, owner);
+  return r;
+}
+
+/** Gemelo de `withOwner` con `createdAt` explícito: es lo que le faltaba a este archivo para poder
+ *  asertar el orden de `list()` (T-1c). Todos los demás fixtures usan `NOW`. */
+function withOwnerAt(id: string, owner: string, createdAt: string): Remittance {
+  const r = Remittance.create(id, beneficiary(), Money.of(400, "USDC"), createdAt);
+  r.attachQuote(seedQuote, createdAt);
+  r.startKyc(createdAt, owner);
   return r;
 }
 
@@ -406,6 +431,24 @@ describe("LocalRepo.list — una entrada que no se puede atribuir deja de tapar 
     await repo.save(withOwner("p3", P_B58));
 
     expect((await repo.list(A)).map((s) => s.id)).toEqual(["a1"]);
+  });
+
+  // ── T-1c ───────────────────────────────────────────────────────────────────────────────────────
+  // 🔴 PRESERVACIÓN, y existe porque el orden no se asertaba en NINGUNA parte. Todos los fixtures de
+  // este archivo se siembran con el mismo `createdAt`, así que el `.sort()` de `list()` nunca comparaba
+  // dos valores distintos: medido, reemplazarlo por `.sort(() => 0)` dejaba la suite COMPLETA en verde.
+  // Y el docblock del contrato paramétrico se exime de medir el orden diciendo que acá se mide; hasta
+  // este test, esa frase le mentía al próximo revisor.
+  //
+  // Mutante que lo mata: `.sort(() => 0)` en `list()`. `Array.prototype.sort` es estable, así que
+  // devolvería el orden de inserción del blob — que acá es a propósito el inverso del esperado.
+  it("T-1c (PRESERVACIÓN): list ordena por createdAt DESCENDENTE, también con veneno presente", async () => {
+    const repo = new LocalRepo();
+    await repo.save(withOwnerAt("vieja", A, OLDER)); // se guarda PRIMERO, y tiene que salir SEGUNDA
+    await repo.save(withOwner("nueva", A));
+    await repo.save(withOwner("p1", P_EMPTY));
+
+    expect((await repo.list(A)).map((s) => s.id)).toEqual(["nueva", "vieja"]);
   });
 
   // ── T-2 ────────────────────────────────────────────────────────────────────────────────────────
@@ -485,9 +528,12 @@ describe("LocalRepo.clearByOwner — el reset borra de verdad, y no borra lo que
     await expect(repo.clearByOwner(A)).resolves.toBeUndefined();
 
     expect(await repo.list(A)).toEqual([]);
+    // 🚫 NO BORRAR esta línea por redundante: es la ÚNICA que mide que al otro owner no se lo tocó.
     expect((await repo.list(B)).map((s) => s.id)).toEqual(["b1"]);
-    // La misma aserción mide las dos mitades: la PII del owner purgado se fue del blob real, y la del
-    // owner que nadie tocó sigue ahí (borrarla sería el bug de AC-2).
+    // La PII del owner purgado se fue del blob real. 🔴 Y la de abajo NO mide la preservación de `b1`,
+    // aunque lo parezca: `p1` también se siembra con `withOwner` ⇒ lleva el mismo `TEST_CCI`, así que
+    // ese `toContain` pasaría aunque `b1` hubiera desaparecido. Lo que sí mide es que el reset no vació
+    // el blob entero. La preservación de `b1` la mide la aserción de `list(B)` de arriba.
     expect(storage.getItem(KEY)).not.toContain(beneficiary("yape").destination);
     expect(storage.getItem(KEY)).toContain(beneficiary().destination);
     // La entrada sin dueño sigue intacta (WKH-201/AC-2).

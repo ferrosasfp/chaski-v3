@@ -10,7 +10,7 @@ import {
   toPersistedIdentity,
 } from "../domain/remittance";
 import { ConcurrentModificationError } from "../application/errors";
-import { canonicalizeAddress } from "../infrastructure/address";
+import { canonicalizeAddress, isOwnedBy } from "../infrastructure/address"; // WKH-348: importado
 // WKH-337: la allowlist de proveniencias REALES se IMPORTA (no se copia). El docblock de la constante
 // dice por qué: "un segundo Set con los mismos valores es exactamente cómo se desincronizan las dos
 // capas". Precedente de import fuera de `presentation/`: `scripts/smoke-helpers.ts`.
@@ -111,24 +111,24 @@ export class InMemoryRepo implements RemittanceRepository {
     const s = this.store.get(id);
     return s ? Remittance.rehydrate(s) : null;
   }
+  // WKH-348/AC-6/CD-5: el predicado de ownership NO se copia acá, se IMPORTA. Este doble tenía el
+  // filtro escrito a mano y con el mismo defecto que LocalRepo: canonicalizaba el ownerAddress de cada
+  // entrada DENTRO del predicado de un .filter(), así que una entrada que no se puede atribuir hacía
+  // tirar al propio doble ⇒ ningún test de la capa de aplicación podía sembrar veneno. Es el mismo
+  // criterio que este archivo ya aplica a REAL_PAYOUT_PROVENANCES (ver el import de arriba): un
+  // segundo texto con el mismo criterio es exactamente cómo se desincronizan las dos capas. El
+  // contrato de remittance-owner-scope.contract.test.ts se pone rojo si una de las dos vuelve a irse.
   async list(address: string): Promise<RemittanceState[]> {
-    const target = canonicalizeAddress(address);
-    return [...this.store.values()].filter(
-      (s) =>
-        s.ownerAddress != null &&
-        canonicalizeAddress(s.ownerAddress) === target,
-    );
+    const target = canonicalizeAddress(address); // el target sigue fail-closed (AC-3)
+    return [...this.store.values()].filter((s) => isOwnedBy(s, target));
   }
   async clearByOwner(address: string): Promise<void> {
-    // Gemelo del filtro de list() sobre this.store (WKH-201/CD-6). this.store ES el store → delete directo.
+    // Gemelo del de list() porque es EL MISMO predicado (WKH-201/CD-5). this.store ES el store →
+    // delete directo. CD-18: la entrada que no se puede atribuir NO se borra, porque borrar lo que no
+    // se puede atribuir es atribuirlo a quien pidió el reset.
     const target = canonicalizeAddress(address);
     for (const [id, s] of this.store) {
-      if (
-        s.ownerAddress != null &&
-        canonicalizeAddress(s.ownerAddress) === target
-      ) {
-        this.store.delete(id);
-      }
+      if (isOwnedBy(s, target)) this.store.delete(id);
     }
   }
 }

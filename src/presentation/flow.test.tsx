@@ -985,7 +985,7 @@ describe("WKH-200 poll stop (fake timers)", () => {
 
 /** Confirmada y NADA MÁS: `principalTx` sigue en null, o sea que la billetera todavía no firmó
  *  ningún depósito. Es el punto exacto en el que corta el `prepare`
- *  (`failAndRefund`, `../application/use-cases/confirm-and-send.ts:385`, con `"not_deposited"`), o sea que es la única
+ *  (`failAndRefund`, `../application/use-cases/confirm-and-send.ts:398`, con `"not_deposited"`), o sea que es la única
  *  forma que tiene una remesa cuyo `failureReason` es un fallo ANTERIOR a la primera firma. */
 function solanaConfirmedSnapshot(expiresAt: string): RemittanceState {
   const r = Remittance.create("rem-1", beneficiary(), Money.of(400, "USDC"), T0);

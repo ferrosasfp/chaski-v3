@@ -310,7 +310,7 @@ describe("HttpSolanaPayoutPrepareGateway — el body que arma el cliente ES el q
   // la rama pinta; ninguno prueba que el motivo llegue (`tests-que-registran-el-doble-no-prueban-el-cableado`).
   //
   // El `reason` que sale de acá es literalmente lo que `ConfirmAndSend` persiste como `failureReason`
-  // (`failAndRefund`, `../../application/use-cases/confirm-and-send.ts:385`), y `TrackView` ramifica
+  // (`failAndRefund`, `../../application/use-cases/confirm-and-send.ts:398`), y `TrackView` ramifica
   // por esa MISMA constante — por eso se compara contra la constante y no contra un literal.
   it("CABLEADO/AC-13: el 422 de la route llega al reason que se persiste, y de ahí al copy de 'no hay quién'", async () => {
     vi.stubGlobal("fetch", prepareRespondsWith(422, { error: PREPARE_NO_AGENT_FOR_CAPABILITY }));

@@ -1,10 +1,20 @@
 // EL UMBRAL DE SOL, CONTRA LA CADENA Y CONTRA EL IDL.
 //
-// El umbral viejo (9.000.000 lamports) sumaba el rent de `EscrowIndex`, una cuenta que el depósito NO
-// crea. Pedía 2,25× lo que el primer depósito de una billetera nueva costó de verdad (4.002.000
-// lamports, medido en cadena) y podía voltear una demo en vivo con un "te falta SOL" falso. Y aun
-// pidiendo de más, no cubría la comisión del refund, que el propio archivo declaraba como no cubierta:
-// quien depositaba con lo justo se quedaba sin con qué firmar su propia recuperación.
+// El umbral de 9.000.000 lamports sumaba el rent de `EscrowIndex`, una cuenta que el depósito NO creaba.
+// Pedía 2,25× lo que el primer depósito de una billetera nueva costó de verdad (4.002.000 lamports,
+// medido en cadena) y podía voltear una demo en vivo con un "te falta SOL" falso. Y aun pidiendo de más,
+// no cubría la comisión del refund, que el propio archivo declaraba como no cubierta: quien depositaba
+// con lo justo se quedaba sin con qué firmar su propia recuperación. Por eso bajó a 4.100.000.
+//
+// 🔴 WKH-347 LO SUBIÓ A 8.874.560, Y NO ES UNA VUELTA ATRÁS. La transacción del depósito ahora emite
+// `register_escrow` como segunda instrucción de negocio, así que CREA `EscrowIndex` de verdad y su
+// alquiler sale de la billetera del remitente. El sumando volvió porque cambió el hecho que lo hacía
+// falso, no porque el error viejo fuera correcto. El parecido con el 9.000.000 es real y está declarado
+// sin suavizar en el docblock de la constante, junto con lo que cuesta: le pide 2,16× a la mayoría de
+// los remitentes, que ya tienen índice y no van a pagar ese alquiler.
+//
+// Varios de los tests de abajo cambiaron de sentido por eso, y en cada uno está escrito por qué. Ninguno
+// se borró: un test que se borra al cambiar un número deja de vigilar el número.
 //
 // Estos tests atan el número a sus DOS fuentes verificables: la medición en cadena y el IDL pinneado.
 // Un test que sólo comparara la constante contra sí misma no probaría nada.
@@ -12,6 +22,12 @@ import { describe, expect, it } from "vitest";
 import { escrowIdl } from "../infrastructure/solana/escrow-idl";
 import {
   ESCROW_DEPOSIT_RENT_LAMPORTS,
+  // WKH-347 (CD-22): se IMPORTA en vez de escribirse a mano. Acá vivía un
+  // `const ESCROW_INDEX_RENT_LAMPORTS = 4_774_560;` local con el comentario "la cuenta que NO se crea
+  // acá", y las dos mitades de esa línea envejecieron: el número es una DECISIÓN derivada que pertenece
+  // al módulo, y la cuenta ahora sí se crea. Dos literales iguales en dos repositorios de decisión
+  // distintos es el defecto que este repo ya documentó una vez.
+  ESCROW_INDEX_RENT_LAMPORTS,
   ESCROW_STATE_RENT_LAMPORTS,
   ESCROW_VAULT_RENT_LAMPORTS,
   LAMPORTS_PER_SOL,
@@ -20,27 +36,55 @@ import {
   formatLamportsAsSolFloor,
 } from "./solana-escrow-rent";
 
-/** Lo que el remitente `8tJVcM2J` pagó de verdad en su PRIMER depósito, medido en devnet. */
+/** Lo que el remitente `8tJVcM2J` pagó de verdad en su PRIMER depósito, medido en devnet.
+ *
+ *  ⚠️ VA ESCRITO A MANO Y NO IMPORTADO, a propósito, y NO es el duplicado que CD-22 prohíbe: éste es
+ *  una MEDICIÓN EN CADENA, o sea un oráculo independiente del código. Importarlo del módulo que se
+ *  vigila convertiría las cotas de abajo en la constante comparándose consigo misma, que es justo lo
+ *  que la cabecera de este archivo dice que no prueba nada. */
 const MEASURED_FIRST_DEPOSIT_LAMPORTS = 4_002_000;
-/** Rent de `EscrowIndex` (558 bytes), medido por la suite del programa. La cuenta que NO se crea acá. */
-const ESCROW_INDEX_RENT_LAMPORTS = 4_774_560;
 
 describe("el umbral de SOL sale del costo REAL del depósito", () => {
-  // 🔴 EL test. Si alguien vuelve a sumar el rent del índice, el umbral pasa de 4.100.000 a más de
-  // 8.700.000 y este límite se rompe.
-  it("no supera por mucho lo que el primer depósito costó en cadena", () => {
+  // 🔴 WKH-347 — ESTA COTA SE RE-DERIVÓ, NO SE DEBILITÓ, y la diferencia importa. Hasta acá medía el
+  // umbral contra el costo del DEPÓSITO SOLO (4.002.000 × 1,1), porque el depósito era todo lo que la
+  // transacción pagaba. Desde WKH-347 la transacción también crea `EscrowIndex`, así que el costo
+  // completo del peor caso es `depósito + índice` y la cota tiene que medirse contra ESO. Medir contra
+  // el subtotal viejo sería exigirle al umbral que no cubra una cuenta que la tx crea de verdad.
+  //
+  // El ×1,1 NO se movió, y ése es el punto: lo que cambió es el costo real, no la tolerancia. Con
+  // 8.776.560 × 1,1 = 9.654.216, el umbral de 8.874.560 entra con margen.
+  it("no supera por mucho lo que el peor caso cuesta en cadena (depósito + índice)", () => {
+    const peorCasoReal = MEASURED_FIRST_DEPOSIT_LAMPORTS + ESCROW_INDEX_RENT_LAMPORTS;
     expect(SENDER_MIN_LAMPORTS_FOR_DEPOSIT).toBeGreaterThanOrEqual(MEASURED_FIRST_DEPOSIT_LAMPORTS);
-    // Cota dura: hasta un 10% por encima de lo medido. El viejo pedía 2,25×.
-    expect(SENDER_MIN_LAMPORTS_FOR_DEPOSIT).toBeLessThanOrEqual(
-      Math.round(MEASURED_FIRST_DEPOSIT_LAMPORTS * 1.1),
-    );
+    // Cota dura: hasta un 10% por encima de lo medido. El de 9.000.000 pedía 2,25× el depósito solo
+    // SIN que ninguna cuenta lo justificara; éste pide 2,16× con una cuenta que la tx crea.
+    expect(SENDER_MIN_LAMPORTS_FOR_DEPOSIT).toBeLessThanOrEqual(Math.round(peorCasoReal * 1.1));
   });
 
-  it("NO incluye el rent de EscrowIndex, que ninguna transacción de Chaski paga", () => {
-    // Si estuviera adentro, el umbral tendría que cubrir la suma de los dos.
-    expect(SENDER_MIN_LAMPORTS_FOR_DEPOSIT).toBeLessThan(
+  // 🔴 T-347-13 — ESTE TEST CAMBIÓ DE SENTIDO A PROPÓSITO. Antes exigía que el umbral NO llegara a
+  // `depósito + índice`, porque ninguna transacción creaba el índice y sumarlo era el bug que este
+  // archivo revirtió. Ahora la transacción SÍ lo crea, así que la exigencia se invierte: el umbral
+  // TIENE que cubrir los dos. Dejarlo como estaba mandaría a alguien a depositar con un saldo que no
+  // alcanza para la cuenta que su propia transacción va a crear, y el depósito REVERTIRÍA EN CADENA.
+  //
+  // 🔴 EL INPUT QUE LO PONE EN ROJO: volver el umbral a 4.100.000, o sacarle el sumando del índice.
+  it("T-347-13 (AC-7): el umbral SÍ cubre el rent de EscrowIndex, que la tx ahora crea", () => {
+    expect(SENDER_MIN_LAMPORTS_FOR_DEPOSIT).toBeGreaterThanOrEqual(
       MEASURED_FIRST_DEPOSIT_LAMPORTS + ESCROW_INDEX_RENT_LAMPORTS,
     );
+    // Y la derivación del propio rent, contra la fórmula de rent-exempt de Solana y no contra sí mismo:
+    // (128 bytes de overhead + 558 de la cuenta) × 6960 lamports por byte-año.
+    expect(ESCROW_INDEX_RENT_LAMPORTS).toBe((128 + 558) * 6960);
+    // La MISMA fórmula sobre `EscrowState` (154 bytes) reproduce un número que salió de una medición en
+    // cadena, no de la fórmula. Es lo que vuelve a la de arriba una derivación y no una coincidencia.
+    expect(ESCROW_STATE_RENT_LAMPORTS).toBe((128 + 154) * 6960);
+  });
+
+  // 🔴 EL CONTROL QUE VUELVE HONESTO AL `MEASURED_FIRST_DEPOSIT_LAMPORTS` escrito a mano: la medición en
+  // cadena y la suma de las dos cuentas que el `deposit` crea tienen que dar el MISMO número. Si
+  // divergen, una de las dos fuentes está mal y hay que ir a ver cuál, en vez de elegir la que conviene.
+  it("la medición en cadena y la suma de las partes coinciden", () => {
+    expect(MEASURED_FIRST_DEPOSIT_LAMPORTS).toBe(ESCROW_DEPOSIT_RENT_LAMPORTS);
   });
 
   // La fuente de por qué el índice no entra: el IDL. No es una opinión sobre el programa, es su
@@ -162,8 +206,20 @@ describe("el alquiler que `close` devuelve sale de la misma derivación que el u
     expect(escrowIndex?.optional).toBe(true);
   });
 
-  it("el umbral del depósito NO se movió (sigue sin sumarle nada de esto)", () => {
-    expect(SENDER_MIN_LAMPORTS_FOR_DEPOSIT).toBe(4_100_000);
+  // 🔴 EL PIN DEL VALOR, RE-DERIVADO PARA WKH-347. Decía `toBe(4_100_000)` y era el pin del umbral que
+  // NO sumaba el índice. Ahora se pinnea contra la SUMA de sus sumandos nombrados y no contra un literal
+  // suelto: un literal sólo dice "alguien escribió este número", mientras que la suma se rompe si
+  // cualquiera de los cuatro términos cambia sin que la derivación del docblock lo acompañe.
+  //
+  // Los dos primeros salen de este archivo como oráculos independientes (la medición en cadena y el
+  // rent-exempt derivado); los dos últimos son la comisión del refund que el umbral le reserva al
+  // sender (5.000 de su única firma + 75.000 de propina de billetera) y el redondeo hacia arriba.
+  it("el umbral del depósito es la SUMA de sus cuatro sumandos, no un literal", () => {
+    expect(SENDER_MIN_LAMPORTS_FOR_DEPOSIT).toBe(
+      MEASURED_FIRST_DEPOSIT_LAMPORTS + 5_000 + 75_000 + 18_000 + ESCROW_INDEX_RENT_LAMPORTS,
+    );
+    // Y el valor concreto, para que el diff de esta HU muestre el número que se movió.
+    expect(SENDER_MIN_LAMPORTS_FOR_DEPOSIT).toBe(8_874_560);
   });
 });
 
@@ -172,18 +228,31 @@ describe("lo que se COBRA se redondea hacia abajo, y por eso deja de colisionar 
     expect(formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_LAMPORTS)).toBe("0,0040");
   });
 
-  // 🔴 ESTE es el test que hace que el de copy discrimine. `formatLamportsAsSol(4_002_000)` y
-  // `formatLamportsAsSol(4_100_000)` devuelven LA MISMA CADENA "0,0041": con el ceil, un mutante que
-  // formatee la constante equivocada (el umbral en vez del alquiler) es INDISTINGUIBLE del código
-  // correcto en pantalla. El floor separa las dos cadenas, y esta aserción es la colisión puesta en
-  // rojo. 🚫 NO simplificar a una aserción de presencia: es el patrón que vuelve a dejar pasar ese
-  // mutante.
+  // 🔴 ESTE es el test que hace que el de copy discrimine. Con el umbral en 4.100.000,
+  // `formatLamportsAsSol(4_002_000)` y `formatLamportsAsSol(4_100_000)` devolvían LA MISMA CADENA
+  // "0,0041": un mutante que formateara la constante equivocada (el umbral en vez del alquiler) era
+  // INDISTINGUIBLE del código correcto en pantalla. El floor separa las dos cadenas, y la primera
+  // aserción de abajo es esa separación puesta en rojo. 🚫 NO simplificar a una aserción de presencia:
+  // es el patrón que vuelve a dejar pasar ese mutante.
+  //
+  // 🔴 WKH-347 — LA COLISIÓN DEL `ceil` DEJÓ DE EXISTIR, Y ES UNA BUENA NOTICIA MAL APROVECHABLE. Con el
+  // umbral en 8.874.560 el ceil da "0,0089" y el alquiler "0,0041": ya no coinciden ni con ceil. La
+  // aserción que EXIGÍA esa coincidencia se saca, porque exigir una colisión que el código ya no produce
+  // sería un test rojo por la herramienta y no por el código.
+  //
+  // ⛔ PERO EL FLOOR NO SE SACA, NI ESTE TEST TAMPOCO, y la razón es la que importa: la colisión
+  // desapareció por el VALOR de una constante que puede volver a moverse (ya se movió dos veces:
+  // 9.000.000 → 4.100.000 → 8.874.560), no por ninguna propiedad de estas dos funciones. El día que el
+  // umbral vuelva a caer cerca del alquiler, la colisión vuelve sola. La primera aserción de abajo es la
+  // única que no depende de ese valor, y es la que sostiene al test de copy.
   it("la cifra del cierre NO puede colisionar con la del umbral de depósito", () => {
     expect(formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_LAMPORTS)).not.toBe(
       formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT),
     );
-    // Y la colisión que el ceil SÍ produce, documentada acá para que nadie la redescubra:
-    expect(formatLamportsAsSol(ESCROW_DEPOSIT_RENT_LAMPORTS)).toBe(
+    // Y el estado ACTUAL de la colisión del ceil, fijado para que su desaparición no pase inadvertida:
+    // hoy NO colisionan. Si este assert se pone rojo, el umbral volvió a acercarse al alquiler y el
+    // floor pasó de ser una precaución a ser lo único que separa las dos cifras en pantalla.
+    expect(formatLamportsAsSol(ESCROW_DEPOSIT_RENT_LAMPORTS)).not.toBe(
       formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT),
     );
   });

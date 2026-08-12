@@ -318,6 +318,11 @@ export function lostEscrowRecoveryError(code: string, maxCandidates: number): st
   // función para extraerla a una constante). Que las dos no diverjan lo vigila el guard de CD-12.
   if (/user rejected|wallet_connect_cancelled|wallet_sign_not_available/i.test(code))
     return "No se completó la firma que prueba que la billetera es tuya, así que no llegamos a preguntar. Esto no es una respuesta sobre tus fondos: volvé a intentar y aceptá la firma.";
+  // WKH-347 — ANTES de `escrow_not_found` y con los textos en el apéndice (los `function` se hoistean).
+  // Es seguro: ninguno de los dos literales contiene la subcadena `escrow_not_found`, así que no le
+  // roban casos a la rama de abajo. Eso NO se supone: lo vigila el control de orden de ramas.
+  if (code.includes("escrow_index_absent")) return sinIndiceCopy();
+  if (code.includes("escrow_index_unreadable")) return indiceIlegibleCopy();
   if (code.includes("escrow_not_found"))
     return sinAbiertosCopy(maxCandidates); // el texto vive en el apéndice; `esVentanaSinAbiertos` lo reconoce delegando acá
   // "No pudimos preguntar" no es "no hay nada". Cinco productores llegan acá, no dos.
@@ -395,7 +400,7 @@ export function lostEscrowRecoveryError(code: string, maxCandidates: number): st
  *  · No dice "recuperá tu alquiler" a secas: dice CUÁLES dos cuentas.
  *  · No suma ni nombra el `EscrowIndex` en la cifra. Lo menciona aparte, como lo que NO vuelve.
  *  · No promete un neto. Dice que hay comisión y que NO sabemos cuánto agrega la billetera: la propina
- *    que inyecta es una incógnita declarada del propio repo (`solana-escrow-rent.ts:80-82`) y esta
+ *    que inyecta es una incógnita declarada del propio repo (`solana-escrow-rent.ts:120-122`) y esta
  *    acción además no declara ComputeBudget, así que tampoco hay un techo de CU que la acote.
  *
  * 🔴 POR QUÉ HAY DOS VOCES Y POR QUÉ EL PARÁMETRO NO TIENE DEFAULT (fix-pack CR/BLQ-BAJO-1). Este
@@ -953,15 +958,22 @@ export const REVISION_TECHO_ALCANZADO =
   "Por ahora no podemos seguir intentando desde acá. Podés recuperar tus USDC en vez de esperar.";
 
 /* ────────────────────────────────────────────────────────────────────────────────────────────────
- * Apéndice WKH-346 (fix-pack AR/BLQ-BAJO-1). Va al FINAL a propósito: el cuerpo de este archivo
- * tiene 4 citas ancladas con destino > `:322` (`:728`, `:852`, `:912`, `:949`) y un solo `Δ +1`
- * arriba las rompería a las cuatro. Un apéndice desplaza 0.
+ * Apéndice WKH-346 (fix-pack AR/BLQ-BAJO-1). Va al FINAL a propósito, y el motivo es mecánico: este
+ * archivo tiene citas ancladas cuyo destino está en su propia mitad de abajo, y una inserción aguas
+ * arriba las desplaza a TODAS de golpe. Un apéndice desplaza 0.
+ *
+ * ⚠️ ACÁ HABÍA UNA LISTA DE CUATRO NÚMEROS ESCRITA A MANO, y para WKH-347 ya estaba VENCIDA: decía
+ * `:728`, `:852`, `:912`, `:949`, y ninguno de los cuatro seguía siendo el sitio que nombraba. Nadie se
+ * enteró porque esos números viven en prosa y ningún guard los mira. Se saca la lista y queda el
+ * criterio, que es lo único que no envejece: **antes de insertar líneas en el cuerpo de este archivo,
+ * corré `citas-ancladas.test.ts`** — ése sí enumera las citas de verdad, y en formato anclado, que es
+ * el único que el candado puede verificar.
  * ──────────────────────────────────────────────────────────────────────────────────────────────── */
 
 /**
  * El texto de `escrow_not_found` para la puerta "Recuperar un envío perdido", en UN solo lugar.
  *
- * Lo extraigo de `lostEscrowRecoveryError` (`:321-322`) porque ahora lo necesitan DOS consumidores:
+ * Lo extraigo de `lostEscrowRecoveryError` (`:326-327`) porque ahora lo necesitan DOS consumidores:
  * esa función, que lo devuelve, y `esVentanaSinAbiertos`, que lo usa para RECONOCER el desenlace
  * "la ventana no tiene ningún escrow abierto" sin volver a clasificar el código.
  *
@@ -970,7 +982,46 @@ export const REVISION_TECHO_ALCANZADO =
  * sin tocarlos: son la red que prueba que esta extracción fue pura.
  */
 export function sinAbiertosCopy(maxCandidates: number): string {
-  return `No encontramos escrows abiertos para esta billetera. Esto no dice que no tengas fondos: dice que ninguno de los últimos ${maxCandidates} envíos que el servidor tiene guardados de esta billetera está abierto en el contrato.`;
+  return `No encontramos escrows abiertos para esta billetera. Esto no dice que no tengas fondos: dice que ninguno de los últimos ${maxCandidates} envíos que el servidor tiene guardados de esta billetera, ni ninguno de los que la cadena tiene registrados en el índice de esta billetera, está abierto en el contrato.`;
+}
+
+/**
+ * WKH-347 — el índice on-chain de esta billetera NO EXISTE. La cadena contestó; no es que no pudimos
+ * preguntar.
+ *
+ * 🔴 LAS TRES HISTORIAS QUE ESTE DESENLACE NO PUEDE DISTINGUIR, y por eso el texto las nombra a las
+ * tres en vez de elegir una. Que la PDA no exista es compatible con:
+ *   · nunca depositaste;
+ *   · depositaste ANTES de que empezáramos a registrar en el índice (WKH-347 no existía);
+ *   · depositaste después, y en ese momento no pudimos registrarlo (el índice estaba lleno, o la sonda
+ *     no se pudo leer y el depósito salió sin la segunda instrucción).
+ * Desde el navegador no hay forma de saber cuál es la de esta persona, así que prometer un diagnóstico
+ * fino sería el mismo error que `probeEscrowIndex` ya tiene documentado.
+ *
+ * 🔑 LA CLÁUSULA "o si en ese momento no pudimos registrarlo" NO ES RELLENO: es la única parte del copy
+ * que le dice a la persona que la ausencia puede ser culpa NUESTRA y no suya. Existe por las dos ramas
+ * en que el depósito sale sin registrar. ⛔ No la borres al pulir el texto.
+ *
+ * ⚠️ Y NO AFIRMA NADA SOBRE LOS FONDOS. "No hay índice" no es "no tenés nada": un depósito que no se
+ * registró está igual de abierto en el contrato, con la plata adentro.
+ */
+export function sinIndiceCopy(): string {
+  return "En la cadena no hay un índice de envíos para esta billetera. Eso pasa si nunca depositaste, y también si depositaste antes de que empezáramos a registrar, o si en ese momento no pudimos registrarlo. No es una respuesta sobre tus fondos.";
+}
+
+/**
+ * WKH-347 — no se pudo LEER el índice on-chain. "No pude preguntar" no es "no".
+ *
+ * Es el mismo tri-estado que el resto del money-path respeta: hay un "sí", un "no" y un "no llegué a
+ * saberlo", y este texto es el tercero. Los tres inputs que llegan acá (el RPC caído, el techo de la
+ * sonda vencido, y bytes que no decodifican como `EscrowIndex`) colapsan en UN código a propósito: la
+ * persona no puede hacer nada distinto con cada uno.
+ *
+ * ⛔ NO puede decir "no encontramos", ni "no tenés", ni sugerir que la búsqueda terminó. La única cosa
+ * accionable es reintentar, y es lo único que promete.
+ */
+export function indiceIlegibleCopy(): string {
+  return "No pudimos leer tu índice de envíos en la cadena, así que no llegamos a preguntar. Esto no es una respuesta sobre tus fondos: probá de nuevo en un rato.";
 }
 
 /**
@@ -985,12 +1036,12 @@ export function sinAbiertosCopy(maxCandidates: number): string {
  * Delegando, la PRECEDENCIA DE RAMAS vale para las dos respuestas sin ningún guard:
  * `lostEscrowRecoveryError` decide primero por `escrow_refund_signature_incomplete` (`:310`) y por
  * `user rejected|wallet_connect_cancelled|wallet_sign_not_available` (`:319`), y esas dos GANAN antes
- * que `escrow_not_found` (`:321`). Un predicado que hiciera el `includes` por su cuenta podría
+ * que `escrow_not_found` (`:326`). Un predicado que hiciera el `includes` por su cuenta podría
  * contradecir al copy el día que un código traiga dos de esas subcadenas a la vez.
  *
  * ⛔ Devuelve `false` para `escrow_recovery_unavailable` y para `escrow_id_unavailable`, y eso es
  * deliberado: "no pude preguntar" NO es "no hay". Esos códigos llegan con cinco productores
- * (`:323-332`) y NINGUNO afirma que la ventana esté vacía, así que la pantalla tiene que seguir
+ * (`:328-337`) y NINGUNO afirma que la ventana esté vacía, así que la pantalla tiene que seguir
  * diciendo que puede haber más. Colapsar los dos desenlaces es el error que este repo ya tiene
  * documentado; `T-346-15` existe sólo para eso.
  */

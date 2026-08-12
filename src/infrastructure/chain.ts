@@ -54,11 +54,18 @@ export function resolveSolanaNetworkId(): string {
  *
  *  DOS HONESTIDADES QUE NO SE BORRAN AL REFACTORIZAR:
  *   - 79.826 es el peor caso **OBSERVADO** en 28 muestras, NO un máximo demostrado.
- *   - Es el peor caso de la forma **más pesada** (`deposit` + `register_escrow`). El `deposit` solo
- *     consume estrictamente menos, así que como proxy **sobreestima, nunca subestima**. 79.826 NO es
- *     el consumo del `deposit` solo. Medición propia del `deposit` solo (W0.2b de esta HU, 30
- *     simulaciones en devnet con `simulateTransaction`, remittanceId distinto en cada una):
- *     30.825..53.325 CU, también en pasos de 1.500. Coherente con que el proxy sobreestime.
+ *   - Es el peor caso de la forma **más pesada** (`deposit` + `register_escrow`). Hasta WKH-347 esa
+ *     forma NO era la que Chaski emitía, así que el 79.826 entraba acá como un **proxy conservador**:
+ *     el `deposit` solo consume estrictamente menos, y por eso sobreestimaba y nunca subestimaba.
+ *     DESDE WKH-347 la forma combinada ES la que se emite cuando el depósito registra el escrow, así
+ *     que para ese caso el 79.826 dejó de ser un proxy y pasó a ser la **medición directa**. NINGÚN
+ *     número cambia por eso, y no es una omisión: el proxy ya estaba dimensionado con la forma pesada,
+ *     que es exactamente la que ahora se emite. Lo que cambia es de qué es evidencia.
+ *   - El `deposit` solo sigue consumiendo estrictamente menos, y sigue siendo la forma que se emite en
+ *     las ramas donde no se registra (índice lleno, o sonda ilegible). Medición propia del `deposit`
+ *     solo (30 simulaciones en devnet con `simulateTransaction`, remittanceId distinto en cada una):
+ *     30.825..53.325 CU, también en pasos de 1.500. Ese dato ya no explica un proxy: explica el
+ *     **margen** que el límite declarado le deja a la forma liviana.
  *
  *  CONTRA QUÉ TOPE SE COMPARÓ: `SOLANA_SPONSOR_MAX_COMPUTE_UNITS` = 300.000
  *  (`wasiai-facilitator/src/infra/env.ts:214`). 120.000/300.000 = **40 % de uso**, margen **2,50×**.

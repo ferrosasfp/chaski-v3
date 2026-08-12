@@ -1347,7 +1347,7 @@ export function TrackView({
   //
   // Se elige TAPAR EL BOTÓN y no suavizar el copy, porque de las dos afirmaciones la del copy es la
   // que se puede sostener: el prepare corre ANTES de `authorizePrincipal`
-  // (`failAndRefund`, `../application/use-cases/confirm-and-send.ts:385`, con `"not_deposited"`), o sea antes de que la
+  // (`failAndRefund`, `../application/use-cases/confirm-and-send.ts:398`, con `"not_deposited"`), o sea antes de que la
   // billetera firme nada. Suavizarla a la forma condicional de la familia de `payout_failed` ("si tus
   // USDC entraron al escrow…") cambiaría un hecho verificable por una duda inventada, que es
   // exactamente el defecto que esta HU vino a sacar de la pantalla.
@@ -2090,7 +2090,7 @@ export function LostEscrowRecovery({
   // pantalla contaba como UN relato el comprobante de A y el cierre de ventana de B, suprimiendo el
   // error de B con un éxito que no fue de B. Cada frase era cierta; el compuesto y el "esta billetera"
   // no. Los códigos que NO lo prenden están enumerados en `esVentanaSinAbiertos`
-  // (`esVentanaSinAbiertos`, `flow-vm.ts:997`), en su docblock de `flow-vm.ts:991-995`.
+  // (`esVentanaSinAbiertos`, `flow-vm.ts:1048`), en su docblock de `flow-vm.ts:991-995`.
   const [sinAbiertos, setSinAbiertos] = useState<string | null>(null);
   // La identidad de la ÚLTIMA búsqueda. Todo lo que la tarjeta muestra se filtra por acá: la frase de
   // cierre dice "esta billetera", así que no puede estar al lado del comprobante de otra.
@@ -3158,7 +3158,7 @@ function resetTo(
  * La versión vieja decía 'volvé a apretar "Buscar mis escrows" para revisar los que falten', y con más
  * de `MAX_RECOVERY_CANDIDATES` depósitos perdidos eso es falso: el orden es `created_at desc`, así que
  * volver a apretar NUNCA alcanza a los más viejos que la ventana. El copy hermano de esta misma
- * tarjeta ya nombra el número (`sinAbiertosCopy`, `flow-vm.ts:322`), así que el estándar del repo para
+ * tarjeta ya nombra el número (`sinAbiertosCopy`, `flow-vm.ts:327`), así que el estándar del repo para
  * esta pantalla es decirlo.
  *
  * POR QUÉ SON FUNCIONES Y NO CONSTANTES: `maxCandidates` entra por parámetro, con el molde exacto de

@@ -155,7 +155,7 @@ describe("AC-8: qué se dice ANTES de abrir ningún diálogo de firma", () => {
     abrirPuerta(new FakeSolanaCloseableEscrowLister([]));
     const texto = document.body.textContent ?? "";
     expect(texto).toContain("0,0040");
-    expect(texto).not.toContain("0,0041"); // ceil, o el umbral de depósito
+    expect(texto).not.toContain("0,0041"); // ceil del alquiler. ⚠️ WKH-347: ya NO es también el umbral de depósito, que pasó a "0,0089"; la aserción sigue valiendo por el ceil
     expect(texto).not.toContain("0,0047"); // floor del alquiler del índice
     expect(texto).not.toContain("0,0048"); // ceil del mismo
     expect(texto).not.toContain("0,0087"); // floor de la suma con el índice

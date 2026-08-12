@@ -338,9 +338,22 @@ export class ConfirmAndSend {
       return r;
     }
     // GUARD DE RENT — ¿le alcanza el SOL al remitente para las cuentas que crea el depósito? El fee lo paga
-    //     el facilitator, el RENT de `escrow_state` + vault + `escrow_index` NO: sale de la billetera
-    //     de quien envía (`payer = sender`). Ver `solana-escrow-rent.ts` para el número y su
-    //     derivación, y `SOLANA_SENDER_SOL_INSUFFICIENT` para qué se veía antes en la pantalla.
+    //     el facilitator, el RENT NO: sale de la billetera de quien envía (`payer = sender`). Ver
+    //     `solana-escrow-rent.ts` para el número y su derivación, y `SOLANA_SENDER_SOL_INSUFFICIENT`
+    //     para qué se veía antes en la pantalla.
+    //
+    //     ⚠️ CUÁLES CUENTAS, CON PRECISIÓN, porque esta línea decía de más antes de WKH-347. El rent de
+    //     `escrow_state` y del vault lo paga el remitente SIEMPRE. El de `escrow_index` lo paga sólo la
+    //     PRIMERA vez, y sólo si la transacción lleva `register_escrow`: no lo paga cuando el índice ya
+    //     existe, ni cuando está lleno, ni cuando la sonda del índice no pudo leerse (en esos dos
+    //     últimos casos el depósito sale con UNA sola instrucción de negocio). Antes de WKH-347 esta
+    //     línea lo nombraba y NINGUNA transacción lo pagaba, lo cual la volvía directamente falsa.
+    //
+    //     ⚠️ Y AUN ASÍ EL UMBRAL LO PIDE SIEMPRE, que no es lo mismo que cobrarlo siempre: el umbral es
+    //     ÚNICO a propósito. Un umbral condicional obligaría a que la lectura del índice de este guard y
+    //     la de `authorizePrincipal` coincidan, separadas por una llamada de red, y si divergen en un
+    //     sentido el depósito REVIERTE EN CADENA. El costo del umbral único está escrito sin suavizar en
+    //     el docblock de la constante.
     //
     //     ⚠️ CORRE ACÁ, ANTES DEL PREPARE, y eso importa: prepare crea una orden de payout real
     //     server-side. Cortar después dejaría una orden huérfana por una causa que ya sabíamos.

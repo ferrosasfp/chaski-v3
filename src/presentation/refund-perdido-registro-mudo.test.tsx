@@ -126,10 +126,25 @@ function buscarConElContainerReal() {
 // decisión de redacción sobre el dinero: dos ediciones y un diff que muestra el texto nuevo entero.
 // El NÚMERO sí sale de la constante que sondea, para que el copy no pueda quedar diciendo un número
 // que el código dejó de usar.
+// 🔴 WKH-347 — ESTE LITERAL SE ACTUALIZÓ A MANO, y es exactamente el costo que el párrafo de arriba
+// anticipó ("reescribir el copy en `flow-vm.ts` y NO tocar este literal deja 2 rojos... se arregla
+// reescribiendo ESTE literal, sin relajar ningún predicado"). Pasó eso: se reescribió el copy, este
+// literal quedó rojo, y se reescribió acá. Ningún predicado se relajó.
+//
+// QUÉ CAMBIÓ EN EL TEXTO, y por qué es un cambio de ALCANCE y no de mecanismo: antes nombraba UNA sola
+// fuente ("los últimos N envíos que el servidor tiene guardados"). Desde WKH-347 la búsqueda mira DOS
+// —la ventana del servidor y el índice on-chain de la billetera— y el copy tiene que nombrar las dos,
+// porque afirmar "no encontramos" habiendo mirado una sola sería afirmar de más sobre la otra.
+//
+// El NÚMERO sigue saliendo de la constante que sondea, no de un literal escrito acá, para que el copy no
+// pueda quedar diciendo un número que el código dejó de usar. El índice NO aporta número: su cupo no es
+// una ventana que la persona pueda entender como "los últimos N", y prometer un número ahí sería
+// inventarle un límite al índice que el código no aplica (los `entries` se sondean ENTEROS).
 const COPY_LEGÍTIMO_DEL_NO_ENCONTRAMOS =
   `No encontramos escrows abiertos para esta billetera. Esto no dice que no tengas fondos: dice que ` +
   `ninguno de los últimos ${MAX_RECOVERY_CANDIDATES} envíos que el servidor tiene guardados de esta ` +
-  `billetera está abierto en el contrato.`;
+  `billetera, ni ninguno de los que la cadena tiene registrados en el índice de esta billetera, está ` +
+  `abierto en el contrato.`;
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
 // LAS MARCAS DE DUDA, QUE SIGUEN VIGILANDO EL OTRO LADO

@@ -481,7 +481,7 @@ describe("flow-vm: lostEscrowRecoveryError — la firma no completada no es un f
     const copy = lostEscrowRecoveryError("escrow_not_found", MAX_RECOVERY_CANDIDATES);
     expect(copy).toContain("No encontramos escrows abiertos");
     expect(copy).toContain(`los últimos ${MAX_RECOVERY_CANDIDATES} envíos`);
-    expect(copy).not.toContain("aceptá la firma");
+    expect(copy).not.toContain("aceptá la firma"); expect(copy).toContain("índice"); // WKH-347: EN ESTA LÍNEA, no en una nueva — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número y ese archivo está fuera del Scope IN. Ahora el copy nombra la SEGUNDA fuente: afirmar "no encontramos" habiendo mirado una sola de las dos sería afirmar de más sobre la otra
   });
 
   // 🔴 EL CONTROL DE ARRIBA PROTEGÍA UN SOLO CÓDIGO, Y NO ALCANZA (AR/MNR-1). Medido: ensanchando la
@@ -1344,5 +1344,97 @@ describe("flow-vm — esVentanaSinAbiertos (WKH-346 fix-pack)", () => {
     );
     // Y el número sale del parámetro, no de un literal: llamado con otro valor, el texto lo refleja.
     expect(sinAbiertosCopy(7)).toContain("los últimos 7 envíos");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// T-347-14 / T-347-16 / T-347-17 · WKH-347 — LOS DOS CÓDIGOS NUEVOS DEL ÍNDICE ON-CHAIN
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// ⛔ ESTE BLOQUE VA AL FINAL DEL ARCHIVO, y no es prolijidad. `http-pop-signer.ts:33` está marcado
+// NO-TOUCH y cita `flow-vm.test.ts:520` POR NÚMERO, y ese archivo está fuera del Scope IN de esta HU.
+// Cualquier inserción aguas arriba de esa línea la rompe, y ningún guard la mira porque es prosa. MEDIDO
+// en esta misma HU: la primera versión de este bloque estaba arriba y desplazó `:520` a `:595`.
+// ⛔ Antes de insertar acá arriba, buscá quién cita este archivo por número de línea.
+describe("flow-vm — los desenlaces del índice on-chain (WKH-347)", () => {
+  // Los códigos van escritos A MANO, igual que `CODIGOS_DEL_REGISTRO_MUDO`: si salieran de la función
+  // vigilada, el test se aplaudiría a sí mismo.
+  const CODIGOS_DEL_INDICE = ["escrow_index_absent", "escrow_index_unreadable"] as const;
+
+  // 🔴 T-347-16 — EL CONTROL DE ORDEN DE RAMAS PARA LAS DOS RAMAS NUEVAS. Se insertaron DELANTE de
+  // `escrow_not_found`, y el argumento de que eso es seguro es que ninguno de los dos literales contiene
+  // esa subcadena. Eso NO se supone: se asserta acá, porque es lo único que impide que un rename futuro
+  // (digamos `escrow_not_found_in_index`) le robe los casos a la rama de abajo en silencio.
+  it("T-347-16 (AC-11): los códigos del índice NO contienen escrow_not_found y no le roban casos", () => {
+    for (const code of CODIGOS_DEL_INDICE) {
+      expect(code).not.toContain("escrow_not_found");
+      // Y el desenlace real: cada uno sale por SU texto, no por el de la ventana vacía.
+      const copy = lostEscrowRecoveryError(code, MAX_RECOVERY_CANDIDATES);
+      expect(copy).not.toBe(sinAbiertosCopy(MAX_RECOVERY_CANDIDATES));
+      expect(copy).not.toContain("No encontramos escrows abiertos");
+      expect(copy).not.toContain("aceptá la firma");
+    }
+    // Los dos textos son DISTINTOS entre sí: colapsarlos diría lo mismo sobre "la cadena contestó que no
+    // hay índice" y "no pudimos leer el índice", que autorizan afirmaciones distintas.
+    const [ausente, ilegible] = CODIGOS_DEL_INDICE.map((c) =>
+      lostEscrowRecoveryError(c, MAX_RECOVERY_CANDIDATES),
+    );
+    expect(ausente).not.toBe(ilegible);
+    // Y ninguno de los dos cae en la red de seguridad, que es lo que pasaría si la rama no existiera.
+    // Sin este assert, los `not.toBe` de arriba los satisface el texto genérico de "algo se cortó".
+    expect(ausente).not.toContain("Algo se cortó antes de terminar");
+    expect(ilegible).not.toContain("Algo se cortó antes de terminar");
+  });
+
+  // 🔴 T-347-16 (segunda mitad) — `esVentanaSinAbiertos` devuelve `false` para los dos. No es un detalle:
+  // esa función es la que decide si la pantalla dice "la ventana no tiene ninguno abierto", y ni "no hay
+  // índice" ni "no pude leerlo" son eso. Sale gratis porque DELEGA en `lostEscrowRecoveryError`, y este
+  // test es lo que prueba que la delegación alcanzó, en vez de suponerlo.
+  it("T-347-16 (AC-11): esVentanaSinAbiertos es false para los dos códigos del índice", () => {
+    for (const code of CODIGOS_DEL_INDICE) {
+      expect(esVentanaSinAbiertos(code, MAX_RECOVERY_CANDIDATES)).toBe(false);
+    }
+    // Control positivo, sin el cual los dos `false` de arriba los daría cualquier función: el código que
+    // SÍ es "la ventana no tiene ninguno abierto" sigue dando `true`.
+    expect(esVentanaSinAbiertos("escrow_not_found", MAX_RECOVERY_CANDIDATES)).toBe(true);
+  });
+
+  // 🔴 T-347-17 (AC-8/CD-8) — LO QUE ESTOS TEXTOS NO PUEDEN DECIR. Las tres frases prohibidas son las
+  // tres formas de afirmar de más que esta HU tiene enfrente: negar los fondos de la persona, negar que
+  // haya envíos, y prometer que el problema ya no puede pasar. La tercera es la que más tienta al
+  // escribir el copy de una HU que "arregla" algo: esta HU NO vuelve imposible el depósito huérfano, lo
+  // vuelve ENCONTRABLE, y el copy no puede insinuar lo primero.
+  it("T-347-17 (AC-8/CD-8): los textos del índice no afirman sobre los fondos ni prometen imposibles", () => {
+    for (const code of CODIGOS_DEL_INDICE) {
+      const copy = lostEscrowRecoveryError(code, MAX_RECOVERY_CANDIDATES);
+      expect(copy).not.toContain("no tenés");
+      expect(copy).not.toContain("no hay envíos");
+      expect(copy).not.toContain("ya no puede pasar");
+      // Y la propiedad POSITIVA, sin la cual las tres negaciones las satisface un texto vacío: los dos
+      // dicen explícitamente que esto no responde sobre los fondos. La regexp es case-insensitive porque
+      // los dos textos lo dicen en posiciones distintas de la oración ("No es..." al empezar una frase en
+      // uno, "Esto no es..." en el otro), y lo que importa es la afirmación, no la mayúscula.
+      expect(copy).toMatch(/no es una respuesta sobre tus fondos/i);
+    }
+  });
+
+  // 🔴 LA CLÁUSULA QUE CIERRA LA OBJECIÓN DEL GATE, y tiene test propio porque es la primera que se cae
+  // al "pulir" el copy. `escrow_index_absent` es compatible con TRES historias, y una es que el depósito
+  // ocurrió y NOSOTROS no pudimos registrarlo (índice lleno, o sonda ilegible). Sin esa cláusula el texto
+  // le echaría la culpa a la persona por algo que hicimos nosotros.
+  it("T-347-17: el texto de índice ausente nombra las TRES historias, incluida la culpa nuestra", () => {
+    const copy = lostEscrowRecoveryError("escrow_index_absent", MAX_RECOVERY_CANDIDATES);
+    expect(copy).toContain("nunca depositaste");
+    expect(copy).toContain("antes de que empezáramos a registrar");
+    expect(copy).toContain("no pudimos registrarlo"); // 🔑 la que cierra la objeción del gate
+  });
+
+  // 🔴 T-347-14 (CD-17) — EL NÚMERO DEL COPY SALE DE LA CONSTANTE, NO DE UN LITERAL. Es el guard contra
+  // que alguien escriba "0,0089" a mano en la pantalla: si el umbral se mueve, el texto se mueve con él.
+  it("T-347-14 (AC-7/CD-17): el texto del umbral se DERIVA de la constante, no está escrito a mano", () => {
+    const texto = formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEPOSIT);
+    expect(texto).toBe("0,0089"); // el valor de hoy, para que el diff muestre el número que se movió
+    // Y la derivación: con OTRO valor el texto cambia. Un literal escrito a mano no lo haría.
+    expect(formatLamportsAsSol(4_100_000)).toBe("0,0041");
+    expect(formatLamportsAsSol(4_100_000)).not.toBe(texto);
   });
 });

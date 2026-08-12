@@ -567,7 +567,7 @@ describe("flow-vm: el default de lostEscrowRecoveryError no llama fracaso a un '
 // 🔴 LA FASE DE LA CONEXIÓN, que decía "no sabemos" sabiendo (AR/MNR-9). Medido con probe: estos
 // códigos salían por la red de seguridad ("Algo se cortó antes de terminar. No sabemos hasta dónde
 // llegamos"), y para ellos eso es tan falso como el defecto que la HU cierra, sólo que en el otro
-// sentido: los cinco los tira el adapter de la wallet (`connect`, `solana-wallet.ts:171`), que corre
+// sentido: los cinco los tira el adapter de la wallet (`connect`, `solana-wallet.ts:188`), que corre
 // ANTES de que exista una address con la que preguntarle nada al registro. No se abrió la billetera,
 // no se firmó, no se preguntó. Es preexistente: antes de WKH-331 decían "No pudimos recuperar los
 // fondos", que era peor.

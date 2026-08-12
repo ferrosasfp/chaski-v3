@@ -738,7 +738,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
 
   // T12 — el ÚNICO test que mira el PAYLOAD. T1..T6 assertan sobre `capturedTx(signSpy)`, que es el
   // objeto que Chaski le ENTREGA a la billetera. Lo que producción serializa y postea es lo que la
-  // billetera DEVUELVE (`remainingAccounts`, `solana-wallet.ts:461`), y en producción puede ser otro objeto: el
+  // billetera DEVUELVE (`remainingAccounts`, `solana-wallet.ts:610`), y en producción puede ser otro objeto: el
   // adapter serializa `signed`, no `tx`. Si una billetera real agrega sus propias ComputeBudget
   // —el escenario que esta HU declara que NO puede impedir (sdd.md §11.1)—, Chaski postea esa tx
   // sin chistar y ninguno de los seis se entera, porque todos miran el objeto de entrada.
@@ -939,18 +939,47 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
       // que necesitan turnos REALES del event loop. Avanzando sólo el reloj falso, el adapter no llega
       // nunca a crear el timer (medido: `getAccountInfo` no se llamaba ni una vez y `vi.getTimerCount()`
       // se quedaba en cero) y el test moría por timeout de vitest con la implementación correcta puesta.
-      // Por eso cada vuelta hace las dos cosas: un `setImmediate` real y un avance del reloj falso.
       //
-      // REFUTADO: bajando el presupuesto del bucle a 400 ms de tiempo falso, este test FALLA. O sea que
-      // lo que lo pone en verde es el techo venciendo, no otra cosa que resuelva la promesa.
+      // 🔴 Y POR QUÉ SON DOS FASES Y NO UNA (WKH-347, arreglo de un FLAKE que viajó en el commit de W1).
+      // La forma de una sola fase hacía las dos cosas en cada vuelta —un turno real y un avance del
+      // reloj— con UN presupuesto compartido de 200 vueltas. Eso ACOPLA el presupuesto de turnos reales
+      // al de tiempo falso: mientras los `import()` no terminan, el timer del techo todavía no existe y
+      // cada avance del reloj gasta vuelta sin efecto. MEDIDO: en la suite completa (113 archivos en
+      // paralelo) los imports tardaban más de 150 vueltas, el bucle se quedaba sin presupuesto con
+      // `resuelta === false`, y el `await p` de abajo colgaba hasta el timeout de 30 s de vitest. En
+      // aislamiento el mismo test pasaba. Y arrastraba a T-347-6: al abortar por timeout, el `finally`
+      // no corre, así que los fake timers quedaban puestos y la llamada abandonada seguía en vuelo.
+      //
+      // Las dos fases desacoplan los presupuestos: primero turnos REALES hasta que el techo exista, sin
+      // tocar el reloj; después el reloj, que ya tiene a quién vencer.
       let resuelta = false;
       void p.then(() => {
         resuelta = true;
       });
-      for (let i = 0; i < 200 && !resuelta; i++) {
+      // 🔴 EL PRESUPUESTO DE ESTA FASE SE MIDE EN TIEMPO REAL Y NO EN VUELTAS, y esa distinción es todo
+      // el arreglo del flake. Un tope de VUELTAS lo agota la carga de la máquina: los `import()`
+      // dinámicos esperan I/O de transformación del módulo, y un `setImmediate` cede el event loop pero
+      // NO espera a ese I/O, así que 2000 vueltas pueden pasar volando en milisegundos sin que el módulo
+      // termine de resolverse. MEDIDO: con tope de 2000 vueltas la suite completa falló acá en una
+      // corrida y pasó en la siguiente sin tocar una línea — o sea que el tope no medía lo que había que
+      // esperar. `Date.now()` NO está falseado (sólo `setTimeout`/`clearTimeout`), así que este tope le
+      // da a la máquina lenta el tiempo que necesite y sigue cortando si el techo no se arma nunca.
+      const t0 = Date.now();
+      while (vi.getTimerCount() === 0 && Date.now() - t0 < 10_000) {
         await new Promise((r) => setImmediate(r)); // deja avanzar el event loop REAL (lazy-imports)
+      }
+      // 🔴 REFUTACIÓN OBLIGATORIA, y es lo que impide que este test sea un falso verde: si el techo NO
+      // llegó a armarse, lo que venga después no prueba nada sobre el techo — la promesa podría resolver
+      // por cualquier otro camino. Sin este assert, la fase 2 aplaudiría cualquier cosa.
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      // REFUTADO: bajando el presupuesto de ESTA fase a 400 ms de tiempo falso, este test FALLA. O sea
+      // que lo que lo pone en verde es el techo venciendo, no otra cosa que resuelva la promesa.
+      for (let i = 0; i < 200 && !resuelta; i++) {
+        await new Promise((r) => setImmediate(r));
         await vi.advanceTimersByTimeAsync(100);
       }
+      // Antes que el `await p`: si no resolvió, este assert lo dice en una línea en vez de colgar 30 s.
+      expect(resuelta).toBe(true);
       const res = await p;
       expect(businessIx(capturedTx(signSpy))).toHaveLength(1);
       expect(res.solana?.partialSignedTx).toBeTruthy();

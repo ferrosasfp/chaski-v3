@@ -290,7 +290,7 @@ export function escrowRefundError(code: string): string {
  *  · En la acción normal el id es conocido, así que "no encontramos un depósito tuyo en el escrow"
  *    habla de UNA remesa concreta y la frase de `escrowRefundError` es correcta.
  *  · Acá el id no existe: se le pide la lista al store durable server-side y se sondean hasta
- *    `maxCandidates` PDAs on-chain (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:324`). `escrow_not_found` sale de DOS
+ *    `maxCandidates` PDAs on-chain (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:341`). `escrow_not_found` sale de DOS
  *    situaciones que no se distinguen desde afuera: el servidor no devolvió ningún id, o ninguno de
  *    los sondeados estaba `Deposited`. Ninguna de las dos prueba que la persona no tenga fondos.
  *
@@ -334,7 +334,7 @@ export function lostEscrowRecoveryError(code: string, maxCandidates: number): st
   // llegamos" (AR/MNR-9). Acá SÍ sabemos: no se llegó a nada. Esta puerta arranca con
   // `resolveSender()` → `connectWallet.execute()` → `SolanaWalletAdapter.connect()`, y estos códigos
   // salen todos de ese método ANTES de que exista una address con la que preguntarle nada al registro
-  // (`connect`, `solana-wallet.ts:171`): `wallet_bridge_not_mounted` lo tira `openModal` si el árbol
+  // (`connect`, `solana-wallet.ts:188`): `wallet_bridge_not_mounted` lo tira `openModal` si el árbol
   // de providers no montó; los otros cuatro rechazan `waitForConnection`, tres de ellos vía
   // `walletErrorCode` desde el `onError` del provider (`failConnection`, `solana-providers.tsx:213`)
   // e `invalid_address` desde el chequeo base58 del propio adapter.
@@ -440,7 +440,7 @@ export function escrowRentExplainer(voice: "discovery" | "remittance"): {
  *
  * ⚠️ El texto de "confirmed" NO menciona los USDC, y es una regla, no una omisión: lo único que la
  * ausencia de `escrow_state` prueba es que las dos cuentas se cerraron. A dónde fue la plata no lo
- * dice — es la misma trampa que `probeEscrowRefunded` ya tiene escrita (`probeEscrowRefunded`, `solana-wallet.ts:891`).
+ * dice — es la misma trampa que `probeEscrowRefunded` ya tiene escrita (`probeEscrowRefunded`, `solana-wallet.ts:1051`).
  */
 export function escrowCloseSentCopy(confirmation: "confirmed" | "pending" | "unknown"): string {
   if (confirmation === "confirmed")

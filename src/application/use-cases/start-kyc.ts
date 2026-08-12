@@ -8,6 +8,9 @@ import type {
   RemittanceRepository,
   WalletPossessionProof,
 } from "../ports";
+// WKH-348/AC-4: la marca estable se IMPORTA del money-path, no se duplica. Un segundo código con el
+// mismo significado obliga a la UI a tener dos copys para la misma causa.
+import { WALLET_ADDRESS_UNAVAILABLE } from "./confirm-and-send";
 
 /**
  * Inicia la verificación de identidad.
@@ -61,6 +64,26 @@ export class StartKyc {
      *  sesión se crea igual pero SIN ATAR, así que no produce fila del veredicto (CD-15/AC-13). */
     kycProof?: WalletPossessionProof;
   }): Promise<StartKycResult> {
+    // WKH-348/AC-4 — SIN address no hay a quién verificar, y el diagnóstico tiene que decir ESO.
+    //
+    // Sin este guard, la cadena vacía viajaba hasta `this.kycStore.get(...)`, que canonicaliza base58
+    // y tira `address_canonicalization_failed`: un diagnóstico falso que manda a mirar el KYC o la
+    // canonicalización cuando lo único que hay que hacer es reconectar la billetera. Es la misma marca
+    // estable y la misma condición que ya usa el money-path (`WALLET_ADDRESS_UNAVAILABLE`), y su copy
+    // ya existe.
+    //
+    // 🚫 ESTO NO "CIERRA EL ÚNICO PRODUCTOR VIVO" de una `ownerAddress` vacía: ninguno quedó
+    // confirmado vivo desde el repo. Medido: el `kycStore.get` de abajo es incondicional y precede a
+    // todos los `repo.save(r)` de este use-case, así que con `address === ""` ya se tiraba antes de
+    // cualquier escritura. Lo que cambia, y es verificable: el diagnóstico pasa a ser el correcto, y
+    // la barrera deja de depender del throw de un caché declarado NO crítico para ser explícita.
+    //
+    // Va como PRIMERA línea y no "justo antes de `r.startKyc`": es más estricto, no cambia ningún
+    // desenlace (con la address vacía no hay nada que hacer con la remesa) y hace la posición
+    // observable con un espía, que es la única aserción que distingue las dos posiciones (T-6c).
+    if (input.address == null || input.address.trim() === "") {
+      throw new Error(WALLET_ADDRESS_UNAVAILABLE);
+    }
     const r = await this.repo.get(input.remittanceId);
     if (!r) throw new Error("remittance_not_found");
     const s = r.snapshot;

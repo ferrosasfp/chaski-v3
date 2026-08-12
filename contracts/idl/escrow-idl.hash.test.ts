@@ -20,10 +20,10 @@ import { canonicalSha256 } from "./canonical-hash";
 // desplegado EXIGE las 9 cuentas y Anchor tolera de más pero no de menos, así que con el IDL viejo
 // `authorizePrincipal` armaba la ix con 8 y TODO depósito fallaba. Por eso el fix del cliente
 // (mandar la cuenta explícita) viaja en el mismo commit que este re-pin.
-// ⚠️ NO alineado con wasiai-facilitator al momento de escribir esto: su pin sigue en `bfbdfe5a…`
-// (wasiai-facilitator/src/chains/escrow-idl.hash.test.ts:39). Es un pin de test, no un guard de
-// runtime; el guard que sí corre en el camino del dinero es CR-1, que acepta cuentas extra desde el
-// índice 8 si son no-signer y no-writable (src/methods/solana-sponsor/cr1.ts:284-288) — y ésta lo es.
+// ✅ YA alineado con wasiai-facilitator: su pin activo también es este valor, medido el 2026-08-11
+// (su `ESCROW_IDL_SHA256`; el `bfbdfe5a…` que hay ahí es el comentario `Anterior:`, no el pin).
+// Igual conviene saberlo: esto es un pin de test, no un guard de runtime. El guard que sí corre en
+// el camino del dinero es CR-1, que acepta cuentas extra no-signer y no-writable desde el índice 8.
 // Anterior: bfbdfe5aedd55d68e6dda4663b5d26daada815c99db03df34a1601fe4a4d3922.
 // RE-PIN 2026-08-05 — despliegue en devnet (slot 481495859, binario verificado byte a byte contra
 // el artefacto local). Motivo, medido con un diff normalizado del IDL entero (claves ordenadas):

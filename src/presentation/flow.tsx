@@ -2090,7 +2090,7 @@ export function LostEscrowRecovery({
   // pantalla contaba como UN relato el comprobante de A y el cierre de ventana de B, suprimiendo el
   // error de B con un éxito que no fue de B. Cada frase era cierta; el compuesto y el "esta billetera"
   // no. Los códigos que NO lo prenden están enumerados en `esVentanaSinAbiertos`
-  // (`esVentanaSinAbiertos`, `flow-vm.ts:1048`), en su docblock de `flow-vm.ts:991-995`.
+  // (`esVentanaSinAbiertos`, `flow-vm.ts:1048`), en su docblock de `flow-vm.ts:1042-1046`.
   const [sinAbiertos, setSinAbiertos] = useState<string | null>(null);
   // La identidad de la ÚLTIMA búsqueda. Todo lo que la tarjeta muestra se filtra por acá: la frase de
   // cierre dice "esta billetera", así que no puede estar al lado del comprobante de otra.

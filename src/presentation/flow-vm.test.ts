@@ -18,7 +18,7 @@ import {
   deliveredDisplay,
   escrowFundsAtRisk,
   escrowFundsKnowledge,
-  escrowKnowledgeCopy, escrowOutcome, escrowOutcomeDisplay, type EscrowChainAnswer, type EscrowKnowledge, type EscrowOutcome, // WKH-349: EN ESTA LÍNEA, no en cinco nuevas — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número y está debajo de acá
+  escrowKnowledgeCopy, escrowOutcome, escrowOutcomeDisplay, type EscrowChainAnswer, type EscrowKnowledge, type EscrowOutcome, historyGroupFor, HISTORY_GROUP_ORDER, HISTORY_GROUP_HEADING, type HistoryGroup, // WKH-349: EN ESTA LÍNEA, no en cinco nuevas — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número y está debajo de acá
   escrowRefundError,
   escrowRentDiscoveryError,
   humanError,
@@ -1765,5 +1765,107 @@ describe("WKH-349 · escrowOutcome / escrowOutcomeDisplay", () => {
     // Las dos pesan igual: el peso dice "hay plata", no "es urgente".
     expect(vencida.emphasis).toBe("strong");
     expect(abierta.emphasis).toBe("strong");
+  });
+});
+
+/**
+ * WKH-350 · LA AGRUPACIÓN DEL HISTORIAL, DEL LADO PURO.
+ *
+ * Estos tres tests fijan el par (texto del encabezado, conjunto de miembros) en LAS DOS MITADES: los
+ * cuatro literales están escritos a mano acá y los cuatro conjuntos también. Cambiar una sola mitad en
+ * producción los pone rojos.
+ *
+ * ⚠️ HASTA DÓNDE LLEGA ESTE CANDADO, dicho para que nadie lo sobreestime: NO puede juzgar si un par
+ * NUEVO es honesto. Si alguien cambia las dos mitades a la vez y de forma coherente, o sea un
+ * encabezado mentiroso con miembros que le calzan, ESTOS TESTS SE PONEN VERDES. Lo único que eliminan
+ * es el drift de una mitad respecto de la otra, que es como esto se rompe en la práctica. CD-10 sigue
+ * necesitando un humano en la revisión.
+ *
+ * 🔴 REGLA DEL ARCHIVO: cada test nombra la edición plausible que lo pone en rojo.
+ */
+describe("WKH-350 · agrupación del historial", () => {
+  // 🔴 T-H1 (AC-4, AC-5) — LOS 4 ENCABEZADOS Y SU ORDEN, COMO LITERALES ESCRITOS ACÁ.
+  // No se derivan del módulo a propósito: un test que le pregunta al código qué texto produce y
+  // después verifica que produjo ese texto es un guard que se compara consigo mismo.
+  // MUTANTE: cambiar cualquiera de los 4 textos en producción. Por ejemplo el tercero a "Resueltos",
+  // que es justo el encabezado que la revisión sacó por afirmar un final que sus miembros no tienen.
+  // Otro mutante que mata: reordenar HISTORY_GROUP_ORDER, alfabético o invertido.
+  it("T-H1: los 4 encabezados y el orden de render son exactamente los acordados", () => {
+    expect(HISTORY_GROUP_HEADING.firma).toBe("Necesitan tu firma");
+    expect(HISTORY_GROUP_HEADING["con-plata"]).toBe("Con plata en el escrow");
+    expect(HISTORY_GROUP_HEADING["sin-plata"]).toBe("Sin plata en el escrow");
+    expect(HISTORY_GROUP_HEADING["sin-respuesta"]).toBe("Sin respuesta sobre tu plata");
+    expect(HISTORY_GROUP_ORDER).toEqual(["firma", "con-plata", "sin-plata", "sin-respuesta"]);
+  });
+
+  // 🔴 T-H2 (CD-10, mitad temporal) — NINGÚN ENCABEZADO HABLA DE PLAZOS.
+  // Ninguna de las filas que caen en estos grupos sostiene una afirmación sobre el tiempo: a
+  // `in-escrow` no se le pregunta a la cadena, así que no se sabe si está en plazo, y la frase por
+  // fila de `chain-deposited-window-open` calla el plazo a propósito.
+  // MUTANTE: reintroducir el encabezado que la revisión sacó, "Con plata en el escrow, todavía en
+  // plazo". Rojo por "todavía" y por "plazo".
+  it("T-H2: ningún encabezado afirma nada sobre plazos ni sobre el tiempo", () => {
+    const PROHIBIDAS = [
+      "plazo",
+      "vence",
+      "venci",
+      "venció",
+      "todavía",
+      "todavia",
+      "aún",
+      "aun ",
+      "a tiempo",
+      "deadline",
+      "expira",
+      "caduca",
+      "tiempo",
+      "pronto",
+    ];
+    const encontradas: string[] = [];
+    for (const g of HISTORY_GROUP_ORDER) {
+      const texto = HISTORY_GROUP_HEADING[g].toLowerCase();
+      for (const p of PROHIBIDAS) if (texto.includes(p)) encontradas.push(`${g}: «${p}»`);
+    }
+    expect(encontradas).toEqual([]);
+  });
+
+  // 🔴 T-H3 (CD-10, mitad de pertenencia) — QUÉ DESENLACES VAN A CADA GRUPO, ESCRITO A MANO.
+  // Los 4 conjuntos suman los 11 EscrowOutcome, sin solapamiento y sin sobrantes. El `Record`
+  // exhaustivo de abajo es lo que hace que "sin sobrantes" lo verifique `tsc` y no mi memoria: si el
+  // tipo gana un valor y nadie lo agrega acá, este archivo deja de compilar.
+  // MUTANTES, cualquiera de los tres pone rojo: mover `chain-released` a "con-plata" (haría que "Con
+  // plata en el escrow" mienta sobre una fila cuya plata ya salió); mover `unverified` a "con-plata"
+  // ("probablemente tenga plata" es justo la invención que AC-7 prohíbe); mover `no-deposit` a
+  // "sin-respuesta" (sí hubo respuesta: nunca se depositó).
+  it("T-H3: cada uno de los 11 desenlaces cae en su grupo, sin solapamiento y sin sobrantes", () => {
+    const ESPERADO: Record<HistoryGroup, EscrowOutcome[]> = {
+      firma: ["chain-deposited-window-closed"],
+      "con-plata": ["in-escrow", "chain-deposited-window-open"],
+      "sin-plata": ["returned", "chain-refunded", "chain-released", "no-deposit"],
+      "sin-respuesta": ["unverified", "chain-pending", "chain-absent", "chain-unknown"],
+    };
+    // El universo, exhaustivo por `tsc`: los 4 locales + los 7 de cadena.
+    const TODOS: Record<EscrowOutcome, true> = {
+      "no-deposit": true,
+      "in-escrow": true,
+      returned: true,
+      unverified: true,
+      "chain-deposited-window-open": true,
+      "chain-deposited-window-closed": true,
+      "chain-released": true,
+      "chain-refunded": true,
+      "chain-absent": true,
+      "chain-unknown": true,
+      "chain-pending": true,
+    };
+    // Cada miembro escrito a mano cae donde se dijo.
+    for (const g of HISTORY_GROUP_ORDER) {
+      for (const o of ESPERADO[g]) expect(historyGroupFor(o)).toBe(g);
+    }
+    // Sin solapamiento y sin sobrantes: los 4 conjuntos particionan los 11 valores del tipo.
+    const escritos = HISTORY_GROUP_ORDER.flatMap((g) => ESPERADO[g]);
+    expect(escritos).toHaveLength(11);
+    expect(new Set(escritos).size).toBe(11);
+    expect([...escritos].sort()).toEqual((Object.keys(TODOS) as EscrowOutcome[]).sort());
   });
 });

@@ -235,6 +235,17 @@ export function createContainer(): Container {
     // se pone rojo.
     closeEscrowAccounts: new CloseEscrowAccounts(solanaClose, wallet),
     solanaCloseableEscrows: wallet, // WKH-327/AC-8: el descubrimiento se lo pregunta a la cadena
+    // WKH-349. El MISMO adapter otra vez, y va acá abajo por el mismo motivo que las dos entradas de
+    // arriba: las 8 líneas citadas por número de este archivo están todas arriba.
+    //
+    // 🔴 ESTA LÍNEA ES EL MUTANTE MÁS PELIGROSO DE LA HU, y es el mismo perfil que documenta el
+    // comentario de `renovarVentana`: el campo es OPCIONAL en `Container` (lo tiene que ser para que el
+    // test-container pueda no pasarlo), así que borrar esta línea deja `tsc` en exit 0 y la suite
+    // entera en verde —los tests de la pantalla inyectan su propio doble— mientras EN PRODUCCIÓN el
+    // historial no le pregunta nada a la cadena y todas las filas vuelven a decir "no comprobamos".
+    // El único test que lo ve es T-C1 en `container.test.ts`, porque ejercita el objeto que ESTA
+    // LÍNEA devuelve en vez de uno armado a mano.
+    solanaEscrowStates: wallet,
   };
 }
 

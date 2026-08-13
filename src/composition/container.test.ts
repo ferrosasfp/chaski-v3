@@ -598,3 +598,35 @@ describe("createContainer — WKH-339: el gesto de renovar enciende la ventana q
     }
   });
 });
+
+/**
+ * WKH-349/CD-17 — EL CABLEADO del lector de estado on-chain del historial.
+ *
+ * 🔴 EL MUTANTE MÁS PELIGROSO DE LA HU, y no es una hipótesis: es el mismo perfil que este archivo ya
+ * documenta para `renovarVentana`. `solanaEscrowStates` es OPCIONAL en `Container` —lo tiene que ser
+ * para que `buildTestContainer` pueda no pasarlo—, así que borrar la línea que lo cablea deja `tsc` en
+ * exit 0 y la suite entera en verde: los tests de la pantalla (`history-onchain.test.tsx`) inyectan su
+ * propio doble y nunca tocan este objeto. En producción el historial no le preguntaría nada a la
+ * cadena y todas las filas volverían a decir "no comprobamos si tus USDC siguen en el escrow".
+ *
+ * Acá el objeto bajo prueba es el que DEVUELVE `createContainer()`, no uno construido por el test: es
+ * el mismo criterio que el describe de AC-7 de más arriba, y es la única forma de que este test vea la
+ * línea que vigila.
+ */
+describe("createContainer — WKH-349/CD-17: el historial tiene a quién preguntarle", () => {
+  it("T-C1: `solanaEscrowStates` está cableado, y es el MISMO adapter que el resto usa", () => {
+    const c = createContainer();
+    // (1) Está. Sin esto, la pantalla queda en "no se preguntó" para siempre en producción.
+    expect(c.solanaEscrowStates).toBeDefined();
+    // (2) Y es el adapter de Solana, no un objeto literal que satisfaga la interfaz de un método.
+    expect(c.solanaEscrowStates).toBeInstanceOf(SolanaWalletAdapter);
+    // (3) EL ASERTO QUE MATA AL MUTANTE FINO: es la MISMA instancia que las otras entradas cableadas
+    //     al adapter. Una segunda instancia compilaría igual y hablaría con la misma cadena, pero
+    //     tendría su propio cache de `connect()`, que es exactamente la clase de divergencia que este
+    //     archivo ya pagó una vez con el guard del cierre.
+    expect(c.solanaEscrowStates).toBe(c.solanaCloseableEscrows);
+    expect(c.solanaEscrowStates).toBe(
+      (c.connectWallet as unknown as { wallet: unknown }).wallet,
+    );
+  });
+});

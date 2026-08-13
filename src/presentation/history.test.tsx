@@ -462,3 +462,59 @@ describe("el botón que borra avisa lo que se lleva", () => {
     expect(screen.getByText("Borrar igual")).toBeInTheDocument();
   });
 });
+
+// ── WKH-349 · lo que la pantalla dice cuando NO preguntó ──────────────────────────────────────────
+//
+// La HU le agregó a esta pantalla una segunda capa que le pregunta a la cadena. Estos dos tests fijan
+// que la capa vieja siga entera cuando la nueva no está: "no se preguntó" no puede degradar en "no
+// pudimos preguntar", que es un fallo, ni en "le estamos preguntando", que es una espera eterna.
+describe("WKH-349 · sin reader cableado, el historial dice exactamente lo de siempre", () => {
+  // 🔴 T-R1 (AC-8) — EL COPY DE ANTES, BYTE A BYTE, PARA LAS CUATRO CLASES DE FILA.
+  // MUTANTE: que la ausencia de reader produzca `chain-pending` o `chain-unknown` (por ejemplo,
+  // arrancando el `useState` en `"pending"`). La pantalla acusaría un fallo, o una espera, de una
+  // consulta que NUNCA se emitió. El esperado no se escribe a mano: sale del mismo `escrowKnowledgeCopy`
+  // que producía el texto antes de esta HU, así que si alguien reescribe una de esas cuatro frases el
+  // test la sigue.
+  it("T-R1: las 4 clases de fila muestran el copy de `escrowKnowledgeCopy`, sin desenlace de cadena", async () => {
+    const returned: RemittanceState = {
+      ...depositedSnapshot("rem-returned"),
+      status: "refunded",
+      refundTx: "5xRealSignature",
+      failureReason: ESCROW_REFUNDED_BY_SENDER,
+    };
+    const items = [
+      abandonedSnapshot("rem-nodeposit"), // no-deposit
+      inEscrowSnapshot("rem-inescrow"), // in-escrow
+      returned, // returned
+      depositedSnapshot("rem-unverified"), // unverified
+    ];
+    render(<HistoryView items={items} onOpen={() => {}} onBack={() => {}} />);
+
+    for (const rem of items) {
+      const esperado = escrowKnowledgeCopy(escrowFundsKnowledge(rem));
+      expect(await screen.findByText(esperado)).toBeInTheDocument();
+    }
+    // Y ninguna frase de la capa nueva: no se preguntó, así que no hay nada que contar de la cadena.
+    expect(screen.queryByText(/El contrato dice/)).toBeNull();
+    expect(screen.queryByText(/No pudimos preguntarle al contrato/)).toBeNull();
+    expect(screen.queryByText(/Le estamos preguntando al contrato/)).toBeNull();
+  });
+
+  // 🔴 T-R2 — LAS PROPS NUEVAS SON OPCIONALES, Y ESO LO GARANTIZA `tsc`, NO ESTE ASSERT.
+  // MUTANTE: volver `reader` y `sender` requeridas. El render de más arriba en este mismo archivo
+  // (`<HistoryView items={items} onOpen={() => {}} onBack={() => {}} />`, el del describe "el historial
+  // dice lo que sabe") deja de compilar y `npm run typecheck` se pone rojo.
+  // ⚠️ LO QUE ESTE TEST NO ES: un candado en runtime. Con las props requeridas, vitest transpila sin
+  // chequear tipos y este archivo correría igual; lo que se rompe es `tsc --noEmit`. Por eso el test
+  // existe como REGRESIÓN de comportamiento (la pantalla se ve entera sin las dos props) y el candado
+  // de tipos vive en el gate de typecheck.
+  it("T-R2: la pantalla se renderiza entera con las tres props de siempre", async () => {
+    render(
+      <HistoryView items={[depositedSnapshot("rem-1")]} onOpen={() => {}} onBack={() => {}} />,
+    );
+    expect(await screen.findByText(/Tus envíos/)).toBeInTheDocument();
+    expect(screen.getByText("Mamá")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Ver seguimiento/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Volver/ })).toBeInTheDocument();
+  });
+});

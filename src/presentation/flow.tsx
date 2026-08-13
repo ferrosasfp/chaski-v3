@@ -43,7 +43,7 @@ import {
 } from "../application/agent-rejections"; // hallazgo #75: rechazo del agente ≠ payout fallido
 import { resolveSolanaExplorerTxUrl, resolveSolanaNetworkConfig } from "../infrastructure/chain"; // HU-SOL-13: cluster Solana activo (env-driven) · WKH-346: la URL del visor que enlaza el comprobante
 import type {
-  CloseableEscrow,
+  CloseableEscrow, EscrowChainState, SolanaEscrowChainStateReader, // WKH-349: EN ESTA LÍNEA, no en dos nuevas — las 19 citas por número a este archivo apuntan de `:222` para abajo
   EscrowRefundConfirmation,
   KycVerdictLookup,
   WalletPossessionProof,
@@ -57,7 +57,7 @@ import {
   deliveredDisplay,
   escrowFundsAtRisk,
   escrowFundsKnowledge,
-  escrowKnowledgeCopy,
+  escrowKnowledgeCopy, escrowOutcome, escrowOutcomeDisplay, type EscrowChainAnswer, // WKH-349: EN ESTA LÍNEA, no en tres nuevas — mismo motivo que `:46` y que la línea de `statusDisplay,` de abajo
   escrowCloseError,
   escrowCloseSentCopy,
   escrowRefundError,
@@ -981,7 +981,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
           )}
 
           {step === "history" && history && (
-            <HistoryView items={history} onOpen={onOpenFromHistory} onBack={() => setStep("send")} />
+            <HistoryView items={history} onOpen={onOpenFromHistory} onBack={() => setStep("send")} reader={c.solanaEscrowStates} sender={address} />
           )}
 
           {step === "done" && rem && <Receipt rem={rem} onNew={() => resetTo(setStep, setRem, setPreview)} />}
@@ -2975,11 +2975,61 @@ export function HistoryView({
   items,
   onOpen,
   onBack,
+  reader,
+  sender,
 }: {
   items: RemittanceState[];
   onOpen: (rem: RemittanceState) => void;
   onBack: () => void;
+  // WKH-349. ⚠️ LAS DOS SON OPCIONALES A PROPÓSITO, y no es tolerancia: `history.test.tsx` renderiza
+  // esta pantalla con tres props y sin ellas ese render deja de compilar. Además son el input del caso
+  // "no se preguntó" —distinto de "no pudimos preguntar"—, que sin opcionalidad no se podría escribir.
+  reader?: SolanaEscrowChainStateReader;
+  sender?: string | null;
 }) {
+  // AC-1 + AC-6 + AC-8, en una línea: se pregunta por el COMPLEMENTO EXACTO de lo que el snapshot ya
+  // sabe. Las filas `no-deposit`, `in-escrow` y `returned` no entran, así que no cuestan ni una cuenta
+  // en el batch ni pueden recibir un desenlace de cadena que contradiga su marcador local.
+  const idsAConsultar = useMemo(
+    () => items.filter((r) => escrowFundsKnowledge(r) === "unverified").map((r) => r.id),
+    [items],
+  );
+  // Tres formas y no un booleano: "no se preguntó" (`not-asked`), "se preguntó y no volvió"
+  // (`pending`) y "contestó" (el Map). Colapsar la primera con la tercera haría que una pantalla sin
+  // reader cableado acusara un fallo de una consulta que nunca existió.
+  const [chain, setChain] = useState<"not-asked" | "pending" | ReadonlyMap<string, EscrowChainState>>(
+    "not-asked",
+  );
+  // 🔴 LA CONSULTA VIVE ACÁ Y NO EN `openHistory` (`:372`), y el motivo es la persona, no la prolijidad:
+  // `openHistory` corre dentro de `guard(...)`, que catchea y manda el error al banner ANTES de
+  // `setStep("history")`. Un RPC caído ahí deja a la persona SIN PANTALLA. Acá deja la pantalla entera
+  // y una frase por fila que dice que no pudimos preguntar. Candado: T-U6 en `history-onchain.test.tsx`.
+  useEffect(() => {
+    // Sin reader, sin dueño resuelto o sin filas que preguntar NO se emite ninguna llamada, y el estado
+    // queda en `"not-asked"`: la pantalla dice exactamente lo que decía antes de esta HU.
+    if (!reader || !sender || idsAConsultar.length === 0) return;
+    let cancelled = false;
+    setChain("pending");
+    reader
+      .readEscrowStates({ sender, remittanceIds: idsAConsultar })
+      .then((states) => {
+        if (!cancelled) setChain(states);
+      })
+      .catch(() => {
+        // El adapter TIRA cuando no puede ni empezar (sender que no es base58, un import que falla).
+        // Se arma el mapa de `"unknown"` explícito en vez de dejar un Map vacío: un vacío se leería
+        // igual fila por fila, pero por accidente y no por decisión.
+        if (!cancelled)
+          setChain(new Map(idsAConsultar.map((id) => [id, "unknown" as EscrowChainState])));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reader, sender, idsAConsultar]);
+  // `idsAConsultar` sale de un `useMemo` sobre `items`: entre dos renders con la misma lista es el
+  // MISMO array, así que este efecto corre una vez por apertura y no una vez por render. Candado: T-U9.
+  const answerFor = (id: string): EscrowChainAnswer =>
+    chain === "not-asked" || chain === "pending" ? chain : (chain.get(id) ?? "unknown");
   return (
     <div className="space-y-4">
       <Card className="space-y-2">
@@ -3000,7 +3050,7 @@ export function HistoryView({
       ) : (
         <ul className="space-y-3">
           {items.map((rem) => (
-            <HistoryEntry key={rem.id} rem={rem} onOpen={onOpen} />
+            <HistoryEntry key={rem.id} rem={rem} onOpen={onOpen} answer={answerFor(rem.id)} />
           ))}
         </ul>
       )}
@@ -3015,12 +3065,18 @@ export function HistoryView({
 function HistoryEntry({
   rem,
   onOpen,
+  answer,
 }: {
   rem: RemittanceState;
   onOpen: (rem: RemittanceState) => void;
+  answer: EscrowChainAnswer;
 }) {
   const status = statusDisplay(rem.status);
   const knowledge = escrowFundsKnowledge(rem);
+  // WKH-349. El texto Y el peso visual salen de la MISMA función, igual que el Pill de abajo: un copy
+  // que dice "siguen en el escrow" con el mismo gris que "no pudimos preguntar" pierde la mitad de
+  // AC-2. Y para los cuatro desenlaces locales devuelve, byte a byte, el copy de siempre.
+  const desenlace = escrowOutcomeDisplay(escrowOutcome(rem, answer));
   // Una remesa que nunca autorizó un depósito no tiene nada que seguir: abrirla en el seguimiento
   // renderizaría la vista optimista ("tu chaski está en camino", pasos en gris) sobre un envío que
   // no llegó a existir. Se lista igual, porque es historia de la persona, pero sin esa puerta.
@@ -3037,7 +3093,15 @@ function HistoryEntry({
           </div>
           <Pill tone={status.tone}>{status.label}</Pill>
         </div>
-        <p className="text-xs text-stone">{escrowKnowledgeCopy(knowledge)}</p>
+        <p
+          className={
+            desenlace.emphasis === "strong"
+              ? "text-xs font-semibold text-cochineal-ink"
+              : "text-xs text-stone"
+          }
+        >
+          {desenlace.copy}
+        </p>
         {openable ? (
           <Button variant="outline" onClick={() => onOpen(rem)}>
             {rem.status === "settled" ? "Ver recibo" : "Ver seguimiento"}

@@ -1029,13 +1029,23 @@ export type EscrowId16 = string;
 /**
  * WKH-349 — QUÉ CONTESTÓ LA CADENA sobre la PDA `escrow_state` de un envío del historial.
  *
- * CINCO valores, y ninguno colapsa en otro. Es el mismo criterio que ya tienen
+ * SEIS valores, y ninguno colapsa en otro. Es el mismo criterio que ya tienen
  * `EscrowRefundConfirmation` (`:339`) y `PrincipalDepositState` (`:420`) en este archivo: "no pudimos
  * preguntar" no es "no hay nada". Un bullet por valor, con lo que prueba y lo que NO prueba:
  *
- *  · `"deposited"` — la cuenta existe y su `status` decodifica `{ Deposited: {} }`.
- *      NO prueba nada sobre el `deadline`: no dice que el refund esté habilitado hoy. El input que lo
- *      refutaría: una PDA `Deposited` con `deadline` en el futuro, donde `refund` revierte igual.
+ *  · `"deposited-window-open"`   — la cuenta existe, su `status` decodifica `{ Deposited: {} }`, y su
+ *      `deadline` es POSTERIOR a nuestro reloj (`nowSec < deadlineSec`). NO prueba que el pago se vaya
+ *      a liberar, ni que la ventana siga abierta cuando la persona actúe: el `deadline` puede caer
+ *      entre que se lee esta cuenta y que se firma cualquier cosa sobre ella. El input que lo
+ *      refutaría: releer la misma PDA un segundo después del `deadline`.
+ *  · `"deposited-window-closed"` — lo mismo, con el `deadline` YA PASADO según nuestro reloj
+ *      (`nowSec >= deadlineSec`), que es la negación EXACTA del guard con el que el refund de esta app
+ *      rechaza por deadline (`refund_before_deadline`, `../infrastructure/solana-wallet.ts:972`). NO
+ *      prueba que el `refund` vaya a entrar: prueba que ESTA app ya no lo rechazaría por deadline.
+ *      Que el programa on-chain acepte exactamente lo mismo NO se leyó desde este repo. Y NO dice que
+ *      exista un botón para firmar esa devolución: esta capa lee, no abre ninguna puerta.
+ *      ⚠️ Estos dos son los ÚNICOS valores del tipo que dependen de algo que la cadena no contestó:
+ *      ver R-4, acá abajo.
  *  · `"released"`  — la cuenta existe y su `status` es `{ Released: {} }`. Prueba que el vault SALIÓ
  *      del escrow. NO prueba que la familia haya recibido los PEN: ese hecho lo reporta el partner de
  *      payout y es el que muestra (`statusDisplay`, `../presentation/flow-vm.ts:133`). Son dos hechos
@@ -1070,8 +1080,35 @@ export type EscrowId16 = string;
  * llamada por fila (no se batchea), y devuelve firmas que después hay que resolver a transacciones
  * para leer qué instrucción corrió. Rompe de frente el "una sola llamada RPC" que esta capa promete.
  * Es otra HU.
+ *
+ * ── R-4 · DE QUÉ LADO DEL `deadline` ESTAMOS LO DICE NUESTRO RELOJ, NO LA CADENA ─────────────────
+ *
+ * `"deposited-window-open"` y `"deposited-window-closed"` son los ÚNICOS DOS valores de un tipo que se
+ * llama "qué contestó la cadena" que dependen de algo que la cadena NO contestó. El `status` y el
+ * `deadline` los dijo ella; de qué lado del `deadline` caemos lo dice el `Date.now()` del dispositivo,
+ * leído dentro de `readEscrowStates` (el adapter de Solana), que es la misma expresión con la que el
+ * refund decide (`refund_before_deadline`, `../infrastructure/solana-wallet.ts:972`).
+ *
+ * El input que lo demuestra: un dispositivo con el reloj tres días atrasado contesta
+ * `"deposited-window-open"` sobre un escrow que el programa ya sólo deja refundear, y la fila le dice
+ * a la persona que todavía hay tiempo. NO hay ningún camino en esta capa que lo detecte.
+ *
+ * Lo que se ELIMINÓ: el camino de no decir nada del `deadline` cuando el `deadline` venía en la misma
+ * cuenta que ya estábamos leyendo. Lo que QUEDA VIVO: lo sabemos con NUESTRO reloj, y ese reloj puede
+ * estar mal. Se ACOTÓ; no se cerró, igual que R-1.
+ *
+ * CÓMO SE CERRARÍA, Y POR QUÉ NO ACÁ: leyendo el `Clock` del cluster, que es otra llamada RPC y rompe
+ * de frente el "una sola llamada" que esta capa promete; o mostrando la FECHA del `deadline` para que
+ * la persona pueda refutarlo sola, que necesita que el `deadline` llegue hasta la pantalla y por lo
+ * tanto cambia el tipo que este puerto devuelve.
  */
-export type EscrowChainState = "deposited" | "released" | "refunded" | "absent" | "unknown";
+export type EscrowChainState =
+  | "deposited-window-open"
+  | "deposited-window-closed"
+  | "released"
+  | "refunded"
+  | "absent"
+  | "unknown";
 
 /**
  * WKH-349 — el estado on-chain de VARIOS escrows del mismo remitente, en el menor número de llamadas.

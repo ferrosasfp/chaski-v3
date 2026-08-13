@@ -40,7 +40,18 @@ function pdaOf(remittanceId: string, sender: PublicKey = SENDER_KP.publicKey): P
   )[0];
 }
 
-async function encodeEscrowState(status: "deposited" | "released" | "refunded"): Promise<Buffer> {
+/** Una hora ANTES de ahora: la ventana de release ya venció y la única salida es el refund. */
+const vencido = (): number => Math.floor(Date.now() / 1000) - 3600;
+/** Una hora DESPUÉS de ahora: la ventana sigue abierta. */
+const vigente = (): number => Math.floor(Date.now() / 1000) + 3600;
+
+// El `deadline` es un parámetro REQUERIDO y no un default a propósito (WKH-349 · W4.5): cuando estaba
+// clavado en `now - 3600`, TODAS las fixtures de este archivo estaban vencidas y ninguna lo decía.
+// Requerido hace que `tsc` enumere cada call site en vez de que cada uno se decida solo y en silencio.
+async function encodeEscrowState(
+  status: "deposited" | "released" | "refunded",
+  deadlineSec: number,
+): Promise<Buffer> {
   const coder = new anchor.BorshAccountsCoder(escrowIdl as unknown as Idl);
   return coder.encode("EscrowState", {
     sender: SENDER_KP.publicKey,
@@ -48,7 +59,7 @@ async function encodeEscrowState(status: "deposited" | "released" | "refunded"):
     authority: Keypair.generate().publicKey,
     mint: new PublicKey(MINT_B58),
     amount: new anchor.BN(1_000_000),
-    deadline: new anchor.BN(Math.floor(Date.now() / 1000) - 3600),
+    deadline: new anchor.BN(deadlineSec),
     status:
       status === "deposited"
         ? { Deposited: {} }
@@ -93,6 +104,9 @@ async function conectadoCon(address: string, resolver?: SolanaRemittanceIdResolv
 afterEach(() => {
   solanaWalletBridge.reset();
   vi.restoreAllMocks();
+  // T-A12 congela `Date` (y SÓLO `Date`). Devolver el reloj acá y no dentro del test es lo que hace
+  // que un test caído a mitad no le deje el reloj congelado al siguiente ni a otro archivo.
+  vi.useRealTimers();
 });
 
 describe("SolanaWalletAdapter.readEscrowStates (WKH-349)", () => {
@@ -100,7 +114,7 @@ describe("SolanaWalletAdapter.readEscrowStates (WKH-349)", () => {
   // una llamada por fila. Abrir el historial pasaría de 1 request a N.
   it("T-A1: 13 ids ⇒ UNA sola llamada al batch, con las 13 pubkeys adentro", async () => {
     const ids = Array.from({ length: 13 }, (_, i) => `rem-${i}`);
-    const llamadas = mockBatch(new Map([[pdaOf("rem-0").toBase58(), await encodeEscrowState("deposited")]]));
+    const llamadas = mockBatch(new Map([[pdaOf("rem-0").toBase58(), await encodeEscrowState("deposited", vigente())]]));
     const adapter = await conectadoCon(SENDER_B58);
 
     const map = await adapter.readEscrowStates({ sender: SENDER_B58, remittanceIds: ids });
@@ -108,7 +122,7 @@ describe("SolanaWalletAdapter.readEscrowStates (WKH-349)", () => {
     expect(llamadas).toHaveLength(1);
     expect(llamadas[0]?.keys).toHaveLength(13);
     expect(llamadas[0]?.keys).toEqual(ids.map((id) => pdaOf(id).toBase58()));
-    expect(map.get("rem-0")).toBe("deposited");
+    expect(map.get("rem-0")).toBe("deposited-window-open");
   });
 
   // T-A2 (AC-1, CD-15) — MUTANTE: cualquier implementación que "reuse" `resolveRemittanceIdFromLedger`
@@ -133,9 +147,9 @@ describe("SolanaWalletAdapter.readEscrowStates (WKH-349)", () => {
   it("T-A3: Deposited / Released / Refunded llegan cada uno a SU fila", async () => {
     mockBatch(
       new Map([
-        [pdaOf("rem-dep").toBase58(), await encodeEscrowState("deposited")],
-        [pdaOf("rem-rel").toBase58(), await encodeEscrowState("released")],
-        [pdaOf("rem-ref").toBase58(), await encodeEscrowState("refunded")],
+        [pdaOf("rem-dep").toBase58(), await encodeEscrowState("deposited", vencido())],
+        [pdaOf("rem-rel").toBase58(), await encodeEscrowState("released", vencido())],
+        [pdaOf("rem-ref").toBase58(), await encodeEscrowState("refunded", vencido())],
       ]),
     );
     const adapter = await conectadoCon(SENDER_B58);
@@ -145,7 +159,7 @@ describe("SolanaWalletAdapter.readEscrowStates (WKH-349)", () => {
       remittanceIds: ["rem-dep", "rem-rel", "rem-ref"],
     });
 
-    expect(map.get("rem-dep")).toBe("deposited");
+    expect(map.get("rem-dep")).toBe("deposited-window-closed");
     expect(map.get("rem-rel")).toBe("released");
     expect(map.get("rem-ref")).toBe("refunded");
   });
@@ -153,7 +167,7 @@ describe("SolanaWalletAdapter.readEscrowStates (WKH-349)", () => {
   // T-A4 (CD-2) — MUTANTE (a): `if (!acc) continue`, y la fila DESAPARECE del Map. MUTANTE (b):
   // `if (!acc) → "unknown"`, que colapsa "la cadena contestó" con "no pudimos preguntar".
   it('T-A4: una PDA sin cuenta es "absent" (la cadena CONTESTÓ), nunca "unknown" ni una fila faltante', async () => {
-    mockBatch(new Map([[pdaOf("rem-viva").toBase58(), await encodeEscrowState("deposited")]]));
+    mockBatch(new Map([[pdaOf("rem-viva").toBase58(), await encodeEscrowState("deposited", vigente())]]));
     const adapter = await conectadoCon(SENDER_B58);
 
     const map = await adapter.readEscrowStates({
@@ -163,7 +177,7 @@ describe("SolanaWalletAdapter.readEscrowStates (WKH-349)", () => {
 
     expect(map.get("rem-sin-cuenta")).toBe("absent");
     expect(map.has("rem-sin-cuenta")).toBe(true);
-    expect(map.get("rem-viva")).toBe("deposited");
+    expect(map.get("rem-viva")).toBe("deposited-window-open");
   });
 
   // T-A5 (AC-1, totalidad) — MUTANTE: cualquier `continue` que saltee una fila. El contrato del puerto
@@ -172,7 +186,7 @@ describe("SolanaWalletAdapter.readEscrowStates (WKH-349)", () => {
     const ids = ["a", "b", "c", "d", "e"];
     mockBatch(
       new Map([
-        [pdaOf("a").toBase58(), await encodeEscrowState("deposited")],
+        [pdaOf("a").toBase58(), await encodeEscrowState("deposited", vigente())],
         [pdaOf("c").toBase58(), Buffer.from([1, 2, 3])], // no decodifica
       ]),
     );
@@ -190,7 +204,7 @@ describe("SolanaWalletAdapter.readEscrowStates (WKH-349)", () => {
   it("T-A6: si el batch del 1er chunk LANZA, ese chunk es 'unknown' y el 2º conserva sus valores", async () => {
     const ids = Array.from({ length: ESCROW_STATE_BATCH_CEILING + 2 }, (_, i) => `rem-${i}`);
     const ultimo = ids[ESCROW_STATE_BATCH_CEILING] as string;
-    const byPda = new Map([[pdaOf(ultimo).toBase58(), await encodeEscrowState("released")]]);
+    const byPda = new Map([[pdaOf(ultimo).toBase58(), await encodeEscrowState("released", vencido())]]);
     let n = 0;
     vi.spyOn(Connection.prototype, "getMultipleAccountsInfo").mockImplementation((async (
       keys: PublicKey[],
@@ -218,7 +232,7 @@ describe("SolanaWalletAdapter.readEscrowStates (WKH-349)", () => {
   it("T-A7: una cuenta que no decodifica deja ESA fila en 'unknown' y no toca a las demás", async () => {
     mockBatch(
       new Map([
-        [pdaOf("rem-ok").toBase58(), await encodeEscrowState("deposited")],
+        [pdaOf("rem-ok").toBase58(), await encodeEscrowState("deposited", vigente())],
         [pdaOf("rem-deforme").toBase58(), Buffer.from([9, 9, 9, 9])],
       ]),
     );
@@ -230,7 +244,7 @@ describe("SolanaWalletAdapter.readEscrowStates (WKH-349)", () => {
     });
 
     expect(map.get("rem-deforme")).toBe("unknown");
-    expect(map.get("rem-ok")).toBe("deposited");
+    expect(map.get("rem-ok")).toBe("deposited-window-open");
     expect(map.size).toBe(2);
   });
 
@@ -239,7 +253,7 @@ describe("SolanaWalletAdapter.readEscrowStates (WKH-349)", () => {
   // ids, o sea perder 50 filas EN SILENCIO.
   it("T-A8: 150 ids ⇒ 2 llamadas (100 + 50) y 150 entradas", async () => {
     const ids = Array.from({ length: 150 }, (_, i) => `rem-${i}`);
-    const llamadas = mockBatch(new Map([[pdaOf("rem-149").toBase58(), await encodeEscrowState("refunded")]]));
+    const llamadas = mockBatch(new Map([[pdaOf("rem-149").toBase58(), await encodeEscrowState("refunded", vencido())]]));
     const adapter = await conectadoCon(SENDER_B58);
 
     const map = await adapter.readEscrowStates({ sender: SENDER_B58, remittanceIds: ids });
@@ -256,13 +270,13 @@ describe("SolanaWalletAdapter.readEscrowStates (WKH-349)", () => {
   // PDAs derivadas serían las de OTRO y la fila diría "absent" sobre un escrow que existe.
   it("T-A9: las PDAs se derivan del `sender` del ARGUMENTO, no de la address cacheada por connect()", async () => {
     const llamadas = mockBatch(
-      new Map([[pdaOf("rem-1").toBase58(), await encodeEscrowState("deposited")]]),
+      new Map([[pdaOf("rem-1").toBase58(), await encodeEscrowState("deposited", vigente())]]),
     );
     const adapter = await conectadoCon(OTRO_B58); // el cache apunta a OTRA billetera
 
     const map = await adapter.readEscrowStates({ sender: SENDER_B58, remittanceIds: ["rem-1"] });
 
-    expect(map.get("rem-1")).toBe("deposited");
+    expect(map.get("rem-1")).toBe("deposited-window-open");
     expect(llamadas[0]?.keys).toEqual([pdaOf("rem-1").toBase58()]);
     // El control sin el cual lo de arriba no prueba nada: las dos PDAs son DISTINTAS, así que el
     // assert de recién no puede pasar por casualidad.
@@ -295,4 +309,73 @@ describe("SolanaWalletAdapter.readEscrowStates (WKH-349)", () => {
     expect(map.get("rem-2")).toBe("unknown");
     expect(map.size).toBe(2);
   }, 20_000);
+
+  // 🔴 T-A11 (AC-10, AC-11, AC-12, CD-19) — DOS FILAS `Deposited` QUE NO DICEN LO MISMO.
+  // MUTANTE (a) — el código de antes de esta amenda: mapear todo `Deposited` a un solo valor, o sea no
+  // leer el `deadline`. Las dos filas darían idéntico y los dos asserts caen juntos.
+  // MUTANTE (b): la comparación INVERTIDA (`nowSec < deadlineSec` ⇒ closed). Las dos respuestas se
+  // cruzan y el test se pone rojo por partida doble.
+  // MUTANTE (c): pedir el `deadline` con una segunda lectura. El contador del doble pasa de 1 a 2, que
+  // es lo que AC-12/CD-19 prohíben: el `deadline` viaja en la MISMA cuenta que el `status`.
+  it("T-A11: dos Deposited en la MISMA llamada ⇒ ventana abierta y ventana vencida, según su deadline", async () => {
+    const llamadas = mockBatch(
+      new Map([
+        [pdaOf("rem-abierta").toBase58(), await encodeEscrowState("deposited", vigente())],
+        [pdaOf("rem-vencida").toBase58(), await encodeEscrowState("deposited", vencido())],
+      ]),
+    );
+    const adapter = await conectadoCon(SENDER_B58);
+
+    const map = await adapter.readEscrowStates({
+      sender: SENDER_B58,
+      remittanceIds: ["rem-abierta", "rem-vencida"],
+    });
+
+    expect(map.get("rem-abierta")).toBe("deposited-window-open");
+    expect(map.get("rem-vencida")).toBe("deposited-window-closed");
+    // AC-12: el desenlace nuevo NO costó una llamada más.
+    expect(llamadas).toHaveLength(1);
+  });
+
+  // 🔴 T-A12 (AC-13) — LA FRONTERA EXACTA: `nowSec === deadlineSec`.
+  // Con el reloj congelado JUSTO en el `deadline`, la respuesta tiene que ser `window-closed`, porque
+  // el predicado de acá es la negación exacta del guard con el que el refund de este mismo adapter
+  // rechaza por deadline (`refund_before_deadline`, `solana-wallet.ts:972`): a esa altura aquél YA NO
+  // rechaza, así que la pantalla no puede decir que todavía se puede liberar.
+  //
+  // MUTANTE: `nowSec > deadlineSec` (estricto). Cambia el resultado UN SOLO SEGUNDO de toda la línea de
+  // tiempo, y T-A11 no lo ve: sus fixtures están a ±1 h. Es exactamente el desacuerdo con el refund que
+  // AC-13 prohíbe.
+  //
+  // ⚠️ LO QUE ESTE TEST NO CUBRE: no prueba nada sobre el reloj del CLUSTER. Sólo prueba que las dos
+  // expresiones de ESTE repo coinciden. Que el programa on-chain corte en el mismo instante es una
+  // afirmación que este repo no midió.
+  //
+  // ⚠️ Se fake-ea SÓLO `Date`, nunca `setTimeout`: T-A10 necesita 5 s de reloj real y este archivo ya
+  // se quemó con eso (`solana-wallet.close.test.ts:314-320`). El criterio de aceptación de este test no
+  // es "pasa el archivo": es `npm test` COMPLETO en verde, con T-A10 adentro.
+  it("T-A12: con el reloj congelado EXACTAMENTE en el deadline, la ventana ya está cerrada", async () => {
+    const CONGELADO_MS = Date.UTC(2026, 7, 13, 12, 0, 0); // múltiplo exacto de 1000: nowSec sin resto
+    const deadlineSec = CONGELADO_MS / 1000;
+    const data = await encodeEscrowState("deposited", deadlineSec); // se codifica con el reloj real
+    mockBatch(new Map([[pdaOf("rem-borde").toBase58(), data]]));
+    const adapter = await conectadoCon(SENDER_B58);
+
+    // Sólo `Date`: `setTimeout` queda real. El `afterEach` de este archivo devuelve el reloj aunque el
+    // test se caiga a mitad, así que ningún otro test hereda el congelamiento.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(CONGELADO_MS);
+
+    // 🔴 CASO DE CONTROL (CD-11): sin esto, el test podría estar midiendo el reloj de la máquina y
+    // dando verde por casualidad. Si el instrumento no congela, acá se pone rojo POR EL CONTROL.
+    expect(Date.now()).toBe(CONGELADO_MS);
+    expect(Math.floor(Date.now() / 1000)).toBe(deadlineSec);
+
+    const map = await adapter.readEscrowStates({
+      sender: SENDER_B58,
+      remittanceIds: ["rem-borde"],
+    });
+
+    expect(map.get("rem-borde")).toBe("deposited-window-closed");
+  });
 });

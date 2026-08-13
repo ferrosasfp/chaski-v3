@@ -38,13 +38,16 @@ import {
 
 afterEach(cleanup);
 
-// Las cuatro frases que esta HU introduce, escritas ACÁ como literales y no derivadas del módulo bajo
+// Las cinco frases que esta HU introduce, escritas ACÁ como literales y no derivadas del módulo bajo
 // prueba: un test que le pregunta al código qué copy produce y después verifica que produjo ese copy
 // es un guard que se compara consigo mismo. Estas cadenas son el contrato con la persona.
 const CP1_DEPOSITADO = "El contrato dice que tus USDC siguen en el escrow, a tu nombre.";
 const CP2_DEVUELTO = "El contrato dice que tus USDC ya volvieron a tu wallet.";
 const CP3_LIBERADO = "El contrato dice que tus USDC ya salieron del escrow hacia el pago.";
 const CP5_NO_PUDIMOS = "No pudimos preguntarle al contrato por este envío.";
+/** La ventana de release ya venció: hay plata adentro y la única puerta que queda es la devolución. */
+const CP8_VENTANA_VENCIDA =
+  "El contrato dice que tus USDC siguen en el escrow y que el plazo para liberarlos al pago ya venció: la salida que queda es devolverlos a tu wallet, y sólo tu firma puede hacerlo.";
 /** La frase de ANTES de esta HU. Que desaparezca es la mitad del punto: la tarjeta no puede decir las dos. */
 const COPY_VIEJO = "No comprobamos si tus USDC siguen en el escrow.";
 
@@ -144,7 +147,7 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
   // costo del batch y, peor, abre la puerta a que una respuesta de cadena pise un marcador local.
   // El otro mutante que mata: no preguntar por ninguna (el filtro invertido) ⇒ `calls` queda vacío.
   it("T-U1: con las 4 clases de fila, se emite UNA llamada y sólo por la fila `unverified`", async () => {
-    const reader = new FakeSolanaEscrowChainStateReader(mapa([["rem-unverified", "deposited"]]));
+    const reader = new FakeSolanaEscrowChainStateReader(mapa([["rem-unverified", "deposited-window-open"]]));
     render(
       <HistoryView
         items={[
@@ -168,7 +171,7 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
   // La tarjeta diría "siguen en el escrow" y "no comprobamos si siguen en el escrow" a la vez. Por eso
   // el assert de que la frase de hoy DESAPARECE es parte del test y no un adorno.
   it("T-U2: `deposited` ⇒ dice que los USDC siguen en el escrow, y ya no dice que no comprobamos", async () => {
-    const reader = new FakeSolanaEscrowChainStateReader(mapa([["rem-1", "deposited"]]));
+    const reader = new FakeSolanaEscrowChainStateReader(mapa([["rem-1", "deposited-window-open"]]));
     render(
       <HistoryView
         items={[unverifiedSnapshot("rem-1")]}
@@ -189,7 +192,7 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
   it("T-U3: el párrafo de `deposited` va en font-semibold; el de `refunded` no", async () => {
     const reader = new FakeSolanaEscrowChainStateReader(
       mapa([
-        ["rem-dep", "deposited"],
+        ["rem-dep", "deposited-window-open"],
         ["rem-ref", "refunded"],
       ]),
     );
@@ -284,7 +287,7 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
   // significativo: una address en minúsculas deriva OTRAS PDAs, así que la respuesta sería sobre los
   // escrows de nadie y todas las filas dirían "no hay cuenta". Por eso se compara byte a byte.
   it("T-U7: el `sender` del batch es idéntico, case incluido, al que resolvió la pantalla", async () => {
-    const reader = new FakeSolanaEscrowChainStateReader(mapa([["rem-1", "deposited"]]));
+    const reader = new FakeSolanaEscrowChainStateReader(mapa([["rem-1", "deposited-window-open"]]));
     const { container } = await seededFlow([unverifiedSnapshot("rem-1")], reader);
     render(<RemittanceFlow container={container} />);
     fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
@@ -325,7 +328,7 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
   // ⚠️ `useExhaustiveDependencies` está en `warn` en `biome.jsonc`: un array de deps mal armado NO
   // rompe el build, así que este test es el único lugar donde eso se ve.
   it("T-U9: re-renderizar con la misma lista no vuelve a preguntar", async () => {
-    const reader = new FakeSolanaEscrowChainStateReader(mapa([["rem-1", "deposited"]]));
+    const reader = new FakeSolanaEscrowChainStateReader(mapa([["rem-1", "deposited-window-open"]]));
     const items = [unverifiedSnapshot("rem-1")];
     const vista = (
       <HistoryView
@@ -342,5 +345,39 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
     rerender(vista);
     await screen.findByText(CP1_DEPOSITADO);
     expect(reader.calls).toHaveLength(1);
+  });
+
+  // 🔴 T-U10 (AC-11) — LA FILA CON LA VENTANA VENCIDA DICE POR QUÉ PUERTA SALE.
+  // El caso REAL que lo motivó: al 2026-08-13 los tres escrows que le quedaban `Deposited` al founder
+  // tenían el plazo vencido (deadlines del 11-ago), así que su única salida era la devolución que
+  // firma el remitente. Con el desenlace único de antes, esas tres filas leían exactamente igual que
+  // una con la ventana abierta.
+  // MUTANTE (a) — EL CABLEADO INCOMPLETO: si el view-model no ramifica el valor nuevo, cae en el
+  // `return "chain-unknown"` final de `escrowOutcome` y la fila diría "No pudimos preguntarle al
+  // contrato" sobre una fila que SÍ contestó. El assert de que CP5 NO aparece es el que lo caza; sin
+  // él, este test pasa igual.
+  // MUTANTE (b): dibujar CP-8 JUNTO a CP-1 (un `<p>` de más en vez de reemplazar el texto), que es lo
+  // que caza el assert de que CP1 no aparece.
+  it("T-U10: `deposited-window-closed` ⇒ dice que el plazo venció y que queda la devolución, en negrita", async () => {
+    const reader = new FakeSolanaEscrowChainStateReader(mapa([["rem-1", "deposited-window-closed"]]));
+    render(
+      <HistoryView
+        items={[unverifiedSnapshot("rem-1")]}
+        onOpen={() => {}}
+        onBack={() => {}}
+        reader={reader}
+        sender={FAKE_SOLANA_BENEFICIARY}
+      />,
+    );
+
+    const vencida = await screen.findByText(CP8_VENTANA_VENCIDA);
+    expect(vencida).toBeInTheDocument();
+    // Ni la frase de la ventana abierta, ni la de antes de esta HU, ni la de "no pudimos preguntar".
+    expect(screen.queryByText(CP1_DEPOSITADO)).toBeNull();
+    expect(screen.queryByText(COPY_VIEJO)).toBeNull();
+    expect(screen.queryByText(CP5_NO_PUDIMOS)).toBeNull();
+    // Sigue pesando `strong`: hay plata adentro, igual que en la fila con la ventana abierta.
+    expect(vencida.className).toContain("font-semibold");
+    expect(vencida.className).toContain("text-cochineal-ink");
   });
 });

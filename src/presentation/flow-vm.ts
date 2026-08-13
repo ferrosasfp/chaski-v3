@@ -161,7 +161,7 @@ export function statusDisplay(status: RemittanceStatus): {
  * Esta función no lee la cadena: se calcula SOLO con el snapshot persistido, así que lo único que
  * puede afirmar es lo que alguien ya midió y llegamos a ESCRIBIR. Por eso los dos valores que
  * afirman algo del vault salen de marcadores que se escriben en UN solo lugar y bajo UNA sola
- * condición, nunca de deducir un final a partir del status. ⚠️ Y SIGUE SIN LEERLA después de WKH-349, que NO tocó esta función: esa HU agregó una capa ENCIMA —(`escrowOutcome`, `:1192`) y (`escrowOutcomeDisplay`, `:1225`), al final de este archivo— que le pregunta a la cadena por el bucket `unverified` cuando se abre el historial. O sea que la PANTALLA de historial hoy sí mira la cadena; esta función, no. Si leés este docblock y concluís que el historial nunca mira la cadena, la conclusión es vieja.
+ * condición, nunca de deducir un final a partir del status. ⚠️ Y SIGUE SIN LEERLA después de WKH-349, que NO tocó esta función: esa HU agregó una capa ENCIMA —(`escrowOutcome`, `:1193`) y (`escrowOutcomeDisplay`, `:1235`), al final de este archivo— que le pregunta a la cadena por el bucket `unverified` cuando se abre el historial. O sea que la PANTALLA de historial hoy sí mira la cadena; esta función, no. Si leés este docblock y concluís que el historial nunca mira la cadena, la conclusión es vieja.
  *
  * - `returned`   los USDC volvieron. Lo respalda `ESCROW_REFUNDED_BY_SENDER`, que RecoverEscrowFunds
  *                escribe recién con `confirmation === "confirmed"` (recover-escrow-funds.ts:70-77),
@@ -1141,7 +1141,7 @@ export function esVentanaSinAbiertos(code: string, maxCandidates: number): boole
 
 /**
  * WKH-349 — LO QUE LA CADENA CONTESTÓ sobre una fila del historial, en la forma en que la fila lo
- * recibe. Son los cinco de (`EscrowChainState`, `../application/ports.ts:1074`) más DOS que no hablan
+ * recibe. Son los seis de (`EscrowChainState`, `../application/ports.ts:1105`) más DOS que no hablan
  * de la respuesta sino de la PREGUNTA, y que por eso no se pueden colapsar con ninguno de aquéllos:
  *
  *  · `"not-asked"` — NO SE PREGUNTÓ. Es lo que ve una pantalla sin reader cableado, sin `sender`, o
@@ -1150,7 +1150,7 @@ export function esVentanaSinAbiertos(code: string, maxCandidates: number): boole
  *      dibujara "No pudimos preguntarle al contrato", la pantalla estaría acusando el fallo de una
  *      consulta que nunca existió.
  *  · `"pending"`   — se preguntó y la respuesta todavía no volvió. Tampoco es "no pudimos": la promesa
- *      sigue viva y el desenlace puede terminar siendo cualquiera de los cinco.
+ *      sigue viva y el desenlace puede terminar siendo cualquiera de los seis.
  */
 export type EscrowChainAnswer = EscrowChainState | "pending" | "not-asked";
 
@@ -1166,7 +1166,8 @@ export type EscrowChainAnswer = EscrowChainState | "pending" | "not-asked";
  */
 export type EscrowOutcome =
   | EscrowKnowledge
-  | "chain-deposited"
+  | "chain-deposited-window-open"
+  | "chain-deposited-window-closed"
   | "chain-released"
   | "chain-refunded"
   | "chain-absent"
@@ -1194,7 +1195,11 @@ export function escrowOutcome(rem: RemittanceState, answer: EscrowChainAnswer): 
   if (k !== "unverified") return k; // AC-6 + AC-8: el snapshot ya contestó; la cadena no entra
   if (answer === "not-asked") return k; // no se preguntó ⇒ el copy de siempre, sin inventar nada
   if (answer === "pending") return "chain-pending";
-  if (answer === "deposited") return "chain-deposited";
+  // Los dos `deposited-*` van en ramas SEPARADAS y no en una común: agruparlos ("total, en las dos hay
+  // plata") vuelve a colapsar justo la distinción que esta capa existe para mostrar — cuál es la única
+  // puerta que le queda a esa fila. Candado: T-V10.
+  if (answer === "deposited-window-open") return "chain-deposited-window-open";
+  if (answer === "deposited-window-closed") return "chain-deposited-window-closed";
   if (answer === "released") return "chain-released";
   if (answer === "refunded") return "chain-refunded";
   if (answer === "absent") return "chain-absent";
@@ -1216,7 +1221,12 @@ export function escrowOutcome(rem: RemittanceState, answer: EscrowChainAnswer): 
  * Sobre `"chain-absent"`: su segunda oración afirma algo sobre NOSOTROS ("desde acá no podemos decir
  * cuál de las dos"), no sobre la plata, y es lo único honesto que se puede decir con este dato. Una
  * PDA que no existe no distingue "el depósito nunca entró" de "ya se cerró después de resolverse":
- * ver R-1 en el docblock de (`EscrowChainState`, `../application/ports.ts:1074`).
+ * ver R-1 en el docblock de (`EscrowChainState`, `../application/ports.ts:1105`).
+ *
+ * Sobre los dos `"chain-deposited-*"`: los dos pesan `strong` porque los dos tienen plata adentro —
+ * el peso visual separa "hay plata" de "no hay nada que hacer", no "urgente" de "no urgente". Lo que
+ * los separa es el TEXTO: el vencido dice cuál es la única puerta que le queda. Y de qué lado del
+ * `deadline` cae esa fila lo decidió NUESTRO reloj, no la cadena: ver R-4 en el mismo docblock.
  *
  * Sobre `"chain-released"`: dice "salieron del escrow hacia el pago" y NO dice "entregado". Esa
  * palabra ya es de (`statusDisplay`, `:133`) para `settled`, que habla de otro hecho —el partner de
@@ -1226,8 +1236,13 @@ export function escrowOutcomeDisplay(o: EscrowOutcome): {
   copy: string;
   emphasis: "strong" | "normal";
 } {
-  if (o === "chain-deposited")
+  if (o === "chain-deposited-window-open")
     return { copy: "El contrato dice que tus USDC siguen en el escrow, a tu nombre.", emphasis: "strong" };
+  if (o === "chain-deposited-window-closed")
+    return {
+      copy: "El contrato dice que tus USDC siguen en el escrow y que el plazo para liberarlos al pago ya venció: la salida que queda es devolverlos a tu wallet, y sólo tu firma puede hacerlo.",
+      emphasis: "strong",
+    };
   if (o === "chain-refunded")
     return { copy: "El contrato dice que tus USDC ya volvieron a tu wallet.", emphasis: "normal" };
   if (o === "chain-released")

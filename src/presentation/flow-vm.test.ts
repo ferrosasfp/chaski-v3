@@ -18,7 +18,7 @@ import {
   deliveredDisplay,
   escrowFundsAtRisk,
   escrowFundsKnowledge,
-  escrowKnowledgeCopy, escrowOutcome, escrowOutcomeDisplay, type EscrowChainAnswer, type EscrowKnowledge, // WKH-349: EN ESTA LÍNEA, no en cuatro nuevas — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número y está debajo de acá
+  escrowKnowledgeCopy, escrowOutcome, escrowOutcomeDisplay, type EscrowChainAnswer, type EscrowKnowledge, type EscrowOutcome, // WKH-349: EN ESTA LÍNEA, no en cinco nuevas — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número y está debajo de acá
   escrowRefundError,
   escrowRentDiscoveryError,
   humanError,
@@ -1564,18 +1564,39 @@ describe("WKH-349 · escrowOutcome / escrowOutcomeDisplay", () => {
   };
   const KNOWLEDGES = Object.keys(FIXTURES) as EscrowKnowledge[];
 
-  // Los SIETE valores de EscrowChainAnswer: los cinco que la cadena puede contestar más los dos que
-  // hablan de la pregunta. ⚠️ El Story File de la HU dice "8" en T-V6; son 7 (5 + 2), y el conteo se
-  // deriva del tipo acá abajo en vez de escribirse a mano.
-  const ANSWERS: EscrowChainAnswer[] = [
-    "deposited",
-    "released",
-    "refunded",
-    "absent",
-    "unknown",
-    "pending",
-    "not-asked",
-  ];
+  // Todos los valores de EscrowChainAnswer: los que la cadena puede contestar más los dos que hablan
+  // de la PREGUNTA. 🔴 SE DERIVA DE UN `Record` EXHAUSTIVO, igual que KNOWLEDGES cinco líneas más
+  // arriba, y por el motivo medido en esta misma HU: cuando esto era un array escrito a mano, agregar
+  // un valor al tipo dejaba a T-V6 verde mirando un valor menos — el candado de totalidad dejaba de
+  // mirar justo el valor nuevo. Con la anotación, el que falte es un error de `tsc`.
+  const ANSWER_SET: Record<EscrowChainAnswer, true> = {
+    "deposited-window-open": true,
+    "deposited-window-closed": true,
+    released: true,
+    refunded: true,
+    absent: true,
+    unknown: true,
+    pending: true,
+    "not-asked": true,
+  };
+  const ANSWERS = Object.keys(ANSWER_SET) as EscrowChainAnswer[];
+
+  // Ídem para los desenlaces de pantalla: los 4 locales + los de cadena. Es lo que hace que T-V7
+  // recorra TODAS las frases que la HU puede producir sin que nadie tenga que contarlas.
+  const OUTCOME_SET: Record<EscrowOutcome, true> = {
+    "no-deposit": true,
+    "in-escrow": true,
+    returned: true,
+    unverified: true,
+    "chain-deposited-window-open": true,
+    "chain-deposited-window-closed": true,
+    "chain-released": true,
+    "chain-refunded": true,
+    "chain-absent": true,
+    "chain-unknown": true,
+    "chain-pending": true,
+  };
+  const OUTCOMES = Object.keys(OUTCOME_SET) as EscrowOutcome[];
 
   // 🔴 T-V1 (AC-6, AC-8) — EL CORTE VA PRIMERO.
   // MUTANTE: mover `if (k !== "unverified") return k` DEBAJO del mapeo. Una respuesta de cadena
@@ -1595,8 +1616,13 @@ describe("WKH-349 · escrowOutcome / escrowOutcomeDisplay", () => {
   // 🔴 T-V2 (AC-2/3/4) — EL MAPEO ES 1:1 Y NO ESTÁ CRUZADO.
   // MUTANTE: `released → chain-refunded` (o cualquier permutación). Cada respuesta se assertea contra
   // SU desenlace, así que un cruce pone en rojo dos líneas a la vez.
-  it("T-V2: sobre una fila `unverified`, las tres respuestas con cuenta mapean cada una a su desenlace", () => {
-    expect(escrowOutcome(FIXTURES.unverified, "deposited")).toBe("chain-deposited");
+  it("T-V2: sobre una fila `unverified`, las cuatro respuestas con cuenta mapean cada una a su desenlace", () => {
+    expect(escrowOutcome(FIXTURES.unverified, "deposited-window-open")).toBe(
+      "chain-deposited-window-open",
+    );
+    expect(escrowOutcome(FIXTURES.unverified, "deposited-window-closed")).toBe(
+      "chain-deposited-window-closed",
+    );
     expect(escrowOutcome(FIXTURES.unverified, "released")).toBe("chain-released");
     expect(escrowOutcome(FIXTURES.unverified, "refunded")).toBe("chain-refunded");
   });
@@ -1625,19 +1651,25 @@ describe("WKH-349 · escrowOutcome / escrowOutcomeDisplay", () => {
   });
 
   // 🔴 T-V5 (AC-2) — LA MITAD VISUAL DEL DESENLACE.
-  // MUTANTE: devolver `"normal"` para todos. El texto seguiría estando y AC-2 perdería su mitad: la
-  // fila que TIENE plata recuperable se leería con el mismo peso que la que no sabemos nada.
-  it("T-V5: sólo `chain-deposited` pesa `strong`; los otros cinco desenlaces de cadena son `normal`", () => {
-    expect(escrowOutcomeDisplay("chain-deposited").emphasis).toBe("strong");
-    for (const o of ["chain-released", "chain-refunded", "chain-absent", "chain-unknown", "chain-pending"] as const) {
-      expect(escrowOutcomeDisplay(o).emphasis).toBe("normal");
-    }
+  // MUTANTE (a): devolver `"normal"` para todos. El texto seguiría estando y AC-2 perdería su mitad:
+  // la fila que TIENE plata adentro se leería con el mismo peso que aquélla de la que no sabemos nada.
+  // MUTANTE (b): darle `"normal"` al vencido, que lo dibujaría gris al lado del abierto en negrita
+  // — y las dos tienen plata adentro. El peso separa "hay plata" de "no hay nada que hacer", no
+  // "urgente" de "no urgente".
+  // El conjunto se recorre ENTERO (OUTCOMES sale del `Record` exhaustivo), así que un `strong` de más
+  // en cualquier otro desenlace también cae acá.
+  it("T-V5: los `strong` son EXACTAMENTE los dos `chain-deposited-*`; todo el resto es `normal`", () => {
+    const fuertes = OUTCOMES.filter((o) => escrowOutcomeDisplay(o).emphasis === "strong").sort();
+    expect(fuertes).toEqual(["chain-deposited-window-closed", "chain-deposited-window-open"]);
   });
 
   // 🔴 T-V6 (AC-1, totalidad) — NINGÚN HUECO EN EL PRODUCTO.
   // MUTANTE: un `switch` sin `default` (o una cadena de `if` sin retorno final) que caiga por un hueco
   // y devuelva `undefined`. La fila lo dibujaría como una tarjeta sin frase.
-  it("T-V6: los 4 conocimientos × las 7 respuestas dan 28 desenlaces, y ninguno es undefined", () => {
+  // ⚠️ El producto NO se escribe a mano: sale de `KNOWLEDGES.length * ANSWERS.length`, y las dos
+  // longitudes salen de `Record`s exhaustivos. Un `toBe(28)` clavado acá envejecía igual que una cita:
+  // esta misma HU le agregó un valor al tipo y el número correcto pasó de 28 a 32.
+  it("T-V6: el producto de conocimientos × respuestas no tiene ningún hueco, y ninguno es undefined", () => {
     let pares = 0;
     for (const k of KNOWLEDGES) {
       for (const a of ANSWERS) {
@@ -1650,7 +1682,6 @@ describe("WKH-349 · escrowOutcome / escrowOutcomeDisplay", () => {
       }
     }
     expect(pares).toBe(KNOWLEDGES.length * ANSWERS.length);
-    expect(pares).toBe(28);
   });
 
   // 🔴 T-V7 (AC-9, CD-1) — LA PANTALLA DICE EL ESTADO, NO PROMETE UNA OPERACIÓN.
@@ -1658,15 +1689,16 @@ describe("WKH-349 · escrowOutcome / escrowOutcomeDisplay", () => {
   // ⚠️ LO QUE ESTE TEST CUBRE, EXACTO: esos SIETE verbos, no "toda promesa de acción". Una frase como
   // "Vamos a sacar tus USDC" pasa este candado. Si alguien quiere la afirmación amplia, tiene que
   // escribir el candado amplio (CD-12): declarar acá que cubre más de lo que cubre sería el defecto.
-  it("T-V7: ninguna de las 10 frases usa uno de los siete verbos de acción sobre el dinero", () => {
+  it("T-V7: ninguna frase producible por esta capa usa uno de los siete verbos de acción sobre el dinero", () => {
     const VERBOS = /\b(recuperamos|liberamos|devolvimos|entregamos|depositamos|movimos|sacamos)\b/i;
-    const nuevas = (
-      ["chain-deposited", "chain-released", "chain-refunded", "chain-absent", "chain-unknown", "chain-pending"] as const
-    ).map((o) => escrowOutcomeDisplay(o).copy);
-    const locales = KNOWLEDGES.map((k) => escrowKnowledgeCopy(k));
-    const todas = [...nuevas, ...locales];
-    expect(todas).toHaveLength(10);
+    // Se recorren TODOS los desenlaces del tipo (OUTCOMES sale del `Record` exhaustivo), así que un
+    // valor nuevo entra a este candado sin que nadie se acuerde de agregarlo a una lista.
+    const todas = OUTCOMES.map((o) => escrowOutcomeDisplay(o).copy);
+    expect(todas).toHaveLength(OUTCOMES.length);
     for (const frase of todas) expect(frase).not.toMatch(VERBOS);
+    // El control del candado: los siete verbos SÍ se detectan cuando están. Sin esto, una regex rota
+    // (o una que no matchea nada) dejaría este test verde sobre cualquier copy.
+    expect("Recuperamos tus USDC").toMatch(VERBOS);
   });
 
   // 🔴 T-V8 (AC-9) — "ENTREGADO" ES DE OTRA COSA, EN LA MISMA TARJETA.
@@ -1694,5 +1726,38 @@ describe("WKH-349 · escrowOutcome / escrowOutcomeDisplay", () => {
     for (const k of KNOWLEDGES) {
       expect(escrowOutcomeDisplay(k)).toEqual({ copy: escrowKnowledgeCopy(k), emphasis: "normal" });
     }
+  });
+
+  // 🔴 T-V10 (AC-11, AC-2) — LA VENTANA VENCIDA ES SU PROPIO DESENLACE, NO UN `Deposited` MÁS.
+  // MUTANTE (a): mapear los dos `deposited-*` a UNA RAMA COMÚN ("total, en las dos hay plata"). Es la
+  // edición tentadora y borra toda la ampliación: la fila con la ventana vencida volvería a decir sólo
+  // que sus USDC siguen adentro, sin decir que la única puerta que le queda es la devolución.
+  // MUTANTE (b): darle `emphasis: "normal"` al vencido, que lo dibujaría gris al lado del abierto en
+  // negrita — y las dos filas tienen plata adentro.
+  it("T-V10: `deposited-window-closed` tiene desenlace, copy y peso propios, y sigue pesando strong", () => {
+    expect(escrowOutcome(FIXTURES.unverified, "deposited-window-closed")).toBe(
+      "chain-deposited-window-closed",
+    );
+
+    const vencida = escrowOutcomeDisplay("chain-deposited-window-closed");
+    const abierta = escrowOutcomeDisplay("chain-deposited-window-open");
+
+    // El copy es OTRO — es lo único que separa las dos filas en la pantalla.
+    expect(vencida.copy).not.toBe(abierta.copy);
+    // Y tampoco es ninguno de los otros cinco desenlaces de cadena: si el VM no ramificara el valor
+    // nuevo, caería en el `return "chain-unknown"` final y diría "no pudimos preguntar" sobre una fila
+    // que SÍ contestó.
+    for (const otro of [
+      "chain-released",
+      "chain-refunded",
+      "chain-absent",
+      "chain-unknown",
+      "chain-pending",
+    ] as const) {
+      expect(vencida.copy).not.toBe(escrowOutcomeDisplay(otro).copy);
+    }
+    // Las dos pesan igual: el peso dice "hay plata", no "es urgente".
+    expect(vencida.emphasis).toBe("strong");
+    expect(abierta.emphasis).toBe("strong");
   });
 });

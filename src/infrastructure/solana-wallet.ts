@@ -1528,8 +1528,8 @@ export class SolanaWalletAdapter
    * bucle y el del ledger, y pide con todas las letras "si tocás uno de los dos bucles, tocá el otro o
    * borrá esta afirmación". Esta HU **no toca ninguno de los dos**: agrega un tercero, y la asimetría
    * se declara acá en vez de quedar sin dueño. El motivo de no unificar, concreto: los tres devuelven
-   * cosas distintas —el primero un `remittanceId`, el segundo un `EscrowId16`, éste un `Map` de cinco
-   * valores—, éste **no elige "el primero"** y **no filtra por estado** (conserva los cinco
+   * cosas distintas —el primero un `remittanceId`, el segundo un `EscrowId16`, éste un `Map` de seis
+   * valores—, éste **no elige "el primero"** y **no filtra por estado** (conserva los seis
    * desenlaces), y la extracción tocaría, en el mismo diff, la función que decide QUÉ escrow se
    * refundea.
    *
@@ -1547,6 +1547,31 @@ export class SolanaWalletAdapter
    *  · El batch de un chunk lanza, o vence `ESCROW_STATE_BATCH_TIMEOUT_MS` ⇒ **sólo ese chunk** cae a
    *    `"unknown"`. Los demás conservan lo que la cadena contestó. Nunca `"absent"`: no preguntamos.
    *  · El decode de UNA cuenta lanza ⇒ **esa fila** cae a `"unknown"`, y las demás quedan intactas.
+   *
+   * ── EL RELOJ ES NUESTRO, NO EL DE LA CADENA ───────────────────────────────────────────────────
+   *
+   * Dos de los seis desenlaces —`"deposited-window-open"` y `"deposited-window-closed"`— no salen sólo
+   * de lo que la cuenta dice. El `status` y el `deadline` los dijo la cadena; DE QUÉ LADO del
+   * `deadline` caemos lo decide `Date.now()` de este dispositivo, leído acá abajo con la MISMA
+   * expresión que usa el refund de este archivo, y comparado con la negación exacta de su guard
+   * (`refund_before_deadline`, `:972`). Que las dos expresiones coincidan es lo único que se verifica:
+   * es lo que impide que la pantalla diga "la salida que queda es la devolución" sobre una fila que el
+   * refund de esta misma app rechazaría.
+   *
+   * El `deadline` NO cuesta ninguna llamada más: viaja en la misma cuenta que el `status`, en el mismo
+   * `coder.decode`. Si alguna vez hace falta un `getAccountInfo` por fila, un segundo batch o una
+   * lectura del `Clock` del cluster para decidir esto, la decisión de diseño cambió y hay que volver a
+   * discutirla: el "una sola llamada por apertura" que esta pantalla promete se paga acá.
+   *
+   * LO QUE NO SE MIDIÓ, y no se convierte en certeza en ninguna frase de este archivo:
+   *  · El skew entre el reloj del dispositivo y el del cluster. Un navegador con la hora corrida
+   *    contesta `"deposited-window-open"` sobre un escrow que el programa ya sólo deja refundear, y
+   *    NADA acá lo detecta. Lo que se ELIMINÓ es no decir nada del `deadline` teniéndolo en la mano;
+   *    lo que QUEDA VIVO es que lo decimos con nuestro reloj.
+   *  · Que pasado el `deadline` el programa on-chain efectivamente rechace un `release`. Este repo no
+   *    leyó el programa. La afirmación descansa en una medición contra devnet hecha afuera y en el
+   *    guard propio de este archivo. Por eso el copy dice "la salida que queda" y NO "el refund va a
+   *    entrar".
    */
   async readEscrowStates(input: {
     sender: string;
@@ -1597,19 +1622,36 @@ export class SolanaWalletAdapter
           continue;
         }
         let statusKey: string | undefined;
+        let deadlineSec: number;
         try {
-          const state = coder.decode("EscrowState", acc.data) as { status: Record<string, unknown> };
+          const state = coder.decode("EscrowState", acc.data) as { status: Record<string, unknown>; deadline: { toNumber(): number } };
           statusKey = Object.keys(state.status)[0]; // { Deposited: {} } | { Released: {} } | ...
+          // El `.toNumber()` va ACÁ ADENTRO, junto al decode, y no abajo en el mapeo: `BN.toNumber()`
+          // TIRA si el valor no entra en 53 bits, y una excepción en el mapeo se escaparía de este
+          // `try`, saldría del método entero y dejaría TODAS las filas del historial en "unknown" —
+          // una sola cuenta deforme se llevaría puesto el batch, que es justo lo que el tercer modo de
+          // falla del docblock de arriba promete que no pasa. ⚠️ Esto NO tiene test propio y va dicho:
+          // la fixture que haría falta —una cuenta que pase el discriminador Borsh de `EscrowState`
+          // con un `i64` absurdo— no representa nada que el programa que las escribe produzca.
+          deadlineSec = state.deadline.toNumber();
         } catch {
           out.set(id, "unknown"); // cuenta deforme o ajena al layout: no pudimos LEER esta fila
           continue;
         }
+        // El reloj es el del DISPOSITIVO, y esta comparación es la negación EXACTA del guard con el
+        // que el refund de este mismo archivo rechaza por deadline
+        // (`refund_before_deadline`, `:972`). Está escrita UNA sola vez y a propósito acoplada a
+        // aquélla: si mañana el refund cambia su condición y ésta no, la pantalla empieza a decir "la
+        // salida que queda es la devolución" sobre una fila que este mismo código rechazaría.
+        const nowSec = Math.floor(Date.now() / 1000);
         // Un `status` que no es ninguno de los tres es un cuarto desenlace SIN NOMBRE: se dice
         // "no pudimos" y no se elige uno de los tres por descarte.
         out.set(
           id,
           statusKey === "Deposited"
-            ? "deposited"
+            ? nowSec < deadlineSec
+              ? "deposited-window-open"
+              : "deposited-window-closed"
             : statusKey === "Released"
               ? "released"
               : statusKey === "Refunded"

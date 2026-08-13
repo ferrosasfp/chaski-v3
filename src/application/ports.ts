@@ -1025,3 +1025,83 @@ export type EscrowId16 = string;
  * `escrowIndexCandidate` de `src/infrastructure/solana-wallet.ts`, con los tres primeros como códigos de
  * `Error` distintos y el cuarto siguiendo al sondeo on-chain. `EscrowId16` se QUEDA: tiene consumidores
  * de producción. */
+
+/**
+ * WKH-349 — QUÉ CONTESTÓ LA CADENA sobre la PDA `escrow_state` de un envío del historial.
+ *
+ * CINCO valores, y ninguno colapsa en otro. Es el mismo criterio que ya tienen
+ * `EscrowRefundConfirmation` (`:339`) y `PrincipalDepositState` (`:420`) en este archivo: "no pudimos
+ * preguntar" no es "no hay nada". Un bullet por valor, con lo que prueba y lo que NO prueba:
+ *
+ *  · `"deposited"` — la cuenta existe y su `status` decodifica `{ Deposited: {} }`.
+ *      NO prueba nada sobre el `deadline`: no dice que el refund esté habilitado hoy. El input que lo
+ *      refutaría: una PDA `Deposited` con `deadline` en el futuro, donde `refund` revierte igual.
+ *  · `"released"`  — la cuenta existe y su `status` es `{ Released: {} }`. Prueba que el vault SALIÓ
+ *      del escrow. NO prueba que la familia haya recibido los PEN: ese hecho lo reporta el partner de
+ *      payout y es el que muestra (`statusDisplay`, `../presentation/flow-vm.ts:133`). Son dos hechos
+ *      distintos sobre la misma remesa.
+ *  · `"refunded"`  — la cuenta existe y su `status` es `{ Refunded: {} }`. NO prueba que la cuenta se
+ *      haya cerrado: la ix `refund` no cierra nada, el cierre es otra instrucción
+ *      (`refund`, `../infrastructure/solana-wallet.ts:1066`).
+ *  · `"absent"`    — LA CADENA CONTESTÓ, y en esa PDA no hay cuenta. Es exactamente lo que significa
+ *      hoy un `!acc` en los dos bucles que ya batchean cuentas del escrow
+ *      (`resolveRemittanceIdFromLedger`, `../infrastructure/solana-wallet.ts:353`) y
+ *      (`listCloseable`, `../infrastructure/solana-wallet.ts:1443`). NO dice a dónde fue la plata y NO
+ *      distingue "nunca existió" de "ya se cerró después de resolverse". Ver R-1, acá abajo.
+ *  · `"unknown"`   — NO PUDIMOS PREGUNTAR: el RPC falló, venció el techo de tiempo, o la respuesta no
+ *      decodifica. No dice absolutamente nada sobre los fondos. NUNCA se colapsa con `"absent"`: uno
+ *      habla de la cadena y el otro de nosotros.
+ *
+ * ── R-1 · LA CUENTA AUSENTE SIGUE SIN DECIR A DÓNDE FUE LA PLATA ─────────────────────────────────
+ *
+ * Esta capa cambia "no comprobamos si tus USDC siguen en el escrow" por "la cadena contestó que ahí no
+ * hay cuenta, y eso significa una de dos cosas". Lo que se ELIMINÓ es el camino de decir "no
+ * comprobamos" cuando sí comprobamos. Lo que QUEDA VIVO: comprobamos, y la respuesta no distingue una
+ * devolución de una entrega. Se ACOTÓ; no se cerró.
+ *
+ * POR QUÉ NO SE DESAMBIGUA CON EL `EscrowIndex` DE WKH-347, que es la idea que va a tener el próximo
+ * que lea esto: el IDL declara que `close` "saca de `entries` el `remittance_id` que está cerrando"
+ * (`close`, `../infrastructure/solana/escrow-idl.ts:290`), o sea que el índice es un registro de
+ * escrows ABIERTOS y no un archivo histórico — justo las cerradas son las que no están. Y
+ * `register_escrow` recién empezó a emitirse en el merge de WKH-347, así que la ausencia de un `id16`
+ * tampoco distingue "nunca existió" de "es anterior a esa HU".
+ *
+ * EL ÚNICO CAMINO CONOCIDO QUE SÍ DESAMBIGUARÍA es `getSignaturesForAddress` sobre la PDA: es UNA
+ * llamada por fila (no se batchea), y devuelve firmas que después hay que resolver a transacciones
+ * para leer qué instrucción corrió. Rompe de frente el "una sola llamada RPC" que esta capa promete.
+ * Es otra HU.
+ */
+export type EscrowChainState = "deposited" | "released" | "refunded" | "absent" | "unknown";
+
+/**
+ * WKH-349 — el estado on-chain de VARIOS escrows del mismo remitente, en el menor número de llamadas.
+ *
+ * Lo consume la pantalla de historial para las filas cuyo desenlace el snapshot local no puede
+ * afirmar. NUNCA firma: ni prueba de posesión, ni `signMessage`, ni una transacción. Abrir "Ver mis
+ * envíos" no puede abrir un diálogo de firma.
+ *
+ * EL CONTRATO ES TOTAL: la implementación devuelve UNA ENTRADA POR CADA `remittanceId` pedido, sin
+ * excepción — incluidos los que fallaron (`"unknown"`) y los que no tienen cuenta (`"absent"`). Un
+ * `Map` no puede expresar esa totalidad en el tipo, así que el consumidor TAMPOCO la asume: una clave
+ * faltante se lee como `"unknown"`. Dos capas, dos candados (T-A5 en el adapter, T-V6 en el
+ * view-model).
+ *
+ * POR QUÉ UN `ReadonlyMap` Y NO UN `Array<{ remittanceId, state }>`, a diferencia de `CloseableEscrow`
+ * (`:397`): el consumidor es un `.map()` de React que necesita el estado de UNA fila. Un array obliga
+ * a cada consumidor a construir su índice, y el día que alguien resuelva eso con un `.find()` adentro
+ * del render, el costo es O(n²) sobre el camino que decide si la persona ve su plata.
+ *
+ * POR QUÉ ESTE PUERTO NO TIRA ANTE UN RPC CAÍDO, y por qué eso NO contradice a
+ * `SolanaCloseableEscrowLister` (`:401`), que tiene escrito lo contrario: allá `[]` es AMBIGUO (no se
+ * distingue de "la cadena contestó y no hay nada"), así que la única forma de decir "no pudimos
+ * preguntar" es tirar. Acá `"unknown"` es un valor explícito que significa exactamente eso, así que no
+ * hay ambigüedad que evitar — y hace falta, porque con troceo un chunk puede fallar mientras otro
+ * contesta, y una excepción global tiraría la respuesta buena. La disciplina se conserva donde sí
+ * aplica: si el adapter no puede ni EMPEZAR (sender inválido, imports que fallan), TIRA.
+ */
+export interface SolanaEscrowChainStateReader {
+  readEscrowStates(input: {
+    sender: string;
+    remittanceIds: readonly string[];
+  }): Promise<ReadonlyMap<string, EscrowChainState>>;
+}

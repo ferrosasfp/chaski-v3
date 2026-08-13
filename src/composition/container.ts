@@ -18,7 +18,7 @@ import { ResumeKyc } from "../application/use-cases/resume-kyc";
 import { StartKyc } from "../application/use-cases/start-kyc";
 import { TrackRemittance } from "../application/use-cases/track-remittance";
 import type {
-  PopProofRecorder, PopSigner, SolanaCloseableEscrowLister,
+  PopProofRecorder, PopSigner, SolanaCloseableEscrowLister, SolanaEscrowChainStateReader, // WKH-349: EN ESTA LÍNEA (`:47`, `:50`, `:114`, `:123`, `:127`, `:141`, `:169` y `:196` se citan por número)
   SolanaEscrowRefundGateway as SolanaEscrowRefundPort,
 } from "../application/ports";
 import { A2aQuoteGateway } from "../infrastructure/a2a/gateways";
@@ -76,7 +76,7 @@ export interface Container extends VentanaYRenovacion { // WKH-339: 2 campos REQ
   closeEscrowAccounts?: CloseEscrowAccounts;
   // El descubrimiento de cerrables (AC-8): la UI necesita LISTAR antes de poder cerrar, porque los
   // envíos que no están en el localStorage de este navegador no tienen ningún otro camino.
-  solanaCloseableEscrows?: SolanaCloseableEscrowLister;
+  solanaCloseableEscrows?: SolanaCloseableEscrowLister; solanaEscrowStates?: SolanaEscrowChainStateReader; // WKH-349: EN ESTA LÍNEA, no en una nueva — `:114`, `:123`, `:127`, `:141`, `:169` y `:196` de este archivo los cita otro por número y están TODOS debajo de acá. Opcional sólo por el test-container; el container real SIEMPRE lo cablea (ver el final de `createContainer`)
 }
 
 // HU-SOL-20/AC-2 — arma el SolanaWalletAdapter CON su resolver de remittanceId en un solo paso (sin setter,

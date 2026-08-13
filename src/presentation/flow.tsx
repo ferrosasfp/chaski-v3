@@ -2968,7 +2968,7 @@ export function ResetWarning({ items }: { items: RemittanceState[] | null }) {
 // QUÉ CONSULTA ESTA PANTALLA, desde WKH-349. Muestra el snapshot guardado y dice de cuál de cuatro
 // cosas se trata (escrowFundsKnowledge), incluido lo que la cadena ya había contestado y quedó
 // escrito. Y para el ÚNICO bucket que ese cálculo no puede resolver —`unverified`, que es "se depositó
-// y nadie volvió a mirar"— le pregunta a la cadena, en una sola llamada por apertura, en qué estado
+// y nadie volvió a mirar"— le pregunta a la cadena, en el MENOR NÚMERO DE LLAMADAS —el batch se trocea a `ESCROW_STATE_BATCH_CEILING`, así que desde la fila 101 son dos—, en qué estado
 // está la PDA `escrow_state` de esas filas. Nunca pregunta por las otras tres: su desenlace ya está
 // determinado localmente y una respuesta de cadena sólo podría contradecir un marcador ya escrito.
 //

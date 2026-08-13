@@ -38,9 +38,11 @@ import {
 
 afterEach(cleanup);
 
-// Las cinco frases que esta HU introduce, escritas ACÁ como literales y no derivadas del módulo bajo
-// prueba: un test que le pregunta al código qué copy produce y después verifica que produjo ese copy
-// es un guard que se compara consigo mismo. Estas cadenas son el contrato con la persona.
+// CINCO de las SIETE frases que esta HU introduce (`escrowOutcomeDisplay` produce siete; las otras dos
+// —`chain-absent` y `chain-pending`— sólo se ejercitan en `flow-vm.test.ts`). Van ACÁ como literales y
+// no derivadas del módulo bajo prueba: un test que le pregunta al código qué copy produce y después
+// verifica que produjo ese copy es un guard que se compara consigo mismo. Estas cadenas son el
+// contrato con la persona.
 const CP1_DEPOSITADO = "El contrato dice que tus USDC siguen en el escrow, a tu nombre.";
 const CP2_DEVUELTO = "El contrato dice que tus USDC ya volvieron a tu wallet.";
 const CP3_LIBERADO = "El contrato dice que tus USDC ya salieron del escrow hacia el pago.";

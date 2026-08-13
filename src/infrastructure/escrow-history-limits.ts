@@ -10,9 +10,9 @@
 //
 // Es lo primero que va a preguntar quien lea `solana-wallet.ts`: el techo de tiempo tiene tres
 // hermanas ahí mismo, en el bloque `:106-121`, y ésta está en otro archivo. El motivo es presupuesto,
-// no prolijidad, y está medido: 30 citas `archivo:línea` de otros archivos apuntan a
-// `solana-wallet.ts` con destino entre `:188` y `:1443`, o sea TODAS por debajo de ese bloque. Una
-// línea nueva ahí arriba las rota a las 30 de golpe. Acá el número de citas desplazadas es 0. El
+// no prolijidad, y el invariante que lo sostiene no lleva número porque el número caduca solo: TODAS
+// las citas ANCLADAS que `solana-wallet.ts` recibe apuntan de `:188` para abajo, o sea por debajo de
+// ese bloque. Una línea nueva ahí arriba las rota a TODAS de golpe. Acá las desplazadas son 0. El
 // import que las trae al adapter entra pegado a una línea existente, por lo mismo.
 //
 // ── DE DÓNDE SALE EL 100 ─────────────────────────────────────────────────────────────────────────
@@ -39,9 +39,10 @@ export const ESCROW_STATE_BATCH_CEILING = 100;
 //
 // De la familia de techos que este repo ya usa para sus LECTURAS SIMPLES —sin firma ni confirmación—
 // que corren dentro del camino que la persona espera mirando la pantalla: `SOL_BALANCE_PROBE_TIMEOUT_MS`
-// (`solana-wallet.ts:112`, sobre `getBalance`) y `ESCROW_INDEX_PROBE_TIMEOUT_MS` (`:121`, sobre
-// `getAccountInfo`). El segundo es además el precedente de ADOPTAR el número nombrando la familia:
-// su docblock dice "Mismo número y MISMA razón que SOL_BALANCE_PROBE_TIMEOUT_MS".
+// (sobre `getBalance`) y `ESCROW_INDEX_PROBE_TIMEOUT_MS` (sobre `getAccountInfo`), los dos en el bloque
+// de `solana-wallet.ts` que se nombra arriba — SIN número de línea, justamente para no citar por
+// número lo que está por ENCIMA de `:188`. El segundo es el precedente de ADOPTAR el número nombrando
+// la familia: su docblock dice "Mismo número y MISMA razón que SOL_BALANCE_PROBE_TIMEOUT_MS".
 //
 // El tercer techo de ese bloque, `REFUND_CONFIRM_TIMEOUT_MS` = 30 000, NO aplica: mide la confirmación
 // de una tx PROPIA y está calibrado contra la vida útil de un blockhash. Acá no hay tx ni confirmación.

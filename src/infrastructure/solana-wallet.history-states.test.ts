@@ -180,6 +180,25 @@ describe("SolanaWalletAdapter.readEscrowStates (WKH-349)", () => {
     expect(map.get("rem-viva")).toBe("deposited-window-open");
   });
 
+  // T-A15 (CD-SDD-7) — LA LISTA VACÍA NO CAMBIA LA DISCIPLINA DE "no puedo ni empezar ⇒ TIRO".
+  // El adapter tenía un corte temprano por lista vacía que se justificaba con "un batch de cero
+  // cuentas", que es falso: el batch cuelga del `for`, que con cero ids no entra nunca. Lo que sí
+  // hacía era comerse el `sender` inválido, contra lo que promete su propio docblock y el del puerto.
+  // MUTANTE: volver a poner `if (input.remittanceIds.length === 0) return out;` arriba de todo. El
+  // segundo assert se pone rojo (resuelve un Map vacío en vez de tirar) y el primero sigue verde.
+  it("T-A15: sin ids ⇒ Map vacío y CERO llamadas; con un sender que no es base58 TIRA igual", async () => {
+    const llamadas = mockBatch(new Map());
+    const adapter = await conectadoCon(SENDER_B58);
+
+    const map = await adapter.readEscrowStates({ sender: SENDER_B58, remittanceIds: [] });
+    expect(map.size).toBe(0);
+    expect(llamadas).toHaveLength(0); // sin corte temprano tampoco hay batch: el `for` no entra
+
+    await expect(
+      adapter.readEscrowStates({ sender: "no-es-base58", remittanceIds: [] }),
+    ).rejects.toThrow();
+  });
+
   // T-A5 (AC-1, totalidad) — MUTANTE: cualquier `continue` que saltee una fila. El contrato del puerto
   // dice "una entrada por cada id pedido", y esto es lo único que lo verifica del lado del adapter.
   it("T-A5: 5 ids pedidos ⇒ 5 entradas, y las claves son EXACTAMENTE los ids pedidos", async () => {

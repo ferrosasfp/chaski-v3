@@ -1666,9 +1666,15 @@ describe("WKH-349 · escrowOutcome / escrowOutcomeDisplay", () => {
   // 🔴 T-V6 (AC-1, totalidad) — NINGÚN HUECO EN EL PRODUCTO.
   // MUTANTE: un `switch` sin `default` (o una cadena de `if` sin retorno final) que caiga por un hueco
   // y devuelva `undefined`. La fila lo dibujaría como una tarjeta sin frase.
-  // ⚠️ El producto NO se escribe a mano: sale de `KNOWLEDGES.length * ANSWERS.length`, y las dos
-  // longitudes salen de `Record`s exhaustivos. Un `toBe(28)` clavado acá envejecía igual que una cita:
-  // esta misma HU le agregó un valor al tipo y el número correcto pasó de 28 a 32.
+  // ⚠️ EL `expect(pares)` DEL FINAL NO ES UN CANDADO, Y ACÁ ANTES SE LO PRESENTABA COMO SI LO FUERA:
+  // `pares` se incrementa UNA VEZ POR ITERACIÓN del mismo producto que después se compara, así que no
+  // puede fallar nunca. Se deja porque documenta la forma del recorrido, pero no prueba nada.
+  // EL CANDADO REAL de que el recorrido cubra TODOS los valores del tipo es `ANSWER_SET`
+  // (`ANSWER_SET`, `:1572`), un `Record<EscrowChainAnswer, true>`: un valor nuevo en el tipo y sin
+  // entrada ahí es un error de `tsc`, no un test verde mirando un valor menos. Lo mismo `FIXTURES`
+  // para `KNOWLEDGES`. Un `toBe(28)` clavado acá tampoco servía: esta misma HU le agregó un valor al
+  // tipo y el número correcto pasó de 28 a 32 — habría envejecido igual que una cita.
+  // Los asserts que SÍ miden están ADENTRO del loop: `toBeDefined` y el copy no vacío.
   it("T-V6: el producto de conocimientos × respuestas no tiene ningún hueco, y ninguno es undefined", () => {
     let pares = 0;
     for (const k of KNOWLEDGES) {

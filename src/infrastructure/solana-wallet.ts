@@ -27,7 +27,7 @@ import type {
   SolanaRemittanceIdResolver,
   SolanaSenderSolBalance,
   SolanaSenderSolBalanceProbe,
-  SolanaCloseableEscrowLister, EscrowChainState, SolanaEscrowChainStateReader, // WKH-349: EN ESTA LÍNEA, no en dos nuevas — las 30 citas por número a este archivo apuntan de `:188` para abajo
+  SolanaCloseableEscrowLister, EscrowChainState, SolanaEscrowChainStateReader, // WKH-349: EN ESTA LÍNEA, no en dos nuevas — TODAS las citas ancladas a este archivo apuntan de `:188` para abajo, y una línea nueva acá arriba las rota a todas
   WalletPort,
 } from "../application/ports";
 import type { Quote } from "../domain/remittance";
@@ -43,7 +43,7 @@ import {
   resolveSolanaUsdcMint,
 } from "./chain";
 import { ESCROW_INDEX_MAX_ENTRIES } from "./escrow-index-limits";
-import { ESCROW_ID_LOOKUP_CEILING } from "./escrow-lookup-limits"; import { ESCROW_STATE_BATCH_CEILING, ESCROW_STATE_BATCH_TIMEOUT_MS } from "./escrow-history-limits"; // WKH-349: EN ESTA LÍNEA, no en una nueva — los imports de este archivo están ARRIBA de `:188` y una línea acá rota las 30 citas por número que apuntan de ahí para abajo. Va pegado a `ESCROW_ID_LOOKUP_CEILING` y no a `ESCROW_INDEX_MAX_ENTRIES` a propósito: ése es justo el techo con el que el nuevo NO se confunde (uno lo pone el servidor del registro durable, el otro el RPC), y quien lea la línea ve los dos juntos
+import { ESCROW_ID_LOOKUP_CEILING } from "./escrow-lookup-limits"; import { ESCROW_STATE_BATCH_CEILING, ESCROW_STATE_BATCH_TIMEOUT_MS } from "./escrow-history-limits"; // WKH-349: EN ESTA LÍNEA, no en una nueva — los imports de este archivo están ARRIBA de `:188` y una línea acá rota TODAS las citas ancladas que apuntan de ahí para abajo, que son las que este archivo recibe. Va pegado a `ESCROW_ID_LOOKUP_CEILING` y no a `ESCROW_INDEX_MAX_ENTRIES` a propósito: ése es justo el techo con el que el nuevo NO se confunde (uno lo pone el servidor del registro durable, el otro el RPC), y quien lea la línea ve los dos juntos
 import { solanaWalletBridge } from "./solana-wallet-bridge";
 
 // HU-SOL-20/AC-2: tope de candidatos que el fallback del REFUND sondea on-chain — el camino que
@@ -113,7 +113,7 @@ const SOL_BALANCE_PROBE_TIMEOUT_MS = 5_000;
 
 /** WKH-327/AC-3 — techo de la sonda de la PDA `["escrow-index", sender]`. Mismo número y MISMA razón
  *  que SOL_BALANCE_PROBE_TIMEOUT_MS de acá arriba: es una lectura simple (sin firma ni confirmación)
- *  que corre dentro del camino que la persona espera mirando la pantalla. ⚠️ HAY UN CUARTO TECHO DE ESTA MISMA FAMILIA Y NO ESTÁ EN ESTE BLOQUE: `ESCROW_STATE_BATCH_TIMEOUT_MS` (el de `readEscrowStates`, el batch del historial) vive en `./escrow-history-limits.ts` junto a su techo de cantidad, porque una línea nueva acá arriba rota las 30 citas por número que este archivo recibe.
+ *  que corre dentro del camino que la persona espera mirando la pantalla. ⚠️ HAY UN CUARTO TECHO DE ESTA MISMA FAMILIA Y NO ESTÁ EN ESTE BLOQUE: `ESCROW_STATE_BATCH_TIMEOUT_MS` (el de `readEscrowStates`, el batch del historial) vive en `./escrow-history-limits.ts` junto a su techo de cantidad, porque TODAS las citas ancladas que este archivo recibe apuntan de `:188` para abajo y una línea nueva acá arriba las rota a todas.
  *
  *  Sin este techo, un `getAccountInfo` colgado (el RPC público que acepta la conexión y no contesta)
  *  deja a la persona mirando "Cerrando…" para siempre. Vencido el techo el resultado es "no pudimos
@@ -1561,7 +1561,7 @@ export class SolanaWalletAdapter
    * El `deadline` NO cuesta ninguna llamada más: viaja en la misma cuenta que el `status`, en el mismo
    * `coder.decode`. Si alguna vez hace falta un `getAccountInfo` por fila, un segundo batch o una
    * lectura del `Clock` del cluster para decidir esto, la decisión de diseño cambió y hay que volver a
-   * discutirla: el "una sola llamada por apertura" que esta pantalla promete se paga acá.
+   * discutirla: el "menor número de llamadas" que esta pantalla promete —hoy una por chunk— se paga acá.
    *
    * LO QUE NO SE MIDIÓ, y no se convierte en certeza en ninguna frase de este archivo:
    *  · El skew entre el reloj del dispositivo y el del cluster. Un navegador con la hora corrida
@@ -1578,9 +1578,13 @@ export class SolanaWalletAdapter
     remittanceIds: readonly string[];
   }): Promise<ReadonlyMap<string, EscrowChainState>> {
     const out = new Map<string, EscrowChainState>();
-    // Corte temprano: sin ids no hay nada que preguntar, y dejarlo caer haría un batch de cero
-    // cuentas cuyo fallo se leería como "no pudimos preguntar" sobre una pregunta que nadie hizo.
-    if (input.remittanceIds.length === 0) return out;
+    // ACÁ NO HAY CORTE TEMPRANO POR LISTA VACÍA, y es una decisión. El que había decía que sin él
+    // saldría "un batch de cero cuentas": es falso — el batch cuelga del `for` de abajo, que con cero
+    // ids no entra NUNCA (la frase estaba copiada de `:370-372`, donde sí es cierta porque allá el
+    // batch se llama incondicionalmente). Lo único que ahorraba eran cuatro `await import` y tres
+    // constructores, sobre un camino que producción no toca (`idsAConsultar`, `../presentation/flow.tsx:3026`). Y a cambio
+    // rompía lo que el docblock de arriba promete: con `{ sender: "no-es-base58", remittanceIds: [] }`
+    // NO tiraba. Sin el corte, un `sender` inválido tira SIEMPRE, con lista vacía o llena (T-A15).
 
     const web3 = await import("@solana/web3.js");
     const { PublicKey: PublicKeyLazy, Connection } = web3;

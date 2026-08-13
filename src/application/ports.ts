@@ -1084,7 +1084,7 @@ export type EscrowId16 = string;
  *
  * EL ÚNICO CAMINO CONOCIDO QUE SÍ DESAMBIGUARÍA es `getSignaturesForAddress` sobre la PDA: es UNA
  * llamada por fila (no se batchea), y devuelve firmas que después hay que resolver a transacciones
- * para leer qué instrucción corrió. Rompe de frente el "una sola llamada RPC" que esta capa promete.
+ * para leer qué instrucción corrió. Rompe el "en el menor número de llamadas" que esta capa promete.
  * Es otra HU.
  *
  * ── R-4 · DE QUÉ LADO DEL `deadline` ESTAMOS LO DICE NUESTRO RELOJ, NO LA CADENA ─────────────────
@@ -1096,16 +1096,26 @@ export type EscrowId16 = string;
  * guard (`refund_before_deadline`, `../infrastructure/solana-wallet.ts:972`)—, así que PUEDEN DIVERGIR:
  * lo único que las obliga a decir lo mismo es T-A13, el test que corre LAS DOS sobre el mismo borde.
  *
- * El input que lo demuestra: un dispositivo con el reloj tres días atrasado contesta
- * `"deposited-window-open"` sobre un escrow que el programa ya sólo deja refundear, y la fila le dice
- * a la persona que todavía hay tiempo. NO hay ningún camino en esta capa que lo detecte.
+ * LOS INPUTS QUE LO DEMUESTRAN, y son dos porque el primero que se escribió acá no se sostenía: decía
+ * "un dispositivo con el reloj tres días atrasado", y ESE dispositivo no puede haber creado el escrow
+ * —el `deadline` se escribe con el MISMO `Date.now()` sesgado (`deadline`, `../infrastructure/solana-wallet.ts:592`)
+ * y el programa lo compara contra el reloj del VALIDADOR, como dice el docblock de
+ * (`CUSTODY_WINDOW_SECS`, `../infrastructure/solana-wallet.ts:100`): ese depósito se rechaza en el
+ * momento, con `DeadlineTooSoon`—. Los dos inputs que sí pasan hoy:
+ *  · El reloj del dispositivo CAMBIÓ entre el depósito y esta lectura (viaje, ajuste manual, drift).
+ *  · El escrow se creó desde OTRO dispositivo, y el `deadline` lo escribió el reloj de aquél.
+ *
+ * QUÉ PASA CUANDO PASA: contestamos `"deposited-window-open"` sobre un escrow que el programa ya sólo
+ * deja refundear. La fila NO le dice "todavía hay tiempo" —CP-1 no habla del plazo, y ese silencio es
+ * lo que AC-10 pide—: lo que hace es CALLAR que la única puerta que queda es la devolución, o sea no
+ * mostrar CP-8 ni su camino al refund. NO hay ningún camino en esta capa que lo detecte.
  *
  * Lo que se ELIMINÓ: el camino de no decir nada del `deadline` cuando el `deadline` venía en la misma
  * cuenta que ya estábamos leyendo. Lo que QUEDA VIVO: lo sabemos con NUESTRO reloj, y ese reloj puede
  * estar mal. Se ACOTÓ; no se cerró, igual que R-1.
  *
- * CÓMO SE CERRARÍA, Y POR QUÉ NO ACÁ: leyendo el `Clock` del cluster, que es otra llamada RPC y rompe
- * de frente el "una sola llamada" que esta capa promete; o mostrando la FECHA del `deadline` para que
+ * CÓMO SE CERRARÍA, Y POR QUÉ NO ACÁ: leyendo el `Clock` del cluster, que es una llamada RPC MÁS por
+ * chunk encima de las que esta capa ya hace; o mostrando la FECHA del `deadline` para que
  * la persona pueda refutarlo sola, que necesita que el `deadline` llegue hasta la pantalla y por lo
  * tanto cambia el tipo que este puerto devuelve.
  */

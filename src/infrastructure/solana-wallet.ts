@@ -17,6 +17,7 @@ import type { Idl, Provider } from "@coral-xyz/anchor";
 import type {
   CloseableEscrow,
   ConnectedWalletProbe,
+  EscrowId16,
   EscrowRefundConfirmation,
   PrincipalDepositState,
   SolanaEscrowDeposit,
@@ -41,6 +42,7 @@ import {
   resolveSolanaRpcUrlPublic,
   resolveSolanaUsdcMint,
 } from "./chain";
+import { ESCROW_INDEX_MAX_ENTRIES } from "./escrow-index-limits";
 import { ESCROW_ID_LOOKUP_CEILING } from "./escrow-lookup-limits";
 import { solanaWalletBridge } from "./solana-wallet-bridge";
 
@@ -117,6 +119,23 @@ const SOL_BALANCE_PROBE_TIMEOUT_MS = 5_000;
  *  deja a la persona mirando "Cerrando…" para siempre. Vencido el techo el resultado es "no pudimos
  *  preguntar", que ACÁ significa abortar sin firmar: ver `probeEscrowIndex`. */
 const ESCROW_INDEX_PROBE_TIMEOUT_MS = 5_000;
+
+/**
+ * WKH-347 — QUÉ escrow eligió el camino de recuperación, y POR CUÁL de las dos fuentes.
+ *
+ * Es una unión discriminada y no una cadena, y ésa es toda la razón por la que existe: lo que sale
+ * del índice on-chain es un `EscrowId16` (los 16 bytes que la cadena consume) y NO es un
+ * `remittanceId`. `sha256` no se invierte, así que del id16 no se vuelve. Con las dos cosas tipadas
+ * como `string`, un id16 podía terminar interpolado en un copy, mandado al registro durable o
+ * comparado con el del `localStorage`, y las tres son falsas. Acá el consumidor está OBLIGADO a
+ * nombrar el caso antes de poder usar el valor.
+ *
+ * Vive en este módulo y no en `ports.ts` a propósito: no cruza ningún puerto. Un puerto ensanchado
+ * que nadie usa es superficie muerta en el money-path.
+ */
+type EscrowRecoveryTarget =
+  | { readonly via: "ledger"; readonly remittanceId: string }
+  | { readonly via: "index"; readonly id16: EscrowId16 };
 
 /** Marca interna: la tx ENTRÓ en un bloque y el programa la revirtió. Es un "no" MEDIDO, no una
  *  indeterminación, y por eso viaja como excepción y no como uno de los tres valores. */
@@ -250,22 +269,70 @@ export class SolanaWalletAdapter
     return Uint8Array.from(sha256(new TextEncoder().encode(remittanceId)).subarray(0, 16));
   }
 
-  /** ÚNICA fuente de la derivación de la PDA `escrow_state` para el refund (seeds: "escrow" | sender |
-   *  remittanceId[u8;16]) — la usan el path normal y el fallback de recuperación (HU-SOL-20/AC-2), así
-   *  que no pueden divergir. Byte-idéntica a la de authorizePrincipal / cross-repo (AH-9).
-   *  `PublicKey.findProgramAddressSync` es estático: el import de módulo y el lazy-import resuelven a
-   *  la MISMA clase. */
+  /** La derivación de la PDA `escrow_state` DESDE UN `remittanceId` — la usan el path normal y el
+   *  fallback de recuperación (HU-SOL-20/AC-2), así que no pueden divergir. Hashea con
+   *  `remittanceIdToBytes16` y DELEGA los seeds en `deriveEscrowStateFromId16`, que a partir de
+   *  WKH-347 es LA fuente única: hay un segundo camino que llega con el `id16` y sin `remittanceId`
+   *  (el índice on-chain), y dos derivaciones separadas son dos PDAs que pueden divergir. */
   private deriveEscrowState(
     senderPk: InstanceType<typeof PublicKey>,
     programId: InstanceType<typeof PublicKey>,
     remittanceId: string,
   ): { pda: InstanceType<typeof PublicKey>; bytes: Uint8Array } {
-    const bytes = this.remittanceIdToBytes16(remittanceId); // [u8;16] determinístico
+    const id16 = this.id16FromBytes(this.remittanceIdToBytes16(remittanceId));
+    return this.deriveEscrowStateFromId16(senderPk, programId, id16);
+  }
+
+  /** WKH-347 — ÚNICA fuente de la derivación de la PDA `escrow_state` (seeds: "escrow" | sender |
+   *  id16[u8;16]). Byte-idéntica a la de authorizePrincipal / cross-repo (AH-9).
+   *  `PublicKey.findProgramAddressSync` es estático: el import de módulo y el lazy-import resuelven a
+   *  la MISMA clase.
+   *
+   *  Entra por `EscrowId16` y no por `remittanceId` porque hay UN camino que nunca tiene el segundo:
+   *  el que redescubre un escrow leyendo el índice on-chain. `sha256` no se invierte, así que ahí el
+   *  `remittanceId` no existe y no se puede inventar. */
+  private deriveEscrowStateFromId16(
+    senderPk: InstanceType<typeof PublicKey>,
+    programId: InstanceType<typeof PublicKey>,
+    id16: EscrowId16,
+  ): { pda: InstanceType<typeof PublicKey>; bytes: Uint8Array } {
+    const bytes = this.bytesFromId16(id16);
     const [pda] = PublicKey.findProgramAddressSync(
       [Buffer.from("escrow"), senderPk.toBuffer(), Buffer.from(bytes)],
       programId,
     );
     return { pda, bytes };
+  }
+
+  /** ÚNICO lugar donde los 16 bytes se vuelven un `EscrowId16` (hex minúscula, 32 chars). Mismo
+   *  criterio de fuente única que la derivación de la PDA de acá arriba: dos conversiones separadas
+   *  son dos formas de escribir el mismo id que después no se comparan con `===`. */
+  private id16FromBytes(bytes: Uint8Array | readonly number[]): EscrowId16 {
+    return Array.from(bytes)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  }
+
+  /** La vuelta. Fail-loud ante cualquier cosa que no sean 32 chars hex: un id16 deforme derivaría una
+   *  PDA que no es la de nadie, y el camino de recuperación diría "no encontramos nada" sobre una
+   *  búsqueda que nunca se hizo bien.
+   *
+   *  ⚠️ `escrow_id16_malformed` HOY NO TIENE PRODUCTOR ALCANZABLE, Y NINGÚN TEST LO CUBRE (fix-pack
+   *  WKH-347, AR/MNR-6). Va dicho porque un docblock que afirma un comportamiento sin que nada lo
+   *  verifique es una promesa, no una propiedad. La razón por la que es inalcanzable es por CONSTRUCCIÓN
+   *  y se puede refutar con un input: el único lugar del adapter que fabrica un `EscrowId16` es
+   *  `id16FromBytes`, que emite siempre 32 caracteres hex minúscula (un `padStart(2,"0")` por byte sobre
+   *  16 bytes), y sus dos fuentes son `remittanceIdToBytes16` (sha256 truncado) y las `entries` del
+   *  `EscrowIndex` decodificado (`vec<[u8;16]>`, cota del layout). Ninguna puede producir otra forma.
+   *  ⇒ El guard queda porque `EscrowId16` es un alias de `string` y no lo protege el tipo: el día que un
+   *  `id16` entre por un puerto, por la URL o escrito a mano en un doble, este `throw` es lo único que
+   *  separa "no encontramos nada" de "buscamos en la PDA de nadie". Si le agregás ese productor, el test
+   *  va con él. */
+  private bytesFromId16(id16: EscrowId16): Uint8Array {
+    if (!/^[0-9a-f]{32}$/.test(id16)) throw new Error("escrow_id16_malformed");
+    const out = new Uint8Array(16);
+    for (let i = 0; i < 16; i++) out[i] = Number.parseInt(id16.slice(i * 2, i * 2 + 2), 16);
+    return out;
   }
 
   // HU-SOL-20/AC-2 — FALLBACK de recuperación: el caller no trajo el remittanceId (localStorage
@@ -282,7 +349,7 @@ export class SolanaWalletAdapter
   // MAX_RECOVERY_CANDIDATES envíos de la persona en los tres casos en que no se preguntó nada.
   // Ahora se consume `lookupBySender`, que las separa, y los tres `not_asked` salen por un código
   // propio. La CUARTA sigue saliendo por `escrow_not_found`, a propósito: ahí el servidor sí contestó
-  // y la frase de la pantalla es cierta. Espeja a (`listCloseable`, `:1104`), que ya hacía esto.
+  // y la frase de la pantalla es cierta. Espeja a (`listCloseable`, `:1443`), que ya hacía esto.
   private async resolveRemittanceIdFromLedger(senderB58: string): Promise<string> {
     const resolver = this.remittanceIdResolver;
     // Mismo guard que `listCloseable`: sin el método no se adivina, y un doble de JS que no lo tenga
@@ -333,6 +400,153 @@ export class SolanaWalletAdapter
       if (statusKey === "Deposited") return candidates[i]!; // el primero refundeable gana
     }
     throw new Error("escrow_not_found"); // ningún candidato está Deposited
+  }
+
+  /**
+   * WKH-347 — QUÉ escrow hay que recuperar, mirando las DOS fuentes que existen: el registro durable
+   * primero y, si ése no encontró nada, el índice on-chain del remitente.
+   *
+   * POR QUÉ EL ÍNDICE VA EN UN `catch` DE `escrow_not_found` Y NO ADENTRO DEL RESOLVER: ese código
+   * sale de DOS puntos distintos del camino del ledger — el servidor contestó y no tiene ids, y
+   * recorrió los candidatos y ninguno está `Deposited` — y los dos merecen la segunda fuente. Con el
+   * `catch` quedan cubiertos los dos por construcción, en vez de por acordarse de tocar dos lugares.
+   * Implementar sólo el primero dejaría el resultado colgado de si la persona CASUALMENTE tiene una
+   * remesa vieja e irrelevante en el ledger, que es una moneda al aire sobre el camino que devuelve
+   * el principal.
+   *
+   * 🚫 LO QUE NO SE CONSULTA, y es un límite declarado: cuando el registro durable contesta
+   * `not_asked` (el mecanismo de PoP apagado, el registro apagado o el PoP rechazado), el corte sigue
+   * siendo `escrow_recovery_unavailable:<motivo>` y el índice NO se mira, aunque sea uno de los
+   * escenarios para los que existe. Ampliarlo obliga a tocar una superficie de copy con cinco
+   * productores y es otra HU. El `throw e` de abajo es lo que lo mantiene cierto, y hay un test que
+   * verifica que la cadena no se toca en esos tres casos.
+   *
+   * El retorno es una unión DISCRIMINADA y no una cadena, porque lo que sale del índice es un
+   * `EscrowId16` y NO es un `remittanceId`: no se puede interpolar en un copy, ni mandar al registro,
+   * ni comparar con el del `localStorage`. Con una cadena pelada las dos cosas serían el mismo tipo.
+   */
+  private async resolveEscrowTarget(senderB58: string): Promise<EscrowRecoveryTarget> {
+    try {
+      const remittanceId = await this.resolveRemittanceIdFromLedger(senderB58);
+      return { via: "ledger", remittanceId };
+    } catch (e) {
+      // SÓLO `escrow_not_found` habilita la segunda fuente. `escrow_recovery_unavailable:*` y
+      // `escrow_id_unavailable` significan que no se llegó a preguntar, y "no pude preguntar" no es
+      // "no hay": pasan de largo tal cual, sin tocar la cadena.
+      if ((e as Error)?.message !== "escrow_not_found") throw e;
+      const id16 = await this.resolveFromEscrowIndex(senderB58);
+      return { via: "index", id16 };
+    }
+  }
+
+  /**
+   * El camino de la SEGUNDA fuente: el índice on-chain `["escrow-index", sender]`, que se deriva de
+   * la pubkey del remitente sola y por eso sigue alcanzable cuando el `remittanceId` se perdió.
+   *
+   * CUATRO desenlaces, y colapsarlos es exactamente el defecto que esta HU no puede introducir:
+   *   · la PDA no existe            ⇒ `escrow_index_absent`. ❌ NO significa "no tenés nada".
+   *   · no se pudo leer             ⇒ `escrow_index_unreadable`. ❌ NO dice nada sobre los fondos.
+   *   · existe y está vacío         ⇒ `escrow_not_found`, que es el de hoy: se miró y no lista nada.
+   *   · existe y tiene entradas     ⇒ sigue el sondeo on-chain, que es el único autoritativo.
+   *
+   * 🚫 LOS `entries` NO SE RECORTAN A `MAX_RECOVERY_CANDIDATES`. Ese techo es el de la ROUTE del
+   * registro durable, que es otra fuente: el índice no tiene servidor, sus entradas son hasta
+   * `ESCROW_INDEX_MAX_ENTRIES` y `getMultipleAccountsInfo` las sondea en UNA llamada igual que 20.
+   * Recortarlas sería tirar candidatos del camino que devuelve el principal por un número que
+   * pertenece a otro lado, que es el defecto que `escrow-lookup-limits.ts` ya documentó una vez.
+   *
+   * El criterio de elección es el mismo que el del camino del ledger: una sola llamada batch, una
+   * cuenta que no decodifica se descarta y nunca rompe la recuperación, y el primero `Deposited` gana.
+   *
+   * 🔴 Y ESO ES UNA DUPLICACIÓN RESIDUAL DECLARADA, no una igualdad garantizada (fix-pack WKH-347,
+   * CR/MNR-3). Acá se AFIRMABA que los dos bucles coinciden y NADA lo verificaba: el bucle de selección
+   * de `escrowIndexCandidate` es un clon estructural del de `resolveRemittanceIdFromLedger`, y el día que
+   * alguien cambie uno —agregarle el chequeo de `deadline`, por ejemplo, o cambiar el criterio de
+   * empate— el otro se queda como está y este docblock queda mintiendo en silencio. No hay test que
+   * compare los dos bucles.
+   *
+   * ⛔ **DECIDÍ NO REFACTORIZAR EL MONEY-PATH A ESTA ALTURA**, y va con esas palabras. Compartir el bucle
+   * es lo correcto en abstracto y acá el costo es concreto: los dos caminos tienen tipos de entrada
+   * distintos (`remittanceId` contra `EscrowId16`), derivan la PDA por funciones distintas y devuelven
+   * cosas distintas, así que la extracción toca la función que elige QUÉ escrow se refundea, en el mismo
+   * diff que ya cambió su comportamiento y con el fix-pack de dos revisiones encima. La deuda queda
+   * anotada acá, en el sitio, y no en un backlog que nadie relee: **si tocás uno de los dos bucles, tocá
+   * el otro o borrá esta afirmación.**
+   *
+   * ⚠️ POR QUÉ ESTA FUNCIÓN ES UN MAPEADOR Y EL TRABAJO VIVE EN LA DE ABAJO. Los cuatro desenlaces son
+   * cuatro, y todo lo que no sea uno de ellos es un QUINTO desenlace SIN NOMBRE. `probeEscrowIndex`
+   * atrapa lo suyo (el techo, el RPC, el decode), pero el resto de este camino —los cuatro
+   * `await import()`, el `new PublicKey(senderB58)`, la derivación de las PDAs y la llamada batch— no
+   * lo atrapa nadie, y un error de ahí escapaba CRUDO hasta la red de seguridad de la pantalla, que
+   * dice "no sabemos hasta dónde llegamos". Y sí sabíamos: no pudimos leer el índice. MEDIDO en jsdom,
+   * donde `findProgramAddressSync` tira "Unable to find a viable program address nonce" (la misma causa
+   * que `escrow-rent-discovery-junta.test.ts` ya dejó medida) y la pantalla mostraba la red de
+   * seguridad en vez del copy del índice.
+   *
+   * ⇒ Cualquier fallo que no sea uno de los tres códigos deliberados se dice `escrow_index_unreadable`,
+   * porque es exactamente lo que significa: *no pude preguntar*, y eso no es "no". Los tres pasan tal
+   * cual, así que este `catch` NO puede convertir un "no hay" en un "no pude".
+   *
+   * 🚫 LO QUE ESTE MAPEO CUESTA, y va escrito para que nadie lo descubra de golpe: el mensaje original
+   * SE PIERDE. Un bug de programación en este camino se va a ver como "no pudimos leer el índice" y no
+   * como el error que es. Se acepta porque acá no se mueve plata —este camino sólo LEE para elegir un
+   * candidato, y los guards autoritativos del refund corren después y completos— y porque la
+   * alternativa medida era peor: la pantalla afirmando que no sabe dónde se cortó cuando sí lo sabe.
+   * El motivo NO se interpola en el código que viaja: un mensaje crudo de una dependencia no es un
+   * enum, y esta cadena llega a `lostEscrowRecoveryError`.
+   */
+  private async resolveFromEscrowIndex(senderB58: string): Promise<EscrowId16> {
+    try {
+      return await this.escrowIndexCandidate(senderB58);
+    } catch (e) {
+      const code = (e as Error)?.message;
+      if (
+        code === "escrow_index_absent" ||
+        code === "escrow_index_unreadable" ||
+        code === "escrow_not_found"
+      )
+        throw e; // los TRES deliberados viajan intactos
+      throw new Error("escrow_index_unreadable");
+    }
+  }
+
+  /** El trabajo del camino del índice. Lo envuelve `resolveFromEscrowIndex`, que es quien garantiza
+   *  que de acá no sale ningún desenlace sin nombre. */
+  private async escrowIndexCandidate(senderB58: string): Promise<EscrowId16> {
+    const web3 = await import("@solana/web3.js");
+    const { PublicKey: PublicKeyLazy, Connection } = web3;
+    const anchor = await import("@coral-xyz/anchor");
+    const { escrowIdl } = await import("./solana/escrow-idl");
+
+    const senderPk = new PublicKeyLazy(senderB58); // valida base58 (CD-SDD-7)
+    const programId = new PublicKeyLazy((escrowIdl as { address: string }).address);
+    const connection = new Connection(
+      resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), // client-safe
+    );
+    const coder = new anchor.BorshAccountsCoder(escrowIdl as unknown as Idl);
+
+    const idx = await this.probeEscrowIndex(connection, senderPk, programId, coder);
+    if (idx.status === "unknown") throw new Error("escrow_index_unreadable");
+    if (idx.status === "absent") throw new Error("escrow_index_absent");
+    if (idx.entries.length === 0) throw new Error("escrow_not_found"); // el índice existe y no lista nada
+
+    const pdas = idx.entries.map((id) => this.deriveEscrowStateFromId16(senderPk, programId, id).pda);
+    const infos = await connection.getMultipleAccountsInfo(pdas);
+    for (let i = 0; i < idx.entries.length; i++) {
+      const acc = infos[i];
+      if (!acc) continue; // la cuenta ya no está: la entrada quedó colgada, no es candidata
+      let statusKey: string | undefined;
+      try {
+        const state = coder.decode("EscrowState", acc.data) as { status: Record<string, unknown> };
+        statusKey = Object.keys(state.status)[0];
+      } catch {
+        continue; // cuenta deforme/ajena al layout: se descarta, NUNCA rompe la recuperación
+      }
+      if (statusKey === "Deposited") return idx.entries[i]!; // el primero refundeable gana
+    }
+    // Se miraron las DOS fuentes y ninguna tiene un escrow abierto. Es el mismo código de hoy porque
+    // es la misma afirmación, y es la única que se puede hacer: se preguntó y no hay.
+    throw new Error("escrow_not_found");
   }
 
   // HU-SOL-5 (AC-1..AC-4, AC-7, AC-8): construye la ix `deposit` del escrow Anchor, fija
@@ -464,13 +678,97 @@ export class SolanaWalletAdapter
       microLamports: resolveSolanaComputeUnitPriceMicroLamports(),
     });
 
+    // ── WKH-347 · el escrow queda ENCONTRABLE desde la pubkey del remitente ────────────────────────
+    //
+    // QUÉ PROBLEMA ATACA, dicho sin exagerar: la derivación de la PDA del escrow es
+    // `["escrow", sender, id16]` y el `id16` sale de `sha256(remittanceId)`, así que el `remittanceId`
+    // es la ÚNICA entrada. Cuando la escritura del registro durable falla, ese id se pierde y no hay
+    // forma de volver a derivar la PDA. Registrar el escrow en el índice on-chain del remitente lo
+    // vuelve ENCONTRABLE desde su pubkey sola.
+    //
+    // ⛔ LO QUE NO HACE, y no se puede escribir de otra manera: NO vuelve imposible el depósito
+    // huérfano y NO evita que la escritura del registro durable falle. Esa escritura sigue igual de
+    // frágil que ayer. Lo único que cambia es que el escrow se puede volver a encontrar después.
+    //
+    // ── LA SONDA VA ACÁ, Y ESO ES PARTE DEL CONTRATO (CD-14) ─────────────────────────────────────
+    //  · 14.1 · el resultado queda en una `const` local YA RESUELTA, antes de la primera línea que
+    //    agrega instrucciones. Nunca un `.then()`, nunca una `Promise` guardada: si el `.add()`
+    //    corriera antes del `await`, la firma no cubriría las dos ix.
+    //  · 14.2 · PROHIBIDO memoizarlo en un campo del adapter. Este adapter es un SINGLETON del
+    //    container y la ocupación del índice cambia con cada registro: un valor memoizado es un dato
+    //    viejo decidiendo si se agrega una ix que puede REVERTIR EL DEPÓSITO COMPLETO.
+    //  · 14.3 · PROHIBIDO que el guard de saldo lea el índice por su cuenta. Hoy compara contra UN
+    //    número fijo y no lo lee; agregarle una lectura reintroduce el modo de falla que el umbral
+    //    único eliminó (dos lecturas separadas por una llamada de red que pueden divergir).
+    //
+    // El techo de la sonda son 5 s (ESCROW_INDEX_PROBE_TIMEOUT_MS) y son hasta 5 s ANTES del diálogo
+    // de firma. 🚫 PROHIBIDO subirlo "para mejorar la tasa de registro": el costo lo paga la persona
+    // mirando la pantalla.
+    const idxCoder = new anchor.BorshAccountsCoder(escrowIdl as unknown as Idl);
+    const idx = await this.probeEscrowIndex(connection, senderPk, programId, idxCoder);
+    // La decisión, con `idx` ya resuelto:
+    //   absent                                   ⇒ se registra (la ix crea el índice)
+    //   present con lugar                        ⇒ se registra
+    //   present y LLENO (>= ESCROW_INDEX_MAX_ENTRIES) ⇒ NO se registra
+    //   unknown                                  ⇒ NO se registra
+    //
+    // ⚠️ LA ASIMETRÍA CON `closeEscrow` ES DELIBERADA Y NO SE ARMONIZA. Allá `unknown` ABORTA, porque
+    // adivinar puede dejar una entrada colgada consumiendo un lugar del cupo y lo único que se pierde
+    // es un cierre reintentable. ACÁ DEGRADA, porque el costo de abortar es bloquear una remesa
+    // legítima por una falla de lectura NUESTRA: un RPC caído no puede impedirle a alguien mandar
+    // plata. Las dos mitades van escritas para que ningún review "corrija" una mirando la otra.
+    //
+    // Y el índice lleno tampoco aborta, por la misma razón: quien tenga 32 escrows abiertos sigue
+    // pudiendo depositar. Lo que pierde es que ESE depósito quede registrado, no el depósito.
+    const registrable =
+      idx.status === "absent" ||
+      (idx.status === "present" && idx.entries.length < ESCROW_INDEX_MAX_ENTRIES);
+    // 🔴 CD-10 — TODO lo nuevo vive adentro de este `if`, así que el camino de UNA ix de negocio no
+    // ejecuta ni una línea nueva y sale byte-idéntico al de antes de esta HU. Está medido contra un
+    // fixture pinneado del árbol previo, no prometido.
+    let regIx: TransactionInstruction | undefined;
+    if (registrable) {
+      const regMethods = program.methods as unknown as {
+        registerEscrow: (...args: unknown[]) => {
+          accounts: (a: Record<string, PublicKey>) => {
+            instruction: () => Promise<TransactionInstruction>;
+          };
+        };
+      };
+      const [escrowIndexPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("escrow-index"), senderPk.toBuffer()],
+        programId,
+      );
+      regIx = await regMethods
+        // El binding al `deposit` NO es opcional: el mismo sender, la MISMA `escrowStatePda` y los
+        // MISMOS `remittanceIdBytes` que la ix de posición 0. No se re-deriva nada — se usan las
+        // variables que ya están en el scope, que es lo que impide que las dos ix hablen de escrows
+        // distintos. SIN `.remainingAccounts(...)`: una cuenta de más acá la rechaza el facilitator.
+        .registerEscrow(Array.from(remittanceIdBytes))
+        // `sender`, `escrowState` y `escrowIndex` explícitos por el mismo criterio que el `deposit`:
+        // que la dirección no dependa de la versión del resolver de anchor. `systemProgram` tiene
+        // `address` fija en el IDL y lo resuelve anchor.
+        .accounts({ sender: senderPk, escrowState: escrowStatePda, escrowIndex: escrowIndexPda })
+        .instruction();
+    }
+
     // ── feePayer + blockhash + partial-sign + serializar (AC-2/AC-3) ──
     const { blockhash } = await connection.getLatestBlockhash();
     // Orden [limit, price, deposit]: convención y legibilidad (el límite es lo que el precio
     // multiplica). CR-1 NO lo exige — filtra las ix de ComputeBudget por programId (cr1.ts:106-107) y
     // toma businessIx[0] del array ya filtrado (:115). Se documenta para que nadie lo cambie creyendo
     // que da igual, y para que nadie lo defienda creyendo que el validador lo impone.
-    const tx = new Transaction().add(limitIx, priceIx, ix); // [limit, price, deposit] — ver CD-1
+    //
+    // 🔴 LO QUE SÍ ES UN INVARIANTE: el `deposit` va SIEMPRE en la posición 0 de las ix DE NEGOCIO, y
+    // el `register_escrow` DESPUÉS. Hay TRES actores que dependen de eso por POSICIÓN, no por
+    // discriminador: el CR-1 del facilitator, el Guard A de SDD 037 y NUESTRO PROPIO SERVIDOR
+    // (`tx.instructions.filter`, `settlement/solana-deposit-beneficiary.ts:106`), que indexa la POSICIÓN
+    // 0 de las ix del escrow y después exige que sea el `deposit`. Con el orden invertido ese lector devuelve
+    // `unreadable` y la route del settle responde 400: TODO depósito patrocinado falla en nuestro
+    // propio servidor, antes de que el facilitator vea nada. ⛔ PROHIBIDO invertirlo.
+    const tx = regIx
+      ? new Transaction().add(limitIx, priceIx, ix, regIx) // [limit, price, deposit, register] — CD-1
+      : new Transaction().add(limitIx, priceIx, ix); // [limit, price, deposit] — ver CD-1
     tx.feePayer = new PublicKey(resolveSolanaFacilitatorPubkey()); // AC-2: facilitator paga el fee de red
     tx.recentBlockhash = blockhash;
 
@@ -624,7 +922,13 @@ export class SolanaWalletAdapter
     // recién después viene la de la transacción. Esa diferencia es la que hace falta al firmar.
     const idPedido =
       typeof remittanceId === "string" && remittanceId.trim().length > 0 ? remittanceId : undefined;
-    const escrowId = idPedido ?? (await this.resolveRemittanceIdFromLedger(senderB58));
+    // WKH-347 — TRES caminos de entrada, no dos, y el tercero es el que trae un `EscrowId16` desde el
+    // índice on-chain. Los dos que ya existían no cambian ni un byte: con el id presente el resolver
+    // NI SE ROZA, y sin id se sigue preguntando primero al registro durable.
+    const target: EscrowRecoveryTarget =
+      idPedido !== undefined
+        ? { via: "ledger", remittanceId: idPedido }
+        : await this.resolveEscrowTarget(senderB58);
 
     // ── lazy-import (patrón authorizePrincipal, DT-SDD-8) ──
     const web3 = await import("@solana/web3.js");
@@ -637,17 +941,22 @@ export class SolanaWalletAdapter
     const programId = new PublicKey((escrowIdl as { address: string }).address); // DR5G…SE4x
 
     // ── PDA escrow_state (misma derivación que authorizePrincipal / cross-repo, AH-9) ──
-    const { pda: escrowStatePda, bytes: remittanceIdBytes } = this.deriveEscrowState(
-      senderPk,
-      programId,
-      escrowId,
-    );
+    // Las dos ramas terminan en la MISMA función de derivación: la del `remittanceId` hashea y
+    // delega, la del `id16` entra directo. Por eso no pueden divergir en la PDA que producen.
+    const { pda: escrowStatePda, bytes: remittanceIdBytes } =
+      target.via === "ledger"
+        ? this.deriveEscrowState(senderPk, programId, target.remittanceId)
+        : this.deriveEscrowStateFromId16(senderPk, programId, target.id16);
 
     const connection = new Connection(
       resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), // client-safe
     );
 
     // ── Read on-chain (autoritativo): status==Deposited && now>=deadline (AC-6/AC-7) ──
+    // 🔴 LOS TRES GUARDS DE ABAJO CORREN COMPLETOS PARA LOS TRES CAMINOS DE ENTRADA, incluido el del
+    // índice. El índice NO es autoritativo sobre el estado de un escrow: dice que alguna vez se
+    // registró, no que siga abierto ni que esté vencido. ⛔ PROHIBIDO saltear, reordenar u
+    // "optimizar" esta secuencia porque el índice ya dijo algo.
     const info = await connection.getAccountInfo(escrowStatePda);
     if (!info) throw new Error("escrow_not_found"); // nada que refundear
     const coder = new anchor.BorshAccountsCoder(escrowIdl as unknown as Idl);
@@ -801,11 +1110,11 @@ export class SolanaWalletAdapter
    * devuelve siempre. Que NINGUNA instrucción la cierre **no se pudo verificar** desde este repo: el
    * IDL no expresa las constraints `close = ...` de Anchor.
    *
-   * POR QUÉ EXIGE `remittanceId` Y `refundEscrow` NO: el fallback de refund (`refundEscrow`, `:616`,
-   * que llama a `resolveRemittanceIdFromLedger`, `:286`) elige UNO entre N y actúa sobre él, porque
+   * POR QUÉ EXIGE `remittanceId` Y `refundEscrow` NO: el fallback de refund (`refundEscrow`, `:914`,
+   * que llama a `resolveRemittanceIdFromLedger`, `:353`) elige UNO entre N y actúa sobre él, porque
    * "recuperar mis USDC" tiene un objetivo natural — el escrow que todavía tiene plata. Para `close` no
    * existe ese "el": todos los terminales son igual de cerrables, y elegir uno en silencio le cerraría
-   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1104`) devuelve la
+   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1443`) devuelve la
    * LISTA y elige ella.
    *
    * ⚠️ POR QUÉ EL LISTER NO TIENE GATEWAY Y EL CIERRE SÍ (apartamiento declarado del SDD §4.1/§4.2,
@@ -828,7 +1137,7 @@ export class SolanaWalletAdapter
    * qué código emite Anchor exactamente en ese caso: haría falta un `close` real que revierta.
    *
    * NO declara ComputeBudget, a diferencia de `authorizePrincipal`
-   * (`ComputeBudgetProgram.setComputeUnitLimit`, `:460`): aquello existía por el
+   * (`ComputeBudgetProgram.setComputeUnitLimit`, `:674`): aquello existía por el
    * tope POR UNIDAD del facilitator, y acá el feePayer es el sender — no hay tope de nadie que
    * respetar. Y el número que haría falta (el consumo de CU de `close`) no existe: los 120.000 de
    * `resolveSolanaComputeUnitLimit` salen del peor caso de `deposit`. Declarar un límite por debajo del
@@ -955,6 +1264,26 @@ export class SolanaWalletAdapter
    * Los TRES inputs que producen "unknown" — RPC caído, techo vencido, bytes indecodificables —
    * colapsan aguas arriba en UN solo código (`escrow_index_probe_failed`). Se dice acá para que nadie
    * lea ese código como un diagnóstico fino: la persona no puede hacer nada distinto con cada uno.
+   *
+   * ⚠️ WKH-347 — A PARTIR DE ACÁ HAY **TRES** LLAMADORES, Y LE DAN A `unknown` TRES DESENLACES
+   * DISTINTOS. No es una incoherencia y no hay que "armonizarla". 🔴 Acá decía DOS, y subcontar es
+   * exactamente lo que debilita a este docblock: existe para que nadie unifique la divergencia, y con un
+   * llamador sin enumerar la unificación parece más barata de lo que es (fix-pack WKH-347, AR/MNR-4).
+   *   · `closeEscrow` ABORTA (`escrow_index_probe_failed`). Adivinar ahí puede dejar una entrada
+   *     colgada consumiendo un lugar del cupo, y lo único que se pierde abortando es un cierre que la
+   *     persona puede reintentar.
+   *   · `authorizePrincipal` DEGRADA: sale sin la 2ª ix. El costo de abortar ahí es otro y mucho más
+   *     alto — bloquear una remesa legítima por una falla de lectura NUESTRA. Un RPC caído no puede
+   *     impedirle a alguien mandar plata.
+   *   · `escrowIndexCandidate` (el camino de RECUPERACIÓN, el tercero, agregado por esta HU) ABORTA con
+   *     OTRO código: `escrow_index_unreadable`, que llega hasta la pantalla con su copy propio. No
+   *     comparte el de `closeEscrow` a propósito — son dos acciones distintas para la persona— y no puede
+   *     degradar como `authorizePrincipal`, porque degradar acá sería contestar "no hay" sobre una
+   *     pregunta que no se pudo hacer.
+   *
+   * La rama `present` transporta además las `entries` ya decodificadas: el decode ya se hacía y su
+   * resultado se tiraba, y hay dos preguntas que lo necesitan (¿queda cupo? ¿qué escrows redescubrir?).
+   * Sigue siendo una unión de TRES, discriminada y sin ningún campo opcional (CD-7).
    */
   private async probeEscrowIndex(
     connection: Web3Connection,
@@ -962,7 +1291,11 @@ export class SolanaWalletAdapter
     programId: InstanceType<typeof PublicKey>,
     coder: { decode(name: string, data: Buffer): unknown },
   ): Promise<
-    | { status: "present"; pda: InstanceType<typeof PublicKey> }
+    | {
+        status: "present";
+        pda: InstanceType<typeof PublicKey>;
+        entries: readonly EscrowId16[];
+      }
     | { status: "absent" }
     | { status: "unknown" }
   > {
@@ -979,25 +1312,31 @@ export class SolanaWalletAdapter
       return { status: "unknown" }; // RPC caído o techo vencido: NO es "no existe"
     }
     if (info === null) return { status: "absent" }; // la cadena CONTESTÓ: no existe
+    let entries: readonly EscrowId16[];
     try {
-      coder.decode("EscrowIndex", info.data);
-    } catch {
       // El decode no es decorativo: distingue "el índice de este sender" de "una cuenta que cayó en esa
       // dirección y no es lo que creemos". Meter una cuenta ESCRIBIBLE que no podemos identificar en
       // una tx del money-path es peor que no mandarla.
+      const decoded = coder.decode("EscrowIndex", info.data) as {
+        entries: ReadonlyArray<Uint8Array | readonly number[]>;
+      };
+      // `entries` es `vec<[u8;16]>` en el IDL, o sea arrays de bytes. La conversión a `EscrowId16`
+      // pasa por el ÚNICO lugar de conversión que tiene este adapter.
+      entries = decoded.entries.map((e) => this.id16FromBytes(e));
+    } catch {
       return { status: "unknown" };
     }
-    return { status: "present", pda };
+    return { status: "present", pda, entries };
   }
 
   /**
    * ¿Entró el `close`? Devuelve el tri-estado y TIRA `close_tx_failed` sólo cuando medimos que la tx
    * entró y revirtió Y la cuenta sigue ahí.
    *
-   * ⚠️ DOS DIVERGENCIAS DELIBERADAS respecto de `confirmRefund`, `:725`. Están escritas acá para
+   * ⚠️ DOS DIVERGENCIAS DELIBERADAS respecto de `confirmRefund`, `:1034`. Están escritas acá para
    * que nadie las "armonice" de vuelta en un code review:
    *
-   * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`confirmRefund`, `:725`), SIN leer nada.
+   * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`confirmRefund`, `:1034`), SIN leer nada.
    *    Éste NO puede: AC-5 exige que el alquiler volvió se afirme *sólo después de leer que la cuenta
    *    ya no existe*. Un `confirmTransaction` sin `err` prueba que la tx ENTRÓ; leer la ausencia es lo
    *    que prueba que hizo lo que queríamos. El input que pone en rojo cualquier atajo acá: un doble
@@ -1082,7 +1421,7 @@ export class SolanaWalletAdapter
    * PoP obligatorio) con una sonda ON-CHAIN, así que incluye envíos que NO están en el `localStorage`
    * de este navegador — que es exactamente la gente que hoy no tiene ningún camino hacia su alquiler.
    *
-   * Espeja `resolveRemittanceIdFromLedger`, `:286`, en su disciplina: fail-loud sin resolver, tope
+   * Espeja `resolveRemittanceIdFromLedger`, `:353`, en su disciplina: fail-loud sin resolver, tope
    * de candidatos, UNA sola llamada RPC batch, y un `decode` en try/catch para que una cuenta deforme
    * no rompa la recuperación entera. Tres diferencias, cada una con su razón:
    *

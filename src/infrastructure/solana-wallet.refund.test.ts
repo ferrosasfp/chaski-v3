@@ -345,24 +345,85 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
     return { data, executable: false, lamports: 1, owner: PROGRAM_ID, rentEpoch: 0 };
   }
 
+  /** La PDA del índice del sender: seeds ["escrow-index", sender]. Portada de
+   *  `solana-wallet.close.test.ts`, misma derivación. */
+  const ESCROW_INDEX_PDA = PublicKey.findProgramAddressSync(
+    [Buffer.from("escrow-index"), SENDER_KP.publicKey.toBuffer()],
+    PROGRAM_ID,
+  )[0];
+
+  /** Los 16 bytes que la CADENA consume, en hex minúscula: la forma de un `EscrowId16`. */
+  function id16Of(bytes: Uint8Array | number[]): string {
+    return Array.from(bytes)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  }
+  /** La PDA `escrow_state` derivada DESDE los 16 bytes, sin pasar por ningún `remittanceId`. Es el
+   *  camino que el índice habilita: del id16 no se vuelve al remittanceId, así que la derivación
+   *  tiene que poder arrancar de los bytes. */
+  function pdaOfBytes(bytes: Uint8Array | number[]): PublicKey {
+    return PublicKey.findProgramAddressSync(
+      [Buffer.from("escrow"), SENDER_KP.publicKey.toBuffer(), Buffer.from(Uint8Array.from(bytes))],
+      PROGRAM_ID,
+    )[0];
+  }
+
+  /** `EscrowIndex` real y DECODIFICABLE. Portado de `solana-wallet.close.test.ts`. Acepta strings
+   *  (que se hashean como lo haría un depósito) o los 16 bytes crudos, que es lo que hace falta para
+   *  probar el caso en que NADIE conoce el `remittanceId` de origen. */
+  async function encodeEscrowIndex(entradas: Array<string | number[]> = []): Promise<Buffer> {
+    const coder = new anchor.BorshAccountsCoder(escrowIdl as unknown as Idl);
+    return coder.encode("EscrowIndex", {
+      sender: SENDER_KP.publicKey,
+      version: 1,
+      bump: 254,
+      entries: entradas.map((e) => (typeof e === "string" ? Array.from(remittanceIdBytes16(e)) : e)),
+    });
+  }
+
+  /** Qué contesta la cadena para UNA pubkey. Portado de `solana-wallet.close.test.ts`: `"throw"` es
+   *  el RPC caído y `"hang"` el que acepta la conexión y no contesta. */
+  type Reply = Buffer | null | "throw" | "hang";
+
   /** Mockea el RPC como una cadena honesta: cada PDA responde SU propio estado (o null si no existe).
-   *  Así el fallback tiene que decodificar de verdad para elegir bien — un `ids[0]` a ciegas se cae. */
-  async function mockChain(states: Record<string, "deposited" | "released">): Promise<void> {
-    const byPda = new Map<string, Buffer>();
+   *  Así el fallback tiene que decodificar de verdad para elegir bien — un `ids[0]` a ciegas se cae.
+   *
+   *  WKH-347 — el segundo parámetro es lo que contesta la PDA del ÍNDICE. Sin él, esa pubkey queda sin
+   *  declarar y la cadena dice `null`, o sea "el índice no existe": ése es el default y es el que
+   *  cambió el desenlace de tres tests de este archivo, a propósito. */
+  async function mockChain(
+    states: Record<string, "deposited" | "released">,
+    indice?: Reply,
+    extras: Array<{ bytes: number[]; status: "deposited" | "released"; deadlineSec?: number }> = [],
+  ): Promise<void> {
+    const byPda = new Map<string, Reply>();
     for (const [id, st] of Object.entries(states)) {
       byPda.set(pdaOf(id).toBase58(), await encodeEscrowState(st, Math.floor(Date.now() / 1000) - 3600));
     }
+    for (const e of extras) {
+      byPda.set(
+        pdaOfBytes(e.bytes).toBase58(),
+        await encodeEscrowState(e.status, e.deadlineSec ?? Math.floor(Date.now() / 1000) - 3600),
+      );
+    }
+    if (indice !== undefined) byPda.set(ESCROW_INDEX_PDA.toBase58(), indice);
+    const buffered = (k: PublicKey): Buffer | null => {
+      const r = byPda.get(k.toBase58());
+      return r instanceof Buffer ? r : null;
+    };
     vi.spyOn(Connection.prototype, "getMultipleAccountsInfo").mockImplementation(
       (async (keys: PublicKey[]) =>
         keys.map((k) => {
-          const d = byPda.get(k.toBase58());
+          const d = buffered(k);
           return d ? accountInfo(d) : null;
         })) as never,
     );
     vi.spyOn(Connection.prototype, "getAccountInfo").mockImplementation(
       (async (k: PublicKey) => {
-        const d = byPda.get(k.toBase58());
-        return d ? accountInfo(d) : null;
+        const r = byPda.get(k.toBase58());
+        if (r === "throw") throw new Error("rpc_down");
+        if (r === "hang") return new Promise(() => {}); // nunca resuelve
+        return r instanceof Buffer ? accountInfo(r) : null;
       }) as never,
     );
   }
@@ -458,8 +519,24 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
   // servidor contestó que no hay nada" que "nunca preguntamos". Ahora dice `answered`, y recién ahí el
   // nombre del test es cierto. Sus tres `expect` no se debilitan: son lo que se pone rojo si el
   // arreglo se pasa de largo y convierte también este caso en un "no llegamos a preguntar".
-  it("T-R0-10: 0 candidatos en el ledger, con el servidor CONTESTANDO ⇒ escrow_not_found, SIN firmar ni broadcastear", async () => {
-    await mockChain({});
+  // 🔴 PARTIDO EN DOS POR WKH-347, y el desenlace del primero CAMBIÓ a propósito. Hasta esta HU el
+  // ledger era la única fuente, así que "el servidor contestó y no tiene ids" agotaba la búsqueda.
+  // Ahora hay una segunda fuente —el índice on-chain, derivable de la pubkey del remitente sola— y
+  // hay que decir CUÁL de las dos cosas pasó: que el índice no exista NO es "no tenés nada".
+  it("T-R0-10 (a): 0 candidatos en el ledger y SIN índice on-chain ⇒ escrow_index_absent, SIN firmar ni broadcastear", async () => {
+    await mockChain({}); // la PDA del índice queda sin declarar ⇒ la cadena dice que no existe
+    const lookupBySender = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: [] }));
+    const adapter = await connectedWith({ lookupBySender });
+    await expect(adapter.refundEscrow()).rejects.toThrow("escrow_index_absent");
+    expect(signSpy).not.toHaveBeenCalled();
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it("T-R0-10 (b): 0 candidatos en el ledger y el índice EXISTE y está VACÍO ⇒ escrow_not_found, SIN firmar ni broadcastear", async () => {
+    // Éste sí conserva el código de siempre, y por la misma razón de siempre: las DOS fuentes
+    // contestaron y ninguna lista nada. Es la única forma de este test en que la frase de la pantalla
+    // ("no encontramos escrows abiertos") es cierta.
+    await mockChain({}, await encodeEscrowIndex([]));
     const lookupBySender = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: [] }));
     const adapter = await connectedWith({ lookupBySender });
     await expect(adapter.refundEscrow()).rejects.toThrow("escrow_not_found");
@@ -467,8 +544,21 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
     expect(sendSpy).not.toHaveBeenCalled();
   });
 
-  it("T-R0-10: candidatos que existen pero NINGUNO está Deposited ⇒ escrow_not_found, sin firmar", async () => {
+  // 🔴 MISMO TRATAMIENTO, y este par es el que prueba que la segunda fuente se consulta también en el
+  // SEGUNDO punto donde el camino del ledger se queda sin nada (recorrió los candidatos y ninguno
+  // está Deposited), no sólo en el primero. Implementar sólo el primero dejaría el resultado colgado
+  // de si la persona casualmente tiene una remesa vieja e irrelevante guardada.
+  it("T-R0-10 (a): candidatos del ledger que existen pero NINGUNO está Deposited, y sin índice ⇒ escrow_index_absent", async () => {
     await mockChain({ "rem-a": "released", "rem-b": "released" });
+    const lookupBySender = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: ["rem-a", "rem-b"] }));
+    const adapter = await connectedWith({ lookupBySender });
+    await expect(adapter.refundEscrow()).rejects.toThrow("escrow_index_absent");
+    expect(signSpy).not.toHaveBeenCalled();
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it("T-R0-10 (b): candidatos del ledger sin ninguno Deposited y el índice EXISTE y está VACÍO ⇒ escrow_not_found", async () => {
+    await mockChain({ "rem-a": "released", "rem-b": "released" }, await encodeEscrowIndex([]));
     const lookupBySender = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: ["rem-a", "rem-b"] }));
     const adapter = await connectedWith({ lookupBySender });
     await expect(adapter.refundEscrow()).rejects.toThrow("escrow_not_found");
@@ -510,7 +600,10 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
     await mockChain({ [`rem-${ESCROW_ID_LOOKUP_CEILING + 3}`]: "deposited" }); // fuera del techo
     const lookupBySender = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: ids }));
     const adapter = await connectedWith({ lookupBySender });
-    await expect(adapter.refundEscrow()).rejects.toThrow("escrow_not_found");
+    // 🔴 EL CÓDIGO CAMBIÓ EN WKH-347 y el assert que importa NO: agotado el ledger se consulta la
+    // segunda fuente, y acá el índice no existe. Lo que este test candea sigue siendo el TECHO del
+    // lote del ledger, que es la línea de abajo y quedó intacta.
+    await expect(adapter.refundEscrow()).rejects.toThrow("escrow_index_absent");
     const batch = vi.mocked(Connection.prototype.getMultipleAccountsInfo);
     expect((batch.mock.calls[0]?.[0] as PublicKey[] | undefined)?.length).toBe(ESCROW_ID_LOOKUP_CEILING);
   });
@@ -533,10 +626,189 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
       // lugar donde el motivo se mira, y por eso se exige entero y no sólo el prefijo.
       await expect(adapter.refundEscrow()).rejects.toThrow(`escrow_recovery_unavailable:${reason}`);
       expect(vi.mocked(Connection.prototype.getMultipleAccountsInfo)).not.toHaveBeenCalled();
+      // 🔴 Y LA SEGUNDA FUENTE TAMPOCO SE TOCA, que es lo que este candado dice vigilar y NO vigilaba
+      // (fix-pack WKH-347, AR/MNR-2). El batch de arriba es cómo lee la cadena el camino del LEDGER; el
+      // del ÍNDICE arranca con un `getAccountInfo` sobre la PDA `["escrow-index", sender]`, y sobre ése
+      // no había ninguna aserción. MEDIDO: un mutante LÍNEA-NEUTRAL en `resolveEscrowTarget` que dejara
+      // pasar los `not_asked` a la segunda fuente dejaba esta suite —y `citas-ancladas`— enteras verdes.
+      // L-3 es un límite declarado del money-path: eso se AFIRMA, no se supone.
+      expect(vi.mocked(Connection.prototype.getAccountInfo)).not.toHaveBeenCalled();
       expect(signSpy).not.toHaveBeenCalled();
       expect(sendSpy).not.toHaveBeenCalled();
     });
   }
+
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  // WKH-347 · la SEGUNDA fuente: el índice on-chain del remitente
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  // El índice se deriva de `["escrow-index", sender]`, o sea de la pubkey sola. Por eso sigue
+  // alcanzable justo cuando el `remittanceId` se perdió, que es el caso que deja los fondos
+  // inalcanzables. Lo que NO es: autoritativo sobre el estado de un escrow. Dice que alguna vez se
+  // registró; el estado lo dice la cuenta, y esos guards corren igual.
+
+  it("T-347-9 (AC-3): el ledger contestó SIN ids y el índice tiene 3 entradas, una Deposited ⇒ refundea ESA", async () => {
+    const bytes = Array.from(remittanceIdBytes16("rem-en-el-indice"));
+    await mockChain(
+      {},
+      await encodeEscrowIndex(["rem-idx-viejo", "rem-en-el-indice", "rem-idx-otro"]),
+      [{ bytes, status: "deposited" }],
+    );
+    const lookupBySender = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: [] }));
+    const adapter = await connectedWith({ lookupBySender });
+
+    const out = await adapter.refundEscrow();
+    expect(out.refundTx).toBe("refund-sig-recovered");
+    // El registro durable se consultó UNA vez y no se lo volvió a molestar: el índice no le pregunta
+    // nada al servidor, que es justamente lo que lo hace útil cuando el servidor no tiene el dato.
+    expect(lookupBySender).toHaveBeenCalledTimes(1);
+
+    const ix = capturedTx(signSpy).instructions[0];
+    if (!ix) throw new Error("no_instruction");
+    // La PDA refundeada es la de la entrada Deposited, no la de la primera del índice: prueba que se
+    // LEYÓ el estado on-chain de cada candidata y no se tomó `entries[0]` a ciegas.
+    expect(ix.keys[2]!.pubkey.toBase58()).toBe(pdaOfBytes(bytes).toBase58());
+    expect(ix.keys[2]!.pubkey.toBase58()).not.toBe(pdaOf("rem-idx-viejo").toBase58());
+  });
+
+  // T-347-10 — TRES inputs, TRES códigos DISTINTOS. Si dos coincidieran, la pantalla estaría diciendo
+  // lo mismo sobre situaciones que autorizan afirmaciones distintas, que es el defecto que esta HU no
+  // puede introducir.
+  it("T-347-10 (AC-3/AC-11): índice ausente, ilegible y vacío dan TRES códigos distintos", async () => {
+    const lookup = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: [] }));
+    // 🔴 LOS TRES ESPERADOS EN CONSTANTES, Y NO REPETIDOS (fix-pack WKH-347, CR/MNR-6). El assert de
+    // abajo construía su `Set` con tres literales PROPIOS, así que se comparaba consigo mismo: el
+    // copiar-pegar que decía cazar —dejar dos `rejects` esperando el mismo código— lo pasaba sin
+    // chistar, porque el `Set` no miraba lo que los `rejects` usan. Ahora es la MISMA referencia.
+    const AUSENTE = "escrow_index_absent";
+    const ILEGIBLE = "escrow_index_unreadable";
+    const VACIO = "escrow_not_found";
+
+    // (a) la cadena CONTESTÓ: la PDA no existe. NO es "no tenés nada": también es compatible con
+    // haber depositado antes de que se registrara, o con no haber podido registrar en su momento.
+    await mockChain({});
+    await expect((await connectedWith({ lookupBySender: lookup })).refundEscrow()).rejects.toThrow(
+      AUSENTE,
+    );
+
+    // (b) NO se pudo preguntar. No dice absolutamente nada sobre los fondos.
+    await mockChain({}, "throw");
+    await expect((await connectedWith({ lookupBySender: lookup })).refundEscrow()).rejects.toThrow(
+      ILEGIBLE,
+    );
+
+    // (c) el índice EXISTE y no lista nada. Recién acá se agotaron las dos fuentes.
+    await mockChain({}, await encodeEscrowIndex([]));
+    await expect((await connectedWith({ lookupBySender: lookup })).refundEscrow()).rejects.toThrow(
+      VACIO,
+    );
+
+    // Y que los tres sean DISTINTOS entre sí, escrito como assert y no como lectura del test: sobre los
+    // MISMOS valores que los `rejects` de arriba consumieron, así que dos iguales se ven acá.
+    expect(new Set([AUSENTE, ILEGIBLE, VACIO]).size).toBe(3);
+  });
+
+  // T-347-10 (d) — EL QUINTO DESENLACE SIN NOMBRE. Los cuatro de §7.3 son cuatro, y todo lo que no sea
+  // uno de ellos es un quinto sin nombre. `probeEscrowIndex` atrapa lo SUYO (el techo, el RPC de la
+  // sonda, el decode), pero el resto del camino del índice no lo atrapaba nadie: los `await import()`,
+  // el `new PublicKey(sender)`, la derivación de las PDAs de los candidatos y la llamada batch que los
+  // sondea. Un error de ahí escapaba CRUDO hasta la red de seguridad de la pantalla, que dice "no
+  // sabemos hasta dónde llegamos" — y sí sabíamos: no pudimos leer el índice.
+  //
+  // 🔴 EL INPUT QUE LO PONE EN ROJO: sacar el mapeo de `resolveFromEscrowIndex`. Sin él esto rechaza con
+  // "batch_down" y las dos aserciones se caen. Y NO lo cubre T-347-10: sus tres inputs fallan ADENTRO
+  // de `probeEscrowIndex`, que ya los atrapaba solo.
+  it("T-347-10 (d): el índice se leyó pero el SONDEO de candidatos falla ⇒ escrow_index_unreadable, nunca el error crudo", async () => {
+    const lookup = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: [] }));
+    await mockChain({}, await encodeEscrowIndex(["rem-idx-0", "rem-idx-1"]));
+    // La sonda del índice YA contestó `present`. Lo que falla es la llamada de DESPUÉS, que está fuera
+    // del try/catch de `probeEscrowIndex`.
+    vi.spyOn(Connection.prototype, "getMultipleAccountsInfo").mockImplementation((async () => {
+      throw new Error("batch_down");
+    }) as never);
+
+    const adapter = await connectedWith({ lookupBySender: lookup });
+    // `then(ok, err)` y no `.catch(...)`: con `.catch` el tipo queda `Error | SolanaEscrowRefundResult`
+    // y `tsc` rechaza leerle `.message`. Acá el camino feliz devuelve `null`, así que si NO rechazara,
+    // el assert de abajo compara `undefined` y falla diciéndolo.
+    const err = await adapter.refundEscrow().then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
+    // Igualdad EXACTA y no `toThrow`: es lo que prueba que el mensaje crudo de la dependencia no viaja
+    // pegado al código. Esta cadena llega a `lostEscrowRecoveryError`, y "batch_down" no es un enum que
+    // la pantalla pueda traducir.
+    expect(err?.message).toBe("escrow_index_unreadable");
+  });
+
+  it("T-347-11 (CD-15): el índice se sondea ENTERO — 32 entradas, la Deposited en la posición 31", async () => {
+    // 🔴 EL INPUT QUE LO PONE EN ROJO: aplicarle `MAX_RECOVERY_CANDIDATES` (20) a las entradas del
+    // índice. Ese techo es el de la ROUTE del registro durable, que es OTRA fuente; el índice no
+    // tiene servidor y `getMultipleAccountsInfo` sondea 32 en la misma llamada que 20. Recortarlas
+    // sería tirar hasta 12 candidatos del camino que devuelve el principal.
+    const entradas = Array.from({ length: 32 }, (_, i) => `rem-idx-${i}`);
+    const bytesUltima = Array.from(remittanceIdBytes16(entradas[31] as string));
+    await mockChain({}, await encodeEscrowIndex(entradas), [{ bytes: bytesUltima, status: "deposited" }]);
+    const lookupBySender = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: [] }));
+    const adapter = await connectedWith({ lookupBySender });
+
+    await adapter.refundEscrow();
+    const ix = capturedTx(signSpy).instructions[0];
+    if (!ix) throw new Error("no_instruction");
+    expect(ix.keys[2]!.pubkey.toBase58()).toBe(pdaOfBytes(bytesUltima).toBase58());
+    // Y el lote sondeado son las 32, no el techo del ledger.
+    const batch = vi.mocked(Connection.prototype.getMultipleAccountsInfo);
+    const ultimo = batch.mock.calls[batch.mock.calls.length - 1]?.[0] as PublicKey[] | undefined;
+    expect(ultimo?.length).toBe(32);
+    expect(ultimo?.length).not.toBe(ESCROW_ID_LOOKUP_CEILING);
+  });
+
+  // T-347-12 (AC-4) — el caso que sólo el índice puede resolver: 16 bytes que NO son el sha256 de
+  // ningún string conocido. Nadie, ni el servidor ni el navegador, puede producir el `remittanceId`
+  // de origen, porque sha256 no se invierte. La recuperación tiene que funcionar igual, operando por
+  // los bytes, y los guards autoritativos tienen que correr COMPLETOS.
+  const BYTES_SIN_ORIGEN = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+
+  it("T-347-12 (AC-4): un id16 sin `remittanceId` conocido se refundea igual, derivando la PDA de los bytes", async () => {
+    await mockChain({}, await encodeEscrowIndex([BYTES_SIN_ORIGEN]), [
+      { bytes: BYTES_SIN_ORIGEN, status: "deposited" },
+    ]);
+    const lookupBySender = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: [] }));
+    const adapter = await connectedWith({ lookupBySender });
+
+    await adapter.refundEscrow();
+    const ix = capturedTx(signSpy).instructions[0];
+    if (!ix) throw new Error("no_instruction");
+    expect(ix.keys[2]!.pubkey.toBase58()).toBe(pdaOfBytes(BYTES_SIN_ORIGEN).toBase58());
+    // Y el arg de la ix `refund` son ESOS 16 bytes, no otros: 8 del discriminador + 16 del id.
+    expect(Array.from(ix.data.subarray(8, 24))).toEqual(BYTES_SIN_ORIGEN);
+    // La forma hex del mismo valor, que es lo que este repo llama `EscrowId16`.
+    expect(id16Of(BYTES_SIN_ORIGEN)).toBe("0102030405060708090a0b0c0d0e0f10");
+  });
+
+  it("T-347-12 (AC-4/CD-6): el guard de estado corre igual para el candidato del índice ⇒ escrow_not_deposited", async () => {
+    await mockChain({}, await encodeEscrowIndex([BYTES_SIN_ORIGEN]), [
+      { bytes: BYTES_SIN_ORIGEN, status: "released" },
+    ]);
+    const lookupBySender = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: [] }));
+    const adapter = await connectedWith({ lookupBySender });
+    // El índice listaba la entrada y aun así no se firma nada: el índice NO es autoritativo sobre el
+    // estado. Sale por `escrow_not_found` del selector, que descarta a la no-Deposited.
+    await expect(adapter.refundEscrow()).rejects.toThrow("escrow_not_found");
+    expect(signSpy).not.toHaveBeenCalled();
+  });
+
+  it("T-347-12 (AC-4/CD-6): el guard de deadline corre igual para el candidato del índice ⇒ refund_before_deadline", async () => {
+    await mockChain({}, await encodeEscrowIndex([BYTES_SIN_ORIGEN]), [
+      { bytes: BYTES_SIN_ORIGEN, status: "deposited", deadlineSec: Math.floor(Date.now() / 1000) + 3600 },
+    ]);
+    const lookupBySender = vi.fn(async (): Promise<RemittanceIdLookup> => ({ outcome: "answered", remittanceIds: [] }));
+    const adapter = await connectedWith({ lookupBySender });
+    // El escrow está Deposited y el índice lo lista, pero la ventana de custodia sigue abierta: el
+    // guard pre-firma corta igual que para cualquier otro camino de entrada.
+    await expect(adapter.refundEscrow()).rejects.toThrow("refund_before_deadline");
+    expect(signSpy).not.toHaveBeenCalled();
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
 
   it("T-R0-10 (fail-loud): sin resolver inyectado y sin id ⇒ escrow_id_unavailable (nunca silencioso)", async () => {
     await mockChain({ "rem-x": "deposited" });

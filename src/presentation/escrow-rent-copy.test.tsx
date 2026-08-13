@@ -5,20 +5,27 @@
 // Lo que estos tests cuidan no es "que el texto exista": es que la CIFRA que la pantalla promete sea la
 // del alquiler que de verdad vuelve, y no la de al lado.
 //
-// 🔴 POR QUÉ HAY ASERCIONES POR AUSENCIA Y NO SÓLO DE PRESENCIA. `formatLamportsAsSol` (el ceil) mapea
-// DOS constantes distintas a la MISMA cadena "0,0041": el umbral de depósito (4.100.000) y el alquiler
-// de las dos cuentas (4.002.000). O sea que un test que sólo assertara la presencia de un número pasa
-// igual con la constante equivocada adentro, o con el formateador equivocado. Las tres aserciones por
-// ausencia ("0,0041", "0,0048", "0,0088") son las que distinguen:
+// 🔴 POR QUÉ HAY ASERCIONES POR AUSENCIA Y NO SÓLO DE PRESENCIA. `formatLamportsAsSol` (el ceil) mapeaba
+// DOS constantes distintas a la MISMA cadena "0,0041": el umbral de depósito (que entonces era 4.100.000)
+// y el alquiler de las dos cuentas (4.002.000). O sea que un test que sólo assertara la presencia de un
+// número pasa igual con la constante equivocada adentro, o con el formateador equivocado. Las tres
+// aserciones por ausencia ("0,0041", "0,0048", "0,0088") son las que distinguen:
 //   · "0,0041" aparece si se usó el ceil, o si se formateó el umbral en vez del alquiler;
 //   · "0,0048" aparece si se mostró el alquiler del EscrowIndex;
 //   · "0,0088" aparece si se sumó el índice al total.
 //
-// 🔴 POR QUÉ `within(...)` Y NO `document.body`. `humanError("solana_sender_sol_insufficient")`
-// renderiza "0,0041" LEGÍTIMAMENTE (flow-vm.ts, el copy del umbral de SOL). Una aserción de ausencia
-// sobre todo el documento se pondría roja por una razón que no tiene nada que ver con AC-6, y el
-// arreglo "obvio" sería borrar la aserción — que es justo la que ataja el error que este archivo
-// existe para atajar.
+// ⚠️ WKH-347 MOVIÓ EL UMBRAL A 8.874.560, o sea "0,0089", así que la colisión con "0,0041" YA NO EXISTE
+// por sí sola. Las tres aserciones por ausencia siguen siendo válidas y NO se tocan: "0,0089" no está en
+// esa lista, y las tres cadenas que enumeran siguen señalando errores reales. Lo que cambió es que una de
+// las tres —"0,0041" por haber formateado el umbral— dejó de ser alcanzable por ESA vía en particular,
+// mientras sigue siéndolo por la otra (haber usado el ceil sobre el alquiler). Se conserva por eso, y
+// porque el umbral ya se movió tres veces y puede volver a acercarse.
+//
+// 🔴 POR QUÉ `within(...)` Y NO `document.body`. `humanError("solana_sender_sol_insufficient")` renderiza
+// LEGÍTIMAMENTE la cifra del umbral de SOL (flow-vm.ts) — hoy "0,0089", antes de WKH-347 "0,0041". La
+// razón del `within` no cambió con el número: una aserción de ausencia sobre todo el documento se pondría
+// roja por algo que no tiene nada que ver con AC-6, y el arreglo "obvio" sería borrar la aserción, que es
+// justo la que ataja el error que este archivo existe para atajar.
 import { afterEach, describe, expect, it } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";

@@ -105,10 +105,30 @@ export async function POST(req: Request): Promise<Response> {
   // comparar. Es la MISMA condición que gobierna el persist de abajo, y se dice de frente en vez de
   // dejarlo implícito: apagar el ledger apaga este control.
   const ledger = getSettlementLedger();
+  // ── WKH-347 (NC-8, resuelto opción (c)) · EL DECODE SE IZÓ FUERA DEL `if (ledger)` ────────────────
+  // Antes vivía adentro, así que con el ledger apagado no se decodificaba nada y la constancia de AC-10
+  // no podía existir en ese camino. El AC pide "exactamente una vez por 200", y una constancia que
+  // desaparece cuando se apaga un flag no cumple eso.
+  //
+  // POR QUÉ IZAR NO CAMBIA NINGUNA RESPUESTA, y es lo que sostiene esta decisión:
+  // `readDepositBeneficiary` es una función TOTAL — envuelve todo en try/catch y devuelve
+  // `{state:"unreadable"}` en vez de tirar (ver su cuerpo). Así que moverla acá no puede convertir un
+  // 200 en un 500, ni introducir un desenlace que antes no existía. Lo único que hace es que el dato
+  // esté disponible para las DOS ramas de abajo.
+  //
+  // ⛔ Y LA OTRA MITAD DE LA DECISIÓN, que es la que la vuelve neutral: el `unreadable ⇒ 400` se queda
+  // ADENTRO del `if (ledger)`. Con el ledger apagado, una tx ilegible sigue teniendo exactamente el
+  // desenlace de hoy y NO aparece un 400 nuevo. Mover ese corte acá arriba sería otra decisión, con
+  // otro riesgo, y no es la que se tomó.
+  //
+  // 🔴 EL COSTO NUEVO, dicho porque existe: en el camino del ledger APAGADO ahora se pagan los cuatro
+  // `import()` dinámicos de `readDepositBeneficiary` y una deserialización de la tx que antes no
+  // ocurrían. Es trabajo local, sin red y sin DB, pero NO es gratis: si algún día la latencia de ese
+  // camino cambia, esta línea es la explicación. 🚫 Prohibido escribir que esto no tiene costo.
+  const inTx = await readDepositBeneficiary(partialSignedTx);
   if (ledger) {
-    // Se decodifica ANTES de tocar la DB: es local y barato, y evita gastar una consulta en una tx
-    // que ni siquiera es un depósito nuestro.
-    const inTx = await readDepositBeneficiary(partialSignedTx);
+    // El decode ya corrió ARRIBA, antes de tocar la DB: es local y barato, y evita gastar una consulta
+    // en una tx que ni siquiera es un depósito nuestro.
     if (inTx.state !== "read") {
       // De esta tx no se puede afirmar NINGÚN destino (base64 roto, tx versionada, sin la ix del
       // escrow). No es "no coincide": es "no se puede juzgar", y por eso tiene su propio enum.
@@ -230,10 +250,58 @@ export async function POST(req: Request): Promise<Response> {
     // facilitator contestó ok pero su body no trae una signature legible) NO emite esta alerta, aunque
     // la tx pudo haberse broadcasteado. Sin signature no se puede afirmar que hubo depósito, y una
     // alerta que afirma un depósito no verificado sería peor que el silencio.
-    // El prefijo [settle][ALERT] queda con dos ocurrencias literales en este archivo, a propósito:
+    // El prefijo [settle][ALERT] queda con CUATRO ocurrencias literales en este archivo, a propósito:
     // factorizarlo obligaría a editar la de S3.5, que es un guard de seguridad que este cambio no
     // toca. Se declara, no se disimula. CD-7: sólo el remittanceId.
+    // (Eran dos hasta WKH-347, que agregó las dos de la constancia del índice, más abajo.)
     console.error("[settle][ALERT] solana_settle_unrecorded_deposit", { remittanceId });
+  }
+
+  // ── WKH-347 / AC-10 · LA CONSTANCIA DE SI EL DEPÓSITO REGISTRÓ EL ESCROW EN EL ÍNDICE ─────────────
+  // VA ACÁ, DESPUÉS del if/else del ledger y DESPUÉS de validar la signature, y esa posición es el AC:
+  // sale exactamente UNA vez por cada 200 y CERO veces en cualquier otra respuesta, porque todos los
+  // demás desenlaces de este handler ya retornaron más arriba. Y sale igual con el ledger encendido o
+  // apagado, que es exactamente lo que la opción (c) de NC-8 compró.
+  //
+  // DE DÓNDE SALE EL DATO, y es lo que lo vuelve un guard y no un adorno: de los BYTES DE LA
+  // TRANSACCIÓN QUE LA WALLET FIRMÓ, nunca de un campo del body. Este archivo ya escribió por qué
+  // (`:91-92`): un campo del request lo elige quien manda el request, y un guard alimentado por el
+  // request se compara consigo mismo. Lo mide T-347-19.
+  //
+  // 🔴 DOS DESENLACES DISTINTOS Y NO UNO, porque colapsarlos repite el defecto que este repo ya arregló
+  // varias veces: *no pude preguntar* NO es *no*.
+  //   · `solana_deposit_unindexed`        — se LEYÓ la tx y llevaba UNA sola ix de negocio. El escrow
+  //     quedó fuera del índice del remitente. Es un HECHO medido sobre bytes firmados, y es el caso que
+  //     esta constancia existe para contar.
+  //   · `solana_deposit_index_unreadable` — el enum CONSERVADOR, y cubre TRES formas y no dos. Acá decía
+  //     "no se pudo determinar" a secas, y para una de las tres eso es más flojo que lo que se sabe
+  //     (fix-pack WKH-347, AR/MNR-7):
+  //       (a) la tx entera no se pudo deserializar ⇒ genuinamente no se sabe nada;
+  //       (b) hay una 2ª ix del escrow cuyo discriminador el IDL no conoce ⇒ genuinamente no se sabe;
+  //       (c) hay una 2ª ix del escrow que decodifica LIMPIO y NO es `register_escrow` (por ejemplo un
+  //           `[deposit, deregister_escrow]`) ⇒ acá sí quedó determinado que la tx NO registró, y este
+  //           enum lo reporta igual como "no se pudo determinar". Es deliberado y es el lado barato del
+  //           error: Chaski no puede emitir esa transacción (su escritor sólo agrega `register_escrow`),
+  //           así que (c) no tiene productor propio hoy, y afirmar `not_registered` sobre una forma que
+  //           no conocemos sería convertir una lectura parcial en un hecho. Si algún día el escritor
+  //           emite una segunda ix distinta, (c) pasa a tener productor y hay que separarlo de (a) y (b).
+  //     Los tres van con el MISMO enum porque para un operador la acción es la misma, y ⛔ nunca con el
+  //     enum de arriba, porque eso sí convertiría una ignorancia en una afirmación.
+  //
+  // ⛔ LO QUE ESTA CONSTANCIA HACE Y LO QUE NO HACE (CD-8 / L-4). HACE: que quede una línea GREPEABLE
+  // con un prefijo que ya existía en este archivo. NO HACE: alertar a nadie — al día de esta HU no hay
+  // ninguna herramienta de observabilidad en las dependencias del repo ni ninguna regla sobre estos
+  // prefijos, así que "alguien la está mirando" es una afirmación que nadie puede hacer, y este código
+  // no la hace. Y tampoco vuelve IMPOSIBLE el escrow huérfano: lo vuelve VISIBLE desde el servidor.
+  // El escrow sigue siendo encontrable por el índice sólo si la tx lo registró; esta línea dice si lo
+  // hizo, no lo arregla.
+  //
+  // SHALL NOT alterar el control de flujo ni la respuesta: es un `console.error` y nada más.
+  const registro = inTx.state === "read" ? inTx.escrowIndexRegistration : "unreadable";
+  if (registro === "not_registered") {
+    console.error("[settle][ALERT] solana_deposit_unindexed", { remittanceId });
+  } else if (registro === "unreadable") {
+    console.error("[settle][ALERT] solana_deposit_index_unreadable", { remittanceId });
   }
 
   return NextResponse.json({ signature }, { status: 200 });

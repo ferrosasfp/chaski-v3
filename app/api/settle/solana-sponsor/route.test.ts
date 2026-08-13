@@ -58,6 +58,45 @@ async function depositTx(beneficiary: string): Promise<string> {
   return tx.serialize({ requireAllSignatures: false, verifySignatures: false }).toString("base64");
 }
 
+/**
+ * WKH-347 — Tx con las DOS ix de negocio, en el orden que producción emite:
+ * `[deposit, register_escrow]`. Mismo coder, mismo IDL pinneado que `depositTx`.
+ *
+ * `invertida: true` la arma AL REVÉS (`[register_escrow, deposit]`), que es el input de T-347-20: con ese
+ * orden el lector server-side devuelve `unreadable` y la route corta con 400.
+ */
+async function depositConRegisterTx(
+  beneficiary: string,
+  invertida = false,
+): Promise<string> {
+  const { Keypair, PublicKey, Transaction, TransactionInstruction } = await import(
+    "@solana/web3.js"
+  );
+  const anchor = await import("@coral-xyz/anchor");
+  const { escrowIdl } = await import("../../../../src/infrastructure/solana/escrow-idl");
+  const coder = new anchor.BorshInstructionCoder(escrowIdl as unknown as Idl);
+  const programId = new PublicKey((escrowIdl as { address: string }).address);
+  const remittanceId = Array.from(new Uint8Array(16));
+  const depositData = coder.encode("deposit", {
+    remittanceId,
+    beneficiary: new PublicKey(beneficiary),
+    authority: Keypair.generate().publicKey,
+    amount: new anchor.BN("400000000"),
+    deadline: new anchor.BN("4070908800"),
+  });
+  // El MISMO `remittanceId` que el `deposit`: el binding entre las dos ix no es opcional.
+  const registerData = coder.encode("register_escrow", { remittanceId });
+  const keys = [{ pubkey: new PublicKey(SENDER), isSigner: true, isWritable: true }];
+  const depositIx = new TransactionInstruction({ programId, keys, data: depositData });
+  const registerIx = new TransactionInstruction({ programId, keys, data: registerData });
+  const tx = new Transaction();
+  if (invertida) tx.add(registerIx, depositIx);
+  else tx.add(depositIx, registerIx);
+  tx.feePayer = Keypair.generate().publicKey;
+  tx.recentBlockhash = Keypair.generate().publicKey.toBase58();
+  return tx.serialize({ requireAllSignatures: false, verifySignatures: false }).toString("base64");
+}
+
 /** Depósito hacia la deposit-address que el servidor registró al preparar (el camino feliz). */
 let PARTIAL_TX = "";
 /** Depósito hacia una dirección que este servidor NUNCA emitió (la respuesta de prepare adulterada). */
@@ -436,23 +475,37 @@ describe("POST /api/settle/solana-sponsor (HU-SOL-13)", () => {
       errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     });
-    /** Alertas del settle emitidas hasta acá. LA MISMA función cuenta los casos de 1 y los de 0
-     *  (CD-13): un `toBe(0)` sobre un spy vacío mediría cero y pasaría sin decir nada. */
-    const settleAlertCount = (): number =>
-      errSpy.mock.calls.filter((c) => String(c[0]).includes("[settle][ALERT]")).length;
+    /** Alertas del settle emitidas hasta acá, POR ENUM. LA MISMA función cuenta los casos de 1 y los de
+     *  0 (CD-13): un `toBe(0)` sobre un spy vacío mediría cero y pasaría sin decir nada.
+     *
+     *  🔴 WKH-347 — SE REFINÓ POR ENUM, Y NO ES COSMÉTICO. Antes contaba TODAS las líneas
+     *  `[settle][ALERT]` sin distinguir cuál, y desde WKH-347 este handler puede emitir CUATRO enums
+     *  distintos. El fixture `depositTx()` arma una tx con UNA sola ix de negocio, así que dispara
+     *  siempre la constancia del índice: con el contador viejo, `T-10a` y `T-10c` medían la alerta
+     *  equivocada y se ponían rojos por una razón que no tenía nada que ver con lo que vigilan.
+     *
+     *  ⚠️ LA PROPIEDAD QUE NO SE PERDIÓ: sigue siendo UNA sola función, y sigue contando los casos de 1
+     *  y los de 0. El `enum` es un ARGUMENTO, no dos funciones distintas: si fueran dos, un `toBe(0)`
+     *  podría estar mirando un canal que nunca se llena. */
+    const settleAlertCount = (enumEsperado: string): number =>
+      errSpy.mock.calls.filter(
+        (c) => String(c[0]).includes("[settle][ALERT]") && String(c[0]).includes(enumEsperado),
+      ).length;
+    /** El enum de WKH-325, el que este describe vigila. */
+    const SIN_REGISTRO = "solana_settle_unrecorded_deposit";
 
     // T-10a — los DOS casos en el MISMO `it`, con el MISMO spy y el MISMO contador.
     it("T-10a (CD-13): ledger apagado + 200 ⇒ 1 alerta; ledger encendido + 200 ⇒ 0", async () => {
       getLedgerMock.mockReturnValue(null);
       facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
       expect((await POST(req(body()))).status).toBe(200);
-      expect(settleAlertCount()).toBe(1);
+      expect(settleAlertCount(SIN_REGISTRO)).toBe(1);
 
       errSpy.mockClear();
       getLedgerMock.mockReturnValue(await ledgerWithPreparedSolana());
       facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
       expect((await POST(req(body()))).status).toBe(200);
-      expect(settleAlertCount()).toBe(0);
+      expect(settleAlertCount(SIN_REGISTRO)).toBe(0);
     });
 
     it("T-10b (CD-7): el argumento de la alerta es EXACTAMENTE {remittanceId}", async () => {
@@ -471,7 +524,7 @@ describe("POST /api/settle/solana-sponsor (HU-SOL-13)", () => {
         getLedgerMock.mockReturnValue(null);
         facilitatorResponds(upstream, { error: "nope" });
         await POST(req(body()));
-        expect(settleAlertCount()).toBe(0);
+        expect(settleAlertCount(SIN_REGISTRO)).toBe(0);
         // Presencia en el mismo canal: con un 200 el mismo contador SÍ da 1 (T-10a), así que este 0
         // no puede venir de un spy que no captura nada.
       },
@@ -487,7 +540,118 @@ describe("POST /api/settle/solana-sponsor (HU-SOL-13)", () => {
       const res = await POST(req(body()));
       expect(res.status).toBe(502);
       expect(await res.json()).toEqual({ error: "solana_settle_broadcast_failed" });
-      expect(settleAlertCount()).toBe(0);
+      expect(settleAlertCount(SIN_REGISTRO)).toBe(0);
+    });
+
+    // ══════════════════════════════════════════════════════════════════════════════════════════════
+    // WKH-347/AC-10 — LA CONSTANCIA DE SI EL DEPÓSITO REGISTRÓ EL ESCROW EN EL ÍNDICE
+    // ══════════════════════════════════════════════════════════════════════════════════════════════
+    // ⚠️ EL NOMBRE LLEVA LA HU A PROPÓSITO: más arriba hay un describe llamado "AC-10 — alerta de
+    // depósito sin registro (WKH-325)", y son ACs DISTINTOS de HUs DISTINTAS. Uno cuenta que el ledger
+    // estaba apagado; éste cuenta que la transacción no registró el escrow en el índice on-chain.
+    //
+    // NC-8 se resolvió con la opción (c): el decode se izó fuera del `if (ledger)`, así que la
+    // constancia sale con el ledger encendido Y apagado. Estos tests miden las dos configuraciones.
+    describe("WKH-347/AC-10 — constancia del registro en el índice", () => {
+      const SIN_INDICE = "solana_deposit_unindexed";
+      const INDICE_ILEGIBLE = "solana_deposit_index_unreadable";
+
+      // 🔴 T-347-18 — LOS DOS CASOS EN EL MISMO `it`, CON EL MISMO SPY Y EL MISMO CONTADOR (CD-13). Un
+      // `toBe(0)` solo no probaría nada: podría estar mirando un canal que nunca se llena.
+      it("T-347-18 (AC-10): tx de UNA ix ⇒ exactamente 1 constancia; tx de DOS ix ⇒ 0", async () => {
+        // (1) UNA sola ix de negocio: el escrow quedó fuera del índice. Es el caso que se cuenta.
+        getLedgerMock.mockReturnValue(null);
+        facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
+        expect((await POST(req(body()))).status).toBe(200);
+        expect(settleAlertCount(SIN_INDICE)).toBe(1);
+        // Y NO se emite el otro enum: "no quedó registrado" no puede salir como "no pude leer".
+        expect(settleAlertCount(INDICE_ILEGIBLE)).toBe(0);
+        // CD-7: sólo el remittanceId. Ni la signature, ni el sender, ni el monto.
+        const call = errSpy.mock.calls.find((c) => String(c[0]).includes(SIN_INDICE));
+        expect(call?.[1]).toEqual({ remittanceId: "rem-sol-1" });
+
+        // (2) LAS DOS ix, en el orden de producción: la tx registró, así que NO hay nada que contar.
+        errSpy.mockClear();
+        facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
+        const dos = await depositConRegisterTx(FAKE_SOLANA_REFERENCE);
+        expect((await POST(req(body({ partialSignedTx: dos })))).status).toBe(200);
+        expect(settleAlertCount(SIN_INDICE)).toBe(0);
+        expect(settleAlertCount(INDICE_ILEGIBLE)).toBe(0);
+      });
+
+      // 🔴 LA MITAD QUE LA OPCIÓN (c) COMPRÓ: la constancia sale IGUAL con el ledger ENCENDIDO. Con la
+      // opción (a) este caso habría dado 0 y el "exactamente una vez por 200" del AC sería falso en una
+      // de las dos configuraciones.
+      it("T-347-18 (NC-8/c): la constancia sale con el ledger ENCENDIDO igual que apagado", async () => {
+        getLedgerMock.mockReturnValue(await ledgerWithPreparedSolana());
+        facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
+        expect((await POST(req(body()))).status).toBe(200);
+        expect(settleAlertCount(SIN_INDICE)).toBe(1);
+      });
+
+      // 🔴 T-347-19 — EL GUARD NO SE PUEDE COMPARAR CONSIGO MISMO. El dato sale de los BYTES de la tx
+      // firmada, nunca de un campo del body. Se manda un body que AFIRMA que se registró, con bytes de
+      // UNA sola ix: la constancia tiene que salir igual. Si alguien alimentara este guard desde el
+      // request, quien controla el request lo apagaría poniendo un campo.
+      it("T-347-19 (AC-10/DT-8): un campo del body que dice 'registrado' NO apaga la constancia", async () => {
+        getLedgerMock.mockReturnValue(null);
+        facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
+        const res = await POST(
+          req(
+            body({
+              escrowIndexRegistered: true,
+              registered: true,
+              escrowIndexRegistration: "registered",
+            }),
+          ),
+        );
+        expect(res.status).toBe(200);
+        expect(settleAlertCount(SIN_INDICE)).toBe(1); // los bytes mandan, no el body
+      });
+
+      // 🔴 LOS DOS DESENLACES SON DISTINGUIBLES, que es la condición que impide repetir el defecto de
+      // colapsar "no pude preguntar" con "no". Acá la tx NO se puede deserializar, así que no se puede
+      // afirmar que no registró: sale el OTRO enum.
+      it("T-347-18 (AC-10): una tx ilegible NO se cuenta como 'no registró', sale su propio enum", async () => {
+        getLedgerMock.mockReturnValue(null); // con el ledger apagado no hay 400: la route responde 200
+        facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
+        const res = await POST(req(body({ partialSignedTx: "AQIDBAUGBwg=" })));
+        expect(res.status).toBe(200);
+        expect(settleAlertCount(INDICE_ILEGIBLE)).toBe(1);
+        // 🔴 Y ACÁ ESTÁ LA DISTINCIÓN, escrita como assert: NO sale el enum del hecho.
+        expect(settleAlertCount(SIN_INDICE)).toBe(0);
+      });
+
+      // 🔴 NC-8, LA MITAD NEUTRAL: con el ledger APAGADO una tx ilegible sigue respondiendo 200, igual
+      // que antes de esta HU. El `unreadable ⇒ 400` se quedó ADENTRO del `if (ledger)` a propósito, así
+      // que izar el decode NO introdujo un 400 nuevo en el camino del flag apagado. Este test es lo que
+      // mantiene cierta esa afirmación.
+      it("NC-8: ledger APAGADO + tx ilegible ⇒ sigue siendo 200, NO un 400 nuevo", async () => {
+        getLedgerMock.mockReturnValue(null);
+        facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
+        const res = await POST(req(body({ partialSignedTx: "AQIDBAUGBwg=" })));
+        expect(res.status).toBe(200);
+      });
+
+      // 🔴 T-347-20 (R-2/CD-13) — EL ORDEN INVERTIDO, AL NIVEL DE LA ROUTE. Con `register_escrow` en la
+      // posición 0, el lector server-side devuelve `unreadable` y la route corta con 400 ANTES del
+      // forward: TODO depósito patrocinado falla en NUESTRO propio servidor, antes de que el facilitator
+      // vea nada. Es el test que fija por qué la posición del `deposit` no se toca.
+      // Corre con el ledger ENCENDIDO, porque el 400 vive adentro de ese `if`.
+      it("T-347-20 (R-2/CD-13): `register_escrow` en la posición 0 ⇒ 400 solana_settle_deposit_unreadable", async () => {
+        getLedgerMock.mockReturnValue(await ledgerWithPreparedSolana());
+        facilitatorResponds(200, { signature: FAKE_SOLANA_SIGNATURE });
+        const invertida = await depositConRegisterTx(FAKE_SOLANA_REFERENCE, true);
+        const res = await POST(req(body({ partialSignedTx: invertida })));
+        expect(res.status).toBe(400);
+        expect(await res.json()).toEqual({ error: "solana_settle_deposit_unreadable" });
+        // Y no se forwardeó: la tx no se broadcasteó, así que la plata no salió.
+        expect(fetchMock).not.toHaveBeenCalled();
+        // CONTROL, sin el cual el 400 de arriba podría venir de cualquier cosa: la MISMA tx con el orden
+        // CORRECTO responde 200 por el mismo camino.
+        const correcta = await depositConRegisterTx(FAKE_SOLANA_REFERENCE);
+        expect((await POST(req(body({ partialSignedTx: correcta })))).status).toBe(200);
+      });
     });
 
     it("T-11b (AC-11/CD-1): el ledger devuelve un error de integridad ⇒ el sponsor responde 200 igual", async () => {

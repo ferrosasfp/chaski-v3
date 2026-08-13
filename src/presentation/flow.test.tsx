@@ -985,7 +985,7 @@ describe("WKH-200 poll stop (fake timers)", () => {
 
 /** Confirmada y NADA MÁS: `principalTx` sigue en null, o sea que la billetera todavía no firmó
  *  ningún depósito. Es el punto exacto en el que corta el `prepare`
- *  (`failAndRefund`, `../application/use-cases/confirm-and-send.ts:385`, con `"not_deposited"`), o sea que es la única
+ *  (`failAndRefund`, `../application/use-cases/confirm-and-send.ts:398`, con `"not_deposited"`), o sea que es la única
  *  forma que tiene una remesa cuyo `failureReason` es un fallo ANTERIOR a la primera firma. */
 function solanaConfirmedSnapshot(expiresAt: string): RemittanceState {
   const r = Remittance.create("rem-1", beneficiary(), Money.of(400, "USDC"), T0);
@@ -1398,7 +1398,7 @@ describe("los tres casos, dichos con palabras distintas", () => {
   });
 
   // Hallazgo #75 — el rechazo del agente de payout tampoco es un fallo de entrega. El prepare corre
-  // ANTES de authorizePrincipal (confirm-and-send.ts:381-386), o sea antes de que la wallet firme
+  // ANTES de authorizePrincipal ((`prepare_unavailable`, `confirm-and-send.ts:394`)), o sea antes de que la wallet firme
   // nada: "no se movió ningún USDC" es un hecho que se lee del orden del use-case. Decirlo con las
   // palabras del payout fallido ("si te cobramos, te reembolsamos") deja esperando un reembolso que
   // no existe, por una causa que se arregla re-cotizando.

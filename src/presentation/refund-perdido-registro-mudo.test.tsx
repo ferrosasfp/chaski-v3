@@ -126,10 +126,25 @@ function buscarConElContainerReal() {
 // decisión de redacción sobre el dinero: dos ediciones y un diff que muestra el texto nuevo entero.
 // El NÚMERO sí sale de la constante que sondea, para que el copy no pueda quedar diciendo un número
 // que el código dejó de usar.
+// 🔴 WKH-347 — ESTE LITERAL SE ACTUALIZÓ A MANO, y es exactamente el costo que el párrafo de arriba
+// anticipó ("reescribir el copy en `flow-vm.ts` y NO tocar este literal deja 2 rojos... se arregla
+// reescribiendo ESTE literal, sin relajar ningún predicado"). Pasó eso: se reescribió el copy, este
+// literal quedó rojo, y se reescribió acá. Ningún predicado se relajó.
+//
+// QUÉ CAMBIÓ EN EL TEXTO, y por qué es un cambio de ALCANCE y no de mecanismo: antes nombraba UNA sola
+// fuente ("los últimos N envíos que el servidor tiene guardados"). Desde WKH-347 la búsqueda mira DOS
+// —la ventana del servidor y el índice on-chain de la billetera— y el copy tiene que nombrar las dos,
+// porque afirmar "no encontramos" habiendo mirado una sola sería afirmar de más sobre la otra.
+//
+// El NÚMERO sigue saliendo de la constante que sondea, no de un literal escrito acá, para que el copy no
+// pueda quedar diciendo un número que el código dejó de usar. El índice NO aporta número: su cupo no es
+// una ventana que la persona pueda entender como "los últimos N", y prometer un número ahí sería
+// inventarle un límite al índice que el código no aplica (los `entries` se sondean ENTEROS).
 const COPY_LEGÍTIMO_DEL_NO_ENCONTRAMOS =
   `No encontramos escrows abiertos para esta billetera. Esto no dice que no tengas fondos: dice que ` +
   `ninguno de los últimos ${MAX_RECOVERY_CANDIDATES} envíos que el servidor tiene guardados de esta ` +
-  `billetera está abierto en el contrato.`;
+  `billetera, ni ninguno de los que la cadena tiene registrados en el índice de esta billetera, está ` +
+  `abierto en el contrato.`;
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
 // LAS MARCAS DE DUDA, QUE SIGUEN VIGILANDO EL OTRO LADO
@@ -267,34 +282,65 @@ describe("AC-5: la firma de posesión no se completó, que tampoco es una respue
 });
 
 describe("AC-3: el CONTROL, sin el cual los cuatro de arriba no prueban nada", () => {
-  // 🔴 POR QUÉ ESTE CASO EXISTE, y por qué sus aserciones son POSITIVAS. Un arreglo que hiciera decir
-  // "no llegamos a preguntar" en las CUATRO condiciones pasaría A/B/C/D sin despeinarse, y sería tan
-  // falso como el defecto que esta HU cierra, sólo que en la otra dirección: la pantalla afirmaría no
-  // haber preguntado también cuando el servidor sí contestó. Acá el servidor SÍ contesta, y contesta
-  // que no hay nada: ése es el único caso en que la pantalla puede afirmar algo sobre esta billetera.
-  // Mismo resolver real, misma ruta, mismo árbol — la ÚNICA diferencia es el status y el body.
+  // 🔴 POR QUÉ ESTE CASO EXISTE. Un arreglo que hiciera decir "no llegamos a preguntar" en las CUATRO
+  // condiciones pasaría A/B/C/D sin despeinarse, y sería tan falso como el defecto que WKH-331 cerró,
+  // sólo que en la otra dirección: la pantalla afirmaría no haber preguntado también cuando el servidor
+  // sí contestó. Mismo resolver real, misma ruta, mismo árbol — la ÚNICA diferencia es el status y el
+  // body.
   //
-  // ⚠️ Las dos subcadenas se exigen PRESENTES a propósito. Con sólo la negación de "no llegamos a
-  // preguntar", un mensaje distinto —o vacío— también la satisfaría y la sobre-corrección quedaría
-  // invisible.
-  it("E) el registro contesta 200 con la lista vacía ⇒ ahí SÍ se dice 'No encontramos'", async () => {
+  // ⚠️ HASTA WKH-347 LAS ASERCIONES DE ACÁ ERAN POSITIVAS, y se exigían dos subcadenas PRESENTES para
+  // que un mensaje distinto —o vacío— no satisficiera la negación. Ya no: con la segunda fuente del
+  // índice, "el servidor contestó que no hay" dejó de agotar la búsqueda, y en jsdom el índice no se
+  // puede leer. La razón completa y las dos mitades que hoy sostienen el control de la afirmación están
+  // escritas sobre el `it` de abajo. Lo que este caso sigue vigilando, y es lo que no puede perderse, es
+  // el otro extremo: que la pantalla NO afirme cuando no pudo mirar.
+  // 🔴 WKH-347 — ESTE CONTROL CAMBIÓ DE SIGNO, Y NO ES UN TEST ROTO. Antes de esta HU "el servidor
+  // contestó y no tiene ids" AGOTABA la búsqueda: el adapter tiraba `escrow_not_found` en el guard de
+  // lista vacía, ANTES de cualquier `await import()`, y por eso la pantalla podía afirmar y jsdom
+  // alcanzaba. Ahora hay una SEGUNDA fuente —el índice on-chain de esta billetera— y G-3 exige
+  // consultarla exactamente acá. ⇒ La lista vacía del servidor ya no autoriza ninguna afirmación por sí
+  // sola: falta saber qué dice el índice.
+  //
+  // ⚠️ Y EN ESTE ENTORNO EL ÍNDICE NO SE PUEDE LEER, y es un hecho de jsdom, no del código: la
+  // derivación de PDA se cae acá con "Unable to find a viable program address nonce" (la misma causa que
+  // `escrow-rent-discovery-junta.test.ts` ya dejó medida, y la razón por la que ese archivo no renderiza
+  // React). Así que el desenlace correcto de este caso pasó a ser un MATIZ, y afirmar acá sería falso.
+  //
+  // 🔴 DÓNDE VIVE AHORA EL CONTROL DE QUE LA PANTALLA TODAVÍA PUEDE AFIRMAR — perderlo sería justo la
+  // sobre-corrección que este archivo existe para cazar, así que va nombrado y son DOS mitades:
+  //   · que el adapter produzca `escrow_not_found` con las DOS fuentes agotadas (el ledger sin ids y el
+  //     índice existente y vacío): `T-347-10 (c)` en `solana-wallet.refund.test.ts`, que corre en node y
+  //     sí puede derivar PDAs;
+  //   · que ese código se diga con el copy que AFIRMA, palabra por palabra: el test de igualdad exacta
+  //     de más abajo en este mismo archivo ("el copy legítimo REAL es EXACTAMENTE el literal vetado").
+  // LO QUE SE PERDIÓ, dicho y no disimulado: el recorrido de las dos mitades juntas en un solo render.
+  // No se puede recuperar en jsdom, porque después de G-3 no queda NINGÚN camino a `escrow_not_found`
+  // que no toque la cadena.
+  it("E) el registro contesta 200 con la lista vacía ⇒ se consulta el índice, y si no se pudo leer se MATIZA", async () => {
     stubFetch({
       [RUTA_CHALLENGE]: challengeOk,
       [RUTA_IDS]: () => Response.json({ remittanceIds: [] }, { status: 200 }),
     });
     buscarConElContainerReal();
 
-    const msg = await screen.findByText(/No encontramos escrows abiertos para esta billetera/);
-    expect(msg).toBeInTheDocument();
-    // El número sale de la MISMA constante que sondea, no de un literal escrito en el test.
-    expect(msg).toHaveTextContent(`los últimos ${MAX_RECOVERY_CANDIDATES} envíos`);
-    expect(screen.queryByText(/no llegamos a preguntar/)).not.toBeInTheDocument();
-
-    // 🔴 Y LA IGUALDAD, sobre el texto que la pantalla renderizó de verdad (re-AR/MNR-6). Las tres
-    // líneas de arriba las satisface cualquier variante que hedgee alrededor de ellas; ésta no
-    // satisface ninguna: lo que se ve es EXACTAMENTE el copy vetado, sin una palabra agregada ni
-    // adelante ni atrás, en ningún punto del camino (rama, mapeador, render).
-    expect(msg.textContent).toBe(COPY_LEGÍTIMO_DEL_NO_ENCONTRAMOS);
+    // Las tres aserciones son ESTABLES a través de W3.4 a propósito: valen igual para la red de
+    // seguridad que se renderiza hoy y para el copy propio de `escrow_index_unreadable` que esa wave le
+    // da. Así este test no hay que reescribirlo dos veces dentro de la misma HU.
+    const err = await screen.findByText(/no es una respuesta sobre tus fondos/);
+    // (1) MATIZA lo que NOSOTROS hicimos, con el mismo predicado que vigila a las otras cuatro copias.
+    expect(dudasEn(err.textContent ?? "").length).toBeGreaterThan(0);
+    // (2) 🚫 Y NO AFIRMA. Ésta es la aserción que esta HU no puede perder en la otra dirección: decir
+    // "No encontramos" cuando el índice no se leyó sería afirmar de más sobre los fondos de la persona.
+    expect(screen.queryByText(/No encontramos escrows abiertos/)).not.toBeInTheDocument();
+    // (3) Ni se atribuye la VENTANA del servidor como si eso cerrara la pregunta. ⚠️ Ojo con el alcance
+    // exacto, que cambió en el fix-pack de esta HU (AR/BLQ-2): el copy de `escrow_index_unreadable` SÍ
+    // dice que el registro durable se consultó y no tenía ninguno abierto —es cierto, y negarlo era el
+    // defecto— pero NO nombra el número de la ventana, porque "ninguno de los últimos N" al lado de un
+    // índice que no se pudo leer se lee como una búsqueda terminada. Lo que este assert prohíbe es el
+    // NÚMERO, no la mención de la fuente.
+    expect(
+      screen.queryByText(new RegExp(`últimos ${MAX_RECOVERY_CANDIDATES} envíos`)),
+    ).not.toBeInTheDocument();
   });
 });
 

@@ -352,7 +352,7 @@ export interface SolanaEscrowRefundGateway {
    *
    * El adapter ya lo soportaba (HU-SOL-20/AC-2): sin id lo resuelve contra el store server-side
    * (`POST /api/solana/escrow/remittance-ids`, PoP obligatorio) y sondea hasta
-   * MAX_RECOVERY_CANDIDATES PDAs on-chain (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:286`). Este puerto lo declaraba
+   * MAX_RECOVERY_CANDIDATES PDAs on-chain (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:353`). Este puerto lo declaraba
    * REQUERIDO, así que ningún consumidor tipado podía usar ese camino: la única forma de llegar al
    * refund desde la interfaz era `RecoverEscrowFunds`, que arranca con `repo.get(remittanceId)` y
    * tira `remittance_not_found` (`recover-escrow-funds.ts`:49-50). O sea que quien borró los datos
@@ -977,3 +977,51 @@ export interface Clock {
 export interface IdGenerator {
   newId(): string;
 }
+
+// ── WKH-347 · el índice on-chain de escrows del remitente ────────────────────────────────────────
+//
+// Se agregan ACÁ ABAJO, al final del archivo, y no al lado de sus parientes temáticos, por una razón
+// medida: hay citas ancladas que apuntan a líneas de este archivo por número (`Clock`, `:974` entre
+// ellas), y una inserción aguas arriba las desplaza a todas en silencio.
+
+/**
+ * Los 16 bytes que la CADENA consume para identificar un escrow, en hexadecimal minúscula de
+ * exactamente 32 caracteres.
+ *
+ * QUÉ ES: la seed de la PDA `["escrow", sender, id16]` y el argumento de `refund` y de `close`. Sale
+ * de `sha256(utf8(remittanceId))[0..16]`, que es una función de UN SOLO SENTIDO: del `id16` NO se
+ * vuelve al `remittanceId`. Por eso existe como tipo propio y no como "el id".
+ *
+ * ⛔ PROHIBIDO llamarlo `remittanceId` en una firma, un campo, una variable o un copy (CD-16). Un
+ * nombre de campo no es su semántica: un `id16` bautizado `remittanceId` invita a interpolarlo en una
+ * pantalla, mandarlo al registro durable o compararlo con el del `localStorage`, y las tres son
+ * falsas. Este alias NO lo impide por sí solo —es un `string`—; lo que lo impide en el camino que
+ * importa es que el resolver devuelva una unión DISCRIMINADA donde hay que nombrar el caso, en vez de
+ * una cadena pelada. Ver el retorno de `resolveRemittanceIdFromLedger` en `solana-wallet.ts`.
+ *
+ * POR QUÉ HEX Y NO `Uint8Array`, con las tres razones refutables:
+ *   1. Se compara con `===` y sirve de `key` de un `.map()` de React. Un `Uint8Array` no.
+ *   2. No lo puede mutar un consumidor. Un `Uint8Array` que viaja por un puerto sí.
+ *   3. Un doble de test lo escribe a mano sin importar `Buffer`.
+ * La conversión hex ↔ bytes vive en UN solo lugar, junto a la derivación de la PDA.
+ */
+export type EscrowId16 = string;
+
+/* ⛔ ACÁ VIVÍA `EscrowIndexLookup`, Y SE BORRÓ EN EL FIX-PACK DE WKH-347 (CR/MNR-1). Va dicho en vez de
+ * desaparecer sin rastro, porque el Story File (§7.3) pedía los cuatro desenlaces y hay que decir dónde
+ * quedaron. Los TRES motivos, cada uno medido:
+ *
+ *   1. CERO consumidores en todo el árbol, ni de producción ni de tests. Un `grep -rn EscrowIndexLookup`
+ *      devolvía sólo su propia declaración.
+ *   2. Su vocabulario NO era el que producción emite. Declaraba `no_index | unreadable | empty |
+ *      candidates`, y los códigos que viajan de verdad son `escrow_index_absent |
+ *      escrow_index_unreadable | escrow_not_found`. O sea que documentaba un idioma que ningún código
+ *      habla, que es peor que no documentar nada.
+ *   3. Lo contradecía este mismo repo, quince líneas más arriba de donde se escribió: "un puerto
+ *      ensanchado que nadie usa es superficie muerta en el money-path".
+ *
+ * DÓNDE ESTÁN AHORA LOS CUATRO DESENLACES, que es lo que §7.3 exigía de verdad (que EXISTAN y estén
+ * DISCRIMINADOS, no que haya un `type` en este archivo): en `resolveFromEscrowIndex` /
+ * `escrowIndexCandidate` de `src/infrastructure/solana-wallet.ts`, con los tres primeros como códigos de
+ * `Error` distintos y el cuarto siguiendo al sondeo on-chain. `EscrowId16` se QUEDA: tiene consumidores
+ * de producción. */

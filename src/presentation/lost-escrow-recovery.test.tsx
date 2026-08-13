@@ -6,7 +6,7 @@
 //   · `POST /api/solana/escrow/remittance-ids` está vivo en producción (medido: responde 403
 //     `escrow_recovery_unverified` sin PoP),
 //   · `refundEscrow()` acepta el id ausente y lo resuelve contra ese endpoint sondeando hasta
-//     `MAX_RECOVERY_CANDIDATES` PDAs (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:286`),
+//     `MAX_RECOVERY_CANDIDATES` PDAs (`resolveRemittanceIdFromLedger`, `solana-wallet.ts:353`),
 //   · el gateway está cableado en el composition root (`solanaRefund`, `container.ts:169`).
 // Y la interfaz llamaba únicamente a `recoverEscrowFunds`, que arranca con `repo.get(remittanceId)` y
 // tira `remittance_not_found` (`recover-escrow-funds.ts`:49-50). O sea: quien borró los datos del
@@ -257,7 +257,7 @@ describe("recuperar un envío perdido: la puerta en el recorrido", () => {
 //
 // 🔴 EL DEFECTO. La pantalla decía "Recuperaste tus fondos" y nada más, y esta puerta resuelve UN
 // escrow por vez: `resolveRemittanceIdFromLedger` sondea hasta `MAX_RECOVERY_CANDIDATES` PDAs y
-// devuelve el PRIMERO en estado `Deposited` (`solana-wallet.ts:333`). Quien tenía dos envíos perdidos
+// devuelve el PRIMERO en estado (`Deposited`, `solana-wallet.ts:400`). Quien tenía dos envíos perdidos
 // se iba de la pantalla creyendo que había recuperado todo, y el segundo se quedaba en el vault.
 describe("recuperar un envío perdido: que puede haber más de uno", () => {
   it("dice que puede haber más envíos, SIN afirmar un número que el código no sabe", async () => {
@@ -405,7 +405,7 @@ describe("recuperar un envío perdido: dos búsquedas seguidas", () => {
 
   // ── T-346-15 · 🔴 EL TRI-ESTADO, que es lo que NO se puede colapsar ────────────────────────────
   //
-  // `escrow_recovery_unavailable` llega con CINCO productores (`flow-vm.ts:323-332`) y NINGUNO afirma
+  // `escrow_recovery_unavailable` llega con CINCO productores (`escrow_id_unavailable`, `flow-vm.ts:329`) y NINGUNO afirma
   // que la ventana esté vacía: el endpoint contestó algo que no es 200/403/501, o los tres `not_asked`
   // que el refund propaga desde WKH-331. En los cinco NO llegamos a mirar la cadena, así que "puede
   // haber más" sigue siendo VERDAD. Colapsarlo con `escrow_not_found` repetiría la lección que este
@@ -543,6 +543,78 @@ describe("recuperar un envío perdido: cambiar de billetera", () => {
       await screen.findByText(/No encontramos escrows abiertos para esta billetera/),
     ).toBeInTheDocument();
     // Y NO se afirma el final del camino, que sería el éxito de A contado como cierre de B.
+    expect(screen.queryByText(/Ya no queda ninguno abierto/)).toBeNull();
+  });
+});
+
+// ── Fix-pack WKH-347 (AR/BLQ-1): el cierre de ventana de las billeteras SIN índice ────────────────
+//
+// 🔴 EL CAMBIO DE COMPORTAMIENTO, dicho como lo que es y no como un ajuste de copy: hasta el fix-pack,
+// `escrow_index_absent` NO prendía el cierre de ventana de WKH-346, y eso era una regresión para la
+// POBLACIÓN ENTERA. Al desplegar, ninguna billetera existente tiene índice on-chain (la PDA se crea con
+// el primer depósito posterior a WKH-347), así que ésta es la respuesta de toda búsqueda hecha justo
+// después de una recuperación exitosa: el final EXITOSO del camino volvía a pintarse con el color del
+// error, que es exactamente el defecto que WKH-346 vino a cerrar. En `main` ese mismo click daba
+// `escrow_not_found` y sí prendía la tarjeta.
+//
+// POR QUÉ ES CIERTO Y NO UNA COMODIDAD: a `escrow_index_absent` se llega SÓLO después de que el
+// registro durable contestó y su ventana no tenía ningún escrow abierto; que la cadena además no tenga
+// índice no agrega ningún candidato que revisar. La tarjeta afirma exactamente eso ("ya no queda ninguno
+// abierto ENTRE los últimos N guardados") y nada sobre los fondos.
+//
+// 🔴 EL MUTANTE QUE ESTO CAZA: sacarle a `esVentanaSinAbiertos` la segunda copia aceptada. Con eso el
+// primer `findByText` se cae y el `queryByText` del error pasa a encontrar el copy del índice.
+describe("recuperar un envío perdido: billetera SIN índice on-chain (WKH-347 fix-pack)", () => {
+  it("recuperar uno y después escrow_index_absent: dice que ya no queda ninguno, y NO como error", async () => {
+    const gateway = new GatewayEnSecuencia([
+      confirmado(FAKE_SOLANA_SIGNATURE),
+      "escrow_index_absent",
+    ]);
+    abrirPuerta(gateway);
+
+    buscar();
+    const comprobante = await screen.findByRole("link", { name: SIGNATURE_CORTA });
+    buscar();
+
+    const cierre = await screen.findByText(/Ya no queda ninguno abierto/);
+    expect(cierre).toHaveTextContent(`los últimos ${MAX_RECOVERY_CANDIDATES} envíos`);
+    expect(screen.queryByText(/Puede haber más envíos con fondos por recuperar/)).toBeNull();
+    // El comprobante no desapareció, y el copy del índice NO se pinta como error: el camino terminó.
+    expect(comprobante).toBeInTheDocument();
+    expect(screen.queryByText(/no hay un índice de envíos de esta billetera/)).toBeNull();
+  });
+
+  // 🔴 EL OTRO LADO DE LA LÍNEA, sin el cual el de arriba sería "prendelo para todo": `unreadable` es no
+  // haber podido preguntarle a la cadena, así que la pantalla tiene que seguir diciendo que puede haber
+  // más Y pintar el matiz. Colapsar los dos códigos pone en rojo estos tres asserts.
+  it("recuperar uno y después escrow_index_unreadable: SIGUE diciendo que puede haber más", async () => {
+    const gateway = new GatewayEnSecuencia([
+      confirmado(FAKE_SOLANA_SIGNATURE),
+      "escrow_index_unreadable",
+    ]);
+    abrirPuerta(gateway);
+
+    buscar();
+    await screen.findByRole("link", { name: SIGNATURE_CORTA });
+    buscar();
+
+    const msg = await screen.findByText(/no pudimos leer es el índice de envíos/);
+    expect(msg).toHaveTextContent("quedó sin revisar");
+    expect(screen.getByText(/Puede haber más envíos con fondos por recuperar/)).toBeInTheDocument();
+    expect(screen.queryByText(/Ya no queda ninguno abierto/)).toBeNull();
+  });
+
+  // Regresión del camino que NO cambia (espejo del de `escrow_not_found`): sin nada recuperado, el
+  // índice ausente en el PRIMER click se sigue pintando como error, con su copy propio.
+  it("con CERO recuperados, escrow_index_absent se sigue pintando como error", async () => {
+    abrirPuerta(new GatewayEnSecuencia(["escrow_index_absent"]));
+
+    buscar();
+
+    expect(
+      await screen.findByText(/no hay un índice de envíos de esta billetera/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Recuperaste tus fondos/)).toBeNull();
     expect(screen.queryByText(/Ya no queda ninguno abierto/)).toBeNull();
   });
 });

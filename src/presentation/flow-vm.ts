@@ -161,7 +161,7 @@ export function statusDisplay(status: RemittanceStatus): {
  * Esta función no lee la cadena: se calcula SOLO con el snapshot persistido, así que lo único que
  * puede afirmar es lo que alguien ya midió y llegamos a ESCRIBIR. Por eso los dos valores que
  * afirman algo del vault salen de marcadores que se escriben en UN solo lugar y bajo UNA sola
- * condición, nunca de deducir un final a partir del status.
+ * condición, nunca de deducir un final a partir del status. ⚠️ Y SIGUE SIN LEERLA después de WKH-349, que NO tocó esta función: esa HU agregó una capa ENCIMA —(`escrowOutcome`, `:1192`) y (`escrowOutcomeDisplay`, `:1225`), al final de este archivo— que le pregunta a la cadena por el bucket `unverified` cuando se abre el historial. O sea que la PANTALLA de historial hoy sí mira la cadena; esta función, no. Si leés este docblock y concluís que el historial nunca mira la cadena, la conclusión es vieja.
  *
  * - `returned`   los USDC volvieron. Lo respalda `ESCROW_REFUNDED_BY_SENDER`, que RecoverEscrowFunds
  *                escribe recién con `confirmation === "confirmed"` (recover-escrow-funds.ts:70-77),

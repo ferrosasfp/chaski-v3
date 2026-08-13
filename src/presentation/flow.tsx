@@ -2242,10 +2242,10 @@ export function LostEscrowRecovery({
  *
  * POR QUÉ VIVE ACÁ Y NO EN OTRO LADO — las tres razones, con lo que se rompería si se hiciera distinto:
  *
- *  1. NO en `HistoryView`. Esa pantalla declara, en su propio comentario, que NO consulta la cadena, y
- *     toda su honestidad ("son los envíos guardados en este dispositivo") se apoya en eso. Meterle una
- *     lectura on-chain cambia lo que la pantalla ES. Además el historial está scopeado por
- *     `localStorage` y AC-8 exige justamente cubrir lo que NO está ahí.
+ *  1. NO en `HistoryView`. ⚠️ La PREMISA original de esta razón se cayó con WKH-349: esa pantalla sí
+ *     consulta la cadena ahora, por el estado de las PDAs de sus propias filas. La CONCLUSIÓN no se
+ *     cayó, y el motivo que la sostiene solo es el otro que ya estaba escrito acá: el historial está
+ *     scopeado por `localStorage` y AC-8 exige justamente cubrir los envíos que NO están ahí.
  *  2. NO adentro de `LostEscrowRecovery`. Esa puerta promete encontrar escrows ABIERTOS con tus USDC, y
  *     su copy de "no encontré nada" lo dice medido: "ninguno de los últimos N envíos… está ABIERTO en
  *     el contrato" (`flow-vm.ts`, `lostEscrowRecoveryError`). Un escrow terminal NO está abierto: meter
@@ -2412,9 +2412,9 @@ function PayoutInProgress({ rem }: { rem: RemittanceState }) {
               lugar, porque enterrarlo sería prometer un automatismo que no existe.
               "Tus USDC ya están en el contrato" (presente, continuo) afirmaba más que `principalTx`,
               que prueba un hecho PASADO: la cadena confirmó que el depósito entró. Nadie volvió a
-              mirar el vault desde entonces, y de hecho el historial de esta misma remesa lo dice con
-              todas las letras ("No comprobamos si tus USDC siguen en el escrow", vía
-              `escrowFundsKnowledge` → `unverified`). Dos pantallas no pueden contar dos historias. */}
+              mirar el vault DESDE ACÁ. Desde WKH-349 el historial de esta misma remesa sí lo mira y
+              dice qué contestó el contrato. La regla no cambia —dos pantallas no pueden contar dos
+              historias— y la relación es: el historial mide, ésta no, y por eso ésta no afirma más. */}
           <p className="mt-0.5 text-xs text-stone">
             Vimos entrar tus USDC al contrato, a tu nombre. Todavía no tenemos la confirmación de que
             el dinero llegó a destino, así que no te lo vamos a decir hasta tenerla.
@@ -2929,7 +2929,7 @@ function RefundWindowNote() {
 //
 // Dos frases y no una: las remesas cuyo depósito la cadena CONFIRMÓ no se pueden anunciar con la
 // misma frase que las que nadie miró. Decir "no comprobamos" sobre plata que sí comprobamos es el
-// mismo error de esta pantalla, sólo que hacia el otro lado.
+// mismo error de esta pantalla, sólo que hacia el otro lado. ⚠️ R-2 (WKH-349) — RESIDUAL VIVO, EN ESTA LÍNEA para no rotar las citas por número que este archivo recibe: `escrowFundsAtRisk` cuenta el bucket `unverified` SÓLO con el snapshot local, así que desde WKH-349 la pantalla de al lado puede saber más que esta advertencia. El input que lo demuestra: una remesa `unverified` cuya PDA está `Released` — el historial dice que sus USDC ya salieron del escrow y acá se la sigue contando entre las que "no comprobamos". Es el MISMO defecto que esa HU arregló, en otra pantalla; quedó fuera de su alcance y NO se arregló acá.
 export function ResetWarning({ items }: { items: RemittanceState[] | null }) {
   // `null` = no pudimos leer el historial. Callar sería degradar la advertencia en silencio.
   const atRisk = items === null ? null : escrowFundsAtRisk(items);
@@ -2965,10 +2965,26 @@ export function ResetWarning({ items }: { items: RemittanceState[] | null }) {
 // la remesa quedaba sin ningún camino desde la interfaz, con los USDC en el vault. El dato SIEMPRE
 // estuvo (el repo las guarda por dueño); lo que faltaba era la pantalla.
 //
-// Lo que esta pantalla NO hace, y es deliberado: no consulta la cadena. Muestra el snapshot guardado
-// y dice de cuál de cuatro cosas se trata (escrowFundsKnowledge), incluido lo que la cadena ya había
-// contestado y quedó escrito. Cuando no sabemos dónde están los USDC lo escribe con esas palabras,
-// en vez de deducir un final del status.
+// QUÉ CONSULTA ESTA PANTALLA, desde WKH-349. Muestra el snapshot guardado y dice de cuál de cuatro
+// cosas se trata (escrowFundsKnowledge), incluido lo que la cadena ya había contestado y quedó
+// escrito. Y para el ÚNICO bucket que ese cálculo no puede resolver —`unverified`, que es "se depositó
+// y nadie volvió a mirar"— le pregunta a la cadena, en una sola llamada por apertura, en qué estado
+// está la PDA `escrow_state` de esas filas. Nunca pregunta por las otras tres: su desenlace ya está
+// determinado localmente y una respuesta de cadena sólo podría contradecir un marcador ya escrito.
+//
+// QUÉ SIGUE SIN CONSULTAR, y es la honestidad del párrafo de abajo ("son los envíos guardados en este
+// dispositivo"): los envíos que NO están en este `localStorage`. La consulta se arma con los ids que
+// la lista ya trae, así que un envío que este navegador no conoce sigue sin aparecer acá. Esa frase
+// sigue siendo verdadera después de esta HU, y el input que la refutaría es un envío ajeno a este
+// almacenamiento apareciendo en la lista.
+//
+// QUÉ NO PRUEBA LA RESPUESTA: que la PDA no exista no dice a dónde fue la plata (no distingue "nunca
+// entró" de "ya se cerró"), y que el vault se haya liberado no dice que la familia haya cobrado. Cada
+// valor lo declara en su propio bullet, en el docblock de `EscrowChainState` (`../application/ports`).
+//
+// Y lo que NO hace, que se decidió y no se olvidó: no firma nada. Ni prueba de posesión, ni
+// `signMessage`, ni una transacción. Una app que pide una firma por mirar una lista entrena a la
+// gente a firmar cualquier cosa.
 //
 // Exportado para test directo, mismo criterio que TrackView y Receipt.
 export function HistoryView({

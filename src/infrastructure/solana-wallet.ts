@@ -27,7 +27,7 @@ import type {
   SolanaRemittanceIdResolver,
   SolanaSenderSolBalance,
   SolanaSenderSolBalanceProbe,
-  SolanaCloseableEscrowLister,
+  SolanaCloseableEscrowLister, EscrowChainState, SolanaEscrowChainStateReader, // WKH-349: EN ESTA LÍNEA, no en dos nuevas — las 30 citas por número a este archivo apuntan de `:188` para abajo
   WalletPort,
 } from "../application/ports";
 import type { Quote } from "../domain/remittance";
@@ -43,7 +43,7 @@ import {
   resolveSolanaUsdcMint,
 } from "./chain";
 import { ESCROW_INDEX_MAX_ENTRIES } from "./escrow-index-limits";
-import { ESCROW_ID_LOOKUP_CEILING } from "./escrow-lookup-limits";
+import { ESCROW_ID_LOOKUP_CEILING } from "./escrow-lookup-limits"; import { ESCROW_STATE_BATCH_CEILING, ESCROW_STATE_BATCH_TIMEOUT_MS } from "./escrow-history-limits"; // WKH-349: EN ESTA LÍNEA, no en una nueva — los imports de este archivo están ARRIBA de `:188` y una línea acá rota las 30 citas por número que apuntan de ahí para abajo. Va pegado a `ESCROW_ID_LOOKUP_CEILING` y no a `ESCROW_INDEX_MAX_ENTRIES` a propósito: ése es justo el techo con el que el nuevo NO se confunde (uno lo pone el servidor del registro durable, el otro el RPC), y quien lea la línea ve los dos juntos
 import { solanaWalletBridge } from "./solana-wallet-bridge";
 
 // HU-SOL-20/AC-2: tope de candidatos que el fallback del REFUND sondea on-chain — el camino que
@@ -113,7 +113,7 @@ const SOL_BALANCE_PROBE_TIMEOUT_MS = 5_000;
 
 /** WKH-327/AC-3 — techo de la sonda de la PDA `["escrow-index", sender]`. Mismo número y MISMA razón
  *  que SOL_BALANCE_PROBE_TIMEOUT_MS de acá arriba: es una lectura simple (sin firma ni confirmación)
- *  que corre dentro del camino que la persona espera mirando la pantalla.
+ *  que corre dentro del camino que la persona espera mirando la pantalla. ⚠️ HAY UN CUARTO TECHO DE ESTA MISMA FAMILIA Y NO ESTÁ EN ESTE BLOQUE: `ESCROW_STATE_BATCH_TIMEOUT_MS` (el de `readEscrowStates`, el batch del historial) vive en `./escrow-history-limits.ts` junto a su techo de cantidad, porque una línea nueva acá arriba rota las 30 citas por número que este archivo recibe.
  *
  *  Sin este techo, un `getAccountInfo` colgado (el RPC público que acepta la conexión y no contesta)
  *  deja a la persona mirando "Cerrando…" para siempre. Vencido el techo el resultado es "no pudimos
@@ -171,7 +171,7 @@ export class SolanaWalletAdapter
     SolanaCloseableEscrowLister,
     // WKH-327 (fix-pack AR/BLQ-BAJO-1): quién está conectado AHORA. Mismo adapter otra vez porque el
     // bridge que sabe la respuesta ya es suyo.
-    ConnectedWalletProbe
+    ConnectedWalletProbe, SolanaEscrowChainStateReader // WKH-349: EN ESTA LÍNEA. El estado on-chain de los escrows del historial se le pregunta a la CADENA, así que vive en el mismo adapter por la misma razón que sus vecinos de arriba
 {
   private address: string | null = null;
 
@@ -1506,5 +1506,118 @@ export class SolanaWalletAdapter
     const sig = await solanaWalletBridge.signMessage(bytes); // Uint8Array(64) de la wallet
     // Normalizar a Uint8Array cubre adapters que devuelvan otro shape (R-2 del SDD).
     return bs58.encode(sig instanceof Uint8Array ? sig : new Uint8Array(sig));
+  }
+
+  /**
+   * WKH-349 — EN QUÉ ESTADO ESTÁ LA PDA `escrow_state` de cada uno de estos envíos. Lo consume la
+   * pantalla de historial, para las filas cuyo desenlace el snapshot local no puede afirmar.
+   *
+   * 🔴 NO FIRMA NADA, Y ESA RESTRICCIÓN ES LA QUE DECIDE SU FORMA. No se reusan
+   * (`resolveRemittanceIdFromLedger`, `:353`) ni (`listCloseable`, `:1443`), que hacen el MISMO
+   * derive+batch+decode, porque los dos empiezan por `resolver.lookupBySender`, que es
+   * PoP-autenticado: reusarlos abriría un diálogo de firma sólo por abrir "Ver mis envíos", y una app
+   * que pide firmas por mirar una lista entrena a la gente a firmar cualquier cosa. Se reusa la mitad
+   * "derive + batch + decode" y nada más; los ids llegan por argumento.
+   *
+   * El `sender` es el del ARGUMENTO, nunca `this.address`: el cache de `connect()` puede ser de otra
+   * billetera que la persona eligió después, y derivar con él daría las PDAs de otro.
+   *
+   * ── R-3 · ES EL TERCER BUCLE DE SELECCIÓN DE ESTE ARCHIVO, Y NO SE UNIFICÓ ─────────────────────
+   *
+   * El docblock de (`escrowIndexCandidate`, `:463`) ya declara la duplicación residual entre ese
+   * bucle y el del ledger, y pide con todas las letras "si tocás uno de los dos bucles, tocá el otro o
+   * borrá esta afirmación". Esta HU **no toca ninguno de los dos**: agrega un tercero, y la asimetría
+   * se declara acá en vez de quedar sin dueño. El motivo de no unificar, concreto: los tres devuelven
+   * cosas distintas —el primero un `remittanceId`, el segundo un `EscrowId16`, éste un `Map` de cinco
+   * valores—, éste **no elige "el primero"** y **no filtra por estado** (conserva los cinco
+   * desenlaces), y la extracción tocaría, en el mismo diff, la función que decide QUÉ escrow se
+   * refundea.
+   *
+   * ── EL CONTRATO ES TOTAL ──────────────────────────────────────────────────────────────────────
+   *
+   * Devuelve una entrada por CADA `remittanceId` pedido. Acá no hay ningún `continue` que saltee una
+   * fila, al revés que en los otros dos bucles: allá descartar una candidata es correcto (buscan UNA),
+   * acá sería perder una fila del historial de la persona sin decírselo.
+   *
+   * ── LOS TRES MODOS DE FALLA ───────────────────────────────────────────────────────────────────
+   *
+   *  · No se puede ni EMPEZAR (`sender` que no es base58, un `await import` que falla) ⇒ **TIRA**. Acá
+   *    sí vale la disciplina de `SolanaCloseableEscrowLister`: no hay ninguna respuesta parcial que
+   *    salvar. Quien llama arma su propio mapa de `"unknown"`.
+   *  · El batch de un chunk lanza, o vence `ESCROW_STATE_BATCH_TIMEOUT_MS` ⇒ **sólo ese chunk** cae a
+   *    `"unknown"`. Los demás conservan lo que la cadena contestó. Nunca `"absent"`: no preguntamos.
+   *  · El decode de UNA cuenta lanza ⇒ **esa fila** cae a `"unknown"`, y las demás quedan intactas.
+   */
+  async readEscrowStates(input: {
+    sender: string;
+    remittanceIds: readonly string[];
+  }): Promise<ReadonlyMap<string, EscrowChainState>> {
+    const out = new Map<string, EscrowChainState>();
+    // Corte temprano: sin ids no hay nada que preguntar, y dejarlo caer haría un batch de cero
+    // cuentas cuyo fallo se leería como "no pudimos preguntar" sobre una pregunta que nadie hizo.
+    if (input.remittanceIds.length === 0) return out;
+
+    const web3 = await import("@solana/web3.js");
+    const { PublicKey: PublicKeyLazy, Connection } = web3;
+    const anchor = await import("@coral-xyz/anchor");
+    const { escrowIdl } = await import("./solana/escrow-idl");
+
+    const senderPk = new PublicKeyLazy(input.sender); // valida base58 (CD-SDD-7); si no lo es, TIRA
+    const programId = new PublicKeyLazy((escrowIdl as { address: string }).address);
+    const connection = new Connection(
+      resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), // client-safe
+    );
+    const coder = new anchor.BorshAccountsCoder(escrowIdl as unknown as Idl);
+
+    // El troceo es lo que hace que el techo sea POR CHUNK: con 150 ids son 2 llamadas y 2 techos, y
+    // que la primera venza no le saca su respuesta a la segunda. Truncar a 100 y devolver 100
+    // entradas para 150 ids perdería 50 filas en silencio, que es el mutante que T-A8 mata.
+    for (let start = 0; start < input.remittanceIds.length; start += ESCROW_STATE_BATCH_CEILING) {
+      const chunk = input.remittanceIds.slice(start, start + ESCROW_STATE_BATCH_CEILING);
+      const pdas = chunk.map((id) => this.deriveEscrowState(senderPk, programId, id).pda);
+      let infos: Awaited<ReturnType<Web3Connection["getMultipleAccountsInfo"]>>;
+      try {
+        // withTimeout y no un `await` pelado: un RPC que acepta la conexión y no contesta dejaría la
+        // fila diciendo "Le estamos preguntando al contrato" para siempre. Es el mismo motivo que en
+        // (`probeEscrowIndex`, `:1288`), y el mensaje "confirm_timeout" que arrastra `withTimeout` no
+        // le llega a ninguna persona: acá se convierte en `"unknown"`.
+        infos = await withTimeout(
+          connection.getMultipleAccountsInfo(pdas),
+          ESCROW_STATE_BATCH_TIMEOUT_MS,
+        );
+      } catch {
+        for (const id of chunk) out.set(id, "unknown"); // NO pudimos preguntar; NO es "no hay cuenta"
+        continue;
+      }
+      for (let i = 0; i < chunk.length; i++) {
+        const id = chunk[i] as string;
+        const acc = infos[i];
+        if (!acc) {
+          out.set(id, "absent"); // la cadena CONTESTÓ: en esa PDA no hay cuenta
+          continue;
+        }
+        let statusKey: string | undefined;
+        try {
+          const state = coder.decode("EscrowState", acc.data) as { status: Record<string, unknown> };
+          statusKey = Object.keys(state.status)[0]; // { Deposited: {} } | { Released: {} } | ...
+        } catch {
+          out.set(id, "unknown"); // cuenta deforme o ajena al layout: no pudimos LEER esta fila
+          continue;
+        }
+        // Un `status` que no es ninguno de los tres es un cuarto desenlace SIN NOMBRE: se dice
+        // "no pudimos" y no se elige uno de los tres por descarte.
+        out.set(
+          id,
+          statusKey === "Deposited"
+            ? "deposited"
+            : statusKey === "Released"
+              ? "released"
+              : statusKey === "Refunded"
+                ? "refunded"
+                : "unknown",
+        );
+      }
+    }
+    return out;
   }
 }

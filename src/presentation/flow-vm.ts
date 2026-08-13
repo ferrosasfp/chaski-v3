@@ -161,7 +161,7 @@ export function statusDisplay(status: RemittanceStatus): {
  * Esta función no lee la cadena: se calcula SOLO con el snapshot persistido, así que lo único que
  * puede afirmar es lo que alguien ya midió y llegamos a ESCRIBIR. Por eso los dos valores que
  * afirman algo del vault salen de marcadores que se escriben en UN solo lugar y bajo UNA sola
- * condición, nunca de deducir un final a partir del status. ⚠️ Y SIGUE SIN LEERLA después de WKH-349, que NO tocó esta función: esa HU agregó una capa ENCIMA —(`escrowOutcome`, `:1193`) y (`escrowOutcomeDisplay`, `:1249`), al final de este archivo— que le pregunta a la cadena por el bucket `unverified` cuando se abre el historial. O sea que la PANTALLA de historial hoy sí mira la cadena; esta función, no. Si leés este docblock y concluís que el historial nunca mira la cadena, la conclusión es vieja.
+ * condición, nunca de deducir un final a partir del status. ⚠️ Y SIGUE SIN LEERLA después de WKH-349, que NO tocó esta función: esa HU agregó una capa ENCIMA —(`escrowOutcome`, `:1193`) y (`escrowOutcomeDisplay`, `:1251`), al final de este archivo— que le pregunta a la cadena por el bucket `unverified` cuando se abre el historial. O sea que la PANTALLA de historial hoy sí mira la cadena; esta función, no. Si leés este docblock y concluís que el historial nunca mira la cadena, la conclusión es vieja.
  *
  * - `returned`   los USDC volvieron. Lo respalda `ESCROW_REFUNDED_BY_SENDER`, que RecoverEscrowFunds
  *                escribe recién con `confirmation === "confirmed"` (recover-escrow-funds.ts:70-77),
@@ -1237,10 +1237,12 @@ export function escrowOutcome(rem: RemittanceState, answer: EscrowChainAnswer): 
  * lo que monta `RefundAction`. AC-11 no pide ese botón y esta HU NO lo agrega.
  *
  * DÓNDE ESTÁ LA PUERTA para esa fila, que es lo que faltaba decir: (`LostEscrowRecovery`,
- * `flow.tsx:755`), en la pantalla de inicio. Esa puerta no mira el estado local de la remesa —resuelve
- * el id contra el registro durable y refundea el primer escrow abierto y vencido del sender—, así que
- * la salida que CP-8 promete existe. Lo que QUEDA VIVO: la frase no dice dónde está, y desde esta
- * tarjeta no se llega. Se ACOTÓ; no se cerró.
+ * `flow.tsx:755`), en la pantalla de inicio. No mira el estado local de la remesa: resuelve el id
+ * contra el registro durable y elige el PRIMER escrow `Deposited` del sender
+ * (`Deposited`, `../infrastructure/solana-wallet.ts:400`); del `deadline` se ocupa después el guard
+ * del refund. Lo que QUEDA VIVO, y son DOS cosas: la frase no dice dónde está esa puerta, y si el
+ * primer escrow abierto del sender NO está vencido, esa puerta tira `refund_before_deadline` y NO
+ * llega hasta esta fila. Se ACOTÓ; no se cerró.
  *
  * Sobre `"chain-released"`: dice "salieron del escrow hacia el pago" y NO dice "entregado". Esa
  * palabra ya es de (`statusDisplay`, `:133`) para `settled`, que habla de otro hecho —el partner de

@@ -177,7 +177,10 @@ describe("WKH-350 · el historial se reparte en 4 secciones y no pierde nada por
   // MUTANTE: un `if (g === undefined) return null` o cualquier filtro que descarte un desenlace no
   // contemplado. Una tarjeta desaparece de la pantalla sin que nadie se entere, que es la peor forma
   // de romper esto: la persona deja de ver un envío suyo y la app no lo dice.
-  it("T-H4: las 9 filas siguen estando, y cada una con la frase de siempre", async () => {
+  // ⚠️ EL TÍTULO DICE LO QUE MIDE Y NADA MÁS: las 9 filas se cuentan como `listitem`, pero la frase se
+  // verifica sólo en las 3 LOCALES. Las 6 de cadena están candadeadas por texto en
+  // `history-onchain.test.tsx` y en los T-V de `flow-vm.test.ts`, no acá.
+  it("T-H4: las 9 filas siguen estando, y las 3 locales con la frase de siempre", async () => {
     const reader = new FakeSolanaEscrowChainStateReader(NUEVE_RESPUESTAS);
     render(
       <HistoryView
@@ -254,16 +257,39 @@ describe("WKH-350 · el historial se reparte en 4 secciones y no pierde nada por
   // 🔴 T-H7 (AC-6) — DENTRO DE UN GRUPO, EL ORDEN ES EL QUE LA LISTA YA TRAÍA.
   // La lista llega ordenada de arriba; reordenarla acá cambiaría lo que la persona espera ver primero
   // sin que nadie lo haya decidido.
-  // MUTANTE: cualquier `.sort()` dentro del grupo, por fecha, por monto o por id. Con estas tres filas
-  // el orden por id sería el mismo, y por eso los nombres son Ana, Beto y Cira en un orden de entrada
-  // que NO es el alfabético.
+  // MUTANTES, y son CUATRO, uno por criterio: un `.sort()` dentro del grupo por nombre, por id, por
+  // fecha o por monto. Los cuatro campos están desalineados a propósito entre sí y con el orden de
+  // entrada, en las dos direcciones:
+  //   entrada  Cira(r2, 300 USDC, 18:02) · Ana(r3, 500, 18:03) · Beto(r1, 400, 18:01)
+  //   nombre ↑ Ana, Beto, Cira      · id ↑ Beto, Cira, Ana
+  //   monto ↑  Cira, Beto, Ana      · fecha ↑ Beto, Cira, Ana
+  // Ninguna de esas seis permutaciones (ni sus inversas) es el orden de entrada, así que cualquiera de
+  // los cuatro `.sort()` mueve al menos una fila y este test se pone rojo.
+  // ⚠️ La versión anterior de este test AFIRMABA cubrir fecha, monto e id y sólo mataba el de nombre:
+  // las tres filas salían con el mismo `T0` y el mismo `Money.of(400)`, y con un sort estable ordenar
+  // por un campo constante deja el orden intacto. Por eso ahora los valores se escriben acá.
   it("T-H7: tres filas del mismo grupo conservan el orden de entrada", () => {
     render(
       <HistoryView
         items={[
-          { ...returnedSnapshot("r1"), beneficiary: { ...beneficiary(), name: "Cira" } },
-          { ...returnedSnapshot("r2"), beneficiary: { ...beneficiary(), name: "Ana" } },
-          { ...returnedSnapshot("r3"), beneficiary: { ...beneficiary(), name: "Beto" } },
+          {
+            ...returnedSnapshot("r2"),
+            beneficiary: { ...beneficiary(), name: "Cira" },
+            sendUsd: Money.of(300, "USDC"),
+            createdAt: "2026-07-09T18:02:00.000Z",
+          },
+          {
+            ...returnedSnapshot("r3"),
+            beneficiary: { ...beneficiary(), name: "Ana" },
+            sendUsd: Money.of(500, "USDC"),
+            createdAt: "2026-07-09T18:03:00.000Z",
+          },
+          {
+            ...returnedSnapshot("r1"),
+            beneficiary: { ...beneficiary(), name: "Beto" },
+            sendUsd: Money.of(400, "USDC"),
+            createdAt: "2026-07-09T18:01:00.000Z",
+          },
         ]}
         onOpen={() => {}}
         onBack={() => {}}

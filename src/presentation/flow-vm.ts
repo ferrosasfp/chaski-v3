@@ -1310,6 +1310,22 @@ export function escrowOutcomeDisplay(o: EscrowOutcome): {
  * sistema no sabe si esa fila está en plazo, y la frase por fila de `chain-deposited-window-open`
  * calla el plazo a propósito (`escrowOutcomeDisplay`, `:1251`). Afirmarlo en el encabezado
  * reintroduce un nivel más arriba el error que ya se cerró a nivel de fila.
+ *
+ * ⚠️ RESIDUAL DE G1, Y ES EL QUE NO ESTABA DECLARADO EN NINGÚN LADO: "Necesitan tu firma" NO contiene
+ * a todas las filas que necesitan una firma. G1 es exactamente `chain-deposited-window-closed`, y ese
+ * desenlace sólo se alcanza por filas `unverified`, porque (`escrowOutcome`, `:1193`) corta en su
+ * primer `if` y descarta la respuesta de la cadena cuando el conocimiento local ya resolvió. Input
+ * concreto: una fila con `PRINCIPAL_SETTLED_REFUND_MANUAL` (⇒ `"in-escrow"` por la rama 2 de
+ * (`escrowFundsKnowledge`, `:206`), el `if` de la línea 215) para la que la cadena contesta
+ * `deposited-window-closed` cae en G2, no en G1: su plazo venció y su única salida también es una
+ * firma, y el encabezado que la nombra dice otra cosa.
+ *
+ * Esto NO es un bug del corte —el corte está argumentado en (`escrowOutcome`, `:1193`) y su candado es
+ * T-V1— ni rompe ningún AC: los ACs definen G1 por `EscrowOutcome === "chain-deposited-window-closed"`,
+ * y esa fila sigue visible, con su copy de siempre, bajo G2. Lo que queda vivo es la LECTURA del
+ * encabezado: se lee como "estas son TODAS las que necesitan tu firma" y es "estas son las que la
+ * cadena nos dejó saber que la necesitan". Quien agregue la acción de refund por grupo tiene que
+ * volver acá: colgarla sólo de G1 la deja fuera del alcance de estas filas.
  */
 export type HistoryGroup = "firma" | "con-plata" | "sin-plata" | "sin-respuesta";
 

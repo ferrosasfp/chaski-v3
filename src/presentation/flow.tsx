@@ -3352,10 +3352,11 @@ export function TxProof({ signature }: { signature: string }) {
 /**
  * WKH-350 · LAS 4 SECCIONES DEL HISTORIAL.
  *
- * Reparte las filas que ya vienen en `items` entre los 4 grupos de (`historyGroupFor`,
- * `flow-vm.ts:1352`) y las renderiza en el orden de (`HISTORY_GROUP_ORDER`, `flow-vm.ts:1317`), que es
- * severidad decreciente. No calcula ningún desenlace: usa el mismo (`escrowOutcome`,
- * `flow-vm.ts:1193`) que la tarjeta ya usaba, y la tarjeta se invoca igual que antes.
+ * Reparte las filas que ya vienen en `items` entre los 4 grupos de (`HistoryGroup`,
+ * `flow-vm.ts:1330`) —el reparto lo hace (`historyGroupFor`, `flow-vm.ts:1368`)— y las renderiza en el
+ * orden de (`HISTORY_GROUP_ORDER`, `flow-vm.ts:1333`), que es severidad decreciente. No calcula ningún
+ * desenlace: usa el mismo (`escrowOutcome`, `flow-vm.ts:1193`) que la tarjeta ya usaba, y la tarjeta se
+ * invoca igual que antes.
  *
  * UN SOLO PASE SOBRE `items`, con push, y NADA de `.sort()` ni de cuatro `.filter()`. El orden dentro
  * de cada grupo tiene que ser el que la lista ya traía, y un solo pase lo garantiza por construcción
@@ -3364,8 +3365,8 @@ export function TxProof({ signature }: { signature: string }) {
  * EL GRUPO SIN FILAS NO SE RENDERIZA, ni el encabezado ni un "0 envíos". Un encabezado sobre un
  * conjunto vacío es una afirmación vacía, y un cero es peor: un número invita a leerse como una
  * medición. Que esto sea inocuo depende de que la partición sea total, y eso está argumentado en el
- * docblock de (`historyGroupFor`, `flow-vm.ts:1352`); si alguien agrega un grupo que pueda quedar
- * vacío significando "no medimos", esto hay que revisarlo.
+ * docblock de (`HistoryGroup`, `flow-vm.ts:1330`) —no en el de `historyGroupFor`, que habla del `??`—;
+ * si alguien agrega un grupo que pueda quedar vacío significando "no medimos", esto hay que revisarlo.
  *
  * DEVUELVE UN FRAGMENT Y NO UN `div`. El padre es un `space-y-4`, y `space-y-*` sólo alcanza a los
  * hijos DIRECTOS: un div envolvente dejaría los 4 grupos a un nivel de profundidad y les comería el
@@ -3374,10 +3375,17 @@ export function TxProof({ signature }: { signature: string }) {
  *
  * ⚠️ POR QUÉ VIVE ACÁ ABAJO Y NO JUNTO A (`HistoryView`, `:2990`), QUE ES DONDE SE LEERÍA MEJOR: por
  * lo mismo que (`TxProof`, `:3303`). Un bloque nuevo en el medio de este archivo desplaza todo lo que
- * viene después, y a este archivo lo apuntan 20 citas por número, de las cuales el candado de citas
- * vigila una minoría: las demás se romperían sin que ningún test se ponga rojo. Como apéndice el
- * desplazamiento es CERO. Cuesta legibilidad y compra eso. Las declaraciones de función se hoistean,
- * así que usarlo arriba y declararlo acá funciona; este archivo ya lo hace con `TxProof`.
+ * viene después, y a este archivo lo apuntan citas por número desde todo el árbol más las autocitas
+ * `:NNN` de sus propios docblocks. De todas ellas, el candado de citas sólo vigila las ANCLADAS —las
+ * que llevan el símbolo delante de la coma—; las SUELTAS, que son mayoría, se romperían sin que ningún
+ * test se ponga rojo, y eso lo declara el propio candado en su cabecera
+ * (`src/composition/citas-ancladas.test.ts`). El número no se escribe acá porque envejece con cada
+ * commit y porque las dos poblaciones no son la misma: se deriva con
+ * `grep -rEo "flow\.tsx:[0-9]+" --include=*.ts --include=*.tsx src app scripts contracts`, y las
+ * ancladas con esa misma cadena precedida de un símbolo entre backticks y una coma.
+ * Como apéndice el desplazamiento es CERO. Cuesta legibilidad y compra eso. Las declaraciones de
+ * función se hoistean, así que usarlo arriba y declararlo acá funciona; este archivo ya lo hace con
+ * `TxProof`.
  *
  * LO QUE ESTE COMPONENTE NO GARANTIZA: `space-y-2` y `space-y-4` son NOMBRES DE CLASE, y que
  * produzcan el espaciado lo hace Tailwind. Ningún test de esta HU lo mide, porque jsdom no hace

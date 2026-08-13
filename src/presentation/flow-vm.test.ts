@@ -1798,13 +1798,26 @@ describe("WKH-350 · agrupación del historial", () => {
     expect(HISTORY_GROUP_ORDER).toEqual(["firma", "con-plata", "sin-plata", "sin-respuesta"]);
   });
 
-  // 🔴 T-H2 (CD-10, mitad temporal) — NINGÚN ENCABEZADO HABLA DE PLAZOS.
+  // 🔴 T-H2 (CD-10, mitad temporal) — UNA RED CONTRA EL VOCABULARIO TEMPORAL, NO UNA PRUEBA.
   // Ninguna de las filas que caen en estos grupos sostiene una afirmación sobre el tiempo: a
   // `in-escrow` no se le pregunta a la cadena, así que no se sabe si está en plazo, y la frase por
   // fila de `chain-deposited-window-open` calla el plazo a propósito.
+  //
+  // ⚠️ LA LISTA NO ES EXHAUSTIVA Y NO PUEDE SERLO, y por eso el test se llama como se llama. Lo que
+  // verifica es "ninguno de los 4 encabezados contiene una de ESTAS cadenas", no "ningún encabezado
+  // habla del tiempo": el castellano tiene más formas de decirlo que las que a alguien se le
+  // ocurrieron un martes. Un encabezado temporal escrito con una palabra que no está acá pasa VERDE.
+  // Leer su verde como "CD-10 está cerrado" es el error que esta advertencia existe para frenar; CD-10
+  // se cierra en la revisión humana, esto sólo abarata las reincidencias.
+  //
+  // ⚠️ Y LA LISTA ARRANCÓ SIN LA PALABRA DEL PROPIO DOMINIO. Medido en la revisión de esta HU: con
+  // `"con-plata": "Con plata en el escrow, ventana abierta"` —o sea el vocabulario literal del código,
+  // `deposited-window-open` / `deposited-window-closed`, que es la redacción MÁS probable de la
+  // recaída— este test daba verde. Por eso están ahora `ventana`, `ahora`, `hoy`, `día`, `ya` y
+  // `reciente`: no porque completen nada, sino porque eran los agujeros más transitados.
   // MUTANTE: reintroducir el encabezado que la revisión sacó, "Con plata en el escrow, todavía en
-  // plazo". Rojo por "todavía" y por "plazo".
-  it("T-H2: ningún encabezado afirma nada sobre plazos ni sobre el tiempo", () => {
+  // plazo". Rojo por "todavía" y por "plazo". O el de arriba, con "ventana".
+  it("T-H2: ningún encabezado contiene ninguna de estas palabras temporales (lista NO exhaustiva)", () => {
     const PROHIBIDAS = [
       "plazo",
       "vence",
@@ -1820,6 +1833,18 @@ describe("WKH-350 · agrupación del historial", () => {
       "caduca",
       "tiempo",
       "pronto",
+      // Agregadas en el fix-pack: el vocabulario del propio dominio y los adverbios de todos los días.
+      // `ya` y `aun` van con espacio a un lado porque son subcadenas de palabras enteras (`playa`,
+      // `aunque`); el costo es que un encabezado que TERMINE en "ya" sin espacio detrás se escapa.
+      "ventana",
+      "ahora",
+      "hoy",
+      "día",
+      "dia ",
+      " ya",
+      "ya ",
+      "reciente",
+      "mientras",
     ];
     const encontradas: string[] = [];
     for (const g of HISTORY_GROUP_ORDER) {

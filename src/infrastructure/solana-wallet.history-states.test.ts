@@ -379,3 +379,98 @@ describe("SolanaWalletAdapter.readEscrowStates (WKH-349)", () => {
     expect(map.get("rem-borde")).toBe("deposited-window-closed");
   });
 });
+
+// 🔴 T-A13 (AC-13) — EL ACOPLE, CORRIENDO LAS DOS FUNCIONES.
+//
+// POR QUÉ NO ALCANZABA T-A12, medido y no supuesto (AR/MNR): con el mutante
+// `if (nowSec <= deadlineSec) throw new Error("refund_before_deadline")` puesto en
+// (`refund_before_deadline`, `solana-wallet.ts:972`) —o sea el refund rechazando EN el deadline
+// mientras la pantalla ya dice "la salida que queda es devolverlos a tu wallet"— la suite entera daba
+// `2025 passed`, cero rojos. T-A12 fija la respuesta del historial contra un literal, así que vigila
+// UN lado del acople; el mutante vive del OTRO. Un candado de un acople tiene que ejercitar las dos
+// funciones o no es un candado, es media medición.
+//
+// LA AFIRMACIÓN QUE FIJA: con el MISMO `deadline` y el MISMO instante, `readEscrowStates` y
+// `refundEscrow` NO PUEDEN DISCREPAR. En el borde exacto (`nowSec === deadlineSec`) la pantalla dice
+// `window-closed` y el refund tiene que DEJAR PASAR; un segundo antes la pantalla dice `window-open` y
+// el refund tiene que RECHAZAR. Las dos mitades hacen falta: la primera mata los mutantes que APRIETAN
+// el refund (`<=`) y la segunda los que lo AFLOJAN (borrar el guard, o `<` en el predicado del
+// historial).
+//
+// ⚠️ LO QUE NO CUBRE, igual que T-A12: nada sobre el reloj del CLUSTER. Prueba que las DOS expresiones
+// de este repo coinciden entre sí, no que coincidan con el programa on-chain (R-4).
+describe("readEscrowStates ⇄ refundEscrow — el acople de AC-13, con las dos funciones corriendo", () => {
+  const CONGELADO_MS = Date.UTC(2026, 7, 13, 12, 0, 0); // múltiplo exacto de 1000: nowSec sin resto
+  const DEADLINE_SEC = CONGELADO_MS / 1000;
+
+  /** Los rieles del refund (blockhash, firma, broadcast, confirmación) + el `getAccountInfo` que lee
+   *  su guard. La MISMA cuenta que el batch del historial le da a `readEscrowStates`: si cada función
+   *  leyera un `deadline` distinto, el test no diría nada sobre el acople. */
+  function mockRefund(data: Buffer): ReturnType<typeof vi.fn> {
+    vi.spyOn(Connection.prototype, "getAccountInfo").mockResolvedValue(accountInfo(data) as never);
+    vi.spyOn(Connection.prototype, "getLatestBlockhash").mockResolvedValue({
+      blockhash: Keypair.generate().publicKey.toBase58(),
+      lastValidBlockHeight: 1,
+    } as never);
+    vi.spyOn(Connection.prototype, "sendRawTransaction").mockImplementation((async () => "sig-borde") as never);
+    vi.spyOn(Connection.prototype, "confirmTransaction").mockImplementation((async () => ({
+      context: { slot: 1 },
+      value: { err: null },
+    })) as never);
+    const signSpy = vi.fn(async (tx: { partialSign(kp: typeof SENDER_KP): void }) => {
+      tx.partialSign(SENDER_KP); // firma REAL: `serialize()` exige la firma del feePayer
+      return tx;
+    });
+    solanaWalletBridge.registerSignTransaction(signSpy as never);
+    return signSpy;
+  }
+
+  /** El escrow del borde, montado para las DOS funciones, con el reloj clavado en `ahoraMs`. */
+  async function montar(ahoraMs: number) {
+    const data = await encodeEscrowState("deposited", DEADLINE_SEC); // se codifica con el reloj real
+    mockBatch(new Map([[pdaOf("rem-borde").toBase58(), data]]));
+    const signSpy = mockRefund(data);
+    const adapter = await conectadoCon(SENDER_B58);
+    vi.useFakeTimers({ toFake: ["Date"] }); // sólo `Date`: T-A10 necesita `setTimeout` real
+    vi.setSystemTime(ahoraMs);
+    return { adapter, signSpy };
+  }
+
+  // MUTANTE que mata (el que el AR aplicó y sobrevivió a la suite entera): `nowSec <= deadlineSec` en
+  // el guard del refund (`solana-wallet.ts:972`). Con él, esta línea se pone roja por
+  // "refund_before_deadline" mientras el assert de arriba sigue diciendo `window-closed`, que es
+  // EXACTAMENTE el desacuerdo que AC-13 prohíbe.
+  it("T-A13a: en el borde exacto, el historial dice 'window-closed' y el refund NO rechaza por deadline", async () => {
+    const { adapter, signSpy } = await montar(CONGELADO_MS);
+
+    // CASO DE CONTROL (CD-11): si el instrumento no congela, esto se pone rojo POR EL CONTROL y no por
+    // el acople.
+    expect(Math.floor(Date.now() / 1000)).toBe(DEADLINE_SEC);
+
+    const map = await adapter.readEscrowStates({ sender: SENDER_B58, remittanceIds: ["rem-borde"] });
+    expect(map.get("rem-borde")).toBe("deposited-window-closed");
+
+    // Y el refund de ESTE MISMO adapter, en ESE MISMO instante, deja pasar. No se afirma con un
+    // `not.toThrow` —que daría verde si el refund tirara por cualquier otro motivo y no habría
+    // ejercitado el guard— sino con la signature: para devolverla tuvo que pasar el guard, firmar y
+    // broadcastear.
+    const out = await adapter.refundEscrow("rem-borde");
+    expect(out.refundTx).toBe("sig-borde");
+    expect(signSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // MUTANTES que mata: (a) borrar el guard `refund_before_deadline` del refund; (b) `nowSec <
+  // deadlineSec ⇒ closed` en el historial. Con cualquiera de los dos, la pantalla y el refund dejan de
+  // decir lo mismo un segundo ANTES del deadline.
+  it("T-A13b: un segundo antes, el historial dice 'window-open' y el refund SÍ rechaza por deadline", async () => {
+    const { adapter, signSpy } = await montar(CONGELADO_MS - 1000);
+
+    expect(Math.floor(Date.now() / 1000)).toBe(DEADLINE_SEC - 1); // control del instrumento
+
+    const map = await adapter.readEscrowStates({ sender: SENDER_B58, remittanceIds: ["rem-borde"] });
+    expect(map.get("rem-borde")).toBe("deposited-window-open");
+
+    await expect(adapter.refundEscrow("rem-borde")).rejects.toThrow("refund_before_deadline");
+    expect(signSpy).not.toHaveBeenCalled(); // rechazó ANTES de pedirle la firma a la persona
+  });
+});

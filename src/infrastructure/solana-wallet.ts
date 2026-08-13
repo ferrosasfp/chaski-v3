@@ -1638,11 +1638,11 @@ export class SolanaWalletAdapter
           out.set(id, "unknown"); // cuenta deforme o ajena al layout: no pudimos LEER esta fila
           continue;
         }
-        // El reloj es el del DISPOSITIVO, y esta comparación es la negación EXACTA del guard con el
-        // que el refund de este mismo archivo rechaza por deadline
-        // (`refund_before_deadline`, `:972`). Está escrita UNA sola vez y a propósito acoplada a
-        // aquélla: si mañana el refund cambia su condición y ésta no, la pantalla empieza a decir "la
-        // salida que queda es la devolución" sobre una fila que este mismo código rechazaría.
+        // El reloj es el del DISPOSITIVO, y esta comparación es la negación EXACTA del guard con el que
+        // el refund de este mismo archivo rechaza por deadline (`refund_before_deadline`, `:972`).
+        // ⚠️ NO está escrita una sola vez: está escrita DOS, allá y acá, así que PUEDEN DIVERGIR — si el
+        // refund cambia su condición y ésta no, la pantalla dice "la salida que queda es la devolución"
+        // sobre una fila que este mismo código rechazaría. Lo único que las ata es T-A13, que corre LAS DOS.
         const nowSec = Math.floor(Date.now() / 1000);
         // Un `status` que no es ninguno de los tres es un cuarto desenlace SIN NOMBRE: se dice
         // "no pudimos" y no se elige uno de los tres por descarte.

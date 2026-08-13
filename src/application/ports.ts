@@ -1086,8 +1086,9 @@ export type EscrowId16 = string;
  * `"deposited-window-open"` y `"deposited-window-closed"` son los ÚNICOS DOS valores de un tipo que se
  * llama "qué contestó la cadena" que dependen de algo que la cadena NO contestó. El `status` y el
  * `deadline` los dijo ella; de qué lado del `deadline` caemos lo dice el `Date.now()` del dispositivo,
- * leído dentro de `readEscrowStates` (el adapter de Solana), que es la misma expresión con la que el
- * refund decide (`refund_before_deadline`, `../infrastructure/solana-wallet.ts:972`).
+ * leído dentro de `readEscrowStates`. Esa comparación está escrita DOS VECES en el adapter —ahí y en el
+ * guard (`refund_before_deadline`, `../infrastructure/solana-wallet.ts:972`)—, así que PUEDEN DIVERGIR:
+ * lo único que las obliga a decir lo mismo es T-A13, el test que corre LAS DOS sobre el mismo borde.
  *
  * El input que lo demuestra: un dispositivo con el reloj tres días atrasado contesta
  * `"deposited-window-open"` sobre un escrow que el programa ya sólo deja refundear, y la fila le dice

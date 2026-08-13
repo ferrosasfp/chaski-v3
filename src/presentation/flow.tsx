@@ -43,7 +43,7 @@ import {
 } from "../application/agent-rejections"; // hallazgo #75: rechazo del agente ≠ payout fallido
 import { resolveSolanaExplorerTxUrl, resolveSolanaNetworkConfig } from "../infrastructure/chain"; // HU-SOL-13: cluster Solana activo (env-driven) · WKH-346: la URL del visor que enlaza el comprobante
 import type {
-  CloseableEscrow,
+  CloseableEscrow, EscrowChainState, SolanaEscrowChainStateReader, // WKH-349: EN ESTA LÍNEA, no en dos nuevas — las 19 citas por número a este archivo apuntan de `:222` para abajo
   EscrowRefundConfirmation,
   KycVerdictLookup,
   WalletPossessionProof,
@@ -57,7 +57,7 @@ import {
   deliveredDisplay,
   escrowFundsAtRisk,
   escrowFundsKnowledge,
-  escrowKnowledgeCopy,
+  escrowKnowledgeCopy, escrowOutcome, escrowOutcomeDisplay, type EscrowChainAnswer, // WKH-349: EN ESTA LÍNEA, no en tres nuevas — mismo motivo que `:46` y que la línea de `statusDisplay,` de abajo
   escrowCloseError,
   escrowCloseSentCopy,
   escrowRefundError,
@@ -981,7 +981,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
           )}
 
           {step === "history" && history && (
-            <HistoryView items={history} onOpen={onOpenFromHistory} onBack={() => setStep("send")} />
+            <HistoryView items={history} onOpen={onOpenFromHistory} onBack={() => setStep("send")} reader={c.solanaEscrowStates} sender={address} />
           )}
 
           {step === "done" && rem && <Receipt rem={rem} onNew={() => resetTo(setStep, setRem, setPreview)} />}
@@ -2242,10 +2242,10 @@ export function LostEscrowRecovery({
  *
  * POR QUÉ VIVE ACÁ Y NO EN OTRO LADO — las tres razones, con lo que se rompería si se hiciera distinto:
  *
- *  1. NO en `HistoryView`. Esa pantalla declara, en su propio comentario, que NO consulta la cadena, y
- *     toda su honestidad ("son los envíos guardados en este dispositivo") se apoya en eso. Meterle una
- *     lectura on-chain cambia lo que la pantalla ES. Además el historial está scopeado por
- *     `localStorage` y AC-8 exige justamente cubrir lo que NO está ahí.
+ *  1. NO en `HistoryView`. ⚠️ La PREMISA original de esta razón se cayó con WKH-349: esa pantalla sí
+ *     consulta la cadena ahora, por el estado de las PDAs de sus propias filas. La CONCLUSIÓN no se
+ *     cayó, y el motivo que la sostiene solo es el otro que ya estaba escrito acá: el historial está
+ *     scopeado por `localStorage` y AC-8 exige justamente cubrir los envíos que NO están ahí.
  *  2. NO adentro de `LostEscrowRecovery`. Esa puerta promete encontrar escrows ABIERTOS con tus USDC, y
  *     su copy de "no encontré nada" lo dice medido: "ninguno de los últimos N envíos… está ABIERTO en
  *     el contrato" (`flow-vm.ts`, `lostEscrowRecoveryError`). Un escrow terminal NO está abierto: meter
@@ -2412,9 +2412,9 @@ function PayoutInProgress({ rem }: { rem: RemittanceState }) {
               lugar, porque enterrarlo sería prometer un automatismo que no existe.
               "Tus USDC ya están en el contrato" (presente, continuo) afirmaba más que `principalTx`,
               que prueba un hecho PASADO: la cadena confirmó que el depósito entró. Nadie volvió a
-              mirar el vault desde entonces, y de hecho el historial de esta misma remesa lo dice con
-              todas las letras ("No comprobamos si tus USDC siguen en el escrow", vía
-              `escrowFundsKnowledge` → `unverified`). Dos pantallas no pueden contar dos historias. */}
+              mirar el vault DESDE ACÁ. Desde WKH-349 el historial de esta misma remesa sí lo mira y
+              dice qué contestó el contrato. La regla no cambia —dos pantallas no pueden contar dos
+              historias— y la relación es: el historial mide, ésta no, y por eso ésta no afirma más. */}
           <p className="mt-0.5 text-xs text-stone">
             Vimos entrar tus USDC al contrato, a tu nombre. Todavía no tenemos la confirmación de que
             el dinero llegó a destino, así que no te lo vamos a decir hasta tenerla.
@@ -2929,7 +2929,7 @@ function RefundWindowNote() {
 //
 // Dos frases y no una: las remesas cuyo depósito la cadena CONFIRMÓ no se pueden anunciar con la
 // misma frase que las que nadie miró. Decir "no comprobamos" sobre plata que sí comprobamos es el
-// mismo error de esta pantalla, sólo que hacia el otro lado.
+// mismo error de esta pantalla, sólo que hacia el otro lado. ⚠️ R-2 (WKH-349) — RESIDUAL VIVO, EN ESTA LÍNEA para no rotar las citas por número que este archivo recibe: `escrowFundsAtRisk` cuenta el bucket `unverified` SÓLO con el snapshot local, así que desde WKH-349 la pantalla de al lado puede saber más que esta advertencia. El input que lo demuestra: una remesa `unverified` cuya PDA está `Released` — el historial dice que sus USDC ya salieron del escrow y acá se la sigue contando entre las que "no comprobamos". Es el MISMO defecto que esa HU arregló, en otra pantalla; quedó fuera de su alcance y NO se arregló acá.
 export function ResetWarning({ items }: { items: RemittanceState[] | null }) {
   // `null` = no pudimos leer el historial. Callar sería degradar la advertencia en silencio.
   const atRisk = items === null ? null : escrowFundsAtRisk(items);
@@ -2965,21 +2965,87 @@ export function ResetWarning({ items }: { items: RemittanceState[] | null }) {
 // la remesa quedaba sin ningún camino desde la interfaz, con los USDC en el vault. El dato SIEMPRE
 // estuvo (el repo las guarda por dueño); lo que faltaba era la pantalla.
 //
-// Lo que esta pantalla NO hace, y es deliberado: no consulta la cadena. Muestra el snapshot guardado
-// y dice de cuál de cuatro cosas se trata (escrowFundsKnowledge), incluido lo que la cadena ya había
-// contestado y quedó escrito. Cuando no sabemos dónde están los USDC lo escribe con esas palabras,
-// en vez de deducir un final del status.
+// QUÉ CONSULTA ESTA PANTALLA, desde WKH-349. Muestra el snapshot guardado y dice de cuál de cuatro
+// cosas se trata (escrowFundsKnowledge), incluido lo que la cadena ya había contestado y quedó
+// escrito. Y para el ÚNICO bucket que ese cálculo no puede resolver —`unverified`, que es "se depositó
+// y nadie volvió a mirar"— le pregunta a la cadena, en el MENOR NÚMERO DE LLAMADAS —el batch se trocea a `ESCROW_STATE_BATCH_CEILING`, así que desde la fila 101 son dos—, en qué estado
+// está la PDA `escrow_state` de esas filas. Nunca pregunta por las otras tres: su desenlace ya está
+// determinado localmente y una respuesta de cadena sólo podría contradecir un marcador ya escrito.
+//
+// QUÉ SIGUE SIN CONSULTAR, y es la honestidad del párrafo de abajo ("son los envíos guardados en este
+// dispositivo"): los envíos que NO están en este `localStorage`. La consulta se arma con los ids que
+// la lista ya trae, así que un envío que este navegador no conoce sigue sin aparecer acá. Esa frase
+// sigue siendo verdadera después de esta HU, y el input que la refutaría es un envío ajeno a este
+// almacenamiento apareciendo en la lista.
+//
+// QUÉ NO PRUEBA LA RESPUESTA: que la PDA no exista no dice a dónde fue la plata (no distingue "nunca
+// entró" de "ya se cerró"), y que el vault se haya liberado no dice que la familia haya cobrado. Cada
+// valor lo declara en su propio bullet, en el docblock de `EscrowChainState` (`../application/ports`).
+//
+// Y lo que NO hace, que se decidió y no se olvidó: no firma nada. Ni prueba de posesión, ni
+// `signMessage`, ni una transacción. Una app que pide una firma por mirar una lista entrena a la
+// gente a firmar cualquier cosa.
 //
 // Exportado para test directo, mismo criterio que TrackView y Receipt.
 export function HistoryView({
   items,
   onOpen,
   onBack,
+  reader,
+  sender,
 }: {
   items: RemittanceState[];
   onOpen: (rem: RemittanceState) => void;
   onBack: () => void;
+  // WKH-349. ⚠️ LAS DOS SON OPCIONALES A PROPÓSITO, y no es tolerancia: `history.test.tsx` renderiza
+  // esta pantalla con tres props y sin ellas ese render deja de compilar. Además son el input del caso
+  // "no se preguntó" —distinto de "no pudimos preguntar"—, que sin opcionalidad no se podría escribir.
+  reader?: SolanaEscrowChainStateReader;
+  sender?: string | null;
 }) {
+  // AC-1 + AC-6 + AC-8, en una línea: se pregunta por el COMPLEMENTO EXACTO de lo que el snapshot ya
+  // sabe. Las filas `no-deposit`, `in-escrow` y `returned` no entran, así que no cuestan ni una cuenta
+  // en el batch ni pueden recibir un desenlace de cadena que contradiga su marcador local.
+  const idsAConsultar = useMemo(
+    () => items.filter((r) => escrowFundsKnowledge(r) === "unverified").map((r) => r.id),
+    [items],
+  );
+  // Tres formas y no un booleano: "no se preguntó" (`not-asked`), "se preguntó y no volvió"
+  // (`pending`) y "contestó" (el Map). Colapsar la primera con la tercera haría que una pantalla sin
+  // reader cableado acusara un fallo de una consulta que nunca existió.
+  const [chain, setChain] = useState<"not-asked" | "pending" | ReadonlyMap<string, EscrowChainState>>(
+    "not-asked",
+  );
+  // 🔴 LA CONSULTA VIVE ACÁ Y NO EN `openHistory` (`:372`), y el motivo es la persona, no la prolijidad:
+  // `openHistory` corre dentro de `guard(...)`, que catchea y manda el error al banner ANTES de
+  // `setStep("history")`. Un RPC caído ahí deja a la persona SIN PANTALLA. Acá deja la pantalla entera
+  // y una frase por fila que dice que no pudimos preguntar. Candado: T-U6 en `history-onchain.test.tsx`.
+  useEffect(() => {
+    // Sin reader, sin dueño resuelto o sin filas que preguntar NO se emite ninguna llamada, y el estado
+    // queda en `"not-asked"`: la pantalla dice exactamente lo que decía antes de esta HU.
+    if (!reader || !sender || idsAConsultar.length === 0) return;
+    let cancelled = false;
+    setChain("pending");
+    reader
+      .readEscrowStates({ sender, remittanceIds: idsAConsultar })
+      .then((states) => {
+        if (!cancelled) setChain(states);
+      })
+      .catch(() => {
+        // El adapter TIRA cuando no puede ni empezar (sender que no es base58, un import que falla).
+        // Se arma el mapa de `"unknown"` explícito en vez de dejar un Map vacío: un vacío se leería
+        // igual fila por fila, pero por accidente y no por decisión.
+        if (!cancelled)
+          setChain(new Map(idsAConsultar.map((id) => [id, "unknown" as EscrowChainState])));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reader, sender, idsAConsultar]);
+  // `idsAConsultar` sale de un `useMemo` sobre `items`: entre dos renders con la misma lista es el
+  // MISMO array, así que este efecto corre una vez por apertura y no una vez por render. Candado: T-U9.
+  const answerFor = (id: string): EscrowChainAnswer =>
+    chain === "not-asked" || chain === "pending" ? chain : (chain.get(id) ?? "unknown");
   return (
     <div className="space-y-4">
       <Card className="space-y-2">
@@ -3000,7 +3066,7 @@ export function HistoryView({
       ) : (
         <ul className="space-y-3">
           {items.map((rem) => (
-            <HistoryEntry key={rem.id} rem={rem} onOpen={onOpen} />
+            <HistoryEntry key={rem.id} rem={rem} onOpen={onOpen} answer={answerFor(rem.id)} />
           ))}
         </ul>
       )}
@@ -3015,12 +3081,18 @@ export function HistoryView({
 function HistoryEntry({
   rem,
   onOpen,
+  answer,
 }: {
   rem: RemittanceState;
   onOpen: (rem: RemittanceState) => void;
+  answer: EscrowChainAnswer;
 }) {
   const status = statusDisplay(rem.status);
   const knowledge = escrowFundsKnowledge(rem);
+  // WKH-349. El texto Y el peso visual salen de la MISMA función, igual que el Pill de abajo: un copy
+  // que dice "siguen en el escrow" con el mismo gris que "no pudimos preguntar" pierde la mitad de
+  // AC-2. Y para los cuatro desenlaces locales devuelve, byte a byte, el copy de siempre.
+  const desenlace = escrowOutcomeDisplay(escrowOutcome(rem, answer));
   // Una remesa que nunca autorizó un depósito no tiene nada que seguir: abrirla en el seguimiento
   // renderizaría la vista optimista ("tu chaski está en camino", pasos en gris) sobre un envío que
   // no llegó a existir. Se lista igual, porque es historia de la persona, pero sin esa puerta.
@@ -3037,7 +3109,15 @@ function HistoryEntry({
           </div>
           <Pill tone={status.tone}>{status.label}</Pill>
         </div>
-        <p className="text-xs text-stone">{escrowKnowledgeCopy(knowledge)}</p>
+        <p
+          className={
+            desenlace.emphasis === "strong"
+              ? "text-xs font-semibold text-cochineal-ink"
+              : "text-xs text-stone"
+          }
+        >
+          {desenlace.copy}
+        </p>
         {openable ? (
           <Button variant="outline" onClick={() => onOpen(rem)}>
             {rem.status === "settled" ? "Ver recibo" : "Ver seguimiento"}
@@ -3187,7 +3267,7 @@ export function recoveryWindowExhausted(maxCandidates: number): string {
  *
  * Los cinco sitios que le muestran una firma a la persona pasan por acá. Tres la imprimían ENTERA (87 u 88 caracteres, y 88 en la mayoría de los casos: una firma ed25519 son 64 bytes y su largo en base58 depende del primer byte. Medido, 4000 muestras: 80,2 % dan 88. Los 87 con los que se mide en los tests son propiedad de `FAKE_SOLANA_SIGNATURE`, no de una firma cualquiera — AR/MNR-2)
  * y desbordaban la única columna de la app; los
- * otros dos ya truncaban con `shortTx` (`shortTx`, `:3119`) y no llevaban a ninguna parte. Un solo
+ * otros dos ya truncaban con `shortTx` (`shortTx`, `:3199`) y no llevaban a ninguna parte. Un solo
  * componente en vez de cinco es lo que impide que el próximo sitio nazca con la tercera variante.
  *
  * 🔴 POR QUÉ VIVE ACÁ Y NO EN `src/presentation/tx-proof.tsx`, que era lo natural. Un archivo nuevo

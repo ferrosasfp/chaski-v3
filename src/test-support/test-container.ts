@@ -27,7 +27,7 @@ import type {
   QuoteGateway,
   RefundGateway,
   RemittanceRepository,
-  SolanaCloseableEscrowLister,
+  SolanaCloseableEscrowLister, SolanaEscrowChainStateReader, // WKH-349: EN ESTA LÍNEA, no en una nueva — mismo motivo que el import de `:7`: `container.test.ts:413` cita `test-container.ts:87` por número
   SolanaEscrowRefundGateway,
   WalletPort,
 } from "../application/ports";
@@ -66,7 +66,7 @@ export interface TestContainerOverrides {
   // seteaba el override, así que la línea nunca corría y nadie la podía ver mal. Un ejemplo
   // equivocado esperando a que alguien lo copie. Los tests del cierre montan el use-case con el probe
   // que corresponda (`escrow-rent-recovery.test.tsx` usa el adapter real contra el bridge).
-  solanaCloseableEscrows?: SolanaCloseableEscrowLister;
+  solanaCloseableEscrows?: SolanaCloseableEscrowLister; solanaEscrowStates?: SolanaEscrowChainStateReader; // WKH-349: EN ESTA LÍNEA (`:87` se cita por número). Misma disciplina que sus dos vecinos: sin override queda UNDEFINED ⇒ el historial NO pregunta nada a la cadena y dice el copy de siempre
   clock?: Clock; // default: new FixedClock()
   // Repo COMPARTIDO por todos los use-cases (default: new InMemoryRepo()). Se inyecta para poder
   // SEMBRARLO antes de renderizar: es la única forma de testear el historial, que por definición
@@ -132,6 +132,7 @@ export function buildTestContainer(o: TestContainerOverrides = {}): Container {
       ? new RecoverEscrowFunds(repo, clock, o.solanaRefund)
       : undefined,
     solanaCloseableEscrows: o.solanaCloseableEscrows,
+    solanaEscrowStates: o.solanaEscrowStates, // WKH-349: undefined ⇒ el historial no consulta la cadena
   };
   return { ...base, ...(o.useCases ?? {}) };
 }

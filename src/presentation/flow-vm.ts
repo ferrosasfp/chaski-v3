@@ -1,4 +1,4 @@
-import type { Money } from "../domain/money";
+import type { Money } from "../domain/money"; import type { EscrowChainState } from "../application/ports"; // WKH-349: EN ESTA LÍNEA, no en una nueva — `:25`, `:29`, `:30`, `:206`, `:253`, `:327`, `:329` y `:1137` de este archivo los cita otro por número y están TODOS debajo de acá
 import type { RemittanceState, RemittanceStatus } from "../domain/remittance";
 import {
   PRINCIPAL_SETTLED_REFUND_MANUAL,
@@ -161,7 +161,7 @@ export function statusDisplay(status: RemittanceStatus): {
  * Esta función no lee la cadena: se calcula SOLO con el snapshot persistido, así que lo único que
  * puede afirmar es lo que alguien ya midió y llegamos a ESCRIBIR. Por eso los dos valores que
  * afirman algo del vault salen de marcadores que se escriben en UN solo lugar y bajo UNA sola
- * condición, nunca de deducir un final a partir del status.
+ * condición, nunca de deducir un final a partir del status. ⚠️ Y SIGUE SIN LEERLA después de WKH-349, que NO tocó esta función: esa HU agregó una capa ENCIMA —(`escrowOutcome`, `:1193`) y (`escrowOutcomeDisplay`, `:1251`), al final de este archivo— que le pregunta a la cadena por el bucket `unverified` cuando se abre el historial. O sea que la PANTALLA de historial hoy sí mira la cadena; esta función, no. Si leés este docblock y concluís que el historial nunca mira la cadena, la conclusión es vieja.
  *
  * - `returned`   los USDC volvieron. Lo respalda `ESCROW_REFUNDED_BY_SENDER`, que RecoverEscrowFunds
  *                escribe recién con `confirmation === "confirmed"` (recover-escrow-funds.ts:70-77),
@@ -1137,4 +1137,140 @@ export function indiceIlegibleCopy(): string {
 export function esVentanaSinAbiertos(code: string, maxCandidates: number): boolean {
   const copy = lostEscrowRecoveryError(code, maxCandidates);
   return copy === sinAbiertosCopy(maxCandidates) || copy === sinIndiceCopy(maxCandidates);
+}
+
+/**
+ * WKH-349 — LO QUE LA CADENA CONTESTÓ sobre una fila del historial, en la forma en que la fila lo
+ * recibe. Son los seis de (`EscrowChainState`, `../application/ports.ts:1122`) más DOS que no hablan
+ * de la respuesta sino de la PREGUNTA, y que por eso no se pueden colapsar con ninguno de aquéllos:
+ *
+ *  · `"not-asked"` — NO SE PREGUNTÓ. Es lo que ve una pantalla sin reader cableado, sin `sender`, o
+ *      cuyo bucket de filas a preguntar quedó vacío. No es "no pudimos preguntar": nadie levantó el
+ *      teléfono. El input que muestra la diferencia: renderizar el historial sin `reader` — si eso
+ *      dibujara "No pudimos preguntarle al contrato", la pantalla estaría acusando el fallo de una
+ *      consulta que nunca existió.
+ *  · `"pending"`   — se preguntó y la respuesta todavía no volvió. Tampoco es "no pudimos": la promesa
+ *      sigue viva y el desenlace puede terminar siendo cualquiera de los seis.
+ */
+export type EscrowChainAnswer = EscrowChainState | "pending" | "not-asked";
+
+/**
+ * El desenlace que la fila del historial muestra: lo que el snapshot local ya sabía, O lo que la
+ * cadena contestó cuando el snapshot no sabía.
+ *
+ * Es un tipo HERMANO de (`EscrowKnowledge`, `:204`) y no un ensanchamiento suyo, a propósito.
+ * Ensanchar aquél rompería a (`escrowFundsAtRisk`, `:241`), que lo consume exhaustivamente, y con él
+ * el copy de la advertencia de borrado — que está fuera del alcance de esta HU. Y volvería falso su
+ * docblock, que afirma "Esta función no lee la cadena": esa frase sigue siendo verdadera después de
+ * WKH-349 porque (`escrowFundsKnowledge`, `:206`) no cambió ni una línea.
+ */
+export type EscrowOutcome =
+  | EscrowKnowledge
+  | "chain-deposited-window-open"
+  | "chain-deposited-window-closed"
+  | "chain-released"
+  | "chain-refunded"
+  | "chain-absent"
+  | "chain-unknown"
+  | "chain-pending";
+
+/**
+ * Qué decir de esta remesa, dado lo que el snapshot local sabe y lo que la cadena contestó.
+ *
+ * 🔴 EL PRIMER `if` ES EL CORTE, Y EL ORDEN NO ES DECORATIVO. Si el conocimiento local ya resolvió el
+ * desenlace, la respuesta de la cadena NO entra: un marcador local se escribió después de ver una tx
+ * confirmada, y dejar que una lectura de PDA lo pise es reabrir el caso que ese marcador cerró. El
+ * input que lo demuestra: una remesa con `ESCROW_REFUNDED_BY_SENDER` (⇒ `"returned"`) cuya PDA está
+ * `Deposited` porque el refund todavía no cerró la cuenta — mover este corte debajo del mapeo le diría
+ * "tus USDC siguen en el escrow" a quien ya los tiene en la wallet. Candado: T-V1.
+ *
+ * El mismo `if` es la implementación literal de AC-6 y AC-8: la cadena sólo se consulta, y sólo se
+ * mira, para el bucket `"unverified"`. Las filas `"no-deposit"` conservan su copy de siempre.
+ *
+ * La función es TOTAL: para cualquier par (`EscrowKnowledge` × `EscrowChainAnswer`) devuelve un
+ * `EscrowOutcome`, nunca `undefined`. Candado: T-V6.
+ */
+export function escrowOutcome(rem: RemittanceState, answer: EscrowChainAnswer): EscrowOutcome {
+  const k = escrowFundsKnowledge(rem);
+  if (k !== "unverified") return k; // AC-6 + AC-8: el snapshot ya contestó; la cadena no entra
+  if (answer === "not-asked") return k; // no se preguntó ⇒ el copy de siempre, sin inventar nada
+  if (answer === "pending") return "chain-pending";
+  // Los dos `deposited-*` van en ramas SEPARADAS y no en una común: agruparlos ("total, en las dos hay
+  // plata") vuelve a colapsar justo la distinción que esta capa existe para mostrar — cuál es la única
+  // puerta que le queda a esa fila. Candado: T-V10.
+  if (answer === "deposited-window-open") return "chain-deposited-window-open";
+  if (answer === "deposited-window-closed") return "chain-deposited-window-closed";
+  if (answer === "released") return "chain-released";
+  if (answer === "refunded") return "chain-refunded";
+  if (answer === "absent") return "chain-absent";
+  // `"unknown"` y cualquier valor que un `EscrowChainAnswer` futuro agregue: "no pudimos preguntar".
+  // Es el lado seguro del tri-estado — el que no afirma nada sobre los fondos.
+  return "chain-unknown";
+}
+
+/**
+ * La frase y el peso visual de cada desenlace. Salen de LA MISMA función, igual que en
+ * (`statusDisplay`, `:133`), para que no puedan divergir por descuido: un copy que dice "siguen en el
+ * escrow" con el mismo gris que "no pudimos preguntar" pierde la mitad de AC-2.
+ *
+ * ⚠️ LAS CUATRO FRASES LOCALES NO SE COPIAN ACÁ: se delegan en (`escrowKnowledgeCopy`, `:256`). Es la
+ * misma lección que este archivo ya tiene escrita en el docblock de
+ * (`lostEscrowRecoveryError`, `:302`) sobre el número del copy: escribir la frase dos veces es cómo
+ * queda una pantalla diciendo algo que el código dejó de decir.
+ *
+ * Sobre `"chain-absent"`: su segunda oración afirma algo sobre NOSOTROS ("desde acá no podemos decir
+ * cuál de las dos"), no sobre la plata, y es lo único honesto que se puede decir con este dato. Una
+ * PDA que no existe no distingue "el depósito nunca entró" de "ya se cerró después de resolverse":
+ * ver R-1 en el docblock de (`EscrowChainState`, `../application/ports.ts:1122`).
+ *
+ * Sobre los dos `"chain-deposited-*"`: los dos pesan `strong` porque los dos tienen plata adentro —
+ * el peso visual separa "hay plata" de "no hay nada que hacer", no "urgente" de "no urgente". Lo que
+ * los separa es el TEXTO: el vencido dice cuál es la única puerta que le queda. Y de qué lado del
+ * `deadline` cae esa fila lo decidió NUESTRO reloj, no la cadena: ver R-4 en el mismo docblock.
+ *
+ * ⚠️ RESIDUAL DE `"chain-deposited-window-closed"`, DECLARADO ACÁ PORQUE NO ESTABA EN NINGÚN LADO: la
+ * frase nombra una salida —"devolverlos a tu wallet, y sólo tu firma puede hacerlo"— que la TARJETA de
+ * la que sale NO SIEMPRE OFRECE. El input: una fila `status: "settled"` con `principalTx != null` cae
+ * en `"unverified"` por la rama (`principalTx`, `:219`) de `escrowFundsKnowledge`, y si su PDA sigue
+ * `Deposited` con el plazo vencido la tarjeta muestra a la vez el Pill "Entregado", esta frase, y como
+ * ÚNICO botón "Ver recibo", que no lleva a ningún refund: `settled` no está en (`refundeable`, `flow.tsx:1337`), que es
+ * lo que monta `RefundAction`. AC-11 no pide ese botón y esta HU NO lo agrega.
+ *
+ * DÓNDE ESTÁ LA PUERTA para esa fila, que es lo que faltaba decir: (`LostEscrowRecovery`,
+ * `flow.tsx:755`), en la pantalla de inicio. No mira el estado local de la remesa: resuelve el id
+ * contra el registro durable y elige el PRIMER escrow `Deposited` del sender
+ * (`Deposited`, `../infrastructure/solana-wallet.ts:400`); del `deadline` se ocupa después el guard
+ * del refund. Lo que QUEDA VIVO, y son DOS cosas: la frase no dice dónde está esa puerta, y si el
+ * primer escrow abierto del sender NO está vencido, esa puerta tira `refund_before_deadline` y NO
+ * llega hasta esta fila. Se ACOTÓ; no se cerró.
+ *
+ * Sobre `"chain-released"`: dice "salieron del escrow hacia el pago" y NO dice "entregado". Esa
+ * palabra ya es de (`statusDisplay`, `:133`) para `settled`, que habla de otro hecho —el partner de
+ * payout reportó haber entregado los PEN— y las dos aparecen en la misma tarjeta. Candado: T-V8.
+ */
+export function escrowOutcomeDisplay(o: EscrowOutcome): {
+  copy: string;
+  emphasis: "strong" | "normal";
+} {
+  if (o === "chain-deposited-window-open")
+    return { copy: "El contrato dice que tus USDC siguen en el escrow, a tu nombre.", emphasis: "strong" };
+  if (o === "chain-deposited-window-closed")
+    return {
+      copy: "El contrato dice que tus USDC siguen en el escrow y que el plazo para liberarlos al pago ya venció: la salida que queda es devolverlos a tu wallet, y sólo tu firma puede hacerlo.",
+      emphasis: "strong",
+    };
+  if (o === "chain-refunded")
+    return { copy: "El contrato dice que tus USDC ya volvieron a tu wallet.", emphasis: "normal" };
+  if (o === "chain-released")
+    return { copy: "El contrato dice que tus USDC ya salieron del escrow hacia el pago.", emphasis: "normal" };
+  if (o === "chain-absent")
+    return {
+      copy: "En el contrato no hay ninguna cuenta para este envío: o el depósito nunca entró, o ya se cerró después de resolverse. Desde acá no podemos decir cuál de las dos.",
+      emphasis: "normal",
+    };
+  if (o === "chain-unknown")
+    return { copy: "No pudimos preguntarle al contrato por este envío.", emphasis: "normal" };
+  if (o === "chain-pending")
+    return { copy: "Le estamos preguntando al contrato.", emphasis: "normal" };
+  return { copy: escrowKnowledgeCopy(o), emphasis: "normal" };
 }

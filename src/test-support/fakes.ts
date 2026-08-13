@@ -46,7 +46,7 @@ import type {
   SolanaEscrowRefundGateway,
   SolanaEscrowCloseGateway,
   SolanaEscrowCloseResult,
-  SolanaCloseableEscrowLister,
+  SolanaCloseableEscrowLister, EscrowChainState, SolanaEscrowChainStateReader, // WKH-349: EN ESTA LÍNEA, no en dos nuevas. `fakes.ts:835` (FAKE_SOLANA_SIGNATURE) lo citan 4 archivos por número y están todos DEBAJO de acá: dos líneas de más los rotan en silencio
   ConnectedWalletProbe,
   CloseableEscrow,
   SolanaEscrowRefundResult,
@@ -1101,3 +1101,31 @@ export const beneficiary = (method: PayoutMethod = "bank_cci") => ({
   method,
   destination: method === "bank_cci" ? TEST_CCI : "999888777",
 });
+
+// FakeSolanaEscrowChainStateReader — WKH-349. La respuesta de LA CADENA a "¿en qué estado está la PDA
+// `escrow_state` de estos envíos?", para la pantalla de historial.
+//
+// Misma forma que `FakeSolanaCloseableEscrowLister` de arriba, y por la misma razón: `mode="reject"`
+// no es un adorno, es el único modo que ejercita "NO llegamos a preguntar". Acá hay una diferencia con
+// aquél que conviene tener presente: el puerto real NO tira ante un RPC caído fila por fila —devuelve
+// `"unknown"`—, así que el `reject` de este doble representa el caso en que el adapter no puede ni
+// EMPEZAR (sender inválido, imports que fallan) y la pantalla tiene que armar su propio mapa de
+// `"unknown"`.
+//
+// El `Map` que se le pasa puede ser PARCIAL a propósito: una clave faltante es exactamente el input
+// que prueba que el consumidor lee la ausencia como `"unknown"` y nunca como "no hay plata".
+export class FakeSolanaEscrowChainStateReader implements SolanaEscrowChainStateReader {
+  public calls: Array<{ sender: string; remittanceIds: readonly string[] }> = [];
+  constructor(
+    private readonly states: ReadonlyMap<string, EscrowChainState> = new Map(),
+    private readonly mode: "resolve" | "reject" = "resolve",
+  ) {}
+  async readEscrowStates(input: {
+    sender: string;
+    remittanceIds: readonly string[];
+  }): Promise<ReadonlyMap<string, EscrowChainState>> {
+    this.calls.push({ sender: input.sender, remittanceIds: [...input.remittanceIds] });
+    if (this.mode === "reject") throw new Error("escrow_states_boom");
+    return this.states;
+  }
+}

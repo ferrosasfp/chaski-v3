@@ -27,7 +27,7 @@ import type {
   SolanaRemittanceIdResolver,
   SolanaSenderSolBalance,
   SolanaSenderSolBalanceProbe,
-  SolanaCloseableEscrowLister,
+  SolanaCloseableEscrowLister, EscrowChainState, SolanaEscrowChainStateReader, // WKH-349: EN ESTA LÍNEA, no en dos nuevas — TODAS las citas ancladas a este archivo apuntan de `:188` para abajo, y una línea nueva acá arriba las rota a todas
   WalletPort,
 } from "../application/ports";
 import type { Quote } from "../domain/remittance";
@@ -43,7 +43,7 @@ import {
   resolveSolanaUsdcMint,
 } from "./chain";
 import { ESCROW_INDEX_MAX_ENTRIES } from "./escrow-index-limits";
-import { ESCROW_ID_LOOKUP_CEILING } from "./escrow-lookup-limits";
+import { ESCROW_ID_LOOKUP_CEILING } from "./escrow-lookup-limits"; import { ESCROW_STATE_BATCH_CEILING, ESCROW_STATE_BATCH_TIMEOUT_MS } from "./escrow-history-limits"; // WKH-349: EN ESTA LÍNEA, no en una nueva — los imports de este archivo están ARRIBA de `:188` y una línea acá rota TODAS las citas ancladas que apuntan de ahí para abajo, que son las que este archivo recibe. Va pegado a `ESCROW_ID_LOOKUP_CEILING` y no a `ESCROW_INDEX_MAX_ENTRIES` a propósito: ése es justo el techo con el que el nuevo NO se confunde (uno lo pone el servidor del registro durable, el otro el RPC), y quien lea la línea ve los dos juntos
 import { solanaWalletBridge } from "./solana-wallet-bridge";
 
 // HU-SOL-20/AC-2: tope de candidatos que el fallback del REFUND sondea on-chain — el camino que
@@ -113,7 +113,7 @@ const SOL_BALANCE_PROBE_TIMEOUT_MS = 5_000;
 
 /** WKH-327/AC-3 — techo de la sonda de la PDA `["escrow-index", sender]`. Mismo número y MISMA razón
  *  que SOL_BALANCE_PROBE_TIMEOUT_MS de acá arriba: es una lectura simple (sin firma ni confirmación)
- *  que corre dentro del camino que la persona espera mirando la pantalla.
+ *  que corre dentro del camino que la persona espera mirando la pantalla. ⚠️ HAY UN CUARTO TECHO DE ESTA MISMA FAMILIA Y NO ESTÁ EN ESTE BLOQUE: `ESCROW_STATE_BATCH_TIMEOUT_MS` (el de `readEscrowStates`, el batch del historial) vive en `./escrow-history-limits.ts` junto a su techo de cantidad, porque TODAS las citas ancladas que este archivo recibe apuntan de `:188` para abajo y una línea nueva acá arriba las rota a todas.
  *
  *  Sin este techo, un `getAccountInfo` colgado (el RPC público que acepta la conexión y no contesta)
  *  deja a la persona mirando "Cerrando…" para siempre. Vencido el techo el resultado es "no pudimos
@@ -171,7 +171,7 @@ export class SolanaWalletAdapter
     SolanaCloseableEscrowLister,
     // WKH-327 (fix-pack AR/BLQ-BAJO-1): quién está conectado AHORA. Mismo adapter otra vez porque el
     // bridge que sabe la respuesta ya es suyo.
-    ConnectedWalletProbe
+    ConnectedWalletProbe, SolanaEscrowChainStateReader // WKH-349: EN ESTA LÍNEA. El estado on-chain de los escrows del historial se le pregunta a la CADENA, así que vive en el mismo adapter por la misma razón que sus vecinos de arriba
 {
   private address: string | null = null;
 
@@ -1506,5 +1506,187 @@ export class SolanaWalletAdapter
     const sig = await solanaWalletBridge.signMessage(bytes); // Uint8Array(64) de la wallet
     // Normalizar a Uint8Array cubre adapters que devuelvan otro shape (R-2 del SDD).
     return bs58.encode(sig instanceof Uint8Array ? sig : new Uint8Array(sig));
+  }
+
+  /**
+   * WKH-349 — EN QUÉ ESTADO ESTÁ LA PDA `escrow_state` de cada uno de estos envíos. Lo consume la
+   * pantalla de historial, para las filas cuyo desenlace el snapshot local no puede afirmar.
+   *
+   * 🔴 NO FIRMA NADA, Y ESA RESTRICCIÓN ES LA QUE DECIDE SU FORMA. No se reusan
+   * (`resolveRemittanceIdFromLedger`, `:353`) ni (`listCloseable`, `:1443`), que hacen el MISMO
+   * derive+batch+decode, porque los dos empiezan por `resolver.lookupBySender`, que es
+   * PoP-autenticado: reusarlos abriría un diálogo de firma sólo por abrir "Ver mis envíos", y una app
+   * que pide firmas por mirar una lista entrena a la gente a firmar cualquier cosa. Se reusa la mitad
+   * "derive + batch + decode" y nada más; los ids llegan por argumento.
+   *
+   * El `sender` es el del ARGUMENTO, nunca `this.address`: el cache de `connect()` puede ser de otra
+   * billetera que la persona eligió después, y derivar con él daría las PDAs de otro.
+   *
+   * ── R-3 · ES EL TERCER BUCLE DE SELECCIÓN DE ESTE ARCHIVO, Y NO SE UNIFICÓ ─────────────────────
+   *
+   * El docblock de (`escrowIndexCandidate`, `:463`) ya declara la duplicación residual entre ese
+   * bucle y el del ledger, y pide con todas las letras "si tocás uno de los dos bucles, tocá el otro o
+   * borrá esta afirmación". Esta HU **no toca ninguno de los dos**: agrega un tercero, y la asimetría
+   * se declara acá en vez de quedar sin dueño. El motivo de no unificar, concreto: los tres devuelven
+   * cosas distintas —el primero un `remittanceId`, el segundo un `EscrowId16`, éste un `Map` de seis
+   * valores—, éste **no elige "el primero"** y **no filtra por estado** (conserva los seis
+   * desenlaces), y la extracción tocaría, en el mismo diff, la función que decide QUÉ escrow se
+   * refundea.
+   *
+   * ── EL CONTRATO ES TOTAL ──────────────────────────────────────────────────────────────────────
+   *
+   * Devuelve una entrada por CADA `remittanceId` pedido. Acá no hay ningún `continue` que saltee una
+   * fila, al revés que en los otros dos bucles: allá descartar una candidata es correcto (buscan UNA),
+   * acá sería perder una fila del historial de la persona sin decírselo.
+   *
+   * ── LOS TRES MODOS DE FALLA ───────────────────────────────────────────────────────────────────
+   *
+   *  · No se puede ni EMPEZAR (`sender` que no es base58, un `await import` que falla) ⇒ **TIRA**. Acá
+   *    sí vale la disciplina de `SolanaCloseableEscrowLister`: no hay ninguna respuesta parcial que
+   *    salvar. Quien llama arma su propio mapa de `"unknown"`.
+   *  · El batch de un chunk lanza, o vence `ESCROW_STATE_BATCH_TIMEOUT_MS` ⇒ **sólo ese chunk** cae a
+   *    `"unknown"`. Los demás conservan lo que la cadena contestó. Nunca `"absent"`: no preguntamos.
+   *  · El decode de UNA cuenta lanza ⇒ **esa fila** cae a `"unknown"`, y las demás quedan intactas.
+   *
+   * ── EL RELOJ ES NUESTRO, NO EL DE LA CADENA ───────────────────────────────────────────────────
+   *
+   * Dos de los seis desenlaces —`"deposited-window-open"` y `"deposited-window-closed"`— no salen sólo
+   * de lo que la cuenta dice. El `status` y el `deadline` los dijo la cadena; DE QUÉ LADO del
+   * `deadline` caemos lo decide `Date.now()` de este dispositivo, leído acá abajo con la MISMA
+   * expresión que usa el refund de este archivo, y comparado con la negación exacta de su guard
+   * (`refund_before_deadline`, `:972`). Que las dos expresiones coincidan es lo único que se verifica:
+   * es lo que impide que la pantalla diga "la salida que queda es la devolución" sobre una fila que el
+   * refund de esta misma app rechazaría.
+   *
+   * El `deadline` NO cuesta ninguna llamada más: viaja en la misma cuenta que el `status`, en el mismo
+   * `coder.decode`. Si alguna vez hace falta un `getAccountInfo` por fila, un segundo batch o una
+   * lectura del `Clock` del cluster para decidir esto, la decisión de diseño cambió y hay que volver a
+   * discutirla: el "menor número de llamadas" que esta pantalla promete —hoy una por chunk— se paga acá.
+   *
+   * LO QUE NO SE MIDIÓ, y no se convierte en certeza en ninguna frase de este archivo:
+   *  · El skew entre el reloj del dispositivo y el del cluster. Un navegador con la hora corrida
+   *    contesta `"deposited-window-open"` sobre un escrow que el programa ya sólo deja refundear, y
+   *    NADA acá lo detecta. Lo que se ELIMINÓ es no decir nada del `deadline` teniéndolo en la mano;
+   *    lo que QUEDA VIVO es que lo decimos con nuestro reloj.
+   *  · Que pasado el `deadline` el programa on-chain efectivamente rechace un `release`. Este repo no
+   *    leyó el programa. La afirmación descansa en una medición contra devnet hecha afuera y en el
+   *    guard propio de este archivo. Por eso el copy dice "la salida que queda" y NO "el refund va a
+   *    entrar".
+   */
+  async readEscrowStates(input: {
+    sender: string;
+    remittanceIds: readonly string[];
+  }): Promise<ReadonlyMap<string, EscrowChainState>> {
+    const out = new Map<string, EscrowChainState>();
+    // ACÁ NO HAY CORTE TEMPRANO POR LISTA VACÍA, y es una decisión. El que había decía que sin él
+    // saldría "un batch de cero cuentas": es falso — el batch cuelga del `for` de abajo, que con cero
+    // ids no entra NUNCA (la frase estaba copiada de `:370-372`, donde sí es cierta porque allá el
+    // batch se llama incondicionalmente). Lo único que ahorraba eran cuatro `await import` y tres
+    // constructores, sobre un camino que producción no toca (`idsAConsultar`, `../presentation/flow.tsx:3026`). Y a cambio
+    // rompía lo que el docblock de arriba promete: con `{ sender: "no-es-base58", remittanceIds: [] }`
+    // NO tiraba. Sin el corte, un `sender` inválido tira SIEMPRE, con lista vacía o llena (T-A15).
+
+    const web3 = await import("@solana/web3.js");
+    const { PublicKey: PublicKeyLazy, Connection } = web3;
+    const anchor = await import("@coral-xyz/anchor");
+    const { escrowIdl } = await import("./solana/escrow-idl");
+
+    const senderPk = new PublicKeyLazy(input.sender); // valida base58 (CD-SDD-7); si no lo es, TIRA
+    const programId = new PublicKeyLazy((escrowIdl as { address: string }).address);
+    const connection = new Connection(
+      resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster), // client-safe
+    );
+    const coder = new anchor.BorshAccountsCoder(escrowIdl as unknown as Idl);
+
+    // El troceo es lo que hace que el techo sea POR CHUNK: con 150 ids son 2 llamadas y 2 techos, y
+    // que la primera venza no le saca su respuesta a la segunda. Truncar a 100 y devolver 100
+    // entradas para 150 ids perdería 50 filas en silencio, que es el mutante que T-A8 mata.
+    for (let start = 0; start < input.remittanceIds.length; start += ESCROW_STATE_BATCH_CEILING) {
+      const chunk = input.remittanceIds.slice(start, start + ESCROW_STATE_BATCH_CEILING);
+      const pdas = chunk.map((id) => this.deriveEscrowState(senderPk, programId, id).pda);
+      let infos: Awaited<ReturnType<Web3Connection["getMultipleAccountsInfo"]>>;
+      try {
+        // withTimeout y no un `await` pelado: un RPC que acepta la conexión y no contesta dejaría la
+        // fila diciendo "Le estamos preguntando al contrato" para siempre. Es el mismo motivo que en
+        // (`probeEscrowIndex`, `:1288`), y el mensaje "confirm_timeout" que arrastra `withTimeout` no
+        // le llega a ninguna persona: acá se convierte en `"unknown"`.
+        infos = await withTimeout(
+          connection.getMultipleAccountsInfo(pdas),
+          ESCROW_STATE_BATCH_TIMEOUT_MS,
+        );
+      } catch {
+        for (const id of chunk) out.set(id, "unknown"); // NO pudimos preguntar; NO es "no hay cuenta"
+        continue;
+      }
+      // 🔴 CARDINALIDAD: una respuesta CORTA no dice "no hay cuenta", dice que no sabemos leerla.
+      // `getMultipleAccountsInfo` promete una entrada por pubkey pedida y NADIE lo verifica: web3.js
+      // valida la FORMA de la respuesta —`array(nullable(AccountInfoResult))`,
+      // `@solana/web3.js/lib/index.cjs.js:6410-6415`— y no su LARGO. Con `noUncheckedIndexedAccess`
+      // (`tsconfig.json:13`) el faltante llega acá como `undefined`, y un `if (!acc)` lo metía en la
+      // misma rama que el `null`: la fila terminaba diciendo "en el contrato no hay ninguna cuenta
+      // para este envío" sobre un escrow que puede tener plata adentro. Es la regla del repo al revés.
+      //
+      // POR QUÉ EL CHUNK ENTERO Y NO SÓLO LAS FILAS FALTANTES: si vinieron menos entradas, tampoco
+      // sabemos CUÁLES faltan. Una respuesta a la que le falta una del medio corre las que siguen, y
+      // entonces `infos[i]` es la cuenta de OTRA fila — que es peor que no contestar. Lo único que
+      // podemos afirmar de un chunk descalzado es que no pudimos leerlo.
+      if (infos.length !== chunk.length) {
+        for (const id of chunk) out.set(id, "unknown");
+        continue;
+      }
+      for (let i = 0; i < chunk.length; i++) {
+        const id = chunk[i] as string;
+        const acc = infos[i];
+        // Los dos casos van SEPARADOS y nunca se colapsan con un `if (!acc)`. El `undefined` de acá ya
+        // no debería poder pasar —lo corta el guard de cardinalidad de arriba—, pero el tipo lo sigue
+        // admitiendo, así que la rama existe y cae del lado que no afirma nada sobre los fondos.
+        if (acc === undefined) {
+          out.set(id, "unknown"); // NO nos contestaron por esta fila; NO es "no hay cuenta"
+          continue;
+        }
+        if (acc === null) {
+          out.set(id, "absent"); // la cadena CONTESTÓ: en esa PDA no hay cuenta
+          continue;
+        }
+        let statusKey: string | undefined;
+        let deadlineSec: number;
+        try {
+          const state = coder.decode("EscrowState", acc.data) as { status: Record<string, unknown>; deadline: { toNumber(): number } };
+          statusKey = Object.keys(state.status)[0]; // { Deposited: {} } | { Released: {} } | ...
+          // El `.toNumber()` va ACÁ ADENTRO, junto al decode, y no abajo en el mapeo: `BN.toNumber()`
+          // TIRA si el valor no entra en 53 bits, y una excepción en el mapeo se escaparía de este
+          // `try`, saldría del método entero y dejaría TODAS las filas del historial en "unknown" —
+          // una sola cuenta deforme se llevaría puesto el batch, que es justo lo que el tercer modo de
+          // falla del docblock de arriba promete que no pasa. ⚠️ Esto NO tiene test propio y va dicho:
+          // la fixture que haría falta —una cuenta que pase el discriminador Borsh de `EscrowState`
+          // con un `i64` absurdo— no representa nada que el programa que las escribe produzca.
+          deadlineSec = state.deadline.toNumber();
+        } catch {
+          out.set(id, "unknown"); // cuenta deforme o ajena al layout: no pudimos LEER esta fila
+          continue;
+        }
+        // El reloj es el del DISPOSITIVO, y esta comparación es la negación EXACTA del guard con el que
+        // el refund de este mismo archivo rechaza por deadline (`refund_before_deadline`, `:972`).
+        // ⚠️ NO está escrita una sola vez: está escrita DOS, allá y acá, así que PUEDEN DIVERGIR — si el
+        // refund cambia su condición y ésta no, la pantalla dice "la salida que queda es la devolución"
+        // sobre una fila que este mismo código rechazaría. Lo único que las ata es T-A16, que corre LAS DOS.
+        const nowSec = Math.floor(Date.now() / 1000);
+        // Un `status` que no es ninguno de los tres es un cuarto desenlace SIN NOMBRE: se dice
+        // "no pudimos" y no se elige uno de los tres por descarte.
+        out.set(
+          id,
+          statusKey === "Deposited"
+            ? nowSec < deadlineSec
+              ? "deposited-window-open"
+              : "deposited-window-closed"
+            : statusKey === "Released"
+              ? "released"
+              : statusKey === "Refunded"
+                ? "refunded"
+                : "unknown",
+        );
+      }
+    }
+    return out;
   }
 }

@@ -429,7 +429,12 @@ describe("SolanaWalletAdapter.readEscrowStates (WKH-349)", () => {
   });
 });
 
-// 🔴 T-A13 (AC-13) — EL ACOPLE, CORRIENDO LAS DOS FUNCIONES.
+// 🔴 T-A16 (AC-13) — EL ACOPLE, CORRIENDO LAS DOS FUNCIONES.
+//
+// EL ID SALTA DE T-A15 A T-A16 A PROPÓSITO: `T-A13` está reservado en §11.6 del Story File para el
+// test que sólo existía si DT-19 caía al fallback del reloj inyectado, y no cayó ("sin fallback este
+// test no existe"). Reusar ese ID para otra cosa dejaría la tabla del Story File describiendo un test
+// que no es éste. Éste, T-A14 y T-A15 los agrega el fix-pack r1 (F-1, F-2 y F-3).
 //
 // POR QUÉ NO ALCANZABA T-A12, medido y no supuesto (AR/MNR): con el mutante
 // `if (nowSec <= deadlineSec) throw new Error("refund_before_deadline")` puesto en
@@ -489,7 +494,7 @@ describe("readEscrowStates ⇄ refundEscrow — el acople de AC-13, con las dos 
   // el guard del refund (`solana-wallet.ts:972`). Con él, esta línea se pone roja por
   // "refund_before_deadline" mientras el assert de arriba sigue diciendo `window-closed`, que es
   // EXACTAMENTE el desacuerdo que AC-13 prohíbe.
-  it("T-A13a: en el borde exacto, el historial dice 'window-closed' y el refund NO rechaza por deadline", async () => {
+  it("T-A16a: en el borde exacto, el historial dice 'window-closed' y el refund NO rechaza por deadline", async () => {
     const { adapter, signSpy } = await montar(CONGELADO_MS);
 
     // CASO DE CONTROL (CD-11): si el instrumento no congela, esto se pone rojo POR EL CONTROL y no por
@@ -511,7 +516,7 @@ describe("readEscrowStates ⇄ refundEscrow — el acople de AC-13, con las dos 
   // MUTANTES que mata: (a) borrar el guard `refund_before_deadline` del refund; (b) `nowSec <
   // deadlineSec ⇒ closed` en el historial. Con cualquiera de los dos, la pantalla y el refund dejan de
   // decir lo mismo un segundo ANTES del deadline.
-  it("T-A13b: un segundo antes, el historial dice 'window-open' y el refund SÍ rechaza por deadline", async () => {
+  it("T-A16b: un segundo antes, el historial dice 'window-open' y el refund SÍ rechaza por deadline", async () => {
     const { adapter, signSpy } = await montar(CONGELADO_MS - 1000);
 
     expect(Math.floor(Date.now() / 1000)).toBe(DEADLINE_SEC - 1); // control del instrumento

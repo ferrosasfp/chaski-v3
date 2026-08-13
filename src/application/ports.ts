@@ -1094,7 +1094,7 @@ export type EscrowId16 = string;
  * `deadline` los dijo ella; de qué lado del `deadline` caemos lo dice el `Date.now()` del dispositivo,
  * leído dentro de `readEscrowStates`. Esa comparación está escrita DOS VECES en el adapter —ahí y en el
  * guard (`refund_before_deadline`, `../infrastructure/solana-wallet.ts:972`)—, así que PUEDEN DIVERGIR:
- * lo único que las obliga a decir lo mismo es T-A13, el test que corre LAS DOS sobre el mismo borde.
+ * lo único que las obliga a decir lo mismo es T-A16, el test que corre LAS DOS sobre el mismo borde.
  *
  * LOS INPUTS QUE LO DEMUESTRAN, y son dos porque el primero que se escribió acá no se sostenía: decía
  * "un dispositivo con el reloj tres días atrasado", y ESE dispositivo no puede haber creado el escrow

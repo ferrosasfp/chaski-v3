@@ -18,7 +18,7 @@ import {
   deliveredDisplay,
   escrowFundsAtRisk,
   escrowFundsKnowledge,
-  escrowKnowledgeCopy,
+  escrowKnowledgeCopy, escrowOutcome, escrowOutcomeDisplay, type EscrowChainAnswer, type EscrowKnowledge, // WKH-349: EN ESTA LÍNEA, no en cuatro nuevas — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número y está debajo de acá
   escrowRefundError,
   escrowRentDiscoveryError,
   humanError,
@@ -1540,6 +1540,159 @@ describe("flow-vm — los desenlaces del índice on-chain (WKH-347)", () => {
     } finally {
       vi.doUnmock("../application/solana-escrow-rent");
       vi.resetModules();
+    }
+  });
+});
+
+// WKH-349 — la segunda capa de conocimiento del historial: qué dice una fila cuando el snapshot local
+// no puede afirmar nada y la CADENA sí contestó.
+//
+// 🔴 REGLA DE ESTE BLOQUE (CD-12): cada test nombra, en su propio comentario, la edición plausible que
+// lo pone en rojo. Un test que no puede nombrar su mutante no es cobertura, es decorado.
+describe("WKH-349 · escrowOutcome / escrowOutcomeDisplay", () => {
+  const rem = (s: Partial<RemittanceState>): RemittanceState =>
+    ({ status: "created", principalTx: null, refundTx: null, failureReason: null, ...s }) as RemittanceState;
+
+  // Una remesa por cada valor de EscrowKnowledge, construida con el MISMO input que la produce en
+  // producción (marcadores reales, no un cast al valor deseado): si `escrowFundsKnowledge` cambiara de
+  // criterio, estos fixtures dejan de representar lo que dicen y el bloque entero se cae.
+  const FIXTURES: Record<EscrowKnowledge, RemittanceState> = {
+    "no-deposit": rem({ status: "created" }),
+    "in-escrow": rem({ status: "payout_failed", failureReason: PRINCIPAL_SETTLED_REFUND_MANUAL }),
+    returned: rem({ status: "refunded", failureReason: ESCROW_REFUNDED_BY_SENDER }),
+    unverified: rem({ status: "principal_in", principalTx: "sig" }),
+  };
+  const KNOWLEDGES = Object.keys(FIXTURES) as EscrowKnowledge[];
+
+  // Los SIETE valores de EscrowChainAnswer: los cinco que la cadena puede contestar más los dos que
+  // hablan de la pregunta. ⚠️ El Story File de la HU dice "8" en T-V6; son 7 (5 + 2), y el conteo se
+  // deriva del tipo acá abajo en vez de escribirse a mano.
+  const ANSWERS: EscrowChainAnswer[] = [
+    "deposited",
+    "released",
+    "refunded",
+    "absent",
+    "unknown",
+    "pending",
+    "not-asked",
+  ];
+
+  // 🔴 T-V1 (AC-6, AC-8) — EL CORTE VA PRIMERO.
+  // MUTANTE: mover `if (k !== "unverified") return k` DEBAJO del mapeo. Una respuesta de cadena
+  // pisaría un marcador local ya escrito — el caso concreto: `returned` (el refund se confirmó y se
+  // anotó) con la PDA todavía en `Deposited`, porque `refund` no cierra la cuenta.
+  it("T-V1: un desenlace que el snapshot local ya resolvió NO lo pisa ninguna respuesta de cadena", () => {
+    for (const k of ["no-deposit", "in-escrow", "returned"] as EscrowKnowledge[]) {
+      for (const a of ANSWERS) {
+        expect(escrowOutcome(FIXTURES[k], a)).toBe(k);
+      }
+    }
+    // Y el cuarto valor local: `unverified` sin pregunta emitida sigue siendo `unverified`, no un
+    // desenlace de cadena inventado.
+    expect(escrowOutcome(FIXTURES.unverified, "not-asked")).toBe("unverified");
+  });
+
+  // 🔴 T-V2 (AC-2/3/4) — EL MAPEO ES 1:1 Y NO ESTÁ CRUZADO.
+  // MUTANTE: `released → chain-refunded` (o cualquier permutación). Cada respuesta se assertea contra
+  // SU desenlace, así que un cruce pone en rojo dos líneas a la vez.
+  it("T-V2: sobre una fila `unverified`, las tres respuestas con cuenta mapean cada una a su desenlace", () => {
+    expect(escrowOutcome(FIXTURES.unverified, "deposited")).toBe("chain-deposited");
+    expect(escrowOutcome(FIXTURES.unverified, "released")).toBe("chain-released");
+    expect(escrowOutcome(FIXTURES.unverified, "refunded")).toBe("chain-refunded");
+  });
+
+  // 🔴 T-V3 (AC-5) — "NO PUDIMOS PREGUNTAR" NO SE COLAPSA CON NINGUNA RESPUESTA.
+  // MUTANTE: mapear `unknown` a `chain-absent`, a `no-deposit` o dejarlo caer en el copy de
+  // `unverified`. Se assertea DESIGUALDAD DE CADENAS, no el texto lindo: el test no opina sobre cómo
+  // está redactada la frase, sólo sobre que no sea la misma que la de otro desenlace.
+  it("T-V3: `unknown` es su propio desenlace y su copy no es el de absent, no-deposit ni unverified", () => {
+    expect(escrowOutcome(FIXTURES.unverified, "unknown")).toBe("chain-unknown");
+    const desconocido = escrowOutcomeDisplay("chain-unknown").copy;
+    expect(desconocido).not.toBe(escrowOutcomeDisplay("chain-absent").copy);
+    expect(desconocido).not.toBe(escrowKnowledgeCopy("no-deposit"));
+    expect(desconocido).not.toBe(escrowKnowledgeCopy("unverified"));
+  });
+
+  // 🔴 T-V4 (CD-2) — "LA CADENA CONTESTÓ QUE NO HAY CUENTA" TAMPOCO ES UNA CONCLUSIÓN SOBRE LA PLATA.
+  // MUTANTE: `absent → chain-released` ("ya se cerró, seguro fue una entrega"), que es la conclusión
+  // tentadora y no medida — una cuenta cerrada no distingue devolución de entrega.
+  it("T-V4: `absent` es su propio desenlace y su copy no es el de unknown, released ni refunded", () => {
+    expect(escrowOutcome(FIXTURES.unverified, "absent")).toBe("chain-absent");
+    const ausente = escrowOutcomeDisplay("chain-absent").copy;
+    expect(ausente).not.toBe(escrowOutcomeDisplay("chain-unknown").copy);
+    expect(ausente).not.toBe(escrowOutcomeDisplay("chain-released").copy);
+    expect(ausente).not.toBe(escrowOutcomeDisplay("chain-refunded").copy);
+  });
+
+  // 🔴 T-V5 (AC-2) — LA MITAD VISUAL DEL DESENLACE.
+  // MUTANTE: devolver `"normal"` para todos. El texto seguiría estando y AC-2 perdería su mitad: la
+  // fila que TIENE plata recuperable se leería con el mismo peso que la que no sabemos nada.
+  it("T-V5: sólo `chain-deposited` pesa `strong`; los otros cinco desenlaces de cadena son `normal`", () => {
+    expect(escrowOutcomeDisplay("chain-deposited").emphasis).toBe("strong");
+    for (const o of ["chain-released", "chain-refunded", "chain-absent", "chain-unknown", "chain-pending"] as const) {
+      expect(escrowOutcomeDisplay(o).emphasis).toBe("normal");
+    }
+  });
+
+  // 🔴 T-V6 (AC-1, totalidad) — NINGÚN HUECO EN EL PRODUCTO.
+  // MUTANTE: un `switch` sin `default` (o una cadena de `if` sin retorno final) que caiga por un hueco
+  // y devuelva `undefined`. La fila lo dibujaría como una tarjeta sin frase.
+  it("T-V6: los 4 conocimientos × las 7 respuestas dan 28 desenlaces, y ninguno es undefined", () => {
+    let pares = 0;
+    for (const k of KNOWLEDGES) {
+      for (const a of ANSWERS) {
+        const o = escrowOutcome(FIXTURES[k], a);
+        expect(o).toBeDefined();
+        // Y su display también es total: un desenlace sin copy es una fila muda.
+        expect(typeof escrowOutcomeDisplay(o).copy).toBe("string");
+        expect(escrowOutcomeDisplay(o).copy.length).toBeGreaterThan(0);
+        pares += 1;
+      }
+    }
+    expect(pares).toBe(KNOWLEDGES.length * ANSWERS.length);
+    expect(pares).toBe(28);
+  });
+
+  // 🔴 T-V7 (AC-9, CD-1) — LA PANTALLA DICE EL ESTADO, NO PROMETE UNA OPERACIÓN.
+  // MUTANTE: reescribir un copy como "Te devolvimos tus USDC" o "Recuperamos tus USDC".
+  // ⚠️ LO QUE ESTE TEST CUBRE, EXACTO: esos SIETE verbos, no "toda promesa de acción". Una frase como
+  // "Vamos a sacar tus USDC" pasa este candado. Si alguien quiere la afirmación amplia, tiene que
+  // escribir el candado amplio (CD-12): declarar acá que cubre más de lo que cubre sería el defecto.
+  it("T-V7: ninguna de las 10 frases usa uno de los siete verbos de acción sobre el dinero", () => {
+    const VERBOS = /\b(recuperamos|liberamos|devolvimos|entregamos|depositamos|movimos|sacamos)\b/i;
+    const nuevas = (
+      ["chain-deposited", "chain-released", "chain-refunded", "chain-absent", "chain-unknown", "chain-pending"] as const
+    ).map((o) => escrowOutcomeDisplay(o).copy);
+    const locales = KNOWLEDGES.map((k) => escrowKnowledgeCopy(k));
+    const todas = [...nuevas, ...locales];
+    expect(todas).toHaveLength(10);
+    for (const frase of todas) expect(frase).not.toMatch(VERBOS);
+  });
+
+  // 🔴 T-V8 (AC-9) — "ENTREGADO" ES DE OTRA COSA, EN LA MISMA TARJETA.
+  // MUTANTE: escribir el copy de `chain-released` como "Ya entregado". Colisionaría con el Pill de
+  // `statusDisplay("settled")`, que en esa misma tarjeta dice "Entregado" sobre OTRO hecho: que el
+  // partner de payout reportó haber entregado los PEN, no que el vault salió del escrow.
+  it("T-V8: el copy de `chain-released` no dice 'entregado', que es la palabra del Pill", () => {
+    const copy = escrowOutcomeDisplay("chain-released").copy;
+    expect(copy).not.toContain("Entregado");
+    expect(copy).not.toContain("entregado");
+    // El control del test: la palabra SÍ existe en la tarjeta, y sale de la otra función. Sin esto,
+    // el assert de arriba pasaría igual en un repo donde "Entregado" no se usara en ningún lado.
+    expect(statusDisplay("settled").label).toBe("Entregado");
+  });
+
+  // 🔴 T-V9 — LOS 4 COPIES LOCALES SE DELEGAN, NO SE COPIAN.
+  //
+  // ⚠️ ESTE TEST NO ESTÁ EN §11 DEL STORY FILE (que enumera T-V1..T-V8): es UNO DE MÁS, y va declarado
+  // como tal en vez de ajustar el conteo de la HU. Existe porque §4.3 exige delegar en
+  // `escrowKnowledgeCopy` y no dejaba candado para esa exigencia.
+  // MUTANTE: pegar las cuatro frases dentro de `escrowOutcomeDisplay`. Da verde el día del copy&paste
+  // y queda diciendo una frase vieja el día que `escrowKnowledgeCopy` cambie la suya. Este assert
+  // compara BYTE A BYTE contra el productor de siempre, así que la divergencia lo pone en rojo.
+  it("T-V9 (extra, fuera de §11): los desenlaces locales devuelven exactamente la frase de escrowKnowledgeCopy", () => {
+    for (const k of KNOWLEDGES) {
+      expect(escrowOutcomeDisplay(k)).toEqual({ copy: escrowKnowledgeCopy(k), emphasis: "normal" });
     }
   });
 });

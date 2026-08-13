@@ -378,6 +378,36 @@ describe("SolanaWalletAdapter.readEscrowStates (WKH-349)", () => {
 
     expect(map.get("rem-borde")).toBe("deposited-window-closed");
   });
+
+  // 🔴 T-A14 (AC-5) — UNA RESPUESTA CORTA NO ES "no hay cuenta".
+  // `getMultipleAccountsInfo` promete una entrada por pubkey y NADIE lo verifica: web3.js valida la
+  // FORMA (`array(nullable(AccountInfoResult))`) y no el LARGO. Con `noUncheckedIndexedAccess` el
+  // faltante llega como `undefined`, y el `if (!acc)` de antes lo mandaba a la MISMA rama que el
+  // `null` — o sea la frase "En el contrato no hay ninguna cuenta para este envío" sobre filas que
+  // pueden tener plata. T-A4 no lo ve: su doble contesta las tres entradas y una es `null` de verdad.
+  //
+  // MUTANTE: volver a juntar los dos casos (`if (!acc) out.set(id, "absent")`, sin el guard de
+  // cardinalidad). Las dos filas sin respuesta pasan a "absent" y esta línea se pone roja.
+  it("T-A14: si el batch devuelve MENOS entradas que pubkeys, TODO el chunk es 'unknown' (nunca 'absent')", async () => {
+    const data = await encodeEscrowState("deposited", vigente());
+    // UNA entrada para TRES pubkeys. No se puede saber cuáles faltan: una entrada de menos EN EL MEDIO
+    // corre a las que siguen, así que ni la primera está apareada con la PDA que se pidió.
+    vi.spyOn(Connection.prototype, "getMultipleAccountsInfo").mockImplementation(
+      (async () => [accountInfo(data)]) as never,
+    );
+    const adapter = await conectadoCon(SENDER_B58);
+
+    const map = await adapter.readEscrowStates({
+      sender: SENDER_B58,
+      remittanceIds: ["rem-1", "rem-2", "rem-3"],
+    });
+
+    expect(map.size).toBe(3); // el contrato sigue siendo total
+    expect([...map.values()]).toEqual(["unknown", "unknown", "unknown"]);
+    // El control que hace que lo de arriba signifique algo: "unknown" acá NO puede confundirse con el
+    // `null` legítimo, que sigue siendo "absent" (T-A4). Son dos hechos distintos y siguen separados.
+    expect([...map.values()]).not.toContain("absent");
+  });
 });
 
 // 🔴 T-A13 (AC-13) — EL ACOPLE, CORRIENDO LAS DOS FUNCIONES.

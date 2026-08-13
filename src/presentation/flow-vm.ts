@@ -1141,7 +1141,7 @@ export function esVentanaSinAbiertos(code: string, maxCandidates: number): boole
 
 /**
  * WKH-349 — LO QUE LA CADENA CONTESTÓ sobre una fila del historial, en la forma en que la fila lo
- * recibe. Son los seis de (`EscrowChainState`, `../application/ports.ts:1106`) más DOS que no hablan
+ * recibe. Son los seis de (`EscrowChainState`, `../application/ports.ts:1112`) más DOS que no hablan
  * de la respuesta sino de la PREGUNTA, y que por eso no se pueden colapsar con ninguno de aquéllos:
  *
  *  · `"not-asked"` — NO SE PREGUNTÓ. Es lo que ve una pantalla sin reader cableado, sin `sender`, o
@@ -1221,7 +1221,7 @@ export function escrowOutcome(rem: RemittanceState, answer: EscrowChainAnswer): 
  * Sobre `"chain-absent"`: su segunda oración afirma algo sobre NOSOTROS ("desde acá no podemos decir
  * cuál de las dos"), no sobre la plata, y es lo único honesto que se puede decir con este dato. Una
  * PDA que no existe no distingue "el depósito nunca entró" de "ya se cerró después de resolverse":
- * ver R-1 en el docblock de (`EscrowChainState`, `../application/ports.ts:1106`).
+ * ver R-1 en el docblock de (`EscrowChainState`, `../application/ports.ts:1112`).
  *
  * Sobre los dos `"chain-deposited-*"`: los dos pesan `strong` porque los dos tienen plata adentro —
  * el peso visual separa "hay plata" de "no hay nada que hacer", no "urgente" de "no urgente". Lo que

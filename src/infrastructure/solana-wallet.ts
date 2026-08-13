@@ -1614,10 +1614,33 @@ export class SolanaWalletAdapter
         for (const id of chunk) out.set(id, "unknown"); // NO pudimos preguntar; NO es "no hay cuenta"
         continue;
       }
+      // 🔴 CARDINALIDAD: una respuesta CORTA no dice "no hay cuenta", dice que no sabemos leerla.
+      // `getMultipleAccountsInfo` promete una entrada por pubkey pedida y NADIE lo verifica: web3.js
+      // valida la FORMA de la respuesta —`array(nullable(AccountInfoResult))`,
+      // `@solana/web3.js/lib/index.cjs.js:6410-6415`— y no su LARGO. Con `noUncheckedIndexedAccess`
+      // (`tsconfig.json:13`) el faltante llega acá como `undefined`, y un `if (!acc)` lo metía en la
+      // misma rama que el `null`: la fila terminaba diciendo "en el contrato no hay ninguna cuenta
+      // para este envío" sobre un escrow que puede tener plata adentro. Es la regla del repo al revés.
+      //
+      // POR QUÉ EL CHUNK ENTERO Y NO SÓLO LAS FILAS FALTANTES: si vinieron menos entradas, tampoco
+      // sabemos CUÁLES faltan. Una respuesta a la que le falta una del medio corre las que siguen, y
+      // entonces `infos[i]` es la cuenta de OTRA fila — que es peor que no contestar. Lo único que
+      // podemos afirmar de un chunk descalzado es que no pudimos leerlo.
+      if (infos.length !== chunk.length) {
+        for (const id of chunk) out.set(id, "unknown");
+        continue;
+      }
       for (let i = 0; i < chunk.length; i++) {
         const id = chunk[i] as string;
         const acc = infos[i];
-        if (!acc) {
+        // Los dos casos van SEPARADOS y nunca se colapsan con un `if (!acc)`. El `undefined` de acá ya
+        // no debería poder pasar —lo corta el guard de cardinalidad de arriba—, pero el tipo lo sigue
+        // admitiendo, así que la rama existe y cae del lado que no afirma nada sobre los fondos.
+        if (acc === undefined) {
+          out.set(id, "unknown"); // NO nos contestaron por esta fila; NO es "no hay cuenta"
+          continue;
+        }
+        if (acc === null) {
           out.set(id, "absent"); // la cadena CONTESTÓ: en esa PDA no hay cuenta
           continue;
         }

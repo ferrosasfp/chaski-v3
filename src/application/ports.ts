@@ -1069,6 +1069,12 @@ export type EscrowId16 = string;
  * comprobamos" cuando sí comprobamos. Lo que QUEDA VIVO: comprobamos, y la respuesta no distingue una
  * devolución de una entrega. Se ACOTÓ; no se cerró.
  *
+ * QUE SEAN DOS Y NO TRES está verificado, no supuesto: la cuenta sólo desaparece por la ix `close`, y
+ * el programa la rechaza si el escrow no está en estado terminal
+ * (`EscrowNotTerminal`, `../infrastructure/solana/escrow-idl.ts:1412`). O sea que una PDA ausente que
+ * alguna vez existió se resolvió antes de cerrarse; no hay un tercer camino por el que un escrow CON
+ * PLATA ADENTRO deje de tener cuenta. Lo que la ausencia NO dice es cuál de los dos desenlaces fue.
+ *
  * POR QUÉ NO SE DESAMBIGUA CON EL `EscrowIndex` DE WKH-347, que es la idea que va a tener el próximo
  * que lea esto: el IDL declara que `close` "saca de `entries` el `remittance_id` que está cerrando"
  * (`close`, `../infrastructure/solana/escrow-idl.ts:290`), o sea que el índice es un registro de

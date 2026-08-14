@@ -1232,9 +1232,9 @@ export function escrowOutcome(rem: RemittanceState, answer: EscrowChainAnswer): 
  * frase nombra una salida —"devolverlos a tu wallet, y sólo tu firma puede hacerlo"— que la TARJETA de
  * la que sale NO SIEMPRE OFRECE. El input: una fila `status: "settled"` con `principalTx != null` cae
  * en `"unverified"` por la rama (`principalTx`, `:219`) de `escrowFundsKnowledge`, y si su PDA sigue
- * `Deposited` con el plazo vencido la tarjeta muestra a la vez el Pill "Entregado", esta frase, y como
- * ÚNICO botón "Ver recibo", que no lleva a ningún refund: `settled` no está en (`refundeable`, `flow.tsx:1337`), que es
- * lo que monta `RefundAction`. AC-11 no pide ese botón y esta HU NO lo agrega.
+ * `Deposited` con el plazo vencido la tarjeta muestra esta frase y, como ÚNICO botón, "Ver recibo",
+ * que no lleva a ningún refund: `settled` no está en (`refundeable`, `flow.tsx:1337`), que es
+ * lo que monta `RefundAction`. WKH-351 sacó el Pill de esa tarjeta; el residual sigue vivo.
  *
  * DÓNDE ESTÁ LA PUERTA para esa fila, que es lo que faltaba decir: (`LostEscrowRecovery`,
  * `flow.tsx:755`), en la pantalla de inicio. No mira el estado local de la remesa: resuelve el id
@@ -1245,8 +1245,8 @@ export function escrowOutcome(rem: RemittanceState, answer: EscrowChainAnswer): 
  * llega hasta esta fila. Se ACOTÓ; no se cerró.
  *
  * Sobre `"chain-released"`: dice "salieron del escrow hacia el pago" y NO dice "entregado". Esa
- * palabra ya es de (`statusDisplay`, `:133`) para `settled`, que habla de otro hecho —el partner de
- * payout reportó haber entregado los PEN— y las dos aparecen en la misma tarjeta. Candado: T-V8.
+ * palabra ya es de (`statusDisplay`, `:133`) para `settled`, que habla de otro hecho, el partner de
+ * payout reportando que entregó los PEN. Desde WKH-351 esa etiqueta vive en el recibo. Candado: T-V8.
  */
 export function escrowOutcomeDisplay(o: EscrowOutcome): {
   copy: string;

@@ -1707,10 +1707,10 @@ describe("WKH-349 · escrowOutcome / escrowOutcomeDisplay", () => {
     expect("Recuperamos tus USDC").toMatch(VERBOS);
   });
 
-  // 🔴 T-V8 (AC-9) — "ENTREGADO" ES DE OTRA COSA, EN LA MISMA TARJETA.
+  // 🔴 T-V8 (AC-9) — "ENTREGADO" ES DE OTRA COSA, Y DESDE WKH-351 TAMBIÉN DE OTRA PANTALLA.
   // MUTANTE: escribir el copy de `chain-released` como "Ya entregado". Colisionaría con el Pill de
-  // `statusDisplay("settled")`, que en esa misma tarjeta dice "Entregado" sobre OTRO hecho: que el
-  // partner de payout reportó haber entregado los PEN, no que el vault salió del escrow.
+  // `statusDisplay("settled")`, que dice "Entregado" sobre OTRO hecho: que el partner de payout
+  // reportó haber entregado los PEN, no que el vault salió del escrow. Ese Pill hoy vive en el recibo.
   it("T-V8: el copy de `chain-released` no dice 'entregado', que es la palabra del Pill", () => {
     const copy = escrowOutcomeDisplay("chain-released").copy;
     expect(copy).not.toContain("Entregado");

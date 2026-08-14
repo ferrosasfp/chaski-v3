@@ -11,7 +11,7 @@
 //
 // 🔴 REGLA DE ESTE ARCHIVO (CD-12): cada test nombra la edición plausible que lo pone en rojo. Un test
 // que no puede nombrar su mutante no es cobertura.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest"; // WKH-352: `vi` EN ESTA LÍNEA, no en una nueva — `history-grupos.test.tsx:17` cita `:41` y `flow-vm.test.ts` cita `:43` y `:251`, las tres SIN ancla
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { HistoryView, RemittanceFlow } from "./flow";
@@ -36,10 +36,10 @@ import {
   beneficiary,
 } from "../test-support/fakes";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); }); // WKH-352: el unstub va EN ESTA LÍNEA (ver el comentario del import)
 
-// CINCO de las SIETE frases que esta HU introduce (`escrowOutcomeDisplay` produce siete; las otras dos
-// —`chain-absent` y `chain-pending`— sólo se ejercitan en `flow-vm.test.ts`). Van ACÁ como literales y
+// SIETE de las OCHO frases de cadena (`escrowOutcomeDisplay` produce ocho desde WKH-352; la única que
+// falta es `chain-pending`, que sólo se ejercita en `flow-vm.test.ts`). Van ACÁ como literales y
 // no derivadas del módulo bajo prueba: un test que le pregunta al código qué copy produce y después
 // verifica que produjo ese copy es un guard que se compara consigo mismo. Estas cadenas son el
 // contrato con la persona.
@@ -50,6 +50,10 @@ const CP5_NO_PUDIMOS = "No pudimos preguntarle al contrato por este envío.";
 /** La ventana de release ya venció: hay plata adentro y la única puerta que queda es la devolución. */
 const CP8_VENTANA_VENCIDA =
   "El contrato dice que tus USDC siguen en el escrow y que el plazo para liberarlos al pago ya venció: la salida que queda es devolverlos a tu wallet, y sólo tu firma puede hacerlo.";
+/** WKH-352 · la fila `absent` que SÍ tiene la prueba local del depósito (`principalTx`). */
+const CP9_ABSENT_CON_DEPOSITO = "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en el contrato ya no hay ninguna cuenta para este envío, así que esa cuenta se cerró después de resolverse. Desde acá no podemos decir si terminó en un pago o en una devolución.";
+/** WKH-352 · la frase AMBIGUA, la de la fila `absent` SIN prueba. Está acá para asertar que la fila con prueba NO la dice. */
+const CP_ABSENT_AMBIGUO = "En el contrato no hay ninguna cuenta para este envío: o el depósito nunca entró, o ya se cerró después de resolverse. Desde acá no podemos decir cuál de las dos.";
 /** La frase de ANTES de esta HU. Que desaparezca es la mitad del punto: la tarjeta no puede decir las dos. */
 const COPY_VIEJO = "No comprobamos si tus USDC siguen en el escrow.";
 
@@ -397,5 +401,111 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
     // Sigue pesando `strong`: hay plata adentro, igual que en la fila con la ventana abierta.
     expect(vencida.className).toContain("font-semibold");
     expect(vencida.className).toContain("text-cochineal-ink");
+  });
+
+  /** WKH-352 · el gemelo de `unverifiedSnapshot` SIN la prueba del depósito: se firmó la autorización y
+   *  nunca se registró el desenlace. Cae en `unverified` por `status: "confirmed"`, así que se le
+   *  pregunta a la cadena igual, pero `principalTx` es `null`. Es el control de T-W7(b): el montaje
+   *  IDÉNTICO salvo por el único dato que decide la frase. */
+  function sinPruebaSnapshot(id: string): RemittanceState {
+    const r = quotedRemittance(id);
+    r.applyKyc(passKyc, T0);
+    r.confirm(T0);
+    return r.snapshot;
+  }
+
+  // 🔴 T-W6 (WKH-352 / AC-1) — LA FILA QUE YA TIENE LA PRUEBA DEL DEPÓSITO DEJA DE LEERSE COMO LAS OTRAS.
+  // `unverifiedSnapshot` llama (`markPrincipalIn`, `:101`), o sea que ESTE fixture ya es el de AC-1:
+  // no hace falta inventar ninguno. La cadena contesta `absent` y la fila, en vez de la disyunción,
+  // dice que el depósito entró y que no se puede saber cómo terminó.
+  // MUTANTE (a) MEDIDO — NO RAMIFICAR: volver `flow-vm.ts:1205` a `return "chain-absent";`. Medido:
+  // T-W6 y T-W7 rojos (los dos esperan el copy nuevo en el DOM).
+  // MUTANTE (b) MEDIDO — DIBUJAR LAS DOS: un `<p>` de más en `flow.tsx:3120` con
+  // `escrowOutcomeDisplay("chain-absent").copy`, o sea el copy nuevo JUNTO al viejo en vez de
+  // reemplazarlo. Medido: SÓLO T-W6 rojo, y sólo por el `queryByText(...)` `toBeNull()` de abajo. Por
+  // eso el assert de ausencia es parte del test y no un adorno: sin él, ese mutante pasa entero y la
+  // tarjeta queda diciendo "tu depósito entró" y "o el depósito nunca entró" a la vez.
+  // QUÉ NO CUBRE (CD-14): no mide el grupo bajo el que cae la fila. Eso es T-W8, en `history-grupos`.
+  it("T-W6: `absent` + `principalTx` ⇒ la tarjeta dice que el depósito entró, y no la disyunción", async () => {
+    const reader = new FakeSolanaEscrowChainStateReader(mapa([["rem-1", "absent"]]));
+    render(
+      <HistoryView
+        items={[unverifiedSnapshot("rem-1")]}
+        onOpen={() => {}}
+        onBack={() => {}}
+        reader={reader}
+        sender={FAKE_SOLANA_BENEFICIARY}
+      />,
+    );
+
+    expect(await screen.findByText(CP9_ABSENT_CON_DEPOSITO)).toBeInTheDocument();
+    // Y NINGUNA de las dos frases que esta fila decía antes sigue en la tarjeta.
+    expect(screen.queryByText(CP_ABSENT_AMBIGUO)).toBeNull();
+    expect(screen.queryByText(COPY_VIEJO)).toBeNull();
+    // Tampoco "no pudimos preguntar": la cadena SÍ contestó, y clarísimo.
+    expect(screen.queryByText(CP5_NO_PUDIMOS)).toBeNull();
+  });
+
+  // 🔴 T-W7 (WKH-352 / AC-3, CD-4) — EL CANDADO MECÁNICO: LA FRASE NUEVA NO CUESTA NI UNA LLAMADA.
+  // Toda la HU es presentación sobre datos YA cargados. El mutante que existe para ser cazado acá es el
+  // tentador: resolver la ambigüedad de verdad, con `getSignaturesForAddress` sobre la PDA, o pedir
+  // cualquier dato extra al abrir el historial. Eso es UNA llamada POR FILA (no se batchea), está
+  // costeado en `ports.ts:1065-1088` (R-1) y está DIFERIDO, no descartado (AC-6).
+  // Dos mitades, las dos obligatorias: (a) un `fetch` que tira ante cualquier invocación, y (b) que
+  // `calls` del reader no se mueva entre un montaje CON prueba y uno SIN prueba.
+  // MUTANTE MEDIDO: en `HistoryEntry` (`flow.tsx:3095`), agregar
+  // `if (escrowOutcome(rem, answer) === "chain-absent-after-deposit") void fetch("/api/solana/signatures");`
+  // Medido: sólo este test se pone rojo, y con el mensaje del doble ("fetch_prohibido_en_esta_pantalla"),
+  // que es la prueba de que lo que falló fue el candado y no otra cosa.
+  // QUÉ NO CUBRE (CD-14): prueba que ESTA pantalla no emite llamadas nuevas. NO prueba que ningún otro
+  // punto de la app lo haga, ni cubre un transporte que no sea `fetch` ni el reader inyectado.
+  it("T-W7: producir la frase nueva no emite NINGUNA llamada extra", async () => {
+    // (a) El doble que tira ante cualquier invocación.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => {
+        throw new Error("fetch_prohibido_en_esta_pantalla");
+      }),
+    );
+    // EL ASSERT DE CONTROL, que NO es opcional: sin él este test pasa igual aunque el doble esté mal
+    // puesto (un `stubGlobal` que no llegó a aplicarse, o un nombre mal escrito) y quedaría verde POR
+    // AUSENCIA, que es como un guard deja de existir. Misma disciplina que T-V7
+    // (`flow-vm.test.ts:1705-1707`) y que `evm-residue-guard.static.test.ts:40-43`.
+    expect(() => (globalThis.fetch as unknown as () => void)()).toThrow(
+      "fetch_prohibido_en_esta_pantalla",
+    );
+
+    // (b) Dos montajes IDÉNTICOS salvo por `principalTx`: el de arriba produce la frase nueva, el de
+    // abajo la ambigua. Si producir la frase nueva costara una consulta, `calls` sería distinto.
+    const readerConPrueba = new FakeSolanaEscrowChainStateReader(mapa([["rem-1", "absent"]]));
+    render(
+      <HistoryView
+        items={[unverifiedSnapshot("rem-1")]}
+        onOpen={() => {}}
+        onBack={() => {}}
+        reader={readerConPrueba}
+        sender={FAKE_SOLANA_BENEFICIARY}
+      />,
+    );
+    expect(await screen.findByText(CP9_ABSENT_CON_DEPOSITO)).toBeInTheDocument();
+    cleanup();
+
+    const readerSinPrueba = new FakeSolanaEscrowChainStateReader(mapa([["rem-1", "absent"]]));
+    render(
+      <HistoryView
+        items={[sinPruebaSnapshot("rem-1")]}
+        onOpen={() => {}}
+        onBack={() => {}}
+        reader={readerSinPrueba}
+        sender={FAKE_SOLANA_BENEFICIARY}
+      />,
+    );
+    expect(await screen.findByText(CP_ABSENT_AMBIGUO)).toBeInTheDocument();
+
+    // Mismo largo y mismos ids: la fila con prueba no pidió nada que la otra no pidiera.
+    expect(readerConPrueba.calls).toHaveLength(1);
+    expect(readerSinPrueba.calls).toHaveLength(1);
+    expect(readerConPrueba.calls[0]?.remittanceIds).toEqual(readerSinPrueba.calls[0]?.remittanceIds);
+    expect(readerConPrueba.calls[0]?.remittanceIds).toEqual(["rem-1"]);
   });
 });

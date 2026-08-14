@@ -1901,7 +1901,7 @@ describe("WKH-350 · agrupación del historial", () => {
  * ⚠️ POR QUÉ ESTE BLOQUE VA AL FINAL DEL ARCHIVO Y NO ADENTRO DEL `describe` de WKH-349. Tres citas
  * `flow-vm.test.ts:NN` SIN ancla apuntan acá adentro y NINGÚN guard las mira, porque el formato que
  * `citas-ancladas.test.ts` vigila pide una coma entre dos backticks: `:520` desde
- * `http-pop-signer.ts:33` (NO-TOUCH), `:1714` (T-V8) desde `history-onchain.test.tsx:251` y `:1873`
+ * `http-pop-signer.ts:33` (NO-TOUCH), `:1714` (T-V8) desde `history-onchain.test.tsx:255` y `:1873`
  * (`TODOS`) desde `history-grupos.test.tsx:405`. Insertar UNA línea arriba de cualquiera de las tres
  * las rompe en silencio. Por eso los tests nuevos van debajo de todas, y las ediciones de este archivo
  * en las tres zonas citadas fueron línea-neutrales.

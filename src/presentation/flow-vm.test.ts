@@ -1908,11 +1908,13 @@ describe("WKH-350 · agrupación del historial", () => {
  * con `grep -rEon 'flow-vm\.test\.ts:[0-9]+(-[0-9]+)?' src app scripts contracts`, y descartando la
  * ÚNICA anclada (la de `flow-vm.ts:1002` a `:481`, que ésa sí la vigila el guard), las otras TRES son:
  * `:76-101` desde `history-grupos.test.tsx:532`, `:1705-1707` desde `history-onchain.test.tsx:473` y
- * `:1905` desde `history-grupos.test.tsx:577`. La última la escribió ESTA HU y apunta adentro de este
- * mismo docblock: por eso las CINCO líneas de arriba no se pueden mover ni una, y todo lo que se le
- * agregue a esta explicación va DEBAJO de la 1905. El AR contó cuatro; medido contra el árbol, son
- * seis. Aparte quedan SEIS auto-citas dentro de este archivo, las seis a `:520` (`:1`, `:3`, `:21`,
- * `:31`, `:484` y `:1358`): mismo riesgo, y por eso `:520` es la línea que este archivo más protege.
+ * `:1905-1911` desde `history-grupos.test.tsx:577` (esa cita decía `:1905` a secas y era falsa en dos
+ * tercios: en la 1905 sólo está `:405`, y `:532` y `:577` viven en la 1910 y la 1911. AR r2 · MNR-1).
+ * La última la escribió ESTA HU y apunta adentro de este mismo docblock: por eso las CINCO líneas de
+ * arriba no se pueden mover ni una, y todo lo que se le agregue va DEBAJO de la 1911, no de la 1905.
+ * El AR contó cuatro; medido contra el árbol, son seis. Aparte quedan SEIS auto-citas dentro de este
+ * archivo, las seis a `:520` (`:1`, `:3`, `:21`, `:31`, `:484` y `:1358`): mismo riesgo, y por eso
+ * `:520` es la línea que este archivo más protege.
  *
  * Insertar UNA línea arriba de cualquiera de esos destinos las rompe en silencio. Por eso los tests
  * nuevos van debajo de todas, y las ediciones de este archivo en las zonas citadas fueron
@@ -2153,8 +2155,10 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
     // formas: los otros tres alternantes no los ejercitaba nadie, así que uno roto (un `\b` de más, un
     // acento mal escrito) habría quedado muerto en silencio, que es EXACTAMENTE el defecto que T-W2
     // documenta dos bloques más arriba y que este archivo ya pagó una vez. La regla, escrita en
-    // `auto-blindaje.md:139`: si la regex tiene N alternantes, el control necesita N. Medido uno por
-    // uno con `node -e` antes de escribirlos.
+    // `auto-blindaje.md:139`: si la regex tiene N alternantes, el control necesita N. Medido como
+    // DIAGONAL y no "los cuatro matchean": se sacó cada alternante uno por uno y se corrieron los
+    // cuatro controles ⇒ `0111`, `1011`, `1101`, `1110`. Cada control muere con SU alternante y con
+    // ninguno más; cuatro controles que matchean por el MISMO alternante no habrían probado nada.
     expect("y quedó cerrada esa misma noche").toMatch(AFIRMA_CIERRE);
     expect("la cuenta fue cerrada por el programa").toMatch(AFIRMA_CIERRE);
     expect("esa cuenta ya no existe en la cadena").toMatch(AFIRMA_CIERRE);
@@ -2210,8 +2214,11 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
     const nuevo = escrowOutcomeDisplay("chain-absent-after-deposit").copy;
     const GENERALIZA = /(en el contrato\s+(que estamos consultando\s+)?no\s+(hay|figura)|el contrato\s+no\s+(tiene|registra))/i;
     expect(nuevo).not.toMatch(GENERALIZA);
-    // UN CONTROL POR ALTERNANTE (la regla de MNR-2, aplicada también acá). El primero no es una frase
-    // inventada: es la frase congelada de `chain-absent`, o sea el espécimen que motivó el hallazgo.
+    // UN CONTROL POR ALTERNANTE (la regla de MNR-2, aplicada también acá), y MEDIDO como diagonal: se
+    // sacó cada alternante uno por uno y se corrieron los cuatro controles. Resultado, en el orden en
+    // que están escritos: `0111`, `1011`, `1101`, `1110`. O sea que cada control muere con SU
+    // alternante y con ninguno más, que es lo que un control tiene que probar. El primero no es una
+    // frase inventada: es la frase congelada de `chain-absent`, el espécimen que motivó el hallazgo.
     expect(COPY_VIEJO_ABSENT).toMatch(GENERALIZA);
     expect("Y en el contrato que estamos consultando no figura ninguna cuenta").toMatch(GENERALIZA);
     expect("el contrato no tiene ninguna cuenta para este envío").toMatch(GENERALIZA);

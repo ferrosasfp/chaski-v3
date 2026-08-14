@@ -574,9 +574,9 @@ describe("WKH-351 · la tarjeta del historial no muestra la etiqueta del trámit
 describe("WKH-352 · el desenlace nuevo cae en el grupo que esa fila ya tenía", () => {
   /** WKH-352 · las dos frases de `absent`, ESCRITAS A MANO y no derivadas del módulo (un test que le
    *  pregunta al código qué copy produce y después verifica que produjo ese copy es un guard que se
-   *  compara consigo mismo). Van acá abajo y no con las otras `CP_` porque `flow-vm.test.ts:1905` cita
-   *  TRES líneas de este archivo SIN ancla, `:405`, `:532` y `:577`, y una insertada arriba de la
-   *  primera las rompe a las tres en silencio (recontado en el AR · MNR-1: eran más de las escritas). */
+   *  compara consigo mismo). Van acá abajo y no con las otras `CP_` porque `flow-vm.test.ts:1905-1911`
+   *  cita TRES líneas de este archivo SIN ancla, y NO las tres desde la 1905: `:405` está en la 1905, y
+   *  `:532` y `:577` en la 1910 y la 1911 (AR r2 · MNR-1, medido; acá decía que las tres iban en :1905). */
   const CP_ABSENT_CON_DEPOSITO =
     "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en la dirección que le corresponde a este envío no hay ninguna cuenta: miramos esa dirección sola, no el contrato entero, y eso es todo lo que medimos. Desde acá no podemos decir si terminó en un pago o en una devolución, ni descartar que la cuenta siga abierta en otra dirección: la que miramos se calcula con la wallet conectada, así que si depositaste con otra, conectá esa y usá la opción de recuperar un envío perdido, en la pantalla de inicio.";
   const CP_ABSENT_AMBIGUO =

@@ -1299,12 +1299,12 @@ export function escrowOutcomeDisplay(o: EscrowOutcome): {
  * resuelto sino uno que no ocurrió. Lo único que los cuatro sostienen es que no hay plata tuya
  * adentro del escrow, y eso es exactamente lo que el encabezado dice.
  *
- * POR QUÉ G4 SE LLAMA "Sin respuesta sobre tu plata" Y NO "Sin respuesta clara de la cadena".
- * `chain-absent` SÍ recibió respuesta de la cadena, y clarísima: no hay cuenta. Lo que no se puede es
- * inferir qué significa. Y a `unverified` no se le preguntó NUNCA: la consulta sale sólo por ese
- * bucket (`idsAConsultar`, `flow.tsx:3009`), y (`escrowOutcome`, `:1193`) devuelve el conocimiento
- * local tal cual cuando la respuesta es `"not-asked"`. Un encabezado que hable de "respuesta de la
- * cadena" aparenta, para dos de sus cuatro miembros, una consulta que no existió.
+ * POR QUÉ G4 SE LLAMA "Sin respuesta sobre tu plata" Y NO "Sin respuesta clara de la cadena". Sus miembros, que son CINCO y
+ * hay que contarlos en (`GRUPO_POR_DESENLACE`, `:1354`) y no en este párrafo, no llegaron por el mismo motivo. `chain-absent`
+ * y `chain-absent-after-deposit` SÍ recibieron respuesta, y clarísima: no hay cuenta; lo que no se puede es inferir qué
+ * significa. `chain-pending` tiene la consulta EN VUELO. A `unverified` no se le preguntó NUNCA (sale sólo por ese bucket,
+ * (`idsAConsultar`, `flow.tsx:3009`), y (`escrowOutcome`, `:1193`) devuelve el conocimiento local tal cual con `"not-asked"`)
+ * y a `chain-unknown` no se le PUDO: un encabezado que hable de "respuesta de la cadena" aparenta, para esos DOS, una consulta que no existió.
  *
  * POR QUÉ G2 NO DICE "todavía en plazo". A `in-escrow` no se le pregunta a la cadena, así que el
  * sistema no sabe si esa fila está en plazo, y la frase por fila de `chain-deposited-window-open`

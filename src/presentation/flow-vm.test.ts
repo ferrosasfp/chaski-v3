@@ -1898,27 +1898,43 @@ describe("WKH-350 · agrupación del historial", () => {
 /**
  * WKH-352 · LA FILA QUE YA TIENE LA PRUEBA DEL DEPÓSITO DEJA DE COMPARTIR LA FRASE AMBIGUA.
  *
- * ⚠️ POR QUÉ ESTE BLOQUE VA AL FINAL DEL ARCHIVO Y NO ADENTRO DEL `describe` de WKH-349. SEIS citas
- * `flow-vm.test.ts:NN` SIN ancla apuntan acá adentro y NINGÚN guard las mira, porque el formato que
- * `citas-ancladas.test.ts` vigila pide una coma entre dos backticks. Tres estaban nombradas acá desde
- * el principio: `:520` desde `http-pop-signer.ts:33` (NO-TOUCH), `:1714` (T-V8) desde
- * `history-onchain.test.tsx:255` y `:1873` (`TODOS`) desde `history-grupos.test.tsx:405`.
+ * 🔴 ACÁ VIVÍA UNA REGLA DE EDICIÓN EN PROSA, Y ERA FALSA EN SUS DOS MITADES (CR · MNR-2). Decía que
+ * "SEIS citas `flow-vm.test.ts:NN` sin ancla" apuntaban a este bloque, y que "todo lo que se le agregue
+ * va DEBAJO de la 1911". Medido con
+ * `grep -rEon 'flow-vm\.test\.ts:[0-9]+(-[0-9]+)?' src app scripts contracts`: las citas externas eran
+ * OCHO, con UNA sola anclada (la de `flow-vm.ts:1002` a `:481`), o sea SIETE sin ancla, no seis. Y la
+ * séptima, escrita por esta misma HU, fijaba la 1935, que está DEBAJO de la 1911: el CR insertó una
+ * línea en la 1920, que es exactamente lo que esa regla autorizaba, y el contenido citado se corrió de
+ * 1935 a 1936 SIN UN SOLO ROJO, con `citas-ancladas.test.ts` en verde.
  *
- * 🔴 Y ESTE MISMO PÁRRAFO DECÍA "TRES", QUE ERA EL CONTEO VIEJO (AR · MNR-1). Recontado contra el árbol
- * con `grep -rEon 'flow-vm\.test\.ts:[0-9]+(-[0-9]+)?' src app scripts contracts`, y descartando la
- * ÚNICA anclada (la de `flow-vm.ts:1002` a `:481`, que ésa sí la vigila el guard), las otras TRES son:
- * `:76-101` desde `history-grupos.test.tsx:532`, `:1705-1707` desde `history-onchain.test.tsx:473` y
- * `:1905-1911` desde `history-grupos.test.tsx:577` (esa cita decía `:1905` a secas y era falsa en dos
- * tercios: en la 1905 sólo está `:405`, y `:532` y `:577` viven en la 1910 y la 1911. AR r2 · MNR-1).
- * La última la escribió ESTA HU y apunta adentro de este mismo docblock: por eso las CINCO líneas de
- * arriba no se pueden mover ni una, y todo lo que se le agregue va DEBAJO de la 1911, no de la 1905.
- * El AR contó cuatro; medido contra el árbol, son seis. Aparte quedan SEIS auto-citas dentro de este
- * archivo, las seis a `:520` (`:1`, `:3`, `:21`, `:31`, `:484` y `:1358`): mismo riesgo, y por eso
- * `:520` es la línea que este archivo más protege.
+ * EL ARREGLO NO FUE CORREGIR EL NÚMERO, FUE ANCLAR. Las cuatro citas externas que apuntan a CÓDIGO de
+ * este archivo hoy llevan símbolo, así que las mira `citas-ancladas.test.ts` y un desplazamiento se
+ * pone ROJO en vez de mentir: (`statusDisplay`, `:76-101`) y (`TODOS`, `:1873`) desde
+ * `history-grupos.test.tsx`, y (`VERBOS`, `:1704-1707`) y (`escrowOutcomeDisplay`, `:1715`) desde
+ * `history-onchain.test.tsx`. Las otras dos eran BOOKKEEPING de esta misma disciplina: una apuntaba a la
+ * PROSA de este párrafo y la otra, desde `history-onchain.test.tsx`, listaba en qué líneas de acá vivían
+ * las citas que la nombraban. Las dos se borraron de raíz, porque con las citas ancladas ese inventario
+ * a mano no hace falta y era el que envejecía solo: de las tres afirmaciones que hacía el de
+ * `history-onchain.test.tsx`, DOS eran falsas cuando se midieron. Cada una de las cuatro citas nuevas se
+ * movió una línea y se comprobó el rojo; no es una atribución deducida.
  *
- * Insertar UNA línea arriba de cualquiera de esos destinos las rompe en silencio. Por eso los tests
- * nuevos van debajo de todas, y las ediciones de este archivo en las zonas citadas fueron
- * línea-neutrales.
+ * ⚠️ UN PUNTO CIEGO DEL CANDADO, ENCONTRADO ESCRIBIENDO ESTE ARREGLO: la cita anclada tiene que entrar
+ * ENTERA EN UN RENGLÓN. `citas-ancladas.test.ts` matchea línea por línea, así que una cita partida en
+ * dos no existe para él. Pasó acá mismo, en el docblock de `principal-tx-single-writer.static.test.ts`:
+ * el símbolo quedó al final de un renglón y el archivo con su número al principio del siguiente, y el
+ * candado la ignoró EN VERDE. Eso no figura en la lista de "lo que no cierra" de ese archivo, y no se
+ * agregó ahí porque `wallet-error-code.ts` cita su línea 61 SIN ancla y un renglón de más arriba la
+ * rompería en silencio, que es el mismo error que este párrafo documenta. Queda como deuda escrita.
+ *
+ * ⚠️ LA QUE NO SE PUDO ANCLAR, Y QUÉ QUEDÓ EN SU LUGAR. `http-pop-signer.ts:33` cita `:520` por número,
+ * y ese archivo está fuera del Scope IN (NO-TOUCH): la cita no se puede reescribir desde acá. En su
+ * lugar va un CANARIO anclado a esa misma línea, (`Buscar`, `:520`), donde `Buscar` es el label del
+ * botón que esa línea nombra, porque ahí no hay ningún identificador y lo que el candado necesita es una
+ * palabra que esté en LA línea y no en las de al lado. Si la 520 se mueve, el candado se pone rojo y hay
+ * que ir a corregir la cita de allá. ⚠️ LO QUE EL CANARIO NO HACE: no lee `http-pop-signer.ts`, así que
+ * no prueba que esa cita diga la verdad; prueba que la línea 520 de acá no se movió. Las SEIS auto-citas
+ * de este archivo a `:520` (`:1`, `:3`, `:21`, `:31`, `:484` y `:1358`) quedan cubiertas por el mismo
+ * canario, porque todas apuntan a esa línea.
  *
  * 🔴 REGLA DE ESTE BLOQUE (CD-12/CD-14): cada test nombra la edición plausible que lo pone en rojo, Y
  * declara qué NO cubre. Toda atribución "el mutante X lo mata" de acá abajo fue APLICADA Y MEDIDA
@@ -1932,7 +1948,7 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
 
   // El copy VIEJO de `chain-absent`, ESCRITO A MANO (AC-2 / CD-8). ⛔ PROHIBIDO derivarlo del módulo:
   // un test que le pregunta al código qué copy produce y después verifica que produjo ese copy es un
-  // guard que se compara consigo mismo (`history-onchain.test.tsx:43-45`).
+  // guard que se compara consigo mismo (`escrowOutcomeDisplay`, `history-onchain.test.tsx:41-45`).
   const COPY_VIEJO_ABSENT =
     "En el contrato no hay ninguna cuenta para este envío: o el depósito nunca entró, o ya se cerró después de resolverse. Desde acá no podemos decir cuál de las dos.";
 

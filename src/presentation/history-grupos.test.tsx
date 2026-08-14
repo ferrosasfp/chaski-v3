@@ -402,7 +402,7 @@ const CP_VENTANA_ABIERTA = "El contrato dice que tus USDC siguen en el escrow, a
 // Las etiquetas SÍ se derivan del productor, y es la decisión opuesta a la de arriba a propósito: acá
 // el conjunto PROHIBIDO tiene que seguir a `statusDisplay` si alguien le cambia una palabra, o el
 // candado quedaría vigilando una etiqueta que ya nadie pinta. El `Record` fuerza la exhaustividad por
-// tipos (mismo molde que `TODOS` en `flow-vm.test.ts:1873`): un `RemittanceStatus` nuevo no compila
+// tipos, mismo molde que (`TODOS`, `flow-vm.test.ts:1873`): un `RemittanceStatus` nuevo no compila
 // hasta que entra acá.
 const TODOS_LOS_STATUS: Record<RemittanceStatus, true> = {
   created: true,
@@ -529,7 +529,7 @@ describe("WKH-351 · la tarjeta del historial no muestra la etiqueta del trámit
   // encabezado de grupo con el que contradecirse, así que ahí la etiqueta no miente.
   // MUTANTE: sacar el Pill del `Receipt` "por consistencia", que es el sobre-cumplimiento, el error
   // simétrico al bug; borrar `statusDisplay` (no compila); o cambiarle una etiqueta al pasar.
-  // NO DUPLICA: `flow-vm.test.ts:76-101` candadea el lado PURO y `flow.test.tsx:1546-1556` cubre 2 de
+  // NO DUPLICA: (`statusDisplay`, `flow-vm.test.ts:76-101`) candadea el PURO y `flow.test.tsx:1546-1556` cubre 2 de
   // los 7 estados en el recibo. Esto es el lado del RENDER con el conjunto completo.
   it("T-N3: el recibo sigue mostrando la etiqueta, y las 7 siguen siendo 7 y no vacías", () => {
     const { container } = render(
@@ -574,9 +574,10 @@ describe("WKH-351 · la tarjeta del historial no muestra la etiqueta del trámit
 describe("WKH-352 · el desenlace nuevo cae en el grupo que esa fila ya tenía", () => {
   /** WKH-352 · las dos frases de `absent`, ESCRITAS A MANO y no derivadas del módulo (un test que le
    *  pregunta al código qué copy produce y después verifica que produjo ese copy es un guard que se
-   *  compara consigo mismo). Van acá abajo y no con las otras `CP_` porque `flow-vm.test.ts:1905-1911`
-   *  cita TRES líneas de este archivo SIN ancla, y NO las tres desde la 1905: `:405` está en la 1905, y
-   *  `:532` y `:577` en la 1910 y la 1911 (AR r2 · MNR-1, medido; acá decía que las tres iban en :1905). */
+   *  compara consigo mismo). Van acá abajo y no con las otras `CP_` porque son de otra HU. ⚠️ ACÁ HABÍA
+   *  UN BOOKKEEPING DE CITAS ("el docblock de WKH-352 de `flow-vm.test.ts` cita TRES líneas de acá sin ancla"),
+   *  y se borró (CR · MNR-2): esas citas ya no existen, y las dos que este archivo hace a `flow-vm.test.ts`
+   *  van ANCLADAS, así que el desplazamiento lo caza `citas-ancladas.test.ts` y no una regla en prosa. */
   const CP_ABSENT_CON_DEPOSITO =
     "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en la dirección que le corresponde a este envío no hay ninguna cuenta: miramos esa dirección sola, no el contrato entero, y eso es todo lo que medimos. Desde acá no podemos decir si terminó en un pago o en una devolución, ni descartar que la cuenta siga abierta en otra dirección: la que miramos se calcula con la wallet conectada, así que si depositaste con otra, cambiá a esa cuenta en tu billetera y volvé a abrir Chaski: ahí, en la pantalla de inicio, está la opción de recuperar un envío perdido.";
   const CP_ABSENT_AMBIGUO =

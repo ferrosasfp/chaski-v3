@@ -76,6 +76,12 @@
 //          pide mirar quién importa qué desde esos tres archivos, y no se hizo: `flow.tsx` ya
 //          rehidrata adentro de un componente exportado, así que un candado por "export" necesitaría
 //          una excepción el primer día. Queda declarado, y no disfrazado de cobertura.
+//   6. El stripper de comentarios NO entiende los LITERALES DE REGEX (CR · MNR-5). Un `/['"]/` en un
+//      fuente de producción le abre una comilla que no existe, y ese tramo queda SIN strippear: es el
+//      modo de fallo viejo, no uno nuevo que borre código. El alcance exacto, la razón de que el error
+//      se corte en el `\n` y el mutante que lo mide están en el docblock de `escanear`. El control
+//      "ninguna comilla queda abierta" mide el árbol de HOY; lo que no ve es una desincronización que
+//      abre y cierra en el medio de un archivo.
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -87,10 +93,75 @@ const SKIP_DIRS = new Set(["node_modules", ".next", "doc", "migrations"]);
 
 /** El invariante es sobre el CÓDIGO, no sobre la prosa: este mismo archivo, y los docblocks de
  *  `flow-vm.ts`, NOMBRAN `principalTx` y `markPrincipalIn` muchas veces. Sin strippear, el candado se
- *  auto-dispararía con sus propias explicaciones y habría que aflojarlo hasta volverlo inútil. */
-function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+ *  auto-dispararía con sus propias explicaciones y habría que aflojarlo hasta volverlo inútil.
+ *
+ *  🔴 Y EL STRIPPER SACABA MENOS DE LO QUE ESE PÁRRAFO AFIRMABA (CR · MNR-5). Era
+ *  `.replace(/^\s*\/\/.*$/gm, "")`, que saca los `//` A PRINCIPIO DE LÍNEA y NADA MÁS: un comentario de
+ *  FIN DE LÍNEA sobrevivía entero. MEDIDO sobre las funciones puras, antes de tocar nada:
+ *  `stripComments('if (rem.principalTx != null) return true; // ojo: principalTx = la prueba')` devolvía
+ *  la línea COMPLETA y `ESCRITURA.test(...)` daba `true`. Y medido también de punta a punta: con
+ *  `// ojo: principalTx = la prueba del deposito` pegado al final de una LECTURA de verdad, la de
+ *  (`principalTx`, `../presentation/flow-vm.ts:1205`), T-W9(a) denunciaba a `flow-vm.ts` como
+ *  escritor. Por qué eso es grave lo escribe este mismo archivo más arriba: un candado que se dispara
+ *  con las lecturas es uno que alguien va a aflojar hasta volverlo inútil.
+ *
+ *  POR QUÉ UN RECORRIDO Y NO UNA REGEX MÁS ANCHA. El arreglo ingenuo (`.replace(/\/\/.*$/gm, "")`) parte
+ *  cualquier `//` que viva ADENTRO de un string. MEDIDO: `const u = "https://rpc/x"; // nota` queda como
+ *  `const u = "https:`, o sea el stripper borrando código. Y no es un caso inventado para el ejemplo:
+ *  el control de (`refundTx`, `:346`) de este mismo archivo lleva un `//` adentro de un string. Por eso
+ *  esto recorre el fuente carácter por carácter llevando el estado de comillas (simple, doble y
+ *  backtick, con `\` de escape) y corta sólo los `//` que quedan FUERA de una.
+ *
+ *  ⚠️ QUÉ NO MODELA, y está medido, no supuesto: los LITERALES DE REGEX. Un `/['"]/` abre una comilla
+ *  que no existe. El daño está ACOTADO a esa línea a propósito (una comilla que no es backtick se cierra
+ *  en el `\n`, porque en JS un string de comillas no cruza la línea), y la dirección del error es la
+ *  segura: ese tramo queda SIN strippear, que es el modo de fallo VIEJO, no uno nuevo que borre código.
+ *  Lo que puede correr hasta el final del archivo es un backtick impar, y para eso está el control
+ *  "ninguna comilla queda abierta" de abajo, que hoy recorre los fuentes de producción y da CERO. Lo que
+ *  ese control NO ve es una desincronización que abre y cierra en el medio del archivo. */
+type Escaneo = { code: string; comillaAbierta: boolean };
+function escanear(src: string): Escaneo {
+  let out = "";
+  let i = 0;
+  let comilla: string | null = null;
+  while (i < src.length) {
+    const c = src[i] as string;
+    const sig = src[i + 1];
+    if (comilla !== null) {
+      if (c === "\\") {
+        out += c + (sig ?? "");
+        i += 2;
+        continue;
+      }
+      out += c;
+      // Un string de comillas simples o dobles NO cruza la línea: si llegamos al `\n` sin cerrar, lo que
+      // se abrió no era un string (un literal de regex, típicamente) y el error se corta acá.
+      if (c === comilla || (c === "\n" && comilla !== "`")) comilla = null;
+      i += 1;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      comilla = c;
+      out += c;
+      i += 1;
+      continue;
+    }
+    if (c === "/" && sig === "*") {
+      const fin = src.indexOf("*/", i + 2);
+      i = fin === -1 ? src.length : fin + 2;
+      continue;
+    }
+    if (c === "/" && sig === "/") {
+      const fin = src.indexOf("\n", i);
+      i = fin === -1 ? src.length : fin;
+      continue;
+    }
+    out += c;
+    i += 1;
+  }
+  return { code: out, comillaAbierta: comilla !== null };
 }
+const stripComments = (src: string): string => escanear(src).code;
 
 function esTest(rel: string): boolean {
   return /\.test\.tsx?$/.test(rel);
@@ -109,9 +180,15 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** Los fuentes de PRODUCCIÓN: todo `.ts`/`.tsx` bajo src/, app/ y scripts/ que no sea un test. */
-const FUENTES: { rel: string; code: string }[] = SCAN_DIRS.flatMap((d) => walk(path.join(ROOT, d)))
-  .map((abs) => ({ rel: path.relative(ROOT, abs), code: stripComments(readFileSync(abs, "utf8")) }))
+/** Los fuentes de PRODUCCIÓN: todo `.ts`/`.tsx` bajo src/, app/ y scripts/ que no sea un test. El
+ *  `crudo` se guarda para el control del stripper: sin el original no hay contra qué medirlo. */
+const FUENTES: { rel: string; code: string; crudo: string }[] = SCAN_DIRS.flatMap((d) =>
+  walk(path.join(ROOT, d)),
+)
+  .map((abs) => {
+    const crudo = readFileSync(abs, "utf8");
+    return { rel: path.relative(ROOT, abs), code: stripComments(crudo), crudo };
+  })
   .filter((f) => !esTest(f.rel));
 
 /** Escribir el campo: `principalTx:` en un objeto (o en la declaración del tipo) y `principalTx =`.
@@ -151,7 +228,9 @@ const FUENTES: { rel: string; code: string }[] = SCAN_DIRS.flatMap((d) => walk(p
  *  grupo entre paréntesis completo, que es lo que deja pasar `getState()` o `repo.getState(id)`. El
  *  `;` y el `{` son el freno, no un adorno: sin ellos el alternante cruzaría hasta el descriptor o
  *  hasta la sentencia siguiente, y cualquier `defineProperty` cerca de la palabra sería un falso
- *  positivo. El control de `:236` planta exactamente ese caso y sigue dando `false`. El `(` se saca de
+ *  positivo. El control de (`refundTx`, `:346`) planta exactamente ese caso y sigue dando `false`. Esa
+ *  cita decía `:236`, y en esa línea no hay ningún assert: hay un comentario sobre los backticks. Ahora
+ *  va ANCLADA, o sea que la vigila `citas-ancladas.test.ts`. El `(` se saca de
  *  la clase para que las dos ramas de la alternancia no puedan matchear el mismo carácter: si pudieran,
  *  una entrada larga sin cierre haría backtracking exponencial.
  *
@@ -265,6 +344,20 @@ describe("WKH-352 · AC-7: `principalTx` tiene un solo escritor, y corre despué
     // Y el alternante de `defineProperty` no se dispara con OTRA propiedad de la misma llamada: si lo
     // hiciera, cualquier `defineProperty` cerca de la palabra sería un falso positivo.
     expect(ESCRITURA.test('Object.defineProperty(state, "refundTx", { value: x }); // principalTx')).toBe(false);
+    // 🔴 EL CONTROL DEL STRIPPER, QUE ES EL QUE FALTABA (CR · MNR-5). Un comentario de FIN DE LÍNEA con
+    // `principalTx` adentro NO puede disparar el candado: la línea de abajo es una LECTURA. Antes de
+    // este commit los dos asserts daban al revés, y con el comentario pegado a una línea real de
+    // `flow-vm.ts` el invariante (a) denunciaba a ese archivo como escritor.
+    const LECTURA_COMENTADA = "if (rem.principalTx != null) return true; // ojo: principalTx = la prueba";
+    expect(stripComments(LECTURA_COMENTADA)).toBe("if (rem.principalTx != null) return true; ");
+    expect(ESCRITURA.test(stripComments(LECTURA_COMENTADA))).toBe(false);
+    // Y el otro lado, que es lo que rompe el arreglo por regex ancha: el `//` que vive ADENTRO de un
+    // string se QUEDA. Si esto se pusiera rojo, el stripper estaría borrando código, no comentarios.
+    const URL_COMENTADA = 'const u = "https://rpc.devnet/x"; // nota';
+    expect(stripComments(URL_COMENTADA)).toBe('const u = "https://rpc.devnet/x"; ');
+    // Y lo que el stripper ya hacía sigue haciéndolo: comentario de línea entera y bloque.
+    expect(stripComments("  // principalTx: fabricada\nconst x = 1;")).toBe("  \nconst x = 1;");
+    expect(stripComments("/* principalTx = x */\nconst y = 2;")).toBe("\nconst y = 2;");
     // El stripper no vació los fuentes que este archivo mira.
     const remittance = FUENTES.find((f) => f.rel === REMITTANCE);
     expect(remittance?.code).toContain("markPrincipalIn");
@@ -272,6 +365,19 @@ describe("WKH-352 · AC-7: `principalTx` tiene un solo escritor, y corre despué
     // Y el barrido efectivamente barrió: si `FUENTES` quedara vacío, todo lo de abajo pasaría por
     // ausencia. El piso es holgado a propósito: mide que el walk anduvo, no el tamaño del repo.
     expect(FUENTES.length).toBeGreaterThan(50);
+  });
+
+  // 🔴 EL CONTROL DE QUE EL MODELO DE COMILLAS DEL STRIPPER LE SIRVA A ESTE ÁRBOL (CR · MNR-5). El
+  // recorrido no entiende literales de regex: un `/['"]/` en un fuente de producción le abre una comilla
+  // que no existe. Ese error se corta en el `\n` (una comilla que no es backtick no cruza la línea), y
+  // el único que puede correr hasta el final del archivo es un BACKTICK impar. Esto lo mide en vez de
+  // prometerlo. MEDIDO hoy: 0 de los fuentes de producción quedan con una comilla abierta.
+  // MUTANTE MEDIDO: un `const RE = /`/;` en `src/composition/container.ts` ⇒ rojo acá, y sólo acá.
+  // ⚠️ LO QUE NO VE: una desincronización que abre y cierra en el MEDIO del archivo. Eso queda declarado
+  // en el docblock de `escanear`, con la dirección del error (deja sin strippear, no borra código).
+  it("control: ningún fuente de producción deja una comilla abierta al terminar el recorrido", () => {
+    const desincronizados = FUENTES.filter((f) => escanear(f.crudo).comillaAbierta).map((f) => f.rel);
+    expect(desincronizados).toEqual([]);
   });
 
   // 🔴 INVARIANTE (a) — UN SOLO ARCHIVO DE PRODUCCIÓN ESCRIBE EL CAMPO.

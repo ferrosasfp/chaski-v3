@@ -11,7 +11,7 @@
 //
 // 🔴 REGLA DE ESTE ARCHIVO (CD-12): cada test nombra la edición plausible que lo pone en rojo. Un test
 // que no puede nombrar su mutante no es cobertura.
-import { afterEach, describe, expect, it, vi } from "vitest"; // WKH-352: `vi` EN ESTA LÍNEA, no en una nueva — `history-grupos.test.tsx:17` cita `:41` y `flow-vm.test.ts` cita `:43` y `:251`, las tres SIN ancla
+import { afterEach, describe, expect, it, vi } from "vitest"; // WKH-352/CR MNR-2: acá decía que `history-grupos.test.tsx` citaba la línea 41 de este archivo y que `flow-vm.test.ts` citaba la 43 y la 251. Medido con grep: grupos NO cita este archivo por número en ningún lado, y las de `flow-vm.test.ts` eran la 43-45, la 255 y la 473, nunca la 251. Dos de las tres eran falsas, que es lo que le pasa a un bookkeeping en prosa. Hoy la única cita que entra acá va anclada (ver el comentario del import de los fakes)
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { HistoryView, RemittanceFlow } from "./flow";
@@ -29,7 +29,7 @@ import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escr
 import type { EscrowChainState } from "../application/ports";
 import {
   FAKE_SOLANA_BENEFICIARY,
-  FakeSolanaEscrowChainStateReader, FakeSolanaEscrowRefundGateway, // WKH-352/AR r3: el gateway del refund va EN ESTA LÍNEA, no en una nueva. Este archivo se cita por número desde `flow-vm.test.ts:1905` (a `:255`), `:1910` (a `:473`) y `:1935` (a `:43-45`); una línea de más acá arriba corre las tres, y ninguna es anclada, así que `citas-ancladas.test.ts` no las mira. Todo lo que esta ronda AGREGA va al FINAL del archivo, debajo de `:473`
+  FakeSolanaEscrowChainStateReader, FakeSolanaEscrowRefundGateway, // WKH-352/CR MNR-2: acá decía "va EN ESTA LÍNEA" porque tres citas sin ancla de `flow-vm.test.ts` apuntaban a este archivo por número y una línea de más las corría en silencio. Ya no: la única que queda apunta a (`escrowOutcomeDisplay`, `:41-45`) y va ANCLADA, así que si esto se corre, `citas-ancladas.test.ts` se pone rojo en vez de mentir. El amontonamiento se deja como está para no correr nada en este commit, pero ya no es lo que sostiene la cita
   FakeSolanaWallet,
   InMemoryRepo,
   T0,
@@ -252,7 +252,7 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
   // vault salió del escrow y "Entregado" dice que el partner de payout reportó haber entregado los PEN,
   // y uno no prueba el otro.
   // 🔴 LO QUE SÍ MATA EL ASSERT DE CP3_LIBERADO: que la respuesta `released` deje de producir la frase
-  // del vault en la tarjeta. T-V8 (`flow-vm.test.ts:1714`) cubre ese copy en PURO, no en el render.
+  // del vault en la tarjeta. T-V8 cubre ese copy en PURO, no en el render: (`escrowOutcomeDisplay`, `flow-vm.test.ts:1715`).
   // 🔴 EL MUTANTE DEL QUE ESTE TEST SÍ ES DUEÑO, MEDIDO: devolver `<Pill tone={status.tone}>{status.label}</Pill>`
   // a `HistoryEntry` (`flow.tsx:3110`) pone rojo el assert de ausencia de abajo. ⚠️ Lo que NO caza es un
   // `<span>` que pinte la etiqueta con un prefijo ("Estado: Pago en curso"): `queryAllByText` es match
@@ -470,7 +470,7 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
     // EL ASSERT DE CONTROL, que NO es opcional: sin él este test pasa igual aunque el doble esté mal
     // puesto (un `stubGlobal` que no llegó a aplicarse, o un nombre mal escrito) y quedaría verde POR
     // AUSENCIA, que es como un guard deja de existir. Misma disciplina que T-V7
-    // (`flow-vm.test.ts:1705-1707`) y que `evm-residue-guard.static.test.ts:40-43`.
+    // en (`VERBOS`, `flow-vm.test.ts:1704-1707`) y que `evm-residue-guard.static.test.ts:40-43`.
     expect(() => (globalThis.fetch as unknown as () => void)()).toThrow(
       "fetch_prohibido_en_esta_pantalla",
     );

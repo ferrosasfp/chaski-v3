@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"; import { WALLET_SIGN_MESSAGE_ERROR, laBilleteraFueTocada } from "./solana/wallet-error-code"; // WKH-339/CR: EN ESTA LÍNEA — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
 import { Money } from "../domain/money";
-import type { RemittanceState, RemittanceStatus } from "../domain/remittance";
+import type { RemittanceState, RemittanceStatus } from "../domain/remittance"; import { Remittance } from "../domain/remittance"; // WKH-352: EN ESTA LÍNEA, no en una nueva — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número, y `:1714`/`:1873` los citan otros dos tests sin ancla
 import {
   PRINCIPAL_SETTLED_REFUND_MANUAL,
   PRINCIPAL_STATE_UNKNOWN,
@@ -1592,7 +1592,7 @@ describe("WKH-349 · escrowOutcome / escrowOutcomeDisplay", () => {
     "chain-deposited-window-closed": true,
     "chain-released": true,
     "chain-refunded": true,
-    "chain-absent": true,
+    "chain-absent": true, "chain-absent-after-deposit": true,
     "chain-unknown": true,
     "chain-pending": true,
   };
@@ -1640,10 +1640,10 @@ describe("WKH-349 · escrowOutcome / escrowOutcomeDisplay", () => {
   });
 
   // 🔴 T-V4 (CD-2) — "LA CADENA CONTESTÓ QUE NO HAY CUENTA" TAMPOCO ES UNA CONCLUSIÓN SOBRE LA PLATA.
-  // MUTANTE: `absent → chain-released` ("ya se cerró, seguro fue una entrega"), que es la conclusión
-  // tentadora y no medida — una cuenta cerrada no distingue devolución de entrega.
+  // MUTANTE: `absent → chain-released` ("ya se cerró, seguro fue una entrega"), la conclusión tentadora y no medida.
+  // WKH-352: el fixture va SIN `principalTx` a propósito — con la prueba del depósito la rama es otra (T-W1).
   it("T-V4: `absent` es su propio desenlace y su copy no es el de unknown, released ni refunded", () => {
-    expect(escrowOutcome(FIXTURES.unverified, "absent")).toBe("chain-absent");
+    expect(escrowOutcome(rem({ status: "confirmed" }), "absent")).toBe("chain-absent");
     const ausente = escrowOutcomeDisplay("chain-absent").copy;
     expect(ausente).not.toBe(escrowOutcomeDisplay("chain-unknown").copy);
     expect(ausente).not.toBe(escrowOutcomeDisplay("chain-released").copy);
@@ -1855,21 +1855,21 @@ describe("WKH-350 · agrupación del historial", () => {
   });
 
   // 🔴 T-H3 (CD-10, mitad de pertenencia) — QUÉ DESENLACES VAN A CADA GRUPO, ESCRITO A MANO.
-  // Los 4 conjuntos suman los 11 EscrowOutcome, sin solapamiento y sin sobrantes. El `Record`
+  // Los 4 conjuntos suman los 12 EscrowOutcome, sin solapamiento y sin sobrantes. El `Record`
   // exhaustivo de abajo es lo que hace que "sin sobrantes" lo verifique `tsc` y no mi memoria: si el
   // tipo gana un valor y nadie lo agrega acá, este archivo deja de compilar.
   // MUTANTES, cualquiera de los tres pone rojo: mover `chain-released` a "con-plata" (haría que "Con
   // plata en el escrow" mienta sobre una fila cuya plata ya salió); mover `unverified` a "con-plata"
   // ("probablemente tenga plata" es justo la invención que AC-7 prohíbe); mover `no-deposit` a
   // "sin-respuesta" (sí hubo respuesta: nunca se depositó).
-  it("T-H3: cada uno de los 11 desenlaces cae en su grupo, sin solapamiento y sin sobrantes", () => {
+  it("T-H3: cada uno de los 12 desenlaces cae en su grupo, sin solapamiento y sin sobrantes", () => {
     const ESPERADO: Record<HistoryGroup, EscrowOutcome[]> = {
       firma: ["chain-deposited-window-closed"],
       "con-plata": ["in-escrow", "chain-deposited-window-open"],
       "sin-plata": ["returned", "chain-refunded", "chain-released", "no-deposit"],
-      "sin-respuesta": ["unverified", "chain-pending", "chain-absent", "chain-unknown"],
+      "sin-respuesta": ["unverified", "chain-pending", "chain-absent", "chain-absent-after-deposit", "chain-unknown"],
     };
-    // El universo, exhaustivo por `tsc`: los 4 locales + los 7 de cadena.
+    // El universo, exhaustivo por `tsc`: los 4 locales + los 8 de cadena.
     const TODOS: Record<EscrowOutcome, true> = {
       "no-deposit": true,
       "in-escrow": true,
@@ -1879,7 +1879,7 @@ describe("WKH-350 · agrupación del historial", () => {
       "chain-deposited-window-closed": true,
       "chain-released": true,
       "chain-refunded": true,
-      "chain-absent": true,
+      "chain-absent": true, "chain-absent-after-deposit": true,
       "chain-unknown": true,
       "chain-pending": true,
     };
@@ -1887,10 +1887,364 @@ describe("WKH-350 · agrupación del historial", () => {
     for (const g of HISTORY_GROUP_ORDER) {
       for (const o of ESPERADO[g]) expect(historyGroupFor(o)).toBe(g);
     }
-    // Sin solapamiento y sin sobrantes: los 4 conjuntos particionan los 11 valores del tipo.
+    // Sin solapamiento y sin sobrantes: los 4 conjuntos particionan los 12 valores del tipo.
     const escritos = HISTORY_GROUP_ORDER.flatMap((g) => ESPERADO[g]);
-    expect(escritos).toHaveLength(11);
-    expect(new Set(escritos).size).toBe(11);
+    expect(escritos).toHaveLength(12);
+    expect(new Set(escritos).size).toBe(12);
     expect([...escritos].sort()).toEqual((Object.keys(TODOS) as EscrowOutcome[]).sort());
+  });
+});
+
+/**
+ * WKH-352 · LA FILA QUE YA TIENE LA PRUEBA DEL DEPÓSITO DEJA DE COMPARTIR LA FRASE AMBIGUA.
+ *
+ * 🔴 ACÁ VIVÍA UNA REGLA DE EDICIÓN EN PROSA, Y ERA FALSA EN SUS DOS MITADES (CR · MNR-2). Decía que
+ * "SEIS citas `flow-vm.test.ts:NN` sin ancla" apuntaban a este bloque, y que "todo lo que se le agregue
+ * va DEBAJO de la 1911". Medido con
+ * `grep -rEon 'flow-vm\.test\.ts:[0-9]+(-[0-9]+)?' src app scripts contracts`: las citas externas eran
+ * OCHO, con UNA sola anclada (la de `flow-vm.ts:1002` a `:481`), o sea SIETE sin ancla, no seis. Y la
+ * séptima, escrita por esta misma HU, fijaba la 1935, que está DEBAJO de la 1911: el CR insertó una
+ * línea en la 1920, que es exactamente lo que esa regla autorizaba, y el contenido citado se corrió de
+ * 1935 a 1936 SIN UN SOLO ROJO, con `citas-ancladas.test.ts` en verde.
+ *
+ * EL ARREGLO NO FUE CORREGIR EL NÚMERO, FUE ANCLAR. Las cuatro citas externas que apuntan a CÓDIGO de
+ * este archivo hoy llevan símbolo, así que las mira `citas-ancladas.test.ts` y un desplazamiento se
+ * pone ROJO en vez de mentir: (`statusDisplay`, `:76-101`) y (`TODOS`, `:1873`) desde
+ * `history-grupos.test.tsx`, y (`VERBOS`, `:1704-1707`) y (`escrowOutcomeDisplay`, `:1715`) desde
+ * `history-onchain.test.tsx`. Las otras dos eran BOOKKEEPING de esta misma disciplina: una apuntaba a la
+ * PROSA de este párrafo y la otra, desde `history-onchain.test.tsx`, listaba en qué líneas de acá vivían
+ * las citas que la nombraban. Las dos se borraron de raíz, porque con las citas ancladas ese inventario
+ * a mano no hace falta y era el que envejecía solo: de las tres afirmaciones que hacía el de
+ * `history-onchain.test.tsx`, DOS eran falsas cuando se midieron. Cada una de las cuatro citas nuevas se
+ * movió una línea y se comprobó el rojo; no es una atribución deducida.
+ *
+ * ⚠️ UN PUNTO CIEGO DEL CANDADO, ENCONTRADO ESCRIBIENDO ESTE ARREGLO: la cita anclada tiene que entrar
+ * ENTERA EN UN RENGLÓN. `citas-ancladas.test.ts` matchea línea por línea, así que una cita partida en
+ * dos no existe para él. Pasó acá mismo, en el docblock de `principal-tx-single-writer.static.test.ts`:
+ * el símbolo quedó al final de un renglón y el archivo con su número al principio del siguiente, y el
+ * candado la ignoró EN VERDE. Eso no figura en la lista de "lo que no cierra" de ese archivo, y no se
+ * agregó ahí porque `wallet-error-code.ts` cita su línea 61 SIN ancla y un renglón de más arriba la
+ * rompería en silencio, que es el mismo error que este párrafo documenta. Queda como deuda escrita.
+ *
+ * ⚠️ LA QUE NO SE PUDO ANCLAR, Y QUÉ QUEDÓ EN SU LUGAR. `http-pop-signer.ts:33` cita `:520` por número,
+ * y ese archivo está fuera del Scope IN (NO-TOUCH): la cita no se puede reescribir desde acá. En su
+ * lugar va un CANARIO anclado a esa misma línea, (`Buscar`, `:520`), donde `Buscar` es el label del
+ * botón que esa línea nombra, porque ahí no hay ningún identificador y lo que el candado necesita es una
+ * palabra que esté en LA línea y no en las de al lado. Si la 520 se mueve, el candado se pone rojo y hay
+ * que ir a corregir la cita de allá. ⚠️ LO QUE EL CANARIO NO HACE: no lee `http-pop-signer.ts`, así que
+ * no prueba que esa cita diga la verdad; prueba que la línea 520 de acá no se movió. Las SEIS auto-citas
+ * de este archivo a `:520` (`:1`, `:3`, `:21`, `:31`, `:484` y `:1358`) quedan cubiertas por el mismo
+ * canario, porque todas apuntan a esa línea.
+ *
+ * 🔴 REGLA DE ESTE BLOQUE (CD-12/CD-14): cada test nombra la edición plausible que lo pone en rojo, Y
+ * declara qué NO cubre. Toda atribución "el mutante X lo mata" de acá abajo fue APLICADA Y MEDIDA
+ * corriendo el test por nombre, no deducida por simetría.
+ */
+describe("WKH-352 · `absent` con prueba local del depósito", () => {
+  const rem = (s: Partial<RemittanceState>): RemittanceState =>
+    ({ status: "created", principalTx: null, refundTx: null, failureReason: null, ...s }) as RemittanceState;
+
+  const T = "2026-01-01T00:00:00.000Z";
+
+  // El copy VIEJO de `chain-absent`, ESCRITO A MANO (AC-2 / CD-8). ⛔ PROHIBIDO derivarlo del módulo:
+  // un test que le pregunta al código qué copy produce y después verifica que produjo ese copy es un
+  // guard que se compara consigo mismo (`escrowOutcomeDisplay`, `history-onchain.test.tsx:41-45`).
+  const COPY_VIEJO_ABSENT =
+    "En el contrato no hay ninguna cuenta para este envío: o el depósito nunca entró, o ya se cerró después de resolverse. Desde acá no podemos decir cuál de las dos.";
+
+  // El universo de desenlaces, exhaustivo por `tsc`: si el tipo gana un valor y nadie lo agrega acá,
+  // este archivo deja de compilar. Es lo que hace que T-W2 compare contra TODOS los otros copies sin
+  // que nadie tenga que mantener una lista a mano.
+  const OUTCOME_SET_352: Record<EscrowOutcome, true> = {
+    "no-deposit": true,
+    "in-escrow": true,
+    returned: true,
+    unverified: true,
+    "chain-deposited-window-open": true,
+    "chain-deposited-window-closed": true,
+    "chain-released": true,
+    "chain-refunded": true,
+    "chain-absent": true,
+    "chain-absent-after-deposit": true,
+    "chain-unknown": true,
+    "chain-pending": true,
+  };
+  const OUTCOMES_352 = Object.keys(OUTCOME_SET_352) as EscrowOutcome[];
+
+  // 🔴 T-W1 (AC-1) — LA FILA CON PRUEBA DEL DEPÓSITO RECIBE SU PROPIO DESENLACE.
+  // MUTANTE MEDIDO: borrar el ternario de `flow-vm.ts:1205` y volver a `return "chain-absent";`.
+  // Aplicado y medido: T-W1 se pone rojo ("expected 'chain-absent' to be 'chain-absent-after-deposit'").
+  // QUÉ NO CUBRE: no mide que la frase sea comprensible para quien la lee. Eso no lo puede medir un test.
+  it("T-W1: `absent` + `principalTx` ⇒ `chain-absent-after-deposit`, y su copy ya no dice la disyunción", () => {
+    const conPrueba = rem({ status: "principal_in", principalTx: "sig" });
+    expect(escrowOutcome(conPrueba, "absent")).toBe("chain-absent-after-deposit");
+    const copy = escrowOutcomeDisplay("chain-absent-after-deposit").copy;
+    expect(copy).toContain("Tu depósito entró");
+    expect(copy).not.toContain("no podemos decir cuál de las dos");
+  });
+
+  // 🔴 T-W2 (AC-1, AC-5, CD-2) — LA FRASE NUEVA ES SUYA, Y NO AFIRMA CÓMO TERMINÓ.
+  // DOS MUTANTES, MEDIDOS POR SEPARADO PORQUE EL TEST CORTA EN EL PRIMER ASSERT QUE FALLA (decirlo así
+  // es el punto: "cae por (a) y por (b)" con UNA sola corrida es una afirmación que nadie midió):
+  //   (a) copiar el copy de `chain-released` ⇒ rojo en la comparación contra los otros 11
+  //       ("expected 'El contrato dice que tus USDC ya sali…' not to be" el mismo string).
+  //   (b) un copy ÚNICO pero que sí afirma ("Tu depósito entró y tus USDC ya salieron hacia el pago…")
+  //       ⇒ pasa (a) y cae en la regex de afirmación de desenlace. Sin este segundo mutante, la mitad
+  //       (b) de este test nunca se habría ejercitado.
+  // QUÉ NO CUBRE: la regex cubre LAS FORMAS QUE ENUMERA, no "toda afirmación de desenlace". Una frase
+  // como "seguro fue una entrega" pasa este candado. Quien quiera la afirmación amplia tiene que
+  // escribir el candado amplio, no declarar acá que cubre más de lo que cubre.
+  it("T-W2: el copy nuevo no se repite con ningún otro, nombra las dos salidas y no afirma ninguna", () => {
+    const nuevo = escrowOutcomeDisplay("chain-absent-after-deposit").copy;
+    // (a) DERIVADO del `Record` exhaustivo, no de una lista a mano: los otros 11 son "todos menos éste".
+    const otros = OUTCOMES_352.filter((o) => o !== "chain-absent-after-deposit").map(
+      (o) => escrowOutcomeDisplay(o).copy,
+    );
+    expect(otros).toHaveLength(11);
+    for (const otro of otros) expect(nuevo).not.toBe(otro);
+    // (b) Nombra las DOS salidas y dice explícitamente que no puede elegir entre ellas.
+    expect(nuevo).toContain("un pago");
+    expect(nuevo).toContain("una devolución");
+    expect(nuevo).toContain("no podemos decir");
+    // ⚠️ SIN `\b` AL FINAL, Y NO ES ESTILO. Esta regex se escribió como `\b(...)\b` y así DOS de sus
+    // tres formas estaban MUERTAS: `\b` es un borde de palabra ASCII, y `pagó`/`devolvió` terminan en
+    // una letra que NO es `\w`, así que después de la `ó` nunca hay borde y el alternante no matchea
+    // jamás. Medido con `node -e`: `/\b(...|se\s+(pagó|devolvió))\b/i.test("se pagó al beneficiario")`
+    // ⇒ `false`. El control de abajo sólo plantaba "ya salieron", que termina en `n` y sí matcheaba,
+    // así que el agujero era invisible a su propio control. Los `\b` de apertura quedan.
+    const AFIRMA_DESENLACE = /(\bya\s+(salieron|volvieron)|\bfue\s+(un pago|una devolución)|\bse\s+(pagó|devolvió))/i;
+    expect(nuevo).not.toMatch(AFIRMA_DESENLACE);
+    // EL ASSERT DE CONTROL: la regex SÍ matchea sobre una frase plantada que sí afirma. Sin esto, una
+    // regex rota dejaría el assert de arriba verde sobre cualquier copy, incluido uno que afirme. Van
+    // LAS TRES formas, una por alternante, justamente para que ninguna pueda morir en silencio: las
+    // dos de abajo daban ROJO con la versión anterior de la regex, y ése es el hallazgo que las trajo.
+    expect("Tus USDC ya salieron hacia el pago").toMatch(AFIRMA_DESENLACE);
+    expect("Al final se pagó al beneficiario").toMatch(AFIRMA_DESENLACE);
+    expect("Al final se devolvió a tu wallet").toMatch(AFIRMA_DESENLACE);
+    // (c) El peso visual: `normal`. `strong` son EXACTAMENTE los dos `chain-deposited-*` (T-V5).
+    expect(escrowOutcomeDisplay("chain-absent-after-deposit").emphasis).toBe("normal");
+  });
+
+  // 🔴 T-W3 (AC-2) — EL CANDADO: LA FRASE NUEVA NO SE DERRAMA SOBRE QUIEN NO TIENE LA PRUEBA.
+  // MUTANTE MEDIDO: predicar por el CAMINO en vez de por la evidencia, o sea
+  // `return k === "unverified" ? "chain-absent-after-deposit" : "chain-absent";` en `flow-vm.ts:1205`.
+  // Ese predicado es SIEMPRE verdadero ahí (`escrowOutcome` ya cortó en `:1195` con
+  // `if (k !== "unverified") return k`), así que le daría la frase "tu depósito entró" a filas que no
+  // tienen NINGUNA prueba de que entró. Aplicado y medido: T-W3 se pone rojo ("expected
+  // 'chain-absent-after-deposit' to be 'chain-absent'") y NINGÚN otro test de este bloque cae, lo cual
+  // es el punto: este candado es el único que cubre esa edición. El loop corta en el PRIMER fixture, así
+  // que lo medido es que el mutante lo mata, no que los tres asserts se ejecuten y fallen.
+  // SEGUNDO MUTANTE MEDIDO: retocar la frase vieja de `flow-vm.ts:1268` (CD-8) ⇒ T-W3 rojo por el `toBe`.
+  // QUÉ NO CUBRE: no mide el copy NUEVO (eso es T-W1/T-W2), ni cubre un cuarto camino a `unverified`
+  // que alguien agregue después a `escrowFundsKnowledge`.
+  it("T-W3: sin `principalTx`, `absent` sigue dando `chain-absent` con su frase BYTE-IDÉNTICA", () => {
+    // Los tres construidos con MARCADORES REALES, uno por cada camino a `unverified` que existe hoy:
+    // la rama de `refunded` sin el marcador del sender (`flow-vm.ts:211-212`), la de
+    // `PRINCIPAL_STATE_UNKNOWN` (`:216`) y la de `confirmed` (`:219`). Ninguno tiene `principalTx`.
+    const sinPrueba: RemittanceState[] = [
+      rem({ status: "refunded", failureReason: "payout_amount_mismatch" }),
+      rem({ status: "payout_failed", failureReason: PRINCIPAL_STATE_UNKNOWN }),
+      rem({ status: "confirmed" }),
+    ];
+    for (const fixture of sinPrueba) {
+      expect(escrowFundsKnowledge(fixture)).toBe("unverified");
+      expect(escrowOutcome(fixture, "absent")).toBe("chain-absent");
+    }
+    // Byte a byte contra el literal escrito a mano arriba, con `toBe`. No `toContain`, no `toMatch`.
+    expect(escrowOutcomeDisplay("chain-absent").copy).toBe(COPY_VIEJO_ABSENT);
+  });
+
+  // 🔴 T-W4 (AC-1, DT-1) — LA FILA DEL SOLAPE RECIBE LA FRASE NUEVA POR DECISIÓN, NO POR ACCIDENTE.
+  //
+  // ⚠️ EN EL AR ESTA FILA SE VA A LEER COMO UN BUG. No lo es: está decidida en DT-1 y argumentada en
+  // §2.4 del SDD de WKH-352. Los tres caminos de `escrowFundsKnowledge` NO particionan por evidencia,
+  // se SOLAPAN: una remesa `refunded` sin `ESCROW_REFUNDED_BY_SENDER` sale por `flow-vm.ts:211-212`
+  // sin llegar nunca a `:219`, y aun así puede traer `principalTx`. Ese `principalTx` lo escribió el
+  // settle tras un `ok:true`, o sea que el depósito entró de verdad. La evidencia gana al camino.
+  //
+  // EL FIXTURE VA CONSTRUIDO POR EL CAMINO REAL, no a mano: se rehidrata en `confirmed` y de ahí en
+  // adelante son las transiciones de producción, cada una pasando por el guard `canTransition`
+  // (`remittance.ts:319`). `principalTx` lo escribe `markPrincipalIn`, que es el ÚNICO escritor del
+  // campo en todo `src/` (candado: `principal-tx-single-writer.static.test.ts`).
+  // MUTANTE MEDIDO: reintroducir el predicado por camino (`k === "unverified"`) NO lo mata, porque esta
+  // fila ES `unverified` — lo mata el mutante de NO ramificar (volver a `return "chain-absent";`), y así
+  // se midió: el segundo assert se pone rojo. Lo de arriba es exactamente el tipo de atribución que
+  // WKH-351 escribió mal por simetría, así que acá va la medida y no la suposición.
+  // QUÉ NO CUBRE: no mide el copy, ni cubre la colisión teórica de un `PayoutGateway` que devuelva
+  // `"principal_state_unknown"` (declarada en §2.3 del SDD y NO cerrada en esta HU).
+  it("T-W4: `refunded` sin el marcador del sender pero CON depósito confirmado recibe la frase nueva", () => {
+    const r = Remittance.rehydrate(rem({ status: "confirmed" }));
+    r.markPrincipalIn("solana-sig-principal", T); // confirm-and-send.ts:464, tras el `ok:true` del settle
+    r.markPayoutSubmitted("transfi-po-1", T, "transfi"); // confirm-and-send.ts:470
+    r.markPayoutFailed("payout_amount_mismatch", T); // track-remittance.ts:23, vía failAndRefund (:64/74)
+    r.markRefunded("solana-refund-sig", T); // track-remittance.ts:33-34, con recibo real
+    const fixture = r.snapshot as RemittanceState;
+    expect(fixture.status).toBe("refunded");
+    expect(fixture.principalTx).not.toBeNull();
+    expect(fixture.failureReason).not.toBe(ESCROW_REFUNDED_BY_SENDER);
+
+    // (1) Es `unverified` POR LA RAMA DE `refunded` (`flow-vm.ts:211-212`), no por la de `:219`. Se
+    // demuestra con el input: el mismo status SIN `principalTx` ya da `unverified` por sí solo, así que
+    // `:219` no es lo que decide acá.
+    expect(escrowFundsKnowledge(fixture)).toBe("unverified");
+    expect(escrowFundsKnowledge(rem({ status: "refunded", failureReason: "payout_amount_mismatch" }))).toBe(
+      "unverified",
+    );
+    // (2) Y recibe la frase nueva, por decisión: el depósito entró y de eso quedó la firma.
+    expect(escrowOutcome(fixture, "absent")).toBe("chain-absent-after-deposit");
+  });
+
+  // 🔴 T-W5 (AC-1) — LA RAMA NUEVA ES DE `absent` Y DE NINGUNA OTRA RESPUESTA.
+  // MUTANTE MEDIDO: ramificar sobre `principalTx` ANTES del `switch` de respuestas, o sea poner
+  // `if (rem.principalTx != null) return "chain-absent-after-deposit";` arriba de `flow-vm.ts:1197`.
+  // "No pudimos preguntar" pasaría a decirle a la persona que la cuenta se cerró. Aplicado y medido:
+  // T-W5 se pone rojo. QUÉ NO CUBRE: mide el DESENLACE, no el copy de cada uno.
+  it("T-W5: con `principalTx`, SÓLO `absent` produce el valor nuevo; las otras 7 respuestas no se mueven", () => {
+    const conPrueba = rem({ status: "principal_in", principalTx: "sig" });
+    // Exhaustivo por `tsc`: si `EscrowChainAnswer` gana un valor y nadie lo mapea acá, no compila. Es
+    // el mismo motivo por el que `ANSWER_SET` (`:1572`) existe: una lista a mano deja de mirar el valor
+    // nuevo justo el día que se agrega.
+    const ESPERADO_352: Record<EscrowChainAnswer, EscrowOutcome> = {
+      "deposited-window-open": "chain-deposited-window-open",
+      "deposited-window-closed": "chain-deposited-window-closed",
+      released: "chain-released",
+      refunded: "chain-refunded",
+      absent: "chain-absent-after-deposit",
+      unknown: "chain-unknown",
+      pending: "chain-pending",
+      "not-asked": "unverified",
+    };
+    const respuestas = Object.keys(ESPERADO_352) as EscrowChainAnswer[];
+    expect(respuestas).toHaveLength(8);
+    for (const a of respuestas) expect(escrowOutcome(conPrueba, a)).toBe(ESPERADO_352[a]);
+    // Y el valor nuevo sale de UNA sola respuesta, no de varias.
+    const producen = respuestas.filter(
+      (a) => escrowOutcome(conPrueba, a) === "chain-absent-after-deposit",
+    );
+    expect(producen).toEqual(["absent"]);
+  });
+
+  // 🔴 T-W10 (AR · BLQ-MED-1) — LA FRASE NUEVA DICE LO MEDIDO, NO LO DEDUCIDO.
+  //
+  // POR QUÉ EXISTE, que es la parte que no se puede omitir. La primera versión de este copy decía
+  // "...y en el contrato ya no hay ninguna cuenta para este envío, ASÍ QUE ESA CUENTA SE CERRÓ DESPUÉS
+  // DE RESOLVERSE". Esa segunda mitad no la sostiene esta fila. Concluir "se cerró" exige saber que la
+  // dirección que consultamos HOY es la misma que creó aquel depósito, y esa dirección sale de tres
+  // cosas de las que el snapshot NO guarda las dos que importan: el program address es un literal del
+  // código (`address`, `../infrastructure/solana/escrow-idl.ts:16`), el endpoint lo elige
+  // (`resolveSolanaRpcUrlPublic`, `../infrastructure/chain.ts:190`) leyendo `NEXT_PUBLIC_SOLANA_RPC_URL`,
+  // y (`RemittanceState`, `../domain/remittance.ts:250`) no tiene ni `programId` ni cluster. Lo ÚNICO
+  // medido cuando la cadena contesta `absent` es "en la dirección que derivamos hoy no hay cuenta".
+  //
+  // EL DAÑO DE DECIR MÁS, que es por qué esto es un candado y no una preferencia de redacción: un
+  // cambio de program address (ya pasó acá, commit `89628d8`), el cutover a mainnet, o una
+  // `NEXT_PUBLIC_SOLANA_RPC_URL` mal apuntada harían que la pantalla le dijera a alguien que no hay
+  // nada que recuperar sobre una fila donde SÍ lo hay, apagándole (`LostEscrowRecovery`,
+  // `flow.tsx:755`), que es la puerta que le queda. Argumento largo en el docblock de
+  // (`escrowOutcomeDisplay`, `flow-vm.ts:1251`).
+  //
+  // MUTANTE MEDIDO: reponer esa media frase en `flow-vm.ts:1267`. Aplicado y medido: T-W10 se pone
+  // rojo por el primer assert, y de este bloque no cae ningún otro.
+  // SEGUNDO MUTANTE MEDIDO: borrar el "ni descartar que la cuenta siga abierta..." final (o sea sacar
+  // el "se cerró" y no poner nada en su lugar, que deja la misma puerta cerrada por omisión) ⇒ T-W10
+  // rojo por el assert `toContain("siga abierta")`, y T-W2 verde. Sin ese assert el mutante pasaba.
+  // ⚠️ Re-medido en el fix-pack r2, porque el copy cambió (BLQ-BAJO-1) y una atribución sobre un texto
+  // que ya no existe es exactamente la clase de prosa que envejece sola: con el copy de hoy y ese
+  // recorte, `2 failed | 170 passed`: T-W10 por `siga abierta` y T-W11 por su propio assert del escape
+  // (o sea que ese mutante ya NO lo caza sólo este test), con T-W2 verde. Se nombra el ASSERT y no su
+  // ordinal: los tres controles nuevos de acá abajo corrieron los números y la frase habría mentido.
+  //
+  // ⚠️ QUÉ NO CUBRE (CD-14): la regex cubre LAS FORMAS DE CIERRE QUE ENUMERA, no toda afirmación sobre
+  // el pasado de la cuenta. "Ese envío ya está resuelto" pasa este candado. Y no mide nada sobre la
+  // dirección real: no compara programa ni cluster contra nada, porque el snapshot no los tiene. Lo
+  // que hace es impedir que el COPY afirme lo que el dato no sostiene.
+  it("T-W10: el copy nuevo no afirma que la cuenta se haya cerrado, y deja abierta la tercera posibilidad", () => {
+    const nuevo = escrowOutcomeDisplay("chain-absent-after-deposit").copy;
+    // Sin `\b` de cierre a propósito: `cerró` termina en una letra que no es `\w` y el borde ASCII
+    // nunca matchea después de la `ó`. Es el mismo defecto que este commit corrigió en T-W2.
+    const AFIRMA_CIERRE = /(se\s+cerr[óo]|qued[óo]\s+cerrada|fue\s+cerrada|ya\s+no\s+existe)/i;
+    expect(nuevo).not.toMatch(AFIRMA_CIERRE);
+    // EL ASSERT DE CONTROL: la regex SÍ matchea la media frase que el AR rechazó, TEXTUAL. Sin esto,
+    // una regex rota dejaría el assert de arriba verde sobre cualquier copy, incluido el rechazado.
+    expect("así que esa cuenta se cerró después de resolverse").toMatch(AFIRMA_CIERRE);
+    // 🔴 UN CONTROL POR ALTERNANTE (AR r2 · MNR-2). Acá había UN solo control y la regex tiene CUATRO
+    // formas: los otros tres alternantes no los ejercitaba nadie, así que uno roto (un `\b` de más, un
+    // acento mal escrito) habría quedado muerto en silencio, que es EXACTAMENTE el defecto que T-W2
+    // documenta dos bloques más arriba y que este archivo ya pagó una vez. LA REGLA, ESCRITA ACÁ Y NO CITADA (AR r3 · MNR-1): SI LA REGEX TIENE N ALTERNANTES, EL CONTROL NECESITA N. Acá decía "la regla, escrita en `auto-blindaje.md:139`", y esa cita no la podía seguir nadie: `doc/` está gitignoreado (`.gitignore:36`) y `git ls-files doc` da 0, así que desde un clone limpio ese archivo NO EXISTE; encima el número estaba corrido (la frase vive en la línea 140, no en la 139). Una regla que el
+    // lector no puede leer no es una regla: por eso ahora vive en el test. Medido como
+    // DIAGONAL y no "los cuatro matchean": se sacó cada alternante uno por uno y se corrieron los
+    // cuatro controles ⇒ `0111`, `1011`, `1101`, `1110`. Cada control muere con SU alternante y con
+    // ninguno más; cuatro controles que matchean por el MISMO alternante no habrían probado nada.
+    expect("y quedó cerrada esa misma noche").toMatch(AFIRMA_CIERRE);
+    expect("la cuenta fue cerrada por el programa").toMatch(AFIRMA_CIERRE);
+    expect("esa cuenta ya no existe en la cadena").toMatch(AFIRMA_CIERRE);
+    // La tercera posibilidad, nombrada: que la cuenta siga abierta donde no estamos mirando.
+    expect(nuevo).toContain("siga abierta");
+    // Y lo que el copy SÍ sostiene se queda: el depósito entró, con su firma confirmada.
+    expect(nuevo).toContain("Tu depósito entró");
+    // ⚠️ LA REGEX NO SE LE APLICA A `chain-absent`, Y NO ES UN OLVIDO: esa frase menciona el cierre
+    // como UNA de dos posibilidades ("o ya se cerró"), no como un hecho. Este assert deja escrito que
+    // sigue diciéndolo y que CD-8 no se rompió al arreglar la frase nueva.
+    expect(escrowOutcomeDisplay("chain-absent").copy).toContain("o ya se cerró después de resolverse");
+    expect(escrowOutcomeDisplay("chain-absent").copy).toBe(COPY_VIEJO_ABSENT);
+  });
+
+  // 🔴 T-W11 (AR r2 · BLQ-BAJO-1) — EL COPY NO GENERALIZA DE UNA DIRECCIÓN A TODO EL CONTRATO, Y SU
+  // ESCAPE APUNTA DONDE LA CUENTA PUEDE ESTAR DE VERDAD.
+  //
+  // POR QUÉ EXISTE, y son dos afirmaciones distintas que el copy hacía de más:
+  //   (1) decía "en EL CONTRATO que estamos consultando no figura ninguna cuenta para este envío". Lo
+  //       que se lee es UNA dirección: la que (`deriveEscrowStateFromId16`, `../infrastructure/solana-wallet.ts:294`)
+  //       deriva de "escrow" + sender + id16, no el programa entero.
+  //       El docblock de (`escrowOutcomeDisplay`, `flow-vm.ts:1251`) ya decía que lo ÚNICO medido es
+  //       "en la dirección que derivamos HOY no hay cuenta": el copy afirmaba más que su propio
+  //       docblock, y ese par (prosa que afirma / docblock que acota) es el que nadie vuelve a leer.
+  //   (2) la tercera posibilidad decía "siga abierta en un contrato que no estamos mirando", y ése es
+  //       justo el lugar donde el más plausible de los cuatro disparadores NO la pone: si el depósito
+  //       lo firmó otra cuenta de la wallet, la cuenta vive en ESTE MISMO programa con otro sender, y
+  //       (`LostEscrowRecovery`, `flow.tsx:2036`) la encuentra porque resuelve por sender. Mandar a un
+  //       "otro contrato" es mandar a la persona al único lugar donde no hay nada que buscar.
+  //
+  // MUTANTE MEDIDO: reponer en `flow-vm.ts:1267` la frase vieja ("Y en el contrato que estamos
+  // consultando no figura ninguna cuenta para este envío... siga abierta en un contrato que no estamos
+  // mirando"). Aplicado y medido: T-W11 rojo por el primer assert, y de ESTE bloque no cae ningún otro
+  // (T-W10 sigue verde: la frase vieja tampoco decía "se cerró"). Fuera de este archivo caen TRES, los
+  // que comparan el literal byte a byte: T-W8 en `history-grupos.test.tsx`, y T-W6 y T-W7 en
+  // `history-onchain.test.tsx`. Corrida completa del mutante: `4 failed | 191 passed`.
+  // SEGUNDO MUTANTE MEDIDO: dejar la primera mitad corregida y volver SÓLO el escape a "esa cuenta siga
+  // abierta en un contrato que no estamos mirando" ⇒ T-W11 rojo, `1 failed | 171 passed`, y el rojo cae
+  // en `toContain("siga abierta en otra dirección")`, no en el `not.toContain` del final (el test corta
+  // en el primer assert que falla, así que del `not.toContain` lo único medido es que existe). El
+  // primer assert queda VERDE con este mutante, que es exactamente por qué la mitad (2) necesita
+  // asserts propios y no alcanzaba con la regex.
+  //
+  // ⚠️ QUÉ NO CUBRE (CD-14). La regex cubre LAS DOS FORMAS QUE ENUMERA, no toda generalización: "no
+  // encontramos la cuenta en el escrow" pasa este candado. No mide que la persona entienda la
+  // distinción entre una dirección y el programa, que ningún test puede medir. Y no mide nada de la
+  // dirección real: sigue sin haber `programId` ni cluster en el snapshot.
+  //
+  // ⚠️ LA MISMA GENERALIZACIÓN VIVE EN LA FRASE CONGELADA DE `chain-absent` ("En el contrato no hay
+  // ninguna cuenta para este envío"), y ACÁ NO SE ARREGLA: CD-8 la declara byte-idéntica en esta HU.
+  // Queda dicho, no disfrazado, y es lo que el control de abajo usa como espécimen real.
+  it("T-W11: el copy nuevo habla de la dirección de este envío, no del contrato entero", () => {
+    const nuevo = escrowOutcomeDisplay("chain-absent-after-deposit").copy;
+    const GENERALIZA = /(en el contrato\s+(que estamos consultando\s+)?no\s+(hay|figura)|el contrato\s+no\s+(tiene|registra))/i;
+    expect(nuevo).not.toMatch(GENERALIZA);
+    // UN CONTROL POR ALTERNANTE (la regla de MNR-2, aplicada también acá), y MEDIDO como diagonal: se
+    // sacó cada alternante uno por uno y se corrieron los cuatro controles. Resultado, en el orden en
+    // que están escritos: `0111`, `1011`, `1101`, `1110`. O sea que cada control muere con SU
+    // alternante y con ninguno más, que es lo que un control tiene que probar. El primero no es una
+    // frase inventada: es la frase congelada de `chain-absent`, el espécimen que motivó el hallazgo.
+    expect(COPY_VIEJO_ABSENT).toMatch(GENERALIZA);
+    expect("Y en el contrato que estamos consultando no figura ninguna cuenta").toMatch(GENERALIZA);
+    expect("el contrato no tiene ninguna cuenta para este envío").toMatch(GENERALIZA);
+    expect("el contrato no registra ninguna cuenta para este envío").toMatch(GENERALIZA);
+    // Y lo que el copy SÍ dice: el alcance de la lectura, explícito.
+    expect(nuevo).toContain("la dirección que le corresponde a este envío");
+    expect(nuevo).toContain("no el contrato entero");
+    // El escape apunta a OTRA DIRECCIÓN y a la wallet, no a otro contrato.
+    expect(nuevo).toContain("siga abierta en otra dirección");
+    expect(nuevo).toContain("wallet conectada");
+    expect(nuevo).not.toContain("un contrato que no estamos mirando");
   });
 });

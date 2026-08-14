@@ -8,13 +8,13 @@
 // dentro de cada sección sea el acordado, que no aparezca ningún botón nuevo, y que la ausencia de
 // respuesta no se disfrace de respuesta.
 //
-// ⚠️ COBERTURA REAL: 10 DE LOS 11 DESENLACES A NIVEL COMPONENTE, no los 11. Nueve salen del montaje
-// base de T-H4 y `unverified` sale de T-H9. El que falta es `chain-pending`, y no es un olvido: el
-// doble `FakeSolanaEscrowChainStateReader` tiene modos `"resolve"` y `"reject"`, y para que la
-// pantalla quede en `pending` haría falta uno que NUNCA resuelva, lo que obliga a editar
-// `src/test-support/fakes.ts`, que está fuera del alcance de esta HU. `chain-pending` queda cubierto
-// sólo a nivel puro, por T-H3 en `flow-vm.test.ts`. Es la misma situación que este repo ya declara en
-// `history-onchain.test.tsx:41-42` para `chain-absent` y `chain-pending`.
+// ⚠️ COBERTURA REAL: 11 DE LOS 12 DESENLACES A NIVEL COMPONENTE, no los 12. Nueve salen del montaje
+// base de T-H4, `unverified` sale de T-H9 y `chain-absent` sale del segundo montaje de T-W8. El que
+// falta es `chain-pending`, y no es un olvido: el doble `FakeSolanaEscrowChainStateReader` tiene modos
+// `"resolve"` y `"reject"`, y para que la pantalla quede en `pending` haría falta uno que NUNCA
+// resuelva, lo que obliga a editar `src/test-support/fakes.ts`, fuera del alcance. `chain-pending`
+// queda cubierto sólo a nivel puro, por T-H3 en `flow-vm.test.ts`. ⚠️ OJO CON EL MONTAJE BASE: desde
+// WKH-352 su fila `rem-absent` da `chain-absent-after-deposit`, NO `chain-absent` (trae `principalTx`).
 //
 // ⚠️ POR QUÉ TAMPOCO ENTRAN LOS 11 EN UN SOLO MONTAJE: con `reader` y `sender` presentes y la promesa
 // resuelta, la respuesta de la pantalla es un `Map`, y una clave faltante se lee `"unknown"`, nunca
@@ -402,7 +402,7 @@ const CP_VENTANA_ABIERTA = "El contrato dice que tus USDC siguen en el escrow, a
 // Las etiquetas SÍ se derivan del productor, y es la decisión opuesta a la de arriba a propósito: acá
 // el conjunto PROHIBIDO tiene que seguir a `statusDisplay` si alguien le cambia una palabra, o el
 // candado quedaría vigilando una etiqueta que ya nadie pinta. El `Record` fuerza la exhaustividad por
-// tipos (mismo molde que `TODOS` en `flow-vm.test.ts:1873`): un `RemittanceStatus` nuevo no compila
+// tipos, mismo molde que (`TODOS`, `flow-vm.test.ts:1873`): un `RemittanceStatus` nuevo no compila
 // hasta que entra acá.
 const TODOS_LOS_STATUS: Record<RemittanceStatus, true> = {
   created: true,
@@ -529,7 +529,7 @@ describe("WKH-351 · la tarjeta del historial no muestra la etiqueta del trámit
   // encabezado de grupo con el que contradecirse, así que ahí la etiqueta no miente.
   // MUTANTE: sacar el Pill del `Receipt` "por consistencia", que es el sobre-cumplimiento, el error
   // simétrico al bug; borrar `statusDisplay` (no compila); o cambiarle una etiqueta al pasar.
-  // NO DUPLICA: `flow-vm.test.ts:76-101` candadea el lado PURO y `flow.test.tsx:1546-1556` cubre 2 de
+  // NO DUPLICA: (`statusDisplay`, `flow-vm.test.ts:76-101`) candadea el PURO y `flow.test.tsx:1546-1556` cubre 2 de
   // los 7 estados en el recibo. Esto es el lado del RENDER con el conjunto completo.
   it("T-N3: el recibo sigue mostrando la etiqueta, y las 7 siguen siendo 7 y no vacías", () => {
     const { container } = render(
@@ -568,5 +568,88 @@ describe("WKH-351 · la tarjeta del historial no muestra la etiqueta del trámit
     const montoYFecha = within(fila).getByText(/^\$400\.00 ·/);
     expect(montoYFecha.textContent).not.toContain("sin fecha");
     expect(within(fila).getAllByRole("button")).toHaveLength(1);
+  });
+});
+
+describe("WKH-352 · el desenlace nuevo cae en el grupo que esa fila ya tenía", () => {
+  /** WKH-352 · las dos frases de `absent`, ESCRITAS A MANO y no derivadas del módulo (un test que le
+   *  pregunta al código qué copy produce y después verifica que produjo ese copy es un guard que se
+   *  compara consigo mismo). Van acá abajo y no con las otras `CP_` porque son de otra HU. ⚠️ ACÁ HABÍA
+   *  UN BOOKKEEPING DE CITAS ("el docblock de WKH-352 de `flow-vm.test.ts` cita TRES líneas de acá sin ancla"),
+   *  y se borró (CR · MNR-2): esas citas ya no existen, y las dos que este archivo hace a `flow-vm.test.ts`
+   *  van ANCLADAS, así que el desplazamiento lo caza `citas-ancladas.test.ts` y no una regla en prosa. */
+  const CP_ABSENT_CON_DEPOSITO =
+    "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en la dirección que le corresponde a este envío no hay ninguna cuenta: miramos esa dirección sola, no el contrato entero, y eso es todo lo que medimos. Desde acá no podemos decir si terminó en un pago o en una devolución, ni descartar que la cuenta siga abierta en otra dirección: la que miramos se calcula con la wallet conectada, así que si depositaste con otra, cambiá a esa cuenta en tu billetera y volvé a abrir Chaski: ahí, en la pantalla de inicio, está la opción de recuperar un envío perdido.";
+  const CP_ABSENT_AMBIGUO =
+    "En el contrato no hay ninguna cuenta para este envío: o el depósito nunca entró, o ya se cerró después de resolverse. Desde acá no podemos decir cuál de las dos.";
+
+  /** WKH-352 · el gemelo SIN la prueba del depósito: se firmó la autorización y nunca se registró el
+   *  desenlace. Cae en `unverified` por `status: "confirmed"`, así que se le pregunta igual, pero
+   *  `principalTx` es `null` y la cadena `absent` lo deja en `chain-absent`. */
+  function sinPruebaSnapshot(id: string): RemittanceState {
+    const r = quotedRemittance(id);
+    r.applyKyc(passKyc, T0);
+    r.confirm(T0);
+    return r.snapshot;
+  }
+
+  // 🔴 T-W8 (WKH-352 / AC-4) — EL DESENLACE NUEVO NO MUEVE NINGUNA FILA DE GRUPO.
+  // El montaje base ya sirve tal cual: `rem-absent` es `unverifiedSnapshot` (`:163`), que llama
+  // (`markPrincipalIn`, `:116`), así que desde WKH-352 esa fila ES el caso de AC-1. Lo que este test
+  // fija es que ganar una frase propia NO la mueve: sigue bajo "Sin respuesta sobre tu plata", que es
+  // el grupo que ya tenía, y el reparto de las 9 filas no cambia.
+  // MUTANTE MEDIDO: mapear `"chain-absent-after-deposit"` a `"sin-plata"` en `GRUPO_POR_DESENLACE`
+  // (`flow-vm.ts:1364`), que es la edición tentadora ("total, ya se resolvió"). Es justo la que
+  // AFIRMARÍA sobre la plata de alguien: mandaría bajo "Sin plata en el escrow" una fila de la que lo
+  // único que se sabe es que el depósito entró y que la cuenta se cerró.
+  // Medido: T-W8 rojo. Y medido también lo que NO es exclusivo de acá: ese mismo mutante pone rojo a
+  // T-H3 en `flow-vm.test.ts`, a nivel puro. Lo que T-W8 agrega es que la fila esté REALMENTE bajo ese
+  // encabezado en el DOM, que es lo que T-H3 no puede ver.
+  // SEGUNDO MONTAJE, y no es un adorno: cubre `chain-absent` a nivel componente, que el montaje base
+  // dejó de cubrir cuando `rem-absent` pasó a tener `principalTx`. Sin él, esta HU BAJA la cobertura de
+  // componente en un desenlace y nadie se entera.
+  // QUÉ NO CUBRE (CD-14): no mide el texto de la frase nueva (eso es T-W6), ni el orden dentro del
+  // grupo, ni `chain-pending` (ver el encabezado del archivo).
+  it("T-W8: la fila con prueba del depósito sigue en 'Sin respuesta sobre tu plata', y nada se mueve", async () => {
+    const reader = new FakeSolanaEscrowChainStateReader(NUEVE_RESPUESTAS);
+    render(
+      <HistoryView
+        items={NUEVE_FILAS}
+        onOpen={() => {}}
+        onBack={() => {}}
+        reader={reader}
+        sender={FAKE_SOLANA_BENEFICIARY}
+      />,
+    );
+    await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(9));
+
+    // La frase de AC-1 está, y está DENTRO del grupo "sin-respuesta".
+    const sinRespuesta = screen.getByTestId("grupo-sin-respuesta");
+    expect(within(sinRespuesta).getByText(CP_ABSENT_CON_DEPOSITO)).toBeInTheDocument();
+    // Y NO está en ninguno de los otros tres. Es la mitad que caza el mutante: si el valor nuevo
+    // mapeara a "sin-plata", la frase aparecería ahí y este assert cae.
+    for (const otro of ["grupo-firma", "grupo-con-plata", "grupo-sin-plata"]) {
+      expect(within(screen.getByTestId(otro)).queryByText(CP_ABSENT_CON_DEPOSITO)).toBeNull();
+    }
+    // El reparto no cambió: siguen siendo 9 filas, ni una se perdió ni se duplicó.
+    expect(screen.getAllByRole("listitem")).toHaveLength(9);
+
+    // SEGUNDO MONTAJE: la fila SIN la prueba cae en el MISMO grupo, con la frase ambigua. Las dos
+    // variantes de `absent` comparten grupo, que es exactamente lo que AC-4 pide.
+    cleanup();
+    const reader2 = new FakeSolanaEscrowChainStateReader(mapa([["rem-sin-prueba", "absent"]]));
+    render(
+      <HistoryView
+        items={[sinPruebaSnapshot("rem-sin-prueba")]}
+        onOpen={() => {}}
+        onBack={() => {}}
+        reader={reader2}
+        sender={FAKE_SOLANA_BENEFICIARY}
+      />,
+    );
+    const sinRespuesta2 = await screen.findByTestId("grupo-sin-respuesta");
+    expect(within(sinRespuesta2).getByText(CP_ABSENT_AMBIGUO)).toBeInTheDocument();
+    // Y esa fila NO dice la frase de AC-1: sin prueba, no se afirma que el depósito entró.
+    expect(within(sinRespuesta2).queryByText(CP_ABSENT_CON_DEPOSITO)).toBeNull();
   });
 });

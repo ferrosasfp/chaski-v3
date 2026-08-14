@@ -530,12 +530,31 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
  * misma que lo volvía inaplicable. El recorrido real terminaba en `escrow_not_found` con la billetera
  * VIEJA, sobre una fila cuyo propio copy dice que ahí SÍ puede haber algo.
  *
- * QUÉ MODELA `cleanup()` + `render()` CON EL MISMO CONTAINER, dicho para que nadie le pida más: una
- * REAPERTURA de la app. Lo que se pierde es el estado de React (`address` entre ellos) y lo que
- * sobrevive es lo durable (el repo, que en producción es `localStorage`). No modela el autoConnect del
- * adapter real de la billetera: acá ese rol lo hace `connect()` del doble, que contesta la cuenta
- * activa del momento. Si mañana la app arrancara `address` desde algún lado persistido, el consejo
- * dejaría de funcionar y T-W12 se pondría rojo, que es exactamente para lo que está.
+ * QUÉ MODELA `cleanup()` + `render()` CON EL MISMO CONTAINER, y CUÁL DE LOS DOS HACE EL TRABAJO. El
+ * reparto importa más que la etiqueta, así que va primero: el modelo de una REAPERTURA de la app es el
+ * SEGUNDO `render()`, que monta una instancia NUEVA de `RemittanceFlow`, con su `address` (un `useState`)
+ * arrancando en `null`; lo durable (el repo, que en producción es `localStorage`) sobrevive porque el
+ * container es el mismo. `cleanup()` NO es lo que tira el estado de React: sólo desmonta el árbol viejo
+ * del DOM. MEDIDO (AR r4 · MNR-1): comentando el `cleanup()` del paso (3), T-W12 pasaba igual, verde de
+ * punta a punta. No era un falso verde: el candado medía bien lo suyo, y lo que estaba mal era ESTE
+ * docblock, que nombraba a `cleanup()` como la mitad del mecanismo e invitaba a "simplificar" el par por
+ * algo que ya no es una reapertura.
+ *
+ * POR QUÉ `cleanup()` SE QUEDA, y con un assert propio que lo vuelve load-bearing (paso 3): sin él
+ * quedan DOS árboles vivos en `document.body`, o sea dos instancias de la app abiertas a la vez, y el
+ * consejo habla de volver a abrir UNA. Sin ese assert, los pasos (4) y (5) pasaban igual sobre los dos
+ * árboles, pero de casualidad: el viejo había quedado parado en el historial, donde no está ni ese botón
+ * ni ese texto. El assert convierte esa casualidad en una condición medida, y desde esta ronda el
+ * mutante de arriba sale ROJO.
+ *
+ * ⚠️ SI VENÍS A SIMPLIFICAR ESTO: reemplazar el par por un re-render sobre el MISMO árbol no modela una
+ * reapertura, porque el estado de React sobrevive. Qué pasa en ese caso no hay que suponerlo: está
+ * medido al lado, en T-W12(control), donde la búsqueda sale con la cuenta VIEJA.
+ *
+ * El par tampoco modela el autoConnect del adapter real de la billetera: acá ese rol lo hace `connect()`
+ * del doble, que contesta la cuenta activa del momento. Si mañana la app arrancara `address` desde algún
+ * lado persistido, el consejo dejaría de funcionar y T-W12 se pondría rojo, que es exactamente para lo
+ * que está.
  *
  * ⛔ LO QUE ESTE BLOQUE NO HACE, Y NO POR OLVIDO: no agrega ningún control de "cambiar billetera" ni
  * toca `resolveSender`. Ese es un defecto real, pero cambia el comportamiento de la conexión para toda
@@ -597,6 +616,9 @@ describe("WKH-352 · AR r3 · el consejo del copy, ejecutado", () => {
   // MUTANTE (b) MEDIDO — el camino deja de funcionar sin que el copy cambie: sembrar `address` desde
   // algo persistido al montar (el "recordá mi billetera" que cualquiera agrega). Rojo acá por el
   // `sender`, que vuelve a salir con la cuenta vieja aunque el texto siga diciendo lo mismo.
+  // MUTANTE (c) MEDIDO (AR r4 · MNR-1) — sacar el `cleanup()` del paso (3), o sea abrir la segunda app
+  // sin cerrar la primera. Rojo acá desde esta ronda, por el assert del paso (3); antes de ese assert
+  // este mismo mutante salía verde, y esa era la razón del hallazgo.
   // ⚠️ QUÉ NO CUBRE: no mide que la persona entienda la frase, ni el autoConnect del adapter real, ni
   // que exista un escrow abierto del otro lado (el doble resuelve siempre). Mide el ÚNICO hecho del
   // que dependía el hallazgo: qué identidad viaja en la búsqueda después de seguir el consejo.
@@ -616,8 +638,14 @@ describe("WKH-352 · AR r3 · el consejo del copy, ejecutado", () => {
     // (2) "cambiá a esa cuenta en tu billetera".
     wallet.actual = OTRA_CUENTA;
 
-    // (3) "volvé a abrir Chaski". Se pierde el estado de React; el repo, que es lo durable, sobrevive.
+    // (3) "volvé a abrir Chaski". LO QUE MODELA LA REAPERTURA ES EL `render()` DE ABAJO, que monta una
+    // instancia nueva con `address` en `null`; el repo, que es lo durable, sobrevive en el container.
+    // `cleanup()` sólo desmonta el árbol viejo: hasta AR r4 · MNR-1 era inerte, y estaba medido que
+    // comentarlo dejaba este test igual de verde. El assert que sigue es lo que le da trabajo, y con él
+    // ese mismo mutante ya sale rojo acá: cierra la app vieja antes de abrir la nueva, en vez de dejar
+    // dos abiertas a la vez, que no es lo que dice el copy.
     cleanup();
+    expect(screen.queryByText(CP9_ABSENT_CON_DEPOSITO)).toBeNull();
     render(<RemittanceFlow container={container} />);
 
     // (4) "ahí, en la pantalla de inicio, está la opción de recuperar un envío perdido".

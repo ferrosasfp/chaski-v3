@@ -102,14 +102,32 @@ const FUENTES: { rel: string; code: string }[] = SCAN_DIRS.flatMap((d) => walk(p
  *  así que no era una forma exótica. MEDIDO: con `const MUTANTE2: Record<string, string> = {
  *  "principalTx": "fabricada" };` agregado a `container.ts`, la versión sin comilla daba
  *  `5 passed`; con esta da rojo en T-W9(a). El `\]?` cierra la misma puerta por acceso indexado
- *  (`state["principalTx"] = x`). El control de abajo planta las cuatro formas, porque el agujero era
- *  invisible a su propio control: éste sólo probaba las dos SIN comillas.
+ *  (`state["principalTx"] = x`). El control de abajo planta las formas que el patrón busca, porque el
+ *  agujero era invisible a su propio control: éste sólo probaba las dos SIN comillas.
+ *
+ *  🔴 Y LA CLASE DE COMILLAS DECÍA `["']`, QUE ES DOS DE LAS TRES QUE TIENE JS (AR r2 · BLQ-BAJO-2).
+ *  El backtick faltaba y no es exótico: es una clave computada válida. MEDIDO, plantando en
+ *  `container.ts` la línea `export const MUTANTE_BT: Record<string, string> = { [`principalTx`]: "fabricada" };`
+ *  ⇒ `tsc --noEmit` exit 0 y `6 passed`. Con el backtick en la clase, ese mismo mutante da rojo en
+ *  T-W9(a). Lo mismo con `state[`principalTx`] = sig;`. El control de abajo suma esa quinta forma.
+ *
+ *  🔴 Y `Object.defineProperty(state, "principalTx", {...})` TAMBIÉN EVADÍA, porque después de la
+ *  comilla viene una coma y no un `:` ni un `=`. Se decidió CUBRIRLO y no declararlo, con un alternante
+ *  propio (`defineProperty(...principalTx`) en vez de aflojar el primero para que acepte una coma:
+ *  aceptar la coma haría matchear cualquier `"principalTx"` en una lista de nombres de campo, que es
+ *  LECTURA, y un candado que se dispara con las lecturas es uno que alguien va a aflojar hasta
+ *  volverlo inútil. Medido: no hay ningún `defineProperty` en los fuentes de producción de este árbol
+ *  (los cuatro que existen están en `*.test.tsx`, que este barrido no mira), así que el alternante no
+ *  introduce falsos positivos hoy. ⚠️ LO QUE SIGUE AFUERA: `Reflect.set(state, "principalTx", x)`, un
+ *  `Object.assign(state, JSON.parse(x))` y cualquier nombre de campo calculado en runtime. El punto 2
+ *  de "QUÉ NO CUBRE" ya lo dice en general, y esto lo hace concreto: el candado cubre las formas que
+ *  ENUMERA, y la lista no es "todas las maneras de escribir una propiedad en JS".
  *
  *  ⚠️ EL PATRÓN SE ESCRIBE UNA SOLA VEZ, en `ESCRITURA_SRC`, y de ahí salen las DOS regex que este
  *  archivo usa (la de `test` y la de contar, que necesita `/g` fresco por lo de `lastIndex` que está
  *  explicado abajo). Escribirlo dos veces es cómo un arreglo se aplica a una y no a la otra: hasta
  *  este commit T-W9(a-bis) llevaba su propia copia literal, y la comilla se le habría escapado. */
-const ESCRITURA_SRC = "principalTx[\"']?\\s*\\]?\\s*[:=]";
+const ESCRITURA_SRC = "principalTx[\"'`]?\\s*\\]?\\s*[:=]|defineProperty\\s*\\([^)]*[\"'`]principalTx";
 const ESCRITURA = new RegExp(ESCRITURA_SRC);
 const todasLasEscrituras = (code: string): RegExpMatchArray | null =>
   code.match(new RegExp(ESCRITURA_SRC, "g"));
@@ -146,13 +164,25 @@ describe("WKH-352 · AC-7: `principalTx` tiene un solo escritor, y corre despué
   // devolviera vacío) dejaría los tres invariantes verdes sobre CUALQUIER fuente, que es exactamente el
   // modo de fallo que `evm-residue-guard.static.test.ts:38-43` documenta: un guard que no puede fallar.
   it("control: la detección encuentra un escritor PLANTADO y no se traga el stripper", () => {
-    // Un escritor plantado, en las CUATRO formas que el candado busca. Las dos de abajo son las que
-    // faltaban: con la regex anterior (`/principalTx\s*[:=]/`) daban `false` y el candado se saltaba
-    // con una clave entre comillas. Son parte del control, no un extra.
+    // Un escritor plantado, en CADA forma que el candado busca: una por forma, sin excepción, porque
+    // una forma sin control es una que puede morir en silencio (la regla está escrita en
+    // `auto-blindaje.md:139` y este archivo ya la pagó dos veces: primero la comilla, después el
+    // backtick). El conteo NO se escribe acá: era "las CUATRO formas" y quedó viejo el día que el
+    // patrón ganó alternantes, o sea la misma clase de cifra que envejece sola que el repo persigue.
+    // Las de comilla y las de backtick daban `false` con las versiones anteriores del patrón, y cada
+    // una se plantó de verdad en `container.ts` para verlo. Son parte del control, no un extra.
     expect(ESCRITURA.test('const s = { ...prev, principalTx: "fabricada" };')).toBe(true);
     expect(ESCRITURA.test("state.principalTx = firmaInventada;")).toBe(true);
     expect(ESCRITURA.test('const M: Record<string, string> = { "principalTx": "fabricada" };')).toBe(true);
     expect(ESCRITURA.test("state[\"principalTx\"] = firmaInventada;")).toBe(true);
+    // Y las DOS del backtick (AR r2 · BLQ-BAJO-2), que es la tercera comilla de JS y la que faltaba.
+    // Las dos se plantaron de verdad en `container.ts` antes de arreglar el patrón: `tsc` exit 0 y
+    // `6 passed`, o sea un escritor real que el candado no veía.
+    expect(ESCRITURA.test("const M: Record<string, string> = { [`principalTx`]: \"fabricada\" };")).toBe(true);
+    expect(ESCRITURA.test("state[`principalTx`] = firmaInventada;")).toBe(true);
+    // Y la forma sin `:` ni `=` en ningún lado, que evadía por una coma. Tiene alternante propio.
+    expect(ESCRITURA.test('Object.defineProperty(state, "principalTx", { value: firmaInventada });')).toBe(true);
+    expect(ESCRITURA.test("Object.defineProperty(state, `principalTx`, { value: x });")).toBe(true);
     // Una llamada plantada al escritor.
     expect('otro.markPrincipalIn("x", now);').toMatch(LLAMADA);
     // Y una rehidratación plantada, que es el camino de (d). Va con el `await repo.save(...)` alrededor
@@ -166,6 +196,10 @@ describe("WKH-352 · AC-7: `principalTx` tiene un solo escritor, y corre despué
     // también la lectura por índice, que es la que el `\]?` de arriba podría haber roto.
     expect(ESCRITURA.test("if (rem.principalTx != null) return true;")).toBe(false);
     expect(ESCRITURA.test('if (rem["principalTx"] != null) return true;')).toBe(false);
+    expect(ESCRITURA.test("if (rem[`principalTx`] != null) return true;")).toBe(false);
+    // Y el alternante de `defineProperty` no se dispara con OTRA propiedad de la misma llamada: si lo
+    // hiciera, cualquier `defineProperty` cerca de la palabra sería un falso positivo.
+    expect(ESCRITURA.test('Object.defineProperty(state, "refundTx", { value: x }); // principalTx')).toBe(false);
     // El stripper no vació los fuentes que este archivo mira.
     const remittance = FUENTES.find((f) => f.rel === REMITTANCE);
     expect(remittance?.code).toContain("markPrincipalIn");

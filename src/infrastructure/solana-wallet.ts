@@ -1689,4 +1689,126 @@ export class SolanaWalletAdapter
     }
     return out;
   }
+
+  /**
+   * WKH-353 — ¿qué dice la cadena de ESTA firma? Devuelve uno de los tres desenlaces de
+   * `SignatureVerdict`, `:1798`, preguntando por HTTP y sin abrir NINGUNA suscripción.
+   *
+   * POR QUÉ NO `connection.confirmTransaction`, que es lo que estaba acá antes. Sus dos estrategias
+   * terminan las dos en `onSignature`, o sea en un `signatureSubscribe` por WebSocket, y el RPC que
+   * usamos contesta `-32601` a ese método. La librería atrapa ese error, lo loguea y devuelve el
+   * estado a 'pending' SIN límite de reintentos (su propio código lo admite con un «TODO: Maybe add
+   * an 'errored' state or a retry limit?»), así que el estado 'subscribed' no llega nunca — y su
+   * respaldo HTTP por `getSignatureStatus` está DETRÁS de esa espera. O sea que ni la suscripción ni
+   * el respaldo de la librería podían producir un veredicto: la espera se consumía entera contra el
+   * techo y no aprendía nada. Las referencias a `@solana/web3.js` 1.98.4 van SIN el formato anclado
+   * del repo a propósito: el candado de citas no escanea `node_modules` y una cita anclada ahí se
+   * pondría roja (lib/index.cjs.js:6553, :6562, :6585, :8383-8410).
+   *
+   * ⚠️ ESTE MÉTODO NO TIENE TECHO PROPIO, Y NO DEBE TENERLO. Lo corta el `withTimeout`, `:150` del
+   * llamador, igual que cortaba al `confirmTransaction` de antes, así que el techo de este camino
+   * sigue siendo UNO SOLO y sigue siendo `confirmTimeoutMs`. Un contador o un techo acá adentro
+   * serían un segundo reloj que nadie configura y que nadie ve al leer el llamador.
+   *
+   * ⚠️ LO QUE ESTO NO ARREGLA, dicho para que ningún copy lo prometa: el techo de 30 s, la sonda
+   * on-chain y el veredicto "unknown" siguen existiendo exactamente igual. Lo que se elimina es UN
+   * CAMINO (la suscripción), no la posibilidad de no saber.
+   */
+  private async awaitSignatureVerdict(
+    connection: Web3Connection,
+    signature: string,
+    ctx: { lastValidBlockHeight: number },
+  ): Promise<SignatureVerdict> {
+    // Paso 1 — el estado, que es la conclusión más barata. Devuelve `null` cuando NO concluye nada, y
+    // ese `null` NO es "no entró": es "todavía no lo vemos". La distinción es la misma disciplina que
+    // el resto de este archivo ya tiene escrita: no pudimos preguntar ≠ la respuesta es que no.
+    const leerEstado = async (): Promise<SignatureVerdict | null> => {
+      let res: Awaited<ReturnType<Web3Connection["getSignatureStatuses"]>>;
+      try {
+        // SIN segundo argumento, o sea SIN `searchTransactionHistory`: el RPC usa su default y mira
+        // sólo su caché reciente de estados. Es una postura tomada y no un olvido — nunca preguntamos
+        // por una firma vieja, preguntamos por una que ACABAMOS de emitir, y un miss de caché no
+        // puede producir un "no entró" falso: cae en el `null` de abajo, que no concluye nada.
+        // 🔴 SUPUESTO NO MEDIDO: que esa caché dure más que nuestro techo. NO SE PUDO VERIFICAR desde
+        // este repo (haría falta medirlo contra el endpoint vivo). Si fuera más corta, el desenlace
+        // sería más LENTO (unseen → sonda), nunca incorrecto.
+        res = await connection.getSignatureStatuses([signature]);
+      } catch {
+        return null; // no pudimos PREGUNTAR. Un throw no es un `null`, y un `null` no es un "no entró".
+      }
+      const status = res.value[0];
+      if (status === null || status === undefined) return null; // no lo vemos todavía
+      // Con `err` NO se mira el commitment, y es deliberado: para tener error la tx tuvo que ENTRAR en
+      // un bloque y ejecutarse. Es un "no" MEDIDO, el único "no" que este método puede afirmar.
+      if (status.err != null) return { kind: "landed", err: status.err };
+      // Sin `err` el nivel SÍ importa: "processed" no alcanza. Es el mismo commitment gate que la
+      // librería aplicaba, y los dos llamadores confirman con "confirmed" (`confirmRefund`, `:1034`).
+      const nivel = status.confirmationStatus;
+      if (nivel === "confirmed" || nivel === "finalized") return { kind: "landed", err: null };
+      return null; // "processed" o ausente ⇒ seguimos preguntando
+    };
+
+    for (;;) {
+      const visto = await leerEstado();
+      if (visto !== null) return visto;
+
+      // Paso 2 — el vencimiento, DESPUÉS del estado y nunca antes.
+      let height: number;
+      try {
+        height = await connection.getBlockHeight("confirmed");
+      } catch {
+        // 🔴 REGLA, no detalle de implementación: un RPC que falla JAMÁS puede producir un veredicto
+        // de "expired". No pudimos preguntar la altura ⇒ NO sabemos si venció ⇒ seguimos esperando.
+        // `-1` siempre es `<= lastValidBlockHeight`, así que el bucle itera como si la altura no
+        // hubiera avanzado. Dejar propagar la excepción —o peor, traducirla a "venció"— haría que un
+        // endpoint con hipo produjera un vencimiento FALSO, que acá significa mentirle a la persona
+        // sobre su plata.
+        height = -1;
+      }
+      if (height > ctx.lastValidBlockHeight) {
+        // ÚLTIMA MIRADA, y no es decorativa: cierra la carrera de la tx que entró en el último bloque
+        // válido mientras nosotros leíamos la altura. Si ahora hay status, GANA EL STATUS.
+        const ultima = await leerEstado();
+        return ultima ?? { kind: "expired" };
+      }
+      await sleep(SIGNATURE_POLL_INTERVAL_MS);
+    }
+  }
+}
+
+/**
+ * WKH-353 — el resultado de preguntarle a la cadena por una firma, con TRES desenlaces y no dos.
+ *
+ * Vive acá abajo, después del cierre de la clase, y no arriba con las constantes. La razón está
+ * medida y escrita en `:116`: TODAS las citas ancladas que este archivo RECIBE apuntan de `:188`
+ * para abajo, y una línea nueva en la cabecera las rota a todas. Acá desplaza cero.
+ *
+ * ⚠️ `expired` y `unseen` van HOY al mismo lugar —la sonda on-chain— y aun así son dos miembros
+ * distintos. PROHIBIDO colapsarlos a un booleano o a un `if (kind !== "landed")`: la distinción que
+ * `confirmRefund`, `:1034` explica en prosa —un blockhash vencido prueba que la tx no puede entrar
+ * DE ACÁ EN ADELANTE, NO que no haya entrado antes— sólo queda protegida si tiene una rama con
+ * nombre propio que haya que BORRAR para perderla. Con un booleano volvemos al estado anterior a
+ * esta HU, con más líneas.
+ *
+ * `unseen` no lo construye ningún lado de este archivo, y eso es correcto: lo produce el
+ * `withTimeout`, `:150` del llamador cuando se acaba la espera, y llega al `catch` que ya existía
+ * como la excepción "confirm_timeout". El miembro existe para que el tipo NOMBRE ese desenlace, no
+ * para que alguien lo devuelva.
+ */
+type SignatureVerdict =
+  | { readonly kind: "landed"; readonly err: unknown | null } // la firma TIENE status: entró en un bloque
+  | { readonly kind: "expired" } // altura > lastValidBlockHeight, y sin status
+  | { readonly kind: "unseen" }; // se acabó la espera; no vimos nada
+
+/** Cada cuánto le volvemos a preguntar a la cadena. El número NO es al azar: es el mismo `sleep(1000)`
+ *  del bucle de vencimiento de `@solana/web3.js` 1.98.4 (lib/index.cjs.js:6676), o sea el intervalo que
+ *  el ecosistema ya considera aceptable para un RPC público. Con el techo de producción (30 s) son como
+ *  mucho 30 lecturas de estado y 30 de altura por confirmación — un orden de magnitud por debajo de las
+ *  reconexiones de WebSocket que el mecanismo anterior generaba para no concluir nada. */
+const SIGNATURE_POLL_INTERVAL_MS = 1_000;
+
+/** Espera `ms` sin bloquear. No existía en este archivo: lo trae WKH-353 para el bucle de
+ *  `awaitSignatureVerdict`, `:1717`, y no tiene ningún otro llamador. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

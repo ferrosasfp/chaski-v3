@@ -1898,13 +1898,25 @@ describe("WKH-350 · agrupación del historial", () => {
 /**
  * WKH-352 · LA FILA QUE YA TIENE LA PRUEBA DEL DEPÓSITO DEJA DE COMPARTIR LA FRASE AMBIGUA.
  *
- * ⚠️ POR QUÉ ESTE BLOQUE VA AL FINAL DEL ARCHIVO Y NO ADENTRO DEL `describe` de WKH-349. Tres citas
+ * ⚠️ POR QUÉ ESTE BLOQUE VA AL FINAL DEL ARCHIVO Y NO ADENTRO DEL `describe` de WKH-349. SEIS citas
  * `flow-vm.test.ts:NN` SIN ancla apuntan acá adentro y NINGÚN guard las mira, porque el formato que
- * `citas-ancladas.test.ts` vigila pide una coma entre dos backticks: `:520` desde
- * `http-pop-signer.ts:33` (NO-TOUCH), `:1714` (T-V8) desde `history-onchain.test.tsx:255` y `:1873`
- * (`TODOS`) desde `history-grupos.test.tsx:405`. Insertar UNA línea arriba de cualquiera de las tres
- * las rompe en silencio. Por eso los tests nuevos van debajo de todas, y las ediciones de este archivo
- * en las tres zonas citadas fueron línea-neutrales.
+ * `citas-ancladas.test.ts` vigila pide una coma entre dos backticks. Tres estaban nombradas acá desde
+ * el principio: `:520` desde `http-pop-signer.ts:33` (NO-TOUCH), `:1714` (T-V8) desde
+ * `history-onchain.test.tsx:255` y `:1873` (`TODOS`) desde `history-grupos.test.tsx:405`.
+ *
+ * 🔴 Y ESTE MISMO PÁRRAFO DECÍA "TRES", QUE ERA EL CONTEO VIEJO (AR · MNR-1). Recontado contra el árbol
+ * con `grep -rEon 'flow-vm\.test\.ts:[0-9]+(-[0-9]+)?' src app scripts contracts`, y descartando la
+ * ÚNICA anclada (la de `flow-vm.ts:1002` a `:481`, que ésa sí la vigila el guard), las otras TRES son:
+ * `:76-101` desde `history-grupos.test.tsx:532`, `:1705-1707` desde `history-onchain.test.tsx:473` y
+ * `:1905` desde `history-grupos.test.tsx:577`. La última la escribió ESTA HU y apunta adentro de este
+ * mismo docblock: por eso las CINCO líneas de arriba no se pueden mover ni una, y todo lo que se le
+ * agregue a esta explicación va DEBAJO de la 1905. El AR contó cuatro; medido contra el árbol, son
+ * seis. Aparte quedan SEIS auto-citas dentro de este archivo, las seis a `:520` (`:1`, `:3`, `:21`,
+ * `:31`, `:484` y `:1358`): mismo riesgo, y por eso `:520` es la línea que este archivo más protege.
+ *
+ * Insertar UNA línea arriba de cualquiera de esos destinos las rompe en silencio. Por eso los tests
+ * nuevos van debajo de todas, y las ediciones de este archivo en las zonas citadas fueron
+ * línea-neutrales.
  *
  * 🔴 REGLA DE ESTE BLOQUE (CD-12/CD-14): cada test nombra la edición plausible que lo pone en rojo, Y
  * declara qué NO cubre. Toda atribución "el mutante X lo mata" de acá abajo fue APLICADA Y MEDIDA

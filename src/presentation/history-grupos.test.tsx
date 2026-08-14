@@ -575,7 +575,8 @@ describe("WKH-352 · el desenlace nuevo cae en el grupo que esa fila ya tenía",
   /** WKH-352 · las dos frases de `absent`, ESCRITAS A MANO y no derivadas del módulo (un test que le
    *  pregunta al código qué copy produce y después verifica que produjo ese copy es un guard que se
    *  compara consigo mismo). Van acá abajo y no con las otras `CP_` porque `flow-vm.test.ts:1905` cita
-   *  `:405` de este archivo SIN ancla, y una línea insertada arriba la rompe en silencio. */
+   *  TRES líneas de este archivo SIN ancla, `:405`, `:532` y `:577`, y una insertada arriba de la
+   *  primera las rompe a las tres en silencio (recontado en el AR · MNR-1: eran más de las escritas). */
   const CP_ABSENT_CON_DEPOSITO =
     "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en el contrato que estamos consultando no figura ninguna cuenta para este envío, que es todo lo que medimos. Desde acá no podemos decir si terminó en un pago o en una devolución, ni descartar que esa cuenta siga abierta en un contrato que no estamos mirando.";
   const CP_ABSENT_AMBIGUO =

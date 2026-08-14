@@ -237,11 +237,21 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
     expect(screen.queryByText(COPY_VIEJO)).toBeNull();
   });
 
-  // 🔴 T-U5 (AC-4, CD-16) — SON DOS HECHOS DISTINTOS Y LA TARJETA MUESTRA LOS DOS.
-  // MUTANTE: que el desenlace de cadena reescriba el Pill (por ejemplo, pintar "Entregado" porque la
-  // PDA está `Released`). El Pill habla de que el partner de payout reportó haber entregado los PEN;
-  // `Released` habla de que el vault salió del escrow. Uno no prueba el otro.
-  it("T-U5: `released` ⇒ dice que salieron hacia el pago, y el Pill sigue diciendo lo del status", async () => {
+  // 🔴 T-U5 (AC-4, CD-16 · reescrito por WKH-351/AC-1) — SON DOS HECHOS DISTINTOS Y LA TARJETA
+  // MUESTRA UNO SOLO: el de la plata. Hasta WKH-351 mostraba además el Pill del trámite, y bajo el
+  // encabezado del grupo eso se leía como una contradicción ("Pago en curso" bajo "Necesitan tu firma").
+  // 🔴 EL MUTANTE ORIGINAL, QUE ESTE TEST SIGUE MATANDO: que el desenlace de cadena reescriba la
+  // etiqueta del trámite (pintar "Entregado" porque la PDA está `Released`). Lo mata el assert de
+  // CP3_LIBERADO: `released` produce la frase del vault y NADA que hable de la entrega. `Released`
+  // dice que el vault salió del escrow; "Entregado" dice que el partner de payout reportó haber
+  // entregado los PEN. Uno no prueba el otro, y ahora ninguna etiqueta lo insinúa. Si alguien borra
+  // ese assert, ese mutante queda sin dueño: T-V8 cubre el copy PURO, no el render.
+  // 🔴 EL MUTANTE NUEVO: devolver `<Pill tone={status.tone}>{status.label}</Pill>` a `HistoryEntry`
+  // (`flow.tsx:3110`), o pintar `status.label` sin Pill en un `<span>` cualquiera.
+  // ⚠️ El assert de ausencia va SIN scope de fila a propósito: este montaje renderiza UNA sola fila y
+  // nada más en `HistoryView` puede producir esa cadena. El scope por grupo lo hace T-N1 en
+  // `history-grupos.test.tsx`, que sí monta 12 filas.
+  it("T-U5: `released` ⇒ dice que salieron hacia el pago, y la tarjeta no muestra la etiqueta del trámite", async () => {
     const rem = unverifiedSnapshot("rem-1");
     const reader = new FakeSolanaEscrowChainStateReader(mapa([["rem-1", "released"]]));
     render(
@@ -254,9 +264,10 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
       />,
     );
     expect(await screen.findByText(CP3_LIBERADO)).toBeInTheDocument();
-    // El Pill sale del status del snapshot, no de la cadena. Y el control del test: la etiqueta que se
-    // espera se deriva del MISMO productor que la pinta, así que no queda un literal envejeciendo acá.
-    expect(screen.getByText(statusDisplay(rem.status).label)).toBeInTheDocument();
+    // La etiqueta se DERIVA del mismo productor que la pintaba, así que no queda un literal
+    // envejeciendo acá. Y el control: si `statusDisplay` devolviera "", el assert de ausencia sería
+    // verde por defecto y este test dejaría de medir nada.
+    expect(screen.queryAllByText(statusDisplay(rem.status).label)).toHaveLength(0);
     expect(statusDisplay(rem.status).label).not.toBe("");
   });
 

@@ -2154,8 +2154,8 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
     // 🔴 UN CONTROL POR ALTERNANTE (AR r2 · MNR-2). Acá había UN solo control y la regex tiene CUATRO
     // formas: los otros tres alternantes no los ejercitaba nadie, así que uno roto (un `\b` de más, un
     // acento mal escrito) habría quedado muerto en silencio, que es EXACTAMENTE el defecto que T-W2
-    // documenta dos bloques más arriba y que este archivo ya pagó una vez. La regla, escrita en
-    // `auto-blindaje.md:139`: si la regex tiene N alternantes, el control necesita N. Medido como
+    // documenta dos bloques más arriba y que este archivo ya pagó una vez. LA REGLA, ESCRITA ACÁ Y NO CITADA (AR r3 · MNR-1): SI LA REGEX TIENE N ALTERNANTES, EL CONTROL NECESITA N. Acá decía "la regla, escrita en `auto-blindaje.md:139`", y esa cita no la podía seguir nadie: `doc/` está gitignoreado (`.gitignore:36`) y `git ls-files doc` da 0, así que desde un clone limpio ese archivo NO EXISTE; encima el número estaba corrido (la frase vive en la línea 140, no en la 139). Una regla que el
+    // lector no puede leer no es una regla: por eso ahora vive en el test. Medido como
     // DIAGONAL y no "los cuatro matchean": se sacó cada alternante uno por uno y se corrieron los
     // cuatro controles ⇒ `0111`, `1011`, `1101`, `1110`. Cada control muere con SU alternante y con
     // ninguno más; cuatro controles que matchean por el MISMO alternante no habrían probado nada.

@@ -139,16 +139,34 @@ const FUENTES: { rel: string; code: string }[] = SCAN_DIRS.flatMap((d) => walk(p
  *  LECTURA, y un candado que se dispara con las lecturas es uno que alguien va a aflojar hasta
  *  volverlo inútil. Medido: no hay ningún `defineProperty` en los fuentes de producción de este árbol
  *  (los cuatro que existen están en `*.test.tsx`, que este barrido no mira), así que el alternante no
- *  introduce falsos positivos hoy. ⚠️ LO QUE SIGUE AFUERA: `Reflect.set(state, "principalTx", x)`, un
- *  `Object.assign(state, JSON.parse(x))` y cualquier nombre de campo calculado en runtime. El punto 2
- *  de "QUÉ NO CUBRE" ya lo dice en general, y esto lo hace concreto: el candado cubre las formas que
- *  ENUMERA, y la lista no es "todas las maneras de escribir una propiedad en JS".
+ *  introduce falsos positivos hoy.
+ *
+ *  🔴 Y ESE ALTERNANTE CUBRÍA MENOS DE LO QUE ESTE DOCBLOCK AFIRMABA (AR r3 · MNR-2). Decía "se decidió
+ *  CUBRIRLO", y el tramo entre el paréntesis y la comilla era `[^)]*`, que NO CRUZA UN `)`: sólo veía
+ *  el caso en que el primer argumento no es una llamada. MEDIDO con `node -e`, sobre el patrón viejo:
+ *  `Object.defineProperty(state, "principalTx", { value: x });` ⇒ `true`, y
+ *  `Object.defineProperty(getState(), "principalTx", { value: x });` ⇒ `false`. O sea un escritor real
+ *  que el candado no veía, dos líneas después de invocar la regla de que cada alternante necesita su
+ *  control. Hoy ese tramo es `(?:[^();{]|\([^)]*\))*`: cualquier carácter salvo `)`, `;` y `{`, MÁS un
+ *  grupo entre paréntesis completo, que es lo que deja pasar `getState()` o `repo.getState(id)`. El
+ *  `;` y el `{` son el freno, no un adorno: sin ellos el alternante cruzaría hasta el descriptor o
+ *  hasta la sentencia siguiente, y cualquier `defineProperty` cerca de la palabra sería un falso
+ *  positivo. El control de `:236` planta exactamente ese caso y sigue dando `false`. El `(` se saca de
+ *  la clase para que las dos ramas de la alternancia no puedan matchear el mismo carácter: si pudieran,
+ *  una entrada larga sin cierre haría backtracking exponencial.
+ *
+ *  ⚠️ LO QUE SIGUE AFUERA, MEDIDO Y NO SUPUESTO: DOS niveles de anidamiento
+ *  (`Object.defineProperty(get(state(x)), "principalTx", ...)` ⇒ `false` también con el patrón nuevo,
+ *  y hay un control abajo que lo fija para que la afirmación no envejezca), `Reflect.set(state,
+ *  "principalTx", x)`, un `Object.assign(state, JSON.parse(x))` y cualquier nombre de campo calculado
+ *  en runtime. El punto 2 de "QUÉ NO CUBRE" ya lo dice en general, y esto lo hace concreto: el candado
+ *  cubre las formas que ENUMERA, y la lista no es "todas las maneras de escribir una propiedad en JS".
  *
  *  ⚠️ EL PATRÓN SE ESCRIBE UNA SOLA VEZ, en `ESCRITURA_SRC`, y de ahí salen las DOS regex que este
  *  archivo usa (la de `test` y la de contar, que necesita `/g` fresco por lo de `lastIndex` que está
  *  explicado abajo). Escribirlo dos veces es cómo un arreglo se aplica a una y no a la otra: hasta
  *  este commit T-W9(a-bis) llevaba su propia copia literal, y la comilla se le habría escapado. */
-const ESCRITURA_SRC = "principalTx[\"'`]?\\s*\\]?\\s*[:=]|defineProperty\\s*\\([^)]*[\"'`]principalTx";
+const ESCRITURA_SRC = "principalTx[\"'`]?\\s*\\]?\\s*[:=]|defineProperty\\s*\\((?:[^();{]|\\([^)]*\\))*[\"'`]principalTx";
 const ESCRITURA = new RegExp(ESCRITURA_SRC);
 const todasLasEscrituras = (code: string): RegExpMatchArray | null =>
   code.match(new RegExp(ESCRITURA_SRC, "g"));
@@ -199,9 +217,14 @@ describe("WKH-352 · AC-7: `principalTx` tiene un solo escritor, y corre despué
   // modo de fallo que `evm-residue-guard.static.test.ts:38-43` documenta: un guard que no puede fallar.
   it("control: la detección encuentra un escritor PLANTADO y no se traga el stripper", () => {
     // Un escritor plantado, en CADA forma que el candado busca: una por forma, sin excepción, porque
-    // una forma sin control es una que puede morir en silencio (la regla está escrita en
-    // `auto-blindaje.md:139` y este archivo ya la pagó dos veces: primero la comilla, después el
-    // backtick). El conteo NO se escribe acá: era "las CUATRO formas" y quedó viejo el día que el
+    // una forma sin control es una que puede morir en silencio. LA REGLA, ESCRITA ACÁ Y NO CITADA
+    // (AR r3 · MNR-1): SI EL PATRÓN TIENE N FORMAS, EL CONTROL NECESITA N. Antes esto decía "la regla
+    // está escrita en `auto-blindaje.md:139`", y esa cita no la podía seguir nadie: `doc/` está
+    // gitignoreado (`.gitignore:36`) y `git ls-files doc` da 0, así que desde un clone limpio ese
+    // archivo NO EXISTE; encima el número estaba corrido (la frase vive en la línea 140, no en la
+    // 139). Una regla que el lector no puede leer no es una regla, y este archivo ya la pagó tres
+    // veces: primero la comilla, después el backtick, después el `)` del argumento que es una llamada.
+    // El conteo NO se escribe acá: era "las CUATRO formas" y quedó viejo el día que el
     // patrón ganó alternantes, o sea la misma clase de cifra que envejece sola que el repo persigue.
     // Las de comilla y las de backtick daban `false` con las versiones anteriores del patrón, y cada
     // una se plantó de verdad en `container.ts` para verlo. Son parte del control, no un extra.
@@ -217,6 +240,14 @@ describe("WKH-352 · AC-7: `principalTx` tiene un solo escritor, y corre despué
     // Y la forma sin `:` ni `=` en ningún lado, que evadía por una coma. Tiene alternante propio.
     expect(ESCRITURA.test('Object.defineProperty(state, "principalTx", { value: firmaInventada });')).toBe(true);
     expect(ESCRITURA.test("Object.defineProperty(state, `principalTx`, { value: x });")).toBe(true);
+    // Y las dos con el primer argumento SIENDO UNA LLAMADA, que es lo que el `[^)]*` viejo no cruzaba
+    // (AR r3 · MNR-2). Las dos daban `false` con el patrón anterior: eran escritores reales invisibles.
+    expect(ESCRITURA.test('Object.defineProperty(getState(), "principalTx", { value: x });')).toBe(true);
+    expect(ESCRITURA.test("Object.defineProperty(repo.getState(id), `principalTx`, { value: x });")).toBe(true);
+    // 🔴 Y EL LÍMITE, FIJADO COMO CONTROL Y NO COMO PROSA: DOS niveles de anidamiento siguen evadiendo.
+    // Este assert existe para que la frase "cubre un nivel" no pueda envejecer en silencio: si alguien
+    // amplía el patrón, esto se pone rojo y hay que venir a reescribir el docblock, que es el punto.
+    expect(ESCRITURA.test('Object.defineProperty(get(state(x)), "principalTx", { value: x });')).toBe(false);
     // Una llamada plantada al escritor.
     expect('otro.markPrincipalIn("x", now);').toMatch(LLAMADA);
     // Y una rehidratación plantada, que es el camino de (d). Va con el `await repo.save(...)` alrededor

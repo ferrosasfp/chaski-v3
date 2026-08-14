@@ -578,7 +578,7 @@ describe("WKH-352 · el desenlace nuevo cae en el grupo que esa fila ya tenía",
    *  cita TRES líneas de este archivo SIN ancla, y NO las tres desde la 1905: `:405` está en la 1905, y
    *  `:532` y `:577` en la 1910 y la 1911 (AR r2 · MNR-1, medido; acá decía que las tres iban en :1905). */
   const CP_ABSENT_CON_DEPOSITO =
-    "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en la dirección que le corresponde a este envío no hay ninguna cuenta: miramos esa dirección sola, no el contrato entero, y eso es todo lo que medimos. Desde acá no podemos decir si terminó en un pago o en una devolución, ni descartar que la cuenta siga abierta en otra dirección: la que miramos se calcula con la wallet conectada, así que si depositaste con otra, conectá esa y usá la opción de recuperar un envío perdido, en la pantalla de inicio.";
+    "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en la dirección que le corresponde a este envío no hay ninguna cuenta: miramos esa dirección sola, no el contrato entero, y eso es todo lo que medimos. Desde acá no podemos decir si terminó en un pago o en una devolución, ni descartar que la cuenta siga abierta en otra dirección: la que miramos se calcula con la wallet conectada, así que si depositaste con otra, cambiá a esa cuenta en tu billetera y volvé a abrir Chaski: ahí, en la pantalla de inicio, está la opción de recuperar un envío perdido.";
   const CP_ABSENT_AMBIGUO =
     "En el contrato no hay ninguna cuenta para este envío: o el depósito nunca entró, o ya se cerró después de resolverse. Desde acá no podemos decir cuál de las dos.";
 

@@ -29,7 +29,7 @@ import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escr
 import type { EscrowChainState } from "../application/ports";
 import {
   FAKE_SOLANA_BENEFICIARY,
-  FakeSolanaEscrowChainStateReader,
+  FakeSolanaEscrowChainStateReader, FakeSolanaEscrowRefundGateway, // WKH-352/AR r3: el gateway del refund va EN ESTA LÍNEA, no en una nueva. Este archivo se cita por número desde `flow-vm.test.ts:1905` (a `:255`), `:1910` (a `:473`) y `:1935` (a `:43-45`); una línea de más acá arriba corre las tres, y ninguna es anclada, así que `citas-ancladas.test.ts` no las mira. Todo lo que esta ronda AGREGA va al FINAL del archivo, debajo de `:473`
   FakeSolanaWallet,
   InMemoryRepo,
   T0,
@@ -51,7 +51,7 @@ const CP5_NO_PUDIMOS = "No pudimos preguntarle al contrato por este envío.";
 const CP8_VENTANA_VENCIDA =
   "El contrato dice que tus USDC siguen en el escrow y que el plazo para liberarlos al pago ya venció: la salida que queda es devolverlos a tu wallet, y sólo tu firma puede hacerlo.";
 /** WKH-352 · la fila `absent` que SÍ tiene la prueba local del depósito (`principalTx`). */
-const CP9_ABSENT_CON_DEPOSITO = "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en la dirección que le corresponde a este envío no hay ninguna cuenta: miramos esa dirección sola, no el contrato entero, y eso es todo lo que medimos. Desde acá no podemos decir si terminó en un pago o en una devolución, ni descartar que la cuenta siga abierta en otra dirección: la que miramos se calcula con la wallet conectada, así que si depositaste con otra, conectá esa y usá la opción de recuperar un envío perdido, en la pantalla de inicio.";
+const CP9_ABSENT_CON_DEPOSITO = "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en la dirección que le corresponde a este envío no hay ninguna cuenta: miramos esa dirección sola, no el contrato entero, y eso es todo lo que medimos. Desde acá no podemos decir si terminó en un pago o en una devolución, ni descartar que la cuenta siga abierta en otra dirección: la que miramos se calcula con la wallet conectada, así que si depositaste con otra, cambiá a esa cuenta en tu billetera y volvé a abrir Chaski: ahí, en la pantalla de inicio, está la opción de recuperar un envío perdido.";
 /** WKH-352 · la frase AMBIGUA, la de la fila `absent` SIN prueba. Está acá para asertar que la fila con prueba NO la dice. */
 const CP_ABSENT_AMBIGUO = "En el contrato no hay ninguna cuenta para este envío: o el depósito nunca entró, o ya se cerró después de resolverse. Desde acá no podemos decir cuál de las dos.";
 /** La frase de ANTES de esta HU. Que desaparezca es la mitad del punto: la tarjeta no puede decir las dos. */
@@ -507,5 +507,160 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
     expect(readerSinPrueba.calls).toHaveLength(1);
     expect(readerConPrueba.calls[0]?.remittanceIds).toEqual(readerSinPrueba.calls[0]?.remittanceIds);
     expect(readerConPrueba.calls[0]?.remittanceIds).toEqual(["rem-1"]);
+  });
+});
+
+/**
+ * WKH-352 · AR r3 / BLQ-MED-1 — EL CONSEJO DEL COPY, EJECUTADO DE PUNTA A PUNTA.
+ *
+ * 🔴 POR QUÉ ESTE BLOQUE EXISTE, y es lo primero que hay que leer. La frase de
+ * `chain-absent-after-deposit` termina mandando a la persona a una puerta concreta, y tres rondas de
+ * AR seguidas rechazaron ESA frase por prometer algo que el código no entregaba. Las tres se
+ * "arreglaron" reescribiendo el texto, y la cuarta versión volvió a fallar por lo mismo. Un texto no
+ * se puede medir a sí mismo: lo único que cierra el hallazgo es un test que EJECUTE el consejo y
+ * falle si el consejo no funciona. Eso es lo que hay acá abajo.
+ *
+ * 🔴 EL DEFECTO QUE LO MOTIVÓ, MEDIDO EN EL CÓDIGO. El copy decía "conectá esa y usá la opción de
+ * recuperar un envío perdido", y en la sesión donde se lee eso es imposible: `address` es un
+ * `useState` (`flow.tsx:147`) y `resolveSender` devuelve el valor local si ya lo tiene
+ * (`flow.tsx:366-370`), así que no vuelve a preguntarle a la billetera; y esta tarjeta SÓLO se puede
+ * ver con `address != null`, porque `flow.tsx:984` pasa `sender={address}`, el efecto de
+ * `HistoryView` corta sin sender (`flow.tsx:3026`) y sin consulta la respuesta es `not-asked`, que
+ * devuelve el conocimiento local (`flow-vm.ts:1196`). La condición que hace visible el consejo era la
+ * misma que lo volvía inaplicable. El recorrido real terminaba en `escrow_not_found` con la billetera
+ * VIEJA, sobre una fila cuyo propio copy dice que ahí SÍ puede haber algo.
+ *
+ * QUÉ MODELA `cleanup()` + `render()` CON EL MISMO CONTAINER, dicho para que nadie le pida más: una
+ * REAPERTURA de la app. Lo que se pierde es el estado de React (`address` entre ellos) y lo que
+ * sobrevive es lo durable (el repo, que en producción es `localStorage`). No modela el autoConnect del
+ * adapter real de la billetera: acá ese rol lo hace `connect()` del doble, que contesta la cuenta
+ * activa del momento. Si mañana la app arrancara `address` desde algún lado persistido, el consejo
+ * dejaría de funcionar y T-W12 se pondría rojo, que es exactamente para lo que está.
+ *
+ * ⛔ LO QUE ESTE BLOQUE NO HACE, Y NO POR OLVIDO: no agrega ningún control de "cambiar billetera" ni
+ * toca `resolveSender`. Ese es un defecto real, pero cambia el comportamiento de la conexión para toda
+ * la app y está fuera del Scope IN de esta HU; el AR lo levanta por separado. Acá se mide el camino
+ * que HOY existe, y se deja escrito cuál es.
+ */
+describe("WKH-352 · AR r3 · el consejo del copy, ejecutado", () => {
+  /** La otra cuenta de la misma billetera. base58 válida de 32 bytes (`bs58.encode(fill(3))`), para
+   *  que nada de lo que atraviesa el camino la pueda rechazar por forma, y distinta byte a byte de
+   *  `FAKE_SOLANA_BENEFICIARY`, que es la dueña de la fila local. */
+  const OTRA_CUENTA = "CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8";
+
+  /** Una billetera cuya CUENTA ACTIVA se puede cambiar: es el gesto que el copy le pide a la persona.
+   *  `FakeSolanaWallet` contesta siempre la misma address, que es justo lo que acá no sirve. */
+  class WalletQueCambiaDeCuenta extends FakeSolanaWallet {
+    constructor(public actual: string) {
+      super();
+    }
+    override async connect(): Promise<string> {
+      return this.actual;
+    }
+    override async getAddress(): Promise<string | null> {
+      return this.actual;
+    }
+  }
+
+  /** El mundo del recorrido: una fila `unverified` CON `principalTx` (la de AC-1) cuya PDA la cadena
+   *  contesta `absent` ⇒ la tarjeta muestra el copy con el consejo. Más la puerta de recuperación
+   *  cableada, que sin `solanaRefund` ni se renderiza. */
+  async function mundo() {
+    const repo = new InMemoryRepo();
+    await repo.save(Remittance.rehydrate(unverifiedSnapshot("rem-1")));
+    const wallet = new WalletQueCambiaDeCuenta(FAKE_SOLANA_BENEFICIARY);
+    const refundGw = new FakeSolanaEscrowRefundGateway();
+    const container = buildTestContainer({
+      repo,
+      wallet,
+      solanaRefund: refundGw,
+      solanaEscrowStates: new FakeSolanaEscrowChainStateReader(mapa([["rem-1", "absent"]])),
+    });
+    return { wallet, refundGw, container };
+  }
+
+  /** Los dos clicks de "usá la opción de recuperar un envío perdido": abrir la puerta y buscar. */
+  async function usarLaOpcionDeRecuperar() {
+    // `find*` y no `get*`: volver a `send` desde el historial pasa por `AnimatePresence`, así que la
+    // puerta no está en el DOM en el mismo tick del click. Con `get*` esto fallaba SÓLO en el control.
+    fireEvent.click(await screen.findByRole("button", { name: "Recuperar un envío perdido" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Buscar mis escrows/ }));
+  }
+
+  // 🔴 T-W12 (AR r3 · BLQ-MED-1) — SEGUIR EL CONSEJO TERMINA CON LA BILLETERA NUEVA.
+  // Los pasos son los del copy, en su orden: se ve la tarjeta, se cambia de cuenta en la billetera, se
+  // vuelve a abrir la app, y recién ahí se usa la opción de recuperar. El assert que cierra el
+  // hallazgo es UNO: con qué `sender` salió la búsqueda.
+  // MUTANTE (a) MEDIDO — el copy vuelve a mandar a algo que no funciona: cambiar la frase de
+  // `flow-vm.ts:1267` por la vieja ("conectá esa y usá la opción..."). Rojo acá por el assert que lee
+  // el consejo del propio literal, ANTES de ejecutarlo.
+  // MUTANTE (b) MEDIDO — el camino deja de funcionar sin que el copy cambie: sembrar `address` desde
+  // algo persistido al montar (el "recordá mi billetera" que cualquiera agrega). Rojo acá por el
+  // `sender`, que vuelve a salir con la cuenta vieja aunque el texto siga diciendo lo mismo.
+  // ⚠️ QUÉ NO CUBRE: no mide que la persona entienda la frase, ni el autoConnect del adapter real, ni
+  // que exista un escrow abierto del otro lado (el doble resuelve siempre). Mide el ÚNICO hecho del
+  // que dependía el hallazgo: qué identidad viaja en la búsqueda después de seguir el consejo.
+  it("T-W12: se ve el consejo, se cambia de cuenta, se vuelve a abrir la app, y la búsqueda sale con la cuenta NUEVA", async () => {
+    const { wallet, refundGw, container } = await mundo();
+
+    // (1) La tarjeta con el consejo, en pantalla, con la billetera de siempre.
+    render(<RemittanceFlow container={container} />);
+    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    expect(await screen.findByText(CP9_ABSENT_CON_DEPOSITO)).toBeInTheDocument();
+    // Y el consejo que este test va a ejecutar sale DEL COPY, no de la cabeza de quien lo escribió: si
+    // alguien cambia la frase por otra, este assert se pone rojo y obliga a re-medir el recorrido.
+    expect(CP9_ABSENT_CON_DEPOSITO).toContain("cambiá a esa cuenta en tu billetera");
+    expect(CP9_ABSENT_CON_DEPOSITO).toContain("volvé a abrir Chaski");
+    expect(CP9_ABSENT_CON_DEPOSITO).toContain("recuperar un envío perdido");
+
+    // (2) "cambiá a esa cuenta en tu billetera".
+    wallet.actual = OTRA_CUENTA;
+
+    // (3) "volvé a abrir Chaski". Se pierde el estado de React; el repo, que es lo durable, sobrevive.
+    cleanup();
+    render(<RemittanceFlow container={container} />);
+
+    // (4) "ahí, en la pantalla de inicio, está la opción de recuperar un envío perdido".
+    await usarLaOpcionDeRecuperar();
+
+    // (5) EL ASSERT QUE CIERRA EL HALLAZGO.
+    await waitFor(() => expect(refundGw.calls).toHaveLength(1));
+    expect(refundGw.calls[0]?.sender).toBe(OTRA_CUENTA);
+    expect(refundGw.calls[0]?.sender).not.toBe(FAKE_SOLANA_BENEFICIARY);
+    // Sin `remittanceId`: es la resolución durable por sender, que es la puerta que el copy nombra.
+    expect(refundGw.calls[0]?.remittanceId).toBeUndefined();
+    // Y el camino llega hasta el final visible, no sólo hasta el borde del gateway.
+    expect(await screen.findByText("Recuperaste tus fondos")).toBeInTheDocument();
+  });
+
+  // 🔴 T-W12(control) — POR QUÉ EL CONSEJO DICE "VOLVÉ A ABRIR" Y NO "CONECTÁ ESA".
+  // Sin este control, T-W12 no mide nada: podría estar verde porque el doble contesta `OTRA_CUENTA`
+  // pase lo que pase, y la reapertura sería decorativa. Acá se hace EL MISMO recorrido salvo el paso
+  // (3), y la búsqueda sale con la cuenta VIEJA. Ese es el defecto que el AR midió y el motivo exacto
+  // de la redacción de hoy.
+  // ⚠️ ESTE CONTROL SE PONE ROJO EL DÍA QUE ALGUIEN ARREGLE `resolveSender` PARA QUE VUELVA A
+  // PREGUNTARLE A LA BILLETERA, y ese rojo es la señal, no un falso positivo: significa que el copy ya
+  // puede decir algo más corto y que hay que volver a esta frase. Está declarado acá para que ese día
+  // nadie lo lea como un test roto.
+  // MUTANTE MEDIDO: sacar el `address ??` de `flow.tsx:367`. Rojo acá y sólo acá, con `sender` saliendo
+  // `OTRA_CUENTA`, o sea el arreglo de la otra HU visto desde este candado.
+  it("T-W12(control): sin volver a abrir la app, la misma búsqueda sale con la cuenta VIEJA", async () => {
+    const { wallet, refundGw, container } = await mundo();
+
+    render(<RemittanceFlow container={container} />);
+    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    expect(await screen.findByText(CP9_ABSENT_CON_DEPOSITO)).toBeInTheDocument();
+
+    wallet.actual = OTRA_CUENTA;
+    // Se vuelve a la pantalla de inicio SIN reabrir la app: el estado de React sigue vivo.
+    fireEvent.click(screen.getByRole("button", { name: /Volver/ }));
+    await usarLaOpcionDeRecuperar();
+
+    await waitFor(() => expect(refundGw.calls).toHaveLength(1));
+    expect(refundGw.calls[0]?.sender).toBe(FAKE_SOLANA_BENEFICIARY);
+    expect(refundGw.calls[0]?.sender).not.toBe(OTRA_CUENTA);
+    // Y la billetera SÍ había cambiado: si esto fallara, el control no estaría midiendo la caché de
+    // `address` sino un doble que nunca cambió de cuenta.
+    expect(await wallet.connect()).toBe(OTRA_CUENTA);
   });
 });

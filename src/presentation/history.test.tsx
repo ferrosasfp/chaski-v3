@@ -348,7 +348,12 @@ describe("el historial dice lo que sabe, y del vault no sabe nada", () => {
   it("un fallo probado antes del broadcast NO insinúa que haya USDC en el escrow", async () => {
     await open([beneficiaryMismatchSnapshot("rem-1")]);
     expect(screen.getByText(/No llegaste a depositar/)).toBeInTheDocument();
-    expect(screen.queryByText(/en el escrow/)).toBeNull();
+    // WKH-350: la regex sigue siendo ANCHA a propósito. Lo que cambia es que el único texto de esta
+    // pantalla autorizado a decir "en el escrow" es el ENCABEZADO del grupo, que NIEGA que haya plata.
+    // Cualquier OTRA mención —de cualquier fila, con cualquier verbo— sigue siendo roja.
+    expect(screen.queryAllByText(/en el escrow/).map((n) => n.textContent)).toEqual([
+      "Sin plata en el escrow",
+    ]);
     expect(screen.queryByRole("button", { name: /Ver seguimiento/ })).toBeNull();
   });
 

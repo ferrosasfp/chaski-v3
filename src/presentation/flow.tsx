@@ -57,7 +57,7 @@ import {
   deliveredDisplay,
   escrowFundsAtRisk,
   escrowFundsKnowledge,
-  escrowKnowledgeCopy, escrowOutcome, escrowOutcomeDisplay, type EscrowChainAnswer, // WKH-349: EN ESTA LÍNEA, no en tres nuevas — mismo motivo que `:46` y que la línea de `statusDisplay,` de abajo
+  escrowKnowledgeCopy, escrowOutcome, escrowOutcomeDisplay, type EscrowChainAnswer, historyGroupFor, HISTORY_GROUP_ORDER, HISTORY_GROUP_HEADING, type HistoryGroup, // WKH-349: EN ESTA LÍNEA, no en tres nuevas — mismo motivo que `:46` y que la línea de `statusDisplay,` de abajo
   escrowCloseError,
   escrowCloseSentCopy,
   escrowRefundError,
@@ -3064,11 +3064,11 @@ export function HistoryView({
           </p>
         </Card>
       ) : (
-        <ul className="space-y-3">
-          {items.map((rem) => (
-            <HistoryEntry key={rem.id} rem={rem} onOpen={onOpen} answer={answerFor(rem.id)} />
-          ))}
-        </ul>
+        // WKH-350 · AC-1/AC-4/AC-5: las 4 secciones. El componente vive al final del archivo y no acá,
+        // por lo mismo que TxProof (:3303): un bloque nuevo en este punto desplaza las 3 citas ancladas
+        // de abajo (:3142, :3199, :3323). Medido hoy: 20 citas apuntan a este archivo, 4 a esta zona.
+        // Números sin backticks: son una foto, no anclas. Reemplazo línea-neutra, 5 líneas por 5.
+        <HistoryGroups items={items} onOpen={onOpen} answerFor={answerFor} />
       )}
 
       <Button variant="outline" onClick={onBack}>
@@ -3346,5 +3346,83 @@ export function TxProof({ signature }: { signature: string }) {
         )}
       </button>
     </span>
+  );
+}
+
+/**
+ * WKH-350 · LAS 4 SECCIONES DEL HISTORIAL.
+ *
+ * Reparte las filas que ya vienen en `items` entre los 4 grupos de (`HistoryGroup`,
+ * `flow-vm.ts:1330`) —el reparto lo hace (`historyGroupFor`, `flow-vm.ts:1368`)— y las renderiza en el
+ * orden de (`HISTORY_GROUP_ORDER`, `flow-vm.ts:1333`), que es severidad decreciente. No calcula ningún
+ * desenlace: usa el mismo (`escrowOutcome`, `flow-vm.ts:1193`) que la tarjeta ya usaba, y la tarjeta se
+ * invoca igual que antes.
+ *
+ * UN SOLO PASE SOBRE `items`, con push, y NADA de `.sort()` ni de cuatro `.filter()`. El orden dentro
+ * de cada grupo tiene que ser el que la lista ya traía, y un solo pase lo garantiza por construcción
+ * en vez de por acuerdo. Candado: T-H7.
+ *
+ * EL GRUPO SIN FILAS NO SE RENDERIZA, ni el encabezado ni un "0 envíos". Un encabezado sobre un
+ * conjunto vacío es una afirmación vacía, y un cero es peor: un número invita a leerse como una
+ * medición. Que esto sea inocuo depende de que la partición sea total, y eso está argumentado en el
+ * docblock de (`HistoryGroup`, `flow-vm.ts:1330`) —no en el de `historyGroupFor`, que habla del `??`—;
+ * si alguien agrega un grupo que pueda quedar vacío significando "no medimos", esto hay que revisarlo.
+ *
+ * DEVUELVE UN FRAGMENT Y NO UN `div`. El padre es un `space-y-4`, y `space-y-*` sólo alcanza a los
+ * hijos DIRECTOS: un div envolvente dejaría los 4 grupos a un nivel de profundidad y les comería el
+ * espaciado. Y va un `<ul>` por grupo en vez de uno solo con separadores, porque la tarjeta devuelve
+ * un `<li>` (`HistoryEntry`, `:3081`) y un encabezado suelto entre `<li>` es HTML inválido.
+ *
+ * ⚠️ POR QUÉ VIVE ACÁ ABAJO Y NO JUNTO A (`HistoryView`, `:2990`), QUE ES DONDE SE LEERÍA MEJOR: por
+ * lo mismo que (`TxProof`, `:3303`). Un bloque nuevo en el medio de este archivo desplaza todo lo que
+ * viene después, y a este archivo lo apuntan citas por número desde todo el árbol más las autocitas
+ * `:NNN` de sus propios docblocks. De todas ellas, el candado de citas sólo vigila las ANCLADAS —las
+ * que llevan el símbolo delante de la coma—; las SUELTAS, que son mayoría, se romperían sin que ningún
+ * test se ponga rojo, y eso lo declara el propio candado en su cabecera
+ * (`src/composition/citas-ancladas.test.ts`). El número no se escribe acá porque envejece con cada
+ * commit y porque las dos poblaciones no son la misma: se deriva con
+ * `grep -rEo "flow\.tsx:[0-9]+" --include=*.ts --include=*.tsx src app scripts contracts`, y las
+ * ancladas con esa misma cadena precedida de un símbolo entre backticks y una coma.
+ * Como apéndice el desplazamiento es CERO. Cuesta legibilidad y compra eso. Las declaraciones de
+ * función se hoistean, así que usarlo arriba y declararlo acá funciona; este archivo ya lo hace con
+ * `TxProof`.
+ *
+ * LO QUE ESTE COMPONENTE NO GARANTIZA: `space-y-2` y `space-y-4` son NOMBRES DE CLASE, y que
+ * produzcan el espaciado lo hace Tailwind. Ningún test de esta HU lo mide, porque jsdom no hace
+ * layout. Misma limitación ya declarada para `TxProof`.
+ */
+function HistoryGroups({
+  items,
+  onOpen,
+  answerFor,
+}: {
+  items: RemittanceState[];
+  onOpen: (rem: RemittanceState) => void;
+  answerFor: (id: string) => EscrowChainAnswer;
+}) {
+  const porGrupo = new Map<HistoryGroup, RemittanceState[]>();
+  for (const rem of items) {
+    const g = historyGroupFor(escrowOutcome(rem, answerFor(rem.id)));
+    const acumulado = porGrupo.get(g);
+    if (acumulado === undefined) porGrupo.set(g, [rem]);
+    else acumulado.push(rem);
+  }
+  return (
+    <>
+      {HISTORY_GROUP_ORDER.map((g) => {
+        const filas = porGrupo.get(g);
+        if (filas === undefined || filas.length === 0) return null;
+        return (
+          <div key={g} className="space-y-2" data-testid={`grupo-${g}`}>
+            <p className="text-sm font-semibold">{HISTORY_GROUP_HEADING[g]}</p>
+            <ul className="space-y-3">
+              {filas.map((rem) => (
+                <HistoryEntry key={rem.id} rem={rem} onOpen={onOpen} answer={answerFor(rem.id)} />
+              ))}
+            </ul>
+          </div>
+        );
+      })}
+    </>
   );
 }

@@ -1274,3 +1274,102 @@ export function escrowOutcomeDisplay(o: EscrowOutcome): {
     return { copy: "Le estamos preguntando al contrato.", emphasis: "normal" };
   return { copy: escrowKnowledgeCopy(o), emphasis: "normal" };
 }
+
+/**
+ * WKH-350 · LA AGRUPACIÓN DEL HISTORIAL: bajo qué encabezado se muestra cada fila.
+ *
+ * Acá NO se calcula ningún desenlace nuevo ni se le pregunta nada a la cadena. Se toma el
+ * `EscrowOutcome` que ya produce (`escrowOutcome`, `:1193`) y se dice a qué sección va esa fila.
+ *
+ * LA PARTICIÓN ES TOTAL. Los 11 valores de (`EscrowOutcome`, `:1167`) se reparten entre los 4 grupos
+ * sin solapamiento y sin sobrantes, así que toda fila aparece siempre, exactamente una vez, bajo un
+ * encabezado visible. De ahí se sigue que ocultar un grupo sin filas es inocuo: un grupo vacío
+ * significa "ninguna de tus filas cayó acá", nunca "acá hay filas que no te estamos mostrando".
+ *
+ * ⚠️ RESIDUAL DECLARADO. Ese razonamiento vale mientras los grupos sean estos 4. Si alguien agrega un
+ * 5.º grupo que SÍ pueda quedar vacío significando "esto no lo medimos", ocultarlo pasa a esconder una
+ * ausencia de medición, y ahí hay que mostrarlo diciendo que no se midió. Quien agregue ese grupo
+ * tiene que volver a este comentario, porque el razonamiento de arriba deja de valer.
+ *
+ * POR QUÉ G3 SE LLAMA "Sin plata en el escrow" Y NO "Resueltos". Sus cuatro miembros no comparten
+ * ningún final. `chain-released` dice que los USDC ya salieron del escrow hacia el pago
+ * (`escrowOutcomeDisplay`, `:1251`), y eso NO es "entregado": esa palabra es de
+ * (`statusDisplay`, `:133`) para `settled` y habla de otro hecho, el partner reportando que pagó. Y
+ * `no-deposit` dice "No llegaste a depositar." (`escrowKnowledgeCopy`, `:256`), que no es un envío
+ * resuelto sino uno que no ocurrió. Lo único que los cuatro sostienen es que no hay plata tuya
+ * adentro del escrow, y eso es exactamente lo que el encabezado dice.
+ *
+ * POR QUÉ G4 SE LLAMA "Sin respuesta sobre tu plata" Y NO "Sin respuesta clara de la cadena".
+ * `chain-absent` SÍ recibió respuesta de la cadena, y clarísima: no hay cuenta. Lo que no se puede es
+ * inferir qué significa. Y a `unverified` no se le preguntó NUNCA: la consulta sale sólo por ese
+ * bucket (`idsAConsultar`, `flow.tsx:3009`), y (`escrowOutcome`, `:1193`) devuelve el conocimiento
+ * local tal cual cuando la respuesta es `"not-asked"`. Un encabezado que hable de "respuesta de la
+ * cadena" aparenta, para dos de sus cuatro miembros, una consulta que no existió.
+ *
+ * POR QUÉ G2 NO DICE "todavía en plazo". A `in-escrow` no se le pregunta a la cadena, así que el
+ * sistema no sabe si esa fila está en plazo, y la frase por fila de `chain-deposited-window-open`
+ * calla el plazo a propósito (`escrowOutcomeDisplay`, `:1251`). Afirmarlo en el encabezado
+ * reintroduce un nivel más arriba el error que ya se cerró a nivel de fila.
+ *
+ * ⚠️ RESIDUAL DE G1, Y ES EL QUE NO ESTABA DECLARADO EN NINGÚN LADO: "Necesitan tu firma" NO contiene
+ * a todas las filas que necesitan una firma. G1 es exactamente `chain-deposited-window-closed`, y ese
+ * desenlace sólo se alcanza por filas `unverified`, porque (`escrowOutcome`, `:1193`) corta en su
+ * primer `if` y descarta la respuesta de la cadena cuando el conocimiento local ya resolvió. Input
+ * concreto: una fila con `PRINCIPAL_SETTLED_REFUND_MANUAL` (⇒ `"in-escrow"` por la rama 2 de
+ * (`escrowFundsKnowledge`, `:206`), el `if` de la línea 215) para la que la cadena contesta
+ * `deposited-window-closed` cae en G2, no en G1: su plazo venció y su única salida también es una
+ * firma, y el encabezado que la nombra dice otra cosa.
+ *
+ * Esto NO es un bug del corte —el corte está argumentado en (`escrowOutcome`, `:1193`) y su candado es
+ * T-V1— ni rompe ningún AC: los ACs definen G1 por `EscrowOutcome === "chain-deposited-window-closed"`,
+ * y esa fila sigue visible, con su copy de siempre, bajo G2. Lo que queda vivo es la LECTURA del
+ * encabezado: se lee como "estas son TODAS las que necesitan tu firma" y es "estas son las que la
+ * cadena nos dejó saber que la necesitan". Quien agregue la acción de refund por grupo tiene que
+ * volver acá: colgarla sólo de G1 la deja fuera del alcance de estas filas.
+ */
+export type HistoryGroup = "firma" | "con-plata" | "sin-plata" | "sin-respuesta";
+
+/** Orden de render, por severidad decreciente. No alfabético, no cronológico, no por cantidad. */
+export const HISTORY_GROUP_ORDER: readonly HistoryGroup[] = [
+  "firma",
+  "con-plata",
+  "sin-plata",
+  "sin-respuesta",
+];
+
+/** El texto de cada encabezado. Cambiar uno de estos cuatro pone rojo a T-H1 y a T-H2. */
+export const HISTORY_GROUP_HEADING: Record<HistoryGroup, string> = {
+  firma: "Necesitan tu firma",
+  "con-plata": "Con plata en el escrow",
+  "sin-plata": "Sin plata en el escrow",
+  "sin-respuesta": "Sin respuesta sobre tu plata",
+};
+
+/**
+ * El mapa, con las 11 claves. Es un `Record` y NO una cadena de `if`, a propósito: si mañana
+ * (`EscrowOutcome`, `:1167`) gana un valor nuevo y nadie le da grupo, esto NO COMPILA. Un `if`-chain
+ * cerrado con un `return` por defecto se traga el mismo olvido y se despliega en silencio. La
+ * diferencia entre un candado y una prosa. Ojo: lo caza `tsc`, no vitest, que no typechequea.
+ */
+const GRUPO_POR_DESENLACE: Record<EscrowOutcome, HistoryGroup> = {
+  "chain-deposited-window-closed": "firma",
+  "in-escrow": "con-plata",
+  "chain-deposited-window-open": "con-plata",
+  returned: "sin-plata",
+  "chain-refunded": "sin-plata",
+  "chain-released": "sin-plata",
+  "no-deposit": "sin-plata",
+  unverified: "sin-respuesta",
+  "chain-pending": "sin-respuesta",
+  "chain-absent": "sin-respuesta",
+  "chain-unknown": "sin-respuesta",
+};
+
+export function historyGroupFor(o: EscrowOutcome): HistoryGroup {
+  // El `??` es inalcanzable por tipos y existe sólo para un valor que llegue de afuera del tipo. El
+  // fallback es "sin-respuesta" y no otro porque es el grupo que MENOS afirma: un desconocido bajo
+  // "Sin plata en el escrow" sería una afirmación falsa y tranquilizadora sobre la plata de alguien;
+  // bajo "Sin respuesta sobre tu plata" no afirma nada. Es la misma doctrina que ya está escrita para
+  // el desenlace en (`escrowOutcome`, `:1193`): el lado seguro, el que no afirma nada sobre fondos.
+  return GRUPO_POR_DESENLACE[o] ?? "sin-respuesta";
+}

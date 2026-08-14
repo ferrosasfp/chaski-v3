@@ -10,10 +10,22 @@
 //
 // Esa propiedad es una FOTO, y las fotos envejecen solas: nadie que agregue mañana un segundo
 // escritor va a leer el docblock de `flow-vm.ts`. Sin este candado, el día que alguien escriba
-// `principalTx` desde otro lado —un backfill, un rehydrate de un webhook, un "lo seteo optimista y
-// después lo confirmo"— la pantalla empieza a afirmar "tu plata entró" sobre plata que puede no haber
-// entrado, y NINGÚN test se pone rojo. El daño no es un bug de render: es una afirmación falsa sobre
-// el dinero de alguien.
+// `principalTx` desde otro lado la pantalla empieza a afirmar "tu plata entró" sobre plata que puede
+// no haber entrado, y NINGÚN test se pone rojo. El daño no es un bug de render: es una afirmación
+// falsa sobre el dinero de alguien.
+//
+// 🔴 LO QUE ESTE PÁRRAFO DECÍA DE MÁS, Y CÓMO SE MIDIÓ (AR · BLQ-BAJO-2). Acá arriba estaba escrito
+// que el candado existía para el día que alguien escribiera `principalTx` "desde otro lado —un
+// backfill, UN REHYDRATE DE UN WEBHOOK, un 'lo seteo optimista'—". Lo del webhook era FALSO y se
+// plantó el escenario para verlo: un `src/application/use-cases/mutante-webhook-sync.ts` con
+// `JSON.parse(payload)`, `{ ...local.snapshot, ...remoto }` y `repo.save(Remittance.rehydrate(...))`.
+// Compila (`tsc --noEmit` exit 0), escribe `principalTx` de verdad y desde la RED, y los invariantes
+// (a)/(a-bis)/(b)/(c) daban `5 passed`: el texto `principalTx` no aparece nunca. El residual de más
+// abajo tampoco lo tapaba, porque habla de un snapshot fabricado a mano en `localStorage` por la
+// misma persona, y acá el dato viene del servidor y es código de producción nuevo. Atribuirle a un
+// candado una cobertura que no tiene es el hallazgo de WKH-351, y estaba pasando otra vez.
+// El arreglo NO fue borrar la frase: es el INVARIANTE (d) de más abajo, que sí cierra ese camino
+// mecánicamente, con su alcance exacto escrito en el punto 5 de acá abajo.
 //
 // ⚠️ QUÉ NO CUBRE ESTE ARCHIVO (CD-14), declarado y no disfrazado:
 //   1. NO mira el VALOR escrito. Que la signature sea la correcta lo cubren
@@ -26,6 +38,11 @@
 //      regresión de esta HU: ahí el atacante y la víctima son la misma persona.
 //   4. NO mira los `*.test.ts(x)`: los tests fabrican estados a propósito y deben poder seguir
 //      haciéndolo. El invariante es sobre el código que corre en producción.
+//   5. El invariante (d) —el que cierra el camino del rehydrate— vigila la LISTA DE ARCHIVOS que
+//      llaman `Remittance.rehydrate(`, no lo que cada uno hace con el estado. O sea: caza el sync
+//      nuevo, en un archivo nuevo, que es la forma que tomó el escenario medido. NO caza un
+//      `rehydrate` agregado DENTRO de alguno de los tres archivos ya listados (`persistence.ts`,
+//      `flow.tsx`, `fakes.ts`). Ese hueco queda declarado acá y no disfrazado de cobertura.
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -92,8 +109,25 @@ const LLAMADA = /\.markPrincipalIn\s*\(/;
 const todasLasLlamadas = (code: string): RegExpMatchArray | null =>
   code.match(/\.markPrincipalIn\s*\(/g);
 
+/** Reconstruir un `Remittance` desde un `RemittanceState` cualquiera. El punto excluye la
+ *  DECLARACIÓN (`static rehydrate(`, `../domain/remittance.ts:304`). Es la OTRA forma de escribir
+ *  `principalTx` sin nombrarlo: `{ ...local.snapshot, ...remoto }` y a rehidratar. */
+const REHIDRATA = /\.rehydrate\s*\(/;
+
 const REMITTANCE = "src/domain/remittance.ts";
 const CALL_SITE = "src/application/use-cases/confirm-and-send.ts";
+
+/** Los ÚNICOS archivos de producción que reconstruyen un `Remittance` desde un estado suelto, con el
+ *  motivo de cada uno escrito a mano leyendo el código, no volcando la salida del escáner:
+ *   · `persistence.ts`: el repo, que es de dónde tiene que salir un estado rehidratado.
+ *   · `flow.tsx`: LECTURA. Rehidrata para preguntar `isQuoteStillValid` y NO guarda nada.
+ *   · `fakes.ts`: test-support. No es un `*.test.ts` y por eso entra al barrido, pero no corre en
+ *     producción; está acá para que el conjunto sea el medido y no uno con un agujero sin nombre. */
+const REHIDRATADORES = [
+  "src/infrastructure/persistence.ts",
+  "src/presentation/flow.tsx",
+  "src/test-support/fakes.ts",
+].sort();
 
 describe("WKH-352 · AC-7: `principalTx` tiene un solo escritor, y corre después del `ok:true`", () => {
   // 🔴 EL ASSERT DE CONTROL DE LA DETECCIÓN. Sin esto, una regex rota (o un `stripComments` que
@@ -109,6 +143,12 @@ describe("WKH-352 · AC-7: `principalTx` tiene un solo escritor, y corre despué
     expect(ESCRITURA.test("state[\"principalTx\"] = firmaInventada;")).toBe(true);
     // Una llamada plantada al escritor.
     expect('otro.markPrincipalIn("x", now);').toMatch(LLAMADA);
+    // Y una rehidratación plantada, que es el camino de (d). Va con el `await repo.save(...)` alrededor
+    // porque es la forma exacta que tomó el escenario del AR.
+    expect("await repo.save(Remittance.rehydrate(merged));").toMatch(REHIDRATA);
+    // La DECLARACIÓN no cuenta: sin el punto, `static rehydrate(` no es una llamada. Si esto se
+    // pusiera rojo, (d) estaría acusando a `remittance.ts` de llamarse a sí mismo.
+    expect(REHIDRATA.test("  static rehydrate(state: RemittanceState): Remittance {")).toBe(false);
     // Y la detección NO matchea una simple LECTURA, que es lo que hace `flow-vm.ts` y debe seguir
     // pudiendo hacer. Si esto se pusiera rojo, el candado estaría prohibiendo leer el campo. Va
     // también la lectura por índice, que es la que el `\]?` de arriba podría haber roto.
@@ -179,5 +219,29 @@ describe("WKH-352 · AC-7: `principalTx` tiene un solo escritor, y corre despué
     const catchDelSettle = code.indexOf("failAfterBroadcast");
     expect(catchDelSettle).toBeGreaterThan(-1);
     expect(llamada).toBeGreaterThan(catchDelSettle);
+  });
+
+  // 🔴 INVARIANTE (d) — LA OTRA FORMA DE ESCRIBIR EL CAMPO SIN NOMBRARLO (AR · BLQ-BAJO-2).
+  //
+  // (a) y (b) buscan el TEXTO `principalTx` y el TEXTO `markPrincipalIn`. Hay un camino que escribe el
+  // campo sin que ninguno de los dos aparezca: tomar un `RemittanceState` entero de otra fuente y
+  // rehidratarlo. `{ ...local.snapshot, ...remoto }` copia `principalTx` con todo lo demás, y
+  // `Remittance.rehydrate` no pasa por ningún guard de transición. Ese estado sale por
+  // (`snapshot`, `../domain/remittance.ts:308`) igual que cualquier otro, y la pantalla le cree.
+  //
+  // MEDIDO, no supuesto: se plantó `src/application/use-cases/mutante-webhook-sync.ts` con
+  // `JSON.parse(payload)` + spread + `repo.save(Remittance.rehydrate(merged))`. Compila (`tsc
+  // --noEmit` exit 0) y con (a)/(a-bis)/(b)/(c) solos daba `5 passed`. Con (d): rojo acá, y sólo acá.
+  //
+  // POR QUÉ UNA LISTA Y NO "UN SOLO SITIO": son TRES y los tres son legítimos, cada uno por su motivo,
+  // escrito arriba en `REHIDRATADORES`. Una lista con el motivo de cada entrada es verificable; un
+  // "un solo sitio" sería falso y habría que aflojarlo el primer día.
+  //
+  // ⚠️ QUÉ NO CUBRE (y está también en el punto 5 del docblock de arriba): mira la LISTA DE ARCHIVOS,
+  // no lo que cada uno hace. Un `rehydrate` nuevo DENTRO de `persistence.ts`, `flow.tsx` o `fakes.ts`
+  // pasa. Y no dice nada del VALOR rehidratado.
+  it("T-W9(d): `Remittance.rehydrate` se llama sólo desde los archivos que tienen su motivo escrito", () => {
+    const rehidratadores = FUENTES.filter((f) => REHIDRATA.test(f.code)).map((f) => f.rel).sort();
+    expect(rehidratadores).toEqual(REHIDRATADORES);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"; import { WALLET_SIGN_MESSAGE_ERROR, laBilleteraFueTocada } from "./solana/wallet-error-code"; // WKH-339/CR: EN ESTA LÍNEA — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
 import { Money } from "../domain/money";
-import type { RemittanceState, RemittanceStatus } from "../domain/remittance";
+import type { RemittanceState, RemittanceStatus } from "../domain/remittance"; import { Remittance } from "../domain/remittance"; // WKH-352: EN ESTA LÍNEA, no en una nueva — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número, y `:1714`/`:1873` los citan otros dos tests sin ancla
 import {
   PRINCIPAL_SETTLED_REFUND_MANUAL,
   PRINCIPAL_STATE_UNKNOWN,
@@ -1892,5 +1892,195 @@ describe("WKH-350 · agrupación del historial", () => {
     expect(escritos).toHaveLength(12);
     expect(new Set(escritos).size).toBe(12);
     expect([...escritos].sort()).toEqual((Object.keys(TODOS) as EscrowOutcome[]).sort());
+  });
+});
+
+/**
+ * WKH-352 · LA FILA QUE YA TIENE LA PRUEBA DEL DEPÓSITO DEJA DE COMPARTIR LA FRASE AMBIGUA.
+ *
+ * ⚠️ POR QUÉ ESTE BLOQUE VA AL FINAL DEL ARCHIVO Y NO ADENTRO DEL `describe` de WKH-349. Tres citas
+ * `flow-vm.test.ts:NN` SIN ancla apuntan acá adentro y NINGÚN guard las mira, porque el formato que
+ * `citas-ancladas.test.ts` vigila pide una coma entre dos backticks: `:520` desde
+ * `http-pop-signer.ts:33` (NO-TOUCH), `:1714` (T-V8) desde `history-onchain.test.tsx:251` y `:1873`
+ * (`TODOS`) desde `history-grupos.test.tsx:405`. Insertar UNA línea arriba de cualquiera de las tres
+ * las rompe en silencio. Por eso los tests nuevos van debajo de todas, y las ediciones de este archivo
+ * en las tres zonas citadas fueron línea-neutrales.
+ *
+ * 🔴 REGLA DE ESTE BLOQUE (CD-12/CD-14): cada test nombra la edición plausible que lo pone en rojo, Y
+ * declara qué NO cubre. Toda atribución "el mutante X lo mata" de acá abajo fue APLICADA Y MEDIDA
+ * corriendo el test por nombre, no deducida por simetría.
+ */
+describe("WKH-352 · `absent` con prueba local del depósito", () => {
+  const rem = (s: Partial<RemittanceState>): RemittanceState =>
+    ({ status: "created", principalTx: null, refundTx: null, failureReason: null, ...s }) as RemittanceState;
+
+  const T = "2026-01-01T00:00:00.000Z";
+
+  // El copy VIEJO de `chain-absent`, ESCRITO A MANO (AC-2 / CD-8). ⛔ PROHIBIDO derivarlo del módulo:
+  // un test que le pregunta al código qué copy produce y después verifica que produjo ese copy es un
+  // guard que se compara consigo mismo (`history-onchain.test.tsx:43-45`).
+  const COPY_VIEJO_ABSENT =
+    "En el contrato no hay ninguna cuenta para este envío: o el depósito nunca entró, o ya se cerró después de resolverse. Desde acá no podemos decir cuál de las dos.";
+
+  // El universo de desenlaces, exhaustivo por `tsc`: si el tipo gana un valor y nadie lo agrega acá,
+  // este archivo deja de compilar. Es lo que hace que T-W2 compare contra TODOS los otros copies sin
+  // que nadie tenga que mantener una lista a mano.
+  const OUTCOME_SET_352: Record<EscrowOutcome, true> = {
+    "no-deposit": true,
+    "in-escrow": true,
+    returned: true,
+    unverified: true,
+    "chain-deposited-window-open": true,
+    "chain-deposited-window-closed": true,
+    "chain-released": true,
+    "chain-refunded": true,
+    "chain-absent": true,
+    "chain-absent-after-deposit": true,
+    "chain-unknown": true,
+    "chain-pending": true,
+  };
+  const OUTCOMES_352 = Object.keys(OUTCOME_SET_352) as EscrowOutcome[];
+
+  // 🔴 T-W1 (AC-1) — LA FILA CON PRUEBA DEL DEPÓSITO RECIBE SU PROPIO DESENLACE.
+  // MUTANTE MEDIDO: borrar el ternario de `flow-vm.ts:1205` y volver a `return "chain-absent";`.
+  // Aplicado y medido: T-W1 se pone rojo ("expected 'chain-absent' to be 'chain-absent-after-deposit'").
+  // QUÉ NO CUBRE: no mide que la frase sea comprensible para quien la lee. Eso no lo puede medir un test.
+  it("T-W1: `absent` + `principalTx` ⇒ `chain-absent-after-deposit`, y su copy ya no dice la disyunción", () => {
+    const conPrueba = rem({ status: "principal_in", principalTx: "sig" });
+    expect(escrowOutcome(conPrueba, "absent")).toBe("chain-absent-after-deposit");
+    const copy = escrowOutcomeDisplay("chain-absent-after-deposit").copy;
+    expect(copy).toContain("Tu depósito entró");
+    expect(copy).not.toContain("no podemos decir cuál de las dos");
+  });
+
+  // 🔴 T-W2 (AC-1, AC-5, CD-2) — LA FRASE NUEVA ES SUYA, Y NO AFIRMA CÓMO TERMINÓ.
+  // DOS MUTANTES, MEDIDOS POR SEPARADO PORQUE EL TEST CORTA EN EL PRIMER ASSERT QUE FALLA (decirlo así
+  // es el punto: "cae por (a) y por (b)" con UNA sola corrida es una afirmación que nadie midió):
+  //   (a) copiar el copy de `chain-released` ⇒ rojo en la comparación contra los otros 11
+  //       ("expected 'El contrato dice que tus USDC ya sali…' not to be" el mismo string).
+  //   (b) un copy ÚNICO pero que sí afirma ("Tu depósito entró y tus USDC ya salieron hacia el pago…")
+  //       ⇒ pasa (a) y cae en la regex de afirmación de desenlace. Sin este segundo mutante, la mitad
+  //       (b) de este test nunca se habría ejercitado.
+  // QUÉ NO CUBRE: la regex cubre LAS FORMAS QUE ENUMERA, no "toda afirmación de desenlace". Una frase
+  // como "seguro fue una entrega" pasa este candado. Quien quiera la afirmación amplia tiene que
+  // escribir el candado amplio, no declarar acá que cubre más de lo que cubre.
+  it("T-W2: el copy nuevo no se repite con ningún otro, nombra las dos salidas y no afirma ninguna", () => {
+    const nuevo = escrowOutcomeDisplay("chain-absent-after-deposit").copy;
+    // (a) DERIVADO del `Record` exhaustivo, no de una lista a mano: los otros 11 son "todos menos éste".
+    const otros = OUTCOMES_352.filter((o) => o !== "chain-absent-after-deposit").map(
+      (o) => escrowOutcomeDisplay(o).copy,
+    );
+    expect(otros).toHaveLength(11);
+    for (const otro of otros) expect(nuevo).not.toBe(otro);
+    // (b) Nombra las DOS salidas y dice explícitamente que no puede elegir entre ellas.
+    expect(nuevo).toContain("un pago");
+    expect(nuevo).toContain("una devolución");
+    expect(nuevo).toContain("no podemos decir");
+    const AFIRMA_DESENLACE = /\b(ya\s+(salieron|volvieron)|fue\s+(un pago|una devolución)|se\s+(pagó|devolvió))\b/i;
+    expect(nuevo).not.toMatch(AFIRMA_DESENLACE);
+    // EL ASSERT DE CONTROL: la regex SÍ matchea sobre una frase plantada que sí afirma. Sin esto, una
+    // regex rota dejaría el assert de arriba verde sobre cualquier copy, incluido uno que afirme.
+    expect("Tus USDC ya salieron hacia el pago").toMatch(AFIRMA_DESENLACE);
+    // (c) El peso visual: `normal`. `strong` son EXACTAMENTE los dos `chain-deposited-*` (T-V5).
+    expect(escrowOutcomeDisplay("chain-absent-after-deposit").emphasis).toBe("normal");
+  });
+
+  // 🔴 T-W3 (AC-2) — EL CANDADO: LA FRASE NUEVA NO SE DERRAMA SOBRE QUIEN NO TIENE LA PRUEBA.
+  // MUTANTE MEDIDO: predicar por el CAMINO en vez de por la evidencia, o sea
+  // `return k === "unverified" ? "chain-absent-after-deposit" : "chain-absent";` en `flow-vm.ts:1205`.
+  // Ese predicado es SIEMPRE verdadero ahí (`escrowOutcome` ya cortó en `:1195` con
+  // `if (k !== "unverified") return k`), así que le daría la frase "tu depósito entró" a filas que no
+  // tienen NINGUNA prueba de que entró. Aplicado y medido: T-W3 se pone rojo ("expected
+  // 'chain-absent-after-deposit' to be 'chain-absent'") y NINGÚN otro test de este bloque cae, lo cual
+  // es el punto: este candado es el único que cubre esa edición. El loop corta en el PRIMER fixture, así
+  // que lo medido es que el mutante lo mata, no que los tres asserts se ejecuten y fallen.
+  // SEGUNDO MUTANTE MEDIDO: retocar la frase vieja de `flow-vm.ts:1268` (CD-8) ⇒ T-W3 rojo por el `toBe`.
+  // QUÉ NO CUBRE: no mide el copy NUEVO (eso es T-W1/T-W2), ni cubre un cuarto camino a `unverified`
+  // que alguien agregue después a `escrowFundsKnowledge`.
+  it("T-W3: sin `principalTx`, `absent` sigue dando `chain-absent` con su frase BYTE-IDÉNTICA", () => {
+    // Los tres construidos con MARCADORES REALES, uno por cada camino a `unverified` que existe hoy:
+    // la rama de `refunded` sin el marcador del sender (`flow-vm.ts:211-212`), la de
+    // `PRINCIPAL_STATE_UNKNOWN` (`:216`) y la de `confirmed` (`:219`). Ninguno tiene `principalTx`.
+    const sinPrueba: RemittanceState[] = [
+      rem({ status: "refunded", failureReason: "payout_amount_mismatch" }),
+      rem({ status: "payout_failed", failureReason: PRINCIPAL_STATE_UNKNOWN }),
+      rem({ status: "confirmed" }),
+    ];
+    for (const fixture of sinPrueba) {
+      expect(escrowFundsKnowledge(fixture)).toBe("unverified");
+      expect(escrowOutcome(fixture, "absent")).toBe("chain-absent");
+    }
+    // Byte a byte contra el literal escrito a mano arriba, con `toBe`. No `toContain`, no `toMatch`.
+    expect(escrowOutcomeDisplay("chain-absent").copy).toBe(COPY_VIEJO_ABSENT);
+  });
+
+  // 🔴 T-W4 (AC-1, DT-1) — LA FILA DEL SOLAPE RECIBE LA FRASE NUEVA POR DECISIÓN, NO POR ACCIDENTE.
+  //
+  // ⚠️ EN EL AR ESTA FILA SE VA A LEER COMO UN BUG. No lo es: está decidida en DT-1 y argumentada en
+  // §2.4 del SDD de WKH-352. Los tres caminos de `escrowFundsKnowledge` NO particionan por evidencia,
+  // se SOLAPAN: una remesa `refunded` sin `ESCROW_REFUNDED_BY_SENDER` sale por `flow-vm.ts:211-212`
+  // sin llegar nunca a `:219`, y aun así puede traer `principalTx`. Ese `principalTx` lo escribió el
+  // settle tras un `ok:true`, o sea que el depósito entró de verdad. La evidencia gana al camino.
+  //
+  // EL FIXTURE VA CONSTRUIDO POR EL CAMINO REAL, no a mano: se rehidrata en `confirmed` y de ahí en
+  // adelante son las transiciones de producción, cada una pasando por el guard `canTransition`
+  // (`remittance.ts:319`). `principalTx` lo escribe `markPrincipalIn`, que es el ÚNICO escritor del
+  // campo en todo `src/` (candado: `principal-tx-single-writer.static.test.ts`).
+  // MUTANTE MEDIDO: reintroducir el predicado por camino (`k === "unverified"`) NO lo mata, porque esta
+  // fila ES `unverified` — lo mata el mutante de NO ramificar (volver a `return "chain-absent";`), y así
+  // se midió: el segundo assert se pone rojo. Lo de arriba es exactamente el tipo de atribución que
+  // WKH-351 escribió mal por simetría, así que acá va la medida y no la suposición.
+  // QUÉ NO CUBRE: no mide el copy, ni cubre la colisión teórica de un `PayoutGateway` que devuelva
+  // `"principal_state_unknown"` (declarada en §2.3 del SDD y NO cerrada en esta HU).
+  it("T-W4: `refunded` sin el marcador del sender pero CON depósito confirmado recibe la frase nueva", () => {
+    const r = Remittance.rehydrate(rem({ status: "confirmed" }));
+    r.markPrincipalIn("solana-sig-principal", T); // confirm-and-send.ts:464, tras el `ok:true` del settle
+    r.markPayoutSubmitted("transfi-po-1", T, "transfi"); // confirm-and-send.ts:470
+    r.markPayoutFailed("payout_amount_mismatch", T); // track-remittance.ts:23, vía failAndRefund (:64/74)
+    r.markRefunded("solana-refund-sig", T); // track-remittance.ts:33-34, con recibo real
+    const fixture = r.snapshot as RemittanceState;
+    expect(fixture.status).toBe("refunded");
+    expect(fixture.principalTx).not.toBeNull();
+    expect(fixture.failureReason).not.toBe(ESCROW_REFUNDED_BY_SENDER);
+
+    // (1) Es `unverified` POR LA RAMA DE `refunded` (`flow-vm.ts:211-212`), no por la de `:219`. Se
+    // demuestra con el input: el mismo status SIN `principalTx` ya da `unverified` por sí solo, así que
+    // `:219` no es lo que decide acá.
+    expect(escrowFundsKnowledge(fixture)).toBe("unverified");
+    expect(escrowFundsKnowledge(rem({ status: "refunded", failureReason: "payout_amount_mismatch" }))).toBe(
+      "unverified",
+    );
+    // (2) Y recibe la frase nueva, por decisión: el depósito entró y de eso quedó la firma.
+    expect(escrowOutcome(fixture, "absent")).toBe("chain-absent-after-deposit");
+  });
+
+  // 🔴 T-W5 (AC-1) — LA RAMA NUEVA ES DE `absent` Y DE NINGUNA OTRA RESPUESTA.
+  // MUTANTE MEDIDO: ramificar sobre `principalTx` ANTES del `switch` de respuestas, o sea poner
+  // `if (rem.principalTx != null) return "chain-absent-after-deposit";` arriba de `flow-vm.ts:1197`.
+  // "No pudimos preguntar" pasaría a decirle a la persona que la cuenta se cerró. Aplicado y medido:
+  // T-W5 se pone rojo. QUÉ NO CUBRE: mide el DESENLACE, no el copy de cada uno.
+  it("T-W5: con `principalTx`, SÓLO `absent` produce el valor nuevo; las otras 7 respuestas no se mueven", () => {
+    const conPrueba = rem({ status: "principal_in", principalTx: "sig" });
+    // Exhaustivo por `tsc`: si `EscrowChainAnswer` gana un valor y nadie lo mapea acá, no compila. Es
+    // el mismo motivo por el que `ANSWER_SET` (`:1572`) existe: una lista a mano deja de mirar el valor
+    // nuevo justo el día que se agrega.
+    const ESPERADO_352: Record<EscrowChainAnswer, EscrowOutcome> = {
+      "deposited-window-open": "chain-deposited-window-open",
+      "deposited-window-closed": "chain-deposited-window-closed",
+      released: "chain-released",
+      refunded: "chain-refunded",
+      absent: "chain-absent-after-deposit",
+      unknown: "chain-unknown",
+      pending: "chain-pending",
+      "not-asked": "unverified",
+    };
+    const respuestas = Object.keys(ESPERADO_352) as EscrowChainAnswer[];
+    expect(respuestas).toHaveLength(8);
+    for (const a of respuestas) expect(escrowOutcome(conPrueba, a)).toBe(ESPERADO_352[a]);
+    // Y el valor nuevo sale de UNA sola respuesta, no de varias.
+    const producen = respuestas.filter(
+      (a) => escrowOutcome(conPrueba, a) === "chain-absent-after-deposit",
+    );
+    expect(producen).toEqual(["absent"]);
   });
 });

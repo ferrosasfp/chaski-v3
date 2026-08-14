@@ -47,12 +47,72 @@ async function encodeEscrowState(
   });
 }
 
-/** confirmTransaction mockeado: por default confirma SIN error (el caso feliz de los tests viejos). */
+/** Altura de bloque que los dobles devuelven cuando el blockhash SIGUE VIGENTE, y el
+ *  `lastValidBlockHeight` de los fixtures, que tiene que quedar por encima. */
+const BLOQUE_VIGENTE = 1;
+const ULTIMO_BLOQUE_VALIDO = 10_000;
+/** Y la altura del blockhash YA VENCIDO: por encima del `lastValidBlockHeight` de cualquier fixture. */
+const BLOQUE_VENCIDO = 1_000_000;
+
+/**
+ * Dobla `getBlockHeight`. ⚠️ NO se puede con `vi.spyOn(Connection.prototype, "getBlockHeight")`, y
+ * descubrirlo costó una corrida: vitest tira «getBlockHeight does not exist». Medido en
+ * `@solana/web3.js` 1.98.4 con `Object.getOwnPropertyNames(Connection.prototype)`: de todo lo que
+ * estos tests doblan —`getAccountInfo`, `getLatestBlockhash`, `sendRawTransaction`,
+ * `getMultipleAccountsInfo`, `getSignatureStatuses`, `confirmTransaction`, `onSignature`— es la ÚNICA
+ * que NO vive en el prototype. El constructor de `Connection` se la asigna a CADA instancia
+ * (lib/index.cjs.js:6057), y una propiedad propia tapa a la del prototype. Y el adapter construye su
+ * `Connection` adentro, así que tampoco hay instancia que espiar.
+ *
+ * Lo que sí funciona, con semántica de JS y sin tocar API privada: un ACCESSOR en el prototype. La
+ * asignación del constructor encuentra el setter heredado, lo llama, y NO crea propiedad propia; las
+ * lecturas caen en el getter. Medido: tras `new Connection(...)` la instancia no tiene la propiedad
+ * propia, el getter devuelve el doble, y `Reflect.deleteProperty` lo revierte del todo.
+ *
+ * ⚠️ `vi.restoreAllMocks()` NO deshace un `defineProperty`. Por eso hay un `afterEach` de archivo acá
+ * abajo: sin él, el doble se filtra al test siguiente y al archivo siguiente.
+ */
+function mockBlockHeight(height: () => Promise<number>): void {
+  Object.defineProperty(Connection.prototype, "getBlockHeight", {
+    configurable: true,
+    get: () => height,
+    set: () => {}, // se traga la asignación del constructor
+  });
+}
+
+function restoreBlockHeight(): void {
+  Reflect.deleteProperty(Connection.prototype, "getBlockHeight");
+}
+
+afterEach(restoreBlockHeight);
+
+/** La confirmación mockeada: por default confirma SIN error (el caso feliz de los tests viejos).
+ *
+ *  WKH-353 — antes esto doblaba `confirmTransaction`, y el adapter ya no lo llama. Ahora dobla LOS
+ *  DOS RPC del bucle de confirmación, `getSignatureStatuses` y `getBlockHeight`, y los dos son
+ *  obligatorios: con uno solo doblado el otro sale a la RED REAL. Eso está MEDIDO sobre este mismo
+ *  archivo antes de repararlo: 10 tests se quedaban 5.000 ms cada uno contra el endpoint vivo (el
+ *  techo de vitest, no el nuestro) y otros daban verde por la razón equivocada.
+ *
+ *  Los dos modos conservan su intención, que es lo único que importa acá:
+ *   · `{ err }` ⇒ la cadena YA tiene status para la firma ⇒ veredicto `landed` en el primer poll.
+ *                 Con `err: null` es el caso feliz; con `err` puesto, el revert MEDIDO.
+ *   · "reject"  ⇒ la cadena NO tiene status y la altura ya pasó el `lastValidBlockHeight`, o sea el
+ *                 blockhash vencido de siempre, que sigue cayendo a la sonda. Antes se escribía como
+ *                 un throw de `confirmTransaction` ("block height exceeded"). */
 function mockConfirm(result: { err: unknown } | "reject" = { err: null }) {
-  return vi.spyOn(Connection.prototype, "confirmTransaction").mockImplementation((async () => {
-    if (result === "reject") throw new Error("block height exceeded");
-    return { context: { slot: 1 }, value: result };
-  }) as never);
+  const statuses = vi
+    .spyOn(Connection.prototype, "getSignatureStatuses")
+    .mockImplementation((async () => ({
+      context: { slot: 1 },
+      value: [
+        result === "reject"
+          ? null
+          : { slot: 1, confirmations: 1, err: result.err, confirmationStatus: "confirmed" },
+      ],
+    })) as never);
+  mockBlockHeight(async () => (result === "reject" ? BLOQUE_VENCIDO : BLOQUE_VIGENTE));
+  return statuses;
 }
 
 function mockAccountInfo(data: Buffer | null) {
@@ -83,7 +143,7 @@ describe("SolanaWalletAdapter.refundEscrow (HU-SOL-13)", () => {
   beforeEach(() => {
     vi.spyOn(Connection.prototype, "getLatestBlockhash").mockResolvedValue({
       blockhash: FIXED_BLOCKHASH,
-      lastValidBlockHeight: 1,
+      lastValidBlockHeight: ULTIMO_BLOQUE_VALIDO, // WKH-353: antes `1`, que quedaba por DEBAJO de cualquier altura real y hacía que el bucle concluyera "vencido" contra la red
     } as Awaited<ReturnType<Connection["getLatestBlockhash"]>>);
     sendSpy = vi.fn(async () => "refund-sig-broadcasted");
     vi.spyOn(Connection.prototype, "sendRawTransaction").mockImplementation(sendSpy as never);
@@ -218,23 +278,27 @@ describe("SolanaWalletAdapter.refundEscrow — confirmación (tri-estado)", () =
     vi.restoreAllMocks();
   });
 
-  it("confirmada sin error ⇒ 'confirmed', y se confirma la MISMA signature que se broadcasteó", async () => {
+  it("confirmada sin error ⇒ 'confirmed', y se pregunta por la MISMA signature que se broadcasteó", async () => {
     await mockAccountSequence("deposited");
-    const confirmSpy = mockConfirm({ err: null });
+    const statusSpy = mockConfirm({ err: null });
     const adapter = await connected();
 
     await expect(adapter.refundEscrow("rem-1")).resolves.toEqual({
       refundTx: "refund-sig",
       confirmation: "confirmed",
     });
-    const arg = confirmSpy.mock.calls[0]?.[0] as unknown as {
-      signature: string;
-      blockhash: string;
-      lastValidBlockHeight: number;
-    };
-    expect(arg.signature).toBe("refund-sig"); // la que devolvió sendRawTransaction, no una inventada
-    expect(arg.blockhash).toBe(FIXED_BLOCKHASH); // el blockhash de ESTA tx: la estrategia de expiry
-    expect(arg.lastValidBlockHeight).toBe(42);
+    // WKH-353 — la intención se conserva ENTERA: se pregunta por la signature que devolvió
+    // `sendRawTransaction` y no por una inventada. Lo que cambia es dónde se lee: antes el argumento
+    // de `confirmTransaction` llevaba adentro `blockhash` + `lastValidBlockHeight`, y ahora la
+    // pregunta es sólo la firma.
+    expect(statusSpy.mock.calls[0]?.[0]).toEqual(["refund-sig"]);
+    // ⚠️ SIN segundo argumento. No es estilo: un `config` acá activaría `searchTransactionHistory` y
+    // pondría al nodo a barrer el ledger completo en CADA poll de 1 Hz.
+    expect(statusSpy.mock.calls[0]?.length).toBe(1);
+    // 🔴 LO QUE ESTE TEST YA NO MIDE, dicho en vez de escondido: que el `blockhash` de ESTA tx y su
+    // `lastValidBlockHeight` lleguen a la confirmación. El `blockhash` dejó de participar (el
+    // vencimiento se decide por ALTURA) y el `lastValidBlockHeight` sólo decide algo en el camino del
+    // vencimiento, que se mide en `solana-wallet.confirm-http.test.ts`.
   });
 
   // El caso del AR, exacto: el blockhash vence mientras la persona firma. Nadie puede decir que volvió.
@@ -304,10 +368,14 @@ describe("SolanaWalletAdapter.refundEscrow — confirmación (tri-estado)", () =
 
   it("la confirmación que nunca responde no cuelga a la persona: vence el techo y cae al probe", async () => {
     await mockAccountSequence("deposited", "deposited");
-    // Promesa que NUNCA resuelve: el websocket ausente del RPC público es exactamente esto.
-    vi.spyOn(Connection.prototype, "confirmTransaction").mockImplementation(
+    // Promesa que NUNCA resuelve: el RPC que acepta la conexión y no contesta es exactamente esto.
+    // WKH-353: va sobre `getSignatureStatuses`, que es el primer paso del bucle. `getBlockHeight`
+    // queda doblado igual y no por simetría: sin él, un cambio de orden de los pasos sacaría este
+    // test a la red real en vez de ponerlo rojo.
+    vi.spyOn(Connection.prototype, "getSignatureStatuses").mockImplementation(
       (() => new Promise(() => {})) as never,
     );
+    mockBlockHeight(async () => BLOQUE_VIGENTE);
     const adapter = await connected(10); // techo diminuto SOLO para el test
 
     await expect(adapter.refundEscrow("rem-1")).resolves.toEqual({
@@ -316,13 +384,17 @@ describe("SolanaWalletAdapter.refundEscrow — confirmación (tri-estado)", () =
     });
   });
 
-  it("el refund SIEMPRE pregunta: confirmTransaction se llama una vez por broadcast", async () => {
+  // La intención se conserva TEXTUAL: el refund SIEMPRE pregunta. Lo que cambia es a quién: antes
+  // `confirmTransaction` una vez por broadcast, ahora el estado de la firma. El "al menos una" y no
+  // "exactamente una" es del mecanismo, no una relajación: el bucle puede pollear N veces, y exigir 1
+  // pondría rojo un camino correcto (el status que tarda dos vueltas en aparecer).
+  it("el refund SIEMPRE pregunta: se pide el estado de la firma al menos una vez por broadcast", async () => {
     await mockAccountSequence("deposited");
-    const confirmSpy = mockConfirm({ err: null });
+    const statusSpy = mockConfirm({ err: null });
     const adapter = await connected();
 
     await adapter.refundEscrow("rem-1");
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(statusSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -431,7 +503,7 @@ describe("SolanaWalletAdapter.refundEscrow — fallback HU-SOL-20 (AC-2/AC-6)", 
   beforeEach(() => {
     vi.spyOn(Connection.prototype, "getLatestBlockhash").mockResolvedValue({
       blockhash: FIXED_BLOCKHASH,
-      lastValidBlockHeight: 1,
+      lastValidBlockHeight: ULTIMO_BLOQUE_VALIDO, // WKH-353: idem, y acá el default de producción son 30 s porque `connectedWith` no inyecta techo
     } as Awaited<ReturnType<Connection["getLatestBlockhash"]>>);
     sendSpy = vi.fn(async () => "refund-sig-recovered");
     vi.spyOn(Connection.prototype, "sendRawTransaction").mockImplementation(sendSpy as never);

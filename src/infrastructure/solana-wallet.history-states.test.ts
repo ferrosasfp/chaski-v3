@@ -107,6 +107,9 @@ afterEach(() => {
   // T-A12 congela `Date` (y SÓLO `Date`). Devolver el reloj acá y no dentro del test es lo que hace
   // que un test caído a mitad no le deje el reloj congelado al siguiente ni a otro archivo.
   vi.useRealTimers();
+  // WKH-353, por la MISMA razón que la línea de arriba: `vi.restoreAllMocks()` no deshace el
+  // `defineProperty` con el que `mockRefund` dobla `getBlockHeight`.
+  Reflect.deleteProperty(Connection.prototype, "getBlockHeight");
 });
 
 describe("SolanaWalletAdapter.readEscrowStates (WKH-349)", () => {
@@ -464,13 +467,30 @@ describe("readEscrowStates ⇄ refundEscrow — el acople de AC-13, con las dos 
     vi.spyOn(Connection.prototype, "getAccountInfo").mockResolvedValue(accountInfo(data) as never);
     vi.spyOn(Connection.prototype, "getLatestBlockhash").mockResolvedValue({
       blockhash: Keypair.generate().publicKey.toBase58(),
-      lastValidBlockHeight: 1,
+      lastValidBlockHeight: 10_000, // WKH-353: antes `1`, o sea por debajo de cualquier altura real
     } as never);
     vi.spyOn(Connection.prototype, "sendRawTransaction").mockImplementation((async () => "sig-borde") as never);
-    vi.spyOn(Connection.prototype, "confirmTransaction").mockImplementation((async () => ({
+    // WKH-353 — la confirmación pregunta por HTTP, así que hay que doblar LOS DOS RPC del bucle. Acá
+    // había un doble de `confirmTransaction`, que el adapter ya no llama, y eso NO se nota como un
+    // rojo: se nota como una salida a la RED REAL. Medido antes de repararlo: T-A16a tardaba 759 ms
+    // contra el endpoint vivo y pasaba igual, o sea verde por la razón equivocada. Y el adapter de
+    // este archivo se construye SIN techo inyectado (`conectadoCon`, `:97`), así que rige el default
+    // de producción: con el endpoint mudo, el test se habría quedado hasta los 30 s.
+    // ⚠️ Tiene que resolver en el PRIMER poll. `montar` congela SÓLO `Date` y deja `setTimeout` real,
+    // así que una iteración más del bucle costaría un segundo de reloj de verdad.
+    vi.spyOn(Connection.prototype, "getSignatureStatuses").mockImplementation((async () => ({
       context: { slot: 1 },
-      value: { err: null },
+      value: [{ slot: 1, confirmations: 1, err: null, confirmationStatus: "confirmed" }],
     })) as never);
+    // ⚠️ `getBlockHeight` no está en el prototype (el constructor se la asigna a cada instancia), así
+    // que NO se dobla con `vi.spyOn`. La medición y el porqué del accessor están escritos una sola
+    // vez, en (`mockBlockHeight`, `solana-wallet.refund.test.ts:75`). Lo revierte el `afterEach` de
+    // archivo, porque `vi.restoreAllMocks()` no deshace un `defineProperty`.
+    Object.defineProperty(Connection.prototype, "getBlockHeight", {
+      configurable: true,
+      get: () => async () => 1,
+      set: () => {},
+    });
     const signSpy = vi.fn(async (tx: { partialSign(kp: typeof SENDER_KP): void }) => {
       tx.partialSign(SENDER_KP); // firma REAL: `serialize()` exige la firma del feePayer
       return tx;

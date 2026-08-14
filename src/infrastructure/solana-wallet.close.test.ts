@@ -89,12 +89,51 @@ async function encodeEscrowIndex(entryIds: string[] = []): Promise<Buffer> {
   });
 }
 
+/** Altura de bloque con el blockhash VIGENTE, y la altura con el blockhash YA VENCIDO. La segunda
+ *  queda por encima del `lastValidBlockHeight` del fixture; la primera, por debajo. */
+const BLOQUE_VIGENTE = 1;
+const BLOQUE_VENCIDO = 1_000_000;
+
+/** ⚠️ `getBlockHeight` NO se dobla con `vi.spyOn(Connection.prototype, ...)`: es la única de las que
+ *  estos tests doblan que el constructor de `Connection` le asigna a CADA instancia, así que no está
+ *  en el prototype y vitest tira «getBlockHeight does not exist». El accessor de abajo se traga esa
+ *  asignación. La medición completa y el porqué están escritos una sola vez, en
+ *  (`mockBlockHeight`, `solana-wallet.refund.test.ts:75`). */
+function mockBlockHeight(height: () => Promise<number>): void {
+  Object.defineProperty(Connection.prototype, "getBlockHeight", {
+    configurable: true,
+    get: () => height,
+    set: () => {},
+  });
+}
+
+// `vi.restoreAllMocks()` NO deshace un `defineProperty`: sin esto el doble se filtra al archivo siguiente.
+afterEach(() => Reflect.deleteProperty(Connection.prototype, "getBlockHeight"));
+
+/** WKH-353 — antes esto doblaba `confirmTransaction`, que el adapter ya no llama. Ahora dobla LOS DOS
+ *  RPC del bucle de confirmación, y los dos son obligatorios: con uno solo el otro sale a la RED REAL.
+ *
+ *  Los TRES modos conservan su intención:
+ *   · `{ err }` ⇒ la cadena ya tiene status ⇒ `landed` en el primer poll (caso feliz o revert medido).
+ *   · "reject"  ⇒ sin status y con la altura pasada ⇒ el blockhash vencido, que cae a la sonda.
+ *   · "hang"    ⇒ el RPC acepta la conexión y no contesta NUNCA. Sigue siendo una promesa que no
+ *                 resuelve, y ahora va sobre el primer paso del bucle. */
 function mockConfirm(result: { err: unknown } | "reject" | "hang" = { err: null }) {
-  return vi.spyOn(Connection.prototype, "confirmTransaction").mockImplementation((async () => {
-    if (result === "hang") return new Promise(() => {}); // el websocket ausente del RPC público
-    if (result === "reject") throw new Error("block height exceeded");
-    return { context: { slot: 1 }, value: result };
-  }) as never);
+  const statuses = vi
+    .spyOn(Connection.prototype, "getSignatureStatuses")
+    .mockImplementation((async () => {
+      if (result === "hang") return new Promise(() => {}); // nunca resuelve
+      return {
+        context: { slot: 1 },
+        value: [
+          result === "reject"
+            ? null
+            : { slot: 1, confirmations: 1, err: result.err, confirmationStatus: "confirmed" },
+        ],
+      };
+    }) as never);
+  mockBlockHeight(async () => (result === "reject" ? BLOQUE_VENCIDO : BLOQUE_VIGENTE));
+  return statuses;
 }
 
 /** Qué contesta la cadena para UNA pubkey. Un array = la MISMA cuenta a lo largo del tiempo (la
@@ -394,7 +433,7 @@ describe("SolanaWalletAdapter.closeEscrow (WKH-327)", () => {
   it("AC-5: confirmación limpia + la cuenta SIGUE AHÍ ⇒ 'pending', NUNCA 'confirmed' (M4)", async () => {
     // Acá `confirmClose` se aparta de `confirmRefund` a propósito: aquél devuelve "confirmed" apenas la
     // tx confirma sin error (`confirmRefund`, `solana-wallet.ts:1034`), SIN leer nada. AC-5 exige leer la AUSENCIA. Un
-    // `confirmTransaction` sin `err` prueba que la tx entró; leer la ausencia prueba que hizo lo que
+    // veredicto `landed` sin `err` prueba que la tx entró; leer la ausencia prueba que hizo lo que
     // queríamos. Este es el único test que separa las dos cosas.
     const REM = "rem-no-cerro";
     const state = await encodeEscrowState("released");
@@ -409,7 +448,7 @@ describe("SolanaWalletAdapter.closeEscrow (WKH-327)", () => {
     });
   });
 
-  it("AC-5: confirmTransaction que NUNCA responde + cuenta presente ⇒ 'pending' (vence el techo y va a la sonda)", async () => {
+  it("AC-5: la lectura del estado de la firma que NUNCA responde + cuenta presente ⇒ 'pending' (vence el techo y va a la sonda)", async () => {
     const REM = "rem-confirm-colgado";
     const state = await encodeEscrowState("released");
     mockChain({
@@ -538,7 +577,7 @@ describe("SolanaWalletAdapter.closeEscrow (WKH-327)", () => {
 // ésos usan `FakeSolanaEscrowCloseGateway` y nunca ejecutan esta clase. El use-case propagaba
 // perfectamente un valor que el gateway ya había falsificado.
 //
-// Es el mismo lugar donde vive su hermano de refund (`SolanaEscrowRefundGateway`, `solana-wallet.refund.test.ts:913`) y por la
+// Es el mismo lugar donde vive su hermano de refund (`SolanaEscrowRefundGateway`, `solana-wallet.refund.test.ts:985`) y por la
 // misma razón: el gateway es una capa de una sola línea que nadie más ejercita.
 describe("SolanaEscrowCloseGateway — propaga el desenlace SIN ascenderlo", () => {
   for (const confirmation of ["confirmed", "pending", "unknown"] as const) {

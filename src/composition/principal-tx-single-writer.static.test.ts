@@ -65,8 +65,25 @@ const FUENTES: { rel: string; code: string }[] = SCAN_DIRS.flatMap((d) => walk(p
   .filter((f) => !esTest(f.rel));
 
 /** Escribir el campo: `principalTx:` en un objeto (o en la declaración del tipo) y `principalTx =`.
- *  Las dos formas con las que este repo escribe estado. */
-const ESCRITURA = /principalTx\s*[:=]/;
+ *  Las dos formas con las que este repo escribe estado.
+ *
+ *  ⚠️ LA COMILLA OPCIONAL NO ES ADORNO, Y ESTE CANDADO SE SALTEABA SIN ELLA. La primera versión era
+ *  `/principalTx\s*[:=]/`, y una clave ENTRE COMILLAS no matchea, porque `"` no es `\s`. Este repo
+ *  escribe claves entre comillas seguido (`GRUPO_POR_DESENLACE`, `../presentation/flow-vm.ts:1354`),
+ *  así que no era una forma exótica. MEDIDO: con `const MUTANTE2: Record<string, string> = {
+ *  "principalTx": "fabricada" };` agregado a `container.ts`, la versión sin comilla daba
+ *  `5 passed`; con esta da rojo en T-W9(a). El `\]?` cierra la misma puerta por acceso indexado
+ *  (`state["principalTx"] = x`). El control de abajo planta las cuatro formas, porque el agujero era
+ *  invisible a su propio control: éste sólo probaba las dos SIN comillas.
+ *
+ *  ⚠️ EL PATRÓN SE ESCRIBE UNA SOLA VEZ, en `ESCRITURA_SRC`, y de ahí salen las DOS regex que este
+ *  archivo usa (la de `test` y la de contar, que necesita `/g` fresco por lo de `lastIndex` que está
+ *  explicado abajo). Escribirlo dos veces es cómo un arreglo se aplica a una y no a la otra: hasta
+ *  este commit T-W9(a-bis) llevaba su propia copia literal, y la comilla se le habría escapado. */
+const ESCRITURA_SRC = "principalTx[\"']?\\s*\\]?\\s*[:=]";
+const ESCRITURA = new RegExp(ESCRITURA_SRC);
+const todasLasEscrituras = (code: string): RegExpMatchArray | null =>
+  code.match(new RegExp(ESCRITURA_SRC, "g"));
 /** Llamar al escritor: un `.markPrincipalIn(`. El punto excluye la DECLARACIÓN del método.
  *  ⚠️ SIN `/g` A PROPÓSITO: `RegExp.test` sobre una regex GLOBAL es STATEFUL (avanza `lastIndex`), así
  *  que reusarla en un `.filter()` sobre muchos archivos se saltea matches y el candado deja pasar
@@ -83,14 +100,20 @@ describe("WKH-352 · AC-7: `principalTx` tiene un solo escritor, y corre despué
   // devolviera vacío) dejaría los tres invariantes verdes sobre CUALQUIER fuente, que es exactamente el
   // modo de fallo que `evm-residue-guard.static.test.ts:38-43` documenta: un guard que no puede fallar.
   it("control: la detección encuentra un escritor PLANTADO y no se traga el stripper", () => {
-    // Un escritor plantado, en las dos formas que el candado busca.
+    // Un escritor plantado, en las CUATRO formas que el candado busca. Las dos de abajo son las que
+    // faltaban: con la regex anterior (`/principalTx\s*[:=]/`) daban `false` y el candado se saltaba
+    // con una clave entre comillas. Son parte del control, no un extra.
     expect(ESCRITURA.test('const s = { ...prev, principalTx: "fabricada" };')).toBe(true);
     expect(ESCRITURA.test("state.principalTx = firmaInventada;")).toBe(true);
+    expect(ESCRITURA.test('const M: Record<string, string> = { "principalTx": "fabricada" };')).toBe(true);
+    expect(ESCRITURA.test("state[\"principalTx\"] = firmaInventada;")).toBe(true);
     // Una llamada plantada al escritor.
     expect('otro.markPrincipalIn("x", now);').toMatch(LLAMADA);
     // Y la detección NO matchea una simple LECTURA, que es lo que hace `flow-vm.ts` y debe seguir
-    // pudiendo hacer. Si esto se pusiera rojo, el candado estaría prohibiendo leer el campo.
+    // pudiendo hacer. Si esto se pusiera rojo, el candado estaría prohibiendo leer el campo. Va
+    // también la lectura por índice, que es la que el `\]?` de arriba podría haber roto.
     expect(ESCRITURA.test("if (rem.principalTx != null) return true;")).toBe(false);
+    expect(ESCRITURA.test('if (rem["principalTx"] != null) return true;')).toBe(false);
     // El stripper no vació los fuentes que este archivo mira.
     const remittance = FUENTES.find((f) => f.rel === REMITTANCE);
     expect(remittance?.code).toContain("markPrincipalIn");
@@ -123,7 +146,7 @@ describe("WKH-352 · AC-7: `principalTx` tiene un solo escritor, y corre despué
     expect(cuerpo).toContain("principalTx: tx");
     // Las ÚNICAS otras menciones en write-position del archivo son la declaración del campo en el tipo
     // y su inicialización en `null` al crear la remesa. Cualquier tercera es un escritor nuevo.
-    const fuera = (code.slice(0, desde) + code.slice(hasta)).match(/principalTx\s*[:=]/g) ?? [];
+    const fuera = todasLasEscrituras(code.slice(0, desde) + code.slice(hasta)) ?? [];
     expect(fuera).toHaveLength(2);
   });
 

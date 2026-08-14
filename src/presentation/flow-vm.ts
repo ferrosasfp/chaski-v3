@@ -1170,7 +1170,7 @@ export type EscrowOutcome =
   | "chain-deposited-window-closed"
   | "chain-released"
   | "chain-refunded"
-  | "chain-absent"
+  | "chain-absent" | "chain-absent-after-deposit"
   | "chain-unknown"
   | "chain-pending";
 
@@ -1202,7 +1202,7 @@ export function escrowOutcome(rem: RemittanceState, answer: EscrowChainAnswer): 
   if (answer === "deposited-window-closed") return "chain-deposited-window-closed";
   if (answer === "released") return "chain-released";
   if (answer === "refunded") return "chain-refunded";
-  if (answer === "absent") return "chain-absent";
+  if (answer === "absent") return rem.principalTx != null ? "chain-absent-after-deposit" : "chain-absent";
   // `"unknown"` y cualquier valor que un `EscrowChainAnswer` futuro agregue: "no pudimos preguntar".
   // Es el lado seguro del tri-estado — el que no afirma nada sobre los fondos.
   return "chain-unknown";
@@ -1218,10 +1218,10 @@ export function escrowOutcome(rem: RemittanceState, answer: EscrowChainAnswer): 
  * (`lostEscrowRecoveryError`, `:302`) sobre el número del copy: escribir la frase dos veces es cómo
  * queda una pantalla diciendo algo que el código dejó de decir.
  *
- * Sobre `"chain-absent"`: su segunda oración afirma algo sobre NOSOTROS ("desde acá no podemos decir
- * cuál de las dos"), no sobre la plata, y es lo único honesto que se puede decir con este dato. Una
- * PDA que no existe no distingue "el depósito nunca entró" de "ya se cerró después de resolverse":
- * ver R-1 en el docblock de (`EscrowChainState`, `../application/ports.ts:1122`).
+ * Sobre `absent`, que desde WKH-352 tiene DOS ramas y la evidencia que las separa es `rem.principalTx`
+ * (la firma del depósito, que sólo se escribe tras un `ok:true` del settle): sin ella lo único honesto
+ * sigue siendo hablar de NOSOTROS ("no podemos decir cuál de las dos"); con ella el "nunca entró" queda
+ * refutado y el resto no, así que tampoco se afirma. R-1 en (`EscrowChainState`, `../application/ports.ts:1122`).
  *
  * Sobre los dos `"chain-deposited-*"`: los dos pesan `strong` porque los dos tienen plata adentro —
  * el peso visual separa "hay plata" de "no hay nada que hacer", no "urgente" de "no urgente". Lo que
@@ -1263,11 +1263,11 @@ export function escrowOutcomeDisplay(o: EscrowOutcome): {
     return { copy: "El contrato dice que tus USDC ya volvieron a tu wallet.", emphasis: "normal" };
   if (o === "chain-released")
     return { copy: "El contrato dice que tus USDC ya salieron del escrow hacia el pago.", emphasis: "normal" };
+  if (o === "chain-absent-after-deposit")
+    return { copy: "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en el contrato ya no hay ninguna cuenta para este envío, así que esa cuenta se cerró después de resolverse. Desde acá no podemos decir si terminó en un pago o en una devolución.", emphasis: "normal" };
+  // La frase de abajo queda BYTE-IDÉNTICA (CD-8): la rama nueva se AGREGA, no reescribe a `chain-absent`.
   if (o === "chain-absent")
-    return {
-      copy: "En el contrato no hay ninguna cuenta para este envío: o el depósito nunca entró, o ya se cerró después de resolverse. Desde acá no podemos decir cuál de las dos.",
-      emphasis: "normal",
-    };
+    return { copy: "En el contrato no hay ninguna cuenta para este envío: o el depósito nunca entró, o ya se cerró después de resolverse. Desde acá no podemos decir cuál de las dos.", emphasis: "normal" };
   if (o === "chain-unknown")
     return { copy: "No pudimos preguntarle al contrato por este envío.", emphasis: "normal" };
   if (o === "chain-pending")
@@ -1281,7 +1281,7 @@ export function escrowOutcomeDisplay(o: EscrowOutcome): {
  * Acá NO se calcula ningún desenlace nuevo ni se le pregunta nada a la cadena. Se toma el
  * `EscrowOutcome` que ya produce (`escrowOutcome`, `:1193`) y se dice a qué sección va esa fila.
  *
- * LA PARTICIÓN ES TOTAL. Los 11 valores de (`EscrowOutcome`, `:1167`) se reparten entre los 4 grupos
+ * LA PARTICIÓN ES TOTAL. Los 12 valores de (`EscrowOutcome`, `:1167`) se reparten entre los 4 grupos
  * sin solapamiento y sin sobrantes, así que toda fila aparece siempre, exactamente una vez, bajo un
  * encabezado visible. De ahí se sigue que ocultar un grupo sin filas es inocuo: un grupo vacío
  * significa "ninguna de tus filas cayó acá", nunca "acá hay filas que no te estamos mostrando".
@@ -1346,7 +1346,7 @@ export const HISTORY_GROUP_HEADING: Record<HistoryGroup, string> = {
 };
 
 /**
- * El mapa, con las 11 claves. Es un `Record` y NO una cadena de `if`, a propósito: si mañana
+ * El mapa, con las 12 claves. Es un `Record` y NO una cadena de `if`, a propósito: si mañana
  * (`EscrowOutcome`, `:1167`) gana un valor nuevo y nadie le da grupo, esto NO COMPILA. Un `if`-chain
  * cerrado con un `return` por defecto se traga el mismo olvido y se despliega en silencio. La
  * diferencia entre un candado y una prosa. Ojo: lo caza `tsc`, no vitest, que no typechequea.
@@ -1361,7 +1361,7 @@ const GRUPO_POR_DESENLACE: Record<EscrowOutcome, HistoryGroup> = {
   "no-deposit": "sin-plata",
   unverified: "sin-respuesta",
   "chain-pending": "sin-respuesta",
-  "chain-absent": "sin-respuesta",
+  "chain-absent": "sin-respuesta", "chain-absent-after-deposit": "sin-respuesta",
   "chain-unknown": "sin-respuesta",
 };
 

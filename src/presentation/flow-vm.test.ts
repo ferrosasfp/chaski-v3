@@ -1592,7 +1592,7 @@ describe("WKH-349 · escrowOutcome / escrowOutcomeDisplay", () => {
     "chain-deposited-window-closed": true,
     "chain-released": true,
     "chain-refunded": true,
-    "chain-absent": true,
+    "chain-absent": true, "chain-absent-after-deposit": true,
     "chain-unknown": true,
     "chain-pending": true,
   };
@@ -1640,10 +1640,10 @@ describe("WKH-349 · escrowOutcome / escrowOutcomeDisplay", () => {
   });
 
   // 🔴 T-V4 (CD-2) — "LA CADENA CONTESTÓ QUE NO HAY CUENTA" TAMPOCO ES UNA CONCLUSIÓN SOBRE LA PLATA.
-  // MUTANTE: `absent → chain-released` ("ya se cerró, seguro fue una entrega"), que es la conclusión
-  // tentadora y no medida — una cuenta cerrada no distingue devolución de entrega.
+  // MUTANTE: `absent → chain-released` ("ya se cerró, seguro fue una entrega"), la conclusión tentadora y no medida.
+  // WKH-352: el fixture va SIN `principalTx` a propósito — con la prueba del depósito la rama es otra (T-W1).
   it("T-V4: `absent` es su propio desenlace y su copy no es el de unknown, released ni refunded", () => {
-    expect(escrowOutcome(FIXTURES.unverified, "absent")).toBe("chain-absent");
+    expect(escrowOutcome(rem({ status: "confirmed" }), "absent")).toBe("chain-absent");
     const ausente = escrowOutcomeDisplay("chain-absent").copy;
     expect(ausente).not.toBe(escrowOutcomeDisplay("chain-unknown").copy);
     expect(ausente).not.toBe(escrowOutcomeDisplay("chain-released").copy);
@@ -1855,21 +1855,21 @@ describe("WKH-350 · agrupación del historial", () => {
   });
 
   // 🔴 T-H3 (CD-10, mitad de pertenencia) — QUÉ DESENLACES VAN A CADA GRUPO, ESCRITO A MANO.
-  // Los 4 conjuntos suman los 11 EscrowOutcome, sin solapamiento y sin sobrantes. El `Record`
+  // Los 4 conjuntos suman los 12 EscrowOutcome, sin solapamiento y sin sobrantes. El `Record`
   // exhaustivo de abajo es lo que hace que "sin sobrantes" lo verifique `tsc` y no mi memoria: si el
   // tipo gana un valor y nadie lo agrega acá, este archivo deja de compilar.
   // MUTANTES, cualquiera de los tres pone rojo: mover `chain-released` a "con-plata" (haría que "Con
   // plata en el escrow" mienta sobre una fila cuya plata ya salió); mover `unverified` a "con-plata"
   // ("probablemente tenga plata" es justo la invención que AC-7 prohíbe); mover `no-deposit` a
   // "sin-respuesta" (sí hubo respuesta: nunca se depositó).
-  it("T-H3: cada uno de los 11 desenlaces cae en su grupo, sin solapamiento y sin sobrantes", () => {
+  it("T-H3: cada uno de los 12 desenlaces cae en su grupo, sin solapamiento y sin sobrantes", () => {
     const ESPERADO: Record<HistoryGroup, EscrowOutcome[]> = {
       firma: ["chain-deposited-window-closed"],
       "con-plata": ["in-escrow", "chain-deposited-window-open"],
       "sin-plata": ["returned", "chain-refunded", "chain-released", "no-deposit"],
-      "sin-respuesta": ["unverified", "chain-pending", "chain-absent", "chain-unknown"],
+      "sin-respuesta": ["unverified", "chain-pending", "chain-absent", "chain-absent-after-deposit", "chain-unknown"],
     };
-    // El universo, exhaustivo por `tsc`: los 4 locales + los 7 de cadena.
+    // El universo, exhaustivo por `tsc`: los 4 locales + los 8 de cadena.
     const TODOS: Record<EscrowOutcome, true> = {
       "no-deposit": true,
       "in-escrow": true,
@@ -1879,7 +1879,7 @@ describe("WKH-350 · agrupación del historial", () => {
       "chain-deposited-window-closed": true,
       "chain-released": true,
       "chain-refunded": true,
-      "chain-absent": true,
+      "chain-absent": true, "chain-absent-after-deposit": true,
       "chain-unknown": true,
       "chain-pending": true,
     };
@@ -1887,10 +1887,10 @@ describe("WKH-350 · agrupación del historial", () => {
     for (const g of HISTORY_GROUP_ORDER) {
       for (const o of ESPERADO[g]) expect(historyGroupFor(o)).toBe(g);
     }
-    // Sin solapamiento y sin sobrantes: los 4 conjuntos particionan los 11 valores del tipo.
+    // Sin solapamiento y sin sobrantes: los 4 conjuntos particionan los 12 valores del tipo.
     const escritos = HISTORY_GROUP_ORDER.flatMap((g) => ESPERADO[g]);
-    expect(escritos).toHaveLength(11);
-    expect(new Set(escritos).size).toBe(11);
+    expect(escritos).toHaveLength(12);
+    expect(new Set(escritos).size).toBe(12);
     expect([...escritos].sort()).toEqual((Object.keys(TODOS) as EscrowOutcome[]).sort());
   });
 });

@@ -2127,9 +2127,14 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
   //
   // MUTANTE MEDIDO: reponer esa media frase en `flow-vm.ts:1267`. Aplicado y medido: T-W10 se pone
   // rojo por el primer assert, y de este bloque no cae ningún otro.
-  // SEGUNDO MUTANTE MEDIDO: borrar el "ni descartar que esa cuenta siga abierta..." final (o sea sacar
+  // SEGUNDO MUTANTE MEDIDO: borrar el "ni descartar que la cuenta siga abierta..." final (o sea sacar
   // el "se cerró" y no poner nada en su lugar, que deja la misma puerta cerrada por omisión) ⇒ T-W10
-  // rojo por el tercer assert, y T-W2 verde. Sin ese tercer assert el mutante pasaba.
+  // rojo por el assert `toContain("siga abierta")`, y T-W2 verde. Sin ese assert el mutante pasaba.
+  // ⚠️ Re-medido en el fix-pack r2, porque el copy cambió (BLQ-BAJO-1) y una atribución sobre un texto
+  // que ya no existe es exactamente la clase de prosa que envejece sola: con el copy de hoy y ese
+  // recorte, `2 failed | 170 passed`: T-W10 por `siga abierta` y T-W11 por su propio assert del escape
+  // (o sea que ese mutante ya NO lo caza sólo este test), con T-W2 verde. Se nombra el ASSERT y no su
+  // ordinal: los tres controles nuevos de acá abajo corrieron los números y la frase habría mentido.
   //
   // ⚠️ QUÉ NO CUBRE (CD-14): la regex cubre LAS FORMAS DE CIERRE QUE ENUMERA, no toda afirmación sobre
   // el pasado de la cuenta. "Ese envío ya está resuelto" pasa este candado. Y no mide nada sobre la
@@ -2144,6 +2149,15 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
     // EL ASSERT DE CONTROL: la regex SÍ matchea la media frase que el AR rechazó, TEXTUAL. Sin esto,
     // una regex rota dejaría el assert de arriba verde sobre cualquier copy, incluido el rechazado.
     expect("así que esa cuenta se cerró después de resolverse").toMatch(AFIRMA_CIERRE);
+    // 🔴 UN CONTROL POR ALTERNANTE (AR r2 · MNR-2). Acá había UN solo control y la regex tiene CUATRO
+    // formas: los otros tres alternantes no los ejercitaba nadie, así que uno roto (un `\b` de más, un
+    // acento mal escrito) habría quedado muerto en silencio, que es EXACTAMENTE el defecto que T-W2
+    // documenta dos bloques más arriba y que este archivo ya pagó una vez. La regla, escrita en
+    // `auto-blindaje.md:139`: si la regex tiene N alternantes, el control necesita N. Medido uno por
+    // uno con `node -e` antes de escribirlos.
+    expect("y quedó cerrada esa misma noche").toMatch(AFIRMA_CIERRE);
+    expect("la cuenta fue cerrada por el programa").toMatch(AFIRMA_CIERRE);
+    expect("esa cuenta ya no existe en la cadena").toMatch(AFIRMA_CIERRE);
     // La tercera posibilidad, nombrada: que la cuenta siga abierta donde no estamos mirando.
     expect(nuevo).toContain("siga abierta");
     // Y lo que el copy SÍ sostiene se queda: el depósito entró, con su firma confirmada.
@@ -2153,5 +2167,61 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
     // sigue diciéndolo y que CD-8 no se rompió al arreglar la frase nueva.
     expect(escrowOutcomeDisplay("chain-absent").copy).toContain("o ya se cerró después de resolverse");
     expect(escrowOutcomeDisplay("chain-absent").copy).toBe(COPY_VIEJO_ABSENT);
+  });
+
+  // 🔴 T-W11 (AR r2 · BLQ-BAJO-1) — EL COPY NO GENERALIZA DE UNA DIRECCIÓN A TODO EL CONTRATO, Y SU
+  // ESCAPE APUNTA DONDE LA CUENTA PUEDE ESTAR DE VERDAD.
+  //
+  // POR QUÉ EXISTE, y son dos afirmaciones distintas que el copy hacía de más:
+  //   (1) decía "en EL CONTRATO que estamos consultando no figura ninguna cuenta para este envío". Lo
+  //       que se lee es UNA dirección: la que (`deriveEscrowStateFromId16`, `../infrastructure/solana-wallet.ts:294`)
+  //       deriva de "escrow" + sender + id16, no el programa entero.
+  //       El docblock de (`escrowOutcomeDisplay`, `flow-vm.ts:1251`) ya decía que lo ÚNICO medido es
+  //       "en la dirección que derivamos HOY no hay cuenta": el copy afirmaba más que su propio
+  //       docblock, y ese par (prosa que afirma / docblock que acota) es el que nadie vuelve a leer.
+  //   (2) la tercera posibilidad decía "siga abierta en un contrato que no estamos mirando", y ése es
+  //       justo el lugar donde el más plausible de los cuatro disparadores NO la pone: si el depósito
+  //       lo firmó otra cuenta de la wallet, la cuenta vive en ESTE MISMO programa con otro sender, y
+  //       (`LostEscrowRecovery`, `flow.tsx:2036`) la encuentra porque resuelve por sender. Mandar a un
+  //       "otro contrato" es mandar a la persona al único lugar donde no hay nada que buscar.
+  //
+  // MUTANTE MEDIDO: reponer en `flow-vm.ts:1267` la frase vieja ("Y en el contrato que estamos
+  // consultando no figura ninguna cuenta para este envío... siga abierta en un contrato que no estamos
+  // mirando"). Aplicado y medido: T-W11 rojo por el primer assert, y de ESTE bloque no cae ningún otro
+  // (T-W10 sigue verde: la frase vieja tampoco decía "se cerró"). Fuera de este archivo caen TRES, los
+  // que comparan el literal byte a byte: T-W8 en `history-grupos.test.tsx`, y T-W6 y T-W7 en
+  // `history-onchain.test.tsx`. Corrida completa del mutante: `4 failed | 191 passed`.
+  // SEGUNDO MUTANTE MEDIDO: dejar la primera mitad corregida y volver SÓLO el escape a "esa cuenta siga
+  // abierta en un contrato que no estamos mirando" ⇒ T-W11 rojo, `1 failed | 171 passed`, y el rojo cae
+  // en `toContain("siga abierta en otra dirección")`, no en el `not.toContain` del final (el test corta
+  // en el primer assert que falla, así que del `not.toContain` lo único medido es que existe). El
+  // primer assert queda VERDE con este mutante, que es exactamente por qué la mitad (2) necesita
+  // asserts propios y no alcanzaba con la regex.
+  //
+  // ⚠️ QUÉ NO CUBRE (CD-14). La regex cubre LAS DOS FORMAS QUE ENUMERA, no toda generalización: "no
+  // encontramos la cuenta en el escrow" pasa este candado. No mide que la persona entienda la
+  // distinción entre una dirección y el programa, que ningún test puede medir. Y no mide nada de la
+  // dirección real: sigue sin haber `programId` ni cluster en el snapshot.
+  //
+  // ⚠️ LA MISMA GENERALIZACIÓN VIVE EN LA FRASE CONGELADA DE `chain-absent` ("En el contrato no hay
+  // ninguna cuenta para este envío"), y ACÁ NO SE ARREGLA: CD-8 la declara byte-idéntica en esta HU.
+  // Queda dicho, no disfrazado, y es lo que el control de abajo usa como espécimen real.
+  it("T-W11: el copy nuevo habla de la dirección de este envío, no del contrato entero", () => {
+    const nuevo = escrowOutcomeDisplay("chain-absent-after-deposit").copy;
+    const GENERALIZA = /(en el contrato\s+(que estamos consultando\s+)?no\s+(hay|figura)|el contrato\s+no\s+(tiene|registra))/i;
+    expect(nuevo).not.toMatch(GENERALIZA);
+    // UN CONTROL POR ALTERNANTE (la regla de MNR-2, aplicada también acá). El primero no es una frase
+    // inventada: es la frase congelada de `chain-absent`, o sea el espécimen que motivó el hallazgo.
+    expect(COPY_VIEJO_ABSENT).toMatch(GENERALIZA);
+    expect("Y en el contrato que estamos consultando no figura ninguna cuenta").toMatch(GENERALIZA);
+    expect("el contrato no tiene ninguna cuenta para este envío").toMatch(GENERALIZA);
+    expect("el contrato no registra ninguna cuenta para este envío").toMatch(GENERALIZA);
+    // Y lo que el copy SÍ dice: el alcance de la lectura, explícito.
+    expect(nuevo).toContain("la dirección que le corresponde a este envío");
+    expect(nuevo).toContain("no el contrato entero");
+    // El escape apunta a OTRA DIRECCIÓN y a la wallet, no a otro contrato.
+    expect(nuevo).toContain("siga abierta en otra dirección");
+    expect(nuevo).toContain("wallet conectada");
+    expect(nuevo).not.toContain("un contrato que no estamos mirando");
   });
 });

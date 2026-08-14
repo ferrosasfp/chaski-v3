@@ -578,7 +578,7 @@ describe("WKH-352 · el desenlace nuevo cae en el grupo que esa fila ya tenía",
    *  TRES líneas de este archivo SIN ancla, `:405`, `:532` y `:577`, y una insertada arriba de la
    *  primera las rompe a las tres en silencio (recontado en el AR · MNR-1: eran más de las escritas). */
   const CP_ABSENT_CON_DEPOSITO =
-    "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en el contrato que estamos consultando no figura ninguna cuenta para este envío, que es todo lo que medimos. Desde acá no podemos decir si terminó en un pago o en una devolución, ni descartar que esa cuenta siga abierta en un contrato que no estamos mirando.";
+    "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en la dirección que le corresponde a este envío no hay ninguna cuenta: miramos esa dirección sola, no el contrato entero, y eso es todo lo que medimos. Desde acá no podemos decir si terminó en un pago o en una devolución, ni descartar que la cuenta siga abierta en otra dirección: la que miramos se calcula con la wallet conectada, así que si depositaste con otra, conectá esa y usá la opción de recuperar un envío perdido, en la pantalla de inicio.";
   const CP_ABSENT_AMBIGUO =
     "En el contrato no hay ninguna cuenta para este envío: o el depósito nunca entró, o ya se cerró después de resolverse. Desde acá no podemos decir cuál de las dos.";
 

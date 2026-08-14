@@ -237,11 +237,26 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
     expect(screen.queryByText(COPY_VIEJO)).toBeNull();
   });
 
-  // 🔴 T-U5 (AC-4, CD-16) — SON DOS HECHOS DISTINTOS Y LA TARJETA MUESTRA LOS DOS.
-  // MUTANTE: que el desenlace de cadena reescriba el Pill (por ejemplo, pintar "Entregado" porque la
-  // PDA está `Released`). El Pill habla de que el partner de payout reportó haber entregado los PEN;
-  // `Released` habla de que el vault salió del escrow. Uno no prueba el otro.
-  it("T-U5: `released` ⇒ dice que salieron hacia el pago, y el Pill sigue diciendo lo del status", async () => {
+  // 🔴 T-U5 (AC-4, CD-16 · reescrito por WKH-351/AC-1) — SON DOS HECHOS DISTINTOS Y LA TARJETA
+  // MUESTRA UNO SOLO: el de la plata. Hasta WKH-351 mostraba además el Pill del trámite, y bajo el
+  // encabezado del grupo eso se leía como una contradicción ("Pago en curso" bajo "Necesitan tu firma").
+  // 🔴 EL MUTANTE ORIGINAL NO LO MATA ESTE TEST, Y ESTÁ MEDIDO: que el desenlace de cadena reescriba
+  // la etiqueta del trámite (pintar "Entregado" porque la PDA está `Released`). Hasta WKH-351 lo mataba
+  // el assert de PRESENCIA del Pill, que es justo el que esta HU dio vuelta. Con ese mutante puesto en
+  // `flow.tsx:3110` este archivo queda VERDE (10 passed): el rojo lo da T-N1, mitad (c), en
+  // `history-grupos.test.tsx`, que es hoy su dueño. El hecho de fondo no cambió: `Released` dice que el
+  // vault salió del escrow y "Entregado" dice que el partner de payout reportó haber entregado los PEN,
+  // y uno no prueba el otro.
+  // 🔴 LO QUE SÍ MATA EL ASSERT DE CP3_LIBERADO: que la respuesta `released` deje de producir la frase
+  // del vault en la tarjeta. T-V8 (`flow-vm.test.ts:1714`) cubre ese copy en PURO, no en el render.
+  // 🔴 EL MUTANTE DEL QUE ESTE TEST SÍ ES DUEÑO, MEDIDO: devolver `<Pill tone={status.tone}>{status.label}</Pill>`
+  // a `HistoryEntry` (`flow.tsx:3110`) pone rojo el assert de ausencia de abajo. ⚠️ Lo que NO caza es un
+  // `<span>` que pinte la etiqueta con un prefijo ("Estado: Pago en curso"): `queryAllByText` es match
+  // EXACTO. Ese lo caza T-N1(c), que compara por substring sobre el `textContent` del grupo.
+  // ⚠️ El assert de ausencia va SIN scope de fila a propósito: este montaje renderiza UNA sola fila y
+  // nada más en `HistoryView` puede producir esa cadena. El scope por grupo lo hace T-N1 en
+  // `history-grupos.test.tsx`, que sí monta 12 filas.
+  it("T-U5: `released` ⇒ dice que salieron hacia el pago, y la tarjeta no muestra la etiqueta del trámite", async () => {
     const rem = unverifiedSnapshot("rem-1");
     const reader = new FakeSolanaEscrowChainStateReader(mapa([["rem-1", "released"]]));
     render(
@@ -254,9 +269,10 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
       />,
     );
     expect(await screen.findByText(CP3_LIBERADO)).toBeInTheDocument();
-    // El Pill sale del status del snapshot, no de la cadena. Y el control del test: la etiqueta que se
-    // espera se deriva del MISMO productor que la pinta, así que no queda un literal envejeciendo acá.
-    expect(screen.getByText(statusDisplay(rem.status).label)).toBeInTheDocument();
+    // La etiqueta se DERIVA del mismo productor que la pintaba, así que no queda un literal
+    // envejeciendo acá. Y el control: si `statusDisplay` devolviera "", el assert de ausencia sería
+    // verde por defecto y este test dejaría de medir nada.
+    expect(screen.queryAllByText(statusDisplay(rem.status).label)).toHaveLength(0);
     expect(statusDisplay(rem.status).label).not.toBe("");
   });
 

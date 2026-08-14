@@ -35,12 +35,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
-import { HistoryView } from "./flow";
+import { HistoryView, Receipt } from "./flow";
+import { statusDisplay } from "./flow-vm";
 import { Money } from "../domain/money";
 import {
   type KycVerification,
   Remittance,
-  type RemittanceState,
+  type RemittanceState, type RemittanceStatus,
   toPersistedIdentity,
 } from "../domain/remittance";
 import { PRINCIPAL_SETTLED_REFUND_MANUAL } from "../application/use-cases/confirm-and-send";
@@ -347,5 +348,225 @@ describe("WKH-350 · el historial se reparte en 4 secciones y no pierde nada por
     expect(within(sinRespuesta).getByText(CP_UNVERIFIED)).toBeInTheDocument();
     expect(within(conPlata).queryByText(CP_UNVERIFIED)).toBeNull();
     expect(within(conPlata).getByText(CP_IN_ESCROW)).toBeInTheDocument();
+  });
+});
+
+// WKH-351 — LA ETIQUETA DEL TRÁMITE YA NO ESTÁ EN LA TARJETA DEL HISTORIAL.
+//
+// EL INVARIANTE: ninguna tarjeta del historial muestra a la vez el encabezado de su grupo y una
+// etiqueta del trámite de pago. El Pill hablaba del TRÁMITE (un hecho que este cliente recuerda) y la
+// frase habla de la PLATA (un hecho que decide la cadena). Son ejes independientes: se medió
+// contradicción alcanzable en 3 de los 4 grupos, no sólo en el caso fotografiado por el founder.
+//
+// 🔴 EL CANDADO TIENE DOS MITADES Y DOS CONTROLES, Y NINGUNA SOBRA:
+//   (b) ESTRUCTURAL — dentro del grupo no hay ningún `span.rounded-full`, que es la forma del `Pill`
+//       (`ui.tsx:116`). Mata: restaurar `<Pill tone={status.tone}>{status.label}</Pill>`, y TAMBIÉN
+//       una etiqueta nueva con texto propio (`<Pill tone="neutral">Trámite</Pill>`), que (c) NO caza.
+//   (c) SEMÁNTICA — ninguna de las 7 etiquetas de `statusDisplay` aparece dentro del `textContent` del
+//       grupo, COMO SUBSTRING. Mata: pintar `status.label` SIN Pill, en un `<span className="text-xs">`,
+//       que (b) NO caza; y también envuelto en un prefijo ("Estado: Pago en curso"), que el
+//       `queryAllByText` con el que nació esta mitad dejaba pasar verde. Cada mitad mata un mutante que
+//       la otra deja pasar.
+//   ctrl-1 — el MISMO selector de (b) encuentra exactamente 1 Pill en el `Receipt`. Sin esto, si
+//       `ui.tsx:116` dejara de usar `rounded-full`, (b) sería VACUAMENTE verde para siempre.
+//   ctrl-2 — el conjunto de (c) tiene 7 etiquetas y ninguna vacía. Sin esto, un `statusDisplay`
+//       mutado a `label: ""` dejaría a (c) buscando cadenas vacías y verde con cualquier cosa.
+//   Los dos controles existen porque UNA ASERCIÓN DE AUSENCIA ES VERDE POR DEFECTO: hay que probar
+//   que el instrumento mide antes de creerle que no encontró nada.
+//
+// ⚠️ EL LÍMITE DECLARADO, para que nadie lea de más en el verde de esto:
+//   1. LO QUE SE ESCAPA ES UNA ETIQUETA SIN CLASE DE PILL CUYO TEXTO NO CONTENGA NINGUNA DE LAS 7.
+//      (b) mira la FORMA y (c) las 7 PALABRAS conocidas como substring; un `<span>` sin `rounded-full`
+//      que diga "En trámite" se escapa de las dos. Un prefijo o un sufijo sobre una de las 7 —"Estado:
+//      Pago en curso"— NO se escapa: eso es lo que cambió respecto de la primera versión de (c), que
+//      usaba `queryAllByText` (match exacto) y lo dejaba pasar. Las dos mitades abaratan la
+//      reincidencia; NO la eliminan.
+//   2. Verifica AUSENCIA, no HONESTIDAD. Igual que T-H1/T-H3, un encabezado mentiroso con filas que
+//      le calzan pasa verde. Esa contradicción la sigue cerrando la revisión humana.
+//   3. (b) depende de un NOMBRE DE CLASE. Lo detecta ctrl-1, y sólo mientras el `Receipt` siga
+//      montando un Pill. Si algún día no lo monta, hay que REHACER el selector, no borrar el control.
+//   4. `chain-pending` sigue sin cobertura a nivel componente (el doble no tiene modo "nunca
+//      resuelve", limitación ya declarada en `:10-17`). Para esa fila el invariante vale POR
+//      CONSTRUCCIÓN (no hay Pill en el JSX), pero no está medido.
+//   5. jsdom no hace layout: que el bloque quede bien con un solo hijo en el flex no lo prueba nadie.
+//
+// 🔴 REGLA DEL ARCHIVO, heredada: cada test nombra la edición plausible que lo pone en rojo.
+
+// La frase de la ventana vencida y la de la ventana abierta, A MANO. Mismo motivo que los H_*: un test
+// que le pregunta al código qué copy produce y después verifica que produjo ese copy se compara consigo
+// mismo. Estas cadenas son el contrato con la persona.
+const CP_VENTANA_VENCIDA =
+  "El contrato dice que tus USDC siguen en el escrow y que el plazo para liberarlos al pago ya venció: la salida que queda es devolverlos a tu wallet, y sólo tu firma puede hacerlo.";
+const CP_VENTANA_ABIERTA = "El contrato dice que tus USDC siguen en el escrow, a tu nombre.";
+
+// Las etiquetas SÍ se derivan del productor, y es la decisión opuesta a la de arriba a propósito: acá
+// el conjunto PROHIBIDO tiene que seguir a `statusDisplay` si alguien le cambia una palabra, o el
+// candado quedaría vigilando una etiqueta que ya nadie pinta. El `Record` fuerza la exhaustividad por
+// tipos (mismo molde que `TODOS` en `flow-vm.test.ts:1873`): un `RemittanceStatus` nuevo no compila
+// hasta que entra acá.
+const TODOS_LOS_STATUS: Record<RemittanceStatus, true> = {
+  created: true,
+  quoted: true,
+  kyc_pending: true,
+  kyc_passed: true,
+  kyc_failed: true,
+  confirmed: true,
+  principal_in: true,
+  payout_submitted: true,
+  settled: true,
+  payout_failed: true,
+  refunded: true,
+};
+const ETIQUETAS_DE_TRAMITE: string[] = [
+  ...new Set(
+    (Object.keys(TODOS_LOS_STATUS) as RemittanceStatus[]).map((s) => statusDisplay(s).label),
+  ),
+];
+
+const LOS_4_GRUPOS = ["firma", "con-plata", "sin-plata", "sin-respuesta"] as const;
+
+/** El molde de (`returnedSnapshot`, `:131-138`): se fuerza el `status` sobre una fila `unverified`. */
+function conStatus(id: string, status: RemittanceStatus): RemittanceState {
+  return { ...unverifiedSnapshot(id), status };
+}
+
+// El montaje base trae 4 de las 7 etiquetas (payout_submitted, payout_failed, refunded y el default
+// por kyc_failed). Las otras 3 entran con `status` forzado, y con una respuesta de cadena que las
+// reparte en 3 grupos distintos, así que las 7 quedan representadas y los 4 grupos tienen filas.
+const DOCE_FILAS: RemittanceState[] = [
+  ...NUEVE_FILAS,
+  conStatus("rem-settled", "settled"),
+  conStatus("rem-principalin", "principal_in"),
+  conStatus("rem-confirmed", "confirmed"),
+];
+
+const DOCE_RESPUESTAS = mapa([
+  ...NUEVE_RESPUESTAS,
+  ["rem-settled", "deposited-window-closed"],
+  ["rem-principalin", "deposited-window-open"],
+  ["rem-confirmed", "released"],
+]);
+
+describe("WKH-351 · la tarjeta del historial no muestra la etiqueta del trámite", () => {
+  // 🔴 T-N1 (AC-1, AC-4 parcial) — EL INVARIANTE, EN LOS 4 GRUPOS, CON LAS 7 ETIQUETAS PRESENTES.
+  // MUTANTE (a): esconder el encabezado del grupo "para evitar la contradicción", que es resolver la
+  // HU al revés: sacarle a la persona el dato que la cadena SÍ sostiene.
+  // MUTANTE (b): restaurar el Pill en `flow.tsx:3110`, o poner cualquier otra etiqueta con forma de
+  // Pill y texto nuevo.
+  // MUTANTE (c): pintar `status.label` sin Pill, en un `<span className="text-xs">`.
+  it("T-N1: en los 4 grupos está el encabezado y no hay ninguna etiqueta de trámite", async () => {
+    const reader = new FakeSolanaEscrowChainStateReader(DOCE_RESPUESTAS);
+    render(
+      <HistoryView
+        items={DOCE_FILAS}
+        onOpen={() => {}}
+        onBack={() => {}}
+        reader={reader}
+        sender={FAKE_SOLANA_BENEFICIARY}
+      />,
+    );
+    await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(12));
+    // (a) los 4 encabezados están: el invariante es "encabezado SIN etiqueta", no "nada de nada".
+    for (const h of [H_FIRMA, H_CON_PLATA, H_SIN_PLATA, H_SIN_RESPUESTA]) {
+      expect(screen.getByText(h)).toBeInTheDocument();
+    }
+    for (const g of LOS_4_GRUPOS) {
+      const grupo = screen.getByTestId(`grupo-${g}`);
+      // (b) estructural. El scope por grupo NO es un adorno: el chip de la wallet del header
+      // (`flow.tsx:554-555`) también es un `span.rounded-full`, y un selector global lo contaría.
+      expect(grupo.querySelectorAll("span.rounded-full")).toHaveLength(0);
+      // (c) semántica, por SUBSTRING sobre el `textContent` del grupo y no por `queryAllByText`.
+      // Medido, y es el motivo del cambio: con `<span className="text-xs">Estado: {status.label}</span>`
+      // en `flow.tsx:3110` la tarjeta decía "Estado: Pago en curso" bajo "Necesitan tu firma" —el caso
+      // exacto del founder, con sus mismas palabras— y `queryAllByText`, que es match EXACTO, lo dejaba
+      // pasar verde. Un prefijo no puede evadir un `includes`.
+      const texto = grupo.textContent ?? "";
+      expect(ETIQUETAS_DE_TRAMITE.filter((label) => texto.includes(label))).toEqual([]);
+    }
+    // ctrl-1 — el instrumento mide: el MISMO selector encuentra 1 Pill en el `Receipt`, que a
+    // propósito sigue mostrando la etiqueta. Se monta en su propio container y se consulta por el
+    // container, no por `screen`, así que no interfiere con los asserts de arriba.
+    const recibo = render(<Receipt rem={unverifiedSnapshot("rem-recibo")} onNew={() => {}} />);
+    expect(recibo.container.querySelectorAll("span.rounded-full")).toHaveLength(1);
+    // ctrl-2 — el instrumento mide: 7 etiquetas distintas y ninguna vacía.
+    expect(ETIQUETAS_DE_TRAMITE).toHaveLength(7);
+    for (const l of ETIQUETAS_DE_TRAMITE) expect(l).not.toBe("");
+  });
+
+  // 🔴 T-N2 (AC-5) — EL CASO QUE EL FOUNDER REPORTÓ, CON EL FIXTURE REAL.
+  // `payout_submitted` + respuesta `deposited-window-closed` ⇒ grupo "Necesitan tu firma". Es
+  // literalmente lo de producción: 3 filas, 32 USDC, con "Pago en curso" al lado de "el plazo venció".
+  // MUTANTE: volver a la Opción 1 (Pill condicional por grupo) preservándolo justo para
+  // `payout_submitted`; revertir sólo el hunk de `flow.tsx:3110` dejando el de `flow.tsx:3090`; o mover la
+  // etiqueta del trámite al encabezado del grupo.
+  // POR QUÉ NO ALCANZA T-N1: T-N1 recorre grupos con un conjunto derivado; T-N2 fija el par exacto
+  // (status, respuesta) del reporte y lo nombra con literales. Si mañana alguien reordena fixtures,
+  // T-N2 sigue nombrando el caso del founder.
+  it("T-N2: la fila del caso reportado cae bajo firma y no dice ni 'Pago en curso' ni 'Entregado'", async () => {
+    const reader = new FakeSolanaEscrowChainStateReader(
+      mapa([["rem-closed", "deposited-window-closed"]]),
+    );
+    render(
+      <HistoryView
+        items={[unverifiedSnapshot("rem-closed")]}
+        onOpen={() => {}}
+        onBack={() => {}}
+        reader={reader}
+        sender={FAKE_SOLANA_BENEFICIARY}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText(H_FIRMA)).toBeInTheDocument());
+    const grupo = screen.getByTestId("grupo-firma");
+    expect(within(grupo).getByText(CP_VENTANA_VENCIDA)).toBeInTheDocument();
+    // Substring, por lo mismo que (c) en T-N1: "Estado: Pago en curso" evade el match exacto de
+    // `queryAllByText`, y este test es justo el que nombra el caso del founder con sus palabras.
+    const texto = grupo.textContent ?? "";
+    expect(["Pago en curso", "Entregado"].filter((l) => texto.includes(l))).toEqual([]);
+  });
+
+  // 🔴 T-N3 (AC-3) — `statusDisplay` SIGUE VIVA Y EL RECIBO SIGUE MOSTRÁNDOLA.
+  // Esta HU mueve la etiqueta, no la borra. El recibo es una sola remesa ya elegida: no tiene
+  // encabezado de grupo con el que contradecirse, así que ahí la etiqueta no miente.
+  // MUTANTE: sacar el Pill del `Receipt` "por consistencia", que es el sobre-cumplimiento, el error
+  // simétrico al bug; borrar `statusDisplay` (no compila); o cambiarle una etiqueta al pasar.
+  // NO DUPLICA: `flow-vm.test.ts:76-101` candadea el lado PURO y `flow.test.tsx:1546-1556` cubre 2 de
+  // los 7 estados en el recibo. Esto es el lado del RENDER con el conjunto completo.
+  it("T-N3: el recibo sigue mostrando la etiqueta, y las 7 siguen siendo 7 y no vacías", () => {
+    const { container } = render(
+      <Receipt rem={unverifiedSnapshot("rem-recibo")} onNew={() => {}} />,
+    );
+    expect(within(container).getByText("Pago en curso")).toBeInTheDocument();
+    expect(container.querySelectorAll("span.rounded-full")).toHaveLength(1);
+    expect(ETIQUETAS_DE_TRAMITE).toHaveLength(7);
+    for (const l of ETIQUETAS_DE_TRAMITE) expect(l).not.toBe("");
+  });
+
+  // 🔴 T-N4 (AC-4) — LO QUE LA TARJETA SIGUE MOSTRANDO, Y ES TODO MENOS LA ETIQUETA.
+  // MUTANTE: la limpieza tentadora de borrar el `<div className="flex items-start justify-between
+  // gap-3">` de `flow.tsx:3103` junto con el Pill ("un flex con un solo hijo sobra"), que se lleva
+  // puestos el nombre, el monto y la fecha. O borrar el bloque `flow.tsx:3103-3111` entero. Además, esas 4
+  // líneas de desplazamiento las cazaría el control de línea-neutralidad.
+  // ⚠️ LA FECHA NO SE COMPARA CONTRA UN LITERAL: `toLocaleDateString("es-PE")` depende del ICU del
+  // runtime. Se verifica que la línea del monto exista y que NO diga "sin fecha", que es lo que
+  // `formatEntryDate` (`flow.tsx:3132`) devuelve cuando el `createdAt` es implanteable.
+  it("T-N4: la tarjeta sigue mostrando nombre, monto, fecha, la frase y exactamente un botón", async () => {
+    const reader = new FakeSolanaEscrowChainStateReader(
+      mapa([["rem-open", "deposited-window-open"]]),
+    );
+    render(
+      <HistoryView
+        items={[unverifiedSnapshot("rem-open")]}
+        onOpen={() => {}}
+        onBack={() => {}}
+        reader={reader}
+        sender={FAKE_SOLANA_BENEFICIARY}
+      />,
+    );
+    expect(await screen.findByText(CP_VENTANA_ABIERTA)).toBeInTheDocument();
+    const fila = screen.getByRole("listitem");
+    expect(within(fila).getByText("Mamá")).toBeInTheDocument();
+    const montoYFecha = within(fila).getByText(/^\$400\.00 ·/);
+    expect(montoYFecha.textContent).not.toContain("sin fecha");
+    expect(within(fila).getAllByRole("button")).toHaveLength(1);
   });
 });

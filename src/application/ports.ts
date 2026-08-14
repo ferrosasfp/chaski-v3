@@ -1052,11 +1052,11 @@ export type EscrowId16 = string;
  *      distintos sobre la misma remesa.
  *  · `"refunded"`  — la cuenta existe y su `status` es `{ Refunded: {} }`. NO prueba que la cuenta se
  *      haya cerrado: la ix `refund` no cierra nada, el cierre es otra instrucción
- *      (`refund`, `../infrastructure/solana-wallet.ts:1066`).
+ *      (`refund`, `../infrastructure/solana-wallet.ts:1072`).
  *  · `"absent"`    — LA CADENA CONTESTÓ, y en esa PDA no hay cuenta. Es exactamente lo que significa
  *      hoy un `!acc` en los dos bucles que ya batchean cuentas del escrow
  *      (`resolveRemittanceIdFromLedger`, `../infrastructure/solana-wallet.ts:353`) y
- *      (`listCloseable`, `../infrastructure/solana-wallet.ts:1443`). NO dice a dónde fue la plata y NO
+ *      (`listCloseable`, `../infrastructure/solana-wallet.ts:1452`). NO dice a dónde fue la plata y NO
  *      distingue "nunca existió" de "ya se cerró después de resolverse". Ver R-1, acá abajo.
  *  · `"unknown"`   — NO PUDIMOS PREGUNTAR: el RPC falló, venció el techo de tiempo, o la respuesta no
  *      decodifica. No dice absolutamente nada sobre los fondos. NUNCA se colapsa con `"absent"`: uno

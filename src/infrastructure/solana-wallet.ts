@@ -349,7 +349,7 @@ export class SolanaWalletAdapter
   // MAX_RECOVERY_CANDIDATES envíos de la persona en los tres casos en que no se preguntó nada.
   // Ahora se consume `lookupBySender`, que las separa, y los tres `not_asked` salen por un código
   // propio. La CUARTA sigue saliendo por `escrow_not_found`, a propósito: ahí el servidor sí contestó
-  // y la frase de la pantalla es cierta. Espeja a (`listCloseable`, `:1443`), que ya hacía esto.
+  // y la frase de la pantalla es cierta. Espeja a (`listCloseable`, `:1452`), que ya hacía esto.
   private async resolveRemittanceIdFromLedger(senderB58: string): Promise<string> {
     const resolver = this.remittanceIdResolver;
     // Mismo guard que `listCloseable`: sin el método no se adivina, y un doble de JS que no lo tenga
@@ -1036,31 +1036,37 @@ export class SolanaWalletAdapter
     escrowStatePda: InstanceType<typeof PublicKey>,
     signature: string,
     ctx: {
-      blockhash: string;
+      blockhash: string; // ⚠️ WKH-353: la confirmación YA NO lo consume — el vencimiento se decide por ALTURA, no por blockhash. Se conserva en el ctx a propósito: sacarlo obliga a tocar la llamada de `refundEscrow`, que está ARRIBA de este método, y eso desplazaría `:1034` y las tres citas ancladas que lo apuntan (una de ellas cross-file). El campo es superficie muerta declarada, no un olvido.
       lastValidBlockHeight: number;
       coder: { decode(name: string, data: Buffer): unknown };
     },
   ): Promise<EscrowRefundConfirmation> {
     let reverted = false;
     try {
-      const res = await withTimeout(
-        connection.confirmTransaction(
-          {
-            signature,
-            blockhash: ctx.blockhash,
-            lastValidBlockHeight: ctx.lastValidBlockHeight,
-          },
-          "confirmed",
-        ),
+      // WKH-353: preguntamos por HTTP en vez de suscribirnos. `confirmTransaction` abría SIEMPRE un
+      // `signatureSubscribe`, el RPC contesta `-32601`, y la espera se consumía entera sin producir
+      // ningún veredicto. El techo sigue siendo UNO y sigue siendo el mismo: ver `awaitSignatureVerdict`, `:1726`.
+      const verdict = await withTimeout(
+        this.awaitSignatureVerdict(connection, signature, {
+          lastValidBlockHeight: ctx.lastValidBlockHeight,
+        }),
         this.confirmTimeoutMs,
       );
       // La tx entró en un bloque Y el programa la revirtió: eso sí es un "no" (los USDC no se movieron).
-      if (res?.value?.err) throw new RefundTxReverted("refund_tx_failed");
-      return "confirmed"; // confirmada sin error ⇒ la ix `refund` se ejecutó
+      if (verdict.kind === "landed" && verdict.err != null) throw new RefundTxReverted("refund_tx_failed");
+      if (verdict.kind === "landed") return "confirmed"; // confirmada sin error ⇒ la ix `refund` se ejecutó
     } catch (err) {
       // Todo lo que NO sea un revert medido es "no pudimos ver": timeout, blockhash vencido, websocket
       // ausente, RPC caído. Un blockhash vencido prueba que la tx no puede entrar DE ACÁ EN ADELANTE,
       // NO que no haya entrado antes ⇒ hay que ir a mirar el estado autoritativo.
+      //
+      // WKH-353 — el puente hacia los tres desenlaces con nombre, SIN reemplazar una palabra de las
+      // tres líneas de arriba: el `expired` de `SignatureVerdict`, `:1807` ES ese blockhash vencido,
+      // con nombre propio. Sigue yendo a la sonda por la misma razón de arriba: prueba que la tx no
+      // puede entrar DE ACÁ EN ADELANTE, NO que no haya entrado antes. `unseen` es otra cosa y va al
+      // mismo lugar: se nos acabó el tiempo de preguntar, y es el que llega hasta acá abajo como
+      // excepción "confirm_timeout". Colapsar los dos en un booleano vuelve a perder la distinción
+      // que estas líneas existen para no perder.
       reverted = err instanceof RefundTxReverted;
     }
     // Fuente autoritativa: el propio EscrowState. `refund` NO cierra la cuenta (eso lo hace la ix
@@ -1114,7 +1120,7 @@ export class SolanaWalletAdapter
    * que llama a `resolveRemittanceIdFromLedger`, `:353`) elige UNO entre N y actúa sobre él, porque
    * "recuperar mis USDC" tiene un objetivo natural — el escrow que todavía tiene plata. Para `close` no
    * existe ese "el": todos los terminales son igual de cerrables, y elegir uno en silencio le cerraría
-   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1443`) devuelve la
+   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1452`) devuelve la
    * LISTA y elige ella.
    *
    * ⚠️ POR QUÉ EL LISTER NO TIENE GATEWAY Y EL CIERRE SÍ (apartamiento declarado del SDD §4.1/§4.2,
@@ -1338,10 +1344,12 @@ export class SolanaWalletAdapter
    *
    * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`confirmRefund`, `:1034`), SIN leer nada.
    *    Éste NO puede: AC-5 exige que el alquiler volvió se afirme *sólo después de leer que la cuenta
-   *    ya no existe*. Un `confirmTransaction` sin `err` prueba que la tx ENTRÓ; leer la ausencia es lo
-   *    que prueba que hizo lo que queríamos. El input que pone en rojo cualquier atajo acá: un doble
-   *    con `confirmTransaction` OK y `getAccountInfo` que sigue devolviendo la cuenta tiene que dar
-   *    "pending" (test "AC-5: confirmación limpia + la cuenta SIGUE AHÍ ⇒ 'pending'").
+   *    ya no existe*. Un veredicto `landed` sin `err` —lo que WKH-353 puso en el lugar del
+   *    `confirmTransaction` que este docblock nombraba acá— prueba que la tx ENTRÓ; leer la ausencia
+   *    es lo que prueba que hizo lo que queríamos. El input que pone en rojo cualquier atajo acá: un
+   *    doble con el status de la firma OK (antes: `confirmTransaction` OK) y `getAccountInfo` que
+   *    sigue devolviendo la cuenta tiene que dar "pending" (test "AC-5: confirmación limpia + la
+   *    cuenta SIGUE AHÍ ⇒ 'pending'").
    * 2. La lectura de ausencia lleva commitment "confirmed" EXPLÍCITO; la del refund no lleva ninguno.
    *    Ver `probeEscrowClosed`.
    */
@@ -1353,14 +1361,15 @@ export class SolanaWalletAdapter
   ): Promise<EscrowRefundConfirmation> {
     let reverted = false;
     try {
-      const res = await withTimeout(
-        connection.confirmTransaction(
-          { signature, blockhash: ctx.blockhash, lastValidBlockHeight: ctx.lastValidBlockHeight },
-          "confirmed",
-        ),
+      // WKH-353, igual que en `confirmRefund`, `:1034`: por HTTP y sin suscripción. El `ctx.blockhash`
+      // ya no se consume acá tampoco, y se conserva por la misma razón escrita allá.
+      const verdict = await withTimeout(
+        this.awaitSignatureVerdict(connection, signature, {
+          lastValidBlockHeight: ctx.lastValidBlockHeight,
+        }),
         this.confirmTimeoutMs,
       );
-      if (res?.value?.err) throw new CloseTxReverted("close_tx_failed");
+      if (verdict.kind === "landed" && verdict.err != null) throw new CloseTxReverted("close_tx_failed");
       // ⚠️ Acá NO se devuelve "confirmed". Sigue de largo a la sonda (divergencia 1).
     } catch (err) {
       reverted = err instanceof CloseTxReverted;
@@ -1513,7 +1522,7 @@ export class SolanaWalletAdapter
    * pantalla de historial, para las filas cuyo desenlace el snapshot local no puede afirmar.
    *
    * 🔴 NO FIRMA NADA, Y ESA RESTRICCIÓN ES LA QUE DECIDE SU FORMA. No se reusan
-   * (`resolveRemittanceIdFromLedger`, `:353`) ni (`listCloseable`, `:1443`), que hacen el MISMO
+   * (`resolveRemittanceIdFromLedger`, `:353`) ni (`listCloseable`, `:1452`), que hacen el MISMO
    * derive+batch+decode, porque los dos empiezan por `resolver.lookupBySender`, que es
    * PoP-autenticado: reusarlos abriría un diálogo de firma sólo por abrir "Ver mis envíos", y una app
    * que pide firmas por mirar una lista entrena a la gente a firmar cualquier cosa. Se reusa la mitad
@@ -1608,7 +1617,7 @@ export class SolanaWalletAdapter
       try {
         // withTimeout y no un `await` pelado: un RPC que acepta la conexión y no contesta dejaría la
         // fila diciendo "Le estamos preguntando al contrato" para siempre. Es el mismo motivo que en
-        // (`probeEscrowIndex`, `:1288`), y el mensaje "confirm_timeout" que arrastra `withTimeout` no
+        // (`probeEscrowIndex`, `:1294`), y el mensaje "confirm_timeout" que arrastra `withTimeout` no
         // le llega a ninguna persona: acá se convierte en `"unknown"`.
         infos = await withTimeout(
           connection.getMultipleAccountsInfo(pdas),
@@ -1692,7 +1701,7 @@ export class SolanaWalletAdapter
 
   /**
    * WKH-353 — ¿qué dice la cadena de ESTA firma? Devuelve uno de los tres desenlaces de
-   * `SignatureVerdict`, `:1798`, preguntando por HTTP y sin abrir NINGUNA suscripción.
+   * `SignatureVerdict`, `:1807`, preguntando por HTTP y sin abrir NINGUNA suscripción.
    *
    * POR QUÉ NO `connection.confirmTransaction`, que es lo que estaba acá antes. Sus dos estrategias
    * terminan las dos en `onSignature`, o sea en un `signatureSubscribe` por WebSocket, y el RPC que
@@ -1808,7 +1817,7 @@ type SignatureVerdict =
 const SIGNATURE_POLL_INTERVAL_MS = 1_000;
 
 /** Espera `ms` sin bloquear. No existía en este archivo: lo trae WKH-353 para el bucle de
- *  `awaitSignatureVerdict`, `:1717`, y no tiene ningún otro llamador. */
+ *  `awaitSignatureVerdict`, `:1726`, y no tiene ningún otro llamador. */
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

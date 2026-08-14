@@ -3087,11 +3087,11 @@ function HistoryEntry({
   onOpen: (rem: RemittanceState) => void;
   answer: EscrowChainAnswer;
 }) {
-  const status = statusDisplay(rem.status);
+  // WKH-351 · AC-1: acá NO se calcula el estado del trámite. El encabezado del grupo ya afirma sobre la plata, y las dos afirmaciones se contradecían en 3 de los 4 grupos. (`statusDisplay`, `flow-vm.ts:133`) sigue viva, y la sigue mostrando (`Receipt`, `:3142`), que es una sola remesa y no tiene encabezado con el que chocar. Reemplazo línea-neutra, 1 línea por 1: borrar esta línea desplaza 8 referencias y 4 no las vigila nadie.
   const knowledge = escrowFundsKnowledge(rem);
-  // WKH-349. El texto Y el peso visual salen de la MISMA función, igual que el Pill de abajo: un copy
-  // que dice "siguen en el escrow" con el mismo gris que "no pudimos preguntar" pierde la mitad de
-  // AC-2. Y para los cuatro desenlaces locales devuelve, byte a byte, el copy de siempre.
+  // WKH-349. El texto Y el peso visual salen de la MISMA función: un copy que dice "siguen en el
+  // escrow" con el mismo gris que "no pudimos preguntar" pierde la mitad de AC-2. Y para los cuatro
+  // desenlaces locales devuelve, byte a byte, el copy de siempre. WKH-351 sacó el Pill que iba abajo.
   const desenlace = escrowOutcomeDisplay(escrowOutcome(rem, answer));
   // Una remesa que nunca autorizó un depósito no tiene nada que seguir: abrirla en el seguimiento
   // renderizaría la vista optimista ("tu chaski está en camino", pasos en gris) sobre un envío que
@@ -3107,7 +3107,7 @@ function HistoryEntry({
               {rem.sendUsd.format()} · {formatEntryDate(rem.createdAt)}
             </p>
           </div>
-          <Pill tone={status.tone}>{status.label}</Pill>
+          {/* WKH-351 · AC-1: acá iba el Pill de statusDisplay. Se fue: bajo el encabezado "Necesitan tu firma" decía "Pago en curso" al lado de la frase que dice que el plazo venció. El div de arriba se queda: con un solo hijo, justify-between deja el bloque en flex-start y nada se mueve. Reemplazo línea-neutra, 1 línea por 1. */}
         </div>
         <p
           className={

@@ -8,6 +8,18 @@
 // sostenible SÓLO porque hoy hay un único escritor del campo, y ese escritor corre después del
 // `ok:true` del settle, o sea después de una transacción ya broadcasteada y confirmada.
 //
+// 🔵 DÓNDE VIVE LA PALABRA "CONFIRMADA", Y POR QUÉ ESTE ARCHIVO NO LA CUBRE (AR r2 · BLQ-MED-2). El
+// `ok:true` no lo decide este repo: el facilitator sólo lo devuelve tras un
+// `connection.confirmTransaction(signature, 'confirmed')` con `conf.value.err` nulo, y si no confirma
+// contesta `ok:false` con `SPONSOR_BROADCAST_EXPIRED` o `SPONSOR_BROADCAST_FAILED`. Está en OTRO
+// repo: `wasiai-facilitator` → `src/methods/solana-sponsor/broadcast.ts:339-342`, leído sobre su
+// commit `8177b6e`. O sea que la confirmación EXISTE y la frase de la pantalla no afirma de más.
+// ⚠️ EL RESIDUO, dicho como es: eso es una lectura del código de otro servicio, con fecha. Lo que
+// estos invariantes candan es el ESCRITOR (uno solo) y su POSICIÓN respecto del gate; el significado
+// del `ok:true` del otro lado del cable no lo mide NADA de acá. Si mañana el facilitator contestara
+// antes de confirmar, o bajara el commitment a `processed`, la pantalla seguiría diciendo "confirmada
+// en la cadena" y esta suite seguiría verde. No hay contrato verificable entre los dos repos.
+//
 // Esa propiedad es una FOTO, y las fotos envejecen solas: nadie que agregue mañana un segundo
 // escritor va a leer el docblock de `flow-vm.ts`. Sin este candado, el día que alguien escriba
 // `principalTx` desde otro lado la pantalla empieza a afirmar "tu plata entró" sobre plata que puede

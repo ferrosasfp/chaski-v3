@@ -362,9 +362,11 @@ describe("WKH-350 · el historial se reparte en 4 secciones y no pierde nada por
 //   (b) ESTRUCTURAL — dentro del grupo no hay ningún `span.rounded-full`, que es la forma del `Pill`
 //       (`ui.tsx:116`). Mata: restaurar `<Pill tone={status.tone}>{status.label}</Pill>`, y TAMBIÉN
 //       una etiqueta nueva con texto propio (`<Pill tone="neutral">Trámite</Pill>`), que (c) NO caza.
-//   (c) SEMÁNTICA — ninguna de las 7 etiquetas de `statusDisplay` aparece como texto de un elemento
-//       del grupo. Mata: pintar `status.label` SIN Pill, en un `<span className="text-xs">`, que (b)
-//       NO caza. Cada mitad mata un mutante que la otra deja pasar.
+//   (c) SEMÁNTICA — ninguna de las 7 etiquetas de `statusDisplay` aparece dentro del `textContent` del
+//       grupo, COMO SUBSTRING. Mata: pintar `status.label` SIN Pill, en un `<span className="text-xs">`,
+//       que (b) NO caza; y también envuelto en un prefijo ("Estado: Pago en curso"), que el
+//       `queryAllByText` con el que nació esta mitad dejaba pasar verde. Cada mitad mata un mutante que
+//       la otra deja pasar.
 //   ctrl-1 — el MISMO selector de (b) encuentra exactamente 1 Pill en el `Receipt`. Sin esto, si
 //       `ui.tsx:116` dejara de usar `rounded-full`, (b) sería VACUAMENTE verde para siempre.
 //   ctrl-2 — el conjunto de (c) tiene 7 etiquetas y ninguna vacía. Sin esto, un `statusDisplay`
@@ -373,9 +375,12 @@ describe("WKH-350 · el historial se reparte en 4 secciones y no pierde nada por
 //   que el instrumento mide antes de creerle que no encontró nada.
 //
 // ⚠️ EL LÍMITE DECLARADO, para que nadie lea de más en el verde de esto:
-//   1. UNA ETIQUETA NUEVA SIN CLASE DE PILL Y CON PALABRAS NUEVAS PASA VERDE. (b) mira la FORMA y (c)
-//      mira las 7 PALABRAS conocidas; un `<span>` sin `rounded-full` que diga "En trámite" se escapa
-//      de las dos. Las dos mitades abaratan la reincidencia; NO la eliminan.
+//   1. LO QUE SE ESCAPA ES UNA ETIQUETA SIN CLASE DE PILL CUYO TEXTO NO CONTENGA NINGUNA DE LAS 7.
+//      (b) mira la FORMA y (c) las 7 PALABRAS conocidas como substring; un `<span>` sin `rounded-full`
+//      que diga "En trámite" se escapa de las dos. Un prefijo o un sufijo sobre una de las 7 —"Estado:
+//      Pago en curso"— NO se escapa: eso es lo que cambió respecto de la primera versión de (c), que
+//      usaba `queryAllByText` (match exacto) y lo dejaba pasar. Las dos mitades abaratan la
+//      reincidencia; NO la eliminan.
 //   2. Verifica AUSENCIA, no HONESTIDAD. Igual que T-H1/T-H3, un encabezado mentiroso con filas que
 //      le calzan pasa verde. Esa contradicción la sigue cerrando la revisión humana.
 //   3. (b) depende de un NOMBRE DE CLASE. Lo detecta ctrl-1, y sólo mientras el `Receipt` siga
@@ -420,7 +425,7 @@ const ETIQUETAS_DE_TRAMITE: string[] = [
 
 const LOS_4_GRUPOS = ["firma", "con-plata", "sin-plata", "sin-respuesta"] as const;
 
-/** El molde de `returnedSnapshot` (`:130-137`): se fuerza el `status` sobre una fila `unverified`. */
+/** El molde de (`returnedSnapshot`, `:131-138`): se fuerza el `status` sobre una fila `unverified`. */
 function conStatus(id: string, status: RemittanceStatus): RemittanceState {
   return { ...unverifiedSnapshot(id), status };
 }
@@ -470,10 +475,13 @@ describe("WKH-351 · la tarjeta del historial no muestra la etiqueta del trámit
       // (b) estructural. El scope por grupo NO es un adorno: el chip de la wallet del header
       // (`flow.tsx:554-555`) también es un `span.rounded-full`, y un selector global lo contaría.
       expect(grupo.querySelectorAll("span.rounded-full")).toHaveLength(0);
-      // (c) semántica.
-      for (const label of ETIQUETAS_DE_TRAMITE) {
-        expect(within(grupo).queryAllByText(label)).toHaveLength(0);
-      }
+      // (c) semántica, por SUBSTRING sobre el `textContent` del grupo y no por `queryAllByText`.
+      // Medido, y es el motivo del cambio: con `<span className="text-xs">Estado: {status.label}</span>`
+      // en `flow.tsx:3110` la tarjeta decía "Estado: Pago en curso" bajo "Necesitan tu firma" —el caso
+      // exacto del founder, con sus mismas palabras— y `queryAllByText`, que es match EXACTO, lo dejaba
+      // pasar verde. Un prefijo no puede evadir un `includes`.
+      const texto = grupo.textContent ?? "";
+      expect(ETIQUETAS_DE_TRAMITE.filter((label) => texto.includes(label))).toEqual([]);
     }
     // ctrl-1 — el instrumento mide: el MISMO selector encuentra 1 Pill en el `Receipt`, que a
     // propósito sigue mostrando la etiqueta. Se monta en su propio container y se consulta por el
@@ -489,7 +497,7 @@ describe("WKH-351 · la tarjeta del historial no muestra la etiqueta del trámit
   // `payout_submitted` + respuesta `deposited-window-closed` ⇒ grupo "Necesitan tu firma". Es
   // literalmente lo de producción: 3 filas, 32 USDC, con "Pago en curso" al lado de "el plazo venció".
   // MUTANTE: volver a la Opción 1 (Pill condicional por grupo) preservándolo justo para
-  // `payout_submitted`; revertir sólo el hunk de `flow.tsx:3110` dejando el de `:3090`; o mover la
+  // `payout_submitted`; revertir sólo el hunk de `flow.tsx:3110` dejando el de `flow.tsx:3090`; o mover la
   // etiqueta del trámite al encabezado del grupo.
   // POR QUÉ NO ALCANZA T-N1: T-N1 recorre grupos con un conjunto derivado; T-N2 fija el par exacto
   // (status, respuesta) del reporte y lo nombra con literales. Si mañana alguien reordena fixtures,
@@ -510,8 +518,10 @@ describe("WKH-351 · la tarjeta del historial no muestra la etiqueta del trámit
     await waitFor(() => expect(screen.getByText(H_FIRMA)).toBeInTheDocument());
     const grupo = screen.getByTestId("grupo-firma");
     expect(within(grupo).getByText(CP_VENTANA_VENCIDA)).toBeInTheDocument();
-    expect(within(grupo).queryAllByText("Pago en curso")).toHaveLength(0);
-    expect(within(grupo).queryAllByText("Entregado")).toHaveLength(0);
+    // Substring, por lo mismo que (c) en T-N1: "Estado: Pago en curso" evade el match exacto de
+    // `queryAllByText`, y este test es justo el que nombra el caso del founder con sus palabras.
+    const texto = grupo.textContent ?? "";
+    expect(["Pago en curso", "Entregado"].filter((l) => texto.includes(l))).toEqual([]);
   });
 
   // 🔴 T-N3 (AC-3) — `statusDisplay` SIGUE VIVA Y EL RECIBO SIGUE MOSTRÁNDOLA.
@@ -534,7 +544,7 @@ describe("WKH-351 · la tarjeta del historial no muestra la etiqueta del trámit
   // 🔴 T-N4 (AC-4) — LO QUE LA TARJETA SIGUE MOSTRANDO, Y ES TODO MENOS LA ETIQUETA.
   // MUTANTE: la limpieza tentadora de borrar el `<div className="flex items-start justify-between
   // gap-3">` de `flow.tsx:3103` junto con el Pill ("un flex con un solo hijo sobra"), que se lleva
-  // puestos el nombre, el monto y la fecha. O borrar el bloque `:3103-3111` entero. Además, esas 4
+  // puestos el nombre, el monto y la fecha. O borrar el bloque `flow.tsx:3103-3111` entero. Además, esas 4
   // líneas de desplazamiento las cazaría el control de línea-neutralidad.
   // ⚠️ LA FECHA NO SE COMPARA CONTRA UN LITERAL: `toLocaleDateString("es-PE")` depende del ICU del
   // runtime. Se verifica que la línea del monto exista y que NO diga "sin fecha", que es lo que

@@ -240,14 +240,19 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
   // 🔴 T-U5 (AC-4, CD-16 · reescrito por WKH-351/AC-1) — SON DOS HECHOS DISTINTOS Y LA TARJETA
   // MUESTRA UNO SOLO: el de la plata. Hasta WKH-351 mostraba además el Pill del trámite, y bajo el
   // encabezado del grupo eso se leía como una contradicción ("Pago en curso" bajo "Necesitan tu firma").
-  // 🔴 EL MUTANTE ORIGINAL, QUE ESTE TEST SIGUE MATANDO: que el desenlace de cadena reescriba la
-  // etiqueta del trámite (pintar "Entregado" porque la PDA está `Released`). Lo mata el assert de
-  // CP3_LIBERADO: `released` produce la frase del vault y NADA que hable de la entrega. `Released`
-  // dice que el vault salió del escrow; "Entregado" dice que el partner de payout reportó haber
-  // entregado los PEN. Uno no prueba el otro, y ahora ninguna etiqueta lo insinúa. Si alguien borra
-  // ese assert, ese mutante queda sin dueño: T-V8 cubre el copy PURO, no el render.
-  // 🔴 EL MUTANTE NUEVO: devolver `<Pill tone={status.tone}>{status.label}</Pill>` a `HistoryEntry`
-  // (`flow.tsx:3110`), o pintar `status.label` sin Pill en un `<span>` cualquiera.
+  // 🔴 EL MUTANTE ORIGINAL NO LO MATA ESTE TEST, Y ESTÁ MEDIDO: que el desenlace de cadena reescriba
+  // la etiqueta del trámite (pintar "Entregado" porque la PDA está `Released`). Hasta WKH-351 lo mataba
+  // el assert de PRESENCIA del Pill, que es justo el que esta HU dio vuelta. Con ese mutante puesto en
+  // `flow.tsx:3110` este archivo queda VERDE (10 passed): el rojo lo da T-N1, mitad (c), en
+  // `history-grupos.test.tsx`, que es hoy su dueño. El hecho de fondo no cambió: `Released` dice que el
+  // vault salió del escrow y "Entregado" dice que el partner de payout reportó haber entregado los PEN,
+  // y uno no prueba el otro.
+  // 🔴 LO QUE SÍ MATA EL ASSERT DE CP3_LIBERADO: que la respuesta `released` deje de producir la frase
+  // del vault en la tarjeta. T-V8 (`flow-vm.test.ts:1714`) cubre ese copy en PURO, no en el render.
+  // 🔴 EL MUTANTE DEL QUE ESTE TEST SÍ ES DUEÑO, MEDIDO: devolver `<Pill tone={status.tone}>{status.label}</Pill>`
+  // a `HistoryEntry` (`flow.tsx:3110`) pone rojo el assert de ausencia de abajo. ⚠️ Lo que NO caza es un
+  // `<span>` que pinte la etiqueta con un prefijo ("Estado: Pago en curso"): `queryAllByText` es match
+  // EXACTO. Ese lo caza T-N1(c), que compara por substring sobre el `textContent` del grupo.
   // ⚠️ El assert de ausencia va SIN scope de fila a propósito: este montaje renderiza UNA sola fila y
   // nada más en `HistoryView` puede producir esa cadena. El scope por grupo lo hace T-N1 en
   // `history-grupos.test.tsx`, que sí monta 12 filas.

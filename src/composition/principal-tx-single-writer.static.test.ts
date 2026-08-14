@@ -36,8 +36,19 @@
 // abajo tampoco lo tapaba, porque habla de un snapshot fabricado a mano en `localStorage` por la
 // misma persona, y acá el dato viene del servidor y es código de producción nuevo. Atribuirle a un
 // candado una cobertura que no tiene es el hallazgo de WKH-351, y estaba pasando otra vez.
-// El arreglo NO fue borrar la frase: es el INVARIANTE (d) de más abajo, que sí cierra ese camino
-// mecánicamente, con su alcance exacto escrito en el punto 5 de acá abajo.
+// El arreglo NO fue borrar la frase: son los INVARIANTES (d) y (d-bis) de más abajo, con su alcance
+// exacto en el punto 5 de acá abajo.
+//
+// 🔴 Y ACÁ DECÍA QUE (d) "SÍ CIERRA ESE CAMINO MECÁNICAMENTE", QUE ERA FALSO Y SE MIDIÓ (AR r2 ·
+// BLQ-BAJO-3). (d) mira la LISTA DE ARCHIVOS. El AR agregó UNA línea a un archivo YA listado,
+// `export function fromState(s: RemittanceState): Remittance { return Remittance.rehydrate(s); }` al
+// final de `persistence.ts`, y con eso re-creó el escenario del webhook en un archivo nuevo sin
+// escribir jamás las palabras `rehydrate` ni `principalTx`: `tsc --noEmit` exit 0, `6 passed`, suite
+// verde. O sea que el wrapper de una línea no es un uso "local" como decía el punto 5: reabre el
+// camino para TODO archivo futuro. Se replantó el escenario completo antes de tocar nada y dio lo
+// mismo que el AR reportó. El arreglo es (d-bis), que cuenta las rehidrataciones de cada archivo de
+// la lista y mata ESE mutante; lo que (d-bis) NO cierra está escrito en su propio comentario y en el
+// punto 5, y esta vez con el input que lo demuestra en vez de un adverbio.
 //
 // ⚠️ QUÉ NO CUBRE ESTE ARCHIVO (CD-14), declarado y no disfrazado:
 //   1. NO mira el VALOR escrito. Que la signature sea la correcta lo cubren
@@ -50,11 +61,21 @@
 //      regresión de esta HU: ahí el atacante y la víctima son la misma persona.
 //   4. NO mira los `*.test.ts(x)`: los tests fabrican estados a propósito y deben poder seguir
 //      haciéndolo. El invariante es sobre el código que corre en producción.
-//   5. El invariante (d) —el que cierra el camino del rehydrate— vigila la LISTA DE ARCHIVOS que
-//      llaman `Remittance.rehydrate(`, no lo que cada uno hace con el estado. O sea: caza el sync
-//      nuevo, en un archivo nuevo, que es la forma que tomó el escenario medido. NO caza un
-//      `rehydrate` agregado DENTRO de alguno de los tres archivos ya listados (`persistence.ts`,
-//      `flow.tsx`, `fakes.ts`). Ese hueco queda declarado acá y no disfrazado de cobertura.
+//   5. Los invariantes del rehydrate NO cierran el camino entero, y acá va el alcance exacto de cada
+//      uno, con el input que lo demuestra:
+//        · (d) vigila la LISTA DE ARCHIVOS que llaman `Remittance.rehydrate(`. Caza el sync nuevo en
+//          un archivo nuevo, que es la forma que tomó el primer escenario medido.
+//        · (d-bis) vigila CUÁNTAS veces rehidrata cada archivo de esa lista. Caza el wrapper
+//          AGREGADO, que es la forma que tomó el segundo (una línea en `persistence.ts` y el camino
+//          reabierto para todo archivo futuro). MEDIDO: `persistence.ts` pasa de 1 a 2 y sólo
+//          (d-bis) se pone rojo.
+//        · LO QUE SIGUE ABIERTO, y también está MEDIDO, no supuesto: mover la llamada que YA existe
+//          adentro de un helper exportado, sin agregar ninguna. Se plantó (`get` llamando a un
+//          `fromState` exportado que envuelve esa misma línea): la cuenta sigue en 1, `tsc` exit 0 y
+//          `7 passed`. O sea que el camino queda abierto igual y ningún candado de acá lo ve. Cerrarlo
+//          pide mirar quién importa qué desde esos tres archivos, y no se hizo: `flow.tsx` ya
+//          rehidrata adentro de un componente exportado, así que un candado por "export" necesitaría
+//          una excepción el primer día. Queda declarado, y no disfrazado de cobertura.
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -143,6 +164,9 @@ const todasLasLlamadas = (code: string): RegExpMatchArray | null =>
  *  DECLARACIÓN (`static rehydrate(`, `../domain/remittance.ts:304`). Es la OTRA forma de escribir
  *  `principalTx` sin nombrarlo: `{ ...local.snapshot, ...remoto }` y a rehidratar. */
 const REHIDRATA = /\.rehydrate\s*\(/;
+/** ⚠️ FRESCA EN CADA USO, por lo del `lastIndex` explicado tres comentarios más arriba. */
+const todasLasRehidrataciones = (code: string): RegExpMatchArray | null =>
+  code.match(/\.rehydrate\s*\(/g);
 
 const REMITTANCE = "src/domain/remittance.ts";
 const CALL_SITE = "src/application/use-cases/confirm-and-send.ts";
@@ -152,12 +176,22 @@ const CALL_SITE = "src/application/use-cases/confirm-and-send.ts";
  *   · `persistence.ts`: el repo, que es de dónde tiene que salir un estado rehidratado.
  *   · `flow.tsx`: LECTURA. Rehidrata para preguntar `isQuoteStillValid` y NO guarda nada.
  *   · `fakes.ts`: test-support. No es un `*.test.ts` y por eso entra al barrido, pero no corre en
- *     producción; está acá para que el conjunto sea el medido y no uno con un agujero sin nombre. */
-const REHIDRATADORES = [
-  "src/infrastructure/persistence.ts",
-  "src/presentation/flow.tsx",
-  "src/test-support/fakes.ts",
-].sort();
+ *     producción; está acá para que el conjunto sea el medido y no uno con un agujero sin nombre.
+ *
+ *  ⚠️ EL NÚMERO ES PARTE DE LA LISTA, y no es decoración (AR r2 · BLQ-BAJO-3): cada archivo declara
+ *  CUÁNTAS veces rehidrata. Una lista de nombres sola deja entrar una línea nueva en un archivo ya
+ *  listado, que es exactamente el escape que el AR midió. Los tres valores son 1, leídos a mano:
+ *  `persistence.ts:134` (`get`), `flow.tsx:220` (el resume) y `fakes.ts:112` (el repo en memoria).
+ *  Si una de estas cuentas sube legítimamente, hay que subirla ACÁ y escribir por qué, que es el
+ *  precio de que no se pueda subir en silencio. */
+const REHIDRATACIONES_POR_ARCHIVO: Record<string, number> = {
+  "src/infrastructure/persistence.ts": 1,
+  "src/presentation/flow.tsx": 1,
+  "src/test-support/fakes.ts": 1,
+};
+/** DERIVADA, no una segunda lista escrita a mano: dos listas que dicen lo mismo son dos listas que
+ *  algún día dicen cosas distintas. Es la misma lección que `ESCRITURA_SRC` tiene arriba. */
+const REHIDRATADORES = Object.keys(REHIDRATACIONES_POR_ARCHIVO).sort();
 
 describe("WKH-352 · AC-7: `principalTx` tiene un solo escritor, y corre después del `ok:true`", () => {
   // 🔴 EL ASSERT DE CONTROL DE LA DETECCIÓN. Sin esto, una regex rota (o un `stripComments` que
@@ -285,9 +319,42 @@ describe("WKH-352 · AC-7: `principalTx` tiene un solo escritor, y corre despué
   //
   // ⚠️ QUÉ NO CUBRE (y está también en el punto 5 del docblock de arriba): mira la LISTA DE ARCHIVOS,
   // no lo que cada uno hace. Un `rehydrate` nuevo DENTRO de `persistence.ts`, `flow.tsx` o `fakes.ts`
-  // pasa. Y no dice nada del VALOR rehidratado.
+  // pasa POR ACÁ: ése lo caza (d-bis), que es el `it` de abajo, y por eso este comentario ya no dice
+  // que el camino queda cerrado. Y ninguno de los dos dice nada del VALOR rehidratado.
   it("T-W9(d): `Remittance.rehydrate` se llama sólo desde los archivos que tienen su motivo escrito", () => {
     const rehidratadores = FUENTES.filter((f) => REHIDRATA.test(f.code)).map((f) => f.rel).sort();
     expect(rehidratadores).toEqual(REHIDRATADORES);
+  });
+
+  // 🔴 INVARIANTE (d-bis) — Y CADA UNO DE ESOS TRES REHIDRATA LAS VECES QUE DECLARA (AR r2 · BLQ-BAJO-3).
+  //
+  // POR QUÉ EXISTE, medido y no supuesto. (d) sola vigila la LISTA DE ARCHIVOS, y el AR la evadió con
+  // UNA línea agregada a un archivo YA listado: `export function fromState(s: RemittanceState):
+  // Remittance { return Remittance.rehydrate(s); }` al final de `persistence.ts`. Con eso, cualquier
+  // archivo nuevo del árbol puede rehidratar un estado que vino de la red sin escribir nunca
+  // `rehydrate` ni `principalTx`. Se re-plantó el escenario completo (un `mutante-webhook-sync2.ts`
+  // con `JSON.parse`, spread y `repo.save(fromState(merged))`): `tsc --noEmit` exit 0 y `6 passed`.
+  // O sea que el docblock que decía que (d) "cierra ese camino mecánicamente" era FALSO, y era la
+  // misma clase de over-claim que el AR ya había marcado una vez en este mismo archivo.
+  //
+  // MUTANTE MEDIDO: ese mismo `fromState` en `persistence.ts`. Aplicado y medido: este test, y sólo
+  // éste, se pone rojo (`persistence.ts` pasa de 1 a 2 rehidrataciones). (d) sigue verde, porque el
+  // archivo ya estaba en la lista: ésa es justamente la razón de ser de (d-bis).
+  //
+  // ⚠️ QUÉ NO CUBRE, dicho como es y no como quisiéramos que fuera. Esto caza la rehidratación
+  // AGREGADA, no la EXPORTADA: si alguien MUEVE la única llamada que ya existe adentro de un helper
+  // exportado (el `get` de `persistence.ts` pasando a llamar a un `fromState` que envuelve esa misma
+  // línea), la cuenta sigue en 1, el candado sigue verde, y el camino queda igual de abierto para todo
+  // archivo futuro. Cerrar ESO pide mirar quién importa qué desde esos tres archivos, y no se hizo:
+  // `flow.tsx` ya rehidrata adentro de un componente exportado, así que un candado por "export" pediría
+  // una excepción el primer día y sería uno de los que se aflojan hasta no medir nada. Queda declarado.
+  it("T-W9(d-bis): cada rehidratador llama a `.rehydrate(` exactamente las veces que declara", () => {
+    const cuentas = Object.fromEntries(
+      REHIDRATADORES.map((rel) => [
+        rel,
+        (todasLasRehidrataciones(FUENTES.find((f) => f.rel === rel)?.code ?? "") ?? []).length,
+      ]),
+    );
+    expect(cuentas).toEqual(REHIDRATACIONES_POR_ARCHIVO);
   });
 });

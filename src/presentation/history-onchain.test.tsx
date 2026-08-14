@@ -51,7 +51,7 @@ const CP5_NO_PUDIMOS = "No pudimos preguntarle al contrato por este envío.";
 const CP8_VENTANA_VENCIDA =
   "El contrato dice que tus USDC siguen en el escrow y que el plazo para liberarlos al pago ya venció: la salida que queda es devolverlos a tu wallet, y sólo tu firma puede hacerlo.";
 /** WKH-352 · la fila `absent` que SÍ tiene la prueba local del depósito (`principalTx`). */
-const CP9_ABSENT_CON_DEPOSITO = "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en el contrato ya no hay ninguna cuenta para este envío, así que esa cuenta se cerró después de resolverse. Desde acá no podemos decir si terminó en un pago o en una devolución.";
+const CP9_ABSENT_CON_DEPOSITO = "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en el contrato que estamos consultando no figura ninguna cuenta para este envío, que es todo lo que medimos. Desde acá no podemos decir si terminó en un pago o en una devolución, ni descartar que esa cuenta siga abierta en un contrato que no estamos mirando.";
 /** WKH-352 · la frase AMBIGUA, la de la fila `absent` SIN prueba. Está acá para asertar que la fila con prueba NO la dice. */
 const CP_ABSENT_AMBIGUO = "En el contrato no hay ninguna cuenta para este envío: o el depósito nunca entró, o ya se cerró después de resolverse. Desde acá no podemos decir cuál de las dos.";
 /** La frase de ANTES de esta HU. Que desaparezca es la mitad del punto: la tarjeta no puede decir las dos. */

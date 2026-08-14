@@ -1218,10 +1218,10 @@ export function escrowOutcome(rem: RemittanceState, answer: EscrowChainAnswer): 
  * (`lostEscrowRecoveryError`, `:302`) sobre el número del copy: escribir la frase dos veces es cómo
  * queda una pantalla diciendo algo que el código dejó de decir.
  *
- * Sobre `absent`, que desde WKH-352 tiene DOS ramas y la evidencia que las separa es `rem.principalTx`
- * (la firma del depósito, que sólo se escribe tras un `ok:true` del settle): sin ella lo único honesto
- * sigue siendo hablar de NOSOTROS ("no podemos decir cuál de las dos"); con ella el "nunca entró" queda
- * refutado y el resto no, así que tampoco se afirma. R-1 en (`EscrowChainState`, `../application/ports.ts:1122`).
+ * Sobre `absent`, que desde WKH-352 tiene DOS ramas y la evidencia que las separa es `rem.principalTx` (la firma del depósito, que sólo se escribe tras un `ok:true` del settle): sin ella lo único honesto sigue siendo hablar de NOSOTROS ("no podemos decir cuál de las dos"); con ella se refuta el "nunca entró", Y NADA MÁS.
+ * ⚠️ `absent` NO PRUEBA QUE LA CUENTA SE HAYA CERRADO, y por eso el copy nuevo NO lo dice. Lo ÚNICO medido es "en la dirección que derivamos HOY no hay cuenta". Esa dirección sale de tres cosas y el snapshot no guarda las dos que importan: el programa es un literal del código (`address`, `../infrastructure/solana/escrow-idl.ts:16`), el endpoint lo elige (`resolveSolanaRpcUrlPublic`, `../infrastructure/chain.ts:190`) leyendo `NEXT_PUBLIC_SOLANA_RPC_URL` sin ninguna validación cruzada, y (`RemittanceState`, `../domain/remittance.ts:250`) tiene `principalTx` y `ownerAddress` pero ni `programId` ni cluster.
+ * CUATRO DISPARADORES REALES de que la dirección de hoy no sea la de aquel depósito, ninguno hipotético: cambiar el program address (ya pasó en este repo, commit `89628d8`, en un commit normal); el cutover a mainnet que (`resolveSolanaNetworkId`, `../infrastructure/chain.ts:32`) tiene escrito como pendiente, y que ese día haría que TODA fila devnet dijera lo que no es; una `NEXT_PUBLIC_SOLANA_RPC_URL` mal apuntada, que es hoy y sin desplegar código; y un cambio de cuenta en la wallet entre el KYC y el confirm.
+ * Un "se cerró" ahí le diría a alguien que no hay nada que recuperar sobre una fila donde SÍ lo hay, y le apagaría (`LostEscrowRecovery`, `flow.tsx:755`), que es la puerta que le queda. Por eso el copy dice lo MEDIDO y deja abierta la tercera posibilidad. Candado: T-W10. R-1 en (`EscrowChainState`, `../application/ports.ts:1122`).
  *
  * Sobre los dos `"chain-deposited-*"`: los dos pesan `strong` porque los dos tienen plata adentro —
  * el peso visual separa "hay plata" de "no hay nada que hacer", no "urgente" de "no urgente". Lo que
@@ -1264,7 +1264,7 @@ export function escrowOutcomeDisplay(o: EscrowOutcome): {
   if (o === "chain-released")
     return { copy: "El contrato dice que tus USDC ya salieron del escrow hacia el pago.", emphasis: "normal" };
   if (o === "chain-absent-after-deposit")
-    return { copy: "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en el contrato ya no hay ninguna cuenta para este envío, así que esa cuenta se cerró después de resolverse. Desde acá no podemos decir si terminó en un pago o en una devolución.", emphasis: "normal" };
+    return { copy: "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en el contrato que estamos consultando no figura ninguna cuenta para este envío, que es todo lo que medimos. Desde acá no podemos decir si terminó en un pago o en una devolución, ni descartar que esa cuenta siga abierta en un contrato que no estamos mirando.", emphasis: "normal" };
   // La frase de abajo queda BYTE-IDÉNTICA (CD-8): la rama nueva se AGREGA, no reescribe a `chain-absent`.
   if (o === "chain-absent")
     return { copy: "En el contrato no hay ninguna cuenta para este envío: o el depósito nunca entró, o ya se cerró después de resolverse. Desde acá no podemos decir cuál de las dos.", emphasis: "normal" };

@@ -1976,11 +1976,21 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
     expect(nuevo).toContain("un pago");
     expect(nuevo).toContain("una devolución");
     expect(nuevo).toContain("no podemos decir");
-    const AFIRMA_DESENLACE = /\b(ya\s+(salieron|volvieron)|fue\s+(un pago|una devolución)|se\s+(pagó|devolvió))\b/i;
+    // ⚠️ SIN `\b` AL FINAL, Y NO ES ESTILO. Esta regex se escribió como `\b(...)\b` y así DOS de sus
+    // tres formas estaban MUERTAS: `\b` es un borde de palabra ASCII, y `pagó`/`devolvió` terminan en
+    // una letra que NO es `\w`, así que después de la `ó` nunca hay borde y el alternante no matchea
+    // jamás. Medido con `node -e`: `/\b(...|se\s+(pagó|devolvió))\b/i.test("se pagó al beneficiario")`
+    // ⇒ `false`. El control de abajo sólo plantaba "ya salieron", que termina en `n` y sí matcheaba,
+    // así que el agujero era invisible a su propio control. Los `\b` de apertura quedan.
+    const AFIRMA_DESENLACE = /(\bya\s+(salieron|volvieron)|\bfue\s+(un pago|una devolución)|\bse\s+(pagó|devolvió))/i;
     expect(nuevo).not.toMatch(AFIRMA_DESENLACE);
     // EL ASSERT DE CONTROL: la regex SÍ matchea sobre una frase plantada que sí afirma. Sin esto, una
-    // regex rota dejaría el assert de arriba verde sobre cualquier copy, incluido uno que afirme.
+    // regex rota dejaría el assert de arriba verde sobre cualquier copy, incluido uno que afirme. Van
+    // LAS TRES formas, una por alternante, justamente para que ninguna pueda morir en silencio: las
+    // dos de abajo daban ROJO con la versión anterior de la regex, y ése es el hallazgo que las trajo.
     expect("Tus USDC ya salieron hacia el pago").toMatch(AFIRMA_DESENLACE);
+    expect("Al final se pagó al beneficiario").toMatch(AFIRMA_DESENLACE);
+    expect("Al final se devolvió a tu wallet").toMatch(AFIRMA_DESENLACE);
     // (c) El peso visual: `normal`. `strong` son EXACTAMENTE los dos `chain-deposited-*` (T-V5).
     expect(escrowOutcomeDisplay("chain-absent-after-deposit").emphasis).toBe("normal");
   });
@@ -2082,5 +2092,54 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
       (a) => escrowOutcome(conPrueba, a) === "chain-absent-after-deposit",
     );
     expect(producen).toEqual(["absent"]);
+  });
+
+  // 🔴 T-W10 (AR · BLQ-MED-1) — LA FRASE NUEVA DICE LO MEDIDO, NO LO DEDUCIDO.
+  //
+  // POR QUÉ EXISTE, que es la parte que no se puede omitir. La primera versión de este copy decía
+  // "...y en el contrato ya no hay ninguna cuenta para este envío, ASÍ QUE ESA CUENTA SE CERRÓ DESPUÉS
+  // DE RESOLVERSE". Esa segunda mitad no la sostiene esta fila. Concluir "se cerró" exige saber que la
+  // dirección que consultamos HOY es la misma que creó aquel depósito, y esa dirección sale de tres
+  // cosas de las que el snapshot NO guarda las dos que importan: el program address es un literal del
+  // código (`address`, `../infrastructure/solana/escrow-idl.ts:16`), el endpoint lo elige
+  // (`resolveSolanaRpcUrlPublic`, `../infrastructure/chain.ts:190`) leyendo `NEXT_PUBLIC_SOLANA_RPC_URL`,
+  // y (`RemittanceState`, `../domain/remittance.ts:250`) no tiene ni `programId` ni cluster. Lo ÚNICO
+  // medido cuando la cadena contesta `absent` es "en la dirección que derivamos hoy no hay cuenta".
+  //
+  // EL DAÑO DE DECIR MÁS, que es por qué esto es un candado y no una preferencia de redacción: un
+  // cambio de program address (ya pasó acá, commit `89628d8`), el cutover a mainnet, o una
+  // `NEXT_PUBLIC_SOLANA_RPC_URL` mal apuntada harían que la pantalla le dijera a alguien que no hay
+  // nada que recuperar sobre una fila donde SÍ lo hay, apagándole (`LostEscrowRecovery`,
+  // `flow.tsx:755`), que es la puerta que le queda. Argumento largo en el docblock de
+  // (`escrowOutcomeDisplay`, `flow-vm.ts:1251`).
+  //
+  // MUTANTE MEDIDO: reponer esa media frase en `flow-vm.ts:1267`. Aplicado y medido: T-W10 se pone
+  // rojo por el primer assert, y de este bloque no cae ningún otro.
+  // SEGUNDO MUTANTE MEDIDO: borrar el "ni descartar que esa cuenta siga abierta..." final (o sea sacar
+  // el "se cerró" y no poner nada en su lugar, que deja la misma puerta cerrada por omisión) ⇒ T-W10
+  // rojo por el tercer assert, y T-W2 verde. Sin ese tercer assert el mutante pasaba.
+  //
+  // ⚠️ QUÉ NO CUBRE (CD-14): la regex cubre LAS FORMAS DE CIERRE QUE ENUMERA, no toda afirmación sobre
+  // el pasado de la cuenta. "Ese envío ya está resuelto" pasa este candado. Y no mide nada sobre la
+  // dirección real: no compara programa ni cluster contra nada, porque el snapshot no los tiene. Lo
+  // que hace es impedir que el COPY afirme lo que el dato no sostiene.
+  it("T-W10: el copy nuevo no afirma que la cuenta se haya cerrado, y deja abierta la tercera posibilidad", () => {
+    const nuevo = escrowOutcomeDisplay("chain-absent-after-deposit").copy;
+    // Sin `\b` de cierre a propósito: `cerró` termina en una letra que no es `\w` y el borde ASCII
+    // nunca matchea después de la `ó`. Es el mismo defecto que este commit corrigió en T-W2.
+    const AFIRMA_CIERRE = /(se\s+cerr[óo]|qued[óo]\s+cerrada|fue\s+cerrada|ya\s+no\s+existe)/i;
+    expect(nuevo).not.toMatch(AFIRMA_CIERRE);
+    // EL ASSERT DE CONTROL: la regex SÍ matchea la media frase que el AR rechazó, TEXTUAL. Sin esto,
+    // una regex rota dejaría el assert de arriba verde sobre cualquier copy, incluido el rechazado.
+    expect("así que esa cuenta se cerró después de resolverse").toMatch(AFIRMA_CIERRE);
+    // La tercera posibilidad, nombrada: que la cuenta siga abierta donde no estamos mirando.
+    expect(nuevo).toContain("siga abierta");
+    // Y lo que el copy SÍ sostiene se queda: el depósito entró, con su firma confirmada.
+    expect(nuevo).toContain("Tu depósito entró");
+    // ⚠️ LA REGEX NO SE LE APLICA A `chain-absent`, Y NO ES UN OLVIDO: esa frase menciona el cierre
+    // como UNA de dos posibilidades ("o ya se cerró"), no como un hecho. Este assert deja escrito que
+    // sigue diciéndolo y que CD-8 no se rompió al arreglar la frase nueva.
+    expect(escrowOutcomeDisplay("chain-absent").copy).toContain("o ya se cerró después de resolverse");
+    expect(escrowOutcomeDisplay("chain-absent").copy).toBe(COPY_VIEJO_ABSENT);
   });
 });

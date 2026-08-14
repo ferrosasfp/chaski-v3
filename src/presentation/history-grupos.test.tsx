@@ -577,7 +577,7 @@ describe("WKH-352 · el desenlace nuevo cae en el grupo que esa fila ya tenía",
    *  compara consigo mismo). Van acá abajo y no con las otras `CP_` porque `flow-vm.test.ts:1905` cita
    *  `:405` de este archivo SIN ancla, y una línea insertada arriba la rompe en silencio. */
   const CP_ABSENT_CON_DEPOSITO =
-    "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en el contrato ya no hay ninguna cuenta para este envío, así que esa cuenta se cerró después de resolverse. Desde acá no podemos decir si terminó en un pago o en una devolución.";
+    "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en el contrato que estamos consultando no figura ninguna cuenta para este envío, que es todo lo que medimos. Desde acá no podemos decir si terminó en un pago o en una devolución, ni descartar que esa cuenta siga abierta en un contrato que no estamos mirando.";
   const CP_ABSENT_AMBIGUO =
     "En el contrato no hay ninguna cuenta para este envío: o el depósito nunca entró, o ya se cerró después de resolverse. Desde acá no podemos decir cuál de las dos.";
 

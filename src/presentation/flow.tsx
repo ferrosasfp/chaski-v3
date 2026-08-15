@@ -75,7 +75,7 @@ import {
 } from "./flow-vm";
 import { cn } from "./cn";
 import { phantomBrowseUrl, useWalletAvailability, useConnectedWalletAddress } from "./wallet-availability"; // el aviso de "acá no hay wallet" (NoWalletHere) · WKH-354/AC-6: `useConnectedWalletAddress` para el banner (CuentaCambiada)
-import { Aviso, Button, Card, ChaskiMark, Field, Muted, Pill, Row, Stepper, TextInput } from "./ui"; // ola 2: los nombres nuevos entran EN ESTA LÍNEA, no en una nueva. Este archivo recibe 83 citas por número (48 ancladas + 35 sueltas, medido en 4c24324) y una sola línea de import de más las corre TODAS
+import { Aviso, Button, Card, ChaskiMark, Field, Money, Muted, Pill, Row, Stepper, TextInput } from "./ui"; // ola 2: los nombres nuevos entran EN ESTA LÍNEA, no en una nueva. Este archivo recibe 83 citas por número (48 ancladas + 35 sueltas, medido en 4c24324) y una sola línea de import de más las corre TODAS
 
 // WKH-187: el quote se muestra ANTES del KYC. Orden: send→connect→review(pre-KYC)→verify→confirm(post-KYC)→track→done.
 // `history` NO es un paso del flujo: es la puerta de entrada a las remesas que ya existen. Se
@@ -773,13 +773,25 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
             <div className="space-y-holgado">
               <Card>
                 <Field label="Enviás">
-                  <div className="flex items-center gap-ajustado">
-                    <span className="text-2xl font-bold text-stone">$</span>
+                  {/* 🔴 EL ÚNICO SITIO DE LA APP DONDE LA MONEDA PUEDE PESAR MENOS QUE LA CIFRA, y no
+                      es una preferencia: acá el símbolo ya vive en su propio `<span>` porque el
+                      `<input>` sólo contiene dígitos. En los otros cuatro sitios el número llega de
+                      `Money.format()`, que devuelve símbolo y dígitos PEGADOS en un solo string
+                      ("S/1,500.00"), y hay dos asserts que exigen que ese string sea UN nodo de texto
+                      directo (`getByText(/^S\/[\d,]+\.\d{2}$/)` y `getByText("S/1,500.00")`, los dos
+                      en `flow.test.tsx`). Partirlo en dos `<span>` los rompe, y uno de los dos es el
+                      guard de que la pantalla nunca muestre "S/0.00". No se debilita un guard del
+                      money-path para conseguir un matiz tipográfico.
+                      Se replica a mano la composición de `<Money>` (moneda en `title` + `semibold` +
+                      opacidad, cifra en `money` + `extrabold`) porque el componente no puede envolver
+                      un `<input>`: sus hijos van adentro de un `<span>`. */}
+                  <div className="flex items-baseline gap-ajustado">
+                    <span className="text-title font-semibold text-stone opacity-70">$</span>
                     <input
                       value={amount}
                       onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))}
                       inputMode="decimal"
-                      className="tabular-nums w-full bg-transparent text-4xl font-extrabold tracking-heading outline-none"
+                      className="w-full bg-transparent text-money font-extrabold tabular-nums outline-none"
                       aria-label="Monto en dólares"
                     />
                   </div>
@@ -801,9 +813,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                     `px-holgado` (=`px-4`) y `py-normal` (=`py-3`). Cero pixeles de diferencia. */}
                 <Aviso tono="bueno" className="mt-holgado">
                   <p className="text-label font-medium text-verde/80">Tu familia recibe</p>
-                  <p className="tabular-nums text-2xl font-extrabold text-verde">
-                    {preview ? preview.receive.format() : "—"}
-                  </p>
+                  <Money tono="verde">{preview ? preview.receive.format() : "—"}</Money>
                   {/* "llega en ~N min" prometía una entrega que este sistema no puede cumplir hoy: la
                       release del vault la dispara una persona a mano y la propia pantalla de
                       seguimiento avisa que "puede quedarse acá un buen rato". El número no se borra
@@ -927,7 +937,15 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                     el sitio de llamada: es lo que en las tres cambia. */}
                 <Aviso tono="bueno" className="text-left">
                   <p className="text-label text-verde/80">Vas a enviar</p>
-                  <p className="tabular-nums text-lg font-extrabold text-verde">
+                  {/* 🔴 LA SEXTA RECETA DE MONTO, que la lista de S-5 no tenía. El docblock de
+                      `<Money>` enumeró cinco (`text-3xl` ×3, `text-4xl` ×2, `text-2xl` ×2) y ésta era
+                      `tabular text-lg font-extrabold text-verde`: un séptimo sitio y un sexto tamaño.
+                      Queda anotado acá porque el conteo de aquel docblock se lee como cerrado.
+                      ⛔ NO pasa por `<Money>`, y el motivo es el sufijo: "en Solana devnet" comparte
+                      el `<p>` con la cifra, y `<Money>` mete a sus hijos adentro de un `<span>` propio.
+                      Además ésta no es la cifra héroe de la pantalla (es "lo que estás por firmar",
+                      con la red al lado): a 32px taparía al CTA. Se le da el rol `title`. */}
+                  <p className="tabular-nums text-title font-extrabold text-verde">
                     {rem ? rem.sendUsd.format() : "—"}{" "}
                     <span className="text-body font-medium">en Solana {resolveSolanaNetworkConfig().cluster}</span>
                   </p>
@@ -1031,11 +1049,17 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                   <h2 className="text-title font-semibold">Revisá el envío</h2>
                   <Pill tone="active">tasa fijada</Pill>
                 </div>
-                <div className="mb-normal rounded-control bg-sand px-holgado py-normal text-center">
-                  <p className="text-label text-stone">{rem.beneficiary.name} recibe</p>
-                  <p className="tabular-nums text-3xl font-extrabold text-verde">
+                {/* 🔴 LA CIFRA SALIÓ DE LA CAJA GRIS (M-2). Estaba adentro de un `bg-sand` con el
+                    mismo peso visual que las filas de abajo, o sea que el dato por el que la persona
+                    entró a la app se leía igual que la comisión. Sin caja, lo que la separa es el
+                    TAMAÑO y el aire, que es lo que una jerarquía tiene que hacer. ⛔ No se agregó
+                    ninguna línea nueva debajo: el destino ya está en la fila "Recibe en" de esta
+                    misma tarjeta, y repetirlo acá sería copy nueva. */}
+                <div className="mb-aire mt-normal text-center">
+                  <Muted escala="label">{rem.beneficiary.name} recibe</Muted>
+                  <Money tono="verde" className="mt-ajustado">
                     {rem.quote.receive.format()}
-                  </p>
+                  </Money>
                 </div>
                 <Row label="Enviás" value={rem.sendUsd.format()} />
                 <Row label="Comisión" value={rem.quote.feeUsd.format()} />
@@ -1069,11 +1093,17 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                   <h2 className="text-title font-semibold">Revisá antes de enviar</h2>
                   <Pill tone="active">tasa fijada</Pill>
                 </div>
-                <div className="mb-normal rounded-control bg-sand px-holgado py-normal text-center">
-                  <p className="text-label text-stone">{rem.beneficiary.name} recibe</p>
-                  <p className="tabular-nums text-3xl font-extrabold text-verde">
+                {/* 🔴 LA CIFRA SALIÓ DE LA CAJA GRIS (M-2). Estaba adentro de un `bg-sand` con el
+                    mismo peso visual que las filas de abajo, o sea que el dato por el que la persona
+                    entró a la app se leía igual que la comisión. Sin caja, lo que la separa es el
+                    TAMAÑO y el aire, que es lo que una jerarquía tiene que hacer. ⛔ No se agregó
+                    ninguna línea nueva debajo: el destino ya está en la fila "Recibe en" de esta
+                    misma tarjeta, y repetirlo acá sería copy nueva. */}
+                <div className="mb-aire mt-normal text-center">
+                  <Muted escala="label">{rem.beneficiary.name} recibe</Muted>
+                  <Money tono="verde" className="mt-ajustado">
                     {rem.quote.receive.format()}
-                  </p>
+                  </Money>
                 </div>
                 <Row label="Enviás" value={rem.sendUsd.format()} />
                 <Row label="Comisión" value={rem.quote.feeUsd.format()} />
@@ -2020,7 +2050,7 @@ export function RefundAction({
   // cuando confirma), así que este array es su único ejemplar.
   //
   // Es el MISMO defecto que el fix-pack de WKH-346 arregló en la puerta de al lado
-  // (`LostEscrowRecovery`, `:2200`) y dejó declarado acá sin tocar, porque AC-9/CD-2 le prohibían este
+  // (`LostEscrowRecovery`, `:2230`) y dejó declarado acá sin tocar, porque AC-9/CD-2 le prohibían este
   // camino de firma. La propiedad "ningún comprobante ya mostrado desaparece" es de la FORMA de CADA
   // estado y no del componente: de "aquella variable es append-only" no se deduce nada sobre esta.
   const [enviados, setEnviados] = useState<
@@ -2214,7 +2244,7 @@ export function LostEscrowRecovery({
   // guarda es la firma de un refund YA TRANSMITIDO cuyo desenlace NADIE conoce: `confirmation` es
   // `"pending"` o `"unknown"` (`EscrowRefundConfirmation`, `ports.ts:339`). O sea EXACTAMENTE la firma
   // que la persona necesita para ir al visor a averiguar si entró, y esta HU la volvió prominente y
-  // enlazable (`RefundSentNotice`, `:2158`, que la imprime como "Orden enviada:"). Medido antes del arreglo: con `pending` y después
+  // enlazable (`RefundSentNotice`, `:2188`, que la imprime como "Orden enviada:"). Medido antes del arreglo: con `pending` y después
   // `confirmed`, la primera firma desaparecía del DOM; con dos `pending`, quedaba UN solo href.
   //
   // ⚠️ El `sender` va PEGADO a cada entrada, no aparte: es lo que hace que la pantalla no mezcle dos
@@ -2360,7 +2390,7 @@ export function LostEscrowRecovery({
         * arreglo: montadas afuera, la tarjeta afirmaría "puede haber más envíos con fondos por
         * recuperar" recién abierta la puerta, sin haberle preguntado nada a la cadena. Es la SEGUNDA
         * encarnación del mismo defecto en este archivo: el CR de WKH-327 lo arregló en el componente
-        * INMEDIATAMENTE SIGUIENTE (`explainer`, `flow.tsx:2447`), a unas pocas decenas de líneas de
+        * INMEDIATAMENTE SIGUIENTE (`explainer`, `flow.tsx:2477`), a unas pocas decenas de líneas de
         * donde nació este. ⚠️ Acá decía "48 líneas" y era una CIFRA QUE ENVEJECE SOLA: es una
         * distancia, y mis propias inserciones la movieron a 60 sin que ningún barrido la cazara
         * (AR-2/MNR-7). Lo que no envejece es la relación estructural, y es la que importa. Un test de
@@ -2549,14 +2579,17 @@ function PayoutInProgress({ rem }: { rem: RemittanceState }) {
   const simulado = isDemoMode(rem);
   return (
     <div className="space-y-normal">
-      <div className="rounded-control bg-sand px-holgado py-normal text-center">
-        <p className="text-label text-stone">{rem.beneficiary.name} va a recibir</p>
-        <p className="tabular-nums text-3xl font-extrabold text-verde">
+      {/* La cifra héroe COMPLETA, y es el único sitio donde ya estaban las tres piezas que M-2
+          pide: rótulo arriba, cifra, y el destino debajo en tono secundario. Lo que faltaba era la
+          jerarquía: los tres se leían con el mismo peso adentro de la misma caja gris. */}
+      <div className="text-center">
+        <Muted escala="label">{rem.beneficiary.name} va a recibir</Muted>
+        <Money tono="verde" className="mt-ajustado">
           {rem.quote ? rem.quote.receive.format() : "—"}
-        </p>
-        <p className="mt-ajustado text-label text-stone">
+        </Money>
+        <Muted escala="label" className="mt-ajustado">
           en {methodLabel(rem.beneficiary.method)} · {rem.beneficiary.destination}
-        </p>
+        </Muted>
       </div>
       <div className="flex items-start gap-ajustado.5">
         {/* 🔴 RELOJ QUIETO, NUNCA UN SPINNER. Mi primera versión de esta tarjeta puso un spinner y el
@@ -2893,7 +2926,7 @@ function AgentUnavailable({
  * agregar *"y el fee de la entrega no lo paga nadie, porque ese paso no corre"*. Es verdad
  * (`this.solana`, `../application/use-cases/confirm-and-send.ts:336`) y está PROHIBIDO escribirlo: en
  * ese mismo cuadrante, tres renglones más arriba en la MISMA tarjeta, la fila de la entrega dice
- * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:3060`). Ese *"lo simula"* es impreciso
+ * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:3093`). Ese *"lo simula"* es impreciso
  * —con el settle apagado la entrega no se simula, se corta— pero es **H1 de WKH-336**, residual de otra
  * HU que exige un TERCER valor de `transport` con su propia frase, y WKH-338 no lo cierra. Si la nota
  * dijera *"la entrega no corre"* mientras la fila dice *"lo simula"*, la tarjeta se contradiría a sí
@@ -3251,7 +3284,7 @@ function HistoryEntry({
   onOpen: (rem: RemittanceState) => void;
   answer: EscrowChainAnswer;
 }) {
-  // WKH-351 · AC-1: acá NO se calcula el estado del trámite. El encabezado del grupo ya afirma sobre la plata, y entre las dos afirmaciones hay contradicción ALCANZABLE en 3 de los 4 grupos. (`statusDisplay`, `flow-vm.ts:133`) sigue viva, y la sigue mostrando (`Receipt`, `:3306`), que es una sola remesa y no tiene encabezado con el que chocar. Reemplazo línea-neutra, 1 línea por 1: borrar esta línea desplaza las referencias de abajo, y a la mayoría no las vigila ningún test.
+  // WKH-351 · AC-1: acá NO se calcula el estado del trámite. El encabezado del grupo ya afirma sobre la plata, y entre las dos afirmaciones hay contradicción ALCANZABLE en 3 de los 4 grupos. (`statusDisplay`, `flow-vm.ts:133`) sigue viva, y la sigue mostrando (`Receipt`, `:3339`), que es una sola remesa y no tiene encabezado con el que chocar. Reemplazo línea-neutra, 1 línea por 1: borrar esta línea desplaza las referencias de abajo, y a la mayoría no las vigila ningún test.
   const knowledge = escrowFundsKnowledge(rem);
   // WKH-349. El texto Y el peso visual salen de la MISMA función: un copy que dice "siguen en el
   // escrow" con el mismo gris que "no pudimos preguntar" pierde la mitad de AC-2. Y para los cuatro
@@ -3325,9 +3358,9 @@ export function Receipt({ rem, onNew }: { rem: RemittanceState; onNew: () => voi
         <p className="text-body text-stone">
           {rem.beneficiary.name} {confirmed ? "recibió" : "tiene que recibir"}
         </p>
-        <p className={cn("tabular-nums text-4xl font-extrabold", confirmed ? "text-verde" : "text-ink")}>
+        <Money tono={confirmed ? "verde" : "ink"} className="mt-ajustado">
           {amount ? amount.format() : "—"}
-        </p>
+        </Money>
         <p className="mt-ajustado text-label text-stone">en su {methodLabel(rem.beneficiary.method)}</p>
         {confirmed ? null : (
           <p className="mx-auto mt-ajustado max-w-xs text-label text-stone">
@@ -3431,7 +3464,7 @@ export function recoveryWindowExhausted(maxCandidates: number): string {
  *
  * Los cinco sitios que le muestran una firma a la persona pasan por acá. Tres la imprimían ENTERA (87 u 88 caracteres, y 88 en la mayoría de los casos: una firma ed25519 son 64 bytes y su largo en base58 depende del primer byte. Medido, 4000 muestras: 80,2 % dan 88. Los 87 con los que se mide en los tests son propiedad de `FAKE_SOLANA_SIGNATURE`, no de una firma cualquiera — AR/MNR-2)
  * y desbordaban la única columna de la app; los
- * otros dos ya truncaban con `shortTx` (`shortTx`, `:3363`) y no llevaban a ninguna parte. Un solo
+ * otros dos ya truncaban con `shortTx` (`shortTx`, `:3396`) y no llevaban a ninguna parte. Un solo
  * componente en vez de cinco es lo que impide que el próximo sitio nazca con la tercera variante.
  *
  * 🔴 POR QUÉ VIVE ACÁ Y NO EN `src/presentation/tx-proof.tsx`, que era lo natural. Un archivo nuevo
@@ -3535,10 +3568,10 @@ export function TxProof({ signature }: { signature: string }) {
  * DEVUELVE UN FRAGMENT Y NO UN `div`. El padre es un `space-y-holgado`, y `space-y-*` sólo alcanza a los
  * hijos DIRECTOS: un div envolvente dejaría los 4 grupos a un nivel de profundidad y les comería el
  * espaciado. Y va un `<ul>` por grupo en vez de uno solo con separadores, porque la tarjeta devuelve
- * un `<li>` (`HistoryEntry`, `:3245`) y un encabezado suelto entre `<li>` es HTML inválido.
+ * un `<li>` (`HistoryEntry`, `:3278`) y un encabezado suelto entre `<li>` es HTML inválido.
  *
- * ⚠️ POR QUÉ VIVE ACÁ ABAJO Y NO JUNTO A (`HistoryView`, `:3154`), QUE ES DONDE SE LEERÍA MEJOR: por
- * lo mismo que (`TxProof`, `:3467`). Un bloque nuevo en el medio de este archivo desplaza todo lo que
+ * ⚠️ POR QUÉ VIVE ACÁ ABAJO Y NO JUNTO A (`HistoryView`, `:3187`), QUE ES DONDE SE LEERÍA MEJOR: por
+ * lo mismo que (`TxProof`, `:3500`). Un bloque nuevo en el medio de este archivo desplaza todo lo que
  * viene después, y a este archivo lo apuntan citas por número desde todo el árbol más las autocitas
  * `:NNN` de sus propios docblocks. De todas ellas, el candado de citas sólo vigila las ANCLADAS —las
  * que llevan el símbolo delante de la coma—; las SUELTAS, que son mayoría, se romperían sin que ningún

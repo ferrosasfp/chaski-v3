@@ -252,6 +252,18 @@ export function Aviso({
  * Cinco tamaños distintos (18, 24, 30, 36) y dos pesos para la MISMA cosa: la cifra que la persona
  * vino a ver. Con la escala cerrada de S-1 son todas `text-money`.
  *
+ * 🔴 ERAN SEIS, NO CINCO, y la que faltaba la encontró la ola 2 al cablear: `tabular text-lg
+ * font-extrabold text-verde` en la caja de "Vas a enviar" del paso `connect`. O sea siete sitios y
+ * seis tamaños (18, 20, 24, 30, 36). El párrafo de arriba se lee como un conteo cerrado y no lo era;
+ * se corrige acá en vez de reescribirlo, porque la medición de entonces también es un dato.
+ * Ese séptimo sitio NO pasa por este componente y el motivo está escrito en su propio sitio.
+ *
+ * ⚠️ Y LA MONEDA EN PESO MENOR SOLO SE PUEDE EN UNO DE LOS SIETE. `Money.format()` devuelve símbolo y
+ * dígitos PEGADOS ("S/1,500.00"), y dos asserts de `flow.test.tsx` exigen que ese string sea un nodo
+ * de texto DIRECTO. Partirlo en dos `<span>` los rompe, y uno de los dos es el guard de que la
+ * pantalla nunca muestre "S/0.00". Así que `moneda` sólo se usa donde el símbolo ya vive aparte: la
+ * entrada de monto del paso `send`. En los otros seis la cifra entra entera por `children`.
+ *
  * LA MONEDA VA EN PESO MENOR QUE LA CIFRA porque el dato es el número: "S/" no cambia entre
  * pantallas y el número sí. Al mismo peso, los dos compiten y ninguno gana.
  *

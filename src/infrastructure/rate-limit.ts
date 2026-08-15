@@ -279,8 +279,8 @@ export const PAYOUT_STATUS_RL: RouteRateLimitConfig = {
 // las tres.
 //
 // IP 30/"10 m" (sin addr). LA RUTA SIGUE SIENDO PÚBLICA Y ASÍ TIENE QUE SER: la llama el cliente de
-// la propia DApp antes de que exista wallet, address o KYC (`A2aQuoteGateway.requestQuote`,
-// `../infrastructure/a2a/gateways.ts:136`). El control acá es el límite de tasa, NO una credencial.
+// la propia DApp antes de que exista wallet, address o KYC
+// (`A2aQuoteGateway`, `./a2a/gateways.ts:134`). El control acá es el límite de tasa, NO una credencial.
 //
 // LA ARITMÉTICA, con las tres cantidades por separado:
 //
@@ -290,13 +290,15 @@ export const PAYOUT_STATUS_RL: RouteRateLimitConfig = {
 //     del gateway se suma aparte, así que el débito real por llamada es >= 0,03.
 //
 //  2. CUÁNTAS NECESITA UNA PERSONA EN 10 MINUTOS. 10, contadas de los dos únicos productores:
-//      · preview en vivo, debounce de 300 ms y sólo con monto >= MIN_SEND_USD = 5
-//        (`../presentation/flow.tsx:167-184` + `../domain/remittance.ts:209`). Sin caché de ningún
-//        tipo: cada preview es un POST (ver `gateways.ts:135`, no memoiza). Tipear "400" con pausas
-//        largas da 2 (el "4" queda bajo el mínimo y no pide nada); con una corrección y tres montos
-//        distintos probados ⇒ 6.
-//      · `lockQuote`, 3 sitios de llamada (`flow.tsx:240`, `:331`, `:500`): al conectar, la
-//        re-cotización automática post-KYC y el re-lock manual por vencimiento ⇒ 4 con dos re-locks.
+//      · preview en vivo, debounce de 300 ms (`previewQuote`, `../presentation/flow.tsx:176`) y sólo
+//        con monto >= 5 (`MIN_SEND_USD`, `../domain/remittance.ts:209`). Sin caché de ningún tipo:
+//        cada preview es un POST (`requestQuote`, `./a2a/gateways.ts:135`, que no memoiza). Tipear
+//        "400" con pausas largas da 2 (el "4" queda bajo el mínimo y no pide nada); con una
+//        corrección y tres montos distintos probados ⇒ 6.
+//      · el lock, 3 sitios de llamada (`lockQuote`, `../presentation/flow.tsx:240`), (`lockQuote`,
+//        `../presentation/flow.tsx:331`) y (`lockQuote`, `../presentation/flow.tsx:500`): al
+//        conectar, la re-cotización automática post-KYC y el re-lock manual por vencimiento ⇒ 4 con
+//        dos re-locks.
 //     6 + 4 = 10.
 //
 //  3. EL MULTIPLICADOR POR IP COMPARTIDA. ×3, y NO el ×2 de `PAYOUT_STATUS_RL`. La diferencia es

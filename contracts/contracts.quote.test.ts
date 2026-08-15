@@ -5,6 +5,19 @@
 //   (b) A2aQuoteGateway.requestQuote (isValidQuoteShape, gateways.ts).
 // Si el provider driftea y se re-vendorea con un shape incompatible → el validador falla → ROJO.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// WKH-355 — el handler ahora consulta el limitador de tasa ANTES de componer, y falla CERRADO si
+// Upstash no está configurado (que es el estado del runner). Sin este doble, los dos casos de abajo
+// cortarían con 503 y este contract test pasaría a medir el limitador en vez del shape del provider,
+// que es lo único que vino a medir. Se mockea SÓLO `checkRouteRateLimit`; `QUOTE_RL` y `clientIp`
+// quedan reales. El candado del limitador NO es este archivo: es
+// `app/api/a2a/quote/route.rate-limit.test.ts`.
+const { checkRouteRateLimitMock } = vi.hoisted(() => ({ checkRouteRateLimitMock: vi.fn() }));
+vi.mock("../src/infrastructure/rate-limit", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/infrastructure/rate-limit")>();
+  return { ...actual, checkRouteRateLimit: checkRouteRateLimitMock };
+});
+
 import { POST } from "../app/api/a2a/quote/route";
 import { A2aQuoteGateway } from "../src/infrastructure/a2a/gateways";
 import type { QuoteRequest } from "../src/application/ports";
@@ -35,6 +48,9 @@ describe("contract quote (AC-1) — handler POST vs fixture vendoreado", () => {
     // W3: la ruta ya no lee la base de los agentes; lo que necesita configurado es el gateway.
     vi.stubEnv("WASIAI_A2A_GATEWAY_URL", "https://gateway.test");
     vi.stubEnv("WASIAI_A2A_AGENT_KEY", "ak_contract_test");
+    // El `afterEach` restaura los mocks ⇒ el doble volvería a devolver `undefined`. Default: pasa.
+    checkRouteRateLimitMock.mockReset();
+    checkRouteRateLimitMock.mockResolvedValue({ ok: true });
   });
 
   it("fixture CANÓNICO ⇒ isValidQuoteResult pasa ⇒ 200", async () => {

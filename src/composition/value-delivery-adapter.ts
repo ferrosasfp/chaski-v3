@@ -89,7 +89,7 @@ export function usesRealGateways(adapter: ValueDeliveryAdapter): boolean {
  * `""` (env PRESENTE Y VACÍA) ⇒ TIRA, y la distinción con `undefined` no es cosmética: `vercel env
  * pull` escribe VACÍO lo que no puede leer, así que un `""` es una key que alguien escribió y quedó
  * en blanco —una mala configuración— y no una ausencia deliberada. Este repo ya declara esa
- * diferencia en (`stubEnv`, `../../app/api/a2a/quote/route.test.ts:98-100`).
+ * diferencia en (`stubEnv`, `../../app/api/a2a/quote/route.test.ts:125-127`).
  *
  * @param raw el valor tal cual sale de `process.env.NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`. Se recibe
  *   por parámetro y NO se lee acá adentro: Next sólo inlinea `process.env.NEXT_PUBLIC_X` cuando

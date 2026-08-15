@@ -465,7 +465,7 @@ describe("GET /api/a2a/plan — los tres estados de disponibilidad (AC-14 / CD-1
 // ⚠️ LAS DOS ENVS SE STUBEAN EN CADA CASO (CD-12), y `undefined` y `""` son casos DISTINTOS:
 // `stubEnv(nombre, undefined as unknown as string)` BORRA la env (ausencia real), mientras `""` es
 // *presente y vacía*. Apoyarse en la ausencia por defecto haría que el resultado dependiera de lo que
-// la shell exporte (`quote/route.test.ts:97-100` lo documenta medido).
+// la shell exporte (`quote/route.test.ts:124-127` lo documenta medido).
 describe("GET /api/a2a/plan — cada leg deriva su transporte de SU bandera (WKH-336)", () => {
   /** Un plan con las DOS envs fijadas explícitamente. `undefined` = env BORRADA (CD-12). */
   async function planCon(adapter: string | undefined, settle: string | undefined) {

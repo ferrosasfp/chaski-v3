@@ -17,6 +17,11 @@ import {
   logGatewayFailure,
   runViaGateway,
 } from "../../../../src/infrastructure/a2a/gateway-client";
+import {
+  QUOTE_RL,
+  checkRouteRateLimit,
+  clientIp,
+} from "../../../../src/infrastructure/rate-limit";
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
@@ -46,6 +51,46 @@ function isValidQuoteResult(v: unknown): boolean {
 }
 
 export async function POST(req: Request): Promise<Response> {
+  // ── WKH-355 · LÍMITE DE TASA, Y VA PRIMERO ──────────────────────────────────────────────────────
+  //
+  // Esta ruta es PÚBLICA y tiene que seguir siéndolo: la llama el cliente de la propia DApp antes de
+  // que exista wallet, address o KYC
+  // (`A2aQuoteGateway`, `../../../../src/infrastructure/a2a/gateways.ts:134`), así que no hay
+  // credencial que pedirle sin romper la primera pantalla del producto. El control que corresponde
+  // acá es el límite de tasa, NO la autenticación.
+  //
+  // Lo que había antes era esto: cero auth y cero límite, y cada POST compone contra el gateway
+  // GASTANDO el saldo de la Agent Key prepaga (`runViaGateway` de abajo). Agotado el saldo, el
+  // gateway contesta 402, este handler lo colapsa en el `a2a_unavailable` de más abajo, y nadie
+  // puede cotizar NI enviar. Una caída total del producto que le cuesta cero a quien la provoca.
+  //
+  // ⛔ NO ES UN CIERRE, ES UN TECHO, y el número está en `QUOTE_RL` con su aritmética: 30 por IP cada
+  // 10 minutos = 0,90 USDC de saldo por IP y por ventana que el limitador aprueba sin chistar. El
+  // contador es por IP y por ventana deslizante: cambiar de IP lo reinicia entero, y esperar 10
+  // minutos también. Lo que faltaría para cerrarlo es un tope de gasto sobre la key, del lado del
+  // gateway, y es otra HU.
+  //
+  // VA ANTES DEL `req.json()` a propósito, igual que en toda la familia (challenge/prepare/recovery/
+  // status): el trabajo caro no empieza hasta que el limitador dijo que sí, y eso incluye el parseo
+  // del body. Consecuencia observable —y es lo que mide el candado—: con el limitador en rojo NO
+  // sale ni un fetch al gateway.
+  //
+  // Fail-CLOSED si Upstash no está configurado, igual que el resto de la familia. Medido antes de
+  // elegirlo (2026-08-15): un `POST /api/payout/prepare` con body `{}` contra prod contesta 400
+  // `prepare_invalid_request`, o sea que llega al guard de FORMATO, que está DESPUÉS de su
+  // limitador ⇒ Upstash SÍ está configurado en producción y este fail-closed no apaga nada hoy. Un
+  // error transitorio de Redis NO cae acá: `checkRouteRateLimit` falla OPEN en ese caso.
+  //
+  // El body sigue teniendo exactamente una clave en los dos cortes (CD-8).
+  const rl = await checkRouteRateLimit(QUOTE_RL, { ip: clientIp(req) });
+  if (rl.unavailable)
+    return NextResponse.json({ error: "quote_rate_limit_unavailable" }, { status: 503 });
+  if (!rl.ok)
+    return NextResponse.json(
+      { error: "quote_rate_limited" },
+      { status: 429, headers: { "Retry-After": String(rl.retryAfter ?? 60) } },
+    );
+
   const body = await req.json().catch(() => ({}));
 
   // WKH-218 + WKH-304: el ÚNICO transporte. Pide la CAPACIDAD al gateway wasiai-a2a vía POST
@@ -81,7 +126,7 @@ export async function POST(req: Request): Promise<Response> {
   // Lo cierto es más chico y es esto: con `"fallback"` el container del CLIENTE cablea
   // `FallbackQuoteGateway` (`usesRealGateways`, `../../../../src/composition/value-delivery-adapter.ts:74`)
   // y la UI propia no llama a este endpoint; el endpoint NO lee la bandera y le contesta igual a quien
-  // sea. Input que lo demuestra, en este repo: (`it.each`, `route.test.ts:386`) corre con la bandera en
+  // sea. Input que lo demuestra, en este repo: (`it.each`, `route.test.ts:413`) corre con la bandera en
   // `"fallback"` y en `undefined`, y en los dos casos exige 200 y un único fetch a `${GW}/compose`.
   //
   // 🔴 POR QUÉ NO ES UN DETALLE: §9 del Story File nombra el flip de esa bandera como la palanca de

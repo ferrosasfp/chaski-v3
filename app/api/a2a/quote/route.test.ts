@@ -1,4 +1,24 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// WKH-355 — el limitador de tasa de la ruta. Mismo patrón que `payout/prepare/route.test.ts:8-12`:
+// se mockea SÓLO `checkRouteRateLimit` y se conservan reales `clientIp` y `QUOTE_RL`.
+//
+// ⚠️ SIN ESTE MOCK TODO ESTE ARCHIVO SE PONDRÍA ROJO, y no por un bug: la ruta ahora falla CERRADA
+// cuando Upstash no está configurado, y en el runner no lo está ⇒ los ~30 casos de acá cortarían con
+// 503 antes de llegar al gateway. El default es `{ ok: true }`, o sea "el limitador dejó pasar", que
+// es lo que cada uno de estos casos ya asumía cuando el limitador no existía.
+//
+// ⛔ Y ESO PARTE AL CANDADO EN DOS, cosa de no atribuirle a este archivo más de lo que mide. Con el
+// default en `{ ok: true }`, borrarle el limitador a la ruta deja los 22 casos de acá arriba en
+// VERDE: un doble que nadie llama no se queja. Lo que este archivo SÍ mide es el veredicto empujado
+// (T-355.5/6/7 al final: con `{ ok: false }` la ruta corta y no compone). Lo que NO puede medir —que
+// la llamada exista— vive en `./route.rate-limit.test.ts`, que corre el módulo REAL sin mockear.
+const { checkRouteRateLimitMock } = vi.hoisted(() => ({ checkRouteRateLimitMock: vi.fn() }));
+vi.mock("../../../../src/infrastructure/rate-limit", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../src/infrastructure/rate-limit")>();
+  return { ...actual, checkRouteRateLimit: checkRouteRateLimitMock };
+});
+
 import { NO_AGENT_REASONS_MEANING_NOBODY } from "../../../../src/application/agent-rejections";
 import { POST } from "./route";
 
@@ -19,6 +39,13 @@ const validResult = {
   expiresAt: "2026-07-09T18:10:00.000Z",
   provenance: "fx-quote-provider",
 };
+
+// El `afterEach` de abajo hace `restoreAllMocks`, que deja al doble del limitador devolviendo
+// `undefined` — y `undefined.unavailable` explota. Se le repone el default ANTES de cada caso.
+beforeEach(() => {
+  checkRouteRateLimitMock.mockReset();
+  checkRouteRateLimitMock.mockResolvedValue({ ok: true });
+});
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -484,5 +511,74 @@ describe("T-5.1/AC-5: ninguna respuesta de /api/a2a/quote lleva el vocabulario p
     const res = await POST(req({ amountUsd: 2 }));
     expect(res.status).toBe(501);
     expect(await res.text()).not.toContain("fx_");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WKH-355 — la mitad del candado que necesita el doble del limitador. La otra mitad (el módulo REAL,
+// sin mock, que es la que se pone roja si alguien borra la llamada) vive en `./route.rate-limit.test.ts`.
+// Acá se mide lo que sólo se puede medir empujando un veredicto: que la ruta lo OBEDECE.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("WKH-355 — la ruta obedece el veredicto del limitador, y sigue siendo pública", () => {
+  const GW = "https://gateway.example.com";
+
+  function conGatewaySano() {
+    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", GW);
+    vi.stubEnv("WASIAI_A2A_AGENT_KEY", KEY);
+    const fn = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => composeOk,
+    }));
+    vi.stubGlobal("fetch", fn);
+    return fn;
+  }
+
+  // El fixture es el del camino feliz (gateway sano, respuesta válida): sin el corte, esto da 200 con
+  // una cotización real. Lo único que cambia es el veredicto del limitador.
+  it("T-355.5: limitador en rojo ⇒ 429 con el Retry-After que dijo, y CERO fetch al gateway", async () => {
+    const fetchMock = conGatewaySano();
+    checkRouteRateLimitMock.mockResolvedValue({ ok: false, retryAfter: 42 });
+
+    const res = await POST(req({ amountUsd: 100, destCountry: "PE", payoutMethod: "yape" }));
+
+    expect(res.status).toBe(429);
+    // El header, con el número que devolvió el limitador y no uno inventado: sin esto, un cliente que
+    // reintenta a ciegas convierte el límite en un bucle de reintentos.
+    expect(res.headers.get("Retry-After")).toBe("42");
+    // CD-8 sigue en pie: exactamente una clave.
+    expect(Object.keys(await res.json())).toEqual(["error"]);
+    // 🔴 Y ACÁ SE MIDE EL ORDEN, que es lo que hace que el límite sirva de algo: el corte pasa ANTES
+    // de componer. Un limitador consultado DESPUÉS de `runViaGateway` daría 429 igual y habría
+    // gastado el saldo lo mismo — el status no lo distingue, el conteo de fetch sí.
+    expect(fetchMock, "la ruta gastó la Agent Key y DESPUÉS contestó 429").not.toHaveBeenCalled();
+  });
+
+  it("T-355.6: `retryAfter` ausente ⇒ el header sale igual, con el default", async () => {
+    conGatewaySano();
+    checkRouteRateLimitMock.mockResolvedValue({ ok: false });
+    const res = await POST(req({ amountUsd: 100 }));
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Retry-After")).toBe("60");
+  });
+
+  // ⚠️ ESTE CASO PROTEGE AL PRODUCTO, NO AL SALDO, y por eso está. El arreglo obvio y equivocado del
+  // agujero es pedirle una credencial a esta ruta. La llama el cliente de la propia DApp ANTES de que
+  // exista wallet, address o KYC: con auth, la primera pantalla deja de cotizar para todo el mundo.
+  // El pedido no lleva ni un header de identidad y tiene que seguir dando 200.
+  it("T-355.7: sin ninguna credencial y bajo el límite ⇒ 200 con la cotización (la ruta es pública)", async () => {
+    const fetchMock = conGatewaySano();
+    checkRouteRateLimitMock.mockResolvedValue({ ok: true });
+
+    const anonimo = new Request("http://localhost/api/a2a/quote", {
+      method: "POST",
+      headers: { "content-type": "application/json" }, // y NADA más: ni cookie, ni Authorization
+      body: JSON.stringify({ amountUsd: 100, destCountry: "PE", payoutMethod: "yape" }),
+    });
+    const res = await POST(anonimo);
+
+    expect(res.status, "alguien le puso autenticación a la ruta pública de cotizar").toBe(200);
+    expect((await res.json()).result).toEqual(validResult);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

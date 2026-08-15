@@ -75,7 +75,7 @@ import {
 } from "./flow-vm";
 import { cn } from "./cn";
 import { phantomBrowseUrl, useWalletAvailability, useConnectedWalletAddress } from "./wallet-availability"; // el aviso de "acá no hay wallet" (NoWalletHere) · WKH-354/AC-6: `useConnectedWalletAddress` para el banner (CuentaCambiada)
-import { Button, Card, ChaskiMark, Field, Pill, Row, Stepper, TextInput } from "./ui";
+import { Aviso, Button, Card, ChaskiMark, Field, Muted, Pill, Row, Stepper, TextInput } from "./ui"; // ola 2: los nombres nuevos entran EN ESTA LÍNEA, no en una nueva. Este archivo recibe 83 citas por número (48 ancladas + 35 sueltas, medido en 4c24324) y una sola línea de import de más las corre TODAS
 
 // WKH-187: el quote se muestra ANTES del KYC. Orden: send→connect→review(pre-KYC)→verify→confirm(post-KYC)→track→done.
 // `history` NO es un paso del flujo: es la puerta de entrada a las remesas que ya existen. Se
@@ -650,11 +650,19 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col pb-segura-b pl-segura-l pr-segura-r pt-segura-t">
-      <header className="mb-5 flex flex-wrap items-center gap-2.5">
+      <header className="mb-aire flex flex-wrap items-center gap-ajustado">
         <ChaskiMark className="h-9 w-9" />
         <div>
-          <h1 className="text-[15px] font-bold leading-none tracking-heading">Chaski</h1>
-          <p className="text-xs text-stone">tu plata a Perú, sin vueltas</p>
+          {/* Tres clases se fueron y ninguna se reemplazó por otra:
+              · `leading-none` — en 40f0b68 era el ÚNICO interlineado declarado de todo el árbol, y
+                el rol `title` ya trae el suyo (1.3).
+              · `tracking-heading` — el rol también declara el suyo (-0.02em). ⚠️ Y NO SE DEJARON LOS
+                DOS: `cn` no los resuelve (son grupos distintos para `tailwind-merge`, así que
+                sobreviven ambos) y cuál gana lo decide el orden en que Tailwind emite las reglas,
+                que no lo elige nadie. Es exactamente el defecto que `cn.ts` documenta para `p-4`.
+              · `text-[15px]` — pasa a `title` (17px), que es el rol de un título de pantalla. */}
+          <h1 className="text-title font-bold">Chaski</h1>
+          <Muted escala="label">tu plata a Perú, sin vueltas</Muted>
         </div>
         {/* ⚠️ WKH-354 (re-AR · MENOR-2) · ESTE PILL SE PINTA CON `address` Y NO CON LA BILLETERA VIVA,
             y desde esta HU eso alcanza estados nuevos: tras volver de Didit, `address` se repuebla con
@@ -668,14 +676,17 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
             Si alguien decide que hay que distinguirlos, el cambio es de ESTE ternario, no del banner. */}
         {address ? (
           <div className="ml-auto flex flex-col items-end gap-1">
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-sand px-2.5 py-1 text-xs font-semibold text-ink">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-sand px-2.5 py-1 text-label font-semibold text-ink">
+              {/* `h-1.5 w-1.5` NO entra en la escala de íconos de S-4 y se queda: no es un ícono,
+                  es el punto de estado de la píldora. Meterlo ahí sería contar mal para que el
+                  número cerrara, que es lo que el propio docblock de `size` declara. */}
               <span className="h-1.5 w-1.5 rounded-full bg-verde"></span>
               {address.slice(0, 6)}…{address.slice(-4)}
             </span>
             {confirmReset ? (
-              <div className="max-w-[15rem] space-y-1.5 text-right text-xs text-stone">
+              <div className="max-w-[15rem] space-y-ajustado text-right text-label text-stone">
                 <ResetWarning items={history} />
-                <div className="flex items-center justify-end gap-2">
+                <div className="flex items-center justify-end gap-ajustado">
                   <button
                     type="button"
                     onClick={forgetAndDisconnect}
@@ -697,7 +708,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
               <button
                 type="button"
                 onClick={onAskReset}
-                className="inline-flex min-h-[44px] items-center px-2 text-xs text-stone underline underline-offset-2"
+                className="inline-flex min-h-[44px] items-center px-2 text-label text-stone underline underline-offset-2"
               >
                 ¿No sos vos?
               </button>
@@ -706,32 +717,32 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
         ) : null}
         <CuentaCambiada sesion={address} enVuelo={rem != null} onAdoptar={adoptarCuentaConectada} disabled={busy} />
       </header>
-      <div className="mb-6">
+      <div className="mb-aire">
         <Stepper steps={STEP_LABELS} current={STEP_INDEX[step]} />
       </div>
 
       {rem && isDemoMode(rem) && (step === "review" || step === "confirm" || step === "track" || step === "verify") ? (
-        <div className="mb-4 flex items-center justify-center">
+        <div className="mb-holgado flex items-center justify-center">
           <Pill tone="warn">{DEMO_PILL}</Pill>
         </div>
       ) : null}
 
       {resuming ? (
-        <Card className="mt-2 flex-1 space-y-4 text-center">
-          <Loader2 className="mx-auto mt-6 h-8 w-8 animate-spin text-cochineal" />
+        <Card className="mt-ajustado flex-1 space-y-holgado text-center">
+          <Loader2 className="mx-auto mt-aire size-icono-lg animate-spin text-cochineal" />
           <div>
-            <h2 className="text-base font-bold">Verificando tu identidad…</h2>
+            <h2 className="text-title font-bold">Verificando tu identidad…</h2>
             {/* "con Didit" se cayó: con `DIDIT_ENV=mock` la persona vuelve de `/kyc-simulado`, que es
                 una página nuestra, y este overlay le decía que estábamos hablando con un proveedor que
                 nadie llamó. Esta pantalla no puede distinguir las dos configuraciones (el navegador no
                 ve `DIDIT_ENV`), así que dice lo que vale en las dos. */}
-            <p className="mx-auto mt-1 max-w-xs text-sm text-stone">
+            <Muted className="mx-auto mt-ajustado max-w-xs">
               Estamos confirmando tu verificación. Un segundo.
-            </p>
+            </Muted>
           </div>
           {showResumeEscape ? (
-            <div className="space-y-2">
-              <p className="text-sm text-stone">¿No completaste la verificación?</p>
+            <div className="space-y-ajustado">
+              <Muted>¿No completaste la verificación?</Muted>
               <Button variant="outline" onClick={onCancelResume}>
                 Empezar de nuevo
               </Button>
@@ -739,12 +750,12 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
           ) : null}
         </Card>
       ) : timedOut ? (
-        <Card className="mt-2 flex-1 space-y-4 text-center">
+        <Card className="mt-ajustado flex-1 space-y-holgado text-center">
           <div>
-            <h2 className="text-base font-bold">La verificación está tardando</h2>
-            <p className="mx-auto mt-1 max-w-xs text-sm text-stone">
+            <h2 className="text-title font-bold">La verificación está tardando</h2>
+            <Muted className="mx-auto mt-ajustado max-w-xs">
               No pudimos confirmar tu identidad a tiempo. Podés reintentar sin recargar la página.
-            </p>
+            </Muted>
           </div>
           <Button onClick={onRetryKyc}>Reintentar</Button>
         </Card>
@@ -1108,14 +1119,21 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
       )}
 
       {error ? (
-        <div className="mt-4 rounded-xl border border-cochineal/20 bg-cochineal/5 px-4 py-3 text-sm text-cochineal-ink">
+        // La caja de error era una de las 14 recetas copiadas que S-3 midió, y es la única del tono
+        // `atencion`. `Aviso` emite la MISMA superficie: `px-holgado`=16px=`px-4` y
+        // `py-normal`=12px=`py-3`, así que el marco no se mueve; lo que cambia es que ahora hay UN
+        // lugar donde vive.
+        <Aviso tono="atencion" className="mt-holgado text-body">
           {error.message}
           {error.code ? (
-            <span className="mt-1 block break-all font-mono text-[11px] opacity-60">
+            // `break-all` se queda: una firma o un código sin espacios desborda la única columna de
+            // la app. `text-[11px]` pasa a `text-mono` (13px), que es el rol de códigos y firmas y
+            // el único que declara la pila monoespaciada que `font-mono` estaba usando sin tema.
+            <span className="mt-ajustado block break-all font-mono text-mono opacity-60">
               {error.code}
             </span>
           ) : null}
-        </div>
+        </Aviso>
       ) : null}
     </main>
   );
@@ -1974,7 +1992,7 @@ export function RefundAction({
   // cuando confirma), así que este array es su único ejemplar.
   //
   // Es el MISMO defecto que el fix-pack de WKH-346 arregló en la puerta de al lado
-  // (`LostEscrowRecovery`, `:2154`) y dejó declarado acá sin tocar, porque AC-9/CD-2 le prohibían este
+  // (`LostEscrowRecovery`, `:2172`) y dejó declarado acá sin tocar, porque AC-9/CD-2 le prohibían este
   // camino de firma. La propiedad "ningún comprobante ya mostrado desaparece" es de la FORMA de CADA
   // estado y no del componente: de "aquella variable es append-only" no se deduce nada sobre esta.
   const [enviados, setEnviados] = useState<
@@ -2168,7 +2186,7 @@ export function LostEscrowRecovery({
   // guarda es la firma de un refund YA TRANSMITIDO cuyo desenlace NADIE conoce: `confirmation` es
   // `"pending"` o `"unknown"` (`EscrowRefundConfirmation`, `ports.ts:339`). O sea EXACTAMENTE la firma
   // que la persona necesita para ir al visor a averiguar si entró, y esta HU la volvió prominente y
-  // enlazable (`RefundSentNotice`, `:2112`, que la imprime como "Orden enviada:"). Medido antes del arreglo: con `pending` y después
+  // enlazable (`RefundSentNotice`, `:2130`, que la imprime como "Orden enviada:"). Medido antes del arreglo: con `pending` y después
   // `confirmed`, la primera firma desaparecía del DOM; con dos `pending`, quedaba UN solo href.
   //
   // ⚠️ El `sender` va PEGADO a cada entrada, no aparte: es lo que hace que la pantalla no mezcle dos
@@ -2314,7 +2332,7 @@ export function LostEscrowRecovery({
         * arreglo: montadas afuera, la tarjeta afirmaría "puede haber más envíos con fondos por
         * recuperar" recién abierta la puerta, sin haberle preguntado nada a la cadena. Es la SEGUNDA
         * encarnación del mismo defecto en este archivo: el CR de WKH-327 lo arregló en el componente
-        * INMEDIATAMENTE SIGUIENTE (`explainer`, `flow.tsx:2401`), a unas pocas decenas de líneas de
+        * INMEDIATAMENTE SIGUIENTE (`explainer`, `flow.tsx:2419`), a unas pocas decenas de líneas de
         * donde nació este. ⚠️ Acá decía "48 líneas" y era una CIFRA QUE ENVEJECE SOLA: es una
         * distancia, y mis propias inserciones la movieron a 60 sin que ningún barrido la cazara
         * (AR-2/MNR-7). Lo que no envejece es la relación estructural, y es la que importa. Un test de
@@ -2847,7 +2865,7 @@ function AgentUnavailable({
  * agregar *"y el fee de la entrega no lo paga nadie, porque ese paso no corre"*. Es verdad
  * (`this.solana`, `../application/use-cases/confirm-and-send.ts:336`) y está PROHIBIDO escribirlo: en
  * ese mismo cuadrante, tres renglones más arriba en la MISMA tarjeta, la fila de la entrega dice
- * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:3014`). Ese *"lo simula"* es impreciso
+ * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:3032`). Ese *"lo simula"* es impreciso
  * —con el settle apagado la entrega no se simula, se corta— pero es **H1 de WKH-336**, residual de otra
  * HU que exige un TERCER valor de `transport` con su propia frase, y WKH-338 no lo cierra. Si la nota
  * dijera *"la entrega no corre"* mientras la fila dice *"lo simula"*, la tarjeta se contradiría a sí
@@ -3205,7 +3223,7 @@ function HistoryEntry({
   onOpen: (rem: RemittanceState) => void;
   answer: EscrowChainAnswer;
 }) {
-  // WKH-351 · AC-1: acá NO se calcula el estado del trámite. El encabezado del grupo ya afirma sobre la plata, y entre las dos afirmaciones hay contradicción ALCANZABLE en 3 de los 4 grupos. (`statusDisplay`, `flow-vm.ts:133`) sigue viva, y la sigue mostrando (`Receipt`, `:3260`), que es una sola remesa y no tiene encabezado con el que chocar. Reemplazo línea-neutra, 1 línea por 1: borrar esta línea desplaza las referencias de abajo, y a la mayoría no las vigila ningún test.
+  // WKH-351 · AC-1: acá NO se calcula el estado del trámite. El encabezado del grupo ya afirma sobre la plata, y entre las dos afirmaciones hay contradicción ALCANZABLE en 3 de los 4 grupos. (`statusDisplay`, `flow-vm.ts:133`) sigue viva, y la sigue mostrando (`Receipt`, `:3278`), que es una sola remesa y no tiene encabezado con el que chocar. Reemplazo línea-neutra, 1 línea por 1: borrar esta línea desplaza las referencias de abajo, y a la mayoría no las vigila ningún test.
   const knowledge = escrowFundsKnowledge(rem);
   // WKH-349. El texto Y el peso visual salen de la MISMA función: un copy que dice "siguen en el
   // escrow" con el mismo gris que "no pudimos preguntar" pierde la mitad de AC-2. Y para los cuatro
@@ -3385,7 +3403,7 @@ export function recoveryWindowExhausted(maxCandidates: number): string {
  *
  * Los cinco sitios que le muestran una firma a la persona pasan por acá. Tres la imprimían ENTERA (87 u 88 caracteres, y 88 en la mayoría de los casos: una firma ed25519 son 64 bytes y su largo en base58 depende del primer byte. Medido, 4000 muestras: 80,2 % dan 88. Los 87 con los que se mide en los tests son propiedad de `FAKE_SOLANA_SIGNATURE`, no de una firma cualquiera — AR/MNR-2)
  * y desbordaban la única columna de la app; los
- * otros dos ya truncaban con `shortTx` (`shortTx`, `:3317`) y no llevaban a ninguna parte. Un solo
+ * otros dos ya truncaban con `shortTx` (`shortTx`, `:3335`) y no llevaban a ninguna parte. Un solo
  * componente en vez de cinco es lo que impide que el próximo sitio nazca con la tercera variante.
  *
  * 🔴 POR QUÉ VIVE ACÁ Y NO EN `src/presentation/tx-proof.tsx`, que era lo natural. Un archivo nuevo
@@ -3489,10 +3507,10 @@ export function TxProof({ signature }: { signature: string }) {
  * DEVUELVE UN FRAGMENT Y NO UN `div`. El padre es un `space-y-4`, y `space-y-*` sólo alcanza a los
  * hijos DIRECTOS: un div envolvente dejaría los 4 grupos a un nivel de profundidad y les comería el
  * espaciado. Y va un `<ul>` por grupo en vez de uno solo con separadores, porque la tarjeta devuelve
- * un `<li>` (`HistoryEntry`, `:3199`) y un encabezado suelto entre `<li>` es HTML inválido.
+ * un `<li>` (`HistoryEntry`, `:3217`) y un encabezado suelto entre `<li>` es HTML inválido.
  *
- * ⚠️ POR QUÉ VIVE ACÁ ABAJO Y NO JUNTO A (`HistoryView`, `:3108`), QUE ES DONDE SE LEERÍA MEJOR: por
- * lo mismo que (`TxProof`, `:3421`). Un bloque nuevo en el medio de este archivo desplaza todo lo que
+ * ⚠️ POR QUÉ VIVE ACÁ ABAJO Y NO JUNTO A (`HistoryView`, `:3126`), QUE ES DONDE SE LEERÍA MEJOR: por
+ * lo mismo que (`TxProof`, `:3439`). Un bloque nuevo en el medio de este archivo desplaza todo lo que
  * viene después, y a este archivo lo apuntan citas por número desde todo el árbol más las autocitas
  * `:NNN` de sus propios docblocks. De todas ellas, el candado de citas sólo vigila las ANCLADAS —las
  * que llevan el símbolo delante de la coma—; las SUELTAS, que son mayoría, se romperían sin que ningún

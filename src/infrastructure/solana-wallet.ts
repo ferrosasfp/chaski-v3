@@ -1585,7 +1585,7 @@ export class SolanaWalletAdapter
     // saldría "un batch de cero cuentas": es falso — el batch cuelga del `for` de abajo, que con cero
     // ids no entra NUNCA (la frase estaba copiada de `:370-372`, donde sí es cierta porque allá el
     // batch se llama incondicionalmente). Lo único que ahorraba eran cuatro `await import` y tres
-    // constructores, sobre un camino que producción no toca (`idsAConsultar`, `../presentation/flow.tsx:3178`). Y a cambio
+    // constructores, sobre un camino que producción no toca (`idsAConsultar`, `../presentation/flow.tsx:3190`). Y a cambio
     // rompía lo que el docblock de arriba promete: con `{ sender: "no-es-base58", remittanceIds: [] }`
     // NO tiraba. Sin el corte, un `sender` inválido tira SIEMPRE, con lista vacía o llena (T-A15).
 

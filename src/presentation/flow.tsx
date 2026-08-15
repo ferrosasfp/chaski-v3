@@ -1177,7 +1177,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
  */
 function VerificationProgress({ approved }: { approved: boolean }) {
   return (
-    <div className="flex items-center gap-2.5 rounded-xl bg-sand/60 px-4 py-3.5">
+    <div className="flex items-center gap-normal rounded-control bg-sand/60 px-holgado py-normal">
       <span
         className={
           approved
@@ -1187,7 +1187,7 @@ function VerificationProgress({ approved }: { approved: boolean }) {
       >
         {approved ? <Check className="size-icono-sm" /> : <Loader2 className="size-icono-sm animate-spin" />}
       </span>
-      <span className="text-sm font-medium text-ink">
+      <span className="text-body font-medium text-ink">
         {approved ? "Tu verificación volvió aprobada" : "Preparando tu verificación"}
       </span>
     </div>
@@ -1220,21 +1220,25 @@ function IdentityBadge({ kyc }: { kyc: KycVerification }) {
   const documento = `${id.documentType} ••••${id.documentNumberLast4}`;
   if (isKycDemo(kyc.provenance)) {
     return (
-      <div className="flex items-start gap-2.5 rounded-xl border border-dashed border-stone/40 bg-sand/60 px-4 py-2.5">
+      // El punteado sobre arena ES el tono `prueba` de S-3, byte por byte: `border border-dashed
+      // border-stone/40 bg-sand/60`. `flex items-start` va como `className` y no adentro del
+      // componente porque de las cajas medidas una es `flex items-center`, otra `text-left` y otra
+      // ninguna de las dos: la superficie la aporta `Aviso`, la disposición el sitio de llamada.
+      <Aviso tono="prueba" className="flex items-start gap-normal">
         <ShieldAlert className="mt-0.5 size-icono-sm shrink-0 text-stone" />
-        <p className="text-xs text-stone">
+        <p className="text-label text-stone">
           Identidad sin verificar: <b>{nombre}</b> · {documento}. {kycOriginNotice(kyc.provenance)}
         </p>
-      </div>
+      </Aviso>
     );
   }
   return (
-    <div className="flex items-center gap-2.5 rounded-xl bg-verde-bg px-4 py-2.5">
+    <Aviso tono="bueno" className="flex items-center gap-normal">
       <BadgeCheck className="size-icono-sm shrink-0 text-verde" />
-      <p className="text-xs text-verde/90">
+      <p className="text-label text-verde/90">
         Identidad verificada: <b>{nombre}</b> · {documento}
       </p>
-    </div>
+    </Aviso>
   );
 }
 
@@ -1266,30 +1270,38 @@ function NoWalletHere() {
   const href = typeof window !== "undefined" ? window.location.href : "";
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   return (
-    <div className="space-y-3 rounded-xl2 border border-line bg-sand/60 p-4">
-      <div className="flex items-center gap-2">
+    // `space-y-3 rounded-xl2 border border-line bg-sand/60 p-4` era la receta más repetida de las 14
+    // que S-3 midió (3 sitios, más 1 casi igual). ⚠️ Y el `p-4` de la receta NO es lo que emite
+    // `Aviso` (`px-holgado py-normal`, o sea 16 y 12): acá el alto baja 4px por lado. Se elige la
+    // superficie del componente y no un `className` que la deshaga, porque tres cajas iguales con un
+    // padding propio cada una es de donde venía el problema.
+    <Aviso className="space-y-normal">
+      <div className="flex items-center gap-ajustado">
         <Smartphone className="size-icono-sm text-cochineal" />
-        <h2 className="text-sm font-bold">No vemos ninguna wallet en este navegador</h2>
+        <h2 className="text-title font-bold">No vemos ninguna wallet en este navegador</h2>
       </div>
-      <p className="text-sm text-stone">
+      <Muted>
         Esto no dice si tenés una wallet instalada: dice que en este navegador no hay ninguna
         disponible.
-      </p>
-      <p className="text-sm text-stone">
+      </Muted>
+      <Muted>
         En el celular, Phantom solo se conecta desde su propio navegador. Si ya la tenés en este
         dispositivo, abrí Chaski adentro de Phantom.
-      </p>
+      </Muted>
+      {/* ⛔ `h-11` (44px) NO se migra al alto del `<Button>`: es un `<a>`, no un botón, y sigue
+          cumpliendo el mínimo de toque de WCAG 2.5.5. Subirlo a 52 lo empataría con el CTA
+          primario de la pantalla, que es lo contrario de lo que M-4 pide. */}
       <a
         href={phantomBrowseUrl(href, origin)}
         rel="noreferrer"
-        className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-cochineal/30 bg-card px-4 text-[15px] font-semibold text-cochineal"
+        className="inline-flex h-11 w-full items-center justify-center gap-ajustado rounded-control border border-cochineal/30 bg-card px-holgado text-body font-semibold text-cochineal"
       >
         <ExternalLink className="size-icono-sm" /> Abrir Chaski en Phantom
       </a>
-      <p className="text-xs text-stone">
+      <Muted escala="label">
         Si estás en una computadora, instalá la extensión de Phantom o Solflare y recargá la página.
-      </p>
-    </div>
+      </Muted>
+    </Aviso>
   );
 }
 
@@ -1645,8 +1657,8 @@ export function TrackView({
     // que o se ofrece la acción o no hay ninguna.
     const recoveryOffered = showRefund;
     return (
-      <Card className="space-y-3">
-        <p className="text-sm font-semibold">
+      <Card className="space-y-normal">
+        <p className="text-title font-semibold">
           {recoveredBySender
             ? "Recuperaste tus fondos"
             : senderSolMissing
@@ -1665,7 +1677,7 @@ export function TrackView({
                   ? "Tus USDC quedaron en el escrow"
                   : "No pudo entregarse"}
         </p>
-        <p className="text-sm text-stone">
+        <Muted>
           {recoveredBySender
             ? "Los USDC volvieron a tu wallet. Esta remesa no se entregó."
             : senderSolMissing
@@ -1683,21 +1695,21 @@ export function TrackView({
                 : principalInEscrow
                   ? "Tu depósito entró al escrow y el envío no siguió. Los USDC siguen ahí, a tu nombre. Nadie te los reembolsó: los recuperás vos, firmando desde tu wallet."
                   : humanError("payout_failed")}
-        </p>
+        </Muted>
         {(principalUnknown || principalInEscrow) && recoveryOffered ? (
-          <p className="text-sm text-stone">{RECOVERY_ASK_WHEN_UNKNOWN}</p>
+          <Muted>{RECOVERY_ASK_WHEN_UNKNOWN}</Muted>
         ) : null}
         {(principalUnknown || principalInEscrow) && !recoveryOffered ? (
-          <p className="text-sm text-stone">{RECOVERY_NEEDS_WALLET}</p>
+          <Muted>{RECOVERY_NEEDS_WALLET}</Muted>
         ) : null}
         {/* Sólo se muestra un comprobante que EXISTE. El adapter ledger-only devuelve null y esta
             línea no se renderiza: un identificador fabricado al lado de la palabra reembolso es peor
             que no decir nada. */}
         {rem.refundTx ? (
-          <p className="text-xs text-stone">Referencia de reembolso: <TxProof signature={rem.refundTx} /></p>
+          <Muted escala="label">Referencia de reembolso: <TxProof signature={rem.refundTx} /></Muted>
         ) : null}
         {showRefund && recover && sender ? (
-          <div className="space-y-2">
+          <div className="space-y-ajustado">
             <RefundAction
               remittanceId={rem.id}
               sender={sender}
@@ -1732,14 +1744,14 @@ export function TrackView({
   // cuenten dos historias) y qué se puede hacer.
   const depositUnknown = rem.status === "confirmed";
   return (
-    <Card className="space-y-4">
-      <div className="flex items-center gap-2.5">
+    <Card className="space-y-holgado">
+      <div className="flex items-center gap-normal">
         <ChaskiMark className={cn("size-icono-lg", waitingOnPerson ? undefined : "animate-pulse")} />
-        <p className="text-sm font-semibold">
+        <p className="text-title font-semibold">
           {waitingOnPerson ? "Tu envío está esperando" : "Tu chaski está en camino…"}
         </p>
       </div>
-      <ol className="space-y-3">
+      <ol className="space-y-normal">
         {TRACK_STEPS.map((s, i) => {
           const last = order.indexOf(s.key[s.key.length - 1] ?? "settled");
           // Un paso está COMPLETADO cuando el estado lo pasó de largo, no cuando lo alcanzó. Antes
@@ -1750,7 +1762,7 @@ export function TrackView({
           const reached = idx > last || (last === order.length - 1 && idx === last);
           const active = !reached && s.key.includes(rem.status);
           return (
-            <li key={s.label} className="flex items-center gap-3">
+            <li key={s.label} className="flex items-center gap-normal">
               <span
                 className={
                   reached
@@ -1769,10 +1781,10 @@ export function TrackView({
                 ) : active ? (
                   <Loader2 className="size-icono-sm animate-spin" />
                 ) : (
-                  <span className="text-xs text-stone">{i + 1}</span>
+                  <span className="text-label text-stone">{i + 1}</span>
                 )}
               </span>
-              <span className={reached || active ? "text-sm font-medium text-ink" : "text-sm text-stone"}>
+              <span className={reached || active ? "text-body font-medium text-ink" : "text-body text-stone"}>
                 {s.label}
               </span>
             </li>
@@ -1795,15 +1807,15 @@ export function TrackView({
         />
       ) : null}
       {depositUnknown ? (
-        <div className="space-y-1">
-          <p className="text-sm text-stone">{escrowKnowledgeCopy(escrowFundsKnowledge(rem))}</p>
-          <p className="text-sm text-stone">
+        <div className="space-y-ajustado">
+          <Muted>{escrowKnowledgeCopy(escrowFundsKnowledge(rem))}</Muted>
+          <Muted>
             {showRefund ? RECOVERY_ASK_WHEN_UNKNOWN : RECOVERY_NEEDS_WALLET}
-          </p>
+          </Muted>
         </div>
       ) : null}
       {showRefund && recover && sender ? (
-        <div className="space-y-2">
+        <div className="space-y-ajustado">
           <RefundAction
             remittanceId={rem.id}
             sender={sender}
@@ -1933,12 +1945,12 @@ function RevisionDelSeguimiento({
     // Estado 5 — sin billetera no hay a quién pedirle la firma, así que NO se ofrece el gesto. Ofrecerlo
     // sería un botón que no puede funcionar; el gateway ya corta por su lado con `payout_status_no_wallet`.
     case "sin-billetera":
-      return <p className="text-xs text-stone">{REVISION_SIN_BILLETERA}</p>;
+      return <p className="text-label text-stone">{REVISION_SIN_BILLETERA}</p>;
     // Estado 2 — la ventana está apagada. Presente puro: qué NO está pasando, sin contar qué pasó antes.
     case "sin-prueba":
       return (
-        <div className="space-y-2">
-          <p className="text-xs text-stone">{REVISION_APAGADA}</p>
+        <div className="space-y-ajustado">
+          <p className="text-label text-stone">{REVISION_APAGADA}</p>
           {/* ⛔ `disabled` POR DOS RAZONES DISTINTAS, y las dos son frenos del cupo:
               · MIENTRAS FIRMA ⇒ un gesto = como máximo UN challenge. Sin esto, N toques abren N popups.
               · SIN INTENTOS ⇒ el techo de `MAX_CHALLENGES_POR_MONTAJE`. Sin esto el camino de FALLO no
@@ -1951,18 +1963,18 @@ function RevisionDelSeguimiento({
           </Button>
           {/* Estado 3 — el popup está abierto. Es texto propio y NO el label del botón, para que el
               control siga siendo alcanzable por su nombre mientras está deshabilitado. */}
-          {gesto === "firmando" ? <p className="text-xs text-stone">{REVISION_FIRMANDO}</p> : null}
+          {gesto === "firmando" ? <p className="text-label text-stone">{REVISION_FIRMANDO}</p> : null}
           {/* Estado 6b — el mecanismo está apagado: reintentar NO sirve, y la copy lo dice. Se separa del
               6 porque son la diferencia entre "probá más tarde" y "esto no se arregla probando". */}
           {gesto === "mecanismo-apagado" ? (
-            <p className="text-xs text-stone">{REVISION_MECANISMO_APAGADO}</p>
+            <p className="text-label text-stone">{REVISION_MECANISMO_APAGADO}</p>
           ) : null}
           {gesto === "no-se-pudo-pedir" ? (
-            <p className="text-xs text-stone">{REVISION_NO_SE_PUDO_PEDIR}</p>
+            <p className="text-label text-stone">{REVISION_NO_SE_PUDO_PEDIR}</p>
           ) : null}
-          {gesto === "sin-firma" ? <p className="text-xs text-stone">{REVISION_SIN_FIRMA}</p> : null}
+          {gesto === "sin-firma" ? <p className="text-label text-stone">{REVISION_SIN_FIRMA}</p> : null}
           {sinIntentos && gesto !== "firmando" ? (
-            <p className="text-xs text-stone">{REVISION_TECHO_ALCANZADO}</p>
+            <p className="text-label text-stone">{REVISION_TECHO_ALCANZADO}</p>
           ) : null}
         </div>
       );
@@ -2008,7 +2020,7 @@ export function RefundAction({
   // cuando confirma), así que este array es su único ejemplar.
   //
   // Es el MISMO defecto que el fix-pack de WKH-346 arregló en la puerta de al lado
-  // (`LostEscrowRecovery`, `:2188`) y dejó declarado acá sin tocar, porque AC-9/CD-2 le prohibían este
+  // (`LostEscrowRecovery`, `:2200`) y dejó declarado acá sin tocar, porque AC-9/CD-2 le prohibían este
   // camino de firma. La propiedad "ningún comprobante ya mostrado desaparece" es de la FORMA de CADA
   // estado y no del componente: de "aquella variable es append-only" no se deduce nada sobre esta.
   const [enviados, setEnviados] = useState<
@@ -2049,7 +2061,7 @@ export function RefundAction({
   }, [recover, remittanceId, sender, onRecovered]);
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-ajustado">
       <Button variant="outline" onClick={onRefund} disabled={busy}>
         {busy ? "Recuperando…" : enviados.length > 0 ? "Volver a intentar" : "Recuperar fondos"}
       </Button>
@@ -2058,7 +2070,7 @@ export function RefundAction({
       {enviados.map((e) => (
         <RefundSentNotice key={e.refundTx} confirmation={e.confirmation} refundTx={e.refundTx} />
       ))}
-      {err ? <p className="text-xs text-cochineal-ink">{err}</p> : null}
+      {err ? <p className="text-label text-cochineal-ink">{err}</p> : null}
     </div>
   );
 }
@@ -2117,12 +2129,12 @@ export function CloseEscrowAction({
   }, [close, remittanceId, sender]);
 
   return (
-    <div className="space-y-2" data-testid="close-escrow-action">
+    <div className="space-y-ajustado" data-testid="close-escrow-action">
       {explainerMode === "own" ? (
         <>
-          <p className="text-sm font-semibold">{explainer.title}</p>
-          <p className="text-sm text-stone">{explainer.body}</p>
-          <p className="text-xs text-stone">{explainer.notRecovered}</p>
+          <p className="text-title font-semibold">{explainer.title}</p>
+          <p className="text-body text-stone">{explainer.body}</p>
+          <p className="text-label text-stone">{explainer.notRecovered}</p>
         </>
       ) : null}
       {done !== "confirmed" ? (
@@ -2130,8 +2142,8 @@ export function CloseEscrowAction({
           {busy ? "Cerrando…" : done ? "Volver a intentar" : "Cerrar y recuperar"}
         </Button>
       ) : null}
-      {done ? <p className="text-sm text-stone">{escrowCloseSentCopy(done)}</p> : null}
-      {err ? <p className="text-xs text-cochineal-ink">{err}</p> : null}
+      {done ? <p className="text-body text-stone">{escrowCloseSentCopy(done)}</p> : null}
+      {err ? <p className="text-label text-cochineal-ink">{err}</p> : null}
     </div>
   );
 }
@@ -2151,15 +2163,15 @@ function RefundSentNotice({
   refundTx: string;
 }) {
   return (
-    <div className="space-y-1">
+    <div className="space-y-ajustado">
       {/* "Enviamos la orden", NUNCA "volvieron". */}
-      <p className="text-xs font-semibold text-ink">Enviamos la orden de recuperación</p>
-      <p className="text-xs text-stone">
+      <p className="text-label font-semibold text-ink">Enviamos la orden de recuperación</p>
+      <p className="text-label text-stone">
         {confirmation === "pending"
           ? "Todavía no la vemos confirmada en la cadena. Puede entrar en un rato, o puede no haber entrado. Hasta que se confirme no sabemos si tus USDC volvieron."
           : "No pudimos consultar la cadena para saber si entró. Nadie sabe todavía si tus USDC volvieron; no es que hayan fallado."}
       </p>
-      <p className="text-xs text-stone">Orden enviada: <TxProof signature={refundTx} /></p>
+      <p className="text-label text-stone">Orden enviada: <TxProof signature={refundTx} /></p>
     </div>
   );
 }
@@ -2202,7 +2214,7 @@ export function LostEscrowRecovery({
   // guarda es la firma de un refund YA TRANSMITIDO cuyo desenlace NADIE conoce: `confirmation` es
   // `"pending"` o `"unknown"` (`EscrowRefundConfirmation`, `ports.ts:339`). O sea EXACTAMENTE la firma
   // que la persona necesita para ir al visor a averiguar si entró, y esta HU la volvió prominente y
-  // enlazable (`RefundSentNotice`, `:2146`, que la imprime como "Orden enviada:"). Medido antes del arreglo: con `pending` y después
+  // enlazable (`RefundSentNotice`, `:2158`, que la imprime como "Orden enviada:"). Medido antes del arreglo: con `pending` y después
   // `confirmed`, la primera firma desaparecía del DOM; con dos `pending`, quedaba UN solo href.
   //
   // ⚠️ El `sender` va PEGADO a cada entrada, no aparte: es lo que hace que la pantalla no mezcle dos
@@ -2322,7 +2334,7 @@ export function LostEscrowRecovery({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex min-h-[52px] w-full items-center justify-center text-center text-sm font-semibold text-cochineal underline underline-offset-2"
+        className="inline-flex min-h-[52px] w-full items-center justify-center text-center text-body font-semibold text-cochineal underline underline-offset-2"
       >
         Recuperar un envío perdido
       </button>
@@ -2330,13 +2342,13 @@ export function LostEscrowRecovery({
   }
 
   return (
-    <div className="space-y-3 rounded-xl2 border border-line bg-sand/60 p-4">
-      <h2 className="text-sm font-bold">Recuperar un envío perdido</h2>
-      <p className="text-sm text-stone">
+    <Aviso className="space-y-normal">
+      <h2 className="text-title font-bold">Recuperar un envío perdido</h2>
+      <p className="text-body text-stone">
         Si borraste los datos del navegador o entrás desde otro dispositivo, tus envíos no aparecen
         en "Ver mis envíos". Los buscamos preguntándole al servidor por tu billetera.
       </p>
-      <p className="text-sm text-stone">
+      <p className="text-body text-stone">
         Tu billetera te va a pedir una firma para probar que es tuya: es un texto, no mueve fondos y
         no paga comisión de red. Si encontramos un escrow abierto te va a pedir una segunda firma, y
         esa sí es la transacción que saca tus USDC; su comisión de red la pagás vos.
@@ -2348,24 +2360,24 @@ export function LostEscrowRecovery({
         * arreglo: montadas afuera, la tarjeta afirmaría "puede haber más envíos con fondos por
         * recuperar" recién abierta la puerta, sin haberle preguntado nada a la cadena. Es la SEGUNDA
         * encarnación del mismo defecto en este archivo: el CR de WKH-327 lo arregló en el componente
-        * INMEDIATAMENTE SIGUIENTE (`explainer`, `flow.tsx:2435`), a unas pocas decenas de líneas de
+        * INMEDIATAMENTE SIGUIENTE (`explainer`, `flow.tsx:2447`), a unas pocas decenas de líneas de
         * donde nació este. ⚠️ Acá decía "48 líneas" y era una CIFRA QUE ENVEJECE SOLA: es una
         * distancia, y mis propias inserciones la movieron a 60 sin que ningún barrido la cazara
         * (AR-2/MNR-7). Lo que no envejece es la relación estructural, y es la que importa. Un test de
         * PRESENCIA no lo ve; sólo lo ve uno que mire el DOM ANTES de buscar (`T-346-12`). */}
       {misRecuperados.length > 0 ? (
-        <div className="space-y-1">
-          <p className="text-xs font-semibold text-ink">Recuperaste tus fondos</p>
+        <div className="space-y-ajustado">
+          <p className="text-label font-semibold text-ink">Recuperaste tus fondos</p>
           {/* La MISMA frase que el historial usa para ese hecho, no una segunda versión. Sigue en
               singular a propósito: "Recuperaste 2 envíos" es un número que SÍ sabemos, pero es alcance
               nuevo y no lo pidió nadie. El encabezado funciona en singular y en plural. */}
-          <p className="text-xs text-stone">{escrowKnowledgeCopy("returned")}</p>
+          <p className="text-label text-stone">{escrowKnowledgeCopy("returned")}</p>
           {misRecuperados.map((r) => (
-            <p key={r.refundTx} className="text-xs text-stone">
+            <p key={r.refundTx} className="text-label text-stone">
               Comprobante: <TxProof signature={r.refundTx} />
             </p>
           ))}
-          <p className="text-xs text-stone">
+          <p className="text-label text-stone">
             {caminoTerminado
               ? recoveryWindowExhausted(MAX_RECOVERY_CANDIDATES)
               : recoveryMoreEscrowsHint(MAX_RECOVERY_CANDIDATES)}
@@ -2384,8 +2396,8 @@ export function LostEscrowRecovery({
           el comprobante, y en `text-cochineal-ink` que ninguno de los últimos N está abierto: la app
           acababa de averiguar que terminó y seguía hablando como si algo hubiera fallado. ⛔ Con
           `recuperados` vacío la guarda no aplica y el error se pinta igual que siempre (T-346-16). */}
-      {err && !caminoTerminado ? <p className="text-xs text-cochineal-ink">{err}</p> : null}
-    </div>
+      {err && !caminoTerminado ? <p className="text-label text-cochineal-ink">{err}</p> : null}
+    </Aviso>
   );
 }
 
@@ -2472,7 +2484,7 @@ export function EscrowRentRecovery({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex min-h-[52px] w-full items-center justify-center text-center text-sm font-semibold text-cochineal underline underline-offset-2"
+        className="inline-flex min-h-[52px] w-full items-center justify-center text-center text-body font-semibold text-cochineal underline underline-offset-2"
       >
         Recuperar el depósito de red de envíos anteriores
       </button>
@@ -2480,11 +2492,11 @@ export function EscrowRentRecovery({
   }
 
   return (
-    <div className="space-y-3 rounded-xl2 border border-line bg-sand/60 p-4">
-      <h2 className="text-sm font-bold">{explainer.title}</h2>
-      <p className="text-sm text-stone">{explainer.body}</p>
-      <p className="text-xs text-stone">{explainer.notRecovered}</p>
-      <p className="text-sm text-stone">
+    <Aviso className="space-y-normal">
+      <h2 className="text-title font-bold">{explainer.title}</h2>
+      <p className="text-body text-stone">{explainer.body}</p>
+      <p className="text-label text-stone">{explainer.notRecovered}</p>
+      <p className="text-body text-stone">
         Tu billetera te va a pedir una firma para probar que es tuya: es un texto, no mueve fondos y
         no paga comisión de red. Después, por cada envío que cierres, te va a pedir la firma de esa
         transacción, y su comisión de red la pagás vos.
@@ -2493,10 +2505,10 @@ export function EscrowRentRecovery({
         {busy ? "Buscando…" : "Buscar envíos con cuentas abiertas"}
       </Button>
       {found && found.length > 0 && close && sender ? (
-        <div className="space-y-3">
+        <div className="space-y-normal">
           {found.map((e) => (
-            <div key={e.remittanceId} className="space-y-1 border-t border-line pt-2">
-              <p className="text-xs text-stone">Envío {e.remittanceId}</p>
+            <div key={e.remittanceId} className="space-y-ajustado border-t border-line pt-ajustado">
+              <p className="text-label text-stone">Envío {e.remittanceId}</p>
               {/* "inherited": el explicativo ya está montado arriba, UNA vez para toda la lista. */}
               <CloseEscrowAction
                 remittanceId={e.remittanceId}
@@ -2508,8 +2520,8 @@ export function EscrowRentRecovery({
           ))}
         </div>
       ) : null}
-      {err ? <p className="text-xs text-cochineal-ink">{err}</p> : null}
-    </div>
+      {err ? <p className="text-label text-cochineal-ink">{err}</p> : null}
+    </Aviso>
   );
 }
 
@@ -2536,17 +2548,17 @@ export function EscrowRentRecovery({
 function PayoutInProgress({ rem }: { rem: RemittanceState }) {
   const simulado = isDemoMode(rem);
   return (
-    <div className="space-y-3">
-      <div className="rounded-xl bg-sand px-4 py-3 text-center">
-        <p className="text-xs text-stone">{rem.beneficiary.name} va a recibir</p>
+    <div className="space-y-normal">
+      <div className="rounded-control bg-sand px-holgado py-normal text-center">
+        <p className="text-label text-stone">{rem.beneficiary.name} va a recibir</p>
         <p className="tabular-nums text-3xl font-extrabold text-verde">
           {rem.quote ? rem.quote.receive.format() : "—"}
         </p>
-        <p className="mt-1 text-xs text-stone">
+        <p className="mt-ajustado text-label text-stone">
           en {methodLabel(rem.beneficiary.method)} · {rem.beneficiary.destination}
         </p>
       </div>
-      <div className="flex items-start gap-2.5">
+      <div className="flex items-start gap-ajustado.5">
         {/* 🔴 RELOJ QUIETO, NUNCA UN SPINNER. Mi primera versión de esta tarjeta puso un spinner y el
             test lo tumbó, con razón: hay una decisión deliberada de que en este paso NADA gire,
             porque un spinner dice "trabajando" y lo que pasa es "esperando". Es el mismo criterio
@@ -2558,7 +2570,7 @@ function PayoutInProgress({ rem }: { rem: RemittanceState }) {
               En `payout_submitted` lo único que pasó es que el agente aceptó crear la orden; los USDC
               siguen en el vault y el release lo dispara una persona a mano. El verbo ahora es el de
               lo que sabemos: aceptó. */}
-          <p className="text-sm font-medium">El proveedor aceptó la orden de pago</p>
+          <p className="text-body font-medium">El proveedor aceptó la orden de pago</p>
           {/* Las dos mitades honestas, JUNTO al titular y no escondidas más abajo. La segunda es la
               frase que estaba antes: este paso no avanza solo. Se conserva el hecho y cambia el
               lugar, porque enterrarlo sería prometer un automatismo que no existe.
@@ -2567,11 +2579,11 @@ function PayoutInProgress({ rem }: { rem: RemittanceState }) {
               mirar el vault DESDE ACÁ. Desde WKH-349 el historial de esta misma remesa sí lo mira y
               dice qué contestó el contrato. La regla no cambia —dos pantallas no pueden contar dos
               historias— y la relación es: el historial mide, ésta no, y por eso ésta no afirma más. */}
-          <p className="mt-0.5 text-xs text-stone">
+          <p className="mt-0.5 text-label text-stone">
             Vimos entrar tus USDC al contrato, a tu nombre. Todavía no tenemos la confirmación de que
             el dinero llegó a destino, así que no te lo vamos a decir hasta tenerla.
           </p>
-          <p className="mt-1 text-xs text-stone">
+          <p className="mt-ajustado text-label text-stone">
             Este paso no avanza solo: la entrega la libera una persona del equipo, así que puede
             quedarse acá un buen rato. Si preferís no esperar, podés recuperar tus USDC.
           </p>
@@ -2587,7 +2599,7 @@ function PayoutInProgress({ rem }: { rem: RemittanceState }) {
           así que esto también se prende con una proveniencia DESCONOCIDA, de la que no sabemos si es
           simulada. Lo que la condición mide es que no está confirmada como real, y es lo que dice. */}
       {simulado ? (
-        <p className="rounded-lg border border-dashed border-stone/40 px-3 py-2 text-xs text-stone">
+        <p className="rounded-control border border-dashed border-stone/40 px-normal py-ajustado text-label text-stone">
           <strong>Entorno de prueba.</strong> Al menos uno de los pasos de este envío (la cotización,
           la verificación o el desembolso) no está confirmado como real. El depósito en la cadena sí
           es real y se puede ver en el explorador.
@@ -2681,8 +2693,8 @@ function AgentPlanCard() {
   if (failed) {
     return (
       <Card>
-        <p className="text-sm font-semibold">Quién va a atender tu envío</p>
-        <p className="mt-1 text-xs text-stone">
+        <p className="text-title font-semibold">Quién va a atender tu envío</p>
+        <p className="mt-ajustado text-label text-stone">
           No pudimos consultar el catálogo ahora. Tu envío sigue igual: esto es informativo.
         </p>
       </Card>
@@ -2692,28 +2704,28 @@ function AgentPlanCard() {
 
   return (
     <Card>
-      <p className="text-sm font-semibold">Quién va a atender tu envío</p>
+      <p className="text-title font-semibold">Quién va a atender tu envío</p>
       {/* "Ninguno de estos pasos está atado a una empresa fija" quedaba desmentido tres renglones
           más abajo por el propio detalle de cada fila: la que decía "hoy se llama directo a X" ERA un
           paso cableado a un agente concreto. Esa fila ya no existe (W3), y aun así la frase de arriba
           sigue describiendo el MODELO (pedimos capacidades) sin afirmar que hoy los tres corran por
           ahí: cada fila lo dice por su cuenta, y en demo la cotización no la da ningún agente. */}
-      <p className="mt-1 text-xs text-stone">
+      <p className="mt-ajustado text-label text-stone">
         Chaski pide capacidades, no empresas: el catálogo abierto responde quién las cumple, así que
         esta lista puede cambiar sola. Abajo, por dónde corre hoy cada paso.
       </p>
-      <div className="mt-3 space-y-2">
+      <div className="mt-normal space-y-ajustado">
         {plan.steps.map((s) => (
-          <div key={s.capability} className="rounded-lg border border-line px-3 py-2">
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="text-sm font-medium">{s.label}</span>
-              <span className="tabular-nums text-sm">
+          <div key={s.capability} className="rounded-control border border-line px-normal py-ajustado">
+            <div className="flex items-baseline justify-between gap-ajustado">
+              <span className="text-body font-medium">{s.label}</span>
+              <span className="tabular-nums text-body">
                 {s.agent?.priceUsdc != null ? `${s.agent.priceUsdc} USDC` : "sin precio publicado"}
               </span>
             </div>
             {s.agent ? (
               <>
-                <p className="mt-0.5 text-xs text-stone">
+                <p className="mt-0.5 text-label text-stone">
                   El catálogo ofrece a {s.agent.id}
                   {s.agent.verified ? " · verificado" : " · sin verificar"}
                 </p>
@@ -2725,9 +2737,9 @@ function AgentPlanCard() {
           </div>
         ))}
       </div>
-      <div className="mt-3 flex items-baseline justify-between">
-        <span className="text-xs text-stone">Precio publicado en el catálogo</span>
-        <span className="tabular-nums text-sm font-semibold">{plan.totalUsdc} USDC</span>
+      <div className="mt-normal flex items-baseline justify-between">
+        <span className="text-label text-stone">Precio publicado en el catálogo</span>
+        <span className="tabular-nums text-body font-semibold">{plan.totalUsdc} USDC</span>
       </div>
       {/* La nota se elige leyendo LOS DOS legs, porque habla del número, y el número suma los steps con
           precio publicado. La regla es "sólo se afirma lo que la pata garantiza": si la ENTREGA no
@@ -2748,10 +2760,10 @@ function AgentPlanCard() {
             : entrega?.transport === "gateway"
               ? AGENT_PRICE_NOTE_GATEWAY
               : AGENT_PRICE_NOTE_GATEWAY_SOLO_FX;
-        return <p className="mt-1 text-xs text-stone">{nota}</p>;
+        return <p className="mt-ajustado text-label text-stone">{nota}</p>;
       })()}
       <PlanConstraintsNote steps={plan.steps} />
-      <p className="mt-2 text-xs text-stone">
+      <p className="mt-ajustado text-label text-stone">
         Tu identidad no pasa por el catálogo: se verifica con el proveedor directo.
       </p>
     </Card>
@@ -2783,7 +2795,7 @@ function PlanConstraintsNote({
   const min = Math.min(...pisos);
   const max = Math.max(...pisos);
   return (
-    <p className="mt-2 text-xs text-stone">
+    <p className="mt-ajustado text-label text-stone">
       Esta lista se consultó con el mismo piso de reputación con el que corre el envío
       {min === max ? ` (${min})` : ` (entre ${min} y ${max}, según el paso)`}: no es una vidriera más
       amplia que lo que se va a ejecutar.
@@ -2817,7 +2829,7 @@ function AgentUnavailable({
 }) {
   if (availability === "sin-candidatos") {
     return (
-      <p className="mt-0.5 text-xs text-stone">
+      <p className="mt-0.5 text-label text-stone">
         El catálogo no ofrece a nadie para esta capacidad
         {typeof constraints?.minReputation === "number"
           ? ` con al menos ${constraints.minReputation} de reputación, que es el piso de este paso`
@@ -2827,7 +2839,7 @@ function AgentUnavailable({
     );
   }
   return (
-    <p className="mt-0.5 text-xs text-stone">
+    <p className="mt-0.5 text-label text-stone">
       No pudimos consultar el catálogo para este paso. No sabemos quién lo atiende, y eso no dice nada
       sobre si hay alguien.
     </p>
@@ -2881,7 +2893,7 @@ function AgentUnavailable({
  * agregar *"y el fee de la entrega no lo paga nadie, porque ese paso no corre"*. Es verdad
  * (`this.solana`, `../application/use-cases/confirm-and-send.ts:336`) y está PROHIBIDO escribirlo: en
  * ese mismo cuadrante, tres renglones más arriba en la MISMA tarjeta, la fila de la entrega dice
- * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:3048`). Ese *"lo simula"* es impreciso
+ * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:3060`). Ese *"lo simula"* es impreciso
  * —con el settle apagado la entrega no se simula, se corta— pero es **H1 de WKH-336**, residual de otra
  * HU que exige un TERCER valor de `transport` con su propia frase, y WKH-338 no lo cierra. Si la nota
  * dijera *"la entrega no corre"* mientras la fila dice *"lo simula"*, la tarjeta se contradiría a sí
@@ -3038,13 +3050,13 @@ const AGENT_PRICE_NOTE_GATEWAY_SOLO_FX =
 function AgentRunsToday({ transport }: { transport: "gateway" | "demo" }) {
   if (transport === "gateway") {
     return (
-      <p className="mt-0.5 text-xs text-stone">
+      <p className="mt-0.5 text-label text-stone">
         Hoy este paso corre por el gateway, que elige al ejecutar: puede tocarle otro.
       </p>
     );
   }
   return (
-    <p className="mt-0.5 text-xs font-medium text-cochineal-ink">
+    <p className="mt-0.5 text-label font-medium text-cochineal-ink">
       Hoy este paso no lo corre ningún agente: esta app está en modo demo y lo simula.
     </p>
   );
@@ -3059,7 +3071,7 @@ const CUSTODY_WINDOW_HOURS = CUSTODY_WINDOW_SECS / 3600;
 
 function RefundWindowNote() {
   return (
-    <p className="text-xs text-stone">
+    <p className="text-label text-stone">
       El plazo se fija cuando depositás y dura unas {CUSTODY_WINDOW_HOURS} horas. Si todavía no
       venció, el botón te lo dice sin firmar nada ni cobrarte comisión.
     </p>
@@ -3199,11 +3211,11 @@ export function HistoryView({
   const answerFor = (id: string): EscrowChainAnswer =>
     chain === "not-asked" || chain === "pending" ? chain : (chain.get(id) ?? "unknown");
   return (
-    <div className="space-y-4">
-      <Card className="space-y-2">
-        <h2 className="text-sm font-semibold">Tus envíos</h2>
+    <div className="space-y-holgado">
+      <Card className="space-y-ajustado">
+        <h2 className="text-title font-semibold">Tus envíos</h2>
         {/* De dónde sale esta lista, dicho antes de que la persona saque conclusiones de que esté vacía. */}
-        <p className="text-xs text-stone">
+        <p className="text-label text-stone">
           Son los envíos guardados en este dispositivo. Si borraste los datos del navegador o entrás
           desde otro, acá no van a aparecer aunque existan.
         </p>
@@ -3211,7 +3223,7 @@ export function HistoryView({
 
       {items.length === 0 ? (
         <Card>
-          <p className="text-sm text-stone">
+          <p className="text-body text-stone">
             No encontramos envíos guardados para esta wallet en este dispositivo.
           </p>
         </Card>
@@ -3239,7 +3251,7 @@ function HistoryEntry({
   onOpen: (rem: RemittanceState) => void;
   answer: EscrowChainAnswer;
 }) {
-  // WKH-351 · AC-1: acá NO se calcula el estado del trámite. El encabezado del grupo ya afirma sobre la plata, y entre las dos afirmaciones hay contradicción ALCANZABLE en 3 de los 4 grupos. (`statusDisplay`, `flow-vm.ts:133`) sigue viva, y la sigue mostrando (`Receipt`, `:3294`), que es una sola remesa y no tiene encabezado con el que chocar. Reemplazo línea-neutra, 1 línea por 1: borrar esta línea desplaza las referencias de abajo, y a la mayoría no las vigila ningún test.
+  // WKH-351 · AC-1: acá NO se calcula el estado del trámite. El encabezado del grupo ya afirma sobre la plata, y entre las dos afirmaciones hay contradicción ALCANZABLE en 3 de los 4 grupos. (`statusDisplay`, `flow-vm.ts:133`) sigue viva, y la sigue mostrando (`Receipt`, `:3306`), que es una sola remesa y no tiene encabezado con el que chocar. Reemplazo línea-neutra, 1 línea por 1: borrar esta línea desplaza las referencias de abajo, y a la mayoría no las vigila ningún test.
   const knowledge = escrowFundsKnowledge(rem);
   // WKH-349. El texto Y el peso visual salen de la MISMA función: un copy que dice "siguen en el
   // escrow" con el mismo gris que "no pudimos preguntar" pierde la mitad de AC-2. Y para los cuatro
@@ -3251,11 +3263,11 @@ function HistoryEntry({
   const openable = knowledge !== "no-deposit";
   return (
     <li>
-      <Card className="space-y-2">
-        <div className="flex items-start justify-between gap-3">
+      <Card className="space-y-ajustado">
+        <div className="flex items-start justify-between gap-normal">
           <div>
-            <p className="text-sm font-semibold">{rem.beneficiary.name}</p>
-            <p className="tabular-nums text-xs text-stone">
+            <p className="text-body font-semibold">{rem.beneficiary.name}</p>
+            <p className="tabular-nums text-label text-stone">
               {rem.sendUsd.format()} · {formatEntryDate(rem.createdAt)}
             </p>
           </div>
@@ -3264,8 +3276,8 @@ function HistoryEntry({
         <p
           className={
             desenlace.emphasis === "strong"
-              ? "text-xs font-semibold text-cochineal-ink"
-              : "text-xs text-stone"
+              ? "text-label font-semibold text-cochineal-ink"
+              : "text-label text-stone"
           }
         >
           {desenlace.copy}
@@ -3295,11 +3307,11 @@ export function Receipt({ rem, onNew }: { rem: RemittanceState; onNew: () => voi
   const { amount, confirmed } = deliveredDisplay(rem);
   const status = statusDisplay(rem.status);
   return (
-    <div className="space-y-4">
+    <div className="space-y-holgado">
       <Card className="text-center">
         <div
           className={cn(
-            "mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full",
+            "mx-auto mb-normal flex h-14 w-14 items-center justify-center rounded-full",
             confirmed ? "bg-verde-bg" : "bg-sand",
           )}
         >
@@ -3310,26 +3322,26 @@ export function Receipt({ rem, onNew }: { rem: RemittanceState; onNew: () => voi
           )}
         </div>
         {/* "recibió" SÓLO con un monto entregado confirmado. Si no, se dice qué es el número. */}
-        <p className="text-sm text-stone">
+        <p className="text-body text-stone">
           {rem.beneficiary.name} {confirmed ? "recibió" : "tiene que recibir"}
         </p>
         <p className={cn("tabular-nums text-4xl font-extrabold", confirmed ? "text-verde" : "text-ink")}>
           {amount ? amount.format() : "—"}
         </p>
-        <p className="mt-1 text-xs text-stone">en su {methodLabel(rem.beneficiary.method)}</p>
+        <p className="mt-ajustado text-label text-stone">en su {methodLabel(rem.beneficiary.method)}</p>
         {confirmed ? null : (
-          <p className="mx-auto mt-2 max-w-xs text-xs text-stone">
+          <p className="mx-auto mt-ajustado max-w-xs text-label text-stone">
             Es el monto cotizado. Todavía no tenemos confirmación de cuánto llegó.
           </p>
         )}
         {isDemoMode(rem) ? (
-          <div className="mt-3 flex items-center justify-center">
+          <div className="mt-normal flex items-center justify-center">
             <Pill tone="warn">{DEMO_PILL}</Pill>
           </div>
         ) : null}
       </Card>
       <Card>
-        <h2 className="mb-2 text-sm font-semibold">Recibo</h2>
+        <h2 className="mb-ajustado text-title font-semibold">Recibo</h2>
         <Row label="Enviaste" value={rem.sendUsd.format()} />
         {rem.quote ? <Row label="Tipo de cambio" value={`S/ ${rem.quote.rate.toFixed(3)}`} /> : null}
         <Row label="Estado" value={<Pill tone={status.tone}>{status.label}</Pill>} />
@@ -3419,7 +3431,7 @@ export function recoveryWindowExhausted(maxCandidates: number): string {
  *
  * Los cinco sitios que le muestran una firma a la persona pasan por acá. Tres la imprimían ENTERA (87 u 88 caracteres, y 88 en la mayoría de los casos: una firma ed25519 son 64 bytes y su largo en base58 depende del primer byte. Medido, 4000 muestras: 80,2 % dan 88. Los 87 con los que se mide en los tests son propiedad de `FAKE_SOLANA_SIGNATURE`, no de una firma cualquiera — AR/MNR-2)
  * y desbordaban la única columna de la app; los
- * otros dos ya truncaban con `shortTx` (`shortTx`, `:3351`) y no llevaban a ninguna parte. Un solo
+ * otros dos ya truncaban con `shortTx` (`shortTx`, `:3363`) y no llevaban a ninguna parte. Un solo
  * componente en vez de cinco es lo que impide que el próximo sitio nazca con la tercera variante.
  *
  * 🔴 POR QUÉ VIVE ACÁ Y NO EN `src/presentation/tx-proof.tsx`, que era lo natural. Un archivo nuevo
@@ -3520,13 +3532,13 @@ export function TxProof({ signature }: { signature: string }) {
  * docblock de (`HistoryGroup`, `flow-vm.ts:1330`) —no en el de `historyGroupFor`, que habla del `??`—;
  * si alguien agrega un grupo que pueda quedar vacío significando "no medimos", esto hay que revisarlo.
  *
- * DEVUELVE UN FRAGMENT Y NO UN `div`. El padre es un `space-y-4`, y `space-y-*` sólo alcanza a los
+ * DEVUELVE UN FRAGMENT Y NO UN `div`. El padre es un `space-y-holgado`, y `space-y-*` sólo alcanza a los
  * hijos DIRECTOS: un div envolvente dejaría los 4 grupos a un nivel de profundidad y les comería el
  * espaciado. Y va un `<ul>` por grupo en vez de uno solo con separadores, porque la tarjeta devuelve
- * un `<li>` (`HistoryEntry`, `:3233`) y un encabezado suelto entre `<li>` es HTML inválido.
+ * un `<li>` (`HistoryEntry`, `:3245`) y un encabezado suelto entre `<li>` es HTML inválido.
  *
- * ⚠️ POR QUÉ VIVE ACÁ ABAJO Y NO JUNTO A (`HistoryView`, `:3142`), QUE ES DONDE SE LEERÍA MEJOR: por
- * lo mismo que (`TxProof`, `:3455`). Un bloque nuevo en el medio de este archivo desplaza todo lo que
+ * ⚠️ POR QUÉ VIVE ACÁ ABAJO Y NO JUNTO A (`HistoryView`, `:3154`), QUE ES DONDE SE LEERÍA MEJOR: por
+ * lo mismo que (`TxProof`, `:3467`). Un bloque nuevo en el medio de este archivo desplaza todo lo que
  * viene después, y a este archivo lo apuntan citas por número desde todo el árbol más las autocitas
  * `:NNN` de sus propios docblocks. De todas ellas, el candado de citas sólo vigila las ANCLADAS —las
  * que llevan el símbolo delante de la coma—; las SUELTAS, que son mayoría, se romperían sin que ningún
@@ -3539,7 +3551,7 @@ export function TxProof({ signature }: { signature: string }) {
  * función se hoistean, así que usarlo arriba y declararlo acá funciona; este archivo ya lo hace con
  * `TxProof`.
  *
- * LO QUE ESTE COMPONENTE NO GARANTIZA: `space-y-2` y `space-y-4` son NOMBRES DE CLASE, y que
+ * LO QUE ESTE COMPONENTE NO GARANTIZA: `space-y-ajustado` y `space-y-normal` son NOMBRES DE CLASE, y que
  * produzcan el espaciado lo hace Tailwind. Ningún test de esta HU lo mide, porque jsdom no hace
  * layout. Misma limitación ya declarada para `TxProof`.
  */
@@ -3565,9 +3577,9 @@ function HistoryGroups({
         const filas = porGrupo.get(g);
         if (filas === undefined || filas.length === 0) return null;
         return (
-          <div key={g} className="space-y-2" data-testid={`grupo-${g}`}>
-            <p className="text-sm font-semibold">{HISTORY_GROUP_HEADING[g]}</p>
-            <ul className="space-y-3">
+          <div key={g} className="space-y-ajustado" data-testid={`grupo-${g}`}>
+            <p className="text-title font-semibold">{HISTORY_GROUP_HEADING[g]}</p>
+            <ul className="space-y-normal">
               {filas.map((rem) => (
                 <HistoryEntry key={rem.id} rem={rem} onOpen={onOpen} answer={answerFor(rem.id)} />
               ))}
@@ -3636,24 +3648,24 @@ function CuentaCambiada({
   const viva = useConnectedWalletAddress();
   if (sesion == null || viva == null || viva === sesion) return null;
   return (
-    <div className="mt-3 w-full space-y-2 rounded-xl2 border border-line bg-sand/60 p-4">
-      <div className="flex items-center gap-2">
+    <Aviso className="mt-normal w-full space-y-ajustado">
+      <div className="flex items-center gap-ajustado">
         <Wallet className="size-icono-sm text-cochineal" />
-        <h2 className="text-sm font-bold">Estás conectado con otra cuenta</h2>
+        <h2 className="text-title font-bold">Estás conectado con otra cuenta</h2>
       </div>
-      <p className="text-sm text-stone">
+      <p className="text-body text-stone">
         Tu billetera tiene activa una cuenta distinta de la que estás usando acá. Podés pasarte a ella
         sin perder nada: no se borra tu verificación ni tus envíos guardados, ni de esta cuenta ni de
         la otra.
       </p>
       {enVuelo ? (
-        <p className="text-sm text-stone">
+        <p className="text-body text-stone">
           Este envío quedó a nombre de la cuenta anterior, así que empezás uno nuevo.
         </p>
       ) : null}
       <Button variant="outline" onClick={onAdoptar} disabled={disabled}>
         Usar esta cuenta
       </Button>
-    </div>
+    </Aviso>
   );
 }

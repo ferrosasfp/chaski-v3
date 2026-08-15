@@ -2629,6 +2629,18 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     });
 
     render(<RemittanceFlow container={c} />);
+    // (1) 🔴 SIN ESTE PASO EL TEST NO DISCRIMINABA (AR r4 · MENOR-1). Acá el `render` era lo primero y
+    // nadie conectaba antes, así que `address` seguía en `null` y NO había ninguna caché que exponer:
+    // con el `address ??` viejo repuesto este test daba verde igual. Medido: el mutante M8
+    // (`const addr = address ?? live ?? …` + deps `[address, c]`) mataba 2a y W12 y sobrevivía acá y
+    // en 2c, o sea que las DOS puertas de recuperar plata volvían a salir con la cuenta vieja sin que
+    // ningún test que hable de ellas se pusiera rojo. El pill del header es la señal de que la caché
+    // quedó cargada: sólo se pinta con `address != null`.
+    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    expect(await screen.findByText(`${A.slice(0, 6)}…${A.slice(-4)}`)).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: /Volver/ }));
+
+    // (2) recién ahora la persona cambia de cuenta en Phantom.
     cambiarDeCuentaA(B, probe);
     fireEvent.click(await screen.findByRole("button", { name: "Recuperar un envío perdido" }));
     fireEvent.click(await screen.findByRole("button", { name: /Buscar mis escrows/ }));
@@ -2647,6 +2659,13 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     });
 
     render(<RemittanceFlow container={c} />);
+    // (1) la caché con A, por el mismo motivo que en 2b (AR r4 · MENOR-1): sin una sesión previa este
+    // test pasaba con el `address ??` viejo puesto.
+    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    expect(await screen.findByText(`${A.slice(0, 6)}…${A.slice(-4)}`)).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: /Volver/ }));
+
+    // (2) y recién después el cambio de cuenta.
     cambiarDeCuentaA(B, probe);
     fireEvent.click(
       await screen.findByRole("button", { name: /Recuperar el depósito de red de envíos anteriores/ }),

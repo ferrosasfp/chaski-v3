@@ -649,7 +649,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
     amountNum >= MIN_SEND_USD && Boolean(recipient.trim()) && isValidCci(destination);
 
   return (
-    <main className="mx-auto flex min-h-dvh max-w-md flex-col px-5 pb-10 pt-6">
+    <main className="mx-auto flex min-h-dvh max-w-md flex-col pb-segura-b pl-segura-l pr-segura-r pt-segura-t">
       <header className="mb-5 flex flex-wrap items-center gap-2.5">
         <ChaskiMark className="h-9 w-9" />
         <div>

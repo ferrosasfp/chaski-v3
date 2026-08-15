@@ -47,7 +47,7 @@ export default async function KycSimuladoPage({
   const { session = "", vendor = "" } = await searchParams;
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-lg flex-col justify-center gap-5 p-6">
+    <main className="mx-auto flex min-h-dvh max-w-lg flex-col justify-center gap-5 pb-segura-b pl-segura-l pr-segura-r pt-segura-t">
       <div className="rounded-xl border-2 border-dashed border-stone/40 p-5">
         <p className="text-xs font-semibold uppercase tracking-wider text-stone">Entorno de prueba</p>
         <h1 className="mt-1 text-xl font-semibold">Verificación de identidad simulada</h1>

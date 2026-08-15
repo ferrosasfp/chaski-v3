@@ -649,7 +649,7 @@ describe("WKH-352/WKH-354 · el consejo del copy, ejecutado sin reabrir la app",
   // cuenta VIEJA— y eso era la descripción del defecto, no de una garantía. Ver el docblock del
   // describe.)
   it("T-354-W12(control): sin cambiar de cuenta, el MISMO recorrido sale con la cuenta de siempre", async () => {
-    const { wallet, refundGw, container } = await mundo();
+    const { probe, refundGw, container } = await mundo();
 
     render(<RemittanceFlow container={container} />);
     fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
@@ -662,9 +662,13 @@ describe("WKH-352/WKH-354 · el consejo del copy, ejecutado sin reabrir la app",
     await waitFor(() => expect(refundGw.calls).toHaveLength(1));
     expect(refundGw.calls[0]?.sender).toBe(FAKE_SOLANA_BENEFICIARY);
     expect(refundGw.calls[0]?.sender).not.toBe(OTRA_CUENTA);
-    // Y la billetera PODÍA haber cambiado: si esto fallara, el control estaría midiendo un doble
-    // incapaz de contestar otra cosa en vez de la ausencia de cambio.
-    wallet.actual = OTRA_CUENTA;
-    expect(await wallet.connect()).toBe(OTRA_CUENTA);
+    // Y el doble PODÍA haber contestado otra cosa: si esto fallara, el control estaría midiendo un
+    // doble incapaz de cambiar en vez de la ausencia de cambio. Va sobre el PROBE y no sobre
+    // `wallet`, que era medir el doble equivocado (CR/MNR-3): después de esta HU el `sender` sale de
+    // (`live`, `./flow.tsx:397`), o sea del probe, y como el probe no contesta `null` en ningún
+    // momento de este recorrido, el `?? connectWallet.execute()` nunca corre y `wallet.connect()` no
+    // se consulta. La versión anterior ni siquiera destructuraba `probe`, que `mundo()` sí devuelve.
+    probe.switchTo(OTRA_CUENTA);
+    expect(await probe.getConnectedAddress()).toBe(OTRA_CUENTA);
   });
 });

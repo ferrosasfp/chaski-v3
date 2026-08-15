@@ -160,9 +160,16 @@ describe("ConnectWallet — WKH-354/AC-4: el veredicto se resuelve POR la direcc
     await store.save(ADDR, kyc("did-de-A")); // A verificada
     await store.save(B, kyc("did-de-B")); // B TAMBIÉN verificada, con otro identificador
     const { gw, calls } = spyGateway(USABLE);
+    // 🔴 UNA SOLA INSTANCIA, y es lo que hace al test capaz de matar el mutante que dice matar
+    // (CR/MNR-2). Con dos `new ConnectWallet(...)` —una por paso— el candado medía dos objetos
+    // recién nacidos, y producción construye UNO solo (`connectWallet`, `../../composition/container.ts:185`).
+    // MEDIDO: con `private cached: string | null = null` y `const address = (this.cached ??= await
+    // this.wallet.connect())` en el use-case, la versión de dos instancias daba 7 passed; ésta da
+    // rojo en (3).
+    const uc = new ConnectWallet(wallet, store, gw);
 
     // (1) con la cuenta de siempre: sale A.
-    const primero = await new ConnectWallet(wallet, store, gw).execute();
+    const primero = await uc.execute();
     expect(primero.address).toBe(ADDR);
     expect(primero.rememberedKyc?.verificationId).toBe("did-de-A");
     expect(calls.at(-1)?.address).toBe(ADDR);
@@ -172,7 +179,7 @@ describe("ConnectWallet — WKH-354/AC-4: el veredicto se resuelve POR la direcc
 
     // (3) TODO sale con B: la dirección, el KYC recordado y la consulta del veredicto. Un cache de la
     //     primera dirección haría que el KYC de A viaje bajo la sesión de B.
-    const segundo = await new ConnectWallet(wallet, store, gw).execute();
+    const segundo = await uc.execute();
     expect(segundo.address).toBe(B);
     expect(segundo.rememberedKyc?.verificationId).toBe("did-de-B");
     expect(segundo.rememberedKyc?.verificationId).not.toBe("did-de-A");

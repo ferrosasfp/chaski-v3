@@ -2896,18 +2896,49 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
 
   // ── AC-4 · el KYC-once sigue funcionando después del gesto ────────────────────────────────────
 
+  // 🔴 EL GESTO VA ADENTRO DE LOS DOS, Y NO ES COSMÉTICO (CR/MNR-1). La primera versión de este par se
+  // llamaba "tras adoptar B" y "el mismo recorrido", y NINGUNO adoptaba: arrancaban sin sesión, hacían
+  // `cambiarDeCuentaA(B)` y seguían derecho al envío, que es el recorrido de PRIMERA VISITA. Con eso
+  // AC-4 —"el KYC-once sigue funcionando DESPUÉS del gesto"— no lo medía nadie: el gesto lo tocaban
+  // T-354-6a y T-354-6e, y ninguno de los dos mira el atajo. Ahora los dos abren sesión con A (la ida
+  // y vuelta al historial es lo que resuelve `address`; sin ella el banner no se pinta, T-354-6d),
+  // cambian la billetera a B y tocan "Usar esta cuenta" ANTES de `fillSend()`.
+  //
+  // El resto del recorrido no cambia porque no puede: `onSend` manda a `connect` siempre, y el atajo
+  // lo decide `onConnect` releyendo la billetera (`onConnect`, `./flow.tsx:321`), que después del
+  // gesto ya devuelve B.
+  //
+  // ⚠️ HASTA DÓNDE LLEGA ESTE PAR, MEDIDO, para no dejarlo afirmando de más otra vez:
+  //   · Sacando SÓLO el click de "Usar esta cuenta" y dejando todo lo demás ⇒ LOS DOS EN ROJO, en el
+  //     assert del pill. O sea que el gesto acá se ejecuta de verdad y algo depende de él.
+  //   · Sacando el click Y el assert del pill ⇒ LOS DOS EN VERDE. El atajo de KYC solo NO distingue
+  //     si hubo gesto: `onConnect` relee la billetera, y el bridge ya tiene B desde
+  //     `cambiarDeCuentaA`. Esto NO es un agujero del test, es el diseño que el docblock de
+  //     (`adoptarCuentaConectada`, `./flow.tsx:596`) afirma —"el envío nuevo vuelve a pasar por
+  //     `onConnect` entero… y no por una copia de acá"— y este par es lo que lo sostiene: si alguien
+  //     duplicara ahí el atajo, la copia dejaría de coincidir con lo que estos dos miden.
+  // Lo que este par SÍ cierra, y antes no lo cerraba nadie: que el recorrido gesto → envío nuevo
+  // termine en `confirm` con la cuenta adoptada verificada, y en `review` cuando no lo está.
   it("T-354-4a: tras adoptar B, que YA estaba verificada, el envío nuevo salta directo a confirmar", async () => {
-    const probe = new FakeConnectedWallet(B);
+    const probe = new FakeConnectedWallet(A);
     const kycStore = new FakeKycStore();
     await kycStore.save(B, passKyc); // B ya se verificó alguna vez
     const c = buildTestContainer({
       connectedWallet: probe,
       kycStore,
-      wallet: new WalletDelBridge(B),
+      wallet: new WalletDelBridge(),
     });
 
     render(<RemittanceFlow container={c} />);
+    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Volver/ }));
+
     cambiarDeCuentaA(B, probe);
+    fireEvent.click(await screen.findByRole("button", { name: "Usar esta cuenta" }));
+    // El pill con B es la señal de que el gesto TERMINÓ (`setAddress` del `guard`). Sin esperarlo,
+    // `busy` sigue en `true` y el botón del paso `connect` se llama "" (spinner), no "Conectar wallet".
+    expect(await screen.findByText(`${B.slice(0, 6)}…${B.slice(-4)}`)).toBeInTheDocument();
+
     fillSend();
     fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
     fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
@@ -2917,15 +2948,23 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
   });
 
   it("T-354-4b(control): con B SIN verificar, el mismo recorrido va a review, no a confirmar", async () => {
-    const probe = new FakeConnectedWallet(B);
+    const probe = new FakeConnectedWallet(A);
     const c = buildTestContainer({
       connectedWallet: probe,
       kycStore: new FakeKycStore(), // vacío: B no se verificó nunca
-      wallet: new WalletDelBridge(B),
+      wallet: new WalletDelBridge(),
     });
 
     render(<RemittanceFlow container={c} />);
+    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Volver/ }));
+
     cambiarDeCuentaA(B, probe);
+    fireEvent.click(await screen.findByRole("button", { name: "Usar esta cuenta" }));
+    // El pill con B es la señal de que el gesto TERMINÓ (`setAddress` del `guard`). Sin esperarlo,
+    // `busy` sigue en `true` y el botón del paso `connect` se llama "" (spinner), no "Conectar wallet".
+    expect(await screen.findByText(`${B.slice(0, 6)}…${B.slice(-4)}`)).toBeInTheDocument();
+
     fillSend();
     fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
     fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));

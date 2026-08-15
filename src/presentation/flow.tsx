@@ -723,7 +723,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
 
       {rem && isDemoMode(rem) && (step === "review" || step === "confirm" || step === "track" || step === "verify") ? (
         <div className="mb-holgado flex items-center justify-center">
-          <Pill tone="warn">{DEMO_PILL}</Pill>
+          <Pill tone="prueba">{DEMO_PILL}</Pill>
         </div>
       ) : null}
 
@@ -1781,6 +1781,15 @@ export function TrackView({
           {waitingOnPerson ? "Tu envío está esperando" : "Tu chaski está en camino…"}
         </p>
       </div>
+      {/* ── M-3 · los tres pasos son un CAMINO, no una lista ────────────────────────────────────
+          El gesto de identidad de esta ola, y el único que se pidió: la marca de Chaski ES un
+          mensajero andino y el camino escalonado del Qhapaq Ñan ya está dibujado en `ChaskiMark`
+          (`ui.tsx`), tres renglones más arriba en esta misma tarjeta. Acá abajo esos tres pasos se
+          dibujaban como una lista plana de puntos sueltos.
+          Es UNA LÍNEA QUE PROGRESA, no una ilustración: 2px, el mismo verde del tilde cuando el tramo
+          ya se recorrió y el mismo gris del borde cuando todavía no. Sin animación (en
+          `payout_submitted` no avanza nada y un tramo que se llenara solo afirmaría un progreso que
+          no existe: es el mismo criterio por el que ese paso muestra un reloj y no un spinner). */}
       <ol className="space-y-normal">
         {TRACK_STEPS.map((s, i) => {
           const last = order.indexOf(s.key[s.key.length - 1] ?? "settled");
@@ -1791,8 +1800,34 @@ export function TrackView({
           // completarlo ES estar en él.
           const reached = idx > last || (last === order.length - 1 && idx === last);
           const active = !reached && s.key.includes(rem.status);
+          // El último no lleva tramo: un camino que sigue después del final promete un paso más.
+          const conConector = i < TRACK_STEPS.length - 1;
           return (
-            <li key={s.label} className="flex items-center gap-normal">
+            // `relative` + `items-start`: el tramo se ancla al `<li>` y arranca DEBAJO del ícono, así
+            // que su largo no depende de cuánto envuelva la etiqueta. Con `items-center` (lo que
+            // había) una etiqueta de dos líneas correría el ícono hacia abajo y el tramo quedaría
+            // colgando en el aire.
+            <li key={s.label} className="relative flex items-start gap-normal">
+              {conConector ? (
+                // ⛔ ES UN `<div>` Y NO UN `<span>`, y eso NO es estilo: `flow.test.tsx` lee el tono de
+                // cada paso con `li.querySelector("span")`, o sea el PRIMER `<span>` del `<li>` en
+                // orden de documento, y espera el círculo del ícono. Un `<span>` acá adelante le
+                // devolvería el tramo y los tres asserts de color pasarían a medir otra cosa. Medido
+                // antes de escribirlo: es el test de `toneOf`, en "los tildes del tracking no marcan
+                // como hecho lo que está en curso".
+                // La geometría: `top-aire` = 24px = el alto exacto del círculo, y `-bottom-normal` =
+                // -12px = el `space-y-normal` del `<ol>`, así que el tramo llega justo al círculo
+                // siguiente. `left-[11px]` centra 2px sobre un círculo de 24. Los tres números están
+                // atados a algo, ninguno es a ojo.
+                <div
+                  aria-hidden="true"
+                  data-testid={`camino-tramo-${i}`}
+                  className={cn(
+                    "absolute left-[11px] top-aire -bottom-normal w-0.5 rounded-full",
+                    reached ? "bg-verde" : "bg-line",
+                  )}
+                />
+              ) : null}
               <span
                 className={
                   reached
@@ -1988,7 +2023,28 @@ function RevisionDelSeguimiento({
                 challenges de un cupo de 10 COMPARTIDO POR IP.
               ⚠️ El botón NO desaparece cuando se agota: se deshabilita y se dice por qué. Esconderlo
               dejaría la pantalla sin explicar por qué ya no hay salida. */}
-          <Button disabled={gesto === "firmando" || sinIntentos} onClick={onRevisar}>
+          {/* ── M-4 · los dos botones de esta pantalla dejan de pesar igual ─────────────────────
+              🔴 EL ESTADO MEDIDO ERA PEOR QUE "PESAN IGUAL", y va dicho porque el encargo decía otra
+              cosa: en 4c24324 este botón era `primary` (cochineal sólido + `shadow-lift`, la única
+              variante con sombra) y "Recuperar fondos" era `outline`. O sea que el control que sólo
+              CONSULTA era el elemento más fuerte del seguimiento, y el que SACA LOS USDC DEL
+              CONTRATO estaba un escalón por debajo. No era empate: estaba al revés.
+
+              ⛔ Y EL ARREGLO NO ES SUBIR "Recuperar fondos" A `primary`, que es lo intuitivo. Este
+              repo ya tiene esa lección escrita en `touch-targets.test.tsx` (T-341-6): agrandar el
+              control destructivo invita el toque accidental, y es el defecto OPUESTO del que se
+              quería cerrar. Acá vale igual con el peso visual. Se BAJA el que consulta.
+
+              El resultado es que el seguimiento no tiene ningún `primary`, y eso es correcto: no hay
+              camino feliz que ofrecer en una pantalla donde lo único que se puede hacer es esperar.
+
+              El `disabled` no cambia de sentido ni de causas, y el alto tampoco: `h-[52px]` está en
+              la clase base del `<Button>` y ninguna variante lo toca. */}
+          <Button
+            variant="ghost"
+            disabled={gesto === "firmando" || sinIntentos}
+            onClick={onRevisar}
+          >
             {REVISION_GESTO}
           </Button>
           {/* Estado 3 — el popup está abierto. Es texto propio y NO el label del botón, para que el
@@ -2050,7 +2106,7 @@ export function RefundAction({
   // cuando confirma), así que este array es su único ejemplar.
   //
   // Es el MISMO defecto que el fix-pack de WKH-346 arregló en la puerta de al lado
-  // (`LostEscrowRecovery`, `:2230`) y dejó declarado acá sin tocar, porque AC-9/CD-2 le prohibían este
+  // (`LostEscrowRecovery`, `:2286`) y dejó declarado acá sin tocar, porque AC-9/CD-2 le prohibían este
   // camino de firma. La propiedad "ningún comprobante ya mostrado desaparece" es de la FORMA de CADA
   // estado y no del componente: de "aquella variable es append-only" no se deduce nada sobre esta.
   const [enviados, setEnviados] = useState<
@@ -2244,7 +2300,7 @@ export function LostEscrowRecovery({
   // guarda es la firma de un refund YA TRANSMITIDO cuyo desenlace NADIE conoce: `confirmation` es
   // `"pending"` o `"unknown"` (`EscrowRefundConfirmation`, `ports.ts:339`). O sea EXACTAMENTE la firma
   // que la persona necesita para ir al visor a averiguar si entró, y esta HU la volvió prominente y
-  // enlazable (`RefundSentNotice`, `:2188`, que la imprime como "Orden enviada:"). Medido antes del arreglo: con `pending` y después
+  // enlazable (`RefundSentNotice`, `:2244`, que la imprime como "Orden enviada:"). Medido antes del arreglo: con `pending` y después
   // `confirmed`, la primera firma desaparecía del DOM; con dos `pending`, quedaba UN solo href.
   //
   // ⚠️ El `sender` va PEGADO a cada entrada, no aparte: es lo que hace que la pantalla no mezcle dos
@@ -2390,7 +2446,7 @@ export function LostEscrowRecovery({
         * arreglo: montadas afuera, la tarjeta afirmaría "puede haber más envíos con fondos por
         * recuperar" recién abierta la puerta, sin haberle preguntado nada a la cadena. Es la SEGUNDA
         * encarnación del mismo defecto en este archivo: el CR de WKH-327 lo arregló en el componente
-        * INMEDIATAMENTE SIGUIENTE (`explainer`, `flow.tsx:2477`), a unas pocas decenas de líneas de
+        * INMEDIATAMENTE SIGUIENTE (`explainer`, `flow.tsx:2533`), a unas pocas decenas de líneas de
         * donde nació este. ⚠️ Acá decía "48 líneas" y era una CIFRA QUE ENVEJECE SOLA: es una
         * distancia, y mis propias inserciones la movieron a 60 sin que ningún barrido la cazara
         * (AR-2/MNR-7). Lo que no envejece es la relación estructural, y es la que importa. Un test de
@@ -2632,11 +2688,17 @@ function PayoutInProgress({ rem }: { rem: RemittanceState }) {
           así que esto también se prende con una proveniencia DESCONOCIDA, de la que no sabemos si es
           simulada. Lo que la condición mide es que no está confirmada como real, y es lo que dice. */}
       {simulado ? (
-        <p className="rounded-control border border-dashed border-stone/40 px-normal py-ajustado text-label text-stone">
-          <strong>Entorno de prueba.</strong> Al menos uno de los pasos de este envío (la cotización,
-          la verificación o el desembolso) no está confirmado como real. El depósito en la cadena sí
-          es real y se puede ver en el explorador.
-        </p>
+        // M-6 · la SEGUNDA señal de "esto es un entorno de prueba". Era un punteado sobre nada, con
+        // un padding propio (12/8) y sin fondo; la píldora de arriba era una superficie sólida sin
+        // borde. Ahora las dos hablan el punteado sobre arena que `Aviso tono="prueba"` ya declaraba.
+        // ⛔ El texto no se fusiona con el de la píldora: son dos afirmaciones distintas.
+        <Aviso tono="prueba">
+          <p className="text-label text-stone">
+            <strong>Entorno de prueba.</strong> Al menos uno de los pasos de este envío (la
+            cotización, la verificación o el desembolso) no está confirmado como real. El depósito en
+            la cadena sí es real y se puede ver en el explorador.
+          </p>
+        </Aviso>
       ) : null}
     </div>
   );
@@ -2926,7 +2988,7 @@ function AgentUnavailable({
  * agregar *"y el fee de la entrega no lo paga nadie, porque ese paso no corre"*. Es verdad
  * (`this.solana`, `../application/use-cases/confirm-and-send.ts:336`) y está PROHIBIDO escribirlo: en
  * ese mismo cuadrante, tres renglones más arriba en la MISMA tarjeta, la fila de la entrega dice
- * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:3093`). Ese *"lo simula"* es impreciso
+ * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:3155`). Ese *"lo simula"* es impreciso
  * —con el settle apagado la entrega no se simula, se corta— pero es **H1 de WKH-336**, residual de otra
  * HU que exige un TERCER valor de `transport` con su propia frase, y WKH-338 no lo cierra. Si la nota
  * dijera *"la entrega no corre"* mientras la fila dice *"lo simula"*, la tarjeta se contradiría a sí
@@ -3284,7 +3346,7 @@ function HistoryEntry({
   onOpen: (rem: RemittanceState) => void;
   answer: EscrowChainAnswer;
 }) {
-  // WKH-351 · AC-1: acá NO se calcula el estado del trámite. El encabezado del grupo ya afirma sobre la plata, y entre las dos afirmaciones hay contradicción ALCANZABLE en 3 de los 4 grupos. (`statusDisplay`, `flow-vm.ts:133`) sigue viva, y la sigue mostrando (`Receipt`, `:3339`), que es una sola remesa y no tiene encabezado con el que chocar. Reemplazo línea-neutra, 1 línea por 1: borrar esta línea desplaza las referencias de abajo, y a la mayoría no las vigila ningún test.
+  // WKH-351 · AC-1: acá NO se calcula el estado del trámite. El encabezado del grupo ya afirma sobre la plata, y entre las dos afirmaciones hay contradicción ALCANZABLE en 3 de los 4 grupos. (`statusDisplay`, `flow-vm.ts:133`) sigue viva, y la sigue mostrando (`Receipt`, `:3401`), que es una sola remesa y no tiene encabezado con el que chocar. Reemplazo línea-neutra, 1 línea por 1: borrar esta línea desplaza las referencias de abajo, y a la mayoría no las vigila ningún test.
   const knowledge = escrowFundsKnowledge(rem);
   // WKH-349. El texto Y el peso visual salen de la MISMA función: un copy que dice "siguen en el
   // escrow" con el mismo gris que "no pudimos preguntar" pierde la mitad de AC-2. Y para los cuatro
@@ -3369,7 +3431,7 @@ export function Receipt({ rem, onNew }: { rem: RemittanceState; onNew: () => voi
         )}
         {isDemoMode(rem) ? (
           <div className="mt-normal flex items-center justify-center">
-            <Pill tone="warn">{DEMO_PILL}</Pill>
+            <Pill tone="prueba">{DEMO_PILL}</Pill>
           </div>
         ) : null}
       </Card>
@@ -3464,7 +3526,7 @@ export function recoveryWindowExhausted(maxCandidates: number): string {
  *
  * Los cinco sitios que le muestran una firma a la persona pasan por acá. Tres la imprimían ENTERA (87 u 88 caracteres, y 88 en la mayoría de los casos: una firma ed25519 son 64 bytes y su largo en base58 depende del primer byte. Medido, 4000 muestras: 80,2 % dan 88. Los 87 con los que se mide en los tests son propiedad de `FAKE_SOLANA_SIGNATURE`, no de una firma cualquiera — AR/MNR-2)
  * y desbordaban la única columna de la app; los
- * otros dos ya truncaban con `shortTx` (`shortTx`, `:3396`) y no llevaban a ninguna parte. Un solo
+ * otros dos ya truncaban con `shortTx` (`shortTx`, `:3458`) y no llevaban a ninguna parte. Un solo
  * componente en vez de cinco es lo que impide que el próximo sitio nazca con la tercera variante.
  *
  * 🔴 POR QUÉ VIVE ACÁ Y NO EN `src/presentation/tx-proof.tsx`, que era lo natural. Un archivo nuevo
@@ -3568,10 +3630,10 @@ export function TxProof({ signature }: { signature: string }) {
  * DEVUELVE UN FRAGMENT Y NO UN `div`. El padre es un `space-y-holgado`, y `space-y-*` sólo alcanza a los
  * hijos DIRECTOS: un div envolvente dejaría los 4 grupos a un nivel de profundidad y les comería el
  * espaciado. Y va un `<ul>` por grupo en vez de uno solo con separadores, porque la tarjeta devuelve
- * un `<li>` (`HistoryEntry`, `:3278`) y un encabezado suelto entre `<li>` es HTML inválido.
+ * un `<li>` (`HistoryEntry`, `:3340`) y un encabezado suelto entre `<li>` es HTML inválido.
  *
- * ⚠️ POR QUÉ VIVE ACÁ ABAJO Y NO JUNTO A (`HistoryView`, `:3187`), QUE ES DONDE SE LEERÍA MEJOR: por
- * lo mismo que (`TxProof`, `:3500`). Un bloque nuevo en el medio de este archivo desplaza todo lo que
+ * ⚠️ POR QUÉ VIVE ACÁ ABAJO Y NO JUNTO A (`HistoryView`, `:3249`), QUE ES DONDE SE LEERÍA MEJOR: por
+ * lo mismo que (`TxProof`, `:3562`). Un bloque nuevo en el medio de este archivo desplaza todo lo que
  * viene después, y a este archivo lo apuntan citas por número desde todo el árbol más las autocitas
  * `:NNN` de sus propios docblocks. De todas ellas, el candado de citas sólo vigila las ANCLADAS —las
  * que llevan el símbolo delante de la coma—; las SUELTAS, que son mayoría, se romperían sin que ningún

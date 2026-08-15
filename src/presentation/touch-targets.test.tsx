@@ -7,8 +7,8 @@
 // `text-xs`), contra los 52 px que el CTA del camino feliz ya tenía. Tres de esos seis son las ÚNICAS
 // puertas para recuperar plata:
 //   · "Ver mis envíos"                                    (`flow.tsx:892`)
-//   · "Recuperar un envío perdido"                        (`flow.tsx:2367`)
-//   · "Recuperar el depósito de red de envíos anteriores"  (`flow.tsx:2517`)
+//   · "Recuperar un envío perdido"                        (`flow.tsx:2423`)
+//   · "Recuperar el depósito de red de envíos anteriores"  (`flow.tsx:2573`)
 // Y otros tres viven apretados en una fila del header, uno de ellos destructivo:
 //   · "Borrar igual" (borra los datos locales)             (`flow.tsx:694`)
 //   · "Cancelar"                                           (`flow.tsx:701`)
@@ -56,7 +56,7 @@ function minHpx(el: HTMLElement): number {
   return Number(m[1]);
 }
 
-/** El px del CTA del camino feliz, leído del `<Button>` REALMENTE renderizado (`ui.tsx:43`). Es un
+/** El px del CTA del camino feliz, leído del `<Button>` REALMENTE renderizado (`ui.tsx:66`). Es un
  *  `h-` fijo, no un `min-h-`: ese control ya cumplía y esta HU no lo toca (CD-4), sólo lo lee. */
 function pxDelCtaDelCaminoFeliz(): number {
   const { unmount } = render(<Button>referencia</Button>);
@@ -102,7 +102,7 @@ function puertasDeRecuperarPlata(): Array<{ nombre: string; el: HTMLElement }> {
 describe("T-341-3 (AC-2): las tres puertas de recuperar plata declaran alto de toque", () => {
   it("las tres declaran min-h de 52 px o más", () => {
     // INPUT QUE LO PONE EN ROJO: borrarle la clase `min-h-[52px]` a cualquiera de las tres
-    // (`className`, `flow.tsx:892`), (`className`, `flow.tsx:2367`), (`className`, `flow.tsx:2517`)
+    // (`className`, `flow.tsx:892`), (`className`, `flow.tsx:2423`), (`className`, `flow.tsx:2573`)
     // ⇒ `minHpx` no matchea ⇒ throw con el nombre del control.
     //
     // El ancla es `className` porque es el ÚNICO símbolo de esas líneas, y eso acota lo que compra:
@@ -122,7 +122,7 @@ describe("T-341-4 (AC-2): el 52 no está escrito a mano, sale del CTA del camino
     // volverían a ser las más chicas de la pantalla y el `>= 52` seguiría verde. Este test ata la
     // relación en vez del número.
     //
-    // INPUT QUE LO PONE EN ROJO: subir el `h-[52px]` de `ui.tsx:43` a `h-[56px]` sin tocar las tres.
+    // INPUT QUE LO PONE EN ROJO: subir el `h-[52px]` de `ui.tsx:66` a `h-[56px]` sin tocar las tres.
     const referencia = pxDelCtaDelCaminoFeliz();
     expect(referencia).toBeGreaterThan(0);
     for (const { nombre, el } of puertasDeRecuperarPlata()) {

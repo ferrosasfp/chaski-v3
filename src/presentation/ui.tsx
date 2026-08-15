@@ -20,10 +20,33 @@ export function ChaskiMark({ className }: { className?: string }) {
   );
 }
 
+/**
+ * Los tres niveles de prominencia, y qué significa cada uno (ola 2 · M-4).
+ *
+ *   `primary` → el camino feliz de ESTA pantalla. Como máximo uno por pantalla.
+ *   `outline` → una acción real que no es el camino feliz. Incluye las que mueven plata: tienen
+ *               borde y superficie propia, o sea que se ven como un botón y se tocan a propósito.
+ *   `ghost`   → una acción que sólo CONSULTA. Sin borde ni fondo.
+ *
+ * 🔴 `ghost` DEJÓ DE SER `text-stone`, y no es gusto: es contraste medido. `#8A8178` sobre el fondo
+ * de la app (`#FBFAF7`) da **3.66:1**, y el texto del `<Button>` es de 15px `font-semibold`, o sea
+ * texto NORMAL para WCAG (el umbral de "texto grande" es 18.66px en negrita o 24px). El mínimo AA
+ * para texto normal es 4.5:1, así que la variante como estaba no lo alcanzaba. `cochineal-ink`
+ * (`#9E1C40`) sobre el mismo fondo da **7.46:1**. Las dos cuentas son la fórmula de luminancia
+ * relativa de WCAG 2.x sobre los hex del tema, no una impresión.
+ *
+ * Que se pudiera cambiar sin romper nada es su propia medición: `ghost` NO tenía ningún sitio de
+ * llamada en 4c24324 (`grep -c 'variant="ghost"'` daba 0), así que era una variante muerta con un
+ * defecto de contraste esperando a su primer uso. M-4 es ese primer uso.
+ *
+ * ⛔ LO QUE LA JERARQUÍA NO PUEDE TOCAR ES EL ÁREA DE TOQUE: el `h-[52px]` vive en la clase base y
+ * NINGUNA variante lo modifica, así que bajar de `primary` a `ghost` cambia color y borde, nunca el
+ * alto. `touch-targets.test.tsx` lo lee del botón renderizado.
+ */
 const BTN_VARIANTS: Record<string, string> = {
   primary: "bg-cochineal text-white hover:bg-cochineal-ink shadow-lift",
   outline: "border border-line bg-card text-ink hover:bg-sand",
-  ghost: "bg-transparent text-stone hover:bg-sand hover:text-ink",
+  ghost: "bg-transparent text-cochineal-ink hover:bg-sand",
 };
 
 export function Button({
@@ -122,18 +145,37 @@ export function Row({ label, value, accent }: { label: string; value: ReactNode;
   );
 }
 
+/**
+ * ⚠️ `warn` SE LLAMA `prueba` DESDE LA OLA 2 (M-6), y el cambio de nombre es la mitad del arreglo.
+ *
+ * La app tiene DOS señales de "esto es un entorno de prueba" y decían lo suyo en dos idiomas
+ * visuales distintos: esta píldora era `bg-sand text-ink`, o sea una superficie sólida sin borde, y
+ * la caja del desembolso era un punteado sobre nada. Dos afirmaciones emparentadas peleando por
+ * atención con dos gramáticas. Ahora las dos hablan el punteado sobre arena, que es el mismo que ya
+ * declaraba `Aviso tono="prueba"` para la identidad sin verificar: el punteado dice "esto no es
+ * real" sin escribir una palabra.
+ *
+ * ⛔ LO QUE NO SE HIZO ES FUSIONAR LOS TEXTOS: son dos afirmaciones distintas (una habla de los
+ * PASOS del envío, la otra de que el depósito en cadena sí es real) y las dos tienen tests propios.
+ * Se unifica la jerarquía, no el contenido.
+ *
+ * Que el renombre no arrastre nada es su propia medición: `warn` era el ÚNICO tono que
+ * `statusDisplay` NO devuelve (su unión es `"ok" | "active" | "bad" | "neutral"`, declarada en
+ * (`statusDisplay`, `flow-vm.ts:133`)), así que sus dos sitios de llamada son las dos píldoras de
+ * modo demo y ninguno más. Si algún día `statusDisplay` devolviera `prueba`, esto deja de compilar.
+ */
 const PILL: Record<string, string> = {
   neutral: "bg-sand text-stone",
   active: "bg-cochineal/10 text-cochineal-ink",
   ok: "bg-verde-bg text-verde",
   bad: "bg-cochineal/10 text-cochineal-ink",
-  warn: "bg-sand text-ink",
+  prueba: "border border-dashed border-stone/40 bg-sand/60 text-stone",
 };
 export function Pill({
   tone = "neutral",
   children,
 }: {
-  tone?: "neutral" | "active" | "ok" | "bad" | "warn";
+  tone?: "neutral" | "active" | "ok" | "bad" | "prueba";
   children: ReactNode;
 }) {
   return (

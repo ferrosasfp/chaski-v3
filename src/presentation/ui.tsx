@@ -21,27 +21,27 @@ export function ChaskiMark({ className }: { className?: string }) {
 }
 
 /**
- * Los tres niveles de prominencia, y qué significa cada uno (ola 2 · M-4).
+ * Los tres niveles de prominencia (ola 2 · M-4) y la regla, que esta ola corrigió.
  *
- *   `primary` → el camino feliz de ESTA pantalla. Como máximo uno por pantalla.
- *   `outline` → una acción real que no es el camino feliz. Incluye las que mueven plata: tienen
- *               borde y superficie propia, o sea que se ven como un botón y se tocan a propósito.
+ * 🔴 LA JERARQUÍA ES RELATIVA A LO QUE **ESTA** PANTALLA OFRECE, NO UNA PROPIEDAD FIJA DEL BOTÓN. Un mismo componente puede pintarse `primary` en una pantalla y `outline` en otra, y eso es correcto por diseño: quien decide es la pantalla, no el botón.
+ *
+ *   `primary` → la acción que SACA A LA PERSONA DE DONDE ESTÁ. Como máximo una por pantalla. Mientras el camino feliz esté disponible, es él. Cuando el camino feliz YA NO EXISTE —el envío no se entregó, la cotización venció— la toma la acción que RESUELVE la situación, aunque mueva plata: en esa pantalla no hay nada más importante que ofrecer.
+ *   `outline` → una acción real que NO resuelve la situación de esta pantalla: una alternativa, una vuelta atrás, o un escape mientras el camino feliz sigue vivo. Incluye las que mueven plata: tienen borde y superficie propia, o sea que se ven como un botón y se tocan a propósito.
  *   `ghost`   → una acción que sólo CONSULTA. Sin borde ni fondo.
  *
- * 🔴 `ghost` DEJÓ DE SER `text-stone`, y no es gusto: es contraste medido. `#8A8178` sobre el fondo
- * de la app (`#FBFAF7`) da **3.66:1**, y el texto del `<Button>` es de 15px `font-semibold`, o sea
- * texto NORMAL para WCAG (el umbral de "texto grande" es 18.66px en negrita o 24px). El mínimo AA
- * para texto normal es 4.5:1, así que la variante como estaba no lo alcanzaba. `cochineal-ink`
- * (`#9E1C40`) sobre el mismo fondo da **7.46:1**. Las dos cuentas son la fórmula de luminancia
- * relativa de WCAG 2.x sobre los hex del tema, no una impresión.
+ * ⛔ CERO `primary` NO ES UN DEFECTO POR SÍ SOLO: una pantalla que sólo informa, o una donde lo único
+ * que se puede hacer es esperar, no tiene ninguna acción resolutiva que promover. El defecto es cero
+ * `primary` HABIENDO una, y es lo que el founder vio en la rama de FALLO del seguimiento: la única
+ * acción posible era "Recuperar fondos" y se pintaba secundaria. Candado: `jerarquia-relativa.test.tsx`.
  *
- * Que se pudiera cambiar sin romper nada es su propia medición: `ghost` NO tenía ningún sitio de
- * llamada en 4c24324 (`grep -c 'variant="ghost"'` daba 0), así que era una variante muerta con un
- * defecto de contraste esperando a su primer uso. M-4 es ese primer uso.
+ * 🔴 `ghost` DEJÓ DE SER `text-stone`, y no es gusto: es contraste medido. `#8A8178` sobre el fondo de la
+ * app (`#FBFAF7`) da **3.66:1**, y el texto del `<Button>` es de 15px `font-semibold`, o sea texto NORMAL
+ * para WCAG (el umbral de "texto grande" es 18.66px en negrita o 24px). El mínimo AA para texto normal es
+ * 4.5:1, así que la variante como estaba no lo alcanzaba. `cochineal-ink` (`#9E1C40`) sobre el mismo fondo
+ * da **7.46:1**. Las dos cuentas son la fórmula de luminancia relativa de WCAG 2.x sobre los hex del tema,
+ * no una impresión. Y `ghost` no tenía NINGÚN sitio de llamada en 4c24324 (`grep -c 'variant="ghost"'` daba 0): era una variante muerta con un defecto de contraste esperando su primer uso, y M-4 es ese uso.
  *
- * ⛔ LO QUE LA JERARQUÍA NO PUEDE TOCAR ES EL ÁREA DE TOQUE: el `h-[52px]` vive en la clase base y
- * NINGUNA variante lo modifica, así que bajar de `primary` a `ghost` cambia color y borde, nunca el
- * alto. `touch-targets.test.tsx` lo lee del botón renderizado.
+ * ⛔ LO QUE LA JERARQUÍA NO PUEDE TOCAR ES EL ÁREA DE TOQUE: el `h-[52px]` vive en la clase base y NINGUNA variante lo modifica, así que subir o bajar de nivel cambia color y borde, nunca el alto (T-O2-7). `touch-targets.test.tsx` lo lee del botón renderizado.
  */
 const BTN_VARIANTS: Record<string, string> = {
   primary: "bg-cochineal text-white hover:bg-cochineal-ink shadow-lift",

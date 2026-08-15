@@ -64,7 +64,7 @@ import "@solana/wallet-adapter-react-ui/styles.css";
  * (`solana-providers.test.tsx`) prueba el VALOR —a 1500 el bridge dice `"none"`, y sólo después del
  * alta `"injected"`—, y (`T-UI-1`, `wallet-availability.test.tsx:179`) prueba la PANTALLA —con
  * `"unknown"` el aviso NO está en el DOM, con `"none"` sí—, que es lo que hace observable el guard de
- * `flow.tsx:1221`. `T-341-11` no renderiza `NoWalletHere`, así que por sí solo NO prueba la pantalla.
+ * `flow.tsx:1229`. `T-341-11` no renderiza `NoWalletHere`, así que por sí solo NO prueba la pantalla.
  *
  * De dónde sale el 1500: el tick del `setInterval` es 1000, así que 1500 deja 500 ms de holgura sobre
  * **la única de las cuatro que tiene cota de retardo conocida tras la inyección** (a lo sumo 1000 ms
@@ -74,7 +74,7 @@ import "@solana/wallet-adapter-react-ui/styles.css";
  * `load` espera todos los subrecursos y puede disparar mucho después de 1500. Así que 1500 **no es
  * holgura sobre "la más lenta"**, que sería falso, ni una cota de `T`.
  *
- * ⚠️ NO la unifiques con el poll de 1500 ms del seguimiento (`flow.tsx:634`). Coinciden en el número
+ * ⚠️ NO la unifiques con el poll de 1500 ms del seguimiento (`flow.tsx:632`). Coinciden en el número
  * y no tienen nada que ver: ése mide cada cuánto se le pregunta al backend por una remesa viva.
  *
  * Los tests de la gracia NO importan esta constante: avanzan el reloj con `1499` y `1500` LITERALES.

@@ -57,7 +57,7 @@
 //      en runtime (por ejemplo `state[campo] = x` con `campo` calculado) no lo ve.
 //   3. NO cubre un `principalTx` introducido por un snapshot FABRICADO A MANO en `localStorage` y
 //      rehidratado. Ese residual es preexistente, es el mismo modelo de confianza que ya gobierna toda
-//      la pantalla de historial y el `TxProof` del recibo (`flow.tsx:3295-3296`), y no es una
+//      la pantalla de historial y el `TxProof` del recibo (`flow.tsx:3303-3304`), y no es una
 //      regresión de esta HU: ahí el atacante y la víctima son la misma persona.
 //   4. NO mira los `*.test.ts(x)`: los tests fabrican estados a propósito y deben poder seguir
 //      haciéndolo. El invariante es sobre el código que corre en producción.
@@ -278,7 +278,7 @@ const CALL_SITE = "src/application/use-cases/confirm-and-send.ts";
  *  ⚠️ EL NÚMERO ES PARTE DE LA LISTA, y no es decoración (AR r2 · BLQ-BAJO-3): cada archivo declara
  *  CUÁNTAS veces rehidrata. Una lista de nombres sola deja entrar una línea nueva en un archivo ya
  *  listado, que es exactamente el escape que el AR midió. Los tres valores son 1, leídos a mano:
- *  `persistence.ts:134` (`get`), `flow.tsx:241` (el resume) y `fakes.ts:112` (el repo en memoria).
+ *  `persistence.ts:134` (`get`), `flow.tsx:234` (el resume) y `fakes.ts:112` (el repo en memoria).
  *  Si una de estas cuentas sube legítimamente, hay que subirla ACÁ y escribir por qué, que es el
  *  precio de que no se pueda subir en silencio. */
 const REHIDRATACIONES_POR_ARCHIVO: Record<string, number> = {

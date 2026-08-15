@@ -1822,7 +1822,7 @@ it("T-6.1: un `provenance` que no está en la allowlist ⇒ NO 'Identidad verifi
 // ⚠️ EL `sender` NO ES `null` ACÁ, Y HAY QUE VERIFICARLO O EL ROJO ES POR EL MOTIVO EQUIVOCADO: con
 // `sender == null` la pantalla cae en el estado "sin billetera", que a propósito NO ofrece el gesto
 // (no hay a quién pedirle la firma), y el test quedaría rojo antes Y después del fix. `openHistory`
-// pasa por `resolveSender`, que hace `setAddress(addr)` (`resolveSender`, `./flow.tsx:387`), así que
+// pasa por `resolveSender`, que hace `setAddress(addr)` (`resolveSender`, `./flow.tsx:380`), así que
 // al llegar al seguimiento `sender` es la address del dueño. El aserto (b) lo clava.
 //
 // Molde: `seededFlow` de `history.test.tsx:130`, que es el mismo camino ("Ver mis envíos" → "Ver
@@ -2905,7 +2905,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
   // cambian la billetera a B y tocan "Usar esta cuenta" ANTES de `fillSend()`.
   //
   // El resto del recorrido no cambia porque no puede: `onSend` manda a `connect` siempre, y el atajo
-  // lo decide `onConnect` releyendo la billetera (`onConnect`, `./flow.tsx:321`), que después del
+  // lo decide `onConnect` releyendo la billetera (`onConnect`, `./flow.tsx:314`), que después del
   // gesto ya devuelve B.
   //
   // ⚠️ HASTA DÓNDE LLEGA ESTE PAR, MEDIDO, para no dejarlo afirmando de más otra vez:
@@ -2914,7 +2914,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
   //   · Sacando el click Y el assert del pill ⇒ LOS DOS EN VERDE. El atajo de KYC solo NO distingue
   //     si hubo gesto: `onConnect` relee la billetera, y el bridge ya tiene B desde
   //     `cambiarDeCuentaA`. Esto NO es un agujero del test, es el diseño que el docblock de
-  //     (`adoptarCuentaConectada`, `./flow.tsx:596`) afirma —"el envío nuevo vuelve a pasar por
+  //     (`adoptarCuentaConectada`, `./flow.tsx:594`) afirma —"el envío nuevo vuelve a pasar por
   //     `onConnect` entero… y no por una copia de acá"— y este par es lo que lo sostiene: si alguien
   //     duplicara ahí el atajo, la copia dejaría de coincidir con lo que estos dos miden.
   // Lo que este par SÍ cierra, y antes no lo cerraba nadie: que el recorrido gesto → envío nuevo
@@ -3061,9 +3061,9 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     // Sin este guard el banner aparecería en la primera pantalla de cualquier persona: con
     // `autoConnect` la billetera puede tener cuenta activa antes de que nadie elija ninguna.
     // 🔴 Y ESTE TEST ES EL ÚNICO QUE LO SOSTIENE, medido: sacando `sesion == null ||` de
-    // `CuentaCambiada` la suite entera da 1 rojo de 2107 y es éste. Acá decía "aparecería en el
-    // arranque de casi toda la suite", que es la misma frase que estaba en el docblock del componente
-    // y que esa medición refuta.
+    // `CuentaCambiada` la suite entera da UN SOLO rojo, y es éste. Lo accionable es la unicidad, no
+    // el total de la suite: el denominador que decía acá quedó viejo en dos commits. Acá además decía
+    // "aparecería en el arranque de casi toda la suite", que es la frase que esa medición refuta.
     const probe = new FakeConnectedWallet(B);
     const c = buildTestContainer({ connectedWallet: probe, wallet: new WalletDelBridge() });
 

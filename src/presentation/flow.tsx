@@ -71,7 +71,7 @@ import {
   kycOriginNotice,
   lostEscrowRecoveryError,
   shortErrorCode,
-  statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, type GestoRenovacion, REVISION_APAGADA, REVISION_FIRMANDO, REVISION_GESTO, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_BILLETERA, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, esVentanaSinAbiertos, // WKH-339: EN ESTA LÍNEA. `flow.tsx:634` lo citan 6 archivos y NINGUNA de las 6 es una cita anclada ⇒ si se mueve, nada se pone rojo y los 6 comentarios rotan en silencio · WKH-346 fix-pack: `esVentanaSinAbiertos` entra acá por lo mismo (Δ0)
+  statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, type GestoRenovacion, REVISION_APAGADA, REVISION_FIRMANDO, REVISION_GESTO, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_BILLETERA, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, esVentanaSinAbiertos, // WKH-339: EN ESTA LÍNEA. `flow.tsx:632` lo citan 6 archivos y NINGUNA de las 6 es una cita anclada ⇒ si se mueve, nada se pone rojo y los 6 comentarios rotan en silencio · WKH-346 fix-pack: `esVentanaSinAbiertos` entra acá por lo mismo (Δ0)
 } from "./flow-vm";
 import { cn } from "./cn";
 import { phantomBrowseUrl, useWalletAvailability, useConnectedWalletAddress } from "./wallet-availability"; // el aviso de "acá no hay wallet" (NoWalletHere) · WKH-354/AC-6: `useConnectedWalletAddress` para el banner (CuentaCambiada)
@@ -220,20 +220,13 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
         // móvil), así que este montaje arranca con `address` en `null` y hasta acá nada la ponía: el
         // resume hacía `setRem` + `setStep` y nada más. Se aterrizaba en `confirm` con la sesión
         // vacía, y ahí el copy de `wallet_account_changed` mandaba a "usá el aviso de arriba" sobre
-        // un banner que NO se pinta sin sesión (es la primera condición de `CuentaCambiada`). Medido
-        // antes del arreglo: el copy salía y el ÚNICO botón de la pantalla era "Recotizar tasa", o
-        // sea la segunda instrucción del copy apuntaba a un control inexistente. T-354-3g lo ejecuta.
+        // un banner que NO se pinta sin sesión (es la primera condición de `CuentaCambiada`).
         //
         // 🔴 SE REPUEBLA CON EL `ownerAddress` DEL SNAPSHOT Y NO CON LA BILLETERA VIVA, y la
         // diferencia ES el arreglo, no un matiz: `address` significa "con qué cuenta está operando
         // esta sesión", y la sesión que se retoma es la de la cuenta que empezó el envío. Con la viva,
         // `sesion` y `viva` quedarían IGUALES y el banner seguiría sin pintarse: el mismo agujero con
         // otro valor. Medido: esa variante deja T-354-3g en rojo igual.
-        //
-        // ⚠️ SI LA BILLETERA NO QUEDÓ CONECTADA tras la recarga, `address` toma igual el dueño del
-        // snapshot y el banner NO se pinta, porque `viva` es `null`. Eso está bien y no deja el copy
-        // colgado: con `viva == null` el guard de `onConfirm` tampoco dispara (CD-17), así que ese
-        // copy no es alcanzable en ese estado. T-354-3h lo mide.
         if (alive && res.snapshot.ownerAddress) setAddress(res.snapshot.ownerAddress);
         if (res.kind === "passed") {
           setRem(res.snapshot); // el snapshot ya trae el quote lockeado pre-redirect (WKH-187)
@@ -476,10 +469,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
       // alcanzable en la práctica ni con qué frecuencia. Lo que sí está leído es el código del
       // adapter. Quien vaya a cerrarlo: lo que falta medir es el evento, no la rama.
       //
-      // 🔵 Y NO ES TAUTOLÓGICO, que es lo que hundió al guard de WKH-327 en su primera versión: los
-      // dos lados salen de fuentes independientes. La izquierda es el bridge, por el puerto inyectado;
-      // la derecha es el snapshot persistido por `r.startKyc` (`../domain/remittance.ts:270`).
-      // Ninguna de las dos la elige el llamador.
+      // 🔵 NO ES TAUTOLÓGICO: la izquierda es el bridge, por el puerto inyectado; la derecha es el snapshot persistido por `r.startKyc` (`../domain/remittance.ts:270`). Fuentes independientes, y ninguna de las dos la elige el llamador.
       //
       // ⚠️ `null` NO dispara el guard (CD-17): `null` es "no hay ninguna billetera conectada", nunca
       // "cambió la identidad". Acusar ahí convertiría un árbol todavía sin montar en una acusación
@@ -593,6 +583,14 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
   // y KYC de A: conservarla bajo la sesión B la dejaría en un callejón (el guard de `onConfirm` la
   // bloquearía para siempre) y, peor, sería el primer paso del camino que CD-1 prohíbe. Un envío con
   // otra cuenta es un envío nuevo, y el copy del banner lo dice.
+  //
+  // 💸 R-1 · EL GESTO CUESTA DOS FIRMAS, y vive acá porque hasta ahora vivía sólo en el SDD, que está
+  // gitignoreado y desaparece al mergear. `c.connectWallet.execute()` de abajo pide una (la prueba de
+  // posesión con la que se consulta el veredicto, `ensure`, `../application/use-cases/connect-wallet.ts:75`)
+  // y el `onConnect` del envío nuevo pide la otra. ⛔ NO se cachea la primera para ahorrarse la
+  // segunda: `http-pop-signer.ts:43-49` prohíbe reusar una prueba guardada para saltarse un popup del
+  // money-path. El costo está aceptado por el founder; lo que NO está resuelto es que el copy del
+  // banner no lo anticipa (dice "Podés pasarte a ella sin perder nada" y no habla de firmas).
   const adoptarCuentaConectada = () =>
     guard(async () => {
       const r = await c.connectWallet.execute();
@@ -658,6 +656,16 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
           <p className="text-[15px] font-bold leading-none tracking-heading">Chaski</p>
           <p className="text-xs text-stone">tu plata a Perú, sin vueltas</p>
         </div>
+        {/* ⚠️ WKH-354 (re-AR · MENOR-2) · ESTE PILL SE PINTA CON `address` Y NO CON LA BILLETERA VIVA,
+            y desde esta HU eso alcanza estados nuevos: tras volver de Didit, `address` se repuebla con
+            el `ownerAddress` del snapshot, así que el pill declara una cuenta aunque la billetera haya
+            quedado DESCONECTADA. El banner de `CuentaCambiada` no lo matiza porque exige `viva != null`.
+            Las dos lecturas, y por eso no se cambió nada:
+              · defendible — mientras la conexión automática no terminó, "estás operando como A" es
+                cierto: A es el dueño de la sesión que se retomó, y ninguna acción monetaria pasa sin
+                que el guard de `onConfirm` vuelva a leer la billetera viva.
+              · incómoda — el pill parece decir "conectado", y no hay firma posible en ese instante.
+            Si alguien decide que hay que distinguirlos, el cambio es de ESTE ternario, no del banner. */}
         {address ? (
           <div className="ml-auto flex flex-col items-end gap-1">
             <span className="inline-flex items-center gap-1.5 rounded-full bg-sand px-2.5 py-1 text-xs font-semibold text-ink">
@@ -1289,7 +1297,7 @@ const TRACK_STEPS: { key: RemittanceState["status"][]; label: string; manual?: b
  * ⛔ PROHIBIDO ponerlo en `1500` reusando el literal del poll. Con 1500 la pantalla funciona igual —
  * por eso esto NO tiene test y la prohibición está escrita acá en vez de fingir un candado. El daño de
  * hacerlo es crear un SEGUNDO literal de una cadencia AJENA, que es el punto ciego que el Auto-Blindaje
- * de WKH-336 nombra; y `flow.tsx:634` (el literal del poll) ya lo citan 6 archivos por número. Un
+ * de WKH-336 nombra; y `flow.tsx:632` (el literal del poll) ya lo citan 6 archivos por número. Un
  * candado que comparara dos números que no tienen por qué ser iguales sería un guard que se compara
  * consigo mismo.
  */
@@ -1398,7 +1406,7 @@ export function TrackView({
   // tests NO se editan y siguen midiendo lo mismo.
   //
   // 🔴 LOS TIPOS SE DERIVAN DEL `Container`, NO SE IMPORTAN. Dos razones y las dos son medibles: un
-  // `import` nuevo arriba desplazaría `flow.tsx:634`, que 6 archivos citan por número y NINGUNA de las
+  // `import` nuevo arriba desplazaría `flow.tsx:632`, que 6 archivos citan por número y NINGUNA de las
   // 6 es una cita anclada (el ancla `` `}, 1500);` `` empieza con `}` y el regex del candado exige
   // `[A-Za-z_$]`) ⇒ si se mueve, nada se pone rojo y los 6 comentarios rotan en silencio. Y derivar del
   // `Container` es además la única fuente: si mañana la firma de `estado` cambia, esto no compila.
@@ -1966,7 +1974,7 @@ export function RefundAction({
   // cuando confirma), así que este array es su único ejemplar.
   //
   // Es el MISMO defecto que el fix-pack de WKH-346 arregló en la puerta de al lado
-  // (`LostEscrowRecovery`, `:2146`) y dejó declarado acá sin tocar, porque AC-9/CD-2 le prohibían este
+  // (`LostEscrowRecovery`, `:2154`) y dejó declarado acá sin tocar, porque AC-9/CD-2 le prohibían este
   // camino de firma. La propiedad "ningún comprobante ya mostrado desaparece" es de la FORMA de CADA
   // estado y no del componente: de "aquella variable es append-only" no se deduce nada sobre esta.
   const [enviados, setEnviados] = useState<
@@ -2160,7 +2168,7 @@ export function LostEscrowRecovery({
   // guarda es la firma de un refund YA TRANSMITIDO cuyo desenlace NADIE conoce: `confirmation` es
   // `"pending"` o `"unknown"` (`EscrowRefundConfirmation`, `ports.ts:339`). O sea EXACTAMENTE la firma
   // que la persona necesita para ir al visor a averiguar si entró, y esta HU la volvió prominente y
-  // enlazable (`RefundSentNotice`, `:2104`, que la imprime como "Orden enviada:"). Medido antes del arreglo: con `pending` y después
+  // enlazable (`RefundSentNotice`, `:2112`, que la imprime como "Orden enviada:"). Medido antes del arreglo: con `pending` y después
   // `confirmed`, la primera firma desaparecía del DOM; con dos `pending`, quedaba UN solo href.
   //
   // ⚠️ El `sender` va PEGADO a cada entrada, no aparte: es lo que hace que la pantalla no mezcle dos
@@ -2306,7 +2314,7 @@ export function LostEscrowRecovery({
         * arreglo: montadas afuera, la tarjeta afirmaría "puede haber más envíos con fondos por
         * recuperar" recién abierta la puerta, sin haberle preguntado nada a la cadena. Es la SEGUNDA
         * encarnación del mismo defecto en este archivo: el CR de WKH-327 lo arregló en el componente
-        * INMEDIATAMENTE SIGUIENTE (`explainer`, `flow.tsx:2393`), a unas pocas decenas de líneas de
+        * INMEDIATAMENTE SIGUIENTE (`explainer`, `flow.tsx:2401`), a unas pocas decenas de líneas de
         * donde nació este. ⚠️ Acá decía "48 líneas" y era una CIFRA QUE ENVEJECE SOLA: es una
         * distancia, y mis propias inserciones la movieron a 60 sin que ningún barrido la cazara
         * (AR-2/MNR-7). Lo que no envejece es la relación estructural, y es la que importa. Un test de
@@ -2332,7 +2340,7 @@ export function LostEscrowRecovery({
       ) : null}
       {/* UNA por orden transmitida, y no la última: cada una es una tx distinta cuyo desenlace nadie
           conoce todavía. `RefundSentNotice` sigue BYTE-IDÉNTICO y lo comparte con `RefundAction`
-          (`RefundAction`, `flow.tsx:1944`), que hoy acumula igual: WKH-346 no pudo (AC-9), otra HU sí. */}
+          (`RefundAction`, `flow.tsx:1952`), que hoy acumula igual: WKH-346 no pudo (AC-9), otra HU sí. */}
       {misEnviados.map((e) => (
         <RefundSentNotice key={e.refundTx} confirmation={e.confirmation} refundTx={e.refundTx} />
       ))}
@@ -2839,7 +2847,7 @@ function AgentUnavailable({
  * agregar *"y el fee de la entrega no lo paga nadie, porque ese paso no corre"*. Es verdad
  * (`this.solana`, `../application/use-cases/confirm-and-send.ts:336`) y está PROHIBIDO escribirlo: en
  * ese mismo cuadrante, tres renglones más arriba en la MISMA tarjeta, la fila de la entrega dice
- * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:3006`). Ese *"lo simula"* es impreciso
+ * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:3014`). Ese *"lo simula"* es impreciso
  * —con el settle apagado la entrega no se simula, se corta— pero es **H1 de WKH-336**, residual de otra
  * HU que exige un TERCER valor de `transport` con su propia frase, y WKH-338 no lo cierra. Si la nota
  * dijera *"la entrega no corre"* mientras la fila dice *"lo simula"*, la tarjeta se contradiría a sí
@@ -3126,7 +3134,7 @@ export function HistoryView({
   const [chain, setChain] = useState<"not-asked" | "pending" | ReadonlyMap<string, EscrowChainState>>(
     "not-asked",
   );
-  // 🔴 LA CONSULTA VIVE ACÁ Y NO EN `openHistory` (`:403`), y el motivo es la persona, no la prolijidad:
+  // 🔴 LA CONSULTA VIVE ACÁ Y NO EN `openHistory` (`:396`), y el motivo es la persona, no la prolijidad:
   // `openHistory` corre dentro de `guard(...)`, que catchea y manda el error al banner ANTES de
   // `setStep("history")`. Un RPC caído ahí deja a la persona SIN PANTALLA. Acá deja la pantalla entera
   // y una frase por fila que dice que no pudimos preguntar. Candado: T-U6 en `history-onchain.test.tsx`.
@@ -3197,7 +3205,7 @@ function HistoryEntry({
   onOpen: (rem: RemittanceState) => void;
   answer: EscrowChainAnswer;
 }) {
-  // WKH-351 · AC-1: acá NO se calcula el estado del trámite. El encabezado del grupo ya afirma sobre la plata, y entre las dos afirmaciones hay contradicción ALCANZABLE en 3 de los 4 grupos. (`statusDisplay`, `flow-vm.ts:133`) sigue viva, y la sigue mostrando (`Receipt`, `:3252`), que es una sola remesa y no tiene encabezado con el que chocar. Reemplazo línea-neutra, 1 línea por 1: borrar esta línea desplaza las referencias de abajo, y a la mayoría no las vigila ningún test.
+  // WKH-351 · AC-1: acá NO se calcula el estado del trámite. El encabezado del grupo ya afirma sobre la plata, y entre las dos afirmaciones hay contradicción ALCANZABLE en 3 de los 4 grupos. (`statusDisplay`, `flow-vm.ts:133`) sigue viva, y la sigue mostrando (`Receipt`, `:3260`), que es una sola remesa y no tiene encabezado con el que chocar. Reemplazo línea-neutra, 1 línea por 1: borrar esta línea desplaza las referencias de abajo, y a la mayoría no las vigila ningún test.
   const knowledge = escrowFundsKnowledge(rem);
   // WKH-349. El texto Y el peso visual salen de la MISMA función: un copy que dice "siguen en el
   // escrow" con el mismo gris que "no pudimos preguntar" pierde la mitad de AC-2. Y para los cuatro
@@ -3366,7 +3374,7 @@ export function recoveryMoreEscrowsHint(maxCandidates: number): string {
  *
  * ⚠️ Esta frase NO dice "no te quedan envíos": dice que no queda ninguno **entre los que miramos**, y
  * después dice qué NO significa. Es la misma voz de (`sinAbiertosCopy`, `flow-vm.ts:327`): el hecho
- * primero, el límite del hecho después. (Iba a `:343`, una línea de comentario, y sin la coma entre los dos backticks el candado ni la miraba: el arreglo son las dos mitades, el número Y el formato.)
+ * primero, el límite del hecho después. (Iba a `:336`, una línea de comentario, y sin la coma entre los dos backticks el candado ni la miraba: el arreglo son las dos mitades, el número Y el formato.)
  */
 export function recoveryWindowExhausted(maxCandidates: number): string {
   return `Ya no queda ninguno abierto entre los últimos ${maxCandidates} envíos guardados de esta billetera. Si tenés envíos más viejos que eso, esta búsqueda no llega a ellos.`;
@@ -3377,7 +3385,7 @@ export function recoveryWindowExhausted(maxCandidates: number): string {
  *
  * Los cinco sitios que le muestran una firma a la persona pasan por acá. Tres la imprimían ENTERA (87 u 88 caracteres, y 88 en la mayoría de los casos: una firma ed25519 son 64 bytes y su largo en base58 depende del primer byte. Medido, 4000 muestras: 80,2 % dan 88. Los 87 con los que se mide en los tests son propiedad de `FAKE_SOLANA_SIGNATURE`, no de una firma cualquiera — AR/MNR-2)
  * y desbordaban la única columna de la app; los
- * otros dos ya truncaban con `shortTx` (`shortTx`, `:3309`) y no llevaban a ninguna parte. Un solo
+ * otros dos ya truncaban con `shortTx` (`shortTx`, `:3317`) y no llevaban a ninguna parte. Un solo
  * componente en vez de cinco es lo que impide que el próximo sitio nazca con la tercera variante.
  *
  * 🔴 POR QUÉ VIVE ACÁ Y NO EN `src/presentation/tx-proof.tsx`, que era lo natural. Un archivo nuevo
@@ -3481,10 +3489,10 @@ export function TxProof({ signature }: { signature: string }) {
  * DEVUELVE UN FRAGMENT Y NO UN `div`. El padre es un `space-y-4`, y `space-y-*` sólo alcanza a los
  * hijos DIRECTOS: un div envolvente dejaría los 4 grupos a un nivel de profundidad y les comería el
  * espaciado. Y va un `<ul>` por grupo en vez de uno solo con separadores, porque la tarjeta devuelve
- * un `<li>` (`HistoryEntry`, `:3191`) y un encabezado suelto entre `<li>` es HTML inválido.
+ * un `<li>` (`HistoryEntry`, `:3199`) y un encabezado suelto entre `<li>` es HTML inválido.
  *
- * ⚠️ POR QUÉ VIVE ACÁ ABAJO Y NO JUNTO A (`HistoryView`, `:3100`), QUE ES DONDE SE LEERÍA MEJOR: por
- * lo mismo que (`TxProof`, `:3413`). Un bloque nuevo en el medio de este archivo desplaza todo lo que
+ * ⚠️ POR QUÉ VIVE ACÁ ABAJO Y NO JUNTO A (`HistoryView`, `:3108`), QUE ES DONDE SE LEERÍA MEJOR: por
+ * lo mismo que (`TxProof`, `:3421`). Un bloque nuevo en el medio de este archivo desplaza todo lo que
  * viene después, y a este archivo lo apuntan citas por número desde todo el árbol más las autocitas
  * `:NNN` de sus propios docblocks. De todas ellas, el candado de citas sólo vigila las ANCLADAS —las
  * que llevan el símbolo delante de la coma—; las SUELTAS, que son mayoría, se romperían sin que ningún
@@ -3545,24 +3553,18 @@ function HistoryGroups({
  *  · `sesion != null`  — nadie conectó todavía. Lo que esta condición evita es el banner en la PRIMERA
  *                        PANTALLA de cualquiera: con `autoConnect` la billetera puede tener cuenta
  *                        activa antes de que la persona elija ninguna, y ahí `viva !== sesion` es
- *                        cierto sin que haya cambiado nada (R-5).
- *                        ⚠️ ACÁ DECÍA "se pintaría en el arranque de casi toda la suite" Y ES FALSO,
- *                        medido: quitando `sesion == null ||` de la condición de abajo, la suite
- *                        completa da 1 rojo de 2107, y ese rojo es T-354-6d, el test escrito para
- *                        esta condición. O sea que la suite NO es la que la sostiene: la sostiene un
- *                        solo test, y por eso ese test es el que no se puede borrar.
+ *                        cierto sin que haya cambiado nada (R-5). Lo sostiene UN solo test y no la
+ *                        suite, medido: el detalle y la medición están en T-354-6d, que es el test
+ *                        que por eso no se puede borrar.
  *  · `viva != null`    — el bridge todavía no midió nada. `null` NO es "cambió la cuenta".
  *  · `viva !== sesion` — sin esta comparación el banner se pinta siempre (T-354-6b lo mide).
  *
  * ⚠️ ESTE COMPONENTE LEE EL BRIDGE GLOBAL y no el puerto inyectado. `useSyncExternalStore` exige un
  * `getSnapshot` SÍNCRONO y `ConnectedWalletProbe` es `async`, así que la SUSCRIPCIÓN no puede pasar
  * por el puerto. El precedente es `NoWalletHere`, que ya consume `useWalletAvailability()` al lado de
- * un container inyectado.
- *
- * 🔵 PERO ESO NO HACE INEVITABLE LA SEGUNDA COSTURA, y decirlo al revés sobrevendía el diseño (AR r4 ·
- * MENOR-3). Lo que el hook obliga es la suscripción; el VALOR podría resolverse por el puerto dentro
- * de un efecto, suscribiéndose igual al bridge para saber CUÁNDO volver a preguntar. Se leen los dos
- * del bridge porque es más simple, no porque no haya otra forma.
+ * un container inyectado. Ojo con el alcance: lo que el hook obliga es la SUSCRIPCIÓN. El valor
+ * podría resolverse por el puerto dentro de un efecto; los dos se leen del bridge porque es más
+ * simple, no porque no haya otra forma.
  *
  * 🔴 Y LOS DOS LECTORES NO APLICAN EL MISMO PREDICADO, así que su equivalencia no la da el tipo:
  *   · (`useConnectedWalletAddress`, `./wallet-availability.ts:62`) devuelve `publicKey` crudo: no mira

@@ -1,7 +1,7 @@
 // Infrastructure — almacén EN MEMORIA de las pruebas de posesión que ya se produjeron (WKH-337).
 //
 // 🔴 POR QUÉ EXISTE, Y ES UNA MEDICIÓN, NO UNA PREFERENCIA. El seguimiento de una remesa corre dentro
-// de un `setInterval` de 1500 ms (`}, 1500);`, `../../presentation/flow.tsx:634`). Si el gateway que
+// de un `setInterval` de 1500 ms (`}, 1500);`, `../../presentation/flow.tsx:632`). Si el gateway que
 // lee el desenlace pudiera PEDIR una prueba de posesión, cada tick abriría un popup de la billetera:
 // 600 s ÷ 1,5 s = 400 firmas por sesión de 10 minutos. Y contra el rate-limit: los buckets de esta app
 // tienen presupuestos de 5 a 60 requests por "10 m", así que 400 los revienta por un orden de magnitud.

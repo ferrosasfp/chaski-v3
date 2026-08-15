@@ -900,31 +900,38 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
           )}
 
           {step === "connect" && (
-            <div className="space-y-4">
-              <Card className="space-y-4 text-center">
+            <div className="space-y-holgado">
+              <Card className="space-y-holgado text-center">
+                {/* `h-14 w-14` NO es un tamaño de ícono y por eso no está en la escala de S-4: es el
+                    círculo que lo CONTIENE. El ícono de adentro sí migró. */}
                 <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-sand">
                   <Wallet className="size-icono-md text-cochineal" />
                 </div>
                 <div>
-                  <h2 className="text-base font-bold">Conectá tu wallet</h2>
+                  <h2 className="text-title font-bold">Conectá tu wallet</h2>
                   {/* "Chaski nunca toca tu plata" es un absoluto y hay quien lo falsifica: el escrow
                       tiene una release-authority, operada por el equipo, que puede liberar el vault
                       hacia el pago (ver `confirm-and-send.ts`:191-197). Lo que sí es verificable, y es
                       lo que hace a esto no custodial, es DÓNDE quedan los USDC: en una cuenta del
                       contrato (ATA de la PDA `escrow_state`, `solana-wallet.ts`:288), nunca en una
                       billetera de Chaski. */}
-                  <p className="mx-auto mt-1 max-w-xs text-sm text-stone">
+                  <Muted className="mx-auto mt-ajustado max-w-xs">
                     Firmás el envío desde tu billetera con USDC. Tus USDC van a un contrato en
                     Solana, no a una cuenta de Chaski.
-                  </p>
+                  </Muted>
                 </div>
-                <div className="rounded-xl bg-verde-bg px-4 py-2.5 text-left">
-                  <p className="text-xs text-verde/80">Vas a enviar</p>
+                {/* La segunda de las tres cajas verdes de S-3. ⚠️ Ésta tenía `py-2.5` (10px) y las
+                    otras dos `py-3` (12px): tres cajas del mismo tono en tres paddings distintos era
+                    justo el síntoma. `Aviso` las deja en uno solo, así que acá el alto crece 2px por
+                    lado. `text-left` va como `className` porque la disposición del contenido la pone
+                    el sitio de llamada: es lo que en las tres cambia. */}
+                <Aviso tono="bueno" className="text-left">
+                  <p className="text-label text-verde/80">Vas a enviar</p>
                   <p className="tabular-nums text-lg font-extrabold text-verde">
                     {rem ? rem.sendUsd.format() : "—"}{" "}
-                    <span className="text-sm font-medium">en Solana {resolveSolanaNetworkConfig().cluster}</span>
+                    <span className="text-body font-medium">en Solana {resolveSolanaNetworkConfig().cluster}</span>
                   </p>
-                </div>
+                </Aviso>
               </Card>
               <NoWalletHere />
               <Button disabled={busy} onClick={onConnect}>
@@ -940,11 +947,14 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
           )}
 
           {step === "verify" && (
-            <div className="space-y-4">
-              <Card className="space-y-4">
-                <div className="flex items-center gap-2 text-verde">
+            <div className="space-y-holgado">
+              <Card className="space-y-holgado">
+                <div className="flex items-center gap-ajustado text-verde">
                   <ShieldCheck className="size-icono-md" />
-                  <p className="text-sm font-semibold">Verificación única</p>
+                  {/* Sigue siendo un `<p>`: promoverlo a encabezado es trabajo de la ola 1 (D-3), que
+                      dejó explícito qué sub-encabezados quedaban afuera y por qué. Esta ola sólo le
+                      cambia el rol tipográfico. */}
+                  <p className="text-body font-semibold">Verificación única</p>
                 </div>
                 {/* TRES frases se cayeron acá, y la tercera es de la misma familia que las dos
                     primeras. Las dos primeras, del barrido anterior:
@@ -966,10 +976,10 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                       distinguir las dos configuraciones, así que dice sólo lo que vale en las dos. Lo
                       que la persona va a tener que hacer lo decide el verificador, y este componente
                       no sabe cuál está configurado. */}
-                <p className="text-sm text-stone">
+                <Muted>
                   Por ley, verificamos tu identidad <b>una sola vez</b>. Tu documento y tu selfie no
                   se comparten con los agentes que cotizan y pagan.
-                </p>
+                </Muted>
                 {/* LA CUARTA DE LA MISMA FAMILIA, y la que sobrevivió al barrido de arriba porque no
                     era una frase. Acá había `IdCard → ArrowRight → ScanFace`: documento, flecha, cara
                     escaneada. Es la MISMA promesa que se borró del párrafo y del botón ("escaneás tu
@@ -989,7 +999,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                 {scanStage === 0 ? (
                   <div
                     data-testid="verify-idle-icon"
-                    className="flex items-center justify-center rounded-xl border border-dashed border-line bg-sand/60 py-7"
+                    className="flex items-center justify-center rounded-control border border-dashed border-line bg-sand/60 py-7"
                   >
                     <ShieldCheck className="size-icono-lg text-stone" />
                   </div>
@@ -1015,14 +1025,14 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
 
           {/* WKH-187: paso `review` pre-KYC — muestra el VALOR (cuánto recibe la familia) antes de verificar. */}
           {step === "review" && rem?.quote && (
-            <div className="space-y-4">
+            <div className="space-y-holgado">
               <Card>
-                <div className="mb-2 flex items-center justify-between">
-                  <h2 className="text-sm font-semibold">Revisá el envío</h2>
+                <div className="mb-ajustado flex items-center justify-between">
+                  <h2 className="text-title font-semibold">Revisá el envío</h2>
                   <Pill tone="active">tasa fijada</Pill>
                 </div>
-                <div className="mb-3 rounded-xl bg-sand px-4 py-3 text-center">
-                  <p className="text-xs text-stone">{rem.beneficiary.name} recibe</p>
+                <div className="mb-normal rounded-control bg-sand px-holgado py-normal text-center">
+                  <p className="text-label text-stone">{rem.beneficiary.name} recibe</p>
                   <p className="tabular-nums text-3xl font-extrabold text-verde">
                     {rem.quote.receive.format()}
                   </p>
@@ -1031,22 +1041,22 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                 <Row label="Comisión" value={rem.quote.feeUsd.format()} />
                 <Row label="Tipo de cambio" value={`S/ ${rem.quote.rate.toFixed(3)}`} />
                 <Row label="Estimado del corredor" value={`~${rem.quote.etaMinutes} min`} />
-                <div className="my-2 h-px bg-line" />
+                <div className="my-ajustado h-px bg-line" />
                 <Row label="Recibe en" value={`${methodLabel(rem.beneficiary.method)} · ${rem.beneficiary.destination}`} />
               </Card>
               <AgentPlanCard />
               <Button disabled={busy} onClick={onContinue}>
                 Continuar <ArrowRight className="size-icono-sm" />
               </Button>
-              <p className="text-center text-xs text-stone">
+              <Muted escala="label" className="text-center">
                 Para enviar, verificás tu identidad una sola vez (por ley).
-              </p>
+              </Muted>
             </div>
           )}
 
           {/* WKH-187: paso `confirm` post-KYC — el review con badge de identidad + confirmar/relock. */}
           {step === "confirm" && rem?.quote && (
-            <div className="space-y-4">
+            <div className="space-y-holgado">
               {rateUpdated ? (
                 <div className="flex items-center justify-center">
                   <Pill tone="active">
@@ -1055,12 +1065,12 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                 </div>
               ) : null}
               <Card>
-                <div className="mb-2 flex items-center justify-between">
-                  <h2 className="text-sm font-semibold">Revisá antes de enviar</h2>
+                <div className="mb-ajustado flex items-center justify-between">
+                  <h2 className="text-title font-semibold">Revisá antes de enviar</h2>
                   <Pill tone="active">tasa fijada</Pill>
                 </div>
-                <div className="mb-3 rounded-xl bg-sand px-4 py-3 text-center">
-                  <p className="text-xs text-stone">{rem.beneficiary.name} recibe</p>
+                <div className="mb-normal rounded-control bg-sand px-holgado py-normal text-center">
+                  <p className="text-label text-stone">{rem.beneficiary.name} recibe</p>
                   <p className="tabular-nums text-3xl font-extrabold text-verde">
                     {rem.quote.receive.format()}
                   </p>
@@ -1069,7 +1079,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                 <Row label="Comisión" value={rem.quote.feeUsd.format()} />
                 <Row label="Tipo de cambio" value={`S/ ${rem.quote.rate.toFixed(3)}`} />
                 <Row label="Estimado del corredor" value={`~${rem.quote.etaMinutes} min`} />
-                <div className="my-2 h-px bg-line" />
+                <div className="my-ajustado h-px bg-line" />
                 <Row label="Recibe en" value={`${methodLabel(rem.beneficiary.method)} · ${rem.beneficiary.destination}`} />
               </Card>
               {rem.kyc ? <IdentityBadge kyc={rem.kyc} /> : null}
@@ -1090,9 +1100,9 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                   <Button disabled={busy} onClick={onConfirm}>
                     {busy ? <Loader2 className="size-icono-sm animate-spin" /> : `Confirmar y enviar ${rem.sendUsd.format()}`}
                   </Button>
-                  <p className="text-center text-xs text-stone">
+                  <Muted escala="label" className="text-center">
                     Al confirmar, autorizás el envío de {rem.sendUsd.format()} desde tu wallet.
-                  </p>
+                  </Muted>
                 </>
               )}
             </div>
@@ -1998,7 +2008,7 @@ export function RefundAction({
   // cuando confirma), así que este array es su único ejemplar.
   //
   // Es el MISMO defecto que el fix-pack de WKH-346 arregló en la puerta de al lado
-  // (`LostEscrowRecovery`, `:2178`) y dejó declarado acá sin tocar, porque AC-9/CD-2 le prohibían este
+  // (`LostEscrowRecovery`, `:2188`) y dejó declarado acá sin tocar, porque AC-9/CD-2 le prohibían este
   // camino de firma. La propiedad "ningún comprobante ya mostrado desaparece" es de la FORMA de CADA
   // estado y no del componente: de "aquella variable es append-only" no se deduce nada sobre esta.
   const [enviados, setEnviados] = useState<
@@ -2192,7 +2202,7 @@ export function LostEscrowRecovery({
   // guarda es la firma de un refund YA TRANSMITIDO cuyo desenlace NADIE conoce: `confirmation` es
   // `"pending"` o `"unknown"` (`EscrowRefundConfirmation`, `ports.ts:339`). O sea EXACTAMENTE la firma
   // que la persona necesita para ir al visor a averiguar si entró, y esta HU la volvió prominente y
-  // enlazable (`RefundSentNotice`, `:2136`, que la imprime como "Orden enviada:"). Medido antes del arreglo: con `pending` y después
+  // enlazable (`RefundSentNotice`, `:2146`, que la imprime como "Orden enviada:"). Medido antes del arreglo: con `pending` y después
   // `confirmed`, la primera firma desaparecía del DOM; con dos `pending`, quedaba UN solo href.
   //
   // ⚠️ El `sender` va PEGADO a cada entrada, no aparte: es lo que hace que la pantalla no mezcle dos
@@ -2338,7 +2348,7 @@ export function LostEscrowRecovery({
         * arreglo: montadas afuera, la tarjeta afirmaría "puede haber más envíos con fondos por
         * recuperar" recién abierta la puerta, sin haberle preguntado nada a la cadena. Es la SEGUNDA
         * encarnación del mismo defecto en este archivo: el CR de WKH-327 lo arregló en el componente
-        * INMEDIATAMENTE SIGUIENTE (`explainer`, `flow.tsx:2425`), a unas pocas decenas de líneas de
+        * INMEDIATAMENTE SIGUIENTE (`explainer`, `flow.tsx:2435`), a unas pocas decenas de líneas de
         * donde nació este. ⚠️ Acá decía "48 líneas" y era una CIFRA QUE ENVEJECE SOLA: es una
         * distancia, y mis propias inserciones la movieron a 60 sin que ningún barrido la cazara
         * (AR-2/MNR-7). Lo que no envejece es la relación estructural, y es la que importa. Un test de
@@ -2871,7 +2881,7 @@ function AgentUnavailable({
  * agregar *"y el fee de la entrega no lo paga nadie, porque ese paso no corre"*. Es verdad
  * (`this.solana`, `../application/use-cases/confirm-and-send.ts:336`) y está PROHIBIDO escribirlo: en
  * ese mismo cuadrante, tres renglones más arriba en la MISMA tarjeta, la fila de la entrega dice
- * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:3038`). Ese *"lo simula"* es impreciso
+ * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:3048`). Ese *"lo simula"* es impreciso
  * —con el settle apagado la entrega no se simula, se corta— pero es **H1 de WKH-336**, residual de otra
  * HU que exige un TERCER valor de `transport` con su propia frase, y WKH-338 no lo cierra. Si la nota
  * dijera *"la entrega no corre"* mientras la fila dice *"lo simula"*, la tarjeta se contradiría a sí
@@ -3229,7 +3239,7 @@ function HistoryEntry({
   onOpen: (rem: RemittanceState) => void;
   answer: EscrowChainAnswer;
 }) {
-  // WKH-351 · AC-1: acá NO se calcula el estado del trámite. El encabezado del grupo ya afirma sobre la plata, y entre las dos afirmaciones hay contradicción ALCANZABLE en 3 de los 4 grupos. (`statusDisplay`, `flow-vm.ts:133`) sigue viva, y la sigue mostrando (`Receipt`, `:3284`), que es una sola remesa y no tiene encabezado con el que chocar. Reemplazo línea-neutra, 1 línea por 1: borrar esta línea desplaza las referencias de abajo, y a la mayoría no las vigila ningún test.
+  // WKH-351 · AC-1: acá NO se calcula el estado del trámite. El encabezado del grupo ya afirma sobre la plata, y entre las dos afirmaciones hay contradicción ALCANZABLE en 3 de los 4 grupos. (`statusDisplay`, `flow-vm.ts:133`) sigue viva, y la sigue mostrando (`Receipt`, `:3294`), que es una sola remesa y no tiene encabezado con el que chocar. Reemplazo línea-neutra, 1 línea por 1: borrar esta línea desplaza las referencias de abajo, y a la mayoría no las vigila ningún test.
   const knowledge = escrowFundsKnowledge(rem);
   // WKH-349. El texto Y el peso visual salen de la MISMA función: un copy que dice "siguen en el
   // escrow" con el mismo gris que "no pudimos preguntar" pierde la mitad de AC-2. Y para los cuatro
@@ -3409,7 +3419,7 @@ export function recoveryWindowExhausted(maxCandidates: number): string {
  *
  * Los cinco sitios que le muestran una firma a la persona pasan por acá. Tres la imprimían ENTERA (87 u 88 caracteres, y 88 en la mayoría de los casos: una firma ed25519 son 64 bytes y su largo en base58 depende del primer byte. Medido, 4000 muestras: 80,2 % dan 88. Los 87 con los que se mide en los tests son propiedad de `FAKE_SOLANA_SIGNATURE`, no de una firma cualquiera — AR/MNR-2)
  * y desbordaban la única columna de la app; los
- * otros dos ya truncaban con `shortTx` (`shortTx`, `:3341`) y no llevaban a ninguna parte. Un solo
+ * otros dos ya truncaban con `shortTx` (`shortTx`, `:3351`) y no llevaban a ninguna parte. Un solo
  * componente en vez de cinco es lo que impide que el próximo sitio nazca con la tercera variante.
  *
  * 🔴 POR QUÉ VIVE ACÁ Y NO EN `src/presentation/tx-proof.tsx`, que era lo natural. Un archivo nuevo
@@ -3513,10 +3523,10 @@ export function TxProof({ signature }: { signature: string }) {
  * DEVUELVE UN FRAGMENT Y NO UN `div`. El padre es un `space-y-4`, y `space-y-*` sólo alcanza a los
  * hijos DIRECTOS: un div envolvente dejaría los 4 grupos a un nivel de profundidad y les comería el
  * espaciado. Y va un `<ul>` por grupo en vez de uno solo con separadores, porque la tarjeta devuelve
- * un `<li>` (`HistoryEntry`, `:3223`) y un encabezado suelto entre `<li>` es HTML inválido.
+ * un `<li>` (`HistoryEntry`, `:3233`) y un encabezado suelto entre `<li>` es HTML inválido.
  *
- * ⚠️ POR QUÉ VIVE ACÁ ABAJO Y NO JUNTO A (`HistoryView`, `:3132`), QUE ES DONDE SE LEERÍA MEJOR: por
- * lo mismo que (`TxProof`, `:3445`). Un bloque nuevo en el medio de este archivo desplaza todo lo que
+ * ⚠️ POR QUÉ VIVE ACÁ ABAJO Y NO JUNTO A (`HistoryView`, `:3142`), QUE ES DONDE SE LEERÍA MEJOR: por
+ * lo mismo que (`TxProof`, `:3455`). Un bloque nuevo en el medio de este archivo desplaza todo lo que
  * viene después, y a este archivo lo apuntan citas por número desde todo el árbol más las autocitas
  * `:NNN` de sus propios docblocks. De todas ellas, el candado de citas sólo vigila las ANCLADAS —las
  * que llevan el símbolo delante de la coma—; las SUELTAS, que son mayoría, se romperían sin que ningún

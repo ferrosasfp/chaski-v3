@@ -2202,7 +2202,7 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
   //   (2) la tercera posibilidad decía "siga abierta en un contrato que no estamos mirando", y ése es
   //       justo el lugar donde el más plausible de los cuatro disparadores NO la pone: si el depósito
   //       lo firmó otra cuenta de la wallet, la cuenta vive en ESTE MISMO programa con otro sender, y
-  //       (`LostEscrowRecovery`, `flow.tsx:2178`) la encuentra porque resuelve por sender. Mandar a un
+  //       (`LostEscrowRecovery`, `flow.tsx:2188`) la encuentra porque resuelve por sender. Mandar a un
   //       "otro contrato" es mandar a la persona al único lugar donde no hay nada que buscar.
   //
   // MUTANTE MEDIDO: reponer en `flow-vm.ts:1267` la frase vieja ("Y en el contrato que estamos

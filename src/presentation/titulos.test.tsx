@@ -22,7 +22,7 @@
 //
 // Se usan `<h1>` (el nombre de la app, en el header, que se pinta siempre) y `<h2>` (los títulos de
 // pantalla y de bloque). NO se introduce un tercer nivel en esta ola, y el motivo es medible:
-// bloques como "Recuperar un envío perdido" (`h2`, `flow.tsx:2324`) se pintan dentro del paso `send`, que
+// bloques como "Recuperar un envío perdido" (`h2`, `flow.tsx:2334`) se pintan dentro del paso `send`, que
 // NO tiene título propio. Marcarlos `<h3>` ahí sería saltear el nivel 2, que es un defecto distinto
 // del que se está cerrando. Los sub-encabezados que sí tienen un padre claro ("Verificación única",
 // "Quién va a atender tu envío", los encabezados de grupo del historial) quedan como `<p>` para la

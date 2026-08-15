@@ -14,6 +14,22 @@
 // leen el TEMA (los valores que se declaran) y las CLASES (los nombres que llegan al DOM). Que
 // `text-support` produzca 13px con interlineado 1.7 en un navegador lo hace el compilador de
 // Tailwind, y esta suite no lo verifica.
+//
+// LOS DIEZ MUTANTES SE APLICARON Y SE MIDIERON, uno por uno, sobre el árbol de 9cd4586. No es una
+// lista de lo que "debería" fallar, es la salida de correrlos (el archivo tiene 22 tests):
+//   · `body` sin `lineHeight`                                    ⇒ 2 failed | 20 passed
+//   · `support` con el mismo interlineado que `body`             ⇒ 1 failed | 21 passed
+//   · `money` más chico que `title`                              ⇒ 1 failed | 21 passed
+//   · `cn.ts` sin el grupo `font-size`                           ⇒ 2 failed | 20 passed
+//   · `cn.ts` sin la escala `spacing`                            ⇒ 1 failed | 21 passed
+//   · `Muted` emitiendo `text-[#8A8178]` (el MISMO gris, otra clase) ⇒ 3 failed | 19 passed
+//   · la moneda de `Money` al mismo peso que la cifra            ⇒ 1 failed | 21 passed
+//   · dos tonos de `Aviso` con la misma superficie               ⇒ 1 failed | 21 passed
+//   · `Money` sin `tabular-nums`                                 ⇒ 1 failed | 21 passed
+//   · `xl2` con un valor distinto de `caja`                      ⇒ 1 failed | 21 passed
+//
+// El sexto es el que más importa de la lista: es el gris EXACTO escrito como valor arbitrario, o sea
+// el cambio que se ve idéntico en pantalla y rompe igual el candado de `history-onchain.test.tsx`.
 import { afterEach, describe, expect, it } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";

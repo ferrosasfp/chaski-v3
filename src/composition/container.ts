@@ -18,7 +18,7 @@ import { ResumeKyc } from "../application/use-cases/resume-kyc";
 import { StartKyc } from "../application/use-cases/start-kyc";
 import { TrackRemittance } from "../application/use-cases/track-remittance";
 import type {
-  PopProofRecorder, PopSigner, SolanaCloseableEscrowLister, SolanaEscrowChainStateReader, // WKH-349: EN ESTA LÍNEA (`:47`, `:50`, `:114`, `:123`, `:127`, `:141`, `:169` y `:196` se citan por número)
+  PopProofRecorder, PopSigner, SolanaCloseableEscrowLister, SolanaEscrowChainStateReader, ConnectedWalletProbe, // WKH-349: EN ESTA LÍNEA (`:47`, `:50`, `:114`, `:123`, `:127`, `:141`, `:169` y `:196` se citan por número). WKH-354: `ConnectedWalletProbe` entra ACÁ y no en una línea propia, por lo mismo
   SolanaEscrowRefundGateway as SolanaEscrowRefundPort,
 } from "../application/ports";
 import { A2aQuoteGateway } from "../infrastructure/a2a/gateways";
@@ -76,7 +76,7 @@ export interface Container extends VentanaYRenovacion { // WKH-339: 2 campos REQ
   closeEscrowAccounts?: CloseEscrowAccounts;
   // El descubrimiento de cerrables (AC-8): la UI necesita LISTAR antes de poder cerrar, porque los
   // envíos que no están en el localStorage de este navegador no tienen ningún otro camino.
-  solanaCloseableEscrows?: SolanaCloseableEscrowLister; solanaEscrowStates?: SolanaEscrowChainStateReader; // WKH-349: EN ESTA LÍNEA, no en una nueva — `:114`, `:123`, `:127`, `:141`, `:169` y `:196` de este archivo los cita otro por número y están TODOS debajo de acá. Opcional sólo por el test-container; el container real SIEMPRE lo cablea (ver el final de `createContainer`)
+  solanaCloseableEscrows?: SolanaCloseableEscrowLister; solanaEscrowStates?: SolanaEscrowChainStateReader; connectedWallet: ConnectedWalletProbe; // WKH-349: EN ESTA LÍNEA, no en una nueva — `:114`, `:123`, `:127`, `:141`, `:169` y `:196` de este archivo los cita otro por número y están TODOS debajo de acá. Opcional sólo por el test-container; el container real SIEMPRE lo cablea (ver el final de `createContainer`). WKH-354/AC-2+AC-3: `connectedWallet` entra ACÁ por lo mismo, y va SIN `?` (CD-14) — opcional dejaría que borrar su cableado compile y la suite quede verde, que es el perfil de mutante que el comentario de `solanaEscrowStates` documenta como el más peligroso del repo
 }
 
 // HU-SOL-20/AC-2 — arma el SolanaWalletAdapter CON su resolver de remittanceId en un solo paso (sin setter,
@@ -246,6 +246,17 @@ export function createContainer(): Container {
     // El único test que lo ve es T-C1 en `container.test.ts`, porque ejercita el objeto que ESTA
     // LÍNEA devuelve en vez de uno armado a mano.
     solanaEscrowStates: wallet,
+    // WKH-354/AC-2+AC-3. El MISMO adapter otra vez, y va acá abajo por el mismo motivo que sus dos
+    // vecinos: las 8 líneas citadas por número de este archivo están TODAS arriba (`:47`, `:50`,
+    // `:114`, `:123`, `:127`, `:141`, `:169`, `:196`).
+    //
+    // 🔴 ESTA LÍNEA ES DONDE VIVE EL RIESGO, y es el mismo perfil que `closeEscrowAccounts` documenta
+    // en su comentario de acá arriba: `ConnectedWalletProbe` es una interfaz de UN método, así que
+    // `{ getConnectedAddress: () => wallet.getAddress() }` la satisface, compila, y devuelve el CACHE
+    // de `connect()` — o sea reintroduce el bug entero desde acá (CD-13). Lo que lo mata es
+    // `container.test.ts` (T-354-CABLE-1), que ejercita el `connectedWallet` QUE ESTA LÍNEA DEVUELVE
+    // contra el `solanaWalletBridge` real, con `connect()` ya corrido para que haya cache que exponer.
+    connectedWallet: wallet,
   };
 }
 

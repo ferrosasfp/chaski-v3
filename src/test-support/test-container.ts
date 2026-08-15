@@ -27,7 +27,7 @@ import type {
   QuoteGateway,
   RefundGateway,
   RemittanceRepository,
-  SolanaCloseableEscrowLister, SolanaEscrowChainStateReader, // WKH-349: EN ESTA LÍNEA, no en una nueva — mismo motivo que el import de `:7`: `container.test.ts:413` cita `test-container.ts:87` por número
+  SolanaCloseableEscrowLister, SolanaEscrowChainStateReader, ConnectedWalletProbe, // WKH-349: EN ESTA LÍNEA, no en una nueva — mismo motivo que el import de `:7`: `container.test.ts:413` cita `test-container.ts:87` por número. WKH-354: `ConnectedWalletProbe` entra ACÁ por lo mismo
   SolanaEscrowRefundGateway,
   WalletPort,
 } from "../application/ports";
@@ -37,7 +37,7 @@ import {
   FakeWallet,
   FakeKycStore,
   FakeKycPendingStore,
-  FakePayoutGateway,
+  FakePayoutGateway, FakeConnectedWallet, // WKH-354: `FakeConnectedWallet` EN ESTA LÍNEA — `:87` (`const payouts`) se cita por número desde 3 sitios y está debajo de este bloque
   FakeRefundGateway,
   FixedClock,
   SeqIds,
@@ -66,7 +66,7 @@ export interface TestContainerOverrides {
   // seteaba el override, así que la línea nunca corría y nadie la podía ver mal. Un ejemplo
   // equivocado esperando a que alguien lo copie. Los tests del cierre montan el use-case con el probe
   // que corresponda (`escrow-rent-recovery.test.tsx` usa el adapter real contra el bridge).
-  solanaCloseableEscrows?: SolanaCloseableEscrowLister; solanaEscrowStates?: SolanaEscrowChainStateReader; // WKH-349: EN ESTA LÍNEA (`:87` se cita por número). Misma disciplina que sus dos vecinos: sin override queda UNDEFINED ⇒ el historial NO pregunta nada a la cadena y dice el copy de siempre
+  solanaCloseableEscrows?: SolanaCloseableEscrowLister; solanaEscrowStates?: SolanaEscrowChainStateReader; connectedWallet?: ConnectedWalletProbe; // WKH-349: EN ESTA LÍNEA (`:87` se cita por número). Misma disciplina que sus dos vecinos: sin override queda UNDEFINED ⇒ el historial NO pregunta nada a la cadena y dice el copy de siempre. WKH-354: `connectedWallet` entra ACÁ por lo mismo; su default NO es undefined sino `new FakeConnectedWallet(null)` = "no hay ninguna billetera conectada", que es el estado real de un test que no montó ningún árbol
   clock?: Clock; // default: new FixedClock()
   // Repo COMPARTIDO por todos los use-cases (default: new InMemoryRepo()). Se inyecta para poder
   // SEMBRARLO antes de renderizar: es la única forma de testear el historial, que por definición
@@ -133,6 +133,14 @@ export function buildTestContainer(o: TestContainerOverrides = {}): Container {
       : undefined,
     solanaCloseableEscrows: o.solanaCloseableEscrows,
     solanaEscrowStates: o.solanaEscrowStates, // WKH-349: undefined ⇒ el historial no consulta la cadena
+    // WKH-354/CD-13. El default es `new FakeConnectedWallet(null)` y NADA MÁS. Está PROHIBIDO
+    // escribir `{ getConnectedAddress: () => wallet.getAddress() }`: es el CACHE de `connect()`, o
+    // sea "la respuesta equivocada que compila" que el docblock de `ConnectedWalletProbe` nombra, y
+    // este mismo archivo ya cuenta más arriba (en el bloque de `solanaClose`) que esa forma vivió
+    // acá, muerta, esperando a que alguien la copiara. `null` significa "no hay ninguna billetera
+    // conectada", que es exactamente el estado de un test que no montó el árbol de providers. Un
+    // test que quiera una cuenta viva la inyecta.
+    connectedWallet: o.connectedWallet ?? new FakeConnectedWallet(null),
   };
   return { ...base, ...(o.useCases ?? {}) };
 }

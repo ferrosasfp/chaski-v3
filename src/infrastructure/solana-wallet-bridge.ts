@@ -38,7 +38,7 @@ type SignMessageFn = (message: Uint8Array) => Promise<Uint8Array>;
 class SolanaWalletBridge {
   private state: SolanaWalletState = { publicKey: null, connected: false };
   private availability: SolanaWalletAvailability = "unknown";
-  private availabilityListeners = new Set<() => void>();
+  private availabilityListeners = new Set<() => void>(); private stateListeners = new Set<() => void>(); // WKH-354/AC-1: EN ESTA LÍNEA, no en una nueva — `:127` y `:146-150` de este archivo los citan por número desde otros 4 sitios y están TODOS debajo de acá
   private openModalHandle: OpenModalFn | null = null;
   private signTxHandle: SignTransactionFn | null = null;
   private signMsgHandle: SignMessageFn | null = null;
@@ -48,7 +48,7 @@ class SolanaWalletBridge {
 
   /** El sync component lo llama en cada cambio de useWallet(). Resuelve la espera si conectó. */
   setState(next: SolanaWalletState): void {
-    this.state = next;
+    const cambio = this.state.publicKey !== next.publicKey || this.state.connected !== next.connected; this.state = next; if (cambio) for (const listener of this.stateListeners) listener(); // WKH-354/AC-1: TODO EN ESTA LÍNEA — el guard "sin cambio no notifico" es el mismo de `setWalletAvailability` (`:65`) y evita el loop de render
     if (next.connected && next.publicKey) this.settle();
   }
 
@@ -190,6 +190,23 @@ class SolanaWalletBridge {
     this.pendingTimer = null;
     this.pendingResolve = null;
     this.pendingReject = null;
+  }
+
+  /** WKH-354/AC-1 · Suscripción para `useSyncExternalStore`. Mismo contrato que
+   *  `subscribeWalletAvailability` (`:78-83`): devuelve el desuscriptor. Existe porque la cuenta
+   *  activa de la wallet cambia SIN que la app haga nada, y hasta acá el bridge sólo se podía LEER
+   *  (`getState()`), no ESCUCHAR: nadie en React se enteraba. Prohibido resolver esto con
+   *  `setInterval` (CD-7): el dato ya llega por evento desde `useWallet()`.
+   *
+   *  ⚠️ `reset()` (`:173-180`) escribe `this.state` DIRECTO, sin pasar por `setState`, así que NO
+   *  notifica a estos listeners. Es deliberado (`reset()` es test-only y su docblock ya avisa que
+   *  tampoco vacía los listeners). Un test que quiera ver a un suscriptor volver a `null` tiene que
+   *  llamar `setState({ publicKey: null, connected: false })`, no `reset()`. */
+  subscribeState(listener: () => void): () => void {
+    this.stateListeners.add(listener);
+    return () => {
+      this.stateListeners.delete(listener);
+    };
   }
 }
 

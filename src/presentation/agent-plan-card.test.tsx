@@ -369,7 +369,7 @@ describe("el precio dice qué es y quién lo cobraría", () => {
   // regresión. Por eso todo lo que compara notas compara ESTE nodo.
   function textoDeLaNota(): string {
     const nodos = screen.getAllByText(/publican en el catálogo/);
-    // La tarjeta se monta en DOS pantallas (`AgentPlanCard`, `flow.tsx:1031` en `review` y `flow.tsx:1077`
+    // La tarjeta se monta en DOS pantallas (`AgentPlanCard`, `flow.tsx:1037` en `review` y `flow.tsx:1083`
     // en `confirm`) y `verLaTarjeta` para en `review`, así que hoy hay UN nodo. Un `cleanup()` olvidado
     // entre dos renders del mismo `it` deja DOS, y sin este assert se compararía la nota del render
     // ANTERIOR y el test daría verde por el DOM equivocado. Es el riesgo que este archivo ya declara en

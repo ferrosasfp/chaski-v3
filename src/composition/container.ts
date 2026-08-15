@@ -290,7 +290,7 @@ export function getContainer(): Container {
 // `setInterval`, y su aritmética de 400 popups no cambió en un solo dígito. Lo que ahora convive con
 // ellos es un CUARTO call-site **del cliente**: **el gateway no puede pedir una firma; la persona sí,
 // y sólo sobre su propio gesto** — un toque explícito, y **≤ 3 por MONTAJE del seguimiento, CONTADOS**
-// (`MAX_CHALLENGES_POR_MONTAJE`, `../presentation/flow.tsx:1349`), contra los 400 automáticos del ingenuo.
+// (`MAX_CHALLENGES_POR_MONTAJE`, `../presentation/flow.tsx:1355`), contra los 400 automáticos del ingenuo.
 // ⛔ Esos cuatro docblocks NO se relajaron ni se les borró una palabra de la aritmética: los cuatro
 // archivos son NO-TOUCH y tienen líneas citadas por número, así que agregarles esta distinción in situ
 // las habría desplazado. Vive acá, y acá es donde hay que buscarla.

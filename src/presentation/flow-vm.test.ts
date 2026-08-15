@@ -2140,7 +2140,7 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
   // cambio de program address (ya pasó acá, commit `89628d8`), el cutover a mainnet, o una
   // `NEXT_PUBLIC_SOLANA_RPC_URL` mal apuntada harían que la pantalla le dijera a alguien que no hay
   // nada que recuperar sobre una fila donde SÍ lo hay, apagándole (`LostEscrowRecovery`,
-  // `flow.tsx:884`), que es la puerta que le queda. Argumento largo en el docblock de
+  // `flow.tsx:890`), que es la puerta que le queda. Argumento largo en el docblock de
   // (`escrowOutcomeDisplay`, `flow-vm.ts:1251`).
   //
   // MUTANTE MEDIDO: reponer esa media frase en `flow-vm.ts:1267`. Aplicado y medido: T-W10 se pone
@@ -2202,7 +2202,7 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
   //   (2) la tercera posibilidad decía "siga abierta en un contrato que no estamos mirando", y ése es
   //       justo el lugar donde el más plausible de los cuatro disparadores NO la pone: si el depósito
   //       lo firmó otra cuenta de la wallet, la cuenta vive en ESTE MISMO programa con otro sender, y
-  //       (`LostEscrowRecovery`, `flow.tsx:2172`) la encuentra porque resuelve por sender. Mandar a un
+  //       (`LostEscrowRecovery`, `flow.tsx:2178`) la encuentra porque resuelve por sender. Mandar a un
   //       "otro contrato" es mandar a la persona al único lugar donde no hay nada que buscar.
   //
   // MUTANTE MEDIDO: reponer en `flow-vm.ts:1267` la frase vieja ("Y en el contrato que estamos

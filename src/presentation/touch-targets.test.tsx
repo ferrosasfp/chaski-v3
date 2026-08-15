@@ -6,9 +6,9 @@
 // alto propio: el área tocable era el alto de la línea de texto (~20 px con `text-sm`, ~16 px con
 // `text-xs`), contra los 52 px que el CTA del camino feliz ya tenía. Tres de esos seis son las ÚNICAS
 // puertas para recuperar plata:
-//   · "Ver mis envíos"                                    (`flow.tsx:876`)
-//   · "Recuperar un envío perdido"                        (`flow.tsx:2309`)
-//   · "Recuperar el depósito de red de envíos anteriores"  (`flow.tsx:2459`)
+//   · "Ver mis envíos"                                    (`flow.tsx:882`)
+//   · "Recuperar un envío perdido"                        (`flow.tsx:2315`)
+//   · "Recuperar el depósito de red de envíos anteriores"  (`flow.tsx:2465`)
 // Y otros tres viven apretados en una fila del header, uno de ellos destructivo:
 //   · "Borrar igual" (borra los datos locales)             (`flow.tsx:694`)
 //   · "Cancelar"                                           (`flow.tsx:701`)
@@ -102,7 +102,7 @@ function puertasDeRecuperarPlata(): Array<{ nombre: string; el: HTMLElement }> {
 describe("T-341-3 (AC-2): las tres puertas de recuperar plata declaran alto de toque", () => {
   it("las tres declaran min-h de 52 px o más", () => {
     // INPUT QUE LO PONE EN ROJO: borrarle la clase `min-h-[52px]` a cualquiera de las tres
-    // (`className`, `flow.tsx:876`), (`className`, `flow.tsx:2309`), (`className`, `flow.tsx:2459`)
+    // (`className`, `flow.tsx:882`), (`className`, `flow.tsx:2315`), (`className`, `flow.tsx:2465`)
     // ⇒ `minHpx` no matchea ⇒ throw con el nombre del control.
     //
     // El ancla es `className` porque es el ÚNICO símbolo de esas líneas, y eso acota lo que compra:

@@ -34,7 +34,13 @@ export function Button({
   return (
     <button
       className={cn(
-        "inline-flex h-[52px] w-full items-center justify-center gap-2 rounded-xl2 px-5 text-[15px] font-semibold transition-[transform,background-color] active:scale-[0.99] disabled:pointer-events-none disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cochineal",
+        // ⛔ `h-[52px]` SE ESCRIBE ASÍ Y NO CON UN TOKEN. `touch-targets.test.tsx` lo lee con una
+        // expresión regular sobre el `className` RENDERIZADO (`h-\[(\d+)px\]`, `touch-targets.test.tsx:64`)
+        // y usa ese número como la referencia contra la que mide las tres puertas de recuperar plata.
+        // Un `h-cta` del tema se vería igual en pantalla y dejaría ese candado sin nada que leer.
+        // `px-5` (20px) también se queda: la escala de S-4 tiene 8/12/16/24 y ninguno vale 20, así que
+        // migrarlo movería el ancho del CTA. Migrar no es redondear.
+        "inline-flex h-[52px] w-full items-center justify-center gap-ajustado rounded-caja px-5 text-body font-semibold transition-[transform,background-color] active:scale-[0.99] disabled:pointer-events-none disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cochineal",
         BTN_VARIANTS[variant],
         className,
       )}
@@ -45,7 +51,10 @@ export function Button({
 
 export function Card({ className, children }: { className?: string; children: ReactNode }) {
   return (
-    <div className={cn("rounded-xl2 border border-line bg-card p-5 shadow-card", className)}>
+    // `p-5` (20px) NO se migra: la escala de S-4 no tiene ese valor y el paso más cercano hacia
+    // abajo (`holgado`, 16px) angostaría 4px cada tarjeta de la app. La superficie sí se migra:
+    // `caja` vale exactamente lo mismo que `xl2` (S-4), así que el radio no se mueve un pixel.
+    <div className={cn("rounded-caja border border-line bg-card p-5 shadow-card", className)}>
       {children}
     </div>
   );
@@ -66,9 +75,17 @@ export function Field({
     // verlo porque `children` es opaco en analisis estatico.
     // biome-ignore lint/a11y/noLabelWithoutControl: el control llega por `children` (ver arriba).
     <label className="block">
-      <span className="mb-1.5 block text-sm font-medium text-stone">{label}</span>
+      {/* La etiqueta de un campo es el caso textual de `label` en S-1 ("etiquetas, píldoras,
+          encabezados de fila"), y acá el cambio de rol es DELIBERADO y se ve: 14px → 12px. Es la
+          contrapartida de M-2 — la etiqueta encoge para que la cifra pueda crecer sin que las dos
+          compitan. `mb-ajustado` (8px) sí es un cambio de valor (era 6px): la escala no tiene 6. */}
+      <span className="mb-ajustado block text-label font-medium text-stone">{label}</span>
       {children}
-      {hint ? <span className="mt-1 block text-xs text-stone">{hint}</span> : null}
+      {hint ? (
+        <Muted as="span" escala="label" className="mt-ajustado block">
+          {hint}
+        </Muted>
+      ) : null}
     </label>
   );
 }
@@ -77,7 +94,10 @@ export function TextInput({ className, ...props }: InputHTMLAttributes<HTMLInput
   return (
     <input
       className={cn(
-        "h-12 w-full rounded-xl border border-line bg-card px-3.5 text-[15px] text-ink outline-none transition-colors placeholder:text-stone/60 focus:border-cochineal",
+        // `rounded-xl` → `rounded-control`: los DOS valen 0.75rem, así que la migración es exacta.
+        // Y es el radio que S-4 le corresponde por posición: una entrada va SIEMPRE adentro de una
+        // superficie, nunca apoyada sobre el fondo de la pantalla.
+        "h-12 w-full rounded-control border border-line bg-card px-3.5 text-body text-ink outline-none transition-colors placeholder:text-stone/60 focus:border-cochineal",
         className,
       )}
       {...props}
@@ -88,8 +108,14 @@ export function TextInput({ className, ...props }: InputHTMLAttributes<HTMLInput
 export function Row({ label, value, accent }: { label: string; value: ReactNode; accent?: boolean }) {
   return (
     <div className="flex items-baseline justify-between py-1.5">
-      <span className="text-sm text-stone">{label}</span>
-      <span className={cn("tabular text-[15px] font-semibold", accent ? "text-verde" : "text-ink")}>
+      <Muted as="span" escala="label">
+        {label}
+      </Muted>
+      {/* ⚠️ `tabular-nums` Y NO LA CLASE `.tabular`. `.tabular` era CSS escrito a mano en
+          `app/globals.css` que hacía exactamente lo que la utilidad de fábrica: no era un token, era
+          una regla suelta que ningún tema conocía, así que `cn` no podía resolverla contra nada y
+          `tailwind-merge` la dejaba pasar junto a cualquier cosa. Este es uno de sus 11 sitios. */}
+      <span className={cn("tabular-nums text-body font-semibold", accent ? "text-verde" : "text-ink")}>
         {value}
       </span>
     </div>
@@ -113,7 +139,8 @@ export function Pill({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold",
+        // `rounded-full` no entra en la escala de S-4: no es un valor, es una forma. Se queda.
+        "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-label font-semibold",
         PILL[tone],
       )}
     >
@@ -228,10 +255,10 @@ export function Aviso({
  * LA MONEDA VA EN PESO MENOR QUE LA CIFRA porque el dato es el número: "S/" no cambia entre
  * pantallas y el número sí. Al mismo peso, los dos compiten y ninguno gana.
  *
- * ⚠️ USA `tabular-nums` DE TAILWIND Y NO LA CLASE `.tabular`. `.tabular` es CSS escrito a mano en
- * `app/globals.css` (11 usos en 40f0b68) que hace exactamente lo que la utilidad de fábrica: no es
- * un token, es una regla suelta que ningún tema conoce. Se deja en su lugar porque los 11 sitios se
- * mueven en la ola 2; lo que NO se hace es sumarle un uso nuevo desde acá.
+ * ⚠️ USA `tabular-nums` DE TAILWIND Y NO LA CLASE `.tabular`. `.tabular` era CSS escrito a mano en
+ * `app/globals.css` (11 usos en 40f0b68) que hacía exactamente lo que la utilidad de fábrica: no era
+ * un token, era una regla suelta que ningún tema conocía. ✅ La ola 2 movió los 11 sitios y BORRÓ la
+ * regla de `globals.css`, así que hoy no queda ninguna forma de escribirlo a mano.
  *
  * Por qué importa que las cifras sean de ancho fijo: en `track` el monto se actualiza en el lugar, y
  * con cifras de ancho variable el número entero se corre de costado en cada refresco.

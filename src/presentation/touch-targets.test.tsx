@@ -56,7 +56,7 @@ function minHpx(el: HTMLElement): number {
   return Number(m[1]);
 }
 
-/** El px del CTA del camino feliz, leído del `<Button>` REALMENTE renderizado (`ui.tsx:37`). Es un
+/** El px del CTA del camino feliz, leído del `<Button>` REALMENTE renderizado (`ui.tsx:43`). Es un
  *  `h-` fijo, no un `min-h-`: ese control ya cumplía y esta HU no lo toca (CD-4), sólo lo lee. */
 function pxDelCtaDelCaminoFeliz(): number {
   const { unmount } = render(<Button>referencia</Button>);
@@ -122,7 +122,7 @@ describe("T-341-4 (AC-2): el 52 no está escrito a mano, sale del CTA del camino
     // volverían a ser las más chicas de la pantalla y el `>= 52` seguiría verde. Este test ata la
     // relación en vez del número.
     //
-    // INPUT QUE LO PONE EN ROJO: subir el `h-[52px]` de `ui.tsx:37` a `h-[56px]` sin tocar las tres.
+    // INPUT QUE LO PONE EN ROJO: subir el `h-[52px]` de `ui.tsx:43` a `h-[56px]` sin tocar las tres.
     const referencia = pxDelCtaDelCaminoFeliz();
     expect(referencia).toBeGreaterThan(0);
     for (const { nombre, el } of puertasDeRecuperarPlata()) {

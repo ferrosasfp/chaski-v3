@@ -18,10 +18,12 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* montos: cifras alineadas */
-.tabular {
-  font-variant-numeric: tabular-nums;
-}
+/* 🔴 ACÁ VIVÍA `.tabular` (ola 2 de rediseño · M-1), y no se borra por prolijidad. Era CSS escrito a
+   mano que hacía exactamente lo que `tabular-nums` de fábrica, con una diferencia que sí importa:
+   `tailwind-merge` no la conocía, así que `cn("tabular", "tabular-nums")` devolvía LAS DOS y ningún
+   token del tema podía pisarla. Sus 11 sitios (10 en `flow.tsx`, 1 en `ui.tsx`) pasaron a la utilidad
+   de fábrica y la regla se fue con ellos. Que no quede ninguno lo verifica `ola-2-pantallas.test.tsx`
+   leyendo el árbol, no este comentario. */
 
 /* Señal de "esto está en curso" que NO se apoya en movimiento: la opacidad late, nada rota ni se
    traslada. Existe sólo para el bloque de abajo. */

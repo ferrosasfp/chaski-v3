@@ -768,7 +768,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                       value={amount}
                       onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))}
                       inputMode="decimal"
-                      className="tabular w-full bg-transparent text-4xl font-extrabold tracking-heading outline-none"
+                      className="tabular-nums w-full bg-transparent text-4xl font-extrabold tracking-heading outline-none"
                       aria-label="Monto en dólares"
                     />
                   </div>
@@ -787,7 +787,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                 ) : null}
                 <div className="mt-4 rounded-xl bg-verde-bg px-4 py-3">
                   <p className="text-xs font-medium text-verde/80">Tu familia recibe</p>
-                  <p className="tabular text-2xl font-extrabold text-verde">
+                  <p className="tabular-nums text-2xl font-extrabold text-verde">
                     {preview ? preview.receive.format() : "—"}
                   </p>
                   {/* "llega en ~N min" prometía una entrega que este sistema no puede cumplir hoy: la
@@ -903,7 +903,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                 </div>
                 <div className="rounded-xl bg-verde-bg px-4 py-2.5 text-left">
                   <p className="text-xs text-verde/80">Vas a enviar</p>
-                  <p className="tabular text-lg font-extrabold text-verde">
+                  <p className="tabular-nums text-lg font-extrabold text-verde">
                     {rem ? rem.sendUsd.format() : "—"}{" "}
                     <span className="text-sm font-medium">en Solana {resolveSolanaNetworkConfig().cluster}</span>
                   </p>
@@ -1006,7 +1006,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                 </div>
                 <div className="mb-3 rounded-xl bg-sand px-4 py-3 text-center">
                   <p className="text-xs text-stone">{rem.beneficiary.name} recibe</p>
-                  <p className="tabular text-3xl font-extrabold text-verde">
+                  <p className="tabular-nums text-3xl font-extrabold text-verde">
                     {rem.quote.receive.format()}
                   </p>
                 </div>
@@ -1044,7 +1044,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                 </div>
                 <div className="mb-3 rounded-xl bg-sand px-4 py-3 text-center">
                   <p className="text-xs text-stone">{rem.beneficiary.name} recibe</p>
-                  <p className="tabular text-3xl font-extrabold text-verde">
+                  <p className="tabular-nums text-3xl font-extrabold text-verde">
                     {rem.quote.receive.format()}
                   </p>
                 </div>
@@ -2505,7 +2505,7 @@ function PayoutInProgress({ rem }: { rem: RemittanceState }) {
     <div className="space-y-3">
       <div className="rounded-xl bg-sand px-4 py-3 text-center">
         <p className="text-xs text-stone">{rem.beneficiary.name} va a recibir</p>
-        <p className="tabular text-3xl font-extrabold text-verde">
+        <p className="tabular-nums text-3xl font-extrabold text-verde">
           {rem.quote ? rem.quote.receive.format() : "—"}
         </p>
         <p className="mt-1 text-xs text-stone">
@@ -2673,7 +2673,7 @@ function AgentPlanCard() {
           <div key={s.capability} className="rounded-lg border border-line px-3 py-2">
             <div className="flex items-baseline justify-between gap-2">
               <span className="text-sm font-medium">{s.label}</span>
-              <span className="tabular text-sm">
+              <span className="tabular-nums text-sm">
                 {s.agent?.priceUsdc != null ? `${s.agent.priceUsdc} USDC` : "sin precio publicado"}
               </span>
             </div>
@@ -2693,7 +2693,7 @@ function AgentPlanCard() {
       </div>
       <div className="mt-3 flex items-baseline justify-between">
         <span className="text-xs text-stone">Precio publicado en el catálogo</span>
-        <span className="tabular text-sm font-semibold">{plan.totalUsdc} USDC</span>
+        <span className="tabular-nums text-sm font-semibold">{plan.totalUsdc} USDC</span>
       </div>
       {/* La nota se elige leyendo LOS DOS legs, porque habla del número, y el número suma los steps con
           precio publicado. La regla es "sólo se afirma lo que la pata garantiza": si la ENTREGA no
@@ -3221,7 +3221,7 @@ function HistoryEntry({
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-sm font-semibold">{rem.beneficiary.name}</p>
-            <p className="tabular text-xs text-stone">
+            <p className="tabular-nums text-xs text-stone">
               {rem.sendUsd.format()} · {formatEntryDate(rem.createdAt)}
             </p>
           </div>
@@ -3279,7 +3279,7 @@ export function Receipt({ rem, onNew }: { rem: RemittanceState; onNew: () => voi
         <p className="text-sm text-stone">
           {rem.beneficiary.name} {confirmed ? "recibió" : "tiene que recibir"}
         </p>
-        <p className={cn("tabular text-4xl font-extrabold", confirmed ? "text-verde" : "text-ink")}>
+        <p className={cn("tabular-nums text-4xl font-extrabold", confirmed ? "text-verde" : "text-ink")}>
           {amount ? amount.format() : "—"}
         </p>
         <p className="mt-1 text-xs text-stone">en su {methodLabel(rem.beneficiary.method)}</p>

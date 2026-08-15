@@ -360,7 +360,7 @@ describe("WKH-350 · el historial se reparte en 4 secciones y no pierde nada por
 //
 // 🔴 EL CANDADO TIENE DOS MITADES Y DOS CONTROLES, Y NINGUNA SOBRA:
 //   (b) ESTRUCTURAL — dentro del grupo no hay ningún `span.rounded-full`, que es la forma del `Pill`
-//       (`ui.tsx:116`). Mata: restaurar `<Pill tone={status.tone}>{status.label}</Pill>`, y TAMBIÉN
+//       (`ui.tsx:143`). Mata: restaurar `<Pill tone={status.tone}>{status.label}</Pill>`, y TAMBIÉN
 //       una etiqueta nueva con texto propio (`<Pill tone="neutral">Trámite</Pill>`), que (c) NO caza.
 //   (c) SEMÁNTICA — ninguna de las 7 etiquetas de `statusDisplay` aparece dentro del `textContent` del
 //       grupo, COMO SUBSTRING. Mata: pintar `status.label` SIN Pill, en un `<span className="text-xs">`,
@@ -368,7 +368,7 @@ describe("WKH-350 · el historial se reparte en 4 secciones y no pierde nada por
 //       `queryAllByText` con el que nació esta mitad dejaba pasar verde. Cada mitad mata un mutante que
 //       la otra deja pasar.
 //   ctrl-1 — el MISMO selector de (b) encuentra exactamente 1 Pill en el `Receipt`. Sin esto, si
-//       `ui.tsx:116` dejara de usar `rounded-full`, (b) sería VACUAMENTE verde para siempre.
+//       `ui.tsx:143` dejara de usar `rounded-full`, (b) sería VACUAMENTE verde para siempre.
 //   ctrl-2 — el conjunto de (c) tiene 7 etiquetas y ninguna vacía. Sin esto, un `statusDisplay`
 //       mutado a `label: ""` dejaría a (c) buscando cadenas vacías y verde con cualquier cosa.
 //   Los dos controles existen porque UNA ASERCIÓN DE AUSENCIA ES VERDE POR DEFECTO: hay que probar

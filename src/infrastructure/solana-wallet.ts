@@ -11,7 +11,7 @@ import { PublicKey } from "@solana/web3.js";
 import type {
   Connection as Web3Connection,
   Transaction as Web3Transaction,
-  TransactionInstruction,
+  TransactionInstruction, TransactionError, // WKH-353: `TransactionError` va EN ESTA LÍNEA y no en una nueva, por la misma razón que ya está escrita dos veces más abajo: una línea nueva acá arriba rota TODAS las citas ancladas que este archivo recibe
 } from "@solana/web3.js";
 import type { Idl, Provider } from "@coral-xyz/anchor";
 import type {
@@ -349,7 +349,7 @@ export class SolanaWalletAdapter
   // MAX_RECOVERY_CANDIDATES envíos de la persona en los tres casos en que no se preguntó nada.
   // Ahora se consume `lookupBySender`, que las separa, y los tres `not_asked` salen por un código
   // propio. La CUARTA sigue saliendo por `escrow_not_found`, a propósito: ahí el servidor sí contestó
-  // y la frase de la pantalla es cierta. Espeja a (`listCloseable`, `:1454`), que ya hacía esto.
+  // y la frase de la pantalla es cierta. Espeja a (`listCloseable`, `:1446`), que ya hacía esto.
   private async resolveRemittanceIdFromLedger(senderB58: string): Promise<string> {
     const resolver = this.remittanceIdResolver;
     // Mismo guard que `listCloseable`: sin el método no se adivina, y un doble de JS que no lo tenga
@@ -1021,7 +1021,6 @@ export class SolanaWalletAdapter
     // el blockhash vence antes de que la tx entre en un bloque (común en devnet), la tx se cae y los
     // USDC siguen en el vault. Preguntar es obligatorio ANTES de afirmar nada.
     const confirmation = await this.confirmRefund(connection, escrowStatePda, signature, {
-      blockhash,
       lastValidBlockHeight,
       coder,
     });
@@ -1036,8 +1035,7 @@ export class SolanaWalletAdapter
     escrowStatePda: InstanceType<typeof PublicKey>,
     signature: string,
     ctx: {
-      blockhash: string; // ⚠️ WKH-353: la confirmación YA NO lo consume; el vencimiento se decide por ALTURA, no por blockhash. Queda como superficie muerta DECLARADA, y el motivo que estaba escrito acá ("sacarlo desplazaría las citas ancladas que apuntan a `confirmRefund`") NO es el motivo: ese costo esta misma HU lo pagó diez veces al re-anclar, así que no puede ser lo que frena un borrado. El motivo real, dicho porque es peor: un sistema de citas por NÚMERO DE LÍNEA desincentiva borrar código muerto, porque cada borrado cobra una ronda de re-anclado que el que borra no eligió. El incentivo empuja a acumular superficie muerta, y este campo es el ejemplo vivo.
-      lastValidBlockHeight: number;
+      lastValidBlockHeight: number; // WKH-353: el vencimiento se decide por ALTURA. Acá había además un `blockhash` que nadie consumía; se borró.
       coder: { decode(name: string, data: Buffer): unknown };
     },
   ): Promise<EscrowRefundConfirmation> {
@@ -1045,7 +1043,7 @@ export class SolanaWalletAdapter
     try {
       // WKH-353: preguntamos por HTTP en vez de suscribirnos. `confirmTransaction` abría SIEMPRE un
       // `signatureSubscribe`, el RPC contesta `-32601`, y la espera se consumía entera sin producir
-      // ningún veredicto. El techo sigue siendo UNO y sigue siendo el mismo: ver `awaitSignatureVerdict`, `:1750`.
+      // ningún veredicto. El techo sigue siendo UNO y sigue siendo el mismo: ver `awaitSignatureVerdict`, `:1736`.
       const verdict = await withTimeout(
         this.awaitSignatureVerdict(connection, signature, {
           lastValidBlockHeight: ctx.lastValidBlockHeight,
@@ -1060,13 +1058,9 @@ export class SolanaWalletAdapter
       // ausente, RPC caído. Un blockhash vencido prueba que la tx no puede entrar DE ACÁ EN ADELANTE,
       // NO que no haya entrado antes ⇒ hay que ir a mirar el estado autoritativo.
       //
-      // WKH-353 — el puente hacia los tres desenlaces con nombre, SIN reemplazar una palabra de las
-      // tres líneas de arriba: el `expired` de `SignatureVerdict`, `:1831` ES ese blockhash vencido,
-      // con nombre propio. Sigue yendo a la sonda por la misma razón de arriba: prueba que la tx no
-      // puede entrar DE ACÁ EN ADELANTE, NO que no haya entrado antes. `unseen` es otra cosa y va al
-      // mismo lugar: se nos acabó el tiempo de preguntar, y es el que llega hasta acá abajo como
-      // excepción "confirm_timeout". Colapsar los dos en un booleano vuelve a perder la distinción
-      // que estas líneas existen para no perder.
+      // WKH-353 — el mapeo a los desenlaces con nombre: el `expired` de `SignatureVerdict`, `:1812` ES
+      // ese blockhash vencido, y `unseen` es que se nos acabó el tiempo de preguntar, el que llega
+      // hasta acá abajo como excepción "confirm_timeout". Por qué NO colapsarlos: está en el tipo.
       reverted = err instanceof RefundTxReverted;
     }
     // Fuente autoritativa: el propio EscrowState. `refund` NO cierra la cuenta (eso lo hace la ix
@@ -1120,7 +1114,7 @@ export class SolanaWalletAdapter
    * que llama a `resolveRemittanceIdFromLedger`, `:353`) elige UNO entre N y actúa sobre él, porque
    * "recuperar mis USDC" tiene un objetivo natural — el escrow que todavía tiene plata. Para `close` no
    * existe ese "el": todos los terminales son igual de cerrables, y elegir uno en silencio le cerraría
-   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1454`) devuelve la
+   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1446`) devuelve la
    * LISTA y elige ella.
    *
    * ⚠️ POR QUÉ EL LISTER NO TIENE GATEWAY Y EL CIERRE SÍ (apartamiento declarado del SDD §4.1/§4.2,
@@ -1250,7 +1244,6 @@ export class SolanaWalletAdapter
     const signature = await connection.sendRawTransaction(signed.serialize());
 
     const confirmation = await this.confirmClose(connection, escrowStatePda, signature, {
-      blockhash,
       lastValidBlockHeight,
     });
     return { closeTx: signature, confirmation };
@@ -1339,10 +1332,10 @@ export class SolanaWalletAdapter
    * ¿Entró el `close`? Devuelve el tri-estado y TIRA `close_tx_failed` sólo cuando medimos que la tx
    * entró y revirtió Y la cuenta sigue ahí.
    *
-   * ⚠️ DOS DIVERGENCIAS DELIBERADAS respecto de `confirmRefund`, `:1034`. Están escritas acá para
+   * ⚠️ DOS DIVERGENCIAS DELIBERADAS respecto de `confirmRefund`, `:1033`. Están escritas acá para
    * que nadie las "armonice" de vuelta en un code review:
    *
-   * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`confirmRefund`, `:1034`), SIN leer nada.
+   * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`confirmRefund`, `:1033`), SIN leer nada.
    *    Éste NO puede: AC-5 exige que el alquiler volvió se afirme *sólo después de leer que la cuenta
    *    ya no existe*. Un veredicto `landed` sin `err` —lo que WKH-353 puso en el lugar del
    *    `confirmTransaction` que este docblock nombraba acá— prueba que la tx ENTRÓ; leer la ausencia
@@ -1357,12 +1350,11 @@ export class SolanaWalletAdapter
     connection: Web3Connection,
     escrowStatePda: InstanceType<typeof PublicKey>,
     signature: string,
-    ctx: { blockhash: string; lastValidBlockHeight: number },
+    ctx: { lastValidBlockHeight: number },
   ): Promise<EscrowRefundConfirmation> {
     let reverted = false;
     try {
-      // WKH-353, igual que en `confirmRefund`, `:1034`: por HTTP y sin suscripción. El `ctx.blockhash`
-      // ya no se consume acá tampoco, y se conserva por la misma razón escrita allá.
+      // WKH-353, igual que en `confirmRefund`, `:1033`: por HTTP y sin suscripción.
       const verdict = await withTimeout(
         this.awaitSignatureVerdict(connection, signature, {
           lastValidBlockHeight: ctx.lastValidBlockHeight,
@@ -1407,9 +1399,9 @@ export class SolanaWalletAdapter
    * puede volver a cerrar; lo que se pierde es exactitud del mensaje durante esa ventana.
    *
    * 🔴 **No se pudo verificar** contra un RPC real que un `getAccountInfo(pda,"confirmed")` inmediatamente
-   * posterior a un veredicto `landed` de `awaitSignatureVerdict`, `:1750` vea el efecto. (WKH-353 cambió
+   * posterior a un veredicto `landed` de `awaitSignatureVerdict`, `:1736` vea el efecto. (WKH-353 cambió
    * QUIÉN aplica el gate de commitment, no que se aplique: lo aplicaba `confirmTransaction`, que ya no
-   * está en este archivo, y hoy lo aplica `leerEstado`, `:1758`.) Ningún doble de test puede matar el
+   * está en este archivo, y hoy lo aplica `leerEstado`, `:1744`.) Ningún doble de test puede matar el
    * mutante que borra este argumento: el mock ignora el segundo parámetro y devuelve lo mismo con o sin
    * él. Su detección es del code review, y el único input que lo probaría es un `close` real contra
    * devnet.
@@ -1524,7 +1516,7 @@ export class SolanaWalletAdapter
    * pantalla de historial, para las filas cuyo desenlace el snapshot local no puede afirmar.
    *
    * 🔴 NO FIRMA NADA, Y ESA RESTRICCIÓN ES LA QUE DECIDE SU FORMA. No se reusan
-   * (`resolveRemittanceIdFromLedger`, `:353`) ni (`listCloseable`, `:1454`), que hacen el MISMO
+   * (`resolveRemittanceIdFromLedger`, `:353`) ni (`listCloseable`, `:1446`), que hacen el MISMO
    * derive+batch+decode, porque los dos empiezan por `resolver.lookupBySender`, que es
    * PoP-autenticado: reusarlos abriría un diálogo de firma sólo por abrir "Ver mis envíos", y una app
    * que pide firmas por mirar una lista entrena a la gente a firmar cualquier cosa. Se reusa la mitad
@@ -1619,7 +1611,7 @@ export class SolanaWalletAdapter
       try {
         // withTimeout y no un `await` pelado: un RPC que acepta la conexión y no contesta dejaría la
         // fila diciendo "Le estamos preguntando al contrato" para siempre. Es el mismo motivo que en
-        // (`probeEscrowIndex`, `:1294`), y el mensaje "confirm_timeout" que arrastra `withTimeout` no
+        // (`probeEscrowIndex`, `:1287`), y el mensaje "confirm_timeout" que arrastra `withTimeout` no
         // le llega a ninguna persona: acá se convierte en `"unknown"`.
         infos = await withTimeout(
           connection.getMultipleAccountsInfo(pdas),
@@ -1703,45 +1695,39 @@ export class SolanaWalletAdapter
 
   /**
    * WKH-353 — ¿qué dice la cadena de ESTA firma? Devuelve uno de los tres desenlaces de
-   * `SignatureVerdict`, `:1831`, preguntando por HTTP y sin abrir NINGUNA suscripción.
+   * `SignatureVerdict`, `:1812`, preguntando por HTTP y sin abrir NINGUNA suscripción.
    *
    * POR QUÉ NO `connection.confirmTransaction`, que es lo que estaba acá antes. Sus dos estrategias
-   * terminan las dos en `onSignature`, o sea en un `signatureSubscribe` por WebSocket, y el RPC que
-   * usamos contesta `-32601` a ese método. La librería atrapa ese error, lo loguea y devuelve el
-   * estado a 'pending' SIN límite de reintentos (su propio código lo admite con un «TODO: Maybe add
-   * an 'errored' state or a retry limit?»), así que el estado 'subscribed' no llega nunca — y su
-   * respaldo HTTP por `getSignatureStatus` está DETRÁS de esa espera. O sea que ni la suscripción ni
-   * el respaldo de la librería podían producir un veredicto: la espera se consumía entera contra el
-   * techo y no aprendía nada. Las referencias a `@solana/web3.js` 1.98.4 van SIN el formato anclado
-   * del repo a propósito: el candado de citas no escanea `node_modules` y una cita anclada ahí se
-   * pondría roja (lib/index.cjs.js:6553, :6562, :6585, :8383-8410).
+   * terminan en `onSignature`, o sea en un `signatureSubscribe` por WebSocket, y el RPC que usamos
+   * contesta `-32601` a ese método. La librería atrapa ese error y devuelve el estado a 'pending' SIN
+   * límite de reintentos, así que 'subscribed' no llega nunca, y su respaldo HTTP por
+   * `getSignatureStatus` está DETRÁS de esa espera: ni la suscripción ni el respaldo podían producir
+   * un veredicto (@solana/web3.js 1.98.4: lib/index.cjs.js:6553, :6562, :6585, :8383-8410).
    *
    * ⚠️ ESTE MÉTODO NO TIENE TECHO PROPIO, Y ESTE BUCLE NO TERMINA SOLO. Acá decía que "lo corta el
    * `withTimeout`, `:150` del llamador", y es FALSO: ese helper es un `Promise.race` contra un
-   * `setTimeout`, o sea que rechaza LA ESPERA DEL LLAMADOR y no tiene ninguna forma de detener el
-   * trabajo de adentro. Lo que el techo acota es cuánto espera quien llama, no cuánto corre esto.
-   * El bucle de abajo sale por `landed` o porque la altura superó `lastValidBlockHeight`, y con un
-   * `getBlockHeight` que falla de forma sostenida NO SALE POR NINGUNA DE LAS DOS: el `catch` deja la
-   * altura en -1 a propósito (ver el bloque de abajo), y -1 nunca supera nada. Medido: con el RPC de
-   * altura tirando siempre, el llamador se va por techo y el bucle sigue haciendo requests después,
-   * a ~2 por segundo, hasta que el proceso lo tira. Eso es lo que `solana-wallet.confirm-http.test.ts`
-   * llama "huérfano", y su efecto sobre los contadores está escrito ahí.
+   * `setTimeout`, así que rechaza LA ESPERA DEL LLAMADOR sin detener el trabajo de adentro. Con un
+   * `getBlockHeight` que falla de forma sostenida lo que se pierde es LA SALIDA POR VENCIMIENTO, y NO
+   * la salida por `landed`: el bucle lee el estado ANTES de tocar la altura (`leerEstado`, `:1744`) y
+   * devuelve lo que vea. Medido con la altura tirando SIEMPRE y el status apareciendo en el segundo
+   * poll: "confirmed" a los 1.105 ms. Lo inmortal es que fallen LAS DOS (altura caída y estado que
+   * nunca concluye): el `catch` deja la altura en -1 a propósito y -1 nunca supera nada, así que el
+   * llamador se va por techo y el bucle sigue pidiendo a ~2 req/s hasta que el proceso lo tira. Eso
+   * es lo que `solana-wallet.confirm-http.test.ts` llama "huérfano".
    *
-   * POR QUÉ ESE RESIDUO IGUAL ES LA OPCIÓN CORRECTA, con los dos números y no con adjetivos: este
-   * bucle hace 2 req/s (un estado + una altura por vuelta) y bajo rate-limit se frena solo, porque el
-   * cliente HTTP de la librería reintenta el 429 con backoff 500→1000→2000→4000 ms
-   * (lib/index.cjs.js:5054-5076). El mecanismo anterior, contra el mismo RPC que contesta `-32601`,
-   * hacía ~40.000 intentos de suscripción POR SEGUNDO sin ningún backoff (~1.200.000 sobre el techo de
-   * 30 s; medición del AR de esta HU, contra un RPC local, y está anotada junto a
-   * `SIGNATURE_POLL_INTERVAL_MS`, `:1848`), y tenía LOS MISMOS TRES DEFECTOS que este bucle: el techo
-   * del llamador tampoco lo cortaba, por esta misma razón; era inmortal con el RPC de altura caído,
-   * porque su propio bucle de vencimiento hacía `catch` y devolvía -1 (mismo archivo, :6665-6670); y
-   * dejaba un huérfano por reintento. O sea: residuo CONOCIDO Y MEDIDO, cuatro órdenes de magnitud más
-   * barato que el de antes, y NO una regresión de esta HU.
+   * POR QUÉ ESE RESIDUO IGUAL ES LA OPCIÓN CORRECTA: son 2 req/s y bajo rate-limit se frena solo,
+   * porque la librería reintenta el 429 con backoff 500→1000→2000→4000 ms (lib/index.cjs.js:5054-5076).
+   * El mecanismo anterior tenía LOS MISMOS TRES DEFECTOS (el techo del llamador tampoco lo cortaba;
+   * era inmortal con el RPC de altura caído, mismo archivo :6665-6670; dejaba un huérfano por
+   * reintento) y era cuatro órdenes de magnitud más caro: los números y su medición viven UNA sola
+   * vez, al lado de `SIGNATURE_POLL_INTERVAL_MS`, `:1827`.
    *
-   * Un contador o un techo acá adentro serían un segundo reloj que nadie configura y que nadie ve al
-   * leer el llamador; el que quiera matar el huérfano de verdad necesita un `AbortSignal` que cruce
-   * desde el llamador, y eso es una HU con su propio alcance, no una línea acá.
+   * Matar el huérfano exige un `AbortSignal` que cruce desde el llamador, y es una HU con su propio
+   * alcance y no una línea acá: los métodos de `Connection` no aceptan `signal` (`getSignatureStatuses`
+   * toma `SignatureStatusConfig`; `getBlockHeight`, `Commitment | GetBlockHeightConfig`; el único
+   * `abortSignal` de la librería es el de `confirmTransaction`, justo lo que sacamos), así que habría
+   * que entrar por `ConnectionConfig.fetch`, y la `Connection` se construye acá adentro en NUEVE
+   * sitios (`grep -c 'new Connection('`), los nueve con un solo argumento y ninguno con override.
    *
    * ⚠️ LO QUE ESTO NO ARREGLA, dicho para que ningún copy lo prometa: el techo de 30 s, la sonda
    * on-chain y el veredicto "unknown" siguen existiendo exactamente igual. Lo que se elimina es UN
@@ -1775,7 +1761,7 @@ export class SolanaWalletAdapter
       // un bloque y ejecutarse. Es un "no" MEDIDO, el único "no" que este método puede afirmar.
       if (status.err != null) return { kind: "landed", err: status.err };
       // Sin `err` el nivel SÍ importa: "processed" no alcanza. Es el mismo commitment gate que la
-      // librería aplicaba, y los dos llamadores confirman con "confirmed" (`confirmRefund`, `:1034`).
+      // librería aplicaba, y los dos llamadores confirman con "confirmed" (`confirmRefund`, `:1033`).
       const nivel = status.confirmationStatus;
       if (nivel === "confirmed" || nivel === "finalized") return { kind: "landed", err: null };
       return null; // "processed" o ausente ⇒ seguimos preguntando
@@ -1812,43 +1798,35 @@ export class SolanaWalletAdapter
 /**
  * WKH-353 — el resultado de preguntarle a la cadena por una firma, con TRES desenlaces y no dos.
  *
- * Vive acá abajo, después del cierre de la clase, y no arriba con las constantes. La razón está
- * medida y escrita en `:116`: TODAS las citas ancladas que este archivo RECIBE apuntan de `:188`
- * para abajo, y una línea nueva en la cabecera las rota a todas. Acá desplaza cero.
- *
- * ⚠️ `expired` y `unseen` van HOY al mismo lugar —la sonda on-chain— y aun así son dos miembros
- * distintos. PROHIBIDO colapsarlos a un booleano o a un `if (kind !== "landed")`: la distinción que
- * `confirmRefund`, `:1034` explica en prosa —un blockhash vencido prueba que la tx no puede entrar
- * DE ACÁ EN ADELANTE, NO que no haya entrado antes— sólo queda protegida si tiene una rama con
- * nombre propio que haya que BORRAR para perderla. Con un booleano volvemos al estado anterior a
- * esta HU, con más líneas.
- *
- * `unseen` no lo construye ningún lado de este archivo, y eso es correcto: lo produce el
- * `withTimeout`, `:150` del llamador cuando se acaba la espera, y llega al `catch` que ya existía
- * como la excepción "confirm_timeout". El miembro existe para que el tipo NOMBRE ese desenlace, no
- * para que alguien lo devuelva.
+ * ⚠️ NADA MECÁNICO PROTEGE LA DISTINCIÓN ENTRE `expired` Y `unseen`: este párrafo es lo único que hay.
+ * Los tres consumos del veredicto preguntan `verdict.kind`, `:1054` (y `:1055`, `:1364`) por
+ * `"landed"`, así que los otros dos caen por el `else` implícito y ninguna rama los nombra; `unseen`
+ * además no lo construye NADIE (lo produce el `withTimeout`, `:150` del llamador al acabarse la
+ * espera, y llega al `catch` como la excepción "confirm_timeout"). MEDIDO borrando el miembro
+ * `unseen`: `tsc` verde y suite verde, 2075/2075; lo único rojo fue `citas-ancladas.test.ts`, por el
+ * desplazamiento de UNA línea y no por la pérdida, y re-anclando esa cita queda verde también.
+ * Aun así, PROHIBIDO colapsarlos a un booleano o a un `if (kind !== "landed")`: se pierde la
+ * distinción que `confirmRefund`, `:1033` explica en prosa (un blockhash vencido prueba que la tx no
+ * puede entrar DE ACÁ EN ADELANTE, NO que no haya entrado antes).
  */
 type SignatureVerdict =
-  | { readonly kind: "landed"; readonly err: unknown | null } // la firma TIENE status: entró en un bloque
+  | { readonly kind: "landed"; readonly err: TransactionError | null } // la firma TIENE status: entró en un bloque
   | { readonly kind: "expired" } // altura > lastValidBlockHeight, y sin status
   | { readonly kind: "unseen" }; // se acabó la espera; no vimos nada
 
-/** Cada cuánto le volvemos a preguntar a la cadena. El número NO es al azar: es el mismo `sleep(1000)`
- *  del bucle de vencimiento de `@solana/web3.js` 1.98.4 (lib/index.cjs.js:6676), o sea el intervalo que
- *  el ecosistema ya considera aceptable para un RPC público. Con el techo de producción (30 s) son como
- *  mucho 30 lecturas de estado y 30 de altura por confirmación, o sea 60 requests y 2 por segundo.
+/** Cada cuánto le volvemos a preguntar a la cadena. Es el mismo `sleep(1000)` del bucle de vencimiento
+ *  de `@solana/web3.js` 1.98.4 (lib/index.cjs.js:6676). Con el techo de producción (30 s) son como
+ *  mucho 30 lecturas de estado y 30 de altura por confirmación: 60 requests, 2 por segundo.
  *
  *  ⚠️ EL NÚMERO CON EL QUE ESTO SE COMPARABA ERA FALSO POR SEIS ÓRDENES DE MAGNITUD. Acá decía "un
- *  orden de magnitud por debajo" citando las "~27 reconexiones WebSocket" del SDD. Medido después por
- *  el AR de esta HU, con un servidor RPC local que contesta `-32601`: el mecanismo anterior hacía
- *  ~40.000 intentos POR SEGUNDO, sostenidos y sin backoff, o sea ~1.200.000 sobre el mismo techo de
- *  30 s. La causa está en la librería: tras el error devuelve la suscripción a 'pending' y se
- *  re-invoca en la misma vuelta, sin `sleep` (lib/index.cjs.js:8404-8410). O sea que la comparación
- *  honesta es 60 contra ~1.200.000, no "un orden de magnitud". */
+ *  orden de magnitud por debajo" citando las "~27 reconexiones WebSocket" del SDD. Medido por el AR de
+ *  esta HU contra un servidor RPC local que contesta `-32601`: el mecanismo anterior hacía ~40.000
+ *  intentos POR SEGUNDO sin backoff, o sea ~1.200.000 sobre el mismo techo de 30 s, porque tras el
+ *  error devuelve la suscripción a 'pending' y se re-invoca en la misma vuelta sin `sleep`
+ *  (lib/index.cjs.js:8404-8410). La comparación honesta es 60 contra ~1.200.000. */
 const SIGNATURE_POLL_INTERVAL_MS = 1_000;
 
-/** Espera `ms` sin bloquear. No existía en este archivo: lo trae WKH-353 para el bucle de
- *  `awaitSignatureVerdict`, `:1750`, y no tiene ningún otro llamador. */
+/** Espera `ms` sin bloquear. Lo trae WKH-353 para `awaitSignatureVerdict`, `:1736`; sin otro llamador. */
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

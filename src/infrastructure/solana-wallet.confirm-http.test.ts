@@ -68,8 +68,12 @@ const PROGRAM_ID = new PublicKey(ESCROW_PROGRAM_ID);
  *  VENZA. Acá el eje temporal tiene que DISTINGUIR "resolvió por poll" de "resolvió por techo
  *  vencido", y con 20 ms el código VIEJO también termina en ~20 ms: la aserción daría verde con el
  *  bug adentro y sin él. Con 3.000 ms, el camino bueno resuelve en el primer poll (~0 ms) y el malo
- *  paga los 3 s enteros. No cuesta nada cuando está verde: sólo el rojo paga, y eso es lo que
- *  queremos que duela. */
+ *  paga los 3 s enteros.
+ *
+ *  ⚠️ Y ESTO NO ES GRATIS CUANDO ESTÁ VERDE, que es lo que acá decía. Medido con los 13 tests en
+ *  verde: T-353-6 (3.015 ms), T-353-7 (3.023 ms) y T-353-8 (3.031 ms) concluyen POR el techo, o sea
+ *  ~9,1 s de los 12,3 s del archivo, en CADA corrida. No paga sólo el rojo: paga siempre. La decisión
+ *  sigue siendo ésta porque un techo que no distingue no candea nada, pero el precio es ése. */
 const TECHO_MS = 3_000;
 /** Holgadamente por encima de un ciclo de poll (`SIGNATURE_POLL_INTERVAL_MS` = 1.000 ms) y
  *  holgadamente por debajo del techo. Es la banda que separa los dos desenlaces. */
@@ -453,8 +457,18 @@ describe("WKH-353 — la confirmación pregunta por HTTP y no abre suscripción"
   // POR QUÉ IGUAL NO INVALIDA NADA: en los tres, la aserción que prueba el mecanismo es de VALOR
   // ("confirmed" vs "pending"), y ésa el huérfano no la toca. Los contadores están como refuerzo del
   // "siguió preguntando", y su piso es `>= 2`: un huérfano sólo puede EMPUJARLOS PARA ARRIBA, así que
-  // puede volver vacua una aserción de piso, nunca darla vuelta. Tampoco hay fuga a la red real: todo
-  // sale por dobles del prototype.
+  // puede volver vacua una aserción de piso, nunca darla vuelta.
+  //
+  // FUGA A LA RED REAL: hoy no hay, pero lo que la sostiene NO es un diseño, así que no se puede citar
+  // como garantía. MEDIDO envolviendo el `getSignatureStatuses` REAL y contando quién llega hasta él:
+  // en una corrida normal del archivo, CERO. Lo que lo sostiene es que siempre hay un doble instalado
+  // cuando el huérfano pollea, y que el proceso termina antes del poll que sigue al último test. Se
+  // cae con un cambio concreto: el `afterEach`, `:274` restaura los métodos reales
+  // (`vi.restoreAllMocks`, `:276`) y borra el accessor de altura (`Reflect.deleteProperty`, `:278`),
+  // así que alcanza con que algo mantenga el proceso vivo un segundo más. MEDIDO agregando 3,5 s de
+  // espera al final del archivo: el huérfano alcanzó el método REAL 3 veces, contra
+  // `https://api.devnet.solana.com` (el `clusterApiUrl("devnet")` que sale cuando
+  // `NEXT_PUBLIC_SOLANA_RPC_URL` no está, que es el caso en los tests).
   //
   // EL ARREGLO SI ALGÚN DÍA MOLESTA, con su medición, porque el atajo obvio NO funciona: contar "en el
   // doble y por instalación" (que es lo que hace `mockChain`, `:184`) NO alcanza, y es lo que dan los
@@ -631,11 +645,11 @@ describe("T-353-9 — `confirmTransaction` no vuelve a producción, y el adapter
     expect(hallazgos).toEqual([]);
   });
 
-  it("`solana-wallet.ts` no nombra ningún `onSignature*` ni `removeSignatureListener`, ni en comentarios", () => {
-    // Acá SÍ se miran los comentarios, y a propósito: el docblock del helper explica por qué NO se usa
-    // la suscripción, así que nombra `onSignature` una vez. Lo que se candea es que no aparezca en
-    // ninguna línea de CÓDIGO. La prueba de que el nombre no está en el código, y no sólo de que no
-    // está el efecto, es lo que separa este candado del test de comportamiento.
+  it("`solana-wallet.ts` no nombra ningún `onSignature*` ni `removeSignatureListener` en líneas de CÓDIGO", () => {
+    // Los comentarios se EXCLUYEN a propósito (el `.filter` de abajo): el docblock del helper explica
+    // por qué NO se usa la suscripción, así que nombra `onSignature` una vez y eso es correcto. Lo que
+    // se candea es que no aparezca en ninguna línea de CÓDIGO. La prueba de que el nombre no está en
+    // el código, y no sólo de que no está el efecto, es lo que separa este candado del de comportamiento.
     const src = readFileSync(path.join(ROOT, "src/infrastructure/solana-wallet.ts"), "utf8").split("\n");
     const enCodigo = src
       .map((l, i) => ({ l, n: i + 1 }))

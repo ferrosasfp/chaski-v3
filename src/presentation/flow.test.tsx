@@ -2703,7 +2703,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
   // ── AC-3 · confirmar bajo otra identidad se corta ANTES de pedir ninguna firma ────────────────
 
   const COPY_AC3 =
-    "Estás conectado con otra cuenta, distinta de la que verificamos para este envío. Cambiá en tu billetera a la cuenta con la que empezaste, o usá el aviso de arriba para pasarte a la que tenés conectada ahora y empezar un envío nuevo.";
+    "Estás conectado con otra cuenta, distinta de la que verificamos para este envío. Cambiá en tu billetera a la cuenta con la que empezaste y tocá \"Recotizar tasa\", o usá el aviso de arriba para pasarte a la que tenés conectada ahora y empezar un envío nuevo.";
 
   it("T-354-3a: con la cuenta cambiada, 'Confirmar y enviar' no llama al use-case y explica por qué", async () => {
     const probe = new FakeConnectedWallet(A);
@@ -2738,16 +2738,22 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     // "Cambiá en tu billetera a la cuenta con la que empezaste" — ejecutado.
     cambiarDeCuentaA(A, probe);
 
-    // 🔴 HALLAZGO MEDIDO EN ESTE TEST, y se deja escrito porque el copy no lo dice. Con `error`
-    // seteado, el paso `confirm` REEMPLAZA "Confirmar y enviar" por "Recotizar tasa" (la rama
-    // `error ? ... : ...` del render de `confirm`). Esa rama es ANTERIOR a esta HU y vale para
-    // CUALQUIER error del paso, no sólo para éste. Consecuencia: después de seguir la primera
-    // instrucción del copy al pie de la letra, en pantalla NO hay ningún botón de confirmar; hay uno
-    // que habla de la tasa. La instrucción se puede cumplir, pero no en un solo gesto, y el copy no
-    // menciona ese gesto intermedio. Medido: los botones en pantalla en este punto son exactamente
-    // ["¿No sos vos?", "Recotizar tasa"].
+    // 🔴 EL CANDADO DE CD-4, Y ES ESTE BLOQUE Y NO UN COMENTARIO. El nombre del control sale DEL
+    // COPY, con un regex sobre el literal, y NO escrito a mano acá: si alguien saca el gesto de la
+    // frase, o lo cambia por un control que en pantalla no existe, esto se pone rojo.
+    //
+    // POR QUÉ LA FRASE TIENE QUE NOMBRAR UN GESTO. Con `error` seteado, el paso `confirm` REEMPLAZA
+    // "Confirmar y enviar" por "Recotizar tasa" (la rama `error ? ... : ...` de su render). Esa rama
+    // es ANTERIOR a esta HU y vale para CUALQUIER error del paso, así que no se toca. Lo que sí es
+    // nuestro es el copy: medido, los botones en pantalla en este punto son exactamente
+    // ["¿No sos vos?", "Recotizar tasa"], o sea que una frase que dijera sólo "cambiá de cuenta"
+    // estaría dando por supuesto un botón de confirmar que NO está.
+    const nombrado = COPY_AC3.match(/tocá "([^"]+)"/)?.[1];
+    expect(nombrado, "el copy dejó de nombrar el control que la persona tiene que tocar").toBeTruthy();
+    // No hay ningún botón de confirmar acá: si lo hubiera, el copy no necesitaría nombrar nada.
     expect(screen.queryByRole("button", { name: /Confirmar y enviar/ })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /Recotizar tasa/ }));
+    // Y el control que la frase nombra EXISTE, con ese nombre accesible exacto.
+    fireEvent.click(screen.getByRole("button", { name: nombrado as string }));
 
     // Y a partir de ahí el guard NO se pega: con la identidad de vuelta en su lugar, el envío sigue.
     fireEvent.click(await screen.findByRole("button", { name: /Confirmar y enviar/ }));

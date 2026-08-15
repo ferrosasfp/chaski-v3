@@ -210,7 +210,7 @@ export class SolanaWalletAdapter
    * ⚠️ EL FALLBACK NO ES DEFENSIVO: cubre un camino que el flujo recorre SIEMPRE. `this.address` vive
    * sólo en memoria y se escribe sólo en `connect()`, así que una recarga de la página lo borra — y hay
    * una navegación completa en el medio del flujo: el KYC se va a Didit y vuelve
-   * (`window.location.href`, `flow.tsx:407`). Al volver, el resume salta derecho a `confirm` sin
+   * (`window.location.href`, `flow.tsx:417`). Al volver, el resume salta derecho a `confirm` sin
    * pasar por `connect()` (`setStep`, `flow.tsx:222`). Antes, ahí `getAddress()` contestaba `null`.
    *
    * El bridge SÍ sobrevive a esa recarga, y no porque persista nada: lo repuebla el sync component
@@ -1585,7 +1585,7 @@ export class SolanaWalletAdapter
     // saldría "un batch de cero cuentas": es falso — el batch cuelga del `for` de abajo, que con cero
     // ids no entra NUNCA (la frase estaba copiada de `:370-372`, donde sí es cierta porque allá el
     // batch se llama incondicionalmente). Lo único que ahorraba eran cuatro `await import` y tres
-    // constructores, sobre un camino que producción no toca (`idsAConsultar`, `../presentation/flow.tsx:3026`). Y a cambio
+    // constructores, sobre un camino que producción no toca (`idsAConsultar`, `../presentation/flow.tsx:3101`). Y a cambio
     // rompía lo que el docblock de arriba promete: con `{ sender: "no-es-base58", remittanceIds: [] }`
     // NO tiraba. Sin el corte, un `sender` inválido tira SIEMPRE, con lista vacía o llena (T-A15).
 

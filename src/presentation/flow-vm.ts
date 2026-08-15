@@ -613,7 +613,7 @@ export function humanError(code: string): string {
   //    `wallet_error:WalletNotReadyError` y el código se muestra en pantalla, que es lo que ese módulo
   //    promete para un nombre que no conocemos.
   if (code.includes("no_account") || code.includes("wallet_not_connected"))
-    return "Reconectá o desbloqueá tu wallet para continuar."; if (code.includes("wallet_account_changed")) return "Estás conectado con otra cuenta, distinta de la que verificamos para este envío. Cambiá en tu billetera a la cuenta con la que empezaste, o usá el aviso de arriba para pasarte a la que tenés conectada ahora y empezar un envío nuevo."; // WKH-354/AC-3: EN ESTA LÍNEA, no en una nueva — este archivo tiene que terminar en 1375 líneas (CD-16): 49 ocurrencias sobre 26 destinos lo citan por número, y `scripts/smoke-helpers.test.ts:336` vigila `:25` y `:30`
+    return "Reconectá o desbloqueá tu wallet para continuar."; if (code.includes("wallet_account_changed")) return "Estás conectado con otra cuenta, distinta de la que verificamos para este envío. Cambiá en tu billetera a la cuenta con la que empezaste y tocá \"Recotizar tasa\", o usá el aviso de arriba para pasarte a la que tenés conectada ahora y empezar un envío nuevo."; // WKH-354/AC-3: EN ESTA LÍNEA, no en una nueva — este archivo tiene que terminar en 1375 líneas (CD-16): 49 ocurrencias sobre 26 destinos lo citan por número, y `scripts/smoke-helpers.test.ts:336` vigila `:25` y `:30`
   // Familia wallet_*: hasta acá TODOS estos códigos caían en el default "Algo salió mal", que es lo
   // que veía quien intentaba conectar desde el celular. Cada rama nombra una causa distinta; ninguna
   // afirma más de lo que la librería nos dice.

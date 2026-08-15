@@ -2254,7 +2254,7 @@ describe("WKH-354 · el copy de la cuenta cambiada y la cola reescrita de chain-
   /** El literal EXACTO, escrito a mano acá y no derivado de `humanError`: un test que le pregunta al
    *  código qué copy produce y después verifica que produjo ese copy se compara consigo mismo. */
   const COPY_AC3 =
-    "Estás conectado con otra cuenta, distinta de la que verificamos para este envío. Cambiá en tu billetera a la cuenta con la que empezaste, o usá el aviso de arriba para pasarte a la que tenés conectada ahora y empezar un envío nuevo.";
+    "Estás conectado con otra cuenta, distinta de la que verificamos para este envío. Cambiá en tu billetera a la cuenta con la que empezaste y tocá \"Recotizar tasa\", o usá el aviso de arriba para pasarte a la que tenés conectada ahora y empezar un envío nuevo.";
 
   it("T-354-3f: `wallet_account_changed` tiene copy propio, byte a byte, y NO promete que la app cambie la cuenta", () => {
     expect(humanError("wallet_account_changed")).toBe(COPY_AC3);
@@ -2272,6 +2272,10 @@ describe("WKH-354 · el copy de la cuenta cambiada y la cola reescrita de chain-
     // `flow.test.tsx` (T-354-3b la primera, T-354-3c la segunda). Un texto no se mide a sí mismo.
     expect(COPY_AC3).toContain("Cambiá en tu billetera a la cuenta con la que empezaste");
     expect(COPY_AC3).toContain("usá el aviso de arriba");
+    // Y la primera NOMBRA el control que la persona va a encontrar en pantalla. Que ese control
+    // exista de verdad, con ese nombre accesible, lo ejecuta T-354-3b: acá sólo se fija que la
+    // frase siga nombrando alguno, porque una instrucción sin gesto es la que dio el hallazgo.
+    expect(COPY_AC3).toMatch(/tocá "[^"]+"/);
   });
 
   it("T-354-7a: la cola de `chain-absent-after-deposit` ya no manda a reabrir la app, y lo de antes de la cola no se movió", () => {

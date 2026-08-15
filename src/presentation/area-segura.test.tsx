@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// Tests — D-1: el área segura del dispositivo.
+// Tests · D-1: el área segura del dispositivo.
 //
 // 🔴 EL DEFECTO QUE CIERRAN, medido en 40f0b68 (el commit del que sale esta rama):
 //     grep -rn "safe-area\|env(safe" app src public tailwind.config.ts next.config.mjs   ⇒ 0

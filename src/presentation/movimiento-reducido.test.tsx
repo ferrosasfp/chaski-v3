@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// Tests — D-2: con el movimiento reducido activado, ningún indicador afirma un progreso que no está
+// Tests · D-2: con el movimiento reducido activado, ningún indicador afirma un progreso que no está
 // mostrando.
 //
 // 🔴 EL DEFECTO QUE CIERRAN, medido en 40f0b68. `app/globals.css` le ponía
@@ -170,12 +170,12 @@ describe("D-2 · framer: la preferencia del sistema deja de ignorarse", () => {
     // alguien lo deja escrito pero fuera de la rama que se pinta, `espia.props` queda vacío.
     //
     // ⚠️ LO QUE NO PRUEBA: que framer efectivamente reduzca algo. No puede probarlo acá y el motivo
-    // está medido arriba — `window.matchMedia` es `undefined` en este jsdom, y framer lee justamente
+    // está medido arriba: `window.matchMedia` es `undefined` en este jsdom, y framer lee justamente
     // eso (`initPrefersReducedMotion`, en `utils/reduced-motion/index.mjs` del paquete): sin
     // `matchMedia` fija `prefersReducedMotion.current = false`. O sea que acá framer NUNCA cree que
     // haya preferencia, y montar un falso de `matchMedia` sólo probaría que el falso funciona.
     // Lo que este test compra es el CABLEADO: que el default `"never"` de `MotionConfigContext`
-    // —que es el que hacía que framer ignorara la preferencia— ya no sea el que rige este árbol.
+    // (el que hacía que framer ignorara la preferencia) ya no sea el que rige este árbol.
     espia.props.length = 0;
     const { RemittanceFlow } = await import("./flow");
     const { buildTestContainer } = await import("../test-support/test-container");

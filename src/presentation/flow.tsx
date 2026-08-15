@@ -653,7 +653,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
       <header className="mb-5 flex flex-wrap items-center gap-2.5">
         <ChaskiMark className="h-9 w-9" />
         <div>
-          <p className="text-[15px] font-bold leading-none tracking-heading">Chaski</p>
+          <h1 className="text-[15px] font-bold leading-none tracking-heading">Chaski</h1>
           <p className="text-xs text-stone">tu plata a Perú, sin vueltas</p>
         </div>
         {/* ⚠️ WKH-354 (re-AR · MENOR-2) · ESTE PILL SE PINTA CON `address` Y NO CON LA BILLETERA VIVA,
@@ -720,7 +720,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
         <Card className="mt-2 flex-1 space-y-4 text-center">
           <Loader2 className="mx-auto mt-6 h-8 w-8 animate-spin text-cochineal" />
           <div>
-            <p className="text-base font-bold">Verificando tu identidad…</p>
+            <h2 className="text-base font-bold">Verificando tu identidad…</h2>
             {/* "con Didit" se cayó: con `DIDIT_ENV=mock` la persona vuelve de `/kyc-simulado`, que es
                 una página nuestra, y este overlay le decía que estábamos hablando con un proveedor que
                 nadie llamó. Esta pantalla no puede distinguir las dos configuraciones (el navegador no
@@ -741,7 +741,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
       ) : timedOut ? (
         <Card className="mt-2 flex-1 space-y-4 text-center">
           <div>
-            <p className="text-base font-bold">La verificación está tardando</p>
+            <h2 className="text-base font-bold">La verificación está tardando</h2>
             <p className="mx-auto mt-1 max-w-xs text-sm text-stone">
               No pudimos confirmar tu identidad a tiempo. Podés reintentar sin recargar la página.
             </p>
@@ -889,7 +889,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                   <Wallet className="h-7 w-7 text-cochineal" />
                 </div>
                 <div>
-                  <p className="text-base font-bold">Conectá tu wallet</p>
+                  <h2 className="text-base font-bold">Conectá tu wallet</h2>
                   {/* "Chaski nunca toca tu plata" es un absoluto y hay quien lo falsifica: el escrow
                       tiene una release-authority, operada por el equipo, que puede liberar el vault
                       hacia el pago (ver `confirm-and-send.ts`:191-197). Lo que sí es verificable, y es
@@ -1001,7 +1001,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
             <div className="space-y-4">
               <Card>
                 <div className="mb-2 flex items-center justify-between">
-                  <p className="text-sm font-semibold">Revisá el envío</p>
+                  <h2 className="text-sm font-semibold">Revisá el envío</h2>
                   <Pill tone="active">tasa fijada</Pill>
                 </div>
                 <div className="mb-3 rounded-xl bg-sand px-4 py-3 text-center">
@@ -1039,7 +1039,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
               ) : null}
               <Card>
                 <div className="mb-2 flex items-center justify-between">
-                  <p className="text-sm font-semibold">Revisá antes de enviar</p>
+                  <h2 className="text-sm font-semibold">Revisá antes de enviar</h2>
                   <Pill tone="active">tasa fijada</Pill>
                 </div>
                 <div className="mb-3 rounded-xl bg-sand px-4 py-3 text-center">
@@ -1235,7 +1235,7 @@ function NoWalletHere() {
     <div className="space-y-3 rounded-xl2 border border-line bg-sand/60 p-4">
       <div className="flex items-center gap-2">
         <Smartphone className="h-4 w-4 text-cochineal" />
-        <p className="text-sm font-bold">No vemos ninguna wallet en este navegador</p>
+        <h2 className="text-sm font-bold">No vemos ninguna wallet en este navegador</h2>
       </div>
       <p className="text-sm text-stone">
         Esto no dice si tenés una wallet instalada: dice que en este navegador no hay ninguna
@@ -2297,7 +2297,7 @@ export function LostEscrowRecovery({
 
   return (
     <div className="space-y-3 rounded-xl2 border border-line bg-sand/60 p-4">
-      <p className="text-sm font-bold">Recuperar un envío perdido</p>
+      <h2 className="text-sm font-bold">Recuperar un envío perdido</h2>
       <p className="text-sm text-stone">
         Si borraste los datos del navegador o entrás desde otro dispositivo, tus envíos no aparecen
         en "Ver mis envíos". Los buscamos preguntándole al servidor por tu billetera.
@@ -2447,7 +2447,7 @@ export function EscrowRentRecovery({
 
   return (
     <div className="space-y-3 rounded-xl2 border border-line bg-sand/60 p-4">
-      <p className="text-sm font-bold">{explainer.title}</p>
+      <h2 className="text-sm font-bold">{explainer.title}</h2>
       <p className="text-sm text-stone">{explainer.body}</p>
       <p className="text-xs text-stone">{explainer.notRecovered}</p>
       <p className="text-sm text-stone">
@@ -3167,7 +3167,7 @@ export function HistoryView({
   return (
     <div className="space-y-4">
       <Card className="space-y-2">
-        <p className="text-sm font-semibold">Tus envíos</p>
+        <h2 className="text-sm font-semibold">Tus envíos</h2>
         {/* De dónde sale esta lista, dicho antes de que la persona saque conclusiones de que esté vacía. */}
         <p className="text-xs text-stone">
           Son los envíos guardados en este dispositivo. Si borraste los datos del navegador o entrás
@@ -3295,7 +3295,7 @@ export function Receipt({ rem, onNew }: { rem: RemittanceState; onNew: () => voi
         ) : null}
       </Card>
       <Card>
-        <p className="mb-2 text-sm font-semibold">Recibo</p>
+        <h2 className="mb-2 text-sm font-semibold">Recibo</h2>
         <Row label="Enviaste" value={rem.sendUsd.format()} />
         {rem.quote ? <Row label="Tipo de cambio" value={`S/ ${rem.quote.rate.toFixed(3)}`} /> : null}
         <Row label="Estado" value={<Pill tone={status.tone}>{status.label}</Pill>} />
@@ -3605,7 +3605,7 @@ function CuentaCambiada({
     <div className="mt-3 w-full space-y-2 rounded-xl2 border border-line bg-sand/60 p-4">
       <div className="flex items-center gap-2">
         <Wallet className="h-4 w-4 text-cochineal" />
-        <p className="text-sm font-bold">Estás conectado con otra cuenta</p>
+        <h2 className="text-sm font-bold">Estás conectado con otra cuenta</h2>
       </div>
       <p className="text-sm text-stone">
         Tu billetera tiene activa una cuenta distinta de la que estás usando acá. Podés pasarte a ella

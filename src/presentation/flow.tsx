@@ -1,5 +1,5 @@
 "use client";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import {
   ArrowRight,
   BadgeCheck,
@@ -749,7 +749,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
           <Button onClick={onRetryKyc}>Reintentar</Button>
         </Card>
       ) : (
-      <AnimatePresence mode="wait">
+      <MotionConfig reducedMotion="user"><AnimatePresence mode="wait">
         <motion.div
           key={step}
           initial={{ opacity: 0, y: 10 }}
@@ -1104,7 +1104,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
 
           {step === "done" && rem && <Receipt rem={rem} onNew={() => resetTo(setStep, setRem, setPreview)} />}
         </motion.div>
-      </AnimatePresence>
+      </AnimatePresence></MotionConfig>
       )}
 
       {error ? (

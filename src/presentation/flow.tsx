@@ -1121,8 +1121,8 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                   Va en las DOS pantallas donde se aprueba, porque las dos son "el último momento
                   antes de comprometerse" según por dónde hayas entrado. */}
               <AgentPlanCard />
-              {error ? (
-                <Button variant="outline" disabled={busy} onClick={onRelock}>
+              {error ? ( // JERARQUÍA RELATIVA (la regla, en `ui.tsx`): este `?` REEMPLAZA a "Confirmar y enviar", o sea que en esta rama el camino feliz NO ESTÁ. Recotizar es lo único que desatasca el envío ⇒ es la acción que RESUELVE ⇒ `primary`, no `outline`. Era el segundo sitio con cero `primary` habiendo una acción resolutiva.
+                <Button disabled={busy} onClick={onRelock}>
                   {busy ? <Loader2 className="size-icono-sm animate-spin" /> : "Recotizar tasa"}
                 </Button>
               ) : (
@@ -1738,13 +1738,13 @@ export function TrackView({
         {rem.refundTx ? (
           <Muted escala="label">Referencia de reembolso: <TxProof signature={rem.refundTx} /></Muted>
         ) : null}
-        {showRefund && recover && sender ? (
+        {showRefund && recover && sender ? ( // ⇒ `resolutiva`: en ESTA rama el envío ya no se entrega, o sea que el camino feliz MURIÓ, y recuperar es lo único que le devuelve sus USDC. Es el defecto que el founder vio: la única acción posible de la pantalla, pintada como secundaria. La regla está en `ui.tsx`; el candado, en `jerarquia-relativa.test.tsx`.
           <div className="space-y-ajustado">
             <RefundAction
               remittanceId={rem.id}
               sender={sender}
               recover={recover}
-              onRecovered={onRecovered}
+              onRecovered={onRecovered} prominencia="resolutiva"
             />
             <RefundWindowNote />
           </div>
@@ -1879,13 +1879,13 @@ export function TrackView({
           </Muted>
         </div>
       ) : null}
-      {showRefund && recover && sender ? (
+      {showRefund && recover && sender ? ( // ⇒ `alternativa`, y es el MISMO componente que la rama de fallo pinta `primary`: acá el envío TODAVÍA puede entregarse, así que recuperar no resuelve la situación, la ABANDONA. Ese es el par que hace falsa la lectura "la variante es del botón".
         <div className="space-y-ajustado">
           <RefundAction
             remittanceId={rem.id}
             sender={sender}
             recover={recover}
-            onRecovered={onRecovered}
+            onRecovered={onRecovered} prominencia="alternativa"
           />
           <RefundWindowNote />
         </div>
@@ -2030,13 +2030,13 @@ function RevisionDelSeguimiento({
               CONSULTA era el elemento más fuerte del seguimiento, y el que SACA LOS USDC DEL
               CONTRATO estaba un escalón por debajo. No era empate: estaba al revés.
 
-              ⛔ Y EL ARREGLO NO ES SUBIR "Recuperar fondos" A `primary`, que es lo intuitivo. Este
-              repo ya tiene esa lección escrita en `touch-targets.test.tsx` (T-341-6): agrandar el
-              control destructivo invita el toque accidental, y es el defecto OPUESTO del que se
-              quería cerrar. Acá vale igual con el peso visual. Se BAJA el que consulta.
+              ⛔ Y EL ARREGLO NO ES SUBIR "Recuperar fondos" A `primary` **EN ESTA RAMA**: acá el envío
+              todavía puede entregarse, o sea que el camino feliz SIGUE VIVO y recuperar no lo resuelve,
+              lo abandona. Además este repo ya tiene la lección en `touch-targets.test.tsx` (T-341-6):
+              agrandar el control destructivo invita el toque accidental. Se BAJA el que consulta.
 
-              El resultado es que el seguimiento no tiene ningún `primary`, y eso es correcto: no hay
-              camino feliz que ofrecer en una pantalla donde lo único que se puede hacer es esperar.
+              🔴 ACÁ DECÍA "el seguimiento no tiene ningún `primary`, y eso es correcto". Vale para ESTA rama —esperar no es una acción— y era FALSO generalizado a la pantalla:
+              en la rama de FALLO el camino feliz murió y recuperar SÍ es `primary` (`showRefund`, `:1741`). La regla, en `ui.tsx`; el candado, en `jerarquia-relativa.test.tsx`.
 
               El `disabled` no cambia de sentido ni de causas, y el alto tampoco: `h-[52px]` está en
               la clase base del `<Button>` y ninguna variante lo toca. */}
@@ -2085,12 +2085,12 @@ export function RefundAction({
   remittanceId,
   sender,
   recover,
-  onRecovered,
+  onRecovered, prominencia,
 }: {
-  remittanceId: string;
-  sender: string;
+  remittanceId: string; sender: string;
   recover: NonNullable<Container["recoverEscrowFunds"]>;
   onRecovered: (snapshot: RemittanceState) => void;
+  prominencia: "resolutiva" | "alternativa"; // ⛔ OBLIGATORIA Y SIN DEFAULT, por lo mismo que el `explainer` de `CloseEscrowAction`: un default deja que el próximo sitio de montaje herede una decisión que nadie tomó, y acá esa decisión es cuál es la ACCIÓN PRINCIPAL DE UNA PANTALLA. `"resolutiva"` = el camino feliz de esa pantalla ya no existe y esto es lo que la saca del pozo ⇒ `primary`. `"alternativa"` = el camino feliz sigue vivo y esto lo ABANDONA ⇒ `outline`. Los dos sitios de montaje están en `TrackView` y pasan valores distintos. La regla, en `ui.tsx`. ⚠️ Este renglón y el de arriba están apretados en una línea A PROPÓSITO: el hunk tiene que ser línea-neutra o desplaza ~30 citas `flow.tsx:NN` de otros archivos, y a la mayoría no las vigila `citas-ancladas.test.ts`.
 }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -2148,7 +2148,7 @@ export function RefundAction({
 
   return (
     <div className="space-y-ajustado">
-      <Button variant="outline" onClick={onRefund} disabled={busy}>
+      <Button variant={prominencia === "resolutiva" ? "primary" : "outline"} onClick={onRefund} disabled={busy}>
         {busy ? "Recuperando…" : enviados.length > 0 ? "Volver a intentar" : "Recuperar fondos"}
       </Button>
       {/* UNA por orden transmitida, y no la última: cada una es una tx distinta cuyo desenlace nadie

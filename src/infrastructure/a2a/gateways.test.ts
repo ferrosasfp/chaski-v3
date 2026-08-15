@@ -157,7 +157,7 @@ describe("A2aQuoteGateway (AC-3)", () => {
   // prueba que el motivo LLEGUE. Es la lección `tests-que-registran-el-doble-no-prueban-el-cableado`.
   //
   // Por eso este `it` arranca en el 422 tal como la route lo escribe (`{error:"a2a_no_agent_for_capability"}`,
-  // (`a2a_no_agent_for_capability`, `../../../app/api/a2a/quote/route.test.ts:225`)) y termina en la frase que se lee en
+  // (`a2a_no_agent_for_capability`, `../../../app/api/a2a/quote/route.test.ts:252`)) y termina en la frase que se lee en
   // pantalla. Lo único NO mockeado en el medio es el gateway de producción.
   it("CABLEADO/AC-13: el 422 de la route llega hasta el copy de 'no hay quién', sin pasar por el genérico", async () => {
     vi.stubGlobal("fetch", rejects({ error: QUOTE_NO_AGENT_FOR_CAPABILITY }, 422));

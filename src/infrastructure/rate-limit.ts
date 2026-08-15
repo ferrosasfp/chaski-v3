@@ -268,3 +268,63 @@ export const PAYOUT_STATUS_RL: RouteRateLimitConfig = {
     defWindow: "10 m",
   },
 };
+
+// ── A2A QUOTE · WKH-355 ──────────────────────────────────────────────────────────────────────────
+// 🔴 VA DESPUÉS DE `PAYOUT_STATUS_RL` POR EL MISMO MOTIVO QUE ÉL VA AL FINAL, y el motivo está tres
+// párrafos más arriba: hay TRES citas por número de línea dentro de este archivo
+// (`../rate-limit.ts:70` en `src/presentation/flow.tsx:1317`, `rate-limit.ts:122-155` en
+// `src/infrastructure/persistence/supabase-server.ts:6`, y `../rate-limit.ts:262` en
+// `src/infrastructure/settlement/ledger-payout-status-gateway.ts:42`). Las tres apuntan a líneas
+// <= 262; agregar al final no desplaza ninguna. ⛔ No lo muevas con el grupo de arriba sin re-medir
+// las tres.
+//
+// IP 30/"10 m" (sin addr). LA RUTA SIGUE SIENDO PÚBLICA Y ASÍ TIENE QUE SER: la llama el cliente de
+// la propia DApp antes de que exista wallet, address o KYC
+// (`A2aQuoteGateway`, `./a2a/gateways.ts:134`). El control acá es el límite de tasa, NO una credencial.
+//
+// LA ARITMÉTICA, con las tres cantidades por separado:
+//
+//  1. QUÉ CUESTA UNA COTIZACIÓN. 0,03 USDC del saldo de la Agent Key prepaga por POST. MEDIDO el
+//     2026-08-15 contra el catálogo vivo (`GET /api/a2a/plan` en prod ⇒ `remittance-fx-quote`,
+//     `priceUsdc: 0.03`), no estimado. Es un PISO: es el precio del agente, y el fee de plataforma
+//     del gateway se suma aparte, así que el débito real por llamada es >= 0,03.
+//
+//  2. CUÁNTAS NECESITA UNA PERSONA EN 10 MINUTOS. 10, contadas de los dos únicos productores:
+//      · preview en vivo, debounce de 300 ms (`previewQuote`, `../presentation/flow.tsx:176`) y sólo
+//        con monto >= 5 (`MIN_SEND_USD`, `../domain/remittance.ts:209`). Sin caché de ningún tipo:
+//        cada preview es un POST (`requestQuote`, `./a2a/gateways.ts:135`, que no memoiza). Tipear
+//        "400" con pausas largas da 2 (el "4" queda bajo el mínimo y no pide nada); con una
+//        corrección y tres montos distintos probados ⇒ 6.
+//      · el lock, 3 sitios de llamada (`lockQuote`, `../presentation/flow.tsx:240`), (`lockQuote`,
+//        `../presentation/flow.tsx:331`) y (`lockQuote`, `../presentation/flow.tsx:500`): al
+//        conectar, la re-cotización automática post-KYC y el re-lock manual por vencimiento ⇒ 4 con
+//        dos re-locks.
+//     6 + 4 = 10.
+//
+//  3. EL MULTIPLICADOR POR IP COMPARTIDA. ×3, y NO el ×2 de `PAYOUT_STATUS_RL`. La diferencia es
+//     estructural, no un margen de gusto: a `payout/status` sólo llega quien YA tiene una remesa en
+//     vuelo, y a esta ruta llega TODO el que abre la app — es la primera pantalla. Detrás de un NAT
+//     de café/oficina/CGNAT la concurrencia de esta ruta es la del tráfico total del sitio, no la de
+//     los envíos. 10 × 3 = 30. Ése es el número.
+//
+// ⚠️ LO QUE ESTE LÍMITE **NO** HACE, dicho de frente: no cierra el agujero, lo acota. 30 × 0,03 =
+// 0,90 USDC por IP cada 10 minutos SIGUEN siendo gasto legítimo-a-los-ojos-del-limitador. Contra el
+// único saldo que este repo tiene anotado (6,793 USDC en `solana-devnet`, el que cita el mensaje de
+// error transcripto en `./a2a/gateway-client.ts:216-217` — una FOTO vieja, no una medición de hoy),
+// una sola IP lo vacía en ~7,5 ventanas ≈ 75 minutos, y N IPs lo dividen por N. El contador se
+// reinicia por ventana deslizante de 10 min y por IP: cambiar de IP lo reinicia entero. El control
+// que faltaría para CERRAR esto es un tope de gasto/alarma sobre el saldo de la key, del lado del
+// gateway, y es otra HU.
+//
+// IP-only por lo mismo que CHALLENGE/PREPARE/RECOVERY/STATUS: el limitador corre ANTES de parsear el
+// body, y además el body de una cotización no tiene address (es `{amountUsd, destCountry,
+// payoutMethod}`) — no hay segunda clave que ofrecer aunque se parseara primero.
+export const QUOTE_RL: RouteRateLimitConfig = {
+  bucketPrefix: "a2a:quote:rl",
+  ip: {
+    envMax: "QUOTE_RL_IP_MAX",
+    defMax: 30,
+    envWindow: "QUOTE_RL_IP_WINDOW",
+    defWindow: "10 m",
+  },
+};

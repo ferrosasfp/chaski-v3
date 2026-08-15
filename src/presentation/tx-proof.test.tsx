@@ -330,7 +330,7 @@ describe("T-346-6 (AC-4): copiar la firma completa, con sus TRES desenlaces", ()
   it("el control declara min-h de 44 px o más, leído del DOM renderizado", () => {
     // INPUT QUE LO PONE EN ROJO: escribir `h-11`. Da los mismos 44 px en Tailwind y `minHpx` NO lo
     // reconoce, así que TIRA con el nombre del control en vez de dejarlo pasar sin medir. 44 px es el
-    // piso de WCAG 2.5.5 que fijó WKH-341 (`touch-targets.test.tsx:159-163`).
+    // piso de WCAG 2.5.5 que fijó WKH-341 (`touch-targets.test.tsx:169-173`).
     stubClipboard(async () => {});
     render(<TxProof signature={FAKE_SOLANA_SIGNATURE} />);
     expect(minHpx(screen.getByRole("button", { name: "Copiar" }))).toBeGreaterThanOrEqual(44);

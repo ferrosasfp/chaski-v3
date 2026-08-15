@@ -71,7 +71,7 @@ import {
   kycOriginNotice,
   lostEscrowRecoveryError,
   shortErrorCode,
-  statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, type GestoRenovacion, REVISION_APAGADA, REVISION_FIRMANDO, REVISION_GESTO, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_BILLETERA, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, esVentanaSinAbiertos, // WKH-339: EN ESTA LÍNEA. `flow.tsx:634` lo citan 5 archivos y NINGUNA de las 5 es una cita anclada ⇒ si se mueve, nada se pone rojo y los 5 comentarios rotan en silencio · WKH-346 fix-pack: `esVentanaSinAbiertos` entra acá por lo mismo (Δ0)
+  statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, type GestoRenovacion, REVISION_APAGADA, REVISION_FIRMANDO, REVISION_GESTO, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_BILLETERA, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, esVentanaSinAbiertos, // WKH-339: EN ESTA LÍNEA. `flow.tsx:634` lo citan 6 archivos y NINGUNA de las 6 es una cita anclada ⇒ si se mueve, nada se pone rojo y los 6 comentarios rotan en silencio · WKH-346 fix-pack: `esVentanaSinAbiertos` entra acá por lo mismo (Δ0)
 } from "./flow-vm";
 import { cn } from "./cn";
 import { phantomBrowseUrl, useWalletAvailability, useConnectedWalletAddress } from "./wallet-availability"; // el aviso de "acá no hay wallet" (NoWalletHere) · WKH-354/AC-6: `useConnectedWalletAddress` para el banner (CuentaCambiada)
@@ -1289,7 +1289,7 @@ const TRACK_STEPS: { key: RemittanceState["status"][]; label: string; manual?: b
  * ⛔ PROHIBIDO ponerlo en `1500` reusando el literal del poll. Con 1500 la pantalla funciona igual —
  * por eso esto NO tiene test y la prohibición está escrita acá en vez de fingir un candado. El daño de
  * hacerlo es crear un SEGUNDO literal de una cadencia AJENA, que es el punto ciego que el Auto-Blindaje
- * de WKH-336 nombra; y `flow.tsx:634` (el literal del poll) ya lo citan 5 archivos por número. Un
+ * de WKH-336 nombra; y `flow.tsx:634` (el literal del poll) ya lo citan 6 archivos por número. Un
  * candado que comparara dos números que no tienen por qué ser iguales sería un guard que se compara
  * consigo mismo.
  */
@@ -1398,9 +1398,9 @@ export function TrackView({
   // tests NO se editan y siguen midiendo lo mismo.
   //
   // 🔴 LOS TIPOS SE DERIVAN DEL `Container`, NO SE IMPORTAN. Dos razones y las dos son medibles: un
-  // `import` nuevo arriba desplazaría `flow.tsx:634`, que 5 archivos citan por número y NINGUNA de las
-  // 5 es una cita anclada (el ancla `` `}, 1500);` `` empieza con `}` y el regex del candado exige
-  // `[A-Za-z_$]`) ⇒ si se mueve, nada se pone rojo y los 5 comentarios rotan en silencio. Y derivar del
+  // `import` nuevo arriba desplazaría `flow.tsx:634`, que 6 archivos citan por número y NINGUNA de las
+  // 6 es una cita anclada (el ancla `` `}, 1500);` `` empieza con `}` y el regex del candado exige
+  // `[A-Za-z_$]`) ⇒ si se mueve, nada se pone rojo y los 6 comentarios rotan en silencio. Y derivar del
   // `Container` es además la única fuente: si mañana la firma de `estado` cambia, esto no compila.
   // Es el mismo molde que `recover` y `closeEscrow` de acá arriba.
   //

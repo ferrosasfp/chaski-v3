@@ -1056,7 +1056,7 @@ export type EscrowId16 = string;
  *  · `"absent"`    — LA CADENA CONTESTÓ, y en esa PDA no hay cuenta. Es exactamente lo que significa
  *      hoy un `!acc` en los dos bucles que ya batchean cuentas del escrow
  *      (`resolveRemittanceIdFromLedger`, `../infrastructure/solana-wallet.ts:353`) y
- *      (`listCloseable`, `../infrastructure/solana-wallet.ts:1452`). NO dice a dónde fue la plata y NO
+ *      (`listCloseable`, `../infrastructure/solana-wallet.ts:1454`). NO dice a dónde fue la plata y NO
  *      distingue "nunca existió" de "ya se cerró después de resolverse". Ver R-1, acá abajo.
  *  · `"unknown"`   — NO PUDIMOS PREGUNTAR: el RPC falló, venció el techo de tiempo, o la respuesta no
  *      decodifica. No dice absolutamente nada sobre los fondos. NUNCA se colapsa con `"absent"`: uno

@@ -32,6 +32,10 @@
 //   borrar el chequeo de `verdict.err` en `confirmRefund`          │ T-353-3 (+ T-353-8)
 //   `expired` ⇒ "pending" sin pasar por la sonda                   │ T-353-4 y T-353-8
 //   borrar la ÚLTIMA MIRADA del paso 2                             │ T-353-5, y SÓLO T-353-5
+//   `height > lastValid` ⇒ `height >= lastValid` (el borde)         │ T-353-5b, y SÓLO T-353-5b (12 de
+//                                                                  │ 13 verdes). Con DOS polls en vez
+//                                                                  │ de tres, el mismo mutante PASA:
+//                                                                  │ medido, y por eso son tres.
 //   `catch { height = -1 }` ⇒ `Number.MAX_SAFE_INTEGER`            │ T-353-6, y SÓLO T-353-6
 //   borrar el `catch` de `leerEstado` (el throw se propaga)        │ T-353-6b, y SÓLO T-353-6b
 //   aceptar `"processed"` como confirmado                          │ T-353-7, y SÓLO T-353-7
@@ -398,6 +402,69 @@ describe("WKH-353 — la confirmación pregunta por HTTP y no abre suscripción"
     expect(Date.now() - t0).toBeLessThan(TOPE_ELAPSED_MS);
   });
 
+  // ── T-353-5b · el BORDE del vencimiento: `>` y no `>=` ───────────────────────────────────────────
+  it("T-353-5b: altura EXACTAMENTE igual a `lastValidBlockHeight` ⇒ TODAVÍA no venció, se sigue preguntando", async () => {
+    // El borde que no probaba nadie: los otros casos usan 1 y 1.000.000 contra 10.000, así que `>` y
+    // `>=` daban lo mismo en todos. El signo lo fija la semántica de Solana, no el gusto:
+    // `lastValidBlockHeight` es el ÚLTIMO bloque en el que la tx todavía puede entrar, así que estar
+    // parado en él no es haber vencido. Con `>=` la confirmación abandona un bloque antes de tiempo y
+    // manda a la sonda una tx que todavía podía entrar: no pierde plata (la sonda sigue decidiendo),
+    // pero degrada el veredicto sin motivo.
+    //
+    // POR QUÉ TRES POLLS Y NO DOS, que es lo que hace mortal a este test y está MEDIDO: con `>=` el
+    // bucle concluye en la PRIMERA vuelta y su ÚLTIMA MIRADA consume el 2º poll; con `>`, el 2º poll lo
+    // consume la 2ª vuelta y el veredicto sale del 3º. Con dos polls los dos caminos leen el
+    // `confirmed` en la misma lectura y los dos devuelven "confirmed": el mutante SOBREVIVE (medido,
+    // verde con `>=`). Con tres, muere.
+    //
+    // La sonda queda en Deposited a propósito: si el veredicto fuera `expired`, el resultado sería
+    // "pending". Así que el "confirmed" sólo puede venir de haber seguido preguntando.
+    //
+    // La aserción que discrimina es de VALOR y no un contador, y eso es deliberado: los contadores de
+    // este archivo pueden traer llamadas de un bucle huérfano de otro test (ver el bloque de abajo,
+    // arriba de T-353-6).
+    mockChain({ [escrowStatePdaOf("rem-5b").toBase58()]: await encodeEscrowState("deposited") });
+    mockStatuses(null, null, { err: null, nivel: "confirmed" });
+    mockBlockHeight(async () => ULTIMO_BLOQUE_VALIDO); // EXACTAMENTE el último bloque válido
+    const adapter = await conectado();
+
+    await expect(adapter.refundEscrow("rem-5b")).resolves.toEqual({
+      refundTx: FIRMA_VALIDA,
+      confirmation: "confirmed",
+    });
+  }, 20_000);
+
+  // ══════════════════════════════════════════════════════════════════════════════════════════════════
+  // ⚠️ LOS CONTADORES DE LOS TRES TESTS DE ACÁ ABAJO PUEDEN INCLUIR LLAMADAS QUE NO SON SUYAS
+  // ══════════════════════════════════════════════════════════════════════════════════════════════════
+  // T-353-6, T-353-6b y T-353-7 terminan porque VENCE EL TECHO, y el techo rechaza la espera del
+  // llamador SIN detener el bucle de adentro: `withTimeout` es un `Promise.race` contra un `setTimeout`
+  // y no tiene ninguna forma de cancelar el trabajo que perdió la carrera. O sea que cada uno de esos
+  // tests deja un bucle HUÉRFANO corriendo, y el huérfano resuelve `getSignatureStatuses` y
+  // `getBlockHeight` por el PROTOTYPE EN EL MOMENTO DE LLAMAR: cae en el doble que instaló el test
+  // siguiente y le mueve el contador.
+  //
+  // MEDIDO acá, no deducido (techo de 1.500 ms, altura que tira siempre, estados siempre `null`):
+  //   · el llamador se fue a los 1.641 ms con 2 lecturas de estado y 2 de altura; 5 s más tarde el
+  //     contador iba en 7 y 7. El huérfano sigue vivo y a 2 req/s, que es el ritmo del poll.
+  //   · un contador RECIÉN INSTALADO, sin nadie que lo llame, recibió 3 `getSignatureStatuses` y 3
+  //     `getBlockHeight` en 3 s. O sea que la contaminación es real y no teórica.
+  //
+  // POR QUÉ IGUAL NO INVALIDA NADA: en los tres, la aserción que prueba el mecanismo es de VALOR
+  // ("confirmed" vs "pending"), y ésa el huérfano no la toca. Los contadores están como refuerzo del
+  // "siguió preguntando", y su piso es `>= 2`: un huérfano sólo puede EMPUJARLOS PARA ARRIBA, así que
+  // puede volver vacua una aserción de piso, nunca darla vuelta. Tampoco hay fuga a la red real: todo
+  // sale por dobles del prototype.
+  //
+  // EL ARREGLO SI ALGÚN DÍA MOLESTA, con su medición, porque el atajo obvio NO funciona: contar "en el
+  // doble y por instalación" (que es lo que hace `mockChain`, `:184`) NO alcanza, y es lo que dan los
+  // 3 y 3 de arriba, porque el huérfano encuentra el doble NUEVO. `mockChain` resuelve otro problema:
+  // que los `calls` del spy se acumulen entre re-instalaciones DENTRO de un mismo test. Para el
+  // huérfano hay que discriminar POR INSTANCIA de `Connection`: medido, el huérfano llama siempre con
+  // la conexión de SU test (1 sola instancia distinta, y no es la que se construye después), así que un
+  // doble escrito como `function (this: Connection)` que sólo cuente cuando `this` es la conexión del
+  // test en curso deja el contador limpio. No se hizo porque las aserciones de valor ya alcanzan.
+  //
   // ── T-353-6 · un RPC caído JAMÁS produce un vencimiento ──────────────────────────────────────────
   it("T-353-6: `getBlockHeight` TIRA siempre ⇒ nunca se declara vencido; se agota el techo y cae a la sonda", async () => {
     // 🔴 La regla del repo, en su forma más pura: "no pude preguntar" NO es "no pasó". Si un fallo de

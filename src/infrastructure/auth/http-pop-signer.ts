@@ -37,7 +37,7 @@ export class HttpPopSigner implements PopSigner {
     //
     // Por qué existe: el seguimiento de la remesa necesita una prueba de posesión para leer el desenlace
     // del payout, y NO PUEDE pedirla — corre en un `setInterval` de 1,5 s
-    // (`}, 1500);`, `../../presentation/flow.tsx:525`), así que pedir abriría un popup de billetera cada
+    // (`}, 1500);`, `../../presentation/flow.tsx:599`), así que pedir abriría un popup de billetera cada
     // tick. Entonces la OBSERVA de acá, que es donde cada firma cuelga de un gesto de la persona.
     //
     // 🔴 EL COMPORTAMIENTO DE ESTA CLASE NO CAMBIA, Y ESO ES UNA CD (CD-6). Sigue pidiendo la firma CADA

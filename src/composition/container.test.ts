@@ -424,7 +424,7 @@ describe("createContainer — WKH-333/AC-20: el connectWallet REAL consulta el v
 // La prueba de posesión se OBSERVA, no se pide: el gesto es `connectWallet.execute()` —uno de los
 // call-sites de `prove()` que ya existen— y el gateway de tracking sólo LEE lo que ese gesto produjo.
 // ⛔ Por eso no hay ninguna llamada a `prove()` acá: si el tracking pudiera pedir una firma, pediría un
-// popup cada 1,5 s (`}, 1500);`, `../presentation/flow.tsx:525`).
+// popup cada 1,5 s (`}, 1500);`, `../presentation/flow.tsx:599`).
 describe("createContainer — el seguimiento del payout lee el ledger (WKH-337/AC-1)", () => {
   const SENDER = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 

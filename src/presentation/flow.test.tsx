@@ -41,9 +41,11 @@ import {
 import { PREPARE_NO_AGENT_FOR_CAPABILITY } from "../application/agent-rejections";
 import { KYC_PROVENANCE_LIVE } from "../infrastructure/didit/decision";
 import { ConnectWallet } from "../application/use-cases/connect-wallet";
+import { solanaWalletBridge } from "../infrastructure/solana-wallet-bridge"; // WKH-354/R-2: la costura del BANNER (el bridge global); la del guard es el `connectedWallet` inyectado
 import {
   FAKE_SOLANA_BENEFICIARY,
   FAKE_SOLANA_SIGNATURE,
+  FAKE_WALLET_ADDRESS, FakeConnectedWallet, FakeSolanaCloseableEscrowLister, // WKH-354
   FakeKycGateway,
   FakeKycStore,
   FakeSolanaEscrowRefundGateway,
@@ -2547,5 +2549,414 @@ describe("WKH-339 — los siete estados de la ventana de lectura, en pantalla", 
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ═══ WKH-354 — la billetera cambió de cuenta y la app tiene que enterarse ════════════════════════
+//
+// ⚠️ LAS DOS COSTURAS (R-2), y no es una preferencia de diseño. El BANNER lee el bridge global
+// (`useConnectedWalletAddress`), porque `useSyncExternalStore` exige un `getSnapshot` SÍNCRONO y
+// `ConnectedWalletProbe.getConnectedAddress()` es `async`. El GUARD y `resolveSender` leen el puerto
+// INYECTADO. En producción son el mismo adapter sobre el mismo bridge, así que todo recorrido que
+// ejercite banner Y guard setea LAS DOS o está midiendo un estado que no existe. Ese es el trabajo
+// de `cambiarDeCuentaA`.
+describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () => {
+  const A = FAKE_WALLET_ADDRESS;
+  const B = "CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8";
+
+  /** La billetera de estos tests LEE EL BRIDGE, que es lo que hace el `SolanaWalletAdapter` real:
+   *  `connect()` espera al bridge y devuelve su `publicKey`. Sin esto habria una TERCERA costura
+   *  —el doble de la billetera— que hay que acordarse de mover a mano, y el gesto de AC-6, que pasa
+   *  por `ConnectWallet.execute()`, adoptaria la cuenta VIEJA en el test y la nueva en produccion.
+   *  Es subclase y no objeto literal porque el spread de una instancia no copia el prototipo. */
+  class WalletDelBridge extends FakeWallet {
+    constructor(private readonly siNoHayNadie: string = A) {
+      super();
+    }
+    override async connect(): Promise<string> {
+      return solanaWalletBridge.getState().publicKey ?? this.siNoHayNadie;
+    }
+    override async getAddress(): Promise<string | null> {
+      return solanaWalletBridge.getState().publicKey ?? this.siNoHayNadie;
+    }
+  }
+
+  /** LAS DOS COSTURAS JUNTAS. Nunca una sola. */
+  function cambiarDeCuentaA(cuenta: string | null, probe: FakeConnectedWallet): void {
+    act(() => {
+      solanaWalletBridge.setState({ publicKey: cuenta, connected: cuenta != null });
+    });
+    probe.switchTo(cuenta);
+  }
+
+  afterEach(() => {
+    // NO `reset()`: escribe `this.state` directo y NO notifica a los suscriptores, así que dejaría a
+    // un árbol montado mostrando el valor viejo (ver el docblock de `subscribeState`).
+    act(() => {
+      solanaWalletBridge.setState({ publicKey: null, connected: false });
+    });
+  });
+
+  // ── AC-2 · las tres puertas NO monetarias resuelven con la dirección VIVA ─────────────────────
+
+  it("T-354-2a: el historial se pide con la cuenta VIVA, no con la que quedó cacheada", async () => {
+    const probe = new FakeConnectedWallet(A);
+    const repo = new InMemoryRepo();
+    const c = buildTestContainer({ repo, wallet: new FakeSolanaWallet(), connectedWallet: probe });
+    const spy = vi.spyOn(c.listHistory, "execute");
+
+    render(<RemittanceFlow container={c} />);
+    // (1) primera visita: la sesión queda con `address = A`. Sin este paso no hay caché que exponer.
+    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith(A));
+    fireEvent.click(await screen.findByRole("button", { name: /Volver/ }));
+
+    // (2) la persona cambia de cuenta en Phantom.
+    cambiarDeCuentaA(B, probe);
+
+    // (3) misma puerta, otra vez: tiene que salir con B. Con el `address ??` de antes salía con A.
+    fireEvent.click(await screen.findByRole("button", { name: /Ver mis envíos/ }));
+    await waitFor(() => expect(spy.mock.calls.at(-1)?.[0]).toBe(B));
+  });
+
+  it("T-354-2b: la recuperación de un envío perdido sale con la cuenta VIVA", async () => {
+    const probe = new FakeConnectedWallet(A);
+    const refundGw = new FakeSolanaEscrowRefundGateway();
+    const c = buildTestContainer({
+      wallet: new FakeSolanaWallet(),
+      solanaRefund: refundGw,
+      connectedWallet: probe,
+    });
+
+    render(<RemittanceFlow container={c} />);
+    cambiarDeCuentaA(B, probe);
+    fireEvent.click(await screen.findByRole("button", { name: "Recuperar un envío perdido" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Buscar mis escrows/ }));
+
+    await waitFor(() => expect(refundGw.calls).toHaveLength(1));
+    expect(refundGw.calls[0]?.sender).toBe(B);
+  });
+
+  it("T-354-2c: la puerta de cuentas cerrables sale con la cuenta VIVA", async () => {
+    const probe = new FakeConnectedWallet(A);
+    const lister = new FakeSolanaCloseableEscrowLister([]);
+    const c = buildTestContainer({
+      wallet: new FakeSolanaWallet(),
+      solanaCloseableEscrows: lister,
+      connectedWallet: probe,
+    });
+
+    render(<RemittanceFlow container={c} />);
+    cambiarDeCuentaA(B, probe);
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Recuperar el depósito de red de envíos anteriores/ }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /Buscar envíos con cuentas abiertas/ }));
+
+    await waitFor(() => expect(lister.calls).toHaveLength(1));
+    expect(lister.calls[0]?.sender).toBe(B);
+  });
+
+  // 🔴 EL CONTROL SIN EL CUAL 2a-2c NO PRUEBAN NADA: si el doble contestara B pase lo que pase, los
+  // tres pasarían igual. Acá NO se cambia de cuenta y las tres puertas tienen que salir con A.
+  it("T-354-2d(control): sin cambio de cuenta, las tres puertas salen con la cuenta de siempre", async () => {
+    const probe = new FakeConnectedWallet(A);
+    const refundGw = new FakeSolanaEscrowRefundGateway();
+    const lister = new FakeSolanaCloseableEscrowLister([]);
+    const c = buildTestContainer({
+      wallet: new FakeSolanaWallet(),
+      solanaRefund: refundGw,
+      solanaCloseableEscrows: lister,
+      connectedWallet: probe,
+    });
+    const spy = vi.spyOn(c.listHistory, "execute");
+
+    render(<RemittanceFlow container={c} />);
+    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith(A));
+    fireEvent.click(await screen.findByRole("button", { name: /Volver/ }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Recuperar un envío perdido" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Buscar mis escrows/ }));
+    await waitFor(() => expect(refundGw.calls).toHaveLength(1));
+    expect(refundGw.calls[0]?.sender).toBe(A);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Recuperar el depósito de red de envíos anteriores/ }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /Buscar envíos con cuentas abiertas/ }));
+    await waitFor(() => expect(lister.calls).toHaveLength(1));
+    expect(lister.calls[0]?.sender).toBe(A);
+  });
+
+  it("T-354-2e: tras resolver con la cuenta viva, el pill del header muestra B", async () => {
+    const probe = new FakeConnectedWallet(B);
+    const c = buildTestContainer({ wallet: new FakeSolanaWallet(), connectedWallet: probe });
+
+    render(<RemittanceFlow container={c} />);
+    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+
+    // El `setAddress(addr)` de `resolveSender` es lo que hace que el header hable de la cuenta real.
+    expect(await screen.findByText(`${B.slice(0, 6)}…${B.slice(-4)}`)).toBeInTheDocument();
+  });
+
+  // ── AC-3 · confirmar bajo otra identidad se corta ANTES de pedir ninguna firma ────────────────
+
+  const COPY_AC3 =
+    "Estás conectado con otra cuenta, distinta de la que verificamos para este envío. Cambiá en tu billetera a la cuenta con la que empezaste, o usá el aviso de arriba para pasarte a la que tenés conectada ahora y empezar un envío nuevo.";
+
+  it("T-354-3a: con la cuenta cambiada, 'Confirmar y enviar' no llama al use-case y explica por qué", async () => {
+    const probe = new FakeConnectedWallet(A);
+    const c = buildTestContainer({ connectedWallet: probe, wallet: new WalletDelBridge() });
+    const spy = vi.spyOn(c.confirmAndSend, "execute");
+
+    render(<RemittanceFlow container={c} />);
+    await goToConfirm(); // la remesa queda con ownerAddress = A
+
+    cambiarDeCuentaA(B, probe);
+    fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
+
+    // (i) la persona lee qué pasó y qué hacer.
+    expect(await screen.findByText(COPY_AC3)).toBeInTheDocument();
+    // (ii) 🔴 CERO llamadas: ningún challenge, ningún popup de firma condenado.
+    expect(spy).toHaveBeenCalledTimes(0);
+    // (iii) y la remesa NO quedó marcada como fallida: sigue confirmable.
+    expect(screen.queryByText(/no pudimos preparar tu pago/i)).toBeNull();
+  });
+
+  it("T-354-3b: ejecutar la PRIMERA instrucción del copy (volver a tu cuenta) desbloquea el envío", async () => {
+    const probe = new FakeConnectedWallet(A);
+    const c = buildTestContainer({ connectedWallet: probe, wallet: new WalletDelBridge() });
+    const spy = vi.spyOn(c.confirmAndSend, "execute");
+
+    render(<RemittanceFlow container={c} />);
+    await goToConfirm();
+    cambiarDeCuentaA(B, probe);
+    fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
+    expect(await screen.findByText(COPY_AC3)).toBeInTheDocument();
+
+    // "Cambiá en tu billetera a la cuenta con la que empezaste" — ejecutado.
+    cambiarDeCuentaA(A, probe);
+
+    // 🔴 HALLAZGO MEDIDO EN ESTE TEST, y se deja escrito porque el copy no lo dice. Con `error`
+    // seteado, el paso `confirm` REEMPLAZA "Confirmar y enviar" por "Recotizar tasa" (la rama
+    // `error ? ... : ...` del render de `confirm`). Esa rama es ANTERIOR a esta HU y vale para
+    // CUALQUIER error del paso, no sólo para éste. Consecuencia: después de seguir la primera
+    // instrucción del copy al pie de la letra, en pantalla NO hay ningún botón de confirmar; hay uno
+    // que habla de la tasa. La instrucción se puede cumplir, pero no en un solo gesto, y el copy no
+    // menciona ese gesto intermedio. Medido: los botones en pantalla en este punto son exactamente
+    // ["¿No sos vos?", "Recotizar tasa"].
+    expect(screen.queryByRole("button", { name: /Confirmar y enviar/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Recotizar tasa/ }));
+
+    // Y a partir de ahí el guard NO se pega: con la identidad de vuelta en su lugar, el envío sigue.
+    fireEvent.click(await screen.findByRole("button", { name: /Confirmar y enviar/ }));
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByText(COPY_AC3)).toBeNull());
+  });
+
+  it("T-354-3c: ejecutar la SEGUNDA instrucción del copy (el aviso de arriba) empieza un envío nuevo sin borrar el KYC", async () => {
+    const probe = new FakeConnectedWallet(A);
+    const kycStore = new FakeKycStore();
+    const c = buildTestContainer({ connectedWallet: probe, kycStore, wallet: new WalletDelBridge() });
+    const forgetSpy = vi.spyOn(c.forgetKyc, "execute");
+
+    render(<RemittanceFlow container={c} />);
+    await goToConfirm();
+    cambiarDeCuentaA(B, probe);
+    fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
+    expect(await screen.findByText(COPY_AC3)).toBeInTheDocument();
+
+    // "usá el aviso de arriba para pasarte a la que tenés conectada ahora" — ejecutado.
+    fireEvent.click(await screen.findByRole("button", { name: "Usar esta cuenta" }));
+
+    // Vuelve a `send` con la cuenta nueva, y sin haber borrado nada.
+    expect(await screen.findByRole("button", { name: /Continuar/ })).toBeInTheDocument();
+    expect(await screen.findByText(`${B.slice(0, 6)}…${B.slice(-4)}`)).toBeInTheDocument();
+    expect(forgetSpy).toHaveBeenCalledTimes(0);
+  });
+
+  it("T-354-3d(control): sin cambiar de cuenta, el mismo recorrido llega al use-case y el mensaje nunca aparece", async () => {
+    const probe = new FakeConnectedWallet(A);
+    const c = buildTestContainer({ connectedWallet: probe, wallet: new WalletDelBridge() });
+    const spy = vi.spyOn(c.confirmAndSend, "execute");
+
+    render(<RemittanceFlow container={c} />);
+    await goToConfirm();
+    fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
+
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(COPY_AC3)).toBeNull();
+  });
+
+  it("T-354-3e: con el probe en `null` el guard NO dispara (null es 'no hay nadie', no 'cambió')", async () => {
+    // Éste es el estado del árbol que todavía no montó providers, o sea el de casi toda la suite.
+    const probe = new FakeConnectedWallet(null);
+    const c = buildTestContainer({ connectedWallet: probe, wallet: new WalletDelBridge() });
+    const spy = vi.spyOn(c.confirmAndSend, "execute");
+
+    render(<RemittanceFlow container={c} />);
+    await goToConfirm();
+    fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
+
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(COPY_AC3)).toBeNull();
+  });
+
+  // ── AC-4 · el KYC-once sigue funcionando después del gesto ────────────────────────────────────
+
+  it("T-354-4a: tras adoptar B, que YA estaba verificada, el envío nuevo salta directo a confirmar", async () => {
+    const probe = new FakeConnectedWallet(B);
+    const kycStore = new FakeKycStore();
+    await kycStore.save(B, passKyc); // B ya se verificó alguna vez
+    const c = buildTestContainer({
+      connectedWallet: probe,
+      kycStore,
+      wallet: new WalletDelBridge(B),
+    });
+
+    render(<RemittanceFlow container={c} />);
+    cambiarDeCuentaA(B, probe);
+    fillSend();
+    fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+
+    // KYC-once intacto: ni `review` ni `verify`, directo a confirmar.
+    expect(await screen.findByRole("button", { name: /Confirmar y enviar/ })).toBeInTheDocument();
+  });
+
+  it("T-354-4b(control): con B SIN verificar, el mismo recorrido va a review, no a confirmar", async () => {
+    const probe = new FakeConnectedWallet(B);
+    const c = buildTestContainer({
+      connectedWallet: probe,
+      kycStore: new FakeKycStore(), // vacío: B no se verificó nunca
+      wallet: new WalletDelBridge(B),
+    });
+
+    render(<RemittanceFlow container={c} />);
+    cambiarDeCuentaA(B, probe);
+    fillSend();
+    fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+
+    expect(await screen.findByText(/Revisá el envío/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Confirmar y enviar/ })).toBeNull();
+  });
+
+  // ── AC-6 · el gesto que adopta la cuenta y NO destruye nada ───────────────────────────────────
+
+  it("T-354-6a: 'Usar esta cuenta' adopta B y deja intacto TODO lo de A (repo y store, no sólo espías)", async () => {
+    const probe = new FakeConnectedWallet(A);
+    const repo = new InMemoryRepo();
+    const rA = Remittance.create("rem-A", beneficiary(), Money.of(400, "USDC"), T0);
+    rA.attachQuote(
+      {
+        quoteId: "q",
+        send: Money.of(400, "USDC"),
+        receive: Money.of(1480, "PEN"),
+        feeUsd: Money.of(0.5, "USDC"),
+        rate: 3.7,
+        etaMinutes: 30,
+        expiresAt: QUOTE_EXPIRES,
+        provenance: "fake",
+      },
+      T0,
+    );
+    rA.startKyc(T0, A); // ownerAddress = A ⇒ la entrada del historial es de A
+    await repo.save(rA);
+    const kycStore = new FakeKycStore();
+    await kycStore.save(A, passKyc);
+    const c = buildTestContainer({ repo, kycStore, connectedWallet: probe, wallet: new WalletDelBridge() });
+    const forgetSpy = vi.spyOn(c.forgetKyc, "execute");
+    const clearSpy = vi.spyOn(repo, "clearByOwner");
+
+    render(<RemittanceFlow container={c} />);
+    // La sesión arranca con A (el pill aparece recién cuando `address` deja de ser null).
+    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Volver/ }));
+
+    cambiarDeCuentaA(B, probe);
+
+    // El banner, con su copy exacto.
+    expect(await screen.findByText("Estás conectado con otra cuenta")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Tu billetera tiene activa una cuenta distinta de la que estás usando acá. Podés pasarte a ella sin perder nada: no se borra tu verificación ni tus envíos guardados, ni de esta cuenta ni de la otra.",
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Usar esta cuenta" }));
+
+    // (i) el pill muestra B.
+    expect(await screen.findByText(`${B.slice(0, 6)}…${B.slice(-4)}`)).toBeInTheDocument();
+    // (ii) y (iii) ninguno de los dos caminos de borrado corrió.
+    expect(forgetSpy).toHaveBeenCalledTimes(0);
+    expect(clearSpy).toHaveBeenCalledTimes(0);
+    // (iv) y (v) LO DURABLE SIGUE AHÍ. Estos dos leen el repo y el store, no cuentan espías: un
+    //      borrado hecho por otro camino pasaría los dos asserts de arriba y moriría acá.
+    expect(await repo.list(A)).toHaveLength(1);
+    expect(await kycStore.get(A)).not.toBeNull();
+  });
+
+  it("T-354-6b(control): con la billetera en la MISMA cuenta de la sesión, el banner no está", async () => {
+    const probe = new FakeConnectedWallet(A);
+    const c = buildTestContainer({ connectedWallet: probe, wallet: new WalletDelBridge() });
+
+    render(<RemittanceFlow container={c} />);
+    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Volver/ }));
+
+    cambiarDeCuentaA(A, probe); // el bridge dice lo mismo que la sesión
+
+    expect(await screen.findByText(`${A.slice(0, 6)}…${A.slice(-4)}`)).toBeInTheDocument();
+    expect(screen.queryByText("Estás conectado con otra cuenta")).toBeNull();
+  });
+
+  it("T-354-6c: '¿No sos vos?' → 'Borrar igual' SIGUE borrando (los dos gestos no se degradaron)", async () => {
+    const probe = new FakeConnectedWallet(A);
+    const c = buildTestContainer({ connectedWallet: probe, wallet: new WalletDelBridge() });
+    const forgetSpy = vi.spyOn(c.forgetKyc, "execute");
+
+    render(<RemittanceFlow container={c} />);
+    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Volver/ }));
+
+    fireEvent.click(await screen.findByRole("button", { name: /¿No sos vos\?/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Borrar igual" }));
+
+    await waitFor(() => expect(forgetSpy).toHaveBeenCalledTimes(1));
+  });
+
+  it("T-354-6d: sin sesión (nadie conectó todavía) el banner NO se pinta, aunque el bridge tenga cuenta", async () => {
+    // Sin este guard el banner aparecería en el arranque de casi toda la suite y en la primera
+    // pantalla de cualquier persona.
+    const probe = new FakeConnectedWallet(B);
+    const c = buildTestContainer({ connectedWallet: probe, wallet: new WalletDelBridge() });
+
+    render(<RemittanceFlow container={c} />);
+    cambiarDeCuentaA(B, probe);
+
+    expect(screen.queryByText("Estás conectado con otra cuenta")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Usar esta cuenta" })).toBeNull();
+  });
+
+  it("T-354-6e: con una remesa en vuelo, el banner lo dice y el gesto la descarta (CD-18)", async () => {
+    const probe = new FakeConnectedWallet(A);
+    const c = buildTestContainer({ connectedWallet: probe, wallet: new WalletDelBridge() });
+
+    render(<RemittanceFlow container={c} />);
+    await goToConfirm(); // remesa en vuelo con ownerAddress = A
+
+    cambiarDeCuentaA(B, probe);
+
+    expect(
+      await screen.findByText("Este envío quedó a nombre de la cuenta anterior, así que empezás uno nuevo."),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Usar esta cuenta" }));
+
+    // Vuelve a `send`: no queda una remesa de A bajo la sesión B.
+    expect(await screen.findByRole("button", { name: /Continuar/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Confirmar y enviar/ })).toBeNull();
   });
 });

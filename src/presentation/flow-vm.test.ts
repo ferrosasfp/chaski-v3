@@ -2140,7 +2140,7 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
   // cambio de program address (ya pasó acá, commit `89628d8`), el cutover a mainnet, o una
   // `NEXT_PUBLIC_SOLANA_RPC_URL` mal apuntada harían que la pantalla le dijera a alguien que no hay
   // nada que recuperar sobre una fila donde SÍ lo hay, apagándole (`LostEscrowRecovery`,
-  // `flow.tsx:755`), que es la puerta que le queda. Argumento largo en el docblock de
+  // `flow.tsx:830`), que es la puerta que le queda. Argumento largo en el docblock de
   // (`escrowOutcomeDisplay`, `flow-vm.ts:1251`).
   //
   // MUTANTE MEDIDO: reponer esa media frase en `flow-vm.ts:1267`. Aplicado y medido: T-W10 se pone
@@ -2202,7 +2202,7 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
   //   (2) la tercera posibilidad decía "siga abierta en un contrato que no estamos mirando", y ése es
   //       justo el lugar donde el más plausible de los cuatro disparadores NO la pone: si el depósito
   //       lo firmó otra cuenta de la wallet, la cuenta vive en ESTE MISMO programa con otro sender, y
-  //       (`LostEscrowRecovery`, `flow.tsx:2036`) la encuentra porque resuelve por sender. Mandar a un
+  //       (`LostEscrowRecovery`, `flow.tsx:2111`) la encuentra porque resuelve por sender. Mandar a un
   //       "otro contrato" es mandar a la persona al único lugar donde no hay nada que buscar.
   //
   // MUTANTE MEDIDO: reponer en `flow-vm.ts:1267` la frase vieja ("Y en el contrato que estamos
@@ -2246,5 +2246,53 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
     expect(nuevo).toContain("siga abierta en otra dirección");
     expect(nuevo).toContain("wallet conectada");
     expect(nuevo).not.toContain("un contrato que no estamos mirando");
+  });
+});
+
+// ═══ WKH-354 · AC-3 y AC-7 — los dos copys que esta HU toca ══════════════════════════════════════
+describe("WKH-354 · el copy de la cuenta cambiada y la cola reescrita de chain-absent", () => {
+  /** El literal EXACTO, escrito a mano acá y no derivado de `humanError`: un test que le pregunta al
+   *  código qué copy produce y después verifica que produjo ese copy se compara consigo mismo. */
+  const COPY_AC3 =
+    "Estás conectado con otra cuenta, distinta de la que verificamos para este envío. Cambiá en tu billetera a la cuenta con la que empezaste, o usá el aviso de arriba para pasarte a la que tenés conectada ahora y empezar un envío nuevo.";
+
+  it("T-354-3f: `wallet_account_changed` tiene copy propio, byte a byte, y NO promete que la app cambie la cuenta", () => {
+    expect(humanError("wallet_account_changed")).toBe(COPY_AC3);
+    // No cae al genérico: si la rama no fuera alcanzable (por ejemplo, si alguna rama anterior
+    // hiciera `includes` de un substring suyo), acá saldría "Algo salió mal".
+    expect(humanError("wallet_account_changed")).not.toBe("Algo salió mal. Intentá de nuevo.");
+    // 🔴 LO QUE LA APP NO PUEDE HACER Y POR LO TANTO NO PROMETE: `WalletContextState` expone
+    // `select(walletName)`, `connect()` y `disconnect()`, y NINGUNA API para elegir la CUENTA dentro
+    // de una wallet — eso pasa adentro de Phantom. Un copy que dijera "te cambiamos la cuenta"
+    // prometería una acción que esta app no puede ejecutar.
+    expect(COPY_AC3).not.toMatch(/te cambiamos|cambiamos tu cuenta/i);
+    // Sin em dashes (ni raya ni semirraya).
+    expect(COPY_AC3).not.toMatch(/[—–]/);
+    // Las DOS instrucciones accionables están, y cada una tiene su test que la EJECUTA en
+    // `flow.test.tsx` (T-354-3b la primera, T-354-3c la segunda). Un texto no se mide a sí mismo.
+    expect(COPY_AC3).toContain("Cambiá en tu billetera a la cuenta con la que empezaste");
+    expect(COPY_AC3).toContain("usá el aviso de arriba");
+  });
+
+  it("T-354-7a: la cola de `chain-absent-after-deposit` ya no manda a reabrir la app, y lo de antes de la cola no se movió", () => {
+    const copy = escrowOutcomeDisplay("chain-absent-after-deposit").copy;
+    // La cola nueva.
+    expect(copy).toContain("cambiá a esa cuenta en tu billetera y volvé a la pantalla de inicio: ahí está la opción de recuperar un envío perdido.");
+    // Y la vieja no está: es el assert que caza la reposición del consejo que exigía reabrir.
+    expect(copy).not.toContain("volvé a abrir Chaski");
+    expect(copy).not.toContain("en la pantalla de inicio, está la opción");
+    // TODO LO ANTERIOR A "cambiá a esa cuenta" queda byte-idéntico: es lo que T-W10 y T-W11 vigilan y
+    // esta HU no tiene nada que decir sobre eso. Si esto se rompe, el cambio se pasó de largo.
+    expect(copy.split("cambiá a esa cuenta")[0]).toBe(
+      "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en la dirección que le corresponde a este envío no hay ninguna cuenta: miramos esa dirección sola, no el contrato entero, y eso es todo lo que medimos. Desde acá no podemos decir si terminó en un pago o en una devolución, ni descartar que la cuenta siga abierta en otra dirección: la que miramos se calcula con la wallet conectada, así que si depositaste con otra, ",
+    );
+  });
+
+  it("T-354-7b: la cola nueva no tiene em dashes y no promete ningún reload", () => {
+    const copy = escrowOutcomeDisplay("chain-absent-after-deposit").copy;
+    const cola = copy.slice(copy.indexOf("cambiá a esa cuenta"));
+    expect(cola).not.toMatch(/[—–]/);
+    // Ninguna de las formas de "volvé a abrir / recargá / reiniciá la app".
+    expect(cola).not.toMatch(/reabr|volv[ée] a abrir|recarg|reinici|refresc/i);
   });
 });

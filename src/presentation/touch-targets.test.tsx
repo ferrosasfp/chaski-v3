@@ -6,13 +6,13 @@
 // alto propio: el área tocable era el alto de la línea de texto (~20 px con `text-sm`, ~16 px con
 // `text-xs`), contra los 52 px que el CTA del camino feliz ya tenía. Tres de esos seis son las ÚNICAS
 // puertas para recuperar plata:
-//   · "Ver mis envíos"                                    (`flow.tsx:747`)
-//   · "Recuperar un envío perdido"                        (`flow.tsx:2173`)
-//   · "Recuperar el depósito de red de envíos anteriores"  (`flow.tsx:2323`)
+//   · "Ver mis envíos"                                    (`flow.tsx:822`)
+//   · "Recuperar un envío perdido"                        (`flow.tsx:2248`)
+//   · "Recuperar el depósito de red de envíos anteriores"  (`flow.tsx:2398`)
 // Y otros tres viven apretados en una fila del header, uno de ellos destructivo:
-//   · "Borrar igual" (borra los datos locales)             (`flow.tsx:566`)
-//   · "Cancelar"                                           (`flow.tsx:573`)
-//   · "¿No sos vos?"                                       (`flow.tsx:583`)
+//   · "Borrar igual" (borra los datos locales)             (`flow.tsx:640`)
+//   · "Cancelar"                                           (`flow.tsx:647`)
+//   · "¿No sos vos?"                                       (`flow.tsx:657`)
 //
 // ⚠️ QUÉ MIDEN ESTOS TESTS Y QUÉ NO. jsdom NO hace layout: `getBoundingClientRect()` devuelve 0 y el
 // alto real en píxeles NO se puede medir acá. Así que estos tests leen el NÚMERO QUE ESTÁ DENTRO DEL
@@ -102,7 +102,7 @@ function puertasDeRecuperarPlata(): Array<{ nombre: string; el: HTMLElement }> {
 describe("T-341-3 (AC-2): las tres puertas de recuperar plata declaran alto de toque", () => {
   it("las tres declaran min-h de 52 px o más", () => {
     // INPUT QUE LO PONE EN ROJO: borrarle la clase `min-h-[52px]` a cualquiera de las tres
-    // (`flow.tsx:747`, `:2143`, `:2293`) ⇒ `minHpx` no matchea ⇒ throw con el nombre del control.
+    // (`flow.tsx:822`, `:2143`, `:2293`) ⇒ `minHpx` no matchea ⇒ throw con el nombre del control.
     for (const { nombre, el } of puertasDeRecuperarPlata()) {
       expect(minHpx(el), nombre).toBeGreaterThanOrEqual(52);
     }
@@ -127,7 +127,7 @@ describe("T-341-4 (AC-2): el 52 no está escrito a mano, sale del CTA del camino
 /**
  * Los tres controles del bloque de reset. "¿No sos vos?" y el par "Borrar igual"/"Cancelar" NO
  * coexisten: el primero es el que abre el bloque y desaparece al abrirlo (es un ternario: `confirmReset` en
- * `flow.tsx:558`, la otra rama en `:579`). Así que el px de "¿No sos vos?" se lee ANTES del click y
+ * `flow.tsx:632`, la otra rama en `:579`). Así que el px de "¿No sos vos?" se lee ANTES del click y
  * el de los otros dos DESPUÉS. Un test que los buscara a los tres al mismo tiempo no encontraría
  * ninguno de los tres.
  */
@@ -152,9 +152,9 @@ async function pxDelBloqueDeReset(): Promise<{
 describe("T-341-5 (AC-3): los tres controles del bloque de reset llegan al mínimo de toque", () => {
   it("los tres declaran min-h de 44 px o más", async () => {
     // 44 px es el mínimo de WCAG 2.5.5 / HIG. No son 52 porque los tres viven en una MISMA fila del
-    // header (`flow.tsx:561`) y a 52 cada uno el header crece más de lo necesario.
+    // header (`flow.tsx:635`) y a 52 cada uno el header crece más de lo necesario.
     //
-    // INPUT QUE LO PONE EN ROJO: dejar cualquiera de los tres sin `min-h-` (`flow.tsx:566`, `:573`,
+    // INPUT QUE LO PONE EN ROJO: dejar cualquiera de los tres sin `min-h-` (`flow.tsx:640`, `:573`,
     // `:583`) ⇒ `minHpx` no matchea ⇒ throw nombrando el control.
     const px = await pxDelBloqueDeReset();
     expect(px.noSosVos, "¿No sos vos?").toBeGreaterThanOrEqual(44);

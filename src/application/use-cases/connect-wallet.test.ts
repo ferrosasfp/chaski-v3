@@ -126,3 +126,72 @@ describe("ConnectWallet — el veredicto se asegura AL CONECTAR (WKH-333/AC-20)"
     expect(out.serverVerdict).toBeUndefined();
   });
 });
+
+// ═══ WKH-354 · AC-4 — regresión: W2.1 no rompió la resolución POR DIRECCIÓN ══════════════════════
+//
+// 🔴 POR QUÉ ESTE TEST EXISTE. WKH-354 hizo que `resolveSender` (pantalla) le pregunte a la billetera
+// VIVA en vez de servir un `useState` cacheado. Lo que NO cambió, y este candado lo fija, es que
+// `ConnectWallet` resuelve TODO —el KYC recordado y el veredicto del servidor— por la dirección que
+// `wallet.connect()` devuelve, y por ninguna otra. En producción esa dirección sale del bridge, así
+// que "adoptar la cuenta que la billetera tiene activa" (el gesto de AC-6, que reusa este mismo
+// use-case) reconoce sola a una cuenta que ya estaba verificada. Si alguien hiciera que este
+// use-case cachee la primera dirección, el gesto adoptaría la cuenta nueva con el KYC de la vieja:
+// exactamente lo que CD-1 prohíbe.
+describe("ConnectWallet — WKH-354/AC-4: el veredicto se resuelve POR la dirección conectada", () => {
+  const B = "CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8";
+
+  /** El molde del adapter real: `connect()` contesta la cuenta ACTIVA, que puede cambiar sin que la
+   *  app haga nada. `FakeWallet` contesta siempre la misma, que es justo lo que acá no sirve. */
+  class WalletQueCambiaDeCuenta extends FakeWallet {
+    constructor(public actual: string) {
+      super();
+    }
+    override async connect(): Promise<string> {
+      return this.actual;
+    }
+    override async getAddress(): Promise<string | null> {
+      return this.actual;
+    }
+  }
+
+  it("T-354-4c: cambiada la cuenta activa, el KYC recordado y el `ensure` salen con la cuenta NUEVA", async () => {
+    const wallet = new WalletQueCambiaDeCuenta(ADDR);
+    const store = new FakeKycStore();
+    await store.save(ADDR, kyc("did-de-A")); // A verificada
+    await store.save(B, kyc("did-de-B")); // B TAMBIÉN verificada, con otro identificador
+    const { gw, calls } = spyGateway(USABLE);
+
+    // (1) con la cuenta de siempre: sale A.
+    const primero = await new ConnectWallet(wallet, store, gw).execute();
+    expect(primero.address).toBe(ADDR);
+    expect(primero.rememberedKyc?.verificationId).toBe("did-de-A");
+    expect(calls.at(-1)?.address).toBe(ADDR);
+
+    // (2) la persona cambia de cuenta en Phantom, sin recargar.
+    wallet.actual = B;
+
+    // (3) TODO sale con B: la dirección, el KYC recordado y la consulta del veredicto. Un cache de la
+    //     primera dirección haría que el KYC de A viaje bajo la sesión de B.
+    const segundo = await new ConnectWallet(wallet, store, gw).execute();
+    expect(segundo.address).toBe(B);
+    expect(segundo.rememberedKyc?.verificationId).toBe("did-de-B");
+    expect(segundo.rememberedKyc?.verificationId).not.toBe("did-de-A");
+    expect(calls.at(-1)?.address).toBe(B);
+    expect(calls.at(-1)?.candidate).toBe("did-de-B");
+  });
+
+  it("T-354-4c(control): con B SIN verificar, el KYC recordado es null y el `ensure` igual sale con B", async () => {
+    // Sin este control, el de arriba podría estar verde por un store que devuelve cualquier cosa.
+    const wallet = new WalletQueCambiaDeCuenta(B);
+    const store = new FakeKycStore();
+    await store.save(ADDR, kyc("did-de-A")); // sólo A está verificada
+    const { gw, calls } = spyGateway(USABLE);
+
+    const out = await new ConnectWallet(wallet, store, gw).execute();
+
+    expect(out.address).toBe(B);
+    expect(out.rememberedKyc).toBeNull(); // el KYC de A NO se hereda
+    expect(calls.at(-1)?.address).toBe(B);
+    expect(calls.at(-1)?.candidate).toBeUndefined();
+  });
+});

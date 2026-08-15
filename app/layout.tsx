@@ -43,10 +43,21 @@ export const metadata: Metadata = {
 //
 // El candado es `app/viewport.test.ts` (T-341-1): se pone en rojo si `maximumScale` o
 // `user-scalable` vuelven a este bloque.
+// `viewportFit: "cover"` (D-1) es la mitad que vive acá del manejo de área segura. Sin él, el
+// navegador encoge la ventana hasta el rectángulo seguro y las cuatro variables
+// `env(safe-area-inset-*)` valen 0 SIEMPRE: los tokens `p-segura-*` de `tailwind.config.ts`
+// existirían y no harían nada. Con él, la ventana ocupa la pantalla entera y el padding del
+// contenedor es lo único que separa el contenido del notch. Las dos mitades sólo sirven juntas, y
+// romper cualquiera de las dos devuelve el defecto original.
+//
+// Se agrega una PROPIEDAD al bloque y no se lo reformatea: el candado (`hasta`,
+// `viewport.test.ts:42`) recorta el fuente desde `export const viewport` hasta el primer cierre a
+// comienzo de línea, así que colapsar este objeto a una línea lo dejaría midiendo otra cosa.
 export const viewport: Viewport = {
   themeColor: "#CB2A54",
   width: "device-width",
   initialScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

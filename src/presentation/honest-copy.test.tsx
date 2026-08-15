@@ -51,6 +51,9 @@ import {
 // requestAnimationFrame y sin esto los steps del flujo nunca montan.
 vi.mock("framer-motion", () => ({
   AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
+  // Lista CERRADA: lo que no esté acá no existe para este archivo, y el faltante tira TODA la
+  // suite del archivo, no un test. Ver el docblock del mismo doble en `flow.test.tsx`.
+  MotionConfig: ({ children }: { children: React.ReactNode }) => children,
   motion: new Proxy(
     {},
     {
@@ -564,7 +567,7 @@ describe("la identidad del paso confirm", () => {
 
   // 🔴 `confirm` no era el único paso afectado, y esto lo prueba. El sello de `track` se prendía SOLO
   // por la pata del payout: con el KYC simulado y un desembolso REAL (`transfi`), la remesa entera
-  // quedaba sin ningún aviso también en seguimiento, y lo mismo en el recibo (`Receipt`, `flow.tsx:3260`,
+  // quedaba sin ningún aviso también en seguimiento, y lo mismo en el recibo (`Receipt`, `flow.tsx:3401`,
   // que llama al mismo `isDemoMode`). Es la combinación hacia la que apunta el proyecto: payout real
   // primero, KYC real después.
   it("el KYC simulado también prende el sello en track, con un desembolso REAL", () => {

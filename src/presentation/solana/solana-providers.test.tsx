@@ -397,7 +397,7 @@ describe("SolanaWalletBridgeSync — la gracia antes de afirmar 'acá no hay nin
 
   it("T-341-13 (CD-2): antes de la gracia el estado es 'unknown', que no afirma nada", async () => {
     // `"unknown"` es lo que hace que `NoWalletHere` NO pinte: su guard es
-    // `if (availability !== "none") return null;` (`flow.tsx:1229`).
+    // `if (availability !== "none") return null;` (`flow.tsx:1297`).
     //
     // ⚠️ ESTE TEST CUBRE LA MITAD DEL AC, Y LA OTRA MITAD LA CUBRE OTRO. El Story File pedía además
     // que "`NoWalletHere` no pinta". Este archivo NO puede probar eso: mockea entero el árbol de

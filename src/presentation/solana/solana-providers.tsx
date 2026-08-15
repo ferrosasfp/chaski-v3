@@ -64,7 +64,7 @@ import "@solana/wallet-adapter-react-ui/styles.css";
  * (`solana-providers.test.tsx`) prueba el VALOR —a 1500 el bridge dice `"none"`, y sólo después del
  * alta `"injected"`—, y (`T-UI-1`, `wallet-availability.test.tsx:179`) prueba la PANTALLA —con
  * `"unknown"` el aviso NO está en el DOM, con `"none"` sí—, que es lo que hace observable el guard de
- * `flow.tsx:1229`. `T-341-11` no renderiza `NoWalletHere`, así que por sí solo NO prueba la pantalla.
+ * `flow.tsx:1297`. `T-341-11` no renderiza `NoWalletHere`, así que por sí solo NO prueba la pantalla.
  *
  * De dónde sale el 1500: el tick del `setInterval` es 1000, así que 1500 deja 500 ms de holgura sobre
  * **la única de las cuatro que tiene cota de retardo conocida tras la inyección** (a lo sumo 1000 ms

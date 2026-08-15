@@ -340,7 +340,7 @@ describe("recuperar un envío perdido: dos búsquedas seguidas", () => {
   // más envíos con fondos por recuperar" sin haberle preguntado NADA a la cadena.
   //
   // Es la SEGUNDA encarnación del mismo defecto en el mismo archivo: el CR de WKH-327 lo arregló en el
-  // componente INMEDIATAMENTE SIGUIENTE (`explainer`, `flow.tsx:2401`), a unas pocas decenas de
+  // componente INMEDIATAMENTE SIGUIENTE (`explainer`, `flow.tsx:2533`), a unas pocas decenas de
   // líneas de donde nació este. ⚠️ Acá decía "48 líneas": una distancia es una cifra que envejece
   // sola, y mis propias inserciones la llevaron a 60 (AR-2/MNR-7). Lo estructural no envejece, y es lo
   // que hace al caso PEOR: nació al lado de la nota que lo describe, no lejos de ella.

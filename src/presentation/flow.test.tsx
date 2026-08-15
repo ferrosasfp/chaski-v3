@@ -108,8 +108,17 @@ function passedSnapshot(receiveMajor: number, rate: number, expiresAt: string): 
 // CD-8 / DT-7: framer-motion pass-through. jsdom no implementa requestAnimationFrame → el exit de
 // AnimatePresence no completa y los steps (review, vuelta a send) NUNCA montarían. El mock solo
 // elimina la animación (presentación), no la lógica.
+// ⚠️ ESTE DOBLE ES UNA LISTA CERRADA, y por eso hay que tocarlo cada vez que `flow.tsx` empieza a
+// usar un export nuevo de framer-motion. No es un `importOriginal` parcial: lo que no esté acá
+// NO EXISTE para este archivo, y el síntoma no es un test suelto en rojo sino la suite entera del
+// archivo caída con «No "X" export is defined on the "framer-motion" mock». Medido al agregar
+// `MotionConfig` en `flow.tsx` (D-2 · ola 1 de rediseño): 52 tests de ESTE archivo en rojo de golpe,
+// y lo mismo en `honest-copy`, `solo-cci`, `wallet-availability` y `agent-plan-card`, que copian
+// este mismo doble. Son cinco copias del mismo listado y ninguna se entera sola.
 vi.mock("framer-motion", () => ({
   AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
+  // Pasa de largo: el punto del doble es pintar DOM plano, y la config de framer no pinta nada.
+  MotionConfig: ({ children }: { children: React.ReactNode }) => children,
   motion: new Proxy(
     {},
     {

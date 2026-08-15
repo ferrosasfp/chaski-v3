@@ -360,7 +360,7 @@ describe("WKH-350 · el historial se reparte en 4 secciones y no pierde nada por
 //
 // 🔴 EL CANDADO TIENE DOS MITADES Y DOS CONTROLES, Y NINGUNA SOBRA:
 //   (b) ESTRUCTURAL — dentro del grupo no hay ningún `span.rounded-full`, que es la forma del `Pill`
-//       (`ui.tsx:116`). Mata: restaurar `<Pill tone={status.tone}>{status.label}</Pill>`, y TAMBIÉN
+//       (`ui.tsx:185`). Mata: restaurar `<Pill tone={status.tone}>{status.label}</Pill>`, y TAMBIÉN
 //       una etiqueta nueva con texto propio (`<Pill tone="neutral">Trámite</Pill>`), que (c) NO caza.
 //   (c) SEMÁNTICA — ninguna de las 7 etiquetas de `statusDisplay` aparece dentro del `textContent` del
 //       grupo, COMO SUBSTRING. Mata: pintar `status.label` SIN Pill, en un `<span className="text-xs">`,
@@ -368,7 +368,7 @@ describe("WKH-350 · el historial se reparte en 4 secciones y no pierde nada por
 //       `queryAllByText` con el que nació esta mitad dejaba pasar verde. Cada mitad mata un mutante que
 //       la otra deja pasar.
 //   ctrl-1 — el MISMO selector de (b) encuentra exactamente 1 Pill en el `Receipt`. Sin esto, si
-//       `ui.tsx:116` dejara de usar `rounded-full`, (b) sería VACUAMENTE verde para siempre.
+//       `ui.tsx:185` dejara de usar `rounded-full`, (b) sería VACUAMENTE verde para siempre.
 //   ctrl-2 — el conjunto de (c) tiene 7 etiquetas y ninguna vacía. Sin esto, un `statusDisplay`
 //       mutado a `label: ""` dejaría a (c) buscando cadenas vacías y verde con cualquier cosa.
 //   Los dos controles existen porque UNA ASERCIÓN DE AUSENCIA ES VERDE POR DEFECTO: hay que probar
@@ -451,7 +451,7 @@ describe("WKH-351 · la tarjeta del historial no muestra la etiqueta del trámit
   // 🔴 T-N1 (AC-1, AC-4 parcial) — EL INVARIANTE, EN LOS 4 GRUPOS, CON LAS 7 ETIQUETAS PRESENTES.
   // MUTANTE (a): esconder el encabezado del grupo "para evitar la contradicción", que es resolver la
   // HU al revés: sacarle a la persona el dato que la cadena SÍ sostiene.
-  // MUTANTE (b): restaurar el Pill en `flow.tsx:3228`, o poner cualquier otra etiqueta con forma de
+  // MUTANTE (b): restaurar el Pill en `flow.tsx:3369`, o poner cualquier otra etiqueta con forma de
   // Pill y texto nuevo.
   // MUTANTE (c): pintar `status.label` sin Pill, en un `<span className="text-xs">`.
   it("T-N1: en los 4 grupos está el encabezado y no hay ninguna etiqueta de trámite", async () => {
@@ -473,11 +473,11 @@ describe("WKH-351 · la tarjeta del historial no muestra la etiqueta del trámit
     for (const g of LOS_4_GRUPOS) {
       const grupo = screen.getByTestId(`grupo-${g}`);
       // (b) estructural. El scope por grupo NO es un adorno: el chip de la wallet del header
-      // (`flow.tsx:671-672`) también es un `span.rounded-full`, y un selector global lo contaría.
+      // (`flow.tsx:679-680`) también es un `span.rounded-full`, y un selector global lo contaría.
       expect(grupo.querySelectorAll("span.rounded-full")).toHaveLength(0);
       // (c) semántica, por SUBSTRING sobre el `textContent` del grupo y no por `queryAllByText`.
       // Medido, y es el motivo del cambio: con `<span className="text-xs">Estado: {status.label}</span>`
-      // en `flow.tsx:3228` la tarjeta decía "Estado: Pago en curso" bajo "Necesitan tu firma" —el caso
+      // en `flow.tsx:3369` la tarjeta decía "Estado: Pago en curso" bajo "Necesitan tu firma" —el caso
       // exacto del founder, con sus mismas palabras— y `queryAllByText`, que es match EXACTO, lo dejaba
       // pasar verde. Un prefijo no puede evadir un `includes`.
       const texto = grupo.textContent ?? "";
@@ -497,7 +497,7 @@ describe("WKH-351 · la tarjeta del historial no muestra la etiqueta del trámit
   // `payout_submitted` + respuesta `deposited-window-closed` ⇒ grupo "Necesitan tu firma". Es
   // literalmente lo de producción: 3 filas, 32 USDC, con "Pago en curso" al lado de "el plazo venció".
   // MUTANTE: volver a la Opción 1 (Pill condicional por grupo) preservándolo justo para
-  // `payout_submitted`; revertir sólo el hunk de `flow.tsx:3228` dejando el de `flow.tsx:3208`; o mover la
+  // `payout_submitted`; revertir sólo el hunk de `flow.tsx:3369` dejando el de `flow.tsx:3349`; o mover la
   // etiqueta del trámite al encabezado del grupo.
   // POR QUÉ NO ALCANZA T-N1: T-N1 recorre grupos con un conjunto derivado; T-N2 fija el par exacto
   // (status, respuesta) del reporte y lo nombra con literales. Si mañana alguien reordena fixtures,
@@ -543,12 +543,12 @@ describe("WKH-351 · la tarjeta del historial no muestra la etiqueta del trámit
 
   // 🔴 T-N4 (AC-4) — LO QUE LA TARJETA SIGUE MOSTRANDO, Y ES TODO MENOS LA ETIQUETA.
   // MUTANTE: la limpieza tentadora de borrar el `<div className="flex items-start justify-between
-  // gap-3">` de `flow.tsx:3221` junto con el Pill ("un flex con un solo hijo sobra"), que se lleva
-  // puestos el nombre, el monto y la fecha. O borrar el bloque `flow.tsx:3221-3229` entero. Además, esas 4
+  // gap-normal">` de `flow.tsx:3362` junto con el Pill ("un flex con un solo hijo sobra"), que se lleva
+  // puestos el nombre, el monto y la fecha. O borrar el bloque `flow.tsx:3362-3370` entero. Además, esas 4
   // líneas de desplazamiento las cazaría el control de línea-neutralidad.
   // ⚠️ LA FECHA NO SE COMPARA CONTRA UN LITERAL: `toLocaleDateString("es-PE")` depende del ICU del
   // runtime. Se verifica que la línea del monto exista y que NO diga "sin fecha", que es lo que
-  // `formatEntryDate` (`flow.tsx:3250`) devuelve cuando el `createdAt` es implanteable.
+  // `formatEntryDate` (`flow.tsx:3391`) devuelve cuando el `createdAt` es implanteable.
   it("T-N4: la tarjeta sigue mostrando nombre, monto, fecha, la frase y exactamente un botón", async () => {
     const reader = new FakeSolanaEscrowChainStateReader(
       mapa([["rem-open", "deposited-window-open"]]),

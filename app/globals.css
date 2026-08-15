@@ -18,9 +18,23 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* montos: cifras alineadas */
-.tabular {
-  font-variant-numeric: tabular-nums;
+/* 🔴 ACÁ VIVÍA `.tabular` (ola 2 de rediseño · M-1), y no se borra por prolijidad. Era CSS escrito a
+   mano que hacía exactamente lo que `tabular-nums` de fábrica, con una diferencia que sí importa:
+   `tailwind-merge` no la conocía, así que `cn("tabular", "tabular-nums")` devolvía LAS DOS y ningún
+   token del tema podía pisarla. Sus 11 sitios (10 en `flow.tsx`, 1 en `ui.tsx`) pasaron a la utilidad
+   de fábrica y la regla se fue con ellos. Que no quede ninguno lo verifica `ola-2-pantallas.test.tsx`
+   leyendo el árbol, no este comentario. */
+
+/* Señal de "esto está en curso" que NO se apoya en movimiento: la opacidad late, nada rota ni se
+   traslada. Existe sólo para el bloque de abajo. */
+@keyframes chaski-en-curso {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -29,5 +43,40 @@ body {
   *::after {
     animation-duration: 0.001ms !important;
     transition-duration: 0.001ms !important;
+  }
+
+  /* 🔴 EL DEFECTO QUE CIERRA ESTA EXCEPCIÓN (D-2 · ola 1 de rediseño).
+     La regla universal de arriba le pone 0.001ms a TODA animación, y eso no las apaga: las CONGELA
+     en su primer cuadro. Medido en 40f0b68: `flow.tsx` tenía 7 `animate-spin` y 1 `animate-pulse`,
+     así que quien navega con el movimiento reducido veía un spinner detenido encima de "Preparando
+     el pago a tu familiar". Un spinner quieto no es un spinner apagado: AFIRMA un progreso que no
+     está mostrando, exactamente igual que una frase que afirma de más.
+     Este repo ya tenía escrita la misma lección del otro lado del problema: el test de
+     `flow.test.tsx` "en payout_submitted NADA gira: el paso que no avanza solo no se anima" nació
+     porque un spinner giraba sobre un paso que no avanza. Congelado sobre un paso que SÍ avanza es
+     el error simétrico. (Sin número de línea a propósito: el candado anti-drift de citas sólo
+     escanea .ts/.tsx, así que una cita anclada escrita acá parecería verificada y no lo estaría.)
+
+     Por qué gana sobre la regla universal: `.animate-spin` tiene especificidad (0,1,0) contra el
+     (0,0,0) del `*`, y entre dos declaraciones `!important` gana la más específica. Igual va DESPUÉS
+     y no antes, y eso no es estilo: el candado que lo verifica corre en jsdom, y jsdom resuelve dos
+     `!important` por ORDEN DE APARICIÓN y no por especificidad (medido: con este bloque movido
+     arriba del universal, la duración computada vuelve a 0.001ms). Escrito abajo del universal, las
+     dos lecturas coinciden.
+
+     Y por qué cuatro longhands en vez del atajo `animation:`: jsdom NO expande el shorthand
+     (medido: `animation: foo 1.6s …` computa `animation-duration: ""` y `animation-name: ""`), así
+     que con el atajo el candado no podría leer nada de lo que vigila. Es válido en un navegador y
+     es invisible para el test, que es la peor combinación.
+
+     Por qué late en vez de girar más lento: el pedido de quien activa "movimiento reducido" es no
+     ver desplazamientos ni rotaciones, no ver menos información. La opacidad no es vestibular, así
+     que el indicador sigue diciendo "en curso" sin desobedecer la preferencia. */
+  .animate-spin,
+  .animate-pulse {
+    animation-name: chaski-en-curso !important;
+    animation-duration: 1.6s !important;
+    animation-timing-function: ease-in-out !important;
+    animation-iteration-count: infinite !important;
   }
 }

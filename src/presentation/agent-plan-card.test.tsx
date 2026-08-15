@@ -40,6 +40,9 @@ import { TEST_CCI } from "../test-support/fakes";
 
 vi.mock("framer-motion", () => ({
   AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
+  // Lista CERRADA: lo que no esté acá no existe para este archivo, y el faltante tira TODA la
+  // suite del archivo, no un test. Ver el docblock del mismo doble en `flow.test.tsx`.
+  MotionConfig: ({ children }: { children: React.ReactNode }) => children,
   motion: new Proxy(
     {},
     {
@@ -366,7 +369,7 @@ describe("el precio dice qué es y quién lo cobraría", () => {
   // regresión. Por eso todo lo que compara notas compara ESTE nodo.
   function textoDeLaNota(): string {
     const nodos = screen.getAllByText(/publican en el catálogo/);
-    // La tarjeta se monta en DOS pantallas (`AgentPlanCard`, `flow.tsx:1020` en `review` y `flow.tsx:1066`
+    // La tarjeta se monta en DOS pantallas (`AgentPlanCard`, `flow.tsx:1071` en `review` y `flow.tsx:1123`
     // en `confirm`) y `verLaTarjeta` para en `review`, así que hoy hay UN nodo. Un `cleanup()` olvidado
     // entre dos renders del mismo `it` deja DOS, y sin este assert se compararía la nota del render
     // ANTERIOR y el test daría verde por el DOM equivocado. Es el riesgo que este archivo ya declara en

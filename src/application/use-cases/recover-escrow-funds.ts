@@ -100,7 +100,7 @@ export class RecoverEscrowFunds {
       // "no pudimos recuperar" sobre plata que ya volvió.
       // ⚠️ Cuánto dura esa verdad depende del caller: mientras alguien re-lea el estado PERSISTIDO y
       // pise el de memoria, vuelve el viejo. El poll de la pantalla hacía exactamente eso 1,5 s
-      // después (`onOpenFromHistory`, `flow.tsx:392`) — por eso ahora NO arranca sobre un estado que ya no avanza solo.
+      // después (`onOpenFromHistory`, `flow.tsx:413`) — por eso ahora NO arranca sobre un estado que ya no avanza solo.
     }
     return { confirmation, refundTx, remittance: r };
   }

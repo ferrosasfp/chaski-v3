@@ -247,14 +247,14 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
   // 🔴 EL MUTANTE ORIGINAL NO LO MATA ESTE TEST, Y ESTÁ MEDIDO: que el desenlace de cadena reescriba
   // la etiqueta del trámite (pintar "Entregado" porque la PDA está `Released`). Hasta WKH-351 lo mataba
   // el assert de PRESENCIA del Pill, que es justo el que esta HU dio vuelta. Con ese mutante puesto en
-  // `flow.tsx:3199` este archivo queda VERDE (10 passed): el rojo lo da T-N1, mitad (c), en
+  // `flow.tsx:3220` este archivo queda VERDE (10 passed): el rojo lo da T-N1, mitad (c), en
   // `history-grupos.test.tsx`, que es hoy su dueño. El hecho de fondo no cambió: `Released` dice que el
   // vault salió del escrow y "Entregado" dice que el partner de payout reportó haber entregado los PEN,
   // y uno no prueba el otro.
   // 🔴 LO QUE SÍ MATA EL ASSERT DE CP3_LIBERADO: que la respuesta `released` deje de producir la frase
   // del vault en la tarjeta. T-V8 cubre ese copy en PURO, no en el render: (`escrowOutcomeDisplay`, `flow-vm.test.ts:1715`).
   // 🔴 EL MUTANTE DEL QUE ESTE TEST SÍ ES DUEÑO, MEDIDO: devolver `<Pill tone={status.tone}>{status.label}</Pill>`
-  // a `HistoryEntry` (`flow.tsx:3199`) pone rojo el assert de ausencia de abajo. ⚠️ Lo que NO caza es un
+  // a `HistoryEntry` (`flow.tsx:3220`) pone rojo el assert de ausencia de abajo. ⚠️ Lo que NO caza es un
   // `<span>` que pinte la etiqueta con un prefijo ("Estado: Pago en curso"): `queryAllByText` es match
   // EXACTO. Ese lo caza T-N1(c), que compara por substring sobre el `textContent` del grupo.
   // ⚠️ El assert de ausencia va SIN scope de fila a propósito: este montaje renderiza UNA sola fila y
@@ -420,7 +420,7 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
   // dice que el depósito entró y que no se puede saber cómo terminó.
   // MUTANTE (a) MEDIDO — NO RAMIFICAR: volver `flow-vm.ts:1205` a `return "chain-absent";`. Medido:
   // T-W6 y T-W7 rojos (los dos esperan el copy nuevo en el DOM).
-  // MUTANTE (b) MEDIDO — DIBUJAR LAS DOS: un `<p>` de más en `flow.tsx:3209` con
+  // MUTANTE (b) MEDIDO — DIBUJAR LAS DOS: un `<p>` de más en `flow.tsx:3230` con
   // `escrowOutcomeDisplay("chain-absent").copy`, o sea el copy nuevo JUNTO al viejo en vez de
   // reemplazarlo. Medido: SÓLO T-W6 rojo, y sólo por el `queryByText(...)` `toBeNull()` de abajo. Por
   // eso el assert de ausencia es parte del test y no un adorno: sin él, ese mutante pasa entero y la
@@ -453,7 +453,7 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
   // costeado en `ports.ts:1065-1088` (R-1) y está DIFERIDO, no descartado (AC-6).
   // Dos mitades, las dos obligatorias: (a) un `fetch` que tira ante cualquier invocación, y (b) que
   // `calls` del reader no se mueva entre un montaje CON prueba y uno SIN prueba.
-  // MUTANTE MEDIDO: en `HistoryEntry` (`flow.tsx:3184`), agregar
+  // MUTANTE MEDIDO: en `HistoryEntry` (`flow.tsx:3205`), agregar
   // `if (escrowOutcome(rem, answer) === "chain-absent-after-deposit") void fetch("/api/solana/signatures");`
   // Medido: sólo este test se pone rojo, y con el mensaje del doble ("fetch_prohibido_en_esta_pantalla"),
   // que es la prueba de que lo que falló fue el candado y no otra cosa.

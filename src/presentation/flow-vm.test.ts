@@ -2140,7 +2140,7 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
   // cambio de program address (ya pasó acá, commit `89628d8`), el cutover a mainnet, o una
   // `NEXT_PUBLIC_SOLANA_RPC_URL` mal apuntada harían que la pantalla le dijera a alguien que no hay
   // nada que recuperar sobre una fila donde SÍ lo hay, apagándole (`LostEscrowRecovery`,
-  // `flow.tsx:844`), que es la puerta que le queda. Argumento largo en el docblock de
+  // `flow.tsx:865`), que es la puerta que le queda. Argumento largo en el docblock de
   // (`escrowOutcomeDisplay`, `flow-vm.ts:1251`).
   //
   // MUTANTE MEDIDO: reponer esa media frase en `flow-vm.ts:1267`. Aplicado y medido: T-W10 se pone
@@ -2202,7 +2202,7 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
   //   (2) la tercera posibilidad decía "siga abierta en un contrato que no estamos mirando", y ése es
   //       justo el lugar donde el más plausible de los cuatro disparadores NO la pone: si el depósito
   //       lo firmó otra cuenta de la wallet, la cuenta vive en ESTE MISMO programa con otro sender, y
-  //       (`LostEscrowRecovery`, `flow.tsx:2125`) la encuentra porque resuelve por sender. Mandar a un
+  //       (`LostEscrowRecovery`, `flow.tsx:2146`) la encuentra porque resuelve por sender. Mandar a un
   //       "otro contrato" es mandar a la persona al único lugar donde no hay nada que buscar.
   //
   // MUTANTE MEDIDO: reponer en `flow-vm.ts:1267` la frase vieja ("Y en el contrato que estamos
@@ -2270,6 +2270,14 @@ describe("WKH-354 · el copy de la cuenta cambiada y la cola reescrita de chain-
     expect(COPY_AC3).not.toMatch(/[—–]/);
     // Las DOS instrucciones accionables están, y cada una tiene su test que la EJECUTA en
     // `flow.test.tsx` (T-354-3b la primera, T-354-3c la segunda). Un texto no se mide a sí mismo.
+    //
+    // ⚠️ ESTO DECÍA MENOS DE LO QUE PARECÍA, y el AR (r4 · BLQ-BAJO-1) lo cazó: 3b y 3c ejecutan las
+    // dos instrucciones desde un recorrido que pasó por `onConnect`, o sea con la sesión ya puesta.
+    // El camino principal en móvil NO pasa por ahí: al volver de Didit la página se RECARGA y el
+    // resume aterrizaba en `confirm` sin sesión, con lo cual la segunda instrucción mandaba a un
+    // aviso que en esa pantalla no existía. O sea que "cada una tiene su test que la ejecuta" era
+    // cierto para UN camino y falso para el otro. Lo cubre T-354-3g (el estado post-resume) más
+    // T-354-3h, que mide que sin billetera conectada este copy directamente no es alcanzable.
     expect(COPY_AC3).toContain("Cambiá en tu billetera a la cuenta con la que empezaste");
     expect(COPY_AC3).toContain("usá el aviso de arriba");
     // Y la primera NOMBRA el control que la persona va a encontrar en pantalla. Que ese control

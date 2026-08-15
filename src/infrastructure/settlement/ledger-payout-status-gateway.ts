@@ -15,7 +15,7 @@
 // que dudes de una rama de error acá, la respuesta es la misma: NO-TERMINAL.
 //
 // ⛔ EL LECTOR DE PRUEBAS NO TIENE `prove`, Y ESO ES DELIBERADO. Esta clase corre dentro de un
-// `setInterval` de 1500 ms (`}, 1500);`, `../../presentation/flow.tsx:613`). Si pudiera pedir una firma,
+// `setInterval` de 1500 ms (`}, 1500);`, `../../presentation/flow.tsx:634`). Si pudiera pedir una firma,
 // pediría un popup de billetera cada 1,5 s — 400 por sesión de 10 min. Que no pueda no depende de que
 // nadie la llame: depende de que el método NO EXISTA en `PopProofReader`
 // (`PopProofReader`, `../../application/ports.ts:150`), así que `tsc` lo impide. Es el patrón estructural

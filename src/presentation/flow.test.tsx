@@ -1822,7 +1822,7 @@ it("T-6.1: un `provenance` que no está en la allowlist ⇒ NO 'Identidad verifi
 // ⚠️ EL `sender` NO ES `null` ACÁ, Y HAY QUE VERIFICARLO O EL ROJO ES POR EL MOTIVO EQUIVOCADO: con
 // `sender == null` la pantalla cae en el estado "sin billetera", que a propósito NO ofrece el gesto
 // (no hay a quién pedirle la firma), y el test quedaría rojo antes Y después del fix. `openHistory`
-// pasa por `resolveSender`, que hace `setAddress(addr)` (`resolveSender`, `./flow.tsx:366`), así que
+// pasa por `resolveSender`, que hace `setAddress(addr)` (`resolveSender`, `./flow.tsx:387`), así que
 // al llegar al seguimiento `sender` es la address del dueño. El aserto (b) lo clava.
 //
 // Molde: `seededFlow` de `history.test.tsx:130`, que es el mismo camino ("Ver mis envíos" → "Ver
@@ -2826,6 +2826,72 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
 
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
     expect(screen.queryByText(COPY_AC3)).toBeNull();
+  });
+
+  // 🔴 T-354-3g — LA SEGUNDA INSTRUCCIÓN DEL COPY, LEÍDA EN LA VUELTA DE DIDIT (AR r4 · BLQ-BAJO-1).
+  //
+  // T-354-3c ya ejecuta esa instrucción, pero desde un recorrido que pasó por `onConnect`, o sea con
+  // `address` puesta. El camino que NO pasa por ahí es el principal en móvil: `startKyc` navega la
+  // MISMA pestaña a Didit (`window.location.href = res.url`) y, al volver, el efecto de resume hace
+  // `setRem` + `setStep("confirm")` y NUNCA llama a `setAddress`. Se aterriza en `confirm` con
+  // `address === null`, y `CuentaCambiada` no se pinta sin sesión (es su primera condición).
+  // Resultado medido antes del arreglo: el copy aparecía, `queryByRole("button", {name: "Usar esta
+  // cuenta"})` daba `null` y el único botón en pantalla era "Recotizar tasa". La frase mandaba a un
+  // control que en esa pantalla no existe, que es EXACTAMENTE el defecto que WKH-352 y WKH-354
+  // vinieron a cerrar, reaparecido en el camino principal.
+  it("T-354-3g: volviendo de Didit (sin pasar por onConnect), el aviso que el copy nombra SÍ está", async () => {
+    const probe = new FakeConnectedWallet(B);
+    // `passedSnapshot` deja `ownerAddress = A`: la remesa se empezó con la cuenta vieja.
+    const snapshot = passedSnapshot(1478.15, 3.7, "2099-01-01T00:00:00.000Z");
+    const c = buildTestContainer({
+      connectedWallet: probe,
+      wallet: new WalletDelBridge(B),
+      useCases: {
+        resumeKyc: {
+          execute: async () => ({ kind: "passed" as const, snapshot }),
+        } as unknown as ResumeKyc,
+      },
+    });
+
+    render(<RemittanceFlow container={c} />);
+    cambiarDeCuentaA(B, probe); // la billetera quedó en B mientras la persona estaba en Didit
+
+    // El resume aterriza en `confirm` sin haber pasado por `onConnect`.
+    fireEvent.click(await screen.findByRole("button", { name: /Confirmar y enviar/ }));
+    expect(await screen.findByText(COPY_AC3)).toBeInTheDocument();
+
+    // Y el control que la SEGUNDA instrucción nombra existe acá también, no sólo en 3c.
+    expect(await screen.findByRole("button", { name: "Usar esta cuenta" })).toBeInTheDocument();
+  });
+
+  // 🔴 T-354-3h(control) — EL CASO QUE PODÍA OBLIGAR A CAMBIAR EL COPY, Y NO LO OBLIGA.
+  //
+  // Tras una recarga la billetera puede NO quedar conectada, y ahí el banner tampoco se pinta (`viva`
+  // es `null`). La pregunta era si eso deja el copy mandando a un aviso ausente otra vez. No: con
+  // `viva == null` el guard de `onConfirm` NO dispara (CD-17, `null` es "no hay nadie" y no "cambió"),
+  // así que ese copy NO ES ALCANZABLE en ese estado y no hay ninguna frase colgada que corregir. Sin
+  // esta medición, la decisión entre repoblar la sesión y reescribir el copy era una opinión.
+  it("T-354-3h(control): sin billetera conectada tras la recarga, el copy no aparece y el envío sigue", async () => {
+    const probe = new FakeConnectedWallet(null); // nadie conectado después de volver de Didit
+    const snapshot = passedSnapshot(1478.15, 3.7, "2099-01-01T00:00:00.000Z"); // ownerAddress = A
+    const c = buildTestContainer({
+      connectedWallet: probe,
+      wallet: new WalletDelBridge(),
+      useCases: {
+        resumeKyc: {
+          execute: async () => ({ kind: "passed" as const, snapshot }),
+        } as unknown as ResumeKyc,
+      },
+    });
+    const spy = vi.spyOn(c.confirmAndSend, "execute");
+
+    render(<RemittanceFlow container={c} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Confirmar y enviar/ }));
+
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(COPY_AC3)).toBeNull();
+    // Y el banner tampoco está, que es lo que hace que la pregunta se plantee.
+    expect(screen.queryByRole("button", { name: "Usar esta cuenta" })).toBeNull();
   });
 
   // ── AC-4 · el KYC-once sigue funcionando después del gesto ────────────────────────────────────

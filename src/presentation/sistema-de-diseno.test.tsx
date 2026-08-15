@@ -27,6 +27,8 @@
 //   · dos tonos de `Aviso` con la misma superficie               ⇒ 1 failed | 21 passed
 //   · `Money` sin `tabular-nums`                                 ⇒ 1 failed | 21 passed
 //   · `xl2` con un valor distinto de `caja`                      ⇒ 1 failed | 21 passed
+// ⚠️ El último de esos diez ya no se puede aplicar tal cual: la ola 2 borró `xl2` del tema, así que
+// ese `it` cambió de sentido (ver su comentario). El mutante equivalente hoy es volver a agregarlo.
 //
 // El sexto es el que más importa de la lista: es el gris EXACTO escrito como valor arbitrario, o sea
 // el cambio que se ve idéntico en pantalla y rompe igual el candado de `history-onchain.test.tsx`.
@@ -163,12 +165,19 @@ describe("S-4 · radios, íconos y espaciado quedan en escalas decidibles", () =
     );
   });
 
-  it("`xl2` sigue existiendo y vale lo mismo que `caja`", () => {
-    // 🔴 NO ES PRUDENCIA, ES UN CANDADO CONCRETO: `ui.tsx` usa `rounded-xl2` en `Button` y en `Card`,
-    // y `touch-targets.test.tsx` lee el `<Button>` renderizado. Borrar el token ahora dejaría esas
-    // clases sin emitir. Que valga lo mismo que `caja` es lo que permite migrar los sitios de
-    // llamada en la ola 2 sin que cambie un pixel.
-    expect(valor("borderRadius", "xl2")).toBe(valor("borderRadius", "caja"));
+  it("el legado `xl2` ya no está en el tema", () => {
+    // 🔴 ESTE `it` CAMBIÓ DE SENTIDO EN LA OLA 2, y el motivo importa más que el assert. Mientras
+    // `ui.tsx` usaba `rounded-xl2`, lo que había que clavar era que el token EXISTIERA y valiera lo
+    // mismo que `caja`: borrarlo antes de mover los sitios de llamada habría dejado esas clases sin
+    // emitir y `touch-targets.test.tsx` midiendo un botón sin estilo. Movidos los sitios, lo que hay
+    // que clavar es lo contrario, porque un token legado que sigue en el tema es una segunda forma
+    // de escribir el mismo radio y la escala vuelve a tener tres valores sin que nadie lo decida.
+    //
+    // ⚠️ ESTO SOLO MIRA EL TEMA. Que no quede ningún `rounded-xl2` ESCRITO en el árbol es otra
+    // pregunta y la contesta `ola-2-pantallas.test.tsx` (T-O2-1), porque una clase de Tailwind es un
+    // string: un `rounded-xl2` olvidado compila, pasa el `tsc` y no emite ninguna regla.
+    expect(Object.keys(grupo("borderRadius"))).not.toContain("xl2");
+    expect(Object.keys(grupo("borderRadius"))).toEqual(["caja", "control"]);
   });
 
   it("hay tres tamaños de ícono, estrictamente crecientes", () => {

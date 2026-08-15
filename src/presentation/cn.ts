@@ -37,9 +37,10 @@ const twMerge = extendTailwindMerge({
     theme: {
       // Alimentan `p-`, `m-`, `gap-` y `space-*` de una sola vez (S-4).
       spacing: ["ajustado", "normal", "holgado", "aire"],
-      // `xl2` entra acá aunque sea anterior a esta ola: tampoco lo conocía, así que
-      // `cn("rounded-xl2", "rounded-full")` devolvía los dos. Es el mismo defecto, más viejo.
-      borderRadius: ["caja", "control", "xl2"],
+      // `xl2` estuvo acá mientras existió (tampoco lo conocía `tailwind-merge`, así que
+      // `cn("rounded-xl2", "rounded-full")` devolvía los dos: el mismo defecto, más viejo). La ola 2
+      // migró sus sitios a `caja` y borró el token del tema, así que se va de acá con él.
+      borderRadius: ["caja", "control"],
       // Los cuatro del área segura (D-1), que sólo se usan como padding.
       padding: ["segura-t", "segura-b", "segura-l", "segura-r"],
     },

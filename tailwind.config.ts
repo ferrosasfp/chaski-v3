@@ -114,13 +114,17 @@ export default {
       // `rounded-full` no entra en la cuenta: no es un valor de una escala, es una forma (píldoras y
       // puntos de estado). Se queda como está.
       //
-      // ⚠️ `xl2` NO SE BORRA, y no es por prudencia: `ui.tsx` lo usa hoy en `Button` y en `Card`, y
-      // `touch-targets.test.tsx` lee el `<Button>` renderizado. Sacar el token dejaría esas clases
-      // sin emitir y el candado del área de toque midiendo un botón sin estilo. `caja` vale
-      // exactamente lo mismo que `xl2` (1.25rem), así que la ola 2 puede migrar los sitios de
-      // llamada uno por uno sin que cambie un pixel, y recién ahí `xl2` se va.
+      // ✅ `xl2` YA NO ESTÁ (ola 2 · M-1). Vivía acá porque `ui.tsx` lo usaba en `Button` y en `Card`
+      // y borrarlo antes de mover los sitios de llamada habría dejado esas clases sin emitir, con
+      // `touch-targets.test.tsx` midiendo un botón sin estilo. Los sitios se migraron a `caja`, que
+      // vale exactamente lo mismo (1.25rem), así que ningún borde cambió de forma.
+      //
+      // 🔴 Y OJO CON LA FORMA DE COMPROBARLO, porque acá el compilador NO ayuda: una clase de
+      // Tailwind es un string dentro de un `className`, así que un `rounded-xl2` olvidado compila,
+      // pasa el `tsc` y simplemente NO EMITE NINGUNA REGLA. El borde desaparece en silencio, que es
+      // el peor modo de falla posible. Lo que sí lo caza es un barrido del árbol, y vive en
+      // `ola-2-pantallas.test.tsx` (T-O2-1).
       borderRadius: {
-        xl2: "1.25rem", // legado; `caja` es su reemplazo y vale lo mismo. Se retira en la ola 2.
         caja: "1.25rem",
         control: "0.75rem",
       },

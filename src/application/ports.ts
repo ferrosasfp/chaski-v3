@@ -137,7 +137,7 @@ export type PayoutOutcomeLookup =
 
 // ── Prueba de posesión OBSERVADA (WKH-337) ───────────────────────────────────
 // 🔴 `PopProofReader` NO TIENE `prove`, Y ESO ES EL PUNTO. El gateway de tracking corre dentro de un
-// setInterval de 1,5 s (`src/presentation/flow.tsx:599`): si pudiera pedir una firma, pediría un popup
+// setInterval de 1,5 s (`src/presentation/flow.tsx:613`): si pudiera pedir una firma, pediría un popup
 // de billetera cada 1,5 s (600 s ÷ 1,5 s = 400 firmas por sesión de 10 min). Que no pueda no depende de
 // que nadie lo llame — depende de que el método NO EXISTA en el tipo, así que `tsc` lo impide. Es el
 // mismo patrón estructural que el campo `garantia` obligatorio de WKH-338: el invariante como forma del

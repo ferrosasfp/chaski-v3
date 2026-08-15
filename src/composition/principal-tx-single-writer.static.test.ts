@@ -57,7 +57,7 @@
 //      en runtime (por ejemplo `state[campo] = x` con `campo` calculado) no lo ve.
 //   3. NO cubre un `principalTx` introducido por un snapshot FABRICADO A MANO en `localStorage` y
 //      rehidratado. Ese residual es preexistente, es el mismo modelo de confianza que ya gobierna toda
-//      la pantalla de historial y el `TxProof` del recibo (`flow.tsx:3260-3261`), y no es una
+//      la pantalla de historial y el `TxProof` del recibo (`flow.tsx:3274-3275`), y no es una
 //      regresión de esta HU: ahí el atacante y la víctima son la misma persona.
 //   4. NO mira los `*.test.ts(x)`: los tests fabrican estados a propósito y deben poder seguir
 //      haciéndolo. El invariante es sobre el código que corre en producción.

@@ -2934,8 +2934,12 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
   });
 
   it("T-354-6d: sin sesión (nadie conectó todavía) el banner NO se pinta, aunque el bridge tenga cuenta", async () => {
-    // Sin este guard el banner aparecería en el arranque de casi toda la suite y en la primera
-    // pantalla de cualquier persona.
+    // Sin este guard el banner aparecería en la primera pantalla de cualquier persona: con
+    // `autoConnect` la billetera puede tener cuenta activa antes de que nadie elija ninguna.
+    // 🔴 Y ESTE TEST ES EL ÚNICO QUE LO SOSTIENE, medido: sacando `sesion == null ||` de
+    // `CuentaCambiada` la suite entera da 1 rojo de 2107 y es éste. Acá decía "aparecería en el
+    // arranque de casi toda la suite", que es la misma frase que estaba en el docblock del componente
+    // y que esa medición refuta.
     const probe = new FakeConnectedWallet(B);
     const c = buildTestContainer({ connectedWallet: probe, wallet: new WalletDelBridge() });
 

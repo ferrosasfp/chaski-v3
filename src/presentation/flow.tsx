@@ -71,7 +71,7 @@ import {
   kycOriginNotice,
   lostEscrowRecoveryError,
   shortErrorCode,
-  statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, type GestoRenovacion, REVISION_APAGADA, REVISION_FIRMANDO, REVISION_GESTO, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_BILLETERA, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, esVentanaSinAbiertos, // WKH-339: EN ESTA LÍNEA. `flow.tsx:599` lo citan 5 archivos y NINGUNA de las 5 es una cita anclada ⇒ si se mueve, nada se pone rojo y los 5 comentarios rotan en silencio · WKH-346 fix-pack: `esVentanaSinAbiertos` entra acá por lo mismo (Δ0)
+  statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, type GestoRenovacion, REVISION_APAGADA, REVISION_FIRMANDO, REVISION_GESTO, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_BILLETERA, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, esVentanaSinAbiertos, // WKH-339: EN ESTA LÍNEA. `flow.tsx:613` lo citan 5 archivos y NINGUNA de las 5 es una cita anclada ⇒ si se mueve, nada se pone rojo y los 5 comentarios rotan en silencio · WKH-346 fix-pack: `esVentanaSinAbiertos` entra acá por lo mismo (Δ0)
 } from "./flow-vm";
 import { cn } from "./cn";
 import { phantomBrowseUrl, useWalletAvailability, useConnectedWalletAddress } from "./wallet-availability"; // el aviso de "acá no hay wallet" (NoWalletHere) · WKH-354/AC-6: `useConnectedWalletAddress` para el banner (CuentaCambiada)
@@ -440,6 +440,20 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
       // ANTES de `authorizePrincipal`. Eso está medido y candado en T-354-5, que corre a nivel
       // use-case y SIN este guard. Lo que este guard evita es el POPUP DE FIRMA CONDENADO y el
       // "no pudimos preparar tu pago. Intentá de nuevo" que reintentaba para siempre.
+      //
+      // ⚠️ Y NO LO EVITA SIEMPRE: hay un residuo, y va acá porque el párrafo de arriba afirmaba sin
+      // condiciones (AR r4 · MENOR-4). Este guard sólo puede acusar lo que el bridge le cuente, y el
+      // bridge se alimenta del `publicKey` del adapter. En `@solana/wallet-adapter-phantom` 0.9.29
+      // (`node_modules/@solana/wallet-adapter-phantom/lib/cjs/adapter.js:48-63`), el handler de
+      // `accountChanged` sale SIN tocar `_publicKey` en dos ramas: cuando no había `_publicKey`
+      // previa, y cuando el `new PublicKey(newPublicKey.toBytes())` tira (ahí emite `error` y
+      // retorna). En esa segunda rama el bridge sigue diciendo A, el banner de `CuentaCambiada` no se
+      // pinta, este guard no dispara, y el popup sale igual.
+      //
+      // 🚧 SUPUESTO NO MEDIDO, declarado como tal: no pudimos reproducir con QUÉ argumento emite
+      // Phantom ese evento cuando la cuenta nueva no es usable, así que NO sabemos si esa rama es
+      // alcanzable en la práctica ni con qué frecuencia. Lo que sí está leído es el código del
+      // adapter. Quien vaya a cerrarlo: lo que falta medir es el evento, no la rama.
       //
       // 🔵 Y NO ES TAUTOLÓGICO, que es lo que hundió al guard de WKH-327 en su primera versión: los
       // dos lados salen de fuentes independientes. La izquierda es el bridge, por el puerto inyectado;
@@ -1254,7 +1268,7 @@ const TRACK_STEPS: { key: RemittanceState["status"][]; label: string; manual?: b
  * ⛔ PROHIBIDO ponerlo en `1500` reusando el literal del poll. Con 1500 la pantalla funciona igual —
  * por eso esto NO tiene test y la prohibición está escrita acá en vez de fingir un candado. El daño de
  * hacerlo es crear un SEGUNDO literal de una cadencia AJENA, que es el punto ciego que el Auto-Blindaje
- * de WKH-336 nombra; y `flow.tsx:599` (el literal del poll) ya lo citan 5 archivos por número. Un
+ * de WKH-336 nombra; y `flow.tsx:613` (el literal del poll) ya lo citan 5 archivos por número. Un
  * candado que comparara dos números que no tienen por qué ser iguales sería un guard que se compara
  * consigo mismo.
  */
@@ -1363,7 +1377,7 @@ export function TrackView({
   // tests NO se editan y siguen midiendo lo mismo.
   //
   // 🔴 LOS TIPOS SE DERIVAN DEL `Container`, NO SE IMPORTAN. Dos razones y las dos son medibles: un
-  // `import` nuevo arriba desplazaría `flow.tsx:599`, que 5 archivos citan por número y NINGUNA de las
+  // `import` nuevo arriba desplazaría `flow.tsx:613`, que 5 archivos citan por número y NINGUNA de las
   // 5 es una cita anclada (el ancla `` `}, 1500);` `` empieza con `}` y el regex del candado exige
   // `[A-Za-z_$]`) ⇒ si se mueve, nada se pone rojo y los 5 comentarios rotan en silencio. Y derivar del
   // `Container` es además la única fuente: si mañana la firma de `estado` cambia, esto no compila.
@@ -1931,7 +1945,7 @@ export function RefundAction({
   // cuando confirma), así que este array es su único ejemplar.
   //
   // Es el MISMO defecto que el fix-pack de WKH-346 arregló en la puerta de al lado
-  // (`LostEscrowRecovery`, `:2111`) y dejó declarado acá sin tocar, porque AC-9/CD-2 le prohibían este
+  // (`LostEscrowRecovery`, `:2125`) y dejó declarado acá sin tocar, porque AC-9/CD-2 le prohibían este
   // camino de firma. La propiedad "ningún comprobante ya mostrado desaparece" es de la FORMA de CADA
   // estado y no del componente: de "aquella variable es append-only" no se deduce nada sobre esta.
   const [enviados, setEnviados] = useState<
@@ -2125,7 +2139,7 @@ export function LostEscrowRecovery({
   // guarda es la firma de un refund YA TRANSMITIDO cuyo desenlace NADIE conoce: `confirmation` es
   // `"pending"` o `"unknown"` (`EscrowRefundConfirmation`, `ports.ts:339`). O sea EXACTAMENTE la firma
   // que la persona necesita para ir al visor a averiguar si entró, y esta HU la volvió prominente y
-  // enlazable (`RefundSentNotice`, `:2069`, que la imprime como "Orden enviada:"). Medido antes del arreglo: con `pending` y después
+  // enlazable (`RefundSentNotice`, `:2083`, que la imprime como "Orden enviada:"). Medido antes del arreglo: con `pending` y después
   // `confirmed`, la primera firma desaparecía del DOM; con dos `pending`, quedaba UN solo href.
   //
   // ⚠️ El `sender` va PEGADO a cada entrada, no aparte: es lo que hace que la pantalla no mezcle dos
@@ -2271,7 +2285,7 @@ export function LostEscrowRecovery({
         * arreglo: montadas afuera, la tarjeta afirmaría "puede haber más envíos con fondos por
         * recuperar" recién abierta la puerta, sin haberle preguntado nada a la cadena. Es la SEGUNDA
         * encarnación del mismo defecto en este archivo: el CR de WKH-327 lo arregló en el componente
-        * INMEDIATAMENTE SIGUIENTE (`explainer`, `flow.tsx:2358`), a unas pocas decenas de líneas de
+        * INMEDIATAMENTE SIGUIENTE (`explainer`, `flow.tsx:2372`), a unas pocas decenas de líneas de
         * donde nació este. ⚠️ Acá decía "48 líneas" y era una CIFRA QUE ENVEJECE SOLA: es una
         * distancia, y mis propias inserciones la movieron a 60 sin que ningún barrido la cazara
         * (AR-2/MNR-7). Lo que no envejece es la relación estructural, y es la que importa. Un test de
@@ -2297,7 +2311,7 @@ export function LostEscrowRecovery({
       ) : null}
       {/* UNA por orden transmitida, y no la última: cada una es una tx distinta cuyo desenlace nadie
           conoce todavía. `RefundSentNotice` sigue BYTE-IDÉNTICO y lo comparte con `RefundAction`
-          (`RefundAction`, `flow.tsx:1909`), que hoy acumula igual: WKH-346 no pudo (AC-9), otra HU sí. */}
+          (`RefundAction`, `flow.tsx:1923`), que hoy acumula igual: WKH-346 no pudo (AC-9), otra HU sí. */}
       {misEnviados.map((e) => (
         <RefundSentNotice key={e.refundTx} confirmation={e.confirmation} refundTx={e.refundTx} />
       ))}
@@ -2804,7 +2818,7 @@ function AgentUnavailable({
  * agregar *"y el fee de la entrega no lo paga nadie, porque ese paso no corre"*. Es verdad
  * (`this.solana`, `../application/use-cases/confirm-and-send.ts:336`) y está PROHIBIDO escribirlo: en
  * ese mismo cuadrante, tres renglones más arriba en la MISMA tarjeta, la fila de la entrega dice
- * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:2971`). Ese *"lo simula"* es impreciso
+ * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:2985`). Ese *"lo simula"* es impreciso
  * —con el settle apagado la entrega no se simula, se corta— pero es **H1 de WKH-336**, residual de otra
  * HU que exige un TERCER valor de `transport` con su propia frase, y WKH-338 no lo cierra. Si la nota
  * dijera *"la entrega no corre"* mientras la fila dice *"lo simula"*, la tarjeta se contradiría a sí
@@ -3162,7 +3176,7 @@ function HistoryEntry({
   onOpen: (rem: RemittanceState) => void;
   answer: EscrowChainAnswer;
 }) {
-  // WKH-351 · AC-1: acá NO se calcula el estado del trámite. El encabezado del grupo ya afirma sobre la plata, y entre las dos afirmaciones hay contradicción ALCANZABLE en 3 de los 4 grupos. (`statusDisplay`, `flow-vm.ts:133`) sigue viva, y la sigue mostrando (`Receipt`, `:3217`), que es una sola remesa y no tiene encabezado con el que chocar. Reemplazo línea-neutra, 1 línea por 1: borrar esta línea desplaza las referencias de abajo, y a la mayoría no las vigila ningún test.
+  // WKH-351 · AC-1: acá NO se calcula el estado del trámite. El encabezado del grupo ya afirma sobre la plata, y entre las dos afirmaciones hay contradicción ALCANZABLE en 3 de los 4 grupos. (`statusDisplay`, `flow-vm.ts:133`) sigue viva, y la sigue mostrando (`Receipt`, `:3231`), que es una sola remesa y no tiene encabezado con el que chocar. Reemplazo línea-neutra, 1 línea por 1: borrar esta línea desplaza las referencias de abajo, y a la mayoría no las vigila ningún test.
   const knowledge = escrowFundsKnowledge(rem);
   // WKH-349. El texto Y el peso visual salen de la MISMA función: un copy que dice "siguen en el
   // escrow" con el mismo gris que "no pudimos preguntar" pierde la mitad de AC-2. Y para los cuatro
@@ -3342,7 +3356,7 @@ export function recoveryWindowExhausted(maxCandidates: number): string {
  *
  * Los cinco sitios que le muestran una firma a la persona pasan por acá. Tres la imprimían ENTERA (87 u 88 caracteres, y 88 en la mayoría de los casos: una firma ed25519 son 64 bytes y su largo en base58 depende del primer byte. Medido, 4000 muestras: 80,2 % dan 88. Los 87 con los que se mide en los tests son propiedad de `FAKE_SOLANA_SIGNATURE`, no de una firma cualquiera — AR/MNR-2)
  * y desbordaban la única columna de la app; los
- * otros dos ya truncaban con `shortTx` (`shortTx`, `:3274`) y no llevaban a ninguna parte. Un solo
+ * otros dos ya truncaban con `shortTx` (`shortTx`, `:3288`) y no llevaban a ninguna parte. Un solo
  * componente en vez de cinco es lo que impide que el próximo sitio nazca con la tercera variante.
  *
  * 🔴 POR QUÉ VIVE ACÁ Y NO EN `src/presentation/tx-proof.tsx`, que era lo natural. Un archivo nuevo
@@ -3446,10 +3460,10 @@ export function TxProof({ signature }: { signature: string }) {
  * DEVUELVE UN FRAGMENT Y NO UN `div`. El padre es un `space-y-4`, y `space-y-*` sólo alcanza a los
  * hijos DIRECTOS: un div envolvente dejaría los 4 grupos a un nivel de profundidad y les comería el
  * espaciado. Y va un `<ul>` por grupo en vez de uno solo con separadores, porque la tarjeta devuelve
- * un `<li>` (`HistoryEntry`, `:3156`) y un encabezado suelto entre `<li>` es HTML inválido.
+ * un `<li>` (`HistoryEntry`, `:3170`) y un encabezado suelto entre `<li>` es HTML inválido.
  *
- * ⚠️ POR QUÉ VIVE ACÁ ABAJO Y NO JUNTO A (`HistoryView`, `:3065`), QUE ES DONDE SE LEERÍA MEJOR: por
- * lo mismo que (`TxProof`, `:3378`). Un bloque nuevo en el medio de este archivo desplaza todo lo que
+ * ⚠️ POR QUÉ VIVE ACÁ ABAJO Y NO JUNTO A (`HistoryView`, `:3079`), QUE ES DONDE SE LEERÍA MEJOR: por
+ * lo mismo que (`TxProof`, `:3392`). Un bloque nuevo en el medio de este archivo desplaza todo lo que
  * viene después, y a este archivo lo apuntan citas por número desde todo el árbol más las autocitas
  * `:NNN` de sus propios docblocks. De todas ellas, el candado de citas sólo vigila las ANCLADAS —las
  * que llevan el símbolo delante de la coma—; las SUELTAS, que son mayoría, se romperían sin que ningún
@@ -3507,18 +3521,44 @@ function HistoryGroups({
  *
  * NO RENDERIZA NADA salvo en el estado donde el gesto tiene sentido, y las TRES condiciones son
  * load-bearing:
- *  · `sesion != null`  — nadie conectó todavía; sin esto el banner se pintaría en el arranque de casi
- *                        toda la suite y en la primera pantalla de cualquiera (R-5).
+ *  · `sesion != null`  — nadie conectó todavía. Lo que esta condición evita es el banner en la PRIMERA
+ *                        PANTALLA de cualquiera: con `autoConnect` la billetera puede tener cuenta
+ *                        activa antes de que la persona elija ninguna, y ahí `viva !== sesion` es
+ *                        cierto sin que haya cambiado nada (R-5).
+ *                        ⚠️ ACÁ DECÍA "se pintaría en el arranque de casi toda la suite" Y ES FALSO,
+ *                        medido: quitando `sesion == null ||` de la condición de abajo, la suite
+ *                        completa da 1 rojo de 2107, y ese rojo es T-354-6d, el test escrito para
+ *                        esta condición. O sea que la suite NO es la que la sostiene: la sostiene un
+ *                        solo test, y por eso ese test es el que no se puede borrar.
  *  · `viva != null`    — el bridge todavía no midió nada. `null` NO es "cambió la cuenta".
  *  · `viva !== sesion` — sin esta comparación el banner se pinta siempre (T-354-6b lo mide).
  *
- * ⚠️ ESTE COMPONENTE LEE EL BRIDGE GLOBAL y no el puerto inyectado, y no es una inconsistencia:
- * `useSyncExternalStore` exige un `getSnapshot` SÍNCRONO y `ConnectedWalletProbe` es `async`. El
- * precedente es `NoWalletHere`, que ya consume `useWalletAvailability()` al lado de un container
- * inyectado. Consecuencia para quien escriba tests: un test que combine este banner con el guard de
- * `onConfirm` tiene que setear LAS DOS costuras (`solanaWalletBridge.setState` Y el `connectedWallet`
- * inyectado), porque en producción son el mismo adapter sobre el mismo bridge y un test que las ponga
- * en desacuerdo está midiendo un estado que no existe.
+ * ⚠️ ESTE COMPONENTE LEE EL BRIDGE GLOBAL y no el puerto inyectado. `useSyncExternalStore` exige un
+ * `getSnapshot` SÍNCRONO y `ConnectedWalletProbe` es `async`, así que la SUSCRIPCIÓN no puede pasar
+ * por el puerto. El precedente es `NoWalletHere`, que ya consume `useWalletAvailability()` al lado de
+ * un container inyectado.
+ *
+ * 🔵 PERO ESO NO HACE INEVITABLE LA SEGUNDA COSTURA, y decirlo al revés sobrevendía el diseño (AR r4 ·
+ * MENOR-3). Lo que el hook obliga es la suscripción; el VALOR podría resolverse por el puerto dentro
+ * de un efecto, suscribiéndose igual al bridge para saber CUÁNDO volver a preguntar. Se leen los dos
+ * del bridge porque es más simple, no porque no haya otra forma.
+ *
+ * 🔴 Y LOS DOS LECTORES NO APLICAN EL MISMO PREDICADO, así que su equivalencia no la da el tipo:
+ *   · (`useConnectedWalletAddress`, `./wallet-availability.ts:62`) devuelve `publicKey` crudo: no mira
+ *     `connected` y no valida base58.
+ *   · (`getConnectedAddress`, `../infrastructure/solana-wallet.ts:252`) exige las dos cosas y devuelve
+ *     `null` si falla cualquiera.
+ * Hoy coinciden por una razón medible y no por construcción: en producción hay UN SOLO escritor del
+ * bridge (`setState`, `./solana/solana-providers.tsx:178`, único llamador fuera de `*.test.*`) y ahí
+ * `publicKey` y `connected` salen del MISMO commit de React, así que el par incoherente
+ * (`publicKey != null` con `connected === false`) no se produce. Lo que rompería la equivalencia:
+ * un segundo escritor del bridge, o una `publicKey` que no parsee como base58. En cualquiera de esos
+ * dos casos el banner acusaría un cambio de cuenta que el guard de `onConfirm` no ve.
+ *
+ * Consecuencia para quien escriba tests: un test que combine este banner con el guard de `onConfirm`
+ * tiene que setear LAS DOS costuras (`solanaWalletBridge.setState` Y el `connectedWallet` inyectado),
+ * porque en producción son el mismo adapter sobre el mismo bridge y un test que las ponga en
+ * desacuerdo está midiendo un estado que no existe.
  *
  * La comparación es cruda (`!==`) y no `canonicalizeAddress`: los dos lados salen de la MISMA fuente
  * base58 (el bridge y el `setAddress` que viene del mismo bridge), así que no hay dos

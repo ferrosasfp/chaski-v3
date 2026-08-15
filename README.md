@@ -299,7 +299,7 @@ The dependency tree mixes React 19 with packages that still declare React 18 pee
 
 ## Tests
 
-**122 test files**, all green. That number is not a claim anyone has to trust:
+**123 test files**, all green. That number is not a claim anyone has to trust:
 `src/composition/readme-test-count.test.ts` counts the tree on every run and turns the suite red if this
 line drifts from it. For the number of individual cases, run `npm test`, which prints it. They break
 down as:

@@ -299,15 +299,19 @@ The dependency tree mixes React 19 with packages that still declare React 18 pee
 
 ## Tests
 
-**750 cases across 59 files**, all green. They break down as:
+**122 test files**, all green. That number is not a claim anyone has to trust:
+`src/composition/readme-test-count.test.ts` counts the tree on every run and turns the suite red if this
+line drifts from it. For the number of individual cases, run `npm test`, which prints it. They break
+down as:
 
 - Domain and application with test doubles, no network, wallet or browser. That is where the money path
   invariants live: nothing is confirmed without a verified identity and a live quote, an expired quote
   fails closed, the state machine admits no jumps.
 - API routes, infrastructure adapters and components with Testing Library.
-- Contract tests against pinned copies of two external services' output, the quote and the KYC
-  (`contracts/`). If a provider changes the shape of its response and someone re vendors the copy, the
-  consumer's test goes red instead of breaking in production. The third one, the payout, was retired:
+- Contract tests against pinned copies of what external services return (`contracts/`): the quote, the
+  KYC, and the three sponsor limits of the Solana facilitator, pinned on 2026-08-03 by WKH-321. If a
+  provider changes the shape of its response and someone re vendors the copy, the
+  consumer's test goes red instead of breaking in production. A fourth one, the payout, was retired:
   its consumer validator lived inside a method that pointed at a deleted route, so its green proved
   nothing. The reason and the follow up are in `contracts/CONTRACT-VERSIONS.md`.
 - The escrow IDL pinned by canonical hash (`contracts/idl/escrow-idl.hash.test.ts`), described above.
@@ -319,7 +323,7 @@ The dependency tree mixes React 19 with packages that still declare React 18 pee
   covering a new name means adding it to the list, with its reason.
 
 ```bash
-npm test          # 750 tests across 59 files
+npm test          # vitest run, the whole suite. It prints files and cases
 npm run qa        # lint + both typechecks + tests
 ```
 

@@ -297,15 +297,19 @@ El árbol de dependencias mezcla React 19 con paquetes que todavía declaran pee
 
 ## Tests
 
-**750 casos en 59 archivos**, todos en verde. Se reparten en:
+**122 archivos de test**, todos en verde. Ese número no es una afirmación que haya que creer:
+`src/composition/readme-test-count.test.ts` cuenta el árbol en cada corrida y pone la suite roja si esta
+línea se le despega. Para el número de casos individuales, corré `npm test`, que lo imprime. Se reparten
+en:
 
 - Dominio y aplicación con dobles de prueba, sin red ni wallet ni navegador. Ahí viven las invariantes
   del camino del dinero: no se confirma sin identidad verificada y cotización vigente, la cotización
   vencida falla cerrado, la máquina de estados no admite saltos.
 - Rutas de API, adaptadores de infraestructura y componentes con Testing Library.
-- Contract tests contra copias pinneadas del output de dos servicios externos, la cotización y el KYC
-  (`contracts/`). Si un proveedor cambia la forma de su respuesta y alguien re vendorea la copia, el
-  test del consumidor se pone rojo en vez de romperse en producción. El tercero, el del payout, se
+- Contract tests contra copias pinneadas de lo que devuelven los servicios externos (`contracts/`): la
+  cotización, el KYC, y los tres topes del sponsor del facilitator de Solana, pinneados el 2026-08-03
+  por WKH-321. Si un proveedor cambia la forma de su respuesta y alguien re vendorea la copia, el
+  test del consumidor se pone rojo en vez de romperse en producción. Un cuarto, el del payout, se
   retiró: su validador consumidor estaba dentro de un método que apuntaba a una ruta borrada, así que su
   verde no probaba nada. El motivo y el follow up están en `contracts/CONTRACT-VERSIONS.md`.
 - El IDL del escrow pinneado por hash canónico (`contracts/idl/escrow-idl.hash.test.ts`), descrito
@@ -318,7 +322,7 @@ El árbol de dependencias mezcla React 19 con paquetes que todavía declaran pee
   de toda librería Ethereum que exista, y cubrir un nombre nuevo es agregarlo a la lista, con su motivo.
 
 ```bash
-npm test          # 750 tests en 59 archivos
+npm test          # vitest run, la suite completa. Imprime archivos y casos
 npm run qa        # lint + los dos typechecks + tests
 ```
 

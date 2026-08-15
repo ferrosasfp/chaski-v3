@@ -579,7 +579,7 @@ describe("WKH-352 · el desenlace nuevo cae en el grupo que esa fila ya tenía",
    *  y se borró (CR · MNR-2): esas citas ya no existen, y las dos que este archivo hace a `flow-vm.test.ts`
    *  van ANCLADAS, así que el desplazamiento lo caza `citas-ancladas.test.ts` y no una regla en prosa. */
   const CP_ABSENT_CON_DEPOSITO =
-    "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en la dirección que le corresponde a este envío no hay ninguna cuenta: miramos esa dirección sola, no el contrato entero, y eso es todo lo que medimos. Desde acá no podemos decir si terminó en un pago o en una devolución, ni descartar que la cuenta siga abierta en otra dirección: la que miramos se calcula con la wallet conectada, así que si depositaste con otra, cambiá a esa cuenta en tu billetera y volvé a abrir Chaski: ahí, en la pantalla de inicio, está la opción de recuperar un envío perdido.";
+    "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en la dirección que le corresponde a este envío no hay ninguna cuenta: miramos esa dirección sola, no el contrato entero, y eso es todo lo que medimos. Desde acá no podemos decir si terminó en un pago o en una devolución, ni descartar que la cuenta siga abierta en otra dirección: la que miramos se calcula con la wallet conectada, así que si depositaste con otra, cambiá a esa cuenta en tu billetera y volvé a la pantalla de inicio: ahí está la opción de recuperar un envío perdido.";
   const CP_ABSENT_AMBIGUO =
     "En el contrato no hay ninguna cuenta para este envío: o el depósito nunca entró, o ya se cerró después de resolverse. Desde acá no podemos decir cuál de las dos.";
 

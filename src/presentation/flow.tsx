@@ -41,7 +41,7 @@ import {
   PREPARE_NO_AGENT_FOR_CAPABILITY,
   isPrepareRejection,
 } from "../application/agent-rejections"; // hallazgo #75: rechazo del agente ≠ payout fallido
-import { resolveSolanaExplorerTxUrl, resolveSolanaNetworkConfig } from "../infrastructure/chain"; // HU-SOL-13: cluster Solana activo (env-driven) · WKH-346: la URL del visor que enlaza el comprobante
+import { resolveSolanaExplorerTxUrl, resolveSolanaNetworkConfig } from "../infrastructure/chain"; import { canonicalizeAddress } from "../infrastructure/address"; // HU-SOL-13: cluster Solana activo (env-driven) · WKH-346: la URL del visor que enlaza el comprobante · WKH-354/AC-3: `canonicalizeAddress` entra EN ESTA LÍNEA, no en una nueva — este archivo recibe 74 citas por número y una línea de import de más las corre TODAS
 import type {
   CloseableEscrow, EscrowChainState, SolanaEscrowChainStateReader, // WKH-349: EN ESTA LÍNEA, no en dos nuevas — las 19 citas por número a este archivo apuntan de `:222` para abajo
   EscrowRefundConfirmation,
@@ -74,7 +74,7 @@ import {
   statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, type GestoRenovacion, REVISION_APAGADA, REVISION_FIRMANDO, REVISION_GESTO, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_BILLETERA, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, esVentanaSinAbiertos, // WKH-339: EN ESTA LÍNEA. `flow.tsx:525` lo citan 5 archivos y NINGUNA de las 5 es una cita anclada ⇒ si se mueve, nada se pone rojo y los 5 comentarios rotan en silencio · WKH-346 fix-pack: `esVentanaSinAbiertos` entra acá por lo mismo (Δ0)
 } from "./flow-vm";
 import { cn } from "./cn";
-import { phantomBrowseUrl, useWalletAvailability } from "./wallet-availability"; // el aviso de "acá no hay wallet" (NoWalletHere)
+import { phantomBrowseUrl, useWalletAvailability, useConnectedWalletAddress } from "./wallet-availability"; // el aviso de "acá no hay wallet" (NoWalletHere) · WKH-354/AC-6: `useConnectedWalletAddress` para el banner (CuentaCambiada)
 import { Button, Card, ChaskiMark, Field, Pill, Row, Stepper, TextInput } from "./ui";
 
 // WKH-187: el quote se muestra ANTES del KYC. Orden: send→connect→review(pre-KYC)→verify→confirm(post-KYC)→track→done.
@@ -364,10 +364,20 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
   // endpoint del store durable exige una prueba de posesión FIRMADA POR ESA address, así que sin
   // wallet conectada no hay a quién preguntarle.
   const resolveSender = useCallback(async () => {
-    const addr = address ?? (await c.connectWallet.execute()).address;
+    // WKH-354/AC-2. Se le pregunta a la billetera VIVA, no al `useState`. El `address ??` que estaba
+    // acá cacheaba la primera cuenta para siempre: cambiar de cuenta en Phantom sin recargar dejaba
+    // estas tres puertas hablando de la cuenta vieja.
+    //
+    // El fallback ante `null` es CONECTAR y no "servir la vieja", y eso es deliberado: `null` es "no
+    // hay ninguna billetera conectada" (`ConnectedWalletProbe`, `../application/ports.ts:536-538`).
+    // Servir la vieja ahí mandaría a `LostEscrowRecovery` a pedirle al store durable una prueba de
+    // posesión firmada por una dirección que nadie tiene conectada: una firma condenada, que es justo
+    // lo que esta HU vino a evitar.
+    const live = await c.connectedWallet.getConnectedAddress();
+    const addr = live ?? (await c.connectWallet.execute()).address;
     setAddress(addr);
     return addr;
-  }, [address, c]);
+  }, [c]);
 
   const openHistory = () =>
     guard(async () => {
@@ -422,6 +432,37 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
   const onConfirm = () =>
     guard(async () => {
       if (!rem) return;
+      // ── WKH-354/AC-3 · guard ANTES de pedir NINGUNA firma ────────────────────────────────────
+      // Este guard es de EXPERIENCIA, no de seguridad, y decirlo importa para que nadie lo lea al
+      // revés en un AR: la seguridad ya está y es criptográfica. Un challenge de PoP emitido para A
+      // firmado con la clave de B no valida contra la pubkey de A (`app/api/payout/prepare/route.ts`,
+      // ed25519), el `prepare` contesta 403 `payout_pop_unverified`, y `confirm-and-send.ts` corta
+      // ANTES de `authorizePrincipal`. Eso está medido y candado en T-354-5, que corre a nivel
+      // use-case y SIN este guard. Lo que este guard evita es el POPUP DE FIRMA CONDENADO y el
+      // "no pudimos preparar tu pago. Intentá de nuevo" que reintentaba para siempre.
+      //
+      // 🔵 Y NO ES TAUTOLÓGICO, que es lo que hundió al guard de WKH-327 en su primera versión: los
+      // dos lados salen de fuentes independientes. La izquierda es el bridge, por el puerto inyectado;
+      // la derecha es el snapshot persistido por `r.startKyc` (`../domain/remittance.ts:270`).
+      // Ninguna de las dos la elige el llamador.
+      //
+      // ⚠️ `null` NO dispara el guard (CD-17): `null` es "no hay ninguna billetera conectada", nunca
+      // "cambió la identidad". Acusar ahí convertiría un árbol todavía sin montar en una acusación
+      // falsa y rompería media suite. Ídem `rem.ownerAddress == null`: no hay contra qué comparar.
+      const live = await c.connectedWallet.getConnectedAddress();
+      if (live != null && rem.ownerAddress != null) {
+        // 🚫 NUNCA `.toLowerCase()` (CD-6): base58 es CASE-SENSITIVE y bajarlo a minúsculas fabrica
+        // colisiones. `canonicalizeAddress` TIRA ante lo que no parsea, y eso se trata como
+        // DESACUERDO (fail-closed), igual que `close-escrow-accounts.ts:75-80`: una dirección que no
+        // podemos parsear es una que no podemos probar que sea la misma.
+        let mismaCuenta: boolean;
+        try {
+          mismaCuenta = canonicalizeAddress(live) === canonicalizeAddress(rem.ownerAddress);
+        } catch {
+          mismaCuenta = false;
+        }
+        if (!mismaCuenta) throw new Error("wallet_account_changed");
+      }
       const r = await c.confirmAndSend.execute({ remittanceId: rem.id });
       setRem(r.snapshot);
       setStep(r.status === "settled" ? "done" : "track");
@@ -493,6 +534,39 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
       setConfirmReset(false);
     });
 
+  // WKH-354/AC-6 · adoptar la cuenta que la billetera tiene activa AHORA, sin destruir nada.
+  //
+  // 🔴 ES OTRO GESTO QUE "Borrar igual" (DT-5), y la diferencia no es de matiz: aquél existe para
+  // "no soy yo, quiero un dispositivo limpio" y borra el KYC y las entries del owner
+  // (`forgetAndDisconnect`, acá arriba). Éste NO llama a `ForgetKyc.execute()` ni a
+  // `repo.clearByOwner()` (CD-8), ni de la cuenta vieja ni de la nueva.
+  //
+  // Reusa `ConnectWallet` y no un use-case nuevo, por tres razones medidas: (a) es el único llamador
+  // que refresca LAS DOS cachés — la de React vía `setAddress` y la del adapter vía `connect()`;
+  // (b) resuelve el KYC POR DIRECCIÓN con el camino ya probado (`connect-wallet.ts:58-85`), así que
+  // si la cuenta nueva ya estaba verificada se reconoce sola (AC-4); y (c) su constructor NO recibe
+  // `RemittanceRepository`, o sea que `clearByOwner` está fuera de su alcance POR TIPO y no por
+  // disciplina.
+  //
+  // Se asignan las MISMAS tres cosas que `onConnect` saca del resultado (`address`, `serverVerdict`,
+  // `kycProof`) y ninguna más: lo que `onConnect` hace después (lockQuote + el atajo KYC-once) es
+  // sobre la remesa EN CURSO, y acá esa remesa se descarta. El envío nuevo vuelve a pasar por
+  // `onConnect` entero, así que el KYC-once de la cuenta adoptada se resuelve por el mismo camino de
+  // siempre y no por una copia de acá.
+  //
+  // ⚠️ Si hay una remesa en vuelo, SE RESETEA (CD-18). Esa remesa tiene `ownerAddress = A`, con quote
+  // y KYC de A: conservarla bajo la sesión B la dejaría en un callejón (el guard de `onConfirm` la
+  // bloquearía para siempre) y, peor, sería el primer paso del camino que CD-1 prohíbe. Un envío con
+  // otra cuenta es un envío nuevo, y el copy del banner lo dice.
+  const adoptarCuentaConectada = () =>
+    guard(async () => {
+      const r = await c.connectWallet.execute();
+      setAddress(r.address);
+      setServerVerdict(r.serverVerdict);
+      setKycProof(r.kycProof);
+      if (rem) resetTo(setStep, setRem, setPreview); // → paso `send`
+    });
+
   // polling en tracking
   const remId = rem?.id;
   const remStatus = rem?.status;
@@ -543,7 +617,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col px-5 pb-10 pt-6">
-      <header className="mb-5 flex items-center gap-2.5">
+      <header className="mb-5 flex flex-wrap items-center gap-2.5">
         <ChaskiMark className="h-9 w-9" />
         <div>
           <p className="text-[15px] font-bold leading-none tracking-heading">Chaski</p>
@@ -587,6 +661,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
             )}
           </div>
         ) : null}
+        <CuentaCambiada sesion={address} enVuelo={rem != null} onAdoptar={adoptarCuentaConectada} disabled={busy} />
       </header>
       <div className="mb-6">
         <Stepper steps={STEP_LABELS} current={STEP_INDEX[step]} />
@@ -3424,5 +3499,64 @@ function HistoryGroups({
         );
       })}
     </>
+  );
+}
+
+/**
+ * WKH-354/AC-6 · El aviso de que la billetera tiene activa otra cuenta, y el gesto para adoptarla.
+ *
+ * NO RENDERIZA NADA salvo en el estado donde el gesto tiene sentido, y las TRES condiciones son
+ * load-bearing:
+ *  · `sesion != null`  — nadie conectó todavía; sin esto el banner se pintaría en el arranque de casi
+ *                        toda la suite y en la primera pantalla de cualquiera (R-5).
+ *  · `viva != null`    — el bridge todavía no midió nada. `null` NO es "cambió la cuenta".
+ *  · `viva !== sesion` — sin esta comparación el banner se pinta siempre (T-354-6b lo mide).
+ *
+ * ⚠️ ESTE COMPONENTE LEE EL BRIDGE GLOBAL y no el puerto inyectado, y no es una inconsistencia:
+ * `useSyncExternalStore` exige un `getSnapshot` SÍNCRONO y `ConnectedWalletProbe` es `async`. El
+ * precedente es `NoWalletHere`, que ya consume `useWalletAvailability()` al lado de un container
+ * inyectado. Consecuencia para quien escriba tests: un test que combine este banner con el guard de
+ * `onConfirm` tiene que setear LAS DOS costuras (`solanaWalletBridge.setState` Y el `connectedWallet`
+ * inyectado), porque en producción son el mismo adapter sobre el mismo bridge y un test que las ponga
+ * en desacuerdo está midiendo un estado que no existe.
+ *
+ * La comparación es cruda (`!==`) y no `canonicalizeAddress`: los dos lados salen de la MISMA fuente
+ * base58 (el bridge y el `setAddress` que viene del mismo bridge), así que no hay dos
+ * representaciones que reconciliar. El guard que SÍ decide algo (`onConfirm`) usa
+ * `canonicalizeAddress` porque ahí un lado viene del snapshot persistido.
+ */
+function CuentaCambiada({
+  sesion,
+  enVuelo,
+  onAdoptar,
+  disabled,
+}: {
+  sesion: string | null;
+  enVuelo: boolean;
+  onAdoptar: () => void;
+  disabled: boolean;
+}) {
+  const viva = useConnectedWalletAddress();
+  if (sesion == null || viva == null || viva === sesion) return null;
+  return (
+    <div className="mt-3 w-full space-y-2 rounded-xl2 border border-line bg-sand/60 p-4">
+      <div className="flex items-center gap-2">
+        <Wallet className="h-4 w-4 text-cochineal" />
+        <p className="text-sm font-bold">Estás conectado con otra cuenta</p>
+      </div>
+      <p className="text-sm text-stone">
+        Tu billetera tiene activa una cuenta distinta de la que estás usando acá. Podés pasarte a ella
+        sin perder nada: no se borra tu verificación ni tus envíos guardados, ni de esta cuenta ni de
+        la otra.
+      </p>
+      {enVuelo ? (
+        <p className="text-sm text-stone">
+          Este envío quedó a nombre de la cuenta anterior, así que empezás uno nuevo.
+        </p>
+      ) : null}
+      <Button variant="outline" onClick={onAdoptar} disabled={disabled}>
+        Usar esta cuenta
+      </Button>
+    </div>
   );
 }

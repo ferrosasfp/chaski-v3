@@ -14,6 +14,8 @@ import {
   FakeSolanaEscrowDepositProbe,
   FakeSolanaEscrowRefundGateway,
   FakeSolanaPayoutPrepareGateway,
+  type FakeSolanaPrepareResult, // WKH-354/AC-5: la forma de la respuesta del prepare, para el doble que VERIFICA la PoP
+  FakeKycStore, // WKH-354/AC-5: el KYC de A, que el candado verifica que sigue entero
   FakeSolanaSenderSolBalanceProbe,
   FakeSolanaSettlementGateway,
   FakeSolanaWallet,
@@ -23,7 +25,8 @@ import {
   T0,
   beneficiary,
 } from "../../test-support/fakes";
-import type { RefundGateway } from "../ports";
+import type { RefundGateway, SolanaPayoutPrepareGateway } from "../ports";
+import type { Beneficiary } from "../../domain/remittance"; // WKH-354/AC-5: el doble de prepare implementa el puerto REAL, así que declara el contrato real
 import { LedgerRefundGateway } from "../../infrastructure/refund/ledger-refund-gateway";
 import {
   ConfirmAndSend,
@@ -65,7 +68,10 @@ async function seedQuoted(repo: InMemoryRepo): Promise<string> {
 function build(
   repo: InMemoryRepo,
   wallet: FakeSolanaWallet,
-  prepare: FakeSolanaPayoutPrepareGateway,
+  // WKH-354/AC-5: el tipo es el PUERTO, no el doble concreto. Antes era `FakeSolanaPayoutPrepareGateway`
+  // y eso obligaba a castear cualquier otro doble que implemente el mismo contrato; un `as unknown as`
+  // acá apagaría justamente el chequeo que hace que el doble nuevo tenga que respetar el puerto real.
+  prepare: SolanaPayoutPrepareGateway,
   gateway: FakeSolanaSettlementGateway,
   _payouts?: FakePayoutGateway,
   // RefundGateway (la interfaz), NO el fake: los tests tienen que poder cablear el adapter REAL de
@@ -581,5 +587,132 @@ describe("ConfirmAndSend — DT-8: sin `solana` inyectado (WKH-320)", () => {
         new FakeRefundGateway(),
       ).execute({ remittanceId: id }),
     ).resolves.toBeDefined();
+  });
+});
+
+// ── WKH-354/AC-5 ─────────────────────────────────────────────────────────────────────────────────
+// La cuenta que la wallet tiene activa AHORA (B) es distinta de la que este envío verificó (A).
+//
+// 🔒 ESTE DESCRIBE ES EL CANDADO DE LA HU, y lo que prueba es que el fail-closed vive EN EL
+// MONEY-PATH y no en la pantalla: corre a nivel use-case, sin montar nada de UI y SIN el guard de
+// `onConfirm`. Pasó con el código de `1e4fe62` (o sea, antes de que WKH-354 tocara la UI), que es
+// justamente lo que lo vuelve un candado de regresión y no la prueba de una feature nueva.
+const CUENTA_B = "CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8"; // base58, la cuenta que la persona activó DESPUÉS
+
+/**
+ * El doble del `/api/payout/prepare` que VERIFICA la prueba de posesión.
+ *
+ * 🔴 DERIVA su respuesta; NO lleva una bandera. Recibe la clave que firma de verdad (`signerAddress`)
+ * y contesta comparándola contra el `address` que le llega en el input, que es exactamente el
+ * criterio del servidor: el challenge se emite para `ch.address` y la firma se verifica ed25519
+ * contra ESA pubkey (`app/api/payout/prepare/route.ts`, `verifySolanaPop`).
+ *
+ * Un `boolean okOrNot` / `shouldFail` / `mode: "reject"` en vez de esta comparación convertiría el
+ * candado en una tautología: el test estaría afirmando lo que él mismo configuró, y el mismo doble
+ * haría pasar los cinco asserts sin probar nada sobre la comparación. Por eso la ÚNICA entrada
+ * permitida es `signerAddress`, y por eso existe el control de acá abajo.
+ */
+class FakePopVerifyingPrepareGateway implements SolanaPayoutPrepareGateway {
+  public calls: Array<{ address: string }> = [];
+  constructor(private readonly signerAddress: string) {}
+  async prepare(input: {
+    remittanceId: string;
+    quoteId: string;
+    address: string;
+    amountUsd: number;
+    beneficiary: Beneficiary;
+    idempotencyKey: string;
+  }): Promise<FakeSolanaPrepareResult> {
+    this.calls.push({ address: input.address });
+    // El challenge fue emitido para `input.address`; quien firma es `signerAddress`. Si no son la
+    // misma pubkey, la verificación ed25519 no cierra y el server contesta 403.
+    if (input.address !== this.signerAddress) {
+      return { ok: false as const, reason: "payout_pop_unverified" };
+    }
+    return {
+      ok: true as const,
+      result: {
+        beneficiary: FAKE_SOLANA_BENEFICIARY,
+        authority: FAKE_SOLANA_AUTHORITY,
+        attestation: "solana-deposit-att-fake",
+        payoutId: "transfi-sol-po-1",
+        provenance: "transfi",
+      },
+    };
+  }
+}
+
+describe("WKH-354/AC-5 · una firma de B NO puede pagar un depósito emitido para A", () => {
+  it("T-354-5: la wallet cambió a B ⇒ el prepare corta con payout_pop_unverified y NUNCA se pide la firma del depósito", async () => {
+    const repo = new InMemoryRepo();
+    // El cache de `connect()`: `getAddress()` devuelve A, que es la cuenta con la que se armó el envío.
+    const wallet = new FakeSolanaWallet();
+    const authorizeSpy = vi.spyOn(wallet, "authorizePrincipal");
+    // Quien firma de verdad AHORA es B: la persona cambió de cuenta en Phantom sin recargar.
+    const prepare = new FakePopVerifyingPrepareGateway(CUENTA_B);
+    const gateway = new FakeSolanaSettlementGateway();
+    // El KYC de A, que esta HU NO tiene que destruir. `ConfirmAndSend` ni siquiera recibe el store:
+    // el assert (5) es estructural, y por eso vale — no hay camino por el que este use-case lo toque.
+    const kycStore = new FakeKycStore();
+    await kycStore.save(FAKE_SOLANA_BENEFICIARY, passKyc);
+    const id = await seedQuoted(repo);
+
+    const out = await build(
+      repo,
+      wallet,
+      prepare,
+      gateway,
+      new FakePayoutGateway(),
+      // Sin comprobante de reembolso la remesa se QUEDA en `payout_failed` en vez de pasar a
+      // `refunded` (`isRealRefundReceipt`, `../refund-receipt.ts:15`). Medido: con el default
+      // `FakeRefundGateway("resolve")` el status es `refunded`, no `payout_failed`. Se elige el
+      // no-receipt porque `payout_failed` es el estado desde el que la persona todavía puede sacar
+      // su plata, que es el que esta HU tiene que preservar.
+      new FakeRefundGateway("no-receipt"),
+    ).execute({ remittanceId: id });
+
+    // (1) el envío NO avanzó: quedó en el estado del que se puede salir.
+    expect(out.snapshot.status).toBe("payout_failed");
+    // (2) y el motivo es el del `prepare`, con el principal declarado "not_deposited".
+    expect(out.snapshot.failureReason).toBe("payout_pop_unverified");
+    // (3) 🔴 EL ASSERT QUE ES LA HU ENTERA: nunca se pidió la firma del depósito. Sin esto el test
+    //     pasaría igual con una remesa que SÍ depositó y falló después, y "firmó y salió mal" no es
+    //     lo mismo que "nunca firmó".
+    expect(authorizeSpy).toHaveBeenCalledTimes(0);
+    // (4) no hay ninguna firma de depósito escrita.
+    expect(out.snapshot.principalTx).toBeNull();
+    // (5) el KYC de A sigue entero y B no ganó ninguna entrada por este camino.
+    expect(await kycStore.get(FAKE_SOLANA_BENEFICIARY)).not.toBeNull();
+    expect(await kycStore.get(CUENTA_B)).toBeNull();
+    // El challenge se pidió para A (la cuenta del envío), no para B: es lo que hace que la firma de B
+    // no verifique, y lo que separa este caso de "el doble rechaza siempre".
+    expect(prepare.calls).toEqual([{ address: FAKE_SOLANA_BENEFICIARY }]);
+  });
+
+  it("T-354-5(control): sin cambio de cuenta (firma A) el MISMO doble contesta ok y la firma del depósito SÍ se pide", async () => {
+    const repo = new InMemoryRepo();
+    const wallet = new FakeSolanaWallet();
+    const authorizeSpy = vi.spyOn(wallet, "authorizePrincipal");
+    // Lo ÚNICO que cambia respecto de T-354-5: quien firma es A, la misma cuenta del envío.
+    const prepare = new FakePopVerifyingPrepareGateway(FAKE_SOLANA_BENEFICIARY);
+    const gateway = new FakeSolanaSettlementGateway();
+    const id = await seedQuoted(repo);
+
+    const out = await build(
+      repo,
+      wallet,
+      prepare,
+      gateway,
+      new FakePayoutGateway(),
+      new FakeRefundGateway("no-receipt"),
+    ).execute({ remittanceId: id });
+
+    // El doble NO rechaza siempre: con la misma cuenta contesta ok:true.
+    expect(prepare.calls).toEqual([{ address: FAKE_SOLANA_BENEFICIARY }]);
+    // Y el camino sigue: se pide la firma del depósito.
+    expect(authorizeSpy).toHaveBeenCalledTimes(1);
+    // La remesa NO quedó en el estado de fallo.
+    expect(out.snapshot.status).not.toBe("payout_failed");
+    expect(out.snapshot.failureReason).not.toBe("payout_pop_unverified");
   });
 });

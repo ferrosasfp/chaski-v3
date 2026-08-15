@@ -40,3 +40,29 @@ export function useWalletAvailability(): SolanaWalletAvailability {
     () => "unknown" as const,
   );
 }
+
+/**
+ * WKH-354/AC-1 · Qué cuenta tiene ACTIVA la billetera en este instante, reactivo.
+ *
+ * `useWalletAvailability` (arriba) contesta "¿hay alguna wallet?"; ésta contesta "¿cuál cuenta?".
+ * Las dos leen el MISMO singleton React-free, así que este módulo sigue sin importar
+ * `@solana/wallet-adapter-*`.
+ *
+ * En el servidor devuelve `null` y no una dirección: el servidor no sabe qué tiene conectado el
+ * navegador de nadie, y `null` acá significa "no hay ninguna billetera conectada" — el mismo
+ * tri-estado que `ConnectedWalletProbe` (`../application/ports.ts:536-538`). Un componente que se
+ * apoye en esto NO puede leer `null` como "cambió la cuenta".
+ *
+ * ⚠️ ESTA ES LA LECTURA RENDER-TIME, y existe además del puerto por una razón de React y no por
+ * gusto: `useSyncExternalStore` exige un `getSnapshot` SÍNCRONO, y
+ * `ConnectedWalletProbe.getConnectedAddress()` es `async`. Un puerto no puede alimentar un
+ * `useSyncExternalStore`. Las decisiones (gesture-time) siguen yendo por el puerto inyectado, que es
+ * la costura que los tests controlan.
+ */
+export function useConnectedWalletAddress(): string | null {
+  return useSyncExternalStore(
+    (onChange) => solanaWalletBridge.subscribeState(onChange),
+    () => solanaWalletBridge.getState().publicKey,
+    () => null,
+  );
+}

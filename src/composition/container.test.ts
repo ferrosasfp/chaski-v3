@@ -630,3 +630,66 @@ describe("createContainer — WKH-349/CD-17: el historial tiene a quién pregunt
     );
   });
 });
+
+/**
+ * WKH-354/AC-2 — EL CABLEADO de `Container.connectedWallet`.
+ *
+ * 🔴 POR QUÉ ESTE DESCRIBE EXISTE. Es el mismo perfil que el de WKH-327/AC-7 de más arriba, y por eso
+ * reusa su montaje: `ConnectedWalletProbe` tiene UN método, así que
+ * `{ getConnectedAddress: () => wallet.getAddress() }` lo satisface, compila, y devuelve el CACHE de
+ * `connect()` — o sea reintroduce en una línea el bug que esta HU vino a cerrar (CD-13). Ningún test
+ * que arme el probe a mano lo puede ver: el objeto bajo prueba tiene que ser el `connectedWallet` QUE
+ * DEVUELVE `createContainer()`.
+ *
+ * Y por eso el `await wallet.connect()` de cada caso NO es ceremonia: sin él no hay cache que
+ * exponer, y el mutante del cache sobreviviría por no tener nada que cachear.
+ */
+describe("createContainer — WKH-354/AC-2: el probe del container lee la billetera VIVA", () => {
+  const A = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+  const B = "8tJVcM2JmYcMNCcNFYtUpXVWvKNTfnrCEwLuTRHpF9dQ";
+
+  /** Gemelo del helper del describe de WKH-327/AC-7: puerto cerrado en loopback, cero I/O fuera de la
+   *  máquina, y `connect()` corrible para que exista el cache. */
+  function containerConectadoCon(address: string) {
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_RPC_URL", "http://127.0.0.1:1/");
+    solanaWalletBridge.setState({ publicKey: address, connected: true });
+    const c = createContainer();
+    const wallet = (c.connectWallet as unknown as { wallet: SolanaWalletAdapter }).wallet;
+    return { c, wallet };
+  }
+
+  it("T-354-CABLE-1: conecté con A, la wallet pasó a B, y el probe del container contesta B (no el cache)", async () => {
+    const { c, wallet } = containerConectadoCon(A);
+    await wallet.connect(); // deja el cache de connect() cargado con A, igual que producción
+
+    solanaWalletBridge.setState({ publicKey: B, connected: true }); // Phantom cambia de cuenta
+
+    expect(await c.connectedWallet.getConnectedAddress()).toBe(B);
+    // Y la otra mitad del hecho, que es lo que hace que este test signifique algo: el cache SÍ sigue
+    // diciendo A. Las dos respuestas conviven, y el container tiene que exponer la VIVA.
+    expect(await wallet.getAddress()).toBe(A);
+  });
+
+  it("T-354-CABLE-2: el default del test-container es `null`, y NO deriva del cache de la wallet", async () => {
+    const { buildTestContainer } = await import("../test-support/test-container");
+    const { FakeSolanaWallet } = await import("../test-support/fakes");
+    const wallet = new FakeSolanaWallet();
+    const c = buildTestContainer({ wallet });
+
+    // "No hay ninguna billetera conectada" — que es el estado real de un test que no montó el árbol.
+    expect(await c.connectedWallet.getConnectedAddress()).toBeNull();
+    // Y no es que el fake no tenga qué contestar: `getAddress()` sí devuelve una dirección. Si el
+    // default fuera `{ getConnectedAddress: () => wallet.getAddress() }` (CD-13), estas dos
+    // expectativas serían la misma y este test quedaría rojo.
+    expect(await wallet.getAddress()).not.toBeNull();
+  });
+
+  it("T-354-CABLE-3: la wallet se DESCONECTA ⇒ el probe contesta null, no la dirección vieja", async () => {
+    const { c, wallet } = containerConectadoCon(A);
+    await wallet.connect();
+
+    solanaWalletBridge.setState({ publicKey: null, connected: false });
+
+    expect(await c.connectedWallet.getConnectedAddress()).toBeNull();
+  });
+});

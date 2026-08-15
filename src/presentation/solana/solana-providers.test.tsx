@@ -415,3 +415,61 @@ describe("SolanaWalletBridgeSync — la gracia antes de afirmar 'acá no hay nin
     expect(solanaWalletBridge.getWalletAvailability()).toBe("unknown");
   });
 });
+
+// ── WKH-354/AC-1 ─────────────────────────────────────────────────────────────────────────────────
+// Hasta acá el bridge sólo se podía LEER (`getState()`), y la cuenta activa de la wallet cambia SIN
+// que la app haga nada: nadie en React se enteraba. Estos tres montan el árbol REAL y no registran
+// ningún listener a mano en el efecto — el estado que empuja `useWallet()` es el de `h.wallet`.
+//
+// ⚠️ NINGUNO usa `solanaWalletBridge.reset()` para volver a `null`: `reset()` escribe `this.state`
+// DIRECTO, sin pasar por `setState`, así que NO notifica a los `stateListeners` (es correcto y
+// deliberado; su docblock ya avisa que tampoco vacía los listeners). Para eso está
+// `setState({ publicKey: null, connected: false })`.
+describe("SolanaWalletBridgeSync — WKH-354/AC-1: el bridge ahora se puede ESCUCHAR", () => {
+  const CUENTA_B = "CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8";
+
+  it("T-354-1: la persona cambia de cuenta en la wallet ⇒ los suscriptores se enteran y el bridge ya tiene la nueva", async () => {
+    const listener = vi.fn();
+    const off = solanaWalletBridge.subscribeState(listener);
+    const { rerender } = render(<SolanaWalletBridgeSync />);
+
+    // Phantom pasa a la cuenta B sin que la app haga nada: `useWallet()` emite otro publicKey.
+    await act(async () => {
+      h.wallet = { ...h.wallet, publicKey: { toBase58: () => CUENTA_B }, connected: true };
+      rerender(<SolanaWalletBridgeSync />);
+    });
+
+    // (i) alguien avisó. Sin la notificación de `setState`, esto queda en 0.
+    expect(listener.mock.calls.length).toBeGreaterThanOrEqual(1);
+    // (ii) y cuando avisó, el estado YA era el nuevo (la notificación va después de asignarlo).
+    expect(solanaWalletBridge.getState().publicKey).toBe(CUENTA_B);
+    off();
+  });
+
+  it("T-354-1b: el desuscriptor desuscribe de verdad (no un `() => {}` de adorno)", async () => {
+    const listener = vi.fn();
+    const off = solanaWalletBridge.subscribeState(listener);
+
+    solanaWalletBridge.setState({ publicKey: CUENTA_B, connected: true });
+    const despuesDeUnCambio = listener.mock.calls.length;
+    expect(despuesDeUnCambio).toBeGreaterThanOrEqual(1);
+
+    off();
+    // Otro cambio REAL después de desuscribirse: el conteo no se mueve.
+    solanaWalletBridge.setState({ publicKey: null, connected: false });
+    expect(listener.mock.calls.length).toBe(despuesDeUnCambio);
+  });
+
+  it("T-354-1c: `setState` con el MISMO estado NO notifica (el guard que evita el loop de render)", async () => {
+    // Se arranca desde un estado distinto para que la PRIMERA llamada sí sea un cambio.
+    solanaWalletBridge.setState({ publicKey: null, connected: false });
+    const listener = vi.fn();
+    const off = solanaWalletBridge.subscribeState(listener);
+
+    solanaWalletBridge.setState({ publicKey: CUENTA_B, connected: true });
+    solanaWalletBridge.setState({ publicKey: CUENTA_B, connected: true }); // idéntico: no hay nada que avisar
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    off();
+  });
+});

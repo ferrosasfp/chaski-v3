@@ -268,6 +268,52 @@ describe("el enlace lleva a ESTA DApp adentro de Phantom", () => {
     );
   });
 
+  // ── WKH-354/AC-1 · el hook de la cuenta activa ─────────────────────────────────────────────────
+  //
+  // ⚠️ El `afterEach` de este archivo llama `solanaWalletBridge.reset()`, y `reset()` escribe
+  // `this.state` DIRECTO, sin pasar por `setState`: NO notifica a los `stateListeners`. Por eso este
+  // test vuelve a `null` con `setState({ publicKey: null, connected: false })` explícito y no con
+  // `reset()` — con `reset()` el componente montado se quedaría mostrando el valor viejo y el test
+  // estaría midiendo el bug que dice prevenir.
+  it("T-354-1d: `useConnectedWalletAddress` sigue a la cuenta viva SIN remontar nada", async () => {
+    const { useConnectedWalletAddress } = await import("./wallet-availability");
+    const CUENTA_B = "CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8";
+    function Sonda() {
+      return <span data-testid="cuenta">{useConnectedWalletAddress() ?? "sin-cuenta"}</span>;
+    }
+
+    render(<Sonda />);
+    // (i) arranca sin cuenta: `null` es "no hay ninguna billetera conectada".
+    expect(screen.getByTestId("cuenta")).toHaveTextContent("sin-cuenta");
+
+    // (ii) la wallet activa otra cuenta y el MISMO árbol montado la muestra. Con un `useState` de
+    //      lectura única (el patrón que esta HU vino a matar) acá seguiría diciendo "sin-cuenta".
+    await act(async () => {
+      solanaWalletBridge.setState({ publicKey: CUENTA_B, connected: true });
+    });
+    expect(screen.getByTestId("cuenta")).toHaveTextContent(CUENTA_B);
+
+    // Y vuelve, por el camino que SÍ notifica.
+    await act(async () => {
+      solanaWalletBridge.setState({ publicKey: null, connected: false });
+    });
+    expect(screen.getByTestId("cuenta")).toHaveTextContent("sin-cuenta");
+  });
+
+  it("T-354-1d(server): el snapshot del servidor es `null`, no una dirección", async () => {
+    // (iii) El servidor no sabe qué tiene conectado el navegador de nadie. Se mide el 3er argumento
+    // de `useSyncExternalStore` por el mismo camino que lo usa React: renderizando a string en el
+    // servidor, sin DOM. Un `getServerSnapshot` que devolviera la dirección haría que el HTML del
+    // servidor afirme una billetera que nadie conectó.
+    const { renderToString } = await import("react-dom/server");
+    const { useConnectedWalletAddress } = await import("./wallet-availability");
+    solanaWalletBridge.setState({ publicKey: "CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8", connected: true });
+    function Sonda() {
+      return <span>{useConnectedWalletAddress() ?? "sin-cuenta"}</span>;
+    }
+    expect(renderToString(<Sonda />)).toContain("sin-cuenta");
+  });
+
   it("T-LINK-2: el esquema es el MISMO que dispara la librería en iOS", () => {
     // Copiado de la rama `readyState === Loadable` de
     // `node_modules/@solana/wallet-adapter-phantom/lib/cjs/adapter.js`:

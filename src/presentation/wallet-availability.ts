@@ -66,3 +66,55 @@ export function useConnectedWalletAddress(): string | null {
     () => null,
   );
 }
+
+/**
+ * WKH-MWA · ¿Está prendida la bandera de Mobile Wallet Adapter?
+ *
+ * 🔴 QUÉ GATEA ESTA BANDERA, Y QUÉ NO — leerlo al revés es el error caro:
+ *   · NO gatea el adapter. El adapter NO ES NUESTRO: lo antepone `@solana/wallet-adapter-react` solo,
+ *     sin que este repo importe nada (ver el docblock de `MWA_WALLET_NAME` en
+ *     `../infrastructure/solana-wallet-bridge.ts`, con la medición de las cuatro plataformas).
+ *   · SÍ gatea lo único que sí es nuestro: si la app le DICE a la persona que ese camino existe.
+ *
+ * POR QUÉ NO SE GATEA EL ADAPTER, que es la decisión de diseño de esta HU y no un descuido: quitarlo
+ * cuando la bandera está apagada dejaría el selector de wallets VACÍO en Chrome de Android, que es
+ * donde hoy es la única entrada. Sería romper algo que existe para poder decir que está apagado. La
+ * bandera apagada tiene que ser byte-idéntica a hoy, y hoy el adapter está.
+ *
+ * POR QUÉ UNA ENV Y NO EL USER AGENT: la pregunta "¿este navegador ofrece MWA?" ya la contesta la
+ * librería y la reporta (`getMwaOffered`, `../infrastructure/solana-wallet-bridge.ts:239`); mirar el
+ * user agent por nuestra cuenta sería una segunda opinión que puede contradecir a la primera, y este
+ * repo ya tiene esa lección escrita en el docblock del efecto de `solana-providers.tsx`. La env
+ * contesta OTRA pregunta, que ninguna medición puede contestar: "¿alguien ya probó esto en un
+ * teléfono?". Esa respuesta la tiene una persona, no el navegador.
+ *
+ * OPT-IN ESTRICTO, mismo patrón que (`solanaSettleOn`, `../composition/container.ts:141`): sólo el
+ * literal `"true"` prende. Ausente, vacía, `"1"`, `"TRUE"` o un typo ⇒ APAGADA. No hay ningún valor
+ * que la prenda por accidente.
+ *
+ * ⚠️ GOTCHA DE DESPLIEGUE: las `NEXT_PUBLIC_` las inlinea el build, no se leen en runtime. Cambiar el
+ * valor en Vercel y REDESPLEGAR el mismo artefacto NO cambia nada: hay que REBUILDEAR.
+ */
+export function mwaEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_SOLANA_MWA_ENABLED === "true";
+}
+
+/**
+ * WKH-MWA · ¿El selector ofrece HOY la entrada de Mobile Wallet Adapter en este navegador?
+ *
+ * Reactivo por la misma razón que `useWalletAvailability` (arriba): la lista de wallets de la librería
+ * se re-emite en cada `readyStateChange`, así que una lectura única al renderizar congelaría la foto
+ * del primer cuadro.
+ *
+ * En el servidor devuelve `false`: el servidor no sabe qué selector va a armar el navegador de nadie,
+ * y `false` acá es el valor que NO habilita a afirmar nada (la pantalla sólo lo usa para AGREGAR una
+ * salida). El significado exacto de la bandera, y las dos lecturas falsas que invita, están en
+ * (`setMwaOffered`, `../infrastructure/solana-wallet-bridge.ts:233`).
+ */
+export function useMwaOffered(): boolean {
+  return useSyncExternalStore(
+    (onChange) => solanaWalletBridge.subscribeMwaOffered(onChange),
+    () => solanaWalletBridge.getMwaOffered(),
+    () => false,
+  );
+}

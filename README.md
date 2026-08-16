@@ -19,6 +19,75 @@ open and why.
 > here, so the deployed site is served from `chaski-v2.vercel.app`. The same string survives on purpose
 > in the `id` field of `public/manifest.json`: changing a PWA manifest `id` orphans existing installs.
 
+## Try it on devnet
+
+The deployed app is `https://chaski-v2.vercel.app`. Everything below happens on Solana devnet, with
+Circle's devnet USDC. No real money moves, and nobody is asked for a real identity document.
+
+**On a phone, open the app from inside Phantom's own browser.** A normal mobile browser has no wallet
+in it, and that is the first wall a tester hits. The screen says so and offers the way through: a
+button that reopens the same URL inside Phantom, built as
+`https://phantom.app/ul/browse/<url>?ref=<origin>` (`src/presentation/wallet-availability.ts:26-28`,
+screen copy at `src/presentation/flow.tsx:1311-1329`). On a computer the path is the other one:
+install the Phantom or Solflare extension and reload. Those two are the only wallets the app wires
+(`src/presentation/solana/solana-providers.tsx:228`).
+
+**Do the whole run in that same browser.** The remittance in progress is kept in the browser's
+`localStorage` (`src/infrastructure/persistence.ts:86`), so starting in one browser and jumping to
+another loses it.
+
+### What to get before you start
+
+- **Circle's devnet USDC**, mint `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`. Ask for it at
+  <https://faucet.circle.com>, choosing the network `Solana Devnet` and pasting the wallet address.
+  Both the page and that network option answered on 2026-08-16. You need **at least 5 USDC**: under
+  that the app does not quote, because `MIN_SEND_USD = 5` (`src/domain/remittance.ts:209`).
+  ⚠️ It is not the `8yRX3fZ2…` mint of the three signatures in the table below. That one is a test
+  token and the app is not configured against it.
+- **About 0.009 devnet SOL** in the same wallet. Ask for it at <https://faucet.solana.com> (it
+  answered on 2026-08-16), or run `solana airdrop 1 <your pubkey> --url devnet` if you have the CLI.
+
+**Why SOL is needed when the fee is sponsored.** A Solana transaction pays two different things and
+only one of them is sponsored. The network fee is paid by the facilitator, which signs as fee payer.
+The rent of the accounts the deposit creates is paid by whoever sends, because the program names the
+sender as their payer. Measured on each of the three deposits quoted below: the fee payer paid 11,200
+lamports of fee and the sender's wallet paid 4,002,000 lamports of rent. The app checks this before
+asking for any signature and stops with "Te falta SOL en la wallet" under 0.0089 SOL
+(`SENDER_MIN_LAMPORTS_FOR_DEPOSIT`, `src/application/solana-escrow-rent.ts:187`, with its derivation
+in the same file).
+
+### The run
+
+1. Connect the wallet.
+2. Amount of 5 USDC or more, the recipient's name, and a destination account of 20 digits, the length
+   of a Peruvian CCI. The form checks the length, not that the account exists
+   (`src/domain/remittance.ts:31` and `:44`), so an invented number gets you through.
+3. Identity. **In this deployment it is simulated**: the screen states that it verifies nothing and
+   asks for no data. That screen only exists when the operator declares the mock
+   (`src/infrastructure/didit/mock-surface-enabled.ts:26`), and the deployed app served it with a 200
+   on 2026-08-16.
+4. Confirm. **The wallet asks to sign twice, and that is deliberate**: first the deposit transaction,
+   then a readable message naming this remittance, so that a captured transaction signature is not
+   enough for somebody else to get a deposit sponsored (`src/infrastructure/solana-wallet.ts:781-799`).
+5. The deposit lands on chain and the screen links the transaction to the explorer
+   (`src/presentation/flow.tsx:3582`). The USDC are in the escrow vault, and the operator cannot
+   redirect them.
+
+### What will not happen, said before you start and not after
+
+- **Nobody pays out soles.** The fiat leg runs against a mock agent by default. There is no bank
+  transfer at the end of this.
+- **The USDC stay in the escrow vault.** Taking them out to the beneficiary is the `release`, and
+  today the trigger is a person. The code says so where the payout provider's webhook lands, in
+  Spanish: *"the on chain verification of the release is done by a person; this is the request that
+  they do it"* (`app/api/webhooks/transfi/route.ts:94-97`). The deposit is non custodial and
+  automatic; the fiat delivery is confirmed by the operator.
+- **You take your own money back.** Two hours after the deposit the custody window closes
+  (`CUSTODY_WINDOW_SECS`, `src/infrastructure/solana-wallet.ts:100`) and the app lets you sign the
+  refund, which needs nobody's cooperation. Before that deadline the program rejects it
+  (`DeadlineNotReached` 6003), so the two hours are a wait, not a failure. It has been done on chain:
+  the `Refund` in the section below, with the sender as the only signer.
+
 ## A remittance is assembled, not hardcoded
 
 A remittance is a chain of steps: verify who is sending, price the currency pair, take custody free
@@ -68,23 +137,67 @@ app is configured against is Circle's (`4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJD
 single environment variable, never a hardcode. Saying "USDC moved" about those signatures would be
 false, so it is not said here.
 
-**The deposit is the strongest piece, and the caveat matters.** The instruction lands on chain, the
-sender's wallet is the only signer of the transfer, and a sponsoring fee payer covers the fees so the
-user never needs SOL. What the signature above proves is that this works when the smoke script drives
-it. Whether it lands from a browser is **not yet verified in the custody window with a real wallet
-extension**: the protocol blocker described in the next paragraph was removed, and the implementation
-is complete. That end-to-end browser round trip is W7 of SDD 038 and it is still pending, so the
-honest statement is "unverified by the full-cycle test", not "it works" and not "it does not work".
+**The deposit is the strongest piece, and it lands from a browser.** The instruction enters the
+chain, the sender's wallet is the only signer of the transfer, and a sponsoring fee payer covers the
+network fee. It does not cover everything, and the difference is not a detail: the rent of the
+accounts the deposit creates comes out of the sender's wallet, so "the user needs no SOL" would be
+false and is not said here. The section "Try it on devnet" has the numbers.
 
-**Chaski now emits ComputeBudget instructions on deposit (WKH-321).** The `deposit` transaction
-carries two instructions before the escrow call: `setComputeUnitLimit` and `setComputeUnitPrice`,
-computed by resolvers in `src/infrastructure/solana-wallet.ts:82-95`. This reduces the probability
-that a wallet such as Phantom adds conflicting priority fees that exceed the facilitator's allowance
-(measured on devnet at 50,000 units): if a wallet attempts to prepend its own ComputeBudget and
-Phantom rejects the duplicate after already signing (as the code assumes), the deposit fails with
-clear evidence. That assumption is not contractual: the behavior is observed on third-party wallets,
-not guaranteed. The deposit has never landed on chain with these instructions yet; the path they
-unblock is not exercised in production.
+Two runs of 2026-08-16, from Phantom's in-app browser on an Android phone, both landed:
+
+| Signature | Time (UTC) | What moved |
+|---|---|---|
+| [`59XvDKhAJD…`](https://explorer.solana.com/tx/59XvDKhAJD5tbdzYeRQWWhNsi5Ac5ppSwu8xM3rHwVCRUVhvZPBcPnUtucU3F5o53VjaM8H9KAWG3zWSq5Waii8K?cluster=devnet) | 2026-08-16T06:17:19Z | 7 USDC out of the sender, into the vault `GppYQSnQ…` |
+| [`2MUbUgJWSh…`](https://explorer.solana.com/tx/2MUbUgJWSh9kVPz5JKAEC7PYw8gNAMjLsqR1fJ3iZ18CtYZCdTEULxNRojmdxinTrCWcBkjMi9HNiTBRGpoPYYo5?cluster=devnet) | 2026-08-16T07:40:14Z | 6 USDC into the vault `HcsP8afr…`, the sender from 56 to 50 |
+
+Both come with `err: null`, a fee of 11,200 lamports paid by the sponsor `4wPhH4dC…`, the sender
+`4AvAjtPg…` as the other signer, and the four instruction shape of the app's deposit path. Read back
+from the public devnet RPC, no permission needed. What the chain proves is the transaction; that the
+client was a phone browser is the report of whoever ran it, the same kind of evidence as the CSP
+walkthrough further down.
+
+**What is not proven is the full cycle, and the reason is not the deposit.** The 13 USDC of those two
+runs are still in custody: the two vaults held 7 and 6 USDC on 2026-08-16, and a
+`getTokenAccountBalance` on each says whether that is still true when you read this. Nothing failed
+there. The run ends where the system ends today, because the release is triggered by a person.
+
+**The way out was exercised too, and by the sender alone.** The escrow of 2026-08-15 passed its
+deadline and whoever deposited took the money back without anyone's cooperation:
+[`3dYjRE7u8b…`](https://explorer.solana.com/tx/3dYjRE7u8bzBKZD9PKci3oJ5X98J8jku65kK9T8GwEZ4hLZ2h9rwWt49ibqgEngSrAiNiA3F5gTN13cZroF2ywDj?cluster=devnet),
+2026-08-16T06:17:49Z, an instruction the logs name `Refund`, with the vault `7piawXnH…` going from
+13.5 USDC to zero and the sender's wallet from 42.5 to 56. There is one signer, the sender, and the
+80,000 lamports of fee came out of their own wallet. Nobody was asked.
+
+**Chaski emits ComputeBudget instructions on deposit (WKH-321), and that path has now landed on
+chain.** The `deposit` transaction carries two instructions before the escrow calls,
+`setComputeUnitLimit` and `setComputeUnitPrice`, from the resolvers in `src/infrastructure/chain.ts:93`
+and `:124`, added to the transaction at `src/infrastructure/solana-wallet.ts:675-678`. This reduces
+the probability that a wallet such as Phantom adds conflicting priority fees that exceed the
+facilitator's allowance (measured on devnet at 50,000 units).
+
+**The transaction that proves it** is
+[`38PyBoVizf…`](https://explorer.solana.com/tx/38PyBoVizfhVLxm217QzeWP3JPYqGxJUC6vzuxh9xxv9FJdMquQ6BUFyUsma1ePiWK59qCQweFNNony1MJ7UReLV?cluster=devnet),
+of 2026-08-15T08:36:12Z, with `err: null`, a fee of 11,200 lamports and 54,600 compute units
+consumed. It carries four instructions, in this order: two of
+`ComputeBudget111111111111111111111111111111`, then two of the escrow program
+`DR5GoMT7sAKzD6wZMKJPeknS3Y6fzgZUNevi7xiESE4x`, which its own logs name `Deposit` and
+`RegisterEscrow`. And it moved money: the escrow vault `7piawXnH…` did not exist before it and ended
+holding 13.5 USDC, while the sender's token account went from 48 to 34.5, in Circle's devnet USDC
+(mint `4zMMC9…`), which is the mint the app is configured against. Anyone can read it back from the
+public devnet RPC with `getTransaction`, without asking us for anything.
+
+⚠️ **The chain does not record which client built a transaction.** A signature carries instructions
+and signers, never the program that assembled them. For the two runs above, the phone browser is the
+report of whoever ran them. For this one there is no such report, and what can be said is narrower:
+the four instruction shape `[limit, price, deposit, register]` is built only by the app's deposit
+path (`src/infrastructure/solana-wallet.ts:769-771`), while the smoke script builds three, with no
+`register_escrow` (`scripts/smoke-solana-e2e.ts:455`), and its signer is not the sender those smoke
+runs were measured on (`src/application/solana-escrow-rent.ts:14`). So it is not a run of the smoke
+as this tree has it, and further than that the chain does not go.
+
+⚠️ The caveat about wallets stays as it was: if a wallet attempts to prepend its own ComputeBudget and
+rejects the duplicate after already signing (as the code assumes), the deposit fails with clear
+evidence. That assumption is not contractual, it is behavior observed on third-party wallets.
 
 **The blocker on the confirmation leg was a shared secret, and it is gone.** The first half was fixed
 earlier: the client signs a proof of possession before asking the server to create the payout order, so
@@ -118,11 +231,13 @@ instead of letting an empty address travel to the authority, which would convert
 error into a false 502 ("identity provider failed"). The guard of ownership remains: the authority
 still fail-closes and still rejects exactly what it did before.
 
-What stays open on this leg is the browser round trip itself (W7 above), and one piece of configuration:
-the facilitator needs `SOLANA_SPONSOR_NETWORK_ID` set, and while it is unset every sponsorship request
-is refused. The order in which the two repos deploy does not matter, because the path is dead today in
-either direction: an old client sends `popProof` and gets a 400 without anything being signed, and a new
-client sends a signature to a server that ignores it and dies on the same 400.
+What used to stay open on this leg was the browser round trip and one piece of configuration, and
+neither is open now. The two deposits of 2026-08-16 were broadcast with the facilitator signing as fee
+payer, which is what its sponsorship endpoint does. An unset `SOLANA_SPONSOR_NETWORK_ID` refuses every
+sponsorship request, and these two were not refused, so that variable is set on the deployed
+facilitator and the `popSignature` path works against a real wallet. What was written here, that the
+path was dead in either direction because an old client sends `popProof` and gets a 400 while a new one
+signs for a server that ignores it, described the window between the two deploys and closed with them.
 
 **The release runs, but nothing decides when to run it.** The instruction is implemented, constrained
 and proven on chain, as the table above shows. What does not exist, in any of the three repos, is a
@@ -165,10 +280,10 @@ The cycle:
 2. The sender's wallet signs `deposit`, which takes `beneficiary`, `authority`, `amount` and `deadline`
    as arguments. The principal leaves the sender's account and lands in the escrow vault. The operator
    never touches it.
-3. The facilitator co-signs as fee payer and broadcasts, so the user's wallet does not need SOL for
-   network fees. The account rent for the escrow PDA and its token vault (approximately 0.004 SOL per
-   remittance, measured on devnet) is paid from the deposit. This is the step that is currently cut
-   from the browser, for the reason described above.
+3. The facilitator co-signs as fee payer and broadcasts, so the sender pays no network fee. The rent
+   of the escrow PDA and its token vault, 4,002,000 lamports (about 0.004 SOL per remittance, measured
+   on devnet), does come out of the sender's wallet, which is why the app looks at their SOL balance
+   first. This step has landed from a browser: the two runs of 2026-08-16 above.
 4. Once the payout in the destination country is confirmed, the release authority signs `release`.
    `sender`, `beneficiary` and `mint` are `has_one` constrained against the escrow account, so the
    destination is the one fixed at deposit time and the authority cannot redirect the funds. Nothing

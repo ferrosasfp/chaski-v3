@@ -21,6 +21,78 @@ todavía está abierta y por qué.
 > propósito en el campo `id` de `public/manifest.json`: cambiar el `id` de un manifest PWA deja
 > huérfanas las instalaciones existentes.
 
+## Cómo probarlo en devnet
+
+La app desplegada es `https://chaski-v2.vercel.app`. Todo lo que sigue pasa en la devnet de Solana,
+con el USDC de devnet de Circle. No se mueve dinero real y a nadie se le pide un documento de verdad.
+
+**En el celular hay que abrir la app DESDE ADENTRO del navegador de Phantom.** Un navegador de
+celular común no tiene ninguna wallet inyectada, y ésa es la primera pared con la que choca quien
+prueba. La pantalla lo dice y ofrece la salida: un botón que vuelve a abrir la misma URL adentro de
+Phantom, armado como `https://phantom.app/ul/browse/<url>?ref=<origen>`
+(`src/presentation/wallet-availability.ts:26-28`, el copy de la pantalla en
+`src/presentation/flow.tsx:1311-1329`). En una computadora el camino es el otro: instalar la
+extensión de Phantom o de Solflare y recargar. Esas dos son las únicas wallets que la app cablea
+(`src/presentation/solana/solana-providers.tsx:228`).
+
+**Hacé el recorrido entero en ese mismo navegador.** La remesa en curso se guarda en el
+`localStorage` del navegador (`src/infrastructure/persistence.ts:86`), así que empezar en uno y
+saltar a otro la pierde.
+
+### Qué conseguir antes de empezar
+
+- **USDC de devnet de Circle**, mint `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`. Se piden en
+  <https://faucet.circle.com>, eligiendo la red `Solana Devnet` y pegando la dirección de la wallet.
+  Tanto la página como esa opción de red contestaron el 2026-08-16. Hacen falta **5 USDC como
+  mínimo**: por debajo de eso la app no cotiza, porque `MIN_SEND_USD = 5`
+  (`src/domain/remittance.ts:209`).
+  ⚠️ NO es el mint `8yRX3fZ2…` de las tres firmas de la tabla de más abajo. Ése es un token de prueba
+  y la app no está configurada contra él.
+- **Unos 0,009 SOL de devnet** en esa misma wallet. Se piden en <https://faucet.solana.com> (contestó
+  el 2026-08-16), o con `solana airdrop 1 <tu pubkey> --url devnet` si tenés la CLI.
+
+**Por qué hace falta SOL si la comisión la paga otro.** Una transacción de Solana paga dos cosas
+distintas y sólo una está patrocinada. La comisión de red la paga el facilitator, que firma como fee
+payer. El alquiler de las cuentas que crea el depósito lo paga quien envía, porque el programa lo
+nombra a él como payer de esas cuentas. Medido sobre los tres depósitos que se citan más abajo: el
+fee payer puso 11.200 lamports de comisión y la wallet del remitente puso 4.002.000 de alquiler. La
+app lo chequea antes de pedir una sola firma y corta con "Te falta SOL en la wallet" por debajo de
+0,0089 SOL (`SENDER_MIN_LAMPORTS_FOR_DEPOSIT`, `src/application/solana-escrow-rent.ts:187`, con su
+derivación en ese mismo archivo).
+
+### El recorrido
+
+1. Conectar la wallet.
+2. Monto de 5 USDC o más, el nombre de quien recibe, y una cuenta de destino de 20 dígitos, que es el
+   largo de un CCI peruano. El formulario chequea el LARGO, no que la cuenta exista
+   (`src/domain/remittance.ts:31` y `:44`), así que un número inventado te deja seguir.
+3. Identidad. **En este despliegue es simulada**: la pantalla dice que no verifica nada y no pide
+   ningún dato. Esa pantalla sólo existe si el operador declaró el mock
+   (`src/infrastructure/didit/mock-surface-enabled.ts:26`), y la app desplegada la sirvió con un 200
+   el 2026-08-16.
+4. Confirmar. **La wallet pide firmar dos veces, y es a propósito**: primero la transacción del
+   depósito, después un mensaje legible que nombra esta remesa, para que una firma de transacción
+   capturada no le alcance a un tercero para pedir el patrocinio de un depósito
+   (`src/infrastructure/solana-wallet.ts:781-799`).
+5. El depósito entra en la cadena y la pantalla enlaza la transacción al visor
+   (`src/presentation/flow.tsx:3582`). Los USDC quedan en el vault del escrow, y el operador no los
+   puede redirigir.
+
+### Qué NO va a pasar, dicho antes de probar y no después
+
+- **Nadie paga soles.** La pata fiat corre contra un agente mock por defecto. No hay ninguna
+  transferencia bancaria al final de esto.
+- **Los USDC se quedan en el vault del escrow.** Sacarlos hacia el beneficiario es el `release`, y
+  hoy el disparador es una persona. Lo dice el código donde aterriza el webhook del proveedor de
+  pagos: *"La verificación on-chain del release la hace una persona; esto es el pedido de que la
+  haga"* (`app/api/webhooks/transfi/route.ts:94-97`). El depósito es no-custodial y automático; la
+  entrega fiat la confirma el operador.
+- **La plata la recuperás vos.** Dos horas después del depósito se cierra la ventana de custodia
+  (`CUSTODY_WINDOW_SECS`, `src/infrastructure/solana-wallet.ts:100`) y la app te deja firmar el
+  refund, que no necesita la cooperación de nadie. Antes de ese deadline el programa lo rechaza
+  (`DeadlineNotReached` 6003), así que las dos horas son una espera y no una falla. Ya se hizo en la
+  cadena: el `Refund` de la sección de abajo, con el remitente como único firmante.
+
 ## Una remesa se arma, no viene cableada
 
 Una remesa es una cadena de pasos: verificar quién envía, poner precio al par de monedas, entregar el
@@ -70,13 +142,78 @@ contra el que la app está configurada es el de Circle
 (`4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`), y es una sola variable de entorno, nunca un hardcode.
 Decir "se movió USDC" sobre esas firmas sería falso, así que acá no se dice.
 
-**El depósito es la pieza más sólida, y la salvedad importa.** La instrucción entra en la cadena, la
-wallet del que envía es la única que firma la transferencia, y un fee payer patrocinador cubre las fees
-así el usuario nunca necesita SOL. Lo que prueba la firma de arriba es que eso funciona cuando lo
-maneja el script de smoke. Si entra desde un navegador **todavía no está verificado**: el bloqueo de
-protocolo que describe el párrafo siguiente ya no está, pero nadie recorrió la vuelta completa con una
-extensión de wallet real. Esa prueba es la W7 del SDD 037 y sigue pendiente, así que lo honesto es decir
-"sin verificar", no "anda" y tampoco "no anda".
+**El depósito es la pieza más sólida, y entra desde un navegador.** La instrucción entra en la
+cadena, la wallet del que envía es la única que firma la transferencia, y un fee payer patrocinador
+cubre la comisión de red. No cubre todo, y la diferencia no es un detalle: el alquiler de las cuentas
+que crea el depósito sale de la wallet de quien envía, así que "el usuario no necesita SOL" sería
+falso y acá no se dice. Los números están en la sección "Cómo probarlo en devnet".
+
+Dos corridas del 2026-08-16, desde el navegador propio de Phantom en un celular Android, entraron las
+dos:
+
+| Firma | Hora (UTC) | Qué se movió |
+|---|---|---|
+| [`59XvDKhAJD…`](https://explorer.solana.com/tx/59XvDKhAJD5tbdzYeRQWWhNsi5Ac5ppSwu8xM3rHwVCRUVhvZPBcPnUtucU3F5o53VjaM8H9KAWG3zWSq5Waii8K?cluster=devnet) | 2026-08-16T06:17:19Z | 7 USDC salen del remitente y quedan en el vault `GppYQSnQ…` |
+| [`2MUbUgJWSh…`](https://explorer.solana.com/tx/2MUbUgJWSh9kVPz5JKAEC7PYw8gNAMjLsqR1fJ3iZ18CtYZCdTEULxNRojmdxinTrCWcBkjMi9HNiTBRGpoPYYo5?cluster=devnet) | 2026-08-16T07:40:14Z | 6 USDC al vault `HcsP8afr…`, el remitente pasa de 56 a 50 |
+
+Las dos vienen con `err: null`, comisión de 11.200 lamports puesta por el patrocinador `4wPhH4dC…`,
+el remitente `4AvAjtPg…` como el otro firmante, y la forma de cuatro instrucciones del camino de
+depósito de la app. Se releen del RPC público de devnet sin permiso de nadie. Lo que la cadena prueba
+es la transacción; que el cliente haya sido el navegador de un celular es el reporte de quien las
+corrió, la misma clase de evidencia que el recorrido de CSP de más abajo.
+
+**Lo que NO está probado es el ciclo completo, y el motivo no es el depósito.** Los 13 USDC de esas
+dos corridas siguen en custodia: los dos vaults tenían 7 y 6 USDC el 2026-08-16, y un
+`getTokenAccountBalance` sobre cada uno dice si eso sigue siendo cierto cuando leas esto. Ahí no
+falló nada. El recorrido termina donde termina el sistema hoy, porque el release lo dispara una
+persona.
+
+**La salida también se ejercitó, y la firmó el remitente solo.** El escrow del 2026-08-15 pasó su
+deadline y quien depositó recuperó la plata sin la cooperación de nadie:
+[`3dYjRE7u8b…`](https://explorer.solana.com/tx/3dYjRE7u8bzBKZD9PKci3oJ5X98J8jku65kK9T8GwEZ4hLZ2h9rwWt49ibqgEngSrAiNiA3F5gTN13cZroF2ywDj?cluster=devnet),
+del 2026-08-16T06:17:49Z, una instrucción que los logs nombran `Refund`, con el vault `7piawXnH…`
+pasando de 13,5 USDC a cero y la wallet del remitente de 42,5 a 56. Hay un solo firmante, el
+remitente, y los 80.000 lamports de comisión salieron de su propia wallet. No se le pidió permiso a
+nadie.
+
+**Chaski emite instrucciones de ComputeBudget en el depósito (WKH-321), y ese camino YA entró en la
+cadena.** La transacción del `deposit` lleva dos instrucciones antes de las del escrow,
+`setComputeUnitLimit` y `setComputeUnitPrice`, que salen de los resolvers de
+`src/infrastructure/chain.ts:93` y `:124` y se agregan a la transacción en
+`src/infrastructure/solana-wallet.ts:675-678`. Eso baja la probabilidad de que una billetera como
+Phantom meta sus propias propinas de prioridad por encima del tope del facilitator (medido en devnet
+en 50.000 unidades).
+
+**La transacción que lo prueba** es
+[`38PyBoVizf…`](https://explorer.solana.com/tx/38PyBoVizfhVLxm217QzeWP3JPYqGxJUC6vzuxh9xxv9FJdMquQ6BUFyUsma1ePiWK59qCQweFNNony1MJ7UReLV?cluster=devnet),
+del 2026-08-15T08:36:12Z, con `err: null`, comisión de 11.200 lamports y 54.600 unidades de cómputo
+consumidas. Lleva cuatro instrucciones, en este orden: dos de
+`ComputeBudget111111111111111111111111111111` y dos del programa de escrow
+`DR5GoMT7sAKzD6wZMKJPeknS3Y6fzgZUNevi7xiESE4x`, que sus propios logs nombran `Deposit` y
+`RegisterEscrow`. Y movió plata de verdad: el vault del escrow `7piawXnH…` no existía antes y terminó
+con 13,5 USDC, mientras la cuenta de tokens del remitente pasó de 48 a 34,5, en el USDC de devnet de
+Circle (mint `4zMMC9…`), que es el mint contra el que la app está configurada. Cualquiera la relee
+del RPC público de devnet con `getTransaction`, sin pedirnos nada.
+
+⚠️ **La cadena no registra qué cliente armó una transacción.** Una firma lleva instrucciones y
+firmantes, nunca el programa que las ensambló. Para las dos corridas de más arriba, el navegador del
+celular es el reporte de quien las corrió. Para ésta no hay tal reporte, y lo que se puede decir es
+más angosto: la forma de cuatro instrucciones `[limit, price, deposit, register]` la arma únicamente
+el camino de depósito de la app (`src/infrastructure/solana-wallet.ts:769-771`), mientras que el
+script de smoke arma tres, sin `register_escrow` (`scripts/smoke-solana-e2e.ts:455`), y su firmante
+tampoco es el remitente sobre el que se midieron esas corridas
+(`src/application/solana-escrow-rent.ts:14`). O sea que no es una corrida del smoke tal como está en
+este árbol, y más lejos que eso la cadena no llega.
+
+⚠️ La salvedad sobre las billeteras sigue igual: si una billetera intenta anteponer su propio
+ComputeBudget y rechaza el duplicado después de haber firmado (como asume el código), el depósito
+falla con evidencia clara. Esa suposición no es contractual, es comportamiento observado en
+billeteras de terceros.
+
+⚠️ **Los tres párrafos de ComputeBudget de acá arriba faltaban enteros en esta traducción hasta el
+2026-08-16**, mientras el README en inglés tenía el suyo desde WKH-321. Es el mismo modo de falla que
+ya está anotado más abajo para el párrafo de seguridad, y el que hace inútil comparar los dos
+archivos por tamaño: hasta hoy los dos tenían 396 líneas.
 
 **El bloqueo de la pata de confirmación era un secreto compartido, y ya no está.** La primera mitad se
 había arreglado antes: el cliente firma una prueba de posesión antes de pedirle al servidor que cree la
@@ -98,12 +235,14 @@ en el `settle()` (`src/application/use-cases/confirm-and-send.ts`), y la ruta qu
 (`app/api/settle/solana-sponsor/route.ts`) corta con 400 si falta o viene deforme, antes de gastar el
 forward. Ese reemplazo es esta rama, no trabajo abierto.
 
-Lo que sí queda abierto en esta pata es la vuelta completa desde el navegador (la W7 de arriba) y una
-pieza de configuración: el facilitator necesita `SOLANA_SPONSOR_NETWORK_ID` seteada, y mientras no lo
-esté rechaza todo pedido de patrocinio. El orden en que se despliegan los dos repos no importa, porque
-el camino hoy está muerto en las dos direcciones: un cliente viejo manda `popProof` y se lleva un 400
-sin que se firme nada, y un cliente nuevo manda una firma que el servidor viejo ignora y muere en el
-mismo 400.
+Lo que quedaba abierto en esta pata era la vuelta desde el navegador y una pieza de configuración, y
+ninguna de las dos sigue abierta. Los dos depósitos del 2026-08-16 se broadcastearon con el
+facilitator firmando como fee payer, que es lo que hace su endpoint de patrocinio. Con
+`SOLANA_SPONSOR_NETWORK_ID` sin setear se rechaza TODO pedido de patrocinio, y a estos dos no se los
+rechazó, así que esa variable está puesta en el facilitator desplegado y el camino de `popSignature`
+funciona contra una billetera real. Lo que decía acá, que el camino estaba muerto en las dos
+direcciones porque un cliente viejo manda `popProof` y se lleva un 400 mientras uno nuevo firma para
+un servidor que lo ignora, describía la ventana entre los dos deploys y se cerró con ellos.
 
 **El release corre, pero nada decide cuándo correrlo.** La instrucción está implementada, restringida y
 probada on chain, como muestra la tabla de arriba. Lo que no existe, en ninguno de los tres repos, es un
@@ -166,8 +305,10 @@ El ciclo:
 2. La wallet del que envía firma `deposit`, que toma `beneficiary`, `authority`, `amount` y `deadline`
    como argumentos. El principal sale de su cuenta y queda en el vault del escrow. El operador no lo
    toca.
-3. El facilitator cofirma como fee payer y hace el broadcast, así el usuario no necesita SOL. Este es el
-   paso que hoy está cortado desde el navegador, por el motivo descrito arriba.
+3. El facilitator cofirma como fee payer y hace el broadcast, así quien envía no paga comisión de red.
+   El alquiler de la PDA del escrow y de su vault, 4.002.000 lamports (unos 0,004 SOL por remesa,
+   medidos en devnet), SÍ sale de la wallet de quien envía, y por eso la app le mira el saldo de SOL
+   antes. Este paso ya entró desde un navegador: las dos corridas del 2026-08-16 de más arriba.
 4. Con el pago en destino confirmado, la autoridad de release firma `release`. `sender`, `beneficiary` y
    `mint` están restringidos por `has_one` contra la cuenta de escrow, así que el destino es el que
    quedó fijado en el depósito y la autoridad no puede redirigir los fondos. Todavía no hay nada

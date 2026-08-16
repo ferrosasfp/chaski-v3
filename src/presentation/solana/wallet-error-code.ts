@@ -111,7 +111,81 @@ export function laBilleteraFueTocada(err: unknown): boolean {
   return nombreDe(err) === WALLET_SIGN_MESSAGE_ERROR;
 }
 
+/**
+ * WKH-MWA · El `name` que la librería de Mobile Wallet Adapter le pone a SUS excepciones.
+ *
+ * No es una convención de mensajes: `SolanaMobileWalletAdapterError` es una clase con su propio
+ * `name` y un `code` de un enum cerrado.
+ */
+export const MWA_ERROR_NAME = "SolanaMobileWalletAdapterError";
+
+/**
+ * WKH-MWA · Los códigos que el paquete INSTALADO declara, copiados de su propia declaración de tipos:
+ * `@solana-mobile/mobile-wallet-adapter-protocol/lib/types/index.d.ts:6-16`.
+ *
+ * ⛔ NO ES UN CATÁLOGO INVENTADO NI AMPLIABLE A OJO. Son los once, ni uno más. Si mañana la librería
+ * agrega uno, `mwaErrorCode` igual lo va a dejar pasar —el `Set` sólo decide si el string es *conocido*,
+ * y un código nuevo cae en la rama que NO afirma causa (ver `mwaHumanError`)— pero el texto propio hay
+ * que escribirlo a mano leyendo qué significa, nunca adivinándolo del nombre.
+ *
+ * ⚠️ Y ESTA LISTA NO LA PUEDE VIGILAR `citas-ancladas.test.ts`: su regexp de rutas
+ * (`citas-ancladas.test.ts:61`) no admite `@`, así que ninguna ruta bajo `@solana-mobile/…` puede ser
+ * una cita anclada. Quien la vigila es `T-ERR-1`, que compara este `Set` contra el enum REAL importado
+ * del paquete: si divergen, se pone rojo.
+ */
+export const MWA_CODES: ReadonlySet<string> = new Set([ // exportado SOLO para T-ERR-1, que lo compara contra el enum real del paquete
+  "ERROR_ASSOCIATION_PORT_OUT_OF_RANGE",
+  "ERROR_REFLECTOR_ID_OUT_OF_RANGE",
+  "ERROR_FORBIDDEN_WALLET_BASE_URL",
+  "ERROR_SECURE_CONTEXT_REQUIRED",
+  "ERROR_SESSION_CLOSED",
+  "ERROR_SESSION_TIMEOUT",
+  "ERROR_WALLET_NOT_FOUND",
+  "ERROR_INVALID_PROTOCOL_VERSION",
+  "ERROR_BROWSER_NOT_SUPPORTED",
+  "ERROR_LOOPBACK_ACCESS_BLOCKED",
+  "ERROR_ASSOCIATION_CANCELLED",
+]);
+
+/** Tope de profundidad al recorrer la cadena. No es paranoia: una cadena ciclada colgaría el render. */
+const MAX_PROF = 6;
+
+/**
+ * WKH-MWA · Busca un `SolanaMobileWalletAdapterError` ADENTRO de la cadena de causas y devuelve su
+ * `code`.
+ *
+ * 🔴 POR QUÉ HAY QUE BAJAR Y NO ALCANZA CON MIRAR EL `name` DE ARRIBA. La cadena está MEDIDA, no
+ * supuesta: se capturó el error real que emite el adapter instalado y su forma es
+ *
+ *     [0] WalletConnectionError          claves propias: error, name
+ *     [1] Error                          (llegado por `.cause`)
+ *     [2] Error                          (llegado por `.cause`)
+ *     [3] SolanaMobileWalletAdapterError  code=ERROR_LOOPBACK_ACCESS_BLOCKED
+ *
+ * O sea que el `name` de arriba es SIEMPRE `WalletConnectionError`, que `KNOWN_CODES` mapea a
+ * `wallet_connect_failed` = "puede que la hayas rechazado, o que la wallet haya fallado". Los once
+ * códigos distintos se colapsaban en esa sola frase, y cada uno pide una acción distinta.
+ *
+ * SE RECORREN LOS DOS CAMPOS, y hacen falta los dos: `WalletError` de `@solana/wallet-adapter-base`
+ * guarda la causa en `.error` (por eso `[0]` tiene esa clave propia), y `wallet-standard-mobile` usa
+ * el `.cause` estándar de `Error`. Seguir uno solo no llega a `[3]`.
+ */
+export function mwaErrorCode(err: unknown, prof = 0): string | null {
+  if (!err || typeof err !== "object" || prof > MAX_PROF) return null;
+  const o = err as { name?: unknown; code?: unknown; error?: unknown; cause?: unknown };
+  if (o.name === MWA_ERROR_NAME && typeof o.code === "string" && o.code) {
+    // El `slice` es el mismo motivo que `MAX_NAME_LEN`: el string viene de un tercero y puede terminar
+    // en pantalla.
+    return o.code.slice(0, MAX_NAME_LEN);
+  }
+  return mwaErrorCode(o.error, prof + 1) ?? (o.cause === o.error ? null : mwaErrorCode(o.cause, prof + 1));
+}
+
 export function walletErrorCode(err: unknown): string {
+  // PRIMERO la cadena de MWA, y el orden NO es intercambiable: si esto fuera después, el `name` de la
+  // envoltura (`WalletConnectionError`) ganaría siempre y ningún código de MWA llegaría nunca a verse.
+  const mwa = mwaErrorCode(err);
+  if (mwa) return `mwa:${mwa}`;
   const name = nombreDe(err);
   if (!name) return "wallet_error:sin_nombre";
   const known = Object.prototype.hasOwnProperty.call(KNOWN_CODES, name)
@@ -119,4 +193,50 @@ export function walletErrorCode(err: unknown): string {
     : undefined;
   if (known) return known;
   return `wallet_error:${name.slice(0, MAX_NAME_LEN)}`;
+}
+
+/**
+ * WKH-MWA · Qué lee la persona cuando la conexión por Mobile Wallet Adapter falla.
+ *
+ * 🔴 LA REGLA DE ESTE MAPA, y es la que hay que respetar al agregarle una entrada: **sólo tiene texto
+ * propio el código cuyo significado se puede afirmar leyendo la librería, Y que pide una acción
+ * distinta de la persona.** Todo lo demás cae al default, que dice que la conexión falló y NO afirma
+ * por qué. El precedente del repo es no acusar cuando no se sabe: es la misma decisión por la que
+ * `wallet_connect_failed` nombra las dos posibilidades sin elegir una.
+ *
+ * Por eso acá hay SIETE entradas y no once. Las cuatro que faltan
+ * —`ERROR_ASSOCIATION_PORT_OUT_OF_RANGE`, `ERROR_REFLECTOR_ID_OUT_OF_RANGE`,
+ * `ERROR_FORBIDDEN_WALLET_BASE_URL`, `ERROR_INVALID_PROTOCOL_VERSION`— son fallas internas del
+ * protocolo frente a las que la persona no puede hacer nada distinto, y darles un texto propio sería
+ * inventar una acción. Caen al default CON EL CÓDIGO A LA VISTA, que es lo que sirve para
+ * diagnosticar. Lo mismo vale para los códigos numéricos del otro enum del paquete
+ * (el enum `SolanaMobileWalletAdapterProtocolErrorCode`, líneas 47-52 del mismo `index.d.ts` — sin backticks alrededor del número a propósito: con ellos `citas-ancladas.test.ts` lo lee como una cita a ESTE archivo, y una ruta con `@` no puede ser una cita anclada): no se enumeran acá
+ * porque ninguno describe algo que la persona pueda corregir desde la pantalla.
+ *
+ * ⛔ NINGUNO DE ESTOS TEXTOS DICE "CANCELASTE", con UNA excepción medida: `ERROR_ASSOCIATION_CANCELLED`,
+ * que es el único de los once que significa que la cancelación ocurrió, y ocurrió EN LA BILLETERA. Ése
+ * es justamente el punto de toda esta HU: hasta acá los once decían "se cerró el selector".
+ */
+export function mwaHumanError(code: string): string {
+  const bruto = code.startsWith("mwa:") ? code.slice(4) : code;
+  switch (bruto) {
+    case "ERROR_LOOPBACK_ACCESS_BLOCKED":
+      return "Tu navegador bloqueó el permiso de red local, que es el que Chaski necesita para hablar con la app de tu billetera. Volver a intentar sin darlo va a fallar igual: abrí los permisos del sitio en Chrome, permití el acceso a la red local y recién ahí probá de nuevo.";
+    case "ERROR_WALLET_NOT_FOUND":
+      return "Ninguna app de billetera respondió en este teléfono. Si tenés Phantom instalada, abrí Chaski desde el navegador de Phantom con el enlace de la pantalla anterior.";
+    case "ERROR_ASSOCIATION_CANCELLED":
+      return "Se canceló la conexión desde la app de tu billetera. Volvé a intentar y aceptá la conexión ahí.";
+    case "ERROR_SECURE_CONTEXT_REQUIRED":
+      return "Esta página no está en https, y la conexión con la app de tu billetera solo funciona en https. Abrí Chaski por su dirección segura y volvé a intentar.";
+    case "ERROR_BROWSER_NOT_SUPPORTED":
+      return "Este navegador no puede abrir la app de tu billetera. Probá desde Chrome, o abrí Chaski adentro del navegador de Phantom.";
+    case "ERROR_SESSION_TIMEOUT":
+      return "La app de tu billetera no respondió a tiempo. Abrila, dejala en primer plano y volvé a intentar.";
+    case "ERROR_SESSION_CLOSED":
+      return "Se cortó la conexión con la app de tu billetera antes de terminar. Volvé a intentar sin cerrar la app.";
+    default:
+      // No sabemos qué pasó, y eso es lo que se dice. El código va a la vista para diagnosticar, igual
+      // que hace `wallet_error:<Nombre>` con un nombre que no conocemos.
+      return `No se pudo conectar con la app de tu billetera. No sabemos por qué: la billetera devolvió ${bruto}. Volvé a intentar, y si vuelve a pasar abrí Chaski adentro del navegador de Phantom.`;
+  }
 }

@@ -21,8 +21,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { RemittanceFlow } from "./flow";
-import { phantomBrowseUrl } from "./wallet-availability";
-import { MWA_WALLET_NAME, solanaWalletBridge } from "../infrastructure/solana-wallet-bridge"; import { useWallet } from "@solana/wallet-adapter-react"; // WKH-MWA: los dos imports EN ESTA LÍNEA — `wallet-availability.test.tsx:62` lo cita `tx-proof.test.tsx:84` por número, y agregar una línea acá lo correría
+import { phantomBrowseUrl } from "./wallet-availability"; import { humanError } from "./flow-vm"; import { mwaErrorCode } from "./solana/wallet-error-code"; // WKH-MWA: los dos EN ESTA LÍNEA — `wallet-availability.test.tsx:62` lo cita `tx-proof.test.tsx:84` por número
+import { MWA_WALLET_NAME, solanaWalletBridge } from "../infrastructure/solana-wallet-bridge"; import { useWallet } from "@solana/wallet-adapter-react"; import { useWalletModal } from "@solana/wallet-adapter-react-ui"; // WKH-MWA: los dos imports EN ESTA LÍNEA — `wallet-availability.test.tsx:62` lo cita `tx-proof.test.tsx:84` por número, y agregar una línea acá lo correría
 import { buildTestContainer } from "../test-support/test-container";
 import { TEST_CCI } from "../test-support/fakes";
 
@@ -96,7 +96,7 @@ beforeEach(() => {
   solanaWalletBridge.reset();
   quitarWalletInyectada();
   setUserAgent(UA_ESCRITORIO);
-  window.history.replaceState({}, "", "/");
+  window.history.replaceState({}, "", "/"); window.localStorage.clear(); // WKH-MWA: EN ESTA LÍNEA (no correr `:62`). `WalletProvider` PERSISTE la wallet elegida en `localStorage["walletName"]` (WalletProvider.js:102), así que sin esto un test que elige MWA deja al siguiente con la wallet ya seleccionada y ya autoconectada desde el montaje: `select()` sale por `if (walletName === nextWalletName) return` y no arranca ninguna asociación. Medido: T-CANCEL-1 y T-CANCEL-2 pasaban en aislamiento y fallaban en la corrida del archivo.
 });
 
 afterEach(() => {
@@ -375,6 +375,32 @@ const UA_IOS =
  * `true` para reproducir la condición de producción, que es https. No es maquillaje: es la condición
  * que el navegador real ya cumple en el dominio desplegado.
  */
+/**
+ * 🔴 ESTO NO ES RUIDO DEL TEST: ES UN DEFECTO DE LA LIBRERÍA, Y ES EL MISMO QUE CAUSA EL BUG.
+ *
+ * `SolanaMobileWalletAdapter.connect()` hace `this.#connect();` sin `await` y sin `return`
+ * (.../@solana-mobile/wallet-adapter-mobile/lib/esm/index.browser.js:88-90). La promesa interna queda
+ * SIN DUEÑO: nadie puede engancharle un `.catch()`, ni la app ni `WalletProviderBase` (que awaitea la
+ * de afuera, que ya resolvió). O sea que **toda falla de asociación de MWA produce, además, un
+ * unhandled rejection en la consola**, en jsdom y en un navegador. No se puede arreglar desde acá.
+ *
+ * Lo que hace este listener es sólo evitar que ese rechazo estructural tumbe la corrida: vitest cuenta
+ * los unhandled rejections del archivo como errores y sale con exit 1 aunque los tests pasen (medido).
+ *
+ * ⚠️ Y ES ESTRECHO A PROPÓSITO. Traga SÓLO lo que trae un código de MWA adentro de la cadena; cualquier
+ * otro rechazo suelto se vuelve a tirar en un `setTimeout`, o sea que sale como excepción no capturada
+ * y vitest lo reporta igual. Un `() => {}` pelado acá habría apagado la red de seguridad de TODO el
+ * archivo, que es como un guard deja de existir sin que nadie lo note.
+ */
+function tragarRechazosSueltosDeMwa(): void {
+  process.on("unhandledRejection", (motivo: unknown) => {
+    if (mwaErrorCode(motivo) !== null) return;
+    setTimeout(() => {
+      throw motivo;
+    }, 0);
+  });
+}
+
 function ponerContextoSeguro(): void {
   Object.defineProperty(window, "isSecureContext", { value: true, configurable: true });
 }
@@ -402,6 +428,7 @@ function ponerContextoSeguro(): void {
  * es la primera línea a leer.
  */
 beforeAll(async () => {
+  tragarRechazosSueltosDeMwa();
   ponerContextoSeguro();
   setUserAgent(UA_ANDROID_CHROME);
   const { default: SolanaProviders } = await import("./solana/solana-providers");
@@ -417,6 +444,7 @@ beforeAll(async () => {
 
 type AdapterEspiado = {
   name: string;
+  connecting: boolean;
   signTransaction: (tx: unknown) => Promise<unknown>;
   sendTransaction: (...args: unknown[]) => Promise<string>;
   emit: (evento: string, ...args: unknown[]) => boolean;
@@ -424,15 +452,21 @@ type AdapterEspiado = {
 
 let listaViva: Array<{ name: string; adapter: AdapterEspiado }> = [];
 let elegir: ((nombre: string) => void) | null = null;
+/** WKH-MWA · las palancas del selector y el `connecting` que engañaba al guard viejo. Los lee T-CANCEL-*. */
+let abrirSelector: ((v: boolean) => void) | null = null;
+let ultimoConnecting = false;
 
 /** Espía DENTRO del árbol: la única forma de ver la lista que la librería arma de verdad. */
 function EspiaDeWallets(): null {
-  const { wallets, select } = useWallet();
+  const { wallets, select, connecting } = useWallet();
+  const { setVisible } = useWalletModal();
   listaViva = wallets.map((w) => ({
     name: String(w.adapter.name),
     adapter: w.adapter as unknown as AdapterEspiado,
   }));
   elegir = (nombre: string) => select(nombre as never);
+  abrirSelector = setVisible;
+  ultimoConnecting = connecting;
   return null;
 }
 
@@ -653,4 +687,216 @@ describe("WKH-MWA · la bandera: qué cambia en la pantalla y qué no", () => {
     });
     expect(screen.getByText(/Phantom solo se conecta desde su propio navegador/)).toBeInTheDocument();
   });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-MWA · CANDADO: un fallo de conexión NO se puede reportar como una cancelación de la persona
+//
+// 🔴 REPORTADO DESDE UN ANDROID REAL, contra producción: la persona tocó "Mobile Wallet Adapter" en el
+// selector, no se abrió ninguna billetera, y la app mostró
+//     "Se cerró el selector de wallet sin conectar. Podés volver a intentarlo cuando quieras."
+//     wallet_connect_cancelled
+// Nadie cerró nada. El mensaje le atribuye a la persona una acción que no hizo, Y tira la causa real.
+//
+// EL MECANISMO, medido en el árbol real y no supuesto (la reproducción es T-CANCEL-1):
+//   1. `SolanaMobileWalletAdapter.connect()` llama a su `#connect()` SIN `await` y SIN `return`
+//      (.../@solana-mobile/wallet-adapter-mobile/lib/esm/index.browser.js:88-90), así que resuelve al
+//      instante con la asociación todavía en vuelo.
+//   2. `WalletProviderBase` hace `yield onAutoConnectRequest()` y después `finally { setConnecting(false) }`
+//      (WalletProviderBase.js:176-190) ⇒ `useWallet().connecting` vuelve a `false` enseguida.
+//   3. 150 ms después del toque, `WalletModal` se cierra solo (WalletModal.js:65-76).
+//   4. El efecto de `solana-providers.tsx:202` veía `!connecting` en `true` y llamaba `cancelConnection()`.
+//   5. `cancelConnection()` rechaza el pending y hace `clearPending()`, así que cuando el error REAL
+//      llegaba, `failConnection(causaReal)` era un no-op (`solana-wallet-bridge.ts:166`).
+//
+// ⚠️ POR QUÉ LA ASERCIÓN QUE DECIDE ES "NO SALIÓ COMO CANCELACIÓN", y va primera: un test que sólo
+// pidiera "se mostró un error" lo pasa TAMBIÉN el comportamiento roto, porque `wallet_connect_cancelled`
+// es un error. Lo que distingue los dos mundos es CUÁL error, y el candado tiene que separar
+// cancelación de falla, no error de no-error.
+
+/** Le presta a jsdom la API de permisos que un Chrome de Android SÍ tiene, y la hace TARDAR. */
+function permisoDeRedQueTarda(ms: number): void {
+  Object.defineProperty(window.navigator, "permissions", {
+    value: {
+      query: async () => {
+        await new Promise((r) => setTimeout(r, ms));
+        return { state: "granted" };
+      },
+    },
+    configurable: true,
+  });
+}
+
+/**
+ * Construye un error de MWA con las clases REALES de las dos librerías, con la forma de cadena que el
+ * adapter produce de verdad: `WalletConnectionError` (que guarda su causa en `.error`) envolviendo un
+ * `Error` que guarda la suya en `.cause`, y adentro el `SolanaMobileWalletAdapterError` con su `code`.
+ * Que ésa sea la forma real lo mide T-CANCEL-4 contra el adapter vivo.
+ */
+function errorRealDeMwa(code: string): Error {
+  const { createRequire } = require("node:module") as typeof import("node:module");
+  const path = require("node:path") as typeof import("node:path");
+  const desdeElAdapter = createRequire(
+    path.join(
+      process.cwd(),
+      "node_modules/@solana/wallet-adapter-react/node_modules/@solana-mobile/wallet-adapter-mobile/lib/cjs/index.js",
+    ),
+  );
+  const proto = desdeElAdapter("@solana-mobile/mobile-wallet-adapter-protocol") as {
+    SolanaMobileWalletAdapterError: new (c: string, m: string) => Error;
+  };
+  const base = require("@solana/wallet-adapter-base") as {
+    WalletConnectionError: new (m: string, e: unknown) => Error;
+  };
+  const adentro = new proto.SolanaMobileWalletAdapterError(code, `falla real: ${code}`);
+  return new base.WalletConnectionError("lo que ve `onError`", new Error("intermedia", { cause: adentro }));
+}
+
+function sinApiDePermisos(): void {
+  Object.defineProperty(window.navigator, "permissions", { value: undefined, configurable: true });
+}
+
+/** Monta, abre el selector, empieza a esperar la conexión y devuelve las palancas. */
+async function escenarioDeConexion(): Promise<{
+  mwa: Record<string, unknown> | undefined;
+  desenlace: () => string | null;
+  cerrarModal: () => Promise<void>;
+}> {
+  await montarArbolConEspia();
+  await act(async () => {
+    abrirSelector?.(true);
+  });
+  let desenlace: string | null = null;
+  solanaWalletBridge.waitForConnection(60_000).then(
+    () => {
+      desenlace = "conectada";
+    },
+    (e: Error) => {
+      desenlace = e.message;
+    },
+  );
+  const mwa = listaViva.find((w) => w.name === NOMBRE_MWA_ESCRITO_EN_CHASKI)?.adapter as unknown as
+    | Record<string, unknown>
+    | undefined;
+  return {
+    mwa,
+    desenlace: () => desenlace,
+    // Exactamente lo que hace WalletModal: 150 ms después del toque, `setVisible(false)`.
+    cerrarModal: async () => {
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 150));
+      });
+      await act(async () => {
+        abrirSelector?.(false);
+      });
+    },
+  };
+}
+
+describe("WKH-MWA · CANDADO: una conexión que falla no puede decir que la cancelaste", () => {
+  it("T-CANCEL-1: la asociación sigue viva cuando el selector se auto-cierra ⇒ NO se acusa de cancelar", async () => {
+    // La reproducción exacta del reporte: una asociación que tarda MÁS que los 150 ms del auto-cierre.
+    permisoDeRedQueTarda(400);
+    setUserAgent(UA_ANDROID_CHROME);
+    const { mwa, desenlace, cerrarModal } = await escenarioDeConexion();
+    expect(mwa, "sin la entrada de MWA no hay nada que reproducir").toBeDefined();
+    if (!mwa) return;
+
+    console.log("### adapter.connecting ANTES de elegir =", mwa.connecting);
+    await act(async () => {
+      elegir?.(NOMBRE_MWA_ESCRITO_EN_CHASKI);
+    });
+    await cerrarModal();
+
+    // (i) LA ASERCIÓN QUE DECIDE. Con el guard viejo acá había `"wallet_connect_cancelled"`.
+    expect(desenlace()).not.toBe("wallet_connect_cancelled");
+
+    // (ii) EL CONTROL QUE IMPIDE EL VERDE POR VACÍO, y es lo que hace que (i) signifique algo: en este
+    //      instante TIENE que haber una asociación viva, y el dato que el guard viejo miraba TIENE que
+    //      estar diciendo lo contrario. Sin esto, un test que nunca llegara a tocar MWA pasaría (i).
+    expect(mwa.connecting, "la asociación tiene que seguir viva").toBe(true);
+    expect(ultimoConnecting, "`useWallet().connecting` es el dato que engañaba al guard viejo").toBe(
+      false,
+    );
+    // (iii) Y no se inventa un éxito tampoco: la espera sigue abierta, que es lo honesto mientras el
+    //       adapter no conteste.
+    expect(desenlace()).toBeNull();
+  });
+
+  it("T-CANCEL-2: el error REAL llega DESPUÉS del auto-cierre y es ÉSE el que ve la persona", async () => {
+    // El escenario COMPLETO del reporte, no una mitad: la asociación tarda más que los 150 ms del
+    // auto-cierre (como en T-CANCEL-1) Y ADEMÁS termina fallando. Con el guard viejo, en el momento en
+    // que este error llega la espera YA estaba rechazada con "cancelaste" y `failConnection` era un
+    // no-op, así que esta causa no podía llegar nunca.
+    permisoDeRedQueTarda(400);
+    setUserAgent(UA_ANDROID_CHROME);
+    const { mwa, desenlace, cerrarModal } = await escenarioDeConexion();
+    expect(mwa).toBeDefined();
+    if (!mwa) return;
+
+    await act(async () => {
+      elegir?.(NOMBRE_MWA_ESCRITO_EN_CHASKI);
+    });
+    await cerrarModal();
+    expect(mwa.connecting, "la asociación tiene que seguir viva al cerrarse el selector").toBe(true);
+
+    // El error se entrega por el MISMO camino que usa la librería: `#runWithGuard` hace
+    // `this.emit("error", e)` antes de re-tirar, y `WalletProviderBase` escucha ese evento
+    // (`adapter.on('error', handleError)`, WalletProviderBase.js:150) y lo manda al `onError` del
+    // provider. Se emite a mano en vez de esperar al fallo real porque el fallo real de jsdom depende
+    // de un timeout de detección de terceros: un test que espera ESE reloj es un flake.
+    // ⚠️ El OBJETO no lo inventa el test: lo construyen las clases reales de las dos librerías, y que
+    // esa forma sea la que el adapter produce de verdad lo mide T-CANCEL-4, end to end.
+    await act(async () => {
+      (mwa as unknown as { emit: (e: string, x: unknown) => boolean }).emit(
+        "error",
+        errorRealDeMwa("ERROR_WALLET_NOT_FOUND"),
+      );
+    });
+
+    const fin = desenlace();
+    // (i) LA ASERCIÓN QUE DECIDE, primero: no salió como cancelación.
+    expect(fin).not.toBe("wallet_connect_cancelled");
+    // (ii) Ni colapsado en el genérico de la envoltura, que es lo que da leer sólo el `name` de arriba.
+    expect(fin).not.toBe("wallet_connect_failed");
+    // (iii) Salió la causa real, la que el adapter puso adentro de la cadena.
+    expect(fin).toBe("mwa:ERROR_WALLET_NOT_FOUND");
+    // (iv) Y lo que LEE la persona dice qué pasó y qué hacer, en vez de acusarla de cerrar el selector.
+    const copy = humanError(fin as string);
+    expect(copy).not.toMatch(/Se cerró el selector/);
+    expect(copy).not.toMatch(/cancelaste|rechazaste|cerraste/i);
+    expect(copy).toMatch(/Ninguna app de billetera respondió/);
+  });
+
+  it("T-CANCEL-3(control): cerrar el selector SIN elegir nada sigue siendo una cancelación", async () => {
+    // El par que impide 'arreglarlo' borrando `cancelConnection()`. Este camino tiene que seguir vivo:
+    // acá la persona SÍ cerró el selector sin elegir, y decirlo es correcto. Si esto se pone verde por
+    // el motivo equivocado —porque nadie cancela nunca— el candado de arriba deja de significar algo.
+    sinApiDePermisos();
+    setUserAgent(UA_ANDROID_CHROME);
+    const { desenlace, cerrarModal } = await escenarioDeConexion();
+    await cerrarModal(); // sin `elegir(...)`: nadie tocó ninguna wallet
+    expect(desenlace()).toBe("wallet_connect_cancelled");
+  });
+  it("T-CANCEL-4: la cadena de causas no la inventa el test, la produce el adapter", async () => {
+    // Sin la API de permisos el adapter falla de verdad y al instante: `checkLocalNetworkAccessPermission`
+    // revienta en el primer renglón. El error que llega acá lo construyó ENTERO la librería. Es el par
+    // que impide que T-CANCEL-2 y T-ERR-2 se estén confirmando con una forma de cadena que yo inventé:
+    // si el adapter la cambiara, esto se pone rojo y esos dos seguirían verdes.
+    sinApiDePermisos();
+    setUserAgent(UA_ANDROID_CHROME);
+    const { mwa, desenlace, cerrarModal } = await escenarioDeConexion();
+    expect(mwa).toBeDefined();
+    if (!mwa) return;
+
+    await act(async () => {
+      elegir?.(NOMBRE_MWA_ESCRITO_EN_CHASKI);
+    });
+    await cerrarModal();
+
+    expect(desenlace()).not.toBe("wallet_connect_cancelled");
+    expect(desenlace()).toBe("mwa:ERROR_LOOPBACK_ACCESS_BLOCKED");
+    expect(humanError(desenlace() as string)).toMatch(/permiso de red local/i);
+  });
+
 });

@@ -13,7 +13,7 @@ import {
 } from "../../infrastructure/chain";
 import { MWA_WALLET_NAME, solanaWalletBridge } from "../../infrastructure/solana-wallet-bridge"; // WKH-MWA: en ESTA línea, agregar un import nuevo correría `:159`/`:165`/`:172`/`:178`/`:213`/`:228`, que 5 archivos citan por número
 import { walletErrorCode } from "./wallet-error-code";
-import "@solana/wallet-adapter-react-ui/styles.css";
+import "./wallet-adapter-vendor.css"; // H5: la hoja del paquete arranca con un `@import` a Google Fonts que nuestro CSP bloquea, y dejaba un error rojo en consola en cada carga. Ésta es la MISMA hoja sin esa línea; el candado que impide que se separen es `wallet-adapter-css-sin-google-fonts.test.ts`.
 
 /**
  * Cuánto se espera, desde el MONTAJE, antes de poder afirmar "acá no hay ninguna wallet".

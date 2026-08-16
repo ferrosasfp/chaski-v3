@@ -50,7 +50,7 @@ vi.mock("@solana/wallet-adapter-react-ui", () => ({
   useWalletModal: () => h.modal,
   WalletModalProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
-vi.mock("@solana/wallet-adapter-react-ui/styles.css", () => ({}));
+vi.mock("./wallet-adapter-vendor.css", () => ({})); // H5: sigue a `solana-providers.tsx:16`. Apuntar al modulo del PAQUETE dejaria un doble que ya nadie importa, o sea un mock sin cableado.
 vi.mock("@solana/wallet-adapter-wallets", () => ({
   PhantomWalletAdapter: class {},
   SolflareWalletAdapter: class {},

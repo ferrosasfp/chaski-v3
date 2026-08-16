@@ -31,7 +31,7 @@ const h = vi.hoisted(() => ({
     signTransaction: undefined as ((t: unknown) => Promise<unknown>) | undefined,
     // La lista viva de adapters que expone `useWallet()`. Vacía por defecto: estos tests son sobre la
     // carrera del modal y el cableado de los firmantes, no sobre la detección.
-    wallets: [] as Array<{ readyState: string }>,
+    wallets: [] as Array<{ readyState: string; adapter: { name: string } }>, // WKH-MWA: el `adapter.name` es parte de la forma REAL de `useWallet().wallets`, y el efecto ahora lo lee para decidir si el selector ofrece MWA
   },
   modal: { visible: false, setVisible: (_v: boolean) => {} },
   /** Captura los props que SolanaProviders le pasa a WalletProvider (para probar el cableado). */
@@ -287,7 +287,7 @@ describe("SolanaWalletBridgeSync — la gracia antes de afirmar 'acá no hay nin
   /** Monta el sync component con una lista de adapters dada y el reloj ya falseado. */
   function montar(readyStates: string[]) {
     vi.useFakeTimers();
-    h.wallet = { ...h.wallet, wallets: readyStates.map((readyState) => ({ readyState })) };
+    h.wallet = { ...h.wallet, wallets: readyStates.map((readyState) => ({ readyState, adapter: { name: "no-es-mwa" } })) }; // WKH-MWA: ninguno de estos casos es MWA
     return render(<SolanaWalletBridgeSync />);
   }
 
@@ -297,7 +297,7 @@ describe("SolanaWalletBridgeSync — la gracia antes de afirmar 'acá no hay nin
     readyStates: string[],
   ) {
     await act(async () => {
-      h.wallet = { ...h.wallet, wallets: readyStates.map((readyState) => ({ readyState })) };
+      h.wallet = { ...h.wallet, wallets: readyStates.map((readyState) => ({ readyState, adapter: { name: "no-es-mwa" } })) }; // WKH-MWA: ninguno de estos casos es MWA
       rerender(<SolanaWalletBridgeSync />);
     });
   }

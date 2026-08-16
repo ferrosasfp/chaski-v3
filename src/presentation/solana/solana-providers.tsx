@@ -11,7 +11,7 @@ import {
   resolveSolanaNetworkConfig,
   resolveSolanaRpcUrlPublic,
 } from "../../infrastructure/chain";
-import { solanaWalletBridge } from "../../infrastructure/solana-wallet-bridge";
+import { MWA_WALLET_NAME, solanaWalletBridge } from "../../infrastructure/solana-wallet-bridge"; // WKH-MWA: en ESTA línea, agregar un import nuevo correría `:159`/`:165`/`:172`/`:178`/`:213`/`:228`, que 5 archivos citan por número
 import { walletErrorCode } from "./wallet-error-code";
 import "@solana/wallet-adapter-react-ui/styles.css";
 
@@ -159,7 +159,7 @@ export function SolanaWalletBridgeSync(): null {
   const graciaVencidaRef = useRef(false);
 
   useEffect(() => {
-    const hayInstalada = wallets.some((w) => w.readyState === WalletReadyState.Installed);
+    const hayInstalada = wallets.some((w) => w.readyState === WalletReadyState.Installed); solanaWalletBridge.setMwaOffered(wallets.some((w) => w.adapter.name === MWA_WALLET_NAME)); // WKH-MWA: TODO EN ESTA LÍNEA, por lo mismo que el import — y va acá y no en un efecto nuevo porque `wallets` es la MISMA lista viva; ver el docblock de `MWA_WALLET_NAME`. NO toca `availability`: MWA reporta `Loadable`, nunca `Installed`
     hayInstaladaRef.current = hayInstalada;
     if (hayInstalada) solanaWalletBridge.setWalletAvailability("injected");
     else if (graciaVencidaRef.current) solanaWalletBridge.setWalletAvailability("none");

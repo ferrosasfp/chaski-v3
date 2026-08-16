@@ -78,6 +78,45 @@ protocolo que describe el párrafo siguiente ya no está, pero nadie recorrió l
 extensión de wallet real. Esa prueba es la W7 del SDD 037 y sigue pendiente, así que lo honesto es decir
 "sin verificar", no "anda" y tampoco "no anda".
 
+**Chaski emite instrucciones de ComputeBudget en el depósito (WKH-321), y ese camino YA entró en la
+cadena.** La transacción del `deposit` lleva dos instrucciones antes de las del escrow,
+`setComputeUnitLimit` y `setComputeUnitPrice`, que salen de los resolvers de
+`src/infrastructure/chain.ts:93` y `:124` y se agregan a la transacción en
+`src/infrastructure/solana-wallet.ts:675-678`. Eso baja la probabilidad de que una billetera como
+Phantom meta sus propias propinas de prioridad por encima del tope del facilitator (medido en devnet
+en 50.000 unidades).
+
+**La transacción que lo prueba** es
+[`38PyBoVizf…`](https://explorer.solana.com/tx/38PyBoVizfhVLxm217QzeWP3JPYqGxJUC6vzuxh9xxv9FJdMquQ6BUFyUsma1ePiWK59qCQweFNNony1MJ7UReLV?cluster=devnet),
+del 2026-08-15T08:36:12Z, con `err: null`, comisión de 11.200 lamports y 54.600 unidades de cómputo
+consumidas. Lleva cuatro instrucciones, en este orden: dos de
+`ComputeBudget111111111111111111111111111111` y dos del programa de escrow
+`DR5GoMT7sAKzD6wZMKJPeknS3Y6fzgZUNevi7xiESE4x`, que sus propios logs nombran `Deposit` y
+`RegisterEscrow`. Y movió plata de verdad: el vault del escrow `7piawXnH…` no existía antes y terminó
+con 13,5 USDC, mientras la cuenta de tokens del remitente pasó de 48 a 34,5, en el USDC de devnet de
+Circle (mint `4zMMC9…`), que es el mint contra el que la app está configurada. Cualquiera la relee
+del RPC público de devnet con `getTransaction`, sin pedirnos nada.
+
+⚠️ **Lo que esa transacción NO dice es qué cliente la armó.** Una firma registra instrucciones y
+firmantes, nunca el programa que las ensambló, así que esto no es la vuelta completa desde el
+navegador y no se ofrece como tal. Lo que sí dice el árbol, y se puede comprobar acá: la forma de
+cuatro instrucciones `[limit, price, deposit, register]` la arma únicamente el camino de depósito de
+la app (`src/infrastructure/solana-wallet.ts:769-771`), mientras que el script de smoke arma tres,
+sin `register_escrow` (`scripts/smoke-solana-e2e.ts:455`). O sea que no es una corrida del smoke tal
+como está en este árbol, y su firmante tampoco es el remitente sobre el que se midieron esas corridas
+(`src/application/solana-escrow-rent.ts:14`). Qué cliente la manejó no queda registrado en ningún
+lado que se pueda leer de la cadena.
+
+⚠️ La salvedad sobre las billeteras sigue igual: si una billetera intenta anteponer su propio
+ComputeBudget y rechaza el duplicado después de haber firmado (como asume el código), el depósito
+falla con evidencia clara. Esa suposición no es contractual, es comportamiento observado en
+billeteras de terceros.
+
+⚠️ **Los tres párrafos de acá arriba faltaban enteros en esta traducción hasta el 2026-08-16**,
+mientras el README en inglés tenía el suyo desde WKH-321. Es el mismo modo de falla que ya está
+anotado más abajo para el párrafo de seguridad, y el que hace inútil comparar los dos archivos por
+tamaño: hasta hoy los dos tenían 396 líneas.
+
 **El bloqueo de la pata de confirmación era un secreto compartido, y ya no está.** La primera mitad se
 había arreglado antes: el cliente firma una prueba de posesión antes de pedirle al servidor que cree la
 orden de payout, así que el flujo ya no muere antes de que la wallet pida una sola firma. La segunda

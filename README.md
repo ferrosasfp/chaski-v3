@@ -76,15 +76,37 @@ extension**: the protocol blocker described in the next paragraph was removed, a
 is complete. That end-to-end browser round trip is W7 of SDD 038 and it is still pending, so the
 honest statement is "unverified by the full-cycle test", not "it works" and not "it does not work".
 
-**Chaski now emits ComputeBudget instructions on deposit (WKH-321).** The `deposit` transaction
-carries two instructions before the escrow call: `setComputeUnitLimit` and `setComputeUnitPrice`,
-computed by resolvers in `src/infrastructure/solana-wallet.ts:82-95`. This reduces the probability
-that a wallet such as Phantom adds conflicting priority fees that exceed the facilitator's allowance
-(measured on devnet at 50,000 units): if a wallet attempts to prepend its own ComputeBudget and
-Phantom rejects the duplicate after already signing (as the code assumes), the deposit fails with
-clear evidence. That assumption is not contractual: the behavior is observed on third-party wallets,
-not guaranteed. The deposit has never landed on chain with these instructions yet; the path they
-unblock is not exercised in production.
+**Chaski emits ComputeBudget instructions on deposit (WKH-321), and that path has now landed on
+chain.** The `deposit` transaction carries two instructions before the escrow calls,
+`setComputeUnitLimit` and `setComputeUnitPrice`, from the resolvers in `src/infrastructure/chain.ts:93`
+and `:124`, added to the transaction at `src/infrastructure/solana-wallet.ts:675-678`. This reduces
+the probability that a wallet such as Phantom adds conflicting priority fees that exceed the
+facilitator's allowance (measured on devnet at 50,000 units).
+
+**The transaction that proves it** is
+[`38PyBoVizf…`](https://explorer.solana.com/tx/38PyBoVizfhVLxm217QzeWP3JPYqGxJUC6vzuxh9xxv9FJdMquQ6BUFyUsma1ePiWK59qCQweFNNony1MJ7UReLV?cluster=devnet),
+of 2026-08-15T08:36:12Z, with `err: null`, a fee of 11,200 lamports and 54,600 compute units
+consumed. It carries four instructions, in this order: two of
+`ComputeBudget111111111111111111111111111111`, then two of the escrow program
+`DR5GoMT7sAKzD6wZMKJPeknS3Y6fzgZUNevi7xiESE4x`, which its own logs name `Deposit` and
+`RegisterEscrow`. And it moved money: the escrow vault `7piawXnH…` did not exist before it and ended
+holding 13.5 USDC, while the sender's token account went from 48 to 34.5, in Circle's devnet USDC
+(mint `4zMMC9…`), which is the mint the app is configured against. Anyone can read it back from the
+public devnet RPC with `getTransaction`, without asking us for anything.
+
+⚠️ **What that transaction does not say is which client built it.** A signature records instructions
+and signers, never the program that assembled them, so this is not the browser round trip and it is
+not offered as one. What the tree does say, and it is checkable here: the four instruction shape
+`[limit, price, deposit, register]` is built only by the app's deposit path
+(`src/infrastructure/solana-wallet.ts:769-771`), while the smoke script builds three, with no
+`register_escrow` (`scripts/smoke-solana-e2e.ts:455`). So it is not a run of the smoke script as this
+tree has it, and its signer is not the sender those runs were measured on
+(`src/application/solana-escrow-rent.ts:14`). Which client did drive it is recorded nowhere that can
+be read from the chain.
+
+⚠️ The caveat about wallets stays as it was: if a wallet attempts to prepend its own ComputeBudget and
+rejects the duplicate after already signing (as the code assumes), the deposit fails with clear
+evidence. That assumption is not contractual, it is behavior observed on third-party wallets.
 
 **The blocker on the confirmation leg was a shared secret, and it is gone.** The first half was fixed
 earlier: the client signs a proof of possession before asking the server to create the payout order, so

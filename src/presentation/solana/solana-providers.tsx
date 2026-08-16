@@ -87,7 +87,7 @@ export const WALLET_GRACE_MS = 1500;
  *  Exportado SÓLO para el test de la carrera del auto-cierre del modal (ver abajo): montarlo suelto
  *  es la única forma de controlar `visible`/`connecting` cuadro por cuadro. */
 export function SolanaWalletBridgeSync(): null {
-  const { publicKey, connected, connecting, signMessage, signTransaction, wallets } = useWallet();
+  const { publicKey, connected, connecting, signMessage, signTransaction, wallet, wallets } = useWallet(); // WKH-MWA: `wallet` (la elegida) EN ESTA MISMA LÍNEA — `:159`/`:165`/`:172`/`:178`/`:213`/`:228` los citan 5 archivos por número
   const { setVisible, visible } = useWalletModal();
 
   // Registra el handle imperativo openModal (capturado desde useWalletModal).
@@ -181,26 +181,26 @@ export function SolanaWalletBridgeSync(): null {
     });
   }, [publicKey, connected]);
 
-  // Best-effort cancel: el modal se cerró y NO hay conexión en curso → la persona salió del selector
-  // sin elegir nada.
+  // Best-effort cancel: el modal se cerró y NO hay conexión en curso → la persona salió del selector sin elegir nada. Y se exige una TRANSICIÓN abierto → cerrado, no el mero hecho de estar cerrado: montar el árbol (que arranca con el modal cerrado) contaba como "cerró el selector" y cancelaba cualquier espera viva. Un cierre es un cambio, no un estado.
   //
-  // ⚠️ EL `!connecting` NO ES DEFENSIVO, ES EL ARREGLO. WalletModal cierra solo 150 ms DESPUÉS de que
-  // tocás una wallet (`select(name)` y acto seguido `setTimeout(() => setVisible(false), 150)`, ver
-  // node_modules/@solana/wallet-adapter-react-ui/lib/cjs/WalletModal.js:65-76). Sin este guard, ese
-  // cierre automático disparaba `cancelConnection()` a los 150 ms del toque, o sea MUCHO antes de que
-  // nadie llegue a aprobar en un teléfono, y rechazaba una conexión que estaba perfectamente viva.
-  // En el escritorio no se veía: con la extensión ya autorizada la conexión resuelve antes de los
-  // 150 ms y `settle()` gana la carrera. En el celular la perdía siempre.
+  // ⚠️ NINGUNO DE LOS DOS `connecting` ES DEFENSIVO: SON DOS ARREGLOS DEL MISMO BUG, PARA DOS ADAPTERS QUE MIENTEN DE MANERAS DISTINTAS. WalletModal cierra solo 150 ms DESPUÉS de que tocás una wallet (`select(name)` y acto seguido `setTimeout(() => setVisible(false), 150)`, node_modules/@solana/wallet-adapter-react-ui/lib/cjs/WalletModal.js:65-76). Sin guard, ese cierre automático dispara `cancelConnection()` a los 150 ms del toque, muchísimo antes de que nadie llegue a aprobar en un teléfono, y rechaza una conexión perfectamente viva con un motivo FALSO: "cancelaste".
   //
-  // Y se exige una TRANSICIÓN abierto → cerrado, no el mero hecho de estar cerrado: con la segunda
-  // lectura, montar el árbol (que arranca con el modal cerrado) contaba como "cerró el selector" y
-  // cancelaba cualquier espera viva. Un cierre es un cambio, no un estado.
+  // (1) `!connecting` — el de `useWallet()`. Alcanza para Phantom y Solflare, cuyo `connect()` espera a que la promesa termine, así que `connecting` sigue en `true` mientras la conexión está viva. En el escritorio el bug ni se veía: con la extensión ya autorizada la conexión resuelve antes de los 150 ms y `settle()` gana la carrera.
+  //
+  // (2) `!wallet?.adapter.connecting` — el del adapter ELEGIDO. Existe porque para Mobile Wallet Adapter el de arriba es un FALSO NEGATIVO, y el mecanismo está medido, no supuesto: `SolanaMobileWalletAdapter.connect()` llama a su `#connect()` **sin `await` y sin `return`** (.../@solana-mobile/wallet-adapter-mobile/lib/esm/index.browser.js:88-90, y `autoConnect()` igual en :85-87), así que resuelve al instante con la asociación todavía en vuelo.
+  // `WalletProviderBase` hace `yield onAutoConnectRequest()` y después `finally { setConnecting(false) }` (WalletProviderBase.js:176-190) ⇒ `connecting` vuelve a `false` enseguida, mientras el adapter sigue trabajando.
+  //
+  // MEDIDO en el árbol real, en el instante exacto en que el modal se auto-cierra, con una asociación que tarda más de 150 ms: `useWallet().connecting=false | adapter.connecting=true | adapter.connected=false`. Ése es el renglón entero de esta rama. El adapter SÍ lleva su propia bandera (`get connecting() { return this.#connecting; }`, mismo archivo :75-77) y la pone en `true` alrededor del `StandardConnect.connect()` (:96-102), así que es el único dato fiable de los dos.
+  //
+  // LO QUE COSTABA, y por eso no es cosmético: `cancelConnection()` rechaza el pending y hace `clearPending()`, así que cuando el error REAL llegaba, `failConnection(causaReal)` era un no-op (`solana-wallet-bridge.ts:166`, "no-op si no hay espera en curso") y la causa se perdía. La persona leía "Se cerró el selector de wallet sin conectar" para un permiso de red denegado, para una billetera que no existe y para una sesión caída. El candado T-CANCEL-* lo vigila.
+  //
+  // ⛔ NO reemplaces (1) por (2) ni al revés. (2) es `undefined` cuando no hay wallet elegida —que es justo el caso legítimo de cancelación— y (1) es el único que cubre a un adapter que no exponga `connecting`.
   const wasVisible = useRef(false);
   useEffect(() => {
     const justClosed = wasVisible.current && !visible;
     wasVisible.current = visible;
-    if (justClosed && !connected && !connecting) solanaWalletBridge.cancelConnection();
-  }, [visible, connected, connecting]);
+    if (justClosed && !connected && !connecting && !wallet?.adapter.connecting) solanaWalletBridge.cancelConnection(); // 🔴 WKH-MWA: el `!wallet?.adapter.connecting` es el arreglo del falso "cancelaste" en MWA, y el docblock de arriba explica por qué el `!connecting` de al lado no alcanza
+  }, [visible, connected, connecting, wallet]);
 
   return null;
 }

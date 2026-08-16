@@ -882,14 +882,14 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                 Continuar <ArrowRight className="size-icono-sm" />
               </Button>
 
-              {/* La vuelta a lo que ya existe. Vive en `send` porque es donde aterriza toda recarga y
-                  también adonde vuelve "Enviar otra": desde acá una remesa con USDC en el escrow
-                  siempre tiene camino, sin importar cómo se llegó. */}
-              <button
+              {/* La vuelta a lo que ya existe. Vive en `send` porque es donde aterriza toda recarga y también adonde vuelve "Enviar otra": desde acá una remesa con USDC en el escrow siempre tiene camino, sin importar cómo se llegó.
+                  H4 · POR QUÉ LAS TRES VIVEN AHORA ADENTRO DE UN GRUPO CON TÍTULO. Medido en producción el 2026-08-16 sobre el árbol renderizado: «Continuar» y las tres puertas de recuperación salían con EXACTAMENTE la misma métrica — 52x372, 15px, peso 600 — y las tres ocupaban el tercio inferior de la pantalla. La única diferencia era el fondo. Tres acciones de rescate pesando lo mismo que la acción principal es lo que hacía que la pantalla se leyera como una lista de opciones equivalentes y no como un formulario con un botón. El grupo las separa con una línea y las nombra por lo que son.
+                  ⛔ LO QUE NO SE TOCA ES EL `min-h-[52px]`: `touch-targets.test.tsx:51` lo lee con `/min-h-\[(\d+)px\]/` sobre el className renderizado, y es el candado del área de toque de las tres puertas de recuperar plata. Baja el PESO TIPOGRÁFICO (`text-body font-semibold` → `text-label font-medium`), nunca el alto. Achicar el blanco de un botón que devuelve fondos sería arreglar la jerarquía rompiendo la accesibilidad. */}
+              <div className="space-y-ajustado border-t border-line pt-holgado"><p className="text-label font-medium text-stone">¿Ya enviaste antes?</p><button
                 type="button"
                 onClick={openHistory}
                 disabled={busy}
-                className="inline-flex min-h-[52px] w-full items-center justify-center text-center text-body font-semibold text-cochineal underline underline-offset-2 disabled:opacity-50"
+                className="inline-flex min-h-[52px] w-full items-center justify-center text-center text-label font-medium text-cochineal underline underline-offset-2 disabled:opacity-50"
               >
                 Ver mis envíos
               </button>
@@ -905,7 +905,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                 lister={c.solanaCloseableEscrows}
                 close={c.closeEscrowAccounts}
                 resolveSender={resolveSender}
-              />
+              /></div>
             </div>
           )}
 
@@ -2420,7 +2420,7 @@ export function LostEscrowRecovery({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex min-h-[52px] w-full items-center justify-center text-center text-body font-semibold text-cochineal underline underline-offset-2"
+        className="inline-flex min-h-[52px] w-full items-center justify-center text-center text-label font-medium text-cochineal underline underline-offset-2"
       >
         Recuperar un envío perdido
       </button>
@@ -2570,7 +2570,7 @@ export function EscrowRentRecovery({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex min-h-[52px] w-full items-center justify-center text-center text-body font-semibold text-cochineal underline underline-offset-2"
+        className="inline-flex min-h-[52px] w-full items-center justify-center text-center text-label font-medium text-cochineal underline underline-offset-2"
       >
         Recuperar el depósito de red de envíos anteriores
       </button>

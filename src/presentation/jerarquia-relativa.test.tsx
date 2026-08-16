@@ -472,3 +472,62 @@ describe("T-JR-3: el paso `send`", () => {
     expect(primariesDe(container)).toEqual([expect.stringContaining("Continuar")]);
   });
 });
+
+// ══ H4 · EL PESO TIPOGRÁFICO, QUE ES OTRA COSA QUE LA VARIANTE ══════════════════════════════════════
+//
+// 🔴 QUÉ SE MIDIÓ Y DÓNDE. En producción, el 2026-08-16, sobre el árbol renderizado en un viewport de
+// celular (412x915): «Continuar» y las TRES puertas de recuperar plata salían con la misma métrica
+// exacta — 52x372, 15px, peso 600. La única diferencia entre la acción principal de la pantalla y tres
+// acciones de rescate era el color de fondo.
+//
+// ⚠️ POR QUÉ `T-JR-3` NO ALCANZABA, y es el punto de este bloque: aquél verifica la VARIANTE (que haya
+// un solo `primary`) y las tres puertas lo pasaban porque no son `<Button>`, son `<button>` planos. O
+// sea que podían tener el tamaño y el peso del CTA sin que nada se pusiera rojo. La jerarquía no es
+// sólo qué variante lleva cada control: es también cuánto pesa su texto.
+//
+// ⛔ Y LA MITAD QUE PROTEGE LA ACCESIBILIDAD: bajar el peso NO puede convertirse en bajar el área de
+// toque. `touch-targets.test.tsx` ya vigila el número; acá se vigila que la corrección de jerarquía no
+// se lo lleve puesto, que es el error que este arreglo podía cometer.
+describe("T-H4: las puertas de recuperar plata no compiten con el CTA, y siguen siendo fáciles de tocar", () => {
+  const PUERTAS = [/Ver mis envíos/, /Recuperar un envío perdido/, /Recuperar el depósito de red/];
+
+  // Las dos puertas de la cadena NO se montan sin su gateway ("un test que no lo inyecta no lo ve",
+  // `test-container.ts:57`). Se inyectan stubs mínimos: acá no se ejercita ninguna búsqueda, sólo se
+  // necesita que los tres botones EXISTAN para poder comparar su peso con el del CTA.
+  const conLasTresPuertas = () =>
+    buildTestContainer({
+      kyc: kycRealGateway(),
+      solanaRefund: {} as never,
+      solanaCloseableEscrows: {} as never,
+    });
+
+  it("T-H4-1: ninguna puerta de recuperación lleva el peso tipográfico del CTA", async () => {
+    // MUTANTE QUE MATA: devolverles `text-body font-semibold` a los tres `<button>` de `flow.tsx`.
+    render(<RemittanceFlow container={conLasTresPuertas()} />);
+    const cta = await screen.findByRole("button", { name: /Continuar/ });
+    // El vocabulario se LEE del CTA renderizado, no se escribe acá: si `ui.tsx` cambia el tamaño del
+    // botón, este candado sigue midiendo la relación y no un número viejo.
+    const pesoDelCta = /(?:^|\s)(text-\w+)/.exec(cta.className)?.[1];
+    expect(pesoDelCta).toBeTruthy();
+    for (const nombre of PUERTAS) {
+      const puerta = screen.getByRole("button", { name: nombre });
+      expect(puerta.className).not.toContain(`${pesoDelCta} font-semibold`);
+      expect(puerta.className).toContain("text-label");
+    }
+  });
+
+  it("T-H4-2(control): bajarles el peso NO les bajó el área de toque", async () => {
+    // La otra mitad. Sin este `it`, "achicar los tres" pasaría en verde, y habríamos arreglado la
+    // jerarquía rompiendo la accesibilidad de los botones que devuelven fondos.
+    render(<RemittanceFlow container={conLasTresPuertas()} />);
+    const cta = await screen.findByRole("button", { name: /Continuar/ });
+    const altoDelCta = Number(/(?:^|\s)h-\[(\d+)px\]/.exec(cta.className)?.[1]);
+    expect(altoDelCta).toBeGreaterThan(0); // se mide el instrumento antes de usarlo
+    for (const nombre of PUERTAS) {
+      const alto = Number(
+        /(?:^|\s)min-h-\[(\d+)px\]/.exec(screen.getByRole("button", { name: nombre }).className)?.[1],
+      );
+      expect(alto).toBeGreaterThanOrEqual(altoDelCta);
+    }
+  });
+});

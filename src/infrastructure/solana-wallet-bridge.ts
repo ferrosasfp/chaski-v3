@@ -37,7 +37,7 @@ type SignMessageFn = (message: Uint8Array) => Promise<Uint8Array>;
 
 class SolanaWalletBridge {
   private state: SolanaWalletState = { publicKey: null, connected: false };
-  private availability: SolanaWalletAvailability = "unknown";
+  private availability: SolanaWalletAvailability = "unknown"; private mwaOffered = false; private mwaListeners = new Set<() => void>(); // WKH-MWA: LOS TRES EN ESTA LÍNEA, no en tres — `:127` y `:146-150` los citan por número desde 3 sitios y están TODOS debajo de acá (mismo motivo que la línea de abajo)
   private availabilityListeners = new Set<() => void>(); private stateListeners = new Set<() => void>(); // WKH-354/AC-1: EN ESTA LÍNEA, no en una nueva — `:127` y `:146-150` de este archivo los citan por número desde otros 4 sitios y están TODOS debajo de acá
   private openModalHandle: OpenModalFn | null = null;
   private signTxHandle: SignTransactionFn | null = null;
@@ -177,6 +177,7 @@ class SolanaWalletBridge {
     this.openModalHandle = null;
     this.signTxHandle = null; // HU-SOL-5: aditivo, limpia el handle entre tests
     this.signMsgHandle = null; // HU-SOL-8: aditivo, limpia el handle entre tests
+    this.setMwaOffered(false); // WKH-MWA: vuelve a "el selector no ofrece MWA", que es el valor que no agrega nada
   }
 
   private settle(): void {
@@ -208,7 +209,84 @@ class SolanaWalletBridge {
       this.stateListeners.delete(listener);
     };
   }
+
+  /**
+   * WKH-MWA · ¿El selector de wallets ofrece HOY, en este navegador, la entrada de Mobile Wallet
+   * Adapter?
+   *
+   * Es una MEDICIÓN, igual que `availability`: lo empuja el sync component leyendo la lista viva de
+   * `useWallet().wallets` y comparando el nombre contra `MWA_WALLET_NAME`. Nadie mira el user agent
+   * acá; quien lo mira es la librería, y esta bandera sólo reporta su conclusión.
+   *
+   * ⚠️ QUÉ SIGNIFICA Y QUÉ NO, porque las dos lecturas fáciles son falsas:
+   *   · SÍ significa: la librería decidió que este navegador puede intentar una asociación local con
+   *     una app de billetera, y por eso puso esa entrada en el selector.
+   *   · NO significa que haya una app de billetera instalada en el teléfono. Eso no se puede saber
+   *     desde el navegador, y es la misma honestidad que (`SolanaWalletAvailability`, `:27`).
+   *   · NO significa que esa billetera vaya a poder firmar SIN enviar. La firma parcial es opcional
+   *     en el protocolo MWA y se sabe recién al conectar (ver el docblock de `MWA_WALLET_NAME`).
+   *
+   * Arranca en `false` y no en un tercer valor "todavía no lo medimos" a propósito: nadie afirma nada
+   * con `false`. Lo único que hace la pantalla con esta bandera es AGREGAR una salida; con `false` el
+   * texto queda exactamente como estaba.
+   */
+  setMwaOffered(next: boolean): void {
+    if (this.mwaOffered === next) return; // mismo guard que (`setWalletAvailability`, `:65`)
+    this.mwaOffered = next;
+    for (const listener of this.mwaListeners) listener();
+  }
+
+  getMwaOffered(): boolean {
+    return this.mwaOffered;
+  }
+
+  /** Suscripción para `useSyncExternalStore`, mismo contrato que (`subscribeWalletAvailability`, `:78-83`):
+   *  devuelve el desuscriptor. */
+  subscribeMwaOffered(listener: () => void): () => void {
+    this.mwaListeners.add(listener);
+    return () => {
+      this.mwaListeners.delete(listener);
+    };
+  }
 }
 
 /** Singleton compartido (browser). El sync component escribe, el adapter lee. */
 export const solanaWalletBridge = new SolanaWalletBridge();
+
+/**
+ * WKH-MWA · El nombre con el que la librería publica la entrada de Mobile Wallet Adapter.
+ *
+ * 🔴 ESTO NO ES UNA FUNCIONALIDAD NUEVA, Y ESE ES EL HALLAZGO. `@solana/wallet-adapter-react@0.15.39`
+ * YA antepone un `SolanaMobileWalletAdapter` a la lista de wallets cuando su propio `getEnvironment`
+ * dice `MOBILE_WEB` (`node_modules/@solana/wallet-adapter-react/lib/cjs/WalletProvider.js:78-101`), y
+ * `MOBILE_WEB` es exactamente: user agent Android, NO WebView, y ningún otro adapter en `Installed`
+ * (`.../lib/cjs/getEnvironment.js:15-38`). O sea que en Chrome de Android esa entrada aparece en el
+ * selector desde antes de esta HU, sin instalar nada.
+ *
+ * MEDIDO, montando el árbol real en jsdom (ver `wallet-availability.test.tsx`, T-MWA-*):
+ *   · Android Chrome                    ⇒ `["Mobile Wallet Adapter" / Loadable]`
+ *   · Android DENTRO de Phantom (WebView) ⇒ `[]`
+ *   · iOS                                ⇒ `[]`
+ *   · escritorio                         ⇒ `[]`
+ * Las tres últimas son la garantía de que el camino que hoy funciona (el navegador interno de
+ * Phantom) no ve esta entrada ni cuando está prendida la bandera: no hay nada que apagar ahí.
+ *
+ * ⚠️ EL VALOR ESTÁ ESCRITO ACÁ Y NO IMPORTADO, a propósito: importarlo obligaría a meter
+ * `@solana-mobile/*` en el bundle de producción para leer una cadena de 21 caracteres. Lo que impide
+ * que envejezca es un test que lo compara contra el nombre que la LIBRERÍA le pone al adapter que
+ * produce (T-MWA-1), no un literal duplicado en el test.
+ *
+ * 🔴 QUÉ GARANTIZA EL ADAPTER Y QUÉ QUEDA A MERCED DE LA BILLETERA — leído en su código, no supuesto:
+ *   · GARANTIZA que `signTransaction()` firma y DEVUELVE. Va derecho a `#performSignTransactions`
+ *     (`@solana-mobile/wallet-adapter-mobile/lib/esm/index.browser.js:218-223`), que usa la feature
+ *     `solana:signTransaction` si está, y si NO está TIRA
+ *     `"Connected wallet does not support signing transactions"` (`:239` y `:252`). Nunca degrada a
+ *     enviar. El único método que puede difundir es `sendTransaction()` (`:160-216`), que Chaski no
+ *     llama en ningún lado y que T-MWA-3 vigila.
+ *   · NO GARANTIZA que la billetera soporte esa feature. En el protocolo MWA `sign_transactions` es
+ *     OPCIONAL: la lista de features sale de preguntarle a la app al conectar (`getCapabilities`,
+ *     `@solana-mobile/wallet-standard-mobile/lib/esm/index.browser.js:1298`) y la feature se cae si la
+ *     app no la declara (`:1326-1343`). Qué contesta Phantom en Android NO se puede leer del paquete,
+ *     y por eso este archivo no lo afirma en ninguna línea.
+ */
+export const MWA_WALLET_NAME = "Mobile Wallet Adapter";

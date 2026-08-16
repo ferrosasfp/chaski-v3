@@ -74,7 +74,7 @@ import {
   statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, type GestoRenovacion, REVISION_APAGADA, REVISION_FIRMANDO, REVISION_GESTO, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_BILLETERA, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, esVentanaSinAbiertos, // WKH-339: EN ESTA LÍNEA. `flow.tsx:632` lo citan 6 archivos y NINGUNA de las 6 es una cita anclada ⇒ si se mueve, nada se pone rojo y los 6 comentarios rotan en silencio · WKH-346 fix-pack: `esVentanaSinAbiertos` entra acá por lo mismo (Δ0)
 } from "./flow-vm";
 import { cn } from "./cn";
-import { phantomBrowseUrl, useWalletAvailability, useConnectedWalletAddress } from "./wallet-availability"; // el aviso de "acá no hay wallet" (NoWalletHere) · WKH-354/AC-6: `useConnectedWalletAddress` para el banner (CuentaCambiada)
+import { phantomBrowseUrl, useWalletAvailability, useConnectedWalletAddress, mwaEnabled, useMwaOffered } from "./wallet-availability"; // el aviso de "acá no hay wallet" (NoWalletHere) · WKH-354/AC-6: `useConnectedWalletAddress` para el banner (CuentaCambiada) · WKH-MWA: los dos últimos, EN ESTA MISMA LÍNEA (85 citas `flow.tsx:NNNN` cuelgan de que este archivo no cambie de largo)
 import { Aviso, Button, Card, ChaskiMark, Field, Money, Muted, Pill, Row, Stepper, TextInput } from "./ui"; // ola 2: los nombres nuevos entran EN ESTA LÍNEA, no en una nueva. Este archivo recibe 83 citas por número (48 ancladas + 35 sueltas, medido en 4c24324) y una sola línea de import de más las corre TODAS
 
 // WKH-187: el quote se muestra ANTES del KYC. Orden: send→connect→review(pre-KYC)→verify→confirm(post-KYC)→track→done.
@@ -1293,7 +1293,7 @@ function IdentityBadge({ kyc }: { kyc: KycVerification }) {
  * celular DENTRO del navegador de Phantom quedan byte-idénticos a como estaban.
  */
 function NoWalletHere() {
-  const availability = useWalletAvailability();
+  const availability = useWalletAvailability(); const mwaListo = useMwaOffered() && mwaEnabled(); // WKH-MWA: los dos hooks EN ESTA LÍNEA — la de abajo la citan `solana-providers.tsx:67` y `solana-providers.test.tsx:400` por número, y el resto del archivo, 85 veces
   if (availability !== "none") return null;
   // Sólo se llega acá en el navegador (en el servidor la disponibilidad es "unknown"), pero el guard
   // deja el componente seguro de renderizar en cualquier contexto.
@@ -1315,8 +1315,8 @@ function NoWalletHere() {
         disponible.
       </Muted>
       <Muted>
-        En el celular, Phantom solo se conecta desde su propio navegador. Si ya la tenés en este
-        dispositivo, abrí Chaski adentro de Phantom.
+        {/* WKH-MWA · las dos frases viven al final del archivo (`NO_WALLET_*`) por el largo, no por gusto. */}
+        {mwaListo ? NO_WALLET_CON_MWA : NO_WALLET_SIN_MWA}
       </Muted>
       {/* ⛔ `h-11` (44px) NO se migra al alto del `<Button>`: es un `<a>`, no un botón, y sigue
           cumpliendo el mínimo de toque de WCAG 2.5.5. Subirlo a 52 lo empataría con el CTA
@@ -3764,3 +3764,26 @@ function CuentaCambiada({
     </Aviso>
   );
 }
+
+/**
+ * WKH-MWA · Las dos frases del aviso de "acá no hay wallet", según haya o no una salida en ESTE
+ * navegador.
+ *
+ * ⛔ VIVEN AL FINAL DEL ARCHIVO, y no al lado del componente que las usa, por una razón mecánica y no
+ * estética: 85 comentarios del repo citan `flow.tsx:NNNN` por número. Meter cuatro líneas en el medio
+ * corre todo lo que está debajo y rompe las citas SIN que ningún barrido del diff lo note, porque el
+ * texto que miente no es el que se editó. Agregar al final no corre nada.
+ *
+ * LA FRASE SIN MWA ES LA DE SIEMPRE, palabra por palabra. Con la bandera apagada esta pantalla queda
+ * byte-idéntica a como estaba, y eso lo mide T-UI-1/T-UI-2, que siguen buscando este mismo texto.
+ *
+ * LA FRASE CON MWA NO PROMETE QUE VAYA A FUNCIONAR, y esa restricción es deliberada. Lo único que
+ * sabemos cuando `mwaListo` es `true` es que la librería puso esa entrada en el selector; NO sabemos
+ * si hay una app de billetera instalada, ni si esa app sabe firmar sin enviar (ver el docblock de
+ * `MWA_WALLET_NAME`). Por eso dice "puede abrirse" y no "se abre", y por eso el enlace a Phantom sigue
+ * abajo: si no se abre, la salida de siempre está a un toque.
+ */
+const NO_WALLET_SIN_MWA =
+  "En el celular, Phantom solo se conecta desde su propio navegador. Si ya la tenés en este dispositivo, abrí Chaski adentro de Phantom.";
+const NO_WALLET_CON_MWA =
+  "En este navegador, al tocar Conectar wallet puede abrirse la app de tu billetera para que autorices desde ahí. Si eso no pasa, usá el enlace de abajo y abrí Chaski adentro de Phantom.";

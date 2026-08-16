@@ -4,7 +4,7 @@ import {
   PRINCIPAL_SETTLED_REFUND_MANUAL,
   PRINCIPAL_STATE_UNKNOWN,
 } from "../application/use-cases/confirm-and-send";
-import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds"; import { laBilleteraFueTocada } from "./solana/wallet-error-code"; // WKH-339/CR: EN ESTA LÍNEA, no en una nueva — `:25`, `:29`, `:30`, `:206` y `:253` de este archivo los cita otro por número
+import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds"; import { laBilleteraFueTocada, mwaHumanError } from "./solana/wallet-error-code"; // WKH-339/CR: EN ESTA LÍNEA, no en una nueva — `:25`, `:29`, `:30`, `:206` y `:253` de este archivo los cita otro por número
 import {
   ESCROW_DEPOSIT_RENT_LAMPORTS,
   SENDER_MIN_LAMPORTS_FOR_DEPOSIT,
@@ -358,7 +358,7 @@ export function lostEscrowRecoveryError(code: string, maxCandidates: number): st
   // Y `no_wallet` NO se enumera porque no tiene productor: su mapeo se borró (ver `humanError` más
   // abajo), y un `WalletNotReadyError` sale hoy como `wallet_error:WalletNotReadyError`.
   if (
-    /wallet_bridge_not_mounted|wallet_connect_timeout|wallet_window_closed|wallet_connect_failed|invalid_address/.test(
+    /wallet_bridge_not_mounted|wallet_connect_timeout|wallet_window_closed|wallet_connect_failed|invalid_address|mwa:/.test( // WKH-MWA: `mwa:` acá porque un fallo de asociación ES "no llegamos a conectar la billetera"; ninguno de esos literales contiene `escrow_not_found`, así que no le roba casos a la rama de abajo
       code,
     )
   )
@@ -617,8 +617,8 @@ export function humanError(code: string): string {
   // Familia wallet_*: hasta acá TODOS estos códigos caían en el default "Algo salió mal", que es lo
   // que veía quien intentaba conectar desde el celular. Cada rama nombra una causa distinta; ninguna
   // afirma más de lo que la librería nos dice.
-  if (code.includes("wallet_connect_cancelled"))
-    return "Se cerró el selector de wallet sin conectar. Podés volver a intentarlo cuando quieras.";
+  if (code.startsWith("mwa:")) return mwaHumanError(code); // WKH-MWA: EN ESTA LÍNEA y ANTES de la de abajo, por dos motivos distintos. (a) El archivo tiene que terminar en 1375 líneas (CD-16). (b) EL ORDEN: un fallo de MWA ya no puede llegar como `wallet_connect_cancelled` —lo arregló el guard de `solana-providers.tsx:202`—, pero si alguna vez volviera a llegar así, la rama de abajo lo acusaría de nuevo. Los textos de los siete códigos con causa conocida viven en `mwaHumanError` y no acá, porque el dueño de la familia `mwa:` es el módulo que la produce.
+  if (code.includes("wallet_connect_cancelled")) return "Se cerró el selector de wallet sin conectar. Podés volver a intentarlo cuando quieras."; // Después del arreglo este texto significa lo que dice: nadie eligió ninguna wallet. Antes salía TAMBIÉN para cualquier fallo de MWA, y ahí "volvé a intentarlo" era un consejo inútil: reintentar sin dar el permiso de red local falla igual. Que no vuelva a pasar lo vigila `T-CANCEL-2`.
   // "La wallet tardó demasiado en responder" afirmaba que alguien le preguntó a una wallet, y este
   // código tiene DOS productores: `WalletTimeoutError` de la librería (ahí sí hubo una wallet lenta) y
   // el timeout propio del bridge (`solana-wallet-bridge.ts`:146-150), que salta al vencerse la espera

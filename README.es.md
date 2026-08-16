@@ -54,8 +54,8 @@ saltar a otro la pierde.
 **Por qué hace falta SOL si la comisión la paga otro.** Una transacción de Solana paga dos cosas
 distintas y sólo una está patrocinada. La comisión de red la paga el facilitator, que firma como fee
 payer. El alquiler de las cuentas que crea el depósito lo paga quien envía, porque el programa lo
-nombra a él como payer de esas cuentas. Medido sobre el depósito que se cita más abajo: el fee payer
-puso 11.200 lamports de comisión y la wallet del remitente puso 4.002.000 lamports de alquiler. La
+nombra a él como payer de esas cuentas. Medido sobre los tres depósitos que se citan más abajo: el
+fee payer puso 11.200 lamports de comisión y la wallet del remitente puso 4.002.000 de alquiler. La
 app lo chequea antes de pedir una sola firma y corta con "Te falta SOL en la wallet" por debajo de
 0,0089 SOL (`SENDER_MIN_LAMPORTS_FOR_DEPOSIT`, `src/application/solana-escrow-rent.ts:187`, con su
 derivación en ese mismo archivo).
@@ -90,7 +90,8 @@ derivación en ese mismo archivo).
 - **La plata la recuperás vos.** Dos horas después del depósito se cierra la ventana de custodia
   (`CUSTODY_WINDOW_SECS`, `src/infrastructure/solana-wallet.ts:100`) y la app te deja firmar el
   refund, que no necesita la cooperación de nadie. Antes de ese deadline el programa lo rechaza
-  (`DeadlineNotReached` 6003), así que las dos horas son una espera y no una falla.
+  (`DeadlineNotReached` 6003), así que las dos horas son una espera y no una falla. Ya se hizo en la
+  cadena: el `Refund` de la sección de abajo, con el remitente como único firmante.
 
 ## Una remesa se arma, no viene cableada
 
@@ -141,13 +142,39 @@ contra el que la app está configurada es el de Circle
 (`4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`), y es una sola variable de entorno, nunca un hardcode.
 Decir "se movió USDC" sobre esas firmas sería falso, así que acá no se dice.
 
-**El depósito es la pieza más sólida, y la salvedad importa.** La instrucción entra en la cadena, la
-wallet del que envía es la única que firma la transferencia, y un fee payer patrocinador cubre las fees
-así el usuario nunca necesita SOL. Lo que prueba la firma de arriba es que eso funciona cuando lo
-maneja el script de smoke. Si entra desde un navegador **todavía no está verificado**: el bloqueo de
-protocolo que describe el párrafo siguiente ya no está, pero nadie recorrió la vuelta completa con una
-extensión de wallet real. Esa prueba es la W7 del SDD 037 y sigue pendiente, así que lo honesto es decir
-"sin verificar", no "anda" y tampoco "no anda".
+**El depósito es la pieza más sólida, y entra desde un navegador.** La instrucción entra en la
+cadena, la wallet del que envía es la única que firma la transferencia, y un fee payer patrocinador
+cubre la comisión de red. No cubre todo, y la diferencia no es un detalle: el alquiler de las cuentas
+que crea el depósito sale de la wallet de quien envía, así que "el usuario no necesita SOL" sería
+falso y acá no se dice. Los números están en la sección "Cómo probarlo en devnet".
+
+Dos corridas del 2026-08-16, desde el navegador propio de Phantom en un celular Android, entraron las
+dos:
+
+| Firma | Hora (UTC) | Qué se movió |
+|---|---|---|
+| [`59XvDKhAJD…`](https://explorer.solana.com/tx/59XvDKhAJD5tbdzYeRQWWhNsi5Ac5ppSwu8xM3rHwVCRUVhvZPBcPnUtucU3F5o53VjaM8H9KAWG3zWSq5Waii8K?cluster=devnet) | 2026-08-16T06:17:19Z | 7 USDC salen del remitente y quedan en el vault `GppYQSnQ…` |
+| [`2MUbUgJWSh…`](https://explorer.solana.com/tx/2MUbUgJWSh9kVPz5JKAEC7PYw8gNAMjLsqR1fJ3iZ18CtYZCdTEULxNRojmdxinTrCWcBkjMi9HNiTBRGpoPYYo5?cluster=devnet) | 2026-08-16T07:40:14Z | 6 USDC al vault `HcsP8afr…`, el remitente pasa de 56 a 50 |
+
+Las dos vienen con `err: null`, comisión de 11.200 lamports puesta por el patrocinador `4wPhH4dC…`,
+el remitente `4AvAjtPg…` como el otro firmante, y la forma de cuatro instrucciones del camino de
+depósito de la app. Se releen del RPC público de devnet sin permiso de nadie. Lo que la cadena prueba
+es la transacción; que el cliente haya sido el navegador de un celular es el reporte de quien las
+corrió, la misma clase de evidencia que el recorrido de CSP de más abajo.
+
+**Lo que NO está probado es el ciclo completo, y el motivo no es el depósito.** Los 13 USDC de esas
+dos corridas siguen en custodia: los dos vaults tenían 7 y 6 USDC el 2026-08-16, y un
+`getTokenAccountBalance` sobre cada uno dice si eso sigue siendo cierto cuando leas esto. Ahí no
+falló nada. El recorrido termina donde termina el sistema hoy, porque el release lo dispara una
+persona.
+
+**La salida también se ejercitó, y la firmó el remitente solo.** El escrow del 2026-08-15 pasó su
+deadline y quien depositó recuperó la plata sin la cooperación de nadie:
+[`3dYjRE7u8b…`](https://explorer.solana.com/tx/3dYjRE7u8bzBKZD9PKci3oJ5X98J8jku65kK9T8GwEZ4hLZ2h9rwWt49ibqgEngSrAiNiA3F5gTN13cZroF2ywDj?cluster=devnet),
+del 2026-08-16T06:17:49Z, una instrucción que los logs nombran `Refund`, con el vault `7piawXnH…`
+pasando de 13,5 USDC a cero y la wallet del remitente de 42,5 a 56. Hay un solo firmante, el
+remitente, y los 80.000 lamports de comisión salieron de su propia wallet. No se le pidió permiso a
+nadie.
 
 **Chaski emite instrucciones de ComputeBudget en el depósito (WKH-321), y ese camino YA entró en la
 cadena.** La transacción del `deposit` lleva dos instrucciones antes de las del escrow,
@@ -168,25 +195,25 @@ con 13,5 USDC, mientras la cuenta de tokens del remitente pasó de 48 a 34,5, en
 Circle (mint `4zMMC9…`), que es el mint contra el que la app está configurada. Cualquiera la relee
 del RPC público de devnet con `getTransaction`, sin pedirnos nada.
 
-⚠️ **Lo que esa transacción NO dice es qué cliente la armó.** Una firma registra instrucciones y
-firmantes, nunca el programa que las ensambló, así que esto no es la vuelta completa desde el
-navegador y no se ofrece como tal. Lo que sí dice el árbol, y se puede comprobar acá: la forma de
-cuatro instrucciones `[limit, price, deposit, register]` la arma únicamente el camino de depósito de
-la app (`src/infrastructure/solana-wallet.ts:769-771`), mientras que el script de smoke arma tres,
-sin `register_escrow` (`scripts/smoke-solana-e2e.ts:455`). O sea que no es una corrida del smoke tal
-como está en este árbol, y su firmante tampoco es el remitente sobre el que se midieron esas corridas
-(`src/application/solana-escrow-rent.ts:14`). Qué cliente la manejó no queda registrado en ningún
-lado que se pueda leer de la cadena.
+⚠️ **La cadena no registra qué cliente armó una transacción.** Una firma lleva instrucciones y
+firmantes, nunca el programa que las ensambló. Para las dos corridas de más arriba, el navegador del
+celular es el reporte de quien las corrió. Para ésta no hay tal reporte, y lo que se puede decir es
+más angosto: la forma de cuatro instrucciones `[limit, price, deposit, register]` la arma únicamente
+el camino de depósito de la app (`src/infrastructure/solana-wallet.ts:769-771`), mientras que el
+script de smoke arma tres, sin `register_escrow` (`scripts/smoke-solana-e2e.ts:455`), y su firmante
+tampoco es el remitente sobre el que se midieron esas corridas
+(`src/application/solana-escrow-rent.ts:14`). O sea que no es una corrida del smoke tal como está en
+este árbol, y más lejos que eso la cadena no llega.
 
 ⚠️ La salvedad sobre las billeteras sigue igual: si una billetera intenta anteponer su propio
 ComputeBudget y rechaza el duplicado después de haber firmado (como asume el código), el depósito
 falla con evidencia clara. Esa suposición no es contractual, es comportamiento observado en
 billeteras de terceros.
 
-⚠️ **Los tres párrafos de acá arriba faltaban enteros en esta traducción hasta el 2026-08-16**,
-mientras el README en inglés tenía el suyo desde WKH-321. Es el mismo modo de falla que ya está
-anotado más abajo para el párrafo de seguridad, y el que hace inútil comparar los dos archivos por
-tamaño: hasta hoy los dos tenían 396 líneas.
+⚠️ **Los tres párrafos de ComputeBudget de acá arriba faltaban enteros en esta traducción hasta el
+2026-08-16**, mientras el README en inglés tenía el suyo desde WKH-321. Es el mismo modo de falla que
+ya está anotado más abajo para el párrafo de seguridad, y el que hace inútil comparar los dos
+archivos por tamaño: hasta hoy los dos tenían 396 líneas.
 
 **El bloqueo de la pata de confirmación era un secreto compartido, y ya no está.** La primera mitad se
 había arreglado antes: el cliente firma una prueba de posesión antes de pedirle al servidor que cree la

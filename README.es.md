@@ -235,12 +235,14 @@ en el `settle()` (`src/application/use-cases/confirm-and-send.ts`), y la ruta qu
 (`app/api/settle/solana-sponsor/route.ts`) corta con 400 si falta o viene deforme, antes de gastar el
 forward. Ese reemplazo es esta rama, no trabajo abierto.
 
-Lo que sí queda abierto en esta pata es la vuelta completa desde el navegador (la W7 de arriba) y una
-pieza de configuración: el facilitator necesita `SOLANA_SPONSOR_NETWORK_ID` seteada, y mientras no lo
-esté rechaza todo pedido de patrocinio. El orden en que se despliegan los dos repos no importa, porque
-el camino hoy está muerto en las dos direcciones: un cliente viejo manda `popProof` y se lleva un 400
-sin que se firme nada, y un cliente nuevo manda una firma que el servidor viejo ignora y muere en el
-mismo 400.
+Lo que quedaba abierto en esta pata era la vuelta desde el navegador y una pieza de configuración, y
+ninguna de las dos sigue abierta. Los dos depósitos del 2026-08-16 se broadcastearon con el
+facilitator firmando como fee payer, que es lo que hace su endpoint de patrocinio. Con
+`SOLANA_SPONSOR_NETWORK_ID` sin setear se rechaza TODO pedido de patrocinio, y a estos dos no se los
+rechazó, así que esa variable está puesta en el facilitator desplegado y el camino de `popSignature`
+funciona contra una billetera real. Lo que decía acá, que el camino estaba muerto en las dos
+direcciones porque un cliente viejo manda `popProof` y se lleva un 400 mientras uno nuevo firma para
+un servidor que lo ignora, describía la ventana entre los dos deploys y se cerró con ellos.
 
 **El release corre, pero nada decide cuándo correrlo.** La instrucción está implementada, restringida y
 probada on chain, como muestra la tabla de arriba. Lo que no existe, en ninguno de los tres repos, es un
@@ -303,8 +305,10 @@ El ciclo:
 2. La wallet del que envía firma `deposit`, que toma `beneficiary`, `authority`, `amount` y `deadline`
    como argumentos. El principal sale de su cuenta y queda en el vault del escrow. El operador no lo
    toca.
-3. El facilitator cofirma como fee payer y hace el broadcast, así el usuario no necesita SOL. Este es el
-   paso que hoy está cortado desde el navegador, por el motivo descrito arriba.
+3. El facilitator cofirma como fee payer y hace el broadcast, así quien envía no paga comisión de red.
+   El alquiler de la PDA del escrow y de su vault, 4.002.000 lamports (unos 0,004 SOL por remesa,
+   medidos en devnet), SÍ sale de la wallet de quien envía, y por eso la app le mira el saldo de SOL
+   antes. Este paso ya entró desde un navegador: las dos corridas del 2026-08-16 de más arriba.
 4. Con el pago en destino confirmado, la autoridad de release firma `release`. `sender`, `beneficiary` y
    `mint` están restringidos por `has_one` contra la cuenta de escrow, así que el destino es el que
    quedó fijado en el depósito y la autoridad no puede redirigir los fondos. Todavía no hay nada

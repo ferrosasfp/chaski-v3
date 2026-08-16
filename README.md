@@ -231,11 +231,13 @@ instead of letting an empty address travel to the authority, which would convert
 error into a false 502 ("identity provider failed"). The guard of ownership remains: the authority
 still fail-closes and still rejects exactly what it did before.
 
-What stays open on this leg is the browser round trip itself (W7 above), and one piece of configuration:
-the facilitator needs `SOLANA_SPONSOR_NETWORK_ID` set, and while it is unset every sponsorship request
-is refused. The order in which the two repos deploy does not matter, because the path is dead today in
-either direction: an old client sends `popProof` and gets a 400 without anything being signed, and a new
-client sends a signature to a server that ignores it and dies on the same 400.
+What used to stay open on this leg was the browser round trip and one piece of configuration, and
+neither is open now. The two deposits of 2026-08-16 were broadcast with the facilitator signing as fee
+payer, which is what its sponsorship endpoint does. An unset `SOLANA_SPONSOR_NETWORK_ID` refuses every
+sponsorship request, and these two were not refused, so that variable is set on the deployed
+facilitator and the `popSignature` path works against a real wallet. What was written here, that the
+path was dead in either direction because an old client sends `popProof` and gets a 400 while a new one
+signs for a server that ignores it, described the window between the two deploys and closed with them.
 
 **The release runs, but nothing decides when to run it.** The instruction is implemented, constrained
 and proven on chain, as the table above shows. What does not exist, in any of the three repos, is a
@@ -278,10 +280,10 @@ The cycle:
 2. The sender's wallet signs `deposit`, which takes `beneficiary`, `authority`, `amount` and `deadline`
    as arguments. The principal leaves the sender's account and lands in the escrow vault. The operator
    never touches it.
-3. The facilitator co-signs as fee payer and broadcasts, so the user's wallet does not need SOL for
-   network fees. The account rent for the escrow PDA and its token vault (approximately 0.004 SOL per
-   remittance, measured on devnet) is paid from the deposit. This is the step that is currently cut
-   from the browser, for the reason described above.
+3. The facilitator co-signs as fee payer and broadcasts, so the sender pays no network fee. The rent
+   of the escrow PDA and its token vault, 4,002,000 lamports (about 0.004 SOL per remittance, measured
+   on devnet), does come out of the sender's wallet, which is why the app looks at their SOL balance
+   first. This step has landed from a browser: the two runs of 2026-08-16 above.
 4. Once the payout in the destination country is confirmed, the release authority signs `release`.
    `sender`, `beneficiary` and `mint` are `has_one` constrained against the escrow account, so the
    destination is the one fixed at deposit time and the authority cannot redirect the funds. Nothing

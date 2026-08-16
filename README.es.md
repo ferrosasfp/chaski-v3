@@ -21,6 +21,77 @@ todavía está abierta y por qué.
 > propósito en el campo `id` de `public/manifest.json`: cambiar el `id` de un manifest PWA deja
 > huérfanas las instalaciones existentes.
 
+## Cómo probarlo en devnet
+
+La app desplegada es `https://chaski-v2.vercel.app`. Todo lo que sigue pasa en la devnet de Solana,
+con el USDC de devnet de Circle. No se mueve dinero real y a nadie se le pide un documento de verdad.
+
+**En el celular hay que abrir la app DESDE ADENTRO del navegador de Phantom.** Un navegador de
+celular común no tiene ninguna wallet inyectada, y ésa es la primera pared con la que choca quien
+prueba. La pantalla lo dice y ofrece la salida: un botón que vuelve a abrir la misma URL adentro de
+Phantom, armado como `https://phantom.app/ul/browse/<url>?ref=<origen>`
+(`src/presentation/wallet-availability.ts:26-28`, el copy de la pantalla en
+`src/presentation/flow.tsx:1311-1329`). En una computadora el camino es el otro: instalar la
+extensión de Phantom o de Solflare y recargar. Esas dos son las únicas wallets que la app cablea
+(`src/presentation/solana/solana-providers.tsx:228`).
+
+**Hacé el recorrido entero en ese mismo navegador.** La remesa en curso se guarda en el
+`localStorage` del navegador (`src/infrastructure/persistence.ts:86`), así que empezar en uno y
+saltar a otro la pierde.
+
+### Qué conseguir antes de empezar
+
+- **USDC de devnet de Circle**, mint `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`. Se piden en
+  <https://faucet.circle.com>, eligiendo la red `Solana Devnet` y pegando la dirección de la wallet.
+  Tanto la página como esa opción de red contestaron el 2026-08-16. Hacen falta **5 USDC como
+  mínimo**: por debajo de eso la app no cotiza, porque `MIN_SEND_USD = 5`
+  (`src/domain/remittance.ts:209`).
+  ⚠️ NO es el mint `8yRX3fZ2…` de las tres firmas de la tabla de más abajo. Ése es un token de prueba
+  y la app no está configurada contra él.
+- **Unos 0,009 SOL de devnet** en esa misma wallet. Se piden en <https://faucet.solana.com> (contestó
+  el 2026-08-16), o con `solana airdrop 1 <tu pubkey> --url devnet` si tenés la CLI.
+
+**Por qué hace falta SOL si la comisión la paga otro.** Una transacción de Solana paga dos cosas
+distintas y sólo una está patrocinada. La comisión de red la paga el facilitator, que firma como fee
+payer. El alquiler de las cuentas que crea el depósito lo paga quien envía, porque el programa lo
+nombra a él como payer de esas cuentas. Medido sobre el depósito que se cita más abajo: el fee payer
+puso 11.200 lamports de comisión y la wallet del remitente puso 4.002.000 lamports de alquiler. La
+app lo chequea antes de pedir una sola firma y corta con "Te falta SOL en la wallet" por debajo de
+0,0089 SOL (`SENDER_MIN_LAMPORTS_FOR_DEPOSIT`, `src/application/solana-escrow-rent.ts:187`, con su
+derivación en ese mismo archivo).
+
+### El recorrido
+
+1. Conectar la wallet.
+2. Monto de 5 USDC o más, el nombre de quien recibe, y una cuenta de destino de 20 dígitos, que es el
+   largo de un CCI peruano. El formulario chequea el LARGO, no que la cuenta exista
+   (`src/domain/remittance.ts:31` y `:44`), así que un número inventado te deja seguir.
+3. Identidad. **En este despliegue es simulada**: la pantalla dice que no verifica nada y no pide
+   ningún dato. Esa pantalla sólo existe si el operador declaró el mock
+   (`src/infrastructure/didit/mock-surface-enabled.ts:26`), y la app desplegada la sirvió con un 200
+   el 2026-08-16.
+4. Confirmar. **La wallet pide firmar dos veces, y es a propósito**: primero la transacción del
+   depósito, después un mensaje legible que nombra esta remesa, para que una firma de transacción
+   capturada no le alcance a un tercero para pedir el patrocinio de un depósito
+   (`src/infrastructure/solana-wallet.ts:781-799`).
+5. El depósito entra en la cadena y la pantalla enlaza la transacción al visor
+   (`src/presentation/flow.tsx:3582`). Los USDC quedan en el vault del escrow, y el operador no los
+   puede redirigir.
+
+### Qué NO va a pasar, dicho antes de probar y no después
+
+- **Nadie paga soles.** La pata fiat corre contra un agente mock por defecto. No hay ninguna
+  transferencia bancaria al final de esto.
+- **Los USDC se quedan en el vault del escrow.** Sacarlos hacia el beneficiario es el `release`, y
+  hoy el disparador es una persona. Lo dice el código donde aterriza el webhook del proveedor de
+  pagos: *"La verificación on-chain del release la hace una persona; esto es el pedido de que la
+  haga"* (`app/api/webhooks/transfi/route.ts:94-97`). El depósito es no-custodial y automático; la
+  entrega fiat la confirma el operador.
+- **La plata la recuperás vos.** Dos horas después del depósito se cierra la ventana de custodia
+  (`CUSTODY_WINDOW_SECS`, `src/infrastructure/solana-wallet.ts:100`) y la app te deja firmar el
+  refund, que no necesita la cooperación de nadie. Antes de ese deadline el programa lo rechaza
+  (`DeadlineNotReached` 6003), así que las dos horas son una espera y no una falla.
+
 ## Una remesa se arma, no viene cableada
 
 Una remesa es una cadena de pasos: verificar quién envía, poner precio al par de monedas, entregar el

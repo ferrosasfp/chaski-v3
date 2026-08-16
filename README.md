@@ -19,6 +19,74 @@ open and why.
 > here, so the deployed site is served from `chaski-v2.vercel.app`. The same string survives on purpose
 > in the `id` field of `public/manifest.json`: changing a PWA manifest `id` orphans existing installs.
 
+## Try it on devnet
+
+The deployed app is `https://chaski-v2.vercel.app`. Everything below happens on Solana devnet, with
+Circle's devnet USDC. No real money moves, and nobody is asked for a real identity document.
+
+**On a phone, open the app from inside Phantom's own browser.** A normal mobile browser has no wallet
+in it, and that is the first wall a tester hits. The screen says so and offers the way through: a
+button that reopens the same URL inside Phantom, built as
+`https://phantom.app/ul/browse/<url>?ref=<origin>` (`src/presentation/wallet-availability.ts:26-28`,
+screen copy at `src/presentation/flow.tsx:1311-1329`). On a computer the path is the other one:
+install the Phantom or Solflare extension and reload. Those two are the only wallets the app wires
+(`src/presentation/solana/solana-providers.tsx:228`).
+
+**Do the whole run in that same browser.** The remittance in progress is kept in the browser's
+`localStorage` (`src/infrastructure/persistence.ts:86`), so starting in one browser and jumping to
+another loses it.
+
+### What to get before you start
+
+- **Circle's devnet USDC**, mint `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`. Ask for it at
+  <https://faucet.circle.com>, choosing the network `Solana Devnet` and pasting the wallet address.
+  Both the page and that network option answered on 2026-08-16. You need **at least 5 USDC**: under
+  that the app does not quote, because `MIN_SEND_USD = 5` (`src/domain/remittance.ts:209`).
+  ⚠️ It is not the `8yRX3fZ2…` mint of the three signatures in the table below. That one is a test
+  token and the app is not configured against it.
+- **About 0.009 devnet SOL** in the same wallet. Ask for it at <https://faucet.solana.com> (it
+  answered on 2026-08-16), or run `solana airdrop 1 <your pubkey> --url devnet` if you have the CLI.
+
+**Why SOL is needed when the fee is sponsored.** A Solana transaction pays two different things and
+only one of them is sponsored. The network fee is paid by the facilitator, which signs as fee payer.
+The rent of the accounts the deposit creates is paid by whoever sends, because the program names the
+sender as their payer. Measured on the deposit quoted further down: the fee payer paid 11,200
+lamports of fee and the sender's wallet paid 4,002,000 lamports of rent. The app checks this before
+asking for any signature and stops with "Te falta SOL en la wallet" under 0.0089 SOL
+(`SENDER_MIN_LAMPORTS_FOR_DEPOSIT`, `src/application/solana-escrow-rent.ts:187`, with its derivation
+in the same file).
+
+### The run
+
+1. Connect the wallet.
+2. Amount of 5 USDC or more, the recipient's name, and a destination account of 20 digits, the length
+   of a Peruvian CCI. The form checks the length, not that the account exists
+   (`src/domain/remittance.ts:31` and `:44`), so an invented number gets you through.
+3. Identity. **In this deployment it is simulated**: the screen states that it verifies nothing and
+   asks for no data. That screen only exists when the operator declares the mock
+   (`src/infrastructure/didit/mock-surface-enabled.ts:26`), and the deployed app served it with a 200
+   on 2026-08-16.
+4. Confirm. **The wallet asks to sign twice, and that is deliberate**: first the deposit transaction,
+   then a readable message naming this remittance, so that a captured transaction signature is not
+   enough for somebody else to get a deposit sponsored (`src/infrastructure/solana-wallet.ts:781-799`).
+5. The deposit lands on chain and the screen links the transaction to the explorer
+   (`src/presentation/flow.tsx:3582`). The USDC are in the escrow vault, and the operator cannot
+   redirect them.
+
+### What will not happen, said before you start and not after
+
+- **Nobody pays out soles.** The fiat leg runs against a mock agent by default. There is no bank
+  transfer at the end of this.
+- **The USDC stay in the escrow vault.** Taking them out to the beneficiary is the `release`, and
+  today the trigger is a person. The code says so where the payout provider's webhook lands, in
+  Spanish: *"the on chain verification of the release is done by a person; this is the request that
+  they do it"* (`app/api/webhooks/transfi/route.ts:94-97`). The deposit is non custodial and
+  automatic; the fiat delivery is confirmed by the operator.
+- **You take your own money back.** Two hours after the deposit the custody window closes
+  (`CUSTODY_WINDOW_SECS`, `src/infrastructure/solana-wallet.ts:100`) and the app lets you sign the
+  refund, which needs nobody's cooperation. Before that deadline the program rejects it
+  (`DeadlineNotReached` 6003), so the two hours are a wait, not a failure.
+
 ## A remittance is assembled, not hardcoded
 
 A remittance is a chain of steps: verify who is sending, price the currency pair, take custody free

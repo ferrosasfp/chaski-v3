@@ -128,7 +128,7 @@ const RESUME_MAX_POLLS = 8;            // 8 × 2500 ms = 20 s total (antes 40 = 
 export function RemittanceFlow({ container }: { container?: Container } = {}) {
   const c = useMemo(() => container ?? createContainer(), [container]);
   const [step, setStep] = useState<Step>("send");
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(false); const disponibilidadWallet = useWalletAvailability(); const mwaEnElSelector = useMwaOffered(); const conectarEsCallejon = disponibilidadWallet === "none" && mwaEnElSelector && !mwaEnabled(); // H1: los cuatro EN ESTA LÍNEA y no en cuatro nuevas — `flow.tsx` recibe ~85 citas por número y una sola línea de más las corre TODAS (ver el docblock del import en :77). Qué significa `conectarEsCallejon` está escrito donde se usa, en `step === "connect"`.
   const [error, setError] = useState<FlowError | null>(null);
 
   // form
@@ -142,7 +142,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
   const [scanStage, setScanStage] = useState(0); // 0 idle · 1-3 escaneando · 4 verificado
 
   // state
-  const [preview, setPreview] = useState<Quote | null>(null);
+  const [preview, setPreview] = useState<Quote | null>(null); const [estadoCotiza, setEstadoCotiza] = useState<"pidiendo" | "ok" | "falla" | "corto">("pidiendo"); // H2: `preview === null` significaba TRES cosas (todavía no llegó · falló · el monto no llega al mínimo) y la pantalla las mostraba con el MISMO guión. Un `Quote | null` ya había perdido el tercer valor; esto lo repone. Va EN ESTA LÍNEA porque `flow.tsx` recibe ~85 citas por número.
   const [rem, setRem] = useState<RemittanceState | null>(null);
   const [address, setAddress] = useState<string | null>(null);
   // WKH-333: el veredicto de KYC que el servidor ya contestó al conectar. NO es un guard: sólo decide
@@ -168,14 +168,14 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
     // WKH-314: por debajo del mínimo no se pide cotización. El agente la rechaza igual, así que
     // pedirla sería un viaje garantizado a un error — y, antes de esta HU, una promesa de cero.
     if (amountNum < MIN_SEND_USD) {
-      setPreview(null);
+      setPreview(null); setEstadoCotiza("corto"); // H2: "corto" no es "falla" — no se pidió nada, así que no hay nada que reintentar ni de qué culpar a la red.
       return;
     }
-    const t = setTimeout(async () => {
+    setEstadoCotiza("pidiendo"); const t = setTimeout(async () => { // H2: "pidiendo" se declara ANTES del debounce y no adentro. Los 300 ms de espera son parte de la demora que la persona ve (medido: 3661 ms de punta a punta), así que durante ese tramo la caja también tiene que decir que está calculando.
       try {
-        setPreview(await c.previewQuote.execute({ amountUsd: amountNum, method }));
+        const q = await c.previewQuote.execute({ amountUsd: amountNum, method }); setPreview(q); setEstadoCotiza("ok"); // el orden importa: el estado se mueve DESPUÉS de que la cifra está, nunca antes
       } catch {
-        setPreview(null);
+        setPreview(null); setEstadoCotiza("falla"); // H2: acá se perdía la causa. Sin esto, un corredor caído y un monto de $2 se ven idénticos.
       }
     }, 300);
     return () => clearTimeout(t);
@@ -813,13 +813,13 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                     `px-holgado` (=`px-4`) y `py-normal` (=`py-3`). Cero pixeles de diferencia. */}
                 <Aviso tono="bueno" className="mt-holgado">
                   <p className="text-label font-medium text-verde/80">Tu familia recibe</p>
-                  <Money tono="verde">{preview ? preview.receive.format() : "—"}</Money>
+                  {estadoCotiza === "pidiendo" ? (<span role="status" aria-label="Calculando cuánto recibe tu familia" className="my-ajustado block h-9 w-44 animate-pulse rounded-control bg-verde/15" />) : (<Money tono="verde">{preview ? preview.receive.format() : "—"}</Money>)}{/* H2 · POR QUÉ UN BLOQUE QUE PALPITA Y NO EL GUIÓN. Medido en producción el 2026-08-16: la cifra tarda 3661 ms desde que arranca la navegación (300 ms de debounce + la ida al corredor). Durante casi cuatro segundos, el número más importante de la pantalla era un guión dentro de una caja verde grande, y eso no se lee como "estoy calculando": se lee como roto. El guión SIGUE siendo el valor correcto para "corto" (el monto no llega al mínimo, no se pidió nada) y para "falla" (ahí además hay una frase abajo que dice qué pasó). ⚠️ El `aria-label` no es adorno: un `<span>` vacío no tiene texto que anunciar, y sin él quien usa lector de pantalla no se entera de que hay algo en curso. */}
                   {/* "llega en ~N min" prometía una entrega que este sistema no puede cumplir hoy: la
                       release del vault la dispara una persona a mano y la propia pantalla de
                       seguimiento avisa que "puede quedarse acá un buen rato". El número no se borra
                       (es un dato del corredor y sirve para comparar), se le pone dueño: lo estima él,
                       no lo promete Chaski. Mismo criterio en las filas de review y confirm. */}
-                  {preview ? (
+                  {estadoCotiza === "falla" ? (<p className="mt-ajustado text-label text-cochineal">No pudimos calcular la tasa ahora. Revisá tu conexión: el monto vuelve a cotizarse solo cuando lo cambies.</p>) : preview ? (
                     <p className="mt-ajustado text-label text-verde/70">
                       1 USD ≈ S/ {preview.rate.toFixed(3)} · el corredor estima ~{preview.etaMinutes}{" "}
                       min
@@ -882,14 +882,14 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                 Continuar <ArrowRight className="size-icono-sm" />
               </Button>
 
-              {/* La vuelta a lo que ya existe. Vive en `send` porque es donde aterriza toda recarga y
-                  también adonde vuelve "Enviar otra": desde acá una remesa con USDC en el escrow
-                  siempre tiene camino, sin importar cómo se llegó. */}
-              <button
+              {/* La vuelta a lo que ya existe. Vive en `send` porque es donde aterriza toda recarga y también adonde vuelve "Enviar otra": desde acá una remesa con USDC en el escrow siempre tiene camino, sin importar cómo se llegó.
+                  H4 · POR QUÉ LAS TRES VIVEN AHORA ADENTRO DE UN GRUPO CON TÍTULO. Medido en producción el 2026-08-16 sobre el árbol renderizado: «Continuar» y las tres puertas de recuperación salían con EXACTAMENTE la misma métrica — 52x372, 15px, peso 600 — y las tres ocupaban el tercio inferior de la pantalla. La única diferencia era el fondo. Tres acciones de rescate pesando lo mismo que la acción principal es lo que hacía que la pantalla se leyera como una lista de opciones equivalentes y no como un formulario con un botón. El grupo las separa con una línea y las nombra por lo que son.
+                  ⛔ LO QUE NO SE TOCA ES EL `min-h-[52px]`: `touch-targets.test.tsx:51` lo lee con `/min-h-\[(\d+)px\]/` sobre el className renderizado, y es el candado del área de toque de las tres puertas de recuperar plata. Baja el PESO TIPOGRÁFICO (`text-body font-semibold` → `text-label font-medium`), nunca el alto. Achicar el blanco de un botón que devuelve fondos sería arreglar la jerarquía rompiendo la accesibilidad. */}
+              <div className="space-y-ajustado border-t border-line pt-holgado"><p className="text-label font-medium text-stone">¿Ya enviaste antes?</p><button
                 type="button"
                 onClick={openHistory}
                 disabled={busy}
-                className="inline-flex min-h-[52px] w-full items-center justify-center text-center text-body font-semibold text-cochineal underline underline-offset-2 disabled:opacity-50"
+                className="inline-flex min-h-[52px] w-full items-center justify-start text-left text-label font-medium text-cochineal underline underline-offset-2 disabled:opacity-50"
               >
                 Ver mis envíos
               </button>
@@ -905,7 +905,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                 lister={c.solanaCloseableEscrows}
                 close={c.closeEscrowAccounts}
                 resolveSender={resolveSender}
-              />
+              /></div>
             </div>
           )}
 
@@ -951,8 +951,8 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                   </p>
                 </Aviso>
               </Card>
-              <NoWalletHere />
-              <Button disabled={busy} onClick={onConnect}>
+              <NoWalletHere />{/* H1 · POR QUÉ ACÁ ABAJO PUEDE NO HABER NINGÚN BOTÓN, y es lo contrario de un descuido. MEDIDO el 2026-08-16 en el teléfono del founder: en Chrome de Android sin wallet inyectada, lo ÚNICO que el selector ofrece es la entrada de Mobile Wallet Adapter, y tocarla no abre nada — ni siquiera pide permiso. O sea que el CTA más grande y más rojo de la pantalla llevaba a un callejón, justo debajo de un cartel que dice "no vemos ninguna wallet en este navegador". La pantalla se contradecía a sí misma, y quien la lee le cree al botón, no a la prosa. ⛔ QUITAR EL ADAPTER NO ERA LA SALIDA: no es nuestro, lo antepone `@solana/wallet-adapter-react` solo (ver el docblock de `MWA_WALLET_NAME` en `../infrastructure/solana-wallet-bridge.ts`). Lo único nuestro es si ofrecemos la puerta. ✅ QUÉ LA REEMPLAZA: `NoWalletHere` asciende "Abrir Chaski en Phantom" a acción resolutiva — el camino que SÍ está verificado en cadena (dos depósitos del founder, 2026-08-16). Un camino que funciona vale más que dos donde uno muere. 🔑 EL `!mwaEnabled()` ES LO QUE HACE HONESTA A LA BANDERA: significa "alguien ya probó MWA en un teléfono de verdad". Prendida, MWA deja de ser un callejón y el botón vuelve solo. ⚠️ NO afecta al escritorio: sin extensión `mwaEnElSelector` es `false`, así que el botón sigue estando y el selector sigue listando qué instalar. */}
+              {conectarEsCallejon ? null : (<Button disabled={busy} onClick={onConnect}>
                 {busy ? (
                   <Loader2 className="size-icono-sm animate-spin" />
                 ) : (
@@ -960,7 +960,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                     <Wallet className="size-icono-sm" /> Conectar wallet
                   </>
                 )}
-              </Button>
+              </Button>)}
             </div>
           )}
 
@@ -1293,7 +1293,7 @@ function IdentityBadge({ kyc }: { kyc: KycVerification }) {
  * celular DENTRO del navegador de Phantom quedan byte-idénticos a como estaban.
  */
 function NoWalletHere() {
-  const availability = useWalletAvailability(); const mwaListo = useMwaOffered() && mwaEnabled(); // WKH-MWA: los dos hooks EN ESTA LÍNEA — la de abajo la citan `solana-providers.tsx:67` y `solana-providers.test.tsx:400` por número, y el resto del archivo, 85 veces
+  const availability = useWalletAvailability(); const mwaOfrecido = useMwaOffered(); const mwaListo = mwaOfrecido && mwaEnabled(); const esElUnicoCamino = mwaOfrecido && !mwaEnabled(); // WKH-MWA: los hooks EN ESTA LÍNEA — la de abajo la citan `solana-providers.tsx:67` y `solana-providers.test.tsx:400` por número, y el resto del archivo, 85 veces. H1: `esElUnicoCamino` = el selector ofrece MWA y nadie verificó todavía que MWA funcione, o sea que `conectarEsCallejon` (arriba, en `step === "connect"`) escondió el CTA y este enlace quedó SOLO.
   if (availability !== "none") return null;
   // Sólo se llega acá en el navegador (en el servidor la disponibilidad es "unknown"), pero el guard
   // deja el componente seguro de renderizar en cualquier contexto.
@@ -1318,13 +1318,13 @@ function NoWalletHere() {
         {/* WKH-MWA · las dos frases viven al final del archivo (`NO_WALLET_*`) por el largo, no por gusto. */}
         {mwaListo ? NO_WALLET_CON_MWA : NO_WALLET_SIN_MWA}
       </Muted>
-      {/* ⛔ `h-11` (44px) NO se migra al alto del `<Button>`: es un `<a>`, no un botón, y sigue
-          cumpliendo el mínimo de toque de WCAG 2.5.5. Subirlo a 52 lo empataría con el CTA
-          primario de la pantalla, que es lo contrario de lo que M-4 pide. */}
+      {/* H1 · DOS ALTOS, Y EL QUE MANDA ES SI HAY OTRO CTA. Con `esElUnicoCamino` este enlace ES la acción de la pantalla (el `<Button>` de abajo no se renderiza), así que toma el alto y el color del CTA primario.
+          La receta se copia a mano de `./ui.tsx:66` + `BTN_VARIANTS.primary` (`./ui.tsx:47`) porque `Button` emite un `<button>` y esto tiene que ser un `<a>` para que el deep link de Phantom navegue; el candado que impide que las dos se separen es T-H1-3 en `wallet-availability.test.tsx`, que LEE el alto de un `<Button>` renderizado. `h-[52px]` va literal y no como token: `touch-targets.test.tsx:64` lo lee con `/h-\[(\d+)px\]/` sobre el className RENDERIZADO.
+          ⛔ SIN `esElUnicoCamino` SE QUEDA EN `h-11` (44px), que era la regla vieja y sigue vigente: ahí SÍ hay un CTA primario abajo, y empatarle el alto es lo contrario de lo que M-4 pide. 44px sigue cumpliendo el mínimo de toque de WCAG 2.5.5. */}
       <a
         href={phantomBrowseUrl(href, origin)}
         rel="noreferrer"
-        className="inline-flex h-11 w-full items-center justify-center gap-ajustado rounded-control border border-cochineal/30 bg-card px-holgado text-body font-semibold text-cochineal"
+        className={esElUnicoCamino ? "inline-flex h-[52px] w-full items-center justify-center gap-ajustado rounded-caja bg-cochineal px-5 text-body font-semibold text-white shadow-lift" : "inline-flex h-11 w-full items-center justify-center gap-ajustado rounded-control border border-cochineal/30 bg-card px-holgado text-body font-semibold text-cochineal"}
       >
         <ExternalLink className="size-icono-sm" /> Abrir Chaski en Phantom
       </a>
@@ -2420,7 +2420,7 @@ export function LostEscrowRecovery({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex min-h-[52px] w-full items-center justify-center text-center text-body font-semibold text-cochineal underline underline-offset-2"
+        className="inline-flex min-h-[52px] w-full items-center justify-start text-left text-label font-medium text-cochineal underline underline-offset-2"
       >
         Recuperar un envío perdido
       </button>
@@ -2570,7 +2570,7 @@ export function EscrowRentRecovery({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex min-h-[52px] w-full items-center justify-center text-center text-body font-semibold text-cochineal underline underline-offset-2"
+        className="inline-flex min-h-[52px] w-full items-center justify-start text-left text-label font-medium text-cochineal underline underline-offset-2"
       >
         Recuperar el depósito de red de envíos anteriores
       </button>

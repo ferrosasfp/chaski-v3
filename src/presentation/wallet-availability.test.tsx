@@ -900,3 +900,87 @@ describe("WKH-MWA · CANDADO: una conexión que falla no puede decir que la canc
   });
 
 });
+
+// ══ H1 · LA PANTALLA DEJA DE OFRECER UNA PUERTA QUE NO ABRE ═══════════════════════════════════════
+//
+// 🔴 EL DEFECTO, MEDIDO EN UN TELÉFONO DE VERDAD (2026-08-16, el del founder): en Chrome de Android sin
+// wallet inyectada, el selector de la librería ofrece UNA sola entrada, Mobile Wallet Adapter, y tocarla
+// no abre nada — ni siquiera aparece un diálogo de permiso. La pantalla ponía su CTA más grande y más
+// rojo ahí, justo debajo del cartel que dice "no vemos ninguna wallet en este navegador". La pantalla se
+// contradecía, y frente a un botón grande y un párrafo, se le cree al botón.
+//
+// LO QUE ESTOS `it` CONGELAN, y por qué son cuatro y no uno:
+//   · T-H1-1 la mitad que arregla: sin salida ⇒ el CTA no está y el enlace toma su lugar.
+//   · T-H1-2 la mitad que lo hace falsable: con la bandera PRENDIDA el CTA VUELVE. Sin este `it`,
+//     "esconder el botón siempre" pasaría en verde y la bandera no significaría nada.
+//   · T-H1-3 que el enlace ascendido mida lo mismo que un `<Button>` DE VERDAD. El alto NO se escribe
+//     acá: se lee de un `<Button>` renderizado. Escribir `52` a mano sería el candado que se aplaude
+//     solo — pasaría aunque `ui.tsx` cambiara el alto del CTA y las dos cosas se separaran.
+//   · T-H1-4 el control de escritorio: sin MWA en el selector el CTA se queda, porque ahí el selector
+//     todavía lista qué instalar. Sin este `it`, "esconderlo en toda pantalla sin wallet" pasaría.
+//
+// ⚠️ LO QUE NO VERIFICA: que MWA efectivamente no funcione en Android. Eso no lo puede medir jsdom — es
+// comportamiento de una app de terceros en un teléfono, y la evidencia es el recorrido del founder, no
+// este archivo. Acá sólo se congela QUÉ OFRECE LA PANTALLA dado ese hecho.
+describe("H1 · cuando conectar no lleva a ningún lado, la pantalla no lo ofrece", () => {
+  const sinSalida = async () => {
+    irAlPasoConectar();
+    await screen.findByRole("button", { name: /Conectar wallet/ });
+    await act(async () => {
+      solanaWalletBridge.setMwaOffered(true);
+      solanaWalletBridge.setWalletAvailability("none");
+    });
+  };
+
+  it("T-H1-1: MWA es lo único que ofrece el selector y nadie lo verificó ⇒ el CTA no está, y el enlace ocupa su lugar", async () => {
+    // MUTANTE QUE MATA: quitarle el `conectarEsCallejon ? null :` al `<Button>` de `flow.tsx`.
+    await sinSalida();
+    expect(screen.queryByRole("button", { name: /Conectar wallet/ })).toBeNull();
+    const enlace = screen.getByRole("link", { name: CAMINO });
+    expect(enlace).toBeInTheDocument();
+    // Y ES la acción resolutiva, no un enlace más: fondo del CTA, no borde sobre fondo claro.
+    expect(enlace.className).toContain("bg-cochineal");
+    expect(enlace.className).not.toContain("bg-card");
+  });
+
+  it("T-H1-2: con la bandera PRENDIDA el CTA vuelve — es lo que hace honesta a la bandera", async () => {
+    // Sin este `it`, borrar la condición entera y esconder el botón siempre daría verde. La bandera
+    // significa "alguien ya probó MWA en un teléfono": si eso pasa, MWA deja de ser un callejón.
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_MWA_ENABLED", "true");
+    await sinSalida();
+    expect(screen.getByRole("button", { name: /Conectar wallet/ })).toBeInTheDocument();
+    // Y entonces el enlace vuelve a ser la salida secundaria, no la resolutiva.
+    expect(screen.getByRole("link", { name: CAMINO }).className).toContain("bg-card");
+  });
+
+  it("T-H1-3: el enlace ascendido mide lo mismo que un `<Button>` real, y el alto se LEE, no se escribe", async () => {
+    // 🔴 Este es el `it` que impide que las dos recetas se separen en silencio. `flow.tsx` copia a mano
+    // la receta de `ui.tsx:66` porque necesita un `<a>` (el deep link tiene que navegar) y `Button`
+    // emite un `<button>`. Esa duplicación es deliberada y está declarada allá; acá está su candado.
+    const { Button } = await import("./ui");
+    const { container: refCtr } = render(<Button>referencia</Button>);
+    const altoDelCtaReal = /(?:^|\s)(h-\[\d+px\])/.exec(
+      (refCtr.querySelector("button") as HTMLElement).className,
+    )?.[1];
+    // Se mide el instrumento antes de usarlo: si `ui.tsx` dejara de emitir un `h-[NNpx]`, esta
+    // expectativa se pone roja acá y no en un assert vacuamente verde más abajo.
+    expect(altoDelCtaReal).toMatch(/^h-\[\d+px\]$/);
+    cleanup();
+
+    await sinSalida();
+    expect(screen.getByRole("link", { name: CAMINO }).className).toContain(altoDelCtaReal as string);
+  });
+
+  it("T-H1-4(control): escritorio sin extensión ⇒ el CTA se queda, porque ahí el selector sí ofrece algo", async () => {
+    // El par negativo. En escritorio la librería NO antepone MWA, y el selector lista wallets para
+    // instalar: esconder el botón dejaría la pantalla sin ninguna acción.
+    irAlPasoConectar();
+    await screen.findByRole("button", { name: /Conectar wallet/ });
+    await act(async () => {
+      solanaWalletBridge.setMwaOffered(false);
+      solanaWalletBridge.setWalletAvailability("none");
+    });
+    expect(screen.getByRole("button", { name: /Conectar wallet/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: CAMINO }).className).toContain("bg-card");
+  });
+});

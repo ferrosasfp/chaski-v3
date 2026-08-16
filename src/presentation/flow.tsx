@@ -889,7 +889,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                 type="button"
                 onClick={openHistory}
                 disabled={busy}
-                className="inline-flex min-h-[52px] w-full items-center justify-center text-center text-label font-medium text-cochineal underline underline-offset-2 disabled:opacity-50"
+                className="inline-flex min-h-[52px] w-full items-center justify-start text-left text-label font-medium text-cochineal underline underline-offset-2 disabled:opacity-50"
               >
                 Ver mis envíos
               </button>
@@ -2420,7 +2420,7 @@ export function LostEscrowRecovery({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex min-h-[52px] w-full items-center justify-center text-center text-label font-medium text-cochineal underline underline-offset-2"
+        className="inline-flex min-h-[52px] w-full items-center justify-start text-left text-label font-medium text-cochineal underline underline-offset-2"
       >
         Recuperar un envío perdido
       </button>
@@ -2570,7 +2570,7 @@ export function EscrowRentRecovery({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex min-h-[52px] w-full items-center justify-center text-center text-label font-medium text-cochineal underline underline-offset-2"
+        className="inline-flex min-h-[52px] w-full items-center justify-start text-left text-label font-medium text-cochineal underline underline-offset-2"
       >
         Recuperar el depósito de red de envíos anteriores
       </button>

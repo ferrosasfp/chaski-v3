@@ -142,7 +142,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
   const [scanStage, setScanStage] = useState(0); // 0 idle · 1-3 escaneando · 4 verificado
 
   // state
-  const [preview, setPreview] = useState<Quote | null>(null);
+  const [preview, setPreview] = useState<Quote | null>(null); const [estadoCotiza, setEstadoCotiza] = useState<"pidiendo" | "ok" | "falla" | "corto">("pidiendo"); // H2: `preview === null` significaba TRES cosas (todavía no llegó · falló · el monto no llega al mínimo) y la pantalla las mostraba con el MISMO guión. Un `Quote | null` ya había perdido el tercer valor; esto lo repone. Va EN ESTA LÍNEA porque `flow.tsx` recibe ~85 citas por número.
   const [rem, setRem] = useState<RemittanceState | null>(null);
   const [address, setAddress] = useState<string | null>(null);
   // WKH-333: el veredicto de KYC que el servidor ya contestó al conectar. NO es un guard: sólo decide
@@ -168,14 +168,14 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
     // WKH-314: por debajo del mínimo no se pide cotización. El agente la rechaza igual, así que
     // pedirla sería un viaje garantizado a un error — y, antes de esta HU, una promesa de cero.
     if (amountNum < MIN_SEND_USD) {
-      setPreview(null);
+      setPreview(null); setEstadoCotiza("corto"); // H2: "corto" no es "falla" — no se pidió nada, así que no hay nada que reintentar ni de qué culpar a la red.
       return;
     }
-    const t = setTimeout(async () => {
+    setEstadoCotiza("pidiendo"); const t = setTimeout(async () => { // H2: "pidiendo" se declara ANTES del debounce y no adentro. Los 300 ms de espera son parte de la demora que la persona ve (medido: 3661 ms de punta a punta), así que durante ese tramo la caja también tiene que decir que está calculando.
       try {
-        setPreview(await c.previewQuote.execute({ amountUsd: amountNum, method }));
+        const q = await c.previewQuote.execute({ amountUsd: amountNum, method }); setPreview(q); setEstadoCotiza("ok"); // el orden importa: el estado se mueve DESPUÉS de que la cifra está, nunca antes
       } catch {
-        setPreview(null);
+        setPreview(null); setEstadoCotiza("falla"); // H2: acá se perdía la causa. Sin esto, un corredor caído y un monto de $2 se ven idénticos.
       }
     }, 300);
     return () => clearTimeout(t);
@@ -813,13 +813,13 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                     `px-holgado` (=`px-4`) y `py-normal` (=`py-3`). Cero pixeles de diferencia. */}
                 <Aviso tono="bueno" className="mt-holgado">
                   <p className="text-label font-medium text-verde/80">Tu familia recibe</p>
-                  <Money tono="verde">{preview ? preview.receive.format() : "—"}</Money>
+                  {estadoCotiza === "pidiendo" ? (<span role="status" aria-label="Calculando cuánto recibe tu familia" className="my-ajustado block h-9 w-44 animate-pulse rounded-control bg-verde/15" />) : (<Money tono="verde">{preview ? preview.receive.format() : "—"}</Money>)}{/* H2 · POR QUÉ UN BLOQUE QUE PALPITA Y NO EL GUIÓN. Medido en producción el 2026-08-16: la cifra tarda 3661 ms desde que arranca la navegación (300 ms de debounce + la ida al corredor). Durante casi cuatro segundos, el número más importante de la pantalla era un guión dentro de una caja verde grande, y eso no se lee como "estoy calculando": se lee como roto. El guión SIGUE siendo el valor correcto para "corto" (el monto no llega al mínimo, no se pidió nada) y para "falla" (ahí además hay una frase abajo que dice qué pasó). ⚠️ El `aria-label` no es adorno: un `<span>` vacío no tiene texto que anunciar, y sin él quien usa lector de pantalla no se entera de que hay algo en curso. */}
                   {/* "llega en ~N min" prometía una entrega que este sistema no puede cumplir hoy: la
                       release del vault la dispara una persona a mano y la propia pantalla de
                       seguimiento avisa que "puede quedarse acá un buen rato". El número no se borra
                       (es un dato del corredor y sirve para comparar), se le pone dueño: lo estima él,
                       no lo promete Chaski. Mismo criterio en las filas de review y confirm. */}
-                  {preview ? (
+                  {estadoCotiza === "falla" ? (<p className="mt-ajustado text-label text-cochineal">No pudimos calcular la tasa ahora. Revisá tu conexión: el monto vuelve a cotizarse solo cuando lo cambies.</p>) : preview ? (
                     <p className="mt-ajustado text-label text-verde/70">
                       1 USD ≈ S/ {preview.rate.toFixed(3)} · el corredor estima ~{preview.etaMinutes}{" "}
                       min

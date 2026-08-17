@@ -694,9 +694,13 @@ describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
 //
 // 🔴 CUÁNDO SE MIDIÓ, Y ESTO ES LO QUE ENVEJECE: sobre el árbol **`012e26c`**, con la suite en
 // `Tests 2687 passed (2687)` / `Test Files 143 passed (143)` y exit 0 ANTES de mutar nada (el harness
-// exige las dos cosas: árbol limpio y base verde, y aborta si no). ⚠️ El ÚNICO diff entre `012e26c` y el
-// commit que trae esta tabla es este bloque de comentario, que no cambia ningún conteo porque es un
-// comentario. Un conteo de `it` rojos es una propiedad del ÁRBOL y no del mutante: cualquier `it` nuevo
+// exige las dos cosas: árbol limpio y base verde, y aborta si no).
+// ⚠️ QUÉ HAY ENTRE `012e26c` Y EL COMMIT QUE TRAE ESTA TABLA, dicho con precisión porque la primera
+// versión de este renglón decía «el ÚNICO diff es este bloque» y eso era falso: hay ESTE bloque **más
+// ediciones de COMENTARIO en 8 archivos de test** (los punteros que decían «los 47» y «el reporte de F3»,
+// que el fix-pack corrigió). Ninguna toca código ejecutable, y eso está medido y no razonado: la suite
+// sigue en `143 archivos / 2687 tests` exit 0 después de las nueve. Lo que un comentario NO puede mover es
+// un conteo de `it`; lo que sí puede mover son citas por número, y de eso se ocupa `citas-ancladas`. Un conteo de `it` rojos es una propiedad del ÁRBOL y no del mutante: cualquier `it` nuevo
 // lo mueve. ⛔ No se hereda, se re-corre.
 //
 // EL PROTOCOLO, ENTERO Y **VERIFICADO POR EL HARNESS** en vez de declarado acá (cada regla está escrita

@@ -21,10 +21,16 @@
 // ⛔ DT-7 — acá NO se lee `window`, ni `Date`, ni `fetch`, ni `process.env`. El almacén, el instante
 // y la URL entran por parámetro.
 //
-// ⚠️ [NO VERIFICADO] (CD-12) — nada de este archivo está medido en un teléfono. Que la billetera
-// vuelva al mismo origen, que el `localStorage` sobreviva al salto y que la transacción que devuelve
-// sea byte-idéntica a la que se le mandó son tres afirmaciones sobre un runtime móvil que este repo
-// no ha medido.
+// ⚠️ [NO VERIFICADO] (CD-12) — nada de este archivo está medido en un teléfono, Y SIGUE SIN ESTARLO
+// DESPUÉS DE WKH-358. Lo que cambió con la ola 4 es que ahora EXISTE un recorrido con el que se puede
+// medir (el connect por enlace y la creación de la cuenta de nonce); lo que NO cambió es que **nadie de
+// este equipo lo corrió en un teléfono**. Las tres afirmaciones sobre el runtime móvil siguen sin
+// verificar: que la billetera vuelva al mismo origen, que el `localStorage` sobreviva al salto, y que
+// la transacción que devuelve sea byte-idéntica a la que se le mandó.
+// ⛔ PROHIBIDO convertir cualquiera de las tres en una afirmación del código sin el reporte del founder
+// pegado al lado (CD-10). Y ⛔ el DEPÓSITO por enlace no cierra ni siquiera en el papel: `prepare()`
+// exige una prueba de posesión firmada por el bridge, que en un móvil sin extensión está vacío, así que
+// todo depósito por enlace muere en `payout_pop_unavailable` ANTES de que este motor corra. Es WKH-359.
 import bs58 from "bs58";
 import { Transaction } from "@solana/web3.js";
 import {
@@ -48,24 +54,26 @@ import { guardarPreparado, leerPreparado, terminarPreparado } from "./preparado"
 // dice QUÉ AFIRMA y QUÉ NO AFIRMA, porque la mitad de los errores caros de este repo salieron de una
 // causa que afirmaba de más.
 //
-// 🔴 LO QUE LA PANTALLA HACE HOY CON ESTAS CAUSAS: NADA, y acá decía lo contrario. La frase anterior
-// era "la capa de presentación las traduce" y es FALSA, medido en el AR de esta HU:
-// `grep -rn "deeplink_" src/presentation` devuelve **0 resultados**, así que las nueve caen en el
-// default de `humanError` (`flow-vm.ts`) y la persona lee la MISMA frase —"Algo salió mal. Intentá de
-// nuevo."— tanto si canceló como si el blockhash venció. El trabajo de partir `rechazado` de
-// `respuesta_ilegible` sirve igual (son dos causas distintas en los logs y en cualquier copy futuro),
-// pero HOY no llega a la pantalla.
+// 🔴 QUÉ HACE LA PANTALLA CON ESTAS CAUSAS, Y CÓMO CAMBIÓ DOS VECES. Al cerrar la ola 3 este párrafo
+// decía "la capa de presentación las traduce" y era FALSO —medido: `grep -rn "deeplink_"
+// src/presentation` daba **0**, así que las nueve caían en el default de `humanError` y la persona
+// leía la MISMA frase tanto si canceló como si el blockhash venció—. Se corrigió a "no hace NADA", que
+// era cierto entonces y **también dejó de serlo**: la ola 4 (WKH-358) cableó el recorrido y escribió
+// el copy.
 //
-// ⛔ Y POR QUÉ EL COPY NO SE ESCRIBE EN ESTA HU, que es una decisión y no un olvido: ninguna de estas
-// causas tiene camino de producción todavía. El colaborador de enlace NO se cablea en `container.ts`
-// (CD-13, con su test en `container.test.ts`), así que un copy escrito hoy sería copy para un error
-// que nadie puede provocar — exactamente el "código muerto de money-path" que el Story File usó para
-// dejar la presentación fuera de scope. El copy es requisito de la ola 4, la misma que cablea el
-// colaborador y escribe el connect.
+// HOY, medido: cada causa tiene su propio texto en el `Record` de `flow-vm.ts`, consultado por un
+// LOOKUP EXACTO que corre ANTES de la cadena de `includes` de `humanError`.
 //
-// 🔒 Y para que este párrafo no envejezca solo, hay un candado que lo mide en cada `npm test`:
-// `deeplink-callers.test.ts` cuenta las causas exportadas de acá y las busca en `src/presentation`.
-// El día que alguien escriba el primer copy, ese test se pone rojo y obliga a reescribir esto.
+// ⚠️ Y SON **ONCE**, NO NUEVE, que es la parte que un `switch` exhaustivo no ve: `CausaDeEnlace`
+// (`:184`) lista las nueve que emite ESTE módulo, y el adaptador tira dos más
+// (`deeplink_saldo_insuficiente` y `deeplink_nonce_ausente`) que nunca pasan por acá. El `Record` está
+// tipado sobre `CausaDeEnlaceEnPantalla`, que las une; su docblock explica por qué el compilador solo
+// no alcanza.
+//
+// 🔒 Y para que este párrafo no vuelva a envejecer solo, el candado que lo mide en cada `npm test`
+// está INVERTIDO desde la ola 4: `deeplink-callers.test.ts` deriva las causas de acá **y del
+// adaptador** y exige que TODAS tengan copy. El día que alguien exporte una docena sin escribirle
+// texto, ese test se pone rojo.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
 /**
@@ -684,7 +692,7 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
         //     enlace ocurre ANTES del KYC: están en dos extremos del recorrido.
         //   · **y aunque llegara, el guard de arriba corta primero**: `estaConectado` exige los tres
         //     campos y un viaje recién abierto por `iniciarConexion` no tiene ninguno, así que
-        //     (`estaConectado`, `:607`) sale por `cortar(DEEPLINK_VIAJE_VENCIDO)` sin llegar hasta acá.
+        //     (`estaConectado`, `:615`) sale por `cortar(DEEPLINK_VIAJE_VENCIDO)` sin llegar hasta acá.
         //
         // ⇒ Esta rama sigue **declarada y sin test, con su precondición escrita arriba**, que es la
         // decisión de siempre para una rama que sólo se alcanza con un disco escrito a mano. Lo que
@@ -913,3 +921,28 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
     };
   }
 }
+
+/**
+ * WKH-358/AC-8 — LAS **ONCE** CAUSAS QUE PUEDEN LLEGAR A LA PANTALLA, y por qué este tipo existe
+ * además de `CausaDeEnlace`.
+ *
+ * 🔴 EL AGUJERO DE TIPO, MEDIDO. `CausaDeEnlace` (`:184`) lista **NUEVE**: son las que emite ESTE
+ * módulo. Le faltan `DEEPLINK_NONCE_AUSENTE` y `DEEPLINK_SALDO_INSUFICIENTE`, que las tira el
+ * ADAPTADOR (`deeplink_saldo_insuficiente`, `../../solana-wallet.ts:807` y
+ * `deeplink_nonce_ausente`, `../../solana-wallet.ts:818`) y que por lo tanto **nunca pasan por acá**.
+ * Consecuencia: un `switch` exhaustivo sobre `CausaDeEnlace` **compila dejando dos causas sin copy y
+ * sin que `tsc` diga una palabra**. Ése es exactamente el modo de falla que este tipo cierra.
+ *
+ * ⛔ Y POR ESO NO ALCANZA CON EL COMPILADOR, que es la mitad que se olvida: este tipo es una lista
+ * escrita a mano, así que una DOCEAVA causa exportada mañana no entraría sola. Por eso la cobertura va
+ * en DOS capas: (1) el `Record` sobre este tipo, que es lo que `tsc` verifica; y (2) el candado de
+ * `deeplink-callers.test.ts`, que **deriva las causas del módulo con un regex** y se pone rojo si
+ * aparece una que este tipo no nombra. La (2) es la que ve lo que la (1) no puede.
+ *
+ * ⚠️ ES ADITIVO Y NO REEMPLAZA A `CausaDeEnlace`: ese tipo describe lo que el MOTOR puede devolver y
+ * sigue siendo el correcto en todas sus firmas. Éste describe lo que la PANTALLA puede recibir.
+ */
+export type CausaDeEnlaceEnPantalla =
+  | CausaDeEnlace
+  | typeof DEEPLINK_NONCE_AUSENTE
+  | typeof DEEPLINK_SALDO_INSUFICIENTE;

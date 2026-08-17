@@ -45,7 +45,7 @@ import {
  * conjunto CERRADO de tres valores (`PasoDelViaje`, `sesion.ts:114`), así que `interpretarVuelta`
  * contesta `no-volvimos` para esta marca y **el motor no consume ni destruye nada** si esta marca queda
  * en la barra. Si en cambio fuera un cuarto `PasoDelViaje`, el motor la miraría, no sabría qué hacer con
- * ella, y el `switch` con `never` de (`nunca`, `firma-por-enlace.ts:712`) dejaría de compilar.
+ * ella, y el `switch` con `never` de (`nunca`, `firma-por-enlace.ts:720`) dejaría de compilar.
  *
  * ⛔ NO la agregues a `PasoDelViaje` "para que sea uniforme": ese conjunto describe los pasos del viaje
  * del DEPÓSITO, y este salto no es parte de ese viaje — pasa antes, y su resultado (una cuenta creada en
@@ -63,13 +63,13 @@ export interface PedidoDeConexion {
    *
    * 🔴 No es una preferencia: (`enlaceDeVuelta`, `sesion.ts:495`) hace `new URL(origen)` y **TIRA** con
    * una URL relativa, sin declararlo en su firma (medido en la ola 1, T9). Mismo requisito, misma razón
-   * y mismas palabras que (`hrefActual`, `firma-por-enlace.ts:209`).
+   * y mismas palabras que (`hrefActual`, `firma-por-enlace.ts:217`).
    */
   hrefActual: string;
   /** Para que la billetera muestre título e ícono en su diálogo. */
   appUrl: string;
   /**
-   * Qué remesa. ⛔ **NUNCA `null`**, por el mismo motivo que (`remittanceId`, `firma-por-enlace.ts:217`):
+   * Qué remesa. ⛔ **NUNCA `null`**, por el mismo motivo que (`remittanceId`, `firma-por-enlace.ts:225`):
    * `interpretarVuelta` acepta `null` como "no tengo remesa en contexto" y con eso **apaga el guard de
    * cruce entre remesas y consume el paso igual**. El viaje que se abre acá lleva el `remittanceId`
    * desde el primer byte (CD-5).
@@ -203,7 +203,7 @@ export function olvidarEleccion(a: Almacen): void {
  *
  * ⛔ NO fija `claveBilletera`, `session` ni `direccion`: esos TRES los escribe la vuelta del connect, y
  * el ancla `claveBilletera` es de UNA SOLA ESCRITURA (`claveBilletera`, `sesion.ts:148`). Un viaje
- * recién abierto NO está conectado (`estaConectado`, `firma-por-enlace.ts:293` exige los tres), y por
+ * recién abierto NO está conectado (`estaConectado`, `firma-por-enlace.ts:301` exige los tres), y por
  * eso el motor de firma **corta antes** de tocarlo: los dos extremos del flujo no se pisan.
  */
 export function iniciarConexion(

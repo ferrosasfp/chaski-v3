@@ -890,10 +890,10 @@ export class SolanaWalletAdapter
     // de siempre. Mover la rama arriba del `tx.recentBlockhash` además rompe DT-10 por construcción (el
     // ancla se calcularía sobre una tx sin blockhash), y eso lo cazan los `it` de T-062-18.
     //
-    // ⚠️ [NO VERIFICADO] (CD-12) — nada de esta rama está medido en un teléfono. Que la billetera
-    // vuelva al mismo origen, que el blockhash aguante el viaje de ida y vuelta (dos saltos a otra
-    // app, una persona leyendo, dos vueltas) y que la transacción devuelta sea byte-idéntica a la
-    // enviada son tres afirmaciones sobre un runtime móvil que este repo NO ha medido.
+    // ⚠️ [NO VERIFICADO] (CD-12) — nada de esta rama está medido en un teléfono, Y SIGUE SIN ESTARLO DESPUÉS DE WKH-358. Eso es lo que esta actualización precisa, en las MISMAS 4 líneas (este bloque tiene 47 citas ancladas por debajo): la ola 4 escribió quién enciende esta rama y quién la alimenta, así que ahora EXISTE un recorrido con el que se puede medir, y lo que no cambió es que nadie de este equipo lo corrió en un teléfono.
+    // Siguen sin verificar, una por una: que la billetera vuelva al mismo origen · que el `localStorage` sobreviva al salto · que la transacción devuelta sea byte-idéntica a la enviada · y que el blockhash aguante el viaje de ida y vuelta (dos saltos a otra app, una persona leyendo, dos vueltas).
+    // ⚠️ La CUARTA es la única que la ola 4 acota, y sólo para el depósito: el durable nonce le saca el reloj a los dos saltos que llevan plata, y el único salto que sigue compitiendo contra un blockhash es el de la CREACIÓN de la cuenta de nonce, donde no hay nada en riesgo (el encabezado de `./solana/nonce-duradero.ts` lo desarrolla). Las otras tres están intactas.
+    // ⛔ PROHIBIDO convertir cualquiera de las cuatro en una afirmación del código sin el reporte del founder pegado al lado (CD-10). Su plan de medición vive en el expediente de la HU, no acá.
     if (this.firmaPorEnlace && this.caminoPorEnlace() !== null) { // WKH-358/DT-1: el colaborador CABLEADO ya no alcanza — hace falta que ESTE recorrido sea por enlace (elección del selector Y `availability === "none"`). Ver `caminoPorEnlace`, `:2239`
       // El almacén y el `href` se toman de acá y no del sitio de composición porque `PedidoDeFirma`
       // los pide y el colaborador no los trae. ⚠️ Sin `localStorage` o sin `location` este entorno no
@@ -905,7 +905,7 @@ export class SolanaWalletAdapter
 
       // 🔴 CD-11, REESCRITO EN WKH-358 CON LA MEDICIÓN Y EN LAS MISMAS 4 LÍNEAS (este bloque tiene 47 citas ancladas por debajo). Acá decía «el `sender` … NUNCA del canal del enlace», sin calificar el camino, y esa mitad se volvió FALSA. El `sender` sigue saliendo de `this.getAddress()` (guard `:560-561`, sin cambios), pero `getAddress()` tiene ahora DOS fuentes y cuál se usa lo decide el gate (`caminoPorEnlace`, `:2239`):
       // · camino INYECTADO ⇒ el bridge, o sea FUERA del canal (y ahí esta rama ni corre: el mismo gate la apaga). · camino POR ENLACE ⇒ (`direccionDelViajeConectado`, `:2307`), que lee `Viaje.direccion`, o sea DENTRO del canal — y no hay alternativa: sin extensión el bridge está vacío.
-      // ⇒ En el camino por enlace, el guard (`DEEPLINK_SENDER_MISMATCH`, `./solana/deeplink/firma-por-enlace.ts:608`) compara dos lecturas del MISMO disco: es COHERENCIA INTERNA, no una defensa. El corte que sí lo es está en (`live`, `../presentation/flow.tsx:506`) cruzado contra `rem.ownerAddress`, que escribe `startKyc` en el repo de remesas y que el canal del enlace no puede escribir; su residual (`ownerAddress == null` no dispara ⇒ un forjador del paso 1 puede dejar el depósito en un escrow que la víctima no puede cerrar) está escrito entero en el bloque de `./solana/deeplink/firma-por-enlace.ts:559-597`. Lo mide `T-065-CD11`.
+      // ⇒ En el camino por enlace, el guard (`DEEPLINK_SENDER_MISMATCH`, `./solana/deeplink/firma-por-enlace.ts:616`) compara dos lecturas del MISMO disco: es COHERENCIA INTERNA, no una defensa. El corte que sí lo es está en (`live`, `../presentation/flow.tsx:506`) cruzado contra `rem.ownerAddress`, que escribe `startKyc` en el repo de remesas y que el canal del enlace no puede escribir; su residual (`ownerAddress == null` no dispara ⇒ un forjador del paso 1 puede dejar el depósito en un escrow que la víctima no puede cerrar) está escrito entero en el bloque de `./solana/deeplink/firma-por-enlace.ts:559-597`. Lo mide `T-065-CD11`.
       // El `sender` va en su forma CANÓNICA: `senderPk.toBase58()` es el round-trip de `new PublicKey(...)`, que es exactamente lo que hace `canonicalizeAddress`. ⛔ NUNCA `.toLowerCase()`: base58 es case-sensitive y bajarlo a minúsculas fabrica colisiones.
       //
       // ⛔ ACÁ HABÍA UN `try { canonicalizeAddress(sender) } catch { limpiar; throw }` Y SE BORRÓ, con
@@ -955,7 +955,7 @@ export class SolanaWalletAdapter
       // Los cortes salen por `throw`, igual que los tres que ya existen en este método
       // (`wallet_not_connected`, `escrow_params_missing`, `sender_signature_missing`): suben por
       // `execute()` sin `try/catch` hasta el `guard()` de la presentación y dejan la remesa en
-      // `confirmed`, que es exactamente el estado que AC-3 vuelve re-ejecutable. ⛔ ACÁ DECÍA "El motor ya limpió." Y ES FALSO DESDE EL FIX-PACK 1 (AR-it2/MNR-1), en el mismo hunk que lo introdujo: el motor limpia SÓLO cuando en el disco no queda nada que salvar, y con un resultado ya firmado adentro preserva el viaje Y el ancla a propósito (`resultadoPreservable`, `solana/deeplink/firma-por-enlace.ts:407`). MEDIDO: `viaje=true prep=true` en 3 de 3 cortes con `transaccionFirmada`. Este `throw` NO limpia nada y NO tiene que hacerlo: es lo que permite que la invocación siguiente retome. Lo que queda pendiente y no es de esta capa: nadie limpia el query string de vuelta, así que con una URL de rechazo todavía en la barra la invocación siguiente vuelve a cortar (ola 4 / HU-357).
+      // `confirmed`, que es exactamente el estado que AC-3 vuelve re-ejecutable. ⛔ ACÁ DECÍA "El motor ya limpió." Y ES FALSO DESDE EL FIX-PACK 1 (AR-it2/MNR-1), en el mismo hunk que lo introdujo: el motor limpia SÓLO cuando en el disco no queda nada que salvar, y con un resultado ya firmado adentro preserva el viaje Y el ancla a propósito (`resultadoPreservable`, `solana/deeplink/firma-por-enlace.ts:415`). MEDIDO: `viaje=true prep=true` en 3 de 3 cortes con `transaccionFirmada`. Este `throw` NO limpia nada y NO tiene que hacerlo: es lo que permite que la invocación siguiente retome. Lo que queda pendiente y no es de esta capa: nadie limpia el query string de vuelta, así que con una URL de rechazo todavía en la barra la invocación siguiente vuelve a cortar (ola 4 / HU-357).
       if (desenlace.tipo === "corte") throw new Error(desenlace.causa);
       if (desenlace.tipo === "salto") {
         return { estado: "hay-que-salir", irA: desenlace.irA, esperando: desenlace.esperando };
@@ -2282,7 +2282,7 @@ export class SolanaWalletAdapter
    *
    *  🔴 CONSECUENCIA MEDIDA Y DECLARADA ACÁ, no un efecto colateral que descubra un review: con esto,
    *  el `sender` que llega al motor y el `viaje.direccion` contra el que el motor lo compara
-   *  (`DEEPLINK_SENDER_MISMATCH`, `./solana/deeplink/firma-por-enlace.ts:608`) salen del MISMO disco,
+   *  (`DEEPLINK_SENDER_MISMATCH`, `./solana/deeplink/firma-por-enlace.ts:616`) salen del MISMO disco,
    *  así que **en el camino por enlace ese guard es coherencia interna y NO una defensa**. En el camino
    *  inyectado sigue siendo la defensa que era, porque ahí el `sender` sale del bridge. El corte que sí
    *  es una defensa en el camino por enlace es el cruce contra `rem.ownerAddress` de
@@ -2291,7 +2291,7 @@ export class SolanaWalletAdapter
    *
    *  ⚠️ NO ES UNA LECTURA PURA Y HAY QUE DECIRLO: `leerViaje` LIMPIA el disco cuando el viaje venció o
    *  es basura. No degrada ningún diagnóstico —el motor trata `no-hay` y `vencido` con el MISMO corte
-   *  (`DEEPLINK_VIAJE_VENCIDO`, `./solana/deeplink/firma-por-enlace.ts:602`)—, así que haber pasado por
+   *  (`DEEPLINK_VIAJE_VENCIDO`, `./solana/deeplink/firma-por-enlace.ts:610`)—, así que haber pasado por
    *  acá antes no cambia lo que la persona lee.
    *
    *  ⚠️ UN `direccion` QUE NO ES BASE58 CONTESTA `null`, y el desenlace de ese caso es
@@ -2311,7 +2311,7 @@ export class SolanaWalletAdapter
     const lectura = leerViaje(disco, Date.now());
     if (lectura.tipo !== "hay") return null; // vencido o inexistente: no hay ninguna cuenta que afirmar
     const v = lectura.viaje;
-    // Los TRES campos, igual que (`estaConectado`, `./solana/deeplink/firma-por-enlace.ts:293`): sin
+    // Los TRES campos, igual que (`estaConectado`, `./solana/deeplink/firma-por-enlace.ts:301`): sin
     // `claveBilletera` y sin `session` no hay canal cifrado, y una `direccion` suelta sería una cuenta
     // que nadie probó haber conectado. Un viaje recién abierto por `iniciarConexion` cae acá.
     if (typeof v.claveBilletera !== "string" || typeof v.session !== "string") return null;

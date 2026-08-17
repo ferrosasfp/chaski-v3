@@ -1574,7 +1574,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
   // 🔴 ESTE BLOQUE CAMBIÓ DE AFIRMACIÓN EN WKH-358, Y NO ES UN ABLANDAMIENTO: ES UNA MEDICIÓN.
   //
   // Lo que decía —y era cierto hasta la ola 3— es que
-  // (`DEEPLINK_SENDER_MISMATCH`, `./solana/deeplink/firma-por-enlace.ts:608`) corta cuando el viaje
+  // (`DEEPLINK_SENDER_MISMATCH`, `./solana/deeplink/firma-por-enlace.ts:616`) corta cuando el viaje
   // trae una dirección ajena. Eso se apoyaba en que el `sender` salía del BRIDGE, o sea de FUERA del
   // canal del enlace. Desde que (`getAddress`, `./solana-wallet.ts:233`) es link-aware —y tiene que
   // serlo: en un teléfono sin extensión el bridge está vacío y el recorrido no puede ni empezar— las

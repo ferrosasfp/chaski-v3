@@ -1,4 +1,4 @@
-import type { Money } from "../domain/money"; import type { EscrowChainState } from "../application/ports"; // WKH-349: EN ESTA LÍNEA, no en una nueva — `:25`, `:29`, `:30`, `:206`, `:253`, `:327`, `:329` y `:1137` de este archivo los cita otro por número y están TODOS debajo de acá
+import type { Money } from "../domain/money"; import type { EscrowChainState } from "../application/ports"; import type { CausaDeEnlaceEnPantalla } from "../infrastructure/solana/deeplink/firma-por-enlace"; // WKH-358/AC-8 agregó el último EN ESTA LÍNEA y ANTES de este comentario, por lo mismo. WKH-349: EN ESTA LÍNEA, no en una nueva — `:25`, `:29`, `:30`, `:206`, `:253`, `:327`, `:329` y `:1137` de este archivo los cita otro por número y están TODOS debajo de acá
 import type { RemittanceState, RemittanceStatus } from "../domain/remittance";
 import {
   PRINCIPAL_SETTLED_REFUND_MANUAL,
@@ -7,7 +7,7 @@ import {
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds"; import { laBilleteraFueTocada, mwaHumanError } from "./solana/wallet-error-code"; // WKH-339/CR: EN ESTA LÍNEA, no en una nueva — `:25`, `:29`, `:30`, `:206` y `:253` de este archivo los cita otro por número
 import {
   ESCROW_DEPOSIT_RENT_LAMPORTS,
-  SENDER_MIN_LAMPORTS_FOR_DEPOSIT,
+  SENDER_MIN_LAMPORTS_FOR_DEPOSIT, SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT, // WKH-358/AC-7: EN ESTA LÍNEA, no en una nueva (50 citas ancladas debajo)
   formatLamportsAsSol,
   formatLamportsAsSolFloor,
 } from "../application/solana-escrow-rent";
@@ -569,7 +569,7 @@ export function shortErrorCode(raw: string): string | undefined {
 }
 
 /** Traduce un código de error interno a copy humano para la UI. */
-export function humanError(code: string): string {
+export function humanError(code: string): string { const porEnlace = copyDeEnlace(code); if (porEnlace !== null) return porEnlace; // WKH-358/AC-8/DT-8 — EN ESTA LÍNEA (Δ0: el primer `if` de abajo es `:573` y una línea acá rompe 24 citas ancladas) y PRIMERO, antes de la cadena de `includes`. Es un lookup EXACTO, así que no puede robarle un código a nadie; lo que sí puede pasar al revés es que un needle nuevo de abajo sea subcadena de una de las once y se las robe en silencio. Medido: hoy ninguna de las once contiene ninguno de los needles actuales, o sea que HOY no hay colisión — pero el orden de una cadena de `includes` es una propiedad frágil y esto la fija. Lo mide `T-065-COPY-4`
   if (code.includes("quote_expired") || code.includes("QUOTE_STALE"))
     return "La tasa cambió. Revisá el nuevo monto.";
   // 🔴 ACÁ VIVÍAN DOS RAMAS `fx_*` Y SE FUERON EN WKH-332/W4 (AC-5), con la regresión declarada.
@@ -1375,3 +1375,80 @@ export function historyGroupFor(o: EscrowOutcome): HistoryGroup {
   // el desenlace en (`escrowOutcome`, `:1194`): el lado seguro, el que no afirma nada sobre fondos.
   return GRUPO_POR_DESENLACE[o] ?? "sin-respuesta";
 }
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-358/AC-8 · EL COPY DE LAS ONCE CAUSAS DEL RECORRIDO POR ENLACE
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 POR QUÉ ESTO NO ES UNA RAMA MÁS DE `humanError`. Esa función es una cadena de `includes`, y hasta
+// esta HU las once causas caían todas en su default: la persona leía "Algo salió mal. Intentá de
+// nuevo." para "cancelaste en tu billetera" y para "no pudimos preguntarle a la red". Son diagnósticos
+// distintos con acciones distintas, y colapsarlos hace que una persona reintente contra un muro.
+//
+// ⛔ ES UN LOOKUP EXACTO Y CORRE **PRIMERO**, antes de la cadena de `includes` (DT-8). Medido: hoy
+// ninguna de las once contiene ninguno de los needles actuales, o sea que HOY no hay colisión — pero
+// el orden de una cadena de `includes` es una propiedad frágil, y un needle nuevo que sea subcadena de
+// una de estas once se las robaría en silencio. Lo mide `T-065-COPY-4`, moviendo el lookup al final.
+//
+// ⛔ NINGUNO DE LOS ONCE AFIRMA QUE SE MOVIÓ PLATA, y no es una preferencia de tono: las once cortan
+// ANTES del broadcast del depósito. Decir "se debitó" ahí sería falso y mandaría a la persona a buscar
+// plata donde no hay ninguna. Lo mide `T-065-COPY-3`. ⛔ Y SIN EM DASHES (CD-16).
+//
+// ⚠️ LOS TRES PARES QUE EL CANDADO NOMBRA TIENEN QUE SER TEXTOS DISTINTOS ENTRE SÍ: `rechazado` es un
+// gesto de la persona, `respuesta_ilegible` es un fallo NUESTRO, y `blockhash_desconocido` es "no
+// llegamos a preguntar". Lo mide `T-065-COPY-2`.
+//
+// 🔴 EL TIPO ES `CausaDeEnlaceEnPantalla` Y NO `CausaDeEnlace`, y ésa es la mitad que `tsc` no ve sola:
+// `CausaDeEnlace` lista NUEVE y le faltan las dos que tira el adaptador, así que un `Record` sobre ese
+// tipo compilaría dejando `deeplink_nonce_ausente` y `deeplink_saldo_insuficiente` sin copy. El
+// razonamiento entero está en el docblock de ese tipo.
+const COPY_DE_ENLACE: Record<CausaDeEnlaceEnPantalla, string> = {
+  // El `prepare` de esta invocación no coincide con el del intento anclado. Fail-closed y sin salida
+  // automática: lo honesto es que empiece de nuevo.
+  deeplink_prepare_diverged:
+    "Los datos de este envío cambiaron mientras autorizabas. No se pidió ninguna firma. Empezá el envío de nuevo.",
+  // El viaje guardado no es de la cuenta que está operando.
+  deeplink_sender_mismatch:
+    "La cuenta con la que volviste no es la que empezó este envío. No se pidió ninguna firma. Conectá la cuenta con la que empezaste.",
+  // La cadena CONTESTÓ que el blockhash murió: esa transacción no entra nunca más.
+  deeplink_blockhash_expired:
+    "Pasó demasiado tiempo y la red ya no acepta esa transacción. No se envió nada. Volvé a intentarlo.",
+  // ⛔ NO es "venció": es que NO llegamos a preguntar. La distinción es todo el punto de esta causa.
+  deeplink_blockhash_desconocido:
+    "No pudimos preguntarle a la red cómo quedó tu transacción. Esto no es una respuesta sobre tu envío: no llegamos a preguntar. Esperá unos segundos y volvé a mirar.",
+  // El corte fail-closed que trae de vuelta a la oferta de crear la cuenta.
+  deeplink_nonce_ausente:
+    "Todavía te falta la cuenta que Solana necesita para pagar desde tu billetera. No se pidió ninguna firma. Creala y seguí desde ahí.",
+  // La cifra NO se escribe acá: se deriva de la constante, igual que en la tarjeta del nonce.
+  deeplink_saldo_insuficiente: `Te falta SOL en tu billetera para cubrir esta operación. Necesitás al menos ${formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT)} SOL. No se pidió ninguna firma.`,
+  // La transacción que volvió NO es la que mandamos a firmar. Es lo más grave de la lista.
+  deeplink_tx_alterada:
+    "Lo que volvió de tu billetera no es lo que te mandamos a firmar, así que lo frenamos. No se envió nada. Empezá el envío de nuevo.",
+  // Este navegador no puede recordar el viaje: sin disco no hay forma de reconocer la vuelta.
+  deeplink_sin_memoria:
+    "Este navegador no puede guardar los datos del envío, así que no podríamos reconocer la respuesta de tu billetera. Probá sin modo privado, o desde otro navegador.",
+  // 🔴 UN GESTO DE LA PERSONA. ⛔ Y este texto NO se puede parecer a los dos de abajo.
+  deeplink_rechazado:
+    "Cancelaste en tu billetera, así que no se firmó nada. Podés volver a intentarlo cuando quieras.",
+  // 🔴 UN FALLO NUESTRO. ⛔ Y no dice "cancelaste": no sabemos si la persona canceló.
+  deeplink_respuesta_ilegible:
+    "No pudimos leer la respuesta de tu billetera, y eso es un problema nuestro y no tuyo. No se firmó nada. Volvé a intentarlo.",
+  // La ventana del viaje se agotó, o el viaje ya no está.
+  deeplink_viaje_vencido:
+    "Pasó demasiado tiempo desde que empezaste y este intento ya no sirve. No se firmó nada. Empezá el envío de nuevo.",
+};
+
+/**
+ * El copy de una causa del recorrido por enlace, o `null` si el código no es una de las once.
+ *
+ * ⚠️ `null` Y NO UN DEFAULT: quien llama es `humanError`, y si esto contestara una frase genérica se
+ * comería todos los demás códigos del sistema. El default sigue siendo el de allá, uno solo.
+ */
+export function copyDeEnlace(code: string): string | null {
+  return Object.hasOwn(COPY_DE_ENLACE, code)
+    ? COPY_DE_ENLACE[code as CausaDeEnlaceEnPantalla]
+    : null;
+}
+
+/** Sólo para los tests: las once claves, derivadas del `Record` y no escritas a mano. */
+export const CAUSAS_CON_COPY = Object.keys(COPY_DE_ENLACE);

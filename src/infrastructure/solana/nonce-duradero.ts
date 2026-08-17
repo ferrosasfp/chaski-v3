@@ -88,7 +88,7 @@ export const NONCE_ADVANCE_ACCOUNT_INDEX = {
  * La distinción que importa es la tercera contra la segunda: "la cuenta no está" es un HECHO sobre la
  * cadena, y "no pudimos preguntar" es un hecho sobre NOSOTROS. Colapsarlos es convertir "no pude
  * preguntar" en "no pasó", que es el error que este repo tiene catalogado
- * (`DEEPLINK_BLOCKHASH_DESCONOCIDO`, `deeplink/firma-por-enlace.ts:124`) y que cuesta borrarle a una
+ * (`DEEPLINK_BLOCKHASH_DESCONOCIDO`, `deeplink/firma-por-enlace.ts:132`) y que cuesta borrarle a una
  * persona dos firmas que estaban perfectas.
  */
 export type LecturaDelNonce =

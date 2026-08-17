@@ -30,6 +30,7 @@
 //   2. No dice NADA sobre desde dónde se llama la única llamada que quedó: que esté en el motor y no
 //      en un render lo fija el `expect` sobre la ruta, que es parte de este mismo `it`.
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { humanError } from "../../../presentation/flow-vm";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -128,58 +129,191 @@ describe("T-062-10 · CD-8: `interpretarVuelta` tiene EXACTAMENTE DOS llamadores
 });
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
-// AR/BLQ-BAJO-2 — las causas de enlace NO tienen copy, y eso está declarado EN EL CÓDIGO
+// WKH-358/AC-8 — LAS ONCE CAUSAS TIENEN COPY PROPIO (candado INVERTIDO, CD-14)
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 //
-// 🔴 QUÉ MIDE ESTE CANDADO Y POR QUÉ ES AL REVÉS DE LO QUE PARECE. El AR midió que
-// `grep -rn "deeplink_" src/presentation` da CERO, o sea que las causas de enlace caen todas en el
-// default de `humanError` y la persona lee la misma frase para "cancelaste" y para "se venció el
-// blockhash". El docblock del motor afirmaba lo contrario ("la presentación las traduce") y esa
-// afirmación era FALSA.
+// 🔴 QUÉ DECÍA ESTE CANDADO HASTA LA OLA 3 Y POR QUÉ CAMBIÓ DE SIGNO. Decía que **ninguna** causa de
+// enlace tenía copy, y era verdad: el AR midió que `grep -rn "deeplink_" src/presentation` daba CERO,
+// o sea que las once caían en el default de `humanError` y la persona leía la misma frase para
+// "cancelaste" y para "no pudimos preguntarle a la red". El motivo de no escribirlo entonces era
+// mecánico y está escrito en el commit de esa ola: el colaborador de enlace no estaba cableado, así
+// que ninguna causa tenía camino de producción, y un copy para un error que nadie puede provocar es
+// código muerto de money-path.
 //
-// La decisión de esta HU fue corregir la afirmación y NO escribir el copy, con un motivo mecánico: el
-// colaborador de enlace no está cableado (CD-13), así que ninguna de estas causas tiene camino de
-// producción, y un copy para un error que nadie puede provocar es código muerto de money-path — la
-// misma razón por la que el efecto de vuelta quedó fuera de scope. El copy es de la ola 4.
+// La ola 4 cableó ese camino. El candado se **INVIERTE** —no se borra, no se `skip`ea— y pasa a exigir
+// lo contrario, con el mismo mecanismo: las causas se DERIVAN del módulo con un regex, nunca de una
+// lista escrita a mano.
 //
-// Este `it` es lo que hace que esa decisión no envejezca sola: el día que alguien escriba el primer
-// copy, se pone ROJO y obliga a reescribir el docblock del motor en el mismo commit.
-// MUTANTE QUE MATA (MEDIDO: exit=1, 3 `it` rojos — éste más dos candados de citas que el mutante
-// desplaza de refilón): agregar un `case DEEPLINK_RECHAZADO:` (o cualquier `"deeplink_"`) en
-// `src/presentation/flow-vm.ts` ⇒ rojo, nombrando el archivo.
-describe("AR/BLQ-BAJO-2 · las causas de enlace y la pantalla", () => {
+// 🔴 Y POR QUÉ ESTA CAPA EXISTE ADEMÁS DEL `Record` TIPADO, que es la pregunta que se hace un review:
+// el `Record` está tipado sobre `CausaDeEnlaceEnPantalla`, que es una unión escrita A MANO. `tsc`
+// garantiza que no falte ninguna de las que ESE TIPO nombra, y nada más. Una DOCEAVA causa exportada
+// mañana en el motor no entra sola a ese tipo, así que el compilador la deja pasar en silencio. Este
+// candado deriva las causas del ARCHIVO y es el único que la ve.
+// MUTANTE QUE MATA: agregar `export const DEEPLINK_XXX = "deeplink_xxx";` en `firma-por-enlace.ts`
+// SIN agregarla al `Record` ⇒ rojo acá y verde en `tsc`, que es exactamente lo que este candado existe
+// para probar. (MEDIDO en la batería de §9.)
+describe("T-065-COPY-1 · las once causas de enlace tienen copy propio", () => {
   const MOTOR = path.resolve(ROOT, "src/infrastructure/solana/deeplink/firma-por-enlace.ts");
-  /** Las causas se DERIVAN del módulo, no se listan a mano: una lista a mano no ve la novena. */
-  const CAUSAS = [...readFileSync(MOTOR, "utf8").matchAll(/^export const (DEEPLINK_\w+) = "(\w+)";$/gm)].map(
+  const ADAPTADOR = path.resolve(ROOT, "src/infrastructure/solana-wallet.ts");
+  /** Las causas se DERIVAN del módulo, no se listan a mano: una lista a mano no ve la que falta. */
+  const DEL_MOTOR = [...readFileSync(MOTOR, "utf8").matchAll(/^export const (DEEPLINK_\w+) = "(\w+)";$/gm)].map(
     (m) => m[2] as string,
   );
+  /** 🔴 LAS DOS DEL ADAPTADOR, que NO están en `CausaDeEnlace` y son las que un `switch` exhaustivo
+   *  deja pasar sin que `tsc` diga nada. Se derivan del archivo con la misma disciplina. */
+  const DEL_ADAPTADOR = [
+    ...new Set(
+      [...readFileSync(ADAPTADOR, "utf8").matchAll(/throw new Error\("(deeplink_\w+)"\)/g)].map(
+        (m) => m[1] as string,
+      ),
+    ),
+  ];
+  const CAUSAS = [...new Set([...DEL_MOTOR, ...DEL_ADAPTADOR])];
   const PRESENTACION = ARCHIVOS.filter((abs) =>
     path.relative(ROOT, abs).startsWith("src/presentation"),
   );
 
-  // Refutación: sin esto, un regex que dejara de matchear pondría el `it` de abajo en verde sobre una
+  // Refutación: sin esto, un regex que dejara de matchear pondría los `it` de abajo en verde sobre una
   // lista vacía, que es exactamente cómo un candado deja de existir sin que nadie lo note.
-  it("las causas se derivaron de verdad del módulo", () => {
-    expect(CAUSAS.length, "el barrido no encontró NINGUNA causa exportada: no está midiendo nada").toBeGreaterThanOrEqual(
-      8,
-    );
+  it("las causas se derivaron de verdad, de los DOS archivos", () => {
+    expect(DEL_MOTOR.length, "el barrido del motor no encontró NINGUNA causa exportada").toBeGreaterThanOrEqual(8);
+    expect(
+      DEL_ADAPTADOR,
+      "el barrido del adaptador no encontró las dos causas que `CausaDeEnlace` NO nombra",
+    ).toEqual(expect.arrayContaining(["deeplink_nonce_ausente", "deeplink_saldo_insuficiente"]));
     expect(CAUSAS).toContain("deeplink_rechazado");
     expect(PRESENTACION.length).toBeGreaterThan(10);
   });
 
-  it("HOY ninguna causa de enlace tiene copy, y el docblock del motor lo dice así", () => {
-    const conCopy = PRESENTACION.filter((abs) => {
-      const txt = readFileSync(abs, "utf8");
-      return CAUSAS.some((c) => txt.includes(c));
-    }).map((abs) => path.relative(ROOT, abs));
+  it("TODAS las causas derivadas tienen copy en `src/presentation`", () => {
+    const sinCopy = CAUSAS.filter(
+      (c) => !PRESENTACION.some((abs) => readFileSync(abs, "utf8").includes(c)),
+    );
     expect(
-      conCopy,
-      "alguien escribió copy para una causa de enlace. Es una buena noticia y rompe este candado a " +
-        "propósito: hay que (1) actualizar el docblock de `firma-por-enlace.ts`, que hoy declara que la " +
-        "pantalla NO las traduce, y (2) revisar que el copy distinga `deeplink_rechazado` " +
-        "('cancelaste') de `deeplink_respuesta_ilegible` (un fallo NUESTRO) y de " +
-        "`deeplink_blockhash_desconocido` ('no pudimos preguntar'), que es el trabajo fino que esta HU " +
-        "dejó hecho del lado del motor.",
+      sinCopy,
+      "estas causas del enlace llegan a la pantalla y caen en el default de `humanError`, o sea que " +
+        "la persona lee la misma frase para 'cancelaste' que para 'no pudimos preguntarle a la red'. " +
+        "El copy va en el `Record` de `flow-vm.ts`, y su clave tiene que estar en " +
+        "`CausaDeEnlaceEnPantalla` para que `tsc` lo exija.",
     ).toEqual([]);
+  });
+
+  // 🔴 EL TRABAJO FINO QUE LA OLA 3 DEJÓ HECHO DEL LADO DEL MOTOR, VERIFICADO DEL LADO DEL COPY: los
+  // tres son diagnósticos distintos con acciones distintas, y colapsarlos hace que una persona
+  // reintente contra un muro. Que TENGAN copy no alcanza: tienen que ser textos DISTINTOS ENTRE SÍ.
+  // MUTANTE QUE MATA: colapsar dos de los tres al mismo texto en el `Record`. (MEDIDO en §9.)
+  it("T-065-COPY-2: los tres pares del mensaje son textos DISTINTOS entre sí", () => {
+    const TRES = ["deeplink_rechazado", "deeplink_respuesta_ilegible", "deeplink_blockhash_desconocido"];
+    const textos = TRES.map((c) => humanError(c));
+    for (const [i, t] of textos.entries()) {
+      expect(t, `\`${TRES[i]}\` cae en el default de \`humanError\``).not.toBe(
+        "Algo salió mal. Intentá de nuevo.",
+      );
+    }
+    expect(
+      new Set(textos).size,
+      "dos de los tres dicen lo mismo: 'cancelaste' (un gesto de la persona), 'no pudimos leer la " +
+        "respuesta' (un fallo NUESTRO) y 'no llegamos a preguntar' piden acciones distintas",
+    ).toBe(3);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// T-065-6 (AC-2) y T-065-CD11b (DT-2) — las afirmaciones que esta HU volvió falsas, y su reescritura
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ CLASE DE DEFECTO CIERRAN ESTOS DOS `it`, y no es "documentación desactualizada". Los dos
+// vigilan frases que eran CIERTAS cuando se escribieron y que un cambio de código de OTRA wave volvió
+// falsas sin tocarlas. Ningún barrido del diff las caza, porque en el diff no aparecen.
+//
+// ⚠️ LO QUE ESTOS DOS BARRIDOS **NO** PUEDEN HACER, dicho antes de que alguien se apoye en su verde:
+// no prohíben la frase vieja, porque las reescrituras la CITAN a propósito (decir "esto decía X y X es
+// falso" es la mitad del valor de la reescritura). Lo que exigen es que el texto nuevo esté: si
+// alguien REEMPLAZA la reescritura por la frase vieja, los marcadores desaparecen y esto se pone rojo.
+// Si alguien la AGREGA sin borrar nada, no lo ven. Es un techo real y va escrito.
+describe("T-065-6 / T-065-CD11b · las afirmaciones reescritas", () => {
+  const MOTOR = path.resolve(ROOT, "src/infrastructure/solana/deeplink/firma-por-enlace.ts");
+  const ADAPTADOR = path.resolve(ROOT, "src/infrastructure/solana-wallet.ts");
+
+  /** El bloque que arranca en `desde` y termina en `hasta`, con su refutación de que existe. */
+  function bloque(archivo: string, desde: string, hasta: string): string {
+    const txt = readFileSync(archivo, "utf8");
+    const a = txt.indexOf(desde);
+    expect(a, `no se encontró el ancla «${desde}» en ${path.basename(archivo)}`).toBeGreaterThan(0);
+    const b = txt.indexOf(hasta, a);
+    expect(b, `no se encontró el cierre «${hasta}» en ${path.basename(archivo)}`).toBeGreaterThan(a);
+    return txt.slice(a, b);
+  }
+
+  // MUTANTE QUE MATA: restaurar la frase vieja («El día que la ola 4 escriba el connect por enlace,
+  // esta rama pasa a ser alcanzable de verdad y ahí necesita su `it`.») EN LUGAR de la reescritura.
+  // (MEDIDO en la batería de §9.)
+  it("T-065-6: el docblock del `case \"conectado\"` del motor ya NO promete que la rama se vuelve alcanzable", () => {
+    const b = bloque(MOTOR, 'case "conectado":', 'case "tx-firmada":');
+    // La razón MEDIDA tiene que estar, y son las tres mitades del argumento de AC-2.
+    expect(b, "el docblock dejó de decir que la rama SIGUE inalcanzable").toContain("SIGUE inalcanzable");
+    expect(b, "el docblock no dice quién procesa la vuelta del connect").toContain("conexion.ts");
+    expect(b, "el docblock no dice por qué los dos extremos no se pisan (el KYC)").toContain("KYC");
+    // Refutación del instrumento: el bloque que se está mirando es el que se cree.
+    expect(b, "el corte se llevó el cuerpo de la rama").toContain("cortar(DEEPLINK_VIAJE_VENCIDO)");
+    expect(b.length).toBeGreaterThan(500);
+  });
+
+  // MUTANTE QUE MATA — TRES SITIOS, TRES CORRIDAS: restaurar la frase vieja («NUNCA sale del canal del
+  // enlace», sin calificar el camino) en cualquiera de los tres, en lugar de la reescritura.
+  // (MEDIDO en la batería de §9, con el conteo de cada uno.)
+  it("T-065-CD11b: los TRES sitios de CD-11 califican el camino, y ninguno se borró", () => {
+    const sitios: ReadonlyArray<{ nombre: string; texto: string }> = [
+      {
+        nombre: "firma-por-enlace.ts · docblock de `PedidoDeFirma.sender`",
+        texto: bloque(MOTOR, "  sender: string;", "  /** El `beneficiary` del `prepare()`"),
+      },
+      {
+        nombre: "firma-por-enlace.ts · la justificación del guard",
+        texto: bloque(MOTOR, "── 2 · CD-11 / T12", "const lectura = leerViaje("),
+      },
+      {
+        nombre: "solana-wallet.ts · el bloque de CD-11 del adaptador",
+        texto: bloque(ADAPTADOR, "CD-11, REESCRITO EN WKH-358", "const senderCanonico"),
+      },
+    ];
+    // ⚠️ EL BLOQUE DEL `sender` SE MIDE HACIA ARRIBA: su docblock está ANTES de la firma. Se recorta al
+    // revés y por eso el ancla de arranque es el campo, no el comentario.
+    const delSender = readFileSync(MOTOR, "utf8");
+    const finSender = delSender.indexOf("  sender: string;");
+    const iniSender = delSender.lastIndexOf("  /**", finSender);
+    const textoSender = delSender.slice(iniSender, finSender);
+
+    const aRevisar = [{ nombre: sitios[0]?.nombre as string, texto: textoSender }, ...sitios.slice(1)];
+
+    for (const s of aRevisar) {
+      // (1) el sitio NO se borró: sigue habiendo texto ahí.
+      expect(s.texto.length, `${s.nombre}: el bloque de CD-11 desapareció`).toBeGreaterThan(300);
+      // (2) y CALIFICA EL CAMINO. Un solo texto para dos caminos era lo que volvía falsa la frase.
+      expect(
+        /camino inyectado/i.test(s.texto),
+        `${s.nombre}: no nombra el camino INYECTADO, donde el \`sender\` sí sale de fuera del canal`,
+      ).toBe(true);
+      expect(
+        /camino por enlace/i.test(s.texto),
+        `${s.nombre}: no nombra el camino POR ENLACE, donde las dos mitades salen del mismo disco`,
+      ).toBe(true);
+      expect(
+        /coherencia interna/i.test(s.texto),
+        `${s.nombre}: no dice que en el camino por enlace el guard es COHERENCIA y no una defensa`,
+      ).toBe(true);
+    }
+    // (3) y los dos que hablan del reemplazo nombran DÓNDE está el corte que sí lo es.
+    for (const s of aRevisar.slice(1)) {
+      expect(
+        s.texto.includes("ownerAddress"),
+        `${s.nombre}: no dice dónde está el corte que SÍ es una defensa (el cruce contra \`ownerAddress\`)`,
+      ).toBe(true);
+    }
+    // (4) y el residual va escrito y sin suavizar en el sitio que lo desarrolla.
+    expect(
+      aRevisar[1]?.texto,
+      "el residual de `ownerAddress == null` dejó de estar escrito: es la mitad que un review echa de menos",
+    ).toContain("ownerAddress == null");
   });
 });

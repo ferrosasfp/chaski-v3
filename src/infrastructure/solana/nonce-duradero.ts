@@ -14,7 +14,7 @@
 // —ningún escrow, ningún USDC, ninguna orden de payout— y si el blockhash vence, el reintento pide
 // uno nuevo y no cuesta más que un toque. En el salto del depósito, vencer significa
 // `PRINCIPAL_STATE_UNKNOWN` y una pantalla que dice "no sabemos si te cobramos"
-// (`solana-wallet.ts:908-914`).
+// (`PRINCIPAL_STATE_UNKNOWN`, `solana-wallet.ts:1017`).
 //
 // ⛔ LO QUE ACÁ NO SE GUARDA NUNCA: ninguna clave privada, igual que en `deeplink/preparado.ts:8-10`.
 // La dirección de la cuenta se DERIVA de la pubkey del remitente y de una semilla fija, así que
@@ -88,8 +88,8 @@ export const NONCE_ADVANCE_ACCOUNT_INDEX = {
  * La distinción que importa es la tercera contra la segunda: "la cuenta no está" es un HECHO sobre la
  * cadena, y "no pudimos preguntar" es un hecho sobre NOSOTROS. Colapsarlos es convertir "no pude
  * preguntar" en "no pasó", que es el error que este repo tiene catalogado
- * (`deeplink/firma-por-enlace.ts:96-104`) y que cuesta borrarle a una persona dos firmas que estaban
- * perfectas.
+ * (`DEEPLINK_BLOCKHASH_DESCONOCIDO`, `deeplink/firma-por-enlace.ts:124`) y que cuesta borrarle a una
+ * persona dos firmas que estaban perfectas.
  */
 export type LecturaDelNonce =
   | { readonly tipo: "hay"; readonly valor: string } // base58 del blockhash guardado

@@ -296,3 +296,44 @@ describe("T-N5 — la tx que CREARÍA la cuenta tiene UN solo firmante (AC-2 / C
     expect(firmantes(tx).size).toBe(2);
   });
 });
+
+describe("⛔ T-N7 (AR MNR-4) — DT-7: la promesa de pureza del módulo, en ejecutable", () => {
+  // 🔴 POR QUÉ EXISTE. El docblock del módulo declara "este módulo NO lee `window`, `Date`, `fetch`
+  // ni `process.env`. La conexión y el techo de tiempo entran por parámetro". Era CIERTA y no tenía
+  // ni un control: una frase que termina en una prohibición, en un módulo del money-path, y la
+  // primera línea que la violara no iba a poner nada rojo. En este repo eso ya está catalogado.
+  //
+  // Se barre el FUENTE y no el comportamiento a propósito: un `vi.stubGlobal` mediría la llamada de
+  // un camino concreto, mientras que lo que la promesa afirma es del ARCHIVO ENTERO, ramas no
+  // ejercitadas incluidas. Y se compara sobre el texto sin comentarios: el docblock nombra los
+  // cuatro identificadores para prohibirlos, así que un barrido crudo se caza a sí mismo — el
+  // guard mirándose al espejo.
+  const PROHIBIDOS = ["window", "Date", "fetch", "process.env"] as const;
+
+  function fuenteSinComentarios(): string {
+    const { readFileSync } = require("node:fs") as typeof import("node:fs");
+    const path = require("node:path") as typeof import("node:path");
+    const crudo = readFileSync(path.join(__dirname, "nonce-duradero.ts"), "utf8");
+    return crudo
+      .replace(/\/\*[\s\S]*?\*\//g, "") // docblocks
+      .replace(/(^|[^:])\/\/.*$/gm, "$1"); // comentarios de línea (sin comerse `https://`)
+  }
+
+  it("el módulo no nombra `window`, `Date`, `fetch` ni `process.env` fuera de los comentarios", () => {
+    const codigo = fuenteSinComentarios();
+    const encontrados = PROHIBIDOS.filter((id) => new RegExp(`\\b${id.replace(".", "\\.")}\\b`).test(codigo));
+    expect(encontrados).toEqual([]);
+  });
+
+  it("el barrido SÍ los encontraría (control del instrumento, no del módulo)", () => {
+    // Sin esto, el `toEqual([])` de arriba pasaría igual si el regex estuviera roto o el archivo
+    // llegara vacío: dos formas de verde que no hablan del módulo. Se mide sobre un fuente
+    // FABRICADO acá, con los cuatro identificadores en código real.
+    const falso = `const a = window.x; const b = new Date(); await fetch("/y"); const c = process.env.Z;`;
+    const encontrados = PROHIBIDOS.filter((id) => new RegExp(`\\b${id.replace(".", "\\.")}\\b`).test(falso));
+    expect(encontrados).toEqual([...PROHIBIDOS]);
+    // Y que el fuente real no llegue vacío por un path equivocado.
+    expect(fuenteSinComentarios().length).toBeGreaterThan(500);
+    expect(fuenteSinComentarios()).toContain("export function construirNonceAdvance");
+  });
+});

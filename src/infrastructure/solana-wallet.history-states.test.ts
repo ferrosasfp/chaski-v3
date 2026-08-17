@@ -511,7 +511,7 @@ describe("readEscrowStates ⇄ refundEscrow — el acople de AC-13, con las dos 
   }
 
   // MUTANTE que mata (el que el AR aplicó y sobrevivió a la suite entera): `nowSec <= deadlineSec` en
-  // el guard del refund (`solana-wallet.ts:1258`). Con él, esta línea se pone roja por
+  // el guard del refund (`refund_before_deadline`, `solana-wallet.ts:1387`). Con él, esta línea va roja por
   // "refund_before_deadline" mientras el assert de arriba sigue diciendo `window-closed`, que es
   // EXACTAMENTE el desacuerdo que AC-13 prohíbe.
   it("T-A16a: en el borde exacto, el historial dice 'window-closed' y el refund NO rechaza por deadline", async () => {

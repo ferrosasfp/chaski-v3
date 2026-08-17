@@ -964,8 +964,8 @@ export class SolanaWalletAdapter
       // ── DT-10 · BYTES CONTRA BYTES ───────────────────────────────────────────────────────────────
       // ⛔ NO se compara contra una tx RECONSTRUIDA: la `reference` es un `Keypair.generate()` nuevo
       // en cada llamada (`:625`), el `deadline` sale del reloj (`:592-594`) y el blockhash cambia
-      // (`:756`). Una reconstrucción no coincidiría JAMÁS y el chequeo se volvería un "siempre falla"
-      // que alguien terminaría borrando. Se compara contra el mensaje que quedó ANCLADO.
+      // (`getLatestBlockhash`, `:830`). Una reconstrucción no coincidiría JAMÁS y el chequeo se
+      // volvería un "siempre falla" que alguien borraría. Se compara contra el mensaje ANCLADO.
       //
       // 🔴 EL ANCLA LA TRAE EL DESENLACE, y antes acá había un SEGUNDO `leerPreparado` con OTRO
       // `Date.now()` (MNR-CR-6). Con dos lecturas del mismo registro la responsabilidad quedaba
@@ -1013,7 +1013,7 @@ export class SolanaWalletAdapter
       // 🔴 SIN ESTO, EL MODO DE FALLA POR DEFAULT ES EL PEOR QUE ESTE REPO TIENE CATALOGADO:
       //   blockhash vencido → `solana_settle_broadcast_failed` → NO está en
       //   SETTLE_REASONS_BEFORE_BROADCAST → `failAfterBroadcast` le pregunta a la cadena → la cuenta
-      //   no existe → `probeDeposit` contesta "unknown" POR DISEÑO (`:1115-1118`) →
+      //   no existe → `probeDeposit` contesta "unknown" POR DISEÑO (`probeDeposit`, `:1254`) →
       //   PRINCIPAL_STATE_UNKNOWN → la pantalla dice "no sabemos si te cobramos" sobre algo que SÍ
       //   sabemos: no salió nada, porque nunca hubo POST al settle.
       // Con esto, "no se movió nada" pasa a ser un HECHO en vez de una incógnita.
@@ -2214,7 +2214,7 @@ export class SolanaWalletAdapter
  * WKH-353 — el resultado de preguntarle a la cadena por una firma, con TRES desenlaces y no dos.
  *
  * ⚠️ NADA MECÁNICO PROTEGE LA DISTINCIÓN ENTRE `expired` Y `unseen`: este párrafo es lo único que hay.
- * Los tres consumos del veredicto preguntan `verdict.kind`, `:1469` (y `:1341`, `:1650`) por
+ * Los tres consumos preguntan (`verdict.kind`, `:1469`) (y (`verdict.kind`, `:1470`), (`CloseTxReverted`, `:1779`)) por
  * `"landed"`, así que los otros dos caen por el `else` implícito y ninguna rama los nombra; `unseen`
  * además no lo construye NADIE (lo produce el `withTimeout`, `:150` del llamador al acabarse la
  * espera, y llega al `catch` como la excepción "confirm_timeout"). MEDIDO borrando el miembro

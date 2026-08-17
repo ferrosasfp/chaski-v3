@@ -255,7 +255,7 @@ describe("el alquiler que `close` devuelve sale de la misma derivación que el u
   //
   // ⚠️ Y NO SE LE AGREGÓ UNA ASERCIÓN ARITMÉTICA, a propósito. Cualquier `expect` sobre el VALOR de
   // `ESCROW_DEPOSIT_RENT_LAMPORTS` acá sería una tercera copia del pin que ya hacen los dos `it` de
-  // arriba (`:102-107` y `:112-114`): no existe un input que la ponga roja dejando esos dos en verde.
+  // arriba ((`ESCROW_DEPOSIT_RENT_LAMPORTS`, `:224`) y (`MEASURED_FIRST_DEPOSIT_LAMPORTS`, `:234`)).
   // Repetir un pin con otra redacción no agrega cobertura, agrega la ilusión de tenerla.
   it("la ix `close` declara `escrow_index` OPCIONAL: se puede cerrar sin esa cuenta", () => {
     const idl = escrowIdl as unknown as {
@@ -370,7 +370,7 @@ describe("el umbral del camino por enlace profundo (durable nonce)", () => {
   });
 
   it("los DOS `75_000` del archivo son el mismo valor (candado contra la deriva silenciosa)", () => {
-    // `REFUND_FEE_ALLOWANCE_LAMPORTS` (`:181`) lleva `5_000 + 75_000` como literales y NO se puede
+    // (`REFUND_FEE_ALLOWANCE_LAMPORTS`, `solana-escrow-rent.ts:181`) lleva `5_000 + 75_000` literales y NO se puede
     // reescribir para usar las constantes (se declara antes que ellas). Este assert es lo único que
     // impide que los dos 75.000 se separen sin que nada se ponga rojo.
     expect(WALLET_TIP_ALLOWANCE_LAMPORTS_FOR_TESTS).toBe(75_000);

@@ -1641,8 +1641,12 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
     // 🔴 EL `catch` DE `canonicalizeAddress` NO ERA "UN SITIO SIN TEST": ERA INALCANZABLE (MNR-CR-2, con
     // una divergencia medida y reportada). Una dirección que no parsea NO llega a la rama de enlace, y
     // no por uno sino por DOS guards que corren antes: `getConnectedAddress` hace `new
-    // PublicKey(publicKey)` y devuelve `null` si tira (`:256-259`) ⇒ `wallet_not_connected` (`:561`); y
-    // si aun así pasara, `new PublicKey(sender)` (`:573`) tira ~200 líneas antes de la rama. Los dos con
+    // PublicKey(publicKey)` y devuelve `null` si tira ((`PublicKey`, `solana-wallet.ts:256`)) ⇒
+    // `wallet_not_connected` ((`wallet_not_connected`, `solana-wallet.ts:561`)); y si aun así pasara,
+    // `new PublicKey(sender)` ((`PublicKey`, `solana-wallet.ts:573`)) tira ~200 líneas antes de la
+    // rama. ⚠️ Las tres citas eran correctas pero DESNUDAS (`:256-259`, `:561`, `:573` sin el archivo),
+    // o sea que se leían como si apuntaran a ESTE test y el candado no las miraba. Ancladas en el
+    // fix-pack del AR: apuntan a producción y ahora `citas-ancladas.test.ts` las verifica. Los dos con
     // exactamente los mismos inputs que `canonicalizeAddress`, que ES esa misma llamada adentro.
     // Por eso la rama se BORRÓ en vez de recibir un test: un test sobre una rama inalcanzable congela una
     // fantasía, y este repo ya lo decidió así (`sesion.ts`, docblock de `LecturaDelViaje`).

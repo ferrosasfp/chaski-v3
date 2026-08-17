@@ -75,7 +75,7 @@ import {
 } from "./flow-vm";
 import { cn } from "./cn";
 import { phantomBrowseUrl, useWalletAvailability, useConnectedWalletAddress, mwaEnabled, useMwaOffered } from "./wallet-availability"; // el aviso de "acá no hay wallet" (NoWalletHere) · WKH-354/AC-6: `useConnectedWalletAddress` para el banner (CuentaCambiada) · WKH-MWA: los dos últimos, EN ESTA MISMA LÍNEA (85 citas `flow.tsx:NNNN` cuelgan de que este archivo no cambie de largo)
-import { Aviso, Button, Card, ChaskiMark, Field, Money, Muted, Pill, Row, Stepper, TextInput } from "./ui"; import { BarraDestinos, type Destino, VolverAlInicio, esDestino } from "./barra-destinos"; import { Bienvenida } from "./bienvenida"; import { DestinoRecuperar } from "./recuperar"; // ola 2: los nombres nuevos entran EN ESTA LÍNEA, no en una nueva. Este archivo recibe 83 citas por número (48 ancladas + 35 sueltas, medido en 4c24324) y una sola línea de import de más las corre TODAS · WKH-063: los TRES imports nuevos entran acá por lo mismo (Δ0 líneas)
+import { Aviso, Button, Card, ChaskiMark, Field, Money, Muted, Pill, Row, Stepper, TextInput } from "./ui"; import { BarraDestinos, type Destino, VolverAlInicio, esDestino } from "./barra-destinos"; import { Bienvenida } from "./bienvenida"; import { DestinoRecuperar, QUE_RECUPERA } from "./recuperar"; // ola 2: los nombres nuevos entran EN ESTA LÍNEA, no en una nueva. Este archivo recibe 83 citas por número (48 ancladas + 35 sueltas, medido en 4c24324) y una sola línea de import de más las corre TODAS · WKH-063: los TRES imports nuevos entran acá por lo mismo (Δ0 líneas)
 
 // WKH-187: el quote se muestra ANTES del KYC. Orden: send→connect→review(pre-KYC)→verify→confirm(post-KYC)→track→done.
 // `history` NO es un paso del flujo: es la puerta de entrada a las remesas que ya existen. Se
@@ -2470,14 +2470,14 @@ export function LostEscrowRecovery({
   if (!refund) return null;
 
   if (!open) {
-    return (
-      <button
+    return ( // WKH-063 (2º pase) · EL ENVOLTORIO Y EL RENGLÓN ENTRAN EN LA LÍNEA DE ABAJO Y EN LA DEL `</button>`, no en líneas nuevas: `flow.tsx:2477` es una cita ANCLADA de `touch-targets.test.tsx` y una línea de más la corre. 🔴 QUÉ ARREGLA EL RENGLÓN: esta puerta era un enlace subrayado con su nombre y NADA MÁS, igual que su vecina, así que para saber cuál de las dos era la tuya había que abrir una y leerle tres párrafos. `QUE_RECUPERA` (`recuperar.tsx`) dice en una línea lo único que permite elegir sin clickear: esta busca USDC, la otra busca SOL. Vive allá y no acá porque el riesgo del par es que los dos renglones digan lo mismo, y eso sólo se ve leyéndolos juntos. ⛔ El `min-h-[52px]` sigue en el `<button>` y no en este `<div>`: lo que AC-5 mide es el área que la persona TOCA, y el renglón no es tocable.
+      <div className="space-y-ajustado py-normal"><button
         type="button"
         onClick={() => setOpen(true)}
         className="inline-flex min-h-[52px] w-full items-center justify-start text-left text-label font-medium text-cochineal underline underline-offset-2"
       >
         Recuperar un envío perdido
-      </button>
+      </button><Muted escala="label">{QUE_RECUPERA.envioPerdido}</Muted></div>
     );
   }
 
@@ -2620,14 +2620,14 @@ export function EscrowRentRecovery({
   if (!lister) return null;
 
   if (!open) {
-    return (
-      <button
+    return ( // WKH-063 (2º pase) · MISMA receta que su vecina y por el MISMO motivo (`flow.tsx:2627` también es una cita anclada de `touch-targets.test.tsx`): el envoltorio va en la línea de abajo y el renglón pegado al `</button>`. Este es el que más falta hacía de los dos, porque su nombre visible es el que un AR ya marcó como jerga: "el depósito de red de envíos anteriores" no dice que lo que vuelve es SOL y no USDC, ni que sólo se puede con un envío YA TERMINADO — las dos cosas están en `escrowRentExplainer("discovery")`, o sea a un click de distancia y no antes.
+      <div className="space-y-ajustado py-normal"><button
         type="button"
         onClick={() => setOpen(true)}
         className="inline-flex min-h-[52px] w-full items-center justify-start text-left text-label font-medium text-cochineal underline underline-offset-2"
       >
         Recuperar el depósito de red de envíos anteriores
-      </button>
+      </button><Muted escala="label">{QUE_RECUPERA.depositoDeRed}</Muted></div>
     );
   }
 

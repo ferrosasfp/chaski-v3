@@ -57,7 +57,7 @@
 //      en runtime (por ejemplo `state[campo] = x` con `campo` calculado) no lo ve.
 //   3. NO cubre un `principalTx` introducido por un snapshot FABRICADO A MANO en `localStorage` y
 //      rehidratado. Ese residual es preexistente, es el mismo modelo de confianza que ya gobierna toda
-//      la pantalla de historial y el `TxProof` del recibo (`flow.tsx:3444-3445`), y no es una
+//      la pantalla de historial y el `TxProof` del recibo (`flow.tsx:3498-3499`), y no es una
 //      regresión de esta HU: ahí el atacante y la víctima son la misma persona.
 //   4. NO mira los `*.test.ts(x)`: los tests fabrican estados a propósito y deben poder seguir
 //      haciéndolo. El invariante es sobre el código que corre en producción.
@@ -101,7 +101,7 @@ const SKIP_DIRS = new Set(["node_modules", ".next", "doc", "migrations"]);
  *  `stripComments('if (rem.principalTx != null) return true; // ojo: principalTx = la prueba')` devolvía
  *  la línea COMPLETA y `ESCRITURA.test(...)` daba `true`. Y medido también de punta a punta: con
  *  `// ojo: principalTx = la prueba del deposito` pegado al final de una LECTURA de verdad, la de
- *  (`principalTx`, `../presentation/flow-vm.ts:1205`), T-W9(a) denunciaba a `flow-vm.ts` como
+ *  (`principalTx`, `../presentation/flow-vm.ts:1206`), T-W9(a) denunciaba a `flow-vm.ts` como
  *  escritor. Por qué eso es grave lo escribe este mismo archivo más arriba: un candado que se dispara
  *  con las lecturas es uno que alguien va a aflojar hasta volverlo inútil.
  *
@@ -196,7 +196,7 @@ const FUENTES: { rel: string; code: string; crudo: string }[] = SCAN_DIRS.flatMa
  *
  *  ⚠️ LA COMILLA OPCIONAL NO ES ADORNO, Y ESTE CANDADO SE SALTEABA SIN ELLA. La primera versión era
  *  `/principalTx\s*[:=]/`, y una clave ENTRE COMILLAS no matchea, porque `"` no es `\s`. Este repo
- *  escribe claves entre comillas seguido (`GRUPO_POR_DESENLACE`, `../presentation/flow-vm.ts:1354`),
+ *  escribe claves entre comillas seguido (`GRUPO_POR_DESENLACE`, `../presentation/flow-vm.ts:1356`),
  *  así que no era una forma exótica. MEDIDO: con `const MUTANTE2: Record<string, string> = {
  *  "principalTx": "fabricada" };` agregado a `container.ts`, la versión sin comilla daba
  *  `5 passed`; con esta da rojo en T-W9(a). El `\]?` cierra la misma puerta por acceso indexado
@@ -278,7 +278,7 @@ const CALL_SITE = "src/application/use-cases/confirm-and-send.ts";
  *  ⚠️ EL NÚMERO ES PARTE DE LA LISTA, y no es decoración (AR r2 · BLQ-BAJO-3): cada archivo declara
  *  CUÁNTAS veces rehidrata. Una lista de nombres sola deja entrar una línea nueva en un archivo ya
  *  listado, que es exactamente el escape que el AR midió. Los tres valores son 1, leídos a mano:
- *  `persistence.ts:134` (`get`), `flow.tsx:234` (el resume) y `fakes.ts:112` (el repo en memoria).
+ *  `persistence.ts:134` (`get`), `flow.tsx:250` (el resume) y `fakes.ts:112` (el repo en memoria).
  *  Si una de estas cuentas sube legítimamente, hay que subirla ACÁ y escribir por qué, que es el
  *  precio de que no se pueda subir en silencio. */
 const REHIDRATACIONES_POR_ARCHIVO: Record<string, number> = {

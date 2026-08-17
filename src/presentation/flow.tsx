@@ -75,15 +75,19 @@ import {
 } from "./flow-vm";
 import { cn } from "./cn";
 import { phantomBrowseUrl, useWalletAvailability, useConnectedWalletAddress, mwaEnabled, useMwaOffered } from "./wallet-availability"; // el aviso de "acá no hay wallet" (NoWalletHere) · WKH-354/AC-6: `useConnectedWalletAddress` para el banner (CuentaCambiada) · WKH-MWA: los dos últimos, EN ESTA MISMA LÍNEA (85 citas `flow.tsx:NNNN` cuelgan de que este archivo no cambie de largo)
-import { Aviso, Button, Card, ChaskiMark, Field, Money, Muted, Pill, Row, Stepper, TextInput } from "./ui"; // ola 2: los nombres nuevos entran EN ESTA LÍNEA, no en una nueva. Este archivo recibe 83 citas por número (48 ancladas + 35 sueltas, medido en 4c24324) y una sola línea de import de más las corre TODAS
+import { Aviso, Button, Card, ChaskiMark, Field, Money, Muted, Pill, Row, Stepper, TextInput } from "./ui"; import { BarraDestinos, type Destino, VolverAlInicio, esDestino } from "./barra-destinos"; import { Bienvenida } from "./bienvenida"; import { DestinoRecuperar } from "./recuperar"; // ola 2: los nombres nuevos entran EN ESTA LÍNEA, no en una nueva. Este archivo recibe 83 citas por número (48 ancladas + 35 sueltas, medido en 4c24324) y una sola línea de import de más las corre TODAS · WKH-063: los TRES imports nuevos entran acá por lo mismo (Δ0 líneas)
 
 // WKH-187: el quote se muestra ANTES del KYC. Orden: send→connect→review(pre-KYC)→verify→confirm(post-KYC)→track→done.
 // `history` NO es un paso del flujo: es la puerta de entrada a las remesas que ya existen. Se
 // necesita porque `step`/`rem`/`address` son estado de React y una recarga los borra: sin esta
 // pantalla, una remesa con USDC en el escrow dejaba de tener camino desde la interfaz.
-type Step = "send" | "connect" | "review" | "verify" | "confirm" | "track" | "done" | "history";
+// WKH-063: esa distinción ("esto no es un paso") dejó de ser un comentario y es un tipo. Los DESTINOS
+// —`bienvenida`, `history`, `recuperar`— se declaran en `./barra-destinos` y `Step` los DERIVA de ahí,
+// así que un destino nuevo entra en un solo lugar y la barra lo reconoce sola. La regla que los
+// separa, y por qué `done` NO es un destino, están en el docblock de ese archivo.
+type Step = Destino | "send" | "connect" | "review" | "verify" | "confirm" | "track" | "done";
 const STEP_LABELS = ["Enviar", "Revisar", "Identidad", "Seguir"];
-const STEP_INDEX: Record<Step, number> = {
+export const STEP_INDEX: Record<Step, number> = { // exportado para el candado de AC-3/AC-4: recorre esta tabla ENTERA, así que un paso nuevo no puede quedarse sin clasificar en silencio
   send: 0,
   connect: 0,
   review: 1,
@@ -91,7 +95,7 @@ const STEP_INDEX: Record<Step, number> = {
   confirm: 2, // comparte "Identidad" con verify (solape análogo al connect/verify anterior)
   track: 3,
   done: 3,
-  history: 0, // fuera de la línea del flujo; el stepper no la representa
+  history: 0, bienvenida: 0, recuperar: 0, // los TRES destinos: fuera de la línea del flujo, y el stepper no los representa (ni los pinta: ver el ternario de su sitio de render)
 };
 
 /**
@@ -125,9 +129,21 @@ const RESUME_ESCAPE_DELAY_MS = 5000;   // el escape aparece a los 5 s
 const RESUME_POLL_INTERVAL_MS = 2500;  // intervalo de poll (sin cambio vs WKH-178)
 const RESUME_MAX_POLLS = 8;            // 8 × 2500 ms = 20 s total (antes 40 = ~100 s)
 
-export function RemittanceFlow({ container }: { container?: Container } = {}) {
+/**
+ * ⚠️ `pasoInicial` ES UNA COSTURA DE TEST, Y SE DECLARA COMO TAL. Mismo molde que `container`: el
+ * DEFAULT es lo que corre en producción, así que la app real no pasa nada y arranca en la pantalla de
+ * confianza (AC-1). Los tests que hablan del FORMULARIO piden `pasoInicial="send"` en voz alta, en vez
+ * de recorrer una pantalla de la que no hablan.
+ *
+ * 🔴 POR QUÉ EL DEFAULT ES EL VALOR NUEVO Y NO EL VIEJO, y es la mitad que importa: con
+ * `pasoInicial = "send"` por defecto, olvidarse de pasarlo en `app/page.tsx` haría desaparecer la
+ * primera pantalla en producción con la suite entera en verde. Ese es el perfil de "default que
+ * degrada en silencio" que este repo ya tiene documentado. Como está, el olvido no existe.
+ * El candado que impide que producción pase este prop está en `barra-destinos.test.tsx`.
+ */
+export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { container?: Container; pasoInicial?: Step } = {}) {
   const c = useMemo(() => container ?? createContainer(), [container]);
-  const [step, setStep] = useState<Step>("send");
+  const [step, setStep] = useState<Step>(pasoInicial);
   const [busy, setBusy] = useState(false); const disponibilidadWallet = useWalletAvailability(); const mwaEnElSelector = useMwaOffered(); const conectarEsCallejon = disponibilidadWallet === "none" && mwaEnElSelector && !mwaEnabled(); // H1: los cuatro EN ESTA LÍNEA y no en cuatro nuevas — `flow.tsx` recibe ~85 citas por número y una sola línea de más las corre TODAS (ver el docblock del import en :77). Qué significa `conectarEsCallejon` está escrito donde se usa, en `step === "connect"`.
   const [error, setError] = useState<FlowError | null>(null);
 
@@ -399,6 +415,19 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
       setHistory(await c.listHistory.execute(addr));
       setStep("history");
     });
+
+  // WKH-063/AC-4 — tocar una pestaña de la barra. `history` NO es un `setStep` y nunca lo fue: la
+  // lista está scopeada por dueño, así que hay que resolver la billetera y pedirla ANTES de tener
+  // pantalla que mostrar (por eso pasa por `openHistory`, con su `guard`). Los otros dos destinos no
+  // le preguntan nada a nadie: son estado local. ⛔ Y NINGUNO mueve plata — es la contracara de la
+  // regla de la barra: si una pestaña necesitara una firma para renderizarse, sería una acción
+  // disfrazada de destino. El `setError(null)` es porque el error en pantalla habla de la pantalla que
+  // se está dejando.
+  const irADestino = (destino: Destino) => {
+    if (destino === "history") return openHistory();
+    setError(null);
+    setStep(destino);
+  };
 
   // Retomar una remesa del historial. No reconstruye nada: mete el snapshot guardado en el MISMO
   // estado que usa el flujo y salta a la vista que ya sabe mostrarlo, botón de recuperar incluido.
@@ -717,9 +746,14 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
         ) : null}
         <CuentaCambiada sesion={address} enVuelo={rem != null} onAdoptar={adoptarCuentaConectada} disabled={busy} />
       </header>
-      <div className="mb-aire">
+      {/* WKH-063 · EL STEPPER NO SE PINTA EN LOS DESTINOS, y no es cosmética: dice "Paso 1 de 4"
+          sobre pantallas que no son un paso de nada. En la de bienvenida era además la primera cosa
+          que la persona veía —una barra de progreso de un envío que todavía no empezó—, que es la
+          mitad del defecto que AC-1 vino a cerrar. `STEP_INDEX` sigue teniendo fila para los tres
+          destinos: el tipo la exige y borrarla no compila. Lo que cambia es quién la lee. */}
+      {esDestino(step) ? null : (<div className="mb-aire">
         <Stepper steps={STEP_LABELS} current={STEP_INDEX[step]} />
-      </div>
+      </div>)}
 
       {rem && isDemoMode(rem) && (step === "review" || step === "confirm" || step === "track" || step === "verify") ? (
         <div className="mb-holgado flex items-center justify-center">
@@ -770,7 +804,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
           className="flex-1"
         >
           {step === "send" && (
-            <div className="space-y-holgado">
+            <div className="space-y-holgado"><VolverAlInicio onVolver={() => setStep("bienvenida")} disabled={busy} />{/* WKH-063 · LA ÚNICA SALIDA DEL FLUJO HACIA LOS DESTINOS, y sin ella la barra sería una trampa: los pasos del envío no la pintan (AC-3), así que quien entra al formulario se quedaba sin ninguna forma de volver a "Mis envíos" o a "Recuperar" salvo recargar la página. Va SÓLO en `send` y no en los pasos siguientes a propósito: de `connect` en adelante hay una cotización fijada y una identidad en juego, y ahí "volver al inicio" no es navegar, es abandonar algo empezado. No borra nada de lo escrito en el formulario (sólo mueve `step`), así que volver a entrar devuelve el monto y el destino tal como estaban. */}
               <Card>
                 <Field label="Enviás">
                   {/* 🔴 EL ÚNICO SITIO DE LA APP DONDE LA MONEDA PUEDE PESAR MENOS QUE LA CIFRA, y no
@@ -882,30 +916,17 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                 Continuar <ArrowRight className="size-icono-sm" />
               </Button>
 
-              {/* La vuelta a lo que ya existe. Vive en `send` porque es donde aterriza toda recarga y también adonde vuelve "Enviar otra": desde acá una remesa con USDC en el escrow siempre tiene camino, sin importar cómo se llegó.
-                  H4 · POR QUÉ LAS TRES VIVEN AHORA ADENTRO DE UN GRUPO CON TÍTULO. Medido en producción el 2026-08-16 sobre el árbol renderizado: «Continuar» y las tres puertas de recuperación salían con EXACTAMENTE la misma métrica — 52x372, 15px, peso 600 — y las tres ocupaban el tercio inferior de la pantalla. La única diferencia era el fondo. Tres acciones de rescate pesando lo mismo que la acción principal es lo que hacía que la pantalla se leyera como una lista de opciones equivalentes y no como un formulario con un botón. El grupo las separa con una línea y las nombra por lo que son.
-                  ⛔ LO QUE NO SE TOCA ES EL `min-h-[52px]`: `touch-targets.test.tsx:51` lo lee con `/min-h-\[(\d+)px\]/` sobre el className renderizado, y es el candado del área de toque de las tres puertas de recuperar plata. Baja el PESO TIPOGRÁFICO (`text-body font-semibold` → `text-label font-medium`), nunca el alto. Achicar el blanco de un botón que devuelve fondos sería arreglar la jerarquía rompiendo la accesibilidad. */}
-              <div className="space-y-ajustado border-t border-line pt-holgado"><p className="text-label font-medium text-stone">¿Ya enviaste antes?</p><button
-                type="button"
-                onClick={openHistory}
-                disabled={busy}
-                className="inline-flex min-h-[52px] w-full items-center justify-start text-left text-label font-medium text-cochineal underline underline-offset-2 disabled:opacity-50"
-              >
-                Ver mis envíos
-              </button>
-
-              {/* La otra puerta, y la que no existía: la lista de arriba sale del almacenamiento de
-                  ESTE navegador. Si se borró, o si la persona entra desde otro dispositivo, ahí no
-                  hay nada y sus USDC pueden seguir en el vault. */}
-              <LostEscrowRecovery refund={c.solanaRefund} resolveSender={resolveSender} />
-              {/* WKH-327/AC-8 — la otra pregunta a la misma cadena: qué envíos TERMINADOS siguen con
-                  sus cuentas abiertas. Va al lado y NO adentro de la puerta de arriba: aquélla promete
-                  encontrar escrows ABIERTOS, y un escrow terminal no está abierto. */}
-              <EscrowRentRecovery
-                lister={c.solanaCloseableEscrows}
-                close={c.closeEscrowAccounts}
-                resolveSender={resolveSender}
-              /></div>
+              {/* WKH-063 · ACÁ VIVÍAN LAS TRES PUERTAS, Y SE FUERON ENTERAS. El grupo "¿Ya enviaste
+                  antes?" tenía "Ver mis envíos", `<LostEscrowRecovery>` y `<EscrowRentRecovery>`: hoy
+                  la primera es la pestaña "Mis envíos" de la barra y las otras dos viven en el destino
+                  "Recuperar" (`DestinoRecuperar`). ⛔ NO QUEDÓ NINGÚN FALLBACK REDUCIDO, y es una
+                  decisión: dejar la barra Y los enlaces duplica la entrada a los mismos dos destinos,
+                  o sea que la pantalla vuelve a ofrecer cuatro caminos donde hay un formulario. La
+                  medición que motivó el grupo sigue valiendo y ahora se cumple por construcción: en
+                  esta pantalla «Continuar» es la única acción con el peso del CTA porque es la única
+                  acción. El `min-h-[52px]` de las tres NO se relajó — se mudó con ellas, y
+                  `touch-targets.test.tsx` las sigue midiendo donde están (la pestaña, en
+                  `barra-destinos.tsx`; las otras dos, en su propio componente, intactas). */}
             </div>
           )}
 
@@ -917,19 +938,7 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                 <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-sand">
                   <Wallet className="size-icono-md text-cochineal" />
                 </div>
-                <div>
-                  <h2 className="text-title font-bold">Conectá tu wallet</h2>
-                  {/* "Chaski nunca toca tu plata" es un absoluto y hay quien lo falsifica: el escrow
-                      tiene una release-authority, operada por el equipo, que puede liberar el vault
-                      hacia el pago (ver `confirm-and-send.ts`:191-197). Lo que sí es verificable, y es
-                      lo que hace a esto no custodial, es DÓNDE quedan los USDC: en una cuenta del
-                      contrato (ATA de la PDA `escrow_state`, `solana-wallet.ts`:288), nunca en una
-                      billetera de Chaski. */}
-                  <Muted className="mx-auto mt-ajustado max-w-xs">
-                    Firmás el envío desde tu billetera con USDC. Tus USDC van a un contrato en
-                    Solana, no a una cuenta de Chaski.
-                  </Muted>
-                </div>
+                <h2 className="text-title font-bold">Conectá tu wallet</h2>
                 {/* La segunda de las tres cajas verdes de S-3. ⚠️ Ésta tenía `py-2.5` (10px) y las
                     otras dos `py-3` (12px): tres cajas del mismo tono en tres paddings distintos era
                     justo el síntoma. `Aviso` las deja en uno solo, así que acá el alto crece 2px por
@@ -961,6 +970,24 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
                   </>
                 )}
               </Button>)}
+              {/* WKH-063/AC-6 · ESTAS DOS FRASES SE MOVIERON, NO SE BORRARON, y la posición ES el
+                  cambio: estaban ARRIBA, entre el título y la acción, y eran el tercero de los tres
+                  bloques de prosa que se leían antes de poder tocar nada. Ahora la pantalla es título
+                  → cuánto vas a firmar → botón, y la honestidad queda como nota al pie, que es donde
+                  no tapa la acción principal.
+                  ⛔ EL TEXTO ES BYTE POR BYTE EL DE ANTES, y el tamaño también (`Muted` sin `escala`,
+                  o sea `support`). Bajarlo a `label` para que "quepa mejor" abajo sería exactamente
+                  "presentarlo mejor" = "verlo menos", que es lo que CD-3 prohíbe.
+                  "Chaski nunca toca tu plata" es un absoluto y hay quien lo falsifica: el escrow
+                  tiene una release-authority, operada por el equipo, que puede liberar el vault
+                  hacia el pago (ver `confirm-and-send.ts`:191-197). Lo que sí es verificable, y es
+                  lo que hace a esto no custodial, es DÓNDE quedan los USDC: en una cuenta del
+                  contrato (ATA de la PDA `escrow_state`, `solana-wallet.ts`:288), nunca en una
+                  billetera de Chaski. */}
+              <Muted className="mx-auto max-w-xs text-center">
+                Firmás el envío desde tu billetera con USDC. Tus USDC van a un contrato en Solana, no
+                a una cuenta de Chaski.
+              </Muted>
             </div>
           )}
 
@@ -1160,6 +1187,23 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
           )}
 
           {step === "done" && rem && <Receipt rem={rem} onNew={() => resetTo(setStep, setRem, setPreview)} />}
+
+          {/* WKH-063/AC-1+AC-2 — la primera pantalla. No recibe `rem` ni `preview` NI PUEDE: su
+              contenido no depende de ningún estado del envío, que es la mitad de lo que la hace la
+              pantalla de entrada (una recarga la deja igual). Su única acción entra al formulario por
+              la MISMA máquina de `Step` que el resto: sin ruta nueva y sin router (CD-4). */}
+          {step === "bienvenida" && <Bienvenida onEmpezar={() => setStep("send")} disabled={busy} />}
+
+          {/* WKH-063 — el destino "Recuperar". Los dos componentes son los MISMOS de antes, con el
+              mismo cableado que tenían al pie de `send`: lo único que cambió es desde dónde se montan
+              (DT-2). ⛔ Si el container no trae sus gateways cada uno devuelve `null` solo, así que la
+              carcasa no puede afirmar cuántas puertas hay — y su copy no lo afirma. */}
+          {step === "recuperar" && (
+            <DestinoRecuperar>
+              <LostEscrowRecovery refund={c.solanaRefund} resolveSender={resolveSender} />
+              <EscrowRentRecovery lister={c.solanaCloseableEscrows} close={c.closeEscrowAccounts} resolveSender={resolveSender} />
+            </DestinoRecuperar>
+          )}
         </motion.div>
       </AnimatePresence></MotionConfig>
       )}
@@ -1181,6 +1225,16 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
           ) : null}
         </Aviso>
       ) : null}
+
+      {/* WKH-063/AC-3+AC-4 · LA BARRA, Y SU CONDICIÓN ES ESTA LÍNEA Y NINGUNA OTRA. No hay una lista
+          de pasos donde se oculta: se pinta si y sólo si `step` es un DESTINO, así que un paso nuevo
+          del flujo nace sin barra y un destino nuevo nace con ella, sin que nadie se acuerde de venir
+          acá. El candado recorre `STEP_INDEX` entero contra una tabla escrita a mano, o sea que
+          agregar un `Step` obliga a clasificarlo.
+          ⛔ VA ÚLTIMA DENTRO DEL `<main>`, y no es orden estético: su `mt-auto` sólo la empuja al
+          borde inferior si es el último hijo de la columna flex. Debajo del bloque de error a
+          propósito — un error habla de la pantalla, no de la navegación. */}
+      {esDestino(step) ? <BarraDestinos activo={step} onIr={irADestino} disabled={busy} /> : null}
     </main>
   );
 }
@@ -1373,7 +1427,7 @@ const TRACK_STEPS: { key: RemittanceState["status"][]; label: string; manual?: b
  * ⛔ PROHIBIDO ponerlo en `1500` reusando el literal del poll. Con 1500 la pantalla funciona igual —
  * por eso esto NO tiene test y la prohibición está escrita acá en vez de fingir un candado. El daño de
  * hacerlo es crear un SEGUNDO literal de una cadencia AJENA, que es el punto ciego que el Auto-Blindaje
- * de WKH-336 nombra; y `flow.tsx:632` (el literal del poll) ya lo citan 6 archivos por número. Un
+ * de WKH-336 nombra; y `flow.tsx:661` (el literal del poll) ya lo citan 6 archivos por número. Un
  * candado que comparara dos números que no tienen por qué ser iguales sería un guard que se compara
  * consigo mismo.
  */
@@ -1482,7 +1536,7 @@ export function TrackView({
   // tests NO se editan y siguen midiendo lo mismo.
   //
   // 🔴 LOS TIPOS SE DERIVAN DEL `Container`, NO SE IMPORTAN. Dos razones y las dos son medibles: un
-  // `import` nuevo arriba desplazaría `flow.tsx:632`, que 6 archivos citan por número y NINGUNA de las
+  // `import` nuevo arriba desplazaría `flow.tsx:661`, que 6 archivos citan por número y NINGUNA de las
   // 6 es una cita anclada (el ancla `` `}, 1500);` `` empieza con `}` y el regex del candado exige
   // `[A-Za-z_$]`) ⇒ si se mueve, nada se pone rojo y los 6 comentarios rotan en silencio. Y derivar del
   // `Container` es además la única fuente: si mañana la firma de `estado` cambia, esto no compila.
@@ -1969,7 +2023,7 @@ function RevisionDelSeguimiento({
   //
   // 🔴 Y SOBREVIVE AL REMONTE, porque un techo por montaje no era un techo (CR/BLQ-MED-2). MEDIDO antes:
   // 5 toques ⇒ 3 challenges · `unmount()` · `render()` · 5 toques ⇒ **total 6**. Y el camino existe en
-  // producción: recargar deja el flujo en `send` (el `step` no persiste) → "Ver mis envíos" → la entrada
+  // producción: recargar deja el flujo en la pantalla de entrada (el `step` no persiste) → pestaña "Mis envíos" → la entrada
   // → `onOpenFromHistory` ⇒ **seguimiento montado de nuevo, contador en 0**. Y el almacén vacío por la
   // recarga es justamente el estado que MUESTRA el botón.
   const intentosRef = useRef(leerIntentosGuardados(sender));
@@ -2106,7 +2160,7 @@ export function RefundAction({
   // cuando confirma), así que este array es su único ejemplar.
   //
   // Es el MISMO defecto que el fix-pack de WKH-346 arregló en la puerta de al lado
-  // (`LostEscrowRecovery`, `:2286`) y dejó declarado acá sin tocar, porque AC-9/CD-2 le prohibían este
+  // (`LostEscrowRecovery`, `:2340`) y dejó declarado acá sin tocar, porque AC-9/CD-2 le prohibían este
   // camino de firma. La propiedad "ningún comprobante ya mostrado desaparece" es de la FORMA de CADA
   // estado y no del componente: de "aquella variable es append-only" no se deduce nada sobre esta.
   const [enviados, setEnviados] = useState<
@@ -2300,7 +2354,7 @@ export function LostEscrowRecovery({
   // guarda es la firma de un refund YA TRANSMITIDO cuyo desenlace NADIE conoce: `confirmation` es
   // `"pending"` o `"unknown"` (`EscrowRefundConfirmation`, `ports.ts:339`). O sea EXACTAMENTE la firma
   // que la persona necesita para ir al visor a averiguar si entró, y esta HU la volvió prominente y
-  // enlazable (`RefundSentNotice`, `:2244`, que la imprime como "Orden enviada:"). Medido antes del arreglo: con `pending` y después
+  // enlazable (`RefundSentNotice`, `:2298`, que la imprime como "Orden enviada:"). Medido antes del arreglo: con `pending` y después
   // `confirmed`, la primera firma desaparecía del DOM; con dos `pending`, quedaba UN solo href.
   //
   // ⚠️ El `sender` va PEGADO a cada entrada, no aparte: es lo que hace que la pantalla no mezcle dos
@@ -2315,7 +2369,7 @@ export function LostEscrowRecovery({
   // 🔴 UNA LISTA APPEND-ONLY, Y LA FORMA DEL ESTADO **ES** EL ARREGLO (AR/BLQ-BAJO-1). Acá había un
   // `useState<string | null>` que el segundo éxito SOBRESCRIBÍA: `SIG2` reemplazaba a `SIG1` y `SIG1`
   // desaparecía del DOM. Y esta puerta existe justamente para escrows que el dispositivo NO conoce —
-  // `SIG1` no está en `localStorage`, no está en "Ver mis envíos", y esto es estado de componente —,
+  // `SIG1` no está en `localStorage`, no está en "Mis envíos", y esto es estado de componente —,
   // así que se destruía la única evidencia en pantalla de un movimiento de dinero que ya ocurrió. La
   // plata no se pierde (la cadena es autoritativa); se pierde la prueba que esta HU vino a hacer
   // usable. La población afectada es EXACTAMENTE la que motivó la frase de AC-7: quien tiene dos o
@@ -2340,7 +2394,7 @@ export function LostEscrowRecovery({
   // pantalla contaba como UN relato el comprobante de A y el cierre de ventana de B, suprimiendo el
   // error de B con un éxito que no fue de B. Cada frase era cierta; el compuesto y el "esta billetera"
   // no. Los códigos que NO lo prenden están enumerados en `esVentanaSinAbiertos`
-  // (`esVentanaSinAbiertos`, `flow-vm.ts:1137`), en su docblock. ⚠️ Y desde el fix-pack de WKH-347 `escrow_index_absent` SÍ lo prende: es cierto (a ese código se llega con la ventana del servidor ya recorrida y sin ninguno abierto) y sin eso el cierre de ventana no se prendía para NINGUNA billetera existente. El motivo medido está en ese mismo docblock.
+  // (`esVentanaSinAbiertos`, `flow-vm.ts:1138`), en su docblock. ⚠️ Y desde el fix-pack de WKH-347 `escrow_index_absent` SÍ lo prende: es cierto (a ese código se llega con la ventana del servidor ya recorrida y sin ninguno abierto) y sin eso el cierre de ventana no se prendía para NINGUNA billetera existente. El motivo medido está en ese mismo docblock.
   const [sinAbiertos, setSinAbiertos] = useState<string | null>(null);
   // La identidad de la ÚLTIMA búsqueda. Todo lo que la tarjeta muestra se filtra por acá: la frase de
   // cierre dice "esta billetera", así que no puede estar al lado del comprobante de otra.
@@ -2432,7 +2486,7 @@ export function LostEscrowRecovery({
       <h2 className="text-title font-bold">Recuperar un envío perdido</h2>
       <p className="text-body text-stone">
         Si borraste los datos del navegador o entrás desde otro dispositivo, tus envíos no aparecen
-        en "Ver mis envíos". Los buscamos preguntándole al servidor por tu billetera.
+        en "Mis envíos". Los buscamos preguntándole al servidor por tu billetera.
       </p>
       <p className="text-body text-stone">
         Tu billetera te va a pedir una firma para probar que es tuya: es un texto, no mueve fondos y
@@ -2446,7 +2500,7 @@ export function LostEscrowRecovery({
         * arreglo: montadas afuera, la tarjeta afirmaría "puede haber más envíos con fondos por
         * recuperar" recién abierta la puerta, sin haberle preguntado nada a la cadena. Es la SEGUNDA
         * encarnación del mismo defecto en este archivo: el CR de WKH-327 lo arregló en el componente
-        * INMEDIATAMENTE SIGUIENTE (`explainer`, `flow.tsx:2533`), a unas pocas decenas de líneas de
+        * INMEDIATAMENTE SIGUIENTE (`explainer`, `flow.tsx:2587`), a unas pocas decenas de líneas de
         * donde nació este. ⚠️ Acá decía "48 líneas" y era una CIFRA QUE ENVEJECE SOLA: es una
         * distancia, y mis propias inserciones la movieron a 60 sin que ningún barrido la cazara
         * (AR-2/MNR-7). Lo que no envejece es la relación estructural, y es la que importa. Un test de
@@ -2501,8 +2555,8 @@ export function LostEscrowRecovery({
  *     el contrato" (`flow-vm.ts`, `lostEscrowRecoveryError`). Un escrow terminal NO está abierto: meter
  *     los cerrables ahí volvería FALSA una frase que hoy es verdadera. Son dos preguntas distintas a la
  *     misma cadena.
- *  3. SÍ en `send`, al lado: es donde aterriza toda recarga y adonde vuelve "Enviar otra", y ya está
- *     `resolveSender`, que es lo que el PoP del endpoint exige. Cero mecanismo nuevo.
+ *  3. SÍ al lado de su vecina, y ya está `resolveSender`, que es lo que el PoP del endpoint exige: cero mecanismo nuevo. ⚠️ ACÁ DECÍA "SÍ en `send`, porque es donde aterriza toda recarga", y esa PREMISA se cayó con WKH-063: la recarga aterriza en la pantalla de entrada y las dos puertas viven en el destino "Recuperar" (`DestinoRecuperar`), a un toque de la barra.
+ *     La CONCLUSIÓN no se cayó y es lo que esta lista defiende: las dos juntas, en la misma pantalla, y ninguna adentro del historial. Que desde los DOS aterrizajes (la entrada y `send`) siga habiendo camino hasta ahí es un invariante con test propio en `history.test.tsx`. Reemplazo línea-neutra, 2 por 2: agregar líneas acá corre las ~85 citas por número de este archivo.
  *
  * QUÉ SE DICE ANTES DE ABRIR NINGÚN DIÁLOGO, igual que su vecina y por la misma razón: acá también hay
  * DOS firmas por motivos distintos (la prueba de posesión, que es un texto, y después la transacción
@@ -2988,7 +3042,7 @@ function AgentUnavailable({
  * agregar *"y el fee de la entrega no lo paga nadie, porque ese paso no corre"*. Es verdad
  * (`this.solana`, `../application/use-cases/confirm-and-send.ts:363`) y está PROHIBIDO escribirlo: en
  * ese mismo cuadrante, tres renglones más arriba en la MISMA tarjeta, la fila de la entrega dice
- * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:3155`). Ese *"lo simula"* es impreciso
+ * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:3209`). Ese *"lo simula"* es impreciso
  * —con el settle apagado la entrega no se simula, se corta— pero es **H1 de WKH-336**, residual de otra
  * HU que exige un TERCER valor de `transport` con su propia frase, y WKH-338 no lo cierra. Si la nota
  * dijera *"la entrega no corre"* mientras la fila dice *"lo simula"*, la tarjeta se contradiría a sí
@@ -3346,7 +3400,7 @@ function HistoryEntry({
   onOpen: (rem: RemittanceState) => void;
   answer: EscrowChainAnswer;
 }) {
-  // WKH-351 · AC-1: acá NO se calcula el estado del trámite. El encabezado del grupo ya afirma sobre la plata, y entre las dos afirmaciones hay contradicción ALCANZABLE en 3 de los 4 grupos. (`statusDisplay`, `flow-vm.ts:133`) sigue viva, y la sigue mostrando (`Receipt`, `:3401`), que es una sola remesa y no tiene encabezado con el que chocar. Reemplazo línea-neutra, 1 línea por 1: borrar esta línea desplaza las referencias de abajo, y a la mayoría no las vigila ningún test.
+  // WKH-351 · AC-1: acá NO se calcula el estado del trámite. El encabezado del grupo ya afirma sobre la plata, y entre las dos afirmaciones hay contradicción ALCANZABLE en 3 de los 4 grupos. (`statusDisplay`, `flow-vm.ts:133`) sigue viva, y la sigue mostrando (`Receipt`, `:3455`), que es una sola remesa y no tiene encabezado con el que chocar. Reemplazo línea-neutra, 1 línea por 1: borrar esta línea desplaza las referencias de abajo, y a la mayoría no las vigila ningún test.
   const knowledge = escrowFundsKnowledge(rem);
   // WKH-349. El texto Y el peso visual salen de la MISMA función: un copy que dice "siguen en el
   // escrow" con el mismo gris que "no pudimos preguntar" pierde la mitad de AC-2. Y para los cuatro
@@ -3526,7 +3580,7 @@ export function recoveryWindowExhausted(maxCandidates: number): string {
  *
  * Los cinco sitios que le muestran una firma a la persona pasan por acá. Tres la imprimían ENTERA (87 u 88 caracteres, y 88 en la mayoría de los casos: una firma ed25519 son 64 bytes y su largo en base58 depende del primer byte. Medido, 4000 muestras: 80,2 % dan 88. Los 87 con los que se mide en los tests son propiedad de `FAKE_SOLANA_SIGNATURE`, no de una firma cualquiera — AR/MNR-2)
  * y desbordaban la única columna de la app; los
- * otros dos ya truncaban con `shortTx` (`shortTx`, `:3458`) y no llevaban a ninguna parte. Un solo
+ * otros dos ya truncaban con `shortTx` (`shortTx`, `:3512`) y no llevaban a ninguna parte. Un solo
  * componente en vez de cinco es lo que impide que el próximo sitio nazca con la tercera variante.
  *
  * 🔴 POR QUÉ VIVE ACÁ Y NO EN `src/presentation/tx-proof.tsx`, que era lo natural. Un archivo nuevo
@@ -3612,9 +3666,9 @@ export function TxProof({ signature }: { signature: string }) {
  * WKH-350 · LAS 4 SECCIONES DEL HISTORIAL.
  *
  * Reparte las filas que ya vienen en `items` entre los 4 grupos de (`HistoryGroup`,
- * `flow-vm.ts:1330`) —el reparto lo hace (`historyGroupFor`, `flow-vm.ts:1368`)— y las renderiza en el
- * orden de (`HISTORY_GROUP_ORDER`, `flow-vm.ts:1333`), que es severidad decreciente. No calcula ningún
- * desenlace: usa el mismo (`escrowOutcome`, `flow-vm.ts:1193`) que la tarjeta ya usaba, y la tarjeta se
+ * `flow-vm.ts:1332`) —el reparto lo hace (`historyGroupFor`, `flow-vm.ts:1370`)— y las renderiza en el
+ * orden de (`HISTORY_GROUP_ORDER`, `flow-vm.ts:1335`), que es severidad decreciente. No calcula ningún
+ * desenlace: usa el mismo (`escrowOutcome`, `flow-vm.ts:1194`) que la tarjeta ya usaba, y la tarjeta se
  * invoca igual que antes.
  *
  * UN SOLO PASE SOBRE `items`, con push, y NADA de `.sort()` ni de cuatro `.filter()`. El orden dentro
@@ -3624,16 +3678,16 @@ export function TxProof({ signature }: { signature: string }) {
  * EL GRUPO SIN FILAS NO SE RENDERIZA, ni el encabezado ni un "0 envíos". Un encabezado sobre un
  * conjunto vacío es una afirmación vacía, y un cero es peor: un número invita a leerse como una
  * medición. Que esto sea inocuo depende de que la partición sea total, y eso está argumentado en el
- * docblock de (`HistoryGroup`, `flow-vm.ts:1330`) —no en el de `historyGroupFor`, que habla del `??`—;
+ * docblock de (`HistoryGroup`, `flow-vm.ts:1332`) —no en el de `historyGroupFor`, que habla del `??`—;
  * si alguien agrega un grupo que pueda quedar vacío significando "no medimos", esto hay que revisarlo.
  *
  * DEVUELVE UN FRAGMENT Y NO UN `div`. El padre es un `space-y-holgado`, y `space-y-*` sólo alcanza a los
  * hijos DIRECTOS: un div envolvente dejaría los 4 grupos a un nivel de profundidad y les comería el
  * espaciado. Y va un `<ul>` por grupo en vez de uno solo con separadores, porque la tarjeta devuelve
- * un `<li>` (`HistoryEntry`, `:3340`) y un encabezado suelto entre `<li>` es HTML inválido.
+ * un `<li>` (`HistoryEntry`, `:3394`) y un encabezado suelto entre `<li>` es HTML inválido.
  *
- * ⚠️ POR QUÉ VIVE ACÁ ABAJO Y NO JUNTO A (`HistoryView`, `:3249`), QUE ES DONDE SE LEERÍA MEJOR: por
- * lo mismo que (`TxProof`, `:3562`). Un bloque nuevo en el medio de este archivo desplaza todo lo que
+ * ⚠️ POR QUÉ VIVE ACÁ ABAJO Y NO JUNTO A (`HistoryView`, `:3303`), QUE ES DONDE SE LEERÍA MEJOR: por
+ * lo mismo que (`TxProof`, `:3616`). Un bloque nuevo en el medio de este archivo desplaza todo lo que
  * viene después, y a este archivo lo apuntan citas por número desde todo el árbol más las autocitas
  * `:NNN` de sus propios docblocks. De todas ellas, el candado de citas sólo vigila las ANCLADAS —las
  * que llevan el símbolo delante de la coma—; las SUELTAS, que son mayoría, se romperían sin que ningún

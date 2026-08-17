@@ -272,7 +272,7 @@ export const PAYOUT_STATUS_RL: RouteRateLimitConfig = {
 // ── A2A QUOTE · WKH-355 ──────────────────────────────────────────────────────────────────────────
 // 🔴 VA DESPUÉS DE `PAYOUT_STATUS_RL` POR EL MISMO MOTIVO QUE ÉL VA AL FINAL, y el motivo está tres
 // párrafos más arriba: hay TRES citas por número de línea dentro de este archivo
-// (`../rate-limit.ts:70` en `src/presentation/flow.tsx:1317`, `rate-limit.ts:122-155` en
+// (`../rate-limit.ts:70` en `src/presentation/flow.tsx:1371`, `rate-limit.ts:122-155` en
 // `src/infrastructure/persistence/supabase-server.ts:6`, y `../rate-limit.ts:262` en
 // `src/infrastructure/settlement/ledger-payout-status-gateway.ts:42`). Las tres apuntan a líneas
 // <= 262; agregar al final no desplaza ninguna. ⛔ No lo muevas con el grupo de arriba sin re-medir
@@ -290,13 +290,13 @@ export const PAYOUT_STATUS_RL: RouteRateLimitConfig = {
 //     del gateway se suma aparte, así que el débito real por llamada es >= 0,03.
 //
 //  2. CUÁNTAS NECESITA UNA PERSONA EN 10 MINUTOS. 10, contadas de los dos únicos productores:
-//      · preview en vivo, debounce de 300 ms (`previewQuote`, `../presentation/flow.tsx:176`) y sólo
+//      · preview en vivo, debounce de 300 ms (`previewQuote`, `../presentation/flow.tsx:192`) y sólo
 //        con monto >= 5 (`MIN_SEND_USD`, `../domain/remittance.ts:209`). Sin caché de ningún tipo:
 //        cada preview es un POST (`requestQuote`, `./a2a/gateways.ts:135`, que no memoiza). Tipear
 //        "400" con pausas largas da 2 (el "4" queda bajo el mínimo y no pide nada); con una
 //        corrección y tres montos distintos probados ⇒ 6.
-//      · el lock, 3 sitios de llamada (`lockQuote`, `../presentation/flow.tsx:240`), (`lockQuote`,
-//        `../presentation/flow.tsx:331`) y (`lockQuote`, `../presentation/flow.tsx:500`): al
+//      · el lock, 3 sitios de llamada (`lockQuote`, `../presentation/flow.tsx:256`), (`lockQuote`,
+//        `../presentation/flow.tsx:347`) y (`lockQuote`, `../presentation/flow.tsx:529`): al
 //        conectar, la re-cotización automática post-KYC y el re-lock manual por vencimiento ⇒ 4 con
 //        dos re-locks.
 //     6 + 4 = 10.

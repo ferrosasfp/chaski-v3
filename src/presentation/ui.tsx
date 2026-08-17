@@ -58,7 +58,7 @@ export function Button({
     <button
       className={cn(
         // ⛔ `h-[52px]` SE ESCRIBE ASÍ Y NO CON UN TOKEN. `touch-targets.test.tsx` lo lee con una
-        // expresión regular sobre el `className` RENDERIZADO (`h-\[(\d+)px\]`, `touch-targets.test.tsx:64`)
+        // expresión regular sobre el `className` RENDERIZADO (`h-\[(\d+)px\]`, `touch-targets.test.tsx:80`)
         // y usa ese número como la referencia contra la que mide las tres puertas de recuperar plata.
         // Un `h-cta` del tema se vería igual en pantalla y dejaría ese candado sin nada que leer.
         // `px-5` (20px) también se queda: la escala de S-4 tiene 8/12/16/24 y ninguno vale 20, así que

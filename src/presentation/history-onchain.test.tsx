@@ -51,7 +51,7 @@ const CP5_NO_PUDIMOS = "No pudimos preguntarle al contrato por este envío.";
 const CP8_VENTANA_VENCIDA =
   "El contrato dice que tus USDC siguen en el escrow y que el plazo para liberarlos al pago ya venció: la salida que queda es devolverlos a tu wallet, y sólo tu firma puede hacerlo.";
 /** WKH-352 · la fila `absent` que SÍ tiene la prueba local del depósito (`principalTx`). */
-const CP9_ABSENT_CON_DEPOSITO = "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en la dirección que le corresponde a este envío no hay ninguna cuenta: miramos esa dirección sola, no el contrato entero, y eso es todo lo que medimos. Desde acá no podemos decir si terminó en un pago o en una devolución, ni descartar que la cuenta siga abierta en otra dirección: la que miramos se calcula con la wallet conectada, así que si depositaste con otra, cambiá a esa cuenta en tu billetera y volvé a la pantalla de inicio: ahí está la opción de recuperar un envío perdido.";
+const CP9_ABSENT_CON_DEPOSITO = "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en la dirección que le corresponde a este envío no hay ninguna cuenta: miramos esa dirección sola, no el contrato entero, y eso es todo lo que medimos. Desde acá no podemos decir si terminó en un pago o en una devolución, ni descartar que la cuenta siga abierta en otra dirección: la que miramos se calcula con la wallet conectada, así que si depositaste con otra, cambiá a esa cuenta en tu billetera y abrí la pestaña Recuperar de la barra de abajo: ahí está la opción de recuperar un envío perdido.";
 /** WKH-352 · la frase AMBIGUA, la de la fila `absent` SIN prueba. Está acá para asertar que la fila con prueba NO la dice. */
 const CP_ABSENT_AMBIGUO = "En el contrato no hay ninguna cuenta para este envío: o el depósito nunca entró, o ya se cerró después de resolverse. Desde acá no podemos decir cuál de las dos.";
 /** La frase de ANTES de esta HU. Que desaparezca es la mitad del punto: la tarjeta no puede decir las dos. */
@@ -247,14 +247,14 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
   // 🔴 EL MUTANTE ORIGINAL NO LO MATA ESTE TEST, Y ESTÁ MEDIDO: que el desenlace de cadena reescriba
   // la etiqueta del trámite (pintar "Entregado" porque la PDA está `Released`). Hasta WKH-351 lo mataba
   // el assert de PRESENCIA del Pill, que es justo el que esta HU dio vuelta. Con ese mutante puesto en
-  // `flow.tsx:3379` este archivo queda VERDE (10 passed): el rojo lo da T-N1, mitad (c), en
+  // `flow.tsx:3433` este archivo queda VERDE (10 passed): el rojo lo da T-N1, mitad (c), en
   // `history-grupos.test.tsx`, que es hoy su dueño. El hecho de fondo no cambió: `Released` dice que el
   // vault salió del escrow y "Entregado" dice que el partner de payout reportó haber entregado los PEN,
   // y uno no prueba el otro.
   // 🔴 LO QUE SÍ MATA EL ASSERT DE CP3_LIBERADO: que la respuesta `released` deje de producir la frase
   // del vault en la tarjeta. T-V8 cubre ese copy en PURO, no en el render: (`escrowOutcomeDisplay`, `flow-vm.test.ts:1715`).
   // 🔴 EL MUTANTE DEL QUE ESTE TEST SÍ ES DUEÑO, MEDIDO: devolver `<Pill tone={status.tone}>{status.label}</Pill>`
-  // a `HistoryEntry` (`flow.tsx:3379`) pone rojo el assert de ausencia de abajo. ⚠️ Lo que NO caza es un
+  // a `HistoryEntry` (`flow.tsx:3433`) pone rojo el assert de ausencia de abajo. ⚠️ Lo que NO caza es un
   // `<span>` que pinte la etiqueta con un prefijo ("Estado: Pago en curso"): `queryAllByText` es match
   // EXACTO. Ese lo caza T-N1(c), que compara por substring sobre el `textContent` del grupo.
   // ⚠️ El assert de ausencia va SIN scope de fila a propósito: este montaje renderiza UNA sola fila y
@@ -292,7 +292,7 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
       reader,
     );
     render(<RemittanceFlow container={container} />);
-    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Mis envíos/ }));
 
     // (1) La pantalla existe: el título, el nombre de la beneficiaria y la puerta al seguimiento.
     expect(await screen.findByText(/Tus envíos/)).toBeInTheDocument();
@@ -312,7 +312,7 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
     const reader = new FakeSolanaEscrowChainStateReader(mapa([["rem-1", "deposited-window-open"]]));
     const { container } = await seededFlow([unverifiedSnapshot("rem-1")], reader);
     render(<RemittanceFlow container={container} />);
-    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Mis envíos/ }));
 
     await waitFor(() => expect(reader.calls).toHaveLength(1));
     expect(reader.calls[0]?.sender).toBe(FAKE_SOLANA_BENEFICIARY);
@@ -418,9 +418,9 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
   // `unverifiedSnapshot` llama (`markPrincipalIn`, `:101`), o sea que ESTE fixture ya es el de AC-1:
   // no hace falta inventar ninguno. La cadena contesta `absent` y la fila, en vez de la disyunción,
   // dice que el depósito entró y que no se puede saber cómo terminó.
-  // MUTANTE (a) MEDIDO — NO RAMIFICAR: volver `flow-vm.ts:1205` a `return "chain-absent";`. Medido:
+  // MUTANTE (a) MEDIDO — NO RAMIFICAR: volver `flow-vm.ts:1206` a `return "chain-absent";`. Medido:
   // T-W6 y T-W7 rojos (los dos esperan el copy nuevo en el DOM).
-  // MUTANTE (b) MEDIDO — DIBUJAR LAS DOS: un `<p>` de más en `flow.tsx:3379` con
+  // MUTANTE (b) MEDIDO — DIBUJAR LAS DOS: un `<p>` de más en `flow.tsx:3433` con
   // `escrowOutcomeDisplay("chain-absent").copy`, o sea el copy nuevo JUNTO al viejo en vez de
   // reemplazarlo. Medido: SÓLO T-W6 rojo, y sólo por el `queryByText(...)` `toBeNull()` de abajo. Por
   // eso el assert de ausencia es parte del test y no un adorno: sin él, ese mutante pasa entero y la
@@ -453,7 +453,7 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
   // costeado en `ports.ts:1065-1088` (R-1) y está DIFERIDO, no descartado (AC-6).
   // Dos mitades, las dos obligatorias: (a) un `fetch` que tira ante cualquier invocación, y (b) que
   // `calls` del reader no se mueva entre un montaje CON prueba y uno SIN prueba.
-  // MUTANTE MEDIDO: en `HistoryEntry` (`flow.tsx:3354`), agregar
+  // MUTANTE MEDIDO: en `HistoryEntry` (`flow.tsx:3408`), agregar
   // `if (escrowOutcome(rem, answer) === "chain-absent-after-deposit") void fetch("/api/solana/signatures");`
   // Medido: sólo este test se pone rojo, y con el mensaje del doble ("fetch_prohibido_en_esta_pantalla"),
   // que es la prueba de que lo que falló fue el candado y no otra cosa.
@@ -612,23 +612,31 @@ describe("WKH-352/WKH-354 · el consejo del copy, ejecutado sin reabrir la app",
 
     // (1) La tarjeta con el consejo, en pantalla, con la billetera de siempre.
     render(<RemittanceFlow container={container} />);
-    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Mis envíos/ }));
     expect(await screen.findByText(CP9_ABSENT_CON_DEPOSITO)).toBeInTheDocument();
     // (2) Y el consejo que este test va a ejecutar sale DEL COPY, no de la cabeza de quien lo escribió:
     // si alguien cambia la frase por otra, estos asserts se ponen rojos y obligan a re-medir el
     // recorrido. El `not.toContain` es el que caza la reposición del consejo viejo.
     expect(CP9_ABSENT_CON_DEPOSITO).toContain("cambiá a esa cuenta en tu billetera");
-    expect(CP9_ABSENT_CON_DEPOSITO).toContain("volvé a la pantalla de inicio");
+    expect(CP9_ABSENT_CON_DEPOSITO).toContain("abrí la pestaña Recuperar de la barra de abajo");
     expect(CP9_ABSENT_CON_DEPOSITO).toContain("recuperar un envío perdido");
     expect(CP9_ABSENT_CON_DEPOSITO).not.toContain("volvé a abrir Chaski");
+    // WKH-063: y tampoco el consejo INTERMEDIO, el que esta HU dejó falso. Mandaba a "la pantalla de
+    // inicio", y la puerta ya no está ahí: se mudó al destino "Recuperar". Un consejo que nombra el
+    // lugar equivocado es peor que uno vago, porque se sigue hasta el final y no encuentra nada.
+    expect(CP9_ABSENT_CON_DEPOSITO).not.toContain("volvé a la pantalla de inicio");
 
     // (3) "cambiá a esa cuenta en tu billetera" — LAS DOS COSTURAS, que en producción son la misma
     //     (el mismo adapter sobre el mismo bridge). Sin la segunda, `resolveSender` no se entera.
     wallet.actual = OTRA_CUENTA;
     probe.switchTo(OTRA_CUENTA);
 
-    // (4) "volvé a la pantalla de inicio: ahí está la opción de recuperar un envío perdido".
-    fireEvent.click(screen.getByRole("button", { name: /Volver/ }));
+    // (4) "abrí la pestaña Recuperar de la barra de abajo: ahí está la opción de recuperar un envío perdido".
+    //     WKH-063: el gesto que el copy nombra CAMBIÓ, y el test lo sigue tal como está escrito ahora.
+    //     Antes era "Volver" (al pie del formulario vivían las tres puertas); hoy es la pestaña de la
+    //     barra de destinos, que el historial SÍ pinta porque es un destino. El nombre va como string
+    //     exacto y no como regex: /Recuperar/ también matchearía "Recuperar un envío perdido".
+    fireEvent.click(screen.getByRole("button", { name: "Recuperar" }));
     await usarLaOpcionDeRecuperar();
 
     // (5) EL ASSERT QUE CIERRA EL HALLAZGO.
@@ -652,11 +660,11 @@ describe("WKH-352/WKH-354 · el consejo del copy, ejecutado sin reabrir la app",
     const { probe, refundGw, container } = await mundo();
 
     render(<RemittanceFlow container={container} />);
-    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Mis envíos/ }));
     expect(await screen.findByText(CP9_ABSENT_CON_DEPOSITO)).toBeInTheDocument();
 
     // Nadie tocó la billetera: ni el doble ni el probe cambian.
-    fireEvent.click(screen.getByRole("button", { name: /Volver/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Recuperar" }));
     await usarLaOpcionDeRecuperar();
 
     await waitFor(() => expect(refundGw.calls).toHaveLength(1));
@@ -665,7 +673,7 @@ describe("WKH-352/WKH-354 · el consejo del copy, ejecutado sin reabrir la app",
     // Y el doble PODÍA haber contestado otra cosa: si esto fallara, el control estaría midiendo un
     // doble incapaz de cambiar en vez de la ausencia de cambio. Va sobre el PROBE y no sobre
     // `wallet`, que era medir el doble equivocado (CR/MNR-3): después de esta HU el `sender` sale de
-    // (`live`, `./flow.tsx:390`), o sea del probe, y como el probe no contesta `null` en ningún
+    // (`live`, `./flow.tsx:406`), o sea del probe, y como el probe no contesta `null` en ningún
     // momento de este recorrido, el `?? connectWallet.execute()` nunca corre y `wallet.connect()` no
     // se consulta. La versión anterior ni siquiera destructuraba `probe`, que `mundo()` sí devuelve.
     probe.switchTo(OTRA_CUENTA);

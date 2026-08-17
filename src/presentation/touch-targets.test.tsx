@@ -6,13 +6,29 @@
 // alto propio: el área tocable era el alto de la línea de texto (~20 px con `text-sm`, ~16 px con
 // `text-xs`), contra los 52 px que el CTA del camino feliz ya tenía. Tres de esos seis son las ÚNICAS
 // puertas para recuperar plata:
-//   · "Ver mis envíos"                                    (`flow.tsx:892`)
-//   · "Recuperar un envío perdido"                        (`flow.tsx:2423`)
-//   · "Recuperar el depósito de red de envíos anteriores"  (`flow.tsx:2573`)
+//   · la pestaña "Mis envíos"                             (`className`, `barra-destinos.tsx:86`)
+//   · "Recuperar un envío perdido"                        (`className`, `flow.tsx:2477`)
+//   · "Recuperar el depósito de red de envíos anteriores"  (`className`, `flow.tsx:2627`)
+//
+// ⚠️ WKH-063 MOVIÓ LA PRIMERA DE LAS TRES, Y ESTE ARCHIVO SE EDITÓ POR ESO. Era el enlace "Ver mis
+// envíos" al pie del formulario; hoy es la pestaña "Mis envíos" de la barra de destinos
+// (`barra-destinos.tsx`), y ese nombre visible ya no existe en ninguna pantalla. Qué cambió y qué NO:
+//   · CAMBIÓ el recorrido para llegar al control (la barra sólo se pinta en los destinos) y el nombre
+//     con el que se lo busca.
+//   · NO cambió ningún umbral: siguen siendo `>= 52` y `>=` el alto del `<Button>` del camino feliz,
+//     leído del elemento renderizado. Ni se relajó, ni se sacó una puerta de la lista: siguen siendo
+//     tres, y la cuarta medición (la del bloque de reset) sigue entrando por la misma puerta que
+//     antes, que ahora es la pestaña.
+// Lo que este archivo NO puede seguir garantizando por sí solo es que las tres estén en la MISMA
+// pantalla, porque ya no lo están: eso pasó a ser un invariante de navegación y lo cuida
+// `barra-destinos.test.tsx`.
+// ⚠️ Y LAS TRES CITAS DE ARRIBA PASARON A SER ANCLADAS. Antes eran citas sueltas (el número solo,
+// sin símbolo delante) y por eso `citas-ancladas.test.ts` nunca las miró, que es como dos de ellas
+// sobrevivieron años sin apuntar a nada. Con el ancla, moverlas sin actualizarlas se pone rojo.
 // Y otros tres viven apretados en una fila del header, uno de ellos destructivo:
-//   · "Borrar igual" (borra los datos locales)             (`flow.tsx:694`)
-//   · "Cancelar"                                           (`flow.tsx:701`)
-//   · "¿No sos vos?"                                       (`flow.tsx:711`)
+//   · "Borrar igual" (borra los datos locales)             (`flow.tsx:723`)
+//   · "Cancelar"                                           (`flow.tsx:730`)
+//   · "¿No sos vos?"                                       (`flow.tsx:740`)
 //
 // ⚠️ QUÉ MIDEN ESTOS TESTS Y QUÉ NO. jsdom NO hace layout: `getBoundingClientRect()` devuelve 0 y el
 // alto real en píxeles NO se puede medir acá. Así que estos tests leen el NÚMERO QUE ESTÁ DENTRO DEL
@@ -69,10 +85,14 @@ function pxDelCtaDelCaminoFeliz(): number {
 
 /** Las tres puertas de recuperar plata, cada una en su montaje mínimo. */
 function puertasDeRecuperarPlata(): Array<{ nombre: string; el: HTMLElement }> {
+  // La pestaña sale del árbol REAL y no de `<BarraDestinos>` montada a mano: lo que hay que medir es
+  // el control que la persona toca en la app, y montar el componente suelto probaría el componente y
+  // no la pantalla. El render arranca en la pantalla de entrada (el default), que es un DESTINO, así
+  // que la barra está ahí desde el primer tick y no hace falta navegar.
   render(
     <RemittanceFlow container={buildTestContainer({ wallet: new FakeSolanaWallet() })} />,
   );
-  const verEnvios = screen.getByRole("button", { name: /Ver mis envíos/ });
+  const verEnvios = screen.getByRole("button", { name: "Mis envíos" });
 
   render(
     <LostEscrowRecovery
@@ -93,7 +113,7 @@ function puertasDeRecuperarPlata(): Array<{ nombre: string; el: HTMLElement }> {
   });
 
   return [
-    { nombre: "Ver mis envíos", el: verEnvios },
+    { nombre: "la pestaña «Mis envíos»", el: verEnvios },
     { nombre: "Recuperar un envío perdido", el: envioPerdido },
     { nombre: "Recuperar el depósito de red de envíos anteriores", el: alquiler },
   ];
@@ -102,7 +122,7 @@ function puertasDeRecuperarPlata(): Array<{ nombre: string; el: HTMLElement }> {
 describe("T-341-3 (AC-2): las tres puertas de recuperar plata declaran alto de toque", () => {
   it("las tres declaran min-h de 52 px o más", () => {
     // INPUT QUE LO PONE EN ROJO: borrarle la clase `min-h-[52px]` a cualquiera de las tres
-    // (`className`, `flow.tsx:892`), (`className`, `flow.tsx:2423`), (`className`, `flow.tsx:2573`)
+    // (`className`, `barra-destinos.tsx:86`), (`className`, `flow.tsx:2477`), (`className`, `flow.tsx:2627`)
     // ⇒ `minHpx` no matchea ⇒ throw con el nombre del control.
     //
     // El ancla es `className` porque es el ÚNICO símbolo de esas líneas, y eso acota lo que compra:
@@ -134,8 +154,8 @@ describe("T-341-4 (AC-2): el 52 no está escrito a mano, sale del CTA del camino
 /**
  * Los tres controles del bloque de reset. "¿No sos vos?" y el par "Borrar igual"/"Cancelar" NO
  * coexisten: el primero es el que abre el bloque y desaparece al abrirlo (es un ternario:
- * (`confirmReset`, `flow.tsx:686`), y la otra rama es la que pinta "¿No sos vos?"
- * (`onAskReset`, `flow.tsx:710`)). Así que el px de "¿No sos vos?" se lee ANTES del click y
+ * (`confirmReset`, `flow.tsx:715`), y la otra rama es la que pinta "¿No sos vos?"
+ * (`onAskReset`, `flow.tsx:739`)). Así que el px de "¿No sos vos?" se lee ANTES del click y
  * el de los otros dos DESPUÉS. Un test que los buscara a los tres al mismo tiempo no encontraría
  * ninguno de los tres.
  */
@@ -146,8 +166,10 @@ async function pxDelBloqueDeReset(): Promise<{
 }> {
   render(<RemittanceFlow container={buildTestContainer({ wallet: new FakeSolanaWallet() })} />);
   // El bloque de reset vive en el header y sólo aparece con `address` puesta. Abrir el historial es
-  // lo que la resuelve: conecta la wallet y hace `setAddress` (`resolveSender`, `flow.tsx:380`).
-  fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+  // lo que la resuelve: conecta la wallet y hace `setAddress` (`resolveSender`, `flow.tsx:396`).
+  // WKH-063: la puerta al historial es la pestaña, y este render arranca en un destino, así que la
+  // barra está en pantalla desde el primer tick. El gesto es el mismo de siempre y el efecto también.
+  fireEvent.click(screen.getByRole("button", { name: "Mis envíos" }));
   const noSosVos = await screen.findByRole("button", { name: "¿No sos vos?" });
   const px = { noSosVos: minHpx(noSosVos), borrarIgual: 0, cancelar: 0 };
 
@@ -160,10 +182,10 @@ async function pxDelBloqueDeReset(): Promise<{
 describe("T-341-5 (AC-3): los tres controles del bloque de reset llegan al mínimo de toque", () => {
   it("los tres declaran min-h de 44 px o más", async () => {
     // 44 px es el mínimo de WCAG 2.5.5 / HIG. No son 52 porque los tres viven en una MISMA fila del
-    // header (`flow.tsx:689`) y a 52 cada uno el header crece más de lo necesario.
+    // header (`flow.tsx:718`) y a 52 cada uno el header crece más de lo necesario.
     //
     // INPUT QUE LO PONE EN ROJO: dejar cualquiera de los tres sin `min-h-`
-    // (`className`, `flow.tsx:694`), (`className`, `flow.tsx:701`), (`className`, `flow.tsx:711`)
+    // (`className`, `flow.tsx:723`), (`className`, `flow.tsx:730`), (`className`, `flow.tsx:740`)
     // ⇒ `minHpx` no matchea ⇒ throw nombrando el control. Mismo ancla débil que en T-341-3 y por el
     // mismo motivo: es el único símbolo de la línea.
     const px = await pxDelBloqueDeReset();

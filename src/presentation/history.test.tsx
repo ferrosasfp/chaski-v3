@@ -141,15 +141,16 @@ async function seededFlow(snapshots: RemittanceState[]) {
 
 // ── EL test. Es el que tiene que ponerse rojo si una remesa con fondos deja de aparecer ───────────
 describe("una remesa con fondos en el escrow siempre es alcanzable desde la interfaz", () => {
-  it("tras recargar, 'Ver mis envíos' la lista y desde ahí se llega a 'Recuperar fondos'", async () => {
+  it("tras recargar, la pestaña 'Mis envíos' la lista y desde ahí se llega a 'Recuperar fondos'", async () => {
     const { gateway, container } = await seededFlow([depositedSnapshot("rem-1")]);
 
-    // Arranque en frío: el flujo monta en `send`, sin `rem` ni `address`. Exactamente una recarga.
+    // Arranque en frío: el flujo monta en la pantalla de entrada, sin `rem` ni `address`. Exactamente
+    // una recarga (WKH-063: antes montaba en `send`, y ahí vivía la puerta).
     render(<RemittanceFlow container={container} />);
     expect(screen.queryByText(/Mamá/)).toBeNull();
 
     // (1) La remesa aparece en el historial.
-    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Mis envíos/ }));
     expect(await screen.findByText(/Tus envíos/)).toBeInTheDocument();
     expect(screen.getByText("Mamá")).toBeInTheDocument();
 
@@ -168,7 +169,7 @@ describe("una remesa con fondos en el escrow siempre es alcanzable desde la inte
     const { repo, container } = await seededFlow([depositedSnapshot("rem-1")]);
     render(<RemittanceFlow container={container} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Mis envíos/ }));
     fireEvent.click(await screen.findByRole("button", { name: /Ver seguimiento/ }));
     fireEvent.click(await screen.findByRole("button", { name: /Recuperar fondos/ }));
 
@@ -177,11 +178,30 @@ describe("una remesa con fondos en el escrow siempre es alcanzable desde la inte
   });
 
   // "Enviar otra" resetea el estado y vuelve a `send`. Era el agravante: producía a propósito el
-  // mismo callejón que la recarga. Ahora `send` es justamente donde está la puerta de vuelta.
-  it("la puerta al historial está en `send`, que es adonde vuelven la recarga y 'Enviar otra'", async () => {
+  // mismo callejón que la recarga.
+  //
+  // 🔴 ESTE TEST CAMBIÓ DE PREMISA EN WKH-063, Y LA VIEJA ERA LA MITAD DEL PUNTO. Decía "la puerta al
+  // historial está en `send`, que es adonde vuelven la recarga y 'Enviar otra'", y desde WKH-063 la
+  // puerta NO está en `send`: es la pestaña "Mis envíos" de la barra de destinos, y la barra no se
+  // pinta en los pasos del flujo (AC-3). Lo que este test cuida no es la ubicación: es que desde
+  // CUALQUIERA de los dos aterrizajes —la recarga y "Enviar otra", que llevan a la pantalla de entrada
+  // y a `send` respectivamente— siga existiendo un camino hasta una remesa con USDC en el escrow. Así
+  // que ahora se verifican LOS DOS, y por eso son dos asserts y no uno.
+  //
+  // MUTANTE QUE MATA: borrar `<VolverAlInicio>` del paso `send`. La segunda mitad se pone roja y dice
+  // exactamente qué se rompió: quien cae en el formulario queda sin salida hacia sus envíos.
+  it("desde los DOS aterrizajes (entrada y `send`) hay camino hasta el historial", async () => {
     const { container } = await seededFlow([depositedSnapshot("rem-1")]);
     render(<RemittanceFlow container={container} />);
-    expect(screen.getByRole("button", { name: /Ver mis envíos/ })).toBeInTheDocument();
+    // (1) La recarga deja la app en la pantalla de entrada, que ES un destino ⇒ la pestaña está ahí.
+    expect(screen.getByRole("button", { name: /Mis envíos/ })).toBeInTheDocument();
+
+    // (2) Y desde el formulario —adonde vuelve "Enviar otra"— se sale a los destinos.
+    fireEvent.click(screen.getByRole("button", { name: /Empezar un envío/ }));
+    expect(await screen.findByRole("button", { name: /Volver al inicio/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Mis envíos/ }), "la barra NO se pinta en `send`").toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Volver al inicio/ }));
+    expect(await screen.findByRole("button", { name: /Mis envíos/ })).toBeInTheDocument();
   });
 
   // El caso que el merge trajo, y el que se pierde si la pantalla sigue mirando sólo `principalTx`:
@@ -192,7 +212,7 @@ describe("una remesa con fondos en el escrow siempre es alcanzable desde la inte
     const { repo, gateway, container } = await seededFlow([inEscrowSnapshot("rem-1")]);
     render(<RemittanceFlow container={container} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Mis envíos/ }));
     expect(await screen.findByText(/Tus envíos/)).toBeInTheDocument();
     expect(screen.getByText("Mamá")).toBeInTheDocument();
     expect(screen.getByText(/Tus USDC quedaron en el escrow, a tu nombre/)).toBeInTheDocument();
@@ -223,7 +243,7 @@ describe("una remesa con fondos en el escrow siempre es alcanzable desde la inte
     const { repo, gateway, container } = await seededFlow([confirmedSnapshot("rem-1")]);
     render(<RemittanceFlow container={container} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Mis envíos/ }));
     expect(await screen.findByText(/Tus envíos/)).toBeInTheDocument();
     // La promesa que el historial ya hacía y el seguimiento no cumplía.
     expect(screen.getByText(/No comprobamos si tus USDC siguen en el escrow/)).toBeInTheDocument();
@@ -243,7 +263,7 @@ describe("una remesa con fondos en el escrow siempre es alcanzable desde la inte
   it("el seguimiento de `confirmed` dice lo mismo que el historial y ofrece la misma salida", async () => {
     const { container } = await seededFlow([confirmedSnapshot("rem-1")]);
     render(<RemittanceFlow container={container} />);
-    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Mis envíos/ }));
     fireEvent.click(await screen.findByRole("button", { name: /Ver seguimiento/ }));
     await screen.findByRole("button", { name: /Recuperar fondos/ });
 
@@ -280,7 +300,7 @@ describe("una remesa con fondos en el escrow siempre es alcanzable desde la inte
       abandonedSnapshot("rem-3"),
     ]);
     render(<RemittanceFlow container={container} />);
-    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Mis envíos/ }));
     await screen.findByText(/Tus envíos/);
     // 2 depositadas → 2 puertas al seguimiento. La abandonada se lista sin puerta (ver abajo).
     expect(await screen.findAllByRole("button", { name: /Ver seguimiento/ })).toHaveLength(2);
@@ -431,7 +451,9 @@ describe("el botón que borra avisa lo que se lleva", () => {
     // Id distinto de "rem-N" a propósito: este test SÍ crea una remesa nueva, y SeqIds emite
     // "rem-1", que chocaría con la sembrada y haría fallar el save por CAS.
     const { container } = await seededFlow([depositedSnapshot("vieja-1")]);
-    render(<RemittanceFlow container={container} />);
+    // El ÚNICO render de este archivo que arranca en el formulario y no en la pantalla de entrada: lo
+    // que este test necesita es justamente el camino que NO pasa por el historial.
+    render(<RemittanceFlow pasoInicial="send" container={container} />);
 
     // send → connect (así se setea `address` sin pasar por el historial).
     fireEvent.change(screen.getByPlaceholderText("Nombre de tu familiar"), {
@@ -456,7 +478,7 @@ describe("el botón que borra avisa lo que se lleva", () => {
     const { container } = await seededFlow([depositedSnapshot("rem-1")]);
     render(<RemittanceFlow container={container} />);
     // Conectar para que exista address (es lo que hace visible el control del header).
-    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Mis envíos/ }));
     await screen.findByText(/Tus envíos/);
 
     fireEvent.click(screen.getByText("¿No sos vos?"));

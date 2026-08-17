@@ -86,7 +86,7 @@ async function verLaTarjeta(steps: PlanStep[], totalUsdc: number): Promise<void>
     "fetch",
     vi.fn(async () => ({ ok: true, json: async () => ({ steps, totalUsdc }) })),
   );
-  render(<RemittanceFlow container={buildTestContainer()} />);
+  render(<RemittanceFlow pasoInicial="send" container={buildTestContainer()} />);
   fireEvent.change(screen.getByPlaceholderText("Nombre de tu familiar"), {
     target: { value: "Mamá" },
   });
@@ -369,7 +369,7 @@ describe("el precio dice qué es y quién lo cobraría", () => {
   // regresión. Por eso todo lo que compara notas compara ESTE nodo.
   function textoDeLaNota(): string {
     const nodos = screen.getAllByText(/publican en el catálogo/);
-    // La tarjeta se monta en DOS pantallas (`AgentPlanCard`, `flow.tsx:1071` en `review` y `flow.tsx:1123`
+    // La tarjeta se monta en DOS pantallas (`AgentPlanCard`, `flow.tsx:1098` en `review` y `flow.tsx:1150`
     // en `confirm`) y `verLaTarjeta` para en `review`, así que hoy hay UN nodo. Un `cleanup()` olvidado
     // entre dos renders del mismo `it` deja DOS, y sin este assert se compararía la nota del render
     // ANTERIOR y el test daría verde por el DOM equivocado. Es el riesgo que este archivo ya declara en

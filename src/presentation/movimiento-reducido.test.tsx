@@ -180,7 +180,7 @@ describe("D-2 · framer: la preferencia del sistema deja de ignorarse", () => {
     const { RemittanceFlow } = await import("./flow");
     const { buildTestContainer } = await import("../test-support/test-container");
     const { FakeSolanaWallet } = await import("../test-support/fakes");
-    render(<RemittanceFlow container={buildTestContainer({ wallet: new FakeSolanaWallet() })} />);
+    render(<RemittanceFlow pasoInicial="send" container={buildTestContainer({ wallet: new FakeSolanaWallet() })} />);
     expect(espia.props.length).toBeGreaterThan(0);
     for (const p of espia.props) expect(p).toBe("user");
   });

@@ -210,8 +210,8 @@ export class SolanaWalletAdapter
    * ⚠️ EL FALLBACK NO ES DEFENSIVO: cubre un camino que el flujo recorre SIEMPRE. `this.address` vive
    * sólo en memoria y se escribe sólo en `connect()`, así que una recarga de la página lo borra — y hay
    * una navegación completa en el medio del flujo: el KYC se va a Didit y vuelve
-   * (`window.location.href`, `flow.tsx:431`). Al volver, el resume salta derecho a `confirm` sin
-   * pasar por `connect()` (`setStep`, `flow.tsx:236`). Antes, ahí `getAddress()` contestaba `null`.
+   * (`window.location.href`, `flow.tsx:460`). Al volver, el resume salta derecho a `confirm` sin
+   * pasar por `connect()` (`setStep`, `flow.tsx:252`). Antes, ahí `getAddress()` contestaba `null`.
    *
    * El bridge SÍ sobrevive a esa recarga, y no porque persista nada: lo repuebla el sync component
    * desde `useWallet()` en cuanto `autoConnect` reconecta (`setState`, `solana-providers.tsx:178`).
@@ -800,7 +800,7 @@ export class SolanaWalletAdapter
 
       // El `sender` sale de `this.getAddress()` (guard `:560-561`, sin cambios) y NUNCA del canal del
       // enlace (CD-11). Se canonicaliza acá: `canonicalizeAddress` TIRA ante lo que no parsea, y eso
-      // se trata como DESACUERDO (fail-closed), igual que `flow.tsx:483-488`.
+      // se trata como DESACUERDO (fail-closed), igual que `flow.tsx:512-517`.
       // ⛔ NUNCA `.toLowerCase()`: base58 es case-sensitive y bajarlo a minúsculas fabrica colisiones.
       let senderCanonico: string;
       try {
@@ -1671,7 +1671,7 @@ export class SolanaWalletAdapter
    * 🔴 NO FIRMA NADA, Y ESA RESTRICCIÓN ES LA QUE DECIDE SU FORMA. No se reusan
    * (`resolveRemittanceIdFromLedger`, `:353`) ni (`listCloseable`, `:1599`), que hacen el MISMO
    * derive+batch+decode, porque los dos empiezan por `resolver.lookupBySender`, que es
-   * PoP-autenticado: reusarlos abriría un diálogo de firma sólo por abrir "Ver mis envíos", y una app
+   * PoP-autenticado: reusarlos abriría un diálogo de firma sólo por abrir "Mis envíos", y una app
    * que pide firmas por mirar una lista entrena a la gente a firmar cualquier cosa. Se reusa la mitad
    * "derive + batch + decode" y nada más; los ids llegan por argumento.
    *
@@ -1738,7 +1738,7 @@ export class SolanaWalletAdapter
     // saldría "un batch de cero cuentas": es falso — el batch cuelga del `for` de abajo, que con cero
     // ids no entra NUNCA (la frase estaba copiada de `:370-372`, donde sí es cierta porque allá el
     // batch se llama incondicionalmente). Lo único que ahorraba eran cuatro `await import` y tres
-    // constructores, sobre un camino que producción no toca (`idsAConsultar`, `../presentation/flow.tsx:3285`). Y a cambio
+    // constructores, sobre un camino que producción no toca (`idsAConsultar`, `../presentation/flow.tsx:3339`). Y a cambio
     // rompía lo que el docblock de arriba promete: con `{ sender: "no-es-base58", remittanceIds: [] }`
     // NO tiraba. Sin el corte, un `sender` inválido tira SIEMPRE, con lista vacía o llena (T-A15).
 

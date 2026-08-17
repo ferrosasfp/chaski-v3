@@ -451,7 +451,7 @@ describe("WKH-351 · la tarjeta del historial no muestra la etiqueta del trámit
   // 🔴 T-N1 (AC-1, AC-4 parcial) — EL INVARIANTE, EN LOS 4 GRUPOS, CON LAS 7 ETIQUETAS PRESENTES.
   // MUTANTE (a): esconder el encabezado del grupo "para evitar la contradicción", que es resolver la
   // HU al revés: sacarle a la persona el dato que la cadena SÍ sostiene.
-  // MUTANTE (b): restaurar el Pill en `flow.tsx:3369`, o poner cualquier otra etiqueta con forma de
+  // MUTANTE (b): restaurar el Pill en `flow.tsx:3423`, o poner cualquier otra etiqueta con forma de
   // Pill y texto nuevo.
   // MUTANTE (c): pintar `status.label` sin Pill, en un `<span className="text-xs">`.
   it("T-N1: en los 4 grupos está el encabezado y no hay ninguna etiqueta de trámite", async () => {
@@ -473,11 +473,11 @@ describe("WKH-351 · la tarjeta del historial no muestra la etiqueta del trámit
     for (const g of LOS_4_GRUPOS) {
       const grupo = screen.getByTestId(`grupo-${g}`);
       // (b) estructural. El scope por grupo NO es un adorno: el chip de la wallet del header
-      // (`flow.tsx:679-680`) también es un `span.rounded-full`, y un selector global lo contaría.
+      // (`flow.tsx:708-709`) también es un `span.rounded-full`, y un selector global lo contaría.
       expect(grupo.querySelectorAll("span.rounded-full")).toHaveLength(0);
       // (c) semántica, por SUBSTRING sobre el `textContent` del grupo y no por `queryAllByText`.
       // Medido, y es el motivo del cambio: con `<span className="text-xs">Estado: {status.label}</span>`
-      // en `flow.tsx:3369` la tarjeta decía "Estado: Pago en curso" bajo "Necesitan tu firma" —el caso
+      // en `flow.tsx:3423` la tarjeta decía "Estado: Pago en curso" bajo "Necesitan tu firma" —el caso
       // exacto del founder, con sus mismas palabras— y `queryAllByText`, que es match EXACTO, lo dejaba
       // pasar verde. Un prefijo no puede evadir un `includes`.
       const texto = grupo.textContent ?? "";
@@ -497,7 +497,7 @@ describe("WKH-351 · la tarjeta del historial no muestra la etiqueta del trámit
   // `payout_submitted` + respuesta `deposited-window-closed` ⇒ grupo "Necesitan tu firma". Es
   // literalmente lo de producción: 3 filas, 32 USDC, con "Pago en curso" al lado de "el plazo venció".
   // MUTANTE: volver a la Opción 1 (Pill condicional por grupo) preservándolo justo para
-  // `payout_submitted`; revertir sólo el hunk de `flow.tsx:3369` dejando el de `flow.tsx:3349`; o mover la
+  // `payout_submitted`; revertir sólo el hunk de `flow.tsx:3423` dejando el de `flow.tsx:3403`; o mover la
   // etiqueta del trámite al encabezado del grupo.
   // POR QUÉ NO ALCANZA T-N1: T-N1 recorre grupos con un conjunto derivado; T-N2 fija el par exacto
   // (status, respuesta) del reporte y lo nombra con literales. Si mañana alguien reordena fixtures,
@@ -529,7 +529,7 @@ describe("WKH-351 · la tarjeta del historial no muestra la etiqueta del trámit
   // encabezado de grupo con el que contradecirse, así que ahí la etiqueta no miente.
   // MUTANTE: sacar el Pill del `Receipt` "por consistencia", que es el sobre-cumplimiento, el error
   // simétrico al bug; borrar `statusDisplay` (no compila); o cambiarle una etiqueta al pasar.
-  // NO DUPLICA: (`statusDisplay`, `flow-vm.test.ts:76-101`) candadea el PURO y `flow.test.tsx:1548-1558` cubre 2 de
+  // NO DUPLICA: (`statusDisplay`, `flow-vm.test.ts:76-101`) candadea el PURO y `flow.test.tsx:1564-1574` cubre 2 de
   // los 7 estados en el recibo. Esto es el lado del RENDER con el conjunto completo.
   it("T-N3: el recibo sigue mostrando la etiqueta, y las 7 siguen siendo 7 y no vacías", () => {
     const { container } = render(
@@ -543,12 +543,12 @@ describe("WKH-351 · la tarjeta del historial no muestra la etiqueta del trámit
 
   // 🔴 T-N4 (AC-4) — LO QUE LA TARJETA SIGUE MOSTRANDO, Y ES TODO MENOS LA ETIQUETA.
   // MUTANTE: la limpieza tentadora de borrar el `<div className="flex items-start justify-between
-  // gap-normal">` de `flow.tsx:3362` junto con el Pill ("un flex con un solo hijo sobra"), que se lleva
-  // puestos el nombre, el monto y la fecha. O borrar el bloque `flow.tsx:3362-3370` entero. Además, esas 4
+  // gap-normal">` de `flow.tsx:3416` junto con el Pill ("un flex con un solo hijo sobra"), que se lleva
+  // puestos el nombre, el monto y la fecha. O borrar el bloque `flow.tsx:3416-3424` entero. Además, esas 4
   // líneas de desplazamiento las cazaría el control de línea-neutralidad.
   // ⚠️ LA FECHA NO SE COMPARA CONTRA UN LITERAL: `toLocaleDateString("es-PE")` depende del ICU del
   // runtime. Se verifica que la línea del monto exista y que NO diga "sin fecha", que es lo que
-  // `formatEntryDate` (`flow.tsx:3391`) devuelve cuando el `createdAt` es implanteable.
+  // `formatEntryDate` (`flow.tsx:3445`) devuelve cuando el `createdAt` es implanteable.
   it("T-N4: la tarjeta sigue mostrando nombre, monto, fecha, la frase y exactamente un botón", async () => {
     const reader = new FakeSolanaEscrowChainStateReader(
       mapa([["rem-open", "deposited-window-open"]]),
@@ -579,7 +579,7 @@ describe("WKH-352 · el desenlace nuevo cae en el grupo que esa fila ya tenía",
    *  y se borró (CR · MNR-2): esas citas ya no existen, y las dos que este archivo hace a `flow-vm.test.ts`
    *  van ANCLADAS, así que el desplazamiento lo caza `citas-ancladas.test.ts` y no una regla en prosa. */
   const CP_ABSENT_CON_DEPOSITO =
-    "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en la dirección que le corresponde a este envío no hay ninguna cuenta: miramos esa dirección sola, no el contrato entero, y eso es todo lo que medimos. Desde acá no podemos decir si terminó en un pago o en una devolución, ni descartar que la cuenta siga abierta en otra dirección: la que miramos se calcula con la wallet conectada, así que si depositaste con otra, cambiá a esa cuenta en tu billetera y volvé a la pantalla de inicio: ahí está la opción de recuperar un envío perdido.";
+    "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en la dirección que le corresponde a este envío no hay ninguna cuenta: miramos esa dirección sola, no el contrato entero, y eso es todo lo que medimos. Desde acá no podemos decir si terminó en un pago o en una devolución, ni descartar que la cuenta siga abierta en otra dirección: la que miramos se calcula con la wallet conectada, así que si depositaste con otra, cambiá a esa cuenta en tu billetera y abrí la pestaña Recuperar de la barra de abajo: ahí está la opción de recuperar un envío perdido.";
   const CP_ABSENT_AMBIGUO =
     "En el contrato no hay ninguna cuenta para este envío: o el depósito nunca entró, o ya se cerró después de resolverse. Desde acá no podemos decir cuál de las dos.";
 
@@ -599,7 +599,7 @@ describe("WKH-352 · el desenlace nuevo cae en el grupo que esa fila ya tenía",
   // fija es que ganar una frase propia NO la mueve: sigue bajo "Sin respuesta sobre tu plata", que es
   // el grupo que ya tenía, y el reparto de las 9 filas no cambia.
   // MUTANTE MEDIDO: mapear `"chain-absent-after-deposit"` a `"sin-plata"` en `GRUPO_POR_DESENLACE`
-  // (`flow-vm.ts:1364`), que es la edición tentadora ("total, ya se resolvió"). Es justo la que
+  // (`flow-vm.ts:1366`), que es la edición tentadora ("total, ya se resolvió"). Es justo la que
   // AFIRMARÍA sobre la plata de alguien: mandaría bajo "Sin plata en el escrow" una fila de la que lo
   // único que se sabe es que el depósito entró y que la cuenta se cerró.
   // Medido: T-W8 rojo. Y medido también lo que NO es exclusivo de acá: ese mismo mutante pone rojo a

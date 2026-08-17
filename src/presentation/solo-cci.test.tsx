@@ -65,7 +65,7 @@ const CCI_PLACEHOLDER = "002 193 004455667788 99";
 const CONTINUAR = { name: /Continuar/ };
 
 function renderSend(): void {
-  render(<RemittanceFlow container={buildTestContainer()} />);
+  render(<RemittanceFlow pasoInicial="send" container={buildTestContainer()} />);
 }
 function typeRecipient(v = "Mamá"): void {
   fireEvent.change(screen.getByPlaceholderText("Nombre de tu familiar"), { target: { value: v } });
@@ -226,14 +226,16 @@ describe("una remesa guardada con un método que ya no se ofrece", () => {
 
   it("T-LEGACY-2: la pantalla de historial la lista y el seguimiento la abre, sin romperse", async () => {
     // El recorrido REAL de una persona que abre la app hoy y tiene una remesa de antes: arranque en
-    // frío en `send`, "Ver mis envíos", "Ver seguimiento". Es la pregunta del encargo (¿se cae el
-    // historial?) contestada por la pantalla, no por el tipo.
+    // frío en la pantalla de entrada, pestaña "Mis envíos", "Ver seguimiento". Es la pregunta del
+    // encargo (¿se cae el historial?) contestada por la pantalla, no por el tipo.
+    // WKH-063: el arranque en frío ya no es `send` y la puerta ya no es un enlace al pie del
+    // formulario; el recorrido que este test ejecuta es el de hoy, sin `pasoInicial`.
     const repo = new InMemoryRepo();
     await repo.save(Remittance.rehydrate(legacyYapeSnapshot("vieja-1")));
     const container = buildTestContainer({ repo, wallet: new FakeSolanaWallet() });
     render(<RemittanceFlow container={container} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Mis envíos/ }));
     expect(await screen.findByText(/Tus envíos/)).toBeInTheDocument();
     expect(screen.getByText("Mamá")).toBeInTheDocument();
 

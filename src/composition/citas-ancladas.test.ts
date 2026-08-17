@@ -20,7 +20,7 @@
 // FORMATO ANCLADO (el que este archivo vigila):
 //     (`símbolo`, `:NN`)                 ← cita al PROPIO archivo
 //     (`símbolo`, `ruta/archivo.ts:NN`)  ← cita a otro archivo
-// La coma entre los dos backticks es lo que lo hace una cita anclada. Una cita suelta —`flow.tsx:324`
+// La coma entre los dos backticks es lo que lo hace una cita anclada. Una cita suelta —`flow.tsx:340`
 // sin símbolo delante— NO se verifica: el candado no puede adivinar qué quiso decir.
 //
 // ⚠️ LO QUE ESTE CANDADO NO CIERRA, declarado y no disfrazado:

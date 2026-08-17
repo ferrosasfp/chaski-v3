@@ -154,6 +154,31 @@ describe("T-DL-6: la forma del cuerpo descifrado se valida, no se castea", () =>
     expect(d.codigo).toBe("forma_inesperada");
   });
 
+  it("una cadena VACÍA no es un campo presente: `public_key: \"\"` no es una cuenta", () => {
+    // 🔴 MEDIDO EN EL RE-AR: un connect con `{"public_key":"","session":""}` salía
+    // `{"tipo":"conectado","direccion":"","session":""}`. El validador exigía que el campo fuera un
+    // `string` y no que tuviera contenido, así que una cadena vacía viajaba hacia el camino del
+    // dinero disfrazada de cuenta de Solana. Es el mismo defecto que el `undefined` tipado `string`
+    // que este bloque ya cerraba, con otra máscara: el tipo se cumple y el valor no existe.
+    // MUTANTE QUE MATA: sacar el `|| v === ""` de `soloTextos`.
+    const par = nuevoParDeCifrado();
+    const r = billeteraQueContesta(par.publica, { public_key: "", session: "" });
+    const params = new URLSearchParams({ phantom_encryption_public_key: r.clave, nonce: r.nonce, data: r.data });
+    const d = leerRespuesta("phantom", params, par.secreta, FORMA_CONEXION);
+    expect(d.tipo).toBe("rechazo");
+    if (d.tipo !== "rechazo") return;
+    expect(d.codigo).toBe("forma_inesperada");
+  });
+
+  it("y basta con que UNO de los dos venga vacío", () => {
+    // El control de granularidad: un validador que sólo mirara el primer campo pasaría el `it` de
+    // arriba. Acá `public_key` es legítimo y `session` está vacío.
+    const par = nuevoParDeCifrado();
+    const r = billeteraQueContesta(par.publica, { public_key: "EjPubKey", session: "" });
+    const params = new URLSearchParams({ phantom_encryption_public_key: r.clave, nonce: r.nonce, data: r.data });
+    expect(leerRespuesta("phantom", params, par.secreta, FORMA_CONEXION).tipo).toBe("rechazo");
+  });
+
   it("un cuerpo que falta UN campo de dos tampoco pasa", () => {
     // El caso alcanzable sin billetera hostil: el mismo secreto compartido sirve para los tres
     // pasos, así que un sobre del paso 2 se descifra perfecto si se lo lee como paso 3.

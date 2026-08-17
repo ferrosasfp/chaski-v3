@@ -254,17 +254,109 @@ describe("T-VJ-2: los TRES desenlaces de leer, y que «vencido» no se disfrace 
     expect(leerViaje(a, AHORA).tipo).toBe("no-hay");
   });
 
-  it("el crash tampoco pasa si alguien arma la lectura a mano", () => {
-    // `leerViaje` ya lo garantiza, pero `interpretarVuelta` recibe una `LecturaDelViaje` que puede
-    // construir cualquiera. Defensa en profundidad: contesta un desenlace y limpia el disco.
+  it("y `interpretarVuelta` tampoco revienta con esa basura, porque lee el disco por su cuenta", () => {
+    // Antes esto había que probarlo armando una `LecturaDelViaje` a mano, porque `interpretarVuelta`
+    // recibía el snapshot de quien la llamara y había que suponer un llamador que le pasara algo que
+    // `leerViaje` nunca produce. Ahora lee ella, así que este camino se ejercita como se da de
+    // verdad: basura en el disco, la función se la come sola. La rama defensiva que existía adentro
+    // (`secreta === null` → limpiar + huerfana) se BORRÓ en vez de dejarla sin test: era código al
+    // que ya no llega nadie, y el re-AR la tenía marcada como mutante vivo (M7) justo por eso.
+    // MUTANTE QUE MATA: sacar la validación `decodificarSecreta` de `leerViaje` (sin ella,
+    // `interpretarVuelta` no tendría bytes que usar y el `bs58.decode` volvería a reventar).
     const a = almacenFalso();
-    const lectura = { tipo: "hay", viaje: viajeBase({ secreta: "!!!no-base58!!!" }) } as const;
+    a.escribir(CLAVE_EN_DISCO, JSON.stringify(viajeBase({ secreta: "!!!no-base58!!!" })));
     expect(() =>
-      interpretarVuelta(a, new URLSearchParams({ [MARCA]: "conectar" }), lectura, null),
+      interpretarVuelta(a, new URLSearchParams({ [MARCA]: "conectar" }), AHORA, null),
     ).not.toThrow();
+    expect(a.datos.has(CLAVE_EN_DISCO)).toBe(false);
     expect(
-      interpretarVuelta(a, new URLSearchParams({ [MARCA]: "conectar" }), lectura, null).tipo,
+      interpretarVuelta(a, new URLSearchParams({ [MARCA]: "conectar" }), AHORA, null).tipo,
     ).toBe("huerfana");
+  });
+
+  it("un `pasosConsumidos` que no es una lista es basura: «no-hay», se LIMPIA y no revienta", () => {
+    // 🔴 MISMA FIRMA DE FALLA QUE LA `secreta` NO-BASE58, con el campo que agregó el fix-pack
+    // anterior. Medido en el re-AR con `pasosConsumidos: 7`:
+    //   `THROW: viaje.pasosConsumidos?.includes is not a function | sigue en disco: true`
+    // Excepción no capturada MÁS disco sucio, o sea que se repetía en CADA carga de la página hasta
+    // que venciera la ventana. El arreglo de la iteración 1 había cerrado la instancia (`secreta`) y
+    // no la clase: todo campo del disco que se USE como estructura hay que validarlo como estructura.
+    // MUTANTE QUE MATA: sacar la validación de `pasosConsumidos` de `leerViaje`.
+    const a = almacenFalso();
+    a.escribir(CLAVE_EN_DISCO, JSON.stringify({ ...viajeBase(), pasosConsumidos: 7 }));
+    expect(() =>
+      interpretarVuelta(a, new URLSearchParams({ [MARCA]: "conectar" }), AHORA, null),
+    ).not.toThrow();
+    expect(a.datos.has(CLAVE_EN_DISCO)).toBe(false);
+  });
+
+  it("un `pasosConsumidos` que es un STRING no consume pasos por subcadena", () => {
+    // 🔴 El otro lado del mismo agujero, y es peor que el crash porque es silencioso: `.includes` en
+    // un string busca SUBCADENAS. Medido: con `pasosConsumidos: "firmar-tx-y-mas"` la respuesta
+    // buena del paso 2 salía `{"tipo":"ya-consumida","paso":"firmar-tx"}` — un campo basura
+    // quemando un paso que nadie consumió, con la firma de la persona en la mano.
+    // MUTANTE QUE MATA: validar `pasosConsumidos` con `typeof === "object"` en vez de `Array.isArray`
+    // (un string sigue entrando), o aceptar cualquier array sin mirar los elementos.
+    const a = almacenFalso();
+    a.escribir(
+      CLAVE_EN_DISCO,
+      JSON.stringify({ ...viajeConectado({ paso: "firmar-tx" }), pasosConsumidos: "firmar-tx-y-mas" }),
+    );
+    const r = respuestaDeLaBilletera({ transaction: "TxBuena" }, par.publicKey);
+    const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: "firmar-tx", ...r }), AHORA, null);
+    expect(v.tipo).not.toBe("ya-consumida");
+  });
+
+  it("una lista con un nombre de paso inventado tampoco pasa", () => {
+    // `["conectar","borrar-todo"]` es tan basura como `7`: el tipo declara TRES nombres y cualquier
+    // otro sólo puede venir de algo que no escribió este módulo.
+    const a = almacenFalso();
+    a.escribir(
+      CLAVE_EN_DISCO,
+      JSON.stringify({ ...viajeBase(), pasosConsumidos: ["conectar", "borrar-todo"] }),
+    );
+    expect(leerViaje(a, AHORA).tipo).toBe("no-hay");
+    expect(a.datos.has(CLAVE_EN_DISCO)).toBe(false);
+  });
+
+  it("un viaje que empezó en el FUTURO es basura, no un viaje eterno", () => {
+    // 🔴 `ahora - desde` es NEGATIVO, así que nunca supera `MAX_EDAD_MS`. Medido en el re-AR: con
+    // `desde` adelantado 10 días el viaje contestaba «hay» diez días después, y con él seguían vivas
+    // `secreta`, `claveBilletera` y la ventana en la que el paso 1 se puede forjar.
+    //
+    // El fix-pack anterior no lo cerró con el argumento de que "la ventana no es un control de
+    // seguridad" (DT-7). Ese argumento dejó de ser cierto en cuanto el paso 1 quedó declarado como
+    // residual: hoy la ventana es la ÚNICA contención que le queda en esta capa, así que su duración
+    // no la puede elegir quien mueva el reloj del teléfono.
+    // MUTANTE QUE MATA: sacar la rama `v.desde > ahora` de `leerViaje`.
+    const a = almacenFalso();
+    const DIEZ_DIAS = 10 * 24 * 60 * 60 * 1000;
+    guardarViaje(a, viajeBase({ desde: AHORA + DIEZ_DIAS }));
+    expect(leerViaje(a, AHORA).tipo).toBe("no-hay");
+    expect(a.datos.has(CLAVE_EN_DISCO)).toBe(false);
+  });
+
+  it("pero el instante exacto todavía vale: el corte es estrictamente mayor", () => {
+    // El control del `it` de arriba. Un guard que matara `desde === ahora` mataría todo viaje que se
+    // lea en el mismo milisegundo en que se escribió, que es el caso normal de la primera lectura.
+    const a = almacenFalso();
+    guardarViaje(a, viajeBase({ desde: AHORA }));
+    expect(leerViaje(a, AHORA).tipo).toBe("hay");
+  });
+
+  it("un almacén que ni siquiera deja LEER contesta «no-hay», no revienta", () => {
+    // Cookies bloqueadas o modo privado: `localStorage` puede tirar hasta en la lectura. Eso no es
+    // un viaje vencido, es que este dispositivo no puede recordar nada.
+    // MUTANTE QUE MATA: sacar el `try` de alrededor de `a.leer(CLAVE)`.
+    const a: Almacen = {
+      leer: () => {
+        throw new Error("SecurityError");
+      },
+      escribir: () => undefined,
+      borrar: () => undefined,
+    };
+    expect(() => leerViaje(a, AHORA)).not.toThrow();
+    expect(leerViaje(a, AHORA).tipo).toBe("no-hay");
   });
 });
 
@@ -310,7 +402,7 @@ describe("T-VJ-4: interpretar la vuelta — los caminos que NO son el feliz", ()
   it("sin la marca es «no-volvimos»: entrar a la página de frente no es volver de ningún lado", () => {
     const a = almacenFalso();
     guardarViaje(a, viajeBase());
-    expect(interpretarVuelta(a, new URLSearchParams(""), leerViaje(a, AHORA), null).tipo).toBe(
+    expect(interpretarVuelta(a, new URLSearchParams(""), AHORA, null).tipo).toBe(
       "no-volvimos",
     );
   });
@@ -321,7 +413,7 @@ describe("T-VJ-4: interpretar la vuelta — los caminos que NO son el feliz", ()
     const v = interpretarVuelta(
       a,
       new URLSearchParams({ [MARCA]: "cualquier-cosa" }),
-      leerViaje(a, AHORA),
+      AHORA,
       null,
     );
     expect(v.tipo).toBe("no-volvimos");
@@ -332,7 +424,7 @@ describe("T-VJ-4: interpretar la vuelta — los caminos que NO son el feliz", ()
     // Lo único honesto es decir que no sabemos de qué viaje habla. NO es "cancelaste".
     // MUTANTE QUE MATA: contestar `rechazo` cuando no hay viaje.
     const a = almacenFalso();
-    const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: "firmar-tx" }), leerViaje(a, AHORA), null);
+    const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: "firmar-tx" }), AHORA, null);
     expect(v.tipo).toBe("huerfana");
     if (v.tipo !== "huerfana") return;
     expect(v.paso).toBe("firmar-tx");
@@ -344,7 +436,7 @@ describe("T-VJ-4: interpretar la vuelta — los caminos que NO son el feliz", ()
     const v = interpretarVuelta(
       a,
       new URLSearchParams({ [MARCA]: "firmar-patrocinio" }),
-      leerViaje(a, AHORA + VEINTE_MINUTOS + 1),
+      AHORA + VEINTE_MINUTOS + 1,
       null,
     );
     expect(v.tipo).toBe("vencida");
@@ -355,7 +447,7 @@ describe("T-VJ-4: interpretar la vuelta — los caminos que NO son el feliz", ()
     // podemos atribuir; y tampoco es "no volvimos", porque volvimos.
     const a = almacenFalso();
     guardarViaje(a, viajeBase());
-    const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: "conectar" }), leerViaje(a, AHORA), null);
+    const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: "conectar" }), AHORA, null);
     expect(v.tipo).toBe("huerfana");
   });
 
@@ -365,7 +457,7 @@ describe("T-VJ-4: interpretar la vuelta — los caminos que NO son el feliz", ()
     const v = interpretarVuelta(
       a,
       new URLSearchParams({ [MARCA]: "firmar-tx", errorCode: "4001", errorMessage: "User rejected" }),
-      leerViaje(a, AHORA),
+      AHORA,
       null,
     );
     expect(v.tipo).toBe("rechazo");
@@ -384,17 +476,17 @@ describe("T-VJ-4: interpretar la vuelta — los caminos que NO son el feliz", ()
     interpretarVuelta(
       a,
       new URLSearchParams({ [MARCA]: "firmar-tx", errorCode: "4001" }),
-      leerViaje(a, AHORA),
+      AHORA,
       null,
     );
     const buena = respuestaDeLaBilletera({ transaction: "TxDeVerdad" }, par.publicKey);
     const v = interpretarVuelta(
       a,
       new URLSearchParams({ [MARCA]: "firmar-tx", ...buena }),
-      leerViaje(a, AHORA),
+      AHORA,
       null,
     );
-    expect(v).toEqual({ tipo: "tx-firmada", transaccionBase58: "TxDeVerdad" });
+    expect(v).toEqual({ tipo: "tx-firmada", transaccionBase58: "TxDeVerdad", persistencia: "guardado" });
   });
 });
 
@@ -418,7 +510,7 @@ describe("T-VJ-6: la respuesta tiene que venir de la billetera con la que se con
     const v = interpretarVuelta(
       a,
       new URLSearchParams({ [MARCA]: "firmar-tx", ...forjada }),
-      leerViaje(a, AHORA),
+      AHORA,
       null,
     );
     expect(v.tipo).toBe("otra-clave");
@@ -435,7 +527,7 @@ describe("T-VJ-6: la respuesta tiene que venir de la billetera con la que se con
     const v = interpretarVuelta(
       a,
       new URLSearchParams({ [MARCA]: "firmar-patrocinio", ...forjada }),
-      leerViaje(a, AHORA),
+      AHORA,
       null,
     );
     expect(v.tipo).toBe("otra-clave");
@@ -451,7 +543,7 @@ describe("T-VJ-6: la respuesta tiene que venir de la billetera con la que se con
     const v = interpretarVuelta(
       a,
       new URLSearchParams({ [MARCA]: "firmar-tx", ...r }),
-      leerViaje(a, AHORA),
+      AHORA,
       null,
     );
     expect(v.tipo).toBe("otra-clave");
@@ -467,18 +559,53 @@ describe("T-VJ-6: la respuesta tiene que venir de la billetera con la que se con
     const v = interpretarVuelta(
       a,
       new URLSearchParams({ [MARCA]: "firmar-tx", ...r }),
-      leerViaje(a, AHORA),
+      AHORA,
       null,
     );
-    expect(v).toEqual({ tipo: "tx-firmada", transaccionBase58: "TxBuena" });
+    expect(v).toEqual({ tipo: "tx-firmada", transaccionBase58: "TxBuena", persistencia: "guardado" });
   });
 
-  it("[RESIDUAL, NO ARREGLADO] en el paso 1 esa misma forja SÍ entra, y no se cierra acá", () => {
+  it("[RESIDUAL, NO ARREGLADO] quien gana el paso 1 gana el VIAJE ENTERO y expulsa a la real", () => {
     // 🔴 Esto NO es un candado: es la documentación ejecutable de un agujero que sigue abierto. El
     // connect es el primer contacto y no hay ninguna clave previa contra qué comparar, así que quien
-    // conozca la pública de la app puede hacerse pasar por la billetera. Cerrarlo pide verificar el
-    // connect contra algo que el atacante no tenga, y eso no vive en este módulo. Si algún día se
-    // cierra, este `it` se pone rojo, que es exactamente lo que tiene que pasar.
+    // conozca la pública de la app puede hacerse pasar por la billetera. Si algún día se cierra,
+    // este `it` se pone rojo, que es exactamente lo que tiene que pasar.
+    //
+    // ⚠️ LA CONSECUENCIA REAL, QUE ESTE COMENTARIO ANTES DECÍA DE MENOS. No es "un paso forjado".
+    // Medido en el re-AR, sobre un viaje limpio:
+    //   connect forjado            -> {"tipo":"conectado","direccion":"DIR-ATACANTE","session":"s"}
+    //   paso 2 firmado por él      -> {"tipo":"tx-firmada","transaccionBase58":"TX-DEL-ATACANTE"}
+    //   paso 3 firmado por él      -> {"tipo":"patrocinio-firmado","firma":"FIRMA-ATACANTE"}
+    //   paso 2 de la billetera REAL-> {"tipo":"otra-clave","paso":"firmar-tx","motivo":"no-coincide"}
+    // Su clave queda fijada como ancla, así que los tres pasos le pertenecen y la billetera de
+    // verdad queda EXPULSADA del viaje hasta que venza la ventana.
+    //
+    // ⛔ Y EL `ya-consumida` NO ES UNA MITIGACIÓN, aunque una versión anterior de este archivo lo
+    // presentaba así. Es al revés: es el mecanismo que FIJA al atacante y BLOQUEA al legítimo.
+    // Escribirlo como mitigación es prosa que afirma de más y apaga la revisión de quien la lea.
+    //
+    // ✅ LO ÚNICO QUE SÍ ACOTA ESTO ACÁ, y por eso está en el código: el ancla de UNA SOLA ESCRITURA
+    // (ver el `it` de abajo). Sin ella, un connect forjado TARDÍO gana incluso después de que la
+    // billetera real haya conectado; con ella, el atacante tiene que llegar ANTES. Eso baja el costo
+    // del ataque, no lo cierra. La segunda contención es la ventana de 20 minutos, que ahora sí es
+    // una ventana (ver el `it` del `desde` en el futuro).
+    //
+    // 🔴 EL CORTE TIENE QUE VENIR DE FUERA DEL CANAL DEL DEEPLINK, y la solución que se le ocurre a
+    // cualquiera no sirve: un token de un solo uso en el `redirect_link` viaja por la MISMA URL
+    // saliente que la clave pública de la app, o sea el mismo historial y los mismos servidores de
+    // la billetera. Cualquier secreto que la app mande en el connect se filtra por donde ya se
+    // filtra lo demás.
+    //
+    // 🔴 REQUISITO PARA LA HU 062, dicho acá para que lo lea quien la escriba:
+    //   1. `viaje.direccion` NO es la cuenta de la persona: es "la cuenta que alguien afirmó por el
+    //      canal del deeplink". Todo lo que se construya con ese valor hereda la forja.
+    //   2. "Una dirección no puede creerse hasta que una firma la pruebe" NO ALCANZA como requisito
+    //      —así estaba escrito y es insuficiente—: el que forjó el connect también produce la firma
+    //      del paso 3, y verifica perfecto contra SU dirección. Una firma prueba control de una
+    //      clave; no prueba que esa clave sea la de la persona.
+    //   3. El escenario concreto que 062 tiene que descartar explícitamente es la **sustitución de
+    //      depositante**: el `remittanceId` de la víctima atado a un escrow cuyo depositante (y por
+    //      lo tanto cuyo destinatario de reembolso) es el atacante.
     const a = almacenFalso();
     guardarViaje(a, viajeBase());
     const forjada = respuestaDeLaBilletera(
@@ -489,10 +616,62 @@ describe("T-VJ-6: la respuesta tiene que venir de la billetera con la que se con
     const v = interpretarVuelta(
       a,
       new URLSearchParams({ [MARCA]: "conectar", ...forjada }),
-      leerViaje(a, AHORA),
+      AHORA,
       null,
     );
-    expect(v).toEqual({ tipo: "conectado", direccion: "DIRECCION-DEL-ATACANTE", session: "s" });
+    expect(v).toEqual({
+      tipo: "conectado",
+      direccion: "DIRECCION-DEL-ATACANTE",
+      session: "s",
+      persistencia: "guardado",
+    });
+  });
+
+  it("el ancla es de UNA SOLA ESCRITURA: un connect posterior con otra clave no la pisa", () => {
+    // 🔴 ESTO ES LO QUE ACOTA EL RESIDUAL DE ARRIBA. Medido en el re-AR: con el ancla pisable, un
+    // connect forjado que llegaba DESPUÉS del connect real reemplazaba `claveBilletera` y
+    // `direccion`, y a partir de ahí los pasos 2 y 3 volvían a ser falsificables con sólo la clave
+    // pública de la app — el candado de la iteración 1 se deshacía entero. Con el ancla write-once,
+    // ganar el paso 1 exige llegar ANTES que la billetera real, no en cualquier momento.
+    //
+    // El fixture tiene el ancla puesta y `pasosConsumidos` VACÍO a propósito: es la única forma de
+    // ejercitar este guard y no el de `ya-consumida`, y es un estado que el tipo permite
+    // (`pasosConsumidos` es opcional, así que cualquier `Viaje` que arme la ola 3 puede tener ancla
+    // sin marca). Sin este `it`, borrar la comparación del paso 1 sobrevive a la suite.
+    // MUTANTE QUE MATA: volver el guard a `paso !== "conectar" && ...` (o sea, no comparar el ancla
+    // en el paso 1).
+    const a = almacenFalso();
+    guardarViaje(a, viajeConectado({ pasosConsumidos: [] }));
+    const forjada = respuestaDeLaBilletera({ public_key: "DIR-ATACANTE", session: "s2" }, par.publicKey, {
+      quien: nacl.box.keyPair(),
+    });
+    const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: "conectar", ...forjada }), AHORA, null);
+    expect(v.tipo).toBe("otra-clave");
+    if (v.tipo !== "otra-clave") return;
+    expect(v.motivo).toBe("no-coincide");
+
+    // Y el disco quedó intacto: ni la clave ni la sesión se movieron.
+    const l = leerViaje(a, AHORA);
+    expect(l.tipo).toBe("hay");
+    if (l.tipo !== "hay") return;
+    expect(l.viaje.claveBilletera).toBe(bs58.encode(billeteraReal.publicKey));
+    expect(l.viaje.direccion).toBeUndefined();
+    expect(l.viaje.session).toBe("s");
+  });
+
+  it("pero la MISMA billetera sí puede volver a conectar sobre su propia ancla", () => {
+    // El control del `it` de arriba: un guard que rechazara todo connect con ancla puesta también
+    // pasaría ese test, y dejaría el paso 1 imposible de repetir para la billetera legítima.
+    const a = almacenFalso();
+    guardarViaje(a, viajeConectado({ pasosConsumidos: [] }));
+    const r = respuestaDeLaBilletera({ public_key: "LaCuenta", session: "s2" }, par.publicKey);
+    const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: "conectar", ...r }), AHORA, null);
+    expect(v).toEqual({
+      tipo: "conectado",
+      direccion: "LaCuenta",
+      session: "s2",
+      persistencia: "guardado",
+    });
   });
 });
 
@@ -508,11 +687,12 @@ describe("T-VJ-7: la misma URL no se aplica dos veces", () => {
     const r = respuestaDeLaBilletera({ transaction: "TxFirmada58" }, par.publicKey);
     const url = new URLSearchParams({ [MARCA]: "firmar-tx", ...r });
 
-    expect(interpretarVuelta(a, url, leerViaje(a, AHORA), null)).toEqual({
+    expect(interpretarVuelta(a, url, AHORA, null)).toEqual({
       tipo: "tx-firmada",
       transaccionBase58: "TxFirmada58",
+      persistencia: "guardado",
     });
-    const segunda = interpretarVuelta(a, url, leerViaje(a, AHORA + 60_000), null);
+    const segunda = interpretarVuelta(a, url, AHORA + 60_000, null);
     expect(segunda.tipo).toBe("ya-consumida");
     if (segunda.tipo !== "ya-consumida") return;
     expect(segunda.paso).toBe("firmar-tx");
@@ -523,8 +703,8 @@ describe("T-VJ-7: la misma URL no se aplica dos veces", () => {
     guardarViaje(a, viajeConectado({ paso: "firmar-tx" }));
     const r = respuestaDeLaBilletera({ transaction: "T" }, par.publicKey);
     const url = new URLSearchParams({ [MARCA]: "firmar-tx", ...r });
-    interpretarVuelta(a, url, leerViaje(a, AHORA), null);
-    const v = interpretarVuelta(a, url, leerViaje(a, AHORA), null);
+    interpretarVuelta(a, url, AHORA, null);
+    const v = interpretarVuelta(a, url, AHORA, null);
     expect(v.tipo).not.toBe("rechazo");
     expect(v.tipo).not.toBe("huerfana");
   });
@@ -535,7 +715,7 @@ describe("T-VJ-7: la misma URL no se aplica dos veces", () => {
     const a = almacenFalso();
     guardarViaje(a, viajeConectado({ paso: "firmar-tx" }));
     const r = respuestaDeLaBilletera({ transaction: "TxGuardada" }, par.publicKey);
-    interpretarVuelta(a, new URLSearchParams({ [MARCA]: "firmar-tx", ...r }), leerViaje(a, AHORA), null);
+    interpretarVuelta(a, new URLSearchParams({ [MARCA]: "firmar-tx", ...r }), AHORA, null);
     const l = leerViaje(a, AHORA);
     expect(l.tipo).toBe("hay");
     if (l.tipo !== "hay") return;
@@ -549,22 +729,92 @@ describe("T-VJ-7: la misma URL no se aplica dos veces", () => {
     const a = almacenFalso();
     guardarViaje(a, viajeBase());
     const conectar = respuestaDeLaBilletera({ public_key: "C", session: "S" }, par.publicKey);
-    interpretarVuelta(a, new URLSearchParams({ [MARCA]: "conectar", ...conectar }), leerViaje(a, AHORA), null);
+    interpretarVuelta(a, new URLSearchParams({ [MARCA]: "conectar", ...conectar }), AHORA, null);
     const firmar = respuestaDeLaBilletera({ transaction: "T" }, par.publicKey);
     const v = interpretarVuelta(
       a,
       new URLSearchParams({ [MARCA]: "firmar-tx", ...firmar }),
-      leerViaje(a, AHORA),
+      AHORA,
       null,
     );
-    expect(v).toEqual({ tipo: "tx-firmada", transaccionBase58: "T" });
+    expect(v).toEqual({ tipo: "tx-firmada", transaccionBase58: "T", persistencia: "guardado" });
+  });
+
+  it("el paso 1 también se consume: el segundo connect es «ya-consumida»", () => {
+    // 🔴 MUTANTE VIVO DEL RE-AR (M16). Los cinco `it` de este bloque consumían `firmar-tx`, y el
+    // único que tocaba `conectar` verificaba lo contrario (que consumir uno no consuma los otros).
+    // Resultado: hacer que `ya-consumida` NO aplicara al paso `conectar` dejaba los 71 tests en
+    // verde. Justo el paso 1, que es el que tiene el residual declarado.
+    // MUTANTE QUE MATA: excluir `conectar` de la comprobación de `pasosConsumidos`.
+    const a = almacenFalso();
+    guardarViaje(a, viajeBase());
+    const r = respuestaDeLaBilletera({ public_key: "LaCuenta", session: "LaSesion" }, par.publicKey);
+    const url = new URLSearchParams({ [MARCA]: "conectar", ...r });
+    expect(interpretarVuelta(a, url, AHORA, null).tipo).toBe("conectado");
+    const segunda = interpretarVuelta(a, url, AHORA, null);
+    expect(segunda.tipo).toBe("ya-consumida");
+    if (segunda.tipo !== "ya-consumida") return;
+    expect(segunda.paso).toBe("conectar");
+  });
+
+  it("la lista de consumidos ACUMULA los tres pasos, no se pisa con el último", () => {
+    // 🔴 MUTANTE VIVO DEL RE-AR (M5). Reemplazar `[...(viaje.pasosConsumidos ?? []), paso]` por
+    // `[paso]` sobrevivía a los 71 tests, y la consecuencia es exactamente el agujero del `it` de
+    // arriba: consumir el paso 2 BORRA la marca del paso 1, y un connect forjado vuelve a entrar
+    // sobre un viaje que ya había conectado. Ningún test miraba la lista completa después de dos
+    // pasos; éste la mira después de los tres.
+    // MUTANTE QUE MATA: `pasosConsumidos: [paso]` en `consumir`.
+    const a = almacenFalso();
+    guardarViaje(a, viajeBase());
+    const conectar = respuestaDeLaBilletera({ public_key: "C", session: "S" }, par.publicKey);
+    interpretarVuelta(a, new URLSearchParams({ [MARCA]: "conectar", ...conectar }), AHORA, null);
+    const firmar = respuestaDeLaBilletera({ transaction: "T" }, par.publicKey);
+    interpretarVuelta(a, new URLSearchParams({ [MARCA]: "firmar-tx", ...firmar }), AHORA, null);
+    const patrocinio = respuestaDeLaBilletera({ signature: "F" }, par.publicKey);
+    interpretarVuelta(a, new URLSearchParams({ [MARCA]: "firmar-patrocinio", ...patrocinio }), AHORA, null);
+
+    const l = leerViaje(a, AHORA);
+    expect(l.tipo).toBe("hay");
+    if (l.tipo !== "hay") return;
+    expect(l.viaje.pasosConsumidos).toEqual(["conectar", "firmar-tx", "firmar-patrocinio"]);
+    // Y los tres resultados siguen ahí: avanzar un paso no borra lo que consiguió el anterior.
+    expect(l.viaje.direccion).toBe("C");
+    expect(l.viaje.transaccionFirmada).toBe("T");
+    expect(l.viaje.firmaDePatrocinio).toBe("F");
+  });
+
+  it("[DECIDIDO, NO ES UN BUG] una SEGUNDA firma legítima del mismo paso se descarta", () => {
+    // La marca de consumo es por NOMBRE de paso, no por pedido, así que un viaje sirve para UN
+    // pedido de cada paso. Si la ola 3 vuelve a pedir la misma firma dentro del mismo viaje
+    // (cotización refrescada, reintento tras un timeout), la segunda firma —buena, de la billetera
+    // real— vuelve como `ya-consumida` y se tira. Este `it` NO celebra eso: lo congela para que sea
+    // una decisión visible y no un descubrimiento en producción. Re-pedir una firma exige un viaje
+    // NUEVO.
+    //
+    // Se evaluó discriminar por `nonce` y se descartó con un motivo medible: el `nonce` sólo existe
+    // en las respuestas que traen sobre, así que una URL con `errorCode` no tiene ninguno y un paso
+    // YA firmado quedaría expuesto a un `?errorCode=` pegado a mano (que hoy sale `ya-consumida`).
+    // Se prefiere perder una firma repetida a poder fabricar un «cancelaste» sobre algo ya firmado.
+    const a = almacenFalso();
+    guardarViaje(a, viajeConectado({ paso: "firmar-tx" }));
+    const primera = respuestaDeLaBilletera({ transaction: "TX-1" }, par.publicKey);
+    const segunda = respuestaDeLaBilletera({ transaction: "TX-2" }, par.publicKey);
+    expect(
+      interpretarVuelta(a, new URLSearchParams({ [MARCA]: "firmar-tx", ...primera }), AHORA, null).tipo,
+    ).toBe("tx-firmada");
+    const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: "firmar-tx", ...segunda }), AHORA, null);
+    expect(v.tipo).toBe("ya-consumida");
+    // Y TX-2 no pisó a TX-1 en el disco: lo que quedó guardado es lo primero que se dio por bueno.
+    const l = leerViaje(a, AHORA);
+    if (l.tipo !== "hay") return;
+    expect(l.viaje.transaccionFirmada).toBe("TX-1");
   });
 
   it("el connect fija la clave de la billetera en el disco: de ahí sale el candado del paso 2", () => {
     const a = almacenFalso();
     guardarViaje(a, viajeBase());
     const r = respuestaDeLaBilletera({ public_key: "LaCuenta", session: "LaSesion" }, par.publicKey);
-    interpretarVuelta(a, new URLSearchParams({ [MARCA]: "conectar", ...r }), leerViaje(a, AHORA), null);
+    interpretarVuelta(a, new URLSearchParams({ [MARCA]: "conectar", ...r }), AHORA, null);
     const l = leerViaje(a, AHORA);
     expect(l.tipo).toBe("hay");
     if (l.tipo !== "hay") return;
@@ -588,7 +838,7 @@ describe("T-VJ-8: una vuelta de otra remesa no se aplica a la que está en curso
     const v = interpretarVuelta(
       a,
       new URLSearchParams({ [MARCA]: "firmar-tx", ...r }),
-      leerViaje(a, AHORA),
+      AHORA,
       "REMESA-2",
     );
     expect(v.tipo).toBe("otra-remesa");
@@ -605,7 +855,7 @@ describe("T-VJ-8: una vuelta de otra remesa no se aplica a la que está en curso
     const v = interpretarVuelta(
       a,
       new URLSearchParams({ [MARCA]: "firmar-tx", ...r }),
-      leerViaje(a, AHORA),
+      AHORA,
       "REMESA-2",
     );
     expect(v.tipo).toBe("otra-remesa");
@@ -620,11 +870,11 @@ describe("T-VJ-8: una vuelta de otra remesa no se aplica a la que está en curso
     guardarViaje(a, viajeConectado({ paso: "firmar-tx", remittanceId: "REMESA-1" }));
     const r = respuestaDeLaBilletera({ transaction: "T" }, par.publicKey);
     const url = new URLSearchParams({ [MARCA]: "firmar-tx", ...r });
-    expect(interpretarVuelta(a, url, leerViaje(a, AHORA), "REMESA-1").tipo).toBe("tx-firmada");
+    expect(interpretarVuelta(a, url, AHORA, "REMESA-1").tipo).toBe("tx-firmada");
 
     const b = almacenFalso();
     guardarViaje(b, viajeConectado({ paso: "firmar-tx", remittanceId: "REMESA-1" }));
-    expect(interpretarVuelta(b, url, leerViaje(b, AHORA), null).tipo).toBe("tx-firmada");
+    expect(interpretarVuelta(b, url, AHORA, null).tipo).toBe("tx-firmada");
   });
 });
 
@@ -642,16 +892,21 @@ describe("T-VJ-5: interpretar la vuelta — los tres pasos que sí salen bien", 
     const r = respuestaDeLaBilletera({ public_key: "LaCuenta", session: "LaSesion" }, par.publicKey, {
       billetera,
     });
-    const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: "conectar", ...r }), leerViaje(a, AHORA), null);
-    expect(v).toEqual({ tipo: "conectado", direccion: "LaCuenta", session: "LaSesion" });
+    const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: "conectar", ...r }), AHORA, null);
+    expect(v).toEqual({
+      tipo: "conectado",
+      direccion: "LaCuenta",
+      session: "LaSesion",
+      persistencia: "guardado",
+    });
   });
 
   it.each(LAS_DOS)("%s · firmar-tx devuelve la transacción firmada", (billetera) => {
     const a = almacenFalso();
     guardarViaje(a, viajeConectado({ billetera, paso: "firmar-tx" }));
     const r = respuestaDeLaBilletera({ transaction: "TxFirmada58" }, par.publicKey, { billetera });
-    const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: "firmar-tx", ...r }), leerViaje(a, AHORA), null);
-    expect(v).toEqual({ tipo: "tx-firmada", transaccionBase58: "TxFirmada58" });
+    const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: "firmar-tx", ...r }), AHORA, null);
+    expect(v).toEqual({ tipo: "tx-firmada", transaccionBase58: "TxFirmada58", persistencia: "guardado" });
   });
 
   it.each(LAS_DOS)("%s · firmar-patrocinio devuelve la firma", (billetera) => {
@@ -661,10 +916,10 @@ describe("T-VJ-5: interpretar la vuelta — los tres pasos que sí salen bien", 
     const v = interpretarVuelta(
       a,
       new URLSearchParams({ [MARCA]: "firmar-patrocinio", ...r }),
-      leerViaje(a, AHORA),
+      AHORA,
       null,
     );
-    expect(v).toEqual({ tipo: "patrocinio-firmado", firma: "FirmaPoP" });
+    expect(v).toEqual({ tipo: "patrocinio-firmado", firma: "FirmaPoP", persistencia: "guardado" });
   });
 
   it("una respuesta de Phantom NO se lee como Solflare al atravesar la sesión", () => {
@@ -673,7 +928,7 @@ describe("T-VJ-5: interpretar la vuelta — los tres pasos que sí salen bien", 
     const a = almacenFalso();
     guardarViaje(a, viajeConectado({ billetera: "solflare", paso: "firmar-tx" }));
     const r = respuestaDeLaBilletera({ transaction: "T" }, par.publicKey, { billetera: "phantom" });
-    const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: "firmar-tx", ...r }), leerViaje(a, AHORA), null);
+    const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: "firmar-tx", ...r }), AHORA, null);
     expect(v.tipo).toBe("huerfana");
   });
 
@@ -690,7 +945,7 @@ describe("T-VJ-5: interpretar la vuelta — los tres pasos que sí salen bien", 
     const v = interpretarVuelta(
       a,
       new URLSearchParams({ [MARCA]: "firmar-patrocinio", ...r }),
-      leerViaje(a, AHORA),
+      AHORA,
       null,
     );
     expect(v.tipo).toBe("rechazo");
@@ -706,7 +961,178 @@ describe("T-VJ-5: interpretar la vuelta — los tres pasos que sí salen bien", 
     const a = almacenFalso();
     guardarViaje(a, viajeConectado({ paso: "conectar" }));
     const r = respuestaDeLaBilletera({ transaction: "T58" }, par.publicKey);
-    const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: "firmar-tx", ...r }), leerViaje(a, AHORA), null);
+    const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: "firmar-tx", ...r }), AHORA, null);
     expect(v.tipo).toBe("tx-firmada");
+  });
+});
+
+describe("T-VJ-9: `interpretarVuelta` lee el disco ELLA, no recibe el snapshot de nadie", () => {
+  // 🔴 QUÉ CLASE DE DEFECTO CIERRA ESTE BLOQUE. La función recibía una `LecturaDelViaje` del
+  // llamador, leía de ahí la marca de consumo y después escribía pisando el almacén entero: un
+  // read-modify-write sobre un snapshot ajeno, o sea un lost-update de manual. Los 71 tests de la
+  // iteración anterior no lo veían porque TODOS re-leían el disco justo antes de llamar — la suite
+  // codificaba un protocolo de uso que la API no obligaba, no documentaba y no verificaba.
+  //
+  // Estos `it` son la contracara: ninguno re-lee entre llamadas, que es exactamente lo que hace un
+  // llamador normal cuando calcula la lectura en un render o en un `useMemo` y llama a la función en
+  // un efecto (y `next.config.mjs` tiene `reactStrictMode: true`, o sea efectos invocados dos veces
+  // en desarrollo).
+
+  it("la misma respuesta procesada dos veces seguidas NO devuelve dos «tx-firmada»", () => {
+    // Medido en el re-AR con el snapshot reusado: `P-A v1` y `P-A v2` daban las dos
+    // `{"tipo":"tx-firmada","transaccionBase58":"TX-REAL"}`. Acá no hay nada que reusar.
+    // MUTANTE QUE MATA: volver a recibir la lectura por parámetro (no compila) o cachear la lectura
+    // fuera del cuerpo de la función.
+    const a = almacenFalso();
+    guardarViaje(a, viajeConectado({ paso: "firmar-tx" }));
+    const url = new URLSearchParams({
+      [MARCA]: "firmar-tx",
+      ...respuestaDeLaBilletera({ transaction: "TX-REAL" }, par.publicKey),
+    });
+    expect(interpretarVuelta(a, url, AHORA, null).tipo).toBe("tx-firmada");
+    expect(interpretarVuelta(a, url, AHORA, null).tipo).toBe("ya-consumida");
+  });
+
+  it("procesar el paso 3 NO borra del disco el resultado del paso 2", () => {
+    // 🔴 Medido en el re-AR con dos pestañas que leían antes de que la primera escribiera: el disco
+    // pasaba de `"pasosConsumidos":["conectar","firmar-tx"],"transaccionFirmada":"TX-REAL"` a
+    // `"pasosConsumidos":["conectar","firmar-patrocinio"],"firmaDePatrocinio":"FIRMA"`. Se PERDÍA una
+    // firma que la persona ya había dado, y el paso volvía a estar disponible para un replay.
+    // Acá las dos llamadas usan sólo el almacén, sin ninguna lectura intermedia del test.
+    const a = almacenFalso();
+    guardarViaje(a, viajeConectado({ paso: "firmar-tx" }));
+    interpretarVuelta(
+      a,
+      new URLSearchParams({
+        [MARCA]: "firmar-tx",
+        ...respuestaDeLaBilletera({ transaction: "TX-REAL" }, par.publicKey),
+      }),
+      AHORA,
+      null,
+    );
+    interpretarVuelta(
+      a,
+      new URLSearchParams({
+        [MARCA]: "firmar-patrocinio",
+        ...respuestaDeLaBilletera({ signature: "FIRMA" }, par.publicKey),
+      }),
+      AHORA,
+      null,
+    );
+    const l = leerViaje(a, AHORA);
+    expect(l.tipo).toBe("hay");
+    if (l.tipo !== "hay") return;
+    expect(l.viaje.transaccionFirmada).toBe("TX-REAL");
+    expect(l.viaje.firmaDePatrocinio).toBe("FIRMA");
+    expect(l.viaje.pasosConsumidos).toEqual(["conectar", "firmar-tx", "firmar-patrocinio"]);
+  });
+
+  it("un viaje que venció ENTRE la escritura y la vuelta sale «vencida», no se lee igual", () => {
+    // El otro lado de que la función lea sola: la ventana se evalúa con el `ahora` de cuando actúa,
+    // no con el de cuando el llamador armó su lectura. Antes esos dos instantes podían ser
+    // cualquiera y la función no tenía cómo saberlo.
+    const a = almacenFalso();
+    guardarViaje(a, viajeConectado({ paso: "firmar-tx" }));
+    const url = new URLSearchParams({
+      [MARCA]: "firmar-tx",
+      ...respuestaDeLaBilletera({ transaction: "T" }, par.publicKey),
+    });
+    expect(interpretarVuelta(a, url, AHORA + VEINTE_MINUTOS + 1, null).tipo).toBe("vencida");
+  });
+});
+
+describe("T-VJ-10: un disco que no acepta la escritura no puede tirarle una excepción a una firma buena", () => {
+  /** Un almacén que deja leer y borrar, pero cuyo `setItem` lanza. Cuota llena, modo privado. */
+  function almacenQueNoDejaEscribir(): Almacen & { datos: Map<string, string> } {
+    const datos = new Map<string, string>();
+    return {
+      datos,
+      leer: (k) => datos.get(k) ?? null,
+      escribir: () => {
+        throw new Error("QuotaExceededError");
+      },
+      borrar: (k) => void datos.delete(k),
+    };
+  }
+
+  it("la firma vuelve igual, con «no-se-pudo-guardar», y NO como excepción", () => {
+    // 🔴 MEDIDO EN EL RE-AR: `P-F resultado: THROW: QuotaExceededError`. La persona saltó a la
+    // billetera, firmó, volvió — y en vez de `tx-firmada` recibía una excepción no capturada. Nació
+    // del rediseño anterior: antes `interpretarVuelta` era pura y ningún fallo del disco la tocaba;
+    // al empezar a escribir, el `setItem` quedó DESPUÉS de la firma, que es el peor momento posible.
+    // El propio módulo tiene escrito, para el caso análogo, que "una respuesta que no se puede abrir
+    // es un desenlace del viaje, no un error de programación": un disco que no se puede escribir es
+    // lo mismo.
+    // MUTANTE QUE MATA: sacar el `try/catch` de `consumir`.
+    const a = almacenQueNoDejaEscribir();
+    // El viaje se siembra a mano porque `guardarViaje` con este almacén tira a propósito (ver abajo).
+    a.datos.set(CLAVE_EN_DISCO, JSON.stringify(viajeConectado({ paso: "firmar-tx" })));
+    const url = new URLSearchParams({
+      [MARCA]: "firmar-tx",
+      ...respuestaDeLaBilletera({ transaction: "TX-REAL" }, par.publicKey),
+    });
+    expect(() => interpretarVuelta(a, url, AHORA, null)).not.toThrow();
+    expect(interpretarVuelta(a, url, AHORA, null)).toEqual({
+      tipo: "tx-firmada",
+      transaccionBase58: "TX-REAL",
+      persistencia: "no-se-pudo-guardar",
+    });
+  });
+
+  it("y lo DICE: no se disfraza de «guardado», porque el anti-repetición no quedó vigente", () => {
+    // Tragarse el fallo sería mentir de la peor forma: sin la marca en el disco, la MISMA URL vuelve
+    // a anunciar el mismo resultado en la próxima lectura y el que llama no tiene cómo distinguir
+    // "acaba de firmar" de "esto ya lo procesé". El desenlace lleva ese hecho pegado.
+    // MUTANTE QUE MATA: devolver siempre `"guardado"` desde `consumir`.
+    const a = almacenQueNoDejaEscribir();
+    a.datos.set(CLAVE_EN_DISCO, JSON.stringify(viajeConectado({ paso: "firmar-tx" })));
+    const url = new URLSearchParams({
+      [MARCA]: "firmar-tx",
+      ...respuestaDeLaBilletera({ transaction: "TX-REAL" }, par.publicKey),
+    });
+    const primera = interpretarVuelta(a, url, AHORA, null);
+    expect(primera.tipo === "tx-firmada" && primera.persistencia).toBe("no-se-pudo-guardar");
+    // Y se comprueba la consecuencia, no sólo la etiqueta: la segunda lectura vuelve a entregar la
+    // misma transacción en vez de decir «ya-consumida».
+    expect(interpretarVuelta(a, url, AHORA, null).tipo).toBe("tx-firmada");
+  });
+
+  it("el camino normal dice «guardado»: la etiqueta no es decorativa", () => {
+    // El control. Un `consumir` que devolviera siempre `"no-se-pudo-guardar"` pasaría los dos `it`
+    // de arriba.
+    const a = almacenFalso();
+    guardarViaje(a, viajeConectado({ paso: "firmar-tx" }));
+    const url = new URLSearchParams({
+      [MARCA]: "firmar-tx",
+      ...respuestaDeLaBilletera({ transaction: "TX-REAL" }, par.publicKey),
+    });
+    const v = interpretarVuelta(a, url, AHORA, null);
+    expect(v.tipo === "tx-firmada" && v.persistencia).toBe("guardado");
+  });
+
+  it("`guardarViaje` SÍ tira, y es deliberado: pasa ANTES del salto", () => {
+    // La asimetría es la decisión. Antes del salto no hay nada que perder y saltar igual sería
+    // mandar a la persona a firmar algo cuya vuelta este dispositivo no va a poder reconocer
+    // (`huerfana` garantizada). Que el llamador se entere y NO salte es lo correcto; tragárselo acá
+    // sería fabricar el viaje roto en silencio.
+    // MUTANTE QUE MATA: envolver `guardarViaje` en un `try/catch` que se coma el error.
+    const a = almacenQueNoDejaEscribir();
+    expect(() => guardarViaje(a, viajeBase())).toThrow();
+  });
+
+  it("`terminarViaje` no tira: limpiar no le deja al que llama ninguna decisión mejor", () => {
+    // La limpieza corre en cada rama de basura de `leerViaje`. Si tirara, un disco que no deja
+    // borrar rompería la LECTURA entera por una operación de higiene.
+    // MUTANTE QUE MATA: sacar el `try/catch` de `terminarViaje`.
+    const a: Almacen = {
+      leer: () => "{esto no es json",
+      escribir: () => undefined,
+      borrar: () => {
+        throw new Error("SecurityError");
+      },
+    };
+    expect(() => terminarViaje(a)).not.toThrow();
+    expect(() => leerViaje(a, AHORA)).not.toThrow();
+    expect(leerViaje(a, AHORA).tipo).toBe("no-hay");
   });
 });

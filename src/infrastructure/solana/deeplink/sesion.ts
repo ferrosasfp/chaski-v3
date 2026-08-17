@@ -39,8 +39,10 @@
  * PÚBLICA de la app, que es un dato que viaja en la URL saliente y queda en el historial. El agujero
  * está cerrado para los pasos 2 y 3 fijando `claveBilletera` (ver `interpretarVuelta`), y en el paso
  * 1 sigue abierto por construcción del protocolo: en el primer contacto no hay nada contra qué
- * comparar. Perder el par obliga a reconectar, sí; pero perder la PÚBLICA le da a un tercero el paso
- * 1 entero, y eso hay que decirlo donde se lea la decisión, no en otro documento.
+ * comparar. Perder el par obliga a reconectar, sí; pero quien tenga la PÚBLICA y llegue antes que la
+ * billetera real se queda con **el viaje entero** —su clave pasa a ser el ancla, los tres pasos le
+ * pertenecen y la billetera real queda afuera—, y eso hay que decirlo donde se lea la decisión, no
+ * en otro documento.
  */
 import bs58 from "bs58";
 import nacl from "tweetnacl";
@@ -89,6 +91,15 @@ export const MAX_EDAD_MS = 20 * 60 * 1000;
 /** Los tres momentos de un viaje. El orden importa: el patrocinio firma sobre la tx ya firmada. */
 export type PasoDelViaje = "conectar" | "firmar-tx" | "firmar-patrocinio";
 
+/**
+ * Los tres nombres, en un solo lugar. Lo usan la marca de la URL (que la escribe cualquiera) y la
+ * validación de lo que hay en el disco (que también lo escribe cualquiera con acceso al origen).
+ * Comparaciones literales y no un `Set`, para que TypeScript estreche el tipo en el que llama.
+ */
+function esPaso(x: unknown): x is PasoDelViaje {
+  return x === "conectar" || x === "firmar-tx" || x === "firmar-patrocinio";
+}
+
 /** Lo que se escribe en disco antes de saltar. */
 export interface Viaje {
   billetera: BilleteraDeeplink;
@@ -103,8 +114,14 @@ export interface Viaje {
    * me conecté" de "contestó alguien que conoce mi clave pública". Sin ella, `interpretarVuelta`
    * derivaba el secreto compartido de la clave que venía EN LA URL, y una vuelta forjada por
    * cualquiera que hubiera visto la pública de la app devolvía `tx-firmada` con una transacción que
-   * ninguna billetera firmó (medido en el AR de esta HU). Se fija acá en el paso 1 y se compara en
-   * los pasos 2 y 3.
+   * ninguna billetera firmó (medido en el AR de esta HU). Se fija en el paso 1 y se compara en los
+   * tres.
+   *
+   * 🔒 ES DE UNA SOLA ESCRITURA. Una vez fijada, NINGÚN camino la cambia: un connect que llega
+   * después con otra clave sale `otra-clave`/`no-coincide` y no escribe nada. No es cosmética: el
+   * re-AR midió que sin esto un connect forjado TARDÍO revertía el ancla ya puesta y se quedaba con
+   * los pasos 2 y 3 aunque la billetera real hubiera conectado primero. Con el ancla write-once,
+   * ganar el paso 1 exige llegar ANTES que la billetera real, no en cualquier momento de la ventana.
    */
   claveBilletera?: string;
   /** Opaco, lo devuelve la billetera al conectar. Ausente hasta que el connect vuelve. */
@@ -130,6 +147,18 @@ export interface Viaje {
    * la misma URL daban tres `tx-firmada`, la tercera con el viaje YA avanzado. Sólo se marca cuando
    * el sobre ABRIÓ (ver `interpretarVuelta`), nunca con un `errorCode`, que no está autenticado y
    * dejaría que un tercero queme el paso antes de que llegue la respuesta real.
+   *
+   * ⚠️ LA MARCA ES POR NOMBRE DE PASO Y NO POR PEDIDO, y eso es una decisión con consecuencia, no un
+   * detalle: **un viaje sirve para UN pedido de cada paso**. Una segunda firma legítima del mismo
+   * paso —cotización refrescada, reintento después de un timeout— vuelve como `ya-consumida` y se
+   * descarta. Quien necesite re-pedir una firma tiene que abrir un viaje NUEVO; la ola 3 no puede
+   * suponer que reusar el viaje le va a funcionar.
+   *
+   * Se evaluó marcar por `nonce` (que sí distingue pedido de pedido) y NO se hizo, porque el `nonce`
+   * sólo viaja en las respuestas que traen sobre: una URL con `errorCode` no tiene ninguno, así que
+   * un paso YA completado dejaría de estar protegido contra un `?errorCode=` pegado a mano y se
+   * cambiaría una molestia recuperable por un `rechazo` fabricable sobre algo ya firmado. La
+   * molestia se prefiere al agujero, y además esta forma tiene techo 3: no crece con el uso.
    */
   pasosConsumidos?: PasoDelViaje[];
   /** Resultados ya conseguidos. Son lo que permite reanudar sin volver a pedir una firma. */
@@ -147,16 +176,42 @@ export interface Viaje {
  *                la persona, porque probablemente esté esperando que su firma sirva para algo.
  */
 export type LecturaDelViaje =
-  | { tipo: "hay"; viaje: Viaje }
+  /**
+   * `secretaBytes` es la `secreta` YA decodificada. Va acá y no se recalcula más arriba para que no
+   * exista ningún camino en el que un «hay» traiga una `secreta` que no sirve: antes esa garantía
+   * era una frase en un comentario y `interpretarVuelta` tenía que volver a decodificar y a manejar
+   * un `null` que `leerViaje` ya había descartado. La rama imposible se borró en vez de dejarla sin
+   * test (era el mutante M7 del re-AR, vivo justo porque nadie podía llegar).
+   */
+  | { tipo: "hay"; viaje: Viaje; secretaBytes: Uint8Array }
   | { tipo: "no-hay" }
   | { tipo: "vencido" };
 
+/**
+ * ⚠️ ESTA SÍ PUEDE TIRAR, Y ES DELIBERADO. `localStorage.setItem` lanza con la cuota llena y en el
+ * modo privado de algunos navegadores. Acá se llama ANTES del salto a la billetera: si el viaje no
+ * se pudo guardar, saltar sería mandar a la persona a firmar algo cuya vuelta este dispositivo no
+ * va a poder reconocer (`huerfana` garantizada). Que el llamador se entere y no salte es el
+ * comportamiento correcto; tragarse el error acá sería fabricar el viaje roto en silencio.
+ *
+ * Lo contrario vale para la escritura de `interpretarVuelta`, que ocurre DESPUÉS de la firma: ahí sí
+ * hay algo que perder y por eso ahí no se tira (ver `Persistencia`).
+ */
 export function guardarViaje(a: Almacen, v: Viaje): void {
   a.escribir(CLAVE, JSON.stringify(v));
 }
 
+/**
+ * Borra el viaje. NO tira: es la operación de limpieza, y un almacén que no deja borrar no le deja
+ * al que llama ninguna decisión mejor que seguir. La usa `leerViaje` en cada rama de basura.
+ */
 export function terminarViaje(a: Almacen): void {
-  a.borrar(CLAVE);
+  try {
+    a.borrar(CLAVE);
+  } catch {
+    // Un disco que no deja borrar deja basura; decírselo a la persona no cambia nada de lo que
+    // puede hacer, y la alternativa (tirar) rompería la lectura entera por una limpieza.
+  }
 }
 
 /**
@@ -177,8 +232,35 @@ function decodificarSecreta(secreta: string): Uint8Array | null {
   }
 }
 
+/**
+ * QUÉ SE VALIDA DEL DISCO, Y POR QUÉ LA LISTA ES ÉSTA Y NO "LA FORMA MÍNIMA".
+ *
+ * Todo lo que sale de acá viene de `JSON.parse` sobre una cadena que escribe cualquiera que pueda
+ * ejecutar en este origen (o que edite el disco a mano), así que el `as Viaje` no verifica nada. Se
+ * valida **todo campo que después se use como algo más que un dato opaco**: los que se decodifican,
+ * los que se comparan con un número y los que se recorren como estructura. Los campos que sólo se
+ * copian o se devuelven (`direccion`, `session`, `remittanceId`, los resultados) no se validan acá a
+ * propósito: quien los use es quien sabe qué forma necesita.
+ *
+ * `pasosConsumidos` está en esta lista porque el re-AR midió la falla exacta que ya había tenido
+ * `secreta`: con `pasosConsumidos: 7` el `.includes(...)` tiraba `is not a function` **y el disco no
+ * se limpiaba**, así que la excepción se repetía en cada carga de la página. Y con
+ * `"firmar-tx-y-mas"` (un string) `.includes` contestaba `true` por SUBCADENA, o sea que un campo
+ * basura podía consumir un paso que nadie consumió.
+ */
+function esListaDePasos(x: unknown): x is PasoDelViaje[] {
+  return Array.isArray(x) && x.every(esPaso);
+}
+
 export function leerViaje(a: Almacen, ahora: number): LecturaDelViaje {
-  const crudo = a.leer(CLAVE);
+  let crudo: string | null;
+  try {
+    crudo = a.leer(CLAVE);
+  } catch {
+    // Un almacén que ni siquiera deja LEER (cookies bloqueadas, modo privado) no es un viaje
+    // vencido: es que acá no hay nada que este dispositivo pueda recordar.
+    return { tipo: "no-hay" };
+  }
   if (!crudo) return { tipo: "no-hay" };
   let v: Viaje;
   try {
@@ -186,18 +268,24 @@ export function leerViaje(a: Almacen, ahora: number): LecturaDelViaje {
   } catch {
     // Un JSON roto es basura, no un viaje vencido. Se limpia y se contesta "no hay": decirle
     // "venció" a alguien sería afirmar que existió algo que no sabemos si existió.
-    a.borrar(CLAVE);
+    terminarViaje(a);
     return { tipo: "no-hay" };
   }
-  // Se valida la forma mínima. Sin `secreta` no se puede abrir ningún sobre, así que ese viaje no
-  // sirve para nada aunque esté fresco.
+  // Sin `secreta` no se puede abrir ningún sobre, así que ese viaje no sirve para nada aunque esté
+  // fresco.
   //
   // 🔴 `Number.isFinite` y no `typeof === "number"` a secas: `JSON.parse('{"desde":1e999}')` produce
   // `Infinity`, cuyo `typeof` es `"number"`, y `ahora - Infinity > MAX_EDAD_MS` es `false` PARA
   // SIEMPRE. Medido: con eso el viaje contestaba `hay` diez años después. La ventana no es un
   // control de seguridad (DT-7), pero un viaje que no vence nunca no es una ventana.
-  if (typeof v?.secreta !== "string" || !Number.isFinite(v?.desde)) {
-    a.borrar(CLAVE);
+  //
+  // 🔴 `pasosConsumidos`: ver `esListaDePasos`. Un campo que se recorre se valida como estructura.
+  if (
+    typeof v?.secreta !== "string" ||
+    !Number.isFinite(v?.desde) ||
+    (v?.pasosConsumidos !== undefined && !esListaDePasos(v.pasosConsumidos))
+  ) {
+    terminarViaje(a);
     return { tipo: "no-hay" };
   }
   // 🔴 Y que `secreta` DECODIFIQUE, no sólo que sea un `string`. Este bloque decía "se valida la
@@ -206,16 +294,54 @@ export function leerViaje(a: Almacen, ahora: number): LecturaDelViaje {
   // además NO caía en ninguna rama que limpiara — o sea que se repetía en CADA carga de la página.
   // Se trata como lo que es: basura en el disco. Se limpia y se contesta "no hay", igual que un JSON
   // roto. NO se agrega un cuarto valor a `LecturaDelViaje`: ese trío es CD-4.
-  if (decodificarSecreta(v.secreta) === null) {
-    a.borrar(CLAVE);
+  const secretaBytes = decodificarSecreta(v.secreta);
+  if (secretaBytes === null) {
+    terminarViaje(a);
+    return { tipo: "no-hay" };
+  }
+  // 🔴 UN VIAJE QUE EMPEZÓ EN EL FUTURO ES BASURA, NO UN VIAJE JOVEN. `ahora - desde` es negativo,
+  // así que nunca supera `MAX_EDAD_MS`: un `desde` adelantado en X días hace que el viaje —y con él
+  // `secreta`, `claveBilletera`, `direccion`, `session` y la ventana en la que el paso 1 se puede
+  // forjar— viva X días más 20 minutos. Medido en el re-AR: `desde` +10 días contestaba «hay» diez
+  // días después.
+  //
+  // El fix-pack anterior argumentó que no hacía falta porque "la ventana no es un control de
+  // seguridad" (DT-7). Ese argumento dejó de valer cuando el paso 1 quedó declarado como residual:
+  // hoy la ventana es la ÚNICA contención que le queda a esa forja en esta capa, así que una ventana
+  // de duración arbitraria es un agujero. Con esta línea DT-7 vuelve a ser cierto.
+  //
+  // Lo que esta línea rompe, dicho: un reloj que se corrige HACIA ATRÁS mientras el viaje está en
+  // curso mata ese viaje (`no-hay`, hay que volver a pedir). Se prefiere eso a sostener una ventana
+  // cuya duración la elige quien haya movido el reloj.
+  if (v.desde > ahora) {
+    terminarViaje(a);
     return { tipo: "no-hay" };
   }
   if (ahora - v.desde > MAX_EDAD_MS) {
-    a.borrar(CLAVE);
+    terminarViaje(a);
     return { tipo: "vencido" };
   }
-  return { tipo: "hay", viaje: v };
+  return { tipo: "hay", viaje: v, secretaBytes };
 }
+
+/**
+ * QUÉ PASÓ CON EL INTENTO DE RECORDAR EL RESULTADO EN EL DISCO, y por qué viaja pegado al resultado
+ * en vez de tragarse.
+ *
+ * `localStorage.setItem` lanza con la cuota llena y en el modo privado de algunos navegadores. Esa
+ * escritura ocurre DESPUÉS de que la persona firmó, así que dejarla tirar convertía una firma BUENA
+ * en una excepción no capturada (medido en el re-AR: `THROW: QuotaExceededError` en vez de
+ * `tx-firmada`). Tirar está descartado: el resultado ya existe y es lo valioso.
+ *
+ * Pero tragárselo también miente, y de la peor manera: si la marca de consumido no se escribió, la
+ * MISMA URL vuelve a dar el mismo resultado en la próxima lectura, y el que llama no tiene forma de
+ * distinguir "acaba de firmar" de "esto ya lo procesé" — que es exactamente el defecto que
+ * `pasosConsumidos` vino a cerrar. Así que el desenlace lo dice:
+ *   · "guardado"           el resultado y la marca quedaron en el disco. El anti-repetición vale.
+ *   · "no-se-pudo-guardar" el resultado es bueno igual, pero este dispositivo NO lo recuerda: no
+ *                          sobrevive a una recarga y la misma URL va a volver a anunciarlo.
+ */
+export type Persistencia = "guardado" | "no-se-pudo-guardar";
 
 /**
  * QUÉ PASÓ CUANDO LA PERSONA VOLVIÓ.
@@ -240,7 +366,9 @@ export type Vuelta =
    * 🔴 NO es `rechazo`: nadie canceló nada. NO es `huerfana`: sí hay viaje. NO es `sobre_ilegible`:
    * el sobre abre perfectamente, y ése es justo el problema. Es el cuarto valor que este módulo no
    * tenía y por eso una vuelta forjada salía como buena.
-   *   · "no-coincide" la URL trae una clave y no es la que fijó el connect.
+   *   · "no-coincide" la URL trae una clave y no es la que fijó el connect. **Aplica también al paso
+   *                   1**: una vez que el ancla está puesta, ningún connect posterior la pisa (ver
+   *                   `claveBilletera`).
    *   · "sin-fijar"   se está leyendo un paso 2 o 3 sobre un viaje que nunca completó el paso 1, así
    *                   que no hay contra qué comparar. Que el orden de DT-3 se respete no lo puede
    *                   afirmar nadie acá, y afirmarlo sería inventar.
@@ -253,9 +381,9 @@ export type Vuelta =
   | { tipo: "ya-consumida"; paso: PasoDelViaje }
   /** El viaje guardado es de otra remesa que la que el llamador tiene en curso. */
   | { tipo: "otra-remesa"; paso: PasoDelViaje; delViaje: string | null; enCurso: string }
-  | { tipo: "conectado"; direccion: string; session: string }
-  | { tipo: "tx-firmada"; transaccionBase58: string }
-  | { tipo: "patrocinio-firmado"; firma: string }
+  | { tipo: "conectado"; direccion: string; session: string; persistencia: Persistencia }
+  | { tipo: "tx-firmada"; transaccionBase58: string; persistencia: Persistencia }
+  | { tipo: "patrocinio-firmado"; firma: string; persistencia: Persistencia }
   | { tipo: "rechazo"; paso: PasoDelViaje; codigo: string; mensaje: string };
 
 /** El parámetro con el que marcamos nuestras propias vueltas. */
@@ -300,11 +428,23 @@ export function enlaceDeVuelta(origen: string, paso: PasoDelViaje): string {
  *
  * ⚠️ LO QUE SIGUE ABIERTO, y no se puede cerrar acá: **el paso 1 es falsificable por diseño del
  * protocolo**. Es el primer contacto: no hay ninguna clave previa contra qué comparar, así que quien
- * conozca la pública de la app puede hacerse pasar por la billetera en el connect. Lo que sí hace
- * este código es que esa vuelta forjada CONSUMA el paso, de manera que la respuesta real que llegue
- * después salga como `ya-consumida` en vez de pisar en silencio lo que la app cree. Es un ruido, no
- * un arreglo. Cerrarlo de verdad pide que el connect se verifique contra algo que el atacante no
- * tenga, y eso no está en este módulo.
+ * conozca la pública de la app puede hacerse pasar por la billetera en el connect.
+ *
+ * 🔴 Y NO ES "UN PASO": QUIEN GANA EL PASO 1 GANA EL VIAJE ENTERO. Su clave queda fijada como ancla,
+ * así que los pasos 2 y 3 le pertenecen y la billetera REAL queda expulsada (`otra-clave` en cada
+ * intento) hasta que venza la ventana. Una versión anterior de este comentario presentaba el
+ * `ya-consumida` de la respuesta real como una mitigación: **es al revés**, es el mecanismo que fija
+ * al atacante y bloquea al legítimo. Lo único que se acota acá es el ancla write-once (ver
+ * `claveBilletera`), que obliga al atacante a llegar ANTES que la billetera real en vez de en
+ * cualquier momento, y la ventana de `MAX_EDAD_MS`, que le pone un techo de 20 minutos.
+ *
+ * 🔴 EL CORTE TIENE QUE VENIR DE FUERA DEL CANAL DEL DEEPLINK. Todo lo que la app manda en el pedido
+ * de connect viaja por la MISMA URL saliente que la clave pública de la app (mismo historial, mismos
+ * servidores de la billetera), así que un token de un solo uso no cierra nada. Y verificar la firma
+ * del paso 3 contra `viaje.direccion` TAMPOCO alcanza: el que forjó el connect también produce esa
+ * firma, y verifica perfecto contra SU dirección. Una firma prueba control de una clave; no prueba
+ * que esa clave sea la de la persona. Ver el `it` `[RESIDUAL, NO ARREGLADO]` de `sesion.test.ts`
+ * para el escenario que la HU 062 tiene que descartar (sustitución de depositante).
  *
  * ⚠️ Y NO CONVIERTE UN `rechazo` EN UN HECHO. El `errorCode` viaja SIN cifrar (así lo definen las dos
  * billeteras), así que un tercero puede provocar un `rechazo` con el código y el mensaje que quiera.
@@ -314,29 +454,46 @@ export function enlaceDeVuelta(origen: string, paso: PasoDelViaje): string {
  * `remesaEnCurso` es obligatorio y admite `null`, que significa "quien llama no tiene ninguna remesa
  * en contexto". No es opcional a propósito: un `?` acá haría que olvidarlo se vea igual que
  * decidirlo, y el cruce entre remesas es la primera línea de ataque de esta HU.
+ *
+ * ══ POR QUÉ ESTA FUNCIÓN LEE EL DISCO Y NO RECIBE UNA `LecturaDelViaje` ═════════════════════════
+ * Recibía la lectura, leía de ahí la marca de consumo y después escribía pisando el almacén entero.
+ * Read-modify-write sobre un snapshot que elige el llamador, con tres consecuencias MEDIDAS por el
+ * re-AR y ninguna que necesite un atacante:
+ *   · reusar la misma `LecturaDelViaje` devolvía `tx-firmada` DOS VECES (y `next.config.mjs` tiene
+ *     `reactStrictMode: true`, o sea que en desarrollo los efectos se invocan dos veces);
+ *   · con dos pestañas, el disco pasaba de tener `transaccionFirmada` a NO tenerla: se perdía una
+ *     firma que la persona ya había dado;
+ *   · una lectura rancia procesaba un connect forjado y PISABA la `claveBilletera` ya fijada, con lo
+ *     que el candado de los pasos 2 y 3 se deshacía.
+ * Los 71 tests no lo veían porque todos re-leían el disco justo antes de llamar: la suite codificaba
+ * un protocolo de uso que la API no obligaba, no documentaba y no verificaba.
+ *
+ * Ahora lee ella, en el momento en que actúa, y escribe a partir de eso. La lectura y la escritura
+ * pasan en el mismo bloque SÍNCRONO —no hay ningún `await` en el medio— así que no existe ningún
+ * punto en el que el llamador pueda tener un snapshot viejo: la clase entera de defecto desaparece
+ * en vez de quedar documentada como disciplina.
+ *
+ * ⚠️ Lo que esto NO resuelve, y hay que decirlo: `localStorage` no tiene compare-and-swap, así que
+ * dos PESTAÑAS que corran esto exactamente a la vez siguen sin tener una garantía formal de
+ * atomicidad. Lo que se elimina es la ventana larga (la que dura lo que el llamador tarde entre
+ * calcular la lectura y usarla), no la física del almacenamiento compartido, que este módulo no
+ * controla. **[NO VERIFICADO]** cómo intercalan dos pestañas de un teléfono real.
  */
 export function interpretarVuelta(
   a: Almacen,
   params: URLSearchParams,
-  lectura: LecturaDelViaje,
+  ahora: number,
   remesaEnCurso: string | null,
 ): Vuelta {
   const marca = params.get(MARCA);
-  if (marca !== "conectar" && marca !== "firmar-tx" && marca !== "firmar-patrocinio") {
-    return { tipo: "no-volvimos" };
-  }
+  if (!esPaso(marca)) return { tipo: "no-volvimos" };
   const paso: PasoDelViaje = marca;
+
+  // 🔴 SE LEE ACÁ, no se recibe. Ver el bloque del docblock sobre el read-modify-write.
+  const lectura = leerViaje(a, ahora);
   if (lectura.tipo === "vencido") return { tipo: "vencida", paso };
   if (lectura.tipo === "no-hay") return { tipo: "huerfana", paso };
-
-  const { viaje } = lectura;
-  const secreta = decodificarSecreta(viaje.secreta);
-  // `leerViaje` ya lo garantiza; esto es por si alguien arma una `LecturaDelViaje` a mano. Se limpia
-  // para que un disco inservible no repita el mismo camino en cada carga.
-  if (secreta === null) {
-    terminarViaje(a);
-    return { tipo: "huerfana", paso };
-  }
+  const { viaje, secretaBytes } = lectura;
 
   if (remesaEnCurso !== null && viaje.remittanceId !== remesaEnCurso) {
     return {
@@ -349,47 +506,72 @@ export function interpretarVuelta(
 
   if (viaje.pasosConsumidos?.includes(paso)) return { tipo: "ya-consumida", paso };
 
+  // EL ANCLA. Se compara en los TRES pasos, con una sola asimetría: en el paso 1, y sólo si todavía
+  // no hay ancla, no hay contra qué comparar y se deja pasar (es el residual declarado arriba). En
+  // cuanto el ancla existe, mande la marca lo que mande, la respuesta tiene que venir de esa clave;
+  // de ahí sale que sea de UNA SOLA ESCRITURA, porque el único camino que la escribe es el de abajo
+  // y a él no se llega con otra clave.
   const claveEnLaUrl = clavePublicaEnRespuesta(viaje.billetera, params);
-  if (paso !== "conectar" && claveEnLaUrl !== null && claveEnLaUrl !== viaje.claveBilletera) {
-    return {
-      tipo: "otra-clave",
-      paso,
-      motivo: viaje.claveBilletera === undefined ? "sin-fijar" : "no-coincide",
-    };
+  if (claveEnLaUrl !== null) {
+    if (viaje.claveBilletera !== undefined) {
+      if (claveEnLaUrl !== viaje.claveBilletera) {
+        return { tipo: "otra-clave", paso, motivo: "no-coincide" };
+      }
+    } else if (paso !== "conectar") {
+      return { tipo: "otra-clave", paso, motivo: "sin-fijar" };
+    }
   }
 
-  /** Escribe el resultado del paso y lo marca consumido. Sólo se llama cuando el sobre ABRIÓ. */
-  const consumir = (conseguido: Partial<Viaje>): void => {
-    guardarViaje(a, {
-      ...viaje,
-      ...conseguido,
-      pasosConsumidos: [...(viaje.pasosConsumidos ?? []), paso],
-    });
+  /**
+   * Escribe el resultado del paso y lo marca consumido. Sólo se llama cuando el sobre ABRIÓ.
+   *
+   * NO TIRA: acá la persona ya firmó. Un `setItem` que lanza (cuota llena, modo privado) no puede
+   * convertir una firma buena en una excepción; se devuelve el resultado con `no-se-pudo-guardar`
+   * para que el que llama sepa que el anti-repetición de este viaje no está vigente. Ver
+   * `Persistencia`.
+   */
+  const consumir = (conseguido: Partial<Viaje>): Persistencia => {
+    try {
+      guardarViaje(a, {
+        ...viaje,
+        ...conseguido,
+        pasosConsumidos: [...(viaje.pasosConsumidos ?? []), paso],
+      });
+      return "guardado";
+    } catch {
+      return "no-se-pudo-guardar";
+    }
   };
 
   if (paso === "conectar") {
-    const d = leerRespuesta(viaje.billetera, params, secreta, soloTextos("public_key", "session"));
-    return traducir(d, paso, (x) => {
-      consumir({
+    const d = leerRespuesta(viaje.billetera, params, secretaBytes, soloTextos("public_key", "session"));
+    return traducir(d, paso, (x) => ({
+      tipo: "conectado" as const,
+      direccion: x.public_key,
+      session: x.session,
+      // `claveEnLaUrl` no puede ser `null` acá: sin clave en la URL `leerRespuesta` habría dado
+      // `ninguno`. Y si el ancla ya estaba puesta, el guard de arriba garantiza que es LA MISMA.
+      persistencia: consumir({
         claveBilletera: claveEnLaUrl ?? undefined,
         direccion: x.public_key,
         session: x.session,
-      });
-      return { tipo: "conectado" as const, direccion: x.public_key, session: x.session };
-    });
+      }),
+    }));
   }
   if (paso === "firmar-tx") {
-    const d = leerRespuesta(viaje.billetera, params, secreta, soloTextos("transaction"));
-    return traducir(d, paso, (x) => {
-      consumir({ transaccionFirmada: x.transaction });
-      return { tipo: "tx-firmada" as const, transaccionBase58: x.transaction };
-    });
+    const d = leerRespuesta(viaje.billetera, params, secretaBytes, soloTextos("transaction"));
+    return traducir(d, paso, (x) => ({
+      tipo: "tx-firmada" as const,
+      transaccionBase58: x.transaction,
+      persistencia: consumir({ transaccionFirmada: x.transaction }),
+    }));
   }
-  const d = leerRespuesta(viaje.billetera, params, secreta, soloTextos("signature"));
-  return traducir(d, paso, (x) => {
-    consumir({ firmaDePatrocinio: x.signature });
-    return { tipo: "patrocinio-firmado" as const, firma: x.signature };
-  });
+  const d = leerRespuesta(viaje.billetera, params, secretaBytes, soloTextos("signature"));
+  return traducir(d, paso, (x) => ({
+    tipo: "patrocinio-firmado" as const,
+    firma: x.signature,
+    persistencia: consumir({ firmaDePatrocinio: x.signature }),
+  }));
 }
 
 /** Pasa un `Desenlace` del protocolo a un `Vuelta`, sin perder ninguno de los tres valores. */

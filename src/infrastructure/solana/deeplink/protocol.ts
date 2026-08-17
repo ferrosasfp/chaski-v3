@@ -276,11 +276,18 @@ export function leerRespuesta<T>(
 }
 
 /**
- * El validador que usan los tres pasos: un objeto con estos campos, todos texto.
+ * El validador que usan los tres pasos: un objeto con estos campos, todos texto NO VACÍO.
  *
  * Es a propósito lo más chico que sirve. No valida largos ni base58 —eso lo verifica quien use el
  * valor— pero sí que el campo EXISTA y sea un `string`, que es lo único que el tipo de retorno
  * afirma y antes no se cumplía.
+ *
+ * 🔴 Y QUE NO ESTÉ VACÍO, que es la mitad que faltaba. Medido en el re-AR: un connect con
+ * `{"public_key":"","session":""}` salía `{ tipo: "conectado", direccion: "", session: "" }`, o sea
+ * una cadena vacía viajando hacia el camino del dinero disfrazada de cuenta de Solana. `""` pasa
+ * `typeof === "string"` pero no es ninguno de los valores que estos tres pasos pueden devolver: una
+ * dirección, una sesión opaca, una transacción o una firma vacías no existen. Se trata como lo que
+ * es —el campo NO vino— y cae en `forma_inesperada`, que es el desenlace que ya existe para eso.
  */
 export function soloTextos<K extends string>(
   ...campos: K[]
@@ -291,7 +298,7 @@ export function soloTextos<K extends string>(
     const salida = {} as Record<K, string>;
     for (const campo of campos) {
       const v = o[campo];
-      if (typeof v !== "string") return null;
+      if (typeof v !== "string" || v === "") return null;
       salida[campo] = v;
     }
     return salida;

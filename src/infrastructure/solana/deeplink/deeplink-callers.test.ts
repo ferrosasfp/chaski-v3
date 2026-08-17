@@ -73,7 +73,7 @@ const LLAMADAS = ARCHIVOS.filter((abs) => {
   }))
   .filter((x) => x.veces > 0);
 
-describe("T-062-10 · CD-8: `interpretarVuelta` tiene UN solo llamador de producción", () => {
+describe("T-062-10 · CD-8: `interpretarVuelta` tiene EXACTAMENTE DOS llamadores de producción", () => {
   // Sin esto el candado podría quedar vigilando CERO archivos (un `SCAN_DIRS` mal escrito, un
   // `walk` que devuelve vacío) y seguir en verde, que es como un guard deja de existir sin que nadie
   // lo note. El piso es holgado a propósito: lo que se mide es que el barrido VE el árbol.
@@ -81,16 +81,38 @@ describe("T-062-10 · CD-8: `interpretarVuelta` tiene UN solo llamador de produc
     expect(ARCHIVOS.length).toBeGreaterThan(200);
   });
 
-  // MUTANTE QUE MATA (MEDIDO: exit=1, 1 `it` rojo, éste): agregar `interpretarVuelta(` en CUALQUIER
-  // archivo de producción —un componente, un efecto, un helper— ⇒ rojo, y nombra el archivo.
-  it("hay exactamente UN sitio de producción, y es el motor", () => {
+  // 🔴 ESTE `it` SE INVIRTIÓ EN LA OLA 4, NO SE BORRÓ NI SE AFLOJÓ (CD-14). Decía "hay exactamente UN
+  // sitio de producción, y es el motor", y era cierto mientras nadie escribía el paso 1: el motor
+  // CONSUMÍA un viaje conectado que ningún código de producción producía.
+  //
+  // 🔒 LO QUE **NO** CAMBIÓ, y es todo el valor del candado: la lista sigue siendo EXACTA y EXHAUSTIVA.
+  // No pasó a ser `toBeLessThanOrEqual(2)` ni "los que estén en esta carpeta": son estos dos archivos,
+  // nombrados, con su cantidad de llamadas. Un tercer llamador —o una segunda llamada en cualquiera de
+  // los dos— sigue poniendo esto rojo y nombrando el archivo.
+  //
+  // ⚠️ POR QUÉ EL SEGUNDO ES LEGÍTIMO Y NO UN ABLANDAMIENTO. Los dos llamadores están en los DOS
+  // EXTREMOS del flujo y no pueden pisarse: el motor corre DESPUÉS del KYC (`authorizePrincipal` sólo
+  // se alcanza con KYC aprobado) y el connect por enlace ocurre ANTES. Y `completarVuelta` **no toca**
+  // las marcas del motor (`firmar-tx`/`firmar-patrocinio`): sale `nada` sin llamar a
+  // `interpretarVuelta`, que es lo que impide que le queme el paso. Eso tiene su propio `it` (T-065-4).
+  //
+  // MUTANTE QUE MATA (los dos siguen matando): agregar `interpretarVuelta(` en CUALQUIER otro archivo
+  // de producción ⇒ rojo, y nombra el archivo. Y agregar una SEGUNDA llamada en cualquiera de los dos
+  // ⇒ también rojo, porque la cantidad va en la cadena comparada.
+  it("hay exactamente DOS sitios de producción: el motor y la pata `conectar`", () => {
     expect(
-      LLAMADAS.map((x) => `${x.ruta} (x${x.veces})`),
-      "`interpretarVuelta` CONSUME el paso de forma irreversible. Un segundo llamador de producción " +
-        "—sobre todo en un render o un efecto, que React invoca dos veces en desarrollo— gasta una " +
-        "firma que la persona ya dio y la vuelve `ya-consumida`. Si esta lista tiene más de una " +
-        "entrada, o una entrada que no es el motor, no es un detalle de estilo.",
-    ).toEqual(["src/infrastructure/solana/deeplink/firma-por-enlace.ts (x1)"]);
+      LLAMADAS.map((x) => `${x.ruta} (x${x.veces})`).sort(),
+      "`interpretarVuelta` CONSUME el paso de forma irreversible. Un llamador de producción que no sea " +
+        "uno de estos dos —sobre todo en un render o un efecto, que React invoca dos veces en " +
+        "desarrollo— gasta una firma que la persona ya dio y la vuelve `ya-consumida`. Los DOS " +
+        "legítimos son el motor (pasos 2 y 3, después del KYC) y `conexion.ts` (paso 1, antes del " +
+        "KYC), y están en extremos opuestos del flujo. Si esta lista cambió, no es un detalle de estilo.",
+    ).toEqual(
+      [
+        "src/infrastructure/solana/deeplink/conexion.ts (x1)",
+        "src/infrastructure/solana/deeplink/firma-por-enlace.ts (x1)",
+      ].sort(),
+    );
   });
 
   // ⛔ Y no puede llamarse desde presentación NI aunque alguien "sólo la mire". Este `it` es

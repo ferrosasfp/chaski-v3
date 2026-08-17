@@ -25,10 +25,17 @@
 // ola 1 cerró (el bloque de `interpretarVuelta` sobre eso está en `sesion.ts:554-570`).
 import bs58 from "bs58";
 import type { Almacen, Viaje } from "./sesion";
-import { enlaceDeVuelta, guardarViaje } from "./sesion";
+import { MARCA, enlaceDeVuelta, guardarViaje, interpretarVuelta } from "./sesion";
 import type { BilleteraDeeplink } from "./protocol";
 import { nuevoParDeCifrado, urlConectar } from "./protocol";
 import type { CausaDeEnlace } from "./firma-por-enlace";
+import {
+  DEEPLINK_RECHAZADO,
+  DEEPLINK_RESPUESTA_ILEGIBLE,
+  DEEPLINK_SIN_MEMORIA,
+  DEEPLINK_TX_ALTERADA,
+  DEEPLINK_VIAJE_VENCIDO,
+} from "./firma-por-enlace";
 
 /**
  * La marca del salto que pide la firma de la transacción que CREA la cuenta de nonce.
@@ -225,4 +232,87 @@ export function iniciarConexion(
       cluster: p.cluster,
     }),
   };
+}
+
+/**
+ * Lee la URL y el disco y decide qué pasó.
+ *
+ * 🔴 **EL SEGUNDO Y ÚLTIMO LLAMADOR DE PRODUCCIÓN DE `interpretarVuelta`** (CD-11). El otro es el motor
+ * (`firma-por-enlace.ts`). Lo mide `T-062-10`, invertido en esta HU a la lista exacta de dos.
+ *
+ * ⛔ PROHIBIDO LLAMARLA DESDE UN RENDER, UN `useMemo` O UN EFECTO SIN GATE DE MONTAJE. Consume el paso
+ * de forma IRREVERSIBLE y `reactStrictMode: true` invoca los efectos dos veces: la segunda lectura
+ * devolvería `ya-consumida` sobre una respuesta buena. Su único llamador es el productor de montaje de
+ * `flow.tsx`, gateado por un ref.
+ *
+ * 🔴 POR QUÉ NO TOCA LAS MARCAS DEL MOTOR, que es la línea más peligrosa de este módulo: `firmar-tx` y
+ * `firmar-patrocinio` son vueltas que el MOTOR necesita consumir. Llamarlas acá **quemaría el paso**
+ * —`interpretarVuelta` marca el paso consumido en la misma escritura en la que devuelve el resultado—
+ * y el motor recibiría después `ya-consumida` sobre una firma que la persona sí dio. Lo mide `T-065-4`.
+ */
+export function completarVuelta(p: PedidoDeConexion): VueltaDeConexion {
+  const params = new URLSearchParams(new URL(p.hrefActual).search);
+  const marca = params.get(MARCA);
+
+  // ⛔ SIN TOCAR EL DISCO. Ni `conectar` ni nada: acá no hay ninguna marca nuestra que interpretar.
+  // Incluye el caso de una marca DESCONOCIDA (algo que nadie de este repo escribió).
+  if (marca !== "conectar") {
+    // 🔴 ÉSTA ES LA LÍNEA QUE PROTEGE AL MOTOR. `firmar-tx` y `firmar-patrocinio` caen acá y salen
+    // `nada` SIN pasar por `interpretarVuelta`. La marca del nonce (`crear-nonce`) también sale por
+    // acá hasta que su rama exista, y eso es seguro por construcción: `esPaso("crear-nonce")` es
+    // falso, así que `interpretarVuelta` contestaría `no-volvimos` y no consumiría nada igual.
+    return { tipo: "nada" };
+  }
+
+  const vuelta = interpretarVuelta(p.almacen, params, p.ahora, p.remittanceId);
+
+  // ⚠️ LA TRADUCCIÓN ES LA MISMA QUE LA DEL MOTOR, CAUSA POR CAUSA, y eso es deliberado: son las mismas
+  // diez variantes y el mismo vocabulario `deeplink_*` llega a la misma pantalla. Un segundo criterio
+  // acá haría que la misma vuelta se le explique distinto a la persona según qué paso estaba corriendo.
+  // ⛔ SIN `default` QUE TRAGUE: el `never` del final es el candado de exhaustividad.
+  switch (vuelta.tipo) {
+    case "conectado":
+      // 🔴 SE MIRA LA `persistencia`, igual que el motor con `tx-firmada`. `"no-se-pudo-guardar"`
+      // significa que la billetera contestó bien pero este dispositivo NO lo recuerda: la dirección se
+      // perdería en el salto siguiente. Seguir sería construir el recorrido sobre un dato que ya sabemos
+      // que no sobrevive.
+      if (vuelta.persistencia === "no-se-pudo-guardar") return { tipo: "corte", causa: DEEPLINK_SIN_MEMORIA };
+      return { tipo: "conectado", direccion: vuelta.direccion };
+    case "no-volvimos":
+      // La marca estaba pero `interpretarVuelta` no vio respuesta. No es un rechazo.
+      return { tipo: "nada" };
+    case "huerfana":
+      // Mismos dos motivos y mismo trato asimétrico que el motor: `manos-vacias` NO limpia nada.
+      return vuelta.motivo === "manos-vacias"
+        ? { tipo: "nada" }
+        : { tipo: "corte", causa: DEEPLINK_VIAJE_VENCIDO };
+    case "vencida":
+    case "ya-consumida":
+    case "otra-remesa":
+      return { tipo: "corte", causa: DEEPLINK_VIAJE_VENCIDO };
+    case "otra-clave":
+      // 🔒 ACÁ MUERE EL CONNECT FORJADO TARDÍO. El ancla `claveBilletera` es write-once
+      // (`claveBilletera`, `sesion.ts:148`), así que una vez fijada ningún connect posterior la pisa.
+      // Lo mide `T-065-3`.
+      return { tipo: "corte", causa: DEEPLINK_TX_ALTERADA };
+    case "rechazo":
+      // El `origen` decide y no el `codigo`, por lo mismo que en el motor: el `errorCode` viaja SIN
+      // cifrar y lo escribe quien arme la URL, así que un fallo de cripto NUESTRO no puede salir como
+      // "cancelaste".
+      return {
+        tipo: "corte",
+        causa: vuelta.origen === "billetera" ? DEEPLINK_RECHAZADO : DEEPLINK_RESPUESTA_ILEGIBLE,
+      };
+    case "tx-firmada":
+    case "patrocinio-firmado":
+      // Inalcanzable con `dl=conectar`: `interpretarVuelta` decide la rama por la MARCA, y con
+      // `"conectar"` sólo puede devolver `conectado` (o un corte). Se escribe igual y NO se colapsa en
+      // el `never`, porque son variantes reales del tipo y tragarlas en el `default` haría que el
+      // candado de exhaustividad dejara de avisar si mañana la marca decidiera otra cosa.
+      return { tipo: "nada" };
+    default: {
+      const nunca: never = vuelta;
+      return { tipo: "corte", causa: nunca };
+    }
+  }
 }

@@ -26,8 +26,10 @@ import {
   MARCA_CREAR_NONCE,
   completarVuelta,
   guardarEleccion,
+  hrefSinRastroDeVuelta,
   iniciarConexion,
   leerEleccion,
+  marcaDeVuelta,
   olvidarEleccion,
   remesaDelViaje,
 } from "./conexion";
@@ -385,6 +387,57 @@ describe("la elección del selector", () => {
       throw new Error("cookies_bloqueadas");
     };
     expect(remesaDelViaje(a, AHORA)).toBeNull();
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// AC-4 · `hrefSinRastroDeVuelta` y `marcaDeVuelta`, las dos PURAS
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+describe("AC-4: la limpieza de la barra", () => {
+  it("saca los parámetros de respuesta y la marca, y NADA MÁS", () => {
+    const sucio =
+      "https://chaski.test/enviar?kyc=return&dl=conectar&phantom_encryption_public_key=K&nonce=N&data=D&errorCode=4001&errorMessage=x&otro=1";
+    const limpio = hrefSinRastroDeVuelta(sucio);
+    const q = new URL(limpio).searchParams;
+    for (const p of [MARCA, "phantom_encryption_public_key", "nonce", "data", "errorCode", "errorMessage"]) {
+      expect(q.get(p), `quedó \`${p}\``).toBeNull();
+    }
+    // 🔴 LA MITAD QUE IMPORTA: lo ajeno sigue viajando. `?kyc=return` es de OTRO recorrido.
+    expect(q.get("kyc")).toBe("return");
+    expect(q.get("otro")).toBe("1");
+    expect(new URL(limpio).pathname).toBe("/enviar");
+  });
+
+  it("también saca la clave de Solflare, no sólo la de Phantom", () => {
+    const limpio = hrefSinRastroDeVuelta("https://chaski.test/e?solflare_encryption_public_key=K&a=1");
+    expect(new URL(limpio).searchParams.get("solflare_encryption_public_key")).toBeNull();
+    expect(new URL(limpio).searchParams.get("a")).toBe("1");
+  });
+
+  it("cuando no queda ningún parámetro, no deja el `?` colgando en la barra", () => {
+    expect(hrefSinRastroDeVuelta("https://chaski.test/enviar?dl=conectar&nonce=N")).toBe(
+      "https://chaski.test/enviar",
+    );
+    // Y el hash sobrevive: es parte de la ubicación de la persona.
+    expect(hrefSinRastroDeVuelta("https://chaski.test/enviar?dl=conectar#abajo")).toBe(
+      "https://chaski.test/enviar#abajo",
+    );
+  });
+
+  it("un href sin nada nuestro vuelve IDÉNTICO (así el productor no escribe la barra de nadie)", () => {
+    const igual = "https://chaski.test/enviar?kyc=return";
+    expect(hrefSinRastroDeVuelta(igual)).toBe(igual);
+  });
+
+  it("un href que no parsea se devuelve tal cual en vez de tirar", () => {
+    expect(hrefSinRastroDeVuelta("/enviar?dl=conectar")).toBe("/enviar?dl=conectar");
+    expect(marcaDeVuelta("/enviar?dl=conectar")).toBeNull();
+  });
+
+  it("`marcaDeVuelta` devuelve lo que haya, incluida una marca que nadie escribió", () => {
+    expect(marcaDeVuelta("https://chaski.test/e?dl=firmar-tx")).toBe("firmar-tx");
+    expect(marcaDeVuelta("https://chaski.test/e?dl=inventada")).toBe("inventada");
+    expect(marcaDeVuelta("https://chaski.test/e")).toBeNull();
   });
 });
 

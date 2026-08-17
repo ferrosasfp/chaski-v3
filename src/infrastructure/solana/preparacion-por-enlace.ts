@@ -85,7 +85,7 @@ export interface EleccionDeEnlace {
    * 🔴 EXISTE PORQUE EL SALTO MATA EL PROCESO DE LA PESTAÑA: al volver, la pantalla monta de cero y su
    * `rem` está en `null`, así que el `remittanceId` que `completar()` exige no vive en ninguna parte de
    * la memoria de la app. Su residual —que con ese id el guard `otra-remesa` no puede cortar en la
-   * vuelta del connect— está escrito entero en (`remesaDelViaje`, `./deeplink/conexion.ts:345`).
+   * vuelta del connect— está escrito entero en (`remesaDelViaje`, `./deeplink/conexion.ts:394`).
    */
   remesaEnCurso(): string | null;
 }

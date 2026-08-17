@@ -27,7 +27,7 @@ import bs58 from "bs58";
 import type { Almacen, Viaje } from "./sesion";
 import { MARCA, enlaceDeVuelta, guardarViaje, interpretarVuelta, leerViaje } from "./sesion";
 import type { BilleteraDeeplink } from "./protocol";
-import { nuevoParDeCifrado, urlConectar } from "./protocol";
+import { PARAMS_DE_RESPUESTA, nuevoParDeCifrado, urlConectar } from "./protocol";
 import type { CausaDeEnlace } from "./firma-por-enlace";
 import {
   DEEPLINK_RECHAZADO,
@@ -342,6 +342,55 @@ export function completarVuelta(p: PedidoDeConexion): VueltaDeConexion {
  * 🔴 NO TIRA NUNCA: la llama el productor de montaje, y un disco que no se deja leer tiene que
  * contestar "no hay viaje", nunca romper el montaje de la pantalla.
  */
+/**
+ * Qué marca nuestra trae esta URL, o `null`. **PURA**: no toca el disco y no consume nada.
+ *
+ * ⚠️ ES SÓLO UN LECTOR, y por eso se puede llamar antes que `completarVuelta` sin romper DT-12: el que
+ * consume el paso de forma irreversible es `completarVuelta`, y esto ni siquiera mira el almacén. Hace
+ * falta porque quien decide qué hacer DESPUÉS de la vuelta —reanudar o no— necesita saber de qué paso
+ * se volvió, y para entonces la barra ya está limpia.
+ *
+ * ⛔ NO valida contra `PasoDelViaje`: devuelve lo que haya, incluida una marca que nadie de este repo
+ * escribió. Quien la use decide qué hacer con lo que no reconoce, y la decisión fail-closed (no
+ * reanudar nada que no sea un paso del motor) vive en el llamador, no acá.
+ */
+export function marcaDeVuelta(hrefActual: string): string | null {
+  try {
+    return new URL(hrefActual).searchParams.get(MARCA);
+  } catch {
+    return null; // un href que no parsea no trae ninguna marca nuestra
+  }
+}
+
+/**
+ * El href sin los parámetros de respuesta ni la marca, para `history.replaceState` (AC-4). **PURA**.
+ *
+ * 🔴 QUÉ SACA Y QUÉ NO, porque la mitad importante es la segunda. Saca exactamente
+ * (`PARAMS_DE_RESPUESTA`, `./protocol.ts:82`) más (`MARCA`, `./sesion.ts:480`), **y NADA MÁS**: todo
+ * otro parámetro del origen sigue viajando, empezando por `?kyc=return`, que es el que trae de vuelta
+ * el recorrido de Didit. Es la misma disciplina que ya tiene (`enlaceDeVuelta`, `./sesion.ts:495`), y
+ * por el mismo motivo: esta función corre sobre la URL **de la persona**, no sobre una nuestra.
+ *
+ * ⚠️ POR QUÉ HACE FALTA, medido en la ola 2: un `errorCode` que queda en la barra hace que la
+ * invocación SIGUIENTE vuelva a leer el mismo rechazo y repita el corte. `firma-por-enlace.ts` tiene
+ * ese caso medido con tres invocaciones idénticas. Sin esta limpieza, la persona no puede reintentar.
+ *
+ * ⛔ Y CUÁNDO SE LLAMA: **DESPUÉS** de haber leído la vuelta, nunca antes. Antes borraría la respuesta
+ * que nadie leyó todavía (DT-10).
+ */
+export function hrefSinRastroDeVuelta(hrefActual: string): string {
+  let u: URL;
+  try {
+    u = new URL(hrefActual);
+  } catch {
+    return hrefActual; // no se puede limpiar lo que no se puede parsear, y devolver otra cosa sería peor
+  }
+  for (const p of PARAMS_DE_RESPUESTA) u.searchParams.delete(p);
+  u.searchParams.delete(MARCA);
+  // `URL.toString()` deja un `?` colgando cuando no queda ningún parámetro, y eso se ve en la barra.
+  return u.searchParams.size === 0 ? `${u.origin}${u.pathname}${u.hash}` : u.toString();
+}
+
 export function remesaDelViaje(a: Almacen, ahora: number): string | null {
   let lectura: ReturnType<typeof leerViaje>;
   try {

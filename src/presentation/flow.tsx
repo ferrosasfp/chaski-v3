@@ -74,7 +74,7 @@ import {
   statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, type GestoRenovacion, REVISION_APAGADA, REVISION_FIRMANDO, REVISION_GESTO, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_BILLETERA, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, esVentanaSinAbiertos, // WKH-339: EN ESTA LÍNEA. `flow.tsx:661` lo citan 6 archivos (`ports.ts`, `container.test.ts`, `http-pop-signer.ts`, `pop-proof-store.ts`, `ledger-payout-status-gateway.ts`, `solana-providers.tsx`) más 2 sitios de acá, y NINGUNA de las 8 es una cita anclada ⇒ si se mueve, nada se pone rojo y los 8 comentarios rotan en silencio. ⛔ Acá decía `632`, que era el número correcto en `ce4f31e` y lo dejó de ser en esta rama: los 6 archivos SÍ se remapearon a 661 y esta línea, que es la que NOMBRA el número, quedó atrás (CR/BLQ-BAJO-1) · WKH-346 fix-pack: `esVentanaSinAbiertos` entra acá por lo mismo (Δ0)
 } from "./flow-vm";
 import { cn } from "./cn";
-import { phantomBrowseUrl, useWalletAvailability, useConnectedWalletAddress, mwaEnabled, useMwaOffered, deeplinkEnabled } from "./wallet-availability"; import type { BilleteraDeeplink } from "../infrastructure/solana/deeplink/protocol"; // WKH-358: los dos EN ESTA MISMA LÍNEA, por lo mismo que los dos de WKH-MWA // el aviso de "acá no hay wallet" (NoWalletHere) · WKH-354/AC-6: `useConnectedWalletAddress` para el banner (CuentaCambiada) · WKH-MWA: los dos últimos, EN ESTA MISMA LÍNEA (el censo de citas por número de `:44` `flow.tsx:NNNN` cuelgan de que este archivo no cambie de largo)
+import { phantomBrowseUrl, useWalletAvailability, useConnectedWalletAddress, mwaEnabled, useMwaOffered, deeplinkEnabled } from "./wallet-availability"; import type { BilleteraDeeplink } from "../infrastructure/solana/deeplink/protocol"; import { hrefSinRastroDeVuelta, marcaDeVuelta } from "../infrastructure/solana/deeplink/conexion"; // WKH-358: los dos EN ESTA MISMA LÍNEA, por lo mismo que los dos de WKH-MWA // el aviso de "acá no hay wallet" (NoWalletHere) · WKH-354/AC-6: `useConnectedWalletAddress` para el banner (CuentaCambiada) · WKH-MWA: los dos últimos, EN ESTA MISMA LÍNEA (el censo de citas por número de `:44` `flow.tsx:NNNN` cuelgan de que este archivo no cambie de largo)
 import { Aviso, Button, Card, ChaskiMark, Field, Money, Muted, Pill, Row, Stepper, TextInput } from "./ui"; import { BarraDestinos, type Destino, VolverAlInicio, esDestino } from "./barra-destinos"; import { Bienvenida } from "./bienvenida"; import { DestinoRecuperar, QUE_RECUPERA } from "./recuperar"; // ola 2: los nombres nuevos entran EN ESTA LÍNEA, no en una nueva. Este archivo recibe MUCHAS citas por número, y una sola línea de import de más corre todas las que apuntan más abajo. ⛔ EL NÚMERO NO SE ESCRIBE ACÁ: vive en UN solo lugar, con su definición y su fecha, en el comentario de `:44` (fix-pack, CR/MNR-5). Acá había un valor y el mismo archivo llevaba otros cuatro distintos para el mismo hecho, cada uno copiado de un vecino en vez de medido · WKH-063: los TRES imports nuevos entran acá por lo mismo (Δ0 líneas)
 
 // WKH-187: el quote se muestra ANTES del KYC. Orden: send→connect→review(pre-KYC)→verify→confirm(post-KYC)→track→done.
@@ -283,7 +283,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
     return () => {
       alive = false;
     };
-  }, [c]); useVueltaPorEnlace({ c, yaInteractuo: yaInteractuoRef, alConectar: (r) => { setAddress(r.address); setServerVerdict(r.serverVerdict); setKycProof(r.kycProof); }, alFallar: (causa) => setError({ message: humanError(causa) }) }); // WKH-358/AC-1 — EN ESTA LÍNEA (Δ0 de citas, `:44`). El cuerpo vive al FINAL del archivo, con todo su razonamiento, por lo que dice el comentario de `:44`: ~60 líneas acá adentro corren las 131 citas por número que este archivo recibe. ⛔ La causa se traduce con `humanError` y NUNCA se escribe un `deeplink_*` literal en este archivo (el candado de copy de `deeplink-callers.test.ts` cuenta los que aparecen en `src/presentation`). ⛔ Y NO hay ningún `setRem`: el gate del pisón vive adentro del hook y esto sólo repuebla lo que `onConnect` repuebla
+  }, [c]); useVueltaPorEnlace({ c, yaInteractuo: yaInteractuoRef, alConectar: (r) => { setAddress(r.address); setServerVerdict(r.serverVerdict); setKycProof(r.kycProof); }, alFallar: (causa) => setError({ message: humanError(causa) }), alReanudar: (r) => { if (r.estado === "hay-que-salir") { window.location.href = r.irA; return; } setRem(r.remesa.snapshot); setStep(r.remesa.status === "settled" ? "done" : "track"); }, alAvisar: (m) => setError({ message: m }) }); // WKH-358/AC-1+AC-3 — EN ESTA LÍNEA (Δ0 de citas, `:44`). El cuerpo vive al FINAL del archivo, con todo su razonamiento, por lo que dice el comentario de `:44`: ~60 líneas acá adentro corren las 131 citas por número que este archivo recibe. ⛔ La causa se traduce con `humanError` y NUNCA se escribe un `deeplink_*` literal en este archivo (el candado de copy de `deeplink-callers.test.ts` cuenta los que aparecen en `src/presentation`). ⛔ Y NO hay ningún `setRem`: el gate del pisón vive adentro del hook y esto sólo repuebla lo que `onConnect` repuebla
 
   // WKH-188: mientras el overlay `resuming` está visible, ofrecer un escape a los 5 s (AC-1).
   // Time-based (no atado al conteo de iteraciones). Al caer `resuming` (terminal temprano o timeout),
@@ -3922,36 +3922,88 @@ const NO_WALLET_CON_MWA =
 //     proceso de la pestaña: al volver, `rem` es `null` y el `remittanceId` sólo sobrevivió adentro del
 //     viaje. Su residual —que con ese id el guard `otra-remesa` no puede cortar en la vuelta del
 //     connect— está escrito entero en
-//     (`remesaDelViaje`, `../infrastructure/solana/deeplink/conexion.ts:345`).
+//     (`remesaDelViaje`, `../infrastructure/solana/deeplink/conexion.ts:394`).
 //   · **EL GATE DEL PISÓN.** La vuelta del enlace es otra recarga, igual que la de Didit, así que le
 //     toca el mismo trato: si la persona ya interactuó, esto no toca la pantalla. Es el mutante G5 del
 //     fix-pack 3 de WKH-063: pisar una remesa `created` con `ownerAddress: null` la vuelve inalcanzable
 //     porque `repo.list(address)` no la lista nunca. ⛔ Y acá directamente NO HAY NINGÚN `setRem`.
 //
-// ⚠️ LO QUE ESTE PRODUCTOR TODAVÍA NO HACE, dicho para que nadie lo lea como completo: **no limpia la
-// barra** (`history.replaceState`, AC-4), **no restaura la remesa en curso** y **no re-invoca
-// `confirmAndSend.execute()`** (AC-3). Las tres cosas van ACÁ ADENTRO en la wave siguiente, y no en un
-// segundo efecto: dos lectores del mismo disco al montar pueden intercalarse, y el segundo vería un
-// disco que el primero ya consumió (DT-12).
+// ── EL ORDEN DE LAS TRES COSAS QUE HACE, Y POR QUÉ ES ÉSE (DT-10 + AC-3 + AC-4) ──────────────────
+//
+//   1. **LEE** la vuelta (`completar()`).
+//   2. **LIMPIA LA BARRA** (`history.replaceState`) — ⛔ DESPUÉS de leer, nunca antes: antes borraría
+//      la respuesta que nadie leyó todavía. Y se limpia SIEMPRE, también tras un corte, porque un
+//      `errorCode` que queda en la barra hace que la invocación SIGUIENTE repita el mismo corte y la
+//      persona no pueda reintentar (el caso que la ola 2 mide con tres invocaciones idénticas).
+//   3. **REANUDA** `confirmAndSend.execute()` si el paso del que se volvió es del MOTOR.
+//
+// 🔴 EL GATE DE LA REANUDACIÓN ES FAIL-CLOSED Y TIENE DOS CONDICIONES, no una:
+//   · la marca de la que se volvió es `firmar-tx` o `firmar-patrocinio` — nunca `conectar` ni
+//     `crear-nonce`, que ocurren ANTES de que exista ninguna orden de pago; y
+//   · la remesa **está en `confirmed`**, verificado leyendo el repo por el dueño
+//     (`listHistory.execute(direccion)`), que es una fuente **independiente del canal del enlace**.
+// ⛔ Sin la segunda condición, una URL con `?dl=firmar-tx` puesta a mano sobre una remesa que la
+// persona todavía NO confirmó haría que `execute()` la confirmara y siguiera hasta `prepare()`, o sea
+// una orden de pago real disparada por un enlace. La condición del `status` NO es cosmética.
+//
+// ⚠️ CÓMO AVISA, Y SU RESIDUAL DECLARADO. Cuando la persona ya interactuó, esto **no navega y no toca
+// `rem`**: prende el banner de error global (`:1211`), que es la única superficie que ya existe y que
+// avisa sin navegar. ⛔ NO reusa el aviso de Didit (`:757`): su copy habla de la verificación y su
+// botón aplica un snapshot de KYC, así que decirle eso a alguien que volvió de firmar una transacción
+// sería falso. El residual: ese banner **no trae un botón para retomar**, y la vuelta es por «Mis
+// envíos», que sí lista una remesa `confirmed` con dueño. Un aviso propio pide una variante nueva en
+// el render de `RemittanceFlow`, y eso es una pantalla nueva, no una línea.
 function useVueltaPorEnlace(i: {
   c: Container;
   yaInteractuo: { readonly current: boolean };
   alConectar: (r: Awaited<ReturnType<Container["connectWallet"]["execute"]>>) => void;
   alFallar: (causaCruda: string) => void;
+  alReanudar: (r: Awaited<ReturnType<Container["confirmAndSend"]["execute"]>>) => void;
+  alAvisar: (mensaje: string) => void;
 }): void {
-  const { c, yaInteractuo, alConectar, alFallar } = i;
+  const { c, yaInteractuo, alConectar, alFallar, alReanudar, alAvisar } = i;
   const yaCorrioRef = useRef(false);
-  // `alConectar`/`alFallar` cambian de identidad en cada render y NO van en las deps A PROPÓSITO: el
-  // efecto corre UNA sola vez (lo garantiza el ref) y agregarlas sólo agregaría re-suscripciones que
-  // el ref después descarta. `yaInteractuo` es un ref y es estable por construcción.
+  // 🔴 DOS REFS Y NO UN `let alive`, Y ACÁ ESTÁ LA DIFERENCIA CON EL EXEMPLAR DEL RESUME DE DIDIT
+  // (`:205-286`), que sí usa `let alive`. **MEDIDO**: con esa forma, bajo `<React.StrictMode>` —que es
+  // lo que corre `next dev`, `next.config.mjs:22`— este productor **no hace NADA**. React 18 monta,
+  // corre el efecto, lo LIMPIA y lo vuelve a correr: la limpieza del primer pase pone `alive = false`
+  // y mata el trabajo que ya arrancó, y el segundo pase se va por el `return` del ref. Neto: cero
+  // llamadas. Lo cazó `T-065-7`, que monta en StrictMode y exige exactamente UNA.
+  //
+  // Con un REF en vez de una variable local, el segundo pase del doble montaje **vuelve a prenderlo**
+  // (`vivoRef.current = true` es la primera línea) y el trabajo del primer pase sigue vivo. En un
+  // desmontaje de verdad no hay segundo pase, así que la limpieza gana y el trabajo se aborta, que es
+  // lo que corresponde. `yaCorrioRef` sigue garantizando lo que CD-11 pide: la vuelta se consume UNA
+  // sola vez, pase lo que pase con los montajes.
+  const vivoRef = useRef(true);
+  // `alConectar`/`alFallar`/`alReanudar`/`alAvisar` cambian de identidad en cada render y NO van en las
+  // deps A PROPÓSITO: el efecto corre UNA sola vez (lo garantiza `yaCorrioRef`) y agregarlas sólo
+  // agregaría re-suscripciones que el ref después descarta. `yaInteractuo` es un ref y es estable.
   // biome-ignore lint/correctness/useExhaustiveDependencies: ver el párrafo de arriba
   useEffect(() => {
+    vivoRef.current = true; // ⚠️ PRIMERO Y SIEMPRE: es lo que repone el segundo pase de StrictMode
     if (yaCorrioRef.current) return;
     yaCorrioRef.current = true;
-    let vivo = true;
+    const vivo = { get valor() { return vivoRef.current; } };
     (async () => {
+      // El href se captura ANTES de todo: el paso 2 lo va a borrar de la barra y el paso 3 necesita
+      // saber de qué salto se volvió. ⚠️ `marcaDeVuelta` es un LECTOR PURO —no toca el disco y no
+      // consume nada—, así que llamarlo antes que `completar()` no rompe DT-12.
+      const hrefAlMontar = window.location.href;
+      const marca = marcaDeVuelta(hrefAlMontar);
+      const limpiarLaBarra = () => {
+        const limpio = hrefSinRastroDeVuelta(hrefAlMontar);
+        // El `!==` NO es una optimización: sin él, los ~100 `it` que montan esta pantalla sin ninguna
+        // marca llamarían igual a `replaceState`, y este productor estaría escribiendo la barra de
+        // recorridos que no tienen nada que ver con el enlace.
+        if (limpio !== hrefAlMontar) window.history.replaceState(null, "", limpio);
+      };
       const remId = c.eleccionDeEnlace.remesaEnCurso();
-      if (remId === null) return; // no hay viaje: este montaje no tiene ninguna vuelta que completar
+      if (remId === null) {
+        // No hay viaje, pero la barra puede traer el rastro de uno que ya murió: se limpia igual.
+        limpiarLaBarra();
+        return;
+      }
       let res: Awaited<ReturnType<Container["eleccionDeEnlace"]["completar"]>>;
       try {
         res = await c.eleccionDeEnlace.completar({ remittanceId: remId });
@@ -3960,32 +4012,70 @@ function useVueltaPorEnlace(i: {
         // se DERIVA del error y nunca se escribe como literal en este archivo: el candado de copy
         // cuenta las causas `deeplink_*` que aparecen en `src/presentation`, y hasta que exista el
         // `Record` con las once, escribir una sola acá lo rompe a propósito.
-        if (vivo) alFallar((e as Error).message);
+        limpiarLaBarra();
+        if (vivo.valor) alFallar((e as Error).message);
         return;
       }
-      if (!vivo) return;
+      limpiarLaBarra(); // paso 2, y SIEMPRE: también tras un corte (AC-4, el `errorCode` que se repite)
+      if (!vivo.valor) return;
       if (res.estado === "corte") {
         alFallar(res.causa); // ídem: la causa se DERIVA del desenlace, no se escribe acá
         return;
       }
-      if (res.estado !== "conectado") return; // `nada` es el caso normal de un montaje sin vuelta
-      // 🔴 EL GATE DEL PISÓN, ANTES DE TOCAR LA PANTALLA. La dirección ya quedó en el disco (la escribió
-      // el lector de la vuelta, adentro de `completar()`), así que no se pierde nada por no aplicarla acá:
-      // el recorrido la encuentra igual cuando la persona siga. Lo que sí se pierde si se aplica es lo
-      // que ella estaba haciendo.
-      if (yaInteractuo.current) return;
+      if (res.estado === "conectado") {
+        // 🔴 EL GATE DEL PISÓN, ANTES DE TOCAR LA PANTALLA. La dirección ya quedó en el disco (la
+        // escribió el lector de la vuelta, adentro de `completar()`), así que no se pierde nada por no
+        // aplicarla acá: el recorrido la encuentra igual cuando la persona siga. Lo que sí se pierde
+        // si se aplica es lo que ella estaba haciendo.
+        if (yaInteractuo.current) return;
+        try {
+          // `connect()` del adaptador contesta `Viaje.direccion` SIN tocar el bridge cuando el gate
+          // está activo, así que este gesto es exactamente el del botón "Conectar wallet" y el atajo
+          // KYC-once sigue funcionando sin un cambio (AC-1).
+          const r = await c.connectWallet.execute();
+          if (vivo.valor) alConectar(r);
+        } catch (e) {
+          if (vivo.valor) alFallar((e as Error).message);
+        }
+        return;
+      }
+      // ── 3 · LA REANUDACIÓN (AC-3) ────────────────────────────────────────────────────────────
+      // Sólo los pasos del MOTOR. `conectar` salió por la rama de arriba; `crear-nonce` y cualquier
+      // marca que nadie escribió caen acá y NO reanudan nada: pasan antes de que exista ninguna orden.
+      if (marca !== "firmar-tx" && marca !== "firmar-patrocinio") return;
+      // La segunda condición, y es la fail-closed: la remesa tiene que estar EN `confirmed`, leído del
+      // repo por el dueño. ⛔ `getConnectedAddress()` es la del enlace, y `repo.list` filtra por
+      // `ownerAddress`, que lo escribe `startKyc` — o sea que esto además cruza el canal del enlace
+      // contra una fuente que ese canal no puede escribir.
+      const dueño = await c.connectedWallet.getConnectedAddress();
+      if (!vivo.valor || dueño === null) return;
+      const enCurso = (await c.listHistory.execute(dueño)).find((r) => r.id === remId);
+      if (!vivo.valor) return;
+      if (enCurso === undefined || enCurso.status !== "confirmed") return;
+      if (yaInteractuo.current) {
+        // Avisa y NO navega. ⛔ Y NO llama a `execute()`: reanudar por debajo mientras la persona usa
+        // la pantalla es la misma pisada, con la orden de pago adentro.
+        alAvisar(AVISO_REANUDACION_POR_ENLACE);
+        return;
+      }
       try {
-        // `connect()` del adaptador contesta `Viaje.direccion` SIN tocar el bridge cuando el gate está
-        // activo, así que este gesto es exactamente el del botón "Conectar wallet" y el atajo KYC-once
-        // sigue funcionando sin un cambio (AC-1).
-        const r = await c.connectWallet.execute();
-        if (vivo) alConectar(r);
+        const r = await c.confirmAndSend.execute({ remittanceId: remId });
+        if (vivo.valor) alReanudar(r);
       } catch (e) {
-        if (vivo) alFallar((e as Error).message);
+        if (vivo.valor) alFallar((e as Error).message);
       }
     })();
     return () => {
-      vivo = false;
+      vivoRef.current = false;
     };
   }, [c]);
 }
+
+/** WKH-358/AC-3 — lo que lee la persona cuando volvió de firmar y ya estaba usando la pantalla.
+ *
+ *  ⛔ NO afirma que se movió plata, y no puede: en este punto la firma volvió pero `execute()` **no se
+ *  llamó**, justamente porque llamarlo sería pisar lo que ella está haciendo. Nombra el camino de
+ *  vuelta que EXISTE hoy —«Mis envíos» lista una remesa `confirmed` con dueño— en vez de un botón que
+ *  esta pantalla no tiene. Sin em dashes (CD-16). */
+const AVISO_REANUDACION_POR_ENLACE =
+  "Volviste de tu billetera y dejamos ese envío como estaba, porque estabas usando esta pantalla. Lo encontrás en Mis envíos para seguir desde donde quedó.";

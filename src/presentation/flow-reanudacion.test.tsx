@@ -21,7 +21,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import bs58 from "bs58";
 import { RemittanceFlow } from "./flow";
 import { buildTestContainer } from "../test-support/test-container";
-import { FakeWallet, InMemoryRepo, T0, beneficiary } from "../test-support/fakes";
+import { FakeWallet, InMemoryRepo, RecorridoPorEnlaceNulo, T0, beneficiary } from "../test-support/fakes";
 import { type KycVerification, Remittance, toPersistedIdentity } from "../domain/remittance";
 import { Money } from "../domain/money";
 import { SolanaWalletAdapter } from "../infrastructure/solana-wallet";
@@ -296,6 +296,99 @@ describe("T-065-8: el pisón", () => {
     expect(await screen.findByText(/Volviste de tu billetera/)).toBeInTheDocument();
     expect(spy, "la reanudación corrió por debajo mientras la persona usaba la pantalla").toHaveBeenCalledTimes(0);
     expect(screen.getByPlaceholderText("Nombre de tu familiar")).toBeInTheDocument();
+  });
+
+  // 🔴 T-065-8b — EL SEGUNDO PISÓN, QUE NO TENÍA NINGÚN `it` Y LO DESTAPÓ LA BATERÍA DEL FIX-PACK.
+  //
+  // `flow.tsx` tiene DOS `if (yaInteractuo.current)` en el mismo productor, y son dos ramas distintas:
+  // la de la REANUDACIÓN (la que mide el `it` de arriba) y la del CONNECT (`res.estado === "conectado"`).
+  // El mutante que apaga la del connect —`if (false) return;`— dejaba la suite COMPLETA en verde:
+  // **2685 passed, exit 0**. O sea que ese gate no lo custodiaba nadie.
+  //
+  // ⚠️ QUÉ SE PIERDE SIN ÉL, sin exagerarlo: esta rama NO hace `setStep` ni `setRem`, así que no saca a la
+  // persona de su pantalla como la otra. Lo que sí hace es pedirle a la billetera un `connect()` y después
+  // ir a la CADENA a preguntar por la cuenta de nonce, mientras ella está tipeando. Es trabajo y una
+  // lectura de red que nadie pidió, en el medio de un formulario.
+  //
+  // ⛔ ACÁ EL COLABORADOR ES UN DOBLE Y NO EL REAL, y es deliberado: lo que se mide es el gate de la
+  // PANTALLA, que es donde vive el mutante. Producir un `{estado:"conectado"}` con el recorrido real exige
+  // rehacer el sobre cifrado del connect, que es lo que `preparacion-por-enlace.test.ts` ya mide; hacerlo
+  // otra vez acá mediría la criptografía y no el gate.
+  //
+  // MUTANTE QUE MATA: en `flow.tsx`, borrar el `if (yaInteractuo.current) return;` de la rama
+  // `res.estado === "conectado"` (MEDIDO en el fix-pack: exit=1, 1 rojo, y el rojo es este `it`).
+  it("T-065-8b: y con la vuelta del CONNECT, si la persona ya interactuó tampoco se conecta por debajo", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo, "confirmed");
+    sembrarVuelta("conectar");
+    let soltar: () => void = () => {};
+    const puerta = new Promise<void>((res) => {
+      soltar = res;
+    });
+    /** El doble contesta la vuelta del CONNECT, y la deja colgada hasta que el test la suelte: así hay
+     *  una ventana real en la que la persona toca la pantalla, igual que en el `it` de arriba. */
+    class RecorridoQueVuelveConectado extends RecorridoPorEnlaceNulo {
+      override remesaEnCurso(): string {
+        return REM;
+      }
+      override async completar(): Promise<never> {
+        await puerta;
+        return { estado: "conectado", direccion: DIRECCION } as never;
+      }
+    }
+    const c = buildTestContainer({
+      repo,
+      wallet: new FakeWallet(),
+      connectedWallet: new SolanaWalletAdapter(),
+      recorridoPorEnlace: new RecorridoQueVuelveConectado(),
+    });
+    const conectar = vi.spyOn(c.connectWallet, "execute");
+
+    render(<RemittanceFlow pasoInicial="bienvenida" container={c} />);
+
+    // La persona entra al formulario: eso es lo que marca `yaInteractuoRef`.
+    fireEvent.click(await screen.findByRole("button", { name: /Empezar un envío/ }));
+    expect(await screen.findByPlaceholderText("Nombre de tu familiar")).toBeInTheDocument();
+
+    await act(async () => {
+      soltar();
+      await Promise.resolve();
+    });
+
+    expect(
+      conectar,
+      "el productor conectó la billetera por debajo mientras la persona usaba la pantalla",
+    ).toHaveBeenCalledTimes(0);
+    expect(screen.getByPlaceholderText("Nombre de tu familiar")).toBeInTheDocument();
+  });
+
+  // El par negativo, y es lo que hace falsable al `it` de arriba: sin ninguna interacción, la MISMA vuelta
+  // del connect SÍ se aplica. Sin esto, un productor que nunca conectara pasaría el de arriba igual.
+  it("T-065-8b (control): sin ninguna interacción, la misma vuelta del connect SÍ conecta", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo, "confirmed");
+    sembrarVuelta("conectar");
+    class RecorridoQueVuelveConectado extends RecorridoPorEnlaceNulo {
+      override remesaEnCurso(): string {
+        return REM;
+      }
+      override async completar(): Promise<never> {
+        return { estado: "conectado", direccion: DIRECCION } as never;
+      }
+      override async estadoDeLaCuentaDeNonce(): Promise<never> {
+        return "no-pudimos-preguntar" as never;
+      }
+    }
+    const c = buildTestContainer({
+      repo,
+      wallet: new FakeWallet(),
+      connectedWallet: new SolanaWalletAdapter(),
+      recorridoPorEnlace: new RecorridoQueVuelveConectado(),
+    });
+    const conectar = vi.spyOn(c.connectWallet, "execute");
+
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
+    await waitFor(() => expect(conectar).toHaveBeenCalledTimes(1));
   });
 
   it("CONTROL: sin ninguna interacción, la misma vuelta SÍ reanuda", async () => {

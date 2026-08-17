@@ -253,6 +253,9 @@ function estaConectado(v: Viaje): v is ViajeConectado {
  *
  * Vacío es peor que ausente: `"" === ""` da `true`, así que un string vacío "coincide" con otro y pasa
  * por comparaciones que tendrían que cortar. Es la misma razón que `esTextoUtil` en `preparado.ts`.
+ *
+ * ⛔ ESTE PREDICADO NO DECIDE SI SE PRESERVA UN RESULTADO EN UN CORTE, y durante un fix-pack lo decidió:
+ * eso es `resultadoPreservable`, que es más estricto y explica por qué.
  */
 function esFirmaUtil(x: unknown): x is string {
   return typeof x === "string" && x.trim() !== "";
@@ -273,6 +276,58 @@ function firmaDelSender(transaccionBase58: string, sender: string): string | nul
   } catch {
     return null;
   }
+}
+
+/** 64 bytes en base58, que es lo que mide una firma ed25519. ⛔ NO VERIFICA NADA MÁS, y no puede: el
+ *  mensaje contra el que la firma de patrocinio verifica lleva adentro la firma de la transacción y lo
+ *  valida el settle, no este módulo. Es una medición de FORMA y se usa como tal. */
+function tieneFormaDeFirma(x: unknown): boolean {
+  if (!esFirmaUtil(x)) return false;
+  try {
+    return bs58.decode(x).length === 64;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * ¿Lo que hay en el disco es algo que este recorrido todavía puede USAR, o preservarlo lo deja trabado?
+ *
+ * 🔴 POR QUÉ NO ALCANZA `esFirmaUtil`, MEDIDO (AR-it2/BLQ-BAJO-1). La preservación de los cortes se
+ * decidía con "string no vacío" mientras el comentario de al lado prometía lo contrario ("basura en el
+ * campo de un resultado NO cuenta como firma"). Con `transaccionFirmada: "no-soy-una-transaccion"` en el
+ * disco, CINCO invocaciones idénticas daban las cinco `deeplink_tx_alterada` con el viaje INTACTO: el
+ * recorrido quedaba trabado hasta que `MAX_EDAD_MS` lo matara, que es exactamente el resultado que la
+ * frase decía evitar. Y no hacía falta basura sintáctica: una transacción que decodifica pero NO trae la
+ * firma del sender hacía lo mismo, porque el paso 9 corta sobre ella en cada vuelta.
+ *
+ * LA REGLA: se preserva lo que el motor podría llegar a usar. Para la transacción es el MISMO predicado
+ * del paso 9 (`firmaDelSender(...) === null` ⇒ corte), y esa coincidencia ES el arreglo: el motor no
+ * conserva nada sobre lo que él mismo cortaría en cada invocación.
+ *
+ * ⚠️ LOS DOS CAMPOS NO SE MIDEN IGUAL, y la asimetría es deliberada:
+ *   · `transaccionFirmada` se verifica ACÁ MISMO —decodifica y trae la entrada del `sender`—, que es
+ *     todo lo que este módulo puede afirmar sin preguntarle a nadie.
+ *   · `firmaDePatrocinio` sólo se mide por FORMA (`tieneFormaDeFirma`). Preservar por este campo no
+ *     puede TRABAR nada: sin `transaccionFirmada` el camino sigue al salto que falta, no al corte. Lo
+ *     que la forma cierra es lo otro que el AR nombró: que a quien pueda escribir el disco le alcance
+ *     con dejar cualquier string para que NINGÚN corte limpie durante 20 min.
+ *
+ * ⚠️ Y ES MÁS ESTRICTO QUE EL GUARD DEL PASO 6, a propósito: ahí `esFirmaUtil` decide si CORTAR, y un
+ * falso positivo suyo le pediría a la persona una firma que ya dio; acá se decide si DESTRUIR.
+ *
+ * ⚠️ EL RESIDUO, dicho y con su `it`: el predicado pregunta por la firma de `p.sender`, o sea la cuenta
+ * de ESTA invocación. Si la persona cambió de cuenta en su billetera, el corte es
+ * `deeplink_sender_mismatch` y la firma de la cuenta VIEJA ya no se preserva. Se elige así porque la
+ * alternativa —preguntar por `viaje.direccion`, que sale del disco— reabre el agujero entero: cualquiera
+ * que escriba el disco pone una `direccion` propia y una tx firmada por SU par, y vuelve a tener un viaje
+ * que ningún corte limpia. Y lo que se pierde no es plata: esa transacción nunca se transmitió.
+ */
+function resultadoPreservable(viaje: Viaje, sender: string): boolean {
+  const txUtilizable =
+    esFirmaUtil(viaje.transaccionFirmada) &&
+    firmaDelSender(viaje.transaccionFirmada, sender) !== null;
+  return txUtilizable || tieneFormaDeFirma(viaje.firmaDePatrocinio);
 }
 
 /**
@@ -309,27 +364,42 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
     // firmó, el corte NO borra nada.** Nada de excepciones por causa: cualquier causa que se agregue
     // mañana la hereda.
     //
-    // ⚠️ LO QUE ESTO CUESTA, dicho sin suavizar: cuando el corte preserva, la x25519 privada del canal
-    // y la sesión sobreviven hasta que `MAX_EDAD_MS` (20 min) las venza, que es justo lo que CD-10
-    // quería evitar. Se elige el costo a sabiendas por tres razones medidas: (1) el camino del
-    // `"salto"` YA deja exactamente eso en el disco por diseño, con la misma ventana, así que no es
-    // una clase de exposición nueva; (2) del otro lado lo que se destruye es una firma del camino del
-    // dinero que no existe en ningún otro lugar del universo; y (3) el que abandona de verdad —la
-    // remesa muere— tiene su propia limpieza, que es `abandonarAutorizacion()` en el adaptador
-    // (AR/MNR-1). "Se venció el paso" no es "se abandonó el envío".
+    // ⚠️ LO QUE ESTO CUESTA, y acá estaba contado A MEDIAS (AR-it2/MNR-2). Cuando el corte preserva, la
+    // x25519 privada del canal y la sesión sobreviven hasta que `MAX_EDAD_MS` (20 min) las venza, que es
+    // justo lo que CD-10 quería evitar. Se elige el costo a sabiendas por dos razones medidas: (1) el
+    // camino del `"salto"` YA deja exactamente eso en el disco por diseño, con la misma ventana, así que
+    // no es una clase de exposición nueva; y (2) del otro lado lo que se destruye es una firma del camino
+    // del dinero que no existe en ningún otro lugar del universo.
+    //
+    // 🔴 Y LA TERCERA RAZÓN QUE ESTABA ESCRITA ACÁ NO CORRE EN ESTE CAMINO, así que se tacha: decía que
+    // "el que abandona de verdad tiene su propia limpieza, `abandonarAutorizacion()`". Ese método existe
+    // (`abandonarAutorizacion`, `../../solana-wallet.ts:1099`) y lo llama UN solo sitio, `failAndRefund`
+    // (`abandonarAutorizacion`, `../../../application/use-cases/confirm-and-send.ts:225`) — y el corte NO
+    // pasa por ahí: la causa sube como `throw` desde `authorizePrincipal`, cuyo único llamador de
+    // producción NO tiene `try/catch` alrededor (`authorizePrincipal`, `../../../application/use-cases/confirm-and-send.ts:486`),
+    // así que `execute()` termina por excepción y nadie limpia nada. VERIFICADO leyendo los dos sitios.
+    //
+    // ⚠️ EL COSTO COMPLETO ES ÉSTE, con sus tres salidas y ni una más. Lo preservado se va del disco (a)
+    // cuando una invocación nueva CIERRA el recorrido, (b) cuando la remesa muere de verdad y
+    // `failAndRefund` corre, o (c) a los 20 min. Y (a) DEPENDE DE UN PRODUCTOR QUE HOY NO EXISTE: nadie
+    // limpia el query string de vuelta, y MEDIDO con `?dl=…&errorCode=…` todavía en la barra tres
+    // invocaciones idénticas repiten el mismo corte con el disco intacto, mientras que con el href limpio
+    // SÍ retoma. O sea que en el navegador de hoy, para una URL de rechazo pegada a mano, la única salida
+    // que queda es la ventana. El limpiador de la barra es de la ola 4 / HU-357.
+    // 🔒 Y esas dos mitades no son prosa: las fija el `it` "con la URL de rechazo pegada, 3 invocaciones
+    // repiten el corte sin tocar el disco; con el href limpio RETOMA", que muere con el mutante ALTO1-a.
     //
     // Y por qué se preserva TAMBIÉN el `Preparado` y no sólo el viaje: el `mensajeBase64` del registro
     // es lo ÚNICO contra lo que esa firma se puede verificar. Guardar la firma y borrar su ancla es
     // guardar algo que ya no sirve.
     const cortar = (causa: CausaDeEnlace): DesenlaceDeFirma => {
       const enDisco = leerViaje(p.almacen, p.ahora);
-      const yaFirmado =
-        enDisco.tipo === "hay" &&
-        (esFirmaUtil(enDisco.viaje.transaccionFirmada) ||
-          esFirmaUtil(enDisco.viaje.firmaDePatrocinio));
-      // Basura en el campo de un resultado NO cuenta como firma: preservarla dejaría el recorrido
-      // trabado hasta que la ventana lo mate, sin nada que salvar.
-      if (!yaFirmado) {
+      // 🔴 SE PRESERVA LO QUE EL RECORRIDO TODAVÍA PUEDE USAR, no "cualquier string no vacío": el
+      // predicado, su medición y su residuo están en `resultadoPreservable` (AR-it2/BLQ-BAJO-1). Acá
+      // decía "basura en el campo de un resultado NO cuenta como firma" sobre un `esFirmaUtil` que
+      // aceptaba cualquier basura no blanca, y eso trababa el recorrido hasta que la ventana lo mataba.
+      const hayAlgoQueSalvar = enDisco.tipo === "hay" && resultadoPreservable(enDisco.viaje, p.sender);
+      if (!hayAlgoQueSalvar) {
         terminarViaje(p.almacen);
         terminarPreparado(p.almacen);
       }
@@ -449,6 +519,21 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
         // No debería llegar acá: el connect es de la ola 4 y NO suspende dentro de este método. Si
         // llega, este viaje no es el que esta invocación está manejando. Corte, no `throw`: el motor
         // no tira.
+        //
+        // ⛔ SIN TEST, DECLARADO, Y CON LA PRECONDICIÓN ESCRITA (AR-it2/MNR-3). Para que
+        // `interpretarVuelta` devuelva `"conectado"` hacen falta LAS DOS COSAS A LA VEZ: (1) `dl=conectar`
+        // en la URL con un sobre que abra con la clave que el disco ya tiene fijada, y (2) un viaje que YA
+        // traiga `claveBilletera`/`session`/`direccion` —el guard `estaConectado` de arriba lo exige— pero
+        // que NO tenga `"conectar"` en `pasosConsumidos`, porque si lo tiene la vuelta es `ya-consumida`
+        // (`pasosConsumidos`, `sesion.ts:606`). Ese estado NO lo puede producir ningún escritor de
+        // producción: el único que escribe `claveBilletera` es la rama del `conectar` (`claveBilletera`,
+        // `sesion.ts:654`), y ese MISMO objeto agrega el paso a `pasosConsumidos` en la MISMA escritura
+        // (`pasosConsumidos`, `sesion.ts:637`) — o la escritura falla entera y no persiste nada. MEDIDO
+        // con una sonda: hand-escribiendo el disco con esa divergencia, la rama se alcanza; sin ella, no.
+        // O sea que hoy sólo se llega con un disco escrito a mano, y este repo ya decidió dos veces qué
+        // hacer con una rama así: borrarla o declararla, nunca congelarla en un test.
+        // ⛔ Y BORRARLA NO COMPILA: el `never` del `default` es el candado. El día que la ola 4 escriba el
+        // connect por enlace, esta rama pasa a ser alcanzable de verdad y ahí necesita su `it`.
         return cortar(DEEPLINK_VIAJE_VENCIDO);
       case "tx-firmada":
       case "patrocinio-firmado":
@@ -546,7 +631,7 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
     // mandando a firmar en este mismo momento.** Por eso la escritura vive acá, pegada al salto, y no
     // arriba.
     //
-    // ⚠️ TRES COSAS QUE ESTA ESCRITURA **NO** HACE, y hay que leerlas juntas:
+    // ⚠️ CUATRO COSAS QUE ESTA ESCRITURA **NO** HACE, y hay que leerlas juntas:
     //   · NO puede mover `beneficiary`/`authority`. Si hubieran divergido, el paso 1 ya cortó; si no
     //     divergieron, los de `p` son idénticos a los del registro. AC-5/CD-5 no se ablanda ni un
     //     poco: lo único que se mueve son los dos campos que DESCRIBEN la transacción.
@@ -556,6 +641,23 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
     //   · NO se ejecuta cuando ya hay una tx firmada. La condición del `if` ES la garantía: sólo se
     //     re-ancla cuando se va a mandar una tx nueva. Si la billetera ya devolvió la firma, el ancla
     //     es la de la tx que se firmó y nadie la toca.
+    //   · NO le da al ancla más de UN SLOT, y ése es el residual declarado de este invariante
+    //     (AR-it2/BLQ-BAJO-2). `Preparado` es un registro único, así que el salto B PISA el ancla del
+    //     salto A mientras el pedido A sigue siendo contestable. MEDIDO con `Transaction` reales: si la
+    //     billetera contesta A, el motor devuelve `"completo"` con la tx de A y el ancla de B, el
+    //     adaptador compara bytes contra bytes (`mensajeDevuelto`, `../../solana-wallet.ts:896`) y tira
+    //     `deeplink_tx_alterada` —limpiando— sobre una firma que la persona SÍ dio, con una causa que
+    //     afirma "no es lo que se pidió firmar" cuando sí lo era, un pedido antes. Lo congela el `it`
+    //     "la billetera contesta el pedido ANTERIOR…", que está escrito como limitación y no como
+    //     comportamiento deseado.
+    //     ⛔ NO SE ARREGLA EN 062, y no por costo: el disparador —que una billetera conteste un pedido
+    //     que ya no es el último— es una afirmación sobre runtime móvil que NADIE midió, y CD-4/CD-12
+    //     prohíben construir sobre eso. Las dos salidas quedan escritas para la ola 4: darle N slots al
+    //     ancla (cambia el formato del disco y ensancha lo que el adaptador acepta, de "los bytes del
+    //     último pedido" a "los de cualquiera de los N") o no re-anclar mientras haya un salto sin
+    //     respuesta, que es LITERALMENTE el mutante MED1-a, o sea el bug que este invariante vino a
+    //     cerrar. Plata en riesgo: NINGUNA —nunca hubo POST al settle—; el costo es una firma que hay que
+    //     volver a pedir.
     //
     // Y sigue valiendo lo de siempre: `guardarPreparado` TIRA a propósito (igual que `guardarViaje`) y
     // esa excepción sube tal cual. Si el disco no acepta el registro, saltar sería mandar a la persona

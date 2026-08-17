@@ -862,7 +862,7 @@ export class SolanaWalletAdapter
       // Los cortes salen por `throw`, igual que los tres que ya existen en este método
       // (`wallet_not_connected`, `escrow_params_missing`, `sender_signature_missing`): suben por
       // `execute()` sin `try/catch` hasta el `guard()` de la presentación y dejan la remesa en
-      // `confirmed`, que es exactamente el estado que AC-3 vuelve re-ejecutable. El motor ya limpió.
+      // `confirmed`, que es exactamente el estado que AC-3 vuelve re-ejecutable. ⛔ ACÁ DECÍA "El motor ya limpió." Y ES FALSO DESDE EL FIX-PACK 1 (AR-it2/MNR-1), en el mismo hunk que lo introdujo: el motor limpia SÓLO cuando en el disco no queda nada que salvar, y con un resultado ya firmado adentro preserva el viaje Y el ancla a propósito (`resultadoPreservable`, `solana/deeplink/firma-por-enlace.ts:326`). MEDIDO: `viaje=true prep=true` en 3 de 3 cortes con `transaccionFirmada`. Este `throw` NO limpia nada y NO tiene que hacerlo: es lo que permite que la invocación siguiente retome. Lo que queda pendiente y no es de esta capa: nadie limpia el query string de vuelta, así que con una URL de rechazo todavía en la barra la invocación siguiente vuelve a cortar (ola 4 / HU-357).
       if (desenlace.tipo === "corte") throw new Error(desenlace.causa);
       if (desenlace.tipo === "salto") {
         return { estado: "hay-que-salir", irA: desenlace.irA, esperando: desenlace.esperando };

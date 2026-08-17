@@ -1298,12 +1298,12 @@ describe("T-347-6 (AC-9/CD-10): con el índice LLENO la tx sale byte-idéntica a
 // ⚠️ CD-15 · LOS 15 MUTANTES DE ESTE BLOQUE SE CORRIERON (2026-08-17, tabla RE-MEDIDA entera en el
 // fix-pack 1), no se razonaron: `spawnSync` sin pipes, suite COMPLETA por mutante, aguja contada con
 // `== 1`, relectura del disco, restauración verificada byte a byte, y dos mutantes de calibración de
-// resultado conocido ANTES de creerle nada a la batería (el que debía morir: exit=1 con 35 rojos; el
+// resultado conocido ANTES de creerle nada a la batería (el que debía morir: exit=1 con 35 rojos —39 tras el FP2, que le agregó `it` al otro archivo—; el
 // que debía vivir: exit=0).
 //
 // | mutante                                                             | exit | `it` rojos |
 // |---|---|---|
-// | T-062-7     invertir el guard `viaje.direccion !== p.sender`         | 1 | 35 |
+// | T-062-7     invertir el guard `viaje.direccion !== p.sender`         | 1 | 39 (re-medido en el FP2; eran 35) |
 // | T-062-7b    pasarle al motor otro valor en `sender`                  | 1 | 2 |
 // | T-062-18(a) comparar sólo la LONGITUD del mensaje devuelto           | 1 | 1 (sólo el CASO B) |
 // | T-062-18(b) dejar sólo la PRESENCIA de la firma (sin `nacl.verify`)   | 1 | 2 (el CASO C + citas) |
@@ -1462,7 +1462,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
   //
   // Se corre contra el motor REAL, no contra un doble: lo que hace falta probar es el CABLEADO.
   describe("T-062-7: `viaje.direccion` distinta del sender ⇒ corte fail-closed", () => {
-    // MUTANTE QUE MATA (MEDIDO: exit=1, 35 `it` rojos en dos archivos): invertir la comparación
+    // MUTANTE QUE MATA (MEDIDO: exit=1, 39 `it` rojos en dos archivos —eran 35 en el FP1—): invertir la comparación
     // `viaje.direccion !== p.sender` del motor ⇒ el depósito se arma con el `sender` del adaptador y una
     // dirección de viaje AJENA, y el caso positivo de abajo NO lo nota. Por eso hacen falta los dos.
     it("una dirección de viaje ajena corta con deeplink_sender_mismatch", async () => {

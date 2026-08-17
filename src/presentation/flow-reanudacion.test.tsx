@@ -96,6 +96,7 @@ function sembrarVuelta(paso: string, extra: Record<string, string> = {}) {
   const almacen = almacenDeNavegador(window.localStorage);
   guardarEleccion(almacen, "phantom");
   solanaWalletBridge.setWalletAvailability("none");
+  vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", "true"); // la 3ª condición del gate del adaptador (fix-pack · AR/BLQ-MED-1): sin ella `caminoPorEnlace()` contesta `null` y esta siembra no describe una vuelta de la billetera
   guardarViaje(almacen, {
     billetera: "phantom",
     secreta: bs58.encode(new Uint8Array(32)),
@@ -120,7 +121,7 @@ function contenedor(repo: InMemoryRepo) {
     repo,
     wallet: new FakeWallet(),
     connectedWallet: new SolanaWalletAdapter(), // 🔴 EL ADAPTADOR REAL: lo que se prueba es el cableado
-    eleccionDeEnlace: new RecorridoPorEnlaceReal(),
+    recorridoPorEnlace: new RecorridoPorEnlaceReal(),
   });
 }
 
@@ -131,6 +132,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllEnvs(); // la bandera del enlace que siembra `sembrarVuelta` no se filtra a otro archivo
   window.localStorage.clear();
   window.history.replaceState(null, "", "/");
   solanaWalletBridge.setWalletAvailability("unknown");
@@ -144,7 +146,7 @@ afterEach(() => {
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
 describe("T-065-7: la reanudación de `execute()`", () => {
   // MUTANTE QUE MATA: en `flow.tsx`, borrar el `if (yaCorrioRef.current) return` del productor ⇒ con
-  // `reactStrictMode` el efecto corre dos veces y este `it` ve 2 llamadas. (MEDIDO en la batería §9.)
+  // `reactStrictMode` el efecto corre dos veces y este `it` ve 2 llamadas. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`.)
   it("con `dl=firmar-tx` y la remesa en `confirmed`, llama a `execute()` EXACTAMENTE una vez", async () => {
     const repo = new InMemoryRepo();
     await sembrarRemesaConfirmada(repo, "confirmed");
@@ -259,7 +261,7 @@ describe("T-065-7: la reanudación de `execute()`", () => {
 // es la misma pisada con una orden de pago adentro.
 //
 // MUTANTE QUE MATA: en `flow.tsx`, mover el gate `if (yaInteractuo.current)` DESPUÉS de la llamada a
-// `c.confirmAndSend.execute(...)` (o borrarlo). (MEDIDO en la batería §9.)
+// `c.confirmAndSend.execute(...)` (o borrarlo). (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`.)
 describe("T-065-8: el pisón", () => {
   it("si la persona ya interactuó, avisa, NO llama a `execute()` y NO la saca de su pantalla", async () => {
     const repo = new InMemoryRepo();
@@ -315,7 +317,7 @@ describe("T-065-8: el pisón", () => {
 describe("T-065-9 / T-065-10: la limpieza de la barra", () => {
   // MUTANTE QUE MATA: en `flow.tsx`, cambiar `window.history.replaceState` por
   // `window.location.assign` ⇒ jsdom registra una navegación y el `it` se pone rojo por el
-  // `Not implemented: navigation`. (MEDIDO en la batería §9.)
+  // `Not implemented: navigation`. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`.)
   it("T-065-9: tras interpretar, la barra pierde la marca y la respuesta, y CONSERVA `?kyc=return`", async () => {
     const repo = new InMemoryRepo();
     await sembrarRemesaConfirmada(repo, "confirmed");
@@ -368,11 +370,38 @@ describe("T-065-9 / T-065-10: la limpieza de la barra", () => {
     cleanup();
 
     // (ii) el segundo montaje, sobre la barra ya limpia, no repite el corte.
+    //
+    // 🔴 ACÁ ESTA MITAD NO MEDÍA NADA (fix-pack · AR/MNR-2). Asserteaba `errorCode === null` y
+    // `kyc === "return"`, que son **exactamente los dos valores que el PRIMER montaje ya dejó fijados**:
+    // pasaban aunque el segundo montaje repitiera el aviso palabra por palabra. Lo que hay que medir es la
+    // AUSENCIA DEL COPY, que es lo único que distingue "no repitió" de "la barra ya estaba limpia".
+    const cuerpoAntes = document.body.textContent ?? "";
     render(<RemittanceFlow pasoInicial="send" container={contenedor(repo)} />);
     await act(async () => {
       await Promise.resolve();
     });
     expect(new URL(window.location.href).searchParams.get("errorCode")).toBeNull();
     expect(new URL(window.location.href).searchParams.get("kyc")).toBe("return");
+    // CD-18 — el instrumento sirve: el `cleanup()` de arriba dejó el documento sin el aviso anterior, así
+    // que lo que se busca abajo sólo puede haberlo puesto ESTE montaje.
+    expect(
+      /cancel|rechaz/i.test(cuerpoAntes),
+      "el `cleanup()` no borró el aviso del primer montaje: este barrido mediría el texto viejo",
+    ).toBe(false);
+    const segundoCuerpo = document.body.textContent ?? "";
+    expect(
+      /cancel|rechaz/i.test(segundoCuerpo),
+      "el SEGUNDO montaje volvió a anunciar el rechazo: la vuelta se está leyendo dos veces",
+    ).toBe(false);
+    // Y la pantalla del segundo montaje es la que corresponde, no una en blanco (si no, la ausencia del
+    // copy sería por un render que falló y no por la limpieza).
+    expect(screen.getByPlaceholderText("Nombre de tu familiar")).toBeInTheDocument();
   });
+
+  // ⚠️ SON DOS MONTAJES Y NO LAS TRES INVOCACIONES QUE AC-4 CITA (AR/MNR-2), y va escrito en vez de
+  // maquillado: la ola 2 midió el caso con TRES invocaciones idénticas del motor sobre la misma URL, y acá
+  // hay DOS montajes de la pantalla. Dos alcanzan para lo que este `it` afirma —que la limpieza corre
+  // después de leer y que el segundo no repite—, y el tercero no agregaría un estado nuevo: la barra ya
+  // está limpia desde el primero. Lo que las tres invocaciones sí miden, y esto no, es el comportamiento
+  // del MOTOR con el rastro intacto; eso vive en `firma-por-enlace.test.ts` y sigue ahí.
 });

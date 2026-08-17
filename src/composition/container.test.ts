@@ -5,7 +5,7 @@
 // se resuelve por construcción, porque vive en el panel del proveedor de hosting— hace que el
 // container NO arranque (assertNoEvmResidue).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync } from "node:fs"; import path from "node:path"; // WKH-337: en UNA línea para no correr (`CABLEADO`, `:129`)
+import { existsSync } from "node:fs"; import path from "node:path"; // WKH-337: en UNA línea para no correr (`CABLEADO`, `:134`)
 import { A2aPayoutGateway, A2aQuoteGateway } from "../infrastructure/a2a/gateways";
 import { FallbackPayoutGateway, FallbackQuoteGateway } from "../infrastructure/fallback/gateways";
 import { SolanaWalletAdapter } from "../infrastructure/solana-wallet";
@@ -13,6 +13,10 @@ import { solanaWalletBridge } from "../infrastructure/solana-wallet-bridge";
 import { createContainer } from "./container";
 import { VALUE_DELIVERY_ADAPTERS, type ValueDeliveryAdapter } from "./value-delivery-adapter";
 import { LedgerPayoutStatusGateway } from "../infrastructure/settlement/ledger-payout-status-gateway";
+import bs58 from "bs58"; import { almacenDeNavegador, guardarViaje } from "../infrastructure/solana/deeplink/sesion"; import { guardarEleccion } from "../infrastructure/solana/deeplink/conexion"; // WKH-358 (fix-pack): los tres EN ESTA LÍNEA — `T-065-GATE-1b`, más abajo, siembra el disco con los escritores de PRODUCCIÓN. ⚠️ Este archivo corre en NODE: `localStorage` y `location` los stubea ese `it`, y el `afterEach` los saca
+
+/** La cuenta que el viaje del enlace afirma. Es base58 válida y NO es la del bridge de los otros `it`. */
+const DIRECCION_DEL_VIAJE = "CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8";
 
 // Las envs EVM tienen que estar AUSENTES para que el container arranque (assertNoEvmResidue).
 const EVM_ENVS = [
@@ -29,6 +33,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals(); // WKH-358 (fix-pack): `T-065-GATE-1b` stubea `localStorage`/`location`, que este archivo NO tiene (corre en Node)
   solanaWalletBridge.reset();
 });
 
@@ -432,7 +437,7 @@ describe("createContainer — el seguimiento del payout lee el ledger (WKH-337/A
    *  lo que se prueba es el cableado, y un repo inyectado a mano no lo tocaría.
    *
    *  🔴 LOS IMPORTS SON DINÁMICOS Y ES DELIBERADO, no una preferencia de estilo. Un `import` estático
-   *  arriba desplazaría (`CABLEADO`, `:129`), que `../application/agent-rejections.test.ts:115` cita por
+   *  arriba desplazaría (`CABLEADO`, `:134`), que `../application/agent-rejections.test.ts:115` cita por
    *  número de línea — y ese archivo está fuera del Scope IN de esta HU. Medido: con los 5 imports
    *  arriba, `citas-ancladas.test.ts` se puso rojo por esa cita. ⛔ No los "subas" sin re-medirla. */
   async function seedSubmitted(c: ReturnType<typeof createContainer>): Promise<string> {
@@ -792,6 +797,74 @@ describe("createContainer — WKH-358/CD-14: la firma por enlace YA está cablea
         '"injected"` tiene que devolver `null` en su PRIMERA condición, sin siquiera mirar el disco.',
     ).not.toMatch(/^deeplink_/);
     expect(causa, "la causa dejó de ser el guard pre-existente").toBe("escrow_params_missing");
+  });
+
+  // ── T-065-GATE-1b (AC-6b) · LA CONDICIÓN DE LA ELECCIÓN, AISLADA ──────────────────────────────────
+  //
+  // 🔴 POR QUÉ EXISTE ESTE `it` ADEMÁS DEL DE ARRIBA, Y ES UN HALLAZGO DEL CR (CR/BLQ-BAJO-1). El `it` de
+  // arriba tenía atribuido como "mutante que mata" el de borrarle a `caminoPorEnlace()` la lectura de la
+  // elección, y **ese mutante lo deja verde**: su fixture monta con `availability === "injected"`, así
+  // que el gate corta en su PRIMERA condición y nunca llega a leer el disco; y además llama a
+  // `authorizePrincipal` SIN `deposit`, así que muere en `escrow_params_missing` antes de cualquier rama.
+  // O sea: AC-6(b) no tenía ningún mutante verificado. La atribución vieja era falsa y el fixture no
+  // podía distinguirla.
+  //
+  // ⛔ POR QUÉ NO SE ARREGLA CAMBIÁNDOLE EL MUTANTE AL `it` DE ARRIBA: con `injected` NINGÚN mutante de
+  // las condiciones 2 y 3 del gate cambia el desenlace, porque el corte pre-existente llega primero. La
+  // condición de la ELECCIÓN sólo se puede aislar con `availability === "none"`, que es este fixture.
+  //
+  // 🔴 LA SONDA ES `getConnectedAddress()` Y NO `authorizePrincipal`, y es deliberado: es el observable
+  // MÁS BARATO del gate —(`direccionDelViajeConectado`, `../infrastructure/solana-wallet.ts:2307`) corta
+  // en `caminoPorEnlace() === null` en su primera línea— y no toca la red, no abre ningún modal y no pide
+  // ninguna firma. Sigue siendo el CONTAINER REAL, que es lo que AC-6(b) exige: el objeto que este
+  // archivo construye, con el colaborador de enlace ya cableado.
+  //
+  // MUTANTE QUE MATA: en `caminoPorEnlace()`, reemplazar `return leerEleccion(disco)` por
+  // `return "phantom"` (línea-neutro) ⇒ el primer `expect` recibe la dirección del viaje en vez de `null`.
+  it("T-065-GATE-1b (AC-6b): con `none` y un viaje CONECTADO en el disco pero SIN elección, el container real NO entra al camino por enlace", async () => {
+    const disco = new Map<string, string>();
+    const storage = {
+      getItem: (k: string) => disco.get(k) ?? null,
+      setItem: (k: string, v: string) => void disco.set(k, v),
+      removeItem: (k: string) => void disco.delete(k),
+      clear: () => disco.clear(),
+      key: () => null,
+      length: 0,
+    };
+    vi.stubGlobal("localStorage", storage);
+    vi.stubGlobal("location", { href: "https://chaski.test/enviar", origin: "https://chaski.test" });
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", "true"); // la 3ª condición del gate, prendida: la que se aísla acá es la 1ª
+    const almacen = almacenDeNavegador(storage as unknown as Storage);
+    // El viaje se escribe con el ESCRITOR DE PRODUCCIÓN: así el nombre de la clave y la forma del `Viaje`
+    // tienen UNA sola fuente y renombrarlos no deja este fixture escribiendo en el vacío.
+    guardarViaje(almacen, {
+      billetera: "phantom",
+      secreta: bs58.encode(new Uint8Array(32)),
+      publica: bs58.encode(new Uint8Array(32)),
+      claveBilletera: bs58.encode(new Uint8Array(32)),
+      session: "s",
+      direccion: DIRECCION_DEL_VIAJE,
+      paso: "conectar",
+      remittanceId: "rem-gate-1b",
+      desde: Date.now(),
+    });
+    solanaWalletBridge.setWalletAvailability("none");
+    solanaWalletBridge.setState({ publicKey: null, connected: false }); // en un teléfono sin extensión el bridge está VACÍO
+    const c = createContainer();
+
+    expect(
+      await c.connectedWallet.getConnectedAddress(),
+      "sin elección persistida el gate se encendió igual: `caminoPorEnlace()` está leyendo el viaje " +
+        "sin que nadie haya elegido nada en el selector, y eso es AC-6(b) roto.",
+    ).toBeNull();
+
+    // 🔴 LA ÚNICA VARIABLE QUE SE MUEVE: la elección. Sin esta mitad, el `toBeNull()` de arriba podría
+    // estar pasando porque la siembra del viaje nunca sirvió para nada (CD-18).
+    guardarEleccion(almacen, "phantom");
+    expect(
+      await c.connectedWallet.getConnectedAddress(),
+      "con la elección puesta el gate TIENE que encenderse, o este `it` no está midiendo la elección",
+    ).toBe(DIRECCION_DEL_VIAJE);
   });
 
   // ⛔ Y el candado complementario: que el colaborador ausente signifique EL CAMINO DE HOY, no un

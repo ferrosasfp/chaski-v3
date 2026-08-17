@@ -190,7 +190,7 @@ describe("T-065-1: `iniciarConexion` abre el viaje y produce la URL del connect"
 describe("T-065-2 / T-065-5: la vuelta `?dl=conectar` completa el viaje", () => {
   // MUTANTE QUE MATA: en `conexion.ts`, en la rama `conectar` de `completarVuelta`, reemplazar la
   // llamada al lector de la vuelta por una escritura directa con `guardarViaje` ⇒ el paso no queda
-  // marcado como consumido y el `it` de anti-replay de más abajo se pone rojo. (MEDIDO en §9.)
+  // marcado como consumido y el `it` de anti-replay de más abajo se pone rojo. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`.)
   it("T-065-5: `conectado` se alcanza por camino de producción, SIN escribir el disco a mano", () => {
     const a = almacenFalso();
     const { publicaDeLaApp, redirectLink } = abrirViaje(a);
@@ -306,7 +306,7 @@ describe("T-065-3: un connect forjado TARDÍO no puede pisar el ancla", () => {
 // devuelve el resultado, así que leerlas acá QUEMARÍA una firma que la persona sí dio.
 //
 // MUTANTE QUE MATA: en `conexion.ts`, hacer que la rama `firmar-tx` también llame al lector de la
-// vuelta ⇒ el disco cambia y este `it` se pone rojo por el byte-a-byte. (MEDIDO en §9.)
+// vuelta ⇒ el disco cambia y este `it` se pone rojo por el byte-a-byte. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`.)
 describe("T-065-4: `completarVuelta` no consume los pasos del motor", () => {
   // ⛔ `MARCA_CREAR_NONCE` NO está en esta lista, y no es un olvido: desde la wave del nonce tiene su
   // propia rama. Que ESA rama tampoco toque el viaje del depósito lo mide el `it` de más abajo.
@@ -454,7 +454,7 @@ describe("AC-4: la limpieza de la barra", () => {
 //   (c) se asserta que el descuento **cambia una cantidad medida** — si neutralizarlo no moviera
 //       ningún número, el descuento sería decorativo y el barrido estaría mirando otra cosa.
 //
-// MUTANTE QUE MATA: agregar `const x = Date.now();` adentro de `completarVuelta`. (MEDIDO en §9.)
+// MUTANTE QUE MATA: agregar `const x = Date.now();` adentro de `completarVuelta`. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`.)
 describe("T-065-PUREZA: `conexion.ts` no lee `window`, ni `Date`, ni `fetch`, ni `process.env`", () => {
   const RUTA = path.join(__dirname, "conexion.ts");
   const PROHIBIDOS = ["window", "Date", "fetch(", "process.env"];
@@ -580,7 +580,7 @@ describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
     expect(r).toEqual({ tipo: "corte", causa: "deeplink_tx_alterada" });
   });
 
-  // MUTANTE QUE MATA: en `conexion.ts`, dejar de escribir el flag `consumido`. (MEDIDO en §9.)
+  // MUTANTE QUE MATA: en `conexion.ts`, dejar de escribir el flag `consumido`. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`.)
   it("T-065-16: la MISMA URL una segunda vez NO vuelve a devolver la transacción", () => {
     const a = almacenFalso();
     const { base58, mensajeBase64 } = transaccion(Keypair.generate());
@@ -593,7 +593,19 @@ describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
     expect(completarVuelta(pedido(a, { hrefActual: href })).tipo).toBe("nonce-firmado");
     // 🔴 El anti-replay de este paso es SU PROPIO flag: `interpretarVuelta` no participa.
     expect(JSON.parse(a.datos.get(CLAVE_NONCE) as string).consumido).toBe(true);
-    expect(completarVuelta(pedido(a, { hrefActual: href })).tipo, "se transmitiría dos veces").toBe("corte");
+    const segunda = completarVuelta(pedido(a, { hrefActual: href }));
+    expect(segunda.tipo, "se transmitiría dos veces").toBe("corte");
+    // 🔴 Y LA CAUSA IMPORTA, NO SÓLO QUE SEA UN CORTE (fix-pack · AR/BLQ-BAJO-2). Acá salía
+    // `deeplink_viaje_vencido`, cuyo copy dice «No se firmó nada. Empezá el envío de nuevo.»: las DOS
+    // mitades son falsas en esta rama —la billetera YA devolvió la transacción firmada, y esto no es el
+    // envío sino la creación de una cuenta—. El `it` viejo miraba sólo `.tipo`, así que el copy falso le
+    // pasaba por al lado.
+    // MUTANTE QUE MATA: devolver `DEEPLINK_VIAJE_VENCIDO` en la rama `consumido === true`.
+    expect((segunda as { causa: string }).causa).toBe("deeplink_nonce_ya_consumido");
+    expect(
+      (segunda as { causa: string }).causa,
+      "volvió a la causa cuyo copy niega la firma que la billetera SÍ dio",
+    ).not.toBe("deeplink_viaje_vencido");
   });
 
   it("un sobre de OTRA clave no pasa el ancla write-once del viaje", () => {

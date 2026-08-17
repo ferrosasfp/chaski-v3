@@ -23,7 +23,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { RemittanceFlow } from "./flow";
 import { phantomBrowseUrl, deeplinkEnabled } from "./wallet-availability"; import { humanError } from "./flow-vm"; import { mwaErrorCode } from "./solana/wallet-error-code"; // WKH-MWA: los dos EN ESTA LÍNEA — `wallet-availability.test.tsx:62` lo cita `tx-proof.test.tsx:84` por número
 import { MWA_WALLET_NAME, solanaWalletBridge } from "../infrastructure/solana-wallet-bridge"; import { useWallet } from "@solana/wallet-adapter-react"; import { useWalletModal } from "@solana/wallet-adapter-react-ui"; // WKH-MWA: los dos imports EN ESTA LÍNEA — `wallet-availability.test.tsx:62` lo cita `tx-proof.test.tsx:84` por número, y agregar una línea acá lo correría
-import { buildTestContainer } from "../test-support/test-container";
+import { buildTestContainer } from "../test-support/test-container"; import { RecorridoPorEnlaceNulo } from "../test-support/fakes"; // WKH-358 (fix-pack): EN ESTA LÍNEA, no en una nueva — `wallet-availability.test.tsx:62` lo cita `tx-proof.test.tsx:84` por número
 import { TEST_CCI } from "../test-support/fakes";
 
 // El barrel `@solana/wallet-adapter-wallets` arrastra el adapter de Ledger, que no resuelve bajo
@@ -169,8 +169,8 @@ const AVISO = /No vemos ninguna wallet en este navegador/;
 const CAMINO = /Abrir Chaski en Phantom/;
 
 /** Renderiza el flujo real y avanza hasta el paso `connect`, que es donde vive el botón de conectar. */
-function irAlPasoConectar(): void {
-  render(<RemittanceFlow pasoInicial="send" container={buildTestContainer()} />);
+function irAlPasoConectar(container = buildTestContainer()): void { // WKH-358 (fix-pack): el parámetro es OPCIONAL y su default es el de siempre, así que los ~20 `it` que ya lo llamaban sin argumentos no cambian de comportamiento. Lo necesita el `it` del control «Cambiar de billetera», que tiene que montar un doble con una elección puesta
+  render(<RemittanceFlow pasoInicial="send" container={container} />);
   fireEvent.change(screen.getByPlaceholderText("Nombre de tu familiar"), {
     target: { value: "Mamá" },
   });
@@ -1084,5 +1084,98 @@ describe("WKH-358/AC-9: la bandera NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED es opt-in
     // ⛔ Lo que el copy NO puede insinuar: que por acá se paga, se envía o se deposita.
     expect(texto).not.toMatch(/pag(ar|á|as)\b/i);
     expect(texto).not.toMatch(/enviar tu plata|depositar|firmar el env[íi]o/i);
+  });
+
+  // ── T-065-OLVIDAR (fix-pack · AR/BLQ-MED-1 + AR/BLQ-BAJO-3 + CR/BLQ-BAJO-4) ─────────────────────
+  //
+  // 🔴 QUÉ AGUJERO MIDEN ESTOS TRES `it`, Y NO ES COPY. Al cerrar la ola 4, `olvidar()` tenía **cero
+  // llamadores de producción** (todos en `*.test.*`) y `CLAVE_ELECCION` no expira: elegir una billetera
+  // una vez dejaba el gate del adaptador armado para ese origen **para siempre y sin salida en la
+  // pantalla**. El docblock de `olvidar()` afirmaba lo contrario. Estos `it` son el candado del llamador
+  // que faltaba, y el 3º es el de la otra mitad (que la bandera pueda replegar la superficie).
+  //
+  // ⚠️ EL DOBLE IMITA EL DISCO A PROPÓSITO (`olvidar()` deja `eleccion()` en `null`), y no se queda
+  // devolviendo `"phantom"` para "probar" que el componente esconde el control por su estado local: eso
+  // sería medir una decisión de implementación mintiendo sobre el almacén. Lo que se mide es lo que la
+  // persona obtiene: el control aparece cuando hay elección, dispara UNA llamada al borrador, y se va.
+  class RecorridoConEleccion extends RecorridoPorEnlaceNulo {
+    public elegida: "phantom" | "solflare" | null = "phantom";
+    override eleccion(): "phantom" | "solflare" | null {
+      return this.elegida;
+    }
+    override olvidar(): void {
+      super.olvidar(); // suma a `olvidos`, que es lo que se assertea
+      this.elegida = null;
+    }
+  }
+  const CAMBIAR = /Cambiar de billetera/;
+
+  // MUTANTE QUE MATA: en `flow.tsx`, borrar del paso `connect` el montaje de
+  // `<OlvidarBilleteraDeEnlace .../>` ⇒ el control desaparece y el primer `expect` cae. Es el mutante
+  // que prueba que el llamador de producción de `olvidar()` existe.
+  it("T-065-OLVIDAR: con una elección puesta, el control «Cambiar de billetera» aparece y BORRA la elección", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", "true");
+    const recorrido = new RecorridoConEleccion();
+    irAlPasoConectar(buildTestContainer({ recorridoPorEnlace: recorrido }));
+    await screen.findByRole("button", { name: /Conectar wallet/ });
+    await act(async () => {
+      solanaWalletBridge.setWalletAvailability("none");
+    });
+    // CD-18 — el fixture fabricó el caso: el doble declara una elección puesta ANTES de mirar nada.
+    expect(recorrido.eleccion(), "el doble no dejó ninguna elección: no hay nada que olvidar").toBe("phantom");
+    expect(recorrido.olvidos, "alguien llamó a `olvidar()` sin que nadie toque el control").toBe(0);
+    const control = screen.getByRole("button", { name: CAMBIAR });
+
+    await act(async () => {
+      fireEvent.click(control);
+    });
+
+    expect(recorrido.olvidos, "el control no llamó a `olvidar()`, o lo llamó más de una vez").toBe(1);
+    expect(recorrido.eleccion(), "la elección quedó en el disco después de olvidarla").toBeNull();
+    expect(
+      screen.queryByRole("button", { name: CAMBIAR }),
+      "el control sigue ofreciendo olvidar una elección que ya no existe",
+    ).not.toBeInTheDocument();
+    // Y el selector sigue estando: olvidar devuelve a la persona al punto de elegir, no a la nada.
+    expect(screen.getByText(SELECTOR)).toBeInTheDocument();
+  });
+
+  // El par negativo, y es la mitad que hace falsable al `it` de arriba: sin esto, un control que se
+  // pintara SIEMPRE pasaría el de arriba igual.
+  it("T-065-OLVIDAR(control): sin ninguna elección en el disco, el control NO se pinta", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", "true");
+    const recorrido = new RecorridoConEleccion();
+    recorrido.elegida = null; // nadie eligió: es el estado de un navegador que recién llega
+    irAlPasoConectar(buildTestContainer({ recorridoPorEnlace: recorrido }));
+    await screen.findByRole("button", { name: /Conectar wallet/ });
+    await act(async () => {
+      solanaWalletBridge.setWalletAvailability("none");
+    });
+    expect(screen.getByText(SELECTOR), "no se llegó al cuadrante que se quiere medir").toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: CAMBIAR })).not.toBeInTheDocument();
+    expect(recorrido.olvidos).toBe(0);
+  });
+
+  // 🔴 T-065-GATE-5 (AC-9) — LA OTRA MITAD DEL REPLIEGUE, Y LA QUE EL AR MIDIÓ COMO ROTA. Con la
+  // bandera apagada, un dispositivo que YA eligió no tiene que quedar con nada del camino por enlace
+  // pintado. El gate del adaptador ((`caminoPorEnlace`, `../infrastructure/solana-wallet.ts:2239`))
+  // consulta la misma bandera como 3ª condición, así que las dos mitades se apagan con el mismo
+  // interruptor. El `it` que mide el gate del ADAPTADOR con la bandera apagada vive en
+  // `../infrastructure/solana/preparacion-por-enlace.test.ts`; éste mide la PANTALLA.
+  // MUTANTE QUE MATA: borrar `deeplinkEnabled() &&` de `mostrarSelectorDeEnlace` (`flow.tsx:147`).
+  it("T-065-GATE-5: con la bandera APAGADA y una elección YA puesta, no queda nada del camino por enlace", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", undefined as unknown as string);
+    const recorrido = new RecorridoConEleccion();
+    irAlPasoConectar(buildTestContainer({ recorridoPorEnlace: recorrido }));
+    await screen.findByRole("button", { name: /Conectar wallet/ });
+    await act(async () => {
+      solanaWalletBridge.setWalletAvailability("none");
+    });
+    // CD-18 — la elección está puesta: sin esto el `it` pasaría por no haber nada que replegar.
+    expect(recorrido.eleccion(), "el fixture no dejó ninguna elección puesta").toBe("phantom");
+    expect(screen.queryByText(SELECTOR), "el selector apareció con la bandera APAGADA").not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: CAMBIAR })).not.toBeInTheDocument();
+    // Y el camino verificado en cadena sigue estando: replegar no es dejar a nadie sin salida.
+    expect(screen.getByRole("link", { name: CAMINO })).toBeInTheDocument();
   });
 });

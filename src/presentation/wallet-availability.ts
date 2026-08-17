@@ -3,7 +3,7 @@
 // Este módulo NO importa `@solana/wallet-adapter-*` (mismo seam que `solana-wallet-bridge.ts`): lee
 // el singleton React-free, que es donde el sync component deja la medición. Así la pantalla del
 // flujo puede reaccionar sin arrastrar la librería a su chunk.
-import { useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react"; import { resolveSolanaDeeplinkEnabled } from "../infrastructure/chain"; // WKH-358 (fix-pack) — EN ESTA LÍNEA y no en una nueva: este archivo recibe citas por número desde `flow.tsx`, `solana-wallet.ts` y su propio test, y una línea de import de más las corre todas. El literal de la env vive en UN solo lugar (`resolveSolanaDeeplinkEnabled`, `../infrastructure/chain.ts:264`) porque el gate del adaptador —que es infraestructura y NO puede importar de acá— es el segundo consumidor
 import {
   type SolanaWalletAvailability,
   solanaWalletBridge,
@@ -132,11 +132,14 @@ export function useMwaOffered(): boolean {
  *     Con la bandera apagada esa pantalla es BYTE-IDÉNTICA a la de hoy, y eso no es una promesa: lo
  *     mide `T-065-21` comparando el `innerHTML` del paso entero, con el mismo mecanismo que
  *     (`T-UI-3`, `wallet-availability.test.tsx:218`).
- *   · NO gatea la rama de enlace del adaptador. Ese gate es OTRO y vive en el adaptador
- *     (`caminoPorEnlace`, `../infrastructure/solana-wallet.ts:2239`), porque tiene que decidirse EN EL
- *     INSTANTE del gesto y con dos condiciones que esta función no conoce: la elección persistida de
- *     la persona y `getWalletAvailability() === "none"`. Una bandera de build no puede contestar
- *     ninguna de las dos.
+ *   · SÍ gatea, DESDE EL FIX-PACK, la rama de enlace del adaptador, y acá decía que NO. 🔴 Esa frase
+ *     era CIERTA y era el bug: el gate (`caminoPorEnlace`, `../infrastructure/solana-wallet.ts:2239`)
+ *     leía sólo disponibilidad + elección persistida, así que un build con esta bandera prendida y
+ *     luego AUSENTE dejaba al dispositivo que ya había elegido con el gate armado **para siempre y sin
+ *     puerta de vuelta** (AR/BLQ-MED-1: la elección no expira). La objeción de este renglón —"una
+ *     bandera de build no puede contestar ninguna de las dos condiciones"— sigue siendo cierta y NO
+ *     aplica: la bandera no CONTESTA ninguna, es una TERCERA condición que se conjuga con las dos.
+ *     El literal de la env vive en (`resolveSolanaDeeplinkEnabled`, `../infrastructure/chain.ts:264`).
  *   · NO borra ni degrada (`phantomBrowseUrl`, `:26`). Ese enlace sigue siendo, con la bandera
  *     prendida o apagada, el ÚNICO camino verificado en cadena por el que una persona en un teléfono
  *     completó un depósito. El selector lo acompaña; no lo reemplaza.
@@ -151,5 +154,5 @@ export function useMwaOffered(): boolean {
  * REDESPLEGAR el mismo artefacto NO cambia nada: hay que REBUILDEAR.
  */
 export function deeplinkEnabled(): boolean {
-  return process.env.NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED === "true";
+  return resolveSolanaDeeplinkEnabled(); // ⛔ NO re-escribas el literal de la env acá: viviría en dos lados
 }

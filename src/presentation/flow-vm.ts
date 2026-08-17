@@ -569,7 +569,7 @@ export function shortErrorCode(raw: string): string | undefined {
 }
 
 /** Traduce un código de error interno a copy humano para la UI. */
-export function humanError(code: string): string { const porEnlace = copyDeEnlace(code); if (porEnlace !== null) return porEnlace; // WKH-358/AC-8/DT-8 — EN ESTA LÍNEA (Δ0: el primer `if` de abajo es `:573` y una línea acá rompe 24 citas ancladas) y PRIMERO, antes de la cadena de `includes`. Es un lookup EXACTO, así que no puede robarle un código a nadie; lo que sí puede pasar al revés es que un needle nuevo de abajo sea subcadena de una de las once y se las robe en silencio. Medido: hoy ninguna de las once contiene ninguno de los needles actuales, o sea que HOY no hay colisión — pero el orden de una cadena de `includes` es una propiedad frágil y esto la fija. Lo mide `T-065-COPY-4`
+export function humanError(code: string): string { const porEnlace = copyDeEnlace(code); if (porEnlace !== null) return porEnlace; // WKH-358/AC-8/DT-8 — EN ESTA LÍNEA (Δ0: el primer `if` de abajo es `:573` y una línea acá rompe 24 citas ancladas) y PRIMERO, antes de la cadena de `includes`. Es un lookup EXACTO, así que no puede robarle un código a nadie; lo que sí puede pasar al revés es que un needle nuevo de abajo sea subcadena de una de las trece y se las robe en silencio. Medido: hoy ninguna de las trece contiene ninguno de los needles actuales, o sea que HOY no hay colisión — pero el orden de una cadena de `includes` es una propiedad frágil y esto la fija. Lo mide `T-065-COPY-4`
   if (code.includes("quote_expired") || code.includes("QUOTE_STALE"))
     return "La tasa cambió. Revisá el nuevo monto.";
   // 🔴 ACÁ VIVÍAN DOS RAMAS `fx_*` Y SE FUERON EN WKH-332/W4 (AC-5), con la regresión declarada.
@@ -739,7 +739,7 @@ export function humanError(code: string): string { const porEnlace = copyDeEnlac
   // que está antes del forward al agente y antes de `authorizePrincipal`, o sea antes de la primera
   // firma de la billetera. Mandaba a buscar plata a un lugar donde no hay plata.
   if (code.includes("payout_not_authorized"))
-    return "Tu verificación de identidad no autoriza este envío. No se movió ningún USDC de tu wallet.";
+    return "Tu verificación de identidad no autoriza este envío. No se movió ningún USDC de tu wallet."; if (code.includes("payout_pop_unavailable") || code.includes("prepare_unavailable")) return "No llegamos a pedir la orden de pago, así que no se movió ningún USDC de tu wallet y no hay ningún reembolso pendiente. Puede ser que la red no nos contestara, o que este navegador no pueda dar la prueba de billetera que el envío necesita. Si volviste de tu app de billetera, ese camino todavía no completa el pago: abrí Chaski adentro de Phantom y probá desde ahí."; // WKH-358 (fix-pack · AR/BLQ-MED-2) — EN ESTA LÍNEA, Δ0: una línea nueva acá corre 15 citas por número de este archivo (`:946` a `:1370`). ⛔ VA ANTES del catch-all `code.includes("payout")` de abajo, que es el que se tragaba `payout_pop_unavailable` y le daba el copy de un payout FALLADO ("si tus USDC entraron al escrow…"): los dos enums de acá traen `principal: "not_deposited"` por construcción, así que esa frase mandaba a buscar plata a un lugar donde con CERTEZA no hay plata. ⚠️ Y NO dice "no se pidió ninguna firma", que sería lo simétrico con `prepareRejected` y sería FALSO: `payout_pop_unavailable` sale de que `pop.prove()` falló, y esa prueba SÍ le pide a la billetera firmar un mensaje (que no mueve plata, pero es una firma). Lo que sí es certeza es que ningún USDC se movió, y eso es lo que la frase afirma
   if (code.includes("payout"))
     return "No se pudo entregar. No hay un reembolso automático: si tus USDC entraron al escrow, los sacás vos firmando desde tu wallet.";
   return "Algo salió mal. Intentá de nuevo.";
@@ -1377,31 +1377,37 @@ export function historyGroupFor(o: EscrowOutcome): HistoryGroup {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
-// WKH-358/AC-8 · EL COPY DE LAS ONCE CAUSAS DEL RECORRIDO POR ENLACE
+// WKH-358/AC-8 · EL COPY DE LAS TRECE CAUSAS DEL RECORRIDO POR ENLACE
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
 //
 // 🔴 POR QUÉ ESTO NO ES UNA RAMA MÁS DE `humanError`. Esa función es una cadena de `includes`, y hasta
-// esta HU las once causas caían todas en su default: la persona leía "Algo salió mal. Intentá de
+// esta HU las once causas que existían entonces caían todas en su default: la persona leía "Algo salió mal. Intentá de
 // nuevo." para "cancelaste en tu billetera" y para "no pudimos preguntarle a la red". Son diagnósticos
 // distintos con acciones distintas, y colapsarlos hace que una persona reintente contra un muro.
 //
 // ⛔ ES UN LOOKUP EXACTO Y CORRE **PRIMERO**, antes de la cadena de `includes` (DT-8). Medido: hoy
-// ninguna de las once contiene ninguno de los needles actuales, o sea que HOY no hay colisión — pero
+// ninguna de las trece contiene ninguno de los needles actuales, o sea que HOY no hay colisión — pero
 // el orden de una cadena de `includes` es una propiedad frágil, y un needle nuevo que sea subcadena de
-// una de estas once se las robaría en silencio. Lo mide `T-065-COPY-4`, moviendo el lookup al final.
+// una de estas trece se las robaría en silencio. Lo mide `T-065-COPY-4`, moviendo el lookup al final.
 //
-// ⛔ NINGUNO DE LOS ONCE AFIRMA QUE SE MOVIÓ PLATA, y no es una preferencia de tono: las once cortan
-// ANTES del broadcast del depósito. Decir "se debitó" ahí sería falso y mandaría a la persona a buscar
+// ⛔ NINGUNO DE LOS TRECE AFIRMA QUE SE MOVIÓ PLATA, y no es una preferencia de tono: las trece cortan
+// ANTES del broadcast del DEPÓSITO. Decir "se debitó" ahí sería falso y mandaría a la persona a buscar
 // plata donde no hay ninguna. Lo mide `T-065-COPY-3`. ⛔ Y SIN EM DASHES (CD-16).
+// ⚠️ PLATA NO ES LO MISMO QUE ALQUILER, Y LAS DOS CAUSAS NUEVAS OBLIGAN A DISTINGUIRLO (fix-pack): las
+// dos son del paso de la CUENTA DE NONCE, que no mueve USDC pero sí puede debitar el alquiler de la
+// cuenta más la comisión de red. `deeplink_nonce_ya_consumido` es POST-firma y puede ser POST-broadcast,
+// así que su copy no niega la firma y no afirma que la cuenta no exista: manda a MIRAR.
 //
 // ⚠️ LOS TRES PARES QUE EL CANDADO NOMBRA TIENEN QUE SER TEXTOS DISTINTOS ENTRE SÍ: `rechazado` es un
 // gesto de la persona, `respuesta_ilegible` es un fallo NUESTRO, y `blockhash_desconocido` es "no
 // llegamos a preguntar". Lo mide `T-065-COPY-2`.
 //
 // 🔴 EL TIPO ES `CausaDeEnlaceEnPantalla` Y NO `CausaDeEnlace`, y ésa es la mitad que `tsc` no ve sola:
-// `CausaDeEnlace` lista NUEVE y le faltan las dos que tira el adaptador, así que un `Record` sobre ese
-// tipo compilaría dejando `deeplink_nonce_ausente` y `deeplink_saldo_insuficiente` sin copy. El
-// razonamiento entero está en el docblock de ese tipo.
+// `CausaDeEnlace` lista ONCE (nueve del motor más las dos del paso del nonce que agregó el fix-pack) y le
+// faltan las dos que tira el adaptador, así que un `Record` sobre ese tipo compilaría dejando
+// `deeplink_nonce_ausente` y `deeplink_saldo_insuficiente` sin copy. El razonamiento entero está en el
+// docblock de ese tipo. ⚠️ El `tsc` de este `Record` fue lo que EXIGIÓ el copy de las dos nuevas: se puso
+// rojo en cuanto entraron a la unión, que es exactamente para lo que la unión existe.
 const COPY_DE_ENLACE: Record<CausaDeEnlaceEnPantalla, string> = {
   // El `prepare` de esta invocación no coincide con el del intento anclado. Fail-closed y sin salida
   // automática: lo honesto es que empiece de nuevo.
@@ -1436,10 +1442,22 @@ const COPY_DE_ENLACE: Record<CausaDeEnlaceEnPantalla, string> = {
   // La ventana del viaje se agotó, o el viaje ya no está.
   deeplink_viaje_vencido:
     "Pasó demasiado tiempo desde que empezaste y este intento ya no sirve. No se firmó nada. Empezá el envío de nuevo.",
+  // 🔴 POST-FIRMA, Y POR ESO NO PUEDE DECIR "no se firmó nada" (fix-pack · AR/BLQ-BAJO-2 + CR/MNR-10).
+  // La respuesta de la billetera ya se leyó una vez y el flag `consumido` se escribe ANTES del broadcast,
+  // así que la transacción PUEDE haber salido. ⛔ Tampoco puede decir "empezá el envío de nuevo": esto no
+  // es el envío, es la creación de una cuenta. La acción honesta es MIRAR si quedó creada.
+  deeplink_nonce_ya_consumido:
+    "Esa respuesta de tu billetera ya la usamos una vez, así que no la mandamos de nuevo. La transacción quedó firmada y puede haber entrado. Mirá si la cuenta ya está antes de volver a intentarlo.",
+  // 🔴 LO QUE ESTE COPY NO AFIRMA ES EL PUNTO (fix-pack · CR/BLQ-BAJO-6): acá salía el copy de
+  // `deeplink_blockhash_expired` ("Pasó demasiado tiempo y la red ya no acepta esa transacción"), y ese
+  // es un diagnóstico de TIEMPO que este camino no puede sostener: una firma que no verifica llega
+  // exactamente al mismo desenlace. Se nombra el blockhash como lo MÁS PROBABLE, no como el hecho.
+  deeplink_nonce_no_entro:
+    "La red no aceptó la transacción que creaba tu cuenta, y la cuenta sigue sin estar. Este paso no toca tus USDC. Lo más común es que haya pasado demasiado tiempo desde que la armamos: volvé a intentarlo y se arma de nuevo.",
 };
 
 /**
- * El copy de una causa del recorrido por enlace, o `null` si el código no es una de las once.
+ * El copy de una causa del recorrido por enlace, o `null` si el código no es una de las trece.
  *
  * ⚠️ `null` Y NO UN DEFAULT: quien llama es `humanError`, y si esto contestara una frase genérica se
  * comería todos los demás códigos del sistema. El default sigue siendo el de allá, uno solo.
@@ -1450,5 +1468,5 @@ export function copyDeEnlace(code: string): string | null {
     : null;
 }
 
-/** Sólo para los tests: las once claves, derivadas del `Record` y no escritas a mano. */
+/** Sólo para los tests: las trece claves, derivadas del `Record` y no escritas a mano. ⚠️ El NÚMERO de este renglón envejece solo: lo que no envejece es que se derive del `Record` con `Object.keys`. */
 export const CAUSAS_CON_COPY = Object.keys(COPY_DE_ENLACE);

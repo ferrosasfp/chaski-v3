@@ -129,12 +129,12 @@ describe("T-062-10 · CD-8: `interpretarVuelta` tiene EXACTAMENTE DOS llamadores
 });
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
-// WKH-358/AC-8 — LAS ONCE CAUSAS TIENEN COPY PROPIO (candado INVERTIDO, CD-14)
+// WKH-358/AC-8 — TODAS LAS CAUSAS TIENEN COPY PROPIO (candado INVERTIDO, CD-14)
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 //
 // 🔴 QUÉ DECÍA ESTE CANDADO HASTA LA OLA 3 Y POR QUÉ CAMBIÓ DE SIGNO. Decía que **ninguna** causa de
 // enlace tenía copy, y era verdad: el AR midió que `grep -rn "deeplink_" src/presentation` daba CERO,
-// o sea que las once caían en el default de `humanError` y la persona leía la misma frase para
+// o sea que las que existían entonces caían en el default de `humanError` y la persona leía la misma frase para
 // "cancelaste" y para "no pudimos preguntarle a la red". El motivo de no escribirlo entonces era
 // mecánico y está escrito en el commit de esa ola: el colaborador de enlace no estaba cableado, así
 // que ninguna causa tenía camino de producción, y un copy para un error que nadie puede provocar es
@@ -152,7 +152,11 @@ describe("T-062-10 · CD-8: `interpretarVuelta` tiene EXACTAMENTE DOS llamadores
 // MUTANTE QUE MATA: agregar `export const DEEPLINK_XXX = "deeplink_xxx";` en `firma-por-enlace.ts`
 // SIN agregarla al `Record` ⇒ rojo acá y verde en `tsc`, que es exactamente lo que este candado existe
 // para probar. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit y `it` rojos de los 47 con el árbol en que se midieron.)
-describe("T-065-COPY-1 · las once causas de enlace tienen copy propio", () => {
+/** El default de `humanError`, en UN solo lugar. Estaba escrito como literal en dos `it` de este
+ *  archivo, y un candado que compara contra una cadena copiada es un candado que se desincroniza. */
+const DEFAULT_DE_HUMAN_ERROR = "Algo salió mal. Intentá de nuevo.";
+
+describe("T-065-COPY-1 · todas las causas de enlace tienen copy propio", () => {
   const MOTOR = path.resolve(ROOT, "src/infrastructure/solana/deeplink/firma-por-enlace.ts");
   const ADAPTADOR = path.resolve(ROOT, "src/infrastructure/solana-wallet.ts");
   /** Las causas se DERIVAN del módulo, no se listan a mano: una lista a mano no ve la que falta. */
@@ -185,10 +189,26 @@ describe("T-065-COPY-1 · las once causas de enlace tienen copy propio", () => {
     expect(PRESENTACION.length).toBeGreaterThan(10);
   });
 
-  it("TODAS las causas derivadas tienen copy en `src/presentation`", () => {
-    const sinCopy = CAUSAS.filter(
-      (c) => !PRESENTACION.some((abs) => readFileSync(abs, "utf8").includes(c)),
-    );
+  // 🔴 ESTE ASSERT ERA FALSABLE Y EL CR LO MIDIÓ (CR/BLQ-BAJO-5). Decía
+  // `!PRESENTACION.some((abs) => readFileSync(abs).includes(c))`, o sea PRESENCIA DE TEXTO en algún
+  // archivo de `src/presentation`. El CR agregó una 12ª causa y **sólo un comentario** que la nombraba en
+  // `flow-vm.ts`: **8 passed**, `tsc` verde, y la persona leyendo el default. No era hipotético: el
+  // auto-blindaje de esta HU documenta TRES veces que el dev escribió un literal `deeplink_*` dentro de un
+  // comentario de `src/presentation`, que es exactamente el input que este candado no distinguía.
+  //
+  // ⇒ AHORA SE MIDE EL COMPORTAMIENTO: `humanError(c)` tiene que devolver algo que NO sea el default. Un
+  // comentario no puede satisfacer eso. Es el mismo assert que `T-065-COPY-2` ya hacía para sus tres, y la
+  // pregunta correcta era por qué no lo hacían los dos.
+  //
+  // ⚠️ `PRESENTACION` SE SIGUE USANDO, y no es residuo: lo usa la refutación de arriba, y además este
+  // `it` conserva la mitad de UBICACIÓN —que el copy viva en `src/presentation`— porque `humanError` es de
+  // ahí, así que llamarla ya prueba las dos cosas. Lo que se fue es la parte que un comentario podía pasar.
+  //
+  // MUTANTE QUE MATA (el del CR, re-corrido en el fix-pack): agregar
+  // `export const DEEPLINK_XXX = "deeplink_xxx";` en `firma-por-enlace.ts` y NADA MÁS que un comentario que
+  // lo nombre en `flow-vm.ts`. Antes: verde. Ahora: rojo acá.
+  it("TODAS las causas derivadas tienen copy PROPIO (no basta con que el texto aparezca en un comentario)", () => {
+    const sinCopy = CAUSAS.filter((c) => humanError(c) === DEFAULT_DE_HUMAN_ERROR);
     expect(
       sinCopy,
       "estas causas del enlace llegan a la pantalla y caen en el default de `humanError`, o sea que " +
@@ -196,19 +216,23 @@ describe("T-065-COPY-1 · las once causas de enlace tienen copy propio", () => {
         "El copy va en el `Record` de `flow-vm.ts`, y su clave tiene que estar en " +
         "`CausaDeEnlaceEnPantalla` para que `tsc` lo exija.",
     ).toEqual([]);
+    // Refutación del instrumento: el default que se compara es EL default, no una cadena inventada. Sin
+    // esto, un typo en `DEFAULT_DE_HUMAN_ERROR` dejaría `sinCopy` vacío siempre y el candado en verde.
+    expect(
+      humanError("un_codigo_que_nadie_mapea_nunca"),
+      "el default de `humanError` cambió: este candado está comparando contra una cadena que ya no existe",
+    ).toBe(DEFAULT_DE_HUMAN_ERROR);
   });
 
   // 🔴 EL TRABAJO FINO QUE LA OLA 3 DEJÓ HECHO DEL LADO DEL MOTOR, VERIFICADO DEL LADO DEL COPY: los
   // tres son diagnósticos distintos con acciones distintas, y colapsarlos hace que una persona
   // reintente contra un muro. Que TENGAN copy no alcanza: tienen que ser textos DISTINTOS ENTRE SÍ.
-  // MUTANTE QUE MATA: colapsar dos de los tres al mismo texto en el `Record`. (MEDIDO en §9.)
+  // MUTANTE QUE MATA: colapsar dos de los tres al mismo texto en el `Record`. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`.)
   it("T-065-COPY-2: los tres pares del mensaje son textos DISTINTOS entre sí", () => {
     const TRES = ["deeplink_rechazado", "deeplink_respuesta_ilegible", "deeplink_blockhash_desconocido"];
     const textos = TRES.map((c) => humanError(c));
     for (const [i, t] of textos.entries()) {
-      expect(t, `\`${TRES[i]}\` cae en el default de \`humanError\``).not.toBe(
-        "Algo salió mal. Intentá de nuevo.",
-      );
+      expect(t, `\`${TRES[i]}\` cae en el default de \`humanError\``).not.toBe(DEFAULT_DE_HUMAN_ERROR);
     }
     expect(
       new Set(textos).size,

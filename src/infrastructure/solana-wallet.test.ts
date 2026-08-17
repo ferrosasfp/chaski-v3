@@ -1418,13 +1418,16 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
 
   /** `localStorage` y `location` de mentira. El entorno de estos tests es Node: no hay ninguno.
    *
-   *  🔴 WKH-358 — ACÁ SE DECLARAN, ADEMÁS, LAS DOS CONDICIONES DEL GATE `caminoPorEnlace()`, y esto NO
-   *  es una adecuación para que los tests pasen: es la precondición que a estos `it` les FALTABA decir.
+   *  🔴 WKH-358 — ACÁ SE DECLARAN, ADEMÁS, LAS **TRES** CONDICIONES DEL GATE `caminoPorEnlace()`, y esto
+   *  NO es una adecuación para que los tests pasen: es la precondición que a estos `it` les FALTABA decir.
    *  Todo este `describe` mide la RAMA DE ENLACE, y desde esta HU esa rama sólo existe cuando (1) la
-   *  persona eligió una billetera en el selector y (2) `getWalletAvailability() === "none"`. Un `it` que
-   *  ejercitara la rama sin declarar las dos estaría midiendo un camino que producción NO puede
-   *  alcanzar — que es exactamente lo que pasaba antes de esta línea, porque con el colaborador
-   *  inyectado a mano alcanzaba para entrar.
+   *  persona eligió una billetera en el selector, (2) `getWalletAvailability() === "none"` y (3) la
+   *  bandera del build está prendida. Un `it` que ejercitara la rama sin declarar las tres estaría
+   *  midiendo un camino que producción NO puede alcanzar — que es exactamente lo que pasaba antes de esta
+   *  línea, porque con el colaborador inyectado a mano alcanzaba para entrar.
+   *  ⚠️ LA (3) LA AGREGÓ EL FIX-PACK, y su ausencia acá NO era un descuido de este harness: el gate no la
+   *  leía. Medido al agregarla al gate y ANTES de tocar este archivo: **31 `it` rojos** en 4 archivos, 23
+   *  de ellos acá. Ése es el número que prueba que la bandera ahora repliega de verdad.
    *
    *  ⛔ NINGÚN `expect` de este archivo cambió de valor, de mensaje ni de cantidad por esto: lo único
    *  que se agrega es el ESTADO DEL MUNDO que la rama necesita. Y tiene un efecto útil de vuelta:
@@ -1450,6 +1453,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
     // clave tiene UNA sola fuente y renombrarla no deja este harness escribiendo en el vacío.
     guardarEleccion(almacenDeNavegador(storage as unknown as Storage), "phantom");
     solanaWalletBridge.setWalletAvailability("none");
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", "true"); // la 3ª condición del gate (fix-pack). El `afterEach` de (`vi.unstubAllEnvs`, `:1514`) la des-stubea, así que no se filtra
     return { leer: (k: string) => disco.get(k) ?? null };
   }
 
@@ -1574,7 +1578,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
   // 🔴 ESTE BLOQUE CAMBIÓ DE AFIRMACIÓN EN WKH-358, Y NO ES UN ABLANDAMIENTO: ES UNA MEDICIÓN.
   //
   // Lo que decía —y era cierto hasta la ola 3— es que
-  // (`DEEPLINK_SENDER_MISMATCH`, `./solana/deeplink/firma-por-enlace.ts:616`) corta cuando el viaje
+  // (`DEEPLINK_SENDER_MISMATCH`, `./solana/deeplink/firma-por-enlace.ts:663`) corta cuando el viaje
   // trae una dirección ajena. Eso se apoyaba en que el `sender` salía del BRIDGE, o sea de FUERA del
   // canal del enlace. Desde que (`getAddress`, `./solana-wallet.ts:233`) es link-aware —y tiene que
   // serlo: en un teléfono sin extensión el bridge está vacío y el recorrido no puede ni empezar— las

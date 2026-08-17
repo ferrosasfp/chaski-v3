@@ -4,8 +4,13 @@
 //   · en `deeplink/conexion.ts` no puede vivir, porque ese módulo es PURO y SÍNCRONO por contrato
 //     (DT-7): no lee `window`, ni `Date`, ni `fetch`. Acá hay `Connection`, `sendRawTransaction` y
 //     lecturas de cuenta.
-//   · en `solana-wallet.ts` tampoco, y por un motivo MEDIDO y no estético: ese archivo tiene 2247
-//     líneas y recibe 85 citas ancladas, así que insertar en el medio (`:1233`) rompe 34 de ellas.
+//   · en `solana-wallet.ts` tampoco, y por un motivo MEDIDO y no estético: ese archivo tiene **2362**
+//     líneas y recibe **116** citas ancladas, de las que **50** apuntan más abajo de `:1233`, así que
+//     insertar en el medio las rompe a todas. ⚠️ RE-MEDIDO EN EL FIX-PACK (CR/MNR-2): decía «2247 líneas,
+//     85 citas, rompe 34», que era cierto al escribirlo y que esta misma HU volvió falso escribiendo
+//     código y comentarios. Los tres números salen de contar, no de heredar: `wc -l` para el primero y el
+//     escáner de `citas-ancladas.test.ts` para los otros dos. ⚠️ Y VUELVEN A ENVEJECER SOLOS: lo que no
+//     envejece es el criterio (insertar arriba corre todo lo de abajo), no la cifra.
 // Queda un módulo propio, que además es la costura que la pantalla puede doblar en los tests sin tocar
 // el adaptador.
 //
@@ -20,8 +25,15 @@ import type { CausaDeEnlace } from "./deeplink/firma-por-enlace";
 import type { Almacen } from "./deeplink/sesion";
 import { almacenDeNavegador, terminarViaje } from "./deeplink/sesion";
 import { completarVuelta, guardarEleccion, iniciarConexion, iniciarCreacionDeNonce, leerEleccion, olvidarEleccion, remesaDelViaje } from "./deeplink/conexion";
-import { DEEPLINK_BLOCKHASH_EXPIRED, DEEPLINK_SIN_MEMORIA, DEEPLINK_TX_ALTERADA } from "./deeplink/firma-por-enlace";
+import { DEEPLINK_NONCE_NO_ENTRO, DEEPLINK_SIN_MEMORIA, DEEPLINK_TX_ALTERADA } from "./deeplink/firma-por-enlace";
 
+import { resolveSolanaNetworkConfig, resolveSolanaRpcUrlPublic } from "../chain";
+import { construirCreacionDeNonce, direccionDelNonce, leerNonce, type ConTecho } from "./nonce-duradero";
+import { NONCE_ACCOUNT_RENT_LAMPORTS } from "../../application/solana-escrow-rent";
+
+// ⚠️ ACÁ ARRANCA EL CÓDIGO, Y ANTES ESTE BLOQUE ESTABA **EN MEDIO DE LOS IMPORTS** (CR/MNR-11): tres
+// `import` quedaban debajo de una `const` y de una función, en un archivo NUEVO, o sea que la higiene se
+// rompió en el mismo commit que lo creó. Se mueve entero, sin cambiarle una línea.
 /** El techo de las lecturas de la cuenta de nonce.
  *
  *  ⚠️ NO CANCELA NADA (CD-18): es un `Promise.race`, así que corta la espera de quien llama y el
@@ -37,9 +49,6 @@ const conTecho: ConTecho = <T,>(p: Promise<T>): Promise<T> =>
       setTimeout(() => rechazar(new Error("nonce_probe_timeout")), TECHO_DE_LECTURA_MS),
     ),
   ]);
-import { resolveSolanaNetworkConfig, resolveSolanaRpcUrlPublic } from "../chain";
-import { construirCreacionDeNonce, direccionDelNonce, leerNonce, type ConTecho } from "./nonce-duradero";
-import { NONCE_ACCOUNT_RENT_LAMPORTS } from "../../application/solana-escrow-rent";
 
 /**
  * ¿Tiene el remitente su cuenta de nonce durable?
@@ -230,10 +239,9 @@ export class RecorridoPorEnlaceReal implements PreparacionPorEnlace {
    * `claveBilletera` es de una sola escritura: la billetera nueva volvería como `otra-clave` en cada
    * intento, o sea que cambiar de billetera dejaría el recorrido roto hasta que venza la ventana.
    *
-   * 🔴 QUIÉN LA LLAMA HOY: **un solo llamador de producción**, el corte del recorrido de la pantalla
-   * `connect`. Los controles «Cambiar de billetera» y «No soy yo» que el SDD nombra como llamadores
-   * previstos **todavía no existen**, y no se inventaron acá para que este docblock no quedara
-   * describiendo una superficie que nadie escribió.
+   * 🔴 QUIÉN LA LLAMA HOY, RE-MEDIDO EN EL FIX-PACK: **un llamador de producción**, el control «Cambiar de billetera» de la pantalla `connect` ((`OlvidarBilleteraDeEnlace`, `../../presentation/flow.tsx:4243`)). ⚠️ ACÁ DECÍA LO MISMO Y ERA FALSO: al cerrar la ola 4 este docblock afirmaba "un solo llamador de producción, el corte del recorrido de la pantalla `connect`", y ese llamador **no existía** — `grep -rn '\.olvidar()' src app` daba SÓLO `*.test.*` (AR/BLQ-BAJO-3, CR/BLQ-BAJO-4, verificado por el orquestador). El costo de esa frase no era cosmético: sin ningún borrador y sin TTL en (`CLAVE_ELECCION`, `./deeplink/conexion.ts:129`), quien elegía Phantom una vez quedaba con el gate del adaptador armado para siempre y sin salida en la pantalla.
+   * ⛔ EL CONTROL «No soy yo» que el SDD también nombraba SIGUE SIN EXISTIR, y no se inventó acá: un
+   * docblock que describe una superficie que nadie escribió es exactamente el defecto de arriba.
    */
   olvidar(): void {
     const e = this.entorno();
@@ -346,7 +354,14 @@ export class RecorridoPorEnlaceReal implements PreparacionPorEnlace {
     const senderPk = new PublicKey(i.direccion);
     const noncePk = await direccionDelNonce(senderPk);
     const connection = this.conexion();
-    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+    // 🔴 CON TECHO, Y ESTE `await` NO LO TENÍA (CR/MNR-11). Es el único de este método que le habla a la
+    // red antes de devolverle una URL a la persona, y su llamador la tiene esperando con el botón
+    // deshabilitado ((`onCrear`, `../../presentation/flow.tsx:4198`)): un RPC que acepta la conexión y no
+    // contesta dejaba esa pantalla trabada **sin ningún camino de vuelta**, porque no hay timeout del otro
+    // lado. Con el techo, el `throw` sube al `guard()` de la presentación y la persona puede reintentar.
+    // ⚠️ EL TECHO NO CANCELA LA PETICIÓN (es un `Promise.race`, lo dice el docblock de `conTecho`): lo que
+    // se acota es cuánto espera la persona, nunca cuánto trabaja la red. No confundir las dos cosas.
+    const { blockhash, lastValidBlockHeight } = await conTecho(connection.getLatestBlockhash());
     const tx = new Transaction({ feePayer: senderPk, blockhash, lastValidBlockHeight });
     for (const ix of construirCreacionDeNonce(senderPk, noncePk, NONCE_ACCOUNT_RENT_LAMPORTS)) tx.add(ix);
     // El ancla son los bytes del MENSAJE, que es lo que la firma no cambia. Contra esto se compara lo
@@ -404,7 +419,12 @@ export class RecorridoPorEnlaceReal implements PreparacionPorEnlace {
 
     let firma: string | null = null;
     try {
-      firma = await connection.sendRawTransaction(tx.serialize());
+      // Con techo por lo mismo que el `getLatestBlockhash` de arriba, y acá el desenlace ya estaba
+      // escrito: un timeout cae en el `catch` y deja `firma = null`, o sea "quién decide es la CADENA".
+      // ⚠️ Y ESO NO ES UN AGUJERO NUEVO: el `Promise.race` no cancela el broadcast, así que una tx que
+      // igual entre la va a encontrar la relectura de abajo, que es la que manda. Lo único que se acota es
+      // la espera.
+      firma = await conTecho(connection.sendRawTransaction(tx.serialize()));
     } catch {
       firma = null; // blockhash vencido, RPC caído, firma faltante. Quién decide es la CADENA, no esto.
     }
@@ -414,13 +434,21 @@ export class RecorridoPorEnlaceReal implements PreparacionPorEnlace {
     if (lectura.tipo === "hay") return { estado: "nonce-listo", firma };
     // `no-hay`, y acá el broadcast SÍ cambia lo que se puede afirmar:
     //   · si salió, la tx puede estar viajando ⇒ `nonce-en-vuelo`, que no dice "ya está" ni "falló";
-    //   · si NO salió, la transacción no entró y no va a entrar: lo más probable es el blockhash
-    //     vencido (~60-90 s contra un salto humano), que es exactamente lo que esa causa nombra. El
-    //     reintento arma la tx DE CERO con un blockhash nuevo y no cuesta plata: no hay escrow, no hay
-    //     USDC y no hay orden de payout.
+    //   · si NO salió, la transacción no entró y no va a entrar. El reintento arma la tx DE CERO y no
+    //     cuesta plata: no hay escrow, no hay USDC y no hay orden de payout.
+    //
+    // 🔴 ACÁ SALÍA `DEEPLINK_BLOCKHASH_EXPIRED`, Y ERA UN DIAGNÓSTICO DE TIEMPO PARA ALGO QUE ESTE CÓDIGO
+    // NO SABE (CR/BLQ-BAJO-6). Su copy dice *"Pasó demasiado tiempo y la red ya no acepta esa
+    // transacción"*, y el CR midió el input que la vuelve falsa: una vuelta con la firma en CERO pasa los
+    // cinco pasos de (`vueltaDelNonce`, `./deeplink/conexion.ts:528`) —nadie verifica ed25519 en este
+    // camino, y por qué alcanza está escrito en el docblock de esa función— y termina exactamente en este
+    // `return`, con `sendRawTransaction` rechazándola por firma faltante y la cuenta sin estar. O sea el
+    // copy de un reloj para un problema de firma. `DEEPLINK_NONCE_NO_ENTRO` afirma lo que el `if` de acá
+    // sí sabe (la red no la aceptó y la cuenta sigue sin estar) y nombra el blockhash como lo MÁS
+    // PROBABLE, que es lo que sigue siendo cierto, en vez de como el hecho.
     return firma !== null
       ? { estado: "nonce-en-vuelo" }
-      : { estado: "corte", causa: DEEPLINK_BLOCKHASH_EXPIRED };
+      : { estado: "corte", causa: DEEPLINK_NONCE_NO_ENTRO };
   }
 
   /** La `Connection` client-safe de la red activa. Se construye por llamada, igual que en el

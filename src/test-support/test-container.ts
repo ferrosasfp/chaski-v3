@@ -37,7 +37,7 @@ import {
   FakeWallet,
   FakeKycStore,
   FakeKycPendingStore,
-  FakePayoutGateway, FakeConnectedWallet, RecorridoPorEnlaceNulo, // WKH-358: `EleccionDeEnlaceNula` EN ESTA LÍNEA por lo mismo. WKH-354: `FakeConnectedWallet` EN ESTA LÍNEA — `:87` (`const payouts`) se cita por número desde 3 sitios y está debajo de este bloque
+  FakePayoutGateway, FakeConnectedWallet, RecorridoPorEnlaceNulo, // WKH-358: `RecorridoPorEnlaceNulo` EN ESTA LÍNEA por lo mismo. ⚠️ Acá decía `EleccionDeEnlaceNula`, que es como se llamaba el doble en W1 y que NO existe desde W4 (CR/MNR-3): el nombre se movió con lo que la clase hace y este comentario se quedó atrás. WKH-354: `FakeConnectedWallet` EN ESTA LÍNEA — `:87` (`const payouts`) se cita por número desde 3 sitios y está debajo de este bloque
   FakeRefundGateway,
   FixedClock,
   SeqIds,
@@ -66,7 +66,7 @@ export interface TestContainerOverrides {
   // seteaba el override, así que la línea nunca corría y nadie la podía ver mal. Un ejemplo
   // equivocado esperando a que alguien lo copie. Los tests del cierre montan el use-case con el probe
   // que corresponda (`escrow-rent-recovery.test.tsx` usa el adapter real contra el bridge).
-  solanaCloseableEscrows?: SolanaCloseableEscrowLister; solanaEscrowStates?: SolanaEscrowChainStateReader; connectedWallet?: ConnectedWalletProbe; eleccionDeEnlace?: PreparacionPorEnlace; // WKH-358: `eleccionDeEnlace` entra ACÁ por lo mismo. WKH-349: EN ESTA LÍNEA (`:87` se cita por número). Misma disciplina que sus dos vecinos: sin override queda UNDEFINED ⇒ el historial NO pregunta nada a la cadena y dice el copy de siempre. WKH-354: `connectedWallet` entra ACÁ por lo mismo; su default NO es undefined sino `new FakeConnectedWallet(null)` = "no hay ninguna billetera conectada", que es el estado real de un test que no montó ningún árbol
+  solanaCloseableEscrows?: SolanaCloseableEscrowLister; solanaEscrowStates?: SolanaEscrowChainStateReader; connectedWallet?: ConnectedWalletProbe; recorridoPorEnlace?: PreparacionPorEnlace; // WKH-358: `recorridoPorEnlace` entra ACÁ por lo mismo. WKH-349: EN ESTA LÍNEA (`:87` se cita por número). Misma disciplina que sus dos vecinos: sin override queda UNDEFINED ⇒ el historial NO pregunta nada a la cadena y dice el copy de siempre. WKH-354: `connectedWallet` entra ACÁ por lo mismo; su default NO es undefined sino `new FakeConnectedWallet(null)` = "no hay ninguna billetera conectada", que es el estado real de un test que no montó ningún árbol
   clock?: Clock; // default: new FixedClock()
   // Repo COMPARTIDO por todos los use-cases (default: new InMemoryRepo()). Se inyecta para poder
   // SEMBRARLO antes de renderizar: es la única forma de testear el historial, que por definición
@@ -140,7 +140,7 @@ export function buildTestContainer(o: TestContainerOverrides = {}): Container {
     // acá, muerta, esperando a que alguien la copiara. `null` significa "no hay ninguna billetera
     // conectada", que es exactamente el estado de un test que no montó el árbol de providers. Un
     // test que quiera una cuenta viva la inyecta.
-    connectedWallet: o.connectedWallet ?? new FakeConnectedWallet(null), eleccionDeEnlace: o.eleccionDeEnlace ?? new RecorridoPorEnlaceNulo(), // WKH-358 — EN ESTA LÍNEA, misma disciplina que sus vecinos. El default NO es `undefined` ni el objeto real: es el doble que dice "esta persona no eligió ninguna billetera por enlace", que es el estado real de un test que no montó ningún selector
+    connectedWallet: o.connectedWallet ?? new FakeConnectedWallet(null), recorridoPorEnlace: o.recorridoPorEnlace ?? new RecorridoPorEnlaceNulo(), // WKH-358 — EN ESTA LÍNEA, misma disciplina que sus vecinos. El default NO es `undefined` ni el objeto real: es el doble que dice "esta persona no eligió ninguna billetera por enlace", que es el estado real de un test que no montó ningún selector
   };
   return { ...base, ...(o.useCases ?? {}) };
 }

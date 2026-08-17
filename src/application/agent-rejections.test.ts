@@ -6,6 +6,8 @@
 // que no es diagnóstico: `kyc_gate_not_passed` es un VEREDICTO sobre una verificación de identidad,
 // que es la familia exacta que WKH-205 colapsó en /api/payout/validate.
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import {
   LOGGABLE_PREPARE_REJECTIONS,
   NO_AGENT_REASONS_MEANING_NOBODY,
@@ -14,7 +16,9 @@ import {
   QUOTE_NO_AGENT_FOR_CAPABILITY,
   QUOTE_REJECTED,
   RELAYABLE_PREPARE_REJECTIONS,
+  PREPARE_UNREACHABLE_ENUMS,
   isPrepareRejection,
+  isPrepareUnreachable,
   noAgentMeansNobodyFits,
   prepareRejectionEnum,
 } from "./agent-rejections";
@@ -112,7 +116,7 @@ describe("agent-rejections — la allow-list decide, no el agente", () => {
 //
 // El universo es exhaustivo por TIPO (`Record<Reason, boolean>` sobre una unión), así que un `reason`
 // nuevo del gateway sin fila acá es `tsc` rojo y no un caso que alguien se olvidó — misma técnica que
-// (`CABLEADO`, `../composition/container.test.ts:129`).
+// (`CABLEADO`, `../composition/container.test.ts:134`).
 describe("noAgentMeansNobodyFits — el 422 son CUATRO desenlaces y sólo tres dicen 'no hay quién'", () => {
   // Los cuatro `reason` que el gateway puede mandar en un 422, MEDIDOS en
   // `wasiai-a2a/src/services/capability-resolver.ts:69-80`. Esto NO es una copia de la constante que
@@ -160,6 +164,74 @@ describe("noAgentMeansNobodyFits — el 422 son CUATRO desenlaces y sólo tres d
     "un reason ausente o desconocido (%s) NO habilita la afirmación fuerte",
     (raw) => {
       expect(noAgentMeansNobodyFits(raw)).toBe(false);
+    },
+  );
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-358 (fix-pack · AR/BLQ-MED-2) — "NO LLEGAMOS A PREGUNTAR" TIENE SU PROPIA FAMILIA
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ PROTEGE, Y NO ES LA FUNCIÓN. `isPrepareUnreachable` es un `includes` sobre dos strings: un `it`
+// que le pase esos dos strings y verifique `true` se compara consigo mismo. Lo que hace falta custodiar es
+// que esos dos strings SEAN los que los productores emiten, porque la lista está escrita por segunda vez
+// en `agent-rejections.ts` (es la "segunda lista" que WKH-332/AR-BLQ-ALTO-2 midió como bug, y acá no se
+// puede cerrar por construcción sin mover enums que esta HU no toca). Así que se cierra por MEDICIÓN:
+// los enums se DERIVAN del texto de sus dos productores con un regex.
+//
+// ⚠️ QUÉ NO CIERRA: que la route del server siga contestando esos mismos enums. Eso vive en otro repo de
+// este mismo árbol (`app/api/payout/prepare/route.ts`) y no lo mira este barrido.
+describe("WKH-358 — `isPrepareUnreachable`: la familia de 'no hubo respuesta de nadie'", () => {
+  const GATEWAY = path.resolve(process.cwd(), "src/infrastructure/settlement/http-solana-prepare-gateway.ts");
+  const USE_CASE = path.resolve(process.cwd(), "src/application/use-cases/confirm-and-send.ts");
+  /** Los enums que los productores DEVUELVEN o PERSISTEN, derivados del archivo y no de una lista. */
+  const DEL_GATEWAY = [
+    ...new Set(
+      [...readFileSync(GATEWAY, "utf8").matchAll(/reason: "(prepare_unavailable|payout_pop_unavailable)"/g)].map(
+        (m) => m[1] as string,
+      ),
+    ),
+  ];
+  const DEL_USE_CASE = [
+    ...new Set(
+      [...readFileSync(USE_CASE, "utf8").matchAll(/failAndRefund\(r, "(\w+)", "not_deposited"\)/g)].map(
+        (m) => m[1] as string,
+      ),
+    ),
+  ];
+
+  // Refutación del instrumento, primero: sin esto un regex que dejara de matchear pondría todo en verde
+  // sobre listas vacías, que es como un candado deja de existir sin que nadie lo note.
+  it("los enums se derivaron de verdad, de sus DOS productores", () => {
+    expect(DEL_GATEWAY, "el barrido del gateway no encontró ningún `reason:` de esta familia").toHaveLength(2);
+    expect(DEL_USE_CASE, "el barrido del use-case no encontró ningún `failAndRefund(..., not_deposited)`").toContain(
+      "prepare_unavailable",
+    );
+  });
+
+  it("todo enum derivado de un productor es reconocido por `isPrepareUnreachable`", () => {
+    for (const e of DEL_GATEWAY) {
+      expect(
+        isPrepareUnreachable(e),
+        `el gateway emite \`${e}\` y la pantalla no lo reconoce: cae en el \`else\` del dispatch de ` +
+          `\`track\` y la persona lee "si tus USDC entraron al escrow, los sacás vos firmando" sobre una ` +
+          "remesa con `principal: not_deposited`.",
+      ).toBe(true);
+    }
+  });
+
+  it("y NO se solapa con la familia de rechazos del agente: son diagnósticos distintos", () => {
+    for (const e of PREPARE_UNREACHABLE_ENUMS) {
+      expect(isPrepareRejection(e), `\`${e}\` entró a la familia de rechazos: su copy afirma que un agente rechazó`).toBe(false);
+      expect(PREPARE_REJECTION_ENUMS).not.toContain(e);
+    }
+    for (const e of PREPARE_REJECTION_ENUMS) expect(isPrepareUnreachable(e)).toBe(false);
+  });
+
+  it.each([undefined, null, "", "prepare_agent_rejected", "payout_failed", "PREPARE_UNAVAILABLE", "prepare_unavailable "])(
+    "un reason ausente, de otra familia o con la caja/espacios distintos (%s) NO entra",
+    (raw) => {
+      expect(isPrepareUnreachable(raw)).toBe(false);
     },
   );
 });

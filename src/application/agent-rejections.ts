@@ -223,3 +223,38 @@ export function noAgentMeansNobodyFits(reason: unknown): boolean {
 export function isPrepareRejection(reason: string | null | undefined): boolean {
   return PREPARE_REJECTION_ENUMS.includes(reason ?? "");
 }
+
+/**
+ * ── "NO LLEGAMOS A PREGUNTAR" NO ES UN RECHAZO, Y HASTA EL FIX-PACK SE DECÍA COMO UN PAYOUT FALLADO
+ *    (WKH-358 fix-pack · AR/BLQ-MED-2) ──────────────────────────────────────────────────────────────
+ *
+ * 🔴 QUÉ AGUJERO CIERRA, MEDIDO. Estos dos enums NO están en `PREPARE_REJECTION_ENUMS` (correcto: nadie
+ * rechazó nada) y tampoco los nombraba ninguna rama de la pantalla, así que caían en el `else` del
+ * dispatch de `track` ⇒ `humanError("payout_failed")` ⇒ *"No se pudo entregar. No hay un reembolso
+ * automático: si tus USDC entraron al escrow, los sacás vos firmando desde tu wallet."* Esa frase manda
+ * a buscar plata a un lugar donde hay CERTEZA de que no hay: los dos salen de `failAndRefund(..., "not_deposited")`
+ * (`prepare_unavailable`, `./use-cases/confirm-and-send.ts:477`), o sea ANTES de `authorizePrincipal` y
+ * sin un solo POST al settle. Es el mismo defecto que `PREPARE_NO_AGENT_FOR_CAPABILITY` cerró de su lado.
+ *
+ * ⚠️ EN QUÉ SE DIFERENCIAN DE LA FAMILIA `prepareRejected`, y por eso son una rama propia y no una fila
+ * más de esa lista: allá un agente LEYÓ el pedido y lo negó, así que el copy puede afirmar dos cosas
+ * ("el agente rechazó" + "no se firmó nada"). Acá **no hubo respuesta de nadie**: la petición no salió,
+ * o salió y no volvió. Lo único que se puede afirmar es la segunda mitad.
+ *
+ * ⛔ Y EL COPY NO PUEDE DECIR "no se pidió ninguna firma": `payout_pop_unavailable` sale de que
+ * `pop.prove()` falló ((`prove`, `../infrastructure/settlement/http-solana-prepare-gateway.ts:224`)), y
+ * esa prueba SÍ le pide a la billetera firmar un mensaje. Ese mensaje no mueve plata, pero es una firma,
+ * y negarla sería exactamente la clase de afirmación de más que esta familia vino a corregir.
+ *
+ * ⚠️ LOS DOS LITERALES ESTÁN ESCRITOS ACÁ Y TAMBIÉN EN SUS PRODUCTORES, y eso es una segunda lista — el
+ * defecto que WKH-332/AR-BLQ-ALTO-2 midió en `container.ts`. No se puede cerrar por construcción sin
+ * mover enums que esta HU no toca, así que se cierra por MEDICIÓN: `agent-rejections.test.ts` deriva los
+ * dos del texto de sus productores con un regex y exige que `isPrepareUnreachable` los reconozca. Si
+ * alguien renombra un enum del gateway, ese `it` se pone rojo y esta lista no queda mintiendo sola.
+ */
+export const PREPARE_UNREACHABLE_ENUMS: readonly string[] = ["prepare_unavailable", "payout_pop_unavailable"];
+
+/** ¿Este `failureReason` dice "no llegamos a preguntarle a nadie", en vez de "alguien nos dijo que no"? */
+export function isPrepareUnreachable(reason: string | null | undefined): boolean {
+  return PREPARE_UNREACHABLE_ENUMS.includes(reason ?? "");
+}

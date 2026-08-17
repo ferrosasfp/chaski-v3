@@ -50,6 +50,13 @@ function montarNavegador(href = HREF) {
   };
   vi.stubGlobal("localStorage", storage);
   vi.stubGlobal("location", { href, origin: ORIGEN });
+  // 🔴 LA 3ª CONDICIÓN DEL GATE, DECLARADA ACÁ (fix-pack · AR/BLQ-MED-1). Se declara en el montaje del
+  // navegador y no en cada `it` porque es parte del ESTADO DEL MUNDO que el recorrido por enlace
+  // necesita, igual que el `localStorage`: sin la bandera prendida el gate del adaptador contesta
+  // `null` y ningún `it` de este archivo mide lo que dice medir. El `afterEach` de acá abajo la limpia.
+  // ⚠️ Los dos `it` de CONTROL que apagan el gate lo hacen moviendo UNA sola variable (la elección o la
+  // disponibilidad) y NO ésta: si apagaran la bandera medirían la condición nueva y no la suya.
+  vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", "true");
   return {
     disco,
     /** Mueve la URL de este "navegador" sin re-montar nada, igual que una vuelta de la billetera. */
@@ -187,6 +194,55 @@ describe("AC-1: selector → URL → vuelta → disco → `ConnectWallet`, sin t
 
     solanaWalletBridge.setWalletAvailability("injected");
     expect(await new SolanaWalletAdapter().getConnectedAddress()).toBeNull(); // el bridge está vacío y MANDA
+  });
+
+  // 🔴 T-065-GATE-5 (AC-9 · fix-pack · AR/BLQ-MED-1) — LA BANDERA APAGADA REPLIEGA EL GATE, Y ESTE `it`
+  // ES LA MITAD QUE NO EXISTÍA. Es el caso del rollback: un dispositivo que YA eligió (la elección no
+  // expira y hasta el fix-pack nada de producción la borraba) contra un build con la bandera ausente.
+  // Antes del fix-pack el gate no leía ninguna `process.env`, así que ese teléfono se quedaba con
+  // `caminoPorEnlace()` devolviendo `"phantom"` para siempre y sin puerta de vuelta: la superficie NO
+  // era replegable, que es exactamente lo que AC-9 pide poder hacer.
+  //
+  // ⚠️ ES EL PAR NEGATIVO DEL `it` DE ARRIBA («AC-1: selector → … → `ConnectWallet`»), que monta la
+  // MISMA siembra con la bandera PRENDIDA y obtiene `DIRECCION`. Los dos juntos son lo que hace que la
+  // bandera sea lo único que decide; uno solo no distingue "replegó" de "nunca se enciende".
+  //
+  // MUTANTE QUE MATA: en `solana-wallet.ts`, en `caminoPorEnlace()`, borrar
+  // `if (!resolveSolanaDeeplinkEnabled()) return null;` ⇒ el gate vuelve a las dos condiciones viejas y
+  // este `it` recibe `DIRECCION` en vez de `null`.
+  it("T-065-GATE-5: con la bandera del build APAGADA, el gate NO se enciende aunque la elección y la dirección estén", async () => {
+    const nav = montarNavegador();
+    const recorrido = new RecorridoPorEnlaceReal();
+    const q = new URL(recorrido.elegir({ billetera: "phantom", remittanceId: REM }).irA).searchParams;
+    nav.navegarA(
+      hrefDeVuelta(
+        q.get("redirect_link") as string,
+        respuestaDeLaBilletera(
+          { public_key: DIRECCION, session: "s" },
+          bs58.decode(q.get("dapp_encryption_public_key") as string),
+          nacl.box.keyPair(),
+        ),
+      ),
+    );
+    await recorrido.completar({ remittanceId: REM });
+    solanaWalletBridge.setWalletAvailability("none");
+    // CD-18 — LAS DOS CONDICIONES VIEJAS ESTÁN CUMPLIDAS, y hay que probarlo antes de apagar la bandera:
+    // con la bandera prendida este mismo estado devuelve la dirección del enlace. Sin esta línea, el
+    // `toBeNull()` de abajo podría estar pasando porque la siembra nunca llegó a encender nada.
+    expect(recorrido.eleccion(), "el fixture no dejó la elección puesta").toBe("phantom");
+    expect((JSON.parse(nav.disco.get(CLAVE_VIAJE) as string) as Viaje).direccion).toBe(DIRECCION);
+    expect(
+      await new SolanaWalletAdapter().getConnectedAddress(),
+      "con la bandera PRENDIDA la siembra tiene que encender el gate, o este `it` no mide la bandera",
+    ).toBe(DIRECCION);
+
+    // 🔴 LA ÚNICA VARIABLE QUE SE MUEVE: la bandera del build. El disco no se toca.
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", undefined as unknown as string);
+    expect(
+      await new SolanaWalletAdapter().getConnectedAddress(),
+      "la bandera apagada NO replegó el gate: un build de rollback deja a este dispositivo con el " +
+        "camino por enlace encendido y sin ninguna puerta de vuelta (AR/BLQ-MED-1).",
+    ).toBeNull();
   });
 });
 
@@ -463,10 +519,19 @@ describe("T-065-17: transmitir y confirmar", () => {
     expect(res).toEqual({ estado: "nonce-no-sabemos" });
   });
 
-  it("el broadcast falla y la cuenta no está ⇒ corte por blockhash, con reintento posible", async () => {
+  // 🔴 LA CAUSA CAMBIÓ EN EL FIX-PACK, Y NO ES UN RENOMBRE (CR/BLQ-BAJO-6). Salía
+  // `deeplink_blockhash_expired`, cuyo copy dice *"Pasó demasiado tiempo y la red ya no acepta esa
+  // transacción"*: una afirmación de TIEMPO que este `if` no puede sostener. El CR midió el input que la
+  // vuelve falsa —una vuelta con la firma en CERO pasa los cinco pasos de `vueltaDelNonce` (nadie verifica
+  // ed25519 en este camino) y termina exactamente acá— o sea el diagnóstico de un reloj para un problema de
+  // firma. `deeplink_nonce_no_entro` afirma sólo lo que este `if` sabe.
+  // MUTANTE QUE MATA: devolver `DEEPLINK_BLOCKHASH_EXPIRED` acá ⇒ este `it` se pone rojo.
+  it("el broadcast falla y la cuenta no está ⇒ corte `deeplink_nonce_no_entro`, con reintento posible", async () => {
     const { res } = await volverDelSaltoDelNonce(null, "falla");
     // ⛔ NO es `nonce-en-vuelo`: nada viajó. Y no es `nonce-no-sabemos`: a la cadena SÍ le preguntamos.
-    expect(res).toEqual({ estado: "corte", causa: "deeplink_blockhash_expired" });
+    expect(res).toEqual({ estado: "corte", causa: "deeplink_nonce_no_entro" });
+    // ⛔ Y NO es la causa del blockhash: el copy de ésa afirma un vencimiento por TIEMPO que acá no se sabe.
+    expect((res as { causa: string }).causa).not.toBe("deeplink_blockhash_expired");
   });
 
   it("el broadcast falla pero la cuenta YA EXISTÍA ⇒ `nonce-listo` con `firma: null`", async () => {
@@ -565,5 +630,63 @@ describe("AC-5: la cuenta de nonce, antes del salto", () => {
     const mensaje = Message.from(Buffer.from(ancla.mensajeBase64, "base64"));
     expect(mensaje.recentBlockhash).toBe(BLOCKHASH);
     expect(mensaje.header.numRequiredSignatures, "la creación pide más de una firma").toBe(1);
+  });
+
+  // 🔴 EL TECHO DEL `getLatestBlockhash` (fix-pack · CR/MNR-11) — LO QUE PASABA SIN ÉL, Y NO ERA COSMÉTICO.
+  // Este `await` es el único de `crearCuentaDeNonce` que le habla a la red antes de devolver una URL, y su
+  // llamador tiene a la persona esperando con el botón deshabilitado. Un RPC que ACEPTA la conexión y no
+  // contesta (que no es lo mismo que uno caído) dejaba esa pantalla trabada para siempre: no hay timeout
+  // del otro lado y no hay ninguna otra salida en el cuadrante.
+  //
+  // ⚠️ EL TECHO NO CANCELA LA PETICIÓN, y este `it` NO afirma que lo haga: es un `Promise.race`, así que
+  // corta LA ESPERA de quien llama y el `getLatestBlockhash` sigue en vuelo. Lo que se mide acá es que la
+  // promesa que la pantalla espera RECHACE, no que la red deje de trabajar.
+  //
+  // MUTANTE QUE MATA: sacarle el `conTecho(...)` a ese `await` ⇒ la promesa nunca se asienta y este `it`
+  // muere por timeout de vitest.
+  it("un RPC que acepta y NO contesta vence por el techo: la promesa RECHAZA en vez de colgar la pantalla", async () => {
+    vi.useFakeTimers();
+    try {
+      const nav = montarNavegador();
+      const recorrido = new RecorridoPorEnlaceReal();
+      const billetera = nacl.box.keyPair();
+      const q = new URL(recorrido.elegir({ billetera: "phantom", remittanceId: REM }).irA).searchParams;
+      nav.navegarA(
+        hrefDeVuelta(
+          q.get("redirect_link") as string,
+          respuestaDeLaBilletera(
+            { public_key: SENDER.publicKey.toBase58(), session: "s" },
+            bs58.decode(q.get("dapp_encryption_public_key") as string),
+            billetera,
+          ),
+        ),
+      );
+      await recorrido.completar({ remittanceId: REM });
+
+      // El RPC que acepta y se queda callado. ⛔ NO es `mockRejectedValue`: eso ya funcionaba antes.
+      let colgadas = 0;
+      vi.spyOn(Connection.prototype, "getLatestBlockhash").mockImplementation(
+        (() => {
+          colgadas += 1;
+          return new Promise(() => {});
+        }) as never,
+      );
+
+      const p = recorrido.crearCuentaDeNonce({
+        direccion: SENDER.publicKey.toBase58(),
+        remittanceId: REM,
+      });
+      const esperado = expect(p).rejects.toThrow("nonce_probe_timeout");
+      await vi.advanceTimersByTimeAsync(5_001);
+      await esperado;
+      // CD-18 — el fixture fabricó el caso: la petición SE HIZO y quedó colgada. Sin esto, un
+      // `crearCuentaDeNonce` que tirara ANTES de llamar a la red pasaría este `it` por el motivo equivocado.
+      expect(colgadas, "el RPC no se llegó a llamar: este `it` no está midiendo el techo").toBe(1);
+      // ⛔ Y NO SE ESCRIBIÓ NINGÚN ANCLA: el ancla se guarda DESPUÉS de armar la tx, así que un corte acá no
+      // deja al disco creyendo que hay una firma pendiente.
+      expect(nav.disco.has("chaski.billetera.nonce.v1")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

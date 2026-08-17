@@ -31,7 +31,7 @@ import type { BilleteraDeeplink } from "./protocol";
 import { PARAMS_DE_RESPUESTA, clavePublicaEnRespuesta, leerRespuesta, nuevoParDeCifrado, secretoCompartido, soloTextos, urlConectar, urlFirmarTransaccion } from "./protocol";
 import type { CausaDeEnlace } from "./firma-por-enlace";
 import {
-  DEEPLINK_RECHAZADO,
+  DEEPLINK_RECHAZADO, DEEPLINK_NONCE_YA_CONSUMIDO, // WKH-358 (fix-pack · AR/BLQ-BAJO-2): el segundo EN ESTA LÍNEA para no correr las 4 citas por número que este archivo recibe (`:129`, `:149`, `:254`, `:400`)
   DEEPLINK_RESPUESTA_ILEGIBLE,
   DEEPLINK_SIN_MEMORIA,
   DEEPLINK_TX_ALTERADA,
@@ -45,7 +45,7 @@ import {
  * conjunto CERRADO de tres valores (`PasoDelViaje`, `sesion.ts:114`), así que `interpretarVuelta`
  * contesta `no-volvimos` para esta marca y **el motor no consume ni destruye nada** si esta marca queda
  * en la barra. Si en cambio fuera un cuarto `PasoDelViaje`, el motor la miraría, no sabría qué hacer con
- * ella, y el `switch` con `never` de (`nunca`, `firma-por-enlace.ts:720`) dejaría de compilar.
+ * ella, y el `switch` con `never` de (`nunca`, `firma-por-enlace.ts:767`) dejaría de compilar.
  *
  * ⛔ NO la agregues a `PasoDelViaje` "para que sea uniforme": ese conjunto describe los pasos del viaje
  * del DEPÓSITO, y este salto no es parte de ese viaje — pasa antes, y su resultado (una cuenta creada en
@@ -63,13 +63,13 @@ export interface PedidoDeConexion {
    *
    * 🔴 No es una preferencia: (`enlaceDeVuelta`, `sesion.ts:495`) hace `new URL(origen)` y **TIRA** con
    * una URL relativa, sin declararlo en su firma (medido en la ola 1, T9). Mismo requisito, misma razón
-   * y mismas palabras que (`hrefActual`, `firma-por-enlace.ts:217`).
+   * y mismas palabras que (`hrefActual`, `firma-por-enlace.ts:264`).
    */
   hrefActual: string;
   /** Para que la billetera muestre título e ícono en su diálogo. */
   appUrl: string;
   /**
-   * Qué remesa. ⛔ **NUNCA `null`**, por el mismo motivo que (`remittanceId`, `firma-por-enlace.ts:225`):
+   * Qué remesa. ⛔ **NUNCA `null`**, por el mismo motivo que (`remittanceId`, `firma-por-enlace.ts:272`):
    * `interpretarVuelta` acepta `null` como "no tengo remesa en contexto" y con eso **apaga el guard de
    * cruce entre remesas y consume el paso igual**. El viaje que se abre acá lleva el `remittanceId`
    * desde el primer byte (CD-5).
@@ -124,7 +124,7 @@ export type EleccionDeBilletera = BilleteraDeeplink | null;
  * es un secreto ni un paso consumible**: es una preferencia. Expirarla tendría un modo de falla propio y
  * peor que el que evita: si venciera ENTRE el salto 1 y la vuelta, el gate de `caminoPorEnlace()` se
  * apagaría y el recorrido caería al camino inyectado **en silencio**, con la vuelta de la billetera ya
- * en la barra y nadie que la lea. Lo único que la borra es un gesto explícito (`olvidarEleccion`).
+ * en la barra y nadie que la lea. Lo único que la borra es un gesto explícito (`olvidarEleccion`). ⚠️ QUÉ COSTABA ESA DECISIÓN, Y QUÉ HIZO FALTA AGREGARLE (fix-pack · AR/BLQ-MED-1). Sin TTL y **sin ningún llamador de producción de `olvidarEleccion`** —que es como se cerró la ola 4, con el docblock de `olvidar()` afirmando lo contrario— la elección era PEGAJOSA SIN SALIDA: quien elegía Phantom quedaba con el gate del adaptador armado para ese origen para siempre, y un build con la bandera del enlace apagada NO lo replegaba. La decisión de no expirar sigue en pie (su modo de falla sigue siendo peor); lo que se agregó son las DOS puertas que faltaban, y ninguna es un reloj: la bandera como 3ª condición del gate ((`caminoPorEnlace`, `../../solana-wallet.ts:2239`)) y el gesto explícito que este párrafo ya prometía ((`OlvidarBilleteraDeEnlace`, `../../../presentation/flow.tsx:4243`)).
  */
 const CLAVE_ELECCION = "chaski.billetera.eleccion.v1";
 
@@ -203,7 +203,7 @@ export function olvidarEleccion(a: Almacen): void {
  *
  * ⛔ NO fija `claveBilletera`, `session` ni `direccion`: esos TRES los escribe la vuelta del connect, y
  * el ancla `claveBilletera` es de UNA SOLA ESCRITURA (`claveBilletera`, `sesion.ts:148`). Un viaje
- * recién abierto NO está conectado (`estaConectado`, `firma-por-enlace.ts:301` exige los tres), y por
+ * recién abierto NO está conectado (`estaConectado`, `firma-por-enlace.ts:348` exige los tres), y por
  * eso el motor de firma **corta antes** de tocarlo: los dos extremos del flujo no se pisan.
  */
 export function iniciarConexion(
@@ -324,31 +324,6 @@ export function completarVuelta(p: PedidoDeConexion): VueltaDeConexion {
 }
 
 /**
- * Qué remesa dice el viaje en curso estar manejando, o `null` si no hay viaje utilizable.
- *
- * 🔴 POR QUÉ HACE FALTA, Y CUÁL ES SU RESIDUAL — LAS DOS COSAS, PORQUE LA SEGUNDA NO SE PUEDE OMITIR.
- *
- * El salto a la billetera **mata el proceso de la pestaña**: al volver, el componente monta de cero y
- * su `rem` está en `null`. El `remittanceId` que `completarVuelta` necesita no existe en ninguna parte
- * de la memoria de la app; el único lugar donde sobrevivió es el propio viaje, que lo lleva desde el
- * primer byte (CD-5, lo escribe `iniciarConexion`).
- *
- * ⚠️ **CONSECUENCIA, DICHA SIN SUAVIZAR**: cuando el `remittanceId` sale de acá, el guard de cruce
- * entre remesas de `interpretarVuelta` (`remittanceId`, `./sesion.ts:597`) compara el viaje contra sí
- * mismo y **no puede contestar `otra-remesa` en la vuelta del connect**. No es un ablandamiento del
- * guard —sigue entero y sigue cortando para el motor de firma, que recibe el id desde
- * `authorizePrincipal` y no desde el disco—, pero **sí es una puerta en la que ese guard no aplica**, y
- * queda escrito acá en vez de descubrirse en un AR.
- *
- * ⛔ LO QUE **NO** SE HIZO, y por qué: pasarle `null` a `interpretarVuelta`. `null` no es "sin guard":
- * es "no tengo remesa en contexto", y con eso **apaga el guard Y consume el paso igual** (está escrito
- * en `PedidoDeConexion.remittanceId`). Devolver un id que al menos nombra una remesa deja al llamador
- * poder verificar que esa remesa exista de su lado, que es una fuente distinta del canal del enlace.
- *
- * 🔴 NO TIRA NUNCA: la llama el productor de montaje, y un disco que no se deja leer tiene que
- * contestar "no hay viaje", nunca romper el montaje de la pantalla.
- */
-/**
  * Qué marca nuestra trae esta URL, o `null`. **PURA**: no toca el disco y no consume nada.
  *
  * ⚠️ ES SÓLO UN LECTOR, y por eso se puede llamar antes que `completarVuelta` sin romper DT-12: el que
@@ -397,6 +372,31 @@ export function hrefSinRastroDeVuelta(hrefActual: string): string {
   return u.searchParams.size === 0 ? `${u.origin}${u.pathname}${u.hash}` : u.toString();
 }
 
+/**
+ * Qué remesa dice el viaje en curso estar manejando, o `null` si no hay viaje utilizable.
+ *
+ * 🔴 POR QUÉ HACE FALTA, Y CUÁL ES SU RESIDUAL — LAS DOS COSAS, PORQUE LA SEGUNDA NO SE PUEDE OMITIR.
+ *
+ * El salto a la billetera **mata el proceso de la pestaña**: al volver, el componente monta de cero y
+ * su `rem` está en `null`. El `remittanceId` que `completarVuelta` necesita no existe en ninguna parte
+ * de la memoria de la app; el único lugar donde sobrevivió es el propio viaje, que lo lleva desde el
+ * primer byte (CD-5, lo escribe `iniciarConexion`).
+ *
+ * ⚠️ **CONSECUENCIA, DICHA SIN SUAVIZAR**: cuando el `remittanceId` sale de acá, el guard de cruce
+ * entre remesas de `interpretarVuelta` (`remittanceId`, `./sesion.ts:597`) compara el viaje contra sí
+ * mismo y **no puede contestar `otra-remesa` en la vuelta del connect**. No es un ablandamiento del
+ * guard —sigue entero y sigue cortando para el motor de firma, que recibe el id desde
+ * `authorizePrincipal` y no desde el disco—, pero **sí es una puerta en la que ese guard no aplica**, y
+ * queda escrito acá en vez de descubrirse en un AR.
+ *
+ * ⛔ LO QUE **NO** SE HIZO, y por qué: pasarle `null` a `interpretarVuelta`. `null` no es "sin guard":
+ * es "no tengo remesa en contexto", y con eso **apaga el guard Y consume el paso igual** (está escrito
+ * en `PedidoDeConexion.remittanceId`). Devolver un id que al menos nombra una remesa deja al llamador
+ * poder verificar que esa remesa exista de su lado, que es una fuente distinta del canal del enlace.
+ *
+ * 🔴 NO TIRA NUNCA: la llama el productor de montaje, y un disco que no se deja leer tiene que
+ * contestar "no hay viaje", nunca romper el montaje de la pantalla.
+ */
 export function remesaDelViaje(a: Almacen, ahora: number): string | null {
   let lectura: ReturnType<typeof leerViaje>;
   try {
@@ -515,11 +515,12 @@ function leerPasoDelNonce(a: Almacen, ahora: number): PasoDelNonce | null {
  *
  * ⚠️ QUÉ **NO** VERIFICA, y hace falta decirlo para que nadie se apoye en su verde: **no verifica la
  * firma ed25519 del sender**. Los bytes del mensaje coinciden igual si la billetera devuelve la misma
- * transacción con la firma en cero, porque las firmas no son parte del mensaje. Esa verificación vive
- * donde vive la pubkey del sender —el adaptador, que ya la hace para el depósito en
- * (`nacl`, `../../solana-wallet.ts:999`)— y este módulo no la conoce. Lo que sí garantiza el paso 5 es
- * que **no se transmita otra transacción que la que mandamos a firmar**, que es el ataque que importa
- * acá: sin él, un sobre bien cifrado podría cambiar el destino de esa creación.
+ * transacción con la firma en cero, porque las firmas no son parte del mensaje. Lo que sí garantiza el
+ * paso 5 es que **no se transmita otra transacción que la que mandamos a firmar**, que es el ataque que
+ * importa acá: sin él, un sobre bien cifrado podría cambiar el destino de esa creación.
+ * 🔴 ACÁ DECÍA QUE ESA VERIFICACIÓN «VIVE EN EL ADAPTADOR, QUE YA LA HACE PARA EL DEPÓSITO EN `solana-wallet.ts:999`», Y ESO ERA UN PUNTERO FALSO (CR/BLQ-BAJO-6): ese sitio es la verificación del DEPÓSITO, en la rama de `authorizePrincipal`, y **por el camino del nonce no pasa nadie por ahí**. En ESTE camino nadie verifica ed25519, ni acá ni después. MEDIDO por el CR: una vuelta con la firma en cero pasa los cinco pasos de arriba y llega al broadcast.
+ * ⇒ POR QUÉ ALCANZA IGUAL, y es el argumento entero, no una tranquilización: **la cadena rechaza**. `sendRawTransaction` de una tx sin la firma de su `feePayer` no entra en ningún bloque, así que el desenlace es "la cuenta no se creó" y NO "se creó una cuenta que no querías". Y lo que está en juego en este paso es CERO USDC: no hay escrow, no hay orden de payout, y el alquiler sólo se debita si la tx entra, o sea si la firma era buena. Verificar acá cambiaría el DIAGNÓSTICO, no el resultado — y ese diagnóstico ya se arregló del otro lado, con (`DEEPLINK_NONCE_NO_ENTRO`, `./firma-por-enlace.ts:235`), que dejó de afirmar que venció un reloj.
+ * ⛔ QUÉ COSTARÍA AGREGARLA, MEDIDO Y NO ESTIMADO, para que la decisión se pueda revisar: los siete `it` del paso del nonce firman con un `Keypair.generate()` que **no es** `viaje.direccion` (`transaccion`, `conexion.test.ts:508`), o sea que el fixture del caso POSITIVO no satisface el guard que habría que agregar. Agregarla exige re-fabricar esos siete fixtures en el mismo cambio; si no, el `it` del camino feliz se pondría rojo y la tentación sería aflojar el guard. Queda declarado y sin hacer.
  *
  * ⛔ MARCA CONSUMIDO ANTES DE DEVOLVER, en la misma lectura. Es lo que impide que un segundo montaje
  * sobre la misma URL vuelva a transmitir (`T-065-16`).
@@ -527,7 +528,7 @@ function leerPasoDelNonce(a: Almacen, ahora: number): PasoDelNonce | null {
 function vueltaDelNonce(p: PedidoDeConexion): VueltaDeConexion {
   const ancla = leerPasoDelNonce(p.almacen, p.ahora);
   if (ancla === null) return { tipo: "corte", causa: DEEPLINK_VIAJE_VENCIDO };
-  if (ancla.consumido === true) return { tipo: "corte", causa: DEEPLINK_VIAJE_VENCIDO };
+  if (ancla.consumido === true) return { tipo: "corte", causa: DEEPLINK_NONCE_YA_CONSUMIDO }; // ⚠️ ACÁ SALÍA `DEEPLINK_VIAJE_VENCIDO`, y su copy dice «No se firmó nada. Empezá el envío de nuevo.»: las DOS mitades son falsas en esta rama (AR/BLQ-BAJO-2 + CR/MNR-10). Es POST-firma —la billetera devolvió la tx firmada y el flag se escribe ANTES del broadcast, así que puede haber salido— y no es el envío sino la creación de una cuenta. Ver el docblock de `DEEPLINK_NONCE_YA_CONSUMIDO`
 
   const lectura = leerViaje(p.almacen, p.ahora);
   if (lectura.tipo !== "hay") return { tipo: "corte", causa: DEEPLINK_VIAJE_VENCIDO };
@@ -583,7 +584,7 @@ function vueltaDelNonce(p: PedidoDeConexion): VueltaDeConexion {
 /** base64 de `tx.serializeMessage()` de una transacción en base58, o `null` si no se puede leer.
  *
  *  Devuelve `null` en vez de tirar por el mismo criterio que `firmaDelSender`
- *  ((`firmaDelSender`, `./firma-por-enlace.ts:335`)): una transacción que no se puede leer es un desenlace del viaje, no
+ *  ((`firmaDelSender`, `./firma-por-enlace.ts:382`)): una transacción que no se puede leer es un desenlace del viaje, no
  *  un error de programación. */
 function mensajeDeLaTransaccion(transaccionBase58: string): string | null {
   try {

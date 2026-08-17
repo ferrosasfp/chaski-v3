@@ -121,7 +121,7 @@ export interface PayoutGateway {
 
 // ── Lectura del desenlace de un payout (WKH-337) ──────────────────────────────
 // CUATRO valores, y son cuatro a propósito: misma familia que `RemittanceIdLookup`, `:467` y
-// `SolanaPrincipalInOutcome`, `:720`. "No pude preguntar" NO es "no pasó", y ninguno de los cuatro
+// `SolanaPrincipalInOutcome`, `:721`. "No pude preguntar" NO es "no pasó", y ninguno de los cuatro
 // colapsa en otro sin perder la información que decide si se puede afirmar un desenlace.
 export type PayoutOutcomeUnknownReason =
   | "no_row" // no hay fila para (payout_id, sender): el ledger estaba apagado al preparar,
@@ -504,10 +504,11 @@ export interface WalletPort {
   ): Promise<AutorizacionDelPrincipal>;
   // El retorno son TRES desenlaces y no dos (WKH-356). El `Promise<{ tx, solana? }>` que había acá
   // sólo sabía escribir "resolvió con esto" y "tiró"; el porqué del tercero —y por qué no es `null`
-  // ni un `boolean`— está en (`AutorizacionDelPrincipal`, `:1184`).
+  // ni un `boolean`— está en (`AutorizacionDelPrincipal`, `:1185`).
   // WKH-206: firma un mensaje arbitrario con la key de la wallet conectada. Lo usa el PopSigner para
   // probar posesión de `address`. En demo devuelve una firma simbólica (AC-5).
   signMessage(message: string): Promise<string>;
+  /** WKH-356/AR-MNR-1 — el envío TERMINÓ (bien o mal) y lo que quedaba guardado para completar una firma ya no sirve. OPCIONAL a propósito: es la única forma de agregarlo sin tocar los cuatro dobles de `WalletPort`, y una billetera que no guarda nada entre invocaciones no tiene nada que abandonar. Existe porque 061 lo dejó como requisito explícito de esta HU: `terminarViaje` no la llama ningún camino de éxito, así que sin esto la x25519 privada, la sesión y una transacción firmada sobreviven a la remesa que las produjo (hasta 20 min). El porqué de cada línea está en la implementación (`SolanaWalletAdapter.abandonarAutorizacion`), incluido por qué ACÁ sí se borra una firma ya dada y en un corte del motor no. ⛔ SÍNCRONO y sin retorno: es limpieza, y el que la llama no tiene ninguna decisión mejor que seguir. Y va EN ESTA LÍNEA, no en una nueva, porque `ports.ts` recibe 10 citas por número cuyo destino está debajo de este bloque. */ abandonarAutorizacion?(): void;
 }
 
 // ── Quién está conectado AHORA (WKH-327, fix-pack AR/BLQ-BAJO-1) ─────────────
@@ -981,7 +982,7 @@ export interface IdGenerator {
 // ── WKH-347 · el índice on-chain de escrows del remitente ────────────────────────────────────────
 //
 // Se agregan ACÁ ABAJO, al final del archivo, y no al lado de sus parientes temáticos, por una razón
-// medida: hay citas ancladas que apuntan a líneas de este archivo por número (`Clock`, `:974` entre
+// medida: hay citas ancladas que apuntan a líneas de este archivo por número (`Clock`, `:975` entre
 // ellas), y una inserción aguas arriba las desplaza a todas en silencio.
 
 /**
@@ -1040,7 +1041,7 @@ export type EscrowId16 = string;
  *      refutaría: releer la misma PDA un segundo después del `deadline`.
  *  · `"deposited-window-closed"` — lo mismo, con el `deadline` YA PASADO según nuestro reloj
  *      (`nowSec >= deadlineSec`), que es la negación EXACTA del guard con el que el refund de esta app
- *      rechaza por deadline (`refund_before_deadline`, `../infrastructure/solana-wallet.ts:1125`). NO
+ *      rechaza por deadline (`refund_before_deadline`, `../infrastructure/solana-wallet.ts:1258`). NO
  *      prueba que el `refund` vaya a entrar: prueba que ESTA app ya no lo rechazaría por deadline.
  *      Que el programa on-chain acepte exactamente lo mismo NO se leyó desde este repo. Y NO dice que
  *      exista un botón para firmar esa devolución: esta capa lee, no abre ninguna puerta.
@@ -1052,11 +1053,11 @@ export type EscrowId16 = string;
  *      distintos sobre la misma remesa.
  *  · `"refunded"`  — la cuenta existe y su `status` es `{ Refunded: {} }`. NO prueba que la cuenta se
  *      haya cerrado: la ix `refund` no cierra nada, el cierre es otra instrucción
- *      (`refund`, `../infrastructure/solana-wallet.ts:1219`).
+ *      (`refund`, `../infrastructure/solana-wallet.ts:1352`).
  *  · `"absent"`    — LA CADENA CONTESTÓ, y en esa PDA no hay cuenta. Es exactamente lo que significa
  *      hoy un `!acc` en los dos bucles que ya batchean cuentas del escrow
  *      (`resolveRemittanceIdFromLedger`, `../infrastructure/solana-wallet.ts:353`) y
- *      (`listCloseable`, `../infrastructure/solana-wallet.ts:1599`). NO dice a dónde fue la plata y NO
+ *      (`listCloseable`, `../infrastructure/solana-wallet.ts:1732`). NO dice a dónde fue la plata y NO
  *      distingue "nunca existió" de "ya se cerró después de resolverse". Ver R-1, acá abajo.
  *  · `"unknown"`   — NO PUDIMOS PREGUNTAR: el RPC falló, venció el techo de tiempo, o la respuesta no
  *      decodifica. No dice absolutamente nada sobre los fondos. NUNCA se colapsa con `"absent"`: uno
@@ -1093,7 +1094,7 @@ export type EscrowId16 = string;
  * llama "qué contestó la cadena" que dependen de algo que la cadena NO contestó. El `status` y el
  * `deadline` los dijo ella; de qué lado del `deadline` caemos lo dice el `Date.now()` del dispositivo,
  * leído dentro de `readEscrowStates`. Esa comparación está escrita DOS VECES en el adapter —ahí y en el
- * guard (`refund_before_deadline`, `../infrastructure/solana-wallet.ts:1125`)—, así que PUEDEN DIVERGIR:
+ * guard (`refund_before_deadline`, `../infrastructure/solana-wallet.ts:1258`)—, así que PUEDEN DIVERGIR:
  * lo único que las obliga a decir lo mismo es T-A16, el test que corre LAS DOS sobre el mismo borde.
  *
  * LOS INPUTS QUE LO DEMUESTRAN, y son dos porque el primero que se escribió acá no se sostenía: decía

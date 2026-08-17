@@ -209,6 +209,20 @@ export class ConfirmAndSend {
           ? PRINCIPAL_STATE_UNKNOWN
           : reason;
     r.markPayoutFailed(effective, this.clock.nowIso());
+    // 🔴 EL ENVÍO SE ABANDONÓ: lo que la billetera hubiera guardado para completar una firma ya no
+    // sirve (WKH-356/AR-MNR-1). Va acá y no en las cinco salidas de abandono porque `failAndRefund` es
+    // el punto ÚNICO por donde una remesa muere en este use-case, y una limpieza con cinco llamadores
+    // es una limpieza a la que mañana le falta el sexto.
+    //
+    // Por qué era un agujero y no una prolijidad: `terminarViaje` no la llama ningún camino de éxito
+    // de `sesion.ts` —su propio docblock lo declara y le deja el trabajo a esta HU— así que sin esto la
+    // x25519 privada del canal, la sesión y una transacción ya firmada sobrevivían hasta 20 min a la
+    // remesa que las produjo, y ese viaje rancio era además la entrada del recorrido siguiente.
+    //
+    // El `?.` no es defensivo: el método es OPCIONAL en `WalletPort` a propósito (ver su docblock), así
+    // que una billetera que no guarda nada entre invocaciones —los cuatro dobles de test, y la
+    // inyectada— no implementa nada y acá no pasa nada.
+    this.wallet.abandonarAutorizacion?.();
     await this.repo.save(r);
     try {
       const { refundTx } = await this.refund.creditBack({
@@ -300,6 +314,19 @@ export class ConfirmAndSend {
     // Superficie de ataque nueva: cero. Un estado persistido adulterado que dijera `confirmed` con un
     // `kyc` malo ya hoy atraviesa `markPrincipalIn`/`markPayoutSubmitted` sin re-chequeo. El guard
     // HEREDA esa forma; no la agrega.
+    //
+    // ⚠️ ESA FRASE NECESITA UNA CALIFICACIÓN QUE ESTE REPO NO PUEDE VER, y sin ella era una afirmación
+    // sin evidencia (CR): lo que el guard vuelve re-ejecutable es un `execute()` que llega a pedir una
+    // firma de depósito, así que "superficie cero" depende de qué hace la CADENA con un SEGUNDO
+    // `deposit` sobre la misma PDA. La PDA `escrow_state` se deriva con `["escrow", sender,
+    // id16(remittanceId)]`, o sea que es determinística por remesa: las dos invocaciones apuntan a la
+    // MISMA cuenta. Si el programa la abriera con `init_if_needed`, un segundo depósito entraría.
+    // VERIFICADO CONTRA EL REPO DEL PROGRAMA, que no está en este árbol:
+    // `solana-programs/programs/escrow/src/lib.rs:582` y `:596` usan `init`, NO `init_if_needed` ⇒ un
+    // segundo `deposit` REVIERTE en cadena. La conclusión se sostiene; lo que faltaba era poder mostrarla.
+    // (Costo declarado del `init`, que el propio Rust documenta: quien adivine los 16 bytes del
+    // `remittance_id` puede crear la cuenta primero por ~0.002 SOL y dejar ese par (sender, id) sin
+    // poder depositar nunca. Sin fondos en riesgo, y la salida es usar otro id.)
     if (r.status !== "confirmed") {
       r.confirm(this.clock.nowIso());
       await this.repo.save(r);
@@ -404,6 +431,35 @@ export class ConfirmAndSend {
     }
     // 1. PREPARE server-side (análogo a 2.7): resuelve beneficiary+authority SERVER-SIDE (NUNCA del
     //    body; AC-1/CD-7). Fallo ⇒ falla ANTES de firmar: la tx nunca salió, el deposit NO entró.
+    //
+    // ══ 🔴 QUÉ HACE LA REANUDACIÓN CON `prepare()`: LO VUELVE A LLAMAR, Y ESO CUESTA (AR/BLQ-BAJO-1) ══
+    //
+    // La decisión, con su precio dicho antes de la razón: un recorrido por enlace que cierre bien son
+    // TRES invocaciones de `execute()`, o sea **tres `prepare()`**, o sea tres órdenes de payout reales
+    // creadas server-side, tres atestaciones y tres filas de ledger. La remesa guarda sólo el ÚLTIMO
+    // `payoutId`: las dos anteriores quedan huérfanas. No es un agujero nuevo —el repo tiene la
+    // categoría y su reconciliación en `app/api/admin/reconcile-orphans/route.ts`— pero acá pasa de ser
+    // excepcional a ser el caso NORMAL del camino móvil, y eso hay que contarlo, no acotarlo con una
+    // palabra amable.
+    //
+    // ⛔ POR QUÉ NO SE PUEDE HACER LO OBVIO (saltear el prepare al reanudar y reusar lo guardado): sería
+    // firmar contra un `beneficiary` leído de `localStorage`, o sea PERDER la atestación server-side que
+    // es la razón de existir de todo ese mecanismo. Con el prepare re-corrido, el valor que se firma
+    // siempre salió de una atestación verificada EN ESTE PROCESO, y lo persistido sirve sólo para
+    // COMPARAR: un disco adulterado puede producir un falso negativo (denegar un envío legítimo) y jamás
+    // un falso positivo. Es DT-4(b) y no se ablanda.
+    //
+    // ⚠️ LO QUE ESTA HU **NO** CIERRA, declarado para que nadie lo lea como cerrado:
+    //   · La idempotencia de `prepare()` por `(remittanceId, quoteId)` es una PRECONDICIÓN que AC-5
+    //     supone y que este repo no puede medir: la `idempotencyKey` que se manda acá abajo sólo viaja
+    //     al ledger (`app/api/payout/prepare/route.ts`). Lo único que este cliente puede garantizar —y
+    //     lo garantiza, con test— es que la clave es la MISMA en todas las invocaciones, y que si el
+    //     destino vuelve distinto se CORTA fail-closed en vez de sustituirlo en silencio.
+    //   · El guard S3.5 del settle acepta CUALQUIERA de las direcciones preparadas
+    //     (`registered.includes(...)`), así que cada reanudación agranda el conjunto de destinos que el
+    //     servidor acepta, de forma monótona. Eso vive server-side y fuera del scope de esta HU; del
+    //     lado del cliente lo tapa la comparación de destino del motor de enlace, que es justamente por
+    //     qué esa comparación no es una redundancia defensiva.
     let prep: Awaited<ReturnType<SolanaPayoutPrepareGateway["prepare"]>>;
     try {
       prep = await this.solana.prepare.prepare({
@@ -513,7 +569,7 @@ export class ConfirmAndSend {
 
 /**
  * El desenlace de `ConfirmAndSend.execute()` (WKH-356). Es el reflejo, un piso más arriba, de
- * (`AutorizacionDelPrincipal`, `../ports.ts:1184`): si la billetera puede suspenderse, el use-case que
+ * (`AutorizacionDelPrincipal`, `../ports.ts:1185`): si la billetera puede suspenderse, el use-case que
  * la llama también, y colapsar eso en un `Remittance` obligaría a inventar un estado de dominio que
  * significara "la persona se fue a firmar a otra app" — un estado que no describe a la remesa sino al
  * navegador, y que además haría falta agregarlo a la FSM.

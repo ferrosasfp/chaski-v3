@@ -46,7 +46,7 @@ import type {
   SolanaEscrowRefundGateway,
   SolanaEscrowCloseGateway,
   SolanaEscrowCloseResult,
-  SolanaCloseableEscrowLister, EscrowChainState, SolanaEscrowChainStateReader, AutorizacionDelPrincipal, // WKH-349: EN ESTA LÍNEA, no en dos nuevas. `fakes.ts:835` (FAKE_SOLANA_SIGNATURE) lo citan 4 archivos por número y están todos DEBAJO de acá: dos líneas de más los rotan en silencio. WKH-356 suma `AutorizacionDelPrincipal` por lo mismo
+  SolanaCloseableEscrowLister, EscrowChainState, SolanaEscrowChainStateReader, AutorizacionDelPrincipal, // WKH-349: EN ESTA LÍNEA, no en dos nuevas. `fakes.ts:835` (FAKE_SOLANA_SIGNATURE) lo citan CINCO archivos por número (`chain.ts`, `desenlaces.ts`, `flow.test.tsx`, `lost-escrow-recovery.test.tsx`, `tx-proof.test.tsx`) y el destino está DEBAJO de acá: dos líneas de más los rotan en silencio. WKH-356 suma `AutorizacionDelPrincipal` por lo mismo. ⚠️ Acá decía CUATRO, y el quinto lo agregó el mismo commit que editó esta línea (MNR-CR-5): el número se deriva con `grep -rln 'fakes\.ts:835' src app` menos este archivo, no se recuerda
   ConnectedWalletProbe,
   CloseableEscrow,
   SolanaEscrowRefundResult,

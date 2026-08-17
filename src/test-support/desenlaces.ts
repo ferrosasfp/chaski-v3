@@ -2,11 +2,15 @@
 //
 // 🔴 POR QUÉ ARCHIVO PROPIO Y NO `fakes.ts`, medido y no por gusto:
 //   1. `fakes.ts:835` (`FAKE_SOLANA_SIGNATURE`) lo citan 5 archivos POR NÚMERO y el propio archivo lo
-//      declara en su `:49`: "dos líneas de más los rotan en silencio". Meter dos funciones ahí es
+//      declara en su `fakes.ts:49`: "dos líneas de más los rotan en silencio". (Esa cita acá iba SIN
+//      el nombre del archivo, o sea que se leía como una línea DE ESTE archivo.) Meter dos funciones ahí es
 //      exactamente eso.
-//   2. `solana-wallet.test.ts` y `solana-deposit-beneficiary.test.ts` hoy NO importan nada de
-//      `test-support/`. Los dos stubean la cadena con cuidado; arrastrarles el módulo `fakes` entero
-//      (con `bs58` y una docena de dobles) para leer un campo es superficie que nadie pidió.
+//   2. `solana-wallet.test.ts` y `solana-deposit-beneficiary.test.ts` stubean la cadena con cuidado, y
+//      arrastrarles el módulo `fakes` entero (con `bs58` y una docena de dobles) para leer un campo es
+//      superficie que nadie pidió. ⚠️ ACÁ DECÍA que esos dos archivos "hoy NO importan nada de
+//      `test-support/`", y era FALSO DESDE EL COMMIT QUE LO ESCRIBIÓ (MNR-CR-5): los dos importan de
+//      `test-support/desenlaces` —de este archivo— justamente por el cambio de esta HU. Lo que sigue
+//      siendo cierto, y es la razón de fondo, es que no importan `fakes`.
 //
 // 🔴 POR QUÉ LOS DOS TIRAN Y NO DEVUELVEN `undefined` NI UN DEFAULT. Un helper que degrada convierte
 // "el código suspendió donde este test no lo esperaba" en un `undefined` que viaja por media suite y

@@ -4,14 +4,22 @@
 // calibración de resultado conocido: uno que tenía que MORIR (invertir el guard de sender del motor)
 // dio exit=1, y uno que tenía que VIVIR (una constante sin efecto) dio exit=0.
 //
+// ⚠️ TABLA RE-MEDIDA ENTERA EN EL FIX-PACK 1 (suite COMPLETA por mutante), y CUATRO de los cinco
+// números viejos estaban bajos: la corrida anterior no había contado los `it` de los otros archivos que
+// consumen este use-case. Un conteo de `it` rojos no se puede copiar de una corrida vieja.
+//
 // | mutante                                                   | exit | `it` rojos |
 // |---|---|---|
-// | T-062-2(a) BORRAR el guard de reanudación                  | 1 | 3 (incluye T-062-2) |
-// | T-062-2(b) el guard a `if (true)`                          | 1 | 3 (incluye T-062-2) |
-// | T-062-3    el guard a `if (false)`                         | 1 | 6 (incluye T-062-3) |
-// | T-062-4    MOVER el guard 2.5 después de authorizePrincipal| 1 | 3 (incluye T-062-4) |
-// | T-062-5    congelar `nowRecheck` al `updatedAt`            | 1 | 3 (incluye T-062-5) |
-// Los DOS de T-062-2 mueren, que es lo que prueba que el `it` mide la CONDICIÓN y no sólo su efecto.
+// | T-062-2(a) BORRAR el guard de reanudación                  | 1 | 8 (incluye T-062-2) |
+// | T-062-2(b) el guard a `if (true)`                          | 1 | 7 (incluye T-062-2) |
+// | T-062-3    el guard a `if (false)`                         | 1 | 62 (incluye T-062-3) |
+// | T-062-4    MOVER el guard 2.5 después de authorizePrincipal| 1 | 5 (incluye T-062-4) |
+// | T-062-5    congelar `nowRecheck` al `updatedAt`            | 1 | 4 (incluye T-062-5) |
+// | AR/MNR-1(a) borrar el aviso de abandono de `failAndRefund`  | 1 | 3 |
+// | AR/MNR-1(b) avisar el abandono en UNA sola salida           | 1 | 1 |
+// Los DOS de T-062-2 mueren, que es lo que prueba que el `it` mide la CONDICIÓN y no sólo su efecto. Y
+// que (b) mate 1 y (a) mate 3 es lo que prueba que el aviso de abandono está en el punto ÚNICO por
+// donde la remesa muere y no colgado de una salida.
 // Tests — ConfirmAndSend: los guards que corren ANTES de tocar el money-path.
 //
 // Alcance de este archivo: SÓLO los guards previos (identidad verificada, autoridad de payout,
@@ -350,7 +358,8 @@ describe("ConfirmAndSend — reanudación tras una suspensión (WKH-356)", () =>
   }
 
   // ── T-062-2 (AC-3) ──────────────────────────────────────────────────────────────────────────────
-  // MUTANTE QUE MATA — los DOS, y por eso el `it` prueba el guard y no otra cosa:
+  // MUTANTE QUE MATA — los DOS, y por eso el `it` prueba el guard y no otra cosa (MEDIDOS: 8 y 7 `it`
+  // rojos respectivamente):
   //   (a) borrar el `if` y dejar `r.confirm(...)` suelto ⇒ tira `invalid_transition:confirmed->confirmed`.
   //   (b) cambiar el `if` a `if (true)` ⇒ tira lo mismo.
   // Si sólo muriera uno de los dos, el `it` estaría midiendo el efecto y no la condición.
@@ -375,7 +384,8 @@ describe("ConfirmAndSend — reanudación tras una suspensión (WKH-356)", () =>
   });
 
   // ── T-062-3 (AC-3) ──────────────────────────────────────────────────────────────────────────────
-  // MUTANTE QUE MATA: cambiar el guard a `if (false)` ⇒ la remesa nunca llega a `confirmed` y el
+  // MUTANTE QUE MATA (MEDIDO: exit=1, 62 `it` rojos en SEIS archivos — o sea que este guard sostiene el
+  // use-case entero): cambiar el guard a `if (false)` ⇒ la remesa nunca llega a `confirmed` y el
   // `confirm()` no se llama nunca. Es el candado que impide "arreglar" AC-3 salteando el confirm
   // SIEMPRE, que dejaría el chequeo de KYC del dominio sin correr en el PRIMER intento.
   it("T-062-3: en el PRIMER intento (`kyc_passed`) el `confirm()` del dominio SÍ se llama", async () => {
@@ -406,7 +416,8 @@ describe("ConfirmAndSend — reanudación tras una suspensión (WKH-356)", () =>
   });
 
   // ── T-062-4 (AC-4) ──────────────────────────────────────────────────────────────────────────────
-  // MUTANTE QUE MATA: mover el guard 2.5 DESPUÉS de `authorizePrincipal` ⇒ el espía cuenta 1 y el
+  // MUTANTE QUE MATA (MEDIDO: exit=1, 5 `it` rojos): mover el guard 2.5 DESPUÉS de `authorizePrincipal`
+  // —el mutante mueve el bloque de verdad, no lo neutraliza— ⇒ el espía cuenta 1 y el
   // `it` se pone rojo. Es la mitad que importa: fail-closed no es sólo "cortar", es cortar ANTES de
   // pedir una firma sobre una cotización que ya no vale.
   it("T-062-4: al reanudar con la cotización VENCIDA corta con `quote_expired_before_submit` y NUNCA pide la firma", async () => {
@@ -431,7 +442,8 @@ describe("ConfirmAndSend — reanudación tras una suspensión (WKH-356)", () =>
   });
 
   // ── T-062-5 (AC-4) ──────────────────────────────────────────────────────────────────────────────
-  // MUTANTE QUE MATA: `const nowRecheck = s.updatedAt;` en vez de `this.clock.nowIso()`. Con eso el
+  // MUTANTE QUE MATA (MEDIDO: exit=1, 4 `it` rojos): `const nowRecheck = s.updatedAt;` en vez de
+  // `this.clock.nowIso()`. Con eso el
   // re-check se evalúa en el instante de la confirmación ORIGINAL —que por construcción era válido,
   // porque `confirm()` no deja pasar una cotización vencida— y una remesa que estuvo veinte minutos
   // en la app de la billetera vuelve y firma sobre un precio muerto.
@@ -457,6 +469,82 @@ describe("ConfirmAndSend — reanudación tras una suspensión (WKH-356)", () =>
         "toda cotización pasa, porque `confirm()` nunca deja entrar una vencida",
     ).toBe("quote_expired_before_submit");
     expect(authorizeSpy).not.toHaveBeenCalled();
+  });
+
+  // ── AR/MNR-1 — el envío se abandona: hay que avisarle a la billetera ────────────────────────────
+  //
+  // 🔴 ERA UN REQUISITO EXPLÍCITO QUE 061 LE DEJÓ A ESTA HU y no estaba. El docblock de `terminarViaje`
+  // (`solana/deeplink/sesion.ts`) lo dice con estas palabras: *"cuando el caso de uso da el viaje por
+  // cerrado —salió bien o se abandona— tiene que llamar a `terminarViaje`… si no lo hace, la clave
+  // privada y la sesión viven hasta 20 minutos de más"*. MEDIDO en el AR: NINGUNA salida de abandono de
+  // `execute()` tocaba el almacén, así que la x25519 privada, la sesión y una transacción ya firmada
+  // sobrevivían a la remesa que las produjo — y ese viaje rancio era la entrada del intento siguiente.
+  //
+  // Va en `failAndRefund` y no en las cinco salidas porque es el punto ÚNICO por donde una remesa muere
+  // acá: una limpieza con cinco llamadores es una a la que mañana le falta el sexto.
+  // MUTANTE QUE MATA (a): borrar la llamada de `failAndRefund` ⇒ MEDIDO: exit=1, 3 `it` rojos (los dos
+  //   de abajo + el candado de citas, que se corre de refilón porque el mutante borra una línea).
+  // MUTANTE QUE MATA (b): moverla a UNA de las salidas (sólo la del quote vencido) ⇒ MEDIDO: exit=1, 1
+  //   `it` rojo: el del tapón DT-8, que es otra salida distinta. El primero queda verde, y ESA asimetría
+  //   es la prueba de que hace falta el punto único.
+  describe("AR/MNR-1: cuando la remesa muere, se le avisa a la billetera que abandone", () => {
+    /** Una billetera que registra el aviso. El método es OPCIONAL en el puerto, así que un doble que no
+     *  lo implemente —los cuatro de `fakes.ts`— simplemente no recibe nada, y eso también se mide. */
+    class BilleteraQueRegistraElAbandono extends FakeSolanaWallet {
+      public abandonos = 0;
+      abandonarAutorizacion(): void {
+        this.abandonos += 1;
+      }
+    }
+
+    it("la cotización vencida ⇒ se avisa el abandono", async () => {
+      const repo = new InMemoryRepo();
+      const wallet = new BilleteraQueRegistraElAbandono();
+      const id = await seedConfirmed(repo);
+
+      await new ConfirmAndSend(
+        wallet,
+        repo,
+        new ScriptedClock(["2026-07-09T18:11:00.000Z"]),
+        new FakeRefundGateway(),
+      ).execute({ remittanceId: id });
+
+      expect(
+        wallet.abandonos,
+        "la remesa murió y nadie le avisó a la billetera: la x25519 privada y la firma quedan hasta 20 min",
+      ).toBe(1);
+    });
+
+    it("el tapón DT-8 (sin `solana` inyectado) ⇒ también se avisa", async () => {
+      const repo = new InMemoryRepo();
+      const wallet = new BilleteraQueRegistraElAbandono();
+      const id = await seedConfirmed(repo);
+
+      await new ConfirmAndSend(wallet, repo, new FixedClock(), new FakeRefundGateway()).execute({
+        remittanceId: id,
+      });
+
+      expect(wallet.abandonos).toBe(1);
+    });
+
+    // Y la contracara: una billetera que NO implementa el método (los cuatro dobles de `fakes.ts`, y el
+    // camino de la billetera inyectada) no rompe nada. El `?.` no es defensivo: el método es opcional.
+    it("una billetera SIN el método no rompe el camino de abandono", async () => {
+      const repo = new InMemoryRepo();
+      const wallet = new FakeSolanaWallet();
+      expect(
+        (wallet as { abandonarAutorizacion?: unknown }).abandonarAutorizacion,
+        "este doble empezó a implementar el método y con eso el `it` dejó de medir el caso ausente",
+      ).toBeUndefined();
+      const id = await seedConfirmed(repo);
+
+      const out = esperarListo(
+        await new ConfirmAndSend(wallet, repo, new FixedClock(), new FakeRefundGateway()).execute({
+          remittanceId: id,
+        }),
+      );
+      expect(out.snapshot.failureReason).toBe("settlement_unavailable");
+    });
   });
 });
 

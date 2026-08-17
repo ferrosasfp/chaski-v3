@@ -96,11 +96,20 @@ function esTextoUtil(x: unknown): x is string {
  * Todo lo que sale de acá viene de un `JSON.parse` sobre una cadena que escribe cualquiera que pueda
  * ejecutar en este origen (o editar el disco a mano): el `as Preparado` no verifica NADA. Se valida
  * **todo campo que se use como algo más que un dato opaco**, y acá TODOS lo son:
- *   · los seis strings se COMPARAN (`beneficiary`/`authority` contra el prepare de la invocación en
- *     curso, `sender` contra la dirección del viaje, `mensajeBase64` contra los bytes que devolvió la
- *     billetera) o se COPIAN AL ENVELOPE que va al settle (`referenceBase58`). Un `undefined` que
- *     llegue a una comparación la vuelve `false` en silencio — o sea, un corte inexplicable — y uno
- *     que llegue al envelope viaja al servidor como la cadena `"undefined"`.
+ *   · los seis strings se COMPARAN o se COPIAN AL ENVELOPE que va al settle (`referenceBase58`). Un
+ *     `undefined` que llegue a una comparación la vuelve `false` en silencio — o sea, un corte
+ *     inexplicable — y uno que llegue al envelope viaja al servidor como la cadena `"undefined"`.
+ *     Quién compara qué, medido y no prometido, porque acá había una lista FALSA (decía que `sender`
+ *     se comparaba "contra la dirección del viaje", y lo que se comparaba era `p.sender` del pedido;
+ *     `remittanceId` no aparecía en ninguna comparación del repo, o sea que este registro era una
+ *     cache key sin dueño — AR/BLQ-MED-2):
+ *       · `remittanceId` y `sender` → contra los del pedido en curso, en `firma-por-enlace.ts`, para
+ *         decidir si este registro es un ancla de ESTA remesa o el resto de otra. Si no coinciden, el
+ *         registro se IGNORA (no es de acá) y más tarde se sobre-escribe.
+ *       · `beneficiary` y `authority` → contra el `prepare()` de la invocación en curso (AC-5/CD-5).
+ *       · `mensajeBase64` → contra los bytes que devolvió la billetera, en el adaptador (DT-10). Se lo
+ *         devuelve el motor por el desenlace, para que las dos capas miren la MISMA lectura.
+ *       · `referenceBase58` → no se compara con nada: se copia al envelope del settle.
  *   · un string VACÍO es peor que ausente: `"" === ""` da `true`, así que dos campos vacíos
  *     "coinciden" y el guard de destino aplaude. Por eso `esTextoUtil` y no `typeof === "string"`.
  *   · `desde` se resta contra `ahora`, así que tiene que ser un número FINITO. `Number.isFinite` y no

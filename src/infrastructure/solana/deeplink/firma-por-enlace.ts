@@ -44,9 +44,28 @@ import {
 import { guardarPreparado, leerPreparado, terminarPreparado } from "./preparado";
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
-// Las causas. Strings estables: viajan como `Error.message` desde `authorizePrincipal` y la capa de
-// presentación las traduce. Cada docblock dice QUÉ AFIRMA y QUÉ NO AFIRMA, porque la mitad de los
-// errores caros de este repo salieron de una causa que afirmaba de más.
+// Las causas. Strings estables: viajan como `Error.message` desde `authorizePrincipal`. Cada docblock
+// dice QUÉ AFIRMA y QUÉ NO AFIRMA, porque la mitad de los errores caros de este repo salieron de una
+// causa que afirmaba de más.
+//
+// 🔴 LO QUE LA PANTALLA HACE HOY CON ESTAS CAUSAS: NADA, y acá decía lo contrario. La frase anterior
+// era "la capa de presentación las traduce" y es FALSA, medido en el AR de esta HU:
+// `grep -rn "deeplink_" src/presentation` devuelve **0 resultados**, así que las nueve caen en el
+// default de `humanError` (`flow-vm.ts`) y la persona lee la MISMA frase —"Algo salió mal. Intentá de
+// nuevo."— tanto si canceló como si el blockhash venció. El trabajo de partir `rechazado` de
+// `respuesta_ilegible` sirve igual (son dos causas distintas en los logs y en cualquier copy futuro),
+// pero HOY no llega a la pantalla.
+//
+// ⛔ Y POR QUÉ EL COPY NO SE ESCRIBE EN ESTA HU, que es una decisión y no un olvido: ninguna de estas
+// causas tiene camino de producción todavía. El colaborador de enlace NO se cablea en `container.ts`
+// (CD-13, con su test en `container.test.ts`), así que un copy escrito hoy sería copy para un error
+// que nadie puede provocar — exactamente el "código muerto de money-path" que el Story File usó para
+// dejar la presentación fuera de scope. El copy es requisito de la ola 4, la misma que cablea el
+// colaborador y escribe el connect.
+//
+// 🔒 Y para que este párrafo no envejezca solo, hay un candado que lo mide en cada `npm test`:
+// `deeplink-callers.test.ts` cuenta las causas exportadas de acá y las busca en `src/presentation`.
+// El día que alguien escriba el primer copy, ese test se pone rojo y obliga a reescribir esto.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
 /**
@@ -74,7 +93,21 @@ export const DEEPLINK_SENDER_MISMATCH = "deeplink_sender_mismatch";
 export const DEEPLINK_BLOCKHASH_EXPIRED = "deeplink_blockhash_expired";
 
 /**
- * AFIRMA: lo que volvió no es lo que se pidió firmar, o la firma no verifica sobre esos bytes.
+ * AFIRMA: **no pudimos preguntarle a la cadena** si el blockhash sigue vivo (el RPC falló o venció el
+ * techo de la sonda). Y sigue siendo cierto que no se movió nada: nunca hubo POST al settle.
+ * NO AFIRMA: ⛔ que el blockhash haya vencido. Es el tercer valor que `deeplink_blockhash_expired` no
+ * puede escribir, y existe por eso: colapsarlos convierte "no pude preguntar" en "no pasó", que es la
+ * clase de error que este repo tiene medida. Consecuencia operativa, y es la mitad que importa: con
+ * esta causa el recorrido **NO se limpia**, así que las dos firmas siguen en el disco y un reintento
+ * puede completarlo. Con `deeplink_blockhash_expired` sí se limpia, porque ahí la transacción está
+ * muerta para siempre.
+ */
+export const DEEPLINK_BLOCKHASH_DESCONOCIDO = "deeplink_blockhash_desconocido";
+
+/**
+ * AFIRMA: lo que volvió no es lo que se pidió firmar, o la firma no verifica sobre esos bytes, o lo
+ * que este dispositivo recordó como firma no es una firma (un `object` en el disco donde tenía que
+ * haber un string base58).
  * NO AFIRMA: ⛔ que la persona haya cancelado. A la persona NO se le muestra "cancelaste" con esto.
  */
 export const DEEPLINK_TX_ALTERADA = "deeplink_tx_alterada";
@@ -112,6 +145,7 @@ export type CausaDeEnlace =
   | typeof DEEPLINK_PREPARE_DIVERGED
   | typeof DEEPLINK_SENDER_MISMATCH
   | typeof DEEPLINK_BLOCKHASH_EXPIRED
+  | typeof DEEPLINK_BLOCKHASH_DESCONOCIDO
   | typeof DEEPLINK_TX_ALTERADA
   | typeof DEEPLINK_SIN_MEMORIA
   | typeof DEEPLINK_RECHAZADO
@@ -178,6 +212,17 @@ export type DesenlaceDeFirma =
       transaccionFirmadaBase58: string;
       firmaDePatrocinio: string;
       referenceBase58: string;
+      /**
+       * 🔴 EL ANCLA, DEVUELTA POR EL MISMO CAMINO QUE LA `reference`, y no es comodidad: es lo que
+       * hace que el adaptador compare contra **el mismo registro que este motor validó**.
+       *
+       * Antes el adaptador volvía a llamar `leerPreparado` con OTRO `Date.now()`, así que había dos
+       * lectores del mismo registro con dos relojes y la responsabilidad partida en dos capas (el
+       * motor anclaba `beneficiary`/`authority`, el adaptador anclaba los bytes). Con esto hay una
+       * sola lectura, un solo reloj, y desaparece la rama "leí el registro y ya no está" que nadie
+       * podía alcanzar.
+       */
+      mensajeBase64: string;
     }
   | { tipo: "corte"; causa: CausaDeEnlace };
 
@@ -195,6 +240,22 @@ function estaConectado(v: Viaje): v is ViajeConectado {
     typeof v.session === "string" &&
     typeof v.direccion === "string"
   );
+}
+
+/**
+ * ¿Esto que salió del disco es una firma, o es lo que alguien dejó ahí?
+ *
+ * 🔴 POR QUÉ HACE FALTA, medido en el AR: `leerViaje` NO valida los resultados a propósito —su
+ * docblock dice que los campos que sólo se copian los valida quien los usa— y el que los usa es este
+ * archivo. Con `firmaDePatrocinio: {"no":"soy un string"}` en el disco, `authorizePrincipal` devolvía
+ * `{ estado: "listo" }` con un `popSignature` de tipo `object`, y eso es lo que se POSTea al settle.
+ * Es el único de los campos que se COPIA A LA RED, o sea el único que no se puede dejar sin mirar.
+ *
+ * Vacío es peor que ausente: `"" === ""` da `true`, así que un string vacío "coincide" con otro y pasa
+ * por comparaciones que tendrían que cortar. Es la misma razón que `esTextoUtil` en `preparado.ts`.
+ */
+function esFirmaUtil(x: unknown): x is string {
+  return typeof x === "string" && x.trim() !== "";
 }
 
 /**
@@ -224,15 +285,54 @@ function firmaDelSender(transaccionBase58: string, sender: string): string | nul
  */
 export class FirmaPorEnlaceReal implements FirmaPorEnlace {
   resolver(p: PedidoDeFirma): DesenlaceDeFirma {
-    // 🔴 LA LIMPIEZA VA EN UN SOLO LUGAR Y SE LLAMA EN TODAS LAS SALIDAS DE CORTE (CD-10/T6).
-    // `terminarViaje` es la única limpieza que existe y SE LLEVA LOS RESULTADOS con ella, así que
-    // llamarla antes de haber leído lo que hace falta destruye una firma que la persona ya dio. Por
-    // eso está acá abajo, encapsulada, y nunca suelta en medio de una rama.
+    // 🔴 LA LIMPIEZA DE LOS CORTES VA EN UN SOLO LUGAR (CD-10/T6). `terminarViaje` es la única
+    // limpieza que existe y SE LLEVA LOS RESULTADOS con ella, así que nunca va suelta en medio de una
+    // rama.
     //
     // ⛔ Y NO SE LLAMA EN EL `"salto"`: ahí el viaje tiene que SOBREVIVIR, que es su razón de existir.
+    //
+    // ══ 🔴 UN CORTE NO PUEDE DESTRUIR UNA FIRMA QUE LA PERSONA YA DIO (AR/BLQ-ALTO-1) ══════════════
+    //
+    // Acá había un `terminarViaje` incondicional y era el agujero más caro de esta HU, MEDIDO: con un
+    // viaje vigente que tenía una `transaccionFirmada` adentro —un depósito del camino del dinero que
+    // la persona ya firmó y que NO ESTÁ EN MEMORIA DE NADIE, porque la página murió en el salto— tres
+    // entradas distintas la tiraban a la basura:
+    //   · `?rem=…&dl=firmar-tx`                          (una recarga o el botón atrás) ⇒ viaje BORRADO
+    //   · `?rem=…&dl=firmar-patrocinio&errorCode=4001`   ⇒ viaje BORRADO
+    //   · un `prepare()` que devolvió otro destino        ⇒ viaje BORRADO
+    // Y los dos del medio los dispara TEXTO DE URL QUE NADIE AUTENTICÓ: el `errorCode` viaja sin
+    // cifrar y lo escribe quien arme el enlace. Un enlace pegado en un chat, abierto a mitad de
+    // recorrido, tiraba la firma del depósito. Es la trampa T4 que 061 midió, descargada sólo para
+    // `manos-vacias`; por eso 061 decidió que un rechazo NO consuma el paso, y esto hacía algo peor.
+    //
+    // LA REGLA, y es la única que hace falta: **si en el disco hay un resultado que la persona ya
+    // firmó, el corte NO borra nada.** Nada de excepciones por causa: cualquier causa que se agregue
+    // mañana la hereda.
+    //
+    // ⚠️ LO QUE ESTO CUESTA, dicho sin suavizar: cuando el corte preserva, la x25519 privada del canal
+    // y la sesión sobreviven hasta que `MAX_EDAD_MS` (20 min) las venza, que es justo lo que CD-10
+    // quería evitar. Se elige el costo a sabiendas por tres razones medidas: (1) el camino del
+    // `"salto"` YA deja exactamente eso en el disco por diseño, con la misma ventana, así que no es
+    // una clase de exposición nueva; (2) del otro lado lo que se destruye es una firma del camino del
+    // dinero que no existe en ningún otro lugar del universo; y (3) el que abandona de verdad —la
+    // remesa muere— tiene su propia limpieza, que es `abandonarAutorizacion()` en el adaptador
+    // (AR/MNR-1). "Se venció el paso" no es "se abandonó el envío".
+    //
+    // Y por qué se preserva TAMBIÉN el `Preparado` y no sólo el viaje: el `mensajeBase64` del registro
+    // es lo ÚNICO contra lo que esa firma se puede verificar. Guardar la firma y borrar su ancla es
+    // guardar algo que ya no sirve.
     const cortar = (causa: CausaDeEnlace): DesenlaceDeFirma => {
-      terminarViaje(p.almacen);
-      terminarPreparado(p.almacen);
+      const enDisco = leerViaje(p.almacen, p.ahora);
+      const yaFirmado =
+        enDisco.tipo === "hay" &&
+        (esFirmaUtil(enDisco.viaje.transaccionFirmada) ||
+          esFirmaUtil(enDisco.viaje.firmaDePatrocinio));
+      // Basura en el campo de un resultado NO cuenta como firma: preservarla dejaría el recorrido
+      // trabado hasta que la ventana lo mate, sin nada que salvar.
+      if (!yaFirmado) {
+        terminarViaje(p.almacen);
+        terminarPreparado(p.almacen);
+      }
       return { tipo: "corte", causa };
     };
 
@@ -254,40 +354,35 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
     // adulterado sólo puede producir un falso NEGATIVO (denegar un envío legítimo) y jamás un falso
     // positivo.
     const registro = leerPreparado(p.almacen, p.ahora);
-    if (registro.tipo === "hay") {
+    // 🔴 UN REGISTRO DE OTRA REMESA (O DE OTRA CUENTA) NO ES UN ANCLA — AR/BLQ-MED-2.
+    //
+    // La clave del `Preparado` es un SINGLETON del origen: no lleva la remesa ni el sender adentro.
+    // Acá se comparaban `beneficiary` y `authority` y nada más, y los dos campos que sí dicen de quién
+    // es el registro se persistían **y no los leía nadie**. Es el equivalente exacto de una cache key
+    // sin `user_id`: un registro sobreviviente de otra remesa —o de otra cuenta de la misma
+    // billetera— pasaba el guard y se adoptaba como ancla, con su `mensajeBase64` y su
+    // `referenceBase58` ajenos. MEDIDO: con `remittanceId: "rem-DE-OTRA-REMESA"` y el mismo par
+    // beneficiary/authority, el motor NO cortaba y el disco se quedaba con el registro ajeno.
+    //
+    // ⚠️ Y POR QUÉ ACÁ SE IGNORA EN VEZ DE CORTAR, al revés que con el viaje de más abajo: el
+    // `Preparado` no tiene adentro ninguna firma ni ninguna clave —son identificadores y bytes
+    // públicos— y sin el viaje de SU remesa no sirve para nada. Ignorarlo no destruye nada (la
+    // sobre-escritura recién ocurre cuando ya se validó que el viaje es de ESTA remesa) y deja que el
+    // recorrido nuevo empiece limpio. El viaje, en cambio, SÍ puede tener una firma adentro, y por eso
+    // ése corta sin borrar.
+    const ancla =
+      registro.tipo === "hay" &&
+      registro.preparado.remittanceId === p.remittanceId &&
+      registro.preparado.sender === p.sender
+        ? registro.preparado
+        : null;
+    if (ancla !== null) {
       // Los DOS campos, no uno: `authority` es quien puede liberar el vault. Comparar sólo el
       // `beneficiary` deja pasar una sustitución de la autoridad de release, que es la mitad cara.
-      if (
-        registro.preparado.beneficiary !== p.beneficiary ||
-        registro.preparado.authority !== p.authority
-      ) {
+      if (ancla.beneficiary !== p.beneficiary || ancla.authority !== p.authority) {
         return cortar(DEEPLINK_PREPARE_DIVERGED);
       }
     }
-    // Primera invocación: no hay nada contra qué comparar todavía, así que se ESCRIBE el registro
-    // ANTES de pedir cualquier salto.
-    //
-    // ⚠️ `guardarPreparado` TIRA a propósito y esa excepción sube tal cual, igual que `guardarViaje`.
-    // Si el disco no acepta el registro, saltar sería mandar a la persona a firmar algo contra lo
-    // que este dispositivo no va a poder comparar nada al volver — y esa comparación es lo único que
-    // hay del lado del cliente contra una sustitución de depositante (AC-5). Que no salte es el
-    // comportamiento correcto.
-    const preparado =
-      registro.tipo === "hay"
-        ? registro.preparado
-        : (() => {
-            const nuevo = {
-              remittanceId: p.remittanceId,
-              sender: p.sender,
-              beneficiary: p.beneficiary,
-              authority: p.authority,
-              mensajeBase64: p.mensajeBase64,
-              referenceBase58: p.referenceBase58,
-              desde: p.ahora,
-            };
-            guardarPreparado(p.almacen, nuevo);
-            return nuevo;
-          })();
 
     // ── 2 · CD-11 / T12 — el viaje sólo puede COINCIDIR con el sender, nunca sustituirlo ──────────
     //
@@ -378,38 +473,104 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
       }
     }
 
-    // ── 5 · Qué falta — POR RESULTADOS, NUNCA por `viaje.paso` (T8) ───────────────────────────────
+    // ── 5 · El viaje del disco tiene que ser DE ESTA REMESA ───────────────────────────────────────
+    //
+    // `interpretarVuelta` compara la remesa —y por eso existe `otra-remesa`— pero SÓLO cuando la URL
+    // trae una respuesta. Por el camino `no-volvimos` / `huerfana-manos-vacias` nadie la compara, y los
+    // resultados guardados de OTRA remesa entraban acá como si fueran de ésta (mismo defecto que el
+    // `Preparado` del paso 1, y el `Viaje` es el que tiene las firmas adentro).
+    //
+    // Va DESPUÉS del `switch` a propósito: puesto antes dejaría `case "otra-remesa"` sin ningún camino
+    // que lo alcance, y una rama inalcanzable con un test es una fantasía congelada. `no-volvimos` no
+    // consume ningún paso, así que llegar hasta acá no cuesta nada.
+    if (viaje.remittanceId !== p.remittanceId) return cortar(DEEPLINK_VIAJE_VENCIDO);
+
+    // ── 6 · Qué falta — POR RESULTADOS, NUNCA por `viaje.paso` (T8) ───────────────────────────────
     //
     // `Viaje.paso` queda RANCIO por construcción: dice qué se fue a pedir en el salto en curso, no
-    // qué se consiguió. Decidir con él manda al salto equivocado y le pide a la persona dos veces la
-    // misma firma. Los resultados se releen del disco DESPUÉS de `interpretarVuelta`, porque es esa
-    // llamada la que acaba de escribir el resultado del paso que volvió.
-    const despues = leerViaje(p.almacen, p.ahora);
-    if (despues.tipo !== "hay") return cortar(DEEPLINK_VIAJE_VENCIDO);
-    const conseguido = despues.viaje;
-    if (!estaConectado(conseguido)) return cortar(DEEPLINK_VIAJE_VENCIDO);
-    const txFirmada = conseguido.transaccionFirmada;
-    const patrocinio = conseguido.firmaDePatrocinio;
+    // qué se consiguió.
+    //
+    // 🔴 DE DÓNDE SALEN LOS RESULTADOS, y por qué acá ya no hay un segundo `leerViaje`. Antes se releía
+    // el disco entero "porque `interpretarVuelta` acaba de escribir el resultado del paso que volvió",
+    // y esa relectura traía dos ramas de error que NADIE podía alcanzar (medido: convertirlas en
+    // `throw` no las dispara en la suite completa) — el mismo caso que este repo ya resolvió BORRANDO
+    // la rama imposible en vez de dejarla sin test (`sesion.ts`, docblock de `LecturaDelViaje`).
+    // El resultado que acaba de llegar viene EN LA `Vuelta` misma, y el guard de `persistencia` de más
+    // arriba ya garantizó que el disco lo aceptó, así que releerlo no agregaba información: sólo
+    // agregaba un segundo reloj y dos cortes fantasma.
+    const txFirmadaCruda =
+      vuelta.tipo === "tx-firmada" ? vuelta.transaccionBase58 : viaje.transaccionFirmada;
+    const patrocinioCrudo =
+      vuelta.tipo === "patrocinio-firmado" ? vuelta.firma : viaje.firmaDePatrocinio;
+    // Presente pero basura ⇒ corte, no "ausente": tratarlo como ausente le pediría a la persona una
+    // firma que ya dio. Ver `esFirmaUtil` por qué el disco puede traer un `object` acá.
+    if (txFirmadaCruda !== undefined && !esFirmaUtil(txFirmadaCruda))
+      return cortar(DEEPLINK_TX_ALTERADA);
+    if (patrocinioCrudo !== undefined && !esFirmaUtil(patrocinioCrudo))
+      return cortar(DEEPLINK_TX_ALTERADA);
+    const txFirmada = txFirmadaCruda;
+    const patrocinio = patrocinioCrudo;
 
-    // ── 6 · Los `DatosDeSesion`, armados en UN SOLO SITIO (T10) ───────────────────────────────────
+    // ── 7 · Los `DatosDeSesion`, armados en UN SOLO SITIO (T10) ───────────────────────────────────
     //
     // ⛔ `secreta` y `publica` son las DOS base58 de 32 bytes y NADA detecta que se intercambien
     // hasta que la vuelta no abre. Por eso se arman una sola vez: `clavePublicaDeLaApp` sale de
     // `viaje.publica` (la que la billetera ya vio) y el secreto compartido de `secretaBytes` (la
     // privada, que NO sale de este módulo).
     const sesion = (paso: "firmar-tx" | "firmar-patrocinio"): DatosDeSesion => ({
-      billetera: conseguido.billetera,
+      billetera: viaje.billetera,
       appUrl: p.appUrl,
       redirectLink: enlaceDeVuelta(p.hrefActual, paso), // el href COMPLETO (T9)
-      clavePublicaDeLaApp: bs58.decode(conseguido.publica),
-      secreto: secretoCompartido(conseguido.claveBilletera, despues.secretaBytes),
-      session: conseguido.session,
+      clavePublicaDeLaApp: bs58.decode(viaje.publica),
+      secreto: secretoCompartido(viaje.claveBilletera, lectura.secretaBytes),
+      session: viaje.session,
     });
 
-    // Falta la firma de la transacción ⇒ salto 2. ⛔ El orden `firmar-tx` → `firmar-patrocinio` es
-    // fijo (AC-6) y no es una convención: el mensaje de patrocinio lleva ADENTRO la firma de la
-    // transacción, así que pedirlo antes es imposible, no sólo incorrecto.
+    // ── 8 · Falta la firma de la transacción ⇒ salto 2, Y EL ANCLA SE PONE SOBRE **ESTA** TX ───────
+    //
+    // ⛔ El orden `firmar-tx` → `firmar-patrocinio` es fijo (AC-6) y no es una convención: el mensaje
+    // de patrocinio lleva ADENTRO la firma de la transacción, así que pedirlo antes es imposible.
+    //
+    // ══ 🔴 EL ANCLA Y LA TX QUE SE MANDA A FIRMAR SON LA MISMA COSA (AR/BLQ-MED-1) ═════════════════
+    //
+    // Acá estaba el segundo agujero caro de la HU. El `Preparado` se escribía UNA vez —en la primera
+    // invocación— y no se refrescaba nunca, pero el salto del paso 2 se puede pedir más de una vez (y
+    // se va a pedir: la persona vuelve sin haber firmado, y ése es el caso más común que existe), y
+    // cada invocación rearma la tx con `reference` nueva, `deadline` nuevo y blockhash nuevo. O sea:
+    // se le pedía firmar txB mientras el ancla seguía siendo msgA. MEDIDO: la invocación final tiraba
+    // `deeplink_tx_alterada` —una causa FALSA, la billetera había devuelto exactamente lo que se le
+    // pidió— y de paso destruía las dos firmas. El recorrido era **estructuralmente incapaz de
+    // cerrar** en cuanto hubiera un segundo pedido del paso 2.
+    //
+    // La regla ahora es una sola línea de invariante: **el registro describe la tx que se está
+    // mandando a firmar en este mismo momento.** Por eso la escritura vive acá, pegada al salto, y no
+    // arriba.
+    //
+    // ⚠️ TRES COSAS QUE ESTA ESCRITURA **NO** HACE, y hay que leerlas juntas:
+    //   · NO puede mover `beneficiary`/`authority`. Si hubieran divergido, el paso 1 ya cortó; si no
+    //     divergieron, los de `p` son idénticos a los del registro. AC-5/CD-5 no se ablanda ni un
+    //     poco: lo único que se mueve son los dos campos que DESCRIBEN la transacción.
+    //   · NO refresca `desde`. Refrescarlo dejaría la ventana de 20 min corriendo de nuevo en cada
+    //     invocación, o sea una ventana cuya duración la elige quien pueda provocar invocaciones. El
+    //     recorrido vence cuando venció, no cuando se lo mira.
+    //   · NO se ejecuta cuando ya hay una tx firmada. La condición del `if` ES la garantía: sólo se
+    //     re-ancla cuando se va a mandar una tx nueva. Si la billetera ya devolvió la firma, el ancla
+    //     es la de la tx que se firmó y nadie la toca.
+    //
+    // Y sigue valiendo lo de siempre: `guardarPreparado` TIRA a propósito (igual que `guardarViaje`) y
+    // esa excepción sube tal cual. Si el disco no acepta el registro, saltar sería mandar a la persona
+    // a firmar algo contra lo que este dispositivo no va a poder comparar nada al volver — y esa
+    // comparación es lo único que hay del lado del cliente contra una sustitución de depositante.
     if (txFirmada === undefined) {
+      guardarPreparado(p.almacen, {
+        remittanceId: p.remittanceId,
+        sender: p.sender,
+        beneficiary: p.beneficiary,
+        authority: p.authority,
+        mensajeBase64: p.mensajeBase64,
+        referenceBase58: p.referenceBase58,
+        desde: ancla?.desde ?? p.ahora,
+      });
       return {
         tipo: "salto",
         irA: urlFirmarTransaccion({
@@ -419,6 +580,14 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
         esperando: "firma-tx",
       };
     }
+
+    // ── 9 · Hay una firma en el disco y no hay ancla contra la que verificarla ─────────────────────
+    //
+    // Este es el `deeplink_sin_memoria` que antes vivía en el adaptador, donde nadie podía alcanzarlo
+    // ni testearlo. Acá sí: pasa cuando el registro venció, cuando se limpió solo por basura, o cuando
+    // el que quedó es de otra remesa. Sin `mensajeBase64` no hay con qué hacer la verificación
+    // bytes-contra-bytes, y firmar el settle sin ella sería aceptar lo que devuelva el canal.
+    if (ancla === null) return cortar(DEEPLINK_SIN_MEMORIA);
 
     // AC-8 / CD-7 — con la tx ya firmada NO se vuelve a pedir esa firma: se sigue por el salto que
     // falta. Reiniciar los tres saltos sería pedirle a la persona una firma que ya dio.
@@ -437,17 +606,23 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
       };
     }
 
-    // ── 7 · Están las dos ⇒ completo. LEER TODO PRIMERO, limpiar DESPUÉS (CD-10/T6) ───────────────
-    // `referenceBase58` sale del REGISTRO PERSISTIDO y no de `p`: la reference que vale es la que
-    // está DENTRO de la transacción firmada, no la de la tx que esta invocación armó y descartó.
-    const desenlace: DesenlaceDeFirma = {
+    // ── 10 · Están las dos ⇒ completo ─────────────────────────────────────────────────────────────
+    //
+    // `referenceBase58` y `mensajeBase64` salen del ANCLA y no de `p`: los dos describen la
+    // transacción que está firmada, no la que esta invocación armó y descartó.
+    //
+    // ⛔ Y ACÁ **NO** SE LIMPIA, que es un cambio deliberado respecto de la primera versión (AR/MNR-3).
+    // La limpieza del camino de éxito la hace el adaptador DESPUÉS de verificar los bytes y de
+    // preguntarle a la cadena por el blockhash, porque esas dos cosas pueden fallar: si se limpiara
+    // acá, un RPC que no contesta dejaría a la persona sin nada que reanudar sobre un recorrido cuyas
+    // dos firmas estaban perfectas. CD-10 pide "leer, usar, y DESPUÉS limpiar": el uso termina en el
+    // adaptador, así que ahí termina la limpieza.
+    return {
       tipo: "completo",
       transaccionFirmadaBase58: txFirmada,
       firmaDePatrocinio: patrocinio,
-      referenceBase58: preparado.referenceBase58,
+      referenceBase58: ancla.referenceBase58,
+      mensajeBase64: ancla.mensajeBase64,
     };
-    terminarViaje(p.almacen);
-    terminarPreparado(p.almacen);
-    return desenlace;
   }
 }

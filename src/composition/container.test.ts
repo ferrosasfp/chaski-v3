@@ -704,9 +704,16 @@ describe("createContainer — WKH-354/AC-2: el probe del container lee la billet
 // Escribirlo en un documento no alcanza: la lección `tests-que-registran-el-doble-no-prueban-el-
 // cableado` dice que si nadie MIDE el cableado, alguien va a leer "la HU está hecha" como "el flujo
 // móvil anda". Esto lo mide.
-// ⚠️ CD-15 · MUTANTE CORRIDO (2026-08-17): pasarle al `SolanaWalletAdapter` de `container.ts` un
-// 3er argumento `{ resolver: … }` ⇒ exit=1 y UN solo `it` rojo, el T-062-21. Aguja contada con
-// `== 1`, relectura del disco, restauración verificada byte a byte.
+// ⚠️ CD-15 · MUTANTES CORRIDOS (2026-08-17, re-medidos en el fix-pack 1), suite COMPLETA, aguja
+// contada con `== 1`, relectura del disco, restauración verificada byte a byte:
+//
+// | mutante                                                              | exit | `it` rojos |
+// |---|---|---|
+// | cablear el colaborador en `container.ts` (3er argumento)              | 1 | 2 |
+// | invertir el `if (this.firmaPorEnlace)` del adaptador                  | 1 | **46, NINGUNO de este archivo** |
+//
+// El primero mata el T-062-21 de acá + el candado de citas ancladas (la línea nueva en `container.ts`
+// desplaza citas; es colateral y va dicho).
 describe("createContainer — WKH-356/CD-13: la firma por enlace NO está cableada al cerrar 062", () => {
   it("T-062-21: el `SolanaWalletAdapter` del container se construye SIN colaborador de enlace", () => {
     const c = createContainer();
@@ -727,7 +734,21 @@ describe("createContainer — WKH-356/CD-13: la firma por enlace NO está cablea
   // ⛔ Y el candado complementario: que el colaborador ausente signifique EL CAMINO DE HOY, no un
   // camino degradado. Con `firmaPorEnlace === undefined` la rama entera vive adentro de un `if`, así
   // que `authorizePrincipal` recorre exactamente el código de antes de esta HU (CD-1).
-  // MUTANTE QUE MATA: invertir el `if (this.firmaPorEnlace)` a `if (!this.firmaPorEnlace)`.
+  // 🔴 ACÁ HABÍA UNA PROMESA FALSA, Y EL CR LA MIDIÓ (CD-15 en FAIL). Decía «MUTANTE QUE MATA: invertir
+  // el `if (this.firmaPorEnlace)`», y ese mutante **deja este archivo entero en verde**: 33/33. La razón
+  // es de este `it` y no del mutante: `authorizePrincipal` se llama SIN `deposit`, así que muere en el
+  // guard `escrow_params_missing` **antes** de llegar a la rama, y por eso invertirla no lo mueve.
+  //
+  // LO QUE ESE MUTANTE SÍ HACE, MEDIDO en la batería del fix-pack 1: exit=1 con **46 `it` rojos**, todos
+  // en `solana-wallet.test.ts` y `solana-deposit-beneficiary.test.ts` — o sea que el candado de CD-1 es
+  // la suite del adaptador, no este `it`. Y eso es información útil: significa que esos ~46 `it` SÍ
+  // atraviesan este código y que el `if` es lo que los protege.
+  //
+  // MUTANTE QUE MATA ESTE `it` (MEDIDO: exit=1, 3 `it` rojos — éste, el `it` de CD-SDD-8 del adaptador
+  // y el candado de citas por el desplazamiento): borrar el guard `escrow_params_missing` ⇒ la causa
+  // deja de ser la pre-existente y el `expect` de abajo cae. O sea: lo que este `it` fija es que el
+  // camino que corre sin colaborador sigue muriendo en un guard VIEJO, no en uno del vocabulario
+  // `deeplink_*`.
   it("T-062-21b: y con el colaborador ausente el retorno del camino inyectado sigue siendo `listo`", async () => {
     solanaWalletBridge.setState({
       publicKey: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",

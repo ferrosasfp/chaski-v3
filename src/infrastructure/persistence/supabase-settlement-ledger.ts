@@ -676,7 +676,7 @@ export class SupabaseSettlementLedger implements SettlementLedger {
       const p = typeof r.payout_provenance === "string" ? r.payout_provenance : "";
       if (!REAL_PAYOUT_PROVENANCES.has(p)) continue;
       // `payout_id` NO tiene índice único en el schema, y el multi-fila está DECLARADO: un payout_id
-      // correlaciona con una fila por quoteId (`WebhookOutcome`, `../../application/ports.ts:714`). Con
+      // correlaciona con una fila por quoteId (`WebhookOutcome`, `../../application/ports.ts:715`). Con
       // dos desenlaces reales y discordantes no sabemos cuál vale. ⛔ Quedarse con el primero sería
       // fabricar un terminal a partir de una moneda al aire, y un `settled` de más es IRREVERSIBLE
       // (`RECOVERABLE`, `../../application/use-cases/recover-escrow-funds.ts:40`).

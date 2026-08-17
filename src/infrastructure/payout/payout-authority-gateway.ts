@@ -6,8 +6,10 @@
 // Eso significa exactamente una cosa: que ESTE gate no bloquea. Acá decía "el demo local sigue
 // llegando a Entregado", y era falso: con el flag de settlement Solana apagado la remesa muere dos
 // pasos más adelante, en el tapón DT-8 de ConfirmAndSend (sin `solana` inyectado → failAndRefund
-// con `settlement_unavailable` → payout_failed → refunded, confirm-and-send.ts:357-360). Nunca
-// llegaba a "Entregado" por este camino, y desde el fix del FallbackPayoutGateway tampoco por el
+// con `settlement_unavailable` → payout_failed → refunded, confirm-and-send.ts:386-392: el rango
+// incluye el docblock de DT-8 Y la llamada, que es lo que la frase promete — antes apuntaba a un rango
+// que NO contenía el token `settlement_unavailable`, ni antes ni después del corrimiento, MNR-CR-4).
+// Nunca llegaba a "Entregado" por este camino, y desde el fix del FallbackPayoutGateway tampoco por el
 // otro. Un comentario que promete un final feliz apaga la búsqueda justo donde había que mirar.
 // Exemplar: kyc-gateway.ts.
 import type { PayoutAuthorityGateway, PayoutAuthorization } from "../../application/ports";

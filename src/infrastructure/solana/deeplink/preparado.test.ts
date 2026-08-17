@@ -1,6 +1,8 @@
 // ⚠️ CD-15 · LOS MUTANTES DE ESTE ARCHIVO SE CORRIERON (2026-08-17). `spawnSync` sin pipes, aguja
-// contada con `== 1`, relectura del disco, restauración verificada byte a byte. 14 mutantes: 13
-// murieron y UNO SOBREVIVIÓ, y el que sobrevivió está escrito al lado de su `it` en vez de tapado.
+// contada con `== 1`, relectura del disco, restauración verificada byte a byte. **15 mutantes: 14
+// murieron y UNO SOBREVIVIÓ**, y el que sobrevivió está escrito al lado de su `it` en vez de tapado.
+// (Acá decía "14 mutantes: 13 murieron" con una tabla de QUINCE filas: el número de la prosa no lo
+// verificaba nada y su propio artefacto lo contradecía — MNR-CR-5. Se cuentan las filas, no la memoria.)
 //
 // | mutante                                                        | exit | `it` rojos |
 // |---|---|---|
@@ -18,7 +20,15 @@
 // | `guardarPreparado` se traga la excepción del disco              | 1 | 2 |
 // | `terminarPreparado` TIRA (se le saca el try/catch)              | 1 | 1 |
 // | el `leer` sin try/catch                                        | 1 | 1 |
-// | reusar la CLAVE del viaje                                      | 1 | 6 |
+// | reusar la CLAVE del viaje                                      | 1 | 66 |
+//
+// ⚠️ ESTA TABLA SE RE-MIDIÓ ENTERA EN EL FIX-PACK 1 (2026-08-17) y DOS NÚMEROS CAMBIARON, porque
+// cambiaron los tests que rodean a este archivo, no el archivo: «reusar la CLAVE del viaje» pasó de 6 a
+// **66** `it` rojos (ahora arrastra `firma-por-enlace.test.ts` y `solana-wallet.test.ts` completos) y
+// «`guardarPreparado` se traga la excepción» dio 2. Los 15 mutantes se corrieron con la suite COMPLETA
+// (136 archivos) y no sólo con este archivo: es lo que hace visible que un cambio de acá se lleva
+// puesto medio recorrido, y es la razón por la que el conteo de `it` rojos no se puede copiar de una
+// corrida vieja.
 //
 // Que los seis campos tengan UN mutante cada uno —y que cada uno mate SÓLO sus tres `it`— es lo que
 // prueba que los seis están mirados, y no que "alguno" lo esté.

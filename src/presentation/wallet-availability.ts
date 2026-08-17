@@ -50,8 +50,8 @@ export function useWalletAvailability(): SolanaWalletAvailability {
  *
  * En el servidor devuelve `null` y no una dirección: el servidor no sabe qué tiene conectado el
  * navegador de nadie, y `null` acá significa "no hay ninguna billetera conectada": el mismo
- * significado de `null` que `ConnectedWalletProbe` (`../application/ports.ts:540`), que es
- * bi-estado a propósito (`ports.ts:536`). Nadie puede leer este `null` como "cambió la cuenta".
+ * significado de `null` que `ConnectedWalletProbe` (`../application/ports.ts:541`), que es
+ * bi-estado a propósito (`ports.ts:537`). Nadie puede leer este `null` como "cambió la cuenta".
  *
  * ⚠️ ESTA ES LA LECTURA RENDER-TIME, y existe además del puerto por una razón de React y no por
  * gusto: `useSyncExternalStore` exige un `getSnapshot` SÍNCRONO, y

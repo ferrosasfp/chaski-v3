@@ -996,7 +996,7 @@ describe("WKH-200 poll stop (fake timers)", () => {
 
 /** Confirmada y NADA MÁS: `principalTx` sigue en null, o sea que la billetera todavía no firmó
  *  ningún depósito. Es el punto exacto en el que corta el `prepare`
- *  (`failAndRefund`, `../application/use-cases/confirm-and-send.ts:425`, con `"not_deposited"`), o sea que es la única
+ *  (`failAndRefund`, `../application/use-cases/confirm-and-send.ts:481`, con `"not_deposited"`), o sea que es la única
  *  forma que tiene una remesa cuyo `failureReason` es un fallo ANTERIOR a la primera firma. */
 function solanaConfirmedSnapshot(expiresAt: string): RemittanceState {
   const r = Remittance.create("rem-1", beneficiary(), Money.of(400, "USDC"), T0);
@@ -1409,7 +1409,7 @@ describe("los tres casos, dichos con palabras distintas", () => {
   });
 
   // Hallazgo #75 — el rechazo del agente de payout tampoco es un fallo de entrega. El prepare corre
-  // ANTES de authorizePrincipal ((`prepare_unavailable`, `confirm-and-send.ts:421`)), o sea antes de que la wallet firme
+  // ANTES de authorizePrincipal ((`prepare_unavailable`, `confirm-and-send.ts:477`)), o sea antes de que la wallet firme
   // nada: "no se movió ningún USDC" es un hecho que se lee del orden del use-case. Decirlo con las
   // palabras del payout fallido ("si te cobramos, te reembolsamos") deja esperando un reembolso que
   // no existe, por una causa que se arregla re-cotizando.
@@ -3111,16 +3111,18 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
 // tercer desenlace es `{ estado: "hay-que-salir", irA, esperando }`, y lo único que la pantalla tiene
 // que hacer con él es NAVEGAR.
 //
-// ⚠️ MUTANTE QUE MATA: ignorar la variante y caer al camino normal ⇒ la pantalla avanza a `track` y le
+// ⚠️ MUTANTE QUE MATA (MEDIDO en el fix-pack 1: exit=1, 1 `it` rojo, éste): ignorar la variante y caer
+// al camino normal ⇒ la pantalla avanza a `track` y le
 // dice a la persona que su plata está en camino SIN QUE SE HAYA FIRMADO NADA. Es el peor desenlace
 // posible de este cambio, y el `as unknown as ConfirmAndSend` del doble saca el shape del alcance de
 // `tsc`, así que el compilador no lo iba a atajar.
 //
 // ⚠️ [NO VERIFICADO] (CD-12) — esto corre en jsdom con un `location` de mentira. Que un teléfono real
 // navegue a un enlace `phantom.app/ul/v1/...` y vuelva al mismo origen no lo mide este archivo.
-// ⚠️ CD-15 · MUTANTE CORRIDO (2026-08-17): borrar de `flow.tsx` la línea
-// `if (res.estado === "hay-que-salir") { window.location.href = res.irA; return; }` ⇒ exit=1 y UN
-// solo `it` rojo, éste. Restauración verificada byte a byte.
+// ⚠️ CD-15 · MUTANTE CORRIDO (2026-08-17, re-medido en el fix-pack 1 con la suite COMPLETA): neutralizar
+// en `flow.tsx` la línea `if (res.estado === "hay-que-salir") { window.location.href = res.irA; return; }`
+// ⇒ exit=1 y UN solo `it` rojo, éste. Restauración verificada byte a byte. Que sea UNO solo es el dato
+// que importa: si esta línea se va, NADA MÁS en la suite lo nota.
 it("T-062-22/AC-1: con `hay-que-salir` la pantalla NAVEGA a `irA` y no toca el estado de la remesa", async () => {
   const IR_A = "https://phantom.app/ul/v1/signTransaction?payload=abc&nonce=def";
   const container = buildTestContainer({

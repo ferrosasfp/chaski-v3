@@ -1,7 +1,15 @@
-// ⚠️ CD-15 · MUTANTE CORRIDO (2026-08-17): agregar un SEGUNDO llamador de producción de
-// `interpretarVuelta` (`export const _segundoLlamador = () => interpretarVuelta(...)` en
-// `firma-por-enlace.ts`) ⇒ exit=1 y UN solo `it` rojo, el de "hay exactamente UN sitio de producción".
-// Restauración verificada byte a byte.
+// ⚠️ CD-15 · LOS DOS MUTANTES DE ESTE ARCHIVO SE CORRIERON (2026-08-17, re-medidos en el fix-pack 1),
+// con la suite COMPLETA y restauración verificada byte a byte:
+//
+// | mutante                                                                | exit | `it` rojos |
+// |---|---|---|
+// | agregar un SEGUNDO llamador de producción de `interpretarVuelta`        | 1 | 1 |
+// | escribir `deeplink_rechazado` en un archivo de `src/presentation`       | 1 | 3 |
+//
+// El segundo mutante mata 3 y no 1, y los tres nombran algo distinto: el `it` de copy de acá, el
+// candado de citas de `scripts/` y el de citas ancladas — porque el mutante mete una línea en
+// `flow-vm.ts` y eso DESPLAZA citas. Es colateral y va dicho: si no se dice, alguien cuenta 3 y cree
+// que el candado de copy es más fuerte de lo que es.
 // T-062-10 (CD-8 / T1) · candado de CLASE: `interpretarVuelta` tiene UN SOLO llamador de producción.
 //
 // 🔴 QUÉ PROBLEMA CIERRA, Y POR QUÉ ES UN CANDADO DE CLASE Y NO DE INSTANCIA. `interpretarVuelta` es
@@ -73,8 +81,8 @@ describe("T-062-10 · CD-8: `interpretarVuelta` tiene UN solo llamador de produc
     expect(ARCHIVOS.length).toBeGreaterThan(200);
   });
 
-  // MUTANTE QUE MATA: agregar `interpretarVuelta(` en CUALQUIER archivo de producción —un
-  // componente, un efecto, un helper— ⇒ este `it` se pone rojo y nombra el archivo.
+  // MUTANTE QUE MATA (MEDIDO: exit=1, 1 `it` rojo, éste): agregar `interpretarVuelta(` en CUALQUIER
+  // archivo de producción —un componente, un efecto, un helper— ⇒ rojo, y nombra el archivo.
   it("hay exactamente UN sitio de producción, y es el motor", () => {
     expect(
       LLAMADAS.map((x) => `${x.ruta} (x${x.veces})`),
@@ -94,5 +102,62 @@ describe("T-062-10 · CD-8: `interpretarVuelta` tiene UN solo llamador de produc
       return rel.startsWith("src/presentation") && readFileSync(abs, "utf8").includes("interpretarVuelta");
     }).map((abs) => path.relative(ROOT, abs));
     expect(enPresentacion).toEqual([]);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// AR/BLQ-BAJO-2 — las causas de enlace NO tienen copy, y eso está declarado EN EL CÓDIGO
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ MIDE ESTE CANDADO Y POR QUÉ ES AL REVÉS DE LO QUE PARECE. El AR midió que
+// `grep -rn "deeplink_" src/presentation` da CERO, o sea que las causas de enlace caen todas en el
+// default de `humanError` y la persona lee la misma frase para "cancelaste" y para "se venció el
+// blockhash". El docblock del motor afirmaba lo contrario ("la presentación las traduce") y esa
+// afirmación era FALSA.
+//
+// La decisión de esta HU fue corregir la afirmación y NO escribir el copy, con un motivo mecánico: el
+// colaborador de enlace no está cableado (CD-13), así que ninguna de estas causas tiene camino de
+// producción, y un copy para un error que nadie puede provocar es código muerto de money-path — la
+// misma razón por la que el efecto de vuelta quedó fuera de scope. El copy es de la ola 4.
+//
+// Este `it` es lo que hace que esa decisión no envejezca sola: el día que alguien escriba el primer
+// copy, se pone ROJO y obliga a reescribir el docblock del motor en el mismo commit.
+// MUTANTE QUE MATA (MEDIDO: exit=1, 3 `it` rojos — éste más dos candados de citas que el mutante
+// desplaza de refilón): agregar un `case DEEPLINK_RECHAZADO:` (o cualquier `"deeplink_"`) en
+// `src/presentation/flow-vm.ts` ⇒ rojo, nombrando el archivo.
+describe("AR/BLQ-BAJO-2 · las causas de enlace y la pantalla", () => {
+  const MOTOR = path.resolve(ROOT, "src/infrastructure/solana/deeplink/firma-por-enlace.ts");
+  /** Las causas se DERIVAN del módulo, no se listan a mano: una lista a mano no ve la novena. */
+  const CAUSAS = [...readFileSync(MOTOR, "utf8").matchAll(/^export const (DEEPLINK_\w+) = "(\w+)";$/gm)].map(
+    (m) => m[2] as string,
+  );
+  const PRESENTACION = ARCHIVOS.filter((abs) =>
+    path.relative(ROOT, abs).startsWith("src/presentation"),
+  );
+
+  // Refutación: sin esto, un regex que dejara de matchear pondría el `it` de abajo en verde sobre una
+  // lista vacía, que es exactamente cómo un candado deja de existir sin que nadie lo note.
+  it("las causas se derivaron de verdad del módulo", () => {
+    expect(CAUSAS.length, "el barrido no encontró NINGUNA causa exportada: no está midiendo nada").toBeGreaterThanOrEqual(
+      8,
+    );
+    expect(CAUSAS).toContain("deeplink_rechazado");
+    expect(PRESENTACION.length).toBeGreaterThan(10);
+  });
+
+  it("HOY ninguna causa de enlace tiene copy, y el docblock del motor lo dice así", () => {
+    const conCopy = PRESENTACION.filter((abs) => {
+      const txt = readFileSync(abs, "utf8");
+      return CAUSAS.some((c) => txt.includes(c));
+    }).map((abs) => path.relative(ROOT, abs));
+    expect(
+      conCopy,
+      "alguien escribió copy para una causa de enlace. Es una buena noticia y rompe este candado a " +
+        "propósito: hay que (1) actualizar el docblock de `firma-por-enlace.ts`, que hoy declara que la " +
+        "pantalla NO las traduce, y (2) revisar que el copy distinga `deeplink_rechazado` " +
+        "('cancelaste') de `deeplink_respuesta_ilegible` (un fallo NUESTRO) y de " +
+        "`deeplink_blockhash_desconocido` ('no pudimos preguntar'), que es el trabajo fino que esta HU " +
+        "dejó hecho del lado del motor.",
+    ).toEqual([]);
   });
 });

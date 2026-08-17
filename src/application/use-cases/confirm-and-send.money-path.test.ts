@@ -8,6 +8,7 @@ import { type KycVerification, type Quote, Remittance } from "../../domain/remit
 import {
   FAKE_SOLANA_AUTHORITY,
   FAKE_SOLANA_BENEFICIARY,
+  FAKE_SOLANA_REFERENCE,
   FAKE_SOLANA_SIGNATURE,
   FakePayoutGateway,
   FakeRefundGateway,
@@ -25,7 +26,7 @@ import {
   T0,
   beneficiary,
 } from "../../test-support/fakes"; import { esperarListo } from "../../test-support/desenlaces"; // WKH-356: narrowing de ResultadoDeEnvio. TIRA si execute() suspende donde el test no lo espera.
-import type { RefundGateway, SolanaPayoutPrepareGateway } from "../ports";
+import type { AutorizacionDelPrincipal, RefundGateway, SolanaPayoutPrepareGateway, WalletPort } from "../ports"; // WKH-356/AR/BLQ-BAJO-1: el doble que SUSPENDE una vez implementa el puerto REAL, así que no puede quedarse corto de contrato
 import type { Beneficiary } from "../../domain/remittance"; // WKH-354/AC-5: el doble de prepare implementa el puerto REAL, así que declara el contrato real
 import { LedgerRefundGateway } from "../../infrastructure/refund/ledger-refund-gateway";
 import {
@@ -144,10 +145,105 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
   // MUTANTE QUE MATA: cambiar cualquiera de los tres campos que el use-case pasa al settle
   // (`partialSignedTx`, `reference`, `popSignature`), o devolver la `Remittance` sin envolver. Si este
   // `it` muere por OTRA cosa, el cambio no fue neutral y hay que mirar qué se movió.
-  // ⚠️ CD-15 · MUTANTE CORRIDO (2026-08-17): cambiar `reference: reference.toBase58()` por una
-  // constante en el envelope del adaptador REAL ⇒ exit=1 con 2 `it` rojos, los dos de
-  // `solana-wallet.test.ts` que fijan el envelope. Este `it` NO lo caza (usa un doble), y eso está
-  // dicho arriba: el candado del adaptador es su propia suite, sin datos de expectativa tocados.
+  // ⚠️ CD-15 · MUTANTE CORRIDO (2026-08-17, re-medido en el fix-pack 1 con la suite completa): cambiar
+  // `reference: reference.toBase58()` por una constante en el envelope del adaptador REAL ⇒ exit=1 con 2
+  // `it` rojos, los dos de `solana-wallet.test.ts` que fijan el envelope. Este `it` NO lo caza (usa un
+  // doble), y eso está dicho arriba: el candado del adaptador es su propia suite, sin datos de
+  // expectativa tocados.
+  // ── AR/BLQ-BAJO-1 — LO QUE LA REANUDACIÓN LE CUESTA AL `prepare()`, MEDIDO ────────────────────────
+  //
+  // 🔴 ESTE `it` NO CELEBRA NADA: fija el precio de la decisión para que nadie tenga que descubrirlo en
+  // producción. La reanudación vuelve a llamar `prepare()` ÍNTEGRO, y eso significa una orden de payout
+  // real por invocación (más su atestación y su fila de ledger), con la remesa guardando sólo el ÚLTIMO
+  // `payoutId`. No se puede evitar sin perder la atestación server-side (DT-4(b)), y por eso está
+  // escrito acá en vez de acotado con una palabra amable.
+  //
+  // ⚠️ Y FIJA LO ÚNICO QUE ESTE CLIENTE SÍ PUEDE GARANTIZAR: la `idempotencyKey` es la MISMA en las dos
+  // invocaciones. Si el servidor deduplica algún día por `(remittanceId, quoteId)`, esto es lo que hace
+  // que ese dedupe funcione; y si no deduplica, esto es lo que hace que la duplicación sea diagnosticable
+  // en el ledger en vez de invisible. La idempotencia del lado del servidor es una PRECONDICIÓN de AC-5
+  // que este repo no puede medir, y así queda declarada.
+  // MUTANTE QUE MATA (MEDIDO: exit=1, 1 `it` rojo, éste): meterle el reloj a la `idempotencyKey`
+  //   (`${s.id}:${quote.quoteId}:${Date.now()}`) ⇒ las dos claves dejan de coincidir. Es el mutante
+  //   barato que hoy no detectaría nada más.
+  //
+  // ⚠️ MUTANTE QUE **SOBREVIVE**, y va escrito porque medirlo es lo que lo vuelve honesto: sacarle el
+  //   `quoteId` a la clave (dejar `${s.id}`) da **exit=0**. O sea que lo que está bajo candado es la
+  //   ESTABILIDAD de la clave entre invocaciones, NO su contenido. Si algún día el servidor deduplica
+  //   por `(remittanceId, quoteId)`, el contenido pasa a importar y ahí hace falta un `it` que lo fije;
+  //   hoy no existe y decirlo es más útil que fingir que sí.
+  it("AR/BLQ-BAJO-1: la reanudación vuelve a llamar `prepare()` (2 órdenes) con la MISMA idempotencyKey", async () => {
+    const repo = new InMemoryRepo();
+    const prepare = new FakeSolanaPayoutPrepareGateway();
+    const gateway = new FakeSolanaSettlementGateway();
+    const id = await seedQuoted(repo);
+
+    /** Una billetera que SUSPENDE la primera vez y completa la segunda: es el recorrido por enlace. */
+    class BilleteraQueSuspendeUnaVez implements WalletPort {
+      public autorizaciones: Array<{ beneficiary?: string; authority?: string }> = [];
+      async connect(): Promise<string> {
+        return FAKE_SOLANA_BENEFICIARY;
+      }
+      async getAddress(): Promise<string | null> {
+        return FAKE_SOLANA_BENEFICIARY;
+      }
+      async authorizePrincipal(
+        _q: Quote,
+        _rem: string,
+        deposit?: { address: string; escrow?: { beneficiary: string; authority: string } },
+      ): Promise<AutorizacionDelPrincipal> {
+        this.autorizaciones.push({
+          beneficiary: deposit?.escrow?.beneficiary,
+          authority: deposit?.escrow?.authority,
+        });
+        if (this.autorizaciones.length === 1) {
+          return { estado: "hay-que-salir", irA: "https://phantom.app/ul/v1/x", esperando: "firma-tx" };
+        }
+        return {
+          estado: "listo",
+          tx: "AQID",
+          solana: {
+            vm: "solana",
+            partialSignedTx: "AQID",
+            reference: FAKE_SOLANA_REFERENCE,
+            popSignature: "POP",
+          },
+        };
+      }
+      async signMessage(): Promise<string> {
+        return "sig";
+      }
+    }
+
+    const wallet = new BilleteraQueSuspendeUnaVez();
+    const uc = new ConfirmAndSend(wallet, repo, new FixedClock(), new FakeRefundGateway(), {
+      prepare,
+      gateway,
+      probe: new FakeSolanaEscrowDepositProbe("not_deposited"),
+      senderBalance: new FakeSolanaSenderSolBalanceProbe(),
+    });
+
+    // Invocación 1: suspende. La remesa QUEDA en `confirmed`, que es la precondición de AC-3.
+    const primera = await uc.execute({ remittanceId: id });
+    expect(primera.estado).toBe("hay-que-salir");
+    expect((await repo.get(id))?.status).toBe("confirmed");
+
+    // Invocación 2: la reanudación. Cierra.
+    const segunda = esperarListo(await uc.execute({ remittanceId: id }));
+    expect(segunda.status).toBe("payout_submitted");
+
+    // EL COSTO, dicho con un número: DOS prepare ⇒ DOS órdenes de payout server-side, y la remesa se
+    // queda con el `payoutId` de la última. La primera queda huérfana y la levanta la reconciliación.
+    expect(prepare.calls).toHaveLength(2);
+    // LA GARANTÍA: la misma clave las dos veces, y el mismo destino atestado en las dos firmas.
+    const claves = prepare.calls.map((c) => c.idempotencyKey);
+    expect(new Set(claves).size, `la idempotencyKey cambió entre invocaciones: ${claves.join(" | ")}`).toBe(1);
+    expect(wallet.autorizaciones).toEqual([
+      { beneficiary: FAKE_SOLANA_BENEFICIARY, authority: FAKE_SOLANA_AUTHORITY },
+      { beneficiary: FAKE_SOLANA_BENEFICIARY, authority: FAKE_SOLANA_AUTHORITY },
+    ]);
+  });
+
   it("T-062-1/AC-2: el camino inyectado llega a markPrincipalIn + payout_submitted con el envelope INTACTO", async () => {
     const repo = new InMemoryRepo();
     // El envelope se declara acá, explícito, para poder cruzarlo campo por campo contra lo que llega

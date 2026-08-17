@@ -19,43 +19,66 @@ import {
   type DatosDeConexion,
   leerRespuesta,
   nuevoParDeCifrado,
+  soloTextos,
   urlConectar,
   urlFirmarMensaje,
   urlFirmarTransaccion,
 } from "./protocol";
 
 const LAS_DOS: BilleteraDeeplink[] = ["phantom", "solflare"];
+
+// ⛔ ESTE MAPA ESTÁ ESCRITO A MANO A PROPÓSITO. NO lo reemplaces por un `import` de `protocol.ts`
+// aunque parezca duplicación: es el ORÁCULO INDEPENDIENTE que hace que `T-DL-2` mida algo. Medido en
+// el CR de esta HU: invertir phantom↔solflare en el mapa de producción mata 11 de los tests de este
+// archivo. Si acá se importara el mapa, ese mutante sobreviviría entero —los dos lados se moverían
+// juntos— y `T-DL-2` pasaría a ser vacuamente verde sin que nadie se entere.
 const CLAVE_EN_RESPUESTA: Record<BilleteraDeeplink, string> = {
   phantom: "phantom_encryption_public_key",
   solflare: "solflare_encryption_public_key",
 };
 
-/** La billetera de mentira: hace lo que dicen las dos documentaciones, ni más ni menos. */
-function billeteraQueContesta(publicaDeLaApp: Uint8Array, cuerpo: unknown) {
+/** El validador del cuerpo del connect. Tipado con `DatosDeConexion` para que los dos no se despeguen. */
+const FORMA_CONEXION: (crudo: unknown) => DatosDeConexion | null = soloTextos("public_key", "session");
+
+/**
+ * La billetera de mentira: hace lo que dicen las dos documentaciones, ni más ni menos.
+ *
+ * `cuerpoCrudo` existe para poder cifrar algo que NO es JSON, que es lo único que ejercita la rama
+ * `json_ilegible`. Ninguna billetera que siga la documentación produce eso; una app rota, sí.
+ */
+function billeteraQueContesta(publicaDeLaApp: Uint8Array, cuerpo: unknown, cuerpoCrudo?: string) {
   const suyo = nacl.box.keyPair();
   const secreto = nacl.box.before(publicaDeLaApp, suyo.secretKey);
   const nonce = nacl.randomBytes(24);
-  const data = nacl.box.after(new TextEncoder().encode(JSON.stringify(cuerpo)), nonce, secreto);
+  const texto = cuerpoCrudo ?? JSON.stringify(cuerpo);
+  const data = nacl.box.after(new TextEncoder().encode(texto), nonce, secreto);
   return { clave: bs58.encode(suyo.publicKey), nonce: bs58.encode(nonce), data: bs58.encode(data) };
 }
 
 describe("T-DL-1: el pedido de conectar", () => {
-  it.each(LAS_DOS)("%s · va al host correcto y lleva los cuatro parámetros obligatorios", (billetera) => {
+  it.each(LAS_DOS)("%s · va al host correcto y cada parámetro lleva SU valor", (billetera) => {
+    // 🔴 ESTE `it` VERIFICA VALORES Y NO PRESENCIA, y la diferencia se midió: mientras sólo pedía
+    // `toBeTruthy()` sobre los cuatro nombres, INTERCAMBIAR `app_url` con `redirect_link` dejaba los
+    // 38 tests en verde. Con el intercambio puesto, la billetera devuelve a `https://chaski-v2...`
+    // SIN la marca `dl`, `interpretarVuelta` contesta `no-volvimos`, y la persona firma sin que la
+    // app se entere nunca. `redirect_link` es el mecanismo entero de esta HU.
+    // MUTANTE QUE MATA: intercambiar los valores de `app_url` y `redirect_link` en `urlConectar`.
     const par = nuevoParDeCifrado();
     const u = new URL(
       urlConectar({
         billetera,
         appUrl: "https://chaski-v2.vercel.app",
-        redirectLink: "https://chaski-v2.vercel.app/?dl=connect",
+        redirectLink: "https://chaski-v2.vercel.app/?dl=conectar",
         clavePublicaDeLaApp: par.publica,
         cluster: "devnet",
       }),
     );
     expect(u.host).toBe(billetera === "phantom" ? "phantom.app" : "solflare.com");
     expect(u.pathname).toBe("/ul/v1/connect");
-    for (const p of ["app_url", "dapp_encryption_public_key", "redirect_link", "cluster"]) {
-      expect(u.searchParams.get(p), `falta ${p}`).toBeTruthy();
-    }
+    expect(u.searchParams.get("app_url")).toBe("https://chaski-v2.vercel.app");
+    expect(u.searchParams.get("redirect_link")).toBe("https://chaski-v2.vercel.app/?dl=conectar");
+    expect(u.searchParams.get("dapp_encryption_public_key")).toBe(bs58.encode(par.publica));
+    expect(u.searchParams.get("cluster")).toBe("devnet");
   });
 
   it.each(LAS_DOS)("%s · el cluster viaja EXPLÍCITO, porque el default de las dos es mainnet", (billetera) => {
@@ -98,7 +121,7 @@ describe("T-DL-2: la vuelta del connect se abre y se lee", () => {
       nonce: r.nonce,
       data: r.data,
     });
-    const d = leerRespuesta<DatosDeConexion>(billetera, params, par.secreta);
+    const d = leerRespuesta(billetera, params, par.secreta, FORMA_CONEXION);
     expect(d.tipo).toBe("ok");
     if (d.tipo !== "ok") return;
     expect(d.datos.public_key).toBe("EjPubKey");
@@ -111,7 +134,83 @@ describe("T-DL-2: la vuelta del connect se abre y se lee", () => {
     const par = nuevoParDeCifrado();
     const r = billeteraQueContesta(par.publica, { public_key: "A", session: "B" });
     const params = new URLSearchParams({ phantom_encryption_public_key: r.clave, nonce: r.nonce, data: r.data });
-    expect(leerRespuesta("solflare", params, par.secreta).tipo).toBe("ninguno");
+    expect(leerRespuesta("solflare", params, par.secreta, FORMA_CONEXION).tipo).toBe("ninguno");
+  });
+});
+
+describe("T-DL-6: la forma del cuerpo descifrado se valida, no se castea", () => {
+  it("un cuerpo sin los campos esperados es «forma_inesperada», no un «ok» con undefined adentro", () => {
+    // 🔴 Medido antes del arreglo: `{ ok: true }` en el paso conectar devolvía
+    // `{ tipo: "ok", datos: { ... } }` con `public_key === undefined` TIPADO `string`, y ese
+    // `undefined` seguía viaje hacia el facilitator disfrazado de dirección. El `as T` no es una
+    // verificación: es una afirmación sobre datos de un tercero.
+    // MUTANTE QUE MATA: volver a `JSON.parse(...) as T` sin llamar a `forma`.
+    const par = nuevoParDeCifrado();
+    const r = billeteraQueContesta(par.publica, { ok: true });
+    const params = new URLSearchParams({ phantom_encryption_public_key: r.clave, nonce: r.nonce, data: r.data });
+    const d = leerRespuesta("phantom", params, par.secreta, FORMA_CONEXION);
+    expect(d.tipo).toBe("rechazo");
+    if (d.tipo !== "rechazo") return;
+    expect(d.codigo).toBe("forma_inesperada");
+  });
+
+  it("un cuerpo que falta UN campo de dos tampoco pasa", () => {
+    // El caso alcanzable sin billetera hostil: el mismo secreto compartido sirve para los tres
+    // pasos, así que un sobre del paso 2 se descifra perfecto si se lo lee como paso 3.
+    const par = nuevoParDeCifrado();
+    const r = billeteraQueContesta(par.publica, { public_key: "A" });
+    const params = new URLSearchParams({ phantom_encryption_public_key: r.clave, nonce: r.nonce, data: r.data });
+    const d = leerRespuesta("phantom", params, par.secreta, FORMA_CONEXION);
+    expect(d.tipo).toBe("rechazo");
+    if (d.tipo !== "rechazo") return;
+    expect(d.codigo).toBe("forma_inesperada");
+  });
+
+  it.each([
+    ["null", "null"],
+    ["un escalar", '"solo-un-string"'],
+    ["una lista", "[1,2,3]"],
+  ])("%s adentro del sobre NO revienta y NO es «ok»", (_nombre, crudo) => {
+    // 🔴 `null` era el peor: `JSON.parse("null") as T` pasaba el cast y el mapper reventaba con
+    // `Cannot read properties of null (reading 'transaction')` — excepción no capturada MEDIDA, en
+    // la función que el docblock promete que "NO revienta".
+    const par = nuevoParDeCifrado();
+    const r = billeteraQueContesta(par.publica, undefined, crudo);
+    const params = new URLSearchParams({ phantom_encryption_public_key: r.clave, nonce: r.nonce, data: r.data });
+    expect(() => leerRespuesta("phantom", params, par.secreta, FORMA_CONEXION)).not.toThrow();
+    expect(leerRespuesta("phantom", params, par.secreta, FORMA_CONEXION).tipo).toBe("rechazo");
+  });
+
+  it("un sobre que abre pero NO trae JSON es «json_ilegible», y esa rama existe", () => {
+    // Esta rama del código nunca la había ejecutado ningún test: la billetera de mentira siempre
+    // cifraba `JSON.stringify(...)`, así que era imposible llegar. Medido: reemplazarla entera por
+    // un `ok` sobrevivía a los 38 tests.
+    // MUTANTE QUE MATA: devolver `{ tipo: "ok" }` en vez de `json_ilegible`.
+    const par = nuevoParDeCifrado();
+    const r = billeteraQueContesta(par.publica, undefined, "{esto no es json");
+    const params = new URLSearchParams({ phantom_encryption_public_key: r.clave, nonce: r.nonce, data: r.data });
+    const d = leerRespuesta("phantom", params, par.secreta, FORMA_CONEXION);
+    expect(d.tipo).toBe("rechazo");
+    if (d.tipo !== "rechazo") return;
+    expect(d.codigo).toBe("json_ilegible");
+  });
+
+  it("«json_ilegible» y «forma_inesperada» NO son el mismo código: se rompieron cosas distintas", () => {
+    // Uno dice "lo que mandaron no es JSON", el otro "es JSON y no tiene lo que hace falta". Quien
+    // los mezcle pierde la única pista de qué hay que mirar.
+    const par = nuevoParDeCifrado();
+    const roto = billeteraQueContesta(par.publica, undefined, "{no");
+    const otraForma = billeteraQueContesta(par.publica, { ok: true });
+    const codigo = (r: { clave: string; nonce: string; data: string }) => {
+      const d = leerRespuesta(
+        "phantom",
+        new URLSearchParams({ phantom_encryption_public_key: r.clave, nonce: r.nonce, data: r.data }),
+        par.secreta,
+        FORMA_CONEXION,
+      );
+      return d.tipo === "rechazo" ? d.codigo : d.tipo;
+    };
+    expect(codigo(roto)).not.toBe(codigo(otraForma));
   });
 });
 
@@ -121,8 +220,11 @@ describe("T-DL-3: los TRES desenlaces, y que ninguno colapsa en otro", () => {
     // alguien que nunca fue a ninguna billetera. Ya pasó con Mobile Wallet Adapter y costó una noche.
     // MUTANTE QUE MATA: devolver `rechazo` cuando falta alguno de los tres parámetros.
     const par = nuevoParDeCifrado();
-    expect(leerRespuesta("phantom", new URLSearchParams(""), par.secreta).tipo).toBe("ninguno");
-    expect(leerRespuesta("phantom", new URLSearchParams({ nonce: "x" }), par.secreta).tipo).toBe("ninguno");
+    const forma = FORMA_CONEXION;
+    expect(leerRespuesta("phantom", new URLSearchParams(""), par.secreta, forma).tipo).toBe("ninguno");
+    expect(
+      leerRespuesta("phantom", new URLSearchParams({ nonce: "x" }), par.secreta, forma).tipo,
+    ).toBe("ninguno");
   });
 
   it("«rechazo» cuando la billetera lo dice con errorCode, y el código llega tal cual", () => {
@@ -131,6 +233,7 @@ describe("T-DL-3: los TRES desenlaces, y que ninguno colapsa en otro", () => {
       "phantom",
       new URLSearchParams({ errorCode: "4001", errorMessage: "User rejected the request." }),
       par.secreta,
+      FORMA_CONEXION,
     );
     expect(d.tipo).toBe("rechazo");
     if (d.tipo !== "rechazo") return;
@@ -145,7 +248,7 @@ describe("T-DL-3: los TRES desenlaces, y que ninguno colapsa en otro", () => {
     const otra = nuevoParDeCifrado();
     const r = billeteraQueContesta(delViaje.publica, { public_key: "A", session: "B" });
     const params = new URLSearchParams({ phantom_encryption_public_key: r.clave, nonce: r.nonce, data: r.data });
-    const d = leerRespuesta("phantom", params, otra.secreta);
+    const d = leerRespuesta("phantom", params, otra.secreta, FORMA_CONEXION);
     expect(d.tipo).toBe("rechazo");
     if (d.tipo !== "rechazo") return;
     expect(d.codigo).toBe("sobre_ilegible");
@@ -158,8 +261,8 @@ describe("T-DL-3: los TRES desenlaces, y que ninguno colapsa en otro", () => {
       nonce: "!!!",
       data: "???",
     });
-    expect(() => leerRespuesta("phantom", params, par.secreta)).not.toThrow();
-    expect(leerRespuesta("phantom", params, par.secreta).tipo).toBe("rechazo");
+    expect(() => leerRespuesta("phantom", params, par.secreta, FORMA_CONEXION)).not.toThrow();
+    expect(leerRespuesta("phantom", params, par.secreta, FORMA_CONEXION).tipo).toBe("rechazo");
   });
 });
 
@@ -168,20 +271,32 @@ describe("T-DL-4: firmar la transacción, SIN que la billetera la envíe", () =>
     // ⛔ El depósito de Chaski es PATROCINADO: el facilitator es el feePayer y transmite él, después
     // de verificar. Si la billetera lo mandara sola, se rompe ese diseño entero.
     // MUTANTE QUE MATA: cambiar el método por `signAndSendTransaction`.
+    //
+    // 🔴 Y ADEMÁS SE CONGELAN LOS PARÁMETROS, que es lo que este `it` no hacía. Medido: borrar
+    // `redirect_link`, borrar `dapp_encryption_public_key` o mandar las dos billeteras a
+    // `phantom.app` sobrevivía a los 38 tests. Ninguna de esas tres roturas hace ruido: producen un
+    // viaje que se firma y no vuelve nunca, en el paso donde se firma el depósito. El `it.each` de
+    // dos billeteras DABA LA APARIENCIA de distinguirlas y sólo miraba el `pathname`, que es igual
+    // para las dos.
+    // MUTANTES QUE MATA: borrar `redirect_link`; borrar `dapp_encryption_public_key`; usar
+    // `BASE.phantom` fijo en vez de `BASE[d.billetera]`.
     const par = nuevoParDeCifrado();
     const u = new URL(
       urlFirmarTransaccion({
         billetera,
         appUrl: "https://x.test",
-        redirectLink: "https://x.test/?dl=sign",
+        redirectLink: "https://x.test/?dl=firmar-tx",
         clavePublicaDeLaApp: par.publica,
         secreto: nacl.box.before(nuevoParDeCifrado().publica, par.secreta),
         session: "s",
         transaccionBase58: "3QJmV3qfvL9SuYo34YihAf3sRCW3qSinyC8hDeaneiTX",
       }),
     );
+    expect(u.host).toBe(billetera === "phantom" ? "phantom.app" : "solflare.com");
     expect(u.pathname).toBe("/ul/v1/signTransaction");
     expect(u.pathname).not.toContain("signAndSend");
+    expect(u.searchParams.get("redirect_link")).toBe("https://x.test/?dl=firmar-tx");
+    expect(u.searchParams.get("dapp_encryption_public_key")).toBe(bs58.encode(par.publica));
     expect(u.searchParams.get("payload")).toBeTruthy();
     expect(u.searchParams.get("nonce")).toBeTruthy();
   });
@@ -244,18 +359,24 @@ describe("T-DL-5: firmar el mensaje de patrocinio", () => {
     const app = nuevoParDeCifrado();
     const wallet = nacl.box.keyPair();
     const secretoApp = nacl.box.before(wallet.publicKey, app.secreta);
+    // Mismos tres candados que en T-DL-4, por la misma razón: éste es el paso del patrocinio y sus
+    // parámetros tampoco los miraba nadie.
+    // MUTANTES QUE MATA: borrar `redirect_link`; borrar `dapp_encryption_public_key`; host fijo.
     const u = new URL(
       urlFirmarMensaje({
         billetera,
         appUrl: "https://x.test",
-        redirectLink: "https://x.test/?dl=pop",
+        redirectLink: "https://x.test/?dl=firmar-patrocinio",
         clavePublicaDeLaApp: app.publica,
         secreto: secretoApp,
         session: "s",
         mensaje: new TextEncoder().encode("Chaski · autorizás el patrocinio de..."),
       }),
     );
+    expect(u.host).toBe(billetera === "phantom" ? "phantom.app" : "solflare.com");
     expect(u.pathname).toBe("/ul/v1/signMessage");
+    expect(u.searchParams.get("redirect_link")).toBe("https://x.test/?dl=firmar-patrocinio");
+    expect(u.searchParams.get("dapp_encryption_public_key")).toBe(bs58.encode(app.publica));
     const abierto = nacl.box.open.after(
       bs58.decode(u.searchParams.get("payload") as string),
       bs58.decode(u.searchParams.get("nonce") as string),
@@ -274,7 +395,9 @@ describe("T-DL-0(instrumento): la billetera de mentira de este archivo sirve par
     const app = nuevoParDeCifrado();
     const r = billeteraQueContesta(app.publica, { public_key: "A", session: "B" });
     const params = new URLSearchParams({ phantom_encryption_public_key: r.clave, nonce: r.nonce, data: r.data });
-    expect(leerRespuesta("phantom", params, app.secreta).tipo).toBe("ok");
-    expect(leerRespuesta("phantom", params, nuevoParDeCifrado().secreta).tipo).toBe("rechazo");
+    expect(leerRespuesta("phantom", params, app.secreta, FORMA_CONEXION).tipo).toBe("ok");
+    expect(
+      leerRespuesta("phantom", params, nuevoParDeCifrado().secreta, FORMA_CONEXION).tipo,
+    ).toBe("rechazo");
   });
 });

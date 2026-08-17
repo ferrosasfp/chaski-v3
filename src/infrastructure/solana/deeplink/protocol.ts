@@ -10,15 +10,20 @@
  *     no es una DApp instalable, es un atajo con disfraz.
  *
  * Los enlaces profundos son la otra salida: la persona se va a la APP de su billetera, autoriza ahí,
- * y vuelve. Funcionan en iOS y en Android, en cualquier navegador. Es lo contrario de Mobile Wallet
- * Adapter, que según la documentación de Solana Mobile **no existe en ningún navegador de iOS** y en
- * Android sólo anda en Chrome.
+ * y vuelve. Según la documentación de Phantom y de Solflare, el enlace universal `https://` abre la
+ * app instalada tanto en iOS como en Android desde cualquier navegador. **[NO VERIFICADO]**: nadie
+ * de este equipo lo corrió en un teléfono, y el work-item de esta HU dice lo contrario para un caso
+ * concreto (RIESGO-1: en iOS una PWA instalada puede NO capturar el universal link de vuelta, y la
+ * vuelta cae en Safari). Se eligió esta vía frente a Mobile Wallet Adapter, que según la
+ * documentación de Solana Mobile **no existe en ningún navegador de iOS** y en Android sólo anda en
+ * Chrome.
  *
- * ⚠️ POR QUÉ VUELVE A FUNCIONAR EL ESTADO, que es lo que hace viable todo esto: el `redirect_link`
- * apunta a NUESTRO PROPIO ORIGEN. Aunque la billetera abra una pestaña nueva —y en web móvil lo
- * hace—, esa pestaña es del mismo origen, así que `localStorage` sigue ahí. La memoria en RAM no
- * sobrevive; el disco sí. Ninguna promesa de este módulo cruza una navegación: cada viaje se corta
- * acá y se retoma leyendo la URL de vuelta.
+ * ⚠️ POR QUÉ EL ESTADO DEBERÍA SOBREVIVIR, que es lo que haría viable todo esto: el `redirect_link`
+ * apunta a NUESTRO PROPIO ORIGEN, y `localStorage` es por origen. **[NO VERIFICADO]** que la
+ * billetera abra una pestaña nueva en web móvil y que esa pestaña conserve el origen: las dos son
+ * afirmaciones sobre el runtime de un teléfono y acá no corre ninguno. Lo que sí es decisión de este
+ * código: la memoria en RAM no sobrevive a la navegación, así que ninguna promesa de este módulo la
+ * cruza. Cada viaje se corta acá y se retoma leyendo la URL de vuelta más el disco.
  *
  * ══ LO QUE ESTE ARCHIVO ES Y LO QUE NO ES ═══════════════════════════════════════════════════════
  * ES: armar URLs y abrir/cerrar los sobres cifrados. Funciones puras, sin `window`, sin `fetch`, sin
@@ -61,6 +66,36 @@ const CLAVE_EN_RESPUESTA: Record<BilleteraDeeplink, string> = {
   phantom: "phantom_encryption_public_key",
   solflare: "solflare_encryption_public_key",
 };
+
+/**
+ * TODO lo que una billetera escribe en la URL de vuelta.
+ *
+ * Existe para que `enlaceDeVuelta` pueda BORRARLOS del origen antes de armar el `redirect_link`: si
+ * el origen ya trae la respuesta de un salto anterior y la billetera AGREGA los suyos en vez de
+ * reemplazarlos, `URLSearchParams.get` devuelve el PRIMERO, o sea el viejo. Si la billetera agrega o
+ * reemplaza es **[NO VERIFICADO]** (lo prueba un teléfono), y por eso no se decide suponiendo: se
+ * limpia siempre, que es correcto en los dos casos.
+ */
+export const PARAMS_DE_RESPUESTA: readonly string[] = [
+  ...Object.values(CLAVE_EN_RESPUESTA),
+  "nonce",
+  "data",
+  "errorCode",
+  "errorMessage",
+];
+
+/**
+ * La clave pública de cifrado que la billetera puso en ESTA URL, o `null` si acá no hay ninguna.
+ *
+ * Se exporta porque `sesion.ts` necesita compararla contra la que fijó en el connect, y el nombre
+ * del parámetro (lo único que difiere entre las dos billeteras) vive acá.
+ */
+export function clavePublicaEnRespuesta(
+  billetera: BilleteraDeeplink,
+  params: URLSearchParams,
+): string | null {
+  return params.get(CLAVE_EN_RESPUESTA[billetera]);
+}
 
 /** El par efímero de cifrado de la app. La clave secreta NUNCA sale de este dispositivo. */
 export interface ParDeCifrado {
@@ -196,17 +231,25 @@ export interface DatosDeConexion {
  * `secretaDeLaApp` es la clave privada guardada antes del salto. Si no coincide con el sobre, esto
  * devuelve `rechazo` con `sobre_ilegible` y NO revienta: una respuesta que no se puede abrir es un
  * desenlace del viaje, no un error de programación.
+ *
+ * 🔴 `forma` NO es opcional, y la razón es un defecto medido. Antes esto hacía `JSON.parse(...) as T`
+ * y devolvía `ok` con lo que fuera: un cuerpo `{ ok: true }` salía como `{ tipo: "conectado",
+ * direccion: undefined }` con `direccion` TIPADA `string`, y un cuerpo `null` reventaba con
+ * `Cannot read properties of null`. El `as` es una afirmación sobre datos de un tercero que nadie
+ * verificó. Ahora el que llama declara qué campos espera; si no están, es un desenlace
+ * (`forma_inesperada`) y no un `undefined` que viaja disfrazado de `string` hasta el facilitator.
  */
 export function leerRespuesta<T>(
   billetera: BilleteraDeeplink,
   params: URLSearchParams,
   secretaDeLaApp: Uint8Array,
+  forma: (crudo: unknown) => T | null,
 ): Desenlace<T> {
   const codigo = params.get("errorCode");
   if (codigo) {
     return { tipo: "rechazo", codigo, mensaje: params.get("errorMessage") ?? "" };
   }
-  const clave = params.get(CLAVE_EN_RESPUESTA[billetera]);
+  const clave = clavePublicaEnRespuesta(billetera, params);
   const nonce = params.get("nonce");
   const data = params.get("data");
   // Los tres tienen que estar. Que falte alguno NO es un rechazo: es que acá no hay respuesta.
@@ -221,9 +264,36 @@ export function leerRespuesta<T>(
   }
   if (!abierto) return { tipo: "rechazo", codigo: "sobre_ilegible", mensaje: "" };
 
+  let crudo: unknown;
   try {
-    return { tipo: "ok", datos: JSON.parse(new TextDecoder().decode(abierto)) as T };
+    crudo = JSON.parse(new TextDecoder().decode(abierto));
   } catch {
     return { tipo: "rechazo", codigo: "json_ilegible", mensaje: "" };
   }
+  const datos = forma(crudo);
+  if (datos === null) return { tipo: "rechazo", codigo: "forma_inesperada", mensaje: "" };
+  return { tipo: "ok", datos };
+}
+
+/**
+ * El validador que usan los tres pasos: un objeto con estos campos, todos texto.
+ *
+ * Es a propósito lo más chico que sirve. No valida largos ni base58 —eso lo verifica quien use el
+ * valor— pero sí que el campo EXISTA y sea un `string`, que es lo único que el tipo de retorno
+ * afirma y antes no se cumplía.
+ */
+export function soloTextos<K extends string>(
+  ...campos: K[]
+): (crudo: unknown) => Record<K, string> | null {
+  return (crudo) => {
+    if (typeof crudo !== "object" || crudo === null) return null;
+    const o = crudo as Record<string, unknown>;
+    const salida = {} as Record<K, string>;
+    for (const campo of campos) {
+      const v = o[campo];
+      if (typeof v !== "string") return null;
+      salida[campo] = v;
+    }
+    return salida;
+  };
 }

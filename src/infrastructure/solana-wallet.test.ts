@@ -5,12 +5,12 @@ import * as anchor from "@coral-xyz/anchor";
 import type { Idl, Provider } from "@coral-xyz/anchor";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { ComputeBudgetProgram, Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction } from "@solana/web3.js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Money } from "../domain/money";
 import type { Quote } from "../domain/remittance";
-import { CUSTODY_WINDOW_SECS, SolanaWalletAdapter } from "./solana-wallet";
+import { CUSTODY_WINDOW_SECS, SolanaWalletAdapter } from "./solana-wallet"; import { SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT } from "../application/solana-escrow-rent"; // WKH-357: EN ESTA LÍNEA, no en una nueva — `solana-wallet.test.ts:453-454` y `:506` se citan por número desde otros dos archivos (ver el comentario de más abajo), así que una línea nueva acá arriba los rota. Y el umbral se IMPORTA, nunca se escribe como literal en un test (CD-12)
 import { escrowIdl } from "./solana/escrow-idl";
-import { solanaWalletBridge } from "./solana-wallet-bridge"; import { esperarAutorizacionLista } from "../test-support/desenlaces"; import { readFileSync } from "node:fs"; import path from "node:path"; import { FirmaPorEnlaceReal, type DesenlaceDeFirma, type FirmaPorEnlace, type PedidoDeFirma } from "./solana/deeplink/firma-por-enlace"; // WKH-356: TODO en esta línea — `solana-wallet.test.ts:453-454` y `:506` los citan por número desde otros dos archivos, así que una línea nueva acá arriba los rota
+import { solanaWalletBridge } from "./solana-wallet-bridge"; import { esperarAutorizacionLista } from "../test-support/desenlaces"; import { readFileSync } from "node:fs"; import path from "node:path"; import { FirmaPorEnlaceReal, type DesenlaceDeFirma, type FirmaPorEnlace, type PedidoDeFirma } from "./solana/deeplink/firma-por-enlace"; import { direccionDelNonce } from "./solana/nonce-duradero"; // WKH-356: TODO en esta línea — `solana-wallet.test.ts:453-454` y `:506` los citan por número desde otros dos archivos, así que una línea nueva acá arriba los rota. WKH-357 agregó el último por la MISMA razón y ANTES de este comentario
 
 const VALID_B58 = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // base58 válido (mixed-case)
 
@@ -175,7 +175,19 @@ function capturedTx(spy: ReturnType<typeof vi.fn>): Transaction {
  *  ⇒ el orden RELATIVO entre las de negocio se asserta posicionalmente: `[0]` es el `deposit` y `[1]`
  *  el `register_escrow`. */
 function businessIx(tx: Transaction) {
-  return tx.instructions.filter((i) => !i.programId.equals(ComputeBudgetProgram.programId));
+  // 🔴 WKH-357 — SE FILTRA TAMBIÉN EL SYSTEM PROGRAM, y no es cosmético: la rama de enlace prepone una
+  // `nonceAdvance`, que NO es de ComputeBudget, así que con el filtro viejo `businessIx(tx)[0]` dejó de
+  // ser el `deposit` y pasó a ser la `nonceAdvance` — 4 bytes de `data` en vez de 104.
+  //
+  // ⚠️ CÓMO SE MANIFESTÓ, porque es la parte que importa: el `it` "CASO B" pisa 32 bytes en el offset
+  // 24 del `data` con `Buffer.copy`, y `copy` sobre un buffer de 4 bytes en el offset 24 NO TIRA: no
+  // copia nada, en silencio. O sea que el test dejó de alterar la transacción y pasó a afirmar que una
+  // tx intacta es una tx intacta — verde sobre nada. Sin este filtro, el `it` que mide la alteración
+  // deja de medirla.
+  const cb = ComputeBudgetProgram.programId;
+  return tx.instructions.filter(
+    (i) => !i.programId.equals(cb) && !i.programId.equals(SystemProgram.programId),
+  );
 }
 /** La ix de negocio de la POSICIÓN 0, que es y tiene que seguir siendo el `deposit`. */
 function depositIx(tx: Transaction) {
@@ -235,6 +247,18 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     // Spies de broadcast — AC-3: deben quedar en 0 (mock para no pegar a red).
     vi.spyOn(Connection.prototype, "sendRawTransaction").mockResolvedValue("sig-never" as never);
     vi.spyOn(Connection.prototype, "sendTransaction").mockResolvedValue("sig-never" as never);
+    // 🔴 WKH-357 — SIN ESTE MOCK, 13 `it` DE LA RAMA DE ENLACE PEGABAN A DEVNET DE VERDAD, y no es una
+    // hipótesis: `authorizePrincipal` pasó a consultar el saldo del remitente antes de armar la tx, y
+    // `probeSenderSolBalance` arma su PROPIA `Connection` contra el RPC público. Medido el 2026-08-17
+    // corriendo `getBalance` de una pubkey nueva contra `api.devnet.solana.com`: devuelve `0`, o sea
+    // `{status:"known", lamports:0}`, que está por debajo del umbral y cortaba los 13 con
+    // `deeplink_saldo_insuficiente` antes de que pudieran medir su propio guard. Un test que depende
+    // de que la red conteste 0 no está midiendo lo que dice medir, y encima viola la regla de este
+    // repo de no pegar a devnet en la suite.
+    //
+    // El valor: MUY por encima del umbral del camino por enlace, para que ningún `it` de acá dependa
+    // del número exacto. Los `it` que SÍ miden el guard de saldo (T-27) lo pisan con su propio valor.
+    vi.spyOn(Connection.prototype, "getBalance").mockResolvedValue(1_000_000_000 as never);
     // 🔴 WKH-347 — SIN ESTO LA SONDA DEL ÍNDICE PEGA A LA RED DE VERDAD. `authorizePrincipal` pasó a
     // leer la PDA `["escrow-index", sender]` antes de armar la tx, y sin mock cada `it` de este
     // describe esperaba los 5 s del techo de la sonda contra un RPC real y moría por timeout de
@@ -1335,6 +1359,63 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
   let signSpy: ReturnType<typeof vi.fn>;
   let blockhashValidoSpy: ReturnType<typeof vi.fn>;
 
+  // ── WKH-357 · la cuenta de nonce de estos tests ────────────────────────────────────────────────
+  /** El valor guardado en la cuenta de nonce. ⚠️ DISTINTO de `FIXED_BLOCKHASH` A PROPÓSITO: si fueran
+   *  iguales, ningún test podría distinguir "la tx usa el valor del nonce" de "la tx usa el blockhash
+   *  de la red", que es justo lo que AC-1 afirma. */
+  const VALOR_DEL_NONCE = Keypair.generate().publicKey.toBase58();
+  /** La dirección derivada del sender. Determinística, así que se calcula una vez. */
+  let NONCE_PK_B58: string;
+  beforeAll(async () => {
+    NONCE_PK_B58 = (await direccionDelNonce(SENDER_KP.publicKey)).toBase58();
+  });
+
+  /** Los 80 bytes de una cuenta de nonce inicializada con `valor` adentro. Mismo layout que el
+   *  fixture de `nonce-duradero.test.ts`: version u32 + state u32 + authority 32 + nonce 32 + fee 8. */
+  function bytesDeCuentaDeNonce(valor: string): Buffer {
+    return Buffer.concat([
+      Buffer.from([0, 0, 0, 0]),
+      Buffer.from([1, 0, 0, 0]),
+      SENDER_KP.publicKey.toBuffer(),
+      new PublicKey(valor).toBuffer(),
+      Buffer.alloc(8),
+    ]) as unknown as Buffer;
+  }
+
+  /**
+   * Qué contesta la cadena para la CUENTA DE NONCE, una respuesta por LECTURA.
+   *
+   * ⚠️ POR QUÉ HACE FALTA UNA LISTA Y NO UN VALOR: en la invocación de la VUELTA hay DOS lecturas de la
+   * cuenta —la de antes de armar la tx (que se descarta) y la de la comparación— y los desenlaces que
+   * hay que medir se distinguen justamente por cuál de las dos falla. Con un valor único no se puede
+   * escribir "la cuenta estaba y dejó de estar", que es el caso en el que YA HAY DOS FIRMAS DADAS.
+   * La última respuesta de la lista se repite si hay más lecturas que entradas.
+   *
+   * Cualquier pubkey que no sea la del nonce contesta `null`, igual que `mockChain({})`: eso es lo que
+   * la sonda del índice del escrow necesita (ausente ⇒ registrable).
+   */
+  function mockNonce(respuestas: Reply[]) {
+    let i = 0;
+    return vi
+      .spyOn(Connection.prototype, "getAccountInfo")
+      .mockImplementation((async (k: PublicKey) => {
+        if (k.toBase58() !== NONCE_PK_B58) return null;
+        const r = respuestas[Math.min(i, respuestas.length - 1)];
+        i += 1;
+        if (r === "throw") throw new Error("rpc_down");
+        if (r === "hang") return new Promise(() => {});
+        return r
+          ? {
+              data: r,
+              executable: false,
+              lamports: 1_447_680,
+              owner: SystemProgram.programId,
+              rentEpoch: 0,
+            }
+          : null;
+      }) as never);
+  }
+
   /** `localStorage` y `location` de mentira. El entorno de estos tests es Node: no hay ninguno. */
   function montarEntorno() {
     disco = new Map<string, string>();
@@ -1374,7 +1455,22 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
     } as Awaited<ReturnType<Connection["getLatestBlockhash"]>>);
     vi.spyOn(Connection.prototype, "sendRawTransaction").mockResolvedValue("sig-never" as never);
     vi.spyOn(Connection.prototype, "sendTransaction").mockResolvedValue("sig-never" as never);
-    mockChain({}); // sin esto la sonda del índice PEGA A LA RED (WKH-347)
+    // 🔴 WKH-357 — LA CUENTA DE NONCE TIENE QUE ESTAR, o `authorizePrincipal` corta con
+    // `deeplink_nonce_ausente` antes de armar la tx y ningún `it` de este describe llega a su propio
+    // guard. `mockChain` mapea POR PDA, así que se declara la dirección derivada del sender.
+    mockChain({ [NONCE_PK_B58]: bytesDeCuentaDeNonce(VALOR_DEL_NONCE) });
+    // 🔴 WKH-357 — SIN ESTE MOCK, 13 `it` DE ESTE DESCRIBE PEGABAN A DEVNET DE VERDAD. No es una
+    // hipótesis: `authorizePrincipal` pasó a consultar el saldo del remitente antes de armar la tx y
+    // `probeSenderSolBalance` arma su PROPIA `Connection` contra el RPC público. Medido el 2026-08-17:
+    // `getBalance` de una pubkey nueva contra `api.devnet.solana.com` devuelve `0`, o sea
+    // `{status:"known", lamports:0}`, que está bajo el umbral y cortaba los 13 con
+    // `deeplink_saldo_insuficiente` antes de que midieran lo suyo. Un test que depende de que la red
+    // conteste 0 no mide lo que dice medir, y encima viola la regla de no pegar a devnet en la suite.
+    // El valor va MUY por encima del umbral para que ningún `it` de acá dependa del número exacto; el
+    // `it` que mide el guard de saldo lo pisa con el suyo.
+    vi.spyOn(Connection.prototype, "getBalance").mockResolvedValue(1_000_000_000 as never);
+    // La sonda vieja. Se sigue espiando A PROPÓSITO aunque el código ya no la llame: T-19 asserta que
+    // recibe CERO llamadas, y sin el spy no habría con qué contarlas.
     blockhashValidoSpy = vi.fn(async () => ({ context: { slot: 1 }, value: true }));
     vi.spyOn(Connection.prototype, "isBlockhashValid").mockImplementation(
       blockhashValidoSpy as never,
@@ -1780,7 +1876,12 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
         // compara los bytes devueltos, sin volver a leer el disco con otro reloj.
         mensajeBase64: p.mensajeBase64,
       });
-      blockhashValidoSpy.mockResolvedValue({ context: { slot: 1 }, value: false });
+      // 🔴 WKH-357 — ACÁ ESTE `it` PONÍA `isBlockhashValid` EN `false`. Ya no hay tal sonda: el valor
+      // que la tx lleva es el de la cuenta de nonce, y `isBlockhashValid` contestaría `false` para él
+      // SIEMPRE (no está entre los ~150 recientes), o sea que el guard viejo mataba el camino entero y
+      // encima borraba las dos firmas. Lo que mata la transacción ahora es que el nonce AVANZÓ: la
+      // cuenta guarda un valor distinto del que la tx trae, porque otra tx lo consumió.
+      mockNonce([bytesDeCuentaDeNonce(Keypair.generate().publicKey.toBase58())]);
       const adapter = await adaptadorConMotor(motor);
       await expect(
         adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit()),
@@ -1788,9 +1889,69 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       // 🔴 Y ES POR ESO QUE `execute()` NUNCA LLEGA AL SETTLE: `authorizePrincipal` TIRA, y su único
       // llamador de producción (`confirm-and-send.ts:484`) NO tiene `try/catch` alrededor. No hay
       // ninguna transacción viajando, así que "no se movió nada" es un hecho y no una incógnita.
-      expect(blockhashValidoSpy).toHaveBeenCalledTimes(1);
       expect(Connection.prototype.sendRawTransaction).not.toHaveBeenCalled();
       expect(Connection.prototype.sendTransaction).not.toHaveBeenCalled();
+      // ★ T-19 (AC-7) — LA SONDA VIEJA RECIBE CERO LLAMADAS. Es un contador sobre el spy, o sea
+      // comportamiento en runtime y no una búsqueda de texto: si alguien reintrodujera
+      // `isBlockhashValid` en este camino, el número dejaría de ser 0 aunque el código "se lea bien".
+      expect(blockhashValidoSpy).toHaveBeenCalledTimes(0);
+    });
+
+    // ── ★ T-18 (AC-7) — la cuenta de nonce NO ESTÁ en la vuelta ─────────────────────────────────
+    // El otro camino a "esta tx no entra nunca más". Comparte causa y limpieza con "el nonce avanzó",
+    // y por eso se miden los dos: son dos hechos distintos con el mismo desenlace, y un `it` solo no
+    // distingue si el código cubre los dos o sólo el que se probó.
+    //
+    // ⚠️ La lista de respuestas es `[bytes, null]` a propósito: la lectura de IDA encuentra la cuenta
+    // (si no, cortaría con `deeplink_nonce_ausente` sin firmar nada, que es otro caso) y la de la
+    // VUELTA la encuentra ausente. Ése es el escenario en el que YA HAY DOS FIRMAS dadas.
+    it("★ T-18: la cuenta de nonce ausente EN LA VUELTA ⇒ deeplink_blockhash_expired y el disco SÍ se limpia", async () => {
+      montarEntorno();
+      const motor = new MotorProgramable();
+      const p = await primeraVuelta(motor);
+      const tx = Transaction.from(bs58.decode(p.transaccionBase58));
+      tx.partialSign(SENDER_KP);
+      motor.responder = () => ({
+        tipo: "completo",
+        transaccionFirmadaBase58: serializar(tx),
+        firmaDePatrocinio: "F",
+        referenceBase58: p.referenceBase58,
+        mensajeBase64: p.mensajeBase64,
+      });
+      sembrarPreparado();
+      mockNonce([bytesDeCuentaDeNonce(VALOR_DEL_NONCE), null]);
+      const adapter = await adaptadorConMotor(motor);
+      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit())).rejects.toThrow(
+        "deeplink_blockhash_expired",
+      );
+      expect(disco.has(CLAVE_VIAJE)).toBe(false);
+      expect(disco.has(CLAVE_PREPARADO)).toBe(false);
+    });
+
+    // ── ★ T-18 (AC-7) — el desenlace VIGENTE, dicho explícitamente ──────────────────────────────
+    it("★ T-18: con el valor del nonce INTACTO el flujo sigue y NO se limpia por vigencia", async () => {
+      montarEntorno();
+      const motor = new MotorProgramable();
+      const p = await primeraVuelta(motor);
+      const tx = Transaction.from(bs58.decode(p.transaccionBase58));
+      tx.partialSign(SENDER_KP);
+      motor.responder = () => ({
+        tipo: "completo",
+        transaccionFirmadaBase58: serializar(tx),
+        firmaDePatrocinio: "F",
+        referenceBase58: p.referenceBase58,
+        mensajeBase64: p.mensajeBase64,
+      });
+      const adapter = await adaptadorConMotor(motor);
+      const r = esperarAutorizacionLista(
+        await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit()),
+      );
+      // Y la tx que viaja lleva el valor del NONCE, no el blockhash de la red. Los dos mocks tienen
+      // valores DISTINTOS, así que esta comparación distingue de verdad (AC-1).
+      const viajando = Transaction.from(Buffer.from(String(r.solana?.partialSignedTx), "base64"));
+      expect(viajando.recentBlockhash).toBe(VALOR_DEL_NONCE);
+      expect(viajando.recentBlockhash).not.toBe(FIXED_BLOCKHASH);
+      expect(blockhashValidoSpy).toHaveBeenCalledTimes(0);
     });
 
     // ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -1819,8 +1980,9 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
         mensajeBase64: p.mensajeBase64,
       });
       sembrarPreparado(); // el doble no escribe el ancla; acá se mide su limpieza
-      // Una promesa que NUNCA se resuelve: es el RPC que acepta y se queda callado.
-      blockhashValidoSpy.mockImplementation(() => new Promise(() => {}));
+      // Una promesa que NUNCA se resuelve: es el RPC que acepta y se queda callado. La lectura de IDA
+      // contesta bien y la de la VUELTA cuelga, que es el caso con las dos firmas ya dadas.
+      mockNonce([bytesDeCuentaDeNonce(VALOR_DEL_NONCE), "hang"]);
       const adapter = await adaptadorConMotor(motor);
       // ⚠️ LA FORMA DE ESTE TEST NO ES DECORATIVA: es la misma de T-347-5(b) de este archivo, que costó
       // un flake entero. Se falsea SÓLO `setTimeout`/`clearTimeout` (el juego completo cuelga el camino
@@ -1845,7 +2007,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
           await new Promise((r) => setImmediate(r));
           await vi.advanceTimersByTimeAsync(100);
         }
-        expect(causa, "la sonda del blockhash no venció nunca: el techo no está").toBe(
+        expect(causa, "la lectura del nonce no venció nunca: el techo no está").toBe(
           "deeplink_blockhash_desconocido",
         );
       } finally {
@@ -1865,7 +2027,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
     // muerta y a cortar igual, durante 20 minutos.
     // MUTANTE QUE MATA (MEDIDO: exit=1, 2 `it` rojos, éste y el candado de citas): borrar el
     // `limpiarRastroDeEnlace` de la rama `!vigente.value`.
-    it("con el blockhash MUERTO (la cadena contestó) el recorrido SÍ se limpia", async () => {
+    it("con el NONCE YA AVANZADO (la cadena contestó otro valor) el recorrido SÍ se limpia", async () => {
       montarEntorno();
       const motor = new MotorProgramable();
       const p = await primeraVuelta(motor);
@@ -1879,7 +2041,9 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
         mensajeBase64: p.mensajeBase64,
       });
       sembrarPreparado(); // el doble no escribe el ancla; acá se mide su limpieza
-      blockhashValidoSpy.mockResolvedValue({ context: { slot: 1 }, value: false });
+      // La cadena CONTESTÓ, y contestó otro valor: el nonce lo consumió otra transacción. Es el caso de
+      // dos dispositivos del mismo remitente, y la tx de este dispositivo está muerta para siempre.
+      mockNonce([bytesDeCuentaDeNonce(Keypair.generate().publicKey.toBase58())]);
       const adapter = await adaptadorConMotor(motor);
       await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit())).rejects.toThrow(
         "deeplink_blockhash_expired",
@@ -1931,6 +2095,226 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
         blockhashValidoSpy,
         "el camino de la billetera inyectada agregó una llamada de red que antes no hacía (CD-1)",
       ).not.toHaveBeenCalled();
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  // WKH-357 · EL DURABLE NONCE EN LA CONSTRUCCIÓN DE LA TX
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  describe("WKH-357: la nonceAdvance, el umbral y la relectura", () => {
+    /** El `PedidoDeFirma` de la PRIMERA vuelta. Gemelo del `primeraVuelta` del describe de T-062-18,
+     *  replicado acá porque aquél es local a ese bloque. */
+    async function pedidoDeLaPrimeraVuelta(motor: MotorProgramable): Promise<PedidoDeFirma> {
+      const adapter = await adaptadorConMotor(motor);
+      sembrarViaje(SENDER_B58);
+      await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      const p = motor.pedidos[0];
+      if (!p) throw new Error("el motor no recibió ningún pedido");
+      return p;
+    }
+
+    function serializarTx(tx: Transaction): string {
+      return bs58.encode(tx.serialize({ requireAllSignatures: false, verifySignatures: false }));
+    }
+
+    /** La tx que se le pasa a la billetera para firmar, en la PRIMERA vuelta. */
+    async function txDelPedido(): Promise<Transaction> {
+      montarEntorno();
+      const motor = new MotorProgramable();
+      const adapter = await adaptadorConMotor(motor);
+      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      expect(r.estado).toBe("hay-que-salir");
+      const pedido = motor.pedidos[0];
+      if (!pedido) throw new Error("el motor no recibió ningún pedido");
+      return Transaction.from(bs58.decode(pedido.transaccionBase58));
+    }
+
+    // ── ★ T-1 (AC-1) ────────────────────────────────────────────────────────────────────────────
+    it("★ T-1: la ix 0 es una nonceAdvance del System Program (data [4,0,0,0], 3 cuentas) y el blockhash es el del NONCE", async () => {
+      const tx = await txDelPedido();
+      const ix0 = tx.instructions[0];
+      expect(ix0?.programId.equals(SystemProgram.programId)).toBe(true);
+      expect([...(ix0?.data ?? [])]).toEqual([4, 0, 0, 0]);
+      expect(ix0?.keys).toHaveLength(3);
+      // La authority (keys[2]) es el SENDER y no el facilitator: si fuera el facilitator, el Check 5
+      // del anti-drain rechazaría la tx entera (el fee-payer no puede estar referenciado por ninguna ix).
+      expect(ix0?.keys[2]?.pubkey.equals(SENDER_KP.publicKey)).toBe(true);
+      expect(ix0?.keys[2]?.isSigner).toBe(true);
+      // Y la cuenta de nonce es la DERIVADA, no una cualquiera.
+      expect(ix0?.keys[0]?.pubkey.toBase58()).toBe(NONCE_PK_B58);
+      // 🔴 EL BLOCKHASH ES EL DEL NONCE. Los dos mocks tienen valores DISTINTOS a propósito: si fueran
+      // iguales, esta línea no distinguiría nada.
+      expect(tx.recentBlockhash).toBe(VALOR_DEL_NONCE);
+      expect(tx.recentBlockhash).not.toBe(FIXED_BLOCKHASH);
+    });
+
+    // ── ★ T-2 (AC-1) ────────────────────────────────────────────────────────────────────────────
+    it("★ T-2: el `deposit` sigue siendo la ix 0 de las de NEGOCIO después del prepend", async () => {
+      const tx = await txDelPedido();
+      // El orden ABSOLUTO es [nonceAdvance, limit, price, deposit(, register)].
+      expect(tx.instructions[1]?.programId.equals(ComputeBudgetProgram.programId)).toBe(true);
+      expect(tx.instructions[2]?.programId.equals(ComputeBudgetProgram.programId)).toBe(true);
+      // Y filtrando ComputeBudget **y** System, la posición 0 es el `deposit`: su data arranca con el
+      // discriminador del `deposit` (104 bytes), no con los 4 de la nonceAdvance.
+      const negocio = businessIx(tx);
+      expect(negocio[0]?.programId.equals(new PublicKey(ESCROW_PROGRAM_ID))).toBe(true);
+      expect(negocio[0]?.data.length).toBe(104);
+      // La posición absoluta del `deposit` pasó de 2 a 3; la RELATIVA entre las de negocio, no cambió.
+      expect(tx.instructions.indexOf(negocio[0] as TransactionInstruction)).toBe(3);
+    });
+
+    // ── T-6 (AC-2) ──────────────────────────────────────────────────────────────────────────────
+    it("T-6: con la cuenta de nonce PRESENTE no se emite ninguna tx de creación ni se transmite nada", async () => {
+      const tx = await txDelPedido();
+      // La ÚNICA ix del System Program es la nonceAdvance: no hay `createAccountWithSeed` ni
+      // `nonceInitialize`. Ésta es la idempotencia de AC-2 — un 2º depósito no vuelve a crear la cuenta,
+      // porque la dirección se deriva por semilla fija y la cuenta ya está.
+      const delSystem = tx.instructions.filter((i) =>
+        i.programId.equals(SystemProgram.programId),
+      );
+      expect(delSystem).toHaveLength(1);
+      expect([...(delSystem[0]?.data ?? [])]).toEqual([4, 0, 0, 0]);
+      expect(Connection.prototype.sendRawTransaction).not.toHaveBeenCalled();
+      expect(Connection.prototype.sendTransaction).not.toHaveBeenCalled();
+    });
+
+    // ── ★ T-26 (AC-2 / §6.6) ────────────────────────────────────────────────────────────────────
+    it("★ T-26: la cuenta de nonce AUSENTE ⇒ deeplink_nonce_ausente, sin firmar NADA y sin limpiar el disco", async () => {
+      montarEntorno();
+      sembrarPreparado();
+      const motor = new MotorProgramable();
+      // La cuenta no existe: es el caso NORMAL hasta que la ola 4 la cree.
+      mockNonce([null]);
+      const firmas = vi.fn(async (t: unknown) => {
+        (t as Transaction).partialSign(SENDER_KP);
+        return t;
+      });
+      solanaWalletBridge.registerSignTransaction(firmas);
+      const adapter = await adaptadorConMotor(motor);
+      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit())).rejects.toThrow(
+        "deeplink_nonce_ausente",
+      );
+      // 🔴 NO SE PIDIÓ NINGUNA FIRMA: el corte es anterior al diálogo de la billetera.
+      expect(firmas).toHaveBeenCalledTimes(0);
+      // 🔴 Y NO SE BORRÓ NADA. Es la diferencia con `deeplink_blockhash_expired`, que sí limpia: acá no
+      // hay ninguna firma dada que pueda estar muerta, así que borrar sólo destruiría estado útil.
+      expect(disco.has(CLAVE_PREPARADO)).toBe(true);
+    });
+
+    // ── ★ T-27 (§6.7) — el guard de saldo, con su fail-open ─────────────────────────────────────
+    it("★ T-27: saldo `known` UN lamport por debajo del umbral ⇒ corta antes de pedir firma", async () => {
+      montarEntorno();
+      const motor = new MotorProgramable();
+      // ⛔ El umbral NO se escribe como literal acá (CD-12): se importa y se le resta 1.
+      vi.spyOn(Connection.prototype, "getBalance").mockResolvedValue(
+        (SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT - 1) as never,
+      );
+      const firmas = vi.fn(async (t: unknown) => t);
+      solanaWalletBridge.registerSignTransaction(firmas);
+      const adapter = await adaptadorConMotor(motor);
+      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit())).rejects.toThrow(
+        "deeplink_saldo_insuficiente",
+      );
+      expect(firmas).toHaveBeenCalledTimes(0);
+    });
+
+    it("★ T-27: saldo EXACTAMENTE en el umbral ⇒ NO corta (la comparación es `<`, no `<=`)", async () => {
+      montarEntorno();
+      const motor = new MotorProgramable();
+      vi.spyOn(Connection.prototype, "getBalance").mockResolvedValue(
+        SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT as never,
+      );
+      const adapter = await adaptadorConMotor(motor);
+      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      expect(r.estado).toBe("hay-que-salir");
+    });
+
+    it("★ T-27: saldo `unknown` (el RPC no contesta) ⇒ FAIL-OPEN, el flujo SIGUE", async () => {
+      // 🔴 ES LA MITAD QUE UN REVIEW "ARREGLA" AL REVÉS. Este guard no custodia dinero —el runtime de
+      // Solana sí—, así que con un RPC caído bloquear convertiría una caída de infraestructura NUESTRA
+      // en "no tenés saldo" para TODO el mundo, demo incluida.
+      montarEntorno();
+      const motor = new MotorProgramable();
+      vi.spyOn(Connection.prototype, "getBalance").mockRejectedValue(new Error("rpc_down"));
+      const adapter = await adaptadorConMotor(motor);
+      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      expect(r.estado).toBe("hay-que-salir");
+    });
+
+    // ── ★ T-9 (AC-3) — el camino INYECTADO no gana ni una llamada de red ────────────────────────
+    it("★ T-9 (AC-3): sin el colaborador `firmaPorEnlace`, las llamadas RPC son las MISMAS que antes de esta HU", async () => {
+      // 🔴 ÉSTE ES EL CANDADO DE CD-1 EN RUNTIME, y es complementario del pin de bytes de T-347-6: aquél
+      // dice que los BYTES no cambiaron, éste que no se agregó ninguna LECTURA. Un cambio puede dejar los
+      // bytes idénticos y colar un `getAccountInfo` de más, y al revés.
+      //
+      // Los números NO están copiados de ningún documento: son los que produce este camino, y se afirman
+      // como igualdad EXACTA para que una lectura nueva no pueda entrar sin ponerse rojo.
+      //   getLatestBlockhash → 1  (el blockhash de la tx)
+      //   getAccountInfo     → 1  (la sonda de la PDA del índice del escrow, WKH-347)
+      //   getBalance         → 0  (el guard de saldo del camino por enlace NO corre acá)
+      montarEntorno();
+      const latest = vi.spyOn(Connection.prototype, "getLatestBlockhash");
+      const accountInfo = mockNonce([bytesDeCuentaDeNonce(VALOR_DEL_NONCE)]);
+      const balance = vi.spyOn(Connection.prototype, "getBalance");
+      latest.mockClear();
+      accountInfo.mockClear();
+      balance.mockClear();
+
+      // ⚠️ SIN motor: es exactamente cómo `container.ts` arma el adapter en producción hoy.
+      solanaWalletBridge.setState({ publicKey: SENDER_B58, connected: true });
+      const adapter = new SolanaWalletAdapter();
+      await adapter.connect();
+      const r = esperarAutorizacionLista(
+        await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit()),
+      );
+
+      expect(latest).toHaveBeenCalledTimes(1);
+      expect(accountInfo).toHaveBeenCalledTimes(1);
+      expect(balance).toHaveBeenCalledTimes(0);
+      // Y que NINGUNA de esas lecturas haya sido la de la cuenta de nonce.
+      const lecturasDelNonce = accountInfo.mock.calls.filter(
+        (c) => (c[0] as PublicKey).toBase58() === NONCE_PK_B58,
+      );
+      expect(lecturasDelNonce).toHaveLength(0);
+      // Y la tx que sale NO lleva ninguna ix del System Program: cero `nonceAdvance`.
+      const tx = Transaction.from(Buffer.from(String(r.solana?.partialSignedTx), "base64"));
+      expect(tx.instructions.filter((i) => i.programId.equals(SystemProgram.programId))).toHaveLength(0);
+      expect(tx.recentBlockhash).toBe(FIXED_BLOCKHASH);
+    });
+
+    // ── ★ T-17 (AC-6) — la RELECTURA, no un valor memoizado ─────────────────────────────────────
+    it("★ T-17 (AC-6): la comparación de la vuelta usa el valor RELEÍDO, no el de la primera lectura", async () => {
+      // 🔴 CÓMO ESTE TEST DISTINGUE LO QUE DICE DISTINGUIR. En la invocación de la vuelta hay DOS
+      // lecturas de la cuenta. Se hace que la 1ª devuelva el valor que la tx TRAE y la 2ª un valor
+      // DISTINTO. Si el código memoizara (o reusara la 1ª), la comparación cuadraría y el depósito
+      // seguiría; como relee, ve que el nonce avanzó y corta. O sea: el resultado sólo puede ser
+      // `expired` si la SEGUNDA lectura es la que decide.
+      montarEntorno();
+      const motor = new MotorProgramable();
+      const p = await pedidoDeLaPrimeraVuelta(motor);
+      const tx = Transaction.from(bs58.decode(p.transaccionBase58));
+      tx.partialSign(SENDER_KP);
+      motor.responder = () => ({
+        tipo: "completo",
+        transaccionFirmadaBase58: serializarTx(tx),
+        firmaDePatrocinio: "F",
+        referenceBase58: p.referenceBase58,
+        mensajeBase64: p.mensajeBase64,
+      });
+      const spy = mockNonce([
+        bytesDeCuentaDeNonce(VALOR_DEL_NONCE), // la de IDA: coincide con lo que la tx trae
+        bytesDeCuentaDeNonce(Keypair.generate().publicKey.toBase58()), // la de la VUELTA: ya avanzó
+      ]);
+      const adapter = await adaptadorConMotor(motor);
+      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit())).rejects.toThrow(
+        "deeplink_blockhash_expired",
+      );
+      // Y se leyó la cuenta DOS veces en esta invocación: un valor guardado en un campo del adapter
+      // (que es un SINGLETON del container) daría 1.
+      const lecturasDelNonce = spy.mock.calls.filter(
+        (c) => (c[0] as PublicKey).toBase58() === NONCE_PK_B58,
+      );
+      expect(lecturasDelNonce.length).toBe(2);
     });
   });
 

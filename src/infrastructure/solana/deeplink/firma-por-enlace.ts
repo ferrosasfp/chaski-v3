@@ -86,16 +86,35 @@ export const DEEPLINK_SENDER_MISMATCH = "deeplink_sender_mismatch";
 /**
  * AFIRMA: la transacción no puede entrar en ningún bloque de acá en adelante, y **no se movió nada**.
  * La segunda mitad es fuerte y es correcta: nunca hubo POST al settle, así que ninguna transacción
- * salió de este navegador.
- * NO AFIRMA: que la persona haya hecho algo mal. El blockhash vence solo, por el tiempo que toma el
- * recorrido.
+ * salió de este navegador. Esa mitad sigue valiendo igual para las DOS formas de morir de abajo.
+ * NO AFIRMA: que la persona haya hecho algo mal. Y ⚠️ **YA NO AFIRMA QUE HAYA VENCIDO UN BLOCKHASH POR
+ * TIEMPO**: acá decía "el blockhash vence solo, por el tiempo que toma el recorrido", y desde WKH-357
+ * el camino por enlace no lleva un blockhash de red sino el valor de una cuenta de nonce durable, que
+ * NO vence por tiempo. Con esta causa, la transacción está muerta por una de estas DOS razones, y
+ * ninguna es un reloj:
+ *   · el nonce AVANZÓ — otra transacción lo consumió, así que el valor que esta tx lleva ya no es el
+ *     que la cuenta guarda (dos dispositivos del mismo remitente a la vez llegan acá);
+ *   · la cuenta de nonce NO ESTÁ — no hay contra qué validar.
+ * El nombre `..._EXPIRED` queda por historia y por no romper las citas que lo referencian; lo que
+ * describe es "esta tx no entra nunca más", no "se venció el tiempo".
  */
 export const DEEPLINK_BLOCKHASH_EXPIRED = "deeplink_blockhash_expired";
 
 /**
- * AFIRMA: **no pudimos preguntarle a la cadena** si el blockhash sigue vivo (el RPC falló o venció el
- * techo de la sonda). Y sigue siendo cierto que no se movió nada: nunca hubo POST al settle.
- * NO AFIRMA: ⛔ que el blockhash haya vencido. Es el tercer valor que `deeplink_blockhash_expired` no
+ * AFIRMA: **no pudimos preguntarle a la cadena** por el valor del nonce del remitente (el RPC falló,
+ * venció el techo, o los bytes de la cuenta no decodifican). Y sigue siendo cierto que no se movió
+ * nada: nunca hubo POST al settle.
+ *
+ * ⚠️ WKH-357 — LO EMITEN DOS MOMENTOS DISTINTOS, y antes sólo describía uno:
+ *   · ANTES de armar la transacción, cuando no se puede leer la cuenta de nonce para saber con qué
+ *     valor firmar. Acá todavía no se pidió NINGUNA firma.
+ *   · A LA VUELTA, cuando no se puede releer la cuenta para comparar el valor que la tx trae. Acá ya
+ *     hay dos firmas dadas.
+ * La consecuencia operativa es la MISMA en los dos y no cambia: **no se limpia nada**, así que lo que
+ * haya en el disco sigue ahí y un reintento puede completar el recorrido.
+ *
+ * NO AFIRMA: ⛔ que el nonce haya avanzado ni que la cuenta no exista. Es el tercer valor que
+ * `deeplink_blockhash_expired` no
  * puede escribir, y existe por eso: colapsarlos convierte "no pude preguntar" en "no pasó", que es la
  * clase de error que este repo tiene medida. Consecuencia operativa, y es la mitad que importa: con
  * esta causa el recorrido **NO se limpia**, así que las dos firmas siguen en el disco y un reintento
@@ -103,6 +122,27 @@ export const DEEPLINK_BLOCKHASH_EXPIRED = "deeplink_blockhash_expired";
  * muerta para siempre.
  */
 export const DEEPLINK_BLOCKHASH_DESCONOCIDO = "deeplink_blockhash_desconocido";
+
+/**
+ * WKH-357 — AFIRMA: el remitente todavía **no tiene su cuenta de nonce durable**, así que no hay
+ * ningún valor con el que firmar un depósito por enlace. **No se movió nada** y **no se pidió ninguna
+ * firma**, así que no hay nada en el disco que preservar ni que borrar.
+ * NO AFIRMA: ⛔ que algo esté roto. Crear esa cuenta es un paso de la OLA 4, y hasta que exista este
+ * corte es el desenlace CORRECTO y esperado de este camino, no una falla. Tampoco afirma que al
+ * remitente le falte SOL: eso es `deeplink_saldo_insuficiente`, que se decide antes y con otra fuente.
+ */
+export const DEEPLINK_NONCE_AUSENTE = "deeplink_nonce_ausente";
+
+/**
+ * WKH-357 — AFIRMA: la cadena contestó el saldo de SOL del remitente y **no le alcanza** para el
+ * camino por enlace, que necesita más que el inyectado porque además tiene que pagar el alquiler de la
+ * cuenta de nonce. Se corta **antes de pedir cualquier firma**.
+ * NO AFIRMA: ⛔ nada cuando no pudimos preguntar. Si el RPC no contesta el saldo, este corte NO se
+ * emite y el flujo SIGUE (fail-open deliberado, la misma decisión que `use-cases/confirm-and-send.ts`
+ * documenta): este guard no custodia dinero —el runtime de Solana sí— y bloquear por una falla de
+ * lectura nuestra convertiría una caída de infraestructura en "no tenés saldo" para todo el mundo.
+ */
+export const DEEPLINK_SALDO_INSUFICIENTE = "deeplink_saldo_insuficiente";
 
 /**
  * AFIRMA: lo que volvió no es lo que se pidió firmar, o la firma no verifica sobre esos bytes, o lo
@@ -398,7 +438,7 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
     //
     // 🔴 Y LA TERCERA RAZÓN QUE ESTABA ESCRITA ACÁ NO CORRE EN ESTE CAMINO, así que se tacha: decía que
     // "el que abandona de verdad tiene su propia limpieza, `abandonarAutorizacion()`". Ese método existe
-    // (`abandonarAutorizacion`, `../../solana-wallet.ts:1099`) y lo llama UN solo sitio, `failAndRefund`
+    // (`abandonarAutorizacion`, `../../solana-wallet.ts:1228`) y lo llama UN solo sitio, `failAndRefund`
     // (`abandonarAutorizacion`, `../../../application/use-cases/confirm-and-send.ts:225`) — y el corte NO
     // pasa por ahí: la causa sube como `throw` desde `authorizePrincipal`, cuyo único llamador de
     // producción NO tiene `try/catch` alrededor (`authorizePrincipal`, `../../../application/use-cases/confirm-and-send.ts:486`),
@@ -408,15 +448,15 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
     // decía "con sus tres salidas y ni una más", y "ni una más" es una afirmación de completitud que se
     // falsea con un grep sobre este mismo repo. Lo preservado se va del disco (a) cuando una invocación
     // nueva CIERRA el recorrido y el adaptador termina de usarlo
-    // (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:972`), (b) cuando la remesa muere de verdad y
-    // `failAndRefund` corre (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:1103`), (c) a los 20 min,
+    // (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:1101`), (b) cuando la remesa muere de verdad y
+    // `failAndRefund` corre (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:1232`), (c) a los 20 min,
     // y (d) —la que faltaba— cuando una invocación LLEGA a `completo` y el adaptador rechaza lo que
     // traía, que son CINCO sitios más: la tx que no decodifica
-    // (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:892`), los bytes que no coinciden con el ancla
-    // (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:897`), la firma del sender que no verifica
-    // (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:912`), la tx sin blockhash
-    // (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:945`) y el blockhash que la CADENA declara muerto
-    // (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:963`). MEDIDO con
+    // (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:985`), los bytes que no coinciden con el ancla
+    // (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:990`), la firma del sender que no verifica
+    // (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:1005`), la tx sin blockhash
+    // (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:1052`) y el blockhash que la CADENA declara muerto
+    // (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:1092`). MEDIDO con
     // `grep -n 'limpiarRastroDeEnlace(' src/infrastructure/solana-wallet.ts` ⇒ 8 líneas, 7 llamadas más
     // la definición; el reparto es 1 de (a), 1 de (b) y 5 de (d). ⚠️ Ese 7 es una FOTO y no lo vigila
     // ningún candado: lo único vigilado es que cada línea citada acá siga nombrando
@@ -660,7 +700,7 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
     // que `resultadoPreservable` PRESERVA y este corte se repite hasta que la ventana mate el viaje
     // (MEDIDO: 3 invocaciones, las 3 `deeplink_viaje_vencido`, viaje intacto). Sin el corte había una
     // salida más rápida —el adaptador limpia el camino de éxito
-    // (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:972`)— pero para llegar a ella hay que gastarle a
+    // (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:1101`)— pero para llegar a ella hay que gastarle a
     // la persona una firma REAL del camino del dinero y POSTear al settle un `popSignature` que no puede
     // corresponder a la tx que va en el mismo envelope. Si el settle lo rechaza o no es una afirmación
     // sobre OTRO servicio: desde este repo `[NO VERIFICADO]`. Se elige NO emitirlo, en vez de emitirlo
@@ -717,7 +757,7 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
     //     (AR-it2/BLQ-BAJO-2). `Preparado` es un registro único, así que el salto B PISA el ancla del
     //     salto A mientras el pedido A sigue siendo contestable. MEDIDO con `Transaction` reales: si la
     //     billetera contesta A, el motor devuelve `"completo"` con la tx de A y el ancla de B, el
-    //     adaptador compara bytes contra bytes (`mensajeDevuelto`, `../../solana-wallet.ts:896`) y tira
+    //     adaptador compara bytes contra bytes (`mensajeDevuelto`, `../../solana-wallet.ts:989`) y tira
     //     `deeplink_tx_alterada` —limpiando— sobre una firma que la persona SÍ dio, con una causa que
     //     afirma "no es lo que se pidió firmar" cuando sí lo era, un pedido antes. Lo congela el `it`
     //     "la billetera contesta el pedido ANTERIOR…", que está escrito como limitación y no como

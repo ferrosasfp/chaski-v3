@@ -44,7 +44,7 @@ import {
 } from "./chain";
 import { ESCROW_INDEX_MAX_ENTRIES } from "./escrow-index-limits";
 import { ESCROW_ID_LOOKUP_CEILING } from "./escrow-lookup-limits"; import { ESCROW_STATE_BATCH_CEILING, ESCROW_STATE_BATCH_TIMEOUT_MS } from "./escrow-history-limits"; // WKH-349: EN ESTA LÍNEA, no en una nueva — los imports de este archivo están ARRIBA de `:188` y una línea acá rota TODAS las citas ancladas que apuntan de ahí para abajo, que son las que este archivo recibe. Va pegado a `ESCROW_ID_LOOKUP_CEILING` y no a `ESCROW_INDEX_MAX_ENTRIES` a propósito: ése es justo el techo con el que el nuevo NO se confunde (uno lo pone el servidor del registro durable, el otro el RPC), y quien lea la línea ve los dos juntos
-import { solanaWalletBridge } from "./solana-wallet-bridge"; import nacl from "tweetnacl"; import { almacenDeNavegador } from "./solana/deeplink/sesion"; import { terminarPreparado } from "./solana/deeplink/preparado"; import { type Almacen, terminarViaje } from "./solana/deeplink/sesion"; import type { FirmaPorEnlace } from "./solana/deeplink/firma-por-enlace"; // WKH-356: TODOS EN ESTA LÍNEA, no en siete nuevas — las citas por número a este archivo apuntan de `:188` para abajo y siete líneas acá arriba las rotan a todas
+import { solanaWalletBridge } from "./solana-wallet-bridge"; import nacl from "tweetnacl"; import { almacenDeNavegador } from "./solana/deeplink/sesion"; import { terminarPreparado } from "./solana/deeplink/preparado"; import { type Almacen, terminarViaje } from "./solana/deeplink/sesion"; import type { FirmaPorEnlace } from "./solana/deeplink/firma-por-enlace"; import { construirNonceAdvance, direccionDelNonce, leerNonce } from "./solana/nonce-duradero"; import { SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT } from "../application/solana-escrow-rent"; // WKH-356: TODOS EN ESTA LÍNEA, no en siete nuevas — las citas por número a este archivo apuntan de `:188` para abajo y siete líneas acá arriba las rotan a todas. WKH-357 agregó los dos últimos por la MISMA razón y ANTES de este comentario, no después: cuatro imports de 062 quedaron una vez adentro de un `//` por pegarlos del lado equivocado
 
 // HU-SOL-20/AC-2: tope de candidatos que el fallback del REFUND sondea on-chain — el camino que
 // devuelve el PRINCIPAL.
@@ -118,7 +118,7 @@ const SOL_BALANCE_PROBE_TIMEOUT_MS = 5_000;
  *  Sin este techo, un `getAccountInfo` colgado (el RPC público que acepta la conexión y no contesta)
  *  deja a la persona mirando "Cerrando…" para siempre. Vencido el techo el resultado es "no pudimos
  *  preguntar", que ACÁ significa abortar sin firmar: ver `probeEscrowIndex`. */
-const ESCROW_INDEX_PROBE_TIMEOUT_MS = 5_000; /** WKH-356/DT-9 — techo de la sonda `isBlockhashValid` de la rama de enlace. MISMO número y MISMA razón que los tres de arriba, y va EN ESTA LÍNEA (no en una nueva) porque todas las citas por número que este archivo recibe apuntan de `:188` para abajo. Sin techo, un RPC que acepta la conexión y no contesta deja el botón girando para siempre; vencido el techo el resultado es `deeplink_blockhash_desconocido`, que NO es "venció el blockhash". */ const BLOCKHASH_PROBE_TIMEOUT_MS = 5_000;
+const ESCROW_INDEX_PROBE_TIMEOUT_MS = 5_000; /** WKH-356/DT-9 — techo de las DOS lecturas de la cuenta de nonce de la rama de enlace (la de antes de armar la tx y la de la vuelta). MISMO número y MISMA razón que los tres de arriba, y va EN ESTA LÍNEA (no en una nueva) porque todas las citas por número que este archivo recibe apuntan de `:188` para abajo. Sin techo, un RPC que acepta la conexión y no contesta deja el botón girando para siempre; vencido el techo el resultado es `deeplink_blockhash_desconocido`, que NO es "venció el blockhash". ⚠️ EL NOMBRE DICE `BLOCKHASH` POR HISTORIA: hasta WKH-357 acotaba una sonda de frescura de blockhash, y renombrarlo costaría rotar las citas ancladas que este archivo recibe. Lo que acota hoy es un `getAccountInfo` sobre la cuenta de nonce. */ const BLOCKHASH_PROBE_TIMEOUT_MS = 5_000;
 
 /**
  * WKH-347 — QUÉ escrow eligió el camino de recuperación, y POR CUÁL de las dos fuentes.
@@ -349,7 +349,7 @@ export class SolanaWalletAdapter
   // MAX_RECOVERY_CANDIDATES envíos de la persona en los tres casos en que no se preguntó nada.
   // Ahora se consume `lookupBySender`, que las separa, y los tres `not_asked` salen por un código
   // propio. La CUARTA sigue saliendo por `escrow_not_found`, a propósito: ahí el servidor sí contestó
-  // y la frase de la pantalla es cierta. Espeja a (`listCloseable`, `:1732`), que ya hacía esto.
+  // y la frase de la pantalla es cierta. Espeja a (`listCloseable`, `:1861`), que ya hacía esto.
   private async resolveRemittanceIdFromLedger(senderB58: string): Promise<string> {
     const resolver = this.remittanceIdResolver;
     // Mismo guard que `listCloseable`: sin el método no se adivina, y un doble de JS que no lo tenga
@@ -752,6 +752,80 @@ export class SolanaWalletAdapter
         .instruction();
     }
 
+    // ══ WKH-357 · LAS TRES LECTURAS DEL NONCE DURABLE, ANTES DE ARMAR LA TX ══════════════════════
+    //
+    // 🔴 CD-1 — TODO esto vive adentro de `if (this.firmaPorEnlace)`, igual que el `if (registrable)`
+    // de arriba y que la rama grande de abajo. El camino de la billetera inyectada (el del video de
+    // M5) no ejecuta NI UNA línea de este bloque: no deriva, no lee la cuenta, no consulta el saldo.
+    //
+    // ⚠️ POR QUÉ ESTE BLOQUE ESTÁ ACÁ Y NO DENTRO DE LA RAMA GRANDE DE MÁS ABAJO. La transacción se
+    // ARMA unas líneas más abajo, y la `nonceAdvance` y el `recentBlockhash` del nonce se necesitan
+    // EN EL MOMENTO DE ARMARLA. Y la rama grande NO se puede subir hasta acá: este archivo lo prohíbe
+    // explícitamente donde está escrita, porque subirla cambiaría el orden de los guards de este
+    // método (y con él el ancla de DT-10, que se calcula sobre una tx que ya tiene blockhash). La
+    // única forma que respeta las dos cosas es este bloque CORTO acá y la rama grande donde está.
+    let nonceIx: TransactionInstruction | undefined;
+    let valorDelNonce: string | undefined;
+    if (this.firmaPorEnlace) {
+      // 0 · SIN MEMORIA NO HAY RECORRIDO, y esto va PRIMERO por dos razones medidas.
+      //
+      // La rama grande de abajo ya corta con esta misma causa (es la dueña del check y sigue
+      // siéndolo); lo que se agrega acá es la PRECONDICIÓN, con el mismo string y sin vocabulario
+      // nuevo. Sin ella, este bloque gastaría DOS lecturas de red (el saldo y la cuenta de nonce)
+      // antes de descubrir que el viaje no puede completarse de todas formas, y encima la persona
+      // vería "te falta SOL" cuando el problema real es que el navegador no puede recordar nada.
+      // Un diagnóstico peor y dos llamadas al vacío: por eso el orden importa y no es estético.
+      if (this.entornoDeEnlace() === null) throw new Error("deeplink_sin_memoria");
+
+      // 1 · La dirección. Sin red: `createWithSeed` sólo hashea. Se re-deriva desde la pubkey SOLA,
+      //     que es lo único que sobrevive a la muerte de la página.
+      const noncePk = await direccionDelNonce(senderPk);
+
+      // 2 · EL GUARD DE SALDO DEL CAMINO POR ENLACE, con SU umbral.
+      //
+      // Reusa la sonda que ya existe (`probeSenderSolBalance`): ya tiene su techo, ya devuelve los
+      // dos valores sin colapsarlos y ya está testeada. ⛔ No se escribe un `getBalance` nuevo.
+      //
+      // 🔴 FAIL-OPEN, Y NO ES UNA ELECCIÓN DE ESTA HU: es la que este repo ya tomó y documentó en
+      // `use-cases/confirm-and-send.ts` ("NO PUDE PREGUNTAR" DEJA SEGUIR, Y ES DELIBERADO). Este
+      // guard NO custodia dinero —el que custodia es el runtime de Solana—, así que con un RPC caído
+      // bloquear convertiría una caída de infraestructura NUESTRA en "no tenés saldo" y dejaría a
+      // TODO el mundo sin poder enviar. La condición es exactamente el espejo de la de allá:
+      // `status === "known"` Y por debajo del umbral. `unknown` DEJA SEGUIR. ⛔ No lo "arregles" al
+      // revés.
+      //
+      // ⛔ Y NO se toca el guard de `confirm-and-send.ts`: compara contra
+      // `SENDER_MIN_LAMPORTS_FOR_DEPOSIT`, no sabe el tipo de billetera, y hacérselo saber exige
+      // cambiar `ports.ts`. Éste es el guard ESPECÍFICO del camino por enlace, no un reemplazo.
+      //
+      // EL COSTO, declarado y no disfrazado: este guard corre DESPUÉS de `prepare()`, así que un
+      // corte por saldo deja una orden de payout huérfana. Eso NO es una clase nueva de problema —
+      // ya es el caso NORMAL de este camino y está escrito en `confirm-and-send.ts` (tres
+      // `prepare()`, las dos anteriores quedan huérfanas). Se dice para no presentarlo como gratis.
+      const saldo = await this.probeSenderSolBalance({ sender: senderPk.toBase58() });
+      if (saldo.status === "known" && saldo.lamports < SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT) {
+        throw new Error("deeplink_saldo_insuficiente");
+      }
+
+      // 3 · El valor guardado en la cuenta. TRES desenlaces, y cada uno con su consecuencia.
+      const lectura = await leerNonce(connection, noncePk, (p) =>
+        withTimeout(p, BLOCKHASH_PROBE_TIMEOUT_MS),
+      );
+      if (lectura.tipo === "no-hay") {
+        // ⛔ SIN limpiar el disco y SIN pedir ninguna firma. Que la cuenta no exista es, hasta que la
+        // ola 4 la cree, el desenlace CORRECTO y esperado de este camino — no una falla. Y como no se
+        // firmó nada, no hay nada que preservar ni que borrar.
+        throw new Error("deeplink_nonce_ausente");
+      }
+      if (lectura.tipo === "no-pudimos-preguntar") {
+        // ⛔ SIN limpiar: no sabemos nada de la cuenta, así que un reintento puede completar el
+        // recorrido. Colapsar esto en "no hay cuenta" sería convertir "no pude preguntar" en "no pasó".
+        throw new Error("deeplink_blockhash_desconocido");
+      }
+      valorDelNonce = lectura.valor;
+      nonceIx = construirNonceAdvance(noncePk, senderPk);
+    }
+
     // ── feePayer + blockhash + partial-sign + serializar (AC-2/AC-3) ──
     const { blockhash } = await connection.getLatestBlockhash();
     // Orden [limit, price, deposit]: convención y legibilidad (el límite es lo que el precio
@@ -759,18 +833,37 @@ export class SolanaWalletAdapter
     // toma businessIx[0] del array ya filtrado (:115). Se documenta para que nadie lo cambie creyendo
     // que da igual, y para que nadie lo defienda creyendo que el validador lo impone.
     //
-    // 🔴 LO QUE SÍ ES UN INVARIANTE: el `deposit` va SIEMPRE en la posición 0 de las ix DE NEGOCIO, y
-    // el `register_escrow` DESPUÉS. Hay TRES actores que dependen de eso por POSICIÓN, no por
-    // discriminador: el CR-1 del facilitator, el Guard A de SDD 037 y NUESTRO PROPIO SERVIDOR
-    // (`tx.instructions.filter`, `settlement/solana-deposit-beneficiary.ts:106`), que indexa la POSICIÓN
-    // 0 de las ix del escrow y después exige que sea el `deposit`. Con el orden invertido ese lector devuelve
-    // `unreadable` y la route del settle responde 400: TODO depósito patrocinado falla en nuestro
-    // propio servidor, antes de que el facilitator vea nada. ⛔ PROHIBIDO invertirlo.
-    const tx = regIx
-      ? new Transaction().add(limitIx, priceIx, ix, regIx) // [limit, price, deposit, register] — CD-1
-      : new Transaction().add(limitIx, priceIx, ix); // [limit, price, deposit] — ver CD-1
+    // 🔴 LO QUE SÍ ES UN INVARIANTE, RE-ENUNCIADO POR WKH-357 (no ablandado): el `deposit` va SIEMPRE
+    // en la posición 0 de las ix DE NEGOCIO, y el `register_escrow` DESPUÉS. Lo que cambió es que la
+    // `nonceAdvance` del camino por enlace se prepone ANTES de todo, y **la `nonceAdvance` no es una
+    // ix de negocio**: no es del escrow ni de ComputeBudget, es del System Program. O sea que la
+    // posición ABSOLUTA del `deposit` pasa de 2 a 3 en el camino por enlace, mientras que su posición
+    // RELATIVA entre las de negocio no cambia nunca. Hay TRES actores que dependen de eso por
+    // POSICIÓN, no por discriminador: el CR-1 del facilitator, el Guard A de SDD 037 y NUESTRO PROPIO
+    // SERVIDOR (`tx.instructions.filter`, `settlement/solana-deposit-beneficiary.ts:106`), que indexa
+    // la POSICIÓN 0 de las ix del escrow y después exige que sea el `deposit`. Los tres FILTRAN antes
+    // de indexar, así que los tres siguen sirviendo — pero el del facilitator **sólo con su bandera
+    // `SOLANA_SPONSOR_DURABLE_NONCE_ENABLED` prendida**, y hasta entonces un depósito por enlace
+    // recibe 403. Con el orden invertido, en cambio, ese lector devuelve `unreadable` y la route del
+    // settle responde 400: TODO depósito patrocinado falla en nuestro propio servidor, antes de que el
+    // facilitator vea nada. ⛔ PROHIBIDO invertir el orden [nonceAdvance, limit, price, deposit, register].
+    //
+    // ⛔ Y LA `nonceAdvance` SE PREPONE ACÁ, A MANO, NUNCA CON `tx.nonceInfo`: ese campo la mete en un
+    // array LOCAL de `compileMessage()` sin tocar `tx.instructions`, así que el objeto y el mensaje
+    // firmado dirían cosas distintas y los tres lectores de arriba leerían la ix equivocada. Medido, y
+    // congelado en el test T-N4 de `solana/nonce-duradero.test.ts`.
+    const tx = nonceIx
+      ? new Transaction().add(nonceIx, limitIx, priceIx, ix, ...(regIx ? [regIx] : [])) // WKH-357
+      : regIx
+        ? new Transaction().add(limitIx, priceIx, ix, regIx) // [limit, price, deposit, register] — CD-1
+        : new Transaction().add(limitIx, priceIx, ix); // [limit, price, deposit] — ver CD-1
     tx.feePayer = new PublicKey(resolveSolanaFacilitatorPubkey()); // AC-2: facilitator paga el fee de red
-    tx.recentBlockhash = blockhash;
+    // El valor del nonce en el camino por enlace (no vence por tiempo); el de la red en el inyectado.
+    // ⚠️ `getLatestBlockhash()` se sigue llamando en los DOS caminos y eso es a propósito: sacarlo de
+    // acá para "ahorrar una llamada" movería una lectura de red que el camino inyectado necesita, y es
+    // exactamente el tipo de cambio que CD-1 prohíbe. Lo que el camino por enlace hace es IGNORAR ese
+    // valor, no evitar la llamada.
+    tx.recentBlockhash = valorDelNonce ?? blockhash;
 
     // ══ WKH-356 · LA RAMA DE FIRMA POR ENLACE PROFUNDO ═══════════════════════════════════════════
     //
@@ -862,7 +955,7 @@ export class SolanaWalletAdapter
       // Los cortes salen por `throw`, igual que los tres que ya existen en este método
       // (`wallet_not_connected`, `escrow_params_missing`, `sender_signature_missing`): suben por
       // `execute()` sin `try/catch` hasta el `guard()` de la presentación y dejan la remesa en
-      // `confirmed`, que es exactamente el estado que AC-3 vuelve re-ejecutable. ⛔ ACÁ DECÍA "El motor ya limpió." Y ES FALSO DESDE EL FIX-PACK 1 (AR-it2/MNR-1), en el mismo hunk que lo introdujo: el motor limpia SÓLO cuando en el disco no queda nada que salvar, y con un resultado ya firmado adentro preserva el viaje Y el ancla a propósito (`resultadoPreservable`, `solana/deeplink/firma-por-enlace.ts:351`). MEDIDO: `viaje=true prep=true` en 3 de 3 cortes con `transaccionFirmada`. Este `throw` NO limpia nada y NO tiene que hacerlo: es lo que permite que la invocación siguiente retome. Lo que queda pendiente y no es de esta capa: nadie limpia el query string de vuelta, así que con una URL de rechazo todavía en la barra la invocación siguiente vuelve a cortar (ola 4 / HU-357).
+      // `confirmed`, que es exactamente el estado que AC-3 vuelve re-ejecutable. ⛔ ACÁ DECÍA "El motor ya limpió." Y ES FALSO DESDE EL FIX-PACK 1 (AR-it2/MNR-1), en el mismo hunk que lo introdujo: el motor limpia SÓLO cuando en el disco no queda nada que salvar, y con un resultado ya firmado adentro preserva el viaje Y el ancla a propósito (`resultadoPreservable`, `solana/deeplink/firma-por-enlace.ts:391`). MEDIDO: `viaje=true prep=true` en 3 de 3 cortes con `transaccionFirmada`. Este `throw` NO limpia nada y NO tiene que hacerlo: es lo que permite que la invocación siguiente retome. Lo que queda pendiente y no es de esta capa: nadie limpia el query string de vuelta, así que con una URL de rechazo todavía en la barra la invocación siguiente vuelve a cortar (ola 4 / HU-357).
       if (desenlace.tipo === "corte") throw new Error(desenlace.causa);
       if (desenlace.tipo === "salto") {
         return { estado: "hay-que-salir", irA: desenlace.irA, esperando: desenlace.esperando };
@@ -928,10 +1021,24 @@ export class SolanaWalletAdapter
       // ⛔ NO se agrega al camino inyectado: ahí sería una llamada de red de más antes de cada firma,
       // y CD-1 lo prohíbe.
       //
-      // ⚠️ [NO VERIFICADO] — es posible que el recorrido por enlace profundo NO pueda cerrar dentro de
-      // la vida de un blockhash en un teléfono real. La salida estructural (durable nonce account) es
-      // OTRA HU: cambia la construcción de la transacción, exige una cuenta nueva en cadena y toca al
-      // facilitator. 062 entrega el diagnóstico honesto, no la solución.
+      // ⚠️ ACÁ DECÍA QUE LA SALIDA ESTRUCTURAL (durable nonce account) ERA "OTRA HU". ESA HU ES ÉSTA
+      // (WKH-357) y la frase quedó falsa, así que se reescribe en vez de dejarla envejecer:
+      //
+      // El camino por enlace YA NO fija un blockhash de red: fija el valor de la cuenta de nonce del
+      // remitente, que no vence por tiempo (ver el bloque de WKH-357 arriba, donde se arma la tx). O
+      // sea que la carrera contra el reloj que este comentario describía **no existe en este camino**.
+      // Lo que sigue abajo NO es una sonda de frescura de blockhash: es la comparación del valor del
+      // nonce, y sus desenlaces son otros (el nonce AVANZÓ, o la cuenta NO ESTÁ).
+      //
+      // ⚠️ Y LO QUE SIGUE SIENDO CIERTO, sin suavizar (CD-14): el durable nonce elimina la carrera de
+      // los dos saltos QUE LLEVAN PLATA, y queda expuesto UN salto —el de la tx que CREA la cuenta de
+      // nonce, que usa un blockhash normal—. Eso es aceptable y no es lo mismo: en ese salto no hay
+      // nada en riesgo (ningún escrow, ningún USDC, ninguna orden de payout) y si el blockhash vence,
+      // el reintento pide uno nuevo y no cuesta más que un toque.
+      //
+      // ⚠️ [NO VERIFICADO] — nada de esto está medido en un teléfono real, y el `[NO VERIFICADO]` de
+      // 062 se hereda entero: que la billetera vuelva al mismo origen y que la tx devuelta sea
+      // byte-idéntica siguen siendo afirmaciones sobre un runtime móvil que este repo NO midió.
       //
       // ⚠️ TRES DESENLACES Y NO DOS (AR/MNR-3). La sonda tiene TECHO —`withTimeout`, el mismo helper y
       // el mismo número que las otras tres sondas de este archivo— porque un RPC que acepta la conexión
@@ -945,18 +1052,40 @@ export class SolanaWalletAdapter
         this.limpiarRastroDeEnlace(almacen);
         throw new Error("deeplink_tx_alterada");
       }
-      let vigente: Awaited<ReturnType<Web3Connection["isBlockhashValid"]>>;
-      try {
-        vigente = await withTimeout(
-          connection.isBlockhashValid(blockhashDevuelto),
-          BLOCKHASH_PROBE_TIMEOUT_MS,
-        );
-      } catch {
+      // 🔴 WKH-357 · ACÁ SE LE PREGUNTABA A `isBlockhashValid` Y YA NO SE PUEDE (AC-7). El valor que
+      // trae esta transacción es el de una cuenta de nonce, y `isBlockhashValid` contesta `false` para
+      // él — CORRECTAMENTE, porque no está entre los ~150 blockhashes recientes. Con la sonda vieja,
+      // ese `false` caía en el `deeplink_blockhash_expired` de abajo, que LIMPIA EL DISCO: la feature
+      // moría en el cliente y le borraba a la persona las DOS firmas antes de que el facilitator viera
+      // nada. Ése es el guard que 062 agregó (DT-9), correcto para su caso, que esta HU vuelve
+      // incorrecto.
+      //
+      // Lo que se pregunta ahora es la ÚNICA cosa que decide si esta tx puede entrar: ¿el valor
+      // guardado en la cuenta de nonce sigue siendo el que la tx lleva? Se relee la cuenta acá y no se
+      // reusa nada del bloque de arriba — ⛔ PROHIBIDO memoizar el valor en un campo del adapter, que
+      // es un SINGLETON del container (la misma regla que este archivo ya escribe para la sonda del
+      // índice). Y es lo que AC-6 exige: después de un fallo, el reintento tiene que leer el valor
+      // VIGENTE, no el que teníamos.
+      const noncePkDeVuelta = await direccionDelNonce(senderPk);
+      const lecturaDeVuelta = await leerNonce(connection, noncePkDeVuelta, (p) =>
+        withTimeout(p, BLOCKHASH_PROBE_TIMEOUT_MS),
+      );
+      if (lecturaDeVuelta.tipo === "no-pudimos-preguntar") {
         // ⛔ SIN `limpiarRastroDeEnlace`: las dos firmas pueden estar perfectas y el que falló fue un
         // RPC nuestro. Borrarlas acá sería castigar a la persona por nuestra infraestructura.
+        // (Este comentario es el de DT-9 y sigue valiendo palabra por palabra: el techo vencido y el
+        // RPC caído entran los dos por acá, y ninguno afirma que la transacción esté muerta.)
         throw new Error("deeplink_blockhash_desconocido");
       }
-      if (!vigente.value) {
+      // Los otros dos desenlaces significan lo MISMO para esta transacción —no puede entrar en ningún
+      // bloque nunca más— y por eso comparten causa y limpieza:
+      //   · `no-hay`  ⇒ la cuenta de nonce no está (o dejó de estar): no hay contra qué validar.
+      //   · `hay` con un valor DISTINTO ⇒ el nonce YA AVANZÓ, o sea que otra tx lo consumió.
+      // ⚠️ Y ojo con la diferencia contra el bloque de arriba: allá `no-hay` es el caso NORMAL y
+      // esperado (la cuenta todavía no existe) y NO limpia porque no se firmó nada; acá ya hay dos
+      // firmas dadas sobre un valor que no sirve, y limpiar es lo que evita que el próximo intento
+      // vuelva a encontrar la misma firma muerta y corte igual durante 20 minutos.
+      if (lecturaDeVuelta.tipo === "no-hay" || lecturaDeVuelta.valor !== blockhashDevuelto) {
         // La cadena CONTESTÓ que no. Esa transacción no puede entrar en ningún bloque nunca más, así
         // que el recorrido está muerto y lo que se limpia no le sirve a nadie: sin esta limpieza el
         // próximo intento volvería a encontrar la misma firma muerta y a cortar igual, durante 20 min.
@@ -1329,7 +1458,7 @@ export class SolanaWalletAdapter
     try {
       // WKH-353: preguntamos por HTTP en vez de suscribirnos. `confirmTransaction` abría SIEMPRE un
       // `signatureSubscribe`, el RPC contesta `-32601`, y la espera se consumía entera sin producir
-      // ningún veredicto. El techo sigue siendo UNO y sigue siendo el mismo: ver `awaitSignatureVerdict`, `:2022`.
+      // ningún veredicto. El techo sigue siendo UNO y sigue siendo el mismo: ver `awaitSignatureVerdict`, `:2151`.
       const verdict = await withTimeout(
         this.awaitSignatureVerdict(connection, signature, {
           lastValidBlockHeight: ctx.lastValidBlockHeight,
@@ -1344,7 +1473,7 @@ export class SolanaWalletAdapter
       // ausente, RPC caído. Un blockhash vencido prueba que la tx no puede entrar DE ACÁ EN ADELANTE,
       // NO que no haya entrado antes ⇒ hay que ir a mirar el estado autoritativo.
       //
-      // WKH-353 — el mapeo a los desenlaces con nombre: el `expired` de `SignatureVerdict`, `:2098` ES
+      // WKH-353 — el mapeo a los desenlaces con nombre: el `expired` de `SignatureVerdict`, `:2227` ES
       // ese blockhash vencido, y `unseen` es que se nos acabó el tiempo de preguntar, el que llega
       // hasta acá abajo como excepción "confirm_timeout". Por qué NO colapsarlos: está en el tipo.
       reverted = err instanceof RefundTxReverted;
@@ -1396,11 +1525,11 @@ export class SolanaWalletAdapter
    * devuelve siempre. Que NINGUNA instrucción la cierre **no se pudo verificar** desde este repo: el
    * IDL no expresa las constraints `close = ...` de Anchor.
    *
-   * POR QUÉ EXIGE `remittanceId` Y `refundEscrow` NO: el fallback de refund (`refundEscrow`, `:1200`,
+   * POR QUÉ EXIGE `remittanceId` Y `refundEscrow` NO: el fallback de refund (`refundEscrow`, `:1329`,
    * que llama a `resolveRemittanceIdFromLedger`, `:353`) elige UNO entre N y actúa sobre él, porque
    * "recuperar mis USDC" tiene un objetivo natural — el escrow que todavía tiene plata. Para `close` no
    * existe ese "el": todos los terminales son igual de cerrables, y elegir uno en silencio le cerraría
-   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1732`) devuelve la
+   * a la persona una cuenta que no eligió. El descubrimiento (`listCloseable`, `:1861`) devuelve la
    * LISTA y elige ella.
    *
    * ⚠️ POR QUÉ EL LISTER NO TIENE GATEWAY Y EL CIERRE SÍ (apartamiento declarado del SDD §4.1/§4.2,
@@ -1618,10 +1747,10 @@ export class SolanaWalletAdapter
    * ¿Entró el `close`? Devuelve el tri-estado y TIRA `close_tx_failed` sólo cuando medimos que la tx
    * entró y revirtió Y la cuenta sigue ahí.
    *
-   * ⚠️ DOS DIVERGENCIAS DELIBERADAS respecto de `confirmRefund`, `:1319`. Están escritas acá para
+   * ⚠️ DOS DIVERGENCIAS DELIBERADAS respecto de `confirmRefund`, `:1448`. Están escritas acá para
    * que nadie las "armonice" de vuelta en un code review:
    *
-   * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`confirmRefund`, `:1319`), SIN leer nada.
+   * 1. `confirmRefund` devuelve "confirmed" apenas la tx confirma sin error (`confirmRefund`, `:1448`), SIN leer nada.
    *    Éste NO puede: AC-5 exige que el alquiler volvió se afirme *sólo después de leer que la cuenta
    *    ya no existe*. Un veredicto `landed` sin `err` —lo que WKH-353 puso en el lugar del
    *    `confirmTransaction` que este docblock nombraba acá— prueba que la tx ENTRÓ; leer la ausencia
@@ -1640,7 +1769,7 @@ export class SolanaWalletAdapter
   ): Promise<EscrowRefundConfirmation> {
     let reverted = false;
     try {
-      // WKH-353, igual que en `confirmRefund`, `:1319`: por HTTP y sin suscripción.
+      // WKH-353, igual que en `confirmRefund`, `:1448`: por HTTP y sin suscripción.
       const verdict = await withTimeout(
         this.awaitSignatureVerdict(connection, signature, {
           lastValidBlockHeight: ctx.lastValidBlockHeight,
@@ -1685,9 +1814,9 @@ export class SolanaWalletAdapter
    * puede volver a cerrar; lo que se pierde es exactitud del mensaje durante esa ventana.
    *
    * 🔴 **No se pudo verificar** contra un RPC real que un `getAccountInfo(pda,"confirmed")` inmediatamente
-   * posterior a un veredicto `landed` de `awaitSignatureVerdict`, `:2022` vea el efecto. (WKH-353 cambió
+   * posterior a un veredicto `landed` de `awaitSignatureVerdict`, `:2151` vea el efecto. (WKH-353 cambió
    * QUIÉN aplica el gate de commitment, no que se aplique: lo aplicaba `confirmTransaction`, que ya no
-   * está en este archivo, y hoy lo aplica `leerEstado`, `:2030`.) Ningún doble de test puede matar el
+   * está en este archivo, y hoy lo aplica `leerEstado`, `:2159`.) Ningún doble de test puede matar el
    * mutante que borra este argumento: el mock ignora el segundo parámetro y devuelve lo mismo con o sin
    * él. Su detección es del code review, y el único input que lo probaría es un `close` real contra
    * devnet.
@@ -1802,7 +1931,7 @@ export class SolanaWalletAdapter
    * pantalla de historial, para las filas cuyo desenlace el snapshot local no puede afirmar.
    *
    * 🔴 NO FIRMA NADA, Y ESA RESTRICCIÓN ES LA QUE DECIDE SU FORMA. No se reusan
-   * (`resolveRemittanceIdFromLedger`, `:353`) ni (`listCloseable`, `:1732`), que hacen el MISMO
+   * (`resolveRemittanceIdFromLedger`, `:353`) ni (`listCloseable`, `:1861`), que hacen el MISMO
    * derive+batch+decode, porque los dos empiezan por `resolver.lookupBySender`, que es
    * PoP-autenticado: reusarlos abriría un diálogo de firma sólo por abrir "Ver mis envíos", y una app
    * que pide firmas por mirar una lista entrena a la gente a firmar cualquier cosa. Se reusa la mitad
@@ -1843,7 +1972,7 @@ export class SolanaWalletAdapter
    * de lo que la cuenta dice. El `status` y el `deadline` los dijo la cadena; DE QUÉ LADO del
    * `deadline` caemos lo decide `Date.now()` de este dispositivo, leído acá abajo con la MISMA
    * expresión que usa el refund de este archivo, y comparado con la negación exacta de su guard
-   * (`refund_before_deadline`, `:1258`). Que las dos expresiones coincidan es lo único que se verifica:
+   * (`refund_before_deadline`, `:1387`). Que las dos expresiones coincidan es lo único que se verifica:
    * es lo que impide que la pantalla diga "la salida que queda es la devolución" sobre una fila que el
    * refund de esta misma app rechazaría.
    *
@@ -1897,7 +2026,7 @@ export class SolanaWalletAdapter
       try {
         // withTimeout y no un `await` pelado: un RPC que acepta la conexión y no contesta dejaría la
         // fila diciendo "Le estamos preguntando al contrato" para siempre. Es el mismo motivo que en
-        // (`probeEscrowIndex`, `:1573`), y el mensaje "confirm_timeout" que arrastra `withTimeout` no
+        // (`probeEscrowIndex`, `:1702`), y el mensaje "confirm_timeout" que arrastra `withTimeout` no
         // le llega a ninguna persona: acá se convierte en `"unknown"`.
         infos = await withTimeout(
           connection.getMultipleAccountsInfo(pdas),
@@ -1955,7 +2084,7 @@ export class SolanaWalletAdapter
           continue;
         }
         // El reloj es el del DISPOSITIVO, y esta comparación es la negación EXACTA del guard con el que
-        // el refund de este mismo archivo rechaza por deadline (`refund_before_deadline`, `:1258`).
+        // el refund de este mismo archivo rechaza por deadline (`refund_before_deadline`, `:1387`).
         // ⚠️ NO está escrita una sola vez: está escrita DOS, allá y acá, así que PUEDEN DIVERGIR — si el
         // refund cambia su condición y ésta no, la pantalla dice "la salida que queda es la devolución"
         // sobre una fila que este mismo código rechazaría. Lo único que las ata es T-A16, que corre LAS DOS.
@@ -1981,7 +2110,7 @@ export class SolanaWalletAdapter
 
   /**
    * WKH-353 — ¿qué dice la cadena de ESTA firma? Devuelve uno de los tres desenlaces de
-   * `SignatureVerdict`, `:2098`, preguntando por HTTP y sin abrir NINGUNA suscripción.
+   * `SignatureVerdict`, `:2227`, preguntando por HTTP y sin abrir NINGUNA suscripción.
    *
    * POR QUÉ NO `connection.confirmTransaction`, que es lo que estaba acá antes. Sus dos estrategias
    * terminan en `onSignature`, o sea en un `signatureSubscribe` por WebSocket, y el RPC que usamos
@@ -1994,7 +2123,7 @@ export class SolanaWalletAdapter
    * `withTimeout`, `:150` del llamador", y es FALSO: ese helper es un `Promise.race` contra un
    * `setTimeout`, así que rechaza LA ESPERA DEL LLAMADOR sin detener el trabajo de adentro. Con un
    * `getBlockHeight` que falla de forma sostenida lo que se pierde es LA SALIDA POR VENCIMIENTO, y NO
-   * la salida por `landed`: el bucle lee el estado ANTES de tocar la altura (`leerEstado`, `:2030`) y
+   * la salida por `landed`: el bucle lee el estado ANTES de tocar la altura (`leerEstado`, `:2159`) y
    * devuelve lo que vea. Medido con la altura tirando SIEMPRE y el status apareciendo en el segundo
    * poll: "confirmed" a los 1.105 ms. Lo inmortal es que fallen LAS DOS (altura caída y estado que
    * nunca concluye): el `catch` deja la altura en -1 a propósito y -1 nunca supera nada, así que el
@@ -2006,7 +2135,7 @@ export class SolanaWalletAdapter
    * El mecanismo anterior tenía LOS MISMOS TRES DEFECTOS (el techo del llamador tampoco lo cortaba;
    * era inmortal con el RPC de altura caído, mismo archivo :6665-6670; dejaba un huérfano por
    * reintento) y era cuatro órdenes de magnitud más caro: los números y su medición viven UNA sola
-   * vez, al lado de `SIGNATURE_POLL_INTERVAL_MS`, `:2113`.
+   * vez, al lado de `SIGNATURE_POLL_INTERVAL_MS`, `:2242`.
    *
    * Matar el huérfano exige un `AbortSignal` que cruce desde el llamador, y es una HU con su propio
    * alcance y no una línea acá: los métodos de `Connection` no aceptan `signal` (`getSignatureStatuses`
@@ -2047,7 +2176,7 @@ export class SolanaWalletAdapter
       // un bloque y ejecutarse. Es un "no" MEDIDO, el único "no" que este método puede afirmar.
       if (status.err != null) return { kind: "landed", err: status.err };
       // Sin `err` el nivel SÍ importa: "processed" no alcanza. Es el mismo commitment gate que la
-      // librería aplicaba, y los dos llamadores confirman con "confirmed" (`confirmRefund`, `:1319`).
+      // librería aplicaba, y los dos llamadores confirman con "confirmed" (`confirmRefund`, `:1448`).
       const nivel = status.confirmationStatus;
       if (nivel === "confirmed" || nivel === "finalized") return { kind: "landed", err: null };
       return null; // "processed" o ausente ⇒ seguimos preguntando
@@ -2085,14 +2214,14 @@ export class SolanaWalletAdapter
  * WKH-353 — el resultado de preguntarle a la cadena por una firma, con TRES desenlaces y no dos.
  *
  * ⚠️ NADA MECÁNICO PROTEGE LA DISTINCIÓN ENTRE `expired` Y `unseen`: este párrafo es lo único que hay.
- * Los tres consumos del veredicto preguntan `verdict.kind`, `:1340` (y `:1341`, `:1650`) por
+ * Los tres consumos del veredicto preguntan `verdict.kind`, `:1469` (y `:1341`, `:1650`) por
  * `"landed"`, así que los otros dos caen por el `else` implícito y ninguna rama los nombra; `unseen`
  * además no lo construye NADIE (lo produce el `withTimeout`, `:150` del llamador al acabarse la
  * espera, y llega al `catch` como la excepción "confirm_timeout"). MEDIDO borrando el miembro
  * `unseen`: `tsc` verde y suite verde, 2075/2075; lo único rojo fue `citas-ancladas.test.ts`, por el
  * desplazamiento de UNA línea y no por la pérdida, y re-anclando esa cita queda verde también.
  * Aun así, PROHIBIDO colapsarlos a un booleano o a un `if (kind !== "landed")`: se pierde la
- * distinción que `confirmRefund`, `:1319` explica en prosa (un blockhash vencido prueba que la tx no
+ * distinción que `confirmRefund`, `:1448` explica en prosa (un blockhash vencido prueba que la tx no
  * puede entrar DE ACÁ EN ADELANTE, NO que no haya entrado antes).
  */
 type SignatureVerdict =
@@ -2112,7 +2241,7 @@ type SignatureVerdict =
  *  (lib/index.cjs.js:8404-8410). La comparación honesta es 60 contra ~1.200.000. */
 const SIGNATURE_POLL_INTERVAL_MS = 1_000;
 
-/** Espera `ms` sin bloquear. Lo trae WKH-353 para `awaitSignatureVerdict`, `:2022`; sin otro llamador. */
+/** Espera `ms` sin bloquear. Lo trae WKH-353 para `awaitSignatureVerdict`, `:2151`; sin otro llamador. */
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

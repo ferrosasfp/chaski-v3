@@ -625,7 +625,7 @@ describe("WKH-MWA · CANDADO: con MWA en juego, el depósito sigue saliendo por 
     // Segunda capa, y de otra naturaleza: T-MWA-4 mide una CORRIDA, esto mide el TEXTO. Hace falta
     // porque `useWallet().sendTransaction` es el único camino de difusión que NO pasa por `Connection`
     // (va derecho a la app de la billetera), así que el guard que ya existe —espiar
-    // `Connection.prototype`, `solana-wallet.test.ts:453-454`— no lo ve ni podría verlo.
+    // `Connection.prototype`, `solana-wallet.test.ts:477-478`— no lo ve ni podría verlo.
     // `solana-providers.tsx` es el ÚNICO archivo del repo que puede leer ese hook (seam AC-3), así que
     // el barrido es exacto y no heurístico: un archivo, una palabra.
     const { readFileSync } = await import("node:fs");

@@ -362,7 +362,7 @@ describe("SolanaWalletAdapter.readEscrowStates (WKH-349)", () => {
   // 🔴 T-A12 (AC-13) — LA FRONTERA EXACTA: `nowSec === deadlineSec`.
   // Con el reloj congelado JUSTO en el `deadline`, la respuesta tiene que ser `window-closed`, porque
   // el predicado de acá es la negación exacta del guard con el que el refund de este mismo adapter
-  // rechaza por deadline (`refund_before_deadline`, `solana-wallet.ts:1258`): a esa altura aquél YA NO
+  // rechaza por deadline (`refund_before_deadline`, `solana-wallet.ts:1387`): a esa altura aquél YA NO
   // rechaza, así que la pantalla no puede decir que todavía se puede liberar.
   //
   // MUTANTE: `nowSec > deadlineSec` (estricto). Cambia el resultado UN SOLO SEGUNDO de toda la línea de
@@ -441,7 +441,7 @@ describe("SolanaWalletAdapter.readEscrowStates (WKH-349)", () => {
 //
 // POR QUÉ NO ALCANZABA T-A12, medido y no supuesto (AR/MNR): con el mutante
 // `if (nowSec <= deadlineSec) throw new Error("refund_before_deadline")` puesto en
-// (`refund_before_deadline`, `solana-wallet.ts:1258`) —o sea el refund rechazando EN el deadline
+// (`refund_before_deadline`, `solana-wallet.ts:1387`) —o sea el refund rechazando EN el deadline
 // mientras la pantalla ya dice "la salida que queda es devolverlos a tu wallet"— la suite entera daba
 // `2025 passed`, cero rojos. T-A12 fija la respuesta del historial contra un literal, así que vigila
 // UN lado del acople; el mutante vive del OTRO. Un candado de un acople tiene que ejercitar las dos

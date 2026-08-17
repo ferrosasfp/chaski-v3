@@ -68,7 +68,7 @@
  */
 import bs58 from "bs58";
 import nacl from "tweetnacl";
-import type { BilleteraDeeplink, Desenlace } from "./protocol";
+import type { BilleteraDeeplink, CodigoNuestro, Desenlace } from "./protocol";
 import {
   PARAMS_DE_RESPUESTA,
   clavePublicaEnRespuesta,
@@ -302,10 +302,21 @@ export function leerViaje(a: Almacen, ahora: number): LecturaDelViaje {
   // Sin `secreta` no se puede abrir ningún sobre, así que ese viaje no sirve para nada aunque esté
   // fresco.
   //
-  // 🔴 `Number.isFinite` y no `typeof === "number"` a secas: `JSON.parse('{"desde":1e999}')` produce
-  // `Infinity`, cuyo `typeof` es `"number"`, y `ahora - Infinity > MAX_EDAD_MS` es `false` PARA
-  // SIEMPRE. Medido: con eso el viaje contestaba `hay` diez años después. La ventana no es un
-  // control de seguridad (DT-7), pero un viaje que no vence nunca no es una ventana.
+  // 🔴 `Number.isFinite` y no `typeof === "number"` a secas: `JSON.parse` produce `Infinity` con
+  // `1e999` y `-Infinity` con `-1e999`, y el `typeof` de los dos es `"number"`.
+  //
+  // ⚠️ ACÁ DECÍA «con eso el viaje contestaba `hay` diez años después» Y HOY ES FALSO — es el gemelo
+  // de un comentario que el fix-pack 3 ya había corregido en `sesion.test.ts` y que se dejó vivo en
+  // ESTE archivo, que es el que manda. Medido con el mutante puesto (`typeof v?.desde !== "number"`):
+  // el `+Infinity` NO llega a depender de esta línea, lo mata el guard `v.desde > ahora` de más
+  // abajo, porque `Infinity > ahora` es `true`. El único `it` que se pone rojo es el de `-1e999`.
+  //
+  // QUÉ SOSTIENE ESTA LÍNEA, DICHO SOBRE EL CÓDIGO DE HOY: `-Infinity` es el único valor que pasa el
+  // guard de futuro (`-Infinity > ahora` es `false`) y llega a la resta, donde `ahora - (-Infinity)`
+  // es `Infinity` y sale por la rama de la EDAD. O sea que sin esta validación un `desde` que no es
+  // ningún instante se contesta **«vencido»** en vez de «no-hay»: se le afirma a la persona que hubo
+  // un viaje suyo y que se le pasó el tiempo —que firmó al pedo— a partir de basura del disco. Es el
+  // mismo criterio que el JSON roto. El candado es el `it` «un `desde` no finito NEGATIVO es basura».
   //
   // 🔴 `pasosConsumidos`: ver `esListaDePasos`. Un campo que se recorre se valida como estructura.
   if (
@@ -397,11 +408,27 @@ export type Vuelta =
   /** En esta URL no hay ninguna respuesta. Alguien entró a la página de frente. NO es un rechazo. */
   | { tipo: "no-volvimos" }
   /**
-   * La URL dice que volvimos de la billetera, pero en el disco no hay viaje.
-   * Pasa de verdad: otro dispositivo, modo incógnito, alguien que compartió el enlace, o un viaje
-   * que ya se cerró. Es lo único honesto que se puede decir, y NO es "cancelaste".
+   * Volvimos de la billetera y de acá no sale ningún resultado. Pasa de verdad: otro dispositivo,
+   * modo incógnito, alguien que compartió el enlace, un viaje ya cerrado, o una billetera que nos
+   * devolvió con las manos vacías. NO es "cancelaste".
+   *
+   * 🔴 EL `motivo` NO ES INFORMATIVO: ES LA DIFERENCIA ENTRE BORRAR UNA FIRMA Y NO BORRARLA. Acá
+   * había UN solo valor y colapsaba dos estados que el módulo distingue perfectamente. Medido en el
+   * CR de esta HU:
+   *   disco VACÍO                              -> huerfana
+   *   disco CON viaje + `transaccionFirmada`   -> huerfana   (idéntica; el llamador no podía separarlas)
+   * Y el docblock decía "es lo único honesto que se puede decir", que era falso en el segundo caso:
+   * ahí SÍ hay viaje y el módulo lo sabe. La consecuencia no es cosmética: un llamador de la ola 3
+   * que reaccione a `huerfana` con "empezá de nuevo" + `terminarViaje` **destruye una transacción
+   * que la persona ya firmó**, que es un dato del camino del dinero y que no está en memoria de
+   * nadie porque la página se murió en el salto.
+   *   · "sin-viaje"    en el disco no hay NADA que se pueda usar (nunca hubo, o era basura y se
+   *                    limpió). Empezar de nuevo es la reacción correcta y no se pierde nada.
+   *   · "manos-vacias" HAY viaje, y esta URL no trae respuesta (o le faltan parámetros). Puede tener
+   *                    resultados de pasos anteriores adentro. ⛔ NO limpiar sin leerlos.
+   * (Mismo patrón que `otra-clave`/`motivo`, por la misma razón: dos hechos distintos, dos valores.)
    */
-  | { tipo: "huerfana"; paso: PasoDelViaje }
+  | { tipo: "huerfana"; paso: PasoDelViaje; motivo: "sin-viaje" | "manos-vacias" }
   /** Había viaje, pero ya no vale. La persona firmó al pedo y merece saberlo. */
   | { tipo: "vencida"; paso: PasoDelViaje }
   /**
@@ -428,7 +455,26 @@ export type Vuelta =
   | { tipo: "conectado"; direccion: string; session: string; persistencia: Persistencia }
   | { tipo: "tx-firmada"; transaccionBase58: string; persistencia: Persistencia }
   | { tipo: "patrocinio-firmado"; firma: string; persistencia: Persistencia }
-  | { tipo: "rechazo"; paso: PasoDelViaje; codigo: string; mensaje: string };
+  /**
+   * Algo dijo que NO. El `origen` dice QUIÉN, y está partido en dos porque los dos códigos no salen
+   * del mismo mundo (ver el docblock de `Desenlace` en `protocol.ts`, donde está la medición).
+   *   · "billetera" el `codigo` salió de la URL, o sea de quien la haya escrito. `string` libre, NO
+   *                 autenticado: este mismo archivo tiene escrito, más abajo, que un tercero puede
+   *                 provocar un `rechazo` con el código y el mensaje que quiera. Es lo que se le
+   *                 puede MOSTRAR a la persona ("cancelaste"), nunca lo que se usa para diagnosticar.
+   *   · "nuestro"   lo escribió `leerRespuesta` mirando el sobre. Conjunto cerrado (`CodigoNuestro`).
+   *                 Es un fallo de ESTE lado y a la persona no se le dice "cancelaste".
+   * Sin esta separación, `?errorCode=sobre_ilegible` pegado a mano en la barra de direcciones y un
+   * fallo real de cripto nuestro llegaban al llamador como el MISMO objeto (medido en el CR).
+   */
+  | { tipo: "rechazo"; paso: PasoDelViaje; origen: "billetera"; codigo: string; mensaje: string }
+  | {
+      tipo: "rechazo";
+      paso: PasoDelViaje;
+      origen: "nuestro";
+      codigo: CodigoNuestro;
+      mensaje: string;
+    };
 
 /** El parámetro con el que marcamos nuestras propias vueltas. */
 export const MARCA = "dl";
@@ -458,6 +504,12 @@ export function enlaceDeVuelta(origen: string, paso: PasoDelViaje): string {
  * QUÉ MIRAR. Quién decide es, en este orden: que el viaje sea de la remesa en curso, que ese paso no
  * se haya leído ya, que la respuesta venga de la clave que fijó el connect, y recién ahí que el
  * sobre abra.
+ *
+ * ⚠️ ESA FRASE ES UN ORDEN Y EL ORDEN NO LO FIJABA NADIE. Medido: intercambiar los dos primeros
+ * guards dejaba la suite entera en verde, porque cada `it` violaba UN guard por vez y con una sola
+ * violación cualquier orden da el mismo resultado. Hoy lo congela el `it` «el ORDEN de decisión que
+ * el docblock declara es el que corre» (`T-VJ-8`), con un viaje que viola los tres a la vez. Si
+ * reordenás estos guards, ese `it` se pone rojo y hay que cambiar ESTE párrafo con él.
  *
  * 🔴 LO QUE ESTE DOCBLOCK DECÍA Y ERA FALSO: *"Una URL fabricada a mano cae en `sobre_ilegible`. Lo
  * único que alguien puede lograr escribiendo la marca es que le contestemos huerfana."* No. El
@@ -536,7 +588,10 @@ export function interpretarVuelta(
   // 🔴 SE LEE ACÁ, no se recibe. Ver el bloque del docblock sobre el read-modify-write.
   const lectura = leerViaje(a, ahora);
   if (lectura.tipo === "vencido") return { tipo: "vencida", paso };
-  if (lectura.tipo === "no-hay") return { tipo: "huerfana", paso };
+  // `"sin-viaje"`: acá el disco NO tiene nada usable —nunca hubo, o había basura y `leerViaje` la
+  // limpió—, así que no hay ningún resultado que se pueda perder. Es el único caso en el que
+  // "empezá de nuevo" es una reacción sin costo. Ver `Vuelta`.
+  if (lectura.tipo === "no-hay") return { tipo: "huerfana", paso, motivo: "sin-viaje" };
   const { viaje, secretaBytes } = lectura;
 
   if (remesaEnCurso !== null && viaje.remittanceId !== remesaEnCurso) {
@@ -620,10 +675,22 @@ export function interpretarVuelta(
 
 /** Pasa un `Desenlace` del protocolo a un `Vuelta`, sin perder ninguno de los tres valores. */
 function traducir<T>(d: Desenlace<T>, paso: PasoDelViaje, ok: (datos: T) => Vuelta): Vuelta {
-  if (d.tipo === "rechazo") return { tipo: "rechazo", paso, codigo: d.codigo, mensaje: d.mensaje };
+  // El `switch` sobre `origen` y no un copiado suelto de `d.codigo`: los dos campos están
+  // correlacionados (`"nuestro"` restringe el código a `CodigoNuestro`) y así es `tsc` el que impide
+  // volver a fundir los dos espacios en un `string` único.
+  if (d.tipo === "rechazo") {
+    return d.origen === "billetera"
+      ? { tipo: "rechazo", paso, origen: "billetera", codigo: d.codigo, mensaje: d.mensaje }
+      : { tipo: "rechazo", paso, origen: "nuestro", codigo: d.codigo, mensaje: d.mensaje };
+  }
   // "ninguno" con la marca puesta significa que la billetera nos mandó de vuelta SIN los parámetros
   // de respuesta. No es un rechazo declarado, pero tampoco es "no volvimos": volvimos con las manos
-  // vacías. Se reporta como huérfana, que es lo único que se puede afirmar.
-  if (d.tipo === "ninguno") return { tipo: "huerfana", paso };
+  // vacías.
+  //
+  // 🔴 `motivo: "manos-vacias"` Y NO `"sin-viaje"`: acá SÍ hay viaje en el disco —`interpretarVuelta`
+  // ya pasó por `leerViaje` y por los tres guards para llegar hasta acá— y puede tener adentro la
+  // `transaccionFirmada` del paso 2. Colapsar los dos motivos es exactamente lo que hacía que un
+  // llamador razonable pudiera contestar "empezá de nuevo" y borrar esa firma. Ver `Vuelta`.
+  if (d.tipo === "ninguno") return { tipo: "huerfana", paso, motivo: "manos-vacias" };
   return ok(d.datos);
 }

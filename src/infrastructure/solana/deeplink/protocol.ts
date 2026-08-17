@@ -59,8 +59,11 @@ const BASE: Record<BilleteraDeeplink, string> = {
 /**
  * Cómo se llama, en la respuesta, la clave pública que puso la billetera.
  *
- * Es LO ÚNICO que difiere entre los dos protocolos. Tenerlo en un mapa y no en un `if` es lo que
- * permite que el resto del archivo no sepa con cuál está hablando.
+ * Es lo único que difiere **en la RESPUESTA**; el otro mapa que difiere es `BASE`, o sea el host de
+ * la ida. (Acá decía "es LO ÚNICO que difiere entre los dos protocolos", a secas, y era falso con
+ * `BASE` diez líneas más arriba en el mismo archivo.) Los dos son mapas y no `if`, que es lo que
+ * permite que el resto del archivo no sepa con cuál está hablando; y los dos tienen candado por
+ * separado: el host lo miran los `it.each` de `T-DL-1/4/5` y el nombre de la respuesta, `T-DL-2`.
  */
 const CLAVE_EN_RESPUESTA: Record<BilleteraDeeplink, string> = {
   phantom: "phantom_encryption_public_key",
@@ -107,7 +110,16 @@ export interface ParDeCifrado {
  * Un par nuevo por sesión, como recomiendan las dos documentaciones.
  *
  * ⚠️ Esto NO es la billetera de nadie ni firma nada: es sólo el canal cifrado entre esta pestaña y
- * la app de la billetera. Perderlo no pierde fondos; obliga a volver a conectar.
+ * la app de la billetera. Perder la SECRETA no pierde fondos; obliga a volver a conectar.
+ *
+ * 🔴 PERO LA PÚBLICA NO ES UN DATO INOCUO, y este bloque decía sólo la mitad tranquilizadora. Para
+ * fabricar una respuesta que el otro lado acepte **no hace falta la secreta: alcanza con la
+ * PÚBLICA**, que viaja en la URL saliente hacia phantom.app/solflare.com, queda en el historial del
+ * navegador y está en el disco. Quien la tenga se fabrica su propio par, deriva el MISMO secreto
+ * compartido por Diffie-Hellman y cifra lo que quiera; medido en el AR de esta HU, así se consiguió
+ * un `tx-firmada` con una transacción que ninguna billetera firmó. Lo que cierra eso NO está en este
+ * archivo: es el ancla `claveBilletera` de `sesion.ts` (ver su docblock, y el bloque de
+ * `interpretarVuelta` sobre el residual del paso 1). Este archivo, solo, no distingue quién cifró.
  */
 export function nuevoParDeCifrado(): ParDeCifrado {
   const par = nacl.box.keyPair();
@@ -202,6 +214,13 @@ export function urlFirmarMensaje(d: DatosDeSesion & { mensaje: Uint8Array }): st
 }
 
 /**
+ * Los códigos que escribe ESTE módulo cuando algo de nuestro lado no cerró. Son un conjunto CERRADO
+ * y por eso son un tipo y no un `string`: el que los consuma puede hacer un `switch` exhaustivo y el
+ * compilador le avisa si mañana aparece un cuarto.
+ */
+export type CodigoNuestro = "sobre_ilegible" | "json_ilegible" | "forma_inesperada";
+
+/**
  * EL DESENLACE DE UN VIAJE, CON SUS TRES VALORES SEPARADOS.
  *
  * 🔴 LOS TRES NO COLAPSAN, y el que se pierde siempre es el tercero. Es la misma lección que este
@@ -213,10 +232,26 @@ export function urlFirmarMensaje(d: DatosDeSesion & { mensaje: Uint8Array }): st
  *
  * Colapsar "ninguno" en "rechazo" le diría "cancelaste" a quien nunca fue a ningún lado. Ya nos pasó
  * con Mobile Wallet Adapter y costó una noche.
+ *
+ * ══ POR QUÉ EL `rechazo` ESTÁ PARTIDO EN DOS POR `origen` ═══════════════════════════════════════
+ * 🔴 Porque los dos `codigo` venían del MISMO campo y no salían del mismo mundo. Medido en el CR de
+ * esta HU: una URL fabricada a mano con `?errorCode=sobre_ilegible` y un fallo REAL de cripto de
+ * este archivo devolvían **exactamente el mismo objeto**. El `errorCode` viaja sin cifrar y lo puede
+ * escribir cualquiera —este mismo módulo lo tiene escrito en el docblock de `interpretarVuelta`— así
+ * que fundirlo con nuestros propios diagnósticos hacía que el espacio de valores de un tercero
+ * pudiera hacerse pasar por un diagnóstico nuestro, y al revés.
+ *   · `origen: "billetera"` el `codigo` lo escribió QUIEN ARMÓ LA URL. `string` libre: no es una
+ *                           enumeración nuestra y no hay que tratarla como tal. No está autenticado.
+ *   · `origen: "nuestro"`   lo escribió este archivo, mirando el sobre. `CodigoNuestro`, cerrado.
+ * Separar el ORIGEN y no sólo renombrar los códigos es lo que hace que `tsc` obligue a distinguir:
+ * un `codigo` suelto se compara con un literal y nadie se entera; con esto, quien quiera reaccionar
+ * a `sobre_ilegible` tiene que decir de qué lado, porque en la rama `"billetera"` ese literal ni
+ * siquiera está en el tipo.
  */
 export type Desenlace<T> =
   | { tipo: "ok"; datos: T }
-  | { tipo: "rechazo"; codigo: string; mensaje: string }
+  | { tipo: "rechazo"; origen: "billetera"; codigo: string; mensaje: string }
+  | { tipo: "rechazo"; origen: "nuestro"; codigo: CodigoNuestro; mensaje: string }
   | { tipo: "ninguno" };
 
 /** Lo que devuelve un connect que salió bien. */
@@ -247,7 +282,9 @@ export function leerRespuesta<T>(
 ): Desenlace<T> {
   const codigo = params.get("errorCode");
   if (codigo) {
-    return { tipo: "rechazo", codigo, mensaje: params.get("errorMessage") ?? "" };
+    // `origen: "billetera"` NO afirma que lo haya escrito una billetera: afirma que salió de la URL,
+    // que es el único hecho observable. Nadie autenticó eso (ver el docblock de `Desenlace`).
+    return { tipo: "rechazo", origen: "billetera", codigo, mensaje: params.get("errorMessage") ?? "" };
   }
   const clave = clavePublicaEnRespuesta(billetera, params);
   const nonce = params.get("nonce");
@@ -262,16 +299,16 @@ export function leerRespuesta<T>(
   } catch {
     abierto = null; // base58 inválido, longitudes que no cierran: todo cae acá
   }
-  if (!abierto) return { tipo: "rechazo", codigo: "sobre_ilegible", mensaje: "" };
+  if (!abierto) return { tipo: "rechazo", origen: "nuestro", codigo: "sobre_ilegible", mensaje: "" };
 
   let crudo: unknown;
   try {
     crudo = JSON.parse(new TextDecoder().decode(abierto));
   } catch {
-    return { tipo: "rechazo", codigo: "json_ilegible", mensaje: "" };
+    return { tipo: "rechazo", origen: "nuestro", codigo: "json_ilegible", mensaje: "" };
   }
   const datos = forma(crudo);
-  if (datos === null) return { tipo: "rechazo", codigo: "forma_inesperada", mensaje: "" };
+  if (datos === null) return { tipo: "rechazo", origen: "nuestro", codigo: "forma_inesperada", mensaje: "" };
   return { tipo: "ok", datos };
 }
 

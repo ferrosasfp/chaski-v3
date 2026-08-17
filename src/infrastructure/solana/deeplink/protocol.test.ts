@@ -264,6 +264,37 @@ describe("T-DL-3: los TRES desenlaces, y que ninguno colapsa en otro", () => {
     if (d.tipo !== "rechazo") return;
     expect(d.codigo).toBe("4001");
     expect(d.mensaje).toContain("rejected");
+    expect(d.origen).toBe("billetera");
+  });
+
+  it("el `origen` separa lo que escribe la URL de lo que escribimos nosotros", () => {
+    // 🔴 MEDIDO EN EL CR: `?errorCode=sobre_ilegible` fabricado a mano y un fallo real de cripto de
+    // este archivo devolvían el MISMO objeto. El `errorCode` no está autenticado —lo escribe quien
+    // arme la URL— así que fundir su espacio de valores con el de nuestros diagnósticos internos
+    // dejaba que cualquiera se hiciera pasar por un fallo nuestro, y al revés.
+    //
+    // El candado mira los TRES códigos nuestros y no sólo uno: el defecto era del campo, no de un
+    // valor, así que un `origen` puesto a mano en una sola de las tres ramas no debe alcanzar.
+    // MUTANTE QUE MATA: devolver `origen: "billetera"` en cualquiera de las tres ramas internas de
+    // `leerRespuesta`, o `origen: "nuestro"` en la rama del `errorCode`.
+    const par = nuevoParDeCifrado();
+    const codigoYOrigen = (params: URLSearchParams, secreta = par.secreta) => {
+      const d = leerRespuesta("phantom", params, secreta, FORMA_CONEXION);
+      return d.tipo === "rechazo" ? `${d.origen}:${d.codigo}` : d.tipo;
+    };
+    const conSobre = (r: { clave: string; nonce: string; data: string }) =>
+      new URLSearchParams({ phantom_encryption_public_key: r.clave, nonce: r.nonce, data: r.data });
+
+    // Los tres nuestros.
+    expect(codigoYOrigen(conSobre(billeteraQueContesta(par.publica, { public_key: "A", session: "B" })), nuevoParDeCifrado().secreta)).toBe("nuestro:sobre_ilegible");
+    expect(codigoYOrigen(conSobre(billeteraQueContesta(par.publica, undefined, "{no")))).toBe("nuestro:json_ilegible");
+    expect(codigoYOrigen(conSobre(billeteraQueContesta(par.publica, { ok: true })))).toBe("nuestro:forma_inesperada");
+
+    // Y los MISMOS tres nombres, fabricados a mano en la URL, salen del otro lado. Ésta es la
+    // colisión exacta que el CR midió: sin `origen`, estas seis llamadas dan tres pares idénticos.
+    for (const codigo of ["sobre_ilegible", "json_ilegible", "forma_inesperada"]) {
+      expect(codigoYOrigen(new URLSearchParams({ errorCode: codigo }))).toBe(`billetera:${codigo}`);
+    }
   });
 
   it("«rechazo» con sobre_ilegible si la clave secreta no es la del viaje, y NO revienta", () => {

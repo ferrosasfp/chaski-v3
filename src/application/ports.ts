@@ -1041,7 +1041,7 @@ export type EscrowId16 = string;
  *      refutaría: releer la misma PDA un segundo después del `deadline`.
  *  · `"deposited-window-closed"` — lo mismo, con el `deadline` YA PASADO según nuestro reloj
  *      (`nowSec >= deadlineSec`), que es la negación EXACTA del guard con el que el refund de esta app
- *      rechaza por deadline (`refund_before_deadline`, `../infrastructure/solana-wallet.ts:1258`). NO
+ *      rechaza por deadline (`refund_before_deadline`, `../infrastructure/solana-wallet.ts:1387`). NO
  *      prueba que el `refund` vaya a entrar: prueba que ESTA app ya no lo rechazaría por deadline.
  *      Que el programa on-chain acepte exactamente lo mismo NO se leyó desde este repo. Y NO dice que
  *      exista un botón para firmar esa devolución: esta capa lee, no abre ninguna puerta.
@@ -1053,11 +1053,11 @@ export type EscrowId16 = string;
  *      distintos sobre la misma remesa.
  *  · `"refunded"`  — la cuenta existe y su `status` es `{ Refunded: {} }`. NO prueba que la cuenta se
  *      haya cerrado: la ix `refund` no cierra nada, el cierre es otra instrucción
- *      (`refund`, `../infrastructure/solana-wallet.ts:1352`).
+ *      (`refund`, `../infrastructure/solana-wallet.ts:1481`).
  *  · `"absent"`    — LA CADENA CONTESTÓ, y en esa PDA no hay cuenta. Es exactamente lo que significa
  *      hoy un `!acc` en los dos bucles que ya batchean cuentas del escrow
  *      (`resolveRemittanceIdFromLedger`, `../infrastructure/solana-wallet.ts:353`) y
- *      (`listCloseable`, `../infrastructure/solana-wallet.ts:1732`). NO dice a dónde fue la plata y NO
+ *      (`listCloseable`, `../infrastructure/solana-wallet.ts:1861`). NO dice a dónde fue la plata y NO
  *      distingue "nunca existió" de "ya se cerró después de resolverse". Ver R-1, acá abajo.
  *  · `"unknown"`   — NO PUDIMOS PREGUNTAR: el RPC falló, venció el techo de tiempo, o la respuesta no
  *      decodifica. No dice absolutamente nada sobre los fondos. NUNCA se colapsa con `"absent"`: uno
@@ -1094,7 +1094,7 @@ export type EscrowId16 = string;
  * llama "qué contestó la cadena" que dependen de algo que la cadena NO contestó. El `status` y el
  * `deadline` los dijo ella; de qué lado del `deadline` caemos lo dice el `Date.now()` del dispositivo,
  * leído dentro de `readEscrowStates`. Esa comparación está escrita DOS VECES en el adapter —ahí y en el
- * guard (`refund_before_deadline`, `../infrastructure/solana-wallet.ts:1258`)—, así que PUEDEN DIVERGIR:
+ * guard (`refund_before_deadline`, `../infrastructure/solana-wallet.ts:1387`)—, así que PUEDEN DIVERGIR:
  * lo único que las obliga a decir lo mismo es T-A16, el test que corre LAS DOS sobre el mismo borde.
  *
  * LOS INPUTS QUE LO DEMUESTRAN, y son dos porque el primero que se escribió acá no se sostenía: decía

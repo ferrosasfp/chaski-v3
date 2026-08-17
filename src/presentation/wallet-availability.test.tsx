@@ -551,8 +551,8 @@ describe("WKH-MWA · CANDADO: con MWA en juego, el depósito sigue saliendo por 
    * 🔴 QUÉ CIERRA ESTE CANDADO, y por qué es el único test de la rama que protege plata.
    *
    * Chaski NO envía la transacción del depósito: pide una firma PARCIAL y la difunde el facilitator,
-   * que es quien paga el fee (`solana-wallet.ts:985-989`). El protocolo MWA tiene DOS operaciones
-   * distintas y la que necesitamos es la OPCIONAL: `sign_transactions` (firmar y devolver) frente a
+   * que es quien paga el fee (`signTransaction`, `solana-wallet.ts:1114`). El protocolo MWA tiene DOS
+   * operaciones distintas y la que necesitamos es la OPCIONAL: `sign_transactions` (firmar y devolver) frente a
    * `sign_and_send_transactions` (firmar y enviar). Una billetera que sólo ofrezca la segunda no sirve
    * para el patrocinio: no puede enviar una transacción cuyo pagador de fees es otra cuenta.
    *
@@ -625,7 +625,7 @@ describe("WKH-MWA · CANDADO: con MWA en juego, el depósito sigue saliendo por 
     // Segunda capa, y de otra naturaleza: T-MWA-4 mide una CORRIDA, esto mide el TEXTO. Hace falta
     // porque `useWallet().sendTransaction` es el único camino de difusión que NO pasa por `Connection`
     // (va derecho a la app de la billetera), así que el guard que ya existe —espiar
-    // `Connection.prototype`, `solana-wallet.test.ts:453-454`— no lo ve ni podría verlo.
+    // `Connection.prototype`, `solana-wallet.test.ts:477-478`— no lo ve ni podría verlo.
     // `solana-providers.tsx` es el ÚNICO archivo del repo que puede leer ese hook (seam AC-3), así que
     // el barrido es exacto y no heurístico: un archivo, una palabra.
     const { readFileSync } = await import("node:fs");

@@ -297,3 +297,65 @@ export function formatLamportsAsSolFloor(lamports: number): string {
   return (units / SOL_DISPLAY_FACTOR).toFixed(SOL_DISPLAY_DECIMALS).replace(".", ",");
 }
 
+// ── WKH-357 · el umbral del camino por ENLACE PROFUNDO (durable nonce) ──────────────────────────────
+//
+// Va TODO al FINAL del archivo, y eso es una decisión medida, no un descuido de orden: este archivo
+// recibe 5 citas ancladas por número (a `:128`, `:128`, `:203`, `:223`, `:223`). Insertando acá abajo
+// no se mueve NINGUNA; insertando arriba de `:181` se mueven 3. Y además tiene que estar después de
+// `:230`, porque referencia a `SOLANA_BASE_FEE_PER_SIGNATURE_LAMPORTS`: es la misma regla que este
+// archivo ya escribió en `:138-141` — un `const` no puede referenciar a otro que se declara después.
+
+/** La propina que la billetera inyecta en una tx que NO declara ComputeBudget: 375.000 µL/CU ×
+ *  200.000 CU / 1e6 = 75.000 lamports. Fuente: la derivación de `:70-80` de este archivo.
+ *
+ *  ⚠️ SÍ, ES EL MISMO 75.000 QUE `REFUND_FEE_ALLOWANCE_LAMPORTS` (`:181`) LLEVA COMO LITERAL, y `:181`
+ *  NO se reescribe para usar esta constante. El motivo es mecánico y no estético: `:181` se declara
+ *  ANTES que `SOLANA_BASE_FEE_PER_SIGNATURE_LAMPORTS` (`:230`), así que no puede referenciarlo, y
+ *  mover cualquiera de las dos cosas para "unificar" rompe la evaluación del módulo o corre 3 citas
+ *  ancladas. El candado contra la deriva silenciosa de los dos 75.000 es T-22, que los ata al mismo
+ *  valor: si alguien cambia uno, el test se pone rojo. */
+const WALLET_TIP_ALLOWANCE_LAMPORTS = 75_000;
+
+/** Alquiler exento de renta de la cuenta de nonce (80 bytes = `NONCE_ACCOUNT_LENGTH`).
+ *
+ *  RE-MEDIDO contra devnet el 2026-08-17: `getMinimumBalanceForRentExemption(80)` → 1447680.
+ *  Coincide con la fórmula pública de rent: (128 + 80) × 3480 × 2 = 1.447.680. Dos fuentes
+ *  independientes sobre el mismo número, que es lo que lo vuelve una derivación y no un literal.
+ *
+ *  ⚠️ LA CADENA ENVEJECE SOLA: si volvés a medirlo y da otro número, el que tiene razón es el RPC y no
+ *  este comentario. La medición se re-corre con:
+ *    node -e 'const {Connection}=require("@solana/web3.js"); new Connection("https://api.devnet.solana.com","confirmed").getMinimumBalanceForRentExemption(80).then(console.log)'
+ *
+ *  ⛔ LO QUE NO VUELVE: este alquiler NO se recupera salvo que alguien emita un `nonceWithdraw`, y esta
+ *  HU NO lo implementa. Son 0,00145 SOL por remitente, UNA sola vez, que quedan bloqueados en su propia
+ *  cuenta de nonce. El remitente los puede recuperar cuando quiera; Chaski no le ofrece el botón. */
+export const NONCE_ACCOUNT_RENT_LAMPORTS = 1_447_680;
+
+/** El umbral de SOL del camino por ENLACE PROFUNDO.
+ *
+ *  ⛔ NO es el del camino de la billetera inyectada y NO lo reemplaza:
+ *  `SENDER_MIN_LAMPORTS_FOR_DEPOSIT` (`:187`) NO cambió de valor. Subirlo cambiaría el veredicto del
+ *  camino inyectado para una billetera con 9.000.000 lamports, y ése es el recorrido del video de M5
+ *  que YA movió USDC real en cadena.
+ *
+ *  Los tres sumandos que se agregan son los de la tx de CREACIÓN de la cuenta de nonce, que el
+ *  remitente firma y paga él (feePayer = sender, UNA sola firma):
+ *    + NONCE_ACCOUNT_RENT_LAMPORTS ............ 1.447.680  el alquiler de la cuenta
+ *    + SOLANA_BASE_FEE_PER_SIGNATURE_LAMPORTS .     5.000  su única firma (`:230`)
+ *    + WALLET_TIP_ALLOWANCE_LAMPORTS ..........    75.000  la propina, el mismo sumando que el refund
+ *
+ *  ⚠️ SE PIDE SIEMPRE en el camino por enlace, tenga o no el remitente su cuenta de nonce ya creada, y
+ *  por la MISMA razón que el punto 4 de `:120-125`: un umbral condicional obliga a que la lectura del
+ *  guard y la de la construcción coincidan, y si divergen la tx REVIERTE EN CADENA. Pedir de más a
+ *  quien ya tiene la cuenta cuesta que un caso borde vea un mensaje de saldo insuficiente; pedir de
+ *  menos cuesta una transacción revertida con el escrow a medio crear. */
+export const SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT =
+  SENDER_MIN_LAMPORTS_FOR_DEPOSIT +
+  NONCE_ACCOUNT_RENT_LAMPORTS +
+  SOLANA_BASE_FEE_PER_SIGNATURE_LAMPORTS +
+  WALLET_TIP_ALLOWANCE_LAMPORTS;
+
+/** Sólo para T-22: ata los dos `75_000` del archivo (éste y el sumando de `REFUND_FEE_ALLOWANCE_LAMPORTS`)
+ *  para que no deriven en silencio. No se usa en producción. */
+export const WALLET_TIP_ALLOWANCE_LAMPORTS_FOR_TESTS = WALLET_TIP_ALLOWANCE_LAMPORTS;
+

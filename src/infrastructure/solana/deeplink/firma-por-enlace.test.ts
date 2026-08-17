@@ -20,7 +20,7 @@
 // cabecera **35** donde son **41** (los rojos nuevos caen en ESTE archivo, pero el mutante es uno y su
 // conteo es global). Los dos sitios se corrigieron con el conteo RE-MEDIDO sobre dba48f9 y con el commit
 // escrito en la misma línea, y ahora cada tabla cita a la otra con el formato anclado
-// (`viaje.direccion`, `../../solana-wallet.test.ts:1306`) para que el candado de citas se ponga rojo si
+// (`viaje.direccion`, `../../solana-wallet.test.ts:1330`) para que el candado de citas se ponga rojo si
 // una se mueve sin la otra: el candado NO compara los números, así que eso es todo lo que hay.
 //
 // 🔴 CALIBRACIÓN, Y ESTA VEZ SIRVIÓ DE VERDAD: el mutante que tenía que MORIR dio exit=1 con 35 `it`

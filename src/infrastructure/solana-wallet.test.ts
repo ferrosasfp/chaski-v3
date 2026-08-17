@@ -1794,7 +1794,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
     // corre antes que los otros dos: el `new PublicKey(v.direccion)` de
     // ((`PublicKey`, `solana-wallet.ts:2320`)), que trata un `direccion` que no parsea
     // como "no hay address" en vez de dejarlo reventar 200 líneas más adelante.
-    // MUTANTE QUE MATA (MEDIDO como `SW-BASE58` en LA BATERÍA, al final de `solana/deeplink/conexion.test.ts`): borrar ese `try { new PublicKey(v.direccion) } catch` ⇒ el
+    // MUTANTE QUE MATA (MEDIDO como `SW-BASE58` en LA BATERÍA, al final de `solana/deeplink/conexion.test.ts`; hasta el fix-pack ese id NO existía en la tabla, CR/BLQ-BAJO-3): borrar ese `try { new PublicKey(v.direccion) } catch` ⇒ el
     // `authorizePrincipal` deja de tirar `wallet_not_connected` y tira una excepción de base58 sin causa
     // traducible ⇒ este `it` se pone rojo por el mensaje.
     it("una dirección que no parsea muere ANTES de la rama de enlace: el motor no recibe NADA", async () => {

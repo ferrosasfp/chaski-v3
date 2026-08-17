@@ -362,9 +362,13 @@ describe("T-065-11: `construirCreacionDeNonce`", () => {
     return { sender, noncePk, ixs, tx };
   }
 
-  // MUTANTE QUE MATA: en `nonce-duradero.ts`, cambiar la forma por
-  // `SystemProgram.createNonceAccount({ …, noncePubkey: Keypair.generate().publicKey })`
-  // ⇒ `numRequiredSignatures` pasa a 2 y este `it` se pone rojo. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit y `it` rojos de los 47 con el árbol en que se midieron.)
+  // MUTANTE QUE MATA: en `nonce-duradero.ts`, cambiar `createAccountWithSeed` por `createAccount`
+  // ⇒ la cuenta nueva deja de derivarse y pasa a ser FIRMANTE, `numRequiredSignatures` pasa a 2 y este
+  // `it` se pone rojo. Es la fila `T-065-11`, que hasta el fix-pack NO EXISTÍA en la tabla: el comentario
+  // decía «MEDIDO: ver LA BATERÍA» y ahí no había ninguna fila con ese id (CR/BLQ-BAJO-2).
+  // ⚠️ Y NO es el mutante que este comentario describía antes (`createNonceAccount` con un `noncePubkey`
+  // ajeno): ese atajo **no existe en la librería** y el bloque de `:219-231` de `nonce-duradero.ts` lo
+  // tiene medido. Un mutante que no compila no mide nada, así que se corre el que sí produce 2 firmas. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit, `it` rojos y el árbol de los 54, y se re-corre con `node scripts/mutacion/bateria-065.mjs`.)
   it("son 2 ix, `numRequiredSignatures === 1`, y el único firmante es el sender", async () => {
     const { sender, tx, ixs } = await armar();
     expect(ixs).toHaveLength(2);
@@ -414,7 +418,7 @@ describe("T-065-11: `construirCreacionDeNonce`", () => {
   //       si además se mueve la constante; con la librería en 80 los dos valores coinciden, así que el
   //       mutante REALMENTE distinguible es el (b);
   //   (b) cambiar `NONCE_ACCOUNT_LENGTH` por `81` ⇒ mueren los dos `it` de abajo.
-  // (MEDIDO: los conteos de los 47 están en LA BATERÍA DE MUTACIÓN, al final de `deeplink/conexion.test.ts`.)
+  // (MEDIDO: los conteos de los 54 están en LA BATERÍA DE MUTACIÓN, al final de `deeplink/conexion.test.ts`.)
   it("T-065-11b: el `space` es el `NONCE_ACCOUNT_LENGTH` de la librería", async () => {
     const { ixs } = await armar();
     const decodificada = SystemInstruction.decodeCreateWithSeed(ixs[0] as TransactionInstruction);

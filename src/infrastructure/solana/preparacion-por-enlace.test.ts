@@ -367,7 +367,7 @@ describe("el cableado contra el navegador", () => {
 // (c) asserta que el descuento **cambia una cantidad medida**.
 //
 // MUTANTE QUE MATA: insertar `await Promise.resolve();` como PRIMERA línea del cuerpo de `completar()`.
-// (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit y `it` rojos de los 47 con el árbol en que se midieron.)
+// (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit, `it` rojos y el árbol de los 54, y se re-corre con `node scripts/mutacion/bateria-065.mjs`.)
 describe("T-065-SYNC: en `completar()` no hay ningún `await` antes de leer la vuelta", () => {
   const RUTA = path.join(__dirname, "preparacion-por-enlace.ts");
 
@@ -496,7 +496,7 @@ describe("T-065-17: transmitir y confirmar", () => {
   }
 
   // MUTANTE QUE MATA: en `preparacion-por-enlace.ts`, devolver `{estado:"nonce-listo"}` con el
-  // resultado del `sendRawTransaction` SIN releer la cuenta. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit y `it` rojos de los 47 con el árbol en que se midieron.)
+  // resultado del `sendRawTransaction` SIN releer la cuenta. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit, `it` rojos y el árbol de los 54, y se re-corre con `node scripts/mutacion/bateria-065.mjs`.)
   it("el RPC aceptó la tx y la cuenta TODAVÍA no está ⇒ `nonce-en-vuelo`, NUNCA `nonce-listo`", async () => {
     const { res, envio } = await volverDelSaltoDelNonce(null, "ok");
     expect(envio, "no se transmitió nada").toHaveBeenCalledTimes(1);

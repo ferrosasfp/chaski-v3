@@ -259,7 +259,7 @@ describe("T-065-2 / T-065-5: la vuelta `?dl=conectar` completa el viaje", () => 
 //
 // MUTANTE QUE MATA: en `sesion.ts`, invertir la comparación del ancla `claveBilletera` (el `if` del
 // bloque `claveEnLaUrl`) ⇒ un segundo connect de OTRA clave pisa el ancla y este `it` se pone rojo.
-// (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit y `it` rojos de los 47 con el árbol en que se midieron.)
+// (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit, `it` rojos y el árbol de los 54, y se re-corre con `node scripts/mutacion/bateria-065.mjs`.)
 describe("T-065-3: un connect forjado TARDÍO no puede pisar el ancla", () => {
   it("otra clave después del connect bueno sale `corte` y NO cambia la dirección", () => {
     const a = almacenFalso();
@@ -560,7 +560,7 @@ describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
   });
 
   // MUTANTE QUE MATA: en `conexion.ts`, en la rama del nonce, borrar la comparación del
-  // `mensajeBase64` contra el ancla. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit y `it` rojos de los 47 con el árbol en que se midieron.)
+  // `mensajeBase64` contra el ancla. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit, `it` rojos y el árbol de los 54, y se re-corre con `node scripts/mutacion/bateria-065.mjs`.)
   it("T-065-15: con OTRA transacción bien cifrada, corta y NO la devuelve", () => {
     const a = almacenFalso();
     const propia = transaccion(Keypair.generate());
@@ -671,91 +671,139 @@ describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
-// 🔴 LA BATERÍA DE MUTACIÓN DE WKH-358 (CD-17 / CD-23) — CORRIDA, NO DECLARADA
+// 🔴 LA BATERÍA DE MUTACIÓN DE WKH-358 (CD-17 / CD-23) — CORRIDA, RE-DERIVABLE, Y CON EL `it` QUE MUERE
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
 //
 // ⚠️ EL «MEDIDO» DE CADA MUTANTE DE ESTA HU APUNTA ACÁ Y NO SE REPITE EN CADA SITIO, a propósito: un
 // conteo escrito en dos lugares se desincroniza, y este repo ya tiene la lección medida (el «6» de
 // `T-062-15(a)` pasó a 7 y a 8 sin que nadie editara la línea). Acá vive UNA sola copia.
 //
-// 🔴 CUÁNDO SE MIDIÓ, Y ESTO ES LO QUE ENVEJECE: sobre **el árbol de ESTE commit** (W6 de WKH-358, o
-// sea `8ef2409` más los tres `it` que la propia batería obligó a escribir). Un conteo de `it` rojos es
-// una propiedad del ÁRBOL y no del mutante: cualquier `it` nuevo lo mueve. ⛔ No se hereda, se re-corre.
+// ══ CÓMO SE RE-CORRE, Y ESTO ES LO QUE FALTABA (fix-pack · CR/BLQ-BAJO-3) ══════════════════════════
 //
-// EL PROTOCOLO, ENTERO Y CUMPLIDO EN LOS 47: respaldo POR COPIA (nunca `git checkout --`), la aguja
-// contada y exigida `== 1`, el texto RESULTANTE verificado (no sólo el count), la suite COMPLETA con
-// `NO_COLOR=1 FORCE_COLOR=0` y **SIN PIPES** (la salida por `spawnSync` a un archivo, el exit code de
-// `status`), el conteo leído de la línea `Tests N failed` y **nunca** contando `×`, restauración
-// verificada por `md5sum` y `git status --short` COMPLETO después de cada uno.
-// **Los 47: md5 restaurado OK y `git status` sin residuos.**
+//     node scripts/mutacion/bateria-065.mjs           # los 54, ≈20 s cada uno
+//     node scripts/mutacion/bateria-065.mjs --dry     # sólo verifica que cada aguja exista 1 vez
+//     node scripts/mutacion/bateria-065.mjs --solo T-065-15
 //
-// | test | mutante · sitio exacto | exit | rojos | veredicto |
-// |---|---|---|---|---|
-// | CALIBRACIÓN · TIENE que morir | sesion.ts · `MAX_EDAD_MS` un segundo menos                                 | exit=1 |  2 | muere |
-// | CALIBRACIÓN · TIENE que vivir | conexion.ts · una `const` sin efecto, LÍNEA-NEUTRA                         | exit=0 |  0 | VIVE  |
-// | T-065-GATE-1           | solana-wallet.ts · `caminoPorEnlace`: borrar la lectura de la elección     | exit=1 |  1 | muere |
-// | T-065-GATE-2           | solana-wallet.ts · `caminoPorEnlace`: borrar la condición de disponibilidad | exit=1 |  3 | muere |
-// | T-065-GATE-3           | solana-wallet.ts · `=== "none"` por `!== "injected"`                       | exit=1 |  1 | muere |
-// | T-065-GATE-4           | solana-wallet.ts:897 · invertir el `if` de la rama de enlace               | exit=1 | 56 | muere |
-// | (mío)                  | solana-wallet.ts · `direccionDelViajeConectado`: borrar el guard de base58 | exit=1 |  2 | muere |
-// | T-062-21 (invertido)   | container.ts:91 · descablear el colaborador de enlace                      | exit=1 |  1 | muere |
-// | T-062-10 (invertido)   | flow.tsx · la cadena `interpretarVuelta(` en presentación                  | exit=1 |  2 | muere |
-// | T-065-20               | wallet-availability.ts · `deeplinkEnabled`: tolerar mayúsculas y espacios  | exit=1 |  1 | muere |
-// | T-065-21               | flow.tsx:147 · borrar el gate `deeplinkEnabled()` del selector             | exit=1 |  1 | muere |
-// | T-UI-3                 | flow.tsx:147 · montar el selector sin mirar `disponibilidadWallet`         | exit=1 |  1 | muere |
-// | T-065-1                | conexion.ts · `iniciarConexion`: vaciar el `cluster`                       | exit=1 |  2 | muere |
-// | T-065-2                | conexion.ts · la rama `conectar`: escritura directa en vez del lector      | exit=1 |  6 | muere |
-// | T-065-3                | sesion.ts:614 · no comparar el ancla write-once                            | exit=1 | 12 | muere |
-// | T-065-4                | conexion.ts · que `firmar-tx` caiga al lector de la vuelta                 | exit=1 |  4 | muere |
-// | T-065-5                | conexion.ts · que la rama `conectado` devuelva un corte                    | exit=1 |  3 | muere |
-// | T-065-PUREZA           | conexion.ts · `Date.now()` dentro de `completarVuelta`                     | exit=1 |  2 | muere |
-// | T-065-SYNC             | preparacion-por-enlace.ts · un `await` como 1ª línea de `completar()`      | exit=1 |  1 | muere |
-// | T-065-CD11 (a)         | flow.tsx:507 · borrar `&& rem.ownerAddress != null`                        | exit=1 |  1 | muere |
-// | T-065-CD11 (b)         | flow.tsx:518 · borrar el `throw wallet_account_changed`                    | exit=1 |  5 | muere |
-// | T-065-CD11 (c)         | solana-wallet.ts:252 · descablear el link-aware de `getConnectedAddress`   | exit=1 |  6 | muere |
-// | T-065-7                | flow.tsx · borrar el ref de montaje del productor                          | exit=1 |  1 | muere |
-// | T-065-8                | flow.tsx · saltear el gate del pisón                                       | exit=1 |  1 | muere |
-// | T-065-9                | flow.tsx · `replaceState` por `location.assign`                            | exit=1 |  4 | muere |
-// | T-065-10               | flow.tsx · limpiar la barra ANTES de leer la vuelta                        | exit=1 |  1 | muere |
-// | (mío)                  | flow.tsx · borrar el gate del `status === "confirmed"`                     | exit=1 |  1 | muere |
-// | (mío)                  | flow.tsx · que cualquier marca reanude                                     | exit=1 |  1 | muere |
-// | T-065-11b (a)          | nonce-duradero.ts · `space: 80` en vez de la constante                     | exit=0 |  0 | VIVE  |
-// | T-065-11b (b)          | nonce-duradero.ts · `space: 81`                                            | exit=1 |  1 | muere |
-// | T-065-12 (a)           | flow.tsx · la cifra `0,0015` escrita a mano en la tarjeta                  | exit=1 |  1 | muere |
-// | T-065-12 (b)           | solana-escrow-rent.ts:332 · mover `NONCE_ACCOUNT_RENT_LAMPORTS`            | exit=1 |  2 | muere |
-// | T-065-13               | solana-wallet.ts:818 · `console.warn` en vez de cortar                     | exit=1 |  2 | muere |
-// | T-065-14               | solana-wallet.ts:823 · limpiar el disco antes del corte                    | exit=1 |  1 | muere |
-// | T-065-15               | conexion.ts · borrar la comparación de bytes contra el ancla               | exit=1 |  1 | muere |
-// | T-065-16               | conexion.ts · dejar de escribir el flag `consumido`                        | exit=1 |  1 | muere |
-// | T-065-17               | preparacion-por-enlace.ts · que el broadcast decida en vez de la cadena    | exit=1 |  2 | muere |
-// | T-065-19               | solana-wallet.ts:806 · volver el guard de saldo FAIL-CLOSED                | exit=1 |  1 | muere |
-// | T-065-6                | firma-por-enlace.ts · restaurar la promesa vieja del `case "conectado"`    | exit=1 |  1 | muere |
-// | T-065-COPY-1           | firma-por-enlace.ts · exportar una 12ª causa sin copy                      | exit=1 |  1 | muere |
-// | T-065-COPY-2           | flow-vm.ts · colapsar dos de los tres pares al mismo texto                 | exit=1 |  1 | muere |
-// | T-065-COPY-3           | flow-vm.ts · meter «se debitó» en una de las once                          | exit=1 |  1 | muere |
-// | T-065-COPY-4           | flow-vm.ts:572 · mover el lookup exacto después de los `includes`          | exit=1 |  4 | muere |
-// | T-065-18               | flow-vm.ts · la cifra `0,0105` escrita a mano                              | exit=1 |  1 | muere |
-// | T-065-CD11b (1/3)      | firma-por-enlace.ts · frase vieja en el docblock de `sender`               | exit=1 |  1 | muere |
-// | T-065-CD11b (2/3)      | firma-por-enlace.ts · frase vieja en la justificación del guard            | exit=1 |  2 | muere |
-// | T-065-CD11b (3/3)      | solana-wallet.ts:906 · frase vieja en el bloque del adaptador              | exit=1 |  1 | muere |
+// 🔴 QUÉ ESTABA MAL Y POR QUÉ ERA BLOQUEANTE. Esta tabla citaba `scratchpad/bateria.mjs` +
+// `scratchpad/mutantes.json`, y esos dos archivos **no existían ni en git ni en el disco**: la única vía
+// de re-correrla se había ido con la sesión que la escribió. Encima el «sha» decía *"`8ef2409` más tres
+// `it`"*, que no es un árbol direccionable, tres filas se llamaban `(mío)` (sin id, o sea no citables) y
+// `SW-BASE58` se citaba desde `solana-wallet.test.ts` como un id que la tabla no tenía. Una medición que
+// no se puede repetir no es una medición: es una declaración. El harness y la especificación de los 54
+// están COMMITEADOS en `scripts/mutacion/`, cada fila tiene id único, y el sha es un sha.
+//
+// 🔴 CUÁNDO SE MIDIÓ, Y ESTO ES LO QUE ENVEJECE: sobre el árbol **`012e26c`**, con la suite en
+// `Tests 2687 passed (2687)` / `Test Files 143 passed (143)` y exit 0 ANTES de mutar nada (el harness
+// exige las dos cosas: árbol limpio y base verde, y aborta si no). ⚠️ El ÚNICO diff entre `012e26c` y el
+// commit que trae esta tabla es este bloque de comentario, que no cambia ningún conteo porque es un
+// comentario. Un conteo de `it` rojos es una propiedad del ÁRBOL y no del mutante: cualquier `it` nuevo
+// lo mueve. ⛔ No se hereda, se re-corre.
+//
+// EL PROTOCOLO, ENTERO Y **VERIFICADO POR EL HARNESS** en vez de declarado acá (cada regla está escrita
+// en el encabezado de `scripts/mutacion/bateria-065.mjs`, al lado del código que la implementa):
+// respaldo POR COPIA (nunca `git checkout --`) · la aguja contada y exigida `== 1` · el texto RESULTANTE
+// verificado (no sólo el count) · el línea-neutro verificado cuando la fila lo declara · la suite
+// COMPLETA con `NO_COLOR=1 FORCE_COLOR=0`, por `spawnSync` y **SIN PIPES** (el exit sale de `status`) ·
+// el conteo leído de la línea `Tests N failed` y **nunca** contando `×` · restauración verificada por
+// `md5` **y** por `git status --short` completo después de CADA mutante, con ABORTO si no vuelve.
+// **Los 54: md5 restaurado OK y `git status` sin residuos.**
+//
+// ── CÓMO SE LEE LA COLUMNA «`it` QUE MUERE», que es la que CD-23(3) exige y la tabla vieja no tenía ──
+//
+// Es lo único que distingue un mutante que mata del que **mata por el motivo equivocado**, y esta HU
+// tiene el caso medido: la fila `T-065-GATE-1` decía «muere, 1 rojo» y el `it` que moría era de OTRO
+// archivo — su fixture montaba con `injected`, así que el gate cortaba en la 1ª condición y nunca leía la
+// elección (CR/BLQ-BAJO-1). Con la columna puesta, eso se ve de un vistazo.
+//
+// La celda trae **el primer `it` de CONDUCTA**, y entre paréntesis cuántos más cayeron.
+// ⚠️ `⚠️+citas` significa que el candado `citas-ancladas.test.ts` también se puso rojo, y eso **NO es
+// cobertura de comportamiento**. Son DOS causas distintas y conviene no confundirlas:
+//   · por DESPLAZAMIENTO — el mutante agrega o quita líneas y corre las citas de más abajo. Los tres que
+//     desplazan están declarados en su fila (`T-065-SYNC` +1, `T-065-11` −2, `T-065-COPY-1` +1).
+//   · por SÍMBOLO — el mutante es LÍNEA-NEUTRO y aun así borra de una línea citada el símbolo que la
+//     ancla. Es el caso de `T-065-CD11-a` (se lleva `ownerAddress` de `flow.tsx:507`, que cita
+//     `firma-por-enlace.ts:590`) y de `SW-BASE58` (se lleva `PublicKey`). Esos dos rojos son legítimos y
+//     dicen algo real: esa línea la cita alguien.
+// `SÓLO el candado de citas ⚠️` querría decir que el mutante no mató NINGÚN `it` de conducta. No hay
+// ninguna fila así.
+//
+// | id | mutante · sitio exacto | exit | rojos | `it` QUE MUERE (el 1º de conducta) | veredicto |
+// |---|---|---|---|---|---|
+// | CALIBRACION-MUERE | sesion.ts · `MAX_EDAD_MS` un segundo menos (la mitad del instrumento que TIENE que morir)                                                                                                                                                                                                       | exit=1 |  2 | sesion.test.ts › la ventana son 20 minutos, dichos en número y no con la propia constante (+1)                                                                 | muere |
+// | CALIBRACION-VIVE  | conexion.ts · una `const` sin efecto, LÍNEA-NEUTRA (la mitad que TIENE que vivir)                                                                                                                                                                                                               | exit=0 |  0 | — (ninguno)                                                                                                                                                    | VIVE |
+// | T-065-GATE-1      | solana-wallet.ts · `caminoPorEnlace`: devolver una billetera SIN leer la elección del disco                                                                                                                                                                                                     | exit=1 |  2 | container.test.ts › T-065-GATE-1b (AC-6b): con `none` y un viaje CONECTADO en el disco pero SIN elección, el container real NO entra al camino por enlace (+1) | muere |
+// | T-065-GATE-2      | solana-wallet.ts · `caminoPorEnlace`: borrar la condición de disponibilidad                                                                                                                                                                                                                     | exit=1 |  3 | solana-wallet.test.ts › T-065-GATE-2: `injected` + elección en disco ⇒ ni `:769` ni `:897`, y sin pedir el umbral del enlace (+2)                              | muere |
+// | T-065-GATE-3      | solana-wallet.ts · `caminoPorEnlace`: `!== "none"` por `=== "injected"` (o sea, tratar `unknown` como enlace)                                                                                                                                                                                   | exit=1 |  1 | solana-wallet.test.ts › T-065-GATE-3: `unknown` ⇒ el gate degrada al camino conocido (fail-closed), no al de enlace                                            | muere |
+// | T-065-GATE-4      | solana-wallet.ts · invertir el `if` de la rama de enlace de `authorizePrincipal` (la PRIMERA de las dos: la del nonce durable). ⚠️ La aguja pelada aparece DOS veces en el archivo, por eso lleva la línea de arriba adentro                                                                    | exit=1 | 47 | solana-wallet.test.ts › AC-1: arma la ix deposit (programId DR5G…SE4x, discriminator, accounts del IDL + PDAs/ATA) (+46)                                       | muere |
+// | T-065-GATE-5      | solana-wallet.ts · `caminoPorEnlace`: borrar la TERCERA condición (la bandera del build) — el mutante del fix-pack                                                                                                                                                                              | exit=1 |  1 | preparacion-por-enlace.test.ts › T-065-GATE-5: con la bandera del build APAGADA, el gate NO se enciende aunque la elección y la dirección estén                | muere |
+// | SW-BASE58         | solana-wallet.ts · `direccionDelViajeConectado`: borrar el guard de base58 del `Viaje.direccion`                                                                                                                                                                                                | exit=1 |  2 | solana-wallet.test.ts › una dirección que no parsea muere ANTES de la rama de enlace: el motor no recibe NADA ⚠️+citas                                         | muere |
+// | T-062-21          | container.ts · descablear el colaborador de enlace del `SolanaWalletAdapter`                                                                                                                                                                                                                    | exit=1 |  1 | container.test.ts › T-062-21 (INVERTIDO): el `SolanaWalletAdapter` del container se construye CON el colaborador de enlace                                     | muere |
+// | T-062-10          | flow.tsx · nombrar `interpretarVuelta(` en un comentario de presentación (el candado prohíbe la MENCIÓN)                                                                                                                                                                                        | exit=1 |  2 | deeplink-callers.test.ts › hay exactamente DOS sitios de producción: el motor y la pata `conectar` (+1)                                                        | muere |
+// | T-065-20          | chain.ts · `resolveSolanaDeeplinkEnabled`: tolerar mayúsculas y espacios (aflojar el opt-in estricto)                                                                                                                                                                                           | exit=1 |  1 | wallet-availability.test.tsx › T-065-20: sólo el literal `true` prende; ausente, vacía, `1`, `TRUE` y `true ` NO                                               | muere |
+// | T-065-21          | flow.tsx · borrar el gate `deeplinkEnabled()` de `mostrarSelectorDeEnlace`                                                                                                                                                                                                                      | exit=1 |  2 | wallet-availability.test.tsx › T-065-21: con la bandera APAGADA el paso `connect` es byte-idéntico al de hoy (+1)                                              | muere |
+// | T-UI-3            | flow.tsx · montar el selector sin mirar `disponibilidadWallet`                                                                                                                                                                                                                                  | exit=1 |  1 | wallet-availability.test.tsx › T-065-21b: con la bandera PRENDIDA y una wallet inyectada, el selector NO aparece                                               | muere |
+// | T-065-OLVIDAR     | flow.tsx · borrar del paso `connect` el montaje del control «Cambiar de billetera» (el único llamador de producción de `olvidar()`)                                                                                                                                                             | exit=1 |  1 | wallet-availability.test.tsx › T-065-OLVIDAR: con una elección puesta, el control «Cambiar de billetera» aparece y BORRA la elección                           | muere |
+// | T-065-1           | conexion.ts · `iniciarConexion`: vaciar el `cluster` de la URL del connect                                                                                                                                                                                                                      | exit=1 |  2 | preparacion-por-enlace.test.ts › el `cluster` de la URL sale de la configuración de red y NO de un literal del módulo (+1)                                     | muere |
+// | T-065-2           | conexion.ts · `completarVuelta`: pasarle `null` como `remittanceId` al lector (apaga el guard de cruce entre remesas). ⚠️ NO es el mutante que la tabla vieja describía («escritura directa en vez del lector»), que no se puede expresar como UNA sustitución: se reemplazó por éste y se dice | exit=1 |  1 | conexion.test.ts › una vuelta de OTRA remesa no se aplica sobre la que está en curso                                                                           | muere |
+// | T-065-3           | sesion.ts · no comparar el ancla write-once `claveBilletera`                                                                                                                                                                                                                                    | exit=1 | 10 | firma-por-enlace.test.ts › una respuesta cifrada por OTRA clave ⇒ deeplink_tx_alterada (no es un rechazo ni una huérfana) (+9)                                 | muere |
+// | T-065-4           | conexion.ts · que `firmar-tx` caiga al lector de la vuelta (quemarle el paso al motor)                                                                                                                                                                                                          | exit=1 |  2 | preparacion-por-enlace.test.ts › una vuelta con la marca del MOTOR sale `nada` y NO quema el paso que el motor necesita (+1)                                   | muere |
+// | T-065-5           | conexion.ts · que la rama `conectado` devuelva un corte en vez de la dirección                                                                                                                                                                                                                  | exit=1 |  3 | preparacion-por-enlace.test.ts › la dirección que devuelve `ConnectWallet` es la que contestó la billetera por el enlace (+2)                                  | muere |
+// | T-065-PUREZA      | conexion.ts · un `Date.now()` adentro de `completarVuelta` (DT-7: el módulo es puro)                                                                                                                                                                                                            | exit=1 |  1 | conexion.test.ts › ninguno de los cuatro aparece en el CÓDIGO, y el descuento de comentarios es load-bearing                                                   | muere |
+// | T-065-SYNC        | preparacion-por-enlace.ts · un `await` como 1ª línea de `completar()` (CD-26: reabre la ventana de read-modify-write)                                                                                                                                                                           | exit=1 |  1 | preparacion-por-enlace.test.ts › el primer segmento de `completar()` es SÍNCRONO, y el descuento de comentarios es load-bearing                                | muere |
+// | T-065-CD11-a      | flow.tsx · borrar `&& rem.ownerAddress != null` del cruce                                                                                                                                                                                                                                       | exit=1 |  2 | flow.test.tsx › con `rem.ownerAddress` en `null` y una dirección viva, el envío SIGUE ⚠️+citas                                                                 | muere |
+// | T-065-CD11-b      | flow.tsx · borrar el `throw wallet_account_changed` del cruce                                                                                                                                                                                                                                   | exit=1 |  5 | flow.test.tsx › T-354-3a: con la cuenta cambiada, 'Confirmar y enviar' no llama al use-case y explica por qué (+4)                                             | muere |
+// | T-065-CD11-c      | solana-wallet.ts · descablear el link-aware de `getConnectedAddress()`                                                                                                                                                                                                                          | exit=1 |  9 | container.test.ts › T-065-GATE-1b (AC-6b): con `none` y un viaje CONECTADO en el disco pero SIN elección, el container real NO entra al camino por enlace (+8) | muere |
+// | T-065-7           | flow.tsx · borrar el ref de montaje del productor de la vuelta (bajo StrictMode consume el paso dos veces)                                                                                                                                                                                      | exit=1 |  1 | flow-reanudacion.test.tsx › con `dl=firmar-tx` y la remesa en `confirmed`, llama a `execute()` EXACTAMENTE una vez                                             | muere |
+// | T-065-8           | flow.tsx · saltear el gate del pisón en la rama `conectado`                                                                                                                                                                                                                                     | exit=1 |  1 | flow-reanudacion.test.tsx › T-065-8b: y con la vuelta del CONNECT, si la persona ya interactuó tampoco se conecta por debajo                                   | muere |
+// | T-065-9           | flow.tsx · `history.replaceState` por `location.assign` al limpiar la barra                                                                                                                                                                                                                     | exit=1 |  5 | flow-reanudacion.test.tsx › con la remesa SIN confirmar, NO llama a `execute()` aunque la barra traiga la marca (+4)                                           | muere |
+// | T-065-10          | flow.tsx · limpiar la barra ANTES de leer la vuelta (DT-10)                                                                                                                                                                                                                                     | exit=1 |  1 | flow-reanudacion.test.tsx › T-065-10: con un `errorCode` en la barra, el PRIMER montaje avisa y el SEGUNDO ya no repite                                        | muere |
+// | RESUME-CONFIRMED  | flow.tsx · borrar el gate `status === "confirmed"` de la reanudación                                                                                                                                                                                                                            | exit=1 |  1 | flow-reanudacion.test.tsx › con la remesa SIN confirmar, NO llama a `execute()` aunque la barra traiga la marca                                                | muere |
+// | RESUME-MARCA      | flow.tsx · que CUALQUIER marca reanude (no sólo los dos pasos del motor)                                                                                                                                                                                                                        | exit=1 |  1 | flow-reanudacion.test.tsx › con una marca que NO es del motor, NO reanuda: sólo `firmar-*` viene después de una orden                                          | muere |
+// | T-065-11          | nonce-duradero.ts · `createAccount` en vez de `createAccountWithSeed` ⇒ la cuenta nueva pasa a ser FIRMANTE y la tx necesita 2 firmas                                                                                                                                                           | exit=1 |  5 | nonce-duradero.test.ts › son 2 ix, `numRequiredSignatures === 1`, y el único firmante es el sender (+4)                                                        | muere |
+// | T-065-11b-a       | nonce-duradero.ts · `space: 80` escrito a mano en vez de la constante (mutante EQUIVALENTE: hoy `NONCE_ACCOUNT_LENGTH` vale 80)                                                                                                                                                                 | exit=0 |  0 | — (ninguno)                                                                                                                                                    | VIVE |
+// | T-065-11b-b       | nonce-duradero.ts · `space: 81` (el que SÍ distingue: es el que prueba que el `space` se mide)                                                                                                                                                                                                  | exit=1 |  1 | nonce-duradero.test.ts › T-065-11b: el `space` es el `NONCE_ACCOUNT_LENGTH` de la librería                                                                     | muere |
+// | T-065-12-a        | flow.tsx · la cifra del alquiler escrita a mano en la tarjeta del nonce en vez de derivada                                                                                                                                                                                                      | exit=1 |  1 | flow.test.tsx › T-065-12: la cifra se DERIVA en el código, y no hay ningún literal de SOL en la tarjeta                                                        | muere |
+// | T-065-12-b        | solana-escrow-rent.ts · mover `NONCE_ACCOUNT_RENT_LAMPORTS` un lamport                                                                                                                                                                                                                          | exit=1 |  2 | solana-escrow-rent.test.ts › la renta de la cuenta de nonce coincide con la fórmula pública de rent (dos fuentes, no un literal) (+1)                          | muere |
+// | T-065-13          | solana-wallet.ts · `console.warn` en vez de cortar cuando la cuenta de nonce NO está                                                                                                                                                                                                            | exit=1 |  2 | solana-wallet.test.ts › ★ T-26: la cuenta de nonce AUSENTE ⇒ deeplink_nonce_ausente, sin firmar NADA y sin limpiar el disco (+1)                               | muere |
+// | T-065-14          | solana-wallet.ts · limpiar el disco ANTES del corte por «no pudimos preguntar» (⚠️ la aguja aparece DOS veces en el archivo: por eso lleva el comentario de arriba adentro)                                                                                                                     | exit=1 |  1 | solana-wallet.test.ts › ★ T-065-14: la cuenta de nonce que NO se puede leer ⇒ deeplink_blockhash_desconocido, y el disco queda INTACTO                         | muere |
+// | T-065-15          | conexion.ts · borrar la comparación de bytes contra el ancla en la vuelta del nonce                                                                                                                                                                                                             | exit=1 |  1 | conexion.test.ts › T-065-15: con OTRA transacción bien cifrada, corta y NO la devuelve                                                                         | muere |
+// | T-065-16          | conexion.ts · dejar de escribir el flag `consumido` del paso del nonce (anti-replay)                                                                                                                                                                                                            | exit=1 |  1 | conexion.test.ts › T-065-16: la MISMA URL una segunda vez NO vuelve a devolver la transacción                                                                  | muere |
+// | T-065-16b         | conexion.ts · devolver `DEEPLINK_VIAJE_VENCIDO` en la rama `consumido === true` (el copy que NIEGA la firma que la billetera sí dio)                                                                                                                                                            | exit=1 |  1 | conexion.test.ts › T-065-16: la MISMA URL una segunda vez NO vuelve a devolver la transacción                                                                  | muere |
+// | T-065-17          | preparacion-por-enlace.ts · que el resultado del broadcast decida en vez de la relectura de la cadena                                                                                                                                                                                           | exit=1 |  2 | preparacion-por-enlace.test.ts › el RPC aceptó la tx y la cuenta TODAVÍA no está ⇒ `nonce-en-vuelo`, NUNCA `nonce-listo` (+1)                                  | muere |
+// | T-065-17b         | preparacion-por-enlace.ts · cambiar la causa del corte del broadcast por otra del vocabulario                                                                                                                                                                                                   | exit=1 |  1 | preparacion-por-enlace.test.ts › el broadcast falla y la cuenta no está ⇒ corte `deeplink_nonce_no_entro`, con reintento posible                               | muere |
+// | T-065-19          | solana-wallet.ts · volver FAIL-CLOSED el guard de saldo del enlace (`unknown` deja de dejar pasar)                                                                                                                                                                                              | exit=1 |  1 | solana-wallet.test.ts › ★ T-27: saldo `unknown` (el RPC no contesta) ⇒ FAIL-OPEN, el flujo SIGUE                                                               | muere |
+// | T-065-6           | firma-por-enlace.ts · restaurar la promesa vieja del `case "conectado"` («pasa a ser alcanzable»)                                                                                                                                                                                               | exit=1 |  1 | deeplink-callers.test.ts › T-065-6: el docblock del `case "conectado"` del motor ya NO promete que la rama se vuelve alcanzable                                | muere |
+// | T-065-COPY-1      | firma-por-enlace.ts + flow-vm.ts · una causa nueva cuyo «copy» es SÓLO un comentario (el mutante del CR, re-corrido)                                                                                                                                                                            | exit=1 |  2 | deeplink-callers.test.ts › TODAS las causas derivadas tienen copy PROPIO (no basta con que el texto aparezca en un comentario) ⚠️+citas                        | muere |
+// | T-065-COPY-2      | flow-vm.ts · colapsar dos de los tres pares del mensaje al MISMO texto                                                                                                                                                                                                                          | exit=1 |  1 | deeplink-callers.test.ts › T-065-COPY-2: los tres pares del mensaje son textos DISTINTOS entre sí                                                              | muere |
+// | T-065-COPY-3      | flow-vm.ts · meter «se debitó» en una de las causas del `Record`                                                                                                                                                                                                                                | exit=1 |  1 | flow-vm.test.ts › T-065-COPY-3: NINGÚN copy afirma que se movió plata, y ninguno tiene em dashes                                                               | muere |
+// | T-065-COPY-4      | flow-vm.ts · mover el lookup EXACTO del `Record` al final de `humanError`, después de la cadena de `includes` (DT-8)                                                                                                                                                                            | exit=1 |  1 | flow-vm.test.ts › T-065-COPY-4: el lookup exacto corre ANTES de la cadena de `includes`                                                                        | muere |
+// | T-065-18          | flow-vm.ts · la cifra del umbral escrita a mano en el copy de saldo insuficiente en vez de derivada                                                                                                                                                                                             | exit=1 |  1 | flow-vm.test.ts › T-065-18: y esa cifra se DERIVA en el código: no hay ningún literal de SOL en el `Record`                                                    | muere |
+// | T-065-CD11b-1     | firma-por-enlace.ts · borrar «camino inyectado» del docblock de `PedidoDeFirma.sender` (la frase vieja no calificaba el camino)                                                                                                                                                                 | exit=1 |  1 | deeplink-callers.test.ts › T-065-CD11b: los TRES sitios de CD-11 califican el camino, y ninguno se borró                                                       | muere |
+// | T-065-CD11b-2     | firma-por-enlace.ts · borrar «coherencia interna» de la justificación del guard                                                                                                                                                                                                                 | exit=1 |  1 | deeplink-callers.test.ts › T-065-CD11b: los TRES sitios de CD-11 califican el camino, y ninguno se borró                                                       | muere |
+// | T-065-CD11b-3     | solana-wallet.ts · borrar «COHERENCIA INTERNA» del bloque de CD-11 del adaptador                                                                                                                                                                                                                | exit=1 |  1 | deeplink-callers.test.ts › T-065-CD11b: los TRES sitios de CD-11 califican el camino, y ninguno se borró                                                       | muere |
+// | T-065-UNREACH     | flow.tsx · apagar `prepareUnreachable` en el dispatch de `track` (los dos enums vuelven al copy del payout fallido)                                                                                                                                                                             | exit=1 |  2 | flow.test.tsx › NO LLEGAMOS A PREPARAR (payout_pop_unavailable): no lo dice como un payout fallido y no manda a sacar del escrow (+1)                          | muere |
+// | T-065-TECHO       | preparacion-por-enlace.ts · sacarle el techo al `getLatestBlockhash` de `crearCuentaDeNonce`                                                                                                                                                                                                    | exit=1 |  1 | preparacion-por-enlace.test.ts › un RPC que acepta y NO contesta vence por el techo: la promesa RECHAZA en vez de colgar la pantalla                           | muere |
 //
 // ── LOS DOS QUE NO MUEREN, Y NINGUNO ES UN AGUJERO ────────────────────────────────────────────────
 //
-// · **`space: 80`** (T-065-11b(a)) VIVE, y estaba PREDICHO en el `it` antes de correrlo:
-//   `NONCE_ACCOUNT_LENGTH` vale 80 hoy, así que el literal y la constante dan lo mismo y **ningún
-//   input los distingue**. Es un mutante EQUIVALENTE, no una falta de cobertura. El que sí distingue es
-//   `space: 81`, que mata. La segunda fuente (`NONCE_ACCOUNT_LENGTH === 80` escrita a mano) es lo que
-//   hace que un bump de la librería se caiga en un test y no en producción.
-// · **la `const` sin efecto** (calibración) vive por diseño: es la mitad que valida el instrumento.
+// · **`T-065-11b-a`** (`space: 80` a mano) VIVE, y estaba PREDICHO en el `it` antes de correrlo:
+//   `NONCE_ACCOUNT_LENGTH` vale 80 hoy, así que el literal y la constante dan lo mismo y **ningún input
+//   los distingue**. Es un mutante EQUIVALENTE, no una falta de cobertura. El que sí distingue es
+//   `T-065-11b-b` (`space: 81`), que mata. La segunda fuente (`NONCE_ACCOUNT_LENGTH === 80` escrita a
+//   mano en el `it`) es lo que hace que un bump de la librería se caiga en un test y no en producción.
+// · **`CALIBRACION-VIVE`** (la `const` sin efecto) vive por diseño: es la mitad que valida el
+//   instrumento. Su hermana `CALIBRACION-MUERE` tiene que morir, y muere. Si las dos murieran o las dos
+//   vivieran, la batería no estaría midiendo el árbol.
 //
 // ── LO QUE LA BATERÍA DESCUBRIÓ, Y ES SU VALOR REAL ───────────────────────────────────────────────
 //
-// Cuatro mutantes sobrevivieron en el PRIMER pase y ninguno era equivalente. Los cuatro se cerraron:
+// **En la corrida original de F3**, cuatro mutantes sobrevivieron y ninguno era equivalente. Los cuatro
+// se cerraron:
 //   1. **`T-065-19`** (borrar `saldo.status === "known" &&`) vivía porque era EQUIVALENTE: con
 //      `status: "unknown"`, `saldo.lamports` es `undefined` y `undefined < N` es `false`, así que el
 //      guard tampoco cortaba. El mutante que sí distingue es volverlo **fail-CLOSED**, y ése mata.
 //      ⚠️ Lección: un mutante que sobrevive puede estar midiendo mal el MUTANTE, no el test.
-//   2. **`T-065-CD11a`** (borrar `&& rem.ownerAddress != null`) no mataba a NADIE, y el comentario de
+//   2. **`T-065-CD11-a`** (borrar `&& rem.ownerAddress != null`) no mataba a NADIE, y el comentario de
 //      `T-065-CD11` afirmaba que «mata a los que miden el residual». No existía ninguno. Se escribió.
 //   3. **`RESUME-MARCA`** (que cualquier marca reanude) sobrevivía porque el `it` de `dl=conectar`
 //      cortaba ANTES del gate de la marca: su fixture no llegaba a lo que decía medir. Se agregó un
@@ -764,17 +812,29 @@ describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
 //      el `it` que existía mide el OTRO `throw` del mismo mensaje —el de la vuelta, no el de la ida—.
 //      Son dos sitios y sólo uno tenía candado. Se escribió el que faltaba.
 //
-// ⚠️ Y UN CUARTO HALLAZGO SOBRE EL INSTRUMENTO: `T-065-14` arrancó como **INSTRUMENTO ROTO**, porque su
-// aguja (`throw new Error("deeplink_blockhash_desconocido");`) aparece **DOS veces** en el adaptador.
-// Sin la regla de CD-23 de contar la aguja y exigir `== 1`, ese mutante habría tocado los dos sitios y
-// su veredicto no habría valido.
+// **En la corrida del FIX-PACK**, con el harness ya commiteado, sobrevivió UNO más y tampoco era
+// equivalente:
+//   5. 🔴 **`T-065-8`** (apagar el gate del pisón de la rama `conectado`). `flow.tsx` tiene DOS
+//      `if (yaInteractuo.current)` en el mismo productor y sólo el de la REANUDACIÓN tenía `it`. Con
+//      `if (false) return;` en el del CONNECT la suite quedaba **2685 passed, exit 0**: ese gate no lo
+//      custodiaba nadie. Sin él, volver del connect mientras la persona tipea le pide un `connect()` a la
+//      billetera y después va a la CADENA a leer la cuenta de nonce, en el medio de un formulario. Se
+//      escribieron `T-065-8b` y su par negativo, y con ellos el mutante muere con 1 rojo.
 //
-// ⚠️ POR QUÉ ALGUNOS CONTEOS SON GRANDES: los mutantes que agregan o quitan LÍNEAS ponen rojo de
-// refilón al candado de citas ancladas por el desplazamiento, y eso NO es cobertura de comportamiento.
-// Está medido en la calibración: la misma `const` sin efecto da **1 rojo** en línea nueva y **0** en
-// línea-neutra. Los conteos de arriba que incluyen ese rojo son los de los mutantes no-neutros.
-// ⚠️ Y `GATE-4` da **56**: el Story File traía «062 midió 46, RE-MEDILO». Re-medido: 56. El número creció
-// con los `it` que esta HU agregó, que es exactamente por lo que había que re-medirlo.
+// ⚠️ Y DOS HALLAZGOS SOBRE EL INSTRUMENTO, los dos de la regla 2 de CD-23 (contar la aguja y exigir
+// `== 1`), que es la que impide que un mutante toque dos sitios y su veredicto no valga:
+//   · `T-065-14` arrancó roto en F3: su aguja (`throw new Error("deeplink_blockhash_desconocido");`)
+//     aparece **DOS veces** en el adaptador. Hoy la fila lleva el comentario de arriba adentro de la
+//     aguja, y está declarado en la propia fila.
+//   · `T-065-GATE-4` arrancó roto en el FIX-PACK, por lo mismo:
+//     `if (this.firmaPorEnlace && this.caminoPorEnlace() !== null) {` aparece **DOS veces**. Se copió del
+//     texto de la tabla vieja, que lo describía por número de línea (`:897`); un número de línea no es
+//     una aguja. Se amplió con la línea de arriba.
 //
-// Se re-corre con `scratchpad/bateria.mjs` + `scratchpad/mutantes.json` (la especificación de los 47).
+// ⚠️ POR QUÉ `GATE-4` DA UN NÚMERO GRANDE (**47**): invierte el `if` de la rama del nonce durable, así
+// que TODO el `describe` del adaptador entra por el camino equivocado. El Story File traía «062 midió
+// 46, RE-MEDILO»; F3 midió 56 y el fix-pack mide 47. Los tres números son ciertos sobre árboles
+// distintos, y por eso el que vale es el de arriba de esta tabla, con su sha. ⛔ El movimiento 56 → 47 no
+// es «se perdió cobertura»: los `it` del adaptador declaran ahora las TRES condiciones del gate, así que
+// varios cortan antes por la bandera en vez de por la inversión. Quien quiera el detalle lo re-corre.
 // ══════════════════════════════════════════════════════════════════════════════════════════════════

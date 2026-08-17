@@ -151,7 +151,7 @@ describe("T-062-10 · CD-8: `interpretarVuelta` tiene EXACTAMENTE DOS llamadores
 // candado deriva las causas del ARCHIVO y es el único que la ve.
 // MUTANTE QUE MATA: agregar `export const DEEPLINK_XXX = "deeplink_xxx";` en `firma-por-enlace.ts`
 // SIN agregarla al `Record` ⇒ rojo acá y verde en `tsc`, que es exactamente lo que este candado existe
-// para probar. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit y `it` rojos de los 47 con el árbol en que se midieron.)
+// para probar. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit, `it` rojos y el árbol de los 54, y se re-corre con `node scripts/mutacion/bateria-065.mjs`.)
 /** El default de `humanError`, en UN solo lugar. Estaba escrito como literal en dos `it` de este
  *  archivo, y un candado que compara contra una cadena copiada es un candado que se desincroniza. */
 const DEFAULT_DE_HUMAN_ERROR = "Algo salió mal. Intentá de nuevo.";
@@ -271,7 +271,7 @@ describe("T-065-6 / T-065-CD11b · las afirmaciones reescritas", () => {
 
   // MUTANTE QUE MATA: restaurar la frase vieja («El día que la ola 4 escriba el connect por enlace,
   // esta rama pasa a ser alcanzable de verdad y ahí necesita su `it`.») EN LUGAR de la reescritura.
-  // (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit y `it` rojos de los 47 con el árbol en que se midieron.)
+  // (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit, `it` rojos y el árbol de los 54, y se re-corre con `node scripts/mutacion/bateria-065.mjs`.)
   it("T-065-6: el docblock del `case \"conectado\"` del motor ya NO promete que la rama se vuelve alcanzable", () => {
     const b = bloque(MOTOR, 'case "conectado":', 'case "tx-firmada":');
     // La razón MEDIDA tiene que estar, y son las tres mitades del argumento de AC-2.

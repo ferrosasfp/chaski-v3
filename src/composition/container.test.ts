@@ -720,7 +720,10 @@ describe("createContainer — WKH-354/AC-2: el probe del container lee la billet
 // "cablear el colaborador ⇒ 2 rojos" e "invertir el `if` del adaptador ⇒ 46 rojos", y los dos números
 // describen un árbol que esta HU acaba de cambiar (el cableado YA no es un mutante: es el estado, y el
 // `if` ganó una segunda condición). Los números re-medidos de esta HU, con su `sha`, están en la tabla
-// de mutación del reporte de F3; escribir acá los viejos sería exactamente el "6 → 7 → 8" que este repo
+// de mutación que vive al final de `../infrastructure/solana/deeplink/conexion.test.ts` y que se re-corre
+// con `node scripts/mutacion/bateria-065.mjs` (el harness y la especificación están COMMITEADOS desde el
+// fix-pack: antes esta línea remitía a un "reporte de F3" que no existía, CR/BLQ-BAJO-3); escribir acá los
+// viejos sería exactamente el "6 → 7 → 8" que este repo
 // ya tiene documentado como candado podrido.
 describe("createContainer — WKH-358/CD-14: la firma por enlace YA está cableada, y lo que la enciende es el GATE", () => {
   // 🔴 ESTE `it` SE INVIRTIÓ EN LA OLA 4, NO SE BORRÓ (CD-14). Mismo movimiento y misma razón que el

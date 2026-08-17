@@ -3448,7 +3448,7 @@ describe("WKH-358/T-065-12 · la tarjeta de la cuenta de nonce", () => {
   });
 
   // MUTANTE QUE MATA: en `flow.tsx`, en la tarjeta, escribir `"0,0015"` como literal en vez de llamar a
-  // `formatLamportsAsSol(NONCE_ACCOUNT_RENT_LAMPORTS)`. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit y `it` rojos de los 47 con el árbol en que se midieron.)
+  // `formatLamportsAsSol(NONCE_ACCOUNT_RENT_LAMPORTS)`. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit, `it` rojos y el árbol de los 54, y se re-corre con `node scripts/mutacion/bateria-065.mjs`.)
   //
   // ⚠️ POR QUÉ ESTE `it` ES TEXTUAL Y NO DE RENDER, dicho porque parece redundante con el primero: un
   // `it` de render que compare contra `formatLamportsAsSol(...)` da VERDE con el literal puesto, porque
@@ -3515,7 +3515,7 @@ describe("WKH-358 · el residual de CD-11: `ownerAddress == null` NO dispara el 
 
   // MUTANTE QUE MATA: en `flow.tsx:507`, borrar `&& rem.ownerAddress != null` ⇒ `canonicalizeAddress`
   // recibe `null`, TIRA, el `catch` lo trata como desacuerdo (fail-closed) y el envío se corta sobre una
-  // remesa que nunca declaró dueño. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit y `it` rojos de los 47 con el árbol en que se midieron.)
+  // remesa que nunca declaró dueño. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit, `it` rojos y el árbol de los 54, y se re-corre con `node scripts/mutacion/bateria-065.mjs`.)
   it("con `rem.ownerAddress` en `null` y una dirección viva, el envío SIGUE", async () => {
     // La remesa llega a `confirm` SIN haber pasado por `startKyc`: es el caso que el residual describe.
     const sinDueño = { ...passedSnapshot(1478.15, 3.7, "2099-01-01T00:00:00.000Z"), ownerAddress: null };

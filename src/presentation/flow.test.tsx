@@ -704,7 +704,11 @@ describe("WKH-188 resume escape (fake timers aislados, CD-10)", () => {
 
   // ── T-ESC6 — AC-6: respuesta terminal `failed` sale de `resuming` al 1er poll ─
   it("T-ESC6: respuesta terminal 'failed' sale de resuming al primer poll", async () => {
-    // La rama `failed` solo hace setRem + setStep("verify"); cualquier snapshot válido sirve.
+    // La rama `failed` aterriza en `verify` con el snapshot y el banner; cualquier snapshot válido sirve.
+    // ⚠️ DESDE WKH-063/fix-pack 3 ESA RAMA PASA POR UN GATE (`aterrizar`, `./flow.tsx:208`) y ya no son
+    // tres sentencias sueltas: acá el gate NO frena porque este test no interactúa con nada, y por eso
+    // este `it` es —medido con el mutante G2— el único de este archivo que vigila el aterrizaje del
+    // `failed` sin interacción previa.
     const failedSnapshot = Remittance.create("rem-1", beneficiary(), Money.of(400, "USDC"), T0).snapshot;
     const container = buildTestContainer({
       useCases: {

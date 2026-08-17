@@ -44,7 +44,7 @@ import {
 } from "./chain";
 import { ESCROW_INDEX_MAX_ENTRIES } from "./escrow-index-limits";
 import { ESCROW_ID_LOOKUP_CEILING } from "./escrow-lookup-limits"; import { ESCROW_STATE_BATCH_CEILING, ESCROW_STATE_BATCH_TIMEOUT_MS } from "./escrow-history-limits"; // WKH-349: EN ESTA LÍNEA, no en una nueva — los imports de este archivo están ARRIBA de `:188` y una línea acá rota TODAS las citas ancladas que apuntan de ahí para abajo, que son las que este archivo recibe. Va pegado a `ESCROW_ID_LOOKUP_CEILING` y no a `ESCROW_INDEX_MAX_ENTRIES` a propósito: ése es justo el techo con el que el nuevo NO se confunde (uno lo pone el servidor del registro durable, el otro el RPC), y quien lea la línea ve los dos juntos
-import { solanaWalletBridge } from "./solana-wallet-bridge"; import nacl from "tweetnacl"; import { almacenDeNavegador } from "./solana/deeplink/sesion"; import { terminarPreparado } from "./solana/deeplink/preparado"; import { type Almacen, terminarViaje } from "./solana/deeplink/sesion"; import type { FirmaPorEnlace } from "./solana/deeplink/firma-por-enlace"; import { construirNonceAdvance, direccionDelNonce, leerNonce } from "./solana/nonce-duradero"; import { SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT } from "../application/solana-escrow-rent"; // WKH-356: TODOS EN ESTA LÍNEA, no en siete nuevas — las citas por número a este archivo apuntan de `:188` para abajo y siete líneas acá arriba las rotan a todas. WKH-357 agregó los dos últimos por la MISMA razón y ANTES de este comentario, no después: cuatro imports de 062 quedaron una vez adentro de un `//` por pegarlos del lado equivocado
+import { solanaWalletBridge } from "./solana-wallet-bridge"; import nacl from "tweetnacl"; import { almacenDeNavegador } from "./solana/deeplink/sesion"; import { terminarPreparado } from "./solana/deeplink/preparado"; import { type Almacen, terminarViaje } from "./solana/deeplink/sesion"; import type { FirmaPorEnlace } from "./solana/deeplink/firma-por-enlace"; import { construirNonceAdvance, direccionDelNonce, leerNonce } from "./solana/nonce-duradero"; import { SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT } from "../application/solana-escrow-rent"; import { leerEleccion } from "./solana/deeplink/conexion"; import type { BilleteraDeeplink } from "./solana/deeplink/protocol"; // WKH-358 agregó los dos últimos por la MISMA razón que los siete de acá y ANTES de este comentario, no después. WKH-356: TODOS EN ESTA LÍNEA, no en siete nuevas — las citas por número a este archivo apuntan de `:188` para abajo y siete líneas acá arriba las rotan a todas. WKH-357 agregó los dos últimos por la MISMA razón y ANTES de este comentario, no después: cuatro imports de 062 quedaron una vez adentro de un `//` por pegarlos del lado equivocado
 
 // HU-SOL-20/AC-2: tope de candidatos que el fallback del REFUND sondea on-chain — el camino que
 // devuelve el PRINCIPAL.
@@ -766,7 +766,7 @@ export class SolanaWalletAdapter
     // única forma que respeta las dos cosas es este bloque CORTO acá y la rama grande donde está.
     let nonceIx: TransactionInstruction | undefined;
     let valorDelNonce: string | undefined;
-    if (this.firmaPorEnlace) {
+    if (this.firmaPorEnlace && this.caminoPorEnlace() !== null) { // WKH-358/DT-1: el colaborador CABLEADO ya no alcanza — hace falta que ESTE recorrido sea por enlace (elección del selector Y `availability === "none"`). Ver `caminoPorEnlace`, `:2239`
       // 0 · SIN MEMORIA NO HAY RECORRIDO, y esto va PRIMERO por dos razones medidas.
       //
       // La rama grande de abajo ya corta con esta misma causa (es la dueña del check y sigue
@@ -894,7 +894,7 @@ export class SolanaWalletAdapter
     // vuelva al mismo origen, que el blockhash aguante el viaje de ida y vuelta (dos saltos a otra
     // app, una persona leyendo, dos vueltas) y que la transacción devuelta sea byte-idéntica a la
     // enviada son tres afirmaciones sobre un runtime móvil que este repo NO ha medido.
-    if (this.firmaPorEnlace) {
+    if (this.firmaPorEnlace && this.caminoPorEnlace() !== null) { // WKH-358/DT-1: el colaborador CABLEADO ya no alcanza — hace falta que ESTE recorrido sea por enlace (elección del selector Y `availability === "none"`). Ver `caminoPorEnlace`, `:2239`
       // El almacén y el `href` se toman de acá y no del sitio de composición porque `PedidoDeFirma`
       // los pide y el colaborador no los trae. ⚠️ Sin `localStorage` o sin `location` este entorno no
       // puede ni recordar la firma ni volver del salto: el viaje no se puede completar, y ésa es
@@ -1473,7 +1473,7 @@ export class SolanaWalletAdapter
       // ausente, RPC caído. Un blockhash vencido prueba que la tx no puede entrar DE ACÁ EN ADELANTE,
       // NO que no haya entrado antes ⇒ hay que ir a mirar el estado autoritativo.
       //
-      // WKH-353 — el mapeo a los desenlaces con nombre: el `expired` de `SignatureVerdict`, `:2227` ES
+      // WKH-353 — el mapeo a los desenlaces con nombre: el `expired` de `SignatureVerdict`, `:2288` ES
       // ese blockhash vencido, y `unseen` es que se nos acabó el tiempo de preguntar, el que llega
       // hasta acá abajo como excepción "confirm_timeout". Por qué NO colapsarlos: está en el tipo.
       reverted = err instanceof RefundTxReverted;
@@ -2110,7 +2110,7 @@ export class SolanaWalletAdapter
 
   /**
    * WKH-353 — ¿qué dice la cadena de ESTA firma? Devuelve uno de los tres desenlaces de
-   * `SignatureVerdict`, `:2227`, preguntando por HTTP y sin abrir NINGUNA suscripción.
+   * `SignatureVerdict`, `:2288`, preguntando por HTTP y sin abrir NINGUNA suscripción.
    *
    * POR QUÉ NO `connection.confirmTransaction`, que es lo que estaba acá antes. Sus dos estrategias
    * terminan en `onSignature`, o sea en un `signatureSubscribe` por WebSocket, y el RPC que usamos
@@ -2135,7 +2135,7 @@ export class SolanaWalletAdapter
    * El mecanismo anterior tenía LOS MISMOS TRES DEFECTOS (el techo del llamador tampoco lo cortaba;
    * era inmortal con el RPC de altura caído, mismo archivo :6665-6670; dejaba un huérfano por
    * reintento) y era cuatro órdenes de magnitud más caro: los números y su medición viven UNA sola
-   * vez, al lado de `SIGNATURE_POLL_INTERVAL_MS`, `:2242`.
+   * vez, al lado de `SIGNATURE_POLL_INTERVAL_MS`, `:2303`.
    *
    * Matar el huérfano exige un `AbortSignal` que cruce desde el llamador, y es una HU con su propio
    * alcance y no una línea acá: los métodos de `Connection` no aceptan `signal` (`getSignatureStatuses`
@@ -2206,6 +2206,67 @@ export class SolanaWalletAdapter
         return ultima ?? { kind: "expired" };
       }
       await sleep(SIGNATURE_POLL_INTERVAL_MS);
+    }
+  }
+
+  /** WKH-358/DT-1 — La billetera del recorrido POR ENLACE, o `null` si este recorrido NO es por enlace.
+   *
+   *  🔴 ES EL ÚNICO INTERRUPTOR DE LA RAMA DE ENLACE, y **DOS condiciones**, las dos derivadas EN EL
+   *  INSTANTE del gesto:
+   *    1. la elección persistida del selector (`leerEleccion`, `./solana/deeplink/conexion.ts:138`), que
+   *       escribe SÓLO el selector y nunca este archivo, y
+   *    2. (`getWalletAvailability`, `./solana-wallet-bridge.ts:70`) `=== "none"`.
+   *  Si falta cualquiera de las dos ⇒ `null` ⇒ el recorrido es el inyectado, **byte-idéntico al de hoy**.
+   *
+   *  ⚠️ `"unknown"` DEVUELVE `null` A PROPÓSITO, y es la mitad que un review "arregla" mal. `unknown` es
+   *  lo que contesta el servidor y lo que contesta el navegador ANTES de montar
+   *  (`useWalletAvailability`, `../presentation/wallet-availability.ts:36`, con su `"unknown"` de servidor
+   *  en `:40`). Degrada al camino CONOCIDO y nunca al revés: si `unknown` activara el gate, un escritorio
+   *  con la extensión todavía sin montar entraría a la rama de enlace. Lo mide `T-065-GATE-3`, y por eso
+   *  la comparación es `=== "none"` y ⛔ **NO** `!== "injected"`, que son distintas exactamente en ese
+   *  caso.
+   *
+   *  ⛔ POR QUÉ ESTO NO ES UNA FACTORY NI UN SEGUNDO ADAPTER, que es lo que parece la solución limpia.
+   *  Una factory decidiría al construir el container (`getContainer`, `../composition/container.ts:265`,
+   *  que corre UNA vez al montar) y la elección de la persona ocurre DESPUÉS: sería una decisión tomada
+   *  antes de que exista el dato. Y un segundo adapter duplicaría un archivo de 2247 líneas con 85 citas
+   *  ancladas entrantes, con las dos instancias compartiendo el MISMO bridge y el MISMO disco.
+   *
+   *  ⚠️ NO LEE `deeplinkEnabled()`, y no es un olvido. Esa bandera gatea si la PANTALLA ofrece el
+   *  selector; este gate mira si la persona YA eligió. Con la bandera apagada nadie puede elegir, así que
+   *  la condición 1 no se cumple y este gate contesta `null` igual — sin que este archivo tenga que
+   *  conocer ninguna `process.env`. */
+  private caminoPorEnlace(): BilleteraDeeplink | "no-podemos-saber" | null {
+    if (solanaWalletBridge.getWalletAvailability() !== "none") return null;
+    const disco = this.discoDeEnlace();
+    // 🔴 EL TERCER VALOR, Y POR QUÉ NO PUEDE COLAPSAR EN `null`. Acá el disco NO SE DEJA LEER, así que
+    // la pregunta "¿qué eligió la persona?" no tiene respuesta: no es "no eligió". Colapsarlo en `null`
+    // (que fue mi primera versión) hace que el recorrido caiga al camino INYECTADO, y con
+    // `availability === "none"` ese camino no tiene ninguna billetera que pueda prosperar: termina en
+    // `wallet_not_connected`, que es una pista FALSA sobre lo que pasó. Entrando a la rama, en cambio,
+    // el guard de `:778` contesta `deeplink_sin_memoria`, que es el diagnóstico correcto y el que la
+    // pantalla sabe traducir. Lo miden los dos `it` de «el entorno del navegador, cuando no colabora».
+    // ⛔ Y no se puede devolver una billetera inventada para rellenar: sería afirmar una elección que
+    // nadie hizo. Por eso el tipo tiene TRES valores y no dos.
+    if (disco === "no-se-pudo") return "no-podemos-saber";
+    if (disco === null) return null;
+    return leerEleccion(disco);
+  }
+
+  /** El `localStorage` de este navegador, distinguiendo **ausente** de **no se deja leer**.
+   *
+   *  ⚠️ POR QUÉ NO REUSA `entornoDeEnlace()` (`:1211`), que parece la misma pregunta: ése exige ADEMÁS
+   *  que exista `location`, y funde los tres casos en `null`. El gate no necesita la URL —sólo la
+   *  elección persistida— y sí necesita separar "no hay disco" de "el disco tiró". Un navegador sin
+   *  `location` pero con disco SIGUE siendo un recorrido por enlace, y tiene que entrar a la rama para
+   *  que el corte diga `deeplink_sin_memoria` en vez de degradar en silencio. */
+  private discoDeEnlace(): Almacen | "no-se-pudo" | null {
+    try {
+      const disco = (globalThis as { localStorage?: Storage }).localStorage;
+      if (!disco) return null;
+      return almacenDeNavegador(disco);
+    } catch {
+      return "no-se-pudo"; // el getter LANZA (modo privado, cookies bloqueadas): no sabemos, no negamos
     }
   }
 }

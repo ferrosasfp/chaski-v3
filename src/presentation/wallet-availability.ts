@@ -118,3 +118,38 @@ export function useMwaOffered(): boolean {
     () => false,
   );
 }
+
+/**
+ * WKH-358 · ¿Está prendida la bandera del recorrido por ENLACE PROFUNDO (deeplink)?
+ *
+ * Hermana exacta de (`mwaEnabled`, `:98`), y con el mismo mecanismo por la misma razón: sólo el
+ * literal `"true"` prende. Ausente, vacía, `"1"`, `"TRUE"`, `"true "` o un typo ⇒ APAGADA. No hay
+ * ningún valor que la prenda por accidente (opt-in estricto, mismo patrón que
+ * (`solanaSettleOn`, `../composition/container.ts:141`)). Lo mide `T-065-20`.
+ *
+ * 🔴 QUÉ GATEA ESTA BANDERA, Y QUÉ NO — y acá la asimetría con `mwaEnabled` importa:
+ *   · SÍ gatea que el SELECTOR de billetera aparezca en el cuadrante `none` de la pantalla `connect`.
+ *     Con la bandera apagada esa pantalla es BYTE-IDÉNTICA a la de hoy, y eso no es una promesa: lo
+ *     mide `T-065-21` comparando el `innerHTML` del paso entero, con el mismo mecanismo que
+ *     (`T-UI-3`, `wallet-availability.test.tsx:218`).
+ *   · NO gatea la rama de enlace del adaptador. Ese gate es OTRO y vive en el adaptador
+ *     (`caminoPorEnlace`, `../infrastructure/solana-wallet.ts:2239`), porque tiene que decidirse EN EL
+ *     INSTANTE del gesto y con dos condiciones que esta función no conoce: la elección persistida de
+ *     la persona y `getWalletAvailability() === "none"`. Una bandera de build no puede contestar
+ *     ninguna de las dos.
+ *   · NO borra ni degrada (`phantomBrowseUrl`, `:26`). Ese enlace sigue siendo, con la bandera
+ *     prendida o apagada, el ÚNICO camino verificado en cadena por el que una persona en un teléfono
+ *     completó un depósito. El selector lo acompaña; no lo reemplaza.
+ *
+ * ⚠️ EL ORDEN DE ENCENDIDO ES FACILITATOR PRIMERO, CHASKI DESPUÉS (AC-9). Con la bandera
+ * (`SOLANA_SPONSOR_DURABLE_NONCE_ENABLED`, `../infrastructure/solana-wallet.ts:846`) apagada del lado
+ * del facilitator, un depósito por enlace recibe **403**. Prender ESTA bandera primero no rompe nada
+ * en silencio, pero tampoco habilita un depósito: lo deja fallando del otro lado.
+ *
+ * ⚠️ GOTCHA DE DESPLIEGUE, el mismo que el de `mwaEnabled` (`:95-96`) y por eso se repite y no se
+ * cita: las `NEXT_PUBLIC_` las inlinea el BUILD, no se leen en runtime. Cambiar el valor en Vercel y
+ * REDESPLEGAR el mismo artefacto NO cambia nada: hay que REBUILDEAR.
+ */
+export function deeplinkEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED === "true";
+}

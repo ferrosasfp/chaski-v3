@@ -10,7 +10,7 @@ import { Money } from "../domain/money";
 import type { Quote } from "../domain/remittance";
 import { CUSTODY_WINDOW_SECS, SolanaWalletAdapter } from "./solana-wallet"; import { SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT } from "../application/solana-escrow-rent"; // WKH-357: EN ESTA LÍNEA, no en una nueva — `solana-wallet.test.ts:453-454` y `:506` se citan por número desde otros dos archivos (ver el comentario de más abajo), así que una línea nueva acá arriba los rota. Y el umbral se IMPORTA, nunca se escribe como literal en un test (CD-12)
 import { escrowIdl } from "./solana/escrow-idl";
-import { solanaWalletBridge } from "./solana-wallet-bridge"; import { esperarAutorizacionLista } from "../test-support/desenlaces"; import { readFileSync } from "node:fs"; import path from "node:path"; import { FirmaPorEnlaceReal, type DesenlaceDeFirma, type FirmaPorEnlace, type PedidoDeFirma } from "./solana/deeplink/firma-por-enlace"; import { direccionDelNonce } from "./solana/nonce-duradero"; // WKH-356: TODO en esta línea — `solana-wallet.test.ts:453-454` y `:506` los citan por número desde otros dos archivos, así que una línea nueva acá arriba los rota. WKH-357 agregó el último por la MISMA razón y ANTES de este comentario
+import { solanaWalletBridge } from "./solana-wallet-bridge"; import { esperarAutorizacionLista } from "../test-support/desenlaces"; import { readFileSync } from "node:fs"; import path from "node:path"; import { FirmaPorEnlaceReal, type DesenlaceDeFirma, type FirmaPorEnlace, type PedidoDeFirma } from "./solana/deeplink/firma-por-enlace"; import { direccionDelNonce } from "./solana/nonce-duradero"; import { guardarEleccion, leerEleccion } from "./solana/deeplink/conexion"; import { almacenDeNavegador } from "./solana/deeplink/sesion"; // WKH-358 agregó los dos últimos por la MISMA razón y ANTES de este comentario. WKH-356: TODO en esta línea — `solana-wallet.test.ts:453-454` y `:506` los citan por número desde otros dos archivos, así que una línea nueva acá arriba los rota. WKH-357 agregó el último por la MISMA razón y ANTES de este comentario
 
 const VALID_B58 = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // base58 válido (mixed-case)
 
@@ -1416,7 +1416,24 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       }) as never);
   }
 
-  /** `localStorage` y `location` de mentira. El entorno de estos tests es Node: no hay ninguno. */
+  /** `localStorage` y `location` de mentira. El entorno de estos tests es Node: no hay ninguno.
+   *
+   *  🔴 WKH-358 — ACÁ SE DECLARAN, ADEMÁS, LAS DOS CONDICIONES DEL GATE `caminoPorEnlace()`, y esto NO
+   *  es una adecuación para que los tests pasen: es la precondición que a estos `it` les FALTABA decir.
+   *  Todo este `describe` mide la RAMA DE ENLACE, y desde esta HU esa rama sólo existe cuando (1) la
+   *  persona eligió una billetera en el selector y (2) `getWalletAvailability() === "none"`. Un `it` que
+   *  ejercitara la rama sin declarar las dos estaría midiendo un camino que producción NO puede
+   *  alcanzar — que es exactamente lo que pasaba antes de esta línea, porque con el colaborador
+   *  inyectado a mano alcanzaba para entrar.
+   *
+   *  ⛔ NINGÚN `expect` de este archivo cambió de valor, de mensaje ni de cantidad por esto: lo único
+   *  que se agrega es el ESTADO DEL MUNDO que la rama necesita. Y tiene un efecto útil de vuelta:
+   *  invertir el gate ahora pone en rojo a estos ~23 `it`, o sea que el gate queda vigilado por la
+   *  suite del adaptador y no sólo por sus tres `it` propios (`T-065-GATE-2`/`3`).
+   *
+   *  ⚠️ El default del bridge es `"unknown"` (`reset`, `./solana-wallet-bridge.ts:173`), que el gate
+   *  rechaza A PROPÓSITO, así que sin el `setWalletAvailability("none")` de acá abajo la rama no corre.
+   *  El `afterEach` global (`:18`) devuelve el bridge a `"unknown"`, así que esto no se filtra. */
   function montarEntorno() {
     disco = new Map<string, string>();
     const storage = {
@@ -1429,6 +1446,10 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
     };
     vi.stubGlobal("localStorage", storage);
     vi.stubGlobal("location", { href: HREF, origin: "https://chaski.test" });
+    // La elección se escribe con el ESCRITOR DE PRODUCCIÓN y no con la clave a mano: así el nombre de la
+    // clave tiene UNA sola fuente y renombrarla no deja este harness escribiendo en el vacío.
+    guardarEleccion(almacenDeNavegador(storage as unknown as Storage), "phantom");
+    solanaWalletBridge.setWalletAvailability("none");
     return { leer: (k: string) => disco.get(k) ?? null };
   }
 
@@ -1600,6 +1621,79 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       expect(motor.pedidos[0]?.beneficiary).toBe(BENEFICIARY_B58);
       expect(motor.pedidos[0]?.authority).toBe(AUTHORITY_B58);
       expect(motor.pedidos[0]?.hrefActual, "no se pasó el href COMPLETO (T9)").toBe(HREF);
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────────────────────────
+  // WKH-358 / AC-6 · EL GATE `caminoPorEnlace()` — la SEGUNDA condición, la que mira el navegador
+  // ──────────────────────────────────────────────────────────────────────────────────────────────
+  //
+  // 🔴 QUÉ MIDEN ESTOS DOS Y POR QUÉ NO LOS CUBRE `montarEntorno()`. El helper de arriba deja el mundo
+  // en el estado del recorrido POR ENLACE (elección persistida + `availability === "none"`), que es lo
+  // que los ~23 `it` de este `describe` necesitan. Estos dos hacen lo contrario: dejan la elección
+  // PUESTA y mueven **sólo la disponibilidad**, que es la variable que la persona no controla y la que
+  // separa un teléfono sin extensión de un escritorio con Phantom.
+  //
+  // ⚠️ POR QUÉ IMPORTA QUE LA ELECCIÓN SIGA PUESTA: sin ella el gate se apagaría por la PRIMERA
+  // condición y estos `it` pasarían sin ejercitar la segunda. Es el defecto de
+  // `el-test-del-camino-feliz-ejercitaba-el-agujero`: el fixture del caso que se quiere medir tiene que
+  // contener el dato que el guard compara. Por eso los dos assertan su propio fixture antes de llamar
+  // (CD-18).
+  describe("T-065-GATE-2/3 (AC-6): con una billetera inyectada o sin medir, la rama de enlace NO corre", () => {
+    /** Deja el mundo del recorrido por enlace y después pisa SÓLO la disponibilidad. */
+    async function conDisponibilidad(d: "injected" | "unknown") {
+      const leerDisco = montarEntorno(); // elección "phantom" + availability "none"
+      solanaWalletBridge.setWalletAvailability(d); // ← la única variable que se mueve
+      // CD-18 — el fixture tiene que haber fabricado el caso: si la elección NO está, estos `it` darían
+      // verde por la primera condición del gate y no medirían la segunda, que es la que vinieron a ver.
+      expect(
+        leerEleccion({
+          leer: (k: string) => leerDisco.leer(k),
+          escribir: () => undefined,
+          borrar: () => undefined,
+        }),
+        "el fixture no dejó ninguna elección en disco: este `it` no está midiendo la disponibilidad",
+      ).toBe("phantom");
+      const motor = new MotorProgramable();
+      const adapter = await adaptadorConMotor(motor);
+      sembrarViaje(SENDER_B58); // un viaje conectado y VÁLIDO: si la rama corriera, tendría todo servido
+      const saldo = vi
+        .spyOn(Connection.prototype, "getBalance")
+        .mockResolvedValue(1_000_000_000 as never);
+      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      return { motor, saldo, r };
+    }
+
+    // MUTANTE QUE MATA: en `caminoPorEnlace()`, borrar la condición
+    // `getWalletAvailability() !== "none"` ⇒ el gate deja de mirar el navegador y este `it` ve un salto.
+    it("T-065-GATE-2: `injected` + elección en disco ⇒ ni `:769` ni `:897`, y sin pedir el umbral del enlace", async () => {
+      const { motor, saldo, r } = await conDisponibilidad("injected");
+      expect(
+        motor.pedidos,
+        "la rama de enlace (`:897`) CORRIÓ con una billetera inyectada: es exactamente lo que AC-6 " +
+          "prohíbe, y ese camino es el del video de M5, que ya movió USDC real en cadena.",
+      ).toEqual([]);
+      expect(
+        saldo,
+        "se consultó el saldo del remitente: eso sólo pasa dentro del bloque del nonce (`:769`), o sea " +
+          "que la rama entró. AC-6 dice que al camino inyectado NO se le pide el umbral del enlace.",
+      ).not.toHaveBeenCalled();
+      expect(r.estado, "el camino inyectado no llegó a su desenlace de siempre").toBe("listo");
+    });
+
+    // MUTANTE QUE MATA: en `caminoPorEnlace()`, cambiar `=== "none"` por `!== "injected"` ⇒ `unknown`
+    // pasa a activar el gate y este `it` ve un salto. Es el mutante que distingue las DOS formas de
+    // escribir la condición, que son idénticas salvo en este caso exacto.
+    it("T-065-GATE-3: `unknown` ⇒ el gate degrada al camino conocido (fail-closed), no al de enlace", async () => {
+      const { motor, saldo, r } = await conDisponibilidad("unknown");
+      expect(
+        motor.pedidos,
+        '`unknown` activó la rama de enlace. `unknown` es lo que contesta el servidor y lo que contesta ' +
+          "el navegador ANTES de montar: si activara el gate, un escritorio con la extensión todavía sin " +
+          "montar entraría al recorrido por enlace. Degradar al camino CONOCIDO es la única dirección segura.",
+      ).toEqual([]);
+      expect(saldo, "se pidió el umbral del enlace con la disponibilidad sin medir").not.toHaveBeenCalled();
+      expect(r.estado).toBe("listo");
     });
   });
 
@@ -2405,14 +2499,22 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
     // regex de comentarios NO ponía nada en rojo (mutante CORRIDO: sobrevivía), y el guard quedaba
     // debilitado en silencio: `primeraRama` caía en el COMENTARIO, que está más arriba, y una llamada
     // colada entre ese comentario y la rama real habría pasado desapercibida.
-    const ramas = (cuerpo.match(/if \(this\.firmaPorEnlace\)/g) ?? []).length;
+    // 🔴 WKH-358 — LA AGUJA CAMBIÓ Y EL INVARIANTE NO. Acá decía `if \(this\.firmaPorEnlace\)` con el
+    // paréntesis de cierre pegado, y esta HU le agregó la segunda condición del gate
+    // (`&& this.caminoPorEnlace() !== null`), así que esa aguja literal pasó a matchear CERO veces en
+    // código y este `it` se puso rojo sin que el invariante que vigila se hubiera movido un milímetro.
+    // Es el perfil exacto de "candado que se pudre solo": el guard estaba escrito contra un literal que
+    // una HU legítima tenía que cambiar.
+    // ⛔ LO QUE **NO** SE TOCÓ: el `toBe(2)`, el conjunto de identificadores barridos, ni lo que el `it`
+    // afirma. Sólo se abrió la aguja hasta el `&&` para que siga nombrando el MISMO `if`.
+    const ramas = (cuerpo.match(/if \(this\.firmaPorEnlace\b/g) ?? []).length;
     expect(
       ramas,
-      "el método tiene que tener EXACTAMENTE 2 ramas `if (this.firmaPorEnlace)` en CÓDIGO (la de las " +
+      "el método tiene que tener EXACTAMENTE 2 ramas `if (this.firmaPorEnlace …)` en CÓDIGO (la de las " +
         "lecturas del nonce y la grande). Si acá aparecen 3, el barrido está contando un comentario y " +
         "el descuento de comentarios dejó de funcionar.",
     ).toBe(2);
-    const primeraRama = cuerpo.indexOf("if (this.firmaPorEnlace)");
+    const primeraRama = cuerpo.indexOf("if (this.firmaPorEnlace");
     expect(primeraRama, "la rama de enlace no está en el cuerpo: el barrido no mide nada").toBeGreaterThan(0);
     // Y que el código del nonce siga existiendo, o los `toBe(-1)` de abajo pasarían por vacío.
     expect(cuerpo).toContain("direccionDelNonce");

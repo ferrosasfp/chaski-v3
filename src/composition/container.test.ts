@@ -694,41 +694,104 @@ describe("createContainer — WKH-354/AC-2: el probe del container lee la billet
   });
 });
 
-// ── WKH-356 / CD-13 · LA RAMA DE ENLACE NO TIENE ACTIVACIÓN DE PRODUCCIÓN ────────────────────────
+// ── WKH-358 / CD-14 · LA RAMA DE ENLACE YA TIENE ACTIVACIÓN, Y EL INTERRUPTOR ES EL GATE ─────────
 //
-// 🔴 POR QUÉ ESTE `it` EXISTE Y POR QUÉ ES OBLIGATORIO. 062 escribe el motor de firma por enlace
-// profundo entero, pero NO lo cablea: falta la ola 4 (selector de billetera + connect por enlace),
-// que es la que produce el `viaje.direccion`, la `session` y la `claveBilletera` que este motor
-// CONSUME y EXIGE. Sin ese cableado no hay ningún camino de producción que entre a la rama.
+// 🔴 QUÉ DECÍA ESTE BLOQUE HASTA LA OLA 4, Y POR QUÉ DEJÓ DE SER CIERTO. Decía *"la rama de enlace NO
+// tiene activación de producción"*, porque 062 escribió el motor entero y NO lo cableó: faltaba la ola 4
+// —la que produce el `viaje.direccion`, la `session` y la `claveBilletera` que el motor CONSUME—. Esa
+// ola es ÉSTA. El colaborador se cablea ahora **sin condición**, y el `it` de abajo se invirtió con su
+// mensaje reescrito en vez de borrarse (CD-14, precedente `:45-48`).
 //
-// Escribirlo en un documento no alcanza: la lección `tests-que-registran-el-doble-no-prueban-el-
+// ⚠️ LO QUE NO CAMBIÓ ES EL ARGUMENTO DE FONDO: la lección `tests-que-registran-el-doble-no-prueban-el-
 // cableado` dice que si nadie MIDE el cableado, alguien va a leer "la HU está hecha" como "el flujo
-// móvil anda". Esto lo mide.
-// ⚠️ CD-15 · MUTANTES CORRIDOS (2026-08-17, re-medidos en el fix-pack 1), suite COMPLETA, aguja
-// contada con `== 1`, relectura del disco, restauración verificada byte a byte:
+// móvil anda". Por eso el `it` sigue existiendo y sigue mirando el objeto que `createContainer()`
+// devuelve — sólo que ahora custodia la presencia en vez de la ausencia.
 //
-// | mutante                                                              | exit | `it` rojos |
-// |---|---|---|
-// | cablear el colaborador en `container.ts` (3er argumento)              | 1 | 2 |
-// | invertir el `if (this.firmaPorEnlace)` del adaptador                  | 1 | **46, NINGUNO de este archivo** |
+// ⛔ Y SIGUE SIENDO FALSO QUE EL FLUJO MÓVIL ANDE. Nadie de este equipo lo midió en un teléfono, y el
+// DEPÓSITO por enlace sigue sin cerrar por el PoP (WKH-359). Lo que esta ola enciende es el connect por
+// enlace y la creación de la cuenta de nonce.
 //
-// El primero mata el T-062-21 de acá + el candado de citas ancladas (la línea nueva en `container.ts`
-// desplaza citas; es colateral y va dicho).
-describe("createContainer — WKH-356/CD-13: la firma por enlace NO está cableada al cerrar 062", () => {
-  it("T-062-21: el `SolanaWalletAdapter` del container se construye SIN colaborador de enlace", () => {
+// ⚠️ CD-17 · LA TABLA DE MUTANTES QUE ESTABA ACÁ SE MIDIÓ CONTRA EL ÁRBOL DE 062 Y NO SE HEREDA. Decía
+// "cablear el colaborador ⇒ 2 rojos" e "invertir el `if` del adaptador ⇒ 46 rojos", y los dos números
+// describen un árbol que esta HU acaba de cambiar (el cableado YA no es un mutante: es el estado, y el
+// `if` ganó una segunda condición). Los números re-medidos de esta HU, con su `sha`, están en la tabla
+// de mutación del reporte de F3; escribir acá los viejos sería exactamente el "6 → 7 → 8" que este repo
+// ya tiene documentado como candado podrido.
+describe("createContainer — WKH-358/CD-14: la firma por enlace YA está cableada, y lo que la enciende es el GATE", () => {
+  // 🔴 ESTE `it` SE INVIRTIÓ EN LA OLA 4, NO SE BORRÓ (CD-14). Mismo movimiento y misma razón que el
+  // `it` de `"a2a"` de WKH-332 (`:45-48`), que es el precedente exacto de este archivo.
+  //
+  // QUÉ CUSTODIABA ANTES: que el motor NO estuviera cableado, porque al cerrar 062 faltaba la ola 4 —la
+  // que produce el `viaje.direccion`, la `session` y la `claveBilletera` que el motor CONSUME—, así que
+  // cablearlo sólo habría borrado la evidencia de que el camino estaba apagado.
+  //
+  // QUÉ CUSTODIA AHORA, que es lo contrario y por eso el `it` se da vuelta: esa ola llegó, el
+  // colaborador se cablea **sin condición**, y lo que decide si la rama corre dejó de ser el cableado y
+  // pasó a ser el gate del adaptador (`caminoPorEnlace`, `../infrastructure/solana-wallet.ts:2239`):
+  // elección persistida del selector **Y** `availability === "none"`. Un `undefined` acá ya no
+  // significa "está apagado a propósito": significa que el cableado se perdió y que **el recorrido por
+  // enlace no existe para nadie**, en silencio y con la suite en verde.
+  //
+  // ⛔ LO QUE ESTE `it` NO AFIRMA, y hay que decirlo porque el nombre invita a leerlo así: NO afirma que
+  // el depósito por enlace funcione. `prepare()` exige un PoP firmado por el bridge
+  // (`http-solana-prepare-gateway.ts:222-235`) y en un móvil sin extensión el bridge está vacío, así que
+  // un depósito por enlace muere en `payout_pop_unavailable` antes de llegar a la rama. Eso es WKH-359.
+  // Lo que esta HU enciende es el connect y la creación de la cuenta de nonce.
+  it("T-062-21 (INVERTIDO): el `SolanaWalletAdapter` del container se construye CON el colaborador de enlace", () => {
     const c = createContainer();
     const wallet = (c.confirmAndSend as unknown as { wallet?: unknown }).wallet;
     expect(wallet, "el container no cableó ninguna billetera a `ConfirmAndSend`").toBeDefined();
     const motor = (wallet as unknown as { firmaPorEnlace?: unknown }).firmaPorEnlace;
     expect(
       motor,
-      "el container INYECTÓ el motor de firma por enlace. Cablearlo NO enciende el flujo móvil: " +
-        "`getAddress()` sigue leyendo el bridge, que en un móvil sin extensión no tiene nada, así que " +
-        "`authorizePrincipal` tira `wallet_not_connected` ANTES de llegar a la rama. Lo único que " +
-        "cablearlo consigue es BORRAR LA EVIDENCIA de que está apagado. Si esto es intencional, hay " +
-        "que traer la ola 4 (selector + connect por enlace) y actualizar el SDD y los dos README en " +
-        "el mismo cambio.",
-    ).toBeUndefined();
+      "el container NO inyectó el motor de firma por enlace. Sin ese cableado, `caminoPorEnlace()` " +
+        "puede devolver la billetera elegida y la rama NO corre igual, porque el primer operando del " +
+        "`if` es el colaborador: el recorrido por enlace queda apagado PARA TODOS y nada más se pone " +
+        "rojo. Si sacarlo es intencional, hay que revertir la ola 4 entera (selector, connect y cuenta " +
+        "de nonce) y actualizar el SDD y los dos README en el mismo cambio.",
+    ).toBeDefined();
+  });
+
+  // ── T-065-GATE-1 (AC-6b) · EL CONTAINER REAL, CON BRIDGE CONECTADO Y SIN ELECCIÓN EN DISCO ────────
+  //
+  // 🔴 POR QUÉ ESTE `it` VA SOBRE EL CONTAINER REAL Y NO SOBRE UN ADAPTER ARMADO A MANO. Es la mitad (b)
+  // de AC-6, y la mitad que un doble no puede dar: lo que hay que medir es que el objeto QUE ESTE
+  // ARCHIVO CONSTRUYE —con el colaborador ya cableado, que es lo que la inversión de arriba acaba de
+  // permitir— siga recorriendo el camino inyectado. Con un adapter a mano estaríamos midiendo el
+  // cableado del test, que es justo lo que la lección `tests-que-registran-el-doble` prohíbe.
+  //
+  // El desenlace esperado NO es un éxito: es `escrow_params_missing`, un guard fail-loud PRE-EXISTENTE
+  // (`solana-wallet.ts:562-563`). Que la causa sea ÉSA —y no ninguna del vocabulario `deeplink_*`— es
+  // exactamente la prueba de que la rama de enlace no se tocó.
+  it("T-065-GATE-1 (AC-6b): con el bridge conectado y SIN elección en disco, no sale ninguna causa `deeplink_*`", async () => {
+    solanaWalletBridge.setState({
+      publicKey: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+      connected: true,
+    });
+    solanaWalletBridge.setWalletAvailability("injected");
+    const c = createContainer();
+    const wallet = c.confirmAndSend as unknown as {
+      wallet: { authorizePrincipal: (...a: unknown[]) => Promise<unknown> };
+    };
+    let causa = "";
+    try {
+      await wallet.wallet.authorizePrincipal(
+        { send: { minor: 1 }, expiresAt: "2099-01-01T00:00:00.000Z" },
+        "rem-gate-1",
+      );
+    } catch (e) {
+      causa = (e as Error).message;
+    }
+    // CD-18: el fixture tiene que haber fabricado algo. Sin esto, un `authorizePrincipal` que resolviera
+    // sin tirar dejaría `causa` en `""` y el `not.toMatch` de abajo pasaría por vacío.
+    expect(causa, "el fixture no produjo ningún corte: no hay nada que clasificar").not.toBe("");
+    expect(
+      causa,
+      "el camino INYECTADO produjo una causa del vocabulario `deeplink_*`. El gate dejó pasar un " +
+        "recorrido que no es por enlace: revisá `caminoPorEnlace()`, que con `availability === " +
+        '"injected"` tiene que devolver `null` en su PRIMERA condición, sin siquiera mirar el disco.',
+    ).not.toMatch(/^deeplink_/);
+    expect(causa, "la causa dejó de ser el guard pre-existente").toBe("escrow_params_missing");
   });
 
   // ⛔ Y el candado complementario: que el colaborador ausente signifique EL CAMINO DE HOY, no un

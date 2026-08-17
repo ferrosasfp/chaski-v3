@@ -140,12 +140,18 @@ export function DestinoRecuperar({ children }: { children: ReactNode }) {
     // ⚠️ `justify-center` no puede recortar nada: un ítem de una columna flex tiene `min-height:auto`,
     // así que nunca baja de su contenido; cuando el contenido no cabe, el `<main>` crece (es
     // `min-h-dvh`) y el sobrante que repartir es cero. Medido a 375x667, donde esta pantalla ya no
-    // cabe: el documento midió 811px, menos que los 856px que el formulario ya medía ahí y menos que
-    // los 870px de la bienvenida. (Acá decía 834px para el formulario y 853px para la bienvenida. El 834
-    // era el número equivocado del par que un CR encontró contradicho —son 856, re-medidos UNA vez en el
-    // fix-pack—; el 853 era correcto y dejó de serlo en el mismo fix-pack, porque condicionar una frase
-    // de la bienvenida le sumó un renglón. La tabla completa y las dos historias están en el encabezado
-    // de `recuperar-composicion.test.tsx`.)
+    // cabe: el documento midió 811px, menos que los **834px** que el formulario ya medía ahí y menos que
+    // los 870px de la bienvenida. 🔴 ESTA LÍNEA DECÍA 834, SE LE ESCRIBIÓ 856 ENCIMA, Y EL 834 ERA EL
+    // NÚMERO BUENO (fix-pack 2 · AR-it2/BLQ-BAJO-1): el fix-pack anterior resolvió el par contradictorio
+    // hacia el valor irreproducible y lo propagó a los cuatro sitios. Re-medido con instrumento nuevo
+    // (build de producción + Chrome headless, viewport CALIBRADO —compara `innerWidth`/`innerHeight`
+    // contra lo pedido y aborta si no coinciden—, dos corridas idénticas): **834px**, con `send` recién
+    // abierto, monto en el `$400` por defecto, nombre y CCI vacíos y el quote ya previsualizado; y 834
+    // también con nombre y CCI válidos cargados. El único estado de `send` que sube a 375x667 es un CCI
+    // INVÁLIDO (878, por la fila del error), y ninguno da 856. (El 853 que esta línea llevaba para la
+    // bienvenida era correcto y dejó de serlo cuando condicionar una frase le sumó un renglón: hoy es
+    // 870. La tabla de nueve celdas, con el estado de cada una, está en el encabezado de
+    // `recuperar-composicion.test.tsx`.)
     <div className="flex flex-1 flex-col justify-center space-y-aire">
       <div>
         <h2 className="text-title font-bold">Recuperar fondos de un envío anterior</h2>

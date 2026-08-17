@@ -69,19 +69,25 @@ import { Aviso, Button, Card, Muted } from "./ui";
  *    viewport de 667 —o sea que la pantalla scrollea— y la tinta va de **24px a 830px**, entera adentro
  *    del documento. Nada quedó afuera ni con altura negativa: si `justify-center` recortara, el
  *    contenido arrancaría por encima de 0.
- *    🔴 Y ACÁ SE CAYÓ EL ARGUMENTO COMPARATIVO QUE ESTA LÍNEA TENÍA, POR CULPA DE OTRO ARREGLO DE ESTE
- *    MISMO FIX-PACK. Decía *"el `send` que sigue midió 856px, o sea que donde esta pantalla scrollea el
+ *    🔴 Y ACÁ SE CAYÓ EL ARGUMENTO COMPARATIVO QUE ESTA LÍNEA TENÍA, POR CULPA DE OTRO ARREGLO DEL
+ *    FIX-PACK ANTERIOR. Decía *"el `send` que sigue midió 856px, o sea que donde esta pantalla scrollea el
  *    formulario ya scrolleaba, y por más"*, y eso **ya es falso**: alargar la frase del `<Aviso>` para
  *    condicionarla (AR/BLQ-BAJO-2) le sumó un renglón a la tarjeta, y el documento de esta pantalla pasó
- *    de 853px a **870px**. A 375x667 la bienvenida es hoy **la MÁS ALTA de las tres** (870 · send 856 ·
+ *    de 853px a **870px**. A 375x667 la bienvenida es hoy **la MÁS ALTA de las tres** (870 · send **834** ·
  *    recuperar 811). Lo que sostiene la decisión es el mecanismo de arriba, que no depende de ninguna
  *    comparación; el número comparativo era corroboración secundaria y se retira en vez de conservarse.
- *    ⚠️ Y EL 856 DEL `send` SE RE-MIDIÓ IGUAL, porque un CR lo puso en duda con razón: el árbol tenía
- *    DOS valores para lo mismo (856 acá; 834 en los dos archivos de `recuperar`). Medido de nuevo sobre
- *    el build de producción con la calibración del viewport verificada: **856px**. El par equivocado era
- *    el de `recuperar` y se corrigió allá — pero el 856 correcto ya no alcanza para el argumento viejo,
- *    porque el que se movió fue el otro lado de la comparación. Las nueve mediciones están en el
- *    encabezado de `bienvenida-composicion.test.tsx`.
+ *    🔴 EL `856` DEL `send` ERA EL VALOR EQUIVOCADO DEL PAR, Y EL FIX-PACK ANTERIOR RESOLVIÓ LA
+ *    CONTRADICCIÓN AL REVÉS (fix-pack 2 · AR-it2/BLQ-BAJO-1): había 856 acá y 834 en los dos archivos de
+ *    `recuperar`, y le escribió 856 encima a los dos sitios que decían el número bueno. **Son 834px**,
+ *    re-medidos con un instrumento nuevo (build de producción + Chrome headless, viewport CALIBRADO: se
+ *    compara `innerWidth`/`innerHeight` contra lo pedido y se ABORTA si no coinciden), dos corridas
+ *    idénticas. **CON QUÉ ESTADO, porque el estado es parte del número**: `send` recién abierto desde la
+ *    bienvenida, monto en el `$400` por defecto, nombre y CCI VACÍOS y la previsualización del quote ya
+ *    resuelta (S/1,478.15 en pantalla). Con nombre y CCI válidos cargados da **834 igual**. Y el 856 no
+ *    sale en NINGUNO de los seis estados de `send` que se pudieron producir a 375x667: 834 intacto · 834
+ *    con nombre+CCI · 878 con CCI inválido (la fila del error) · 850 con monto por debajo del mínimo · 810
+ *    con el monto vacío · 834 con la cotización abortada. Las mediciones están en el encabezado de
+ *    `bienvenida-composicion.test.tsx`.
  *
  * 2. UN BLOQUE NUEVO QUE SE GANA SU LUGAR: los tres pasos de lo que va a pasar (`PASOS`). No es
  *    relleno y la diferencia es testeable: cada uno de los tres describe un tramo que el flujo
@@ -144,7 +150,7 @@ import { Aviso, Button, Card, Muted } from "./ui";
  *
  * ⛔ CADA RENGLÓN ES UN HECHO SOBRE EL RECORRIDO, Y SE VERIFICA CORRIÉNDOLO. El candado no busca estas
  * frases en la pantalla: camina el flujo real y comprueba que el tramo que cada una anuncia existe
- * (`PASOS_ESPERADOS`, `bienvenida-composicion.test.tsx:201`). Por eso están escritas en términos de lo
+ * (`PASOS_ESPERADOS`, `bienvenida-composicion.test.tsx:233`). Por eso están escritas en términos de lo
  * que la app HACE y no de lo que se siente:
  *   · el 1 nombra los dos datos que el paso `send` pide (el monto y el CCI);
  *   · el 2 nombra la verificación de identidad y la firma, que son `verify` y `confirm`, y dice "una

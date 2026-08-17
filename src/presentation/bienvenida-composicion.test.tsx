@@ -62,25 +62,48 @@
 // banda llena. Es el mismo agujero que tenía la v1 (medir la caja en vez de la tinta), acotado a la
 // tarjeta en vez de a la pantalla, y no está cerrado.
 //
-// 🔴 Y ACÁ SE CAYÓ UNA CONCLUSIÓN, MEDIDA, POR CULPA DE OTRO ARREGLO DE ESTE MISMO FIX-PACK. La tabla de
+// 🔴 Y ACÁ SE CAYÓ UNA CONCLUSIÓN, MEDIDA, POR CULPA DE OTRO ARREGLO DEL FIX-PACK ANTERIOR. La tabla de
 // alturas de documento decía `bienvenida 853px · send 856px` a 375x667, y con eso se afirmaba *"donde la
 // bienvenida scrollea, el formulario ya scrolleaba (y por más)"*. Condicionar la frase del `<Aviso>`
 // (AR/BLQ-BAJO-2) le sumó un renglón a la tarjeta, así que el documento de la bienvenida pasó a **870px**
-// y la afirmación se INVIRTIÓ. Re-medido al cierre del fix-pack, mismo build, misma calibración:
+// y la afirmación se INVIRTIÓ.
+//
+// 🔴 Y LA RECONCILIACIÓN DEL PAR CONTRADICTORIO SE RESOLVIÓ HACIA EL VALOR EQUIVOCADO (fix-pack 2 ·
+// AR-it2/BLQ-BAJO-1), en DOS celdas: el árbol tenía `send @375x667` = 856 acá y 834 en los dos archivos de
+// `recuperar`, y el fix-pack anterior escribió **856 en los cuatro sitios**, pisando los dos que decían el
+// número bueno; ídem la fila `390x844`, donde escribió 870 para la bienvenida. RE-MEDIDO CON UN
+// INSTRUMENTO NUEVO (build de producción `npm run build` + `npm start`, Chrome headless,
+// `deviceScaleFactor 1`, VIEWPORT CALIBRADO: el instrumento compara `innerWidth`/`innerHeight` contra lo
+// pedido y ABORTA si no coinciden, dos veces por medición — antes y después de caminar), **dos corridas
+// con las celdas idénticas**. Ningún píxel sale de un PNG: todos de `scrollHeight` del `<html>`.
 //
 //     viewport    bienvenida    send      recuperar    ¿scrollea a ese alto?
-//     375x667        870px      856px       811px      las TRES (viewport 667)
-//     390x844        870px      844px       844px      sólo la bienvenida (870 > 844)
+//     375x667        870px      834px       811px      las TRES (viewport 667)
+//     390x844        848px      844px       844px      sólo la bienvenida (848 > 844, por 4px)
 //     412x915        915px      915px       915px      ninguna
+//
+// ⛔ EL ESTADO ES PARTE DEL NÚMERO, y por eso va escrito al lado:
+//   · `bienvenida`: la app recién abierta, sin tocar nada (h2 «Tu plata no pasa por Chaski», barra
+//     presente, ninguna cifra en pantalla).
+//   · `send`: abierto tocando «Empezar un envío», monto en el `$400` por defecto, nombre y CCI VACÍOS y la
+//     previsualización del quote YA RESUELTA (S/1,478.15 visible). Con nombre y CCI válidos cargados da
+//     834 igual, así que la celda no depende de eso.
+//   · `recuperar`: abierto tocando su pestaña de la barra.
+// Y LOS OTROS CINCO ESTADOS DE `send` A 375x667, medidos para poder decir que el 856 no es de ninguno:
+// 834 intacto · 834 con nombre+CCI · **878 con CCI inválido** (la fila del error) · 850 con monto por
+// debajo del mínimo · 810 con el monto vacío · 834 con la cotización abortada. **856 no aparece en
+// ninguno**, y por eso el par contradictorio era 834 (bueno) contra 856 (irreproducible).
 //
 // LO QUE SE PUEDE AFIRMAR, y es menos de lo que se afirmaba: a 375x667 la bienvenida es la MÁS ALTA de
 // las tres, no la más baja. Lo que sostiene `justify-center` no es esa comparación sino el mecanismo, y
 // eso sí está medido: a 375x667 la tinta va de 24px a 830px dentro de un documento de 870px, o sea
 // ENTERA adentro — `min-height:auto` no puede recortar, y si recortara el contenido arrancaría por
 // encima de 0. El detalle está en el docblock de `bienvenida.tsx`.
-// ⚠️ El `send 856px` es correcto y se re-midió (era el número que un CR puso en duda: el árbol tenía 856
-// acá y 834 en los dos archivos de `recuperar`, y el par equivocado era el de allá). Lo que cambió no fue
-// ese lado de la comparación sino el otro, y por eso tener el 856 bien ya no alcanza para la frase vieja.
+// ⚠️ NINGUNA CONCLUSIÓN SE INVIERTE CON LOS NÚMEROS CORREGIDOS, y se verificó una por una: `811 < 834 <
+// 870` sigue diciendo que `recuperar` es la más baja y la bienvenida la más alta a 375x667, y `848 > 844`
+// sigue diciendo que a 390x844 scrollea sólo la bienvenida — con 4px de margen en vez de 26. Lo que
+// cambia es que el margen es fino, así que un renglón más en la bienvenida ya no mueve nada y un renglón
+// más en `send` la haría scrollear también.
 //
 // ⚠️ QUÉ PUEDE Y QUÉ NO PUEDE MEDIR ESTE ARCHIVO, declarado antes de los asserts. Acá corre jsdom, que
 // NO hace layout, y tampoco corre Tailwind:
@@ -96,19 +119,28 @@
 // Cada uno se editó en el árbol, se corrió este archivo y se anotó la salida. No es una lista de lo que
 // "debería" fallar: son los conteos de la corrida.
 //
-// ⚠️ LOS OCHO SE RE-CORRIERON EN EL FIX-PACK, porque el archivo pasó de **11 a 13 tests** (los dos de
-// `T-063-24`) y un total viejo (`… (11)`) ya no describe este árbol. Un conteo de mutación es relativo
-// al tamaño de la suite y agregar tests lo invalida sin que nada se ponga rojo.
+// ⚠️ LOS OCHO SE RE-CORRIERON EN EL FIX-PACK, porque el archivo pasó de **11 a 14 tests** —los dos de
+// `T-063-24` MÁS el de antivacuidad de `T-063-10`, o sea TRES y no dos (verificado contando los `it(` de
+// los dos árboles, no de memoria)— y un total viejo (`… (11)`) ya no describe este árbol. Un conteo de
+// mutación es relativo al tamaño de la suite y agregar tests lo invalida sin que nada se ponga rojo.
+//
+// 🔴 Y EL FIX-PACK ANTERIOR PUBLICÓ ESTA TABLA CON **(13)** EN LAS OCHO FILAS SOBRE UN ARCHIVO DE **14**
+// TESTS (fix-pack 2 · AR-it2/MNR-1). Los ocho `failed` estaban bien; los ocho totales estaban viejos por
+// uno, o sea que la tabla decía "re-medida" y ocho de sus dieciséis números venían de la corrida anterior.
+// Es EXACTAMENTE el antipatrón que el párrafo de arriba declara, en la tabla que está debajo del párrafo.
+// LOS OCHO SE RE-CORRIERON DE NUEVO, uno por uno, sobre el árbol del fix-pack 2, cada uno con el conteo
+// del patrón verificado en 1 ANTES de aplicar y con los archivos restaurados y comparados byte a byte
+// después. Control sin mutante en la misma corrida: **`14 passed (14)`**.
 //
 //   MUTANTE APLICADO                                                        RESULTADO MEDIDO
-//   1. la raíz sin `justify-center` (vuelve a quedar anclada arriba)         1 failed | 12 passed (13)
-//   2. la raíz con `min-h-full` en vez de `flex-1` (la clase INERTE)         2 failed | 11 passed (13)
-//   3. el `motion.div` de vuelta a `flex-1` a secas (sin `flex flex-col`)    1 failed | 12 passed (13)
-//   4. `PASOS` con dos renglones en vez de tres                             3 failed | 10 passed (13)
-//   5. el renglón 2 sin la mitad de la identidad                            1 failed | 12 passed (13)
-//   6. `onContinue` de `review` saltando `verify` (`flow.tsx:384`)           1 failed | 12 passed (13)
-//   7. la nota de la red borrada                                            2 failed | 11 passed (13)
-//   8. la fila `TxProof` del depósito borrada del comprobante (fix-pack)     1 failed | 12 passed (13)
+//   1. la raíz sin `justify-center` (vuelve a quedar anclada arriba)         1 failed | 13 passed (14)
+//   2. la raíz con `min-h-full` en vez de `flex-1` (la clase INERTE)         2 failed | 12 passed (14)
+//   3. el `motion.div` de vuelta a `flex-1` a secas (sin `flex flex-col`)    1 failed | 13 passed (14)
+//   4. `PASOS` con dos renglones en vez de tres                             3 failed | 11 passed (14)
+//   5. el renglón 2 sin la mitad de la identidad                            1 failed | 13 passed (14)
+//   6. `onContinue` de `review` saltando `verify` (`onContinue`, `flow.tsx:384`)  1 failed | 13 passed (14)
+//   7. la nota de la red borrada                                            2 failed | 12 passed (14)
+//   8. la fila `TxProof` del depósito borrada del comprobante (fix-pack)     1 failed | 13 passed (14)
 //
 // ⚠️ EL 2 MATA DOS Y ES EL QUE MÁS ENSEÑA: rompe el `it` que prohíbe `min-h-full` y también el que
 // exige `flex-1`, o sea que la clase inerte no puede entrar disfrazada de "otra forma de escribirlo".

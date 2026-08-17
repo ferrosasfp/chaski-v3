@@ -25,30 +25,54 @@
 // APLICARON Y SE CORRIERON, uno por uno. No es una lista de lo que "debería" fallar: es la salida de
 // correrlos.
 //
-// ⚠️ LOS DOCE CONTEOS DE ABAJO SE RE-MIDIERON EN EL FIX-PACK, y hay un motivo que vale más que los
-// números: el archivo pasó de **30 a 38 tests**, así que TODOS los totales viejos (`… (30)`) dejaron de
-// describir este árbol. Un conteo de mutación es relativo al tamaño de la suite; agregar tests lo
-// invalida sin que nada se ponga rojo. Los doce se volvieron a correr sobre el árbol de este fix-pack.
+// ⚠️ LOS CONTEOS DE ABAJO SE RE-MIDIERON EN EL FIX-PACK 2, y hay un motivo que vale más que los números:
+// el archivo pasó de **30 → 38 → 39 tests** (el 39º es el `it` de control de `T-063-21`, que el fix-pack 2
+// agregó), así que TODOS los totales de la tabla anterior (`… (38)`) dejaron de describir este árbol. Un
+// conteo de mutación es relativo al tamaño de la suite; agregar UN test lo invalida sin que nada se ponga
+// rojo, y eso es exactamente el hallazgo AR-it2/MNR-1 en el archivo hermano. Los CATORCE se volvieron a
+// aplicar y correr, uno por uno, con el conteo de cada patrón verificado en 1 ANTES de aplicar y los
+// archivos restaurados y comparados byte a byte después. Control en la misma corrida: **`39 passed (39)`**.
 //
 //   MUTANTE APLICADO                                                    RESULTADO MEDIDO
-//   1. `pasoInicial = "send"` como default de `RemittanceFlow`          9 failed | 29 passed (38)
-//   2. el CTA de la bienvenida llamando a `setStep("connect")`          3 failed | 35 passed (38)
-//   3. `app/page.tsx` pasando `pasoInicial="send"`                      1 failed | 37 passed (38)
-//   4. la barra pintada sin el guard `esDestino(step)`                 11 failed | 27 passed (38)
-//   5. `esDestino` devolviendo `true` también para `"done"`             2 failed | 36 passed (38)
-//   6. una cuarta pestaña, y que además es una acción                   5 failed | 33 passed (38)
-//   7. la frase de custodia MOVIDA arriba del CTA en `connect`          1 failed | 37 passed (38)
-//   7b. la MISMA frase DUPLICADA (arriba y abajo a la vez)              2 failed | 36 passed (38)
-//   8. `DEMO_PILL` con otro texto                                       1 failed | 37 passed (38)
-//   ── los cuatro del fix-pack ─────────────────────────────────────────────────────────────────────
-//   F1. el guard de la barra de vuelta a `esDestino(step)` a secas      3 failed | 35 passed (38)
-//   F2. un TERCER overlay en el ternario, sin sumarlo al guard          1 failed | 37 passed (38)
-//   F3. `onBack={() => setStep("send")}` en el historial                1 failed | 37 passed (38)
-//   F4. `setStep("send")` al final de `forgetAndDisconnect`             1 failed | 37 passed (38)
+//   1. `pasoInicial = "send"` como default de `RemittanceFlow`         10 failed | 29 passed (39)
+//   2. el CTA de la bienvenida llamando a `setStep("connect")`          3 failed | 36 passed (39)
+//   3. `app/page.tsx` pasando `pasoInicial="send"`                      1 failed | 38 passed (39)
+//   4a. el guard de la barra ENTERO borrado (se pinta siempre)         11 failed | 28 passed (39)
+//   4b. SÓLO `esDestino(step)` borrado (quedan las dos banderas)        8 failed | 31 passed (39)
+//   5. `esDestino` devolviendo `true` también para `"done"`             2 failed | 37 passed (39)
+//   6. una cuarta pestaña, y que además es una acción                   5 failed | 34 passed (39)
+//   7. la frase de custodia MOVIDA arriba del CTA en `connect`          1 failed | 38 passed (39)
+//   7b. la MISMA frase DUPLICADA (arriba y abajo a la vez)              2 failed | 37 passed (39)
+//   8. `DEMO_PILL` con otro texto                                       1 failed | 38 passed (39)
+//   ── los cuatro del primer fix-pack ──────────────────────────────────────────────────────────────
+//   F1. el guard de la barra de vuelta a `esDestino(step)` a secas      3 failed | 36 passed (39)
+//   F2. un TERCER overlay en el ternario, DECLARADO, sin sumarlo al guard  1 failed | 38 passed (39)
+//   F3. `onBack={() => setStep("send")}` en el historial                1 failed | 38 passed (39)
+//   F4. `setStep("send")` al final de `forgetAndDisconnect`             1 failed | 38 passed (39)
+//   ── el del fix-pack 2 ───────────────────────────────────────────────────────────────────────────
+//   F5. `disabled={busy}` en el «Volver» de `HistoryView`               1 failed | 38 passed (39)
 //
-// Y los dos que este archivo NO mata, porque los ACs que tocan viven en otros candados. Se corrieron
-// igual, y contra los archivos que sí los miran, para no dejar el par sin medir. También re-medidos en el
-// fix-pack (`touch-targets.test.tsx` ganó `T-341-7`, así que su total pasó de 20 a 21):
+// 🔴 EL 4 ERA UNA FILA AMBIGUA Y AHORA SON DOS, y la diferencia no es de un test: son 11 contra 8. Decía
+// "la barra pintada sin el guard `esDestino(step)`", que se lee de dos maneras — borrar el guard COMPLETO
+// (y ahí caen además los tres `it` de `T-063-20`, porque la barra se pinta encima de los dos overlays) o
+// borrar sólo ese término y dejar `!resuming && !timedOut`. El `11 failed` de la tabla vieja es la
+// PRIMERA lectura; la segunda da 8 y es la que aísla lo que su nombre dice. Mismo tratamiento que el par
+// 7 / 7b, que ya se había partido por lo mismo.
+// ⚠️ EL 1 MATA DIEZ Y NO NUEVE, y el décimo es el `it` de control nuevo de `T-063-21`: monta el default
+// (`bienvenida`) y exige que la barra esté, así que un default en `"send"` lo mata. Es información y no
+// ruido: dice que ese control también vigila el default.
+// ⛔ DOS DE ESTOS MUTANTES ESTUVIERON MAL ESCRITOS EN LA PRIMERA PASADA DEL FIX-PACK 2, y queda anotado
+// porque un mutante que rompe el módulo no mide nada:
+//   · el 7 puesto como HERMANO del `<div>` raíz del bloque `connect` deja dos hijos en una rama `&&` ⇒
+//     error de compilación y `no tests` (cero, ni verde ni rojo). Va como PRIMER HIJO de ese `<div>`.
+//   · el F2 con `otroOverlay` SIN DECLARAR es un `ReferenceError` en render ⇒ `34 failed | 5 passed (39)`,
+//     que parece un mutante potentísimo y es un módulo roto. Con `const otroOverlay = false;` declarado
+//     mata **1**, y el que cae es el que lee el FUENTE — que es lo que ese `it` promete.
+//
+// Y los dos que este archivo NO mata, porque los ACs que tocan viven en otros candados. NO se re-corrieron
+// en el fix-pack 2, y el motivo es medible: sus totales son relativos a `touch-targets.test.tsx` y
+// `jerarquia-relativa.test.tsx`, y el fix-pack 2 NO tocó ninguno de los dos (no aparecen en su `git
+// status`), así que 21 y 16 siguen describiendo esos árboles:
 //   9. la pestaña sin su `min-h-[52px]` (AC-5)   ⇒ touch-targets + jerarquia:  3 failed | 18 passed (21)
 //  10. la pestaña activa con el vocabulario COMPLETO de `primary`
 //                                               ⇒ jerarquia-relativa:         2 failed | 14 passed (16)
@@ -302,8 +326,10 @@ describe("T-063-4 (AC-3/AC-4): la máquina de `Step` está partida en pasos y de
 });
 
 describe("T-063-5 (AC-3): NINGÚN paso del envío pinta la barra", () => {
-  // MUTANTE 4 (aplicado): pintar `<BarraDestinos>` sin el `esDestino(step)` ⇒ los 7 `it` de acá se
-  // ponen rojos de una.
+  // MUTANTE 4b (aplicado): borrar `esDestino(step)` del guard de la barra, dejando `!resuming &&
+  // !timedOut` ⇒ `8 failed | 31 passed (39)`. Los 7 `it` de este `it.each` MÁS el que camina el
+  // recorrido real, que está abajo: OCHO y no siete (fix-pack 2). Con el guard ENTERO borrado son 11,
+  // porque caen también los tres de `T-063-20`; las dos filas están en el encabezado.
   it.each(PASOS_DEL_FLUJO)("en `%s` no hay barra de destinos", (paso) => {
     // ⚠️ VARIOS DE ESTOS PASOS NO RENDERIZAN CONTENIDO sin una remesa en estado (`review` exige
     // `rem?.quote`, `track` exige `rem`), y eso NO debilita el test: la barra depende de `step` y de
@@ -569,7 +595,7 @@ describe("T-063-20 (AR/BLQ-MED-1): con un overlay de KYC arriba, la barra NO se 
     buildTestContainer({ useCases: { resumeKyc: { execute } as unknown as Container["resumeKyc"] } });
 
   it("🔴 mientras el resume dice `processing`, hay overlay y NO hay barra", async () => {
-    // MUTANTE F1 (aplicado): devolver el guard a `esDestino(step)` a secas ⇒ `3 failed | 35 passed (38)`.
+    // MUTANTE F1 (aplicado): devolver el guard a `esDestino(step)` a secas ⇒ `3 failed | 36 passed (39)`.
     // ⚠️ CAEN TRES Y NO DOS, y el tercero es el que importa: éste, el de `timedOut`, y el que lee el
     // FUENTE (porque la línea de la barra deja de contener `!resuming`). Sin el mutante: `38 passed`.
     render(<RemittanceFlow container={conResume(async () => ({ kind: "processing" }))} />);
@@ -608,7 +634,9 @@ describe("T-063-20 (AR/BLQ-MED-1): con un overlay de KYC arriba, la barra NO se 
     // línea de la barra.
     //
     // MUTANTE F2 (aplicado): agregar `) : otroOverlay ? (` como tercera rama del ternario, sin tocar la
-    // línea de la barra ⇒ `1 failed | 37 passed (38)`, y el único que cae es éste.
+    // línea de la barra ⇒ `1 failed | 38 passed (39)`, y el único que cae es éste. ⚠️ Y `otroOverlay`
+    // TIENE QUE ESTAR DECLARADO: sin declararlo el mutante es un `ReferenceError` en render y da `34
+    // failed | 5 passed (39)`, que no mide este `it` sino un módulo roto (fix-pack 2).
     // ⚠️ CÓMO SE IDENTIFICA "EL" TERNARIO, porque `flow.tsx` tiene 18 ternarios con esta forma y sólo UNO
     // decide si el flujo se pinta o no. El rasgo que lo distingue no es la indentación (el bloque de
     // `error` está al mismo nivel y coexiste con la barra A PROPÓSITO): es que su rama ELSE final es la
@@ -650,49 +678,107 @@ describe("T-063-20 (AR/BLQ-MED-1): con un overlay de KYC arriba, la barra NO se 
   });
 });
 
-describe("T-063-21 (AR/BLQ-MED-1, lo que NO se arregló): la ventana previa a la primera respuesta", () => {
-  it("🔴 una elección hecha antes de que el resume contestara SE PIERDE, y queda medido", async () => {
-    // ⚠️ ESTE `it` NO DEFIENDE UN ARREGLO: DOCUMENTA UN DEFECTO QUE SIGUE ABIERTO, medido en vez de
-    // razonado. La barra ya no se pinta con el overlay arriba, pero `resuming` arranca en `false` y sólo
-    // pasa a `true` cuando el primer `resumeKyc.execute()` CONTESTA. Y en el camino del video ese primer
-    // execute hace una llamada de red a Didit (`kyc.decision`), o sea cientos de milisegundos con la
-    // bienvenida y la barra en pantalla, las dos correctas. Si la persona toca un destino ahí, el resume
-    // llega después y hace `setStep("confirm")` encima.
-    //
-    // POR QUÉ NO SE GUARDÓ EL `setStep`, y la decisión se midió: cortarlo con un ref del tipo "la
-    // persona ya navegó" deja una identidad YA VERIFICADA sin ninguna pantalla que la retome — desde
-    // `recuperar` no hay ningún camino de vuelta a `confirm`—, o sea que cambia una navegación tardía
-    // por una remesa varada con el KYC pagado. Eso es peor, y elegirlo bien es diseño de una HU, no de
-    // un fix-pack. Cuando se arregle, ESTE test se pone rojo y hay que venir a reescribirlo: es la
-    // forma de que el defecto no se olvide.
+describe("T-063-21 (AR-it2/BLQ-MED-1): la ventana previa a la primera respuesta ya no pisa la elección", () => {
+  /** El resume que no contesta hasta que el test lo suelta: ES la ventana, sin depender de ningún reloj. */
+  const conResumeDeferido = () => {
     let resolver: ((r: ResumeKycResult) => void) | null = null;
     const enVuelo = new Promise<ResumeKycResult>((res) => {
       resolver = res;
     });
     const { container } = conLasDosPuertas();
-    const conDeferido = {
-      ...container,
-      resumeKyc: { execute: () => enVuelo } as unknown as Container["resumeKyc"],
+    return {
+      container: { ...container, resumeKyc: { execute: () => enVuelo } as unknown as Container["resumeKyc"] },
+      contestar: (r: ResumeKycResult) => (resolver as unknown as (x: ResumeKycResult) => void)(r),
     };
-    render(<RemittanceFlow container={conDeferido} />);
+  };
+
+  it("🔴 la pantalla que la persona eligió SOBREVIVE, y el aviso dice que la verificación está lista", async () => {
+    // ⚠️ ESTE `it` CAMBIÓ DE SIGNO EN EL FIX-PACK 2, y decirlo es la mitad del valor: hasta `6eb57e6`
+    // CONGELABA LA LIMITACIÓN (asserteaba que la elección SE PERDÍA, para que el día que alguien cerrara
+    // el defecto el test se pusiera rojo y viniera a reescribirlo). Eso es exactamente lo que pasó: el
+    // gate del pisón lo puso rojo, y esto es la reescritura. Lo que congela ahora es el comportamiento
+    // NUEVO.
+    //
+    // 🔴 POR QUÉ SE CERRÓ, y las dos mitades del argumento viejo estaban medidas al revés (AR-it2):
+    //   · "cortarlo deja una identidad verificada sin pantalla que la retome" es FALSO: `ResumeKyc`
+    //     persiste la verificación (`kycStore`, `../application/use-cases/resume-kyc.ts:49`) ANTES de que
+    //     la UI navegue, y el atajo KYC-once de `onConnect` (`rememberedKyc`, `./flow.tsx:358`) la retoma
+    //     con CERO llamadas a Didit. Lo que se perdía al cortar era un formulario para volver a tipear, no
+    //     el KYC pagado. ⚠️ EL AR-it2 CITABA `:47` PARA ESA LÍNEA, Y ES EL `applyKyc`: el `kycStore.save`
+    //     está dos líneas más abajo. El hecho ("corre antes de que la UI navegue") aguanta; el número no.
+    //   · "la ventana es corta (cientos de ms)" también es FALSO: el `fetch` del cliente a
+    //     `/api/kyc/decision` no tiene timeout y el del server es `AbortSignal.timeout(10_000)`
+    //     (`AbortSignal`, `../../app/api/kyc/decision/route.ts:57`), así que son HASTA 10 s cuando la
+    //     petición llega, y sin techo cuando no llega — el caso plausible, porque la app se está
+    //     recargando desde un redirect externo en una red móvil.
+    // Y el aterrizaje no era una pantalla de navegación: era `confirm`, la que pide la firma que mueve la
+    // plata, sin barra y con una única salida DESTRUCTIVA ("¿No sos vos?" borra el KYC de la address y la
+    // PII del beneficiario).
+    //
+    // ── LOS DOS MUTANTES DEL GATE, APLICADOS Y CORRIDOS, uno por `it` ─────────────────────────────
+    // ⚠️ HACEN FALTA DOS Y NO UNO, y esto lo aprendí midiendo: mi primera versión de este comentario
+    // decía que UN mutante mataba los dos `it` de este bloque, y es FALSO. Un gate condicional tiene dos
+    // formas de romperse y cada una mata un `it` distinto:
+    //   G1. los tres `aterrizarEnConfirm()` del resume-loop de vuelta a `setStep("confirm")` a secas
+    //       (3 sustituciones, con el conteo verificado antes de aplicar) ⇒ `1 failed | 38 passed (39)`,
+    //       y el que cae es ÉSTE. Es el defecto original, repuesto.
+    //   G2. `aterrizarEnConfirm` sin su condición, o sea que NUNCA navega y siempre avisa
+    //       (1 sustitución) ⇒ `1 failed | 38 passed (39)`, y el que cae es el `it` DE ABAJO.
+    // O sea: G1 no toca el control y G2 no toca este `it`. Un gate que se "cerrara" borrando la
+    // navegación pasaría este `it` en verde, y ése es todo el motivo de que el de abajo exista.
+    // Y el costo real de G2 está medido FUERA de este archivo, que es donde vive el camino principal:
+    // `src/presentation/flow.test.tsx` da `4 failed | 107 passed (111)` y los cuatro son `T-AC6`,
+    // `T-REQUOTE`, `T-354-3g` y `T-354-3h`. Sin G2 medido, "el arreglo es no navegar" se lee razonable.
+    const { container, contestar } = conResumeDeferido();
+    render(<RemittanceFlow container={container} />);
 
     // (1) La ventana: el resume todavía no contestó, así que NO hay overlay y la barra es correcta.
     expect(screen.queryByRole("heading", { name: /Verificando tu identidad/ })).toBeNull();
     const nav = barra();
-    expect(nav, "en esta ventana la barra SÍ está, y eso no es el defecto").not.toBeNull();
+    expect(nav, "en esta ventana la barra SÍ está, y es la precondición de todo el test").not.toBeNull();
 
     // (2) La persona elige un destino.
     fireEvent.click(within(nav as HTMLElement).getByRole("button", { name: "Recuperar" }));
     expect(screen.getByRole("heading", { name: /Recuperar fondos de un envío anterior/ })).toBeInTheDocument();
 
-    // (3) El resume contesta, y pisa la elección.
-    (resolver as unknown as (r: ResumeKycResult) => void)({ kind: "passed", snapshot: remesaConDeposito("rem-9") });
-    await waitFor(() =>
-      expect(
-        screen.queryByRole("heading", { name: /Recuperar fondos de un envío anterior/ }),
-        "DEFECTO ABIERTO: el resume se llevó puesta la pantalla que la persona eligió",
-      ).toBeNull(),
-    );
+    // (3) El resume contesta. El aviso aparece; la pantalla elegida NO se mueve.
+    contestar({ kind: "passed", snapshot: remesaConDeposito("rem-9") });
+    expect(await screen.findByText("Tu verificación quedó lista")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: /Recuperar fondos de un envío anterior/ }),
+      "el resume no puede llevarse puesta la pantalla que la persona eligió",
+    ).toBeInTheDocument();
+    // Y no aterrizó en la pantalla de la firma, que es lo que hacía antes.
+    expect(screen.queryByRole("button", { name: /Confirmar y enviar/ })).toBeNull();
+
+    // (4) EL AVISO NO ES UN DEAD-END, y este assert es el que obliga a que `setRem` se haya conservado:
+    // sin el snapshot en estado, `confirm` no tiene remesa que mostrar y el botón no lleva a ninguna
+    // parte. La barra sólo ofrece los tres destinos y "Empezar un envío" crearía una remesa NUEVA, así
+    // que este botón es el ÚNICO camino de vuelta al envío que se estaba haciendo.
+    fireEvent.click(screen.getByRole("button", { name: "Seguir con ese envío" }));
+    expect(await screen.findByRole("button", { name: /Confirmar y enviar/ })).toBeInTheDocument();
+    expect(screen.queryByText("Tu verificación quedó lista"), "el aviso se consume al usarlo").toBeNull();
+  });
+
+  it("🔴 (la otra mitad) sin ningún toque de barra, el resume SÍ navega solo", async () => {
+    // ⚠️ SIN ESTE `it` EL GATE SE PODRÍA "CERRAR" BORRANDO LA NAVEGACIÓN, y eso rompería el camino
+    // principal del KYC en móvil: la vuelta de Didit es una recarga, y si nadie tocó nada la persona
+    // TIENE que aterrizar en `confirm` sola. Medido fuera de este archivo por `T-AC6`, `T-REQUOTE`,
+    // `T-354-3g` y `T-354-3h` (los cuatro montan `pasoInicial="send"`); acá se mide en el MISMO montaje
+    // que el `it` de arriba —default `bienvenida`, con la barra en pantalla— para que las dos mitades del
+    // gate se lean juntas. La diferencia entre los dos `it` es UN click.
+    // MUTANTE G2 (aplicado y corrido, ver el bloque de arriba): `aterrizarEnConfirm` sin su condición
+    // ⇒ `1 failed | 38 passed (39)` acá y `4 failed | 107 passed (111)` en `flow.test.tsx`.
+    const { container, contestar } = conResumeDeferido();
+    render(<RemittanceFlow container={container} />);
+    expect(barra(), "la barra está y no se la toca: eso es todo el contraste").not.toBeNull();
+
+    contestar({ kind: "passed", snapshot: remesaConDeposito("rem-8") });
+    expect(await screen.findByRole("button", { name: /Confirmar y enviar/ })).toBeInTheDocument();
+    expect(
+      screen.queryByText("Tu verificación quedó lista"),
+      "sin elección previa no hay nada que avisar: navegar ES el comportamiento correcto acá",
+    ).toBeNull();
   });
 });
 
@@ -705,7 +791,7 @@ describe("T-063-21 (AR/BLQ-MED-1, lo que NO se arregló): la ventana previa a la
 describe("T-063-22 (AR/BLQ-BAJO-1): el «Volver» del historial va al inicio, no al medio del embudo", () => {
   it("🔴 desde el historial, «Volver» aterriza en la bienvenida y NO en el formulario", async () => {
     // MUTANTE F3 (aplicado): `onBack={() => setStep("send")}`, que es lo que decía ⇒ `1 failed |
-    // 37 passed (38)`. El assert que lo mata es el segundo: sin él, "la bienvenida está" y "el
+    // 38 passed (39)`. El assert que lo mata es el segundo: sin él, "la bienvenida está" y "el
     // formulario está" podrían ser las dos verdad si alguien pintara las dos.
     render(<RemittanceFlow pasoInicial="history" container={conLasDosPuertas().container} />);
     // `pasoInicial="history"` con `history === null` no pinta la lista, así que se entra caminando.
@@ -717,44 +803,83 @@ describe("T-063-22 (AR/BLQ-BAJO-1): el «Volver» del historial va al inicio, no
     expect(screen.queryByText(/Paso 1 de 4/)).toBeNull();
   });
 
-  it("🔴 y el botón se queda por un motivo MEDIDO: es la única salida que sobrevive a `busy`", async () => {
+  it("🔴 y el botón se queda por un motivo MEDIDO: sobrevive a `busy` en la pantalla congelada", async () => {
     // ⚠️ POR QUÉ NO SE BORRÓ, que era la otra opción sobre la mesa (la barra ya ofrece "Enviar", así que
     // un «Volver» a pantalla completa dentro de un destino ES navegación duplicada, justo lo que el
     // work-item eliminó al borrar los enlaces del pie). Medido acá: con la billetera que nunca contesta,
     // `guard` deja `busy` en `true` sin timeout ni escape (AR/MNR-3) y las TRES pestañas quedan
-    // `disabled`. El «Volver» no honra `disabled`, así que es el único control vivo de la pantalla.
-    // Borrarlo cambiaba un defecto de duplicación por un congelamiento sin salida.
-    // MUTANTE: ponerle `disabled={busy}` al «Volver» ⇒ este `it` se pone rojo, y ahí el botón deja de
-    // tener motivo para existir y hay que borrarlo con su fila de `jerarquia-relativa.test.tsx`.
+    // `disabled`. El «Volver» no honra `disabled`, así que sobrevive al congelamiento.
+    //
+    // 🔴 ACÁ DECÍA «es el ÚNICO control vivo de la pantalla», Y ES FALSO — MEDIDO (fix-pack 2 ·
+    // AR-it2/MNR-2). Censo completo de botones NO deshabilitados en el árbol que este test mide
+    // (`history` con la lista pintada y la billetera colgada después):
+    //     ["¿No sos vos?", "Ver seguimiento", "Volver"]
+    // Son TRES. El gesto del header (`¿No sos vos?`) no honra `busy`, y el botón de fila del historial
+    // tampoco: se pinta con `onOpen` y sin ningún prop de deshabilitado (`onOpen`, `flow.tsx:3435`). La
+    // conclusión de fondo no se
+    // mueve —el «Volver» sí sobrevive, y borrarlo cambiaba un defecto de duplicación por una pantalla más
+    // pobre— pero "único" afirmaba de más, y de los otros dos uno es DESTRUCTIVO (`¿No sos vos?` borra el
+    // KYC de la address y la PII del beneficiario) y el otro no sale del destino. Como salida NO
+    // destructiva hacia otra pantalla, el «Volver» es el único; eso es lo que se puede afirmar.
+    //
+    // 🔴 Y ESTE `it` MEDÍA UN ÁRBOL DESMONTADO (fix-pack 2 · AR-it2/MNR-4). La versión vieja capturaba el
+    // «Volver» del PRIMER render, hacía `cleanup()`, montaba un árbol nuevo con la billetera colgada y
+    // asserteaba sobre el nodo del árbol viejo: el assert no hablaba de la pantalla congelada. Ahora hay
+    // UN solo árbol y un `connectWallet` que anda la 1ª vez (pinta la lista) y se cuelga desde la 2ª.
+    // ⛔ Y EL NODO SE RE-QUERYEA DESPUÉS DE COLGAR, no se cachea, porque en este árbol un nodo capturado
+    // NO SOBREVIVE A UN RE-RENDER: medido, `document.body.contains(nodoCapturado) === false` y el nodo
+    // fresco es OTRO objeto. La causa está medida y es del doble de `framer-motion` de este archivo: su
+    // `Proxy` devuelve una función NUEVA en cada acceso, así que `motion.div === motion.div` da **false**
+    // y React ve un tipo de componente distinto en cada render ⇒ remonta el subárbol entero.
+    // MUTANTE (aplicado y corrido): ponerle `disabled={busy}` al «Volver» ⇒ este `it` se pone rojo, y ahí
+    // el botón deja de tener motivo para existir y hay que borrarlo con su fila de
+    // `jerarquia-relativa.test.tsx`. El conteo está en el encabezado, mutante F5.
     const refund = new FakeSolanaEscrowRefundGateway();
     const lister = new FakeSolanaCloseableEscrowLister([]);
-    const container = buildTestContainer({ wallet: new FakeSolanaWallet(), solanaRefund: refund, solanaCloseableEscrows: lister });
+    const base = buildTestContainer({ wallet: new FakeSolanaWallet(), solanaRefund: refund, solanaCloseableEscrows: lister });
+    let intentos = 0;
+    const container = {
+      ...base,
+      // Anda una vez (hace falta para PINTAR la lista) y se cuelga desde la segunda: `openHistory`
+      // vuelve a entrar en `guard` y `busy` se queda arriba para siempre.
+      connectWallet: {
+        execute: () => {
+          intentos += 1;
+          return intentos === 1 ? base.connectWallet.execute() : new Promise<never>(() => {});
+        },
+      } as unknown as Container["connectWallet"],
+      listHistory: { execute: async () => [remesaConDeposito("rem-7")] } as unknown as Container["listHistory"],
+    };
     render(<RemittanceFlow pasoInicial="history" container={container} />);
     fireEvent.click(within(barra() as HTMLElement).getByRole("button", { name: "Mis envíos" }));
-    const volver = await screen.findByRole("button", { name: /^Volver$/ });
+    // PRECONDICIÓN 1: la lista está PINTADA. Sin esto el árbol no es la pantalla que este test describe.
+    expect(await screen.findByRole("button", { name: /Ver seguimiento/ })).toBeInTheDocument();
 
-    // Se cuelga la billetera: `openHistory` vuelve a entrar en `guard` y `busy` se queda arriba.
-    const conColgada = { ...container, connectWallet: { execute: () => new Promise<never>(() => {}) } as unknown as Container["connectWallet"] };
-    cleanup();
-    render(<RemittanceFlow pasoInicial="history" container={conColgada} />);
-    const nav = barra() as HTMLElement;
-    fireEvent.click(within(nav).getByRole("button", { name: "Mis envíos" }));
+    // Se cuelga la billetera, en el MISMO árbol.
+    fireEvent.click(within(barra() as HTMLElement).getByRole("button", { name: "Mis envíos" }));
+    // PRECONDICIÓN 2: las pestañas quedaron muertas.
     await waitFor(() =>
       expect(
         within(barra() as HTMLElement).getByRole("button", { name: "Recuperar" }),
         "con la billetera colgada las pestañas quedan muertas: es la precondición de este test",
       ).toBeDisabled(),
     );
-    // Y el control que este test defiende NO está disabled. Se mide sobre el render de arriba, que es
-    // el que tiene la lista pintada.
-    expect(volver, "el «Volver» del historial no puede honrar `busy`: es la salida de última instancia").not.toBeDisabled();
+    // PRECONDICIÓN 3: la lista sigue pintada DESPUÉS de colgar (si se hubiera ido, lo de abajo mediría
+    // otra pantalla).
+    expect(screen.getByRole("button", { name: /Ver seguimiento/ })).toBeInTheDocument();
+
+    // Y el control que este test defiende NO está disabled, en ESTE árbol y con el nodo re-queryeado.
+    expect(
+      screen.getByRole("button", { name: /^Volver$/ }),
+      "el «Volver» del historial no puede honrar `busy`: es la salida de última instancia",
+    ).not.toBeDisabled();
   });
 });
 
 describe("T-063-23 (AR/BLQ-BAJO-1): después de «Borrar igual», el dispositivo limpio arranca en el inicio", () => {
   it("🔴 no aterriza en el medio del formulario", async () => {
     // MUTANTE F4 (aplicado): `setStep("send")` al final de `forgetAndDisconnect`, que es lo que decía ⇒
-    // `1 failed | 37 passed (38)`.
+    // `1 failed | 38 passed (39)`.
     //
     // El gesto significa "no soy yo, quiero un dispositivo limpio": borra el KYC de la address y la PII
     // del beneficiario. Aterrizar con "Paso 1 de 4" arriba contradice lo que se acaba de pedir.

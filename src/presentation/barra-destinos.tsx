@@ -79,10 +79,10 @@ const ICONOS: Record<Destino, typeof Send> = {
  * disparador (ver `T-063-21`, que lo mide para el resume). Las dos instancias piden el mismo mecanismo
  * —cancelar o versionar la navegación en vuelo— y elegirlo bien es diseño de una HU, no de un fix-pack.
  *
- * ⚠️ LA MITIGACIÓN QUE SÍ HAY, y es la única: desde `history`, el botón «Volver» de `HistoryView` NO
- * honra `disabled`, así que sobrevive al congelamiento. Es la razón medida por la que ese botón no se
- * borró pese a ser navegación duplicada dentro de un destino. Desde `bienvenida` y `recuperar` no hay
- * ninguna salida: eso queda ABIERTO y sin candado.
+ * ⚠️ LA MITIGACIÓN QUE SÍ HAY **Y SU PRECONDICIÓN**, que el fix-pack anterior no escribió y por eso decía "mitigado en un camino de tres" a secas (fix-pack 2 · AR-it2/MNR-3). Desde `history` el botón «Volver» de `HistoryView` NO honra `disabled`, así que sobrevive al congelamiento — 🔴 PERO ESE BOTÓN SÓLO EXISTE SI LA LISTA YA ESTÁ PINTADA (`history`, `flow.tsx:1185`: el sitio de render exige `history` no nula), o sea SÓLO en un SEGUNDO toque, con la billetera ya colgada de antes. Y el disparador natural es el PRIMER toque de "Mis envíos": ahí `history` sigue en `null`, no se pinta ningún «Volver», y la pantalla queda con CERO controles vivos. Medido en jsdom, censo de botones NO deshabilitados: `bienvenida` con la billetera colgada desde el arranque ⇒ `[]` · `bienvenida` tras el primer toque de "Mis envíos" que se cuelga ⇒ `[]` · `recuperar` colgado ⇒ dos vivos ("Recuperar un envío perdido" y "Recuperar el depósito de red de envíos anteriores"), pero NINGUNO de los dos navega: son las dos puertas de la cadena.
+ * Es la razón medida por la que ese botón no se borró pese a ser navegación duplicada dentro de un
+ * destino. Desde `bienvenida` y `recuperar` no hay ninguna salida hacia otra pantalla: eso queda ABIERTO
+ * y sin candado, y la frase "mitigado" vale sólo con la precondición de arriba.
  */
 export function BarraDestinos({
   activo,

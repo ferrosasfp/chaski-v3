@@ -33,29 +33,41 @@
 // Y EL CONTROL QUE HACE HONESTA LA MEJORA, porque "llené la pantalla" es fácil de conseguir mal: esta
 // pantalla NO quedó más alta que las otras. Altura del documento en el mismo build.
 //
-// 🔴 ESTA TABLA TENÍA DOS NÚMEROS MAL, Y UNO DE LOS DOS INVERTÍA UNA CONCLUSIÓN EN OTRO ARCHIVO
-// (fix-pack, CR/BLQ-BAJO-2). Decía `send 834px` a 375x667 y `bienvenida 844px` a 390x844, y el
-// encabezado de `bienvenida-composicion.test.tsx` decía 856 y 853 para los mismos dos casos. Con 834,
-// la bienvenida (853) pasaba a ser la pantalla MÁS ALTA y el argumento de `bienvenida.tsx` ("donde esta
-// pantalla scrollea, el formulario ya scrolleaba") se caía. RE-MEDIDO UNA VEZ el 2026-08-17, build de
-// producción + Chrome headless, con la calibración verificada (el `innerWidth`/`innerHeight` del layout
-// se compara contra el viewport pedido y el instrumento aborta si no coinciden):
+// 🔴 ESTA TABLA TENÍA DOS NÚMEROS MAL, Y LA RECONCILIACIÓN DEL FIX-PACK ANTERIOR ELIGIÓ LOS EQUIVOCADOS.
+// Al empezar, acá decía `send 834px` a 375x667 y `bienvenida 844px` a 390x844, y el encabezado de
+// `bienvenida-composicion.test.tsx` decía 856 y 853/870 para los mismos dos casos. El fix-pack anterior
+// resolvió la contradicción escribiendo **856 y 870** en los cuatro sitios, o sea PISANDO los dos que
+// tenían el número bueno. RE-MEDIDO el 2026-08-17 en el fix-pack 2 (AR-it2/BLQ-BAJO-1) con un instrumento
+// escrito de cero: build de producción (`npm run build` + `npm start` en un puerto libre) + Chrome
+// headless, `deviceScaleFactor 1`, y CALIBRACIÓN VERIFICADA DOS VECES por medición —antes y después de
+// caminar la pantalla el instrumento compara el `innerWidth`/`innerHeight` del layout contra el viewport
+// pedido y ABORTA si no coinciden—. **Dos corridas completas con las celdas idénticas.** Ningún píxel sale
+// de una captura: todos de `scrollHeight` del `<html>`.
 //
 //     viewport    recuperar    bienvenida    send
-//     375x667        811px        870px       856px    ← recuperar es la MÁS BAJA de las tres
-//     390x844        844px        870px       844px
+//     375x667        811px        870px       834px    ← recuperar es la MÁS BAJA de las tres
+//     390x844        844px        848px       844px
 //     412x915        915px        915px       915px
 //
-// Los tres números de `recuperar` se confirmaron; los dos equivocados eran los de acá. ⛔ Y no se eligió
-// el valor que hacía quedar bien ninguna frase: se midió, y resultó que el número que sostenía la
-// conclusión de `bienvenida.tsx` era el correcto — lo que se cayó fue el OTRO lado de esa comparación,
-// porque el mismo fix-pack alargó una frase de la bienvenida y su documento pasó de 853px a 870px. El
-// detalle está en el encabezado de `bienvenida-composicion.test.tsx`.
+// ⛔ EL ESTADO DE CADA COLUMNA, porque un alto sin su estado no es reproducible: `recuperar` abierto
+// tocando su pestaña de la barra · `bienvenida` como abre la app, sin tocar nada · `send` abierto con
+// «Empezar un envío», monto en el `$400` por defecto, nombre y CCI VACÍOS y la previsualización del quote
+// YA resuelta (con nombre y CCI válidos cargados da lo mismo). ⚠️ EL ÚNICO ESTADO DE `send` QUE SUBE es un
+// CCI INVÁLIDO, que agrega la fila del error: 878px a 375x667 Y a 390x844. Los otros cinco medidos a
+// 375x667: 834 intacto · 834 con nombre+CCI · 850 con monto por debajo del mínimo · 810 con el monto
+// vacío · 834 con la cotización abortada. **856 no sale de ninguno de los seis.**
+//
+// ⛔ Y NO SE ELIGIÓ EL VALOR QUE HACÍA QUEDAR BIEN NINGUNA FRASE: se midió primero y se comprobó después
+// que ninguna conclusión se invierte. El argumento de `bienvenida.tsx` no se apoya en esta comparación
+// sino en el mecanismo (`min-height:auto` no recorta), y la comparación que sí se usa —`recuperar` es la
+// más baja— aguanta con 811 < 834 < 870.
 //
 // QUÉ SCROLLEA Y DÓNDE, dicho sin generalizar de más: a 375x667 las tres pantallas scrollean (811/870/
-// 856 contra 667). A 390x844 scrollea SÓLO la bienvenida (870 contra 844); `recuperar` y `send` entran
-// justo. A 412x915 no scrollea ninguna. O sea que `recuperar` no introduce una clase de dispositivo
-// donde la app deje de caber, y en los dos teléfonos donde algo scrollea es la que scrollea menos.
+// 834 contra 667). A 390x844 scrollea SÓLO la bienvenida (848 contra 844, por 4px); `recuperar` y `send`
+// entran justo (844 = 844). A 412x915 no scrollea ninguna. O sea que `recuperar` no introduce una clase de
+// dispositivo donde la app deje de caber, y en los dos teléfonos donde algo scrollea es la que scrollea
+// menos. ⚠️ El margen de 390x844 es de 4px y no de 26 como decía el número viejo: un renglón más en `send`
+// lo haría scrollear ahí también.
 //
 // ── ⚠️ EL TERCER DESTINO, `history`, SIGUE SIN MEDIR — y esto es lo que sí se averiguó ─────────────
 // El primer pase lo dejó abierto diciendo que hace falta una billetera conectada. Sigue siendo cierto y
@@ -64,8 +76,10 @@
 // que llega a `recuperar` tocando su pestaña, apuntado a "Mis envíos", devolvió números IDÉNTICOS a los
 // que la bienvenida daba EN ESA CORRIDA (`853/844/915` de documento), o sea que nunca salió de la
 // pantalla de entrada. Un número tomado así habría sido la bienvenida disfrazada de historial.
-// ⚠️ Esos tres números son de la corrida de entonces y hoy la bienvenida mide `870/870/915` (el fix-pack
-// le alargó una frase). Lo que probaba el intento no era el valor sino la IDENTIDAD con la bienvenida, y
+// ⚠️ Esos tres números son de la corrida de entonces y hoy la bienvenida mide `870/848/915` (el fix-pack
+// le alargó una frase; el `870` del medio que decía acá era el segundo número mal del fix-pack anterior,
+// corregido en el fix-pack 2). Lo que probaba el intento no era el valor sino la IDENTIDAD con la
+// bienvenida, y
 // eso se midió cuando se midió: no se re-corre para "actualizarlos" porque no son una medición de
 // `history`, son la prueba de que el instrumento naíf no llegaba.
 //
@@ -126,14 +140,17 @@
 // de `jerarquia-relativa.test.tsx` (`2 failed | 25 passed (27)` corriendo los dos archivos juntos): esa
 // pantalla no puede ganar una acción resolutiva sin que alguien vaya a cambiar la fila y diga por qué.
 //
-// Y LOS MUTANTES 1 Y 3 SE CORRIERON ADEMÁS CONTRA LA SUITE COMPLETA. Re-corridos en el fix-pack, contra
-// el baseline nuevo de `139 passed (139)` / `2492 passed (2492)` (el viejo decía 2478 y el fix-pack sumó
-// 14 tests, así que los tres números de cada fila habían quedado describiendo otro árbol):
-//     M1 ⇒ `1 failed | 138 passed (139)` · `1 failed | 2491 passed (2492)`   ← ESTE archivo y ninguno más
-//     M3 ⇒ `1 failed | 138 passed (139)` · `2 failed | 2490 passed (2492)`   ← ídem
-// O sea que fuera de acá nadie los ve, y eso es el dato: antes de este pase la composición vertical de
-// este destino no la vigilaba nada. Y el dato SIGUE siendo el mismo después de 14 tests nuevos, que es
-// lo que la re-corrida compró: los `it` del fix-pack tampoco los ven.
+// Y LOS MUTANTES 1 Y 3 SE CORRIERON ADEMÁS CONTRA LA SUITE COMPLETA. Re-corridos en el FIX-PACK 2 (el
+// fix-pack 2 sumó un `it` de control a `barra-destinos.test.tsx`, así que el baseline pasó de
+// `2492 passed (2492)` a **`139 passed (139)` / `2493 passed (2493)`** y los totales viejos volvían a
+// describir otro árbol — el mismo defecto que AR-it2/MNR-1 encontró en el archivo hermano). Medidos, no
+// ajustados a mano, y con el archivo restaurado y comparado byte a byte después de cada uno:
+//     M1 ⇒ `1 failed | 138 passed (139)` · `1 failed | 2492 passed (2493)`   ← ESTE archivo y ninguno más
+//     M3 ⇒ `1 failed | 138 passed (139)` · `2 failed | 2491 passed (2493)`   ← ídem
+// Y los `it` que caen se leyeron de la salida, no se supusieron: M1 mata `T-063-16` («la raíz pide las dos
+// cosas») y M3 mata los dos de `T-063-13`. O sea que fuera de acá nadie los ve, y eso es el dato: antes de
+// este pase la composición vertical de este destino no la vigilaba nada. Y el dato SIGUE siendo el mismo
+// después de los tests nuevos de los dos fix-packs, que es lo que la re-corrida compró.
 //
 // ⚠️ ANOTADO PORQUE PASÓ Y NO PORQUE SE ENTIENDA: en la PRIMERA corrida de M3 contra la suite completa
 // falló además un `it` de otro archivo — `agent-plan-card.test.tsx > T-7.1 … > en 'gateway + agente

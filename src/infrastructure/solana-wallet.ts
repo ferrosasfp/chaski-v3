@@ -211,7 +211,7 @@ export class SolanaWalletAdapter
    * sólo en memoria y se escribe sólo en `connect()`, así que una recarga de la página lo borra — y hay
    * una navegación completa en el medio del flujo: el KYC se va a Didit y vuelve
    * (`window.location.href`, `flow.tsx:460`). Al volver, el resume salta derecho a `confirm` sin
-   * pasar por `connect()` (`setStep`, `flow.tsx:252`). Antes, ahí `getAddress()` contestaba `null`.
+   * pasar por `connect()` (`aterrizarEnConfirm`, `flow.tsx:252` — era `setStep` hasta WKH-063/fix-pack 2, que metió esa navegación detrás de un gate; el destino sigue siendo `confirm`). Antes, ahí `getAddress()` contestaba `null`.
    *
    * El bridge SÍ sobrevive a esa recarga, y no porque persista nada: lo repuebla el sync component
    * desde `useWallet()` en cuanto `autoConnect` reconecta (`setState`, `solana-providers.tsx:178`).

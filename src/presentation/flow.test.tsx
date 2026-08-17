@@ -41,7 +41,7 @@ import {
 import { PREPARE_NO_AGENT_FOR_CAPABILITY } from "../application/agent-rejections";
 import { KYC_PROVENANCE_LIVE } from "../infrastructure/didit/decision";
 import { ConnectWallet } from "../application/use-cases/connect-wallet";
-import { solanaWalletBridge } from "../infrastructure/solana-wallet-bridge"; // WKH-354/R-2: la costura del BANNER (el bridge global); la del guard es el `connectedWallet` inyectado
+import { solanaWalletBridge } from "../infrastructure/solana-wallet-bridge"; import { SolanaWalletAdapter } from "../infrastructure/solana-wallet"; import { guardarEleccion } from "../infrastructure/solana/deeplink/conexion"; import { almacenDeNavegador, guardarViaje } from "../infrastructure/solana/deeplink/sesion"; // WKH-358 agregó los tres últimos EN ESTA LÍNEA y ANTES de este comentario: `history-grupos.test.tsx:532` y `jerarquia-relativa.test.tsx:83` citan por número líneas de este archivo, así que tres líneas nuevas acá arriba las rotan a las dos. WKH-354/R-2: la costura del BANNER (el bridge global); la del guard es el `connectedWallet` inyectado
 import {
   FAKE_SOLANA_BENEFICIARY,
   FAKE_SOLANA_SIGNATURE,
@@ -3222,4 +3222,122 @@ it("T-062-22/AC-1: con `hay-que-salir` la pantalla NAVEGA a `irA` y no toca el e
   } finally {
     Object.defineProperty(window, "location", { configurable: true, value: originalLocation });
   }
+});
+
+// ═══ WKH-358 · T-065-CD11 — EL CORTE FUERA DEL CANAL, EN EL CAMINO POR ENLACE ════════════════════
+//
+// 🔴 QUÉ MIDE ESTO Y POR QUÉ EXISTE, dicho entero porque es lo que reemplaza a una afirmación que
+// esta HU dejó de poder hacer.
+//
+// Hasta la ola 3, el corte contra la sustitución de depositante en el camino por enlace era
+// (`DEEPLINK_SENDER_MISMATCH`, `../infrastructure/solana/deeplink/firma-por-enlace.ts:608`): el motor
+// comparaba `viaje.direccion` contra el `sender`, y el `sender` salía del bridge, o sea de FUERA del
+// canal del enlace. Desde que (`getAddress`, `../infrastructure/solana-wallet.ts:233`) es link-aware
+// —y tiene que serlo, porque en un teléfono sin extensión el bridge está vacío— las dos mitades de esa
+// comparación salen del MISMO disco y ese guard pasó a ser coherencia interna.
+//
+// 🔴 EL CORTE QUE SÍ ES UNA DEFENSA YA ESTABA EN EL ÁRBOL Y NO HUBO QUE ESCRIBIRLO: el cruce de
+// (`live`, `./flow.tsx:506`) contra `rem.ownerAddress` (`./flow.tsx:507`), que tira
+// `wallet_account_changed` (`./flow.tsx:518`). `ownerAddress` lo escribe `startKyc` en el REPO DE
+// REMESAS, una fuente que el canal del enlace no puede escribir. Lo que esta HU cambió es que ese
+// cruce, que en el camino por enlace comparaba `null` contra la remesa y no cortaba nunca, ahora
+// recibe la dirección del enlace y CORTA. O sea: se volvió load-bearing sin una línea nueva.
+//
+// ⚠️ EL RESIDUAL, ESCRITO Y NO SUAVIZADO: el cruce sólo puede cortar cuando hay contra qué comparar, y
+// `rem.ownerAddress == null` NO dispara (es correcto: `null` no es "cambió la identidad"). Para una
+// remesa que llegara a firmar sin haber pasado por `startKyc`, un forjador del paso 1 SÍ puede
+// sustituir al depositante. Qué le compra: no le compra plata —el depósito exige la firma ed25519 del
+// `sender` sobre los bytes anclados, así que tendría que poner de su propia billetera— pero SÍ le
+// compra un daño real: la PDA del escrow se deriva de `["escrow", sender, id16]`, así que el depósito
+// queda en un escrow que la víctima no puede recuperar ni cerrar. El techo es que escribir
+// `Viaje.direccion` exige ganar el paso 1, o sea llegar ANTES que la billetera real (el ancla es de
+// una sola escritura) y dentro de la ventana de 20 minutos. Es el residual que las olas 1 y 2 ya
+// declararon; esta HU no lo agranda ni lo cierra.
+describe("WKH-358/T-065-CD11 · el cruce contra `ownerAddress` corta en el camino por enlace", () => {
+  const A = FAKE_WALLET_ADDRESS; // con la que se hizo el KYC ⇒ la que queda en `rem.ownerAddress`
+  const B = "CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8"; // la que el canal del enlace afirma
+
+  /** Deja este navegador en el estado EXACTO del camino por enlace, con los escritores de PRODUCCIÓN
+   *  y no con las claves a mano: la elección del selector, `availability === "none"` (las dos
+   *  condiciones del gate) y un viaje CONECTADO cuya `direccion` es la que se le pasa. */
+  function sembrarRecorridoPorEnlace(direccion: string): void {
+    const almacen = almacenDeNavegador(window.localStorage);
+    guardarEleccion(almacen, "phantom");
+    solanaWalletBridge.setWalletAvailability("none");
+    guardarViaje(almacen, {
+      billetera: "phantom",
+      secreta: bs58.encode(new Uint8Array(32)),
+      publica: bs58.encode(new Uint8Array(32)),
+      claveBilletera: bs58.encode(new Uint8Array(32)),
+      session: "s",
+      direccion,
+      paso: "conectar",
+      remittanceId: "rem-de-este-test",
+      desde: Date.now(),
+    });
+  }
+
+  afterEach(() => {
+    window.localStorage.clear();
+    solanaWalletBridge.setWalletAvailability("unknown"); // el default del bridge
+    act(() => {
+      solanaWalletBridge.setState({ publicKey: null, connected: false });
+    });
+  });
+
+  // MUTANTES QUE MATAN — tres sitios, y el tercero es el que prueba que esta HU volvió load-bearing al
+  // cruce (los conteos van en la batería de §9, no acá, para que no se pudran en dos lugares):
+  //   (a) `flow.tsx:518` — borrar el `throw new Error("wallet_account_changed")`.
+  //   (b) `solana-wallet.ts:252` — borrar la consulta a `direccionDelViajeConectado()` de
+  //       `getConnectedAddress()` ⇒ el puerto contesta `null` (el bridge está vacío), el cruce no
+  //       dispara y el use-case se llama igual. Ése es el estado del árbol ANTES de W2.3.
+  //   (c) `flow.tsx:507` — borrar `&& rem.ownerAddress != null`. Este NO mata a este `it` (el cruce
+  //       sigue cortando); mata a los que miden el residual. Va escrito para que nadie lo lea como
+  //       cobertura que este `it` no da.
+  it("T-065-CD11: con `Viaje.direccion` = B y `rem.ownerAddress` = A, NO se pide ninguna firma", async () => {
+    const c = buildTestContainer({
+      connectedWallet: new SolanaWalletAdapter(), // 🔴 EL ADAPTADOR REAL: lo que se prueba es el CABLEADO
+      wallet: new FakeWallet(), // el KYC se hace con A
+    });
+    const spy = vi.spyOn(c.confirmAndSend, "execute");
+
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
+    await goToConfirm(); // la remesa queda con `ownerAddress` = A
+
+    sembrarRecorridoPorEnlace(B);
+
+    // CD-18 — EL FIXTURE FABRICÓ EL CASO, y las dos mitades hacen falta: (i) el puerto contesta B, y
+    // (ii) NO lo saca del bridge, que está vacío. Sin (ii) esto podría estar midiendo el guard viejo.
+    expect(await c.connectedWallet.getConnectedAddress()).toBe(B);
+    expect(
+      solanaWalletBridge.getState().publicKey,
+      "el bridge tiene una cuenta: este `it` ya no mide el camino por enlace",
+    ).toBeNull();
+    expect(B).not.toBe(A);
+
+    fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
+
+    // (i) la persona lee qué pasó; (ii) 🔴 CERO llamadas al use-case ⇒ ninguna firma, ningún salto.
+    expect(await screen.findByText(/Estás conectado con otra cuenta/)).toBeInTheDocument();
+    expect(spy, "el cruce fuera del canal no cortó: el depósito se pidió con la cuenta del enlace").toHaveBeenCalledTimes(0);
+  });
+
+  it("CONTROL: con `Viaje.direccion` = A (la misma del KYC), el recorrido llega al use-case", async () => {
+    const c = buildTestContainer({
+      connectedWallet: new SolanaWalletAdapter(),
+      wallet: new FakeWallet(),
+    });
+    const spy = vi.spyOn(c.confirmAndSend, "execute");
+
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
+    await goToConfirm();
+
+    sembrarRecorridoPorEnlace(A); // el canal del enlace afirma LA MISMA cuenta
+
+    expect(await c.connectedWallet.getConnectedAddress()).toBe(A);
+    fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
+
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/Estás conectado con otra cuenta/)).toBeNull();
+  });
 });

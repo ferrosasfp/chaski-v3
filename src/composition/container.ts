@@ -44,7 +44,7 @@ import { HttpSolanaPayoutPrepareGateway } from "../infrastructure/settlement/htt
 import { HttpSolanaSettlementGateway } from "../infrastructure/settlement/http-solana-settlement-gateway";
 import { LocalKycStore } from "../infrastructure/kyc-store";
 import { LocalRepo } from "../infrastructure/persistence";
-import { SolanaWalletAdapter } from "../infrastructure/solana-wallet"; import { FirmaPorEnlaceReal } from "../infrastructure/solana/deeplink/firma-por-enlace"; import { EleccionDeEnlaceReal, type EleccionDeEnlace } from "../infrastructure/solana/preparacion-por-enlace"; // WKH-358: EN ESTA LÍNEA, no en una nueva — este archivo recibe 40 citas ancladas y TODAS apuntan de `:48` para abajo, así que una línea nueva en el bloque de imports las rota a las 40 (medido). Precedente con su motivo escrito: `solana-wallet.ts:47`, siete imports en una línea. ⚠️ Y esta línea tiene que seguir conteniendo `SolanaWalletAdapter`, que es lo que cita `flow.tsx` por número
+import { SolanaWalletAdapter } from "../infrastructure/solana-wallet"; import { FirmaPorEnlaceReal } from "../infrastructure/solana/deeplink/firma-por-enlace"; import { RecorridoPorEnlaceReal, type VueltaDeEnlace } from "../infrastructure/solana/preparacion-por-enlace"; // WKH-358: EN ESTA LÍNEA, no en una nueva — este archivo recibe 40 citas ancladas y TODAS apuntan de `:48` para abajo, así que una línea nueva en el bloque de imports las rota a las 40 (medido). Precedente con su motivo escrito: `solana-wallet.ts:47`, siete imports en una línea. ⚠️ Y esta línea tiene que seguir conteniendo `SolanaWalletAdapter`, que es lo que cita `flow.tsx` por número
 import { CryptoIds, SystemClock } from "../infrastructure/system";
 
 export interface Container extends VentanaYRenovacion { // WKH-339: 2 campos REQUERIDOS, ver el final del archivo
@@ -76,7 +76,7 @@ export interface Container extends VentanaYRenovacion { // WKH-339: 2 campos REQ
   closeEscrowAccounts?: CloseEscrowAccounts;
   // El descubrimiento de cerrables (AC-8): la UI necesita LISTAR antes de poder cerrar, porque los
   // envíos que no están en el localStorage de este navegador no tienen ningún otro camino.
-  solanaCloseableEscrows?: SolanaCloseableEscrowLister; solanaEscrowStates?: SolanaEscrowChainStateReader; connectedWallet: ConnectedWalletProbe; eleccionDeEnlace: EleccionDeEnlace; // WKH-358: `eleccionDeEnlace` entra ACÁ y SIN `?` por la misma razón que `connectedWallet` (CD-14): opcional dejaría que borrar su cableado compile y la suite quede verde, y el síntoma sería que el selector de billetera no hace nada en un teléfono, que es justo donde nadie de este equipo mira. WKH-349: EN ESTA LÍNEA, no en una nueva — `:114`, `:123`, `:127`, `:141`, `:169` y `:196` de este archivo los cita otro por número y están TODOS debajo de acá. Opcional sólo por el test-container; el container real SIEMPRE lo cablea (ver el final de `createContainer`). WKH-354/AC-2+AC-3: `connectedWallet` entra ACÁ por lo mismo, y va SIN `?` (CD-14) — opcional dejaría que borrar su cableado compile y la suite quede verde, que es el perfil de mutante que el comentario de `solanaEscrowStates` documenta como el más peligroso del repo
+  solanaCloseableEscrows?: SolanaCloseableEscrowLister; solanaEscrowStates?: SolanaEscrowChainStateReader; connectedWallet: ConnectedWalletProbe; eleccionDeEnlace: VueltaDeEnlace; // WKH-358: `eleccionDeEnlace` entra ACÁ y SIN `?` por la misma razón que `connectedWallet` (CD-14): opcional dejaría que borrar su cableado compile y la suite quede verde, y el síntoma sería que el selector de billetera no hace nada en un teléfono, que es justo donde nadie de este equipo mira. WKH-349: EN ESTA LÍNEA, no en una nueva — `:114`, `:123`, `:127`, `:141`, `:169` y `:196` de este archivo los cita otro por número y están TODOS debajo de acá. Opcional sólo por el test-container; el container real SIEMPRE lo cablea (ver el final de `createContainer`). WKH-354/AC-2+AC-3: `connectedWallet` entra ACÁ por lo mismo, y va SIN `?` (CD-14) — opcional dejaría que borrar su cableado compile y la suite quede verde, que es el perfil de mutante que el comentario de `solanaEscrowStates` documenta como el más peligroso del repo
 }
 
 // HU-SOL-20/AC-2 — arma el SolanaWalletAdapter CON su resolver de remittanceId en un solo paso (sin setter,
@@ -256,7 +256,7 @@ export function createContainer(): Container {
     // de `connect()` — o sea reintroduce el bug entero desde acá (CD-13). Lo que lo mata es
     // `container.test.ts` (T-354-CABLE-1), que ejercita el `connectedWallet` QUE ESTA LÍNEA DEVUELVE
     // contra el `solanaWalletBridge` real, con `connect()` ya corrido para que haya cache que exponer.
-    connectedWallet: wallet, eleccionDeEnlace: new EleccionDeEnlaceReal(), // WKH-358 — va acá abajo por el mismo motivo que sus tres vecinos: las 8 líneas que este archivo tiene citadas por número están TODAS arriba. Es un objeto SIN estado propio (lee y escribe el `localStorage` en cada llamada), así que no hay nada que memoizar ni que invalidar
+    connectedWallet: wallet, eleccionDeEnlace: new RecorridoPorEnlaceReal(), // WKH-358 — va acá abajo por el mismo motivo que sus tres vecinos: las 8 líneas que este archivo tiene citadas por número están TODAS arriba. Es un objeto SIN estado propio (lee y escribe el `localStorage` en cada llamada), así que no hay nada que memoizar ni que invalidar
   };
 }
 
@@ -369,4 +369,5 @@ export type {
   EstadoDeLaCuentaDeNonce,
   PreparacionPorEnlace,
   ResultadoDePreparacion,
+  VueltaDeEnlace,
 } from "../infrastructure/solana/preparacion-por-enlace";

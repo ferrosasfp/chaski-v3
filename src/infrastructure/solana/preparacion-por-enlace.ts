@@ -17,7 +17,8 @@ import type { BilleteraDeeplink } from "./deeplink/protocol";
 import type { CausaDeEnlace } from "./deeplink/firma-por-enlace";
 import type { Almacen } from "./deeplink/sesion";
 import { almacenDeNavegador, terminarViaje } from "./deeplink/sesion";
-import { guardarEleccion, iniciarConexion, leerEleccion, olvidarEleccion } from "./deeplink/conexion";
+import { completarVuelta, guardarEleccion, iniciarConexion, leerEleccion, olvidarEleccion, remesaDelViaje } from "./deeplink/conexion";
+import { DEEPLINK_SIN_MEMORIA } from "./deeplink/firma-por-enlace";
 import { resolveSolanaNetworkConfig } from "../chain";
 
 /**
@@ -53,10 +54,11 @@ export type ResultadoDePreparacion =
 /**
  * LA MITAD DE LA ELECCIÓN — lo que la pantalla `connect` necesita para ofrecer el selector y saltar.
  *
- * 🔴 POR QUÉ ESTÁ PARTIDA EN DOS INTERFACES Y NO ES UNA SOLA. Estas tres operaciones son las únicas que
- * viven ENTERAS del lado de acá del salto: leer la elección, persistirla y abrir el viaje. Las otras
- * tres (`completar`, `estadoDeLaCuentaDeNonce`, `crearCuentaDeNonce`) necesitan la VUELTA y la CADENA.
- * Separarlas deja que el composition root cablee la mitad que existe sin que el compilador tenga que
+ * 🔴 POR QUÉ ESTÁ PARTIDA EN TRES INTERFACES Y NO ES UNA SOLA. Estas cuatro operaciones son las únicas
+ * que viven ENTERAS de este lado del salto y ANTES de él: leer la elección, persistirla, abrir el viaje
+ * y decir qué remesa quedó anotada. `completar()` necesita la VUELTA (`VueltaDeEnlace`), y
+ * `estadoDeLaCuentaDeNonce`/`crearCuentaDeNonce` necesitan la CADENA (`PreparacionPorEnlace`).
+ * Separarlas deja que el composition root cablee la parte que existe sin que el compilador tenga que
  * aceptar métodos a medio escribir, que es como se cuela un default que degrada en silencio.
  *
  * ⛔ Y NO ES UNA INTERFAZ "por si acaso": tiene un consumidor propio y distinto —el selector de la
@@ -77,16 +79,28 @@ export interface EleccionDeEnlace {
   elegir(i: { billetera: BilleteraDeeplink; remittanceId: string }): { irA: string };
   /** Borra la elección y el rastro. Ver su implementación para quién la llama hoy. */
   olvidar(): void;
+  /**
+   * Qué remesa dice estar manejando el viaje en curso, o `null`.
+   *
+   * 🔴 EXISTE PORQUE EL SALTO MATA EL PROCESO DE LA PESTAÑA: al volver, la pantalla monta de cero y su
+   * `rem` está en `null`, así que el `remittanceId` que `completar()` exige no vive en ninguna parte de
+   * la memoria de la app. Su residual —que con ese id el guard `otra-remesa` no puede cortar en la
+   * vuelta del connect— está escrito entero en (`remesaDelViaje`, `./deeplink/conexion.ts:345`).
+   */
+  remesaEnCurso(): string | null;
 }
 
 /**
- * La costura COMPLETA del recorrido por enlace, tal como la ve la pantalla.
+ * LA MITAD QUE YA PUEDE LEER LA VUELTA, pero todavía no le pregunta nada a la cadena.
  *
- * ⚠️ EL REPARTO DE RESPONSABILIDADES, que es lo que hace que esto no sea un puerto más: las funciones
- * PURAS (abrir el viaje, leer la vuelta, limpiar la barra) viven en `deeplink/conexion.ts`; acá viven
- * las que necesitan la cadena o el reloj. Este objeto las compone, y es el único que la pantalla toca.
+ * 🔴 POR QUÉ HAY UN ESCALÓN MÁS Y NO DOS INTERFACES, y es el MISMO argumento que partió a
+ * `EleccionDeEnlace`: `completar()` vive entero de este lado (disco + URL, y nada más) y ya tiene un
+ * consumidor de producción —el productor de montaje de la pantalla—, mientras que
+ * `estadoDeLaCuentaDeNonce` y `crearCuentaDeNonce` necesitan `Connection`. Declarar hoy la interfaz
+ * completa obligaría a escribir dos métodos que no hacen lo que su nombre dice, que es exactamente
+ * cómo entra al money-path un default que degrada en silencio.
  */
-export interface PreparacionPorEnlace extends EleccionDeEnlace {
+export interface VueltaDeEnlace extends EleccionDeEnlace {
   /**
    * Se volvió de un salto.
    *
@@ -99,6 +113,16 @@ export interface PreparacionPorEnlace extends EleccionDeEnlace {
    * cerró. Lo mide `T-065-SYNC`.
    */
   completar(i: { remittanceId: string }): Promise<ResultadoDePreparacion>;
+}
+
+/**
+ * La costura COMPLETA del recorrido por enlace, tal como la ve la pantalla.
+ *
+ * ⚠️ EL REPARTO DE RESPONSABILIDADES, que es lo que hace que esto no sea un puerto más: las funciones
+ * PURAS (abrir el viaje, leer la vuelta, limpiar la barra) viven en `deeplink/conexion.ts`; acá viven
+ * las que necesitan la cadena o el reloj. Este objeto las compone, y es el único que la pantalla toca.
+ */
+export interface PreparacionPorEnlace extends VueltaDeEnlace {
   /** ¿Tiene el remitente su cuenta de nonce? TRES valores, nunca dos. */
   estadoDeLaCuentaDeNonce(direccion: string): Promise<EstadoDeLaCuentaDeNonce>;
   /**
@@ -112,19 +136,20 @@ export interface PreparacionPorEnlace extends EleccionDeEnlace {
 }
 
 /**
- * La mitad de la elección, cableada contra el navegador de verdad.
+ * La ida y la vuelta del recorrido por enlace, cableadas contra el navegador de verdad.
  *
  * ⚠️ ES ACÁ, Y NO EN `deeplink/conexion.ts`, DONDE VIVEN `window` Y `Date`. Ése es el módulo puro
  * (DT-7); éste es el que le pasa el mundo por parámetro. Toda la lógica de qué se escribe en el disco y
  * qué URL sale está allá y se puede probar sin un navegador.
  *
- * 🔴 IMPLEMENTA `EleccionDeEnlace` Y NO `PreparacionPorEnlace`, y eso es una afirmación y no una
- * omisión: esta clase entrega LA IDA (elegir y saltar). La VUELTA —`completar`, y con ella el broadcast
- * y la lectura de la cadena— es de la wave siguiente. Declarar la interfaz completa hoy obligaría a
- * escribir tres métodos que no hacen lo que su nombre dice, que es exactamente la forma en que un
- * default que degrada en silencio entra al money-path.
+ * 🔴 IMPLEMENTA `VueltaDeEnlace` Y NO `PreparacionPorEnlace`, y eso es una afirmación y no una omisión:
+ * esta clase entrega la IDA (elegir y saltar) y la VUELTA (leer la URL y el disco). Lo que le falta
+ * —`estadoDeLaCuentaDeNonce` y `crearCuentaDeNonce`— necesita `Connection`, y es de la wave siguiente.
+ * Declarar la interfaz completa hoy obligaría a escribir dos métodos que no hacen lo que su nombre
+ * dice, que es exactamente la forma en que un default que degrada en silencio entra al money-path.
+ * ⚠️ Se llamaba `EleccionDeEnlaceReal` mientras sólo hacía la ida; el nombre se movió con lo que hace.
  */
-export class EleccionDeEnlaceReal implements EleccionDeEnlace {
+export class RecorridoPorEnlaceReal implements VueltaDeEnlace {
   /** El `localStorage` y la URL de este navegador, o `null` si este entorno no los tiene.
    *
    *  Mismo `try` y misma razón que (`entornoDeEnlace`, `../solana-wallet.ts:1177`): en el modo privado
@@ -188,5 +213,63 @@ export class EleccionDeEnlaceReal implements EleccionDeEnlace {
     if (e === null) return; // sin disco no hay nada que limpiar, y avisarlo no le sirve a nadie
     olvidarEleccion(e.almacen);
     terminarViaje(e.almacen);
+  }
+
+  remesaEnCurso(): string | null {
+    const e = this.entorno();
+    return e === null ? null : remesaDelViaje(e.almacen, Date.now());
+  }
+
+  /**
+   * 🔴 CD-26 — TODO LO DE ARRIBA DEL `await` ES **UN SOLO BLOQUE SÍNCRONO**, Y ES EL CONTRATO.
+   *
+   * La atomicidad de `interpretarVuelta` depende de que la lectura del disco y su escritura vivan en el
+   * mismo tick: es un read-modify-write sobre `localStorage`, y `localStorage` es compartido entre
+   * pestañas del mismo origen. Un `await` metido ANTES de `completarVuelta` reabre exactamente la
+   * ventana que el fix-pack 2 de la ola 1 cerró. ⛔ Por eso `entorno()`, `Date.now()` y
+   * `completarVuelta` van los tres SIN `await` en el medio, y los `await` (el broadcast y la lectura de
+   * la cadena, que llegan en la wave del nonce) van DESPUÉS. Lo mide `T-065-SYNC`.
+   *
+   * ⚠️ El `async` de la firma no rompe esa regla: el cuerpo de una función `async` corre síncrono hasta
+   * el primer `await`, y acá el primero está después de que la vuelta ya se resolvió.
+   */
+  async completar(i: { remittanceId: string }): Promise<ResultadoDePreparacion> {
+    const e = this.entorno();
+    // Sin disco no se puede leer ninguna vuelta, y eso es exactamente lo que `deeplink_sin_memoria`
+    // afirma. ⛔ No es `{estado:"nada"}`: "no había marca nuestra" y "no podemos leer" son cosas
+    // distintas, y colapsarlas dejaría a la persona sin ningún diagnóstico tras volver del salto.
+    if (e === null) return { estado: "corte", causa: DEEPLINK_SIN_MEMORIA };
+    const vuelta = completarVuelta({
+      almacen: e.almacen,
+      ahora: Date.now(),
+      hrefActual: e.href, // el href COMPLETO: `enlaceDeVuelta` TIRA con una URL relativa
+      appUrl: e.origin,
+      remittanceId: i.remittanceId,
+      cluster: resolveSolanaNetworkConfig().cluster,
+    });
+    // ⛔ SIN `default` QUE TRAGUE: el `never` del final es el candado de exhaustividad, igual que en el
+    // motor y en `completarVuelta`.
+    switch (vuelta.tipo) {
+      case "nada":
+        return { estado: "nada" };
+      case "conectado":
+        return { estado: "conectado", direccion: vuelta.direccion };
+      case "corte":
+        return { estado: "corte", causa: vuelta.causa };
+      case "nonce-firmado":
+        // ⛔ HOY ESTA RAMA ES INALCANZABLE, Y ESO ES UNA PROPIEDAD DEL CÓDIGO Y NO UNA ESPERANZA:
+        // `completarVuelta` sólo produce `nonce-firmado` desde su rama `crear-nonce`, que todavía no
+        // existe — esa marca cae en el `marca !== "conectar"` y sale `nada`. ACÁ va, en la wave del
+        // nonce, el broadcast (patrón `closeEscrow`) y la relectura de la cadena con `leerNonce`.
+        // Hasta entonces se contesta el valor NEUTRO, que es el mismo trato que este repo ya le da a
+        // las dos variantes inalcanzables de `completarVuelta` (`tx-firmada` y `patrocinio-firmado`).
+        // ⛔ NO se contesta `nonce-listo` ni `nonce-en-vuelo`: los dos afirmarían algo sobre una
+        // transacción que nadie transmitió.
+        return { estado: "nada" };
+      default: {
+        const nunca: never = vuelta;
+        return { estado: "corte", causa: nunca };
+      }
+    }
   }
 }

@@ -283,7 +283,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
     return () => {
       alive = false;
     };
-  }, [c]);
+  }, [c]); useVueltaPorEnlace({ c, yaInteractuo: yaInteractuoRef, alConectar: (r) => { setAddress(r.address); setServerVerdict(r.serverVerdict); setKycProof(r.kycProof); }, alFallar: (causa) => setError({ message: humanError(causa) }) }); // WKH-358/AC-1 — EN ESTA LÍNEA (Δ0 de citas, `:44`). El cuerpo vive al FINAL del archivo, con todo su razonamiento, por lo que dice el comentario de `:44`: ~60 líneas acá adentro corren las 131 citas por número que este archivo recibe. ⛔ La causa se traduce con `humanError` y NUNCA se escribe un `deeplink_*` literal en este archivo (el candado de copy de `deeplink-callers.test.ts` cuenta los que aparecen en `src/presentation`). ⛔ Y NO hay ningún `setRem`: el gate del pisón vive adentro del hook y esto sólo repuebla lo que `onConnect` repuebla
 
   // WKH-188: mientras el overlay `resuming` está visible, ofrecer un escape a los 5 s (AC-1).
   // Time-based (no atado al conteo de iteraciones). Al caer `resuming` (terminal temprano o timeout),
@@ -3900,3 +3900,92 @@ function SelectorDeEnlace({
 
 const NO_WALLET_CON_MWA =
   "En este navegador, al tocar Conectar wallet puede abrirse la app de tu billetera para que autorices desde ahí. Si eso no pasa, usá el enlace de abajo y abrí Chaski adentro de Phantom.";
+
+// ═══ WKH-358/AC-1 · EL PRODUCTOR DE MONTAJE DE LA VUELTA POR ENLACE ══════════════════════════════
+//
+// 🔴 POR QUÉ ES UN HOOK AL FINAL DEL ARCHIVO Y NO UN `useEffect` ADENTRO DE `RemittanceFlow`, que es
+// donde estaría si sólo importara la legibilidad: este archivo recibe 131 citas por número a 79 líneas
+// destino (el censo y su fecha viven en UN solo lugar, `:44`), así que meter ~60 líneas en el medio del
+// componente las corre TODAS. La regla de esta HU es explícita: lo nuevo va al final, donde rompe 0.
+// El componente lo invoca en UNA línea ya existente.
+//
+// ⛔ UN EFECTO, UN REF, Y EL MISMO GATE DE PISÓN QUE EL RESUME (DT-12 + CD-7 + CD-11). Cada mitad tiene
+// su motivo medido y ninguna es decorativa:
+//
+//   · **UN REF.** `completar()` llega hasta el lector de la vuelta de `sesion.ts`, que consume el paso
+//     de forma IRREVERSIBLE en la misma escritura en la que devuelve el resultado (⚠️ el nombre de esa
+//     función NO se escribe en este archivo: un candado de `deeplink-callers.test.ts` prohíbe que
+//     `src/presentation` la MENCIONE, y es a propósito). Con `reactStrictMode: true`
+//     React invoca los efectos DOS veces, y la segunda lectura devolvería `ya-consumida` sobre una
+//     respuesta que la billetera sí dio. Sin el ref, la vuelta buena se quema sola.
+//   · **`remesaEnCurso()` PRIMERO, y si contesta `null` no se llama a `completar()`.** El salto mata el
+//     proceso de la pestaña: al volver, `rem` es `null` y el `remittanceId` sólo sobrevivió adentro del
+//     viaje. Su residual —que con ese id el guard `otra-remesa` no puede cortar en la vuelta del
+//     connect— está escrito entero en
+//     (`remesaDelViaje`, `../infrastructure/solana/deeplink/conexion.ts:345`).
+//   · **EL GATE DEL PISÓN.** La vuelta del enlace es otra recarga, igual que la de Didit, así que le
+//     toca el mismo trato: si la persona ya interactuó, esto no toca la pantalla. Es el mutante G5 del
+//     fix-pack 3 de WKH-063: pisar una remesa `created` con `ownerAddress: null` la vuelve inalcanzable
+//     porque `repo.list(address)` no la lista nunca. ⛔ Y acá directamente NO HAY NINGÚN `setRem`.
+//
+// ⚠️ LO QUE ESTE PRODUCTOR TODAVÍA NO HACE, dicho para que nadie lo lea como completo: **no limpia la
+// barra** (`history.replaceState`, AC-4), **no restaura la remesa en curso** y **no re-invoca
+// `confirmAndSend.execute()`** (AC-3). Las tres cosas van ACÁ ADENTRO en la wave siguiente, y no en un
+// segundo efecto: dos lectores del mismo disco al montar pueden intercalarse, y el segundo vería un
+// disco que el primero ya consumió (DT-12).
+function useVueltaPorEnlace(i: {
+  c: Container;
+  yaInteractuo: { readonly current: boolean };
+  alConectar: (r: Awaited<ReturnType<Container["connectWallet"]["execute"]>>) => void;
+  alFallar: (causaCruda: string) => void;
+}): void {
+  const { c, yaInteractuo, alConectar, alFallar } = i;
+  const yaCorrioRef = useRef(false);
+  // `alConectar`/`alFallar` cambian de identidad en cada render y NO van en las deps A PROPÓSITO: el
+  // efecto corre UNA sola vez (lo garantiza el ref) y agregarlas sólo agregaría re-suscripciones que
+  // el ref después descarta. `yaInteractuo` es un ref y es estable por construcción.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: ver el párrafo de arriba
+  useEffect(() => {
+    if (yaCorrioRef.current) return;
+    yaCorrioRef.current = true;
+    let vivo = true;
+    (async () => {
+      const remId = c.eleccionDeEnlace.remesaEnCurso();
+      if (remId === null) return; // no hay viaje: este montaje no tiene ninguna vuelta que completar
+      let res: Awaited<ReturnType<Container["eleccionDeEnlace"]["completar"]>>;
+      try {
+        res = await c.eleccionDeEnlace.completar({ remittanceId: remId });
+      } catch (e) {
+        // ⛔ NO SE TRAGA. Una vuelta que revienta es algo que la persona tiene que poder leer. La causa
+        // se DERIVA del error y nunca se escribe como literal en este archivo: el candado de copy
+        // cuenta las causas `deeplink_*` que aparecen en `src/presentation`, y hasta que exista el
+        // `Record` con las once, escribir una sola acá lo rompe a propósito.
+        if (vivo) alFallar((e as Error).message);
+        return;
+      }
+      if (!vivo) return;
+      if (res.estado === "corte") {
+        alFallar(res.causa); // ídem: la causa se DERIVA del desenlace, no se escribe acá
+        return;
+      }
+      if (res.estado !== "conectado") return; // `nada` es el caso normal de un montaje sin vuelta
+      // 🔴 EL GATE DEL PISÓN, ANTES DE TOCAR LA PANTALLA. La dirección ya quedó en el disco (la escribió
+      // el lector de la vuelta, adentro de `completar()`), así que no se pierde nada por no aplicarla acá:
+      // el recorrido la encuentra igual cuando la persona siga. Lo que sí se pierde si se aplica es lo
+      // que ella estaba haciendo.
+      if (yaInteractuo.current) return;
+      try {
+        // `connect()` del adaptador contesta `Viaje.direccion` SIN tocar el bridge cuando el gate está
+        // activo, así que este gesto es exactamente el del botón "Conectar wallet" y el atajo KYC-once
+        // sigue funcionando sin un cambio (AC-1).
+        const r = await c.connectWallet.execute();
+        if (vivo) alConectar(r);
+      } catch (e) {
+        if (vivo) alFallar((e as Error).message);
+      }
+    })();
+    return () => {
+      vivo = false;
+    };
+  }, [c]);
+}

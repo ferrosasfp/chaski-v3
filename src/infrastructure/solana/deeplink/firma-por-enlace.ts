@@ -216,8 +216,24 @@ export interface PedidoDeFirma {
    */
   remittanceId: string;
   /**
-   * La dirección del remitente, la de `this.getAddress()`. CD-11: **NUNCA sale del canal del
-   * enlace**. El viaje sólo puede coincidir con ella o cortar; no puede sustituirla.
+   * La dirección del remitente, la que devuelve `getAddress()` del adaptador.
+   *
+   * 🔴 CD-11, REESCRITO EN WKH-358 CON LA MEDICIÓN, PORQUE LA FRASE ANTERIOR SE VOLVIÓ FALSA. Decía
+   * *"NUNCA sale del canal del enlace"*, sin calificar el camino, y eso valía cuando `getAddress()`
+   * tenía una sola clase de fuente. Hoy tiene **DOS**, y cuál se usa lo decide el gate
+   * `caminoPorEnlace()` (`caminoPorEnlace`, `../../solana-wallet.ts:2239`):
+   *
+   *   · **camino inyectado** (el gate contesta `null`): sale del bridge de la extensión, o sea de
+   *     **FUERA** del canal del enlace. Ahí la frase vieja sigue siendo cierta, y el guard de `:556`
+   *     sigue siendo la defensa que era. ⚠️ Aunque en ese camino el motor **ni siquiera corre**: la
+   *     rama de enlace del adaptador está gateada por el mismo `caminoPorEnlace()`.
+   *   · **camino por enlace** (el gate contesta una billetera): sale de `Viaje.direccion`
+   *     (`direccion`, `./sesion.ts:152`), o sea de **DENTRO** del canal. No hay alternativa: en un
+   *     teléfono sin extensión el bridge está vacío y ésa es la única fuente que existe.
+   *
+   * ⇒ En el camino por enlace, el guard de `:556` compara dos lecturas del MISMO disco y por lo tanto
+   * es **coherencia interna y no una defensa**. Dónde está la que sí lo es, y su residual, está entero
+   * en el bloque de `:540`.
    */
   sender: string;
   /** El `beneficiary` del `prepare()` de ESTA invocación (atestado server-side). */
@@ -537,12 +553,48 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
       }
     }
 
-    // ── 2 · CD-11 / T12 — el viaje sólo puede COINCIDIR con el sender, nunca sustituirlo ──────────
+    // ── 2 · CD-11 / T12 — qué garantiza esta comparación, y EN QUÉ CAMINO ─────────────────────────
     //
     // El paso 1 del protocolo es falsificable por diseño (no hay clave previa contra qué comparar) y
-    // quien lo gana gana el viaje entero. Lo que esta línea garantiza es lo único que se puede
-    // garantizar en esta capa: un connect forjado NO puede sustituir al depositante, sólo puede
-    // DENEGAR el viaje. El `sender` sale de `this.getAddress()` y jamás del canal del enlace.
+    // quien lo gana gana el viaje entero.
+    //
+    // 🔴 ACÁ DECÍA, SIN CALIFICAR EL CAMINO: *"un connect forjado NO puede sustituir al depositante,
+    // sólo puede DENEGAR el viaje. El `sender` sale de `this.getAddress()` y jamás del canal del
+    // enlace."* **WKH-358 volvió falsa la segunda mitad, y con ella la primera.** No se borra: se
+    // reparte en los dos caminos, que es lo que la hacía falsa (un solo texto para dos caminos).
+    //
+    //   · **CAMINO INYECTADO.** Ahí sí: el `sender` sale del bridge de la extensión, o sea de FUERA
+    //     del canal, así que un connect forjado sólo puede DENEGAR. ⚠️ Y ahí este motor **ni siquiera
+    //     corre**: el adaptador gatea su rama de enlace con `caminoPorEnlace()`, que exige
+    //     `availability === "none"`. O sea que el camino en el que esta línea sería una defensa es
+    //     justamente el que no la ejecuta.
+    //   · **CAMINO POR ENLACE.** El `sender` sale de `getAddress()`, que desde esta HU lee
+    //     `Viaje.direccion` (`direccion`, `./sesion.ts:152`) — y no hay alternativa: en un teléfono
+    //     sin extensión el bridge está vacío. ⇒ **las dos mitades de esta comparación salen del MISMO
+    //     disco y esta línea NO PUEDE CORTAR. Es coherencia interna, no una defensa.**
+    //
+    // ⇒ ESTA LÍNEA NO SE BORRA (sigue siendo el candado de coherencia y su `it` unitario la ejercita
+    // con un `PedidoDeFirma` fabricado), pero **NO se puede seguir contando como el corte contra la
+    // sustitución de depositante**.
+    //
+    // 🔴 DÓNDE ESTÁ EL CORTE QUE SÍ LO ES, y no hubo que escribirlo: el cruce de
+    // (`live`, `../../../presentation/flow.tsx:506`) contra `rem.ownerAddress`
+    // (`../../../presentation/flow.tsx:507`), que tira `wallet_account_changed`
+    // (`../../../presentation/flow.tsx:518`). `ownerAddress` lo escribe `startKyc` en el REPO DE
+    // REMESAS, una fuente que el canal del enlace no puede escribir; hacer link-aware a
+    // `getConnectedAddress()` lo volvió load-bearing solo. Lo mide `T-065-CD11`.
+    //
+    // ⚠️ SU RESIDUAL, DICHO ENTERO Y SIN SUAVIZAR: ese cruce sólo corta cuando hay contra qué
+    // comparar, y `rem.ownerAddress == null` **no dispara** (es correcto: `null` no es "cambió la
+    // identidad"). Para una remesa que llegue a firmar sin haber pasado por `startKyc`, un forjador
+    // del paso 1 SÍ puede sustituir al depositante. Qué le compra: **no le compra plata** —el depósito
+    // exige la firma ed25519 del `sender` sobre los bytes anclados, así que tendría que poner de su
+    // propia billetera—, pero **sí un daño real y perverso**: la PDA del escrow se deriva de
+    // `["escrow", sender, id16]`, así que el depósito queda en un escrow que **la víctima no puede
+    // recuperar ni cerrar**. El techo: escribir `Viaje.direccion` exige ganar el paso 1, o sea llegar
+    // ANTES que la billetera real (el ancla `claveBilletera` es de una sola escritura,
+    // (`claveBilletera`, `./sesion.ts:148`)) y dentro de `MAX_EDAD_MS`. Es el residual que las olas 1
+    // y 2 ya declararon; WKH-358 no lo agranda ni lo cierra.
     //
     // ⛔ Comparación exacta. NUNCA `.toLowerCase()`: base58 es case-sensitive y bajarlo a minúsculas
     // fabrica colisiones. El adaptador ya canonicaliza los dos lados antes de llegar acá.
@@ -615,8 +667,29 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
         // con una sonda: hand-escribiendo el disco con esa divergencia, la rama se alcanza; sin ella, no.
         // O sea que hoy sólo se llega con un disco escrito a mano, y este repo ya decidió dos veces qué
         // hacer con una rama así: borrarla o declararla, nunca congelarla en un test.
-        // ⛔ Y BORRARLA NO COMPILA: el `never` del `default` es el candado. El día que la ola 4 escriba el
-        // connect por enlace, esta rama pasa a ser alcanzable de verdad y ahí necesita su `it`.
+        // ⛔ Y BORRARLA NO COMPILA: el `never` del `default` es el candado.
+        //
+        // 🔴 ACÁ HABÍA UNA PROMESA Y WKH-358 LA VOLVIÓ FALSA, ASÍ QUE SE REESCRIBE Y NO SE DEJA
+        // ENVEJECER (AC-2). Decía: *"El día que la ola 4 escriba el connect por enlace, esta rama pasa
+        // a ser alcanzable de verdad y ahí necesita su `it`."* La ola 4 escribió el connect por enlace
+        // —(`completarVuelta`, `./conexion.ts:253`)— y **esta rama SIGUE inalcanzable**, por una razón
+        // que no tiene nada que ver con lo que la promesa suponía y que ahora está medida:
+        //
+        //   · **la vuelta del connect la procesa OTRO módulo.** `conexion.ts` es el segundo y último
+        //     llamador de producción de `interpretarVuelta`, y es él quien recibe el `"conectado"`.
+        //   · **y los dos extremos no se pisan, por el flujo.** Este motor sólo se invoca desde
+        //     `authorizePrincipal`, que corre dentro de `ConfirmAndSend.execute`, y ése exige que la
+        //     remesa ya traiga su veredicto de KYC
+        //     ((`kyc`, `../../../application/use-cases/confirm-and-send.ts:337`)). El connect por
+        //     enlace ocurre ANTES del KYC: están en dos extremos del recorrido.
+        //   · **y aunque llegara, el guard de arriba corta primero**: `estaConectado` exige los tres
+        //     campos y un viaje recién abierto por `iniciarConexion` no tiene ninguno, así que
+        //     (`estaConectado`, `:607`) sale por `cortar(DEEPLINK_VIAJE_VENCIDO)` sin llegar hasta acá.
+        //
+        // ⇒ Esta rama sigue **declarada y sin test, con su precondición escrita arriba**, que es la
+        // decisión de siempre para una rama que sólo se alcanza con un disco escrito a mano. Lo que
+        // ganó su `it` es la rama `"conectado"` de `conexion.ts`, alcanzada por camino de producción.
+        // ⛔ NO volver a escribir una promesa con fecha: lo mide `T-065-6`.
         return cortar(DEEPLINK_VIAJE_VENCIDO);
       case "tx-firmada":
       case "patrocinio-firmado":

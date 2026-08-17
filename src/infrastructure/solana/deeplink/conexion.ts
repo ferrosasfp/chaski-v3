@@ -25,7 +25,7 @@
 // ola 1 cerró (el bloque de `interpretarVuelta` sobre eso está en `sesion.ts:554-570`).
 import bs58 from "bs58";
 import type { Almacen, Viaje } from "./sesion";
-import { MARCA, enlaceDeVuelta, guardarViaje, interpretarVuelta } from "./sesion";
+import { MARCA, enlaceDeVuelta, guardarViaje, interpretarVuelta, leerViaje } from "./sesion";
 import type { BilleteraDeeplink } from "./protocol";
 import { nuevoParDeCifrado, urlConectar } from "./protocol";
 import type { CausaDeEnlace } from "./firma-por-enlace";
@@ -44,7 +44,7 @@ import {
  * conjunto CERRADO de tres valores (`PasoDelViaje`, `sesion.ts:114`), así que `interpretarVuelta`
  * contesta `no-volvimos` para esta marca y **el motor no consume ni destruye nada** si esta marca queda
  * en la barra. Si en cambio fuera un cuarto `PasoDelViaje`, el motor la miraría, no sabría qué hacer con
- * ella, y el `switch` con `never` de (`nunca`, `firma-por-enlace.ts:639`) dejaría de compilar.
+ * ella, y el `switch` con `never` de (`nunca`, `firma-por-enlace.ts:712`) dejaría de compilar.
  *
  * ⛔ NO la agregues a `PasoDelViaje` "para que sea uniforme": ese conjunto describe los pasos del viaje
  * del DEPÓSITO, y este salto no es parte de ese viaje — pasa antes, y su resultado (una cuenta creada en
@@ -202,7 +202,7 @@ export function olvidarEleccion(a: Almacen): void {
  *
  * ⛔ NO fija `claveBilletera`, `session` ni `direccion`: esos TRES los escribe la vuelta del connect, y
  * el ancla `claveBilletera` es de UNA SOLA ESCRITURA (`claveBilletera`, `sesion.ts:148`). Un viaje
- * recién abierto NO está conectado (`estaConectado`, `firma-por-enlace.ts:277` exige los tres), y por
+ * recién abierto NO está conectado (`estaConectado`, `firma-por-enlace.ts:293` exige los tres), y por
  * eso el motor de firma **corta antes** de tocarlo: los dos extremos del flujo no se pisan.
  */
 export function iniciarConexion(
@@ -315,4 +315,44 @@ export function completarVuelta(p: PedidoDeConexion): VueltaDeConexion {
       return { tipo: "corte", causa: nunca };
     }
   }
+}
+
+/**
+ * Qué remesa dice el viaje en curso estar manejando, o `null` si no hay viaje utilizable.
+ *
+ * 🔴 POR QUÉ HACE FALTA, Y CUÁL ES SU RESIDUAL — LAS DOS COSAS, PORQUE LA SEGUNDA NO SE PUEDE OMITIR.
+ *
+ * El salto a la billetera **mata el proceso de la pestaña**: al volver, el componente monta de cero y
+ * su `rem` está en `null`. El `remittanceId` que `completarVuelta` necesita no existe en ninguna parte
+ * de la memoria de la app; el único lugar donde sobrevivió es el propio viaje, que lo lleva desde el
+ * primer byte (CD-5, lo escribe `iniciarConexion`).
+ *
+ * ⚠️ **CONSECUENCIA, DICHA SIN SUAVIZAR**: cuando el `remittanceId` sale de acá, el guard de cruce
+ * entre remesas de `interpretarVuelta` (`remittanceId`, `./sesion.ts:597`) compara el viaje contra sí
+ * mismo y **no puede contestar `otra-remesa` en la vuelta del connect**. No es un ablandamiento del
+ * guard —sigue entero y sigue cortando para el motor de firma, que recibe el id desde
+ * `authorizePrincipal` y no desde el disco—, pero **sí es una puerta en la que ese guard no aplica**, y
+ * queda escrito acá en vez de descubrirse en un AR.
+ *
+ * ⛔ LO QUE **NO** SE HIZO, y por qué: pasarle `null` a `interpretarVuelta`. `null` no es "sin guard":
+ * es "no tengo remesa en contexto", y con eso **apaga el guard Y consume el paso igual** (está escrito
+ * en `PedidoDeConexion.remittanceId`). Devolver un id que al menos nombra una remesa deja al llamador
+ * poder verificar que esa remesa exista de su lado, que es una fuente distinta del canal del enlace.
+ *
+ * 🔴 NO TIRA NUNCA: la llama el productor de montaje, y un disco que no se deja leer tiene que
+ * contestar "no hay viaje", nunca romper el montaje de la pantalla.
+ */
+export function remesaDelViaje(a: Almacen, ahora: number): string | null {
+  let lectura: ReturnType<typeof leerViaje>;
+  try {
+    lectura = leerViaje(a, ahora);
+  } catch {
+    return null;
+  }
+  if (lectura.tipo !== "hay") return null;
+  const id = lectura.viaje.remittanceId;
+  // `leerViaje` NO valida los campos que sólo se copian (lo declara su bloque de validación), así que
+  // el `typeof` va acá: quien usa el campo es quien sabe qué forma necesita. Un `""` es peor que
+  // ausente —compara `true` contra otro `""`— por la misma razón que `esTextoUtil` en `preparado.ts`.
+  return typeof id === "string" && id !== "" ? id : null;
 }

@@ -14,7 +14,7 @@ import { canonicalizeAddress, isOwnedBy } from "../infrastructure/address"; // W
 // WKH-337: la allowlist de proveniencias REALES se IMPORTA (no se copia). El docblock de la constante
 // dice por qué: "un segundo Set con los mismos valores es exactamente cómo se desincronizan las dos
 // capas". Precedente de import fuera de `presentation/`: `scripts/smoke-helpers.ts`.
-import { REAL_PAYOUT_PROVENANCES } from "../domain/payout-provenance"; import type { EleccionDeEnlace } from "../infrastructure/solana/preparacion-por-enlace"; import type { BilleteraDeeplink } from "../infrastructure/solana/deeplink/protocol"; // WKH-358: los dos EN ESTA LÍNEA, misma disciplina que el resto del bloque. CR/MNR-4: capas
+import { REAL_PAYOUT_PROVENANCES } from "../domain/payout-provenance"; import type { VueltaDeEnlace } from "../infrastructure/solana/preparacion-por-enlace"; import type { BilleteraDeeplink } from "../infrastructure/solana/deeplink/protocol"; // WKH-358: los dos EN ESTA LÍNEA, misma disciplina que el resto del bloque. CR/MNR-4: capas
 import type {
   Clock,
   EscrowRefundConfirmation,
@@ -1044,7 +1044,7 @@ export class FakeConnectedWallet implements ConnectedWalletProbe {
  * `tests-que-registran-el-doble-no-prueban-el-cableado`. El test que quiera medir el salto tiene que
  * pasar su propio doble, y así queda escrito en el test que lo hace.
  */
-export class EleccionDeEnlaceNula implements EleccionDeEnlace {
+export class RecorridoPorEnlaceNulo implements VueltaDeEnlace {
   public olvidos = 0;
   eleccion(): BilleteraDeeplink | null {
     return null;
@@ -1054,6 +1054,19 @@ export class EleccionDeEnlaceNula implements EleccionDeEnlace {
   }
   olvidar(): void {
     this.olvidos++;
+  }
+  /** `null` = "no hay ningún viaje por enlace abierto", que es el estado real de un test que no montó
+   *  ningún selector. Y es lo que hace que el productor de montaje de la pantalla **no llame** a
+   *  `completar()` en los ~100 `it` que montan el flujo sin tener nada que ver con esta HU. */
+  remesaEnCurso(): string | null {
+    return null;
+  }
+  /** ⚠️ TIRA, por la misma razón que `elegir()`: ningún test puede creer que volvió de un salto sin que
+   *  nada lo haya hecho. Es inalcanzable mientras `remesaEnCurso()` conteste `null`, y si algún día se
+   *  alcanza, que se vea. ⛔ No devuelve `{estado:"nada"}`: ése es un desenlace REAL del recorrido y un
+   *  doble que lo imite escondería el cableado que falta. */
+  async completar(): Promise<never> {
+    throw new Error("vuelta_de_enlace_no_cableada_en_este_test");
   }
 }
 

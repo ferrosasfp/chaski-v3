@@ -1568,27 +1568,63 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
   }
 
   // ──────────────────────────────────────────────────────────────────────────────────────────────
-  // T-062-7 (§4.5 / T12 / CD-11) — el viaje sólo puede COINCIDIR con el sender, nunca sustituirlo
+  // T-062-7 (§4.5 / T12 / CD-11) — de dónde sale el `sender` que el motor compara contra el viaje
   // ──────────────────────────────────────────────────────────────────────────────────────────────
   //
-  // 🔴 POR QUÉ ESTE GUARD NO ES REDUNDANTE. Hay tres mecanismos contra la sustitución de depositante y
-  // los otros dos tienen agujeros declarados: el guard S3.5 del settle **se apaga con el ledger** (la
-  // propia route lo dice), y **no cubre el caso de dos `prepare()`** porque
-  // `listPreparedDepositAddresses` devuelve todas las direcciones y hace `includes(...)`. En un
-  // deployment sin ledger, ESTE es el único.
+  // 🔴 ESTE BLOQUE CAMBIÓ DE AFIRMACIÓN EN WKH-358, Y NO ES UN ABLANDAMIENTO: ES UNA MEDICIÓN.
+  //
+  // Lo que decía —y era cierto hasta la ola 3— es que
+  // (`DEEPLINK_SENDER_MISMATCH`, `./solana/deeplink/firma-por-enlace.ts:608`) corta cuando el viaje
+  // trae una dirección ajena. Eso se apoyaba en que el `sender` salía del BRIDGE, o sea de FUERA del
+  // canal del enlace. Desde que (`getAddress`, `./solana-wallet.ts:233`) es link-aware —y tiene que
+  // serlo: en un teléfono sin extensión el bridge está vacío y el recorrido no puede ni empezar— las
+  // dos mitades de esa comparación salen del MISMO disco, así que **en el camino por enlace ese guard
+  // es coherencia interna y no puede cortar**. En el camino inyectado el motor ni siquiera corre.
+  //
+  // ⛔ EL GUARD NO SE BORRÓ NI SE DEBILITÓ, y su cobertura unitaria sigue entera: los dos `it` del
+  // motor que lo ejercitan directamente (`firma-por-enlace.test.ts:1532` y `:1548`) le pasan un
+  // `PedidoDeFirma` fabricado con `sender ≠ viaje.direccion` y siguen verdes. Lo que se dejó de poder
+  // afirmar es la versión INTEGRADA, a través del adaptador.
+  //
+  // 🔴 DÓNDE ESTÁ EL CORTE QUE SÍ ES UNA DEFENSA, PARA QUE NADIE LEA ESTO COMO UNA PÉRDIDA: el cruce
+  // de `../presentation/flow.tsx:507` contra `rem.ownerAddress`, que lo escribe `startKyc` en el repo
+  // de remesas —una fuente que el canal del enlace NO puede escribir— y que se volvió load-bearing
+  // exactamente por hacer link-aware a `getConnectedAddress()`. Lo mide **T-065-CD11**
+  // (`../presentation/flow.test.tsx`), y su residual (`rem.ownerAddress == null` no dispara) está
+  // escrito sin suavizar en el bloque de CD-11 de (`senderCanonico`, `./solana-wallet.ts:924`).
+  //
+  // El primer `it` de acá abajo pasó a medir la mitad que SÍ es medible y es la que sostiene todo lo
+  // anterior: que el `sender` del camino por enlace sale del VIAJE y no del bridge.
   //
   // Se corre contra el motor REAL, no contra un doble: lo que hace falta probar es el CABLEADO.
-  describe("T-062-7: `viaje.direccion` distinta del sender ⇒ corte fail-closed", () => {
-    // MUTANTE QUE MATA (MEDIDO: exit=1, 39 `it` rojos en dos archivos —eran 35 en el FP1—): invertir la comparación
-    // `viaje.direccion !== p.sender` del motor ⇒ el depósito se arma con el `sender` del adaptador y una
-    // dirección de viaje AJENA, y el caso positivo de abajo NO lo nota. Por eso hacen falta los dos.
-    it("una dirección de viaje ajena corta con deeplink_sender_mismatch", async () => {
+  describe("T-062-7: el `sender` del camino por enlace sale del viaje, no del bridge", () => {
+    // MUTANTE QUE MATA: en `solana-wallet.ts:233`, borrar la consulta a `direccionDelViajeConectado()`
+    // de `getAddress()` ⇒ el `sender` vuelve a salir del bridge (otra cuenta), el motor lo compara
+    // contra `viaje.direccion` y corta con `deeplink_sender_mismatch` ⇒ este `it` se pone rojo.
+    // (MEDIDO en la batería de §9; el conteo va ahí y no acá para que no se pudra en dos lugares.)
+    it("el pedido lleva `viaje.direccion`, aunque el bridge diga otra cuenta", async () => {
       montarEntorno();
-      const adapter = await adaptadorConMotor(new FirmaPorEnlaceReal());
-      sembrarViaje(Keypair.generate().publicKey.toBase58()); // ← otra cuenta
-      await expect(
-        adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit()),
-      ).rejects.toThrow("deeplink_sender_mismatch");
+      const motor = new MotorProgramable();
+      const adapter = await adaptadorConMotor(motor); // deja el bridge en SENDER_B58 y el cache también
+      const kpDelViaje = Keypair.generate(); // ← otra cuenta, la del enlace
+      const delViaje = kpDelViaje.publicKey.toBase58();
+      // 🔴 LA CUENTA DE NONCE SE DERIVA DEL SENDER, así que cambiar de sender cambia la PDA. Sin esto,
+      // este `it` cortaba en `deeplink_nonce_ausente` antes de llegar al motor — que es, de paso, otra
+      // prueba de que el `sender` cambió, pero mide el guard de la cuenta y no el de la fuente.
+      mockChain({
+        [NONCE_PK_B58]: bytesDeCuentaDeNonce(VALOR_DEL_NONCE),
+        [(await direccionDelNonce(kpDelViaje.publicKey)).toBase58()]: bytesDeCuentaDeNonce(VALOR_DEL_NONCE),
+      });
+      sembrarViaje(delViaje);
+      // CD-18 — el fixture fabricó el caso: las dos fuentes dicen cosas DISTINTAS. Sin esto, un
+      // `sembrarViaje` que sembrara la misma dirección volvería este `it` verde sin medir nada.
+      expect(delViaje, "el fixture sembró la misma cuenta que el bridge").not.toBe(SENDER_B58);
+      expect(solanaWalletBridge.getState().publicKey).toBe(SENDER_B58);
+
+      await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+
+      // 🔴 Y ESTO ES LO QUE VUELVE COHERENCIA AL GUARD DE `:556`: llega lo mismo por los dos lados.
+      expect(motor.pedidos[0]?.sender).toBe(delViaje);
     });
 
     it("CASO POSITIVO: con la misma dirección el viaje sigue y sale un salto", async () => {
@@ -1744,17 +1780,31 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
     // exactamente los mismos inputs que `canonicalizeAddress`, que ES esa misma llamada adentro.
     // Por eso la rama se BORRÓ en vez de recibir un test: un test sobre una rama inalcanzable congela una
     // fantasía, y este repo ya lo decidió así (`sesion.ts`, docblock de `LecturaDelViaje`).
-    // MUTANTE QUE MATA (MEDIDO: exit=1, 3 `it` rojos, y los otros dos son de HU-SOL-4, o sea que este
-    // guard lo sostiene más de un `it`): que `getConnectedAddress` se trague el error de
-    // `new PublicKey(...)` ⇒ este `it` deja de recibir `wallet_not_connected` y el motor empieza a
-    // recibir pedidos con basura, que es justo lo que los dos guards impiden.
+    //
+    // 🔴 WKH-358 — EL FIXTURE SEMBRABA LA BASURA EN UNA FUENTE QUE ESTE CAMINO YA NO LEE, y lo cazó la
+    // suite. Hasta la ola 3 el `sender` del camino por enlace salía del BRIDGE, así que ensuciar el
+    // bridge fabricaba el caso negativo. Desde que `getAddress()` es link-aware, el camino por enlace
+    // lee `Viaje.direccion`: con el viaje sembrado en base58 VÁLIDO, este `it` dejó de fabricar nada y
+    // se puso rojo por la razón contraria a la que lo hizo nacer (el motor SÍ recibía un pedido, con
+    // una dirección buena). Ahora la basura se siembra en LAS DOS fuentes, y hay un tercer guard que
+    // corre antes que los otros dos: el `new PublicKey(v.direccion)` de
+    // ((`PublicKey`, `solana-wallet.ts:2320`)), que trata un `direccion` que no parsea
+    // como "no hay address" en vez de dejarlo reventar 200 líneas más adelante.
+    // MUTANTE QUE MATA (MEDIDO en la batería de §9, sitio `solana-wallet.ts` /
+    // `direccionDelViajeConectado`): borrar ese `try { new PublicKey(v.direccion) } catch` ⇒ el
+    // `authorizePrincipal` deja de tirar `wallet_not_connected` y tira una excepción de base58 sin causa
+    // traducible ⇒ este `it` se pone rojo por el mensaje.
     it("una dirección que no parsea muere ANTES de la rama de enlace: el motor no recibe NADA", async () => {
       montarEntorno();
       const motor = new MotorProgramable();
       // Sin `connect()`: así `getAddress()` no tiene cache y le pregunta al bridge en vivo.
       const adapter = new SolanaWalletAdapter(undefined, undefined, motor);
-      solanaWalletBridge.setState({ publicKey: "no-es-base58-válido-###", connected: true });
-      sembrarViaje(SENDER_B58);
+      const BASURA = "no-es-base58-válido-###";
+      solanaWalletBridge.setState({ publicKey: BASURA, connected: true });
+      sembrarViaje(BASURA); // ← LAS DOS fuentes del `sender`, no una
+      // CD-18 — el fixture fabricó el caso negativo en las dos fuentes que este camino puede leer.
+      expect(() => new PublicKey(BASURA), "el fixture sembró algo que SÍ parsea").toThrow();
+      expect(JSON.parse(disco.get(CLAVE_VIAJE) as string).direccion).toBe(BASURA);
       disco.set(CLAVE_PREPARADO, JSON.stringify({ basura: true }));
       await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit())).rejects.toThrow(
         "wallet_not_connected",

@@ -133,6 +133,34 @@ vi.mock("framer-motion", () => ({
 afterEach(() => cleanup());
 
 // ── Helpers de navegación (WKH-187: send → connect → review(pre-KYC) → verify → confirm) ──────
+/**
+ * WKH-063 · CÓMO SE LLEGA HOY AL HISTORIAL, y por qué son dos toques y no uno.
+ *
+ * Antes era un enlace al pie del formulario ("Ver mis envíos"). Hoy es la pestaña "Mis envíos" de la
+ * barra de destinos, y la barra NO se pinta en los pasos del flujo (AC-3), así que desde `send` el
+ * recorrido es: salir del flujo y tocar la pestaña. Es EXACTAMENTE lo que hace una persona, y por eso
+ * el helper navega de verdad en vez de saltar con `pasoInicial`.
+ *
+ * Sincrónico porque este archivo mockea `framer-motion` (ver el `vi.mock` de arriba): sin ese doble,
+ * el cambio de pantalla no completa en el mismo tick y estos dos clicks necesitarían `findBy`.
+ */
+// WKH-063 fix-pack (AR/BLQ-BAJO-1): la ruta hasta "Mis envíos" depende de DÓNDE estás, y desde este
+// fix-pack hay dos puntos de partida posibles en el mismo test. Desde el FORMULARIO hay que salir primero
+// con "Volver al inicio" (los pasos del flujo no pintan la barra, AC-3); desde un DESTINO la barra ya
+// está y ese botón no existe. El `query*` es lo que hace al helper servir en los dos casos, y no es
+// tolerancia floja: la segunda mitad —tocar la pestaña— es obligatoria y usa `getBy*`, así que si la
+// barra no estuviera, el helper falla ruidosamente igual.
+function irAMisEnvios(): void {
+  const salir = screen.queryByRole("button", { name: /Volver al inicio/ });
+  if (salir !== null) fireEvent.click(salir);
+  fireEvent.click(screen.getByRole("button", { name: /Mis envíos/ }));
+}
+
+/** Entrar (o volver a entrar) al formulario desde la pantalla de entrada. */
+function irAlFormulario(): void {
+  fireEvent.click(screen.getByRole("button", { name: /Empezar un envío/ }));
+}
+
 function fillSend(recipient = "Mamá", destination = TEST_CCI): void {
   fireEvent.change(screen.getByPlaceholderText("Nombre de tu familiar"), {
     target: { value: recipient },
@@ -161,7 +189,7 @@ async function goToConfirm(): Promise<void> {
 // ── T1 — AC-4 (harness smoke) + banner "Modo demo" (WKH-178) ─────────────────
 // FallbackQuoteGateway → provenance "local-fallback" → dispara isDemoMode.
 it("T1: modo demo muestra el monto del quote (no S/0.00) y el banner 'Modo demo' una sola vez", async () => {
-  render(<RemittanceFlow container={buildTestContainer({ quotes: new FallbackQuoteGateway() })} />);
+  render(<RemittanceFlow pasoInicial="send" container={buildTestContainer({ quotes: new FallbackQuoteGateway() })} />);
 
   await goToReview();
 
@@ -191,7 +219,7 @@ it("T1: modo demo muestra el monto del quote (no S/0.00) y el banner 'Modo demo'
 // La protección real vive en el agente (`fx_amount_below_minimum`); esto es que la persona se
 // entere ANTES del nombre, el KYC y la plata.
 it("T-314-UI-1: por debajo del mínimo el botón NO habilita y se explica por qué", async () => {
-  render(<RemittanceFlow container={buildTestContainer()} />);
+  render(<RemittanceFlow pasoInicial="send" container={buildTestContainer()} />);
 
   const amountInput = await screen.findByLabelText("Monto en dólares");
   fireEvent.change(amountInput, { target: { value: "0.40" } });
@@ -211,7 +239,7 @@ it("T-314-UI-1: por debajo del mínimo el botón NO habilita y se explica por qu
 // Contra-ejemplo OBLIGATORIO: sin esto, deshabilitar el botón SIEMPRE dejaba el test de arriba
 // en verde y la app inutilizable.
 it("T-314-UI-2: en el mínimo exacto el botón SÍ habilita y no hay advertencia", async () => {
-  render(<RemittanceFlow container={buildTestContainer()} />);
+  render(<RemittanceFlow pasoInicial="send" container={buildTestContainer()} />);
 
   const amountInput = await screen.findByLabelText("Monto en dólares");
   fireEvent.change(amountInput, { target: { value: "5" } });
@@ -223,7 +251,7 @@ it("T-314-UI-2: en el mínimo exacto el botón SÍ habilita y no hay advertencia
 
 // ── T2 — AC-9: review nombre + doc enmascarado (CD-12) ───────────────────────
 it("T2: confirm renderiza el nombre y el documento enmascarado; el número completo nunca está en el DOM", async () => {
-  const { container } = render(<RemittanceFlow container={buildTestContainer()} />);
+  const { container } = render(<RemittanceFlow pasoInicial="send" container={buildTestContainer()} />);
 
   await goToConfirm();
 
@@ -239,7 +267,7 @@ it("T2: confirm renderiza el nombre y el documento enmascarado; el número compl
 
 // ── T4 — AC-7: control reset visible solo con address (WKH-184) ──────────────
 it("T4: '¿No sos vos?' aparece solo con una address conectada", async () => {
-  render(<RemittanceFlow container={buildTestContainer()} />);
+  render(<RemittanceFlow pasoInicial="send" container={buildTestContainer()} />);
 
   // (i) render inicial: address === null → sin control de reset.
   expect(screen.queryByText("¿No sos vos?")).toBeNull();
@@ -258,8 +286,8 @@ it("T4: '¿No sos vos?' aparece solo con una address conectada", async () => {
 // El CTA se llama "Borrar igual" y no "Empezar de nuevo": el overlay de resume tiene un botón con
 // ESE nombre que no borra nada, y dos botones con la misma etiqueta donde uno destruye datos y el
 // otro no es un accidente esperando. Lo que el test verifica no cambió.
-it("T5: 'Borrar igual' limpia address + PII del beneficiario y vuelve a 'send'", async () => {
-  render(<RemittanceFlow container={buildTestContainer()} />);
+it("T5: 'Borrar igual' limpia address + PII del beneficiario y vuelve a la pantalla de entrada", async () => {
+  render(<RemittanceFlow pasoInicial="send" container={buildTestContainer()} />);
 
   fillSend("Mamá", TEST_CCI);
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
@@ -269,7 +297,16 @@ it("T5: 'Borrar igual' limpia address + PII del beneficiario y vuelve a 'send'",
   fireEvent.click(await screen.findByText("¿No sos vos?"));
   fireEvent.click(await screen.findByText("Borrar igual"));
 
-  // (a) vuelve a "send" (input de monto visible de nuevo).
+  // (a) WKH-063 fix-pack (AR/BLQ-BAJO-1): vuelve a la PANTALLA DE ENTRADA, no al medio del formulario.
+  // Antes este assert buscaba el input de monto directo, porque `forgetAndDisconnect` hacía
+  // `setStep("send")` — y hasta WKH-063 `send` ERA el inicio. Hoy `send` es el paso 1 de 4 de un envío, y
+  // aterrizar ahí después de decir "no soy yo" contradice el gesto. Los dos asserts van juntos: que la
+  // pantalla de entrada esté Y que el formulario NO, porque "agregar la pantalla nueva" y "pintar las dos"
+  // darían lo mismo con uno solo.
+  expect(await screen.findByRole("heading", { name: "Tu plata no pasa por Chaski" })).toBeInTheDocument();
+  expect(screen.queryByLabelText("Monto en dólares")).toBeNull();
+  // Y los campos siguen limpios cuando se vuelve a entrar, que es lo que el resto del test mide.
+  irAlFormulario();
   const amountInput = (await screen.findByLabelText("Monto en dólares")) as HTMLInputElement;
   expect(amountInput).toBeInTheDocument();
 
@@ -286,7 +323,7 @@ it("T5: 'Borrar igual' limpia address + PII del beneficiario y vuelve a 'send'",
 
 // ── T-AC1 / T-REORDER (RTL) — AC-1: el quote es visible ANTES del KYC ─────────
 it("T-AC1/T-REORDER: tras conectar, el paso review muestra el quote (S/ concreto) ANTES de cualquier UI de KYC", async () => {
-  render(<RemittanceFlow container={buildTestContainer()} />);
+  render(<RemittanceFlow pasoInicial="send" container={buildTestContainer()} />);
 
   await goToReview(); // send → connect → review (SIN pasar por verify)
 
@@ -301,7 +338,7 @@ it("T-AC1/T-REORDER: tras conectar, el paso review muestra el quote (S/ concreto
 
 // ── T-AC2 — AC-2: "Continuar" del review NO auto-inicia el KYC ────────────────
 it("T-AC2: el review tiene 'Continuar'; el escaneo aparece recién tras el tap (KYC no auto-inicia)", async () => {
-  render(<RemittanceFlow container={buildTestContainer()} />);
+  render(<RemittanceFlow pasoInicial="send" container={buildTestContainer()} />);
 
   await goToReview();
 
@@ -316,7 +353,7 @@ it("T-AC2: el review tiene 'Continuar'; el escaneo aparece recién tras el tap (
 it("T-AC4: KYC-once → tras conectar va directo a confirm (sin review ni escaneo), con quote lockeado", async () => {
   const kycStore = new FakeKycStore();
   await kycStore.save("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", passKyc); // wallet ya verificada
-  render(<RemittanceFlow container={buildTestContainer({ kycStore })} />);
+  render(<RemittanceFlow pasoInicial="send" container={buildTestContainer({ kycStore })} />);
 
   fillSend();
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
@@ -357,7 +394,7 @@ it("T-AC4b: local verificado + el servidor dice `absent` ⇒ va a review, y NO s
     kyc,
     useCases: { connectWallet: new ConnectWallet(wallet, kycStore, verdictGw) },
   });
-  render(<RemittanceFlow container={container} />);
+  render(<RemittanceFlow pasoInicial="send" container={container} />);
 
   fillSend();
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
@@ -385,7 +422,7 @@ const kycRealGateway = () => new FakeKycGateway({ provenance: KYC_PROVENANCE_LIV
 
 // ── T-AC8 — AC-8: confirm muestra el badge de identidad junto al quote ────────
 it("T-AC8: el paso confirm muestra el badge de identidad (rem.kyc.identity) junto al quote", async () => {
-  render(<RemittanceFlow container={buildTestContainer({ kyc: kycRealGateway() })} />);
+  render(<RemittanceFlow pasoInicial="send" container={buildTestContainer({ kyc: kycRealGateway() })} />);
 
   await goToConfirm();
 
@@ -403,7 +440,7 @@ it("T-AC5b: en confirm, si el quote venció, 'Recotizar tasa' re-cotiza SIN re-e
     },
   } as unknown as ConfirmAndSend;
   render(
-    <RemittanceFlow
+    <RemittanceFlow pasoInicial="send"
       container={buildTestContainer({ kyc: kycRealGateway(), useCases: { confirmAndSend: rejecting } })}
     />,
   );
@@ -432,7 +469,7 @@ function rejectingWith(code: string) {
 
 it("T-CODE-1: un código conocido muestra su copy propio Y el código", async () => {
   render(
-    <RemittanceFlow
+    <RemittanceFlow pasoInicial="send"
       container={buildTestContainer({ useCases: { confirmAndSend: rejectingWith("wallet_connect_cancelled") } })}
     />,
   );
@@ -445,7 +482,7 @@ it("T-CODE-1: un código conocido muestra su copy propio Y el código", async ()
 
 it("T-CODE-2: un código DESCONOCIDO cae al genérico pero el código sigue a la vista", async () => {
   render(
-    <RemittanceFlow
+    <RemittanceFlow pasoInicial="send"
       container={buildTestContainer({ useCases: { confirmAndSend: rejectingWith("chirimoya_invertida") } })}
     />,
   );
@@ -467,7 +504,7 @@ it("T-AC6: resume 'passed' con quote vigente navega a confirm SIN re-cotizar", a
       lockQuote: { execute: lockSpy } as unknown as LockQuote,
     },
   });
-  render(<RemittanceFlow container={container} />);
+  render(<RemittanceFlow pasoInicial="send" container={container} />);
 
   // el efecto de resume corre al montar → quote vigente → confirm directo.
   expect(await screen.findByRole("button", { name: /Confirmar y enviar/ })).toBeInTheDocument();
@@ -485,7 +522,7 @@ it("T-REQUOTE: resume 'passed' con quote vencido auto re-cotiza, muestra el mont
       lockQuote: { execute: async () => ({ status: "quoted" as const, snapshot: fresh }) } as unknown as LockQuote,
     },
   });
-  render(<RemittanceFlow container={container} />);
+  render(<RemittanceFlow pasoInicial="send" container={container} />);
 
   // (a) aterriza en confirm con el indicador de tasa actualizada.
   expect(await screen.findByText(/La tasa se actualizó/)).toBeInTheDocument();
@@ -535,7 +572,7 @@ describe("WKH-188 resume escape (fake timers aislados, CD-10)", () => {
   // ── T-ESC1 — AC-1: el escape aparece a los 5 s, no antes ──────────────────
   it("T-ESC1: el escape aparece a los 5 s, no antes", async () => {
     const { container } = escapeContainer();
-    render(<RemittanceFlow container={container} />);
+    render(<RemittanceFlow pasoInicial="send" container={container} />);
 
     // Ancla el timer del escape apenas resuming=true (ver armEscape / auto-blindaje).
     await act(async () => {
@@ -559,7 +596,7 @@ describe("WKH-188 resume escape (fake timers aislados, CD-10)", () => {
   // ── T-ESC2 — AC-2: cancelar limpia el pending y vuelve a `send` ───────────
   it("T-ESC2: cancelar limpia el pending y vuelve a 'send'", async () => {
     const { container, abandonSpy } = escapeContainer();
-    render(<RemittanceFlow container={container} />);
+    render(<RemittanceFlow pasoInicial="send" container={container} />);
 
     await armEscape();
     await act(async () => {
@@ -576,7 +613,7 @@ describe("WKH-188 resume escape (fake timers aislados, CD-10)", () => {
   // ── T-ESC3 — AC-3: cancelar detiene el loop (sin más resumeKyc) ──────────
   it("T-ESC3: cancelar detiene el loop (sin más resumeKyc)", async () => {
     const { container, resumeSpy } = escapeContainer();
-    render(<RemittanceFlow container={container} />);
+    render(<RemittanceFlow pasoInicial="send" container={container} />);
 
     await armEscape();
     const n = resumeSpy.mock.calls.length;
@@ -595,7 +632,7 @@ describe("WKH-188 resume escape (fake timers aislados, CD-10)", () => {
   // ── T-ESC4 — AC-4: el escape NO abre camino a `confirm` sin KYC ──────────
   it("T-ESC4: el escape NO abre camino a confirm sin KYC", async () => {
     const { container } = escapeContainer();
-    render(<RemittanceFlow container={container} />);
+    render(<RemittanceFlow pasoInicial="send" container={container} />);
 
     await armEscape();
     await act(async () => {
@@ -619,7 +656,7 @@ describe("WKH-188 resume escape (fake timers aislados, CD-10)", () => {
         abandonPendingKyc: { execute: abandonSpy } as unknown as AbandonPendingKyc,
       },
     });
-    render(<RemittanceFlow container={container} />);
+    render(<RemittanceFlow pasoInicial="send" container={container} />);
 
     // MENOR-1 (CR): borde inferior — ANTES de los 20 s el timeout NO debe dispararse.
     // Guarda contra un timeout accidentalmente más corto (p.ej. RESUME_MAX_POLLS=4 → 10 s).
@@ -676,7 +713,7 @@ describe("WKH-188 resume escape (fake timers aislados, CD-10)", () => {
         } as unknown as ResumeKyc,
       },
     });
-    render(<RemittanceFlow container={container} />);
+    render(<RemittanceFlow pasoInicial="send" container={container} />);
 
     // El primer poll es terminal (sin sleep) → aterriza en `verify`. Flush sin disparar el escape (5 s).
     await act(async () => {
@@ -713,7 +750,7 @@ describe("WKH-188 resume escape (fake timers aislados, CD-10)", () => {
         abandonPendingKyc: { execute: abandonSpy } as unknown as AbandonPendingKyc,
       },
     });
-    render(<RemittanceFlow container={container} />);
+    render(<RemittanceFlow pasoInicial="send" container={container} />);
 
     // (1) 1er execute() creado al montar; lo resolvemos con `processing` → resuming=true + ancla el
     // timer del escape cerca de t≈0 (auto-blindaje WKH-188).
@@ -835,7 +872,7 @@ async function seededKycStore(): Promise<FakeKycStore> {
 // ── T-AC1a — AC-1: payout_failed en track renderiza la vista de fallo, no la optimista ─────────
 it("T-AC1a: remesa en payout_failed muestra 'No se pudo entregar', nunca 'en camino'", async () => {
   const failed = buildFlowSnapshot("payout_failed", null);
-  render(<RemittanceFlow container={trackContainer(failed, failed, await seededKycStore())} />);
+  render(<RemittanceFlow pasoInicial="send" container={trackContainer(failed, failed, await seededKycStore())} />);
 
   await goToConfirmViaKycOnce();
   fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
@@ -847,7 +884,7 @@ it("T-AC1a: remesa en payout_failed muestra 'No se pudo entregar', nunca 'en cam
 // ── T-AC1b — AC-1: refunded en track renderiza la misma vista de fallo/reembolso ──────────────
 it("T-AC1b: remesa en refunded muestra la vista de fallo/reembolso, nunca 'en camino'", async () => {
   const refunded = buildFlowSnapshot("refunded", null);
-  render(<RemittanceFlow container={trackContainer(refunded, refunded, await seededKycStore())} />);
+  render(<RemittanceFlow pasoInicial="send" container={trackContainer(refunded, refunded, await seededKycStore())} />);
 
   await goToConfirmViaKycOnce();
   fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
@@ -859,7 +896,7 @@ it("T-AC1b: remesa en refunded muestra la vista de fallo/reembolso, nunca 'en ca
 // ── T-AC3c — AC-3: payout mock (didit quote/kyc) dispara el banner en track y en el Receipt ────
 it("T-AC3c (track): quote/kyc reales pero payout local-fallback → banner 'Modo demo' en track", async () => {
   const submitted = buildFlowSnapshot("payout_submitted", "local-fallback");
-  render(<RemittanceFlow container={trackContainer(submitted, submitted, await seededKycStore())} />);
+  render(<RemittanceFlow pasoInicial="send" container={trackContainer(submitted, submitted, await seededKycStore())} />);
 
   await goToConfirmViaKycOnce();
   fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
@@ -872,7 +909,7 @@ it("T-AC3c (track): quote/kyc reales pero payout local-fallback → banner 'Modo
 
 it("T-AC3c (receipt): payout local-fallback settled → banner 'Modo demo' en el Receipt", async () => {
   const settled = buildFlowSnapshot("settled", "local-fallback");
-  render(<RemittanceFlow container={trackContainer(settled, settled, await seededKycStore())} />);
+  render(<RemittanceFlow pasoInicial="send" container={trackContainer(settled, settled, await seededKycStore())} />);
 
   await goToConfirmViaKycOnce();
   fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
@@ -884,7 +921,7 @@ it("T-AC3c (receipt): payout local-fallback settled → banner 'Modo demo' en el
 
 // ── T-AC4 — AC-4: el banner demo cubre el paso verify ─────────────────────────────────────────
 it("T-AC4: en step verify con quote demo (fallback) el banner 'Modo demo' es visible", async () => {
-  render(<RemittanceFlow container={buildTestContainer({ quotes: new FallbackQuoteGateway() })} />);
+  render(<RemittanceFlow pasoInicial="send" container={buildTestContainer({ quotes: new FallbackQuoteGateway() })} />);
 
   await goToReview(); // quote fallback → isDemoMode true
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ })); // review → verify
@@ -921,7 +958,7 @@ describe("WKH-200 poll stop (fake timers)", () => {
         trackRemittance: { execute: trackSpy } as unknown as TrackRemittance,
       },
     });
-    render(<RemittanceFlow container={container} />);
+    render(<RemittanceFlow pasoInicial="send" container={container} />);
 
     // navegación con flush de microtasks (sin sleeps en el atajo KYC-once).
     await act(async () => {
@@ -1762,7 +1799,7 @@ describe("HU-SOL-13 / WKH-320 — BLQ-MED-1: RemittanceFlow completo renderiza (
 
   it("BLQ-MED-1: wallet conectada ⇒ el flujo NO crashea (el paso review se ve); banner de fallback OCULTO", async () => {
     // FakeSolanaWallet.connect() → address base58 (FAKE_SOLANA_BENEFICIARY).
-    render(<RemittanceFlow container={buildTestContainer({ wallet: new FakeSolanaWallet() })} />);
+    render(<RemittanceFlow pasoInicial="send" container={buildTestContainer({ wallet: new FakeSolanaWallet() })} />);
 
     // send → connect → review: si el render crasheara, "Revisá el envío" NUNCA aparecería.
     await goToReview();
@@ -1791,7 +1828,7 @@ describe("HU-SOL-13 / WKH-320 — BLQ-MED-1: RemittanceFlow completo renderiza (
 it("T-6.1: un `provenance` que no está en la allowlist ⇒ NO 'Identidad verificada', sí el origen crudo", async () => {
   const agenteNuevo = "cualquier-agente-nuevo";
   render(
-    <RemittanceFlow
+    <RemittanceFlow pasoInicial="send"
       container={buildTestContainer({ kyc: new FakeKycGateway({ provenance: agenteNuevo }) })}
     />,
   );
@@ -1831,10 +1868,10 @@ it("T-6.1: un `provenance` que no está en la allowlist ⇒ NO 'Identidad verifi
 // ⚠️ EL `sender` NO ES `null` ACÁ, Y HAY QUE VERIFICARLO O EL ROJO ES POR EL MOTIVO EQUIVOCADO: con
 // `sender == null` la pantalla cae en el estado "sin billetera", que a propósito NO ofrece el gesto
 // (no hay a quién pedirle la firma), y el test quedaría rojo antes Y después del fix. `openHistory`
-// pasa por `resolveSender`, que hace `setAddress(addr)` (`resolveSender`, `./flow.tsx:380`), así que
+// pasa por `resolveSender`, que hace `setAddress(addr)` (`resolveSender`, `./flow.tsx:396`), así que
 // al llegar al seguimiento `sender` es la address del dueño. El aserto (b) lo clava.
 //
-// Molde: `seededFlow` de `history.test.tsx:130`, que es el mismo camino ("Ver mis envíos" → "Ver
+// Molde: `seededFlow` de `history.test.tsx:130`, que es el mismo camino (pestaña "Mis envíos" → "Ver
 // seguimiento"). Se reescribe acá en vez de importarse porque los helpers de ese archivo son locales.
 it("T-339.2 (AC-1): con la ventana de lectura apagada, el seguimiento ofrece revisar ahora", async () => {
   const repo = new InMemoryRepo();
@@ -1852,8 +1889,8 @@ it("T-339.2 (AC-1): con la ventana de lectura apagada, el seguimiento ofrece rev
 
   // Arranque en frío: el flujo monta en `send`. Es una recarga, y el almacén de pruebas está vacío
   // desde el primer milisegundo. NO se graba ninguna prueba a propósito.
-  render(<RemittanceFlow container={container} />);
-  fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+  render(<RemittanceFlow pasoInicial="send" container={container} />);
+  irAMisEnvios();
   fireEvent.click(await screen.findByRole("button", { name: /Ver seguimiento/ }));
 
   // (a) llegamos al seguimiento de una remesa en `payout_submitted` (si esto falla, el test mide otra
@@ -2181,7 +2218,7 @@ describe("WKH-339 — los siete estados de la ventana de lectura, en pantalla", 
   //
   // MEDIDO por el CR sobre el código anterior: 5 toques ⇒ 3 challenges · `unmount()` · `render()` ·
   // 5 toques ⇒ **total 6**. Y el camino existe en producción, no es un montaje del test: recargar deja el
-  // flujo en `send` (el `step` no persiste) → "Ver mis envíos" → la entrada → `onOpenFromHistory` ⇒
+  // flujo en la pantalla de entrada (el `step` no persiste) → pestaña "Mis envíos" → la entrada → `onOpenFromHistory` ⇒
   // seguimiento montado de nuevo con el contador en 0. Y el almacén vacío por la recarga es justo el
   // estado que MUESTRA el botón. La cuenta del CR llegaba a los 10 del cupo.
   //
@@ -2614,9 +2651,9 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     const c = buildTestContainer({ repo, wallet: new FakeSolanaWallet(), connectedWallet: probe });
     const spy = vi.spyOn(c.listHistory, "execute");
 
-    render(<RemittanceFlow container={c} />);
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
     // (1) primera visita: la sesión queda con `address = A`. Sin este paso no hay caché que exponer.
-    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    irAMisEnvios();
     await waitFor(() => expect(spy).toHaveBeenCalledWith(A));
     fireEvent.click(await screen.findByRole("button", { name: /Volver/ }));
 
@@ -2624,7 +2661,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     cambiarDeCuentaA(B, probe);
 
     // (3) misma puerta, otra vez: tiene que salir con B. Con el `address ??` de antes salía con A.
-    fireEvent.click(await screen.findByRole("button", { name: /Ver mis envíos/ }));
+    irAMisEnvios();
     await waitFor(() => expect(spy.mock.calls.at(-1)?.[0]).toBe(B));
   });
 
@@ -2637,7 +2674,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
       connectedWallet: probe,
     });
 
-    render(<RemittanceFlow container={c} />);
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
     // (1) 🔴 SIN ESTE PASO EL TEST NO DISCRIMINABA (AR r4 · MENOR-1). Acá el `render` era lo primero y
     // nadie conectaba antes, así que `address` seguía en `null` y NO había ninguna caché que exponer:
     // con el `address ??` viejo repuesto este test daba verde igual. Medido: el mutante M8
@@ -2645,9 +2682,9 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     // en 2c, o sea que las DOS puertas de recuperar plata volvían a salir con la cuenta vieja sin que
     // ningún test que hable de ellas se pusiera rojo. El pill del header es la señal de que la caché
     // quedó cargada: sólo se pinta con `address != null`.
-    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    irAMisEnvios();
     expect(await screen.findByText(`${A.slice(0, 6)}…${A.slice(-4)}`)).toBeInTheDocument();
-    fireEvent.click(await screen.findByRole("button", { name: /Volver/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Recuperar" })); // WKH-063: las dos puertas de la cadena ya no viven en `send` (adonde llevaba "Volver"): viven en el destino "Recuperar", y desde el historial se llega por la barra, que el historial SÍ pinta. Nombre exacto y no regex: /Recuperar/ matchearía también las dos puertas.
 
     // (2) recién ahora la persona cambia de cuenta en Phantom.
     cambiarDeCuentaA(B, probe);
@@ -2667,12 +2704,12 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
       connectedWallet: probe,
     });
 
-    render(<RemittanceFlow container={c} />);
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
     // (1) la caché con A, por el mismo motivo que en 2b (AR r4 · MENOR-1): sin una sesión previa este
     // test pasaba con el `address ??` viejo puesto.
-    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    irAMisEnvios();
     expect(await screen.findByText(`${A.slice(0, 6)}…${A.slice(-4)}`)).toBeInTheDocument();
-    fireEvent.click(await screen.findByRole("button", { name: /Volver/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Recuperar" })); // WKH-063: las dos puertas de la cadena ya no viven en `send` (adonde llevaba "Volver"): viven en el destino "Recuperar", y desde el historial se llega por la barra, que el historial SÍ pinta. Nombre exacto y no regex: /Recuperar/ matchearía también las dos puertas.
 
     // (2) y recién después el cambio de cuenta.
     cambiarDeCuentaA(B, probe);
@@ -2699,10 +2736,10 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     });
     const spy = vi.spyOn(c.listHistory, "execute");
 
-    render(<RemittanceFlow container={c} />);
-    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
+    irAMisEnvios();
     await waitFor(() => expect(spy).toHaveBeenCalledWith(A));
-    fireEvent.click(await screen.findByRole("button", { name: /Volver/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Recuperar" })); // WKH-063: las dos puertas de la cadena ya no viven en `send` (adonde llevaba "Volver"): viven en el destino "Recuperar", y desde el historial se llega por la barra, que el historial SÍ pinta. Nombre exacto y no regex: /Recuperar/ matchearía también las dos puertas.
 
     fireEvent.click(await screen.findByRole("button", { name: "Recuperar un envío perdido" }));
     fireEvent.click(await screen.findByRole("button", { name: /Buscar mis escrows/ }));
@@ -2721,8 +2758,8 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     const probe = new FakeConnectedWallet(B);
     const c = buildTestContainer({ wallet: new FakeSolanaWallet(), connectedWallet: probe });
 
-    render(<RemittanceFlow container={c} />);
-    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
+    irAMisEnvios();
 
     // El `setAddress(addr)` de `resolveSender` es lo que hace que el header hable de la cuenta real.
     expect(await screen.findByText(`${B.slice(0, 6)}…${B.slice(-4)}`)).toBeInTheDocument();
@@ -2738,7 +2775,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     const c = buildTestContainer({ connectedWallet: probe, wallet: new WalletDelBridge() });
     const spy = vi.spyOn(c.confirmAndSend, "execute");
 
-    render(<RemittanceFlow container={c} />);
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
     await goToConfirm(); // la remesa queda con ownerAddress = A
 
     cambiarDeCuentaA(B, probe);
@@ -2757,7 +2794,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     const c = buildTestContainer({ connectedWallet: probe, wallet: new WalletDelBridge() });
     const spy = vi.spyOn(c.confirmAndSend, "execute");
 
-    render(<RemittanceFlow container={c} />);
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
     await goToConfirm();
     cambiarDeCuentaA(B, probe);
     fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
@@ -2795,7 +2832,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     const c = buildTestContainer({ connectedWallet: probe, kycStore, wallet: new WalletDelBridge() });
     const forgetSpy = vi.spyOn(c.forgetKyc, "execute");
 
-    render(<RemittanceFlow container={c} />);
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
     await goToConfirm();
     cambiarDeCuentaA(B, probe);
     fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
@@ -2815,7 +2852,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     const c = buildTestContainer({ connectedWallet: probe, wallet: new WalletDelBridge() });
     const spy = vi.spyOn(c.confirmAndSend, "execute");
 
-    render(<RemittanceFlow container={c} />);
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
     await goToConfirm();
     fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
 
@@ -2829,7 +2866,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     const c = buildTestContainer({ connectedWallet: probe, wallet: new WalletDelBridge() });
     const spy = vi.spyOn(c.confirmAndSend, "execute");
 
-    render(<RemittanceFlow container={c} />);
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
     await goToConfirm();
     fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
 
@@ -2862,7 +2899,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
       },
     });
 
-    render(<RemittanceFlow container={c} />);
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
     cambiarDeCuentaA(B, probe); // la billetera quedó en B mientras la persona estaba en Didit
 
     // El resume aterriza en `confirm` sin haber pasado por `onConnect`.
@@ -2894,7 +2931,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     });
     const spy = vi.spyOn(c.confirmAndSend, "execute");
 
-    render(<RemittanceFlow container={c} />);
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
     fireEvent.click(await screen.findByRole("button", { name: /Confirmar y enviar/ }));
 
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
@@ -2914,7 +2951,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
   // cambian la billetera a B y tocan "Usar esta cuenta" ANTES de `fillSend()`.
   //
   // El resto del recorrido no cambia porque no puede: `onSend` manda a `connect` siempre, y el atajo
-  // lo decide `onConnect` releyendo la billetera (`onConnect`, `./flow.tsx:314`), que después del
+  // lo decide `onConnect` releyendo la billetera (`onConnect`, `./flow.tsx:330`), que después del
   // gesto ya devuelve B.
   //
   // ⚠️ HASTA DÓNDE LLEGA ESTE PAR, MEDIDO, para no dejarlo afirmando de más otra vez:
@@ -2923,7 +2960,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
   //   · Sacando el click Y el assert del pill ⇒ LOS DOS EN VERDE. El atajo de KYC solo NO distingue
   //     si hubo gesto: `onConnect` relee la billetera, y el bridge ya tiene B desde
   //     `cambiarDeCuentaA`. Esto NO es un agujero del test, es el diseño que el docblock de
-  //     (`adoptarCuentaConectada`, `./flow.tsx:594`) afirma —"el envío nuevo vuelve a pasar por
+  //     (`adoptarCuentaConectada`, `./flow.tsx:623`) afirma —"el envío nuevo vuelve a pasar por
   //     `onConnect` entero… y no por una copia de acá"— y este par es lo que lo sostiene: si alguien
   //     duplicara ahí el atajo, la copia dejaría de coincidir con lo que estos dos miden.
   // Lo que este par SÍ cierra, y antes no lo cerraba nadie: que el recorrido gesto → envío nuevo
@@ -2938,8 +2975,8 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
       wallet: new WalletDelBridge(),
     });
 
-    render(<RemittanceFlow container={c} />);
-    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
+    irAMisEnvios();
     fireEvent.click(await screen.findByRole("button", { name: /Volver/ }));
 
     cambiarDeCuentaA(B, probe);
@@ -2948,6 +2985,8 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     // `busy` sigue en `true` y el botón del paso `connect` se llama "" (spinner), no "Conectar wallet".
     expect(await screen.findByText(`${B.slice(0, 6)}…${B.slice(-4)}`)).toBeInTheDocument();
 
+    // WKH-063 fix-pack: el «Volver» del historial deja en la pantalla de entrada, no en el formulario.
+    irAlFormulario();
     fillSend();
     fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
     fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
@@ -2964,8 +3003,8 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
       wallet: new WalletDelBridge(),
     });
 
-    render(<RemittanceFlow container={c} />);
-    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
+    irAMisEnvios();
     fireEvent.click(await screen.findByRole("button", { name: /Volver/ }));
 
     cambiarDeCuentaA(B, probe);
@@ -2974,6 +3013,8 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     // `busy` sigue en `true` y el botón del paso `connect` se llama "" (spinner), no "Conectar wallet".
     expect(await screen.findByText(`${B.slice(0, 6)}…${B.slice(-4)}`)).toBeInTheDocument();
 
+    // WKH-063 fix-pack: el «Volver» del historial deja en la pantalla de entrada, no en el formulario.
+    irAlFormulario();
     fillSend();
     fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
     fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
@@ -3009,9 +3050,9 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     const forgetSpy = vi.spyOn(c.forgetKyc, "execute");
     const clearSpy = vi.spyOn(repo, "clearByOwner");
 
-    render(<RemittanceFlow container={c} />);
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
     // La sesión arranca con A (el pill aparece recién cuando `address` deja de ser null).
-    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    irAMisEnvios();
     fireEvent.click(await screen.findByRole("button", { name: /Volver/ }));
 
     cambiarDeCuentaA(B, probe);
@@ -3041,8 +3082,8 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     const probe = new FakeConnectedWallet(A);
     const c = buildTestContainer({ connectedWallet: probe, wallet: new WalletDelBridge() });
 
-    render(<RemittanceFlow container={c} />);
-    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
+    irAMisEnvios();
     fireEvent.click(await screen.findByRole("button", { name: /Volver/ }));
 
     cambiarDeCuentaA(A, probe); // el bridge dice lo mismo que la sesión
@@ -3056,8 +3097,8 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     const c = buildTestContainer({ connectedWallet: probe, wallet: new WalletDelBridge() });
     const forgetSpy = vi.spyOn(c.forgetKyc, "execute");
 
-    render(<RemittanceFlow container={c} />);
-    fireEvent.click(screen.getByRole("button", { name: /Ver mis envíos/ }));
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
+    irAMisEnvios();
     fireEvent.click(await screen.findByRole("button", { name: /Volver/ }));
 
     fireEvent.click(await screen.findByRole("button", { name: /¿No sos vos\?/ }));
@@ -3076,7 +3117,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     const probe = new FakeConnectedWallet(B);
     const c = buildTestContainer({ connectedWallet: probe, wallet: new WalletDelBridge() });
 
-    render(<RemittanceFlow container={c} />);
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
     cambiarDeCuentaA(B, probe);
 
     expect(screen.queryByText("Estás conectado con otra cuenta")).toBeNull();
@@ -3087,7 +3128,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     const probe = new FakeConnectedWallet(A);
     const c = buildTestContainer({ connectedWallet: probe, wallet: new WalletDelBridge() });
 
-    render(<RemittanceFlow container={c} />);
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
     await goToConfirm(); // remesa en vuelo con ownerAddress = A
 
     cambiarDeCuentaA(B, probe);
@@ -3135,7 +3176,7 @@ it("T-062-22/AC-1: con `hay-que-salir` la pantalla NAVEGA a `irA` y no toca el e
       } as unknown as ConfirmAndSend,
     },
   });
-  render(<RemittanceFlow container={container} />);
+  render(<RemittanceFlow pasoInicial="send" container={container} />);
   await goToConfirmViaKycOnce();
 
   // jsdom marca `location.href` como no asignable de verdad (navega); se reemplaza el objeto entero.

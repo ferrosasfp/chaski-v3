@@ -67,7 +67,7 @@ const VALOR_DE_PRUEBA = 7;
 const resolveSender = async () => FAKE_SOLANA_BENEFICIARY;
 
 /** El px declarado en el nombre de la clase del elemento renderizado. Copiado de `minHpx` en
- *  `touch-targets.test.tsx:50-57` en vez de importado, porque ahí es una función de módulo no
+ *  `touch-targets.test.tsx:66-73` en vez de importado, porque ahí es una función de módulo no
  *  exportada; se duplica igual que los 9 `passKyc` locales del repo. Lo que NO se cambia al copiarlo
  *  es que falle RUIDOSAMENTE: un helper que devolviera 0 haría pasar el `expect` de abajo por vacuidad,
  *  y un candado que no encuentra lo que vigila es un candado que dejó de existir. */
@@ -330,7 +330,7 @@ describe("T-346-6 (AC-4): copiar la firma completa, con sus TRES desenlaces", ()
   it("el control declara min-h de 44 px o más, leído del DOM renderizado", () => {
     // INPUT QUE LO PONE EN ROJO: escribir `h-11`. Da los mismos 44 px en Tailwind y `minHpx` NO lo
     // reconoce, así que TIRA con el nombre del control en vez de dejarlo pasar sin medir. 44 px es el
-    // piso de WCAG 2.5.5 que fijó WKH-341 (`touch-targets.test.tsx:169-173`).
+    // piso de WCAG 2.5.5 que fijó WKH-341 (`touch-targets.test.tsx:191-195`).
     stubClipboard(async () => {});
     render(<TxProof signature={FAKE_SOLANA_SIGNATURE} />);
     expect(minHpx(screen.getByRole("button", { name: "Copiar" }))).toBeGreaterThanOrEqual(44);

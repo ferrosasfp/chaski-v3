@@ -48,7 +48,7 @@ class SolanaWalletBridge {
 
   /** El sync component lo llama en cada cambio de useWallet(). Resuelve la espera si conectó. */
   setState(next: SolanaWalletState): void {
-    const cambio = this.state.publicKey !== next.publicKey || this.state.connected !== next.connected; this.state = next; if (cambio) for (const listener of this.stateListeners) listener(); // WKH-354/AC-1: TODO EN ESTA LÍNEA — el guard "sin cambio no notifico" es el mismo de `setWalletAvailability` (`:65`) y evita el loop de render
+    const cambio = this.state.publicKey !== next.publicKey || this.state.connected !== next.connected; this.state = next; if (cambio) for (const listener of this.stateListeners) listener(); // WKH-354/AC-1: TODO EN ESTA LÍNEA — el guard "sin cambio no notifico" es el mismo de `setWalletAvailability` (`:64`) y evita el loop de render (decía `:65`: el mismo off-by-one heredado que la cita ANCLADA de `:234`, y ésta ni anclada está)
     if (next.connected && next.publicKey) this.settle();
   }
 
@@ -231,7 +231,7 @@ class SolanaWalletBridge {
    * texto queda exactamente como estaba.
    */
   setMwaOffered(next: boolean): void {
-    if (this.mwaOffered === next) return; // mismo guard que (`setWalletAvailability`, `:65`)
+    if (this.mwaOffered === next) return; // mismo guard que (`setWalletAvailability`, `:64`) — decía `:65`, off-by-one HEREDADO (idéntico en `ce4f31e`, así que no es de WKH-063). Estuvo invisible hasta que el fix-pack le enseñó a `esComentario()` a ver los comentarios que no arrancan la línea
     this.mwaOffered = next;
     for (const listener of this.mwaListeners) listener();
   }

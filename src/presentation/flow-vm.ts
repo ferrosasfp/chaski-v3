@@ -161,7 +161,7 @@ export function statusDisplay(status: RemittanceStatus): {
  * Esta función no lee la cadena: se calcula SOLO con el snapshot persistido, así que lo único que
  * puede afirmar es lo que alguien ya midió y llegamos a ESCRIBIR. Por eso los dos valores que
  * afirman algo del vault salen de marcadores que se escriben en UN solo lugar y bajo UNA sola
- * condición, nunca de deducir un final a partir del status. ⚠️ Y SIGUE SIN LEERLA después de WKH-349, que NO tocó esta función: esa HU agregó una capa ENCIMA —(`escrowOutcome`, `:1193`) y (`escrowOutcomeDisplay`, `:1251`), al final de este archivo— que le pregunta a la cadena por el bucket `unverified` cuando se abre el historial. O sea que la PANTALLA de historial hoy sí mira la cadena; esta función, no. Si leés este docblock y concluís que el historial nunca mira la cadena, la conclusión es vieja.
+ * condición, nunca de deducir un final a partir del status. ⚠️ Y SIGUE SIN LEERLA después de WKH-349, que NO tocó esta función: esa HU agregó una capa ENCIMA —(`escrowOutcome`, `:1194`) y (`escrowOutcomeDisplay`, `:1253`), al final de este archivo— que le pregunta a la cadena por el bucket `unverified` cuando se abre el historial. O sea que la PANTALLA de historial hoy sí mira la cadena; esta función, no. Si leés este docblock y concluís que el historial nunca mira la cadena, la conclusión es vieja.
  *
  * - `returned`   los USDC volvieron. Lo respalda `ESCROW_REFUNDED_BY_SENDER`, que RecoverEscrowFunds
  *                escribe recién con `confirmation === "confirmed"` (recover-escrow-funds.ts:70-77),
@@ -445,7 +445,7 @@ export function escrowRentExplainer(voice: "discovery" | "remittance"): {
  *
  * ⚠️ El texto de "confirmed" NO menciona los USDC, y es una regla, no una omisión: lo único que la
  * ausencia de `escrow_state` prueba es que las dos cuentas se cerraron. A dónde fue la plata no lo
- * dice — es la misma trampa que `probeEscrowRefunded` ya tiene escrita (`probeEscrowRefunded`, `solana-wallet.ts:1364`).
+ * dice — es la misma trampa que `probeEscrowRefunded` ya tiene escrita (`probeEscrowRefunded`, `solana-wallet.ts:1231`).
  */
 export function escrowCloseSentCopy(confirmation: "confirmed" | "pending" | "unknown"): string {
   if (confirmation === "confirmed")
@@ -730,7 +730,7 @@ export function humanError(code: string): string {
   // propia persona, o la release-authority a mano. O sea que nadie devuelve nada solo.
   //
   // Es el texto que MÁS se lee de este archivo: TrackView lo usa como último recurso para cualquier
-  // `payout_failed` cuyo reason no reconozca (`humanError`, `flow.tsx:1727`), justo cuando no sabemos dónde está la
+  // `payout_failed` cuyo reason no reconozca (`humanError`, `flow.tsx:1781`), justo cuando no sabemos dónde está la
   // plata. Prometer un reembolso ahí manda a esperar sentado en vez de a la única acción que sirve.
   // WKH-333 — VA ANTES del catch-all de `payout`, y arregla un defecto de copy PREEXISTENTE que este
   // cambio vuelve mucho más alcanzable. `payout_not_authorized` no contiene "kyc", así que caía en el
@@ -854,7 +854,7 @@ export function gestoDespuesDeProve(r: ResultadoDelGesto): GestoRenovacion {
  *     acá se afirmaba que era "alcanzable de verdad… desde el historial sin haber conectado" y **no está
  *     medido**. ⚠️ Y mi corrección anterior citaba mal la evidencia: decía que "los dos sitios que ponen
  *     `step` en `track` pasan antes por `setAddress`", y eso es **falso** para `onOpenFromHistory` —
- *     la garantía está UN SALTO ANTES: (`onOpenFromHistory`, `./flow.tsx:406`) sólo
+ *     la garantía está UN SALTO ANTES: (`onOpenFromHistory`, `./flow.tsx:435`) sólo
  *     hace `setError`/`setRem`/`setStep` —**no toca la address**—, pero a la pantalla de historial se
  *     llega únicamente por `openHistory`, que hace `await resolveSender()` (y ése sí hace `setAddress`)
  *     ANTES de `setStep("history")`. El otro sitio (`:427`, tras confirmar) llega con la wallet ya
@@ -914,7 +914,7 @@ export const REVISION_FIRMANDO = "Confirmá en tu billetera…";
  *  el caso: la alternativa sería no cubrirlo y confiar en que ningún llamador futuro lo produzca.
  *  T-339.7 lo clava. Lo que se saca es la afirmación.
  *
- *  🔴 Y LA EVIDENCIA CORREGIDA (CR/MNR-1), porque mi primera corrección citaba mal: la garantía está UN SALTO ANTES: (`onOpenFromHistory`, `./flow.tsx:406`) sólo
+ *  🔴 Y LA EVIDENCIA CORREGIDA (CR/MNR-1), porque mi primera corrección citaba mal: la garantía está UN SALTO ANTES: (`onOpenFromHistory`, `./flow.tsx:435`) sólo
  *     hace `setError`/`setRem`/`setStep` —**no toca la address**—, pero a la pantalla de historial se
  *     llega únicamente por `openHistory`, que hace `await resolveSender()` (y ése sí hace `setAddress`)
  *     ANTES de `setStep("history")`. El otro sitio (`:427`, tras confirmar) llega con la wallet ya
@@ -944,14 +944,15 @@ export const REVISION_SIN_FIRMA = "La firma no se completó. Podés intentar de 
  *     remontar el seguimiento lo volvía a 0 ⇒ la copy invitaba a vaciar el cupo de la IP. Una copy que
  *     recomienda la acción que desarma la mitigación es peor que no tener mitigación.
  *   · **mandaba a una salida que esta pantalla NO TIENE**: medido, el seguimiento no expone ningún
- *     control de navegación (ni botón, ni `onBack`, ni "Ver mis envíos" — eso vive sólo en la pantalla de
- *     envío). Desde acá la única forma de "volver a abrir" es RECARGAR, algo que la frase no nombraba.
+ *     control de navegación (ni botón, ni `onBack`, ni la pestaña "Mis envíos" — desde WKH-063 la barra
+ *     de destinos NO se pinta en los pasos del flujo, y el seguimiento es uno de ellos). Desde acá la
+ *     única forma de "volver a abrir" es RECARGAR, algo que la frase no nombraba.
  *
  *  ⇒ ahora **no da ninguna instrucción de remonte** y nombra una acción que **sí está en esta pantalla**.
  *  No promete que reintentar funcione, no culpa a nadie, y no afirma nada del vault.
  *
  *  ⚠️ Y NO REPITE VERBATIM la frase de `PayoutInProgress` ("Si preferís no esperar, podés recuperar tus
- *  USDC.", `flow.tsx:2677`), aunque nombre la misma acción. Mi primera versión la copiaba tal cual para
+ *  USDC.", `flow.tsx:2731`), aunque nombre la misma acción. Mi primera versión la copiaba tal cual para
  *  reusar copy ya vetada, y MEDIDO: `getByText` encontraba **dos** nodos, o sea que la pantalla le decía
  *  lo mismo dos veces en el mismo lugar. Reusar copy vetada es bueno; duplicarla en la misma vista no. */
 export const REVISION_TECHO_ALCANZADO =
@@ -1141,7 +1142,7 @@ export function esVentanaSinAbiertos(code: string, maxCandidates: number): boole
 
 /**
  * WKH-349 — LO QUE LA CADENA CONTESTÓ sobre una fila del historial, en la forma en que la fila lo
- * recibe. Son los seis de (`EscrowChainState`, `../application/ports.ts:1123`) más DOS que no hablan
+ * recibe. Son los seis de (`EscrowChainState`, `../application/ports.ts:1122`) más DOS que no hablan
  * de la respuesta sino de la PREGUNTA, y que por eso no se pueden colapsar con ninguno de aquéllos:
  *
  *  · `"not-asked"` — NO SE PREGUNTÓ. Es lo que ve una pantalla sin reader cableado, sin `sender`, o
@@ -1221,7 +1222,7 @@ export function escrowOutcome(rem: RemittanceState, answer: EscrowChainAnswer): 
  * Sobre `absent`, que desde WKH-352 tiene DOS ramas y la evidencia que las separa es `rem.principalTx` (la firma del depósito, que sólo se escribe tras un `ok:true` del settle): sin ella lo único honesto sigue siendo hablar de NOSOTROS ("no podemos decir cuál de las dos"); con ella se refuta el "nunca entró", Y NADA MÁS. 🔵 DE DÓNDE SALE EL "confirmada en la cadena" DE ESA FRASE, que es lo que faltaba escribir acá (AR r2 · BLQ-MED-2, refutado en su parte grave y anotado en ésta). El `ok:true` del settle NO significa "lo transmitimos": el facilitator sólo lo devuelve después de un `connection.confirmTransaction(signature, 'confirmed')` cuyo `conf.value.err` es nulo. Vive en OTRO repo: `wasiai-facilitator` → `src/methods/solana-sponsor/broadcast.ts:339-342`, medido sobre su commit `8177b6e`. Si no confirma, esa función devuelve `ok:false` con `SPONSOR_BROADCAST_EXPIRED` o `SPONSOR_BROADCAST_FAILED`, y entonces `markPrincipalIn` no corre (el gate está en `confirm-and-send.ts`, candado T-W9(c)). O sea: la confirmación existe, y por eso la frase no se debilita a "nos devolvieron su firma". ⚠️ RESIDUO, dicho como es: esa garantía es de OTRO servicio y de OTRO repo. Si el facilitator dejara de confirmar antes de contestar (o cambiara el commitment a `processed`), la palabra "confirmada" de este copy pasaría a ser falsa y NINGÚN test de ESTE repo se pondría rojo. No hay contrato verificable entre los dos lados: hay una lectura del código del otro, con fecha. Lo que sí está candado acá es el ESCRITOR único y su posición respecto del gate (`principal-tx-single-writer.static.test.ts`), no lo que el `ok:true` significa del otro lado del cable.
  * ⚠️ `absent` NO PRUEBA QUE LA CUENTA SE HAYA CERRADO, y por eso el copy nuevo NO lo dice. Lo ÚNICO medido es "en la dirección que derivamos HOY no hay cuenta". Esa dirección sale de tres cosas y el snapshot no guarda las dos que importan: el programa es un literal del código (`address`, `../infrastructure/solana/escrow-idl.ts:16`), el endpoint lo elige (`resolveSolanaRpcUrlPublic`, `../infrastructure/chain.ts:190`) leyendo `NEXT_PUBLIC_SOLANA_RPC_URL` sin ninguna validación cruzada, y (`RemittanceState`, `../domain/remittance.ts:250`) tiene `principalTx` y `ownerAddress` pero ni `programId` ni cluster.
  * CUATRO DISPARADORES REALES de que la dirección de hoy no sea la de aquel depósito, ninguno hipotético: cambiar el program address (ya pasó en este repo, commit `89628d8`, en un commit normal); el cutover a mainnet que (`resolveSolanaNetworkId`, `../infrastructure/chain.ts:32`) tiene escrito como pendiente, y que ese día haría que TODA fila devnet dijera lo que no es; una `NEXT_PUBLIC_SOLANA_RPC_URL` mal apuntada, que es hoy y sin desplegar código; y un cambio de cuenta en la wallet entre el KYC y el confirm.
- * Un "se cerró" ahí le diría a alguien que no hay nada que recuperar sobre una fila donde SÍ lo hay, y le apagaría (`LostEscrowRecovery`, `flow.tsx:900`), que es la puerta que le queda. Por eso el copy dice lo MEDIDO y deja abierta la tercera posibilidad. Candado: T-W10. R-1 en (`EscrowChainState`, `../application/ports.ts:1123`). 🔴 Y EL COPY DECÍA DOS COSAS QUE ESTE MISMO DOCBLOCK REFUTA (AR r2 · BLQ-BAJO-1), corregidas acá. (1) Decía "en EL CONTRATO que estamos consultando no figura ninguna cuenta", que generaliza de UNA lectura a todo el programa: lo que se lee es una sola dirección, la que (`deriveEscrowStateFromId16`, `../infrastructure/solana-wallet.ts:294`) deriva de `["escrow", sender, id16]`. Ahora dice la dirección de este envío y que miramos esa sola. (2) La tercera posibilidad decía "siga abierta en un contrato que no estamos mirando", y ése es justo el lugar donde el disparador MÁS PLAUSIBLE de los cuatro de arriba NO la pone: si la fila quedó con un `ownerAddress` y el depósito lo firmó otra cuenta de la wallet, la PDA existe en ESTE MISMO programa, sembrada con el otro sender, y (`LostEscrowRecovery`, `flow.tsx:900`) la encuentra porque resuelve por sender. Por eso el copy ahora nombra la otra dirección y manda a esa puerta, en vez de mandar a un contrato que nadie va a ir a buscar. ⚠️ RESIDUO DE ESA ÚLTIMA FRASE: nombra la puerta en prosa ("recuperar un envío perdido"), no por su label. Si alguien renombra el label de esa puerta, que hoy dice "Recuperar un envío perdido" en el cuerpo de (`LostEscrowRecovery`, `flow.tsx:2286`), esta frase queda apuntando a algo que en pantalla se llama de otra forma. ⚠️ ESO CAMBIÓ A MEDIAS: T-W12 (el candado de acá abajo) busca ese botón POR SU LABEL, así que un renombre lo pone rojo y obliga a mirar esta frase; lo que sigue sin vigilancia es que la PROSA del copy y el label digan LO MISMO, porque nadie los compara. Duplicar el label byte a byte cambiaría un riesgo por el otro, el de las dos copias que divergen. 🔴 EL CONSEJO NO SE PODÍA CUMPLIR DESDE DONDE SE LEE (AR r3 · BLQ-MED-1), Y ESO SE CERRÓ EN DOS ETAPAS. Decía "conectá esa y usá la opción de recuperar un envío perdido", y eso ERA inaplicable en la sesión en la que se lee: `address` es un `useState` (`address`, `flow.tsx:147`) y (`resolveSender`, `flow.tsx:380`) devolvía el valor local cuando ya lo tenía —un `address ??` que cacheaba la primera cuenta para siempre—, así que nunca se le volvía a preguntar a la billetera. Y esta tarjeta SÓLO puede verse con `address != null`, por construcción: (`HistoryView`, `flow.tsx:1159`) recibe `sender={address}`, su efecto corta sin sender (`reader`, `flow.tsx:3285`) y sin consulta la respuesta es `not-asked`, que devuelve el conocimiento local (`answer`, `:1196`). O sea: LA MISMA CONDICIÓN QUE HACÍA VISIBLE EL CONSEJO ERA LA QUE LO VOLVÍA IMPOSIBLE. Lo único que limpiaba `address` era (`forgetAndDisconnect`, `flow.tsx:540`), detrás de "Borrar igual", que además borra el KYC y las entries del owner. ETAPA 1 (WKH-352): el copy pasó a mandar a volver a abrir la app, porque el montaje nuevo arranca con `address` en `null`. ETAPA 2 (WKH-354), que es la que vale hoy: se ELIMINÓ el `address ??`, y (`resolveSender`, `flow.tsx:380`) le pregunta al puerto `connectedWallet` —la billetera VIVA— en cada una de las tres puertas no monetarias, así que la reapertura dejó de hacer falta y el copy dejó de pedirla. Acá decía "⛔ NO se agregó ningún control de cambiar billetera ni se tocó `resolveSender`: eso cambia la conexión para TODA la app y es otra HU": esa HU fue WKH-354 y esa frase ya es falsa, por eso se reescribió. Y el arreglo NO es esta prosa: es T-354-W12 + su control en `history-onchain.test.tsx`, que ejecutan el consejo de punta a punta —sin reabrir la app— y assertan con qué `sender` sale la recuperación. Tres rondas de AR se fueron en reescribir texto que prometía de más; un texto no se puede medir a sí mismo.
+ * Un "se cerró" ahí le diría a alguien que no hay nada que recuperar sobre una fila donde SÍ lo hay, y le apagaría (`LostEscrowRecovery`, `flow.tsx:1203`), que es la puerta que le queda. Por eso el copy dice lo MEDIDO y deja abierta la tercera posibilidad. Candado: T-W10. R-1 en (`EscrowChainState`, `../application/ports.ts:1122`). 🔴 Y EL COPY DECÍA DOS COSAS QUE ESTE MISMO DOCBLOCK REFUTA (AR r2 · BLQ-BAJO-1), corregidas acá. (1) Decía "en EL CONTRATO que estamos consultando no figura ninguna cuenta", que generaliza de UNA lectura a todo el programa: lo que se lee es una sola dirección, la que (`deriveEscrowStateFromId16`, `../infrastructure/solana-wallet.ts:294`) deriva de `["escrow", sender, id16]`. Ahora dice la dirección de este envío y que miramos esa sola. (2) La tercera posibilidad decía "siga abierta en un contrato que no estamos mirando", y ése es justo el lugar donde el disparador MÁS PLAUSIBLE de los cuatro de arriba NO la pone: si la fila quedó con un `ownerAddress` y el depósito lo firmó otra cuenta de la wallet, la PDA existe en ESTE MISMO programa, sembrada con el otro sender, y (`LostEscrowRecovery`, `flow.tsx:1203`) la encuentra porque resuelve por sender. Por eso el copy ahora nombra la otra dirección y manda a esa puerta, en vez de mandar a un contrato que nadie va a ir a buscar. ⚠️ RESIDUO DE ESA ÚLTIMA FRASE: nombra la puerta en prosa ("recuperar un envío perdido"), no por su label. Si alguien renombra el label de esa puerta, que hoy dice "Recuperar un envío perdido" en el cuerpo de (`LostEscrowRecovery`, `flow.tsx:2340`), esta frase queda apuntando a algo que en pantalla se llama de otra forma. ⚠️ ESO CAMBIÓ A MEDIAS: T-W12 (el candado de acá abajo) busca ese botón POR SU LABEL, así que un renombre lo pone rojo y obliga a mirar esta frase; lo que sigue sin vigilancia es que la PROSA del copy y el label digan LO MISMO, porque nadie los compara. Duplicar el label byte a byte cambiaría un riesgo por el otro, el de las dos copias que divergen. 🔴 EL CONSEJO NO SE PODÍA CUMPLIR DESDE DONDE SE LEE (AR r3 · BLQ-MED-1), Y ESO SE CERRÓ EN DOS ETAPAS. Decía "conectá esa y usá la opción de recuperar un envío perdido", y eso ERA inaplicable en la sesión en la que se lee: `address` es un `useState` (`address`, `flow.tsx:163`) y (`resolveSender`, `flow.tsx:396`) devolvía el valor local cuando ya lo tenía —un `address ??` que cacheaba la primera cuenta para siempre—, así que nunca se le volvía a preguntar a la billetera. Y esta tarjeta SÓLO puede verse con `address != null`, por construcción: (`HistoryView`, `flow.tsx:1186`) recibe `sender={address}`, su efecto corta sin sender (`reader`, `flow.tsx:3339`) y sin consulta la respuesta es `not-asked`, que devuelve el conocimiento local (`answer`, `:1197`). O sea: LA MISMA CONDICIÓN QUE HACÍA VISIBLE EL CONSEJO ERA LA QUE LO VOLVÍA IMPOSIBLE. Lo único que limpiaba `address` era (`forgetAndDisconnect`, `flow.tsx:540`), detrás de "Borrar igual", que además borra el KYC y las entries del owner. ETAPA 1 (WKH-352): el copy pasó a mandar a volver a abrir la app, porque el montaje nuevo arranca con `address` en `null`. ETAPA 2 (WKH-354), que es la que vale hoy: se ELIMINÓ el `address ??`, y (`resolveSender`, `flow.tsx:396`) le pregunta al puerto `connectedWallet` —la billetera VIVA— en cada una de las tres puertas no monetarias, así que la reapertura dejó de hacer falta y el copy dejó de pedirla. Acá decía "⛔ NO se agregó ningún control de cambiar billetera ni se tocó `resolveSender`: eso cambia la conexión para TODA la app y es otra HU": esa HU fue WKH-354 y esa frase ya es falsa, por eso se reescribió. Y el arreglo NO es esta prosa: es T-354-W12 + su control en `history-onchain.test.tsx`, que ejecutan el consejo de punta a punta —sin reabrir la app— y assertan con qué `sender` sale la recuperación. Tres rondas de AR se fueron en reescribir texto que prometía de más; un texto no se puede medir a sí mismo.
  *
  * Sobre los dos `"chain-deposited-*"`: los dos pesan `strong` porque los dos tienen plata adentro —
  * el peso visual separa "hay plata" de "no hay nada que hacer", no "urgente" de "no urgente". Lo que
@@ -1233,11 +1234,12 @@ export function escrowOutcome(rem: RemittanceState, answer: EscrowChainAnswer): 
  * la que sale NO SIEMPRE OFRECE. El input: una fila `status: "settled"` con `principalTx != null` cae
  * en `"unverified"` por la rama (`principalTx`, `:219`) de `escrowFundsKnowledge`, y si su PDA sigue
  * `Deposited` con el plazo vencido la tarjeta muestra esta frase y, como ÚNICO botón, "Ver recibo",
- * que no lleva a ningún refund: `settled` no está en (`refundeable`, `flow.tsx:1531`), que es
+ * que no lleva a ningún refund: `settled` no está en (`refundeable`, `flow.tsx:1585`), que es
  * lo que monta `RefundAction`. WKH-351 sacó el Pill de esa tarjeta; el residual sigue vivo.
  *
  * DÓNDE ESTÁ LA PUERTA para esa fila, que es lo que faltaba decir: (`LostEscrowRecovery`,
- * `flow.tsx:900`), en la pantalla de inicio. No mira el estado local de la remesa: resuelve el id
+ * `flow.tsx:1419`), que desde WKH-063 se monta en el destino "Recuperar" de la barra y ya no al pie
+ * del formulario. No mira el estado local de la remesa: resuelve el id
  * contra el registro durable y elige el PRIMER escrow `Deposited` del sender
  * (`Deposited`, `../infrastructure/solana-wallet.ts:400`); del `deadline` se ocupa después el guard
  * del refund. Lo que QUEDA VIVO, y son DOS cosas: la frase no dice dónde está esa puerta, y si el
@@ -1264,7 +1266,7 @@ export function escrowOutcomeDisplay(o: EscrowOutcome): {
   if (o === "chain-released")
     return { copy: "El contrato dice que tus USDC ya salieron del escrow hacia el pago.", emphasis: "normal" };
   if (o === "chain-absent-after-deposit")
-    return { copy: "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en la dirección que le corresponde a este envío no hay ninguna cuenta: miramos esa dirección sola, no el contrato entero, y eso es todo lo que medimos. Desde acá no podemos decir si terminó en un pago o en una devolución, ni descartar que la cuenta siga abierta en otra dirección: la que miramos se calcula con la wallet conectada, así que si depositaste con otra, cambiá a esa cuenta en tu billetera y volvé a la pantalla de inicio: ahí está la opción de recuperar un envío perdido.", emphasis: "normal" };
+    return { copy: "Tu depósito entró: de eso quedó la firma de la transacción, confirmada en la cadena. Y en la dirección que le corresponde a este envío no hay ninguna cuenta: miramos esa dirección sola, no el contrato entero, y eso es todo lo que medimos. Desde acá no podemos decir si terminó en un pago o en una devolución, ni descartar que la cuenta siga abierta en otra dirección: la que miramos se calcula con la wallet conectada, así que si depositaste con otra, cambiá a esa cuenta en tu billetera y abrí la pestaña Recuperar de la barra de abajo: ahí está la opción de recuperar un envío perdido.", emphasis: "normal" };
   // La frase de abajo queda BYTE-IDÉNTICA (CD-8): la rama nueva se AGREGA, no reescribe a `chain-absent`.
   if (o === "chain-absent")
     return { copy: "En el contrato no hay ninguna cuenta para este envío: o el depósito nunca entró, o ya se cerró después de resolverse. Desde acá no podemos decir cuál de las dos.", emphasis: "normal" };
@@ -1279,9 +1281,9 @@ export function escrowOutcomeDisplay(o: EscrowOutcome): {
  * WKH-350 · LA AGRUPACIÓN DEL HISTORIAL: bajo qué encabezado se muestra cada fila.
  *
  * Acá NO se calcula ningún desenlace nuevo ni se le pregunta nada a la cadena. Se toma el
- * `EscrowOutcome` que ya produce (`escrowOutcome`, `:1193`) y se dice a qué sección va esa fila.
+ * `EscrowOutcome` que ya produce (`escrowOutcome`, `:1194`) y se dice a qué sección va esa fila.
  *
- * LA PARTICIÓN ES TOTAL. Los 12 valores de (`EscrowOutcome`, `:1167`) se reparten entre los 4 grupos
+ * LA PARTICIÓN ES TOTAL. Los 12 valores de (`EscrowOutcome`, `:1168`) se reparten entre los 4 grupos
  * sin solapamiento y sin sobrantes, así que toda fila aparece siempre, exactamente una vez, bajo un
  * encabezado visible. De ahí se sigue que ocultar un grupo sin filas es inocuo: un grupo vacío
  * significa "ninguna de tus filas cayó acá", nunca "acá hay filas que no te estamos mostrando".
@@ -1293,34 +1295,34 @@ export function escrowOutcomeDisplay(o: EscrowOutcome): {
  *
  * POR QUÉ G3 SE LLAMA "Sin plata en el escrow" Y NO "Resueltos". Sus cuatro miembros no comparten
  * ningún final. `chain-released` dice que los USDC ya salieron del escrow hacia el pago
- * (`escrowOutcomeDisplay`, `:1251`), y eso NO es "entregado": esa palabra es de
+ * (`escrowOutcomeDisplay`, `:1253`), y eso NO es "entregado": esa palabra es de
  * (`statusDisplay`, `:133`) para `settled` y habla de otro hecho, el partner reportando que pagó. Y
  * `no-deposit` dice "No llegaste a depositar." (`escrowKnowledgeCopy`, `:256`), que no es un envío
  * resuelto sino uno que no ocurrió. Lo único que los cuatro sostienen es que no hay plata tuya
  * adentro del escrow, y eso es exactamente lo que el encabezado dice.
  *
  * POR QUÉ G4 SE LLAMA "Sin respuesta sobre tu plata" Y NO "Sin respuesta clara de la cadena". Sus miembros, que son CINCO y
- * hay que contarlos en (`GRUPO_POR_DESENLACE`, `:1354`) y no en este párrafo, no llegaron por el mismo motivo. `chain-absent`
+ * hay que contarlos en (`GRUPO_POR_DESENLACE`, `:1356`) y no en este párrafo, no llegaron por el mismo motivo. `chain-absent`
  * y `chain-absent-after-deposit` SÍ recibieron respuesta, y clarísima: no hay cuenta; lo que no se puede es inferir qué
  * significa. `chain-pending` tiene la consulta EN VUELO. A `unverified` no se le preguntó NUNCA (sale sólo por ese bucket,
- * (`idsAConsultar`, `flow.tsx:3268`), y (`escrowOutcome`, `:1193`) devuelve el conocimiento local tal cual con `"not-asked"`)
+ * (`idsAConsultar`, `flow.tsx:3322`), y (`escrowOutcome`, `:1194`) devuelve el conocimiento local tal cual con `"not-asked"`)
  * y a `chain-unknown` no se le PUDO: un encabezado que hable de "respuesta de la cadena" aparenta, para esos DOS, una consulta que no existió.
  *
  * POR QUÉ G2 NO DICE "todavía en plazo". A `in-escrow` no se le pregunta a la cadena, así que el
  * sistema no sabe si esa fila está en plazo, y la frase por fila de `chain-deposited-window-open`
- * calla el plazo a propósito (`escrowOutcomeDisplay`, `:1251`). Afirmarlo en el encabezado
+ * calla el plazo a propósito (`escrowOutcomeDisplay`, `:1253`). Afirmarlo en el encabezado
  * reintroduce un nivel más arriba el error que ya se cerró a nivel de fila.
  *
  * ⚠️ RESIDUAL DE G1, Y ES EL QUE NO ESTABA DECLARADO EN NINGÚN LADO: "Necesitan tu firma" NO contiene
  * a todas las filas que necesitan una firma. G1 es exactamente `chain-deposited-window-closed`, y ese
- * desenlace sólo se alcanza por filas `unverified`, porque (`escrowOutcome`, `:1193`) corta en su
+ * desenlace sólo se alcanza por filas `unverified`, porque (`escrowOutcome`, `:1194`) corta en su
  * primer `if` y descarta la respuesta de la cadena cuando el conocimiento local ya resolvió. Input
  * concreto: una fila con `PRINCIPAL_SETTLED_REFUND_MANUAL` (⇒ `"in-escrow"` por la rama 2 de
  * (`escrowFundsKnowledge`, `:206`), el `if` de la línea 215) para la que la cadena contesta
  * `deposited-window-closed` cae en G2, no en G1: su plazo venció y su única salida también es una
  * firma, y el encabezado que la nombra dice otra cosa.
  *
- * Esto NO es un bug del corte —el corte está argumentado en (`escrowOutcome`, `:1193`) y su candado es
+ * Esto NO es un bug del corte —el corte está argumentado en (`escrowOutcome`, `:1194`) y su candado es
  * T-V1— ni rompe ningún AC: los ACs definen G1 por `EscrowOutcome === "chain-deposited-window-closed"`,
  * y esa fila sigue visible, con su copy de siempre, bajo G2. Lo que queda vivo es la LECTURA del
  * encabezado: se lee como "estas son TODAS las que necesitan tu firma" y es "estas son las que la
@@ -1347,7 +1349,7 @@ export const HISTORY_GROUP_HEADING: Record<HistoryGroup, string> = {
 
 /**
  * El mapa, con las 12 claves. Es un `Record` y NO una cadena de `if`, a propósito: si mañana
- * (`EscrowOutcome`, `:1167`) gana un valor nuevo y nadie le da grupo, esto NO COMPILA. Un `if`-chain
+ * (`EscrowOutcome`, `:1168`) gana un valor nuevo y nadie le da grupo, esto NO COMPILA. Un `if`-chain
  * cerrado con un `return` por defecto se traga el mismo olvido y se despliega en silencio. La
  * diferencia entre un candado y una prosa. Ojo: lo caza `tsc`, no vitest, que no typechequea.
  */
@@ -1370,6 +1372,6 @@ export function historyGroupFor(o: EscrowOutcome): HistoryGroup {
   // fallback es "sin-respuesta" y no otro porque es el grupo que MENOS afirma: un desconocido bajo
   // "Sin plata en el escrow" sería una afirmación falsa y tranquilizadora sobre la plata de alguien;
   // bajo "Sin respuesta sobre tu plata" no afirma nada. Es la misma doctrina que ya está escrita para
-  // el desenlace en (`escrowOutcome`, `:1193`): el lado seguro, el que no afirma nada sobre fondos.
+  // el desenlace en (`escrowOutcome`, `:1194`): el lado seguro, el que no afirma nada sobre fondos.
   return GRUPO_POR_DESENLACE[o] ?? "sin-respuesta";
 }

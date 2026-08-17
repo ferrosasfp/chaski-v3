@@ -211,22 +211,43 @@ describe("recuperar un envío perdido: qué se dice cuando no aparece nada", () 
 });
 
 describe("recuperar un envío perdido: la puerta en el recorrido", () => {
-  // Vive en `send` porque es donde aterriza toda recarga y adonde vuelve "Enviar otra". Quien llega
-  // desde otro dispositivo ve esta pantalla y ninguna otra.
-  it("está en `send`, al lado de 'Ver mis envíos'", () => {
+  // 🔴 ESTE BLOQUE ES EL DEL CABLEADO, y por eso monta `RemittanceFlow` entero y no el componente
+  // suelto: los tests de arriba prueban que la puerta HACE lo que dice, y estos que la app la MONTA.
+  // Sin ellos, `LostEscrowRecovery` sería un componente cuyos únicos llamadores viven en `*.test.*`.
+  //
+  // ⚠️ WKH-063 CAMBIÓ DÓNDE, y por eso cambió el recorrido de estos tres. Antes decía "vive en `send`
+  // porque es donde aterriza toda recarga": hoy la recarga aterriza en la pantalla de entrada, que es
+  // un DESTINO, y la puerta vive en el destino "Recuperar", a un toque de la barra. Lo que estos
+  // tests cuidan no es la pantalla: es que exista un camino de dos toques desde donde cae la recarga
+  // hasta la única puerta que le sirve a quien entra desde otro dispositivo.
+  /** Los dos toques del recorrido real: la recarga cae en la entrada, y de ahí a "Recuperar". */
+  const irAlDestinoRecuperar = async () =>
+    fireEvent.click(await screen.findByRole("button", { name: "Recuperar" }));
+
+  it("está en el destino `recuperar`, a un toque de la barra, junto a la otra puerta de la cadena", async () => {
     const container = buildTestContainer({
       wallet: new FakeSolanaWallet(),
       solanaRefund: new FakeSolanaEscrowRefundGateway(),
+      // La OTRA puerta de la cadena. Va en el mismo container a propósito: lo que este test reemplaza
+      // es el viejo "al lado de 'Ver mis envíos'", y hoy la vecina de esta puerta es aquélla.
+      solanaCloseableEscrows: {} as never,
     });
     render(<RemittanceFlow container={container} />);
+    // Y no está ANTES de tocar la pestaña: si estuviera, el test no mediría ningún cableado nuevo.
+    expect(screen.queryByRole("button", { name: /Recuperar un envío perdido/ })).toBeNull();
 
-    expect(screen.getByRole("button", { name: /Ver mis envíos/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Recuperar un envío perdido/ })).toBeInTheDocument();
+    await irAlDestinoRecuperar();
+
+    expect(await screen.findByRole("button", { name: /Recuperar un envío perdido/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Recuperar el depósito de red de envíos anteriores/ }),
+    ).toBeInTheDocument();
   });
 
   // Sin gateway cableado no se ofrece una puerta que no lleva a ningún lado.
-  it("sin gateway de refund no se muestra", () => {
+  it("sin gateway de refund no se muestra", async () => {
     render(<RemittanceFlow container={buildTestContainer()} />);
+    await irAlDestinoRecuperar();
     expect(screen.queryByRole("button", { name: /Recuperar un envío perdido/ })).toBeNull();
   });
 
@@ -239,8 +260,9 @@ describe("recuperar un envío perdido: la puerta en el recorrido", () => {
       solanaRefund: gateway,
     });
     render(<RemittanceFlow container={container} />);
+    await irAlDestinoRecuperar();
 
-    fireEvent.click(screen.getByRole("button", { name: /Recuperar un envío perdido/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Recuperar un envío perdido/ }));
     fireEvent.click(await screen.findByRole("button", { name: /Buscar mis escrows/ }));
 
     await waitFor(() => expect(gateway.calls).toHaveLength(1));
@@ -315,7 +337,7 @@ describe("recuperar un envío perdido: que puede haber más de uno", () => {
 //
 // 🔴 EL DEFECTO QUE CIERRAN. `recovered` era un `useState<string | null>` que el segundo éxito
 // SOBRESCRIBÍA, y esta puerta existe justamente para escrows que el dispositivo NO conoce: la primera
-// firma no está en `localStorage`, no está en "Ver mis envíos", y esto es estado de componente. O sea
+// firma no está en `localStorage`, no está en "Mis envíos", y esto es estado de componente. O sea
 // que el segundo click borraba la única evidencia en pantalla de un movimiento de dinero que ya
 // ocurrió. La plata no se pierde (la cadena es autoritativa); se pierde la prueba. Y la población
 // afectada es EXACTAMENTE la que motivó la frase de AC-7: quien tiene dos o más envíos perdidos.
@@ -340,7 +362,7 @@ describe("recuperar un envío perdido: dos búsquedas seguidas", () => {
   // más envíos con fondos por recuperar" sin haberle preguntado NADA a la cadena.
   //
   // Es la SEGUNDA encarnación del mismo defecto en el mismo archivo: el CR de WKH-327 lo arregló en el
-  // componente INMEDIATAMENTE SIGUIENTE (`explainer`, `flow.tsx:2533`), a unas pocas decenas de
+  // componente INMEDIATAMENTE SIGUIENTE (`explainer`, `flow.tsx:2587`), a unas pocas decenas de
   // líneas de donde nació este. ⚠️ Acá decía "48 líneas": una distancia es una cifra que envejece
   // sola, y mis propias inserciones la llevaron a 60 (AR-2/MNR-7). Lo estructural no envejece, y es lo
   // que hace al caso PEOR: nació al lado de la nota que lo describe, no lejos de ella.

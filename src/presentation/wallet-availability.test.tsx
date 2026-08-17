@@ -170,7 +170,7 @@ const CAMINO = /Abrir Chaski en Phantom/;
 
 /** Renderiza el flujo real y avanza hasta el paso `connect`, que es donde vive el botón de conectar. */
 function irAlPasoConectar(): void {
-  render(<RemittanceFlow container={buildTestContainer()} />);
+  render(<RemittanceFlow pasoInicial="send" container={buildTestContainer()} />);
   fireEvent.change(screen.getByPlaceholderText("Nombre de tu familiar"), {
     target: { value: "Mamá" },
   });

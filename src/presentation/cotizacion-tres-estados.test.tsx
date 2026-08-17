@@ -56,7 +56,7 @@ function corredorQueFalla(): Partial<Container> {
 describe("H2 · la caja de «Tu familia recibe» distingue los tres estados", () => {
   it("T-H2-1: mientras la cotización está en vuelo se anuncia que se calcula, y NO se muestra el guión", async () => {
     // MUTANTE QUE MATA: devolverle a `flow.tsx` el `<Money>{preview ? … : "—"}</Money>` sin condición.
-    render(<RemittanceFlow container={buildTestContainer({ useCases: corredorQueNoContesta() })} />);
+    render(<RemittanceFlow pasoInicial="send" container={buildTestContainer({ useCases: corredorQueNoContesta() })} />);
     const enCurso = await screen.findByRole("status", { name: CALCULANDO });
     expect(enCurso).toBeInTheDocument();
     // Y la caja NO puede estar mostrando además el guión: serían dos afirmaciones a la vez.
@@ -66,7 +66,7 @@ describe("H2 · la caja de «Tu familia recibe» distingue los tres estados", ()
 
   it("T-H2-2: cuando la cifra llega, el aviso de «calculando» se va y queda el monto", async () => {
     // El par positivo. Sin él, dejar el bloque que palpita para siempre pasaría en verde.
-    render(<RemittanceFlow container={buildTestContainer()} />);
+    render(<RemittanceFlow pasoInicial="send" container={buildTestContainer()} />);
     await waitFor(() => {
       expect(screen.queryByRole("status", { name: CALCULANDO })).toBeNull();
     });
@@ -83,7 +83,7 @@ describe("H2 · la caja de «Tu familia recibe» distingue los tres estados", ()
     // EXACTAMENTE igual, así que la persona esperaba para siempre un número que no iba a llegar.
     // MUTANTE QUE MATA: cambiar `setEstadoCotiza("falla")` por `setEstadoCotiza("pidiendo")` en el
     // `catch` de `flow.tsx`.
-    render(<RemittanceFlow container={buildTestContainer({ useCases: corredorQueFalla() })} />);
+    render(<RemittanceFlow pasoInicial="send" container={buildTestContainer({ useCases: corredorQueFalla() })} />);
     await screen.findByText(FALLA);
     expect(screen.queryByRole("status", { name: CALCULANDO })).toBeNull();
   });
@@ -92,7 +92,7 @@ describe("H2 · la caja de «Tu familia recibe» distingue los tres estados", ()
     // El `it` que hace falsables a los otros tres. "Corto" NO es un fallo (no se pidió nada, no hay
     // conexión que revisar) y NO es una espera (no hay nada en vuelo). Si alguien colapsa los estados
     // otra vez, o muestra el bloque que palpita siempre que falte la cifra, acá se pone rojo.
-    const { container } = render(<RemittanceFlow container={buildTestContainer()} />);
+    const { container } = render(<RemittanceFlow pasoInicial="send" container={buildTestContainer()} />);
     const monto = container.querySelector('input[inputmode="decimal"]') as HTMLInputElement;
     expect(monto).not.toBeNull();
     await act(async () => {

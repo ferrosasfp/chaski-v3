@@ -76,7 +76,7 @@ function fillSend(): void {
 
 /** send → connect (la pantalla de conectar wallet). */
 function irAConectar(): void {
-  render(<RemittanceFlow container={buildTestContainer()} />);
+  render(<RemittanceFlow pasoInicial="send" container={buildTestContainer()} />);
   fillSend();
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
 }
@@ -100,7 +100,7 @@ async function irARevisar(): Promise<void> {
  */
 async function irAConfirmarConKyc(provenance: string | undefined): Promise<void> {
   render(
-    <RemittanceFlow container={buildTestContainer({ kyc: new FakeKycGateway({ provenance }) })} />,
+    <RemittanceFlow pasoInicial="send" container={buildTestContainer({ kyc: new FakeKycGateway({ provenance }) })} />,
   );
   fillSend();
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
@@ -310,7 +310,7 @@ describe("paso de identidad", () => {
 // El número no se borra (es un dato del corredor y sirve para comparar): se le pone dueño.
 describe("el tiempo de llegada", () => {
   it("el preview del monto atribuye el estimado al corredor, no lo promete Chaski", async () => {
-    render(<RemittanceFlow container={buildTestContainer()} />);
+    render(<RemittanceFlow pasoInicial="send" container={buildTestContainer()} />);
     fireEvent.change(await screen.findByLabelText("Monto en dólares"), { target: { value: "400" } });
 
     expect(await screen.findByText(/el corredor estima ~\d+/)).toBeInTheDocument();
@@ -333,7 +333,7 @@ describe("el tiempo de llegada", () => {
 // todo el rango. Lo que sí vale en todo el rango es lo que el efecto hace: no pedir cotización.
 describe("el mínimo enviable", () => {
   it("no afirma que la comisión se lleve todo: dice lo que la app efectivamente hace", async () => {
-    render(<RemittanceFlow container={buildTestContainer()} />);
+    render(<RemittanceFlow pasoInicial="send" container={buildTestContainer()} />);
     fireEvent.change(await screen.findByLabelText("Monto en dólares"), { target: { value: "4" } });
     fillSend();
 
@@ -413,7 +413,7 @@ describe("el overlay que retoma la verificación", () => {
         } as unknown as ResumeKyc,
       },
     });
-    render(<RemittanceFlow container={container} />);
+    render(<RemittanceFlow pasoInicial="send" container={container} />);
 
     expect(await screen.findByText(/Estamos confirmando tu verificación\. Un segundo\./)).toBeInTheDocument();
     expect(screen.queryByText(/con Didit/)).toBeNull();
@@ -567,7 +567,7 @@ describe("la identidad del paso confirm", () => {
 
   // 🔴 `confirm` no era el único paso afectado, y esto lo prueba. El sello de `track` se prendía SOLO
   // por la pata del payout: con el KYC simulado y un desembolso REAL (`transfi`), la remesa entera
-  // quedaba sin ningún aviso también en seguimiento, y lo mismo en el recibo (`Receipt`, `flow.tsx:3401`,
+  // quedaba sin ningún aviso también en seguimiento, y lo mismo en el recibo (`Receipt`, `flow.tsx:3455`,
   // que llama al mismo `isDemoMode`). Es la combinación hacia la que apunta el proyecto: payout real
   // primero, KYC real después.
   it("el KYC simulado también prende el sello en track, con un desembolso REAL", () => {

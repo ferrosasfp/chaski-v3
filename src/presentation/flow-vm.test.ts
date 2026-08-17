@@ -1902,7 +1902,7 @@ describe("WKH-350 · agrupación del historial", () => {
  * "SEIS citas `flow-vm.test.ts:NN` sin ancla" apuntaban a este bloque, y que "todo lo que se le agregue
  * va DEBAJO de la 1911". Medido con
  * `grep -rEon 'flow-vm\.test\.ts:[0-9]+(-[0-9]+)?' src app scripts contracts`: las citas externas eran
- * OCHO, con UNA sola anclada (la de `flow-vm.ts:1002` a `:481`), o sea SIETE sin ancla, no seis. Y la
+ * OCHO, con UNA sola anclada (la de `flow-vm.ts:1003` a `:481`), o sea SIETE sin ancla, no seis. Y la
  * séptima, escrita por esta misma HU, fijaba la 1935, que está DEBAJO de la 1911: el CR insertó una
  * línea en la 1920, que es exactamente lo que esa regla autorizaba, y el contenido citado se corrió de
  * 1935 a 1936 SIN UN SOLO ROJO, con `citas-ancladas.test.ts` en verde.
@@ -1972,7 +1972,7 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
   const OUTCOMES_352 = Object.keys(OUTCOME_SET_352) as EscrowOutcome[];
 
   // 🔴 T-W1 (AC-1) — LA FILA CON PRUEBA DEL DEPÓSITO RECIBE SU PROPIO DESENLACE.
-  // MUTANTE MEDIDO: borrar el ternario de `flow-vm.ts:1205` y volver a `return "chain-absent";`.
+  // MUTANTE MEDIDO: borrar el ternario de `flow-vm.ts:1206` y volver a `return "chain-absent";`.
   // Aplicado y medido: T-W1 se pone rojo ("expected 'chain-absent' to be 'chain-absent-after-deposit'").
   // QUÉ NO CUBRE: no mide que la frase sea comprensible para quien la lee. Eso no lo puede medir un test.
   it("T-W1: `absent` + `principalTx` ⇒ `chain-absent-after-deposit`, y su copy ya no dice la disyunción", () => {
@@ -2027,14 +2027,14 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
 
   // 🔴 T-W3 (AC-2) — EL CANDADO: LA FRASE NUEVA NO SE DERRAMA SOBRE QUIEN NO TIENE LA PRUEBA.
   // MUTANTE MEDIDO: predicar por el CAMINO en vez de por la evidencia, o sea
-  // `return k === "unverified" ? "chain-absent-after-deposit" : "chain-absent";` en `flow-vm.ts:1205`.
+  // `return k === "unverified" ? "chain-absent-after-deposit" : "chain-absent";` en `flow-vm.ts:1206`.
   // Ese predicado es SIEMPRE verdadero ahí (`escrowOutcome` ya cortó en `:1195` con
   // `if (k !== "unverified") return k`), así que le daría la frase "tu depósito entró" a filas que no
   // tienen NINGUNA prueba de que entró. Aplicado y medido: T-W3 se pone rojo ("expected
   // 'chain-absent-after-deposit' to be 'chain-absent'") y NINGÚN otro test de este bloque cae, lo cual
   // es el punto: este candado es el único que cubre esa edición. El loop corta en el PRIMER fixture, así
   // que lo medido es que el mutante lo mata, no que los tres asserts se ejecuten y fallen.
-  // SEGUNDO MUTANTE MEDIDO: retocar la frase vieja de `flow-vm.ts:1268` (CD-8) ⇒ T-W3 rojo por el `toBe`.
+  // SEGUNDO MUTANTE MEDIDO: retocar la frase vieja de `flow-vm.ts:1270` (CD-8) ⇒ T-W3 rojo por el `toBe`.
   // QUÉ NO CUBRE: no mide el copy NUEVO (eso es T-W1/T-W2), ni cubre un cuarto camino a `unverified`
   // que alguien agregue después a `escrowFundsKnowledge`.
   it("T-W3: sin `principalTx`, `absent` sigue dando `chain-absent` con su frase BYTE-IDÉNTICA", () => {
@@ -2096,7 +2096,7 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
 
   // 🔴 T-W5 (AC-1) — LA RAMA NUEVA ES DE `absent` Y DE NINGUNA OTRA RESPUESTA.
   // MUTANTE MEDIDO: ramificar sobre `principalTx` ANTES del `switch` de respuestas, o sea poner
-  // `if (rem.principalTx != null) return "chain-absent-after-deposit";` arriba de `flow-vm.ts:1197`.
+  // `if (rem.principalTx != null) return "chain-absent-after-deposit";` arriba de `flow-vm.ts:1198`.
   // "No pudimos preguntar" pasaría a decirle a la persona que la cuenta se cerró. Aplicado y medido:
   // T-W5 se pone rojo. QUÉ NO CUBRE: mide el DESENLACE, no el copy de cada uno.
   it("T-W5: con `principalTx`, SÓLO `absent` produce el valor nuevo; las otras 7 respuestas no se mueven", () => {
@@ -2140,10 +2140,10 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
   // cambio de program address (ya pasó acá, commit `89628d8`), el cutover a mainnet, o una
   // `NEXT_PUBLIC_SOLANA_RPC_URL` mal apuntada harían que la pantalla le dijera a alguien que no hay
   // nada que recuperar sobre una fila donde SÍ lo hay, apagándole (`LostEscrowRecovery`,
-  // `flow.tsx:900`), que es la puerta que le queda. Argumento largo en el docblock de
-  // (`escrowOutcomeDisplay`, `flow-vm.ts:1251`).
+  // `flow.tsx:1203`), que es la puerta que le queda. Argumento largo en el docblock de
+  // (`escrowOutcomeDisplay`, `flow-vm.ts:1253`).
   //
-  // MUTANTE MEDIDO: reponer esa media frase en `flow-vm.ts:1267`. Aplicado y medido: T-W10 se pone
+  // MUTANTE MEDIDO: reponer esa media frase en `flow-vm.ts:1269`. Aplicado y medido: T-W10 se pone
   // rojo por el primer assert, y de este bloque no cae ningún otro.
   // SEGUNDO MUTANTE MEDIDO: borrar el "ni descartar que la cuenta siga abierta..." final (o sea sacar
   // el "se cerró" y no poner nada en su lugar, que deja la misma puerta cerrada por omisión) ⇒ T-W10
@@ -2196,16 +2196,16 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
   //   (1) decía "en EL CONTRATO que estamos consultando no figura ninguna cuenta para este envío". Lo
   //       que se lee es UNA dirección: la que (`deriveEscrowStateFromId16`, `../infrastructure/solana-wallet.ts:294`)
   //       deriva de "escrow" + sender + id16, no el programa entero.
-  //       El docblock de (`escrowOutcomeDisplay`, `flow-vm.ts:1251`) ya decía que lo ÚNICO medido es
+  //       El docblock de (`escrowOutcomeDisplay`, `flow-vm.ts:1253`) ya decía que lo ÚNICO medido es
   //       "en la dirección que derivamos HOY no hay cuenta": el copy afirmaba más que su propio
   //       docblock, y ese par (prosa que afirma / docblock que acota) es el que nadie vuelve a leer.
   //   (2) la tercera posibilidad decía "siga abierta en un contrato que no estamos mirando", y ése es
   //       justo el lugar donde el más plausible de los cuatro disparadores NO la pone: si el depósito
   //       lo firmó otra cuenta de la wallet, la cuenta vive en ESTE MISMO programa con otro sender, y
-  //       (`LostEscrowRecovery`, `flow.tsx:2286`) la encuentra porque resuelve por sender. Mandar a un
+  //       (`LostEscrowRecovery`, `flow.tsx:2340`) la encuentra porque resuelve por sender. Mandar a un
   //       "otro contrato" es mandar a la persona al único lugar donde no hay nada que buscar.
   //
-  // MUTANTE MEDIDO: reponer en `flow-vm.ts:1267` la frase vieja ("Y en el contrato que estamos
+  // MUTANTE MEDIDO: reponer en `flow-vm.ts:1269` la frase vieja ("Y en el contrato que estamos
   // consultando no figura ninguna cuenta para este envío... siga abierta en un contrato que no estamos
   // mirando"). Aplicado y medido: T-W11 rojo por el primer assert, y de ESTE bloque no cae ningún otro
   // (T-W10 sigue verde: la frase vieja tampoco decía "se cerró"). Fuera de este archivo caen TRES, los
@@ -2289,7 +2289,7 @@ describe("WKH-354 · el copy de la cuenta cambiada y la cola reescrita de chain-
   it("T-354-7a: la cola de `chain-absent-after-deposit` ya no manda a reabrir la app, y lo de antes de la cola no se movió", () => {
     const copy = escrowOutcomeDisplay("chain-absent-after-deposit").copy;
     // La cola nueva.
-    expect(copy).toContain("cambiá a esa cuenta en tu billetera y volvé a la pantalla de inicio: ahí está la opción de recuperar un envío perdido.");
+    expect(copy).toContain("cambiá a esa cuenta en tu billetera y abrí la pestaña Recuperar de la barra de abajo: ahí está la opción de recuperar un envío perdido.");
     // Y la vieja no está: es el assert que caza la reposición del consejo que exigía reabrir.
     expect(copy).not.toContain("volvé a abrir Chaski");
     expect(copy).not.toContain("en la pantalla de inicio, está la opción");

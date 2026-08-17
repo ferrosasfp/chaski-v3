@@ -36,9 +36,13 @@
 // ⚠️ LO QUE **NO** VERIFICA, declarado y no disfrazado:
 //   · Que la clase emita el color. Acá no corre Tailwind y jsdom no hace layout: se leen NOMBRES DE
 //     CLASE. Es la misma limitación que ya declaran `ola-2-pantallas.test.tsx` y `touch-targets`.
-//   · Que la tabla de abajo esté COMPLETA. Las 10 filas salieron de barrer los 17 `<Button` de
+//   · Que la tabla de abajo esté COMPLETA. Las filas salieron de barrer los `<Button` de
 //     `src/presentation/` y agrupar por pantalla; una pantalla NUEVA no entra sola a esta tabla y nadie
 //     se entera. Eso es trabajo de quien revise el PR que la agregue, no de este archivo.
+//     ⚠️ ACÁ DECÍA "las 10 filas ... los 17 `<Button`", y los dos números estaban viejos: la tabla
+//     tenía 7 filas cuando WKH-063 la encontró. Los conteos a mano en un comentario envejecen solos y
+//     nadie los mide, así que se sacaron en vez de corregirlos. Que WKH-063 tuviera que agregar sus
+//     dos pantallas a mano es la prueba de que la limitación de arriba es real, no teórica.
 //   · Si el VEREDICTO de cada fila es el correcto. "¿Hay acá una acción que resuelve la situación?" es
 //     un juicio de diseño. Este candado lo CONGELA para que cambiarlo obligue a editar esta tabla y a
 //     decir por qué; no lo deduce.
@@ -256,6 +260,46 @@ type Fila = {
 
 const FILAS: readonly Fila[] = [
   {
+    // WKH-063/AC-8 · LA PRIMERA PANTALLA. Nueva en esta HU: la tabla no la habría reclamado sola (su
+    // propio docblock declara que una pantalla nueva "no entra sola"), así que entra a mano.
+    nombre: "bienvenida · la pantalla de confianza, que es por donde arranca la app",
+    resolutiva: true,
+    porQue:
+      "es una pantalla de UNA sola cosa: empezar un envío. «Empezar un envío» saca a la persona de " +
+      "acá hacia el formulario, y no hay ninguna otra acción con la que competir. Si esto quedara en " +
+      "0, la primera pantalla de la app no tendría acción principal, que es el defecto original de la " +
+      "rama de fallo del seguimiento en la pantalla donde se paga más caro.",
+    botones: [/Empezar un envío/],
+    montar: async () =>
+      render(<RemittanceFlow pasoInicial="bienvenida" container={buildTestContainer()} />).container,
+  },
+  {
+    // WKH-063/AC-8 · EL DESTINO "RECUPERAR", y es la fila con el veredicto más discutible de las dos
+    // nuevas. Está escrita para que cambiarlo obligue a venir acá y decir por qué.
+    nombre: "recuperar · el destino con las dos puertas de la cadena",
+    resolutiva: false,
+    porQue:
+      "las dos puertas ABREN UNA BÚSQUEDA en la cadena: no sacan a la persona de acá ni resuelven " +
+      "nada todavía. Lo que resuelve (el refund, el cierre de cuentas) aparece DESPUÉS de que la " +
+      "cadena contestó, adentro de cada componente, y ahí cada uno decide su propia jerarquía. " +
+      "⚠️ Y hay una segunda razón por la que no pueden ser `primary`: son las puertas que " +
+      "`touch-targets.test.tsx` mide, o sea `<button>` planos con `min-h-[52px]`, y T-H4 exige que NO " +
+      "lleven el peso del CTA. Promoverlas rompería los dos candados a la vez.",
+    botones: [/Recuperar un envío perdido/, /Recuperar el depósito de red/],
+    montar: async () => {
+      const { container } = render(
+        <RemittanceFlow
+          pasoInicial="recuperar"
+          container={buildTestContainer({
+            solanaRefund: {} as never,
+            solanaCloseableEscrows: {} as never,
+          })}
+        />,
+      );
+      return container;
+    },
+  },
+  {
     nombre: "seguimiento · rama de FALLO, con la recuperación disponible",
     resolutiva: true,
     porQue:
@@ -425,7 +469,7 @@ describe("T-JR-2: el paso `confirm`, con y sin error", () => {
     // `confirm` hay un `primary`". Sin él, mover el `primary` de «Confirmar y enviar» a cualquier otro
     // control de la misma pantalla pasaría desapercibido.
     const { container } = render(
-      <RemittanceFlow container={buildTestContainer({ kyc: kycRealGateway() })} />,
+      <RemittanceFlow pasoInicial="send" container={buildTestContainer({ kyc: kycRealGateway() })} />,
     );
     await irAConfirm();
     expect(primariesDe(container)).toEqual([expect.stringContaining("Confirmar y enviar")]);
@@ -444,7 +488,7 @@ describe("T-JR-2: el paso `confirm`, con y sin error", () => {
       },
     } as unknown as ConfirmAndSend;
     const { container } = render(
-      <RemittanceFlow
+      <RemittanceFlow pasoInicial="send"
         container={buildTestContainer({ kyc: kycRealGateway(), useCases: { confirmAndSend: rechaza } })}
       />,
     );
@@ -466,7 +510,7 @@ describe("T-JR-3: el paso `send`", () => {
     // subrayados y no pasan por `<Button>`, así que no pueden ganar prominencia por accidente. Este
     // `it` lo fija: si alguien las convierte en `<Button variant="primary">`, acá hay dos.
     const { container } = render(
-      <RemittanceFlow container={buildTestContainer({ kyc: kycRealGateway() })} />,
+      <RemittanceFlow pasoInicial="send" container={buildTestContainer({ kyc: kycRealGateway() })} />,
     );
     await screen.findByRole("button", { name: /Continuar/ });
     expect(primariesDe(container)).toEqual([expect.stringContaining("Continuar")]);
@@ -489,7 +533,22 @@ describe("T-JR-3: el paso `send`", () => {
 // toque. `touch-targets.test.tsx` ya vigila el número; acá se vigila que la corrección de jerarquía no
 // se lo lleve puesto, que es el error que este arreglo podía cometer.
 describe("T-H4: las puertas de recuperar plata no compiten con el CTA, y siguen siendo fáciles de tocar", () => {
-  const PUERTAS = [/Ver mis envíos/, /Recuperar un envío perdido/, /Recuperar el depósito de red/];
+  // ⚠️ WKH-063 CAMBIÓ EL MONTAJE DE ESTE BLOQUE, NO SU REGLA. Las tres puertas ya no comparten
+  // pantalla con «Continuar»: la primera es la pestaña "Mis envíos" de la barra de destinos y las otras
+  // dos viven en el destino "Recuperar". O sea que el defecto original —cuatro controles con la MISMA
+  // métrica en el mismo tercio de pantalla— hoy es imposible por construcción, y este bloque cuida lo
+  // que sigue siendo cuidable y sigue importando: que ninguna de las tres gane el peso del CTA en la
+  // pantalla donde vive, y que eso no se haya conseguido achicándolas.
+  //
+  // 🔴 EL VOCABULARIO DEL CTA SE SIGUE LEYENDO DEL CTA RENDERIZADO Y NO SE ESCRIBE ACÁ, igual que
+  // antes: si `ui.tsx` cambia el rol tipográfico o el alto del botón, este candado sigue midiendo la
+  // relación y no un número viejo. Lo único que cambió es que hay que montar DOS pantallas, porque el
+  // CTA y las puertas ya no conviven en una.
+  //
+  // ⚠️ Y POR QUÉ SE LEEN LOS `className` DE NODOS YA DESMONTADOS: los dos destinos pintan la MISMA
+  // barra, así que tener los dos montados a la vez deja DOS pestañas "Mis envíos" en el documento y
+  // `getByRole` falla por ambigüedad (medido). Se desmonta y se guarda la referencia, que es el mismo
+  // molde que `pxDelCtaDelCaminoFeliz` de `touch-targets.test.tsx`: el nodo conserva su `className`.
 
   // Las dos puertas de la cadena NO se montan sin su gateway ("un test que no lo inyecta no lo ve",
   // `test-container.ts:57`). Se inyectan stubs mínimos: acá no se ejercita ninguna búsqueda, sólo se
@@ -501,33 +560,58 @@ describe("T-H4: las puertas de recuperar plata no compiten con el CTA, y siguen 
       solanaCloseableEscrows: {} as never,
     });
 
-  it("T-H4-1: ninguna puerta de recuperación lleva el peso tipográfico del CTA", async () => {
-    // MUTANTE QUE MATA: devolverles `text-body font-semibold` a los tres `<button>` de `flow.tsx`.
-    render(<RemittanceFlow container={conLasTresPuertas()} />);
+  /** El rol tipográfico y el alto del CTA del camino feliz, leídos del `<Button>` que `send` pinta. */
+  async function vocabularioDelCta(): Promise<{ peso: string; alto: number }> {
+    const { unmount } = render(
+      <RemittanceFlow pasoInicial="send" container={conLasTresPuertas()} />,
+    );
     const cta = await screen.findByRole("button", { name: /Continuar/ });
-    // El vocabulario se LEE del CTA renderizado, no se escribe acá: si `ui.tsx` cambia el tamaño del
-    // botón, este candado sigue midiendo la relación y no un número viejo.
-    const pesoDelCta = /(?:^|\s)(text-\w+)/.exec(cta.className)?.[1];
-    expect(pesoDelCta).toBeTruthy();
-    for (const nombre of PUERTAS) {
-      const puerta = screen.getByRole("button", { name: nombre });
-      expect(puerta.className).not.toContain(`${pesoDelCta} font-semibold`);
-      expect(puerta.className).toContain("text-label");
+    const peso = /(?:^|\s)(text-\w+)/.exec(cta.className)?.[1];
+    const alto = Number(/(?:^|\s)h-\[(\d+)px\]/.exec(cta.className)?.[1]);
+    unmount();
+    // Se mide el instrumento ANTES de usarlo: sin esto, un CTA que dejara de declarar su rol haría
+    // pasar los dos `it` de abajo por vacuidad.
+    expect(peso, "el CTA de `send` ya no declara ningún rol tipográfico").toBeTruthy();
+    expect(alto, "el CTA de `send` ya no declara ningún h-[Npx]").toBeGreaterThan(0);
+    return { peso: peso as string, alto };
+  }
+
+  /** Las tres puertas, cada una en la pantalla donde vive HOY. */
+  async function lasTresPuertas(): Promise<Array<{ nombre: string; el: HTMLElement }>> {
+    const { unmount } = render(
+      <RemittanceFlow pasoInicial="bienvenida" container={conLasTresPuertas()} />,
+    );
+    const pestania = await screen.findByRole("button", { name: "Mis envíos" });
+    unmount();
+
+    render(<RemittanceFlow pasoInicial="recuperar" container={conLasTresPuertas()} />);
+    const perdido = await screen.findByRole("button", { name: /Recuperar un envío perdido/ });
+    const alquiler = screen.getByRole("button", { name: /Recuperar el depósito de red/ });
+
+    return [
+      { nombre: "la pestaña «Mis envíos»", el: pestania },
+      { nombre: "Recuperar un envío perdido", el: perdido },
+      { nombre: "Recuperar el depósito de red", el: alquiler },
+    ];
+  }
+
+  it("T-H4-1: ninguna puerta de recuperación lleva el peso tipográfico del CTA", async () => {
+    // MUTANTE QUE MATA: devolverles `text-body font-semibold` a los tres `<button>` (los dos de
+    // `flow.tsx` y el de `barra-destinos.tsx`).
+    const { peso } = await vocabularioDelCta();
+    for (const { nombre, el } of await lasTresPuertas()) {
+      expect(el.className, nombre).not.toContain(`${peso} font-semibold`);
+      expect(el.className, nombre).toContain("text-label");
     }
   });
 
   it("T-H4-2(control): bajarles el peso NO les bajó el área de toque", async () => {
     // La otra mitad. Sin este `it`, "achicar los tres" pasaría en verde, y habríamos arreglado la
     // jerarquía rompiendo la accesibilidad de los botones que devuelven fondos.
-    render(<RemittanceFlow container={conLasTresPuertas()} />);
-    const cta = await screen.findByRole("button", { name: /Continuar/ });
-    const altoDelCta = Number(/(?:^|\s)h-\[(\d+)px\]/.exec(cta.className)?.[1]);
-    expect(altoDelCta).toBeGreaterThan(0); // se mide el instrumento antes de usarlo
-    for (const nombre of PUERTAS) {
-      const alto = Number(
-        /(?:^|\s)min-h-\[(\d+)px\]/.exec(screen.getByRole("button", { name: nombre }).className)?.[1],
-      );
-      expect(alto).toBeGreaterThanOrEqual(altoDelCta);
+    const { alto: altoDelCta } = await vocabularioDelCta();
+    for (const { nombre, el } of await lasTresPuertas()) {
+      const alto = Number(/(?:^|\s)min-h-\[(\d+)px\]/.exec(el.className)?.[1]);
+      expect(alto, nombre).toBeGreaterThanOrEqual(altoDelCta);
     }
   });
 });

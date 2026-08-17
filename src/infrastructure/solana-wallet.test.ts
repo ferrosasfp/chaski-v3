@@ -2360,4 +2360,72 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       ).toBe(false);
     }
   });
+
+  // ── ★ T-8 (AC-3 / CD-11) — todo lo del nonce vive DESPUÉS del primer `if (this.firmaPorEnlace)` ──
+  //
+  // ⚠️ QUÉ PRUEBA ESTE TEST Y QUÉ NO, dicho antes de que alguien se apoye en su verde. Prueba que
+  // ningún identificador del nonce aparece en el cuerpo de `authorizePrincipal` ANTES de la primera
+  // rama de enlace. NO prueba que el camino inyectado no los ejecute: para eso haría falta razonar
+  // sobre el flujo de control, y un texto no puede hacerlo. Los instrumentos que SÍ lo miden son
+  // otros dos, y son de runtime:
+  //   · T-9, que cuenta las llamadas RPC del camino inyectado y las clava en 1/1/0;
+  //   · T-347-6, que compara los BYTES de la tx del camino inyectado contra un fixture pinneado del
+  //     árbol previo a WKH-347 — un pin que esta HU NO regeneró, y que sigue verde.
+  // Y el candado más fuerte es el mutante, medido: sacar el bloque del nonce afuera del `if` pone 28
+  // `it` en rojo. Este barrido es la red barata que caza el error de EDICIÓN (pegar una línea nueva
+  // arriba de la rama por descuido), no una prueba de aislamiento.
+  it("★ T-8 (CD-11): ningún identificador del nonce aparece antes de la primera rama `if (this.firmaPorEnlace)`", () => {
+    const fuente = readFileSync(
+      path.resolve(process.cwd(), "src/infrastructure/solana-wallet.ts"),
+      "utf8",
+    );
+    const desde = fuente.indexOf("async authorizePrincipal(");
+    expect(desde, "no se encontró `authorizePrincipal` en el archivo").toBeGreaterThan(0);
+    const hasta = fuente.indexOf("¿Entró el principal al vault", desde);
+    expect(hasta, "no se encontró el final del método").toBeGreaterThan(desde);
+    // CD-11 regla (a): descontar comentarios. Sin esto, el barrido se dispara con los propios
+    // comentarios que explican el nonce, que son muchos y están a propósito.
+    const cuerpo = fuente
+      .slice(desde, hasta)
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(?<!:)\/\/.*$/gm, "");
+    // CD-11 regla (b): assertar que DESPUÉS de descontarlos todavía queda el código que creemos
+    // mirar. Sin esta línea, un regex goloso da verde sobre una cadena vacía.
+    expect(
+      cuerpo.includes("solanaWalletBridge.signTransaction(tx)"),
+      "el barrido borró el código además de los comentarios: estaría dando verde sobre la nada",
+    ).toBe(true);
+    // 🔴 Y ACÁ ESTÁ LO QUE HACE QUE EL DESCUENTO DE COMENTARIOS SEA LOAD-BEARING, medido: el cuerpo
+    // BRUTO tiene 3 ocurrencias de `if (this.firmaPorEnlace)` y el descontado tiene 2 — la tercera es
+    // el comentario que explica que todo vive adentro de la rama. Sin este assert, neutralizar el
+    // regex de comentarios NO ponía nada en rojo (mutante CORRIDO: sobrevivía), y el guard quedaba
+    // debilitado en silencio: `primeraRama` caía en el COMENTARIO, que está más arriba, y una llamada
+    // colada entre ese comentario y la rama real habría pasado desapercibida.
+    const ramas = (cuerpo.match(/if \(this\.firmaPorEnlace\)/g) ?? []).length;
+    expect(
+      ramas,
+      "el método tiene que tener EXACTAMENTE 2 ramas `if (this.firmaPorEnlace)` en CÓDIGO (la de las " +
+        "lecturas del nonce y la grande). Si acá aparecen 3, el barrido está contando un comentario y " +
+        "el descuento de comentarios dejó de funcionar.",
+    ).toBe(2);
+    const primeraRama = cuerpo.indexOf("if (this.firmaPorEnlace)");
+    expect(primeraRama, "la rama de enlace no está en el cuerpo: el barrido no mide nada").toBeGreaterThan(0);
+    // Y que el código del nonce siga existiendo, o los `toBe(-1)` de abajo pasarían por vacío.
+    expect(cuerpo).toContain("direccionDelNonce");
+    // ⚠️ SE BARREN LAS TRES LLAMADAS, NO LAS DOS DECLARACIONES, y el motivo es real y no una excusa
+    // para que el test pase: `let nonceIx` y `let valorDelNonce` TIENEN que estar declaradas en el
+    // scope de afuera, porque el ternario que arma la tx —que corre en los DOS caminos— las lee. Una
+    // declaración `let x: T | undefined;` no hace trabajo, no pide red y no cambia un byte: en el
+    // camino inyectado las dos valen `undefined` y el ternario toma la rama de siempre. Lo que importa
+    // es que no se EJECUTE nada, y eso lo miden T-9 (1/1/0 llamadas RPC) y T-347-6 (los bytes).
+    for (const id of ["direccionDelNonce", "leerNonce", "construirNonceAdvance"]) {
+      const antes = cuerpo.slice(0, primeraRama);
+      expect(
+        antes.indexOf(id),
+        `\`${id}\` aparece ANTES del primer \`if (this.firmaPorEnlace)\`. Todo lo de WKH-357 vive ` +
+          "adentro de esa rama (CD-1): el camino de la billetera inyectada es el del video de M5 y ya " +
+          "movió USDC real en cadena.",
+      ).toBe(-1);
+    }
+  });
 });

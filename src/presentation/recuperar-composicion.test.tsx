@@ -323,7 +323,7 @@ describe("T-063-13 (2º pase): cada puerta dice QUÉ MONEDA busca, y se comprueb
     //
     // ⚠️ LO QUE ESTE `it` NO VERIFICA, dicho antes de que alguien lo lea de más: que "sólo se libera
     // cuando ese envío ya terminó" sea cierto. Eso es un guard de la cadena
-    // (`escrow_not_terminal`, `../infrastructure/solana-wallet.ts:1352`) y ya tiene su propio test
+    // (`escrow_not_terminal`, `../infrastructure/solana-wallet.ts:1485`) y ya tiene su propio test
     // ejecutable en `solana-wallet.close.test.ts:391`, que comprueba que un `EscrowState` en
     // `Deposited` aborta ANTES de firmar. Acá se apunta a él en vez de escribir una segunda versión.
     for (const { puerta, dice, noDice, frase } of RENGLONES) {

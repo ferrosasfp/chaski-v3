@@ -1298,12 +1298,12 @@ describe("T-347-6 (AC-9/CD-10): con el índice LLENO la tx sale byte-idéntica a
 // ⚠️ CD-15 · LOS 15 MUTANTES DE ESTE BLOQUE SE CORRIERON (2026-08-17, tabla RE-MEDIDA entera en el
 // fix-pack 1), no se razonaron: `spawnSync` sin pipes, suite COMPLETA por mutante, aguja contada con
 // `== 1`, relectura del disco, restauración verificada byte a byte, y dos mutantes de calibración de
-// resultado conocido ANTES de creerle nada a la batería (el que debía morir: exit=1 con 35 rojos —39 tras el FP2, que le agregó `it` al otro archivo—; el
+// resultado conocido ANTES de creerle nada a la batería (el que debía morir: exit=1 con **41** rojos en DOS archivos, RE-MEDIDO en el FP4 sobre dba48f9 —eran 35 al escribir esta cabecera y 39 tras el FP2, que le agregó `it` al otro archivo—; el
 // que debía vivir: exit=0).
 //
 // | mutante                                                             | exit | `it` rojos |
 // |---|---|---|
-// | T-062-7     invertir el guard `viaje.direccion !== p.sender`         | 1 | 39 (re-medido en el FP2; eran 35) |
+// | T-062-7     invertir el guard `viaje.direccion !== p.sender`         | 1 | 41 en DOS archivos (RE-MEDIDO en el FP4 sobre dba48f9; 39 tras el FP2, 35 al escribirla). Es el MISMO mutante que la tabla gemela llama `CALIB` (`CALIB`, `solana/deeplink/firma-por-enlace.test.ts:84`): su conteo es global, así que las dos filas se mueven juntas o se contradicen |
 // | T-062-7b    pasarle al motor otro valor en `sender`                  | 1 | 2 |
 // | T-062-18(a) comparar sólo la LONGITUD del mensaje devuelto           | 1 | 1 (sólo el CASO B) |
 // | T-062-18(b) dejar sólo la PRESENCIA de la firma (sin `nacl.verify`)   | 1 | 2 (el CASO C + citas) |

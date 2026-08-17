@@ -9,22 +9,22 @@
 // ⚠️ EL FIX-PACK 3 (AR-it3) AGREGÓ 2 `it` —la última fila, `IT3-MNR4`— y ESO OBLIGÓ A RE-CORRER FILAS
 // VIEJAS, porque un `it` nuevo que pasa por el código de un mutante viejo le sube el conteo sin que nadie
 // edite su fila. Baseline del FP3: `136 passed` / `2466 passed`, exit 0 (eran 2464 antes de los dos `it`).
-// Re-corridas: `CALIB` (39 → 41), `ALTO1-a` (12 → 13), `BAJO1-b` (1 → 2) y `T-062-15(a)` (ver su nota:
-// NO reprodujo su 6). Re-corridas Y SIN CAMBIO, que es la mitad que se suele no mirar: `ALTO1-b` (5) y
+// Re-corridas: `CALIB` (39 → 41), `ALTO1-a` (12 → 13), `BAJO1-b` (1 → 2) y `T-062-15(a)` (6 → 8; el FP4 midió que ese 6 era CIERTO en el FP1 y se podrió solo —ver su nota— y re-corrió `CALIB` sobre dba48f9: 41, sin cambio).
+// Re-corridas Y SIN CAMBIO, que es la mitad que se suele no mirar: `ALTO1-b` (5) y
 // `BAJO1-a` (4) — los dos preservan igual porque el patrocinio del fixture nuevo está definido y tiene
 // forma de firma. Las que NO se re-corrieron es porque los dos `it` nuevos cortan en el paso 6 y no
 // alcanzan su código (ninguno escribe ancla, ninguno llega a `completo`, ninguno arma un salto).
 //
-// 🔴 Y QUEDA UN NÚMERO VIEJO EN OTRO ARCHIVO, DICHO ACÁ PORQUE EL FP3 NO PODÍA TOCARLO (scope): `CALIB`
-// es el MISMO mutante que `solana-wallet.test.ts` anota como `T-062-7`, y esa fila sigue diciendo **39**
-// donde ahora son **41** (los 2 rojos nuevos caen en ESTE archivo, no en aquél, pero el mutante es uno y
-// su conteo es global). Es una línea de update y NO se hizo: el FP3 tenía permitido tocar
-// `firma-por-enlace.ts`, su test y `solana-wallet.ts`, no `solana-wallet.test.ts`. Va escrito para que la
-// próxima revisión lo cierre en vez de descubrirlo — que un mutante compartido tenga su conteo en dos
-// tablas es, además, la razón estructural por la que este borde se pudre solo.
+// 🔒 EL NÚMERO VIEJO DE OTRO ARCHIVO QUEDÓ CERRADO EN EL FP4, Y ERAN DOS SITIOS, NO UNO: `CALIB` es el
+// MISMO mutante que `solana-wallet.test.ts` anota como `T-062-7`, y allá la fila decía **39** y su
+// cabecera **35** donde son **41** (los rojos nuevos caen en ESTE archivo, pero el mutante es uno y su
+// conteo es global). Los dos sitios se corrigieron con el conteo RE-MEDIDO sobre dba48f9 y con el commit
+// escrito en la misma línea, y ahora cada tabla cita a la otra con el formato anclado
+// (`viaje.direccion`, `../../solana-wallet.test.ts:1306`) para que el candado de citas se ponga rojo si
+// una se mueve sin la otra: el candado NO compara los números, así que eso es todo lo que hay.
 //
 // 🔴 CALIBRACIÓN, Y ESTA VEZ SIRVIÓ DE VERDAD: el mutante que tenía que MORIR dio exit=1 con 35 `it`
-// rojos (39 en el FP2 y 41 en el FP3, con los `it` nuevos de cada vuelta); el que tenía que VIVIR dio **exit=0**. En el primer intento los DOS dieron exit=1 y eso
+// rojos (39 en el FP2 y 41 en el FP3 y en el FP4, con los `it` nuevos de cada vuelta); el que tenía que VIVIR dio **exit=0**. En el primer intento los DOS dieron exit=1 y eso
 // delató el instrumento roto (el árbol tenía el candado de citas en rojo y el parser leía la salida
 // con códigos ANSI adentro). Sin la calibración, las filas de abajo habrían sido mentiras.
 //
@@ -42,16 +42,16 @@
 //
 // ⛔ Y ACÁ VA EL RESIDUO, porque este borde ya falló tres revisiones seguidas: la correspondencia
 // fila ↔ claim se verifica A MANO, no hay candado. Un candado por CONTEO no alcanza, y el motivo NO es
-// que "se compare consigo mismo": esa cláusula estaba acá y era FALSA (AR-it3/MNR-5). Contar filas de la
-// tabla contra contar sitios de claim cruza DOS artefactos independientes del archivo, y eso es cruce, no
-// auto-comparación; la lección `guards-que-se-comparan-consigo-mismos` habla de un guard que RECALCULA la
-// fórmula que vigila. Se borra porque una cláusula así queda escrita como argumento reusable para
-// rechazar un candado legítimo la próxima vez. El motivo que SÍ se sostiene, y alcanza solo, es que la
-// relación no es 1:1 por sitio: un solo comentario declara DOS
-// mutantes (los dos de `MED2`), otro declara un mutante que ya está en otra fila (`15(a)`), y uno de los
-// `it` remite al mutante de otro (`MED1-a`). El candado honesto exige TAGUEAR los 32 claims con el nombre
-// de su fila y comparar conjuntos, y eso es una pasada de retag sobre todo el archivo: queda propuesto,
-// no hecho, y dicho acá para que la próxima revisión decida en vez de descubrirlo.
+// que "se compare consigo mismo" (esa cláusula estaba acá y era FALSA, AR-it3/MNR-5: contar filas contra
+// contar sitios de claim cruza DOS artefactos independientes del archivo, y eso es cruce): es que la
+// relación NO es 1:1 por sitio. LA ARITMÉTICA COMPLETA, re-derivada en el FP4 sobre dba48f9 porque la
+// receta que estuvo acá NO reproducía: 34 apariciones de la frase − 1 la cabecera de :37 − 3 que remiten
+// a un mutante YA tabulado (:825 → el 15(a) de :798 · :1071 → el ALTO1-a de :859 · :1297 → el MED1-a de
+// :1208) + 1 porque :1394 declara DOS en un solo comentario (`MED2-a` y `MED2-b`) + 1 por la fila
+// `T-062-11`, cuyo claim está en :377 y NO usa la frase vigilada (dice otra) = 32, contra las 32 filas
+// de :58-:89. La receta vieja nombraba 2 de las 3 cross-refs y no nombraba la fila de :377: esos dos
+// errores se COMPENSAN (−1 y +1), así que cerraba en 32 de casualidad, y sin restar la cabecera da 33. El
+// candado honesto —taguear los 32 claims con el nombre de su fila y comparar conjuntos— sigue PROPUESTO.
 //
 // | mutante                                                          | exit | `it` rojos |
 // |---|---|---|
@@ -65,7 +65,7 @@
 // | T-062-12    ignorar la `persistencia`                             | 1 | 4 |
 // | T-062-13    tratar los dos motivos de `huerfana` igual            | 1 | 1 |
 // | T-062-14    colapsar los dos orígenes del rechazo                 | 1 | 1 |
-// | T-062-15(a) limpiar ANTES de leer los resultados                  | 1 | 8 (ver la nota: su 6 NO reprodujo) |
+// | T-062-15(a) limpiar ANTES de leer, SITIO A (ver su nota)          | 1 | 8 (re-medido en dba48f9; el 6 era del FP1) |
 // | T-062-15(b) volver a limpiar en la salida de éxito del motor      | 1 | 1 |
 // | T-062-15(c) `terminarViaje` también en la rama del salto          | 1 | 3 |
 // | T-062-16    devolver la `secreta` en el desenlace                 | 1 | 2 |
@@ -81,7 +81,7 @@
 // | MED2-c      borrar el guard del `remittanceId` del viaje          | 1 | 1 |
 // | CONECTADO   borrar el guard `!estaConectado(viaje)`               | 1 | 1 |
 // | MNR2        borrar la validación `esFirmaUtil` de los resultados   | 1 | 1 |
-// | CALIB       invertir `viaje.direccion !== p.sender` (el que DEBÍA morir) | 1 | 41, en dos archivos (re-corrido en el FP3; 39 en el FP2, 35 en el FP1) |
+// | CALIB       invertir `viaje.direccion !== p.sender` (el que DEBÍA morir) | 1 | 41, en dos archivos (RE-MEDIDO en dba48f9/FP4; 39 en el FP2, 35 en el FP1) |
 // | BAJO1-a     preservar con `esFirmaUtil` sola (el predicado viejo)   | 1 | 4 (re-corrido en el FP3, SIN cambio) |
 // | BAJO1-b     `tieneFormaDeFirma` mide 32 bytes en vez de 64         | 1 | 2 (re-medido en FP3; el control positivo + el `it` de la limitación de `IT3-MNR4`) |
 // | BAJO1-c     `tieneFormaDeFirma` acepta cualquier cosa              | 1 | 1 + 1 de refilón (ver abajo) |
@@ -795,18 +795,18 @@ describe("T-062-15: cada salida deja el viaje y el registro limpios, y los resul
     ],
   ];
 
-  // MUTANTE QUE MATA (15(a), MEDIDO: exit=1, **8** `it` rojos): limpiar ANTES de leer los resultados (un
-  // `terminarViaje` insertado arriba de la lectura del paso 6, justo encima de `const txFirmadaCruda =`)
-  // ⇒ el éxito sale con el disco vacío. Es el ORDEN, no la presencia, lo que estos casos miden.
-  // ⛔ Y ACÁ VA UN RESIDUO QUE ENCONTRÓ EL FP3 AL RE-CORRERLO: su número viejo era **6** y NO SE PUDO
-  // REPRODUCIR. La descripción "arriba de la lectura" tiene DOS sitios posibles y ninguno da 6 hoy:
-  // arriba de la lectura del paso 6 da **8** (2 son los `it` nuevos de `IT3-MNR4`, o sea 6 no venía de
-  // acá tampoco: sin ellos serían 7), y adentro de `cortar`, arriba de su `leerViaje`, da **13** y es
-  // INDISTINGUIBLE de `ALTO1-a` —destruir antes de leer hace que `hayAlgoQueSalvar` sea siempre `false`—.
-  // La explicación más plausible es que el 6 se midió en el FP1, cuando el paso 6 todavía RELEÍA el disco
-  // (ese segundo `leerViaje` se borró después, y su docblock lo cuenta), así que es un número medido
-  // contra una forma del código que ya no existe: un candado que se podría haber quedado verde en silencio
-  // dos fix-packs. Se deja el 8 con el sitio ESCRITO, que es lo que faltaba.
+  // MUTANTE QUE MATA (15(a), RE-MEDIDO en el FP4 sobre dba48f9: exit=1, **8** `it` rojos, 1 archivo): limpiar
+  // ANTES de leer los resultados, en el SITIO A —y el sitio va escrito porque el número solo no alcanza—: un
+  // `terminarViaje(p.almacen)` pegado encima de `const txFirmadaCruda =` (firma-por-enlace.ts:629), arriba de
+  // la lectura del paso 6 ⇒ el éxito sale con el disco vacío. Es el ORDEN, no la presencia, lo que se mide. El
+  // SITIO B que la descripción también admite —adentro de `cortar`, arriba de su `leerViaje` (:439)— da **13**
+  // y es INDISTINGUIBLE de `ALTO1-a`: destruir antes de leer hace que `hayAlgoQueSalvar` sea siempre `false`.
+  // ⛔ EL RESIDUO DEL FP3 (su número viejo era **6** y no reprodujo) YA NO ES HIPÓTESIS, Y LA QUE EL FP3 DEJÓ
+  // ERA FALSA: supuso que el 6 se midió cuando el paso 6 releía el disco, y ese segundo `leerViaje` ya no
+  // existía en fba7ea0 (FP1), el commit donde el 6 se escribió. Medido corriendo el mutante en un worktree de
+  // fba7ea0: ahí daba exit=1 y **6** rojos, y son los MISMOS 6 de hoy; los otros 2 son `it` agregados después
+  // (uno en 93b22ee, uno en dba48f9) que este mutante también mata. El 6 era CIERTO al escribirse y se podrió
+  // solo: 6 → 7 → 8 sin que nadie lo tocara (`candados-que-se-pudren-solos`); por eso el número lleva commit.
   for (const [nombre, armar] of CORTES) {
     it(`el corte \`${nombre}\` deja el disco limpio`, () => {
       const a = almacenFalso();
@@ -1525,7 +1525,7 @@ describe("los guards que no tenían test", () => {
 // CD-11 / T12 — el sender no sale del canal del enlace
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 describe("el viaje sólo puede COINCIDIR con el sender, nunca sustituirlo", () => {
-  // MUTANTE QUE MATA (CALIB, RE-CORRIDO en el FP3: exit=1, **41 `it` rojos** en dos archivos; 39 en el FP2 y 35 en el FP1 — es el mutante de
+  // MUTANTE QUE MATA (CALIB, RE-CORRIDO en el FP4 sobre dba48f9: exit=1, **41 `it` rojos** en dos archivos —41 también en el FP3; 39 en el FP2 y 35 en el FP1—; es el mutante de
   // calibración de toda la batería, el que tenía que morir, y la fila que la tabla de arriba se había
   // dejado afuera dos revisiones seguidas): invertir la comparación `viaje.direccion !== p.sender`
   // ⇒ un connect forjado se queda con el viaje entero y el depósito se arma con una dirección ajena.

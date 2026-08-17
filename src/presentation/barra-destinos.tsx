@@ -57,6 +57,33 @@ const ICONOS: Record<Destino, typeof Send> = {
   recuperar: LifeBuoy,
 };
 
+/**
+ * ⚠️ `disabled` APAGA LAS TRES PESTAÑAS A LA VEZ, Y ESO ES UN DEFECTO DECLARADO, NO UN DISEÑO
+ * (AR/MNR-3). Queda escrito acá, en el sitio del prop, porque el encabezado de
+ * `barra-destinos.test.tsx` declara otros límites y no éste.
+ *
+ * QUÉ PASA, MEDIDO (T-063-22, segundo `it`): el único sitio de llamada le pasa `busy`, y `busy` lo pone
+ * `guard` (`flow.tsx:300-314`), que NO tiene timeout. Con una billetera que nunca contesta —tocar "Mis
+ * envíos" entra por `openHistory` → `resolveSender` → `connectWallet.execute()`— las tres pestañas y el
+ * CTA de la bienvenida quedan `disabled` para siempre y la única salida es RECARGAR la página.
+ *
+ * ⛔ POR QUÉ EXISTÍA ANTES Y AHORA MOLESTA MÁS: el congelamiento por `busy` es pre-WKH-063. Lo que
+ * cambió es que ahora se lleva puesta la ÚNICA navegación de la app, porque esta HU borró los tres
+ * enlaces del pie de `send`. Y el repo ya trata esta clase como defecto: el overlay `resuming` tiene
+ * escape manual a los 5 s (WKH-188, `flow.tsx:288-298`); esto no tiene ninguno.
+ *
+ * 🔴 POR QUÉ EL FIX-PACK NO LO ARREGLÓ, y la alternativa se evaluó en serio. Lo obvio es que sólo la
+ * pestaña que necesita la billetera honre `disabled` (`history`; las otras dos son estado local). Eso
+ * cambia el congelamiento por una CARRERA: la persona se va a `recuperar`, la billetera contesta tarde y
+ * `openHistory` hace `setStep("history")` encima, o sea el MISMO defecto que AR/BLQ-MED-1 con otro
+ * disparador (ver `T-063-21`, que lo mide para el resume). Las dos instancias piden el mismo mecanismo
+ * —cancelar o versionar la navegación en vuelo— y elegirlo bien es diseño de una HU, no de un fix-pack.
+ *
+ * ⚠️ LA MITIGACIÓN QUE SÍ HAY, y es la única: desde `history`, el botón «Volver» de `HistoryView` NO
+ * honra `disabled`, así que sobrevive al congelamiento. Es la razón medida por la que ese botón no se
+ * borró pese a ser navegación duplicada dentro de un destino. Desde `bienvenida` y `recuperar` no hay
+ * ninguna salida: eso queda ABIERTO y sin candado.
+ */
 export function BarraDestinos({
   activo,
   onIr,

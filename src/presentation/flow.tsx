@@ -41,9 +41,9 @@ import {
   PREPARE_NO_AGENT_FOR_CAPABILITY,
   isPrepareRejection,
 } from "../application/agent-rejections"; // hallazgo #75: rechazo del agente ≠ payout fallido
-import { resolveSolanaExplorerTxUrl, resolveSolanaNetworkConfig } from "../infrastructure/chain"; import { canonicalizeAddress } from "../infrastructure/address"; // HU-SOL-13: cluster Solana activo (env-driven) · WKH-346: la URL del visor que enlaza el comprobante · WKH-354/AC-3: `canonicalizeAddress` entra EN ESTA LÍNEA, no en una nueva — este archivo recibe 74 citas por número y una línea de import de más las corre TODAS
+import { resolveSolanaExplorerTxUrl, resolveSolanaNetworkConfig } from "../infrastructure/chain"; import { canonicalizeAddress } from "../infrastructure/address"; // HU-SOL-13: cluster Solana activo (env-driven) · WKH-346: la URL del visor que enlaza el comprobante · WKH-354/AC-3: `canonicalizeAddress` entra EN ESTA LÍNEA, no en una nueva. ⛔ EL NÚMERO, CON SU DEFINICIÓN AL LADO, porque acá vivía un "74" que ya era falso y se había republicado en dos comentarios nuevos (CR/MNR-5): se cuenta UNA cita por cada `flow.tsx:NNN` de `src|app|scripts|contracts` más cada auto-cita `` `:NNN` `` de este archivo. Medido el 2026-08-17 al cierre del fix-pack: **131 ocurrencias** (98 de la forma larga desde 30 archivos, 8 de ellas dentro de este mismo archivo, + 33 auto-citas) a **79 líneas destino distintas**. Una línea de import de más corre TODAS las que apuntan más abajo, que a esta altura son 130 de las 131. ⚠️ ES UNA FOTO Y ENVEJECE SOLA: el propio fix-pack la movió de 108 a 131 escribiendo comentarios, así que el número se re-deriva, no se hereda
 import type {
-  CloseableEscrow, EscrowChainState, SolanaEscrowChainStateReader, // WKH-349: EN ESTA LÍNEA, no en dos nuevas — las 19 citas por número a este archivo apuntan de `:243` para abajo
+  CloseableEscrow, EscrowChainState, SolanaEscrowChainStateReader, // WKH-349: EN ESTA LÍNEA, no en dos nuevas. Decía "las 19 citas … apuntan de `:243` para abajo" y las dos mitades eran falsas (CR/MNR-5): medido el 2026-08-17 con la definición de `:44`, son 131 y la más alta apunta a `:44`, la línea de arriba. Lo que sí vale, y es el argumento: 130 de las 131 apuntan MÁS ABAJO, así que dos líneas nuevas acá las corren todas
   EscrowRefundConfirmation,
   KycVerdictLookup,
   WalletPossessionProof,
@@ -71,11 +71,11 @@ import {
   kycOriginNotice,
   lostEscrowRecoveryError,
   shortErrorCode,
-  statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, type GestoRenovacion, REVISION_APAGADA, REVISION_FIRMANDO, REVISION_GESTO, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_BILLETERA, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, esVentanaSinAbiertos, // WKH-339: EN ESTA LÍNEA. `flow.tsx:632` lo citan 6 archivos y NINGUNA de las 6 es una cita anclada ⇒ si se mueve, nada se pone rojo y los 6 comentarios rotan en silencio · WKH-346 fix-pack: `esVentanaSinAbiertos` entra acá por lo mismo (Δ0)
+  statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, type GestoRenovacion, REVISION_APAGADA, REVISION_FIRMANDO, REVISION_GESTO, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_BILLETERA, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, esVentanaSinAbiertos, // WKH-339: EN ESTA LÍNEA. `flow.tsx:661` lo citan 6 archivos (`ports.ts`, `container.test.ts`, `http-pop-signer.ts`, `pop-proof-store.ts`, `ledger-payout-status-gateway.ts`, `solana-providers.tsx`) más 2 sitios de acá, y NINGUNA de las 8 es una cita anclada ⇒ si se mueve, nada se pone rojo y los 8 comentarios rotan en silencio. ⛔ Acá decía `632`, que era el número correcto en `ce4f31e` y lo dejó de ser en esta rama: los 6 archivos SÍ se remapearon a 661 y esta línea, que es la que NOMBRA el número, quedó atrás (CR/BLQ-BAJO-1) · WKH-346 fix-pack: `esVentanaSinAbiertos` entra acá por lo mismo (Δ0)
 } from "./flow-vm";
 import { cn } from "./cn";
-import { phantomBrowseUrl, useWalletAvailability, useConnectedWalletAddress, mwaEnabled, useMwaOffered } from "./wallet-availability"; // el aviso de "acá no hay wallet" (NoWalletHere) · WKH-354/AC-6: `useConnectedWalletAddress` para el banner (CuentaCambiada) · WKH-MWA: los dos últimos, EN ESTA MISMA LÍNEA (85 citas `flow.tsx:NNNN` cuelgan de que este archivo no cambie de largo)
-import { Aviso, Button, Card, ChaskiMark, Field, Money, Muted, Pill, Row, Stepper, TextInput } from "./ui"; import { BarraDestinos, type Destino, VolverAlInicio, esDestino } from "./barra-destinos"; import { Bienvenida } from "./bienvenida"; import { DestinoRecuperar, QUE_RECUPERA } from "./recuperar"; // ola 2: los nombres nuevos entran EN ESTA LÍNEA, no en una nueva. Este archivo recibe 83 citas por número (48 ancladas + 35 sueltas, medido en 4c24324) y una sola línea de import de más las corre TODAS · WKH-063: los TRES imports nuevos entran acá por lo mismo (Δ0 líneas)
+import { phantomBrowseUrl, useWalletAvailability, useConnectedWalletAddress, mwaEnabled, useMwaOffered } from "./wallet-availability"; // el aviso de "acá no hay wallet" (NoWalletHere) · WKH-354/AC-6: `useConnectedWalletAddress` para el banner (CuentaCambiada) · WKH-MWA: los dos últimos, EN ESTA MISMA LÍNEA (el censo de citas por número de `:44` `flow.tsx:NNNN` cuelgan de que este archivo no cambie de largo)
+import { Aviso, Button, Card, ChaskiMark, Field, Money, Muted, Pill, Row, Stepper, TextInput } from "./ui"; import { BarraDestinos, type Destino, VolverAlInicio, esDestino } from "./barra-destinos"; import { Bienvenida } from "./bienvenida"; import { DestinoRecuperar, QUE_RECUPERA } from "./recuperar"; // ola 2: los nombres nuevos entran EN ESTA LÍNEA, no en una nueva. Este archivo recibe MUCHAS citas por número, y una sola línea de import de más corre todas las que apuntan más abajo. ⛔ EL NÚMERO NO SE ESCRIBE ACÁ: vive en UN solo lugar, con su definición y su fecha, en el comentario de `:44` (fix-pack, CR/MNR-5). Acá había un valor y el mismo archivo llevaba otros cuatro distintos para el mismo hecho, cada uno copiado de un vecino en vez de medido · WKH-063: los TRES imports nuevos entran acá por lo mismo (Δ0 líneas)
 
 // WKH-187: el quote se muestra ANTES del KYC. Orden: send→connect→review(pre-KYC)→verify→confirm(post-KYC)→track→done.
 // `history` NO es un paso del flujo: es la puerta de entrada a las remesas que ya existen. Se
@@ -144,7 +144,7 @@ const RESUME_MAX_POLLS = 8;            // 8 × 2500 ms = 20 s total (antes 40 = 
 export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { container?: Container; pasoInicial?: Step } = {}) {
   const c = useMemo(() => container ?? createContainer(), [container]);
   const [step, setStep] = useState<Step>(pasoInicial);
-  const [busy, setBusy] = useState(false); const disponibilidadWallet = useWalletAvailability(); const mwaEnElSelector = useMwaOffered(); const conectarEsCallejon = disponibilidadWallet === "none" && mwaEnElSelector && !mwaEnabled(); // H1: los cuatro EN ESTA LÍNEA y no en cuatro nuevas — `flow.tsx` recibe ~85 citas por número y una sola línea de más las corre TODAS (ver el docblock del import en :77). Qué significa `conectarEsCallejon` está escrito donde se usa, en `step === "connect"`.
+  const [busy, setBusy] = useState(false); const disponibilidadWallet = useWalletAvailability(); const mwaEnElSelector = useMwaOffered(); const conectarEsCallejon = disponibilidadWallet === "none" && mwaEnElSelector && !mwaEnabled(); // H1: los cuatro EN ESTA LÍNEA y no en cuatro nuevas — `flow.tsx` recibe ~muchas citas por número y una sola línea de más corre todas las que apuntan más abajo (el número y su definición viven en UN solo lugar, `:44`). Qué significa `conectarEsCallejon` está escrito donde se usa, en `step === "connect"`.
   const [error, setError] = useState<FlowError | null>(null);
 
   // form
@@ -158,7 +158,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
   const [scanStage, setScanStage] = useState(0); // 0 idle · 1-3 escaneando · 4 verificado
 
   // state
-  const [preview, setPreview] = useState<Quote | null>(null); const [estadoCotiza, setEstadoCotiza] = useState<"pidiendo" | "ok" | "falla" | "corto">("pidiendo"); // H2: `preview === null` significaba TRES cosas (todavía no llegó · falló · el monto no llega al mínimo) y la pantalla las mostraba con el MISMO guión. Un `Quote | null` ya había perdido el tercer valor; esto lo repone. Va EN ESTA LÍNEA porque `flow.tsx` recibe ~85 citas por número.
+  const [preview, setPreview] = useState<Quote | null>(null); const [estadoCotiza, setEstadoCotiza] = useState<"pidiendo" | "ok" | "falla" | "corto">("pidiendo"); // H2: `preview === null` significaba TRES cosas (todavía no llegó · falló · el monto no llega al mínimo) y la pantalla las mostraba con el MISMO guión. Un `Quote | null` ya había perdido el tercer valor; esto lo repone. Va EN ESTA LÍNEA porque `flow.tsx` recibe ~muchas citas por número (el número y su definición viven en UN solo lugar, `:44`).
   const [rem, setRem] = useState<RemittanceState | null>(null);
   const [address, setAddress] = useState<string | null>(null);
   // WKH-333: el veredicto de KYC que el servidor ya contestó al conectar. NO es un guard: sólo decide
@@ -518,7 +518,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
         if (!mismaCuenta) throw new Error("wallet_account_changed");
       }
       const res = await c.confirmAndSend.execute({ remittanceId: rem.id }); // WKH-356: TRES desenlaces
-      if (res.estado === "hay-que-salir") { window.location.href = res.irA; return; } // AC-1 — SÓLO navegar, igual que el redirect a Didit de `:428-432`. La URL ya viene armada por el protocolo de la billetera: acá NO se parsea, NO se reescribe, NO se le agrega ningún parámetro. La remesa quedó persistida en `confirmed`, que es el estado que la reanudación vuelve re-ejecutable (AC-3). ⛔ Δ0 OBLIGATORIO en estas tres líneas: hay 41 destinos de línea de este archivo citados por número más abajo, y una línea de más los rota a todos en silencio
+      if (res.estado === "hay-que-salir") { window.location.href = res.irA; return; } // AC-1 — SÓLO navegar, igual que el redirect a Didit de `:457-461` (decía `:428-432`, que es donde vivía en `ce4f31e`: CR/BLQ-BAJO-1). La URL ya viene armada por el protocolo de la billetera: acá NO se parsea, NO se reescribe, NO se le agrega ningún parámetro. La remesa quedó persistida en `confirmed`, que es el estado que la reanudación vuelve re-ejecutable (AC-3). ⛔ Δ0 OBLIGATORIO en estas tres líneas: medido el 2026-08-17 con la definición de `:44`, hay 54 líneas destino de este archivo citadas por número más abajo (84 ocurrencias), y una línea de más las rota a todas en silencio
       setRem(res.remesa.snapshot); setStep(res.remesa.status === "settled" ? "done" : "track");
     });
 
@@ -584,7 +584,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
       setScanStage(0);
       setAmount("400"); // no es PII → vuelve al default inicial (evita form con monto en blanco)
       setRateUpdated(false); // WKH-187
-      setStep("send");
+      setStep("bienvenida"); // fix-pack AR/BLQ-BAJO-1: decía `"send"`, y hasta WKH-063 eso ERA el inicio. Hoy `send` es el paso 1 de un envío, así que un dispositivo recién limpiado ("no soy yo" + "Borrar igual") aterrizaba EN EL MEDIO DEL FORMULARIO, con "Paso 1 de 4" arriba y sin barra. `bienvenida` es el destino de entrada y es lo que este gesto significa: volver al principio. Lo camina `T-063-23`
       setConfirmReset(false);
     });
 
@@ -802,9 +802,9 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
           exit={{ opacity: 0, y: -8 }}
           transition={{ duration: 0.22 }}
           className="flex flex-1 flex-col"
-        >{/* WKH-063 (2º pase) · `flex flex-col` ENTRA EN LA LÍNEA DE ARRIBA Y NO EN UNA NUEVA, y este comentario cuelga del `>` por lo mismo: este archivo recibe 74 citas por número y una línea de más las corre TODAS. 🔴 POR QUÉ HACÍA FALTA, medido sobre el build de producción con Chrome a 412x915: la bienvenida tenía 381px de vacío entre el CTA y la barra (42% del viewport), y para centrar su bloque hacía falta una altura contra la que centrarse. `min-h-full`/`h-full` en el hijo NO SIRVEN, y está MEDIDO y no razonado: con este `<div>` en `flex-1` a secas, el hijo con `min-height:100%` medía 644px dentro de un padre de 728px, o sea que la clase emitía una regla que resolvía a nada. Es el peor modo de falla posible (compila, se ve igual, no hace nada), el mismo que el docblock de `borderRadius` en `tailwind.config.ts` describe para un `rounded-xl2` olvidado. Con el padre en `flex flex-col`, un hijo que pide `flex-1` sí se estira a los 728px. ⛔ ESTO NO CENTRA NADA POR SÍ SOLO: el `justify-center` y el `flex-1` viven en el hijo (`Bienvenida`, `bienvenida.tsx:131`), así que las demás pantallas siguen ancladas arriba, que es lo que un formulario tiene que hacer. Los otros pasos pasan de bloque a ítem flex SIN cambiar de alto: un ítem flex sin `flex-grow` mide su contenido, y cada rama de acá abajo renderiza UN solo elemento. */}
+        >{/* WKH-063 (2º pase) · `flex flex-col` ENTRA EN LA LÍNEA DE ARRIBA Y NO EN UNA NUEVA, y este comentario cuelga del `>` por lo mismo: este archivo recibe muchas citas por número y una línea de más corre todas las que apuntan más abajo (el número y su definición están en `:44`, medidos UNA vez; acá decía "74", copiado de allá cuando allá ya era falso, que es el antipatrón que el auto-blindaje de esta HU prohíbe). 🔴 POR QUÉ HACÍA FALTA, medido sobre el build de producción con Chrome a 412x915: la bienvenida tenía 381px de vacío entre el CTA y la barra (42% del viewport), y para centrar su bloque hacía falta una altura contra la que centrarse. `min-h-full`/`h-full` en el hijo NO SIRVEN, y está MEDIDO y no razonado: con este `<div>` en `flex-1` a secas, el hijo con `min-height:100%` medía 644px dentro de un padre de 728px, o sea que la clase emitía una regla que resolvía a nada. Es el peor modo de falla posible (compila, se ve igual, no hace nada), el mismo que el docblock de `borderRadius` en `tailwind.config.ts` describe para un `rounded-xl2` olvidado. Con el padre en `flex flex-col`, un hijo que pide `flex-1` sí se estira a los 728px. ⛔ ESTO NO CENTRA NADA POR SÍ SOLO: el `justify-center` y el `flex-1` viven en el hijo (`Bienvenida`, `bienvenida.tsx:169`), así que las demás pantallas siguen ancladas arriba, que es lo que un formulario tiene que hacer. Los otros pasos pasan de bloque a ítem flex SIN cambiar de alto: un ítem flex sin `flex-grow` mide su contenido, y cada rama de acá abajo renderiza UN solo elemento. */}
           {step === "send" && (
-            <div className="space-y-holgado"><VolverAlInicio onVolver={() => setStep("bienvenida")} disabled={busy} />{/* WKH-063 · LA ÚNICA SALIDA DEL FLUJO HACIA LOS DESTINOS, y sin ella la barra sería una trampa: los pasos del envío no la pintan (AC-3), así que quien entra al formulario se quedaba sin ninguna forma de volver a "Mis envíos" o a "Recuperar" salvo recargar la página. Va SÓLO en `send` y no en los pasos siguientes a propósito: de `connect` en adelante hay una cotización fijada y una identidad en juego, y ahí "volver al inicio" no es navegar, es abandonar algo empezado. No borra nada de lo escrito en el formulario (sólo mueve `step`), así que volver a entrar devuelve el monto y el destino tal como estaban. */}
+            <div className="space-y-holgado"><VolverAlInicio onVolver={() => setStep("bienvenida")} disabled={busy} />{/* WKH-063 · LA ÚNICA SALIDA DEL FLUJO HACIA LOS DESTINOS, y sin ella la barra sería una trampa: los pasos del envío no la pintan (AC-3), así que quien entra al formulario se quedaba sin ninguna forma de volver a "Mis envíos" o a "Recuperar" salvo recargar la página. Va SÓLO en `send` y no en los pasos siguientes a propósito: de `connect` en adelante hay una cotización fijada y una identidad en juego, y ahí "volver al inicio" no es navegar, es abandonar algo empezado. ⚠️ ESA JUSTIFICACIÓN CUBRE 5 DE LOS 6 PASOS, NO LOS 6 (fix-pack, AR/MNR-5): a `track` y a `done` también se llega ABRIENDO UN ENVÍO VIEJO desde "Mis envíos" (`onOpenFromHistory`, `:435-439`), y en ESE camino no hay nada empezado que abandonar — la persona venía de un destino a mirar un envío que ya pasó. Medido: desde ahí no hay barra (son pasos del flujo) y `track` no expone ningún control de salida, así que el único gesto posible es recargar. El dead-end es PRE-EXISTENTE a WKH-063 (`flow-vm.ts:946-949` ya lo tenía medido y escrito para el seguimiento); lo que esta HU agregó encima es la justificación de arriba, que no describe este camino. ⛔ NO SE ARREGLA ACÁ, y el motivo es el mismo que el de AR/MNR-3: poner `VolverAlInicio` en `track` mezcla dos entradas con significados opuestos ("abandonar el envío que estoy haciendo" y "dejar de mirar uno viejo") y decidir bien qué dice el control en cada una es diseño, no un renglón de fix-pack. Queda como defecto ABIERTO y sin candado. No borra nada de lo escrito en el formulario (sólo mueve `step`), así que volver a entrar devuelve el monto y el destino tal como estaban. */}
               <Card>
                 <Field label="Enviás">
                   {/* 🔴 EL ÚNICO SITIO DE LA APP DONDE LA MONEDA PUEDE PESAR MENOS QUE LA CIFRA, y no
@@ -1182,8 +1182,8 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
             />
           )}
 
-          {step === "history" && history && (
-            <HistoryView items={history} onOpen={onOpenFromHistory} onBack={() => setStep("send")} reader={c.solanaEscrowStates} sender={address} />
+          {step === "history" && history && ( // fix-pack AR/BLQ-BAJO-1 · el `onBack` decía `setStep("send")`, o sea que el único botón grande del historial te metía ADENTRO del embudo (paso 1 de 4, sin barra). Va a `bienvenida`, que es el destino de entrada. ⚠️ Y EL BOTÓN SE QUEDA pese a que la barra ya ofrece "Enviar": es el ÚNICO control de esta pantalla que NO honra `disabled={busy}`, así que con la billetera colgada (AR/MNR-3) es la única salida que sobrevive. Las dos mitades las mide `T-063-22`; si mañana se le pone `disabled`, el botón deja de tener motivo y se borra
+            <HistoryView items={history} onOpen={onOpenFromHistory} onBack={() => setStep("bienvenida")} reader={c.solanaEscrowStates} sender={address} />
           )}
 
           {step === "done" && rem && <Receipt rem={rem} onNew={() => resetTo(setStep, setRem, setPreview)} />}
@@ -1226,15 +1226,15 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
         </Aviso>
       ) : null}
 
-      {/* WKH-063/AC-3+AC-4 · LA BARRA, Y SU CONDICIÓN ES ESTA LÍNEA Y NINGUNA OTRA. No hay una lista
-          de pasos donde se oculta: se pinta si y sólo si `step` es un DESTINO, así que un paso nuevo
-          del flujo nace sin barra y un destino nuevo nace con ella, sin que nadie se acuerde de venir
-          acá. El candado recorre `STEP_INDEX` entero contra una tabla escrita a mano, o sea que
-          agregar un `Step` obliga a clasificarlo.
-          ⛔ VA ÚLTIMA DENTRO DEL `<main>`, y no es orden estético: su `mt-auto` sólo la empuja al
-          borde inferior si es el último hijo de la columna flex. Debajo del bloque de error a
-          propósito — un error habla de la pantalla, no de la navegación. */}
-      {esDestino(step) ? <BarraDestinos activo={step} onIr={irADestino} disabled={busy} /> : null}
+      {/* WKH-063/AC-3+AC-4 · LA BARRA. Dos mitades: `step` es un DESTINO **y no hay overlay arriba**. La segunda la agregó el fix-pack (AR/BLQ-MED-1). Un paso nuevo del flujo nace sin barra y un destino nuevo nace con ella: el candado recorre `STEP_INDEX` entero contra una tabla a mano, así que un `Step` nuevo obliga a clasificarlo.
+          🔴 POR QUÉ `!resuming && !timedOut`, y es el camino del video: el KYC vuelve de Didit como RECARGA (`window.location.href` en el `redirect` de `:457-461`), así que el resume corre AL MONTAR — y con el default `pasoInicial = "bienvenida"` el `step` de ese montaje ya es un destino. Medido antes del arreglo, con `resumeKyc` devolviendo `processing`: la barra se pintaba debajo de "Verificando tu identidad…" con las tres pestañas HABILITADAS, y al tocar una quedaba marcada `aria-current="page"` mientras la pantalla seguía en el overlay. O sea: la barra afirmaba un lugar donde la persona no estaba, y AC-3 pide lo contrario (hay un envío en curso ⇒ no hay barra).
+          ⛔ LOS DOS OVERLAYS VIVEN EN EL TERNARIO DE ARRIBA (`:764-796`), y por eso esta línea nombra sus banderas y no una lista de pasos. ⚠️ Un TERCER overlay que nazca mañana en ese ternario NO queda cubierto por esta línea, y eso no se declara en prosa: `T-063-20` lee este archivo, saca las banderas de las ramas del ternario y exige que cada una esté negada acá. Una rama nueva sin su `!bandera` se pone roja sola.
+          ⚠️ LO QUE ESTA LÍNEA NO ARREGLA, medido y no supuesto: el resume hace `setStep("confirm")` (`:252`/`:263`) cuando contesta, así que una elección hecha en la ventana ANTERIOR a la primera respuesta —la barra ahí es correcta, el overlay todavía no está— se pisa igual. `T-063-21` lo EJERCITA y assertea el pisón, que es la forma de que el día que se arregle el test lo diga. No se guardó el `setStep` a propósito: cortarlo dejaría una identidad ya verificada sin ninguna pantalla que la retome, y eso es peor que una navegación tardía.
+          ⛔ VA ÚLTIMA DENTRO DEL `<main>`, y no es orden estético: su `mt-auto` sólo la empuja al borde
+          inferior si es el último hijo de la columna flex. Debajo del bloque de error a propósito, y no
+          por descuido: un error habla de la pantalla en la que estás, no de la navegación que la
+          rodea. */}
+      {esDestino(step) && !resuming && !timedOut ? <BarraDestinos activo={step} onIr={irADestino} disabled={busy} /> : null}
     </main>
   );
 }
@@ -2090,7 +2090,7 @@ function RevisionDelSeguimiento({
               agrandar el control destructivo invita el toque accidental. Se BAJA el que consulta.
 
               🔴 ACÁ DECÍA "el seguimiento no tiene ningún `primary`, y eso es correcto". Vale para ESTA rama —esperar no es una acción— y era FALSO generalizado a la pantalla:
-              en la rama de FALLO el camino feliz murió y recuperar SÍ es `primary` (`showRefund`, `:1741`). La regla, en `ui.tsx`; el candado, en `jerarquia-relativa.test.tsx`.
+              en la rama de FALLO el camino feliz murió y recuperar SÍ es `primary` (`showRefund`, `:1795`; decía `:1741`, su línea en `ce4f31e`). La regla, en `ui.tsx`; el candado, en `jerarquia-relativa.test.tsx`.
 
               El `disabled` no cambia de sentido ni de causas, y el alto tampoco: `h-[52px]` está en
               la clase base del `<Button>` y ninguna variante lo toca. */}
@@ -2526,7 +2526,7 @@ export function LostEscrowRecovery({
       ) : null}
       {/* UNA por orden transmitida, y no la última: cada una es una tx distinta cuyo desenlace nadie
           conoce todavía. `RefundSentNotice` sigue BYTE-IDÉNTICO y lo comparte con `RefundAction`
-          (`RefundAction`, `flow.tsx:1952`), que hoy acumula igual: WKH-346 no pudo (AC-9), otra HU sí. */}
+          (`RefundAction`, `flow.tsx:2138`), que hoy acumula igual: WKH-346 no pudo (AC-9), otra HU sí. ⚠️ Decía `:1952`, y eso NO es regresión de WKH-063: en `ce4f31e` la línea 1952 ya era `onRenovada,` — la cita nació rota y el candado no la veía porque su predicado sólo miraba comentarios que ARRANCAN la línea, y ésta es la continuación de un bloque (CR/BLQ-BAJO-1). Ahora sí la ve. */}
       {misEnviados.map((e) => (
         <RefundSentNotice key={e.refundTx} confirmation={e.confirmation} refundTx={e.refundTx} />
       ))}
@@ -2556,7 +2556,7 @@ export function LostEscrowRecovery({
  *     los cerrables ahí volvería FALSA una frase que hoy es verdadera. Son dos preguntas distintas a la
  *     misma cadena.
  *  3. SÍ al lado de su vecina, y ya está `resolveSender`, que es lo que el PoP del endpoint exige: cero mecanismo nuevo. ⚠️ ACÁ DECÍA "SÍ en `send`, porque es donde aterriza toda recarga", y esa PREMISA se cayó con WKH-063: la recarga aterriza en la pantalla de entrada y las dos puertas viven en el destino "Recuperar" (`DestinoRecuperar`), a un toque de la barra.
- *     La CONCLUSIÓN no se cayó y es lo que esta lista defiende: las dos juntas, en la misma pantalla, y ninguna adentro del historial. Que desde los DOS aterrizajes (la entrada y `send`) siga habiendo camino hasta ahí es un invariante con test propio en `history.test.tsx`. Reemplazo línea-neutra, 2 por 2: agregar líneas acá corre las ~85 citas por número de este archivo.
+ *     La CONCLUSIÓN no se cayó y es lo que esta lista defiende: las dos juntas, en la misma pantalla, y ninguna adentro del historial. Que desde los DOS aterrizajes (la entrada y `send`) siga habiendo camino hasta ahí es un invariante con test propio en `history.test.tsx`. Reemplazo línea-neutra, 2 por 2: agregar líneas acá corre las ~muchas citas por número de este archivo (el número y su definición viven en UN solo lugar, `:44`).
  *
  * QUÉ SE DICE ANTES DE ABRIR NINGÚN DIÁLOGO, igual que su vecina y por la misma razón: acá también hay
  * DOS firmas por motivos distintos (la prueba de posesión, que es un texto, y después la transacción
@@ -3329,7 +3329,7 @@ export function HistoryView({
   const [chain, setChain] = useState<"not-asked" | "pending" | ReadonlyMap<string, EscrowChainState>>(
     "not-asked",
   );
-  // 🔴 LA CONSULTA VIVE ACÁ Y NO EN `openHistory` (`:396`), y el motivo es la persona, no la prolijidad:
+  // 🔴 LA CONSULTA VIVE ACÁ Y NO EN `openHistory` (`:412`; decía `:396`, su línea en `ce4f31e`), y el motivo es la persona, no la prolijidad:
   // `openHistory` corre dentro de `guard(...)`, que catchea y manda el error al banner ANTES de
   // `setStep("history")`. Un RPC caído ahí deja a la persona SIN PANTALLA. Acá deja la pantalla entera
   // y una frase por fila que dice que no pudimos preguntar. Candado: T-U6 en `history-onchain.test.tsx`.
@@ -3379,7 +3379,7 @@ export function HistoryView({
       ) : (
         // WKH-350 · AC-1/AC-4/AC-5: las 4 secciones. El componente vive al final del archivo y no acá,
         // por lo mismo que TxProof (:3303): un bloque nuevo en este punto desplaza las 3 citas ancladas
-        // de abajo (:3142, :3199, :3323). Medido hoy: 20 citas apuntan a este archivo, 4 a esta zona.
+        // de abajo (:3142, :3199, :3323). Las citas por número que este archivo recibe, y su definición, están en `:44`; a esta zona apuntan 4.
         // Números sin backticks: son una foto, no anclas. Reemplazo línea-neutra, 5 líneas por 5.
         <HistoryGroups items={items} onOpen={onOpen} answerFor={answerFor} />
       )}
@@ -3569,7 +3569,7 @@ export function recoveryMoreEscrowsHint(maxCandidates: number): string {
  *
  * ⚠️ Esta frase NO dice "no te quedan envíos": dice que no queda ninguno **entre los que miramos**, y
  * después dice qué NO significa. Es la misma voz de (`sinAbiertosCopy`, `flow-vm.ts:327`): el hecho
- * primero, el límite del hecho después. (Iba a `:336`, una línea de comentario, y sin la coma entre los dos backticks el candado ni la miraba: el arreglo son las dos mitades, el número Y el formato.)
+ * primero, el límite del hecho después. (Iba a `:352` de este archivo, que es una línea de comentario y no la declaración de nada, y sin la coma entre los dos backticks el candado ni la miraba: el arreglo son las dos mitades, el número Y el formato. ⛔ ESE NÚMERO SE ESCRIBÍA `:336`, que es la línea que ese mismo comentario ocupaba en `ce4f31e`: una nota histórica que cita un número se vuelve falsa sin que nadie la edite, y esta se corrigió en el fix-pack junto con las otras cinco desplazadas.)
  */
 export function recoveryWindowExhausted(maxCandidates: number): string {
   return `Ya no queda ninguno abierto entre los últimos ${maxCandidates} envíos guardados de esta billetera. Si tenés envíos más viejos que eso, esta búsqueda no llega a ellos.`;

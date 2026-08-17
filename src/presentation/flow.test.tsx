@@ -144,9 +144,21 @@ afterEach(() => cleanup());
  * Sincrónico porque este archivo mockea `framer-motion` (ver el `vi.mock` de arriba): sin ese doble,
  * el cambio de pantalla no completa en el mismo tick y estos dos clicks necesitarían `findBy`.
  */
+// WKH-063 fix-pack (AR/BLQ-BAJO-1): la ruta hasta "Mis envíos" depende de DÓNDE estás, y desde este
+// fix-pack hay dos puntos de partida posibles en el mismo test. Desde el FORMULARIO hay que salir primero
+// con "Volver al inicio" (los pasos del flujo no pintan la barra, AC-3); desde un DESTINO la barra ya
+// está y ese botón no existe. El `query*` es lo que hace al helper servir en los dos casos, y no es
+// tolerancia floja: la segunda mitad —tocar la pestaña— es obligatoria y usa `getBy*`, así que si la
+// barra no estuviera, el helper falla ruidosamente igual.
 function irAMisEnvios(): void {
-  fireEvent.click(screen.getByRole("button", { name: /Volver al inicio/ }));
+  const salir = screen.queryByRole("button", { name: /Volver al inicio/ });
+  if (salir !== null) fireEvent.click(salir);
   fireEvent.click(screen.getByRole("button", { name: /Mis envíos/ }));
+}
+
+/** Entrar (o volver a entrar) al formulario desde la pantalla de entrada. */
+function irAlFormulario(): void {
+  fireEvent.click(screen.getByRole("button", { name: /Empezar un envío/ }));
 }
 
 function fillSend(recipient = "Mamá", destination = TEST_CCI): void {
@@ -274,7 +286,7 @@ it("T4: '¿No sos vos?' aparece solo con una address conectada", async () => {
 // El CTA se llama "Borrar igual" y no "Empezar de nuevo": el overlay de resume tiene un botón con
 // ESE nombre que no borra nada, y dos botones con la misma etiqueta donde uno destruye datos y el
 // otro no es un accidente esperando. Lo que el test verifica no cambió.
-it("T5: 'Borrar igual' limpia address + PII del beneficiario y vuelve a 'send'", async () => {
+it("T5: 'Borrar igual' limpia address + PII del beneficiario y vuelve a la pantalla de entrada", async () => {
   render(<RemittanceFlow pasoInicial="send" container={buildTestContainer()} />);
 
   fillSend("Mamá", TEST_CCI);
@@ -285,7 +297,16 @@ it("T5: 'Borrar igual' limpia address + PII del beneficiario y vuelve a 'send'",
   fireEvent.click(await screen.findByText("¿No sos vos?"));
   fireEvent.click(await screen.findByText("Borrar igual"));
 
-  // (a) vuelve a "send" (input de monto visible de nuevo).
+  // (a) WKH-063 fix-pack (AR/BLQ-BAJO-1): vuelve a la PANTALLA DE ENTRADA, no al medio del formulario.
+  // Antes este assert buscaba el input de monto directo, porque `forgetAndDisconnect` hacía
+  // `setStep("send")` — y hasta WKH-063 `send` ERA el inicio. Hoy `send` es el paso 1 de 4 de un envío, y
+  // aterrizar ahí después de decir "no soy yo" contradice el gesto. Los dos asserts van juntos: que la
+  // pantalla de entrada esté Y que el formulario NO, porque "agregar la pantalla nueva" y "pintar las dos"
+  // darían lo mismo con uno solo.
+  expect(await screen.findByRole("heading", { name: "Tu plata no pasa por Chaski" })).toBeInTheDocument();
+  expect(screen.queryByLabelText("Monto en dólares")).toBeNull();
+  // Y los campos siguen limpios cuando se vuelve a entrar, que es lo que el resto del test mide.
+  irAlFormulario();
   const amountInput = (await screen.findByLabelText("Monto en dólares")) as HTMLInputElement;
   expect(amountInput).toBeInTheDocument();
 
@@ -2964,6 +2985,8 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     // `busy` sigue en `true` y el botón del paso `connect` se llama "" (spinner), no "Conectar wallet".
     expect(await screen.findByText(`${B.slice(0, 6)}…${B.slice(-4)}`)).toBeInTheDocument();
 
+    // WKH-063 fix-pack: el «Volver» del historial deja en la pantalla de entrada, no en el formulario.
+    irAlFormulario();
     fillSend();
     fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
     fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
@@ -2990,6 +3013,8 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     // `busy` sigue en `true` y el botón del paso `connect` se llama "" (spinner), no "Conectar wallet".
     expect(await screen.findByText(`${B.slice(0, 6)}…${B.slice(-4)}`)).toBeInTheDocument();
 
+    // WKH-063 fix-pack: el «Volver» del historial deja en la pantalla de entrada, no en el formulario.
+    irAlFormulario();
     fillSend();
     fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
     fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));

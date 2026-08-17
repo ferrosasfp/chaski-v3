@@ -31,24 +31,43 @@
 // mismo margen a cada lado, que es la diferencia cualitativa contra "todo el vacío abajo".
 //
 // Y EL CONTROL QUE HACE HONESTA LA MEJORA, porque "llené la pantalla" es fácil de conseguir mal: esta
-// pantalla NO quedó más alta que las otras. Altura del documento en el mismo build:
+// pantalla NO quedó más alta que las otras. Altura del documento en el mismo build.
+//
+// 🔴 ESTA TABLA TENÍA DOS NÚMEROS MAL, Y UNO DE LOS DOS INVERTÍA UNA CONCLUSIÓN EN OTRO ARCHIVO
+// (fix-pack, CR/BLQ-BAJO-2). Decía `send 834px` a 375x667 y `bienvenida 844px` a 390x844, y el
+// encabezado de `bienvenida-composicion.test.tsx` decía 856 y 853 para los mismos dos casos. Con 834,
+// la bienvenida (853) pasaba a ser la pantalla MÁS ALTA y el argumento de `bienvenida.tsx` ("donde esta
+// pantalla scrollea, el formulario ya scrolleaba") se caía. RE-MEDIDO UNA VEZ el 2026-08-17, build de
+// producción + Chrome headless, con la calibración verificada (el `innerWidth`/`innerHeight` del layout
+// se compara contra el viewport pedido y el instrumento aborta si no coinciden):
 //
 //     viewport    recuperar    bienvenida    send
-//     375x667        811px        853px       834px    ← recuperar es la MÁS BAJA de las tres
-//     390x844        844px        844px       844px
+//     375x667        811px        870px       856px    ← recuperar es la MÁS BAJA de las tres
+//     390x844        844px        870px       844px
 //     412x915        915px        915px       915px
 //
-// O sea: en el único teléfono de los tres donde la app scrollea, `recuperar` scrollea MENOS que la
-// pantalla de entrada y menos que el formulario. No introduce una clase de dispositivo donde la app
-// deje de caber.
+// Los tres números de `recuperar` se confirmaron; los dos equivocados eran los de acá. ⛔ Y no se eligió
+// el valor que hacía quedar bien ninguna frase: se midió, y resultó que el número que sostenía la
+// conclusión de `bienvenida.tsx` era el correcto — lo que se cayó fue el OTRO lado de esa comparación,
+// porque el mismo fix-pack alargó una frase de la bienvenida y su documento pasó de 853px a 870px. El
+// detalle está en el encabezado de `bienvenida-composicion.test.tsx`.
+//
+// QUÉ SCROLLEA Y DÓNDE, dicho sin generalizar de más: a 375x667 las tres pantallas scrollean (811/870/
+// 856 contra 667). A 390x844 scrollea SÓLO la bienvenida (870 contra 844); `recuperar` y `send` entran
+// justo. A 412x915 no scrollea ninguna. O sea que `recuperar` no introduce una clase de dispositivo
+// donde la app deje de caber, y en los dos teléfonos donde algo scrollea es la que scrollea menos.
 //
 // ── ⚠️ EL TERCER DESTINO, `history`, SIGUE SIN MEDIR — y esto es lo que sí se averiguó ─────────────
 // El primer pase lo dejó abierto diciendo que hace falta una billetera conectada. Sigue siendo cierto y
 // este pase tampoco lo midió: llegar a `history` pasa por `resolveSender` → `connectWallet`, y en un
 // Chrome headless sin extensión el toque a la pestaña no hace nada. Medido, no supuesto: el instrumento
 // que llega a `recuperar` tocando su pestaña, apuntado a "Mis envíos", devolvió números IDÉNTICOS a los
-// de la bienvenida en los tres viewports (`853/844/915` de documento), o sea que nunca salió de la
+// que la bienvenida daba EN ESA CORRIDA (`853/844/915` de documento), o sea que nunca salió de la
 // pantalla de entrada. Un número tomado así habría sido la bienvenida disfrazada de historial.
+// ⚠️ Esos tres números son de la corrida de entonces y hoy la bienvenida mide `870/870/915` (el fix-pack
+// le alargó una frase). Lo que probaba el intento no era el valor sino la IDENTIDAD con la bienvenida, y
+// eso se midió cuando se midió: no se re-corre para "actualizarlos" porque no son una medición de
+// `history`, son la prueba de que el instrumento naíf no llegaba.
 //
 // LO QUE SÍ SE PUEDE AFIRMAR SIN NAVEGADOR, y es información nueva para el próximo pase: el defecto
 // está ESTRUCTURALMENTE ABIERTO ahí. La raíz de `HistoryView` es `<div className="space-y-holgado">`
@@ -75,9 +94,11 @@
 //   · Y SÍ congela la clase que NO hay que usar (T-063-16b), que es la que se midió inerte en este
 //     mismo layout y en el código se ve exactamente igual que la que sí funciona.
 //
-// ── LOS DIEZ MUTANTES: APLICADOS Y CORRIDOS, no razonados ───────────────────────────────────────────
+// ── LOS ONCE MUTANTES: APLICADOS Y CORRIDOS, no razonados ───────────────────────────────────────────
 // Cada uno se editó en el árbol, se corrió este archivo (11 tests) y se anotó la salida. No es una
-// lista de lo que "debería" fallar: son los conteos de la corrida.
+// lista de lo que "debería" fallar: son los conteos de la corrida. El total de este archivo NO cambió en
+// el fix-pack (sigue en 11 tests), así que los diez conteos viejos siguen describiendo este árbol; el 3b
+// se agregó y se corrió acá.
 //
 //   MUTANTE APLICADO                                                          RESULTADO MEDIDO
 //   1. la raíz sin `justify-center` (vuelve a quedar anclada arriba)          1 failed | 10 passed (11)
@@ -90,32 +111,44 @@
 //   8. un `<Button>` (o sea `primary`) "Ver mis envíos" agregado acá         1 failed | 10 passed (11)
 //   9. el `motion.div` de `flow.tsx` de vuelta a `flex-1` a secas            1 failed | 10 passed (11)
 //  10. el renglón de la primera puerta sin renderizar (`flow.tsx`)           1 failed | 10 passed (11)
+//   3b. los renglones intercambiados EN EL SITIO DE RENDER (`flow.tsx:2480`/
+//       `:2630`), dejando `QUE_RECUPERA` intacto — el que sí AÍSLA (fix-pack)  1 failed | 10 passed (11)
 //
-// ⚠️ EL 3 ES EL QUE JUSTIFICA EL ARCHIVO: intercambiar los dos renglones deja las dos frases existiendo
-// letra por letra, así que un test que sólo verificara presencia las aprueba a las dos. Uno de los dos
-// `it` que se ponen rojos es el que ABRE cada puerta y comprueba que adentro se hable de la moneda que
-// el renglón anunció (verificado en la corrida, no deducido del conteo).
+// ⚠️ EL 3 Y EL 3b SON LA MISMA IDEA CON DOS ALCANCES, y confundirlos fue un hallazgo del CR (MNR-1).
+// Intercambiar los renglones deja las dos frases existiendo letra por letra, así que un test de presencia
+// las aprueba a las dos. Pero el 3 muta las CONSTANTES, así que mata DOS `it` (el de los literales y el
+// que abre la puerta) y no aísla a ninguno; el 3b muta sólo el SITIO DE RENDER, deja los literales
+// coincidiendo, y mata UNO: el que ABRE cada puerta y comprueba que adentro se hable de la moneda que el
+// renglón anunció. El 3b es el que justifica el archivo, y el par de conteos es lo que lo demuestra.
 // EL 5 es el único que toca lógica y no texto: pone en rojo la nota del pie sobre la cuenta conectada,
 // que es una afirmación sobre un MECANISMO y no sobre una pantalla.
 // EL 8 es el que prueba que el último `it` no pasa por vacuidad, y también pone rojo la fila "recuperar"
 // de `jerarquia-relativa.test.tsx` (`2 failed | 25 passed (27)` corriendo los dos archivos juntos): esa
 // pantalla no puede ganar una acción resolutiva sin que alguien vaya a cambiar la fila y diga por qué.
 //
-// Y LOS MUTANTES 1 Y 3 SE CORRIERON ADEMÁS CONTRA LA SUITE COMPLETA (139 archivos), contra un baseline
-// de `139 passed (139)` / `2478 passed (2478)`:
-//     M1 ⇒ `1 failed | 138 passed (139)` · `1 failed | 2477 passed (2478)`   ← ESTE archivo y ninguno más
-//     M3 ⇒ `1 failed | 138 passed (139)` · `2 failed | 2476 passed (2478)`   ← ídem
+// Y LOS MUTANTES 1 Y 3 SE CORRIERON ADEMÁS CONTRA LA SUITE COMPLETA. Re-corridos en el fix-pack, contra
+// el baseline nuevo de `139 passed (139)` / `2492 passed (2492)` (el viejo decía 2478 y el fix-pack sumó
+// 14 tests, así que los tres números de cada fila habían quedado describiendo otro árbol):
+//     M1 ⇒ `1 failed | 138 passed (139)` · `1 failed | 2491 passed (2492)`   ← ESTE archivo y ninguno más
+//     M3 ⇒ `1 failed | 138 passed (139)` · `2 failed | 2490 passed (2492)`   ← ídem
 // O sea que fuera de acá nadie los ve, y eso es el dato: antes de este pase la composición vertical de
-// este destino no la vigilaba nada.
+// este destino no la vigilaba nada. Y el dato SIGUE siendo el mismo después de 14 tests nuevos, que es
+// lo que la re-corrida compró: los `it` del fix-pack tampoco los ven.
 //
 // ⚠️ ANOTADO PORQUE PASÓ Y NO PORQUE SE ENTIENDA: en la PRIMERA corrida de M3 contra la suite completa
 // falló además un `it` de otro archivo — `agent-plan-card.test.tsx > T-7.1 … > en 'gateway + agente
 // ofrecido' el DOM no dice 'Hoy se llama directo a' ni 'Hoy no corre ese'`. NO se reprodujo: ese archivo
 // da `32 passed (32)` aislado, la suite completa dio `139 passed` dos veces con el árbol restaurado, y
 // la SEGUNDA corrida del MISMO mutante dio los números de arriba sin ese fallo. M3 cambia dos literales
-// de `recuperar.tsx`, que ese archivo no importa, así que el mutante no puede ser la causa. Queda
-// declarado como un flake candidato de OTRO archivo, SIN diagnosticar: "no se reprodujo" no es "está
-// bien", y esta nota existe para que el próximo que lo vea no lo atribuya a esta HU.
+// de `recuperar.tsx`, que ese archivo no importa, así que el mutante no puede ser la causa.
+// 🔴 Y ACÁ FALTABA EL DATO QUE MÁS LE SIRVE A QUIEN LO HEREDE (fix-pack, CR/MNR-10): decía "un flake
+// candidato de OTRO archivo", y eso esconde que **esta rama SÍ tocó ese archivo, y funcionalmente**.
+// Medido con `git diff ce4f31e -- src/presentation/agent-plan-card.test.tsx`: 2 inserciones / 2
+// borrados, y una de las dos es `render(<RemittanceFlow pasoInicial="send" …>)` donde antes no había
+// prop (la otra es un remapeo de cita). O sea que el `it` que falló corre sobre un árbol que la HU
+// cambió: no es "otro archivo" en el sentido de "ajeno". Sigue sin diagnosticar y eso está bien
+// declararlo, pero la relación con la rama es DIRECTA y no se puede omitir. "No se reprodujo" no es
+// "está bien", y "otro archivo" no es "no lo tocamos".
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -251,12 +284,21 @@ describe("T-063-13 (2º pase): cada puerta dice QUÉ MONEDA busca, y se comprueb
   });
 
   it("🔴 abrir cada puerta muestra la moneda que su renglón anunció (se abre, no se lee)", () => {
-    // MUTANTE 3 (aplicado): intercambiar `envioPerdido` y `depositoDeRed` ⇒ rojo, y es el mutante que
-    // justifica el archivo entero. Las dos frases siguen existiendo letra por letra, así que el `it`
-    // de arriba las aprobaría igual (sólo cambiaría a qué puerta se le pegó cada una): lo único que lo
-    // caza es ABRIR la puerta y mirar de qué moneda habla adentro.
+    // 🔴 ACÁ HABÍA UNA DEFENSA CON EL MUTANTE EQUIVOCADO (fix-pack, CR/MNR-1), y el test es bueno: lo
+    // que estaba mal era la evidencia. Decía que del mutante 3 (intercambiar `envioPerdido` y
+    // `depositoDeRed`) "lo único que lo caza es ABRIR la puerta", y es falso: ese mutante cambia las
+    // CONSTANTES, así que el `it` de los literales de arriba también se pone rojo. Medido: **2 failed |
+    // 9 passed (11)**, y los dos que caen son ése y éste. Un mutante que mata dos no aísla nada.
     //
-    // El intercambio se caza por los DOS lados, y por eso hay `dice` y `noDice`:
+    // EL MUTANTE QUE SÍ AÍSLA a este `it`, y es el que va acá: intercambiar los renglones EN EL SITIO DE
+    // RENDER (`QUE_RECUPERA.envioPerdido` en `flow.tsx:2480` por `.depositoDeRed`, y al revés en
+    // `:2630`), dejando `QUE_RECUPERA` intacto. Las dos frases existen letra por letra Y los literales
+    // coinciden, así que el `it` de arriba pasa feliz; sólo cambió a qué puerta se le pegó cada una.
+    // Medido: **1 failed | 10 passed (11)**, y el único que cae es éste. Eso es lo que hace falta para
+    // afirmar "lo único que lo caza es ABRIR la puerta": el par de conteos, no uno solo.
+    //
+    // El intercambio se caza por los DOS lados, y por eso hay `dice` y `noDice`.
+    //
     //   · el renglón "Busca SOL" pegado a la puerta del envío perdido ⇒ su panel no tiene ninguna
     //     cifra en SOL ⇒ rojo por `dice`;
     //   · el renglón "Busca USDC" pegado a la puerta del alquiler ⇒ su panel SÍ tiene la cifra en SOL,
@@ -448,11 +490,17 @@ describe("T-063-15 (2º pase): el consejo de «Mis envíos» se puede SEGUIR des
  * El ancla son dos hechos ESTRUCTURALES de la pantalla, no dos frases: el titular y una de las dos
  * puertas. La raíz es el ancestro más cercano de la puerta que TAMBIÉN contiene el titular.
  *
- * ⚠️ Y NO SE ANCLA EN LA NOTA DE LA RED, que fue la primera versión: con ese ancla, borrar la nota
- * ponía en rojo los CUATRO `it` de este bloque en vez de uno, o sea que tres de ellos fallaban por un
+ * ⚠️ Y NO SE ANCLA EN LA NOTA DE LA RED, que fue la primera versión: con ese ancla, borrar la nota ponía
+ * en rojo TODOS los `it` del bloque de composición en vez de uno, o sea que los demás fallaban por un
  * motivo que no es el suyo. Medido corriendo el mutante 7 con las dos versiones: `4 failed` con la nota
  * de ancla, `1 failed` con ésta. Un ancla tiene que ser lo que no puede desaparecer sin que la pantalla
  * deje de ser esta pantalla.
+ * 🔴 EL "CUATRO" DE ESA MEDICIÓN ERA UNA FOTO Y ENVEJECIÓ (fix-pack, CR/MNR-3): acá decía "los CUATRO
+ * `it` de este bloque" y hoy el bloque tiene CINCO. El `4 failed` se queda como lo que es —el conteo de
+ * la corrida de entonces, con el ancla vieja y cuatro `it`— y por eso arriba dice "todos" y no un número:
+ * un conteo de mutación es relativo al tamaño del bloque, así que agregar un `it` lo invalida sin que
+ * nada se ponga rojo. Lo que SÍ se re-midió sobre este árbol es el número que defiende el ancla nueva:
+ * borrar la nota hoy da **`1 failed | 10 passed (11)`**, y el único que cae es el `it` de la nota.
  */
 function bloque() {
   const puerta = screen.getByRole("button", { name: /Recuperar un envío perdido/ });
@@ -523,7 +571,11 @@ describe("T-063-16 (2º pase): el bloque pide crecer y centrarse, y su padre pue
   });
 
   it("la nota de la red dice «Solana devnet», y el literal va escrito ACÁ y no importado del resolver", () => {
-    // MUTANTE 7 (aplicado): borrar la nota ⇒ rojo (y también rompe `bloque()`, que la usa de ancla).
+    // MUTANTE 7 (aplicado): borrar la nota ⇒ `1 failed | 10 passed (11)`, y el único que cae es éste.
+    // 🔴 ACÁ DECÍA "(y también rompe `bloque()`, que la usa de ancla)", Y ES FALSO desde que el ancla se
+    // volvió estructural — es residuo del ancla vieja y contradice de frente al docblock de `bloque()`,
+    // 70 líneas más arriba, que explica que se cambió justamente para que esto NO pase. Medido: los tres
+    // `it` que usan `bloque()` pasan con la nota borrada (CR/MNR-2).
     //
     // POR QUÉ EL LITERAL A MANO: si esto asserteara `resolveSolanaNetworkConfig().cluster` sería un
     // guard que se compara consigo mismo y pasaría con cualquier red, incluida la equivocada. Mismo
@@ -531,8 +583,12 @@ describe("T-063-16 (2º pase): el bloque pide crecer y centrarse, y su padre pue
     //
     // ⛔ Y NO ES DECORACIÓN, y en ESTA pantalla menos que en la otra: acá la persona puede querer ir a
     // mirar sus cuentas al explorador por su cuenta, y el explorador pide el cluster en la URL
-    // (`resolveSolanaExplorerTxUrl`, `../infrastructure/chain.ts:224`). Sale del MISMO resolver que
-    // firma, así que la pantalla no puede nombrar una red distinta de la real.
+    // (`resolveSolanaExplorerTxUrl`, `../infrastructure/chain.ts:224`). Sale del MISMO resolver que la
+    // bienvenida, así que las dos pantallas dicen siempre lo mismo.
+    // ⚠️ Lo que este `it` NO prueba, y decía que sí (fix-pack, AR/MNR-2): que la pantalla "no pueda"
+    // nombrar una red distinta de la real. Sí puede: el nombre es un literal del código y el endpoint
+    // que firma sale de `NEXT_PUBLIC_SOLANA_RPC_URL` sin validación cruzada. Lo que esto clava es que el
+    // literal de la pantalla sea `devnet` y no otro, que es lo único falsable desde jsdom.
     pintarRecuperar(mundo().container);
     expect(screen.getByText(/Las cuentas de tus envíos viven en Solana devnet/)).toBeInTheDocument();
   });

@@ -24,16 +24,63 @@
 //     VACÍO (CTA → barra)                 70px   ← 8%   (era 381px / 42%)
 //     VACÍO real (fin del contenido → barra) 42px ← 5%
 //
-// Y el control que hace honesta a esa mejora, porque "llené la pantalla" es fácil de conseguir mal:
-// la bienvenida NO quedó más alta que la pantalla a la que lleva. Altura del documento medida en el
-// mismo build, en tres teléfonos:
+// ⛔ LOS DOS NÚMEROS DE ARRIBA SALEN DEL INSTRUMENTO v2, QUE ES GANABLE SIN ARREGLAR NADA, y hasta el
+// fix-pack esto no estaba dicho acá (AR/MNR-1 y CR/MNR-11, el mismo hallazgo desde dos revisiones). "El
+// tramo entre la última tinta y la barra" se puede llevar a 0 clavando una nota al pie con `mt-auto` y
+// dejando el agujero en el medio — lo declara el encabezado de `recuperar-composicion.test.tsx`, que es
+// donde se escribió el instrumento v3 para arreglarlo. Y el v3 NUNCA se había corrido sobre esta
+// pantalla, así que el "8%" de acá y el "9%" de allá no eran la misma medida y no se podían comparar.
 //
-//     375x667   bienvenida 853px   ·   send 856px
-//     390x844   bienvenida 853px   ·   send 844px
-//     412x915   bienvenida 915px   ·   send 915px
+// ── EL v3 SOBRE LAS TRES PANTALLAS, UNA SOLA CORRIDA, UNA SOLA DEFINICIÓN ────────────────────────────
+// Definición, y es la que hace comparables las nueve celdas: se funden todas las bandas de tinta de
+// DENTRO DEL `<main>` (nodos de texto por `Range`, elementos hoja, y todo lo que declare borde o fondo)
+// y se reporta el SALTO MÁXIMO entre dos bandas consecutivas, en cualquier parte de la columna. La
+// barra es una banda como cualquier otra, así que el tramo hasta ella entra en la cuenta. Medido el
+// 2026-08-17, build de producción + Chrome headless, calibración verificada (el instrumento compara el
+// `innerWidth`/`innerHeight` del layout contra el viewport pedido y aborta si no coinciden) y las nueve
+// celdas idénticas en dos corridas:
 //
-// O sea: donde la bienvenida scrollea, el formulario ya scrolleaba (y por más). La pantalla nueva no
-// introduce una clase de dispositivo donde la app deje de caber.
+//     viewport    bienvenida       send            recuperar
+//     375x667      24px ( 4%)      30px ( 4%)       24px ( 4%)
+//     390x844      24px ( 3%)      30px ( 4%)       52px ( 6%)
+//     412x915      58px ( 6%)      30px ( 3%)       95px (10%)
+//
+// LO QUE ESTA TABLA DICE, y es distinto de lo que decían los dos números viejos: el peor hueco de la
+// bienvenida está ARRIBA (entre el pie del header y la primera tarjeta, 62→120 a 412x915), no abajo. Y
+// medida con el MISMO instrumento, la bienvenida (58px / 6%) está MEJOR que `recuperar` (95px / 10%),
+// que es la comparación que antes no se podía hacer.
+//
+// ⚠️ ESTOS NÚMEROS NO SON LOS "DESPUÉS" DE LOS PARES ANTES/DESPUÉS de este archivo ni de
+// `recuperar-composicion.test.tsx`, y no se mezclan: aquel v3 medía dentro del bloque de la pantalla y
+// NO contaba el hueco entre el header de la app y el bloque, así que para `recuperar` a 412x915 daba
+// 79px donde este da 95px. Los dos son ciertos con su definición al lado; el de acá es el más exigente
+// y es el único que se corrió sobre las tres pantallas. Los "antes" (381px / 469px) se quedan con la
+// etiqueta del instrumento que los midió, porque reproducirlos exigiría revertir el código.
+//
+// ⚠️ Y LO QUE NINGUNA DE LAS DOS VERSIONES DEL v3 PUEDE VER: un hueco DENTRO de una tarjeta. El fondo
+// de la `<Card>` cuenta como tinta, así que una tarjeta con 200px de nada adentro se mide como una
+// banda llena. Es el mismo agujero que tenía la v1 (medir la caja en vez de la tinta), acotado a la
+// tarjeta en vez de a la pantalla, y no está cerrado.
+//
+// 🔴 Y ACÁ SE CAYÓ UNA CONCLUSIÓN, MEDIDA, POR CULPA DE OTRO ARREGLO DE ESTE MISMO FIX-PACK. La tabla de
+// alturas de documento decía `bienvenida 853px · send 856px` a 375x667, y con eso se afirmaba *"donde la
+// bienvenida scrollea, el formulario ya scrolleaba (y por más)"*. Condicionar la frase del `<Aviso>`
+// (AR/BLQ-BAJO-2) le sumó un renglón a la tarjeta, así que el documento de la bienvenida pasó a **870px**
+// y la afirmación se INVIRTIÓ. Re-medido al cierre del fix-pack, mismo build, misma calibración:
+//
+//     viewport    bienvenida    send      recuperar    ¿scrollea a ese alto?
+//     375x667        870px      856px       811px      las TRES (viewport 667)
+//     390x844        870px      844px       844px      sólo la bienvenida (870 > 844)
+//     412x915        915px      915px       915px      ninguna
+//
+// LO QUE SE PUEDE AFIRMAR, y es menos de lo que se afirmaba: a 375x667 la bienvenida es la MÁS ALTA de
+// las tres, no la más baja. Lo que sostiene `justify-center` no es esa comparación sino el mecanismo, y
+// eso sí está medido: a 375x667 la tinta va de 24px a 830px dentro de un documento de 870px, o sea
+// ENTERA adentro — `min-height:auto` no puede recortar, y si recortara el contenido arrancaría por
+// encima de 0. El detalle está en el docblock de `bienvenida.tsx`.
+// ⚠️ El `send 856px` es correcto y se re-midió (era el número que un CR puso en duda: el árbol tenía 856
+// acá y 834 en los dos archivos de `recuperar`, y el par equivocado era el de allá). Lo que cambió no fue
+// ese lado de la comparación sino el otro, y por eso tener el 856 bien ya no alcanza para la frase vieja.
 //
 // ⚠️ QUÉ PUEDE Y QUÉ NO PUEDE MEDIR ESTE ARCHIVO, declarado antes de los asserts. Acá corre jsdom, que
 // NO hace layout, y tampoco corre Tailwind:
@@ -45,18 +92,23 @@
 //   · Y SÍ congela un caso raro que vale la pena: la clase que NO hay que usar (ver T-063-11b), porque
 //     es la que se midió inerte en este layout y se ve exactamente igual en el código.
 //
-// ── LOS SIETE MUTANTES: APLICADOS Y CORRIDOS, no razonados ──────────────────────────────────────────
-// Cada uno se editó en el árbol, se corrió este archivo (11 tests) y se anotó la salida. No es una
-// lista de lo que "debería" fallar: son los conteos de la corrida.
+// ── LOS OCHO MUTANTES: APLICADOS Y CORRIDOS, no razonados ───────────────────────────────────────────
+// Cada uno se editó en el árbol, se corrió este archivo y se anotó la salida. No es una lista de lo que
+// "debería" fallar: son los conteos de la corrida.
+//
+// ⚠️ LOS OCHO SE RE-CORRIERON EN EL FIX-PACK, porque el archivo pasó de **11 a 13 tests** (los dos de
+// `T-063-24`) y un total viejo (`… (11)`) ya no describe este árbol. Un conteo de mutación es relativo
+// al tamaño de la suite y agregar tests lo invalida sin que nada se ponga rojo.
 //
 //   MUTANTE APLICADO                                                        RESULTADO MEDIDO
-//   1. la raíz sin `justify-center` (vuelve a quedar anclada arriba)         1 failed | 10 passed (11)
-//   2. la raíz con `min-h-full` en vez de `flex-1` (la clase INERTE)         2 failed |  9 passed (11)
-//   3. el `motion.div` de vuelta a `flex-1` a secas (sin `flex flex-col`)    1 failed | 10 passed (11)
-//   4. `PASOS` con dos renglones en vez de tres                             3 failed |  8 passed (11)
-//   5. el renglón 2 sin la mitad de la identidad                            1 failed | 10 passed (11)
-//   6. `onContinue` de `review` saltando `verify` (`flow.tsx:384`)           1 failed | 10 passed (11)
-//   7. la nota de la red borrada                                            2 failed |  9 passed (11)
+//   1. la raíz sin `justify-center` (vuelve a quedar anclada arriba)         1 failed | 12 passed (13)
+//   2. la raíz con `min-h-full` en vez de `flex-1` (la clase INERTE)         2 failed | 11 passed (13)
+//   3. el `motion.div` de vuelta a `flex-1` a secas (sin `flex flex-col`)    1 failed | 12 passed (13)
+//   4. `PASOS` con dos renglones en vez de tres                             3 failed | 10 passed (13)
+//   5. el renglón 2 sin la mitad de la identidad                            1 failed | 12 passed (13)
+//   6. `onContinue` de `review` saltando `verify` (`flow.tsx:384`)           1 failed | 12 passed (13)
+//   7. la nota de la red borrada                                            2 failed | 11 passed (13)
+//   8. la fila `TxProof` del depósito borrada del comprobante (fix-pack)     1 failed | 12 passed (13)
 //
 // ⚠️ EL 2 MATA DOS Y ES EL QUE MÁS ENSEÑA: rompe el `it` que prohíbe `min-h-full` y también el que
 // exige `flex-1`, o sea que la clase inerte no puede entrar disfrazada de "otra forma de escribirlo".
@@ -69,9 +121,12 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach } from "vitest";
 import React from "react";
-import { RemittanceFlow } from "./flow";
+import { Receipt, RemittanceFlow } from "./flow";
 import { buildTestContainer } from "../test-support/test-container";
-import { TEST_CCI } from "../test-support/fakes";
+import { Money } from "../domain/money";
+import { Remittance, type RemittanceState, toPersistedIdentity } from "../domain/remittance";
+import { FAKE_SOLANA_BENEFICIARY, TEST_CCI, T0, beneficiary } from "../test-support/fakes";
+import { KYC_PROVENANCE_LIVE } from "../infrastructure/didit/decision";
 
 // El MISMO doble que `barra-destinos.test.tsx`: sin él el `exit` de AnimatePresence no completa en el
 // mismo tick y el cambio de pantalla no se puede seguir con `get*`. Y acá cumple una segunda función
@@ -130,20 +185,42 @@ const pintarBienvenida = () => render(<RemittanceFlow container={buildTestContai
 // EXISTIR EN EL FLUJO REAL para que la frase sea cierta. La lección está en el auto-blindaje de esta
 // misma HU: un test que verifica que el copy existe no se rompe cuando el copy se vuelve falso; uno
 // que EJECUTA lo que el copy anuncia, sí.
-const PASOS_ESPERADOS = [
+//
+// 🔴 LA TABLA PROMETÍA MÁS DE LO QUE SU TIPO OBLIGABA (fix-pack, CR/MNR-7). DOS de las tres `sonda` eran
+// CUERPOS VACÍOS —un comentario diciendo "la sonda es el recorrido de T-063-10b"— y el trabajo real
+// estaba escrito inline en ese `it`. Con eso no había verde vacuo HOY, pero una CUARTA fila con
+// `sonda: () => {}` pasaba los cuatro `it` del bloque sin ejercitar nada, o sea que la próxima frase de
+// producto podía entrar con una sonda de mentira. Se cerró por los dos lados:
+//   · los asserts inline se MUDARON a la sonda de su renglón, así que ninguna queda vacía. Para eso la
+//     sonda recibe un `seguir()`: el renglón 2 abarca dos pasos del flujo (`verify` y `confirm`) y
+//     necesita avanzar en el medio. El `seguir` lo provee el recorrido, que sigue siendo el dueño de la
+//     navegación;
+//   · y hay un `it` de ANTIVACUIDAD que lee el cuerpo de cada sonda y exige que llame a `expect`. Una
+//     fila nueva con `sonda: () => {}` se pone roja sola.
+type Sondeo = { seguir: () => Promise<void> };
+const PASOS_ESPERADOS: readonly { frase: string; sonda: (s: Sondeo) => Promise<void> }[] = [
   {
     frase: "Ponés cuánto querés enviar y el CCI de la cuenta en Perú.",
     // El paso `send` pide exactamente esos dos datos, y los dos se buscan por su etiqueta real.
-    sonda: () => {
+    sonda: async () => {
       expect(screen.getByLabelText("Monto en dólares")).toBeInTheDocument();
       expect(screen.getByPlaceholderText("002 193 004455667788 99")).toBeInTheDocument();
     },
   },
   {
     frase: "Verificás tu identidad una sola vez y firmás el envío desde tu billetera.",
-    // Las dos mitades son dos pasos distintos del flujo (`verify` y `confirm`), y las dos se caminan.
-    sonda: () => {
-      /* la sonda de este renglón es el recorrido de T-063-10b, que llega hasta los dos botones */
+    // Las dos mitades son dos pasos distintos del flujo (`verify` y `confirm`), y las dos se caminan:
+    // primero la identidad, y DESPUÉS de avanzar, la firma. El orden es parte de lo que el renglón dice.
+    sonda: async ({ seguir }) => {
+      expect(
+        await screen.findByRole("button", { name: /Verificar mi identidad/ }),
+        "el renglón 2 anuncia una verificación de identidad: el flujo tiene que tenerla",
+      ).toBeInTheDocument();
+      await seguir();
+      expect(
+        await screen.findByRole("button", { name: /Confirmar y enviar/ }),
+        "y el renglón 2 también anuncia una firma",
+      ).toBeInTheDocument();
     },
   },
   {
@@ -154,11 +231,20 @@ const PASOS_ESPERADOS = [
     // sonda. Es el caso puro de por qué la tabla lleva sonda: escrito a ojo, ese renglón se iba a
     // producción con una afirmación condicional presentada como incondicional.
     frase: "Seguís el envío desde la app, con su estado a la vista.",
-    sonda: () => {
-      /* ídem: la sonda es el último tramo del recorrido de T-063-10b */
+    // ⚠️ LA SONDA ES EL TRAMO, NO EL DESENLACE, y es deliberado: con los dobles por defecto el pago
+    // falla (`FakePayoutGateway`), así que el TEXTO de estado que aparece depende de la rama y asertar
+    // uno lo ataría a este doble. Lo que el renglón 3 afirma, y lo que vale en todas las ramas, es que
+    // hay un cuarto tramo después de la firma. El stepper lo anuncia con texto real (un `sr-only`, no
+    // un `aria-label` sobre un `<div>` genérico, que es el arreglo que ya vive en `Stepper`).
+    sonda: async ({ seguir }) => {
+      await seguir();
+      expect(
+        await screen.findByText("Paso 4 de 4"),
+        "el renglón 3 anuncia un seguimiento: después de firmar el flujo tiene que seguir",
+      ).toBeInTheDocument();
     },
   },
-] as const;
+];
 
 describe("T-063-10 (2º pase): la pantalla dice QUÉ VA A PASAR, y lo que dice se puede correr", () => {
   it("los tres renglones están, en orden, y son tres (no dos ni cuatro)", () => {
@@ -194,11 +280,20 @@ describe("T-063-10 (2º pase): la pantalla dice QUÉ VA A PASAR, y lo que dice s
     // `setStep("confirm")` ⇒ el flujo salta la identidad, el renglón 2 de la bienvenida pasa a ser
     // mentira, y ESTE test se pone rojo. Es el mutante que justifica el archivo: los otros dos de
     // arriba miran el texto, y un texto no puede medirse a sí mismo.
+    // ⚠️ LA NAVEGACIÓN ES DE ESTE `it` Y LOS ASSERTS SON DE CADA SONDA (fix-pack, CR/MNR-7): antes los
+    // asserts de los renglones 2 y 3 estaban acá inline y sus sondas eran cuerpos vacíos.
+    const tocar = (nombre: RegExp) => async () => {
+      fireEvent.click(await screen.findByRole("button", { name: nombre }));
+    };
     pintarBienvenida();
     fireEvent.click(screen.getByRole("button", { name: /Empezar un envío/ }));
 
     // Renglón 1 · el monto y el CCI.
-    PASOS_ESPERADOS[0].sonda();
+    await (PASOS_ESPERADOS[0] as { sonda: (s: Sondeo) => Promise<void> }).sonda({
+      seguir: async () => {
+        throw new Error("el renglón 1 no avanza: sus dos datos están en la misma pantalla");
+      },
+    });
     fireEvent.change(screen.getByPlaceholderText("Nombre de tu familiar"), {
       target: { value: "Mamá" },
     });
@@ -211,26 +306,29 @@ describe("T-063-10 (2º pase): la pantalla dice QUÉ VA A PASAR, y lo que dice s
     fireEvent.click(await screen.findByRole("button", { name: /Continuar/ }));
 
     // Renglón 2 · la identidad primero y la firma después, en ese orden y con ese nombre.
-    expect(
-      await screen.findByRole("button", { name: /Verificar mi identidad/ }),
-      "el renglón 2 anuncia una verificación de identidad: el flujo tiene que tenerla",
-    ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Verificar mi identidad/ }));
-    const firmar = await screen.findByRole("button", { name: /Confirmar y enviar/ });
-    expect(firmar, "y el renglón 2 también anuncia una firma").toBeInTheDocument();
+    await (PASOS_ESPERADOS[1] as { sonda: (s: Sondeo) => Promise<void> }).sonda({
+      seguir: tocar(/Verificar mi identidad/),
+    });
 
     // Renglón 3 · después de firmar el flujo NO termina: hay un tramo de seguimiento.
+    await (PASOS_ESPERADOS[2] as { sonda: (s: Sondeo) => Promise<void> }).sonda({
+      seguir: tocar(/Confirmar y enviar/),
+    });
+  });
+
+  it("🔴 ninguna fila de la tabla puede traer una sonda VACÍA (antivacuidad del propio candado)", () => {
+    // MUTANTE (aplicado): agregar una cuarta fila con `frase: "…" , sonda: async () => {}` ⇒ rojo acá,
+    // nombrando la frase. Sin este `it`, esa fila pasaba los cuatro `it` de arriba sin ejercitar nada:
+    // el `toEqual` de los renglones se pone rojo por el TEXTO (hay que agregar la frase a `PASOS`
+    // también), y con las dos mitades hechas la sonda vacía entraba sin que nada la mirara.
     //
-    // ⚠️ LA SONDA ES EL TRAMO, NO EL DESENLACE, y es deliberado: con los dobles por defecto el pago
-    // falla (`FakePayoutGateway`), así que el TEXTO de estado que aparece depende de la rama y asertar
-    // uno lo ataría a este doble. Lo que el renglón 3 afirma, y lo que vale en todas las ramas, es que
-    // hay un cuarto tramo después de la firma. El stepper lo anuncia con texto real (un `sr-only`, no
-    // un `aria-label` sobre un `<div>` genérico, que es el arreglo que ya vive en `Stepper`).
-    fireEvent.click(firmar);
-    expect(
-      await screen.findByText("Paso 4 de 4"),
-      "el renglón 3 anuncia un seguimiento: después de firmar el flujo tiene que seguir",
-    ).toBeInTheDocument();
+    // Se lee el CUERPO de la función, que es lo único que distingue una sonda de un placeholder. No se
+    // exige un mínimo de líneas (sería un número arbitrario): se exige que llame a `expect`, que es lo
+    // que convierte una sonda en una medición.
+    expect(PASOS_ESPERADOS.length, "ANTIVACUIDAD del antivacuidad: la tabla no puede estar vacía").toBe(3);
+    for (const { frase, sonda } of PASOS_ESPERADOS) {
+      expect(sonda.toString(), `la sonda de «${frase}» no assertea nada`).toContain("expect(");
+    }
   });
 
   it("ningún renglón promete una entrega ni un plazo", () => {
@@ -317,7 +415,13 @@ describe("T-063-11 (2º pase): el bloque pide crecer y centrarse, y su padre pue
 
 // ══ LA RED, DICHA CON SU NOMBRE ══════════════════════════════════════════════════════════════════
 
-describe("T-063-12 (2º pase): la pantalla nombra la red, y es la que va a firmar", () => {
+// ⚠️ EL TÍTULO DE ESTE BLOQUE DECÍA "y es la que va a firmar", Y ESO NO ES LO QUE MIDE (fix-pack,
+// AR/MNR-2). Mide que el literal de la pantalla sea `devnet`. Que ese literal COINCIDA con la red contra
+// la que se firma no lo garantiza nada: el nombre es un literal (`cluster`, `../infrastructure/chain.ts:8`)
+// y el endpoint sale de `NEXT_PUBLIC_SOLANA_RPC_URL` (`resolveSolanaRpcUrlPublic`,
+// `../infrastructure/chain.ts:190`) sin validación cruzada. El detalle, con la precondición del env
+// medida, está en el docblock de `bienvenida.tsx`.
+describe("T-063-12 (2º pase): la pantalla nombra la red, y el nombre es un literal vigilado", () => {
   it("🔴 dice «Solana devnet», y el literal va escrito ACÁ y no importado del resolver", () => {
     // MUTANTE 7 (aplicado): borrar la nota del pie ⇒ rojo.
     //
@@ -360,5 +464,107 @@ describe("T-063-12 (2º pase): la pantalla nombra la red, y es la que va a firma
     expect(texto, "una tasa").not.toMatch(/1 USD ≈/);
     // Los únicos dígitos legítimos de la pantalla son los tres números de la lista de pasos.
     expect((texto.match(/\d/g) ?? []).join("")).toBe("123");
+  });
+});
+
+// ══ AR/BLQ-BAJO-2 · LA FRASE MÁS FUERTE DE LA PANTALLA, EJECUTADA EN LA RAMA MENOS FAVORABLE ═════
+//
+// 🔴 QUÉ DECÍA Y POR QUÉ ERA FALSO. El `<Aviso>` de la bienvenida decía *"cada envío deja una
+// transacción que podés abrir en el explorador de Solana"*: incondicional, sobre un sistema condicional.
+// `principalTx` se escribe recién en `markPrincipalIn`, así que una remesa en `confirmed` —la persona ya
+// firmó la autorización del depósito y nadie llegó a registrar el desenlace, la ventana que
+// `recover-escrow-funds.ts:30-35` documenta como "hasta 15 s del timeout del settle más el broadcast"—
+// no tiene ninguna firma que enlazar. En esa rama la primera pantalla ya prometió una.
+//
+// ⚠️ Y SU ÚNICO CANDADO ERA UN `getByText`. Es exactamente el defecto que este mismo pase le arregló al
+// renglón 3 de `PASOS` (ver el comentario de su fila): un test que verifica que el copy EXISTE no se
+// rompe cuando el copy se vuelve falso. La regla la escribió esta HU y no se le aplicó a su propia
+// frase más fuerte, que es la que sostiene AC-1.
+//
+// LOS DOS `it` SON UN PAR Y NINGUNO SIRVE SOLO: el primero ejecuta la rama SIN firma y exige que no haya
+// enlace; el segundo ejecuta la rama CON firma y exige que sí lo haya. Sin el segundo, borrar `TxProof`
+// del comprobante dejaría al primero en verde y la mitad condicional de la frase vacía. ⚠️ Y EL FIXTURE
+// DEL CASO POSITIVO INCLUYE EL CAMPO de verdad (`markPrincipalIn`), que es la lección que este repo ya
+// tiene escrita como "el test del camino feliz ejercitaba el agujero".
+function remesaFirmada(id: string, conFirma: boolean): RemittanceState {
+  const r = Remittance.create(id, beneficiary(), Money.of(400, "USDC"), T0);
+  r.attachQuote(
+    {
+      quoteId: "q",
+      send: Money.of(400, "USDC"),
+      receive: Money.of(1478.15, "PEN"),
+      feeUsd: Money.of(0.5, "USDC"),
+      rate: 3.7,
+      etaMinutes: 30,
+      expiresAt: "2026-07-10T00:00:00.000Z",
+      provenance: "didit",
+    },
+    T0,
+  );
+  r.startKyc(T0, FAKE_SOLANA_BENEFICIARY);
+  r.applyKyc(
+    {
+      verificationId: "v-1",
+      approved: true,
+      payoutAllowed: true,
+      riskLevel: "low",
+      provenance: KYC_PROVENANCE_LIVE,
+      identity: toPersistedIdentity({
+        firstName: "Ana",
+        lastNamePaternal: "Quispe",
+        lastNameMaternal: "Mamani",
+        documentType: "DNI",
+        documentNumber: "12345678",
+        dateOfBirth: "1990-01-01",
+        nationality: "PE",
+      }),
+    },
+    T0,
+  );
+  r.confirm(T0); // `confirmed`: firmó la autorización, `principalTx` sigue en null
+  if (conFirma) r.markPrincipalIn("5xFirmaDeMentira", T0);
+  return r.snapshot;
+}
+
+describe("T-063-24 (AR/BLQ-BAJO-2): la promesa del explorador se ejecuta en las DOS ramas", () => {
+  it("🔴 RAMA SIN FIRMA (`confirmed`): no hay ningún enlace al explorador, y la frase no promete uno", () => {
+    // La precondición del test, medida y no supuesta: esta remesa está en un estado donde la persona YA
+    // firmó y el sistema NO tiene la firma. Si mañana el dominio empezara a escribir `principalTx` en
+    // `confirm()`, este assert cae y hay que venir a re-leer la frase, no a ajustar el test.
+    const sinFirma = remesaFirmada("rem-sin", false);
+    expect(sinFirma.status, "el estado que abre la ventana").toBe("confirmed");
+    expect(sinFirma.principalTx, "y el sistema no tiene ninguna firma que enlazar").toBeNull();
+
+    render(<Receipt rem={sinFirma} onNew={() => {}} />);
+    expect(screen.queryByText("Depósito en Solana"), "no hay depósito que mostrar en esta rama").toBeNull();
+    expect(document.querySelectorAll('[data-testid="tx-proof"]'), "ni un solo enlace al explorador").toHaveLength(0);
+
+    // Y la frase de la bienvenida, en la misma corrida, no puede prometer lo que acá no existe.
+    cleanup();
+    pintarBienvenida();
+    const texto = document.body.textContent ?? "";
+    expect(texto, "la versión INCONDICIONAL no puede volver").not.toContain("cada envío deja una transacción");
+    expect(texto, "y la que quedó dice CUÁNDO aparece el enlace").toContain(
+      "en cuanto la app tiene su firma te da el enlace para abrirla en el explorador",
+    );
+  });
+
+  it("🔴 RAMA CON FIRMA (`principal_in`): el enlace está, y apunta al explorador de Solana", () => {
+    // MUTANTE que este `it` mata y el otro NO: borrar la fila `{rem.principalTx ? <Row … TxProof/> }` del
+    // comprobante. Sin este `it`, la mitad condicional de la frase ("te da el enlace") quedaría sin nada
+    // que la sostenga y el primer `it` seguiría verde.
+    const conFirma = remesaFirmada("rem-con", true);
+    expect(conFirma.principalTx, "ANTIVACUIDAD: el fixture positivo TIENE que traer la firma").toBe(
+      "5xFirmaDeMentira",
+    );
+
+    render(<Receipt rem={conFirma} onNew={() => {}} />);
+    expect(screen.getByText("Depósito en Solana")).toBeInTheDocument();
+    const enlaces = [...document.querySelectorAll('[data-testid="tx-proof"] a')] as HTMLAnchorElement[];
+    expect(enlaces, "la fila del depósito trae su enlace").toHaveLength(1);
+    // No se compara contra la URL que el resolver produce (sería un guard que se compara consigo mismo):
+    // se exige que el `href` sea del explorador de Solana y que lleve ESTA firma.
+    expect((enlaces[0] as HTMLAnchorElement).href).toContain("5xFirmaDeMentira");
+    expect((enlaces[0] as HTMLAnchorElement).href).toMatch(/explorer\.solana\.com|solscan|solana/i);
   });
 });

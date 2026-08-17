@@ -602,12 +602,18 @@ describe("WKH-352/WKH-354 · el consejo del copy, ejecutado sin reabrir la app",
 
   // 🔴 T-354-W12 — SEGUIR EL CONSEJO TERMINA CON LA BILLETERA NUEVA, Y SIN REABRIR NADA.
   // Los pasos son los del copy, en su orden: se ve la tarjeta, se cambia de cuenta en la billetera, se
-  // vuelve a la pantalla de inicio, y ahí se usa la opción de recuperar. El assert que cierra el
-  // hallazgo es UNO: con qué `sender` salió la búsqueda.
+  // ABRE LA PESTAÑA «Recuperar» de la barra, y ahí se usa la opción de recuperar. El assert que cierra
+  // el hallazgo es UNO: con qué `sender` salió la búsqueda.
+  // ⛔ ACÁ Y EN EL NOMBRE DEL `it` DECÍA "se vuelve a la pantalla de inicio", Y ERA EL LUGAR VIEJO
+  // (fix-pack, CR/MNR-8). El cuerpo del test hace `getByRole("button", { name: "Recuperar" })` y encima
+  // assertea que el copy NO diga "volvé a la pantalla de inicio" (el `not.toContain` de más abajo), o
+  // sea que el título afirmaba justo lo contrario de lo que el test mide. Y el nombre de un `it` no es
+  // decoración: es lo único que un CI en rojo imprime, así que un nombre falso manda a mirar el archivo
+  // equivocado.
   // ⛔ SIN `cleanup()` Y SIN UN SEGUNDO `render()`. Ese par era el modelo de la REAPERTURA, y la
   // reapertura es justamente lo que WKH-354 eliminó: un test que todavía reabra no mide lo que la HU
   // hizo. El árbol montado es UNO solo, de punta a punta.
-  it("T-354-W12: se ve el consejo, se cambia de cuenta, se vuelve a la pantalla de inicio, y la búsqueda sale con la cuenta NUEVA", async () => {
+  it("T-354-W12: se ve el consejo, se cambia de cuenta, se abre la pestaña «Recuperar» de la barra, y la búsqueda sale con la cuenta NUEVA", async () => {
     const { wallet, refundGw, probe, container } = await mundo();
 
     // (1) La tarjeta con el consejo, en pantalla, con la billetera de siempre.

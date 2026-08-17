@@ -6,7 +6,7 @@
 // alto propio: el área tocable era el alto de la línea de texto (~20 px con `text-sm`, ~16 px con
 // `text-xs`), contra los 52 px que el CTA del camino feliz ya tenía. Tres de esos seis son las ÚNICAS
 // puertas para recuperar plata:
-//   · la pestaña "Mis envíos"                             (`className`, `barra-destinos.tsx:86`)
+//   · la pestaña "Mis envíos"                             (`className`, `barra-destinos.tsx:113`)
 //   · "Recuperar un envío perdido"                        (`className`, `flow.tsx:2477`)
 //   · "Recuperar el depósito de red de envíos anteriores"  (`className`, `flow.tsx:2627`)
 //
@@ -122,7 +122,7 @@ function puertasDeRecuperarPlata(): Array<{ nombre: string; el: HTMLElement }> {
 describe("T-341-3 (AC-2): las tres puertas de recuperar plata declaran alto de toque", () => {
   it("las tres declaran min-h de 52 px o más", () => {
     // INPUT QUE LO PONE EN ROJO: borrarle la clase `min-h-[52px]` a cualquiera de las tres
-    // (`className`, `barra-destinos.tsx:86`), (`className`, `flow.tsx:2477`), (`className`, `flow.tsx:2627`)
+    // (`className`, `barra-destinos.tsx:113`), (`className`, `flow.tsx:2477`), (`className`, `flow.tsx:2627`)
     // ⇒ `minHpx` no matchea ⇒ throw con el nombre del control.
     //
     // El ancla es `className` porque es el ÚNICO símbolo de esas líneas, y eso acota lo que compra:
@@ -192,6 +192,31 @@ describe("T-341-5 (AC-3): los tres controles del bloque de reset llegan al míni
     expect(px.noSosVos, "¿No sos vos?").toBeGreaterThanOrEqual(44);
     expect(px.borrarIgual, "Borrar igual").toBeGreaterThanOrEqual(44);
     expect(px.cancelar, "Cancelar").toBeGreaterThanOrEqual(44);
+  });
+});
+
+describe("T-341-7 (WKH-063 fix-pack): «Volver al inicio» declara su alto de toque", () => {
+  it("declara min-h de 44 px o más, leído del `<button>` renderizado", () => {
+    // 🔴 POR QUÉ EXISTE ESTE `it`. `VolverAlInicio` (`barra-destinos.tsx`) declara `min-h-[44px]` y era
+    // el ÚNICO control nuevo de WKH-063 sin ninguna vigilancia de toque — lo dejó anotado el AR como
+    // observación. No es AC-5 (no es una de las tres puertas de recuperar plata) pero está en el mismo
+    // renglón de riesgo: es un número escrito a mano en un `className`, o sea que se puede borrar sin
+    // que nada se ponga rojo. Y encima es LA salida del formulario hacia los destinos (AC-3 deja `send`
+    // sin barra), así que si se vuelve intocable en un teléfono la app se queda sin camino de vuelta.
+    //
+    // 44 y no 52 por el mismo criterio que los tres controles del bloque de reset: es el mínimo de WCAG
+    // 2.5.5, y este control no devuelve fondos ni destruye nada — mueve `step` y nada más. El propio
+    // docblock de `VolverAlInicio` ya lo argumenta; lo que faltaba era medirlo.
+    //
+    // INPUT QUE LO PONE EN ROJO: borrarle el `min-h-[44px]` a `VolverAlInicio`
+    // (`className`, `barra-destinos.tsx:160`) ⇒ `minHpx` no matchea ⇒ throw.
+    // MEDIDO (aplicado): con la clase borrada ⇒ `1 failed | 4 passed (5)`, y el único que cae es éste.
+    //
+    // ⚠️ Mismo límite que declara el encabezado de este archivo: se lee el NÚMERO DEL NOMBRE DE LA CLASE
+    // sobre el elemento realmente renderizado, no un alto en píxeles. jsdom no hace layout.
+    render(<RemittanceFlow pasoInicial="send" container={buildTestContainer()} />);
+    const volver = screen.getByRole("button", { name: /Volver al inicio/ });
+    expect(minHpx(volver), "«Volver al inicio»").toBeGreaterThanOrEqual(44);
   });
 });
 

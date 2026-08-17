@@ -80,7 +80,12 @@ import { Aviso, Card, Muted } from "./ui";
  * 4. LA RED, DICHA CON SU NOMBRE, igual que en la bienvenida y por una razón más fuerte que allá: en
  *    esta pantalla la persona puede querer ir a mirar sus cuentas al explorador por su cuenta, y el
  *    explorador pide el cluster en la URL (`resolveSolanaExplorerTxUrl`, `chain.ts:224`). Sale del
- *    mismo resolver que firma, así que la pantalla no puede nombrar una red distinta de la real.
+ *    mismo resolver que la bienvenida, así que las dos pantallas dicen siempre lo mismo.
+ *    ⚠️ Y NO "no puede nombrar una red distinta de la real", que es lo que decía acá y es falso como
+ *    imposibilidad (fix-pack, AR/MNR-2): el nombre es un literal (`cluster`, `chain.ts:8`) y el endpoint
+ *    sale de `NEXT_PUBLIC_SOLANA_RPC_URL` sin validación cruzada. El detalle medido, con la precondición
+ *    del env verificada, está en el docblock de `bienvenida.tsx` — acá no se repite para no dejar dos
+ *    copias que divergen, que es la regla de este mismo archivo.
  *
  * ⛔ LO QUE **NO** SE HIZO, Y ES LO QUE MÁS SE PARECÍA A UN ARREGLO: rellenar. El hueco restante NO se
  * cerró con un ícono grande de arribo (la pestaña activa ya lleva el mismo `LifeBuoy` y su
@@ -135,8 +140,12 @@ export function DestinoRecuperar({ children }: { children: ReactNode }) {
     // ⚠️ `justify-center` no puede recortar nada: un ítem de una columna flex tiene `min-height:auto`,
     // así que nunca baja de su contenido; cuando el contenido no cabe, el `<main>` crece (es
     // `min-h-dvh`) y el sobrante que repartir es cero. Medido a 375x667, donde esta pantalla ya no
-    // cabe: el documento midió 811px, menos que los 834px que el formulario ya medía ahí y menos que
-    // los 853px de la bienvenida.
+    // cabe: el documento midió 811px, menos que los 856px que el formulario ya medía ahí y menos que
+    // los 870px de la bienvenida. (Acá decía 834px para el formulario y 853px para la bienvenida. El 834
+    // era el número equivocado del par que un CR encontró contradicho —son 856, re-medidos UNA vez en el
+    // fix-pack—; el 853 era correcto y dejó de serlo en el mismo fix-pack, porque condicionar una frase
+    // de la bienvenida le sumó un renglón. La tabla completa y las dos historias están en el encabezado
+    // de `recuperar-composicion.test.tsx`.)
     <div className="flex flex-1 flex-col justify-center space-y-aire">
       <div>
         <h2 className="text-title font-bold">Recuperar fondos de un envío anterior</h2>

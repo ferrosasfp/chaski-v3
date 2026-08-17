@@ -111,8 +111,8 @@ export type EleccionDeBilletera = BilleteraDeeplink | null;
 
 /**
  * CLAVE PROPIA, la TERCERA del recorrido, distinta de la del `Viaje`
- * (`"chaski.billetera.viaje.v1"`, `sesion.ts:95`) y de la del `Preparado`
- * (`"chaski.billetera.preparado.v1"`, `preparado.ts:31`).
+ * ((`CLAVE`, `sesion.ts:95`)) y de la del `Preparado`
+ * ((`CLAVE`, `preparado.ts:31`)).
  *
  * ⛔ NO reusar ninguna de las otras dos, por el mismo argumento que ya está escrito en
  * (`CLAVE`, `preparado.ts:31`): son ciclos de vida distintos y compartir clave haría que limpiar uno se
@@ -583,7 +583,7 @@ function vueltaDelNonce(p: PedidoDeConexion): VueltaDeConexion {
 /** base64 de `tx.serializeMessage()` de una transacción en base58, o `null` si no se puede leer.
  *
  *  Devuelve `null` en vez de tirar por el mismo criterio que `firmaDelSender`
- *  (`./firma-por-enlace.ts:327`): una transacción que no se puede leer es un desenlace del viaje, no
+ *  ((`firmaDelSender`, `./firma-por-enlace.ts:335`)): una transacción que no se puede leer es un desenlace del viaje, no
  *  un error de programación. */
 function mensajeDeLaTransaccion(transaccionBase58: string): string | null {
   try {

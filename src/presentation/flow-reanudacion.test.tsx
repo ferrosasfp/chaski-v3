@@ -191,8 +191,35 @@ describe("T-065-7: la reanudación de `execute()`", () => {
     expect(spy, "un enlace disparó una orden de pago sobre una remesa que nadie confirmó").toHaveBeenCalledTimes(0);
   });
 
-  // MUTANTE QUE MATA: en `flow.tsx`, sacar la condición sobre la marca (`marca !== "firmar-tx" && …`)
-  // ⇒ una vuelta del CONNECT reanudaría el envío.
+  // 🔴 EL `it` DE ABAJO NO ALCANZABA, Y LO MIDIÓ LA BATERÍA. Con `dl=conectar` sobre un viaje que ya
+  // trae `claveBilletera` y su paso consumido, `completar()` sale por un CORTE (`ya-consumida`) y el
+  // productor vuelve ANTES de llegar al gate de la marca: el mutante «cualquier marca reanuda» pasaba
+  // con exit=0 y 0 rojos. Este `it` usa una marca que NO existe, que es la que llega hasta el gate.
+  // MUTANTE QUE MATA: en `flow.tsx`, cambiar `marca !== "firmar-tx" && marca !== "firmar-patrocinio"`
+  // por `marca === null` ⇒ una marca cualquiera reanuda el envío. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit y `it` rojos de los 47 con el árbol en que se midieron.)
+  it("con una marca que NO es del motor, NO reanuda: sólo `firmar-*` viene después de una orden", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo, "confirmed");
+    sembrarVuelta("una-marca-que-nadie-escribio");
+    const c = contenedor(repo);
+    const spy = vi.spyOn(c.confirmAndSend, "execute");
+
+    // CD-18 — el fixture fabricó el caso: la marca ESTÁ, es ajena, y la remesa SÍ está confirmada. Sin
+    // las tres, el gate de la marca no es lo que decide y este `it` mediría otra cosa.
+    expect(new URL(window.location.href).searchParams.get("dl")).toBe("una-marca-que-nadie-escribio");
+    expect((await repo.get(REM))?.snapshot.status).toBe("confirmed");
+
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
+    await waitFor(() => expect(new URL(window.location.href).searchParams.get("dl")).toBeNull());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(spy, "una marca que nadie escribió reanudó un envío").toHaveBeenCalledTimes(0);
+  });
+
+  // MUTANTE QUE MATA: ídem, aunque este `it` NO lo caza (ver el bloque de arriba): con `dl=conectar` el
+  // productor corta antes del gate. Se queda porque mide otra cosa que sí importa —que la vuelta del
+  // connect no reanude— y su valor no depende del gate de la marca.
   it("con `dl=conectar` NO reanuda: ese paso pasa antes de que exista ninguna orden", async () => {
     const repo = new InMemoryRepo();
     await sembrarRemesaConfirmada(repo, "confirmed");

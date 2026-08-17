@@ -364,7 +364,7 @@ describe("T-065-11: `construirCreacionDeNonce`", () => {
 
   // MUTANTE QUE MATA: en `nonce-duradero.ts`, cambiar la forma por
   // `SystemProgram.createNonceAccount({ …, noncePubkey: Keypair.generate().publicKey })`
-  // ⇒ `numRequiredSignatures` pasa a 2 y este `it` se pone rojo. (MEDIDO en la batería de §9.)
+  // ⇒ `numRequiredSignatures` pasa a 2 y este `it` se pone rojo. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit y `it` rojos de los 47 con el árbol en que se midieron.)
   it("son 2 ix, `numRequiredSignatures === 1`, y el único firmante es el sender", async () => {
     const { sender, tx, ixs } = await armar();
     expect(ixs).toHaveLength(2);
@@ -414,7 +414,7 @@ describe("T-065-11: `construirCreacionDeNonce`", () => {
   //       si además se mueve la constante; con la librería en 80 los dos valores coinciden, así que el
   //       mutante REALMENTE distinguible es el (b);
   //   (b) cambiar `NONCE_ACCOUNT_LENGTH` por `81` ⇒ mueren los dos `it` de abajo.
-  // (MEDIDO en la batería de §9, con sus conteos.)
+  // (MEDIDO: los conteos de los 47 están en LA BATERÍA DE MUTACIÓN, al final de `deeplink/conexion.test.ts`.)
   it("T-065-11b: el `space` es el `NONCE_ACCOUNT_LENGTH` de la librería", async () => {
     const { ixs } = await armar();
     const decodificada = SystemInstruction.decodeCreateWithSeed(ixs[0] as TransactionInstruction);

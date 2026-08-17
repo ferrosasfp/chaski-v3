@@ -2343,7 +2343,7 @@ describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace",
   });
 
   // MUTANTE QUE MATA: mover el lookup del `Record` al FINAL de `humanError`, después del último
-  // `includes` y antes del `return` del default. (MEDIDO en la batería de §9.)
+  // `includes` y antes del `return` del default. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit y `it` rojos de los 47 con el árbol en que se midieron.)
   //
   // ⚠️ POR QUÉ ESTE `it` ES TEXTUAL Y NO DE COMPORTAMIENTO, dicho porque un review lo va a preguntar:
   // HOY ninguna de las once contiene ninguno de los needles de la cadena, así que **no existe ningún

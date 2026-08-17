@@ -1582,12 +1582,12 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
   // es coherencia interna y no puede cortar**. En el camino inyectado el motor ni siquiera corre.
   //
   // ⛔ EL GUARD NO SE BORRÓ NI SE DEBILITÓ, y su cobertura unitaria sigue entera: los dos `it` del
-  // motor que lo ejercitan directamente (`firma-por-enlace.test.ts:1532` y `:1548`) le pasan un
+  // motor que lo ejercitan directamente ((`deeplink_sender_mismatch`, `./solana/deeplink/firma-por-enlace.test.ts:1532` y `:1548`) le pasan un
   // `PedidoDeFirma` fabricado con `sender ≠ viaje.direccion` y siguen verdes. Lo que se dejó de poder
   // afirmar es la versión INTEGRADA, a través del adaptador.
   //
   // 🔴 DÓNDE ESTÁ EL CORTE QUE SÍ ES UNA DEFENSA, PARA QUE NADIE LEA ESTO COMO UNA PÉRDIDA: el cruce
-  // de `../presentation/flow.tsx:507` contra `rem.ownerAddress`, que lo escribe `startKyc` en el repo
+  // de (`ownerAddress`, `../presentation/flow.tsx:507`) contra `rem.ownerAddress`, que lo escribe `startKyc` en el repo
   // de remesas —una fuente que el canal del enlace NO puede escribir— y que se volvió load-bearing
   // exactamente por hacer link-aware a `getConnectedAddress()`. Lo mide **T-065-CD11**
   // (`../presentation/flow.test.tsx`), y su residual (`rem.ownerAddress == null` no dispara) está
@@ -1601,7 +1601,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
     // MUTANTE QUE MATA: en `solana-wallet.ts:233`, borrar la consulta a `direccionDelViajeConectado()`
     // de `getAddress()` ⇒ el `sender` vuelve a salir del bridge (otra cuenta), el motor lo compara
     // contra `viaje.direccion` y corta con `deeplink_sender_mismatch` ⇒ este `it` se pone rojo.
-    // (MEDIDO en la batería de §9; el conteo va ahí y no acá para que no se pudra en dos lugares.)
+    // (MEDIDO: ver LA BATERÍA al final de `deeplink/conexion.test.ts`; el conteo va ahí y no acá para que no se pudra en dos lugares.)
     it("el pedido lleva `viaje.direccion`, aunque el bridge diga otra cuenta", async () => {
       montarEntorno();
       const motor = new MotorProgramable();
@@ -1790,8 +1790,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
     // corre antes que los otros dos: el `new PublicKey(v.direccion)` de
     // ((`PublicKey`, `solana-wallet.ts:2320`)), que trata un `direccion` que no parsea
     // como "no hay address" en vez de dejarlo reventar 200 líneas más adelante.
-    // MUTANTE QUE MATA (MEDIDO en la batería de §9, sitio `solana-wallet.ts` /
-    // `direccionDelViajeConectado`): borrar ese `try { new PublicKey(v.direccion) } catch` ⇒ el
+    // MUTANTE QUE MATA (MEDIDO como `SW-BASE58` en LA BATERÍA, al final de `solana/deeplink/conexion.test.ts`): borrar ese `try { new PublicKey(v.direccion) } catch` ⇒ el
     // `authorizePrincipal` deja de tirar `wallet_not_connected` y tira una excepción de base58 sin causa
     // traducible ⇒ este `it` se pone rojo por el mensaje.
     it("una dirección que no parsea muere ANTES de la rama de enlace: el motor no recibe NADA", async () => {
@@ -2347,6 +2346,50 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       // 🔴 Y NO SE BORRÓ NADA. Es la diferencia con `deeplink_blockhash_expired`, que sí limpia: acá no
       // hay ninguna firma dada que pueda estar muerta, así que borrar sólo destruiría estado útil.
       expect(disco.has(CLAVE_PREPARADO)).toBe(true);
+    });
+
+    // ── ★ T-065-14 (WKH-358 / AC-5) — la lectura de IDA que no contesta NO limpia el disco ──────
+    //
+    // 🔴 ESTE `it` LO PIDIÓ LA BATERÍA DE MUTACIÓN, y es un agujero que estaba abierto. El mutante
+    // «agregar `limpiarRastroDeEnlace(almacen)` antes del `throw deeplink_blockhash_desconocido`»
+    // sobrevivía con exit=0 y 0 rojos. El `it` que sí existía —«un RPC que acepta y NO contesta vence
+    // por el techo»— mide la lectura de la VUELTA (el `deeplink_blockhash_desconocido` de más abajo, el
+    // que corre con las dos firmas ya dadas), no ésta, que es la de la IDA. Son dos `throw` distintos
+    // del mismo mensaje y sólo uno tenía candado.
+    //
+    // ⚠️ POR QUÉ IMPORTA ACÁ, donde todavía no se firmó nada de ESTE intento: el disco puede traer el
+    // viaje y el registro de un intento ANTERIOR, con una firma adentro. Limpiarlos porque NUESTRO RPC
+    // no contestó es castigar a la persona por nuestra infraestructura, que es la misma razón por la
+    // que la lectura de la vuelta no limpia.
+    // MUTANTE QUE MATA (MEDIDO: ver LA BATERÍA al final de `deeplink/conexion.test.ts`): agregar `this.limpiarRastroDeEnlace(almacen)`
+    // antes de ese `throw`.
+    it("★ T-065-14: la cuenta de nonce que NO se puede leer ⇒ deeplink_blockhash_desconocido, y el disco queda INTACTO", async () => {
+      montarEntorno();
+      sembrarPreparado();
+      sembrarViaje(SENDER_B58);
+      const motor = new MotorProgramable();
+      // El RPC tira: es `no-pudimos-preguntar`, que NO es "no hay cuenta".
+      mockNonce(["throw"]);
+      const firmas = vi.fn(async (t: unknown) => t);
+      solanaWalletBridge.registerSignTransaction(firmas);
+      const adapter = await adaptadorConMotor(motor);
+      // CD-18 — el fixture fabricó el caso: el disco tiene las DOS cosas antes de llamar.
+      expect(disco.has(CLAVE_VIAJE)).toBe(true);
+      expect(disco.has(CLAVE_PREPARADO)).toBe(true);
+
+      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit())).rejects.toThrow(
+        "deeplink_blockhash_desconocido",
+      );
+
+      // 🔴 NO se pidió ninguna firma, y 🔴 NO se borró nada.
+      expect(firmas).toHaveBeenCalledTimes(0);
+      expect(
+        disco.has(CLAVE_VIAJE),
+        "un RPC nuestro que no contestó borró el viaje de la persona, con lo que tuviera adentro",
+      ).toBe(true);
+      expect(disco.has(CLAVE_PREPARADO)).toBe(true);
+      // Y el motor no recibió nada: el corte es anterior a armar el pedido.
+      expect(motor.pedidos).toEqual([]);
     });
 
     // ── ★ T-27 (§6.7) — el guard de saldo, con su fail-open ─────────────────────────────────────

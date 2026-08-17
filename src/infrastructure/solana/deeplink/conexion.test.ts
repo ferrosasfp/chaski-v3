@@ -146,8 +146,7 @@ describe("T-065-1: `iniciarConexion` abre el viaje y produce la URL del connect"
   });
 
   // MUTANTE QUE MATA: en `conexion.ts`, en `iniciarConexion`, borrar `cluster` del objeto que se le
-  // pasa a `urlConectar` ⇒ `tsc` lo caza, y si se le pasara `""` este `it` se pone rojo. (MEDIDO en la
-  // batería de §9.)
+  // pasa a `urlConectar` ⇒ `tsc` lo caza, y si se le pasara `""` este `it` se pone rojo. (MEDIDO: ver LA BATERÍA al final de `deeplink/conexion.test.ts`.)
   it("la URL es la de `urlConectar`, con `cluster` EXPLÍCITO y el `redirect_link` marcado", () => {
     const a = almacenFalso();
     const { irA, q, redirectLink } = abrirViaje(a);
@@ -260,7 +259,7 @@ describe("T-065-2 / T-065-5: la vuelta `?dl=conectar` completa el viaje", () => 
 //
 // MUTANTE QUE MATA: en `sesion.ts`, invertir la comparación del ancla `claveBilletera` (el `if` del
 // bloque `claveEnLaUrl`) ⇒ un segundo connect de OTRA clave pisa el ancla y este `it` se pone rojo.
-// (MEDIDO en la batería de §9.)
+// (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit y `it` rojos de los 47 con el árbol en que se midieron.)
 describe("T-065-3: un connect forjado TARDÍO no puede pisar el ancla", () => {
   it("otra clave después del connect bueno sale `corte` y NO cambia la dirección", () => {
     const a = almacenFalso();
@@ -561,7 +560,7 @@ describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
   });
 
   // MUTANTE QUE MATA: en `conexion.ts`, en la rama del nonce, borrar la comparación del
-  // `mensajeBase64` contra el ancla. (MEDIDO en la batería de §9.)
+  // `mensajeBase64` contra el ancla. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit y `it` rojos de los 47 con el árbol en que se midieron.)
   it("T-065-15: con OTRA transacción bien cifrada, corta y NO la devuelve", () => {
     const a = almacenFalso();
     const propia = transaccion(Keypair.generate());
@@ -658,3 +657,112 @@ describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
     expect(a.datos.get(CLAVE_VIAJE), "la vuelta del nonce consumió un paso del viaje").toBe(viajeAntes);
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// 🔴 LA BATERÍA DE MUTACIÓN DE WKH-358 (CD-17 / CD-23) — CORRIDA, NO DECLARADA
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// ⚠️ EL «MEDIDO» DE CADA MUTANTE DE ESTA HU APUNTA ACÁ Y NO SE REPITE EN CADA SITIO, a propósito: un
+// conteo escrito en dos lugares se desincroniza, y este repo ya tiene la lección medida (el «6» de
+// `T-062-15(a)` pasó a 7 y a 8 sin que nadie editara la línea). Acá vive UNA sola copia.
+//
+// 🔴 CUÁNDO SE MIDIÓ, Y ESTO ES LO QUE ENVEJECE: sobre **el árbol de ESTE commit** (W6 de WKH-358, o
+// sea `8ef2409` más los tres `it` que la propia batería obligó a escribir). Un conteo de `it` rojos es
+// una propiedad del ÁRBOL y no del mutante: cualquier `it` nuevo lo mueve. ⛔ No se hereda, se re-corre.
+//
+// EL PROTOCOLO, ENTERO Y CUMPLIDO EN LOS 47: respaldo POR COPIA (nunca `git checkout --`), la aguja
+// contada y exigida `== 1`, el texto RESULTANTE verificado (no sólo el count), la suite COMPLETA con
+// `NO_COLOR=1 FORCE_COLOR=0` y **SIN PIPES** (la salida por `spawnSync` a un archivo, el exit code de
+// `status`), el conteo leído de la línea `Tests N failed` y **nunca** contando `×`, restauración
+// verificada por `md5sum` y `git status --short` COMPLETO después de cada uno.
+// **Los 47: md5 restaurado OK y `git status` sin residuos.**
+//
+// | test | mutante · sitio exacto | exit | rojos | veredicto |
+// |---|---|---|---|---|
+// | CALIBRACIÓN · TIENE que morir | sesion.ts · `MAX_EDAD_MS` un segundo menos                                 | exit=1 |  2 | muere |
+// | CALIBRACIÓN · TIENE que vivir | conexion.ts · una `const` sin efecto, LÍNEA-NEUTRA                         | exit=0 |  0 | VIVE  |
+// | T-065-GATE-1           | solana-wallet.ts · `caminoPorEnlace`: borrar la lectura de la elección     | exit=1 |  1 | muere |
+// | T-065-GATE-2           | solana-wallet.ts · `caminoPorEnlace`: borrar la condición de disponibilidad | exit=1 |  3 | muere |
+// | T-065-GATE-3           | solana-wallet.ts · `=== "none"` por `!== "injected"`                       | exit=1 |  1 | muere |
+// | T-065-GATE-4           | solana-wallet.ts:897 · invertir el `if` de la rama de enlace               | exit=1 | 56 | muere |
+// | (mío)                  | solana-wallet.ts · `direccionDelViajeConectado`: borrar el guard de base58 | exit=1 |  2 | muere |
+// | T-062-21 (invertido)   | container.ts:91 · descablear el colaborador de enlace                      | exit=1 |  1 | muere |
+// | T-062-10 (invertido)   | flow.tsx · la cadena `interpretarVuelta(` en presentación                  | exit=1 |  2 | muere |
+// | T-065-20               | wallet-availability.ts · `deeplinkEnabled`: tolerar mayúsculas y espacios  | exit=1 |  1 | muere |
+// | T-065-21               | flow.tsx:147 · borrar el gate `deeplinkEnabled()` del selector             | exit=1 |  1 | muere |
+// | T-UI-3                 | flow.tsx:147 · montar el selector sin mirar `disponibilidadWallet`         | exit=1 |  1 | muere |
+// | T-065-1                | conexion.ts · `iniciarConexion`: vaciar el `cluster`                       | exit=1 |  2 | muere |
+// | T-065-2                | conexion.ts · la rama `conectar`: escritura directa en vez del lector      | exit=1 |  6 | muere |
+// | T-065-3                | sesion.ts:614 · no comparar el ancla write-once                            | exit=1 | 12 | muere |
+// | T-065-4                | conexion.ts · que `firmar-tx` caiga al lector de la vuelta                 | exit=1 |  4 | muere |
+// | T-065-5                | conexion.ts · que la rama `conectado` devuelva un corte                    | exit=1 |  3 | muere |
+// | T-065-PUREZA           | conexion.ts · `Date.now()` dentro de `completarVuelta`                     | exit=1 |  2 | muere |
+// | T-065-SYNC             | preparacion-por-enlace.ts · un `await` como 1ª línea de `completar()`      | exit=1 |  1 | muere |
+// | T-065-CD11 (a)         | flow.tsx:507 · borrar `&& rem.ownerAddress != null`                        | exit=1 |  1 | muere |
+// | T-065-CD11 (b)         | flow.tsx:518 · borrar el `throw wallet_account_changed`                    | exit=1 |  5 | muere |
+// | T-065-CD11 (c)         | solana-wallet.ts:252 · descablear el link-aware de `getConnectedAddress`   | exit=1 |  6 | muere |
+// | T-065-7                | flow.tsx · borrar el ref de montaje del productor                          | exit=1 |  1 | muere |
+// | T-065-8                | flow.tsx · saltear el gate del pisón                                       | exit=1 |  1 | muere |
+// | T-065-9                | flow.tsx · `replaceState` por `location.assign`                            | exit=1 |  4 | muere |
+// | T-065-10               | flow.tsx · limpiar la barra ANTES de leer la vuelta                        | exit=1 |  1 | muere |
+// | (mío)                  | flow.tsx · borrar el gate del `status === "confirmed"`                     | exit=1 |  1 | muere |
+// | (mío)                  | flow.tsx · que cualquier marca reanude                                     | exit=1 |  1 | muere |
+// | T-065-11b (a)          | nonce-duradero.ts · `space: 80` en vez de la constante                     | exit=0 |  0 | VIVE  |
+// | T-065-11b (b)          | nonce-duradero.ts · `space: 81`                                            | exit=1 |  1 | muere |
+// | T-065-12 (a)           | flow.tsx · la cifra `0,0015` escrita a mano en la tarjeta                  | exit=1 |  1 | muere |
+// | T-065-12 (b)           | solana-escrow-rent.ts:332 · mover `NONCE_ACCOUNT_RENT_LAMPORTS`            | exit=1 |  2 | muere |
+// | T-065-13               | solana-wallet.ts:818 · `console.warn` en vez de cortar                     | exit=1 |  2 | muere |
+// | T-065-14               | solana-wallet.ts:823 · limpiar el disco antes del corte                    | exit=1 |  1 | muere |
+// | T-065-15               | conexion.ts · borrar la comparación de bytes contra el ancla               | exit=1 |  1 | muere |
+// | T-065-16               | conexion.ts · dejar de escribir el flag `consumido`                        | exit=1 |  1 | muere |
+// | T-065-17               | preparacion-por-enlace.ts · que el broadcast decida en vez de la cadena    | exit=1 |  2 | muere |
+// | T-065-19               | solana-wallet.ts:806 · volver el guard de saldo FAIL-CLOSED                | exit=1 |  1 | muere |
+// | T-065-6                | firma-por-enlace.ts · restaurar la promesa vieja del `case "conectado"`    | exit=1 |  1 | muere |
+// | T-065-COPY-1           | firma-por-enlace.ts · exportar una 12ª causa sin copy                      | exit=1 |  1 | muere |
+// | T-065-COPY-2           | flow-vm.ts · colapsar dos de los tres pares al mismo texto                 | exit=1 |  1 | muere |
+// | T-065-COPY-3           | flow-vm.ts · meter «se debitó» en una de las once                          | exit=1 |  1 | muere |
+// | T-065-COPY-4           | flow-vm.ts:572 · mover el lookup exacto después de los `includes`          | exit=1 |  4 | muere |
+// | T-065-18               | flow-vm.ts · la cifra `0,0105` escrita a mano                              | exit=1 |  1 | muere |
+// | T-065-CD11b (1/3)      | firma-por-enlace.ts · frase vieja en el docblock de `sender`               | exit=1 |  1 | muere |
+// | T-065-CD11b (2/3)      | firma-por-enlace.ts · frase vieja en la justificación del guard            | exit=1 |  2 | muere |
+// | T-065-CD11b (3/3)      | solana-wallet.ts:906 · frase vieja en el bloque del adaptador              | exit=1 |  1 | muere |
+//
+// ── LOS DOS QUE NO MUEREN, Y NINGUNO ES UN AGUJERO ────────────────────────────────────────────────
+//
+// · **`space: 80`** (T-065-11b(a)) VIVE, y estaba PREDICHO en el `it` antes de correrlo:
+//   `NONCE_ACCOUNT_LENGTH` vale 80 hoy, así que el literal y la constante dan lo mismo y **ningún
+//   input los distingue**. Es un mutante EQUIVALENTE, no una falta de cobertura. El que sí distingue es
+//   `space: 81`, que mata. La segunda fuente (`NONCE_ACCOUNT_LENGTH === 80` escrita a mano) es lo que
+//   hace que un bump de la librería se caiga en un test y no en producción.
+// · **la `const` sin efecto** (calibración) vive por diseño: es la mitad que valida el instrumento.
+//
+// ── LO QUE LA BATERÍA DESCUBRIÓ, Y ES SU VALOR REAL ───────────────────────────────────────────────
+//
+// Cuatro mutantes sobrevivieron en el PRIMER pase y ninguno era equivalente. Los cuatro se cerraron:
+//   1. **`T-065-19`** (borrar `saldo.status === "known" &&`) vivía porque era EQUIVALENTE: con
+//      `status: "unknown"`, `saldo.lamports` es `undefined` y `undefined < N` es `false`, así que el
+//      guard tampoco cortaba. El mutante que sí distingue es volverlo **fail-CLOSED**, y ése mata.
+//      ⚠️ Lección: un mutante que sobrevive puede estar midiendo mal el MUTANTE, no el test.
+//   2. **`T-065-CD11a`** (borrar `&& rem.ownerAddress != null`) no mataba a NADIE, y el comentario de
+//      `T-065-CD11` afirmaba que «mata a los que miden el residual». No existía ninguno. Se escribió.
+//   3. **`RESUME-MARCA`** (que cualquier marca reanude) sobrevivía porque el `it` de `dl=conectar`
+//      cortaba ANTES del gate de la marca: su fixture no llegaba a lo que decía medir. Se agregó un
+//      `it` con una marca que nadie escribió, que es la que llega.
+//   4. **`T-065-14`** (limpiar el disco antes del corte por «no pudimos preguntar») sobrevivía porque
+//      el `it` que existía mide el OTRO `throw` del mismo mensaje —el de la vuelta, no el de la ida—.
+//      Son dos sitios y sólo uno tenía candado. Se escribió el que faltaba.
+//
+// ⚠️ Y UN CUARTO HALLAZGO SOBRE EL INSTRUMENTO: `T-065-14` arrancó como **INSTRUMENTO ROTO**, porque su
+// aguja (`throw new Error("deeplink_blockhash_desconocido");`) aparece **DOS veces** en el adaptador.
+// Sin la regla de CD-23 de contar la aguja y exigir `== 1`, ese mutante habría tocado los dos sitios y
+// su veredicto no habría valido.
+//
+// ⚠️ POR QUÉ ALGUNOS CONTEOS SON GRANDES: los mutantes que agregan o quitan LÍNEAS ponen rojo de
+// refilón al candado de citas ancladas por el desplazamiento, y eso NO es cobertura de comportamiento.
+// Está medido en la calibración: la misma `const` sin efecto da **1 rojo** en línea nueva y **0** en
+// línea-neutra. Los conteos de arriba que incluyen ese rojo son los de los mutantes no-neutros.
+// ⚠️ Y `GATE-4` da **56**: el Story File traía «062 midió 46, RE-MEDILO». Re-medido: 56. El número creció
+// con los `it` que esta HU agregó, que es exactamente por lo que había que re-medirlo.
+//
+// Se re-corre con `scratchpad/bateria.mjs` + `scratchpad/mutantes.json` (la especificación de los 47).
+// ══════════════════════════════════════════════════════════════════════════════════════════════════

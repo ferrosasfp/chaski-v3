@@ -215,7 +215,7 @@ describe("el cableado contra el navegador", () => {
   // a la vez y ningún `it` lo notaría — y el default de las dos billeteras es `mainnet-beta`, o sea
   // que el modo de falla es "la persona autoriza sobre la red equivocada".
   // ⚠️ Y LO QUE ESTE PAR NO PRUEBA: hoy `resolveSolanaNetworkConfig()` devuelve una constante pinneada
-  // (`chain.ts:18`), no una env. El día que se lea de una env, el `it` de abajo es el que hay que
+  // ((`cluster`, `../chain.ts:18`)), no una env. El día que se lea de una env, el `it` de abajo es el que hay que
   // mover, y el de arriba tiene que seguir verde sin tocarse.
   it("el `cluster` de la URL sale de la configuración de red y NO de un literal del módulo", () => {
     const nav = montarNavegador();
@@ -311,7 +311,7 @@ describe("el cableado contra el navegador", () => {
 // (c) asserta que el descuento **cambia una cantidad medida**.
 //
 // MUTANTE QUE MATA: insertar `await Promise.resolve();` como PRIMERA línea del cuerpo de `completar()`.
-// (MEDIDO en la batería de §9.)
+// (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit y `it` rojos de los 47 con el árbol en que se midieron.)
 describe("T-065-SYNC: en `completar()` no hay ningún `await` antes de leer la vuelta", () => {
   const RUTA = path.join(__dirname, "preparacion-por-enlace.ts");
 
@@ -440,7 +440,7 @@ describe("T-065-17: transmitir y confirmar", () => {
   }
 
   // MUTANTE QUE MATA: en `preparacion-por-enlace.ts`, devolver `{estado:"nonce-listo"}` con el
-  // resultado del `sendRawTransaction` SIN releer la cuenta. (MEDIDO en la batería de §9.)
+  // resultado del `sendRawTransaction` SIN releer la cuenta. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit y `it` rojos de los 47 con el árbol en que se midieron.)
   it("el RPC aceptó la tx y la cuenta TODAVÍA no está ⇒ `nonce-en-vuelo`, NUNCA `nonce-listo`", async () => {
     const { res, envio } = await volverDelSaltoDelNonce(null, "ok");
     expect(envio, "no se transmitió nada").toHaveBeenCalledTimes(1);

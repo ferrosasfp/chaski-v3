@@ -587,8 +587,8 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
     //
     // 🔴 DÓNDE ESTÁ EL CORTE QUE SÍ LO ES, y no hubo que escribirlo: el cruce de
     // (`live`, `../../../presentation/flow.tsx:506`) contra `rem.ownerAddress`
-    // (`../../../presentation/flow.tsx:507`), que tira `wallet_account_changed`
-    // (`../../../presentation/flow.tsx:518`). `ownerAddress` lo escribe `startKyc` en el REPO DE
+    // ((`ownerAddress`, `../../../presentation/flow.tsx:507`)), que tira `wallet_account_changed`
+    // ((`mismaCuenta`, `../../../presentation/flow.tsx:518`)). `ownerAddress` lo escribe `startKyc` en el REPO DE
     // REMESAS, una fuente que el canal del enlace no puede escribir; hacer link-aware a
     // `getConnectedAddress()` lo volvió load-bearing solo. Lo mide `T-065-CD11`.
     //

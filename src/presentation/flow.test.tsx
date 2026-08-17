@@ -3287,14 +3287,17 @@ describe("WKH-358/T-065-CD11 · el cruce contra `ownerAddress` corta en el camin
   });
 
   // MUTANTES QUE MATAN — tres sitios, y el tercero es el que prueba que esta HU volvió load-bearing al
-  // cruce (los conteos van en la batería de §9, no acá, para que no se pudran en dos lugares):
+  // cruce (los conteos van en LA BATERÍA DE MUTACIÓN, al final de
+  // `../infrastructure/solana/deeplink/conexion.test.ts`, y no acá, para que no se pudran en dos lugares):
   //   (a) `flow.tsx:518` — borrar el `throw new Error("wallet_account_changed")`.
   //   (b) `solana-wallet.ts:252` — borrar la consulta a `direccionDelViajeConectado()` de
   //       `getConnectedAddress()` ⇒ el puerto contesta `null` (el bridge está vacío), el cruce no
   //       dispara y el use-case se llama igual. Ése es el estado del árbol ANTES de W2.3.
-  //   (c) `flow.tsx:507` — borrar `&& rem.ownerAddress != null`. Este NO mata a este `it` (el cruce
-  //       sigue cortando); mata a los que miden el residual. Va escrito para que nadie lo lea como
-  //       cobertura que este `it` no da.
+  //   (c) `flow.tsx:507` — borrar `&& rem.ownerAddress != null`. Este NO mata a este `it`: el cruce
+  //       sigue cortando. ⚠️ Y ACÁ DECÍA «mata a los que miden el residual» SIN QUE EXISTIERA NINGUNO:
+  //       corrido, ese mutante sobrevivía con exit=0 y 0 rojos, o sea que esta línea afirmaba una
+  //       cobertura inexistente. El `it` que la da está más abajo en este archivo («el residual de
+  //       CD-11: `ownerAddress == null` NO dispara el guard») y se escribió por esa medición.
   it("T-065-CD11: con `Viaje.direccion` = B y `rem.ownerAddress` = A, NO se pide ninguna firma", async () => {
     const c = buildTestContainer({
       connectedWallet: new SolanaWalletAdapter(), // 🔴 EL ADAPTADOR REAL: lo que se prueba es el CABLEADO
@@ -3400,7 +3403,7 @@ describe("WKH-358/T-065-12 · la tarjeta de la cuenta de nonce", () => {
   });
 
   // MUTANTE QUE MATA: en `flow.tsx`, en la tarjeta, escribir `"0,0015"` como literal en vez de llamar a
-  // `formatLamportsAsSol(NONCE_ACCOUNT_RENT_LAMPORTS)`. (MEDIDO en la batería de §9.)
+  // `formatLamportsAsSol(NONCE_ACCOUNT_RENT_LAMPORTS)`. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit y `it` rojos de los 47 con el árbol en que se midieron.)
   //
   // ⚠️ POR QUÉ ESTE `it` ES TEXTUAL Y NO DE RENDER, dicho porque parece redundante con el primero: un
   // `it` de render que compare contra `formatLamportsAsSol(...)` da VERDE con el literal puesto, porque
@@ -3439,3 +3442,84 @@ describe("WKH-358/T-065-12 · la tarjeta de la cuenta de nonce", () => {
     ).toEqual([]);
   });
 });
+
+// ═══ WKH-358 · EL RESIDUAL DE T-065-CD11, CON SU PROPIO `it` ═════════════════════════════════════
+//
+// 🔴 POR QUÉ ESTE `it` EXISTE, Y ES UN HALLAZGO DE LA BATERÍA Y NO UN EXTRA. El comentario de
+// `T-065-CD11` declaraba que el mutante «borrar `&& rem.ownerAddress != null` de `flow.tsx:507`» no
+// mataba a ese `it` pero sí «a los que miden el residual». Corrido: ese mutante **no mataba a NADIE**
+// (exit=0, 0 rojos). O sea que la frase afirmaba una cobertura que no existía, que es exactamente la
+// clase de prosa que este repo tiene prohibida. Este `it` es la cobertura que faltaba.
+//
+// ⚠️ QUÉ AFIRMA, Y NO ES QUE EL RESIDUAL SEA SEGURO: afirma que `rem.ownerAddress == null` **no dispara
+// el guard**, que es la mitad correcta (null no es "cambió la identidad", y acusar ahí convertiría un
+// árbol todavía sin montar en una acusación falsa). El residual —que en ese caso un forjador del paso 1
+// SÍ puede sustituir al depositante— sigue **abierto y declarado**, y está escrito sin suavizar en el
+// bloque de CD-11 del motor. Esta HU no lo cierra.
+describe("WKH-358 · el residual de CD-11: `ownerAddress == null` NO dispara el guard", () => {
+  const B = "CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8";
+
+  afterEach(() => {
+    window.localStorage.clear();
+    solanaWalletBridge.setWalletAvailability("unknown");
+    act(() => {
+      solanaWalletBridge.setState({ publicKey: null, connected: false });
+    });
+  });
+
+  // MUTANTE QUE MATA: en `flow.tsx:507`, borrar `&& rem.ownerAddress != null` ⇒ `canonicalizeAddress`
+  // recibe `null`, TIRA, el `catch` lo trata como desacuerdo (fail-closed) y el envío se corta sobre una
+  // remesa que nunca declaró dueño. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit y `it` rojos de los 47 con el árbol en que se midieron.)
+  it("con `rem.ownerAddress` en `null` y una dirección viva, el envío SIGUE", async () => {
+    // La remesa llega a `confirm` SIN haber pasado por `startKyc`: es el caso que el residual describe.
+    const sinDueño = { ...passedSnapshot(1478.15, 3.7, "2099-01-01T00:00:00.000Z"), ownerAddress: null };
+    // CD-18 — el fixture fabricó el caso: sin esto, `passedSnapshot` deja `ownerAddress = A` y este
+    // `it` mediría el camino de siempre.
+    expect(sinDueño.ownerAddress, "el fixture no dejó la remesa sin dueño").toBeNull();
+
+    const almacen = almacenDeNavegador(window.localStorage);
+    guardarEleccion(almacen, "phantom");
+    solanaWalletBridge.setWalletAvailability("none");
+    guardarViaje(almacen, {
+      billetera: "phantom",
+      secreta: bs58.encode(new Uint8Array(32)),
+      publica: bs58.encode(new Uint8Array(32)),
+      claveBilletera: bs58.encode(new Uint8Array(32)),
+      session: "s",
+      direccion: B,
+      paso: "conectar",
+      remittanceId: sinDueño.id,
+      desde: Date.now(),
+    });
+
+    const c = buildTestContainer({
+      connectedWallet: new SolanaWalletAdapter(),
+      wallet: new WalletDelBridgeSuelto(),
+      useCases: {
+        resumeKyc: { execute: async () => ({ kind: "passed" as const, snapshot: sinDueño }) } as unknown as ResumeKyc,
+      },
+    });
+    const spy = vi.spyOn(c.confirmAndSend, "execute");
+
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
+    // El puerto contesta B por el canal del enlace; la remesa no tiene con qué comparar.
+    expect(await c.connectedWallet.getConnectedAddress()).toBe(B);
+    fireEvent.click(await screen.findByRole("button", { name: /Confirmar y enviar/ }));
+
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    expect(
+      screen.queryByText(/Estás conectado con otra cuenta/),
+      "el guard acusó un cambio de identidad sobre una remesa que nunca declaró dueño",
+    ).toBeNull();
+  });
+});
+
+/** La billetera de este bloque: el `WalletDelBridge` de WKH-354 vive dentro de su describe. */
+class WalletDelBridgeSuelto extends FakeWallet {
+  override async connect(): Promise<string> {
+    return solanaWalletBridge.getState().publicKey ?? FAKE_WALLET_ADDRESS;
+  }
+  override async getAddress(): Promise<string | null> {
+    return solanaWalletBridge.getState().publicKey ?? FAKE_WALLET_ADDRESS;
+  }
+}

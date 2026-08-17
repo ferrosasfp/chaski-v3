@@ -381,7 +381,7 @@ export class RecorridoPorEnlaceReal implements PreparacionPorEnlace {
    * implementa `signAndSendTransaction`) y el facilitator no puede ser parte de esta tx (Check 5).
    * Queda el cliente, y **no es un mecanismo nuevo**: el árbol ya tiene dos broadcasts de cliente para
    * operaciones que no meten plata en el escrow, y el exemplar exacto es `closeEscrow`
-   * (`../solana-wallet.ts:1654`). La única diferencia es que la firma no viene del bridge sino de la
+   * ((`getLatestBlockhash`, `../solana-wallet.ts:1654`)). La única diferencia es que la firma no viene del bridge sino de la
    * vuelta del enlace. **T-062-20 no se debilita**: prohíbe transmitir dentro del cuerpo de
    * `authorizePrincipal`, y esto vive en otro método de otra clase.
    *
@@ -424,7 +424,7 @@ export class RecorridoPorEnlaceReal implements PreparacionPorEnlace {
   }
 
   /** La `Connection` client-safe de la red activa. Se construye por llamada, igual que en el
-   *  adaptador (`../solana-wallet.ts:384`): no hay estado que memoizar y una conexión guardada
+   *  adaptador ((`Connection`, `../solana-wallet.ts:384`)): no hay estado que memoizar y una conexión guardada
    *  sobreviviría a un cambio de configuración sin enterarse. */
   private conexion(): Connection {
     return new Connection(resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster));

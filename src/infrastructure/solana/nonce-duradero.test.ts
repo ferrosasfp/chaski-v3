@@ -9,14 +9,17 @@ import {
   NONCE_ACCOUNT_LENGTH,
   NonceAccount,
   PublicKey,
+  SystemInstruction,
   SystemProgram,
   SYSVAR_RECENT_BLOCKHASHES_PUBKEY,
   Transaction,
   ComputeBudgetProgram,
   type AccountInfo,
   type Connection,
+  type TransactionInstruction,
 } from "@solana/web3.js";
 import {
+  construirCreacionDeNonce,
   construirNonceAdvance,
   direccionDelNonce,
   leerNonce,
@@ -335,5 +338,104 @@ describe("⛔ T-N7 (AR MNR-4) — DT-7: la promesa de pureza del módulo, en eje
     // Y que el fuente real no llegue vacío por un path equivocado.
     expect(fuenteSinComentarios().length).toBeGreaterThan(500);
     expect(fuenteSinComentarios()).toContain("export function construirNonceAdvance");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// T-065-11 / T-065-11b (WKH-358 / AC-5) — la transacción que CREA la cuenta
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ SE ESTÁ PROTEGIENDO. El contrato entero de esta cuenta es **una sola firma y nada que
+// persistir**: si la creación exigiera dos firmantes, habría que guardar una clave privada para que la
+// segunda firma sobreviviera al salto a la billetera, y eso está prohibido. El `it` de abajo no
+// verifica la forma "por si acaso": verifica el número que ES la decisión.
+describe("T-065-11: `construirCreacionDeNonce`", () => {
+  const RENTA = 1_447_680;
+  /** Un blockhash cualquiera: acá no se mide el reloj, sólo la forma de la transacción. */
+  const BLOCKHASH_FIJO = Keypair.generate().publicKey.toBase58();
+
+  async function armar(sender = Keypair.generate()) {
+    const noncePk = await direccionDelNonce(sender.publicKey);
+    const ixs = construirCreacionDeNonce(sender.publicKey, noncePk, RENTA);
+    const tx = new Transaction({ feePayer: sender.publicKey, blockhash: BLOCKHASH_FIJO, lastValidBlockHeight: 1 });
+    for (const ix of ixs) tx.add(ix);
+    return { sender, noncePk, ixs, tx };
+  }
+
+  // MUTANTE QUE MATA: en `nonce-duradero.ts`, cambiar la forma por
+  // `SystemProgram.createNonceAccount({ …, noncePubkey: Keypair.generate().publicKey })`
+  // ⇒ `numRequiredSignatures` pasa a 2 y este `it` se pone rojo. (MEDIDO en la batería de §9.)
+  it("son 2 ix, `numRequiredSignatures === 1`, y el único firmante es el sender", async () => {
+    const { sender, tx, ixs } = await armar();
+    expect(ixs).toHaveLength(2);
+    const msg = tx.compileMessage();
+    expect(
+      msg.header.numRequiredSignatures,
+      "la creación pide más de una firma: habría que PERSISTIR una clave privada, que es lo que esta " +
+        "forma existe para evitar",
+    ).toBe(1);
+    expect(msg.accountKeys[0]?.toBase58()).toBe(sender.publicKey.toBase58());
+    // Y firma de verdad: si la cuenta nueva fuera firmante, esto tiraría por firma faltante.
+    tx.sign(sender);
+    expect(tx.verifySignatures()).toBe(true);
+  });
+
+  it("la cuenta destino es EXACTAMENTE la que devuelve `direccionDelNonce`", async () => {
+    const { noncePk, ixs } = await armar();
+    // La cuenta nueva es la 1 de `createAccountWithSeed` (from, newAccount, base).
+    expect(ixs[0]?.keys[1]?.pubkey.toBase58()).toBe(noncePk.toBase58());
+    // ⛔ Y NO es firmante: su dirección se DERIVA, no se genera.
+    expect(ixs[0]?.keys[1]?.isSigner, "la cuenta nueva quedó como firmante").toBe(false);
+    // La 2ª ix inicializa ESA misma cuenta, con el sender como authority (CD-6).
+    expect(ixs[1]?.keys[0]?.pubkey.toBase58()).toBe(noncePk.toBase58());
+  });
+
+  it("la authority del nonce es el SENDER, nunca otra cuenta (CD-6 / Check 5 del facilitator)", async () => {
+    const { sender, ixs } = await armar();
+    const decodificada = SystemInstruction.decodeNonceInitialize(ixs[1] as TransactionInstruction);
+    expect(decodificada.authorizedPubkey.toBase58()).toBe(sender.publicKey.toBase58());
+  });
+
+  it("el round-trip serializar → `Transaction.from` deja el mensaje BYTE-IDÉNTICO", async () => {
+    const { sender, tx } = await armar();
+    tx.sign(sender);
+    const vuelta = Transaction.from(tx.serialize());
+    expect(Buffer.from(vuelta.serializeMessage())).toEqual(Buffer.from(tx.serializeMessage()));
+  });
+
+  // ── T-065-11b (CD-20) — el `space` sale de la LIBRERÍA, no del literal ──────────────────────────
+  //
+  // DOS FUENTES, como pide CD-20: (a) el `it` de acá abajo compara el `space` de la instrucción contra
+  // `NONCE_ACCOUNT_LENGTH` de la librería; (b) el `it` que le sigue ata esa constante al número `80`
+  // escrito A MANO. Con una sola, un bump de la librería movería los dos lados a la vez.
+  //
+  // MUTANTES QUE MATAN: en `nonce-duradero.ts`, en `construirCreacionDeNonce`,
+  //   (a) cambiar `NONCE_ACCOUNT_LENGTH` por `80` ⇒ muere sólo el `it` que compara contra la librería
+  //       si además se mueve la constante; con la librería en 80 los dos valores coinciden, así que el
+  //       mutante REALMENTE distinguible es el (b);
+  //   (b) cambiar `NONCE_ACCOUNT_LENGTH` por `81` ⇒ mueren los dos `it` de abajo.
+  // (MEDIDO en la batería de §9, con sus conteos.)
+  it("T-065-11b: el `space` es el `NONCE_ACCOUNT_LENGTH` de la librería", async () => {
+    const { ixs } = await armar();
+    const decodificada = SystemInstruction.decodeCreateWithSeed(ixs[0] as TransactionInstruction);
+    expect(decodificada.space).toBe(NONCE_ACCOUNT_LENGTH);
+    expect(decodificada.seed).toBe(SEMILLA_DEL_NONCE);
+    expect(decodificada.lamports).toBe(RENTA);
+    expect(decodificada.programId.toBase58()).toBe(SystemProgram.programId.toBase58());
+  });
+
+  it("T-065-11b (2ª fuente): `NONCE_ACCOUNT_LENGTH` vale 80, escrito a mano acá", () => {
+    // ⛔ El `80` va literal A PROPÓSITO. Es lo único que puede delatar un bump de `@solana/web3.js` que
+    // mueva el largo: sin esta línea, los dos lados de la comparación de arriba se moverían juntos y
+    // `leerNonce` (`:159`) empezaría a rechazar las cuentas que nosotros mismos creamos.
+    expect(NONCE_ACCOUNT_LENGTH).toBe(80);
+  });
+
+  it("`createNonceAccountWithSeed` NO existe en esta versión (por eso las ix se componen a mano)", () => {
+    // El control del párrafo del docblock: si un bump la agregara, este `it` avisa y recién ahí tiene
+    // sentido discutir si conviene usarla.
+    expect(
+      (SystemProgram as unknown as Record<string, unknown>).createNonceAccountWithSeed,
+    ).toBeUndefined();
   });
 });

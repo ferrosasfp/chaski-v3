@@ -14,7 +14,7 @@ import { canonicalizeAddress, isOwnedBy } from "../infrastructure/address"; // W
 // WKH-337: la allowlist de proveniencias REALES se IMPORTA (no se copia). El docblock de la constante
 // dice por qué: "un segundo Set con los mismos valores es exactamente cómo se desincronizan las dos
 // capas". Precedente de import fuera de `presentation/`: `scripts/smoke-helpers.ts`.
-import { REAL_PAYOUT_PROVENANCES } from "../domain/payout-provenance"; import type { VueltaDeEnlace } from "../infrastructure/solana/preparacion-por-enlace"; import type { BilleteraDeeplink } from "../infrastructure/solana/deeplink/protocol"; // WKH-358: los dos EN ESTA LÍNEA, misma disciplina que el resto del bloque. CR/MNR-4: capas
+import { REAL_PAYOUT_PROVENANCES } from "../domain/payout-provenance"; import type { PreparacionPorEnlace } from "../infrastructure/solana/preparacion-por-enlace"; import type { BilleteraDeeplink } from "../infrastructure/solana/deeplink/protocol"; // WKH-358: los dos EN ESTA LÍNEA, misma disciplina que el resto del bloque. CR/MNR-4: capas
 import type {
   Clock,
   EscrowRefundConfirmation,
@@ -1044,7 +1044,7 @@ export class FakeConnectedWallet implements ConnectedWalletProbe {
  * `tests-que-registran-el-doble-no-prueban-el-cableado`. El test que quiera medir el salto tiene que
  * pasar su propio doble, y así queda escrito en el test que lo hace.
  */
-export class RecorridoPorEnlaceNulo implements VueltaDeEnlace {
+export class RecorridoPorEnlaceNulo implements PreparacionPorEnlace {
   public olvidos = 0;
   eleccion(): BilleteraDeeplink | null {
     return null;
@@ -1067,6 +1067,15 @@ export class RecorridoPorEnlaceNulo implements VueltaDeEnlace {
    *  doble que lo imite escondería el cableado que falta. */
   async completar(): Promise<never> {
     throw new Error("vuelta_de_enlace_no_cableada_en_este_test");
+  }
+  /** ⚠️ TIRA, por lo mismo. ⛔ Y NO devuelve `"falta"` ni `"no-pudimos-preguntar"`: los dos son
+   *  desenlaces REALES de preguntarle a la cadena, y un doble que imite uno esconde el cableado que
+   *  falta. Un test que necesite un estado concreto pasa SU propio doble, y así queda escrito ahí. */
+  async estadoDeLaCuentaDeNonce(): Promise<never> {
+    throw new Error("preparacion_por_enlace_no_cableada_en_este_test");
+  }
+  async crearCuentaDeNonce(): Promise<never> {
+    throw new Error("preparacion_por_enlace_no_cableada_en_este_test");
   }
 }
 

@@ -2213,7 +2213,7 @@ export class SolanaWalletAdapter
    *
    *  🔴 ES EL ÚNICO INTERRUPTOR DE LA RAMA DE ENLACE, y **DOS condiciones**, las dos derivadas EN EL
    *  INSTANTE del gesto:
-   *    1. la elección persistida del selector (`leerEleccion`, `./solana/deeplink/conexion.ts:148`), que
+   *    1. la elección persistida del selector (`leerEleccion`, `./solana/deeplink/conexion.ts:149`), que
    *       escribe SÓLO el selector y nunca este archivo, y
    *    2. (`getWalletAvailability`, `./solana-wallet-bridge.ts:70`) `=== "none"`.
    *  Si falta cualquiera de las dos ⇒ `null` ⇒ el recorrido es el inyectado, **byte-idéntico al de hoy**.

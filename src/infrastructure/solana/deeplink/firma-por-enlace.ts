@@ -672,7 +672,7 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
         // 🔴 ACÁ HABÍA UNA PROMESA Y WKH-358 LA VOLVIÓ FALSA, ASÍ QUE SE REESCRIBE Y NO SE DEJA
         // ENVEJECER (AC-2). Decía: *"El día que la ola 4 escriba el connect por enlace, esta rama pasa
         // a ser alcanzable de verdad y ahí necesita su `it`."* La ola 4 escribió el connect por enlace
-        // —(`completarVuelta`, `./conexion.ts:253`)— y **esta rama SIGUE inalcanzable**, por una razón
+        // —(`completarVuelta`, `./conexion.ts:254`)— y **esta rama SIGUE inalcanzable**, por una razón
         // que no tiene nada que ver con lo que la promesa suponía y que ahora está medida:
         //
         //   · **la vuelta del connect la procesa OTRO módulo.** `conexion.ts` es el segundo y último

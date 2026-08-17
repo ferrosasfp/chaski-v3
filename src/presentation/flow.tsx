@@ -74,7 +74,7 @@ import {
   statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, type GestoRenovacion, REVISION_APAGADA, REVISION_FIRMANDO, REVISION_GESTO, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_BILLETERA, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, esVentanaSinAbiertos, // WKH-339: EN ESTA LÍNEA. `flow.tsx:661` lo citan 6 archivos (`ports.ts`, `container.test.ts`, `http-pop-signer.ts`, `pop-proof-store.ts`, `ledger-payout-status-gateway.ts`, `solana-providers.tsx`) más 2 sitios de acá, y NINGUNA de las 8 es una cita anclada ⇒ si se mueve, nada se pone rojo y los 8 comentarios rotan en silencio. ⛔ Acá decía `632`, que era el número correcto en `ce4f31e` y lo dejó de ser en esta rama: los 6 archivos SÍ se remapearon a 661 y esta línea, que es la que NOMBRA el número, quedó atrás (CR/BLQ-BAJO-1) · WKH-346 fix-pack: `esVentanaSinAbiertos` entra acá por lo mismo (Δ0)
 } from "./flow-vm";
 import { cn } from "./cn";
-import { phantomBrowseUrl, useWalletAvailability, useConnectedWalletAddress, mwaEnabled, useMwaOffered, deeplinkEnabled } from "./wallet-availability"; import type { BilleteraDeeplink } from "../infrastructure/solana/deeplink/protocol"; import { hrefSinRastroDeVuelta, marcaDeVuelta } from "../infrastructure/solana/deeplink/conexion"; // WKH-358: los dos EN ESTA MISMA LÍNEA, por lo mismo que los dos de WKH-MWA // el aviso de "acá no hay wallet" (NoWalletHere) · WKH-354/AC-6: `useConnectedWalletAddress` para el banner (CuentaCambiada) · WKH-MWA: los dos últimos, EN ESTA MISMA LÍNEA (el censo de citas por número de `:44` `flow.tsx:NNNN` cuelgan de que este archivo no cambie de largo)
+import { phantomBrowseUrl, useWalletAvailability, useConnectedWalletAddress, mwaEnabled, useMwaOffered, deeplinkEnabled } from "./wallet-availability"; import type { BilleteraDeeplink } from "../infrastructure/solana/deeplink/protocol"; import { hrefSinRastroDeVuelta, marcaDeVuelta } from "../infrastructure/solana/deeplink/conexion"; import type { EstadoDeLaCuentaDeNonce } from "../composition/container"; import { NONCE_ACCOUNT_RENT_LAMPORTS, formatLamportsAsSol } from "../application/solana-escrow-rent"; // WKH-358: los dos EN ESTA MISMA LÍNEA, por lo mismo que los dos de WKH-MWA // el aviso de "acá no hay wallet" (NoWalletHere) · WKH-354/AC-6: `useConnectedWalletAddress` para el banner (CuentaCambiada) · WKH-MWA: los dos últimos, EN ESTA MISMA LÍNEA (el censo de citas por número de `:44` `flow.tsx:NNNN` cuelgan de que este archivo no cambie de largo)
 import { Aviso, Button, Card, ChaskiMark, Field, Money, Muted, Pill, Row, Stepper, TextInput } from "./ui"; import { BarraDestinos, type Destino, VolverAlInicio, esDestino } from "./barra-destinos"; import { Bienvenida } from "./bienvenida"; import { DestinoRecuperar, QUE_RECUPERA } from "./recuperar"; // ola 2: los nombres nuevos entran EN ESTA LÍNEA, no en una nueva. Este archivo recibe MUCHAS citas por número, y una sola línea de import de más corre todas las que apuntan más abajo. ⛔ EL NÚMERO NO SE ESCRIBE ACÁ: vive en UN solo lugar, con su definición y su fecha, en el comentario de `:44` (fix-pack, CR/MNR-5). Acá había un valor y el mismo archivo llevaba otros cuatro distintos para el mismo hecho, cada uno copiado de un vecino en vez de medido · WKH-063: los TRES imports nuevos entran acá por lo mismo (Δ0 líneas)
 
 // WKH-187: el quote se muestra ANTES del KYC. Orden: send→connect→review(pre-KYC)→verify→confirm(post-KYC)→track→done.
@@ -159,7 +159,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
 
   // state
   const [preview, setPreview] = useState<Quote | null>(null); const [estadoCotiza, setEstadoCotiza] = useState<"pidiendo" | "ok" | "falla" | "corto">("pidiendo"); // H2: `preview === null` significaba TRES cosas (todavía no llegó · falló · el monto no llega al mínimo) y la pantalla las mostraba con el MISMO guión. Un `Quote | null` ya había perdido el tercer valor; esto lo repone. Va EN ESTA LÍNEA porque `flow.tsx` recibe ~muchas citas por número (el número y su definición viven en UN solo lugar, `:44`).
-  const [rem, setRem] = useState<RemittanceState | null>(null); const onElegirBilleteraDeEnlace = (b: BilleteraDeeplink) => { if (rem === null) return; yaInteractuoRef.current = true; try { window.location.href = c.eleccionDeEnlace.elegir({ billetera: b, remittanceId: rem.id }).irA; } catch (e) { setError({ message: humanError((e as Error).message) }); } }; // WKH-358 — EN ESTA LÍNEA (Δ0 de citas, `:44`) y ACÁ ABAJO porque necesita `rem`, que se declara en esta misma línea. TRES cosas que no son obvias: (1) `rem === null` NO puede saltar — el viaje se abre CON el `remittanceId` desde el primer byte (CD-5) y sin remesa no hay dueño cruzado que comparar a la vuelta; (2) marca `yaInteractuoRef` porque esto ES una interacción de la persona, y sin eso un resume que resuelva mientras ella está en la app de la billetera navegaría por encima al volver; (3) el `catch` traduce en vez de tirar: `elegir` sube una causa del vocabulario del enlace cuando el disco no acepta el viaje, y eso hay que DECIRLO, no dejarlo como excepción sin causa. ⚠️ Y LA CAUSA SE DERIVA DEL ERROR, NUNCA SE ESCRIBE ACÁ COMO LITERAL: el candado de copy de `deeplink-callers.test.ts` cuenta las causas `deeplink_*` que aparecen en `src/presentation`, y hasta que exista el `Record` con las once (W5) escribir una sola acá lo rompe a propósito. Hoy `humanError` la manda a su default, que es exactamente lo que el docblock del motor declara
+  const [rem, setRem] = useState<RemittanceState | null>(null); const onElegirBilleteraDeEnlace = (b: BilleteraDeeplink) => { if (rem === null) return; yaInteractuoRef.current = true; try { window.location.href = c.eleccionDeEnlace.elegir({ billetera: b, remittanceId: rem.id }).irA; } catch (e) { setError({ message: humanError((e as Error).message) }); } }; // WKH-358 — EN ESTA LÍNEA (Δ0 de citas, `:44`) y ACÁ ABAJO porque necesita `rem`, que se declara en esta misma línea. TRES cosas que no son obvias: (1) `rem === null` NO puede saltar — el viaje se abre CON el `remittanceId` desde el primer byte (CD-5) y sin remesa no hay dueño cruzado que comparar a la vuelta; (2) marca `yaInteractuoRef` porque esto ES una interacción de la persona, y sin eso un resume que resuelva mientras ella está en la app de la billetera navegaría por encima al volver; (3) el `catch` traduce en vez de tirar: `elegir` sube una causa del vocabulario del enlace cuando el disco no acepta el viaje, y eso hay que DECIRLO, no dejarlo como excepción sin causa. ⚠️ Y LA CAUSA SE DERIVA DEL ERROR, NUNCA SE ESCRIBE ACÁ COMO LITERAL: el candado de copy de `deeplink-callers.test.ts` cuenta las causas del vocabulario del enlace que aparecen en `src/presentation`, y hasta que exista el `Record` con las once (W5) escribir una sola acá lo rompe a propósito. Hoy `humanError` la manda a su default, que es exactamente lo que el docblock del motor declara
   const [address, setAddress] = useState<string | null>(null);
   // WKH-333: el veredicto de KYC que el servidor ya contestó al conectar. NO es un guard: sólo decide
   // si se gasta un cupo de Didit (el guard del dinero es `prepare`, server-side).
@@ -167,7 +167,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
   // La prueba de posesión que se firmó al conectar. Viaja hasta la creación de la sesión de Didit
   // (WKH-333/R-1) para que no haga falta un SEGUNDO prompt de billetera por el mismo motivo.
   const [kycProof, setKycProof] = useState<WalletPossessionProof | undefined>(undefined);
-  const [resuming, setResuming] = useState(false); // retomando KYC al volver de Didit
+  const [resuming, setResuming] = useState(false); const [estadoNonce, setEstadoNonce] = useState<EstadoDeLaCuentaDeNonce | "en-vuelo" | null>(null); // retomando KYC al volver de Didit · WKH-358/AC-5: `estadoNonce` EN ESTA LÍNEA (Δ0 de citas, `:44`). `null` = "todavía no le preguntamos a la cadena", que NO es ninguno de los cuatro estados y por eso no es uno de sus valores: con `null` la tarjeta no se pinta. El quinto valor, `"en-vuelo"`, no viene de la cadena sino del broadcast, y por eso vive acá y no en `EstadoDeLaCuentaDeNonce`
   const [timedOut, setTimedOut] = useState(false); // el resume-loop agotó el timeout
   const [confirmReset, setConfirmReset] = useState(false); // control "¿No sos vos?" (WKH-184)
   const [rateUpdated, setRateUpdated] = useState(false); // WKH-187: el quote se re-cotizó tras expirar durante el KYC
@@ -283,7 +283,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
     return () => {
       alive = false;
     };
-  }, [c]); useVueltaPorEnlace({ c, yaInteractuo: yaInteractuoRef, alConectar: (r) => { setAddress(r.address); setServerVerdict(r.serverVerdict); setKycProof(r.kycProof); }, alFallar: (causa) => setError({ message: humanError(causa) }), alReanudar: (r) => { if (r.estado === "hay-que-salir") { window.location.href = r.irA; return; } setRem(r.remesa.snapshot); setStep(r.remesa.status === "settled" ? "done" : "track"); }, alAvisar: (m) => setError({ message: m }) }); // WKH-358/AC-1+AC-3 — EN ESTA LÍNEA (Δ0 de citas, `:44`). El cuerpo vive al FINAL del archivo, con todo su razonamiento, por lo que dice el comentario de `:44`: ~60 líneas acá adentro corren las 131 citas por número que este archivo recibe. ⛔ La causa se traduce con `humanError` y NUNCA se escribe un `deeplink_*` literal en este archivo (el candado de copy de `deeplink-callers.test.ts` cuenta los que aparecen en `src/presentation`). ⛔ Y NO hay ningún `setRem`: el gate del pisón vive adentro del hook y esto sólo repuebla lo que `onConnect` repuebla
+  }, [c]); useVueltaPorEnlace({ c, yaInteractuo: yaInteractuoRef, alConectar: (r) => { setAddress(r.address); setServerVerdict(r.serverVerdict); setKycProof(r.kycProof); }, alFallar: (causa) => setError({ message: humanError(causa) }), alReanudar: (r) => { if (r.estado === "hay-que-salir") { window.location.href = r.irA; return; } setRem(r.remesa.snapshot); setStep(r.remesa.status === "settled" ? "done" : "track"); }, alAvisar: (m) => setError({ message: m }), alSaberDelNonce: setEstadoNonce }); // WKH-358/AC-1+AC-3+AC-5 — EN ESTA LÍNEA (Δ0 de citas, `:44`). El cuerpo vive al FINAL del archivo, con todo su razonamiento, por lo que dice el comentario de `:44`: ~60 líneas acá adentro corren las 131 citas por número que este archivo recibe. ⛔ La causa se traduce con `humanError` y NUNCA se escribe una causa del enlace como literal en este archivo (el candado de copy de `deeplink-callers.test.ts` cuenta los que aparecen en `src/presentation`). ⛔ Y NO hay ningún `setRem`: el gate del pisón vive adentro del hook y esto sólo repuebla lo que `onConnect` repuebla
 
   // WKH-188: mientras el overlay `resuming` está visible, ofrecer un escape a los 5 s (AC-1).
   // Time-based (no atado al conteo de iteraciones). Al caer `resuming` (terminal temprano o timeout),
@@ -381,7 +381,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
     });
 
   // WKH-187/AC-2: la CTA "Continuar" del review lleva al KYC pero NO lo auto-inicia (navegación pura).
-  const onContinue = () => setStep("verify");
+  const onContinue = () => setStep("verify"); const mirarLaCuentaDeNonce = async (direccion: string) => { setEstadoNonce(await c.eleccionDeEnlace.estadoDeLaCuentaDeNonce(direccion)); }; const onVolverAMirarLaCuentaDeNonce = () => guard(async () => { const dir = await c.connectedWallet.getConnectedAddress(); if (dir !== null) await mirarLaCuentaDeNonce(dir); }); const onCrearCuentaDeNonce = () => guard(async () => { if (rem === null) return; yaInteractuoRef.current = true; const dir = await c.connectedWallet.getConnectedAddress(); if (dir === null) return; window.location.href = (await c.eleccionDeEnlace.crearCuentaDeNonce({ direccion: dir, remittanceId: rem.id })).irA; }); // WKH-358/AC-5 — LOS TRES EN ESTA LÍNEA (Δ0 de citas, `:44`). ⚠️ `onCrearCuentaDeNonce` marca `yaInteractuoRef` porque ES una interacción de la persona: sin eso, un resume que resuelva mientras ella está en la app de la billetera navegaría por encima al volver. ⛔ La dirección sale de `getConnectedAddress()` y NO de `address`: en el camino por enlace el estado de React se pierde en el salto y el puerto lee el disco
 
   // La puerta de entrada a lo que ya existe. Pide la address ANTES de listar porque el historial está
   // scopeado por dueño (repo.list): sin saber quién sos no hay lista que mostrar, y adivinarla sería
@@ -754,7 +754,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
       {esDestino(step) ? null : (<div className="mb-aire">
         <Stepper steps={STEP_LABELS} current={STEP_INDEX[step]} />
       </div>)}
-      {avisoKyc !== null ? (<Aviso tono={avisoKyc.destino === "verify" ? "atencion" : "bueno"} className="mb-holgado text-body"><span className="block font-semibold">{avisoKyc.destino === "verify" ? "Tu verificación necesita otro intento" : "Tu verificación quedó lista"}</span><span className="mt-ajustado block">No te sacamos de esta pantalla porque la estabas usando vos. El envío que dejaste a medias sigue guardado.</span><Button variant="outline" className="mt-normal" onClick={() => { const a = avisoKyc; setAvisoKyc(null); setRem(a.snapshot); if (a.error !== undefined) setError({ message: a.error }); setStep(a.destino); }}>{avisoKyc.destino === "verify" ? "Reintentar la verificación" : "Seguir con ese envío"}</Button></Aviso>) : null}{/* 🔴 WKH-063 (fix-pack 2, con SUS DOS CAMINOS ABIERTOS CERRADOS EN EL 3) · EL AVISO QUE REEMPLAZA AL PISÓN, y es NO MODAL a propósito: no tapa nada, no roba el foco y no navega. Se prende cuando el resume terminó y `yaInteractuoRef` (`:175`) está en `true`, o sea cuando antes había una navegación no pedida. 🔴 SON DOS VARIANTES Y NO UNA (fix-pack 3), porque el resume tiene dos desenlaces terminales y el `failed` también pisaba: con `destino === "verify"` el título NO puede decir que la verificación quedó lista, y el `tono` tampoco puede ser `bueno` (el verde de esta app es el del dinero que llega). La segunda frase es la MISMA en las dos ramas a propósito, y por eso dice "la estabas usando" y no "la habías elegido": el fix-pack 3 sumó el embudo, donde la persona no eligió un destino con la barra sino que entró a tipear, y "elegido" habría sido falso en ese camino. ⛔ EL BOTÓN NO ES DECORACIÓN, y desde el fix-pack 3 es más que un `setStep`: APLICA EL SNAPSHOT (`setRem`) que `aterrizar` (`:208`) no aplicó. Es el único camino de vuelta medido — la barra sólo ofrece los tres destinos, "Empezar un envío" crea una remesa NUEVA, y "Mis envíos" tampoco sirve para una remesa sin depósito autorizado, que se lista SIN control de fila (`openable`, `:3412`). ⚠️ VA ACÁ Y NO ABAJO DEL BLOQUE DE ERROR: a 375x667 las tres pantallas de destino miden más que el viewport (medido en el encabezado de `recuperar-composicion.test.tsx`), así que un aviso puesto al lado de la barra nace debajo del pliegue. ⛔ Δ0 DE LÍNEAS: entra en la línea en blanco que había acá, por las citas por número de este archivo (`:44`). */}
+      {avisoKyc !== null ? (<Aviso tono={avisoKyc.destino === "verify" ? "atencion" : "bueno"} className="mb-holgado text-body"><span className="block font-semibold">{avisoKyc.destino === "verify" ? "Tu verificación necesita otro intento" : "Tu verificación quedó lista"}</span><span className="mt-ajustado block">No te sacamos de esta pantalla porque la estabas usando vos. El envío que dejaste a medias sigue guardado.</span><Button variant="outline" className="mt-normal" onClick={() => { const a = avisoKyc; setAvisoKyc(null); setRem(a.snapshot); if (a.error !== undefined) setError({ message: a.error }); setStep(a.destino); }}>{avisoKyc.destino === "verify" ? "Reintentar la verificación" : "Seguir con ese envío"}</Button></Aviso>) : null}{/* 🔴 WKH-063 (fix-pack 2, con SUS DOS CAMINOS ABIERTOS CERRADOS EN EL 3) · EL AVISO QUE REEMPLAZA AL PISÓN, y es NO MODAL a propósito: no tapa nada, no roba el foco y no navega. Se prende cuando el resume terminó y `yaInteractuoRef` (`:175`) está en `true`, o sea cuando antes había una navegación no pedida. 🔴 SON DOS VARIANTES Y NO UNA (fix-pack 3), porque el resume tiene dos desenlaces terminales y el `failed` también pisaba: con `destino === "verify"` el título NO puede decir que la verificación quedó lista, y el `tono` tampoco puede ser `bueno` (el verde de esta app es el del dinero que llega). La segunda frase es la MISMA en las dos ramas a propósito, y por eso dice "la estabas usando" y no "la habías elegido": el fix-pack 3 sumó el embudo, donde la persona no eligió un destino con la barra sino que entró a tipear, y "elegido" habría sido falso en ese camino. ⛔ EL BOTÓN NO ES DECORACIÓN, y desde el fix-pack 3 es más que un `setStep`: APLICA EL SNAPSHOT (`setRem`) que `aterrizar` (`:208`) no aplicó. Es el único camino de vuelta medido — la barra sólo ofrece los tres destinos, "Empezar un envío" crea una remesa NUEVA, y "Mis envíos" tampoco sirve para una remesa sin depósito autorizado, que se lista SIN control de fila (`openable`, `:3412`). ⚠️ VA ACÁ Y NO ABAJO DEL BLOQUE DE ERROR: a 375x667 las tres pantallas de destino miden más que el viewport (medido en el encabezado de `recuperar-composicion.test.tsx`), así que un aviso puesto al lado de la barra nace debajo del pliegue. ⛔ Δ0 DE LÍNEAS: entra en la línea en blanco que había acá, por las citas por número de este archivo (`:44`). */}{estadoNonce !== null ? (<TarjetaDeCuentaDeNonce estado={estadoNonce} ocupado={busy} onCrear={onCrearCuentaDeNonce} onVolverAMirar={onVolverAMirarLaCuentaDeNonce} onSeguirSinCrearla={() => setEstadoNonce(null)} />) : null}{/* WKH-358/AC-5 — EN ESTA LÍNEA (Δ0 de citas, `:44`) y ACÁ ARRIBA, junto al aviso del KYC, por el mismo motivo que ése: a 375x667 las pantallas miden más que el viewport, así que algo puesto al final nace debajo del pliegue. El componente vive al FINAL del archivo, con todo su razonamiento. ⛔ «Seguir sin crearla» sólo apaga la tarjeta y NO limpia nada: el corte del adaptador por cuenta de nonce ausente sigue siendo el cinturón y trae a la persona de vuelta a esta misma oferta */}
       {rem && isDemoMode(rem) && (step === "review" || step === "confirm" || step === "track" || step === "verify") ? (
         <div className="mb-holgado flex items-center justify-center">
           <Pill tone="prueba">{DEMO_PILL}</Pill>
@@ -3922,7 +3922,7 @@ const NO_WALLET_CON_MWA =
 //     proceso de la pestaña: al volver, `rem` es `null` y el `remittanceId` sólo sobrevivió adentro del
 //     viaje. Su residual —que con ese id el guard `otra-remesa` no puede cortar en la vuelta del
 //     connect— está escrito entero en
-//     (`remesaDelViaje`, `../infrastructure/solana/deeplink/conexion.ts:394`).
+//     (`remesaDelViaje`, `../infrastructure/solana/deeplink/conexion.ts:400`).
 //   · **EL GATE DEL PISÓN.** La vuelta del enlace es otra recarga, igual que la de Didit, así que le
 //     toca el mismo trato: si la persona ya interactuó, esto no toca la pantalla. Es el mutante G5 del
 //     fix-pack 3 de WKH-063: pisar una remesa `created` con `ownerAddress: null` la vuelve inalcanzable
@@ -3960,8 +3960,12 @@ function useVueltaPorEnlace(i: {
   alFallar: (causaCruda: string) => void;
   alReanudar: (r: Awaited<ReturnType<Container["confirmAndSend"]["execute"]>>) => void;
   alAvisar: (mensaje: string) => void;
+  /** El estado de la cuenta de nonce, con el quinto valor (`"en-vuelo"`) que NO viene de la cadena
+   *  sino del broadcast. ⛔ Los tres de la cadena NO se colapsan: `no-pudimos-preguntar` no es
+   *  `falta`. */
+  alSaberDelNonce: (estado: EstadoDeLaCuentaDeNonce | "en-vuelo") => void;
 }): void {
-  const { c, yaInteractuo, alConectar, alFallar, alReanudar, alAvisar } = i;
+  const { c, yaInteractuo, alConectar, alFallar, alReanudar, alAvisar, alSaberDelNonce } = i;
   const yaCorrioRef = useRef(false);
   // 🔴 DOS REFS Y NO UN `let alive`, Y ACÁ ESTÁ LA DIFERENCIA CON EL EXEMPLAR DEL RESUME DE DIDIT
   // (`:205-286`), que sí usa `let alive`. **MEDIDO**: con esa forma, bajo `<React.StrictMode>` —que es
@@ -4010,7 +4014,7 @@ function useVueltaPorEnlace(i: {
       } catch (e) {
         // ⛔ NO SE TRAGA. Una vuelta que revienta es algo que la persona tiene que poder leer. La causa
         // se DERIVA del error y nunca se escribe como literal en este archivo: el candado de copy
-        // cuenta las causas `deeplink_*` que aparecen en `src/presentation`, y hasta que exista el
+        // cuenta las causas del vocabulario del enlace que aparecen en `src/presentation`, y hasta que exista el
         // `Record` con las once, escribir una sola acá lo rompe a propósito.
         limpiarLaBarra();
         if (vivo.valor) alFallar((e as Error).message);
@@ -4033,10 +4037,31 @@ function useVueltaPorEnlace(i: {
           // está activo, así que este gesto es exactamente el del botón "Conectar wallet" y el atajo
           // KYC-once sigue funcionando sin un cambio (AC-1).
           const r = await c.connectWallet.execute();
-          if (vivo.valor) alConectar(r);
+          if (!vivo.valor) return;
+          alConectar(r);
+          // 🔴 Y RECIÉN ACÁ SE LE PREGUNTA A LA CADENA POR LA CUENTA DE NONCE (AC-5), que es el motivo
+          // por el que esta pregunta vive en `connect` y no en `confirm`: allá cada intento cuesta una
+          // orden de payout REAL. El razonamiento entero está en `TarjetaDeCuentaDeNonce`.
+          const estado = await c.eleccionDeEnlace.estadoDeLaCuentaDeNonce(res.direccion);
+          if (vivo.valor) alSaberDelNonce(estado);
         } catch (e) {
           if (vivo.valor) alFallar((e as Error).message);
         }
+        return;
+      }
+      // La vuelta del salto que pidió la firma de la CREACIÓN de la cuenta. Los tres desenlaces se
+      // mapean uno a uno y ⛔ ninguno se colapsa: `nonce-en-vuelo` no dice "ya está" ni "falló", y
+      // `nonce-no-sabemos` no dice nada sobre la cuenta.
+      if (res.estado === "nonce-listo") {
+        alSaberDelNonce("existe");
+        return;
+      }
+      if (res.estado === "nonce-en-vuelo") {
+        alSaberDelNonce("en-vuelo");
+        return;
+      }
+      if (res.estado === "nonce-no-sabemos") {
+        alSaberDelNonce("no-pudimos-preguntar");
         return;
       }
       // ── 3 · LA REANUDACIÓN (AC-3) ────────────────────────────────────────────────────────────
@@ -4079,3 +4104,107 @@ function useVueltaPorEnlace(i: {
  *  esta pantalla no tiene. Sin em dashes (CD-16). */
 const AVISO_REANUDACION_POR_ENLACE =
   "Volviste de tu billetera y dejamos ese envío como estaba, porque estabas usando esta pantalla. Lo encontrás en Mis envíos para seguir desde donde quedó.";
+
+/**
+ * WKH-358/AC-5 — LA CUENTA DE NONCE DEL REMITENTE, CON SUS CUATRO ESTADOS.
+ *
+ * 🔴 POR QUÉ SE PIDE ACÁ Y NO EN `confirm`, que es donde el corte el corte por cuenta de nonce ausente la reclama.
+ * Tres razones medidas, en orden de peso:
+ *   1. **En `confirm` cuesta una orden de payout REAL por intento.** El bloque del nonce del adaptador
+ *      corre DESPUÉS de `prepare()`, así que un remitente nuevo por enlace pagaría 1 orden TransFi +
+ *      1 atestación + 1 fila de ledger + 1 cargo a la Agent Key **antes** de que se le pueda decir que
+ *      le falta una cuenta, y otra por cada reintento. Acá no hay `prepare()` y no queda nada huérfano.
+ *   2. **En `confirm` la ventana de 20 minutos tendría que cubrir cuatro saltos humanos.** Acá el salto
+ *      cae al principio de la ventana, y la cuenta queda creada PARA SIEMPRE: el envío siguiente no la
+ *      vuelve a pedir.
+ *   3. **Acá la persona todavía no firmó nada del dinero.** Si rechaza, no hay nada que reembolsar.
+ *
+ * ⛔ Y EL CINTURÓN NO SE AFLOJA: el corte del adaptador por cuenta ausente sigue siendo
+ * fail-closed. Si alguien llega a `confirm` sin cuenta, el depósito **no** se pide.
+ *
+ * ⚠️ LA CIFRA SE DERIVA, NUNCA SE ESCRIBE (AC-5 / CD-20): sale de `NONCE_ACCOUNT_RENT_LAMPORTS` por
+ * `formatLamportsAsSol`. Un literal en el CÓDIGO de acá abajo es exactamente lo que este AC prohíbe, y
+ * lo mide `T-065-12` con DOS fuentes.
+ *
+ * Hoy esa derivación da **0,0015 SOL** (1.447.680 lamports, la renta de una cuenta de 80 bytes en
+ * devnet). ⚠️ Ese número está ACÁ, en un comentario, y NO en el código, y la diferencia es el punto
+ * entero: el barrido de `T-065-12` descuenta los comentarios y después exige que en el código no quede
+ * **ninguna** cifra con coma. Este renglón es además lo que vuelve load-bearing a ese descuento (regla
+ * (c) de CD-19): sin una cifra en la prosa, descontarla no cambiaría ningún número medido y el barrido
+ * estaría mirando otra cosa. ⛔ Y envejece solo: si la renta de devnet cambiara, el que tiene razón es
+ * el RPC y no este párrafo — quien lo mide es el `it` de `solana-escrow-rent.test.ts`. ⛔ Sin em dashes en ningún texto (CD-16). ⛔ Y NINGÚN texto de esta tarjeta afirma
+ * que se movió plata: en los cuatro estados no se movió ninguna.
+ */
+export function TarjetaDeCuentaDeNonce({
+  estado,
+  ocupado,
+  onCrear,
+  onVolverAMirar,
+  onSeguirSinCrearla,
+}: {
+  estado: EstadoDeLaCuentaDeNonce | "en-vuelo";
+  ocupado: boolean;
+  onCrear: () => void;
+  onVolverAMirar: () => void;
+  onSeguirSinCrearla: () => void;
+}) {
+  if (estado === "existe") {
+    // Sin cifra: acá no se paga nada. Decir un número sobre una cuenta que ya está sería pedir plata
+    // que nadie va a cobrar.
+    return (
+      <Aviso tono="bueno" className="mb-holgado text-body">
+        <span className="block font-semibold">Tu cuenta ya está lista.</span>
+      </Aviso>
+    );
+  }
+  if (estado === "en-vuelo") {
+    // ⛔ Ni "ya está" ni "falló": la red todavía no contestó y las dos cosas serían inventadas.
+    return (
+      <Aviso tono="neutro" className="mb-holgado text-body">
+        <span className="block">
+          Mandamos la transacción y la red todavía no la confirmó. Podés esperar unos segundos y volver
+          a mirar.
+        </span>
+        <Button variant="outline" className="mt-normal" disabled={ocupado} onClick={onVolverAMirar}>
+          Volver a mirar
+        </Button>
+      </Aviso>
+    );
+  }
+  if (estado === "no-pudimos-preguntar") {
+    // La misma forma que el resto de la app le da a "no llegamos a preguntar": lo que se niega es
+    // haber recibido una respuesta, no la existencia de la cuenta.
+    return (
+      <Aviso tono="atencion" className="mb-holgado text-body">
+        <span className="block">
+          No pudimos preguntarle a la red si la cuenta quedó creada. Esto no es una respuesta sobre tu
+          cuenta: no llegamos a preguntar.
+        </span>
+        <Button variant="outline" className="mt-normal" disabled={ocupado} onClick={onVolverAMirar}>
+          Volver a mirar
+        </Button>
+      </Aviso>
+    );
+  }
+  return (
+    <Aviso tono="atencion" className="mb-holgado text-body">
+      <span className="block font-semibold">Falta una cuenta para poder pagar desde tu billetera</span>
+      <span className="mt-ajustado block">
+        Para pagar por enlace, Solana necesita una cuenta tuya que guarda un valor de un solo uso. Se
+        crea una vez y te sirve para todos tus envíos. Cuesta {formatLamportsAsSol(NONCE_ACCOUNT_RENT_LAMPORTS)} SOL
+        de alquiler, que quedan inmovilizados en esa cuenta y Chaski no te los devuelve con ningún
+        botón. Más la comisión de red de esta transacción, que también la pagás vos.
+      </span>
+      <Button className="mt-normal" disabled={ocupado} onClick={onCrear}>
+        Crear la cuenta
+      </Button>
+      {/* ⚠️ LA SALIDA SECUNDARIA NO ES UN CALLEJÓN, y por eso se ofrece: si la persona sigue sin crear
+          la cuenta, llega a `confirm` y ahí el corte del adaptador por cuenta ausente la trae de vuelta a esta
+          misma oferta. Ese corte NO limpia el disco y NO pide ninguna firma, así que no se le pierde
+          nada. */}
+      <Button variant="ghost" className="mt-ajustado" disabled={ocupado} onClick={onSeguirSinCrearla}>
+        Seguir sin crearla
+      </Button>
+    </Aviso>
+  );
+}

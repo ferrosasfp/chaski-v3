@@ -4,7 +4,7 @@
 // sobre el mismo estado). Overrides a nivel gateway y escape-hatch a nivel use-case (useCases).
 // CD-11: cero I/O real acá (la única excepción, FallbackQuoteGateway, la inyecta el test).
 
-import type { Container, VueltaDeEnlace } from "../composition/container"; import { InMemoryPopProofStore } from "../infrastructure/auth/pop-proof-store"; // WKH-358: `EleccionDeEnlace` entra ACÁ, en la línea que ya existe, y se toma del re-export del composition root y no del módulo de infraestructura, que es exactamente para lo que ese re-export se escribió. WKH-339: el import va EN ESTA LÍNEA, no en una nueva, porque `container.test.ts:413` cita `test-container.ts:87` por número y una línea de más lo rota en silencio (mismo motivo que `flow-vm.ts:25`)
+import type { Container, PreparacionPorEnlace } from "../composition/container"; import { InMemoryPopProofStore } from "../infrastructure/auth/pop-proof-store"; // WKH-358: `EleccionDeEnlace` entra ACÁ, en la línea que ya existe, y se toma del re-export del composition root y no del módulo de infraestructura, que es exactamente para lo que ese re-export se escribió. WKH-339: el import va EN ESTA LÍNEA, no en una nueva, porque `container.test.ts:413` cita `test-container.ts:87` por número y una línea de más lo rota en silencio (mismo motivo que `flow-vm.ts:25`)
 import { PreviewQuote } from "../application/use-cases/preview-quote";
 import { RecoverEscrowFunds } from "../application/use-cases/recover-escrow-funds";
 import { CreateRemittance } from "../application/use-cases/create-remittance";
@@ -66,7 +66,7 @@ export interface TestContainerOverrides {
   // seteaba el override, así que la línea nunca corría y nadie la podía ver mal. Un ejemplo
   // equivocado esperando a que alguien lo copie. Los tests del cierre montan el use-case con el probe
   // que corresponda (`escrow-rent-recovery.test.tsx` usa el adapter real contra el bridge).
-  solanaCloseableEscrows?: SolanaCloseableEscrowLister; solanaEscrowStates?: SolanaEscrowChainStateReader; connectedWallet?: ConnectedWalletProbe; eleccionDeEnlace?: VueltaDeEnlace; // WKH-358: `eleccionDeEnlace` entra ACÁ por lo mismo. WKH-349: EN ESTA LÍNEA (`:87` se cita por número). Misma disciplina que sus dos vecinos: sin override queda UNDEFINED ⇒ el historial NO pregunta nada a la cadena y dice el copy de siempre. WKH-354: `connectedWallet` entra ACÁ por lo mismo; su default NO es undefined sino `new FakeConnectedWallet(null)` = "no hay ninguna billetera conectada", que es el estado real de un test que no montó ningún árbol
+  solanaCloseableEscrows?: SolanaCloseableEscrowLister; solanaEscrowStates?: SolanaEscrowChainStateReader; connectedWallet?: ConnectedWalletProbe; eleccionDeEnlace?: PreparacionPorEnlace; // WKH-358: `eleccionDeEnlace` entra ACÁ por lo mismo. WKH-349: EN ESTA LÍNEA (`:87` se cita por número). Misma disciplina que sus dos vecinos: sin override queda UNDEFINED ⇒ el historial NO pregunta nada a la cadena y dice el copy de siempre. WKH-354: `connectedWallet` entra ACÁ por lo mismo; su default NO es undefined sino `new FakeConnectedWallet(null)` = "no hay ninguna billetera conectada", que es el estado real de un test que no montó ningún árbol
   clock?: Clock; // default: new FixedClock()
   // Repo COMPARTIDO por todos los use-cases (default: new InMemoryRepo()). Se inyecta para poder
   // SEMBRARLO antes de renderizar: es la única forma de testear el historial, que por definición

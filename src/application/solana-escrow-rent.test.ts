@@ -383,3 +383,32 @@ describe("el umbral del camino por enlace profundo (durable nonce)", () => {
     expect(fuente).toContain("const REFUND_FEE_ALLOWANCE_LAMPORTS = 5_000 + 75_000;");
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// T-065-12 (2ª fuente · WKH-358 / AC-5 / CD-20) — la cifra del alquiler del nonce, escrita a mano
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 POR QUÉ ESTE `it` EXISTE Y NO ALCANZA CON EL DE LA PANTALLA. La pantalla DERIVA la cifra de esta
+// constante, así que un `it` que compare la pantalla contra `formatLamportsAsSol(...)` movería los dos
+// lados a la vez si alguien cambiara la constante: quedaría verde mostrando otro número. Éste es el
+// que ancla el valor, con las DOS cadenas escritas A MANO. Si la renta de una cuenta de 80 bytes
+// cambia en devnet, este `it` es el que obliga a mirar el copy antes de mover el número.
+describe("T-065-12: el alquiler de la cuenta de nonce, con su cifra anclada a mano", () => {
+  it("`NONCE_ACCOUNT_RENT_LAMPORTS` son 1.447.680 lamports", () => {
+    expect(NONCE_ACCOUNT_RENT_LAMPORTS).toBe(1_447_680);
+  });
+
+  it("y se muestran como `0,0015` SOL — la cadena va escrita a mano, no derivada", () => {
+    // ⛔ El literal de la derecha NO se calcula: es el oráculo independiente. Con
+    // `formatLamportsAsSol(NONCE_ACCOUNT_RENT_LAMPORTS)` de los dos lados, esto no mediría nada.
+    expect(formatLamportsAsSol(1_447_680)).toBe("0,0015");
+    expect(formatLamportsAsSol(NONCE_ACCOUNT_RENT_LAMPORTS)).toBe("0,0015");
+  });
+
+  it("⛔ `0,00145` no lo produce NINGUNA función de este archivo (es un literal a mano)", () => {
+    // El work-item lo traía escrito así y AC-5 prohíbe exactamente eso: una cifra que ninguna función
+    // del árbol produce es una cifra que nadie puede volver a derivar.
+    expect(formatLamportsAsSol(NONCE_ACCOUNT_RENT_LAMPORTS)).not.toBe("0,00145");
+    expect(formatLamportsAsSolFloor(NONCE_ACCOUNT_RENT_LAMPORTS)).not.toBe("0,00145");
+  });
+});

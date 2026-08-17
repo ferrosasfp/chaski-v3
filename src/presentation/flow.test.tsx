@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import bs58 from "bs58";
-import { Receipt, RemittanceFlow, TrackView } from "./flow";
+import { Receipt, RemittanceFlow, TarjetaDeCuentaDeNonce, TrackView } from "./flow";
 import type {
   SolanaEscrowRefundGateway,
   SolanaEscrowRefundResult,
@@ -16,6 +16,7 @@ import { buildTestContainer } from "../test-support/test-container";
 // arma `container.ts` (un `peek` que decide, y un signer que graba en ESE almacén), así que lo que se
 // mide es el mecanismo y no un doble que dice lo que se le pide.
 import { InMemoryPopProofStore } from "../infrastructure/auth/pop-proof-store";
+import { NONCE_ACCOUNT_RENT_LAMPORTS, formatLamportsAsSol } from "../application/solana-escrow-rent";
 import { FallbackQuoteGateway } from "../infrastructure/fallback/gateways";
 import type { ResumeKyc } from "../application/use-cases/resume-kyc";
 import type { AbandonPendingKyc } from "../application/use-cases/abandon-pending-kyc";
@@ -3339,5 +3340,102 @@ describe("WKH-358/T-065-CD11 · el cruce contra `ownerAddress` corta en el camin
 
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
     expect(screen.queryByText(/Estás conectado con otra cuenta/)).toBeNull();
+  });
+});
+
+// ═══ WKH-358 · T-065-12 (AC-5 / CD-20) — el copy de la cuenta de nonce ═══════════════════════════
+//
+// 🔴 DOS FUENTES, Y ÉSTA ES LA DE LA DERIVACIÓN. La otra —la cadena `"0,0015"` escrita a mano— vive en
+// `solana-escrow-rent.test.ts`. Con una sola, cambiar la constante movería los dos lados a la vez y la
+// pantalla mostraría otro número en verde.
+describe("WKH-358/T-065-12 · la tarjeta de la cuenta de nonce", () => {
+  const noop = () => {};
+
+  it("el estado `falta` dice la cifra, dice que NO vuelve, y ofrece las dos salidas", () => {
+    render(
+      <TarjetaDeCuentaDeNonce estado="falta" ocupado={false} onCrear={noop} onVolverAMirar={noop} onSeguirSinCrearla={noop} />,
+    );
+    const texto = document.body.textContent ?? "";
+    // La cifra, DERIVADA de la constante (la segunda fuente la ancla a `"0,0015"` a mano).
+    expect(texto).toContain(`${formatLamportsAsSol(NONCE_ACCOUNT_RENT_LAMPORTS)} SOL`);
+    // 🔴 Y QUE NO VUELVE. Es la mitad del copy que AC-5 exige explícitamente.
+    expect(texto).toContain("Chaski no te los devuelve con ningún botón");
+    expect(screen.getByRole("button", { name: "Crear la cuenta" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Seguir sin crearla" })).toBeInTheDocument();
+    // ⛔ CD-16: sin em dashes en el copy que ve la persona.
+    expect(texto).not.toContain("—");
+    // ⛔ Y NO afirma que se movió plata: en este estado no se movió ninguna.
+    expect(/se debitó|se cobró|te cobramos|se movió/i.test(texto)).toBe(false);
+  });
+
+  it("`en vuelo` no dice ni «ya está» ni «falló», y ofrece volver a mirar", () => {
+    render(
+      <TarjetaDeCuentaDeNonce estado="en-vuelo" ocupado={false} onCrear={noop} onVolverAMirar={noop} onSeguirSinCrearla={noop} />,
+    );
+    const texto = document.body.textContent ?? "";
+    expect(texto).toContain("la red todavía no la confirmó");
+    expect(/ya está|falló|no se pudo/i.test(texto), "afirma un desenlace que la red no dio").toBe(false);
+    expect(screen.getByRole("button", { name: "Volver a mirar" })).toBeInTheDocument();
+    expect(texto).not.toContain("—");
+  });
+
+  it("`no-pudimos-preguntar` niega la PREGUNTA, no la cuenta", () => {
+    render(
+      <TarjetaDeCuentaDeNonce estado="no-pudimos-preguntar" ocupado={false} onCrear={noop} onVolverAMirar={noop} onSeguirSinCrearla={noop} />,
+    );
+    const texto = document.body.textContent ?? "";
+    expect(texto).toContain("no llegamos a preguntar");
+    // 🔴 LA MITAD QUE IMPORTA: no dice que la cuenta falte. "No pude preguntar" no es "no pasó".
+    expect(/no la tenés|no existe|falta una cuenta/i.test(texto)).toBe(false);
+    expect(texto).not.toContain("—");
+  });
+
+  it("`existe` no muestra NINGUNA cifra: acá no se paga nada", () => {
+    render(
+      <TarjetaDeCuentaDeNonce estado="existe" ocupado={false} onCrear={noop} onVolverAMirar={noop} onSeguirSinCrearla={noop} />,
+    );
+    const texto = document.body.textContent ?? "";
+    expect(texto).toContain("Tu cuenta ya está lista");
+    expect(/\d,\d{4}/.test(texto), "pidió plata en el estado en el que no se paga nada").toBe(false);
+  });
+
+  // MUTANTE QUE MATA: en `flow.tsx`, en la tarjeta, escribir `"0,0015"` como literal en vez de llamar a
+  // `formatLamportsAsSol(NONCE_ACCOUNT_RENT_LAMPORTS)`. (MEDIDO en la batería de §9.)
+  //
+  // ⚠️ POR QUÉ ESTE `it` ES TEXTUAL Y NO DE RENDER, dicho porque parece redundante con el primero: un
+  // `it` de render que compare contra `formatLamportsAsSol(...)` da VERDE con el literal puesto, porque
+  // hoy los dos valen `"0,0015"`. Lo que distingue una cifra derivada de una escrita a mano no es el
+  // valor: es el CÓDIGO. Las tres reglas de CD-19 van aplicadas abajo.
+  it("T-065-12: la cifra se DERIVA en el código, y no hay ningún literal de SOL en la tarjeta", () => {
+    const fuente = readFileSync(path.resolve(process.cwd(), "src/presentation/flow.tsx"), "utf8");
+    // ⚠️ EL CORTE ARRANCA EN EL DOCBLOCK Y NO EN LA FIRMA, y no es un detalle: la regla (c) de CD-19
+    // exige que descontar los comentarios CAMBIE un número medido, y la única cifra con coma de este
+    // bloque vive en la prosa. Cortando en la firma, el descuento no movía nada y este barrido
+    // quedaba mirando otra cosa (medido: 0 y 0).
+    // ⚠️ Y ARRANCA EN EL `/**`, no en la primera línea de la prosa: sin el abre-comentario adentro
+    // del corte, el regex de bloque no matchea y el descuento no descuenta nada (medido: 1 y 1).
+    const desde = fuente.indexOf("/**\n * WKH-358/AC-5 — LA CUENTA DE NONCE DEL REMITENTE");
+    expect(desde, "no se encontró el docblock de la tarjeta en el archivo").toBeGreaterThan(0);
+    const bruto = fuente.slice(desde);
+    // (a) se descuentan los comentarios; el `(?<!:)` protege los `https://`.
+    const cuerpo = bruto.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(?<!:)\/\/.*$/gm, "");
+    // (b) el descuento no se comió el código que este barrido cree mirar.
+    expect(cuerpo, "el descuento de comentarios se llevó el cuerpo de la tarjeta").toContain(
+      "formatLamportsAsSol(NONCE_ACCOUNT_RENT_LAMPORTS)",
+    );
+    expect(cuerpo).toContain("Falta una cuenta para poder pagar desde tu billetera");
+    // (c) el descuento CAMBIA una cantidad medida: los comentarios de la tarjeta SÍ nombran cifras con
+    // coma. Sin esta afirmación, un descuento roto pasaría igual y nadie lo vería.
+    const cifrasEnBruto = (bruto.match(/\d,\d{4}/g) ?? []).length;
+    const cifrasEnCuerpo = (cuerpo.match(/\d,\d{4}/g) ?? []).length;
+    expect(
+      cifrasEnBruto,
+      "ninguna cifra con coma aparece en los comentarios ⇒ descontarlos no cambia nada y el barrido es decorativo",
+    ).toBeGreaterThan(cifrasEnCuerpo);
+    // y el barrido: CERO cifras de SOL escritas a mano en el código de la tarjeta.
+    expect(
+      cuerpo.match(/\d,\d{4}/g) ?? [],
+      "hay una cifra de SOL escrita a mano en la tarjeta: AC-5 exige que se DERIVE de la constante",
+    ).toEqual([]);
   });
 });

@@ -24,10 +24,11 @@
 // síncrono. Un `await` en el medio reintroduce la ventana de read-modify-write que el fix-pack 2 de la
 // ola 1 cerró (el bloque de `interpretarVuelta` sobre eso está en `sesion.ts:554-570`).
 import bs58 from "bs58";
+import { Transaction } from "@solana/web3.js";
 import type { Almacen, Viaje } from "./sesion";
-import { MARCA, enlaceDeVuelta, guardarViaje, interpretarVuelta, leerViaje } from "./sesion";
+import { MARCA, MAX_EDAD_MS, enlaceDeVuelta, guardarViaje, interpretarVuelta, leerViaje } from "./sesion";
 import type { BilleteraDeeplink } from "./protocol";
-import { PARAMS_DE_RESPUESTA, nuevoParDeCifrado, urlConectar } from "./protocol";
+import { PARAMS_DE_RESPUESTA, clavePublicaEnRespuesta, leerRespuesta, nuevoParDeCifrado, secretoCompartido, soloTextos, urlConectar, urlFirmarTransaccion } from "./protocol";
 import type { CausaDeEnlace } from "./firma-por-enlace";
 import {
   DEEPLINK_RECHAZADO,
@@ -254,13 +255,18 @@ export function completarVuelta(p: PedidoDeConexion): VueltaDeConexion {
   const params = new URLSearchParams(new URL(p.hrefActual).search);
   const marca = params.get(MARCA);
 
+  // 🔴 EL PASO DEL NONCE TIENE SU PROPIO LECTOR, y `interpretarVuelta` NO PARTICIPA: `esPaso` es un
+  // conjunto cerrado de tres y `"crear-nonce"` no está adentro, así que ese lector contestaría
+  // `no-volvimos` sin consumir nada. El anti-replay de este paso es su propio flag `consumido`.
+  if (marca === MARCA_CREAR_NONCE) return vueltaDelNonce(p);
+
   // ⛔ SIN TOCAR EL DISCO. Ni `conectar` ni nada: acá no hay ninguna marca nuestra que interpretar.
   // Incluye el caso de una marca DESCONOCIDA (algo que nadie de este repo escribió).
   if (marca !== "conectar") {
     // 🔴 ÉSTA ES LA LÍNEA QUE PROTEGE AL MOTOR. `firmar-tx` y `firmar-patrocinio` caen acá y salen
-    // `nada` SIN pasar por `interpretarVuelta`. La marca del nonce (`crear-nonce`) también sale por
-    // acá hasta que su rama exista, y eso es seguro por construcción: `esPaso("crear-nonce")` es
-    // falso, así que `interpretarVuelta` contestaría `no-volvimos` y no consumiría nada igual.
+    // `nada` SIN pasar por `interpretarVuelta`. Consumirlas acá QUEMARÍA el paso que el motor
+    // necesita: ese lector marca el paso consumido en la MISMA escritura en la que devuelve el
+    // resultado, así que el motor recibiría después `ya-consumida` sobre una firma que la persona dio.
     return { tipo: "nada" };
   }
 
@@ -404,4 +410,227 @@ export function remesaDelViaje(a: Almacen, ahora: number): string | null {
   // el `typeof` va acá: quien usa el campo es quien sabe qué forma necesita. Un `""` es peor que
   // ausente —compara `true` contra otro `""`— por la misma razón que `esTextoUtil` en `preparado.ts`.
   return typeof id === "string" && id !== "" ? id : null;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// EL PASO DEL NONCE — su propio almacén, su propia ancla y su propio anti-replay
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+/**
+ * La CUARTA clave del recorrido, y separada de las otras tres por el mismo argumento que ya está
+ * escrito en (`CLAVE`, `./preparado.ts:31`): son ciclos de vida distintos y compartir clave haría que
+ * limpiar uno se llevara el otro.
+ *
+ * Acá la asimetría es propia: la creación de la cuenta de nonce **no es parte del viaje del
+ * depósito**. Pasa antes, su resultado (una cuenta en la cadena) sobrevive a todos los envíos que la
+ * persona haga después, y un corte del depósito no tiene por qué borrar el ancla de una transacción
+ * de creación que puede estar en vuelo.
+ */
+const CLAVE_NONCE = "chaski.billetera.nonce.v1";
+
+/**
+ * Lo que hay que recordar del salto que pide la firma de la creación. ⛔ NINGUNA clave: la sesión y la
+ * `claveBilletera` salen del VIAJE, que es donde el ancla write-once ya vive.
+ */
+interface PasoDelNonce {
+  /**
+   * base64 de `tx.serializeMessage()` de la transacción que se mandó a firmar. Es contra ESTO que se
+   * compara lo que devuelve la billetera.
+   *
+   * ⛔ NUNCA contra una transacción RECONSTRUIDA, por la misma razón que
+   * (`mensajeBase64`, `./preparado.ts:47`): el blockhash sale de la red y cambia en cada intento, así
+   * que una reconstrucción no coincidiría jamás y el chequeo sería uno que alguien termina borrando.
+   */
+  mensajeBase64: string;
+  /** ms epoch del momento en que se guardó. Misma ventana que el viaje, por el mismo motivo. */
+  desde: number;
+  /**
+   * 🔴 EL ANTI-REPLAY DE ESTE PASO, y es propio porque `interpretarVuelta` no participa. Sin este
+   * flag, volver a montar la pantalla con la MISMA URL en la barra transmitiría la transacción otra
+   * vez. Lo mide `T-065-16`.
+   */
+  consumido?: boolean;
+}
+
+/**
+ * ⚠️ TIRA si el disco no acepta el ancla, igual que (`guardarViaje`, `./sesion.ts:222`) y por la misma
+ * razón: se llama ANTES del salto, y un ancla que no se pudo guardar significa que al volver no vamos
+ * a poder comparar nada. Transmitir una transacción que no pudimos verificar contra lo que mandamos a
+ * firmar es exactamente lo que esta ancla existe para impedir.
+ */
+export function guardarPasoDelNonce(a: Almacen, mensajeBase64: string, ahora: number): void {
+  a.escribir(CLAVE_NONCE, JSON.stringify({ mensajeBase64, desde: ahora } satisfies PasoDelNonce));
+}
+
+/** Borra el ancla del paso del nonce. NO tira: es limpieza. */
+export function terminarPasoDelNonce(a: Almacen): void {
+  try {
+    a.borrar(CLAVE_NONCE);
+  } catch {
+    // Un disco que no deja borrar deja basura; tirar acá rompería una salida entera por una limpieza.
+  }
+}
+
+/** Lee el ancla. `null` ante ausencia, basura, ventana vencida o instante del futuro — y limpia el
+ *  disco en los tres últimos casos, por la lección de 061: un campo inválido que hace tirar y NO
+ *  limpia repite la excepción en CADA carga de la página. */
+function leerPasoDelNonce(a: Almacen, ahora: number): PasoDelNonce | null {
+  let crudo: string | null;
+  try {
+    crudo = a.leer(CLAVE_NONCE);
+  } catch {
+    return null; // un disco que no deja leer no tiene un ancla vencida: no tiene nada
+  }
+  if (!crudo) return null;
+  let x: PasoDelNonce;
+  try {
+    x = JSON.parse(crudo) as PasoDelNonce;
+  } catch {
+    terminarPasoDelNonce(a);
+    return null;
+  }
+  if (typeof x?.mensajeBase64 !== "string" || x.mensajeBase64 === "" || !Number.isFinite(x?.desde)) {
+    terminarPasoDelNonce(a);
+    return null;
+  }
+  // Un ancla que empezó en el FUTURO es basura, no una joven: `ahora - desde` es negativo y nunca
+  // supera la ventana. Mismo agujero que 061 midió en `leerViaje` y se cierra igual.
+  if (x.desde > ahora || ahora - x.desde > MAX_EDAD_MS) {
+    terminarPasoDelNonce(a);
+    return null;
+  }
+  return x;
+}
+
+/**
+ * La vuelta del salto que pidió la firma de la transacción que CREA la cuenta de nonce.
+ *
+ * 🔴 QUÉ VERIFICA, EN ESTE ORDEN Y SIN SALTEARSE NINGUNO:
+ *   1. que haya un ancla viva (si no, no hay contra qué comparar y no se transmite nada);
+ *   2. que **no esté consumida** — el anti-replay propio de este paso;
+ *   3. que el viaje esté conectado, porque la sesión y la `claveBilletera` salen de ahí;
+ *   4. que la respuesta venga cifrada con **LA MISMA `claveBilletera`** que el viaje ya tiene fijada
+ *      (ancla write-once: un sobre de cualquier otra clave sale `deeplink_tx_alterada`);
+ *   5. que **los bytes del mensaje de la transacción devuelta sean IDÉNTICOS** a los del ancla.
+ *
+ * ⚠️ QUÉ **NO** VERIFICA, y hace falta decirlo para que nadie se apoye en su verde: **no verifica la
+ * firma ed25519 del sender**. Los bytes del mensaje coinciden igual si la billetera devuelve la misma
+ * transacción con la firma en cero, porque las firmas no son parte del mensaje. Esa verificación vive
+ * donde vive la pubkey del sender —el adaptador, que ya la hace para el depósito en
+ * (`nacl`, `../../solana-wallet.ts:999`)— y este módulo no la conoce. Lo que sí garantiza el paso 5 es
+ * que **no se transmita otra transacción que la que mandamos a firmar**, que es el ataque que importa
+ * acá: sin él, un sobre bien cifrado podría cambiar el destino de esa creación.
+ *
+ * ⛔ MARCA CONSUMIDO ANTES DE DEVOLVER, en la misma lectura. Es lo que impide que un segundo montaje
+ * sobre la misma URL vuelva a transmitir (`T-065-16`).
+ */
+function vueltaDelNonce(p: PedidoDeConexion): VueltaDeConexion {
+  const ancla = leerPasoDelNonce(p.almacen, p.ahora);
+  if (ancla === null) return { tipo: "corte", causa: DEEPLINK_VIAJE_VENCIDO };
+  if (ancla.consumido === true) return { tipo: "corte", causa: DEEPLINK_VIAJE_VENCIDO };
+
+  const lectura = leerViaje(p.almacen, p.ahora);
+  if (lectura.tipo !== "hay") return { tipo: "corte", causa: DEEPLINK_VIAJE_VENCIDO };
+  const viaje = lectura.viaje;
+  if (typeof viaje.claveBilletera !== "string" || typeof viaje.session !== "string") {
+    return { tipo: "corte", causa: DEEPLINK_VIAJE_VENCIDO };
+  }
+
+  const params = new URLSearchParams(new URL(p.hrefActual).search);
+  // 🔒 EL ANCLA WRITE-ONCE, ANTES DE ABRIR NADA: la respuesta tiene que venir de la MISMA clave que
+  // contestó el connect. Es el mismo guard que `interpretarVuelta` aplica a los pasos del motor.
+  if (clavePublicaEnRespuesta(viaje.billetera, params) !== viaje.claveBilletera) {
+    // ⚠️ Un rechazo explícito de la billetera llega SIN clave de cifrado, así que caería acá y se
+    // leería como "alterada". Se mira primero el `errorCode`, que es lo único observable.
+    const codigo = params.get("errorCode");
+    if (codigo) return { tipo: "corte", causa: DEEPLINK_RECHAZADO };
+    return { tipo: "corte", causa: DEEPLINK_TX_ALTERADA };
+  }
+
+  const desenlace = leerRespuesta(
+    viaje.billetera,
+    params,
+    lectura.secretaBytes,
+    soloTextos("transaction"),
+  );
+  if (desenlace.tipo === "ninguno") return { tipo: "nada" }; // la marca estaba pero no hay respuesta
+  if (desenlace.tipo === "rechazo") {
+    return {
+      tipo: "corte",
+      causa: desenlace.origen === "billetera" ? DEEPLINK_RECHAZADO : DEEPLINK_RESPUESTA_ILEGIBLE,
+    };
+  }
+
+  // 5 · BYTES CONTRA BYTES. `null` acá es "no se pudo leer la transacción", que se trata igual que
+  // "no es la que mandamos": las dos cosas significan que no podemos afirmar qué se va a transmitir.
+  const mensaje = mensajeDeLaTransaccion(desenlace.datos.transaction);
+  if (mensaje === null || mensaje !== ancla.mensajeBase64) {
+    return { tipo: "corte", causa: DEEPLINK_TX_ALTERADA };
+  }
+
+  // ⛔ EL FLAG SE ESCRIBE ANTES DE DEVOLVER. Si se escribiera después de transmitir, una recarga en el
+  // medio dejaría el ancla viva y la transmitiría dos veces.
+  try {
+    p.almacen.escribir(CLAVE_NONCE, JSON.stringify({ ...ancla, consumido: true } satisfies PasoDelNonce));
+  } catch {
+    // Un disco que no deja escribir no puede recordar que esto se consumió ⇒ no se transmite. Es el
+    // lado conservador: transmitir sin poder recordarlo es exactamente el replay que el flag evita.
+    return { tipo: "corte", causa: DEEPLINK_SIN_MEMORIA };
+  }
+  return { tipo: "nonce-firmado", transaccionBase58: desenlace.datos.transaction };
+}
+
+/** base64 de `tx.serializeMessage()` de una transacción en base58, o `null` si no se puede leer.
+ *
+ *  Devuelve `null` en vez de tirar por el mismo criterio que `firmaDelSender`
+ *  (`./firma-por-enlace.ts:327`): una transacción que no se puede leer es un desenlace del viaje, no
+ *  un error de programación. */
+function mensajeDeLaTransaccion(transaccionBase58: string): string | null {
+  try {
+    return Buffer.from(Transaction.from(bs58.decode(transaccionBase58)).serializeMessage()).toString("base64");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * PASO 2-BIS · El salto que pide la firma de la transacción que CREA la cuenta de nonce.
+ *
+ * ⚠️ ES OTRO SALTO Y NO EL DEL DEPÓSITO, y por eso lleva marca propia. La transacción la ARMA el
+ * adaptador (necesita la cadena para el blockhash y el alquiler); acá se cifra el sobre con la sesión
+ * del viaje y se guarda el ancla de bytes contra la que se va a comparar al volver.
+ *
+ * ⚠️ EL ORDEN DE LAS DOS ESCRITURAS NO ES ESTÉTICO: primero el ancla, después la URL. Si la URL se
+ * devolviera antes de haber podido guardar el ancla, la persona saltaría a firmar algo contra lo que
+ * este dispositivo no va a poder comparar nada, y la comparación de bytes es lo único que impide que
+ * se transmita una transacción distinta de la que mandamos a firmar.
+ *
+ * TIRA si el viaje no está conectado (no hay canal cifrado con el que pedir nada) o si el disco no
+ * acepta el ancla, por la misma razón que `iniciarConexion`: saltar sin poder recordar es mandar a
+ * firmar a ciegas. ⛔ No envolver esto en un `try`.
+ */
+export function iniciarCreacionDeNonce(
+  p: PedidoDeConexion & { transaccionBase58: string; mensajeBase64: string },
+): { irA: string } {
+  const lectura = leerViaje(p.almacen, p.ahora);
+  if (lectura.tipo !== "hay") throw new Error(DEEPLINK_VIAJE_VENCIDO);
+  const viaje = lectura.viaje;
+  if (typeof viaje.claveBilletera !== "string" || typeof viaje.session !== "string") {
+    throw new Error(DEEPLINK_VIAJE_VENCIDO);
+  }
+  guardarPasoDelNonce(p.almacen, p.mensajeBase64, p.ahora); // TIRA a propósito: ver el docblock
+  return {
+    irA: urlFirmarTransaccion({
+      billetera: viaje.billetera,
+      appUrl: p.appUrl,
+      // ⚠️ `enlaceDeVuelta` LIMPIA del origen los parámetros de respuesta que ya trajera: sin eso, un
+      // `redirect_link` armado sobre una URL que ya volvió de un salto se lleva el `nonce`/`data`
+      // viejos adentro, y `URLSearchParams.get` devuelve el PRIMERO.
+      redirectLink: enlaceDeVuelta(p.hrefActual, MARCA_CREAR_NONCE),
+      clavePublicaDeLaApp: bs58.decode(viaje.publica),
+      secreto: secretoCompartido(viaje.claveBilletera, lectura.secretaBytes),
+      session: viaje.session,
+      transaccionBase58: p.transaccionBase58,
+    }),
+  };
 }

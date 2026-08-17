@@ -492,7 +492,7 @@ export const MARCA = "dl";
  *
  * Lo que NO toca: cualquier otro parámetro del origen (`?kyc=return`, etc.) sigue viajando.
  */
-export function enlaceDeVuelta(origen: string, paso: PasoDelViaje): string {
+export function enlaceDeVuelta(origen: string, paso: PasoDelViaje | "crear-nonce"): string { // WKH-358/AC-5 — EN ESTA LÍNEA (Δ0: este archivo recibe 4 citas ancladas). El salto que CREA la cuenta de nonce vuelve con su propia marca, y ⛔ ESA MARCA NO ES UN `PasoDelViaje` A PROPÓSITO: `esPaso` es un conjunto cerrado de tres, así que `interpretarVuelta` contesta `no-volvimos` y el motor no consume ni destruye nada si esta marca queda en la barra. El literal va escrito acá y no importado de `conexion.ts` para no invertir la dependencia (ese módulo importa a éste); quien lo ata es `tsc`, porque `MARCA_CREAR_NONCE` es un `const` de ese mismo literal y pasarlo acá no compilaría si divergieran
   const u = new URL(origen);
   for (const p of PARAMS_DE_RESPUESTA) u.searchParams.delete(p);
   u.searchParams.set(MARCA, paso);

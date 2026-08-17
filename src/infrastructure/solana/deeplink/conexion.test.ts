@@ -19,6 +19,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import nacl from "tweetnacl";
+import { Keypair, SystemProgram, Transaction } from "@solana/web3.js";
 import bs58 from "bs58";
 import type { BilleteraDeeplink } from "./protocol";
 import { MARCA, type Almacen, type Viaje, guardarViaje } from "./sesion";
@@ -308,7 +309,9 @@ describe("T-065-3: un connect forjado TARDÍO no puede pisar el ancla", () => {
 // MUTANTE QUE MATA: en `conexion.ts`, hacer que la rama `firmar-tx` también llame al lector de la
 // vuelta ⇒ el disco cambia y este `it` se pone rojo por el byte-a-byte. (MEDIDO en §9.)
 describe("T-065-4: `completarVuelta` no consume los pasos del motor", () => {
-  const AJENAS = ["firmar-tx", "firmar-patrocinio", MARCA_CREAR_NONCE, "marca-que-nadie-escribio"];
+  // ⛔ `MARCA_CREAR_NONCE` NO está en esta lista, y no es un olvido: desde la wave del nonce tiene su
+  // propia rama. Que ESA rama tampoco toque el viaje del depósito lo mide el `it` de más abajo.
+  const AJENAS = ["firmar-tx", "firmar-patrocinio", "marca-que-nadie-escribio"];
 
   for (const marca of AJENAS) {
     it(`\`dl=${marca}\` ⇒ "nada", y el disco queda BYTE A BYTE igual`, () => {
@@ -484,5 +487,174 @@ describe("T-065-PUREZA: `conexion.ts` no lee `window`, ni `Date`, ni `fetch`, ni
 
     // (a) y el barrido propiamente dicho.
     expect(enCodigo, "`conexion.ts` dejó de ser puro (DT-7)").toEqual([]);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// T-065-15 / T-065-16 (AC-5) — la vuelta del paso del NONCE: bytes contra bytes, y una sola vez
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ PROTEGE LA COMPARACIÓN DE BYTES. Un sobre bien cifrado que traiga OTRA transacción se
+// transmitiría igual si nadie compara: el canal prueba que quien contestó tiene la clave del viaje, no
+// que la transacción sea la que mandamos a firmar. Ese es el ataque que este bloque cierra, y por eso
+// la comparación es contra el ancla guardada ANTES del salto y nunca contra una reconstrucción.
+//
+// ⚠️ Y LO QUE NO PROTEGE, dicho para que nadie se apoye en su verde: no verifica la firma ed25519 del
+// sender. Los bytes del mensaje coinciden igual con la firma en cero, porque las firmas no son parte
+// del mensaje. Esa verificación vive en el adaptador, que es el que conoce la pubkey.
+describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
+  const CLAVE_NONCE = "chaski.billetera.nonce.v1";
+
+  /** Una transacción de verdad, firmada por `firmante` si se le pide, y su mensaje en base64. */
+  function transaccion(firmante?: Keypair) {
+    const pagador = firmante ?? Keypair.generate();
+    const tx = new Transaction({
+      feePayer: pagador.publicKey,
+      blockhash: Keypair.generate().publicKey.toBase58(),
+      lastValidBlockHeight: 1,
+    });
+    tx.add(
+      SystemProgram.transfer({ fromPubkey: pagador.publicKey, toPubkey: pagador.publicKey, lamports: 1 }),
+    );
+    const mensajeBase64 = Buffer.from(tx.serializeMessage()).toString("base64");
+    if (firmante) tx.sign(firmante);
+    const base58 = bs58.encode(tx.serialize({ requireAllSignatures: false, verifySignatures: false }));
+    return { base58, mensajeBase64 };
+  }
+
+  /** Deja el disco listo: viaje CONECTADO por camino de producción + el ancla del paso del nonce. */
+  function prepararSalto(a: ReturnType<typeof almacenFalso>, mensajeBase64: string) {
+    const { publicaDeLaApp, redirectLink } = abrirViaje(a);
+    completarVuelta(
+      pedido(a, {
+        hrefActual: hrefDeVuelta(
+          redirectLink,
+          respuestaDeLaBilletera({ public_key: DIRECCION, session: "s" }, publicaDeLaApp),
+        ),
+      }),
+    );
+    a.escribir(CLAVE_NONCE, JSON.stringify({ mensajeBase64, desde: AHORA }));
+    return { publicaDeLaApp, redirectLink };
+  }
+
+  /** El href de vuelta del paso del nonce: el mismo `redirect_link` pero con la marca del nonce. */
+  function vueltaDelNonce(redirectLink: string, params: Record<string, string>): string {
+    const u = new URL(hrefDeVuelta(redirectLink, params));
+    u.searchParams.set(MARCA, MARCA_CREAR_NONCE);
+    return u.toString();
+  }
+
+  it("con los bytes que coinciden, devuelve la transacción para transmitir", () => {
+    const a = almacenFalso();
+    const { base58, mensajeBase64 } = transaccion(Keypair.generate());
+    const { publicaDeLaApp, redirectLink } = prepararSalto(a, mensajeBase64);
+
+    const r = completarVuelta(
+      pedido(a, {
+        hrefActual: vueltaDelNonce(
+          redirectLink,
+          respuestaDeLaBilletera({ transaction: base58 }, publicaDeLaApp),
+        ),
+      }),
+    );
+    expect(r).toEqual({ tipo: "nonce-firmado", transaccionBase58: base58 });
+  });
+
+  // MUTANTE QUE MATA: en `conexion.ts`, en la rama del nonce, borrar la comparación del
+  // `mensajeBase64` contra el ancla. (MEDIDO en la batería de §9.)
+  it("T-065-15: con OTRA transacción bien cifrada, corta y NO la devuelve", () => {
+    const a = almacenFalso();
+    const propia = transaccion(Keypair.generate());
+    const ajena = transaccion(Keypair.generate());
+    // CD-18 — el fixture fabricó el caso: son dos transacciones DISTINTAS.
+    expect(ajena.mensajeBase64).not.toBe(propia.mensajeBase64);
+    const { publicaDeLaApp, redirectLink } = prepararSalto(a, propia.mensajeBase64);
+
+    const r = completarVuelta(
+      pedido(a, {
+        hrefActual: vueltaDelNonce(
+          redirectLink,
+          respuestaDeLaBilletera({ transaction: ajena.base58 }, publicaDeLaApp),
+        ),
+      }),
+    );
+    expect(r).toEqual({ tipo: "corte", causa: "deeplink_tx_alterada" });
+  });
+
+  // MUTANTE QUE MATA: en `conexion.ts`, dejar de escribir el flag `consumido`. (MEDIDO en §9.)
+  it("T-065-16: la MISMA URL una segunda vez NO vuelve a devolver la transacción", () => {
+    const a = almacenFalso();
+    const { base58, mensajeBase64 } = transaccion(Keypair.generate());
+    const { publicaDeLaApp, redirectLink } = prepararSalto(a, mensajeBase64);
+    const href = vueltaDelNonce(
+      redirectLink,
+      respuestaDeLaBilletera({ transaction: base58 }, publicaDeLaApp),
+    );
+
+    expect(completarVuelta(pedido(a, { hrefActual: href })).tipo).toBe("nonce-firmado");
+    // 🔴 El anti-replay de este paso es SU PROPIO flag: `interpretarVuelta` no participa.
+    expect(JSON.parse(a.datos.get(CLAVE_NONCE) as string).consumido).toBe(true);
+    expect(completarVuelta(pedido(a, { hrefActual: href })).tipo, "se transmitiría dos veces").toBe("corte");
+  });
+
+  it("un sobre de OTRA clave no pasa el ancla write-once del viaje", () => {
+    const a = almacenFalso();
+    const { base58, mensajeBase64 } = transaccion(Keypair.generate());
+    const { publicaDeLaApp, redirectLink } = prepararSalto(a, mensajeBase64);
+    const r = completarVuelta(
+      pedido(a, {
+        hrefActual: vueltaDelNonce(
+          redirectLink,
+          respuestaDeLaBilletera({ transaction: base58 }, publicaDeLaApp, { quien: nacl.box.keyPair() }),
+        ),
+      }),
+    );
+    expect(r).toEqual({ tipo: "corte", causa: "deeplink_tx_alterada" });
+  });
+
+  it("un rechazo explícito de la billetera se lee como rechazo, no como alterada", () => {
+    const a = almacenFalso();
+    const { mensajeBase64 } = transaccion();
+    const { redirectLink } = prepararSalto(a, mensajeBase64);
+    const r = completarVuelta(
+      pedido(a, {
+        hrefActual: vueltaDelNonce(redirectLink, { errorCode: "4001", errorMessage: "User rejected" }),
+      }),
+    );
+    expect(r).toEqual({ tipo: "corte", causa: "deeplink_rechazado" });
+  });
+
+  it("sin ancla viva, no se transmite nada (y una ancla vencida no cuenta)", () => {
+    const a = almacenFalso();
+    const { base58, mensajeBase64 } = transaccion(Keypair.generate());
+    const { publicaDeLaApp, redirectLink } = prepararSalto(a, mensajeBase64);
+    const href = vueltaDelNonce(
+      redirectLink,
+      respuestaDeLaBilletera({ transaction: base58 }, publicaDeLaApp),
+    );
+    // Sin ancla: se borra y no hay contra qué comparar.
+    a.borrar(CLAVE_NONCE);
+    expect(completarVuelta(pedido(a, { hrefActual: href })).tipo).toBe("corte");
+    // Con ancla VENCIDA: veinte minutos y un milisegundo después.
+    a.escribir(CLAVE_NONCE, JSON.stringify({ mensajeBase64, desde: AHORA - 1_200_001 }));
+    expect(completarVuelta(pedido(a, { hrefActual: href })).tipo).toBe("corte");
+    expect(a.datos.has(CLAVE_NONCE), "el ancla vencida no se limpió").toBe(false);
+  });
+
+  it("la vuelta del nonce NO toca el viaje del depósito: son dos ciclos de vida", () => {
+    const a = almacenFalso();
+    const { base58, mensajeBase64 } = transaccion(Keypair.generate());
+    const { publicaDeLaApp, redirectLink } = prepararSalto(a, mensajeBase64);
+    const viajeAntes = a.datos.get(CLAVE_VIAJE) as string;
+
+    completarVuelta(
+      pedido(a, {
+        hrefActual: vueltaDelNonce(
+          redirectLink,
+          respuestaDeLaBilletera({ transaction: base58 }, publicaDeLaApp),
+        ),
+      }),
+    );
+    expect(a.datos.get(CLAVE_VIAJE), "la vuelta del nonce consumió un paso del viaje").toBe(viajeAntes);
   });
 });

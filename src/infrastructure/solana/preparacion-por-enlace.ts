@@ -13,13 +13,33 @@
 // exige un PoP del bridge y en un móvil sin extensión el bridge está vacío, así que el depósito muere en
 // `payout_pop_unavailable` antes de la rama de enlace. Es WKH-359. Lo que este módulo entrega es el
 // recorrido COMPLETO de la creación de la cuenta de nonce.
+import bs58 from "bs58";
+import { Connection, PublicKey, Transaction } from "@solana/web3.js";
 import type { BilleteraDeeplink } from "./deeplink/protocol";
 import type { CausaDeEnlace } from "./deeplink/firma-por-enlace";
 import type { Almacen } from "./deeplink/sesion";
 import { almacenDeNavegador, terminarViaje } from "./deeplink/sesion";
-import { completarVuelta, guardarEleccion, iniciarConexion, leerEleccion, olvidarEleccion, remesaDelViaje } from "./deeplink/conexion";
-import { DEEPLINK_SIN_MEMORIA } from "./deeplink/firma-por-enlace";
-import { resolveSolanaNetworkConfig } from "../chain";
+import { completarVuelta, guardarEleccion, iniciarConexion, iniciarCreacionDeNonce, leerEleccion, olvidarEleccion, remesaDelViaje } from "./deeplink/conexion";
+import { DEEPLINK_BLOCKHASH_EXPIRED, DEEPLINK_SIN_MEMORIA, DEEPLINK_TX_ALTERADA } from "./deeplink/firma-por-enlace";
+
+/** El techo de las lecturas de la cuenta de nonce.
+ *
+ *  ⚠️ NO CANCELA NADA (CD-18): es un `Promise.race`, así que corta la espera de quien llama y el
+ *  `getAccountInfo` sigue en vuelo. Lo que se acota es cuánto espera la persona, no cuánto trabaja la
+ *  red. Mismo mecanismo y mismo número que el del adaptador
+ *  (`BLOCKHASH_PROBE_TIMEOUT_MS`, `../solana-wallet.ts:121`), escrito acá porque este módulo no
+ *  importa a ése (sería una dependencia al revés). */
+const TECHO_DE_LECTURA_MS = 5_000;
+const conTecho: ConTecho = <T,>(p: Promise<T>): Promise<T> =>
+  Promise.race([
+    p,
+    new Promise<T>((_r, rechazar) =>
+      setTimeout(() => rechazar(new Error("nonce_probe_timeout")), TECHO_DE_LECTURA_MS),
+    ),
+  ]);
+import { resolveSolanaNetworkConfig, resolveSolanaRpcUrlPublic } from "../chain";
+import { construirCreacionDeNonce, direccionDelNonce, leerNonce, type ConTecho } from "./nonce-duradero";
+import { NONCE_ACCOUNT_RENT_LAMPORTS } from "../../application/solana-escrow-rent";
 
 /**
  * ¿Tiene el remitente su cuenta de nonce durable?
@@ -43,8 +63,17 @@ export type ResultadoDePreparacion =
   /** En esta URL no había ninguna marca nuestra. No se tocó el disco. */
   | { estado: "nada" }
   | { estado: "conectado"; direccion: string }
-  /** La cadena confirmó que la cuenta EXISTE. `firma` es la del broadcast, para la traza. */
-  | { estado: "nonce-listo"; firma: string }
+  /**
+   * La cadena confirmó que la cuenta EXISTE. `firma` es la del broadcast, **para la traza y nada
+   * más**: el veredicto lo da la relectura de la cuenta, nunca esta firma.
+   *
+   * 🔴 `null` ES UN VALOR REAL Y NO UN HUECO (divergencia declarada respecto de §3.3 del contrato, que
+   * lo tipaba `string`). Hay un caso MEDIBLE en el que la cuenta existe y este intento no tiene
+   * ninguna firma que declarar: el `sendRawTransaction` falló —blockhash vencido es lo más probable—
+   * y al releer, la cuenta YA ESTABA (la creó un intento anterior que sí entró). Poner `""` ahí sería
+   * exactamente lo que este repo tiene prohibido: un vacío que se lee como un valor.
+   */
+  | { estado: "nonce-listo"; firma: string | null }
   /** Se transmitió y la cadena todavía no la confirma. ⛔ Ni "ya está" ni "falló". */
   | { estado: "nonce-en-vuelo" }
   /** No pudimos preguntarle a la cadena. NO es una respuesta sobre la cuenta. */
@@ -85,7 +114,7 @@ export interface EleccionDeEnlace {
    * 🔴 EXISTE PORQUE EL SALTO MATA EL PROCESO DE LA PESTAÑA: al volver, la pantalla monta de cero y su
    * `rem` está en `null`, así que el `remittanceId` que `completar()` exige no vive en ninguna parte de
    * la memoria de la app. Su residual —que con ese id el guard `otra-remesa` no puede cortar en la
-   * vuelta del connect— está escrito entero en (`remesaDelViaje`, `./deeplink/conexion.ts:394`).
+   * vuelta del connect— está escrito entero en (`remesaDelViaje`, `./deeplink/conexion.ts:400`).
    */
   remesaEnCurso(): string | null;
 }
@@ -142,14 +171,12 @@ export interface PreparacionPorEnlace extends VueltaDeEnlace {
  * (DT-7); éste es el que le pasa el mundo por parámetro. Toda la lógica de qué se escribe en el disco y
  * qué URL sale está allá y se puede probar sin un navegador.
  *
- * 🔴 IMPLEMENTA `VueltaDeEnlace` Y NO `PreparacionPorEnlace`, y eso es una afirmación y no una omisión:
- * esta clase entrega la IDA (elegir y saltar) y la VUELTA (leer la URL y el disco). Lo que le falta
- * —`estadoDeLaCuentaDeNonce` y `crearCuentaDeNonce`— necesita `Connection`, y es de la wave siguiente.
- * Declarar la interfaz completa hoy obligaría a escribir dos métodos que no hacen lo que su nombre
- * dice, que es exactamente la forma en que un default que degrada en silencio entra al money-path.
- * ⚠️ Se llamaba `EleccionDeEnlaceReal` mientras sólo hacía la ida; el nombre se movió con lo que hace.
+ * 🔴 IMPLEMENTA `PreparacionPorEnlace` ENTERA desde la wave del nonce, y no antes: mientras le faltaba
+ * la mitad de la cadena declaraba `VueltaDeEnlace`, que es el escalón que existe justamente para no
+ * tener que escribir métodos que no hacen lo que su nombre dice. ⚠️ Se llamó `EleccionDeEnlaceReal`
+ * mientras sólo hacía la ida; el nombre se movió con lo que hace, dos veces.
  */
-export class RecorridoPorEnlaceReal implements VueltaDeEnlace {
+export class RecorridoPorEnlaceReal implements PreparacionPorEnlace {
   /** El `localStorage` y la URL de este navegador, o `null` si este entorno no los tiene.
    *
    *  Mismo `try` y misma razón que (`entornoDeEnlace`, `../solana-wallet.ts:1177`): en el modo privado
@@ -257,19 +284,149 @@ export class RecorridoPorEnlaceReal implements VueltaDeEnlace {
       case "corte":
         return { estado: "corte", causa: vuelta.causa };
       case "nonce-firmado":
-        // ⛔ HOY ESTA RAMA ES INALCANZABLE, Y ESO ES UNA PROPIEDAD DEL CÓDIGO Y NO UNA ESPERANZA:
-        // `completarVuelta` sólo produce `nonce-firmado` desde su rama `crear-nonce`, que todavía no
-        // existe — esa marca cae en el `marca !== "conectar"` y sale `nada`. ACÁ va, en la wave del
-        // nonce, el broadcast (patrón `closeEscrow`) y la relectura de la cadena con `leerNonce`.
-        // Hasta entonces se contesta el valor NEUTRO, que es el mismo trato que este repo ya le da a
-        // las dos variantes inalcanzables de `completarVuelta` (`tx-firmada` y `patrocinio-firmado`).
-        // ⛔ NO se contesta `nonce-listo` ni `nonce-en-vuelo`: los dos afirmarían algo sobre una
-        // transacción que nadie transmitió.
-        return { estado: "nada" };
+        // 🔴 ACÁ ARRANCAN LOS `await`, Y RECIÉN ACÁ (CD-26). Todo lo de arriba fue un solo bloque
+        // síncrono: el disco ya se leyó, el paso ya quedó marcado consumido y la vuelta ya se
+        // resolvió. El broadcast y la relectura de la cadena no pueden reabrir ninguna ventana.
+        return await this.transmitirYConfirmar(vuelta.transaccionBase58);
       default: {
         const nunca: never = vuelta;
         return { estado: "corte", causa: nunca };
       }
     }
+  }
+
+  /**
+   * ¿Tiene el remitente su cuenta de nonce? **TRES valores, nunca dos** — delega en `leerNonce`, que
+   * ya los distingue, y **no colapsa ninguno**. `no-pudimos-preguntar` NO es "no la tiene": es que no
+   * llegamos a preguntar, y con eso no se le dice nada a la persona sobre su cuenta ni se limpia nada
+   * del disco (AC-5).
+   *
+   * ⚠️ El techo NO cancela el `getAccountInfo`: es un `Promise.race`, así que corta LA ESPERA de quien
+   * llama y la petición sigue en vuelo. Lo que se acota es cuánto espera la persona.
+   */
+  async estadoDeLaCuentaDeNonce(direccion: string): Promise<EstadoDeLaCuentaDeNonce> {
+    let senderPk: PublicKey;
+    try {
+      senderPk = new PublicKey(direccion);
+    } catch {
+      // Una dirección que no parsea no es "la cuenta no está": es que no podemos ni derivar cuál sería.
+      return "no-pudimos-preguntar";
+    }
+    const noncePk = await direccionDelNonce(senderPk);
+    const lectura = await leerNonce(this.conexion(), noncePk, conTecho);
+    switch (lectura.tipo) {
+      case "hay":
+        return "existe";
+      case "no-hay":
+        return "falta";
+      case "no-pudimos-preguntar":
+        return "no-pudimos-preguntar";
+      default: {
+        const nunca: never = lectura;
+        return nunca;
+      }
+    }
+  }
+
+  /**
+   * Arma la transacción de creación DE CERO, la cifra en un sobre y devuelve el salto.
+   *
+   * ⛔ SE ARMA DE CERO EN CADA INTENTO Y **PROHIBIDO REUSAR LA GUARDADA**: su blockhash dura de 60 a
+   * 90 s (`nonce-duradero.ts:11-17`) contra un salto humano, así que un reintento con la vieja falla
+   * siempre. No cuesta plata: no hay escrow, no hay USDC y no hay orden de payout — el reintento
+   * cuesta un toque.
+   *
+   * 🔴 EL `feePayer` ES EL SENDER Y LA ÚNICA FIRMA ES LA SUYA. El facilitator **no puede** ser parte de
+   * esta transacción: su Check 5 rechaza toda tx en la que el fee-payer aparezca referenciado por
+   * cualquier instrucción, y la `nonceInitialize` referencia a su authority, que es el sender (CD-6).
+   */
+  async crearCuentaDeNonce(i: { direccion: string; remittanceId: string }): Promise<{ irA: string }> {
+    const e = this.entorno();
+    if (e === null) throw new Error(DEEPLINK_SIN_MEMORIA);
+    const senderPk = new PublicKey(i.direccion);
+    const noncePk = await direccionDelNonce(senderPk);
+    const connection = this.conexion();
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+    const tx = new Transaction({ feePayer: senderPk, blockhash, lastValidBlockHeight });
+    for (const ix of construirCreacionDeNonce(senderPk, noncePk, NONCE_ACCOUNT_RENT_LAMPORTS)) tx.add(ix);
+    // El ancla son los bytes del MENSAJE, que es lo que la firma no cambia. Contra esto se compara lo
+    // que devuelva la billetera, byte a byte (`T-065-15`).
+    const mensajeBase64 = Buffer.from(tx.serializeMessage()).toString("base64");
+    return iniciarCreacionDeNonce({
+      almacen: e.almacen,
+      ahora: Date.now(),
+      hrefActual: e.href,
+      appUrl: e.origin,
+      remittanceId: i.remittanceId,
+      cluster: resolveSolanaNetworkConfig().cluster,
+      transaccionBase58: bs58.encode(
+        tx.serialize({ requireAllSignatures: false, verifySignatures: false }),
+      ),
+      mensajeBase64,
+    });
+  }
+
+  /**
+   * Transmite la transacción firmada y **le pregunta a la CADENA por la CUENTA**, no por la firma.
+   *
+   * 🔴 ⛔ PROHIBIDO DEVOLVER `nonce-listo` CON EL RESULTADO DEL `sendRawTransaction`: "el RPC aceptó la
+   * tx" **no es** "la cuenta existe". El estado sale de releer con `leerNonce`, que da los tres
+   * valores, y cada uno se mapea a su propio desenlace:
+   *   · `hay`                 ⇒ `nonce-listo`   (lo ÚNICO que afirma que la cuenta existe)
+   *   · `no-hay`              ⇒ `nonce-en-vuelo` (se transmitió y la red todavía no la confirma)
+   *   · `no-pudimos-preguntar`⇒ `nonce-no-sabemos` (⛔ NO se colapsa en `no-hay`)
+   * Lo mide `T-065-17`.
+   *
+   * ⚠️ POR QUÉ TRANSMITE CHASKI Y ESO NO VIOLA CD-3. La billetera no transmite (su protocolo no
+   * implementa `signAndSendTransaction`) y el facilitator no puede ser parte de esta tx (Check 5).
+   * Queda el cliente, y **no es un mecanismo nuevo**: el árbol ya tiene dos broadcasts de cliente para
+   * operaciones que no meten plata en el escrow, y el exemplar exacto es `closeEscrow`
+   * (`../solana-wallet.ts:1654`). La única diferencia es que la firma no viene del bridge sino de la
+   * vuelta del enlace. **T-062-20 no se debilita**: prohíbe transmitir dentro del cuerpo de
+   * `authorizePrincipal`, y esto vive en otro método de otra clase.
+   *
+   * ⚠️ UN BROADCAST QUE FALLA NO ES UNA CUENTA QUE NO SE CREÓ: el error más probable es el blockhash
+   * vencido, y el desenlace correcto es volver a preguntarle a la cadena. Por eso el `catch` NO corta:
+   * cae en la relectura, que es la que decide.
+   */
+  private async transmitirYConfirmar(transaccionBase58: string): Promise<ResultadoDePreparacion> {
+    const connection = this.conexion();
+    let tx: Transaction;
+    try {
+      tx = Transaction.from(bs58.decode(transaccionBase58));
+    } catch {
+      return { estado: "corte", causa: DEEPLINK_TX_ALTERADA };
+    }
+    // El `feePayer` de esta tx es el sender: es de donde sale la cuenta cuyo nonce hay que releer.
+    // ⛔ NO se toma del disco: se toma de la transacción que efectivamente se va a transmitir.
+    const senderPk = tx.feePayer;
+    if (senderPk === undefined) return { estado: "corte", causa: DEEPLINK_TX_ALTERADA };
+
+    let firma: string | null = null;
+    try {
+      firma = await connection.sendRawTransaction(tx.serialize());
+    } catch {
+      firma = null; // blockhash vencido, RPC caído, firma faltante. Quién decide es la CADENA, no esto.
+    }
+
+    const lectura = await leerNonce(connection, await direccionDelNonce(senderPk), conTecho);
+    if (lectura.tipo === "no-pudimos-preguntar") return { estado: "nonce-no-sabemos" };
+    if (lectura.tipo === "hay") return { estado: "nonce-listo", firma };
+    // `no-hay`, y acá el broadcast SÍ cambia lo que se puede afirmar:
+    //   · si salió, la tx puede estar viajando ⇒ `nonce-en-vuelo`, que no dice "ya está" ni "falló";
+    //   · si NO salió, la transacción no entró y no va a entrar: lo más probable es el blockhash
+    //     vencido (~60-90 s contra un salto humano), que es exactamente lo que esa causa nombra. El
+    //     reintento arma la tx DE CERO con un blockhash nuevo y no cuesta plata: no hay escrow, no hay
+    //     USDC y no hay orden de payout.
+    return firma !== null
+      ? { estado: "nonce-en-vuelo" }
+      : { estado: "corte", causa: DEEPLINK_BLOCKHASH_EXPIRED };
+  }
+
+  /** La `Connection` client-safe de la red activa. Se construye por llamada, igual que en el
+   *  adaptador (`../solana-wallet.ts:384`): no hay estado que memoizar y una conexión guardada
+   *  sobreviviría a un cambio de configuración sin enterarse. */
+  private conexion(): Connection {
+    return new Connection(resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster));
   }
 }

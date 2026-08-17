@@ -20,6 +20,7 @@ import { RecorridoPorEnlaceReal } from "./preparacion-por-enlace";
 import { SolanaWalletAdapter } from "../solana-wallet";
 import { solanaWalletBridge } from "../solana-wallet-bridge";
 import { ConnectWallet } from "../../application/use-cases/connect-wallet";
+import { Connection, Keypair, Message, SystemProgram, Transaction } from "@solana/web3.js";
 import { FakeKycStore } from "../../test-support/fakes";
 import { resolveSolanaNetworkConfig } from "../chain";
 
@@ -350,5 +351,219 @@ describe("T-065-SYNC: en `completar()` no hay ningún `await` antes de leer la v
       "`completar()` tiene un `await` ANTES de leer la vuelta (CD-26): eso reabre la ventana de " +
         "read-modify-write sobre `localStorage` que el fix-pack 2 de la ola 1 cerró.",
     ).toBe(false);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// T-065-17 (AC-5 / §4.4) — la confirmación le pregunta a la CADENA por la CUENTA, no por la firma
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 LA DISTINCIÓN QUE ESTE BLOQUE PROTEGE: "el RPC aceptó la transacción" **no es** "la cuenta
+// existe". Un `sendRawTransaction` que resuelve dice que el nodo la admitió en su cola, no que haya
+// entrado en un bloque ni que haya hecho lo que queríamos. El veredicto sale de RELEER la cuenta, y de
+// esa relectura salen TRES estados, no dos.
+describe("T-065-17: transmitir y confirmar", () => {
+  const CLAVE_NONCE = "chaski.billetera.nonce.v1";
+  const SENDER = Keypair.generate();
+
+  /** Los 80 bytes de una cuenta de nonce inicializada. Mismo layout que el fixture del módulo. */
+  function bytesDeCuentaDeNonce(): Buffer {
+    return Buffer.concat([
+      Buffer.from([0, 0, 0, 0]),
+      Buffer.from([1, 0, 0, 0]),
+      SENDER.publicKey.toBuffer(),
+      Keypair.generate().publicKey.toBuffer(),
+      Buffer.alloc(8),
+    ]);
+  }
+
+  /** La cadena de mentira: qué contesta `getAccountInfo` para la PDA del nonce del sender. */
+  function mockCadena(respuesta: Buffer | null | "throw") {
+    vi.spyOn(Connection.prototype, "getAccountInfo").mockImplementation((async () => {
+      if (respuesta === "throw") throw new Error("rpc_down");
+      return respuesta === null
+        ? null
+        : { data: respuesta, executable: false, lamports: 1, owner: SystemProgram.programId, rentEpoch: 0 };
+    }) as never);
+  }
+
+  /** Una transacción firmada por el sender, con su ancla, y el disco listo para su vuelta. */
+  function prepararVueltaDelNonce(nav: ReturnType<typeof montarNavegador>) {
+    const billetera = nacl.box.keyPair();
+    const recorrido = new RecorridoPorEnlaceReal();
+    const q = new URL(recorrido.elegir({ billetera: "phantom", remittanceId: REM }).irA).searchParams;
+    const publicaDeLaApp = bs58.decode(q.get("dapp_encryption_public_key") as string);
+    const redirectLink = q.get("redirect_link") as string;
+    nav.navegarA(
+      hrefDeVuelta(
+        redirectLink,
+        respuestaDeLaBilletera({ public_key: SENDER.publicKey.toBase58(), session: "s" }, publicaDeLaApp, billetera),
+      ),
+    );
+    // El connect, por camino de producción: deja el viaje conectado y el ancla `claveBilletera` fijada.
+    return { recorrido, publicaDeLaApp, redirectLink, billetera, nav };
+  }
+
+  function transaccionFirmada() {
+    const tx = new Transaction({
+      feePayer: SENDER.publicKey,
+      blockhash: Keypair.generate().publicKey.toBase58(),
+      lastValidBlockHeight: 1,
+    });
+    tx.add(
+      SystemProgram.transfer({ fromPubkey: SENDER.publicKey, toPubkey: SENDER.publicKey, lamports: 1 }),
+    );
+    const mensajeBase64 = Buffer.from(tx.serializeMessage()).toString("base64");
+    tx.sign(SENDER);
+    return { base58: bs58.encode(tx.serialize()), mensajeBase64 };
+  }
+
+  async function volverDelSaltoDelNonce(
+    respuestaDeLaCadena: Buffer | null | "throw",
+    broadcast: "ok" | "falla",
+  ) {
+    const nav = montarNavegador();
+    const ctx = prepararVueltaDelNonce(nav);
+    await ctx.recorrido.completar({ remittanceId: REM }); // consume el connect
+    const { base58, mensajeBase64 } = transaccionFirmada();
+    nav.disco.set(CLAVE_NONCE, JSON.stringify({ mensajeBase64, desde: Date.now() }));
+    const u = new URL(
+      hrefDeVuelta(ctx.redirectLink, respuestaDeLaBilletera({ transaction: base58 }, ctx.publicaDeLaApp, ctx.billetera)),
+    );
+    u.searchParams.set(MARCA, "crear-nonce");
+    nav.navegarA(u.toString());
+    mockCadena(respuestaDeLaCadena);
+    const envio = vi.spyOn(Connection.prototype, "sendRawTransaction");
+    if (broadcast === "ok") envio.mockResolvedValue("firma-1" as never);
+    else envio.mockRejectedValue(new Error("blockhash not found"));
+    return { res: await ctx.recorrido.completar({ remittanceId: REM }), envio, nav };
+  }
+
+  // MUTANTE QUE MATA: en `preparacion-por-enlace.ts`, devolver `{estado:"nonce-listo"}` con el
+  // resultado del `sendRawTransaction` SIN releer la cuenta. (MEDIDO en la batería de §9.)
+  it("el RPC aceptó la tx y la cuenta TODAVÍA no está ⇒ `nonce-en-vuelo`, NUNCA `nonce-listo`", async () => {
+    const { res, envio } = await volverDelSaltoDelNonce(null, "ok");
+    expect(envio, "no se transmitió nada").toHaveBeenCalledTimes(1);
+    expect(
+      res,
+      "se afirmó que la cuenta existe con el resultado del broadcast: 'el RPC aceptó la tx' no es " +
+        "'la cuenta existe'",
+    ).toEqual({ estado: "nonce-en-vuelo" });
+  });
+
+  it("la cadena confirma la cuenta ⇒ `nonce-listo`, con la firma del broadcast para la traza", async () => {
+    const { res } = await volverDelSaltoDelNonce(bytesDeCuentaDeNonce(), "ok");
+    expect(res).toEqual({ estado: "nonce-listo", firma: "firma-1" });
+  });
+
+  // 🔴 EL TERCER VALOR, que es el que siempre se pierde. ⛔ NO se colapsa en `no-hay`: eso sería
+  // convertir "no pude preguntar" en "no pasó".
+  it("la cadena no contesta ⇒ `nonce-no-sabemos`, que no afirma NADA sobre la cuenta", async () => {
+    const { res } = await volverDelSaltoDelNonce("throw", "ok");
+    expect(res).toEqual({ estado: "nonce-no-sabemos" });
+  });
+
+  it("el broadcast falla y la cuenta no está ⇒ corte por blockhash, con reintento posible", async () => {
+    const { res } = await volverDelSaltoDelNonce(null, "falla");
+    // ⛔ NO es `nonce-en-vuelo`: nada viajó. Y no es `nonce-no-sabemos`: a la cadena SÍ le preguntamos.
+    expect(res).toEqual({ estado: "corte", causa: "deeplink_blockhash_expired" });
+  });
+
+  it("el broadcast falla pero la cuenta YA EXISTÍA ⇒ `nonce-listo` con `firma: null`", async () => {
+    // 🔴 EL CASO QUE OBLIGA A QUE `firma` SEA `string | null`: la cuenta existe (la creó un intento
+    // anterior que sí entró) y este intento no tiene ninguna firma que declarar. Un `""` acá sería un
+    // vacío que se lee como un valor.
+    const { res } = await volverDelSaltoDelNonce(bytesDeCuentaDeNonce(), "falla");
+    expect(res).toEqual({ estado: "nonce-listo", firma: null });
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// AC-5 · `estadoDeLaCuentaDeNonce` (tri-estado) y `crearCuentaDeNonce` (la tx que la crea)
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+describe("AC-5: la cuenta de nonce, antes del salto", () => {
+  const SENDER = Keypair.generate();
+
+  function mockCadena(respuesta: Buffer | null | "throw") {
+    vi.spyOn(Connection.prototype, "getAccountInfo").mockImplementation((async () => {
+      if (respuesta === "throw") throw new Error("rpc_down");
+      return respuesta === null
+        ? null
+        : { data: respuesta, executable: false, lamports: 1, owner: SystemProgram.programId, rentEpoch: 0 };
+    }) as never);
+  }
+
+  it("TRES valores, nunca dos, y `no-pudimos-preguntar` NO se colapsa en `falta`", async () => {
+    montarNavegador();
+    const r = new RecorridoPorEnlaceReal();
+    const buenos = Buffer.concat([
+      Buffer.from([0, 0, 0, 0]),
+      Buffer.from([1, 0, 0, 0]),
+      SENDER.publicKey.toBuffer(),
+      Keypair.generate().publicKey.toBuffer(),
+      Buffer.alloc(8),
+    ]);
+    mockCadena(buenos);
+    expect(await r.estadoDeLaCuentaDeNonce(SENDER.publicKey.toBase58())).toBe("existe");
+    mockCadena(null);
+    expect(await r.estadoDeLaCuentaDeNonce(SENDER.publicKey.toBase58())).toBe("falta");
+    mockCadena("throw");
+    expect(
+      await r.estadoDeLaCuentaDeNonce(SENDER.publicKey.toBase58()),
+      "'no pudimos preguntar' se leyó como 'no la tiene'",
+    ).toBe("no-pudimos-preguntar");
+  });
+
+  it("una dirección que no parsea NO se contesta como `falta`", async () => {
+    montarNavegador();
+    mockCadena(null);
+    expect(await new RecorridoPorEnlaceReal().estadoDeLaCuentaDeNonce("no-es-base58-###")).toBe(
+      "no-pudimos-preguntar",
+    );
+  });
+
+  it("`crearCuentaDeNonce` arma la tx DE CERO, guarda su ancla de bytes y salta a firmarla", async () => {
+    const nav = montarNavegador();
+    const recorrido = new RecorridoPorEnlaceReal();
+    // El connect primero, por camino de producción: sin viaje conectado no hay canal cifrado.
+    const billetera = nacl.box.keyPair();
+    const q = new URL(recorrido.elegir({ billetera: "phantom", remittanceId: REM }).irA).searchParams;
+    nav.navegarA(
+      hrefDeVuelta(
+        q.get("redirect_link") as string,
+        respuestaDeLaBilletera(
+          { public_key: SENDER.publicKey.toBase58(), session: "s" },
+          bs58.decode(q.get("dapp_encryption_public_key") as string),
+          billetera,
+        ),
+      ),
+    );
+    await recorrido.completar({ remittanceId: REM });
+
+    const BLOCKHASH = Keypair.generate().publicKey.toBase58();
+    vi.spyOn(Connection.prototype, "getLatestBlockhash").mockResolvedValue({
+      blockhash: BLOCKHASH,
+      lastValidBlockHeight: 1,
+    } as never);
+
+    const { irA } = await recorrido.crearCuentaDeNonce({
+      direccion: SENDER.publicKey.toBase58(),
+      remittanceId: REM,
+    });
+
+    expect(new URL(irA).host).toBe("phantom.app");
+    expect(new URL(irA).pathname).toBe("/ul/v1/signTransaction");
+    // La vuelta trae la marca PROPIA del nonce, que NO es un paso del viaje del depósito.
+    const redirect = new URL(new URL(irA).searchParams.get("redirect_link") as string);
+    expect(redirect.searchParams.get(MARCA)).toBe("crear-nonce");
+    // Y el ancla quedó guardada ANTES del salto: sin ella, a la vuelta no habría contra qué comparar.
+    const ancla = JSON.parse(nav.disco.get("chaski.billetera.nonce.v1") as string);
+    expect(typeof ancla.mensajeBase64).toBe("string");
+    expect(ancla.mensajeBase64.length).toBeGreaterThan(0);
+    expect(ancla.consumido).toBeUndefined();
+    // 🔴 Y ESE ANCLA ES DE UNA TX CON EL BLOCKHASH QUE ACABA DE PEDIR: se armó de cero, no se reusó.
+    const mensaje = Message.from(Buffer.from(ancla.mensajeBase64, "base64"));
+    expect(mensaje.recentBlockhash).toBe(BLOCKHASH);
+    expect(mensaje.header.numRequiredSignatures, "la creación pide más de una firma").toBe(1);
   });
 });

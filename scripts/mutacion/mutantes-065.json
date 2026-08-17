@@ -1,0 +1,452 @@
+[
+  {
+    "id": "CALIBRACION-MUERE",
+    "nota": "sesion.ts · `MAX_EDAD_MS` un segundo menos (la mitad del instrumento que TIENE que morir)",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana/deeplink/sesion.ts",
+    "buscar": "export const MAX_EDAD_MS = 20 * 60 * 1000;",
+    "reemplazar": "export const MAX_EDAD_MS = 20 * 60 * 1000 - 1000;"
+  },
+  {
+    "id": "CALIBRACION-VIVE",
+    "nota": "conexion.ts · una `const` sin efecto, LÍNEA-NEUTRA (la mitad que TIENE que vivir)",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana/deeplink/conexion.ts",
+    "buscar": "export const MARCA_CREAR_NONCE = \"crear-nonce\";",
+    "reemplazar": "export const MARCA_CREAR_NONCE = \"crear-nonce\"; const _calibracion = 1; void _calibracion;"
+  },
+  {
+    "id": "T-065-GATE-1",
+    "nota": "solana-wallet.ts · `caminoPorEnlace`: devolver una billetera SIN leer la elección del disco",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana-wallet.ts",
+    "buscar": "    return leerEleccion(disco);",
+    "reemplazar": "    return \"phantom\";"
+  },
+  {
+    "id": "T-065-GATE-2",
+    "nota": "solana-wallet.ts · `caminoPorEnlace`: borrar la condición de disponibilidad",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana-wallet.ts",
+    "buscar": "if (solanaWalletBridge.getWalletAvailability() !== \"none\") return null; if (!resolveSolanaDeeplinkEnabled())",
+    "reemplazar": "if (!resolveSolanaDeeplinkEnabled())"
+  },
+  {
+    "id": "T-065-GATE-3",
+    "nota": "solana-wallet.ts · `caminoPorEnlace`: `!== \"none\"` por `=== \"injected\"` (o sea, tratar `unknown` como enlace)",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana-wallet.ts",
+    "buscar": "if (solanaWalletBridge.getWalletAvailability() !== \"none\") return null;",
+    "reemplazar": "if (solanaWalletBridge.getWalletAvailability() === \"injected\") return null;"
+  },
+  {
+    "id": "T-065-GATE-4",
+    "nota": "solana-wallet.ts · invertir el `if` de la rama de enlace de `authorizePrincipal` (la PRIMERA de las dos: la del nonce durable). ⚠️ La aguja pelada aparece DOS veces en el archivo, por eso lleva la línea de arriba adentro",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana-wallet.ts",
+    "buscar": "    let valorDelNonce: string | undefined;\n    if (this.firmaPorEnlace && this.caminoPorEnlace() !== null) {",
+    "reemplazar": "    let valorDelNonce: string | undefined;\n    if (!(this.firmaPorEnlace && this.caminoPorEnlace() !== null)) {"
+  },
+  {
+    "id": "T-065-GATE-5",
+    "nota": "solana-wallet.ts · `caminoPorEnlace`: borrar la TERCERA condición (la bandera del build) — el mutante del fix-pack",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana-wallet.ts",
+    "buscar": " if (!resolveSolanaDeeplinkEnabled()) return null;",
+    "reemplazar": ""
+  },
+  {
+    "id": "SW-BASE58",
+    "nota": "solana-wallet.ts · `direccionDelViajeConectado`: borrar el guard de base58 del `Viaje.direccion`",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana-wallet.ts",
+    "buscar": "      new PublicKey(v.direccion); // ver el docblock",
+    "reemplazar": "      void v.direccion; // ver el docblock"
+  },
+  {
+    "id": "T-062-21",
+    "nota": "container.ts · descablear el colaborador de enlace del `SolanaWalletAdapter`",
+    "neutro": true,
+    "archivo": "src/composition/container.ts",
+    "buscar": "new HttpSolanaRemittanceIdResolver(lazyPop), undefined, new FirmaPorEnlaceReal(),",
+    "reemplazar": "new HttpSolanaRemittanceIdResolver(lazyPop), undefined, undefined,"
+  },
+  {
+    "id": "T-062-10",
+    "nota": "flow.tsx · nombrar `interpretarVuelta(` en un comentario de presentación (el candado prohíbe la MENCIÓN)",
+    "neutro": true,
+    "archivo": "src/presentation/flow.tsx",
+    "buscar": "        // ⛔ NO SE TRAGA. Una vuelta que revienta",
+    "reemplazar": "        // ⛔ NO SE TRAGA (interpretarVuelta(). Una vuelta que revienta"
+  },
+  {
+    "id": "T-065-20",
+    "nota": "chain.ts · `resolveSolanaDeeplinkEnabled`: tolerar mayúsculas y espacios (aflojar el opt-in estricto)",
+    "neutro": true,
+    "archivo": "src/infrastructure/chain.ts",
+    "buscar": "  return process.env.NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED === \"true\";",
+    "reemplazar": "  return process.env.NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED?.trim().toLowerCase() === \"true\";"
+  },
+  {
+    "id": "T-065-21",
+    "nota": "flow.tsx · borrar el gate `deeplinkEnabled()` de `mostrarSelectorDeEnlace`",
+    "neutro": true,
+    "archivo": "src/presentation/flow.tsx",
+    "buscar": "const mostrarSelectorDeEnlace = disponibilidadWallet === \"none\" && deeplinkEnabled();",
+    "reemplazar": "const mostrarSelectorDeEnlace = disponibilidadWallet === \"none\";"
+  },
+  {
+    "id": "T-UI-3",
+    "nota": "flow.tsx · montar el selector sin mirar `disponibilidadWallet`",
+    "neutro": true,
+    "archivo": "src/presentation/flow.tsx",
+    "buscar": "const mostrarSelectorDeEnlace = disponibilidadWallet === \"none\" && deeplinkEnabled(); //",
+    "reemplazar": "const mostrarSelectorDeEnlace = deeplinkEnabled(); //"
+  },
+  {
+    "id": "T-065-OLVIDAR",
+    "nota": "flow.tsx · borrar del paso `connect` el montaje del control «Cambiar de billetera» (el único llamador de producción de `olvidar()`)",
+    "neutro": true,
+    "archivo": "src/presentation/flow.tsx",
+    "buscar": "{mostrarSelectorDeEnlace ? <OlvidarBilleteraDeEnlace recorrido={c.recorridoPorEnlace} deshabilitado={busy} /> : null}",
+    "reemplazar": ""
+  },
+  {
+    "id": "T-065-1",
+    "nota": "conexion.ts · `iniciarConexion`: vaciar el `cluster` de la URL del connect",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana/deeplink/conexion.ts",
+    "buscar": "      cluster: p.cluster,",
+    "reemplazar": "      cluster: \"\","
+  },
+  {
+    "id": "T-065-2",
+    "nota": "conexion.ts · `completarVuelta`: pasarle `null` como `remittanceId` al lector (apaga el guard de cruce entre remesas). ⚠️ NO es el mutante que la tabla vieja describía («escritura directa en vez del lector»), que no se puede expresar como UNA sustitución: se reemplazó por éste y se dice",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana/deeplink/conexion.ts",
+    "buscar": "  const vuelta = interpretarVuelta(p.almacen, params, p.ahora, p.remittanceId);",
+    "reemplazar": "  const vuelta = interpretarVuelta(p.almacen, params, p.ahora, null);"
+  },
+  {
+    "id": "T-065-3",
+    "nota": "sesion.ts · no comparar el ancla write-once `claveBilletera`",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana/deeplink/sesion.ts",
+    "buscar": "      if (claveEnLaUrl !== viaje.claveBilletera) {",
+    "reemplazar": "      if (claveEnLaUrl === undefined) {"
+  },
+  {
+    "id": "T-065-4",
+    "nota": "conexion.ts · que `firmar-tx` caiga al lector de la vuelta (quemarle el paso al motor)",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana/deeplink/conexion.ts",
+    "buscar": "  if (marca !== \"conectar\") {",
+    "reemplazar": "  if (marca !== \"conectar\" && marca !== \"firmar-tx\") {"
+  },
+  {
+    "id": "T-065-5",
+    "nota": "conexion.ts · que la rama `conectado` devuelva un corte en vez de la dirección",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana/deeplink/conexion.ts",
+    "buscar": "      return { tipo: \"conectado\", direccion: vuelta.direccion };",
+    "reemplazar": "      return { tipo: \"corte\", causa: DEEPLINK_VIAJE_VENCIDO };"
+  },
+  {
+    "id": "T-065-PUREZA",
+    "nota": "conexion.ts · un `Date.now()` adentro de `completarVuelta` (DT-7: el módulo es puro)",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana/deeplink/conexion.ts",
+    "buscar": "  const params = new URLSearchParams(new URL(p.hrefActual).search);\n  const marca = params.get(MARCA);",
+    "reemplazar": "  const params = new URLSearchParams(new URL(p.hrefActual).search); void Date.now();\n  const marca = params.get(MARCA);"
+  },
+  {
+    "id": "T-065-SYNC",
+    "nota": "preparacion-por-enlace.ts · un `await` como 1ª línea de `completar()` (CD-26: reabre la ventana de read-modify-write)",
+    "neutro": false,
+    "archivo": "src/infrastructure/solana/preparacion-por-enlace.ts",
+    "buscar": "  async completar(i: { remittanceId: string }): Promise<ResultadoDePreparacion> {\n    const e = this.entorno();",
+    "reemplazar": "  async completar(i: { remittanceId: string }): Promise<ResultadoDePreparacion> {\n    await Promise.resolve();\n    const e = this.entorno();"
+  },
+  {
+    "id": "T-065-CD11-a",
+    "nota": "flow.tsx · borrar `&& rem.ownerAddress != null` del cruce",
+    "neutro": true,
+    "archivo": "src/presentation/flow.tsx",
+    "buscar": "      if (live != null && rem.ownerAddress != null) {",
+    "reemplazar": "      if (live != null) {"
+  },
+  {
+    "id": "T-065-CD11-b",
+    "nota": "flow.tsx · borrar el `throw wallet_account_changed` del cruce",
+    "neutro": true,
+    "archivo": "src/presentation/flow.tsx",
+    "buscar": "        if (!mismaCuenta) throw new Error(\"wallet_account_changed\");",
+    "reemplazar": "        void mismaCuenta;"
+  },
+  {
+    "id": "T-065-CD11-c",
+    "nota": "solana-wallet.ts · descablear el link-aware de `getConnectedAddress()`",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana-wallet.ts",
+    "buscar": "  async getConnectedAddress(): Promise<string | null> { const porEnlace = this.direccionDelViajeConectado(); if (porEnlace !== null) return porEnlace;",
+    "reemplazar": "  async getConnectedAddress(): Promise<string | null> {"
+  },
+  {
+    "id": "T-065-7",
+    "nota": "flow.tsx · borrar el ref de montaje del productor de la vuelta (bajo StrictMode consume el paso dos veces)",
+    "neutro": true,
+    "archivo": "src/presentation/flow.tsx",
+    "buscar": "    if (yaCorrioRef.current) return;",
+    "reemplazar": "    if (false) return;"
+  },
+  {
+    "id": "T-065-8",
+    "nota": "flow.tsx · saltear el gate del pisón en la rama `conectado`",
+    "neutro": true,
+    "archivo": "src/presentation/flow.tsx",
+    "buscar": "        if (yaInteractuo.current) return;\n        try {",
+    "reemplazar": "        if (false) return;\n        try {"
+  },
+  {
+    "id": "T-065-9",
+    "nota": "flow.tsx · `history.replaceState` por `location.assign` al limpiar la barra",
+    "neutro": true,
+    "archivo": "src/presentation/flow.tsx",
+    "buscar": "window.history.replaceState(null, \"\", limpio);",
+    "reemplazar": "window.location.assign(limpio);"
+  },
+  {
+    "id": "T-065-10",
+    "nota": "flow.tsx · limpiar la barra ANTES de leer la vuelta (DT-10)",
+    "neutro": true,
+    "archivo": "src/presentation/flow.tsx",
+    "buscar": "      const remId = c.recorridoPorEnlace.remesaEnCurso();",
+    "reemplazar": "      limpiarLaBarra(); const remId = c.recorridoPorEnlace.remesaEnCurso();"
+  },
+  {
+    "id": "RESUME-CONFIRMED",
+    "nota": "flow.tsx · borrar el gate `status === \"confirmed\"` de la reanudación",
+    "neutro": true,
+    "archivo": "src/presentation/flow.tsx",
+    "buscar": "      if (enCurso === undefined || enCurso.status !== \"confirmed\") return;",
+    "reemplazar": "      if (enCurso === undefined) return;"
+  },
+  {
+    "id": "RESUME-MARCA",
+    "nota": "flow.tsx · que CUALQUIER marca reanude (no sólo los dos pasos del motor)",
+    "neutro": true,
+    "archivo": "src/presentation/flow.tsx",
+    "buscar": "      if (marca !== \"firmar-tx\" && marca !== \"firmar-patrocinio\") return;",
+    "reemplazar": "      if (marca === null) return;"
+  },
+  {
+    "id": "T-065-11",
+    "nota": "nonce-duradero.ts · `createAccount` en vez de `createAccountWithSeed` ⇒ la cuenta nueva pasa a ser FIRMANTE y la tx necesita 2 firmas",
+    "neutro": false,
+    "archivo": "src/infrastructure/solana/nonce-duradero.ts",
+    "buscar": "    SystemProgram.createAccountWithSeed({\n      fromPubkey: senderPk,\n      basePubkey: senderPk,\n      newAccountPubkey: noncePk,\n      seed: SEMILLA_DEL_NONCE,\n      lamports,",
+    "reemplazar": "    SystemProgram.createAccount({\n      fromPubkey: senderPk,\n      newAccountPubkey: noncePk,\n      lamports,"
+  },
+  {
+    "id": "T-065-11b-a",
+    "nota": "nonce-duradero.ts · `space: 80` escrito a mano en vez de la constante (mutante EQUIVALENTE: hoy `NONCE_ACCOUNT_LENGTH` vale 80)",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana/nonce-duradero.ts",
+    "buscar": "      space: NONCE_ACCOUNT_LENGTH, // ⛔ NUNCA el literal 80 (CD-20)",
+    "reemplazar": "      space: 80, // ⛔ NUNCA el literal 80 (CD-20)"
+  },
+  {
+    "id": "T-065-11b-b",
+    "nota": "nonce-duradero.ts · `space: 81` (el que SÍ distingue: es el que prueba que el `space` se mide)",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana/nonce-duradero.ts",
+    "buscar": "      space: NONCE_ACCOUNT_LENGTH, // ⛔ NUNCA",
+    "reemplazar": "      space: 81, // ⛔ NUNCA"
+  },
+  {
+    "id": "T-065-12-a",
+    "nota": "flow.tsx · la cifra del alquiler escrita a mano en la tarjeta del nonce en vez de derivada",
+    "neutro": true,
+    "archivo": "src/presentation/flow.tsx",
+    "buscar": "Cuesta {formatLamportsAsSol(NONCE_ACCOUNT_RENT_LAMPORTS)} SOL",
+    "reemplazar": "Cuesta 0,0015 SOL"
+  },
+  {
+    "id": "T-065-12-b",
+    "nota": "solana-escrow-rent.ts · mover `NONCE_ACCOUNT_RENT_LAMPORTS` un lamport",
+    "neutro": true,
+    "archivo": "src/application/solana-escrow-rent.ts",
+    "buscar": "export const NONCE_ACCOUNT_RENT_LAMPORTS = 1_447_680;",
+    "reemplazar": "export const NONCE_ACCOUNT_RENT_LAMPORTS = 1_447_681;"
+  },
+  {
+    "id": "T-065-13",
+    "nota": "solana-wallet.ts · `console.warn` en vez de cortar cuando la cuenta de nonce NO está",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana-wallet.ts",
+    "buscar": "        throw new Error(\"deeplink_nonce_ausente\");",
+    "reemplazar": "        console.warn(\"deeplink_nonce_ausente\");"
+  },
+  {
+    "id": "T-065-14",
+    "nota": "solana-wallet.ts · limpiar el disco ANTES del corte por «no pudimos preguntar» (⚠️ la aguja aparece DOS veces en el archivo: por eso lleva el comentario de arriba adentro)",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana-wallet.ts",
+    "buscar": "        // recorrido. Colapsar esto en \"no hay cuenta\" sería convertir \"no pude preguntar\" en \"no pasó\".\n        throw new Error(\"deeplink_blockhash_desconocido\");",
+    "reemplazar": "        // recorrido. Colapsar esto en \"no hay cuenta\" sería convertir \"no pude preguntar\" en \"no pasó\".\n        this.limpiarRastroDeEnlace(almacen); throw new Error(\"deeplink_blockhash_desconocido\");"
+  },
+  {
+    "id": "T-065-15",
+    "nota": "conexion.ts · borrar la comparación de bytes contra el ancla en la vuelta del nonce",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana/deeplink/conexion.ts",
+    "buscar": "  if (mensaje === null || mensaje !== ancla.mensajeBase64) {",
+    "reemplazar": "  if (mensaje === null) {"
+  },
+  {
+    "id": "T-065-16",
+    "nota": "conexion.ts · dejar de escribir el flag `consumido` del paso del nonce (anti-replay)",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana/deeplink/conexion.ts",
+    "buscar": "JSON.stringify({ ...ancla, consumido: true } satisfies PasoDelNonce)",
+    "reemplazar": "JSON.stringify({ ...ancla } satisfies PasoDelNonce)"
+  },
+  {
+    "id": "T-065-16b",
+    "nota": "conexion.ts · devolver `DEEPLINK_VIAJE_VENCIDO` en la rama `consumido === true` (el copy que NIEGA la firma que la billetera sí dio)",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana/deeplink/conexion.ts",
+    "buscar": "  if (ancla.consumido === true) return { tipo: \"corte\", causa: DEEPLINK_NONCE_YA_CONSUMIDO };",
+    "reemplazar": "  if (ancla.consumido === true) return { tipo: \"corte\", causa: DEEPLINK_VIAJE_VENCIDO };"
+  },
+  {
+    "id": "T-065-17",
+    "nota": "preparacion-por-enlace.ts · que el resultado del broadcast decida en vez de la relectura de la cadena",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana/preparacion-por-enlace.ts",
+    "buscar": "    if (lectura.tipo === \"hay\") return { estado: \"nonce-listo\", firma };",
+    "reemplazar": "    if (firma !== null) return { estado: \"nonce-listo\", firma };"
+  },
+  {
+    "id": "T-065-17b",
+    "nota": "preparacion-por-enlace.ts · cambiar la causa del corte del broadcast por otra del vocabulario",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana/preparacion-por-enlace.ts",
+    "buscar": "      : { estado: \"corte\", causa: DEEPLINK_NONCE_NO_ENTRO };",
+    "reemplazar": "      : { estado: \"corte\", causa: DEEPLINK_SIN_MEMORIA };"
+  },
+  {
+    "id": "T-065-19",
+    "nota": "solana-wallet.ts · volver FAIL-CLOSED el guard de saldo del enlace (`unknown` deja de dejar pasar)",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana-wallet.ts",
+    "buscar": "      if (saldo.status === \"known\" && saldo.lamports < SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT) {",
+    "reemplazar": "      if (saldo.status !== \"known\" || saldo.lamports < SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT) {"
+  },
+  {
+    "id": "T-065-6",
+    "nota": "firma-por-enlace.ts · restaurar la promesa vieja del `case \"conectado\"` («pasa a ser alcanzable»)",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana/deeplink/firma-por-enlace.ts",
+    "buscar": "**esta rama SIGUE inalcanzable**",
+    "reemplazar": "**esta rama pasa a ser alcanzable de verdad**"
+  },
+  {
+    "id": "T-065-COPY-1",
+    "nota": "firma-por-enlace.ts + flow-vm.ts · una causa nueva cuyo «copy» es SÓLO un comentario (el mutante del CR, re-corrido)",
+    "neutro": false,
+    "edits": [
+      {
+        "archivo": "src/infrastructure/solana/deeplink/firma-por-enlace.ts",
+        "buscar": "export const DEEPLINK_NONCE_NO_ENTRO = \"deeplink_nonce_no_entro\";",
+        "reemplazar": "export const DEEPLINK_NONCE_NO_ENTRO = \"deeplink_nonce_no_entro\";\nexport const DEEPLINK_MUTANTE = \"deeplink_mutante_del_cr\";"
+      },
+      {
+        "archivo": "src/presentation/flow-vm.ts",
+        "buscar": "/** Traduce un código de error interno a copy humano para la UI. */",
+        "reemplazar": "/** Traduce un código de error interno a copy humano para la UI. Ver deeplink_mutante_del_cr. */"
+      }
+    ]
+  },
+  {
+    "id": "T-065-COPY-2",
+    "nota": "flow-vm.ts · colapsar dos de los tres pares del mensaje al MISMO texto",
+    "neutro": true,
+    "archivo": "src/presentation/flow-vm.ts",
+    "buscar": "    \"No pudimos leer la respuesta de tu billetera, y eso es un problema nuestro y no tuyo. No se firmó nada. Volvé a intentarlo.\",",
+    "reemplazar": "    \"Cancelaste en tu billetera, así que no se firmó nada. Podés volver a intentarlo cuando quieras.\","
+  },
+  {
+    "id": "T-065-COPY-3",
+    "nota": "flow-vm.ts · meter «se debitó» en una de las causas del `Record`",
+    "neutro": true,
+    "archivo": "src/presentation/flow-vm.ts",
+    "buscar": "\"Cancelaste en tu billetera, así que no se firmó nada. Podés volver a intentarlo cuando quieras.\"",
+    "reemplazar": "\"Cancelaste en tu billetera, pero ya se debitó de tu billetera. Podés volver a intentarlo cuando quieras.\""
+  },
+  {
+    "id": "T-065-COPY-4",
+    "nota": "flow-vm.ts · mover el lookup EXACTO del `Record` al final de `humanError`, después de la cadena de `includes` (DT-8)",
+    "neutro": true,
+    "edits": [
+      {
+        "archivo": "src/presentation/flow-vm.ts",
+        "buscar": "export function humanError(code: string): string { const porEnlace = copyDeEnlace(code); if (porEnlace !== null) return porEnlace; //",
+        "reemplazar": "export function humanError(code: string): string { //"
+      },
+      {
+        "archivo": "src/presentation/flow-vm.ts",
+        "buscar": "  return \"Algo salió mal. Intentá de nuevo.\";\n}",
+        "reemplazar": "  const porEnlace = copyDeEnlace(code); if (porEnlace !== null) return porEnlace; return \"Algo salió mal. Intentá de nuevo.\";\n}"
+      }
+    ]
+  },
+  {
+    "id": "T-065-18",
+    "nota": "flow-vm.ts · la cifra del umbral escrita a mano en el copy de saldo insuficiente en vez de derivada",
+    "neutro": true,
+    "archivo": "src/presentation/flow-vm.ts",
+    "buscar": "${formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT)} SOL",
+    "reemplazar": "0,0105 SOL"
+  },
+  {
+    "id": "T-065-CD11b-1",
+    "nota": "firma-por-enlace.ts · borrar «camino inyectado» del docblock de `PedidoDeFirma.sender` (la frase vieja no calificaba el camino)",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana/deeplink/firma-por-enlace.ts",
+    "buscar": "   *   · **camino inyectado** (el gate contesta `null`)",
+    "reemplazar": "   *   · **el camino de siempre** (el gate contesta `null`)"
+  },
+  {
+    "id": "T-065-CD11b-2",
+    "nota": "firma-por-enlace.ts · borrar «coherencia interna» de la justificación del guard",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana/deeplink/firma-por-enlace.ts",
+    "buscar": "    //     disco y esta línea NO PUEDE CORTAR. Es coherencia interna, no una defensa.**",
+    "reemplazar": "    //     disco y esta línea NO PUEDE CORTAR.**"
+  },
+  {
+    "id": "T-065-CD11b-3",
+    "nota": "solana-wallet.ts · borrar «COHERENCIA INTERNA» del bloque de CD-11 del adaptador",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana-wallet.ts",
+    "buscar": "compara dos lecturas del MISMO disco: es COHERENCIA INTERNA, no una defensa.",
+    "reemplazar": "compara dos lecturas del MISMO disco."
+  },
+  {
+    "id": "T-065-UNREACH",
+    "nota": "flow.tsx · apagar `prepareUnreachable` en el dispatch de `track` (los dos enums vuelven al copy del payout fallido)",
+    "neutro": true,
+    "archivo": "src/presentation/flow.tsx",
+    "buscar": "const prepareUnreachable = isPrepareUnreachable(rem.failureReason);",
+    "reemplazar": "const prepareUnreachable = false;"
+  },
+  {
+    "id": "T-065-TECHO",
+    "nota": "preparacion-por-enlace.ts · sacarle el techo al `getLatestBlockhash` de `crearCuentaDeNonce`",
+    "neutro": true,
+    "archivo": "src/infrastructure/solana/preparacion-por-enlace.ts",
+    "buscar": "await conTecho(connection.getLatestBlockhash());",
+    "reemplazar": "await connection.getLatestBlockhash();"
+  }
+]

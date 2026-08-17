@@ -160,7 +160,13 @@ for (const m of seleccion) {
     for (const e of edits) {
       const leido = readFileSync(path.resolve(RAIZ, e.archivo), "utf8");
       if (e.reemplazar !== "" && !leido.includes(e.reemplazar)) throw new Error(`${e.archivo}: el reemplazo NO quedó escrito`);
-      if (leido.includes(e.buscar)) throw new Error(`${e.archivo}: la aguja sigue estando`);
+      // ⚠️ LA SEGUNDA MITAD NO APLICA SIEMPRE, y hay que decir por qué en vez de sacarla: un mutante que
+      // AGREGA algo (la `const` sin efecto de la calibración) tiene la aguja ADENTRO de su reemplazo, así
+      // que exigir que la aguja desaparezca lo daría por no aplicado. El caso que esta comprobación cubre
+      // —un `split/join` que no hizo nada— ya lo cubre la regla 2 (aguja == 1) más la línea de arriba.
+      if (!e.reemplazar.includes(e.buscar) && leido.includes(e.buscar)) {
+        throw new Error(`${e.archivo}: la aguja sigue estando`);
+      }
     }
     // Regla 4 — línea-neutro declarado, línea-neutro verificado.
     let desplaza = 0;

@@ -21,7 +21,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { RemittanceFlow } from "./flow";
-import { phantomBrowseUrl } from "./wallet-availability"; import { humanError } from "./flow-vm"; import { mwaErrorCode } from "./solana/wallet-error-code"; // WKH-MWA: los dos EN ESTA LÍNEA — `wallet-availability.test.tsx:62` lo cita `tx-proof.test.tsx:84` por número
+import { phantomBrowseUrl, deeplinkEnabled } from "./wallet-availability"; import { humanError } from "./flow-vm"; import { mwaErrorCode } from "./solana/wallet-error-code"; // WKH-MWA: los dos EN ESTA LÍNEA — `wallet-availability.test.tsx:62` lo cita `tx-proof.test.tsx:84` por número
 import { MWA_WALLET_NAME, solanaWalletBridge } from "../infrastructure/solana-wallet-bridge"; import { useWallet } from "@solana/wallet-adapter-react"; import { useWalletModal } from "@solana/wallet-adapter-react-ui"; // WKH-MWA: los dos imports EN ESTA LÍNEA — `wallet-availability.test.tsx:62` lo cita `tx-proof.test.tsx:84` por número, y agregar una línea acá lo correría
 import { buildTestContainer } from "../test-support/test-container";
 import { TEST_CCI } from "../test-support/fakes";
@@ -982,5 +982,107 @@ describe("H1 · cuando conectar no lleva a ningún lado, la pantalla no lo ofrec
     });
     expect(screen.getByRole("button", { name: /Conectar wallet/ })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: CAMINO }).className).toContain("bg-card");
+  });
+});
+
+// ── WKH-358 / AC-9 · LA BANDERA DEL CAMINO POR ENLACE ────────────────────────────────────────────
+//
+// 🔴 POR QUÉ ESTOS DOS `it` SON DE CLASES DISTINTAS Y HACEN FALTA LOS DOS. `T-065-20` mide la FUNCIÓN
+// (qué valores prenden) y `T-065-21` mide la PANTALLA (que apagada no cambie un byte). Una sola de las
+// dos deja un agujero entero: con sólo la función, alguien puede leerla bien y montar el selector sin
+// gatearlo; con sólo la pantalla, el opt-in podría aflojarse a `"TRUE"` sin que nada se ponga rojo.
+//
+// El `afterEach` de este archivo ya llama `vi.unstubAllEnvs()` (`:106`), así que la bandera NO se filtra
+// entre tests y el resto del archivo sigue midiendo "lo de siempre" con la bandera ausente.
+const SELECTOR = /Conectá desde tu app de billetera/;
+
+describe("WKH-358/AC-9: la bandera NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED es opt-in ESTRICTO", () => {
+  // MUTANTE QUE MATA: en `wallet-availability.ts`, en `deeplinkEnabled()`, cambiar `=== "true"` por
+  // `?.toLowerCase() === "true"` ⇒ `"TRUE"` pasa a prender y la fila de abajo lo caza.
+  it("T-065-20: sólo el literal `true` prende; ausente, vacía, `1`, `TRUE` y `true ` NO", () => {
+    // Lo que SÍ prende, primero: sin esta fila el `it` podría pasar con una función que devuelve
+    // `false` siempre, que es el mutante más barato de todos (CD-18).
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", "true");
+    expect(deeplinkEnabled(), "el literal `true` TIENE que prender, o esto no gatea nada").toBe(true);
+    for (const v of ["", "1", "TRUE", "True", "true ", " true", "yes", "on"]) {
+      vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", v);
+      expect(deeplinkEnabled(), `el valor ${JSON.stringify(v)} NO puede prender la bandera`).toBe(false);
+    }
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", undefined as unknown as string);
+    expect(deeplinkEnabled(), "ausente tiene que estar APAGADA").toBe(false);
+  });
+
+  // MUTANTE QUE MATA: en `flow.tsx`, en el JSX del paso `connect`, borrar el gate
+  // `mostrarSelectorDeEnlace ?` del selector ⇒ el selector aparece con la bandera apagada y el
+  // `innerHTML` deja de ser idéntico.
+  it("T-065-21: con la bandera APAGADA el paso `connect` es byte-idéntico al de hoy", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", undefined as unknown as string);
+    irAlPasoConectar();
+    await screen.findByRole("button", { name: /Conectar wallet/ });
+    await act(async () => {
+      solanaWalletBridge.setWalletAvailability("none");
+    });
+    const apagada = screen.getByText(/Conectá tu wallet/).closest("div")?.parentElement?.parentElement
+      ?.innerHTML;
+    // CD-18 — que el fixture haya llegado al cuadrante que se quiere medir. Sin esto, un render que
+    // fallara antes dejaría `apagada === undefined` y la comparación de abajo pasaría por vacío.
+    expect(apagada, "no se llegó a renderizar el paso `connect`").toBeTruthy();
+    expect(screen.queryByText(SELECTOR), "el selector apareció con la bandera APAGADA").not.toBeInTheDocument();
+    // Y el enlace a Phantom, que es el camino verificado en cadena, sigue estando.
+    expect(screen.getByRole("link", { name: CAMINO })).toBeInTheDocument();
+
+    cleanup();
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", "true");
+    irAlPasoConectar();
+    await screen.findByRole("button", { name: /Conectar wallet/ });
+    await act(async () => {
+      solanaWalletBridge.setWalletAvailability("none");
+    });
+    const prendida = screen.getByText(/Conectá tu wallet/).closest("div")?.parentElement?.parentElement
+      ?.innerHTML;
+    // 🔴 LA MITAD QUE HACE FALSABLE A LA OTRA: si el `innerHTML` fuera igual con la bandera prendida,
+    // el `toBe(apagada)` de arriba estaría pasando porque el selector NO se monta nunca, no porque la
+    // bandera lo gatee. Con esta línea, las dos afirmaciones sólo pueden ser ciertas a la vez si la
+    // bandera es exactamente lo que decide.
+    expect(prendida, "con la bandera PRENDIDA la pantalla no cambió: el selector no se está montando").not.toBe(apagada);
+    expect(screen.getByText(SELECTOR)).toBeInTheDocument();
+    // Y `NoWalletHere` NO se borró ni se escondió: se degradó a salida secundaria.
+    expect(screen.getByRole("link", { name: CAMINO })).toBeInTheDocument();
+    expect(screen.getByText(AVISO)).toBeInTheDocument();
+  });
+
+  // AC-6 / CD-2 — el selector NO aparece fuera del cuadrante `none`, ni siquiera con la bandera
+  // prendida. Es la mitad que impide que este camino se ofrezca donde el gate del adaptador nunca se
+  // enciende (un escritorio con extensión), o sea una puerta que no lleva a donde dice.
+  it("T-065-21b: con la bandera PRENDIDA y una wallet inyectada, el selector NO aparece", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", "true");
+    irAlPasoConectar();
+    await screen.findByRole("button", { name: /Conectar wallet/ });
+    await act(async () => {
+      solanaWalletBridge.setWalletAvailability("injected");
+    });
+    expect(
+      screen.queryByText(SELECTOR),
+      "el selector se ofreció con una wallet INYECTADA. Ahí el gate `caminoPorEnlace()` devuelve " +
+        "`null` siempre, así que el salto volvería y el recorrido correría por el camino inyectado: " +
+        "una puerta que no lleva a donde dice.",
+    ).not.toBeInTheDocument();
+  });
+
+  // CD-16 — el copy del selector no puede prometer que se pueda PAGAR por enlace, porque el depósito
+  // por enlace NO cierra en esta HU (el PoP es WKH-359). Y sin em dashes.
+  it("T-065-COPY-SELECTOR: el copy del selector no promete pagar, y no tiene em dashes", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", "true");
+    irAlPasoConectar();
+    await screen.findByRole("button", { name: /Conectar wallet/ });
+    await act(async () => {
+      solanaWalletBridge.setWalletAvailability("none");
+    });
+    const texto = (screen.getByText(SELECTOR).closest("div")?.parentElement?.textContent ?? "").trim();
+    expect(texto, "el fixture no capturó el copy del selector").toContain("Elegí cuál usás");
+    expect(texto).not.toContain("—");
+    // ⛔ Lo que el copy NO puede insinuar: que por acá se paga, se envía o se deposita.
+    expect(texto).not.toMatch(/pag(ar|á|as)\b/i);
+    expect(texto).not.toMatch(/enviar tu plata|depositar|firmar el env[íi]o/i);
   });
 });

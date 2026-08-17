@@ -23,8 +23,11 @@
 // `interpretarVuelta` depende de que la lectura del disco y su escritura vivan en el MISMO bloque
 // síncrono. Un `await` en el medio reintroduce la ventana de read-modify-write que el fix-pack 2 de la
 // ola 1 cerró (el bloque de `interpretarVuelta` sobre eso está en `sesion.ts:554-570`).
-import type { Almacen } from "./sesion";
+import bs58 from "bs58";
+import type { Almacen, Viaje } from "./sesion";
+import { enlaceDeVuelta, guardarViaje } from "./sesion";
 import type { BilleteraDeeplink } from "./protocol";
+import { nuevoParDeCifrado, urlConectar } from "./protocol";
 import type { CausaDeEnlace } from "./firma-por-enlace";
 
 /**
@@ -171,4 +174,55 @@ export function olvidarEleccion(a: Almacen): void {
   } catch {
     // Ver arriba. Tirar acá rompería una salida entera por una limpieza.
   }
+}
+
+/**
+ * PASO 1 · Abre un viaje NUEVO y devuelve la URL del connect.
+ *
+ * 🔴 ES EL ÚNICO ESCRITOR DE PRODUCCIÓN DE UN VIAJE **INICIAL**, y hasta esta HU no existía ninguno:
+ * (`guardarViaje`, `sesion.ts:222`) sólo se alcanzaba desde `consumir`
+ * (`consumir`, `sesion.ts:632`), que **actualiza** un viaje que ya está. Eso es lo que dejaba
+ * al motor de firma sin nadie que lo alimentara.
+ *
+ * ⚠️ TIRA SI EL DISCO NO ACEPTA EL VIAJE, y es deliberado — es la misma decisión que
+ * (`guardarViaje`, `sesion.ts:222`) ya tiene escrita en `:213-221`: se llama **antes** del salto, así
+ * que un viaje que no se pudo guardar significa que este dispositivo no va a poder reconocer la vuelta.
+ * Saltar igual sería mandar a la persona a autorizar a ciegas. ⛔ No envolver esto en un `try`.
+ *
+ * 🔒 EL `remittanceId` VA DESDE EL PRIMER BYTE (CD-5). El dueño cruzado del viaje —remesa **y**
+ * sender— es lo que hace que una vuelta de otra remesa salga `otra-remesa`
+ * (`remittanceId`, `sesion.ts:597`) en vez de aplicarse sobre la que está en curso.
+ *
+ * ⛔ NO fija `claveBilletera`, `session` ni `direccion`: esos TRES los escribe la vuelta del connect, y
+ * el ancla `claveBilletera` es de UNA SOLA ESCRITURA (`claveBilletera`, `sesion.ts:148`). Un viaje
+ * recién abierto NO está conectado (`estaConectado`, `firma-por-enlace.ts:277` exige los tres), y por
+ * eso el motor de firma **corta antes** de tocarlo: los dos extremos del flujo no se pisan.
+ */
+export function iniciarConexion(
+  p: PedidoDeConexion & { billetera: BilleteraDeeplink },
+): { irA: string } {
+  const par = nuevoParDeCifrado();
+  const viaje: Viaje = {
+    billetera: p.billetera,
+    secreta: bs58.encode(par.secreta),
+    publica: bs58.encode(par.publica),
+    paso: "conectar",
+    remittanceId: p.remittanceId,
+    desde: p.ahora,
+  };
+  guardarViaje(p.almacen, viaje); // TIRA a propósito: ver el docblock
+  return {
+    irA: urlConectar({
+      billetera: p.billetera,
+      appUrl: p.appUrl,
+      // La marca del paso la pone `enlaceDeVuelta`, que además LIMPIA del origen los parámetros de
+      // respuesta que ya trajera. Sin esa limpieza, un `redirect_link` armado sobre una URL que ya
+      // volvió de un salto se lleva el `nonce`/`data` viejos adentro.
+      redirectLink: enlaceDeVuelta(p.hrefActual, "conectar"),
+      clavePublicaDeLaApp: par.publica,
+      // ⛔ EXPLÍCITO SIEMPRE. El default de las dos billeteras es `mainnet-beta`: omitirlo haría que la
+      // persona autorice sobre la red equivocada. Lo mide `T-065-1`.
+      cluster: p.cluster,
+    }),
+  };
 }

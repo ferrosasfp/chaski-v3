@@ -74,7 +74,7 @@ import {
   statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, type GestoRenovacion, REVISION_APAGADA, REVISION_FIRMANDO, REVISION_GESTO, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_BILLETERA, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, esVentanaSinAbiertos, // WKH-339: EN ESTA LÍNEA. `flow.tsx:661` lo citan 6 archivos (`ports.ts`, `container.test.ts`, `http-pop-signer.ts`, `pop-proof-store.ts`, `ledger-payout-status-gateway.ts`, `solana-providers.tsx`) más 2 sitios de acá, y NINGUNA de las 8 es una cita anclada ⇒ si se mueve, nada se pone rojo y los 8 comentarios rotan en silencio. ⛔ Acá decía `632`, que era el número correcto en `ce4f31e` y lo dejó de ser en esta rama: los 6 archivos SÍ se remapearon a 661 y esta línea, que es la que NOMBRA el número, quedó atrás (CR/BLQ-BAJO-1) · WKH-346 fix-pack: `esVentanaSinAbiertos` entra acá por lo mismo (Δ0)
 } from "./flow-vm";
 import { cn } from "./cn";
-import { phantomBrowseUrl, useWalletAvailability, useConnectedWalletAddress, mwaEnabled, useMwaOffered } from "./wallet-availability"; // el aviso de "acá no hay wallet" (NoWalletHere) · WKH-354/AC-6: `useConnectedWalletAddress` para el banner (CuentaCambiada) · WKH-MWA: los dos últimos, EN ESTA MISMA LÍNEA (el censo de citas por número de `:44` `flow.tsx:NNNN` cuelgan de que este archivo no cambie de largo)
+import { phantomBrowseUrl, useWalletAvailability, useConnectedWalletAddress, mwaEnabled, useMwaOffered, deeplinkEnabled } from "./wallet-availability"; import type { BilleteraDeeplink } from "../infrastructure/solana/deeplink/protocol"; // WKH-358: los dos EN ESTA MISMA LÍNEA, por lo mismo que los dos de WKH-MWA // el aviso de "acá no hay wallet" (NoWalletHere) · WKH-354/AC-6: `useConnectedWalletAddress` para el banner (CuentaCambiada) · WKH-MWA: los dos últimos, EN ESTA MISMA LÍNEA (el censo de citas por número de `:44` `flow.tsx:NNNN` cuelgan de que este archivo no cambie de largo)
 import { Aviso, Button, Card, ChaskiMark, Field, Money, Muted, Pill, Row, Stepper, TextInput } from "./ui"; import { BarraDestinos, type Destino, VolverAlInicio, esDestino } from "./barra-destinos"; import { Bienvenida } from "./bienvenida"; import { DestinoRecuperar, QUE_RECUPERA } from "./recuperar"; // ola 2: los nombres nuevos entran EN ESTA LÍNEA, no en una nueva. Este archivo recibe MUCHAS citas por número, y una sola línea de import de más corre todas las que apuntan más abajo. ⛔ EL NÚMERO NO SE ESCRIBE ACÁ: vive en UN solo lugar, con su definición y su fecha, en el comentario de `:44` (fix-pack, CR/MNR-5). Acá había un valor y el mismo archivo llevaba otros cuatro distintos para el mismo hecho, cada uno copiado de un vecino en vez de medido · WKH-063: los TRES imports nuevos entran acá por lo mismo (Δ0 líneas)
 
 // WKH-187: el quote se muestra ANTES del KYC. Orden: send→connect→review(pre-KYC)→verify→confirm(post-KYC)→track→done.
@@ -144,7 +144,7 @@ const RESUME_MAX_POLLS = 8;            // 8 × 2500 ms = 20 s total (antes 40 = 
 export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { container?: Container; pasoInicial?: Step } = {}) {
   const c = useMemo(() => container ?? createContainer(), [container]);
   const [step, setStep] = useState<Step>(pasoInicial);
-  const [busy, setBusy] = useState(false); const disponibilidadWallet = useWalletAvailability(); const mwaEnElSelector = useMwaOffered(); const conectarEsCallejon = disponibilidadWallet === "none" && mwaEnElSelector && !mwaEnabled(); // H1: los cuatro EN ESTA LÍNEA y no en cuatro nuevas — `flow.tsx` recibe ~muchas citas por número y una sola línea de más corre todas las que apuntan más abajo (el número y su definición viven en UN solo lugar, `:44`). Qué significa `conectarEsCallejon` está escrito donde se usa, en `step === "connect"`.
+  const [busy, setBusy] = useState(false); const disponibilidadWallet = useWalletAvailability(); const mwaEnElSelector = useMwaOffered(); const conectarEsCallejon = disponibilidadWallet === "none" && mwaEnElSelector && !mwaEnabled(); const mostrarSelectorDeEnlace = disponibilidadWallet === "none" && deeplinkEnabled(); // WKH-358: `mostrarSelectorDeEnlace` EN ESTA LÍNEA por lo mismo. Las DOS condiciones van juntas acá y no repartidas por el JSX: `deeplinkEnabled()` sola dejaría el selector visible en un escritorio con extensión, donde el gate del adaptador NUNCA se enciende y el botón llevaría a un salto que al volver corre por el camino inyectado igual. H1: los cuatro EN ESTA LÍNEA y no en cuatro nuevas — `flow.tsx` recibe ~muchas citas por número y una sola línea de más corre todas las que apuntan más abajo (el número y su definición viven en UN solo lugar, `:44`). Qué significa `conectarEsCallejon` está escrito donde se usa, en `step === "connect"`.
   const [error, setError] = useState<FlowError | null>(null);
 
   // form
@@ -159,7 +159,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
 
   // state
   const [preview, setPreview] = useState<Quote | null>(null); const [estadoCotiza, setEstadoCotiza] = useState<"pidiendo" | "ok" | "falla" | "corto">("pidiendo"); // H2: `preview === null` significaba TRES cosas (todavía no llegó · falló · el monto no llega al mínimo) y la pantalla las mostraba con el MISMO guión. Un `Quote | null` ya había perdido el tercer valor; esto lo repone. Va EN ESTA LÍNEA porque `flow.tsx` recibe ~muchas citas por número (el número y su definición viven en UN solo lugar, `:44`).
-  const [rem, setRem] = useState<RemittanceState | null>(null);
+  const [rem, setRem] = useState<RemittanceState | null>(null); const onElegirBilleteraDeEnlace = (b: BilleteraDeeplink) => { if (rem === null) return; yaInteractuoRef.current = true; try { window.location.href = c.eleccionDeEnlace.elegir({ billetera: b, remittanceId: rem.id }).irA; } catch (e) { setError({ message: humanError((e as Error).message) }); } }; // WKH-358 — EN ESTA LÍNEA (Δ0 de citas, `:44`) y ACÁ ABAJO porque necesita `rem`, que se declara en esta misma línea. TRES cosas que no son obvias: (1) `rem === null` NO puede saltar — el viaje se abre CON el `remittanceId` desde el primer byte (CD-5) y sin remesa no hay dueño cruzado que comparar a la vuelta; (2) marca `yaInteractuoRef` porque esto ES una interacción de la persona, y sin eso un resume que resuelva mientras ella está en la app de la billetera navegaría por encima al volver; (3) el `catch` traduce en vez de tirar: `elegir` sube una causa del vocabulario del enlace cuando el disco no acepta el viaje, y eso hay que DECIRLO, no dejarlo como excepción sin causa. ⚠️ Y LA CAUSA SE DERIVA DEL ERROR, NUNCA SE ESCRIBE ACÁ COMO LITERAL: el candado de copy de `deeplink-callers.test.ts` cuenta las causas `deeplink_*` que aparecen en `src/presentation`, y hasta que exista el `Record` con las once (W5) escribir una sola acá lo rompe a propósito. Hoy `humanError` la manda a su default, que es exactamente lo que el docblock del motor declara
   const [address, setAddress] = useState<string | null>(null);
   // WKH-333: el veredicto de KYC que el servidor ya contestó al conectar. NO es un guard: sólo decide
   // si se gasta un cupo de Didit (el guard del dinero es `prepare`, server-side).
@@ -960,7 +960,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
                   </p>
                 </Aviso>
               </Card>
-              <NoWalletHere />{/* H1 · POR QUÉ ACÁ ABAJO PUEDE NO HABER NINGÚN BOTÓN, y es lo contrario de un descuido. MEDIDO el 2026-08-16 en el teléfono del founder: en Chrome de Android sin wallet inyectada, lo ÚNICO que el selector ofrece es la entrada de Mobile Wallet Adapter, y tocarla no abre nada — ni siquiera pide permiso. O sea que el CTA más grande y más rojo de la pantalla llevaba a un callejón, justo debajo de un cartel que dice "no vemos ninguna wallet en este navegador". La pantalla se contradecía a sí misma, y quien la lee le cree al botón, no a la prosa. ⛔ QUITAR EL ADAPTER NO ERA LA SALIDA: no es nuestro, lo antepone `@solana/wallet-adapter-react` solo (ver el docblock de `MWA_WALLET_NAME` en `../infrastructure/solana-wallet-bridge.ts`). Lo único nuestro es si ofrecemos la puerta. ✅ QUÉ LA REEMPLAZA: `NoWalletHere` asciende "Abrir Chaski en Phantom" a acción resolutiva — el camino que SÍ está verificado en cadena (dos depósitos del founder, 2026-08-16). Un camino que funciona vale más que dos donde uno muere. 🔑 EL `!mwaEnabled()` ES LO QUE HACE HONESTA A LA BANDERA: significa "alguien ya probó MWA en un teléfono de verdad". Prendida, MWA deja de ser un callejón y el botón vuelve solo. ⚠️ NO afecta al escritorio: sin extensión `mwaEnElSelector` es `false`, así que el botón sigue estando y el selector sigue listando qué instalar. */}
+              {mostrarSelectorDeEnlace ? <SelectorDeEnlace onElegir={onElegirBilleteraDeEnlace} deshabilitado={busy} /> : null}<NoWalletHere />{/* WKH-358 · EL SELECTOR VA ARRIBA Y `NoWalletHere` QUEDA COMO SALIDA SECUNDARIA, y las dos mitades de esa jerarquía son deliberadas. ARRIBA porque con la bandera prendida el selector es la acción resolutiva del cuadrante `none`. Y `NoWalletHere` ⛔ NO SE BORRA Y NO SE DEGRADA A NOTA AL PIE: hoy el enlace a Phantom es el ÚNICO camino por el que una persona en un teléfono completó un depósito verificado en cadena (dos del founder, 2026-08-16), mientras que el camino por enlace todavía NO cierra el depósito (WKH-359). Ofrecer primero lo que conecta y dejar debajo lo que además paga es honesto sólo mientras eso siga siendo cierto: el día que el PoP por enlace exista, esta jerarquía hay que volver a discutirla. ⚠️ `mostrarSelectorDeEnlace` lleva la bandera Y `availability === "none"` adentro (ver `:147`), así que con la bandera apagada esto es `null` y la pantalla queda BYTE-IDÉNTICA (lo mide T-065-21). H1 · POR QUÉ ACÁ ABAJO PUEDE NO HABER NINGÚN BOTÓN, y es lo contrario de un descuido. MEDIDO el 2026-08-16 en el teléfono del founder: en Chrome de Android sin wallet inyectada, lo ÚNICO que el selector ofrece es la entrada de Mobile Wallet Adapter, y tocarla no abre nada — ni siquiera pide permiso. O sea que el CTA más grande y más rojo de la pantalla llevaba a un callejón, justo debajo de un cartel que dice "no vemos ninguna wallet en este navegador". La pantalla se contradecía a sí misma, y quien la lee le cree al botón, no a la prosa. ⛔ QUITAR EL ADAPTER NO ERA LA SALIDA: no es nuestro, lo antepone `@solana/wallet-adapter-react` solo (ver el docblock de `MWA_WALLET_NAME` en `../infrastructure/solana-wallet-bridge.ts`). Lo único nuestro es si ofrecemos la puerta. ✅ QUÉ LA REEMPLAZA: `NoWalletHere` asciende "Abrir Chaski en Phantom" a acción resolutiva — el camino que SÍ está verificado en cadena (dos depósitos del founder, 2026-08-16). Un camino que funciona vale más que dos donde uno muere. 🔑 EL `!mwaEnabled()` ES LO QUE HACE HONESTA A LA BANDERA: significa "alguien ya probó MWA en un teléfono de verdad". Prendida, MWA deja de ser un callejón y el botón vuelve solo. ⚠️ NO afecta al escritorio: sin extensión `mwaEnElSelector` es `false`, así que el botón sigue estando y el selector sigue listando qué instalar. */}
               {conectarEsCallejon ? null : (<Button disabled={busy} onClick={onConnect}>
                 {busy ? (
                   <Loader2 className="size-icono-sm animate-spin" />
@@ -3839,5 +3839,64 @@ function CuentaCambiada({
  */
 const NO_WALLET_SIN_MWA =
   "En el celular, Phantom solo se conecta desde su propio navegador. Si ya la tenés en este dispositivo, abrí Chaski adentro de Phantom.";
+/**
+ * WKH-358/AC-1 · EL SELECTOR DEL CAMINO POR ENLACE — las dos billeteras que hablan el protocolo.
+ *
+ * 🔴 SÓLO EN EL CUADRANTE `none`, y son tres razones, dos de ellas mecánicas:
+ *   1. en `injected` ofrecerlo **viola AC-6 por construcción**, porque el gate del adaptador
+ *      (`caminoPorEnlace`, `../infrastructure/solana-wallet.ts:2239`) exige `"none"`: el botón saltaría
+ *      a la billetera y al volver el recorrido correría por el camino inyectado igual. Una puerta que
+ *      no lleva a donde dice.
+ *   2. en `unknown` este repo ya tiene la disciplina de no afirmar
+ *      (`useWalletAvailability`, `./wallet-availability.ts:36` contesta `"unknown"` en el servidor).
+ *   3. el navegador interno de Phantom **es `injected`** (lo mide `T-CABLE-2`), y ahí el camino de hoy
+ *      funciona y está verificado en cadena.
+ *
+ * ⛔ ESTE SELECTOR NO PROMETE QUE SE PUEDA PAGAR POR ENLACE, y el copy está escrito para no insinuarlo.
+ * Hoy el DEPÓSITO por enlace no cierra: `prepare()` exige un PoP firmado por el bridge, que en un
+ * teléfono sin extensión está vacío (WKH-359). Lo que este camino sí completa es CONECTAR la billetera y
+ * crear la cuenta de nonce. Por eso dice "Conectar" y nunca "Pagar", y por eso el enlace a Phantom
+ * (`NoWalletHere`) sigue abajo como salida: es el único camino con un depósito medido en cadena.
+ *
+ * ⚠️ EL ALTO SE LEE DE UN `<Button>` DE VERDAD, no se escribe. Cada opción ES un `<Button>`, así que no
+ * hay ninguna receta copiada que se pueda desincronizar — que es justo el problema que el `<a>` de
+ * `NoWalletHere` tiene que resolver con `T-H1-3` porque necesita ser un `<a>`. Acá no: un `<button>`
+ * sirve, porque la navegación la hace el handler.
+ *
+ * ⛔ SIN EM DASHES en el texto que ve la persona (CD-16).
+ */
+function SelectorDeEnlace({
+  onElegir,
+  deshabilitado,
+}: {
+  onElegir: (b: BilleteraDeeplink) => void;
+  deshabilitado: boolean;
+}) {
+  return (
+    <Aviso className="space-y-normal">
+      <div className="flex items-center gap-ajustado">
+        <Smartphone className="size-icono-sm text-cochineal" />
+        <h2 className="text-title font-bold">Conectá desde tu app de billetera</h2>
+      </div>
+      <Muted>
+        Vas a salir a tu billetera para autorizar la conexión y volvés acá. Elegí cuál usás.
+      </Muted>
+      <Button disabled={deshabilitado} onClick={() => onElegir("phantom")}>
+        <ExternalLink className="size-icono-sm" /> Conectar con Phantom
+      </Button>
+      <Button variant="outline" disabled={deshabilitado} onClick={() => onElegir("solflare")}>
+        <ExternalLink className="size-icono-sm" /> Conectar con Solflare
+      </Button>
+      {/* ⚠️ ESTA FRASE NO ES UN ADORNO: es lo único que distingue este camino del de abajo para alguien
+          que sólo quiere mandar plata. Decir qué se consigue acá (conectar) y no prometer lo que no
+          cierra (pagar) es la diferencia entre una puerta honesta y una que frustra en el paso 4. */}
+      <Muted escala="label">
+        Si tu billetera no vuelve a esta página, usá el enlace de abajo para abrir Chaski adentro de
+        Phantom.
+      </Muted>
+    </Aviso>
+  );
+}
+
 const NO_WALLET_CON_MWA =
   "En este navegador, al tocar Conectar wallet puede abrirse la app de tu billetera para que autorices desde ahí. Si eso no pasa, usá el enlace de abajo y abrí Chaski adentro de Phantom.";

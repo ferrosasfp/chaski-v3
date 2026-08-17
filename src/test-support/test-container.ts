@@ -4,7 +4,7 @@
 // sobre el mismo estado). Overrides a nivel gateway y escape-hatch a nivel use-case (useCases).
 // CD-11: cero I/O real acá (la única excepción, FallbackQuoteGateway, la inyecta el test).
 
-import type { Container } from "../composition/container"; import { InMemoryPopProofStore } from "../infrastructure/auth/pop-proof-store"; // WKH-339: el import va EN ESTA LÍNEA, no en una nueva, porque `container.test.ts:413` cita `test-container.ts:87` por número y una línea de más lo rota en silencio (mismo motivo que `flow-vm.ts:25`)
+import type { Container, EleccionDeEnlace } from "../composition/container"; import { InMemoryPopProofStore } from "../infrastructure/auth/pop-proof-store"; // WKH-358: `EleccionDeEnlace` entra ACÁ, en la línea que ya existe, y se toma del re-export del composition root y no del módulo de infraestructura, que es exactamente para lo que ese re-export se escribió. WKH-339: el import va EN ESTA LÍNEA, no en una nueva, porque `container.test.ts:413` cita `test-container.ts:87` por número y una línea de más lo rota en silencio (mismo motivo que `flow-vm.ts:25`)
 import { PreviewQuote } from "../application/use-cases/preview-quote";
 import { RecoverEscrowFunds } from "../application/use-cases/recover-escrow-funds";
 import { CreateRemittance } from "../application/use-cases/create-remittance";
@@ -37,7 +37,7 @@ import {
   FakeWallet,
   FakeKycStore,
   FakeKycPendingStore,
-  FakePayoutGateway, FakeConnectedWallet, // WKH-354: `FakeConnectedWallet` EN ESTA LÍNEA — `:87` (`const payouts`) se cita por número desde 3 sitios y está debajo de este bloque
+  FakePayoutGateway, FakeConnectedWallet, EleccionDeEnlaceNula, // WKH-358: `EleccionDeEnlaceNula` EN ESTA LÍNEA por lo mismo. WKH-354: `FakeConnectedWallet` EN ESTA LÍNEA — `:87` (`const payouts`) se cita por número desde 3 sitios y está debajo de este bloque
   FakeRefundGateway,
   FixedClock,
   SeqIds,
@@ -66,7 +66,7 @@ export interface TestContainerOverrides {
   // seteaba el override, así que la línea nunca corría y nadie la podía ver mal. Un ejemplo
   // equivocado esperando a que alguien lo copie. Los tests del cierre montan el use-case con el probe
   // que corresponda (`escrow-rent-recovery.test.tsx` usa el adapter real contra el bridge).
-  solanaCloseableEscrows?: SolanaCloseableEscrowLister; solanaEscrowStates?: SolanaEscrowChainStateReader; connectedWallet?: ConnectedWalletProbe; // WKH-349: EN ESTA LÍNEA (`:87` se cita por número). Misma disciplina que sus dos vecinos: sin override queda UNDEFINED ⇒ el historial NO pregunta nada a la cadena y dice el copy de siempre. WKH-354: `connectedWallet` entra ACÁ por lo mismo; su default NO es undefined sino `new FakeConnectedWallet(null)` = "no hay ninguna billetera conectada", que es el estado real de un test que no montó ningún árbol
+  solanaCloseableEscrows?: SolanaCloseableEscrowLister; solanaEscrowStates?: SolanaEscrowChainStateReader; connectedWallet?: ConnectedWalletProbe; eleccionDeEnlace?: EleccionDeEnlace; // WKH-358: `eleccionDeEnlace` entra ACÁ por lo mismo. WKH-349: EN ESTA LÍNEA (`:87` se cita por número). Misma disciplina que sus dos vecinos: sin override queda UNDEFINED ⇒ el historial NO pregunta nada a la cadena y dice el copy de siempre. WKH-354: `connectedWallet` entra ACÁ por lo mismo; su default NO es undefined sino `new FakeConnectedWallet(null)` = "no hay ninguna billetera conectada", que es el estado real de un test que no montó ningún árbol
   clock?: Clock; // default: new FixedClock()
   // Repo COMPARTIDO por todos los use-cases (default: new InMemoryRepo()). Se inyecta para poder
   // SEMBRARLO antes de renderizar: es la única forma de testear el historial, que por definición
@@ -140,7 +140,7 @@ export function buildTestContainer(o: TestContainerOverrides = {}): Container {
     // acá, muerta, esperando a que alguien la copiara. `null` significa "no hay ninguna billetera
     // conectada", que es exactamente el estado de un test que no montó el árbol de providers. Un
     // test que quiera una cuenta viva la inyecta.
-    connectedWallet: o.connectedWallet ?? new FakeConnectedWallet(null),
+    connectedWallet: o.connectedWallet ?? new FakeConnectedWallet(null), eleccionDeEnlace: o.eleccionDeEnlace ?? new EleccionDeEnlaceNula(), // WKH-358 — EN ESTA LÍNEA, misma disciplina que sus vecinos. El default NO es `undefined` ni el objeto real: es el doble que dice "esta persona no eligió ninguna billetera por enlace", que es el estado real de un test que no montó ningún selector
   };
   return { ...base, ...(o.useCases ?? {}) };
 }

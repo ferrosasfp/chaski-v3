@@ -15,6 +15,10 @@
 // recorrido COMPLETO de la creación de la cuenta de nonce.
 import type { BilleteraDeeplink } from "./deeplink/protocol";
 import type { CausaDeEnlace } from "./deeplink/firma-por-enlace";
+import type { Almacen } from "./deeplink/sesion";
+import { almacenDeNavegador, terminarViaje } from "./deeplink/sesion";
+import { guardarEleccion, iniciarConexion, leerEleccion, olvidarEleccion } from "./deeplink/conexion";
+import { resolveSolanaNetworkConfig } from "../chain";
 
 /**
  * ¿Tiene el remitente su cuenta de nonce durable?
@@ -47,13 +51,18 @@ export type ResultadoDePreparacion =
   | { estado: "corte"; causa: CausaDeEnlace };
 
 /**
- * La costura del recorrido por enlace, tal como la ve la pantalla.
+ * LA MITAD DE LA ELECCIÓN — lo que la pantalla `connect` necesita para ofrecer el selector y saltar.
  *
- * ⚠️ EL REPARTO DE RESPONSABILIDADES, que es lo que hace que esto no sea un puerto más: las funciones
- * PURAS (abrir el viaje, leer la vuelta, limpiar la barra) viven en `deeplink/conexion.ts`; acá viven
- * las que necesitan la cadena o el reloj. Este objeto las compone, y es el único que la pantalla toca.
+ * 🔴 POR QUÉ ESTÁ PARTIDA EN DOS INTERFACES Y NO ES UNA SOLA. Estas tres operaciones son las únicas que
+ * viven ENTERAS del lado de acá del salto: leer la elección, persistirla y abrir el viaje. Las otras
+ * tres (`completar`, `estadoDeLaCuentaDeNonce`, `crearCuentaDeNonce`) necesitan la VUELTA y la CADENA.
+ * Separarlas deja que el composition root cablee la mitad que existe sin que el compilador tenga que
+ * aceptar métodos a medio escribir, que es como se cuela un default que degrada en silencio.
+ *
+ * ⛔ Y NO ES UNA INTERFAZ "por si acaso": tiene un consumidor propio y distinto —el selector de la
+ * pantalla `connect`—, que no puede ni debe alcanzar el broadcast ni la lectura de la cadena.
  */
-export interface PreparacionPorEnlace {
+export interface EleccionDeEnlace {
   /**
    * Qué billetera eligió la persona, o `null`. Lectura **PURA** del almacén de la elección: no toca la
    * red, no pide ninguna firma y no escribe nada.
@@ -66,6 +75,18 @@ export interface PreparacionPorEnlace {
    * la misma razón escrita ahí: saltar sin poder recordar el viaje es mandar a firmar a ciegas.
    */
   elegir(i: { billetera: BilleteraDeeplink; remittanceId: string }): { irA: string };
+  /** Borra la elección y el rastro. Ver su implementación para quién la llama hoy. */
+  olvidar(): void;
+}
+
+/**
+ * La costura COMPLETA del recorrido por enlace, tal como la ve la pantalla.
+ *
+ * ⚠️ EL REPARTO DE RESPONSABILIDADES, que es lo que hace que esto no sea un puerto más: las funciones
+ * PURAS (abrir el viaje, leer la vuelta, limpiar la barra) viven en `deeplink/conexion.ts`; acá viven
+ * las que necesitan la cadena o el reloj. Este objeto las compone, y es el único que la pantalla toca.
+ */
+export interface PreparacionPorEnlace extends EleccionDeEnlace {
   /**
    * Se volvió de un salto.
    *
@@ -88,6 +109,84 @@ export interface PreparacionPorEnlace {
    * vieja falla siempre. No cuesta plata: no hay escrow, no hay USDC y no hay orden de payout.
    */
   crearCuentaDeNonce(i: { direccion: string; remittanceId: string }): Promise<{ irA: string }>;
-  /** Borra la elección y el rastro. Ver su implementación para quién la llama hoy. */
-  olvidar(): void;
+}
+
+/**
+ * La mitad de la elección, cableada contra el navegador de verdad.
+ *
+ * ⚠️ ES ACÁ, Y NO EN `deeplink/conexion.ts`, DONDE VIVEN `window` Y `Date`. Ése es el módulo puro
+ * (DT-7); éste es el que le pasa el mundo por parámetro. Toda la lógica de qué se escribe en el disco y
+ * qué URL sale está allá y se puede probar sin un navegador.
+ *
+ * 🔴 IMPLEMENTA `EleccionDeEnlace` Y NO `PreparacionPorEnlace`, y eso es una afirmación y no una
+ * omisión: esta clase entrega LA IDA (elegir y saltar). La VUELTA —`completar`, y con ella el broadcast
+ * y la lectura de la cadena— es de la wave siguiente. Declarar la interfaz completa hoy obligaría a
+ * escribir tres métodos que no hacen lo que su nombre dice, que es exactamente la forma en que un
+ * default que degrada en silencio entra al money-path.
+ */
+export class EleccionDeEnlaceReal implements EleccionDeEnlace {
+  /** El `localStorage` y la URL de este navegador, o `null` si este entorno no los tiene.
+   *
+   *  Mismo `try` y misma razón que (`entornoDeEnlace`, `../solana-wallet.ts:1177`): en el modo privado
+   *  de algunos navegadores el que lanza es el GETTER de la propiedad, antes de que ninguna costura
+   *  exista. */
+  private entorno(): { almacen: Almacen; href: string; origin: string } | null {
+    try {
+      const g = globalThis as { localStorage?: Storage; location?: { href: string; origin: string } };
+      const disco = g.localStorage;
+      const url = g.location;
+      if (!disco || !url) return null;
+      return { almacen: almacenDeNavegador(disco), href: url.href, origin: url.origin };
+    } catch {
+      return null;
+    }
+  }
+
+  eleccion(): BilleteraDeeplink | null {
+    const e = this.entorno();
+    return e === null ? null : leerEleccion(e.almacen);
+  }
+
+  /**
+   * ⚠️ EL ORDEN DE LAS DOS ESCRITURAS IMPORTA Y NO ES ESTÉTICO: primero la elección, después el viaje.
+   * `iniciarConexion` **TIRA** si el disco no acepta el viaje, y si la elección se escribiera después
+   * nunca llegaría a escribirse — la persona volvería del salto (o no saltaría) sin que el gate
+   * `caminoPorEnlace()` supiera que este recorrido es por enlace, y caería al camino inyectado en
+   * silencio. Con este orden, un disco que no acepta el viaje deja la elección puesta y el corte llega
+   * como excepción a quien la pidió, que es lo que corresponde.
+   */
+  elegir(i: { billetera: BilleteraDeeplink; remittanceId: string }): { irA: string } {
+    const e = this.entorno();
+    // Sin disco no se puede ni recordar la elección ni reconocer la vuelta: saltar sería mandar a la
+    // persona a autorizar algo que este navegador no va a saber leer. Misma causa que ya existe.
+    if (e === null) throw new Error("deeplink_sin_memoria");
+    guardarEleccion(e.almacen, i.billetera);
+    return iniciarConexion({
+      almacen: e.almacen,
+      ahora: Date.now(),
+      hrefActual: e.href, // el href COMPLETO: `enlaceDeVuelta` TIRA con una URL relativa
+      appUrl: e.origin,
+      remittanceId: i.remittanceId,
+      cluster: resolveSolanaNetworkConfig().cluster,
+      billetera: i.billetera,
+    });
+  }
+
+  /**
+   * ⚠️ BORRA LA ELECCIÓN **Y** EL VIAJE, y las dos mitades hacen falta. Sin borrar el viaje, la persona
+   * que "cambia de billetera" se quedaría con un viaje abierto de la billetera anterior, y su ancla
+   * `claveBilletera` es de una sola escritura: la billetera nueva volvería como `otra-clave` en cada
+   * intento, o sea que cambiar de billetera dejaría el recorrido roto hasta que venza la ventana.
+   *
+   * 🔴 QUIÉN LA LLAMA HOY: **un solo llamador de producción**, el corte del recorrido de la pantalla
+   * `connect`. Los controles «Cambiar de billetera» y «No soy yo» que el SDD nombra como llamadores
+   * previstos **todavía no existen**, y no se inventaron acá para que este docblock no quedara
+   * describiendo una superficie que nadie escribió.
+   */
+  olvidar(): void {
+    const e = this.entorno();
+    if (e === null) return; // sin disco no hay nada que limpiar, y avisarlo no le sirve a nadie
+    olvidarEleccion(e.almacen);
+    terminarViaje(e.almacen);
+  }
 }

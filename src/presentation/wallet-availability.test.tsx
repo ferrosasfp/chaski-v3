@@ -551,7 +551,7 @@ describe("WKH-MWA · CANDADO: con MWA en juego, el depósito sigue saliendo por 
    * 🔴 QUÉ CIERRA ESTE CANDADO, y por qué es el único test de la rama que protege plata.
    *
    * Chaski NO envía la transacción del depósito: pide una firma PARCIAL y la difunde el facilitator,
-   * que es quien paga el fee (`solana-wallet.ts:775-779`). El protocolo MWA tiene DOS operaciones
+   * que es quien paga el fee (`solana-wallet.ts:985-989`). El protocolo MWA tiene DOS operaciones
    * distintas y la que necesitamos es la OPCIONAL: `sign_transactions` (firmar y devolver) frente a
    * `sign_and_send_transactions` (firmar y enviar). Una billetera que sólo ofrezca la segunda no sirve
    * para el patrocinio: no puede enviar una transacción cuyo pagador de fees es otra cuenta.

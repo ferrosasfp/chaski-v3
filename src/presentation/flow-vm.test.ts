@@ -2074,8 +2074,8 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
   // `"principal_state_unknown"` (declarada en §2.3 del SDD y NO cerrada en esta HU).
   it("T-W4: `refunded` sin el marcador del sender pero CON depósito confirmado recibe la frase nueva", () => {
     const r = Remittance.rehydrate(rem({ status: "confirmed" }));
-    r.markPrincipalIn("solana-sig-principal", T); // confirm-and-send.ts:464, tras el `ok:true` del settle
-    r.markPayoutSubmitted("transfi-po-1", T, "transfi"); // confirm-and-send.ts:470
+    r.markPrincipalIn("solana-sig-principal", T); // confirm-and-send.ts:553, tras el `ok:true` del settle
+    r.markPayoutSubmitted("transfi-po-1", T, "transfi"); // confirm-and-send.ts:559
     r.markPayoutFailed("payout_amount_mismatch", T); // track-remittance.ts:23, vía failAndRefund (:64/74)
     r.markRefunded("solana-refund-sig", T); // track-remittance.ts:33-34, con recibo real
     const fixture = r.snapshot as RemittanceState;

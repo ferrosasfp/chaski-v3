@@ -224,7 +224,7 @@ export class LedgerPayoutStatusGateway implements PayoutGateway {
     // 5 · EL ÚNICO camino a un terminal, y llega con evidencia server-side verificada.
     //
     // `deliveredPen: null` y `txRef: null` son MEDIDOS, no una simplificación: el webhook escribe SÓLO
-    // el status (`recordWebhookOutcome`, `../../application/ports.ts:967` — sólo `payoutId`+`status`).
+    // el status (`recordWebhookOutcome`, `../../application/ports.ts:968` — sólo `payoutId`+`status`).
     // `value_minor` es el
     // principal en USDC, no los PEN entregados; usarlo como `deliveredPen` sería un error de categoría
     // Y de moneda (`isDeliveredWithinReceiveTolerance` TIRA `reconcile_currency_mismatch`).

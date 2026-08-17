@@ -34,7 +34,7 @@ import {
   ScriptedClock,
   T0,
   beneficiary,
-} from "../../test-support/fakes";
+} from "../../test-support/fakes"; import { esperarListo } from "../../test-support/desenlaces"; // WKH-356: narrowing de ResultadoDeEnvio. TIRA si execute() suspende donde el test no lo espera.
 import { ConfirmAndSend } from "./confirm-and-send";
 
 const passKyc: KycVerification = {
@@ -182,14 +182,14 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
     const id = await seedQuoted(repo);
 
     const clock = new ScriptedClock([T0, "2026-07-09T18:11:00.000Z"]); // vence en el re-check
-    const out = await new ConfirmAndSend(
+    const out = esperarListo(await new ConfirmAndSend(
       new FakeSolanaWallet(),
       repo,
       clock,
       new FakeRefundGateway(),
       { prepare, gateway: new FakeSolanaSettlementGateway(), probe: new FakeSolanaEscrowDepositProbe(),
         senderBalance: new FakeSolanaSenderSolBalanceProbe() },
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id }));
 
     expect(prepareSpy).not.toHaveBeenCalled();
     expect(out.snapshot.failureReason).toBe("quote_expired_before_submit");
@@ -209,14 +209,14 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       reason: "prepare_no_deposit_address",
     });
 
-    const out = await new ConfirmAndSend(
+    const out = esperarListo(await new ConfirmAndSend(
       wallet,
       repo,
       new FixedClock(),
       refund,
       { prepare, gateway, probe: new FakeSolanaEscrowDepositProbe(),
         senderBalance: new FakeSolanaSenderSolBalanceProbe() },
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id }));
 
     expect(authorizeSpy).not.toHaveBeenCalled(); // AC-7: NUNCA se pidió la firma
     expect(settleSpy).not.toHaveBeenCalled();
@@ -231,7 +231,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
     const submitSpy = vi.spyOn(payouts, "submit");
     const id = await seedQuoted(repo);
 
-    const out = await new ConfirmAndSend(
+    const out = esperarListo(await new ConfirmAndSend(
       new FakeSolanaWallet(),
       repo,
       new FixedClock(),
@@ -242,7 +242,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
         probe: new FakeSolanaEscrowDepositProbe(),
         senderBalance: new FakeSolanaSenderSolBalanceProbe(),
       },
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id }));
 
     // DT-7/DT-11: el use-case ya ni recibe el PayoutGateway; este spy no puede dispararse ni por
     // accidente. El PEN lo libera el proveedor al detectar el depósito on-chain.
@@ -262,14 +262,14 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       reason: "solana_settle_rejected",
     });
 
-    const out = await new ConfirmAndSend(
+    const out = esperarListo(await new ConfirmAndSend(
       new FakeSolanaWallet(),
       repo,
       new FixedClock(),
       new FakeRefundGateway(),
       { prepare: new FakeSolanaPayoutPrepareGateway(), gateway, probe: new FakeSolanaEscrowDepositProbe(),
         senderBalance: new FakeSolanaSenderSolBalanceProbe() },
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id }));
 
     expect(out.snapshot.principalTx).toBeNull();
     expect(out.snapshot.failureReason).toBe("solana_settle_rejected");

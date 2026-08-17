@@ -50,7 +50,7 @@ export class InMemoryPopProofStore implements PopProofReader, PopProofRecorder {
   constructor(private readonly clock: Clock) {}
 
   /** El reloj es el puerto inyectado, no `Date.now()`: `Clock` es `{ nowIso(): string }` y NO tiene
-   *  `nowMs()` (`Clock`, `../../application/ports.ts:974`). ⛔ No ampliar el puerto por esto. */
+   *  `nowMs()` (`Clock`, `../../application/ports.ts:975`). ⛔ No ampliar el puerto por esto. */
   private ahoraMs(): number {
     return Date.parse(this.clock.nowIso());
   }

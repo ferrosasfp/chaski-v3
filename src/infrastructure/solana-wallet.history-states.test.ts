@@ -362,7 +362,7 @@ describe("SolanaWalletAdapter.readEscrowStates (WKH-349)", () => {
   // 🔴 T-A12 (AC-13) — LA FRONTERA EXACTA: `nowSec === deadlineSec`.
   // Con el reloj congelado JUSTO en el `deadline`, la respuesta tiene que ser `window-closed`, porque
   // el predicado de acá es la negación exacta del guard con el que el refund de este mismo adapter
-  // rechaza por deadline (`refund_before_deadline`, `solana-wallet.ts:972`): a esa altura aquél YA NO
+  // rechaza por deadline (`refund_before_deadline`, `solana-wallet.ts:1258`): a esa altura aquél YA NO
   // rechaza, así que la pantalla no puede decir que todavía se puede liberar.
   //
   // MUTANTE: `nowSec > deadlineSec` (estricto). Cambia el resultado UN SOLO SEGUNDO de toda la línea de
@@ -441,7 +441,7 @@ describe("SolanaWalletAdapter.readEscrowStates (WKH-349)", () => {
 //
 // POR QUÉ NO ALCANZABA T-A12, medido y no supuesto (AR/MNR): con el mutante
 // `if (nowSec <= deadlineSec) throw new Error("refund_before_deadline")` puesto en
-// (`refund_before_deadline`, `solana-wallet.ts:972`) —o sea el refund rechazando EN el deadline
+// (`refund_before_deadline`, `solana-wallet.ts:1258`) —o sea el refund rechazando EN el deadline
 // mientras la pantalla ya dice "la salida que queda es devolverlos a tu wallet"— la suite entera daba
 // `2025 passed`, cero rojos. T-A12 fija la respuesta del historial contra un literal, así que vigila
 // UN lado del acople; el mutante vive del OTRO. Un candado de un acople tiene que ejercitar las dos
@@ -511,7 +511,7 @@ describe("readEscrowStates ⇄ refundEscrow — el acople de AC-13, con las dos 
   }
 
   // MUTANTE que mata (el que el AR aplicó y sobrevivió a la suite entera): `nowSec <= deadlineSec` en
-  // el guard del refund (`solana-wallet.ts:972`). Con él, esta línea se pone roja por
+  // el guard del refund (`solana-wallet.ts:1258`). Con él, esta línea se pone roja por
   // "refund_before_deadline" mientras el assert de arriba sigue diciendo `window-closed`, que es
   // EXACTAMENTE el desacuerdo que AC-13 prohíbe.
   it("T-A16a: en el borde exacto, el historial dice 'window-closed' y el refund NO rechaza por deadline", async () => {

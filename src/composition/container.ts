@@ -300,7 +300,7 @@ export function getContainer(): Container {
 //  · `VentanaDeLectura` NO tiene `prove` ⇒ **el OBJETO que informa el estado no puede firmar**. Y NO
 //    tiene `peek` ⇒ tampoco puede sacar la credencial del almacén y armarse un `fetch` a mano,
 //    salteándose el throttle de 20 s del gateway.
-//  · `PopSigner` (`PopSigner`, `../application/ports.ts:553`) NO tiene `estado` ni `peek` ⇒ **el OBJETO
+//  · `PopSigner` (`PopSigner`, `../application/ports.ts:554`) NO tiene `estado` ni `peek` ⇒ **el OBJETO
 //    que firma no puede consultar el estado**, así que no puede "optimizar" saltándose el popup de una
 //    operación de dinero reusando una prueba guardada.
 // ⛔ UN SOLO PUERTO CON LOS DOS MÉTODOS ES UNA VIOLACIÓN, aunque `PopProofReader` quede intacto.

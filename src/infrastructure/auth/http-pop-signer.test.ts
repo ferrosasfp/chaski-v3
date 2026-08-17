@@ -10,7 +10,7 @@ function fakeWallet(sig = "0xwalletsig"): WalletPort {
   return {
     connect: async () => ADDR,
     getAddress: async () => ADDR,
-    authorizePrincipal: async () => ({ tx: "0x" }),
+    authorizePrincipal: async () => ({ estado: "listo" as const, tx: "0x" }),
     signMessage: vi.fn(async () => sig),
   };
 }

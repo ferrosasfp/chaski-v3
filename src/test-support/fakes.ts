@@ -46,7 +46,7 @@ import type {
   SolanaEscrowRefundGateway,
   SolanaEscrowCloseGateway,
   SolanaEscrowCloseResult,
-  SolanaCloseableEscrowLister, EscrowChainState, SolanaEscrowChainStateReader, // WKH-349: EN ESTA LÍNEA, no en dos nuevas. `fakes.ts:835` (FAKE_SOLANA_SIGNATURE) lo citan 4 archivos por número y están todos DEBAJO de acá: dos líneas de más los rotan en silencio
+  SolanaCloseableEscrowLister, EscrowChainState, SolanaEscrowChainStateReader, AutorizacionDelPrincipal, // WKH-349: EN ESTA LÍNEA, no en dos nuevas. `fakes.ts:835` (FAKE_SOLANA_SIGNATURE) lo citan CINCO archivos por número (`chain.ts`, `desenlaces.ts`, `flow.test.tsx`, `lost-escrow-recovery.test.tsx`, `tx-proof.test.tsx`) y el destino está DEBAJO de acá: dos líneas de más los rotan en silencio. WKH-356 suma `AutorizacionDelPrincipal` por lo mismo. ⚠️ Acá decía CUATRO, y el quinto lo agregó el mismo commit que editó esta línea (MNR-CR-5): el número se deriva con `grep -rln 'fakes\.ts:835' src app` menos este archivo, no se recuerda
   ConnectedWalletProbe,
   CloseableEscrow,
   SolanaEscrowRefundResult,
@@ -293,8 +293,8 @@ export class FakeWallet implements WalletPort {
     _remittanceId?: string,
     _deposit?: { address: string }, // WKH-211: 3er arg (to = depositAddress). El fake lo ignora; los
     // tests spyean authorizePrincipal para inspeccionar que recibió el depositAddress de prepare.
-  ): Promise<{ tx: string }> {
-    return { tx: "fake-principal" };
+  ): Promise<AutorizacionDelPrincipal> {
+    return { estado: "listo", tx: "fake-principal" }; // WKH-356: el envoltorio, mismo dato de siempre
   }
   // WKH-206: firma fake (no toca red).
   async signMessage(_message: string): Promise<string> {
@@ -868,9 +868,14 @@ export class FakeSolanaWallet implements WalletPort {
     _quote: Quote,
     remittanceId?: string,
     deposit?: { address: string; escrow?: { beneficiary: string; authority: string; mint?: string } },
-  ): Promise<{ tx: string; solana?: SolanaPrincipalAuthorization }> {
+  ): Promise<AutorizacionDelPrincipal> {
     this.authorizeCalls.push({ remittanceId, deposit });
-    return this.solana ? { tx: this.solana.partialSignedTx, solana: this.solana } : { tx: "0xsol" };
+    // WKH-356: el envoltorio `estado`, y NADA más. Este doble NUNCA suspende: la variante
+    // "hay-que-salir" la produce sólo la rama de enlace del adaptador real, y quien quiera probarla
+    // escribe un doble propio que la devuelva explícitamente (que es lo que hace T-062-22).
+    return this.solana
+      ? { estado: "listo", tx: this.solana.partialSignedTx, solana: this.solana }
+      : { estado: "listo", tx: "0xsol" };
   }
   async signMessage(_message: string): Promise<string> {
     return "solana-fakesig";

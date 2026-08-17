@@ -440,7 +440,7 @@ export async function POST(req: Request): Promise<Response> {
   // rechazo perfectamente explicado (el agente dijo POR QUÉ) sale disfrazado de "no nos dio
   // dirección". 422 y no 502: el pedido llegó, se entendió y se negó, así que reintentarlo igual no
   // lo arregla. Nada se atestó, nada se escribió en el ledger y NINGUNA firma se pidió: el prepare
-  // corre antes de `authorizePrincipal` ((`prepare_unavailable`, `confirm-and-send.ts:394`)).
+  // corre antes de `authorizePrincipal` ((`prepare_unavailable`, `confirm-and-send.ts:477`)).
   const rejection = readPayoutRejection(result);
   if (rejection) {
     // Sólo enums (CD-5/CD-9): ni el beneficiary, ni la BASE, ni el body del request. El detalle que

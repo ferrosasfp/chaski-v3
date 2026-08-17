@@ -107,7 +107,7 @@ interface PlanStep {
    *
    * ⚠️ `"demo"` EN LA ENTREGA NO QUIERE DECIR QUE SE SIMULE. Quiere decir settle apagado, y con el
    * settle apagado la entrega no corre ni la simula nadie: `ConfirmAndSend` FALLA CERRADO antes de
-   * intentar nada (`this.solana`, `confirm-and-send.ts:336` ⇒ `settlement_unavailable` +
+   * intentar nada (`this.solana`, `confirm-and-send.ts:390` ⇒ `settlement_unavailable` +
    * `not_deposited`). No existe ningún camino de código donde el payout se ejecute contra un mock y
    * complete. La frase que se renderiza para `"demo"` dice *"lo simula"* y en este leg es imprecisa:
    * es un residual DECLARADO (H1 de WKH-336), y corregirlo exige un TERCER valor de este campo con su

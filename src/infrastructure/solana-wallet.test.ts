@@ -4,13 +4,13 @@ import bs58 from "bs58";
 import * as anchor from "@coral-xyz/anchor";
 import type { Idl, Provider } from "@coral-xyz/anchor";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
-import { ComputeBudgetProgram, Connection, Keypair, PublicKey, SystemProgram, Transaction, type TransactionInstruction } from "@solana/web3.js";
+import { ComputeBudgetProgram, Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction } from "@solana/web3.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Money } from "../domain/money";
 import type { Quote } from "../domain/remittance";
 import { CUSTODY_WINDOW_SECS, SolanaWalletAdapter } from "./solana-wallet";
 import { escrowIdl } from "./solana/escrow-idl";
-import { solanaWalletBridge } from "./solana-wallet-bridge";
+import { solanaWalletBridge } from "./solana-wallet-bridge"; import { esperarAutorizacionLista } from "../test-support/desenlaces"; import { readFileSync } from "node:fs"; import path from "node:path"; import { FirmaPorEnlaceReal, type DesenlaceDeFirma, type FirmaPorEnlace, type PedidoDeFirma } from "./solana/deeplink/firma-por-enlace"; // WKH-356: TODO en esta línea — `solana-wallet.test.ts:453-454` y `:506` los citan por número desde otros dos archivos, así que una línea nueva acá arriba los rota
 
 const VALID_B58 = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // base58 válido (mixed-case)
 
@@ -405,7 +405,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     const adapter = await connectedAdapter();
     const rid = "rem-037-envelope";
     const quote = makeQuote();
-    const res = await adapter.authorizePrincipal(quote, rid, escrowDeposit());
+    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(quote, rid, escrowDeposit()));
 
     const popSignature = res.solana?.popSignature;
     expect(typeof popSignature).toBe("string");
@@ -448,7 +448,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
 
   it("AC-3/CD-SDD-1: NUNCA broadcast; return trae solana.partialSignedTx b64 + reference b58", async () => {
     const adapter = await connectedAdapter();
-    const res = await adapter.authorizePrincipal(makeQuote(), "rem-ac3", escrowDeposit());
+    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-ac3", escrowDeposit()));
 
     expect(Connection.prototype.sendRawTransaction).not.toHaveBeenCalled();
     expect(Connection.prototype.sendTransaction).not.toHaveBeenCalled();
@@ -463,7 +463,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
 
   it("AC-4/CD-SDD-6: reference como remainingAccount no-signer/no-writable, al final del set", async () => {
     const adapter = await connectedAdapter();
-    const res = await adapter.authorizePrincipal(makeQuote(), "rem-ac4", escrowDeposit());
+    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-ac4", escrowDeposit()));
 
     const ix = depositIx(capturedTx(signSpy));
     const last = ix.keys[ix.keys.length - 1];
@@ -752,7 +752,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
   // billetera devuelve — que es la mitad que sí se puede verificar desde acá.
   it("T12 (AC-5, payload): la tx que se POSTEA trae exactamente [limit 120.000, price 10.000, deposit, register_escrow]", async () => {
     const adapter = await connectedAdapter();
-    const res = await adapter.authorizePrincipal(makeQuote(), "rem-cb-payload", escrowDeposit());
+    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-cb-payload", escrowDeposit()));
 
     const posted = Transaction.from(Buffer.from(res.solana?.partialSignedTx ?? "", "base64"));
 
@@ -898,7 +898,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
       ),
     });
     const adapter = await connectedAdapter();
-    const res = await adapter.authorizePrincipal(makeQuote(), "rem-347-lleno", escrowDeposit());
+    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-347-lleno", escrowDeposit()));
 
     // UNA sola ix de negocio, y es el `deposit`. Registrar contra un índice lleno devolvería
     // EscrowIndexFull (6005) y, al viajar en la misma tx, REVERTIRÍA EL DEPÓSITO.
@@ -916,7 +916,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
   it("T-347-5(a) (AC-6): la sonda LANZA ⇒ una sola ix de negocio y la promesa RESUELVE", async () => {
     mockChain({ [ESCROW_INDEX_PDA.toBase58()]: "throw" });
     const adapter = await connectedAdapter();
-    const res = await adapter.authorizePrincipal(makeQuote(), "rem-347-rpc-caido", escrowDeposit());
+    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-347-rpc-caido", escrowDeposit()));
     expect(businessIx(capturedTx(signSpy))).toHaveLength(1);
     expect(res.solana?.partialSignedTx).toBeTruthy();
   });
@@ -980,7 +980,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
       }
       // Antes que el `await p`: si no resolvió, este assert lo dice en una línea en vez de colgar 30 s.
       expect(resuelta).toBe(true);
-      const res = await p;
+      const res = esperarAutorizacionLista(await p);
       expect(businessIx(capturedTx(signSpy))).toHaveLength(1);
       expect(res.solana?.partialSignedTx).toBeTruthy();
     } finally {
@@ -993,7 +993,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     // podemos identificar en una tx del money-path es peor que no mandarla.
     mockChain({ [ESCROW_INDEX_PDA.toBase58()]: Buffer.alloc(64, 7) });
     const adapter = await connectedAdapter();
-    const res = await adapter.authorizePrincipal(makeQuote(), "rem-347-basura", escrowDeposit());
+    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-347-basura", escrowDeposit()));
     expect(businessIx(capturedTx(signSpy))).toHaveLength(1);
     expect(res.solana?.partialSignedTx).toBeTruthy();
   });
@@ -1248,7 +1248,7 @@ describe("T-347-6 (AC-9/CD-10): con el índice LLENO la tx sale byte-idéntica a
     const adapter = new SolanaWalletAdapter();
     await adapter.connect();
 
-    const res = await adapter.authorizePrincipal(
+    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(
       {
         quoteId: "q-byte",
         send: Money.fromMinor(12_345_678, "USDC"),
@@ -1267,7 +1267,7 @@ describe("T-347-6 (AC-9/CD-10): con el índice LLENO la tx sale byte-idéntica a
           authority: AUTHORITY.publicKey.toBase58(),
         },
       },
-    );
+    ));
     return res.solana?.partialSignedTx ?? "";
   }
 
@@ -1278,5 +1278,702 @@ describe("T-347-6 (AC-9/CD-10): con el índice LLENO la tx sale byte-idéntica a
     // dos, esta línea lo dice.
     const posted = Transaction.from(Buffer.from(b64, "base64"));
     expect(businessIx(posted)).toHaveLength(1);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-356 · LA RAMA DE FIRMA POR ENLACE PROFUNDO
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 EL PRIMER CANDADO ES QUE NO EXISTA. Con el colaborador ausente —que es como queda producción al
+// cerrar 062— esta rama entera vive adentro de un `if` y no ejecuta NI UNA línea. Eso es CD-1, y lo
+// que lo mide no es este describe: son los ~40 `it` de arriba, que siguen verdes SIN QUE SE HAYA
+// TOCADO UN SOLO DATO DE EXPECTATIVA.
+//
+// ⚠️ [NO VERIFICADO] (CD-12) — nada de acá está medido en un teléfono. `localStorage` y `location` son
+// objetos de mentira, y la billetera es una función. Que un móvil real vuelva al mismo origen, que
+// conserve el disco a través del salto y que devuelva la transacción byte-idéntica son tres
+// afirmaciones sobre un runtime que este repo NO ha medido.
+//
+// ⚠️ CD-15 · LOS 15 MUTANTES DE ESTE BLOQUE SE CORRIERON (2026-08-17, tabla RE-MEDIDA entera en el
+// fix-pack 1), no se razonaron: `spawnSync` sin pipes, suite COMPLETA por mutante, aguja contada con
+// `== 1`, relectura del disco, restauración verificada byte a byte, y dos mutantes de calibración de
+// resultado conocido ANTES de creerle nada a la batería (el que debía morir: exit=1 con **41** rojos en DOS archivos, RE-MEDIDO en el FP4 sobre dba48f9 —eran 35 al escribir esta cabecera y 39 tras el FP2, que le agregó `it` al otro archivo—; el
+// que debía vivir: exit=0).
+//
+// | mutante                                                             | exit | `it` rojos |
+// |---|---|---|
+// | T-062-7     invertir el guard `viaje.direccion !== p.sender`         | 1 | 41 en DOS archivos (RE-MEDIDO en el FP4 sobre dba48f9; 39 tras el FP2, 35 al escribirla). Es el MISMO mutante que la tabla gemela llama `CALIB` (`CALIB`, `solana/deeplink/firma-por-enlace.test.ts:84`): su conteo es global, así que las dos filas se mueven juntas o se contradicen |
+// | T-062-7b    pasarle al motor otro valor en `sender`                  | 1 | 2 |
+// | T-062-18(a) comparar sólo la LONGITUD del mensaje devuelto           | 1 | 1 (sólo el CASO B) |
+// | T-062-18(b) dejar sólo la PRESENCIA de la firma (sin `nacl.verify`)   | 1 | 2 (el CASO C + citas) |
+// | T-062-19    borrar el `isBlockhashValid`                             | 1 | 2 |
+// | T-062-20    referenciar `sendRawTransaction` en el método            | 1 | 2 |
+// | CD-1        cambiar un campo del envelope del camino INYECTADO       | 1 | 2 |
+// | CD-1(b)     agregar `isBlockhashValid` al camino INYECTADO           | 1 | 3 |
+// | MNR-CR-7    sacar el `try/catch` de `entornoDeEnlace`                 | 1 | 1 |
+// | MNR-CR-2    tragarse el error de `new PublicKey` en getConnectedAddress | 1 | 3 |
+// | AR/MNR-1    vaciar `abandonarAutorizacion`                            | 1 | 1 |
+// | AR/MNR-3(a) sacar el `withTimeout` de la sonda del blockhash          | 1 | 2 |
+// | AR/MNR-3(b) colapsar «no pude preguntar» en «venció»                  | 1 | 1 |
+// | AR/MNR-3(c) no limpiar cuando la cadena dijo que el blockhash murió    | 1 | 2 |
+// | AR/MNR-3(d) no limpiar en la salida de ÉXITO                          | 1 | 2 |
+//
+// Que 18(a) mate SÓLO el caso B y 18(b) SÓLO el caso C es lo que prueba que los dos chequeos —bytes del
+// mensaje y verificación de la firma— hacen trabajos distintos y ninguno cubre al otro.
+//
+// ⚠️ VARIOS DE ESTOS MUTANTES AGREGAN O QUITAN LÍNEAS, y eso pone rojo de refilón al candado de citas
+// ancladas (`citas-ancladas.test.ts`), porque desplaza destinos. Está contado arriba y va dicho: si no
+// se dice, alguien lee «2 rojos» y cree que dos `it` de comportamiento lo cazaron.
+describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WKH-356)", () => {
+  const CLAVE_PREPARADO = "chaski.billetera.preparado.v1";
+  const CLAVE_VIAJE = "chaski.billetera.viaje.v1";
+  const HREF = "https://chaski.test/enviar?rem=rem-1";
+  const REM = "rem-1";
+
+  let disco: Map<string, string>;
+  let signSpy: ReturnType<typeof vi.fn>;
+  let blockhashValidoSpy: ReturnType<typeof vi.fn>;
+
+  /** `localStorage` y `location` de mentira. El entorno de estos tests es Node: no hay ninguno. */
+  function montarEntorno() {
+    disco = new Map<string, string>();
+    const storage = {
+      getItem: (k: string) => disco.get(k) ?? null,
+      setItem: (k: string, v: string) => void disco.set(k, v),
+      removeItem: (k: string) => void disco.delete(k),
+      clear: () => disco.clear(),
+      key: () => null,
+      length: 0,
+    };
+    vi.stubGlobal("localStorage", storage);
+    vi.stubGlobal("location", { href: HREF, origin: "https://chaski.test" });
+    return { leer: (k: string) => disco.get(k) ?? null };
+  }
+
+  /** Motor programable que además REGISTRA el `PedidoDeFirma` que recibió. */
+  class MotorProgramable implements FirmaPorEnlace {
+    public pedidos: PedidoDeFirma[] = [];
+    public responder: (p: PedidoDeFirma) => DesenlaceDeFirma = () => ({
+      tipo: "salto",
+      irA: "https://phantom.app/ul/v1/signTransaction?x=1",
+      esperando: "firma-tx",
+    });
+    resolver(p: PedidoDeFirma): DesenlaceDeFirma {
+      this.pedidos.push(p);
+      return this.responder(p);
+    }
+  }
+
+  beforeEach(() => {
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_USDC_MINT", MINT_B58);
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_FACILITATOR_PUBKEY", FACILITATOR_B58);
+    vi.spyOn(Connection.prototype, "getLatestBlockhash").mockResolvedValue({
+      blockhash: FIXED_BLOCKHASH,
+      lastValidBlockHeight: 1,
+    } as Awaited<ReturnType<Connection["getLatestBlockhash"]>>);
+    vi.spyOn(Connection.prototype, "sendRawTransaction").mockResolvedValue("sig-never" as never);
+    vi.spyOn(Connection.prototype, "sendTransaction").mockResolvedValue("sig-never" as never);
+    mockChain({}); // sin esto la sonda del índice PEGA A LA RED (WKH-347)
+    blockhashValidoSpy = vi.fn(async () => ({ context: { slot: 1 }, value: true }));
+    vi.spyOn(Connection.prototype, "isBlockhashValid").mockImplementation(
+      blockhashValidoSpy as never,
+    );
+    signSpy = vi.fn(async (tx: unknown) => {
+      (tx as Transaction).partialSign(SENDER_KP);
+      return tx;
+    });
+    solanaWalletBridge.registerSignTransaction(signSpy);
+    solanaWalletBridge.registerSignMessage(
+      vi.fn(async (bytes: Uint8Array) => nacl.sign.detached(bytes, SENDER_KP.secretKey)),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  const escrowDeposit = () => ({
+    address: "unused-evm-field",
+    escrow: { beneficiary: BENEFICIARY_B58, authority: AUTHORITY_B58 },
+  });
+
+  async function adaptadorConMotor(motor: FirmaPorEnlace): Promise<SolanaWalletAdapter> {
+    solanaWalletBridge.setState({ publicKey: SENDER_B58, connected: true });
+    // ⚠️ EL 3er PARÁMETRO VA AL FINAL y el 2º se omite: es lo que hace que `container.ts` —que pasa UN
+    // solo argumento— y los tests que pasan `confirmTimeoutMs` posicionalmente sigan compilando.
+    const adapter = new SolanaWalletAdapter(undefined, undefined, motor);
+    await adapter.connect();
+    return adapter;
+  }
+
+  /** El registro del intento, escrito DIRECTO en el disco.
+   *
+   * ⚠️ HACE FALTA PORQUE `MotorProgramable` ES UN DOBLE Y NO ESCRIBE NADA: el que escribe el ancla es el
+   * motor real, y estos tests reemplazan el motor justamente para poder fabricar el desenlace. Lo que se
+   * siembra acá NO es el ancla contra la que el adaptador compara —esa viaja en el desenlace
+   * (`mensajeBase64`)— sino sólo el estado de disco cuya limpieza (o su ausencia) se está midiendo. */
+  function sembrarPreparado() {
+    disco.set(
+      CLAVE_PREPARADO,
+      JSON.stringify({
+        remittanceId: REM,
+        sender: SENDER_B58,
+        beneficiary: BENEFICIARY_B58,
+        authority: AUTHORITY_B58,
+        mensajeBase64: "MSG",
+        referenceBase58: "REF",
+        desde: Date.now(),
+      }),
+    );
+  }
+
+  /** Un viaje ya conectado, escrito DIRECTO en el disco de mentira. */
+  function sembrarViaje(direccion: string) {
+    const par = nacl.box.keyPair();
+    const billetera = nacl.box.keyPair();
+    disco.set(
+      CLAVE_VIAJE,
+      JSON.stringify({
+        billetera: "phantom",
+        secreta: bs58.encode(par.secretKey),
+        publica: bs58.encode(par.publicKey),
+        claveBilletera: bs58.encode(billetera.publicKey),
+        session: "s",
+        direccion,
+        paso: "firmar-tx",
+        remittanceId: REM,
+        pasosConsumidos: ["conectar"],
+        desde: Date.now(),
+      }),
+    );
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────────────────────────
+  // T-062-7 (§4.5 / T12 / CD-11) — el viaje sólo puede COINCIDIR con el sender, nunca sustituirlo
+  // ──────────────────────────────────────────────────────────────────────────────────────────────
+  //
+  // 🔴 POR QUÉ ESTE GUARD NO ES REDUNDANTE. Hay tres mecanismos contra la sustitución de depositante y
+  // los otros dos tienen agujeros declarados: el guard S3.5 del settle **se apaga con el ledger** (la
+  // propia route lo dice), y **no cubre el caso de dos `prepare()`** porque
+  // `listPreparedDepositAddresses` devuelve todas las direcciones y hace `includes(...)`. En un
+  // deployment sin ledger, ESTE es el único.
+  //
+  // Se corre contra el motor REAL, no contra un doble: lo que hace falta probar es el CABLEADO.
+  describe("T-062-7: `viaje.direccion` distinta del sender ⇒ corte fail-closed", () => {
+    // MUTANTE QUE MATA (MEDIDO: exit=1, 39 `it` rojos en dos archivos —eran 35 en el FP1—): invertir la comparación
+    // `viaje.direccion !== p.sender` del motor ⇒ el depósito se arma con el `sender` del adaptador y una
+    // dirección de viaje AJENA, y el caso positivo de abajo NO lo nota. Por eso hacen falta los dos.
+    it("una dirección de viaje ajena corta con deeplink_sender_mismatch", async () => {
+      montarEntorno();
+      const adapter = await adaptadorConMotor(new FirmaPorEnlaceReal());
+      sembrarViaje(Keypair.generate().publicKey.toBase58()); // ← otra cuenta
+      await expect(
+        adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit()),
+      ).rejects.toThrow("deeplink_sender_mismatch");
+    });
+
+    it("CASO POSITIVO: con la misma dirección el viaje sigue y sale un salto", async () => {
+      montarEntorno();
+      const adapter = await adaptadorConMotor(new FirmaPorEnlaceReal());
+      sembrarViaje(SENDER_B58);
+      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      expect(r.estado).toBe("hay-que-salir");
+      expect(r.estado === "hay-que-salir" && r.esperando).toBe("firma-tx");
+      expect(r.estado === "hay-que-salir" && new URL(r.irA).host).toBe("phantom.app");
+    });
+
+    // El `sender` que viaja al motor sale de `this.getAddress()` y está CANONICALIZADO: nunca del canal
+    // del enlace.
+    // 🔴 ACÁ HABÍA UN «MUTANTE QUE MATA» IMPOSIBLE, y el CR lo midió: decía «pasarle `viaje.direccion` en
+    // vez de `sender`», y el adaptador NO TIENE `viaje.direccion` (el viaje lo lee el motor). Peor: el
+    // fixture siembra el viaje con la MISMA dirección del sender, así que cualquier mutante que las
+    // confunda devuelve lo mismo y este `it` no lo notaría nunca.
+    // MUTANTE QUE MATA DE VERDAD (MEDIDO: exit=1, 2 `it` rojos, éste y el caso positivo): pasarle al
+    // motor otro valor en `sender` (`deposit.escrow.beneficiary`) ⇒ el motor compara contra algo que no
+    // es la cuenta del adaptador.
+    it("el `sender` del pedido es el del adaptador, canonicalizado", async () => {
+      montarEntorno();
+      const motor = new MotorProgramable();
+      const adapter = await adaptadorConMotor(motor);
+      sembrarViaje(SENDER_B58);
+      await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      expect(motor.pedidos[0]?.sender).toBe(new PublicKey(SENDER_B58).toBase58());
+      expect(motor.pedidos[0]?.remittanceId, "se le pasó otra cosa que el 2º argumento (T2)").toBe(REM);
+      expect(motor.pedidos[0]?.beneficiary).toBe(BENEFICIARY_B58);
+      expect(motor.pedidos[0]?.authority).toBe(AUTHORITY_B58);
+      expect(motor.pedidos[0]?.hrefActual, "no se pasó el href COMPLETO (T9)").toBe(HREF);
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────────────────────────
+  // MNR-CR-7 / MNR-CR-2 — el entorno hostil, y la limpieza que NO tiene que estar
+  // ──────────────────────────────────────────────────────────────────────────────────────────────
+  describe("el entorno del navegador, cuando no colabora", () => {
+    // 🔴 LO QUE NO ESTABA ENVUELTO ERA LA LECTURA DE LA PROPIEDAD. Todo el resto del código de enlace
+    // envuelve las OPERACIONES del disco, pero en el modo privado de algunos navegadores el que tira es
+    // el getter, antes de que ninguna costura exista. Sin el `try`, `authorizePrincipal` subía un error
+    // FUERA del vocabulario `deeplink_*` y la pantalla no tenía ninguna causa que traducir.
+    // MUTANTE QUE MATA (MEDIDO: exit=1, 1 `it` rojo, éste): que el `catch` de `entornoDeEnlace` re-tire
+    // en vez de devolver `null` ⇒ este `it` recibe "denegado por política" en vez de
+    // `deeplink_sin_memoria`.
+    // ⚠️ `[NO VERIFICADO]` (CD-12): que un navegador real lance en ese getter no está medido acá.
+    it("un `localStorage` cuyo getter LANZA ⇒ deeplink_sin_memoria (no un error de otro vocabulario)", async () => {
+      montarEntorno();
+      Object.defineProperty(globalThis, "localStorage", {
+        configurable: true,
+        get() {
+          throw new Error("denegado por política de almacenamiento");
+        },
+      });
+      const adapter = await adaptadorConMotor(new FirmaPorEnlaceReal());
+      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit())).rejects.toThrow(
+        "deeplink_sin_memoria",
+      );
+    });
+
+    it("sin `location` ⇒ deeplink_sin_memoria: sin URL no se puede volver del salto", async () => {
+      montarEntorno();
+      vi.stubGlobal("location", undefined);
+      const adapter = await adaptadorConMotor(new FirmaPorEnlaceReal());
+      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit())).rejects.toThrow(
+        "deeplink_sin_memoria",
+      );
+    });
+
+    // 🔴 EL `catch` DE `canonicalizeAddress` NO ERA "UN SITIO SIN TEST": ERA INALCANZABLE (MNR-CR-2, con
+    // una divergencia medida y reportada). Una dirección que no parsea NO llega a la rama de enlace, y
+    // no por uno sino por DOS guards que corren antes: `getConnectedAddress` hace `new
+    // PublicKey(publicKey)` y devuelve `null` si tira (`:256-259`) ⇒ `wallet_not_connected` (`:561`); y
+    // si aun así pasara, `new PublicKey(sender)` (`:573`) tira ~200 líneas antes de la rama. Los dos con
+    // exactamente los mismos inputs que `canonicalizeAddress`, que ES esa misma llamada adentro.
+    // Por eso la rama se BORRÓ en vez de recibir un test: un test sobre una rama inalcanzable congela una
+    // fantasía, y este repo ya lo decidió así (`sesion.ts`, docblock de `LecturaDelViaje`).
+    // MUTANTE QUE MATA (MEDIDO: exit=1, 3 `it` rojos, y los otros dos son de HU-SOL-4, o sea que este
+    // guard lo sostiene más de un `it`): que `getConnectedAddress` se trague el error de
+    // `new PublicKey(...)` ⇒ este `it` deja de recibir `wallet_not_connected` y el motor empieza a
+    // recibir pedidos con basura, que es justo lo que los dos guards impiden.
+    it("una dirección que no parsea muere ANTES de la rama de enlace: el motor no recibe NADA", async () => {
+      montarEntorno();
+      const motor = new MotorProgramable();
+      // Sin `connect()`: así `getAddress()` no tiene cache y le pregunta al bridge en vivo.
+      const adapter = new SolanaWalletAdapter(undefined, undefined, motor);
+      solanaWalletBridge.setState({ publicKey: "no-es-base58-válido-###", connected: true });
+      sembrarViaje(SENDER_B58);
+      disco.set(CLAVE_PREPARADO, JSON.stringify({ basura: true }));
+      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit())).rejects.toThrow(
+        "wallet_not_connected",
+      );
+      expect(motor.pedidos, "la rama de enlace corrió con una dirección que no parsea").toEqual([]);
+      expect(
+        disco.has(CLAVE_VIAJE),
+        "algo borró el viaje de la persona por una dirección que NUESTRO bridge no supo parsear",
+      ).toBe(true);
+      expect(disco.has(CLAVE_PREPARADO)).toBe(true);
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────────────────────────
+  // AR/MNR-1 — `abandonarAutorizacion`: el requisito explícito que 061 le dejó a esta HU
+  // ──────────────────────────────────────────────────────────────────────────────────────────────
+  describe("abandonarAutorizacion: cuando el envío murió, el rastro se borra", () => {
+    // MUTANTE QUE MATA (MEDIDO: exit=1, 1 `it` rojo, éste): vaciar el cuerpo del método. Y el de abajo
+    // mide la otra mitad, la que protege CD-1: sin colaborador, el método no toca el disco NI UNA VEZ.
+    it("con colaborador de enlace, borra el viaje y el registro", async () => {
+      montarEntorno();
+      const adapter = await adaptadorConMotor(new FirmaPorEnlaceReal());
+      sembrarViaje(SENDER_B58);
+      disco.set(CLAVE_PREPARADO, "{}");
+      adapter.abandonarAutorizacion();
+      expect(
+        disco.has(CLAVE_VIAJE),
+        "la x25519 privada y la sesión sobrevivieron a la remesa que las produjo (hasta 20 min)",
+      ).toBe(false);
+      expect(disco.has(CLAVE_PREPARADO)).toBe(false);
+    });
+
+    it("SIN colaborador (producción al cerrar 062) no toca el disco: no hay nada que limpiar", async () => {
+      montarEntorno();
+      solanaWalletBridge.setState({ publicKey: SENDER_B58, connected: true });
+      const adapter = new SolanaWalletAdapter(); // el camino de la billetera inyectada
+      await adapter.connect();
+      sembrarViaje(SENDER_B58);
+      disco.set(CLAVE_PREPARADO, "{}");
+      adapter.abandonarAutorizacion();
+      expect(disco.has(CLAVE_VIAJE), "el camino inyectado borró algo que no escribió (CD-1)").toBe(
+        true,
+      );
+      expect(disco.has(CLAVE_PREPARADO)).toBe(true);
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────────────────────────
+  // T-062-18 (DT-10) — bytes contra bytes
+  // ──────────────────────────────────────────────────────────────────────────────────────────────
+  describe("T-062-18: lo que volvió tiene que ser lo que se pidió firmar", () => {
+    /** Corre la invocación A (salto) y devuelve el pedido capturado, para poder fabricar la vuelta de
+     *  la invocación B con la MISMA transacción que el adaptador armó.
+     *
+     *  ⚠️ ACÁ SE SEMBRABA EL `Preparado` A MANO, y el CR lo marcó como hueco de método: sembrarlo
+     *  hacía que nadie midiera la relación entre lo que el motor persiste y lo que el adaptador
+     *  compara en la invocación siguiente — que es exactamente por dónde entró AR/BLQ-MED-1. Ya no
+     *  hace falta: el ancla la devuelve el desenlace (`mensajeBase64`), así que el adaptador compara
+     *  contra el MISMO registro que el motor validó y no hay dos lecturas que puedan divergir. La
+     *  relación motor↔ancla la mide `firma-por-enlace.test.ts` con el motor real y cuatro
+     *  invocaciones. */
+    async function primeraVuelta(motor: MotorProgramable): Promise<PedidoDeFirma> {
+      const adapter = await adaptadorConMotor(motor);
+      sembrarViaje(SENDER_B58);
+      await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      const p = motor.pedidos[0];
+      if (!p) throw new Error("el motor no recibió ningún pedido");
+      return p;
+    }
+
+    function serializar(tx: Transaction): string {
+      return bs58.encode(tx.serialize({ requireAllSignatures: false, verifySignatures: false }));
+    }
+
+    it("CASO POSITIVO: la MISMA tx firmada por el sender ⇒ `listo`, con la reference PERSISTIDA", async () => {
+      montarEntorno();
+      const motor = new MotorProgramable();
+      const p = await primeraVuelta(motor);
+      const tx = Transaction.from(bs58.decode(p.transaccionBase58));
+      tx.partialSign(SENDER_KP);
+      motor.responder = () => ({
+        tipo: "completo",
+        transaccionFirmadaBase58: serializar(tx),
+        firmaDePatrocinio: "FIRMA-POP-DEL-VIAJE",
+        referenceBase58: p.referenceBase58,
+        // El ANCLA, por el mismo camino que la reference (MNR-CR-6): es contra esto que el adaptador
+        // compara los bytes devueltos, sin volver a leer el disco con otro reloj.
+        mensajeBase64: p.mensajeBase64,
+      });
+      const adapter = await adaptadorConMotor(motor);
+      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      expect(r.estado).toBe("listo");
+      if (r.estado !== "listo") return;
+      expect(r.solana?.vm).toBe("solana");
+      expect(r.solana?.popSignature).toBe("FIRMA-POP-DEL-VIAJE");
+      // 🔴 LA REFERENCE ES LA DEL INTENTO ORIGINAL, no la del `Keypair.generate()` de esta invocación
+      // (que se descartó junto con la tx que la llevaba). Sin esto el envelope declararía una
+      // reference que NO está adentro de su propia transacción y la traza del depósito se rompe.
+      expect(r.solana?.reference).toBe(p.referenceBase58);
+      expect(r.tx).toBe(r.solana?.partialSignedTx);
+      // Y los bytes que salen son los que la billetera devolvió, no los de la tx nueva.
+      expect(r.tx).toBe(Buffer.from(bs58.decode(serializar(tx))).toString("base64"));
+    });
+
+    // MUTANTE QUE MATA (MEDIDO, y por separado): comparar sólo la LONGITUD del mensaje ⇒ exit=1 con 1
+    // `it` rojo, el CASO B. Dejar sólo la PRESENCIA de la firma (sin `nacl.verify`) ⇒ exit=1 con el CASO
+    // C. Ninguno de los dos mata al otro: por eso se comparan los BYTES DEL MENSAJE **y** se VERIFICA la
+    // firma.
+    it("CASO A: una ix agregada ⇒ deeplink_tx_alterada", async () => {
+      montarEntorno();
+      const motor = new MotorProgramable();
+      const p = await primeraVuelta(motor);
+      const tx = Transaction.from(bs58.decode(p.transaccionBase58));
+      tx.add(
+        new TransactionInstruction({
+          programId: Keypair.generate().publicKey,
+          keys: [],
+          data: Buffer.from([9, 9]),
+        }),
+      );
+      tx.partialSign(SENDER_KP);
+      motor.responder = () => ({
+        tipo: "completo",
+        transaccionFirmadaBase58: serializar(tx),
+        firmaDePatrocinio: "F",
+        referenceBase58: p.referenceBase58,
+        // El ANCLA, por el mismo camino que la reference (MNR-CR-6): es contra esto que el adaptador
+        // compara los bytes devueltos, sin volver a leer el disco con otro reloj.
+        mensajeBase64: p.mensajeBase64,
+      });
+      const adapter = await adaptadorConMotor(motor);
+      await expect(
+        adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit()),
+      ).rejects.toThrow("deeplink_tx_alterada");
+    });
+
+    it("CASO B: otro `beneficiary` adentro de la ix ⇒ deeplink_tx_alterada", async () => {
+      montarEntorno();
+      const motor = new MotorProgramable();
+      const p = await primeraVuelta(motor);
+      const tx = Transaction.from(bs58.decode(p.transaccionBase58));
+      // El `beneficiary` viaja en los ARGS de la ix `deposit` (posición 0 de las de negocio): se
+      // pisan 32 bytes de su data. Los bytes del mensaje cambian ⇒ el guard tiene que verlo.
+      const deposito = businessIx(tx)[0];
+      if (!deposito) throw new Error("sin ix de deposit");
+      new PublicKey(Keypair.generate().publicKey.toBase58()).toBuffer().copy(deposito.data, 24);
+      tx.partialSign(SENDER_KP);
+      motor.responder = () => ({
+        tipo: "completo",
+        transaccionFirmadaBase58: serializar(tx),
+        firmaDePatrocinio: "F",
+        referenceBase58: p.referenceBase58,
+        // El ANCLA, por el mismo camino que la reference (MNR-CR-6): es contra esto que el adaptador
+        // compara los bytes devueltos, sin volver a leer el disco con otro reloj.
+        mensajeBase64: p.mensajeBase64,
+      });
+      const adapter = await adaptadorConMotor(motor);
+      await expect(
+        adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit()),
+      ).rejects.toThrow("deeplink_tx_alterada");
+    });
+
+    // 🔴 EL CASO QUE UNA COMPARACIÓN DE BYTES SOLA NO VE. Las firmas NO son parte del mensaje, así que
+    // la MISMA transacción con la firma en cero pasa el `serializeMessage()` byte a byte.
+    // MUTANTE QUE MATA (MEDIDO: exit=1, este `it` + el candado de citas por el desplazamiento): dejar
+    // sólo `if (!firmaDevuelta)` ⇒ este `it` se pone rojo y los otros dos siguen verdes, que es justo lo
+    // que lo hace necesario.
+    it("CASO C: los MISMOS bytes con una firma que no verifica ⇒ deeplink_tx_alterada", async () => {
+      montarEntorno();
+      const motor = new MotorProgramable();
+      const p = await primeraVuelta(motor);
+      const tx = Transaction.from(bs58.decode(p.transaccionBase58));
+      const otro = Keypair.generate();
+      // Firma de OTRA clave, colocada en la posición del sender: hay firma, tiene 64 bytes, y no
+      // verifica.
+      const fake = nacl.sign.detached(new Uint8Array(tx.serializeMessage()), otro.secretKey);
+      tx.addSignature(SENDER_KP.publicKey, Buffer.from(fake));
+      motor.responder = () => ({
+        tipo: "completo",
+        transaccionFirmadaBase58: serializar(tx),
+        firmaDePatrocinio: "F",
+        referenceBase58: p.referenceBase58,
+        // El ANCLA, por el mismo camino que la reference (MNR-CR-6): es contra esto que el adaptador
+        // compara los bytes devueltos, sin volver a leer el disco con otro reloj.
+        mensajeBase64: p.mensajeBase64,
+      });
+      const adapter = await adaptadorConMotor(motor);
+      await expect(
+        adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit()),
+      ).rejects.toThrow("deeplink_tx_alterada");
+    });
+
+    // ──────────────────────────────────────────────────────────────────────────────────────────────
+    // T-062-19 (DT-9) — el blockhash
+    // ──────────────────────────────────────────────────────────────────────────────────────────────
+    //
+    // 🔴 SIN ESTE CHEQUEO EL DESENLACE ES EL PEOR QUE ESTE REPO TIENE CATALOGADO:
+    //   blockhash vencido → `solana_settle_broadcast_failed` → NO está en
+    //   SETTLE_REASONS_BEFORE_BROADCAST → `failAfterBroadcast` pregunta a la cadena → la cuenta no
+    //   existe → `probeDeposit` contesta "unknown" POR DISEÑO → PRINCIPAL_STATE_UNKNOWN → la pantalla
+    //   dice "no sabemos si te cobramos" sobre algo que SÍ sabemos.
+    // MUTANTE QUE MATA (MEDIDO: exit=1, 2 `it` rojos, éste y el de la limpieza): neutralizar el
+    // `if (!vigente.value)` ⇒ este `it` deja de tirar, `execute()` llega al settle y el desenlace pasa a
+    // ser "no sabemos si te cobramos".
+    it("T-062-19: con el blockhash vencido corta con deeplink_blockhash_expired y NO devuelve envelope", async () => {
+      montarEntorno();
+      const motor = new MotorProgramable();
+      const p = await primeraVuelta(motor);
+      const tx = Transaction.from(bs58.decode(p.transaccionBase58));
+      tx.partialSign(SENDER_KP);
+      motor.responder = () => ({
+        tipo: "completo",
+        transaccionFirmadaBase58: serializar(tx),
+        firmaDePatrocinio: "F",
+        referenceBase58: p.referenceBase58,
+        // El ANCLA, por el mismo camino que la reference (MNR-CR-6): es contra esto que el adaptador
+        // compara los bytes devueltos, sin volver a leer el disco con otro reloj.
+        mensajeBase64: p.mensajeBase64,
+      });
+      blockhashValidoSpy.mockResolvedValue({ context: { slot: 1 }, value: false });
+      const adapter = await adaptadorConMotor(motor);
+      await expect(
+        adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit()),
+      ).rejects.toThrow("deeplink_blockhash_expired");
+      // 🔴 Y ES POR ESO QUE `execute()` NUNCA LLEGA AL SETTLE: `authorizePrincipal` TIRA, y su único
+      // llamador de producción (`confirm-and-send.ts:484`) NO tiene `try/catch` alrededor. No hay
+      // ninguna transacción viajando, así que "no se movió nada" es un hecho y no una incógnita.
+      expect(blockhashValidoSpy).toHaveBeenCalledTimes(1);
+      expect(Connection.prototype.sendRawTransaction).not.toHaveBeenCalled();
+      expect(Connection.prototype.sendTransaction).not.toHaveBeenCalled();
+    });
+
+    // ──────────────────────────────────────────────────────────────────────────────────────────────
+    // AR/MNR-3 — la sonda tiene TECHO, y vencido el techo la causa es OTRA
+    // ──────────────────────────────────────────────────────────────────────────────────────────────
+    //
+    // 🔴 "NO PUDE PREGUNTAR" NO ES "NO PASÓ". Con dos valores nada más, un RPC que acepta la conexión y
+    // no contesta terminaba (a) dejando el botón girando PARA SIEMPRE, porque esta llamada era la única
+    // sonda del archivo sin techo, y (b) sobre un recorrido cuyas dos firmas la versión anterior ya
+    // había borrado, porque la limpieza corría ANTES. Las dos mitades se arreglan juntas.
+    // MUTANTE QUE MATA (a): sacar el `withTimeout` ⇒ MEDIDO: exit=1, 2 `it` rojos (éste, que ya no
+    //   termina, más el candado de citas por el desplazamiento de líneas).
+    // MUTANTE QUE MATA (b): tirar `deeplink_blockhash_expired` en el `catch` ⇒ MEDIDO: exit=1, 1 `it`
+    //   rojo, éste, por la causa.
+    it("un RPC que acepta y NO contesta vence por el techo ⇒ deeplink_blockhash_desconocido", async () => {
+      montarEntorno();
+      const motor = new MotorProgramable();
+      const p = await primeraVuelta(motor);
+      const tx = Transaction.from(bs58.decode(p.transaccionBase58));
+      tx.partialSign(SENDER_KP);
+      motor.responder = () => ({
+        tipo: "completo",
+        transaccionFirmadaBase58: serializar(tx),
+        firmaDePatrocinio: "F",
+        referenceBase58: p.referenceBase58,
+        mensajeBase64: p.mensajeBase64,
+      });
+      sembrarPreparado(); // el doble no escribe el ancla; acá se mide su limpieza
+      // Una promesa que NUNCA se resuelve: es el RPC que acepta y se queda callado.
+      blockhashValidoSpy.mockImplementation(() => new Promise(() => {}));
+      const adapter = await adaptadorConMotor(motor);
+      // ⚠️ LA FORMA DE ESTE TEST NO ES DECORATIVA: es la misma de T-347-5(b) de este archivo, que costó
+      // un flake entero. Se falsea SÓLO `setTimeout`/`clearTimeout` (el juego completo cuelga el camino
+      // antes de llegar a la sonda), y son DOS fases con presupuestos separados: primero turnos REALES
+      // del event loop hasta que el techo EXISTA —los `await import()` los necesitan—, y sólo después se
+      // mueve el reloj falso, que ya tiene a quién vencer.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const corriendo = adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+        let causa: string | null = null;
+        void corriendo.catch((e: unknown) => {
+          causa = e instanceof Error ? e.message : String(e);
+        });
+        const t0 = Date.now(); // `Date` NO está falseado: este presupuesto se mide en tiempo REAL
+        while (vi.getTimerCount() === 0 && Date.now() - t0 < 10_000) {
+          await new Promise((r) => setImmediate(r));
+        }
+        // 🔴 REFUTACIÓN OBLIGATORIA: si no se armó ningún techo, lo que venga después no prueba nada
+        // sobre el techo — la promesa podría rechazar por cualquier otro camino.
+        expect(vi.getTimerCount(), "no se armó ningún techo: este test no mide nada").toBeGreaterThan(0);
+        for (let i = 0; i < 200 && causa === null; i++) {
+          await new Promise((r) => setImmediate(r));
+          await vi.advanceTimersByTimeAsync(100);
+        }
+        expect(causa, "la sonda del blockhash no venció nunca: el techo no está").toBe(
+          "deeplink_blockhash_desconocido",
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+      // 🔴 Y EL DISCO QUEDA INTACTO: las dos firmas pueden estar perfectas y el que falló fue un RPC
+      // nuestro. Borrarlas sería castigar a la persona por nuestra infraestructura.
+      expect(disco.has(CLAVE_VIAJE), "un fallo de NUESTRO RPC borró el viaje con las firmas").toBe(
+        true,
+      );
+      expect(disco.has(CLAVE_PREPARADO)).toBe(true);
+    }, 30_000);
+
+    // La contracara, y es lo que hace que las dos causas no sean la misma con distinto nombre: cuando la
+    // cadena CONTESTÓ que el blockhash murió, esa transacción no entra en ningún bloque nunca más, así
+    // que el recorrido se limpia. Sin la limpieza, el próximo intento vuelve a encontrar la misma firma
+    // muerta y a cortar igual, durante 20 minutos.
+    // MUTANTE QUE MATA (MEDIDO: exit=1, 2 `it` rojos, éste y el candado de citas): borrar el
+    // `limpiarRastroDeEnlace` de la rama `!vigente.value`.
+    it("con el blockhash MUERTO (la cadena contestó) el recorrido SÍ se limpia", async () => {
+      montarEntorno();
+      const motor = new MotorProgramable();
+      const p = await primeraVuelta(motor);
+      const tx = Transaction.from(bs58.decode(p.transaccionBase58));
+      tx.partialSign(SENDER_KP);
+      motor.responder = () => ({
+        tipo: "completo",
+        transaccionFirmadaBase58: serializar(tx),
+        firmaDePatrocinio: "F",
+        referenceBase58: p.referenceBase58,
+        mensajeBase64: p.mensajeBase64,
+      });
+      sembrarPreparado(); // el doble no escribe el ancla; acá se mide su limpieza
+      blockhashValidoSpy.mockResolvedValue({ context: { slot: 1 }, value: false });
+      const adapter = await adaptadorConMotor(motor);
+      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit())).rejects.toThrow(
+        "deeplink_blockhash_expired",
+      );
+      expect(disco.has(CLAVE_VIAJE)).toBe(false);
+      expect(disco.has(CLAVE_PREPARADO)).toBe(false);
+    });
+
+    // 🔴 LA LIMPIEZA DEL CAMINO DE ÉXITO ES DE ACÁ, no del motor (CD-10: leer → usar → limpiar). El
+    // motor ya no limpia al devolver `"completo"` justamente para que las dos verificaciones de arriba
+    // puedan fallar sin destruir nada; el uso termina cuando el envelope está armado, y ahí se limpia.
+    // MUTANTE QUE MATA (MEDIDO: exit=1, 2 `it` rojos, éste y el candado de citas): borrar el
+    // `limpiarRastroDeEnlace` de antes del `return` ⇒ la x25519 privada y la sesión sobreviven a un envío
+    // que salió BIEN, hasta que la ventana de 20 min las venza.
+    it("el camino de ÉXITO deja el disco limpio, DESPUÉS de haber armado el envelope", async () => {
+      montarEntorno();
+      const motor = new MotorProgramable();
+      const p = await primeraVuelta(motor);
+      const tx = Transaction.from(bs58.decode(p.transaccionBase58));
+      tx.partialSign(SENDER_KP);
+      motor.responder = () => ({
+        tipo: "completo",
+        transaccionFirmadaBase58: serializar(tx),
+        firmaDePatrocinio: "FIRMA-POP",
+        referenceBase58: p.referenceBase58,
+        mensajeBase64: p.mensajeBase64,
+      });
+      sembrarPreparado(); // el doble no escribe el ancla; acá se mide su limpieza
+      const adapter = await adaptadorConMotor(motor);
+      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      expect(r.estado).toBe("listo");
+      expect(r.estado === "listo" && r.solana?.popSignature).toBe("FIRMA-POP"); // el envelope se armó
+      expect(disco.has(CLAVE_VIAJE), "la x25519 privada sobrevivió a un envío exitoso").toBe(false);
+      expect(disco.has(CLAVE_PREPARADO)).toBe(false);
+    });
+
+    // ⛔ Y NO SE AGREGA AL CAMINO INYECTADO: ahí sería una llamada de red de más antes de cada firma, y
+    // CD-1 lo prohíbe. MUTANTE QUE MATA (MEDIDO: exit=1, 3 `it` rojos, y el tercero es revelador: muere
+    // el T-347-5(b) del techo de la sonda del índice, o sea que una llamada de red de más en este camino
+    // se paga en un test que ni sabe de esta HU): agregar `isBlockhashValid` al camino inyectado.
+    it("el camino INYECTADO no consulta `isBlockhashValid` ni una vez (CD-1)", async () => {
+      montarEntorno();
+      solanaWalletBridge.setState({ publicKey: SENDER_B58, connected: true });
+      const adapter = new SolanaWalletAdapter(); // ← sin colaborador: el camino de siempre
+      await adapter.connect();
+      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      expect(r.estado).toBe("listo");
+      expect(
+        blockhashValidoSpy,
+        "el camino de la billetera inyectada agregó una llamada de red que antes no hacía (CD-1)",
+      ).not.toHaveBeenCalled();
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────────────────────────
+  // T-062-20 (AC-7 / CD-2) — la billetera NUNCA transmite
+  // ──────────────────────────────────────────────────────────────────────────────────────────────
+  it("T-062-20: NINGUNA rama de `authorizePrincipal` referencia sendRawTransaction/sendTransaction/signAndSendTransaction", () => {
+    // Barrido sobre el CÓDIGO, no sobre una corrida: un espía en 0 sólo dice que ESE camino no
+    // transmitió. Esto dice que no hay ninguna rama que pueda.
+    // MUTANTE QUE MATA (MEDIDO: exit=1, 2 `it` rojos, éste y el candado de citas): referenciar
+    // `sendRawTransaction` dentro del método.
+    const fuente = readFileSync(
+      path.resolve(process.cwd(), "src/infrastructure/solana-wallet.ts"),
+      "utf8",
+    );
+    const desde = fuente.indexOf("async authorizePrincipal(");
+    expect(desde, "no se encontró `authorizePrincipal` en el archivo").toBeGreaterThan(0);
+    // El método termina donde arranca el docblock de `probeDeposit`, el siguiente miembro.
+    const hasta = fuente.indexOf("¿Entró el principal al vault", desde);
+    expect(hasta, "no se encontró el final del método").toBeGreaterThan(desde);
+    // 🔴 HAY QUE SACAR LOS COMENTARIOS, y el primer intento de este test no lo hacía: el método tiene
+    // escrito `// AC-3/CD-SDD-1: NUNCA connection.sendRawTransaction / sendTransaction acá.`, o sea
+    // que el barrido crudo daba positivo sobre la línea que PROHÍBE lo que busca. Un guard que se
+    // dispara con su propia advertencia es un guard que alguien termina borrando.
+    // El `(?<!:)` protege los `https://` de cualquier literal.
+    const cuerpo = fuente
+      .slice(desde, hasta)
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(?<!:)\/\/.*$/gm, "");
+    // Y que el barrido no se haya comido el CÓDIGO: si esto falla, el `for` de abajo estaría mirando
+    // una cadena vacía y daría verde sin haber mirado nada.
+    expect(
+      cuerpo.includes("solanaWalletBridge.signTransaction(tx)"),
+      "el barrido borró el código además de los comentarios: estaría dando verde sobre la nada",
+    ).toBe(true);
+    expect(cuerpo.includes("this.firmaPorEnlace")).toBe(true); // y la rama nueva también está adentro
+    for (const prohibida of ["sendRawTransaction", "sendTransaction", "signAndSendTransaction"]) {
+      expect(
+        cuerpo.includes(prohibida),
+        `\`authorizePrincipal\` referencia \`${prohibida}\`. El facilitator es el ÚNICO que transmite ` +
+          "(AC-7/CD-2): una billetera que broadcastea rompe el modelo de patrocinio entero, porque la " +
+          "tx sale sin la firma del feePayer y el rent lo paga quien no debe.",
+      ).toBe(false);
+    }
   });
 });

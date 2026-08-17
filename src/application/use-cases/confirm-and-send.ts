@@ -209,6 +209,20 @@ export class ConfirmAndSend {
           ? PRINCIPAL_STATE_UNKNOWN
           : reason;
     r.markPayoutFailed(effective, this.clock.nowIso());
+    // 🔴 EL ENVÍO SE ABANDONÓ: lo que la billetera hubiera guardado para completar una firma ya no
+    // sirve (WKH-356/AR-MNR-1). Va acá y no en las cinco salidas de abandono porque `failAndRefund` es
+    // el punto ÚNICO por donde una remesa muere en este use-case, y una limpieza con cinco llamadores
+    // es una limpieza a la que mañana le falta el sexto.
+    //
+    // Por qué era un agujero y no una prolijidad: `terminarViaje` no la llama ningún camino de éxito
+    // de `sesion.ts` —su propio docblock lo declara y le deja el trabajo a esta HU— así que sin esto la
+    // x25519 privada del canal, la sesión y una transacción ya firmada sobrevivían hasta 20 min a la
+    // remesa que las produjo, y ese viaje rancio era además la entrada del recorrido siguiente.
+    //
+    // El `?.` no es defensivo: el método es OPCIONAL en `WalletPort` a propósito (ver su docblock), así
+    // que una billetera que no guarda nada entre invocaciones —los cuatro dobles de test, y la
+    // inyectada— no implementa nada y acá no pasa nada.
+    this.wallet.abandonarAutorizacion?.();
     await this.repo.save(r);
     try {
       const { refundTx } = await this.refund.creditBack({
@@ -270,13 +284,53 @@ export class ConfirmAndSend {
     }
   }
 
-  async execute(input: { remittanceId: string }): Promise<Remittance> {
+  async execute(input: { remittanceId: string }): Promise<ResultadoDeEnvio> {
     const r = await this.repo.get(input.remittanceId);
     if (!r) throw new Error("remittance_not_found");
 
     // 1. Confirmar: la invariante del dominio exige KYC pasado + quote válido no vencido.
-    r.confirm(this.clock.nowIso());
-    await this.repo.save(r);
+    //
+    // 🔴 GUARD DE REANUDACIÓN (WKH-356/AC-3). Sin el `if`, una remesa que YA está en `confirmed`
+    // porque una invocación anterior quedó suspendida dentro de `authorizePrincipal` —la persona se
+    // fue a firmar a la app de la billetera y este proceso dejó de existir— muere acá con
+    // `invalid_transition:confirmed->confirmed` y no hay forma de terminar de mandar la plata.
+    //
+    // ⚠️ SALTEAR `confirm()` NO DEBILITA NINGUNO DE SUS TRES CHEQUEOS, y esto es lo que hace que este
+    // diseño no necesite tocar la FSM (`remittance.ts` no se modifica en esta HU):
+    //
+    //   · el chequeo de KYC (`payoutAllowed`, `../../domain/remittance.ts:347`) — NO SE PIERDE.
+    //     `to("confirmed", …)` tiene UN SOLO escritor en todo el dominio, y está adentro de
+    //     `confirm()`: o sea que `status === "confirmed"` ES la prueba de que ese invariante se
+    //     cumplió. Y no puede caducar entre una invocación y la siguiente, porque el único método
+    //     que reescribe `kyc` es `applyKyc` y desde `confirmed` no hay ningún camino de vuelta a un
+    //     estado `kyc_*`: la fila de la FSM (`confirmed`, `../../domain/remittance.ts:174`) es
+    //     `["principal_in","payout_failed"]` y ninguno de los dos vuelve a un `kyc_*`.
+    //   · `quote` presente — NO SE PIERDE: lo re-verifica la línea siguiente a este bloque
+    //     (`if (!quote || !kyc) throw`), en TODA invocación.
+    //   · `isQuoteExpired(quote, now)` — NO SE PIERDE, y además queda MÁS estricto: el guard 2.5 de
+    //     acá abajo llama `r.isQuoteStillValid(nowRecheck)`, que es la MISMA `isQuoteExpired`
+    //     evaluada en un instante POSTERIOR. Eso es AC-4 servida por código que ya existía.
+    //
+    // Superficie de ataque nueva: cero. Un estado persistido adulterado que dijera `confirmed` con un
+    // `kyc` malo ya hoy atraviesa `markPrincipalIn`/`markPayoutSubmitted` sin re-chequeo. El guard
+    // HEREDA esa forma; no la agrega.
+    //
+    // ⚠️ ESA FRASE NECESITA UNA CALIFICACIÓN QUE ESTE REPO NO PUEDE VER, y sin ella era una afirmación
+    // sin evidencia (CR): lo que el guard vuelve re-ejecutable es un `execute()` que llega a pedir una
+    // firma de depósito, así que "superficie cero" depende de qué hace la CADENA con un SEGUNDO
+    // `deposit` sobre la misma PDA. La PDA `escrow_state` se deriva con `["escrow", sender,
+    // id16(remittanceId)]`, o sea que es determinística por remesa: las dos invocaciones apuntan a la
+    // MISMA cuenta. Si el programa la abriera con `init_if_needed`, un segundo depósito entraría.
+    // VERIFICADO CONTRA EL REPO DEL PROGRAMA, que no está en este árbol:
+    // `solana-programs/programs/escrow/src/lib.rs:582` y `:596` usan `init`, NO `init_if_needed` ⇒ un
+    // segundo `deposit` REVIERTE en cadena. La conclusión se sostiene; lo que faltaba era poder mostrarla.
+    // (Costo declarado del `init`, que el propio Rust documenta: quien adivine los 16 bytes del
+    // `remittance_id` puede crear la cuenta primero por ~0.002 SOL y dejar ese par (sender, id) sin
+    // poder depositar nunca. Sin fondos en riesgo, y la salida es usar otro id.)
+    if (r.status !== "confirmed") {
+      r.confirm(this.clock.nowIso());
+      await this.repo.save(r);
+    }
     const s = r.snapshot;
     const quote = s.quote;
     const kyc = s.kyc;
@@ -311,7 +365,7 @@ export class ConfirmAndSend {
     const address = await this.wallet.getAddress();
     if (address == null || address.trim() === "") {
       await this.failAndRefund(r, WALLET_ADDRESS_UNAVAILABLE);
-      return r; // NO se prepara el payout, NO se firma nada
+      return { estado: "listo", remesa: r }; // NO se prepara el payout, NO se firma nada
     }
 
     // 2.5 Re-check de vigencia del quote (M2/AC-5, CD-2): la ventana confirm→firma es de minutos
@@ -324,7 +378,7 @@ export class ConfirmAndSend {
     const nowRecheck = this.clock.nowIso();
     if (!r.isQuoteStillValid(nowRecheck)) {
       await this.failAndRefund(r, "quote_expired_before_submit");
-      return r;
+      return { estado: "listo", remesa: r };
     }
 
     // 2.6 Settlement no-custodial contra el escrow (HU-SOL-13/AC-1). Es el CAMINO ÚNICO: su ausencia
@@ -335,7 +389,7 @@ export class ConfirmAndSend {
     // sin enums nuevos y sin leer una sola env (CD-13/CD-14 intactos).
     if (!this.solana) {
       await this.failAndRefund(r, "settlement_unavailable", "not_deposited");
-      return r;
+      return { estado: "listo", remesa: r };
     }
     // GUARD DE RENT — ¿le alcanza el SOL al remitente para las cuentas que crea el depósito? El fee lo paga
     //     el facilitator, el RENT NO: sale de la billetera de quien envía (`payer = sender`). Ver
@@ -373,10 +427,39 @@ export class ConfirmAndSend {
     const senderSol = await this.probeSenderSol(address);
     if (senderSol.status === "known" && senderSol.lamports < SENDER_MIN_LAMPORTS_FOR_DEPOSIT) {
       await this.failAndRefund(r, SOLANA_SENDER_SOL_INSUFFICIENT, "not_deposited");
-      return r; // NO se prepara el payout, NO se le pide una sola firma a la wallet
+      return { estado: "listo", remesa: r }; // NO se prepara el payout, NO se le pide una sola firma a la wallet
     }
     // 1. PREPARE server-side (análogo a 2.7): resuelve beneficiary+authority SERVER-SIDE (NUNCA del
     //    body; AC-1/CD-7). Fallo ⇒ falla ANTES de firmar: la tx nunca salió, el deposit NO entró.
+    //
+    // ══ 🔴 QUÉ HACE LA REANUDACIÓN CON `prepare()`: LO VUELVE A LLAMAR, Y ESO CUESTA (AR/BLQ-BAJO-1) ══
+    //
+    // La decisión, con su precio dicho antes de la razón: un recorrido por enlace que cierre bien son
+    // TRES invocaciones de `execute()`, o sea **tres `prepare()`**, o sea tres órdenes de payout reales
+    // creadas server-side, tres atestaciones y tres filas de ledger. La remesa guarda sólo el ÚLTIMO
+    // `payoutId`: las dos anteriores quedan huérfanas. No es un agujero nuevo —el repo tiene la
+    // categoría y su reconciliación en `app/api/admin/reconcile-orphans/route.ts`— pero acá pasa de ser
+    // excepcional a ser el caso NORMAL del camino móvil, y eso hay que contarlo, no acotarlo con una
+    // palabra amable.
+    //
+    // ⛔ POR QUÉ NO SE PUEDE HACER LO OBVIO (saltear el prepare al reanudar y reusar lo guardado): sería
+    // firmar contra un `beneficiary` leído de `localStorage`, o sea PERDER la atestación server-side que
+    // es la razón de existir de todo ese mecanismo. Con el prepare re-corrido, el valor que se firma
+    // siempre salió de una atestación verificada EN ESTE PROCESO, y lo persistido sirve sólo para
+    // COMPARAR: un disco adulterado puede producir un falso negativo (denegar un envío legítimo) y jamás
+    // un falso positivo. Es DT-4(b) y no se ablanda.
+    //
+    // ⚠️ LO QUE ESTA HU **NO** CIERRA, declarado para que nadie lo lea como cerrado:
+    //   · La idempotencia de `prepare()` por `(remittanceId, quoteId)` es una PRECONDICIÓN que AC-5
+    //     supone y que este repo no puede medir: la `idempotencyKey` que se manda acá abajo sólo viaja
+    //     al ledger (`app/api/payout/prepare/route.ts`). Lo único que este cliente puede garantizar —y
+    //     lo garantiza, con test— es que la clave es la MISMA en todas las invocaciones, y que si el
+    //     destino vuelve distinto se CORTA fail-closed en vez de sustituirlo en silencio.
+    //   · El guard S3.5 del settle acepta CUALQUIERA de las direcciones preparadas
+    //     (`registered.includes(...)`), así que cada reanudación agranda el conjunto de destinos que el
+    //     servidor acepta, de forma monótona. Eso vive server-side y fuera del scope de esta HU; del
+    //     lado del cliente lo tapa la comparación de destino del motor de enlace, que es justamente por
+    //     qué esa comparación no es una redundancia defensiva.
     let prep: Awaited<ReturnType<SolanaPayoutPrepareGateway["prepare"]>>;
     try {
       prep = await this.solana.prepare.prepare({
@@ -392,23 +475,29 @@ export class ConfirmAndSend {
       });
     } catch {
       await this.failAndRefund(r, "prepare_unavailable", "not_deposited");
-      return r;
+      return { estado: "listo", remesa: r };
     }
     if (!prep.ok) {
       await this.failAndRefund(r, prep.reason, "not_deposited");
-      return r;
+      return { estado: "listo", remesa: r };
     }
     // 2. authorizePrincipal: la wallet arma+partial-firma la ix `deposit` del escrow con el
     //    beneficiary+authority resueltos server-side (HU-SOL-5 ya arma el deposit desde el 3er arg).
-    const { solana } = await this.wallet.authorizePrincipal(quote, s.id, {
+    const autorizacion = await this.wallet.authorizePrincipal(quote, s.id, {
       address: prep.result.beneficiary,
       escrow: { beneficiary: prep.result.beneficiary, authority: prep.result.authority },
     });
+    // WKH-356/AC-1 — la SUSPENSIÓN sube TAL CUAL y no toca la remesa. Que quede persistida en
+    // `confirmed` es la precondición de que la reanudación funcione: es el estado que el guard del
+    // paso 1 vuelve re-ejecutable (AC-3). ⛔ NO la conviertas acá en un `failAndRefund`: nadie firmó
+    // nada todavía y no hay nada que reembolsar.
+    if (autorizacion.estado === "hay-que-salir") return autorizacion;
+    const { solana } = autorizacion;
     // Sin el envelope Solana no hay tx que broadcastear ⇒ fail-closed, NUNCA markPrincipalIn (la
     // mentira que la HU vino a matar). Nunca hubo broadcast ⇒ el deposit NO entró, y eso sí lo sabemos.
     if (!solana) {
       await this.failAndRefund(r, "settlement_unverified", "not_deposited");
-      return r;
+      return { estado: "listo", remesa: r };
     }
     // 3. BROADCAST del deposit vía el facilitator (/api/settle/solana-sponsor → /solana/sponsor). El
     //    facilitator pone la COMISIÓN DE RED, y sólo eso: acá decía "gasless" a secas, y el ALQUILER
@@ -436,17 +525,17 @@ export class ConfirmAndSend {
       });
     } catch {
       await this.failAfterBroadcast(r, "solana_settle_unavailable", s.id, address);
-      return r;
+      return { estado: "listo", remesa: r };
     }
     if (!res.ok) {
       // Sólo los reasons que prueban un corte ANTERIOR al broadcast pueden afirmar "no entró". El
       // resto va a la cadena: un `reason` no es evidencia de dónde está la plata.
       if (SETTLE_REASONS_BEFORE_BROADCAST.includes(res.reason)) {
         await this.failAndRefund(r, res.reason, "not_deposited");
-        return r;
+        return { estado: "listo", remesa: r };
       }
       await this.failAfterBroadcast(r, res.reason, s.id, address);
-      return r;
+      return { estado: "listo", remesa: r };
     }
     // 4. markPrincipalIn con la signature base58 VERIFICADA on-chain por /solana/sponsor. Luego
     //    payout_submitted con el payoutId de prepare (la orden de desembolso ya se creó).
@@ -474,6 +563,26 @@ export class ConfirmAndSend {
       prep.result.agent,
     );
     await this.repo.save(r);
-    return r;
+    return { estado: "listo", remesa: r };
   }
 }
+
+/**
+ * El desenlace de `ConfirmAndSend.execute()` (WKH-356). Es el reflejo, un piso más arriba, de
+ * (`AutorizacionDelPrincipal`, `../ports.ts:1185`): si la billetera puede suspenderse, el use-case que
+ * la llama también, y colapsar eso en un `Remittance` obligaría a inventar un estado de dominio que
+ * significara "la persona se fue a firmar a otra app" — un estado que no describe a la remesa sino al
+ * navegador, y que además haría falta agregarlo a la FSM.
+ *
+ * QUÉ NO ES: no es un canal de error. Los cortes de la rama de enlace siguen siendo `throw`, igual que
+ * `wallet_not_connected` y `escrow_params_missing`, y suben por acá sin `try/catch` hasta el `guard()`
+ * de la presentación. Por eso NO hay variante `"error"` ni campo `reason`: agregarla partiría el
+ * manejo de fallas en dos caminos y el nuevo no tendría ninguno de los candados del viejo.
+ *
+ * QUÉ DEJA LA SUSPENSIÓN DETRÁS: la remesa queda persistida en `confirmed`. Eso NO es un accidente, es
+ * la precondición de que la reanudación funcione: el guard del paso 1 de `execute()` es el que vuelve
+ * ese estado re-ejecutable (AC-3).
+ */
+export type ResultadoDeEnvio =
+  | { estado: "listo"; remesa: Remittance }
+  | { estado: "hay-que-salir"; irA: string; esperando: "firma-tx" | "firma-patrocinio" };

@@ -450,7 +450,7 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
   // Toda la HU es presentación sobre datos YA cargados. El mutante que existe para ser cazado acá es el
   // tentador: resolver la ambigüedad de verdad, con `getSignaturesForAddress` sobre la PDA, o pedir
   // cualquier dato extra al abrir el historial. Eso es UNA llamada POR FILA (no se batchea), está
-  // costeado en `ports.ts:1065-1088` (R-1) y está DIFERIDO, no descartado (AC-6).
+  // costeado en `ports.ts:1066-1089` (R-1) y está DIFERIDO, no descartado (AC-6).
   // Dos mitades, las dos obligatorias: (a) un `fetch` que tira ante cualquier invocación, y (b) que
   // `calls` del reader no se mueva entre un montaje CON prueba y uno SIN prueba.
   // MUTANTE MEDIDO: en `HistoryEntry` (`flow.tsx:3354`), agregar

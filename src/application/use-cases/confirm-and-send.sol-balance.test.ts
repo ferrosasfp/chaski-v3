@@ -27,7 +27,7 @@ import {
   QUOTE_EXPIRES,
   T0,
   beneficiary,
-} from "../../test-support/fakes";
+} from "../../test-support/fakes"; import { esperarListo } from "../../test-support/desenlaces"; // WKH-356: narrowing de ResultadoDeEnvio. TIRA si execute() suspende donde el test no lo espera.
 import { SENDER_MIN_LAMPORTS_FOR_DEPOSIT } from "../solana-escrow-rent";
 import { ConfirmAndSend, SOLANA_SENDER_SOL_INSUFFICIENT } from "./confirm-and-send";
 
@@ -94,9 +94,9 @@ describe("ConfirmAndSend — guard de rent: el SOL del remitente ANTES de armar 
     const senderBalance = new FakeSolanaSenderSolBalanceProbe(SENDER_MIN_LAMPORTS_FOR_DEPOSIT - 1);
     const id = await seedQuoted(repo);
 
-    const out = await build(repo, wallet, prepare, gateway, senderBalance).execute({
+    const out = esperarListo(await build(repo, wallet, prepare, gateway, senderBalance).execute({
       remittanceId: id,
-    });
+    }));
 
     // 1. El reason es SUYO. No es "payout_failed", no es PRINCIPAL_STATE_UNKNOWN, no es un 502 del
     //    facilitator: es la causa real, y es local.
@@ -123,13 +123,13 @@ describe("ConfirmAndSend — guard de rent: el SOL del remitente ANTES de armar 
     const gateway = new FakeSolanaSettlementGateway();
     const id = await seedQuoted(repo);
 
-    const out = await build(
+    const out = esperarListo(await build(
       repo,
       wallet,
       prepare,
       gateway,
       new FakeSolanaSenderSolBalanceProbe(1_000_000_000), // 1 SOL
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id }));
 
     expect(out.snapshot.status).toBe("payout_submitted");
     expect(out.snapshot.failureReason).toBeFalsy();
@@ -145,13 +145,13 @@ describe("ConfirmAndSend — guard de rent: el SOL del remitente ANTES de armar 
     const wallet = new FakeSolanaWallet();
     const id = await seedQuoted(repo);
 
-    const out = await build(
+    const out = esperarListo(await build(
       repo,
       wallet,
       new FakeSolanaPayoutPrepareGateway(),
       new FakeSolanaSettlementGateway(),
       new FakeSolanaSenderSolBalanceProbe(SENDER_MIN_LAMPORTS_FOR_DEPOSIT),
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id }));
 
     expect(out.snapshot.status).toBe("payout_submitted");
     expect(wallet.authorizeCalls).toHaveLength(1);
@@ -167,13 +167,13 @@ describe("ConfirmAndSend — guard de rent: el SOL del remitente ANTES de armar 
     const wallet = new FakeSolanaWallet();
     const id = await seedQuoted(repo);
 
-    const out = await build(
+    const out = esperarListo(await build(
       repo,
       wallet,
       new FakeSolanaPayoutPrepareGateway(),
       new FakeSolanaSettlementGateway(),
       new FakeSolanaSenderSolBalanceProbe(0, "reject"), // el 0 no se lee: el probe ni contesta
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id }));
 
     expect(out.snapshot.failureReason).not.toBe(SOLANA_SENDER_SOL_INSUFFICIENT);
     expect(out.snapshot.status).toBe("payout_submitted");
@@ -185,13 +185,13 @@ describe("ConfirmAndSend — guard de rent: el SOL del remitente ANTES de armar 
     const wallet = new FakeSolanaWallet();
     const id = await seedQuoted(repo);
 
-    const out = await build(
+    const out = esperarListo(await build(
       repo,
       wallet,
       new FakeSolanaPayoutPrepareGateway(),
       new FakeSolanaSettlementGateway(),
       new FakeSolanaSenderSolBalanceProbe(0, "unknown"),
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id }));
 
     expect(out.snapshot.failureReason).not.toBe(SOLANA_SENDER_SOL_INSUFFICIENT);
     expect(out.snapshot.status).toBe("payout_submitted");

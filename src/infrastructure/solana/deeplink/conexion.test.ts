@@ -702,8 +702,11 @@ describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
 // código ejecutable**. Eso está MEDIDO y no razonado: la suite sigue en `143 archivos / 2687 tests` con
 // exit 0 después de todas. Un comentario no puede mover un conteo de `it`; lo que sí puede mover son
 // citas por número, y de eso se ocupa `citas-ancladas.test.ts`, que también está verde.
-// ⇒ SI ALGUIEN DUDA, EL CONTROL ES DE UNA LÍNEA: `git diff 012e26c..HEAD -- src app`. Medido al escribir
-// esto: **261 líneas `+`/`-`, y sólo 2 no arrancan con `//`**. Esas 2 son el MISMO renglón
+// ⇒ SI ALGUIEN DUDA, EL CONTROL ES DE UNA LÍNEA: `git diff 012e26c..HEAD -- src app`, y lo que hay que
+// mirar es **cuántas líneas `+`/`-` NO arrancan con `//`: son 2**. ⛔ El total de líneas del diff NO se
+// escribe acá y ya se intentó: puse "261" y al commitear ESE MISMO renglón pasó a 267, porque el renglón
+// es parte del diff que mide. Un número que se auto-incluye no se puede escribir; el "2" sí, porque es
+// invariante ante agregar comentarios. Esas 2 son el MISMO renglón
 // (`flow.tsx:162`) antes y después, y lo que cambió ahí es el comentario que va PEGADO al final de una
 // línea de código — que es la técnica línea-neutra de este repo, así que un barrido por «la línea arranca
 // con `//`» no puede verlas. No hace falta creerle a este renglón: el comando está arriba. Un conteo de `it` rojos es una propiedad del ÁRBOL y no del mutante: cualquier `it` nuevo

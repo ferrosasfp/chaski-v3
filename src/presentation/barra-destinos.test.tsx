@@ -25,32 +25,48 @@
 // APLICARON Y SE CORRIERON, uno por uno. No es una lista de lo que "debería" fallar: es la salida de
 // correrlos.
 //
-// ⚠️ LOS CONTEOS DE ABAJO SE RE-MIDIERON EN EL FIX-PACK 2, y hay un motivo que vale más que los números:
-// el archivo pasó de **30 → 38 → 39 tests** (el 39º es el `it` de control de `T-063-21`, que el fix-pack 2
-// agregó), así que TODOS los totales de la tabla anterior (`… (38)`) dejaron de describir este árbol. Un
-// conteo de mutación es relativo al tamaño de la suite; agregar UN test lo invalida sin que nada se ponga
-// rojo, y eso es exactamente el hallazgo AR-it2/MNR-1 en el archivo hermano. Los CATORCE se volvieron a
-// aplicar y correr, uno por uno, con el conteo de cada patrón verificado en 1 ANTES de aplicar y los
-// archivos restaurados y comparados byte a byte después. Control en la misma corrida: **`39 passed (39)`**.
+// ⚠️ LOS CONTEOS DE ABAJO SE RE-MIDIERON EN EL FIX-PACK 3, y hay un motivo que vale más que los números:
+// el archivo pasó de **30 → 38 → 39 → 43 tests** (los cuatro nuevos son los dos caminos que el fix-pack 2
+// dejó declarados y abiertos, cada uno con su control o su aislamiento), así que TODOS los totales de la
+// tabla anterior (`… (39)`) dejaron de describir este árbol. Un conteo de mutación es relativo al tamaño
+// de la suite; agregar UN test lo invalida sin que nada se ponga rojo, y eso es exactamente el hallazgo
+// AR-it2/MNR-1 en el archivo hermano. Los QUINCE se volvieron a aplicar y correr, uno por uno, con el
+// conteo de cada patrón verificado ANTES de aplicar, el TEXTO resultante verificado también (no alcanza
+// `count == 1`: hay que mirar que la sustitución diga lo que se quería) y los archivos restaurados y
+// comparados byte a byte después. Control en la misma corrida: **`43 passed (43)`**.
 //
 //   MUTANTE APLICADO                                                    RESULTADO MEDIDO
-//   1. `pasoInicial = "send"` como default de `RemittanceFlow`         10 failed | 29 passed (39)
-//   2. el CTA de la bienvenida llamando a `setStep("connect")`          3 failed | 36 passed (39)
-//   3. `app/page.tsx` pasando `pasoInicial="send"`                      1 failed | 38 passed (39)
-//   4a. el guard de la barra ENTERO borrado (se pinta siempre)         11 failed | 28 passed (39)
-//   4b. SÓLO `esDestino(step)` borrado (quedan las dos banderas)        8 failed | 31 passed (39)
-//   5. `esDestino` devolviendo `true` también para `"done"`             2 failed | 37 passed (39)
-//   6. una cuarta pestaña, y que además es una acción                   5 failed | 34 passed (39)
-//   7. la frase de custodia MOVIDA arriba del CTA en `connect`          1 failed | 38 passed (39)
-//   7b. la MISMA frase DUPLICADA (arriba y abajo a la vez)              2 failed | 37 passed (39)
-//   8. `DEMO_PILL` con otro texto                                       1 failed | 38 passed (39)
+//   1. `pasoInicial = "send"` como default de `RemittanceFlow`         14 failed | 29 passed (43)
+//   2. el CTA de la bienvenida llamando a `setStep("connect")`          5 failed | 38 passed (43)
+//   3. `app/page.tsx` pasando `pasoInicial="send"`                      1 failed | 42 passed (43)
+//   4a. el guard de la barra ENTERO borrado (se pinta siempre)         11 failed | 32 passed (43)
+//   4b. SÓLO `esDestino(step)` borrado (quedan las dos banderas)        8 failed | 35 passed (43)
+//   5. `esDestino` devolviendo `true` también para `"done"`             2 failed | 41 passed (43)
+//   6. una cuarta pestaña, y que además es una acción                   4 failed | 39 passed (43)
+//   7. la frase de custodia MOVIDA arriba del CTA en `connect`          1 failed | 42 passed (43)
+//   7b. la MISMA frase DUPLICADA (arriba y abajo a la vez)              2 failed | 41 passed (43)
+//   8. `DEMO_PILL` con otro texto                                       1 failed | 42 passed (43)
 //   ── los cuatro del primer fix-pack ──────────────────────────────────────────────────────────────
-//   F1. el guard de la barra de vuelta a `esDestino(step)` a secas      3 failed | 36 passed (39)
-//   F2. un TERCER overlay en el ternario, DECLARADO, sin sumarlo al guard  1 failed | 38 passed (39)
-//   F3. `onBack={() => setStep("send")}` en el historial                1 failed | 38 passed (39)
-//   F4. `setStep("send")` al final de `forgetAndDisconnect`             1 failed | 38 passed (39)
-//   ── el del fix-pack 2 ───────────────────────────────────────────────────────────────────────────
-//   F5. `disabled={busy}` en el «Volver» de `HistoryView`               1 failed | 38 passed (39)
+//   F1. el guard de la barra de vuelta a `esDestino(step)` a secas      3 failed | 40 passed (43)
+//   F2. un TERCER overlay en el ternario, DECLARADO, sin sumarlo al guard  1 failed | 42 passed (43)
+//   F3. `onBack={() => setStep("send")}` en el historial                1 failed | 42 passed (43)
+//   F4. `setStep("send")` al final de `forgetAndDisconnect`             1 failed | 42 passed (43)
+//   ── el del fix-pack 2, con su patrón CORREGIDO ──────────────────────────────────────────────────
+//   F5. el «Volver» de `HistoryView` deshabilitado (`disabled`)         2 failed | 41 passed (43)
+//   ── los cinco del gate del pisón viven en el bloque de `T-063-21`, con su tabla propia ──────────
+//
+// 🔴 DOS FILAS NO SON EL MISMO MUTANTE QUE ANTES, y decirlo importa más que el número. **F5**: el
+// renglón viejo decía `disabled={busy}`, y `HistoryView` NO RECIBE `busy` (no es un prop de su firma),
+// así que ese patrón es un `ReferenceError` en render y no mide nada. Lo aplicado es `disabled` a secas,
+// que es la misma pregunta ("el «Volver» honra el congelamiento") sin romper el módulo; mata **2** y no
+// 1, porque además del `it` del congelamiento cae el primero de `T-063-22`, que lo CLICKEA. **El 6**: la
+// versión aplicada acá agrega `"enviarAhora"` a `Destino`/`DESTINOS`/`ETIQUETAS`/`ICONOS` con la etiqueta
+// "Enviar ahora" y mata **4**, no 5. No sé si es exactamente el patrón del fix-pack 2 (el renglón no lo
+// escribía), así que el número que vale es el de acá, que sí dice qué se aplicó.
+//
+// ⚠️ EL CRECIMIENTO DE 1 Y DE 2 ES INFORMACIÓN, no ruido: el 1 pasó de matar 10 a matar **14** y el 2 de
+// 3 a **5**, y los cuatro/dos de más son los `it` nuevos. Los dos vigilan el default `bienvenida` y el
+// destino del CTA, que es por dónde entra el embudo.
 //
 // 🔴 EL 4 ERA UNA FILA AMBIGUA Y AHORA SON DOS, y la diferencia no es de un test: son 11 contra 8. Decía
 // "la barra pintada sin el guard `esDestino(step)`", que se lee de dos maneras — borrar el guard COMPLETO
@@ -58,9 +74,9 @@
 // borrar sólo ese término y dejar `!resuming && !timedOut`. El `11 failed` de la tabla vieja es la
 // PRIMERA lectura; la segunda da 8 y es la que aísla lo que su nombre dice. Mismo tratamiento que el par
 // 7 / 7b, que ya se había partido por lo mismo.
-// ⚠️ EL 1 MATA DIEZ Y NO NUEVE, y el décimo es el `it` de control nuevo de `T-063-21`: monta el default
-// (`bienvenida`) y exige que la barra esté, así que un default en `"send"` lo mata. Es información y no
-// ruido: dice que ese control también vigila el default.
+// ⚠️ EL 1 MATA CATORCE, y los cuatro que se sumaron sobre el 10 del fix-pack 2 son los cuatro `it` nuevos
+// de `T-063-21`: los SEIS de ese bloque montan el default (`bienvenida`) y caen los seis. Es información y
+// no ruido: dice que esos `it` también vigilan el default, no sólo el gate.
 // ⛔ DOS DE ESTOS MUTANTES ESTUVIERON MAL ESCRITOS EN LA PRIMERA PASADA DEL FIX-PACK 2, y queda anotado
 // porque un mutante que rompe el módulo no mide nada:
 //   · el 7 puesto como HERMANO del `<div>` raíz del bloque `connect` deja dos hijos en una rama `&&` ⇒
@@ -70,9 +86,11 @@
 //     mata **1**, y el que cae es el que lee el FUENTE — que es lo que ese `it` promete.
 //
 // Y los dos que este archivo NO mata, porque los ACs que tocan viven en otros candados. NO se re-corrieron
-// en el fix-pack 2, y el motivo es medible: sus totales son relativos a `touch-targets.test.tsx` y
-// `jerarquia-relativa.test.tsx`, y el fix-pack 2 NO tocó ninguno de los dos (no aparecen en su `git
-// status`), así que 21 y 16 siguen describiendo esos árboles:
+// en el fix-pack 2 ni en el 3, y el motivo es medible: sus totales son relativos a `touch-targets.test.tsx`
+// y `jerarquia-relativa.test.tsx`, y ninguno de los dos fix-packs tocó ninguno de los dos archivos (no
+// aparecen en su `git status`). Re-derivado en el fix-pack 3 sin aplicar los mutantes, que es la
+// precondición y no la conclusión: `vitest run touch-targets jerarquia-relativa` da **`21 passed (21)`**
+// (5 + 16), así que 21 y 16 siguen describiendo esos árboles:
 //   9. la pestaña sin su `min-h-[52px]` (AC-5)   ⇒ touch-targets + jerarquia:  3 failed | 18 passed (21)
 //  10. la pestaña activa con el vocabulario COMPLETO de `primary`
 //                                               ⇒ jerarquia-relativa:         2 failed | 14 passed (16)
@@ -719,16 +737,22 @@ describe("T-063-21 (AR-it2/BLQ-MED-1): la ventana previa a la primera respuesta 
     // ⚠️ HACEN FALTA DOS Y NO UNO, y esto lo aprendí midiendo: mi primera versión de este comentario
     // decía que UN mutante mataba los dos `it` de este bloque, y es FALSO. Un gate condicional tiene dos
     // formas de romperse y cada una mata un `it` distinto:
-    //   G1. los tres `aterrizarEnConfirm()` del resume-loop de vuelta a `setStep("confirm")` a secas
-    //       (3 sustituciones, con el conteo verificado antes de aplicar) ⇒ `1 failed | 38 passed (39)`,
-    //       y el que cae es ÉSTE. Es el defecto original, repuesto.
-    //   G2. `aterrizarEnConfirm` sin su condición, o sea que NUNCA navega y siempre avisa
-    //       (1 sustitución) ⇒ `1 failed | 38 passed (39)`, y el que cae es el `it` DE ABAJO.
-    // O sea: G1 no toca el control y G2 no toca este `it`. Un gate que se "cerrara" borrando la
-    // navegación pasaría este `it` en verde, y ése es todo el motivo de que el de abajo exista.
+    //   G1. `aterrizar` sin su guard, o sea el pisón a secas: SIEMPRE navega (1 sustitución, con el
+    //       conteo verificado antes de aplicar) ⇒ `4 failed | 39 passed (43)`, y los cuatro que caen son
+    //       los cuatro `it` del defecto (éste, los dos del embudo y el del `failed`). Es el defecto
+    //       original, repuesto. ⚠️ EN EL FIX-PACK 2 ESTE MUTANTE MATABA 1: pasó a matar 4 porque el gate
+    //       pasó a cubrir cuatro caminos, y eso es información, no ruido.
+    //   G2. `aterrizar` sin su condición, o sea que NUNCA navega y siempre avisa (1 sustitución) ⇒
+    //       `2 failed | 41 passed (43)`, y los dos que caen son los dos CONTROLES (el de abajo y el del
+    //       `failed`). En el fix-pack 2 mataba 1; ahora hay dos controles.
+    // O sea: G1 no toca los controles y G2 no toca este `it`. Un gate que se "cerrara" borrando la
+    // navegación pasaría este `it` en verde, y ése es todo el motivo de que los controles existan.
     // Y el costo real de G2 está medido FUERA de este archivo, que es donde vive el camino principal:
-    // `src/presentation/flow.test.tsx` da `4 failed | 107 passed (111)` y los cuatro son `T-AC6`,
-    // `T-REQUOTE`, `T-354-3g` y `T-354-3h`. Sin G2 medido, "el arreglo es no navegar" se lee razonable.
+    // `src/presentation/flow.test.tsx` da `5 failed | 106 passed (111)`. ⚠️ SON CINCO Y NO CUATRO, y el
+    // quinto es información nueva del fix-pack 3: además de `T-AC6`, `T-REQUOTE`, `T-354-3g` y
+    // `T-354-3h` cae `T-ESC6`, que es el único de ese archivo que mide el aterrizaje del `failed` sin
+    // interacción — y sólo puede caer porque el fix-pack 3 metió el `failed` en el mismo gate. Sin G2
+    // medido, "el arreglo es no navegar" se lee razonable.
     const { container, contestar } = conResumeDeferido();
     render(<RemittanceFlow container={container} />);
 
@@ -767,8 +791,8 @@ describe("T-063-21 (AR-it2/BLQ-MED-1): la ventana previa a la primera respuesta 
     // `T-354-3g` y `T-354-3h` (los cuatro montan `pasoInicial="send"`); acá se mide en el MISMO montaje
     // que el `it` de arriba —default `bienvenida`, con la barra en pantalla— para que las dos mitades del
     // gate se lean juntas. La diferencia entre los dos `it` es UN click.
-    // MUTANTE G2 (aplicado y corrido, ver el bloque de arriba): `aterrizarEnConfirm` sin su condición
-    // ⇒ `1 failed | 38 passed (39)` acá y `4 failed | 107 passed (111)` en `flow.test.tsx`.
+    // MUTANTE G2 (aplicado y corrido, ver el bloque de arriba): `aterrizar` sin su condición
+    // ⇒ `1 failed | 42 passed (43)` acá y `4 failed | 107 passed (111)` en `flow.test.tsx`.
     const { container, contestar } = conResumeDeferido();
     render(<RemittanceFlow container={container} />);
     expect(barra(), "la barra está y no se la toca: eso es todo el contraste").not.toBeNull();
@@ -778,6 +802,174 @@ describe("T-063-21 (AR-it2/BLQ-MED-1): la ventana previa a la primera respuesta 
     expect(
       screen.queryByText("Tu verificación quedó lista"),
       "sin elección previa no hay nada que avisar: navegar ES el comportamiento correcto acá",
+    ).toBeNull();
+  });
+
+  // ══ LOS DOS CAMINOS QUE EL FIX-PACK 2 DEJÓ DECLARADOS Y ABIERTOS (fix-pack 3) ══════════════════
+  //
+  // 🔴 POR QUÉ NO ALCANZABA CON EL GATE DEL FIX-PACK 2: su condición era "eligió un destino CON LA
+  // BARRA", y en la ventana del resume hay más de una forma de estar usando la app. Los dos caminos que
+  // quedaban afuera están medidos abajo, uno por `it`, con su sonda de ANTES escrita al lado.
+  //
+  // ⚠️ Y LA PREGUNTA "¿HAY UN TERCERO?" SE MIDIÓ EN VEZ DE RAZONARSE. Censo de botones habilitados en el
+  // montaje del resume (default `bienvenida`, sin overlay porque el resume todavía no contestó):
+  //     ["Empezar un envío", "Enviar", "Mis envíos", "Recuperar"]
+  // Son CUATRO y nada más: el CTA del embudo más las tres pestañas. Las puertas de `recuperar`
+  // (`["Recuperar un envío perdido", "Recuperar el depósito de red de envíos anteriores"]`) y el
+  // «Volver» del historial NO están en ese censo porque sus pantallas no están montadas todavía, y para
+  // montarlas hay que tocar una pestaña, que YA marca el ref. Por eso `openHistory` no lleva marca
+  // propia y las puertas de `recuperar` tampoco: no son primeras interacciones alcanzables.
+  //
+  //   MUTANTE                                                              RESULTADO MEDIDO
+  //   G3. la marca del CTA de la bienvenida borrada (queda sólo la barra)  2 failed | 41 passed (43)
+  //   G4. el `failed` de vuelta a sus tres sentencias sueltas              1 failed | 42 passed (43)
+  //   G5. `aterrizar` aplicando `setRem(snapshot)` ANTES del gate          1 failed | 42 passed (43)
+  // G3 mata los DOS `it` del embudo y ninguno de los del `failed`; G4 mata SÓLO el `it` del `failed`
+  // gateado (su control pasa, y tiene que pasar: G4 es "navegar siempre", que es justo lo que el control
+  // pide); G5 no mata ninguno de esos tres y sí el de la remesa en curso. O sea: los tres defectos son
+  // independientes y cada uno tiene su candado.
+  // ⚠️ Y LOS CONTEOS DE G1/G2 CAMBIARON CON EL FIX-PACK 3, así que los de arriba están re-medidos, no
+  // heredados: G1 pasó de matar 1 a matar **4** (los cuatro `it` del defecto, porque ahora son cuatro) y
+  // G2 de matar 1 a matar **2** (los dos controles). Ese crecimiento es la evidencia de que el gate pasó
+  // a cubrir dos caminos más, y era el número que un fix-pack se olvida de volver a mirar.
+
+  it("🔴 el EMBUDO también cuenta: entrar a tipear y recibir el resume NO se lleva puesto el formulario", async () => {
+    // 🔴 EL CAMINO 1 DE LOS DOS QUE EL FIX-PACK 2 DECLARÓ ABIERTOS. Sonda de ANTES, en este mismo
+    // montaje: «Empezar un envío» → monto `137` → llega el `passed` ⇒ la entrada de monto DESAPARECE y
+    // los controles quedan en `["¿No sos vos?", "Confirmar y enviar $400.00"]`, sin ningún aviso. O sea
+    // la pantalla de la firma, con la cifra de OTRA remesa, sobre una persona que estaba tipeando.
+    // Sonda de DESPUÉS (lo que este `it` congela): la entrada sigue en pantalla con `137` y los
+    // controles son `["¿No sos vos?", "Seguir con ese envío", "Volver al inicio", "Continuar"]`.
+    // MUTANTE G3 (aplicado y corrido): borrarle la marca al handler del CTA (`onEmpezar={() =>
+    // setStep("send")}`, que es lo que decía) ⇒ `2 failed | 41 passed (43)`, y los dos que caen son éste
+    // y el de abajo. El monto `137` NO es cosmético: `400` es el default del formulario, así que con el
+    // default los dos snapshots miden lo mismo y el assert no podría discriminar.
+    const { container, contestar } = conResumeDeferido();
+    render(<RemittanceFlow container={container} />);
+    fireEvent.click(screen.getByRole("button", { name: /Empezar un envío/ }));
+    fireEvent.change(screen.getByLabelText("Monto en dólares"), { target: { value: "137" } });
+
+    contestar({ kind: "passed", snapshot: remesaConDeposito("rem-11") });
+    expect(await screen.findByText("Tu verificación quedó lista")).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Monto en dólares"),
+      "el resume no puede sacar del formulario a alguien que está tipeando en él",
+    ).toHaveValue("137");
+    expect(screen.queryByRole("button", { name: /Confirmar y enviar/ })).toBeNull();
+  });
+
+  it("🔴 y la remesa EN CURSO no se reemplaza: el `setRem` del resume espera al botón del aviso", async () => {
+    // 🔴 LA MITAD DEL CAMINO 1 QUE NO ES NAVEGACIÓN SINO PÉRDIDA DE DATOS, y es la que el fix-pack 2 no
+    // podía ver porque dejó el `setRem` FUERA del gate a propósito. Sonda de ANTES, recorrido completo:
+    // «Empezar un envío» → `137` + nombre + CCI → «Continuar» (que CREA la remesa) → llega el `passed`
+    // ⇒ controles `["¿No sos vos?", "Confirmar y enviar $400.00"]`, y la remesa recién creada queda en el
+    // repo como `created` con `ownerAddress: null`. Eso último es lo que la vuelve INALCANZABLE: el
+    // `ownerAddress` sólo se puebla en `startKyc` (`startKyc`, `../domain/remittance.ts:325`), así que
+    // `repo.list(address)` no la devuelve nunca y "Mis envíos" no la lista. Medido: `repo.list(dueño del
+    // KYC)` da `[]` y la única fila del repo es la de `137` con `owner: null`.
+    // Sonda de DESPUÉS: se queda en `connect` con su «Conectar wallet», y el aviso al lado.
+    // MUTANTE G5 (aplicado y corrido): devolverle a `aterrizar` el `setRem(snapshot)` ANTES del `if`
+    // ⇒ `1 failed | 42 passed (43)`, y el único que cae es ÉSTE. Los otros tres del bloque pasan, que es
+    // el motivo de que este `it` exista aparte: los avisos y las pantallas se comportan igual con el
+    // `setRem` adelantado, y lo único que cambia es de quién es la remesa que quedó en estado.
+    const { container, contestar } = conResumeDeferido();
+    render(<RemittanceFlow container={container} />);
+    fireEvent.click(screen.getByRole("button", { name: /Empezar un envío/ }));
+    fireEvent.change(screen.getByLabelText("Monto en dólares"), { target: { value: "137" } });
+    fireEvent.change(screen.getByPlaceholderText("Nombre de tu familiar"), { target: { value: "Mamá" } });
+    fireEvent.change(screen.getByPlaceholderText("002 193 004455667788 99"), { target: { value: TEST_CCI } });
+    fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+    expect(await screen.findByRole("button", { name: /Conectar wallet/ })).toBeInTheDocument();
+
+    contestar({ kind: "passed", snapshot: remesaConDeposito("rem-12") });
+    expect(await screen.findByText("Tu verificación quedó lista")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Conectar wallet/ }),
+      "la persona estaba a un paso de conectar SU envío: el resume no puede moverla de ahí",
+    ).toBeInTheDocument();
+    // 🔴 EL ASSERT QUE MATA A G5, y sin él este `it` pasaba con el `setRem` adelantado: quedarse en
+    // `connect` no dice de QUIÉN es la remesa que hay en estado. `connect` pinta "Vas a enviar" con
+    // (`sendUsd`, `./flow.tsx:958`), así que la cifra de esa tarjeta ES la identidad de la remesa en curso, y
+    // con el `setRem` antes del gate pasa a `$400.00` (la del KYC) sin que nada más en la pantalla
+    // cambie. Medido: con G5 este `it` era el ÚNICO de los cuatro del bloque que caía, y sin este assert
+    // no caía ninguno.
+    const vasAEnviar = screen.getByText("Vas a enviar").parentElement as HTMLElement;
+    expect(vasAEnviar.textContent, "la remesa en curso sigue siendo la de la persona").toContain("$137.00");
+    expect(vasAEnviar.textContent, "y NO la que trajo el resume").not.toContain("$400.00");
+
+    // Y el camino de vuelta a la remesa del KYC existe y es explícito. ⚠️ ES DE UNA SOLA DIRECCIÓN, y
+    // conviene decirlo: al usarlo, `rem` pasa a ser la remesa del KYC y la de `137` queda sin fila que la
+    // liste (su `ownerAddress` sigue en `null`). La diferencia con el defecto es QUIÉN decide: acá lo
+    // decide un toque, no la latencia de una petición. Lo que sobrevive del formulario son los valores
+    // tipeados, que siguen en estado.
+    fireEvent.click(screen.getByRole("button", { name: "Seguir con ese envío" }));
+    expect(await screen.findByRole("button", { name: "Confirmar y enviar $400.00" })).toBeInTheDocument();
+  });
+
+  it("🔴 el resume `failed` pasa por el MISMO gate, y su aviso NO puede decir que la verificación está lista", async () => {
+    // 🔴 EL CAMINO 2. El fix-pack 2 gateó los tres `aterrizarEnConfirm` y dejó el `failed` con sus tres
+    // sentencias sueltas (`setRem` + `setStep("verify")` + `setError`). Sonda de ANTES: tocar «Recuperar»
+    // en la ventana y recibir después un `failed` ⇒ la pantalla elegida DESAPARECE, controles
+    // `["¿No sos vos?", "Verificar mi identidad"]` y el banner "La verificación no pasó" arriba. Y el
+    // control con el resume `failed` SIN tocar nada da EXACTAMENTE los mismos controles, o sea que antes
+    // del fix los dos casos eran indistinguibles.
+    // 🔴 POR QUÉ NO SIRVE EL COPY DE `passed`, y es la mitad del arreglo que no es cableado: "Tu
+    // verificación quedó lista" es FALSO en esta rama. La variante dice que necesita otro intento, su
+    // `tono` es `atencion` y no `bueno` (el verde de esta app es el del dinero que llega, no el de
+    // cualquier novedad), y su botón lleva a `verify`, que es donde se reintenta.
+    // ⚠️ EL BANNER DE ERROR NO SE PRENDE MIENTRAS EL AVISO ESTÁ, y es a propósito: habla de la pantalla a
+    // la que se llega. Prenderlo sin navegar lo pondría sobre `recuperar`, que no tuvo ningún fallo. Se
+    // prende al usar el botón, y eso es la última mitad de este `it`.
+    // MUTANTE G4 (aplicado y corrido): devolverle al `else` sus tres sentencias sueltas ⇒ `1 failed |
+    // 42 passed (43)`, y el único que cae es ÉSTE. El de abajo NO cae con G4 y no puede caer: G4 es
+    // "navegar siempre", que es exactamente lo que el control pide. Quien mata al de abajo es G2.
+    const { container, contestar } = conResumeDeferido();
+    render(<RemittanceFlow container={container} />);
+    fireEvent.click(within(barra() as HTMLElement).getByRole("button", { name: "Recuperar" }));
+
+    contestar({ kind: "failed", snapshot: remesaConDeposito("rem-13") });
+    expect(await screen.findByText("Tu verificación necesita otro intento")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: /Recuperar fondos de un envío anterior/ }),
+      "un `failed` tampoco puede llevarse puesta la pantalla que la persona eligió",
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Tu verificación quedó lista"),
+      "el copy del caso bueno no puede aparecer cuando la verificación NO pasó",
+    ).toBeNull();
+    expect(
+      screen.queryByText(/La verificación no pasó/),
+      "el banner habla de `verify`: sobre `recuperar` no tiene de qué hablar",
+    ).toBeNull();
+
+    // El botón es el que navega, y recién ahí el banner dice lo que pasó.
+    fireEvent.click(screen.getByRole("button", { name: "Reintentar la verificación" }));
+    expect(await screen.findByRole("button", { name: /Verificar mi identidad/ })).toBeInTheDocument();
+    expect(screen.getByText(/La verificación no pasó/)).toBeInTheDocument();
+  });
+
+  it("🔴 (control del `failed`) sin tocar nada, el `failed` SÍ navega solo a `verify`, con su banner", async () => {
+    // La otra mitad del par, por el mismo motivo que el control del `passed`: sin este `it`, el camino 2
+    // se podría "cerrar" haciendo que el `failed` NUNCA navegue, y eso rompe el camino principal en
+    // móvil (la vuelta de Didit es una recarga: si nadie tocó nada, una verificación rechazada TIENE que
+    // dejar a la persona en la pantalla donde se reintenta, con el motivo a la vista).
+    // ⚠️ ACÁ IBA A ESCRIBIR "ESTE CONTROL NO LO CUBRE NADIE AFUERA" Y ES FALSO, MEDIDO: los cuatro que
+    // `flow.test.tsx` tiene para el aterrizaje sin interacción (`T-AC6`, `T-REQUOTE`, `T-354-3g`,
+    // `T-354-3h`) son todos del `passed`, pero hay un QUINTO que es del `failed` y no lo había contado:
+    // `T-ESC6` monta `pasoInicial="send"`, contesta `failed` al primer poll y exige `verify` + el banner.
+    // Lo destapó el mutante G2, que en `flow.test.tsx` mata **5** y no 4. Este `it` sigue valiendo —mide
+    // el mismo contraste en el montaje de la barra, a un click del `it` de arriba— pero "nadie más lo
+    // cubre" habría sido una frase de más.
+    const { container, contestar } = conResumeDeferido();
+    render(<RemittanceFlow container={container} />);
+    expect(barra(), "la barra está y no se la toca: eso es todo el contraste").not.toBeNull();
+
+    contestar({ kind: "failed", snapshot: remesaConDeposito("rem-14") });
+    expect(await screen.findByRole("button", { name: /Verificar mi identidad/ })).toBeInTheDocument();
+    expect(screen.getByText(/La verificación no pasó/)).toBeInTheDocument();
+    expect(
+      screen.queryByText("Tu verificación necesita otro intento"),
+      "sin interacción previa no hay nada que avisar: navegar ES el comportamiento correcto acá",
     ).toBeNull();
   });
 });

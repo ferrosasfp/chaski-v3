@@ -139,6 +139,67 @@ describe("T-VJ-1: guardar, leer y terminar", () => {
     terminarViaje(a);
     expect(leerViaje(a, AHORA).tipo).toBe("no-hay");
   });
+
+  it("[LÍMITE DECLARADO] un viaje que salió BIEN no lo limpia nadie: limpiar es del que llama", () => {
+    // 🔴 ESTE `it` NO ES UN CANDADO: es la documentación ejecutable de una frase que era FALSA. El
+    // bloque que justifica guardar una clave privada x25519 en `localStorage` (DT-6) decía "se crea
+    // una por viaje y se BORRA al terminar", y el re-AR midió lo contrario (Q-6): tras los tres
+    // pasos con la billetera real la `secreta` seguía en el disco y `leerViaje` seguía contestando
+    // «hay». `terminarViaje` sólo tiene llamadores dentro de `leerViaje`, en sus ramas de basura y
+    // vencimiento; NINGÚN camino de éxito lo llama.
+    //
+    // 🔴 POR QUÉ EL MÓDULO NO LIMPIA SOLO, que es la parte que hay que entender antes de "arreglarlo":
+    //   1. Los resultados y el disco son la MISMA cosa. Borrar al consumir el paso 3 se llevaría
+    //      `transaccionFirmada` —la firma del paso 2— y el que llama no la tiene en memoria: la
+    //      página se murió en el salto, por eso existe este módulo. Se destruiría un dato del camino
+    //      del dinero exactamente en el momento en que hace falta.
+    //   2. Este módulo NO SABE cuándo terminó el que llama. El orden de DT-3 no lo verifica nadie
+    //      acá (medido: un paso 3 sobre un viaje que nunca firmó el paso 2 sale
+    //      `patrocinio-firmado`), y el propio docblock de `otra-clave/sin-fijar` dice que afirmar
+    //      ese orden sería inventar. "El tercer paso es el último" es justamente la suposición sobre
+    //      el flujo ajeno que el módulo se niega a hacer en todo lo demás.
+    // Así que la frase se corrigió en vez de fabricar un borrado que adivina. Lo que queda vivo
+    // hasta que la ventana lo venza está medido acá abajo, sin adornos.
+    //
+    // ⚠️ SI ALGÚN DÍA SE AGREGA EL BORRADO AUTOMÁTICO, ESTE `it` SE PONE ROJO. Eso es lo que tiene
+    // que pasar: es la señal de que la frase del docblock de `secreta` hay que cambiarla con él, que
+    // es la divergencia que este `it` existe para impedir. Verificado en el fix-pack 3 con un
+    // mutante que llama a `terminarViaje` tras consumir el paso 3: el `it` lo MATA. Y con él se
+    // ponen rojos otros DOS que ya existían ("la lista de consumidos ACUMULA los tres pasos" y
+    // "procesar el paso 3 NO borra del disco el resultado del paso 2"), o sea que la suite ya
+    // exigía en dos lugares que el paso 3 NO limpie: agregar el borrado no era corregir una
+    // omisión, era rehacer lo que otros dos `it` protegen. Lo que faltaba era decirlo arriba.
+    const a = almacenFalso();
+    guardarViaje(a, viajeBase());
+    const conectar = respuestaDeLaBilletera({ public_key: "C", session: "S" }, par.publicKey);
+    expect(
+      interpretarVuelta(a, new URLSearchParams({ [MARCA]: "conectar", ...conectar }), AHORA, null).tipo,
+    ).toBe("conectado");
+    const firmar = respuestaDeLaBilletera({ transaction: "TX" }, par.publicKey);
+    expect(
+      interpretarVuelta(a, new URLSearchParams({ [MARCA]: "firmar-tx", ...firmar }), AHORA, null).tipo,
+    ).toBe("tx-firmada");
+    const patrocinio = respuestaDeLaBilletera({ signature: "F" }, par.publicKey);
+    expect(
+      interpretarVuelta(a, new URLSearchParams({ [MARCA]: "firmar-patrocinio", ...patrocinio }), AHORA, null)
+        .tipo,
+    ).toBe("patrocinio-firmado");
+
+    // Los tres pasos salieron bien y NADIE borró nada.
+    expect(a.borrados).toBe(0);
+    const l = leerViaje(a, AHORA);
+    expect(l.tipo).toBe("hay");
+    if (l.tipo !== "hay") return;
+    // La clave PRIVADA, entera, sigue ahí. Es el dato que la frase corregida promete que sobrevive.
+    expect(l.viaje.secreta).toBe(bs58.encode(par.secretKey));
+    expect(l.viaje.claveBilletera).toBe(bs58.encode(billeteraReal.publicKey));
+    expect(l.viaje.pasosConsumidos).toEqual(["conectar", "firmar-tx", "firmar-patrocinio"]);
+
+    // Y la otra mitad, que es la que hace honesta a la frase nueva: el que llama TIENE con qué
+    // limpiar. Pasarle el trabajo a alguien que no puede hacerlo sería la misma mentira de vuelta.
+    terminarViaje(a);
+    expect(leerViaje(a, AHORA).tipo).toBe("no-hay");
+  });
 });
 
 describe("T-VJ-2: los TRES desenlaces de leer, y que «vencido» no se disfrace de «no-hay»", () => {
@@ -214,9 +275,17 @@ describe("T-VJ-2: los TRES desenlaces de leer, y que «vencido» no se disfrace 
     // 🔴 `JSON.parse('{"desde":1e999}')` produce `Infinity`, y `typeof Infinity === "number"`, así
     // que pasaba la validación de forma. `ahora - Infinity > MAX_EDAD_MS` es `false` para siempre:
     // medido, el viaje contestaba «hay» diez años después. Un `desde` en el futuro (reloj del
-    // teléfono movido) NO se trata acá a propósito: DT-7 dice que esto no es un control de
-    // seguridad, y un reloj atrasado es una situación honesta. Un `Infinity`, no.
-    // MUTANTE QUE MATA: volver `Number.isFinite(v?.desde)` a `typeof v?.desde !== "number"`.
+    // teléfono movido) lo trata el `it` del `desde` en el futuro, más abajo.
+    //
+    // ⚠️ ESTE `it` NO PINCHA `Number.isFinite`, Y ANTES DECÍA QUE SÍ. Acá decía «MUTANTE QUE MATA:
+    // volver `Number.isFinite(v?.desde)` a `typeof v?.desde !== "number"`», y el re-AR aplicó
+    // exactamente ese mutante (M13) y midió los 92 tests en verde. La causa es el mismo fix-pack que
+    // escribió la frase: el guard `v.desde > ahora` SUBSUME este caso, porque `Infinity > ahora` es
+    // `true` y el viaje muere ahí aunque `Number.isFinite` no exista. Un «MUTANTE QUE MATA» falso es
+    // peor que no tener el comentario: promete una cobertura que no existe, y quien borre la
+    // validación confiando en este `it` no ve nada rojo.
+    // QUÉ MATA ESTE `it`, dicho de verdad: dejar `desde` sin mirar en las DOS validaciones a la vez.
+    // Quien pincha `Number.isFinite` por sí solo es el `it` de abajo, el de `-1e999`.
     //
     // ⚠️ El `desde` se escribe A MANO en el JSON y no con `JSON.stringify`, porque
     // `JSON.stringify(Infinity)` produce `null` y el viaje moriría por la otra mitad de la
@@ -228,6 +297,34 @@ describe("T-VJ-2: los TRES desenlaces de leer, y que «vencido» no se disfrace 
     expect(JSON.parse(crudo).desde).toBe(Number.POSITIVE_INFINITY);
     a.escribir(CLAVE_EN_DISCO, crudo);
     expect(leerViaje(a, AHORA + VEINTE_MINUTOS * 100_000).tipo).toBe("no-hay");
+  });
+
+  it("un `desde` no finito NEGATIVO es basura, y basura NO es «vencido»", () => {
+    // 🔴 ÉSTE ES EL QUE PINCHA `Number.isFinite` SOLO, y existe porque el `it` de arriba prometía
+    // hacerlo y no lo hacía (M13 del re-AR, VIVO). `-1e999` es `-Infinity`, que NO cae en el guard
+    // de futuro —`-Infinity > ahora` es `false`—, así que es el único valor que llega a depender de
+    // la validación de finitud. Si ésta se debilita a `typeof === "number"`, el viaje pasa la forma
+    // y sale por la rama de la EDAD, porque `ahora - (-Infinity)` es `Infinity`.
+    //
+    // Y ahí está el delta que importa, que no es cosmético: «vencido» es una afirmación sobre la
+    // persona —"hubo un viaje tuyo y se te pasó el tiempo", o sea que firmó al pedo— y de un `desde`
+    // que no es un instante no se puede afirmar que existiera ningún viaje. Es exactamente el
+    // criterio ya escrito para el JSON roto: se limpia y se contesta «no-hay», porque decir
+    // «venció» sería afirmar que existió algo que no sabemos si existió.
+    //
+    // ⚠️ EL DISCO NO DISCRIMINA ACÁ: las dos ramas limpian, así que un `expect` sobre `borrados`
+    // pasaría con mutante y sin mutante. Lo único que separa las dos versiones del código es CUÁL de
+    // los dos desenlaces sale, y por eso el `expect` es sobre `tipo`.
+    // MUTANTE QUE MATA: volver `Number.isFinite(v?.desde)` a `typeof v?.desde !== "number"`.
+    // Medido en el fix-pack 3: sin mutante `no-hay`, con mutante `vencido`.
+    const a = almacenFalso();
+    const crudo = JSON.stringify(viajeBase()).replace(`"desde":${AHORA}`, '"desde":-1e999');
+    // Los dos `expect` del instrumento, por la misma razón que en el `it` de arriba: si el fixture
+    // dejara de producir un `-Infinity`, este test pasaría sin haber ejercitado nunca la rama.
+    expect(crudo).toContain("-1e999");
+    expect(JSON.parse(crudo).desde).toBe(Number.NEGATIVE_INFINITY);
+    a.escribir(CLAVE_EN_DISCO, crudo);
+    expect(leerViaje(a, AHORA).tipo).toBe("no-hay");
   });
 
   it("una `secreta` que no decodifica es «no-hay» y se limpia: NO revienta", () => {
@@ -342,6 +439,26 @@ describe("T-VJ-2: los TRES desenlaces de leer, y que «vencido» no se disfrace 
     const a = almacenFalso();
     guardarViaje(a, viajeBase({ desde: AHORA }));
     expect(leerViaje(a, AHORA).tipo).toBe("hay");
+  });
+
+  it("y UN MILISEGUNDO adelantado ya es basura: ese borde no tiene tolerancia de reloj", () => {
+    // 🔴 EL BORDE DE ESE GUARD NO LO PINCHABA NADIE, y son los dos `it` de arriba los que lo dejan
+    // sin pinchar: uno usa `desde` +10 días y el otro exactamente `ahora`, así que todo el intervalo
+    // `(ahora, ahora + 20 min]` quedaba libre. Medido en el re-AR: meter una tolerancia de reloj de
+    // 20 minutos (`v.desde > ahora + MAX_EDAD_MS`) dejaba los 92 tests en verde (M37), y en el
+    // fix-pack 3 se midió que ni siquiera hace falta tanto — `+ 1` también sobrevivía (M37b).
+    //
+    // Por qué el borde de ESTE guard y no de cualquier otro: con esa tolerancia un viaje vive 40
+    // minutos en vez de 20, y la ventana es —por el docblock del propio guard— la ÚNICA contención
+    // que le queda en esta capa al residual del paso 1. Un límite que se puede aflojar sin que nada
+    // se ponga rojo convierte ese argumento en una frase. La tolerancia además la elegiría quien
+    // mueva el reloj del teléfono, que es justo de quien la ventana no tiene que depender.
+    // MUTANTE QUE MATA: cualquier `v.desde > ahora + N` con `N > 0`. Medido: +1 ms da `no-hay` hoy,
+    // y `hay` con la tolerancia puesta.
+    const a = almacenFalso();
+    guardarViaje(a, viajeBase({ desde: AHORA + 1 }));
+    expect(leerViaje(a, AHORA).tipo).toBe("no-hay");
+    expect(a.datos.has(CLAVE_EN_DISCO)).toBe(false);
   });
 
   it("un almacén que ni siquiera deja LEER contesta «no-hay», no revienta", () => {
@@ -1108,6 +1225,88 @@ describe("T-VJ-10: un disco que no acepta la escritura no puede tirarle una exce
     });
     const v = interpretarVuelta(a, url, AHORA, null);
     expect(v.tipo === "tx-firmada" && v.persistencia).toBe("guardado");
+  });
+
+  it("[LÍMITE DECLARADO] «guardado» dice que el `setItem` no tiró, no que el valor siga ahí", () => {
+    // 🔴 ESTE `it` NO ES UN CANDADO: congela la distancia entre lo que el tipo `Persistencia` puede
+    // afirmar y lo que decía. Decía que con «guardado» "el resultado y la marca quedaron en el disco,
+    // el anti-repetición vale", y lo único que el código observa es que la escritura no lanzó.
+    // `localStorage` no tiene compare-and-swap, así que entre nuestra lectura y nuestra escritura
+    // otra pestaña puede escribir y nuestro `setItem` la pisa —o la de ella pisa la nuestra— sin que
+    // ninguna de las dos se entere.
+    //
+    // El re-AR lo midió (P-16) y ese número vivía sólo en un reporte que no vuelve a correr nadie.
+    // Acá el intercalado es físico y explícito: la pestaña B corre ENTERA dentro del `leer` de A, así
+    // que A escribe a partir de un estado que ya quedó viejo. No mide con qué probabilidad pasa en un
+    // teléfono real —eso es [NO VERIFICADO]—, mide que es POSIBLE, que es lo que la frase necesitaba.
+    //
+    // ⚠️ LA PEOR CONSECUENCIA, dicha sin adornos: una firma que la persona YA dio desaparece del
+    // disco y su paso vuelve a estar disponible. NO es una escalada de privilegio (el ancla sigue
+    // intacta y la re-jugada devuelve la misma firma legítima), es pérdida de un resultado del camino
+    // del dinero. Que la HU 062 decida qué hace con eso es un requisito, no un detalle.
+    //
+    // ⚠️ SI ALGÚN DÍA SE AGREGA COMPARE-AND-SWAP, ESTE `it` SE PONE ROJO — y ahí el docblock de
+    // `Persistencia` vuelve a poder prometer lo que hoy no puede. Esa es su función.
+    const datos = new Map<string, string>();
+    /** Un almacén pelado sobre el mismo `Map`, para leer el final sin disparar el intercalado. */
+    const plano: Almacen = {
+      leer: (k) => datos.get(k) ?? null,
+      escribir: (k, v) => void datos.set(k, v),
+      borrar: (k) => void datos.delete(k),
+    };
+    let bDevolvio: unknown = null;
+    let yaCorrioB = false;
+    const conIntercalado: Almacen = {
+      leer: (k) => {
+        const valor = datos.get(k) ?? null;
+        if (!yaCorrioB) {
+          yaCorrioB = true;
+          // La pestaña B, entera, DESPUÉS de que A leyó y ANTES de que A escriba.
+          bDevolvio = interpretarVuelta(
+            plano,
+            new URLSearchParams({
+              [MARCA]: "firmar-patrocinio",
+              ...respuestaDeLaBilletera({ signature: "FIRMA-DE-B" }, par.publicKey),
+            }),
+            AHORA,
+            null,
+          );
+        }
+        return valor;
+      },
+      escribir: (k, v) => void datos.set(k, v),
+      borrar: (k) => void datos.delete(k),
+    };
+    guardarViaje(plano, viajeConectado({ paso: "firmar-tx" }));
+
+    const aDevolvio = interpretarVuelta(
+      conIntercalado,
+      new URLSearchParams({
+        [MARCA]: "firmar-tx",
+        ...respuestaDeLaBilletera({ transaction: "TX-DE-A" }, par.publicKey),
+      }),
+      AHORA,
+      null,
+    );
+
+    // Las dos pestañas contestaron que guardaron.
+    expect(bDevolvio).toEqual({
+      tipo: "patrocinio-firmado",
+      firma: "FIRMA-DE-B",
+      persistencia: "guardado",
+    });
+    expect(aDevolvio).toEqual({
+      tipo: "tx-firmada",
+      transaccionBase58: "TX-DE-A",
+      persistencia: "guardado",
+    });
+
+    // Y una de las dos no guardó nada: ni la firma de B ni su marca de consumo están en el disco.
+    const l = leerViaje(plano, AHORA);
+    expect(l.tipo).toBe("hay");
+    if (l.tipo !== "hay") return;
+    expect(l.viaje.firmaDePatrocinio).toBeUndefined();
+    expect(l.viaje.pasosConsumidos).not.toContain("firmar-patrocinio");
   });
 
   it("`guardarViaje` SÍ tira, y es deliberado: pasa ANTES del salto", () => {

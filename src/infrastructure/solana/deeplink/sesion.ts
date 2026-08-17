@@ -30,9 +30,31 @@
  * descuido:
  *   · NO controla fondos. Es una x25519 EFÍMERA que sólo cifra el canal entre esta pestaña y la app de
  *     la billetera. La clave que mueve dinero nunca sale de la billetera y este código no la ve nunca.
- *   · Se crea una por viaje (las dos documentaciones lo recomiendan) y se BORRA al terminar.
+ *   · Se crea una por viaje (las dos documentaciones lo recomiendan).
  *   · Quien pudiera leerla necesitaría ejecutar código en nuestro origen, y con eso ya podría hacer
  *     cosas mucho peores que leer esto. No agrega superficie de ataque sobre el dinero.
+ *
+ * ⚠️ ACÁ DECÍA "y se BORRA al terminar", Y ERA FALSO. Lo midió una revisión: tras completar los tres
+ * pasos con la billetera real, `leerViaje` seguía contestando `hay` y la `secreta` seguía en el
+ * disco. `terminarViaje` sólo lo llama `leerViaje`, en sus ramas de basura y de vencimiento: NINGÚN
+ * camino de éxito limpia nada. Lo que de verdad pasa es que un viaje terminado bien vive hasta que
+ * `MAX_EDAD_MS` lo venza, con `secreta`, `claveBilletera`, `direccion`, `session` y los dos
+ * resultados adentro. La frase importaba porque era la que sostenía esta decisión entera.
+ *
+ * Y no se arregló agregando el borrado, por dos razones medibles:
+ *   · el disco ES el resultado. Borrar al consumir el paso 3 se llevaría `transaccionFirmada`, que
+ *     es la firma del paso 2, y el que llama no la tiene en memoria: la página se murió en el salto,
+ *     que es la razón de existir de este módulo. Sería destruir un dato del camino del dinero justo
+ *     cuando hace falta.
+ *   · este módulo no sabe cuándo terminó el que llama. El orden de DT-3 no lo verifica nadie acá (un
+ *     paso 3 sobre un viaje que nunca firmó el paso 2 sale `patrocinio-firmado`), y el docblock de
+ *     `otra-clave`/`sin-fijar` ya dice que afirmar ese orden sería inventar. "El tercer paso es el
+ *     último" es la misma suposición sobre el flujo ajeno que el módulo se niega a hacer en todo lo
+ *     demás.
+ * 🔴 ASÍ QUE ES UN REQUISITO EXPLÍCITO DE LA OLA 3 (HU 062): cuando el caso de uso da el viaje por
+ * cerrado —salió bien o se abandona— tiene que llamar a `terminarViaje`, que está exportado
+ * justamente para eso. Si no lo hace, la clave privada y la sesión viven hasta 20 minutos de más. El
+ * `it` `[LÍMITE DECLARADO]` de `sesion.test.ts` congela las dos mitades de este párrafo.
  *
  * ⚠️ Lo que este párrafo decía y era FALSO: "perderla no pierde nada". Una revisión lo midió: para
  * fabricar una respuesta que este módulo aceptara NO hacía falta la clave SECRETA, alcanzaba con la
@@ -203,7 +225,13 @@ export function guardarViaje(a: Almacen, v: Viaje): void {
 
 /**
  * Borra el viaje. NO tira: es la operación de limpieza, y un almacén que no deja borrar no le deja
- * al que llama ninguna decisión mejor que seguir. La usa `leerViaje` en cada rama de basura.
+ * al que llama ninguna decisión mejor que seguir.
+ *
+ * QUIÉN LA LLAMA HOY: sólo `leerViaje`, en sus ramas de basura y de vencimiento. **Ningún camino de
+ * éxito la llama**, así que un viaje que salió bien queda en el disco hasta que la ventana lo venza.
+ * No es un olvido: es la decisión del bloque de arriba sobre `secreta`, con sus dos razones. La
+ * contraparte es que limpiar un viaje terminado es trabajo del que llama, y esta función exportada
+ * es su herramienta.
  */
 export function terminarViaje(a: Almacen): void {
   try {
@@ -337,9 +365,25 @@ export function leerViaje(a: Almacen, ahora: number): LecturaDelViaje {
  * MISMA URL vuelve a dar el mismo resultado en la próxima lectura, y el que llama no tiene forma de
  * distinguir "acaba de firmar" de "esto ya lo procesé" — que es exactamente el defecto que
  * `pasosConsumidos` vino a cerrar. Así que el desenlace lo dice:
- *   · "guardado"           el resultado y la marca quedaron en el disco. El anti-repetición vale.
+ *   · "guardado"           **el `setItem` del resultado y de la marca no tiró.**
  *   · "no-se-pudo-guardar" el resultado es bueno igual, pero este dispositivo NO lo recuerda: no
  *                          sobrevive a una recarga y la misma URL va a volver a anunciarlo.
+ *
+ * ⚠️ "GUARDADO" ES EXACTAMENTE ESO Y NADA MÁS, y acá decía de más: decía "el resultado y la marca
+ * quedaron en el disco, el anti-repetición vale". Eso el código no lo puede saber. Lo único que
+ * observa es que la escritura no lanzó; que el valor SIGA ahí un instante después es otra
+ * afirmación, y `localStorage` no da con qué sostenerla porque no tiene compare-and-swap. Medido con
+ * dos pestañas intercaladas: una devolvió `"guardado"` y su escritura la pisó la otra —ni el
+ * resultado ni la marca quedaron—, y de ese lado el paso volvió a ser re-jugable.
+ *
+ * Se deja el comportamiento como está (no hay con qué arreglarlo en esta capa) y se corrige la
+ * promesa, que es la mitad que sí depende de nosotros: la advertencia de `interpretarVuelta` sobre
+ * las dos pestañas y esta definición decían cosas incompatibles, y quien leyera sólo ésta se iba
+ * tranquilo. El caso está congelado en el `it` `[LÍMITE DECLARADO]` de `sesion.test.ts`.
+ *
+ * El NOMBRE se deja: `"guardado"` / `"no-se-pudo-guardar"` es el par correcto para "el disco aceptó
+ * la escritura" / "el disco la rechazó", que es la distinción que el llamador necesita tomar. Lo que
+ * estaba mal no era la etiqueta sino la consecuencia que esta definición le colgaba.
  */
 export type Persistencia = "guardado" | "no-se-pudo-guardar";
 

@@ -301,17 +301,42 @@ function tieneFormaDeFirma(x: unknown): boolean {
  * frase decía evitar. Y no hacía falta basura sintáctica: una transacción que decodifica pero NO trae la
  * firma del sender hacía lo mismo, porque el paso 9 corta sobre ella en cada vuelta.
  *
- * LA REGLA: se preserva lo que el motor podría llegar a usar. Para la transacción es el MISMO predicado
- * del paso 9 (`firmaDelSender(...) === null` ⇒ corte), y esa coincidencia ES el arreglo: el motor no
- * conserva nada sobre lo que él mismo cortaría en cada invocación.
+ * LA REGLA: se preserva lo que el motor podría llegar a usar. Para la TRANSACCIÓN es el MISMO predicado
+ * del paso 9 (`firmaDelSender(...) === null` ⇒ corte), y esa coincidencia ES el arreglo DE ESA CLASE:
+ * nada que el paso 9 cortaría mirando la tx queda conservado.
+ *
+ * ⛔ Y LA GENERALIZACIÓN QUE ESTABA ACÁ ERA FALSA, POR BIEN QUE SONARA (AR-it3/MNR-1). Decía "el motor
+ * no conserva nada sobre lo que él mismo cortaría en cada invocación", y hay DOS cortes que este
+ * predicado NO mira: los dos preservan y los dos se repiten en cada vuelta hasta que la ventana mate el
+ * viaje.
+ *   · `ancla === null` (paso 9): una tx REAL firmada por el sender —el predicado da `true`— con el
+ *     registro ausente ⇒ `deeplink_sin_memoria` en cada invocación, y el href limpio tampoco lo saca.
+ *   · el patrocinio SIN transacción (paso 6), que es el corte que agregó este fix-pack (AR-it3/MNR-4).
+ * A ninguno de los dos llega un recorrido honesto, y eso está DERIVADO LEYENDO A LOS ESCRITORES, no
+ * ejecutado: el registro lo escribe el paso 8 de este archivo —MEDIDO con grep hoy: es la única llamada
+ * de producción a `guardarPreparado`, y ese número es una foto que no vigila ningún candado— y sólo con
+ * un viaje de ESTA remesa ya en el disco, así que `Preparado.desde >= Viaje.desde`. Ninguno de los dos
+ * `desde` se refresca —el del registro es `ancla?.desde ?? p.ahora` y el del viaje lo arrastra el
+ * `{...viaje}` de `consumir` (`guardarViaje`, `sesion.ts:634`)— y los dos vencen con la MISMA constante
+ * ((`MAX_EDAD_MS`, `sesion.ts:359`) y (`MAX_EDAD_MS`, `preparado.ts:172`)), o sea que por VENCIMIENTO el
+ * viaje muere primero o a la vez y nunca queda vivo sobre un registro muerto. Lo que NO se midió es la
+ * ausencia de todo otro camino: se midieron los escritores, no el universo.
  *
  * ⚠️ LOS DOS CAMPOS NO SE MIDEN IGUAL, y la asimetría es deliberada:
  *   · `transaccionFirmada` se verifica ACÁ MISMO —decodifica y trae la entrada del `sender`—, que es
  *     todo lo que este módulo puede afirmar sin preguntarle a nadie.
- *   · `firmaDePatrocinio` sólo se mide por FORMA (`tieneFormaDeFirma`). Preservar por este campo no
- *     puede TRABAR nada: sin `transaccionFirmada` el camino sigue al salto que falta, no al corte. Lo
- *     que la forma cierra es lo otro que el AR nombró: que a quien pueda escribir el disco le alcance
- *     con dejar cualquier string para que NINGÚN corte limpie durante 20 min.
+ *   · `firmaDePatrocinio` sólo se mide por FORMA (`tieneFormaDeFirma`), y la forma NO CIERRA NADA
+ *     (AR-it3/MNR-2). Acá decía que "cierra" el agujero de que a quien escriba el disco le alcance con
+ *     dejar cualquier string para que ningún corte limpie durante 20 min, y es falso: sube el listón de
+ *     "cualquier string" a "cualquier 64 bytes en base58", que para quien escribe el disco no es un
+ *     listón —lo cumple con UNA línea—. La medición está abajo, en el control positivo de
+ *     `firma-por-enlace.test.ts`: el `it` "un `firmaDePatrocinio` de 64 bytes SÍ se preserva" fabrica el
+ *     valor con un `nacl.sign.detached` de tres bytes y el corte deja el viaje Y el ancla en el disco.
+ *     O sea que ACOTA y no cierra (`acotar-no-es-cerrar`): lo que se gana es que la basura SIN forma de
+ *     firma deje de trabar el recorrido, que es la clase que midió el AR-it2.
+ *   · Y preservar por este campo SÍ puede trabar el recorrido, al revés de lo que decía acá: un
+ *     patrocinio sin `transaccionFirmada` es un corte en CADA invocación, y ese caso está tratado en el
+ *     paso 6 (AR-it3/MNR-4).
  *
  * ⚠️ Y ES MÁS ESTRICTO QUE EL GUARD DEL PASO 6, a propósito: ahí `esFirmaUtil` decide si CORTAR, y un
  * falso positivo suyo le pediría a la persona una firma que ya dio; acá se decide si DESTRUIR.
@@ -379,9 +404,27 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
     // producción NO tiene `try/catch` alrededor (`authorizePrincipal`, `../../../application/use-cases/confirm-and-send.ts:486`),
     // así que `execute()` termina por excepción y nadie limpia nada. VERIFICADO leyendo los dos sitios.
     //
-    // ⚠️ EL COSTO COMPLETO ES ÉSTE, con sus tres salidas y ni una más. Lo preservado se va del disco (a)
-    // cuando una invocación nueva CIERRA el recorrido, (b) cuando la remesa muere de verdad y
-    // `failAndRefund` corre, o (c) a los 20 min. Y (a) DEPENDE DE UN PRODUCTOR QUE HOY NO EXISTE: nadie
+    // ⚠️ EL COSTO, CON SUS CUATRO CLASES DE SALIDA — Y LA CUARTA NO ESTABA ESCRITA (AR-it3/MNR-3). Acá
+    // decía "con sus tres salidas y ni una más", y "ni una más" es una afirmación de completitud que se
+    // falsea con un grep sobre este mismo repo. Lo preservado se va del disco (a) cuando una invocación
+    // nueva CIERRA el recorrido y el adaptador termina de usarlo
+    // (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:972`), (b) cuando la remesa muere de verdad y
+    // `failAndRefund` corre (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:1103`), (c) a los 20 min,
+    // y (d) —la que faltaba— cuando una invocación LLEGA a `completo` y el adaptador rechaza lo que
+    // traía, que son CINCO sitios más: la tx que no decodifica
+    // (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:892`), los bytes que no coinciden con el ancla
+    // (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:897`), la firma del sender que no verifica
+    // (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:912`), la tx sin blockhash
+    // (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:945`) y el blockhash que la CADENA declara muerto
+    // (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:963`). MEDIDO con
+    // `grep -n 'limpiarRastroDeEnlace(' src/infrastructure/solana-wallet.ts` ⇒ 8 líneas, 7 llamadas más
+    // la definición; el reparto es 1 de (a), 1 de (b) y 5 de (d). ⚠️ Ese 7 es una FOTO y no lo vigila
+    // ningún candado: lo único vigilado es que cada línea citada acá siga nombrando
+    // `limpiarRastroDeEnlace`, y eso lo hace `citas-ancladas.test.ts`. La clase (d) empuja la exposición
+    // en la dirección CONSERVADORA —limpia antes de los 20 min—, así que la frase vieja hacía sonar la
+    // exposición PEOR de lo que es; se corrige igual, porque una afirmación de completitud falsa entrena
+    // a no verificar las otras.
+    // Y (a) DEPENDE DE UN PRODUCTOR QUE HOY NO EXISTE: nadie
     // limpia el query string de vuelta, y MEDIDO con `?dl=…&errorCode=…` todavía en la barra tres
     // invocaciones idénticas repiten el mismo corte con el disco intacto, mientras que con el href limpio
     // SÍ retoma. O sea que en el navegador de hoy, para una URL de rechazo pegada a mano, la única salida
@@ -595,6 +638,35 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
       return cortar(DEEPLINK_TX_ALTERADA);
     const txFirmada = txFirmadaCruda;
     const patrocinio = patrocinioCrudo;
+    // 🔴 UN PATROCINIO SIN TRANSACCIÓN NO ES UN RESULTADO A MEDIAS: ES UN VIAJE QUE YA NO PUEDE CERRAR
+    // (AR-it3/MNR-4). El orden `firmar-tx` → `firmar-patrocinio` es fijo (AC-6) porque el mensaje de
+    // patrocinio lleva ADENTRO la firma de la transacción, así que a este estado no llega ningún
+    // recorrido honesto. Y NO hace falta un disco escrito a mano: lo produce una billetera que contesta
+    // `dl=firmar-patrocinio` cuando se le pidió la tx, porque el paso que volvió lo dice la URL y T8
+    // prohíbe decidir por `viaje.paso`. MEDIDO con la billetera falsa, partiendo de un viaje recién
+    // conectado SIN tx y SIN patrocinio: una sola vuelta con la marca del paso 3 deja
+    // `firmaDePatrocinio` en el disco, `transaccionFirmada` en `undefined` y `pasosConsumidos` en
+    // `["conectar","firmar-patrocinio"]`, o sea el paso ya QUEMADO.
+    //
+    // ⚠️ LA MEDIA FRASE QUE JUSTIFICABA NO HACER NADA ERA "sin `transaccionFirmada` el camino sigue al
+    // salto, no al corte": cierto, y no decía qué pasa DESPUÉS. MEDIDO sin este corte: la invocación 1
+    // manda a firmar la tx, la persona firma, y la 2 devuelve `completo` con el patrocinio VIEJO y la tx
+    // NUEVA; la 3 devuelve lo mismo. `mensajesPedidos` queda en `[]`, o sea que el motor NUNCA arma el
+    // mensaje de patrocinio de esta tx: ese viaje no puede conseguir un patrocinio que corresponda, y
+    // tampoco puede pedirlo, porque el paso está quemado. Contradecía la regla de `resultadoPreservable`
+    // —se preserva lo que el motor podría llegar a USAR— con un valor que no se puede usar jamás.
+    //
+    // ⚠️ LO QUE ESTE CORTE CUESTA, medido y elegido a sabiendas: el patrocinio tiene forma de firma, así
+    // que `resultadoPreservable` PRESERVA y este corte se repite hasta que la ventana mate el viaje
+    // (MEDIDO: 3 invocaciones, las 3 `deeplink_viaje_vencido`, viaje intacto). Sin el corte había una
+    // salida más rápida —el adaptador limpia el camino de éxito
+    // (`limpiarRastroDeEnlace`, `../../solana-wallet.ts:972`)— pero para llegar a ella hay que gastarle a
+    // la persona una firma REAL del camino del dinero y POSTear al settle un `popSignature` que no puede
+    // corresponder a la tx que va en el mismo envelope. Si el settle lo rechaza o no es una afirmación
+    // sobre OTRO servicio: desde este repo `[NO VERIFICADO]`. Se elige NO emitirlo, en vez de emitirlo
+    // esperando que lo pare un guard que este repo no puede ver. Es la misma clase de corte que el
+    // `ancla === null` del paso 9, y está nombrada arriba, en `resultadoPreservable`.
+    if (patrocinio !== undefined && txFirmada === undefined) return cortar(DEEPLINK_VIAJE_VENCIDO);
 
     // ── 7 · Los `DatosDeSesion`, armados en UN SOLO SITIO (T10) ───────────────────────────────────
     //

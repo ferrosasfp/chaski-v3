@@ -1,13 +1,30 @@
-// ⚠️ CD-15 · LAS 31 FILAS DE ESTA TABLA SON MEDICIONES, no declaraciones. Las 26 primeras se corrieron
-// en el fix-pack 1 (2026-08-17); las 5 últimas —de `CALIB` para abajo— en el fix-pack 2, y en esa vuelta
-// se RE-CORRIERON cuatro filas viejas: `CALIB` (35 → 39), `ALTO1-a` (10 → 12), `ALTO1-b` (1 → 5, y su
-// sitio se movió) y `MED1-a` (1 → 2). Las cuatro subieron porque el FP2 agregó `it` que pasan por su
+// ⚠️ CD-15 · LAS 32 FILAS DE ESTA TABLA SON MEDICIONES, no declaraciones. Las 26 primeras se corrieron
+// en el fix-pack 1 (2026-08-17); las 5 siguientes —de `CALIB` para abajo— en el fix-pack 2, y en esa
+// vuelta se RE-CORRIERON cuatro filas viejas: `CALIB` (35 → 39), `ALTO1-a` (10 → 12), `ALTO1-b` (1 → 5, y
+// su sitio se movió) y `MED1-a` (1 → 2). Las cuatro subieron porque el FP2 agregó `it` que pasan por su
 // código; ninguna bajó, que es la mitad que importaba mirar. `spawnSync` sin
 // pipes, suite COMPLETA (136 archivos) por mutante, aguja contada con `== 1`, relectura del disco,
 // restauración verificada byte a byte.
 //
+// ⚠️ EL FIX-PACK 3 (AR-it3) AGREGÓ 2 `it` —la última fila, `IT3-MNR4`— y ESO OBLIGÓ A RE-CORRER FILAS
+// VIEJAS, porque un `it` nuevo que pasa por el código de un mutante viejo le sube el conteo sin que nadie
+// edite su fila. Baseline del FP3: `136 passed` / `2466 passed`, exit 0 (eran 2464 antes de los dos `it`).
+// Re-corridas: `CALIB` (39 → 41), `ALTO1-a` (12 → 13), `BAJO1-b` (1 → 2) y `T-062-15(a)` (ver su nota:
+// NO reprodujo su 6). Re-corridas Y SIN CAMBIO, que es la mitad que se suele no mirar: `ALTO1-b` (5) y
+// `BAJO1-a` (4) — los dos preservan igual porque el patrocinio del fixture nuevo está definido y tiene
+// forma de firma. Las que NO se re-corrieron es porque los dos `it` nuevos cortan en el paso 6 y no
+// alcanzan su código (ninguno escribe ancla, ninguno llega a `completo`, ninguno arma un salto).
+//
+// 🔴 Y QUEDA UN NÚMERO VIEJO EN OTRO ARCHIVO, DICHO ACÁ PORQUE EL FP3 NO PODÍA TOCARLO (scope): `CALIB`
+// es el MISMO mutante que `solana-wallet.test.ts` anota como `T-062-7`, y esa fila sigue diciendo **39**
+// donde ahora son **41** (los 2 rojos nuevos caen en ESTE archivo, no en aquél, pero el mutante es uno y
+// su conteo es global). Es una línea de update y NO se hizo: el FP3 tenía permitido tocar
+// `firma-por-enlace.ts`, su test y `solana-wallet.ts`, no `solana-wallet.test.ts`. Va escrito para que la
+// próxima revisión lo cierre en vez de descubrirlo — que un mutante compartido tenga su conteo en dos
+// tablas es, además, la razón estructural por la que este borde se pudre solo.
+//
 // 🔴 CALIBRACIÓN, Y ESTA VEZ SIRVIÓ DE VERDAD: el mutante que tenía que MORIR dio exit=1 con 35 `it`
-// rojos (39 en el FP2, con los `it` nuevos); el que tenía que VIVIR dio **exit=0**. En el primer intento los DOS dieron exit=1 y eso
+// rojos (39 en el FP2 y 41 en el FP3, con los `it` nuevos de cada vuelta); el que tenía que VIVIR dio **exit=0**. En el primer intento los DOS dieron exit=1 y eso
 // delató el instrumento roto (el árbol tenía el candado de citas en rojo y el parser leía la salida
 // con códigos ANSI adentro). Sin la calibración, las filas de abajo habrían sido mentiras.
 //
@@ -24,10 +41,15 @@
 // como `T-062-7`: es un solo mutante que mata `it` en los dos archivos, no dos mutantes.
 //
 // ⛔ Y ACÁ VA EL RESIDUO, porque este borde ya falló tres revisiones seguidas: la correspondencia
-// fila ↔ claim se verifica A MANO, no hay candado. Un candado por CONTEO sería un guard que se compara
-// consigo mismo y encima mentiría, porque la relación no es 1:1 por sitio: un solo comentario declara DOS
+// fila ↔ claim se verifica A MANO, no hay candado. Un candado por CONTEO no alcanza, y el motivo NO es
+// que "se compare consigo mismo": esa cláusula estaba acá y era FALSA (AR-it3/MNR-5). Contar filas de la
+// tabla contra contar sitios de claim cruza DOS artefactos independientes del archivo, y eso es cruce, no
+// auto-comparación; la lección `guards-que-se-comparan-consigo-mismos` habla de un guard que RECALCULA la
+// fórmula que vigila. Se borra porque una cláusula así queda escrita como argumento reusable para
+// rechazar un candado legítimo la próxima vez. El motivo que SÍ se sostiene, y alcanza solo, es que la
+// relación no es 1:1 por sitio: un solo comentario declara DOS
 // mutantes (los dos de `MED2`), otro declara un mutante que ya está en otra fila (`15(a)`), y uno de los
-// `it` remite al mutante de otro (`MED1-a`). El candado honesto exige TAGUEAR los 31 claims con el nombre
+// `it` remite al mutante de otro (`MED1-a`). El candado honesto exige TAGUEAR los 32 claims con el nombre
 // de su fila y comparar conjuntos, y eso es una pasada de retag sobre todo el archivo: queda propuesto,
 // no hecho, y dicho acá para que la próxima revisión decida en vez de descubrirlo.
 //
@@ -43,12 +65,12 @@
 // | T-062-12    ignorar la `persistencia`                             | 1 | 4 |
 // | T-062-13    tratar los dos motivos de `huerfana` igual            | 1 | 1 |
 // | T-062-14    colapsar los dos orígenes del rechazo                 | 1 | 1 |
-// | T-062-15(a) limpiar ANTES de leer los resultados                  | 1 | 6 |
+// | T-062-15(a) limpiar ANTES de leer los resultados                  | 1 | 8 (ver la nota: su 6 NO reprodujo) |
 // | T-062-15(b) volver a limpiar en la salida de éxito del motor      | 1 | 1 |
 // | T-062-15(c) `terminarViaje` también en la rama del salto          | 1 | 3 |
 // | T-062-16    devolver la `secreta` en el desenlace                 | 1 | 2 |
 // | T-062-17    intercambiar `secreta`/`publica`                       | 1 | 2 |
-// | ALTO1-a     volver `cortar` incondicional                         | 1 | 12 (re-medido en FP2) |
+// | ALTO1-a     volver `cortar` incondicional                         | 1 | 13 (re-medido en FP3; 12 en FP2, 10 en FP1) |
 // | ALTO1-b     `!== undefined` en vez del predicado de preservación   | 1 | 5 (re-medido en FP2) |
 // | MED1-a      escribir el ancla UNA vez y no refrescarla            | 1 | 2 (re-medido en FP2) |
 // | MED1-b      refrescar el ancla SIEMPRE (aun con firma dada)       | 1 | 1 |
@@ -59,11 +81,12 @@
 // | MED2-c      borrar el guard del `remittanceId` del viaje          | 1 | 1 |
 // | CONECTADO   borrar el guard `!estaConectado(viaje)`               | 1 | 1 |
 // | MNR2        borrar la validación `esFirmaUtil` de los resultados   | 1 | 1 |
-// | CALIB       invertir `viaje.direccion !== p.sender` (el que DEBÍA morir) | 1 | 39, en dos archivos (re-corrido en el FP2; 35 en el FP1) |
-// | BAJO1-a     preservar con `esFirmaUtil` sola (el predicado viejo)   | 1 | 4 |
-// | BAJO1-b     `tieneFormaDeFirma` mide 32 bytes en vez de 64         | 1 | 1 (el control positivo) |
+// | CALIB       invertir `viaje.direccion !== p.sender` (el que DEBÍA morir) | 1 | 41, en dos archivos (re-corrido en el FP3; 39 en el FP2, 35 en el FP1) |
+// | BAJO1-a     preservar con `esFirmaUtil` sola (el predicado viejo)   | 1 | 4 (re-corrido en el FP3, SIN cambio) |
+// | BAJO1-b     `tieneFormaDeFirma` mide 32 bytes en vez de 64         | 1 | 2 (re-medido en FP3; el control positivo + el `it` de la limitación de `IT3-MNR4`) |
 // | BAJO1-c     `tieneFormaDeFirma` acepta cualquier cosa              | 1 | 1 + 1 de refilón (ver abajo) |
 // | MNR3        borrar el corte `firmaDelSender === null` del paso 9    | 1 | 1 |
+// | IT3-MNR4    borrar el corte «patrocinio sin transacción» del paso 6 | 1 | 2 (los dos `it` del último `describe`) |
 //
 // ⚠️ `BAJO1-c` AGREGA LÍNEAS, y eso pone rojo **de refilón** al candado de citas ancladas
 // (`citas-ancladas.test.ts`), porque desplaza el destino de una cita a `firma-por-enlace.ts`. Va dicho:
@@ -772,9 +795,18 @@ describe("T-062-15: cada salida deja el viaje y el registro limpios, y los resul
     ],
   ];
 
-  // MUTANTE QUE MATA (MEDIDO: exit=1, 6 `it` rojos): limpiar ANTES de leer los resultados (un
-  // `terminarViaje` insertado arriba de la lectura) ⇒ los nueve casos de corte pierden su estado y el
-  // éxito sale con campos vacíos. Es el ORDEN, no la presencia, lo que estos casos miden.
+  // MUTANTE QUE MATA (15(a), MEDIDO: exit=1, **8** `it` rojos): limpiar ANTES de leer los resultados (un
+  // `terminarViaje` insertado arriba de la lectura del paso 6, justo encima de `const txFirmadaCruda =`)
+  // ⇒ el éxito sale con el disco vacío. Es el ORDEN, no la presencia, lo que estos casos miden.
+  // ⛔ Y ACÁ VA UN RESIDUO QUE ENCONTRÓ EL FP3 AL RE-CORRERLO: su número viejo era **6** y NO SE PUDO
+  // REPRODUCIR. La descripción "arriba de la lectura" tiene DOS sitios posibles y ninguno da 6 hoy:
+  // arriba de la lectura del paso 6 da **8** (2 son los `it` nuevos de `IT3-MNR4`, o sea 6 no venía de
+  // acá tampoco: sin ellos serían 7), y adentro de `cortar`, arriba de su `leerViaje`, da **13** y es
+  // INDISTINGUIBLE de `ALTO1-a` —destruir antes de leer hace que `hayAlgoQueSalvar` sea siempre `false`—.
+  // La explicación más plausible es que el 6 se midió en el FP1, cuando el paso 6 todavía RELEÍA el disco
+  // (ese segundo `leerViaje` se borró después, y su docblock lo cuenta), así que es un número medido
+  // contra una forma del código que ya no existe: un candado que se podría haber quedado verde en silencio
+  // dos fix-packs. Se deja el 8 con el sitio ESCRITO, que es lo que faltaba.
   for (const [nombre, armar] of CORTES) {
     it(`el corte \`${nombre}\` deja el disco limpio`, () => {
       const a = almacenFalso();
@@ -824,11 +856,12 @@ describe("T-062-15: cada salida deja el viaje y el registro limpios, y los resul
   // 🔴 Y DOS DE ESTOS CORTES LOS DISPARA TEXTO DE URL QUE NADIE AUTENTICÓ (`errorCode` viaja sin
   // cifrar): un enlace pegado en un chat, abierto a mitad de recorrido, tiraba la firma a la basura.
   //
-  // MUTANTE QUE MATA (ALTO1-a, RE-MEDIDO en el FP2: exit=1, **12** `it` rojos, eran 10): volver `cortar`
-  // incondicional (borrar el `if (!hayAlgoQueSalvar)`) ⇒ se ponen rojos los ocho casos de abajo, el
-  // control positivo del patrocinio, el `it` del costo de preservar, el «tx firmada SIN ancla» y el
-  // «viaje de OTRA remesa» — y los nueve casos de arriba siguen VERDES, que es exactamente por qué hacían
-  // falta los dos conjuntos.
+  // MUTANTE QUE MATA (ALTO1-a, RE-MEDIDO en el FP3: exit=1, **13** `it` rojos; eran 12 en el FP2 y 10 en
+  // el FP1): volver `cortar` incondicional (borrar el `if (!hayAlgoQueSalvar)`) ⇒ se ponen rojos los ocho
+  // casos de abajo, el control positivo del patrocinio, el `it` del costo de preservar, el «tx firmada SIN
+  // ancla», el «viaje de OTRA remesa» y —el 13º, que agregó el FP3— el `it` de la limitación de
+  // `IT3-MNR4`, que exige que el corte del patrocinio-sin-tx tampoco borre. Y los nueve casos de arriba
+  // siguen VERDES, que es exactamente por qué hacían falta los dos conjuntos.
   describe("un corte NO borra un viaje que tiene una firma adentro (AR/BLQ-ALTO-1)", () => {
     const FIRMADA = txFirmadaB58();
     /** Los mismos cortes de arriba, pero con el viaje YA con la firma del paso 2 adentro. */
@@ -974,9 +1007,12 @@ describe("T-062-15: cada salida deja el viaje y el registro limpios, y los resul
     //   del sender) ⇒ el caso `blanco` sigue verde —es el único que el predicado viejo también rechazaba,
     //   y es exactamente por qué este fixture no podía quedar solo— y se ponen rojos los otros tres más
     //   el del residuo.
-    // MUTANTE QUE MATA (BAJO1-b, MEDIDO: exit=1, 1 `it` rojo): `tieneFormaDeFirma` midiendo 32 bytes en
-    //   vez de 64 ⇒ muere el CONTROL POSITIVO de más abajo, no el 4º caso (con 32 el string de basura
-    //   tampoco decodifica). Que mate uno y no el otro es lo que prueba que los dos hacen falta.
+    // MUTANTE QUE MATA (BAJO1-b, RE-MEDIDO en el FP3: exit=1, **2** `it` rojos, era 1):
+    //   `tieneFormaDeFirma` midiendo 32 bytes en vez de 64 ⇒ muere el CONTROL POSITIVO de más abajo, no el
+    //   4º caso (con 32 el string de basura tampoco decodifica). Que mate uno y no el otro es lo que
+    //   prueba que los dos hacen falta. El 2º rojo lo agregó el FP3: el `it` de la limitación de
+    //   `IT3-MNR4` usa un patrocinio de 64 bytes y con la medida en 32 deja de ser preservable, así que el
+    //   corte limpia y ese `it` lo nota.
     // MUTANTE QUE MATA (BAJO1-c, MEDIDO: exit=1, 1 `it` rojo de comportamiento —el 4º caso— más el
     //   candado de citas de refilón, porque el mutante agrega líneas): `tieneFormaDeFirma` aceptando
     //   cualquier cosa.
@@ -1489,7 +1525,7 @@ describe("los guards que no tenían test", () => {
 // CD-11 / T12 — el sender no sale del canal del enlace
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 describe("el viaje sólo puede COINCIDIR con el sender, nunca sustituirlo", () => {
-  // MUTANTE QUE MATA (CALIB, RE-CORRIDO en el FP2: exit=1, **39 `it` rojos** en dos archivos, eran 35 — es el mutante de
+  // MUTANTE QUE MATA (CALIB, RE-CORRIDO en el FP3: exit=1, **41 `it` rojos** en dos archivos; 39 en el FP2 y 35 en el FP1 — es el mutante de
   // calibración de toda la batería, el que tenía que morir, y la fila que la tabla de arriba se había
   // dejado afuera dos revisiones seguidas): invertir la comparación `viaje.direccion !== p.sender`
   // ⇒ un connect forjado se queda con el viaje entero y el depósito se arma con una dirección ajena.
@@ -1510,5 +1546,69 @@ describe("el viaje sólo puede COINCIDIR con el sender, nunca sustituirlo", () =
     guardarPreparado(a, preparadoBase());
     const r = motor.resolver(pedido(a, { sender: dir }));
     expect(r.tipo === "corte" && r.causa).toBe("deeplink_sender_mismatch");
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// AR-it3/MNR-4 — un patrocinio SIN transacción es un viaje que ya no puede cerrar
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ SE MIDIÓ ANTES DE ELEGIR, porque el corte no era la única salida y la otra era "declararlo".
+// SIN el corte: la invocación 1 manda a firmar la tx, la persona firma, y la 2 devuelve `completo` con
+// el patrocinio VIEJO y la tx NUEVA (la 3, lo mismo). `mensajesPedidos` queda en `[]`: el motor no arma
+// NUNCA el mensaje de patrocinio de esa tx, así que el viaje no puede conseguir uno que corresponda, y
+// tampoco puede pedirlo, porque `pasosConsumidos` ya trae `firmar-patrocinio`.
+//
+// ⚠️ Y LA PRECONDICIÓN NO ES UN DISCO ESCRITO A MANO: alcanza una billetera que contesta
+// `dl=firmar-patrocinio` cuando se le pidió la tx. El paso que volvió lo dice la URL y T8 prohíbe
+// decidir por `viaje.paso`, así que ese resultado se persiste igual. El primer `it` de abajo lo arma con
+// la billetera falsa, partiendo de un viaje SIN tx y SIN patrocinio, y no toca el disco a mano.
+//
+// ⚠️ LO QUE EL CORTE CUESTA, y por eso el segundo `it` congela una LIMITACIÓN y no un deseo: el
+// patrocinio tiene forma de firma, así que `resultadoPreservable` preserva y el corte se repite hasta
+// que la ventana mate el viaje. Se elige igual: la alternativa era gastarle a la persona una firma REAL
+// del camino del dinero y POSTear al settle un `popSignature` que no puede corresponder a la tx que va
+// en el mismo envelope, esperando que lo pare un guard que vive en OTRO servicio y que este repo no
+// puede ver (`[NO VERIFICADO]`).
+describe("MNR-4: un patrocinio sin transacción NO manda a firmar nada, corta", () => {
+  // MUTANTE QUE MATA (IT3-MNR4, MEDIDO: exit=1, 2 `it` rojos, los dos de acá): borrar el
+  //   `if (patrocinio !== undefined && txFirmada === undefined) return cortar(...)` ⇒ el primer `it` ve
+  //   un `salto` de `firma-tx` donde esperaba el corte, y el segundo ve un `completo` con el patrocinio
+  //   viejo en la invocación 2.
+  it("una vuelta de patrocinio sin tx en el disco ⇒ corte, y NO se manda a firmar la transacción", () => {
+    const a = almacenFalso();
+    guardarViaje(a, viajeConectado()); // ni tx ni patrocinio: el disco no se toca a mano
+    const inventada = bs58.encode(nacl.sign.detached(new Uint8Array([7]), SENDER.secretKey));
+    // La app la mandó a `firmar-tx`; la billetera vuelve con la marca del paso 3.
+    const r = motor.resolver(
+      pedido(a, {
+        hrefActual: href("firmar-patrocinio", respuestaDeLaBilletera({ signature: inventada })),
+      }),
+    );
+    expect(r).toEqual({ tipo: "corte", causa: DEEPLINK_VIAJE_VENCIDO });
+    expect(
+      mensajesPedidos,
+      "se armó un mensaje de patrocinio sobre una transacción que no existe",
+    ).toEqual([]);
+    // El corte va ANTES del paso 8, así que no re-ancla nada: sin esto, un estado que no puede cerrar
+    // dejaría además un registro nuevo con su ventana.
+    expect(a.datos.has(CLAVE_PREPARADO), "el corte escribió un ancla igual").toBe(false);
+  });
+
+  // ⚠️ LIMITACIÓN DECLARADA, NO COMPORTAMIENTO DESEADO (el mismo formato que el `it` de BLQ-BAJO-2): el
+  // corte preserva porque el patrocinio tiene forma de firma, así que la única salida es la ventana de
+  // 20 min. Si mañana alguien hace que este caso limpie, este `it` se pone rojo y tiene que leer el
+  // costo del otro lado —un corte que borra el disco por texto de URL no autenticado es BLQ-ALTO-1—.
+  it("el corte se REPITE con el disco intacto: la única salida es la ventana (limitación)", () => {
+    const a = almacenFalso();
+    const patrocinioViejo = bs58.encode(nacl.sign.detached(new Uint8Array([9]), SENDER.secretKey));
+    expect(bs58.decode(patrocinioViejo).length, "el fixture no es una firma ed25519").toBe(64);
+    guardarViaje(a, viajeConectado({ firmaDePatrocinio: patrocinioViejo }));
+    const causas = [1, 2, 3].map(() => {
+      const r = motor.resolver(pedido(a));
+      return r.tipo === "corte" ? r.causa : r.tipo;
+    });
+    expect(causas).toEqual([DEEPLINK_VIAJE_VENCIDO, DEEPLINK_VIAJE_VENCIDO, DEEPLINK_VIAJE_VENCIDO]);
+    expect(a.datos.has(CLAVE_VIAJE), "el corte borró una firma que la persona dio").toBe(true);
   });
 });

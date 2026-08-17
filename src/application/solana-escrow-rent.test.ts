@@ -37,7 +37,11 @@ import {
   ESCROW_STATE_RENT_LAMPORTS,
   ESCROW_VAULT_RENT_LAMPORTS,
   LAMPORTS_PER_SOL,
+  NONCE_ACCOUNT_RENT_LAMPORTS,
+  SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT,
   SENDER_MIN_LAMPORTS_FOR_DEPOSIT,
+  SOLANA_BASE_FEE_PER_SIGNATURE_LAMPORTS,
+  WALLET_TIP_ALLOWANCE_LAMPORTS_FOR_TESTS,
   formatLamportsAsSol,
   formatLamportsAsSolFloor,
 } from "./solana-escrow-rent";
@@ -330,5 +334,52 @@ describe("lo que se COBRA se redondea hacia abajo, y por eso deja de colisionar 
   it("usa coma decimal (es-PE), no punto, igual que su hermana", () => {
     expect(formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_LAMPORTS)).toContain(",");
     expect(formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_LAMPORTS)).not.toContain(".");
+  });
+});
+
+// ── ★ T-22 (WKH-357 / CD-12) — el umbral del camino por ENLACE, y el que NO se movió ────────────────
+describe("el umbral del camino por enlace profundo (durable nonce)", () => {
+  it("🔴 el umbral del camino INYECTADO no se movió: sigue valiendo 8.874.560", () => {
+    // El candado de CD-1/CD-12. Subir este número cambiaría el veredicto del recorrido del video de
+    // M5 para una billetera con 9.000.000 lamports, y ese recorrido YA movió USDC real en cadena.
+    // El `it` de más arriba ya lo ata a sus cuatro sumandos; acá se vuelve a clavar el valor desde la
+    // HU que agregó un umbral NUEVO, que es cuando el riesgo de "aprovecho y le sumo la renta" existe.
+    expect(SENDER_MIN_LAMPORTS_FOR_DEPOSIT).toBe(8_874_560);
+  });
+
+  it("el umbral por enlace es el inyectado MÁS los tres sumandos de crear la cuenta de nonce", () => {
+    // ⛔ Sin literal del total (CD-12): se afirma la DIFERENCIA contra sus sumandos nombrados. Escribir
+    // `10_402_240` acá sería un segundo repositorio del mismo número, que es lo que el archivo ya
+    // prohíbe en su cabecera para `ESCROW_INDEX_RENT_LAMPORTS`.
+    expect(SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT - SENDER_MIN_LAMPORTS_FOR_DEPOSIT).toBe(
+      NONCE_ACCOUNT_RENT_LAMPORTS +
+        SOLANA_BASE_FEE_PER_SIGNATURE_LAMPORTS +
+        WALLET_TIP_ALLOWANCE_LAMPORTS_FOR_TESTS,
+    );
+    // Y es estrictamente MAYOR: un signo invertido en la suma daría un umbral más bajo que el de hoy
+    // y la diferencia de arriba seguiría cuadrando en valor absoluto si alguien la escribiera con
+    // `Math.abs`.
+    expect(SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT).toBeGreaterThan(SENDER_MIN_LAMPORTS_FOR_DEPOSIT);
+  });
+
+  it("la renta de la cuenta de nonce coincide con la fórmula pública de rent (dos fuentes, no un literal)", () => {
+    // (128 bytes de overhead + 80 de la cuenta) × 3480 lamports/byte-año × 2 años.
+    // La otra fuente es el RPC: `getMinimumBalanceForRentExemption(80)` devolvió 1447680 contra devnet
+    // el 2026-08-17. Las dos coinciden, y por eso el número es una derivación y no un literal.
+    expect(NONCE_ACCOUNT_RENT_LAMPORTS).toBe((128 + 80) * 3480 * 2);
+  });
+
+  it("los DOS `75_000` del archivo son el mismo valor (candado contra la deriva silenciosa)", () => {
+    // `REFUND_FEE_ALLOWANCE_LAMPORTS` (`:181`) lleva `5_000 + 75_000` como literales y NO se puede
+    // reescribir para usar las constantes (se declara antes que ellas). Este assert es lo único que
+    // impide que los dos 75.000 se separen sin que nada se ponga rojo.
+    expect(WALLET_TIP_ALLOWANCE_LAMPORTS_FOR_TESTS).toBe(75_000);
+    // Y el sumando gemelo, leído del propio archivo fuente para que no sea la constante mirándose al
+    // espejo: la línea que declara el allowance del refund tiene que seguir diciendo `5_000 + 75_000`.
+    const fuente = readFileSync(
+      join(process.cwd(), "src/application/solana-escrow-rent.ts"),
+      "utf8",
+    );
+    expect(fuente).toContain("const REFUND_FEE_ALLOWANCE_LAMPORTS = 5_000 + 75_000;");
   });
 });

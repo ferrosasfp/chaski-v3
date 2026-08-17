@@ -4,13 +4,13 @@ import bs58 from "bs58";
 import * as anchor from "@coral-xyz/anchor";
 import type { Idl, Provider } from "@coral-xyz/anchor";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
-import { ComputeBudgetProgram, Connection, Keypair, PublicKey, SystemProgram, Transaction, type TransactionInstruction } from "@solana/web3.js";
+import { ComputeBudgetProgram, Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction } from "@solana/web3.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Money } from "../domain/money";
 import type { Quote } from "../domain/remittance";
 import { CUSTODY_WINDOW_SECS, SolanaWalletAdapter } from "./solana-wallet";
 import { escrowIdl } from "./solana/escrow-idl";
-import { solanaWalletBridge } from "./solana-wallet-bridge";
+import { solanaWalletBridge } from "./solana-wallet-bridge"; import { esperarAutorizacionLista } from "../test-support/desenlaces"; import { readFileSync } from "node:fs"; import path from "node:path"; import { FirmaPorEnlaceReal, type DesenlaceDeFirma, type FirmaPorEnlace, type PedidoDeFirma } from "./solana/deeplink/firma-por-enlace"; // WKH-356: TODO en esta línea — `solana-wallet.test.ts:453-454` y `:506` los citan por número desde otros dos archivos, así que una línea nueva acá arriba los rota
 
 const VALID_B58 = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // base58 válido (mixed-case)
 
@@ -405,7 +405,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     const adapter = await connectedAdapter();
     const rid = "rem-037-envelope";
     const quote = makeQuote();
-    const res = await adapter.authorizePrincipal(quote, rid, escrowDeposit());
+    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(quote, rid, escrowDeposit()));
 
     const popSignature = res.solana?.popSignature;
     expect(typeof popSignature).toBe("string");
@@ -448,7 +448,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
 
   it("AC-3/CD-SDD-1: NUNCA broadcast; return trae solana.partialSignedTx b64 + reference b58", async () => {
     const adapter = await connectedAdapter();
-    const res = await adapter.authorizePrincipal(makeQuote(), "rem-ac3", escrowDeposit());
+    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-ac3", escrowDeposit()));
 
     expect(Connection.prototype.sendRawTransaction).not.toHaveBeenCalled();
     expect(Connection.prototype.sendTransaction).not.toHaveBeenCalled();
@@ -463,7 +463,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
 
   it("AC-4/CD-SDD-6: reference como remainingAccount no-signer/no-writable, al final del set", async () => {
     const adapter = await connectedAdapter();
-    const res = await adapter.authorizePrincipal(makeQuote(), "rem-ac4", escrowDeposit());
+    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-ac4", escrowDeposit()));
 
     const ix = depositIx(capturedTx(signSpy));
     const last = ix.keys[ix.keys.length - 1];
@@ -752,7 +752,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
   // billetera devuelve — que es la mitad que sí se puede verificar desde acá.
   it("T12 (AC-5, payload): la tx que se POSTEA trae exactamente [limit 120.000, price 10.000, deposit, register_escrow]", async () => {
     const adapter = await connectedAdapter();
-    const res = await adapter.authorizePrincipal(makeQuote(), "rem-cb-payload", escrowDeposit());
+    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-cb-payload", escrowDeposit()));
 
     const posted = Transaction.from(Buffer.from(res.solana?.partialSignedTx ?? "", "base64"));
 
@@ -898,7 +898,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
       ),
     });
     const adapter = await connectedAdapter();
-    const res = await adapter.authorizePrincipal(makeQuote(), "rem-347-lleno", escrowDeposit());
+    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-347-lleno", escrowDeposit()));
 
     // UNA sola ix de negocio, y es el `deposit`. Registrar contra un índice lleno devolvería
     // EscrowIndexFull (6005) y, al viajar en la misma tx, REVERTIRÍA EL DEPÓSITO.
@@ -916,7 +916,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
   it("T-347-5(a) (AC-6): la sonda LANZA ⇒ una sola ix de negocio y la promesa RESUELVE", async () => {
     mockChain({ [ESCROW_INDEX_PDA.toBase58()]: "throw" });
     const adapter = await connectedAdapter();
-    const res = await adapter.authorizePrincipal(makeQuote(), "rem-347-rpc-caido", escrowDeposit());
+    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-347-rpc-caido", escrowDeposit()));
     expect(businessIx(capturedTx(signSpy))).toHaveLength(1);
     expect(res.solana?.partialSignedTx).toBeTruthy();
   });
@@ -980,7 +980,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
       }
       // Antes que el `await p`: si no resolvió, este assert lo dice en una línea en vez de colgar 30 s.
       expect(resuelta).toBe(true);
-      const res = await p;
+      const res = esperarAutorizacionLista(await p);
       expect(businessIx(capturedTx(signSpy))).toHaveLength(1);
       expect(res.solana?.partialSignedTx).toBeTruthy();
     } finally {
@@ -993,7 +993,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     // podemos identificar en una tx del money-path es peor que no mandarla.
     mockChain({ [ESCROW_INDEX_PDA.toBase58()]: Buffer.alloc(64, 7) });
     const adapter = await connectedAdapter();
-    const res = await adapter.authorizePrincipal(makeQuote(), "rem-347-basura", escrowDeposit());
+    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-347-basura", escrowDeposit()));
     expect(businessIx(capturedTx(signSpy))).toHaveLength(1);
     expect(res.solana?.partialSignedTx).toBeTruthy();
   });
@@ -1248,7 +1248,7 @@ describe("T-347-6 (AC-9/CD-10): con el índice LLENO la tx sale byte-idéntica a
     const adapter = new SolanaWalletAdapter();
     await adapter.connect();
 
-    const res = await adapter.authorizePrincipal(
+    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(
       {
         quoteId: "q-byte",
         send: Money.fromMinor(12_345_678, "USDC"),
@@ -1267,7 +1267,7 @@ describe("T-347-6 (AC-9/CD-10): con el índice LLENO la tx sale byte-idéntica a
           authority: AUTHORITY.publicKey.toBase58(),
         },
       },
-    );
+    ));
     return res.solana?.partialSignedTx ?? "";
   }
 
@@ -1278,5 +1278,417 @@ describe("T-347-6 (AC-9/CD-10): con el índice LLENO la tx sale byte-idéntica a
     // dos, esta línea lo dice.
     const posted = Transaction.from(Buffer.from(b64, "base64"));
     expect(businessIx(posted)).toHaveLength(1);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-356 · LA RAMA DE FIRMA POR ENLACE PROFUNDO
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 EL PRIMER CANDADO ES QUE NO EXISTA. Con el colaborador ausente —que es como queda producción al
+// cerrar 062— esta rama entera vive adentro de un `if` y no ejecuta NI UNA línea. Eso es CD-1, y lo
+// que lo mide no es este describe: son los ~40 `it` de arriba, que siguen verdes SIN QUE SE HAYA
+// TOCADO UN SOLO DATO DE EXPECTATIVA.
+//
+// ⚠️ [NO VERIFICADO] (CD-12) — nada de acá está medido en un teléfono. `localStorage` y `location` son
+// objetos de mentira, y la billetera es una función. Que un móvil real vuelva al mismo origen, que
+// conserve el disco a través del salto y que devuelva la transacción byte-idéntica son tres
+// afirmaciones sobre un runtime que este repo NO ha medido.
+//
+// ⚠️ CD-15 · LOS MUTANTES DE ESTE BLOQUE SE CORRIERON (2026-08-17), no se razonaron. `spawnSync` sin
+// pipes, aguja contada con `== 1`, relectura del disco, restauración verificada byte a byte, y DOS
+// mutantes de calibración de resultado conocido antes de creerle nada a la batería.
+//
+// | mutante                                                             | exit | `it` rojos |
+// |---|---|---|
+// | T-062-7     borrar el guard `viaje.direccion !== p.sender`           | 1 | 1 |
+// | T-062-18(a) comparar sólo la LONGITUD del mensaje devuelto           | 1 | 1 (sólo el CASO B) |
+// | T-062-18(b) borrar el `nacl.sign.detached.verify`                    | 1 | 1 (sólo el CASO C) |
+// | T-062-19    borrar el `isBlockhashValid`                             | 1 | 1 |
+// | T-062-20    referenciar `sendRawTransaction` en el método            | 1 | 1 |
+// | CD-1        cambiar un campo del envelope del camino INYECTADO       | 1 | 2 |
+// Que 18(a) mate SÓLO el caso B y 18(b) SÓLO el caso C es lo que prueba que los dos chequeos —bytes
+// del mensaje y verificación de la firma— hacen trabajos distintos y ninguno cubre al otro.
+describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WKH-356)", () => {
+  const CLAVE_PREPARADO = "chaski.billetera.preparado.v1";
+  const CLAVE_VIAJE = "chaski.billetera.viaje.v1";
+  const HREF = "https://chaski.test/enviar?rem=rem-1";
+  const REM = "rem-1";
+
+  let disco: Map<string, string>;
+  let signSpy: ReturnType<typeof vi.fn>;
+  let blockhashValidoSpy: ReturnType<typeof vi.fn>;
+
+  /** `localStorage` y `location` de mentira. El entorno de estos tests es Node: no hay ninguno. */
+  function montarEntorno() {
+    disco = new Map<string, string>();
+    const storage = {
+      getItem: (k: string) => disco.get(k) ?? null,
+      setItem: (k: string, v: string) => void disco.set(k, v),
+      removeItem: (k: string) => void disco.delete(k),
+      clear: () => disco.clear(),
+      key: () => null,
+      length: 0,
+    };
+    vi.stubGlobal("localStorage", storage);
+    vi.stubGlobal("location", { href: HREF, origin: "https://chaski.test" });
+    return { leer: (k: string) => disco.get(k) ?? null };
+  }
+
+  /** Motor programable que además REGISTRA el `PedidoDeFirma` que recibió. */
+  class MotorProgramable implements FirmaPorEnlace {
+    public pedidos: PedidoDeFirma[] = [];
+    public responder: (p: PedidoDeFirma) => DesenlaceDeFirma = () => ({
+      tipo: "salto",
+      irA: "https://phantom.app/ul/v1/signTransaction?x=1",
+      esperando: "firma-tx",
+    });
+    resolver(p: PedidoDeFirma): DesenlaceDeFirma {
+      this.pedidos.push(p);
+      return this.responder(p);
+    }
+  }
+
+  beforeEach(() => {
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_USDC_MINT", MINT_B58);
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_FACILITATOR_PUBKEY", FACILITATOR_B58);
+    vi.spyOn(Connection.prototype, "getLatestBlockhash").mockResolvedValue({
+      blockhash: FIXED_BLOCKHASH,
+      lastValidBlockHeight: 1,
+    } as Awaited<ReturnType<Connection["getLatestBlockhash"]>>);
+    vi.spyOn(Connection.prototype, "sendRawTransaction").mockResolvedValue("sig-never" as never);
+    vi.spyOn(Connection.prototype, "sendTransaction").mockResolvedValue("sig-never" as never);
+    mockChain({}); // sin esto la sonda del índice PEGA A LA RED (WKH-347)
+    blockhashValidoSpy = vi.fn(async () => ({ context: { slot: 1 }, value: true }));
+    vi.spyOn(Connection.prototype, "isBlockhashValid").mockImplementation(
+      blockhashValidoSpy as never,
+    );
+    signSpy = vi.fn(async (tx: unknown) => {
+      (tx as Transaction).partialSign(SENDER_KP);
+      return tx;
+    });
+    solanaWalletBridge.registerSignTransaction(signSpy);
+    solanaWalletBridge.registerSignMessage(
+      vi.fn(async (bytes: Uint8Array) => nacl.sign.detached(bytes, SENDER_KP.secretKey)),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  const escrowDeposit = () => ({
+    address: "unused-evm-field",
+    escrow: { beneficiary: BENEFICIARY_B58, authority: AUTHORITY_B58 },
+  });
+
+  async function adaptadorConMotor(motor: FirmaPorEnlace): Promise<SolanaWalletAdapter> {
+    solanaWalletBridge.setState({ publicKey: SENDER_B58, connected: true });
+    // ⚠️ EL 3er PARÁMETRO VA AL FINAL y el 2º se omite: es lo que hace que `container.ts` —que pasa UN
+    // solo argumento— y los tests que pasan `confirmTimeoutMs` posicionalmente sigan compilando.
+    const adapter = new SolanaWalletAdapter(undefined, undefined, motor);
+    await adapter.connect();
+    return adapter;
+  }
+
+  /** Un viaje ya conectado, escrito DIRECTO en el disco de mentira. */
+  function sembrarViaje(direccion: string) {
+    const par = nacl.box.keyPair();
+    const billetera = nacl.box.keyPair();
+    disco.set(
+      CLAVE_VIAJE,
+      JSON.stringify({
+        billetera: "phantom",
+        secreta: bs58.encode(par.secretKey),
+        publica: bs58.encode(par.publicKey),
+        claveBilletera: bs58.encode(billetera.publicKey),
+        session: "s",
+        direccion,
+        paso: "firmar-tx",
+        remittanceId: REM,
+        pasosConsumidos: ["conectar"],
+        desde: Date.now(),
+      }),
+    );
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────────────────────────
+  // T-062-7 (§4.5 / T12 / CD-11) — el viaje sólo puede COINCIDIR con el sender, nunca sustituirlo
+  // ──────────────────────────────────────────────────────────────────────────────────────────────
+  //
+  // 🔴 POR QUÉ ESTE GUARD NO ES REDUNDANTE. Hay tres mecanismos contra la sustitución de depositante y
+  // los otros dos tienen agujeros declarados: el guard S3.5 del settle **se apaga con el ledger** (la
+  // propia route lo dice), y **no cubre el caso de dos `prepare()`** porque
+  // `listPreparedDepositAddresses` devuelve todas las direcciones y hace `includes(...)`. En un
+  // deployment sin ledger, ESTE es el único.
+  //
+  // Se corre contra el motor REAL, no contra un doble: lo que hace falta probar es el CABLEADO.
+  describe("T-062-7: `viaje.direccion` distinta del sender ⇒ corte fail-closed", () => {
+    // MUTANTE QUE MATA: borrar la comparación `viaje.direccion !== p.sender` del motor ⇒ el depósito
+    // se arma con el `sender` del adaptador y una dirección de viaje AJENA, y el caso positivo de
+    // abajo NO lo nota. Por eso hacen falta los dos.
+    it("una dirección de viaje ajena corta con deeplink_sender_mismatch", async () => {
+      montarEntorno();
+      const adapter = await adaptadorConMotor(new FirmaPorEnlaceReal());
+      sembrarViaje(Keypair.generate().publicKey.toBase58()); // ← otra cuenta
+      await expect(
+        adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit()),
+      ).rejects.toThrow("deeplink_sender_mismatch");
+    });
+
+    it("CASO POSITIVO: con la misma dirección el viaje sigue y sale un salto", async () => {
+      montarEntorno();
+      const adapter = await adaptadorConMotor(new FirmaPorEnlaceReal());
+      sembrarViaje(SENDER_B58);
+      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      expect(r.estado).toBe("hay-que-salir");
+      expect(r.estado === "hay-que-salir" && r.esperando).toBe("firma-tx");
+      expect(r.estado === "hay-que-salir" && new URL(r.irA).host).toBe("phantom.app");
+    });
+
+    // El `sender` que viaja al motor sale de `this.getAddress()` y está CANONICALIZADO: nunca del
+    // canal del enlace. MUTANTE QUE MATA: pasarle `viaje.direccion` en vez de `sender`.
+    it("el `sender` del pedido es el del adaptador, canonicalizado", async () => {
+      montarEntorno();
+      const motor = new MotorProgramable();
+      const adapter = await adaptadorConMotor(motor);
+      sembrarViaje(SENDER_B58);
+      await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      expect(motor.pedidos[0]?.sender).toBe(new PublicKey(SENDER_B58).toBase58());
+      expect(motor.pedidos[0]?.remittanceId, "se le pasó otra cosa que el 2º argumento (T2)").toBe(REM);
+      expect(motor.pedidos[0]?.beneficiary).toBe(BENEFICIARY_B58);
+      expect(motor.pedidos[0]?.authority).toBe(AUTHORITY_B58);
+      expect(motor.pedidos[0]?.hrefActual, "no se pasó el href COMPLETO (T9)").toBe(HREF);
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────────────────────────
+  // T-062-18 (DT-10) — bytes contra bytes
+  // ──────────────────────────────────────────────────────────────────────────────────────────────
+  describe("T-062-18: lo que volvió tiene que ser lo que se pidió firmar", () => {
+    /** Corre la invocación A (salto), siembra el registro con lo que el adaptador armó, y devuelve el
+     *  pedido capturado para poder fabricar la vuelta de la invocación B. */
+    async function primeraVuelta(motor: MotorProgramable): Promise<PedidoDeFirma> {
+      const adapter = await adaptadorConMotor(motor);
+      sembrarViaje(SENDER_B58);
+      await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      const p = motor.pedidos[0];
+      if (!p) throw new Error("el motor no recibió ningún pedido");
+      disco.set(
+        CLAVE_PREPARADO,
+        JSON.stringify({
+          remittanceId: REM,
+          sender: SENDER_B58,
+          beneficiary: BENEFICIARY_B58,
+          authority: AUTHORITY_B58,
+          mensajeBase64: p.mensajeBase64,
+          referenceBase58: p.referenceBase58,
+          desde: Date.now(),
+        }),
+      );
+      return p;
+    }
+
+    function serializar(tx: Transaction): string {
+      return bs58.encode(tx.serialize({ requireAllSignatures: false, verifySignatures: false }));
+    }
+
+    it("CASO POSITIVO: la MISMA tx firmada por el sender ⇒ `listo`, con la reference PERSISTIDA", async () => {
+      montarEntorno();
+      const motor = new MotorProgramable();
+      const p = await primeraVuelta(motor);
+      const tx = Transaction.from(bs58.decode(p.transaccionBase58));
+      tx.partialSign(SENDER_KP);
+      motor.responder = () => ({
+        tipo: "completo",
+        transaccionFirmadaBase58: serializar(tx),
+        firmaDePatrocinio: "FIRMA-POP-DEL-VIAJE",
+        referenceBase58: p.referenceBase58,
+      });
+      const adapter = await adaptadorConMotor(motor);
+      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      expect(r.estado).toBe("listo");
+      if (r.estado !== "listo") return;
+      expect(r.solana?.vm).toBe("solana");
+      expect(r.solana?.popSignature).toBe("FIRMA-POP-DEL-VIAJE");
+      // 🔴 LA REFERENCE ES LA DEL INTENTO ORIGINAL, no la del `Keypair.generate()` de esta invocación
+      // (que se descartó junto con la tx que la llevaba). Sin esto el envelope declararía una
+      // reference que NO está adentro de su propia transacción y la traza del depósito se rompe.
+      expect(r.solana?.reference).toBe(p.referenceBase58);
+      expect(r.tx).toBe(r.solana?.partialSignedTx);
+      // Y los bytes que salen son los que la billetera devolvió, no los de la tx nueva.
+      expect(r.tx).toBe(Buffer.from(bs58.decode(serializar(tx))).toString("base64"));
+    });
+
+    // MUTANTE QUE MATA: comparar sólo la LONGITUD de la tx, o sólo la PRESENCIA de la firma ⇒ los dos
+    // casos de abajo sobreviven. Es por eso que se comparan los BYTES DEL MENSAJE y además se
+    // VERIFICA la firma.
+    it("CASO A: una ix agregada ⇒ deeplink_tx_alterada", async () => {
+      montarEntorno();
+      const motor = new MotorProgramable();
+      const p = await primeraVuelta(motor);
+      const tx = Transaction.from(bs58.decode(p.transaccionBase58));
+      tx.add(
+        new TransactionInstruction({
+          programId: Keypair.generate().publicKey,
+          keys: [],
+          data: Buffer.from([9, 9]),
+        }),
+      );
+      tx.partialSign(SENDER_KP);
+      motor.responder = () => ({
+        tipo: "completo",
+        transaccionFirmadaBase58: serializar(tx),
+        firmaDePatrocinio: "F",
+        referenceBase58: p.referenceBase58,
+      });
+      const adapter = await adaptadorConMotor(motor);
+      await expect(
+        adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit()),
+      ).rejects.toThrow("deeplink_tx_alterada");
+    });
+
+    it("CASO B: otro `beneficiary` adentro de la ix ⇒ deeplink_tx_alterada", async () => {
+      montarEntorno();
+      const motor = new MotorProgramable();
+      const p = await primeraVuelta(motor);
+      const tx = Transaction.from(bs58.decode(p.transaccionBase58));
+      // El `beneficiary` viaja en los ARGS de la ix `deposit` (posición 0 de las de negocio): se
+      // pisan 32 bytes de su data. Los bytes del mensaje cambian ⇒ el guard tiene que verlo.
+      const deposito = businessIx(tx)[0];
+      if (!deposito) throw new Error("sin ix de deposit");
+      new PublicKey(Keypair.generate().publicKey.toBase58()).toBuffer().copy(deposito.data, 24);
+      tx.partialSign(SENDER_KP);
+      motor.responder = () => ({
+        tipo: "completo",
+        transaccionFirmadaBase58: serializar(tx),
+        firmaDePatrocinio: "F",
+        referenceBase58: p.referenceBase58,
+      });
+      const adapter = await adaptadorConMotor(motor);
+      await expect(
+        adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit()),
+      ).rejects.toThrow("deeplink_tx_alterada");
+    });
+
+    // 🔴 EL CASO QUE UNA COMPARACIÓN DE BYTES SOLA NO VE. Las firmas NO son parte del mensaje, así que
+    // la MISMA transacción con la firma en cero pasa el `serializeMessage()` byte a byte.
+    // MUTANTE QUE MATA: borrar el `nacl.sign.detached.verify` ⇒ este `it` se pone rojo y los otros dos
+    // siguen verdes, que es justo lo que lo hace necesario.
+    it("CASO C: los MISMOS bytes con una firma que no verifica ⇒ deeplink_tx_alterada", async () => {
+      montarEntorno();
+      const motor = new MotorProgramable();
+      const p = await primeraVuelta(motor);
+      const tx = Transaction.from(bs58.decode(p.transaccionBase58));
+      const otro = Keypair.generate();
+      // Firma de OTRA clave, colocada en la posición del sender: hay firma, tiene 64 bytes, y no
+      // verifica.
+      const fake = nacl.sign.detached(new Uint8Array(tx.serializeMessage()), otro.secretKey);
+      tx.addSignature(SENDER_KP.publicKey, Buffer.from(fake));
+      motor.responder = () => ({
+        tipo: "completo",
+        transaccionFirmadaBase58: serializar(tx),
+        firmaDePatrocinio: "F",
+        referenceBase58: p.referenceBase58,
+      });
+      const adapter = await adaptadorConMotor(motor);
+      await expect(
+        adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit()),
+      ).rejects.toThrow("deeplink_tx_alterada");
+    });
+
+    // ──────────────────────────────────────────────────────────────────────────────────────────────
+    // T-062-19 (DT-9) — el blockhash
+    // ──────────────────────────────────────────────────────────────────────────────────────────────
+    //
+    // 🔴 SIN ESTE CHEQUEO EL DESENLACE ES EL PEOR QUE ESTE REPO TIENE CATALOGADO:
+    //   blockhash vencido → `solana_settle_broadcast_failed` → NO está en
+    //   SETTLE_REASONS_BEFORE_BROADCAST → `failAfterBroadcast` pregunta a la cadena → la cuenta no
+    //   existe → `probeDeposit` contesta "unknown" POR DISEÑO → PRINCIPAL_STATE_UNKNOWN → la pantalla
+    //   dice "no sabemos si te cobramos" sobre algo que SÍ sabemos.
+    // MUTANTE QUE MATA: borrar el `isBlockhashValid` ⇒ este `it` deja de tirar, `execute()` llega al
+    // settle y el desenlace pasa a ser "no sabemos si te cobramos".
+    it("T-062-19: con el blockhash vencido corta con deeplink_blockhash_expired y NO devuelve envelope", async () => {
+      montarEntorno();
+      const motor = new MotorProgramable();
+      const p = await primeraVuelta(motor);
+      const tx = Transaction.from(bs58.decode(p.transaccionBase58));
+      tx.partialSign(SENDER_KP);
+      motor.responder = () => ({
+        tipo: "completo",
+        transaccionFirmadaBase58: serializar(tx),
+        firmaDePatrocinio: "F",
+        referenceBase58: p.referenceBase58,
+      });
+      blockhashValidoSpy.mockResolvedValue({ context: { slot: 1 }, value: false });
+      const adapter = await adaptadorConMotor(motor);
+      await expect(
+        adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit()),
+      ).rejects.toThrow("deeplink_blockhash_expired");
+      // 🔴 Y ES POR ESO QUE `execute()` NUNCA LLEGA AL SETTLE: `authorizePrincipal` TIRA, y su único
+      // llamador de producción (`confirm-and-send.ts:428`) NO tiene `try/catch` alrededor. No hay
+      // ninguna transacción viajando, así que "no se movió nada" es un hecho y no una incógnita.
+      expect(blockhashValidoSpy).toHaveBeenCalledTimes(1);
+      expect(Connection.prototype.sendRawTransaction).not.toHaveBeenCalled();
+      expect(Connection.prototype.sendTransaction).not.toHaveBeenCalled();
+    });
+
+    // ⛔ Y NO SE AGREGA AL CAMINO INYECTADO: ahí sería una llamada de red de más antes de cada firma, y
+    // CD-1 lo prohíbe. MUTANTE QUE MATA: mover el `isBlockhashValid` fuera del `if (this.firmaPorEnlace)`.
+    it("el camino INYECTADO no consulta `isBlockhashValid` ni una vez (CD-1)", async () => {
+      montarEntorno();
+      solanaWalletBridge.setState({ publicKey: SENDER_B58, connected: true });
+      const adapter = new SolanaWalletAdapter(); // ← sin colaborador: el camino de siempre
+      await adapter.connect();
+      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      expect(r.estado).toBe("listo");
+      expect(
+        blockhashValidoSpy,
+        "el camino de la billetera inyectada agregó una llamada de red que antes no hacía (CD-1)",
+      ).not.toHaveBeenCalled();
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────────────────────────
+  // T-062-20 (AC-7 / CD-2) — la billetera NUNCA transmite
+  // ──────────────────────────────────────────────────────────────────────────────────────────────
+  it("T-062-20: NINGUNA rama de `authorizePrincipal` referencia sendRawTransaction/sendTransaction/signAndSendTransaction", () => {
+    // Barrido sobre el CÓDIGO, no sobre una corrida: un espía en 0 sólo dice que ESE camino no
+    // transmitió. Esto dice que no hay ninguna rama que pueda.
+    // MUTANTE QUE MATA: agregar cualquiera de las tres dentro del método ⇒ rojo.
+    const fuente = readFileSync(
+      path.resolve(process.cwd(), "src/infrastructure/solana-wallet.ts"),
+      "utf8",
+    );
+    const desde = fuente.indexOf("async authorizePrincipal(");
+    expect(desde, "no se encontró `authorizePrincipal` en el archivo").toBeGreaterThan(0);
+    // El método termina donde arranca el docblock de `probeDeposit`, el siguiente miembro.
+    const hasta = fuente.indexOf("¿Entró el principal al vault", desde);
+    expect(hasta, "no se encontró el final del método").toBeGreaterThan(desde);
+    // 🔴 HAY QUE SACAR LOS COMENTARIOS, y el primer intento de este test no lo hacía: el método tiene
+    // escrito `// AC-3/CD-SDD-1: NUNCA connection.sendRawTransaction / sendTransaction acá.`, o sea
+    // que el barrido crudo daba positivo sobre la línea que PROHÍBE lo que busca. Un guard que se
+    // dispara con su propia advertencia es un guard que alguien termina borrando.
+    // El `(?<!:)` protege los `https://` de cualquier literal.
+    const cuerpo = fuente
+      .slice(desde, hasta)
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(?<!:)\/\/.*$/gm, "");
+    // Y que el barrido no se haya comido el CÓDIGO: si esto falla, el `for` de abajo estaría mirando
+    // una cadena vacía y daría verde sin haber mirado nada.
+    expect(
+      cuerpo.includes("solanaWalletBridge.signTransaction(tx)"),
+      "el barrido borró el código además de los comentarios: estaría dando verde sobre la nada",
+    ).toBe(true);
+    expect(cuerpo.includes("this.firmaPorEnlace")).toBe(true); // y la rama nueva también está adentro
+    for (const prohibida of ["sendRawTransaction", "sendTransaction", "signAndSendTransaction"]) {
+      expect(
+        cuerpo.includes(prohibida),
+        `\`authorizePrincipal\` referencia \`${prohibida}\`. El facilitator es el ÚNICO que transmite ` +
+          "(AC-7/CD-2): una billetera que broadcastea rompe el modelo de patrocinio entero, porque la " +
+          "tx sale sin la firma del feePayer y el rent lo paga quien no debe.",
+      ).toBe(false);
+    }
   });
 });

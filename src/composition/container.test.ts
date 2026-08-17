@@ -693,3 +693,55 @@ describe("createContainer — WKH-354/AC-2: el probe del container lee la billet
     expect(await c.connectedWallet.getConnectedAddress()).toBeNull();
   });
 });
+
+// ── WKH-356 / CD-13 · LA RAMA DE ENLACE NO TIENE ACTIVACIÓN DE PRODUCCIÓN ────────────────────────
+//
+// 🔴 POR QUÉ ESTE `it` EXISTE Y POR QUÉ ES OBLIGATORIO. 062 escribe el motor de firma por enlace
+// profundo entero, pero NO lo cablea: falta la ola 4 (selector de billetera + connect por enlace),
+// que es la que produce el `viaje.direccion`, la `session` y la `claveBilletera` que este motor
+// CONSUME y EXIGE. Sin ese cableado no hay ningún camino de producción que entre a la rama.
+//
+// Escribirlo en un documento no alcanza: la lección `tests-que-registran-el-doble-no-prueban-el-
+// cableado` dice que si nadie MIDE el cableado, alguien va a leer "la HU está hecha" como "el flujo
+// móvil anda". Esto lo mide.
+// ⚠️ CD-15 · MUTANTE CORRIDO (2026-08-17): pasarle al `SolanaWalletAdapter` de `container.ts` un
+// 3er argumento `{ resolver: … }` ⇒ exit=1 y UN solo `it` rojo, el T-062-21. Aguja contada con
+// `== 1`, relectura del disco, restauración verificada byte a byte.
+describe("createContainer — WKH-356/CD-13: la firma por enlace NO está cableada al cerrar 062", () => {
+  it("T-062-21: el `SolanaWalletAdapter` del container se construye SIN colaborador de enlace", () => {
+    const c = createContainer();
+    const wallet = (c.confirmAndSend as unknown as { wallet?: unknown }).wallet;
+    expect(wallet, "el container no cableó ninguna billetera a `ConfirmAndSend`").toBeDefined();
+    const motor = (wallet as unknown as { firmaPorEnlace?: unknown }).firmaPorEnlace;
+    expect(
+      motor,
+      "el container INYECTÓ el motor de firma por enlace. Cablearlo NO enciende el flujo móvil: " +
+        "`getAddress()` sigue leyendo el bridge, que en un móvil sin extensión no tiene nada, así que " +
+        "`authorizePrincipal` tira `wallet_not_connected` ANTES de llegar a la rama. Lo único que " +
+        "cablearlo consigue es BORRAR LA EVIDENCIA de que está apagado. Si esto es intencional, hay " +
+        "que traer la ola 4 (selector + connect por enlace) y actualizar el SDD y los dos README en " +
+        "el mismo cambio.",
+    ).toBeUndefined();
+  });
+
+  // ⛔ Y el candado complementario: que el colaborador ausente signifique EL CAMINO DE HOY, no un
+  // camino degradado. Con `firmaPorEnlace === undefined` la rama entera vive adentro de un `if`, así
+  // que `authorizePrincipal` recorre exactamente el código de antes de esta HU (CD-1).
+  // MUTANTE QUE MATA: invertir el `if (this.firmaPorEnlace)` a `if (!this.firmaPorEnlace)`.
+  it("T-062-21b: y con el colaborador ausente el retorno del camino inyectado sigue siendo `listo`", async () => {
+    solanaWalletBridge.setState({
+      publicKey: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+      connected: true,
+    });
+    const c = createContainer();
+    const wallet = c.confirmAndSend as unknown as {
+      wallet: { authorizePrincipal: (...a: unknown[]) => Promise<unknown> };
+    };
+    // Sin `deposit.escrow` el método tira `escrow_params_missing` en el guard fail-loud PRE-EXISTENTE
+    // (`:562-563`), o sea ANTES de cualquier línea nueva. Que la causa sea ÉSA —y no una del
+    // vocabulario `deeplink_*`— es la prueba de que el camino que corre es el de siempre.
+    await expect(
+      wallet.wallet.authorizePrincipal({ send: { minor: 1 }, expiresAt: "2099-01-01T00:00:00.000Z" }, "rem-1"),
+    ).rejects.toThrow("escrow_params_missing");
+  });
+});

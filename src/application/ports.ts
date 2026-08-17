@@ -501,10 +501,10 @@ export interface WalletPort {
     quote: Quote,
     remittanceId: string,
     deposit?: { address: string; escrow?: SolanaEscrowDeposit }, // escrow? = ADITIVO (Solana, HU-SOL-5)
-  ): Promise<{
-    tx: string; // demo: firma simbólica (AC-5)
-    solana?: SolanaPrincipalAuthorization; // el envelope real (HU-SOL-5)
-  }>;
+  ): Promise<AutorizacionDelPrincipal>;
+  // El retorno son TRES desenlaces y no dos (WKH-356). El `Promise<{ tx, solana? }>` que había acá
+  // sólo sabía escribir "resolvió con esto" y "tiró"; el porqué del tercero —y por qué no es `null`
+  // ni un `boolean`— está en (`AutorizacionDelPrincipal`, `:1184`).
   // WKH-206: firma un mensaje arbitrario con la key de la wallet conectada. Lo usa el PopSigner para
   // probar posesión de `address`. En demo devuelve una firma simbólica (AC-5).
   signMessage(message: string): Promise<string>;
@@ -1040,7 +1040,7 @@ export type EscrowId16 = string;
  *      refutaría: releer la misma PDA un segundo después del `deadline`.
  *  · `"deposited-window-closed"` — lo mismo, con el `deadline` YA PASADO según nuestro reloj
  *      (`nowSec >= deadlineSec`), que es la negación EXACTA del guard con el que el refund de esta app
- *      rechaza por deadline (`refund_before_deadline`, `../infrastructure/solana-wallet.ts:972`). NO
+ *      rechaza por deadline (`refund_before_deadline`, `../infrastructure/solana-wallet.ts:1125`). NO
  *      prueba que el `refund` vaya a entrar: prueba que ESTA app ya no lo rechazaría por deadline.
  *      Que el programa on-chain acepte exactamente lo mismo NO se leyó desde este repo. Y NO dice que
  *      exista un botón para firmar esa devolución: esta capa lee, no abre ninguna puerta.
@@ -1052,11 +1052,11 @@ export type EscrowId16 = string;
  *      distintos sobre la misma remesa.
  *  · `"refunded"`  — la cuenta existe y su `status` es `{ Refunded: {} }`. NO prueba que la cuenta se
  *      haya cerrado: la ix `refund` no cierra nada, el cierre es otra instrucción
- *      (`refund`, `../infrastructure/solana-wallet.ts:1066`).
+ *      (`refund`, `../infrastructure/solana-wallet.ts:1219`).
  *  · `"absent"`    — LA CADENA CONTESTÓ, y en esa PDA no hay cuenta. Es exactamente lo que significa
  *      hoy un `!acc` en los dos bucles que ya batchean cuentas del escrow
  *      (`resolveRemittanceIdFromLedger`, `../infrastructure/solana-wallet.ts:353`) y
- *      (`listCloseable`, `../infrastructure/solana-wallet.ts:1446`). NO dice a dónde fue la plata y NO
+ *      (`listCloseable`, `../infrastructure/solana-wallet.ts:1599`). NO dice a dónde fue la plata y NO
  *      distingue "nunca existió" de "ya se cerró después de resolverse". Ver R-1, acá abajo.
  *  · `"unknown"`   — NO PUDIMOS PREGUNTAR: el RPC falló, venció el techo de tiempo, o la respuesta no
  *      decodifica. No dice absolutamente nada sobre los fondos. NUNCA se colapsa con `"absent"`: uno
@@ -1093,7 +1093,7 @@ export type EscrowId16 = string;
  * llama "qué contestó la cadena" que dependen de algo que la cadena NO contestó. El `status` y el
  * `deadline` los dijo ella; de qué lado del `deadline` caemos lo dice el `Date.now()` del dispositivo,
  * leído dentro de `readEscrowStates`. Esa comparación está escrita DOS VECES en el adapter —ahí y en el
- * guard (`refund_before_deadline`, `../infrastructure/solana-wallet.ts:972`)—, así que PUEDEN DIVERGIR:
+ * guard (`refund_before_deadline`, `../infrastructure/solana-wallet.ts:1125`)—, así que PUEDEN DIVERGIR:
  * lo único que las obliga a decir lo mismo es T-A16, el test que corre LAS DOS sobre el mismo borde.
  *
  * LOS INPUTS QUE LO DEMUESTRAN, y son dos porque el primero que se escribió acá no se sostenía: decía
@@ -1159,3 +1159,28 @@ export interface SolanaEscrowChainStateReader {
     remittanceIds: readonly string[];
   }): Promise<ReadonlyMap<string, EscrowChainState>>;
 }
+
+/**
+ * El desenlace de `authorizePrincipal` (`WalletPort`, `:494`) tiene TRES formas, no dos.
+ *
+ * El tipo que había acá era `Promise<{ tx, solana? }>`: sólo sabía escribir dos cosas, "resolvió
+ * con esto" y "tiró". Firmar por enlace profundo en un celular agrega una tercera que ninguna de
+ * las dos alcanza: para pedir la firma, la pestaña tiene que NAVEGAR a la app de la billetera, y
+ * este proceso de JavaScript deja de existir antes de que la promesa resuelva. Con el tipo viejo
+ * la única forma de escribirla era una promesa que nunca resuelve, o sea no escribirla.
+ *
+ * POR QUÉ NO ES `null`, NI UN `boolean`, NI UN CAMPO OPCIONAL QUE "SIGNIFIQUE" LA VARIANTE. Las
+ * tres colapsan el tercer desenlace en la AUSENCIA de algo, y una ausencia no lleva carga: la
+ * suspensión necesita decir A DÓNDE hay que ir (`irA`) y QUÉ firma se está esperando
+ * (`esperando`), y quien la reciba tiene que quedar obligado por el compilador a mirar las dos.
+ * Mismo criterio, y por la misma razón, que (`RemittanceIdLookup`, `:467`) y
+ * (`SolanaSenderSolBalance`, `:439`).
+ *
+ * `irA` es la URL SALIENTE ya armada por el protocolo de la billetera. Quien la recibe SÓLO
+ * navega: no la parsea, no la reescribe, no le agrega parámetros. `esperando` tiene exactamente
+ * dos valores y NO incluye `"conectar"`: el connect es del `WalletPort.connect()`, que no
+ * suspende dentro de este método.
+ */
+export type AutorizacionDelPrincipal =
+  | { estado: "listo"; tx: string; solana?: SolanaPrincipalAuthorization }
+  | { estado: "hay-que-salir"; irA: string; esperando: "firma-tx" | "firma-patrocinio" };

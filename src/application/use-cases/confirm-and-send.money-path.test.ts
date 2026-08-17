@@ -24,7 +24,7 @@ import {
   QUOTE_EXPIRES,
   T0,
   beneficiary,
-} from "../../test-support/fakes";
+} from "../../test-support/fakes"; import { esperarListo } from "../../test-support/desenlaces"; // WKH-356: narrowing de ResultadoDeEnvio. TIRA si execute() suspende donde el test no lo espera.
 import type { RefundGateway, SolanaPayoutPrepareGateway } from "../ports";
 import type { Beneficiary } from "../../domain/remittance"; // WKH-354/AC-5: el doble de prepare implementa el puerto REAL, así que declara el contrato real
 import { LedgerRefundGateway } from "../../infrastructure/refund/ledger-refund-gateway";
@@ -104,7 +104,7 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
     const submitSpy = vi.spyOn(payouts, "submit");
     const id = await seedQuoted(repo);
 
-    const out = await build(repo, wallet, prepare, gateway, payouts).execute({ remittanceId: id });
+    const out = esperarListo(await build(repo, wallet, prepare, gateway, payouts).execute({ remittanceId: id }));
 
     // prepare resolvió {beneficiary, authority} server-side (una sola llamada).
     expect(prepare.calls).toHaveLength(1);
@@ -126,6 +126,77 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
     expect(out.snapshot.payoutProvenance).toBe("transfi");
     // El submit del payout NO se llama: la release la dispara el facilitator async.
     expect(submitSpy).not.toHaveBeenCalled();
+  });
+
+  // ── T-062-1 (AC-2 / CD-1) ───────────────────────────────────────────────────────────────────────
+  //
+  // 🔴 EL CANDADO DE LA REGRESIÓN BYTE-IDÉNTICA. WKH-356 metió un envoltorio (`{ estado: "listo", … }`)
+  // en el retorno de `authorizePrincipal` y otro (`{ estado: "listo", remesa }`) en el de `execute()`.
+  // Lo ÚNICO que puede cambiar es ese envoltorio: ni un campo del envelope, ni el orden de los guards,
+  // ni lo que llega al settle. Este `it` fija los TRES campos que el use-case saca del envelope y los
+  // cruza contra los que la billetera devolvió, uno por uno.
+  //
+  // ⚠️ QUÉ MIDE Y QUÉ NO. Esto mide que el use-case no perdió ni cambió nada al desenvolver. Que el
+  // ADAPTADOR real siga produciendo los mismos bytes lo mide `solana-wallet.test.ts`, cuyos ~40 `it`
+  // pasaron esta HU **sin que se tocara un solo dato de expectativa** — el control es
+  // `git diff -U0 -- '*.test.ts*' | grep '^[-+].*expect('`, que en W0 devolvió CERO líneas.
+  //
+  // MUTANTE QUE MATA: cambiar cualquiera de los tres campos que el use-case pasa al settle
+  // (`partialSignedTx`, `reference`, `popSignature`), o devolver la `Remittance` sin envolver. Si este
+  // `it` muere por OTRA cosa, el cambio no fue neutral y hay que mirar qué se movió.
+  // ⚠️ CD-15 · MUTANTE CORRIDO (2026-08-17): cambiar `reference: reference.toBase58()` por una
+  // constante en el envelope del adaptador REAL ⇒ exit=1 con 2 `it` rojos, los dos de
+  // `solana-wallet.test.ts` que fijan el envelope. Este `it` NO lo caza (usa un doble), y eso está
+  // dicho arriba: el candado del adaptador es su propia suite, sin datos de expectativa tocados.
+  it("T-062-1/AC-2: el camino inyectado llega a markPrincipalIn + payout_submitted con el envelope INTACTO", async () => {
+    const repo = new InMemoryRepo();
+    // El envelope se declara acá, explícito, para poder cruzarlo campo por campo contra lo que llega
+    // al settle. Un default compartido dejaría el `toBe` comparándose consigo mismo.
+    const envelope = {
+      vm: "solana" as const,
+      partialSignedTx: "QUdJRC1JTllFQ1RBRE8=",
+      // Valores LITERALES y distintos de los defaults del doble a propósito: con los defaults, un
+      // `toBe` contra la constante compartida se compararía consigo mismo y pasaría aunque el
+      // use-case leyera el campo equivocado.
+      reference: "REFERENCE-DEL-INTENTO-062-1",
+      popSignature: "POP-DEL-VIAJE-062-1",
+    };
+    const wallet = new FakeSolanaWallet(envelope);
+    const prepare = new FakeSolanaPayoutPrepareGateway();
+    const gateway = new FakeSolanaSettlementGateway();
+    const id = await seedQuoted(repo);
+
+    const res = await build(repo, wallet, prepare, gateway).execute({ remittanceId: id });
+
+    // 1. El desenlace es `listo` y NO una suspensión: el camino inyectado no suspende nunca.
+    expect(
+      res.estado,
+      "el camino de la billetera inyectada devolvió una suspensión: eso es el camino de enlace " +
+        "profundo, que al cerrar 062 no tiene activación de producción (CD-13)",
+    ).toBe("listo");
+    if (res.estado !== "listo") return;
+    const out = res.remesa;
+
+    // 2. Los TRES campos del envelope llegan al settle SIN cambiar (el `tx` de la unión es el mismo
+    //    `partialSignedTx`, que es el shape base del puerto).
+    expect(gateway.calls).toHaveLength(1);
+    expect(gateway.calls[0]!.partialSignedTx).toBe(envelope.partialSignedTx);
+    expect(gateway.calls[0]!.reference).toBe(envelope.reference);
+    expect(gateway.calls[0]!.popSignature).toBe(envelope.popSignature);
+    expect(gateway.calls[0]!.remittanceId).toBe("r-1");
+
+    // 3. Y el orden de los guards no se movió: el prepare corrió UNA vez y ANTES de la firma.
+    expect(prepare.calls).toHaveLength(1);
+    expect(wallet.authorizeCalls).toHaveLength(1);
+    expect(wallet.authorizeCalls[0]!.deposit?.escrow).toEqual({
+      beneficiary: FAKE_SOLANA_BENEFICIARY,
+      authority: FAKE_SOLANA_AUTHORITY,
+    });
+
+    // 4. El desenlace de siempre: principal_in con la signature verificada + payout_submitted.
+    expect(out.snapshot.principalTx).toBe(FAKE_SOLANA_SIGNATURE);
+    expect(out.status).toBe("payout_submitted");
+    expect(out.snapshot.payoutId).toBe("transfi-sol-po-1");
   });
 
   // Trazabilidad de la plata: la remesa tiene que poder decir QUIÉN dio el beneficiary contra el
@@ -151,12 +222,12 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
     });
     const id = await seedQuoted(repo);
 
-    const out = await build(
+    const out = esperarListo(await build(
       repo,
       new FakeSolanaWallet(),
       prepare,
       new FakeSolanaSettlementGateway(),
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id }));
 
     expect(out.status).toBe("payout_submitted");
     expect(out.snapshot.payoutAgent).toEqual({
@@ -173,12 +244,12 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
     const repo = new InMemoryRepo();
     const id = await seedQuoted(repo);
 
-    const out = await build(
+    const out = esperarListo(await build(
       repo,
       new FakeSolanaWallet(),
       new FakeSolanaPayoutPrepareGateway(),
       new FakeSolanaSettlementGateway(),
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id }));
 
     expect(out.status).toBe("payout_submitted");
     expect(out.snapshot.payoutAgent).toBeNull();
@@ -191,9 +262,9 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
     const gateway = new FakeSolanaSettlementGateway();
     const id = await seedQuoted(repo);
 
-    const out = await build(repo, wallet, prepare, gateway, new FakePayoutGateway()).execute({
+    const out = esperarListo(await build(repo, wallet, prepare, gateway, new FakePayoutGateway()).execute({
       remittanceId: id,
-    });
+    }));
 
     expect(wallet.authorizeCalls).toHaveLength(0); // NUNCA firmó
     expect(gateway.calls).toHaveLength(0); // NUNCA broadcasteó
@@ -209,9 +280,9 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
     const gateway = new FakeSolanaSettlementGateway({ ok: false, reason: "solana_settle_rejected" });
     const id = await seedQuoted(repo);
 
-    const out = await build(repo, wallet, prepare, gateway, new FakePayoutGateway()).execute({
+    const out = esperarListo(await build(repo, wallet, prepare, gateway, new FakePayoutGateway()).execute({
       remittanceId: id,
-    });
+    }));
 
     expect(wallet.authorizeCalls).toHaveLength(1); // firmó (arma la ix deposit)
     expect(gateway.calls).toHaveLength(1); // intentó broadcastear
@@ -227,9 +298,9 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
     const gateway = new FakeSolanaSettlementGateway(undefined, "reject"); // settle() throw
     const id = await seedQuoted(repo);
 
-    const out = await build(repo, wallet, prepare, gateway, new FakePayoutGateway()).execute({
+    const out = esperarListo(await build(repo, wallet, prepare, gateway, new FakePayoutGateway()).execute({
       remittanceId: id,
-    });
+    }));
 
     expect(out.snapshot.principalTx).toBeNull();
     expect(out.status).toBe("refunded");
@@ -247,14 +318,14 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
     const gateway = new FakeSolanaSettlementGateway({ ok: false, reason: "solana_settle_rejected" });
     const id = await seedQuoted(repo);
 
-    const out = await build(
+    const out = esperarListo(await build(
       repo,
       wallet,
       prepare,
       gateway,
       new FakePayoutGateway(),
       new LedgerRefundGateway(), // producción, no fake
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id }));
 
     expect(out.status).toBe("payout_failed");
     expect(out.status).not.toBe("refunded");
@@ -272,9 +343,9 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
     const gateway = new FakeSolanaSettlementGateway();
     const id = await seedQuoted(repo);
 
-    const out = await build(repo, wallet, prepare, gateway, new FakePayoutGateway()).execute({
+    const out = esperarListo(await build(repo, wallet, prepare, gateway, new FakePayoutGateway()).execute({
       remittanceId: id,
-    });
+    }));
 
     expect(gateway.calls).toHaveLength(0); // NUNCA broadcastea sin envelope
     expect(out.snapshot.principalTx).toBeNull();
@@ -310,9 +381,9 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
     const id = await seedQuoted(repo);
     const probe = new FakeSolanaEscrowDepositProbe("not_deposited");
 
-    const out = await afterSettleFailure(repo, probe, throwingGateway()).execute({
+    const out = esperarListo(await afterSettleFailure(repo, probe, throwingGateway()).execute({
       remittanceId: id,
-    });
+    }));
 
     expect(out.snapshot.failureReason).toBe("solana_settle_unavailable");
     expect(out.status).toBe("payout_failed");
@@ -325,9 +396,9 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
     const id = await seedQuoted(repo);
     const probe = new FakeSolanaEscrowDepositProbe("deposited");
 
-    const out = await afterSettleFailure(repo, probe, throwingGateway()).execute({
+    const out = esperarListo(await afterSettleFailure(repo, probe, throwingGateway()).execute({
       remittanceId: id,
-    });
+    }));
 
     expect(out.snapshot.failureReason).toBe(PRINCIPAL_SETTLED_REFUND_MANUAL);
     expect(out.snapshot.failureReason).not.toBe("solana_settle_unavailable");
@@ -345,9 +416,9 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
     const id = await seedQuoted(repo);
     const probe = new FakeSolanaEscrowDepositProbe("unknown");
 
-    const out = await afterSettleFailure(repo, probe, throwingGateway()).execute({
+    const out = esperarListo(await afterSettleFailure(repo, probe, throwingGateway()).execute({
       remittanceId: id,
-    });
+    }));
 
     expect(out.snapshot.failureReason).toBe(PRINCIPAL_STATE_UNKNOWN);
     expect(out.snapshot.failureReason).not.toBe("solana_settle_unavailable"); // ni "no entró"
@@ -361,9 +432,9 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
     const id = await seedQuoted(repo);
     const probe = new FakeSolanaEscrowDepositProbe("not_deposited", "reject"); // lanza
 
-    const out = await afterSettleFailure(repo, probe, throwingGateway()).execute({
+    const out = esperarListo(await afterSettleFailure(repo, probe, throwingGateway()).execute({
       remittanceId: id,
-    });
+    }));
 
     expect(out.snapshot.failureReason).toBe(PRINCIPAL_STATE_UNKNOWN);
   });
@@ -381,7 +452,7 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
       reason: "solana_settle_unavailable",
     });
 
-    const out = await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id });
+    const out = esperarListo(await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id }));
 
     expect(probe.calls).toHaveLength(1);
     expect(out.snapshot.failureReason).toBe(PRINCIPAL_STATE_UNKNOWN);
@@ -396,7 +467,7 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
       reason: "solana_settle_unverified",
     });
 
-    const out = await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id });
+    const out = esperarListo(await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id }));
 
     expect(probe.calls).toHaveLength(1);
     expect(out.snapshot.failureReason).toBe(PRINCIPAL_SETTLED_REFUND_MANUAL);
@@ -411,7 +482,7 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
       reason: "solana_settle_broadcast_failed",
     });
 
-    const out = await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id });
+    const out = esperarListo(await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id }));
 
     expect(probe.calls).toHaveLength(1);
     expect(out.snapshot.failureReason).toBe(PRINCIPAL_SETTLED_REFUND_MANUAL);
@@ -427,7 +498,7 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
       const probe = new FakeSolanaEscrowDepositProbe("deposited"); // aunque dijera que sí
       const gateway = new FakeSolanaSettlementGateway({ ok: false, reason });
 
-      const out = await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id });
+      const out = esperarListo(await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id }));
 
       expect(probe.calls).toHaveLength(0);
       expect(out.snapshot.failureReason).toBe(reason);
@@ -451,7 +522,7 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
       const probe = new FakeSolanaEscrowDepositProbe("deposited"); // aunque dijera que sí
       const gateway = new FakeSolanaSettlementGateway({ ok: false, reason });
 
-      const out = await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id });
+      const out = esperarListo(await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id }));
 
       expect(probe.calls).toHaveLength(0);
       expect(out.snapshot.failureReason).toBe(reason);
@@ -479,7 +550,7 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
       reason: SOLANA_SETTLE_LEDGER_UNAVAILABLE,
     });
 
-    const out = await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id });
+    const out = esperarListo(await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id }));
 
     expect(probe.calls).toHaveLength(0);
     expect(out.snapshot.failureReason).toBe(SOLANA_SETTLE_LEDGER_UNAVAILABLE);
@@ -505,7 +576,7 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
       reason: "solana_settle_unavailable", // el 503 del timeout, POSTERIOR al broadcast
     });
 
-    const out = await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id });
+    const out = esperarListo(await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id }));
 
     // Se le preguntó a la cadena. Con el enum compartido en la lista, esto sería 0.
     expect(probe.calls).toHaveLength(1);
@@ -524,9 +595,9 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
     const id = await seedQuoted(repo);
     const probe = new FakeSolanaEscrowDepositProbe("unknown");
 
-    const out = await afterSettleFailure(repo, probe, throwingGateway()).execute({
+    const out = esperarListo(await afterSettleFailure(repo, probe, throwingGateway()).execute({
       remittanceId: id,
-    });
+    }));
     expect(out.snapshot.failureReason).toBe(PRINCIPAL_STATE_UNKNOWN);
 
     // El sender firma el refund trustless del escrow y la cadena lo confirma.
@@ -555,13 +626,13 @@ describe("ConfirmAndSend — DT-8: sin `solana` inyectado (WKH-320)", () => {
     const refund = new FakeRefundGateway();
     const id = await seedQuoted(repo);
 
-    const out = await new ConfirmAndSend(
+    const out = esperarListo(await new ConfirmAndSend(
       wallet,
       repo,
       new FixedClock(),
       refund,
       // sin 6º arg: flag apagado / envs faltantes
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id }));
 
     // NUNCA 'confirmed' en silencio.
     expect(out.status).toBe("refunded");
@@ -657,7 +728,7 @@ describe("WKH-354/AC-5 · una firma de B NO puede pagar un depósito emitido par
     await kycStore.save(FAKE_SOLANA_BENEFICIARY, passKyc);
     const id = await seedQuoted(repo);
 
-    const out = await build(
+    const out = esperarListo(await build(
       repo,
       wallet,
       prepare,
@@ -669,7 +740,7 @@ describe("WKH-354/AC-5 · una firma de B NO puede pagar un depósito emitido par
       // no-receipt porque `payout_failed` es el estado desde el que la persona todavía puede sacar
       // su plata, que es el que esta HU tiene que preservar.
       new FakeRefundGateway("no-receipt"),
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id }));
 
     // (1) el envío NO avanzó: quedó en el estado del que se puede salir.
     expect(out.snapshot.status).toBe("payout_failed");
@@ -698,14 +769,14 @@ describe("WKH-354/AC-5 · una firma de B NO puede pagar un depósito emitido par
     const gateway = new FakeSolanaSettlementGateway();
     const id = await seedQuoted(repo);
 
-    const out = await build(
+    const out = esperarListo(await build(
       repo,
       wallet,
       prepare,
       gateway,
       new FakePayoutGateway(),
       new FakeRefundGateway("no-receipt"),
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id }));
 
     // El doble NO rechaza siempre: con la misma cuenta contesta ok:true.
     expect(prepare.calls).toEqual([{ address: FAKE_SOLANA_BENEFICIARY }]);

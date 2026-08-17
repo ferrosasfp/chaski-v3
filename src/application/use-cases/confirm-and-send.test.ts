@@ -1,3 +1,17 @@
+// ⚠️ CD-15 · LOS MUTANTES DE ESTE ARCHIVO SE CORRIERON (2026-08-17), no se razonaron. Protocolo:
+// `spawnSync` sin pipes, aguja contada con `== 1`, relectura del disco, y restauración verificada
+// byte a byte al final. ANTES de creerle un veredicto a la batería se corrieron DOS mutantes de
+// calibración de resultado conocido: uno que tenía que MORIR (invertir el guard de sender del motor)
+// dio exit=1, y uno que tenía que VIVIR (una constante sin efecto) dio exit=0.
+//
+// | mutante                                                   | exit | `it` rojos |
+// |---|---|---|
+// | T-062-2(a) BORRAR el guard de reanudación                  | 1 | 3 (incluye T-062-2) |
+// | T-062-2(b) el guard a `if (true)`                          | 1 | 3 (incluye T-062-2) |
+// | T-062-3    el guard a `if (false)`                         | 1 | 6 (incluye T-062-3) |
+// | T-062-4    MOVER el guard 2.5 después de authorizePrincipal| 1 | 3 (incluye T-062-4) |
+// | T-062-5    congelar `nowRecheck` al `updatedAt`            | 1 | 3 (incluye T-062-5) |
+// Los DOS de T-062-2 mueren, que es lo que prueba que el `it` mide la CONDICIÓN y no sólo su efecto.
 // Tests — ConfirmAndSend: los guards que corren ANTES de tocar el money-path.
 //
 // Alcance de este archivo: SÓLO los guards previos (identidad verificada, autoridad de payout,
@@ -22,7 +36,7 @@ import {
   ScriptedClock,
   T0,
   beneficiary,
-} from "../../test-support/fakes";
+} from "../../test-support/fakes"; import { esperarListo } from "../../test-support/desenlaces"; // WKH-356: narrowing de ResultadoDeEnvio. TIRA si execute() suspende donde el test no lo espera.
 import { ConfirmAndSend } from "./confirm-and-send";
 
 const passKyc: KycVerification = {
@@ -82,12 +96,12 @@ describe("ConfirmAndSend — el pre-check de autoridad SE ELIMINÓ (WKH-333/DT-2
     });
     const id = await seedQuoted(repo);
 
-    const out = await new ConfirmAndSend(
+    const out = esperarListo(await new ConfirmAndSend(
       wallet,
       repo,
       new FixedClock(),
       new FakeRefundGateway(),
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id }));
 
     // El doble está construido y NADIE lo tocó: no hay forma de que este use-case llegue a él.
     expect(
@@ -122,12 +136,12 @@ describe("ConfirmAndSend — el pre-check de autoridad SE ELIMINÓ (WKH-333/DT-2
     const forged: KycVerification = { ...passKyc, approved: true, payoutAllowed: true };
     const id = await seedQuoted(repo, forged);
 
-    const out = await new ConfirmAndSend(
+    const out = esperarListo(await new ConfirmAndSend(
       wallet,
       repo,
       new FixedClock(),
       new FakeRefundGateway(),
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id }));
 
     expect(out.snapshot.principalTx).toBeNull();
     expect(
@@ -145,12 +159,12 @@ describe("ConfirmAndSend — el pre-check de autoridad SE ELIMINÓ (WKH-333/DT-2
     const fromServer: KycVerification = { ...passKyc, verificationId: null };
     const id = await seedQuoted(repo, fromServer);
 
-    const out = await new ConfirmAndSend(
+    const out = esperarListo(await new ConfirmAndSend(
       wallet,
       repo,
       new FixedClock(),
       new FakeRefundGateway(),
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id }));
 
     expect(
       out.snapshot.failureReason,
@@ -176,12 +190,12 @@ describe("ConfirmAndSend — sin address de wallet no se le pregunta a la autori
     const authorizeSpy = vi.spyOn(wallet, "authorizePrincipal");
     const id = await seedQuoted(repo);
 
-    const out = await new ConfirmAndSend(
+    const out = esperarListo(await new ConfirmAndSend(
       wallet,
       repo,
       new FixedClock(),
       new FakeRefundGateway(),
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id }));
 
     expect(out.snapshot.failureReason).toBe("wallet_address_unavailable");
     // Lo que este test protege de verdad: que la causa NO se disfrace de la otra.
@@ -200,12 +214,12 @@ describe("ConfirmAndSend — sin address de wallet no se le pregunta a la autori
     const authority = new FakePayoutAuthorityGateway({ authorized: true });
     const id = await seedQuoted(repo);
 
-    const out = await new ConfirmAndSend(
+    const out = esperarListo(await new ConfirmAndSend(
       wallet,
       repo,
       new FixedClock(),
       new FakeRefundGateway(),
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id }));
 
     expect(out.snapshot.failureReason).toBe("wallet_address_unavailable");
     expect(authority.calls).toEqual([]);
@@ -223,12 +237,12 @@ describe("ConfirmAndSend — sin address de wallet no se le pregunta a la autori
     const wallet = new FakeSolanaWallet();
     const id = await seedQuoted(repo);
 
-    const out = await new ConfirmAndSend(
+    const out = esperarListo(await new ConfirmAndSend(
       wallet,
       repo,
       new FixedClock(),
       new FakeRefundGateway(),
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id }));
 
     expect(out.snapshot.failureReason).toBe("settlement_unavailable");
     expect(out.snapshot.failureReason).not.toBe("wallet_address_unavailable");
@@ -244,12 +258,12 @@ describe("ConfirmAndSend — re-check de vigencia del quote (M2/AC-5)", () => {
 
     // 1ª llamada (confirm) = T0 válido; 2ª (re-check) = 18:11 > QUOTE_EXPIRES (18:10).
     const clock = new ScriptedClock([T0, "2026-07-09T18:11:00.000Z"]);
-    const out = await new ConfirmAndSend(
+    const out = esperarListo(await new ConfirmAndSend(
       wallet,
       repo,
       clock,
       new FakeRefundGateway(),
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id }));
 
     expect(out.status).toBe("refunded"); // WKH-186: refund-on-failure; guard de expiry intacto
     expect(out.snapshot.failureReason).toBe("quote_expired_before_submit");
@@ -273,12 +287,12 @@ describe("ConfirmAndSend — refund-on-failure best-effort (WKH-186 AC-7)", () =
     const refund = new FakeRefundGateway("reject");
     const id = await seedQuoted(repo);
 
-    const out = await new ConfirmAndSend(
+    const out = esperarListo(await new ConfirmAndSend(
       new FakeSolanaWallet(),
       repo,
       new FixedClock(),
       refund,
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id }));
 
     expect(out.status).toBe("payout_failed"); // best-effort: NO escala a refunded ni tira
     expect(
@@ -307,6 +321,142 @@ describe("ConfirmAndSend — refund-on-failure best-effort (WKH-186 AC-7)", () =
     expect(refund.calls).toHaveLength(1);
     expect(refund.calls[0]?.amountUsd).toEqual(Money.of(400, "USDC"));
     expect(refund.calls[0]?.remittanceId).toBe("r-1");
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-356 · el guard de reanudación (AC-3) y el re-check de vigencia al reanudar (AC-4)
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ ESCENARIO ES ÉSTE, porque sin él los cuatro tests de abajo parecen paranoia. Firmar por
+// enlace profundo en un celular hace que la pestaña NAVEGUE a la app de la billetera: este proceso de
+// JavaScript deja de existir en el medio de `authorizePrincipal`. Cuando la persona vuelve, `execute()`
+// se invoca DE NUEVO sobre una remesa que la invocación anterior ya dejó persistida en `confirmed`.
+// Sin el guard, esa segunda invocación muere en `r.confirm()` con `invalid_transition:confirmed->
+// confirmed` y la plata queda a mitad de camino, sin ningún botón que la termine de mandar.
+//
+// ⚠️ Lo que estos tests NO prueban: nada sobre un teléfono real. El recorrido móvil completo está
+// [NO VERIFICADO] (CD-12) y lo que se mide acá es el use-case, con dobles, en Node.
+describe("ConfirmAndSend — reanudación tras una suspensión (WKH-356)", () => {
+  /** Una remesa persistida EN `confirmed`: exactamente lo que deja atrás una invocación suspendida. */
+  async function seedConfirmed(repo: InMemoryRepo, confirmAt: string = T0): Promise<string> {
+    const id = await seedQuoted(repo);
+    const r = await repo.get(id);
+    if (!r) throw new Error("seed_confirmed_sin_remesa");
+    r.confirm(confirmAt);
+    await repo.save(r);
+    if (r.status !== "confirmed") throw new Error(`seed_confirmed_dejo_${r.status}`);
+    return id;
+  }
+
+  // ── T-062-2 (AC-3) ──────────────────────────────────────────────────────────────────────────────
+  // MUTANTE QUE MATA — los DOS, y por eso el `it` prueba el guard y no otra cosa:
+  //   (a) borrar el `if` y dejar `r.confirm(...)` suelto ⇒ tira `invalid_transition:confirmed->confirmed`.
+  //   (b) cambiar el `if` a `if (true)` ⇒ tira lo mismo.
+  // Si sólo muriera uno de los dos, el `it` estaría midiendo el efecto y no la condición.
+  it("T-062-2: una remesa YA `confirmed` se re-ejecuta sin `invalid_transition:confirmed->confirmed`", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedConfirmed(repo);
+
+    const out = esperarListo(await new ConfirmAndSend(
+      new FakeSolanaWallet(),
+      repo,
+      new FixedClock(),
+      new FakeRefundGateway(),
+    ).execute({ remittanceId: id }));
+
+    // Llegó hasta el tapón DT-8 (sin `solana` inyectado), o sea que ATRAVESÓ el paso 1 en vez de
+    // morir en él. Ese reason es la prueba de que la reanudación siguió, no el objeto de la prueba.
+    expect(
+      out.snapshot.failureReason,
+      "la reanudación no llegó al tapón DT-8: murió antes, y el único guard entre medio es el del paso 1",
+    ).toBe("settlement_unavailable");
+    expect(out.status).toBe("refunded");
+  });
+
+  // ── T-062-3 (AC-3) ──────────────────────────────────────────────────────────────────────────────
+  // MUTANTE QUE MATA: cambiar el guard a `if (false)` ⇒ la remesa nunca llega a `confirmed` y el
+  // `confirm()` no se llama nunca. Es el candado que impide "arreglar" AC-3 salteando el confirm
+  // SIEMPRE, que dejaría el chequeo de KYC del dominio sin correr en el PRIMER intento.
+  it("T-062-3: en el PRIMER intento (`kyc_passed`) el `confirm()` del dominio SÍ se llama", async () => {
+    const repo = new InMemoryRepo();
+    const id = await seedQuoted(repo);
+    const r0 = await repo.get(id);
+    expect(r0?.status).toBe("kyc_passed"); // precondición explícita: NO arranca en `confirmed`
+
+    const saveSpy = vi.spyOn(repo, "save");
+    const estados: string[] = [];
+    saveSpy.mockImplementation(async function (this: InMemoryRepo, rem) {
+      estados.push(rem.status);
+      return InMemoryRepo.prototype.save.call(this, rem);
+    });
+
+    await new ConfirmAndSend(
+      new FakeSolanaWallet(),
+      repo,
+      new FixedClock(),
+      new FakeRefundGateway(),
+    ).execute({ remittanceId: id });
+
+    expect(
+      estados[0],
+      "el primer `save` del use-case no persistió una remesa `confirmed`: el guard se saltea el " +
+        "`confirm()` también en el primer intento, y ahí sí se pierde el chequeo de KYC del dominio",
+    ).toBe("confirmed");
+  });
+
+  // ── T-062-4 (AC-4) ──────────────────────────────────────────────────────────────────────────────
+  // MUTANTE QUE MATA: mover el guard 2.5 DESPUÉS de `authorizePrincipal` ⇒ el espía cuenta 1 y el
+  // `it` se pone rojo. Es la mitad que importa: fail-closed no es sólo "cortar", es cortar ANTES de
+  // pedir una firma sobre una cotización que ya no vale.
+  it("T-062-4: al reanudar con la cotización VENCIDA corta con `quote_expired_before_submit` y NUNCA pide la firma", async () => {
+    const repo = new InMemoryRepo();
+    const wallet = new FakeSolanaWallet();
+    const authorizeSpy = vi.spyOn(wallet, "authorizePrincipal");
+    const id = await seedConfirmed(repo); // ya `confirmed`: el guard del paso 1 no vuelve a confirmar
+
+    const out = esperarListo(await new ConfirmAndSend(
+      wallet,
+      repo,
+      new ScriptedClock(["2026-07-09T18:11:00.000Z"]), // > QUOTE_EXPIRES (18:10)
+      new FakeRefundGateway(),
+    ).execute({ remittanceId: id }));
+
+    expect(out.snapshot.failureReason).toBe("quote_expired_before_submit");
+    expect(
+      authorizeSpy,
+      "se le pidió una firma a la billetera sobre una cotización vencida: el guard 2.5 corrió tarde",
+    ).not.toHaveBeenCalled();
+    expect(out.snapshot.principalTx).toBeNull();
+  });
+
+  // ── T-062-5 (AC-4) ──────────────────────────────────────────────────────────────────────────────
+  // MUTANTE QUE MATA: `const nowRecheck = s.updatedAt;` en vez de `this.clock.nowIso()`. Con eso el
+  // re-check se evalúa en el instante de la confirmación ORIGINAL —que por construcción era válido,
+  // porque `confirm()` no deja pasar una cotización vencida— y una remesa que estuvo veinte minutos
+  // en la app de la billetera vuelve y firma sobre un precio muerto.
+  it("T-062-5: el re-check usa el reloj de LA REANUDACIÓN, no el de la confirmación original", async () => {
+    const repo = new InMemoryRepo();
+    const wallet = new FakeSolanaWallet();
+    const authorizeSpy = vi.spyOn(wallet, "authorizePrincipal");
+    // La confirmación original ocurrió en T0, con la cotización perfectamente viva.
+    const id = await seedConfirmed(repo, T0);
+    const antes = await repo.get(id);
+    expect(antes?.isQuoteStillValid(T0)).toBe(true); // en T0 la cotización valía: el mutante pasaría
+
+    const out = esperarListo(await new ConfirmAndSend(
+      wallet,
+      repo,
+      new ScriptedClock(["2026-07-09T18:11:00.000Z"]), // la vuelta ocurre DESPUÉS del vencimiento
+      new FakeRefundGateway(),
+    ).execute({ remittanceId: id }));
+
+    expect(
+      out.snapshot.failureReason,
+      "el re-check no miró el reloj de la reanudación: con el instante de la confirmación original " +
+        "toda cotización pasa, porque `confirm()` nunca deja entrar una vencida",
+    ).toBe("quote_expired_before_submit");
+    expect(authorizeSpy).not.toHaveBeenCalled();
   });
 });
 

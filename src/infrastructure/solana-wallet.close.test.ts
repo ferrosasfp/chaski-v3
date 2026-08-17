@@ -432,7 +432,7 @@ describe("SolanaWalletAdapter.closeEscrow (WKH-327)", () => {
 
   it("AC-5: confirmación limpia + la cuenta SIGUE AHÍ ⇒ 'pending', NUNCA 'confirmed' (M4)", async () => {
     // Acá `confirmClose` se aparta de `confirmRefund` a propósito: aquél devuelve "confirmed" apenas la
-    // tx confirma sin error (`confirmRefund`, `solana-wallet.ts:1033`), SIN leer nada. AC-5 exige leer la AUSENCIA. Un
+    // tx confirma sin error (`confirmRefund`, `solana-wallet.ts:1186`), SIN leer nada. AC-5 exige leer la AUSENCIA. Un
     // veredicto `landed` sin `err` prueba que la tx entró; leer la ausencia prueba que hizo lo que
     // queríamos. Este es el único test que separa las dos cosas.
     const REM = "rem-no-cerro";

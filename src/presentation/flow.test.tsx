@@ -817,7 +817,7 @@ function trackContainer(
     kycStore,
     useCases: {
       confirmAndSend: {
-        execute: async () => Remittance.rehydrate(confirmSnapshot),
+        execute: async () => ({ estado: "listo" as const, remesa: Remittance.rehydrate(confirmSnapshot) }), // WKH-356: shape nuevo. El `as unknown as` de abajo saca este doble del alcance de `tsc`, así que con el shape viejo la compilación seguía dando 0 y el fallo aparecía recién en runtime, cuando `flow.tsx` lee `res.estado` sobre un `Remittance` y cae al camino equivocado.
       } as unknown as ConfirmAndSend,
       trackRemittance: {
         execute: async () => Remittance.rehydrate(trackSnapshot),
@@ -916,7 +916,7 @@ describe("WKH-200 poll stop (fake timers)", () => {
       kycStore,
       useCases: {
         confirmAndSend: {
-          execute: async () => Remittance.rehydrate(final),
+          execute: async () => ({ estado: "listo" as const, remesa: Remittance.rehydrate(final) }), // WKH-356: shape nuevo. `tsc` NO lo mira (el cast lo saca de su alcance); esto sólo se cae en runtime.
         } as unknown as ConfirmAndSend,
         trackRemittance: { execute: trackSpy } as unknown as TrackRemittance,
       },
@@ -996,7 +996,7 @@ describe("WKH-200 poll stop (fake timers)", () => {
 
 /** Confirmada y NADA MÁS: `principalTx` sigue en null, o sea que la billetera todavía no firmó
  *  ningún depósito. Es el punto exacto en el que corta el `prepare`
- *  (`failAndRefund`, `../application/use-cases/confirm-and-send.ts:398`, con `"not_deposited"`), o sea que es la única
+ *  (`failAndRefund`, `../application/use-cases/confirm-and-send.ts:425`, con `"not_deposited"`), o sea que es la única
  *  forma que tiene una remesa cuyo `failureReason` es un fallo ANTERIOR a la primera firma. */
 function solanaConfirmedSnapshot(expiresAt: string): RemittanceState {
   const r = Remittance.create("rem-1", beneficiary(), Money.of(400, "USDC"), T0);
@@ -1409,7 +1409,7 @@ describe("los tres casos, dichos con palabras distintas", () => {
   });
 
   // Hallazgo #75 — el rechazo del agente de payout tampoco es un fallo de entrega. El prepare corre
-  // ANTES de authorizePrincipal ((`prepare_unavailable`, `confirm-and-send.ts:394`)), o sea antes de que la wallet firme
+  // ANTES de authorizePrincipal ((`prepare_unavailable`, `confirm-and-send.ts:421`)), o sea antes de que la wallet firme
   // nada: "no se movió ningún USDC" es un hecho que se lee del orden del use-case. Decirlo con las
   // palabras del payout fallido ("si te cobramos, te reembolsamos") deja esperando un reembolso que
   // no existe, por una causa que se arregla re-cotizando.
@@ -3102,4 +3102,77 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     expect(await screen.findByRole("button", { name: /Continuar/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Confirmar y enviar/ })).toBeNull();
   });
+});
+
+// ── WKH-356 / AC-1 · T-062-22 — la suspensión en la pantalla ──────────────────────────────────────
+//
+// 🔴 QUÉ ESCENARIO ES. Firmar por enlace profundo en un celular hace que la pestaña NAVEGUE a la app
+// de la billetera. `execute()` no puede resolver con una remesa —no hay ninguna todavía— ni tirar: el
+// tercer desenlace es `{ estado: "hay-que-salir", irA, esperando }`, y lo único que la pantalla tiene
+// que hacer con él es NAVEGAR.
+//
+// ⚠️ MUTANTE QUE MATA: ignorar la variante y caer al camino normal ⇒ la pantalla avanza a `track` y le
+// dice a la persona que su plata está en camino SIN QUE SE HAYA FIRMADO NADA. Es el peor desenlace
+// posible de este cambio, y el `as unknown as ConfirmAndSend` del doble saca el shape del alcance de
+// `tsc`, así que el compilador no lo iba a atajar.
+//
+// ⚠️ [NO VERIFICADO] (CD-12) — esto corre en jsdom con un `location` de mentira. Que un teléfono real
+// navegue a un enlace `phantom.app/ul/v1/...` y vuelva al mismo origen no lo mide este archivo.
+// ⚠️ CD-15 · MUTANTE CORRIDO (2026-08-17): borrar de `flow.tsx` la línea
+// `if (res.estado === "hay-que-salir") { window.location.href = res.irA; return; }` ⇒ exit=1 y UN
+// solo `it` rojo, éste. Restauración verificada byte a byte.
+it("T-062-22/AC-1: con `hay-que-salir` la pantalla NAVEGA a `irA` y no toca el estado de la remesa", async () => {
+  const IR_A = "https://phantom.app/ul/v1/signTransaction?payload=abc&nonce=def";
+  const container = buildTestContainer({
+    kycStore: await seededKycStore(),
+    useCases: {
+      confirmAndSend: {
+        // El doble devuelve la SUSPENSIÓN. Sin el narrowing de `flow.tsx`, `res.remesa` es `undefined`
+        // y `res.remesa.snapshot` revienta — o, peor, con el shape viejo la pantalla avanzaría.
+        execute: async () => ({ estado: "hay-que-salir" as const, irA: IR_A, esperando: "firma-tx" as const }),
+      } as unknown as ConfirmAndSend,
+    },
+  });
+  render(<RemittanceFlow container={container} />);
+  await goToConfirmViaKycOnce();
+
+  // jsdom marca `location.href` como no asignable de verdad (navega); se reemplaza el objeto entero.
+  const originalLocation = window.location;
+  const asignado: string[] = [];
+  Object.defineProperty(window, "location", {
+    configurable: true,
+    value: {
+      ...originalLocation,
+      get href() {
+        return originalLocation.href;
+      },
+      set href(v: string) {
+        asignado.push(v);
+      },
+    },
+  });
+
+  try {
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
+    });
+
+    // 1. Navegó, y a la URL TAL CUAL vino: no se parsea, no se reescribe, no se le agregan parámetros.
+    expect(
+      asignado,
+      "la pantalla no navegó a la URL de la billetera: la persona se queda mirando el botón mientras " +
+        "el use-case ya dejó la remesa lista para reanudar",
+    ).toEqual([IR_A]);
+
+    // 2. Y NO avanzó a `track`: sigue en confirm. Este es el assert que mata el mutante — sin él, una
+    //    pantalla que navega Y además avanza pasaría el punto 1.
+    expect(
+      screen.getByRole("button", { name: /Confirmar y enviar/ }),
+      "la pantalla avanzó de `confirm` sin que se haya firmado nada",
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/en camino/)).toBeNull();
+    expect(screen.queryByText(/No se pudo entregar/)).toBeNull();
+  } finally {
+    Object.defineProperty(window, "location", { configurable: true, value: originalLocation });
+  }
 });

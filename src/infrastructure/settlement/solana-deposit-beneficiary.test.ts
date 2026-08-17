@@ -14,7 +14,7 @@ import type { Quote } from "../../domain/remittance";
 import { SolanaWalletAdapter } from "../solana-wallet";
 import { solanaWalletBridge } from "../solana-wallet-bridge";
 import { escrowIdl } from "../solana/escrow-idl";
-import { readDepositBeneficiary } from "./solana-deposit-beneficiary";
+import { readDepositBeneficiary } from "./solana-deposit-beneficiary"; import { esperarAutorizacionLista } from "../../test-support/desenlaces"; // WKH-356: narrowing de AutorizacionDelPrincipal. TIRA si el adaptador suspende donde el test no lo espera.
 
 const MINT_B58 = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 const SENDER_KP = Keypair.generate();
@@ -51,10 +51,10 @@ async function realDepositTx(beneficiary: string): Promise<string> {
   );
   const adapter = new SolanaWalletAdapter();
   await adapter.connect();
-  const res = await adapter.authorizePrincipal(quote(), "rem-read-1", {
+  const res = esperarAutorizacionLista(await adapter.authorizePrincipal(quote(), "rem-read-1", {
     address: "unused",
     escrow: { beneficiary, authority: AUTHORITY_B58 },
-  });
+  }));
   const b64 = res.solana?.partialSignedTx;
   if (!b64) throw new Error("no_partial_signed_tx");
   return b64;

@@ -488,9 +488,9 @@ export function RemittanceFlow({ container }: { container?: Container } = {}) {
         }
         if (!mismaCuenta) throw new Error("wallet_account_changed");
       }
-      const r = await c.confirmAndSend.execute({ remittanceId: rem.id });
-      setRem(r.snapshot);
-      setStep(r.status === "settled" ? "done" : "track");
+      const res = await c.confirmAndSend.execute({ remittanceId: rem.id }); // WKH-356: TRES desenlaces
+      if (res.estado === "hay-que-salir") { window.location.href = res.irA; return; } // AC-1 — SÓLO navegar, igual que el redirect a Didit de `:428-432`. La URL ya viene armada por el protocolo de la billetera: acá NO se parsea, NO se reescribe, NO se le agrega ningún parámetro. La remesa quedó persistida en `confirmed`, que es el estado que la reanudación vuelve re-ejecutable (AC-3). ⛔ Δ0 OBLIGATORIO en estas tres líneas: hay 41 destinos de línea de este archivo citados por número más abajo, y una línea de más los rota a todos en silencio
+      setRem(res.remesa.snapshot); setStep(res.remesa.status === "settled" ? "done" : "track");
     });
 
   // MNR-1 (AR): si el quote venció en review, re-cotizar sin dead-end.
@@ -1541,7 +1541,7 @@ export function TrackView({
   //
   // Se elige TAPAR EL BOTÓN y no suavizar el copy, porque de las dos afirmaciones la del copy es la
   // que se puede sostener: el prepare corre ANTES de `authorizePrincipal`
-  // (`failAndRefund`, `../application/use-cases/confirm-and-send.ts:398`, con `"not_deposited"`), o sea antes de que la
+  // (`failAndRefund`, `../application/use-cases/confirm-and-send.ts:425`, con `"not_deposited"`), o sea antes de que la
   // billetera firme nada. Suavizarla a la forma condicional de la familia de `payout_failed` ("si tus
   // USDC entraron al escrow…") cambiaría un hecho verificable por una duda inventada, que es
   // exactamente el defecto que esta HU vino a sacar de la pantalla.
@@ -1651,7 +1651,7 @@ export function TrackView({
     // una causa que se arregla cargando unos centavos de SOL.
     const senderSolMissing = rem.failureReason === SOLANA_SENDER_SOL_INSUFFICIENT;
     // Y el tercero que tampoco es un fallo de entrega: el agente de payout RECHAZÓ crear la orden.
-    // El prepare corre antes de `authorizePrincipal` ((`prepare_unavailable`, `confirm-and-send.ts:394`)), o sea antes de
+    // El prepare corre antes de `authorizePrincipal` ((`prepare_unavailable`, `confirm-and-send.ts:421`)), o sea antes de
     // que la wallet firme nada, así que "no se movió ningún USDC" es un hecho que se lee del orden
     // del use-case, no una promesa. Decirlo con las palabras de un payout fallido ("si te cobramos,
     // te reembolsamos") deja esperando un reembolso que no existe.
@@ -2756,7 +2756,7 @@ function AgentPlanCard() {
      *   (`resolveValueDeliveryAdapter`, `container.ts:114`);
      * · en la ENTREGA, `"demo"` = el settle Solana está apagado (`solanaSettleOn`,
      *   `container.ts:141`), y ahí no hay simulador: el envío FALLA CERRADO antes de intentar nada
-     *   (`this.solana`, `../application/use-cases/confirm-and-send.ts:336` ⇒ `settlement_unavailable`).
+     *   (`this.solana`, `../application/use-cases/confirm-and-send.ts:363` ⇒ `settlement_unavailable`).
      *   La frase renderizada para `"demo"` dice *"lo simula"*: en este leg es imprecisa, y es un
      *   residual declarado (H1 de WKH-336) porque corregirla exige un TERCER valor de este campo.
      * En los dos casos afirmar "corre por el gateway" sería falso, que es para lo que existe el campo.
@@ -2979,14 +2979,14 @@ function AgentUnavailable({
  * (`withPrice`, `../../app/api/a2a/plan/route.ts:294`) y por lo tanto cubre a las DOS patas cuando las
  * dos publican precio. En el cuadrante `adapter="a2a-gateway"` + settle apagado, parte de ese número es
  * el fee de un paso que no se va a ejecutar: el envío falla cerrado antes de intentarlo (`this.solana`,
- * `../application/use-cases/confirm-and-send.ts:336`). La salida es atribución POR PATA, en modo
+ * `../application/use-cases/confirm-and-send.ts:363`). La salida es atribución POR PATA, en modo
  * *"sólo se afirma lo que la pata garantiza"*: son tres notas, y la del cuadrante con las DOS banderas
  * encendidas —los dos legs por el gateway— no cambió una letra, porque ahí *"ese fee"* es cierto y
  * acotarla perdería información verificable.
  *
  * ⚠️ Y DE LA ENTREGA, LA NOTA ACOTADA NO DICE NADA. A PROPÓSITO, Y NO SE "COMPLETA". Lo natural sería
  * agregar *"y el fee de la entrega no lo paga nadie, porque ese paso no corre"*. Es verdad
- * (`this.solana`, `../application/use-cases/confirm-and-send.ts:336`) y está PROHIBIDO escribirlo: en
+ * (`this.solana`, `../application/use-cases/confirm-and-send.ts:363`) y está PROHIBIDO escribirlo: en
  * ese mismo cuadrante, tres renglones más arriba en la MISMA tarjeta, la fila de la entrega dice
  * *"esta app está en modo demo y lo simula"* (`simula`, `flow.tsx:3155`). Ese *"lo simula"* es impreciso
  * —con el settle apagado la entrega no se simula, se corta— pero es **H1 de WKH-336**, residual de otra
@@ -3138,7 +3138,7 @@ const AGENT_PRICE_NOTE_GATEWAY_SOLO_FX =
  *   IGUALES para los dos pasos, y la de `demo` dice *"lo simula"*. Para la cotización es exacto. Para la
  *   ENTREGA es impreciso al revés de lo que se leería: con el settle apagado la entrega no se simula, no
  *   corre — `ConfirmAndSend` falla cerrado antes de intentar nada (`this.solana`,
- *   `../application/use-cases/confirm-and-send.ts:336` ⇒ `settlement_unavailable`). No se corrige acá
+ *   `../application/use-cases/confirm-and-send.ts:363` ⇒ `settlement_unavailable`). No se corrige acá
  *   porque exige un TERCER valor de `transport` con su propia frase, y hoy los dos strings de abajo están
  *   asserteados literalmente en tres sitios: cambiarlos a medias pone rojos tests ajenos.
  */

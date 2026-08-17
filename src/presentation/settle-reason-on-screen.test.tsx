@@ -46,7 +46,7 @@ import {
   QUOTE_EXPIRES,
   T0,
   beneficiary,
-} from "../test-support/fakes";
+} from "../test-support/fakes"; import { esperarListo } from "../test-support/desenlaces"; // WKH-356: narrowing de ResultadoDeEnvio. TIRA si execute() suspende donde el test no lo espera.
 import { escrowFundsKnowledge, escrowKnowledgeCopy } from "./flow-vm";
 import { TrackView } from "./flow";
 
@@ -87,7 +87,7 @@ async function runSettleFailure(
   await repo.save(r);
 
   const probe = new FakeSolanaEscrowDepositProbe(chainSays);
-  const out = await new ConfirmAndSend(
+  const out = esperarListo(await new ConfirmAndSend(
     new FakeSolanaWallet(),
     repo,
     new FixedClock(),
@@ -98,7 +98,7 @@ async function runSettleFailure(
       probe,
       senderBalance: new FakeSolanaSenderSolBalanceProbe(),
     },
-  ).execute({ remittanceId: "rem-1" });
+  ).execute({ remittanceId: "rem-1" }));
 
   return { snapshot: out.snapshot, probeCalls: probe.calls.length };
 }

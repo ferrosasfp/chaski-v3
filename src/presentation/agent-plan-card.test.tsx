@@ -29,7 +29,7 @@
 //   · ENTREGA: lo decide el settle, no el adapter (`solanaSettleOn`, `container.ts:141`). Con el settle
 //     en `"true"` se paga contra la Agent Key aunque el adapter esté en `"fallback"`; con el settle
 //     apagado no lo paga nadie, porque el envío no corre: falla cerrado (`this.solana`,
-//     `../application/use-cases/confirm-and-send.ts:336`).
+//     `../application/use-cases/confirm-and-send.ts:363`).
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
@@ -274,7 +274,7 @@ describe("el precio dice qué es y quién lo cobraría", () => {
     expect(screen.getByText(LO_PAGA_CHASKI)).toBeInTheDocument();
     // Y la fila de la ENTREGA sigue diciendo lo suyo: la nota de precio no borra el transporte por paso.
     // ⚠️ Esta línea asserta el STRING QUE HOY SE RENDERIZA, no que la entrega se simule: con el settle
-    // apagado no se simula, se corta (`this.solana`, `../application/use-cases/confirm-and-send.ts:336`).
+    // apagado no se simula, se corta (`this.solana`, `../application/use-cases/confirm-and-send.ts:363`).
     // Esa imprecisión es H1 de WKH-336, declarada y no corregida porque exige un tercer `transport`.
     expect(screen.getByText(/esta app está en modo demo y lo simula/)).toBeInTheDocument();
   });
@@ -351,7 +351,7 @@ describe("el precio dice qué es y quién lo cobraría", () => {
   // Chaski. En el cuadrante
   // `adapter="a2a-gateway"` + settle apagado la mitad de ese número es el fee de un paso que no se va a
   // ejecutar: el envío falla cerrado antes de intentarlo (`this.solana`,
-  // `../application/use-cases/confirm-and-send.ts:336`). Ahora la nota se acota NOMBRANDO la pata de la
+  // `../application/use-cases/confirm-and-send.ts:363`). Ahora la nota se acota NOMBRANDO la pata de la
   // cotización, y de la entrega no dice nada.
   //
   // ⚠️ DE LA ENTREGA NO DICE NADA A PROPÓSITO, Y NO ES UN OLVIDO. Decir *"la entrega no corre"* sería

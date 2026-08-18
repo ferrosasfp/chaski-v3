@@ -259,7 +259,7 @@ describe("T-065-2 / T-065-5: la vuelta `?dl=conectar` completa el viaje", () => 
 //
 // MUTANTE QUE MATA: en `sesion.ts`, invertir la comparación del ancla `claveBilletera` (el `if` del
 // bloque `claveEnLaUrl`) ⇒ un segundo connect de OTRA clave pisa el ancla y este `it` se pone rojo.
-// (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit, `it` rojos y el árbol de los 54, y se re-corre con `node scripts/mutacion/bateria-065.mjs`.)
+// (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit, `it` rojos y el árbol de los 56, y se re-corre con `node scripts/mutacion/bateria-065.mjs`.)
 describe("T-065-3: un connect forjado TARDÍO no puede pisar el ancla", () => {
   it("otra clave después del connect bueno sale `corte` y NO cambia la dirección", () => {
     const a = almacenFalso();
@@ -566,7 +566,7 @@ describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
   });
 
   // MUTANTE QUE MATA: en `conexion.ts`, en la rama del nonce, borrar la comparación del
-  // `mensajeBase64` contra el ancla. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit, `it` rojos y el árbol de los 54, y se re-corre con `node scripts/mutacion/bateria-065.mjs`.)
+  // `mensajeBase64` contra el ancla. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit, `it` rojos y el árbol de los 56, y se re-corre con `node scripts/mutacion/bateria-065.mjs`.)
   it("T-065-15: con OTRA transacción bien cifrada, corta y NO la devuelve", () => {
     const a = almacenFalso();
     const propia = transaccion(Keypair.generate());
@@ -752,7 +752,7 @@ describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
 //
 // ══ CÓMO SE RE-CORRE, Y ESTO ES LO QUE FALTABA (fix-pack · CR/BLQ-BAJO-3) ══════════════════════════
 //
-//     node scripts/mutacion/bateria-065.mjs           # los 54, ≈20 s cada uno
+//     node scripts/mutacion/bateria-065.mjs           # los 56, ≈20 s cada uno
 //     node scripts/mutacion/bateria-065.mjs --dry     # sólo verifica que cada aguja exista 1 vez
 //     node scripts/mutacion/bateria-065.mjs --solo T-065-15
 //
@@ -761,27 +761,46 @@ describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
 // de re-correrla se había ido con la sesión que la escribió. Encima el «sha» decía *"`8ef2409` más tres
 // `it`"*, que no es un árbol direccionable, tres filas se llamaban `(mío)` (sin id, o sea no citables) y
 // `SW-BASE58` se citaba desde `solana-wallet.test.ts` como un id que la tabla no tenía. Una medición que
-// no se puede repetir no es una medición: es una declaración. El harness y la especificación de los 54
+// no se puede repetir no es una medición: es una declaración. El harness y la especificación de los 56
 // están COMMITEADOS en `scripts/mutacion/`, cada fila tiene id único, y el sha es un sha.
 //
-// 🔴 CUÁNDO SE MIDIÓ, Y ESTO ES LO QUE ENVEJECE: sobre el árbol **`012e26c`**, con la suite en
-// `Tests 2687 passed (2687)` / `Test Files 143 passed (143)` y exit 0 ANTES de mutar nada (el harness
-// exige las dos cosas: árbol limpio y base verde, y aborta si no).
-// ⚠️ QUÉ HAY ENTRE `012e26c` Y EL COMMIT QUE TRAE ESTA TABLA, dicho con un criterio y no con un número
+// 🔴 CUÁNDO SE MIDIÓ, Y ESTO ES LO QUE ENVEJECE: sobre el árbol **`b4f7e6d`**, con la suite en
+// `Tests 2689 passed (2689)` / `Test Files 143 passed (143)` y exit 0 ANTES de mutar nada (el harness
+// exige las dos cosas: árbol limpio y base verde, y aborta si no). ⚠️ EL RE-AR it2 OBLIGÓ A RE-CORRERLA
+// ENTERA, y no por prolijidad: sumó dos `it` (`T-065-22` / `T-065-22b`), y un conteo de `it` rojos es una
+// propiedad del árbol. Resultado de esa corrida: **54 mueren, 2 viven** —`CALIBRACION-VIVE`, que TIENE que
+// vivir, y `T-065-11b-a`—, y **55 de las 56 filas reproducen exit + rojos + veredicto exactos** contra la
+// tabla anterior. La única que difiere es `T-065-COPY-2`, que trae +1, y ese +1 **no es cobertura**: es el
+// flake de `bienvenida-composicion.test.tsx › cada renglón anuncia un tramo…`, un archivo que esta HU no
+// toca. Está sensible a CARGA y el re-AR lo reprodujo por mecanismo (sin carga 0 de 12; con 24 workers
+// ocupados 5 de 6; en `7db4508`, antes de que esta HU existiera, 6 de 6), o sea que es PRE-EXISTENTE y
+// AJENO. ⛔ Se deja el 2 que la corrida dio, con el motivo escrito al lado, en vez de publicar el 1 que
+// «debería» ser: la tabla es la salida de una corrida, no una corrección a mano.
+// ⚠️ Y LA PRIMERA CORRIDA DE ESTE MISMO ÁRBOL SE DESCARTÓ POR LO MISMO, dicho para que se entienda el
+// costo: el flake cayó adentro de `CALIBRACION-VIVE` y la mitad del instrumento que TIENE que sobrevivir
+// reportó un KILL FALSO. Si la calibración no da `VIVE`, la corrida entera no vale.
+// ⚠️ QUÉ HAY ENTRE `b4f7e6d` Y EL COMMIT QUE TRAE ESTA TABLA, dicho con un criterio y no con un número
 // (la 1ª versión de este renglón decía «el ÚNICO diff es este bloque», que era falso, y la 2ª decía «más
-// 8 archivos de test», que envejeció al commit siguiente): hay ESTE bloque **más ediciones de COMENTARIO**
-// —los punteros que decían «los 47», «el reporte de F3» y «el `Record` con las once»—, y **ninguna toca
-// código ejecutable**. Eso está MEDIDO y no razonado: la suite sigue en `143 archivos / 2687 tests` con
-// exit 0 después de todas. Un comentario no puede mover un conteo de `it`; lo que sí puede mover son
-// citas por número, y de eso se ocupa `citas-ancladas.test.ts`, que también está verde.
-// ⇒ SI ALGUIEN DUDA, EL CONTROL ES DE UNA LÍNEA: `git diff 012e26c..HEAD -- src app`, y lo que hay que
-// mirar es **cuántas líneas `+`/`-` NO arrancan con `//`: son 2**. ⛔ El total de líneas del diff NO se
+// 8 archivos de test», que envejeció al commit siguiente): hay ESTE bloque y **nada más**, o sea puras
+// líneas de COMENTARIO, **ninguna de ellas código ejecutable**. Eso está MEDIDO y no razonado: la suite
+// sigue en `143 archivos / 2689 tests` con exit 0 después de todas. Un comentario no puede mover un
+// conteo de `it`; lo que sí puede mover son citas por número, y de eso se ocupa `citas-ancladas.test.ts`,
+// que también está verde.
+// ⇒ SI ALGUIEN DUDA, EL CONTROL ES DE UNA LÍNEA: `git diff b4f7e6d..HEAD -- src app`, y lo que hay que
+// mirar es **cuántas líneas `+`/`-` NO arrancan con `//`: son 2, y las 2 son COMENTARIO IGUAL**. 🔴 ESE
+// «2» ES LA LECCIÓN Y NO UN RESIDUO: las dos son el MISMO renglón, `:569`, donde cambió «el árbol de los
+// 54» por «los 56», y no las ve el barrido porque el comentario está INDENTADO (`  //`) en vez de arrancar
+// la línea. O sea que este control tiene el mismo agujero que `citas-ancladas.test.ts` ya midió y cerró en
+// su escáner. El criterio que sí vale, medido con `node` y no con un pipe: **líneas `+`/`-` que no son
+// comentario, 0**. ⛔ Y NO SE MIDE REDIRIGIENDO LA SALIDA (`git diff … > archivo`): en este entorno esa
+// redirección se come contenido en silencio y el mismo conteo dio 0 sobre el archivo truncado. ⛔ El total de líneas del diff NO se
 // escribe acá y ya se intentó: puse "261" y al commitear ESE MISMO renglón pasó a 267, porque el renglón
 // es parte del diff que mide. Un número que se auto-incluye no se puede escribir; el "2" sí, porque es
-// invariante ante agregar comentarios. Esas 2 son el MISMO renglón
-// (`flow.tsx:162`) antes y después, y lo que cambió ahí es el comentario que va PEGADO al final de una
-// línea de código — que es la técnica línea-neutra de este repo, así que un barrido por «la línea arranca
-// con `//`» no puede verlas. No hace falta creerle a este renglón: el comando está arriba. Un conteo de `it` rojos es una propiedad del ÁRBOL y no del mutante: cualquier `it` nuevo
+// invariante ante agregar comentarios. ⚠️ EN LA TABLA ANTERIOR ESE INVARIANTE DABA 2, y las 2 eran el
+// MISMO renglón (`flow.tsx:162`) antes y después: lo que había cambiado ahí es el comentario que va
+// PEGADO al final de una línea de código, que es la técnica línea-neutra de este repo y por eso un
+// barrido por «la línea arranca con `//`» no puede verlas. Acá da 0 porque este commit no toca ninguna
+// línea de código. No hace falta creerle a este renglón: el comando está arriba. Un conteo de `it` rojos es una propiedad del ÁRBOL y no del mutante: cualquier `it` nuevo
 // lo mueve. ⛔ No se hereda, se re-corre.
 //
 // EL PROTOCOLO, ENTERO Y **VERIFICADO POR EL HARNESS** en vez de declarado acá (cada regla está escrita
@@ -791,7 +810,7 @@ describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
 // COMPLETA con `NO_COLOR=1 FORCE_COLOR=0`, por `spawnSync` y **SIN PIPES** (el exit sale de `status`) ·
 // el conteo leído de la línea `Tests N failed` y **nunca** contando `×` · restauración verificada por
 // `md5` **y** por `git status --short` completo después de CADA mutante, con ABORTO si no vuelve.
-// **Los 54: md5 restaurado OK y `git status` sin residuos.**
+// **Los 56: md5 restaurado OK y `git status` sin residuos.**
 //
 // ── CÓMO SE LEE LA COLUMNA «`it` QUE MUERE», que es la que CD-23(3) exige y la tabla vieja no tenía ──
 //
@@ -854,12 +873,14 @@ describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
 // | T-065-15          | conexion.ts · borrar la comparación de bytes contra el ancla en la vuelta del nonce                                                                                                                                                                                                             | exit=1 |  1 | conexion.test.ts › T-065-15: con OTRA transacción bien cifrada, corta y NO la devuelve                                                                         | muere |
 // | T-065-16          | conexion.ts · dejar de escribir el flag `consumido` del paso del nonce (anti-replay)                                                                                                                                                                                                            | exit=1 |  1 | conexion.test.ts › T-065-16: la MISMA URL una segunda vez NO vuelve a devolver la transacción                                                                  | muere |
 // | T-065-16b         | conexion.ts · devolver `DEEPLINK_VIAJE_VENCIDO` en la rama `consumido === true` (el copy que NIEGA la firma que la billetera sí dio)                                                                                                                                                            | exit=1 |  1 | conexion.test.ts › T-065-16: la MISMA URL una segunda vez NO vuelve a devolver la transacción                                                                  | muere |
+// | T-065-22          | conexion.ts · `vueltaDelNonce`: devolver `DEEPLINK_VIAJE_VENCIDO` en la rama `lectura.tipo !== "hay"` (la salida del viaje vencido, la ALCANZABLE con el ancla viva)                                                                                 | exit=1 |  1 | conexion.test.ts › T-065-22: el ancla viva y el viaje vencido cortan con deeplink_nonce_sin_contexto, no con el copy que niega la firma                        | muere |
+// | T-065-22b         | conexion.ts · `vueltaDelNonce`: devolver `DEEPLINK_VIAJE_VENCIDO` en la rama `ancla === null`                                                                                                                                                                   | exit=1 |  1 | conexion.test.ts › T-065-22b: la vuelta SIN ancla del paso corta con la misma causa post-vuelta                                                                | muere |
 // | T-065-17          | preparacion-por-enlace.ts · que el resultado del broadcast decida en vez de la relectura de la cadena                                                                                                                                                                                           | exit=1 |  2 | preparacion-por-enlace.test.ts › el RPC aceptó la tx y la cuenta TODAVÍA no está ⇒ `nonce-en-vuelo`, NUNCA `nonce-listo` (+1)                                  | muere |
 // | T-065-17b         | preparacion-por-enlace.ts · cambiar la causa del corte del broadcast por otra del vocabulario                                                                                                                                                                                                   | exit=1 |  1 | preparacion-por-enlace.test.ts › el broadcast falla y la cuenta no está ⇒ corte `deeplink_nonce_no_entro`, con reintento posible                               | muere |
 // | T-065-19          | solana-wallet.ts · volver FAIL-CLOSED el guard de saldo del enlace (`unknown` deja de dejar pasar)                                                                                                                                                                                              | exit=1 |  1 | solana-wallet.test.ts › ★ T-27: saldo `unknown` (el RPC no contesta) ⇒ FAIL-OPEN, el flujo SIGUE                                                               | muere |
 // | T-065-6           | firma-por-enlace.ts · restaurar la promesa vieja del `case "conectado"` («pasa a ser alcanzable»)                                                                                                                                                                                               | exit=1 |  1 | deeplink-callers.test.ts › T-065-6: el docblock del `case "conectado"` del motor ya NO promete que la rama se vuelve alcanzable                                | muere |
 // | T-065-COPY-1      | firma-por-enlace.ts + flow-vm.ts · una causa nueva cuyo «copy» es SÓLO un comentario (el mutante del CR, re-corrido)                                                                                                                                                                            | exit=1 |  2 | deeplink-callers.test.ts › TODAS las causas derivadas tienen copy PROPIO (no basta con que el texto aparezca en un comentario) ⚠️+citas                        | muere |
-// | T-065-COPY-2      | flow-vm.ts · colapsar dos de los tres pares del mensaje al MISMO texto                                                                                                                                                                                                                          | exit=1 |  1 | deeplink-callers.test.ts › T-065-COPY-2: los tres pares del mensaje son textos DISTINTOS entre sí                                                              | muere |
+// | T-065-COPY-2      | flow-vm.ts · colapsar dos de los tres pares del mensaje al MISMO texto                                                                                                                                                                                                                          | exit=1 |  2 | deeplink-callers.test.ts › T-065-COPY-2: los tres pares del mensaje son textos DISTINTOS entre sí                                                              | muere |
 // | T-065-COPY-3      | flow-vm.ts · meter «se debitó» en una de las causas del `Record`                                                                                                                                                                                                                                | exit=1 |  1 | flow-vm.test.ts › T-065-COPY-3: NINGÚN copy afirma que se movió plata, y ninguno tiene em dashes                                                               | muere |
 // | T-065-COPY-4      | flow-vm.ts · mover el lookup EXACTO del `Record` al final de `humanError`, después de la cadena de `includes` (DT-8)                                                                                                                                                                            | exit=1 |  1 | flow-vm.test.ts › T-065-COPY-4: el lookup exacto corre ANTES de la cadena de `includes`                                                                        | muere |
 // | T-065-18          | flow-vm.ts · la cifra del umbral escrita a mano en el copy de saldo insuficiente en vez de derivada                                                                                                                                                                                             | exit=1 |  1 | flow-vm.test.ts › T-065-18: y esa cifra se DERIVA en el código: no hay ningún literal de SOL en el `Record`                                                    | muere |
@@ -917,9 +938,25 @@ describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
 //     una aguja. Se amplió con la línea de arriba.
 //
 // ⚠️ POR QUÉ `GATE-4` DA UN NÚMERO GRANDE (**47**): invierte el `if` de la rama del nonce durable, así
-// que TODO el `describe` del adaptador entra por el camino equivocado. El Story File traía «062 midió
-// 46, RE-MEDILO»; F3 midió 56 y el fix-pack mide 47. Los tres números son ciertos sobre árboles
-// distintos, y por eso el que vale es el de arriba de esta tabla, con su sha. ⛔ El movimiento 56 → 47 no
-// es «se perdió cobertura»: los `it` del adaptador declaran ahora las TRES condiciones del gate, así que
-// varios cortan antes por la bandera en vez de por la inversión. Quien quiera el detalle lo re-corre.
+// que TODO el `describe` del adaptador entra por el camino equivocado. Los 47 `it` que mueren son de
+// `solana-wallet.test.ts` y `solana-deposit-beneficiary.test.ts`, o sea del adaptador, los 47 (verificado
+// leyendo la columna `itsRojos` de la corrida de `b4f7e6d`).
+//
+// 🔴 EL MOVIMIENTO 56 → 47 NO SE EXPLICA COMO DECÍA ACÁ, y la explicación vieja la refuta la medición
+// (re-AR it2 · BLQ-BAJO-3). Decía: «los `it` del adaptador declaran ahora las TRES condiciones del gate,
+// así que varios cortan antes por la bandera en vez de por la inversión». **Falso por las dos puntas.**
+// La descomposición real tiene TRES tramos y sólo el último es del árbol:
+//
+//     56  ← medido en F3 **con la aguja ROTA**, la pelada, que aparece DOS veces en el archivo
+//     52  ← `a301c44` (base del fix-pack) con la aguja BUENA · medición del re-AR it2
+//     47  ← `a8c0692` y también `b4f7e6d` con la aguja buena · re-derivado acá
+//
+// ⇒ **4 de los 9 puntos son cambio de INSTRUMENTO, no del árbol**, y esta misma tabla lo dice cinco
+// líneas más arriba: la aguja pelada tocaba dos sitios. Y los 5 restantes **no son `it` del adaptador**:
+// son de `agent-plan-card`, `bienvenida-composicion` (el flake), `flow.test`, `honest-copy` y
+// `refund-perdido-registro-mudo` — cuatro de esos archivos el fix-pack ni los toca, y **cero `it` nuevos
+// entraron al conjunto**. Son `it` de UI sensibles a carga, no cobertura perdida.
+// ⛔ QUÉ NO ES MÍO EN ESE CUADRO: los tramos `56` y `52` los midió el re-AR it2 sobre `a301c44`, y **no
+// los re-derivé**. Lo que sí re-derivé es el `47` y su composición. Quien quiera el cuadro entero lo
+// re-corre con `--solo T-065-GATE-4` sobre cada sha.
 // ══════════════════════════════════════════════════════════════════════════════════════════════════

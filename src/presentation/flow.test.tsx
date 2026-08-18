@@ -1998,7 +1998,7 @@ describe("WKH-339 — los siete estados de la ventana de lectura, en pantalla", 
 
   // ── T-339.6 (AC-5) · Estado 1: con la ventana VIGENTE el render es el de siempre ────────────────
   //
-  // Molde de `agent-plan-card.test.tsx:406`: render → capturar → `cleanup()` → render → capturar →
+  // Molde de (`cleanup`, `./agent-plan-card.test.tsx:434`) —⚠️ acá decía `:406`, que es una línea EN BLANCO: una cita suelta que no se puede seguir (fix-pack · CR/MNR-8), ahora anclada y por lo tanto vigilada—: render → capturar → `cleanup()` → render → capturar →
   // comparar. ⚠️ El `cleanup()` NO es opcional: sin él quedan DOS árboles en el DOM y se compararía el
   // render anterior consigo mismo.
   //

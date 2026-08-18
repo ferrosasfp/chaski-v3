@@ -44,8 +44,8 @@ import {
  * 🔴 NO ES UN `PasoDelViaje`, Y ESO ES EL MECANISMO, NO UN DESCUIDO. (`esPaso`, `sesion.ts:121`) es un
  * conjunto CERRADO de tres valores (`PasoDelViaje`, `sesion.ts:114`), así que `interpretarVuelta`
  * contesta `no-volvimos` para esta marca y **el motor no consume ni destruye nada** si esta marca queda
- * en la barra. Si en cambio fuera un cuarto `PasoDelViaje`, el motor la miraría, no sabría qué hacer con
- * ella, y el `switch` con `never` de (`nunca`, `firma-por-enlace.ts:795`) dejaría de compilar.
+ * en la barra. ⚠️ Y ACÁ VA LA CORRECCIÓN DE LA EVIDENCIA, que importa más que la regla: esta línea decía que si esta marca fuera un cuarto `PasoDelViaje` el `switch` con `never` de (`nunca`, `firma-por-enlace.ts:795`) *"dejaría de compilar"*. **LO CORRÍ Y ES FALSO**, y no sólo en HEAD: medido también en `723ca3c` —o sea que la afirmación ya era falsa el día que WKH-358 se desplegó—. Agregando `"crear-nonce"` a (`PasoDelViaje`, `sesion.ts:114`) **y** a (`esPaso`, `sesion.ts:121`), `tsc --noEmit` queda VERDE y la suite COMPLETA también. El motivo es estructural y no un descuido: ese `never` es exhaustividad sobre (`Vuelta`, `sesion.ts:407`), y `PasoDelViaje` entra a esas variantes como CAMPO (`paso: PasoDelViaje`) y no como discriminante ⇒ agregarle un valor no crea ninguna variante nueva que el `switch` esté obligado a mirar.
+ * ⇒ **el único candado real es `T-067-16`**, en `sesion.test.ts`, y es de RUNTIME. Desde el fix-pack del AR itera también sobre `"crear-nonce"`: antes miraba sólo las dos marcas del PoP, así que esta marca —la que este mismo archivo define— no la vigilaba nadie.
  *
  * ⛔ NO la agregues a `PasoDelViaje` "para que sea uniforme": ese conjunto describe los pasos del viaje
  * del DEPÓSITO, y este salto no es parte de ese viaje — pasa antes, y su resultado (una cuenta creada en

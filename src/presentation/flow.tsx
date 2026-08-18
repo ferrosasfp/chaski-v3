@@ -72,7 +72,7 @@ import {
   lostEscrowRecoveryError,
   shortErrorCode,
   statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, type GestoRenovacion, REVISION_APAGADA, REVISION_FIRMANDO, REVISION_GESTO, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_BILLETERA, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, esVentanaSinAbiertos, // WKH-339: EN ESTA LÍNEA. `flow.tsx:661` lo citan 6 archivos (`ports.ts`, `container.test.ts`, `http-pop-signer.ts`, `pop-proof-store.ts`, `ledger-payout-status-gateway.ts`, `solana-providers.tsx`) más 2 sitios de acá, y NINGUNA de las 8 es una cita anclada ⇒ si se mueve, nada se pone rojo y los 8 comentarios rotan en silencio. ⛔ Acá decía `632`, que era el número correcto en `ce4f31e` y lo dejó de ser en esta rama: los 6 archivos SÍ se remapearon a 661 y esta línea, que es la que NOMBRA el número, quedó atrás (CR/BLQ-BAJO-1) · WKH-346 fix-pack: `esVentanaSinAbiertos` entra acá por lo mismo (Δ0)
-} from "./flow-vm";
+  cruceDeCuenta, seVerificoLaCuenta } from "./flow-vm"; // WKH-359/AC-6 — los dos EN ESTA LÍNEA (Δ0: este archivo recibe 83 citas ancladas y una línea nueva acá arriba las corre a todas). ⚠️ Van ACÁ y no al final de `:74` porque esa línea TERMINA en comentario: pegar un import ahí lo deja comentado, y `tsc` no lo caza hasta que algo lo use. Me pasó dos veces en esta HU.
 import { cn } from "./cn";
 import { phantomBrowseUrl, useWalletAvailability, useConnectedWalletAddress, mwaEnabled, useMwaOffered, deeplinkEnabled } from "./wallet-availability"; import type { BilleteraDeeplink } from "../infrastructure/solana/deeplink/protocol"; import { hrefSinRastroDeVuelta, marcaDeVuelta } from "../infrastructure/solana/deeplink/conexion"; import type { EstadoDeLaCuentaDeNonce } from "../composition/container"; import { NONCE_ACCOUNT_RENT_LAMPORTS, formatLamportsAsSol } from "../application/solana-escrow-rent"; // WKH-358: los dos EN ESTA MISMA LÍNEA, por lo mismo que los dos de WKH-MWA // el aviso de "acá no hay wallet" (NoWalletHere) · WKH-354/AC-6: `useConnectedWalletAddress` para el banner (CuentaCambiada) · WKH-MWA: los dos últimos, EN ESTA MISMA LÍNEA (el censo de citas por número de `:44` `flow.tsx:NNNN` cuelgan de que este archivo no cambie de largo)
 import { Aviso, Button, Card, ChaskiMark, Field, Money, Muted, Pill, Row, Stepper, TextInput } from "./ui"; import { BarraDestinos, type Destino, VolverAlInicio, esDestino } from "./barra-destinos"; import { Bienvenida } from "./bienvenida"; import { DestinoRecuperar, QUE_RECUPERA } from "./recuperar"; import { LEMA } from "./marca"; import { urlDeVueltaDeKyc } from "./splash-puerta"; // HU-066: los DOS EN ESTA LÍNEA, no en dos nuevas, por lo mismo que dice el resto de este renglón. `LEMA` es el lema del header, que el splash repite y que hasta esta HU estaba escrito a mano acá abajo; `urlDeVueltaDeKyc` arma el callback de Didit, que hasta esta HU era un literal y que la puerta del splash necesita LEER: eran dos escrituras del mismo string en dos archivos, sin nada que las atara // ola 2: los nombres nuevos entran EN ESTA LÍNEA, no en una nueva. Este archivo recibe MUCHAS citas por número, y una sola línea de import de más corre todas las que apuntan más abajo. ⛔ EL NÚMERO NO SE ESCRIBE ACÁ: vive en UN solo lugar, con su definición y su fecha, en el comentario de `:44` (fix-pack, CR/MNR-5). Acá había un valor y el mismo archivo llevaba otros cuatro distintos para el mismo hecho, cada uno copiado de un vecino en vez de medido · WKH-063: los TRES imports nuevos entran acá por lo mismo (Δ0 líneas)
@@ -283,7 +283,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
     return () => {
       alive = false;
     };
-  }, [c]); useVueltaPorEnlace({ c, yaInteractuo: yaInteractuoRef, alConectar: (r) => { setAddress(r.address); setServerVerdict(r.serverVerdict); setKycProof(r.kycProof); }, alFallar: (causa) => setError({ message: humanError(causa) }), alReanudar: (r) => { if (r.estado === "hay-que-salir") { window.location.href = r.irA; return; } setRem(r.remesa.snapshot); setStep(r.remesa.status === "settled" ? "done" : "track"); }, alAvisar: (m) => setError({ message: m }), alSaberDelNonce: setEstadoNonce }); // WKH-358/AC-1+AC-3+AC-5 — EN ESTA LÍNEA (Δ0 de citas, `:44`). El cuerpo vive al FINAL del archivo, con todo su razonamiento, por lo que dice el comentario de `:44`: ~60 líneas acá adentro corren las 131 citas por número que este archivo recibe. ⛔ La causa se traduce con `humanError` y NUNCA se escribe una causa del enlace como literal en este archivo (el candado de copy de `deeplink-callers.test.ts` cuenta los que aparecen en `src/presentation`). ⛔ Y NO hay ningún `setRem`: el gate del pisón vive adentro del hook y esto sólo repuebla lo que `onConnect` repuebla
+  }, [c]); useVueltaPorEnlace({ c, yaInteractuo: yaInteractuoRef, alConectar: (r) => { setAddress(r.address); if (r.estado !== "listo") { window.location.href = r.irA; return; } setServerVerdict(r.serverVerdict); setKycProof(r.kycProof); }, alFallar: (causa) => setError({ message: humanError(causa) }), alReanudar: (r) => { if (r.estado === "hay-que-salir") { window.location.href = r.irA; return; } setRem(r.remesa.snapshot); setStep(r.remesa.status === "settled" ? "done" : "track"); }, alAvisar: (m) => setError({ message: m }), alSaberDelNonce: setEstadoNonce }); // WKH-358/AC-1+AC-3+AC-5 — EN ESTA LÍNEA (Δ0 de citas, `:44`). El cuerpo vive al FINAL del archivo, con todo su razonamiento, por lo que dice el comentario de `:44`: ~60 líneas acá adentro corren las 131 citas por número que este archivo recibe. ⛔ La causa se traduce con `humanError` y NUNCA se escribe una causa del enlace como literal en este archivo (el candado de copy de `deeplink-callers.test.ts` cuenta los que aparecen en `src/presentation`). ⛔ Y NO hay ningún `setRem`: el gate del pisón vive adentro del hook y esto sólo repuebla lo que `onConnect` repuebla
 
   // WKH-188: mientras el overlay `resuming` está visible, ofrecer un escape a los 5 s (AC-1).
   // Time-based (no atado al conteo de iteraciones). Al caer `resuming` (terminal temprano o timeout),
@@ -330,12 +330,12 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
   const onConnect = () =>
     guard(async () => {
       if (!rem) return;
-      const {
+      const rc = await c.connectWallet.execute(); if (rc.estado === "hay-que-salir") { window.location.href = rc.irA; return; } const { // WKH-359/AC-3 — LA NAVEGACIÓN, EN ESTA LÍNEA Y SIN AGREGAR NINGUNA (Δ0: `:330` recibe 75 citas ancladas y `:507`/`:521`, que están más abajo, 55 y 52). Igual que las otras dos suspensiones de esta pantalla, acá SÓLO se navega: la URL viene armada por el protocolo de la billetera y no se parsea, no se reescribe, no se le agrega nada
         address: addr,
         rememberedKyc,
         serverVerdict,
         kycProof: proof,
-      } = await c.connectWallet.execute();
+      } = rc;
       setAddress(addr);
       // WKH-333/AC-20: el veredicto server-side lo resolvió `ConnectWallet`, que es el único momento
       // que corre en TODOS los caminos. Se guarda para pasárselo a `startKyc` sin pedir una segunda
@@ -504,7 +504,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
       // "cambió la identidad". Acusar ahí convertiría un árbol todavía sin montar en una acusación
       // falsa y rompería media suite. Ídem `rem.ownerAddress == null`: no hay contra qué comparar.
       const live = await c.connectedWallet.getConnectedAddress();
-      if (live != null && rem.ownerAddress != null) {
+      const cruce = cruceDeCuenta(live, rem.ownerAddress ?? null); if (seVerificoLaCuenta(cruce) && live != null && rem.ownerAddress != null) { // WKH-359/AC-6 — EL TRI-ESTADO, EN LA LÍNEA QUE EXISTE (⛔ Δ0: hay 55 citas ancladas de acá para abajo). El `if` mudo de antes hacía que "no se comparó" fuera indistinguible de "se comparó y coincidió"; ahora el caso `null` produce un valor con nombre y ⛔ `seVerificoLaCuenta` contesta `false` para los DOS. ⚠️ RESIDUAL SIN SUAVIZAR ([NC-1]): esto NO es un evento observable en producción y esta HU no inventa uno — el razonamiento entero, y por qué el caso `null` NO se convierte en corte, está en el docblock de (`CruceDeCuenta`, `./flow-vm.ts:1531`)
         // 🚫 NUNCA `.toLowerCase()` (CD-6): base58 es CASE-SENSITIVE y bajarlo a minúsculas fabrica
         // colisiones. `canonicalizeAddress` TIRA ante lo que no parsea, y eso se trata como
         // DESACUERDO (fail-closed), igual que `close-escrow-accounts.ts:75-80`: una dirección que no
@@ -615,7 +615,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
   //
   // 💸 R-1 · EL GESTO CUESTA DOS FIRMAS, y vive acá porque hasta ahora vivía sólo en el SDD, que está
   // gitignoreado y desaparece al mergear. `c.connectWallet.execute()` de abajo pide una (la prueba de
-  // posesión con la que se consulta el veredicto, `ensure`, `../application/use-cases/connect-wallet.ts:75`)
+  // posesión con la que se consulta el veredicto, `ensure`, `../application/use-cases/connect-wallet.ts:120`)
   // y el `onConnect` del envío nuevo pide la otra. ⛔ NO se cachea la primera para ahorrarse la
   // segunda: `http-pop-signer.ts:43-49` prohíbe reusar una prueba guardada para saltarse un popup del
   // money-path. El costo está aceptado por el founder; lo que NO está resuelto es que el copy del
@@ -623,7 +623,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
   const adoptarCuentaConectada = () =>
     guard(async () => {
       const r = await c.connectWallet.execute();
-      setAddress(r.address);
+      setAddress(r.address); if (r.estado === "hay-que-salir") { window.location.href = r.irA; return; } // WKH-359/AC-3 — EN ESTA LÍNEA (Δ0: este archivo recibe 83 citas ancladas). La dirección se aplica IGUAL antes de salir, porque el `connect()` ya corrió y ya la conocemos: perderla obligaría a re-conectar al volver del salto
       setServerVerdict(r.serverVerdict);
       setKycProof(r.kycProof);
       if (rem) resetTo(setStep, setRem, setPreview); // → paso `send`
@@ -4038,7 +4038,7 @@ function useVueltaPorEnlace(i: {
           // KYC-once sigue funcionando sin un cambio (AC-1).
           const r = await c.connectWallet.execute();
           if (!vivo.valor) return;
-          alConectar(r);
+          alConectar(r); if (r.estado === "hay-que-salir") return; // WKH-359/AC-3 — EN ESTA LÍNEA (Δ0). `alConectar` ya navegó; sin este `return` el recorrido seguiría preguntándole a la CADENA por la cuenta de nonce mientras el navegador se va a la billetera, o sea una lectura de red que nadie va a leer
           // 🔴 Y RECIÉN ACÁ SE LE PREGUNTA A LA CADENA POR LA CUENTA DE NONCE (AC-5), que es el motivo
           // por el que esta pregunta vive en `connect` y no en `confirm`: allá cada intento cuesta una
           // orden de payout REAL. El razonamiento entero está en `TarjetaDeCuentaDeNonce`.
@@ -4067,7 +4067,7 @@ function useVueltaPorEnlace(i: {
       // ── 3 · LA REANUDACIÓN (AC-3) ────────────────────────────────────────────────────────────
       // Sólo los pasos del MOTOR. `conectar` salió por la rama de arriba; `crear-nonce` y cualquier
       // marca que nadie escribió caen acá y NO reanudan nada: pasan antes de que exista ninguna orden.
-      if (marca === "pop-payout") { let vp: Awaited<ReturnType<Container["recorridoPorEnlace"]["completarPop"]>>; try { vp = await c.recorridoPorEnlace.completarPop(); } catch (e) { if (vivo.valor) alFallar((e as Error).message); return; } if (!vivo.valor) return; if (vp.estado === "corte") { alFallar(vp.causa); return; } if (vp.estado !== "pop-listo") return; } else       if (marca !== "firmar-tx" && marca !== "firmar-patrocinio") return; // WKH-359/AC-7 — LA RAMA DEL PERMISO, PEGADA A LA LÍNEA QUE EXISTE (Δ0: hay 4 citas ancladas de acá para abajo y ésta es la única línea de este archivo que esta HU toca; `:286`, `:330`, `:507` y `:521` reciben 77, 75, 55 y 52 y NO se tocan). 🔴 LA REANUDACIÓN SIGUE SIENDO POR RESULTADOS Y NUNCA POR `viaje.paso` (AC-7): esto no pregunta en qué paso dice el viaje que está —el campo (`paso`, `../infrastructure/solana/deeplink/sesion.ts:154`) de `Viaje` queda RANCIO por construcción, dice qué se fue a pedir en el salto en curso y no qué se consiguió— sino que lee el ancla y sigue SÓLO si la firma volvió y VERIFICÓ. Cuando sigue, cae al MISMO bloque de abajo que la reanudación de siempre: el dueño, la remesa en `confirmed`, y `execute()`. ⛔ Y no se le vuelve a pedir ninguna firma ya dada: `execute()` encuentra la prueba anclada y `pedir()` la entrega sin saltar (lo mide `T-067-11`). ⚠️ El motor NO tocó nada al pasar por acá: `pop-payout` no es un `PasoDelViaje`, así que `completar()` de más arriba contestó `nada` sin consumir ni destruir el viaje del depósito (CD-11, `T-067-16`)
+      if (marca === "pop-kyc") { let vk: Awaited<ReturnType<Container["recorridoPorEnlace"]["completarPop"]>>; try { vk = await c.recorridoPorEnlace.completarPop(); } catch (e) { if (vivo.valor) alFallar((e as Error).message); return; } if (!vivo.valor) return; if (vk.estado === "corte") { alFallar(vk.causa); return; } if (vk.estado !== "pop-listo") return; if (yaInteractuo.current) { alAvisar(AVISO_REANUDACION_POR_ENLACE); return; } try { const rk = await c.connectWallet.execute(); if (vivo.valor) alConectar(rk); } catch (e) { if (vivo.valor) alFallar((e as Error).message); } return; } if (marca === "pop-payout") { let vp: Awaited<ReturnType<Container["recorridoPorEnlace"]["completarPop"]>>; try { vp = await c.recorridoPorEnlace.completarPop(); } catch (e) { if (vivo.valor) alFallar((e as Error).message); return; } if (!vivo.valor) return; if (vp.estado === "corte") { alFallar(vp.causa); return; } if (vp.estado !== "pop-listo") return; } else       if (marca !== "firmar-tx" && marca !== "firmar-patrocinio") return; // WKH-359/AC-7 — LA RAMA DEL PERMISO, PEGADA A LA LÍNEA QUE EXISTE (Δ0: hay 4 citas ancladas de acá para abajo y ésta es la única línea de este archivo que esta HU toca; `:286`, `:330`, `:507` y `:521` reciben 77, 75, 55 y 52 y NO se tocan). 🔴 LA REANUDACIÓN SIGUE SIENDO POR RESULTADOS Y NUNCA POR `viaje.paso` (AC-7): esto no pregunta en qué paso dice el viaje que está —el campo (`paso`, `../infrastructure/solana/deeplink/sesion.ts:154`) de `Viaje` queda RANCIO por construcción, dice qué se fue a pedir en el salto en curso y no qué se consiguió— sino que lee el ancla y sigue SÓLO si la firma volvió y VERIFICÓ. Cuando sigue, cae al MISMO bloque de abajo que la reanudación de siempre: el dueño, la remesa en `confirmed`, y `execute()`. ⛔ Y no se le vuelve a pedir ninguna firma ya dada: `execute()` encuentra la prueba anclada y `pedir()` la entrega sin saltar (lo mide `T-067-11`). ⚠️ El motor NO tocó nada al pasar por acá: `pop-payout` no es un `PasoDelViaje`, así que `completar()` de más arriba contestó `nada` sin consumir ni destruir el viaje del depósito (CD-11, `T-067-16`)
       // La segunda condición, y es la fail-closed: la remesa tiene que estar EN `confirmed`, leído del
       // repo por el dueño. ⛔ `getConnectedAddress()` es la del enlace, y `repo.list` filtra por
       // `ownerAddress`, que lo escribe `startKyc` — o sea que esto además cruza el canal del enlace

@@ -29,7 +29,7 @@ import {
   kycOriginNotice,
   REAL_KYC_PROVENANCES,
   esVentanaSinAbiertos, sinAbiertosCopy, sinIndiceCopy, indiceIlegibleCopy, statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, // WKH-339/CR: las otras 4 constantes YA NO se importan por nombre — el loop las DERIVA del módulo, que es el arreglo de BLQ-BAJO-1. Si vuelven acá por nombre, el loop volvió a ser una lista a mano. // WKH-339: EN ESTA LÍNEA, no en líneas nuevas — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
-} from "./flow-vm"; import * as MODULO_FLOW_VM from "./flow-vm"; // WKH-339/CR-BLQ-BAJO-1: el namespace entero, para DERIVAR la lista de copies en vez de escribirla. En esta línea para no desplazar `:520`
+} from "./flow-vm"; import { cruceDeCuenta, seVerificoLaCuenta } from "./flow-vm"; import * as MODULO_FLOW_VM from "./flow-vm"; // WKH-339/CR-BLQ-BAJO-1: el namespace entero, para DERIVAR la lista de copies en vez de escribirla. En esta línea para no desplazar `:520`
 import {
   KYC_PROVENANCE_LIVE,
   KYC_PROVENANCE_MOCK,
@@ -2418,5 +2418,60 @@ describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace",
       "hay una cifra de SOL escrita a mano en el `Record`: AC-7 exige que se DERIVE de la constante",
     ).toEqual([]);
     expect(cuerpo).toContain("formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT)");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-359 · T-067-10 (AC-6) — EL CRUCE DE `flow.tsx:507` TIENE TRES ESTADOS, NO UN `if` MUDO
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// ⛔ EL RESIDUAL, SIN SUAVIZAR ([NC-1] de la HU): esto mide que el tri-estado EXISTE y que el caso
+// `null` NO se reporta como verificado. **NO es un evento observable en producción** y esta HU no
+// inventa uno: no hay ningún `console.*` ni sink de telemetría en el camino de `flow.tsx:506-519`
+// (medido), y agregar infraestructura de observabilidad no pedida a un archivo de 4268 líneas con 83
+// citas entrantes sería expandir el scope para "cumplir" un AC. **Si el founder quería un evento que
+// se pueda ver en producción, esto no lo entrega.**
+describe("T-067-10 (WKH-359/AC-6): el cruce de cuenta distingue NO COMPARADO de COMPARADO", () => {
+  const A = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+  const B = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
+
+  // 🔴 MUTANTE QUE MATA (el del Story File): colapsar el tri-estado en un booleano —por ejemplo hacer
+  // que `cruceDeCuenta` devuelva sólo `"comparado" | "no-comparado-sin-billetera"`, o que
+  // `seVerificoLaCuenta` conteste `true` para alguno de los dos "no comparado"—. Con el booleano, el
+  // caso `ownerAddress == null` se vuelve indistinguible de "se comparó y coincidió", que es
+  // exactamente lo que AC-6 prohíbe presentar.
+  it("`rem.ownerAddress == null` ⇒ `no-comparado-sin-owner`, y NO cuenta como verificado", () => {
+    expect(cruceDeCuenta(A, null)).toBe("no-comparado-sin-owner");
+    expect(
+      seVerificoLaCuenta(cruceDeCuenta(A, null)),
+      "el caso sin dueño se está reportando como verificado: eso es afirmar que se comparó una " +
+        "identidad contra nada",
+    ).toBe(false);
+  });
+
+  it("sin billetera conectada ⇒ `no-comparado-sin-billetera`, y tampoco cuenta como verificado", () => {
+    expect(cruceDeCuenta(null, A)).toBe("no-comparado-sin-billetera");
+    expect(seVerificoLaCuenta(cruceDeCuenta(null, A))).toBe(false);
+    // ⚠️ Y con las DOS ausentes gana "sin billetera": describe al dispositivo (el árbol todavía sin
+    // montar) y no a la remesa. Al revés le echaría la culpa a la remesa por el estado del arranque.
+    expect(cruceDeCuenta(null, null)).toBe("no-comparado-sin-billetera");
+  });
+
+  // Refutación del instrumento: con las dos presentes SÍ cuenta como comparado. Sin esto, un
+  // `seVerificoLaCuenta` que devolviera `false` siempre daría verde arriba sin vigilar nada.
+  it("con las dos presentes ⇒ `comparado`, y SÍ cuenta como verificado (sean iguales o distintas)", () => {
+    expect(cruceDeCuenta(A, A)).toBe("comparado");
+    expect(seVerificoLaCuenta(cruceDeCuenta(A, A))).toBe(true);
+    // ⚠️ `comparado` dice que el cruce SE EJECUTÓ, no que haya coincidido: quién decide sobre la
+    // igualdad es `canonicalizeAddress` en `flow.tsx`, y este valor no habla de eso.
+    expect(cruceDeCuenta(A, B)).toBe("comparado");
+  });
+
+  // ⛔ LO QUE ESTE TRI-ESTADO **NO** HACE, y va escrito para que nadie lo lea al revés: no corta.
+  // El fail-closed que hace falta ya existe y es más fuerte — vive server-side, en
+  // `app/api/payout/prepare/route.ts`, que exige el PoP y la fila del veredicto SIN respaldo.
+  it("los tres valores son DISTINTOS entre sí: colapsar dos pierde la distinción que AC-6 pide", () => {
+    const todos = [cruceDeCuenta(A, A), cruceDeCuenta(A, null), cruceDeCuenta(null, A)];
+    expect(new Set(todos).size, "dos de los tres estados colapsaron en el mismo valor").toBe(3);
   });
 });

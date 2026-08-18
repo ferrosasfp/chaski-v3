@@ -5,7 +5,7 @@
 // se resuelve por construcción, porque vive en el panel del proveedor de hosting— hace que el
 // container NO arranque (assertNoEvmResidue).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync } from "node:fs"; import path from "node:path"; // WKH-337: en UNA línea para no correr (`CABLEADO`, `:134`)
+import { existsSync } from "node:fs"; import path from "node:path"; // WKH-337: en UNA línea para no correr (`CABLEADO`, `:135`)
 import { A2aPayoutGateway, A2aQuoteGateway } from "../infrastructure/a2a/gateways";
 import { FallbackPayoutGateway, FallbackQuoteGateway } from "../infrastructure/fallback/gateways";
 import { SolanaWalletAdapter } from "../infrastructure/solana-wallet";
@@ -14,6 +14,7 @@ import { createContainer } from "./container";
 import { VALUE_DELIVERY_ADAPTERS, type ValueDeliveryAdapter } from "./value-delivery-adapter";
 import { LedgerPayoutStatusGateway } from "../infrastructure/settlement/ledger-payout-status-gateway";
 import bs58 from "bs58"; import { almacenDeNavegador, guardarViaje } from "../infrastructure/solana/deeplink/sesion"; import { guardarEleccion } from "../infrastructure/solana/deeplink/conexion"; // WKH-358 (fix-pack): los tres EN ESTA LÍNEA — `T-065-GATE-1b`, más abajo, siembra el disco con los escritores de PRODUCCIÓN. ⚠️ Este archivo corre en NODE: `localStorage` y `location` los stubea ese `it`, y el `afterEach` los saca
+import { esperarConectado } from "../test-support/desenlaces"; // WKH-359: ConnectWallet.execute() ahora tiene DOS desenlaces. Este helper TIRA si suspendió donde el test no lo espera, en vez de dejar un `undefined` viajando por media suite.
 
 /** La cuenta que el viaje del enlace afirma. Es base58 válida y NO es la del bridge de los otros `it`. */
 const DIRECCION_DEL_VIAJE = "CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8";
@@ -398,7 +399,7 @@ describe("createContainer — WKH-333/AC-20: el connectWallet REAL consulta el v
     });
 
     const c = createContainer();
-    const out = await c.connectWallet.execute();
+    const out = esperarConectado(await c.connectWallet.execute());
 
     expect(
       calls.some((u) => u.includes("/api/a2a/payout/challenge")),
@@ -437,7 +438,7 @@ describe("createContainer — el seguimiento del payout lee el ledger (WKH-337/A
    *  lo que se prueba es el cableado, y un repo inyectado a mano no lo tocaría.
    *
    *  🔴 LOS IMPORTS SON DINÁMICOS Y ES DELIBERADO, no una preferencia de estilo. Un `import` estático
-   *  arriba desplazaría (`CABLEADO`, `:134`), que `../application/agent-rejections.test.ts:115` cita por
+   *  arriba desplazaría (`CABLEADO`, `:135`), que `../application/agent-rejections.test.ts:115` cita por
    *  número de línea — y ese archivo está fuera del Scope IN de esta HU. Medido: con los 5 imports
    *  arriba, `citas-ancladas.test.ts` se puso rojo por esa cita. ⛔ No los "subas" sin re-medirla. */
   async function seedSubmitted(c: ReturnType<typeof createContainer>): Promise<string> {

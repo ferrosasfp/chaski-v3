@@ -32,6 +32,7 @@ import {
   ThrowingKycPendingStore,
   ThrowingSaveKycStore,
 } from "../test-support/fakes"; import { esperarListo } from "../test-support/desenlaces"; // WKH-356: narrowing de ResultadoDeEnvio. TIRA si execute() suspende donde el test no lo espera.
+import { esperarConectado } from "../test-support/desenlaces"; // WKH-359: ConnectWallet.execute() ahora tiene DOS desenlaces. Este helper TIRA si suspendió donde el test no lo espera, en vez de dejar un `undefined` viajando por media suite.
 
 function setup(opts?: {
   kyc?: FakeKycGateway;
@@ -167,7 +168,7 @@ describe("Use-cases — money-path", () => {
   it("ConnectWallet devuelve address + KYC recordado (login de la DApp)", async () => {
     const kycStore = new FakeKycStore();
     const { connect } = setup({ kycStore });
-    let res = await connect.execute();
+    let res = esperarConectado(await connect.execute());
     expect(res.address).toBe(FAKE_SOLANA_BENEFICIARY);
     expect(res.rememberedKyc).toBeNull();
     await kycStore.save(FAKE_SOLANA_BENEFICIARY, {
@@ -178,7 +179,7 @@ describe("Use-cases — money-path", () => {
       provenance: "didit",
       identity: null,
     });
-    res = await connect.execute();
+    res = esperarConectado(await connect.execute());
     expect(res.rememberedKyc?.approved).toBe(true);
   });
 

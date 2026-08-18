@@ -182,7 +182,7 @@ export function createContainer(): Container {
     // NINGÚN camino real y toda persona ya verificada llega a `prepare` sin fila. Por eso tiene test
     // propio en `container.test.ts` (T-CABLE-1), que ejercita el `connectWallet` QUE ESTA LÍNEA
     // DEVUELVE. Es el MISMO HttpPopSigner sobre la MISMA wallet que ya usan el prepare y el refund.
-    connectWallet: new ConnectWallet(wallet, kycStore, new HttpKycVerdictGateway(new HttpPopSigner(wallet, popProofs))),
+    connectWallet: new ConnectWallet(wallet, kycStore, new HttpKycVerdictGateway(new HttpPopSigner(wallet, popProofs)), wallet), // WKH-359/AC-3 — el 4º argumento EN ESTA LÍNEA. Es el MISMO adapter otra vez (como `probe`, `senderBalance` y `pop` del bundle de arriba): la pregunta "¿estamos en el camino por enlace?" la contesta `caminoPorEnlace`, que es `private` de esa clase. ⛔ SIN ESTA LÍNEA la sesión de Didit se crea SIN ATAR en todo teléfono sin extensión, `decision/route.ts:100` no escribe fila y `prepare` contesta 403 — y ⚠️ NO SE VE, porque una billetera que ya tiene fila cierra igual. Lo ve `container.test.ts`, que ejercita el `connectWallet` que ESTA LÍNEA devuelve
     startKyc: new StartKyc(kyc, kycStore, kycPending, repo, clock),
     resumeKyc: new ResumeKyc(kyc, kycStore, kycPending, repo, clock),
     lockQuote: new LockQuote(quotes, repo, clock),

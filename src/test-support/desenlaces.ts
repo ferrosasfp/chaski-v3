@@ -55,3 +55,25 @@ export function esperarAutorizacionLista(res: AutorizacionDelPrincipal): {
   }
   return { tx: res.tx, solana: res.solana };
 }
+
+/**
+ * WKH-359/AC-3 — Ídem para `ConnectWallet.execute()`, que desde esta HU tiene DOS desenlaces: el de
+ * siempre y la suspensión que va a buscar la prueba de posesión por enlace.
+ *
+ * TIRA si suspendió, por la MISMA razón que sus dos hermanos de arriba: un helper que degradara
+ * convertiría "el connect suspendió donde este test no lo esperaba" en un `undefined` que viaja por
+ * media suite y revienta lejos, en un `expect` que habla de otra cosa.
+ *
+ * ⚠️ NO verifica nada del contenido: sólo descarta la variante de suspensión.
+ */
+export function esperarConectado<
+  T extends { estado: "listo" } | { estado: "hay-que-salir"; irA: string; esperando: string },
+>(res: T): Extract<T, { estado: "listo" }> {
+  if (res.estado !== "listo") {
+    throw new Error(
+      `esperarConectado: connectWallet.execute() suspendió (irA="${res.irA}", esperando="${res.esperando}") ` +
+        "y este test da por hecho que no. Si la suspensión es lo correcto, el test tiene que assertarla, no ignorarla.",
+    );
+  }
+  return res as Extract<T, { estado: "listo" }>;
+}

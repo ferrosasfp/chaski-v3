@@ -673,7 +673,7 @@ export interface KycVerdictEnsureResult {
  *  `candidateVerificationId` es la PISTA del navegador (de `KycStore.peek`): el servidor NUNCA le
  *  cree, la re-consulta contra la autoridad y persiste sólo si vuelve autorizada (AC-8). */
 export interface KycVerdictGateway {
-  ensure(address: string, candidateVerificationId?: string): Promise<KycVerdictEnsureResult>;
+  ensure(address: string, candidateVerificationId?: string, yaConseguida?: WalletPossessionProof): Promise<KycVerdictEnsureResult>; // WKH-359/AC-3 — el 3er argumento EN ESTA LÍNEA. La prueba YA CONSEGUIDA por el camino por enlace, que no tiene bridge al que pedírsela. Sin esto la sesión de Didit se crea SIN ATAR y `prepare` contesta 403 a toda billetera que no tenga ya fila del veredicto — y ⛔ eso NO se ve en la corrida de quien ya se verificó
 }
 
 // ── Persistencia (historial/estado — aislado del demo) ───────────────────────

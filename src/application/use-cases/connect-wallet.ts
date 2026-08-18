@@ -4,6 +4,7 @@ import type {
   KycVerdictGateway,
   KycVerdictLookup,
   WalletPossessionProof,
+  PruebaDePosesionPorEnlace,
   WalletPort,
 } from "../ports";
 
@@ -45,19 +46,63 @@ export class ConnectWallet {
      *  (`serverVerdict` ausente ⇒ el flujo cae al camino de hoy). Es lo que mantiene byte-idéntico
      *  al demo y a cualquier composición que no lo inyecte. */
     private readonly verdictGateway?: KycVerdictGateway,
+    /** WKH-359/AC-3 — cómo se consigue la prueba de posesión cuando NO hay extensión de billetera.
+     *  ⚠️ OPCIONAL por la MISMA razón que `verdictGateway`: sin él este use-case se comporta
+     *  EXACTAMENTE como antes de esta HU. ⛔ Y esa opcionalidad NO es la que CD-2 prohíbe: no vuelve
+     *  el PoP opcional (el servidor lo sigue exigiendo), sino que describe una composición que no lo
+     *  cableó. El que sí es requerido, y donde el fail-open importaría, es el del money-path
+     *  (`pop`, `./confirm-and-send.ts:174`). Quien lo cablea de verdad es
+     *  (`connectWallet`, `../../composition/container.ts:185`), y eso tiene test propio. */
+    private readonly pop?: PruebaDePosesionPorEnlace,
   ) {}
 
-  async execute(): Promise<{
-    address: string;
-    rememberedKyc: KycVerification | null;
-    serverVerdict?: KycVerdictLookup;
-    /** La prueba de posesión que se usó para consultar el veredicto. Viaja hasta la creación de la
-     *  sesión de Didit, que también la exige (R-1), para que haya UNA sola firma por sesión. */
-    kycProof?: WalletPossessionProof;
-  }> {
+  /**
+   * WKH-359/AC-3 — DOS DESENLACES, y la suspensión SUBE POR EL TIPO (DT-4/CD-17).
+   *
+   * 🔴 POR QUÉ NO UN CAMPO OPCIONAL `irA?`, que es lo que parece más barato: colapsaría el segundo
+   * desenlace en la AUSENCIA de algo, y una ausencia no lleva carga. Es el MISMO argumento, con las
+   * mismas palabras, que este repo ya escribió para (`AutorizacionDelPrincipal`, `../ports.ts:1185`)
+   * y para (`RemittanceIdLookup`, `../ports.ts:467`): quien la reciba tiene que quedar OBLIGADO por
+   * el compilador a mirar el `irA`.
+   *
+   * ⚠️ `address` VIAJA EN LAS DOS VARIANTES, y no es una comodidad: cuando esto suspende,
+   * `wallet.connect()` YA corrió y la dirección ya se conoce. Ponerla sólo en `listo` obligaría a los
+   * call-sites que únicamente necesitan la dirección —`resolveSender` de "Mis envíos"— a manejar una
+   * suspensión que a ellos no les cambia nada.
+   */
+  async execute(): Promise<
+    | {
+        estado: "listo";
+        address: string;
+        rememberedKyc: KycVerification | null;
+        serverVerdict?: KycVerdictLookup;
+        /** La prueba de posesión que se usó para consultar el veredicto. Viaja hasta la creación de la
+         *  sesión de Didit, que también la exige (R-1), para que haya UNA sola firma por sesión. */
+        kycProof?: WalletPossessionProof;
+      }
+    | { estado: "hay-que-salir"; address: string; irA: string; esperando: "firma-pop-kyc" }
+  > {
     const address = await this.wallet.connect();
     const rememberedKyc = await this.store.get(address);
-    if (!this.verdictGateway) return { address, rememberedKyc };
+    if (!this.verdictGateway) return { estado: "listo", address, rememberedKyc };
+
+    // 🔴 EL PASO DE LA PRUEBA, Y ⛔ FUERA DEL `try` DE ABAJO (es el mutante de `T-067-5`). Si viviera
+    // adentro, el `catch` —que se traga TODO lo que salga del gateway, correctamente— se comería
+    // también la suspensión, `serverVerdict` y `kycProof` quedarían `undefined`, y estaríamos
+    // exactamente en el bug que esta wave vino a cerrar: sesión de Didit sin atar, sin fila, y 403 en
+    // `prepare` para toda billetera nueva.
+    let yaConseguida: WalletPossessionProof | undefined;
+    if (this.pop) {
+      const permiso = await this.pop.pedir({ proposito: "pop-kyc", direccion: address });
+      // `no-corresponde` (camino inyectado) y `no-se-puede` (emisor apagado / sin disco) siguen por el
+      // camino de hoy, y eso NO es degradar el PoP: el gateway de abajo lo va a pedir por su cuenta en
+      // el camino inyectado, y en el por enlace la falta de veredicto la corta el SERVIDOR con 403.
+      // ⛔ Lo que no se puede es impedir conectar, que es la puerta de entrada a todo (CD-15).
+      if (permiso.estado === "hay-que-salir") {
+        return { estado: "hay-que-salir", address, irA: permiso.irA, esperando: "firma-pop-kyc" };
+      }
+      if (permiso.estado === "listo") yaConseguida = permiso.proof;
+    }
 
     // La PISTA para el backfill sale de `peek()` y NO de `get()`: `get()` devuelve null pasados los
     // 180 días del caché de dispositivo, y esa entry vencida es justamente la población que el
@@ -72,7 +117,7 @@ export class ConnectWallet {
     let serverVerdict: KycVerdictLookup | undefined;
     let kycProof: WalletPossessionProof | undefined;
     try {
-      const ensured = await this.verdictGateway.ensure(address, candidate);
+      const ensured = await this.verdictGateway.ensure(address, candidate, yaConseguida);
       serverVerdict = ensured.lookup;
       kycProof = ensured.proof;
     } catch {
@@ -82,6 +127,6 @@ export class ConnectWallet {
       // (se crea la sesión de Didit), que es el desenlace correcto y ya probado.
       serverVerdict = undefined;
     }
-    return { address, rememberedKyc, serverVerdict, kycProof };
+    return { estado: "listo", address, rememberedKyc, serverVerdict, kycProof };
   }
 }

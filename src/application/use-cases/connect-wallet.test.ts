@@ -304,6 +304,49 @@ describe("WKH-359 · T-067-5 (AC-3): la prueba de posesión del veredicto, por e
     expect(calls[0]?.yaConseguida).toBeUndefined();
   });
 
+  // 🔴 T-067-23 (fix-pack · AR/BLQ-BAJO-3) — SI `ensure()` TIRA, LA PRUEBA RECIÉN FIRMADA NO SE TIRA
+  // A LA BASURA. La prueba del PoP por enlace es de UN SOLO USO: (`leerPruebaPop`,
+  // `../../infrastructure/solana/deeplink/pop-por-enlace.ts:398`) borra el ancla ANTES de devolver
+  // (CD-15). O sea que cuando el `fetch` de `/api/kyc/verdict` revienta, la persona YA hizo el viaje
+  // redondo y YA firmó, y esa firma no se puede recuperar de ningún lado. Asignando `kycProof` dentro
+  // del `try` quedaba `undefined` ⇒ sesión de Didit SIN ATAR ⇒ sin fila del veredicto ⇒ 403
+  // `prepare_kyc_verdict_missing`: la misma cadena que esta HU cierra, entrando por otra puerta.
+  //
+  // MUTANTE QUE MATA: borrar el `kycProof = yaConseguida;` del `catch` de `connect-wallet.ts`.
+  it("T-067-23: `ensure()` que TIRA no se lleva puesta la prueba que la persona ya firmó", async () => {
+    const { gw, calls } = spyGateway(USABLE, { throws: true });
+    const proof = { challenge: "ch-del-enlace", signature: "sig-del-enlace" };
+    const { pop } = popFalso({ estado: "listo", proof });
+
+    const r = esperarConectado(await new ConnectWallet(new FakeWallet(), new FakeKycStore(), gw, pop).execute());
+
+    // CD-18 — el fixture fabricó el caso: el gateway se llamó, recibió la prueba, y TIRÓ.
+    expect(calls, "el gateway ni se llamó: este `it` no está midiendo el `catch`").toHaveLength(1);
+    expect(calls[0]?.yaConseguida).toEqual(proof);
+    // ⛔ El veredicto SÍ se pierde, y está bien: el gateway falló, no sabemos nada de él.
+    expect(r.serverVerdict, "se inventó un veredicto que el gateway nunca contestó").toBeUndefined();
+    // 🔴 Y la prueba NO: es lo único que ya teníamos antes de llamarlo.
+    expect(
+      r.kycProof,
+      "la firma de la persona se descartó en silencio: el ancla ya se borró, no se recupera, y la " +
+        "sesión de Didit se va a crear SIN ATAR",
+    ).toEqual(proof);
+    expect(r.address, "un gateway caído dejó a la persona sin poder ni conectar (CD-15)").toBe(ADDR);
+  });
+
+  // ⛔ LA CALIBRACIÓN, en la dirección contraria: sin prueba conseguida, un `ensure()` que tira sigue
+  // dejando `kycProof` en `undefined`. El `catch` conserva lo que YA había, no fabrica nada.
+  it("CALIBRACIÓN: sin permiso conseguido, el `catch` no inventa ninguna prueba", async () => {
+    const { gw, calls } = spyGateway(USABLE, { throws: true });
+    const { pop } = popFalso({ estado: "no-corresponde" });
+
+    const r = esperarConectado(await new ConnectWallet(new FakeWallet(), new FakeKycStore(), gw, pop).execute());
+
+    expect(calls).toHaveLength(1);
+    expect(r.kycProof, "el `catch` fabricó una prueba que nadie firmó").toBeUndefined();
+    expect(r.serverVerdict).toBeUndefined();
+  });
+
   // Refutación del conjunto: SIN el puerto cableado, el use-case se comporta como antes de esta HU.
   it("sin el puerto inyectado, el comportamiento es el de antes de la HU", async () => {
     const { gw, calls } = spyGateway(USABLE);

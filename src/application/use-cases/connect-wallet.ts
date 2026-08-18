@@ -126,6 +126,18 @@ export class ConnectWallet {
       // API dejaría a la persona sin poder ni empezar. `undefined` ⇒ el flujo sigue el camino de hoy
       // (se crea la sesión de Didit), que es el desenlace correcto y ya probado.
       serverVerdict = undefined;
+      // 🔴 PERO LA PRUEBA YA CONSEGUIDA **NO SE TIRA** (fix-pack · AR/BLQ-BAJO-3), y ésta es la línea.
+      // La prueba del PoP por enlace es de **UN SOLO USO**: (`leerPruebaPop`,
+      // `../../infrastructure/solana/deeplink/pop-por-enlace.ts:398`) borra el ancla ANTES de devolver
+      // (CD-15), así que para cuando `ensure()` tira, la persona YA hizo el viaje redondo a su
+      // billetera, YA firmó, y esa firma no se puede volver a leer de ningún lado. Dejando `kycProof`
+      // en `undefined` —que es lo que pasaba, porque se asignaba adentro del `try`— la sesión de Didit
+      // se creaba SIN ATAR, `decision/route.ts` no escribía fila y `prepare` contestaba 403
+      // `prepare_kyc_verdict_missing`: la misma cadena que esta HU vino a cerrar, por otra puerta.
+      // ⛔ Y NO SE TOCA `serverVerdict`: el gateway falló, así que no sabemos nada del veredicto. Lo
+      // único que se conserva es lo que ya teníamos ANTES de llamarlo, que es la firma de la persona.
+      // ⚠️ Esto NO estrecha el `catch` (CD-17): sigue tragando todo lo que salga del gateway.
+      kycProof = yaConseguida;
     }
     return { estado: "listo", address, rememberedKyc, serverVerdict, kycProof };
   }

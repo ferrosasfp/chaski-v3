@@ -562,7 +562,7 @@ describe("T-067-11 / T-067-12 (WKH-359/AC-7): la vuelta del salto del permiso", 
   }
 
   // 🔴 MUTANTE QUE MATA: en `flow.tsx:4009`, quitar `"pop-payout"` de la condición de la rama (la marca
-  // cae al filtro `marca !== "firmar-tx" && marca !== "firmar-patrocinio"` de `:4070` y el productor
+  // cae al filtro `marca !== "firmar-tx" && marca !== "firmar-patrocinio"` de (`marca`, `./flow.tsx:4070`) y el productor
   // vuelve sin reanudar), o decidir por `viaje.paso` —que en este fixture dice `firmar-tx`— en vez de
   // por el desenlace.
   //
@@ -693,8 +693,9 @@ describe("T-067-11 / T-067-12 (WKH-359/AC-7): la vuelta del salto del permiso", 
   // firmar y no leía absolutamente nada, y el ancla quedaba sin consumir, así que el reintento volvía
   // a caer en el mismo silencio.
   //
-  // MUTANTE QUE MATA: en `flow.tsx`, mover la rama del permiso (`:4009`) DEBAJO del
-  // `if (remId === null) { limpiarLaBarra(); return; }` de `:4010` — que es exactamente donde estaba.
+  // MUTANTE QUE MATA: en `flow.tsx`, mover la rama del permiso ((`completarPop`, `./flow.tsx:4009`))
+  // DEBAJO del `if (remId === null) { limpiarLaBarra(); return; }` de (`remId`, `./flow.tsx:4010`)
+  // — que es exactamente donde estaba.
   it("T-067-22: si el viaje venció mientras firmaba, la vuelta del permiso igual se lee y se avisa", async () => {
     const repo = new InMemoryRepo();
     await sembrarRemesaConfirmada(repo, "confirmed");

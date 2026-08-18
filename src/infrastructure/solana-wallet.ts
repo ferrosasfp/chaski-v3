@@ -2352,7 +2352,7 @@ export class SolanaWalletAdapter
    *
    *  ⛔ VIVE ACÁ Y NO EN `preparacion-por-enlace.ts` PORQUE ACÁ VIVE EL GATE: (`caminoPorEnlace`,
    *  `:2239`) es `private`, y ese otro módulo **no puede** importar el adaptador — lo declara en sus
-   *  `:7-13`: sería la dependencia al revés, y ese archivo existe justamente para eso.
+   *  (`solana-wallet`, `./solana/preparacion-por-enlace.ts:7-13`): sería la dependencia al revés, y ese archivo existe justamente para eso.
    *
    *  LOS CUATRO DESENLACES, y ninguno se puede colapsar en la ausencia de otro:
    *   · `no-corresponde` ⇒ el gate está apagado o no hay elección persistida. Quien llama sigue como

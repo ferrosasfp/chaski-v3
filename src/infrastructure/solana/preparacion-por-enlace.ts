@@ -150,7 +150,7 @@ export interface VueltaDeEnlace extends EleccionDeEnlace {
    * van después. Un `await` antes reintroduce exactamente la ventana que el fix-pack 2 de la ola 1
    * cerró. Lo mide `T-065-SYNC`.
    */
-  completar(i: { remittanceId: string }): Promise<ResultadoDePreparacion>; completarPop(i: { hrefDeLaVuelta: string }): Promise<ResultadoDePop>; // WKH-359/AC-7 — EN ESTA LÍNEA (Δ0). ⛔ MÉTODO PROPIO Y NO UNA VARIANTE MÁS DE `completar`: son dos vueltas distintas, con anclas distintas, y `completar` consume el paso del VIAJE de forma irreversible. Meter el PoP ahí haría que volver del salto del permiso destruyera el paso del depósito. Y ⛔ NO recibe `remittanceId`: el permiso no es de una remesa, es de una billetera, y pedírselo sería inventar un cruce que este ancla no puede sostener. 🔴 SÍ RECIBE EL HREF, Y ES OBLIGATORIO (fix-pack · AR/BLQ-ALTO-1): el único llamador de producción (`flow.tsx:4070`) YA limpió la barra con `replaceState` antes de llegar acá —el paso 2 corre para toda vuelta, también la del PoP—, así que leer `location.href` en vivo adentro de esta implementación da una URL SIN `nonce`, SIN `data` y SIN la clave de cifrado ⇒ **toda firma buena salía `deeplink_pop_alterado`**. El parámetro es REQUERIDO y no opcional a propósito: con un `?` el llamador podía volver a olvidarlo y el compilador no decía nada. Es el mismo `hrefActual` que (`vueltaDelPop`, `./deeplink/pop-por-enlace.ts:313`) ya recibía por parámetro; lo que faltaba era que el borde no lo fabricara de una fuente ya limpiada.
+  completar(i: { remittanceId: string }): Promise<ResultadoDePreparacion>; completarPop(i: { hrefDeLaVuelta: string }): Promise<ResultadoDePop>; // WKH-359/AC-7 — EN ESTA LÍNEA (Δ0). ⛔ MÉTODO PROPIO Y NO UNA VARIANTE MÁS DE `completar`: son dos vueltas distintas, con anclas distintas, y `completar` consume el paso del VIAJE de forma irreversible. Meter el PoP ahí haría que volver del salto del permiso destruyera el paso del depósito. Y ⛔ NO recibe `remittanceId`: el permiso no es de una remesa, es de una billetera, y pedírselo sería inventar un cruce que este ancla no puede sostener. 🔴 SÍ RECIBE EL HREF, Y ES OBLIGATORIO (fix-pack · AR/BLQ-ALTO-1): el único llamador de producción es (`completarPop`, `../../presentation/flow.tsx:4009`) —⚠️ acá decía `flow.tsx:4070`, que es el FILTRO de reanudación y no el llamador (fix-pack · AR/MNR-1)— y en la versión rota limpiaba la barra con `replaceState` antes de llegar acá —el paso 2 corre para toda vuelta, también la del PoP—, así que leer `location.href` en vivo adentro de esta implementación da una URL SIN `nonce`, SIN `data` y SIN la clave de cifrado ⇒ **toda firma buena salía `deeplink_pop_alterado`**. El parámetro es REQUERIDO y no opcional a propósito: con un `?` el llamador podía volver a olvidarlo y el compilador no decía nada. Es el mismo `hrefActual` que (`vueltaDelPop`, `./deeplink/pop-por-enlace.ts:313`) ya recibía por parámetro; lo que faltaba era que el borde no lo fabricara de una fuente ya limpiada.
 }
 
 /**
@@ -472,16 +472,23 @@ export class RecorridoPorEnlaceReal implements PreparacionPorEnlace {
    *
    * 🔴 EL HREF ENTRA POR PARÁMETRO Y **NO** SE LEE DE `this.entorno()` (fix-pack · AR/BLQ-ALTO-1), y
    * ésta es la línea que estaba rota. (`entorno`, `:194`) lee `globalThis.location.href` EN VIVO, y
-   * para cuando el productor llega hasta acá ya corrió su paso 2: `limpiarLaBarra()` es
-   * INCONDICIONAL (`../../presentation/flow.tsx:4023`) y `hrefSinRastroDeVuelta` borra `nonce`,
-   * `data`, `errorCode`, la clave de cifrado de la billetera y el `dl`
-   * (`hrefSinRastroDeVuelta`, `./deeplink/conexion.ts:362`). ⇒ `vueltaDelPop` recibía una URL sin un
+   * en la versión rota el productor ya había corrido su paso 2 cuando llegaba hasta acá:
+   * `limpiarLaBarra()` es INCONDICIONAL ((`limpiarLaBarra`, `../../presentation/flow.tsx:4023`)) y
+   * `hrefSinRastroDeVuelta` borra `nonce`, `data`, `errorCode`, la clave de cifrado de la billetera y
+   * el `dl` ((`hrefSinRastroDeVuelta`, `./deeplink/conexion.ts:362`)). ⇒ `vueltaDelPop` recibía una URL sin un
    * solo parámetro de respuesta, el guard write-once de la `claveBilletera` no encontraba clave y
    * **toda firma buena salía `deeplink_pop_alterado`**, con la persona en un loop que sólo terminaba
    * al vencer el `exp`. Medido con las dos mitades: mismo disco, href sucio ⇒ `pop-firmado`; href
    * limpio ⇒ `corte deeplink_pop_alterado`.
    * ⛔ Y NO se arregla "moviendo la limpieza después": el paso 2 tiene que correr igual para toda
    * vuelta (AC-4), así que lo que se arregla es de DÓNDE sale el href, no cuándo se limpia.
+   * ⚠️ HOY LA LIMPIEZA YA NO CORRE ANTES, Y ESO **NO** ES LO QUE ARREGLA ESTO (fix-pack · AR/MNR-2). El
+   * mismo fix-pack reordenó la rama del productor: (`completarPop`, `../../presentation/flow.tsx:4009`)
+   * llama acá ANTES de `limpiarLaBarra()`. La reordenación cierra el SÍNTOMA; lo que hace a esta función
+   * **inmune al orden** es el parámetro, y por eso es el parámetro lo que no se toca. Con el href leído
+   * en vivo, cualquiera que vuelva a mover la limpieza —o que agregue un `replaceState` en otro lado—
+   * reabre el mismo agujero sin tocar una línea de este archivo. Un arreglo que depende del orden de dos
+   * archivos distintos no es un arreglo: es una coincidencia con fecha de vencimiento.
    * ⚠️ `almacen` y `origin` SÍ siguen saliendo de `entorno()`: el disco no lo toca `replaceState` y el
    * origen no cambia con la limpieza. Lo único que la barra pierde es la query.
    */

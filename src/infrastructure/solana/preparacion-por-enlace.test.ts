@@ -703,7 +703,7 @@ describe("AC-5: la cuenta de nonce, antes del salto", () => {
 // `RecorridoConVueltaDelPop` en `presentation/flow-reanudacion.test.tsx`, que devuelve un enlatado), y
 // `deeplink/pop-por-enlace.test.ts` prueba `vueltaDelPop` pasándole el `hrefActual` a mano. ⇒ **nadie
 // probaba quién le pasa ese href en producción**, que era justo la línea rota: el productor
-// —(`useVueltaPorEnlace`, `../../presentation/flow.tsx:3956`), en la rama de `:4009`— limpia la barra para TODA vuelta y la
+// —(`useVueltaPorEnlace`, `../../presentation/flow.tsx:3956`), en la rama de (`completarPop`, `../../presentation/flow.tsx:4009`)— limpia la barra para TODA vuelta y la
 // implementación leía `globalThis.location.href` después de esa limpieza, así que le llegaba una URL
 // sin `nonce`, sin `data` y sin la clave de cifrado de la billetera ⇒ el guard write-once de
 // `claveBilletera` no encontraba clave y **toda firma buena salía `deeplink_pop_alterado`**.

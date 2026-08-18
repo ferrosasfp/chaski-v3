@@ -905,4 +905,73 @@ describe("createContainer — WKH-358/CD-14: la firma por enlace YA está cablea
       wallet.wallet.authorizePrincipal({ send: { minor: 1 }, expiresAt: "2099-01-01T00:00:00.000Z" }, "rem-1"),
     ).rejects.toThrow("escrow_params_missing");
   });
+
+  // ════════════════════════════════════════════════════════════════════════════════════════════════
+  // WKH-359 · T-067-19 (DT-13) — LOS CONSUMIDORES 3 Y 4 CAMBIAN DE DIAGNÓSTICO, **NO DE RECORRIDO**
+  // ════════════════════════════════════════════════════════════════════════════════════════════════
+  //
+  // 🔴 QUÉ DECLARA ESTE `it`, y es tanto lo que afirma como lo que NIEGA. Son CUATRO los consumidores
+  // de una prueba de posesión, no tres: el prepare del payout (1), el veredicto de KYC (2), el
+  // resolver del refund (3, `../infrastructure/refund/http-solana-remittance-id-resolver.ts`) y el
+  // gesto de renovar la ventana de lectura (4, `renovarVentana`, cableado en `container.ts:221`).
+  // Esta HU le da recorrido a los DOS PRIMEROS. A los otros dos les da **diagnóstico y nada más**.
+  //
+  // ⛔ NADIE PUEDE LEER ESTE CAMBIO COMO "el refund por enlace ya funciona". Lo que cambia es que en
+  // vez de `wallet_sign_not_available` —la marca del bridge, que en el camino por enlace es cierta
+  // SIEMPRE y por lo tanto no distingue nada— ahora sale `deeplink_pop_sin_firma`, que dice "falta el
+  // insumo" y la pantalla sabe traducir. El recorrido de esos dos gestos sigue muriendo ahí.
+  it("T-067-19 (DT-13): `renovarVentana` por enlace corta con `deeplink_pop_sin_firma`, no con `wallet_sign_not_available`", async () => {
+    const disco = new Map<string, string>();
+    const storage = {
+      getItem: (k: string) => disco.get(k) ?? null,
+      setItem: (k: string, v: string) => void disco.set(k, v),
+      removeItem: (k: string) => void disco.delete(k),
+      clear: () => disco.clear(),
+      key: () => null,
+      length: 0,
+    };
+    vi.stubGlobal("localStorage", storage);
+    vi.stubGlobal("location", { href: "https://chaski.test/enviar", origin: "https://chaski.test" });
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", "true");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ popChallenge: "t", popMessage: "m", exp: Math.floor(Date.now() / 1000) + 600 }), { status: 200, headers: { "content-type": "application/json" } })));
+    const almacen = almacenDeNavegador(storage as unknown as Storage);
+    // Las TRES condiciones del gate, sembradas con los escritores de PRODUCCIÓN.
+    guardarViaje(almacen, {
+      billetera: "phantom",
+      secreta: bs58.encode(new Uint8Array(32)),
+      publica: bs58.encode(new Uint8Array(32)),
+      claveBilletera: bs58.encode(new Uint8Array(32)),
+      session: "s",
+      direccion: DIRECCION_DEL_VIAJE,
+      paso: "conectar",
+      remittanceId: "rem-067-19",
+      desde: Date.now(),
+    });
+    guardarEleccion(almacen, "phantom");
+    solanaWalletBridge.setWalletAvailability("none");
+    solanaWalletBridge.setState({ publicKey: null, connected: false }); // el bridge VACÍO de un teléfono
+    const c = createContainer();
+
+    // CD-18 — el fixture fabricó el caso: el gate está encendido de verdad.
+    expect(
+      await c.connectedWallet.getConnectedAddress(),
+      "el gate no se encendió: este `it` estaría midiendo el camino inyectado",
+    ).toBe(DIRECCION_DEL_VIAJE);
+
+    let causa = "";
+    try {
+      await c.renovarVentana?.prove(DIRECCION_DEL_VIAJE);
+    } catch (e) {
+      causa = (e as Error).message;
+    }
+    expect(causa, "el gesto no cortó: no hay nada que clasificar").not.toBe("");
+    // 🔴 MUTANTE QUE MATA: borrar el gate de `signMessage` ⇒ vuelve `wallet_sign_not_available`.
+    expect(
+      causa,
+      "el consumidor #4 sigue recibiendo la marca del bridge, que en el camino por enlace es cierta " +
+        "SIEMPRE y por lo tanto no le dice nada a nadie",
+    ).not.toBe("wallet_sign_not_available");
+    expect(causa).toBe("deeplink_pop_sin_firma");
+  });
+
 });

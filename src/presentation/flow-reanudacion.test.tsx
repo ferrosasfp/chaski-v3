@@ -68,7 +68,7 @@ const DIRECCION = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // la del `Fak
 const REM = "rem-1";
 
 /** Una remesa que YA pasó por `confirm`: es el único estado en el que AC-3 permite reanudar. */
-async function sembrarRemesaConfirmada(repo: InMemoryRepo, estado: "confirmed" | "kyc_passed") {
+async function sembrarRemesaConfirmada(repo: InMemoryRepo, estado: "confirmed" | "kyc_passed", dueño: string = DIRECCION) { // WKH-359: el 3er argumento, con default = el de siempre. Los `it` del PoP necesitan una cuenta cuya PRIVADA tengan, para poder firmar de verdad, y el dueño de la remesa tiene que ser ESA misma o el cruce de `flow.tsx:507` corta con `wallet_account_changed`.
   const r = Remittance.create(REM, beneficiary(), Money.of(400, "USDC"), T0);
   r.attachQuote(
     {
@@ -83,7 +83,7 @@ async function sembrarRemesaConfirmada(repo: InMemoryRepo, estado: "confirmed" |
     },
     T0,
   );
-  r.startKyc(T0, DIRECCION); // 🔴 esto es lo que escribe `ownerAddress`, la fuente que el enlace NO toca
+  r.startKyc(T0, dueño); // 🔴 esto es lo que escribe `ownerAddress`, la fuente que el enlace NO toca
   r.applyKyc(KYC_APROBADO, T0);
   if (estado === "confirmed") r.confirm(T0);
   await repo.save(r);
@@ -497,4 +497,140 @@ describe("T-065-9 / T-065-10: la limpieza de la barra", () => {
   // después de leer y que el segundo no repite—, y el tercero no agregaría un estado nuevo: la barra ya
   // está limpia desde el primero. Lo que las tres invocaciones sí miden, y esto no, es el comportamiento
   // del MOTOR con el rastro intacto; eso vive en `firma-por-enlace.test.ts` y sigue ahí.
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-359 · T-067-11 y T-067-12 (AC-7) — VOLVER DEL SALTO DEL PERMISO NO RE-PIDE NINGUNA FIRMA
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ SE MIDE ACÁ Y QUÉ SE MIDE EN OTRO LADO, dicho antes de que alguien lo lea al revés. Lo que
+// vive en este archivo es **la rama de `flow.tsx:4070`**: que la marca del permiso llegue a
+// `completarPop()`, que sólo se reanude si el desenlace es `pop-listo`, y que el doble montaje de
+// StrictMode no la consuma dos veces. La VERIFICACIÓN de la firma (los cinco chequeos + ed25519) la
+// mide `deeplink/pop-por-enlace.test.ts`, con sobres cifrados y firmas ed25519 reales.
+//
+// ⛔ Y POR QUÉ ESA MITAD NO PUEDE VIVIR ACÁ, medido y no elegido por comodidad: **este archivo corre en
+// jsdom** (`@vitest-environment jsdom`, arriba de todo), y bajo jsdom
+// `new TextEncoder().encode(...)` devuelve un `Uint8Array` que **NO es `instanceof Uint8Array`** del
+// realm donde vive `tweetnacl` (medido con una sonda: `instanceof Uint8Array: false`). Cualquier
+// llamada a `iniciarPop` o `vueltaDelPop` desde acá muere en `checkArrayTypes` de tweetnacl con
+// `unexpected type, use Uint8Array`, ANTES de ejercitar una sola línea de esta HU.
+// ⚠️ Es un límite del RUNNER, no de producción: en un navegador real hay un solo realm y esto no pasa.
+// Es la lección "el runner de tests NO es el runtime real", en su versión más cara.
+//
+// ⇒ Por eso acá se dobla la costura que el propio módulo declara tener para esto
+// (`preparacion-por-enlace.ts`: *"la costura que la pantalla puede doblar en los tests sin tocar el
+// adaptador"*), y se dice qué queda afuera en vez de fingir que se mide todo.
+describe("T-067-11 / T-067-12 (WKH-359/AC-7): la vuelta del salto del permiso", () => {
+  /** El recorrido con la vuelta del PoP programada. ⛔ Sólo se dobla `completarPop`: todo lo demás
+   *  sigue siendo el `RecorridoPorEnlaceNulo`, que TIRA, así que un camino no previsto se ve. */
+  class RecorridoConVueltaDelPop extends RecorridoPorEnlaceNulo {
+    public llamadas = 0;
+    constructor(private readonly desenlace: { estado: "pop-listo"; proposito: "pop-payout" | "pop-kyc" } | { estado: "nada" } | { estado: "corte"; causa: string }) {
+      super();
+    }
+    override remesaEnCurso(): string {
+      return REM;
+    }
+    override async completar(): Promise<never> {
+      // La vuelta del MOTOR contesta `nada`: la marca del permiso NO es un `PasoDelViaje`, así que
+      // el motor no la mira y no consume ni destruye el viaje del depósito (CD-11, `T-067-16`).
+      return { estado: "nada" } as never;
+    }
+    override async completarPop(): Promise<never> {
+      this.llamadas += 1;
+      return this.desenlace as never;
+    }
+  }
+
+  function contenedorConPop(repo: InMemoryRepo, recorrido: RecorridoConVueltaDelPop) {
+    return buildTestContainer({
+      repo,
+      wallet: new FakeWallet(),
+      connectedWallet: new SolanaWalletAdapter(),
+      recorridoPorEnlace: recorrido,
+    });
+  }
+
+  // 🔴 MUTANTE QUE MATA: en `flow.tsx:4070`, quitar la rama de `pop-payout` (la marca cae al filtro
+  // `marca !== "firmar-tx" && marca !== "firmar-patrocinio"` y el productor vuelve sin reanudar), o
+  // decidir por `viaje.paso` —que en este fixture dice `firmar-tx`— en vez de por el desenlace.
+  it("T-067-11: con el permiso conseguido, reanuda y el bridge recibe CERO pedidos de firma", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo, "confirmed");
+    sembrarVuelta("pop-payout");
+    const firmaSpy = vi.fn(async () => new Uint8Array(64));
+    solanaWalletBridge.registerSignMessage(firmaSpy);
+    const recorrido = new RecorridoConVueltaDelPop({ estado: "pop-listo", proposito: "pop-payout" });
+    const c = contenedorConPop(repo, recorrido);
+    const spy = vi.spyOn(c.confirmAndSend, "execute");
+
+    // CD-18 — el fixture fabricó el caso: la marca del PERMISO está en la barra, y el paso del VIAJE
+    // dice `firmar-tx`. Sin esta mitad, este `it` podría estar pasando por el camino de siempre.
+    expect(new URL(window.location.href).searchParams.get("dl")).toBe("pop-payout");
+
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
+
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    expect(spy.mock.calls[0]?.[0]).toEqual({ remittanceId: REM });
+    expect(recorrido.llamadas, "la vuelta del permiso no se leyó, o se leyó de más").toBe(1);
+    // ⛔ Y NO se le volvió a pedir al bridge una firma que la persona ya dio. En el camino por enlace
+    // ese bridge está vacío, así que un pedido acá además muere.
+    expect(
+      firmaSpy,
+      "se le pidió al bridge una firma teniendo el permiso conseguido: eso es pedirle a la persona " +
+        "una firma que ya dio, y en un teléfono ese pedido ni siquiera puede prosperar",
+    ).not.toHaveBeenCalled();
+  });
+
+  // 🔴 MUTANTE QUE MATA: borrar el `if (yaCorrioRef.current) return` del productor ⇒ con `StrictMode`
+  // el efecto corre dos veces y la vuelta se consume DOS veces. Mismo patrón que `T-065-7`.
+  it("T-067-12: en StrictMode el doble montaje consume la vuelta UNA sola vez", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo, "confirmed");
+    sembrarVuelta("pop-payout");
+    const recorrido = new RecorridoConVueltaDelPop({ estado: "pop-listo", proposito: "pop-payout" });
+    const c = contenedorConPop(repo, recorrido);
+    const spy = vi.spyOn(c.confirmAndSend, "execute");
+
+    render(
+      <React.StrictMode>
+        <RemittanceFlow pasoInicial="send" container={c} />
+      </React.StrictMode>,
+    );
+
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(spy, "el doble montaje de StrictMode consumió la vuelta dos veces").toHaveBeenCalledTimes(1);
+    expect(recorrido.llamadas, "la vuelta del permiso se leyó dos veces").toBe(1);
+  });
+
+  // ⛔ La mitad fail-closed, y es la que impide que un enlace dispare una orden de pago SIN permiso.
+  // MUTANTE QUE MATA: en `flow.tsx:4070`, quitar el `if (vp.estado !== "pop-listo") return;`.
+  it("si el permiso NO quedó listo, la marca no dispara ningún `execute()`", async () => {
+    for (const desenlace of [
+      { estado: "corte" as const, causa: "deeplink_pop_alterado" },
+      { estado: "nada" as const },
+    ]) {
+      const repo = new InMemoryRepo();
+      await sembrarRemesaConfirmada(repo, "confirmed");
+      sembrarVuelta("pop-payout");
+      const c = contenedorConPop(repo, new RecorridoConVueltaDelPop(desenlace));
+      const spy = vi.spyOn(c.confirmAndSend, "execute");
+
+      render(<RemittanceFlow pasoInicial="send" container={c} />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(
+        spy,
+        `con el desenlace \`${desenlace.estado}\` se disparó el money-path igual: \`prepare\` va a ` +
+          "contestar 403 y la remesa se va a degradar por un camino que nadie pidió",
+      ).toHaveBeenCalledTimes(0);
+      cleanup();
+      window.localStorage.clear();
+    }
+  });
 });

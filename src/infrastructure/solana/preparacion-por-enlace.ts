@@ -4,13 +4,13 @@
 //   · en `deeplink/conexion.ts` no puede vivir, porque ese módulo es PURO y SÍNCRONO por contrato
 //     (DT-7): no lee `window`, ni `Date`, ni `fetch`. Acá hay `Connection`, `sendRawTransaction` y
 //     lecturas de cuenta.
-//   · en `solana-wallet.ts` tampoco, y por un motivo MEDIDO y no estético: ese archivo tiene **2362**
-//     líneas y recibe **116** citas ancladas, de las que **50** apuntan más abajo de `:1233`, así que
-//     insertar en el medio las rompe a todas. ⚠️ RE-MEDIDO EN EL FIX-PACK (CR/MNR-2): decía «2247 líneas,
-//     85 citas, rompe 34», que era cierto al escribirlo y que esta misma HU volvió falso escribiendo
-//     código y comentarios. Los tres números salen de contar, no de heredar: `wc -l` para el primero y el
-//     escáner de `citas-ancladas.test.ts` para los otros dos. ⚠️ Y VUELVEN A ENVEJECER SOLOS: lo que no
-//     envejece es el criterio (insertar arriba corre todo lo de abajo), no la cifra.
+//   · en `solana-wallet.ts` tampoco, y por un motivo MEDIDO y no estético: ese archivo tiene
+//     [[CENSO src/infrastructure/solana-wallet.ts lineas=2498]] líneas y recibe
+//     [[CENSO src/infrastructure/solana-wallet.ts entrantes=126]] citas ancladas, de las que
+//     [[CENSO src/infrastructure/solana-wallet.ts entrantes-desde-1233=59]] apuntan de `:1233` para
+//     abajo, así que insertar en el medio las rompe a todas. ⚠️ LOS TRES YA ENVEJECIERON DOS VECES ACÁ
+//     («2247/85/34» ⇒ «2362/116/50» ⇒ los de hoy) sin que nadie editara la frase, y por eso desde el
+//     fix-pack del CR NO se escriben: son MARCADORES que `citas-ancladas.test.ts` verifica en cada `npm test` y que se ponen ROJOS solos. Lo que no envejece es el criterio (insertar arriba corre todo lo de abajo); la cifra sí, y ahora tiene quien la vigile.
 // Queda un módulo propio, que además es la costura que la pantalla puede doblar en los tests sin tocar
 // el adaptador.
 //
@@ -519,7 +519,7 @@ export class RecorridoPorEnlaceReal implements PreparacionPorEnlace {
 
 /**
  * WKH-359 — Qué salió de leer la vuelta del salto del PoP. Va AL FINAL del archivo, donde hay CERO
- * citas ancladas (medido: las únicas dos de este archivo apuntan a `:246`).
+ * citas ancladas: [[CENSO src/infrastructure/solana/preparacion-por-enlace.ts entrantes-desde-520=0]] apuntan de acá para abajo, y el CERO es lo que sostiene la decisión. ⚠️ ACÁ DECÍA «las únicas dos de este archivo apuntan a `:246`» Y SE DESMENTÍA SIN SALIR DEL BLOQUE (CR/MNR-3): este mismo docblock contiene una tercera cita dos líneas más abajo, y el fix-pack agregó una cuarta en `:474`. Hoy son [[CENSO src/infrastructure/solana/preparacion-por-enlace.ts entrantes=5]] entrantes a [[CENSO src/infrastructure/solana/preparacion-por-enlace.ts destinos=4]] destinos, todos MARCADORES verificados.
  *
  * ⛔ ES UN TIPO PROPIO Y NO UNA VARIANTE MÁS DE (`ResultadoDePreparacion`, `:71`), y no es duplicación:
  * ese tipo lo consume un `switch` exhaustivo en la pantalla, así que agregarle un miembro obliga a

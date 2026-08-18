@@ -260,3 +260,166 @@ describe("candado anti-drift: toda cita ANCLADA apunta a una línea que nombra s
     expect(rotas).toEqual([]);
   });
 });
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// EL CENSO — las AFIRMACIONES NUMÉRICAS sobre el árbol, verificadas (WKH-359 / CR/MNR-2 + CR/MNR-3)
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ PROBLEMA CIERRA, MEDIDO, Y POR QUÉ NO ALCANZABA CON RE-MEDIR. Este repo justifica su
+// convención Δ0 —"lo nuevo va al final, insertar arriba corre las citas de abajo"— con frases del tipo
+// *"este archivo tiene 2362 líneas y recibe 116 citas ancladas"*. El razonamiento no envejece; **el
+// número sí, y lo mueve el mismo commit que lo escribe**. La cuenta de esta sola HU:
+//   · "2247 líneas / 85 citas / rompe 34"  ⇒ corregido a  "2362 / 116 / 50"  ⇒ hoy sería otro.
+//   · "47 citas por número" en el gate de `solana-wallet.ts`, que era un conteo COPIADO del número
+//     viejo del archivo.
+//   · la corrección de ese 47 decía "RE-MEDIDO en el árbol de este commit" y reportaba, al dígito, los
+//     cinco números del árbol BASE (CR/MNR-2). O sea: **el fix de un conteo inventado, repitiendo el
+//     defecto una capa más arriba**, que es el peor lugar posible para tenerlo.
+//   · seis cifras más que el propio commit volvió falsas sin que nadie editara una frase (CR/MNR-3).
+// Y lo que cierra el caso: mientras se escribía ESTE bloque, los números medidos al empezar la sesión
+// (123 entrantes a `solana-wallet.ts`, 87 a `flow.tsx`) ya habían cambiado a 126 y 98 por los commits
+// del propio fix-pack. **Re-medir a mano produce la séptima cifra falsa, no la primera verdadera.**
+//
+// ⇒ LA ÚNICA FORMA QUE NO SE PUDRE ES QUE EL NÚMERO NO SE ESCRIBA A MANO, SINO QUE SE VERIFIQUE. El
+// marcador ES la receta, y es EJECUTABLE:
+//     [[CENSO ruta/desde/la/raiz.ts lineas=2498]]            <- lo que cuenta `wc -l`
+//     [[CENSO ruta/desde/la/raiz.ts entrantes=126]]          <- citas ANCLADAS que apuntan a ese archivo
+//     [[CENSO ruta/desde/la/raiz.ts destinos=68]]            <- líneas destino distintas
+//     [[CENSO ruta/desde/la/raiz.ts entrantes-desde-906=75]] <- las que caen en la 906 o más abajo
+//     [[CENSO ruta/desde/la/raiz.ts destinos-desde-463=4]]   <- ídem, contando líneas destino
+// Si el árbol se mueve, el marcador se pone ROJO y hay que re-derivarlo. Es el mismo trato que
+// `deriveTables()` en el repo hermano: **el criterio es la regla y el número es una foto**, sólo que acá
+// la foto tiene fecha de vencimiento automática.
+//
+// ⚠️ LO QUE ESTE CANDADO **NO** CIERRA, declarado y no disfrazado:
+//   1. Es OPT-IN, igual que las citas ancladas: una cifra escrita en prosa sin marcador sigue sin que
+//      la mire nadie. Lo que se ganó no es cobertura total: es que la cifra AHORA SE PUEDE atar.
+//   2. `entrantes` cuenta las citas ANCLADAS y nada más. Las SUELTAS —`flow.tsx:4009` sin símbolo
+//      delante— también se rompen al insertar arriba y siguen sin contarse (es el agujero #1 de este
+//      mismo archivo). Una frase que hable de "citas por número" y se apoye en un marcador `entrantes`
+//      está diciendo MENOS de lo que parece, y tiene que decirlo.
+//   3. No mira la PROSA alrededor del marcador. `[[CENSO x lineas=10]]` al lado de la frase "este
+//      archivo es chico" da verde aunque la frase mienta por otro motivo.
+//   4. `lineas` es `wc -l`, o sea SALTOS DE LÍNEA. Un archivo sin salto final cuenta uno menos que las
+//      líneas que muestra un editor. Es la misma cuenta que usan las frases que vigila, a propósito.
+//
+// 🔴 LA BATERÍA, CORRIDA, con restauración por `cp` desde una copia y md5 verificado en las dos puntas
+// (⛔ NO con `git checkout --`: el árbol de un fix-pack no está limpio y eso restaura a HEAD, que en
+// esta misma sesión se llevó puesto un refactor sin commitear):
+//   · **C4** — una línea nueva insertada arriba en `solana-wallet.ts`, que ES el defecto que este
+//     candado existe para cazar: `3 failed | 6 passed (9)`, y el reporte nombra los dos marcadores
+//     `lineas=2498` con su valor real (`el árbol dice 2499`) y el archivo:línea de cada uno.
+//     ⚠️ En esa corrida cae TAMBIÉN la calibración del +1, y no es ruido: con el árbol movido, un
+//     marcador viejo +1 puede COINCIDIR con el valor nuevo y dejar de reportarse. La calibración sólo
+//     significa algo sobre un árbol verde; leerla al revés es leer dos síntomas del mismo hecho.
+//   · **C2** — `desajustes()` devuelve SIEMPRE `[]`: `2 failed | 7 passed (9)`, y las dos que caen son
+//     las calibraciones. El `it` principal pasa. Es exactamente para lo que están.
+//   · **C3** — el regex `CENSO` no matchea nada: `1 failed | 8 passed (9)`, y cae el piso. Un candado
+//     que deja de ver marcadores se pone rojo en vez de quedarse en verde vigilando el vacío.
+const CENSO = /\[\[CENSO ([\w./-]+) (lineas|entrantes|destinos)(?:-desde-(\d+))?=(\d+)\]\]/g;
+
+type Marcador = {
+  desde: string;
+  lineaDesde: number;
+  ruta: string;
+  campo: string;
+  piso: number | null;
+  dice: number;
+  crudo: string;
+};
+
+function recolectarCenso(): Marcador[] {
+  const out: Marcador[] = [];
+  for (const abs of FILES) {
+    const src = readFileSync(abs, "utf8").split("\n");
+    const { marcas } = lineasConComentario(src);
+    src.forEach((l, i) => {
+      if (!marcas[i]) return;
+      for (const m of l.matchAll(CENSO)) {
+        out.push({
+          desde: path.relative(ROOT, abs),
+          lineaDesde: i + 1,
+          ruta: m[1] as string,
+          campo: m[2] as string,
+          piso: m[3] === undefined ? null : Number(m[3]),
+          dice: Number(m[4]),
+          crudo: m[0] as string,
+        });
+      }
+    });
+  }
+  return out;
+}
+
+/** Deriva el valor REAL del campo. `null` si el archivo que nombra el marcador no existe en el árbol. */
+function derivarCenso(mk: Marcador): number | null {
+  const abs = path.resolve(ROOT, mk.ruta);
+  if (!existsSync(abs)) return null;
+  // `lineas` = lo que cuenta `wc -l` (saltos), no `split("\n").length`, que da uno más.
+  if (mk.campo === "lineas") return readFileSync(abs, "utf8").split("\n").length - 1;
+  const hits = CITAS.filter((c) => resolverDestino(c) === abs && (mk.piso === null || c.linea >= mk.piso));
+  return mk.campo === "destinos" ? new Set(hits.map((c) => c.linea)).size : hits.length;
+}
+
+/** Los marcadores cuyo número no coincide con el árbol. Es una función APARTE para poder CALIBRARLA. */
+function desajustes(marcadores: readonly Marcador[]): string[] {
+  const out: string[] = [];
+  for (const mk of marcadores) {
+    const real = derivarCenso(mk);
+    if (real === null) {
+      out.push(`${mk.desde}:${mk.lineaDesde} → ${mk.crudo}: el archivo ${mk.ruta} no existe`);
+      continue;
+    }
+    if (real !== mk.dice) out.push(`${mk.desde}:${mk.lineaDesde} → ${mk.crudo}: el árbol dice ${real}`);
+  }
+  return out;
+}
+
+const CENSOS = recolectarCenso();
+
+describe("candado anti-drift: toda afirmación numérica MARCADA coincide con el árbol", () => {
+  // El piso es el conteo MEDIDO al escribirlo (24), no un objetivo, y se midió ROMPIÉNDOLO a propósito
+  // —piso en 999 ⇒ `expected 24 to be greater than or equal to 999`— porque un guard que no expone su
+  // total no se adivina. Sin este `it`, borrar todos los
+  // marcadores deja al candado vigilando CERO y en verde, que es como un guard deja de existir sin que
+  // nadie lo note.
+  it("hay marcadores de censo para vigilar (el candado no está vacío)", () => {
+    expect(CENSOS.length).toBeGreaterThanOrEqual(24);
+  });
+
+  it("cada marcador `[[CENSO …]]` dice el número que el árbol tiene hoy", () => {
+    expect(desajustes(CENSOS)).toEqual([]);
+  });
+
+  // 🔴 LA CALIBRACIÓN, Y NO ES OPCIONAL: sin ella, un `desajustes()` que devolviera SIEMPRE `[]` —por un
+  // `derivarCenso` roto, por un regex que no matchea nada, por un `filter` invertido— pasaría el `it` de
+  // arriba con los 24 marcadores puestos y nadie se enteraría. Acá se le entra con los marcadores REALES
+  // del árbol y el número corrido en uno, y se exige que los reporte a TODOS. Es el mismo trato que
+  // `T-CITAS-LEXER` le da al lexer: el guard se prueba con la entrada que TIENE que ponerlo rojo.
+  it("CALIBRACIÓN: con el número corrido en uno, el candado los reporta a todos", () => {
+    const falsos = CENSOS.map((mk) => ({ ...mk, dice: mk.dice + 1 }));
+    expect(desajustes(falsos)).toHaveLength(CENSOS.length);
+    // Y la segunda mitad: el mensaje trae el número REAL, que es lo que hace accionable el rojo.
+    const primero = CENSOS[0];
+    if (primero !== undefined) {
+      expect(desajustes([{ ...primero, dice: primero.dice + 1 }])[0]).toContain(`el árbol dice ${primero.dice}`);
+    }
+  });
+
+  // Un marcador que apunta a un archivo inexistente es un hallazgo (se movió o se borró), no una
+  // excepción. Con entrada SINTÉTICA, porque el árbol —correctamente— no tiene ninguno.
+  it("CALIBRACIÓN: un marcador que apunta a un archivo que no existe se reporta", () => {
+    const inventado: Marcador = {
+      desde: "sintetico.ts",
+      lineaDesde: 1,
+      ruta: "src/no-existe-jamas.ts",
+      campo: "lineas",
+      piso: null,
+      dice: 1,
+      crudo: "[[CENSO src/no-existe-jamas.ts lineas=1]]",
+    };
+    expect(desajustes([inventado])).toEqual([
+      "sintetico.ts:1 → [[CENSO src/no-existe-jamas.ts lineas=1]]: el archivo src/no-existe-jamas.ts no existe",
+    ]);
+  });
+});

@@ -402,7 +402,7 @@ export function leerPruebaPop(
 ): { popChallenge: string; firma: string; popMessage: string } | null {
   const ancla = leerPasoPop(a, ahora);
   if (ancla === null) return null;
-  if (ancla.proposito !== proposito) return null; // ⛔ NO se borra el ancla del otro propósito: no es basura, es de otro dueño, y borrarla acá haría que pedir el PoP del payout cancelara el del KYC en curso
+  if (ancla.proposito !== proposito) return null; // ⛔ NO se borra el ancla del otro propósito, y ésta es la razón que SÍ se sostiene: esto es una LECTURA, y una lectura no destruye lo que no entrega. ⚠️ ACÁ DECÍA que borrarla «haría que pedir el PoP del payout cancelara el del KYC en curso», Y ESO ES FALSO (fix-pack · AR/MNR-1): el ancla es UNA SOLA RANURA ((`CLAVE_POP`, `:75`)), así que (`iniciarPop`, `:238`) YA pisa la del otro propósito al escribir la suya —reproducido: tras un `iniciarPop` de `pop-payout`, el ancla del KYC dejó de existir—. Lo que este `return null` sí garantiza es lo único que hay que garantizar (CD-15): un permiso de un propósito NO se entrega para el otro. Y el costo real de la ranura única va dicho: un desafío y un salto de más, no un agujero
   if (typeof ancla.firma !== "string" || ancla.firma === "") return null;
   terminarPasoPop(a); // ⛔ ANTES del return: ver el docblock
   return { popChallenge: ancla.popChallenge, firma: ancla.firma, popMessage: ancla.popMessage };
@@ -428,7 +428,7 @@ export function leerPruebaPop(
 export function leerFirmaParaMensaje(a: Almacen, ahora: number, mensaje: string): string | null {
   const ancla = leerPasoPop(a, ahora);
   if (ancla === null) return null;
-  if (ancla.popMessage !== mensaje) return null; // ⛔ NO se borra: el ancla es de OTRO pedido y borrarla acá haría que pedir una firma cualquiera cancelara el permiso en curso
+  if (ancla.popMessage !== mensaje) return null; // ⛔ NO se borra: el ancla es de OTRO pedido y esto es una LECTURA. ⚠️ Misma corrección que en (`leerPruebaPop`, `:398`) (fix-pack · AR/MNR-1): no es que borrarla «cancelaría el permiso en curso» —la ranura es una sola y `iniciarPop` ya la pisa—, es que una lectura no destruye lo que no entrega
   if (typeof ancla.firma !== "string" || ancla.firma === "") return null;
   terminarPasoPop(a); // ⛔ ANTES del return, igual que `leerPruebaPop`: el borrado ES el "un solo uso"
   return ancla.firma;

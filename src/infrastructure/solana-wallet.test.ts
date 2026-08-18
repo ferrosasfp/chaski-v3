@@ -1840,17 +1840,27 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       expect(disco.has(CLAVE_PREPARADO)).toBe(false);
     });
 
+    // ⚠️ LA ETIQUETA DE ESTE `it` DECÍA "el camino de la billetera inyectada" Y EL FIXTURE NO LO ES
+    // (fix-pack · AR/MNR-2). `montarEntorno()` arma el mundo del recorrido POR ENLACE —disco, `location`
+    // y la elección persistida— y acá no se toca la disponibilidad, así que esto no es el camino inyectado
+    // por más que el bridge tenga una cuenta. ⛔ Y NO SE "ARREGLA" agregando `setWalletAvailability("injected")`:
+    // `abandonarAutorizacion()` corta en su `if (!this.firmaPorEnlace) return;` ANTES de mirar nada del
+    // entorno, así que esa línea no cambiaría ningún `expect` y sería una declaración que no mide nadie.
+    // Lo que este `it` mide —y mide bien— es la mitad de CD-1: **sin el colaborador del enlace, el
+    // método no toca el disco**, que es la composición de producción al cerrar 062. Los otros dos `it`
+    // de este archivo que SÍ dependen de la disponibilidad la declaran, y ahí la línea es load-bearing.
     it("SIN colaborador (producción al cerrar 062) no toca el disco: no hay nada que limpiar", async () => {
       montarEntorno();
       solanaWalletBridge.setState({ publicKey: SENDER_B58, connected: true });
-      const adapter = new SolanaWalletAdapter(); // el camino de la billetera inyectada
+      const adapter = new SolanaWalletAdapter(); // SIN el colaborador del enlace: es lo que se construía en producción al cerrar 062
       await adapter.connect();
       sembrarViaje(SENDER_B58);
       disco.set(CLAVE_PREPARADO, "{}");
       adapter.abandonarAutorizacion();
-      expect(disco.has(CLAVE_VIAJE), "el camino inyectado borró algo que no escribió (CD-1)").toBe(
-        true,
-      );
+      expect(
+        disco.has(CLAVE_VIAJE),
+        "un adaptador SIN colaborador del enlace borró algo que no escribió (CD-1)",
+      ).toBe(true);
       expect(disco.has(CLAVE_PREPARADO)).toBe(true);
     });
   });

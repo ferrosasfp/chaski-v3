@@ -27,7 +27,7 @@
 //   1. Las citas SIN ancla siguen sin vigilancia, y NADA las cuenta: lo único medido es el otro lado del
 //      conjunto, y ese total NO se escribe acá porque envejece: se deriva con el regex de `:62`.
 //   2. Un ancla que aparece en varias líneas del archivo destino da verde apuntando a cualquiera de
-//      ellas. El ancla prueba "esta línea habla del símbolo", no "es LA línea".
+//      ellas. El ancla prueba "esta línea habla del símbolo", no "es LA línea". ⚠️ Y ACÁ VA EL TAMAÑO DEL AGUJERO, que hasta el fix-pack de WKH-359 (AR/MNR-3) nadie había medido: de las 658 citas ancladas del árbol, **580 (88,1 %) tienen su ancla en MÁS DE UNA línea del archivo destino** ⇒ el verde de este candado discrimina de verdad en ~12 % de los casos. ⛔ Los dos números son una FOTO —se mueven con cada comentario nuevo— y por eso NO hay ningún `expect` que los fije: se re-derivan con la receta de `:62` más un conteo de ocurrencias del ancla en el destino, y el instrumento que los derive tiene que calibrarse contra el total que cuenta ESTE archivo antes de que se le crea. Lo invariante sí es el reparto: este candado caza el ancla que NO existe en el destino, y no la línea equivocada dentro del mismo símbolo.
 //   3. Sólo resuelve el archivo destino si la ruta es relativa al que cita o si el basename es único
 //      en el árbol. Si no resuelve, el test FALLA (una cita a un archivo inexistente es un hallazgo,
 //      no una excepción).

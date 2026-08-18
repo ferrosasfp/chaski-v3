@@ -407,3 +407,29 @@ export function leerPruebaPop(
   terminarPasoPop(a); // ⛔ ANTES del return: ver el docblock
   return { popChallenge: ancla.popChallenge, firma: ancla.firma, popMessage: ancla.popMessage };
 }
+
+/**
+ * Entrega la firma anclada **si y sólo si** es sobre EXACTAMENTE estos bytes, y borra el ancla en el
+ * mismo gesto (CD-15). `null` si no hay ancla viva, si todavía no tiene firma, o si el texto anclado
+ * no es el que se está pidiendo firmar.
+ *
+ * 🔴 POR QUÉ FILTRA POR EL MENSAJE Y NO POR EL PROPÓSITO, a diferencia de (`leerPruebaPop`, `:398`).
+ * Quien la llama es (`signMessage`, `../../solana-wallet.ts:1922`), que recibe un texto y no sabe para
+ * qué se lo piden: su contrato (`WalletPort`, `../../../application/ports.ts:494`) es `(message) =>
+ * firma` y ⛔ **no se ensancha** (CD-16). El texto ES el discriminante acá, y es uno más fuerte que el
+ * propósito: dos desafíos de propósitos distintos tienen textos distintos, así que exigir el texto ya
+ * exige el propósito. Al revés no vale.
+ *
+ * ⛔ Y ES UNA LECTURA, NUNCA UN PEDIDO (CD-12). Si no hay nada que leer, esto contesta `null` y quien
+ * llama corta: **no navega**. Un `signMessage` que navegara devolvería una promesa que nunca resuelve,
+ * porque el proceso de JavaScript deja de existir en el salto — es el argumento que ya está escrito en
+ * (`AutorizacionDelPrincipal`, `../../../application/ports.ts:1185`).
+ */
+export function leerFirmaParaMensaje(a: Almacen, ahora: number, mensaje: string): string | null {
+  const ancla = leerPasoPop(a, ahora);
+  if (ancla === null) return null;
+  if (ancla.popMessage !== mensaje) return null; // ⛔ NO se borra: el ancla es de OTRO pedido y borrarla acá haría que pedir una firma cualquiera cancelara el permiso en curso
+  if (typeof ancla.firma !== "string" || ancla.firma === "") return null;
+  terminarPasoPop(a); // ⛔ ANTES del return, igual que `leerPruebaPop`: el borrado ES el "un solo uso"
+  return ancla.firma;
+}

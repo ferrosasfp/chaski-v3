@@ -39,6 +39,7 @@ import {
   FakeSolanaEscrowDepositProbe,
   FakeSolanaPayoutPrepareGateway,
   FakeSolanaSenderSolBalanceProbe,
+  FakePruebaDePosesionPorEnlace,
   FakeSolanaSettlementGateway,
   FakeSolanaWallet,
   FixedClock,
@@ -96,7 +97,7 @@ async function runSettleFailure(
       prepare: new FakeSolanaPayoutPrepareGateway(),
       gateway: new FakeSolanaSettlementGateway({ ok: false, reason }),
       probe,
-      senderBalance: new FakeSolanaSenderSolBalanceProbe(),
+      senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace(),
     },
   ).execute({ remittanceId: "rem-1" }));
 

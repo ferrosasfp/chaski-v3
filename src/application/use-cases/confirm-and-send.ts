@@ -9,7 +9,7 @@ import type {
   SolanaEscrowDepositProbe,
   SolanaPayoutPrepareGateway,
   SolanaSenderSolBalance,
-  SolanaSenderSolBalanceProbe,
+  SolanaSenderSolBalanceProbe, PruebaDePosesionPorEnlace, // WKH-359: EN ESTA LÍNEA, no en una nueva — este archivo recibe 8 citas ancladas y agregar una línea acá arriba las corre a todas
   SolanaSettlementFailureReason,
   SolanaSettlementGateway,
   WalletPort,
@@ -171,7 +171,7 @@ export class ConfirmAndSend {
       prepare: SolanaPayoutPrepareGateway;
       gateway: SolanaSettlementGateway;
       probe: SolanaEscrowDepositProbe;
-      senderBalance: SolanaSenderSolBalanceProbe;
+      senderBalance: SolanaSenderSolBalanceProbe; pop: PruebaDePosesionPorEnlace; // WKH-359/AC-2 — EN ESTA LÍNEA (Δ0: hay 8 citas ancladas de `:463` para abajo, y cuatro de ellas viven en `flow.tsx`, que recibe 83). ⛔ VIAJA EN EL BUNDLE Y ES REQUERIDO, por la MISMA razón que `probe` y `senderBalance` de acá arriba: un `pop?` suelto que quedara undefined haría que el paso de la prueba de posesión desapareciera EN SILENCIO, y el camino por enlace volvería —sin ruido— al `payout_pop_unavailable` que esta HU vino a matar. En el camino inyectado su `pedir()` contesta `no-corresponde` y no hace nada (AC-8), así que inyectarlo siempre no cuesta nada.
     },
   ) {}
 
@@ -460,7 +460,7 @@ export class ConfirmAndSend {
     //     servidor acepta, de forma monótona. Eso vive server-side y fuera del scope de esta HU; del
     //     lado del cliente lo tapa la comparación de destino del motor de enlace, que es justamente por
     //     qué esa comparación no es una redundancia defensiva.
-    let prep: Awaited<ReturnType<SolanaPayoutPrepareGateway["prepare"]>>;
+    const pop = await this.solana.pop.pedir({ proposito: "pop-payout", direccion: address }); if (pop.estado === "no-se-puede") { await this.failAndRefund(r, pop.causa, "not_deposited"); return { estado: "listo", remesa: r }; } if (pop.estado === "hay-que-salir") return { estado: "hay-que-salir", irA: pop.irA, esperando: "firma-pop-payout" };     let prep: Awaited<ReturnType<SolanaPayoutPrepareGateway["prepare"]>>; // WKH-359/AC-2 — EL PASO DE LA PRUEBA DE POSESIÓN, PEGADO A LA LÍNEA QUE EXISTE y ⛔ ANTES DEL `try` de abajo. Δ0: hay 8 citas ancladas de acá para abajo a 3 destinos (medido en esta rama con la receta del candado) y DOS de las emisoras viven en `flow.tsx`, el archivo de 4268 líneas con 83 citas entrantes. ⛔ POR QUÉ NO ADENTRO DEL `try`: el `catch` de `:476` se lo comería y devolvería `prepare_unavailable`, o sea el diagnóstico de un prepare que nunca corrió — ése es exactamente el mutante de `T-067-3`. ⛔ Y POR QUÉ ANTES DE (`authorizePrincipal`, `:486`): `prepare` corta en 403 sin la prueba, así que pedirla después sería gastarle a la persona una firma de transacción para un POST ya condenado. En el camino inyectado esto contesta `no-corresponde` y no ejecuta ninguna línea nueva (AC-8)
     try {
       prep = await this.solana.prepare.prepare({
         remittanceId: s.id,
@@ -471,7 +471,7 @@ export class ConfirmAndSend {
         address, // ya garantizado no vacío por el guard de arriba (era `address ?? ""`)
         amountUsd: s.sendUsd.major,
         beneficiary: s.beneficiary,
-        idempotencyKey: `${s.id}:${quote.quoteId}`,
+        idempotencyKey: `${s.id}:${quote.quoteId}`, ...(pop.estado === "listo" ? { proof: pop.proof } : {}), // WKH-359/AC-2 — LA PRUEBA VIAJA ACÁ, EN LA LÍNEA QUE EXISTE. Sin esto el gateway le pediría OTRA al bridge, que en un móvil está vacío, y la remesa moriría en `payout_pop_unavailable` con el permiso ya conseguido en la mano. ⚠️ El spread condicional y no `proof: ...` a secas: en el camino inyectado `pedir()` contesta `no-corresponde` y el body tiene que salir SIN el campo, byte-idéntico a antes de esta HU (AC-8). Lo mide `T-067-4`
       });
     } catch {
       await this.failAndRefund(r, "prepare_unavailable", "not_deposited");
@@ -585,4 +585,4 @@ export class ConfirmAndSend {
  */
 export type ResultadoDeEnvio =
   | { estado: "listo"; remesa: Remittance }
-  | { estado: "hay-que-salir"; irA: string; esperando: "firma-tx" | "firma-patrocinio" };
+  | { estado: "hay-que-salir"; irA: string; esperando: "firma-tx" | "firma-patrocinio" | "firma-pop-payout" }; // WKH-359/AC-2 — el tercer valor EN ESTA LÍNEA. ⛔ NO es una firma de la transacción ni del patrocinio: es el permiso que `prepare` exige ANTES de que exista ninguna transacción, y por eso sale del `execute` mucho más arriba que los otros dos. Quien lo recibe SÓLO navega, igual que con los otros dos (`../../presentation/flow.tsx:521`)

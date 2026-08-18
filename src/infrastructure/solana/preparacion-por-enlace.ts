@@ -24,7 +24,7 @@ import type { BilleteraDeeplink } from "./deeplink/protocol";
 import type { CausaDeEnlace } from "./deeplink/firma-por-enlace";
 import type { Almacen } from "./deeplink/sesion";
 import { almacenDeNavegador, terminarViaje } from "./deeplink/sesion";
-import { completarVuelta, guardarEleccion, iniciarConexion, iniciarCreacionDeNonce, leerEleccion, olvidarEleccion, remesaDelViaje } from "./deeplink/conexion";
+import { completarVuelta, guardarEleccion, iniciarConexion, iniciarCreacionDeNonce, leerEleccion, olvidarEleccion, remesaDelViaje } from "./deeplink/conexion"; import { vueltaDelPop } from "./deeplink/pop-por-enlace"; // WKH-359: EN ESTA LÍNEA, por el mismo motivo que el resto de este archivo evita líneas nuevas arriba
 import { DEEPLINK_NONCE_NO_ENTRO, DEEPLINK_SIN_MEMORIA, DEEPLINK_TX_ALTERADA } from "./deeplink/firma-por-enlace";
 
 import { resolveSolanaNetworkConfig, resolveSolanaRpcUrlPublic } from "../chain";
@@ -150,7 +150,7 @@ export interface VueltaDeEnlace extends EleccionDeEnlace {
    * van después. Un `await` antes reintroduce exactamente la ventana que el fix-pack 2 de la ola 1
    * cerró. Lo mide `T-065-SYNC`.
    */
-  completar(i: { remittanceId: string }): Promise<ResultadoDePreparacion>;
+  completar(i: { remittanceId: string }): Promise<ResultadoDePreparacion>; completarPop(): Promise<ResultadoDePop>; // WKH-359/AC-7 — EN ESTA LÍNEA (Δ0). ⛔ MÉTODO PROPIO Y NO UNA VARIANTE MÁS DE `completar`: son dos vueltas distintas, con anclas distintas, y `completar` consume el paso del VIAJE de forma irreversible. Meter el PoP ahí haría que volver del salto del permiso destruyera el paso del depósito. Y ⛔ NO recibe `remittanceId`: el permiso no es de una remesa, es de una billetera, y pedírselo sería inventar un cruce que este ancla no puede sostener.
 }
 
 /**
@@ -457,4 +457,57 @@ export class RecorridoPorEnlaceReal implements PreparacionPorEnlace {
   private conexion(): Connection {
     return new Connection(resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster));
   }
+
+  /**
+   * WKH-359/AC-7 — La vuelta del salto que pidió la prueba de posesión.
+   *
+   * 🔴 LA REANUDACIÓN ES POR RESULTADOS, NUNCA POR `viaje.paso` (AC-7). Esto NO mira en qué paso dice
+   * el viaje que está: lee el ancla del PoP y contesta qué HAY. El razonamiento entero está escrito en
+   * (`interpretarVuelta`, `./deeplink/sesion.ts:578`) y en el motor: *"`Viaje.paso` queda RANCIO por
+   * construcción: dice qué se fue a pedir en el salto en curso, no qué se consiguió."*
+   *
+   * ⚠️ ES ENTERAMENTE SÍNCRONA por dentro —no hay un solo `await`— así que CD-26 se cumple por
+   * construcción y no por disciplina: el disco se lee, el ancla se marca consumida y la vuelta se
+   * resuelve en un único bloque, sin ninguna ventana de read-modify-write que reabrir.
+   */
+  async completarPop(): Promise<ResultadoDePop> {
+    const e = this.entorno();
+    // Mismo criterio que `completar`: "no había marca nuestra" y "no podemos leer el disco" son cosas
+    // distintas, y colapsarlas dejaría a la persona sin diagnóstico después de volver del salto.
+    if (e === null) return { estado: "corte", causa: DEEPLINK_SIN_MEMORIA };
+    const v = vueltaDelPop({ almacen: e.almacen, ahora: Date.now(), hrefActual: e.href, appUrl: e.origin });
+    switch (v.tipo) {
+      case "nada":
+        return { estado: "nada" };
+      case "pop-firmado":
+        // ⛔ NO se devuelve la firma: queda anclada y la saca quien la necesite, UNA vez
+        // (`leerPruebaPop`, `./deeplink/pop-por-enlace.ts:398`). Pasarla por acá la haría viajar por
+        // la pantalla, que no tiene por qué tocarla.
+        return { estado: "pop-listo", proposito: v.proposito };
+      case "corte":
+        return { estado: "corte", causa: v.causa };
+      default: {
+        // ⛔ ESTO NO TRAGA NADA: es el candado de exhaustividad, igual que en `completar`.
+        const nunca: never = v;
+        return { estado: "corte", causa: nunca };
+      }
+    }
+  }
 }
+
+/**
+ * WKH-359 — Qué salió de leer la vuelta del salto del PoP. Va AL FINAL del archivo, donde hay CERO
+ * citas ancladas (medido: las únicas dos de este archivo apuntan a `:246`).
+ *
+ * ⛔ ES UN TIPO PROPIO Y NO UNA VARIANTE MÁS DE (`ResultadoDePreparacion`, `:71`), y no es duplicación:
+ * ese tipo lo consume un `switch` exhaustivo en la pantalla, así que agregarle un miembro obliga a
+ * decidir qué hace la reanudación del DEPÓSITO con un desenlace del PERMISO. Son dos preguntas
+ * distintas y mezclarlas es exactamente cómo un `never` deja de proteger: pasa a exigir ramas que no
+ * significan nada en su contexto, y alguien las rellena con un `break`.
+ */
+export type ResultadoDePop =
+  /** No había marca del PoP en esta URL, o la había y no vino respuesta. No se tocó el disco. */
+  | { estado: "nada" }
+  /** La firma volvió, VERIFICÓ, y quedó anclada. Quien la necesite la saca con `leerPruebaPop`. */
+  | { estado: "pop-listo"; proposito: "pop-payout" | "pop-kyc" }
+  | { estado: "corte"; causa: CausaDeEnlace };

@@ -24,7 +24,7 @@ import type {
   SolanaEscrowDepositProbe,
   SolanaEscrowRefundResult,
   AutorizacionDelPrincipal, // WKH-356: OCUPA LA LÍNEA que dejó `SolanaPrincipalAuthorization` (que quedó sin uso al cambiar el retorno). Sustituirlo en el lugar, y no borrar una línea y agregar otra, es lo que deja este bloque en Δ0: las citas por número a este archivo apuntan de `:188` para abajo.
-  SolanaRemittanceIdResolver,
+  SolanaRemittanceIdResolver, PruebaDePosesionPorEnlace, PruebaPorEnlace, // WKH-359: los DOS EN ESTA LÍNEA, no en dos nuevas — todas las citas ancladas a este archivo apuntan de `:188` para abajo y una línea nueva acá arriba las rota a todas (mismo motivo que WKH-349 y WKH-356, un par de líneas más abajo)
   SolanaSenderSolBalance,
   SolanaSenderSolBalanceProbe,
   SolanaCloseableEscrowLister, EscrowChainState, SolanaEscrowChainStateReader, // WKH-349: EN ESTA LÍNEA, no en dos nuevas — TODAS las citas ancladas a este archivo apuntan de `:188` para abajo, y una línea nueva acá arriba las rota a todas
@@ -44,7 +44,7 @@ import {
 } from "./chain";
 import { ESCROW_INDEX_MAX_ENTRIES } from "./escrow-index-limits";
 import { ESCROW_ID_LOOKUP_CEILING } from "./escrow-lookup-limits"; import { ESCROW_STATE_BATCH_CEILING, ESCROW_STATE_BATCH_TIMEOUT_MS } from "./escrow-history-limits"; // WKH-349: EN ESTA LÍNEA, no en una nueva — los imports de este archivo están ARRIBA de `:188` y una línea acá rota TODAS las citas ancladas que apuntan de ahí para abajo, que son las que este archivo recibe. Va pegado a `ESCROW_ID_LOOKUP_CEILING` y no a `ESCROW_INDEX_MAX_ENTRIES` a propósito: ése es justo el techo con el que el nuevo NO se confunde (uno lo pone el servidor del registro durable, el otro el RPC), y quien lea la línea ve los dos juntos
-import { solanaWalletBridge } from "./solana-wallet-bridge"; import nacl from "tweetnacl"; import { almacenDeNavegador, leerViaje } from "./solana/deeplink/sesion"; import { terminarPreparado } from "./solana/deeplink/preparado"; import { type Almacen, terminarViaje } from "./solana/deeplink/sesion"; import type { FirmaPorEnlace } from "./solana/deeplink/firma-por-enlace"; import { construirNonceAdvance, direccionDelNonce, leerNonce } from "./solana/nonce-duradero"; import { SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT } from "../application/solana-escrow-rent"; import { leerEleccion } from "./solana/deeplink/conexion"; import type { BilleteraDeeplink } from "./solana/deeplink/protocol"; // WKH-358 agregó los dos últimos por la MISMA razón que los siete de acá y ANTES de este comentario, no después. WKH-356: TODOS EN ESTA LÍNEA, no en siete nuevas — las citas por número a este archivo apuntan de `:188` para abajo y siete líneas acá arriba las rotan a todas. WKH-357 agregó los dos últimos por la MISMA razón y ANTES de este comentario, no después: cuatro imports de 062 quedaron una vez adentro de un `//` por pegarlos del lado equivocado
+import { solanaWalletBridge } from "./solana-wallet-bridge"; import nacl from "tweetnacl"; import { almacenDeNavegador, leerViaje } from "./solana/deeplink/sesion"; import { terminarPreparado } from "./solana/deeplink/preparado"; import { type Almacen, terminarViaje } from "./solana/deeplink/sesion"; import type { FirmaPorEnlace } from "./solana/deeplink/firma-por-enlace"; import { construirNonceAdvance, direccionDelNonce, leerNonce } from "./solana/nonce-duradero"; import { SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT } from "../application/solana-escrow-rent"; import { leerEleccion } from "./solana/deeplink/conexion"; import type { BilleteraDeeplink } from "./solana/deeplink/protocol"; import { MARCA_POP_KYC, MARCA_POP_PAYOUT, iniciarPop, leerFirmaParaMensaje, leerPasoPop, leerPruebaPop } from "./solana/deeplink/pop-por-enlace"; import { DEEPLINK_POP_SIN_FIRMA, DEEPLINK_SIN_MEMORIA } from "./solana/deeplink/firma-por-enlace"; // WKH-359 — EN ESTA MISMA LÍNEA, por el mismo motivo que los de WKH-349 y WKH-356 de arriba: todas las citas ancladas a este archivo apuntan de `:188` para abajo y una línea nueva acá las rota a todas. // WKH-358 agregó los dos últimos por la MISMA razón que los siete de acá y ANTES de este comentario, no después. WKH-356: TODOS EN ESTA LÍNEA, no en siete nuevas — las citas por número a este archivo apuntan de `:188` para abajo y siete líneas acá arriba las rotan a todas. WKH-357 agregó los dos últimos por la MISMA razón y ANTES de este comentario, no después: cuatro imports de 062 quedaron una vez adentro de un `//` por pegarlos del lado equivocado
 
 // HU-SOL-20/AC-2: tope de candidatos que el fallback del REFUND sondea on-chain — el camino que
 // devuelve el PRINCIPAL.
@@ -171,7 +171,7 @@ export class SolanaWalletAdapter
     SolanaCloseableEscrowLister,
     // WKH-327 (fix-pack AR/BLQ-BAJO-1): quién está conectado AHORA. Mismo adapter otra vez porque el
     // bridge que sabe la respuesta ya es suyo.
-    ConnectedWalletProbe, SolanaEscrowChainStateReader // WKH-349: EN ESTA LÍNEA. El estado on-chain de los escrows del historial se le pregunta a la CADENA, así que vive en el mismo adapter por la misma razón que sus vecinos de arriba
+    ConnectedWalletProbe, SolanaEscrowChainStateReader, PruebaDePosesionPorEnlace // WKH-349: EN ESTA LÍNEA. El estado on-chain de los escrows del historial se le pregunta a la CADENA, así que vive en el mismo adapter por la misma razón que sus vecinos de arriba
 {
   private address: string | null = null;
 
@@ -1473,7 +1473,7 @@ export class SolanaWalletAdapter
       // ausente, RPC caído. Un blockhash vencido prueba que la tx no puede entrar DE ACÁ EN ADELANTE,
       // NO que no haya entrado antes ⇒ hay que ir a mirar el estado autoritativo.
       //
-      // WKH-353 — el mapeo a los desenlaces con nombre: el `expired` de `SignatureVerdict`, `:2342` ES
+      // WKH-353 — el mapeo a los desenlaces con nombre: el `expired` de `SignatureVerdict`, `:2478` ES
       // ese blockhash vencido, y `unseen` es que se nos acabó el tiempo de preguntar, el que llega
       // hasta acá abajo como excepción "confirm_timeout". Por qué NO colapsarlos: está en el tipo.
       reverted = err instanceof RefundTxReverted;
@@ -1919,7 +1919,7 @@ export class SolanaWalletAdapter
   // el popMessage VERBATIM; la wallet (vía bridge) devuelve la firma ed25519 de 64 bytes; se codifica
   // base58 (simétrico con verifySolanaPop.signatureBase58). Browser+node-safe: bs58 + TextEncoder,
   // NUNCA Buffer node-only (auto-blindaje HU-SOL-5 BLQ-MED-1).
-  async signMessage(message: string): Promise<string> {
+  async signMessage(message: string): Promise<string> { const porEnlace = this.firmaDelPopPorEnlace(message); if (porEnlace !== null) return porEnlace; // WKH-359/AC-1 — PEGADO A LA FIRMA, no en una línea propia: este archivo recibe 25 citas ancladas de acá para abajo a 8 destinos (medido en esta rama con la receta de (`ANCLADA`, `../composition/citas-ancladas.test.ts:62`); el Story File decía 23 y mis propias waves lo movieron), y una línea de más las rota a todas. En el camino por enlace la firma NO se pide: se LEE de un ancla que un salto anterior ya trajo, o se corta (CD-12). ⛔ POR QUÉ NO PUEDE HACER EL VIAJE REDONDO, medido y no opinado: el tipo es `(message) => Promise<string>` (`../application/ports.ts:510`) y un proceso de JavaScript que navega a otra app DEJA DE EXISTIR antes de que la promesa resuelva ⇒ un `signMessage` que navegara devolvería una promesa que nunca resuelve. Ensanchar el retorno tocaría los cuatro dobles de `WalletPort` y correría 11 ocurrencias ancladas (CD-16). Con el gate apagado esto devuelve `null` y lo de abajo corre BYTE-IDÉNTICO (AC-8)
     const bytes = new TextEncoder().encode(message); // browser+node-safe (NO Buffer)
     const sig = await solanaWalletBridge.signMessage(bytes); // Uint8Array(64) de la wallet
     // Normalizar a Uint8Array cubre adapters que devuelvan otro shape (R-2 del SDD).
@@ -2110,7 +2110,7 @@ export class SolanaWalletAdapter
 
   /**
    * WKH-353 — ¿qué dice la cadena de ESTA firma? Devuelve uno de los tres desenlaces de
-   * `SignatureVerdict`, `:2342`, preguntando por HTTP y sin abrir NINGUNA suscripción.
+   * `SignatureVerdict`, `:2478`, preguntando por HTTP y sin abrir NINGUNA suscripción.
    *
    * POR QUÉ NO `connection.confirmTransaction`, que es lo que estaba acá antes. Sus dos estrategias
    * terminan en `onSignature`, o sea en un `signatureSubscribe` por WebSocket, y el RPC que usamos
@@ -2135,7 +2135,7 @@ export class SolanaWalletAdapter
    * El mecanismo anterior tenía LOS MISMOS TRES DEFECTOS (el techo del llamador tampoco lo cortaba;
    * era inmortal con el RPC de altura caído, mismo archivo :6665-6670; dejaba un huérfano por
    * reintento) y era cuatro órdenes de magnitud más caro: los números y su medición viven UNA sola
-   * vez, al lado de `SIGNATURE_POLL_INTERVAL_MS`, `:2357`.
+   * vez, al lado de `SIGNATURE_POLL_INTERVAL_MS`, `:2493`.
    *
    * Matar el huérfano exige un `AbortSignal` que cruce desde el llamador, y es una HU con su propio
    * alcance y no una línea acá: los métodos de `Connection` no aceptan `signal` (`getSignatureStatuses`
@@ -2323,6 +2323,142 @@ export class SolanaWalletAdapter
     }
     return v.direccion; // OPACO, SIN toLowerCase (CD-3)
   }
+
+  /** WKH-359/AC-1 — La firma del PoP que un salto anterior YA trajo, o `null` si este recorrido no es
+   *  por enlace (y entonces `signMessage` sigue por el bridge, byte-idéntico — AC-8).
+   *
+   *  ⛔ LEE O CORTA, NUNCA PIDE (CD-12). El corte es `deeplink_pop_sin_firma` y ⛔ **no**
+   *  `wallet_sign_not_available`, que es lo que salía antes de esta HU: esa marca la tira el bridge
+   *  (`../infrastructure/solana-wallet-bridge.ts:127`) y significa "no hay extensión en este
+   *  navegador", cosa que en el camino por enlace es cierta SIEMPRE y por lo tanto no distingue nada.
+   *  La nueva significa "falta el insumo", que es accionable. Lo miden `T-067-2` y `T-067-19`.
+   *
+   *  🔴 Y ESO ES TODO LO QUE ESTA HU LE DA A LOS CONSUMIDORES 3 Y 4 (DT-13): el resolver de refund
+   *  (`../infrastructure/refund/http-solana-remittance-id-resolver.ts:30`) y el gesto de renovar la
+   *  ventana (`../presentation/flow.tsx:1180`) pasan por acá y reciben **diagnóstico correcto, NO
+   *  recorrido**. ⛔ Nadie puede leer este cambio como "el refund por enlace ya funciona". */
+  private firmaDelPopPorEnlace(mensaje: string): string | null {
+    if (this.caminoPorEnlace() === null) return null; // el gate manda: camino inyectado ⇒ byte-idéntico
+    const disco = this.discoDeEnlace();
+    // Un disco que no se deja leer no es "no hay ancla": es que no podemos saber. El diagnóstico
+    // correcto es el mismo que usa `:778` para el mismo hecho, y la pantalla ya lo sabe traducir.
+    if (disco === null || disco === "no-se-pudo") throw new Error(DEEPLINK_SIN_MEMORIA);
+    const firma = leerFirmaParaMensaje(disco, Date.now(), mensaje);
+    if (firma === null) throw new Error(DEEPLINK_POP_SIN_FIRMA);
+    return firma;
+  }
+
+  /** WKH-359/AC-2, AC-5 — La implementación de (`PruebaDePosesionPorEnlace`, `../application/ports.ts:1232`).
+   *
+   *  ⛔ VIVE ACÁ Y NO EN `preparacion-por-enlace.ts` PORQUE ACÁ VIVE EL GATE: (`caminoPorEnlace`,
+   *  `:2239`) es `private`, y ese otro módulo **no puede** importar el adaptador — lo declara en sus
+   *  `:7-13`: sería la dependencia al revés, y ese archivo existe justamente para eso.
+   *
+   *  LOS CUATRO DESENLACES, y ninguno se puede colapsar en la ausencia de otro:
+   *   · `no-corresponde` ⇒ el gate está apagado o no hay elección persistida. Quien llama sigue como
+   *     siempre. **Es la línea que sostiene AC-8**, y por eso va PRIMERO, antes de tocar el disco.
+   *   · `listo`          ⇒ el ancla ya tiene firma verificada. Se entrega UNA vez (CD-15).
+   *   · `hay-que-salir`  ⇒ falta, y hay a dónde ir. El ancla se escribe ANTES de devolver la URL.
+   *   · `no-se-puede`    ⇒ **sin `irA`**, y eso es lo medible (AC-5).
+   *
+   *  🔴 AC-5 — EL 501 NO SALTA A NINGUNA BILLETERA. Cuando el emisor contesta 501 (`PAYOUT_POP_SECRET`
+   *  ausente server-side) esto corta con la marca ESTABLE `payout_pop_unavailable` —la misma que ya
+   *  producía (`prepare`, `./settlement/http-solana-prepare-gateway.ts:193`) antes de esta HU— y ⛔ NO
+   *  escribe ancla y ⛔ NO devuelve `irA`. Es lo mismo que hace hoy `HttpPopSigner` con su
+   *  `if (res.status === 501) return null` (`./auth/http-pop-signer.ts:22`), y es una decisión de
+   *  ahorro además de correctitud: la route leería ESA MISMA env y contestaría 503, así que saltar
+   *  sería mandar a la persona a firmar algo cuyo rechazo ya está determinado.
+   *
+   *  ⚠️ EL EMISOR ES EL MISMO PARA LOS DOS PROPÓSITOS, y no es un atajo: `HttpKycVerdictGateway`
+   *  también saca su desafío de `/api/a2a/payout/challenge` (lo hace vía el mismo `PopSigner`, ver
+   *  `./kyc/http-kyc-verdict-gateway.ts:60`). Lo que separa los dos permisos es el `proposito` del
+   *  ancla, no el emisor (CD-15).
+   *
+   *  ⛔ NO IMPORTA `pop-challenge.ts` (CD-13): la ventana sale del `exp` que viene en ESTE JSON, nunca
+   *  de una constante copiada de un módulo que importa `node:crypto`. */
+  async pedir(input: {
+    proposito: typeof MARCA_POP_PAYOUT | typeof MARCA_POP_KYC;
+    direccion: string;
+  }): Promise<PruebaPorEnlace> {
+    if (this.caminoPorEnlace() === null) return { estado: "no-corresponde" }; // AC-8: antes de tocar nada
+    const disco = this.discoDeEnlace();
+    if (disco === null || disco === "no-se-pudo") {
+      return { estado: "no-se-puede", causa: "payout_pop_unavailable" }; // sin disco no hay ancla posible, y saltar sin poder recordar es saltar a ciegas
+    }
+    const ahora = Date.now();
+
+    const ya = leerPruebaPop(disco, ahora, input.proposito);
+    if (ya !== null) return { estado: "listo", proof: { challenge: ya.popChallenge, signature: ya.firma } };
+
+    // 🔴 UN SALTO EN CURSO NO QUEMA UN DESAFÍO NUEVO. Si el ancla del MISMO propósito sigue viva y
+    // todavía sin firma —la persona volvió sin firmar, o recargó—, se vuelve a armar la URL con el
+    // MISMO `popChallenge` y el MISMO `exp`. Pedir uno nuevo acá haría que el reloj del permiso se
+    // reiniciara en cada reintento, que es justo lo que DT-10 vino a evitar.
+    const enCurso = leerPasoPop(disco, ahora);
+    if (enCurso !== null && enCurso.proposito === input.proposito && enCurso.firma === undefined) {
+      return { estado: "hay-que-salir", irA: this.saltoDelPop(disco, ahora, input.proposito, enCurso.popChallenge, enCurso.popMessage, enCurso.exp) };
+    }
+
+    let res: Response;
+    try {
+      res = await fetch("/api/a2a/payout/challenge", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ address: input.direccion }),
+      });
+    } catch {
+      return { estado: "no-se-puede", causa: "payout_pop_unavailable" }; // red caída ⇒ no hay desafío que anclar, y no se salta
+    }
+    // ⛔ Los dos con la MISMA marca y SIN `irA`, a propósito: 501 es "el mecanismo está apagado" y el
+    // resto es "no pudimos preguntar". Los dos significan que no hay nada que ir a firmar.
+    if (!res.ok) return { estado: "no-se-puede", causa: "payout_pop_unavailable" };
+
+    let desafio: { popChallenge?: unknown; popMessage?: unknown; exp?: unknown };
+    try {
+      desafio = (await res.json()) as typeof desafio;
+    } catch {
+      return { estado: "no-se-puede", causa: "payout_pop_unavailable" };
+    }
+    // Los TRES tienen que estar y ser del tipo que decimos. ⚠️ Un `exp` ausente NO se rellena con un
+    // default: sería fabricar acá la ventana que DT-10 dice que la fija el servidor.
+    if (
+      typeof desafio.popChallenge !== "string" ||
+      typeof desafio.popMessage !== "string" ||
+      typeof desafio.exp !== "number" ||
+      !Number.isFinite(desafio.exp)
+    ) {
+      return { estado: "no-se-puede", causa: "payout_pop_unavailable" };
+    }
+
+    return {
+      estado: "hay-que-salir",
+      irA: this.saltoDelPop(disco, ahora, input.proposito, desafio.popChallenge, desafio.popMessage, desafio.exp),
+    };
+  }
+
+  /** El salto en sí. ⛔ NO se envuelve en un `try`: `iniciarPop` TIRA si el viaje no está conectado o
+   *  si el disco no acepta el ancla, y las dos cosas significan que saltar sería mandar a firmar algo
+   *  cuya vuelta este dispositivo no va a poder verificar. */
+  private saltoDelPop(
+    disco: Almacen,
+    ahora: number,
+    proposito: typeof MARCA_POP_PAYOUT | typeof MARCA_POP_KYC,
+    popChallenge: string,
+    popMessage: string,
+    exp: number,
+  ): string {
+    return iniciarPop({
+      almacen: disco,
+      ahora,
+      hrefActual: (globalThis as { location?: Location }).location?.href ?? "",
+      appUrl: (globalThis as { location?: Location }).location?.origin ?? "",
+      proposito,
+      popChallenge,
+      popMessage,
+      exp,
+    }).irA;
+  }
+
 }
 
 /**

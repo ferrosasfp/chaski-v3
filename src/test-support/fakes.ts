@@ -54,6 +54,9 @@ import type {
   SolanaPrincipalAuthorization,
   SolanaSenderSolBalance,
   SolanaSenderSolBalanceProbe,
+  PruebaDePosesionPorEnlace,
+  PruebaPorEnlace,
+  WalletPossessionProof,
   SolanaSettlementFailureReason,
   SolanaPrincipalInOutcome,
   SolanaSettlementGateway,
@@ -906,6 +909,7 @@ export class FakeSolanaPayoutPrepareGateway implements SolanaPayoutPrepareGatewa
     amountUsd: number;
     beneficiary: unknown;
     idempotencyKey: string;
+    proof?: WalletPossessionProof; // WKH-359: el doble registra la prueba INYECTADA. Sin esto, un `prepare` que la ignorara daría verde: el fake no tendría dónde mostrarla.
   }> = [];
   constructor(
     private readonly result: FakeSolanaPrepareResult = {
@@ -1077,6 +1081,14 @@ export class RecorridoPorEnlaceNulo implements PreparacionPorEnlace {
   async crearCuentaDeNonce(): Promise<never> {
     throw new Error("preparacion_por_enlace_no_cableada_en_este_test");
   }
+  /** WKH-359 — ⚠️ TIRA, por la MISMA razón que `completar()`: ningún test puede creer que volvió del
+   *  salto del permiso sin que nada lo haya hecho. Es inalcanzable mientras la barra no traiga una marca
+   *  del PoP, que es un gate MÁS fuerte que el de `completar()` (aquél se gatea con `remesaEnCurso()`).
+   *  ⛔ No devuelve `{estado:"nada"}`: ése es un desenlace REAL y un doble que lo imite esconde el
+   *  cableado que falta. */
+  async completarPop(): Promise<never> {
+    throw new Error("vuelta_del_pop_no_cableada_en_este_test");
+  }
 }
 
 // FakeSolanaCloseableEscrowLister — WKH-327/AC-8. `mode="reject"` NO es un adorno: es el único modo
@@ -1177,5 +1189,32 @@ export class FakeSolanaEscrowChainStateReader implements SolanaEscrowChainStateR
     this.calls.push({ sender: input.sender, remittanceIds: [...input.remittanceIds] });
     if (this.mode === "reject") throw new Error("escrow_states_boom");
     return this.states;
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-359 — EL DOBLE DE `PruebaDePosesionPorEnlace`
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 SU DEFAULT ES `no-corresponde`, Y ESO NO ES PEREZA: ES LA EVIDENCIA DE AC-8. `no-corresponde` es
+// lo que contesta el adaptador real en el camino INYECTADO (gate apagado, o sin elección persistida),
+// que es el camino de toda la suite preexistente. Con este default, los ~40 `it` de `ConfirmAndSend`
+// que ya existían siguen midiendo EXACTAMENTE lo que medían: si el paso nuevo tocara una línea del
+// camino inyectado, se pondrían rojos ellos, sin que haya que escribir un `it` nuevo para notarlo.
+//
+// ⛔ POR QUÉ EL PUERTO ES REQUERIDO EN EL BUNDLE Y NO `pop?`, aunque eso obligue a tocar 5 archivos de
+// test: un `pop?` suelto que quedara undefined haría que el paso desapareciera EN SILENCIO y el camino
+// por enlace volvería, sin ruido, al `payout_pop_unavailable` que esta HU vino a matar. Es el MISMO
+// argumento que `confirm-and-send.ts` ya tenía escrito para `probe` y `senderBalance`, y el costo de
+// tocar 5 archivos es exactamente el precio de que borrar el cableado no compile.
+export class FakePruebaDePosesionPorEnlace implements PruebaDePosesionPorEnlace {
+  /** Cada llamada con su `proposito`: es lo que permite afirmar que se pidió UNA vez y para QUÉ. */
+  readonly llamadas: { proposito: string; direccion: string }[] = [];
+
+  constructor(private readonly respuesta: PruebaPorEnlace = { estado: "no-corresponde" }) {}
+
+  pedir(input: { proposito: "pop-payout" | "pop-kyc"; direccion: string }): Promise<PruebaPorEnlace> {
+    this.llamadas.push({ proposito: input.proposito, direccion: input.direccion });
+    return Promise.resolve(this.respuesta);
   }
 }

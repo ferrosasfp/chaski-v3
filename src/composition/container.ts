@@ -161,7 +161,7 @@ export function createContainer(): Container {
         prepare: new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet, popProofs)),
         gateway: new HttpSolanaSettlementGateway(),
         probe: wallet,
-        senderBalance: wallet,
+        senderBalance: wallet, pop: wallet, // WKH-359/AC-2 — ⛔ SIN `?`, EN ESTA LÍNEA. `pop` es el MISMO adapter otra vez (como `probe` y `senderBalance`) y no es pereza: la pregunta "¿estamos en el camino por enlace?" la contesta (`caminoPorEnlace`, `../infrastructure/solana-wallet.ts:2239`), que es `private` de esa clase, y el gate y el disco viven ahí. ⛔ Opcional dejaría que BORRAR ESTA LÍNEA compilara con la suite verde, que es la razón que este archivo ya escribió dos veces (`:79` y `:213-220`); requerido lo vuelve un error de compilación en 6 sitios. El único test que ve esta línea es el que ejercita el objeto que ESTA FUNCIÓN DEVUELVE (`container.test.ts`). En el camino inyectado `pedir()` contesta `no-corresponde` y no ejecuta ninguna línea nueva (AC-8).
       }
     : undefined;
   // Refund trustless (AC-6/CD-10): válvula de recuperación (lee on-chain y aborta si no es

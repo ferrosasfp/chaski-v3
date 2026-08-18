@@ -242,7 +242,7 @@ export function isPrepareRejection(reason: string | null | undefined): boolean {
  * o salió y no volvió. Lo único que se puede afirmar es la segunda mitad.
  *
  * ⛔ Y EL COPY NO PUEDE DECIR "no se pidió ninguna firma": `payout_pop_unavailable` sale de que
- * `pop.prove()` falló ((`prove`, `../infrastructure/settlement/http-solana-prepare-gateway.ts:224`)).
+ * `pop.prove()` falló ((`prove`, `../infrastructure/settlement/http-solana-prepare-gateway.ts:245`)).
  * ⚠️ ACÁ DECÍA QUE «esa prueba SÍ le pide a la billetera firmar un mensaje», Y ES DEMASIADO ANCHO (re-AR
  * it2 · MNR-4): (`prove`, `../infrastructure/auth/http-pop-signer.ts:16`) tiene TRES salidas y **sólo una
  * toca la billetera**. Las otras dos cortan ANTES de (`signMessage`, `../infrastructure/auth/http-pop-signer.ts:29`):

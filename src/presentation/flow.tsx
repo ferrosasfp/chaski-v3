@@ -4006,7 +4006,7 @@ function useVueltaPorEnlace(i: {
       // 🔴 LA RAMA DEL PERMISO SE EVALÚA **ANTES** DEL GATE DE `remId`, Y EL ORDEN ES PARTE DEL ARREGLO
       // (fix-pack · AR/BLQ-BAJO-4). ⛔ El permiso NO es de una remesa, es de una BILLETERA: no depende de
       // `remittanceId` y por eso puede —y debe— resolverse aunque el viaje del depósito ya no exista.
-      if (marca === "pop-kyc" || marca === "pop-payout") { let vp: Awaited<ReturnType<Container["recorridoPorEnlace"]["completarPop"]>>; try { vp = await c.recorridoPorEnlace.completarPop({ hrefDeLaVuelta: hrefAlMontar }); } catch (e) { limpiarLaBarra(); if (vivo.valor) alFallar((e as Error).message); return; } limpiarLaBarra(); if (!vivo.valor) return; if (vp.estado === "corte") { alFallar(vp.causa); return; } if (vp.estado !== "pop-listo") return; if (marca === "pop-kyc") { if (yaInteractuo.current) { alAvisar(AVISO_REANUDACION_POR_ENLACE); return; } try { const rk = await c.connectWallet.execute(); if (vivo.valor) alConectar(rk); } catch (e) { if (vivo.valor) alFallar((e as Error).message); } return; } } // WKH-359/AC-7 · fix-pack AR/BLQ-ALTO-1 + BLQ-BAJO-4 — LA VUELTA DEL PERMISO, EN ESTA LÍNEA (Δ0) Y ANTES DE TODO LO DEMÁS. 🔴 `hrefAlMontar` SE PASA POR PARÁMETRO Y ⛔ NO SE DEJA QUE EL ADAPTADOR LEA `location` EN VIVO: ahí estaba el bug que rompía AC-2, AC-3 y AC-7. El paso 2 —(`limpiarLaBarra`, `:4023`)— corre para TODA vuelta y borra `nonce`, `data`, `errorCode`, la clave de cifrado y el `dl`, así que la implementación real leía una URL sin un solo parámetro de respuesta y **toda firma buena salía `deeplink_pop_alterado`**, en un loop que sólo terminaba al vencer el `exp`. Medido con las dos mitades: mismo disco, href sucio ⇒ `pop-firmado`; href limpio ⇒ `corte`. Lo vigilan (`completarPop`, `../infrastructure/solana/preparacion-por-enlace.test.ts:696`) —que aplica `hrefSinRastroDeVuelta` como este productor— y `T-067-11`, que exige que lo que llega acá traiga todavía el rastro. ⚠️ LOS DOS PROPÓSITOS COMPARTEN LA LECTURA Y NO ES AHORRO: la vuelta es la MISMA (un ancla, `CLAVE_POP`), y lo único que cambia es qué se hace después de que verificó. `pop-kyc` re-ejecuta `connectWallet` (la prueba anclada la saca `pedir()` sin saltar) y RETORNA; `pop-payout` cae al mismo bloque de reanudación de siempre, por (`marca`, `:4070`). ⛔ Y NO SE COLAPSA CON EL `else` DE `:4070`: llegar hasta acá con `remId === null` es alcanzable —el viaje dura 20 min (`MAX_EDAD_MS`, `../infrastructure/solana/deeplink/sesion.ts:111`) y el `exp` del desafío 10, con relojes que arrancan en momentos distintos— y con el gate de `:4010` primero eso limpiaba la barra y retornaba SIN llamar a `completarPop()` y SIN `alFallar`: la persona volvía de firmar y no leía **nada**. Ahora lee el corte que `vueltaDelPop` sí sabe nombrar
+      if (marca === "pop-kyc" || marca === "pop-payout") { if ((await resolverVueltaDelPermiso({ c, marca, hrefAlMontar, limpiarLaBarra, vivo, yaInteractuo, alConectar, alFallar, alAvisar })) === "cortar") return; } // WKH-359/AC-7 · fix-pack AR/BLQ-ALTO-1 + BLQ-BAJO-4 — LA VUELTA DEL PERMISO, EN ESTA LÍNEA (Δ0) Y ANTES DE TODO LO DEMÁS. 🔴 `hrefAlMontar` SE PASA POR PARÁMETRO Y ⛔ NO SE DEJA QUE EL ADAPTADOR LEA `location` EN VIVO: ahí estaba el bug que rompía AC-2, AC-3 y AC-7. El paso 2 —(`limpiarLaBarra`, `:4023`)— corre para TODA vuelta y borra `nonce`, `data`, `errorCode`, la clave de cifrado y el `dl`, así que la implementación real leía una URL sin un solo parámetro de respuesta y **toda firma buena salía `deeplink_pop_alterado`**, en un loop que sólo terminaba al vencer el `exp`. Medido con las dos mitades: mismo disco, href sucio ⇒ `pop-firmado`; href limpio ⇒ `corte`. Lo vigilan (`completarPop`, `../infrastructure/solana/preparacion-por-enlace.test.ts:696`) —que aplica `hrefSinRastroDeVuelta` como este productor— y `T-067-11`, que exige que lo que llega acá traiga todavía el rastro. ⚠️ LOS DOS PROPÓSITOS COMPARTEN LA LECTURA Y NO ES AHORRO: la vuelta es la MISMA (un ancla, `CLAVE_POP`), y lo único que cambia es qué se hace después de que verificó. `pop-kyc` re-ejecuta `connectWallet` (la prueba anclada la saca `pedir()` sin saltar) y RETORNA; `pop-payout` cae al mismo bloque de reanudación de siempre, por (`marca`, `:4070`). ⛔ Y NO SE COLAPSA CON EL `else` DE `:4070`: llegar hasta acá con `remId === null` es alcanzable —el viaje dura 20 min (`MAX_EDAD_MS`, `../infrastructure/solana/deeplink/sesion.ts:111`) y el `exp` del desafío 10, con relojes que arrancan en momentos distintos— y con el gate de `:4010` primero eso limpiaba la barra y retornaba SIN llamar a `completarPop()` y SIN `alFallar`: la persona volvía de firmar y no leía **nada**. Ahora lee el corte que `vueltaDelPop` sí sabe nombrar ⚠️ ESTA LÍNEA TENÍA 716 CHARS DE CÓDIGO Y 16 `;` (fix-pack · CR/MNR-7): un `try`/`catch`, dos `await`, seis ramas y dos `return` distintos, todo en una línea física, en la reanudación del money-path. El cuerpo se fue a (`resolverVueltaDelPermiso`, `:4301`), AL FINAL DEL ARCHIVO, que es donde este archivo ya manda lo nuevo porque ahí rompe CERO citas —medido: la cita entrante más baja aterriza en `:4243` y el archivo tenía 4268 líneas—. El Δ0 se conserva y la rama vuelve a ser legible: hoy son 215 chars y 1 `;`, medidos con la MISMA receta que el CR usó para el 716 (`awk` que corta en el primer `//` y cuenta el resto).
       if (remId === null) { limpiarLaBarra(); return; } // No hay viaje, pero la barra puede traer el rastro de uno que ya murió: se limpia igual. ⚠️ ESTE GATE YA NO PUEDE TRAGARSE UNA VUELTA DEL PoP: la rama de `:4009` la atendió y retornó (o, para `pop-payout` con el permiso conseguido, sigue de largo y cae acá). ⚠️ ACÁ DECÍA «el `remId` existe por construcción, porque `vueltaDelPop` corta con `deeplink_viaje_vencido` cuando el viaje no está» Y NO SE SOSTIENE (fix-pack · AR/MNR-3): las dos mitades leen cosas distintas. `vueltaDelPop` mira que HAYA viaje; `remId` sale de (`remesaDelViaje`, `../infrastructure/solana/deeplink/conexion.ts:400`), que además contesta `null` con el viaje VIVO si `viaje.remittanceId` no es un texto útil, y de (`remesaEnCurso`, `../infrastructure/solana/preparacion-por-enlace.ts:253`), que pasa antes por `entorno()` —el que EXIGE `location`, cosa que `discoDeEnlace` no—. O sea: `vueltaDelPop` en verde NO implica `remId !== null`. El desenlace de ese caso es el retorno silencioso de esta misma línea, con el atenuante MEDIDO de que la prueba quedó anclada y `pedir()` la entrega después sin volver a saltar (`T-067-27`). ⛔ Lo defectuoso era la AFIRMACIÓN, no el comportamiento: el `if` se queda igual, y es lo que estrecha `remId` a `string` para el `completar()` de abajo
       let res: Awaited<ReturnType<Container["recorridoPorEnlace"]["completar"]>>;
       try {
@@ -4265,4 +4265,80 @@ function OlvidarBilleteraDeEnlace({
       Cambiar de billetera
     </Button>
   );
+}
+
+
+/**
+ * WKH-359/AC-7 (fix-pack · CR/MNR-7) — LA VUELTA DEL PERMISO, SACADA DE LA LÍNEA DE `:4009`.
+ *
+ * 🔴 POR QUÉ ESTÁ ACÁ ABAJO Y NO ADENTRO DEL PRODUCTOR, que es donde estaría si sólo importara la
+ * legibilidad. Es la convención Δ0 de este archivo, la misma que ya puso a (`useVueltaPorEnlace`,
+ * `:3956`) al final: insertar líneas ARRIBA corre por número todas las citas de abajo, y este archivo
+ * las recibe por decenas. Acá abajo rompe CERO, y eso está MEDIDO y no supuesto: la cita entrante más
+ * baja aterriza en (`OlvidarBilleteraDeEnlace`, `:4243`) —tres sitios: `conexion.ts`,
+ * `preparacion-por-enlace.ts` y `solana-wallet.ts`— y el archivo terminaba en 4268.
+ *
+ * ⛔ Y POR QUÉ NO SE DEJÓ TODO EN LA LÍNEA, que es lo que la convención venía haciendo: porque cruzó un
+ * umbral. `:4009` ya no era *"un comentario pegado a una línea que existía"*, era **un bloque de control
+ * entero en una línea física**: 716 chars de código y 16 `;`, con un `try`/`catch`, dos `await`, seis
+ * ramas y dos `return` distintos —contra 566 chars y 11 `;` de la peor línea anterior del archivo—. Ahí
+ * no se puede poner un breakpoint en UNA rama, el `git blame` por línea deja de discriminar, y un diff
+ * de una sola de las seis repinta las 2.436 columnas. Es la rama que decide qué pasa cuando la persona
+ * vuelve de firmar el permiso del money-path, y la va a leer alguien que no la escribió.
+ *
+ * 🔴 EL TIPO DE RETORNO ES UNA DECISIÓN, NO UN `boolean`. `"cortar"` significa *"esto ya resolvió y ya
+ * avisó lo que había que avisar (o decidió a propósito no avisar nada): el productor NO sigue"*, y
+ * `"seguir"` es el ÚNICO camino que cae al bloque de reanudación de siempre —`pop-payout` con el
+ * permiso conseguido—. Un `boolean` acá se leería al revés con la misma facilidad que al derecho.
+ *
+ * ⚠️ LO QUE **NO** CAMBIÓ, y es la mitad que importa en el money-path: el orden de las llamadas, quién
+ * llama a `limpiarLaBarra()` y cuándo, qué se traga y qué no, y los seis desenlaces. Es un movimiento de
+ * TEXTO. Medido: la suite queda en `147 files / 2780 tests` sin tocar un solo `it`, y el mutante que
+ * `T-067-22` declara —mover esta rama DEBAJO del gate de (`remId`, `:4010`)— sigue matando, corrido
+ * después del movimiento: `1 failed | 14 passed (15)` en `flow-reanudacion.test.tsx`, y el que cae es
+ * `T-067-22`. Un refactor de una rama del money-path que no re-corre su propio mutante no está medido.
+ */
+async function resolverVueltaDelPermiso(i: {
+  c: Container;
+  marca: "pop-kyc" | "pop-payout";
+  hrefAlMontar: string;
+  limpiarLaBarra: () => void;
+  vivo: { readonly valor: boolean };
+  yaInteractuo: { readonly current: boolean };
+  alConectar: (r: Awaited<ReturnType<Container["connectWallet"]["execute"]>>) => void;
+  alFallar: (causaCruda: string) => void;
+  alAvisar: (mensaje: string) => void;
+}): Promise<"cortar" | "seguir"> {
+  const { c, marca, hrefAlMontar, limpiarLaBarra, vivo, yaInteractuo, alConectar, alFallar, alAvisar } = i;
+  let vp: Awaited<ReturnType<Container["recorridoPorEnlace"]["completarPop"]>>;
+  try {
+    vp = await c.recorridoPorEnlace.completarPop({ hrefDeLaVuelta: hrefAlMontar });
+  } catch (e) {
+    limpiarLaBarra();
+    if (vivo.valor) alFallar((e as Error).message);
+    return "cortar";
+  }
+  limpiarLaBarra();
+  if (!vivo.valor) return "cortar";
+  if (vp.estado === "corte") {
+    alFallar(vp.causa);
+    return "cortar";
+  }
+  // `nada` —la marca estaba pero no vino respuesta— NO avisa nada A PROPÓSITO: no hay ningún hecho que
+  // contarle a la persona, y un `alFallar` con una causa inventada es peor que el silencio.
+  if (vp.estado !== "pop-listo") return "cortar";
+  if (marca === "pop-kyc") {
+    if (yaInteractuo.current) {
+      alAvisar(AVISO_REANUDACION_POR_ENLACE);
+      return "cortar";
+    }
+    try {
+      const rk = await c.connectWallet.execute();
+      if (vivo.valor) alConectar(rk);
+    } catch (e) {
+      if (vivo.valor) alFallar((e as Error).message);
+    }
+    return "cortar";
+  }
+  return "seguir"; // `pop-payout` con el permiso conseguido: cae al bloque de reanudación de siempre
 }

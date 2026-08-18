@@ -819,3 +819,241 @@ describe("T-067-21 (AR/BLQ-ALTO-1): la vuelta del permiso se lee del href que le
     });
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-359 · T-067-24 … T-067-27 (fix-pack · CR/MNR-4) — LAS CUATRO RAMAS DE `pedir()` QUE NINGÚN `it`
+// EJERCITABA SOBRE LA IMPLEMENTACIÓN REAL
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ AGUJERO CIERRA, Y CÓMO SE MIDIÓ QUE ERA UN AGUJERO. La enumeración del CR:
+// `grep -rn "\.pedir(" --include=*.test.ts --include=*.test.tsx src/ app/` devolvía **un solo**
+// call-site ejecutable del `pedir()` real —el (`pedir`, `:769`) de `T-067-21`— y recorría **una** de las cinco
+// ramas (desafío fresco ⇒ `hay-que-salir`). Las otras cuatro se afirmaban ÚNICAMENTE a través de
+// (`FakePruebaDePosesionPorEnlace`, `../../test-support/fakes.ts:1210`), **cuyo valor de retorno ES la
+// conclusión bajo prueba**: el doble contesta `no-corresponde` porque se lo pusieron, no porque el
+// gate haya decidido nada. ⇒ el docblock de (`pedir`, `../solana-wallet.ts:2379`) dice de su primera
+// línea *"Es la línea que sostiene AC-8"*, y borrarla no ponía roja a la suite.
+//
+// ⛔ POR QUÉ ESTE ARCHIVO Y NO `solana-wallet.test.ts`, que es donde vive la clase: `pedir()` sólo
+// hace algo con un VIAJE CONECTADO, y el connect por enlace entero —`elegir` ⇒ URL ⇒ sobre cifrado ⇒
+// `completar`— ya está montado acá y corre en `node`, con un solo realm. Bajo jsdom el `Uint8Array` de
+// `new TextEncoder().encode(...)` no es `instanceof Uint8Array` del realm de `tweetnacl` y `iniciarPop`
+// muere en `checkArrayTypes` antes de ejercitar una línea de esta HU (es la misma razón, medida, que
+// `T-067-21` ya declara en su encabezado).
+//
+// ⛔ POR QUÉ EL CONNECT SE REPITE ACÁ EN VEZ DE COMPARTIR EL FIXTURE DE `T-067-21`, y es Δ0 y no
+// pereza: subir aquel `volviendoDeFirmarElPermiso()` a scope de módulo lo obliga a moverse de línea, y
+// este archivo lo citan DOS sitios por número —(`completarPop`, `../../presentation/flow.tsx:4009`) y
+// (`completarPop`, `../../presentation/flow-reanudacion.test.tsx:575`), las dos a `:696`—. Lo que se
+// comparte de verdad no es el código: es que las dos mitades produzcan el MISMO estado del mundo, y
+// eso se verifica solo (si el connect de acá no dejara el viaje conectado, `pedir()` no llegaría a
+// ninguna de las cuatro ramas y los cuatro `it` se caerían en el `throw` del fixture).
+describe("T-067-24..27 (CR/MNR-4): las cuatro ramas de `pedir()`, sobre el adaptador REAL", () => {
+  const FIRMANTE_2 = Keypair.generate();
+  const MENSAJE_2 = "chaski:pop:payout:4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU:1755400001";
+
+  /** Deja el mundo con el viaje CONECTADO por enlace y la elección persistida, que es la precondición
+   *  de las cinco ramas. No toca el ancla del PoP: eso lo hace cada `it` con el `pedir()` real. */
+  async function conectadoPorEnlace() {
+    const nav = montarNavegador();
+    const recorrido = new RecorridoPorEnlaceReal();
+    const billetera = nacl.box.keyPair();
+    const q = new URL(recorrido.elegir({ billetera: "phantom", remittanceId: REM }).irA).searchParams;
+    const publicaDeLaApp = bs58.decode(q.get("dapp_encryption_public_key") as string);
+    nav.navegarA(
+      hrefDeVuelta(
+        q.get("redirect_link") as string,
+        respuestaDeLaBilletera(
+          { public_key: FIRMANTE_2.publicKey.toBase58(), session: "sess-2" },
+          publicaDeLaApp,
+          billetera,
+        ),
+      ),
+    );
+    const conectado = await recorrido.completar({ remittanceId: REM });
+    if (conectado.estado !== "conectado") throw new Error(`el connect no cerró: ${conectado.estado}`);
+    solanaWalletBridge.setWalletAvailability("none"); // el estado de un teléfono sin extensión
+    return { nav, recorrido, billetera, publicaDeLaApp };
+  }
+
+  /** El emisor del desafío, de mentira sólo en el transporte: el JSON tiene la forma que produce
+   *  `app/api/a2a/payout/challenge/route.ts`. `status` entra por parámetro para poder medir el 501. */
+  function emisorDelDesafio(status = 200, challenge = "ch-24") {
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ popChallenge: challenge, popMessage: MENSAJE_2, exp: Math.floor(Date.now() / 1000) + 600 }),
+          { status, headers: { "content-type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+    return fetchSpy;
+  }
+
+  const pedirPayout = () =>
+    new SolanaWalletAdapter().pedir({ proposito: "pop-payout", direccion: FIRMANTE_2.publicKey.toBase58() });
+
+  // ────────────────────────────────────────────────────────────────────────────────────────────────
+  // T-067-24 · AC-8 — EL GATE VA PRIMERO, Y SE MIDE CON UN DISCO QUE TIRA
+  // ────────────────────────────────────────────────────────────────────────────────────────────────
+  //
+  // 🔴 POR QUÉ EL DISCO TIENE QUE TIRAR PARA QUE ESTE `it` VALGA ALGO. El mutante que el CR nombra es
+  // *"mover el gate DESPUÉS del disco"*, y con un disco SANO ese mutante sigue contestando
+  // `no-corresponde`: las dos versiones son indistinguibles. La única entrada que las separa es un
+  // `localStorage` cuyo getter LANZA (modo privado de iOS Safari, cookies bloqueadas), porque ahí
+  // (`discoDeEnlace`, `../solana-wallet.ts:2263`) contesta `"no-se-pudo"` y la rama del disco devuelve
+  // `no-se-puede`. ⇒ gate primero ⇒ `no-corresponde`; disco primero ⇒ `no-se-puede`.
+  // MUTANTES QUE MATA, LOS DOS CORRIDOS (`npx vitest run …/preparacion-por-enlace.test.ts`, cada uno
+  // con el árbol restaurado y verificado por md5):
+  //   · **M1** mover el `if (this.caminoPorEnlace() === null)` DEBAJO del `if (disco === null || disco
+  //     === "no-se-pudo")` ⇒ `1 failed | 27 passed (28)`, y el que cae es éste.
+  //   · **M5** borrar esa línea entera —el mutante que el CR nombró como *"no puede poner rojo a
+  //     nadie"*— ⇒ `1 failed | 27 passed (28)`, y el que cae es éste. Ya no es cierto.
+  // ⛔ Y el `it` de al lado es la CALIBRACIÓN INVERSA: mueve UNA sola variable (la disponibilidad) y el
+  // mismo llamado deja de contestar `no-corresponde`. Sin él, un `pedir()` que devolviera
+  // `no-corresponde` para TODO pasaría el de arriba — y eso está MEDIDO, no razonado: el mutante **M6**
+  // (`if (true) return { estado: "no-corresponde" }`) da `6 failed | 22 passed (28)` y **el de arriba NO
+  // está entre los seis**; el que lo caza es el de abajo. Las dos direcciones, cada una con su `it`.
+  it("T-067-24: camino inyectado ⇒ `no-corresponde` sin tocar el disco ni la red (AC-8)", async () => {
+    await conectadoPorEnlace();
+    const fetchSpy = emisorDelDesafio();
+    solanaWalletBridge.setWalletAvailability("injected"); // la extensión existe ⇒ el camino de siempre
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      get() {
+        throw new Error("denegado por política de almacenamiento");
+      },
+    });
+    expect(await pedirPayout()).toEqual({ estado: "no-corresponde" });
+    expect(fetchSpy, "el camino inyectado pidió un desafío: ya no es byte-idéntico").not.toHaveBeenCalled();
+  });
+
+  it("T-067-24b CALIBRACIÓN: con la MISMA llamada y sólo la disponibilidad en `none`, ya no es `no-corresponde`", async () => {
+    await conectadoPorEnlace();
+    emisorDelDesafio();
+    expect((await pedirPayout()).estado).toBe("hay-que-salir");
+  });
+
+  // ────────────────────────────────────────────────────────────────────────────────────────────────
+  // T-067-25 · AC-5 — EL 501 NO SALTA A NINGUNA BILLETERA
+  // ────────────────────────────────────────────────────────────────────────────────────────────────
+  //
+  // ⛔ EL CUERPO DEL 501 ES UN DESAFÍO VÁLIDO A PROPÓSITO, y ahí está la mitad que mide: si el corte se
+  // decidiera por el JSON y no por el STATUS, este `it` recibiría un `hay-que-salir` perfectamente
+  // armado. Es lo que mata el mutante que el CR nombra —cambiar el `!res.ok` por un `catch`— y también
+  // el de borrar el `if (!res.ok)` entero — **M2**, corrido: `1 failed | 27 passed (28)`, y el que cae
+  // es éste.
+  // 🔴 LO QUE SE AFIRMA NO ES SÓLO EL ESTADO: es que **no hay `irA` y no quedó ancla en el disco**. Un
+  // ancla escrita sin salto dejaría a la vuelta esperando una firma que nadie fue a pedir.
+  it("T-067-25: 501 con cuerpo VÁLIDO ⇒ `no-se-puede`, sin `irA` y sin ancla (AC-5)", async () => {
+    const { nav } = await conectadoPorEnlace();
+    emisorDelDesafio(501);
+    const r = await pedirPayout();
+    expect(r).toEqual({ estado: "no-se-puede", causa: "payout_pop_unavailable" });
+    expect("irA" in r, "el 501 devolvió una URL: la persona salta a firmar algo ya condenado").toBe(false);
+    expect(nav.disco.get("chaski.billetera.pop.v1"), "el 501 dejó un ancla sin salto").toBeUndefined();
+  });
+
+  // ────────────────────────────────────────────────────────────────────────────────────────────────
+  // T-067-26 · DT-10 — UN SALTO EN CURSO NO QUEMA UN DESAFÍO NUEVO
+  // ────────────────────────────────────────────────────────────────────────────────────────────────
+  //
+  // 🔴 QUÉ PROPIEDAD ES, Y POR QUÉ NO ALCANZA CON MIRAR EL `fetch`. La persona vuelve sin firmar (o
+  // recarga la pantalla) y `pedir()` se llama de nuevo: si pidiera un desafío nuevo, el reloj del
+  // permiso se reiniciaría en cada reintento y `exp` dejaría de ser la ventana que el SERVIDOR fijó,
+  // que es exactamente lo que DT-10 vino a evitar. Se mide en las dos puntas: **el emisor se consulta
+  // una sola vez** y **el ancla del disco sigue teniendo el PRIMER `popChallenge` y el PRIMER `exp`**.
+  //
+  // ⛔ ACÁ NO SE COMPARAN LAS DOS URLs DEL SALTO, Y LA RAZÓN LA MIDIÓ ESTE MISMO `it` PONIÉNDOSE ROJO:
+  // la primera versión afirmaba *"mismo desafío y mismo `exp` ⇒ mismo sobre"* y es **falso**. El sobre
+  // lo cifra `nacl.box.after` con un `nonce` de (`randomBytes`, `./deeplink/protocol.ts:171`) nuevo en
+  // cada llamada, así que dos saltos del MISMO desafío dan dos URLs distintas byte a byte. Comparar
+  // URLs medía el generador de aleatorios, no DT-10.
+  // MUTANTE QUE MATA, CORRIDO (**M3**): borrar el bloque `if (enCurso !== null && …)` de `pedir()` ⇒ el
+  // emisor se consulta DOS veces y el ancla queda con `ch-26-2`, o sea el desafío quemado que DT-10
+  // prohíbe. Medido: `1 failed | 27 passed (28)`, y el que cae es éste.
+  it("T-067-26: dos `pedir()` con el ancla viva y sin firma reusan el MISMO desafío (DT-10)", async () => {
+    const { nav } = await conectadoPorEnlace();
+    // El emisor contesta un desafío DISTINTO en cada llamada: sin eso, un segundo `fetch` sería
+    // invisible en el disco y el `it` sólo mediría el contador de llamadas.
+    let emision = 0;
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            popChallenge: `ch-26-${++emision}`,
+            popMessage: MENSAJE_2,
+            exp: Math.floor(Date.now() / 1000) + 600,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const uno = await pedirPayout();
+    if (uno.estado !== "hay-que-salir") throw new Error(`el primer salto no se armó: ${uno.estado}`);
+    const anclaPrimera = JSON.parse(nav.disco.get("chaski.billetera.pop.v1") as string);
+
+    const dos = await pedirPayout();
+    if (dos.estado !== "hay-que-salir") throw new Error(`el segundo salto no se armó: ${dos.estado}`);
+    const anclaSegunda = JSON.parse(nav.disco.get("chaski.billetera.pop.v1") as string);
+
+    expect(fetchSpy, "se pidió un desafío nuevo por un salto que ya estaba en curso").toHaveBeenCalledTimes(1);
+    expect(anclaPrimera.popChallenge).toBe("ch-26-1");
+    expect(anclaSegunda.popChallenge, "el segundo salto quemó un desafío nuevo (DT-10)").toBe("ch-26-1");
+    expect(anclaSegunda.exp, "el reloj del permiso se reinició en el reintento (DT-10)").toBe(anclaPrimera.exp);
+  });
+
+  // ────────────────────────────────────────────────────────────────────────────────────────────────
+  // T-067-27 · LA ÚLTIMA PATA DE LA CADENA — `listo`, Y UNA SOLA VEZ (CD-15)
+  // ────────────────────────────────────────────────────────────────────────────────────────────────
+  //
+  // 🔴 ESTO ES EL RECORRIDO COMPLETO Y SIN UN SOLO DATO SEMBRADO: connect real ⇒ `pedir()` real arma el
+  // salto ⇒ la billetera firma ed25519 DE VERDAD el `popMessage` anclado ⇒ `completarPop()` real
+  // verifica ⇒ `pedir()` real ENTREGA la prueba. Hasta este `it`, el `estado: "listo"` sólo existía
+  // como respuesta enlatada de un doble. Lo único de mentira sigue siendo el emisor del desafío y el
+  // navegador.
+  // ⛔ Y LA SEGUNDA MITAD ES CD-15: el mismo `pedir()`, otra vez, NO vuelve a entregar. El ancla se
+  // borra en el gesto de la entrega ((`terminarPasoPop`, `./deeplink/pop-por-enlace.ts:407`)), así que
+  // la segunda llamada tiene que salir a buscar un desafío nuevo.
+  // MUTANTE QUE MATA, CORRIDO (**M4**): en `leerPruebaPop`, mover el `terminarPasoPop(a)` DESPUÉS del
+  // `return` ⇒ la segunda llamada vuelve a contestar `listo` con la MISMA firma. Medido:
+  // `1 failed | 27 passed (28)`, y el que cae es éste.
+  it("T-067-27: la prueba verificada se entrega como `listo`, y sólo la primera vez (CD-15)", async () => {
+    const { nav, recorrido, billetera, publicaDeLaApp } = await conectadoPorEnlace();
+    emisorDelDesafio(200, "ch-27");
+    const salto = await pedirPayout();
+    if (salto.estado !== "hay-que-salir") throw new Error(`el salto no se armó: ${salto.estado}`);
+
+    const hrefSucio = hrefDeVuelta(
+      new URL(salto.irA).searchParams.get("redirect_link") as string,
+      respuestaDeLaBilletera(
+        { signature: bs58.encode(nacl.sign.detached(new TextEncoder().encode(MENSAJE_2), FIRMANTE_2.secretKey)) },
+        publicaDeLaApp,
+        billetera,
+      ),
+    );
+    nav.navegarA(hrefSinRastroDeVuelta(hrefSucio)); // el paso 2 del productor, igual que en producción
+    expect(await recorrido.completarPop({ hrefDeLaVuelta: hrefSucio })).toEqual({
+      estado: "pop-listo",
+      proposito: "pop-payout",
+    });
+
+    const entrega = await pedirPayout();
+    expect(entrega).toEqual({ estado: "listo", proof: { challenge: "ch-27", signature: expect.any(String) } });
+    if (entrega.estado !== "listo") throw new Error("inalcanzable: lo acaba de afirmar el `expect`");
+    // La firma es la de la billetera, verificable contra el mensaje anclado: no es un `String` cualquiera.
+    expect(
+      nacl.sign.detached.verify(
+        new TextEncoder().encode(MENSAJE_2),
+        bs58.decode(entrega.proof.signature),
+        FIRMANTE_2.publicKey.toBytes(),
+      ),
+      "la firma entregada no verifica contra el `popMessage` anclado",
+    ).toBe(true);
+
+    emisorDelDesafio(200, "ch-27-segundo");
+    const otraVez = await pedirPayout();
+    expect(otraVez.estado, "la prueba se entregó dos veces: el «un solo uso» de CD-15 no está").not.toBe("listo");
+  });
+});

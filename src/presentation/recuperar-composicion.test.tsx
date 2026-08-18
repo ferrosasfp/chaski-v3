@@ -618,7 +618,7 @@ describe("T-063-16 (2º pase): el bloque pide crecer y centrarse, y su padre pue
     // clava desde acá también: el consejo de "Mis envíos" es PROSA, no un control.
     //
     // ⚠️ Lo que este `it` mide es que no haya `<Button>` de la app en esta pantalla: la variante vive
-    // en el `className` renderizado (`BTN_VARIANTS`, `ui.tsx:46`), y las tres pestañas de la barra son
+    // en el `className` renderizado (`BTN_VARIANTS`, `ui.tsx:72`), y las tres pestañas de la barra son
     // `<button>` planos. Que la REGLA de qué es `primary` no se relaje sigue siendo trabajo de
     // `jerarquia-relativa.test.tsx`.
     pintarRecuperar(mundo().container);

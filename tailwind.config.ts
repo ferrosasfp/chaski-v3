@@ -11,7 +11,14 @@ export default {
         ink: "#17130F",
         stone: "#8A8178",
         line: "#EBE7DF",
-        cochineal: { DEFAULT: "#CB2A54", ink: "#9E1C40" },
+        // `claro` lo agrega HU-066 y es el ÚNICO tono pensado para fondo OSCURO: el splash es la
+        // primera superficie de tinta que tiene esta app y ninguno de los dos cochinillas de arriba
+        // sirve ahí. MEDIDO con la fórmula de luminancia relativa de WCAG 2.x sobre los hex del tema,
+        // contra `ink` (#17130F), que es el fondo del splash: `cochineal` (#CB2A54) da **3,50:1** y NO
+        // llega al 4,5:1 de AA para texto normal —y la píldora de red es texto de 12px—; `claro`
+        // (#E08AA0) da **7,27:1**, o sea AAA. ⛔ NO se usa sobre `paper` ni sobre `card`: contra el
+        // blanco de una tarjeta da 2,26:1 y sería ilegible. Es un color de superficie oscura y nada más.
+        cochineal: { DEFAULT: "#CB2A54", ink: "#9E1C40", claro: "#E08AA0" },
         verde: { DEFAULT: "#12805C", bg: "#E7F3EE" },
         sand: "#F3EFE7",
       },

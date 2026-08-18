@@ -92,7 +92,7 @@ export function almacenDeNavegador(storage: Storage): Almacen {
   };
 }
 
-const CLAVE = "chaski.billetera.viaje.v1";
+export const CLAVE = "chaski.billetera.viaje.v1"; // HU-066: SE EXPORTA, y el `export` entra EN ESTA LÍNEA y no con un docblock arriba porque esta línea está citada por número ((`CLAVE`, `conexion.ts:114`)) y un bloque nuevo la correría. POR QUÉ SE EXPORTA: la puerta del splash (`motivoParaNoMostrar`, `../../../presentation/splash-puerta.ts:84`) necesita saber si hay un viaje de billetera guardado —que es la condición REAL de la vuelta por enlace, no la marca en la URL— y copiar el literal allá habría dejado dos sitios de escritura del mismo string. ⛔ SIGUE SIENDO DE ESTE MÓDULO: nadie de afuera escribe en esta clave, sólo se lee para decidir si NO pintar una pantalla.
 
 /**
  * Cuánto vale un viaje guardado. **20 minutos.**

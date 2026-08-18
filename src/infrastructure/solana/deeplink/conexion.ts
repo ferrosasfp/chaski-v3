@@ -31,7 +31,7 @@ import type { BilleteraDeeplink } from "./protocol";
 import { PARAMS_DE_RESPUESTA, clavePublicaEnRespuesta, leerRespuesta, nuevoParDeCifrado, secretoCompartido, soloTextos, urlConectar, urlFirmarTransaccion } from "./protocol";
 import type { CausaDeEnlace } from "./firma-por-enlace";
 import {
-  DEEPLINK_RECHAZADO, DEEPLINK_NONCE_YA_CONSUMIDO, // WKH-358 (fix-pack · AR/BLQ-BAJO-2): el segundo EN ESTA LÍNEA para no correr las 4 citas por número que este archivo recibe (`:129`, `:149`, `:254`, `:400`)
+  DEEPLINK_RECHAZADO, DEEPLINK_NONCE_YA_CONSUMIDO, DEEPLINK_NONCE_SIN_CONTEXTO, // WKH-358 (fix-pack · AR/BLQ-BAJO-2; la tercera, del re-AR it2 · BLQ-BAJO-1): las dos entran EN ESTA LÍNEA para no correr las citas por número que este archivo recibe. ⚠️ ACÁ DECÍA «las 4 (`:129`, `:149`, `:254`, `:400`)» Y YA ERA FALSO CUANDO SE ESCRIBIÓ: el propio fix-pack agregó una quinta al citar `vueltaDelNonce`. RE-MEDIDO en el árbol de este commit con el instrumento de `citas-ancladas.test.ts` (su regex `ANCLADA` + su resolución de destino, sumando entrantes largas y auto-citas ancladas): **13 ocurrencias a 7 destinos** (`:129` x2, `:149`, `:209` x2, `:254`, `:400` x2, `:461` x2, `:528` x3). El número es una foto y este mismo commit lo movió de 7 a 13 escribiendo comentarios; el invariante es que los 7 destinos apuntan más abajo de esta línea
   DEEPLINK_RESPUESTA_ILEGIBLE,
   DEEPLINK_SIN_MEMORIA,
   DEEPLINK_TX_ALTERADA,
@@ -45,7 +45,7 @@ import {
  * conjunto CERRADO de tres valores (`PasoDelViaje`, `sesion.ts:114`), así que `interpretarVuelta`
  * contesta `no-volvimos` para esta marca y **el motor no consume ni destruye nada** si esta marca queda
  * en la barra. Si en cambio fuera un cuarto `PasoDelViaje`, el motor la miraría, no sabría qué hacer con
- * ella, y el `switch` con `never` de (`nunca`, `firma-por-enlace.ts:767`) dejaría de compilar.
+ * ella, y el `switch` con `never` de (`nunca`, `firma-por-enlace.ts:795`) dejaría de compilar.
  *
  * ⛔ NO la agregues a `PasoDelViaje` "para que sea uniforme": ese conjunto describe los pasos del viaje
  * del DEPÓSITO, y este salto no es parte de ese viaje — pasa antes, y su resultado (una cuenta creada en
@@ -63,13 +63,13 @@ export interface PedidoDeConexion {
    *
    * 🔴 No es una preferencia: (`enlaceDeVuelta`, `sesion.ts:495`) hace `new URL(origen)` y **TIRA** con
    * una URL relativa, sin declararlo en su firma (medido en la ola 1, T9). Mismo requisito, misma razón
-   * y mismas palabras que (`hrefActual`, `firma-por-enlace.ts:264`).
+   * y mismas palabras que (`hrefActual`, `firma-por-enlace.ts:292`).
    */
   hrefActual: string;
   /** Para que la billetera muestre título e ícono en su diálogo. */
   appUrl: string;
   /**
-   * Qué remesa. ⛔ **NUNCA `null`**, por el mismo motivo que (`remittanceId`, `firma-por-enlace.ts:272`):
+   * Qué remesa. ⛔ **NUNCA `null`**, por el mismo motivo que (`remittanceId`, `firma-por-enlace.ts:300`):
    * `interpretarVuelta` acepta `null` como "no tengo remesa en contexto" y con eso **apaga el guard de
    * cruce entre remesas y consume el paso igual**. El viaje que se abre acá lleva el `remittanceId`
    * desde el primer byte (CD-5).
@@ -203,7 +203,7 @@ export function olvidarEleccion(a: Almacen): void {
  *
  * ⛔ NO fija `claveBilletera`, `session` ni `direccion`: esos TRES los escribe la vuelta del connect, y
  * el ancla `claveBilletera` es de UNA SOLA ESCRITURA (`claveBilletera`, `sesion.ts:148`). Un viaje
- * recién abierto NO está conectado (`estaConectado`, `firma-por-enlace.ts:348` exige los tres), y por
+ * recién abierto NO está conectado (`estaConectado`, `firma-por-enlace.ts:376` exige los tres), y por
  * eso el motor de firma **corta antes** de tocarlo: los dos extremos del flujo no se pisan.
  */
 export function iniciarConexion(
@@ -519,22 +519,22 @@ function leerPasoDelNonce(a: Almacen, ahora: number): PasoDelNonce | null {
  * paso 5 es que **no se transmita otra transacción que la que mandamos a firmar**, que es el ataque que
  * importa acá: sin él, un sobre bien cifrado podría cambiar el destino de esa creación.
  * 🔴 ACÁ DECÍA QUE ESA VERIFICACIÓN «VIVE EN EL ADAPTADOR, QUE YA LA HACE PARA EL DEPÓSITO EN `solana-wallet.ts:999`», Y ESO ERA UN PUNTERO FALSO (CR/BLQ-BAJO-6): ese sitio es la verificación del DEPÓSITO, en la rama de `authorizePrincipal`, y **por el camino del nonce no pasa nadie por ahí**. En ESTE camino nadie verifica ed25519, ni acá ni después. MEDIDO por el CR: una vuelta con la firma en cero pasa los cinco pasos de arriba y llega al broadcast.
- * ⇒ POR QUÉ ALCANZA IGUAL, y es el argumento entero, no una tranquilización: **la cadena rechaza**. `sendRawTransaction` de una tx sin la firma de su `feePayer` no entra en ningún bloque, así que el desenlace es "la cuenta no se creó" y NO "se creó una cuenta que no querías". Y lo que está en juego en este paso es CERO USDC: no hay escrow, no hay orden de payout, y el alquiler sólo se debita si la tx entra, o sea si la firma era buena. Verificar acá cambiaría el DIAGNÓSTICO, no el resultado — y ese diagnóstico ya se arregló del otro lado, con (`DEEPLINK_NONCE_NO_ENTRO`, `./firma-por-enlace.ts:235`), que dejó de afirmar que venció un reloj.
- * ⛔ QUÉ COSTARÍA AGREGARLA, MEDIDO Y NO ESTIMADO, para que la decisión se pueda revisar: los siete `it` del paso del nonce firman con un `Keypair.generate()` que **no es** `viaje.direccion` (`transaccion`, `conexion.test.ts:508`), o sea que el fixture del caso POSITIVO no satisface el guard que habría que agregar. Agregarla exige re-fabricar esos siete fixtures en el mismo cambio; si no, el `it` del camino feliz se pondría rojo y la tentación sería aflojar el guard. Queda declarado y sin hacer.
+ * ⇒ POR QUÉ ALCANZA IGUAL, y es el argumento entero, no una tranquilización: **la cadena rechaza**. `sendRawTransaction` de una tx sin la firma de su `feePayer` no entra en ningún bloque, así que el desenlace es "la cuenta no se creó" y NO "se creó una cuenta que no querías". Y lo que está en juego en este paso es CERO USDC: no hay escrow, no hay orden de payout, y el alquiler sólo se debita si la tx entra, o sea si la firma era buena. Verificar acá cambiaría el DIAGNÓSTICO, no el resultado — y ese diagnóstico ya se arregló del otro lado, con (`DEEPLINK_NONCE_NO_ENTRO`, `./firma-por-enlace.ts:245`), que dejó de afirmar que venció un reloj.
+ * ⛔ QUÉ COSTARÍA AGREGARLA, MEDIDO Y NO ESTIMADO, para que la decisión se pueda revisar: los siete `it` del paso del nonce firman con un `Keypair.generate()` que **no es** `viaje.direccion` (`transaccion`, `conexion.test.ts:514`), o sea que el fixture del caso POSITIVO no satisface el guard que habría que agregar. Agregarla exige re-fabricar esos siete fixtures en el mismo cambio; si no, el `it` del camino feliz se pondría rojo y la tentación sería aflojar el guard. Queda declarado y sin hacer.
  *
  * ⛔ MARCA CONSUMIDO ANTES DE DEVOLVER, en la misma lectura. Es lo que impide que un segundo montaje
  * sobre la misma URL vuelva a transmitir (`T-065-16`).
  */
 function vueltaDelNonce(p: PedidoDeConexion): VueltaDeConexion {
   const ancla = leerPasoDelNonce(p.almacen, p.ahora);
-  if (ancla === null) return { tipo: "corte", causa: DEEPLINK_VIAJE_VENCIDO };
+  if (ancla === null) return { tipo: "corte", causa: DEEPLINK_NONCE_SIN_CONTEXTO }; // ⚠️ ACÁ SALÍA `DEEPLINK_VIAJE_VENCIDO`, y las dos mitades de su copy («No se firmó nada. Empezá el envío de nuevo.») son falsas TAMBIÉN acá (re-AR it2 · BLQ-BAJO-1). Esta salida NO es pre-firma: es PRE-LECTURA. Llegar a esta función significa que la barra trae `MARCA_CREAR_NONCE`, que sólo vive en el `redirect_link` que le dimos a la billetera, así que ya volvimos de ella y esto corta sin mirar un solo parámetro. El razonamiento completo, con los dos relojes, está en el bloque de (`DEEPLINK_NONCE_SIN_CONTEXTO`, `./firma-por-enlace.ts:262`)
   if (ancla.consumido === true) return { tipo: "corte", causa: DEEPLINK_NONCE_YA_CONSUMIDO }; // ⚠️ ACÁ SALÍA `DEEPLINK_VIAJE_VENCIDO`, y su copy dice «No se firmó nada. Empezá el envío de nuevo.»: las DOS mitades son falsas en esta rama (AR/BLQ-BAJO-2 + CR/MNR-10). Es POST-firma —la billetera devolvió la tx firmada y el flag se escribe ANTES del broadcast, así que puede haber salido— y no es el envío sino la creación de una cuenta. Ver el docblock de `DEEPLINK_NONCE_YA_CONSUMIDO`
 
   const lectura = leerViaje(p.almacen, p.ahora);
-  if (lectura.tipo !== "hay") return { tipo: "corte", causa: DEEPLINK_VIAJE_VENCIDO };
+  if (lectura.tipo !== "hay") return { tipo: "corte", causa: DEEPLINK_NONCE_SIN_CONTEXTO }; // 🔴 ÉSTA ES LA ALCANZABLE CON EL ANCLA VIVA, y es lo que hace que el error no sea de precisión: los dos relojes usan la MISMA (`MAX_EDAD_MS`, `./sesion.ts:111`) pero el del viaje arranca en (`iniciarConexion`, `:209`) —al tocar el selector— y `consumir` conserva su `desde`, mientras que el del ancla arranca en (`guardarPasoDelNonce`, `:461`), mucho después ⇒ el viaje vence primero. Selector t=0, «Crear la cuenta» t=15m, firma, vuelta t=21m: ancla viva, viaje vencido, y con la causa vieja la persona leía «No se firmó nada» recién salida de firmar. Lo mide `T-065-17`
   const viaje = lectura.viaje;
   if (typeof viaje.claveBilletera !== "string" || typeof viaje.session !== "string") {
-    return { tipo: "corte", causa: DEEPLINK_VIAJE_VENCIDO };
+    return { tipo: "corte", causa: DEEPLINK_NONCE_SIN_CONTEXTO }; // ídem: sin canal no se puede abrir el sobre, pero eso no dice nada sobre si se firmó
   }
 
   const params = new URLSearchParams(new URL(p.hrefActual).search);
@@ -584,7 +584,7 @@ function vueltaDelNonce(p: PedidoDeConexion): VueltaDeConexion {
 /** base64 de `tx.serializeMessage()` de una transacción en base58, o `null` si no se puede leer.
  *
  *  Devuelve `null` en vez de tirar por el mismo criterio que `firmaDelSender`
- *  ((`firmaDelSender`, `./firma-por-enlace.ts:382`)): una transacción que no se puede leer es un desenlace del viaje, no
+ *  ((`firmaDelSender`, `./firma-por-enlace.ts:410`)): una transacción que no se puede leer es un desenlace del viaje, no
  *  un error de programación. */
 function mensajeDeLaTransaccion(transaccionBase58: string): string | null {
   try {

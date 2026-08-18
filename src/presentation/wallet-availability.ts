@@ -3,7 +3,7 @@
 // Este módulo NO importa `@solana/wallet-adapter-*` (mismo seam que `solana-wallet-bridge.ts`): lee
 // el singleton React-free, que es donde el sync component deja la medición. Así la pantalla del
 // flujo puede reaccionar sin arrastrar la librería a su chunk.
-import { useSyncExternalStore } from "react"; import { resolveSolanaDeeplinkEnabled } from "../infrastructure/chain"; // WKH-358 (fix-pack) — EN ESTA LÍNEA y no en una nueva: este archivo recibe citas por número desde `flow.tsx`, `solana-wallet.ts` y su propio test, y una línea de import de más las corre todas. El literal de la env vive en UN solo lugar (`resolveSolanaDeeplinkEnabled`, `../infrastructure/chain.ts:264`) porque el gate del adaptador —que es infraestructura y NO puede importar de acá— es el segundo consumidor
+import { useSyncExternalStore } from "react"; import { resolveSolanaDeeplinkEnabled } from "../infrastructure/chain"; // WKH-358 (fix-pack) — EN ESTA LÍNEA y no en una nueva: este archivo recibe citas por número desde `flow.tsx`, `solana-wallet.ts` y su propio test, y una línea de import de más las corre todas. El literal de la env vive en UN solo lugar (`resolveSolanaDeeplinkEnabled`, `../infrastructure/chain.ts:269`) porque el gate del adaptador —que es infraestructura y NO puede importar de acá— es el segundo consumidor
 import {
   type SolanaWalletAvailability,
   solanaWalletBridge,
@@ -139,7 +139,7 @@ export function useMwaOffered(): boolean {
  *     puerta de vuelta** (AR/BLQ-MED-1: la elección no expira). La objeción de este renglón —"una
  *     bandera de build no puede contestar ninguna de las dos condiciones"— sigue siendo cierta y NO
  *     aplica: la bandera no CONTESTA ninguna, es una TERCERA condición que se conjuga con las dos.
- *     El literal de la env vive en (`resolveSolanaDeeplinkEnabled`, `../infrastructure/chain.ts:264`).
+ *     El literal de la env vive en (`resolveSolanaDeeplinkEnabled`, `../infrastructure/chain.ts:269`).
  *   · NO borra ni degrada (`phantomBrowseUrl`, `:26`). Ese enlace sigue siendo, con la bandera
  *     prendida o apagada, el ÚNICO camino verificado en cadena por el que una persona en un teléfono
  *     completó un depósito. El selector lo acompaña; no lo reemplaza.

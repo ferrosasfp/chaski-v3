@@ -3274,7 +3274,7 @@ it("T-062-22/AC-1: con `hay-que-salir` la pantalla NAVEGA a `irA` y no toca el e
 // esta HU dejó de poder hacer.
 //
 // Hasta la ola 3, el corte contra la sustitución de depositante en el camino por enlace era
-// (`DEEPLINK_SENDER_MISMATCH`, `../infrastructure/solana/deeplink/firma-por-enlace.ts:663`): el motor
+// (`DEEPLINK_SENDER_MISMATCH`, `../infrastructure/solana/deeplink/firma-por-enlace.ts:691`): el motor
 // comparaba `viaje.direccion` contra el `sender`, y el `sender` salía del bridge, o sea de FUERA del
 // canal del enlace. Desde que (`getAddress`, `../infrastructure/solana-wallet.ts:233`) es link-aware
 // —y tiene que serlo, porque en un teléfono sin extensión el bridge está vacío— las dos mitades de esa

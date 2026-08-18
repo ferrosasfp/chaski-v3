@@ -146,7 +146,7 @@ describe("T-062-10 · CD-8: `interpretarVuelta` tiene EXACTAMENTE DOS llamadores
 //
 // 🔴 Y POR QUÉ ESTA CAPA EXISTE ADEMÁS DEL `Record` TIPADO, que es la pregunta que se hace un review:
 // el `Record` está tipado sobre `CausaDeEnlaceEnPantalla`, que es una unión escrita A MANO. `tsc`
-// garantiza que no falte ninguna de las que ESE TIPO nombra, y nada más. Una DOCEAVA causa exportada
+// garantiza que no falte ninguna de las que ESE TIPO nombra, y nada más. Una causa nueva exportada
 // mañana en el motor no entra sola a ese tipo, así que el compilador la deja pasar en silencio. Este
 // candado deriva las causas del ARCHIVO y es el único que la ve.
 // MUTANTE QUE MATA: agregar `export const DEEPLINK_XXX = "deeplink_xxx";` en `firma-por-enlace.ts`

@@ -64,13 +64,13 @@ import { guardarPreparado, leerPreparado, terminarPreparado } from "./preparado"
 // HOY, medido: cada causa tiene su propio texto en el `Record` de `flow-vm.ts`, consultado por un
 // LOOKUP EXACTO que corre ANTES de la cadena de `includes` de `humanError`.
 //
-// ⚠️ Y SON **TRECE**, NO NUEVE, que es la parte que un `switch` exhaustivo no ve. `CausaDeEnlace` lista
-// ONCE: las nueve que emite ESTE módulo más las dos del paso de la cuenta de nonce que agregó el fix-pack
-// y que emiten `conexion.ts` / `preparacion-por-enlace.ts` (viven acá porque acá vive el vocabulario, y
-// están en la unión porque las firmas de esos dos módulos la usan). Y el adaptador tira dos más
-// (`deeplink_saldo_insuficiente` y `deeplink_nonce_ausente`) que nunca pasan por acá.
-// ⚠️ EL NÚMERO DE ESTE PÁRRAFO ENVEJECE SOLO, y ya envejeció una vez: decía ONCE cuando eran once y el
-// fix-pack lo volvió falso. Lo que no envejece es el candado, que las DERIVA del archivo. El `Record` está
+// ⚠️ Y SON **CATORCE**, NO NUEVE, que es la parte que un `switch` exhaustivo no ve. `CausaDeEnlace` lista
+// DOCE: las nueve que emite ESTE módulo más las TRES del paso de la cuenta de nonce (dos del fix-pack, la
+// tercera del re-AR it2), que emiten `conexion.ts` / `preparacion-por-enlace.ts` y viven acá porque acá vive
+// el vocabulario. Y el adaptador tira dos más (`deeplink_saldo_insuficiente` y `deeplink_nonce_ausente`) que
+// nunca pasan por acá. ⚠️ EL NÚMERO DE ESTE PÁRRAFO ENVEJECE SOLO, y ya envejeció DOS veces: decía ONCE
+// cuando eran once y el fix-pack lo volvió falso; después decía TRECE y el re-AR it2 lo volvió falso otra
+// vez. Lo que no envejece es el candado, que las DERIVA del archivo. El `Record` está
 // tipado sobre `CausaDeEnlaceEnPantalla`, que las une; su docblock explica por qué el compilador solo
 // no alcanza.
 //
@@ -194,21 +194,31 @@ export const DEEPLINK_RESPUESTA_ILEGIBLE = "deeplink_respuesta_ilegible";
 export const DEEPLINK_VIAJE_VENCIDO = "deeplink_viaje_vencido";
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
-// LAS DOS CAUSAS DEL PASO DE LA CUENTA DE NONCE (fix-pack de WKH-358 · AR/BLQ-BAJO-2 + CR/BLQ-BAJO-6)
+// LAS TRES CAUSAS DEL PASO DE LA CUENTA DE NONCE (fix-pack de WKH-358 · AR/BLQ-BAJO-2 + CR/BLQ-BAJO-6,
+// y la tercera del re-AR it2 · BLQ-BAJO-1)
 //
 // ⚠️ LAS EMITE `conexion.ts` / `preparacion-por-enlace.ts` Y NO ESTE MÓDULO, y viven acá igual por lo
 // mismo que las otras nueve: este archivo es el VOCABULARIO, y `CausaDeEnlace` es la unión que las
 // firmas de los dos módulos comparten. Ponerlas en el otro lado obligaría a ensanchar `VueltaDeConexion`
 // y `ResultadoDePreparacion` a una unión propia, y a que el candado de copy barra un archivo más.
 //
-// 🔴 POR QUÉ NO ALCANZABA `DEEPLINK_VIAJE_VENCIDO`, que es lo que las dos usaban antes del fix-pack: su
-// copy dice *"No se firmó nada. Empezá el envío de nuevo."*, y las dos mitades eran falsas acá. La
-// primera porque los dos casos son POST-firma. La segunda porque este paso no es el envío: es la
+// 🔴 POR QUÉ NO ALCANZABA `DEEPLINK_VIAJE_VENCIDO`, que es lo que las tres usaban antes del fix-pack: su
+// copy dice *"No se firmó nada. Empezá el envío de nuevo."*, y las dos mitades son falsas acá. La
+// primera porque los tres casos son POST-VUELTA. La segunda porque este paso no es el envío: es la
 // creación de una cuenta, y mandar a "empezar el envío de nuevo" es el diagnóstico de otro recorrido.
-// ⚠️ LO QUE QUEDA SIN CERRAR Y VA ESCRITO: las OTRAS tres salidas de `vueltaDelNonce` (ancla ausente,
-// ancla vencida, viaje sin canal) siguen usando `DEEPLINK_VIAJE_VENCIDO`, o sea que siguen leyéndose con
-// las palabras del envío. Ahí las dos mitades del copy SÍ son ciertas (son pre-firma), así que el error
-// que queda es de PRECISIÓN, no de hecho. No se abrió una causa más porque el fix-pack no lo pidió.
+// 🔴 ACÁ DECÍA QUE LAS OTRAS TRES SALIDAS DE `vueltaDelNonce` SEGUÍAN EN `DEEPLINK_VIAJE_VENCIDO` PERO
+// QUE «AHÍ LAS DOS MITADES DEL COPY SÍ SON CIERTAS (SON PRE-FIRMA)», Y ESO ERA FALSO (re-AR it2 ·
+// BLQ-BAJO-1): no son pre-firma, son PRE-LECTURA. (`vueltaDelNonce`, `./conexion.ts:528`) sólo corre si
+// la barra trae `MARCA_CREAR_NONCE`, y esa marca viaja en el `redirect_link` que le dimos a la billetera
+// ((`enlaceDeVuelta`, `./sesion.ts:495`)), así que estar ahí significa que VOLVIMOS de la billetera; las
+// tres cortan antes de mirar un solo parámetro, o sea que no pueden saber si se firmó. Y el caso no es
+// hipotético: son DOS relojes con la MISMA constante ((`MAX_EDAD_MS`, `./sesion.ts:111`), 20 min) y
+// arranques distintos — el del VIAJE arranca al tocar el selector ((`iniciarConexion`, `./conexion.ts:209`),
+// que escribe `desde` en `./conexion.ts:219`) y `consumir` lo conserva, y el del ANCLA arranca mucho después, al pedir
+// la firma ((`guardarPasoDelNonce`, `./conexion.ts:461`), que escribe en `./conexion.ts:462`) ⇒ el viaje SIEMPRE vence
+// primero, así que la salida de `./conexion.ts:534` se alcanza con el ancla viva. Recorrido: selector en t=0, "Crear la
+// cuenta" en t=15m, firma en Phantom, vuelta en t=21m ⇒ ancla viva, viaje vencido, y la persona leía "No
+// se firmó nada" recién salida de firmar. Por eso las tres pasaron a la causa de acá abajo.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
 /**
@@ -234,6 +244,23 @@ export const DEEPLINK_NONCE_YA_CONSUMIDO = "deeplink_nonce_ya_consumido";
  */
 export const DEEPLINK_NONCE_NO_ENTRO = "deeplink_nonce_no_entro";
 
+/**
+ * AFIRMA: volvimos de la billetera por el paso de la cuenta de nonce y este dispositivo ya no tiene
+ * con qué leer esa respuesta. Cubre las tres formas de lo mismo, y las tres cortan ANTES de mirar un
+ * solo parámetro de la URL: no hay ancla del paso (ausente, basura o vencida), no hay viaje utilizable,
+ * o el viaje no tiene canal (`session` / `claveBilletera`). Sin ancla no hay contra qué comparar la
+ * transacción devuelta y sin canal no se puede abrir el sobre ⇒ no se transmite nada.
+ * NO AFIRMA: ⛔ que no se haya firmado. Es POST-VUELTA por construcción —la marca que trae acá vive en
+ * el `redirect_link` que le dimos a la billetera— y las tres salidas cortan sin leer la respuesta, así
+ * que la firma pudo haber ocurrido. ⛔ Tampoco afirma que la cuenta no exista, ni que esto sea "el
+ * envío": es la creación de una cuenta, y no hay USDC, escrow ni orden de payout en juego.
+ * 🔴 POR QUÉ NO ES `DEEPLINK_VIAJE_VENCIDO`, que es lo que las tres usaban: su copy dice *"No se firmó
+ * nada. Empezá el envío de nuevo."* y las dos mitades son falsas acá, en una ventana ESTRICTAMENTE MÁS
+ * ANCHA que la de las otras dos causas de este bloque, por los dos relojes que explica el bloque de
+ * arriba. Lo mide `T-065-17`, con su mutante.
+ */
+export const DEEPLINK_NONCE_SIN_CONTEXTO = "deeplink_nonce_sin_contexto";
+
 export type CausaDeEnlace =
   | typeof DEEPLINK_PREPARE_DIVERGED
   | typeof DEEPLINK_SENDER_MISMATCH
@@ -245,7 +272,8 @@ export type CausaDeEnlace =
   | typeof DEEPLINK_RESPUESTA_ILEGIBLE
   | typeof DEEPLINK_VIAJE_VENCIDO
   | typeof DEEPLINK_NONCE_YA_CONSUMIDO
-  | typeof DEEPLINK_NONCE_NO_ENTRO;
+  | typeof DEEPLINK_NONCE_NO_ENTRO
+  | typeof DEEPLINK_NONCE_SIN_CONTEXTO;
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
@@ -279,16 +307,16 @@ export interface PedidoDeFirma {
    * `caminoPorEnlace()` (`caminoPorEnlace`, `../../solana-wallet.ts:2239`):
    *
    *   · **camino inyectado** (el gate contesta `null`): sale del bridge de la extensión, o sea de
-   *     **FUERA** del canal del enlace. Ahí la frase vieja sigue siendo cierta, y el guard de `:556`
+   *     **FUERA** del canal del enlace. Ahí la frase vieja sigue siendo cierta, y el guard de `:584`
    *     sigue siendo la defensa que era. ⚠️ Aunque en ese camino el motor **ni siquiera corre**: la
    *     rama de enlace del adaptador está gateada por el mismo `caminoPorEnlace()`.
    *   · **camino por enlace** (el gate contesta una billetera): sale de `Viaje.direccion`
    *     (`direccion`, `./sesion.ts:152`), o sea de **DENTRO** del canal. No hay alternativa: en un
    *     teléfono sin extensión el bridge está vacío y ésa es la única fuente que existe.
    *
-   * ⇒ En el camino por enlace, el guard de `:556` compara dos lecturas del MISMO disco y por lo tanto
+   * ⇒ En el camino por enlace, el guard de `:584` compara dos lecturas del MISMO disco y por lo tanto
    * es **coherencia interna y no una defensa**. Dónde está la que sí lo es, y su residual, está entero
-   * en el bloque de `:540`.
+   * en el bloque de `:568`.
    */
   sender: string;
   /** El `beneficiary` del `prepare()` de ESTA invocación (atestado server-side). */
@@ -739,7 +767,7 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
         //     enlace ocurre ANTES del KYC: están en dos extremos del recorrido.
         //   · **y aunque llegara, el guard de arriba corta primero**: `estaConectado` exige los tres
         //     campos y un viaje recién abierto por `iniciarConexion` no tiene ninguno, así que
-        //     (`estaConectado`, `:662`) sale por `cortar(DEEPLINK_VIAJE_VENCIDO)` sin llegar hasta acá.
+        //     (`estaConectado`, `:690`) sale por `cortar(DEEPLINK_VIAJE_VENCIDO)` sin llegar hasta acá.
         //
         // ⇒ Esta rama sigue **declarada y sin test, con su precondición escrita arriba**, que es la
         // decisión de siempre para una rama que sólo se alcanza con un disco escrito a mano. Lo que
@@ -970,18 +998,18 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
 }
 
 /**
- * WKH-358/AC-8 — LAS **TRECE** CAUSAS QUE PUEDEN LLEGAR A LA PANTALLA, y por qué este tipo existe
- * además de `CausaDeEnlace`. (Eran once al cerrar la ola 4; el fix-pack agregó las dos del paso del nonce.)
+ * WKH-358/AC-8 — LAS **CATORCE** CAUSAS QUE PUEDEN LLEGAR A LA PANTALLA, y por qué este tipo existe
+ * además de `CausaDeEnlace`. (Eran once al cerrar la ola 4; el fix-pack sumó dos del paso del nonce y el re-AR it2 la tercera.)
  *
- * 🔴 EL AGUJERO DE TIPO, MEDIDO. `CausaDeEnlace` (`:232`) lista **ONCE**: nueve que emite ESTE módulo y
- * dos del paso del nonce, que emiten sus dos módulos vecinos. Le faltan `DEEPLINK_NONCE_AUSENTE` y `DEEPLINK_SALDO_INSUFICIENTE`, que las tira el
+ * 🔴 EL AGUJERO DE TIPO, MEDIDO. `CausaDeEnlace` (`:264`) lista **DOCE**: nueve que emite ESTE módulo y
+ * TRES del paso del nonce, que emiten sus dos módulos vecinos. Le faltan `DEEPLINK_NONCE_AUSENTE` y `DEEPLINK_SALDO_INSUFICIENTE`, que las tira el
  * ADAPTADOR (`deeplink_saldo_insuficiente`, `../../solana-wallet.ts:807` y
  * `deeplink_nonce_ausente`, `../../solana-wallet.ts:818`) y que por lo tanto **nunca pasan por acá**.
  * Consecuencia: un `switch` exhaustivo sobre `CausaDeEnlace` **compila dejando dos causas sin copy y
  * sin que `tsc` diga una palabra**. Ése es exactamente el modo de falla que este tipo cierra.
  *
  * ⛔ Y POR ESO NO ALCANZA CON EL COMPILADOR, que es la mitad que se olvida: este tipo es una lista
- * escrita a mano, así que una DOCEAVA causa exportada mañana no entraría sola. Por eso la cobertura va
+ * escrita a mano, así que una causa exportada mañana no entraría sola. Por eso la cobertura va
  * en DOS capas: (1) el `Record` sobre este tipo, que es lo que `tsc` verifica; y (2) el candado de
  * `deeplink-callers.test.ts`, que **deriva las causas del módulo con un regex** y se pone rojo si
  * aparece una que este tipo no nombra. La (2) es la que ve lo que la (1) no puede.

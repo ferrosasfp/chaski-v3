@@ -243,8 +243,13 @@ export function resolveSolanaExplorerTxUrl(signature: string): string {
  * fix-pack le agregó un SEGUNDO consumidor que está en infraestructura: el gate del adaptador
  * ((`caminoPorEnlace`, `./solana-wallet.ts:2239`)), que es la tercera condición que le faltaba para
  * que la bandera pueda REPLEGAR la superficie y no sólo esconder el botón. `src/infrastructure` no
- * puede importar de `src/presentation` (no hay un solo import así en el árbol; medido con
- * `grep -rn 'presentation/' src/infrastructure --include=*.ts`, cero fuera de comentarios), y
+ * puede importar de `src/presentation`. ⚠️ ACÁ DECÍA «no hay un solo import así en el árbol, medido, cero
+ * fuera de comentarios» Y ES FALSO (re-AR it2 · MNR-1): corriendo ese mismo
+ * `grep -rn 'presentation/' src/infrastructure --include=*.ts` en el árbol de este commit hay **3 imports
+ * reales**, los tres en `*.test.ts` y los tres trayendo `humanError` de `flow-vm`
+ * ((`humanError`, `./solana/deeplink/deeplink-callers.test.ts:33`), (`humanError`, `./a2a/gateways.test.ts:4`) y
+ * (`humanError`, `./settlement/http-solana-prepare-gateway.test.ts:44`)). La regla que aguanta es la de PRODUCCIÓN: en
+ * `src/infrastructure` no hay ningún import de `src/presentation` fuera de tests, y
  * duplicar el literal de la env en los dos lados es exactamente la "segunda lista" que este repo ya
  * midió como bug (AR/BLQ-ALTO-2 de WKH-332, en `../composition/container.ts:118-123`).
  *

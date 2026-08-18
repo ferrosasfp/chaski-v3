@@ -22,9 +22,9 @@ import nacl from "tweetnacl";
 import { Keypair, SystemProgram, Transaction } from "@solana/web3.js";
 import bs58 from "bs58";
 import type { BilleteraDeeplink } from "./protocol";
-import { MARCA, type Almacen, type Viaje, guardarViaje } from "./sesion";
+import { MARCA, MAX_EDAD_MS, type Almacen, type Viaje, guardarViaje } from "./sesion"; // MAX_EDAD_MS entra EN ESTA LÍNEA (Δ0): lo usa la refutación del fixture de `T-065-17`, que necesita el MISMO número que el código, no una copia
 import {
-  MARCA_CREAR_NONCE,
+  MARCA_CREAR_NONCE, guardarPasoDelNonce, // el segundo EN ESTA LÍNEA (Δ0): `T-065-17` re-ancla el paso del nonce por el camino de producción y no con `a.escribir`
   completarVuelta,
   guardarEleccion,
   hrefSinRastroDeVuelta,
@@ -500,7 +500,13 @@ describe("T-065-PUREZA: `conexion.ts` no lee `window`, ni `Date`, ni `fetch`, ni
 //
 // ⚠️ Y LO QUE NO PROTEGE, dicho para que nadie se apoye en su verde: no verifica la firma ed25519 del
 // sender. Los bytes del mensaje coinciden igual con la firma en cero, porque las firmas no son parte
-// del mensaje. Esa verificación vive en el adaptador, que es el que conoce la pubkey.
+// del mensaje. 🔴 ACÁ DECÍA «esa verificación vive en el adaptador, que es el que conoce la pubkey», Y
+// ERA UN PUNTERO FALSO (CR/BLQ-BAJO-6): ese sitio es la verificación del DEPÓSITO, en la rama de
+// `authorizePrincipal`, y por el camino del nonce NO PASA NADIE POR AHÍ. En este camino no la verifica
+// nadie, ni acá ni después. Se corrigió en `conexion.ts:521` y esta línea quedó contradiciéndolo (re-AR
+// it2 · BLQ-BAJO-2): el argumento entero de por qué alcanza igual —la cadena rechaza una tx sin la firma
+// de su `feePayer`, así que el desenlace es "la cuenta no se creó"— vive en el docblock de
+// (`vueltaDelNonce`, `./conexion.ts:528`), con su costo medido de agregarla.
 describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
   const CLAVE_NONCE = "chaski.billetera.nonce.v1";
 
@@ -606,6 +612,72 @@ describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
       (segunda as { causa: string }).causa,
       "volvió a la causa cuyo copy niega la firma que la billetera SÍ dio",
     ).not.toBe("deeplink_viaje_vencido");
+  });
+
+  // 🔴 T-065-17 · LOS DOS RELOJES (re-AR it2 · BLQ-BAJO-1), Y ES EL CASO QUE UNA PERSONA LEE MAL.
+  //
+  // El fix-pack arregló la rama `consumido` de arriba y dejó escrito que las OTRAS tres salidas de
+  // `vueltaDelNonce` seguían en `deeplink_viaje_vencido` pero que ahí «las dos mitades del copy SÍ son
+  // ciertas (son pre-firma)». Es falso: son PRE-LECTURA. Llegar a esa función significa que la barra
+  // trae `MARCA_CREAR_NONCE`, que sólo vive en el `redirect_link` que le dimos a la billetera, así que
+  // ya volvimos de ella; las tres cortan antes de mirar un solo parámetro y por lo tanto NO SABEN si se
+  // firmó.
+  //
+  // ⚠️ Y NO ES UN CASO DE LABORATORIO: son DOS relojes con la MISMA `MAX_EDAD_MS` y arranques distintos.
+  // El del VIAJE arranca en `iniciarConexion` (al tocar el selector) y `consumir` conserva su `desde`;
+  // el del ANCLA arranca en `guardarPasoDelNonce`, cuando se pide la firma, mucho después ⇒ el viaje
+  // SIEMPRE vence primero, y esta salida se alcanza con el ancla viva. Este `it` recorre eso: selector
+  // en t=0, «Crear la cuenta» en t=15m, firma, vuelta en t=21m.
+  //
+  // MUTANTE QUE MATA: devolver `DEEPLINK_VIAJE_VENCIDO` en la rama `lectura.tipo !== "hay"` de
+  // `vueltaDelNonce`. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de este archivo.)
+  it("T-065-17: el ancla viva y el viaje vencido cortan con deeplink_nonce_sin_contexto, no con el copy que niega la firma", () => {
+    const a = almacenFalso();
+    const { base58, mensajeBase64 } = transaccion(Keypair.generate());
+    const { publicaDeLaApp, redirectLink } = prepararSalto(a, mensajeBase64);
+    // El ancla se re-escribe 15 min después del viaje, por el MISMO camino que produce el salto real.
+    const QUINCE_MIN = 15 * 60 * 1000;
+    guardarPasoDelNonce(a, mensajeBase64, AHORA + QUINCE_MIN);
+    const enVuelta = AHORA + 21 * 60 * 1000;
+    // CD-18 — el fixture FABRICA el caso, y se refuta con la constante del código y no con una copia:
+    // a los 21 min el ancla tiene 6 (viva) y el viaje 21 (vencido).
+    expect(enVuelta - (AHORA + QUINCE_MIN), "el ancla tendría que estar VIVA").toBeLessThan(MAX_EDAD_MS);
+    expect(enVuelta - AHORA, "el viaje tendría que estar VENCIDO").toBeGreaterThan(MAX_EDAD_MS);
+
+    const r = completarVuelta(
+      pedido(a, {
+        ahora: enVuelta,
+        hrefActual: vueltaDelNonce(
+          redirectLink,
+          respuestaDeLaBilletera({ transaction: base58 }, publicaDeLaApp),
+        ),
+      }),
+    );
+    expect(r.tipo).toBe("corte");
+    expect((r as { causa: string }).causa).toBe("deeplink_nonce_sin_contexto");
+    expect(
+      (r as { causa: string }).causa,
+      "la causa cuyo copy dice «No se firmó nada. Empezá el envío de nuevo.» a alguien que acaba de firmar",
+    ).not.toBe("deeplink_viaje_vencido");
+  });
+
+  // MUTANTE QUE MATA: devolver `DEEPLINK_VIAJE_VENCIDO` en la rama `ancla === null`.
+  it("T-065-17b: la vuelta SIN ancla del paso corta con la misma causa post-vuelta", () => {
+    const a = almacenFalso();
+    const { base58, mensajeBase64 } = transaccion(Keypair.generate());
+    const { publicaDeLaApp, redirectLink } = prepararSalto(a, mensajeBase64);
+    a.borrar(CLAVE_NONCE); // el disco perdió el ancla mientras la persona estaba en la billetera
+    expect(a.datos.has(CLAVE_NONCE), "el fixture no llegó al estado que dice medir").toBe(false);
+
+    const r = completarVuelta(
+      pedido(a, {
+        hrefActual: vueltaDelNonce(
+          redirectLink,
+          respuestaDeLaBilletera({ transaction: base58 }, publicaDeLaApp),
+        ),
+      }),
+    );
+    expect(r).toEqual({ tipo: "corte", causa: "deeplink_nonce_sin_contexto" });
   });
 
   it("un sobre de OTRA clave no pasa el ancla write-once del viaje", () => {
@@ -735,7 +807,7 @@ describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
 //     desplazan están declarados en su fila (`T-065-SYNC` +1, `T-065-11` −2, `T-065-COPY-1` +1).
 //   · por SÍMBOLO — el mutante es LÍNEA-NEUTRO y aun así borra de una línea citada el símbolo que la
 //     ancla. Es el caso de `T-065-CD11-a` (se lleva `ownerAddress` de `flow.tsx:507`, que cita
-//     `firma-por-enlace.ts:590`) y de `SW-BASE58` (se lleva `PublicKey`). Esos dos rojos son legítimos y
+//     `firma-por-enlace.ts:665`) y de `SW-BASE58` (se lleva `PublicKey`). Esos dos rojos son legítimos y
 //     dicen algo real: esa línea la cita alguien.
 // `SÓLO el candado de citas ⚠️` querría decir que el mutante no mató NINGÚN `it` de conducta. No hay
 // ninguna fila así.

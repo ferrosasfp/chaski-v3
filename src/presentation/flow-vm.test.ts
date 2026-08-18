@@ -2317,17 +2317,17 @@ describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace",
   // agregar una causa sin copy dejara este bloque en verde, que es justo lo que tiene que cazar.
   const CAUSAS = CAUSAS_CON_COPY;
 
-  it("son TRECE, y ninguna cae en el default de `humanError`", () => {
+  it("son CATORCE, y ninguna cae en el default de `humanError`", () => {
     // ⚠️ EL NÚMERO ESTÁ ESCRITO A MANO A PROPÓSITO y es la SEGUNDA fuente: la lista se deriva del
     // `Record` con `Object.keys`, así que sin este número agregar una causa sin copy no movería nada acá.
-    // Eran ONCE al cerrar la ola 4; el fix-pack sumó las dos del paso de la cuenta de nonce.
-    expect(CAUSAS, "el `Record` dejó de tener las trece causas").toHaveLength(13);
+    // Eran ONCE al cerrar la ola 4; el fix-pack sumó dos del paso de la cuenta de nonce y el re-AR it2 la tercera.
+    expect(CAUSAS, "el `Record` dejó de tener las catorce causas").toHaveLength(14);
     for (const c of CAUSAS) {
       expect(humanError(c), `\`${c}\` cae en el default: la persona lee la frase genérica`).not.toBe(
         "Algo salió mal. Intentá de nuevo.",
       );
     }
-    // Y las trece son textos con contenido, no cadenas de relleno.
+    // Y las catorce son textos con contenido, no cadenas de relleno.
     for (const c of CAUSAS) expect(humanError(c).length).toBeGreaterThan(40);
   });
 
@@ -2338,10 +2338,10 @@ describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace",
   // gramática que vigila, o sea un guard que se compara consigo mismo. El costo real es que el copy de
   // este `Record` no puede usar ese verbo ni en negativo, y eso ya se pagó una vez en el fix-pack.
   it("T-065-COPY-3: NINGÚN copy afirma que se movió plata, y ninguno tiene em dashes", () => {
-    // 🔴 LAS TRECE CORTAN ANTES DEL BROADCAST DEL DEPÓSITO. Decir "se debitó" ahí es falso, y manda a la
-    // persona a buscar plata donde no hay ninguna. ⚠️ Dos de las trece (las del paso del nonce) SÍ son
+    // 🔴 LAS CATORCE CORTAN ANTES DEL BROADCAST DEL DEPÓSITO. Decir "se debitó" ahí es falso, y manda a la
+    // persona a buscar plata donde no hay ninguna. ⚠️ Tres de las catorce (las del paso del nonce) SÍ son
     // post-broadcast de OTRA transacción, la que crea la cuenta: ahí lo que puede haberse debitado es el
-    // alquiler en SOL, nunca USDC, y ninguno de los dos copys afirma lo contrario.
+    // alquiler en SOL, nunca USDC, y ninguno de los tres copys afirma lo contrario.
     const MOVIO_PLATA = /se debit|se cobr|te cobramos|se movi|se transfir|se descont|salieron de tu/i;
     for (const c of CAUSAS) {
       const t = humanError(c);
@@ -2356,7 +2356,7 @@ describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace",
   // `includes` y antes del `return` del default. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit, `it` rojos y el árbol de los 54, y se re-corre con `node scripts/mutacion/bateria-065.mjs`.)
   //
   // ⚠️ POR QUÉ ESTE `it` ES TEXTUAL Y NO DE COMPORTAMIENTO, dicho porque un review lo va a preguntar:
-  // HOY ninguna de las trece contiene ninguno de los needles de la cadena, así que **no existe ningún
+  // HOY ninguna de las catorce contiene ninguno de los needles de la cadena, así que **no existe ningún
   // input que distinga los dos órdenes**. Un `it` de comportamiento sería verde con el lookup en
   // cualquier lado. Lo que DT-8 fija es una propiedad del CÓDIGO, y por eso se mide sobre el código.
   it("T-065-COPY-4: el lookup exacto corre ANTES de la cadena de `includes`", () => {
@@ -2384,7 +2384,7 @@ describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace",
     expect(
       cuerpo.indexOf("copyDeEnlace(code)"),
       "el lookup exacto quedó DESPUÉS de la cadena de `includes`: un needle nuevo que sea subcadena " +
-        "de una de las trece se las roba en silencio (DT-8)",
+        "de una de las catorce se las roba en silencio (DT-8)",
     ).toBeLessThan(cuerpo.indexOf("code.includes("));
   });
 

@@ -242,9 +242,17 @@ export function isPrepareRejection(reason: string | null | undefined): boolean {
  * o salió y no volvió. Lo único que se puede afirmar es la segunda mitad.
  *
  * ⛔ Y EL COPY NO PUEDE DECIR "no se pidió ninguna firma": `payout_pop_unavailable` sale de que
- * `pop.prove()` falló ((`prove`, `../infrastructure/settlement/http-solana-prepare-gateway.ts:224`)), y
- * esa prueba SÍ le pide a la billetera firmar un mensaje. Ese mensaje no mueve plata, pero es una firma,
- * y negarla sería exactamente la clase de afirmación de más que esta familia vino a corregir.
+ * `pop.prove()` falló ((`prove`, `../infrastructure/settlement/http-solana-prepare-gateway.ts:224`)).
+ * ⚠️ ACÁ DECÍA QUE «esa prueba SÍ le pide a la billetera firmar un mensaje», Y ES DEMASIADO ANCHO (re-AR
+ * it2 · MNR-4): (`prove`, `../infrastructure/auth/http-pop-signer.ts:16`) tiene TRES salidas y **sólo una
+ * toca la billetera**. Las otras dos cortan ANTES de (`signMessage`, `../infrastructure/auth/http-pop-signer.ts:29`):
+ * el `501` de `:22` (nuestro server sin `PAYOUT_POP_SECRET` ⇒ devuelve `null`) y el `!ok`/red caída de
+ * `:23`. El fundamento correcto es más chico y alcanza igual: la tercera salida EXISTE y es alcanzable,
+ * así que NO SE PUEDE AFIRMAR que no se pidió firma. Ese mensaje no mueve plata, pero es una firma, y
+ * negarla sería exactamente la clase de afirmación de más que esta familia vino a corregir.
+ * ⚠️ Y LA CONTRACARA, QUE VIVE EN EL COPY Y NO ACÁ: el sub-caso 501 es NUESTRO, no de la red ni del
+ * navegador. El copy de (`payout_pop_unavailable`, `../presentation/flow-vm.ts:742`) nombraba sólo esas dos causas y
+ * dejaba a la persona sin la real y sin señal de que el problema es de nuestro lado; hoy nombra las tres.
  *
  * ⚠️ LOS DOS LITERALES ESTÁN ESCRITOS ACÁ Y TAMBIÉN EN SUS PRODUCTORES, y eso es una segunda lista — el
  * defecto que WKH-332/AR-BLQ-ALTO-2 midió en `container.ts`. No se puede cerrar por construcción sin

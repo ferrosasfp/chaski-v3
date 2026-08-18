@@ -680,7 +680,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col pb-segura-b pl-segura-l pr-segura-r pt-segura-t">
       <header className="mb-aire flex flex-wrap items-center gap-ajustado">
-        <ChaskiMark className="size-icono-lg" />
+        <ChaskiMark className="h-icono-lg w-auto" />
         <div>
           {/* Tres clases se fueron y ninguna se reemplazó por otra:
               · `leading-none` — en 40f0b68 era el ÚNICO interlineado declarado de todo el árbol, y
@@ -1830,7 +1830,7 @@ export function TrackView({
   return (
     <Card className="space-y-holgado">
       <div className="flex items-center gap-normal">
-        <ChaskiMark className={cn("size-icono-lg", waitingOnPerson ? undefined : "animate-pulse")} />
+        <ChaskiMark className={cn("h-icono-lg w-auto", waitingOnPerson ? undefined : "animate-pulse")} />
         <p className="text-title font-semibold">
           {waitingOnPerson ? "Tu envío está esperando" : "Tu chaski está en camino…"}
         </p>

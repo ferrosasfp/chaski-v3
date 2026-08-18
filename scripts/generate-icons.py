@@ -27,7 +27,17 @@ from PIL import Image, ImageDraw
 
 RAIZ = Path(__file__).resolve().parent.parent
 OUT = RAIZ / "public"
-MARCA = OUT / "marca-chaski.png"
+# ⛔ LA FUENTE NO ES `public/marca-chaski.png`, Y ESO ES EL ARREGLO. Ese archivo es el asset WEB:
+# se sirve en el header de la app dentro de una caja de 32px, asi que esta reexportado a 128px de
+# ancho para no mandar medio mega al telefono. Un icono de 512 sacado de ahi sale escalado 2,88x
+# hacia arriba — borroso, con exit 0 y sin aviso. Medido el 2026-08-18, y el acoplamiento lo
+# introdujo la optimizacion de peso de HU-066: los dos usos compartian archivo y optimizar uno
+# degradaba al otro en silencio.
+# La fuente de marca vive aparte, a resolucion completa, y NO se sirve al navegador.
+FUENTE = RAIZ / "assets" / "marca" / "logo-chaski-fuente.png"
+CORTE_LOGOTIPO = 880  # y a partir del cual empieza la palabra CHASKI en la fuente (medido sobre el
+                      # perfil de tinta por fila: el mensajero termina en ~878 y debajo solo queda
+                      # la "K" en x>=1156. Cortar en 900 dejaba un fragmento naranja en el icono.)
 
 BG = "#17130F"  # tinta. El MISMO valor que `colors.ink` en tailwind.config.ts y que el fondo del splash.
 
@@ -51,7 +61,9 @@ def render(lado: int) -> Image.Image:
     fondo = Image.new("RGBA", (n, n), (0, 0, 0, 0))
     ImageDraw.Draw(fondo).rounded_rectangle([0, 0, n - 1, n - 1], radius=RADIO * n, fill=BG)
 
-    marca = Image.open(MARCA).convert("RGBA")
+    fuente = Image.open(FUENTE).convert("RGBA")
+    marca = fuente.crop((0, 0, fuente.width, CORTE_LOGOTIPO))
+    marca = marca.crop(marca.getchannel("A").getbbox())
     ancho = int(n * ANCHO_MARCA)
     alto = round(ancho * marca.height / marca.width)  # se respeta la proporcion; nunca se deforma
     marca = marca.resize((ancho, alto), Image.LANCZOS)
@@ -60,8 +72,8 @@ def render(lado: int) -> Image.Image:
 
 
 def main() -> None:
-    if not MARCA.exists():
-        raise SystemExit(f"falta {MARCA}: es la fuente de los iconos, no un adorno")
+    if not FUENTE.exists():
+        raise SystemExit(f"falta {FUENTE}: es la fuente de marca a resolucion completa, no un adorno")
     OUT.mkdir(parents=True, exist_ok=True)
     for lado, nombre in ((192, "icon-192.png"), (512, "icon-512.png"), (180, "apple-touch-icon.png")):
         render(lado).save(OUT / nombre, "PNG")

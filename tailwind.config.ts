@@ -152,6 +152,20 @@ export default {
       // Los otros dos NO son íconos y por eso quedan afuera: `h-14 w-14` es el círculo que CONTIENE
       // un ícono, y `h-1.5 w-1.5` es el punto de estado de la píldora de cuenta. Meterlos en esta
       // escala habría sido contarlos mal para que el número cerrara.
+      // ⚠️ LA MISMA ESCALA VA EN `height` PORQUE `size-*` NO ALCANZA PARA UNA MARCA QUE NO ES CUADRADA.
+      // `size-icono-lg` fija una caja de 32x32 y `object-contain` mete adentro la proporcion real; la
+      // marca de Chaski es 1,51:1, asi que pintaba 32 de ancho por 21 de ALTO y se leia mas liviana
+      // que el cuadrado macizo que reemplazo. Lo que hay que fijar es el ALTO y dejar que el ancho
+      // salga solo: `h-icono-lg w-auto`.
+      // ⛔ Y NO SE PUEDE USAR `h-icono-lg` SIN ESTE BLOQUE, medido el 2026-08-18: con la escala
+      // declarada solo en `size`, la clase `h-icono-lg` NO EMITE NINGUNA REGLA y la imagen sale a su
+      // tamano intrinseco — 128x85 en vez de 32 de alto. Compila, se ve, y no hace nada: el mismo
+      // modo de falla que el docblock de `borderRadius` describe mas abajo.
+      height: {
+        "icono-sm": "1rem",
+        "icono-md": "1.5rem",
+        "icono-lg": "2rem",
+      },
       size: {
         "icono-sm": "1rem",
         "icono-md": "1.5rem",

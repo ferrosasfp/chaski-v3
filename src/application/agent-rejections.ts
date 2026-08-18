@@ -223,3 +223,46 @@ export function noAgentMeansNobodyFits(reason: unknown): boolean {
 export function isPrepareRejection(reason: string | null | undefined): boolean {
   return PREPARE_REJECTION_ENUMS.includes(reason ?? "");
 }
+
+/**
+ * ── "NO LLEGAMOS A PREGUNTAR" NO ES UN RECHAZO, Y HASTA EL FIX-PACK SE DECÍA COMO UN PAYOUT FALLADO
+ *    (WKH-358 fix-pack · AR/BLQ-MED-2) ──────────────────────────────────────────────────────────────
+ *
+ * 🔴 QUÉ AGUJERO CIERRA, MEDIDO. Estos dos enums NO están en `PREPARE_REJECTION_ENUMS` (correcto: nadie
+ * rechazó nada) y tampoco los nombraba ninguna rama de la pantalla, así que caían en el `else` del
+ * dispatch de `track` ⇒ `humanError("payout_failed")` ⇒ *"No se pudo entregar. No hay un reembolso
+ * automático: si tus USDC entraron al escrow, los sacás vos firmando desde tu wallet."* Esa frase manda
+ * a buscar plata a un lugar donde hay CERTEZA de que no hay: los dos salen de `failAndRefund(..., "not_deposited")`
+ * (`prepare_unavailable`, `./use-cases/confirm-and-send.ts:477`), o sea ANTES de `authorizePrincipal` y
+ * sin un solo POST al settle. Es el mismo defecto que `PREPARE_NO_AGENT_FOR_CAPABILITY` cerró de su lado.
+ *
+ * ⚠️ EN QUÉ SE DIFERENCIAN DE LA FAMILIA `prepareRejected`, y por eso son una rama propia y no una fila
+ * más de esa lista: allá un agente LEYÓ el pedido y lo negó, así que el copy puede afirmar dos cosas
+ * ("el agente rechazó" + "no se firmó nada"). Acá **no hubo respuesta de nadie**: la petición no salió,
+ * o salió y no volvió. Lo único que se puede afirmar es la segunda mitad.
+ *
+ * ⛔ Y EL COPY NO PUEDE DECIR "no se pidió ninguna firma": `payout_pop_unavailable` sale de que
+ * `pop.prove()` falló ((`prove`, `../infrastructure/settlement/http-solana-prepare-gateway.ts:224`)).
+ * ⚠️ ACÁ DECÍA QUE «esa prueba SÍ le pide a la billetera firmar un mensaje», Y ES DEMASIADO ANCHO (re-AR
+ * it2 · MNR-4): (`prove`, `../infrastructure/auth/http-pop-signer.ts:16`) tiene TRES salidas y **sólo una
+ * toca la billetera**. Las otras dos cortan ANTES de (`signMessage`, `../infrastructure/auth/http-pop-signer.ts:29`):
+ * el `501` de `:22` (nuestro server sin `PAYOUT_POP_SECRET` ⇒ devuelve `null`) y el `!ok`/red caída de
+ * `:23`. El fundamento correcto es más chico y alcanza igual: la tercera salida EXISTE y es alcanzable,
+ * así que NO SE PUEDE AFIRMAR que no se pidió firma. Ese mensaje no mueve plata, pero es una firma, y
+ * negarla sería exactamente la clase de afirmación de más que esta familia vino a corregir.
+ * ⚠️ Y LA CONTRACARA, QUE VIVE EN EL COPY Y NO ACÁ: el sub-caso 501 es NUESTRO, no de la red ni del
+ * navegador. El copy de (`payout_pop_unavailable`, `../presentation/flow-vm.ts:742`) nombraba sólo esas dos causas y
+ * dejaba a la persona sin la real y sin señal de que el problema es de nuestro lado; hoy nombra las tres.
+ *
+ * ⚠️ LOS DOS LITERALES ESTÁN ESCRITOS ACÁ Y TAMBIÉN EN SUS PRODUCTORES, y eso es una segunda lista — el
+ * defecto que WKH-332/AR-BLQ-ALTO-2 midió en `container.ts`. No se puede cerrar por construcción sin
+ * mover enums que esta HU no toca, así que se cierra por MEDICIÓN: `agent-rejections.test.ts` deriva los
+ * dos del texto de sus productores con un regex y exige que `isPrepareUnreachable` los reconozca. Si
+ * alguien renombra un enum del gateway, ese `it` se pone rojo y esta lista no queda mintiendo sola.
+ */
+export const PREPARE_UNREACHABLE_ENUMS: readonly string[] = ["prepare_unavailable", "payout_pop_unavailable"];
+
+/** ¿Este `failureReason` dice "no llegamos a preguntarle a nadie", en vez de "alguien nos dijo que no"? */
+export function isPrepareUnreachable(reason: string | null | undefined): boolean {
+  return PREPARE_UNREACHABLE_ENUMS.includes(reason ?? "");
+}

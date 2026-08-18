@@ -44,7 +44,7 @@ import { HttpSolanaPayoutPrepareGateway } from "../infrastructure/settlement/htt
 import { HttpSolanaSettlementGateway } from "../infrastructure/settlement/http-solana-settlement-gateway";
 import { LocalKycStore } from "../infrastructure/kyc-store";
 import { LocalRepo } from "../infrastructure/persistence";
-import { SolanaWalletAdapter } from "../infrastructure/solana-wallet";
+import { SolanaWalletAdapter } from "../infrastructure/solana-wallet"; import { FirmaPorEnlaceReal } from "../infrastructure/solana/deeplink/firma-por-enlace"; import { RecorridoPorEnlaceReal, type PreparacionPorEnlace } from "../infrastructure/solana/preparacion-por-enlace"; // WKH-358: EN ESTA LÍNEA, no en una nueva — este archivo recibe 40 citas ancladas y TODAS apuntan de `:48` para abajo, así que una línea nueva en el bloque de imports las rota a las 40 (medido). Precedente con su motivo escrito: (`solanaWalletBridge`, `../infrastructure/solana-wallet.ts:47`), siete imports en una línea. ⚠️ Y esta línea tiene que seguir conteniendo `SolanaWalletAdapter`, que es lo que cita `flow.tsx` por número
 import { CryptoIds, SystemClock } from "../infrastructure/system";
 
 export interface Container extends VentanaYRenovacion { // WKH-339: 2 campos REQUERIDOS, ver el final del archivo
@@ -76,7 +76,7 @@ export interface Container extends VentanaYRenovacion { // WKH-339: 2 campos REQ
   closeEscrowAccounts?: CloseEscrowAccounts;
   // El descubrimiento de cerrables (AC-8): la UI necesita LISTAR antes de poder cerrar, porque los
   // envíos que no están en el localStorage de este navegador no tienen ningún otro camino.
-  solanaCloseableEscrows?: SolanaCloseableEscrowLister; solanaEscrowStates?: SolanaEscrowChainStateReader; connectedWallet: ConnectedWalletProbe; // WKH-349: EN ESTA LÍNEA, no en una nueva — `:114`, `:123`, `:127`, `:141`, `:169` y `:196` de este archivo los cita otro por número y están TODOS debajo de acá. Opcional sólo por el test-container; el container real SIEMPRE lo cablea (ver el final de `createContainer`). WKH-354/AC-2+AC-3: `connectedWallet` entra ACÁ por lo mismo, y va SIN `?` (CD-14) — opcional dejaría que borrar su cableado compile y la suite quede verde, que es el perfil de mutante que el comentario de `solanaEscrowStates` documenta como el más peligroso del repo
+  solanaCloseableEscrows?: SolanaCloseableEscrowLister; solanaEscrowStates?: SolanaEscrowChainStateReader; connectedWallet: ConnectedWalletProbe; recorridoPorEnlace: PreparacionPorEnlace; // WKH-358 (fix-pack/CR-MNR-5): SE LLAMABA `eleccionDeEnlace` Y EL NOMBRE MENTÍA — el campo tipa `PreparacionPorEnlace` ENTERA (siete miembros: la elección, la vuelta, la cadena y el broadcast), no la elección; el nombre venía de W1, cuando el tipo sí era `EleccionDeEnlace`, y no se movió con lo que hace. Hoy nombra lo mismo que las dos implementaciones (`RecorridoPorEnlaceReal`, `RecorridoPorEnlaceNulo`). `recorridoPorEnlace` entra ACÁ y SIN `?` por la misma razón que `connectedWallet` (CD-14): opcional dejaría que borrar su cableado compile y la suite quede verde, y el síntoma sería que el selector de billetera no hace nada en un teléfono, que es justo donde nadie de este equipo mira. WKH-349: EN ESTA LÍNEA, no en una nueva — `:114`, `:123`, `:127`, `:141`, `:169` y `:196` de este archivo los cita otro por número y están TODOS debajo de acá. Opcional sólo por el test-container; el container real SIEMPRE lo cablea (ver el final de `createContainer`). WKH-354/AC-2+AC-3: `connectedWallet` entra ACÁ por lo mismo, y va SIN `?` (CD-14) — opcional dejaría que borrar su cableado compile y la suite quede verde, que es el perfil de mutante que el comentario de `solanaEscrowStates` documenta como el más peligroso del repo
 }
 
 // HU-SOL-20/AC-2 — arma el SolanaWalletAdapter CON su resolver de remittanceId en un solo paso (sin setter,
@@ -88,7 +88,7 @@ export interface Container extends VentanaYRenovacion { // WKH-339: 2 campos REQ
 function createSolanaWallet(proofs: PopProofRecorder): SolanaWalletAdapter { // WKH-337: el observador
   const lazyPop: PopSigner = { prove: (a) => new HttpPopSigner(adapter, proofs).prove(a) }; // ídem
   const adapter: SolanaWalletAdapter = new SolanaWalletAdapter(
-    new HttpSolanaRemittanceIdResolver(lazyPop),
+    new HttpSolanaRemittanceIdResolver(lazyPop), undefined, new FirmaPorEnlaceReal(), // WKH-358 — el colaborador de enlace se cablea SIN CONDICIÓN, y lo que enciende la rama es el gate del adaptador (`caminoPorEnlace`, `../infrastructure/solana-wallet.ts:2239`): elección del selector Y `availability === "none"`. Con eso el camino inyectado no ejecuta ni una línea de las ramas nuevas y no hace falta ninguna bandera acá. ⚠️ EL `undefined` DEL MEDIO NO ES DECORATIVO: `firmaPorEnlace` es el 3er parámetro POSICIONAL y el 2º (`confirmTimeoutMs`) tiene default, así que sin el hueco esto no compila; pasar `undefined` dispara ese default, que es exactamente el de producción. ⛔ NO importes `REFUND_CONFIRM_TIMEOUT_MS` sólo para esto: sería un import más, y arriba está escrito lo que cuesta un import en este archivo
   );
   return adapter;
 }
@@ -256,7 +256,7 @@ export function createContainer(): Container {
     // de `connect()` — o sea reintroduce el bug entero desde acá (CD-13). Lo que lo mata es
     // `container.test.ts` (T-354-CABLE-1), que ejercita el `connectedWallet` QUE ESTA LÍNEA DEVUELVE
     // contra el `solanaWalletBridge` real, con `connect()` ya corrido para que haya cache que exponer.
-    connectedWallet: wallet,
+    connectedWallet: wallet, recorridoPorEnlace: new RecorridoPorEnlaceReal(), // WKH-358 — va acá abajo por el mismo motivo que sus tres vecinos: las 8 líneas que este archivo tiene citadas por número están TODAS arriba. Es un objeto SIN estado propio (lee y escribe el `localStorage` en cada llamada), así que no hay nada que memoizar ni que invalidar
   };
 }
 
@@ -345,3 +345,29 @@ export interface VentanaYRenovacion {
   ventanaDeLectura: VentanaDeLectura;
   renovarVentana: PopSigner;
 }
+
+// ── WKH-358 · el recorrido por ENLACE PROFUNDO, re-exportado desde acá ─────────────────────────────
+//
+// 🔴 POR QUÉ ESTOS TRES TIPOS SE RE-EXPORTAN ACÁ Y NO VIVEN EN `ports.ts`, y es EXACTAMENTE el mismo
+// argumento que el bloque de `VentanaDeLectura` de acá arriba, con las mismas dos mitades:
+//   · nadie de `application/` los consume. Los consumen el composition root (que arma el objeto) y la
+//     pantalla (que lo usa). Son las dos capas que se tocan en este archivo.
+//   · y `ports.ts` queda **byte-idéntico a propósito**. Ahí vive (`AutorizacionDelPrincipal`,
+//     `../application/ports.ts:1170`), cuyo `esperando` es de DOS valores y cuyo docblock dice *"NO
+//     incluye `"conectar"`"* — una frase que sigue siendo VERDADERA después de esta HU, porque el
+//     connect por enlace NO pasa por ese puerto: pasa antes, y lo resuelve la pantalla. Abrir ese
+//     archivo para meter un tipo de composición pondría esa frase en discusión por cero beneficio. Y
+//     recibe 20 citas ancladas, así que tocarlo además es caro.
+// ⛔ NO los "acomodes" en `ports.ts` después.
+//
+// ⚠️ QUÉ NO SIGNIFICA ESTE RE-EXPORT: no significa que el depósito por enlace exista. La pata que falta
+// es el PoP por enlace (WKH-359) y está declarada en el encabezado de
+// `../infrastructure/solana/preparacion-por-enlace.ts`. Lo que esta HU entrega es la máquina de conexión
+// y la creación de la cuenta de nonce.
+export type {
+  EleccionDeEnlace,
+  EstadoDeLaCuentaDeNonce,
+  PreparacionPorEnlace,
+  ResultadoDePreparacion,
+  VueltaDeEnlace,
+} from "../infrastructure/solana/preparacion-por-enlace";

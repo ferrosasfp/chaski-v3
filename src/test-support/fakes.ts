@@ -14,7 +14,7 @@ import { canonicalizeAddress, isOwnedBy } from "../infrastructure/address"; // W
 // WKH-337: la allowlist de proveniencias REALES se IMPORTA (no se copia). El docblock de la constante
 // dice por qué: "un segundo Set con los mismos valores es exactamente cómo se desincronizan las dos
 // capas". Precedente de import fuera de `presentation/`: `scripts/smoke-helpers.ts`.
-import { REAL_PAYOUT_PROVENANCES } from "../domain/payout-provenance"; // CR/MNR-4: capas
+import { REAL_PAYOUT_PROVENANCES } from "../domain/payout-provenance"; import type { PreparacionPorEnlace } from "../infrastructure/solana/preparacion-por-enlace"; import type { BilleteraDeeplink } from "../infrastructure/solana/deeplink/protocol"; // WKH-358: los dos EN ESTA LÍNEA, misma disciplina que el resto del bloque. CR/MNR-4: capas
 import type {
   Clock,
   EscrowRefundConfirmation,
@@ -1031,6 +1031,51 @@ export class FakeConnectedWallet implements ConnectedWalletProbe {
   async getConnectedAddress(): Promise<string | null> {
     this.calls++;
     return this.address;
+  }
+}
+
+/**
+ * WKH-358 — el doble de la elección de billetera por enlace. **Nadie eligió nada.**
+ *
+ * 🔴 ES UN OBJETO NULO, NO UN STUB VACÍO, y la diferencia importa: `eleccion()` devuelve `null`, que es
+ * el estado REAL de un test que no montó ningún selector, y `elegir()` **TIRA** en vez de contestar una
+ * URL de mentira. Un doble que devolviera un `irA` inventado dejaría pasar un test que cree haber
+ * saltado a la billetera sin que nada lo haya hecho — el perfil exacto de
+ * `tests-que-registran-el-doble-no-prueban-el-cableado`. El test que quiera medir el salto tiene que
+ * pasar su propio doble, y así queda escrito en el test que lo hace.
+ */
+export class RecorridoPorEnlaceNulo implements PreparacionPorEnlace {
+  public olvidos = 0;
+  eleccion(): BilleteraDeeplink | null {
+    return null;
+  }
+  elegir(): { irA: string } {
+    throw new Error("eleccion_de_enlace_no_cableada_en_este_test");
+  }
+  olvidar(): void {
+    this.olvidos++;
+  }
+  /** `null` = "no hay ningún viaje por enlace abierto", que es el estado real de un test que no montó
+   *  ningún selector. Y es lo que hace que el productor de montaje de la pantalla **no llame** a
+   *  `completar()` en los ~100 `it` que montan el flujo sin tener nada que ver con esta HU. */
+  remesaEnCurso(): string | null {
+    return null;
+  }
+  /** ⚠️ TIRA, por la misma razón que `elegir()`: ningún test puede creer que volvió de un salto sin que
+   *  nada lo haya hecho. Es inalcanzable mientras `remesaEnCurso()` conteste `null`, y si algún día se
+   *  alcanza, que se vea. ⛔ No devuelve `{estado:"nada"}`: ése es un desenlace REAL del recorrido y un
+   *  doble que lo imite escondería el cableado que falta. */
+  async completar(): Promise<never> {
+    throw new Error("vuelta_de_enlace_no_cableada_en_este_test");
+  }
+  /** ⚠️ TIRA, por lo mismo. ⛔ Y NO devuelve `"falta"` ni `"no-pudimos-preguntar"`: los dos son
+   *  desenlaces REALES de preguntarle a la cadena, y un doble que imite uno esconde el cableado que
+   *  falta. Un test que necesite un estado concreto pasa SU propio doble, y así queda escrito ahí. */
+  async estadoDeLaCuentaDeNonce(): Promise<never> {
+    throw new Error("preparacion_por_enlace_no_cableada_en_este_test");
+  }
+  async crearCuentaDeNonce(): Promise<never> {
+    throw new Error("preparacion_por_enlace_no_cableada_en_este_test");
   }
 }
 

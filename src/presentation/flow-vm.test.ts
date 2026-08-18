@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest"; import { WALLET_SIGN_MESSAGE_ERROR, laBilleteraFueTocada } from "./solana/wallet-error-code"; // WKH-339/CR: EN ESTA LÍNEA — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
+import { describe, expect, it, vi } from "vitest"; import { WALLET_SIGN_MESSAGE_ERROR, laBilleteraFueTocada } from "./solana/wallet-error-code"; import { readFileSync } from "node:fs"; import path from "node:path"; import { CAUSAS_CON_COPY } from "./flow-vm"; import { SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT } from "../application/solana-escrow-rent"; // WKH-358/AC-8 agregó los cuatro EN ESTA LÍNEA y ANTES de este comentario, por lo mismo. WKH-339/CR: EN ESTA LÍNEA — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
 import { Money } from "../domain/money";
 import type { RemittanceState, RemittanceStatus } from "../domain/remittance"; import { Remittance } from "../domain/remittance"; // WKH-352: EN ESTA LÍNEA, no en una nueva — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número, y `:1714`/`:1873` los citan otros dos tests sin ancla
 import {
@@ -2306,5 +2306,114 @@ describe("WKH-354 · el copy de la cuenta cambiada y la cola reescrita de chain-
     expect(cola).not.toMatch(/[—–]/);
     // Ninguna de las formas de "volvé a abrir / recargá / reiniciá la app".
     expect(cola).not.toMatch(/reabr|volv[ée] a abrir|recarg|reinici|refresc/i);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-358/AC-8 · T-065-COPY-3 / COPY-4 y AC-7 · T-065-18 — el copy de las causas del enlace
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace", () => {
+  // ⛔ LA LISTA NO SE ESCRIBE A MANO: se deriva del propio `Record`. Una lista a mano acá haría que
+  // agregar una causa sin copy dejara este bloque en verde, que es justo lo que tiene que cazar.
+  const CAUSAS = CAUSAS_CON_COPY;
+
+  it("son CATORCE, y ninguna cae en el default de `humanError`", () => {
+    // ⚠️ EL NÚMERO ESTÁ ESCRITO A MANO A PROPÓSITO y es la SEGUNDA fuente: la lista se deriva del
+    // `Record` con `Object.keys`, así que sin este número agregar una causa sin copy no movería nada acá.
+    // Eran ONCE al cerrar la ola 4; el fix-pack sumó dos del paso de la cuenta de nonce y el re-AR it2 la tercera.
+    expect(CAUSAS, "el `Record` dejó de tener las catorce causas").toHaveLength(14);
+    for (const c of CAUSAS) {
+      expect(humanError(c), `\`${c}\` cae en el default: la persona lee la frase genérica`).not.toBe(
+        "Algo salió mal. Intentá de nuevo.",
+      );
+    }
+    // Y las catorce son textos con contenido, no cadenas de relleno.
+    for (const c of CAUSAS) expect(humanError(c).length).toBeGreaterThan(40);
+  });
+
+  // MUTANTE QUE MATA: meter "se debitó" en cualquiera de los textos del `Record`. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`.)
+  // ⚠️ MIDE LA MENCIÓN, NO LA AFIRMACIÓN, y hay que decirlo porque parece lo mismo: un copy que dijera
+  // «NO se movió ningún USDC» —que es VERDADERO y es lo que otras ramas de `humanError` dicen— también lo
+  // pone rojo. Se deja así a propósito: ensancharlo para que entienda negaciones sería recodificar acá la
+  // gramática que vigila, o sea un guard que se compara consigo mismo. El costo real es que el copy de
+  // este `Record` no puede usar ese verbo ni en negativo, y eso ya se pagó una vez en el fix-pack.
+  it("T-065-COPY-3: NINGÚN copy afirma que se movió plata, y ninguno tiene em dashes", () => {
+    // 🔴 LAS CATORCE CORTAN ANTES DEL BROADCAST DEL DEPÓSITO. Decir "se debitó" ahí es falso, y manda a la
+    // persona a buscar plata donde no hay ninguna. ⚠️ Tres de las catorce (las del paso del nonce) SÍ son
+    // post-broadcast de OTRA transacción, la que crea la cuenta: ahí lo que puede haberse debitado es el
+    // alquiler en SOL, nunca USDC, y ninguno de los tres copys afirma lo contrario.
+    const MOVIO_PLATA = /se debit|se cobr|te cobramos|se movi|se transfir|se descont|salieron de tu/i;
+    for (const c of CAUSAS) {
+      const t = humanError(c);
+      expect(MOVIO_PLATA.test(t), `\`${c}\` afirma que se movió plata: «${t}»`).toBe(false);
+      expect(t.includes("—"), `\`${c}\` tiene un em dash (CD-16)`).toBe(false);
+    }
+    // Refutación del instrumento: el regex SÍ encuentra la frase prohibida cuando está.
+    expect(MOVIO_PLATA.test("ya se debitó de tu billetera")).toBe(true);
+  });
+
+  // MUTANTE QUE MATA: mover el lookup del `Record` al FINAL de `humanError`, después del último
+  // `includes` y antes del `return` del default. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit, `it` rojos y el árbol de los 54, y se re-corre con `node scripts/mutacion/bateria-065.mjs`.)
+  //
+  // ⚠️ POR QUÉ ESTE `it` ES TEXTUAL Y NO DE COMPORTAMIENTO, dicho porque un review lo va a preguntar:
+  // HOY ninguna de las catorce contiene ninguno de los needles de la cadena, así que **no existe ningún
+  // input que distinga los dos órdenes**. Un `it` de comportamiento sería verde con el lookup en
+  // cualquier lado. Lo que DT-8 fija es una propiedad del CÓDIGO, y por eso se mide sobre el código.
+  it("T-065-COPY-4: el lookup exacto corre ANTES de la cadena de `includes`", () => {
+    const fuente = readFileSync(path.resolve(process.cwd(), "src/presentation/flow-vm.ts"), "utf8");
+    const desde = fuente.indexOf("export function humanError(code: string): string {");
+    expect(desde, "no se encontró `humanError` en el archivo").toBeGreaterThan(0);
+    const hasta = fuente.indexOf('return "Algo salió mal. Intentá de nuevo.";', desde);
+    expect(hasta, "no se encontró el default de `humanError`").toBeGreaterThan(desde);
+    // (a) se descuentan los comentarios: el bloque de arriba NOMBRA `copyDeEnlace` e `includes` en
+    // prosa, y sin descontarlos este barrido mediría dónde está el comentario.
+    const bruto = fuente.slice(desde, hasta);
+    const cuerpo = bruto.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(?<!:)\/\/.*$/gm, "");
+    // (b) el descuento no se comió el código que este barrido cree mirar.
+    expect(cuerpo, "el descuento se llevó el lookup").toContain("copyDeEnlace(code)");
+    expect(cuerpo, "el descuento se llevó la cadena de `includes`").toContain("code.includes(");
+    // (c) el descuento CAMBIA una cantidad medida: `includes` aparece más veces en bruto que en el
+    // código. Sin esta afirmación, un `sinComentarios` roto pasaría igual.
+    const enBruto = (bruto.match(/includes/g) ?? []).length;
+    const enCuerpo = (cuerpo.match(/includes/g) ?? []).length;
+    expect(
+      enBruto,
+      "`includes` no aparece en los comentarios ⇒ descontarlos no cambia nada y el barrido es decorativo",
+    ).toBeGreaterThan(enCuerpo);
+    // y el barrido: el lookup está ANTES del primer `includes`.
+    expect(
+      cuerpo.indexOf("copyDeEnlace(code)"),
+      "el lookup exacto quedó DESPUÉS de la cadena de `includes`: un needle nuevo que sea subcadena " +
+        "de una de las catorce se las roba en silencio (DT-8)",
+    ).toBeLessThan(cuerpo.indexOf("code.includes("));
+  });
+
+  // ── T-065-18 (AC-7) ─────────────────────────────────────────────────────────────────────────────
+  // MUTANTE QUE MATA: escribir `"0,0105"` a mano en el copy de `deeplink_saldo_insuficiente` en vez de
+  // derivarlo de la constante. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`; el `it` textual de más abajo es el que lo caza.)
+  it("T-065-18: el copy de saldo insuficiente muestra la cifra DERIVADA y no dice que se movió plata", () => {
+    const t = humanError("deeplink_saldo_insuficiente");
+    expect(t).toContain(`${formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT)} SOL`);
+    // La segunda fuente: la cadena escrita A MANO. Con una sola, mover el umbral movería los dos lados.
+    expect(formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT)).toBe("0,0105");
+    expect(/se debit|se cobr|se movi/i.test(t)).toBe(false);
+    expect(t).toContain("No se pidió ninguna firma");
+  });
+
+  it("T-065-18: y esa cifra se DERIVA en el código: no hay ningún literal de SOL en el `Record`", () => {
+    const fuente = readFileSync(path.resolve(process.cwd(), "src/presentation/flow-vm.ts"), "utf8");
+    const desde = fuente.indexOf("const COPY_DE_ENLACE: Record<CausaDeEnlaceEnPantalla, string> = {");
+    expect(desde).toBeGreaterThan(0);
+    const hasta = fuente.indexOf("export function copyDeEnlace(", desde);
+    const cuerpo = fuente
+      .slice(desde, hasta)
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(?<!:)\/\/.*$/gm, "");
+    expect(cuerpo, "el descuento se llevó el `Record`").toContain("deeplink_rechazado:");
+    expect(
+      cuerpo.match(/\d,\d{4}/g) ?? [],
+      "hay una cifra de SOL escrita a mano en el `Record`: AC-7 exige que se DERIVE de la constante",
+    ).toEqual([]);
+    expect(cuerpo).toContain("formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT)");
   });
 });

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import bs58 from "bs58";
-import { Receipt, RemittanceFlow, TrackView } from "./flow";
+import { Receipt, RemittanceFlow, TarjetaDeCuentaDeNonce, TrackView } from "./flow";
 import type {
   SolanaEscrowRefundGateway,
   SolanaEscrowRefundResult,
@@ -16,6 +16,7 @@ import { buildTestContainer } from "../test-support/test-container";
 // arma `container.ts` (un `peek` que decide, y un signer que graba en ESE almacén), así que lo que se
 // mide es el mecanismo y no un doble que dice lo que se le pide.
 import { InMemoryPopProofStore } from "../infrastructure/auth/pop-proof-store";
+import { NONCE_ACCOUNT_RENT_LAMPORTS, formatLamportsAsSol } from "../application/solana-escrow-rent";
 import { FallbackQuoteGateway } from "../infrastructure/fallback/gateways";
 import type { ResumeKyc } from "../application/use-cases/resume-kyc";
 import type { AbandonPendingKyc } from "../application/use-cases/abandon-pending-kyc";
@@ -38,10 +39,10 @@ import {
   ESCROW_REFUNDED_BY_SENDER,
   RecoverEscrowFunds,
 } from "../application/use-cases/recover-escrow-funds";
-import { PREPARE_NO_AGENT_FOR_CAPABILITY } from "../application/agent-rejections";
+import { PREPARE_NO_AGENT_FOR_CAPABILITY, isPrepareRejection } from "../application/agent-rejections";
 import { KYC_PROVENANCE_LIVE } from "../infrastructure/didit/decision";
 import { ConnectWallet } from "../application/use-cases/connect-wallet";
-import { solanaWalletBridge } from "../infrastructure/solana-wallet-bridge"; // WKH-354/R-2: la costura del BANNER (el bridge global); la del guard es el `connectedWallet` inyectado
+import { solanaWalletBridge } from "../infrastructure/solana-wallet-bridge"; import { SolanaWalletAdapter } from "../infrastructure/solana-wallet"; import { guardarEleccion } from "../infrastructure/solana/deeplink/conexion"; import { almacenDeNavegador, guardarViaje } from "../infrastructure/solana/deeplink/sesion"; // WKH-358 agregó los tres últimos EN ESTA LÍNEA y ANTES de este comentario: `history-grupos.test.tsx:532` y `jerarquia-relativa.test.tsx:83` citan por número líneas de este archivo, así que tres líneas nuevas acá arriba las rotan a las dos. WKH-354/R-2: la costura del BANNER (el bridge global); la del guard es el `connectedWallet` inyectado
 import {
   FAKE_SOLANA_BENEFICIARY,
   FAKE_SOLANA_SIGNATURE,
@@ -1500,6 +1501,49 @@ describe("los tres casos, dichos con palabras distintas", () => {
     // Ni el copy de la familia hermana: acá no hubo ningún agente que rechazara nada.
     expect(screen.queryByText(/El agente de pagos rechazó/)).toBeNull();
   });
+
+  // 🔴 WKH-358 (fix-pack · AR/BLQ-MED-2) — EL SEXTO DESENLACE: "NO LLEGAMOS A PREGUNTARLE A NADIE".
+  //
+  // QUÉ MIDE, con el input concreto. `payout_pop_unavailable` y `prepare_unavailable` NO son
+  // `isPrepareRejection` (medido: los 4 enums de esa familia no los incluyen) y hasta el fix-pack
+  // NINGUNA rama los nombraba, así que caían en el `else` de `TrackView` ⇒ `humanError("payout_failed")`
+  // ⇒ *"No se pudo entregar… si tus USDC entraron al escrow, los sacás vos firmando desde tu wallet"*.
+  // Los dos salen de `failAndRefund(..., "not_deposited")`, o sea que "no entró ningún USDC" es CERTEZA:
+  // esa frase mandaba a buscar plata donde se sabe que no hay.
+  //
+  // ⚠️ Y ESTE `it` MIDE ADEMÁS LO QUE EL COPY **NO** DICE: no niega la firma. `payout_pop_unavailable`
+  // sale de que `pop.prove()` falló, y esa prueba SÍ le pide a la billetera firmar un mensaje (que no
+  // mueve plata, pero es una firma). Decir "no se pidió ninguna firma" acá sería la misma clase de
+  // afirmación de más que este desenlace vino a corregir.
+  //
+  // MUTANTE QUE MATA: borrar `prepareUnreachable` del dispatch de `TrackView` (las dos ramas o
+  // cualquiera de las dos) ⇒ el título vuelve a "No pudo entregarse" y reaparece "los sacás vos".
+  it.each(["payout_pop_unavailable", "prepare_unavailable"])(
+    "NO LLEGAMOS A PREPARAR (%s): no lo dice como un payout fallido y no manda a sacar del escrow",
+    async (reason) => {
+      const rem = failedBeforeDepositWith(reason);
+      // CD-18 — el fixture fabricó el caso: si este reason entrara a la familia de rechazos del agente,
+      // este `it` estaría midiendo la rama de al lado y pasaría por el motivo equivocado.
+      expect(isPrepareRejection(reason), "el reason entró a la familia de rechazos del agente").toBe(false);
+      const { recover } = await seededRecovery(rem, new FakeSolanaEscrowRefundGateway());
+      render(<LiveTrackView initial={rem} recover={recover} />);
+
+      expect(screen.getByText(/No llegamos a preparar el envío/)).toBeInTheDocument();
+      expect(screen.getByText(/no se movió ningún USDC de tu wallet/)).toBeInTheDocument();
+      expect(screen.getByText(/no hay ningún reembolso pendiente/)).toBeInTheDocument();
+      // ⛔ LAS TRES FRASES QUE NO PUEDEN ESTAR: la del payout fallido, la del reembolso prometido y la
+      // que invita a sacar del escrow unos USDC que nunca entraron.
+      expect(screen.queryByText(/No pudo entregarse/)).toBeNull();
+      expect(screen.queryByText(/te reembolsamos/)).toBeNull();
+      expect(screen.queryByText(/los sacás vos/)).toBeNull();
+      // ⛔ Ni el copy de la familia hermana: acá NO hubo ningún agente que rechazara nada…
+      expect(screen.queryByText(/El agente de pagos rechazó/)).toBeNull();
+      expect(screen.queryByText(/No pudimos preparar el envío/)).toBeNull();
+      // …⛔ ni la negación de la firma, que este desenlace no puede afirmar.
+      expect(screen.queryByText(/No se pidió ninguna firma/)).toBeNull();
+      expect(screen.queryByText(/antes de que firmaras nada/)).toBeNull();
+    },
+  );
 
   // 🔴 CR/BLQ-BAJO-1 — LA TARJETA NO PUEDE CONTRADECIRSE SOBRE LA PLATA DE LA PERSONA.
   //
@@ -3223,3 +3267,306 @@ it("T-062-22/AC-1: con `hay-que-salir` la pantalla NAVEGA a `irA` y no toca el e
     Object.defineProperty(window, "location", { configurable: true, value: originalLocation });
   }
 });
+
+// ═══ WKH-358 · T-065-CD11 — EL CORTE FUERA DEL CANAL, EN EL CAMINO POR ENLACE ════════════════════
+//
+// 🔴 QUÉ MIDE ESTO Y POR QUÉ EXISTE, dicho entero porque es lo que reemplaza a una afirmación que
+// esta HU dejó de poder hacer.
+//
+// Hasta la ola 3, el corte contra la sustitución de depositante en el camino por enlace era
+// (`DEEPLINK_SENDER_MISMATCH`, `../infrastructure/solana/deeplink/firma-por-enlace.ts:691`): el motor
+// comparaba `viaje.direccion` contra el `sender`, y el `sender` salía del bridge, o sea de FUERA del
+// canal del enlace. Desde que (`getAddress`, `../infrastructure/solana-wallet.ts:233`) es link-aware
+// —y tiene que serlo, porque en un teléfono sin extensión el bridge está vacío— las dos mitades de esa
+// comparación salen del MISMO disco y ese guard pasó a ser coherencia interna.
+//
+// 🔴 EL CORTE QUE SÍ ES UNA DEFENSA YA ESTABA EN EL ÁRBOL Y NO HUBO QUE ESCRIBIRLO: el cruce de
+// (`live`, `./flow.tsx:506`) contra `rem.ownerAddress` (`./flow.tsx:507`), que tira
+// `wallet_account_changed` (`./flow.tsx:518`). `ownerAddress` lo escribe `startKyc` en el REPO DE
+// REMESAS, una fuente que el canal del enlace no puede escribir. Lo que esta HU cambió es que ese
+// cruce, que en el camino por enlace comparaba `null` contra la remesa y no cortaba nunca, ahora
+// recibe la dirección del enlace y CORTA. O sea: se volvió load-bearing sin una línea nueva.
+//
+// ⚠️ EL RESIDUAL, ESCRITO Y NO SUAVIZADO: el cruce sólo puede cortar cuando hay contra qué comparar, y
+// `rem.ownerAddress == null` NO dispara (es correcto: `null` no es "cambió la identidad"). Para una
+// remesa que llegara a firmar sin haber pasado por `startKyc`, un forjador del paso 1 SÍ puede
+// sustituir al depositante. Qué le compra: no le compra plata —el depósito exige la firma ed25519 del
+// `sender` sobre los bytes anclados, así que tendría que poner de su propia billetera— pero SÍ le
+// compra un daño real: la PDA del escrow se deriva de `["escrow", sender, id16]`, así que el depósito
+// queda en un escrow que la víctima no puede recuperar ni cerrar. El techo es que escribir
+// `Viaje.direccion` exige ganar el paso 1, o sea llegar ANTES que la billetera real (el ancla es de
+// una sola escritura) y dentro de la ventana de 20 minutos. Es el residual que las olas 1 y 2 ya
+// declararon; esta HU no lo agranda ni lo cierra.
+describe("WKH-358/T-065-CD11 · el cruce contra `ownerAddress` corta en el camino por enlace", () => {
+  const A = FAKE_WALLET_ADDRESS; // con la que se hizo el KYC ⇒ la que queda en `rem.ownerAddress`
+  const B = "CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8"; // la que el canal del enlace afirma
+
+  /** Deja este navegador en el estado EXACTO del camino por enlace, con los escritores de PRODUCCIÓN
+   *  y no con las claves a mano: la elección del selector, `availability === "none"` y la bandera del
+   *  build (las TRES condiciones del gate; la 3ª la agregó el fix-pack) y un viaje CONECTADO cuya `direccion` es la que se le pasa. */
+  function sembrarRecorridoPorEnlace(direccion: string): void {
+    const almacen = almacenDeNavegador(window.localStorage);
+    guardarEleccion(almacen, "phantom");
+    solanaWalletBridge.setWalletAvailability("none");
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", "true"); // la 3ª condición del gate (fix-pack · AR/BLQ-MED-1)
+    guardarViaje(almacen, {
+      billetera: "phantom",
+      secreta: bs58.encode(new Uint8Array(32)),
+      publica: bs58.encode(new Uint8Array(32)),
+      claveBilletera: bs58.encode(new Uint8Array(32)),
+      session: "s",
+      direccion,
+      paso: "conectar",
+      remittanceId: "rem-de-este-test",
+      desde: Date.now(),
+    });
+  }
+
+  afterEach(() => {
+    window.localStorage.clear();
+    vi.unstubAllEnvs(); // la bandera del enlace que siembra `sembrarRecorridoPorEnlace` NO se filtra a otro archivo
+    solanaWalletBridge.setWalletAvailability("unknown"); // el default del bridge
+    act(() => {
+      solanaWalletBridge.setState({ publicKey: null, connected: false });
+    });
+  });
+
+  // MUTANTES QUE MATAN — tres sitios, y el tercero es el que prueba que esta HU volvió load-bearing al
+  // cruce (los conteos van en LA BATERÍA DE MUTACIÓN, al final de
+  // `../infrastructure/solana/deeplink/conexion.test.ts`, y no acá, para que no se pudran en dos lugares):
+  //   (a) `flow.tsx:518` — borrar el `throw new Error("wallet_account_changed")`.
+  //   (b) `solana-wallet.ts:252` — borrar la consulta a `direccionDelViajeConectado()` de
+  //       `getConnectedAddress()` ⇒ el puerto contesta `null` (el bridge está vacío), el cruce no
+  //       dispara y el use-case se llama igual. Ése es el estado del árbol ANTES de W2.3.
+  //   (c) `flow.tsx:507` — borrar `&& rem.ownerAddress != null`. Este NO mata a este `it`: el cruce
+  //       sigue cortando. ⚠️ Y ACÁ DECÍA «mata a los que miden el residual» SIN QUE EXISTIERA NINGUNO:
+  //       corrido, ese mutante sobrevivía con exit=0 y 0 rojos, o sea que esta línea afirmaba una
+  //       cobertura inexistente. El `it` que la da está más abajo en este archivo («el residual de
+  //       CD-11: `ownerAddress == null` NO dispara el guard») y se escribió por esa medición.
+  it("T-065-CD11: con `Viaje.direccion` = B y `rem.ownerAddress` = A, NO se pide ninguna firma", async () => {
+    const c = buildTestContainer({
+      connectedWallet: new SolanaWalletAdapter(), // 🔴 EL ADAPTADOR REAL: lo que se prueba es el CABLEADO
+      wallet: new FakeWallet(), // el KYC se hace con A
+    });
+    const spy = vi.spyOn(c.confirmAndSend, "execute");
+
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
+    await goToConfirm(); // la remesa queda con `ownerAddress` = A
+
+    sembrarRecorridoPorEnlace(B);
+
+    // CD-18 — EL FIXTURE FABRICÓ EL CASO, y las dos mitades hacen falta: (i) el puerto contesta B, y
+    // (ii) NO lo saca del bridge, que está vacío. Sin (ii) esto podría estar midiendo el guard viejo.
+    expect(await c.connectedWallet.getConnectedAddress()).toBe(B);
+    expect(
+      solanaWalletBridge.getState().publicKey,
+      "el bridge tiene una cuenta: este `it` ya no mide el camino por enlace",
+    ).toBeNull();
+    expect(B).not.toBe(A);
+
+    fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
+
+    // (i) la persona lee qué pasó; (ii) 🔴 CERO llamadas al use-case ⇒ ninguna firma, ningún salto.
+    expect(await screen.findByText(/Estás conectado con otra cuenta/)).toBeInTheDocument();
+    expect(spy, "el cruce fuera del canal no cortó: el depósito se pidió con la cuenta del enlace").toHaveBeenCalledTimes(0);
+  });
+
+  it("CONTROL: con `Viaje.direccion` = A (la misma del KYC), el recorrido llega al use-case", async () => {
+    const c = buildTestContainer({
+      connectedWallet: new SolanaWalletAdapter(),
+      wallet: new FakeWallet(),
+    });
+    const spy = vi.spyOn(c.confirmAndSend, "execute");
+
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
+    await goToConfirm();
+
+    sembrarRecorridoPorEnlace(A); // el canal del enlace afirma LA MISMA cuenta
+
+    expect(await c.connectedWallet.getConnectedAddress()).toBe(A);
+    fireEvent.click(screen.getByRole("button", { name: /Confirmar y enviar/ }));
+
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/Estás conectado con otra cuenta/)).toBeNull();
+  });
+});
+
+// ═══ WKH-358 · T-065-12 (AC-5 / CD-20) — el copy de la cuenta de nonce ═══════════════════════════
+//
+// 🔴 DOS FUENTES, Y ÉSTA ES LA DE LA DERIVACIÓN. La otra —la cadena `"0,0015"` escrita a mano— vive en
+// `solana-escrow-rent.test.ts`. Con una sola, cambiar la constante movería los dos lados a la vez y la
+// pantalla mostraría otro número en verde.
+describe("WKH-358/T-065-12 · la tarjeta de la cuenta de nonce", () => {
+  const noop = () => {};
+
+  it("el estado `falta` dice la cifra, dice que NO vuelve, y ofrece las dos salidas", () => {
+    render(
+      <TarjetaDeCuentaDeNonce estado="falta" ocupado={false} onCrear={noop} onVolverAMirar={noop} onSeguirSinCrearla={noop} />,
+    );
+    const texto = document.body.textContent ?? "";
+    // La cifra, DERIVADA de la constante (la segunda fuente la ancla a `"0,0015"` a mano).
+    expect(texto).toContain(`${formatLamportsAsSol(NONCE_ACCOUNT_RENT_LAMPORTS)} SOL`);
+    // 🔴 Y QUE NO VUELVE. Es la mitad del copy que AC-5 exige explícitamente.
+    expect(texto).toContain("Chaski no te los devuelve con ningún botón");
+    expect(screen.getByRole("button", { name: "Crear la cuenta" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Seguir sin crearla" })).toBeInTheDocument();
+    // ⛔ CD-16: sin em dashes en el copy que ve la persona.
+    expect(texto).not.toContain("—");
+    // ⛔ Y NO afirma que se movió plata: en este estado no se movió ninguna.
+    expect(/se debitó|se cobró|te cobramos|se movió/i.test(texto)).toBe(false);
+  });
+
+  it("`en vuelo` no dice ni «ya está» ni «falló», y ofrece volver a mirar", () => {
+    render(
+      <TarjetaDeCuentaDeNonce estado="en-vuelo" ocupado={false} onCrear={noop} onVolverAMirar={noop} onSeguirSinCrearla={noop} />,
+    );
+    const texto = document.body.textContent ?? "";
+    expect(texto).toContain("la red todavía no la confirmó");
+    expect(/ya está|falló|no se pudo/i.test(texto), "afirma un desenlace que la red no dio").toBe(false);
+    expect(screen.getByRole("button", { name: "Volver a mirar" })).toBeInTheDocument();
+    expect(texto).not.toContain("—");
+  });
+
+  it("`no-pudimos-preguntar` niega la PREGUNTA, no la cuenta", () => {
+    render(
+      <TarjetaDeCuentaDeNonce estado="no-pudimos-preguntar" ocupado={false} onCrear={noop} onVolverAMirar={noop} onSeguirSinCrearla={noop} />,
+    );
+    const texto = document.body.textContent ?? "";
+    expect(texto).toContain("no llegamos a preguntar");
+    // 🔴 LA MITAD QUE IMPORTA: no dice que la cuenta falte. "No pude preguntar" no es "no pasó".
+    expect(/no la tenés|no existe|falta una cuenta/i.test(texto)).toBe(false);
+    expect(texto).not.toContain("—");
+  });
+
+  it("`existe` no muestra NINGUNA cifra: acá no se paga nada", () => {
+    render(
+      <TarjetaDeCuentaDeNonce estado="existe" ocupado={false} onCrear={noop} onVolverAMirar={noop} onSeguirSinCrearla={noop} />,
+    );
+    const texto = document.body.textContent ?? "";
+    expect(texto).toContain("Tu cuenta ya está lista");
+    expect(/\d,\d{4}/.test(texto), "pidió plata en el estado en el que no se paga nada").toBe(false);
+  });
+
+  // MUTANTE QUE MATA: en `flow.tsx`, en la tarjeta, escribir `"0,0015"` como literal en vez de llamar a
+  // `formatLamportsAsSol(NONCE_ACCOUNT_RENT_LAMPORTS)`. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit, `it` rojos y el árbol de los 54, y se re-corre con `node scripts/mutacion/bateria-065.mjs`.)
+  //
+  // ⚠️ POR QUÉ ESTE `it` ES TEXTUAL Y NO DE RENDER, dicho porque parece redundante con el primero: un
+  // `it` de render que compare contra `formatLamportsAsSol(...)` da VERDE con el literal puesto, porque
+  // hoy los dos valen `"0,0015"`. Lo que distingue una cifra derivada de una escrita a mano no es el
+  // valor: es el CÓDIGO. Las tres reglas de CD-19 van aplicadas abajo.
+  it("T-065-12: la cifra se DERIVA en el código, y no hay ningún literal de SOL en la tarjeta", () => {
+    const fuente = readFileSync(path.resolve(process.cwd(), "src/presentation/flow.tsx"), "utf8");
+    // ⚠️ EL CORTE ARRANCA EN EL DOCBLOCK Y NO EN LA FIRMA, y no es un detalle: la regla (c) de CD-19
+    // exige que descontar los comentarios CAMBIE un número medido, y la única cifra con coma de este
+    // bloque vive en la prosa. Cortando en la firma, el descuento no movía nada y este barrido
+    // quedaba mirando otra cosa (medido: 0 y 0).
+    // ⚠️ Y ARRANCA EN EL `/**`, no en la primera línea de la prosa: sin el abre-comentario adentro
+    // del corte, el regex de bloque no matchea y el descuento no descuenta nada (medido: 1 y 1).
+    const desde = fuente.indexOf("/**\n * WKH-358/AC-5 — LA CUENTA DE NONCE DEL REMITENTE");
+    expect(desde, "no se encontró el docblock de la tarjeta en el archivo").toBeGreaterThan(0);
+    const bruto = fuente.slice(desde);
+    // (a) se descuentan los comentarios; el `(?<!:)` protege los `https://`.
+    const cuerpo = bruto.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(?<!:)\/\/.*$/gm, "");
+    // (b) el descuento no se comió el código que este barrido cree mirar.
+    expect(cuerpo, "el descuento de comentarios se llevó el cuerpo de la tarjeta").toContain(
+      "formatLamportsAsSol(NONCE_ACCOUNT_RENT_LAMPORTS)",
+    );
+    expect(cuerpo).toContain("Falta una cuenta para poder pagar desde tu billetera");
+    // (c) el descuento CAMBIA una cantidad medida: los comentarios de la tarjeta SÍ nombran cifras con
+    // coma. Sin esta afirmación, un descuento roto pasaría igual y nadie lo vería.
+    const cifrasEnBruto = (bruto.match(/\d,\d{4}/g) ?? []).length;
+    const cifrasEnCuerpo = (cuerpo.match(/\d,\d{4}/g) ?? []).length;
+    expect(
+      cifrasEnBruto,
+      "ninguna cifra con coma aparece en los comentarios ⇒ descontarlos no cambia nada y el barrido es decorativo",
+    ).toBeGreaterThan(cifrasEnCuerpo);
+    // y el barrido: CERO cifras de SOL escritas a mano en el código de la tarjeta.
+    expect(
+      cuerpo.match(/\d,\d{4}/g) ?? [],
+      "hay una cifra de SOL escrita a mano en la tarjeta: AC-5 exige que se DERIVE de la constante",
+    ).toEqual([]);
+  });
+});
+
+// ═══ WKH-358 · EL RESIDUAL DE T-065-CD11, CON SU PROPIO `it` ═════════════════════════════════════
+//
+// 🔴 POR QUÉ ESTE `it` EXISTE, Y ES UN HALLAZGO DE LA BATERÍA Y NO UN EXTRA. El comentario de
+// `T-065-CD11` declaraba que el mutante «borrar `&& rem.ownerAddress != null` de `flow.tsx:507`» no
+// mataba a ese `it` pero sí «a los que miden el residual». Corrido: ese mutante **no mataba a NADIE**
+// (exit=0, 0 rojos). O sea que la frase afirmaba una cobertura que no existía, que es exactamente la
+// clase de prosa que este repo tiene prohibida. Este `it` es la cobertura que faltaba.
+//
+// ⚠️ QUÉ AFIRMA, Y NO ES QUE EL RESIDUAL SEA SEGURO: afirma que `rem.ownerAddress == null` **no dispara
+// el guard**, que es la mitad correcta (null no es "cambió la identidad", y acusar ahí convertiría un
+// árbol todavía sin montar en una acusación falsa). El residual —que en ese caso un forjador del paso 1
+// SÍ puede sustituir al depositante— sigue **abierto y declarado**, y está escrito sin suavizar en el
+// bloque de CD-11 del motor. Esta HU no lo cierra.
+describe("WKH-358 · el residual de CD-11: `ownerAddress == null` NO dispara el guard", () => {
+  const B = "CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8";
+
+  afterEach(() => {
+    window.localStorage.clear();
+    vi.unstubAllEnvs(); // ídem: la bandera del enlace no se filtra
+    solanaWalletBridge.setWalletAvailability("unknown");
+    act(() => {
+      solanaWalletBridge.setState({ publicKey: null, connected: false });
+    });
+  });
+
+  // MUTANTE QUE MATA: en `flow.tsx:507`, borrar `&& rem.ownerAddress != null` ⇒ `canonicalizeAddress`
+  // recibe `null`, TIRA, el `catch` lo trata como desacuerdo (fail-closed) y el envío se corta sobre una
+  // remesa que nunca declaró dueño. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit, `it` rojos y el árbol de los 54, y se re-corre con `node scripts/mutacion/bateria-065.mjs`.)
+  it("con `rem.ownerAddress` en `null` y una dirección viva, el envío SIGUE", async () => {
+    // La remesa llega a `confirm` SIN haber pasado por `startKyc`: es el caso que el residual describe.
+    const sinDueño = { ...passedSnapshot(1478.15, 3.7, "2099-01-01T00:00:00.000Z"), ownerAddress: null };
+    // CD-18 — el fixture fabricó el caso: sin esto, `passedSnapshot` deja `ownerAddress = A` y este
+    // `it` mediría el camino de siempre.
+    expect(sinDueño.ownerAddress, "el fixture no dejó la remesa sin dueño").toBeNull();
+
+    const almacen = almacenDeNavegador(window.localStorage);
+    guardarEleccion(almacen, "phantom");
+    solanaWalletBridge.setWalletAvailability("none");
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", "true"); // la 3ª condición del gate (fix-pack · AR/BLQ-MED-1)
+    guardarViaje(almacen, {
+      billetera: "phantom",
+      secreta: bs58.encode(new Uint8Array(32)),
+      publica: bs58.encode(new Uint8Array(32)),
+      claveBilletera: bs58.encode(new Uint8Array(32)),
+      session: "s",
+      direccion: B,
+      paso: "conectar",
+      remittanceId: sinDueño.id,
+      desde: Date.now(),
+    });
+
+    const c = buildTestContainer({
+      connectedWallet: new SolanaWalletAdapter(),
+      wallet: new WalletDelBridgeSuelto(),
+      useCases: {
+        resumeKyc: { execute: async () => ({ kind: "passed" as const, snapshot: sinDueño }) } as unknown as ResumeKyc,
+      },
+    });
+    const spy = vi.spyOn(c.confirmAndSend, "execute");
+
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
+    // El puerto contesta B por el canal del enlace; la remesa no tiene con qué comparar.
+    expect(await c.connectedWallet.getConnectedAddress()).toBe(B);
+    fireEvent.click(await screen.findByRole("button", { name: /Confirmar y enviar/ }));
+
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    expect(
+      screen.queryByText(/Estás conectado con otra cuenta/),
+      "el guard acusó un cambio de identidad sobre una remesa que nunca declaró dueño",
+    ).toBeNull();
+  });
+});
+
+/** La billetera de este bloque: el `WalletDelBridge` de WKH-354 vive dentro de su describe. */
+class WalletDelBridgeSuelto extends FakeWallet {
+  override async connect(): Promise<string> {
+    return solanaWalletBridge.getState().publicKey ?? FAKE_WALLET_ADDRESS;
+  }
+  override async getAddress(): Promise<string | null> {
+    return solanaWalletBridge.getState().publicKey ?? FAKE_WALLET_ADDRESS;
+  }
+}

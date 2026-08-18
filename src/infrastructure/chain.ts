@@ -232,3 +232,40 @@ export function resolveSolanaExplorerTxUrl(signature: string): string {
       throw new Error("unsupported_solana_cluster"); // fail-loud (cluster futuro sin mapeo)
   }
 }
+
+// ── WKH-358 (fix-pack · AR/BLQ-MED-1) — la bandera del recorrido por ENLACE PROFUNDO ─────────────
+
+/**
+ * ¿Está prendida la bandera del recorrido por enlace profundo?
+ *
+ * 🔴 POR QUÉ VIVE ACÁ Y NO EN `../presentation/wallet-availability.ts`, QUE ES DONDE VIVÍA. Al cerrar
+ * la ola 4 la leía UN solo consumidor —el selector de la pantalla `connect`—, y ahí estaba bien. El
+ * fix-pack le agregó un SEGUNDO consumidor que está en infraestructura: el gate del adaptador
+ * ((`caminoPorEnlace`, `./solana-wallet.ts:2239`)), que es la tercera condición que le faltaba para
+ * que la bandera pueda REPLEGAR la superficie y no sólo esconder el botón. `src/infrastructure` no
+ * puede importar de `src/presentation`. ⚠️ ACÁ DECÍA «no hay un solo import así en el árbol, medido, cero
+ * fuera de comentarios» Y ES FALSO (re-AR it2 · MNR-1): corriendo ese mismo
+ * `grep -rn 'presentation/' src/infrastructure --include=*.ts` en el árbol de este commit hay **3 imports
+ * reales**, los tres en `*.test.ts` y los tres trayendo `humanError` de `flow-vm`
+ * ((`humanError`, `./solana/deeplink/deeplink-callers.test.ts:33`), (`humanError`, `./a2a/gateways.test.ts:4`) y
+ * (`humanError`, `./settlement/http-solana-prepare-gateway.test.ts:44`)). La regla que aguanta es la de PRODUCCIÓN: en
+ * `src/infrastructure` no hay ningún import de `src/presentation` fuera de tests, y
+ * duplicar el literal de la env en los dos lados es exactamente la "segunda lista" que este repo ya
+ * midió como bug (AR/BLQ-ALTO-2 de WKH-332, en `../composition/container.ts:118-123`).
+ *
+ * ⇒ El literal `NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED` aparece **una sola vez en producción**, acá, y
+ * (`deeplinkEnabled`, `../presentation/wallet-availability.ts:156`) delega. Lo mide `T-065-20`, que
+ * sigue llamando a la función de presentación: si la delegación se rompiera, ese `it` se cae.
+ *
+ * OPT-IN ESTRICTO: sólo el literal `"true"`. Ausente, vacía, `"1"`, `"TRUE"`, `"true "` o un typo ⇒
+ * APAGADA. No hay ningún valor que la prenda por accidente. Mismo patrón que
+ * (`solanaSettleOn`, `../composition/container.ts:141`).
+ *
+ * ⚠️ GOTCHA DE DESPLIEGUE: las `NEXT_PUBLIC_` las inlinea el BUILD, no se leen en runtime. Cambiar el
+ * valor en el panel del hosting y REDESPLEGAR el mismo artefacto NO cambia nada: hay que REBUILDEAR.
+ * La lectura queda como member expression literal —`process.env.X`, no `process.env[k]`— porque es lo
+ * único que Next inlinea en el bundle del cliente (misma razón que `../composition/container.ts:113-117`).
+ */
+export function resolveSolanaDeeplinkEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED === "true";
+}

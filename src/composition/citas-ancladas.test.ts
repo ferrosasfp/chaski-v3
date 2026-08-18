@@ -25,7 +25,7 @@
 //
 // ⚠️ LO QUE ESTE CANDADO NO CIERRA, declarado y no disfrazado:
 //   1. Las citas SIN ancla siguen sin vigilancia, y NADA las cuenta: lo único medido es el otro lado del
-//      conjunto (388 ancladas al 2026-08-17). "Son la mayoría" es una impresión, no una medición.
+//      conjunto, y ese total NO se escribe acá porque envejece: se deriva con el regex de `:62`.
 //   2. Un ancla que aparece en varias líneas del archivo destino da verde apuntando a cualquiera de
 //      ellas. El ancla prueba "esta línea habla del símbolo", no "es LA línea".
 //   3. Sólo resuelve el archivo destino si la ruta es relativa al que cita o si el basename es único
@@ -77,9 +77,9 @@ const ANCLADA = /`([A-Za-z_$][\w$.]*)`,\s*`([\w./-]*?):(\d+)(?:-\d+)?`/g;
  *
  * CÓMO SE ARREGLÓ: dejó de ser un predicado por línea y pasó a ser un escaneo POR ARCHIVO que sigue el
  * estado del lexer (dentro/fuera de un bloque `/* *\/`, dentro/fuera de una cadena) y marca cada línea
- * que LLEVA texto de comentario, arranque con él o no. Después del cambio no queda ninguna ciega: **388 de
- * 388** al cierre del fix-pack. ⚠️ Ese total CRECE con cada comentario nuevo (el propio fix-pack lo movió de
- * 383 a 388), así que lo invariante no es el número sino que la diferencia sea CERO — y eso es lo que los
+ * que LLEVA texto de comentario, arranque con él o no. Después del cambio **no queda ninguna ciega**, y
+ * esa diferencia-en-cero es lo invariante. ⚠️ EL TOTAL NO SE ESCRIBE ACÁ, y el motivo está medido: cada
+ * comentario nuevo lo mueve, y WKH-357/063/358 lo movieron cuatro veces. Lo que vale es lo que los
  * `it` de abajo miden, sin depender de ninguna cifra escrita acá.
  *
  * ⚠️ POR QUÉ SE SALTEAN LAS CADENAS: sin eso, un `"https://…"` abre un comentario de línea falso y un

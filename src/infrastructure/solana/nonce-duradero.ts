@@ -88,7 +88,7 @@ export const NONCE_ADVANCE_ACCOUNT_INDEX = {
  * La distinción que importa es la tercera contra la segunda: "la cuenta no está" es un HECHO sobre la
  * cadena, y "no pudimos preguntar" es un hecho sobre NOSOTROS. Colapsarlos es convertir "no pude
  * preguntar" en "no pasó", que es el error que este repo tiene catalogado
- * (`DEEPLINK_BLOCKHASH_DESCONOCIDO`, `deeplink/firma-por-enlace.ts:124`) y que cuesta borrarle a una
+ * (`DEEPLINK_BLOCKHASH_DESCONOCIDO`, `deeplink/firma-por-enlace.ts:136`) y que cuesta borrarle a una
  * persona dos firmas que estaban perfectas.
  */
 export type LecturaDelNonce =
@@ -207,4 +207,74 @@ export function construirNonceAdvance(
   senderPk: PublicKey,
 ): TransactionInstruction {
   return SystemProgram.nonceAdvance({ noncePubkey: noncePk, authorizedPubkey: senderPk });
+}
+
+/**
+ * Las DOS instrucciones que CREAN e inicializan la cuenta de nonce del remitente (WKH-358 / AC-5).
+ *
+ * 🔴 SE COMPONEN A MANO PORQUE LA FUNCIÓN QUE PARECE QUE HAY NO EXISTE. Medido contra el
+ * `@solana/web3.js` de este `node_modules` (1.98.4):
+ *
+ * ```
+ * createNonceAccount           function
+ * createNonceAccountWithSeed   undefined   ← 🔴 NO EXISTE
+ * nonceInitialize              function
+ * createAccountWithSeed        function
+ * NONCE_ACCOUNT_LENGTH         80
+ * ```
+ *
+ * ⛔ Y `createNonceAccount` —el atajo que suena bien— ESTÁ PROHIBIDO. La diferencia no es de estilo:
+ *
+ * | Forma | ix | `numRequiredSignatures` | Quién firma |
+ * |---|---|---|---|
+ * | **`createAccountWithSeed` + `nonceInitialize`** (`base == from == sender`) | **2** | **1** | el sender, y nadie más |
+ * | `createNonceAccount(...)` con un `Keypair` | 2 | **2** | el sender **y la cuenta nueva** |
+ *
+ * Con dos firmantes habría que **persistir una clave privada** para que la segunda firma sobreviva al
+ * salto a la billetera, y eso es exactamente lo que la ola 3 descartó (`:109-115`) y lo que
+ * `deeplink/preparado.ts:8-10` prohíbe. Una firma y nada que persistir es el contrato entero de esta
+ * cuenta. Lo mide `T-065-11`.
+ *
+ * ⛔ EL `space` VA COMO `NONCE_ACCOUNT_LENGTH` DE LA LIBRERÍA, **nunca** el literal `80` (CD-20). Es el
+ * mismo número que `leerNonce` compara en `:159`: si un bump de la librería lo moviera, escribir `80`
+ * a mano dejaría la cuenta creada con un largo que nuestra propia lectura rechaza. Lo mide `T-065-11b`
+ * con **dos** fuentes.
+ *
+ * ⚠️ EL ALQUILER NO VUELVE POR NINGÚN BOTÓN DE CHASKI, y quien muestre esto en pantalla tiene que
+ * decirlo: recuperarlo exige un `nonceWithdraw`, que no existe en este árbol (está declarado en
+ * (`nonceWithdraw`, `../../application/solana-escrow-rent.ts:329`)). El monto lo pone quien llama, desde
+ * `NONCE_ACCOUNT_RENT_LAMPORTS`.
+ *
+ * ⚠️ ESTA TRANSACCIÓN USA UN BLOCKHASH NORMAL y por lo tanto vence en ~60-90 s (ver el encabezado de
+ * este archivo). Es el único salto del recorrido que sigue compitiendo contra el reloj, y es
+ * aceptable porque no hay nada en riesgo: sin escrow, sin USDC y sin orden de payout, el reintento
+ * cuesta un toque. ⛔ **PROHIBIDO reusar la transacción guardada** en el reintento: se arma de cero,
+ * con un blockhash nuevo.
+ *
+ * `lamports` va por parámetro y no se lee de una constante acá por lo mismo que `ConTecho`: el número
+ * vive en UN solo lugar (`NONCE_ACCOUNT_RENT_LAMPORTS`), y un default en este módulo sería un segundo
+ * número que nadie recuerda actualizar.
+ */
+export function construirCreacionDeNonce(
+  senderPk: PublicKey,
+  noncePk: PublicKey,
+  lamports: number,
+): readonly TransactionInstruction[] {
+  return [
+    // `basePubkey === fromPubkey === senderPk` es lo que hace que la cuenta nueva NO sea firmante: su
+    // dirección se deriva, no se genera. Es la misma derivación que `direccionDelNonce`, y quien
+    // llama pasa el resultado de ésa como `noncePk` — el `it` lo compara.
+    SystemProgram.createAccountWithSeed({
+      fromPubkey: senderPk,
+      basePubkey: senderPk,
+      newAccountPubkey: noncePk,
+      seed: SEMILLA_DEL_NONCE,
+      lamports,
+      space: NONCE_ACCOUNT_LENGTH, // ⛔ NUNCA el literal 80 (CD-20)
+      programId: SystemProgram.programId,
+    }),
+    // La authority es el SENDER, siempre (CD-6). Si fuera el facilitator, Check 5 rechazaría todo
+    // depósito por enlace: el bloque de `:72-77` lo explica entero.
+    SystemProgram.nonceInitialize({ noncePubkey: noncePk, authorizedPubkey: senderPk }),
+  ];
 }

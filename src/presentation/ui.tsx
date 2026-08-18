@@ -1,23 +1,49 @@
 "use client";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
 import { cn } from "./cn";
+import { MARCA_SRC, NOMBRE } from "./marca";
 
-/** Marca Chaski — el Qhapaq Ñan (camino escalonado andino) rematando en un nudo de khipu. */
+/**
+ * Marca Chaski — el mensajero andino corriendo, con su manta de tocapu y la estela de velocidad.
+ *
+ * 🔴 ERA UN `<svg>` INLINE Y AHORA ES LA IMAGEN DE LA MARCA (HU-066). El dibujo viejo era un camino
+ * escalonado blanco rematando en un círculo de cochinilla sobre un cuadrado redondeado de tinta:
+ * geometría escrita a mano que ya no es la marca de Chaski. El docblock que estaba acá describía ESE
+ * dibujo ("el Qhapaq Ñan rematando en un nudo de khipu") y quedó falso con el cambio de marca, igual
+ * que el comentario de la tarjeta de seguimiento (`flow.tsx`, el que abre los tres pasos).
+ *
+ * ⛔ EL FONDO OSCURO NO VUELVE, y la decisión se tomó MIRÁNDOLA RENDERIZADA, no razonándola. El `<svg>`
+ * pintaba su propio `<rect fill="#17130F" rx="10">`, así que la marca traía un cuadrado de tinta
+ * pegado. El PNG nuevo es transparente y sus colores son saturados (violeta, naranja, cian), que es
+ * justo el rango que sobrevive sobre el papel claro de la app (`paper`, #FBFAF7). Medido sobre el
+ * build de producción a 390x844: la marca en el header sobre el fondo de la app se lee entera y no
+ * necesita ninguna superficie que la separe. Y devolverle el cuadrado sería peor que redundante: en el
+ * splash, que ya es oscuro, un rectángulo de tinta con esquinas redondeadas sobre un fondo de tinta se
+ * ve como un parche. El único lugar donde ese cuadrado sigue existiendo es el ÍCONO de la app
+ * (`public/icon-*.png`), que es lo que un ícono necesita para recortarse contra el escritorio.
+ *
+ * ⛔ `object-contain` NO ES DECORATIVO Y ES LO QUE SOSTIENE EL CONTRATO DE ESTA FUNCIÓN. El `<svg>`
+ * viejo tenía `viewBox="0 0 40 40"`, o sea cuadrado, y los dos sitios de llamada le pasan
+ * `size-icono-lg` (32x32). El PNG es 1154x765 = **1,51:1**: sin `object-contain` el navegador lo
+ * aplasta a un cuadrado y el mensajero queda deformado. Con él, la CAJA la sigue fijando el
+ * `className` de quien llama —que es lo que esta función promete— y la tinta entra adentro con su
+ * proporción. Los dos llamadores siguen andando sin cambiar una letra, incluido el `animate-pulse`
+ * condicional de la tarjeta de seguimiento: `animate-pulse` anima la opacidad del elemento, y un
+ * `<img>` la respeta igual que un `<svg>`.
+ *
+ * ⛔ EL NOMBRE ACCESIBLE SIGUE SIENDO "Chaski", Y SE DICE UNA SOLA VEZ. Antes era `role="img"` +
+ * `aria-label="Chaski"` sobre un `<svg>`, que no tiene ninguno de los dos de fábrica. Un `<img>` sí:
+ * su rol implícito ES `img` y su nombre accesible sale del `alt`. Así que el par de atributos se
+ * reemplaza por UN `alt`, y NO por `alt` + `role` + `aria-label`.
+ * ⚠️ ESTO NO ES UNA PREFERENCIA MÍA: escribir `role="img"` acá lo rechaza el linter del repo
+ * (`a11y/noRedundantRoles`, y es ERROR, no warning), y poner `aria-label` junto al `alt` haría que el
+ * nombre accesible saliera del `aria-label` con el `alt` de adorno — dos sitios para el mismo nombre y
+ * uno invisible. Lo mide `marca.test.tsx` pidiendo el nodo por ROL y por NOMBRE a la vez, que es lo
+ * que un lector de pantalla resuelve, y el mutante que vacía el `alt` lo pone rojo.
+ */
 export function ChaskiMark({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 40 40" className={className} role="img" aria-label="Chaski">
-      <rect width="40" height="40" rx="10" fill="#17130F" />
-      <path
-        d="M7 27 L7 23 L11 23 L11 19 L15 19 L15 15 L19 15"
-        stroke="#FBFAF7"
-        strokeWidth="2.2"
-        fill="none"
-        strokeLinecap="square"
-      />
-      <circle cx="27" cy="15" r="5.2" fill="#CB2A54" />
-      <circle cx="27" cy="15" r="1.8" fill="#17130F" />
-    </svg>
-  );
+  // biome-ignore lint/performance/noImgElement: ver la nota de PAYLOAD del reporte de HU-066. `<img>` sirve el PNG tal cual (medido: 447 KB para una caja de 32x32) y `next/image` lo bajaría a un par de KB, pero pide un `sizes` en píxeles, y ese número adentro de este componente contradice su único contrato —que el tamaño lo fije el `className` de quien llama—. Queda como defecto ABIERTO y medido, no como algo que no se vio.
+  return <img src={MARCA_SRC} alt={NOMBRE} className={cn("object-contain", className)} />;
 }
 
 /**

@@ -19,9 +19,13 @@ export const metadata: Metadata = {
   description:
     "Mandá plata a tu familia en Perú con solo pedirlo. Reciben soles depositados en su cuenta bancaria.",
   manifest: "/manifest.json",
-  // Los genera scripts/generate-icons.py desde la geometría de ChaskiMark. Sin esto el sitio no
-  // tenía NINGÚN icono (/favicon.ico daba 404 y el manifiesto traía "icons": []), y toda wallet o
-  // navegador que pide el icono de la app mostraba un recuadro vacío al lado del dominio.
+  // Los genera scripts/generate-icons.py. ⚠️ ACÁ DECÍA "desde la geometría de ChaskiMark" Y HU-066 LO
+  // VOLVIÓ FALSO: `ChaskiMark` dejó de ser geometría escrita a mano y el script ahora compone
+  // `public/marca-chaski.png` sobre el cuadrado de tinta. No era un comentario viejo y nada más — el
+  // script SEGUÍA dibujando el logo anterior, así que correrlo habría pisado estos iconos con la marca
+  // vieja, en silencio y con exit 0. Sin ellos el sitio no tenía NINGÚN icono (/favicon.ico daba 404 y
+  // el manifiesto traía "icons": []), y toda wallet o navegador que pide el icono de la app mostraba
+  // un recuadro vacío al lado del dominio.
   icons: {
     icon: [
       { url: "/favicon.ico", sizes: "any" },

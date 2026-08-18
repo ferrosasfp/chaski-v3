@@ -75,7 +75,7 @@ import {
 } from "./flow-vm";
 import { cn } from "./cn";
 import { phantomBrowseUrl, useWalletAvailability, useConnectedWalletAddress, mwaEnabled, useMwaOffered, deeplinkEnabled } from "./wallet-availability"; import type { BilleteraDeeplink } from "../infrastructure/solana/deeplink/protocol"; import { hrefSinRastroDeVuelta, marcaDeVuelta } from "../infrastructure/solana/deeplink/conexion"; import type { EstadoDeLaCuentaDeNonce } from "../composition/container"; import { NONCE_ACCOUNT_RENT_LAMPORTS, formatLamportsAsSol } from "../application/solana-escrow-rent"; // WKH-358: los dos EN ESTA MISMA LÍNEA, por lo mismo que los dos de WKH-MWA // el aviso de "acá no hay wallet" (NoWalletHere) · WKH-354/AC-6: `useConnectedWalletAddress` para el banner (CuentaCambiada) · WKH-MWA: los dos últimos, EN ESTA MISMA LÍNEA (el censo de citas por número de `:44` `flow.tsx:NNNN` cuelgan de que este archivo no cambie de largo)
-import { Aviso, Button, Card, ChaskiMark, Field, Money, Muted, Pill, Row, Stepper, TextInput } from "./ui"; import { BarraDestinos, type Destino, VolverAlInicio, esDestino } from "./barra-destinos"; import { Bienvenida } from "./bienvenida"; import { DestinoRecuperar, QUE_RECUPERA } from "./recuperar"; // ola 2: los nombres nuevos entran EN ESTA LÍNEA, no en una nueva. Este archivo recibe MUCHAS citas por número, y una sola línea de import de más corre todas las que apuntan más abajo. ⛔ EL NÚMERO NO SE ESCRIBE ACÁ: vive en UN solo lugar, con su definición y su fecha, en el comentario de `:44` (fix-pack, CR/MNR-5). Acá había un valor y el mismo archivo llevaba otros cuatro distintos para el mismo hecho, cada uno copiado de un vecino en vez de medido · WKH-063: los TRES imports nuevos entran acá por lo mismo (Δ0 líneas)
+import { Aviso, Button, Card, ChaskiMark, Field, Money, Muted, Pill, Row, Stepper, TextInput } from "./ui"; import { BarraDestinos, type Destino, VolverAlInicio, esDestino } from "./barra-destinos"; import { Bienvenida } from "./bienvenida"; import { DestinoRecuperar, QUE_RECUPERA } from "./recuperar"; import { LEMA } from "./marca"; import { urlDeVueltaDeKyc } from "./splash-puerta"; // HU-066: los DOS EN ESTA LÍNEA, no en dos nuevas, por lo mismo que dice el resto de este renglón. `LEMA` es el lema del header, que el splash repite y que hasta esta HU estaba escrito a mano acá abajo; `urlDeVueltaDeKyc` arma el callback de Didit, que hasta esta HU era un literal y que la puerta del splash necesita LEER: eran dos escrituras del mismo string en dos archivos, sin nada que las atara // ola 2: los nombres nuevos entran EN ESTA LÍNEA, no en una nueva. Este archivo recibe MUCHAS citas por número, y una sola línea de import de más corre todas las que apuntan más abajo. ⛔ EL NÚMERO NO SE ESCRIBE ACÁ: vive en UN solo lugar, con su definición y su fecha, en el comentario de `:44` (fix-pack, CR/MNR-5). Acá había un valor y el mismo archivo llevaba otros cuatro distintos para el mismo hecho, cada uno copiado de un vecino en vez de medido · WKH-063: los TRES imports nuevos entran acá por lo mismo (Δ0 líneas)
 
 // WKH-187: el quote se muestra ANTES del KYC. Orden: send→connect→review(pre-KYC)→verify→confirm(post-KYC)→track→done.
 // `history` NO es un paso del flujo: es la puerta de entrada a las remesas que ya existen. Se
@@ -443,7 +443,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
       if (!rem) return;
       setScanStage(1);
       const callbackUrl =
-        typeof window !== "undefined" ? `${window.location.origin}/?kyc=return` : undefined;
+        typeof window !== "undefined" ? urlDeVueltaDeKyc(window.location.origin) : undefined; // HU-066: era el literal del callback escrito acá. La puerta del splash tiene que reconocer ESE parámetro para no pintarse encima del aterrizaje del KYC, así que el string se escribe en UN solo lugar ((`urlDeVueltaDeKyc`, `./splash-puerta.ts:54`)) y los dos lo leen de ahí
       const res = await c.startKyc.execute({
         remittanceId: rem.id,
         address: address ?? "",
@@ -691,7 +691,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
                 que no lo elige nadie. Es exactamente el defecto que `cn.ts` documenta para `p-4`.
               · `text-[15px]` — pasa a `title` (17px), que es el rol de un título de pantalla. */}
           <h1 className="text-title font-bold">Chaski</h1>
-          <Muted escala="label">tu plata a Perú, sin vueltas</Muted>
+          <Muted escala="label">{LEMA}</Muted>{/* HU-066: era el literal `tu plata a Perú, sin vueltas` escrito acá. El splash lo repite, y dos literales idénticos en dos archivos son cómo uno se corrige y el otro no. La constante vive en `./marca.ts` */}
         </div>
         {/* ⚠️ WKH-354 (re-AR · MENOR-2) · ESTE PILL SE PINTA CON `address` Y NO CON LA BILLETERA VIVA,
             y desde esta HU eso alcanza estados nuevos: tras volver de Didit, `address` se repuebla con
@@ -1836,10 +1836,10 @@ export function TrackView({
         </p>
       </div>
       {/* ── M-3 · los tres pasos son un CAMINO, no una lista ────────────────────────────────────
-          El gesto de identidad de esta ola, y el único que se pidió: la marca de Chaski ES un
-          mensajero andino y el camino escalonado del Qhapaq Ñan ya está dibujado en `ChaskiMark`
-          (`ui.tsx`), tres renglones más arriba en esta misma tarjeta. Acá abajo esos tres pasos se
-          dibujaban como una lista plana de puntos sueltos.
+          🔴 ACÁ DECÍA que «el camino escalonado del Qhapaq Ñan ya está dibujado en `ChaskiMark`, tres renglones más arriba», Y HU-066 LO VOLVIÓ FALSO: la marca nueva es el mensajero corriendo y no tiene ningún camino escalonado — ese dibujo bajó a ser el fondo del splash (`Grecas`, `./splash.tsx:245`). ⛔ EL PÁRRAFO SE REESCRIBE EN ESTAS MISMAS 4 LÍNEAS y no en 6: este archivo recibe muchas citas por número (`:44`) y dos renglones de comentario de más corren todas las que apuntan más abajo, que es un defecto silencioso en 30 archivos ajenos por una edición de prosa.
+          EL GESTO SE SOSTIENE IGUAL, y ahora sin apoyarse en el dibujo de al lado: la marca de Chaski
+          ES un mensajero que RECORRE, así que sus tres pasos se dibujan como un camino y no como una
+          lista. Acá abajo eran una lista plana de puntos sueltos.
           Es UNA LÍNEA QUE PROGRESA, no una ilustración: 2px, el mismo verde del tilde cuando el tramo
           ya se recorrió y el mismo gris del borde cuando todavía no. Sin animación (en
           `payout_submitted` no avanza nada y un tramo que se llenara solo afirmaría un progreso que

@@ -1,66 +1,71 @@
-#!/usr/bin/env python3
-"""Genera los iconos de la app desde la MISMA geometría que `ChaskiMark` (src/presentation/ui.tsx).
+"""Genera los iconos de la app componiendo `public/marca-chaski.png` sobre el cuadrado de tinta.
 
-Por qué un script y no unos PNG sueltos: los binarios sin procedencia no se pueden revisar ni
-regenerar. Acá la fuente de verdad es la geometría de abajo, que es copia literal del `<svg>` de la
-marca. Si la marca cambia, se cambia acá y se vuelve a correr.
+🔴 POR QUE CAMBIO ESTE SCRIPT (HU-066), Y ES LO PRIMERO QUE HAY QUE LEER. Hasta esta HU el archivo
+dibujaba la marca A MANO: una copia literal de la geometria del `<svg>` de `ChaskiMark` (un camino
+escalonado blanco y un circulo de cochinilla). Esa ya NO es la marca de Chaski. Dejarlo como estaba
+no era un comentario viejo: era un script ARMADO Y CARGADO, porque correrlo habria pisado los iconos
+nuevos de `public/` con el logo viejo, en silencio y con exit 0. Un generador que se quedo atras del
+recurso que genera es peor que no tener generador.
+
+La fuente de verdad sigue siendo un archivo del repo revisable, no un binario sin procedencia: ahora
+es `public/marca-chaski.png` (el mensajero solo, sin la palabra), que es EL MISMO archivo que pinta
+`ChaskiMark` en la app. Si la marca cambia, se reemplaza ese PNG y se vuelve a correr esto.
 
     python3 scripts/generate-icons.py
 
 Requiere Pillow. Escribe en public/: favicon.ico, icon-192.png, icon-512.png, apple-touch-icon.png.
+
+⛔ EL CUADRADO DE TINTA SE QUEDA ACA Y SOLO ACA. La marca dentro de la APP perdio ese fondo en HU-066
+(el PNG es transparente y se apoya sobre el papel claro de la pantalla). Un ICONO es otro problema: se
+recorta contra un escritorio de cualquier color, y sin superficie propia el mensajero se pierde. Por eso
+el fondo vive en este script, que es el unico sitio que produce iconos, y no en el componente.
 """
 
 from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-# ── Geometría de ChaskiMark, viewBox 0 0 40 40 ────────────────────────────────────────────────
-VB = 40.0
-BG = "#17130F"  # tinta
-PATH_COLOR = "#FBFAF7"  # papel
-KNOT_COLOR = "#CB2A54"  # cochinilla
-CORNER_R = 10.0
-STROKE_W = 2.2
-# Qhapaq Ñan: camino escalonado andino.
-PATH_PTS = [(7, 27), (7, 23), (11, 23), (11, 19), (15, 19), (15, 15), (19, 15)]
-KNOT_C = (27.0, 15.0)
-KNOT_R = 5.2
-KNOT_HOLE_R = 1.8
+RAIZ = Path(__file__).resolve().parent.parent
+OUT = RAIZ / "public"
+MARCA = OUT / "marca-chaski.png"
 
-SS = 8  # supersampling: dibujamos grande y reducimos, que es el antialiasing del pobre y alcanza.
-OUT = Path(__file__).resolve().parent.parent / "public"
+BG = "#17130F"  # tinta. El MISMO valor que `colors.ink` en tailwind.config.ts y que el fondo del splash.
+
+# Los dos numeros de composicion NO SE ELIGIERON A OJO: son los que MINIMIZAN la diferencia contra el
+# icono que el founder trajo con la marca nueva. Punto de partida medido sobre `icon-512.png` (primer
+# pixel opaco de la fila y=0 en x=102 => radio 0,199; bbox de la tinta 350 de 512 => ancho 0,684) y
+# despues barrido de 8 combinaciones comparando pixel a pixel contra ese archivo:
+#     radio 0,20 / ancho 0,684 -> diferencia media 4,83 de 255
+#     radio 0,22 / ancho 0,70  -> diferencia media 2,78 de 255   <- el que quedo
+# ⚠️ NO llega a cero y no puede: el resto es el antialiasing de OTRA herramienta. Lo que este script
+# garantiza es que los iconos salgan de la marca NUEVA, no que sean byte-identicos a los del founder.
+RADIO = 0.22   # del lado del icono
+ANCHO_MARCA = 0.70  # del lado del icono
+
+SS = 8  # supersampling: se dibuja grande y se reduce. Es el antialiasing del pobre y alcanza.
+        # Medido: entre SS=4 y SS=8 la diferencia contra el icono de referencia cambia 0,04 de 255.
 
 
-def render(size: int) -> Image.Image:
-    n = size * SS
-    k = n / VB  # escala viewBox -> pixeles
-    img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle([0, 0, n - 1, n - 1], radius=CORNER_R * k, fill=BG)
+def render(lado: int) -> Image.Image:
+    n = lado * SS
+    fondo = Image.new("RGBA", (n, n), (0, 0, 0, 0))
+    ImageDraw.Draw(fondo).rounded_rectangle([0, 0, n - 1, n - 1], radius=RADIO * n, fill=BG)
 
-    # Cada segmento es axis-aligned, así que un rectángulo extendido w/2 en las dos puntas
-    # reproduce a la vez el `strokeLinecap="square"` y el miter join de las esquinas.
-    half = (STROKE_W * k) / 2
-    for (x0, y0), (x1, y1) in zip(PATH_PTS, PATH_PTS[1:]):
-        ax, ay, bx, by = x0 * k, y0 * k, x1 * k, y1 * k
-        d.rectangle(
-            [min(ax, bx) - half, min(ay, by) - half, max(ax, bx) + half, max(ay, by) + half],
-            fill=PATH_COLOR,
-        )
-
-    cx, cy = KNOT_C[0] * k, KNOT_C[1] * k
-    for r, color in ((KNOT_R * k, KNOT_COLOR), (KNOT_HOLE_R * k, BG)):
-        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=color)
-
-    return img.resize((size, size), Image.LANCZOS)
+    marca = Image.open(MARCA).convert("RGBA")
+    ancho = int(n * ANCHO_MARCA)
+    alto = round(ancho * marca.height / marca.width)  # se respeta la proporcion; nunca se deforma
+    marca = marca.resize((ancho, alto), Image.LANCZOS)
+    fondo.alpha_composite(marca, ((n - ancho) // 2, (n - alto) // 2))
+    return fondo.resize((lado, lado), Image.LANCZOS)
 
 
 def main() -> None:
+    if not MARCA.exists():
+        raise SystemExit(f"falta {MARCA}: es la fuente de los iconos, no un adorno")
     OUT.mkdir(parents=True, exist_ok=True)
-    for size, name in ((192, "icon-192.png"), (512, "icon-512.png"), (180, "apple-touch-icon.png")):
-        render(size).save(OUT / name, "PNG")
-        print(f"escrito {name} ({size}x{size})")
-    # .ico multi-tamaño: el favicon lo consumen navegadores viejos y algunos crawlers.
+    for lado, nombre in ((192, "icon-192.png"), (512, "icon-512.png"), (180, "apple-touch-icon.png")):
+        render(lado).save(OUT / nombre, "PNG")
+        print(f"escrito {nombre} ({lado}x{lado})")
     render(64).save(OUT / "favicon.ico", "ICO", sizes=[(16, 16), (32, 32), (48, 48), (64, 64)])
     print("escrito favicon.ico (16/32/48/64)")
 

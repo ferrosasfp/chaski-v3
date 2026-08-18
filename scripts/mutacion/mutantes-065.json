@@ -312,7 +312,7 @@
     "reemplazar": "JSON.stringify({ ...ancla } satisfies PasoDelNonce)"
   },
   {
-    "id": "T-065-17",
+    "id": "T-065-22",
     "nota": "conexion.ts · `vueltaDelNonce`: devolver `DEEPLINK_VIAJE_VENCIDO` en la rama del viaje vencido (la alcanzable CON el ancla viva)",
     "neutro": true,
     "archivo": "src/infrastructure/solana/deeplink/conexion.ts",
@@ -320,7 +320,7 @@
     "reemplazar": "if (lectura.tipo !== \"hay\") return { tipo: \"corte\", causa: DEEPLINK_VIAJE_VENCIDO };"
   },
   {
-    "id": "T-065-17b",
+    "id": "T-065-22b",
     "nota": "conexion.ts · `vueltaDelNonce`: devolver `DEEPLINK_VIAJE_VENCIDO` en la rama sin ancla",
     "neutro": true,
     "archivo": "src/infrastructure/solana/deeplink/conexion.ts",

@@ -257,7 +257,7 @@ export const DEEPLINK_NONCE_NO_ENTRO = "deeplink_nonce_no_entro";
  * 🔴 POR QUÉ NO ES `DEEPLINK_VIAJE_VENCIDO`, que es lo que las tres usaban: su copy dice *"No se firmó
  * nada. Empezá el envío de nuevo."* y las dos mitades son falsas acá, en una ventana ESTRICTAMENTE MÁS
  * ANCHA que la de las otras dos causas de este bloque, por los dos relojes que explica el bloque de
- * arriba. Lo mide `T-065-17`, con su mutante.
+ * arriba. Lo mide `T-065-22`, con su mutante.
  */
 export const DEEPLINK_NONCE_SIN_CONTEXTO = "deeplink_nonce_sin_contexto";
 

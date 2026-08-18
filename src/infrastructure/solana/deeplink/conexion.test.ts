@@ -22,9 +22,9 @@ import nacl from "tweetnacl";
 import { Keypair, SystemProgram, Transaction } from "@solana/web3.js";
 import bs58 from "bs58";
 import type { BilleteraDeeplink } from "./protocol";
-import { MARCA, MAX_EDAD_MS, type Almacen, type Viaje, guardarViaje } from "./sesion"; // MAX_EDAD_MS entra EN ESTA LÍNEA (Δ0): lo usa la refutación del fixture de `T-065-17`, que necesita el MISMO número que el código, no una copia
+import { MARCA, MAX_EDAD_MS, type Almacen, type Viaje, guardarViaje } from "./sesion"; // MAX_EDAD_MS entra EN ESTA LÍNEA (Δ0): lo usa la refutación del fixture de `T-065-22`, que necesita el MISMO número que el código, no una copia
 import {
-  MARCA_CREAR_NONCE, guardarPasoDelNonce, // el segundo EN ESTA LÍNEA (Δ0): `T-065-17` re-ancla el paso del nonce por el camino de producción y no con `a.escribir`
+  MARCA_CREAR_NONCE, guardarPasoDelNonce, // el segundo EN ESTA LÍNEA (Δ0): `T-065-22` re-ancla el paso del nonce por el camino de producción y no con `a.escribir`
   completarVuelta,
   guardarEleccion,
   hrefSinRastroDeVuelta,
@@ -614,7 +614,7 @@ describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
     ).not.toBe("deeplink_viaje_vencido");
   });
 
-  // 🔴 T-065-17 · LOS DOS RELOJES (re-AR it2 · BLQ-BAJO-1), Y ES EL CASO QUE UNA PERSONA LEE MAL.
+  // 🔴 T-065-22 · LOS DOS RELOJES (re-AR it2 · BLQ-BAJO-1), Y ES EL CASO QUE UNA PERSONA LEE MAL.
   //
   // El fix-pack arregló la rama `consumido` de arriba y dejó escrito que las OTRAS tres salidas de
   // `vueltaDelNonce` seguían en `deeplink_viaje_vencido` pero que ahí «las dos mitades del copy SÍ son
@@ -631,7 +631,7 @@ describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
   //
   // MUTANTE QUE MATA: devolver `DEEPLINK_VIAJE_VENCIDO` en la rama `lectura.tipo !== "hay"` de
   // `vueltaDelNonce`. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de este archivo.)
-  it("T-065-17: el ancla viva y el viaje vencido cortan con deeplink_nonce_sin_contexto, no con el copy que niega la firma", () => {
+  it("T-065-22: el ancla viva y el viaje vencido cortan con deeplink_nonce_sin_contexto, no con el copy que niega la firma", () => {
     const a = almacenFalso();
     const { base58, mensajeBase64 } = transaccion(Keypair.generate());
     const { publicaDeLaApp, redirectLink } = prepararSalto(a, mensajeBase64);
@@ -662,7 +662,7 @@ describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
   });
 
   // MUTANTE QUE MATA: devolver `DEEPLINK_VIAJE_VENCIDO` en la rama `ancla === null`.
-  it("T-065-17b: la vuelta SIN ancla del paso corta con la misma causa post-vuelta", () => {
+  it("T-065-22b: la vuelta SIN ancla del paso corta con la misma causa post-vuelta", () => {
     const a = almacenFalso();
     const { base58, mensajeBase64 } = transaccion(Keypair.generate());
     const { publicaDeLaApp, redirectLink } = prepararSalto(a, mensajeBase64);

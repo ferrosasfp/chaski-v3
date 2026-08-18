@@ -1071,11 +1071,17 @@ export const DEEPLINK_POP_SIN_FIRMA = "deeplink_pop_sin_firma";
 export const DEEPLINK_POP_VENCIDO = "deeplink_pop_vencido";
 
 /**
- * AFIRMA: volvió una respuesta del paso de firma de mensaje y NO es la que se pidió: o el `message`
- * devuelto no es byte a byte el que quedó anclado, o la firma no verifica ed25519 contra la
- * dirección que el viaje tiene fijada. Corta fail-closed: no se avanza la remesa y no se pide
- * ninguna firma más.
+ * AFIRMA: volvió una respuesta del paso de firma de mensaje y la firma que trae **no verifica ed25519
+ * sobre los bytes del `popMessage` anclado, contra la dirección que el viaje tiene fijada** —o el sobre
+ * no vino cifrado con la `claveBilletera` write-once del viaje—. Corta fail-closed: no se avanza la
+ * remesa y no se pide ninguna firma más.
  * NO AFIRMA: ⛔ que haya un atacante. Un canal que se cruzó con otro envío llega al mismo lugar.
+ * ⛔ Y TAMPOCO AFIRMA **que el `message` devuelto no sea byte a byte el anclado**. Acá decía justo eso
+ * (fix-pack · CR/MNR-1) y describía un chequeo que NO EXISTE: (`vueltaDelPop`, `pop-por-enlace.ts:313`)
+ * lee la respuesta con (`soloTextos`, `sesion.ts:668`) y en todo ese módulo no hay una sola comparación
+ * del `popMessage` contra nada que venga de la URL. **No hace falta, y el porqué está escrito**: la
+ * verificación ed25519 sobre los bytes ANCLADOS es el mismo chequeo y más fuerte —una firma hecha sobre
+ * otro texto no verifica contra estos bytes— y el razonamiento vive en (`popMessage`, `pop-por-enlace.ts:296-302`).
  * 🔴 POR QUÉ ES DISTINTA DE `DEEPLINK_RECHAZADO` Y DE `DEEPLINK_TX_ALTERADA` (AC-4). De
  * `deeplink_rechazado` porque ahí la billetera contestó "no" y acá contestó "sí" con algo que no
  * cierra: colapsarlas haría que la persona lea "cancelaste" cuando no canceló. De

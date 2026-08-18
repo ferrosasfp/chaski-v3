@@ -293,10 +293,10 @@ export function iniciarPop(
  *      la dirección que el viaje declara.
  *
  * 🔴 EL QUINTO ES DISTINTO DEL DE `vueltaDelNonce`, Y LA DIFERENCIA ESTÁ MEDIDA, no elegida. El Story
- * File pedía "que el `message` devuelto sea el `popMessage` anclado, BYTE A BYTE". **Ese chequeo no se
- * puede escribir: la billetera NO devuelve el `message`.** Medido en el árbol: la vuelta del paso
- * `signMessage` del protocolo se lee con `soloTextos("signature")` y nada más
- * (`../deeplink/sesion.ts:668`), o sea que el único campo que vuelve es la firma.
+ * File pedía "que el `message` devuelto sea el `popMessage` anclado, BYTE A BYTE". **Ese chequeo no se escribe.**
+ * ⚠️ Y LA RAZÓN QUE HABÍA ACÁ NO LO SOSTENÍA (fix-pack · CR/MNR-1): decía *"no se puede escribir: la billetera NO devuelve el `message`"*, y lo respaldaba con que la vuelta del paso `signMessage` se lee con (`soloTextos`, `./sesion.ts:668`) y nada más.
+ * Eso mide qué conserva **NUESTRO lector**, no qué MANDA la billetera: son dos afirmaciones distintas y
+ * la evidencia sólo alcanza la primera. La decisión NO cambia; quien la sostiene es el argumento de abajo.
  * ⇒ La verificación ed25519 sobre los bytes ANCLADOS es **el mismo chequeo, y más fuerte**: una firma
  * hecha sobre otro texto no verifica contra estos bytes, así que "es el mensaje que mandamos" sale
  * como consecuencia. Y de yapa prueba QUIÉN firmó, que una comparación de cadenas no puede.

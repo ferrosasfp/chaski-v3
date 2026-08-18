@@ -161,7 +161,7 @@ export function createContainer(): Container {
         prepare: new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet, popProofs)),
         gateway: new HttpSolanaSettlementGateway(),
         probe: wallet,
-        senderBalance: wallet,
+        senderBalance: wallet, pop: wallet, // WKH-359/AC-2 — ⛔ SIN `?`, EN ESTA LÍNEA. `pop` es el MISMO adapter otra vez (como `probe` y `senderBalance`) y no es pereza: la pregunta "¿estamos en el camino por enlace?" la contesta (`caminoPorEnlace`, `../infrastructure/solana-wallet.ts:2239`), que es `private` de esa clase, y el gate y el disco viven ahí. ⛔ Opcional dejaría que BORRAR ESTA LÍNEA compilara con la suite verde, que es la razón que este archivo ya escribió dos veces (`:79` y `:213-220`); requerido lo vuelve un error de compilación en 6 sitios. El único test que ve esta línea es el que ejercita el objeto que ESTA FUNCIÓN DEVUELVE (`container.test.ts`). En el camino inyectado `pedir()` contesta `no-corresponde` y no ejecuta ninguna línea nueva (AC-8).
       }
     : undefined;
   // Refund trustless (AC-6/CD-10): válvula de recuperación (lee on-chain y aborta si no es
@@ -182,7 +182,7 @@ export function createContainer(): Container {
     // NINGÚN camino real y toda persona ya verificada llega a `prepare` sin fila. Por eso tiene test
     // propio en `container.test.ts` (T-CABLE-1), que ejercita el `connectWallet` QUE ESTA LÍNEA
     // DEVUELVE. Es el MISMO HttpPopSigner sobre la MISMA wallet que ya usan el prepare y el refund.
-    connectWallet: new ConnectWallet(wallet, kycStore, new HttpKycVerdictGateway(new HttpPopSigner(wallet, popProofs))),
+    connectWallet: new ConnectWallet(wallet, kycStore, new HttpKycVerdictGateway(new HttpPopSigner(wallet, popProofs)), wallet), // WKH-359/AC-3 — el 4º argumento EN ESTA LÍNEA. Es el MISMO adapter otra vez (como `probe`, `senderBalance` y `pop` del bundle de arriba): la pregunta "¿estamos en el camino por enlace?" la contesta `caminoPorEnlace`, que es `private` de esa clase. ⛔ SIN ESTA LÍNEA la sesión de Didit se crea SIN ATAR en todo teléfono sin extensión, `decision/route.ts:100` no escribe fila y `prepare` contesta 403 — y ⚠️ NO SE VE, porque una billetera que ya tiene fila cierra igual. Lo ve `container.test.ts`, que ejercita el `connectWallet` que ESTA LÍNEA devuelve
     startKyc: new StartKyc(kyc, kycStore, kycPending, repo, clock),
     resumeKyc: new ResumeKyc(kyc, kycStore, kycPending, repo, clock),
     lockQuote: new LockQuote(quotes, repo, clock),

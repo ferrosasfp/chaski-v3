@@ -27,7 +27,7 @@ import { type Quote, Remittance } from "../../domain/remittance";
 import { FallbackKycGateway } from "../../infrastructure/fallback/gateways";
 import { DiditKycGateway } from "../../infrastructure/didit/kyc-gateway";
 import { HttpKycVerdictGateway } from "../../infrastructure/kyc/http-kyc-verdict-gateway";
-import type { PopSigner } from "../ports";
+import type { PopSigner, WalletPort } from "../ports";
 import {
   FAKE_WALLET_ADDRESS,
   FakeKycPendingStore,
@@ -41,6 +41,11 @@ import {
 } from "../../test-support/fakes";
 import { ConnectWallet } from "./connect-wallet";
 import { StartKyc } from "./start-kyc";
+import { esperarConectado } from "../../test-support/desenlaces"; // WKH-359: ConnectWallet.execute() ahora tiene DOS desenlaces. Este helper TIRA si suspendió donde el test no lo espera, en vez de dejar un `undefined` viajando por media suite.
+import nacl from "tweetnacl";
+import bs58 from "bs58";
+import { buildSolanaPopMessage, issueSolanaPopChallenge } from "../../infrastructure/auth/pop-challenge"; // WKH-359: el emisor REAL del desafío. Es server-side (importa `node:crypto`) y por eso sólo puede vivir en un test o en una route, NUNCA en el módulo del cliente (CD-13).
+import { resolveSolanaNetworkId } from "../../infrastructure/chain";
 
 const DIDIT_OK = {
   session_id: "s1",
@@ -124,7 +129,7 @@ async function conectarYArrancarKyc(pop: PopSigner) {
   const repo = new InMemoryRepo();
   const id = await seed(repo);
   const connect = new ConnectWallet(new FakeWallet(), kycStore, new HttpKycVerdictGateway(pop));
-  const conectado = await connect.execute();
+  const conectado = esperarConectado(await connect.execute());
 
   const startKyc = new StartKyc(
     new DiditKycGateway(new FallbackKycGateway()),
@@ -201,5 +206,118 @@ describe("rechazar la firma al conectar NO impide iniciar el KYC (CD-15/AC-13, A
       "apagar el emisor del challenge dejó a todo el mundo sin poder verificarse: un flag de " +
         "infraestructura nuestra no puede cerrar la puerta de entrada",
     ).toBeDefined();
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-359 · T-067-6 (AC-3) — CON LA PRUEBA CONSEGUIDA POR ENLACE, LA SESIÓN SE CREA **ATADA**
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 ES LA OTRA MITAD DE T-CW-3, Y NO EXISTÍA. Todo este archivo mide el caso SIN prueba (la sesión se
+// crea sin atar, que es lo correcto), y **ningún test del repo afirmaba que el `vendor_data` VIAJA
+// cuando la prueba SÍ está** (verificado: el único `vendor_data` asertado en la suite era el
+// `toBeUndefined` de T-CW-3). O sea que el camino ATADO —el que produce la fila del veredicto y por lo
+// tanto el que autoriza a pagar— no lo vigilaba nadie.
+//
+// ⛔ Y ES EL ESLABÓN DE §0.1: sin `vendorData`, `../../../app/api/kyc/decision/route.ts:100` hace
+// `if (!mapped.vendorData) return;` y NO ESCRIBE FILA; sin fila, `prepare` contesta 403
+// `prepare_kyc_verdict_missing` **sin ningún respaldo**.
+describe("T-067-6 (WKH-359/AC-3): con la prueba del enlace, la sesión de Didit se crea ATADA", () => {
+  beforeEach(() => {
+    vi.stubEnv("DIDIT_API_KEY", "didit-key");
+    vi.stubEnv("DIDIT_WORKFLOW_ID", "wf-1");
+    vi.stubEnv("KYC_SESSION_SECRET", "kyc-session-secret");
+    vi.stubEnv("PAYOUT_POP_SECRET", "test-pop-secret");
+    vi.stubEnv("DIDIT_ENV", "mock");
+    vi.stubEnv("DIDIT_BASE_URL", "http://localhost:9999/didit-mock");
+    rlMock.mockReset();
+    rlMock.mockResolvedValue({ ok: true });
+    installFetch();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  // 🔴 MUTANTE QUE MATA: no propagar `yaConseguida` al `ensure()` de `HttpKycVerdictGateway`, o no
+  // devolver `proof` desde `ConnectWallet` ⇒ `kycProof` llega `undefined` a `StartKyc`, la route crea
+  // la sesión SIN ATAR y `vendor_data` desaparece del body. Es §0.1 entera.
+  it("T-067-6: `vendor_data` VIAJA, y es la dirección PROBADA (no la del body)", async () => {
+    // La cuenta, con su privada: sin eso la firma no verificaría y la route contestaría 403. ⛔ No se
+    // usa `FakeWallet`, cuya `signMessage` devuelve una firma de mentira: contra esta route eso no
+    // pasaría P5, y un test que “pasa” con una firma inválida no estaría midiendo el binding.
+    const cuenta = nacl.sign.keyPair();
+    const direccion = bs58.encode(cuenta.publicKey);
+    const walletDelEnlace: WalletPort = {
+      async connect() {
+        return direccion;
+      },
+      async getAddress() {
+        return direccion;
+      },
+      async authorizePrincipal() {
+        return { estado: "listo" as const, tx: "no-se-usa" };
+      },
+      async signMessage() {
+        // ⛔ TIRA A PROPÓSITO: en el camino por enlace NO hay bridge, y si algo llamara acá el test
+        // estaría midiendo el camino inyectado disfrazado. Es el `wallet_sign_not_available` real.
+        throw new Error("wallet_sign_not_available");
+      },
+    };
+
+    // El desafío SALE DEL EMISOR REAL y la firma es ed25519 de verdad: es lo que el salto por enlace
+    // trae de vuelta, y lo que la route va a verificar en P2..P5.
+    const exp = Math.floor(Date.now() / 1000) + 600;
+    const datos = { address: direccion, networkId: resolveSolanaNetworkId(), nonce: "a1b2c3d4e5f60718293a4b5c6d7e8f90", exp };
+    const proof = {
+      challenge: issueSolanaPopChallenge(datos),
+      signature: bs58.encode(
+        nacl.sign.detached(new TextEncoder().encode(buildSolanaPopMessage(datos)), cuenta.secretKey),
+      ),
+    };
+
+    const kycStore = new FakeKycStore();
+    const repo = new InMemoryRepo();
+    const id = await seed(repo);
+    const connect = new ConnectWallet(kycStore ? walletDelEnlace : walletDelEnlace, kycStore, new HttpKycVerdictGateway(popQueRechaza), {
+      pedir: () => Promise.resolve({ estado: "listo" as const, proof }),
+    });
+    const conectado = esperarConectado(await connect.execute());
+
+    // 1 · La prueba sobrevivió al gateway y sale del `connect`. ⛔ El `catch` de `:78-84` NO la tragó.
+    expect(
+      conectado.kycProof,
+      "la prueba del enlace se perdió en el connect: la sesión se va a crear sin atar",
+    ).toEqual(proof);
+
+    const startKyc = new StartKyc(
+      new DiditKycGateway(new FallbackKycGateway()),
+      kycStore,
+      new FakeKycPendingStore(),
+      repo,
+      new FixedClock(),
+    );
+    await startKyc.execute({
+      remittanceId: id,
+      address: conectado.address,
+      serverVerdict: conectado.serverVerdict,
+      kycProof: conectado.kycProof,
+    });
+
+    // 2 · 🔴 LA AFIRMACIÓN QUE NO EXISTÍA EN LA SUITE: el `vendor_data` VIAJA.
+    const aDidit = llamadas.find((l) => l.url.includes("/v3/session/"));
+    expect(aDidit, "no se creó ninguna sesión de verificación").toBeDefined();
+    const enviado = aDidit?.body as { vendor_data?: string } | undefined;
+    expect(
+      enviado?.vendor_data,
+      "la sesión se creó SIN ATAR teniendo la prueba en la mano: `decision/route.ts:100` no va a " +
+        "escribir fila y `prepare` va a contestar 403 a esta persona, para siempre",
+    ).toBe(direccion);
+
+    // 3 · Y es la dirección PROBADA, no una que el caller escribió: la route saca `ch.address` del
+    // token verificado por HMAC y NUNCA la compara contra `body.vendorData` (es el guard-que-se-mira-
+    // al-espejo que su CD-18 prohíbe). Sin esta mitad, atar sería el ataque de R-1.
+    expect(enviado?.vendor_data).not.toBe(FAKE_WALLET_ADDRESS);
   });
 });

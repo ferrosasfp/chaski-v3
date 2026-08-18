@@ -678,4 +678,70 @@ describe("HttpSolanaPayoutPrepareGateway — el body que arma el cliente ES el q
     expect(out).toEqual({ ok: false, reason: "payout_pop_unavailable" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  // ══════════════════════════════════════════════════════════════════════════════════════════════════
+  // WKH-359 · T-067-4 (AC-2) — LA INYECCIÓN DE LA PRUEBA YA CONSEGUIDA
+  // ══════════════════════════════════════════════════════════════════════════════════════════════════
+  //
+  // 🔴 QUÉ CIERRA. En el camino por enlace no hay bridge, así que `pop.prove()` tira y el `catch` de
+  // `:243` —que ⛔ NO se estrecha (CD-17)— convierte eso en `payout_pop_unavailable`: la remesa muere.
+  // La prueba se consigue por otro lado (un salto a la billetera) y entra por `input.proof`.
+  describe("T-067-4 (WKH-359/AC-2): con `proof` inyectada no se le pide nada a nadie", () => {
+    // 🔴 MUTANTE QUE MATA: ignorar `input.proof` (borrar el `if (input.proof)`) ⇒ `prove` recibe 1
+    // llamada en vez de 0, y en producción esa llamada es la que muere sin bridge.
+    it("`pop.prove` recibe CERO llamadas y el body lleva EL PAR inyectado", async () => {
+      const fetchMock = routeFetch(agentOk);
+      vi.stubGlobal("fetch", fetchMock);
+      const signer = new HttpPopSigner(wallet);
+      const proveSpy = vi.spyOn(signer, "prove");
+      // La prueba se fabrica con la MISMA key del caller, como la fabricaría el salto por enlace: así el
+      // par que viaja es uno que la route puede verificar de verdad (P3/P5) y no un stub complaciente.
+      const desafio = await (await fetch("/api/a2a/payout/challenge", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ address: ADDR }),
+      })).json() as { popChallenge: string; popMessage: string };
+      const proof = {
+        challenge: desafio.popChallenge,
+        signature: bs58.encode(nacl.sign.detached(new TextEncoder().encode(desafio.popMessage), KP.secretKey)),
+      };
+      fetchMock.mockClear();
+
+      const out = await new HttpSolanaPayoutPrepareGateway(signer).prepare({ ...prepareInput(), proof });
+
+      expect(proveSpy, "el gateway pidió una firma teniendo la prueba en la mano").not.toHaveBeenCalled();
+      const calls = fetchMock.mock.calls.map((c) => String(c[0]));
+      expect(calls, "se pidió un challenge nuevo: el del salto se estaría tirando a la basura").not.toContain(
+        "/api/a2a/payout/challenge",
+      );
+      expect(calls[0]).toBe("/api/payout/prepare");
+      const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+        popChallenge: string;
+        popSignature: string;
+      };
+      expect(body.popChallenge).toBe(proof.challenge);
+      expect(body.popSignature).toBe(proof.signature);
+      // Y la mitad que prueba que el par es REAL y no un adorno: la route lo verificó y dejó pasar.
+      expect(out.ok, "la route rechazó el par inyectado: no es una prueba, es una cadena cualquiera").toBe(true);
+    });
+
+    // 🔴 LA OTRA MITAD DE AC-8, Y ES LA QUE SE OLVIDA: sin `proof` esto tiene que correr BYTE-IDÉNTICO a
+    // como corría antes de la HU. MUTANTE QUE MATA: hacer que el camino sin `proof` deje de llamar a
+    // `prove` (por ejemplo, cortando cuando `input.proof` falta).
+    it("SIN `proof`, el comportamiento es el de siempre: pide el challenge y firma con el bridge", async () => {
+      const fetchMock = routeFetch(agentOk);
+      vi.stubGlobal("fetch", fetchMock);
+      const signer = new HttpPopSigner(wallet);
+      const proveSpy = vi.spyOn(signer, "prove");
+
+      const out = await new HttpSolanaPayoutPrepareGateway(signer).prepare(prepareInput());
+
+      expect(proveSpy).toHaveBeenCalledTimes(1);
+      const calls = fetchMock.mock.calls.map((c) => String(c[0]));
+      expect(calls[0]).toBe("/api/a2a/payout/challenge");
+      expect(calls[1]).toBe("/api/payout/prepare");
+      expect(out.ok).toBe(true);
+    });
+  });
+
 });

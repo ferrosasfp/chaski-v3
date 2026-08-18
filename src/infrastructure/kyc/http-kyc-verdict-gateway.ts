@@ -27,6 +27,7 @@ import type {
   KycVerdictGateway,
   KycVerdictLookup,
   PopSigner,
+  WalletPossessionProof,
 } from "../../application/ports";
 
 interface VerdictResponse {
@@ -54,11 +55,32 @@ function readRiskLevel(v: unknown): "low" | "medium" | "high" {
 export class HttpKycVerdictGateway implements KycVerdictGateway {
   constructor(private readonly pop: PopSigner) {}
 
-  async ensure(address: string, candidateVerificationId?: string): Promise<KycVerdictEnsureResult> {
+  // 🔴 WKH-359/AC-3 — EL 3er ARGUMENTO ES LA PRUEBA YA CONSEGUIDA, y es el eslabón entero de esta HU.
+  // Sin él, en el camino por enlace `this.pop.prove()` tira `wallet_sign_not_available` (no hay
+  // bridge en un móvil), el `catch` de abajo lo convierte —correctamente— en
+  // `not_asked/pop_declined` **EN SILENCIO**, y a partir de ahí:
+  //   · `ConnectWallet` devuelve `kycProof: undefined`;
+  //   · `/api/kyc/session` crea la sesión de Didit **SIN ATAR** (el `vendor_data` no viaja);
+  //   · `app/api/kyc/decision/route.ts:100` hace `if (!mapped.vendorData) return;` ⇒ NO ESCRIBE FILA;
+  //   · y `prepare` contesta 403 `prepare_kyc_verdict_missing`, sin ningún respaldo: esa route
+  //     declara que no hay `?? body.kycVerificationId` ni env que lo habilite.
+  // ⚠️ Y LO PELIGROSO ES QUE NO SE VE: una billetera que YA tiene fila del veredicto cierra igual, así
+  // que el bug no aparece en la corrida de quien ya se verificó y le pasa a cada persona nueva.
+  // ⛔ EL `catch` DE ABAJO NO SE ESTRECHA (CD-17): sigue tragándose todo lo que salga de `prove()`,
+  // porque un fallo del PoP no puede impedir verificarse. Lo que cambia es que cuando la prueba YA
+  // está, no se le pide nada a nadie y no hay excepción que tragar.
+  async ensure(
+    address: string,
+    candidateVerificationId?: string,
+    yaConseguida?: WalletPossessionProof,
+  ): Promise<KycVerdictEnsureResult> {
     let proof: Awaited<ReturnType<PopSigner["prove"]>>;
-    try {
-      proof = await this.pop.prove(address);
-    } catch {
+    if (yaConseguida) {
+      proof = yaConseguida;
+    } else {
+      try {
+        proof = await this.pop.prove(address);
+      } catch {
       // La causa típica y esperable: la persona vio el prompt de la billetera y dijo que no. NO es un
       // error del sistema y NO puede impedir verificarse (CD-15): se sigue por el camino de hoy.
       // ⚠️ ESTA FRASE ERA FALSA CUANDO SE ESCRIBIÓ, y el test que la vuelve verdadera es
@@ -66,7 +88,8 @@ export class HttpKycVerdictGateway implements KycVerdictGateway {
       // desenlace terminaba en `throw didit_session_failed` y la persona no podía verificarse
       // (AR/BLQ-ALTO-2). Hoy esa ruta crea la sesión sin atar cuando no hay prueba. La frase se
       // conserva porque ahora describe lo que pasa, con un input que lo mide.
-      return { lookup: { outcome: "not_asked", reason: "pop_declined" } };
+        return { lookup: { outcome: "not_asked", reason: "pop_declined" } };
+      }
     }
     if (!proof) return { lookup: { outcome: "not_asked", reason: "pop_disabled" } };
     // 🔴 ESTA ES LA ÚNICA FIRMA DE BILLETERA DE TODO EL FLUJO DE KYC. Se devuelve al caller para que

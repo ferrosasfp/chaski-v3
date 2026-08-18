@@ -26,6 +26,7 @@ import {
   FakeSolanaEscrowDepositProbe,
   FakeSolanaPayoutPrepareGateway,
   FakeSolanaSenderSolBalanceProbe,
+  FakePruebaDePosesionPorEnlace,
   FakeSolanaSettlementGateway,
   FakeSolanaWallet,
   FixedClock,
@@ -91,7 +92,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       new FixedClock(),
       new FakeRefundGateway(),
       { prepare, gateway, probe: new FakeSolanaEscrowDepositProbe(),
-        senderBalance: new FakeSolanaSenderSolBalanceProbe() },
+        senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace() },
     ).execute({ remittanceId: id });
 
     // Orden REAL de invocación: prepare ANTES de firmar ANTES de settle.
@@ -131,7 +132,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       new FixedClock(),
       new FakeRefundGateway(),
       { prepare, gateway, probe: new FakeSolanaEscrowDepositProbe(),
-        senderBalance: new FakeSolanaSenderSolBalanceProbe() },
+        senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace() },
     ).execute({ remittanceId: id });
 
     expect(prepareSpy).toHaveBeenCalledTimes(1);
@@ -165,7 +166,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       new FixedClock(),
       new FakeRefundGateway(),
       { prepare, gateway: new FakeSolanaSettlementGateway(), probe: new FakeSolanaEscrowDepositProbe(),
-        senderBalance: new FakeSolanaSenderSolBalanceProbe() },
+        senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace() },
     ).execute({ remittanceId: id });
 
     expect(
@@ -188,7 +189,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       clock,
       new FakeRefundGateway(),
       { prepare, gateway: new FakeSolanaSettlementGateway(), probe: new FakeSolanaEscrowDepositProbe(),
-        senderBalance: new FakeSolanaSenderSolBalanceProbe() },
+        senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace() },
     ).execute({ remittanceId: id }));
 
     expect(prepareSpy).not.toHaveBeenCalled();
@@ -215,7 +216,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       new FixedClock(),
       refund,
       { prepare, gateway, probe: new FakeSolanaEscrowDepositProbe(),
-        senderBalance: new FakeSolanaSenderSolBalanceProbe() },
+        senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace() },
     ).execute({ remittanceId: id }));
 
     expect(authorizeSpy).not.toHaveBeenCalled(); // AC-7: NUNCA se pidió la firma
@@ -240,7 +241,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
         prepare: new FakeSolanaPayoutPrepareGateway(),
         gateway: new FakeSolanaSettlementGateway(),
         probe: new FakeSolanaEscrowDepositProbe(),
-        senderBalance: new FakeSolanaSenderSolBalanceProbe(),
+        senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace(),
       },
     ).execute({ remittanceId: id }));
 
@@ -268,7 +269,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       new FixedClock(),
       new FakeRefundGateway(),
       { prepare: new FakeSolanaPayoutPrepareGateway(), gateway, probe: new FakeSolanaEscrowDepositProbe(),
-        senderBalance: new FakeSolanaSenderSolBalanceProbe() },
+        senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace() },
     ).execute({ remittanceId: id }));
 
     expect(out.snapshot.principalTx).toBeNull();

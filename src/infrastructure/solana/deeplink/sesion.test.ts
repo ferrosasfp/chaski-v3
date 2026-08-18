@@ -1605,3 +1605,61 @@ describe("T-VJ-10: un disco que no acepta la escritura no puede tirarle una exce
     expect(leerViaje(a, AHORA).tipo).toBe("no-hay");
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-359 · T-067-16 — LAS DOS MARCAS DEL PoP NO SON PASOS DEL VIAJE (CD-11)
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 POR QUÉ ESTE `it` EXISTE Y NO ALCANZABA CON `tsc`, medido y no heredado. El Story File de esta HU
+// declaraba que el candado de CD-11 era el `never` de (`nunca`, `./firma-por-enlace.ts:795`): «si el
+// cambio compila, la marca se coló al conjunto cerrado». **LO CORRÍ Y ES FALSO.** Agregué
+// `"pop-payout"` a (`PasoDelViaje`, `./sesion.ts:114`) Y a (`esPaso`, `./sesion.ts:121`), y
+// `tsc --noEmit` quedó VERDE y la suite completa también (2721 passed). El motivo es estructural y no
+// un descuido: ese `never` es exhaustividad sobre (`Vuelta`, `./sesion.ts:407`), y `PasoDelViaje`
+// entra a esas variantes como CAMPO (`paso: PasoDelViaje`), no como discriminante ⇒ agregarle un
+// valor no crea ninguna variante nueva que el `switch` esté obligado a mirar.
+//
+// ⇒ Sin este `it`, CD-11 no la vigila NADIE. Por eso se escribió en W0, junto con la línea que
+// protege, y no en la wave de candados.
+//
+// ⚠️ SE MIDE EL EFECTO OBSERVABLE Y NO `esPaso` DIRECTAMENTE, a propósito: esa función no se exporta,
+// y exportarla para poder testearla ensancharía la superficie del módulo para beneficio del test. Lo
+// que importa no es el predicado sino su consecuencia: que el motor conteste `no-volvimos` y por lo
+// tanto NO consuma ni destruya el viaje del depósito cuando una marca del PoP queda en la barra.
+describe("T-067-16 (CD-11) · las marcas que NO son pasos del viaje no entran al conjunto cerrado", () => {
+  // MUTANTE QUE MATA: agregar `|| x === "pop-payout"` (o `"pop-kyc"`, o `"crear-nonce"`) a `esPaso` en
+  // `sesion.ts:122`. MEDIDO: con el mutante puesto, `tsc` queda VERDE y ESTE `it` se pone ROJO. Es el
+  // único que lo ve.
+  //
+  // 🔴 `"crear-nonce"` ENTRÓ ACÁ EN EL FIX-PACK DEL AR (AR/BLQ-BAJO-1), y no es simetría: es la marca
+  // MÁS VIEJA de las tres —la define (`MARCA_CREAR_NONCE`, `./conexion.ts:54`), de WKH-358, YA
+  // DESPLEGADO— y era la única que no vigilaba nadie. Medido en `723ca3c`: con `"crear-nonce"` metido
+  // en `PasoDelViaje` y en `esPaso`, la suite COMPLETA de ese commit pasa entera. El docblock de
+  // `MARCA_CREAR_NONCE` decía que el `never` de `firma-por-enlace.ts:795` lo cazaba; era falso, y se
+  // corrigió en el mismo fix-pack.
+  it("una marca que no es un paso del viaje es `no-volvimos`: el motor no la mira y no toca el viaje", () => {
+    for (const marca of ["pop-payout", "pop-kyc", "crear-nonce"]) {
+      const a = almacenFalso();
+      guardarViaje(a, viajeBase());
+      const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: marca }), AHORA, null);
+      expect(v.tipo, `la marca \`${marca}\` entró al conjunto cerrado de \`PasoDelViaje\``).toBe(
+        "no-volvimos",
+      );
+      // Y la mitad que de verdad importa: el viaje SIGUE ENTERO. Si la marca hubiera entrado a
+      // `esPaso`, el motor la habría tratado como un paso y podría consumirlo o destruirlo.
+      const despues = leerViaje(a, AHORA);
+      expect(despues.tipo, `la marca \`${marca}\` destruyó el viaje del depósito`).toBe("hay");
+    }
+  });
+
+  // Refutación del instrumento: este `it` compara contra `"no-volvimos"`, que es también lo que
+  // contesta una marca inventada. Sin esto, un `interpretarVuelta` que contestara `no-volvimos` a
+  // TODO daría verde acá sin vigilar nada.
+  it("el instrumento distingue: una marca que SÍ es un paso del viaje no contesta `no-volvimos`", () => {
+    const a = almacenFalso();
+    guardarViaje(a, viajeBase());
+    expect(
+      interpretarVuelta(a, new URLSearchParams({ [MARCA]: "conectar" }), AHORA, null).tipo,
+    ).not.toBe("no-volvimos");
+  });
+});

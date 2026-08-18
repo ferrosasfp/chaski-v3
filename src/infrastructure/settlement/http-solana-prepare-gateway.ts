@@ -39,7 +39,7 @@ import {
   PREPARE_REJECTION_ENUMS,
 } from "../../application/agent-rejections";
 import type { AgentRef, Beneficiary } from "../../domain/remittance";
-import type { PopSigner, SolanaPayoutPrepareGateway } from "../../application/ports";
+import type { PopSigner, SolanaPayoutPrepareGateway, WalletPossessionProof } from "../../application/ports";
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -196,7 +196,7 @@ export class HttpSolanaPayoutPrepareGateway implements SolanaPayoutPrepareGatewa
     address: string;
     amountUsd: number;
     beneficiary: Beneficiary;
-    idempotencyKey: string;
+    idempotencyKey: string; proof?: WalletPossessionProof; // WKH-359/AC-2 — PEGADO a `idempotencyKey`, en la línea que existe, igual que en (`prepare`, `../../application/ports.ts:310`)
   }): Promise<
     | {
         ok: true;
@@ -219,13 +219,35 @@ export class HttpSolanaPayoutPrepareGateway implements SolanaPayoutPrepareGatewa
     //
     // `prove(input.address)` firma para la MISMA address que viaja en el body: P3 de la route compara
     // canonicalizeAddress(challenge.address) contra canonicalizeAddress(body.address).
+    //
+    // 🔴 WKH-359/AC-2 — LA INYECCIÓN, Y POR QUÉ NO ES "ESTRECHAR EL CATCH". En el camino por enlace no
+    // hay bridge, así que `this.pop.prove()` tira `wallet_sign_not_available` y el `catch` de abajo
+    // lo convierte —correctamente— en `payout_pop_unavailable`: la remesa muere ahí. La alternativa
+    // que el F1 dejó escrita era estrechar ese `catch`, y su costo es dejar pasar un tipo de excepción
+    // a través de un guard fail-closed del money-path que existe porque *"nunca se postea sin PoP"*.
+    // ⛔ Este camino NO TOCA EL GUARD (CD-17): cuando la prueba YA viene conseguida, no se le pide
+    // nada a nadie y no hay excepción que atravesar. Es más barato **y** más seguro.
+    //
+    // ⛔ Y NO VIOLA CD-5 (reusar una prueba para saltearse un prompt del money-path). Las TRES
+    // propiedades que lo sostienen están medidas con tests, no con prosa:
+    //   (a) la prueba se pide UNA vez por `prepare`, y **el salto ES el popup**: la persona firma
+    //       conscientemente, sólo que en otra app en vez de en una extensión;
+    //   (b) el ancla es de UN SOLO USO (`consumido` + borrado al entregar) y de UN SOLO PROPÓSITO
+    //       (`pop-payout` no sirve para `pop-kyc` ni al revés) — lo mide `T-067-17`;
+    //   (c) su ventana la fija el `exp` del SERVIDOR, no el cliente — lo mide `T-067-18`.
+    //
+    // ⚠️ SIN `input.proof` ESTO CORRE BYTE-IDÉNTICO a como corría antes de esta HU. Lo mide `T-067-4`.
     let proof: Awaited<ReturnType<PopSigner["prove"]>>;
-    try {
-      proof = await this.pop.prove(input.address);
-    } catch {
-      // Red caída / 400 / 5xx del emisor del challenge ⇒ no hay prueba que mandar. Fail-closed con el
-      // MISMO enum que la route usa cuando no puede verificar: nunca se postea sin PoP.
-      return { ok: false, reason: "payout_pop_unavailable" };
+    if (input.proof) {
+      proof = input.proof;
+    } else {
+      try {
+        proof = await this.pop.prove(input.address);
+      } catch {
+        // Red caída / 400 / 5xx del emisor del challenge ⇒ no hay prueba que mandar. Fail-closed con el
+        // MISMO enum que la route usa cuando no puede verificar: nunca se postea sin PoP.
+        return { ok: false, reason: "payout_pop_unavailable" };
+      }
     }
     if (!proof) {
       // `null` = el emisor respondió 501: el server NO tiene PAYOUT_POP_SECRET. La route lee ESA MISMA

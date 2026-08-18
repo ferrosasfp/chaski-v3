@@ -4,13 +4,13 @@
 //   · en `deeplink/conexion.ts` no puede vivir, porque ese módulo es PURO y SÍNCRONO por contrato
 //     (DT-7): no lee `window`, ni `Date`, ni `fetch`. Acá hay `Connection`, `sendRawTransaction` y
 //     lecturas de cuenta.
-//   · en `solana-wallet.ts` tampoco, y por un motivo MEDIDO y no estético: ese archivo tiene **2362**
-//     líneas y recibe **116** citas ancladas, de las que **50** apuntan más abajo de `:1233`, así que
-//     insertar en el medio las rompe a todas. ⚠️ RE-MEDIDO EN EL FIX-PACK (CR/MNR-2): decía «2247 líneas,
-//     85 citas, rompe 34», que era cierto al escribirlo y que esta misma HU volvió falso escribiendo
-//     código y comentarios. Los tres números salen de contar, no de heredar: `wc -l` para el primero y el
-//     escáner de `citas-ancladas.test.ts` para los otros dos. ⚠️ Y VUELVEN A ENVEJECER SOLOS: lo que no
-//     envejece es el criterio (insertar arriba corre todo lo de abajo), no la cifra.
+//   · en `solana-wallet.ts` tampoco, y por un motivo MEDIDO y no estético: ese archivo tiene
+//     [[CENSO src/infrastructure/solana-wallet.ts lineas=2498]] líneas y recibe
+//     [[CENSO src/infrastructure/solana-wallet.ts entrantes=126]] citas ancladas, de las que
+//     [[CENSO src/infrastructure/solana-wallet.ts entrantes-desde-1233=59]] apuntan de `:1233` para
+//     abajo, así que insertar en el medio las rompe a todas. ⚠️ LOS TRES YA ENVEJECIERON DOS VECES ACÁ
+//     («2247/85/34» ⇒ «2362/116/50» ⇒ los de hoy) sin que nadie editara la frase, y por eso desde el
+//     fix-pack del CR NO se escriben: son MARCADORES que `citas-ancladas.test.ts` verifica en cada `npm test` y que se ponen ROJOS solos. Lo que no envejece es el criterio (insertar arriba corre todo lo de abajo); la cifra sí, y ahora tiene quien la vigile.
 // Queda un módulo propio, que además es la costura que la pantalla puede doblar en los tests sin tocar
 // el adaptador.
 //
@@ -24,7 +24,7 @@ import type { BilleteraDeeplink } from "./deeplink/protocol";
 import type { CausaDeEnlace } from "./deeplink/firma-por-enlace";
 import type { Almacen } from "./deeplink/sesion";
 import { almacenDeNavegador, terminarViaje } from "./deeplink/sesion";
-import { completarVuelta, guardarEleccion, iniciarConexion, iniciarCreacionDeNonce, leerEleccion, olvidarEleccion, remesaDelViaje } from "./deeplink/conexion";
+import { completarVuelta, guardarEleccion, iniciarConexion, iniciarCreacionDeNonce, leerEleccion, olvidarEleccion, remesaDelViaje } from "./deeplink/conexion"; import { vueltaDelPop } from "./deeplink/pop-por-enlace"; // WKH-359: EN ESTA LÍNEA, por el mismo motivo que el resto de este archivo evita líneas nuevas arriba
 import { DEEPLINK_NONCE_NO_ENTRO, DEEPLINK_SIN_MEMORIA, DEEPLINK_TX_ALTERADA } from "./deeplink/firma-por-enlace";
 
 import { resolveSolanaNetworkConfig, resolveSolanaRpcUrlPublic } from "../chain";
@@ -150,7 +150,7 @@ export interface VueltaDeEnlace extends EleccionDeEnlace {
    * van después. Un `await` antes reintroduce exactamente la ventana que el fix-pack 2 de la ola 1
    * cerró. Lo mide `T-065-SYNC`.
    */
-  completar(i: { remittanceId: string }): Promise<ResultadoDePreparacion>;
+  completar(i: { remittanceId: string }): Promise<ResultadoDePreparacion>; completarPop(i: { hrefDeLaVuelta: string }): Promise<ResultadoDePop>; // WKH-359/AC-7 — EN ESTA LÍNEA (Δ0). ⛔ MÉTODO PROPIO Y NO UNA VARIANTE MÁS DE `completar`: son dos vueltas distintas, con anclas distintas, y `completar` consume el paso del VIAJE de forma irreversible. Meter el PoP ahí haría que volver del salto del permiso destruyera el paso del depósito. Y ⛔ NO recibe `remittanceId`: el permiso no es de una remesa, es de una billetera, y pedírselo sería inventar un cruce que este ancla no puede sostener. 🔴 SÍ RECIBE EL HREF, Y ES OBLIGATORIO (fix-pack · AR/BLQ-ALTO-1): el único llamador de producción es (`completarPop`, `../../presentation/flow.tsx:4009`) —⚠️ acá decía `flow.tsx:4070`, que es el FILTRO de reanudación y no el llamador (fix-pack · AR/MNR-1)— y en la versión rota limpiaba la barra con `replaceState` antes de llegar acá —el paso 2 corre para toda vuelta, también la del PoP—, así que leer `location.href` en vivo adentro de esta implementación da una URL SIN `nonce`, SIN `data` y SIN la clave de cifrado ⇒ **toda firma buena salía `deeplink_pop_alterado`**. El parámetro es REQUERIDO y no opcional a propósito: con un `?` el llamador podía volver a olvidarlo y el compilador no decía nada. Es el mismo `hrefActual` que (`vueltaDelPop`, `./deeplink/pop-por-enlace.ts:313`) ya recibía por parámetro; lo que faltaba era que el borde no lo fabricara de una fuente ya limpiada.
 }
 
 /**
@@ -457,4 +457,79 @@ export class RecorridoPorEnlaceReal implements PreparacionPorEnlace {
   private conexion(): Connection {
     return new Connection(resolveSolanaRpcUrlPublic(resolveSolanaNetworkConfig().cluster));
   }
+
+  /**
+   * WKH-359/AC-7 — La vuelta del salto que pidió la prueba de posesión.
+   *
+   * 🔴 LA REANUDACIÓN ES POR RESULTADOS, NUNCA POR `viaje.paso` (AC-7). Esto NO mira en qué paso dice
+   * el viaje que está: lee el ancla del PoP y contesta qué HAY. El razonamiento entero está escrito en
+   * (`interpretarVuelta`, `./deeplink/sesion.ts:578`) y en el motor: *"`Viaje.paso` queda RANCIO por
+   * construcción: dice qué se fue a pedir en el salto en curso, no qué se consiguió."*
+   *
+   * ⚠️ ES ENTERAMENTE SÍNCRONA por dentro —no hay un solo `await`— así que CD-26 se cumple por
+   * construcción y no por disciplina: el disco se lee, el ancla se marca consumida y la vuelta se
+   * resuelve en un único bloque, sin ninguna ventana de read-modify-write que reabrir.
+   *
+   * 🔴 EL HREF ENTRA POR PARÁMETRO Y **NO** SE LEE DE `this.entorno()` (fix-pack · AR/BLQ-ALTO-1), y
+   * ésta es la línea que estaba rota. (`entorno`, `:194`) lee `globalThis.location.href` EN VIVO, y
+   * en la versión rota el productor ya había corrido su paso 2 cuando llegaba hasta acá:
+   * `limpiarLaBarra()` es INCONDICIONAL ((`limpiarLaBarra`, `../../presentation/flow.tsx:4023`)) y
+   * `hrefSinRastroDeVuelta` borra `nonce`, `data`, `errorCode`, la clave de cifrado de la billetera y
+   * el `dl` ((`hrefSinRastroDeVuelta`, `./deeplink/conexion.ts:362`)). ⇒ `vueltaDelPop` recibía una URL sin un
+   * solo parámetro de respuesta, el guard write-once de la `claveBilletera` no encontraba clave y
+   * **toda firma buena salía `deeplink_pop_alterado`**, con la persona en un loop que sólo terminaba
+   * al vencer el `exp`. Medido con las dos mitades: mismo disco, href sucio ⇒ `pop-firmado`; href
+   * limpio ⇒ `corte deeplink_pop_alterado`.
+   * ⛔ Y NO se arregla "moviendo la limpieza después": el paso 2 tiene que correr igual para toda
+   * vuelta (AC-4), así que lo que se arregla es de DÓNDE sale el href, no cuándo se limpia.
+   * ⚠️ HOY LA LIMPIEZA YA NO CORRE ANTES, Y ESO **NO** ES LO QUE ARREGLA ESTO (fix-pack · AR/MNR-2). El
+   * mismo fix-pack reordenó la rama del productor: (`completarPop`, `../../presentation/flow.tsx:4009`)
+   * llama acá ANTES de `limpiarLaBarra()`. La reordenación cierra el SÍNTOMA; lo que hace a esta función
+   * **inmune al orden** es el parámetro, y por eso es el parámetro lo que no se toca. Con el href leído
+   * en vivo, cualquiera que vuelva a mover la limpieza —o que agregue un `replaceState` en otro lado—
+   * reabre el mismo agujero sin tocar una línea de este archivo. Un arreglo que depende del orden de dos
+   * archivos distintos no es un arreglo: es una coincidencia con fecha de vencimiento.
+   * ⚠️ `almacen` y `origin` SÍ siguen saliendo de `entorno()`: el disco no lo toca `replaceState` y el
+   * origen no cambia con la limpieza. Lo único que la barra pierde es la query.
+   */
+  async completarPop(i: { hrefDeLaVuelta: string }): Promise<ResultadoDePop> {
+    const e = this.entorno();
+    // Mismo criterio que `completar`: "no había marca nuestra" y "no podemos leer el disco" son cosas
+    // distintas, y colapsarlas dejaría a la persona sin diagnóstico después de volver del salto.
+    if (e === null) return { estado: "corte", causa: DEEPLINK_SIN_MEMORIA };
+    const v = vueltaDelPop({ almacen: e.almacen, ahora: Date.now(), hrefActual: i.hrefDeLaVuelta, appUrl: e.origin });
+    switch (v.tipo) {
+      case "nada":
+        return { estado: "nada" };
+      case "pop-firmado":
+        // ⛔ NO se devuelve la firma: queda anclada y la saca quien la necesite, UNA vez
+        // (`leerPruebaPop`, `./deeplink/pop-por-enlace.ts:398`). Pasarla por acá la haría viajar por
+        // la pantalla, que no tiene por qué tocarla.
+        return { estado: "pop-listo", proposito: v.proposito };
+      case "corte":
+        return { estado: "corte", causa: v.causa };
+      default: {
+        // ⛔ ESTO NO TRAGA NADA: es el candado de exhaustividad, igual que en `completar`.
+        const nunca: never = v;
+        return { estado: "corte", causa: nunca };
+      }
+    }
+  }
 }
+
+/**
+ * WKH-359 — Qué salió de leer la vuelta del salto del PoP. Va AL FINAL del archivo, donde hay CERO
+ * citas ancladas: [[CENSO src/infrastructure/solana/preparacion-por-enlace.ts entrantes-desde-520=0]] apuntan de acá para abajo, y el CERO es lo que sostiene la decisión. ⚠️ ACÁ DECÍA «las únicas dos de este archivo apuntan a `:246`» Y SE DESMENTÍA SIN SALIR DEL BLOQUE (CR/MNR-3): este mismo docblock contiene una tercera cita dos líneas más abajo, y el fix-pack agregó una cuarta en `:474`. Hoy son [[CENSO src/infrastructure/solana/preparacion-por-enlace.ts entrantes=5]] entrantes a [[CENSO src/infrastructure/solana/preparacion-por-enlace.ts destinos=4]] destinos, todos MARCADORES verificados.
+ *
+ * ⛔ ES UN TIPO PROPIO Y NO UNA VARIANTE MÁS DE (`ResultadoDePreparacion`, `:71`), y no es duplicación:
+ * ese tipo lo consume un `switch` exhaustivo en la pantalla, así que agregarle un miembro obliga a
+ * decidir qué hace la reanudación del DEPÓSITO con un desenlace del PERMISO. Son dos preguntas
+ * distintas y mezclarlas es exactamente cómo un `never` deja de proteger: pasa a exigir ramas que no
+ * significan nada en su contexto, y alguien las rellena con un `break`.
+ */
+export type ResultadoDePop =
+  /** No había marca del PoP en esta URL, o la había y no vino respuesta. No se tocó el disco. */
+  | { estado: "nada" }
+  /** La firma volvió, VERIFICÓ, y quedó anclada. Quien la necesite la saca con `leerPruebaPop`. */
+  | { estado: "pop-listo"; proposito: "pop-payout" | "pop-kyc" }
+  | { estado: "corte"; causa: CausaDeEnlace };

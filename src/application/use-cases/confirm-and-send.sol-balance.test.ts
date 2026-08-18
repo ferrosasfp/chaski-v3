@@ -20,6 +20,7 @@ import {
   FakeSolanaEscrowDepositProbe,
   FakeSolanaPayoutPrepareGateway,
   FakeSolanaSenderSolBalanceProbe,
+  FakePruebaDePosesionPorEnlace,
   FakeSolanaSettlementGateway,
   FakeSolanaWallet,
   FixedClock,
@@ -81,6 +82,7 @@ function build(
       gateway,
       probe: new FakeSolanaEscrowDepositProbe(),
       senderBalance,
+      pop: new FakePruebaDePosesionPorEnlace(), // WKH-359: `no-corresponde` por default = el camino inyectado (AC-8)
     },
   );
 }

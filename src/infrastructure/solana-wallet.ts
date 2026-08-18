@@ -24,7 +24,7 @@ import type {
   SolanaEscrowDepositProbe,
   SolanaEscrowRefundResult,
   AutorizacionDelPrincipal, // WKH-356: OCUPA LA LÍNEA que dejó `SolanaPrincipalAuthorization` (que quedó sin uso al cambiar el retorno). Sustituirlo en el lugar, y no borrar una línea y agregar otra, es lo que deja este bloque en Δ0: las citas por número a este archivo apuntan de `:188` para abajo.
-  SolanaRemittanceIdResolver,
+  SolanaRemittanceIdResolver, PruebaDePosesionPorEnlace, PruebaPorEnlace, // WKH-359: los DOS EN ESTA LÍNEA, no en dos nuevas — todas las citas ancladas a este archivo apuntan de `:188` para abajo y una línea nueva acá arriba las rota a todas (mismo motivo que WKH-349 y WKH-356, un par de líneas más abajo)
   SolanaSenderSolBalance,
   SolanaSenderSolBalanceProbe,
   SolanaCloseableEscrowLister, EscrowChainState, SolanaEscrowChainStateReader, // WKH-349: EN ESTA LÍNEA, no en dos nuevas — TODAS las citas ancladas a este archivo apuntan de `:188` para abajo, y una línea nueva acá arriba las rota a todas
@@ -44,7 +44,7 @@ import {
 } from "./chain";
 import { ESCROW_INDEX_MAX_ENTRIES } from "./escrow-index-limits";
 import { ESCROW_ID_LOOKUP_CEILING } from "./escrow-lookup-limits"; import { ESCROW_STATE_BATCH_CEILING, ESCROW_STATE_BATCH_TIMEOUT_MS } from "./escrow-history-limits"; // WKH-349: EN ESTA LÍNEA, no en una nueva — los imports de este archivo están ARRIBA de `:188` y una línea acá rota TODAS las citas ancladas que apuntan de ahí para abajo, que son las que este archivo recibe. Va pegado a `ESCROW_ID_LOOKUP_CEILING` y no a `ESCROW_INDEX_MAX_ENTRIES` a propósito: ése es justo el techo con el que el nuevo NO se confunde (uno lo pone el servidor del registro durable, el otro el RPC), y quien lea la línea ve los dos juntos
-import { solanaWalletBridge } from "./solana-wallet-bridge"; import nacl from "tweetnacl"; import { almacenDeNavegador, leerViaje } from "./solana/deeplink/sesion"; import { terminarPreparado } from "./solana/deeplink/preparado"; import { type Almacen, terminarViaje } from "./solana/deeplink/sesion"; import type { FirmaPorEnlace } from "./solana/deeplink/firma-por-enlace"; import { construirNonceAdvance, direccionDelNonce, leerNonce } from "./solana/nonce-duradero"; import { SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT } from "../application/solana-escrow-rent"; import { leerEleccion } from "./solana/deeplink/conexion"; import type { BilleteraDeeplink } from "./solana/deeplink/protocol"; // WKH-358 agregó los dos últimos por la MISMA razón que los siete de acá y ANTES de este comentario, no después. WKH-356: TODOS EN ESTA LÍNEA, no en siete nuevas — las citas por número a este archivo apuntan de `:188` para abajo y siete líneas acá arriba las rotan a todas. WKH-357 agregó los dos últimos por la MISMA razón y ANTES de este comentario, no después: cuatro imports de 062 quedaron una vez adentro de un `//` por pegarlos del lado equivocado
+import { solanaWalletBridge } from "./solana-wallet-bridge"; import nacl from "tweetnacl"; import { almacenDeNavegador, leerViaje } from "./solana/deeplink/sesion"; import { terminarPreparado } from "./solana/deeplink/preparado"; import { type Almacen, terminarViaje } from "./solana/deeplink/sesion"; import type { FirmaPorEnlace } from "./solana/deeplink/firma-por-enlace"; import { construirNonceAdvance, direccionDelNonce, leerNonce } from "./solana/nonce-duradero"; import { SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT } from "../application/solana-escrow-rent"; import { leerEleccion } from "./solana/deeplink/conexion"; import type { BilleteraDeeplink } from "./solana/deeplink/protocol"; import { MARCA_POP_KYC, MARCA_POP_PAYOUT, iniciarPop, leerFirmaParaMensaje, leerPasoPop, leerPruebaPop } from "./solana/deeplink/pop-por-enlace"; import { DEEPLINK_POP_SIN_FIRMA, DEEPLINK_SIN_MEMORIA } from "./solana/deeplink/firma-por-enlace"; // WKH-359 — EN ESTA MISMA LÍNEA, por el mismo motivo que los de WKH-349 y WKH-356 de arriba: todas las citas ancladas a este archivo apuntan de `:188` para abajo y una línea nueva acá las rota a todas. // WKH-358 agregó los dos últimos por la MISMA razón que los siete de acá y ANTES de este comentario, no después. WKH-356: TODOS EN ESTA LÍNEA, no en siete nuevas — las citas por número a este archivo apuntan de `:188` para abajo y siete líneas acá arriba las rotan a todas. WKH-357 agregó los dos últimos por la MISMA razón y ANTES de este comentario, no después: cuatro imports de 062 quedaron una vez adentro de un `//` por pegarlos del lado equivocado
 
 // HU-SOL-20/AC-2: tope de candidatos que el fallback del REFUND sondea on-chain — el camino que
 // devuelve el PRINCIPAL.
@@ -171,7 +171,7 @@ export class SolanaWalletAdapter
     SolanaCloseableEscrowLister,
     // WKH-327 (fix-pack AR/BLQ-BAJO-1): quién está conectado AHORA. Mismo adapter otra vez porque el
     // bridge que sabe la respuesta ya es suyo.
-    ConnectedWalletProbe, SolanaEscrowChainStateReader // WKH-349: EN ESTA LÍNEA. El estado on-chain de los escrows del historial se le pregunta a la CADENA, así que vive en el mismo adapter por la misma razón que sus vecinos de arriba
+    ConnectedWalletProbe, SolanaEscrowChainStateReader, PruebaDePosesionPorEnlace // WKH-349: EN ESTA LÍNEA. El estado on-chain de los escrows del historial se le pregunta a la CADENA, así que vive en el mismo adapter por la misma razón que sus vecinos de arriba
 {
   private address: string | null = null;
 
@@ -890,7 +890,7 @@ export class SolanaWalletAdapter
     // de siempre. Mover la rama arriba del `tx.recentBlockhash` además rompe DT-10 por construcción (el
     // ancla se calcularía sobre una tx sin blockhash), y eso lo cazan los `it` de T-062-18.
     //
-    // ⚠️ [NO VERIFICADO] (CD-12) — nada de esta rama está medido en un teléfono, Y SIGUE SIN ESTARLO DESPUÉS DE WKH-358. Eso es lo que esta actualización precisa, en las MISMAS 4 líneas (este bloque recibe 65 citas ancladas por debajo, re-medidas en el fix-pack: decía 47): la ola 4 escribió quién enciende esta rama y quién la alimenta, así que ahora EXISTE un recorrido con el que se puede medir, y lo que no cambió es que nadie de este equipo lo corrió en un teléfono.
+    // ⚠️ [NO VERIFICADO] (CD-12) — nada de esta rama está medido en un teléfono, Y SIGUE SIN ESTARLO DESPUÉS DE WKH-358. Eso es lo que esta actualización precisa, en las MISMAS 4 líneas (este bloque recibe [[CENSO src/infrastructure/solana-wallet.ts entrantes-desde-893=75]] citas ancladas por debajo): la ola 4 escribió quién enciende esta rama y quién la alimenta, así que ahora EXISTE un recorrido con el que se puede medir, y lo que no cambió es que nadie de este equipo lo corrió en un teléfono.
     // Siguen sin verificar, una por una: que la billetera vuelva al mismo origen · que el `localStorage` sobreviva al salto · que la transacción devuelta sea byte-idéntica a la enviada · y que el blockhash aguante el viaje de ida y vuelta (dos saltos a otra app, una persona leyendo, dos vueltas).
     // ⚠️ La CUARTA es la única que la ola 4 acota, y sólo para el depósito: el durable nonce le saca el reloj a los dos saltos que llevan plata, y el único salto que sigue compitiendo contra un blockhash es el de la CREACIÓN de la cuenta de nonce, donde no hay nada en riesgo (el encabezado de `./solana/nonce-duradero.ts` lo desarrolla). Las otras tres están intactas.
     // ⛔ PROHIBIDO convertir cualquiera de las cuatro en una afirmación del código sin el reporte del founder pegado al lado (CD-10). Su plan de medición vive en el expediente de la HU, no acá.
@@ -903,7 +903,7 @@ export class SolanaWalletAdapter
       if (entorno === null) throw new Error("deeplink_sin_memoria");
       const almacen = entorno.almacen;
 
-      // 🔴 CD-11, REESCRITO EN WKH-358 CON LA MEDICIÓN Y EN LAS MISMAS 4 LÍNEAS (este bloque recibe 65 citas ancladas por debajo, re-medidas en el fix-pack: decía 47). Acá decía «el `sender` … NUNCA del canal del enlace», sin calificar el camino, y esa mitad se volvió FALSA. El `sender` sigue saliendo de `this.getAddress()` (guard `:560-561`, sin cambios), pero `getAddress()` tiene ahora DOS fuentes y cuál se usa lo decide el gate (`caminoPorEnlace`, `:2239`):
+      // 🔴 CD-11, REESCRITO EN WKH-358 CON LA MEDICIÓN Y EN LAS MISMAS 4 LÍNEAS (este bloque recibe [[CENSO src/infrastructure/solana-wallet.ts entrantes-desde-906=75]] citas ancladas por debajo —marcador verificado; decía 47, después 65, y las DOS veces se copió a la frase gemela de `:893`—). Acá decía «el `sender` … NUNCA del canal del enlace», sin calificar el camino, y esa mitad se volvió FALSA. El `sender` sigue saliendo de `this.getAddress()` (guard `:560-561`, sin cambios), pero `getAddress()` tiene ahora DOS fuentes y cuál se usa lo decide el gate (`caminoPorEnlace`, `:2239`):
       // · camino INYECTADO ⇒ el bridge, o sea FUERA del canal (y ahí esta rama ni corre: el mismo gate la apaga). · camino POR ENLACE ⇒ (`direccionDelViajeConectado`, `:2307`), que lee `Viaje.direccion`, o sea DENTRO del canal — y no hay alternativa: sin extensión el bridge está vacío.
       // ⇒ En el camino por enlace, el guard (`DEEPLINK_SENDER_MISMATCH`, `./solana/deeplink/firma-por-enlace.ts:691`) compara dos lecturas del MISMO disco: es COHERENCIA INTERNA, no una defensa. El corte que sí lo es está en (`live`, `../presentation/flow.tsx:506`) cruzado contra `rem.ownerAddress`, que escribe `startKyc` en el repo de remesas y que el canal del enlace no puede escribir; su residual (`ownerAddress == null` no dispara ⇒ un forjador del paso 1 puede dejar el depósito en un escrow que la víctima no puede cerrar) está escrito entero en el bloque de (`CD-11`, `./solana/deeplink/firma-por-enlace.ts:639`). Lo mide `T-065-CD11`. ⚠️ Y EL CRUCE ES TIME-OF-CHECK, NO FUENTE-INDEPENDIENTE (fix-pack · AR/BLQ-BAJO-4): en ESTE camino `rem.ownerAddress` lo escribió `startKyc` con la MISMA `Viaje.direccion` que acá se compara, así que un forjador anterior a `startKyc` compara A contra A. Lo que el cruce cierra de verdad es la ventana POSTERIOR a `startKyc`, cuando `ownerAddress` ya quedó congelado en el repo de remesas. La fuente-independiente real es un PoP por enlace (WKH-359), que no existe.
       // El `sender` va en su forma CANÓNICA: `senderPk.toBase58()` es el round-trip de `new PublicKey(...)`, que es exactamente lo que hace `canonicalizeAddress`. ⛔ NUNCA `.toLowerCase()`: base58 es case-sensitive y bajarlo a minúsculas fabrica colisiones.
@@ -1473,7 +1473,7 @@ export class SolanaWalletAdapter
       // ausente, RPC caído. Un blockhash vencido prueba que la tx no puede entrar DE ACÁ EN ADELANTE,
       // NO que no haya entrado antes ⇒ hay que ir a mirar el estado autoritativo.
       //
-      // WKH-353 — el mapeo a los desenlaces con nombre: el `expired` de `SignatureVerdict`, `:2342` ES
+      // WKH-353 — el mapeo a los desenlaces con nombre: el `expired` de `SignatureVerdict`, `:2478` ES
       // ese blockhash vencido, y `unseen` es que se nos acabó el tiempo de preguntar, el que llega
       // hasta acá abajo como excepción "confirm_timeout". Por qué NO colapsarlos: está en el tipo.
       reverted = err instanceof RefundTxReverted;
@@ -1919,7 +1919,7 @@ export class SolanaWalletAdapter
   // el popMessage VERBATIM; la wallet (vía bridge) devuelve la firma ed25519 de 64 bytes; se codifica
   // base58 (simétrico con verifySolanaPop.signatureBase58). Browser+node-safe: bs58 + TextEncoder,
   // NUNCA Buffer node-only (auto-blindaje HU-SOL-5 BLQ-MED-1).
-  async signMessage(message: string): Promise<string> {
+  async signMessage(message: string): Promise<string> { const porEnlace = this.firmaDelPopPorEnlace(message); if (porEnlace !== null) return porEnlace; // WKH-359/AC-1 — PEGADO A LA FIRMA, no en una línea propia: este archivo recibe **29 citas ancladas a 8 destinos contando ESTA línea (comparador `>=1922`), y 26 a 7 sin contarla (`>1922`)**, y una línea de más las rota a todas. ⚠️ ACÁ DECÍA «25 a 8» Y NO LO REPRODUCE NINGUNA DE LAS DOS VARIANTES (fix-pack · AR/BLQ-BAJO-2): era un par mezclado de dos mediciones distintas. Re-derivado con la receta de (`ANCLADA`, `../composition/citas-ancladas.test.ts:62`) —su regex, su lexer de comentarios y su resolución de destino, contando entrantes largas y auto-citas—, y **calibrando el instrumento antes de creerle**: su total del árbol tiene que dar el mismo número que el candado real, que se lee subiéndole el piso al `it` de (`CITAS`, `../composition/citas-ancladas.test.ts:202`). 🔴 EL COMPARADOR QUE SOSTIENE EL ARGUMENTO ES EL `>=`, y por eso va primero: una línea nueva acá corre TAMBIÉN a esta misma línea, así que el conjunto en riesgo la incluye. ⚠️ Y el número es una FOTO —cada comentario nuevo lo mueve, y el Story File decía 23—; el invariante no lo es: todo lo que se cita de acá para abajo se corre con una línea nueva arriba. En el camino por enlace la firma NO se pide: se LEE de un ancla que un salto anterior ya trajo, o se corta (CD-12). ⛔ POR QUÉ NO PUEDE HACER EL VIAJE REDONDO, medido y no opinado: el tipo es `(message) => Promise<string>` (`../application/ports.ts:510`) y un proceso de JavaScript que navega a otra app DEJA DE EXISTIR antes de que la promesa resuelva ⇒ un `signMessage` que navegara devolvería una promesa que nunca resuelve. Ensanchar el retorno tocaría los cuatro dobles de `WalletPort` y correría 11 ocurrencias ancladas (CD-16). Con el gate apagado esto devuelve `null` y lo de abajo corre BYTE-IDÉNTICO (AC-8)
     const bytes = new TextEncoder().encode(message); // browser+node-safe (NO Buffer)
     const sig = await solanaWalletBridge.signMessage(bytes); // Uint8Array(64) de la wallet
     // Normalizar a Uint8Array cubre adapters que devuelvan otro shape (R-2 del SDD).
@@ -2110,7 +2110,7 @@ export class SolanaWalletAdapter
 
   /**
    * WKH-353 — ¿qué dice la cadena de ESTA firma? Devuelve uno de los tres desenlaces de
-   * `SignatureVerdict`, `:2342`, preguntando por HTTP y sin abrir NINGUNA suscripción.
+   * `SignatureVerdict`, `:2478`, preguntando por HTTP y sin abrir NINGUNA suscripción.
    *
    * POR QUÉ NO `connection.confirmTransaction`, que es lo que estaba acá antes. Sus dos estrategias
    * terminan en `onSignature`, o sea en un `signatureSubscribe` por WebSocket, y el RPC que usamos
@@ -2135,7 +2135,7 @@ export class SolanaWalletAdapter
    * El mecanismo anterior tenía LOS MISMOS TRES DEFECTOS (el techo del llamador tampoco lo cortaba;
    * era inmortal con el RPC de altura caído, mismo archivo :6665-6670; dejaba un huérfano por
    * reintento) y era cuatro órdenes de magnitud más caro: los números y su medición viven UNA sola
-   * vez, al lado de `SIGNATURE_POLL_INTERVAL_MS`, `:2357`.
+   * vez, al lado de `SIGNATURE_POLL_INTERVAL_MS`, `:2493`.
    *
    * Matar el huérfano exige un `AbortSignal` que cruce desde el llamador, y es una HU con su propio
    * alcance y no una línea acá: los métodos de `Connection` no aceptan `signal` (`getSignatureStatuses`
@@ -2230,14 +2230,14 @@ export class SolanaWalletAdapter
    *  ⛔ POR QUÉ ESTO NO ES UNA FACTORY NI UN SEGUNDO ADAPTER, que es lo que parece la solución limpia.
    *  Una factory decidiría al construir el container (`getContainer`, `../composition/container.ts:265`,
    *  que corre UNA vez al montar) y la elección de la persona ocurre DESPUÉS: sería una decisión tomada
-   *  antes de que exista el dato. Y un segundo adapter duplicaría un archivo de **2362** líneas con **116**
-   *  citas ancladas entrantes (re-medido en el fix-pack: decía 2247 y 85, y esta HU lo volvió falso sin que nadie editara la frase), con las dos instancias compartiendo el MISMO bridge y el MISMO disco.
+   *  antes de que exista el dato. Y un segundo adapter duplicaría un archivo de [[CENSO src/infrastructure/solana-wallet.ts lineas=2498]] líneas
+   *  con [[CENSO src/infrastructure/solana-wallet.ts entrantes=126]] citas ancladas entrantes (los dos ya envejecieron dos veces acá —«2247/85» ⇒ «2362/116»— y por eso desde el fix-pack del CR son MARCADORES que verifica `citas-ancladas.test.ts`, no cifras escritas a mano), con las dos instancias compartiendo el MISMO bridge y el MISMO disco.
    *
    *  🔴 ACÁ DECÍA «NO LEE `deeplinkEnabled()`, y no es un olvido», Y ERA EL BUG (AR/BLQ-MED-1, en las MISMAS 4 líneas para no correr las 47 citas de más abajo). El argumento de esa frase era: *"con la bandera apagada nadie puede elegir, así que la condición 1 no se cumple"*. **Es falso para un dispositivo que YA eligió**: `CLAVE_ELECCION` no expira (`CLAVE_ELECCION`, `./solana/deeplink/conexion.ts:129`) y nada de producción la borraba, así que un build con la bandera prendida y después ausente dejaba a ese teléfono con este gate devolviendo `"phantom"` **sin puerta de vuelta**, o sea con la superficie NO replegable — que es justo lo que AC-9 pide poder hacer. Medido antes del fix: agregar la bandera como 3ª condición ponía **31 `it` en rojo**, o sea que la frase y el árbol se contradecían.
    *  ⇒ Hoy la lee, y la objeción original sigue en pie sin aplicar: la bandera no CONTESTA ninguna de las otras dos condiciones (no sabe qué eligió la persona ni qué hay inyectado), es una tercera que se conjuga con ellas. El literal de la env NO entra a este archivo: viene por (`resolveSolanaDeeplinkEnabled`, `./chain.ts:269`), que es su único sitio en producción.
    *  ⛔ Y NO alcanza sola: el otro repliegue es el gesto de la persona, y es el control «Cambiar de billetera» de (`OlvidarBilleteraDeEnlace`, `../presentation/flow.tsx:4243`), que llama a (`olvidar`, `./solana/preparacion-por-enlace.ts:246`). Los dos hacen falta: la bandera repliega el BUILD, el control repliega EL DISPOSITIVO. */
   private caminoPorEnlace(): BilleteraDeeplink | "no-podemos-saber" | null {
-    if (solanaWalletBridge.getWalletAvailability() !== "none") return null; if (!resolveSolanaDeeplinkEnabled()) return null; // LA 3ª CONDICIÓN, EN ESTA MISMA LÍNEA (Δ0). ⚠️ ACÁ DECÍA «este bloque recibe 47 citas por número desde más abajo» Y ERA UN CONTEO INVENTADO (re-AR it2 · BLQ-BAJO-4): el 47 se copió del número viejo del archivo, que en ESTE MISMO COMMIT se estaba corrigiendo a 65 en `:906`. RE-MEDIDO en el árbol de este commit con el instrumento de `citas-ancladas.test.ts` (su regex `ANCLADA` + su resolución de destino; entrantes largas + auto-citas ancladas, filtradas por destino): las que apuntan MÁS ABAJO de esta línea son **6 ocurrencias a 4 destinos**. El archivo entero recibe 116 (76 largas de 23 archivos + 40 auto) a 64 destinos, y 65 de esas caen por debajo de `:906`. El invariante que justifica el Δ0 no es el total: es que TODO lo que está más abajo se corre con una línea nueva acá. Va DESPUÉS de la disponibilidad y ANTES del disco a propósito: `T-065-GATE-1`/`GATE-2` afirman que con `injected` el gate corta "en su PRIMERA condición, sin siquiera mirar el disco", y meter la bandera antes volvería falsa esa frase para todos los `it` que no la declaran
+    if (solanaWalletBridge.getWalletAvailability() !== "none") return null; if (!resolveSolanaDeeplinkEnabled()) return null; // LA 3ª CONDICIÓN, EN ESTA MISMA LÍNEA (Δ0). ⚠️ ACÁ DECÍA «este bloque recibe 47 citas por número desde más abajo» Y ERA UN CONTEO INVENTADO (re-AR it2 · BLQ-BAJO-4): el 47 se copió del número viejo del archivo, que en ESTE MISMO COMMIT se estaba corrigiendo a 65 en `:906`. ⚠️ Y LA CORRECCIÓN DE ESE 47 REPITIÓ EL DEFECTO UNA CAPA MÁS ARRIBA (CR/MNR-2): decía «RE-MEDIDO en el árbol de este commit» y reportaba, al dígito, los cinco números del árbol BASE. ⇒ Desde el fix-pack del CR los números de esta línea NO se escriben: son MARCADORES que `citas-ancladas.test.ts` verifica contra el árbol en cada `npm test` y que se ponen ROJOS solos. Las que apuntan MÁS ABAJO de esta línea son [[CENSO src/infrastructure/solana-wallet.ts entrantes-desde-2241=9]] ocurrencias a [[CENSO src/infrastructure/solana-wallet.ts destinos-desde-2241=6]] destinos. El archivo entero recibe [[CENSO src/infrastructure/solana-wallet.ts entrantes=126]] a [[CENSO src/infrastructure/solana-wallet.ts destinos=68]] destinos, y [[CENSO src/infrastructure/solana-wallet.ts entrantes-desde-906=75]] de esas caen por debajo de `:906`. ⚠️ Lo que estos marcadores NO cuentan son las citas SUELTAS —`solana-wallet.ts:NNNN` sin símbolo delante—, que se rompen igual y no las mira nadie. El invariante que justifica el Δ0 no es el total: es que TODO lo que está más abajo se corre con una línea nueva acá. Va DESPUÉS de la disponibilidad y ANTES del disco a propósito: `T-065-GATE-1`/`GATE-2` afirman que con `injected` el gate corta "en su PRIMERA condición, sin siquiera mirar el disco", y meter la bandera antes volvería falsa esa frase para todos los `it` que no la declaran
     const disco = this.discoDeEnlace();
     // 🔴 EL TERCER VALOR, Y POR QUÉ NO PUEDE COLAPSAR EN `null`. Acá el disco NO SE DEJA LEER, así que
     // la pregunta "¿qué eligió la persona?" no tiene respuesta: no es "no eligió". Colapsarlo en `null`
@@ -2323,6 +2323,142 @@ export class SolanaWalletAdapter
     }
     return v.direccion; // OPACO, SIN toLowerCase (CD-3)
   }
+
+  /** WKH-359/AC-1 — La firma del PoP que un salto anterior YA trajo, o `null` si este recorrido no es
+   *  por enlace (y entonces `signMessage` sigue por el bridge, byte-idéntico — AC-8).
+   *
+   *  ⛔ LEE O CORTA, NUNCA PIDE (CD-12). El corte es `deeplink_pop_sin_firma` y ⛔ **no**
+   *  `wallet_sign_not_available`, que es lo que salía antes de esta HU: esa marca la tira el bridge
+   *  (`../infrastructure/solana-wallet-bridge.ts:127`) y significa "no hay extensión en este
+   *  navegador", cosa que en el camino por enlace es cierta SIEMPRE y por lo tanto no distingue nada.
+   *  La nueva significa "falta el insumo", que es accionable. Lo miden `T-067-2` y `T-067-19`.
+   *
+   *  🔴 Y ESO ES TODO LO QUE ESTA HU LE DA A LOS CONSUMIDORES 3 Y 4 (DT-13): el resolver de refund
+   *  (`../infrastructure/refund/http-solana-remittance-id-resolver.ts:30`) y el gesto de renovar la
+   *  ventana (`../presentation/flow.tsx:1180`) pasan por acá y reciben **diagnóstico correcto, NO
+   *  recorrido**. ⛔ Nadie puede leer este cambio como "el refund por enlace ya funciona". */
+  private firmaDelPopPorEnlace(mensaje: string): string | null {
+    if (this.caminoPorEnlace() === null) return null; // el gate manda: camino inyectado ⇒ byte-idéntico
+    const disco = this.discoDeEnlace();
+    // Un disco que no se deja leer no es "no hay ancla": es que no podemos saber. El diagnóstico
+    // correcto es el mismo que usa `:778` para el mismo hecho, y la pantalla ya lo sabe traducir.
+    if (disco === null || disco === "no-se-pudo") throw new Error(DEEPLINK_SIN_MEMORIA);
+    const firma = leerFirmaParaMensaje(disco, Date.now(), mensaje);
+    if (firma === null) throw new Error(DEEPLINK_POP_SIN_FIRMA);
+    return firma;
+  }
+
+  /** WKH-359/AC-2, AC-5 — La implementación de (`PruebaDePosesionPorEnlace`, `../application/ports.ts:1232`).
+   *
+   *  ⛔ VIVE ACÁ Y NO EN `preparacion-por-enlace.ts` PORQUE ACÁ VIVE EL GATE: (`caminoPorEnlace`,
+   *  `:2239`) es `private`, y ese otro módulo **no puede** importar el adaptador — lo declara en sus
+   *  (`solana-wallet`, `./solana/preparacion-por-enlace.ts:7-13`): sería la dependencia al revés, y ese archivo existe justamente para eso.
+   *
+   *  LOS CUATRO DESENLACES, y ninguno se puede colapsar en la ausencia de otro:
+   *   · `no-corresponde` ⇒ el gate está apagado o no hay elección persistida. Quien llama sigue como
+   *     siempre. **Es la línea que sostiene AC-8**, y por eso va PRIMERO, antes de tocar el disco.
+   *   · `listo`          ⇒ el ancla ya tiene firma verificada. Se entrega UNA vez (CD-15).
+   *   · `hay-que-salir`  ⇒ falta, y hay a dónde ir. El ancla se escribe ANTES de devolver la URL.
+   *   · `no-se-puede`    ⇒ **sin `irA`**, y eso es lo medible (AC-5).
+   *
+   *  🔴 AC-5 — EL 501 NO SALTA A NINGUNA BILLETERA. Cuando el emisor contesta 501 (`PAYOUT_POP_SECRET`
+   *  ausente server-side) esto corta con la marca ESTABLE `payout_pop_unavailable` —la misma que ya
+   *  producía (`prepare`, `./settlement/http-solana-prepare-gateway.ts:193`) antes de esta HU— y ⛔ NO
+   *  escribe ancla y ⛔ NO devuelve `irA`. Es lo mismo que hace hoy `HttpPopSigner` con su
+   *  `if (res.status === 501) return null` (`./auth/http-pop-signer.ts:22`), y es una decisión de
+   *  ahorro además de correctitud: la route leería ESA MISMA env y contestaría 503, así que saltar
+   *  sería mandar a la persona a firmar algo cuyo rechazo ya está determinado.
+   *
+   *  ⚠️ EL EMISOR ES EL MISMO PARA LOS DOS PROPÓSITOS, y no es un atajo: `HttpKycVerdictGateway`
+   *  también saca su desafío de `/api/a2a/payout/challenge` (lo hace vía el mismo `PopSigner`, ver
+   *  `./kyc/http-kyc-verdict-gateway.ts:60`). Lo que separa los dos permisos es el `proposito` del
+   *  ancla, no el emisor (CD-15).
+   *
+   *  ⛔ NO IMPORTA `pop-challenge.ts` (CD-13): la ventana sale del `exp` que viene en ESTE JSON, nunca
+   *  de una constante copiada de un módulo que importa `node:crypto`. */
+  async pedir(input: {
+    proposito: typeof MARCA_POP_PAYOUT | typeof MARCA_POP_KYC;
+    direccion: string;
+  }): Promise<PruebaPorEnlace> {
+    if (this.caminoPorEnlace() === null) return { estado: "no-corresponde" }; // AC-8: antes de tocar nada
+    const disco = this.discoDeEnlace();
+    if (disco === null || disco === "no-se-pudo") {
+      return { estado: "no-se-puede", causa: "payout_pop_unavailable" }; // sin disco no hay ancla posible, y saltar sin poder recordar es saltar a ciegas
+    }
+    const ahora = Date.now();
+
+    const ya = leerPruebaPop(disco, ahora, input.proposito);
+    if (ya !== null) return { estado: "listo", proof: { challenge: ya.popChallenge, signature: ya.firma } };
+
+    // 🔴 UN SALTO EN CURSO NO QUEMA UN DESAFÍO NUEVO. Si el ancla del MISMO propósito sigue viva y
+    // todavía sin firma —la persona volvió sin firmar, o recargó—, se vuelve a armar la URL con el
+    // MISMO `popChallenge` y el MISMO `exp`. Pedir uno nuevo acá haría que el reloj del permiso se
+    // reiniciara en cada reintento, que es justo lo que DT-10 vino a evitar.
+    const enCurso = leerPasoPop(disco, ahora);
+    if (enCurso !== null && enCurso.proposito === input.proposito && enCurso.firma === undefined) {
+      return { estado: "hay-que-salir", irA: this.saltoDelPop(disco, ahora, input.proposito, enCurso.popChallenge, enCurso.popMessage, enCurso.exp) };
+    }
+
+    let res: Response;
+    try {
+      res = await fetch("/api/a2a/payout/challenge", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ address: input.direccion }),
+      });
+    } catch {
+      return { estado: "no-se-puede", causa: "payout_pop_unavailable" }; // red caída ⇒ no hay desafío que anclar, y no se salta
+    }
+    // ⛔ Los dos con la MISMA marca y SIN `irA`, a propósito: 501 es "el mecanismo está apagado" y el
+    // resto es "no pudimos preguntar". Los dos significan que no hay nada que ir a firmar.
+    if (!res.ok) return { estado: "no-se-puede", causa: "payout_pop_unavailable" };
+
+    let desafio: { popChallenge?: unknown; popMessage?: unknown; exp?: unknown };
+    try {
+      desafio = (await res.json()) as typeof desafio;
+    } catch {
+      return { estado: "no-se-puede", causa: "payout_pop_unavailable" };
+    }
+    // Los TRES tienen que estar y ser del tipo que decimos. ⚠️ Un `exp` ausente NO se rellena con un
+    // default: sería fabricar acá la ventana que DT-10 dice que la fija el servidor.
+    if (
+      typeof desafio.popChallenge !== "string" ||
+      typeof desafio.popMessage !== "string" ||
+      typeof desafio.exp !== "number" ||
+      !Number.isFinite(desafio.exp)
+    ) {
+      return { estado: "no-se-puede", causa: "payout_pop_unavailable" };
+    }
+
+    return {
+      estado: "hay-que-salir",
+      irA: this.saltoDelPop(disco, ahora, input.proposito, desafio.popChallenge, desafio.popMessage, desafio.exp),
+    };
+  }
+
+  /** El salto en sí. ⛔ NO se envuelve en un `try`: `iniciarPop` TIRA si el viaje no está conectado o si el disco no acepta el ancla, y las dos cosas significan que saltar sería mandar a firmar algo cuya vuelta este dispositivo no va a poder verificar. ⚠️ Y ESE THROW ES **UN QUINTO DESENLACE** QUE (`PruebaPorEnlace`, `../application/ports.ts:1214`) NO DECLARA (CR/MNR-6, dejado abierto a propósito): sus cuatro estados no agotan el espacio. Un `localStorage` LEGIBLE pero NO ESCRIBIBLE —modo privado de iOS Safari, cuota llena, o sea el escenario móvil de esta HU— sale como excepción cruda y no como `no-se-puede`, y los dos llamadores invocan `pedir()` fuera de todo `try` ((`pedir`, `../application/use-cases/confirm-and-send.ts:463`) y (`pedir`, `../application/use-cases/connect-wallet.ts:96`), este último a propósito: es el mutante de `T-067-5`). La asimetría está a cuatro líneas: disco ILEGIBLE ⇒ `no-se-puede` tipado; disco NO ESCRIBIBLE ⇒ throw. En el money-path la rama `no-se-puede` hace `failAndRefund` y el throw se lleva la remesa sin marcar. ⛔ NO se cierra acá porque es un cambio de comportamiento del money-path y esto es una pasada de cierre de MENORes; queda escrito para que nadie lea los cuatro estados como si fueran todos.
+   *  ⚠️ EL `?? ""` DE ABAJO: MEDIDO Y NO ALCANZABLE EN PRODUCCIÓN (CR/MNR-6.b). Con `location` ausente, `enlaceDeVuelta` hace `new URL("")` y tira `TypeError: Invalid URL`, que no es ninguna causa que `copyDeEnlace` sepa traducir. Para llegar hace falta un runtime **con `localStorage` y sin `location`**, y ése no existe en los que esta app corre: `localStorage` está declarado ÚNICAMENTE en la interfaz `WindowLocalStorage` de `lib.dom.d.ts`, que sólo extiende `Window` —y toda `Window` tiene `location`—, mientras que `lib.webworker.d.ts` no lo declara ni una vez. La receta, sin número de línea porque vive en `node_modules` y lo mueve cualquier bump: `grep -n "localStorage" node_modules/typescript/lib/lib.webworker.d.ts` ⇒ **0 líneas**; el mismo grep sobre `lib.dom.d.ts` ⇒ **4**, que son dos sitios (la propiedad de `WindowLocalStorage` con su comentario de MDN, y el `declare var localStorage` global del scope de `Window`) y ninguno fuera de `Window`. ⚠️ El «4» salió de CORRER el grep: la primera versión de esta frase decía «una sola» sin correrlo y era falsa, que es el defecto que este mismo fix-pack está cerrando. Del otro lado, sin `localStorage` (SSR, node) (`discoDeEnlace`, `:2263`) contesta `null`, `caminoPorEnlace()` contesta `null` y `pedir()` sale por `no-corresponde` sin llegar acá. ⇒ el único que construye ese mundo es un test que estubea globales.
+   *  ⛔ POR QUÉ NO SE SACA IGUAL: sin el `??`, `hrefActual` sería `string | undefined` y el tipo obligaría a decidir acá qué desenlace es —o sea a abrir el quinto—, que es justo lo que este pase NO hace. El día que se cierre el quinto, los dos se arreglan de una: `location` ausente ⇒ `no-se-puede`, no `""`. */
+  private saltoDelPop(
+    disco: Almacen,
+    ahora: number,
+    proposito: typeof MARCA_POP_PAYOUT | typeof MARCA_POP_KYC,
+    popChallenge: string,
+    popMessage: string,
+    exp: number,
+  ): string {
+    return iniciarPop({
+      almacen: disco,
+      ahora,
+      hrefActual: (globalThis as { location?: Location }).location?.href ?? "",
+      appUrl: (globalThis as { location?: Location }).location?.origin ?? "",
+      proposito,
+      popChallenge,
+      popMessage,
+      exp,
+    }).irA;
+  }
+
 }
 
 /**

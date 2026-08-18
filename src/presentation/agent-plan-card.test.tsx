@@ -80,7 +80,32 @@ type PlanStep = {
   transport: "gateway" | "demo";
 };
 
-/** Monta el flujo hasta `review`, que es donde vive la tarjeta, con el plan que se le indique. */
+/**
+ * Monta el flujo hasta `review`, que es donde vive la tarjeta, con el plan que se le indique.
+ *
+ * 🔴 ACÁ VIVE EL FLAKE DE ESTE ARCHIVO, Y ESTÁ DECLARADO CON SU MECANISMO, NO CON UNA REPETICIÓN
+ * (WKH-359 fix-pack · AR/MNR-4). El re-AR it2 vio caer `T-7.1` en 1 de 3 corridas de la suite COMPLETA
+ * en worktree, verde en aislado, con este archivo FUERA del diff de la HU. Quedó reportado como flake
+ * ajeno **no declarado** —su vecino `T-063-10` de `bienvenida-composicion.test.tsx` sí lo estaba— y la
+ * sugerencia fue registrarlo o medir el mecanismo. **Se midió el mecanismo**, porque repetir hasta que
+ * dé verde no prueba nada sobre un flake de 1 en N:
+ *   · SIN carga, este archivo entero: `32 passed (32)` en 3 de 3 corridas, ~2,0 s.
+ *   · CON 24 procesos de CPU ocupando las 24 cores (`nproc` ⇒ 24) y nada más cambiado:
+ *     `1 failed | 31 passed (32)`, cae `T-7.1`, y el error **nombra la causa**:
+ *     `Unable to find an element with the text: /Revisá el envío/`. La corrida pasa de 2,0 s a 10,4 s.
+ * ⇒ LA CAUSA ES ESTE HELPER, no `T-7.1`: los tres `await screen.findBy*` de abajo corren con el timeout
+ * POR DEFECTO de Testing Library (1000 ms). Bajo carga, el render de `RemittanceFlow` en jsdom no
+ * alcanza a asentarse en ese presupuesto y el primer `findBy` rechaza. Es sensibilidad a CARGA, y es el
+ * MISMO mecanismo que el flake ya declarado de `bienvenida-composicion.test.tsx`.
+ * ⛔ NO SE SUBE EL TIMEOUT NI SE LE PONE UN `retry`, y la razón es la de siempre en este repo: un techo
+ * más alto no elimina el caso, le pone un número —y el número lo vuelve a agotar una máquina más
+ * cargada—; un `retry` convierte un rojo honesto en un verde que no distingue el flake de una
+ * regresión. Lo que corresponde es que quien vea `T-7.1` en rojo mire PRIMERO si la corrida fue bajo
+ * carga, y sólo si no lo fue lo trate como hallazgo.
+ * ⚠️ NO SE LE CARGA A WKH-359: este archivo no está en el diff de la HU. Se declara acá porque acá
+ * está el mecanismo, y porque un flake sin declarar degrada el verde de la suite, que es el gate de
+ * este repo.
+ */
 async function verLaTarjeta(steps: PlanStep[], totalUsdc: number): Promise<void> {
   vi.stubGlobal(
     "fetch",

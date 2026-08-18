@@ -1465,6 +1465,26 @@ const COPY_DE_ENLACE: Record<CausaDeEnlaceEnPantalla, string> = {
   // vence primero y esto se alcanza con el ancla viva, o sea recién salida de firmar.
   deeplink_nonce_sin_contexto:
     "Volviste del paso que crea tu cuenta de Solana, y este navegador ya no tiene los datos para leer esa respuesta. Si llegaste a firmar, la cuenta puede haber quedado creada: mirá si ya está antes de volver a intentarlo. Este paso no toca tus USDC.",
+  // ── WKH-359 · LAS TRES DE LA PRUEBA DE POSESIÓN POR ENLACE ─────────────────────────────────────
+  // 🔴 FALTA EL INSUMO, y por eso NO dice "cancelaste": a la persona no se le preguntó nada todavía.
+  // Es PRE-SALTO por construcción (lo emite (`signMessage`, `../infrastructure/solana-wallet.ts:1922`)
+  // antes de navegar a ninguna billetera), así que afirmar cualquier cosa sobre una firma sería falso.
+  deeplink_pop_sin_firma:
+    "Nos falta un permiso tuyo para seguir y todavía no te lo pedimos. Volvé a intentarlo: te vamos a llevar a tu billetera para que lo confirmes.",
+  // 🔴 ⛔ ESTE COPY NO AFIRMA NI QUE SE FIRMÓ NI QUE NO SE FIRMÓ, y es a propósito ([NC-2] de WKH-359).
+  // La causa se alcanza tanto ANTES del salto (el ancla venció esperando) como DESPUÉS (la persona
+  // volvió tarde), y desde acá las dos son indistinguibles: el ancla no registra si la billetera llegó
+  // a mostrar la pantalla. El vecino `deeplink_viaje_vencido` (arriba) SÍ dice "No se firmó nada", y
+  // WKH-358 midió que esa frase sale FALSA recién salida de firmar. Acá no se repite el error.
+  // ⛔ Tampoco dice "empezá el envío de nuevo": el permiso venció, no la remesa.
+  deeplink_pop_vencido:
+    "Pasó demasiado tiempo y el permiso que estábamos usando ya no vale. No mandamos nada con él. Volvé a intentarlo y te lo pedimos de nuevo.",
+  // 🔴 LA RESPUESTA NO ES LA QUE PEDIMOS. ⛔ No dice "alguien te está atacando": un canal cruzado con
+  // otro envío llega exactamente acá. Y ⛔ no dice "cancelaste" (eso es `deeplink_rechazado`, donde la
+  // billetera contestó que no) ni habla de la transacción (eso es `deeplink_tx_alterada`, donde hay
+  // USDC en juego): esto es una firma de MENSAJE, no toca fondos, y el corte es ANTES de mover nada.
+  deeplink_pop_alterado:
+    "Lo que volvió de tu billetera no coincide con lo que te pedimos, así que lo cortamos acá y no mandamos tus USDC. Empezá el envío de nuevo desde esta pantalla.",
 };
 
 /**
@@ -1481,3 +1501,49 @@ export function copyDeEnlace(code: string): string | null {
 
 /** Sólo para los tests: las catorce claves, derivadas del `Record` y no escritas a mano. ⚠️ El NÚMERO de este renglón envejece solo: lo que no envejece es que se derive del `Record` con `Object.keys`. */
 export const CAUSAS_CON_COPY = Object.keys(COPY_DE_ENLACE);
+
+/**
+ * WKH-359/AC-6 — EL CRUCE DE (`live`, `./flow.tsx:506`) CONTRA `rem.ownerAddress`, CON TRES ESTADOS.
+ *
+ * 🔴 QUÉ PROBLEMA CIERRA. Ese cruce es un `if` mudo: cuando alguna de las dos mitades es `null` **no
+ * se ejecuta**, y desde afuera eso es indistinguible de "se ejecutó y coincidió". AC-6 pide que el
+ * caso `null` quede REGISTRADO como no comparado y ⛔ que **no se presente como verificado**.
+ *
+ * ⛔ Y ACÁ VA EL RESIDUAL, SIN SUAVIZAR ([NC-1] de la HU). **Esto NO es un evento observable en
+ * producción.** No hay ningún `console.*` ni sink de telemetría en el camino de `flow.tsx:506-519`
+ * (medido), y esta HU **no inventa uno**: agregar infraestructura de observabilidad no pedida a un
+ * archivo de 4268 líneas con 83 citas entrantes sería expandir el scope para "cumplir" un AC.
+ * Lo que esto entrega es que el tri-estado **existe en el código y es medible por un test**
+ * (`T-067-10`). Si el founder quería un evento que se pueda ver en producción, **esto no lo entrega**.
+ *
+ * 🔴 Y POR QUÉ EL CASO `null` NO SE CONVIERTE EN CORTE (DT-11). Tres razones, y la tercera manda:
+ *   1. `flow.tsx:503-505` declara que `null` es *"no hay ninguna billetera conectada"*, nunca *"cambió
+ *      la identidad"*: acusar ahí rompería el arranque.
+ *   2. En el camino por enlace ese cruce es **time-of-check y no fuente-independiente** —las dos
+ *      mitades salen del mismo disco—, así que endurecer un guard que ya se sabe que compara A contra
+ *      A compra poco.
+ *   3. **El fail-closed que hace falta YA EXISTE y es más fuerte, y vive del otro lado**:
+ *      `app/api/payout/prepare/route.ts:214` exige el PoP, P1..P5 lo verifican ed25519 contra el
+ *      `sender`, y (`prepare_kyc_verdict_missing`, `../../app/api/payout/prepare/route.ts:310`) exige la fila del veredicto SIN respaldo. Ninguna remesa deposita sin que el
+ *      SERVIDOR haya verificado una firma sobre la dirección del `sender`, tenga `ownerAddress` lo que
+ *      tenga. Un segundo corte client-side sobre el mismo hecho es defensa duplicada en la capa débil.
+ */
+export type CruceDeCuenta = "comparado" | "no-comparado-sin-owner" | "no-comparado-sin-billetera";
+
+/**
+ * ⚠️ EL ORDEN DE LAS DOS PREGUNTAS NO ES ARBITRARIO Y SE MIDE: "no hay billetera conectada" se
+ * contesta PRIMERO porque es la condición del arranque —el árbol todavía sin montar— y describe al
+ * dispositivo, no a la remesa. Si se preguntara al revés, una pantalla recién abierta sobre una remesa
+ * sin dueño se reportaría como `no-comparado-sin-owner`, que le echa la culpa a la remesa.
+ */
+export function cruceDeCuenta(live: string | null, ownerAddress: string | null): CruceDeCuenta {
+  if (live == null) return "no-comparado-sin-billetera";
+  if (ownerAddress == null) return "no-comparado-sin-owner";
+  return "comparado";
+}
+
+/** ⛔ `false` para los DOS casos de "no comparado". Existe para que ningún call-site pueda escribir
+ *  `!== "comparado"` al revés por accidente, y para que el nombre diga qué se puede afirmar. */
+export function seVerificoLaCuenta(c: CruceDeCuenta): boolean {
+  return c === "comparado";
+}

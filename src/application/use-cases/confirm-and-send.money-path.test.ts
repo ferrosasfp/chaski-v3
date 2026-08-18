@@ -18,6 +18,7 @@ import {
   type FakeSolanaPrepareResult, // WKH-354/AC-5: la forma de la respuesta del prepare, para el doble que VERIFICA la PoP
   FakeKycStore, // WKH-354/AC-5: el KYC de A, que el candado verifica que sigue entero
   FakeSolanaSenderSolBalanceProbe,
+  FakePruebaDePosesionPorEnlace,
   FakeSolanaSettlementGateway,
   FakeSolanaWallet,
   FixedClock,
@@ -26,7 +27,7 @@ import {
   T0,
   beneficiary,
 } from "../../test-support/fakes"; import { esperarListo } from "../../test-support/desenlaces"; // WKH-356: narrowing de ResultadoDeEnvio. TIRA si execute() suspende donde el test no lo espera.
-import type { AutorizacionDelPrincipal, RefundGateway, SolanaPayoutPrepareGateway, WalletPort } from "../ports"; // WKH-356/AR/BLQ-BAJO-1: el doble que SUSPENDE una vez implementa el puerto REAL, así que no puede quedarse corto de contrato
+import type { AutorizacionDelPrincipal, PruebaDePosesionPorEnlace, RefundGateway, SolanaPayoutPrepareGateway, WalletPort } from "../ports"; // WKH-356/AR/BLQ-BAJO-1: el doble que SUSPENDE una vez implementa el puerto REAL, así que no puede quedarse corto de contrato
 import type { Beneficiary } from "../../domain/remittance"; // WKH-354/AC-5: el doble de prepare implementa el puerto REAL, así que declara el contrato real
 import { LedgerRefundGateway } from "../../infrastructure/refund/ledger-refund-gateway";
 import {
@@ -85,13 +86,17 @@ function build(
   // ningún test de este archivo va sobre el guard de rent, así que todos siguen recorriendo el camino
   // completo. Los que SÍ van sobre el guard viven en confirm-and-send.sol-balance.test.ts.
   senderBalance: FakeSolanaSenderSolBalanceProbe = new FakeSolanaSenderSolBalanceProbe(),
+  // WKH-359 — el puerto de la prueba de posesión por enlace. Default `no-corresponde` = el camino
+  // INYECTADO, que es el de todos los `it` de este archivo (AC-8): si el paso nuevo tocara ese camino,
+  // se pondrían rojos ellos y no habría que escribir un `it` para notarlo.
+  pop: PruebaDePosesionPorEnlace = new FakePruebaDePosesionPorEnlace(),
 ): ConfirmAndSend {
   return new ConfirmAndSend(
     wallet,
     repo,
     new FixedClock(),
     refund,
-    { prepare, gateway, probe, senderBalance },
+    { prepare, gateway, probe, senderBalance, pop },
   );
 }
 
@@ -221,6 +226,7 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
       gateway,
       probe: new FakeSolanaEscrowDepositProbe("not_deposited"),
       senderBalance: new FakeSolanaSenderSolBalanceProbe(),
+      pop: new FakePruebaDePosesionPorEnlace(), // WKH-359: `no-corresponde` = camino inyectado (AC-8)
     });
 
     // Invocación 1: suspende. La remesa QUEDA en `confirmed`, que es la precondición de AC-3.
@@ -881,5 +887,92 @@ describe("WKH-354/AC-5 · una firma de B NO puede pagar un depósito emitido par
     // La remesa NO quedó en el estado de fallo.
     expect(out.snapshot.status).not.toBe("payout_failed");
     expect(out.snapshot.failureReason).not.toBe("payout_pop_unverified");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-359 · T-067-3 (AC-2) y T-067-9 (AC-5) — EL PASO DE LA PRUEBA DE POSESIÓN, ANTES DEL `prepare`
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+describe("WKH-359 · el permiso del payout se consigue ANTES de `prepare` (AC-2, AC-5)", () => {
+  // 🔴 MUTANTE QUE MATA (el del Story File, y es el que define dónde va el paso): mover la llamada a
+  // `pop.pedir()` ADENTRO del `try` de `confirm-and-send.ts:464`. El `catch` de `:476` se traga la
+  // suspensión —que ahí ya no sube por el tipo sino que se pierde— y `execute()` devuelve
+  // `{estado:"listo"}` con `failureReason: "prepare_unavailable"`, o sea el diagnóstico de un prepare
+  // que NUNCA CORRIÓ. Este `it` se pone rojo en los dos `expect` de abajo.
+  it("T-067-3: invocación 1 por enlace ⇒ `hay-que-salir` con `firma-pop-payout`, y `prepare` NO se llamó", async () => {
+    const repo = new InMemoryRepo();
+    const wallet = new FakeSolanaWallet();
+    const prepare = new FakeSolanaPayoutPrepareGateway();
+    const gateway = new FakeSolanaSettlementGateway();
+    const pop = new FakePruebaDePosesionPorEnlace({ estado: "hay-que-salir", irA: "https://phantom.app/ul/v1/signMessage?x=1" });
+    const id = await seedQuoted(repo);
+
+    const r = await build(repo, wallet, prepare, gateway, undefined, undefined, undefined, undefined, pop).execute({
+      remittanceId: id,
+    });
+
+    expect(r).toEqual({
+      estado: "hay-que-salir",
+      irA: "https://phantom.app/ul/v1/signMessage?x=1",
+      esperando: "firma-pop-payout",
+    });
+    // 🔴 LAS DOS MITADES QUE IMPORTAN, y la segunda es la que el mutante rompe:
+    expect(prepare.calls, "se posteó al prepare sin el permiso: eso vuelve 403 y quema una orden").toHaveLength(0);
+    expect(wallet.authorizeCalls, "se le pidió a la persona una firma de transacción antes del permiso").toHaveLength(0);
+    // Y la remesa NO se tocó: queda `confirmed`, que es la precondición de que la reanudación funcione.
+    const enDisco = await repo.get(id);
+    expect(enDisco?.status).toBe("confirmed");
+    expect(enDisco?.snapshot.failureReason ?? null, "se escribió un diagnóstico de fallo por una suspensión").toBeNull();
+  });
+
+  it("T-067-3b: se pide UNA vez y con el propósito del PAYOUT (nunca el del KYC)", async () => {
+    const repo = new InMemoryRepo();
+    const pop = new FakePruebaDePosesionPorEnlace({ estado: "hay-que-salir", irA: "https://phantom.app/x" });
+    const id = await seedQuoted(repo);
+    await build(repo, new FakeSolanaWallet(), new FakeSolanaPayoutPrepareGateway(), new FakeSolanaSettlementGateway(), undefined, undefined, undefined, undefined, pop).execute({ remittanceId: id });
+
+    expect(pop.llamadas).toHaveLength(1);
+    expect(pop.llamadas[0]!.proposito, "un permiso del KYC no autoriza un payout (CD-15)").toBe("pop-payout");
+  });
+
+  // 🔴 T-067-9 (AC-5) — EL 501 NO SALTA A NINGUNA BILLETERA. La marca es la MISMA que este camino ya
+  // producía antes de la HU, así que la persona lee lo de siempre y no aparece un enum nuevo.
+  // MUTANTE QUE MATA: tratar el `no-se-puede` como `hay-que-salir` (o darle un `irA`) ⇒ el primer
+  // `expect` cambia de forma y el `estado` deja de ser `listo`.
+  it("T-067-9: emisor 501 ⇒ corte con `payout_pop_unavailable` y CERO navegaciones a la billetera", async () => {
+    const repo = new InMemoryRepo();
+    const prepare = new FakeSolanaPayoutPrepareGateway();
+    const pop = new FakePruebaDePosesionPorEnlace({ estado: "no-se-puede", causa: "payout_pop_unavailable" });
+    const id = await seedQuoted(repo);
+
+    const r = await build(repo, new FakeSolanaWallet(), prepare, new FakeSolanaSettlementGateway(), undefined, undefined, undefined, undefined, pop).execute({
+      remittanceId: id,
+    });
+
+    expect(r.estado, "con el emisor apagado el recorrido saltó igual a la billetera").toBe("listo");
+    expect(r.estado === "listo" && r.remesa.snapshot.failureReason).toBe("payout_pop_unavailable");
+    expect(prepare.calls, "se gastó un POST y un token de rate-limit en un rechazo ya determinado").toHaveLength(0);
+  });
+
+  // Con la prueba YA conseguida, el recorrido sigue y `prepare` la recibe: es la invocación 2, la de
+  // después del salto. MUTANTE QUE MATA: no propagar `pop.proof` al input de `prepare` ⇒ el gateway
+  // real volvería a pedirle una firma al bridge, que en un móvil está vacío.
+  it("con la prueba conseguida, `prepare` la recibe en su input y el recorrido sigue", async () => {
+    const repo = new InMemoryRepo();
+    const prepare = new FakeSolanaPayoutPrepareGateway();
+    const pop = new FakePruebaDePosesionPorEnlace({
+      estado: "listo",
+      proof: { challenge: "token-opaco", signature: "firma-del-enlace" },
+    });
+    const id = await seedQuoted(repo);
+
+    const out = esperarListo(await build(repo, new FakeSolanaWallet(), prepare, new FakeSolanaSettlementGateway(), undefined, undefined, undefined, undefined, pop).execute({ remittanceId: id }));
+
+    expect(prepare.calls).toHaveLength(1);
+    expect(prepare.calls[0]!.proof, "la prueba no viajó: el gateway va a pedirle otra al bridge vacío").toEqual({
+      challenge: "token-opaco",
+      signature: "firma-del-enlace",
+    });
+    expect(out.snapshot.failureReason ?? null).toBeNull();
   });
 });

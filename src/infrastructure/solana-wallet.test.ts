@@ -10,7 +10,7 @@ import { Money } from "../domain/money";
 import type { Quote } from "../domain/remittance";
 import { CUSTODY_WINDOW_SECS, SolanaWalletAdapter } from "./solana-wallet"; import { SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT } from "../application/solana-escrow-rent"; // WKH-357: EN ESTA LÍNEA, no en una nueva — `solana-wallet.test.ts:453-454` y `:506` se citan por número desde otros dos archivos (ver el comentario de más abajo), así que una línea nueva acá arriba los rota. Y el umbral se IMPORTA, nunca se escribe como literal en un test (CD-12)
 import { escrowIdl } from "./solana/escrow-idl";
-import { solanaWalletBridge } from "./solana-wallet-bridge"; import { esperarAutorizacionLista } from "../test-support/desenlaces"; import { readFileSync } from "node:fs"; import path from "node:path"; import { FirmaPorEnlaceReal, type DesenlaceDeFirma, type FirmaPorEnlace, type PedidoDeFirma } from "./solana/deeplink/firma-por-enlace"; import { direccionDelNonce } from "./solana/nonce-duradero"; import { guardarEleccion, leerEleccion } from "./solana/deeplink/conexion"; import { almacenDeNavegador } from "./solana/deeplink/sesion"; // WKH-358 agregó los dos últimos por la MISMA razón y ANTES de este comentario. WKH-356: TODO en esta línea — `solana-wallet.test.ts:453-454` y `:506` los citan por número desde otros dos archivos, así que una línea nueva acá arriba los rota. WKH-357 agregó el último por la MISMA razón y ANTES de este comentario
+import { solanaWalletBridge } from "./solana-wallet-bridge"; import { esperarAutorizacionLista } from "../test-support/desenlaces"; import { readFileSync } from "node:fs"; import path from "node:path"; import { FirmaPorEnlaceReal, type DesenlaceDeFirma, type FirmaPorEnlace, type PedidoDeFirma } from "./solana/deeplink/firma-por-enlace"; import { direccionDelNonce } from "./solana/nonce-duradero"; import { guardarEleccion, leerEleccion } from "./solana/deeplink/conexion"; import { almacenDeNavegador, guardarViaje } from "./solana/deeplink/sesion"; import { MARCA_POP_PAYOUT, guardarPasoPop } from "./solana/deeplink/pop-por-enlace"; // WKH-359 agregó los dos ÚLTIMOS y ⛔ ANTES del `//`, que es donde estuve por equivocarme: esta línea TERMINA en comentario, así que pegar un import "al final" lo deja comentado y `tsc` lo caza recién cuando alguien lo usa. WKH-358 agregó los dos anteriores por la MISMA razón y ANTES de este comentario. WKH-356: TODO en esta línea — `solana-wallet.test.ts:453-454` y `:506` los citan por número desde otros dos archivos, así que una línea nueva acá arriba los rota. WKH-357 agregó el último por la MISMA razón y ANTES de este comentario
 
 const VALID_B58 = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // base58 válido (mixed-case)
 
@@ -1840,17 +1840,27 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       expect(disco.has(CLAVE_PREPARADO)).toBe(false);
     });
 
+    // ⚠️ LA ETIQUETA DE ESTE `it` DECÍA "el camino de la billetera inyectada" Y EL FIXTURE NO LO ES
+    // (fix-pack · AR/MNR-2). `montarEntorno()` arma el mundo del recorrido POR ENLACE —disco, `location`
+    // y la elección persistida— y acá no se toca la disponibilidad, así que esto no es el camino inyectado
+    // por más que el bridge tenga una cuenta. ⛔ Y NO SE "ARREGLA" agregando `setWalletAvailability("injected")`:
+    // `abandonarAutorizacion()` corta en su `if (!this.firmaPorEnlace) return;` ANTES de mirar nada del
+    // entorno, así que esa línea no cambiaría ningún `expect` y sería una declaración que no mide nadie.
+    // Lo que este `it` mide —y mide bien— es la mitad de CD-1: **sin el colaborador del enlace, el
+    // método no toca el disco**, que es la composición de producción al cerrar 062. Los otros dos `it`
+    // de este archivo que SÍ dependen de la disponibilidad la declaran, y ahí la línea es load-bearing.
     it("SIN colaborador (producción al cerrar 062) no toca el disco: no hay nada que limpiar", async () => {
       montarEntorno();
       solanaWalletBridge.setState({ publicKey: SENDER_B58, connected: true });
-      const adapter = new SolanaWalletAdapter(); // el camino de la billetera inyectada
+      const adapter = new SolanaWalletAdapter(); // SIN el colaborador del enlace: es lo que se construía en producción al cerrar 062
       await adapter.connect();
       sembrarViaje(SENDER_B58);
       disco.set(CLAVE_PREPARADO, "{}");
       adapter.abandonarAutorizacion();
-      expect(disco.has(CLAVE_VIAJE), "el camino inyectado borró algo que no escribió (CD-1)").toBe(
-        true,
-      );
+      expect(
+        disco.has(CLAVE_VIAJE),
+        "un adaptador SIN colaborador del enlace borró algo que no escribió (CD-1)",
+      ).toBe(true);
       expect(disco.has(CLAVE_PREPARADO)).toBe(true);
     });
   });
@@ -2237,6 +2247,16 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
     // se paga en un test que ni sabe de esta HU): agregar `isBlockhashValid` al camino inyectado.
     it("el camino INYECTADO no consulta `isBlockhashValid` ni una vez (CD-1)", async () => {
       montarEntorno();
+      // 🔴 WKH-359 — ESTA LÍNEA FALTABA, Y SIN ELLA EL NOMBRE DE ESTE `it` ERA FALSO. `montarEntorno()`
+      // deja `availability: "none"` + elección persistida + bandera prendida, que son EXACTAMENTE las
+      // tres condiciones de (`caminoPorEnlace`, `./solana-wallet.ts:2239`) ⇒ este fixture construía el
+      // camino POR ENLACE, no el inyectado. `setState({connected:true})` no lo cambia: la
+      // disponibilidad y el estado del bridge son dos cosas distintas. Antes de esta HU no se notaba
+      // porque sin el colaborador `firmaPorEnlace` la autorización caía igual a la rama de siempre;
+      // el gate nuevo de `signMessage` lo destapó. Con `"injected"` —que es lo que reporta un
+      // navegador CON extensión, `solana-providers.tsx:164`— el gate contesta `null` en su primera
+      // condición y este `it` mide por fin lo que su nombre dice.
+      solanaWalletBridge.setWalletAvailability("injected");
       solanaWalletBridge.setState({ publicKey: SENDER_B58, connected: true });
       const adapter = new SolanaWalletAdapter(); // ← sin colaborador: el camino de siempre
       await adapter.connect();
@@ -2456,6 +2476,16 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       balance.mockClear();
 
       // ⚠️ SIN motor: es exactamente cómo `container.ts` arma el adapter en producción hoy.
+      // 🔴 WKH-359 — ESTA LÍNEA FALTABA, Y SIN ELLA EL NOMBRE DE ESTE `it` ERA FALSO. `montarEntorno()`
+      // deja `availability: "none"` + elección persistida + bandera prendida, que son EXACTAMENTE las
+      // tres condiciones de (`caminoPorEnlace`, `./solana-wallet.ts:2239`) ⇒ este fixture construía el
+      // camino POR ENLACE, no el inyectado. `setState({connected:true})` no lo cambia: la
+      // disponibilidad y el estado del bridge son dos cosas distintas. Antes de esta HU no se notaba
+      // porque sin el colaborador `firmaPorEnlace` la autorización caía igual a la rama de siempre;
+      // el gate nuevo de `signMessage` lo destapó. Con `"injected"` —que es lo que reporta un
+      // navegador CON extensión, `solana-providers.tsx:164`— el gate contesta `null` en su primera
+      // condición y este `it` mide por fin lo que su nombre dice.
+      solanaWalletBridge.setWalletAvailability("injected");
       solanaWalletBridge.setState({ publicKey: SENDER_B58, connected: true });
       const adapter = new SolanaWalletAdapter();
       await adapter.connect();
@@ -2630,5 +2660,140 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
           "movió USDC real en cadena.",
       ).toBe(-1);
     }
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-359 · T-067-1 / T-067-2 / T-067-13 — LA RAMA DE ENLACE DE `signMessage`
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// ⚠️ [NC-3] — NADIE CORRIÓ EL PASO `signMessage` DEL PROTOCOLO EN UN TELÉFONO. Estos `it` usan dobles,
+// y ningún verde de acá autoriza a decir que esto funciona en un dispositivo real. Los `[NO
+// VERIFICADO]` NV-1..NV-5 de la ola 4 siguen abiertos y esta HU no los cierra (CD-7).
+describe("WKH-359 · `signMessage` por enlace: LEE una prueba anclada, o corta (AC-1)", () => {
+  const CLAVE_POP = "chaski.billetera.pop.v1";
+  const CLAVE_VIAJE = "chaski.billetera.viaje.v1";
+  const MENSAJE = "chaski.test quiere verificar que controlás esta cuenta.\nnonce: abc123";
+  let disco: Map<string, string>;
+  let storage: Storage;
+
+  /** El entorno del camino POR ENLACE: sin extensión, con elección persistida y con la bandera. Las
+   *  TRES condiciones de `caminoPorEnlace`, escritas con los escritores de PRODUCCIÓN. */
+  function entornoPorEnlace(): void {
+    disco = new Map<string, string>();
+    storage = {
+      getItem: (k: string) => disco.get(k) ?? null,
+      setItem: (k: string, v: string) => void disco.set(k, v),
+      removeItem: (k: string) => void disco.delete(k),
+      clear: () => disco.clear(),
+      key: () => null,
+      length: 0,
+    } as unknown as Storage;
+    vi.stubGlobal("localStorage", storage);
+    vi.stubGlobal("location", { href: "https://chaski.test/enviar", origin: "https://chaski.test" });
+    guardarEleccion(almacenDeNavegador(storage), "phantom");
+    solanaWalletBridge.setWalletAvailability("none");
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", "true");
+  }
+
+  /** El viaje CONECTADO, escrito con el escritor de producción del módulo del viaje. */
+  function viajeConectado(): void {
+    const par = nacl.box.keyPair();
+    guardarViaje(almacenDeNavegador(storage), {
+      billetera: "phantom",
+      secreta: bs58.encode(par.secretKey),
+      publica: bs58.encode(par.publicKey),
+      claveBilletera: bs58.encode(nacl.box.keyPair().publicKey),
+      session: "sess-1",
+      direccion: SENDER_B58,
+      remittanceId: "rem-1",
+      paso: "conectar",
+      desde: Date.now(),
+    });
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    solanaWalletBridge.setWalletAvailability("unknown");
+  });
+
+  // MUTANTE QUE MATA: borrar el gate de `signMessage` (`solana-wallet.ts:1922`) ⇒ vuelve a llamar al
+  // bridge y `signMessageSpy` recibe 1 llamada en vez de 0.
+  it("T-067-1: con la prueba anclada devuelve ESA firma y el bridge recibe CERO llamadas", async () => {
+    entornoPorEnlace();
+    viajeConectado();
+    const firma = bs58.encode(nacl.sign.detached(new TextEncoder().encode(MENSAJE), SENDER_KP.secretKey));
+    guardarPasoPop(almacenDeNavegador(storage), {
+      proposito: MARCA_POP_PAYOUT,
+      popChallenge: "token-opaco",
+      popMessage: MENSAJE,
+      exp: Math.floor(Date.now() / 1000) + 600,
+      direccion: SENDER_B58,
+      desde: Date.now(),
+      consumido: true,
+      firma,
+    });
+    const spy = vi.fn(async () => new Uint8Array(64));
+    solanaWalletBridge.registerSignMessage(spy);
+
+    const adapter = new SolanaWalletAdapter();
+    await expect(adapter.signMessage(MENSAJE)).resolves.toBe(firma);
+    expect(spy, "el camino por enlace le pidió una firma al bridge, que en un móvil está vacío").not.toHaveBeenCalled();
+    // Y CD-15: la prueba se entregó UNA vez, así que el ancla ya no está.
+    expect(disco.has(CLAVE_POP), "el ancla sobrevivió a su entrega: la prueba quedó reusable").toBe(false);
+  });
+
+  // 🔴 MUTANTE QUE MATA: devolver `""` en vez de tirar, o delegar al bridge cuando no hay ancla.
+  // Lo segundo es el estado ANTERIOR a esta HU y produce `wallet_sign_not_available`, que es
+  // exactamente lo que este `it` prohíbe.
+  it("T-067-2: SIN ancla tira `deeplink_pop_sin_firma`, y NUNCA `wallet_sign_not_available`", async () => {
+    entornoPorEnlace();
+    viajeConectado();
+    const spy = vi.fn(async () => {
+      throw new Error("wallet_sign_not_available");
+    });
+    solanaWalletBridge.registerSignMessage(spy);
+
+    const adapter = new SolanaWalletAdapter();
+    await expect(adapter.signMessage(MENSAJE)).rejects.toThrow("deeplink_pop_sin_firma");
+    expect(spy, "cayó al bridge: el gate no se aplicó").not.toHaveBeenCalled();
+  });
+
+  it("una prueba anclada para OTRO mensaje no sirve: corta igual (el texto ES el discriminante)", () => {
+    entornoPorEnlace();
+    viajeConectado();
+    guardarPasoPop(almacenDeNavegador(storage), {
+      proposito: MARCA_POP_PAYOUT,
+      popChallenge: "token-opaco",
+      popMessage: "OTRO desafío completamente distinto",
+      exp: Math.floor(Date.now() / 1000) + 600,
+      direccion: SENDER_B58,
+      desde: Date.now(),
+      consumido: true,
+      firma: "firma-cualquiera",
+    });
+    const adapter = new SolanaWalletAdapter();
+    return expect(adapter.signMessage(MENSAJE)).rejects.toThrow("deeplink_pop_sin_firma");
+  });
+
+  // 🔴 T-067-13 (AC-8) — LA PROPIEDAD QUE SOSTIENE TODA LA HU: con la bandera apagada, NINGUNA línea
+  // nueva ejecuta. ⛔ Y el fixture es el MISMO de arriba salvo la bandera, que es lo que lo vuelve un
+  // control y no otro test: si cambiara algo más, no probaría que la bandera es lo que decide.
+  // MUTANTE QUE MATA: sacar `resolveSolanaDeeplinkEnabled()` del gate de `caminoPorEnlace`.
+  it("T-067-13 (AC-8): con la bandera AUSENTE, `signMessage` va al bridge como siempre", async () => {
+    entornoPorEnlace();
+    viajeConectado();
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", ""); // la única diferencia con los `it` de arriba
+    const spy = vi.fn(async () => new Uint8Array(64).fill(7));
+    solanaWalletBridge.registerSignMessage(spy);
+
+    const adapter = new SolanaWalletAdapter();
+    const r = await adapter.signMessage(MENSAJE);
+    expect(spy, "con la bandera apagada el camino inyectado dejó de usar el bridge").toHaveBeenCalledTimes(1);
+    expect(r).toBe(bs58.encode(new Uint8Array(64).fill(7)));
+    // Y el ancla del PoP ni se miró: no hay ninguna y aun así no cortó.
+    expect(disco.has(CLAVE_POP)).toBe(false);
+    expect(disco.has(CLAVE_VIAJE), "el fixture no dejó el viaje escrito: el control no controla nada").toBe(true);
   });
 });

@@ -150,7 +150,7 @@ export interface VueltaDeEnlace extends EleccionDeEnlace {
    * van después. Un `await` antes reintroduce exactamente la ventana que el fix-pack 2 de la ola 1
    * cerró. Lo mide `T-065-SYNC`.
    */
-  completar(i: { remittanceId: string }): Promise<ResultadoDePreparacion>; completarPop(): Promise<ResultadoDePop>; // WKH-359/AC-7 — EN ESTA LÍNEA (Δ0). ⛔ MÉTODO PROPIO Y NO UNA VARIANTE MÁS DE `completar`: son dos vueltas distintas, con anclas distintas, y `completar` consume el paso del VIAJE de forma irreversible. Meter el PoP ahí haría que volver del salto del permiso destruyera el paso del depósito. Y ⛔ NO recibe `remittanceId`: el permiso no es de una remesa, es de una billetera, y pedírselo sería inventar un cruce que este ancla no puede sostener.
+  completar(i: { remittanceId: string }): Promise<ResultadoDePreparacion>; completarPop(i: { hrefDeLaVuelta: string }): Promise<ResultadoDePop>; // WKH-359/AC-7 — EN ESTA LÍNEA (Δ0). ⛔ MÉTODO PROPIO Y NO UNA VARIANTE MÁS DE `completar`: son dos vueltas distintas, con anclas distintas, y `completar` consume el paso del VIAJE de forma irreversible. Meter el PoP ahí haría que volver del salto del permiso destruyera el paso del depósito. Y ⛔ NO recibe `remittanceId`: el permiso no es de una remesa, es de una billetera, y pedírselo sería inventar un cruce que este ancla no puede sostener. 🔴 SÍ RECIBE EL HREF, Y ES OBLIGATORIO (fix-pack · AR/BLQ-ALTO-1): el único llamador de producción (`flow.tsx:4070`) YA limpió la barra con `replaceState` antes de llegar acá —el paso 2 corre para toda vuelta, también la del PoP—, así que leer `location.href` en vivo adentro de esta implementación da una URL SIN `nonce`, SIN `data` y SIN la clave de cifrado ⇒ **toda firma buena salía `deeplink_pop_alterado`**. El parámetro es REQUERIDO y no opcional a propósito: con un `?` el llamador podía volver a olvidarlo y el compilador no decía nada. Es el mismo `hrefActual` que (`vueltaDelPop`, `./deeplink/pop-por-enlace.ts:313`) ya recibía por parámetro; lo que faltaba era que el borde no lo fabricara de una fuente ya limpiada.
 }
 
 /**
@@ -469,13 +469,28 @@ export class RecorridoPorEnlaceReal implements PreparacionPorEnlace {
    * ⚠️ ES ENTERAMENTE SÍNCRONA por dentro —no hay un solo `await`— así que CD-26 se cumple por
    * construcción y no por disciplina: el disco se lee, el ancla se marca consumida y la vuelta se
    * resuelve en un único bloque, sin ninguna ventana de read-modify-write que reabrir.
+   *
+   * 🔴 EL HREF ENTRA POR PARÁMETRO Y **NO** SE LEE DE `this.entorno()` (fix-pack · AR/BLQ-ALTO-1), y
+   * ésta es la línea que estaba rota. (`entorno`, `:194`) lee `globalThis.location.href` EN VIVO, y
+   * para cuando el productor llega hasta acá ya corrió su paso 2: `limpiarLaBarra()` es
+   * INCONDICIONAL (`../../presentation/flow.tsx:4023`) y `hrefSinRastroDeVuelta` borra `nonce`,
+   * `data`, `errorCode`, la clave de cifrado de la billetera y el `dl`
+   * (`hrefSinRastroDeVuelta`, `./deeplink/conexion.ts:362`). ⇒ `vueltaDelPop` recibía una URL sin un
+   * solo parámetro de respuesta, el guard write-once de la `claveBilletera` no encontraba clave y
+   * **toda firma buena salía `deeplink_pop_alterado`**, con la persona en un loop que sólo terminaba
+   * al vencer el `exp`. Medido con las dos mitades: mismo disco, href sucio ⇒ `pop-firmado`; href
+   * limpio ⇒ `corte deeplink_pop_alterado`.
+   * ⛔ Y NO se arregla "moviendo la limpieza después": el paso 2 tiene que correr igual para toda
+   * vuelta (AC-4), así que lo que se arregla es de DÓNDE sale el href, no cuándo se limpia.
+   * ⚠️ `almacen` y `origin` SÍ siguen saliendo de `entorno()`: el disco no lo toca `replaceState` y el
+   * origen no cambia con la limpieza. Lo único que la barra pierde es la query.
    */
-  async completarPop(): Promise<ResultadoDePop> {
+  async completarPop(i: { hrefDeLaVuelta: string }): Promise<ResultadoDePop> {
     const e = this.entorno();
     // Mismo criterio que `completar`: "no había marca nuestra" y "no podemos leer el disco" son cosas
     // distintas, y colapsarlas dejaría a la persona sin diagnóstico después de volver del salto.
     if (e === null) return { estado: "corte", causa: DEEPLINK_SIN_MEMORIA };
-    const v = vueltaDelPop({ almacen: e.almacen, ahora: Date.now(), hrefActual: e.href, appUrl: e.origin });
+    const v = vueltaDelPop({ almacen: e.almacen, ahora: Date.now(), hrefActual: i.hrefDeLaVuelta, appUrl: e.origin });
     switch (v.tipo) {
       case "nada":
         return { estado: "nada" };

@@ -504,7 +504,7 @@ describe("T-065-9 / T-065-10: la limpieza de la barra", () => {
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
 //
 // 🔴 QUÉ SE MIDE ACÁ Y QUÉ SE MIDE EN OTRO LADO, dicho antes de que alguien lo lea al revés. Lo que
-// vive en este archivo es **la rama de `flow.tsx:4070`**: que la marca del permiso llegue a
+// vive en este archivo es **la rama de `flow.tsx:4009`**: que la marca del permiso llegue a
 // `completarPop()`, que sólo se reanude si el desenlace es `pop-listo`, y que el doble montaje de
 // StrictMode no la consuma dos veces. La VERIFICACIÓN de la firma (los cinco chequeos + ed25519) la
 // mide `deeplink/pop-por-enlace.test.ts`, con sobres cifrados y firmas ed25519 reales.
@@ -526,19 +526,28 @@ describe("T-067-11 / T-067-12 (WKH-359/AC-7): la vuelta del salto del permiso", 
    *  sigue siendo el `RecorridoPorEnlaceNulo`, que TIRA, así que un camino no previsto se ve. */
   class RecorridoConVueltaDelPop extends RecorridoPorEnlaceNulo {
     public llamadas = 0;
-    constructor(private readonly desenlace: { estado: "pop-listo"; proposito: "pop-payout" | "pop-kyc" } | { estado: "nada" } | { estado: "corte"; causa: string }) {
+    constructor(
+      private readonly desenlace: { estado: "pop-listo"; proposito: "pop-payout" | "pop-kyc" } | { estado: "nada" } | { estado: "corte"; causa: string },
+      /** El viaje del DEPÓSITO, que vence a los 20 min y es un reloj distinto del `exp` del desafío
+       *  (10 min). `false` = ya venció mientras la persona firmaba (fix-pack · AR/BLQ-BAJO-4). */
+      private readonly viajeVivo = true,
+    ) {
       super();
     }
-    override remesaEnCurso(): string {
-      return REM;
+    override remesaEnCurso(): string | null {
+      return this.viajeVivo ? REM : null;
     }
     override async completar(): Promise<never> {
       // La vuelta del MOTOR contesta `nada`: la marca del permiso NO es un `PasoDelViaje`, así que
       // el motor no la mira y no consume ni destruye el viaje del depósito (CD-11, `T-067-16`).
       return { estado: "nada" } as never;
     }
-    override async completarPop(): Promise<never> {
+    /** Lo que el PRODUCTOR le pasó, sin interpretarlo. Es la mitad que faltaba: hasta el fix-pack este
+     *  doble no miraba el argumento, y el bug de `AR/BLQ-ALTO-1` vivía justo ahí. */
+    public hrefsRecibidos: string[] = [];
+    override async completarPop(i: { hrefDeLaVuelta: string }): Promise<never> {
       this.llamadas += 1;
+      this.hrefsRecibidos.push(i.hrefDeLaVuelta);
       return this.desenlace as never;
     }
   }
@@ -552,13 +561,30 @@ describe("T-067-11 / T-067-12 (WKH-359/AC-7): la vuelta del salto del permiso", 
     });
   }
 
-  // 🔴 MUTANTE QUE MATA: en `flow.tsx:4070`, quitar la rama de `pop-payout` (la marca cae al filtro
-  // `marca !== "firmar-tx" && marca !== "firmar-patrocinio"` y el productor vuelve sin reanudar), o
-  // decidir por `viaje.paso` —que en este fixture dice `firmar-tx`— en vez de por el desenlace.
+  // 🔴 MUTANTE QUE MATA: en `flow.tsx:4009`, quitar `"pop-payout"` de la condición de la rama (la marca
+  // cae al filtro `marca !== "firmar-tx" && marca !== "firmar-patrocinio"` de `:4070` y el productor
+  // vuelve sin reanudar), o decidir por `viaje.paso` —que en este fixture dice `firmar-tx`— en vez de
+  // por el desenlace.
+  //
+  // 🔴 Y EL SEGUNDO MUTANTE, EL DEL FIX-PACK (AR/BLQ-ALTO-1): en `flow.tsx:4009`, pasarle a
+  // `completarPop` el href YA LIMPIO —`hrefSinRastroDeVuelta(hrefAlMontar)` en vez de `hrefAlMontar`—.
+  // Es exactamente lo que hacía el código rechazado, sólo que allá el href limpio no se pasaba sino que
+  // lo leía el adaptador de `location` en vivo, después de que el paso 2 ya hubiera corrido.
+  // ⚠️ ESTE `it` MIDE LA MITAD DEL PRODUCTOR Y NADA MÁS: que lo que sale de acá conserve el rastro. La
+  // otra mitad —que la implementación REAL use ese argumento y no `location`— la mide
+  // (`completarPop`, `../infrastructure/solana/preparacion-por-enlace.test.ts:696`), en entorno `node`,
+  // porque bajo jsdom tweetnacl no acepta el `Uint8Array` de este realm.
   it("T-067-11: con el permiso conseguido, reanuda y el bridge recibe CERO pedidos de firma", async () => {
     const repo = new InMemoryRepo();
     await sembrarRemesaConfirmada(repo, "confirmed");
-    sembrarVuelta("pop-payout");
+    // ⛔ LOS TRES PARÁMETROS DE RESPUESTA VAN EN LA SIEMBRA A PROPÓSITO: son los que
+    // `hrefSinRastroDeVuelta` borra, o sea los que distinguen el href de ANTES del paso 2 del de
+    // después. Sin ellos, "sucio" y "limpio" se diferencian sólo en el `dl` y este `it` mediría menos.
+    sembrarVuelta("pop-payout", {
+      phantom_encryption_public_key: "8TB7whSu6PvhWWNQnZRZBpTsCTZKm3Y6y1WVHZE8gWy3",
+      nonce: "3HqTh8HFEZ6zMbTuxHmYVX",
+      data: "2Fk9WkH7pJpTz3ZQ5ZC3Rn",
+    });
     const firmaSpy = vi.fn(async () => new Uint8Array(64));
     solanaWalletBridge.registerSignMessage(firmaSpy);
     const recorrido = new RecorridoConVueltaDelPop({ estado: "pop-listo", proposito: "pop-payout" });
@@ -574,6 +600,30 @@ describe("T-067-11 / T-067-12 (WKH-359/AC-7): la vuelta del salto del permiso", 
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
     expect(spy.mock.calls[0]?.[0]).toEqual({ remittanceId: REM });
     expect(recorrido.llamadas, "la vuelta del permiso no se leyó, o se leyó de más").toBe(1);
+
+    // 🔴 LA MITAD DEL FIX-PACK (AR/BLQ-ALTO-1): lo que el productor le pasó a `completarPop` es el href
+    // de ANTES de limpiar la barra. Los tres parámetros de respuesta tienen que estar: sin ellos, el
+    // guard write-once de la `claveBilletera` no encuentra clave y toda firma buena sale
+    // `deeplink_pop_alterado`.
+    const recibido = recorrido.hrefsRecibidos[0] as string;
+    for (const p of ["phantom_encryption_public_key", "nonce", "data", "dl"]) {
+      expect(
+        new URL(recibido).searchParams.get(p),
+        `el productor le pasó a \`completarPop\` un href SIN \`${p}\`: es el href de después de limpiar ` +
+          "la barra, y con él ninguna vuelta del permiso puede verificar",
+      ).not.toBeNull();
+    }
+    // ⛔ Y LA REFUTACIÓN DEL INSTRUMENTO, que es lo que impide que esto pase por no limpiar nunca: la
+    // barra SÍ quedó limpia. O sea que las dos cosas ocurrieron, y en este orden: se leyó con el href
+    // sucio y se limpió igual (AC-4).
+    for (const p of ["phantom_encryption_public_key", "nonce", "data", "dl"]) {
+      expect(
+        new URL(window.location.href).searchParams.get(p),
+        `la barra quedó con \`${p}\`: el paso 2 no corrió y este \`it\` no distingue sucio de limpio`,
+      ).toBeNull();
+    }
+    expect(new URL(window.location.href).searchParams.get("kyc"), "el paso 2 se llevó un parámetro ajeno").toBe("return");
+
     // ⛔ Y NO se le volvió a pedir al bridge una firma que la persona ya dio. En el camino por enlace
     // ese bridge está vacío, así que un pedido acá además muere.
     expect(
@@ -608,7 +658,7 @@ describe("T-067-11 / T-067-12 (WKH-359/AC-7): la vuelta del salto del permiso", 
   });
 
   // ⛔ La mitad fail-closed, y es la que impide que un enlace dispare una orden de pago SIN permiso.
-  // MUTANTE QUE MATA: en `flow.tsx:4070`, quitar el `if (vp.estado !== "pop-listo") return;`.
+  // MUTANTE QUE MATA: en `flow.tsx:4009`, quitar el `if (vp.estado !== "pop-listo") return;`.
   it("si el permiso NO quedó listo, la marca no dispara ningún `execute()`", async () => {
     for (const desenlace of [
       { estado: "corte" as const, causa: "deeplink_pop_alterado" },
@@ -632,5 +682,41 @@ describe("T-067-11 / T-067-12 (WKH-359/AC-7): la vuelta del salto del permiso", 
       cleanup();
       window.localStorage.clear();
     }
+  });
+
+  // 🔴 T-067-22 (fix-pack · AR/BLQ-BAJO-4) — EL VIAJE VENCIÓ MIENTRAS LA PERSONA FIRMABA, Y ANTES
+  // ESO ERA **CERO COPY**. Son dos relojes distintos con arranques distintos: el viaje dura 20 min
+  // (`MAX_EDAD_MS`, `../infrastructure/solana/deeplink/sesion.ts:111`) y el `exp` del desafío 10, y el
+  // del viaje arranca antes —al tocar el selector—, así que es alcanzable volver de firmar con el
+  // ancla viva y el viaje muerto. Con el gate de `remId` ANTES de la rama del permiso, el productor
+  // limpiaba la barra y retornaba sin llamar a `completarPop()` y sin `alFallar`: la persona volvía de
+  // firmar y no leía absolutamente nada, y el ancla quedaba sin consumir, así que el reintento volvía
+  // a caer en el mismo silencio.
+  //
+  // MUTANTE QUE MATA: en `flow.tsx`, mover la rama del permiso (`:4009`) DEBAJO del
+  // `if (remId === null) { limpiarLaBarra(); return; }` de `:4010` — que es exactamente donde estaba.
+  it("T-067-22: si el viaje venció mientras firmaba, la vuelta del permiso igual se lee y se avisa", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo, "confirmed");
+    sembrarVuelta("pop-payout");
+    const recorrido = new RecorridoConVueltaDelPop(
+      { estado: "corte", causa: "deeplink_viaje_vencido" },
+      false, // ⚠️ LA ÚNICA VARIABLE QUE SE MUEVE contra `T-067-11`: `remesaEnCurso()` contesta `null`
+    );
+    const c = contenedorConPop(repo, recorrido);
+    const spy = vi.spyOn(c.confirmAndSend, "execute");
+
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
+
+    // 1 · la vuelta SE LEYÓ: el permiso no depende de `remittanceId` y no puede quedar colgado de un
+    // gate que habla de otra cosa.
+    await waitFor(() => expect(recorrido.llamadas, "la vuelta del permiso ni se leyó").toBe(1));
+    // 2 · y la persona LEE algo. Este es el hallazgo: antes acá no aparecía ningún texto.
+    expect(
+      await screen.findByText(/Pasó demasiado tiempo desde que empezaste/),
+      "la persona volvió de firmar y no leyó nada",
+    ).toBeInTheDocument();
+    // 3 · y ⛔ NO se disparó ninguna orden de pago: avisar no es reanudar.
+    expect(spy).toHaveBeenCalledTimes(0);
   });
 });

@@ -1086,7 +1086,7 @@ export class RecorridoPorEnlaceNulo implements PreparacionPorEnlace {
    *  del PoP, que es un gate MÁS fuerte que el de `completar()` (aquél se gatea con `remesaEnCurso()`).
    *  ⛔ No devuelve `{estado:"nada"}`: ése es un desenlace REAL y un doble que lo imite esconde el
    *  cableado que falta. */
-  async completarPop(): Promise<never> {
+  async completarPop(_i: { hrefDeLaVuelta: string }): Promise<never> { // fix-pack · AR/BLQ-ALTO-1: el parámetro va aunque este doble no lo use, porque un `override` no puede pedir MÁS argumentos que su base y los dobles que sí lo miran extienden esta clase
     throw new Error("vuelta_del_pop_no_cableada_en_este_test");
   }
 }

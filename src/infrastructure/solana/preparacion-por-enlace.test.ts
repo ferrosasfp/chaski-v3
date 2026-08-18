@@ -16,6 +16,7 @@ import bs58 from "bs58";
 import type { BilleteraDeeplink } from "./deeplink/protocol";
 import type { Viaje } from "./deeplink/sesion";
 import { MARCA } from "./deeplink/sesion";
+import { hrefSinRastroDeVuelta } from "./deeplink/conexion"; // fix-pack · AR/BLQ-MED-1: el `it` nuevo aplica LA MISMA función que el productor, no una limpieza escrita a mano
 import { RecorridoPorEnlaceReal } from "./preparacion-por-enlace";
 import { SolanaWalletAdapter } from "../solana-wallet";
 import { solanaWalletBridge } from "../solana-wallet-bridge";
@@ -688,5 +689,133 @@ describe("AC-5: la cuenta de nonce, antes del salto", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-359 · T-067-21 (fix-pack · AR/BLQ-ALTO-1 + AR/BLQ-MED-1) — `completarPop()` LEE EL HREF QUE LE
+// PASAN, Y NO `location` EN VIVO
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ AGUJERO CIERRA, Y POR QUÉ EL 100 % VERDE NO LO VEÍA. `RecorridoPorEnlaceReal.completarPop()`
+// —la implementación REAL, la que corre en el teléfono— no la ejercitaba ningún `it`: sus dos usos en
+// la suite eran dobles (`RecorridoPorEnlaceNulo` en `test-support/fakes.ts`, que tira, y
+// `RecorridoConVueltaDelPop` en `presentation/flow-reanudacion.test.tsx`, que devuelve un enlatado), y
+// `deeplink/pop-por-enlace.test.ts` prueba `vueltaDelPop` pasándole el `hrefActual` a mano. ⇒ **nadie
+// probaba quién le pasa ese href en producción**, que era justo la línea rota: el productor
+// —(`useVueltaPorEnlace`, `../../presentation/flow.tsx:3956`), en la rama de `:4009`— limpia la barra para TODA vuelta y la
+// implementación leía `globalThis.location.href` después de esa limpieza, así que le llegaba una URL
+// sin `nonce`, sin `data` y sin la clave de cifrado de la billetera ⇒ el guard write-once de
+// `claveBilletera` no encontraba clave y **toda firma buena salía `deeplink_pop_alterado`**.
+//
+// ⚠️ POR QUÉ ACÁ Y NO EN `flow-reanudacion.test.tsx`: ese archivo corre en jsdom, y bajo jsdom el
+// `Uint8Array` de `new TextEncoder().encode(...)` no es `instanceof Uint8Array` del realm de
+// `tweetnacl` ⇒ cualquier llamada a `iniciarPop`/`vueltaDelPop` muere en `checkArrayTypes` antes de
+// ejercitar una línea de esta HU. Este archivo corre en `node`, con un solo realm, y por eso puede
+// firmar ed25519 de verdad. La mitad del productor —que lo que sale de `flow.tsx` conserve el
+// rastro— la mide `T-067-11` allá.
+//
+// ⛔ NADA SE SIEMBRA A MANO: la URL del salto la produce el adaptador REAL (`pedir()`), el sobre lo
+// cifra la billetera de mentira con el secreto compartido del canal, y la firma es ed25519 de verdad
+// sobre el `popMessage` que el "servidor" mandó. Lo único falso es el `fetch` del desafío y el
+// navegador.
+describe("T-067-21 (AR/BLQ-ALTO-1): la vuelta del permiso se lee del href que le pasan", () => {
+  const FIRMANTE = Keypair.generate(); // la billetera de la persona: acá SÍ tenemos su privada
+  const POP_MESSAGE = "chaski:pop:payout:4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU:1755400000";
+
+  /** Deja el mundo en el instante EXACTO en el que la billetera acaba de devolver la firma del
+   *  desafío, y devuelve las dos versiones del href: la que el navegador tenía al montar (sucia) y la
+   *  que el productor deja en la barra (limpia, con LA MISMA función que usa `flow.tsx`). */
+  async function volviendoDeFirmarElPermiso() {
+    const nav = montarNavegador();
+    const recorrido = new RecorridoPorEnlaceReal();
+    const billetera = nacl.box.keyPair();
+
+    // 1 · el connect, entero: es lo que fija `claveBilletera`, `session` y `direccion` en el viaje.
+    const q = new URL(recorrido.elegir({ billetera: "phantom", remittanceId: REM }).irA).searchParams;
+    const publicaDeLaApp = bs58.decode(q.get("dapp_encryption_public_key") as string);
+    nav.navegarA(
+      hrefDeVuelta(
+        q.get("redirect_link") as string,
+        respuestaDeLaBilletera(
+          { public_key: FIRMANTE.publicKey.toBase58(), session: "sess-1" },
+          publicaDeLaApp,
+          billetera,
+        ),
+      ),
+    );
+    expect(await recorrido.completar({ remittanceId: REM })).toEqual({
+      estado: "conectado",
+      direccion: FIRMANTE.publicKey.toBase58(),
+    });
+
+    // 2 · el salto del permiso, por el camino de producción: `pedir()` del adaptador. Lo único de
+    // mentira es la respuesta del emisor del desafío; el ancla y la URL las escribe el código real.
+    solanaWalletBridge.setWalletAvailability("none"); // el estado de un teléfono sin extensión
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              popChallenge: "ch-1",
+              popMessage: POP_MESSAGE,
+              exp: Math.floor(Date.now() / 1000) + 600,
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+    const permiso = await new SolanaWalletAdapter().pedir({
+      proposito: "pop-payout",
+      direccion: FIRMANTE.publicKey.toBase58(),
+    });
+    if (permiso.estado !== "hay-que-salir") throw new Error(`el salto no se armó: ${permiso.estado}`);
+
+    // 3 · la billetera firma ed25519 el mensaje ANCLADO y vuelve a nuestro origen.
+    const redirect = new URL(permiso.irA).searchParams.get("redirect_link") as string;
+    const hrefSucio = hrefDeVuelta(
+      redirect,
+      respuestaDeLaBilletera(
+        { signature: bs58.encode(nacl.sign.detached(new TextEncoder().encode(POP_MESSAGE), FIRMANTE.secretKey)) },
+        publicaDeLaApp,
+        billetera,
+      ),
+    );
+    // 4 · EL PASO 2 DEL PRODUCTOR, con la MISMA función que corre en `flow.tsx:3999`. Acá está el
+    // caso: el navegador ya no tiene el rastro, y sólo la variable capturada lo conserva.
+    const hrefLimpio = hrefSinRastroDeVuelta(hrefSucio);
+    nav.navegarA(hrefLimpio);
+
+    // CD-18 — el fixture fabricó el caso, y las dos mitades se declaran: el sucio TIENE los tres
+    // parámetros de respuesta y el limpio NO tiene ninguno. Sin esto, los dos `it` de abajo podrían
+    // estar comparando dos URLs iguales.
+    for (const p of ["phantom_encryption_public_key", "nonce", "data", MARCA]) {
+      expect(new URL(hrefSucio).searchParams.get(p), `el href "sucio" no trae \`${p}\``).not.toBeNull();
+      expect(new URL(hrefLimpio).searchParams.get(p), `el href "limpio" todavía trae \`${p}\``).toBeNull();
+    }
+    return { recorrido, hrefSucio, hrefLimpio };
+  }
+
+  // 🔴 MUTANTE QUE MATA: en `preparacion-por-enlace.ts`, volver a `hrefActual: e.href` (lo que decía la
+  // línea rechazada) en la llamada a `vueltaDelPop` de `completarPop`.
+  it("con la barra YA limpia, el href capturado por el productor alcanza para verificar (`pop-listo`)", async () => {
+    const { recorrido, hrefSucio } = await volviendoDeFirmarElPermiso();
+    expect(await recorrido.completarPop({ hrefDeLaVuelta: hrefSucio })).toEqual({
+      estado: "pop-listo",
+      proposito: "pop-payout",
+    });
+  });
+
+  // ⛔ LA CALIBRACIÓN, en la dirección contraria: con el href que el navegador REALMENTE tiene después
+  // del paso 2 —el que leía la versión rechazada— la misma vuelta buena sale `deeplink_pop_alterado`.
+  // Esto es lo que el bug producía en el teléfono, y es lo que impide que el `it` de arriba dé verde
+  // por un `completarPop` que contestara `pop-listo` a cualquier cosa.
+  it("CALIBRACIÓN: con el href de DESPUÉS de limpiar, la misma firma buena sale `deeplink_pop_alterado`", async () => {
+    const { recorrido, hrefLimpio } = await volviendoDeFirmarElPermiso();
+    expect(await recorrido.completarPop({ hrefDeLaVuelta: hrefLimpio })).toEqual({
+      estado: "corte",
+      causa: "deeplink_pop_alterado",
+    });
   });
 });

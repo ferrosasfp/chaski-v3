@@ -307,7 +307,7 @@ export interface SolanaPayoutPrepareGateway {
     address: string;
     amountUsd: number;
     beneficiary: Beneficiary;
-    idempotencyKey: string;
+    idempotencyKey: string; proof?: WalletPossessionProof; // WKH-359/AC-2 — PEGADO A `idempotencyKey`, EN LA LÍNEA QUE EXISTE: este archivo recibe 17 citas ancladas de acá para abajo a 12 destinos (medido en `723ca3c` con la receta del candado) y una línea de más las corre a todas. 🔴 QUÉ ES: la prueba de posesión YA OBTENIDA, que el camino por enlace consigue con su propio salto. Cuando viene, (`prepare`, `../infrastructure/settlement/http-solana-prepare-gateway.ts:193`) la usa y NO llama a `pop.prove()`; cuando falta, ese gateway corre byte-idéntico a como corría antes de esta HU. ⛔ NO la vuelve opcional en el sentido de CD-2: el que decide si el PoP es exigible sigue siendo el SERVIDOR (`prepare/route.ts:214`), que contesta 403 sin él. Esto sólo dice QUIÉN la consiguió.
   }): Promise<
     | {
         ok: true;
@@ -1185,3 +1185,50 @@ export interface SolanaEscrowChainStateReader {
 export type AutorizacionDelPrincipal =
   | { estado: "listo"; tx: string; solana?: SolanaPrincipalAuthorization }
   | { estado: "hay-que-salir"; irA: string; esperando: "firma-tx" | "firma-patrocinio" };
+
+/**
+ * WKH-359 — CÓMO SE CONSIGUE UNA PRUEBA DE POSESIÓN CUANDO NO HAY EXTENSIÓN DE BILLETERA.
+ *
+ * 🔴 POR QUÉ ES UN PUERTO NUEVO Y NO UN `PopSigner` MÁS. (`PopSigner`, `:554`) tiene UN método que
+ * devuelve la prueba o `null`, y ese tipo no puede escribir el desenlace que define este camino: para
+ * conseguir la firma hay que NAVEGAR a la app de la billetera, y este proceso de JavaScript deja de
+ * existir antes de que la promesa resuelva. Es exactamente el argumento que este archivo ya escribió
+ * para (`AutorizacionDelPrincipal`, `:1185`), y la conclusión es la misma: la suspensión sube por el
+ * TIPO, obligando al compilador a que quien la reciba mire `irA`.
+ *
+ * LOS CUATRO DESENLACES, y ninguno se puede colapsar en la ausencia de otro:
+ *   · `no-corresponde` — no estamos en el camino por enlace (o el gate está apagado). ⛔ ES EL QUE
+ *     SOSTIENE AC-8: quien lo recibe sigue por su camino de siempre, byte-idéntico. No es un error.
+ *   · `listo`          — hay una prueba anclada utilizable. Se entrega UNA vez: el ancla se borra al
+ *     entregarla (CD-15, un solo uso y un solo propósito).
+ *   · `hay-que-salir`  — falta la prueba y hay a dónde ir a buscarla. `irA` es la URL SALIENTE ya
+ *     armada por el protocolo de la billetera: quien la recibe SÓLO navega.
+ *   · `no-se-puede`    — no hay forma de conseguirla y NO se salta a ninguna billetera. Es el
+ *     desenlace del 501 (`PAYOUT_POP_SECRET` ausente server-side), y su `causa` es la marca ESTABLE
+ *     que ese caso ya producía antes de esta HU (AC-5). ⛔ Sin `irA`, y eso es lo medible: con el
+ *     emisor apagado, el camino por enlace no puede producir ninguna navegación a la billetera.
+ *
+ * ⛔ EL TECHO (CD-6 de WKH-359, y no se suaviza): esto prueba posesión de la clave que EL CANAL
+ * declara, NO que esa sea la billetera de la persona. No cierra la falsificación del paso 1.
+ */
+export type PruebaPorEnlace =
+  | { estado: "no-corresponde" }
+  | { estado: "listo"; proof: WalletPossessionProof }
+  | { estado: "hay-que-salir"; irA: string }
+  | { estado: "no-se-puede"; causa: string };
+
+/**
+ * ⚠️ EL `proposito` NO ES DECORATIVO Y NO TIENE DEFAULT (CD-15). Un ancla sacada para el payout no
+ * satisface un pedido del KYC ni al revés: son dos desafíos distintos del servidor y reusar uno para
+ * el otro sería exactamente el "reuso de una prueba guardada para saltearse un prompt del money-path"
+ * que prohíbe la CD-6 de (`prove`, `../infrastructure/auth/http-pop-signer.ts:16`). Lo mide `T-067-17`.
+ *
+ * Los dos literales se escriben ACÁ y no se importan del módulo del enlace, por la misma razón que
+ * (`enlaceDeVuelta`, `../infrastructure/solana/deeplink/sesion.ts:495`) escribe `"crear-nonce"` a
+ * mano: importar invertiría la dependencia (la capa de aplicación no sabe de deeplinks). Quien los
+ * ata es `tsc`, porque del otro lado son `const` de estos mismos literales y pasarlos no compilaría
+ * si divergieran.
+ */
+export interface PruebaDePosesionPorEnlace {
+  pedir(input: { proposito: "pop-payout" | "pop-kyc"; direccion: string }): Promise<PruebaPorEnlace>;
+}

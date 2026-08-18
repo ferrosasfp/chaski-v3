@@ -273,7 +273,7 @@ export type CausaDeEnlace =
   | typeof DEEPLINK_VIAJE_VENCIDO
   | typeof DEEPLINK_NONCE_YA_CONSUMIDO
   | typeof DEEPLINK_NONCE_NO_ENTRO
-  | typeof DEEPLINK_NONCE_SIN_CONTEXTO;
+  | typeof DEEPLINK_NONCE_SIN_CONTEXTO | typeof DEEPLINK_POP_SIN_FIRMA | typeof DEEPLINK_POP_VENCIDO | typeof DEEPLINK_POP_ALTERADO; // WKH-359 — LOS TRES EN ESTA LÍNEA, no en tres nuevas: hay 13 citas ancladas de acá para abajo (medido en `723ca3c`) y tres líneas nuevas las corren a todas. Las declaraciones viven al final del archivo, donde hay CERO.
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
@@ -1021,3 +1021,69 @@ export type CausaDeEnlaceEnPantalla =
   | CausaDeEnlace
   | typeof DEEPLINK_NONCE_AUSENTE
   | typeof DEEPLINK_SALDO_INSUFICIENTE;
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-359 — LAS TRES CAUSAS DE LA PRUEBA DE POSESIÓN POR ENLACE.
+//
+// 🔴 POR QUÉ AL FINAL DEL ARCHIVO Y NO AL LADO DE SUS HERMANAS DEL PASO DEL NONCE. No es orden ni
+// estilo: este módulo recibe **13 citas ancladas de `:276` para abajo** (medido en `723ca3c` con el
+// escáner de (`ANCLADA`, `../../../composition/citas-ancladas.test.ts:62`), la misma receta del
+// candado), así que abrir un hueco arriba las corre a todas. Acá abajo hay CERO. `tsc` no pide orden
+// para los tipos, así que la unión de (`CausaDeEnlace`, `:264`) las nombra desde arriba sin problema.
+//
+// ⛔ EL TECHO DE LAS TRES, Y NO SE SUAVIZA (CD-6 de WKH-359). La prueba de posesión demuestra que
+// quien contesta tiene la clave privada de la dirección **que el canal declara**. NO demuestra que
+// esa dirección sea la billetera de la persona que empezó el envío: quien gane el paso 1 —el ancla
+// write-once de (`claveBilletera`, `sesion.ts:148`)— se queda con el canal entero y satisface
+// cualquier desafío posterior CON SU PROPIA CLAVE. Lo que esa persona NO compra es plata (el depósito
+// exige su propia firma ed25519 sobre los bytes anclados, y la PDA se deriva del `sender`); lo que SÍ
+// compra es daño. ⛔ Ninguna de estas tres cierra esa falsificación, y ningún comentario, docblock ni
+// mensaje de commit de este repo puede decir que sí.
+
+/**
+ * AFIRMA: en el camino por enlace se pidió una firma de mensaje y este dispositivo NO tiene ninguna
+ * prueba anclada utilizable contra la cual contestar. Es el corte de (`signMessage`,
+ * `../../solana-wallet.ts:1922`) cuando no hay ancla, hay ancla de otro propósito, hay una ya
+ * consumida, o los bytes anclados no son los que se están pidiendo firmar.
+ * NO AFIRMA: ⛔ que la persona haya rechazado nada —no se le preguntó—, ni que el mecanismo esté
+ * roto. Es PRE-SALTO por construcción: se emite sin haber navegado a ninguna billetera.
+ * 🔴 POR QUÉ NO ES `wallet_sign_not_available`, que es lo que se emitía antes: esa marca la tira el
+ * bridge (`../../solana-wallet-bridge.ts:127`) y significa "no hay extensión en este navegador", que
+ * en el camino por enlace es cierto SIEMPRE y por lo tanto no distingue nada. Ésta significa "falta
+ * el insumo", que es accionable: ir a buscarlo.
+ */
+export const DEEPLINK_POP_SIN_FIRMA = "deeplink_pop_sin_firma";
+
+/**
+ * AFIRMA: la ventana del desafío que el servidor emitió ya pasó, así que la prueba anclada no le
+ * sirve a nadie: `prepare` la rechazaría igual. La ventana la fija el `exp` que el SERVIDOR mandó en
+ * el JSON del desafío (`../../../../app/api/a2a/payout/challenge/route.ts:73`), no un reloj de acá.
+ * NO AFIRMA: ⛔ **ni que se haya firmado ni que no se haya firmado**, y eso es el punto, no una
+ * omisión ([NC-2] de WKH-359). Esta causa se alcanza tanto ANTES del salto (el ancla venció
+ * esperando) como DESPUÉS (la persona volvió tarde), y las dos son indistinguibles desde acá: el
+ * ancla no registra si la billetera llegó a mostrar la pantalla. El vecino
+ * `deeplink_viaje_vencido` sí dice "No se firmó nada", y WKH-358 midió que esa frase sale FALSA
+ * recién salida de firmar. Acá no se repite.
+ * ⚠️ RESIDUAL DECLARADO: el reloj del VIAJE (`MAX_EDAD_MS`, `sesion.ts:111`) sigue siendo
+ * independiente del `exp` del desafío y puede vencer primero (arranca al tocar el selector). Cuando
+ * gana ese, la persona lee el copy del viaje y no éste. Eso NO lo cierra esta HU.
+ */
+export const DEEPLINK_POP_VENCIDO = "deeplink_pop_vencido";
+
+/**
+ * AFIRMA: volvió una respuesta del paso de firma de mensaje y NO es la que se pidió: o el `message`
+ * devuelto no es byte a byte el que quedó anclado, o la firma no verifica ed25519 contra la
+ * dirección que el viaje tiene fijada. Corta fail-closed: no se avanza la remesa y no se pide
+ * ninguna firma más.
+ * NO AFIRMA: ⛔ que haya un atacante. Un canal que se cruzó con otro envío llega al mismo lugar.
+ * 🔴 POR QUÉ ES DISTINTA DE `DEEPLINK_RECHAZADO` Y DE `DEEPLINK_TX_ALTERADA` (AC-4). De
+ * `deeplink_rechazado` porque ahí la billetera contestó "no" y acá contestó "sí" con algo que no
+ * cierra: colapsarlas haría que la persona lea "cancelaste" cuando no canceló. De
+ * `deeplink_tx_alterada` porque ésa habla de la TRANSACCIÓN del depósito —USDC en juego, y la cadena
+ * rechazaría igual— y ésta habla de una firma de MENSAJE que no toca fondos y que **nadie más va a
+ * rechazar**: sin este chequeo el par viajaría a `prepare`, que contestaría 403
+ * `payout_pop_unverified`, o sea el diagnóstico de una falsificación para lo que puede ser un canal
+ * cruzado. Ésta es la razón por la que acá SÍ se verifica ed25519 y en (`vueltaDelNonce`,
+ * `conexion.ts:508`) no: allá lo que está en juego es cero USDC y la cadena es el segundo par de ojos.
+ */
+export const DEEPLINK_POP_ALTERADO = "deeplink_pop_alterado";

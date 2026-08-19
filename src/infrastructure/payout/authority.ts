@@ -4,8 +4,8 @@
 // bundle del cliente (CD-10).
 //
 // 🔴 WKH-233 — ESTA FUNCIÓN YA NO LE HABLA AL PROVEEDOR DE KYC NI MAPEA SU PAYLOAD. Le pregunta al
-// agente `remit-kyc-validator` y ADOPTA SU VEREDICTO TAL CUAL. El gate es UNA comparación:
-//
+// AGENTE DE KYC (su nombre vive UNA sola vez, en `agent-env.ts`, CD-2) y ADOPTA SU VEREDICTO TAL
+// CUAL. El gate es UNA comparación:
 //     body.payoutAllowed === true
 //
 // ⛔ Y NADA MÁS. Chaski NO recompone el criterio con `approved && identityMatches`: eso sería

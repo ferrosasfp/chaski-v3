@@ -1,6 +1,6 @@
-// Server-side: crea una sesión de verificación de identidad EN EL AGENTE `remit-kyc-validator`
-// (WKH-233). Este repo YA NO le habla al proveedor de KYC por ningún camino: la credencial del
-// proveedor vive en el agente, no acá. Env-gated (501 si no hay host del agente).
+// Server-side: crea una sesión de verificación de identidad EN EL AGENTE DE KYC — su nombre vive UNA
+// sola vez, en `agent-env.ts` (WKH-233/CD-2). Este repo YA NO le habla al proveedor de KYC por ningún
+// camino: la credencial del proveedor vive en el agente. Env-gated (501 si no hay host del agente).
 //
 // ⛔ ESTA ROUTE NO ES UN PROXY, Y NO PUEDE SERLO (CD-1). Lo que se reemplazó es UN `fetch`. Todo lo
 // demás se queda, y cada cosa por su motivo:

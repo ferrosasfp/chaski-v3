@@ -1,6 +1,6 @@
-// Server-side: consulta la decisión de una sesión de verificación EN EL AGENTE `remit-kyc-validator`
-// (WKH-233). Este repo YA NO le habla al proveedor de KYC ni mapea su payload: el mapeo lo hace el
-// agente y acá se consume su salida ya juzgada.
+// Server-side: consulta la decisión de una sesión de verificación EN EL AGENTE DE KYC — su nombre
+// vive UNA sola vez, en `agent-env.ts` (WKH-233/CD-2). Este repo YA NO le habla al proveedor de KYC
+// ni mapea su payload: el mapeo lo hace el agente y acá se consume su salida ya juzgada.
 //
 // Guard-order (P-7, intacto): 501 → 500 → 400 → 401 → el store del token → recién el borde.
 // ⛔ NUNCA un viaje al agente sin haber pasado el HMAC. Su candado (T-TOK-5) NO mira el status: cuenta

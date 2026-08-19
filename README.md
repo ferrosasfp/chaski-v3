@@ -449,13 +449,24 @@ npm run qa        # lint + both typechecks + tests
 script is deliberately not part of it: it is opt in and it moves tokens on devnet.
 
 There is a second workflow, `.github/workflows/reconcile-orphans.yml`, and it is scheduled rather than
-triggered by a push: once an hour (`23 * * * *`) it calls the admin reconciliation route in production
-with the secret in a header, and it goes red if the transport fails or if the response reports rows
-that a person has to look at. It prints only the aggregate counters, never the correlation ids: the
-logs of a public repository are public. What it does not do is stand guard. If GitHub delays or skips
-a scheduled tick there is no run, and therefore nothing turns red. That gap is written down rather
-than implied, in the header of the workflow and in `docs/runbook-reconcile-orphans.md`, which also
-says what to do about each red.
+triggered by a push. Once an hour (`23 * * * *`) it is meant to call the admin reconciliation route in
+production with the secret in a header, and to go red if the transport fails or if the response reports
+rows that a person has to look at. It prints only the aggregate counters, never the correlation ids: the
+logs of a public repository are public.
+
+⛔ Status as of 2026-08-19, measured and not assumed: **that workflow has never run.** GitHub lists only
+`ci.yml` under `gh api repos/ferrosasfp/chaski-v3/actions/workflows`,
+`gh run list --workflow=reconcile-orphans.yml` answers HTTP 404, and the repository has zero Actions
+secrets (`{"total_count":0}`). Merging the file registers the schedule, which is the easy half. The
+other half is not: with no secret loaded, the job fails on its first step without calling the route, so
+every hourly run is red and nothing gets reconciled, until someone runs
+`gh secret set RECONCILE_ADMIN_SECRET`. The measured status table is at the top of
+[`docs/runbook-reconcile-orphans.md`](docs/runbook-reconcile-orphans.md). Read it before you conclude
+that an hourly check is watching the ledger, because right now none is.
+
+What it does not do, once it does run, is stand guard. If GitHub delays or skips a scheduled tick there
+is no run, and therefore nothing turns red. That gap is written down rather than implied, in the header
+of the workflow and in `docs/runbook-reconcile-orphans.md`, which also says what to do about each red.
 
 ## Architecture
 

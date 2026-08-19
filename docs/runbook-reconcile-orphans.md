@@ -3,14 +3,57 @@
 > Escrito el 2026-08-19. Existe porque `POST /api/admin/reconcile-orphans` ya tenía sus tests y ya
 > estaba configurado en producción, **y no lo invocaba nadie**: no había `vercel.json`, el único
 > workflow del repo no tenía `schedule:`, ningún script de `package.json` mencionaba la ruta y no hay
-> UI de administración. Ahora lo invoca `.github/workflows/reconcile-orphans.yml`, cada hora. Este
-> documento dice qué hacer con cada rojo de ese workflow.
+> UI de administración. Ahora hay un `.github/workflows/reconcile-orphans.yml` que queda declarado
+> para invocarla cada hora, y este documento dice qué hacer con cada rojo de ese workflow. ⛔ Antes de
+> apoyarte en eso: al 2026-08-19 **ese workflow todavía no corrió ni una vez**, y hay dos
+> pre-requisitos founder-only pendientes. Están medidos en la sección de abajo.
 
-## Antes que nada: acá sí hay un productor, pero su ausencia es invisible
+## ⛔ Estado al 2026-08-19: este cron TODAVÍA NO CORRIÓ NI UNA VEZ
+
+Esto no es una advertencia genérica: es una **medición**, y va antes que todo lo demás porque cambia
+cómo se lee el resto del documento. Faltan dos pre-requisitos, los dos founder-only, y **ninguno de
+los dos se resuelve mergeando el `.yml`**.
+
+| Pre-requisito | Estado medido al 2026-08-19 | Con qué se midió |
+|---|---|---|
+| El workflow registrado en GitHub | **NO** — la API lista sólo `ci.yml` | `gh api repos/ferrosasfp/chaski-v3/actions/workflows --jq '.workflows[].path'` |
+| Alguna corrida, de cualquier evento | **NO** — el workflow no existe para GitHub | `gh run list --workflow=reconcile-orphans.yml` ⇒ **HTTP 404** |
+| El secreto cargado en los Secrets de Actions | **NO** — el repo tiene cero | `gh api repos/ferrosasfp/chaski-v3/actions/secrets` ⇒ `{"total_count":0}` |
+| El backlog real de `prepared` huérfanas | **SIN MEDIR** — exige el valor del secreto, que nadie tiene acá | — |
+
+**El primero se resuelve con el push**: en cuanto el `.yml` entre a `main`, GitHub registra el
+`schedule:` y el workflow empieza a correr cada hora. Esa es la mitad fácil.
+
+🔴 **El segundo no, y es lo único que hay que entender antes de seguir leyendo: hasta que exista el
+secreto, el job falla en su primer paso sin llamar a la ruta.** El paso L1 arranca chequeando que
+`RECONCILE_ADMIN_SECRET` no esté vacío, y con cero secrets cargados ese chequeo corta con `exit 1` y la
+anotación `secreto ausente (L1)` **antes del `curl`** (medido: ese paso corrido con el secreto vacío
+sale 1 sin tocar la red). O sea que durante esa ventana hay una corrida por hora, **todas rojas, y cero
+reconciliación**. La reconciliación no empieza a existir hasta que se ejecute:
+
+```bash
+gh secret set RECONCILE_ADMIN_SECRET --repo ferrosasfp/chaski-v3   # EL MISMO VALOR que la env de Vercel
+```
+
+Y después, la única verificación que prueba el registro (una corrida cuyo evento sea `schedule`; ni el
+`.yml` commiteado ni un `workflow_dispatch` verde cuentan):
+
+```bash
+gh run list --workflow=reconcile-orphans.yml --limit 5 --json event,conclusion,createdAt
+```
+
+⚠️ **Mientras alguna fila de esta tabla diga NO, cualquier frase en presente del resto del documento
+—"corre", "llama", "se pone rojo"— describe lo que el workflow VA A HACER, no lo que está pasando.**
+Si actualizás el estado, actualizá la fecha de este título.
+
+## Antes que nada: acá sí hay un productor DECLARADO, pero su ausencia es invisible
 
 A diferencia del runbook de alertas del ledger —donde nadie te avisa nada y el documento se ejecuta
-cuando alguien decide mirar—, acá **sí hay algo automático**: un workflow programado que corre solo y
-que se pone **rojo** cuando encuentra algo. Esa es la parte buena, y es real.
+cuando alguien decide mirar—, acá **sí queda declarado algo automático**: un workflow programado que,
+con el schedule registrado y el secreto cargado, corre solo y se pone **rojo** cuando encuentra algo.
+Esa es la parte buena. Lo que todavía no es cierto es el presente: **al 2026-08-19 no corrió ninguna
+vez**, y con cero secrets cargados la primera corrida después del push va a morir en el chequeo de
+secreto vacío, antes del `curl`. Los dos pre-requisitos están arriba, medidos.
 
 ⚠️ **La parte que no hay que leer de más:** lo que se pone rojo es **una corrida que ocurrió**. Si la
 corrida **no ocurre**, no hay nada rojo que mirar. GitHub documenta que puede **retrasar o saltear**
@@ -27,6 +70,10 @@ gh run list --workflow=reconcile-orphans.yml --limit 10 --json event,conclusion,
 
 Con la cadencia de hoy tendría que haber una corrida por hora. Si la última es de hace mucho más que
 eso, el problema es el productor, no el ledger.
+
+⚠️ Y si ese comando devuelve **HTTP 404** o una lista vacía, no es que el productor se cayó: es que
+**todavía no se registró**, que es el estado medido al 2026-08-19. Eso se resuelve en la sección de
+pre-requisitos, no acá.
 
 ## La cadencia
 

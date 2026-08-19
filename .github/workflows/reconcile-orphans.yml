@@ -1,0 +1,221 @@
+# reconcile-orphans — el productor que le faltaba a POST /api/admin/reconcile-orphans (WKH-328 parte B).
+#
+# QUE DISPARA ESTO Y CONTRA QUE. Un `schedule:` horario (minuto 23) que hace UN POST contra
+# https://chaski-v2.vercel.app/api/admin/reconcile-orphans con el secreto en un header.
+# ⚠️ El proyecto de Vercel se llama `chaski-v2` y sirve el codigo de chaski-v3. NO es un typo: el
+# deployment de produccion vigente tiene ese alias. La URL va literal y a la vista, y no escondida en
+# una variable de repo: en un repo publico, auditable > oculto.
+#
+# POR QUE GITHUB ACTIONS Y NO VERCEL CRON — las tres razones estan medidas, y la tercera se sostiene
+# sola:
+#   3. REGISTRO (la decisiva). El webhook GitHub→Vercel de este repo esta MUERTO: pushear a `main`
+#      NO despliega, y el deployment de produccion vigente tiene `crons: []`. Un `vercel.json`
+#      versionado no tendria ningun efecto hasta que alguien corra `vercel deploy --prod --yes` A
+#      MANO — que es el modo de falla exacto "el archivo declara la intencion y nadie inscribio el
+#      schedule". GitHub Actions, en cambio, SI funciona en este repo. Lo que esta muerto es
+#      GitHub→Vercel, no GitHub→Actions.
+#   1. METODO. La ruta exporta SOLO `POST`, y Vercel Cron emite `GET`. Agregar un handler `GET`
+#      choca de frente con el alcance de esta HU (es wiring, no rediseno), y darle `GET` a una
+#      operacion que MUTA es semantica HTTP rota: la abre a prefetchers, crawlers y caches.
+#   2. CADENCIA. El plan de la cuenta Vercel duena del proyecto es `hobby`, que limita los crons a
+#      una vez por dia, contra relojes del propio endpoint de 10 y 15 minutos.
+# Las razones 1 y 2 dependen ademas de comportamiento documentado de la plataforma Vercel que NO se
+# pudo verificar desde este repo. Esta dicho asi a proposito, no disimulado.
+#
+# POR QUE HORARIO Y NO `*/15`:
+#   · Nada se degrada con la latencia. Lo que la mitad `prepared` reporta YA ES IRREVERSIBLE cuando
+#     entra al conjunto (pasada la atestacion, el settle responderia 400), y la mitad `stale` solo
+#     pone una etiqueta para que un humano mire fuera de banda. Detectarlo a los 10 min o a los 60
+#     no cambia ninguna accion disponible.
+#   · Ir mas rapido tiene costo real: la senal L2 es PEGAJOSA (ver abajo), asi que `*/15` produciria
+#     96 rojos por dia por el mismo hallazgo.
+# POR QUE EL MINUTO 23 Y NO EL 0: GitHub documenta que el evento `schedule` se retrasa en los picos
+# de carga, y que el arranque de cada hora es un pico. Un minuto no redondo es la mitigacion barata
+# y documentada.
+#
+# LA SENAL SON DOS CAPAS, CON NOMBRE PROPIO Y DISTINTO:
+#   L1 — TRANSPORTE. HTTP != 200, un `curl` que no completa, o el secreto vacio. Prueba que el
+#        endpoint es alcanzable y autenticado. Cubre 401 (secreto rotado en un solo store), 501
+#        (env borrada de Vercel o ledger apagado), 503 (la DB no contesta), 404 (la ruta
+#        desaparecio del deploy) y timeout.
+#   L2 — HALLAZGOS. 200 con `preparedOrphans.total > 0`, `failed > 0` o `manualReview > 0`. Prueba
+#        que hay algo que UN HUMANO tiene que mirar.
+#
+# ⚠️ L2 ES PEGAJOSA, Y ESO ES CORRECTO. Una fila `prepared` no sale de `prepared` sola: nada en el
+# endpoint la muta (su propio comentario dice "solo VISIBILIDAD, cero mutacion"). Asi que UNA VEZ
+# ROJA, SIGUE ROJA HASTA QUE UN HUMANO ACTUE SOBRE LA FILA. Es lo correcto —un hallazgo no se
+# auto-cura en silencio— y es tambien el mayor riesgo operativo de esta HU: un job cronicamente rojo
+# entrena a ignorarlo, y ahi L1 deja de verse.
+#
+# 🔴 LOS LOGS DE ACTIONS DE UN REPO PUBLICO SON PUBLICOS. El endpoint justifica devolver IDs con la
+# frase "esta respuesta va a logs", y ESE RAZONAMIENTO FUE ESCRITO PARA LOS LOGS DE VERCEL, QUE SON
+# PRIVADOS. El array `items` de `preparedOrphans` lleva id, remittanceId, quoteId, payoutId,
+# payoutProvenance y createdAt de REMESAS REALES. ⇒ Aca se imprimen SOLO los agregados: ese array
+# NUNCA se ecoa, ni entero ni por campo, y el body crudo tampoco. Por eso el `curl` manda el cuerpo
+# a un archivo con `-o` y lo unico que sale por stdout es el codigo HTTP.
+# Lo que esto NO elimina, sin suavizar: publicar un total revela VOLUMEN OPERATIVO a cualquiera. Es
+# un dato de negocio, no PII ni un identificador de correlacion, y se acepta a cambio de que la
+# senal sea legible.
+#
+# 🔴 QUE **NO** MIDE ESTA SENAL — los 7 items, textuales y sin suavizar:
+#   1. LA AUSENCIA DE CORRIDAS ES INVISIBLE. Si GitHub retrasa o SALTEA un tick programado
+#      (comportamiento documentado bajo carga), o deshabilita el workflow por 60 dias sin actividad
+#      en el repo, NADA SE PONE ROJO: no hay corrida, no hay senal. ESTA HU NO ENTREGA HEARTBEAT NI
+#      DEAD-MAN'S-SWITCH. Mitigante parcial y medido: el repo tiene pushes diarios, asi que el reloj
+#      de los 60 dias nunca se acerca, y GitHub avisa por mail antes de deshabilitar. EL SALTEO BAJO
+#      CARGA NO ESTA CUBIERTO POR NADA.
+#   2. Un verde no dice que el ledger este sano. Dice que DOS `SELECT` contestaron. No dice nada de
+#      las ESCRITURAS, ni del webhook de TransFi, ni del proveedor.
+#   3. `total: 0` no dice que no se perdio plata. `prepared` significa "no hay deposito REGISTRADO",
+#      no "no hubo deposito". Y no certifica NADA sobre las filas en los otros cinco estados.
+#   4. No mide el codigo de `main`. El cron pega al alias de produccion, y el webhook GitHub→Vercel
+#      esta muerto ⇒ produccion es lo ultimo desplegado A MANO, que puede estar detras de `main`.
+#      UN VERDE DEL CRON NO ES UN VERDE DE `main`.
+#   5. No cierra el circuito de `manual_review`. El endpoint etiqueta filas para que un humano las
+#      mire; NADA VERIFICA QUE ALGUIEN LAS MIRE.
+#   6. No cancela nada del lado de TransFi. Explicitamente fuera del endpoint y de esta HU.
+#   7. El candado de la suite (src/composition/reconcile-cron-guard.static.test.ts) verifica el
+#      TEXTO de este .yml, NO que GitHub lo haya inscrito. Que este archivo exista y este commiteado
+#      es la INTENCION; que GitHub registre el schedule es otra cosa, y lo unico que la prueba es una
+#      corrida cuyo evento sea `schedule` (`gh run list --workflow=reconcile-orphans.yml --json event`).
+#
+# Runbook con que hacer en cada rojo: docs/runbook-reconcile-orphans.md
+name: reconcile-orphans
+
+# Solo estos dos triggers. NI `push` NI `pull_request`: GitHub no expone secretos a workflows de
+# `pull_request` desde un fork, y al no tener ese trigger ni siquiera existe la superficie.
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+# El GITHUB_TOKEN de este job no necesita NI UN scope: no lee el arbol y no escribe nada en el repo.
+permissions: {}
+
+# Dos corridas SOLAPADAS tienen un efecto observable y acotado: si las dos leen la misma fila antes
+# de que cualquiera escriba, ambas llaman markOutcome con incrementAttempt ⇒ `attempts` se
+# incrementa DOS VECES para un solo evento. Es un contador de evidencia inflado; no mueve dinero (el
+# reconcile nunca llama a fetch) y no reclasifica (el status destino es el mismo valor). Las
+# corridas SECUENCIALES ya son idempotentes: `manual_review` no pertenece al conjunto de estados que
+# el barrido de varadas elige, asi que la fila que muto la corrida N no vuelve a ser elegida por la
+# N+1. La mitigacion va aca, en el productor, y no en la ruta, porque esta HU tiene PROHIBIDO tocar
+# la ruta. Y `cancel-in-progress: false`, NO `true`: cancelar la corrida en curso dejaria el batch a
+# la mitad.
+concurrency:
+  group: reconcile-orphans
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    name: reconciliacion de huerfanas del ledger
+    runs-on: ubuntu-latest
+    # Cota dura de la corrida (AC-B7). El `curl` ya tiene su propio --max-time 60.
+    timeout-minutes: 5
+
+    # NO se usa actions/checkout a proposito: el job no necesita el arbol del repo. Menos superficie
+    # y mas rapido. `curl` y `jq` ya vienen en la imagen de ubuntu-latest.
+    steps:
+      - name: el endpoint responde 200 (transporte)
+        env:
+          # El secreto llega por `env:`, NUNCA interpolado dentro del `run:` (si se interpolara, el
+          # valor quedaria escrito en el script que Actions materializa en el runner).
+          RECONCILE_ADMIN_SECRET: ${{ secrets.RECONCILE_ADMIN_SECRET }}
+        run: |
+          set -euo pipefail
+
+          # Chequeo de secreto vacio ANTES del curl, con mensaje propio. Es exactamente lo que pasa
+          # si el secreto de Actions no se cargo nunca; sin este chequeo el sintoma seria un 401
+          # confuso que manda a investigar Vercel en vez de GitHub.
+          if [ -z "${RECONCILE_ADMIN_SECRET}" ]; then
+            echo "::error title=secreto ausente (L1)::RECONCILE_ADMIN_SECRET no esta cargado en los secrets de Actions de este repo. Cargalo con 'gh secret set RECONCILE_ADMIN_SECRET --repo ferrosasfp/chaski-v3', con EL MISMO VALOR que la env de Vercel. Ver docs/runbook-reconcile-orphans.md"
+            exit 1
+          fi
+
+          # -o body.json ⇒ el cuerpo va a un ARCHIVO, nunca a stdout (repo publico: ver el docblock).
+          # -w '%{http_code}' ⇒ lo unico que sale por stdout es el codigo HTTP.
+          # El secreto viaja en un HEADER, jamas en la URL: una query-string es cacheable y queda
+          # escrita en logs de proxies y del proveedor.
+          if ! code="$(curl -sS -X POST \
+            --max-time 60 \
+            -H "authorization: Bearer ${RECONCILE_ADMIN_SECRET}" \
+            -o body.json \
+            -w '%{http_code}' \
+            https://chaski-v2.vercel.app/api/admin/reconcile-orphans)"; then
+            echo "::error title=transporte (L1)::el curl no completo (timeout de 60s, DNS, TLS o red). El endpoint no es alcanzable desde el runner. Ver docs/runbook-reconcile-orphans.md"
+            exit 1
+          fi
+
+          if [ "${code}" != "200" ]; then
+            echo "::error title=transporte (L1)::el endpoint respondio HTTP ${code}, no 200. La tabla de codigos (401 / 501 / 503 / 404 / timeout) esta en docs/runbook-reconcile-orphans.md"
+            {
+              echo "### reconcile-orphans — L1 (transporte) en rojo"
+              echo ""
+              echo "HTTP \`${code}\`, esperado \`200\`. Que hacer: \`docs/runbook-reconcile-orphans.md\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          echo "transporte OK: HTTP ${code}"
+
+      - name: sin hallazgos que revisar
+        run: |
+          set -euo pipefail
+
+          # ⚠️ SOLO estos CINCO agregados salen del body, y nada mas. El array de IDs de correlacion
+          # no se lee aca ni se imprime en ningun lado: los logs de este repo son publicos.
+          scanned="$(jq -r '.scanned' body.json)"
+          manual_review="$(jq -r '.manualReview' body.json)"
+          failed="$(jq -r '.failed' body.json)"
+          prepared_total="$(jq -r '.preparedOrphans.total' body.json)"
+          prepared_truncated="$(jq -r '.preparedOrphans.truncated' body.json)"
+
+          # 🔴 LA FORMA SE VALIDA ANTES DE COMPARAR. Si la respuesta cambia de forma, `jq -r` imprime
+          # el texto `null`, y un `null` comparado con `-gt` NO puede pasar por verde: tiene que ser
+          # un rojo con mensaje propio, no un verde por accidente.
+          for par in "scanned=${scanned}" "manualReview=${manual_review}" "failed=${failed}" "preparedOrphans.total=${prepared_total}"; do
+            nombre="${par%%=*}"
+            valor="${par#*=}"
+            case "${valor}" in
+              '' | *[!0-9]*)
+                echo "::error title=forma inesperada (L2)::el campo ${nombre} no es un entero (valor recibido: '${valor}'). La respuesta del endpoint cambio de forma, o no es JSON. Ver docs/runbook-reconcile-orphans.md"
+                exit 1
+                ;;
+            esac
+          done
+
+          # ⚠️ `truncated` es un BOOLEANO, no un entero: en el endpoint sale de comparar el total
+          # contra el largo de la pagina. Aplicarle la validacion numerica de arriba pondria este
+          # paso ROJO SIEMPRE.
+          case "${prepared_truncated}" in
+            true | false) ;;
+            *)
+              echo "::error title=forma inesperada (L2)::preparedOrphans.truncated no es true ni false (valor recibido: '${prepared_truncated}'). Ver docs/runbook-reconcile-orphans.md"
+              exit 1
+              ;;
+          esac
+
+          # El resumen se escribe SIEMPRE, en verde y en rojo: si solo se escribiera en rojo, no
+          # habria forma de distinguir "corrio y no encontro nada" de "no corrio".
+          {
+            echo "### reconcile-orphans"
+            echo ""
+            echo "| agregado | valor |"
+            echo "|---|---|"
+            echo "| scanned | ${scanned} |"
+            echo "| manualReview | ${manual_review} |"
+            echo "| failed | ${failed} |"
+            echo "| preparedOrphans.total | ${prepared_total} |"
+            echo "| preparedOrphans.truncated | ${prepared_truncated} |"
+            echo ""
+            echo "Que hacer con cada uno: \`docs/runbook-reconcile-orphans.md\`."
+            echo ""
+            echo "Solo agregados: los IDs de correlacion NO salen de este log, a proposito — los logs de Actions de un repo publico son publicos."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # LAS TRES COMPARACIONES, no dos. Borrar una deja un hallazgo entero sin senal.
+          if [ "${prepared_total}" -gt 0 ] || [ "${failed}" -gt 0 ] || [ "${manual_review}" -gt 0 ]; then
+            echo "::error title=hallazgos que revisar (L2)::preparedOrphans.total=${prepared_total}, failed=${failed}, manualReview=${manual_review}. Al menos uno es > 0: hay filas que tiene que mirar una persona. Esta senal es PEGAJOSA — sigue roja hasta que alguien actue sobre las filas. Ver docs/runbook-reconcile-orphans.md"
+            exit 1
+          fi
+
+          echo "sin hallazgos: los tres contadores en 0"

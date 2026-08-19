@@ -258,10 +258,10 @@ export function Bienvenida({ onEmpezar, disabled }: { onEmpezar: () => void; dis
             favorable, que es lo que la regla pide); en la rama con `principalTx` exige que el enlace
             esté y apunte al explorador, así que la mitad condicional tampoco se puede vaciar. */}
         <Aviso className="text-left">
-          <Muted escala="label">
-            Y no hace falta creernos: el depósito de tus USDC es una transacción en Solana, y en cuanto
-            la app tiene su firma te da el enlace para abrirla en el explorador.
-          </Muted>
+          <details>{/* ── DIVULGACIÓN PROGRESIVA, Y EL PATRÓN ES "COLAPSAR SIN DESMONTAR", el mismo que `AgentPlanCard` (`flow.tsx`) ya tiene en producción. El nodo de abajo NO se desmonta: deja de VERSE, no de existir, así que ningún `getByText` cambia de resultado. ⚠️ ESTA FRASE NO ERA "libre", QUE ES LO QUE EL ANÁLISIS DE CONTENIDO DECÍA: está CLAVADA en dos sitios —el `toContain` de `T-063-24` en `bienvenida-composicion.test.tsx` y el `getByText` del mutante de confianza en `barra-destinos.test.tsx`—, y los dos preguntan por PRESENCIA, que es exactamente por qué sobrevive al colapso. El mecanismo que lo generaliza, y no la anécdota: en los archivos de test de esta carpeta hay CERO usos de `toBeVisible()`. ⛔ NO SE REFORMULÓ UNA LETRA: mismo nodo `<Muted escala="label">`, mismo literal y mismo elemento para el matcher (partirlo en dos nodos rompería el `getByText`, que lee sólo los nodos de texto DIRECTOS de cada elemento). Lo único nuevo es la etiqueta del `<summary>`. ⛔ Y NO ES UNA ADVERTENCIA DE DINERO LO QUE SE COLAPSA: es la PRUEBA de la promesa de custodia, no la promesa — "tus USDC quedan en un contrato en Solana" queda arriba y a la vista, y la red de prueba sigue suelta al pie de la pantalla. Quien duda, abre. ⛔ Δ0 DE LÍNEAS a propósito, y el comentario cuelga del `<details>` por eso: este archivo RECIBE citas ancladas por número que apuntan MÁS ABAJO de acá, y una línea de más las corre. Cuáles son y desde dónde llegan está escrito en `:4`, en UN solo lugar; repetirlas acá sería una segunda copia que envejece sola. */}
+            <summary className="cursor-pointer text-label text-stone">Cómo se comprueba</summary>
+            <Muted escala="label">Y no hace falta creernos: el depósito de tus USDC es una transacción en Solana, y en cuanto la app tiene su firma te da el enlace para abrirla en el explorador.</Muted>
+          </details>
         </Aviso>
       </Card>
 

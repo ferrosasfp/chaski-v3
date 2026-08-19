@@ -185,10 +185,10 @@ export function DestinoRecuperar({ children }: { children: ReactNode }) {
           ⛔ Y ES PROSA, NO UN BOTÓN: un "Ver mis envíos" acá duplicaría la pestaña de la barra y
           convertiría esta pantalla en `resolutiva` (ver el docblock de arriba). */}
       <Aviso>
-        <Muted escala="label">
-          ¿El envío te aparece en "Mis envíos"? Abrilo desde ahí: la pantalla del envío dice en qué
-          estado quedó, y si sus USDC se pueden recuperar la opción está en esa misma pantalla.
-        </Muted>
+        <details>{/* ── COLAPSAR SIN DESMONTAR, el mismo patrón que `AgentPlanCard` (`flow.tsx`) ya tiene en producción: el nodo sigue MONTADO y sólo deja de verse. ⛔ NO SE IMITA ACÁ EL PATRÓN DE LAS DOS PUERTAS DE ESTA MISMA PANTALLA (`LostEscrowRecovery`, `EscrowRentRecovery`), que DESMONTAN —su `if (!open)` devuelve un resumen— y por eso sus tests pagan el precio de abrir la puerta antes de asertar. ⚠️ ESTE CONSEJO NO ERA "libre", QUE ES LO QUE EL ANÁLISIS DE CONTENIDO DECÍA: `T-063-15` en `recuperar-composicion.test.tsx` lo agarra con un `getByText` sobre la primera pregunta y después le lee dos pedazos más del `textContent` ("Abrilo desde ahí", "si sus USDC se pueden recuperar") ANTES de caminar el consejo hasta el botón de recuperar. Las tres lecturas son de PRESENCIA y por eso el colapso las deja intactas; lo que las rompería es partir el texto en dos nodos, así que el literal entero vive en UN solo `<Muted>`, igual que antes. ⛔ POR QUÉ ÉSTE Y NO OTRO DE ESTA PANTALLA: es un DESVÍO —le dice a la persona que probablemente no necesita esta pantalla—, no una precondición ni una advertencia de dinero. Las dos que sí lo son se quedan sueltas al pie y a la vista: con qué cuenta se busca (sin la correcta, la búsqueda no encuentra nada) y en qué red viven las cuentas. */}
+          <summary className="cursor-pointer text-label text-stone">¿Y si aparece en Mis envíos?</summary>
+          <Muted escala="label">¿El envío te aparece en "Mis envíos"? Abrilo desde ahí: la pantalla del envío dice en qué estado quedó, y si sus USDC se pueden recuperar la opción está en esa misma pantalla.</Muted>
+        </details>
       </Aviso>
       {/* Las dos notas del pie van juntas y en `escala="label"`, con el mismo criterio que la nota de
           la red de la bienvenida: una nota de contexto no se pone donde tape lo que hay que hacer.

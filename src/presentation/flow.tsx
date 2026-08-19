@@ -3363,11 +3363,11 @@ export function HistoryView({
     <div className="space-y-holgado">
       <Card className="space-y-ajustado">
         <h2 className="text-title font-semibold">Tus envíos</h2>
-        {/* De dónde sale esta lista, dicho antes de que la persona saque conclusiones de que esté vacía. */}
-        <p className="text-label text-stone">
-          Son los envíos guardados en este dispositivo. Si borraste los datos del navegador o entrás
-          desde otro, acá no van a aparecer aunque existan.
-        </p>
+        {/* De dónde sale esta lista, dicho antes de que la persona saque conclusiones de que esté vacía — pero BAJO DEMANDA, porque cuando la lista trae lo que la persona esperaba es ruido: sólo importa cuando FALTA algo, que es lo que pregunta el `<summary>`. ── COLAPSAR SIN DESMONTAR, el mismo patrón que `AgentPlanCard` en este mismo archivo: el `<p>` sigue MONTADO y sólo deja de verse, así que ningún `getByText` cambia de resultado. ⛔ NO se imita el patrón de DESMONTAR de `LostEscrowRecovery`, cuyo `if (!open)` devuelve un resumen y rompe todo `getByText` que no abra la puerta primero. ⚠️ ÉSTE ES EL ÚNICO DE LOS TRES BLOQUES DE ESTA TANDA QUE SÍ ESTABA LIBRE, medido: cero ocurrencias del literal en todo `src/` y `app/` fuera de esta línea (los otros dos, la prueba del explorador en `bienvenida.tsx` y el desvío de `recuperar.tsx`, venían clasificados "libres" y están CLAVADOS). ⛔ Y NO ES UNA ADVERTENCIA DE DINERO: dice de dónde sale la lista, no dónde quedó la plata; el estado vacío y el aviso de escrow de `ResetWarning` quedan sueltos y a la vista. ⛔ Δ0 DE LÍNEAS (5 por 5): este archivo recibe muchas citas por número y las 3 de acá abajo las nombra el comentario del `HistoryGroups`; el número y su definición viven en `:44`. */}
+        <details>
+          <summary className="cursor-pointer text-label text-stone">¿Falta un envío?</summary>
+          <p className="mt-ajustado text-label text-stone">Son los envíos guardados en este dispositivo. Si borraste los datos del navegador o entrás desde otro, acá no van a aparecer aunque existan.</p>
+        </details>
       </Card>
 
       {items.length === 0 ? (

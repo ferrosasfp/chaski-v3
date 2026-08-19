@@ -22,6 +22,7 @@ import {
   beneficiary,
 } from "../../test-support/fakes";
 import { Remittance } from "../../domain/remittance";
+import { CLAVE_KYC_PENDIENTE, LocalKycPendingStore } from "../../infrastructure/kyc-pending-store";
 import { ResumeKyc } from "./resume-kyc";
 
 const ADDR = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
@@ -86,6 +87,7 @@ async function construir(pending: KycPending) {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -139,22 +141,64 @@ describe("T-CARR-1 · un pendiente `carril:\"agente\"` se lee por el carril del 
   });
 });
 
+// 🔴 ESTE BLOQUE USA EL STORE **REAL**, Y ESO NO ES UN DETALLE: MEDIDO CON UN MUTANTE.
+//
+// La primera versión de T-CARR-2 usaba `FakeKycPendingStore` y le pasaba `carril: "directo"` a mano.
+// Con eso, el mutante que importa —invertir la normalización de `LocalKycPendingStore.get()` para que
+// un pendiente SIN el campo caiga en `"agente"`— **SOBREVIVÍA**: el doble no normaliza nada, así que
+// el test nunca ejercitaba la línea que decide. Era el test del camino feliz custodiando el agujero.
+//
+// Acá la cadena va entera: un blob de `localStorage` guardado ANTES de la HU (sin el campo) → el
+// store REAL → `ResumeKyc`. Es la única forma de que el mutante muera.
+class MemStorage implements Storage {
+  private m = new Map<string, string>();
+  get length(): number {
+    return this.m.size;
+  }
+  clear(): void {
+    this.m.clear();
+  }
+  getItem(key: string): string | null {
+    return this.m.get(key) ?? null;
+  }
+  key(i: number): string | null {
+    return [...this.m.keys()][i] ?? null;
+  }
+  removeItem(key: string): void {
+    this.m.delete(key);
+  }
+  setItem(key: string, value: string): void {
+    this.m.set(key, value);
+  }
+}
+
+/** Siembra en `localStorage` el blob TAL CUAL lo escribía el código anterior a WKH-233: sin `carril`. */
+async function conStoreReal(blob: Record<string, unknown>) {
+  vi.stubGlobal("localStorage", new MemStorage());
+  const { repo, id } = await sembrar();
+  localStorage.setItem(CLAVE_KYC_PENDIENTE, JSON.stringify({ ...blob, remittanceId: id }));
+  const pendingStore = new LocalKycPendingStore();
+  const kycStore = new FakeKycStore();
+  const kyc = gatewayQueCuenta();
+  const uc = new ResumeKyc(kyc as never, kycStore, pendingStore, repo, new FixedClock());
+  return { uc, kyc, pendingStore, kycStore, repo, id };
+}
+
 describe("T-CARR-2 · un pendiente SIN carril (los de antes de la HU) ⇒ `directo` ⇒ no se puede retomar", () => {
-  it("🔴 devuelve `failed`, limpia el pendiente, y `kyc.decision` recibe CERO llamadas", async () => {
-    // El store normaliza a `"directo"` lo que no sea exactamente `"agente"`. Acá se fuerza el caso
-    // real: un blob de `localStorage` guardado antes de WKH-233, que no trae el campo.
-    const { uc, kyc, pendingStore, kycStore } = await construir({
-      remittanceId: "x",
+  it("🔴 el blob VIEJO (sin el campo) ⇒ `failed`, pendiente limpiado, `kyc.decision` en CERO", async () => {
+    const { uc, kyc, pendingStore, kycStore } = await conStoreReal({
       sessionId: "sess-vieja-del-proveedor",
       address: ADDR,
-      carril: "directo",
+      sessionToken: "hmac-viejo",
     });
     const guardar = vi.spyOn(kycStore, "save");
     const res = await uc.execute();
 
-    // 🧬 MUTANTE: default `"agente"` ⇒ llamaría al agente ⇒ ROJO. Y el daño del mutante es preciso:
-    // esa sesión no tiene fila en `kyc_session_tokens`, el agente contestaría 401, esto devolvería
-    // `"processing"` PARA SIEMPRE y la persona quedaría girando hasta el timeout, sin salida.
+    // 🧬 MUTANTE (MEDIDO que muere acá y que SOBREVIVÍA con el doble): invertir la normalización de
+    // `LocalKycPendingStore.get()` para que lo que no sea `"directo"` caiga en `"agente"` ⇒ llamaría
+    // al agente ⇒ ROJO. Y el daño del mutante es preciso: esa sesión no tiene fila en
+    // `kyc_session_tokens`, el agente contestaría 401, esto devolvería `"processing"` PARA SIEMPRE y
+    // la persona quedaría girando hasta el timeout, sin salida y sin explicación.
     expect(kyc.decision, "se consultó al agente por una sesión que él no emitió").toHaveBeenCalledTimes(0);
     expect(res.kind).toBe("failed");
     expect(await pendingStore.get(), "el pendiente quedó vivo: el próximo arranque vuelve a girar").toBeNull();
@@ -162,6 +206,30 @@ describe("T-CARR-2 · un pendiente SIN carril (los de antes de la HU) ⇒ `direc
     // decimos que no pudimos retomar. `flow.tsx` ya tiene el aterrizaje de `failed`, con salida.
     expect(guardar, "se persistió un veredicto que nadie emitió").not.toHaveBeenCalled();
   });
+
+  it("✅ calibración inversa con el store REAL: el MISMO blob CON `carril:\"agente\"` SÍ llama al gateway", async () => {
+    // Sin esta mitad, una normalización que devolviera `"directo"` SIEMPRE también mataría al mutante
+    // de arriba — y cortaría a todo el mundo, incluida la gente que se está verificando ahora.
+    const { uc, kyc } = await conStoreReal({
+      sessionId: "sess-nueva",
+      address: ADDR,
+      carril: "agente",
+    });
+    await uc.execute();
+    expect(kyc.decision).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([["un valor desconocido", "AGENTE"], ["un typo", "agent"], ["un número", 7]])(
+    "%s en el campo `carril` cae del lado fail-closed (`directo`), no del que consulta al agente",
+    async (_caso, valor) => {
+      // Un blob de `localStorage` es atacante-controlable: un valor raro NO puede abrir el camino que
+      // le habla al agente. 🧬 MUTANTE: `carril: p.carril ?? "directo"` (que dejaría pasar cualquier
+      // string presente) ⇒ ROJO por el primer caso.
+      const { uc, kyc } = await conStoreReal({ sessionId: "s", address: ADDR, carril: valor });
+      expect((await uc.execute()).kind).toBe("failed");
+      expect(kyc.decision).toHaveBeenCalledTimes(0);
+    },
+  );
 
   it("el snapshot que devuelve es el de la remesa, para que la pantalla tenga qué mostrar", async () => {
     const { uc, id } = await construir({

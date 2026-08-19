@@ -251,19 +251,19 @@ it("T-314-UI-2: en el mínimo exacto el botón SÍ habilita y no hay advertencia
 });
 
 // ── T-UI-2 — 🔴 REESCRITO POR WKH-233: la tarjeta YA NO MUESTRA DATOS DE IDENTIDAD ───────────────
-// ⚠️ ESTE `it` MEDÍA "nombre completo + documento enmascarado en pantalla", y eso dejó de existir: el
-// agente de KYC NO devuelve ningún dato de identidad (ni nombre, ni apellidos, ni tipo/número de
-// documento, ni sus últimos 4). Lo que el test custodiaba —que el número COMPLETO nunca esté en el
-// DOM— se conserva y es MÁS fuerte: ahora NINGÚN campo de identidad puede estar, enmascarado o no.
-it("T-UI-2: la tarjeta NO muestra nombre ni documento en NINGUNA de sus dos ramas (WKH-233/D-2)", async () => {
-  const { container } = render(<RemittanceFlow pasoInicial="send" container={buildTestContainer()} />);
+// ⚠️ MEDÍA "nombre completo + documento enmascarado en pantalla", y eso dejó de existir: el agente NO
+// devuelve ningún dato de identidad. 🔴 Y MIDE LAS **DOS** RAMAS, medido con un mutante: la versión
+// anterior sólo miraba la rama "sin verificar", y con eso un `${id.firstName}` repuesto en la rama
+// VERDE **SOBREVIVÍA**. El fixture positivo tiene que ejercitar el agujero, no esquivarlo.
+it.each([
+  ["sin verificar", { identity: null }, /Identidad sin verificar/],
+  ["verificada", { identity: null, realVerified: true, verifiedAt: "2026-08-19T10:00:00.000Z" }, /Identidad verificada/],
+])("T-UI-2: en la rama «%s» la tarjeta NO muestra nombre ni documento (WKH-233/D-2)", async (_c, over, marca) => {
+  const cont = buildTestContainer({ kyc: new FakeKycGateway(over) });
+  const { container } = render(<RemittanceFlow pasoInicial="send" container={cont} />);
   await goToConfirm();
-  // 🧬 MUTANTE: reponer `${id.firstName}` (o el documento) en `IdentityBadge` ⇒ ROJO.
-  for (const dato of ["Test Quispe Mamani", "DNI", "••••5678", "12345678"]) {
-    expect(container.textContent, `la tarjeta mostró «${dato}», que el agente no devuelve`).not.toContain(dato);
-  }
-  // ✅ Calibración: la tarjeta SÍ está en pantalla (un DOM vacío también pasaría lo de arriba).
-  expect(await screen.findByText(/Identidad sin verificar/)).toBeInTheDocument();
+  expect(await screen.findByText(marca)).toBeInTheDocument(); // ✅ calibración: la tarjeta SÍ está
+  for (const d of ["Test Quispe Mamani", "DNI", "••••5678", "12345678"]) expect(container.textContent, `la tarjeta mostró «${d}»`).not.toContain(d);
 });
 
 // ── T4 — AC-7: control reset visible solo con address (WKH-184) ──────────────
@@ -419,7 +419,7 @@ it("T-AC4b: local verificado + el servidor dice `absent` ⇒ va a review, y NO s
 // (`realVerified: true`). El default de `FakeKycGateway` no lo declara y por eso cae en la tarjeta de
 // "sin verificar": estos dos tests hablan del camino verificado, así que lo declaran. ⚠️ WKH-233: lo
 // que gatea el badge dejó de ser la PROVENIENCIA y pasó a ser el juicio del agente.
-const kycRealGateway = () => new FakeKycGateway({ provenance: KYC_PROVENANCE_LIVE, realVerified: true, verifiedAt: "2026-08-19T10:00:00.000Z" });
+const kycRealGateway = () => new FakeKycGateway({ provenance: KYC_PROVENANCE_LIVE, realVerified: true, verifiedAt: "2026-08-19T10:00:00.000Z", identity: null }); // 🔴 `identity: null` NO es decorativo: es lo que el agente devuelve SIEMPRE, y sin él T-UI-1 no ejercita el `if (!id) return null` que mide (MEDIDO: con identidad, ese mutante SOBREVIVÍA)
 
 // ── T-UI-1 — DT-13(b): con `identity: null` la tarjeta RENDERIZA igual ────────
 it("T-UI-1: el paso confirm muestra la tarjeta de identidad VERIFICADA aunque `identity` sea null", async () => {

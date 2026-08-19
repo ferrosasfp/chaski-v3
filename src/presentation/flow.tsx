@@ -4013,9 +4013,9 @@ function useVueltaPorEnlace(i: {
         res = await c.recorridoPorEnlace.completar({ remittanceId: remId });
       } catch (e) {
         // ⛔ NO SE TRAGA. Una vuelta que revienta es algo que la persona tiene que poder leer. La causa
-        // se DERIVA del error y nunca se escribe como literal en este archivo: el candado de copy
-        // cuenta las causas del vocabulario del enlace que aparecen en `src/presentation`, y hasta que exista el
-        // `Record` con todas (once al cerrar la ola 4, catorce desde el re-AR it2), escribir una sola acá lo rompe a propósito.
+        // se DERIVA del error y nunca se escribe como literal en este archivo. ⚠️ ACÁ DECÍA QUE ESO LO VIGILA UN CANDADO —«el candado de copy cuenta las causas del vocabulario del enlace que aparecen en `src/presentation` … escribir una sola acá lo rompe a propósito»— Y HOY ES FALSO (F4/F4-3). ⛔ PREEXISTENTE DE WKH-358, no de la HU del PoP: `git blame` sobre estas líneas da `b7530ae` y `f2b1090`, y el cambio que las volvió falsas es `9a32fa5`, los tres de esa ola.
+        // MEDIDO al cerrar F4, no leído del diff: con una causa del vocabulario escrita como literal de `string` en ESTE archivo, `../infrastructure/solana/deeplink/deeplink-callers.test.ts` da **8 passed (8)**. No lo rompe. La razón es que el candado CAMBIÓ PARA MEJOR (CR/BLQ-BAJO-5): dejó de medir PRESENCIA DE TEXTO —que un simple comentario satisfacía, y el auto-blindaje de esta HU documenta tres veces que eso pasó— y pasó a medir COMPORTAMIENTO, `humanError(c) !== DEFAULT_DE_HUMAN_ERROR`. Lo que quedó viejo es la prosa, no el candado.
+        // ⇒ LO QUE SIGUE VIGENTE, Y ES LO ÚNICO QUE HAY QUE OBEDECER ACÁ: derivar la causa del error es correcto por sí mismo, y ⛔ escribir un literal en este archivo NO LO CAZA NADIE. Lo que el candado sí garantiza es lo otro: que ninguna causa del vocabulario llegue a la pantalla sin copy propio.
         limpiarLaBarra();
         if (vivo.valor) alFallar((e as Error).message);
         return;

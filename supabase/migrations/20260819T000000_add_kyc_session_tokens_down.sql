@@ -1,0 +1,35 @@
+-- 20260819T000000_add_kyc_session_tokens_down.sql — reversa de
+-- 20260819T000000_add_kyc_session_tokens.sql. NO aplicar: la aplica el founder (accion gated).
+-- Base: bdwv. ⛔ PROHIBIDO caldz (mainnet).
+--
+-- 🔴 ESTE `down` ES DESTRUCTIVO Y CORTA EL KYC ENTERO. No es simetrico con el `up`.
+--
+-- Con `KYC_AGENT_BASE_URL` seteada, esta tabla es la UNICA fuente del `decisionToken` que autoriza a
+-- leer la decision de una sesion. Sin fila:
+--   · `app/api/kyc/decision/route.ts` corta con 502 ⇒ NADIE puede terminar su verificacion, ni
+--     siquiera quien ya escaneo el documento y esta esperando el resultado;
+--   · `resolvePayoutAuthority` corta con `kyc_ownership_mismatch` ⇒ `prepare` responde
+--     `payout_not_authorized`/403 ⇒ NADIE PUEDE PAGAR.
+--
+-- ⇒ Ejecutar este `down` con el codigo nuevo desplegado deja a TODA la gente verificada sin poder
+--   cobrar, y a toda la que este a mitad de una verificacion sin poder terminarla. El dato NO se
+--   puede reconstruir: el `decisionToken` lo emitio el agente UNA vez, al crear la sesion, y no hay
+--   ningun endpoint para re-emitirlo (CD-21).
+--
+-- ⇒ Y APAGAR LA ENV NO ALCANZA. Quitar `KYC_AGENT_BASE_URL` frena las sesiones NUEVAS, pero las
+--   lecturas en vuelo se enrutan por la FILA del token y por el `carril` del pendiente, nunca por la
+--   env (D-1/DT-3a): con la tabla borrada esas lecturas siguen intentando y cortan igual.
+--
+-- ⛔ Y EL ROLLBACK DE WKH-233 TAMPOCO ES ROTAR `KYC_DECISION_TOKEN_SECRET` EN EL AGENTE. Eso es un
+--   CORTE (CD-21): invalida TODOS los tokens en vuelo, incluidos los de personas ya verificadas que
+--   todavia no cobraron, y no hay donde re-emitirlos.
+--
+-- Orden seguro para revertir, y en este orden:
+--   1. QUITAR `KYC_AGENT_BASE_URL` del proveedor. Las sesiones NUEVAS vuelven a la simulacion
+--      (`/api/kyc/session` responde 501 y el adapter cae al fallback), byte-identico al demo previo.
+--   2. RE-DESPLEGAR EL CODIGO ANTERIOR a WKH-233 (el que le habla al proveedor de KYC directo). Esto
+--      es lo que devuelve la capacidad de verificar y de pagar; quitar la env sola no lo hace, porque
+--      los pendientes con `carril: "agente"` siguen buscando su fila.
+--   3. Verificar que una verificacion completa y un pago completo funcionan con ese codigo.
+--   4. Recien entonces, este `down`.
+drop table if exists public.kyc_session_tokens;

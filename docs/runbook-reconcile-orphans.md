@@ -8,18 +8,46 @@
 > apoyarte en eso: al 2026-08-19 **ese workflow todavía no corrió ni una vez**, y hay dos
 > pre-requisitos founder-only pendientes. Están medidos en la sección de abajo.
 
-## ⛔ Estado al 2026-08-19: este cron TODAVÍA NO CORRIÓ NI UNA VEZ
+## ✅ Estado al 2026-08-19 12:30 UTC: el cron CORRE, y su primera corrida encontró hallazgos reales
 
-Esto no es una advertencia genérica: es una **medición**, y va antes que todo lo demás porque cambia
-cómo se lee el resto del documento. Faltan dos pre-requisitos, los dos founder-only, y **ninguno de
-los dos se resuelve mergeando el `.yml`**.
+> ⚠️ **Esta sección decía, hasta las 11:46 UTC de hoy, «este cron TODAVÍA NO CORRIÓ NI UNA VEZ».**
+> Era cierto cuando se escribió y dejó de serlo sin que nadie editara el archivo. Se deja anotado
+> porque es exactamente el modo de falla que este repo persigue: **una medición correcta que envejece
+> sola.**
 
-| Pre-requisito | Estado medido al 2026-08-19 | Con qué se midió |
+Los cuatro pre-requisitos, **medidos hoy**, y las dos ramas del job **observadas en producción**:
+
+| Pre-requisito | Estado medido al 2026-08-19 12:30 UTC | Con qué se midió |
 |---|---|---|
-| El workflow registrado en GitHub | **NO** — la API lista sólo `ci.yml` | `gh api repos/ferrosasfp/chaski-v3/actions/workflows --jq '.workflows[].path'` |
-| Alguna corrida, de cualquier evento | **NO** — el workflow no existe para GitHub | `gh run list --workflow=reconcile-orphans.yml` ⇒ **HTTP 404** |
-| El secreto cargado en los Secrets de Actions | **NO** — el repo tiene cero | `gh api repos/ferrosasfp/chaski-v3/actions/secrets` ⇒ `{"total_count":0}` |
-| El backlog real de `prepared` huérfanas | **SIN MEDIR** — exige el valor del secreto, que nadie tiene acá | — |
+| El workflow registrado en GitHub | ✅ **SÍ**, `state: active` | `gh api repos/ferrosasfp/chaski-v3/actions/workflows` |
+| Una corrida con **`event: schedule`** — el único nivel que prueba el registro | ✅ **SÍ**: `2026-08-19T11:46:15Z` | `gh api …/workflows/reconcile-orphans.yml/runs` |
+| El secreto en los Secrets de Actions | ✅ **SÍ**, cargado 11:51:35 UTC | `gh api …/actions/secrets` ⇒ `total_count=1` |
+| El backlog real de `prepared` huérfanas | ✅ **MEDIDO**: `preparedOrphans.total=6`, `failed=0`, `manualReview=19` | la corrida de las 11:51 |
+
+### Las dos ramas, observadas con 5 minutos de diferencia
+
+**La corrida programada de las 11:46, ANTES de que existiera el secreto** — el fail-fast, en producción:
+
+```
+2. el endpoint responde 200 (transporte)  =>  FAILURE
+3. sin hallazgos que revisar              =>  SKIPPED
+   ::error secreto ausente (L1)
+```
+
+Cortó en el primer paso, **se saltó el resto y nunca tocó la red**, y la anotación trae el comando
+exacto. Es el comportamiento que los tests medían tres veces; acá quedó observado sin que nadie lo
+provocara.
+
+**La corrida de las 11:51, con el secreto puesto** — la señal real:
+
+```
+2. el endpoint responde 200 (transporte)  =>  SUCCESS
+3. sin hallazgos que revisar              =>  FAILURE
+   preparedOrphans.total=6  failed=0  manualReview=19
+```
+
+⚠️ **A partir de acá el job va a estar ROJO cada hora hasta que alguien actúe sobre esas filas.** Es la
+señal **pegajosa**, y es deliberado — ver más abajo por qué la decisión NO es bajarle el volumen.
 
 **El primero se resuelve con el push**: en cuanto el `.yml` entre a `main`, GitHub registra el
 `schedule:` y el workflow empieza a correr cada hora. Esa es la mitad fácil.
@@ -90,6 +118,29 @@ cuando más se retrasan los `schedule`. Un minuto no redondo es la mitigación b
 
 ⚠️ Si cambiás el `cron:` del workflow, esta línea tiene que cambiar con él: hay un test que compara
 las dos y se pone rojo si se despegan.
+
+### 🔴 El `schedule` se retrasa, y hay que saber cuánto antes de diagnosticar nada
+
+**Medido el 2026-08-19**: programado **11:23**, corrió **11:46:15** ⇒ **23 minutos de retraso**.
+
+**Por qué esto va en el runbook y no en un comentario del `.yml`**: sin este dato, quien mire a los 5
+minutos del horario ve **cero corridas** y concluye que el cron no está registrado. Ya pasó hoy: a las
+11:30 la API devolvía `total_count=0` y **no había forma de distinguir «demora» de «registro roto»**
+sin esperar. Es una hora de diagnóstico buscando un bug que no existe.
+
+⚠️ **Y el dato incómodo**: la sección de arriba explica que se eligió el minuto 23 en vez del 0
+*porque* el arranque de hora es el pico donde más se retrasan los `schedule`. **Se retrasó 23 minutos
+igual.** La mitigación reduce el riesgo, **no lo elimina** — no la cuentes como garantía.
+
+**Cómo diagnosticar bien**, en este orden:
+
+1. **¿Está registrado?** `gh api repos/ferrosasfp/chaski-v3/actions/workflows` — si el `.yml` no
+   aparece, no es demora: no está registrado, y lo que falta es el push a `main`.
+2. **¿Hay alguna corrida?** `gh api …/workflows/reconcile-orphans.yml/runs`.
+   ⚠️ **`gh run list` devuelve `HTTP 404` con exit code 0 si le llega un pipe** — leé el texto, no el
+   código de salida.
+3. **Recién si está registrado y no hay corridas después de ~40 minutos del horario**, tratalo como
+   problema. Antes de eso, es demora.
 
 ## Las dos señales
 

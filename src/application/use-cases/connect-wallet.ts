@@ -52,7 +52,7 @@ export class ConnectWallet {
      *  el PoP opcional (el servidor lo sigue exigiendo), sino que describe una composición que no lo
      *  cableó. El que sí es requerido, y donde el fail-open importaría, es el del money-path
      *  (`pop`, `./confirm-and-send.ts:174`). Quien lo cablea de verdad es
-     *  (`connectWallet`, `../../composition/container.ts:185`), y eso tiene test propio. */
+     *  (`connectWallet`, `../../composition/container.ts:185`), y eso tiene test propio: `T-CABLE-2`, en `../../composition/container.test.ts`. ⚠️ «TIENE TEST PROPIO» FUE FALSO HASTA EL CIERRE DE F4 (F4/F4-1): no había ningún `it` que prendiera la bandera y ejercitara el `connectWallet` del container a la vez, así que BORRAR ese 4º argumento pasaba `tsc` —por este mismo `?`— y dejaba la suite entera en verde. El candado que faltaba es lo que se escribió; el código no cambió. */
     private readonly pop?: PruebaDePosesionPorEnlace,
   ) {}
 

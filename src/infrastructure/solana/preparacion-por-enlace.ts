@@ -6,8 +6,8 @@
 //     lecturas de cuenta.
 //   · en `solana-wallet.ts` tampoco, y por un motivo MEDIDO y no estético: ese archivo tiene
 //     [[CENSO src/infrastructure/solana-wallet.ts lineas=2498]] líneas y recibe
-//     [[CENSO src/infrastructure/solana-wallet.ts entrantes=126]] citas ancladas, de las que
-//     [[CENSO src/infrastructure/solana-wallet.ts entrantes-desde-1233=59]] apuntan de `:1233` para
+//     [[CENSO src/infrastructure/solana-wallet.ts entrantes=127]] citas ancladas, de las que
+//     [[CENSO src/infrastructure/solana-wallet.ts entrantes-desde-1233=60]] apuntan de `:1233` para
 //     abajo, así que insertar en el medio las rompe a todas. ⚠️ LOS TRES YA ENVEJECIERON DOS VECES ACÁ
 //     («2247/85/34» ⇒ «2362/116/50» ⇒ los de hoy) sin que nadie editara la frase, y por eso desde el
 //     fix-pack del CR NO se escriben: son MARCADORES que `citas-ancladas.test.ts` verifica en cada `npm test` y que se ponen ROJOS solos. Lo que no envejece es el criterio (insertar arriba corre todo lo de abajo); la cifra sí, y ahora tiene quien la vigile.

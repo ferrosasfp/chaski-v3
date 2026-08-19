@@ -1,7 +1,7 @@
 "use client";
 import { ArrowRight, ShieldCheck } from "lucide-react";
 import { resolveSolanaNetworkConfig } from "../infrastructure/chain";
-import { Aviso, Button, Card, Muted } from "./ui"; import { Grecas } from "./grecas"; import { MARCA_SRC } from "./marca";
+import { Aviso, Button, Card, Muted } from "./ui"; import { Grecas } from "./grecas"; import { MARCA_SRC } from "./marca"; // HU-068 (cierre, CR/MNR-1): LOS DOS NUEVOS EN ESTA LÍNEA, no en dos nuevas — este archivo RECIBE citas ancladas por número y las tres apuntan más abajo: (`resolveSolanaNetworkConfig`, `./bienvenida.tsx:314`) desde `marca.ts:46`, (`Card`, `./bienvenida.tsx:295`) desde `grecas.tsx:36` y (`Grecas`, `./bienvenida.tsx:212`) desde `bienvenida-composicion.test.tsx:854`. Separarlos las corre a las tres. Las ancladas las caza `citas-ancladas.test.ts` con un rojo; las SUELTAS de este archivo no las mira nadie y se rompen en silencio. ⛔ Y si agregás uno, va ANTES de este `//`: pegarlo al final lo deja comentado y `noUnusedImports` no ve un import inexistente (CD-15)
 
 /**
  * WKH-063 / AC-1 · LA PRIMERA PANTALLA, que hasta esta HU no existía.
@@ -218,7 +218,7 @@ export function Bienvenida({ onEmpezar, disabled }: { onEmpezar: () => void; dis
           src={MARCA_SRC}
           alt=""
           aria-hidden="true"
-          className="relative h-8 w-auto object-contain"
+          className="relative h-icono-lg w-auto object-contain"
         />
       </div>
       <Card className="space-y-holgado text-center">

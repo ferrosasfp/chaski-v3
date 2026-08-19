@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { cn } from "./cn";
 import { LEMA, LOGO_SRC, NOMBRE, pildoraDeRed } from "./marca";
-import { motivoParaNoMostrar, type MotivoParaNoMostrar } from "./splash-puerta"; import { Grecas as GrecasMotivo } from "./grecas";
+import { motivoParaNoMostrar, type MotivoParaNoMostrar } from "./splash-puerta"; import { Grecas as GrecasMotivo } from "./grecas"; // HU-068 (cierre, CR/MNR-1): EN ESTA LÍNEA, no en una nueva — UNA sola línea acá mueve `function Grecas` de `:245` a `:246` y rompe la cita (`Grecas`, `./splash.tsx:245`) de `flow.tsx:1839`, que esta HU no puede tocar. El motivo largo está escrito 246 líneas más abajo, en `splash.tsx:251`. Y ya pasó una vez: auto-blindaje HU-066 W2, seis renglones de prosa corrieron esta definición de `:235` a `:245`. ⛔ Un import nuevo va ANTES de este `//` (CD-15)
 
 /**
  * HU-066 · La pantalla de bienvenida de marca (splash), que es lo PRIMERO que se ve.

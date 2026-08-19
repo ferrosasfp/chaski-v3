@@ -660,10 +660,10 @@ describe("J-AC1 (HU-068/AC-1): la entrada monta un elemento visual DE MARCA, y u
 });
 
 describe("J-AC4 (HU-068/AC-4): los `className` de `bienvenida.tsx` hablan por ROL, y el barrido se CALIBRA", () => {
-  // La misma forma que `ola-2-pantallas.test.tsx:91-100`, con su limitación declarada: reconoce
-  // `className="…"` y `className={cn(…)}` y NADA MÁS. Un `className={`…`}` sería INVISIBLE acá
-  // (`ola-2-pantallas.test.tsx:94`) y por eso CD-12 lo prohíbe en la banda: el guard aplaudiría el
-  // vacío. Toma el SOURCE como argumento —y no un path— justamente para que se pueda calibrar.
+  // La PRIMERA RAMA del barrido de `ola-2-pantallas.test.tsx:94` — y NO "la misma forma" (CR/MNR-5b):
+  // aquél tiene una SEGUNDA rama (`:98`) para los mapas de variantes que esta copia no tiene. Reconoce
+  // `className="…"` y `className={cn(…)}` y NADA MÁS: un `className={`…`}`, un ternario o una variable
+  // son INVISIBLES acá, por eso CD-12 los prohíbe en la banda y por eso existe el piso derivado de abajo.
   function clasesDe(src: string): string[] {
     const out: string[] = [];
     for (const m of src.matchAll(/className=(?:"([^"]*)"|\{cn\(([\s\S]*?)\)\})/g)) {
@@ -729,7 +729,7 @@ describe("J-AC4 (HU-068/AC-4): los `className` de `bienvenida.tsx` hablan por RO
     expect(sitios, "ANTIVACUIDAD: con 0 atributos en el archivo, todo lo de abajo pasa por vacío").toBeGreaterThan(0);
     expect(
       clasesDe(src).length,
-      "hay atributos que el barrido NO ve (¿alguno pasó a template literal?): AC-4 quedaría ciego ahí",
+      "hay `className` que el barrido NO ve, y AC-4 queda ciego ahí. Las TRES formas dan este mismo rojo: template literal, TERNARIO (`className={x ? \"a\" : \"b\"}`, el más común de los tres en React) o variable (`className={estilo}`) ⇒ ACCIÓN: volvela a `className=\"…\"` o `className={cn(…)}`, o extendé `clasesDe` Y agregale un caso al calibrador de abajo",
     ).toBe(sitios);
   });
 
@@ -986,3 +986,13 @@ describe("J-MNR1 (fix-pack AR/MNR-1): el tono de la banda cae DENTRO de la venta
 //   · CD-12 en `grecas.tsx`. El barrido de `J-AC4` lee **sólo `bienvenida.tsx`**, así que la forma del
 //     `className` de `grecas.tsx` la sostiene la revisión.
 //   · El parseo del `stroke` del `it` nuevo: no se mutó un `<path>` sin `stroke` legible.
+//   · 🔴 CR/MNR-4 — LA ESCAPATORIA QUE QUEDA EN ESTE MISMO ARCHIVO, Y EL CALIBRADOR NO LA CAZA: el piso
+//     derivado de arriba cerró la de BAJAR un literal, pero ENSANCHAR el regex de `clasesDe` (`:669`) de
+//     `\{cn\((...)\)\}` a `\{(...)\}` restaura la igualdad `clasesDe === sitios` y vuelve a CEGAR AC-4,
+//     con este archivo en VERDE. Medido por simulación (no ejecutando el `it` mutado): sobre una fuente con
+//     un `text-sm` y un `text-[20px]` VIVOS dentro de un ternario, el regex de hoy da 2/3 ⇒ ROJO, el ancho
+//     da 3/3 ⇒ VERDE y `culpables()` devuelve `[]`; y el CALIBRADOR de `:736-744` sigue dando sus 2
+//     culpables con el regex ancho, así que NO lo distingue. Es menor que la del 10 —aquélla se disparaba
+//     editando el archivo OBJETIVO, ésta exige editar el GUARD a propósito— y por eso queda declarada acá
+//     en vez de arreglada. Si algún día se cierra: un caso de calibrador con `className={x ? "text-sm" : "a"}`
+//     que exija que `clasesDe` NO lo capture.

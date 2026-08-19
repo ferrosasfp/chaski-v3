@@ -29,6 +29,13 @@ vi.mock("../../../../src/infrastructure/rate-limit", async (importOriginal) => {
 
 // El FLAG. `null` = `KYC_VERDICT_STORE_ENABLED` ausente (lo que devuelve la factory real, ver
 // `supabase-kyc-verdicts.ts`). Es la única cosa que cambia entre los dos casos de abajo.
+// WKH-233 — el store del `decisionToken`. HONESTO (aplica el filtro por dueño de verdad, CD-19): un
+// `mockResolvedValue` fijo dejaría pasar la pérdida del `.eq("owner_address", …)`, que es el IDOR.
+const { getTokenStoreMock } = vi.hoisted(() => ({ getTokenStoreMock: vi.fn() }));
+vi.mock("../../../../src/infrastructure/persistence/supabase-kyc-session-tokens", () => ({
+  getKycSessionTokenStore: getTokenStoreMock,
+}));
+
 const { getVerdictStoreMock } = vi.hoisted(() => ({ getVerdictStoreMock: vi.fn() }));
 vi.mock("../../../../src/infrastructure/persistence/supabase-kyc-verdicts", () => ({
   getKycVerdictStore: getVerdictStoreMock,
@@ -131,11 +138,18 @@ describe("prepare + autoridad REAL — la semántica del flag OFF (AR/BLQ-ALTO-1
     // flag en "" para forzar el carril punto a punto; los dos se fueron con ese carril.
     vi.stubEnv("WASIAI_A2A_GATEWAY_URL", "https://gateway.test");
     vi.stubEnv("WASIAI_A2A_AGENT_KEY", "ak_flag_off_secret");
-    // 🔴 CON key: es lo que hace que la autoridad REAL tome su camino de producción (consultar a
-    // Didit) en vez de la rama `simulated_dev`. Sin esto el test mediría el demo, no el money-path.
-    vi.stubEnv("DIDIT_API_KEY", "didit-key");
-    vi.stubEnv("DIDIT_ENV", "mock");
-    vi.stubEnv("DIDIT_BASE_URL", "http://localhost:9999/didit-mock");
+    // 🔴 CON host del agente: es lo que hace que la autoridad REAL tome su camino de producción
+    // (consultar al agente de KYC) en vez de la rama `simulated_dev`. Sin esto el test mediría el
+    // demo, no el money-path.
+    vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test");
+    vi.stubEnv("KYC_AGENT_INVOKE_SECRET", undefined);
+    getTokenStoreMock.mockReset();
+    getTokenStoreMock.mockReturnValue({
+      // El filtro por dueño, aplicado: sólo devuelve el token si el par (sesión, dirección) coincide.
+      getForOwner: vi.fn(async (sessionId: string, owner: string) =>
+        sessionId === ROW_ID && owner === ADDR ? "k1.token-del-agente" : null,
+      ),
+    });
     checkRouteRateLimitMock.mockReset();
     checkRouteRateLimitMock.mockResolvedValue({ ok: true });
     getVerdictStoreMock.mockReset();
@@ -143,11 +157,21 @@ describe("prepare + autoridad REAL — la semántica del flag OFF (AR/BLQ-ALTO-1
     urls = [];
     fetchMock = vi.fn(async (url: string) => {
       urls.push(String(url));
-      if (String(url).includes("/v3/session/")) {
-        // La autoridad de identidad contestando que SÍ, y con el `vendor_data` que su ownership check
-        // exige: es la MISMA dirección del caller, o sea el pagador legítimo.
+      if (String(url).includes("/api/agents/")) {
+        // El agente de KYC contestando que SÍ, con su juicio ya hecho: `payoutAllowed: true` exige,
+        // por construcción, que la identidad reclamada COINCIDA — o sea el pagador legítimo.
         return new Response(
-          JSON.stringify({ status: "Approved", session_id: ROW_ID, vendor_data: ADDR }),
+          JSON.stringify({
+            terminal: true,
+            status: "Approved",
+            approved: true,
+            riskLevel: "low",
+            verificationId: ROW_ID,
+            provenance: "didit",
+            payoutAllowed: true,
+            reasons: [],
+            identityMatches: true,
+          }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
       }
@@ -193,7 +217,7 @@ describe("prepare + autoridad REAL — la semántica del flag OFF (AR/BLQ-ALTO-1
     ).toBe(200);
     // El id viaja DENTRO de la URL que la autoridad fetchea, así que acá se mide contra la
     // implementación real y no contra el argumento de un espía.
-    const authorityUrl = urls.find((u) => u.includes("/v3/session/"));
+    const authorityUrl = urls.find((u) => u.includes("/api/agents/"));
     expect(authorityUrl, "la autoridad real no se consultó").toBeDefined();
     expect(
       authorityUrl,

@@ -1,10 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpPayoutAuthorityGateway } from "../../../../src/infrastructure/payout/payout-authority-gateway";
 
-// WKH-205: el rate-limit corre cuando DIDIT_API_KEY está seteado. Los tests de autoridad no fijan
+// WKH-233: el rate-limit corre cuando KYC_AGENT_BASE_URL está seteada (misma semántica de antes,
+// sin la env del proveedor). Los tests de autoridad no fijan
 // Upstash env (fail-closed → 503) → mockeamos checkRouteRateLimit a { ok:true } por default y lo
 // overrideamos en los tests AC-4 (!ok → 429) / AC-6 (unavailable → 503). clientIp/PAYOUT_VALIDATE_RL
 // se conservan reales (rest-spread del módulo original).
+// WKH-233 — el store del `decisionToken`, HONESTO: aplica el filtro por dueño de verdad (CD-19).
+const { getTokenStoreMock } = vi.hoisted(() => ({ getTokenStoreMock: vi.fn() }));
+vi.mock("../../../../src/infrastructure/persistence/supabase-kyc-session-tokens", () => ({
+  getKycSessionTokenStore: getTokenStoreMock,
+}));
+
 const { checkRouteRateLimitMock } = vi.hoisted(() => ({ checkRouteRateLimitMock: vi.fn() }));
 vi.mock("../../../../src/infrastructure/rate-limit", async (importOriginal) => {
   const actual =
@@ -27,10 +34,23 @@ function req(payload: unknown): Request {
   });
 }
 
-function diditOk(raw: Record<string, unknown>) {
+/** El agente de KYC contestando. `over` pisa el veredicto ya juzgado; `payoutAllowed` es TODO el gate. */
+function agenteOk(over: Record<string, unknown> = {}) {
   return vi.fn(async (_url: string, _init?: RequestInit) => ({
     ok: true,
-    json: async () => raw,
+    status: 200,
+    json: async () => ({
+      terminal: true,
+      status: "Approved",
+      approved: true,
+      riskLevel: "low",
+      verificationId: VID,
+      provenance: "didit",
+      payoutAllowed: true,
+      reasons: [],
+      identityMatches: true,
+      ...over,
+    }),
   }));
 }
 
@@ -39,17 +59,21 @@ beforeEach(() => {
   // Default: rate-limit permite el paso (los tests de autoridad no lo ejercitan).
   checkRouteRateLimitMock.mockReset();
   checkRouteRateLimitMock.mockResolvedValue({ ok: true });
-  // Ambiente de Didit (fail-closed): los tests con DIDIT_API_KEY llegan al guard 3 de authority.ts,
-  // que sin DIDIT_ENV devuelve 503 kyc_authority_misconfigured. Se fija "mock" para que un
-  // DIDIT_ENV=live de la shell/CI no pueda resolver el host REAL de Didit desde un test.
-  vi.stubEnv("DIDIT_ENV", "mock");
-  vi.stubEnv("DIDIT_BASE_URL", "http://localhost:9999/didit-mock");
+  vi.stubEnv("KYC_AGENT_INVOKE_SECRET", undefined);
+  vi.stubEnv("VERCEL_ENV", undefined);
+  // La fila del token existe para el par legítimo `(VID, ADDR)` y para ningún otro.
+  getTokenStoreMock.mockReset();
+  getTokenStoreMock.mockReturnValue({
+    getForOwner: vi.fn(async (s: string, o: string) =>
+      s === VID && o === ADDR ? "k1.token-del-agente" : null,
+    ),
+  });
 });
 
 describe("POST /api/payout/validate — autoridad server-side (WKH-180)", () => {
   // ── Guard 1: sin key ────────────────────────────────────────────────────────
   it("VERCEL_ENV=production + sin key → 503 authorized:false kyc_authority_unavailable, fetch NOT called (AC-3, CD-4)", async () => {
-    vi.stubEnv("DIDIT_API_KEY", "");
+    vi.stubEnv("KYC_AGENT_BASE_URL", undefined);
     vi.stubEnv("VERCEL_ENV", "production");
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -60,7 +84,7 @@ describe("POST /api/payout/validate — autoridad server-side (WKH-180)", () => 
   });
 
   it("sin VERCEL_ENV + sin key → 200 authorized:true simulated_dev, fetch NOT called (AC-4)", async () => {
-    vi.stubEnv("DIDIT_API_KEY", "");
+    vi.stubEnv("KYC_AGENT_BASE_URL", undefined);
     vi.stubEnv("VERCEL_ENV", "");
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -72,7 +96,7 @@ describe("POST /api/payout/validate — autoridad server-side (WKH-180)", () => 
 
   // ── Guard 2: formato → COLAPSA a kyc_not_authorized/200 (WKH-205 AC-1, oráculo cerrado) ─────────
   it("verificationId '' (con key) → 200 kyc_not_authorized (colapsado), fetch NOT called (AC-1/AC-5)", async () => {
-    vi.stubEnv("DIDIT_API_KEY", "test-key");
+    vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test");
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const res = await POST(req({ verificationId: "", address: ADDR }));
@@ -82,7 +106,7 @@ describe("POST /api/payout/validate — autoridad server-side (WKH-180)", () => 
   });
 
   it("verificationId ausente (con key) → 200 kyc_not_authorized (colapsado), fetch NOT called (AC-1/AC-5)", async () => {
-    vi.stubEnv("DIDIT_API_KEY", "test-key");
+    vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test");
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const res = await POST(req({ address: ADDR }));
@@ -97,23 +121,23 @@ describe("POST /api/payout/validate — autoridad server-side (WKH-180)", () => 
   // "Approved → authorized:true" en realidad estaba ejercitando el bypass, no el camino real
   // (la DApp siempre manda vendorData = senderAddress — kyc-gateway.ts:28).
   it("key + Didit Approved (con binding) → 200 authorized:true (AC-1)", async () => {
-    vi.stubEnv("DIDIT_API_KEY", "test-key");
-    vi.stubGlobal("fetch", diditOk({ status: "Approved", session_id: VID, vendor_data: ADDR }));
+    vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test");
+    vi.stubGlobal("fetch", agenteOk());
     const res = await POST(req({ verificationId: VID, address: ADDR }));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ authorized: true });
   });
 
   it("key + Didit Declined → 200 kyc_not_authorized (colapsado, oráculo cerrado) (AC-1)", async () => {
-    vi.stubEnv("DIDIT_API_KEY", "test-key");
-    vi.stubGlobal("fetch", diditOk({ status: "Declined", session_id: VID }));
+    vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test");
+    vi.stubGlobal("fetch", agenteOk({ approved: false, status: "Declined", payoutAllowed: false }));
     const res = await POST(req({ verificationId: VID, address: ADDR }));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ authorized: false, reason: "kyc_not_authorized" });
   });
 
   it("key + Didit !res.ok → 502 kyc_reauth_failed NO colapsa (técnico preservado) (AC-2)", async () => {
-    vi.stubEnv("DIDIT_API_KEY", "test-key");
+    vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test");
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) })));
     const res = await POST(req({ verificationId: VID, address: ADDR }));
     // AC-2: reason técnico (502) NO se colapsa a kyc_not_authorized ni a 200; conserva su forma.
@@ -122,27 +146,30 @@ describe("POST /api/payout/validate — autoridad server-side (WKH-180)", () => 
   });
 
   it("key + Didit fetch throws (timeout) → 502 authorized:false kyc_reauth_failed, NO 500 crudo (MNR-A fail-closed)", async () => {
-    vi.stubEnv("DIDIT_API_KEY", "test-key");
+    vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test");
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("The operation was aborted due to timeout"); }));
     const res = await POST(req({ verificationId: VID, address: ADDR }));
     expect(res.status).toBe(502);
     expect(await res.json()).toEqual({ authorized: false, reason: "kyc_reauth_failed" });
   });
 
-  // ── Ownership (vendor_data) ──────────────────────────────────────────────────
-  it("vendor_data mismatch vs address → 200 kyc_not_authorized (colapsado) (AC-1 ownership)", async () => {
-    vi.stubEnv("DIDIT_API_KEY", "test-key");
-    vi.stubGlobal("fetch", diditOk({ status: "Approved", session_id: VID, vendor_data: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }));
-    const res = await POST(req({ verificationId: VID, address: ADDR }));
+  // ── Ownership — WKH-233: el binding YA NO ES un eco del borde, es la FILA DEL TOKEN ────────────
+  // Antes el dueño se leía del `vendor_data` que el proveedor ecoaba en su decisión; ahora el par
+  // `(sesión, dirección)` decide si la credencial se obtiene siquiera. El desenlace observable de
+  // esta route es el MISMO, y por eso las aserciones no cambian.
+  it("dirección que NO es la dueña de la sesión → 200 kyc_not_authorized (colapsado) (AC-1 ownership)", async () => {
+    vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test");
+    vi.stubGlobal("fetch", agenteOk());
+    const res = await POST(req({ verificationId: VID, address: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ authorized: false, reason: "kyc_not_authorized" });
   });
 
   // CANDADO DE NO-REGRESIÓN: éste es el camino de la DApp (kyc-gateway.ts:28 manda siempre
   // vendorData = senderAddress). Si el fail-closed de abajo alguna vez lo rompe, se rompe la demo.
-  it("vendor_data match exacto (base58 case-sensitive) → true", async () => {
-    vi.stubEnv("DIDIT_API_KEY", "test-key");
-    vi.stubGlobal("fetch", diditOk({ status: "Approved", session_id: VID, vendor_data: ADDR }));
+  it("la dirección DUEÑA de la sesión (base58 case-sensitive) → true", async () => {
+    vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test");
+    vi.stubGlobal("fetch", agenteOk());
     const res = await POST(req({ verificationId: VID, address: ADDR }));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ authorized: true });
@@ -153,9 +180,13 @@ describe("POST /api/payout/validate — autoridad server-side (WKH-180)", () => 
   // 2026-08-04 — POST /api/kyc/session {} (público, sin credenciales) → sesión con vendor vacío →
   // aprobada por el mock → /api/payout/validate autorizaba CUALQUIER address. Tres direcciones sin
   // relación entre sí pasaron las tres.
-  it("vendor_data ausente → NO autorizado (fail-closed: sin binding no hay autorización)", async () => {
-    vi.stubEnv("DIDIT_API_KEY", "test-key");
-    vi.stubGlobal("fetch", diditOk({ status: "Approved", session_id: VID }));
+  it("sesión SIN ATAR → NO autorizado (fail-closed: sin binding no hay autorización)", async () => {
+    vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test");
+    // Una sesión creada sin prueba de posesión tiene `owner_address` NULL, y un `.eq` NUNCA matchea
+    // un NULL ⇒ `getForOwner` devuelve `null` para CUALQUIER dirección. Es el mismo desenlace que el
+    // bypass viejo producía con `vendor_data` vacío, pero ahora por construcción de la query.
+    getTokenStoreMock.mockReturnValue({ getForOwner: vi.fn(async () => null) });
+    vi.stubGlobal("fetch", agenteOk());
     const res = await POST(req({ verificationId: VID, address: ADDR }));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ authorized: false, reason: "kyc_not_authorized" });
@@ -171,8 +202,8 @@ describe("POST /api/payout/validate — autoridad server-side (WKH-180)", () => 
   ])(
     "vendor_data ausente + address ajena (%s) → NO autorizado (el bypass reproducido en prod)",
     async (_label, foreignAddress) => {
-      vi.stubEnv("DIDIT_API_KEY", "test-key");
-      vi.stubGlobal("fetch", diditOk({ status: "Approved", session_id: VID }));
+      vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test");
+      vi.stubGlobal("fetch", agenteOk());
       const res = await POST(req({ verificationId: VID, address: foreignAddress }));
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({ authorized: false, reason: "kyc_not_authorized" });
@@ -183,14 +214,14 @@ describe("POST /api/payout/validate — autoridad server-side (WKH-180)", () => 
   // no puede ser distinguible de "sesión rechazada". Por eso el reason es kyc_ownership_mismatch
   // (que ya está en el switch de validate/route.ts:76) y no uno nuevo, que caería al default y
   // saldría crudo.
-  it("vendor_data ausente es BYTE-IDÉNTICO a Declined (no abre un oráculo nuevo)", async () => {
-    vi.stubEnv("DIDIT_API_KEY", "test-key");
+  it("una sesión sin binding es BYTE-IDÉNTICA a Declined (no abre un oráculo nuevo)", async () => {
+    vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test");
 
-    vi.stubGlobal("fetch", diditOk({ status: "Approved", session_id: VID }));
-    const noBinding = await POST(req({ verificationId: VID, address: ADDR }));
+    vi.stubGlobal("fetch", agenteOk());
+    const noBinding = await POST(req({ verificationId: VID, address: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }));
     const noBindingBody = await noBinding.json();
 
-    vi.stubGlobal("fetch", diditOk({ status: "Declined", session_id: VID }));
+    vi.stubGlobal("fetch", agenteOk({ approved: false, status: "Declined", payoutAllowed: false }));
     const declined = await POST(req({ verificationId: VID, address: ADDR }));
     const declinedBody = await declined.json();
 
@@ -200,15 +231,12 @@ describe("POST /api/payout/validate — autoridad server-side (WKH-180)", () => 
 
   // ── Cero PII / key server-only ───────────────────────────────────────────────
   it("respuesta nunca contiene identity/documentNumber ni el API key (AC-7, CD-A8)", async () => {
-    vi.stubEnv("DIDIT_API_KEY", "super-secret-key");
+    vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test");
     vi.stubGlobal(
       "fetch",
-      diditOk({
-        status: "Approved",
-        session_id: VID,
-        vendor_data: ADDR,
-        id_verifications: [{ document_number: "44556677", first_name: "Ana" }],
-      }),
+      // El agente NO devuelve datos de identidad; se agregan igual como campos EXTRA para medir que
+      // ni siquiera un campo desconocido del borde puede llegar a la respuesta de esta route.
+      agenteOk({ id_verifications: [{ document_number: "44556677", first_name: "Ana" }] }),
     );
     const res = await POST(req({ verificationId: VID, address: ADDR }));
     const raw = await res.text();
@@ -221,16 +249,16 @@ describe("POST /api/payout/validate — autoridad server-side (WKH-180)", () => 
 
   // ── WKH-205 AC-1: oráculo cerrado — los 3 reasons subject son INDISTINGUIBLES ──────────────────
   it("AC-1: Declined / ownership-mismatch / verificationId-inválido → body+status BYTE-IDÉNTICOS", async () => {
-    vi.stubEnv("DIDIT_API_KEY", "test-key");
+    vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test");
 
     // (1) Didit Declined
-    vi.stubGlobal("fetch", diditOk({ status: "Declined", session_id: VID }));
+    vi.stubGlobal("fetch", agenteOk({ approved: false, status: "Declined", payoutAllowed: false }));
     const declined = await POST(req({ verificationId: VID, address: ADDR }));
     const declinedBody = await declined.json();
 
-    // (2) ownership mismatch (Approved pero vendor_data != address)
-    vi.stubGlobal("fetch", diditOk({ status: "Approved", session_id: VID, vendor_data: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }));
-    const mismatch = await POST(req({ verificationId: VID, address: ADDR }));
+    // (2) ownership mismatch: el agente diría que sí, pero la fila del token no es de este caller
+    vi.stubGlobal("fetch", agenteOk());
+    const mismatch = await POST(req({ verificationId: VID, address: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }));
     const mismatchBody = await mismatch.json();
 
     // (3) verificationId inválido (formato) — sin fetch
@@ -253,7 +281,7 @@ describe("POST /api/payout/validate — autoridad server-side (WKH-180)", () => 
     ["number", 123],
     ["string", "str"],
   ])("AC-3: body no-record (%s) con key → nunca 500 (200 kyc_not_authorized), fetch NOT called", async (_label, payload) => {
-    vi.stubEnv("DIDIT_API_KEY", "test-key");
+    vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test");
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const res = await POST(req(payload));
@@ -266,7 +294,6 @@ describe("POST /api/payout/validate — autoridad server-side (WKH-180)", () => 
 
   // ── WKH-205 AC-4: rate-limit excedido → 429, autoridad/Didit NO consultadas ───────────────────
   it("AC-4: rate-limit !ok (con key) → 429, resolvePayoutAuthority/fetch NOT called", async () => {
-    vi.stubEnv("DIDIT_API_KEY", "test-key");
     vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test"); // WKH-233: el gate del limiter mira el host del agente, no la credencial del proveedor (misma semántica: ¿demo o vivo?)
     checkRouteRateLimitMock.mockResolvedValue({ ok: false, retryAfter: 30 });
     const fetchMock = vi.fn();
@@ -280,7 +307,6 @@ describe("POST /api/payout/validate — autoridad server-side (WKH-180)", () => 
 
   // ── WKH-205 AC-6: Upstash ausente en entorno vivo → 503 fail-closed ───────────────────────────
   it("AC-6: rate-limit unavailable (con key) → 503 kyc_authority_unavailable fail-closed, fetch NOT called", async () => {
-    vi.stubEnv("DIDIT_API_KEY", "test-key");
     vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test"); // WKH-233: el gate del limiter mira el host del agente, no la credencial del proveedor (misma semántica: ¿demo o vivo?)
     checkRouteRateLimitMock.mockResolvedValue({ ok: false, unavailable: true });
     const fetchMock = vi.fn();
@@ -315,31 +341,36 @@ describe("HttpPayoutAuthorityGateway — adapter fail-closed (WKH-180, CD-A4)", 
   });
 });
 
-describe("autoridad de payout — ambiente de Didit fail-closed (guard 3)", () => {
-  it("key + SIN DIDIT_ENV → 503 kyc_authority_misconfigured; NO se re-valida contra Didit", async () => {
-    vi.stubEnv("DIDIT_API_KEY", "test-key");
-    vi.stubEnv("DIDIT_ENV", undefined);
-    vi.stubEnv("DIDIT_BASE_URL", undefined);
+describe("autoridad de payout — el host del agente, fail-closed (guard 1)", () => {
+  // ⚠️ ESTE BLOQUE REEMPLAZA al que medía el ambiente del PROVEEDOR (`DIDIT_ENV`), que se fue con el
+  // proveedor. Lo que custodiaba —que sin ambiente declarado la autoridad NUNCA autorice y NUNCA
+  // hable con el borde— se conserva, apuntado a la señal que hoy existe.
+  it("sin host del agente + VERCEL_ENV=production → 503 fail-loud; NO se consulta a nadie", async () => {
+    vi.stubEnv("KYC_AGENT_BASE_URL", undefined);
+    vi.stubEnv("VERCEL_ENV", "production");
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const res = await POST(req({ verificationId: VID, address: ADDR }));
-    // 503 (misconfig NUESTRA) y NO 502 (kyc_reauth_failed = "Didit falló"): un reason que manda a
-    // ops a mirar al partner cuando el problema es una env sin setear cuesta horas de diagnóstico.
+    // 503 (misconfig NUESTRA) y NO 502 ("el agente falló"): un reason que manda a ops a mirar al
+    // agente cuando el problema es una env sin setear cuesta horas de diagnóstico.
     expect(res.status).toBe(503);
-    expect(await res.json()).toEqual({ authorized: false, reason: "kyc_authority_misconfigured" });
-    expect(fetchMock).not.toHaveBeenCalled(); // fail-closed: nunca autoriza, nunca habla con Didit
+    expect(await res.json()).toEqual({ authorized: false, reason: "kyc_authority_unavailable" });
+    expect(fetchMock).not.toHaveBeenCalled(); // fail-closed: nunca autoriza, nunca habla con nadie
   });
 
-  it("DIDIT_ENV=live + VERCEL_ENV=preview → 503 (un preview NO re-valida contra el Didit real)", async () => {
-    // El vector real: los previews de Vercel HEREDAN las envs de producción por default.
-    vi.stubEnv("DIDIT_API_KEY", "test-key");
-    vi.stubEnv("DIDIT_ENV", "live");
-    vi.stubEnv("DIDIT_BASE_URL", undefined);
+  it("sin host del agente + VERCEL_ENV=preview → 503 (un preview tampoco autoriza por default)", async () => {
+    // El vector real: los previews de Vercel HEREDAN las envs de producción por default, así que la
+    // ausencia de la env en un preview es la señal de que ese deploy no debe autorizar nada.
+    vi.stubEnv("KYC_AGENT_BASE_URL", undefined);
     vi.stubEnv("VERCEL_ENV", "preview");
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const res = await POST(req({ verificationId: VID, address: ADDR }));
-    expect(res.status).toBe(503);
+    // ⚠️ CONSECUENCIA DICHA: en un preview SIN la env, la rama no-prod devuelve `simulated_dev` y la
+    // route lo propaga con 200. Eso NO paga: `prepare` rechaza `simulated_dev` en TODO scope de
+    // Vercel, que es donde vive el money-path. Esta route es advisory.
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ authorized: true, reason: "simulated_dev" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

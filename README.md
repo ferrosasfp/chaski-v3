@@ -448,6 +448,15 @@ npm run qa        # lint + both typechecks + tests
 `npm test` and `npm run build` on Node 22, on every push to `main` and on every pull request. The smoke
 script is deliberately not part of it: it is opt in and it moves tokens on devnet.
 
+There is a second workflow, `.github/workflows/reconcile-orphans.yml`, and it is scheduled rather than
+triggered by a push: once an hour (`23 * * * *`) it calls the admin reconciliation route in production
+with the secret in a header, and it goes red if the transport fails or if the response reports rows
+that a person has to look at. It prints only the aggregate counters, never the correlation ids: the
+logs of a public repository are public. What it does not do is stand guard. If GitHub delays or skips
+a scheduled tick there is no run, and therefore nothing turns red. That gap is written down rather
+than implied, in the header of the workflow and in `docs/runbook-reconcile-orphans.md`, which also
+says what to do about each red.
+
 ## Architecture
 
 Layer by layer detail and the full list of API routes: [`docs/architecture.md`](docs/architecture.md).

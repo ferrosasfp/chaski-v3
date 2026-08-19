@@ -139,7 +139,13 @@ esta es la lista completa (`find app/api -name route.ts`):
 - `api/a2a/quote`, `api/a2a/payout/challenge`: cotización vía el marketplace de agentes y el
   challenge de la prueba de posesión.
 - `api/webhooks/transfi`: notificaciones del proveedor de desembolso, con firma HMAC verificada.
-- `api/admin/reconcile-orphans`: reconciliación de filas del ledger sin contraparte.
+- `api/admin/reconcile-orphans`: reconciliación de filas del ledger sin contraparte. La dispara
+  `.github/workflows/reconcile-orphans.yml`, un workflow programado que la llama una vez por hora
+  (`23 * * * *`) con el secreto en un header, y que se pone rojo si el transporte falla o si hay
+  hallazgos que una persona tiene que mirar. No es un Vercel Cron, y la razón está medida: el
+  webhook GitHub→Vercel de este repo está muerto, así que un `vercel.json` declararía un cron que
+  nadie inscribe hasta un deploy manual. Qué hacer con cada rojo:
+  `docs/runbook-reconcile-orphans.md`.
 
 Hay una sola ruta de settlement, no una por VM. `app/api/settle/principal` y
 `app/api/a2a/payout/submit` fueron borradas, y su ausencia está asserted, no comentada

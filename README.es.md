@@ -473,6 +473,15 @@ npm run qa        # lint + los dos typechecks + tests
 `npm test` y `npm run build` sobre Node 22, en cada push a `main` y en cada pull request. El script de
 smoke queda deliberadamente afuera: es opt in y mueve tokens en devnet.
 
+Hay un segundo workflow, `.github/workflows/reconcile-orphans.yml`, y es programado en vez de
+disparado por un push: una vez por hora (`23 * * * *`) llama a la ruta admin de reconciliación en
+producción con el secreto en un header, y se pone rojo si el transporte falla o si la respuesta
+reporta filas que una persona tiene que mirar. Imprime sólo los contadores agregados, nunca los ids de
+correlación: los logs de un repositorio público son públicos. Lo que no hace es montar guardia. Si
+GitHub retrasa o saltea un tick programado no hay corrida, y por lo tanto nada se pone rojo. Ese
+agujero está escrito en vez de insinuado, en el encabezado del workflow y en
+`docs/runbook-reconcile-orphans.md`, que además dice qué hacer con cada rojo.
+
 ## Arquitectura
 
 Detalle capa por capa y la lista completa de rutas de API:

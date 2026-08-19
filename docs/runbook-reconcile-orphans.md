@@ -175,6 +175,11 @@ El `--max-time 60` no es sólo una afirmación de este documento: el candado de 
 blanca sobre los argumentos del `curl`**, así que borrarlo pone la suite roja (y agregarle una bandera
 que no esté enumerada, también — `--trace-ascii` volcaba el cuerpo entero al log público).
 
+Y desde el CR de WKH-328·B el **número** también está atado, no sólo la bandera: el candado **deriva el
+valor del `.yml`** y exige que **este párrafo declare el mismo**, así que subir el techo sin tocar esta
+línea pone la suite roja. Antes no era así, y se midió: cambiar el número pasaba en verde con esta frase
+intacta, o sea que el documento quedaba desactualizado en silencio.
+
 ## Rojo de L2: qué significa cada contador
 
 | Campo | Qué es | Qué hacer |
@@ -199,7 +204,15 @@ L2 en la primera de las cinco lecturas, **antes** de que la validación de forma
 que el paso queda rojo **sin una sola línea `::error`** y ese rojo no aparece en ninguna tabla de este
 runbook.
 
-**Cómo se reconoce**: L1 en verde, L2 en rojo, y en el log **ninguna línea `::error`**.
+**Cómo se reconoce**: L1 en verde, L2 en rojo, en el log **ninguna línea `::error`** — y la corrida
+**sin tabla de resumen**.
+
+Esa última es la señal más rápida de las cuatro, y la única que se ve **antes** de abrir los logs: el
+bloque que escribe la tabla de agregados en el resumen del job está **después** de las cinco lecturas del
+cuerpo, así que un cuerpo que no es JSON mata el paso en la primera y el resumen **no llega a
+escribirse**. Un rojo de L2 **con** tabla de resumen es otra cosa —hallazgos de verdad, o forma
+inesperada— y ésos sí traen su línea `::error`. O sea: mirá primero si hay tabla; si no hay, es este
+caso y no hace falta leer nada más.
 
 **Qué hacer**: pegarle al endpoint a mano (ver "Cómo obtener los IDs a mano", abajo) y mirar el cuerpo.
 Si no es JSON, el problema está entre el CDN y la función, no en el ledger, y no hay ninguna fila que

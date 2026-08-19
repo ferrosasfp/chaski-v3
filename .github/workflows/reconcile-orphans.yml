@@ -1,5 +1,13 @@
 # reconcile-orphans — el productor que le faltaba a POST /api/admin/reconcile-orphans (WKH-328 parte B).
 #
+# ⛔ ESTADO MEDIDO AL 2026-08-19: ESTE CRON TODAVIA NO CORRIO NI UNA VEZ, Y NO EMPIEZA A CORRER POR
+# MERGEAR ESTE ARCHIVO. Los secrets de Actions de este repo estan en `{"total_count":0}`, el unico
+# workflow registrado en GitHub es `ci.yml`, y `gh run list --workflow=reconcile-orphans.yml` contesta
+# HTTP 404 (ojo: con exit code 0 — hay que leer el texto, no el exit). Que este archivo exista y este
+# commiteado es la INTENCION; los pre-requisitos que faltan, ninguno de los cuales se resuelve
+# mergeando, estan en docs/runbook-reconcile-orphans.md. Todo lo que sigue esta escrito en presente a
+# proposito: describe lo que el workflow HACE cuando corra, no lo que ya paso.
+#
 # QUE DISPARA ESTO Y CONTRA QUE. Un `schedule:` horario (minuto 23) que hace UN POST contra
 # https://chaski-v2.vercel.app/api/admin/reconcile-orphans con el secreto en un header.
 # ⚠️ El proyecto de Vercel se llama `chaski-v2` y sirve el codigo de chaski-v3. NO es un typo: el
@@ -138,8 +146,16 @@ jobs:
           # el header `authorization: Bearer <el secreto de administracion de produccion>` a ese
           # dominio, y la suite aprobaba igual. Asi que el destino se arma en una variable, y el
           # esquema y el host se comparan contra la lista blanca ANTES del curl: si no coinciden el
-          # paso CORTA y el secreto NO SALE. Esto no depende de ningun test: es el .yml el que se
-          # niega a mandar la credencial afuera.
+          # paso CORTA y el secreto NO SALE. Que el secreto no salga no depende de ningun test: es el
+          # .yml el que se niega a mandar la credencial afuera.
+          # 🔴 LO QUE SI NECESITA UN TEST ES EL ORDEN, Y NO LO TENIA. Medido en el CR de esta HU: mover
+          # el bloque de mas abajo (de `esquema=` hasta su `fi`) a DESPUES del curl pasaba 17/17 EN
+          # VERDE, porque el candado solo exigia que el literal y la comparacion EXISTIERAN, en
+          # cualquier lugar del `run:`. Con ese orden el `authorization: Bearer <el secreto de
+          # administracion de produccion>` YA SALIO cuando el paso imprime el mensaje de abajo —"El
+          # secreto de administracion NO se envio"—, o sea que la anotacion se vuelve una afirmacion
+          # FALSA emitida por el propio workflow. Ahora T-042B-15 exige que esta comparacion corra
+          # ANTES del curl, con su calibracion en las dos direcciones.
           HOST_PERMITIDO="chaski-v2.vercel.app"
           RECONCILE_URL="https://chaski-v2.vercel.app/api/admin/reconcile-orphans"
 
@@ -155,7 +171,10 @@ jobs:
           # -w '%{http_code}' ⇒ lo unico que sale por stdout es el codigo HTTP.
           # El secreto viaja en un HEADER, jamas en la URL: una query-string es cacheable y queda
           # escrita en logs de proxies y del proveedor.
-          # 🔴 Y NINGUNA OTRA BANDERA. El candado corre una LISTA BLANCA sobre el argv de este curl.
+          # 🔴 Y NINGUNA OTRA BANDERA. El candado corre una LISTA BLANCA sobre el argv de CADA `curl`
+          # que este paso invoque —no solo el primero: medido en el CR, con el lector anterior un
+          # SEGUNDO comando `curl` mandando el mismo header a otro host pasaba 17/17 en verde—, y el
+          # VALOR del `--max-time` esta atado contra el runbook, no solo la bandera.
           # Medido: `--trace-ascii /dev/stdout` volcaba el intercambio HTTP completo —cuerpo incluido,
           # o sea los IDs de remesas reales— al log publico SIN tocar body.json, y ninguna lista negra
           # de literales podia verlo. Agregar una bandera que el candado no enumere pone la suite roja
@@ -219,8 +238,14 @@ jobs:
               ;;
           esac
 
-          # El resumen se escribe SIEMPRE, en verde y en rojo: si solo se escribiera en rojo, no
-          # habria forma de distinguir "corrio y no encontro nada" de "no corrio".
+          # El resumen se escribe en verde Y en los rojos que ESTA CAPA DECIDE: si solo se escribiera en
+          # rojo, no habria forma de distinguir "corrio y no encontro nada" de "no corrio".
+          # ⚠️ PERO NO SE ESCRIBE SIEMPRE, y decirlo asi era falso. Medido: este bloque va DESPUES de las
+          # cinco lecturas de agregados, asi que un cuerpo que no es JSON mata el paso en la PRIMERA de
+          # ellas (sale 5, y `set -euo pipefail` corta) y GITHUB_STEP_SUMMARY no llega a escribirse ⇒ la
+          # corrida aparece en la UI SIN TABLA DE AGREGADOS. Es la cuarta senal del corte sin anotacion,
+          # y la mas visible de las cuatro: se ve ANTES de abrir los logs. Esta en
+          # docs/runbook-reconcile-orphans.md, "un rojo sin anotacion".
           {
             echo "### reconcile-orphans"
             echo ""

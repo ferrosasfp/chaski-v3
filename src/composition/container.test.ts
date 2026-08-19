@@ -975,3 +975,137 @@ describe("createContainer — WKH-358/CD-14: la firma por enlace YA está cablea
   });
 
 });
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-359/AC-3 · T-CABLE-2 — EL 4º ARGUMENTO DE `ConnectWallet`, EJERCITADO (F4/F4-1)
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 POR QUÉ EXISTE ESTE `it`: PORQUE LA PROSA QUE DECÍA QUE YA EXISTÍA ERA FALSA, Y F4 LO MIDIÓ.
+// `container.ts:185` afirmaba «⛔ SIN ESTA LÍNEA … `prepare` contesta 403 … Lo ve `container.test.ts`»
+// y `../application/use-cases/connect-wallet.ts:55` repetía «y eso tiene test propio». Las dos
+// describían un candado que NO estaba escrito. Los dos mutantes que lo probaron (F4 · §4):
+//   · **M4** — el 4º argumento ⇒ `undefined as never`: este archivo daba **36 passed (36)**.
+//   · **M5** — el 4º argumento **BORRADO**, que es literalmente "sin esta línea": `tsc --noEmit`
+//     exit **0** (el parámetro es `pop?`, opcional en `connect-wallet.ts:56`) y la suite COMPLETA en
+//     **147 passed / 2783 passed | 1 skipped**. ⇒ borrar "el eslabón entero" compilaba y pasaba TODO.
+//
+// 🔴 Y POR QUÉ NINGÚN `it` DE LOS QUE YA ESTABAN PODÍA VERLO — la causa es estructural y es la parte
+// que hay que entender antes de tocar esto. Con la bandera APAGADA el 4º argumento no hace nada:
+// `pedir()` contesta `no-corresponde` en su primera línea (`../infrastructure/solana-wallet.ts:2384`)
+// y el use-case sigue byte-idéntico (AC-8, y es deliberado). Así que el único `it` capaz de ver el
+// cableado es uno que prenda `NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED` **Y** ejercite
+// `c.connectWallet.execute()` **EN EL MISMO `it`**. Este archivo tenía los dos ingredientes por
+// separado —la bandera en `:840` y `:935`, el `connectWallet` del container en `:402` y `:511`— y
+// nunca juntos. Ésa es exactamente la superficie donde M4 y M5 vivían.
+//
+// ⛔ POR QUÉ NO ALCANZA CON `expect((c.connectWallet as …).pop).toBeDefined()`, que es más barato: es
+// el mismo error que `T-CABLE-1b` ya corrigió para el 3er argumento. Un `toBeDefined()` mata M5 pero
+// **no mata M4 en su versión útil** —inyectar un colaborador inerte, un objeto cuyo `pedir()` conteste
+// siempre `no-corresponde`— y ése es el mutante que importa, porque es el que un refactor produce sin
+// querer. Acá se EJERCITA: se enciende el camino por enlace de verdad y se exige que el `connectWallet`
+// QUE EL CONTAINER DEVUELVE **suspenda** para ir a buscar la firma.
+//
+// 🔴 EL FIXTURE ES EL DE `T-067-19` (`:935`), con los escritores de PRODUCCIÓN, y por la misma razón:
+// las TRES condiciones del gate (`caminoPorEnlace`, `../infrastructure/solana-wallet.ts:2239-2240`)
+// sembradas sin copiar ni el nombre de la clave ni la forma del `Viaje`.
+//
+// ⚠️ LO QUE ESTE `it` NO AFIRMA: no dice que el PoP del KYC funcione en un teléfono. La firma la
+// devuelve la billetera y **nadie de este equipo corrió eso en un dispositivo** ([NC-3], sigue
+// abierto). Lo que afirma es lo que M5 destapó: que **el 4º argumento está cableado y hace algo**.
+describe("createContainer — WKH-359/AC-3: el `connectWallet` REAL consigue el PoP por enlace (T-CABLE-2)", () => {
+  /** Las tres condiciones del gate + el emisor del desafío vivo. Devuelve el container REAL. */
+  function containerPorEnlace(desafio: Response): ReturnType<typeof createContainer> {
+    const disco = new Map<string, string>();
+    const storage = {
+      getItem: (k: string) => disco.get(k) ?? null,
+      setItem: (k: string, v: string) => void disco.set(k, v),
+      removeItem: (k: string) => void disco.delete(k),
+      clear: () => disco.clear(),
+      key: () => null,
+      length: 0,
+    };
+    vi.stubGlobal("localStorage", storage);
+    vi.stubGlobal("location", { href: "https://chaski.test/enviar", origin: "https://chaski.test" });
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", "true");
+    vi.stubGlobal("fetch", vi.fn(async () => desafio.clone()));
+    const almacen = almacenDeNavegador(storage as unknown as Storage);
+    guardarViaje(almacen, {
+      billetera: "phantom",
+      secreta: bs58.encode(new Uint8Array(32)),
+      publica: bs58.encode(new Uint8Array(32)),
+      claveBilletera: bs58.encode(new Uint8Array(32)),
+      session: "s",
+      direccion: DIRECCION_DEL_VIAJE,
+      paso: "conectar",
+      remittanceId: "rem-cable-2",
+      desde: Date.now(),
+    });
+    guardarEleccion(almacen, "phantom");
+    solanaWalletBridge.setWalletAvailability("none");
+    solanaWalletBridge.setState({ publicKey: null, connected: false }); // el bridge VACÍO de un teléfono sin extensión
+    return createContainer();
+  }
+
+  const DESAFIO_VIVO = () =>
+    new Response(
+      JSON.stringify({ popChallenge: "c-cable-2", popMessage: "m-cable-2", exp: Math.floor(Date.now() / 1000) + 600 }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+
+  // 🔴 MUTANTES QUE MATAN ESTE `it`, LOS DOS DE F4 (y son la razón de que exista):
+  //   · **M5** — borrar el 4º argumento de `container.ts:185` ⇒ `this.pop` queda `undefined`,
+  //     `connect-wallet.ts:95` no entra al `if`, y `execute()` sale por `"listo"` en vez de suspender.
+  //   · **M4** — pasarlo como `undefined as never` ⇒ idéntico desenlace.
+  // Un tercero, el que `T-CABLE-1b` enseñó a no dejar pasar: inyectar un colaborador INERTE cuyo
+  // `pedir()` conteste siempre `no-corresponde` ⇒ también sale `"listo"` y también cae acá.
+  it("T-CABLE-2: con el camino por enlace encendido, el `connectWallet` del container SUSPENDE a firmar el PoP del KYC", async () => {
+    const c = containerPorEnlace(DESAFIO_VIVO());
+
+    // CD-18 — el fixture fabricó el caso de verdad. Sin esto, un gate apagado dejaría a este `it`
+    // midiendo el camino inyectado y el `toBe("hay-que-salir")` de abajo caería por el motivo equivocado.
+    expect(
+      await c.connectedWallet.getConnectedAddress(),
+      "el gate no se encendió: este `it` estaría midiendo el camino inyectado, donde el 4º argumento " +
+        "no hace nada por diseño (AC-8) y por lo tanto no se puede ver",
+    ).toBe(DIRECCION_DEL_VIAJE);
+
+    const out = await c.connectWallet.execute();
+
+    expect(
+      out.estado,
+      "el `connectWallet` que ESTA composición devuelve NO pidió la prueba de posesión por enlace: el " +
+        "4º argumento de `container.ts:185` no está cableado, o el colaborador inyectado es inerte. " +
+        "Consecuencia, y por eso este candado existe: en todo teléfono sin extensión la sesión de Didit " +
+        "se crea SIN ATAR, `app/api/kyc/decision/route.ts:100` no escribe la fila del veredicto y " +
+        "`app/api/payout/prepare/route.ts:310` contesta 403 `prepare_kyc_verdict_missing`. ⚠️ Y NO SE " +
+        "VE: una billetera que YA tiene fila cierra igual, así que el bug sólo lo sufre la gente nueva",
+    ).toBe("hay-que-salir");
+    if (out.estado !== "hay-que-salir") return; // narrowing; el `expect` de arriba ya falló
+    // El propósito es el del KYC y no el del payout: son ANCLAS DISTINTAS (CD-15) y confundirlas haría
+    // que la firma del veredicto se consumiera como si fuera la del depósito.
+    expect(out.esperando).toBe("firma-pop-kyc");
+    expect(out.address).toBe(DIRECCION_DEL_VIAJE);
+    expect(out.irA, "suspendió sin decir a dónde ir, que es una suspensión que nadie puede resolver").toContain("phantom");
+  });
+
+  // 🔴 EL CONTROL SIN EL CUAL EL DE ARRIBA NO PRUEBA NADA (CD-18, y es la lección de `T-065-GATE-1`).
+  // Si `execute()` contestara `"hay-que-salir"` por cualquier motivo —por ejemplo porque el fixture
+  // rompió algo aguas arriba—, el `it` de arriba pasaría igual sin que el 4º argumento exista. Acá se
+  // mueve UNA sola variable: el emisor del desafío contesta 501 (`PAYOUT_POP_SECRET` ausente
+  // server-side), que es el desenlace `no-se-puede` de AC-5. El cableado es el MISMO y el desenlace
+  // TIENE que cambiar a `"listo"`, sin salto a ninguna billetera.
+  it("CONTROL: con el emisor del desafío en 501 el MISMO cableado NO suspende (el desenlace lo decide el colaborador, no el fixture)", async () => {
+    const c = containerPorEnlace(
+      new Response(JSON.stringify({ error: "pop_not_configured" }), { status: 501 }),
+    );
+    expect(await c.connectedWallet.getConnectedAddress()).toBe(DIRECCION_DEL_VIAJE);
+
+    const out = await c.connectWallet.execute();
+    expect(
+      out.estado,
+      "con el emisor apagado el connect suspendió igual: entonces la suspensión del `it` de arriba no " +
+        "la produce `pedir()` y ese test no está midiendo el cableado",
+    ).toBe("listo");
+    expect(out.address).toBe(DIRECCION_DEL_VIAJE); // conectar sigue funcionando: el PoP no puede ser la puerta (CD-15)
+  });
+});

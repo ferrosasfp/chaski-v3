@@ -438,7 +438,7 @@ El árbol de dependencias mezcla React 19 con paquetes que todavía declaran pee
 
 ## Tests
 
-**147 archivos de test**, todos en verde. Ese número no es una afirmación que haya que creer:
+**148 archivos de test**, todos en verde. Ese número no es una afirmación que haya que creer:
 `src/composition/readme-test-count.test.ts` cuenta el árbol en cada corrida y pone la suite roja si esta
 línea se le despega. Para el número de casos individuales, corré `npm test`, que lo imprime. Se reparten
 en:
@@ -472,6 +472,27 @@ npm run qa        # lint + los dos typechecks + tests
 `.github/workflows/ci.yml` corre `npm run lint`, `npm run typecheck`, `npm run typecheck:scripts`,
 `npm test` y `npm run build` sobre Node 22, en cada push a `main` y en cada pull request. El script de
 smoke queda deliberadamente afuera: es opt in y mueve tokens en devnet.
+
+Hay un segundo workflow, `.github/workflows/reconcile-orphans.yml`, y es programado en vez de
+disparado por un push. Una vez por hora (`23 * * * *`) queda declarado para llamar a la ruta admin de
+reconciliación en producción con el secreto en un header, y para ponerse rojo si el transporte falla o
+si la respuesta reporta filas que una persona tiene que mirar. Imprime sólo los contadores agregados,
+nunca los ids de correlación: los logs de un repositorio público son públicos.
+
+⛔ Estado al 2026-08-19, medido y no supuesto: **ese workflow no corrió ni una vez.** GitHub lista sólo
+`ci.yml` en `gh api repos/ferrosasfp/chaski-v3/actions/workflows`,
+`gh run list --workflow=reconcile-orphans.yml` contesta HTTP 404, y el repo tiene cero secrets de
+Actions (`{"total_count":0}`). Mergear el archivo registra el schedule, que es la mitad fácil. La otra
+mitad no lo es: sin el secreto cargado, el job falla en su primer paso sin llamar a la ruta, así que
+cada corrida horaria es roja y no se reconcilia nada, hasta que alguien ejecute
+`gh secret set RECONCILE_ADMIN_SECRET`. La tabla de estado medido está al principio de
+[`docs/runbook-reconcile-orphans.md`](docs/runbook-reconcile-orphans.md). Leela antes de concluir que
+hay un chequeo horario vigilando el ledger, porque hoy no hay ninguno.
+
+Lo que no hace, una vez que sí corra, es montar guardia. Si GitHub retrasa o saltea un tick programado
+no hay corrida, y por lo tanto nada se pone rojo. Ese agujero está escrito en vez de insinuado, en el
+encabezado del workflow y en `docs/runbook-reconcile-orphans.md`, que además dice qué hacer con cada
+rojo.
 
 ## Arquitectura
 

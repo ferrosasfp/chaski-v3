@@ -95,7 +95,7 @@ las dos y se pone rojo si se despegan.
 
 | Capa | Nombre del paso | Qué la enciende | Qué prueba |
 |---|---|---|---|
-| **L1** | *el endpoint responde 200 (transporte)* | HTTP ≠ 200, un `curl` que no completa, o el secreto vacío | Que el endpoint es **alcanzable y autenticado** |
+| **L1** | *el endpoint responde 200 (transporte)* | HTTP ≠ 200, un `curl` que no completa, el secreto vacío, o un destino que no es el host fijado | Que el endpoint es **alcanzable y autenticado** |
 | **L2** | *sin hallazgos que revisar* | 200 con `preparedOrphans.total > 0`, `failed > 0` o `manualReview > 0` | Que hay algo que **una persona** tiene que mirar |
 
 Son dos pasos con nombre propio y distinto justamente para que el rojo se lea de un vistazo: un rojo
@@ -113,6 +113,27 @@ Vercel cuando el problema está en GitHub.
 gh secret set RECONCILE_ADMIN_SECRET --repo ferrosasfp/chaski-v3   # con EL MISMO VALOR que Vercel
 gh api repos/ferrosasfp/chaski-v3/actions/secrets --jq '.secrets[].name'   # devuelve el nombre, nunca el valor
 ```
+
+### `destino no permitido` (falla antes del `curl`, y el secreto NO sale)
+
+El paso arma la URL en una variable y compara **el esquema y el host** contra una lista blanca escrita
+en el propio workflow **antes** de mandar el `curl`. Si no coinciden, corta con esta anotación y el
+header `authorization: Bearer <el secreto de administración>` **no se envía a ningún lado**.
+
+Que aparezca este rojo significa una de dos cosas:
+
+- alguien **editó la URL** del workflow (un renglón) sin actualizar el `HOST_PERMITIDO` de al lado, o
+- el **alias de producción cambió de verdad**.
+
+Si es lo segundo, el cambio son **tres** ediciones coordinadas y a propósito: los dos renglones del
+workflow (`HOST_PERMITIDO` y `RECONCILE_URL`) y **este runbook**, porque el candado de la suite cruza
+el host del workflow contra el que aparece acá y se pone rojo si se despegan. El host de producción
+vigente es `chaski-v2.vercel.app` (el proyecto de Vercel se llama `chaski-v2` y sirve el código de
+chaski-v3; no es un typo).
+
+⚠️ Este control es del `.yml`, **no del test**: no depende de que nadie corra la suite. Existe porque
+mandar una credencial de administración a un dominio arbitrario es una edición de un solo renglón en un
+repo público, y antes de esto la suite la aprobaba.
 
 ### `401`
 
@@ -150,6 +171,10 @@ producción**, no a `main` (ver "lo que este cron no mide", ítem 4).
 La función no contestó en 60 segundos. El paso tiene su propio `--max-time 60` y el job entero tiene
 un `timeout-minutes: 5`.
 
+El `--max-time 60` no es sólo una afirmación de este documento: el candado de la suite corre una **lista
+blanca sobre los argumentos del `curl`**, así que borrarlo pone la suite roja (y agregarle una bandera
+que no esté enumerada, también — `--trace-ascii` volcaba el cuerpo entero al log público).
+
 ## Rojo de L2: qué significa cada contador
 
 | Campo | Qué es | Qué hacer |
@@ -159,6 +184,31 @@ un `timeout-minutes: 5`.
 | `manualReview` | Filas varadas que **esta corrida** acaba de etiquetar para revisión humana | Alguien tiene que resolverlas fuera de banda |
 | `failed` | Filas cuyo etiquetado **tiró** al escribir | Un error transitorio de DB en una fila no aborta el batch. Si persiste entre corridas, es infra |
 | `scanned` | Cuántas varadas miró la corrida | Contexto, no alarma por sí solo |
+
+## Un rojo sin anotación: cómo se reconoce y qué hacer
+
+⚠️ **Este job puede fallar sin decir por qué. Está medido y se declara acá porque no está cubierto.**
+
+Cada corte que las dos capas **deciden** escribe primero su anotación `::error`, y hay un candado en la
+suite que verifica esa dirección: toda anotación va seguida de un corte. **La dirección contraria no
+está verificada por nada**: puede haber un corte sin ninguna anotación.
+
+El caso concreto, medido: `jq -r` sobre un cuerpo que **no es JSON** —una página de error HTML de un
+CDN devuelta con `200`, por ejemplo— sale con **código 5**. Con `set -euo pipefail`, ese 5 mata el paso
+L2 en la primera de las cinco lecturas, **antes** de que la validación de forma llegue a correr, así
+que el paso queda rojo **sin una sola línea `::error`** y ese rojo no aparece en ninguna tabla de este
+runbook.
+
+**Cómo se reconoce**: L1 en verde, L2 en rojo, y en el log **ninguna línea `::error`**.
+
+**Qué hacer**: pegarle al endpoint a mano (ver "Cómo obtener los IDs a mano", abajo) y mirar el cuerpo.
+Si no es JSON, el problema está entre el CDN y la función, no en el ledger, y no hay ninguna fila que
+mirar todavía.
+
+**Por qué queda declarado en vez de arreglado**: cerrarlo bien pide un `trap … ERR` en el workflow, y
+esa línea contiene `::error` sin un corte detrás, así que choca de frente con el candado que verifica la
+otra dirección. Arreglar las dos cosas a la vez es más que un renglón y quedó fuera de esta HU: la
+decisión fue **escribirlo** —con la consecuencia operativa, que es este párrafo— en vez de improvisarlo.
 
 ### Cómo obtener los IDs a mano
 

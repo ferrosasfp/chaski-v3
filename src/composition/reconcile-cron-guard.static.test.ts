@@ -9,41 +9,103 @@
 // nombre del secreto, o alguien que "simplifica" el curl y le saca el chequeo de status, pasaria
 // `npm run qa` entero en verde.
 //
-// 🔴 LO QUE LOS TESTS DE ESTE ARCHIVO **NO** PRUEBAN — dicho, no escondido:
-//   · No ejecutan el workflow, no hablan con GitHub, y NO PUEDEN probar que el schedule haya quedado
-//     REGISTRADO. Eso es un procedimiento humano de tres niveles, y el unico que prueba algo es una
-//     corrida cuyo evento sea `schedule`
-//     (`gh run list --workflow=reconcile-orphans.yml --json event`). Ni el .yml commiteado (eso es
-//     la INTENCION) ni un `gh workflow run` verde (que queda con evento `workflow_dispatch`) ni un
-//     HTTP 200 (que prueba el endpoint, no el productor) cuentan como prueba de registro.
-//   · Un `sed` que reescriba el YAML con otra sintaxis igualmente valida los pasa en verde. Son un
-//     candado ANTI-REGRESION, no una prueba de funcionamiento.
-//   · No prueban que el cron CORRA: la ausencia de corridas es invisible y esta HU no entrega
-//     heartbeat. Ver el encabezado del propio workflow, item 1 de "que NO mide".
-//   · NO son un validador del schema de GitHub Actions. `bloqueAnidado` comprueba que la ESTRUCTURA
-//     que GitHub va a leer exista (`jobs.<job>.steps[i].run`), asi que un YAML sin clave `jobs:` —que
-//     GitHub no puede registrar— se pone rojo. Lo que sigue pasando en verde es un YAML con la
-//     estructura correcta y un VALOR invalido: un `runs-on:` que no existe, o un `cron:` de cinco
-//     campos fuera de rango. El parser de GitHub no esta disponible offline.
-//   · Miran el TEXTO del `.yml`, no el resultado de ejecutarlo. Que `-o body.json` este escrito no
-//     prueba que el body no se filtre por otra via (`head body.json`, un `set -x`, una accion de
-//     terceros): prueba que las formas medidas de filtrarlo no estan.
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// 🔴 EL PERIMETRO DE ESTE CANDADO. LEELO ANTES DE APOYARTE EN SU VERDE.
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// Esto es un MATCHER DE TEXTO sobre un YAML, con un lector de YAML escrito a mano. **No puede ser
+// exhaustivo, por construccion**, y la historia lo mide: tres rondas de revision adversarial, y en
+// cada una aparecio una forma nueva de esquivar el matcheo de texto (un comentario de linea completa;
+// un comentario EN LINEA; un `name:` de paso; un `exit 1` anidado en un `if` que nunca se cumple; una
+// bandera de `curl` que no toca el archivo que el candado vigila). Lo unico que probaria de verdad
+// que este workflow no filtra datos y falla fuerte es **correrlo**, y para eso hay que pushear.
+// ⇒ Asi que este archivo NO se presenta como total. Se presenta con perimetro declarado. Las dos
+// frases que decia antes —"REGLA DE ESTE ARCHIVO, **sin excepciones**" y "el invariante cubre las seis
+// de una vez y **NO ENVEJECE**"— eran FALSAS y estan corregidas: una lista de lo que se cubre no es
+// una prueba de que no haya nada mas.
 //
-// ⚠️ TRAMPA RESUELTA A PROPOSITO, Y AHORA EN LOS DOS SENTIDOS — LOS COMENTARIOS NO SON
-// CONFIGURACION. El encabezado del workflow EXPLICA por que no tiene trigger `pull_request`, asi que
-// la palabra `pull_request` aparece DOS veces en el archivo, en prosa. Un barrido del texto completo
-// buscando esa palabra daria rojo con el workflow correcto.
-// 🔴 Y la version PELIGROSA de la misma trampa, que en la primera entrega de este archivo estaba
-// abierta y quedo medida: un comentario tambien SATISFACE una asercion que exige que algo ESTE. El
-// comentario `# -o body.json ⇒ el cuerpo va a un ARCHIVO` alcanzaba para que `expect(L1).toMatch(
-// /-o\s+body\.json/)` pasara con el `-o` BORRADO del curl — o sea, con el body (que lleva
-// remittanceId / quoteId / payoutId de remesas REALES) imprimiendose en el log de un repo PUBLICO.
-// ⇒ REGLA DE ESTE ARCHIVO, sin excepciones: **toda** asercion sobre lo que el workflow hace corre
-// contra el CODIGO y nunca contra el archivo crudo. `bloqueAnidado` devuelve los bloques ya sin
-// comentarios, `PASOS[i].run` es el cuerpo del `run:` sin comentarios, y `CODIGO` es todo `jobs:` sin
-// comentarios. El unico barrido que toca `YAML` crudo es el de `name:` y el conteo de lineas de
-// T-042B-0. Es la misma leccion que la trampa 3 de no-evm-surface.test.ts, y la que quedo escrita en
-// doc/sdd/042-*/auto-blindaje.md.
+// LO QUE SI CUBRE. Cada linea tiene al menos un mutante que MUERE, con el workflow correcto en verde
+// — los del fix-pack #3 (26 mutantes) estan en su reporte, los anteriores en los dos AR. La UNICA
+// excepcion, dicha: la no-regresion de `route.ts` (ultima linea) no tiene mutante propio, porque
+// mutar `route.ts` esta fuera del Scope IN de esta HU.
+//   · Estructura: que exista `jobs.<job>.steps[i].run` —lo que GitHub lee— y no solo el texto. Un
+//     `jobss:`, un segundo job, o un paso convertido a `uses:` ponen T-042B-0 rojo.
+//   · Que los triggers sean EXACTAMENTE `schedule` + `workflow_dispatch`, y la cadencia sea la misma
+//     string en el YAML, el runbook y `.env.example` (fuente unica: el `cron:` del YAML).
+//   · Que el secreto viaje en un header, alimentado por `env:`, y NUNCA en la URL ni en texto plano.
+//   · Que el DESTINO del secreto este fijado: host y esquema cruzados con el `.yml`, el runbook y el
+//     arbol de la app (T-042B-15).
+//   · Que el argv del `curl` sea una LISTA BLANCA, en las dos direcciones (ninguna bandera de mas,
+//     ninguna obligatoria de menos).
+//   · Que cada anotacion `::error` vaya seguida de un corte `exit 1` **INCONDICIONAL EN SU NIVEL** —no
+//     "presente en el bloque"— y que no haya ningun `exit 0`.
+//   · Que ninguna de las nueve formas enumeradas de imprimir el cuerpo este en el shell, y que TODA
+//     invocacion de `jq` sea una de las cinco lecturas de agregados permitidas (lista blanca).
+//   · Que los comentarios —de linea completa Y en linea— no puedan ni satisfacer ni violar ninguna
+//     asercion, y que el `name:` de un paso tampoco (es configuracion, no codigo).
+//   · No-regresion del endpoint: `route.ts` sigue con solo `POST`, una `markOutcome` y cero `fetch`.
+//
+// LO QUE **NO** CUBRE — la lista explicita, no "etcetera":
+//   1. QUE EL SCHEDULE ESTE REGISTRADO EN GITHUB. No ejecuta el workflow, no habla con GitHub. El .yml
+//      commiteado es la INTENCION; lo unico que prueba el registro es una corrida cuyo evento sea
+//      `schedule` (`gh run list --workflow=reconcile-orphans.yml --json event`). Ni un
+//      `gh workflow run` verde (queda con evento `workflow_dispatch`) ni un HTTP 200 (que prueba el
+//      endpoint, no el productor) cuentan. Y no prueba que el cron CORRA: la ausencia de corridas es
+//      invisible y esta HU no entrega heartbeat (ver el item 1 de "que NO mide" del propio workflow).
+//   2. EL SCHEMA DE GITHUB ACTIONS. Lo que pasa en verde es la estructura correcta con un VALOR
+//      invalido: un `runs-on:` inexistente, un `timeout-minutes: 0`, o un `run: >` (escalar plegado)
+//      que ROMPE el script — los tres medidos. El parser de GitHub no esta disponible offline y la
+//      libreria `yaml` de `node_modules` es solo una dependencia TRANSITIVA (ver `bloqueAnidado`).
+//   3. NO HAY META-TEST DE ESTE ARCHIVO. Un mutante sobre el candado mismo —borrar un `expect`,
+//      relajar un regex— no lo mide NADA: `npm run lint` no mira `.github/` (que es la razon por la que
+//      el candado existe) y nada mira si el candado sigue teniendo dientes. Las sondas de calibracion
+//      de T-042B-8, T-042B-9, T-042B-15 y T-042B-16 acotan el riesgo (un lector roto se delata en su
+//      propia sonda) pero NO son un meta-test. Es un limite estructural, no un atajo.
+//   4. LAS OTRAS VIAS DE LEER `body.json`. La lista blanca cubre `jq`; siguen pasando en verde
+//      `head -c 300 body.json`, `head -20 body.json >> "$GITHUB_STEP_SUMMARY"`, `$(cat < body.json)`,
+//      un `while read < body.json`, un `python3 -c` que imprima `['items']` y un `set -x`. Los seis
+//      publicarian IDs de remesas reales en un repo publico. Medidos uno por uno: cuatro en el AR it2,
+//      y dos (`head -c 300 body.json` y `set -x`) re-medidos en el fix-pack #3, donde SOBREVIVEN a
+//      proposito — un limite declarado que nadie volvio a medir es un limite que puede haberse cerrado
+//      o agrandado sin que nadie se enterara.
+//   5. LA DIRECCION ESPEJO DEL INVARIANTE: verifica **anotacion ⇒ corte** y NADA verifica
+//      **corte ⇒ anotacion**. Es deliberado, y su consecuencia esta escrita: `jq -r` sobre un cuerpo
+//      que no es JSON sale **5**, asi que un 200 con una pagina de error HTML del CDN mata L2 por
+//      `set -e` **sin ninguna anotacion `::error`** ⇒ EL JOB PUEDE FALLAR SIN DECIR POR QUE, y ese rojo
+//      queda fuera de la tabla de codigos del runbook. Cerrarlo bien pide un `trap … ERR` en el `.yml`
+//      (que ademas colisiona con este mismo invariante, porque la linea del trap contiene `::error` sin
+//      corte detras), asi que se DECLARA en vez de improvisarse. El runbook lo dice en
+//      "un rojo sin anotacion", con que hacer cuando pase.
+//   6. `permissions: {}` NO ESTA ATADO: cambiarlo a `write-all` pasa en verde. El impacto esta acotado
+//      porque T-042B-0 exige exactamente dos pasos con `run:` (ninguna action de terceros puede entrar
+//      sin ponerlo rojo), pero el candado no existe.
+//   7. `set +e` suelto, un `if` de UN RENGLON (`if …; then exit 1; fi`) y mover `concurrency` a nivel
+//      de job: el primero no tiene candado; los otros dos dan ROJO con un workflow valido (falso rojo
+//      en la direccion visible). Estan medidos y dichos, no descubiertos.
+//   8. QUE EL WORKFLOW HAGA LO QUE DICE. Un `sed` que reescriba el YAML con otra sintaxis igualmente
+//      valida lo pasa en verde. Es un candado ANTI-REGRESION sobre el texto, no una prueba de
+//      funcionamiento.
+//
+// ⚠️ TRAMPA RESUELTA A PROPOSITO, Y EN LOS DOS SENTIDOS — LOS COMENTARIOS NO SON CONFIGURACION. El
+// encabezado del workflow EXPLICA por que no tiene trigger `pull_request`, asi que esa palabra aparece
+// DOS veces en el archivo, en prosa: un barrido del texto completo buscandola daria rojo con el
+// workflow correcto. Y la version PELIGROSA de la misma trampa, medida: un comentario tambien
+// SATISFACE una asercion que exige que algo ESTE. El comentario `# -o body.json ⇒ el cuerpo va a un
+// ARCHIVO` alcanzaba para que `expect(L1).toMatch(/-o\s+body\.json/)` pasara con el `-o` BORRADO del
+// curl — o sea, con el body (que lleva remittanceId / quoteId / payoutId de remesas REALES)
+// imprimiendose en el log de un repo PUBLICO.
+// ⇒ REGLA DE ESTE ARCHIVO: toda asercion sobre lo que el workflow **ejecuta** corre contra el codigo,
+// nunca contra el archivo crudo, y hay TRES niveles a proposito:
+//   · `SHELL` = los `run:` de los pasos, sin comentarios de linea completa NI en linea. Es lo unico
+//     que se ejecuta, y es contra esto que van las listas negras y blancas de fuga de datos.
+//   · `CODIGO` = todo lo que cuelga de `jobs:`, sin comentarios de linea completa NI en linea —
+//     incluye configuracion (`env:`, `name:`, `with:`). Va aca lo que puede vivir fuera del `run:`,
+//     como un `Bearer` en texto plano.
+//   · `YAML` crudo lo tocan SOLO tres cosas, y a proposito: el `name:` del workflow, el `cron:` y el
+//     conteo de lineas de T-042B-0.
+// La eleccion entre los tres NO es estilistica: `CODIGO` en lugar de `SHELL` produjo el 4to falso rojo
+// de esta serie (un `name:` de paso con la palabra `jq`), y `YAML` en lugar de `CODIGO` produjo los
+// tres primeros. Es la misma leccion que la trampa 3 de no-evm-surface.test.ts, y la que quedo escrita
+// en doc/sdd/042-*/auto-blindaje.md.
 //
 // ⚠️ POR QUE NO HAY BARRIDO DE DIRECTORIOS ACA. Este archivo lee CINCO rutas fijas. No recorre
 // ningun arbol, asi que no puede auto-dispararse con los literales que persigue (`.items`,
@@ -73,13 +135,52 @@ const ROUTE = leer(ROUTE_REL);
 const GITIGNORE = leer(".gitignore");
 const ENV_EXAMPLE = leer(".env.example");
 
-/** Saca los comentarios de linea completa. NO toca los `#` que van a mitad de linea: en este YAML no
- *  hay ninguno dentro de los bloques que se inspeccionan, y un borrado ingenuo se comeria un `#`
- *  legitimo dentro de una cadena. */
+/** Corta una linea en el primer `#` que ABRE comentario de shell: fuera de comillas y al principio de
+ *  una palabra (principio de linea o precedido por un blanco). Es la regla del shell, y es la que
+ *  hace que `echo "algo # con numeral"` y la expansion `${RECONCILE_URL#*://}` —las dos en este
+ *  workflow— queden intactas, que es exactamente lo que un `l.split("#")[0]` rompe. */
+function sinComentarioEnLinea(linea: string): string {
+  let comilla = "";
+  for (let i = 0; i < linea.length; i++) {
+    const c = linea[i] as string;
+    if (comilla !== "") {
+      if (c === comilla) comilla = "";
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      comilla = c;
+      continue;
+    }
+    if (c === "#" && (i === 0 || /\s/.test(linea[i - 1] as string))) return linea.slice(0, i).trimEnd();
+  }
+  return linea;
+}
+
+/** Saca los comentarios: los de LINEA COMPLETA **y** los que van A MITAD DE LINEA.
+ *
+ *  🔴 POR QUE LOS DOS, Y POR QUE ARREGLAR UNO SOLO NO ALCANZA. La version anterior filtraba solo
+ *  `/^\s*#/`, y el AR de la iteracion 2 lo midio en las DOS direcciones, las dos con 2801/2801 en
+ *  verde:
+ *    · FALSO VERDE: borrar `-o body.json` del `curl` y agregar al final de otra linea el comentario
+ *      `  # el cuerpo ya no va a -o body.json` dejaba pasar `expect(L1).toMatch(/-o\s+body\.json/)`.
+ *      Sin `-o`, `curl` escribe el cuerpo en stdout y `code="$(curl …)"` lo captura, asi que los
+ *      `remittanceId` / `quoteId` / `payoutId` de remesas REALES salen al `::error`, al resumen y al
+ *      log de un repo PUBLICO — con el candado en verde.
+ *    · FALSO ROJO: un `  # nunca cat body.json` al final de una linea ponia T-042B-10 rojo con el
+ *      workflow 100% CORRECTO. Y escribir un comentario en linea es una edicion legitima; el riesgo
+ *      no es el rojo, es que alguien con la suite roja y el workflow bien RELAJE el patron.
+ *  Las dos direcciones salen del mismo hueco, asi que hay que DESPOJAR el comentario, no prohibirlo:
+ *  prohibir el `#` a mitad de linea cerraria el falso verde y dejaria el falso rojo en pie.
+ *
+ *  ⚠️ EL BORDE DE ESTE DESPOJADOR, declarado: no entiende el escape `\#` ni los heredocs. Ninguno de
+ *  los dos aparece en este YAML; si aparecieran, el efecto seria un falso ROJO (una linea recortada de
+ *  mas ⇒ una asercion de presencia que no encuentra lo que busca), que es visible, y no un falso
+ *  verde, que no lo es. Calibrado en las dos direcciones en T-042B-16. */
 function sinComentarios(texto: string): string {
   return texto
     .split("\n")
     .filter((l) => !/^\s*#/.test(l))
+    .map(sinComentarioEnLinea)
     .join("\n");
 }
 
@@ -189,6 +290,24 @@ const PASOS = pasosDelJob();
 const L1 = PASOS[0]?.run ?? "";
 const L2 = PASOS[1]?.run ?? "";
 
+/** El SHELL del workflow: la concatenacion de los `run:` de los pasos, o sea LO UNICO QUE SE EJECUTA.
+ *
+ *  🔴 POR QUE NO ALCANZA CON `CODIGO`, medido por el AR de la iteracion 2: renombrar el paso 2 a
+ *  `- name: sin hallazgos que revisar (jq de los cinco agregados)` deja el workflow FUNCIONALMENTE
+ *  IDENTICO (un `name:` es una etiqueta) y ponia T-042B-10 ROJO. La causa no son los comentarios —un
+ *  `name:` es CONFIGURACION, ningun despojador de comentarios lo saca— sino la pregunta: una lista
+ *  blanca de lo que el workflow EJECUTA tiene que correr sobre el codigo que se ejecuta, no sobre todo
+ *  el texto que cuelga de `jobs:`. Es el 4to falso rojo de la misma familia, y el propio archivo ya
+ *  declara que renombrar es legitimo (ver `nombresDeJob`).
+ *
+ *  ⚠️ Y NO PIERDE COBERTURA, que es la pregunta que hay que hacerse antes de estrechar un barrido: el
+ *  unico otro lugar donde un paso puede EJECUTAR algo es un `uses:` con `with: script:`, y T-042B-0
+ *  exige EXACTAMENTE dos pasos y que los dos tengan cuerpo `run:` de mas de 100 caracteres, asi que un
+ *  tercer paso —o uno de los dos convertido a `uses:`— pone T-042B-0 rojo antes (D3 y D4 del AR mueren
+ *  ahi). `CODIGO` se sigue usando para lo que es configuracion (el `Bearer` puede vivir en un `env:` o
+ *  en un `with:`, no solo en el `run:`). */
+const SHELL = PASOS.map((p) => p.run).join("\n");
+
 /** El bloque `if … ; then … fi` de un `run:` cuya PRIMERA linea matchea `condicion`. Cuenta `if`/`fi`
  *  para no cortar en un anidado. Devuelve "" si no hay ninguno.
  *
@@ -218,33 +337,90 @@ function bloqueIf(run: string, condicion: RegExp): string {
   return "";
 }
 
-/** Las anotaciones `::error` de un `run:` que NO cortan: el primer `exit` que aparece despues de la
- *  anotacion (antes de la siguiente) tiene que ser `exit 1`. Devuelve la lista de las que fallan.
+/** Los renglones que ABREN y CIERRAN un bloque condicional o de repeticion del shell. `{ … }` y
+ *  `( … )` NO estan a proposito: un grupo de llaves se ejecuta SIEMPRE que el flujo llega a el —este
+ *  workflow usa uno para escribir el resumen— asi que no condiciona nada. */
+const ABRE_BLOQUE = /^\s*(if|case|while|until|for)\b/;
+const CIERRA_BLOQUE = /^\s*(fi|esac|done)\b/;
+
+/** El primer `exit N` que se ejecuta SIEMPRE que el flujo llega a `desde`: el que esta a profundidad
+ *  CERO de bloques abiertos entre `desde` y `hasta`. Devuelve "" si no hay ninguno.
  *
- *  🔴 POR QUE ES EL INVARIANTE Y NO UNA LISTA DE LINEAS. Un `::error` sin corte es el peor de los dos
+ *  🔴 POR QUE PROFUNDIDAD Y NO PRESENCIA. Es el agujero que el AR de la iteracion 2 midio dos veces,
+ *  las dos con **2801/2801 en verde**: envolver el `exit 1` del chequeo de status en
+ *  `if [ "$SILENCIAR" = "si" ]; then exit 1; fi` —un interruptor por variable de entorno, que es la
+ *  forma canonica de "bajarle el volumen" a un job cronicamente rojo, y textualmente la tentacion que
+ *  el runbook predice— deja **401 / 404 / 501 / 503 en VERDE**; y el mismo mutante sobre el corte de
+ *  hallazgos deja el job **aprobando CON hallazgos**. Las aserciones anteriores preguntaban "¿aparece
+ *  un `exit 1` en este bloque?" y la pregunta correcta es "¿este `exit 1` se ejecuta cuando la
+ *  condicion se cumple?". Un `exit 1` anidado en un `if` que nunca se cumple contesta SI a la primera
+ *  y NO a la segunda.
+ *
+ *  ⚠️ Se cuenta ESTRUCTURA (bloques abiertos) y no SANGRIA a proposito: la sangria de un script dentro
+ *  de un block scalar de YAML es reformateable sin cambiar la semantica, y la estructura de bloques no.
+ *  Y si el flujo SALE del bloque que contiene a `desde` (profundidad negativa) la busqueda se corta: un
+ *  `exit 1` de mas afuera no protege a la anotacion de adentro.
+ *
+ *  ⚠️ LO QUE NO HACE: no es un parser de bash. Un `if … ; then exit 1 ; fi` escrito TODO en un renglon
+ *  cuenta como bloque abierto que nunca cierra, asi que el `exit` de ese renglon no lo ve nadie ⇒ la
+ *  anotacion se reporta como sin corte (rojo). Es la direccion segura del error, y en este YAML no hay
+ *  ningun `if` de un renglon. */
+function corteIncondicional(
+  lineas: readonly string[],
+  desde: number,
+  hasta: number = lineas.length,
+): string {
+  let profundidad = 0;
+  for (let j = desde; j < hasta; j++) {
+    const l = lineas[j] as string;
+    if (CIERRA_BLOQUE.test(l)) {
+      profundidad--;
+      if (profundidad < 0) return "";
+      continue;
+    }
+    if (ABRE_BLOQUE.test(l)) {
+      profundidad++;
+      continue;
+    }
+    const m = /^\s*exit\s+(\d+)\s*$/.exec(l);
+    if (m && profundidad === 0) return m[1] as string;
+  }
+  return "";
+}
+
+/** Las anotaciones `::error` de un `run:` que NO cortan: despues de cada una, y antes de la siguiente,
+ *  tiene que haber un `exit 1` **INCONDICIONAL** (ver `corteIncondicional`). Devuelve las que fallan.
+ *
+ *  🔴 POR QUE ES UN INVARIANTE Y NO UNA LISTA DE LINEAS. Un `::error` sin corte es el peor de los dos
  *  mundos: pinta la anotacion de rojo en la UI de Actions y DEJA EL PASO EN VERDE, asi que parece que
- *  hay senal y el job aprueba. Este workflow tiene SEIS anotaciones con su `exit 1`, y las seis
- *  sobrevivian al mutante `exit 1 → exit 0` mientras el corte se asserteaba por presencia (medido: las
- *  del status y de los hallazgos por el AR; las dos de los `case` de validacion de forma, que no viven
- *  en ningun `if`, las medi yo en el fix-pack y tambien sobrevivian). El invariante las cubre a las
- *  seis de una vez y NO ENVEJECE: una septima anotacion con su `exit 1` lo deja verde, y sin su
- *  `exit 1` lo pone rojo, sin tocar este archivo. */
+ *  hay senal y el job aprueba. Este workflow tiene SIETE anotaciones con su `exit 1` (las dos de los
+ *  `case` de validacion de forma no viven en ningun `if`, asi que ningun `bloqueIf` las alcanza), y
+ *  todas sobrevivian al mutante `exit 1 → exit 0` cuando el corte se asserteaba por presencia suelta.
+ *  El invariante las cubre a todas de una vez: agregar una anotacion nueva con su `exit 1`
+ *  incondicional lo deja verde, y sin el lo pone rojo, sin tocar este archivo.
+ *
+ *  🔴 SU ALCANCE EXACTO, corregido — la version anterior de este docblock decia que el invariante
+ *  "cubre las seis de una vez y NO ENVEJECE", y las dos mitades eran FALSAS: solo valia frente a
+ *  cortes INCONDICIONALES (un `exit 1` anidado en un `if` falso lo satisfacia) y el numero seis se
+ *  quedaba viejo con la primera anotacion nueva. Una declaracion asi apaga la revision siguiente, que
+ *  es peor que no tenerla. Lo que hoy se puede afirmar, y esta medido:
+ *    · cubre TODAS las anotaciones del `run:` que se le pase, sin enumerarlas;
+ *    · exige que el corte sea incondicional EN SU NIVEL, no que exista en algun lugar del bloque;
+ *    · es ASIMETRICO: verifica **anotacion ⇒ corte**, y NADA verifica **corte ⇒ anotacion**. La
+ *      asimetria es deliberada y su consecuencia operativa esta declarada en el docblock de arriba y
+ *      en el runbook (`docs/runbook-reconcile-orphans.md`, "un rojo sin anotacion"): este job puede
+ *      fallar SIN DECIR POR QUE. */
 function anotacionesSinCorte(run: string): readonly string[] {
   const lineas = run.split("\n");
   const sueltas: string[] = [];
   for (let i = 0; i < lineas.length; i++) {
     if (!(lineas[i] as string).includes("::error")) continue;
     const titulo = /::error title=([^:]*)/.exec(lineas[i] as string)?.[1] ?? `linea ${i}`;
-    let corte = "";
-    for (let j = i + 1; j < lineas.length; j++) {
-      const m = /^\s*exit\s+(\d+)\s*$/.exec(lineas[j] as string);
-      if (m) {
-        corte = m[1] as string;
-        break;
-      }
-      if ((lineas[j] as string).includes("::error")) break;
+    const siguiente = lineas.findIndex((l, k) => k > i && l.includes("::error"));
+    const corte = corteIncondicional(lineas, i + 1, siguiente === -1 ? lineas.length : siguiente);
+    if (corte !== "1") {
+      sueltas.push(`${titulo} → ${corte === "" ? "ningun corte incondicional" : `exit ${corte}`}`);
     }
-    if (corte !== "1") sueltas.push(`${titulo} → ${corte === "" ? "ningun exit" : `exit ${corte}`}`);
   }
   return sueltas;
 }
@@ -254,6 +430,64 @@ function anotacionesSinCorte(run: string): readonly string[] {
 const URL_RE = /https?:\/\/[^\s"'`)]+/g;
 function urlsDe(texto: string): readonly string[] {
   return [...texto.matchAll(URL_RE)].map((m) => m[0]);
+}
+
+/** Parte una linea de shell en TOKENS respetando las comillas: `-H "authorization: Bearer x"` son DOS
+ *  tokens y no cuatro. No es un parser de shell (no entiende escapes ni sustitucion de comandos
+ *  anidada); es lo justo para poder correr una LISTA BLANCA sobre el argv de un comando de una linea.
+ *  Calibrado en T-042B-15. */
+function tokens(cmd: string): readonly string[] {
+  const out: string[] = [];
+  let actual = "";
+  let comilla = "";
+  let abierto = false;
+  for (const c of cmd) {
+    if (comilla !== "") {
+      if (c === comilla) comilla = "";
+      else actual += c;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      comilla = c;
+      abierto = true;
+      continue;
+    }
+    if (/\s/.test(c)) {
+      if (actual !== "" || abierto) {
+        out.push(actual);
+        actual = "";
+        abierto = false;
+      }
+      continue;
+    }
+    actual += c;
+  }
+  if (actual !== "" || abierto) out.push(actual);
+  return out;
+}
+
+/** El argv del `curl` de un `run:`, con las lineas de continuacion (`\`) ya unidas y sin el
+ *  `if ! code="$(` de adelante ni el `)"; then` de atras. Devuelve [] si no hay ningun `curl`.
+ *
+ *  🔴 POR QUE HACE FALTA EL ARGV Y NO ALCANZA CON REGEX DE PRESENCIA. El AR de la iteracion 2 midio
+ *  dos banderas que el candado no podia ver, las dos con 15/15: `--trace-ascii /dev/stdout` volcaba el
+ *  intercambio HTTP COMPLETO —cuerpo incluido, o sea los IDs de remesas reales— al log de un repo
+ *  publico SIN TOCAR `body.json` (asi que ninguna asercion sobre `body.json` lo alcanzaba); y borrar
+ *  `--max-time 60` subia el techo de 60 s a los 5 min del `timeout-minutes`. Tres rondas de lista
+ *  negra son la evidencia de que la lista negra no cierra: lo que cierra es enumerar lo PERMITIDO. */
+function argvDelCurl(run: string): readonly string[] {
+  const lineas = run.split("\n");
+  const i = lineas.findIndex((l) => /\bcurl\b/.test(l));
+  if (i === -1) return [];
+  let texto = lineas[i] as string;
+  let j = i;
+  while (/\\\s*$/.test(lineas[j] as string) && j + 1 < lineas.length) {
+    j++;
+    texto = `${texto.replace(/\\\s*$/, "")} ${(lineas[j] as string).trim()}`;
+  }
+  const desde = texto.indexOf("curl");
+  const cierre = texto.lastIndexOf(')"');
+  return tokens(cierre > desde ? texto.slice(desde, cierre) : texto.slice(desde));
 }
 
 /** El `cron:` del YAML es la FUENTE UNICA de la cadencia. No se hardcodea en este archivo a
@@ -401,18 +635,26 @@ describe("WKH-328B — candado estatico del workflow que invoca reconcile-orphan
     expect(L1).toMatch(/%\{http_code\}/);
     expect(L1).toMatch(/!=\s*"200"/);
     expect(L1).toMatch(/-o\s+body\.json/);
-    // 🔴 CADA GUARDA CON SU `exit 1` DENTRO DE SU PROPIO `if`, no suelto en el paso. Ver el docblock
-    // de `bloqueIf`: con `expect(L1).toMatch(/exit 1/)` bastaba que quedara UNO de los tres, asi que
-    // voltear a `exit 0` el del chequeo de status —un 401 en VERDE— pasaba 15/15.
+    // 🔴 CADA GUARDA CON SU `exit 1` INCONDICIONAL DENTRO DE SU PROPIO `if`, no suelto en el paso y no
+    // anidado en otra condicion. Dos agujeros medidos, en dos rondas distintas:
+    //   · con `expect(L1).toMatch(/exit 1/)` bastaba que quedara UNO de los tres `exit 1` del paso, asi
+    //     que voltear a `exit 0` el del chequeo de status —un 401 en VERDE— pasaba 15/15;
+    //   · y con el corte asserteado por PRESENCIA dentro del bloque, envolverlo en
+    //     `if [ "$SILENCIAR" = "si" ]; then exit 1; fi` volvia a dejar el 401 en VERDE con 2801/2801.
+    //     Por eso se usa `corteIncondicional` y no un `toMatch(/^\s*exit 1$/m)`.
     const guardas = [
       ["el secreto esta vacio", /-z\s+"\$\{RECONCILE_ADMIN_SECRET\}"/],
+      ["el destino no es el host permitido", /"\$\{host\}"\s*!=\s*"\$\{HOST_PERMITIDO\}"/],
       ["el curl no completa", /curl/],
       ['el status no es "200"', /!=\s*"200"/],
     ] as const;
     for (const [etiqueta, condicion] of guardas) {
       const bloque = bloqueIf(L1, condicion);
       expect(bloque, `L1 no tiene un \`if\` para: ${etiqueta}`).not.toBe("");
-      expect(bloque, `el \`if\` de "${etiqueta}" no corta con exit 1`).toMatch(/^\s*exit 1$/m);
+      expect(
+        corteIncondicional(bloque.split("\n"), 1),
+        `el \`if\` de "${etiqueta}" no corta con un exit 1 INCONDICIONAL en su nivel`,
+      ).toBe("1");
     }
     // ⚠️ CALIBRACION DE `bloqueIf`, EN LAS DOS DIRECCIONES: que encuentre el corte cuando esta DENTRO
     // del bloque, y que NO lo vea cuando esta afuera. Sin esta sonda, un extractor con un bug propio
@@ -424,6 +666,17 @@ describe("WKH-328B — candado estatico del workflow que invoca reconcile-orphan
     expect(bloqueIf('if [ "$x" != "200" ]; then\n  echo hola\nfi\nexit 1', /!=\s*"200"/)).not.toMatch(
       /exit 1/,
     );
+    // ⚠️ Y LA CALIBRACION DEL DETECTOR DE CORTES, que es el arreglo de esta ronda: el mismo bloque con
+    // el `exit 1` suelto y con el `exit 1` anidado en un `if` que puede no cumplirse. El segundo es el
+    // mutante que sobrevivia con 2801/2801, y aca queda ejercitado en la direccion negativa.
+    expect(corteIncondicional('if [ "$x" != "200" ]; then\n  exit 1\nfi'.split("\n"), 1)).toBe("1");
+    expect(
+      corteIncondicional(
+        'if [ "$x" != "200" ]; then\n  if [ "$s" = "si" ]; then\n    exit 1\n  fi\nfi'.split("\n"),
+        1,
+      ),
+      "un exit 1 anidado en otro `if` NO es un corte incondicional",
+    ).toBe("");
     // Y ninguna anotacion queda sin corte: un `::error` sin `exit 1` pinta rojo y aprueba el paso.
     expect(anotacionesSinCorte(L1)).toEqual([]);
     expect(L1, "L1 tiene un `exit 0` explicito: un corte que no corta").not.toMatch(/^\s*exit 0\s*$/m);
@@ -443,7 +696,15 @@ describe("WKH-328B — candado estatico del workflow que invoca reconcile-orphan
     // y el job sale VERDE— pasaba 15/15, porque los `exit 1` de la validacion de forma seguian
     // escritos. Y es la mutacion que el runbook predice como tentacion humana con L2 cronicamente
     // roja (`docs/runbook-reconcile-orphans.md`: "la decision no es bajarle el volumen").
-    expect(ifHallazgos, "el `if` de hallazgos no corta con exit 1").toMatch(/^\s*exit 1$/m);
+    // Y el corte tiene que ser INCONDICIONAL: envolverlo en `if [ "$SILENCIAR" = "si" ]; then …` deja
+    // el job APROBANDO CON HALLAZGOS, y sobrevivia con 2801/2801 mientras esto era un `toMatch`.
+    expect(
+      corteIncondicional(ifHallazgos.split("\n"), 1),
+      "el `if` de hallazgos no corta con un exit 1 INCONDICIONAL en su nivel",
+    ).toBe("1");
+    // Simetria con L1 (era una asimetria sin razon escrita): borrar `set -euo pipefail` de L2 dejaba el
+    // paso sin `set -e`, o sea que un `jq` que falla no cortaria por si solo.
+    expect(L2, "L2 no tiene `set -euo pipefail`").toMatch(/set -euo pipefail/);
     // ⚠️ `truncated` es un BOOLEANO (en el endpoint sale de comparar el total contra el largo de la
     // pagina), asi que se valida como true/false. Si se le aplicara la validacion de entero de los
     // otros cuatro campos, este paso quedaria ROJO SIEMPRE.
@@ -461,14 +722,30 @@ describe("WKH-328B — candado estatico del workflow que invoca reconcile-orphan
     expect(anotacionesSinCorte('echo "::error title=x::y"\nexit 1')).toEqual([]);
     expect(anotacionesSinCorte('echo "::error title=x::y"\nexit 0')).toHaveLength(1);
     expect(anotacionesSinCorte('echo "::error title=x::y"\necho fin')).toHaveLength(1);
+    // Y el mutante de esta ronda: la anotacion con su `exit 1` PERO anidado en un `if` que puede no
+    // cumplirse. Con el detector anterior daba `[]` (verde) y el 401 salia verde.
+    expect(
+      anotacionesSinCorte('echo "::error title=x::y"\nif [ "$s" = "si" ]; then\n  exit 1\nfi'),
+      "un exit 1 anidado en un `if` que puede no cumplirse NO alcanza como corte",
+    ).toHaveLength(1);
+    // Y el grupo de llaves NO es una condicion: el corte que viene despues de un `{ … } >> resumen`
+    // (que es la forma exacta del chequeo de status) tiene que seguir contando como incondicional.
+    expect(
+      anotacionesSinCorte('echo "::error title=x::y"\n{\n  echo linea\n} >> "$RESUMEN"\nexit 1'),
+      "un grupo `{ … }` no condiciona nada y no puede invalidar el corte",
+    ).toEqual([]);
   });
 
   // ── AC-B6 · CD-10 — los logs de un repo PUBLICO son publicos ────────────────────────────────
   it("T-042B-10: el workflow no ecoa el body ni los IDs de correlacion", () => {
     // El array de items lleva remittanceId / quoteId / payoutId de remesas REALES.
-    // ⚠️ Sobre CODIGO (sin comentarios) y no sobre el YAML crudo: medido, un comentario que NOMBRE la
-    // prohibicion (`# CONTRAEJEMPLO PROHIBIDO: nunca \`cat body.json\``) ponia este test ROJO con el
-    // workflow CORRECTO.
+    // ⚠️ Sobre SHELL (los `run:`, sin comentarios de linea completa NI en linea) y no sobre el YAML
+    // crudo ni sobre `CODIGO`. Tres falsos rojos medidos, uno por ronda, todos con el workflow CORRECTO:
+    //   · un comentario de linea completa que NOMBRE la prohibicion
+    //     (`# CONTRAEJEMPLO PROHIBIDO: nunca \`cat body.json\``);
+    //   · un comentario EN LINEA (`  # nunca cat body.json` al final de un `echo`);
+    //   · y el `name:` de un paso que contenga la palabra `jq`, que es CONFIGURACION y por lo tanto
+    //     ningun despojador de comentarios lo saca. Ver el docblock de `SHELL`.
     const prohibidos = [
       "cat body.json",
       'cat "body.json"',
@@ -484,7 +761,7 @@ describe("WKH-328B — candado estatico del workflow que invoca reconcile-orphan
       `$${"{body}"}`,
     ];
     for (const p of prohibidos) {
-      expect(CODIGO.includes(p), `el workflow imprimiria datos de remesas reales: ${p}`).toBe(false);
+      expect(SHELL.includes(p), `el workflow imprimiria datos de remesas reales: ${p}`).toBe(false);
     }
     // 🔴 Y LA LISTA BLANCA, que es la que cierra el agujero de verdad. Una lista negra no puede
     // enumerar todas las formas de imprimir el array: medido, agregar la linea
@@ -501,7 +778,7 @@ describe("WKH-328B — candado estatico del workflow que invoca reconcile-orphan
       ".preparedOrphans.truncated",
     ] as const;
     const LECTURA_PERMITIDA = /^\s*[a-z_]+="\$\(jq -r '(\.[A-Za-z.]+)' body\.json\)"$/;
-    const lineasJq = CODIGO.split("\n").filter((l) => /\bjq\b/.test(l));
+    const lineasJq = SHELL.split("\n").filter((l) => /\bjq\b/.test(l));
     expect(lineasJq, "el codigo del workflow no invoca `jq` en ninguna linea").not.toEqual([]);
     const leidos: string[] = [];
     for (const l of lineasJq) {
@@ -510,10 +787,18 @@ describe("WKH-328B — candado estatico del workflow que invoca reconcile-orphan
       leidos.push((m?.[1] as string) ?? l.trim());
     }
     expect([...leidos].sort()).toEqual([...AGREGADOS].sort());
-    // ⚠️ LO QUE ESTA LISTA BLANCA NO CUBRE, declarado: cubre `jq`, no cualquier otra forma de leer el
-    // archivo. `head body.json`, `cat < body.json` o un `set -x` que ecoe el comando siguen pasando —
-    // los dos primeros por no estar en la lista negra de arriba, el tercero porque este candado mira
-    // el texto del .yml y no el log que produce.
+    // ⚠️ LO QUE ESTA LISTA BLANCA NO CUBRE, declarado y con los inputs concretos medidos: cubre `jq`,
+    // no cualquier otra forma de leer `body.json`. Siguen pasando en verde, y los seis publicarian IDs
+    // de remesas reales en un repo publico:
+    //   · `head -c 300 body.json` a stdout, y `head -20 body.json >> "$GITHUB_STEP_SUMMARY"`;
+    //   · `echo "detalle: $(cat < body.json)"`;
+    //   · `while IFS= read -r l; do echo "$l"; done < body.json`;
+    //   · `python3 -c "…['items']…"`;
+    //   · `set -x`, que ecoa el comando y no el archivo.
+    // El eje de las BANDERAS de `curl` —`--trace-ascii /dev/stdout`, que volcaba el cuerpo al log sin
+    // tocar `body.json`— NO esta en esta lista: lo cierra la lista blanca del argv en T-042B-15. Si
+    // algun dia se cierran estos seis, el instrumento es el mismo: lista blanca de los comandos del
+    // `run:`, no lista negra de literales. Ver el PERIMETRO en el encabezado de este archivo.
   });
 
   // ── AC-B7 — solapamiento y cota de duracion ─────────────────────────────────────────────────
@@ -555,5 +840,123 @@ describe("WKH-328B — candado estatico del workflow que invoca reconcile-orphan
     expect(CRON, "no se pudo leer el `cron:` del workflow").not.toBe("");
     expect(RUNBOOK.includes(CRON), `el runbook no declara la cadencia ${CRON}`).toBe(true);
     expect(ENV_EXAMPLE.includes(CRON), `.env.example no declara la cadencia ${CRON}`).toBe(true);
+  });
+
+  // ── AC-B2 · AC-B3 · AC-B6 · CD-10 — el argv del curl y el DESTINO del secreto ────────────────
+  it("T-042B-15: el argv del curl es una LISTA BLANCA, y el destino del secreto esta fijado", () => {
+    // ⚠️ `${VAR}` escrito de corrido dentro de una cadena de TS lo marca biome con
+    // lint/suspicious/noTemplateCurlyInString, asi que se arma partido, igual que el literal prohibido
+    // de T-042B-10. Lo que se compara es el TEXTO, no la sintaxis del template.
+    const VAR_SECRETO = `$${"{RECONCILE_ADMIN_SECRET}"}`;
+    const VAR_URL = `$${"{RECONCILE_URL}"}`;
+    const HEADER = `authorization: Bearer ${VAR_SECRETO}`;
+
+    const argv = argvDelCurl(L1);
+    expect(argv, "L1 no tiene ningun `curl`").not.toEqual([]);
+
+    // 🔴 LISTA BLANCA DEL ARGV. Cualquier token que no este enumerado es rojo. `--trace-ascii
+    // /dev/stdout` —que publica el cuerpo entero en el log de un repo publico sin tocar `body.json`—
+    // muere aca, y muere por NO ESTAR EN LA LISTA, no por estar en una lista negra que alguien tuvo que
+    // imaginar. Lo mismo cualquier `--output`, `-v`, `--trace`, `-D`, `--data-binary` o un segundo `-H`.
+    const ARGV_PERMITIDO: readonly (string | RegExp)[] = [
+      "curl",
+      "-sS",
+      "-X",
+      "POST",
+      "--max-time",
+      /^[0-9]+$/,
+      "-H",
+      HEADER,
+      "-o",
+      "body.json",
+      "-w",
+      "%{http_code}",
+      VAR_URL,
+    ];
+    for (const t of argv) {
+      const permitido = ARGV_PERMITIDO.some((p) => (typeof p === "string" ? p === t : p.test(t)));
+      expect(permitido, `bandera del curl que no esta en la lista blanca del candado: '${t}'`).toBe(true);
+    }
+    // Y LA OTRA DIRECCION: la lista blanca sola no impide BORRAR una bandera necesaria. Medido: sin
+    // `--max-time 60` el techo del curl pasa de 60 s a los 5 min del `timeout-minutes`, y el runbook
+    // —que afirma los 60 s— queda desactualizado en silencio.
+    for (const req of ["-sS", "-X", "POST", "--max-time", "-H", HEADER, "-o", "body.json", "-w", "%{http_code}", VAR_URL]) {
+      expect(argv, `al curl le falta un argumento obligatorio: ${req}`).toContain(req);
+    }
+
+    // ⚠️ CALIBRACION DEL LECTOR, EN LAS DOS DIRECCIONES. Sin esto, un `argvDelCurl` con un bug propio
+    // (devolver [] o perder los tokens) haria que las dos listas de arriba aplaudan sobre nada.
+    expect(tokens('curl -H "authorization: Bearer x" -o body.json')).toEqual([
+      "curl",
+      "-H",
+      "authorization: Bearer x",
+      "-o",
+      "body.json",
+    ]);
+    expect(
+      argvDelCurl('if ! code="$(curl -sS --trace-ascii /dev/stdout \\\n            "$U")"; then'),
+      "la sonda negativa: si el lector no ve la bandera, la lista blanca no protege nada",
+    ).toContain("--trace-ascii");
+
+    // 🔴 EL DESTINO, CRUZADO CON DOS FUENTES INDEPENDIENTES DEL PROPIO CURL. Medido por el AR: cambiar
+    // el host de la URL a otro dominio —una edicion de UN renglon— mandaba el
+    // `authorization: Bearer <secreto de administracion de produccion>` a ese dominio, y la suite
+    // aprobaba 15/15. Es el hallazgo mas grave de las tres rondas y no dependia de ningun test: el
+    // arreglo de fondo esta en el `.yml` (compara el host contra la lista blanca ANTES del curl y corta
+    // sin mandar nada). Esto lo cruza con el arbol de la app y con el runbook.
+    const urls = urlsDe(L1);
+    expect(urls, "el paso L1 tiene que tener EXACTAMENTE una URL escrita").toHaveLength(1);
+    const destino = urls[0] as string;
+    expect(destino.startsWith("https://"), `el destino no es https: ${destino}`).toBe(true);
+    const host = (destino.replace("https://", "").split("/")[0] as string) ?? "";
+    expect(host, "no se pudo derivar el host del destino").not.toBe("");
+    // 1. el propio `.yml` se niega a mandar el secreto a otro host: el literal de la lista blanca del
+    //    shell tiene que ser EL MISMO host que el de la URL.
+    expect(
+      L1.includes(`HOST_PERMITIDO="${host}"`),
+      `el workflow no fija el host antes del curl: falta HOST_PERMITIDO="${host}"`,
+    ).toBe(true);
+    expect(L1, "el workflow no compara el host contra HOST_PERMITIDO antes del curl").toMatch(
+      /"\$\{host\}"\s*!=\s*"\$\{HOST_PERMITIDO\}"/,
+    );
+    // 2. y el runbook —otro archivo, que un humano lee— declara el MISMO host. Cambiar el destino de
+    //    verdad exige tocar los dos archivos, que es exactamente lo que se quiere que se revise.
+    expect(RUNBOOK.includes(host), `el runbook no declara el host de destino ${host}`).toBe(true);
+    // 3. la RUTA sale del arbol de la app y no de una copia escrita aca: si el endpoint se mueve, el
+    //    destino del cron tiene que moverse con el.
+    const ruta = `/${ROUTE_REL.replace("app/", "").replace("/route.ts", "")}`;
+    expect(destino, "el destino no es el endpoint que esta en el arbol de la app").toBe(
+      `https://${host}${ruta}`,
+    );
+  });
+
+  // ── Calibracion de los lectores de este archivo ──────────────────────────────────────────────
+  it("T-042B-16: el despojador de comentarios, calibrado en las DOS direcciones", () => {
+    // 🔴 LA DIRECCION PELIGROSA (falso verde): un comentario EN LINEA que nombre `-o body.json` no
+    // puede satisfacer la asercion que exige que el `-o` este en el `curl`. Medido con el `-o` borrado:
+    // pasaba 2801/2801, y el cuerpo con IDs de remesas reales salia al log publico.
+    expect(sinComentarios('  echo "transporte OK"  # el cuerpo ya no va a -o body.json')).toBe(
+      '  echo "transporte OK"',
+    );
+    // 🔴 LA DIRECCION DEL FALSO ROJO: un comentario en linea que nombre una prohibicion no puede poner
+    // T-042B-10 rojo con el workflow correcto. Escribir ese comentario es una edicion legitima.
+    expect(sinComentarios('  echo "sin hallazgos"  # nunca cat body.json').includes("cat body.json")).toBe(
+      false,
+    );
+    // Y el comentario de linea completa sigue saliendo entero (no queda una linea con basura).
+    expect(sinComentarios("    # solo un comentario\n    echo hola")).toBe("    echo hola");
+    // ⚠️ LO QUE NO SE PUEDE TOCAR, que es la razon por la que esto no es un `split("#")[0]`: un `#`
+    // dentro de comillas es DATO (el resumen del workflow escribe `### reconcile-orphans`), y un `#`
+    // pegado a un nombre de variable es una EXPANSION del shell (el workflow saca el esquema de la URL
+    // con una). Comerselos seria un falso rojo, o peor, cambiar lo que el candado cree que ejecuta.
+    expect(sinComentarios('  echo "### reconcile-orphans # con numeral"')).toBe(
+      '  echo "### reconcile-orphans # con numeral"',
+    );
+    expect(sinComentarios(`  host="$${"{RECONCILE_URL#*://}"}"`)).toBe(
+      `  host="$${"{RECONCILE_URL#*://}"}"`,
+    );
+    // Y la calibracion de que el despojador NO es un no-op disfrazado: si `sinComentarioEnLinea`
+    // devolviera siempre la linea entera, las dos primeras sondas fallarian; si devolviera siempre "",
+    // fallarian las dos ultimas. Las cuatro juntas lo fijan.
   });
 });

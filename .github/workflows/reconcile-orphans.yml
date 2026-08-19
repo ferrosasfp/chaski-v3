@@ -34,8 +34,9 @@
 # y documentada.
 #
 # LA SENAL SON DOS CAPAS, CON NOMBRE PROPIO Y DISTINTO:
-#   L1 — TRANSPORTE. HTTP != 200, un `curl` que no completa, o el secreto vacio. Prueba que el
-#        endpoint es alcanzable y autenticado. Cubre 401 (secreto rotado en un solo store), 501
+#   L1 — TRANSPORTE. HTTP != 200, un `curl` que no completa, el secreto vacio, o un destino que no
+#        es el host fijado (en ese ultimo caso corta ANTES del curl y el secreto no sale). Prueba que
+#        el endpoint es alcanzable y autenticado. Cubre 401 (secreto rotado en un solo store), 501
 #        (env borrada de Vercel o ledger apagado), 503 (la DB no contesta), 404 (la ruta
 #        desaparecio del deploy) y timeout.
 #   L2 — HALLAZGOS. 200 con `preparedOrphans.total > 0`, `failed > 0` o `manualReview > 0`. Prueba
@@ -131,16 +132,40 @@ jobs:
             exit 1
           fi
 
+          # 🔴 EL DESTINO VA FIJADO, Y SE VERIFICA ANTES DE MANDAR EL SECRETO. Medido en el AR de la
+          # iteracion 2: con la URL escrita suelta dentro del `curl`, cambiar el host a otro dominio
+          # —una edicion de UN renglon, en un repo publico donde cualquiera puede abrir una PR— mandaba
+          # el header `authorization: Bearer <el secreto de administracion de produccion>` a ese
+          # dominio, y la suite aprobaba igual. Asi que el destino se arma en una variable, y el
+          # esquema y el host se comparan contra la lista blanca ANTES del curl: si no coinciden el
+          # paso CORTA y el secreto NO SALE. Esto no depende de ningun test: es el .yml el que se
+          # niega a mandar la credencial afuera.
+          HOST_PERMITIDO="chaski-v2.vercel.app"
+          RECONCILE_URL="https://chaski-v2.vercel.app/api/admin/reconcile-orphans"
+
+          esquema="${RECONCILE_URL%%://*}"
+          host="${RECONCILE_URL#*://}"
+          host="${host%%/*}"
+          if [ "${esquema}" != "https" ] || [ "${host}" != "${HOST_PERMITIDO}" ]; then
+            echo "::error title=destino no permitido (L1)::el POST iria al host '${host}' con esquema '${esquema}', y el unico destino permitido es el host '${HOST_PERMITIDO}' por https. El secreto de administracion NO se envio. Si el alias de produccion cambio de verdad, hay que editar los dos renglones del workflow Y docs/runbook-reconcile-orphans.md, que el candado cruza. Ver docs/runbook-reconcile-orphans.md"
+            exit 1
+          fi
+
           # -o body.json ⇒ el cuerpo va a un ARCHIVO, nunca a stdout (repo publico: ver el docblock).
           # -w '%{http_code}' ⇒ lo unico que sale por stdout es el codigo HTTP.
           # El secreto viaja en un HEADER, jamas en la URL: una query-string es cacheable y queda
           # escrita en logs de proxies y del proveedor.
+          # 🔴 Y NINGUNA OTRA BANDERA. El candado corre una LISTA BLANCA sobre el argv de este curl.
+          # Medido: `--trace-ascii /dev/stdout` volcaba el intercambio HTTP completo —cuerpo incluido,
+          # o sea los IDs de remesas reales— al log publico SIN tocar body.json, y ninguna lista negra
+          # de literales podia verlo. Agregar una bandera que el candado no enumere pone la suite roja
+          # a proposito: para eso esta.
           if ! code="$(curl -sS -X POST \
             --max-time 60 \
             -H "authorization: Bearer ${RECONCILE_ADMIN_SECRET}" \
             -o body.json \
             -w '%{http_code}' \
-            https://chaski-v2.vercel.app/api/admin/reconcile-orphans)"; then
+            "${RECONCILE_URL}")"; then
             echo "::error title=transporte (L1)::el curl no completo (timeout de 60s, DNS, TLS o red). El endpoint no es alcanzable desde el runner. Ver docs/runbook-reconcile-orphans.md"
             exit 1
           fi

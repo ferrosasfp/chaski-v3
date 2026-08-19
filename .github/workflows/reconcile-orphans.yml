@@ -3,7 +3,15 @@
 # ⛔ ESTADO MEDIDO AL 2026-08-19: ESTE CRON TODAVIA NO CORRIO NI UNA VEZ, Y NO EMPIEZA A CORRER POR
 # MERGEAR ESTE ARCHIVO. Los secrets de Actions de este repo estan en `{"total_count":0}`, el unico
 # workflow registrado en GitHub es `ci.yml`, y `gh run list --workflow=reconcile-orphans.yml` contesta
-# HTTP 404 (ojo: con exit code 0 — hay que leer el texto, no el exit). Que este archivo exista y este
+# `HTTP 404: Not Found` con EXIT CODE 1 (gh 2.62.0).
+# ⚠️ ESTE RENGLON DECIA "con exit code 0 — hay que leer el texto, no el exit", Y ERA FALSO: ese 0 era
+# del `head` al que se habia canalizado el comando para medirlo. Medido de nuevo SIN PIPE, en tres
+# formas (a secas, con `--json event`, con `--repo`) ⇒ exit 1 en las tres; el mismo comando con
+# `| head -3` ⇒ exit 0; y el control positivo `--workflow=ci.yml` ⇒ exit 0 con corridas de verdad. O
+# sea que el exit code de `gh` SI discrimina, y el error era del instrumento con que se lo midio —la
+# misma regla de este expediente, "los exit codes nunca se leen despues de un pipe", mordiendo la
+# unica frase que hablaba de exit codes. La conclusion de fondo no cambia y esta verificada por otro
+# camino: `gh api …/actions/workflows` devuelve un solo workflow, `ci.yml`. Que este archivo exista y este
 # commiteado es la INTENCION; los pre-requisitos que faltan, ninguno de los cuales se resuelve
 # mergeando, estan en docs/runbook-reconcile-orphans.md. Todo lo que sigue esta escrito en presente a
 # proposito: describe lo que el workflow HACE cuando corra, no lo que ya paso.
@@ -172,9 +180,12 @@ jobs:
           # El secreto viaja en un HEADER, jamas en la URL: una query-string es cacheable y queda
           # escrita en logs de proxies y del proveedor.
           # 🔴 Y NINGUNA OTRA BANDERA. El candado corre una LISTA BLANCA sobre el argv de CADA `curl`
-          # que este paso invoque —no solo el primero: medido en el CR, con el lector anterior un
-          # SEGUNDO comando `curl` mandando el mismo header a otro host pasaba 17/17 en verde—, y el
-          # VALOR del `--max-time` esta atado contra el runbook, no solo la bandera.
+          # que invoque CUALQUIERA de los dos pasos —no solo el primero de este paso: medido en el CR,
+          # con el lector anterior un SEGUNDO comando `curl` mandando el mismo header a otro host pasaba
+          # 17/17 en verde; y medido en el F4, un `curl --data-binary @body.json` en el paso de abajo
+          # subia el cuerpo entero a otro host y tambien pasaba 17/17, porque la lista blanca corria
+          # solo sobre ESTE paso—, y el VALOR del `--max-time` esta atado contra el runbook, no solo la
+          # bandera.
           # Medido: `--trace-ascii /dev/stdout` volcaba el intercambio HTTP completo —cuerpo incluido,
           # o sea los IDs de remesas reales— al log publico SIN tocar body.json, y ninguna lista negra
           # de literales podia verlo. Agregar una bandera que el candado no enumere pone la suite roja

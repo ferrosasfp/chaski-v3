@@ -25,15 +25,15 @@ import {
   lostEscrowRecoveryError,
   shortErrorCode,
   isDemoMode,
-  isKycDemo,
+  // ⛔ acá estaba `isKycDemo`: WKH-233 lo borró (el juicio es del agente). Línea-neutro a propósito.
   kycOriginNotice,
-  REAL_KYC_PROVENANCES,
+  // ⛔ acá estaba `REAL_KYC_PROVENANCES`: misma HU, mismo motivo. Ver la lápida en `flow-vm.ts`.
   esVentanaSinAbiertos, sinAbiertosCopy, sinIndiceCopy, indiceIlegibleCopy, statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, // WKH-339/CR: las otras 4 constantes YA NO se importan por nombre — el loop las DERIVA del módulo, que es el arreglo de BLQ-BAJO-1. Si vuelven acá por nombre, el loop volvió a ser una lista a mano. // WKH-339: EN ESTA LÍNEA, no en líneas nuevas — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
 } from "./flow-vm"; import { cruceDeCuenta, seVerificoLaCuenta } from "./flow-vm"; import * as MODULO_FLOW_VM from "./flow-vm"; // WKH-339/CR-BLQ-BAJO-1: el namespace entero, para DERIVAR la lista de copies en vez de escribirla. En esta línea para no desplazar `:520`
-import {
-  KYC_PROVENANCE_LIVE,
-  KYC_PROVENANCE_MOCK,
-} from "../infrastructure/didit/decision";
+// WKH-233 — los dos literales del proveedor se escriben ACÁ, en un test. El módulo que los exportaba
+// se borró con la HU; los tests SÍ pueden nombrarlo (el candado de residuo salta los `*.test.*`).
+const KYC_PROVENANCE_LIVE = "didit";
+const KYC_PROVENANCE_MOCK = "didit-mock";
 // El número que el copy dice sale de la MISMA constante que el refund sondea, nunca de un literal
 // escrito acá: así el test no puede quedar afirmando un número que el código dejó de usar.
 import { MAX_RECOVERY_CANDIDATES } from "../infrastructure/solana-wallet";
@@ -279,7 +279,7 @@ describe("flow-vm — isDemoMode", () => {
   it("AC-6: ambos provenance didit → false (deriva de provenance, no de flag)", () => {
     const rem = {
       quote: { provenance: "didit" },
-      kyc: { provenance: "didit" },
+      kyc: { provenance: "didit", realVerified: true },
     } as RemittanceState;
     expect(isDemoMode(rem)).toBe(false);
   });
@@ -287,7 +287,7 @@ describe("flow-vm — isDemoMode", () => {
   it("T-AC3a (AC-3/5): quote/kyc reales pero payout mock (local-fallback) → true", () => {
     const rem = {
       quote: { provenance: "didit" },
-      kyc: { provenance: "didit" },
+      kyc: { provenance: "didit", realVerified: true },
       payoutProvenance: "local-fallback",
     } as RemittanceState;
     expect(isDemoMode(rem)).toBe(true);
@@ -302,7 +302,7 @@ describe("flow-vm — isDemoMode", () => {
   it("kyc.provenance didit-mock (DIDIT_ENV=mock) → true, sin payout todavía", () => {
     const rem = {
       quote: { provenance: "didit" },
-      kyc: { provenance: KYC_PROVENANCE_MOCK },
+      kyc: { provenance: KYC_PROVENANCE_MOCK, realVerified: false },
     } as RemittanceState;
     expect(isDemoMode(rem)).toBe(true);
   });
@@ -311,7 +311,7 @@ describe("flow-vm — isDemoMode", () => {
   it("una proveniencia de KYC desconocida → true (lo que no está en la allowlist no es real)", () => {
     const rem = {
       quote: { provenance: "didit" },
-      kyc: { provenance: "verificador-nuevo-2027" },
+      kyc: { provenance: "verificador-nuevo-2027", realVerified: false },
     } as RemittanceState;
     expect(isDemoMode(rem)).toBe(true);
   });
@@ -327,7 +327,7 @@ describe("flow-vm — isDemoMode", () => {
 
     const vacia = {
       quote: { provenance: "didit" },
-      kyc: { provenance: "" },
+      kyc: { provenance: "", realVerified: false },
     } as RemittanceState;
     expect(isDemoMode(vacia)).toBe(true);
   });
@@ -343,48 +343,48 @@ describe("flow-vm — isDemoMode", () => {
   it("T-AC3b (AC-3/5): payout real transfi / null / ausente (quote/kyc reales) → false", () => {
     const real = {
       quote: { provenance: "didit" },
-      kyc: { provenance: "didit" },
+      kyc: { provenance: "didit", realVerified: true },
       payoutProvenance: "transfi",
     } as RemittanceState;
     expect(isDemoMode(real)).toBe(false);
 
     const noPayout = {
       quote: { provenance: "didit" },
-      kyc: { provenance: "didit" },
+      kyc: { provenance: "didit", realVerified: true },
       payoutProvenance: null,
     } as RemittanceState;
     expect(isDemoMode(noPayout)).toBe(false);
 
     const absent = {
       quote: { provenance: "didit" },
-      kyc: { provenance: "didit" },
+      kyc: { provenance: "didit", realVerified: true },
     } as RemittanceState; // payoutProvenance undefined (legacy) → false
     expect(isDemoMode(absent)).toBe(false);
   });
 });
 
-describe("flow-vm — la allowlist del KYC (dirección de seguridad)", () => {
-  // El conjunto NO se compara contra un literal escrito acá: se compara contra la constante que
-  // PRODUCE la etiqueta. Es lo que prueba el cableado en vez de repetir el valor (un segundo Set con
-  // los mismos strings es exactamente cómo se desincronizan las dos capas).
-  it("la allowlist contiene la etiqueta que produce mapDiditDecision para `live`, y sólo esa", () => {
-    expect(REAL_KYC_PROVENANCES.has(KYC_PROVENANCE_LIVE)).toBe(true);
-    expect([...REAL_KYC_PROVENANCES]).toEqual([KYC_PROVENANCE_LIVE]);
-    // Y la etiqueta del mock NO está: es la propiedad de la que cuelga todo el arreglo.
-    expect(REAL_KYC_PROVENANCES.has(KYC_PROVENANCE_MOCK)).toBe(false);
+describe("T-VM-1 · el juicio de la pantalla es del AGENTE, no de una allow-list local (WKH-233/D-3)", () => {
+  // ⚠️ REEMPLAZA a los dos `it` que medían `REAL_KYC_PROVENANCES` e `isKycDemo`, borrados con la HU: una lista local con el nombre del proveedor adentro es lo primero que habría que cambiar al cambiar de proveedor, y el criterio de cierre es que NO haga falta cambiar nada. Lo que la reemplaza —`realVerified`, poblado desde el `payoutAllowed` del agente— exige MÁS: aprobado ∧ hubo reclamo de identidad ∧ la identidad COINCIDE ∧ proveniencia en SU allow-list de verificaciones reales.
+  // ⛔ Δ0 EN LÍNEAS, Y NO ES ESTILO: `http-pop-signer.ts:33` cita `flow-vm.test.ts:520` por número y
+  // esa línea está DEBAJO de acá, así que agregar o quitar una línea en este bloque la corre. El
+  // propio `http-pop-signer.ts` documenta que su bloque no se mueve por la razón simétrica.
+  const remCon = (provenance: string, realVerified?: boolean) =>
+    ({ quote: { provenance: "didit" }, kyc: { provenance, realVerified } }) as RemittanceState;
+
+  it("T-VM-1: mira `realVerified` y NO la proveniencia — `false` es demo con CUALQUIER proveniencia", () => {
+    // 🧬 MUTANTE: volver a mirar `provenance` (o reponer `isKycDemo`) ⇒ ROJO por el primer caso, que es proveniencia REAL del proveedor + `realVerified:false`: con la lógica vieja daba `false` y la pantalla habría afirmado "Identidad verificada" sobre algo que el agente NO declaró real.
+    for (const p of [KYC_PROVENANCE_LIVE, KYC_PROVENANCE_MOCK, "local-fallback", "", "raro"]) {
+      expect(isDemoMode(remCon(p, false)), `con provenance="${p}"`).toBe(true);
+    }
+    // Ausencia de dato NO es prueba de que sea real: una rehidratación vieja (el spread de `kyc-store.ts` / `persistence.ts`) vuelve con `undefined`, y eso sobre-avisa: es el error gratis.
+    expect(isDemoMode(remCon(KYC_PROVENANCE_LIVE, undefined))).toBe(true);
   });
 
-  it("isKycDemo: sólo la allowlist es real; comparación EXACTA (un espacio de más ya no lo es)", () => {
-    expect(isKycDemo(KYC_PROVENANCE_LIVE)).toBe(false);
-    expect(isKycDemo(KYC_PROVENANCE_MOCK)).toBe(true);
-    expect(isKycDemo("local-fallback")).toBe(true);
-    expect(isKycDemo("fake")).toBe(true);
-    expect(isKycDemo("lo-que-sea")).toBe(true);
-    expect(isKycDemo(" didit")).toBe(true); // exacta, como en REAL_PAYOUT_PROVENANCES
-    expect(isKycDemo("Didit")).toBe(true);
-    expect(isKycDemo("")).toBe(true);
-    expect(isKycDemo(null)).toBe(true);
-    expect(isKycDemo(undefined)).toBe(true);
+  it("✅ calibración inversa: `realVerified:true` ⇒ false, INCLUSO con una proveniencia desconocida", () => {
+    // La mitad que distingue este guard de uno que deniega todo. Y la proveniencia rara no es un descuido: si el agente dijo que sí, la etiqueta cruda ya no vota. Eso ES el criterio de cierre hecho test.
+    for (const p of [KYC_PROVENANCE_LIVE, "verificador-nuevo-2027"]) {
+      expect(isDemoMode(remCon(p, true)), `con provenance="${p}"`).toBe(false);
+    }
   });
 
   it("kycOriginNotice: dice el origen crudo cuando existe, y nombra la ausencia cuando no", () => {

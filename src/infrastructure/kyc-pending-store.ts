@@ -16,12 +16,31 @@ export class LocalKycPendingStore implements KycPendingStore {
       throw new Error("kyc_pending_unavailable");
     }
   }
+  /**
+   * 🔴 EL `carril` SE NORMALIZA AL LEER, Y ⛔ LA CLAVE **NO** CAMBIA DE VERSIÓN (WKH-233/DT-3a).
+   *
+   * POR QUÉ NO UN `.v2`. `CLAVE_KYC_PENDIENTE` es un literal EXPORTADO y consumido por
+   * `../presentation/splash-puerta.ts`: subirle la versión dejaría a los pendientes EN VUELO
+   * invisibles para la puerta del splash, o sea que quien está volviendo del redirect en ese momento
+   * se quedaría sin la pantalla que lo retoma. Migrar el dato al leer no tiene ese costo.
+   *
+   * POR QUÉ EL DEFAULT ES `"directo"` Y NO `"agente"`. Un pendiente guardado ANTES de esta HU se creó
+   * contra el proveedor: su `sessionId` no tiene fila en `kyc_session_tokens`, así que el agente
+   * contestaría 401. Asumir `"agente"` haría que `ResumeKyc` lo consultara igual y devolviera
+   * `"processing"` para siempre — un spinner infinito. `"directo"` es el lado fail-closed: se dice
+   * que no se puede retomar, con una pantalla que tiene salida.
+   *
+   * ⛔ Y NO se valida "es uno de los dos": cualquier valor que no sea exactamente `"agente"` cae en
+   * `"directo"`. Un valor desconocido en un blob de `localStorage` —que es atacante-controlable— no
+   * puede abrir el camino que consulta al agente.
+   */
   async get(): Promise<KycPending | null> {
     if (typeof localStorage === "undefined") return null;
     const raw = localStorage.getItem(CLAVE_KYC_PENDIENTE);
     if (!raw) return null;
     try {
-      return JSON.parse(raw) as KycPending;
+      const p = JSON.parse(raw) as KycPending;
+      return { ...p, carril: p.carril === "agente" ? "agente" : "directo" };
     } catch {
       return null;
     }

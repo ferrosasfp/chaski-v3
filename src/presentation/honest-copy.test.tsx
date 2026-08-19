@@ -42,10 +42,10 @@ import {
   T0,
   beneficiary,
 } from "../test-support/fakes";
-import {
-  KYC_PROVENANCE_LIVE,
-  KYC_PROVENANCE_MOCK,
-} from "../infrastructure/didit/decision";
+const KYC_PROVENANCE_LIVE = "didit"; // WKH-233: los dos literales se escriben ACÁ, en un test, porque
+const KYC_PROVENANCE_MOCK = "didit-mock"; // el módulo que los exportaba se borró con la HU. Δ0 en líneas: este archivo recibe citas por número.
+// (el bloque de import de esas dos constantes ocupaba estas mismas 4 líneas)
+
 
 // CD-8 / DT-7: framer-motion pass-through (mismo mock que flow.test.tsx). jsdom no implementa
 // requestAnimationFrame y sin esto los steps del flujo nunca montan.
@@ -98,9 +98,9 @@ async function irARevisar(): Promise<void> {
  * del quote queda apagada en los cuatro casos, así que lo único que puede prender el sello acá es la
  * pata del KYC. Es lo que hace que estos tests midan lo que dicen medir.
  */
-async function irAConfirmarConKyc(provenance: string | undefined): Promise<void> {
-  render(
-    <RemittanceFlow pasoInicial="send" container={buildTestContainer({ kyc: new FakeKycGateway({ provenance }) })} />,
+async function irAConfirmarConKyc(provenance: string | undefined, realVerified = false): Promise<void> {
+  render( // WKH-233: quien decide si la pantalla puede AFIRMAR una verificación es `realVerified` (el juicio del agente), no la proveniencia. La proveniencia sigue viajando porque es lo que la pantalla NOMBRA cuando no puede afirmar nada.
+    <RemittanceFlow pasoInicial="send" container={buildTestContainer({ kyc: new FakeKycGateway({ provenance, realVerified }) })} />,
   );
   fillSend();
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
@@ -504,11 +504,11 @@ describe("estilo del copy", () => {
 // prueban las cuatro entradas posibles de esa decisión, y el de "una proveniencia que nadie conoce"
 // es el que muere si alguien la vuelve a invertir a denylist.
 describe("la identidad del paso confirm", () => {
-  it("KYC real (allowlist): badge verde, sin sello de demo", async () => {
-    await irAConfirmarConKyc(KYC_PROVENANCE_LIVE);
+  it("KYC que el AGENTE declaró real: badge verde, sin sello de demo", async () => {
+    await irAConfirmarConKyc(KYC_PROVENANCE_LIVE, true);
 
     expect(screen.getByText(/Identidad verificada/)).toBeInTheDocument();
-    expect(screen.getByText(/Test Quispe Mamani/)).toBeInTheDocument();
+    // ⚠️ WKH-233: acá se afirmaba además que el NOMBRE está en pantalla; ya no, el agente no devuelve ningún dato de identidad (que NINGUNO esté lo mide T-UI-2 en `flow.test.tsx`). Δ0 en líneas: este archivo recibe citas por número.
     // Éste es el caso que NO tiene que cambiar: sin sello, como hasta hoy.
     expect(screen.queryByText(/Modo demo/)).toBeNull();
     expect(screen.queryByText(/Identidad sin verificar/)).toBeNull();
@@ -516,7 +516,7 @@ describe("la identidad del paso confirm", () => {
 
   // EL test de esta HU: el KYC simulado que la demo usa de verdad.
   it("KYC simulado (didit-mock): el sello se prende en confirm y la pantalla no afirma una verificación", async () => {
-    await irAConfirmarConKyc(KYC_PROVENANCE_MOCK);
+    await irAConfirmarConKyc(KYC_PROVENANCE_MOCK, false);
 
     // (a) el sello, que antes no aparecía hasta `track` y sólo si el payout era mock.
     expect(screen.getAllByText(/Modo demo \(con pasos simulados\)/)).toHaveLength(1);
@@ -527,8 +527,8 @@ describe("la identidad del paso confirm", () => {
     expect(
       screen.getByText(/Estos datos salieron de "didit-mock", que no está en la lista de verificadores reales/),
     ).toBeInTheDocument();
-    // (d) los datos siguen a la vista: el problema era lo que se AFIRMABA de ellos, no mostrarlos.
-    expect(screen.getByText(/Test Quispe Mamani/)).toBeInTheDocument();
+    // (d) ⚠️ ACÁ SE AFIRMABA que los datos siguen a la vista. WKH-233 lo volvió falso y no se disimula:
+    // el agente no devuelve ningún dato de identidad, así que no hay datos que mostrar en NINGUNA rama.
     // (e) el barrido de em dashes también cubre esta pantalla, que antes no visitaba.
     expect(document.body.textContent ?? "").not.toContain("—");
   });

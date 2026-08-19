@@ -271,22 +271,38 @@ describe("POST /api/kyc/verdict (WKH-333)", () => {
     ).toEqual({ verdict: null, reason: "expired" });
   });
 
-  // ── T-EP-9 — AC-11 ──────────────────────────────────────────────────────────────────────────
-  it("T-EP-9: provenance 'didit-mock' ⇒ reason 'simulated' (M-7)", async () => {
+  // ── T-EP-9 — 🔴 REESCRITO POR WKH-233, Y LA CONSECUENCIA VA DICHA ────────────────────────────────
+  //
+  // ⚠️ ESTOS DOS `it` AFIRMABAN `reason: "simulated"`, Y ESE MOTIVO YA NO EXISTE. Desde WKH-233 la
+  // fila se escribe SÓLO cuando el agente devuelve `payoutAllowed === true`, y ese booleano ya exige
+  // que la proveniencia esté en SU allow-list de verificaciones reales ⇒ **una fila que existe es,
+  // por invariante, real**, y ningún código puede producir ya ese motivo.
+  //
+  // LO QUE SE PIERDE, y no se disimula: una verificación simulada deja de producir fila, así que este
+  // endpoint responde `absent` donde antes respondía `simulated`. Se pierde poder decir "preguntamos
+  // y era una demo". Se conserva la distinción que sostiene el tipo (`usable`/`absent`/`not_asked`),
+  // que es la que impide usar `usable` como default de "no pude preguntar".
+  //
+  // LO QUE MIDEN AHORA: que la proveniencia CRUDA viaja tal cual y que este endpoint NO la juzga.
+  // Juzgarla acá volvería a poner el criterio del proveedor dentro de Chaski, que es lo que se borró.
+  it("T-EP-9: una proveniencia simulada viaja CRUDA — este endpoint ya no la juzga (WKH-233/D-3)", async () => {
     getStoreMock.mockReturnValue(honestStore([verdict({ provenance: "didit-mock" })]));
     const res = await POST(req({ sender: SENDER_A, ...realPop(KP_A) }));
+    const body = (await res.json()) as { verdict: { provenance: string } };
     expect(
-      await res.json(),
-      "una verificación SIMULADA se devolvió como utilizable: la pantalla afirmaría una identidad " +
-        "que nadie verificó, y el flujo saltearía el KYC real",
-    ).toEqual({ verdict: null, reason: "simulated" });
+      body.verdict.provenance,
+      "el endpoint reescribió o filtró la proveniencia: el consumidor necesita el valor CRUDO para " +
+        "poder decir de dónde salió, y juzgarlo acá reintroduce la allow-list local que se borró",
+    ).toBe("didit-mock");
   });
 
-  it("T-EP-9b: una provenance DESCONOCIDA también cuenta como simulada (fail-safe)", async () => {
+  it("T-EP-9b: una proveniencia DESCONOCIDA también viaja cruda (no se normaliza ni se descarta)", async () => {
     getStoreMock.mockReturnValue(honestStore([verdict({ provenance: "proveedor-nuevo-2027" })]));
     const res = await POST(req({ sender: SENDER_A, ...realPop(KP_A) }));
-    expect(await res.json()).toEqual({ verdict: null, reason: "simulated" });
+    const body = (await res.json()) as { verdict: { provenance: string } };
+    expect(body.verdict.provenance).toBe("proveedor-nuevo-2027");
   });
+
 
   // ── T-EP-10 ─────────────────────────────────────────────────────────────────────────────────
   it("T-EP-10: approved:false ⇒ reason 'not_approved' (M-6)", async () => {

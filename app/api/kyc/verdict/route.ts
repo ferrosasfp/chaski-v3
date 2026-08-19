@@ -44,12 +44,9 @@ import {
   checkRouteRateLimit,
   clientIp,
 } from "../../../../src/infrastructure/rate-limit";
-// ⚠️ ÚNICA importación de `src/presentation/**` desde una route de este repo, y es deliberada:
-// `isKycDemo` es la allow-list de proveniencias reales, y el propio archivo dice por qué un segundo
-// Set con los mismos valores es "exactamente cómo se desincronizan las dos capas". El módulo no es
-// "use client" y ya lo importa `scripts/smoke-helpers.ts`, así que no arrastra nada de React.
-// Refutación de que sigue siendo una sola fuente: `command grep -rn "isKycDemo" src/ app/ scripts/`.
-import { isKycDemo } from "../../../../src/presentation/flow-vm";
+// 🔴 WKH-233 — ACÁ ESTABA LA ÚNICA IMPORTACIÓN DE `src/presentation/**` DESDE UNA ROUTE DE ESTE
+// REPO (`isKycDemo`), y se fue con la allow-list local que consultaba. La arista capa-a-capa que
+// justificaba ("una sola fuente del juicio") dejó de existir porque el juicio dejó de estar acá.
 
 // Excluye arrays (mirror de prepare/route.ts).
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -187,9 +184,18 @@ export async function POST(req: Request): Promise<Response> {
   // (`provenance`), y al final la vigencia. Los tres viajan sólo detrás del PoP, o sea sólo al dueño,
   // y existen para que la pantalla pueda decir "tu verificación venció" sin inventarlo.
   if (!record.approved) return json({ verdict: null, reason: "not_approved" }, 200);
-  // AC-11: una proveniencia fuera del conjunto real cuenta como simulada AL LEER. Fail-safe: una
-  // etiqueta desconocida (un proveedor nuevo, un typo) sobre-avisa, que es el error gratis.
-  if (isKycDemo(record.provenance)) return json({ verdict: null, reason: "simulated" }, 200);
+  // 🔴 WKH-233 — ACÁ ESTABA `if (isKycDemo(record.provenance)) return … reason:"simulated"`, y YA NO
+  // HACE FALTA: desde esta HU `app/api/kyc/decision/route.ts` escribe la fila SÓLO cuando el agente
+  // devuelve `payoutAllowed === true`, y ese booleano ya exige que la proveniencia esté en su
+  // allow-list de verificaciones REALES. ⇒ POR INVARIANTE, una fila que existe es real.
+  //
+  // ⚠️ CONSECUENCIA DECLARADA, no escondida: una verificación simulada deja de producir fila, así que
+  // este endpoint responde `absent` donde antes respondía `simulated`. **Se pierde poder decir
+  // "preguntamos y era una demo"**; se conserva la distinción que sostiene el tipo
+  // (`usable`/`absent`/`not_asked`), que es la que impide usar `usable` como default de "no pude
+  // preguntar". El miembro `"simulated"` se borró de `KycVerdictAbsentReason` en vez de dejarlo "por
+  // las dudas": un valor que NINGÚN código puede producir es superficie muerta en un borde de
+  // confianza, y el próximo que lo lea va a creer que pasa.
   if (isVerdictExpired(record.verifiedAt, ttlDays, Date.now())) {
     return json({ verdict: null, reason: "expired" }, 200);
   }

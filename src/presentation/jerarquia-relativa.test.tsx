@@ -62,7 +62,7 @@ import {
 import { RecoverEscrowFunds } from "../application/use-cases/recover-escrow-funds";
 import { CloseEscrowAccounts } from "../application/use-cases/close-escrow-accounts";
 import { ConfirmAndSend } from "../application/use-cases/confirm-and-send";
-import { KYC_PROVENANCE_LIVE } from "../infrastructure/didit/decision";
+const KYC_PROVENANCE_LIVE = "didit"; // WKH-233: el literal se escribe ACÁ, en un test, porque el módulo que lo exportaba se borró con la HU (el juicio "esto es real" ya no lo hace Chaski). EN UNA SOLA LÍNEA: este archivo recibe citas `archivo:línea` y agregar líneas las corre.
 import { buildTestContainer } from "../test-support/test-container";
 import {
   FAKE_SOLANA_BENEFICIARY,

@@ -40,7 +40,7 @@ import {
   RecoverEscrowFunds,
 } from "../application/use-cases/recover-escrow-funds";
 import { PREPARE_NO_AGENT_FOR_CAPABILITY, isPrepareRejection } from "../application/agent-rejections";
-import { KYC_PROVENANCE_LIVE } from "../infrastructure/didit/decision";
+const KYC_PROVENANCE_LIVE = "didit"; // WKH-233: el literal se escribe ACÁ, en un test, porque el módulo que lo exportaba se borró con la HU (el juicio "esto es real" ya no lo hace Chaski). EN UNA SOLA LÍNEA: este archivo recibe citas `archivo:línea` y agregar líneas las corre.
 import { ConnectWallet } from "../application/use-cases/connect-wallet";
 import { solanaWalletBridge } from "../infrastructure/solana-wallet-bridge"; import { SolanaWalletAdapter } from "../infrastructure/solana-wallet"; import { guardarEleccion } from "../infrastructure/solana/deeplink/conexion"; import { almacenDeNavegador, guardarViaje } from "../infrastructure/solana/deeplink/sesion"; // WKH-358 agregó los tres últimos EN ESTA LÍNEA y ANTES de este comentario: `history-grupos.test.tsx:532` y `jerarquia-relativa.test.tsx:83` citan por número líneas de este archivo, así que tres líneas nuevas acá arriba las rotan a las dos. WKH-354/R-2: la costura del BANNER (el bridge global); la del guard es el `connectedWallet` inyectado
 import {
@@ -250,20 +250,20 @@ it("T-314-UI-2: en el mínimo exacto el botón SÍ habilita y no hay advertencia
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
-// ── T2 — AC-9: review nombre + doc enmascarado (CD-12) ───────────────────────
-it("T2: confirm renderiza el nombre y el documento enmascarado; el número completo nunca está en el DOM", async () => {
+// ── T-UI-2 — 🔴 REESCRITO POR WKH-233: la tarjeta YA NO MUESTRA DATOS DE IDENTIDAD ───────────────
+// ⚠️ ESTE `it` MEDÍA "nombre completo + documento enmascarado en pantalla", y eso dejó de existir: el
+// agente de KYC NO devuelve ningún dato de identidad (ni nombre, ni apellidos, ni tipo/número de
+// documento, ni sus últimos 4). Lo que el test custodiaba —que el número COMPLETO nunca esté en el
+// DOM— se conserva y es MÁS fuerte: ahora NINGÚN campo de identidad puede estar, enmascarado o no.
+it("T-UI-2: la tarjeta NO muestra nombre ni documento en NINGUNA de sus dos ramas (WKH-233/D-2)", async () => {
   const { container } = render(<RemittanceFlow pasoInicial="send" container={buildTestContainer()} />);
-
   await goToConfirm();
-
-  // (a) nombre completo visible.
-  expect(await screen.findByText(/Test Quispe Mamani/)).toBeInTheDocument();
-  // (b) documento enmascarado visible (DNI + últimos 4).
-  expect(screen.getByText(/DNI/)).toBeInTheDocument();
-  expect(screen.getByText(/••••5678/)).toBeInTheDocument();
-  // (c) CD-12: el número de documento completo NUNCA aparece en el DOM.
-  expect(screen.queryByText(/12345678/)).toBeNull();
-  expect(container.textContent).not.toContain("12345678");
+  // 🧬 MUTANTE: reponer `${id.firstName}` (o el documento) en `IdentityBadge` ⇒ ROJO.
+  for (const dato of ["Test Quispe Mamani", "DNI", "••••5678", "12345678"]) {
+    expect(container.textContent, `la tarjeta mostró «${dato}», que el agente no devuelve`).not.toContain(dato);
+  }
+  // ✅ Calibración: la tarjeta SÍ está en pantalla (un DOM vacío también pasaría lo de arriba).
+  expect(await screen.findByText(/Identidad sin verificar/)).toBeInTheDocument();
 });
 
 // ── T4 — AC-7: control reset visible solo con address (WKH-184) ──────────────
@@ -415,20 +415,20 @@ it("T-AC4b: local verificado + el servidor dice `absent` ⇒ va a review, y NO s
   ).not.toHaveBeenCalled();
 });
 
-// El badge VERDE afirma una verificación, así que sólo sale con una proveniencia de la allowlist
-// (`REAL_KYC_PROVENANCES`). El default de `FakeKycGateway` es "fake", que no está en ella y por eso
-// ahora cae en la tarjeta de "sin verificar": estos dos tests hablan del camino verificado, así que
-// declaran el origen real. La constante se IMPORTA de donde se produce, no se escribe "didit" acá.
-const kycRealGateway = () => new FakeKycGateway({ provenance: KYC_PROVENANCE_LIVE });
+// El badge VERDE afirma una verificación, así que sólo sale cuando el AGENTE la declaró real
+// (`realVerified: true`). El default de `FakeKycGateway` no lo declara y por eso cae en la tarjeta de
+// "sin verificar": estos dos tests hablan del camino verificado, así que lo declaran. ⚠️ WKH-233: lo
+// que gatea el badge dejó de ser la PROVENIENCIA y pasó a ser el juicio del agente.
+const kycRealGateway = () => new FakeKycGateway({ provenance: KYC_PROVENANCE_LIVE, realVerified: true, verifiedAt: "2026-08-19T10:00:00.000Z" });
 
-// ── T-AC8 — AC-8: confirm muestra el badge de identidad junto al quote ────────
-it("T-AC8: el paso confirm muestra el badge de identidad (rem.kyc.identity) junto al quote", async () => {
+// ── T-UI-1 — DT-13(b): con `identity: null` la tarjeta RENDERIZA igual ────────
+it("T-UI-1: el paso confirm muestra la tarjeta de identidad VERIFICADA aunque `identity` sea null", async () => {
   render(<RemittanceFlow pasoInicial="send" container={buildTestContainer({ kyc: kycRealGateway() })} />);
-
+  // ⚠️ Δ0 EN LÍNEAS: este archivo recibe ~138 citas `flow.test.tsx:NN`; agregar o quitar una las corre.
   await goToConfirm();
-
+  // 🧬 MUTANTE: reponer el `if (!id) return null` ⇒ la tarjeta DESAPARECE ⇒ ROJO. Ése es el modo de
+  // falla que D-2 nombró: sin este test, la tarjeta se habría borrado sin que nadie lo notara.
   expect(screen.getByText(/Identidad verificada/)).toBeInTheDocument();
-  expect(screen.getByText(/Test Quispe Mamani/)).toBeInTheDocument();
   expect(screen.getByText(/^S\/[\d,]+\.\d{2}$/)).toBeInTheDocument(); // quote junto a la identidad
 });
 
@@ -1873,7 +1873,7 @@ describe("HU-SOL-13 / WKH-320 — BLQ-MED-1: RemittanceFlow completo renderiza (
 //
 // CD-17: depende del `vi.mock("framer-motion")` de módulo y de los helpers `goToConfirm` /
 // `buildTestContainer` de este archivo. Se corre en la suite completa, no solo.
-it("T-6.1: un `provenance` que no está en la allowlist ⇒ NO 'Identidad verificada', sí el origen crudo", async () => {
+it("T-6.1: sin el juicio del AGENTE ⇒ NO 'Identidad verificada', y SÍ el origen crudo", async () => {
   const agenteNuevo = "cualquier-agente-nuevo";
   render(
     <RemittanceFlow pasoInicial="send"
@@ -1883,15 +1883,15 @@ it("T-6.1: un `provenance` que no está en la allowlist ⇒ NO 'Identidad verifi
 
   await goToConfirm();
 
-  // (a) el badge verde NO sale: afirmar una verificación exige estar en la allowlist.
+  // (a) el badge verde NO sale: afirmar una verificación exige que el AGENTE la haya declarado real.
   expect(screen.queryByText(/Identidad verificada/)).toBeNull();
   // (b) sale la tarjeta que dice que no se puede afirmar...
   expect(screen.getByText(/Identidad sin verificar/)).toBeInTheDocument();
   // (c) ...y NOMBRA el origen crudo, en vez de esconderlo. Sin esto la pantalla diría "no verificada"
   //     sin dar con qué discutirlo, y quien opera no sabría qué emisor mirar.
   expect(screen.getByText(new RegExp(agenteNuevo))).toBeInTheDocument();
-  // (d) y los datos siguen mostrándose: "no verificada" no es "falsa".
-  expect(screen.getByText(/Test Quispe Mamani/)).toBeInTheDocument();
+  // (d) ⚠️ Y LO QUE ANTES ERA "los datos siguen mostrándose" YA NO APLICA: el agente no devuelve
+  //     ningún dato de identidad, así que no hay datos que mostrar. Lo cubre T-UI-2.
 });
 
 // ── WKH-339 · T-339.2 (AC-1) — la ventana apagada tiene un gesto para volver a encenderse ─────────

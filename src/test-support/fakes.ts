@@ -197,7 +197,7 @@ export class FakeKycGateway implements KycGateway {
   }
   async start(_req: KycRequest): Promise<KycStartResult> {
     return this.redirect
-      ? { kind: "redirect", url: "https://verify.didit.me/session/fake", sessionId: "sess-fake" }
+      ? { kind: "redirect", url: "https://verificacion.example/session/fake", sessionId: "sess-fake" } // WKH-233: el host del doble dejó de nombrar al proveedor (1 hit de CÓDIGO; este archivo NO es un `*.test.*` y por eso cuenta)
       : { kind: "completed", verification: this.v() };
   }
   async decision(_sessionId: string): Promise<KycDecision> {

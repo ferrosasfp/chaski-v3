@@ -11,12 +11,12 @@ import {
   formatLamportsAsSol,
   formatLamportsAsSolFloor,
 } from "../application/solana-escrow-rent";
-import { KYC_PROVENANCE_LIVE } from "../infrastructure/didit/decision";
+// ⛔ EN ESTA LÍNEA VIVÍA `import { KYC_PROVENANCE_LIVE } from "../infrastructure/didit/decision"`. WKH-233 lo borró junto con el módulo entero, y la línea se conserva VACÍA DE CÓDIGO a propósito: 52 citas `flow-vm.ts:NN` de otros archivos apuntan más abajo, y borrarla las corre a todas.
 
 /** Proveniencias de payout que representan un desembolso REAL (allowlist fail-safe, CD-8). Cualquier
  *  valor desconocido/typo cae del lado seguro → muestra el banner (over-warn), nunca lo oculta.
- *  Exemplar: REAL_KYC_PROVENANCES = new Set(["didit"]) en el agente KYC. La misma dirección se aplica
- *  al KYC más abajo, en `REAL_KYC_PROVENANCES` de este archivo.
+ *  Exemplar: la allow-list de verificaciones REALES del agente de KYC. La misma dirección se aplica
+ *  al KYC, pero YA NO ACÁ: desde WKH-233 ese juicio lo hace el agente (ver la lápida de abajo).
  *
  *  Se EXPORTA (y no se copia a ningún lado) porque el smoke de devnet decide con este mismo conjunto
  *  si abortar: `scripts/smoke-helpers.ts` lo importa. Un segundo Set con los mismos valores es
@@ -31,61 +31,61 @@ export function isPayoutDemo(p: string | null | undefined): boolean {
 }
 
 /**
- * Los ORÍGENES DE VERIFICACIÓN QUE PODEMOS AFIRMAR (allowlist fail-safe, misma dirección que
- * `REAL_PAYOUT_PROVENANCES`). El valor NO se escribe a mano acá: se importa de la MISMA constante que
- * lo produce (`decision.ts`), así que un rename del literal rompe la compilación en vez de dejar esta
- * lista apuntando a un valor que ya nadie emite.
+ * 🔴 ACÁ VIVÍAN `REAL_KYC_PROVENANCES` E `isKycDemo`, Y WKH-233 LOS BORRÓ. ESTE BLOQUE ES SU LÁPIDA,
+ * y ocupa exactamente las líneas que ocupaban ellos: 52 citas `flow-vm.ts:NN` de otros archivos
+ * apuntan más abajo, así que borrar las líneas las rompe a todas (candado `citas-ancladas.test.ts`).
  *
- * 🔴 EL RE-ENCUADRE DE WKH-332/W4, Y ES DE SIGNIFICADO, NO DE DIRECCIÓN. Este conjunto se leía como
- * "qué proveedor usamos", una lista de nuestros integrados. Con el catálogo abierto esa lectura invita
- * al error exacto que CD-7 prohíbe: pensar que si el gateway eligió a alguien, ese alguien "verifica".
- * Lo que la lista significa es lo otro: de qué orígenes podemos AFIRMAR en pantalla que hubo una
- * verificación. Nada más.
+ * QUÉ ERAN. Una allow-list LOCAL de proveniencias "reales" —`new Set([KYC_PROVENANCE_LIVE])`, o sea
+ * `new Set(["<el nombre del proveedor>"])`— y el predicado que la consultaba. Con ellos, ESTA capa
+ * juzgaba por su cuenta si una verificación de identidad era real.
  *
- * ⛔ PROHIBIDO volverla env (mismo motivo que los pisos de reputación: una env con default ausente es
- * un control que se apaga solo en un entorno nuevo, sin que falle nada).
- * ⛔ PROHIBIDO derivar "es real" de que el gateway haya elegido al agente, de su `verified` o de su
- * reputación: `verified` y `reputation` los AUTO-REPORTA el propio card del agente, y el gateway sólo
- * los neutraliza cuando el step viaja con `min_reputation` (CD-7). Un desconocido que declara
- * `verified: true` no verificó a nadie.
+ * POR QUÉ SE BORRARON Y NO SE "EXCEPTUARON". El criterio de cierre de WKH-233 es que cambiar de
+ * proveedor de KYC no exija UN SOLO cambio en Chaski. Una lista local con el nombre del proveedor
+ * adentro es, literalmente, lo primero que habría que cambiar al cambiar de proveedor. Dejarla y
+ * exceptuarla en el guard habría sido ganar la métrica sin cumplir la regla: el arreglo trucho.
  *
- * 🔴 POR QUÉ ES UNA ALLOWLIST Y NO UN `=== "local-fallback"`. Acá vivía la comparación contra el
- * único valor simulado CONOCIDO, o sea que todo lo desconocido se leía como real. Con `DIDIT_ENV=mock`
- * la decisión llega con `didit-mock` (decision.ts:22 y :91, vía `DiditKycGateway`, que sólo cae al
- * fallback si el server contesta 501): el sello de demo no se prendía y la pantalla de `confirm`
- * escribía "Identidad verificada" sobre datos que nadie verificó. Invertida la dirección, lo
- * desconocido SOBRE-AVISA: un valor nuevo, un typo o una proveniencia que este archivo no conoce
- * prende el sello, que es el error gratis. El error caro es el otro.
+ * QUÉ LAS REEMPLAZA, Y ES MÁS FUERTE, NO MENOS. `KycVerification.realVerified`, poblado ÚNICAMENTE
+ * desde el `payoutAllowed` del agente de KYC. Ese booleano significa, POR CONSTRUCCIÓN de su
+ * `isStatusPayoutAllowed`: aprobado ∧ hubo reclamo de identidad ∧ la identidad COINCIDE ∧ la
+ * proveniencia está en la allow-list de verificaciones REALES **del agente**. Lo que `isKycDemo`
+ * miraba era sólo la última de las cuatro. ⇒ la pantalla afirma MENOS de lo que afirmaba antes, y lo
+ * que afirma lo respalda quien verificó.
  *
- * El consumidor autoritativo del lado del dinero sigue siendo `REAL_KYC_PROVENANCES` de
- * `wasiai-remittance-agents/src/providers/kyc.ts` (es el que abre el desembolso). Este conjunto es
- * el de la PANTALLA y no decide nada del money-path: sólo decide qué se puede afirmar en pantalla.
+ * LO QUE SE CONSERVA DE SU DIRECCIÓN FAIL-SAFE, y sigue valiendo: la ausencia de dato cuenta como NO
+ * real. Antes eso era `typeof p !== "string"`; ahora es que `realVerified` sea un `boolean` REQUERIDO
+ * del tipo —el compilador obliga a decidirlo en cada constructor— y que los tres sitios que no
+ * pueden afirmar nada (la simulación, los dobles de test, y toda rehidratación vieja) lo pongan en
+ * `false`. Un snapshot guardado antes de que el campo existiera vuelve con `undefined`, que NO es
+ * `true`, así que sobre-avisa. Ése sigue siendo el error gratis; el caro es el otro.
+ *
+ * ⛔ PROHIBIDO reponer acá una allow-list, una env con la lista, o un `=== "local-fallback"`. Ⓐ Una
+ * env con default ausente es un control que se apaga solo en un entorno nuevo sin que falle nada.
+ * Ⓑ Un `=== "local-fallback"` compara contra el único valor simulado CONOCIDO, o sea que todo lo
+ * desconocido se leería como real: es exactamente el bug que la allow-list vino a cerrar en su día,
+ * y volver a él sería retroceder dos HUs de una sentada. Ⓒ Derivar "es real" de que el gateway haya
+ * elegido a un agente, de su `verified` o de su reputación tampoco vale: esos dos campos los
+ * AUTO-REPORTA el propio card del agente. Un desconocido que declara `verified: true` no verificó a
+ * nadie.
+ *
+ * ⛔ Y PROHIBIDO recomponer el criterio del agente acá con `approved && identityMatches`: eso sería
+ * re-implementar el juicio de KYC, que es el pecado exacto que esta HU existe para borrar.
+ *
+ * DÓNDE MIRAR AHORA:
+ *   · el campo y su docblock: `../domain/remittance.ts`, `realVerified`;
+ *   · quién lo puebla: `../infrastructure/kyc/agent-kyc-gateway.ts`, método `decision`;
+ *   · quién decide el desembolso con el mismo booleano: `../infrastructure/payout/authority.ts`;
+ *   · el candado que impide que estos nombres vuelvan: `../composition/kyc-provider-residue.static.test.ts`.
+ *
+ * ⚠️ LO QUE ESTA LÁPIDA NO DICE, para que nadie la lea de más: NO afirma que la pantalla haya dejado
+ * de mostrar identidades simuladas. Las muestra igual, y con más razón —el demo se conserva—; lo que
+ * cambió es QUIÉN decide que no son reales. Y NO afirma que el juicio del agente esté verificado
+ * contra el proveedor vivo: eso no se pudo medir en esta HU y está declarado como tal.
  */
-export const REAL_KYC_PROVENANCES: ReadonlySet<string> = new Set([KYC_PROVENANCE_LIVE]);
-
-/**
- * true si la verificación de identidad NO se puede afirmar como real.
- *
- * ⚠️ AUSENTE O VACÍA CUENTA COMO NO REAL, y es lo contrario de `isPayoutDemo`. La diferencia no es un
- * descuido: `payoutProvenance` ausente significa "esta remesa todavía no tiene payout", un estado
- * normal del que no hay nada que avisar. Un `KycVerification` que EXISTE y no declara de dónde salió
- * es otra cosa: es un objeto que la pantalla ya está mostrando como identidad de la persona. Ausencia
- * de dato no es prueba de que sea real. Es alcanzable en producción por dos caminos, no hipotéticos:
- * `kyc-gateway.ts`:52 castea la respuesta HTTP sin validar (`provenance` puede no venir), y
- * `kyc-store.ts`:86 / `persistence.ts`:64 rehidratan snapshots viejos con un spread, así que un
- * snapshot guardado antes de que el campo existiera vuelve con `undefined`.
- *
- * Quién NO llega acá: una remesa sin KYC (`rem.kyc == null`). Eso lo filtra `isDemoMode`, porque ahí
- * no hay ninguna verificación que la pantalla pueda estar afirmando de más.
- */
-export function isKycDemo(p: string | null | undefined): boolean {
-  return typeof p !== "string" || !REAL_KYC_PROVENANCES.has(p);
-}
 
 /**
  * La frase que dice POR QUÉ esta identidad no se muestra como verificada. Nunca afirma que los datos
  * sean falsos ni que nadie los haya mirado: afirma lo ÚNICO comprobable con un input concreto, que su
- * origen no está en `REAL_KYC_PROVENANCES`. Con `didit-mock` sale el valor tal cual, que es lo que
+ * origen no es uno que el AGENTE haya declarado real. Con una proveniencia simulada sale el valor
  * hace la frase falsable a simple vista.
  *
  * El `provenance` se muestra en claro a propósito: es una etiqueta de configuración de un conjunto
@@ -99,12 +99,12 @@ export function kycOriginNotice(p: string | null | undefined): string {
 }
 
 /** "Modo demo" ⇔ alguno de los tres pasos del flujo no está confirmado como real: la cotización vino
- *  del fallback local, la verificación no salió de un verificador de la allowlist, o el desembolso no
+ *  del fallback local, la verificación no la declaró real el AGENTE DE KYC, o el desembolso no
  *  salió de un partner de la allowlist. */
 export function isDemoMode(rem: RemittanceState): boolean {
   return (
     rem.quote?.provenance === "local-fallback" ||
-    (rem.kyc != null && isKycDemo(rem.kyc.provenance)) ||
+    (rem.kyc != null && !rem.kyc.realVerified) || // 🔴 WKH-233/D-3: el juicio es del AGENTE, no de una allow-list local. `rem.kyc == null` (remesa sin KYC) NO llega acá y no debe: ahí no hay ninguna verificación que la pantalla pueda estar afirmando de más
     isPayoutDemo(rem.payoutProvenance)
   );
 }

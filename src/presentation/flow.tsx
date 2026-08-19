@@ -67,7 +67,7 @@ import {
   type FlowError,
   humanError,
   isDemoMode,
-  isKycDemo,
+  // ⛔ ACÁ ESTABA `isKycDemo`. WKH-233 lo borró (el juicio es del agente, no de una allow-list local). La línea SE QUEDA vacía de código: este archivo recibe ~98 citas ancladas y borrarla las corre a todas.
   kycOriginNotice,
   lostEscrowRecoveryError,
   shortErrorCode,
@@ -1298,11 +1298,15 @@ function VerificationProgress({ approved }: { approved: boolean }) {
  * es el motivo por el que esta tarjeta existe. Lo que cambia es qué se afirma de ellos.
  */
 function IdentityBadge({ kyc }: { kyc: KycVerification }) {
-  const id = kyc.identity;
-  if (!id) return null;
-  const nombre = `${id.firstName} ${id.lastNamePaternal} ${id.lastNameMaternal}`;
-  const documento = `${id.documentType} ••••${id.documentNumberLast4}`;
-  if (isKycDemo(kyc.provenance)) {
+  // 🔴 WKH-233/D-2 — ACÁ ESTABAN `const id = kyc.identity;` y `if (!id) return null;`, y los dos se
+  // borraron. El agente de KYC NO devuelve NINGÚN dato de identidad (ni nombre, ni apellidos, ni
+  // tipo/número de documento, ni sus últimos 4) ⇒ `kyc.identity` es SIEMPRE `null` por el camino
+  // nuevo, así que con ese `return null` la tarjeta habría DESAPARECIDO de la pantalla sin que nadie
+  // lo notara. Por eso el rediseño es de esta HU y no queda huérfano. ⛔ Y NO se le pide el dato a la
+  // persona para rellenarla: sería un dato NO VERIFICADO en una pantalla de compliance. Lo honesto es
+  // afirmar MENOS, no inventar. ⛔ Las líneas no se borran: ~98 citas ancladas apuntan más abajo.
+  const cuando = kyc.verifiedAt ? ` · ${new Date(kyc.verifiedAt).toLocaleDateString("es-PE")}` : ""; // sólo si el servidor lo observó; ⛔ nunca se inventa una fecha
+  if (kyc.realVerified !== true) { // 🔴 el juicio es del AGENTE; `!== true` ESTRICTO, nunca truthiness
     return (
       // El punteado sobre arena ES el tono `prueba` de S-3, byte por byte: `border border-dashed
       // border-stone/40 bg-sand/60`. `flex items-start` va como `className` y no adentro del
@@ -1310,18 +1314,14 @@ function IdentityBadge({ kyc }: { kyc: KycVerification }) {
       // ninguna de las dos: la superficie la aporta `Aviso`, la disposición el sitio de llamada.
       <Aviso tono="prueba" className="flex items-start gap-normal">
         <ShieldAlert className="mt-0.5 size-icono-sm shrink-0 text-stone" />
-        <p className="text-label text-stone">
-          Identidad sin verificar: <b>{nombre}</b> · {documento}. {kycOriginNotice(kyc.provenance)}
-        </p>
+        <p className="text-label text-stone">Identidad sin verificar. {kycOriginNotice(kyc.provenance)}</p>
       </Aviso>
     );
   }
   return (
     <Aviso tono="bueno" className="flex items-center gap-normal">
       <BadgeCheck className="size-icono-sm shrink-0 text-verde" />
-      <p className="text-label text-verde/90">
-        Identidad verificada: <b>{nombre}</b> · {documento}
-      </p>
+      <p className="text-label text-verde/90">Identidad verificada{cuando}</p>
     </Aviso>
   );
 }

@@ -76,9 +76,17 @@ export class FallbackKycGateway implements KycGateway {
   async decision(_sessionId: string): Promise<KycDecision> {
     return { terminal: true, verification: this.simulated(0) };
   }
+  /**
+   * 🔴 `realVerified: false` NO ES UNA OPINIÓN DE ESTA CLASE, ES SU DEFINICIÓN (WKH-233/D-3). Una
+   * simulación no verificó a nadie, así que no puede declarar una verificación real — y por eso
+   * `verifiedAt` es `null`: no hay ningún momento observado que declarar, y ⛔ inventar uno sería
+   * fabricar evidencia. `approved`/`payoutAllowed` SÍ siguen en `true`, y no es contradictorio: eso
+   * es lo que hace que el DEMO llegue a `kyc_passed` y la persona pueda recorrer la app. Lo que NO
+   * hace es abrir un desembolso, porque eso lo decide `realVerified` vía el agente.
+   */
   private simulated(amountUsd: number): KycVerification {
     return {
-      verificationId: `didit-demo-${Date.now().toString(36)}`,
+      verificationId: `kyc-demo-${Date.now().toString(36)}`, // WKH-233: el prefijo dejó de nombrar al proveedor. Es 1 hit de CÓDIGO y cuenta para el criterio de cierre
       approved: true,
       payoutAllowed: true, realVerified: false, verifiedAt: null,
       riskLevel: amountUsd >= 1000 ? "medium" : "low",

@@ -2854,24 +2854,51 @@ function AgentPlanCard() {
   return (
     <Card>
       <p className="text-title font-semibold">Quién va a atender tu envío</p>
-      {/* "Ninguno de estos pasos está atado a una empresa fija" quedaba desmentido tres renglones
-          más abajo por el propio detalle de cada fila: la que decía "hoy se llama directo a X" ERA un
-          paso cableado a un agente concreto. Esa fila ya no existe (W3), y aun así la frase de arriba
-          sigue describiendo el MODELO (pedimos capacidades) sin afirmar que hoy los tres corran por
-          ahí: cada fila lo dice por su cuenta, y en demo la cotización no la da ningún agente. */}
-      <p className="mt-ajustado text-label text-stone">
-        Chaski pide capacidades, no empresas: el catálogo abierto responde quién las cumple, así que
-        esta lista puede cambiar sola. Abajo, por dónde corre hoy cada paso.
-      </p>
+      {/* ── DIVULGACIÓN PROGRESIVA, Y EL PATRÓN ES "COLAPSAR SIN DESMONTAR". Los `<details>` de abajo dejan de VERSE, no de existir: el nodo sigue montado, así que ningún `getByText` cambia de resultado. MEDIDO antes de escribir esto, en las dos direcciones: `agent-plan-card.test.tsx` da `32 passed` con el texto suelto y `32 passed` con el MISMO texto adentro de un `<details>` cerrado; y el control negativo —la nota reemplazada por `return null`— da `15 failed | 17 passed`, o sea que esos tests SÍ se ponen rojos por este texto y el verde de arriba no es un verde vacío. El mecanismo, que es lo que lo generaliza y no la anécdota: en los 33 archivos de test de esta carpeta hay CERO usos de `toBeVisible()`; todo lo que custodia copy pregunta por PRESENCIA en el DOM. ⛔ NO se imita acá el patrón de DESMONTAR de `LostEscrowRecovery`, cuyo `if (!open)` devuelve un resumen mientras la puerta está cerrada: rompe todo `getByText` que no abra la puerta primero, y sus tests pagan ese precio abriéndola. ⚠️ Y NINGÚN `<details>` de esta tarjeta esconde una advertencia de dinero: lo que se colapsa es atribución de fee y procedencia del catálogo. Las advertencias de dinero de esta app (que los fondos quedaron en el escrow, que nadie los reembolsó, cómo recuperarlos) no viven en esta tarjeta y no se colapsan en ningún lado. */}
       <div className="mt-normal space-y-ajustado">
         {plan.steps.map((s) => (
-          <div key={s.capability} className="rounded-control border border-line px-normal py-ajustado">
-            <div className="flex items-baseline justify-between gap-ajustado">
-              <span className="text-body font-medium">{s.label}</span>
-              <span className="tabular-nums text-body">
-                {s.agent?.priceUsdc != null ? `${s.agent.priceUsdc} USDC` : "sin precio publicado"}
-              </span>
-            </div>
+          <div key={s.capability} className="flex items-baseline justify-between gap-ajustado">
+            <span className="text-body font-medium">{s.label}</span>
+            <span className="tabular-nums text-body">
+              {s.agent?.priceUsdc != null ? `${s.agent.priceUsdc} USDC` : "sin precio publicado"}
+            </span>
+          </div>
+        ))}
+      </div>
+      {/* LA ETIQUETA SIGUE SIENDO `Precio publicado en el catálogo` Y NO `Total`, y no es inercia: "total" arrastra a leer este número como parte de lo que la persona envía, que es EXACTAMENTE lo que la nota de acá abajo existe para negar (*"no se suma a lo que enviás"*). La etiqueta actual nombra al DUEÑO del número —el catálogo— y no promete que sea el total de nada. Además el literal está clavado en dos asserts, (`getByText`, `agent-plan-card.test.tsx:233`) y (`getByText`, `agent-plan-card.test.tsx:363`), así que cambiarla cuesta dos tests y compra una lectura peor. ⚠️ Y LA SEPARACIÓN ES UN BORDE, NO UN CARÁCTER: un guión largo en el body lo prohíben cinco asserts, entre ellos (`toContain`, `agent-plan-card.test.tsx:211`) y (`toContain`, `honest-copy.test.tsx:478`). */}
+      <div className="mt-normal flex items-baseline justify-between border-t border-line pt-ajustado">
+        <span className="text-label text-stone">Precio publicado en el catálogo</span>
+        <span className="tabular-nums text-body font-semibold">{plan.totalUsdc} USDC</span>
+      </div>
+      {/* La nota se elige leyendo LOS DOS legs, porque habla del número, y el número suma los steps con precio publicado. La regla es "sólo se afirma lo que la pata garantiza": si la ENTREGA no garantiza nada, la atribución se acota nombrando la pata de la COTIZACIÓN, y de la otra no se dice nada. Si el leg de la cotización no se puede identificar, no se afirma NADA y no se renderiza nota: ver el docblock de `AGENT_PRICE_NOTE_*`. ⚠️ ESTE BLOQUE NO CAMBIÓ UNA LETRA al entrar al `<details>`: mismo selector, mismos tres literales, mismo nodo `<p>`. Lo único nuevo es el `<summary>` de arriba. */}
+      <details className="mt-ajustado">
+        <summary className="cursor-pointer text-label text-stone">Qué cubre este precio</summary>
+        {(() => {
+          const cotizacion = plan.steps.find((s) => s.label === FX_STEP_LABEL);
+          if (cotizacion === undefined) return null;
+          const entrega = plan.steps.find((s) => s.label === PAYOUT_STEP_LABEL);
+          // ⚠️ ES `=== "gateway"` Y NO `!== "demo"`, y la dirección ES la decisión. Un `?.` seguido de un
+          // `!==` elige un default en silencio: con `entrega === undefined` daría `true` y caería en la
+          // afirmación MÁS FUERTE —que se paga el fee del total— justo cuando no se sabe nada de la
+          // entrega. Con `=== "gateway"` un `entrega` ausente da `false` y cae en la MÁS DÉBIL.
+          const nota =
+            cotizacion.transport === "demo"
+              ? AGENT_PRICE_NOTE_DEMO
+              : entrega?.transport === "gateway"
+                ? AGENT_PRICE_NOTE_GATEWAY
+                : AGENT_PRICE_NOTE_GATEWAY_SOLO_FX;
+          return <p className="mt-ajustado text-label text-stone">{nota}</p>;
+        })()}
+      </details>
+      {/* "Ninguno de estos pasos está atado a una empresa fija" quedaba desmentido tres renglones más abajo por el propio detalle de cada fila: la que decía "hoy se llama directo a X" ERA un paso cableado a un agente concreto. Esa fila ya no existe (W3), y aun así la frase de abajo sigue describiendo el MODELO (pedimos capacidades) sin afirmar que hoy los tres corran por ahí: cada fila lo dice por su cuenta, y en demo la cotización no la da ningún agente. ⚠️ Y EL "Abajo" DE ESA FRASE SIGUE SIENDO CIERTO, que es lo único que esta reorganización tenía que cuidar para poder MOVER sin REFORMULAR: las filas por paso se movieron ACÁ ADENTRO, debajo de la frase y en el mismo orden. Si alguien las saca de este `<details>` y deja la frase sola, "Abajo" pasa a apuntar a nada y hay que reescribirla, que es justo lo que este cambio evitó. */}
+      <details className="mt-ajustado">
+        <summary className="cursor-pointer text-label text-stone">Cómo se eligen</summary>
+        <p className="mt-ajustado text-label text-stone">
+          Chaski pide capacidades, no empresas: el catálogo abierto responde quién las cumple, así que
+          esta lista puede cambiar sola. Abajo, por dónde corre hoy cada paso.
+        </p>
+        {plan.steps.map((s) => (
+          <div key={s.capability} className="mt-ajustado rounded-control border border-line px-normal py-ajustado">
             {s.agent ? (
               <>
                 <p className="mt-0.5 text-label text-stone">
@@ -2885,36 +2912,9 @@ function AgentPlanCard() {
             )}
           </div>
         ))}
-      </div>
-      <div className="mt-normal flex items-baseline justify-between">
-        <span className="text-label text-stone">Precio publicado en el catálogo</span>
-        <span className="tabular-nums text-body font-semibold">{plan.totalUsdc} USDC</span>
-      </div>
-      {/* La nota se elige leyendo LOS DOS legs, porque habla del número, y el número suma los steps con
-          precio publicado. La regla es "sólo se afirma lo que la pata garantiza": si la ENTREGA no
-          garantiza nada, la atribución se acota nombrando la pata de la COTIZACIÓN, y de la otra no se
-          dice nada. Si el leg de la cotización no se puede identificar, no se afirma NADA y no se
-          renderiza nota: ver el docblock de `AGENT_PRICE_NOTE_*`. */}
-      {(() => {
-        const cotizacion = plan.steps.find((s) => s.label === FX_STEP_LABEL);
-        if (cotizacion === undefined) return null;
-        const entrega = plan.steps.find((s) => s.label === PAYOUT_STEP_LABEL);
-        // ⚠️ ES `=== "gateway"` Y NO `!== "demo"`, y la dirección ES la decisión. Un `?.` seguido de un
-        // `!==` elige un default en silencio: con `entrega === undefined` daría `true` y caería en la
-        // afirmación MÁS FUERTE —que se paga el fee del total— justo cuando no se sabe nada de la
-        // entrega. Con `=== "gateway"` un `entrega` ausente da `false` y cae en la MÁS DÉBIL.
-        const nota =
-          cotizacion.transport === "demo"
-            ? AGENT_PRICE_NOTE_DEMO
-            : entrega?.transport === "gateway"
-              ? AGENT_PRICE_NOTE_GATEWAY
-              : AGENT_PRICE_NOTE_GATEWAY_SOLO_FX;
-        return <p className="mt-ajustado text-label text-stone">{nota}</p>;
-      })()}
-      <PlanConstraintsNote steps={plan.steps} />
-      <p className="mt-ajustado text-label text-stone">
-        Tu identidad no pasa por el catálogo: se verifica con el proveedor directo.
-      </p>
+        <PlanConstraintsNote steps={plan.steps} />
+        <p className="mt-ajustado text-label text-stone">Tu identidad no pasa por el catálogo: se verifica con el proveedor directo.</p>
+      </details>
     </Card>
   );
 }

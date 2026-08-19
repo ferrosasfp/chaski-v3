@@ -42,7 +42,7 @@ import { MARCA_SRC, NOMBRE } from "./marca";
  * que un lector de pantalla resuelve, y el mutante que vacía el `alt` lo pone rojo.
  */
 export function ChaskiMark({ className }: { className?: string }) {
-  // biome-ignore lint/performance/noImgElement: ver la nota de PAYLOAD del reporte de HU-066. `<img>` sirve el PNG tal cual (medido: 447 KB para una caja de 32x32) y `next/image` lo bajaría a un par de KB, pero pide un `sizes` en píxeles, y ese número adentro de este componente contradice su único contrato —que el tamaño lo fije el `className` de quien llama—. Queda como defecto ABIERTO y medido, no como algo que no se vio.
+  // biome-ignore lint/performance/noImgElement: EL MOTIVO ES EL CONTRATO, NO EL PAYLOAD. `next/image` pide un `sizes` en píxeles y ese número acá contradice lo único que esta función promete —que la caja la fija el `className` de quien llama (ver arriba, y el `object-contain` de abajo)—. ⛔ Y EL "447 KB" QUE ESTA LÍNEA PUBLICABA ERA FALSO POR 32×: `stat -c '%s' public/marca-chaski.png` da **14.279 B** (re-medido el 2026-08-19, HU-068), porque el payload YA SE ARREGLÓ en 80bf8fc ("la primera pantalla pesaba 1 MB en imagenes, y sobraba el 94%") y el número se quedó viejo. Con el número se cae la conclusión que colgaba de él: no hay 445 KB que ahorrar, así que el ahorro que justificaba la migración no existe. ⚠️ Cuánto ahorraría `next/image` sobre 14.279 B NO SE MIDIÓ, y por eso no se afirma que no serviría.
   return <img src={MARCA_SRC} alt={NOMBRE} className={cn("object-contain", className)} />;
 }
 

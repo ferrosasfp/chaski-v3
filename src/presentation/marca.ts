@@ -43,7 +43,7 @@ export const LOGO_SRC = "/logo-chaski.png";
  *
  * 🔴 SE DERIVA, NO SE ESCRIBE. El literal `"SOLANA DEVNET"` en el JSX se vería idéntico hoy y sería
  * falso el día del cutover a mainnet, sin que nada se ponga rojo. Sale del MISMO resolver que ya usan
- * la bienvenida (`resolveSolanaNetworkConfig`, `./bienvenida.tsx:268`) y el paso `connect`, así que la
+ * la bienvenida (`resolveSolanaNetworkConfig`, `./bienvenida.tsx:314`) y el paso `connect`, así que la
  * primera pantalla y la de firmar no pueden nombrar redes distintas.
  *
  * ⚠️ LO QUE ESTO **NO** GARANTIZA, y ya está medido y escrito en el docblock de `Bienvenida`: el

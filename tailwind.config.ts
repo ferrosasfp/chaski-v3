@@ -11,13 +11,13 @@ export default {
         ink: "#17130F",
         stone: "#8A8178",
         line: "#EBE7DF",
-        // `claro` lo agrega HU-066 y es el ÚNICO tono pensado para fondo OSCURO: el splash es la
-        // primera superficie de tinta que tiene esta app y ninguno de los dos cochinillas de arriba
-        // sirve ahí. MEDIDO con la fórmula de luminancia relativa de WCAG 2.x sobre los hex del tema,
-        // contra `ink` (#17130F), que es el fondo del splash: `cochineal` (#CB2A54) da **3,50:1** y NO
-        // llega al 4,5:1 de AA para texto normal —y la píldora de red es texto de 12px—; `claro`
-        // (#E08AA0) da **7,27:1**, o sea AAA. ⛔ NO se usa sobre `paper` ni sobre `card`: contra el
-        // blanco de una tarjeta da 2,26:1 y sería ilegible. Es un color de superficie oscura y nada más.
+        // `claro` lo agrega HU-066 y es el ÚNICO tono pensado para fondo OSCURO: el splash es la primera
+        // superficie de tinta de esta app y ninguno de los dos cochinillas de arriba sirve ahí. ⚠️ LOS TRES
+        // NÚMEROS DE ACÁ ESTABAN REDONDEADOS DE MENOS y se RE-DERIVARON uno por uno con luminancia relativa
+        // WCAG 2.x sobre los hex de arriba (HU-068 fix-pack, AR/MNR-5); ninguna conclusión cambia, los tres
+        // números sí. Contra `ink` (#17130F), el fondo del splash: `cochineal` (#CB2A54) da **3,5183:1** (decía
+        // 3,50) y NO llega al 4,5:1 de AA para texto normal —la píldora de red es de 12px—; `claro` (#E08AA0)
+        // da **7,3142:1** (decía 7,27), AAA. ⛔ NO sobre `paper` ni `card`: en `card` da **2,5263:1** (decía 2,26).
         cochineal: { DEFAULT: "#CB2A54", ink: "#9E1C40", claro: "#E08AA0" },
         verde: { DEFAULT: "#12805C", bg: "#E7F3EE" },
         sand: "#F3EFE7",

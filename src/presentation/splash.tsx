@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { cn } from "./cn";
 import { LEMA, LOGO_SRC, NOMBRE, pildoraDeRed } from "./marca";
-import { motivoParaNoMostrar, type MotivoParaNoMostrar } from "./splash-puerta";
+import { motivoParaNoMostrar, type MotivoParaNoMostrar } from "./splash-puerta"; import { Grecas as GrecasMotivo } from "./grecas";
 
 /**
  * HU-066 · La pantalla de bienvenida de marca (splash), que es lo PRIMERO que se ve.
@@ -243,23 +243,18 @@ export function Splash({ msEnPantalla = MS_EN_PANTALLA }: { msEnPantalla?: numbe
  * nada. `aria-hidden` porque no dice nada: es tinta.
  */
 function Grecas() {
-  return (
-    // ⛔ `aria-hidden="true"` ESCRITO CON EL STRING Y NO COMO ATAJO BOOLEANO. El atajo `aria-hidden`
-    // renderiza lo mismo, y el linter (`a11y/noSvgWithoutTitle`) NO lo reconoce: exige un `<title>`,
-    // que acá sería la respuesta equivocada —esto no es una imagen con contenido, es tinta de fondo, y
-    // un `<title>` la metería en el árbol accesible para después esconderla—.
-    <svg aria-hidden="true" className="pointer-events-none absolute inset-0 size-full opacity-[0.05]">
-      <defs>
-        <pattern id="chaski-qhapaq-nan" width="28" height="28" patternUnits="userSpaceOnUse">
-          <path
-            d="M0 28 L0 21 L7 21 L7 14 L14 14 L14 7 L21 7 L21 0"
-            stroke="#FBFAF7"
-            strokeWidth="1.5"
-            fill="none"
-          />
-        </pattern>
-      </defs>
-      <rect width="100%" height="100%" fill="url(#chaski-qhapaq-nan)" />
-    </svg>
-  );
+  // 🔴 HU-068 · LA GEOMETRÍA SE MUDÓ A `./grecas`, Y ESTA FUNCIÓN SIGUE EXISTIENDO A PROPÓSITO: la
+  // pantalla de entrada necesita el mismo motivo, y duplicarlo es el defecto que `marca.ts:6-7` ya
+  // tiene escrito. Lo que quedó acá es el envoltorio que fija los DOS valores del splash —su `id` y su
+  // tono— así que el render es idéntico byte a byte al de antes de esta HU.
+  //
+  // ⛔ Y NO SE BORRÓ NI SE RENOMBRÓ: `flow.tsx:1839` cita `(`Grecas`, `./splash.tsx:245`)`, y esa cita
+  // ya se rompió una vez (auto-blindaje HU-066 W2, cuando seis renglones de prosa corrieron esta
+  // definición de `:235` a `:245`). Arreglarla exigiría editar `flow.tsx`, que esta HU no puede tocar.
+  // Por eso el símbolo se queda en su línea, y el cuerpo —que no recibe ninguna cita— es lo único que
+  // se movió.
+  //
+  // El `id` sigue siendo `"chaski-qhapaq-nan"`: es el que ya estaba, y cambiarlo acá sería un cambio de
+  // render del splash sin ninguna razón. El que NO puede repetirlo es el otro sitio de llamada.
+  return <GrecasMotivo id="chaski-qhapaq-nan" tono="sobre-oscuro" />;
 }

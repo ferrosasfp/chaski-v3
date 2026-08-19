@@ -1,7 +1,7 @@
 "use client";
 import { ArrowRight, ShieldCheck } from "lucide-react";
 import { resolveSolanaNetworkConfig } from "../infrastructure/chain";
-import { Aviso, Button, Card, Muted } from "./ui";
+import { Aviso, Button, Card, Muted } from "./ui"; import { Grecas } from "./grecas"; import { MARCA_SRC } from "./marca";
 
 /**
  * WKH-063 / AC-1 · LA PRIMERA PANTALLA, que hasta esta HU no existía.
@@ -153,8 +153,8 @@ import { Aviso, Button, Card, Muted } from "./ui";
  * (`PASOS_ESPERADOS`, `bienvenida-composicion.test.tsx:233`). Por eso están escritas en términos de lo
  * que la app HACE y no de lo que se siente:
  *   · el 1 nombra los dos datos que el paso `send` pide (el monto y el CCI);
- *   · el 2 nombra la verificación de identidad y la firma, que son `verify` y `confirm`, y dice "una
- *     sola vez" porque es lo que el propio paso ya afirma ("Verificación única", `flow.tsx:1002`);
+ *   · el 2 nombra la verificación de identidad y la firma, que son `verify` y `confirm`. ⚠️ HU-068 le
+ *     sacó el "una sola vez" para que entre en UN renglón; el paso lo sigue diciendo (`flow.tsx:1025`);
  *   · el 3 dice que se SIGUE el envío y que su estado está a la vista. ⛔ NO dice que el dinero
  *     llegue, ni cuándo: este repo ya borró un "llega en ~30 min" por prometer una entrega que el
  *     sistema no controla (la release del vault la dispara una persona), y `honest-copy.test.tsx`
@@ -167,14 +167,60 @@ import { Aviso, Button, Card, Muted } from "./ui";
  *     sostiene el aviso de arriba, y decirla dos veces con una mitad condicional debilitaba las dos.
  */
 const PASOS = [
-  "Ponés cuánto querés enviar y el CCI de la cuenta en Perú.",
-  "Verificás tu identidad una sola vez y firmás el envío desde tu billetera.",
-  "Seguís el envío desde la app, con su estado a la vista.",
+  "Ponés el monto y el CCI de tu familiar.",
+  "Verificás tu identidad y firmás el envío.",
+  "Seguís el envío y su estado desde la app.",
 ] as const;
 
 export function Bienvenida({ onEmpezar, disabled }: { onEmpezar: () => void; disabled?: boolean }) {
   return (
     <div className="flex flex-1 flex-col justify-center space-y-aire">
+      {/* HU-068 · LA BANDA DE MARCA, y es lo ÚNICO no textual de esta pantalla que no es un ícono.
+          El defecto que cierra: la entrada contaba todo su mensaje con prosa (cero `<img>`, cero
+          `<svg>` en este subárbol), y la salida no podía ser tipográfica porque la escala S-1 está
+          cerrada por arriba —su tope, `money`, está reservado para la cifra (`tailwind.config.ts:81`)—.
+
+          🔴 CADA PÍXEL DE ALTO DE ACÁ SALE 1:1 DE UN RENGLÓN DE PROSA, y no es una figura retórica: a
+          390x844 el documento ya mide 848 contra 844 de viewport, así que el sobrante que reparte el
+          `justify-center` de arriba es EXACTAMENTE 0 (medido en el navegador, no derivado: la raíz
+          mide 660,28px y sus hijos ocupan 660,28px). No hay colchón. Los 40px de esta banda más los
+          24px del `space-y-aire` que agrega se pagan con los tres renglones de `PASOS`, que pasaron de
+          dos líneas a una (medido: 2/2/2 líneas antes, con `Range.getClientRects`).
+          ⚠️ A 412x915 SÍ hay sobrante (105,72px medidos) y ahí la banda entra sin pagar nada. El
+          presupuesto de esta HU es el del viewport MÁS chico donde el documento ya desbordaba.
+
+          ⛔ NO SE REUSA `ChaskiMark`: su único contrato es que la caja la fija el `className` de quien
+          llama (`ui.tsx:25-32`) y no acepta `alt` ni `data-*`. Acá el `alt` tiene que ser VACÍO.
+          ⛔ Y NO ENTRA NINGÚN ASSET NUEVO: es la MISMA URL que el header ya pide (`flow.tsx:683`), o
+          sea 0 bytes adicionales de descarga. Medido en el navegador con
+          `PerformanceResourceTiming.transferSize`: 14.579 B antes y después, un solo `<img>` de red.
+
+          ⛔ SIN TEXTO NI SUPERFICIE DE COLOR PROPIA adentro. No es minimalismo: con texto encima, la
+          exigencia de contraste WCAG pasa a medirse contra el color COMPUESTO de la banda, y este repo
+          ya publicó una vez un contraste correcto contra el fondo equivocado (`bienvenida.tsx:293-299`,
+          más abajo en este mismo archivo). Sin tinta encima, no hay nada que medir. */}
+      <div
+        data-marca-entrada
+        className="relative flex h-10 items-center justify-center overflow-hidden"
+      >
+        {/* 🔴 EL `id` NO PUEDE SER EL DEL SPLASH, y es un bug medido: `app/page.tsx:20-21` monta
+            `<Splash />` y `<RemittanceFlow />` como HERMANOS, así que los dos `<pattern>` conviven en
+            un solo documento los ~1200 ms que el splash se queda (`splash.tsx:60`). `url(#…)` resuelve
+            al PRIMERO en orden de documento, que sería el del splash: su `stroke` es `#FBFAF7`, el tono
+            para fondo oscuro, casi el color de `paper`, y esta banda se vería VACÍA y después
+            aparecería. Falla intermitente y atada al reloj. Candado: el `it` de `id` duplicados. */}
+        <Grecas id="chaski-qhapaq-nan-entrada" tono="sobre-claro" />
+        {/* biome-ignore lint/performance/noImgElement: es la MISMA URL que `ChaskiMark` ya pide en el
+            header, así que el navegador no hace una segunda descarga (medido: 1 sola entrada de
+            `initiatorType==="img"`, 14.579 B transferidos, idénticos antes y después de esta HU).
+            `next/image` pediría un `sizes` en píxeles y acá la caja la fija este `className`. */}
+        <img
+          src={MARCA_SRC}
+          alt=""
+          aria-hidden="true"
+          className="relative h-8 w-auto object-contain"
+        />
+      </div>
       <Card className="space-y-holgado text-center">
         {/* `h-14 w-14` no es un tamaño de ícono y por eso no está en la escala de S-4: es el círculo
             que lo CONTIENE. Es la MISMA receta que el paso `connect` ya pinta, y se reusa tal cual

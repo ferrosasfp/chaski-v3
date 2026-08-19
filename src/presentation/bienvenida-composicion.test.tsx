@@ -122,7 +122,7 @@
 // ⚠️ LOS OCHO SE RE-CORRIERON EN EL FIX-PACK, porque el archivo pasó de **11 a 14 tests** —los dos de
 // `T-063-24` MÁS el de antivacuidad de `T-063-10`, o sea TRES y no dos (verificado contando los `it(` de
 // los dos árboles, no de memoria)— y un total viejo (`… (11)`) ya no describe este árbol. Un conteo de
-// mutación es relativo al tamaño de la suite y agregar tests lo invalida sin que nada se ponga rojo.
+// mutación es relativo al tamaño de la suite y agregar tests lo invalida sin que nada se ponga rojo. 🔴 Y VOLVIÓ A PASAR: HU-068 llevó este archivo de **14 a 21 tests**, así que LOS DIECISÉIS NÚMEROS DE LA TABLA DE ABAJO SON DE LA CORRIDA DE 14 Y ESTÁN VIEJOS. No se les escribió un total nuevo encima —eso sería publicar como medido algo que no se re-corrió—: los tres que HU-068 SÍ re-corrió sobre 21 (el 4, el 5 y el 6) están al FINAL del archivo, con su conteo, junto con los diez mutantes nuevos de la banda.
 //
 // 🔴 Y EL FIX-PACK ANTERIOR PUBLICÓ ESTA TABLA CON **(13)** EN LAS OCHO FILAS SOBRE UN ARCHIVO DE **14**
 // TESTS (fix-pack 2 · AR-it2/MNR-1). Los ocho `failed` estaban bien; los ocho totales estaban viejos por
@@ -232,7 +232,7 @@ const pintarBienvenida = () => render(<RemittanceFlow container={buildTestContai
 type Sondeo = { seguir: () => Promise<void> };
 const PASOS_ESPERADOS: readonly { frase: string; sonda: (s: Sondeo) => Promise<void> }[] = [
   {
-    frase: "Ponés cuánto querés enviar y el CCI de la cuenta en Perú.",
+    frase: "Ponés el monto y el CCI de tu familiar.",
     // El paso `send` pide exactamente esos dos datos, y los dos se buscan por su etiqueta real.
     sonda: async () => {
       expect(screen.getByLabelText("Monto en dólares")).toBeInTheDocument();
@@ -240,7 +240,7 @@ const PASOS_ESPERADOS: readonly { frase: string; sonda: (s: Sondeo) => Promise<v
     },
   },
   {
-    frase: "Verificás tu identidad una sola vez y firmás el envío desde tu billetera.",
+    frase: "Verificás tu identidad y firmás el envío.",
     // Las dos mitades son dos pasos distintos del flujo (`verify` y `confirm`), y las dos se caminan:
     // primero la identidad, y DESPUÉS de avanzar, la firma. El orden es parte de lo que el renglón dice.
     sonda: async ({ seguir }) => {
@@ -262,7 +262,7 @@ const PASOS_ESPERADOS: readonly { frase: string; sonda: (s: Sondeo) => Promise<v
     // en la rama donde el depósito no llegó a firmarse la frase era FALSA. Se cambió la frase, no la
     // sonda. Es el caso puro de por qué la tabla lleva sonda: escrito a ojo, ese renglón se iba a
     // producción con una afirmación condicional presentada como incondicional.
-    frase: "Seguís el envío desde la app, con su estado a la vista.",
+    frase: "Seguís el envío y su estado desde la app.",
     // ⚠️ LA SONDA ES EL TRAMO, NO EL DESENLACE, y es deliberado: con los dobles por defecto el pago
     // falla (`FakePayoutGateway`), así que el TEXTO de estado que aparece depende de la rama y asertar
     // uno lo ataría a este doble. Lo que el renglón 3 afirma, y lo que vale en todas las ramas, es que
@@ -600,3 +600,224 @@ describe("T-063-24 (AR/BLQ-BAJO-2): la promesa del explorador se ejecuta en las 
     expect((enlaces[0] as HTMLAnchorElement).href).toMatch(/explorer\.solana\.com|solscan|solana/i);
   });
 });
+
+// ══ HU-068 · LOS CANDADOS DE LA BANDA DE MARCA ════════════════════════════════════════════════════
+//
+// ⛔ VAN AL FINAL DEL ARCHIVO, Y NO ES ORDEN ESTÉTICO: `bienvenida.tsx:153` cita
+// (`PASOS_ESPERADOS`, `bienvenida-composicion.test.tsx:233`), así que un `describe` insertado más
+// arriba correría ese número y rompería una cita SALIENTE — el lado que HU-066 se olvidó de mirar.
+// ⛔ Y POR LO MISMO NO HAY NINGÚN `import` NUEVO EN LA CABECERA: lo que estos tests necesitan de
+// `node:fs`, de `lucide-react`, de `./marca` y del splash entra con `await import(...)` adentro del
+// `it`. Un import de más arriba mueve las 602 líneas de abajo y con ellas el ancla de esa cita.
+//
+// ⚠️ LO QUE ESTOS CUATRO NO MIDEN, dicho antes de sus asserts: ni un píxel. Corren en jsdom, que no
+// hace layout y no corre Tailwind (es la misma limitación declarada arriba, y sigue siendo cierta).
+// Que la banda MIDA 40px y que el documento siga en 848 lo mide el instrumento del navegador de W0/W4,
+// que no es un test de este repo: es un procedimiento.
+
+const SELECTOR_BANDA = "[data-marca-entrada]";
+
+describe("J-AC1 (HU-068/AC-1): la entrada monta un elemento visual DE MARCA, y un ícono no cuenta", () => {
+  it("la banda existe, y adentro están la marca Y el motivo de grecas", async () => {
+    const { MARCA_SRC } = await import("./marca");
+    pintarBienvenida();
+    const banda = document.querySelector(SELECTOR_BANDA) as HTMLElement | null;
+    expect(banda, `no hay ningún ${SELECTOR_BANDA} en la pantalla de entrada`).not.toBeNull();
+    // Se piden los dos por separado para que el rojo diga CUÁL falta. AC-1 se conforma con uno; esta
+    // HU puso los dos, así que borrar cualquiera es una regresión y no una variante.
+    expect(
+      (banda as HTMLElement).querySelector("img")?.getAttribute("src") ?? null,
+      "el <img> de la banda tiene que servir la MISMA URL que el header ya pide",
+    ).toBe(MARCA_SRC);
+    expect(
+      (banda as HTMLElement).querySelector("pattern"),
+      "y el motivo de grecas tiene que estar en el subárbol de la banda",
+    ).not.toBeNull();
+  });
+
+  it("🔴 ANTI-TRAMPA: un árbol con SÓLO los dos íconos de `lucide-react` NO satisface el selector", async () => {
+    // AC-1 lo dice con todas las letras: un ícono de `lucide-react` no lo satisface, y esta pantalla
+    // YA tenía dos (`ArrowRight` y `ShieldCheck`). Sin este `it`, un guard escrito como "hay algún
+    // <svg>" habría dado verde desde ANTES de que la banda existiera, porque los íconos son <svg>.
+    const { ArrowRight, ShieldCheck } = await import("lucide-react");
+    render(
+      React.createElement(
+        "div",
+        null,
+        React.createElement(ArrowRight),
+        React.createElement(ShieldCheck),
+      ),
+    );
+    expect(
+      document.querySelectorAll("svg").length,
+      "ANTIVACUIDAD: el árbol de control TIENE que traer los dos íconos",
+    ).toBe(2);
+    expect(
+      document.querySelector(SELECTOR_BANDA),
+      "dos íconos de lucide no son un elemento visual de marca",
+    ).toBeNull();
+  });
+});
+
+describe("J-AC4 (HU-068/AC-4): los `className` de `bienvenida.tsx` hablan por ROL, y el barrido se CALIBRA", () => {
+  // La misma forma que `ola-2-pantallas.test.tsx:91-100`, con su limitación declarada: reconoce
+  // `className="…"` y `className={cn(…)}` y NADA MÁS. Un `className={`…`}` sería INVISIBLE acá
+  // (`ola-2-pantallas.test.tsx:94`) y por eso CD-12 lo prohíbe en la banda: el guard aplaudiría el
+  // vacío. Toma el SOURCE como argumento —y no un path— justamente para que se pueda calibrar.
+  function clasesDe(src: string): string[] {
+    const out: string[] = [];
+    for (const m of src.matchAll(/className=(?:"([^"]*)"|\{cn\(([\s\S]*?)\)\})/g)) {
+      out.push(m[1] ?? m[2] ?? "");
+    }
+    return out;
+  }
+
+  const ROLES = ["money", "title", "body", "support", "label", "mono"]; // tailwind.config.ts:77-99
+  const SEPARACION = ["ajustado", "normal", "holgado", "aire"]; // tailwind.config.ts:219-224
+  // Los `text-*` que NO son tamaño: colores del tema y alineación. Escritos A MANO y no derivados del
+  // config, para que un `text-*` nuevo tenga que pasar por acá a propósito y no entre solo.
+  const TEXT_QUE_NO_ES_TAMANO = [
+    "text-cochineal",
+    "text-cochineal-ink",
+    "text-stone",
+    "text-left",
+    "text-center",
+    "text-right",
+  ];
+
+  function culpables(cadenas: string[]): string[] {
+    const malas: string[] = [];
+    for (const cadena of cadenas) {
+      for (const c of cadena.split(/\s+/).filter(Boolean)) {
+        const sep = /^(space-[xy]|gap|p[trblxy]?|m[trblxy]?)-(.+)$/.exec(c);
+        if (/^text-\[/.test(c)) {
+          malas.push(`${c} — tamaño a mano: la escala S-1 es cerrada`);
+        } else if (/^text-(xs|sm|base|lg|xl|[2-9]xl)$/.test(c)) {
+          malas.push(`${c} — tamaño de fábrica: el vocabulario es por rol`);
+        } else if (/^text-/.test(c) && !ROLES.includes(c.slice(5)) && !TEXT_QUE_NO_ES_TAMANO.includes(c)) {
+          malas.push(`${c} — ni un rol de fontSize ni un color declarado`);
+        } else if (sep !== null && !SEPARACION.includes(sep[2] as string) && sep[2] !== "auto") {
+          malas.push(`${c} — separación fuera de los cuatro tokens de spacing`);
+        }
+      }
+    }
+    return malas;
+  }
+
+  it("el barrido encuentra clases (si diera 0, los dos `it` de abajo pasarían por vacío)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(`${process.cwd()}/src/presentation/bienvenida.tsx`, "utf8");
+    // El piso es el conteo MEDIDO al escribir esto (18 cadenas, 2026-08-19), no un objetivo.
+    expect(clasesDe(src).length).toBeGreaterThan(10);
+  });
+
+  it("🔴 CALIBRADOR: contra una entrada sintética, el barrido reporta LAS DOS familias", () => {
+    // Sin esto el guard es indistinguible de uno roto: "no encontré nada" y "no sé mirar" dan el mismo
+    // verde. La entrada trae un tamaño de fábrica Y uno a mano, que son las dos formas que AC-4 prohíbe.
+    const sintetico = '<div className="text-sm text-[20px] gap-normal mx-auto">x</div>';
+    const reportadas = culpables(clasesDe(sintetico));
+    expect(reportadas.join(" | "), "el barrido no ve el tamaño de fábrica").toContain("text-sm");
+    expect(reportadas.join(" | "), "el barrido no ve el tamaño a mano").toContain("text-[20px]");
+    expect(reportadas, "y no puede inventar culpables: `gap-normal` y `mx-auto` son legales").toHaveLength(2);
+  });
+
+  it("no hay ningún tamaño de fábrica, ningún `text-[Npx]` y ninguna separación fuera de los 4 tokens", async () => {
+    // INPUT QUE LO PONE EN ROJO: un `text-sm` o un `text-[20px]` en la banda; o un `gap-3` en vez de
+    // `gap-normal`. `bienvenida.tsx` NO estaba cubierto por `T-O2-2`, que barre sólo `flow.tsx` y
+    // `ui.tsx` (`ola-2-pantallas.test.tsx:132`): este `it` es el que cierra ese agujero.
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(`${process.cwd()}/src/presentation/bienvenida.tsx`, "utf8");
+    expect(culpables(clasesDe(src))).toEqual([]);
+  });
+});
+
+describe("J-AC8 (HU-068/AC-8): la banda no lleva texto ni superficie de color propia", () => {
+  it("el subárbol de la banda no tiene ningún nodo de texto no vacío, ni un `bg-*`", () => {
+    pintarBienvenida();
+    const banda = document.querySelector(SELECTOR_BANDA) as HTMLElement | null;
+    expect(banda, "ANTIVACUIDAD: sin banda este test pasaría por vacío").not.toBeNull();
+    const caminante = document.createTreeWalker(banda as HTMLElement, NodeFilter.SHOW_TEXT);
+    const textos: string[] = [];
+    for (let n = caminante.nextNode(); n !== null; n = caminante.nextNode()) {
+      const t = (n.textContent ?? "").trim();
+      if (t !== "") textos.push(t);
+    }
+    // Con texto encima, AC-8 deja su rama fácil: el contraste habría que medirlo contra el color
+    // COMPUESTO de la banda (α·ink sobre paper), que es justo la clase de cuenta que este repo ya
+    // publicó una vez contra el fondo equivocado.
+    expect(textos, "la banda es decorativa: si lleva texto, AC-8 pasa a exigir 4,5:1 medido").toEqual([]);
+    const conFondo = [banda as HTMLElement, ...(banda as HTMLElement).querySelectorAll("*")]
+      .map((e) => e.getAttribute("class") ?? "")
+      .filter((clase) => /(^|\s)bg-/.test(clase));
+    expect(conFondo, "una superficie de color propia es el otro disparador de AC-8").toEqual([]);
+  });
+});
+
+describe("J-DT4 (HU-068/§0.3): el splash y la app conviven en UN documento, y ningún `id` se repite", () => {
+  it("🔴 montados como en `app/page.tsx:20-21`, no hay dos elementos con el mismo `id`", async () => {
+    // EL BUG QUE ESTE `it` CAZA, y que ningún artefacto anterior tenía: los dos subárboles conviven
+    // ~1200 ms (`splash.tsx:60`), un `id` de SVG es del DOCUMENTO y `url(#…)` resuelve al PRIMERO en
+    // orden de documento. Con el `id` repetido la banda de la entrada pintaría con el `<pattern>` del
+    // splash, cuyo stroke es el tono para fondo oscuro, y se vería vacía. Intermitente y atada al reloj.
+    const { Splash } = await import("./splash");
+    // ⚠️ `RemittanceFlow` va en JSX y el splash por `createElement`: con los DOS por `createElement`,
+    // `tsc` rechaza el `container` (TS2769, "'container' does not exist in type 'Attributes'") y la
+    // suite pasa igual porque vitest no tipa. Medido en W3: `npm test` verde con `npm run typecheck`
+    // en exit 2. El `createElement` queda sólo donde hace falta, que es el import dinámico.
+    render(
+      <>
+        {React.createElement(Splash)}
+        <RemittanceFlow container={buildTestContainer()} />
+      </>,
+    );
+    // La PRECONDICIÓN, medida y no supuesta: si los dos `<pattern>` no convivieran, este test no
+    // estaría midiendo el bug y daría verde igual.
+    expect(
+      document.querySelectorAll("pattern").length,
+      "los dos motivos tienen que estar en el documento a la vez, o esto no mide nada",
+    ).toBe(2);
+    const conId = [...document.querySelectorAll("[id]")];
+    expect(
+      conId.length,
+      "ANTIVACUIDAD: con 0 elementos con `id`, cualquier cosa pasaría",
+    ).toBeGreaterThanOrEqual(2);
+    const ids = conId.map((e) => e.id);
+    expect(
+      ids.filter((v, i) => ids.indexOf(v) !== i),
+      "un `id` repetido hace que `url(#…)` resuelva al primero del documento y no al propio",
+    ).toEqual([]);
+  });
+});
+
+// ── HU-068 · LOS MUTANTES DE ESTA HU: APLICADOS Y CORRIDOS SOBRE 21 TESTS ──────────────────────────
+//
+// Cada uno se editó en el árbol, se verificó que la sustitución OCURRIÓ leyendo el texto resultante (un
+// ancla que aparece dos veces no se sustituye y el `sed` sale 0 igual: dos de estos diez fallaron esa
+// verificación en el primer intento y NO se corrieron hasta arreglarla), se corrió este archivo y se
+// restauró comparando **md5**. Control sin mutante, en la misma tanda: **21 passed (21)**.
+//
+//   MUTANTE APLICADO                                                         RESULTADO MEDIDO
+//   M4.  `PASOS` con dos renglones en vez de tres                            3 failed | 18 passed (21)
+//   M5a. el renglón 2 sin la mitad de la identidad (sólo el código)           1 failed | 20 passed (21)
+//   M6.  `onContinue` de `review` salta `verify` (`flow.tsx:384`)             1 failed | 20 passed (21)
+//   J-AC1a. la banda sin su `data-*` estable (inalcanzable)                   2 failed | 19 passed (21)
+//   J-AC1b. 🔴 la banda pasa a ser un `<ShieldCheck />`                       2 failed | 19 passed (21)
+//   J-AC4a. `text-[20px]` en el `className` de la banda                      1 failed | 20 passed (21)
+//   J-AC4b. `text-sm` en el `className` de la banda                          1 failed | 20 passed (21)
+//   J-AC4c. 🔴 el BARRIDO ciego (se rompe el regex de `clasesDe`)             2 failed | 19 passed (21)
+//   J-AC8.  un `<p>Envíos seguros</p>` encima de la banda                    1 failed | 20 passed (21)
+//   J-DT4.  la banda con el `id="chaski-qhapaq-nan"` del splash              1 failed | 20 passed (21)
+//
+// 🔴 Y LOS DOS QUE SOBREVIVIERON, que valen más que los diez que murieron:
+//
+//   M5b. el renglón 2 sin la identidad **en el código Y en la tabla a la vez**  0 failed | 21 passed
+//        ⇒ NADA en esta suite obliga al renglón 2 a nombrar la verificación de identidad si quien lo
+//        cambia edita también la fila de `PASOS_ESPERADOS`. La `sonda` camina `verify` y `confirm`
+//        diga lo que diga la frase: protege que el FLUJO no pierda el paso, no que el COPY no pierda la
+//        afirmación. Eso último lo sostiene una persona leyendo la tabla, que es su diseño declarado
+//        («las frases van escritas acá, letra por letra»), y así queda dicho en vez de suponerse.
+//   J-AC4c(1ª versión). borrar SÓLO la rama `/^text-\[/` del barrido              0 failed | 21 passed
+//        ⇒ no es un agujero: `text-[20px]` cae en la rama siguiente («ni un rol ni un color declarado»)
+//        y se sigue reportando. O sea que la cobertura es REDUNDANTE, no ciega. El mutante que sí lo
+//        mata es el de arriba (romper el regex), y por eso el calibrador se escribió contra el barrido
+//        ENTERO y no contra una rama.

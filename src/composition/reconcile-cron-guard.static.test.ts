@@ -30,9 +30,22 @@
 // no existe para vos —una version anterior de este parrafo citaba directamente "su reporte" del
 // fix-pack #3, y ese reporte no existe en ningun lado—. Lo que SI es verificable desde aca, en un
 // comando: los mutantes de la ultima ronda se corrieron contra el workflow cuyo
-// `md5sum .github/workflows/reconcile-orphans.yml` es `96a71a72993b995abe47a0e8192d9703`. Si no coincide con el
+// `md5sum .github/workflows/reconcile-orphans.yml` es `ac1cb1dc05d2411edd58b8d387344bd9`. Si no coincide con el
 // del arbol que estas leyendo, el `.yml` cambio despues de que se midio y esta lista hay que volver a
 // medirla.
+// ⚠️ ESTE NUMERO YA ENVEJECIO UNA VEZ, Y FUE EN EL COMMIT QUE LO ESCRIBIO. Decia
+// `96a71a72993b995abe47a0e8192d9703`, que es el md5 del `.yml` ANTES del fix-pack #5: ese fix-pack
+// edito el `.yml` Y este candado, y actualizo el segundo sin actualizar el primero. O sea que la
+// UNICA linea verificable en un comando de todo este parrafo estuvo FALSA, en el archivo cuyo valor
+// entero es que sus numeros sean confiables — la misma clase de defecto que la enumeracion vieja de
+// `YAML` crudo (mas abajo, en la lista de los tres niveles), y lo midio el F4.
+// ⚠️ Y NADA LO SOSTIENE: ninguna asercion compara este md5 contra el archivo, asi que se vuelve a
+// poner viejo con la proxima edicion del `.yml`, en silencio. No haberla puesto es deliberado —una
+// asercion asi pondria la suite ROJA en toda edicion legitima del workflow— y el precio esta
+// declarado aca: este renglon hay que actualizarlo A MANO cada vez que el `.yml` cambie.
+// LA DIRECCION DEL ERROR SE CONSERVA, y es lo que lo vuelve una molestia y no un agujero: un md5
+// viejo manda a RE-MEDIR una lista que quiza no hacia falta re-medir (falsa alarma), nunca a dar por
+// medido algo que no se midio (falsa confianza). Corre el comando antes de apoyarte en la lista.
 // La UNICA excepcion, dicha: la no-regresion de `route.ts` (ultima linea) no tiene mutante propio,
 // porque mutar `route.ts` esta fuera del Scope IN de esta HU.
 //   · Estructura: que exista `jobs.<job>.steps[i].run` —lo que GitHub lee— y no solo el texto. Un
@@ -84,6 +97,21 @@
 //      es esa reversion CUANDO ADEMAS hay un `curl` fuera de L1 (medido: 16/17), porque el conteo de
 //      invocaciones escaneadas se cruza contra las lineas de invocacion de TODO el `SHELL`. O sea: el
 //      cruce protege el caso que importa —el agujero abierto— y no protege la reversion en frio.
+//      Y EL OTRO ARREGLO DEL FIX-PACK #5 —el localizador de T-042B-8, que paso de
+//      `L1.indexOf("-z ") < L1.indexOf("curl")` a buscar POR LINEA con `CURL_INVOCACION`— SE DELATA
+//      IGUAL DE POCO, y revertirlo NO ES SOLO UN RIESGO DE FALSO ROJO. Tres inputs, medidos:
+//        · la reversion SOLA, con el `.yml` CORRECTO: 17/17 EN VERDE. Nadie la ve.
+//        · la reversion + un `echo "diagnostico: si el curl falla, mira el runbook"` arriba del
+//          `run:` (workflow por lo demas CORRECTO): 16/17, `expected 107 to be less than 63` ⇒ FALSO
+//          ROJO. Es la mitad que ya estaba escrita, en el comentario de T-042B-8.
+//        · la reversion + un `if [ -z "${GITHUB_RUN_ID:-}" ]` de senuelo ANTES del curl, con el
+//          chequeo real del secreto movido a DESPUES: 17/17 EN VERDE ⇒ FALSO VERDE, con el POST
+//          saliendo antes de que nadie verifique que el secreto existe. Con el localizador arreglado
+//          ese mismo input MUERE 16/17 (`expected 33 to be less than 14`).
+//      O sea que el `indexOf` crudo no se ancla solo en la palabra `curl` de un mensaje: se ancla
+//      tambien en CUALQUIER `-z ` del script, y no en el del secreto. La reversion pide un segundo
+//      renglon para volverse peligrosa —igual que `R1` pide `K1`— y ese segundo renglon es una linea
+//      de shell que nadie tiene motivo para mirar dos veces.
 //      LO QUE SI SE DELATA SIEMPRE, porque hay una sonda que lo mira: volver
 //      `CURL_INVOCACION` al `/\bcurl\b/` ingenuo, o volver el lector a leer solo el PRIMER `curl`, ponen
 //      T-042B-15 ROJO. La diferencia entre las dos mitades es exactamente "¿hay una sonda que ejercite

@@ -4,6 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const { rlMock } = vi.hoisted(() => ({ rlMock: vi.fn() }));
 vi.mock("../../../../src/infrastructure/rate-limit", () => ({ checkKycRateLimit: rlMock }));
 
+// WKH-233 — el store del `decisionToken`. Se mockea el MÓDULO (no la base) para poder contar
+// llamadas y forzar el fallo de la escritura, que es lo que T-TOK-6 mide.
+const { putMock, storeMock } = vi.hoisted(() => ({ putMock: vi.fn(), storeMock: vi.fn() }));
+vi.mock("../../../../src/infrastructure/persistence/supabase-kyc-session-tokens", () => ({
+  getKycSessionTokenStore: storeMock,
+}));
+
 import bs58 from "bs58";
 import nacl from "tweetnacl";
 import { Keypair } from "@solana/web3.js";
@@ -13,7 +20,15 @@ import {
 } from "../../../../src/infrastructure/auth/pop-challenge";
 import { POST } from "./route";
 
-const DIDIT_OK = { session_id: "s1", url: "https://verify.didit.me/session/s1", session_token: "didit-tok" };
+// La salida del agente. `decisionToken` es un CENTINELA reconocible: T-TOK-3/T-TOK-4 barren el body,
+// las cabeceras y los logs buscándolo. Si aparece en alguno, CD-20 está roto.
+const TOKEN_CENTINELA = "k1.CENTINELA-QUE-NO-DEBE-SALIR";
+const AGENT_OK = {
+  sessionId: "s1",
+  url: "https://verificacion.example/session/s1",
+  decisionToken: TOKEN_CENTINELA,
+  provenance: "didit",
+};
 
 // WKH-333/R-1 — la ruta pasa a exigir prueba de posesión de la billetera. Seeds FIJAS: las addresses
 // son reproducibles corrida a corrida, así una mutación que hardcodee un valor se puede escribir y
@@ -44,11 +59,11 @@ function realPop(signer: Keypair, challengeFor: Keypair = signer) {
  *  cada aserto: el `!` es la única forma que TypeScript acepta ahí (el `?.` encadenado dispara
  *  `noUnsafeOptionalChaining`, que en este repo es ERROR de lint, no warning). Concentrarlo en un
  *  solo lugar deja los casos legibles y el lint quieto. */
-function sentToDidit(m: { mock: { calls: unknown[][] } }, n = 0): Record<string, unknown> {
+function sentToAgent(m: { mock: { calls: unknown[][] } }, n = 0): Record<string, unknown> {
   const call = m.mock.calls[n];
-  if (!call) throw new Error("no hubo llamada a Didit");
+  if (!call) throw new Error("no hubo llamada al agente");
   const init = call[1] as RequestInit | undefined;
-  if (!init?.body) throw new Error("la llamada a Didit no llevó body");
+  if (!init?.body) throw new Error("la llamada al agente no llevó body");
   return JSON.parse(String(init.body)) as Record<string, unknown>;
 }
 
@@ -72,23 +87,21 @@ afterEach(() => vi.restoreAllMocks());
 beforeEach(() => {
   rlMock.mockReset();
   rlMock.mockResolvedValue({ ok: true });
-  vi.stubEnv("DIDIT_API_KEY", "test-key");
-  vi.stubEnv("DIDIT_WORKFLOW_ID", "wf-1");
+  putMock.mockReset();
+  putMock.mockResolvedValue(undefined);
+  storeMock.mockReset();
+  storeMock.mockReturnValue({ put: putMock });
+  vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test");
+  vi.stubEnv("KYC_AGENT_INVOKE_SECRET", undefined);
   vi.stubEnv("KYC_SESSION_SECRET", "test-secret-123");
-  vi.stubEnv("KYC_CALLBACK_BASE_URL", "");
   // WKH-333/R-1: la ruta exige PoP. Sin el secreto responde 503 fail-closed, así que los casos que
   // llegan a Didit tienen que presentarlo.
   vi.stubEnv("PAYOUT_POP_SECRET", POP_SECRET);
-  // Ambiente de Didit declarado (fail-closed): sin esto la ruta corta en 500 didit_env_misconfigured
-  // antes del rate-limit. Además BLINDA contra un DIDIT_ENV=live exportado en la shell/CI: un test
-  // jamás debe poder resolver el host REAL de Didit (crea verificaciones con PII).
-  vi.stubEnv("DIDIT_ENV", "mock");
-  vi.stubEnv("DIDIT_BASE_URL", "http://localhost:9999/didit-mock");
 });
 
 describe("POST /api/kyc/session — guard-order + rate-limit + callback + token (WKH-179)", () => {
-  it("sin DIDIT_API_KEY → 501, rate-limit NO invocado (AC-4)", async () => {
-    vi.stubEnv("DIDIT_API_KEY", "");
+  it("T-SES-4: sin KYC_AGENT_BASE_URL → 501, rate-limit NO invocado (AC-4)", async () => {
+    vi.stubEnv("KYC_AGENT_BASE_URL", undefined);
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const res = await POST(req());
@@ -97,22 +110,22 @@ describe("POST /api/kyc/session — guard-order + rate-limit + callback + token 
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("DIDIT_API_KEY sin KYC_SESSION_SECRET → 500 (CD-7)", async () => {
+  it("con host del agente y sin KYC_SESSION_SECRET → 500 (CD-7)", async () => {
     vi.stubEnv("KYC_SESSION_SECRET", "");
     const res = await POST(req());
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: "server_misconfigured" });
   });
 
-  it("rate-limit consultado ANTES del fetch a Didit (AC-5, CD-2)", async () => {
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => DIDIT_OK }));
+  it("rate-limit consultado ANTES del viaje al agente (AC-5, CD-1)", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => AGENT_OK }));
     vi.stubGlobal("fetch", fetchMock);
     await POST(req({ vendorData: "0xabc" }));
     expect(rlMock).toHaveBeenCalledWith({ ip: "9.9.9.9", address: "0xabc" });
   });
 
   it("IP viene de x-vercel-forwarded-for (fuente confiable de Vercel); XFF malicioso se ignora (MNR-1)", async () => {
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => DIDIT_OK }));
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => AGENT_OK }));
     vi.stubGlobal("fetch", fetchMock);
     // Atacante intenta forjar el leftmost del XFF; Vercel inyecta la IP real en x-vercel-forwarded-for.
     await POST(
@@ -125,14 +138,14 @@ describe("POST /api/kyc/session — guard-order + rate-limit + callback + token 
   });
 
   it("IP cae a x-real-ip cuando no hay x-vercel-forwarded-for; XFF forjado no la cambia (MNR-1)", async () => {
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => DIDIT_OK }));
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => AGENT_OK }));
     vi.stubGlobal("fetch", fetchMock);
     await POST(reqWithHeaders({ "x-real-ip": "7.7.7.7", "x-forwarded-for": "1.2.3.4" }));
     expect(rlMock).toHaveBeenCalledWith({ ip: "7.7.7.7", address: undefined });
   });
 
   it("sin headers de Vercel → XFF como último recurso toma el valor MÁS A LA DERECHA, no el leftmost (MNR-1)", async () => {
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => DIDIT_OK }));
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => AGENT_OK }));
     vi.stubGlobal("fetch", fetchMock);
     // 1.1.1.1 lo puede forjar el cliente; 8.8.8.8 (rightmost) lo agrega el proxy de confianza.
     await POST(reqWithHeaders({ "x-forwarded-for": "1.1.1.1, 8.8.8.8" }));
@@ -159,69 +172,59 @@ describe("POST /api/kyc/session — guard-order + rate-limit + callback + token 
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("body.callback IGNORADO; a Didit va el callback server-side (AC-8, AC-9, M6)", async () => {
+  it("DT-11: el `callback` YA NO EXISTE — no se manda ninguno, ni el del body ni uno construido", async () => {
+    // ⚠️ ESTE TEST REEMPLAZA a los dos que medían el callback server-side. El callback se fue con la
+    // HU: el agente lo valida contra una allowlist de orígenes que nace VACÍA (fail-closed), así que
+    // mandarlo sin esa env sería un 400 garantizado. Lo que el test viejo custodiaba —que
+    // `body.callback` no se reenvíe a ciegas— se conserva y es MÁS fuerte: no se reenvía NADA.
     vi.stubEnv("KYC_CALLBACK_BASE_URL", "https://chaski.app");
     const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
       void init;
-      return { ok: true, json: async () => DIDIT_OK };
+      return { ok: true, json: async () => AGENT_OK };
     });
     vi.stubGlobal("fetch", fetchMock);
-    // ⚠️ CAMBIÓ EN WKH-333: este caso ahora presenta un PoP válido, porque sin él la ruta corta en
-    // 403 antes del fetch. Lo que el test mide —que `body.callback` se ignora— no cambió.
     await POST(req({ callback: "http://evil.com", vendorData: "0xabc", ...realPop(KP_A) }));
-    const sentBody = sentToDidit(fetchMock);
-    expect(sentBody.callback).toBe("https://chaski.app/kyc/callback");
-    expect(JSON.stringify(sentBody)).not.toContain("evil");
+    const sent = sentToAgent(fetchMock);
+    expect(Object.keys(sent)).toEqual(["identityRef"]);
+    expect(JSON.stringify(sent)).not.toContain("evil");
+    expect(JSON.stringify(sent)).not.toContain("chaski.app");
   });
 
-  it("sin KYC_CALLBACK_BASE_URL → callback undefined (nunca body.callback, AC-9)", async () => {
-    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
-      void init;
-      return { ok: true, json: async () => DIDIT_OK };
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    await POST(req({ callback: "http://evil.com", ...realPop(KP_A) }));
-    const sentBody = sentToDidit(fetchMock);
-    expect(sentBody.callback).toBeUndefined();
-    expect(JSON.stringify(sentBody)).not.toContain("evil");
-  });
-
-  it("éxito → 200 con authToken (nuestro) + sessionToken (de Didit), distintos (CD-10)", async () => {
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => DIDIT_OK }));
+  it("éxito → 200 con `{sessionId, url, authToken}` y NADA MÁS (CD-20)", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => AGENT_OK }));
     vi.stubGlobal("fetch", fetchMock);
     const res = await POST(req({ vendorData: "0xabc", ...realPop(KP_A) }));
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { sessionId: string; sessionToken: string; authToken: string };
+    const body = (await res.json()) as Record<string, unknown>;
+    // 🧬 MUTANTE: devolver el `decisionToken` (o el `sessionToken` del proveedor, que tampoco leía
+    // nadie) ⇒ una clave de más ⇒ ROJO.
+    expect(Object.keys(body).sort()).toEqual(["authToken", "sessionId", "url"]);
     expect(body.sessionId).toBe("s1");
-    expect(body.sessionToken).toBe("didit-tok");
     expect(typeof body.authToken).toBe("string");
-    expect(body.authToken).not.toBe(body.sessionToken);
   });
 
-  // ── Ambiente de Didit: fail-closed (elimina el default productivo) ──────────
-  it("key + workflow válidos + SIN DIDIT_ENV → 500 didit_env_misconfigured y NO se crea sesión en Didit", async () => {
-    vi.stubEnv("DIDIT_ENV", undefined);
-    vi.stubEnv("DIDIT_BASE_URL", undefined);
+  // ── El host del agente: fail-closed (sin default, nunca) ────────────────────
+  it("T-SES-4: sin KYC_AGENT_BASE_URL ⇒ 501 (NO 500, NO 502) y NO se crea ninguna sesión", async () => {
+    vi.stubEnv("KYC_AGENT_BASE_URL", undefined);
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const res = await POST(req({ vendorData: "0xabc" }));
-    expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ error: "didit_env_misconfigured" });
-    // EL assert que importa: esta ruta CREA verificaciones de identidad. Sin ambiente declarado no
-    // sale ni un request. Antes de este fix, acá se creaba una sesión REAL en producción de Didit.
+    // 🧬 MUTANTE: devolver 500 ⇒ ROJO. El 501 es el que hace que `AgentKycGateway.start` caiga al
+    // fallback ⇒ el demo queda byte-idéntico. Un 500 lo rompería.
+    expect(res.status).toBe(501);
+    // EL assert que importa: esta ruta CREA verificaciones de identidad. Sin host declarado no sale
+    // ni un request.
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("DIDIT_ENV=mock + DIDIT_BASE_URL → el fetch va al MOCK, nunca al host de Didit", async () => {
-    // El `_url: string` NO es decorativo: sin parámetro declarado, `mock.calls` se tipa como `[]`
-    // y `calls[0][0]` no compila con strict (TS2493).
-    const fetchMock = vi.fn(async (_url: string) => ({ ok: true, json: async () => DIDIT_OK }));
+  it("✅ calibración: CON la env, el fetch va al host del agente y a su ruta", async () => {
+    const fetchMock = vi.fn(async (_url: string) => ({ ok: true, json: async () => AGENT_OK }));
     vi.stubGlobal("fetch", fetchMock);
     const res = await POST(req({ vendorData: "0xabc", ...realPop(KP_A) }));
     expect(res.status).toBe(200);
-    const url = String(fetchMock.mock.calls[0]?.[0]);
-    expect(url).toBe("http://localhost:9999/didit-mock/v3/session/");
-    expect(url).not.toContain("didit.me");
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      "https://agentes.test/api/agents/remit-kyc-validator/session",
+    );
   });
 });
 
@@ -238,15 +241,15 @@ describe("POST /api/kyc/session — el vendor_data sale del PoP, no del body (WK
   function fetchOk() {
     const m = vi.fn(async (_url: string, init?: RequestInit) => {
       void init;
-      return { ok: true, json: async () => DIDIT_OK };
+      return { ok: true, json: async () => AGENT_OK };
     });
     vi.stubGlobal("fetch", m);
     return m;
   }
 
   // ── T-SE-1 — AC-12: el demo queda byte-idéntico ────────────────────────────────────────────────
-  it("T-SE-1: sin DIDIT_API_KEY ⇒ 501 ANTES del PoP (el demo no pide una firma nueva) (M-33b)", async () => {
-    vi.stubEnv("DIDIT_API_KEY", "");
+  it("T-SE-1: sin host del agente ⇒ 501 ANTES del PoP (el demo no pide una firma nueva) (M-33b)", async () => {
+    vi.stubEnv("KYC_AGENT_BASE_URL", undefined);
     const fetchMock = fetchOk();
     const res = await POST(req({ vendorData: ADDR_A })); // SIN PoP, como el demo de hoy
     expect(
@@ -269,7 +272,7 @@ describe("POST /api/kyc/session — el vendor_data sale del PoP, no del body (WK
   // sin prueba la sesión se crea (CD-15/AC-13) pero **no queda atada a nada**, y en particular NO
   // queda atada al valor del body. M-33 ("saltear el PoP cuando el body trae vendorData") sigue
   // muriendo acá, y muere por el aserto que importa: a Didit no le llega `body.vendorData`.
-  it("T-SE-2: con key y SIN PoP ⇒ la sesión SE CREA, pero SIN atar (el body no ata) (M-33)", async () => {
+  it("T-SE-2: con host y SIN PoP ⇒ la sesión SE CREA, pero SIN atar (el body no ata) (M-33)", async () => {
     const fetchMock = fetchOk();
     const res = await POST(req({ vendorData: ADDR_A }));
     expect(
@@ -277,14 +280,16 @@ describe("POST /api/kyc/session — el vendor_data sale del PoP, no del body (WK
       "sin prueba de posesión la ruta cortó: rechazar la firma de la billetera deja a la persona sin " +
         "poder INICIAR el KYC, que es exactamente lo que CD-15 prohíbe",
     ).toBe(200);
-    const sent = sentToDidit(fetchMock) as unknown as { vendor_data?: string };
+    const sent = sentToAgent(fetchMock) as unknown as { identityRef?: string };
     expect(
-      sent.vendor_data,
+      sent.identityRef,
       "la sesión quedó atada a la dirección que vino en el body: quien la mande puede hacer que la " +
         "fila del veredicto de OTRA persona quede a su nombre, y esa fila es la que autoriza el pago",
     ).toBeUndefined();
-    // Y sin `vendor_data`, `app/api/kyc/decision/route.ts` no escribe ninguna fila (fail-closed,
-    // T-DEC-3): la sesión sin atar no puede producir autoridad de pago para nadie.
+    // Y sin `identityRef` el agente omite `identityMatches` ⇒ su `payoutAllowed` es `false` ⇒
+    // `app/api/kyc/decision/route.ts` NO escribe fila (T-DEC-1): la sesión sin atar no puede producir
+    // autoridad de pago para nadie, y el `owner_address` del token queda NULL, que es el mismo
+    // fail-closed por construcción de la query owner-scoped.
   });
 
   it("T-SE-2b: una prueba PRESENTADA y ROTA sigue dando 403, y NO crea sesión", async () => {
@@ -307,25 +312,25 @@ describe("POST /api/kyc/session — el vendor_data sale del PoP, no del body (WK
   });
 
   // ── T-SE-3 — AC-19 / M-32: EL CASO DEL ATAQUE ─────────────────────────────────────────────────
-  it("T-SE-3: PoP de A + `vendorData` de B ⇒ a Didit va la dirección de A (M-32)", async () => {
+  it("T-SE-3: PoP de A + `vendorData` de B ⇒ al agente va la dirección de A (M-32)", async () => {
     const fetchMock = fetchOk();
     const res = await POST(req({ vendorData: ADDR_B, ...realPop(KP_A) }));
     expect(res.status).toBe(200);
-    const sent = sentToDidit(fetchMock) as unknown as { vendor_data: string };
+    const sent = sentToAgent(fetchMock) as unknown as { identityRef: string };
     expect(
-      sent.vendor_data,
+      sent.identityRef,
       "la sesión quedó atada a la dirección que vino en el body: quien la mande puede hacer que la " +
         "fila del veredicto de OTRA persona quede a su nombre, y esa fila es la que autoriza el pago",
     ).toBe(ADDR_A);
-    expect(sent.vendor_data).not.toBe(ADDR_B);
+    expect(sent.identityRef).not.toBe(ADDR_B);
   });
 
-  it("T-SE-3b: sin `vendorData` en el body, a Didit va igual la dirección probada", async () => {
+  it("T-SE-3b: sin `vendorData` en el body, al agente va igual la dirección probada", async () => {
     const fetchMock = fetchOk();
     const res = await POST(req({ ...realPop(KP_A) }));
     expect(res.status).toBe(200);
-    const sent = sentToDidit(fetchMock) as unknown as { vendor_data: string };
-    expect(sent.vendor_data).toBe(ADDR_A);
+    const sent = sentToAgent(fetchMock) as unknown as { identityRef: string };
+    expect(sent.identityRef).toBe(ADDR_A);
   });
 
   it("T-SE-3c: un challenge de A firmado por B ⇒ 403 (la firma es lo que ata, no el token)", async () => {
@@ -404,7 +409,7 @@ describe("POST /api/kyc/session — el vendor_data sale del PoP, no del body (WK
     expect(JSON.parse(first.body)).toEqual({ error: "kyc_session_unverified" });
   });
 
-  it("T-SE-6: con key y SIN PAYOUT_POP_SECRET ⇒ 503 fail-closed, nunca un 500 crudo", async () => {
+  it("T-SE-6: con host y SIN PAYOUT_POP_SECRET ⇒ 503 fail-closed, nunca un 500 crudo", async () => {
     // Sin el guard explícito, `verifySolanaPopChallenge` tira "PAYOUT_POP_SECRET missing" y sale una
     // excepción sin manejar. Un deployment así no puede atar la sesión a nadie: no crea ninguna.
     const proof = realPop(KP_A); // se emite CON secreto, se presenta SIN él
@@ -426,7 +431,7 @@ describe("POST /api/kyc/session — el vendor_data sale del PoP, no del body (WK
 // EXACTAMENTE igual que una caída de Didit, un `workflow_id` inválido o un rate-limit suyo: "suben
 // los 502", sin causa nombrable. Es el multiplicador de CR/BLQ-MED-1, porque el supuesto que ese
 // hallazgo dejó apoyado en documentación —no en una llamada real— se manifestaría justo acá.
-describe("POST /api/kyc/session — el 502 de Didit nombra su causa, y sin PII (WKH-333/CR-BLQ-BAJO-2)", () => {
+describe("POST /api/kyc/session — el 502 del agente nombra su causa, y sin PII (WKH-333/CR-BLQ-BAJO-2)", () => {
   function fetchFail(status: number) {
     const m = vi.fn(async (_url: string, init?: RequestInit) => {
       void init;
@@ -445,7 +450,7 @@ describe("POST /api/kyc/session — el 502 de Didit nombra su causa, y sin PII (
       warn,
       "el rechazo de Didit a una sesión SIN `vendor_data` —el modo de falla propio de esta HU— sale " +
         "por el mismo 502 mudo que una caída del proveedor: el incidente no tendría causa nombrable",
-    ).toHaveBeenCalledWith("[kyc-session] didit_session_failed", { atada: false, upstream: 400 });
+    ).toHaveBeenCalledWith("[kyc-session] kyc_session_failed", { atada: false, upstream: 400 });
   });
 
   it("T-SE-7b: sesión ATADA rechazada ⇒ `atada:true`, y la DIRECCIÓN no aparece en ningún lado", async () => {
@@ -457,7 +462,7 @@ describe("POST /api/kyc/session — el 502 de Didit nombra su causa, y sin PII (
       warn,
       "`atada` quedó constante: un log que dice lo mismo pase lo que pase no distingue nada, que es " +
         "el estado del que este candado saca a la ruta",
-    ).toHaveBeenCalledWith("[kyc-session] didit_session_failed", { atada: true, upstream: 503 });
+    ).toHaveBeenCalledWith("[kyc-session] kyc_session_failed", { atada: true, upstream: 503 });
     // VALUE-FREE (CD-2/CD-9): `atada` es un booleano DERIVADO de si hubo dirección probada. Si alguien
     // "mejora" el log poniendo la dirección —o el vendor_data, o el challenge— esto se pone rojo.
     expect(
@@ -474,10 +479,159 @@ describe("POST /api/kyc/session — el 502 de Didit nombra su causa, y sin PII (
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({ ok: true, json: async () => DIDIT_OK })),
+      vi.fn(async () => ({ ok: true, json: async () => AGENT_OK })),
     );
     const res = await POST(req({ vendorData: ADDR_A })); // sin atar, y exitosa
     expect(res.status).toBe(200);
     expect(warn.mock.calls.filter((c) => String(c[0]).startsWith("[kyc-session]"))).toEqual([]);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-233 — el token at-rest: CD-20 (no sale nunca) y la escritura que NO es best-effort
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+describe("POST /api/kyc/session — T-SES-1/T-TOK-3/T-TOK-4/T-TOK-6", () => {
+  function fetchOkAgent() {
+    const m = vi.fn(async (_url: string, init?: RequestInit) => {
+      void init;
+      return { ok: true, status: 200, json: async () => AGENT_OK };
+    });
+    vi.stubGlobal("fetch", m);
+    return m;
+  }
+
+  // ── T-SES-1 — AC-8/P-1/CD-1 ────────────────────────────────────────────────────────────────────
+  it("T-SES-1: con el limiter AGOTADO, el doble de `fetch` recibe CERO llamadas (no mira el status)", async () => {
+    rlMock.mockResolvedValue({ ok: false, retryAfter: 42 });
+    const fetchMock = fetchOkAgent();
+    const res = await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+    // 🧬 MUTANTE: borrar `checkKycRateLimit` ⇒ el doble recibe 1 llamada ⇒ ROJO. Y el mutante importa:
+    // 🔴 EL AGENTE NO TIENE RATE LIMIT. Si el límite sale de acá, no lo cubre nadie, y cada sesión
+    // creada consume cuota del proveedor.
+    expect(fetchMock, "se gastó cuota del proveedor con el limiter agotado").toHaveBeenCalledTimes(0);
+    expect(putMock, "se escribió un token de una sesión que nunca se creó").toHaveBeenCalledTimes(0);
+    expect(res.status).toBe(429);
+  });
+
+  it("✅ calibración inversa: con el limiter OK, el agente recibe EXACTAMENTE 1 llamada", async () => {
+    const fetchMock = fetchOkAgent();
+    const res = await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  // ── T-TOK-3 — CD-20: el barrido de la RESPUESTA ───────────────────────────────────────────────
+  it("T-TOK-3: el `decisionToken` NO aparece en el body NI en ninguna cabecera de la respuesta", async () => {
+    fetchOkAgent();
+    const res = await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+    expect(res.status).toBe(200);
+    const cuerpo = await res.text();
+    const cabeceras = JSON.stringify([...res.headers.entries()]);
+    // 🧬 MUTANTE: devolver el token en el JSON ⇒ ROJO acá, en la primera de las tres rutas barridas.
+    expect(cuerpo, "el decisionToken salió en el body: es una credencial del money-path").not.toContain(
+      TOKEN_CENTINELA,
+    );
+    expect(cabeceras, "el decisionToken salió en una cabecera").not.toContain(TOKEN_CENTINELA);
+    // ✅ Calibración: la respuesta SÍ trae lo que tiene que traer (un barrido sobre una respuesta
+    // vacía también pasaría el assert de arriba).
+    expect(JSON.parse(cuerpo)).toMatchObject({ sessionId: "s1", url: AGENT_OK.url });
+  });
+
+  // ── T-TOK-4 — CD-20: el barrido de los LOGS ───────────────────────────────────────────────────
+  it.each([
+    ["camino feliz", true],
+    ["camino de fallo del agente", false],
+    ["camino de fallo de la escritura", null],
+  ])("T-TOK-4: en el %s, ningún `console.*` lleva el token", async (_caso, feliz) => {
+    const capturado: string[] = [];
+    const anotar = (...a: unknown[]) => {
+      capturado.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" "));
+    };
+    vi.spyOn(console, "warn").mockImplementation(anotar);
+    vi.spyOn(console, "error").mockImplementation(anotar);
+    vi.spyOn(console, "log").mockImplementation(anotar);
+    if (feliz === false) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => ({ ok: false, status: 502, json: async () => ({}) })),
+      );
+    } else {
+      fetchOkAgent();
+      if (feliz === null) putMock.mockRejectedValue(new Error("kyc_session_token_write_failed:42P01"));
+    }
+    await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+    // 🧬 MUTANTE: `console.warn("[kyc-session]", { decisionToken })` ⇒ ROJO.
+    expect(capturado.join("\n")).not.toContain(TOKEN_CENTINELA);
+    // ✅ Y los logs de fallo SIGUEN emitiéndose, value-free: un módulo que no loguea nada también
+    // pasaría el assert de arriba, y sería el fallo indiagnosticable que ya costó un incidente.
+    if (feliz !== true) expect(capturado.join("\n")).toContain("[kyc-session]");
+  });
+
+  // ── T-TOK-6 — la escritura NO es best-effort ──────────────────────────────────────────────────
+  it("T-TOK-6: si `put` LANZA ⇒ 503 `kyc_session_unavailable` y el body NO trae `url`", async () => {
+    fetchOkAgent();
+    putMock.mockRejectedValue(new Error("kyc_session_token_write_failed:42P01"));
+    const res = await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+    // 🧬 MUTANTE: tragarse el error y devolver 200 con la url ⇒ ROJO por los DOS asserts. Y el mutante
+    // es el caro: la persona escanearía su documento para un veredicto que NADIE va a poder consultar,
+    // porque el `decisionToken` no se puede re-emitir (CD-21).
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toEqual({ error: "kyc_session_unavailable" });
+    expect(body.url).toBeUndefined();
+  });
+
+  it("T-TOK-6b: sin store (envs de Supabase ausentes) ⇒ el MISMO 503, sin código nuevo", async () => {
+    fetchOkAgent();
+    storeMock.mockReturnValue(null);
+    const res = await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "kyc_session_unavailable" });
+  });
+
+  it("✅ calibración: con `put` OK ⇒ 200, y el token se persistió con el dueño PROBADO", async () => {
+    fetchOkAgent();
+    const res = await POST(req({ vendorData: ADDR_B, ...realPop(KP_A) }));
+    expect(res.status).toBe(200);
+    // ⛔ `ownerAddress` sale de la dirección PoP-PROBADA (A), NUNCA de `body.vendorData` (B).
+    expect(putMock).toHaveBeenCalledWith({
+      sessionId: "s1",
+      decisionToken: TOKEN_CENTINELA,
+      ownerAddress: ADDR_A,
+    });
+  });
+
+  it("sin prueba de posesión, el token se persiste con `ownerAddress: null` (sesión SIN ATAR)", async () => {
+    fetchOkAgent();
+    const res = await POST(req({ vendorData: ADDR_A })); // sin PoP
+    expect(res.status).toBe(200);
+    // 🔴 Y ese `null` es lo que hace que esta sesión JAMÁS pueda autorizar un desembolso: un
+    // `.eq("owner_address", X)` nunca matchea un NULL. No es un chequeo que alguien tenga que
+    // recordar: es la forma de la query.
+    expect(putMock).toHaveBeenCalledWith({
+      sessionId: "s1",
+      decisionToken: TOKEN_CENTINELA,
+      ownerAddress: null,
+    });
+  });
+
+  it("la escritura corre DESPUÉS del agente (antes no existe el sessionId) y con el limiter pasado", async () => {
+    const orden: string[] = [];
+    rlMock.mockImplementation(async () => {
+      orden.push("limiter");
+      return { ok: true };
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        orden.push("agente");
+        return { ok: true, status: 200, json: async () => AGENT_OK };
+      }),
+    );
+    putMock.mockImplementation(async () => {
+      orden.push("put");
+    });
+    await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+    expect(orden).toEqual(["limiter", "agente", "put"]);
   });
 });

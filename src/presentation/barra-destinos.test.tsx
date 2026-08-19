@@ -726,7 +726,7 @@ describe("T-063-21 (AR-it2/BLQ-MED-1): la ventana previa a la primera respuesta 
     //     está dos líneas más abajo. El hecho ("corre antes de que la UI navegue") aguanta; el número no.
     //   · "la ventana es corta (cientos de ms)" también es FALSO: el `fetch` del cliente a
     //     `/api/kyc/decision` no tiene timeout y el del server es `AbortSignal.timeout(10_000)`
-    //     (`AbortSignal`, `../../app/api/kyc/decision/route.ts:57`), así que son HASTA 10 s cuando la
+    //     (`AbortSignal`, `../infrastructure/kyc/agent-kyc-client.ts:171` — WKH-233 lo movió: el `fetch` del borde salió de la route y vive en el cliente del agente, con el MISMO techo de 10 s), así que son HASTA 10 s cuando la
     //     petición llega, y sin techo cuando no llega — el caso plausible, porque la app se está
     //     recargando desde un redirect externo en una red móvil.
     // Y el aterrizaje no era una pantalla de navegación: era `confirm`, la que pide la firma que mueve la

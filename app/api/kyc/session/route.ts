@@ -1,17 +1,25 @@
-// Server-side: crea una sesión de verificación en Didit. El API key vive SOLO acá (env),
-// nunca llega al browser. POST /v3/session/ con header x-api-key. Env-gated (501 si no hay key).
-// WKH-179: rate-limit por IP + address ANTES de llamar a Didit (financial-DoS, A2); callback
-// reconstruido server-side (ignora body.callback, M6); emite el token HMAC de sesión (B1).
-// Guard-order: 501 → 500 → rate-limit → PoP (sólo si se presentó una prueba; ver S5) → callback
-// server-side → Didit → issue token (CD-2).
+// Server-side: crea una sesión de verificación de identidad EN EL AGENTE `remit-kyc-validator`
+// (WKH-233). Este repo YA NO le habla al proveedor de KYC por ningún camino: la credencial del
+// proveedor vive en el agente, no acá. Env-gated (501 si no hay host del agente).
 //
-// 🔴 WKH-333/R-1 — `vendor_data` YA NO SALE DEL BODY. Salía, y eso permitía crear una sesión de
-// verificación atada a la dirección de OTRA persona y aprobarla con el documento propio: Didit ecoa
-// esa dirección y `app/api/kyc/decision/route.ts` escribía la fila del veredicto A NOMBRE DE LA
-// VÍCTIMA. Mientras el pago usaba el identificador del localStorage de cada uno, esa fila ajena era
-// inerte. Con el veredicto server-side, esa fila ES la fuente de autoridad del pago —y el paso 1 del
-// CAS la REEMPLAZA si ya había una legítima—, así que la víctima pasaría a pagar bajo la identidad de
-// otro sin forma de notarlo. Por eso R-1 entra en esta HU y no queda como sucesora.
+// ⛔ ESTA ROUTE NO ES UN PROXY, Y NO PUEDE SERLO (CD-1). Lo que se reemplazó es UN `fetch`. Todo lo
+// demás se queda, y cada cosa por su motivo:
+//   · `clientIp()` + `checkKycRateLimit` (P-1/P-2) — 🔴 EL AGENTE NO TIENE RATE LIMIT. Si el límite
+//     sale de acá, NO LO CUBRE NADIE, y cada sesión creada consume cuota del proveedor. Corre ANTES
+//     de cualquier viaje al agente, y su candado cuenta LLAMADAS, no status.
+//   · el bloque S5 completo (P-3/P-4) — la prueba de posesión que decide si la sesión nace ATADA.
+//   · `issueSessionToken` (P-5) — el HMAC NUESTRO que después autoriza el GET /decision de Chaski.
+//     ⛔ NO es el `decisionToken` del agente: son secretos de repos distintos.
+//
+// 🔴 WKH-333/R-1 — `vendor_data` NO SALE DEL BODY, y eso no cambió: el binding sale de la dirección
+// del challenge PoP-verificado. Salía del body, y eso permitía crear una sesión de verificación atada
+// a la dirección de OTRA persona y aprobarla con el documento propio. Con el veredicto server-side
+// esa fila ES la fuente de autoridad del pago, así que la víctima pasaría a pagar bajo la identidad
+// de otro sin forma de notarlo.
+//
+// 🔴 WKH-233/CD-20 — LA RESPUESTA YA NO DEVUELVE NINGUNA CREDENCIAL DEL BORDE. Ni el `decisionToken`
+// del agente (se persiste server-side y nunca sale) ni el `session_token` del proveedor (que ya no
+// existe acá y que, medido, no lo leía nadie). La respuesta es `{sessionId, url, authToken}`.
 //
 // Residual que esto NO cierra, y es idéntico a hoy: quien controla la dirección puede escanear el
 // documento de otra persona. Eso es un problema del verificador de identidad, no de este binding.
@@ -23,7 +31,9 @@ import {
 import { verifySolanaPop } from "../../../../src/infrastructure/auth/pop-verify-solana";
 import { resolveSolanaNetworkId } from "../../../../src/infrastructure/chain";
 import { canonicalizeAddress } from "../../../../src/infrastructure/address";
-import { resolveDiditBaseUrl } from "../../../../src/infrastructure/didit/didit-env";
+import { createAgentKycSession } from "../../../../src/infrastructure/kyc/agent-kyc-client";
+import { resolveKycAgentBaseUrl } from "../../../../src/infrastructure/kyc/agent-env";
+import { getKycSessionTokenStore } from "../../../../src/infrastructure/persistence/supabase-kyc-session-tokens";
 import { issueSessionToken } from "../../../../src/infrastructure/kyc-auth";
 import { checkKycRateLimit } from "../../../../src/infrastructure/rate-limit";
 
@@ -49,24 +59,22 @@ function clientIp(req: Request): string {
 }
 
 export async function POST(req: Request): Promise<Response> {
-  const apiKey = process.env.DIDIT_API_KEY;
-  const workflowId = process.env.DIDIT_WORKFLOW_ID;
-  if (!apiKey || !workflowId) {
-    return NextResponse.json({ error: "didit_not_configured" }, { status: 501 });
+  // Host del agente: fail-closed y LAZY. Va PRIMERO y ANTES del rate-limit, para no gastar
+  // presupuesto del limiter en un request que no puede andar. Resolver una URL no es un fetch: al
+  // agente se le habla recién más abajo (P-7 intacto).
+  //
+  // 🔴 501 Y NO 500, Y ES DELIBERADO. Es el status del que depende `AgentKycGateway.start` para caer
+  // al fallback, o sea el que hace que sin `KYC_AGENT_BASE_URL` el demo quede BYTE-IDÉNTICO a como
+  // estaba antes de esta HU. Es también el interruptor de rollback de WKH-233 (D-1): quitar esa env
+  // apaga el camino nuevo sin re-desplegar. ⛔ PROHIBIDO agregar una segunda perilla.
+  try {
+    resolveKycAgentBaseUrl();
+  } catch {
+    return NextResponse.json({ error: "kyc_agent_not_configured" }, { status: 501 });
   }
 
   if (!process.env.KYC_SESSION_SECRET) {
     return NextResponse.json({ error: "server_misconfigured" }, { status: 500 });
-  }
-
-  // Ambiente de Didit: fail-closed y LAZY. Va junto al resto de los guards de MISCONFIG (500) y
-  // ANTES del rate-limit, para no gastar presupuesto del limiter en un request que no puede andar.
-  // No viola CD-2 (resolver una URL no es un fetch: a Didit se le sigue hablando recién más abajo).
-  let base: string;
-  try {
-    base = resolveDiditBaseUrl();
-  } catch {
-    return NextResponse.json({ error: "didit_env_misconfigured" }, { status: 500 });
   }
 
   const body = (await req.json().catch(() => ({}))) as {
@@ -139,34 +147,22 @@ export async function POST(req: Request): Promise<Response> {
     (typeof popChallenge === "string" && popChallenge.trim() !== "") ||
     (typeof popSignature === "string" && popSignature.trim() !== "");
 
-  // `undefined` ⇒ sesión SIN atar: `JSON.stringify` OMITE la clave (no manda `null`). Es la MISMA
-  // forma de onda que ya salía antes de esta HU — `9beb814` mandaba `vendor_data: body.vendorData`,
-  // que con un `POST {}` también omite la clave. Lo que cambia es el ORIGEN del valor, no el body.
+  // `undefined` ⇒ sesión SIN ATAR: la CLAVE `identityRef` SE OMITE del body (ver
+  // `createAgentKycSession`). Es la misma forma de onda que salía antes de WKH-233; lo que cambia es
+  // a quién se le manda.
   //
-  // 🔴 DE DÓNDE SALE QUE DIDIT ACEPTE ESO, con la precisión que costó un bloqueante (CR/BLQ-MED-1).
-  // Acá decía "medido en producción el 2026-08-04 y documentado en `payout/authority.ts`", y esa
-  // fuente dice otra cosa: su propio texto aclara que "a los ~9 s **el mock** la aprueba"
-  // (authority.ts:113). El `base` de este fetch lo resuelve `resolveDiditBaseUrl()`, cuyo eje `mock`
-  // apunta a "un endpoint NUESTRO (mock local / CI)" (didit-env.ts:34-35) ⇒ aquel 200 con `&vendor=`
-  // vacío LO DEVOLVIÓ NUESTRO MOCK, no Didit. La frase era cierta del deployment e inexacta del
-  // proveedor, y esa diferencia es justamente la que hacía que nadie corriera la sonda.
+  // 🔴 DE DÓNDE SALE QUE EL AGENTE ACEPTE ESO, y esta vez está MEDIDO EN CÓDIGO, no en una doc de un
+  // tercero: su `KycSessionInputSchema` declara `identityRef: z.string().trim().min(1).max(128)
+  // .optional()` dentro de un `.strict()`. O sea: omitir la clave es válido; mandarla `null` o vacía
+  // NO lo es (sería un 400 y la persona no podría ni empezar el KYC). Por eso se OMITE y no se
+  // rellena. ⚠️ Lo que sigue SIN medirse contra el proveedor vivo es lo de aguas arriba —si el
+  // proveedor acepta una sesión sin binding— y eso ahora es problema del AGENTE, no de este repo.
   //
-  // LO QUE SOSTIENE EL SUPUESTO HOY: la referencia pública de Didit para `POST /v3/session/` declara
-  // `vendor_data` como `(string, optional)`, y su ÚNICO campo requerido es `workflow_id`
-  // (docs.didit.me/sessions-api/create-session, consultada el 2026-08-07).
-  // ⚠️ Eso es DOCUMENTACIÓN, NO una llamada real contra el endpoint vivo: no se corrió ninguna.
-  // Escribir "medido contra Didit" sería repetir el error de arriba. En los tests el proveedor es un
-  // doble que devuelve 200 sea cual sea el body, así que AC-13/CD-15 NO están verificados contra el
-  // proveedor real. La sonda que lo cerraría queda OPCIONAL para el founder (peor caso: 1
-  // verificación de las 500 del tier gratuito) y está escrita en `doc/sdd/046-…/fix-pack-cr.md` §2.
-  //
-  // 🔴 COSTO REAL DEL CAMINO SIN ATAR, que hasta ahora no estaba escrito en ningún lado. La misma
-  // referencia recomienda mandar SIEMPRE `vendor_data` "to reduce noise in duplicate detection":
-  // omitirlo desactiva la idempotencia y la deduplicación entre sesiones. ⇒ quien rechaza la firma
-  // varias veces genera verificaciones que Didit ya NO colapsa, y CADA UNA consume del tier de 500.
-  // NO se arregla acá y NO se inventa un centinela: cualquier valor que no sea la dirección PROBADA
-  // reabre R-1, que costó un bloqueante cerrar. Un identificador de sesión no adivinable sería
-  // diseño nuevo, y va a HU aparte.
+  // 🔴 COSTO REAL DEL CAMINO SIN ATAR, que se conserva escrito porque no lo arregla esta HU: sin
+  // binding, el proveedor no puede deduplicar entre sesiones ⇒ quien rechaza la firma varias veces
+  // genera verificaciones que NO se colapsan, y cada una consume cuota. ⛔ NO se inventa un
+  // centinela: cualquier valor que no sea la dirección PROBADA reabre R-1, que costó un bloqueante
+  // cerrar. Un identificador de sesión no adivinable sería diseño nuevo, y va a HU aparte.
   let provedAddress: string | undefined;
 
   if (popPresentado) {
@@ -216,64 +212,77 @@ export async function POST(req: Request): Promise<Response> {
     }
   }
 
-  // Callback server-side: se IGNORA body.callback por completo (M6). Sin base URL → sin callback
-  // (Didit muestra su pantalla default; el resume anda por localStorage).
-  const callbackBase = process.env.KYC_CALLBACK_BASE_URL;
-  const callback = callbackBase ? `${callbackBase}/kyc/callback` : undefined;
+  // ⛔ EL `callback` SE FUE (DT-11). Ya no se construye ni se manda: el agente valida el
+  // `callbackUrl` contra una allowlist de orígenes que nace VACÍA (fail-closed), así que mandarlo sin
+  // esa env sería un 400 garantizado; y el retomar del flujo de Chaski no depende del callback sino
+  // del pendiente en `localStorage`. Con él se fue `KYC_CALLBACK_BASE_URL`.
+  const r = await createAgentKycSession({ identityRef: provedAddress });
 
-  const res = await fetch(`${base}/v3/session/`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-api-key": apiKey },
-    body: JSON.stringify({
-      workflow_id: workflowId,
-      // 🔴 LA DIRECCIÓN PROBADA, NUNCA `body.vendorData` (AC-19/CD-29). Este valor es el que Didit
-      // ecoa en la decisión y con el que se escribe la fila del veredicto: si saliera del body,
-      // cualquiera podría hacer que la fila de otra persona quede a su nombre (o al revés).
-      // `undefined` (sin prueba) ⇒ la clave NO viaja ⇒ sesión sin atar ⇒ ninguna fila se escribirá.
-      // Ese es el único valor posible además de la dirección probada: no hay tercer origen.
-      vendor_data: provedAddress,
-      callback,
-    }),
-    signal: AbortSignal.timeout(10_000),
-  });
-
-  if (!res.ok) {
-    // 🔴 EL MODO DE FALLA PROPIO DE ESTA HU ERA INDETECTABLE (CR/BLQ-BAJO-2). Este 502 colapsa TODO
-    // fallo de Didit: una caída del proveedor, un `workflow_id` inválido, un rate-limit suyo — y
-    // también el que introdujo esta HU, que es que rechace el body SIN `vendor_data` (el camino sin
-    // atar). Desde afuera los cuatro se ven idénticos ("suben los 502") y este archivo no tenía UNA
-    // sola línea de log, así que el supuesto de arriba, si algún día deja de valer, se manifestaría
-    // como un incidente sin causa nombrable. Es el multiplicador de CR/BLQ-MED-1, y por eso el log
-    // entra en el mismo fix-pack que la corrección de esa frase.
+  if (!r.ok) {
+    // 🔴 ESTE 502 COLAPSA TODO FALLO DEL AGENTE, y por eso lleva log: una caída del agente, sus
+    // credenciales del proveedor ausentes (nace INERTE ⇒ 502), un 401 de su guard de invoke, y el
+    // camino sin atar. Desde afuera los cuatro se ven idénticos ("suben los 502").
     //
-    // VALUE-FREE, y las dos palabras cuentan (CD-2/CD-9): `atada` es un BOOLEANO DERIVADO de si hubo
-    // dirección probada — NUNCA la dirección. No viaja el `vendor_data`, ni el body, ni el challenge,
-    // ni la firma, ni nada del PoP. `upstream` es el status del proveedor, que además ya sale en la
-    // respuesta, así que no agrega superficie. Un salto de 502 con `atada:false` y `upstream:4xx`
-    // nombra su causa solo; con `atada:true` o `upstream:5xx` apunta al proveedor.
+    // VALUE-FREE, y las dos palabras cuentan (P-14/CD-15): `atada` es un BOOLEANO DERIVADO de si hubo
+    // dirección probada — NUNCA la dirección. No viaja el `identityRef`, ni el body, ni el challenge,
+    // ni la firma. `upstream` es el status del agente, que además ya sale en la respuesta.
     //
-    // ⚠️ LO QUE ESTE LOG NO MIDE, dicho para que nadie se apoye en él de más: sólo se emite en el
-    // camino de FALLO. NO cuenta cuántas sesiones sin atar se crean con éxito, así que NO sirve para
-    // dimensionar el consumo de cupo por deduplicación perdida que se documenta más arriba. Eso
-    // necesitaría una señal en el camino feliz, y no está.
-    //
-    // `console.warn` con prefijo de ruta, igual que `[payout-prepare] agent_rejected`. NO se usa
-    // `logLedgerAlert`: ese canal es el del ledger de evidencia y su módulo declara tener exactamente
-    // dos emisores; esto no es una escritura de evidencia que faltó.
-    console.warn("[kyc-session] didit_session_failed", {
+    // ⚠️ LO QUE ESTE LOG NO MIDE: sólo se emite en el camino de FALLO. NO cuenta cuántas sesiones sin
+    // atar se crean con ÉXITO, así que NO sirve para dimensionar el consumo de cupo por deduplicación
+    // perdida que se documenta más arriba. Eso necesitaría una señal en el camino feliz, y no está.
+    console.warn("[kyc-session] kyc_session_failed", {
       atada: provedAddress !== undefined,
-      upstream: res.status,
+      upstream: r.upstream,
     });
-    return NextResponse.json({ error: "didit_session_failed", upstream: res.status }, { status: 502 });
+    return NextResponse.json({ error: "kyc_session_failed", upstream: r.upstream }, { status: 502 });
   }
 
-  const d = (await res.json()) as { session_id: string; url: string; session_token?: string };
-  // sessionToken = de Didit (NO tocar). authToken = NUESTRO HMAC (nuevo, CD-10).
-  const authToken = issueSessionToken(d.session_id);
-  return NextResponse.json({
-    sessionId: d.session_id,
-    url: d.url,
-    sessionToken: d.session_token,
-    authToken,
-  });
+  // 🔴 LA ESCRITURA DEL TOKEN **NO ES BEST-EFFORT**, Y ES LO CONTRARIO DE LA ESCRITURA DEL VEREDICTO
+  // (que sí lo es, en `decision/route.ts`). ⛔ No las unifiques.
+  //
+  // POR QUÉ. El `decisionToken` es la ÚNICA credencial que después autoriza a leer la decisión de
+  // esta sesión, por CUALQUIER camino: ni la pantalla ni el pago pueden hacerlo sin ella, y el agente
+  // NO tiene forma de re-emitirla (CD-21). Si no se persiste y devolviéramos la URL igual, la persona
+  // escanearía su documento para un veredicto que NADIE va a poder consultar nunca.
+  // ⇒ Fallar acá cuesta UN reintento. No fallar cuesta UNA VERIFICACIÓN ENTERA.
+  //
+  // ⚠️ CONSECUENCIA DECLARADA: la sesión YA se creó en el agente, así que la CUOTA YA SE GASTÓ, y no
+  // hay forma de deshacerlo desde acá (no existe un `DELETE /session`). Es el costo aceptado, y es
+  // estrictamente menor que el otro.
+  //
+  // ⛔ `ownerAddress` SALE DE `provedAddress` —la dirección PoP-PROBADA— Y DE NINGÚN OTRO LADO. Nunca
+  // de `body.vendorData`, nunca de otro campo del body, nunca de un header. Es P-3/P-11 extendido a
+  // la credencial nueva, y es exactamente por qué se eligió persistir el token server-side en vez de
+  // devolvérselo al navegador. `undefined` (sin prueba) ⇒ `null`: la sesión queda SIN ATAR y —por
+  // construcción de la query owner-scoped, no por un chequeo que alguien tenga que recordar— jamás
+  // va a poder autorizar un desembolso.
+  //
+  // El código de error es `kyc_session_unavailable`/503, que esta route YA DEVUELVE HOY (la rama de
+  // `PAYOUT_POP_SECRET` ausente): el conjunto observable de errores no cambia.
+  const tokenStore = getKycSessionTokenStore();
+  if (!tokenStore) {
+    console.warn("[kyc-session] kyc_session_token_store_unavailable", {
+      atada: provedAddress !== undefined,
+    });
+    return NextResponse.json({ error: "kyc_session_unavailable" }, { status: 503 });
+  }
+  try {
+    await tokenStore.put({
+      sessionId: r.output.sessionId,
+      decisionToken: r.output.decisionToken,
+      ownerAddress: provedAddress ?? null,
+    });
+  } catch {
+    // Value-free: sólo la etiqueta de la rama. ⛔ NUNCA el token, ni el sessionId, ni la dirección.
+    console.warn("[kyc-session] kyc_session_token_write_failed", {
+      atada: provedAddress !== undefined,
+    });
+    return NextResponse.json({ error: "kyc_session_unavailable" }, { status: 503 });
+  }
+
+  // `authToken` = el HMAC NUESTRO (WKH-179) que autoriza el GET /decision de ESTA route.
+  // ⛔ CD-20: NO se devuelve el `decisionToken` del agente. No va en el body, no va en una cabecera,
+  // no va a un log. Vive server-side y se lee owner-scoped.
+  const authToken = issueSessionToken(r.output.sessionId);
+  return NextResponse.json({ sessionId: r.output.sessionId, url: r.output.url, authToken });
 }

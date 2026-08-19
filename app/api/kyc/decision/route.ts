@@ -1,27 +1,44 @@
-// Server-side: consulta la decisión de una sesión Didit y la mapea a nuestro modelo.
-// GET /v3/session/{id}/decision/ con header x-api-key. Env-gated (501 si no hay key).
-// WKH-179: exige token HMAC de sesión (x-kyc-token) → cierra el IDOR/PII-leak (B1). El
-// documentNumber se enmascara en la respuesta (defensa en profundidad). Guard-order: 501 → 500
-// → 400 → 401 → recién Didit (nunca fetch a Didit sin autorización, CD-2).
+// Server-side: consulta la decisión de una sesión de verificación EN EL AGENTE `remit-kyc-validator`
+// (WKH-233). Este repo YA NO le habla al proveedor de KYC ni mapea su payload: el mapeo lo hace el
+// agente y acá se consume su salida ya juzgada.
+//
+// Guard-order (P-7, intacto): 501 → 500 → 400 → 401 → el store del token → recién el borde.
+// ⛔ NUNCA un viaje al agente sin haber pasado el HMAC. Su candado (T-TOK-5) NO mira el status: cuenta
+// llamadas al store y al `fetch`, las dos en CERO.
+//
+// 🔴 DE DÓNDE SALE LA CREDENCIAL DEL BORDE, Y POR QUÉ NO PUEDE VENIR DEL CALLER. El agente exige un
+// `decisionToken` en `x-kyc-decision-token`. El único input del caller acá es el `sessionId` y el
+// HMAC de Chaski, así que la credencial sale DEL STORE server-side y de ningún otro lado (CD-20). Que
+// el navegador la trajera sería devolverle al cliente una credencial del money-path, o sea el agujero
+// exacto que WKH-333 cerró con el `kycVerificationId`.
+//
+// 🔴 LA LECTURA DEL STORE ES LA ÚNICA EXCEPCIÓN A CD-19 (sin filtro por dueño), y su motivo está
+// escrito DENTRO del store, no en `doc/`: este camino POR CONSTRUCCIÓN no tiene dueño al que filtrar
+// —una sesión creada sin prueba de posesión no tiene dirección probada— y exigirlo dejaría a esa
+// persona sin poder leer su propio veredicto. Su guard equivalente es el HMAC, que corre ANTES.
+//
+// ⚠️ ESTA ROUTE YA NO DEVUELVE NINGÚN DATO DE IDENTIDAD, porque el agente no devuelve ninguno: ni
+// nombre, ni apellidos, ni tipo/número de documento —tampoco sus últimos 4—. Por eso desapareció el
+// enmascarado: no hay nada que enmascarar. Y por eso `IdentityBadge` se rediseñó (D-2): tal como
+// estaba, la tarjeta se habría borrado de la pantalla sin que nadie lo notara.
 import { NextResponse } from "next/server";
-import {
-  type DiditDecisionResult,
-  mapDiditDecision,
-  maskDecision,
-} from "../../../../src/infrastructure/didit/decision";
+import type { KycAgentDecisionOutput } from "../../../../src/infrastructure/kyc/agent-contract";
+import { readAgentKycDecision } from "../../../../src/infrastructure/kyc/agent-kyc-client";
+import { resolveKycAgentBaseUrl } from "../../../../src/infrastructure/kyc/agent-env";
 import { canonicalizeAddress } from "../../../../src/infrastructure/address";
 import { getKycVerdictStore } from "../../../../src/infrastructure/persistence/supabase-kyc-verdicts";
+import { getKycSessionTokenStore } from "../../../../src/infrastructure/persistence/supabase-kyc-session-tokens";
 import { logLedgerAlert } from "../../../../src/infrastructure/persistence/ledger-alert";
-import {
-  resolveDiditBaseUrl,
-  resolveDiditEnvironment,
-  type DiditEnvironment,
-} from "../../../../src/infrastructure/didit/didit-env";
 import { verifySessionToken } from "../../../../src/infrastructure/kyc-auth";
 
 export async function GET(req: Request): Promise<Response> {
-  const apiKey = process.env.DIDIT_API_KEY;
-  if (!apiKey) return NextResponse.json({ error: "didit_not_configured" }, { status: 501 });
+  // 501 = sin host del agente. Mismo status que devolvía el guard de la credencial del proveedor, y
+  // por el mismo motivo: es el interruptor de rollback de WKH-233 (D-1).
+  try {
+    resolveKycAgentBaseUrl();
+  } catch {
+    return NextResponse.json({ error: "kyc_agent_not_configured" }, { status: 501 });
+  }
 
   if (!process.env.KYC_SESSION_SECRET) {
     return NextResponse.json({ error: "server_misconfigured" }, { status: 500 });
@@ -30,91 +47,109 @@ export async function GET(req: Request): Promise<Response> {
   const sessionId = new URL(req.url).searchParams.get("sessionId");
   if (!sessionId) return NextResponse.json({ error: "missing_session" }, { status: 400 });
 
-  // Auth: mismo cuerpo/status para "sin token" y "token inválido" (anti-enumeración, CD-5).
-  // NO se llama a Didit en ninguno de los dos casos (CD-2).
+  // Auth (P-5/P-6): MISMO cuerpo y MISMO status para "sin token" y "token inválido"
+  // (anti-enumeración). NO se toca el store NI se llama al agente en ninguno de los dos casos.
   const token = req.headers.get("x-kyc-token");
   if (!token || !verifySessionToken(sessionId, token)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  // Ambiente de Didit: fail-closed y LAZY (después de los guards, CD-2 intacto). Sin DIDIT_ENV no
-  // se resuelve host → 500 de MISCONFIG (no 502): el problema es nuestro, no de Didit.
-  // El MISMO ambiente resuelve el host y etiqueta la decisión. Que salgan de la misma lectura es
-  // el punto: si el host es el mock, la etiqueta dice mock, y no hay forma de que uno diga una cosa
-  // y la otra diga otra.
-  let base: string;
-  let environment: DiditEnvironment;
+  // La credencial del borde. ⛔ SIN FILA ⇒ 502 CON EL MISMO CÓDIGO que un fallo del agente, y NO se
+  // distingue del token inválido: distinguirlos sería un oráculo de "esa sesión existe" (P-6).
+  const tokenStore = getKycSessionTokenStore();
+  let fila: Awaited<ReturnType<NonNullable<typeof tokenStore>["readForVerifiedSession"]>> = null;
   try {
-    environment = resolveDiditEnvironment();
-    base = resolveDiditBaseUrl();
+    fila = tokenStore ? await tokenStore.readForVerifiedSession(sessionId) : null;
   } catch {
-    // Etiqueta value-free: el mensaje del throw nombra la env, pero NO se filtra al cliente.
-    return NextResponse.json({ error: "didit_env_misconfigured" }, { status: 500 });
+    fila = null; // un fallo de la base tampoco se distingue: mismo 502, sin eco del SQLSTATE
+  }
+  if (!fila) {
+    return NextResponse.json({ error: "kyc_decision_failed", upstream: 0 }, { status: 502 });
   }
 
-  const res = await fetch(`${base}/v3/session/${encodeURIComponent(sessionId)}/decision/`, {
-    headers: { "x-api-key": apiKey },
-    signal: AbortSignal.timeout(10_000),
+  // 🔴 `identityClaim` SÓLO SI LA FILA TIENE DUEÑO (D-6). Sin dueño ⇒ la clave NO se manda ⇒ el
+  // agente OMITE `identityMatches` ⇒ su `payoutAllowed` es `false` ⇒ NO se escribe fila y la pantalla
+  // dice "sin verificar". Es correcto: una sesión sin atar no se puede afirmar como de esa billetera.
+  // ⛔ PROHIBIDO rellenar el claim con `body.address`, con la dirección conectada o con cualquier
+  // valor que no haya salido de una prueba de posesión: eso reabre R-1.
+  const r = await readAgentKycDecision({
+    sessionId,
+    identityClaim: fila.ownerAddress ?? undefined,
+    decisionToken: fila.token,
   });
-  if (!res.ok) {
-    return NextResponse.json({ error: "didit_decision_failed", upstream: res.status }, { status: 502 });
+  if (!r.ok) {
+    return NextResponse.json(
+      { error: "kyc_decision_failed", upstream: r.upstream },
+      { status: 502 },
+    );
   }
 
-  const decision = await res.json();
-  const mapped = mapDiditDecision(decision, environment);
-  await persistKycVerdict(mapped);
-  return NextResponse.json(maskDecision(mapped));
+  const d = r.output;
+  // El momento en que ESTE servidor observó el desenlace terminal. Se computa UNA vez y se usa para
+  // las dos cosas (la fila y la respuesta), así que la respuesta es idéntica falle o no la escritura.
+  const verifiedAt = d.terminal && d.approved ? new Date().toISOString() : null;
+  await persistKycVerdict(d, fila.ownerAddress, verifiedAt);
+  // ⛔ CD-20: la respuesta NO lleva el `decisionToken`. Lo que sale es la salida del agente tal cual,
+  // más el momento observado.
+  return NextResponse.json({ ...d, verifiedAt });
 }
 
 /**
- * WKH-333/AC-1 — persiste el veredicto cuando la verificación llega a un desenlace terminal APROBADO.
+ * Persiste el veredicto cuando el AGENTE dice que esta verificación habilita un desembolso.
  *
- * POR QUÉ ACÁ Y NO EN `resume-kyc.ts`. Ese use-case corre en el BROWSER (`container.ts`, "Container
- * compartido (browser)"). Escribir desde ahí sería el navegador diciéndole al servidor "esta
- * dirección está verificada", que es exactamente lo que `ports.ts` prohíbe: los booleanos del
- * localStorage son atacante-controlables. Acá, en cambio, las cinco cosas que la fila necesita
- * —terminal, verificationId, approved, riskLevel, provenance, vendorData— salen de `mapDiditDecision`
- * sobre la respuesta que Didit acaba de dar, server-side.
+ * 🔴 LA CONDICIÓN ES `payoutAllowed !== true` ⇒ NO SE ESCRIBE, y es ESTRICTAMENTE MÁS ESTRICTA que la
+ * anterior (`!vendorData`). Por construcción de `isStatusPayoutAllowed` en el agente, ese booleano
+ * exige aprobado ∧ hubo reclamo de identidad ∧ `identityMatches === true` ∧ proveniencia en la
+ * allow-list de verificaciones REALES. ⇒ convierte *"existe una fila"* en el invariante
+ * **"el agente la juzgó real, aprobada y atada"**, que es lo que después deja borrar el juicio local.
  *
- * BEST-EFFORT y sin PII (AC-9/CD-2/CD-13):
+ * ⛔ SIN `?? false` (CD-3). No se normaliza `identityMatches` ni ningún campo del agente: ausente ≠
+ * `false` ≠ `true`. La comparación es `!== true` ESTRICTA, nunca truthiness: un `payoutAllowed: "true"`
+ * (el STRING) es truthy y abriría el gate — por eso el cliente ya lo rechaza al estrechar, y por eso
+ * acá igual se compara contra `true`.
+ *
+ * BEST-EFFORT y sin PII (P-13):
  *   · La respuesta HTTP es BYTE-IDÉNTICA pase lo que pase con la escritura. Que la evidencia no quede
  *     no puede cambiar el desenlace del KYC de una persona.
- *   · Un fallo emite UNA alerta por el MISMO canal que el ledger de evidencia (`logLedgerAlert`), y
- *     VALUE-FREE: ni el verification_id, ni la dirección, ni ningún campo de la fila. Interpolar el
- *     prefijo a mano en un `console.error` rompería la garantía que ese módulo documenta.
- *   · `vendorData` vacío ⇒ NO se escribe. Es el mismo fail-closed que el ownership check de
- *     `authority.ts`: sin binding declarado no se puede afirmar de QUIÉN es esta verificación, y una
- *     fila a nombre equivocado es peor que ninguna fila (con el flag encendido, esa fila es la fuente
- *     de autoridad de un pago).
- *   · IDEMPOTENTE sin mover `verified_at`: esta route se pollea hasta 8 veces por verificación
- *     (`flow.tsx`, RESUME_MAX_POLLS). El contrato CAS del store devuelve 'already_recorded' y NO
- *     toca la fecha (CD-25); si la moviera, quien deje la pestaña recargando no vencería nunca.
+ *     ⚠️ NO CONFUNDIR con la escritura del TOKEN en `session/route.ts`, que NO es best-effort a
+ *     propósito: sin token nadie puede leer NADA de esa sesión; sin esta fila, la persona igual ve su
+ *     resultado y el próximo poll reintenta.
+ *   · Un fallo emite UNA alerta por el MISMO canal que el ledger de evidencia y VALUE-FREE.
+ *   · IDEMPOTENTE sin mover `verified_at`: esta route se pollea hasta 8 veces por verificación. El
+ *     contrato CAS del store devuelve `already_recorded` y NO toca la fecha; si la moviera, quien deje
+ *     la pestaña recargando no vencería nunca.
  *
- * `verifiedAt` es el momento en que ESTE servidor observó el desenlace terminal. Es lo único que este
- * código midió: la fecha del escaneo no viaja en la decisión de Didit.
+ * `senderAddress` sale del `owner_address` de la FILA DEL TOKEN —o sea de la dirección PoP-probada—,
+ * nunca de un eco del borde. Con `payoutAllowed === true` esa dirección existe por construcción (sin
+ * claim el agente no puede devolver `true`); el guard de abajo lo deja escrito igual, fail-closed.
  */
-async function persistKycVerdict(mapped: DiditDecisionResult): Promise<void> {
-  if (!mapped.terminal || !mapped.approved) return;
+async function persistKycVerdict(
+  d: KycAgentDecisionOutput,
+  ownerAddress: string | null,
+  verifiedAt: string | null,
+): Promise<void> {
+  if (d.payoutAllowed !== true) return; // ⛔ el gate del agente, adoptado TAL CUAL (DT-5')
+  if (!d.terminal || !d.approved || verifiedAt === null) return;
+  if (!ownerAddress) return; // fail-closed: sin dueño probado no se escribe (no puede pasar acá)
   const store = getKycVerdictStore();
-  if (!store) return; // flag OFF o envs ausentes ⇒ byte-idéntico a hoy (AC-12)
-  if (!mapped.vendorData) return; // fail-closed: sin binding no se escribe
+  if (!store) return; // flag OFF o envs ausentes ⇒ byte-idéntico a hoy
   let owner: string;
   try {
-    owner = canonicalizeAddress(mapped.vendorData);
+    owner = canonicalizeAddress(ownerAddress);
   } catch {
-    return; // vendor_data que no es una address ⇒ tampoco hay binding
+    return; // un dueño que no canonicaliza tampoco es un binding
   }
   try {
     await store.put({
       senderAddress: owner,
-      verificationId: mapped.verificationId,
+      verificationId: d.verificationId, // por contrato del agente, ES el sessionId que se pidió
       approved: true,
-      riskLevel: mapped.riskLevel,
-      provenance: mapped.provenance, // CRUDA (AC-11): el juicio vive en el lector
-      verifiedAt: new Date().toISOString(),
+      riskLevel: d.riskLevel,
+      provenance: d.provenance, // CRUDA: el juicio ya vino hecho, en `payoutAllowed`
+      verifiedAt,
     });
   } catch {
-    // Value-free por contrato: sólo la etiqueta de la rama. Nada de la fila (CD-13).
+    // Value-free por contrato: sólo la etiqueta de la rama. Nada de la fila.
     logLedgerAlert("kyc_verdict_write_failed", { stage: "kyc_decision_route" });
   }
 }

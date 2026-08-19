@@ -267,6 +267,7 @@ describe("POST /api/payout/validate — autoridad server-side (WKH-180)", () => 
   // ── WKH-205 AC-4: rate-limit excedido → 429, autoridad/Didit NO consultadas ───────────────────
   it("AC-4: rate-limit !ok (con key) → 429, resolvePayoutAuthority/fetch NOT called", async () => {
     vi.stubEnv("DIDIT_API_KEY", "test-key");
+    vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test"); // WKH-233: el gate del limiter mira el host del agente, no la credencial del proveedor (misma semántica: ¿demo o vivo?)
     checkRouteRateLimitMock.mockResolvedValue({ ok: false, retryAfter: 30 });
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -280,6 +281,7 @@ describe("POST /api/payout/validate — autoridad server-side (WKH-180)", () => 
   // ── WKH-205 AC-6: Upstash ausente en entorno vivo → 503 fail-closed ───────────────────────────
   it("AC-6: rate-limit unavailable (con key) → 503 kyc_authority_unavailable fail-closed, fetch NOT called", async () => {
     vi.stubEnv("DIDIT_API_KEY", "test-key");
+    vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test"); // WKH-233: el gate del limiter mira el host del agente, no la credencial del proveedor (misma semántica: ¿demo o vivo?)
     checkRouteRateLimitMock.mockResolvedValue({ ok: false, unavailable: true });
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

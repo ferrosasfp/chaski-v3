@@ -31,9 +31,10 @@ export async function POST(req: Request): Promise<Response> {
   const verificationId = typeof body.verificationId === "string" ? body.verificationId : "";
   const address = typeof body.address === "string" ? body.address : "";
 
-  // AC-4/DT-5/CD-9: rate-limit ANTES de la autoridad, SOLO con key (prod-like). Sin key → dev/sim,
-  // no hay costo Didit que limitar y el demo local sigue andando (mismo criterio que kyc/session).
-  if (process.env.DIDIT_API_KEY) {
+  // AC-4/DT-5/CD-9: rate-limit ANTES de la autoridad, SOLO en entorno vivo (prod-like). Sin el
+  // host del agente → dev/sim, no hay costo de cuota que limitar y el demo local sigue andando
+  // (mismo criterio que kyc/session).
+  if (process.env.KYC_AGENT_BASE_URL) { // WKH-233: MISMA semántica (¿demo o vivo?) sin la env del proveedor, que ya no existe en este repo. Residual R-6 heredado: este gate mira "hay entorno vivo", no "esta llamada cuesta plata", y eso NO se rediseña acá — se arrastra tal cual para que el cambio sea sólo el de la cañería
     const rl = await checkRouteRateLimit(PAYOUT_VALIDATE_RL, {
       ip: clientIp(req),
       address: address || undefined,

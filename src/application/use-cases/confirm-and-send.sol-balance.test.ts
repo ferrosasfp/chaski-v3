@@ -35,7 +35,7 @@ import { ConfirmAndSend, SOLANA_SENDER_SOL_INSUFFICIENT } from "./confirm-and-se
 const passKyc: KycVerification = {
   verificationId: "v-1",
   approved: true,
-  payoutAllowed: true,
+  payoutAllowed: true, realVerified: true, verifiedAt: null,
   riskLevel: "low",
   provenance: "didit",
   identity: null,

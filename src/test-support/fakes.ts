@@ -180,7 +180,7 @@ export class FakeKycGateway implements KycGateway {
     return {
       verificationId: "v-1",
       approved: true,
-      payoutAllowed: true,
+      payoutAllowed: true, realVerified: false, verifiedAt: null,
       riskLevel: "low",
       provenance: "fake",
       identity: toPersistedIdentity({

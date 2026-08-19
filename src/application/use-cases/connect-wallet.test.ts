@@ -23,7 +23,7 @@ function kyc(verificationId: string | null = "did-del-navegador") {
   return {
     verificationId,
     approved: true,
-    payoutAllowed: true,
+    payoutAllowed: true, realVerified: true, verifiedAt: null,
     riskLevel: "low" as const,
     provenance: "didit",
     identity: toPersistedIdentity({

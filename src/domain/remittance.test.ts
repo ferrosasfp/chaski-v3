@@ -17,7 +17,7 @@ const OWNER = "0xSender";
 const passKyc: KycVerification = {
   verificationId: "v",
   approved: true,
-  payoutAllowed: true,
+  payoutAllowed: true, realVerified: true, verifiedAt: null,
   riskLevel: "low",
   provenance: "didit",
   identity: null,

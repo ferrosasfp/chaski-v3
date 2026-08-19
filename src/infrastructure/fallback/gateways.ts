@@ -80,7 +80,7 @@ export class FallbackKycGateway implements KycGateway {
     return {
       verificationId: `didit-demo-${Date.now().toString(36)}`,
       approved: true,
-      payoutAllowed: true,
+      payoutAllowed: true, realVerified: false, verifiedAt: null,
       riskLevel: amountUsd >= 1000 ? "medium" : "low",
       provenance: "local-fallback",
       identity: toPersistedIdentity({

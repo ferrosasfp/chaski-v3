@@ -67,7 +67,7 @@ describe("StartKyc — sólo un veredicto USABLE saltea la sesión de Didit (WKH
     await store.save(ADDR, {
       verificationId: "did-local",
       approved: true,
-      payoutAllowed: true,
+      payoutAllowed: true, realVerified: true, verifiedAt: null,
       riskLevel: "low",
       provenance: "didit",
       identity: null,
@@ -109,7 +109,6 @@ describe("StartKyc — sólo un veredicto USABLE saltea la sesión de Didit (WKH
   const noSaltean: Array<[string, KycVerdictLookup | undefined]> = [
     ["absent/absent", { outcome: "absent", reason: "absent" }],
     ["absent/expired", { outcome: "absent", reason: "expired" }],
-    ["absent/simulated", { outcome: "absent", reason: "simulated" }],
     ["absent/not_approved", { outcome: "absent", reason: "not_approved" }],
     ["not_asked/pop_disabled", { outcome: "not_asked", reason: "pop_disabled" }],
     ["not_asked/pop_rejected", { outcome: "not_asked", reason: "pop_rejected" }],
@@ -152,7 +151,7 @@ describe("StartKyc — sólo un veredicto USABLE saltea la sesión de Didit (WKH
   const localAprobado = {
     verificationId: "did-local",
     approved: true,
-    payoutAllowed: true,
+    payoutAllowed: true, realVerified: true, verifiedAt: null,
     riskLevel: "low" as const,
     provenance: "didit",
     identity: null,
@@ -160,7 +159,6 @@ describe("StartKyc — sólo un veredicto USABLE saltea la sesión de Didit (WKH
   const cruzado: Array<[string, KycVerdictLookup | undefined, boolean]> = [
     ["absent/absent", { outcome: "absent", reason: "absent" }, true],
     ["absent/expired", { outcome: "absent", reason: "expired" }, true],
-    ["absent/simulated", { outcome: "absent", reason: "simulated" }, true],
     ["absent/not_approved", { outcome: "absent", reason: "not_approved" }, true],
     ["not_asked/pop_disabled", { outcome: "not_asked", reason: "pop_disabled" }, false],
     ["not_asked/pop_rejected", { outcome: "not_asked", reason: "pop_rejected" }, false],

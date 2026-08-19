@@ -72,7 +72,7 @@ export interface KycPending {
   remittanceId: string;
   sessionId: string;
   address: string;
-  sessionToken?: string; // authToken HMAC persistido para autorizar el GET /decision (WKH-179)
+  sessionToken?: string; carril: "agente" | "directo"; // LOS DOS EN ESTA LÍNEA: insertar líneas acá corre las 28 citas `archivo:línea` que apuntan a este archivo (candado `citas-ancladas.test.ts`). `sessionToken` = authToken HMAC persistido para autorizar el GET /decision (WKH-179). 🔴 `carril` (WKH-233/DT-3a) = CONTRA QUIÉN se creó la sesión: `"agente"` (el agente de KYC, el camino de hoy en adelante) o `"directo"` (el proveedor, como nacieron todos los pendientes anteriores a la HU). La lectura al volver del redirect se enruta por ESTE valor y NUNCA por el valor actual de una env: un pendiente en vuelo tiene que resolverse por el camino con el que nació, o quitar `KYC_AGENT_BASE_URL` (que es el rollback de la HU) cortaría a quien está a mitad del flujo. Ver `ResumeKyc`. ⛔ REQUERIDO, NO OPCIONAL: con un `?`, borrarlo en un call site COMPILA, que es la lección ya escrita de `container.ts` —un colaborador que desaparece sin que nada se ponga rojo—. Un pendiente leído de `localStorage` sin el campo (los de antes de la HU) lo normaliza el store a `"directo"`, que es el lado fail-closed: se dice "no puedo retomar esto" en vez de fabricar un veredicto sobre esa persona
 }
 export interface KycPendingStore {
   save(p: KycPending): Promise<void>;
@@ -631,7 +631,7 @@ export interface KycVerdictStore {
  *
  * ⚠️ `verificationId` NO está acá y no puede estar (AC-6): este tipo cruza la red hacia el navegador.
  */
-export type KycVerdictAbsentReason = "absent" | "expired" | "simulated" | "not_approved";
+export type KycVerdictAbsentReason = "absent" | "expired" | "not_approved"; // ⚠️ WKH-233 — `"simulated"` SE ELIMINÓ de esta unión, y la consecuencia va dicha, no escondida. Desde esta HU la fila del veredicto se escribe SÓLO cuando el agente devuelve `payoutAllowed: true`, y ese booleano ya exige que la proveniencia esté en la allow-list de verificaciones REALES del agente ⇒ una fila que existe es, por invariante, real: no queda ningún código capaz de producir este motivo. Lo que se pierde, dicho: una verificación simulada ya no produce fila, así que `/api/kyc/verdict` responde `absent` donde antes respondía `simulated`. Se pierde poder decir "preguntamos y era una demo"; se conserva la distinción que sostiene el tipo (`usable`/`absent`/`not_asked`). ⛔ PROHIBIDO dejarlo "por las dudas": un valor que NINGÚN código puede producir es superficie muerta en un borde de confianza, y el próximo que lo lea va a creer que pasa
 export type KycVerdictNotAskedReason =
   | "pop_disabled"
   | "pop_rejected"

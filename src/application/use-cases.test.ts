@@ -174,7 +174,7 @@ describe("Use-cases — money-path", () => {
     await kycStore.save(FAKE_SOLANA_BENEFICIARY, {
       verificationId: "v",
       approved: true,
-      payoutAllowed: true,
+      payoutAllowed: true, realVerified: true, verifiedAt: null,
       riskLevel: "low",
       provenance: "didit",
       identity: null,

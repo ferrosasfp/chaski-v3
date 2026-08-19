@@ -161,7 +161,7 @@ describe("T-JR-0: el marcador de `primary` existe y DISCRIMINA", () => {
 const passKyc: KycVerification = {
   verificationId: "v-1",
   approved: true,
-  payoutAllowed: true,
+  payoutAllowed: true, realVerified: true, verifiedAt: null,
   riskLevel: "low",
   provenance: "didit",
   identity: toPersistedIdentity({

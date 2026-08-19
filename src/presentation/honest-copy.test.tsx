@@ -132,7 +132,7 @@ function remesaConFalloDesconocido(): RemittanceState {
     {
       verificationId: "v-1",
       approved: true,
-      payoutAllowed: true,
+      payoutAllowed: true, realVerified: true, verifiedAt: null,
       riskLevel: "low",
       provenance: "didit",
       identity: toPersistedIdentity({
@@ -590,7 +590,7 @@ describe("la identidad del paso confirm", () => {
       {
         verificationId: "v-1",
         approved: true,
-        payoutAllowed: true,
+        payoutAllowed: true, realVerified: false, verifiedAt: null,
         riskLevel: "low",
         provenance: KYC_PROVENANCE_MOCK,
         identity: toPersistedIdentity({

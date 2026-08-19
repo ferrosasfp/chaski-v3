@@ -39,7 +39,7 @@ async function seedOwned(repo: InMemoryRepo, id: string, address: string): Promi
 const kyc: KycVerification = {
   verificationId: "v-1",
   approved: true,
-  payoutAllowed: true,
+  payoutAllowed: true, realVerified: true, verifiedAt: null,
   riskLevel: "low",
   provenance: "didit",
   identity: toPersistedIdentity({
@@ -71,7 +71,7 @@ describe("ForgetKyc", () => {
   it("AC-3: limpia el pending en curso", async () => {
     const kycStore = new FakeKycStore();
     const pending = new FakeKycPendingStore();
-    await pending.save({ remittanceId: "r-1", sessionId: "s-1", address: SENDER });
+    await pending.save({ remittanceId: "r-1", sessionId: "s-1", address: SENDER, carril: "agente" });
     expect(await pending.get()).not.toBeNull();
 
     await new ForgetKyc(kycStore, pending, new InMemoryRepo()).execute({ address: SENDER });
@@ -82,7 +82,7 @@ describe("ForgetKyc", () => {
   it("AC-5 defensivo: si kycStore.clear rechaza, execute resuelve igual y pending.clear corre", async () => {
     const kycStore = new ThrowingClearKycStore();
     const pending = new FakeKycPendingStore();
-    await pending.save({ remittanceId: "r-1", sessionId: "s-1", address: SENDER });
+    await pending.save({ remittanceId: "r-1", sessionId: "s-1", address: SENDER, carril: "agente" });
 
     await expect(
       new ForgetKyc(kycStore, pending, new InMemoryRepo()).execute({ address: SENDER }),
@@ -117,7 +117,7 @@ describe("ForgetKyc", () => {
     const pending = new FakeKycPendingStore();
     const repo = new ThrowingClearByOwnerRepo(); // clearByOwner re-lanza (CD-7)
     await kycStore.save(SENDER, kyc);
-    await pending.save({ remittanceId: "r-1", sessionId: "s-1", address: SENDER });
+    await pending.save({ remittanceId: "r-1", sessionId: "s-1", address: SENDER, carril: "agente" });
 
     await expect(
       new ForgetKyc(kycStore, pending, repo).execute({ address: SENDER }),
@@ -133,7 +133,7 @@ describe("ForgetKyc", () => {
     const pending = new FakeKycPendingStore();
     const repo = new InMemoryRepo();
     await kycStore.save(SENDER, kyc);
-    await pending.save({ remittanceId: "r-1", sessionId: "s-1", address: SENDER });
+    await pending.save({ remittanceId: "r-1", sessionId: "s-1", address: SENDER, carril: "agente" });
     await seedOwned(repo, "rem-1", SENDER);
 
     await new ForgetKyc(kycStore, pending, repo).execute({ address: SENDER });

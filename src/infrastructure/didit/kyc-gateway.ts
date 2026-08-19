@@ -62,7 +62,7 @@ export class DiditKycGateway implements KycGateway {
       verification: {
         verificationId: d.verificationId,
         approved: d.approved,
-        payoutAllowed: d.payoutAllowed,
+        payoutAllowed: d.payoutAllowed, realVerified: false, verifiedAt: null,
         riskLevel: d.riskLevel,
         provenance: d.provenance,
         identity: d.identity ? toPersistedIdentity(d.identity) : null, // reducir PII aguas arriba (CD-6)

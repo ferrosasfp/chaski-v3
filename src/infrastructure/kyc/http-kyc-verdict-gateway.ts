@@ -39,7 +39,7 @@ interface VerdictResponse {
   reason?: unknown;
 }
 
-const ABSENT_REASONS = ["absent", "expired", "simulated", "not_approved"] as const;
+const ABSENT_REASONS = ["absent", "expired", "not_approved"] as const; // EN ESTA LÍNEA: `solana-wallet.ts:2374` cita `:60` de este archivo por número. WKH-233 — `"simulated"` se fue de `KycVerdictAbsentReason` y por eso se va de acá: la fila del veredicto se escribe SÓLO con `payoutAllowed === true` del agente de KYC, así que una fila que existe es real por invariante y ningún servidor puede emitir ya ese motivo. Un servidor viejo que lo emitiera cae en la rama de `readAbsentReason` y cuenta como `absent`, que es el fail-safe correcto: la respuesta existe, pero este cliente no puede afirmar de qué motivo habla
 type AbsentReason = (typeof ABSENT_REASONS)[number];
 
 function readAbsentReason(v: unknown): AbsentReason {

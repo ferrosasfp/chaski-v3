@@ -117,7 +117,7 @@ describe("HttpKycVerdictGateway — cuatro desenlaces distinguibles (WKH-333)", 
   });
 
   it("200 sin verdict ⇒ absent CON el motivo que declaró el servidor (venció ≠ no hay)", async () => {
-    for (const reason of ["absent", "expired", "simulated", "not_approved"]) {
+    for (const reason of ["absent", "expired", "not_approved"]) { // WKH-233: `"simulated"` se fue de `KycVerdictAbsentReason` (una fila que existe es real por invariante)
       fetchReturning(200, { verdict: null, reason });
       const out = await new HttpKycVerdictGateway(popSigner("ok")).ensure(ADDR);
       expect(out.lookup).toEqual({ outcome: "absent", reason });

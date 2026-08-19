@@ -465,7 +465,7 @@ describe("createContainer — el seguimiento del payout lee el ledger (WKH-337/A
       {
         verificationId: "v-337",
         approved: true,
-        payoutAllowed: true,
+        payoutAllowed: true, realVerified: true, verifiedAt: null,
         riskLevel: "low",
         provenance: "didit",
         identity: null,

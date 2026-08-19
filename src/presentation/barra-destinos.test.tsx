@@ -542,7 +542,7 @@ function remesaConDeposito(id: string): RemittanceState {
     {
       verificationId: "v-1",
       approved: true,
-      payoutAllowed: true,
+      payoutAllowed: true, realVerified: true, verifiedAt: null,
       riskLevel: "low",
       provenance: KYC_PROVENANCE_LIVE,
       identity: toPersistedIdentity({

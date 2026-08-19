@@ -133,6 +133,13 @@ export class StartKyc {
         verificationId: null,
         approved: true,
         payoutAllowed: true,
+        // 🔴 `true` NO ES UN OPTIMISMO (WKH-233/D-3). Que exista fila del veredicto es, desde esta
+        // HU, el invariante "el agente la juzgó real, aprobada y atada": `app/api/kyc/decision`
+        // escribe SÓLO con `payoutAllowed === true` del agente, y ese booleano ya exige que la
+        // proveniencia esté en la allow-list de verificaciones REALES del agente. Una verificación
+        // simulada no produce fila, así que este camino no puede alcanzarse con una.
+        realVerified: true,
+        verifiedAt: sv.verdict.verifiedAt, // el momento que el servidor observó; NO se inventa acá
         riskLevel: sv.verdict.riskLevel,
         provenance: sv.verdict.provenance,
         identity: null, // el servidor no persiste PII y este cliente no la recibe (CD-2)
@@ -173,6 +180,13 @@ export class StartKyc {
       sessionId: res.sessionId,
       address: input.address,
       sessionToken: res.authToken, // token HMAC para autorizar el GET /decision al volver (WKH-179)
+      // WKH-233/DT-3a — CONTRA QUIÉN se creó esta sesión, para que la lectura al volver se enrute por
+      // el camino con el que nació y NUNCA por el valor actual de una env. Es `"agente"` porque un
+      // `kind: "redirect"` sólo lo produce `AgentKycGateway.start`: la simulación resuelve directo
+      // (`kind: "completed"`) y no llega hasta acá. Los pendientes anteriores a esta HU no tienen el
+      // campo y el store los normaliza a `"directo"` (fail-closed: se dice que no se puede retomar,
+      // en vez de fabricar un veredicto sobre esa persona).
+      carril: "agente",
     });
     await this.repo.save(r); // ← si pending.save lanzó, ESTO no corre → remesa sigue en "quoted"
     return { kind: "redirect", url: res.url };

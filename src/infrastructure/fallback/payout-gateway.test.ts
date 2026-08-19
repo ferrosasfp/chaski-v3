@@ -44,7 +44,7 @@ async function submittedRemittance() {
     {
       verificationId: "v-1",
       approved: true,
-      payoutAllowed: true,
+      payoutAllowed: true, realVerified: false, verifiedAt: null,
       riskLevel: "low",
       provenance: "local-fallback",
       identity: null,

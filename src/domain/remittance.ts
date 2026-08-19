@@ -146,10 +146,10 @@ export interface KycVerification {
    *  evidencia. Si hace falta el identificador, se lo pide el servidor a su propia fila. */
   verificationId: string | null;
   approved: boolean;
-  payoutAllowed: boolean;
+  payoutAllowed: boolean; realVerified: boolean; verifiedAt: string | null; // 🔴 LOS TRES EN ESTA LÍNEA, y no es estilo: insertar líneas acá corre las 22 citas `archivo:línea` que apuntan a este archivo (candado `citas-ancladas.test.ts`). ⚠️ WKH-233 — `payoutAllowed` NO ES EL `payoutAllowed` DEL AGENTE DE KYC, Y CONFUNDIRLOS ROMPE LA PANTALLA, NO EL PAGO (D-3, el footgun más caro de esa HU): acá vale LO MISMO QUE `approved` (antes `mapDiditDecision` hacía `payoutAllowed: approved`) y lo consumen el dominio (`applyKyc`, `canConfirm`), `ResumeKyc`, `StartKyc` y el fallback; meterle el del agente haría que con KYC simulado valiera `false` y el flujo no llegara ni a `kyc_passed`, o sea que la demo se rompería en la pantalla de identidad, lejos de donde se causó, y eso NO es lo que decidió DT-5'. · `realVerified` ES el juicio del agente ADOPTADO TAL CUAL (DT-5'): se puebla ÚNICAMENTE desde el `payoutAllowed` de su `GET /decision`, que por construcción significa aprobado ∧ hubo reclamo de identidad ∧ la identidad COINCIDE ∧ la proveniencia está en la allow-list de verificaciones REALES del agente. Reemplaza a la allow-list LOCAL que vivía en `flow-vm.ts` (`REAL_KYC_PROVENANCES`/`isKycDemo`), borrada a propósito: una lista local con el nombre del proveedor es exactamente lo que hay que cambiar al cambiar de proveedor. ⛔ PROHIBIDO derivarlo de `provenance`, de `approved` o de cualquier cosa que Chaski calcule: el agente decide, Chaski pregunta. · `verifiedAt` = cuándo ESTE servidor observó el desenlace terminal; `null` = no lo sabemos (una simulación no verificó nada y la rama que la pinta no muestra fecha). ⚠️ IMPRECISIÓN DECLARADA: `app/api/kyc/decision/route.ts` se pollea hasta 8 veces por verificación, así que dos polls devuelven dos valores; la FILA no se mueve (el CAS devuelve `already_recorded` y no toca `verified_at`), lo que varía dentro de esos ~20 s es lo que se muestra. Aceptable para una etiqueta de pantalla; ⛔ NO es evidencia y no se persiste como tal
   riskLevel: "low" | "medium" | "high";
   provenance: string;
-  identity: PersistedIdentity | null; // reducida (sin PII cruda) — lo que Didit extrae, ya reducido
+  identity: PersistedIdentity | null; // reducida (sin PII cruda); por el camino del agente es SIEMPRE null (el agente no devuelve ningún dato de identidad)
 }
 
 export type RemittanceStatus =

@@ -60,7 +60,7 @@ const COPY_VIEJO = "No comprobamos si tus USDC siguen en el escrow.";
 const passKyc: KycVerification = {
   verificationId: "v-1",
   approved: true,
-  payoutAllowed: true,
+  payoutAllowed: true, realVerified: true, verifiedAt: null,
   riskLevel: "low",
   provenance: "didit",
   identity: toPersistedIdentity({

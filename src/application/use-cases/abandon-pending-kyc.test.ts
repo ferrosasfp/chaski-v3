@@ -5,7 +5,7 @@ import { AbandonPendingKyc } from "./abandon-pending-kyc";
 describe("AbandonPendingKyc", () => {
   it("AC-7: limpia el pending (próximo resume ya no re-bloquea)", async () => {
     const pending = new FakeKycPendingStore();
-    await pending.save({ remittanceId: "r-1", sessionId: "s-1", address: "0xSender" });
+    await pending.save({ remittanceId: "r-1", sessionId: "s-1", address: "0xSender", carril: "agente" });
     expect(await pending.get()).not.toBeNull();
 
     await new AbandonPendingKyc(pending).execute();

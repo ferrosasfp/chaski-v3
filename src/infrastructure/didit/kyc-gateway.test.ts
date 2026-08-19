@@ -6,7 +6,7 @@ import { DiditKycGateway } from "./kyc-gateway";
 const fallbackResult: KycVerification = {
   verificationId: "fb-1",
   approved: true,
-  payoutAllowed: true,
+  payoutAllowed: true, realVerified: false, verifiedAt: null,
   riskLevel: "low",
   provenance: "local-fallback",
   identity: null,

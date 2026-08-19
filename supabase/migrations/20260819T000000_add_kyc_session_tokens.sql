@@ -36,14 +36,62 @@
 --        `kyc_verdicts` gana una columna de token [...] HAY QUE RECONSIDERARLO". Esta migracion
 --        dispara exactamente esa condicion ⇒ companion en `wasiai-remittance-agents`.
 --
--- ⚠️ ORDEN DE DESPLIEGUE: **MIGRACION -> ENVS -> CODIGO.** No es una preferencia, y el inverso
---    rompe produccion:
+-- ════════════════════════════════════════════════════════════════════════════════════════════════
+-- 🔴 QUIEN SE QUEDA SIN COBRAR EL DIA DEL DEPLOY. LEER ANTES DE DESPLEGAR (AR/BLQ-MED-1).
+--
+-- ESTA HU CORTA A TODA PERSONA VERIFICADA ANTES DE ELLA, y no es un efecto colateral: es la
+-- consecuencia directa del diseño, y esta seccion existe para que nadie la descubra en produccion.
+--
+-- POR QUE. `resolvePayoutAuthority` (`src/infrastructure/payout/authority.ts`, Guard 3) exige una
+-- fila de ESTA tabla para conseguir el `decisionToken`. La tabla la puebla UNICAMENTE
+-- `app/api/kyc/session/route.ts` al crear una sesion NUEVA contra el agente. El `decisionToken` de
+-- una verificacion vieja —hecha contra el proveedor, antes de WKH-233— **NUNCA EXISTIO**, asi que no
+-- hay fila que traer ⇒ `kyc_ownership_mismatch` ⇒ `prepare` responde `payout_not_authorized`/403,
+-- SIN LLEGAR A CONSULTAR AL AGENTE.
+--
+-- ⚠️ Y EL BACKFILL DE RESCATE TAMPOCO SIRVE: `app/api/kyc/verdict/route.ts` (linea 247 al escribirse
+-- esto) llama a la MISMA `resolvePayoutAuthority` y recibe el MISMO `kyc_ownership_mismatch`. O sea
+-- que el camino que existe justamente para re-consultar a la autoridad con la pista del navegador
+-- muere por el mismo guard. **No hay rescate automatico. Hay que re-verificarse.**
+--
+-- 🔴 CUANTA GENTE ES — MEDIDO CONTRA bdwv EL 2026-08-19, Y ES UNA FOTO QUE ENVEJECE:
+--     kyc_verdicts        1 fila · 1 aprobada · 1 sender distinto
+--     kyc_session_tokens  0 filas (esta migracion YA se aplico a bdwv: la tabla existe y esta vacia)
+--     control positivo    remittance_settlements = 25 filas ⇒ la sonda VE datos reales, el 1 y el 0
+--                         no son "la consulta no devolvio nada"
+--   ⇒ al 2026-08-19 es **UNA persona**, casi con certeza la billetera de prueba del founder. **No es
+--     un corte de padron.** ⛔ PERO ESE NUMERO NO LO VIGILA NADA: si desplegas en dos meses,
+--     **RE-CONTALO** antes de decidir (`select count(*) from kyc_verdicts`). Con un padron real, la
+--     decision de abajo hay que volver a tomarla, no heredarla.
+--
+-- QUE SE DECIDIO, Y QUE ESTA PROHIBIDO. Se ACEPTA el corte y se documenta (opcion (c) del AR).
+-- ⛔ PROHIBIDO un backfill que invente filas en esta tabla, un carril de gracia, o cualquier cosa que
+--    reabra el juicio local que esta HU existe para borrar: un token que Chaski no recibio del agente
+--    no se puede fabricar, y una excepcion "para los de antes" es exactamente la allow-list local que
+--    DT-5' saca del medio.
+--
+-- ⚠️ LA CONSECUENCIA OPERATIVA, ESCRITA: **quien tenga una fila vieja en `kyc_verdicts` DEBE
+--    RE-VERIFICARSE DESPUES DEL DEPLOY** (reconectar, firmar, escanear el documento otra vez, cuota
+--    del proveedor gastada otra vez). Hasta que lo haga, su desembolso da 403 `payout_not_authorized`
+--    y desde la pantalla se ve igual que un KYC rechazado.
+--    🔴 Y ESTO TIENE FECHA: el video del Demo Day se graba el **25**, y puede ser con esa billetera.
+--    Si es la misma, la re-verificacion va ANTES de la grabacion, no despues.
+-- ════════════════════════════════════════════════════════════════════════════════════════════════
+--
+-- ⚠️ ORDEN DE DESPLIEGUE: **MIGRACION -> ENVS -> CODIGO -> RE-VERIFICAR A LOS DE ANTES.** No es una
+--    preferencia, y el inverso rompe produccion:
 --   1. Aplicar este .sql a BDWV. ⛔ NUNCA a caldz (mainnet). Nadie lo lee todavia: el codigo no esta
 --      desplegado.
 --   2. Sembrar `KYC_AGENT_BASE_URL` (y `KYC_AGENT_INVOKE_SECRET` si el guard del agente ya esta
 --      encendido) EN EL PROVEEDOR, con el codigo todavia sin desplegar. Nadie las lee hasta que un
 --      deploy las levante, y el deploy las levanta YA seteadas. Ventana sin roturas.
 --   3. Desplegar el codigo.
+--   4. 🔴 RE-VERIFICAR A QUIEN YA ESTABA VERIFICADO. Este paso NO ES OPCIONAL y no lo hace ningun
+--      script: es la persona, a mano, reconectando y firmando (ver el bloque de arriba). Al
+--      2026-08-19 la lista es de **1 fila** en `kyc_verdicts`; ⛔ re-contala antes de desplegar,
+--      porque ese numero envejece solo y nada lo vigila. Hasta que ese paso ocurra, esa persona ve
+--      403 `payout_not_authorized` en cada intento de cobro, y no hay backfill que lo evite
+--      (`app/api/kyc/verdict/route.ts` cae por el mismo guard).
 --   · Codigo -> envs (ROTO): abre una ventana en la que `/api/kyc/session` responde 501 y todo el
 --     mundo cae a la SIMULACION. No corta pagos (nadie con veredicto simulado paga), pero SIRVE UN
 --     KYC FALSO A GENTE REAL, que es peor.

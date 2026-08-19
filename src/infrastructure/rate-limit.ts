@@ -191,7 +191,7 @@ function retryAfterFrom(reset: number): number {
 // su entry MÁS A LA IZQUIERDA es spoofeable, y tomarlo (como antes) permitía evadir el límite por IP
 // rotando el header. Por eso XFF es SOLO último recurso y, de usarlo, tomamos el valor MÁS A LA
 // DERECHA (el que agrega el proxy de confianza más cercano), nunca el leftmost.
-// WKH-205: extraído byte-idéntico de kyc/session/route.ts:37-49 (la copia de kyc/session queda, dup
+// WKH-205: extraído byte-idéntico de `clientIp` en `app/api/kyc/session/route.ts` (esa copia queda, dup
 // documentada — CD-11) para que las rutas nuevas (validate/challenge) reusen la misma fuente.
 export function clientIp(req: Request): string {
   const trusted =

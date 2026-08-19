@@ -100,8 +100,8 @@ export class StartKyc {
     //
     // ⚠️ LOS CUATRO `not_asked` NO ENTRAN ACÁ, y no es una omisión — es que forzar una sesión no los
     // ayudaría. Medido, uno por uno: sin prueba de posesión (`pop_declined`, `pop_disabled`) la
-    // sesión de Didit se crea SIN ATAR y `decision/route.ts` no escribe ninguna fila
-    // (`if (!mapped.vendorData) return`); con la tabla apagada (`store_disabled`) tampoco hay dónde
+    // sesión de verificación se crea SIN ATAR y `persistKycVerdict` no escribe ninguna fila
+    // (su gate es `d.payoutAllowed !== true`); con la tabla apagada (`store_disabled`) tampoco hay dónde
     // escribirla; y con la prueba rechazada (`pop_rejected`) el remedio es un challenge nuevo, no un
     // escaneo nuevo. Mandarlos a re-verificarse gastaría un cupo del tier gratuito y los dejaría
     // exactamente donde estaban. Para esos cuatro, la salida es reconectar y aceptar la firma, y eso

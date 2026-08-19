@@ -214,7 +214,7 @@ describe("ConnectWallet — WKH-354/AC-4: el veredicto se resuelve POR la direcc
 // 🔴 POR QUÉ ESTA WAVE NO SE PUEDE SALTEAR, dicho entero. Sin ella, en un teléfono sin extensión
 // `pop.prove()` tira, `HttpKycVerdictGateway` contesta `not_asked/pop_declined` EN SILENCIO,
 // `ConnectWallet` devuelve `kycProof: undefined`, `/api/kyc/session` crea la sesión de Didit SIN ATAR,
-// `app/api/kyc/decision/route.ts:100` hace `if (!mapped.vendorData) return;` y NO ESCRIBE FILA, y
+// `persistKycVerdict` corta con `d.payoutAllowed !== true` y NO ESCRIBE FILA, y
 // `prepare` contesta 403 `prepare_kyc_verdict_missing` sin ningún respaldo.
 // ⚠️ Y NO SE VE: una billetera que YA tiene fila del veredicto cierra igual, así que el bug le pasa a
 // cada persona nueva y no aparece en la corrida de quien ya se verificó.

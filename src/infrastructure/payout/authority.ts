@@ -101,6 +101,15 @@ export async function resolvePayoutAuthority(
   }
 
   // Guard 2 — FORMATO. Nunca se consulta nada con un id vacío/malformado.
+  //
+  // ⚠️ CITA ROTA QUE NO SE PUEDE ARREGLAR DESDE ACÁ, Y SE DEJA ESCRITA EN VEZ DE DEJARLA CALLADA:
+  // `app/api/payout/prepare/route.ts` (línea 273 al escribirse esto) cita este guard como
+  // "`authority.ts:58-60` y `:65-67`". Esos números eran CIERTOS en `main` y los rompió ESTA HU al
+  // reescribir la cabecera: hoy los dos guards de formato viven en las dos ramas de acá arriba y de
+  // acá mismo. ⛔ NO se corrige en el sitio que cita, porque `prepare/route.ts` tiene que quedar con
+  // CERO diff en esta rama (es la restricción que protege al money-path de un cambio incidental), y
+  // ⛔ NO se contorsiona este archivo para que los números vuelvan a coincidir. Queda como deuda
+  // nombrada: la HU que vuelva a tocar `prepare/route.ts` la arregla ahí, anclando al símbolo.
   if (!verificationId.trim()) {
     return { authorized: false, reason: "invalid_verification_id", httpStatus: 400 };
   }
@@ -112,9 +121,24 @@ export async function resolvePayoutAuthority(
     // Misconfig NUESTRA (envs de Supabase ausentes), no una caída del agente ⇒ su propio reason.
     return { authorized: false, reason: "kyc_authority_unavailable", httpStatus: 503 };
   }
+  // 🔴 AR/MNR-3 — SE CANONICALIZA **UNA** VEZ Y LAS DOS PREGUNTAS USAN EL MISMO VALOR. Acá se
+  // canonicalizaba para el store y más abajo se le mandaba al agente la dirección **CRUDA**, o sea
+  // dos valores distintos para las dos mitades de la MISMA decisión de desembolso: con qué dirección
+  // se busca el dueño de la credencial, y con qué dirección se le pregunta al agente si la identidad
+  // coincide. Hoy no es explotable —`canonicalizeAddress` es la identidad sobre todo lo que
+  // `new PublicKey()` no rechaza, medido con esta versión de `@solana/web3.js`— y si dejara de serlo
+  // fallaría CERRADO (el agente diría `identityMatches:false`). Se cierra igual: es una asimetría
+  // gratuita **en la línea que decide un desembolso**, y el que la lea después no tiene por qué
+  // re-derivar que hoy no importa.
+  //
+  // ⛔ La canonicalización SIGUE DENTRO de este `try`, y eso no es acomodo: una dirección malformada
+  // tiene que seguir saliendo por `kyc_reauth_failed`/502 —exactamente como salía antes de WKH-233—
+  // porque un `reason` nuevo cae al `default` del `switch` de `prepare` y CD-16 no lo permite.
   let decisionToken: string | null;
+  let identityClaim: string;
   try {
-    decisionToken = await tokenStore.getForOwner(verificationId, canonicalizeAddress(address));
+    identityClaim = canonicalizeAddress(address);
+    decisionToken = await tokenStore.getForOwner(verificationId, identityClaim);
   } catch {
     // Lectura rota (base caída, tabla ausente) o dirección malformada. Fail-closed: nunca autoriza.
     // ⚠️ La dirección malformada cae acá y sale como "la autoridad falló", que es lo MISMO que hacía
@@ -142,7 +166,9 @@ export async function resolvePayoutAuthority(
   try {
     const r = await readAgentKycDecision({
       sessionId: verificationId,
-      identityClaim: address, // la dirección PoP-VERIFICADA que llega desde `prepare`
+      // La dirección PoP-VERIFICADA que llega desde `prepare`, CANONICALIZADA — y es EL MISMO valor
+      // con el que se buscó al dueño de la credencial, no una segunda lectura de `address` (MNR-3).
+      identityClaim,
       decisionToken,
     });
     if (!r.ok) {

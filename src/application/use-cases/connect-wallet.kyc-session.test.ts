@@ -225,8 +225,8 @@ describe("rechazar la firma al conectar NO impide iniciar el KYC (CD-15/AC-13, A
 // `toBeUndefined` de T-CW-3). O sea que el camino ATADO —el que produce la fila del veredicto y por lo
 // tanto el que autoriza a pagar— no lo vigilaba nadie.
 //
-// ⛔ Y ES EL ESLABÓN DE §0.1: sin `payoutAllowed`, `../../../app/api/kyc/decision/route.ts` hace
-// `if (!mapped.vendorData) return;` y NO ESCRIBE FILA; sin fila, `prepare` contesta 403
+// ⛔ Y ES EL ESLABÓN DE §0.1: sin `payoutAllowed`, `persistKycVerdict` (en
+// `../../../app/api/kyc/decision/route.ts`) NO ESCRIBE FILA; sin fila, `prepare` contesta 403
 // `prepare_kyc_verdict_missing` **sin ningún respaldo**.
 describe("T-067-6 (WKH-359/AC-3): con la prueba del enlace, la sesión de Didit se crea ATADA", () => {
   beforeEach(() => {

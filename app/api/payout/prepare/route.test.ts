@@ -1768,3 +1768,109 @@ describe("POST /api/payout/prepare — el identificador sale de la fila, no del 
     expect(fetchMock, "se creó una orden de payout REAL sin veredicto").not.toHaveBeenCalled();
   });
 });
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// T-TOK-3c / T-TOK-4c · AR/MNR-5 — LA TERCERA PATA DEL BARRIDO DE CD-20, QUE FALTABA
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ FALTABA, MEDIDO. El Story File declara que el barrido del centinela corre sobre TRES rutas
+// —`kyc/session`, `kyc/decision` y ESTA— y la Done Definition lo daba por cumplido. Las dos primeras
+// lo tienen; acá había **cero ocurrencias de `CENTINELA`**. No había fuga viva: faltaba el candado.
+//
+// 🔴 POR DÓNDE PODRÍA ENTRAR EL TOKEN A ESTA RUTA, que es lo que hace que este `it` no sea decorativo.
+// `prepare` nunca ve el `decisionToken` directamente: su único contacto con esa credencial es a través
+// del objeto que devuelve `resolvePayoutAuthority`, que HOY trae `provenance` y `riskLevel` —dos
+// campos que la ruta NO ecoa: el `provenance` del 200 sale del resultado del AGENTE DE PAYOUT, no de
+// la autoridad—. El mutante realista es que alguien haga `NextResponse.json({ ...d, … })` para "no
+// perder información", o que un día `PayoutAuthorityDecision` gane un campo con la credencial adentro.
+// Por eso el doble de la autoridad devuelve el centinela EN SUS PROPIOS CAMPOS: es el único canal por
+// el que la credencial podría llegar hasta acá.
+describe("POST /api/payout/prepare — T-TOK-3c/T-TOK-4c: nada de la autoridad se ecoa (CD-20)", () => {
+  const TOKEN_CENTINELA = "k1.CENTINELA-QUE-NO-DEBE-SALIR"; // el MISMO literal que las otras dos rutas
+
+  // ⚠️ Replica el `beforeEach` del primer describe a propósito: este bloque es hermano, no anidado.
+  beforeEach(() => {
+    KP = nacl.sign.keyPair();
+    ADDR = bs58.encode(KP.publicKey);
+    AUTHORITY = bs58.encode(nacl.sign.keyPair().publicKey);
+    vi.stubEnv("DEPOSIT_ATTESTATION_SECRET", "test-deposit-secret");
+    vi.stubEnv("SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY", AUTHORITY);
+    vi.stubEnv("VERCEL_ENV", "");
+    vi.stubEnv("PAYOUT_POP_SECRET", "pop-secret");
+    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", GW);
+    vi.stubEnv("WASIAI_A2A_AGENT_KEY", GW_KEY);
+    checkRouteRateLimitMock.mockReset();
+    checkRouteRateLimitMock.mockResolvedValue({ ok: true });
+    authorityMock.mockReset();
+    // 🔴 EL CENTINELA VIAJA EN LOS CAMPOS DE LA AUTORIDAD. `provenance`/`riskLevel` son los dos campos
+    // aditivos que ESA función ya devuelve; `decisionToken` es el campo que no debería existir nunca
+    // ahí, y está puesto justamente para que el barrido lo cace el día que alguien lo agregue.
+    authorityMock.mockResolvedValue({
+      authorized: true,
+      httpStatus: 200,
+      provenance: TOKEN_CENTINELA,
+      riskLevel: TOKEN_CENTINELA,
+      decisionToken: TOKEN_CENTINELA,
+    });
+    ledgerMock.recordOrderPrepared.mockReset();
+    ledgerMock.recordOrderPrepared.mockResolvedValue(undefined);
+    getLedgerMock.mockReset();
+    getLedgerMock.mockReturnValue(null);
+    getVerdictStoreMock.mockReset();
+    getVerdictStoreMock.mockReturnValue(storeConFilaDe(ADDR));
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    agentResponds(200, agentResult());
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("T-TOK-3c/T-TOK-4c: el centinela no aparece en el body, ni en las cabeceras, ni en `console.*`", async () => {
+    const capturado: string[] = [];
+    const anotar = (...a: unknown[]) => {
+      capturado.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" "));
+    };
+    vi.spyOn(console, "warn").mockImplementation(anotar);
+    vi.spyOn(console, "error").mockImplementation(anotar);
+    vi.spyOn(console, "log").mockImplementation(anotar);
+
+    const res = await POST(req(bodyOf()));
+
+    // ✅ CONTROL POSITIVO, y va PRIMERO: sin él, cualquier corte temprano (403, 503) dejaría los tres
+    // asserts de abajo verdes por vacío — que es exactamente cómo un barrido se vuelve decorativo.
+    expect(res.status, "el caso no llegó al 200: el barrido de abajo sería vacuo").toBe(200);
+    const cuerpo = await res.text();
+    expect(JSON.parse(cuerpo)).toMatchObject({ beneficiary: DEPOSIT, payoutId: "transfi-po-1" });
+
+    // 🧬 MUTANTE: `NextResponse.json({ ...d, beneficiary, … })` en la rama del 200 —o cualquier eco de
+    // `d.provenance`— ⇒ ROJO en el primero.
+    expect(cuerpo, "un campo de la autoridad se ecoó en el body del 200").not.toContain(TOKEN_CENTINELA);
+    expect(
+      JSON.stringify([...res.headers.entries()]),
+      "un campo de la autoridad se ecoó en una cabecera",
+    ).not.toContain(TOKEN_CENTINELA);
+    expect(capturado.join("\n"), "un campo de la autoridad se ecoó a un log").not.toContain(
+      TOKEN_CENTINELA,
+    );
+  });
+
+  it("T-TOK-3c (rama de rechazo): tampoco sale por el 403 de `payout_not_authorized`", async () => {
+    // El otro camino observable: la autoridad NO autoriza. El body de rechazo es un enum fijo, y este
+    // caso fija que sigue siéndolo aunque la autoridad devuelva campos con contenido.
+    authorityMock.mockResolvedValue({
+      authorized: false,
+      reason: "kyc_ownership_mismatch",
+      httpStatus: 200,
+      provenance: TOKEN_CENTINELA,
+    });
+    const res = await POST(req(bodyOf()));
+    expect(res.status).toBe(403);
+    const cuerpo = await res.text();
+    expect(JSON.parse(cuerpo)).toEqual({ error: "payout_not_authorized" }); // control positivo
+    expect(cuerpo).not.toContain(TOKEN_CENTINELA);
+    expect(JSON.stringify([...res.headers.entries()])).not.toContain(TOKEN_CENTINELA);
+  });
+});

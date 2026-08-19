@@ -1288,14 +1288,14 @@ function VerificationProgress({ approved }: { approved: boolean }) {
  * sello de "Modo demo" tampoco se prendía, porque `isDemoMode` sólo reconocía `local-fallback`. Quien
  * mirara esa pantalla veía una app dando por buena una identidad inventada, sin un solo aviso.
  *
- * QUÉ AFIRMA CADA RAMA. La verde afirma una verificación, y por eso exige que el origen esté en
- * `REAL_KYC_PROVENANCES` (comparación exacta, `Set.has`). La otra NO afirma que los datos sean falsos
- * ni que nadie los haya mirado: dice que no podemos llamarlos verificados y muestra el origen crudo,
- * que es lo que hace la frase falsable de un vistazo. Lo desconocido cae en la segunda: sobre-avisar
- * es el error gratis.
+ * QUÉ AFIRMA CADA RAMA, Y WKH-233 LO CAMBIÓ ENTERO. La verde YA NO exige una allow-list local: esa
+ * lista —se llamaba `REAL_KYC_PROVENANCES`— LA BORRÓ ESTA HU (su lápida está en `flow-vm.ts`), y hoy
+ * el gate es `kyc.realVerified !== true`, o sea el `payoutAllowed` del AGENTE adoptado tal cual. La
+ * otra rama NO afirma que nada sea falso ni que nadie lo haya mirado: dice que no podemos llamarlo
+ * verificado y muestra el origen crudo. Lo desconocido cae en la segunda: sobre-avisar sale gratis.
  *
- * Los DATOS se muestran en las dos ramas. Sacarlos escondería a quién está por enviar la persona, que
- * es el motivo por el que esta tarjeta existe. Lo que cambia es qué se afirma de ellos.
+ * ⛔ ACÁ DECÍA "los DATOS se muestran en las dos ramas", Y ES FALSO EN LAS DOS: el agente no devuelve
+ * NINGÚN dato de identidad, así que ninguna rama muestra uno. Ver el bloque de adentro del componente.
  */
 function IdentityBadge({ kyc }: { kyc: KycVerification }) {
   // 🔴 WKH-233/D-2 — ACÁ ESTABAN `const id = kyc.identity;` y `if (!id) return null;`, y los dos se

@@ -23,6 +23,7 @@
 // estaba, la tarjeta se habría borrado de la pantalla sin que nadie lo notara.
 import { NextResponse } from "next/server";
 import type { KycAgentDecisionOutput } from "../../../../src/infrastructure/kyc/agent-contract";
+import type { AgentKycCall } from "../../../../src/infrastructure/kyc/agent-kyc-client";
 import { readAgentKycDecision } from "../../../../src/infrastructure/kyc/agent-kyc-client";
 import { resolveKycAgentBaseUrl } from "../../../../src/infrastructure/kyc/agent-env";
 import { canonicalizeAddress } from "../../../../src/infrastructure/address";
@@ -72,11 +73,29 @@ export async function GET(req: Request): Promise<Response> {
   // dice "sin verificar". Es correcto: una sesión sin atar no se puede afirmar como de esa billetera.
   // ⛔ PROHIBIDO rellenar el claim con `body.address`, con la dirección conectada o con cualquier
   // valor que no haya salido de una prueba de posesión: eso reabre R-1.
-  const r = await readAgentKycDecision({
-    sessionId,
-    identityClaim: fila.ownerAddress ?? undefined,
-    decisionToken: fila.token,
-  });
+  //
+  // 🔴 AR/BLQ-BAJO-1 — EL `try/catch` ES DE ESTA ROUTE, Y NO DEL CLIENTE. `readAgentKycDecision`
+  // RECHAZA en cinco sitios (transporte caído, JSON roto, raíz no-objeto, `reasons` que no es un
+  // array de strings, y cada clave del contrato faltante o con el tipo equivocado). Hace bien en
+  // tirar. Sin este `catch` el rechazo escapaba de la route y Next contestaba un **500 genérico**, no
+  // el 502 que el bloque de abajo declara — y un 500 es además un status que esta ruta no tenía en su
+  // conjunto observable para el caso "el agente no contestó lo que dice contestar".
+  //
+  // `upstream: 0` = "no hubo status upstream", el MISMO valor que ya usa la rama sin fila de arriba.
+  // ⇒ un fallo de transporte y una sesión inexistente siguen siendo INDISTINGUIBLES desde afuera, que
+  // es lo que P-6 pide (no ser un oráculo de qué sesiones existen).
+  let r: AgentKycCall<KycAgentDecisionOutput>;
+  try {
+    r = await readAgentKycDecision({
+      sessionId,
+      identityClaim: fila.ownerAddress ?? undefined,
+      decisionToken: fila.token,
+    });
+  } catch {
+    // ⛔ Value-free: el `err` NO se toca. Su `message` puede traer la URL del agente, que lleva el
+    // `sessionId` y el `identityClaim` en el query. El cliente ya emitió su log de rama.
+    r = { ok: false, upstream: 0 };
+  }
   if (!r.ok) {
     return NextResponse.json(
       { error: "kyc_decision_failed", upstream: r.upstream },

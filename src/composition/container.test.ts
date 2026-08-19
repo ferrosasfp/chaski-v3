@@ -1076,7 +1076,8 @@ describe("createContainer — WKH-359/AC-3: el `connectWallet` REAL consigue el 
       "el `connectWallet` que ESTA composición devuelve NO pidió la prueba de posesión por enlace: el " +
         "4º argumento de `container.ts:185` no está cableado, o el colaborador inyectado es inerte. " +
         "Consecuencia, y por eso este candado existe: en todo teléfono sin extensión la sesión de Didit " +
-        "se crea SIN ATAR, `app/api/kyc/decision/route.ts:100` no escribe la fila del veredicto y " +
+        "se crea SIN ATAR, `persistKycVerdict` no escribe la fila del veredicto (su gate es " +
+        "`d.payoutAllowed !== true`) y " +
         "`app/api/payout/prepare/route.ts:310` contesta 403 `prepare_kyc_verdict_missing`. ⚠️ Y NO SE " +
         "VE: una billetera que YA tiene fila cierra igual, así que el bug sólo lo sufre la gente nueva",
     ).toBe("hay-que-salir");

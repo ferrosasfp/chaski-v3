@@ -31,6 +31,8 @@ import {
 import { verifySolanaPop } from "../../../../src/infrastructure/auth/pop-verify-solana";
 import { resolveSolanaNetworkId } from "../../../../src/infrastructure/chain";
 import { canonicalizeAddress } from "../../../../src/infrastructure/address";
+import type { KycAgentSessionOutput } from "../../../../src/infrastructure/kyc/agent-contract";
+import type { AgentKycCall } from "../../../../src/infrastructure/kyc/agent-kyc-client";
 import { createAgentKycSession } from "../../../../src/infrastructure/kyc/agent-kyc-client";
 import { resolveKycAgentBaseUrl } from "../../../../src/infrastructure/kyc/agent-env";
 import { getKycSessionTokenStore } from "../../../../src/infrastructure/persistence/supabase-kyc-session-tokens";
@@ -77,6 +79,26 @@ export async function POST(req: Request): Promise<Response> {
     return NextResponse.json({ error: "server_misconfigured" }, { status: 500 });
   }
 
+  // 🔴 AR/BLQ-BAJO-2 — LA RESOLUCIÓN DEL STORE SUBIÓ ACÁ, Y NO ES ORDEN COSMÉTICO. Estaba DESPUÉS de
+  // `createAgentKycSession`, o sea después de crear una sesión REAL en el agente. Con las envs de
+  // Supabase ausentes eso QUEMA UNA VERIFICACIÓN DEL PROVEEDOR por request y después contesta 503:
+  // cuota gastada por una misconfig NUESTRA, que este mismo archivo ya cuenta como el costo caro
+  // ("Fallar acá cuesta UN reintento. No fallar cuesta UNA VERIFICACIÓN ENTERA", más abajo). Con el
+  // limiter en 5/10min, cada IP quema 5 cupos por ventana, indefinidamente y sin que nadie se
+  // verifique. Resolver el store NO es un fetch (es leer dos envs y construir el cliente), así que
+  // subirlo no toca P-7: al agente se le sigue hablando recién después de los guards.
+  //
+  // ⛔ LO QUE **NO** SUBIÓ ES LA ESCRITURA. `put` necesita el `sessionId`, que no existe antes del
+  // agente, y sigue donde estaba —fuera de este bloque— con su propio 503 y su propio log.
+  //
+  // El log pierde `atada`: acá todavía no se corrió el bloque S5, así que esa señal NO EXISTE en este
+  // punto. Rellenarla con `false` afirmaría que la sesión iba sin atar, que es un dato inventado.
+  const tokenStore = getKycSessionTokenStore();
+  if (!tokenStore) {
+    console.warn("[kyc-session] kyc_session_token_store_unavailable", {});
+    return NextResponse.json({ error: "kyc_session_unavailable" }, { status: 503 });
+  }
+
   const body = (await req.json().catch(() => ({}))) as {
     vendorData?: string;
     callback?: string;
@@ -119,7 +141,7 @@ export async function POST(req: Request): Promise<Response> {
   // ataque de R-1). CON prueba se ata a la dirección probada. Nunca se ata a algo no probado.
   //
   // ⚠️ CONSECUENCIA, DICHA: una sesión sin atar NO produce fila del veredicto — `decision/route.ts`
-  // corta con `if (!mapped.vendorData) return`. O sea que quien rechaza la firma se verifica igual
+  // corta con `d.payoutAllowed !== true`. O sea que quien rechaza la firma se verifica igual
   // (esto), pero para PAGAR va a necesitar una prueba de todos modos, porque `prepare` exige PoP
   // desde WKH-206 y la fila sale de ahí. Y la salida NO es la misma para todos — la distinción
   // importa y se derivó del guard de ownership de `authority.ts`:
@@ -216,12 +238,40 @@ export async function POST(req: Request): Promise<Response> {
   // `callbackUrl` contra una allowlist de orígenes que nace VACÍA (fail-closed), así que mandarlo sin
   // esa env sería un 400 garantizado; y el retomar del flujo de Chaski no depende del callback sino
   // del pendiente en `localStorage`. Con él se fue `KYC_CALLBACK_BASE_URL`.
-  const r = await createAgentKycSession({ identityRef: provedAddress });
+  //
+  // 🔴 AR/BLQ-BAJO-1 — EL `try/catch` ES DE ESTA RUTA, Y NO DEL CLIENTE. `createAgentKycSession`
+  // RECHAZA en cinco sitios (transporte caído, JSON roto, raíz no-objeto, y cada clave faltante o con
+  // el tipo equivocado: `kyc_agent_bad_response:session:<clave>`). Hace bien en tirar —ahí no hay
+  // ningún status upstream que reportar—, pero sin este `catch` el rechazo escapaba de la route y
+  // Next contestaba un **500 genérico**: ni el 502 que el contrato de abajo declara, ni el
+  // `console.warn` que lo hace diagnosticable. Medido con tres sondas del AR, no deducido.
+  //
+  // `upstream: 0` = "no hubo status upstream". Es el MISMO valor que ya usa `decision/route.ts` para
+  // su rama sin fila, así que no entra ningún código nuevo al conjunto observable.
+  let r: AgentKycCall<KycAgentSessionOutput>;
+  try {
+    r = await createAgentKycSession({ identityRef: provedAddress });
+  } catch {
+    // ⛔ Value-free: el `err` NO se toca. Su `message` puede traer la clave que faltó y, por el
+    // camino del transporte, la URL del agente. El cliente ya emitió su propio log de rama.
+    r = { ok: false, upstream: 0 };
+  }
 
   if (!r.ok) {
-    // 🔴 ESTE 502 COLAPSA TODO FALLO DEL AGENTE, y por eso lleva log: una caída del agente, sus
-    // credenciales del proveedor ausentes (nace INERTE ⇒ 502), un 401 de su guard de invoke, y el
-    // camino sin atar. Desde afuera los cuatro se ven idénticos ("suben los 502").
+    // 🔴 ESTE 502 COLAPSA TODO FALLO DEL AGENTE, y por eso lleva log. Son CINCO causas, no cuatro, y
+    // la quinta es la que este 502 no veía hasta el fix-pack del AR:
+    //   · una caída del agente / DNS / timeout ⇒ el `fetch` RECHAZA ⇒ entra por el `catch` de arriba
+    //     con `upstream: 0`. ⚠️ Antes ESTA RAMA NO SE ALCANZABA: la route rechazaba y Next devolvía
+    //     un 500 genérico, y este `console.warn` no se emitía nunca. La frase que decía "una caída
+    //     del agente" era FALSA para el caso más común de todos.
+    //   · sus credenciales del proveedor ausentes (nace INERTE ⇒ 502) ⇒ `!res.ok` ⇒ `upstream: 502`.
+    //   · un 401 de su guard de invoke ⇒ `!res.ok` ⇒ `upstream: 401`.
+    //   · el camino sin atar rechazado por el agente ⇒ `!res.ok` ⇒ `upstream: 400`.
+    //   · 🔴 NUEVO DE ESTA HU: un agente que contesta **200 sin `decisionToken`** (o con cualquier
+    //     clave del contrato faltante o del tipo equivocado). El cliente estrecha y tira
+    //     `kyc_agent_bad_response:session:decisionToken` ⇒ `catch` ⇒ `upstream: 0`. Es exactamente el
+    //     caso que la cabecera del cliente dice manejar, y sin este `catch` salía por 500.
+    // Desde afuera las cinco se ven idénticas ("suben los 502").
     //
     // VALUE-FREE, y las dos palabras cuentan (P-14/CD-15): `atada` es un BOOLEANO DERIVADO de si hubo
     // dirección probada — NUNCA la dirección. No viaja el `identityRef`, ni el body, ni el challenge,
@@ -259,13 +309,11 @@ export async function POST(req: Request): Promise<Response> {
   //
   // El código de error es `kyc_session_unavailable`/503, que esta route YA DEVUELVE HOY (la rama de
   // `PAYOUT_POP_SECRET` ausente): el conjunto observable de errores no cambia.
-  const tokenStore = getKycSessionTokenStore();
-  if (!tokenStore) {
-    console.warn("[kyc-session] kyc_session_token_store_unavailable", {
-      atada: provedAddress !== undefined,
-    });
-    return NextResponse.json({ error: "kyc_session_unavailable" }, { status: 503 });
-  }
+  //
+  // ⚠️ ACÁ ESTABA `getKycSessionTokenStore()` con su guard de `null`, y SUBIÓ al bloque de guards del
+  // principio (AR/BLQ-BAJO-2): preguntarlo recién acá gastaba una verificación del proveedor antes de
+  // un chequeo gratis. Lo que queda —la ESCRITURA— no puede subir: necesita el `sessionId`, que sólo
+  // existe después del agente.
   try {
     await tokenStore.put({
       sessionId: r.output.sessionId,

@@ -61,7 +61,7 @@ export class HttpKycVerdictGateway implements KycVerdictGateway {
   // `not_asked/pop_declined` **EN SILENCIO**, y a partir de ahí:
   //   · `ConnectWallet` devuelve `kycProof: undefined`;
   //   · `/api/kyc/session` crea la sesión de Didit **SIN ATAR** (el `vendor_data` no viaja);
-  //   · `app/api/kyc/decision/route.ts:100` hace `if (!mapped.vendorData) return;` ⇒ NO ESCRIBE FILA;
+  //   · `persistKycVerdict` corta y NO ESCRIBE FILA — su gate es `d.payoutAllowed !== true`;
   //   · y `prepare` contesta 403 `prepare_kyc_verdict_missing`, sin ningún respaldo: esa route
   //     declara que no hay `?? body.kycVerificationId` ni env que lo habilite.
   // ⚠️ Y LO PELIGROSO ES QUE NO SE VE: una billetera que YA tiene fila del veredicto cierra igual, así

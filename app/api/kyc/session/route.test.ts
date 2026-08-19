@@ -581,12 +581,85 @@ describe("POST /api/kyc/session — T-SES-1/T-TOK-3/T-TOK-4/T-TOK-6", () => {
     expect(body.url).toBeUndefined();
   });
 
-  it("T-TOK-6b: sin store (envs de Supabase ausentes) ⇒ el MISMO 503, sin código nuevo", async () => {
-    fetchOkAgent();
+  it("T-TOK-6b: sin store (envs de Supabase ausentes) ⇒ el MISMO 503, y el agente recibe CERO llamadas", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchMock = fetchOkAgent();
     storeMock.mockReturnValue(null);
     const res = await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: "kyc_session_unavailable" });
+    // 🔴 AR/BLQ-BAJO-2 — ESTA ES LA LÍNEA NUEVA, Y NO MIRA EL STATUS: cuenta LLAMADAS. El 503 ya salía
+    // antes del fix; lo que NO salía es sin gastar una verificación del proveedor. La resolución del
+    // store vivía DESPUÉS de `createAgentKycSession`, así que cada request con las envs de Supabase
+    // ausentes creaba una sesión REAL en el agente —cuota quemada— y recién después contestaba 503.
+    // Con el limiter en 5/10min, cada IP quemaba 5 cupos por ventana, indefinidamente.
+    // 🧬 MUTANTE: bajar `const tokenStore = getKycSessionTokenStore()` a donde estaba (después del
+    // agente) ⇒ el doble recibe 1 llamada ⇒ ROJO, con el status todavía en 503.
+    expect(
+      fetchMock,
+      "se creó una sesión REAL en el agente —cuota del proveedor gastada— para después contestar 503 " +
+        "por una misconfig NUESTRA que se podía chequear gratis antes de salir a la red",
+    ).toHaveBeenCalledTimes(0);
+    // ⛔ Y el `put` tampoco: sin store no hay a quién escribirle.
+    expect(putMock).toHaveBeenCalledTimes(0);
+  });
+
+  // ── AR/BLQ-BAJO-1 — el cliente RECHAZA, y el 502 lo tiene que producir ESTA route ──────────────
+  //
+  // 🔴 QUÉ AGUJERO CIERRA. T-SE-7/T-SE-7b cubren el camino `{ ok:false, upstream }`, o sea el agente
+  // que CONTESTA mal. `createAgentKycSession` tiene otro camino entero: RECHAZA (transporte caído,
+  // JSON roto, raíz no-objeto, y cada clave del contrato faltante o con el tipo equivocado). Ese
+  // camino no pasaba por ningún `catch` de esta route ⇒ el rechazo escapaba, Next devolvía un **500
+  // genérico**, y el `console.warn("[kyc-session] kyc_session_failed", …)` —que existe justamente
+  // para que el incidente tenga causa nombrable— NO SE EMITÍA NUNCA.
+  it("T-SE-8: agente INALCANZABLE ⇒ 502 `kyc_session_failed` con `upstream: 0`, y CON su log", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError("fetch failed");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    // 🧬 MUTANTE: quitarle el `try/catch` a `createAgentKycSession` ⇒ esta promesa RECHAZA ⇒ ROJO.
+    const res = await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+    expect(fetchMock, "el caso no llegó a ejercitar el borde").toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "kyc_session_failed", upstream: 0 });
+    // 🔴 Y el log, que es la mitad que importa: sin él "suben los 502" no tiene causa nombrable, y
+    // una caída del agente se ve igual que un 400 suyo. `atada` sigue siendo un booleano DERIVADO.
+    expect(
+      warn,
+      "la caída del agente —el modo de falla más común de un servicio en otro deployment— salía por " +
+        "un 500 genérico y sin una sola línea de log",
+    ).toHaveBeenCalledWith("[kyc-session] kyc_session_failed", { atada: true, upstream: 0 });
+    // ⛔ Value-free: ni la dirección ni el challenge ni la firma aparecen en el log.
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(ADDR_A);
+    // ⛔ Y NO se escribió ningún token de una sesión que nunca se creó.
+    expect(putMock).toHaveBeenCalledTimes(0);
+  });
+
+  it("T-SE-8b: agente que contesta 200 SIN `decisionToken` ⇒ el MISMO 502, sin eco de la clave", async () => {
+    // 🔴 EL CASO NUEVO DE ESTA HU, y es exactamente el que la cabecera del cliente dice manejar: el
+    // borde no se castea, se ESTRECHA, así que una clave faltante tira
+    // `kyc_agent_bad_response:session:decisionToken` en vez de viajar como `undefined` hasta el store.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { decisionToken: _sinToken, ...sinCredencial } = AGENT_OK;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => sinCredencial })),
+    );
+    const res = await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "kyc_session_failed", upstream: 0 });
+    // ⛔ El nombre de la clave que faltó NO sale al cliente ni al log de esta route: viene del
+    // `message` del error, que es lo único que este `catch` tiene prohibido tocar.
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("kyc_agent_bad_response");
+    expect(putMock, "se persistió un token que el agente nunca mandó").toHaveBeenCalledTimes(0);
+  });
+
+  it("✅ calibración: con la respuesta COMPLETA, la misma ruta devuelve 200 (el 502 no es constante)", async () => {
+    fetchOkAgent();
+    const res = await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+    expect(res.status).toBe(200);
+    expect((await res.json()) as Record<string, unknown>).toMatchObject({ sessionId: "s1" });
   });
 
   it("✅ calibración: con `put` OK ⇒ 200, y el token se persistió con el dueño PROBADO", async () => {

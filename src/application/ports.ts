@@ -36,7 +36,7 @@ export interface KycRequest {
   // ese 403 dejaba a quien rechazaba la firma SIN PODER INICIAR EL KYC, contra CD-15/AC-13
   // (AR/BLQ-ALTO-2). Lo que la prueba decide no es SI se crea la sesión, sino si la sesión queda
   // ATADA a una dirección: sin prueba se crea sin atar, y una sesión sin atar no produce fila del
-  // veredicto (`decision/route.ts` corta con `if (!mapped.vendorData)`). NO es fail-open: omitirlas
+  // veredicto (`persistKycVerdict` corta con `d.payoutAllowed !== true`). NO es fail-open: omitirlas
   // no le da al atacante ninguna capacidad —lo que el atacante querría es atar la sesión a la
   // dirección de otro, y eso exige la firma de esa billetera—, y el demo (sin DIDIT_API_KEY) sale con
   // 501 antes de todo esto y sigue byte-idéntico.

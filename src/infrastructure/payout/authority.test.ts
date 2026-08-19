@@ -15,6 +15,24 @@ vi.mock("../persistence/supabase-kyc-session-tokens", () => ({
   getKycSessionTokenStore: getTokenStoreMock,
 }));
 
+// 🔴 AR/MNR-3 — POR QUÉ SE DOBLA `canonicalizeAddress`, Y NO ES COMODIDAD. La asimetría que este
+// fix-pack cierra (canonicalizar para el store y mandarle al agente el valor CRUDO) **no se puede
+// observar con la función real**: medido con esta versión de `@solana/web3.js`,
+// `new PublicKey(x).toBase58() === x` para TODO `x` que el constructor no rechaza —las formas cortas
+// tipo `"1"` ya no se aceptan (tiran `Invalid public key input`)—, así que canonicalizar es la
+// identidad y los dos códigos dan el mismo byte. Sin este doble, T-AUTH-7 sería verde con y sin el
+// fix, o sea un candado vacuo.
+// ⚠️ El doble DELEGA EN LA FUNCIÓN REAL por default (se re-arma en cada `beforeEach`): los ~20 casos
+// del resto del archivo —incluido el de la address malformada, que necesita que TIRE— siguen
+// corriendo contra el comportamiento real. Sólo T-AUTH-7 le cambia la implementación.
+const { canonSpy } = vi.hoisted(() => ({ canonSpy: vi.fn<(a: string) => string>() }));
+vi.mock("../address", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../address")>();
+  return { ...actual, canonicalizeAddress: (a: string) => canonSpy(a) };
+});
+const REAL_CANON = (await vi.importActual<typeof import("../address")>("../address"))
+  .canonicalizeAddress;
+
 import { resolvePayoutAuthority } from "./authority";
 
 const VID = "sess-abc";
@@ -66,6 +84,8 @@ beforeEach(() => {
   vi.stubEnv("VERCEL_ENV", undefined);
   getTokenStoreMock.mockReset();
   storeConLaFilaDe(VID, ADDR);
+  canonSpy.mockReset();
+  canonSpy.mockImplementation(REAL_CANON); // default: la función REAL, para todo el resto del archivo
 });
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -351,5 +371,54 @@ describe("T-AUTH-6: si el token fue invalidado, el agente contesta 401 y NO se r
     const d = await resolvePayoutAuthority({ verificationId: VID, address: ADDR });
     expect(d.reason).toBe("kyc_reauth_failed");
     expect(d.httpStatus).toBe(502);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// T-AUTH-7 · AR/MNR-3 — las DOS mitades de la decisión usan EL MISMO valor de la dirección
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ ASIMETRÍA CIERRA. La decisión del desembolso se parte en dos preguntas sobre la MISMA
+// dirección: (1) ¿de quién es la credencial? — al store, con la dirección CANONICALIZADA; (2) ¿la
+// identidad coincide? — al agente, que acá recibía la dirección **CRUDA**. Dos valores para una sola
+// decisión, en la línea que autoriza plata.
+//
+// ⚠️ HOY NO ES EXPLOTABLE, Y ESO ESTÁ MEDIDO, NO SUPUESTO: con esta versión de `@solana/web3.js` la
+// canonicalización es la identidad sobre todo input aceptado, así que los dos valores coinciden
+// siempre y —si algún día dejaran de coincidir— el agente contestaría `identityMatches:false` y el
+// gate fallaría CERRADO. Se cierra igual porque es gratis y porque el próximo que lea esas dos
+// líneas no tiene por qué re-derivar todo esto.
+//
+// ⛔ POR ESO ESTE `it` NO PUEDE MEDIRSE CON LA FUNCIÓN REAL, y por eso el doble: ver la nota del
+// `vi.mock("../address")` arriba. Un test que usara la real sería verde con y sin el fix.
+describe("T-AUTH-7: al agente le llega la dirección CANONICALIZADA, la misma que buscó al dueño", () => {
+  const CANON = "CanonICALiZADAxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"; // el valor que devuelve el doble
+  const CRUDA = "cruda-tal-como-vino-de-prepare";
+
+  it("el `identityClaim` del query es el valor CANONICALIZADO, nunca el crudo", async () => {
+    canonSpy.mockImplementation(() => CANON);
+    storeConLaFilaDe(VID, CANON); // la fila es del dueño CANONICALIZADO
+    const urls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (u: string) => {
+        urls.push(u);
+        return { ok: true, status: 200, json: async () => AGENTE_SI };
+      }),
+    );
+
+    const d = await resolvePayoutAuthority({ verificationId: VID, address: CRUDA });
+
+    // ✅ Control positivo: el caso llegó de verdad hasta el agente. Sin esto, un corte temprano
+    // (sin fila, sin store) dejaría el assert de abajo verde por vacío.
+    expect(urls, "el caso no llegó a consultar al agente: el assert de abajo sería vacuo").toHaveLength(1);
+    expect(d.authorized).toBe(true);
+
+    const primera = urls[0];
+    if (primera === undefined) throw new Error("no hubo llamada al agente");
+    const claim = new URL(primera).searchParams.get("identityClaim");
+    // 🧬 MUTANTE: volver a `identityClaim: address` (la dirección cruda) ⇒ ROJO por las dos.
+    expect(claim, "al agente le llegó una dirección distinta de la que identificó al dueño").toBe(CANON);
+    expect(claim).not.toBe(CRUDA);
   });
 });

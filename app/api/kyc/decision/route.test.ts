@@ -195,6 +195,65 @@ describe("GET /api/kyc/decision — T-DEC-3: la credencial del borde sale del st
 });
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
+// T-DEC-4 · AR/BLQ-BAJO-1 — el cliente RECHAZA, y el 502 lo tiene que producir ESTA route
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ AGUJERO CIERRA. Los casos de arriba cubren el camino `{ ok:false, upstream }`, o sea el
+// agente que CONTESTA mal. `readAgentKycDecision` tiene otro camino entero: RECHAZA (transporte
+// caído, JSON roto, raíz no-objeto, `reasons` que no es array de strings, y cada clave del contrato
+// faltante o con el tipo equivocado). Ese camino no pasaba por ningún `catch` de esta route ⇒ el
+// rechazo escapaba y Next devolvía un **500 genérico**, no el 502 que el docblock declara.
+//
+// ⚠️ Y NO ES UN CASO DE LABORATORIO: la primera rama es "el agente no está disponible", que es el
+// modo de falla más común de un servicio que vive en otro deployment.
+describe("GET /api/kyc/decision — T-DEC-4: un RECHAZO del cliente sale por 502, nunca por 500", () => {
+  /** El `fetch` no contesta: RECHAZA. Es el agente inalcanzable / DNS / timeout. */
+  function agenteInalcanzable() {
+    const m = vi.fn(async () => {
+      throw new TypeError("fetch failed");
+    });
+    vi.stubGlobal("fetch", m);
+    return m;
+  }
+
+  it("T-DEC-4a: agente INALCANZABLE ⇒ 502 `kyc_decision_failed` con `upstream: 0` (no un 500 crudo)", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchMock = agenteInalcanzable();
+    // 🧬 MUTANTE: quitarle el `try/catch` a la llamada del agente ⇒ esta promesa RECHAZA ⇒ ROJO.
+    const res = await GET(req({ "x-kyc-token": issueSessionToken(SESSION) }));
+    expect(fetchMock, "el caso no llegó a ejercitar el borde").toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(502);
+    // ⛔ `upstream: 0` = "no hubo status upstream", el MISMO valor de la rama sin fila ⇒ desde afuera
+    // un fallo de transporte y una sesión inexistente siguen siendo indistinguibles (P-6).
+    expect(await res.json()).toEqual({ error: "kyc_decision_failed", upstream: 0 });
+  });
+
+  it("T-DEC-4b: agente que contesta 200 SIN `payoutAllowed` ⇒ el MISMO 502, sin eco de la clave", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { payoutAllowed: _quitada, ...sinGate } = AGENT_APPROVED;
+    agenteResponde(sinGate);
+    const res = await GET(req({ "x-kyc-token": issueSessionToken(SESSION) }));
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "kyc_decision_failed", upstream: 0 });
+  });
+
+  it("T-DEC-4c: `reasons` que no es un array de strings ⇒ el MISMO 502", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    agenteResponde({ ...AGENT_APPROVED, reasons: "no-soy-un-array" });
+    const res = await GET(req({ "x-kyc-token": issueSessionToken(SESSION) }));
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "kyc_decision_failed", upstream: 0 });
+  });
+
+  it("✅ calibración: con la respuesta COMPLETA, la misma ruta devuelve 200 (el 502 no es constante)", async () => {
+    agenteResponde(AGENT_APPROVED);
+    const res = await GET(req({ "x-kyc-token": issueSessionToken(SESSION) }));
+    expect(res.status).toBe(200);
+    expect((await res.json()) as Record<string, unknown>).toMatchObject({ payoutAllowed: true });
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
 // T-TOK-5 · la excepción a CD-19 NO es un colador: el HMAC corre ANTES de tocar el store
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 describe("GET /api/kyc/decision — T-TOK-5", () => {

@@ -32,8 +32,8 @@
 import { cn } from "./cn";
 
 /**
- * Los dos tonos, y cada uno con el fondo REAL contra el que se midió al lado del número (que es lo que
- * este repo ya se equivocó una vez por no hacer: `bienvenida.tsx:293-299`).
+ * Los dos tonos, y cada uno con el fondo REAL contra el que se midió al lado del número. No hacerlo ya
+ * le costó a este repo una cifra contra el fondo equivocado: la corrección, en (`Card`, `./bienvenida.tsx:295`).
  *
  * `sobre-oscuro` — `#FBFAF7` (`paper`) al 5%. Es EXACTAMENTE lo que el splash pinta hoy sobre `bg-ink`,
  * copiado sin cambiarle un dígito para que el render del splash quede idéntico.

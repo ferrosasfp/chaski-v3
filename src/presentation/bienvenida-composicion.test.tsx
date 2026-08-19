@@ -704,11 +704,33 @@ describe("J-AC4 (HU-068/AC-4): los `className` de `bienvenida.tsx` hablan por RO
     return malas;
   }
 
-  it("el barrido encuentra clases (si diera 0, los dos `it` de abajo pasarían por vacío)", async () => {
+  it("el barrido ve TODOS los `className` del archivo (si viera menos, los dos `it` de abajo pasarían por ciegos)", async () => {
+    // 🔴 ACÁ HABÍA UN PISO ESCRITO A MANO —`toBeGreaterThan(10)` contra 18 medido— Y ERA ESQUIVABLE
+    // (fix-pack, AR/MNR-2). Medido: pasando 7 de las 18 cadenas a la forma que el barrido no lee, el
+    // conteo quedaba en 11 > 10, el piso seguía verde, y con él un `text-sm` y un `text-[20px]` REALES
+    // quedaban invisibles ⇒ **AC-4 se violaba con la suite COMPLETA en verde** (`0 failed | 2793
+    // passed (2793)`). Y el comentario decía que el piso "es el conteo MEDIDO (18)" mientras el código
+    // escribía 10: la prosa no describía al código, que es el defecto #1 recurrente de este repo.
+    //
+    // ⇒ EL PISO NO SE SUBIÓ A 18: SE DERIVA. Un 18 a mano hay que re-medirlo en cada `className` nuevo
+    // y es exactamente así como el 10 de arriba se volvió falso. El derivado sale de un escaneo A
+    // PROPÓSITO MÁS TONTO que el del barrido: cuenta SITIOS de atributo sin mirar la FORMA del valor.
+    // Los dos escanean el mismo texto y de la misma manera —comentarios incluidos—, así que difieren
+    // sólo en la forma y la igualdad afirma exactamente una cosa: **no queda ningún `className` del
+    // archivo que el barrido no sepa leer**.
+    // ⚠️ Y ES LO QUE VUELVE EJECUTABLE A CD-12 (prohibido el template literal en las clases de esta
+    // pantalla): antes lo declaraba este archivo y no lo verificaba nada, en ninguna parte.
+    // ⚠️ EL AVISO CORRECTO, dicho para que no sorprenda: un ejemplo de la forma prohibida escrito en un
+    // comentario de `bienvenida.tsx` pondría esto ROJO. Es lo que se pretende —el archivo objetivo se
+    // barre como texto, no como AST— y el ejemplo se escribe sin el signo igual.
     const { readFileSync } = await import("node:fs");
     const src = readFileSync(`${process.cwd()}/src/presentation/bienvenida.tsx`, "utf8");
-    // El piso es el conteo MEDIDO al escribir esto (18 cadenas, 2026-08-19), no un objetivo.
-    expect(clasesDe(src).length).toBeGreaterThan(10);
+    const sitios = [...src.matchAll(/className=/g)].length;
+    expect(sitios, "ANTIVACUIDAD: con 0 atributos en el archivo, todo lo de abajo pasa por vacío").toBeGreaterThan(0);
+    expect(
+      clasesDe(src).length,
+      "hay atributos que el barrido NO ve (¿alguno pasó a template literal?): AC-4 quedaría ciego ahí",
+    ).toBe(sitios);
   });
 
   it("🔴 CALIBRADOR: contra una entrada sintética, el barrido reporta LAS DOS familias", () => {
@@ -791,6 +813,10 @@ describe("J-DT4 (HU-068/§0.3): el splash y la app conviven en UN documento, y n
 
 // ── HU-068 · LOS MUTANTES DE ESTA HU: APLICADOS Y CORRIDOS SOBRE 21 TESTS ──────────────────────────
 //
+// ⚠️ ESTA TABLA ES DE LA CORRIDA DE **21** TESTS, o sea el árbol de ANTES del fix-pack post-AR. No se
+// re-corrió: sobrescribir sus totales sin volver a correrlos sería publicar como medido algo que no medí.
+// Los números del árbol de hoy (**22** tests) están en la tabla del final del archivo.
+//
 // Cada uno se editó en el árbol, se verificó que la sustitución OCURRIÓ leyendo el texto resultante (un
 // ancla que aparece dos veces no se sustituye y el `sed` sale 0 igual: dos de estos diez fallaron esa
 // verificación en el primer intento y NO se corrieron hasta arreglarla), se corrió este archivo y se
@@ -821,3 +847,142 @@ describe("J-DT4 (HU-068/§0.3): el splash y la app conviven en UN documento, y n
 //        y se sigue reportando. O sea que la cobertura es REDUNDANTE, no ciega. El mutante que sí lo
 //        mata es el de arriba (romper el regex), y por eso el calibrador se escribió contra el barrido
 //        ENTERO y no contra una rama.
+
+// ── FIX-PACK AR/MNR-1 · EL EJE QUE ESTA HU INAUGURÓ, Y QUE ERA EL ÚNICO SIN CANDADO ────────────────
+//
+// 🔴 POR QUÉ EXISTE ESTE `it`, con el número que lo pide. `Grecas` tiene DOS tonos y el sitio de llamada
+// elige uno: (`Grecas`, `./bienvenida.tsx:212`). Cambiar ese literal a `sobre-oscuro` SOBREVIVÍA a la
+// suite COMPLETA —medido en el fix-pack: `0 failed | 2793 passed (2793)`, y ningún test del repo
+// mencionaba `tono`, `sobre-claro`, `sobre-oscuro` ni `TonoDeGrecas`—. Lo que pinta el tono equivocado es
+// `#FBFAF7` al 5% sobre `paper` `#FBFAF7`: contraste **1,0000:1**, el color EXACTO del fondo. O sea la
+// misma banda invisible que el bug del `id` que caza `J-DT4`, sólo que PERMANENTE en vez de durar los
+// 1200 ms del splash. Y el piso que lo prohíbe —1,15:1, en el docblock de (`TONOS`, `./grecas.tsx:55`)—
+// era prosa sin test: esta HU **creó** el eje configurable (antes el tono era un literal adentro del
+// splash y no se podía equivocar) y gastó su candado en el eje hermano.
+//
+// ⚠️ NO COMPARA CONTRA EL LITERAL DEL TONO, y no es elegancia. Un `expect(stroke).toBe("#17130F")` afirma
+// "es el color que escribí", que es un guard comparándose consigo mismo. Este `it` mide la PROPIEDAD que
+// el módulo declara normativa —el contraste del color COMPUESTO contra la superficie que la banda tiene
+// debajo— así que también se pone rojo si cambia la opacidad, si cambia el hex de `paper`, o si el
+// `<body>` deja de pintar `paper`. Los tres cambian la conclusión y ninguno toca el literal del tono.
+//
+// ⚠️ LÍMITE, CON ESTAS PALABRAS (AR/MNR-7): esto NO mide que el motivo se VEA. El piso 1,15 y el techo
+// 1,60 son un criterio convertido en número —el propio docblock de `TONOS` lo dice de sí mismo— y el
+// tono elegido da **1,2301:1** componiendo en float, que es lo que hace este `it` (**1,2296:1** si el
+// compuesto se redondea a hex, o sea #E4E3E0, que es lo que el navegador termina pintando; las dos
+// cifras redondean al 1,230 publicado). En los dos casos el margen sobre el piso es **0,08**, y el piso
+// lo declaró este mismo repo, no una norma externa. NADIE lo vio en
+// un teléfono real: el instrumento de toda esta HU es Chrome headless con el viewport puesto a mano.
+// Este `it` verifica que la banda esté DENTRO de la ventana declarada, no que la ventana sea la
+// correcta. ⛔ El tono no se cambia sin medir: mirar la pantalla una vez en un teléfono real es la
+// única verificación que puede refutar el 1,15, y sigue sin hacerse.
+describe("J-MNR1 (fix-pack AR/MNR-1): el tono de la banda cae DENTRO de la ventana de contraste declarada", () => {
+  const PISO = 1.15;
+  const TECHO = 1.6;
+
+  function canales(hex: string): readonly number[] {
+    return [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16));
+  }
+
+  /** Luminancia relativa WCAG 2.x. Canales 0-255 en FLOAT: la composición no se redondea a hex. */
+  function luminancia(rgb: readonly number[]): number {
+    const [r, g, b] = rgb.map((c) => {
+      const s = c / 255;
+      return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * (r as number) + 0.7152 * (g as number) + 0.0722 * (b as number);
+  }
+
+  function contraste(a: readonly number[], b: readonly number[]): number {
+    const la = luminancia(a);
+    const lb = luminancia(b);
+    return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+  }
+
+  /** `tinta` a opacidad `alfa` sobre `fondo`: lo que el navegador compone al aplicar `opacity-[…]`. */
+  function compuesto(tinta: string, fondo: string, alfa: number): readonly number[] {
+    const t = canales(tinta);
+    const f = canales(fondo);
+    return [0, 1, 2].map((i) => (t[i] as number) * alfa + (f[i] as number) * (1 - alfa));
+  }
+
+  it("🔴 el par (stroke, opacidad) que la banda RENDERIZA da entre 1,15:1 y 1,60:1 contra el fondo real", async () => {
+    const { readFileSync } = await import("node:fs");
+    // (1) EL FONDO NO SE ESCRIBE ACÁ: sale del tema. Y que ese sea el fondo de la banda tampoco se
+    //     supone: la banda no tiene superficie propia (eso lo fija `J-AC8`), así que abajo tiene la del
+    //     `<body>`, y eso se lee del archivo.
+    const tema = readFileSync(`${process.cwd()}/tailwind.config.ts`, "utf8");
+    const paper = /^\s*paper:\s*"(#[0-9A-Fa-f]{6})"/m.exec(tema)?.[1] ?? "";
+    const ink = /^\s*ink:\s*"(#[0-9A-Fa-f]{6})"/m.exec(tema)?.[1] ?? "";
+    expect(paper, "ANTIVACUIDAD: sin `paper` leído del tema no hay contra qué medir").toMatch(/^#[0-9A-Fa-f]{6}$/);
+    expect(ink, "ANTIVACUIDAD: el calibrador de abajo necesita la tinta del tema").toMatch(/^#[0-9A-Fa-f]{6}$/);
+    const layout = readFileSync(`${process.cwd()}/app/layout.tsx`, "utf8");
+    expect(
+      /<body className="[^"]*\bbg-paper\b/.test(layout),
+      "PRECONDICIÓN: si el `<body>` deja de pintar `paper`, este número mide contra otro fondo",
+    ).toBe(true);
+    // (2) CALIBRADOR EN LAS DOS DIRECCIONES, con los hex del propio tema. Sin esto una fórmula rota
+    //     aplaude: una que devolviera 1,5 fijo entra en la ventana y este `it` daría verde igual.
+    expect(
+      contraste(compuesto(ink, paper, 0), canales(paper)),
+      "CALIBRADOR: a opacidad 0 el compuesto ES el fondo y tiene que caer bajo el piso",
+    ).toBeLessThan(PISO);
+    expect(
+      contraste(compuesto(ink, paper, 1), canales(paper)),
+      "CALIBRADOR: a opacidad 1 es tinta plena y tiene que pasarse del techo",
+    ).toBeGreaterThan(TECHO);
+    // (3) EL PAR SALE DEL DOM RENDERIZADO, no de la tabla `TONOS`.
+    pintarBienvenida();
+    const banda = document.querySelector(SELECTOR_BANDA) as HTMLElement | null;
+    expect(banda, `no hay ningún ${SELECTOR_BANDA} en la pantalla de entrada`).not.toBeNull();
+    const svg = (banda as HTMLElement).querySelector("svg");
+    const stroke = (banda as HTMLElement).querySelector("pattern path")?.getAttribute("stroke") ?? "";
+    const alfa = Number.parseFloat(/opacity-\[([\d.]+)\]/.exec(svg?.getAttribute("class") ?? "")?.[1] ?? "");
+    expect(stroke, "el motivo tiene que traer su stroke en hex de 6 dígitos").toMatch(/^#[0-9A-Fa-f]{6}$/);
+    expect(alfa > 0 && alfa <= 1, "y su opacidad tiene que poder leerse de la clase del svg").toBe(true);
+    // (4) LA MEDICIÓN. Con `tono="sobre-oscuro"` esto da 1,0000 y el piso lo pone rojo.
+    const medido = contraste(compuesto(stroke, paper, alfa), canales(paper));
+    expect(
+      medido,
+      `el motivo da ${medido.toFixed(4)}:1 sobre ${paper} y el piso declarado es ${PISO}:1`,
+    ).toBeGreaterThanOrEqual(PISO);
+    expect(
+      medido,
+      `el motivo da ${medido.toFixed(4)}:1 y el techo es ${TECHO}:1 (arriba compite con el texto tenue)`,
+    ).toBeLessThanOrEqual(TECHO);
+  });
+});
+
+// ── FIX-PACK POST-AR · LOS 8 MUTANTES, SOBRE 22 TESTS ──────────────────────────────────────────────
+//
+// Mismo protocolo que la tabla de arriba: cada mutante se aplicó al árbol, se verificó **leyendo el texto
+// resultante** que la sustitución ocurrió (nunca por el exit del comando), se corrió, y se restauró desde
+// una copia previa comparando `md5sum`. ⛔ Nunca con `git checkout --`: no restaura el pre-mutante de un
+// archivo que uno mismo editó, y en W2 de esta HU casi se llevó el trabajo.
+// Control sin mutante, en la misma tanda: **22 passed (22)**, y la suite completa **2794 passed (2794)**
+// en 3 corridas seguidas.
+//
+//   MUTANTE APLICADO                                                          RESULTADO MEDIDO
+//   ── los dos que el AR pidió cerrar, medidos en la SUITE COMPLETA ────────────────────────────────────
+//   MNR-1. `tono="sobre-claro"` ⇒ `"sobre-oscuro"`        ANTES: 0 failed | 2793 passed  (SOBREVIVÍA)
+//                                                         AHORA: 1 failed | 2793 passed (2794)
+//   MNR-2. 7 de las 18 clases a template literal, con un  ANTES: 0 failed | 2793 passed  (SOBREVIVÍA,
+//          `text-sm` y un `text-[20px]` VIVOS adentro            y AC-4 quedaba ciego)
+//                                                         AHORA: 1 failed | 2793 passed (2794)
+//                                                         («expected 11 to be 18»)
+//   ── cuatro más contra el `it` nuevo, para que no se lea como "compara dos literales" ────────────────
+//   `opacity-[0.10]` ⇒ `opacity-[0.05]` (stroke intacto)              1 failed | 21 passed (22)
+//   `opacity-[0.10]` ⇒ `opacity-[0.30]`                               1 failed | 21 passed (22)
+//   el `<body>` de `app/layout.tsx` pinta `bg-card`                   1 failed | 21 passed (22)
+//   la fórmula de contraste devuelve 1,5 FIJO (ataque al calibrador)  1 failed | 21 passed (22)
+//   ── y dos sobre la cita nueva de `grecas.tsx`, que es lo que mide por qué se ancló ──────────────────
+//   la cita anclada con el número corrido a `:296`        1 failed | 8 passed (9) en `citas-ancladas`
+//   la MISMA cita de vuelta a la forma SUELTA             0 failed | 9 passed (9) ⇒ nadie la miraría
+//
+// 🔴 LO QUE SIGUE SIN CANDADO, DICHO ACÁ PARA NO REPETIR EL DEFECTO QUE ESTE FIX-PACK VINO A ARREGLAR:
+//   · El COPY de los tres renglones. Vaciarlos a una letra, sincronizando `PASOS_ESPERADOS`, deja la suite
+//     COMPLETA en `0 failed | 2793 passed`. Está decidido así (DT-5): el candado camina el FLUJO. Lo que
+//     se corrigió es la PROSA de AC-5, que prometía un candado que no existe — no la cobertura.
+//   · CD-12 en `grecas.tsx`. El barrido de `J-AC4` lee **sólo `bienvenida.tsx`**, así que la forma del
+//     `className` de `grecas.tsx` la sostiene la revisión.
+//   · El parseo del `stroke` del `it` nuevo: no se mutó un `<path>` sin `stroke` legible.

@@ -17,7 +17,7 @@
 import { NextResponse } from "next/server";
 // Mismo gate que las otras dos superficies del mock, desde el MISMO lugar. Había TRES copias privadas
 // de esta función y una de las tres superficies —`app/kyc-simulado/page.tsx`— no tenía ninguna.
-import { mockDiditSurfaceEnabled } from "../../../../../../../src/infrastructure/didit/mock-surface-enabled";
+import { mockDiditSurfaceEnabled } from "../../../../../../../src/infrastructure/mock-surface";
 
 /** Cuánto "tarda" la verificación simulada. Corto, pero suficiente para ver el bucle de espera. */
 const MOCK_VERIFICATION_MS = 6_000;

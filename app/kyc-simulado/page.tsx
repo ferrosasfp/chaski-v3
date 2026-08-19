@@ -19,7 +19,7 @@
 // tenerlo, porque el 404 es lo que hace verificable que está apagado.*
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { mockDiditSurfaceEnabled } from "../../src/infrastructure/didit/mock-surface-enabled";
+import { mockDiditSurfaceEnabled } from "../../src/infrastructure/mock-surface";
 
 export const metadata = { title: "Verificación simulada · Chaski" };
 

@@ -29,7 +29,7 @@ import {
   resolveSolanaFacilitatorPubkey,
   resolveSolanaUsdcMint,
 } from "../infrastructure/chain";
-import { DiditKycGateway } from "../infrastructure/didit/kyc-gateway";
+import { AgentKycGateway } from "../infrastructure/kyc/agent-kyc-gateway";
 import {
   FallbackKycGateway, // WKH-337/R-2: los dos *PayoutGateway* de este módulo y del de a2a quedaron sin
   FallbackQuoteGateway, // consumidor de producción y NO se borran — sus docblocks lo dicen (AC-6).
@@ -121,9 +121,9 @@ export function createContainer(): Container {
   // `usesRealGateways`, junto a la lista, con un switch exhaustivo que `tsc` obliga a mantener.
   const useA2a = usesRealGateways(adapter);
   const quotes = useA2a ? new A2aQuoteGateway() : new FallbackQuoteGateway();
-  // Server-truth: SIEMPRE el gateway Didit, con la simulación como fallback. Si el server tiene
-  // key → Didit real; si no (501) → simulación. No depende del inlineado NEXT_PUBLIC del cliente.
-  const kyc = new DiditKycGateway(new FallbackKycGateway());
+  // Server-truth: SIEMPRE el gateway del AGENTE de KYC, con la simulación como fallback. Si el server
+  // tiene host del agente → camino real; si no (501) → simulación. No depende de ningún NEXT_PUBLIC.
+  const kyc = new AgentKycGateway(new FallbackKycGateway()); // WKH-233/CD-9: EN ESTA MISMA LÍNEA. Este archivo documenta que OCHO de sus líneas las cita otro por número, y la del gateway de KYC está arriba de cuatro de ellas
   const payouts = new LedgerPayoutStatusGateway(wallet, popProofs, clock); // WKH-337/AC-6, ver `:136`
   // 🔴 WKH-333/DT-20 — acá se construía `payoutAuthority = new HttpPayoutAuthorityGateway()` y se
   // inyectaba en `ConfirmAndSend`. Ese pre-check se eliminó: el cliente ya no tiene el

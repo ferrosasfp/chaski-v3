@@ -46,25 +46,32 @@ describe("candado · la superficie de prueba de Didit se apaga entera y desde un
   // Los tres se prueban por separado y no con un `||`: "ausente", "live" y "typo" son entradas
   // distintas y una implementación puede acertar en dos y errar en la tercera. Un `it.each` mantiene
   // separado el motivo de cada rojo.
+  // 🔴 WKH-233/DT-9 — CAMBIAN EL PATH DEL IMPORT Y LA ENV STUBBEADA, Y NADA MÁS. El módulo se mudó a
+  // `src/infrastructure/mock-surface.ts` (el directorio del proveedor se borró entero) y dejó de
+  // colgar del ambiente del proveedor: ahora lee su PROPIA env. Las cuatro aserciones TEXTUALES de
+  // más abajo son el candado y NO se tocan: siguen valiendo exactamente igual.
+  //
+  // ⚠️ Y LA LISTA DE INPUTS SE AMPLÍA, porque la env nueva tiene formas de fallar que la vieja no
+  // tenía: `"TRUE"`, `"1"` y `" true"` con espacio. Los tres apagan. El único encendido es el literal
+  // exacto — ⛔ un `!== "false"` los encendería a los tres y es el mutante que esto mata.
   it.each([
     ["ausente", undefined],
-    ["live", "live"],
-    ["un typo", "moc"],
-  ])("T-GATE-1: con DIDIT_ENV %s la página NO existe", async (_caso, valor) => {
-    vi.stubEnv("DIDIT_ENV", valor as string);
+    ["false", "false"],
+    ["un typo", "tru"],
+    ["TRUE en mayúsculas", "TRUE"],
+    ["1", "1"],
+    ["true con un espacio delante", " true"],
+  ])("T-GATE-1/T-MOCK-2: con MOCK_KYC_SURFACE_ENABLED %s la página NO existe", async (_caso, valor) => {
+    vi.stubEnv("MOCK_KYC_SURFACE_ENABLED", valor as string);
     vi.resetModules();
-    const { mockDiditSurfaceEnabled } = await import(
-      "../../src/infrastructure/didit/mock-surface-enabled"
-    );
+    const { mockDiditSurfaceEnabled } = await import("../../src/infrastructure/mock-surface");
     expect(mockDiditSurfaceEnabled()).toBe(false);
   });
 
-  it("T-GATE-2: con DIDIT_ENV=mock la superficie SÍ está encendida", async () => {
-    vi.stubEnv("DIDIT_ENV", "mock");
+  it("T-GATE-2: con MOCK_KYC_SURFACE_ENABLED=true (el literal exacto) la superficie SÍ está encendida", async () => {
+    vi.stubEnv("MOCK_KYC_SURFACE_ENABLED", "true");
     vi.resetModules();
-    const { mockDiditSurfaceEnabled } = await import(
-      "../../src/infrastructure/didit/mock-surface-enabled"
-    );
+    const { mockDiditSurfaceEnabled } = await import("../../src/infrastructure/mock-surface");
     expect(mockDiditSurfaceEnabled()).toBe(true);
   });
 

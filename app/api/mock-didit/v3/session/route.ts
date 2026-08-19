@@ -19,7 +19,7 @@ import { NextResponse } from "next/server";
 // El gate vive en UN solo lugar y lo comparten esta ruta y `app/kyc-simulado/page.tsx`. Cuando estaba
 // acá adentro como función privada, la página no lo tenía y respondía con cualquier `DIDIT_ENV`: el
 // principio de esta cabecera se cumplía a medias sin que nada lo notara.
-import { mockDiditSurfaceEnabled } from "../../../../../src/infrastructure/didit/mock-surface-enabled";
+import { mockDiditSurfaceEnabled } from "../../../../../src/infrastructure/mock-surface";
 
 export async function POST(req: Request): Promise<Response> {
   if (!mockDiditSurfaceEnabled()) {

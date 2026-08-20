@@ -3742,7 +3742,7 @@ describe("HU 073 · la pantalla del resume no atribuye una causa que no midió",
     montarConResume(async () => {
       throw new Error("didit_caido");
     });
-    // ⛔ CERO ms: ni un `RESUME_POLL_INTERVAL_MS`. 🧬 MUTANTE: devolver el `break` a `flow.tsx:216` ⇒ el
+    // ⛔ CERO ms: ni un `RESUME_POLL_INTERVAL_MS`. 🧬 MUTANTE: devolver el `break` a (`setFinDelResume`, `flow.tsx:216`) ⇒ el
     // corte cae en el cierre del bucle y la card no aparece hasta los 20 s ⇒ rojo acá.
     await avanzar(0);
     expect(screen.getByRole("heading", { name: COPY_RESUME_INTERRUMPIDO_TITULO })).toBeInTheDocument();
@@ -3856,7 +3856,7 @@ describe("HU 073 · la pantalla del resume no atribuye una causa que no midió",
 
   // ── T-073-7 (BLQ-MED-6) ─────────────────────────────────────────────────────────────────────────
   //
-  // 🔴 EL HALLAZGO QUE CIERRA. `flow.tsx:278` hacía `await c.abandonPendingKyc.execute()` SIN `try`.
+  // 🔴 EL HALLAZGO QUE CIERRA. (`abandonPendingKyc`, `flow.tsx:278`) hacía `await c.abandonPendingKyc.execute()` SIN `try`.
   // Si `clear()` tira —y `LocalKycPendingStore.clear` tira `kyc_pending_unavailable` cuando `removeItem`
   // falla—, `setResuming(false)` YA corrió y el `setFinDelResume` de abajo no corre nunca: la persona
   // queda en la pantalla de abajo, sin overlay, sin card y sin ninguna explicación, después de 20 s de
@@ -3876,7 +3876,7 @@ describe("HU 073 · la pantalla del resume no atribuye una causa que no midió",
       },
     });
     await avanzar(20_000);
-    // 🧬 MUTANTE: sacar el `try/catch` de `flow.tsx:278` ⇒ la card NO aparece ⇒ rojo.
+    // 🧬 MUTANTE: sacar el `try/catch` de (`abandonPendingKyc`, `flow.tsx:278`) ⇒ la card NO aparece ⇒ rojo.
     // ✅ CALIBRADOR que debe SOBREVIVIR: cambiar el `message` del `Error`.
     expect(
       screen.getByRole("heading", { name: COPY_RESUME_SIN_RESPUESTA_TITULO }),
@@ -3893,7 +3893,7 @@ describe("HU 073 · la pantalla del resume no atribuye una causa que no midió",
   // de los 5 s la persona ya está en `send`, y si el `execute()` que quedó en vuelo RECHAZA, el bucle
   // pinta la card de D-3 encima diciendo «Algo se interrumpió al abrir esta pantalla» cuando no estaba
   // abriendo ninguna. La rama de (`finDelResume`, `flow.tsx:786`) gana sobre el `step`, así que tapa.
-  // `T-ESC7` (`flow.test.tsx:742`) cruza el escape con un execute que RESUELVE; ninguno lo cruzaba con
+  // `T-ESC7` ((`execute`, `flow.test.tsx:742`)) cruza el escape con un execute que RESUELVE; ninguno lo cruzaba con
   // uno que RECHAZA, que es el único camino que entra al `catch`.
   //
   // Los dos `it` van juntos a propósito: el segundo es la CALIBRACIÓN INVERSA. Sin él, el primero
@@ -3981,7 +3981,7 @@ describe("HU 073 · la pantalla del resume no atribuye una causa que no midió",
 // lado y no del otro pone esto rojo, en las dos direcciones.
 //
 // ⛔ El parámetro no se escribe a mano: sale de `urlDeVueltaDeKyc`, el ÚNICO productor de esa URL
-// (barrido: `flow.tsx:446` es su único llamador).
+// (barrido: (`urlDeVueltaDeKyc`, `flow.tsx:446`) es su único llamador).
 describe("HU 073 · T-073-5 (AC-5): la app no cuenta CÓMO entró la persona", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => {
@@ -4084,7 +4084,7 @@ describe("HU 073 · T-073-4 (AC-4): el aviso del cupo, en la misma pantalla y an
     ).toHaveBeenCalledTimes(1);
 
     // (3) LA CONSECUENCIA, INCONDICIONAL y contra el símbolo importado.
-    // 🧬 MUTANTE: borrar el aviso de `flow.tsx:1054` ⇒ rojo ACÁ.
+    // 🧬 MUTANTE: borrar el aviso de (`AvisoDeVerificacionNueva`, `flow.tsx:1054`) ⇒ rojo ACÁ.
     expect(
       textoAntesDelToque,
       "la pantalla cobró una verificación sin decirlo antes: el aviso no estaba en el árbol al momento " +

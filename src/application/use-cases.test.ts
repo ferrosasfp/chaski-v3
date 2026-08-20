@@ -355,8 +355,8 @@ describe("Use-cases — money-path", () => {
 //
 // 🔴 QUÉ FRASE MATA, Y POR QUÉ NINGÚN TEST ANTERIOR PODÍA MATARLA. La card vieja del resume decía «No
 // pudimos confirmar tu identidad a tiempo» para TODOS los finales, incluido el `catch` de
-// `flow.tsx:215`. Los dos tests que se iban a usar como evidencia (`T-073-2a` y
-// `barra-destinos.test.tsx:627-639`) construyen el throw TEMPRANO, o sea el único sub-caso donde esa
+// (`catch`, `flow.tsx:215`). Los dos tests que se iban a usar como evidencia (`T-073-2a` y
+// (`catch`, `barra-destinos.test.tsx:627-639`)) construyen el throw TEMPRANO, o sea el único sub-caso donde esa
 // frase era casi cierta. **La cobertura y la falsedad estaban en cuadrantes distintos.**
 //
 // Este `it` construye el PEOR estado: se preguntó, contestaron, el veredicto fue terminal y APROBADO, y

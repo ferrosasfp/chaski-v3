@@ -59,16 +59,63 @@ const DECISION_TOKEN_HEADER = "x-kyc-decision-token";
  *
  * ⚠️ QUÉ ROMPE ESTO Y QUÉ NO. Los TRES consumidores envuelven la llamada en un `try/catch` y la
  * convierten en el 502 que ya devuelven cuando el agente contesta 401 (`app/api/kyc/session/route.ts:253`,
- * `app/api/kyc/decision/route.ts:89`, (`readAgentKycDecision`, `../payout/authority.ts:176`) ⇒ `kyc_reauth_failed`). ⇒ el
- * conjunto de errores observables NO cambia; lo que cambia es que el fallo pasa a ser NUESTRO y
- * diagnosticable en vez de un 401 ajeno. Un `.trim()` vacío cuenta como ausente: `Bearer ` pelado es
+ * `app/api/kyc/decision/route.ts:89`, (`readAgentKycDecision`, `../payout/authority.ts:176`) ⇒ `kyc_reauth_failed`).
+ * ⛔ ACÁ DECÍA «⇒ el conjunto de errores observables NO cambia», Y ERA FALSO, MEDIDO (re-AR it2 ·
+ * BLQ-MED-2): el `upstream` viaja en el BODY de `/api/kyc/session`, y sin la env pasaba de
+ * `{error:"kyc_session_failed", upstream:401}` a `upstream:0`. El `401` era el ÚNICO dato que apuntaba
+ * a la credencial, y este fail-closed lo borraba. **El status HTTP no cambia (502 en los tres); el body
+ * y el log sí.**
+ *
+ * 🔴 Y PEOR QUE EL NÚMERO: LA ETIQUETA MENTÍA. Con `invokeAuthHeader()` evaluado DENTRO del `try` del
+ * `fetch`, el throw de la credencial salía por el `catch` del transporte y el único rastro era
+ * `session_transport_failed` — la MISMA etiqueta que un DNS caído, un timeout o un connection reset. Un
+ * fail-closed que colapsa una misconfig NUESTRA en "transporte" reintroduce, con otro nombre, el daño
+ * exacto que costó los ocho días: un diagnóstico que no distingue causas que se arreglan distinto.
+ * ⇒ La credencial se resuelve **ANTES del `try`**, tira una `KycAgentConfigError` propia, y su log es
+ * `<rama>_config_missing` **con el NOMBRE de la env** (nunca el valor). Las routes la mapean a
+ * (`UPSTREAM_INVOKE_SECRET_UNSET`, `:104`) en vez de al `0` de "no hubo respuesta".
+ * Lo mide `T-CLI-4''`: cero llamadas al doble de `fetch` + la etiqueta `config`, no `transport`.
+ *
+ * Un `.trim()` vacío cuenta como ausente: `Bearer ` pelado es
  * `credential_malformed` para el agente, que es peor que no salir.
  */
-function invokeAuthHeader(): Record<string, string> {
-  const secret = process.env.KYC_AGENT_INVOKE_SECRET?.trim();
+/** El nombre de la env. NO es un secreto —el secreto es su VALOR— y por eso puede ir al log: sin él,
+ *  el operador lee "algo de configuración" y tiene que adivinar cuál. */
+export const INVOKE_SECRET_ENV = "KYC_AGENT_INVOKE_SECRET";
+
+/**
+ * ⛔ UNA CLASE PROPIA Y NO UN `Error` PELADO, y no es estilo. Las routes tienen que poder distinguir
+ * "no pudimos acreditarnos" de "el agente no contestó" SIN parsear el `message` —que es value-free a
+ * propósito y no se puede ecoar—. Un `instanceof` es la única forma de que esa distinción sobreviva
+ * hasta el body de la respuesta, que es donde el operador la lee.
+ */
+export class KycAgentConfigError extends Error {
+  readonly env: string;
+  constructor(env: string, message: string) {
+    super(message);
+    this.name = "KycAgentConfigError";
+    this.env = env;
+  }
+}
+
+/** El `upstream` de una misconfig NUESTRA. ⛔ NO es `0`: `0` significa "no hubo status upstream"
+ *  —el agente no contestó— y colapsar las dos es exactamente lo que este fix-pack vino a deshacer.
+ *  Es NEGATIVO para que no pueda chocar nunca con un status HTTP real ni con el `0` que ya existe. */
+export const UPSTREAM_INVOKE_SECRET_UNSET = -1;
+
+/**
+ * ⛔ SE LLAMA **ANTES** DEL `try` DEL `fetch`, EN LAS DOS FUNCIONES. Adentro, su throw sale por el
+ * `catch` del transporte y queda etiquetado `<rama>_transport_failed`, o sea con el diagnóstico de otra
+ * causa (re-AR it2 · BLQ-MED-2). El `rama` viaja como argumento sólo para eso: para que el log diga de
+ * qué llamada se trata sin heredar la etiqueta equivocada.
+ */
+function invokeAuthHeader(rama: "session" | "decision"): Record<string, string> {
+  const secret = process.env[INVOKE_SECRET_ENV]?.trim();
   if (!secret) {
-    // Value-free: NUNCA el valor, que es un secreto. Sólo el nombre de la env y la acción.
-    throw new Error(
+    // Value-free: NUNCA el valor, que es un secreto. Sólo el NOMBRE de la env y la acción.
+    console.warn(`[kyc-agent] ${rama}_config_missing`, { env: INVOKE_SECRET_ENV });
+    throw new KycAgentConfigError(
+      INVOKE_SECRET_ENV,
       "kyc_agent_invoke_secret_unset: seteá KYC_AGENT_INVOKE_SECRET con la credencial de invoke del " +
         "agente de verificación de identidad. No se pregunta sin acreditarse: un servicio que no " +
         "puede decir quién es no pide la identidad de una persona.",
@@ -137,11 +184,12 @@ export async function createAgentKycSession(input: {
   const body: Record<string, string> = {};
   if (input.identityRef !== undefined) body.identityRef = input.identityRef;
 
+  const auth = invokeAuthHeader("session"); // ⛔ ANTES del `try`: adentro, su throw se etiquetaría como transporte
   let res: Response;
   try {
     res = await fetch(url, {
       method: "POST",
-      headers: { "content-type": "application/json", ...invokeAuthHeader() },
+      headers: { "content-type": "application/json", ...auth },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
@@ -192,10 +240,11 @@ export async function readAgentKycDecision(input: {
   url.searchParams.set("sessionId", input.sessionId);
   if (input.identityClaim !== undefined) url.searchParams.set("identityClaim", input.identityClaim);
 
+  const auth = invokeAuthHeader("decision"); // ⛔ ANTES del `try`, por lo mismo que en `session`
   let res: Response;
   try {
     res = await fetch(url.toString(), {
-      headers: { [DECISION_TOKEN_HEADER]: input.decisionToken, ...invokeAuthHeader() },
+      headers: { [DECISION_TOKEN_HEADER]: input.decisionToken, ...auth },
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch (err) {

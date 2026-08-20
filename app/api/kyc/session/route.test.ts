@@ -19,6 +19,7 @@ import {
   issueSolanaPopChallenge,
 } from "../../../../src/infrastructure/auth/pop-challenge";
 import { POST } from "./route";
+import { UPSTREAM_INVOKE_SECRET_UNSET } from "../../../../src/infrastructure/kyc/agent-kyc-client";
 
 // La salida del agente. `decisionToken` es un CENTINELA reconocible: T-TOK-3/T-TOK-4 barren el body,
 // las cabeceras y los logs buscándolo. Si aparece en alguno, CD-20 está roto.
@@ -657,6 +658,42 @@ describe("POST /api/kyc/session — T-SES-1/T-TOK-3/T-TOK-4/T-TOK-6", () => {
     // `message` del error, que es lo único que este `catch` tiene prohibido tocar.
     expect(JSON.stringify(warn.mock.calls)).not.toContain("kyc_agent_bad_response");
     expect(putMock, "se persistió un token que el agente nunca mandó").toHaveBeenCalledTimes(0);
+  });
+
+  // ── re-AR it2 / BLQ-MED-2 — LA MISCONFIG NUESTRA NO SE DISFRAZA DE "EL AGENTE NO CONTESTÓ" ──────
+  //
+  // 🔴 QUÉ AGUJERO CIERRA, Y ES EL QUE ABRIÓ LA 1ª ITERACIÓN DEL FIX-PACK. El fail-closed de la
+  // credencial hacía que el throw saliera por el `catch` del transporte ⇒ `upstream: 0`, o sea el
+  // MISMO body que T-SE-8 (agente inalcanzable). El `401` del agente —el único dato del body que
+  // apuntaba a la credencial— desaparecía, y el log decía `session_transport_failed`. Dos causas que
+  // se arreglan distinto (setear una env vs. mirar el deployment del agente) colapsadas en una.
+  //
+  // 🧬 MUTANTE: volver el `catch` a `r = { ok: false, upstream: 0 }` ⇒ este `it` ROJO y T-SE-8 verde.
+  it("T-SE-8c: SIN `KYC_AGENT_INVOKE_SECRET` ⇒ 502 con un `upstream` PROPIO, y sin gastar el viaje", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubEnv("KYC_AGENT_INVOKE_SECRET", undefined);
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError("fetch failed");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const res = await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+    expect(res.status).toBe(502);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.error).toBe("kyc_session_failed");
+    // 1. El `upstream` DISTINGUE. Es lo único que el operador lee del body.
+    expect(body.upstream, "la misconfig se ve igual que un agente caído").toBe(
+      UPSTREAM_INVOKE_SECRET_UNSET,
+    );
+    expect(body.upstream).not.toBe(0);
+    // 2. Y no salió ningún viaje: no se le preguntó por la identidad de nadie sin acreditarse.
+    expect(fetchMock).toHaveBeenCalledTimes(0);
+    // 3. El log de la route lleva el mismo valor (el del cliente, con el NOMBRE de la env, lo mide
+    //    `T-CLI-4''`).
+    expect(warn).toHaveBeenCalledWith("[kyc-session] kyc_session_failed", {
+      atada: true,
+      upstream: UPSTREAM_INVOKE_SECRET_UNSET,
+    });
+    expect(putMock).toHaveBeenCalledTimes(0);
   });
 
   it("✅ calibración: con la respuesta COMPLETA, la misma ruta devuelve 200 (el 502 no es constante)", async () => {

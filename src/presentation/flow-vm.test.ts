@@ -29,7 +29,7 @@ import {
   kycOriginNotice,
   // ⛔ acá estaba `REAL_KYC_PROVENANCES`: misma HU, mismo motivo. Ver la lápida en `flow-vm.ts`.
   esVentanaSinAbiertos, sinAbiertosCopy, sinIndiceCopy, indiceIlegibleCopy, statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, // WKH-339/CR: las otras 4 constantes YA NO se importan por nombre — el loop las DERIVA del módulo, que es el arreglo de BLQ-BAJO-1. Si vuelven acá por nombre, el loop volvió a ser una lista a mano. // WKH-339: EN ESTA LÍNEA, no en líneas nuevas — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
-} from "./flow-vm"; import { cruceDeCuenta, seVerificoLaCuenta } from "./flow-vm"; import * as MODULO_FLOW_VM from "./flow-vm"; // WKH-339/CR-BLQ-BAJO-1: el namespace entero, para DERIVAR la lista de copies en vez de escribirla. En esta línea para no desplazar `:520`
+} from "./flow-vm"; import { COPY_FALLO_SIN_DEPOSITO, copyDeEntregaFallida } from "./flow-vm"; import { cruceDeCuenta, seVerificoLaCuenta } from "./flow-vm"; import * as MODULO_FLOW_VM from "./flow-vm"; // WKH-339/CR-BLQ-BAJO-1: el namespace entero, para DERIVAR la lista de copies en vez de escribirla. En esta línea para no desplazar `:520`
 // WKH-233 — los dos literales del proveedor se escriben ACÁ, en un test. El módulo que los exportaba
 // se borró con la HU; los tests SÍ pueden nombrarlo (el candado de residuo salta los `*.test.*`).
 const KYC_PROVENANCE_LIVE = "didit";
@@ -2546,5 +2546,77 @@ describe("T-COPY-5: `payout_authority_unavailable` tiene copy propio (WKH-233/H-
     ].map(humanError);
     expect(new Set(tres).size, "dos de los tres colapsaron en el mismo copy").toBe(3);
     for (const msg of tres) expect(msg).not.toBe(CATCH_ALL_PAYOUT);
+  });
+});
+
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// T-COPY-SD — `COPY_FALLO_SIN_DEPOSITO`: la frase que leen los 8 enums SIN copy propio (re-AR it3 · MNR-4)
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ DEFECTO CIERRA. La frase decía «Podés empezar de nuevo con una cotización fresca» y esa acción
+// no le sirve a 2 de sus 8 enums: con `prepare_rate_limited`, hacerlo INMEDIATAMENTE vuelve a chocar con
+// el mismo límite; con `prepare_not_configured` —una misconfiguración nuestra— no funciona NUNCA. No era
+// falsa: era una acción inútil para dos casos, y por eso el AR la dejó en MENOR. Además callaba la firma
+// del PoP que su copy hermano, escrito en el mismo commit, sí nombra a propósito.
+//
+// ⛔ Y ESTA CONSTANTE NO TENÍA NI UN TEST. Se podía reescribir entera —o volver a la versión que este
+// MENOR corrige— sin que nada cambiara de color. Lo único que la miraba era `T-PANT-2`, y sólo por lo
+// que NO dice (que no promete el escrow).
+//
+// ⚠️ SE MIDEN PROPIEDADES, NO EL LITERAL. Un `toBe("…")` con la frase copiada acá sería un guard que se
+// compara consigo mismo y que hay que editar cada vez que se toca una coma. Lo que estos `it` clavan es
+// lo que la vuelve correcta o incorrecta para sus 8 casos.
+describe("T-COPY-SD: la frase del fallo sin depósito le sirve a sus OCHO enums", () => {
+  const remesa = (s: Partial<RemittanceState>): RemittanceState =>
+    ({ status: "created", principalTx: null, refundTx: null, failureReason: null, ...s }) as RemittanceState;
+
+  /** Un corte del `prepare`: `payout_failed` y `principalTx === null` ⇒ `escrowFundsKnowledge` = "no-deposit". */
+  const sinDeposito = (reason: string): RemittanceState =>
+    remesa({ status: "payout_failed", failureReason: reason });
+
+  // 🧪 CONTROL POSITIVO, MISMA CORRIDA: sin esto, los `it` de abajo podrían estar midiendo una frase que
+  // la pantalla no usa. Acá se prueba que ESTOS enums llegan de verdad a la constante, por el mecanismo
+  // real (`copyDeEntregaFallida`), y que el revés —con el depósito en vuelo— NO la usa.
+  it("T-COPY-SD-0: los dos enums del hallazgo llegan a esta frase, y con depósito en vuelo NO", () => {
+    for (const e of ["prepare_rate_limited", "prepare_not_configured"]) {
+      expect(copyDeEntregaFallida(sinDeposito(e)), e).toBe(COPY_FALLO_SIN_DEPOSITO);
+    }
+    const conDeposito = remesa({ status: "payout_failed", failureReason: "prepare_rate_limited", principalTx: "sig" });
+    expect(copyDeEntregaFallida(conDeposito)).not.toBe(COPY_FALLO_SIN_DEPOSITO);
+  });
+
+  // EL HALLAZGO. `prepare_rate_limited` se arregla ESPERANDO y `prepare_not_configured` no se arregla
+  // desde el lado de la persona. Una acción que no admita el paso del tiempo no le sirve a ninguno de los
+  // dos. MUTANTE que lo mata: volver la frase a «Podés empezar de nuevo con una cotización fresca» a secas.
+  it("T-COPY-SD-1: la acción admite el paso del tiempo y no promete que reintentar alcance", () => {
+    expect(COPY_FALLO_SIN_DEPOSITO, "sin el 'en un rato', el rate-limit vuelve a chocar").toContain("en un rato");
+    expect(
+      COPY_FALLO_SIN_DEPOSITO,
+      "sin esto, `prepare_not_configured` deja a la persona reintentando algo que no puede funcionar",
+    ).toMatch(/el problema es nuestro/);
+    // Y NO da la orden opuesta: nada de "volvé a intentar AHORA".
+    expect(COPY_FALLO_SIN_DEPOSITO).not.toMatch(/(intentá|probá) de nuevo ahora/i);
+  });
+
+  // LA CONSISTENCIA CON EL HERMANO, que es la mitad que el AR marcó aparte. Los dos salen de cortes en
+  // los que la billetera YA firmó el PoP; uno lo nombraba y el otro lo callaba.
+  it("T-COPY-SD-2: nombra la firma del PoP igual que `payout_authority_unavailable`, y ninguno la niega", () => {
+    const hermano = humanError("payout_authority_unavailable");
+    expect(hermano, "control: el hermano sigue nombrándola").toContain("probar que la billetera es tuya");
+    expect(COPY_FALLO_SIN_DEPOSITO).toContain("probar que la billetera es tuya");
+    for (const frase of [COPY_FALLO_SIN_DEPOSITO, hermano]) {
+      expect(frase, "negar la firma sería FALSO: el PoP se firma antes del POST").not.toMatch(
+        /no se (te )?pidió ninguna firma/i,
+      );
+    }
+  });
+
+  // LO QUE NO PUEDE PERDER AL ARREGLARSE: la certeza que la vuelve usable. Si alguien la suaviza a
+  // "puede que no se haya movido nada", vuelve la duda que esta HU sacó de la pantalla.
+  it("T-COPY-SD-3: sigue afirmando en categórico que no salió nada y que no hay nada que reclamar", () => {
+    expect(COPY_FALLO_SIN_DEPOSITO).toContain("no llegó a salir ningún USDC de tu wallet");
+    expect(COPY_FALLO_SIN_DEPOSITO).toContain("no hay ningún reembolso pendiente ni nada que reclamar");
+    expect(COPY_FALLO_SIN_DEPOSITO, "el escrow es justo lo que NO hay que prometer acá").not.toMatch(/escrow/i);
   });
 });

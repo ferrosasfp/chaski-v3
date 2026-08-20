@@ -2485,6 +2485,14 @@ describe("T-067-10 (WKH-359/AC-6): el cruce de cuenta distingue NO COMPARADO de 
 // salieron de su billetera: los tres emisores del enum (`app/api/payout/prepare/route.ts:333`, `:344`,
 // `:347`) cortan antes del forward al agente y antes de `authorizePrincipal`.
 //
+//
+// 🔴 QUÉ MIDE ESTE `describe` Y QUÉ NO, ESCRITO PORQUE LA DIFERENCIA YA COSTÓ UNA ITERACIÓN (re-AR it2 ·
+// BLQ-ALTO-1). Mide **la FUNCIÓN `humanError`**: que el enum tenga rama propia y que el catch-all siga
+// vivo. **NO mide la PANTALLA.** Con estos `it` en verde, `TrackView` estuvo igual de roto que antes
+// durante toda la 1ª iteración del fix-pack, porque su `else` estaba hardcodeado a
+// `humanError("payout_failed")` y el `failureReason` real no llegaba nunca hasta acá. Lo que la persona
+// LEE lo mide `src/presentation/copy-de-prepare-en-pantalla.test.tsx`, que renderiza la vista y barre
+// TODOS los enums que emite la route. Los dos hacen falta: éste clava el copy, aquél clava el camino.
 // ⛔ ESTE `describe` VA AL FINAL DEL ARCHIVO A PROPÓSITO, y no es prolijidad: `:481`, `:520`, `:76-101`,
 // `:1704-1707` y `:1873` de este archivo los cita otro por NÚMERO (`http-pop-signer.ts:33`,
 // `flow-vm.ts:1003`, `history-grupos.test.tsx:405`/`:532`, `history-onchain.test.tsx:255`/`:473`).

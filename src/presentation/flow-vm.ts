@@ -729,8 +729,8 @@ export function humanError(code: string): string { const porEnlace = copyDeEnlac
   // (`confirm-and-send.ts`:219-222). Sacar los USDC del vault es o el refund trustless que firma la
   // propia persona, o la release-authority a mano. O sea que nadie devuelve nada solo.
   //
-  // Es el texto que MÁS se lee de este archivo: TrackView lo usa como último recurso para cualquier
-  // `payout_failed` cuyo reason no reconozca (`humanError`, `flow.tsx:1781`), justo cuando no sabemos dónde está la
+  // Era el texto que MÁS se leía de este archivo: TrackView lo usaba como último recurso para CUALQUIER
+  // fallo cuyo reason no reconociera. ⚠️ YA NO: desde el fix-pack it2 el último recurso es (`copyDeEntregaFallida`, `flow.tsx:1781`), que sólo llega acá cuando el depósito PUEDE estar en el vault — o sea, justo cuando no sabemos dónde está la
   // plata. Prometer un reembolso ahí manda a esperar sentado en vez de a la única acción que sirve.
   // WKH-333 — VA ANTES del catch-all de `payout`, y arregla un defecto de copy PREEXISTENTE que este
   // cambio vuelve mucho más alcanzable. `payout_not_authorized` no contiene "kyc", así que caía en el
@@ -1546,4 +1546,57 @@ export function cruceDeCuenta(live: string | null, ownerAddress: string | null):
  *  `!== "comparado"` al revés por accidente, y para que el nombre diga qué se puede afirmar. */
 export function seVerificoLaCuenta(c: CruceDeCuenta): boolean {
   return c === "comparado";
+}
+
+// ── WKH-233 (fix-pack it2 · AR/BLQ-ALTO-1 + AR/BLQ-MED-1) · EL CUERPO DE LA PANTALLA DE FALLO ─────
+//
+// 🔴 QUÉ DEFECTO CIERRA, Y POR QUÉ NO ES "UNA RAMA MÁS". El `else` de (`copyDeEntregaFallida`,
+// `./flow.tsx:1781`) estaba HARDCODEADO a `humanError("payout_failed")`, o sea que el `failureReason`
+// real de la remesa NUNCA llegaba a `humanError` salvo por las dos ramas que lo pasaban a mano. Efecto
+// medido en pantalla, no deducido: de los 14 enums que emite `app/api/payout/prepare/route.ts`, **12
+// terminaban leyendo "si tus USDC entraron al escrow, los sacás vos firmando"** — sobre cortes que
+// ocurren ANTES de `authorizePrincipal`, o sea con `principalTx === null` y CERO USDC en ningún vault.
+// Entre esos 12 estaba `payout_authority_unavailable`, al que la 1ª iteración de este fix-pack le
+// escribió un copy propio que la persona nunca vio, y `payout_not_authorized`, al que WKH-333 le había
+// escrito otro que tampoco veía. Dos arreglos, el mismo agujero, ninguna de las dos veces lo cazó un
+// test: los dos llamaban a `humanError()` en vez de renderizar la pantalla.
+//
+// ⛔ POR ESO ACÁ NO HAY UNA LISTA DE ENUMS. Un tercer `if` sería el mismo patrón que ya falló dos
+// veces, y la lista envejece sola: el enum número 15 nacería prometiendo el escrow y nadie lo vería.
+// La promesa se decide por EL ESTADO REAL DEL DEPÓSITO, que es lo único que la vuelve verdadera o
+// falsa: (`escrowFundsKnowledge`, `:206`), la misma función que ya decide si el historial ofrece
+// recuperar. El enum sólo elige entre las frases COMPATIBLES con ese estado.
+//
+// LAS DOS DIRECCIONES, y las dos importan:
+//   · `knowledge !== "no-deposit"` ⇒ puede haber USDC en el vault ⇒ manda la promesa del escrow,
+//     SIEMPRE, aunque el enum tenga copy propio. Un copy que dice "no se movió ningún USDC" sobre una
+//     remesa que sí depositó le calla a la persona la única acción que le devuelve su plata. Es el
+//     mutante peligroso, y es el que mata `T-PANT-3`.
+//   · `knowledge === "no-deposit"` ⇒ sabemos que no salió nada (su docblock: "nunca se autorizó, o el
+//     intento murió ANTES del broadcast y eso está probado") ⇒ la promesa del escrow es INALCANZABLE.
+//     Con copy propio manda ése; sin copy propio, la frase neutra de acá abajo.
+//
+// ⚠️ "SIN COPY PROPIO" SE DERIVA, NO SE ENUMERA: se compara contra lo que `humanError` devuelve para un
+// código que cae en el catch-all de `payout` y para uno que no cae en ninguna rama. Si alguien reescribe
+// cualquiera de las dos frases, esto la sigue sin editarse; si alguien BORRA el catch-all, la
+// comparación deja de matchear y el enum se queda con su copy propio, que es el lado seguro.
+//
+// ⛔ Y ESTA FUNCIÓN NO AFIRMA "ya no puede pasar" NADA sobre la route: lo medido es que hoy ningún enum
+// de `prepare/route.ts` alcanza la promesa del escrow con un snapshot sin depósito, y el instrumento
+// que lo re-mide en cada `npm test` es `copy-de-prepare-en-pantalla.test.tsx` (T-PANT-2), que deriva el
+// conjunto de enums leyendo la route en vez de copiarlo.
+
+/** La frase para un fallo de entrega del que SABEMOS que no movió un solo USDC y que no tiene copy
+ *  propio. No promete reembolsos, no manda a ningún escrow, y afirma exactamente lo que
+ *  `escrowFundsKnowledge` certifica: que el depósito no salió. */
+export const COPY_FALLO_SIN_DEPOSITO =
+  "No se pudo entregar y no llegó a salir ningún USDC de tu wallet: no hay ningún reembolso pendiente ni nada que reclamar. Podés empezar de nuevo con una cotización fresca.";
+
+export function copyDeEntregaFallida(rem: RemittanceState): string {
+  // 1. Si NO sabemos que el depósito no salió, no se puede usar ninguna frase que niegue el movimiento.
+  if (escrowFundsKnowledge(rem) !== "no-deposit") return humanError("payout_failed");
+  // 2. Sabemos que no salió nada. ¿El motivo tiene copy propio, o cae en uno de los dos genéricos?
+  const propio = humanError(rem.failureReason ?? "");
+  const sinRamaPropia = propio === humanError("payout_failed") || propio === humanError("");
+  return sinRamaPropia ? COPY_FALLO_SIN_DEPOSITO : propio;
 }

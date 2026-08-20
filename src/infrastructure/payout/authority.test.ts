@@ -388,10 +388,20 @@ describe("T-AUTH-6: si el token fue invalidado, el agente contesta 401 y NO se r
   // de las dos puntas: estaba en que NADA ataba el `reason` que fija el `it` de arriba con el copy que
   // sale del otro lado. La cadena medida es `kyc_reauth_failed`/502 (acá) ⇒ el `default` del `switch`
   // de `app/api/payout/prepare/route.ts:347` ⇒ `payout_authority_unavailable` ⇒ el `case` 1:1 de
-  // `../settlement/http-solana-prepare-gateway.ts:59` ⇒ `humanError` en la pantalla. Con las dos
-  // puntas verdes por separado, ese enum estuvo cayendo en el catch-all `code.includes("payout")` y la
-  // persona leía "si tus USDC entraron al escrow, los sacás vos firmando" — sobre un corte que ocurre
-  // ANTES del forward al agente y ANTES de `authorizePrincipal`, o sea con CERO USDC en ningún escrow.
+  // `../settlement/http-solana-prepare-gateway.ts:59` ⇒ `payout_authority_unavailable` como `failureReason`
+  // persistido. Con las dos puntas verdes por separado, ese enum estuvo cayendo en el catch-all
+  // `code.includes("payout")` y la persona leía "si tus USDC entraron al escrow, los sacás vos firmando"
+  // — sobre un corte que ocurre ANTES del forward al agente y ANTES de `authorizePrincipal`, o sea con
+  // CERO USDC en ningún escrow.
+  //
+  // 🔴 LO QUE ESTE `it` MIDE, EXACTAMENTE: **la FUNCIÓN de copy, no la PANTALLA.** Acá se llama a
+  // `humanError()` y se afirma sobre lo que devuelve. ⚠️ ACÁ DECÍA «⇒ `humanError` EN LA PANTALLA», Y ESA
+  // ERA LA MITAD FALSA (re-AR it2 · BLQ-ALTO-1): el `it` daba verde mientras `TrackView` no llamaba nunca
+  // a `humanError` con este motivo —su `else` estaba hardcodeado a `humanError("payout_failed")`—, así que
+  // el copy nuevo era INALCANZABLE y este archivo lo daba por entregado. El último eslabón, el que la
+  // persona lee, lo mide RENDERIZANDO la vista: `src/presentation/copy-de-prepare-en-pantalla.test.tsx`
+  // (T-PANT-1 para este enum, T-PANT-2 para el conjunto). Si ese archivo desaparece, este `it` vuelve a
+  // ser una punta suelta y hay que decirlo en voz alta.
   //
   // ⚠️ LO QUE ESTO **NO** MIDE, declarado: el salto `502 ⇒ payout_authority_unavailable` es lectura a
   // mano del `switch` de `prepare/route.ts` (fuera del Scope IN de este fix-pack: ese archivo tiene

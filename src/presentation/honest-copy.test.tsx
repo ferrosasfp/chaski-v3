@@ -864,6 +864,15 @@ const VEDADAS_DEL_RESUME: ReadonlyArray<readonly [string, string]> = [
   ["fallo", "ídem"],
 ];
 
+/** EL PREDICADO DEL BARRIDO, EN UN SOLO LUGAR, y no es un refactor cosmético (CR/MNR-3): existe para que el control positivo del final pueda
+ *  correr EXACTAMENTE lo que corren las cinco pantallas, sobre un `textContent` sintético. Antes el predicado vivía inline en el `it` y el
+ *  control positivo era OTRO —un `filter` contra un literal—, así que aplaudía un enmascarado roto. ⛔ Si esto se vuelve a escribir inline en
+ *  algún lado, el control positivo deja de probar el camino real y hay que volver a leer esta nota. */
+const vedadasQueDice = (texto: string, ajeno: readonly string[]): string[] => {
+  const sinLoAjeno = ajeno.reduce((t, frase) => t.split(frase.toLowerCase()).join(" ⟦ajeno⟧ "), texto);
+  return VEDADAS_DEL_RESUME.filter(([palabra]) => sinLoAjeno.includes(palabra.toLowerCase())).map(([palabra]) => palabra);
+};
+
 describe("HU 073 · ninguna de las cinco pantallas del resume usa el léxico vedado", () => {
   const snapshotPelado = () =>
     RemesaDeDominio.create("rem-073", beneficiarioDeTest(), Money.of(400, "USDC"), T_CERO).snapshot;
@@ -983,9 +992,9 @@ describe("HU 073 · ninguna de las cinco pantallas del resume usa el léxico ved
           pantalla.testigo.toLowerCase(),
         );
 
+        const dichas = vedadasQueDice(texto, pantalla.ajeno);
         for (const [palabra, porQue] of VEDADAS_DEL_RESUME) {
-          const sinLoAjeno = pantalla.ajeno.reduce((t, frase) => t.split(frase.toLowerCase()).join(" ⟦ajeno⟧ "), texto);
-          expect(sinLoAjeno, `${pantalla.nombre} dice «${palabra}»: ${porQue}`).not.toContain(palabra.toLowerCase());
+          expect(dichas, `${pantalla.nombre} dice «${palabra}»: ${porQue}`).not.toContain(palabra);
         }
         // Y lo declarado como AJENO tiene que SEGUIR ESTANDO: si la frase se reescribe, esta excepción
         // deja de tapar algo que existe y hay que volver a mirarla. ⛔ Sin esto, una excepción escrita
@@ -1005,19 +1014,28 @@ describe("HU 073 · ninguna de las cinco pantallas del resume usa el léxico ved
     });
   }
 
-  it("✅ el barrido SÍ se dispara: una palabra vedada plantada a mano la caza", () => {
-    // Sin este `it`, un `not.toContain` mal escrito (o un léxico vacío) dejaría los cinco de arriba
-    // verdes para siempre. Acá se planta la frase que la HU vino a borrar y se comprueba que el mismo
-    // criterio la ve.
+  it("✅ el barrido SÍ se dispara: el MISMO predicado, sobre un `textContent` sintético", () => {
+    // ⛔ QUÉ CUBRE ESTE `it` Y QUÉ NO — enumerado, no prometido de más (CR/MNR-3). Acá decía cubrir «un `not.toContain` mal escrito» y
+    // NO RENDERIZABA NADA: filtraba el léxico contra un literal, así que lo único que podía cazar era «el léxico quedó vacío» o «el
+    // léxico dejó de cazar esta frase». Ahora corre `vedadasQueDice`, que es LA MISMA función que corren las cinco pantallas de arriba,
+    // sobre un `textContent` sintético ⇒ también muere si el enmascarado del `ajeno` se come de más o si deja de tapar lo que se le declara.
+    // ⛔ LO QUE SIGUE AFUERA, declarado: el `expect(…).not.toContain(…)` vive en el `it` de cada pantalla y este `it` no lo ejecuta. Un `.not`
+    // borrado ahí lo tiene que cazar otra cosa, no esto. Es la misma regla que la entrada anterior del auto-blindaje: un control positivo
+    // sólo cubre el camino que EJECUTA.
     const plantada = "no pudimos confirmar tu identidad a tiempo.";
-    const cazadas = VEDADAS_DEL_RESUME.filter(([w]) => plantada.includes(w.toLowerCase())).map(([w]) => w);
-    expect(cazadas, "el léxico dejó de cazar la frase exacta que esta HU eliminó").toEqual(
+    expect(vedadasQueDice(plantada, []), "el barrido dejó de cazar la frase exacta que esta HU eliminó").toEqual(
       expect.arrayContaining(["a tiempo", "no pudimos"]),
     );
+    // Y el enmascarado del `ajeno` tapa esa MISMA frase cuando se la declara: es lo que hace legítima la excepción de D-5, y sin este
+    // assert un `reduce` que no enmascarara nada dejaría la excepción sin efecto y NADIE lo notaría (D-5 seguiría verde por otro lado).
+    expect(
+      vedadasQueDice(plantada, [plantada]),
+      "el enmascarado del `ajeno` dejó de tapar la frase que se le declara",
+    ).toEqual([]);
     // Y la del presente NO se caza: es el copy de D-4 y tiene que poder existir (R-12).
     const permitida = "no podemos seguir con esta verificación. podés hacer una nueva.";
     expect(
-      VEDADAS_DEL_RESUME.filter(([w]) => permitida.includes(w.toLowerCase())),
+      vedadasQueDice(permitida, []),
       "el léxico se escribió como subcadena (`no pud`/`no pod`) y se lleva puesto el copy de D-4",
     ).toEqual([]);
   });

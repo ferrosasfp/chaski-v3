@@ -29,7 +29,7 @@ import {
   kycOriginNotice,
   // ⛔ acá estaba `REAL_KYC_PROVENANCES`: misma HU, mismo motivo. Ver la lápida en `flow-vm.ts`.
   esVentanaSinAbiertos, sinAbiertosCopy, sinIndiceCopy, indiceIlegibleCopy, statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, // WKH-339/CR: las otras 4 constantes YA NO se importan por nombre — el loop las DERIVA del módulo, que es el arreglo de BLQ-BAJO-1. Si vuelven acá por nombre, el loop volvió a ser una lista a mano. // WKH-339: EN ESTA LÍNEA, no en líneas nuevas — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
-} from "./flow-vm"; import { COPY_FALLO_SIN_DEPOSITO, copyDeEntregaFallida } from "./flow-vm"; import { cruceDeCuenta, seVerificoLaCuenta } from "./flow-vm"; import * as MODULO_FLOW_VM from "./flow-vm"; // WKH-339/CR-BLQ-BAJO-1: el namespace entero, para DERIVAR la lista de copies en vez de escribirla. En esta línea para no desplazar `:520`
+} from "./flow-vm"; import { COPY_RESUME_SIN_RESPUESTA_TITULO, COPY_RESUME_SIN_RESPUESTA_CUERPO, COPY_RESUME_INTERRUMPIDO_TITULO, COPY_RESUME_INTERRUMPIDO_CUERPO, COPY_RESUME_NO_PODEMOS_SEGUIR, COPY_RESUME_NO_PODEMOS_SEGUIR_AVISO, COPY_VERIFY_PIDE_UNA_NUEVA, LABEL_VOLVER_A_EMPEZAR_EL_ENVIO, DESENLACES_DEL_RESUME, copyDelFinDelResume } from "./flow-vm"; import { readFileSync as leerFuente } from "node:fs"; import { join as unirRuta } from "node:path"; import { COPY_FALLO_SIN_DEPOSITO, copyDeEntregaFallida } from "./flow-vm"; import { cruceDeCuenta, seVerificoLaCuenta } from "./flow-vm"; import * as MODULO_FLOW_VM from "./flow-vm"; // WKH-339/CR-BLQ-BAJO-1: el namespace entero, para DERIVAR la lista de copies en vez de escribirla. En esta línea para no desplazar `:520`
 // WKH-233 — los dos literales del proveedor se escriben ACÁ, en un test. El módulo que los exportaba
 // se borró con la HU; los tests SÍ pueden nombrarlo (el candado de residuo salta los `*.test.*`).
 const KYC_PROVENANCE_LIVE = "didit";
@@ -2687,5 +2687,314 @@ describe("T-COPY-SD-DERIVA: las dos mitades de `sinRamaPropia`, sin depender de 
     const propio = humanError("payout_authority_unavailable");
     expect(propio, "control: el enum elegido sigue teniendo rama propia").not.toBe(humanError("payout_failed"));
     expect(copyDeEntregaFallida(sinDeposito("payout_authority_unavailable"))).toBe(propio);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// HU 073 · T-073-COPY-* y T-073-CENSO — el copy del resume de KYC, sin React
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// ⛔ NINGUNA de estas frases se escribe como literal acá: todo va contra el SÍMBOLO importado. Un test
+// que copia la frase deja de ser una segunda fuente; es la misma frase escrita dos veces.
+
+describe("HU 073 · D-2 (el techo del bucle) no afirma que el sistema estuvo lento", () => {
+  it("T-073-COPY-1: el título no dice «tardando»", () => {
+    expect(
+      COPY_RESUME_SIN_RESPUESTA_TITULO,
+      "«tardando» le atribuye la causa a una lentitud que nadie midió: el bucle también termina acá " +
+        "cuando el verificador contestó ocho veces sin ser final, que no es lentitud sino ausencia de veredicto",
+    ).not.toContain("tardando");
+    expect(COPY_RESUME_SIN_RESPUESTA_TITULO).not.toMatch(/a tiempo|demora|lent/i);
+  });
+
+  it("T-073-COPY-1b: el título no dice «todavía»", () => {
+    expect(
+      COPY_RESUME_SIN_RESPUESTA_TITULO,
+      "«todavía» promete un futuro en el que ese resultado llega, y en el camino normal `flow.tsx` " +
+        "corre `abandonPendingKyc` ANTES de pintar esta card: el pendiente ya no está, nadie va a volver a preguntar",
+    ).not.toMatch(/todav[ií]a/i);
+  });
+
+  it("T-073-COPY-1c: el cuerpo no enumera causas (canda la PROPIEDAD, no una lista)", () => {
+    // ⛔ El candado NO exige una enumeración: exige que NO la haya. Un candado que EXIGE una lista de
+    // causas impide corregirla, que es el modo de fallo del guard que se compara consigo mismo.
+    expect(
+      COPY_RESUME_SIN_RESPUESTA_CUERPO,
+      "el cuerpo elige una causa entre las dos que `processing` colapsa (contestaron sin ser final / " +
+        "la consulta falló): el tipo no las distingue, así que la pantalla tampoco puede",
+    ).not.toMatch(/sin terminar|sigue en curso|ya no sirve|no sabemos si/i);
+  });
+
+  it("T-073-COPY-1d: «varias veces» es falsable — se lee `RESUME_MAX_POLLS` del fuente de flow.tsx", () => {
+    expect(COPY_RESUME_SIN_RESPUESTA_CUERPO).toContain("varias veces");
+    // ⚠️ Se LEE y no se importa: `RESUME_MAX_POLLS` no está exportada, y exportarla obligaría a editar
+    // una línea Δ0 que termina en `//`.
+    const fuente = leerFuente(unirRuta(process.cwd(), "src/presentation/flow.tsx"), "utf8");
+    const m = /RESUME_MAX_POLLS = (\d+)/.exec(fuente);
+    // ANTI-VACUIDAD: sin esto, borrar la constante deja el `it` verde por no encontrar nada que medir.
+    expect(m, "no encontré `RESUME_MAX_POLLS` en flow.tsx: este candado dejó de mirar").not.toBeNull();
+    expect(
+      Number((m as RegExpExecArray)[1]),
+      "el bucle intenta menos de tres veces: «varias veces» dejó de ser cierto",
+    ).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe("HU 073 · D-3 (el intento se cortó) tiene texto propio y no toma partido", () => {
+  it("T-073-COPY-2a: el título de D-3 NO es el de D-2", () => {
+    expect(
+      COPY_RESUME_INTERRUMPIDO_TITULO,
+      "D-2 y D-3 volvieron a la misma card: son dos finales que no comparten un solo hecho",
+    ).not.toBe(COPY_RESUME_SIN_RESPUESTA_TITULO);
+    expect(COPY_RESUME_INTERRUMPIDO_CUERPO).not.toBe(COPY_RESUME_SIN_RESPUESTA_CUERPO);
+  });
+
+  it("T-073-COPY-2b: D-3 no usa ninguna palabra de duración", () => {
+    for (const frase of [COPY_RESUME_INTERRUMPIDO_TITULO, COPY_RESUME_INTERRUMPIDO_CUERPO]) {
+      expect(
+        frase,
+        "D-3 habla de tiempo, y acá no se midió ningún tiempo: el bucle ni siquiera llegó a su techo",
+      ).not.toMatch(/tardando|a tiempo|demora|segundo|minuto/i);
+    }
+  });
+
+  it("T-073-COPY-2c: D-3 no promete que la verificación quedó intacta", () => {
+    // Trivial, y se conserva ADEMÁS de T-073-2d (el candado de comportamiento), no en vez de él: el
+    // throw puede venir DESPUÉS de que `repo.save` ya escribió, así que «no cambió por esto» sería falsa.
+    for (const frase of [COPY_RESUME_INTERRUMPIDO_TITULO, COPY_RESUME_INTERRUMPIDO_CUERPO]) {
+      expect(frase).not.toContain("Tu verificación no cambió por esto");
+    }
+  });
+
+  it("T-073-COPY-2d: D-3 no vuelve a tomar partido sobre si se preguntó (canda la PROPIEDAD)", () => {
+    for (const frase of [COPY_RESUME_INTERRUMPIDO_TITULO, COPY_RESUME_INTERRUMPIDO_CUERPO]) {
+      expect(
+        frase,
+        "la frase afirma si la consulta salió o no, y eso es lo que esta HU vino a sacar: el `catch` " +
+          "de flow.tsx no mira el error, así que desde la pantalla los dos casos son indistinguibles",
+      ).not.toMatch(/no llegamos a preguntar|la consulta no sali[óo]|preguntamos/i);
+    }
+  });
+
+  it("T-073-COPY-2e: el cuerpo de D-3 arranca con el antecedente condicional", () => {
+    expect(
+      COPY_RESUME_INTERRUMPIDO_CUERPO,
+      "sin el «Si estabas volviendo» se le afirma una verificación a quien nunca empezó ninguna: el " +
+        "`get` del disco está FUERA del `try` del store, así que un disco ilegible aterriza en este mismo desenlace",
+    ).toMatch(/^Si estabas volviendo/);
+  });
+});
+
+describe("HU 073 · D-4 no emite un veredicto sobre la persona", () => {
+  it("T-073-COPY-3: el banner no dice «no pasó» ni habla de rechazo", () => {
+    expect(
+      COPY_RESUME_NO_PODEMOS_SEGUIR,
+      "«no pasó» es un veredicto, y uno de los dos sub-casos que llegan acá ni siquiera consultó al " +
+        "verificador (resume-kyc.ts:37 corta con `decision` en CERO llamadas)",
+    ).not.toContain("no pasó");
+    expect(COPY_RESUME_NO_PODEMOS_SEGUIR).not.toMatch(/rechaz/i);
+  });
+
+  it("T-073-COPY-3b: el banner no emite NINGÚN veredicto sobre la verificación (canda la PROPIEDAD)", () => {
+    expect(COPY_RESUME_NO_PODEMOS_SEGUIR).not.toMatch(/no qued[óo] lista|no est[áa] lista|no sirvi[óo]|fue rechaz/i);
+  });
+
+  it("T-073-COPY-3c: el aviso tampoco lo emite", () => {
+    expect(
+      COPY_RESUME_NO_PODEMOS_SEGUIR_AVISO,
+      "«necesita otro intento» afirma que la verificación está incompleta, y acá puede estar aprobada " +
+        "del otro lado: lo único medido es que NOSOTROS no podemos retomarla",
+    ).not.toMatch(/necesita otro intento/i);
+    expect(COPY_RESUME_NO_PODEMOS_SEGUIR_AVISO).not.toMatch(/rechaz|no pas[óo]/i);
+  });
+});
+
+describe("HU 073 · el aviso de la pantalla verify (AC-4)", () => {
+  it("T-073-COPY-4a: es CONDICIONAL, no categórico", () => {
+    expect(
+      COPY_VERIFY_PIDE_UNA_NUEVA,
+      "el aviso afirma sin condición que el botón consume una verificación, y con un veredicto usable " +
+        "en la billetera el botón ni llega a llamar al verificador",
+    ).toMatch(/^Si esta billetera todav[ií]a no tiene una verificaci[óo]n aprobada/);
+  });
+
+  it("T-073-COPY-4b: dice «pide», no «abre»", () => {
+    expect(
+      COPY_VERIFY_PIDE_UNA_NUEVA,
+      "«abre» describe una sesión hospedada que sin agente configurado NO existe (el fallback resuelve " +
+        "sin redirect); «pide» describe la llamada, que ocurre en las dos configuraciones",
+    ).not.toMatch(/abre una verificaci[óo]n/i);
+  });
+
+  it("T-073-COPY-4c: nombra el cupo (AC-4 pide decir que CONSUME, no que abre)", () => {
+    expect(COPY_VERIFY_PIDE_UNA_NUEVA, "se borró la oración que dice que el cupo no es infinito").toMatch(/cupo/i);
+  });
+});
+
+describe("HU 073 · el label del control de la card", () => {
+  it("T-073-COPY-5: no es «Reintentar» ni colisiona con el escape de los 5 s", () => {
+    expect(LABEL_VOLVER_A_EMPEZAR_EL_ENVIO).not.toMatch(/^Reintentar$/);
+    // ⛔ SUBCADENA, no `^…$`: `getByRole({name:/…/})` matchea por subcadena, así que un ancla dejaría
+    // pasar «Empezar de nuevo el envío», que es exactamente la colisión que hay que evitar.
+    expect(
+      LABEL_VOLVER_A_EMPEZAR_EL_ENVIO,
+      "colisiona con el escape de los 5 s, que LIMPIA el pendiente; este control no lo limpia",
+    ).not.toMatch(/Empezar de nuevo/i);
+  });
+
+  it("T-073-COPY-6: ninguna frase nueva usa em dash (⛔ CD-23)", () => {
+    for (const frase of [
+      COPY_RESUME_SIN_RESPUESTA_TITULO,
+      COPY_RESUME_SIN_RESPUESTA_CUERPO,
+      COPY_RESUME_INTERRUMPIDO_TITULO,
+      COPY_RESUME_INTERRUMPIDO_CUERPO,
+      COPY_RESUME_NO_PODEMOS_SEGUIR,
+      COPY_RESUME_NO_PODEMOS_SEGUIR_AVISO,
+      COPY_VERIFY_PIDE_UNA_NUEVA,
+      LABEL_VOLVER_A_EMPEZAR_EL_ENVIO,
+    ]) {
+      expect(frase, `«${frase}» tiene un em dash`).not.toContain("—");
+    }
+  });
+
+  it("T-073-COPY-7: `copyDelFinDelResume` resuelve los DOS finales, y a cards distintas", () => {
+    const techo = copyDelFinDelResume("sin-respuesta-en-el-techo");
+    const cortado = copyDelFinDelResume("no-pudimos-preguntar");
+    expect(techo.titulo).toBe(COPY_RESUME_SIN_RESPUESTA_TITULO);
+    expect(techo.cuerpo).toBe(COPY_RESUME_SIN_RESPUESTA_CUERPO);
+    expect(cortado.titulo).toBe(COPY_RESUME_INTERRUMPIDO_TITULO);
+    expect(cortado.cuerpo).toBe(COPY_RESUME_INTERRUMPIDO_CUERPO);
+    // ⛔ CD-26: ningún valor del tipo puede ser falsy, o la rama `) : finDelResume ? (` de flow.tsx no
+    // pinta la card y ningún candado lo ve (es comparación de strings en runtime, `tsc` no la mira).
+    for (const v of ["sin-respuesta-en-el-techo", "no-pudimos-preguntar"] as const) {
+      expect(Boolean(v), `el valor «${v}» de FinDelResume es falsy: la card no se pintaría`).toBe(true);
+    }
+  });
+});
+
+// ── T-073-CENSO (AC-7) ────────────────────────────────────────────────────────────────────────────
+//
+// 🔴 LAS CLAVES NO SE COPIAN A MANO: se DERIVAN del fuente de `resume-kyc.ts`. Una lista escrita acá
+// no se pone roja cuando nace un desenlace nuevo — se queda vieja en silencio, que es el modo de fallo
+// que este repo ya midió tres veces. El quinto desenlace (`D3_throw`) NO tiene `kind` porque es el que
+// ocurre cuando `execute()` TIRA, y ésa es exactamente la razón por la que la card vieja no lo veía.
+const FUENTE_RESUME_KYC = leerFuente(
+  unirRuta(process.cwd(), "src/application/use-cases/resume-kyc.ts"),
+  "utf8",
+);
+const KINDS_DEL_RESUME = [...FUENTE_RESUME_KYC.matchAll(/\|\s*\{\s*kind:\s*"(\w+)"/g)].map(
+  (m) => m[1] as string,
+);
+
+/** Palabras de contenido: 4 letras o más, sin acentos ni puntuación. El umbral de 4 saca los nexos
+ *  («con», «que», «una», «por») sin necesidad de una lista de stopwords escrita a mano. */
+function palabrasDeContenido(frase: string): Set<string> {
+  return new Set(
+    frase
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length >= 4),
+  );
+}
+
+/** Cuánto se solapan dos frases, como fracción de la MÁS CORTA. 1 = una dice lo mismo que la otra. */
+function solapamiento(a: string, b: string): number {
+  const pa = palabrasDeContenido(a);
+  const pb = palabrasDeContenido(b);
+  if (pa.size === 0 || pb.size === 0) return 0;
+  let comunes = 0;
+  for (const w of pa) if (pb.has(w)) comunes++;
+  return comunes / Math.min(pa.size, pb.size);
+}
+
+/** Calibrado, no elegido: con el copy de hoy el par más alto que NO es intencional da 0.5 (el cuerpo
+ *  de D-2 contra el aviso de D-4), y el par intencional de D-4 da 1.0. 0.6 los separa. */
+const SOLAPAMIENTO_QUE_HAY_QUE_DECLARAR = 0.6;
+
+describe("T-073-CENSO (AC-7): los cinco desenlaces del resume tienen texto declarado y justificado", () => {
+  it("el censo no está vacío y los `kind` se derivaron de verdad del fuente", () => {
+    // ANTI-VACUIDAD del derivador: si el regex deja de matchear, todos los `it` de abajo pasarían por
+    // recorrer una lista vacía.
+    expect(
+      KINDS_DEL_RESUME.length,
+      "el regex dejó de encontrar los `kind` de `ResumeKycResult`: este censo dejó de mirar",
+    ).toBeGreaterThanOrEqual(4);
+    expect(KINDS_DEL_RESUME).toContain("none");
+    expect(KINDS_DEL_RESUME).toContain("processing");
+    expect(Object.keys(DESENLACES_DEL_RESUME).length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("cada `kind` de `ResumeKycResult` tiene su fila en el censo", () => {
+    const claves = Object.keys(DESENLACES_DEL_RESUME);
+    for (const kind of KINDS_DEL_RESUME) {
+      expect(
+        claves.some((k) => k.endsWith(`_${kind}`)),
+        `el desenlace \`${kind}\` no tiene fila en DESENLACES_DEL_RESUME: nació un final del resume y ` +
+          "nadie decidió qué lee la persona cuando cae ahí",
+      ).toBe(true);
+    }
+  });
+
+  it("el desenlace del THROW existe y no depende de ningún `kind` (nadie lo nombra en el tipo)", () => {
+    expect(
+      Object.keys(DESENLACES_DEL_RESUME),
+      "se borró la fila del throw: es el desenlace que no tiene `kind`, y por eso era el que la card " +
+        "vieja pintaba con la explicación de otro",
+    ).toContain("D3_throw");
+  });
+
+  it.each(Object.keys(DESENLACES_DEL_RESUME))("la fila `%s` justifica con una cita archivo:línea", (clave) => {
+    const fila = DESENLACES_DEL_RESUME[clave as keyof typeof DESENLACES_DEL_RESUME];
+    expect(fila, `${clave} no tiene fila`).toBeDefined();
+    expect(fila.porQue.length, `${clave} tiene un \`porQue\` vacío`).toBeGreaterThan(0);
+    expect(
+      fila.porQue,
+      `${clave} razona en vez de citar: una justificación sin \`archivo:línea\` es una opinión, y una ` +
+        "opinión no se puede volver a verificar cuando el código de abajo cambie",
+    ).toMatch(/[\w.-]+\.tsx?:\d+/);
+  });
+
+  it("dos textos que se solapan tienen que declararlo con `mismoTextoQue`", () => {
+    // CONTROL POSITIVO del instrumento: la métrica tiene que poder dispararse. Sin esto, un
+    // `solapamiento` roto (que devolviera siempre 0) dejaría el barrido de abajo verde para siempre.
+    expect(
+      solapamiento("No podemos seguir con esta verificación", "Con esta verificación no podemos seguir"),
+      "la métrica de solapamiento dejó de ver dos frases que dicen lo mismo: el barrido es decorativo",
+    ).toBeGreaterThanOrEqual(SOLAPAMIENTO_QUE_HAY_QUE_DECLARAR);
+
+    const filas = Object.entries(DESENLACES_DEL_RESUME);
+    const sinDeclarar: string[] = [];
+    for (let i = 0; i < filas.length; i++) {
+      for (let j = i; j < filas.length; j++) {
+        const [ka, fa] = filas[i] as [string, (typeof filas)[number][1]];
+        const [kb, fb] = filas[j] as [string, (typeof filas)[number][1]];
+        for (const ta of fa.copy) {
+          for (const tb of fb.copy) {
+            if (ta === tb && ka === kb) continue;
+            if (solapamiento(ta, tb) < SOLAPAMIENTO_QUE_HAY_QUE_DECLARAR) continue;
+            // ⛔ NO alcanza con que la fila TENGA un `mismoTextoQue`: tiene que NOMBRAR a la otra.
+            // Medido: con la versión que sólo miraba si el campo existía, el mutante «devolver D-2 y
+            // D-3 a la misma card» daba `225 passed` — sobrevivía entero.
+            const declarado = fa.mismoTextoQue?.con === kb || fb.mismoTextoQue?.con === ka;
+            if (!declarado) sinDeclarar.push(`${ka} ↔ ${kb}: «${ta}» / «${tb}»`);
+          }
+        }
+      }
+    }
+    expect(
+      sinDeclarar,
+      "dos desenlaces distintos leen casi igual y nadie declaró que fuera a propósito: o comparten " +
+        "sentido de verdad (y hay que decirlo con `mismoTextoQue`) o se volvieron a colapsar en una card",
+    ).toEqual([]);
+  });
+
+  it("la fila que lleva DOS textos que dicen lo mismo lo declara (D-4, las dos ramas de `yaInteractuoRef`)", () => {
+    expect(DESENLACES_DEL_RESUME.D4_failed.copy).toHaveLength(2);
+    expect(
+      DESENLACES_DEL_RESUME.D4_failed.mismoTextoQue?.con,
+      "D-4 tiene el banner y el aviso sin declarar que son el MISMO desenlace visto desde dos ramas",
+    ).toBe("D4_failed");
   });
 });

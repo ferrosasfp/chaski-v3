@@ -1600,3 +1600,145 @@ export function copyDeEntregaFallida(rem: RemittanceState): string {
   const sinRamaPropia = propio === humanError("payout_failed") || propio === humanError("");
   return sinRamaPropia ? COPY_FALLO_SIN_DEPOSITO : propio;
 }
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// HU 073 · LOS CINCO DESENLACES DEL RESUME DE KYC, Y EL COPY QUE CADA UNO PUEDE SOSTENER
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ PROBLEMA CIERRA. La pantalla que retoma el KYC tenía DOS aterrizajes y CUATRO desenlaces, así
+// que dos de ellos caían en una card que afirmaba una causa que nadie había medido: «La verificación
+// está tardando» / «No pudimos confirmar tu identidad a tiempo». En la rama del `catch` esa frase es
+// falsa para todo el mundo a la vez —el resume puede haber preguntado, recibido un veredicto terminal
+// y haber tirado DESPUÉS, al persistirlo— y la persona leía una explicación inventada.
+//
+// ⛔ POR QUÉ LAS FRASES VIVEN ACÁ Y NO EN `flow.tsx`. Un literal dentro del JSX sólo se puede asertar
+// copiándolo en el test, y entonces el test y la pantalla dejan de ser dos fuentes: son la misma frase
+// escrita dos veces, y cambiarla en un lado deja el candado verde igual. Contra el SÍMBOLO importado,
+// cambiar el texto no puede apagar ningún assert. Es el patrón que este repo ya usa para el copy de
+// entrega fallida (`COPY_FALLO_SIN_DEPOSITO`, `:1592`).
+
+/**
+ * Cómo TERMINÓ el bucle que retoma la verificación. `null` = no terminó (o nunca corrió).
+ *
+ * 🔴 ES UN MOTIVO Y NO UN BOOLEANO, y no es ceremonia: el `timedOut` que esto reemplaza colapsaba dos
+ * finales que no comparten ni un hecho. `"sin-respuesta-en-el-techo"` es *preguntamos varias veces y
+ * ninguna respuesta fue final*; `"no-pudimos-preguntar"` es *el intento se cortó y no sabemos ni si la
+ * consulta salió*. Con un `boolean` los dos se pintaban con la MISMA card, y la card tenía que elegir
+ * una causa: eligió la del primero y se la aplicó también al segundo. Es la misma lección que
+ * (`MotivoParaNoMostrar`, `./splash-puerta.ts:68`) ya tiene escrita: un `boolean` pierde el tercer valor.
+ *
+ * ⛔ CD-26 — NINGÚN VALOR DE ESTE TIPO PUEDE SER FALSY (`""`, `0`, `false`). La rama que pinta la card
+ * en `flow.tsx` es un chequeo POR VERDAD (`) : finDelResume ? (`) y no un `!== null`, porque el
+ * anti-vacuidad que vigila esa cadena de overlays lee el fuente y su regex sólo admite un identificador
+ * suelto entre `) : ` y ` ? (`. Un valor falsy haría que la card NO se pinte, `tsc` no lo vería (es
+ * comparación de strings en runtime) y ningún candado lo cazaría: quedaría la pantalla muda que esta HU
+ * vino a eliminar. Si algún día hace falta un valor falsy, primero hay que cambiar ese anti-vacuidad.
+ */
+export type FinDelResume = "sin-respuesta-en-el-techo" | "no-pudimos-preguntar";
+
+/** D-2 · el techo del bucle. ⛔ NO dice «todavía»: en el camino normal `flow.tsx` limpia el pendiente
+ *  ANTES de pintar esta card, así que no hay ningún futuro en el que ese resultado llegue solo. */
+export const COPY_RESUME_SIN_RESPUESTA_TITULO = "No tenemos el resultado de tu verificación";
+
+/** D-2 · el cuerpo. «varias veces» es falsable y `T-073-COPY-1d` lo mide contra `RESUME_MAX_POLLS`.
+ *  ⛔ No enumera causas: las dos ramas que llegan acá (contestaron sin ser final / la consulta falló)
+ *  el tipo no las distingue, así que cualquier enumeración tendría que ELEGIR una. */
+export const COPY_RESUME_SIN_RESPUESTA_CUERPO =
+  "Lo intentamos varias veces y no llegó ninguna respuesta final. Desde acá no podemos saber en qué estado quedó tu verificación.";
+
+/** D-3 · el intento se cortó. Habla de la PANTALLA, que es lo único que se midió. */
+export const COPY_RESUME_INTERRUMPIDO_TITULO = "Algo se interrumpió al abrir esta pantalla";
+
+/** D-3 · el cuerpo, y el antecedente condicional es obligatorio: acá también llega quien NUNCA empezó
+ *  una verificación (el `get` del disco está FUERA del `try` del store, así que un disco ilegible cae
+ *  en este mismo desenlace). Sin el «Si estabas volviendo», se le afirmaría una verificación a alguien
+ *  que no tiene ninguna. ⛔ Y no toma partido sobre si la consulta salió: no se midió. */
+export const COPY_RESUME_INTERRUMPIDO_CUERPO =
+  "Si estabas volviendo de una verificación, no sabemos en qué estado quedó, ni si la consulta llegó a salir.";
+
+/** D-4 · el banner. Enuncia sobre NOSOTROS y en PRESENTE («no podemos seguir»), ⛔ nunca un veredicto
+ *  sobre la persona ni sobre su verificación: uno de los dos sub-casos que llegan acá ni siquiera
+ *  consultó al verificador, así que «no pasó» sería una acusación sin medición detrás. */
+export const COPY_RESUME_NO_PODEMOS_SEGUIR = "No podemos seguir con esta verificación. Podés hacer una nueva.";
+
+/** D-4 · el MISMO desenlace visto desde la otra rama (la persona ya estaba usando la pantalla, así que
+ *  no se la saca de ahí: se le avisa). Comparte sentido con el banner A PROPÓSITO, y por eso la fila de
+ *  `D4_failed` lo declara con `mismoTextoQue`. */
+export const COPY_RESUME_NO_PODEMOS_SEGUIR_AVISO = "Con esta verificación no podemos seguir";
+
+/** El aviso de la pantalla `verify`, arriba del botón que gasta. ⛔ Es CONDICIONAL a propósito: si la
+ *  billetera ya tiene un veredicto usable el botón ni se toca, así que un «esto consume una
+ *  verificación» categórico sería falso. Y dice «pide», ⛔ no «abre»: sin agente configurado no hay
+ *  ninguna sesión hospedada que abrir, pero la llamada ocurre en las dos configuraciones. */
+export const COPY_VERIFY_PIDE_UNA_NUEVA =
+  "Si esta billetera todavía no tiene una verificación aprobada, este botón pide una verificación nueva. El cupo de verificaciones no es ilimitado.";
+
+/** ⛔ NO puede llamarse «Empezar de nuevo»: ése es el escape de los 5 s del overlay de al lado, que
+ *  LIMPIA el pendiente, y éste no lo limpia. Dos sinónimos con efectos distintos son ambiguos para la
+ *  persona, no sólo para el `getByRole`. Y ⛔ no puede ser «Reintentar» a secas: no reintenta la
+ *  verificación, arranca el envío de cero. */
+export const LABEL_VOLVER_A_EMPEZAR_EL_ENVIO = "Volver a empezar el envío";
+
+/** Los desenlaces posibles del resume. Los cuatro primeros son los `kind` de `ResumeKycResult`; el
+ *  quinto no tiene `kind` porque es el que ocurre cuando `execute()` TIRA, y ésa es exactamente la
+ *  razón por la que la card vieja no lo distinguía. */
+export type DesenlaceDelResume = "D1_none" | "D2_processing" | "D3_throw" | "D4_failed" | "D5_passed";
+
+export type FilaDeDesenlace = {
+  /** Los textos que la persona puede leer en este desenlace. `[]` = no cambia el copy que ya existía. */
+  readonly copy: readonly string[];
+  /** ⛔ CITA `archivo:línea`, NO razona. `T-073-CENSO` exige la cita: una justificación sin cita es una
+   *  opinión, y una opinión no se puede volver a verificar cuando el código de abajo cambie. */
+  readonly porQue: string;
+  /**
+   * Se declara cuando dos textos del censo LEEN CASI IGUAL, y ⛔ tiene que NOMBRAR con cuál desenlace
+   * (`con`), incluida esta misma fila cuando el solapamiento es interno.
+   *
+   * 🔴 POR QUÉ NOMBRA Y NO ES UN BOOLEANO, y está MEDIDO: la primera versión de este campo era un
+   * `string` suelto («declarado, sí»). Con eso, el mutante *«devolver D-2 y D-3 a la misma card»*
+   * SOBREVIVÍA en verde (`225 passed`): las dos filas ya traían un `mismoTextoQue` puesto por otro
+   * motivo, y el censo lo leía como permiso para cualquier solapamiento. Un permiso que no dice CON QUÉ
+   * es un permiso para todo.
+   */
+  readonly mismoTextoQue?: { readonly con: DesenlaceDelResume; readonly porQue: string };
+};
+
+export const DESENLACES_DEL_RESUME: Readonly<Record<DesenlaceDelResume, FilaDeDesenlace>> = {
+  D1_none: {
+    copy: [],
+    porQue:
+      "resume-kyc.ts:25, :30 y :35 devuelven el MISMO `none` para tres hechos distintos (no hay pendiente / no hay remesa / la remesa ya salió de kyc_pending). Cualquier frase tendría que elegir uno de los tres, así que este desenlace no dice nada del KYC: aterriza en la bienvenida, que tiene salidas.",
+  },
+  D2_processing: {
+    copy: [COPY_RESUME_SIN_RESPUESTA_TITULO, COPY_RESUME_SIN_RESPUESTA_CUERPO],
+    porQue:
+      "resume-kyc.ts:44 (contestaron y no era final) y resume-kyc.ts:41-42 (la consulta falló y se reintenta) llegan al mismo `processing`: el tipo no los distingue, así que el copy NO enumera causas.",
+  },
+  D3_throw: {
+    copy: [COPY_RESUME_INTERRUMPIDO_TITULO, COPY_RESUME_INTERRUMPIDO_CUERPO],
+    porQue:
+      "flow.tsx:215 no mira el error, y hay CUATRO throws POSTERIORES a la consulta (resume-kyc.ts:47 applyKyc, :48 repo.save, :49 kycStore.save, :50 pending.clear) más uno anterior (:24). Evidencia ejecutable de que el throw tardío existe: use-cases.test.ts:244-260 y T-073-2d, que además cuenta la llamada a `decision`.",
+  },
+  D4_failed: {
+    copy: [COPY_RESUME_NO_PODEMOS_SEGUIR, COPY_RESUME_NO_PODEMOS_SEGUIR_AVISO],
+    porQue:
+      "resume-kyc.ts:37 declara textual que no se inventa un veredicto sobre esa persona, sólo que NO PUDIMOS RETOMAR. Evidencia ejecutable: resume-kyc.carril.test.ts:188-208 mide `decision` en CERO llamadas para el pendiente sin carril, con su calibración inversa en :210-220.",
+    mismoTextoQue: {
+      con: "D4_failed",
+      porQue:
+        "el banner y el aviso son el MISMO desenlace visto desde las dos ramas de `yaInteractuoRef` (flow.tsx:175 y :208), no dos desenlaces. Se solapan a propósito: quien ya estaba usando la pantalla recibe el aviso en vez de que se la reemplacen.",
+    },
+  },
+  D5_passed: {
+    copy: [],
+    porQue:
+      "flow.tsx:757 rama `confirm` («Tu verificación quedó lista») ya es cierta: se preguntó, contestaron y el veredicto fue terminal y aprobado (resume-kyc.ts:44 y :51). Esta HU no lo toca.",
+  },
+};
+
+/** Resuelve el copy de la card según CÓMO terminó el bucle. Función pura: sin React, sin JSX. */
+export function copyDelFinDelResume(fin: FinDelResume): { titulo: string; cuerpo: string } {
+  return fin === "sin-respuesta-en-el-techo"
+    ? { titulo: COPY_RESUME_SIN_RESPUESTA_TITULO, cuerpo: COPY_RESUME_SIN_RESPUESTA_CUERPO }
+    : { titulo: COPY_RESUME_INTERRUMPIDO_TITULO, cuerpo: COPY_RESUME_INTERRUMPIDO_CUERPO };
+}

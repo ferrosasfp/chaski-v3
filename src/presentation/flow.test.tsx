@@ -296,7 +296,7 @@ it("T5: 'Borrar igual' limpia address + PII del beneficiario y vuelve a la panta
 
   // Con address conectada → abrir la confirmación y ejecutar forgetAndDisconnect.
   fireEvent.click(await screen.findByText("¿No sos vos?"));
-  fireEvent.click(await screen.findByText("Borrar igual"));
+  await clickCuandoHabilite(/^Borrar igual$/); // re-AR it3/MNR-3 — el 2º click va sobre `<button disabled={busy}>` (`flow.tsx:722`)
 
   // (a) WKH-063 fix-pack (AR/BLQ-BAJO-1): vuelve a la PANTALLA DE ENTRADA, no al medio del formulario.
   // Antes este assert buscaba el input de monto directo, porque `forgetAndDisconnect` hacía
@@ -1271,7 +1271,13 @@ describe("HU-SOL-13 — acción refund en TrackView (T7)", () => {
     render(<LiveTrackView initial={rem} recover={recover} />);
 
     fireEvent.click(await screen.findByRole("button", { name: /Recuperar fondos/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Volver a intentar/ }));
+    // re-AR it3/MNR-3 — EL ÚNICO DE LOS 5 EN QUE EL PRIMER CLICK SÍ ABRE UNA VENTANA DE `busy`, y el AR
+    // no lo vio porque "Volver a intentar" no estaba en la lista del candado. Es el MISMO botón
+    // (`flow.tsx:2205`), que cambia de etiqueta: `onRefund` hace `setBusy(true)` → `await` →
+    // `setEnviados(...)` (lo que produce la etiqueta nueva) → `setBusy(false)` en el `finally`. Hoy
+    // React junta las dos últimas en un solo commit y por eso pasa; que pase depende de ESE batching,
+    // no de nada que este test afirme.
+    await clickCuandoHabilite(/Volver a intentar/);
 
     await waitFor(() => expect(gateway.calls).toHaveLength(2));
   });
@@ -3150,7 +3156,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     fireEvent.click(await screen.findByRole("button", { name: /Volver/ }));
 
     fireEvent.click(await screen.findByRole("button", { name: /¿No sos vos\?/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "Borrar igual" }));
+    await clickCuandoHabilite(/^Borrar igual$/); // re-AR it3/MNR-3 — el 2º click va sobre `<button disabled={busy}>` (`flow.tsx:722`)
 
     await waitFor(() => expect(forgetSpy).toHaveBeenCalledTimes(1));
   });

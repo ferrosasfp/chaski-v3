@@ -1083,7 +1083,7 @@ describe("T-063-23 (AR/BLQ-BAJO-1): después de «Borrar igual», el dispositivo
     await screen.findByText(/Revisá el envío/);
 
     fireEvent.click(await screen.findByRole("button", { name: /¿No sos vos\?/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Borrar igual/ }));
+    await clickCuandoHabilite(/Borrar igual/); // re-AR it3/MNR-3 — el 2º click va sobre `<button disabled={busy}>` (`flow.tsx:722`)
 
     expect(
       await screen.findByRole("heading", { name: "Tu plata no pasa por Chaski" }),

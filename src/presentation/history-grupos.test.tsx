@@ -529,7 +529,7 @@ describe("WKH-351 · la tarjeta del historial no muestra la etiqueta del trámit
   // encabezado de grupo con el que contradecirse, así que ahí la etiqueta no miente.
   // MUTANTE: sacar el Pill del `Receipt` "por consistencia", que es el sobre-cumplimiento, el error
   // simétrico al bug; borrar `statusDisplay` (no compila); o cambiarle una etiqueta al pasar.
-  // NO DUPLICA: (`statusDisplay`, `flow-vm.test.ts:76-101`) candadea el PURO y `flow.test.tsx:1568-1578` cubre 2 de
+  // NO DUPLICA: (`statusDisplay`, `flow-vm.test.ts:76-101`) candadea el PURO y (`showRefund`, `flow.test.tsx:1576-1584`) cubre 2 de
   // los 7 estados en el recibo. Esto es el lado del RENDER con el conjunto completo.
   it("T-N3: el recibo sigue mostrando la etiqueta, y las 7 siguen siendo 7 y no vacías", () => {
     const { container } = render(

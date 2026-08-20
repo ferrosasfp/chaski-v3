@@ -13,14 +13,22 @@
 //
 // ⛔ LO QUE ESTE CANDADO **NO** HACE, y hay que leerlo antes de apoyarse en su verde:
 //
-//   1. NO prueba que la lista de nombres esté COMPLETA. Es opt-in, igual que las citas ancladas. Lo que
-//      sí está medido es que cada nombre de la lista SIGUE EXISTIENDO en la UI (`it` de abajo), o sea
-//      que un rename se pone rojo en vez de vaciar el candado en silencio. Un botón `disabled={busy}`
-//      NUEVO no entra solo: hay que sumarlo acá.
+//   1. NO DERIVA la lista de nombres de la UI: sigue siendo opt-in, igual que las citas ancladas. Un
+//      botón `disabled={busy}` nuevo no entra solo — hay que sumarlo acá. Lo que sí está medido es que
+//      cada nombre SIGUE EXISTIENDO en la UI (`it` de abajo): un rename se pone rojo en vez de vaciar
+//      el candado en silencio. ⚠️ Y ACÁ ESTABA EL AGUJERO (re-AR it3 · MNR-3): a la pregunta «¿qué pone
+//      rojo esto cuando aparece un botón gateado NUEVO?» la respuesta era **NADA**, y por eso la lista
+//      se quedó corta con botones que YA existían — `Borrar igual`, `Usar esta cuenta`,
+//      `Volver a intentar` y las tres pestañas de la barra: seis nombres que no había visto nadie, y un
+//      «32 gateados» que en realidad era ≥ 35. Hoy hay un DISPARADOR MECÁNICO: `T-CLICK-SITIOS` pinnea
+//      el número EXACTO de ocurrencias de `disabled={busy}` en los cuatro archivos de UI. Una más —o una
+//      menos— pone rojo y obliga a decidir si esa etiqueta entra en la lista. Sigue sin probar que la
+//      lista esté completa; lo que prueba es que **no se puede agregar un botón gateado sin que alguien
+//      lo mire**.
 //   2. NO mira si el PRIMER click del par dispara un `guard`. Eso se resuelve a mano: un par cuyo
-//      primer click es un `setState` síncrono NO instancia la carrera, y los tres del árbol que están
+//      primer click es un `setState` síncrono NO instancia la carrera, y los CUATRO del árbol que están
 //      en ese caso figuran abajo en `EXENTOS`, con el `onClick` que lo demuestra citado en su propia
-//      línea del test. Un cuarto sitio no entra solo: hay que agregarlo a esa lista, o sea decir por
+//      línea del test. Un quinto sitio no entra solo: hay que agregarlo a esa lista, o sea decir por
 //      qué. ⇒ el criterio sintáctico sobre-detecta a propósito, y la exención es la que carga la
 //      prueba.
 //   3. NO mide una TASA de flake. Repetir corridas verdes no dice nada de una carrera de 1 en 1000. Lo
@@ -37,6 +45,22 @@ const DIR = path.resolve(ROOT, "src/presentation");
 /**
  * Los botones que la app deshabilita mientras un `guard()` está en vuelo. Escritos a mano (ver el
  * punto 1 de arriba), y con el `it` que los ata a la UI real.
+ *
+ * 🔴 LOS SEIS ÚLTIMOS ENTRARON EN LA it3 (re-AR · MNR-3), Y NO SON BOTONES NUEVOS: existían desde
+ * antes y el candado no los miraba. Cada uno con el sitio que lo hace gateado, verificado leyendo la
+ * UI y no la lista:
+ *   · `Borrar igual`      — `<button onClick={forgetAndDisconnect} disabled={busy}>` (`flow.tsx:722`)
+ *   · `Usar esta cuenta`  — `<CuentaCambiada … disabled={busy} />` (`flow.tsx:747`) lo reenvía a su
+ *                           `<Button onClick={onAdoptar} disabled={disabled}>` (`flow.tsx:3815`)
+ *   · `Volver a intentar` — es el MISMO botón que `Recuperar fondos` y que `Cerrar y recuperar`, con la
+ *                           etiqueta cambiada tras un intento (`flow.tsx:2206`, `flow.tsx:2282`)
+ *   · `Enviar`, `Mis envíos`, `Recuperar` — las tres pestañas de `<BarraDestinos … disabled={busy} />`
+ *                           (`flow.tsx:1237`), que las apaga a las tres juntas (`barra-destinos.tsx:111`)
+ *
+ * ⚠️ SON SUBCADENAS Y SOBRE-DETECTAN A PROPÓSITO: `paresPegados` hace `includes`, así que `Recuperar`
+ * también matchea `Recuperar fondos`. Eso agranda el perímetro, nunca lo achica, y la exención es la
+ * que carga la prueba. Medido al agregarlas: **5 pares nuevos**, de los cuales 4 se convirtieron y 1
+ * quedó exento con su razón.
  */
 const GATEADOS_POR_BUSY: readonly string[] = [
   "Conectar wallet",
@@ -50,6 +74,12 @@ const GATEADOS_POR_BUSY: readonly string[] = [
   "Buscar envíos con cuentas abiertas",
   "Empezar un envío",
   "Volver al inicio",
+  "Borrar igual",
+  "Usar esta cuenta",
+  "Volver a intentar",
+  "Enviar",
+  "Mis envíos",
+  "Recuperar",
 ];
 
 /**
@@ -61,6 +91,11 @@ const EXENTOS: readonly string[] = [
   "barra-destinos.test.tsx:284", // el de arriba es `VolverAlInicio` ⇒ `onVolver` = `setStep`, síncrono
   "refund-perdido-registro-mudo.test.tsx:82", // el de arriba es la puerta ⇒ `setOpen(true)`, síncrono
   "tx-proof.test.tsx:178", // ídem
+  // re-AR it3/MNR-3 — el par vive DENTRO de `irAMisEnvios()`, un helper SÍNCRONO. Su primer click es el
+  // mismo `VolverAlInicio` de la exención de arriba (`onVolver` = `setStep("bienvenida")`, `flow.tsx:807`),
+  // así que no abre ningún `guard` y no hay ventana de `busy`. Convertirlo obligaría a volver `async` el
+  // helper y todos sus llamadores: mucho más cambio que el defecto que cerraría, que es ninguno.
+  "flow.test.tsx:157",
 ];
 
 function archivosDeTest(): string[] {
@@ -100,9 +135,40 @@ describe("candado: ningún click sobre un botón gateado por `busy` va pegado a 
   it("cada nombre de la lista sigue existiendo en la UI (un rename NO vacía el candado)", () => {
     const ausentes = GATEADOS_POR_BUSY.filter((n) => !FUENTE_UI.includes(n));
     expect(ausentes, "estos botones se renombraron y el candado dejó de vigilarlos").toEqual([]);
-    // Y que la app siga teniendo botones gateados: si `disabled={busy}` desapareciera, el mecanismo
-    // entero dejaría de existir y esta lista sería arqueología.
-    expect(FUENTE_UI.split("disabled={busy}").length - 1).toBeGreaterThanOrEqual(10);
+  });
+
+  // ── T-CLICK-SITIOS — EL DISPARADOR, y es lo que a MNR-3 le faltaba ────────────────────────────
+  //
+  // 🔴 QUÉ DEFECTO CIERRA. Acá había un `toBeGreaterThanOrEqual(10)` contra **15** ocurrencias, con la
+  // razón "si `disabled={busy}` desapareciera, el mecanismo dejaría de existir". Eso es cierto y es lo
+  // ÚNICO que veía: un piso no puede ver un botón gateado NUEVO (16 sigue siendo >= 10) y tampoco vio
+  // los seis viejos que faltaban en la lista. Es la misma forma de candado que se pudre solo que el pin
+  // de enums de `copy-de-prepare-en-pantalla.test.tsx` acaba de cerrar: el piso mide el vaciado, no la
+  // deriva.
+  //
+  // ⇒ CONTEO EXACTO. Cualquier movimiento —un botón gateado nuevo, uno que deja de estarlo, o hasta un
+  // comentario que nombre la cadena— pone rojo y obliga a decidir si esa etiqueta entra en
+  // `GATEADOS_POR_BUSY`.
+  //
+  // ⚠️ EL PIN NO DISTINGUE CÓDIGO DE COMENTARIO, y está medido: de las 15 ocurrencias, **14 son props
+  // reales** y **1 vive dentro de un comentario** (`flow.tsx:1185`, prosa que discute el `disabled`).
+  // No se filtra a propósito: filtrar pide un lexer, y un lexer que se equivoque vuelve a perder un
+  // sitio EN SILENCIO. Un rojo de más cuesta un renglón; uno de menos costó este MENOR.
+  //
+  // ⛔ LO QUE NO PRUEBA: que la lista esté completa. Un botón gateado nuevo pone rojo ESTE `it`, no el
+  // de los pares, y su etiqueta la sigue escribiendo una persona.
+  it("T-CLICK-SITIOS: el número de sitios `disabled={busy}` de la UI es EXACTAMENTE el pinneado", () => {
+    const contar = (s: string): number => s.split("disabled={busy}").length - 1;
+    expect(
+      contar(FUENTE_UI),
+      "cambió la cantidad de `disabled={busy}` en la UI. Si es un botón NUEVO: sumá su etiqueta a " +
+        "`GATEADOS_POR_BUSY` y recién ahí actualizá este número. Si desapareció uno: sacá su etiqueta. " +
+        "Mover el número sin mirar la lista es exactamente lo que dejó seis botones sin vigilancia.",
+    ).toBe(15);
+    // 🧪 CONTROL DEL INSTRUMENTO, MISMA CORRIDA: el contador discrimina de verdad, no es un `toBe`
+    // sobre una constante. Con un sitio de mentira agregado da 16; sobre una fuente sin la cadena, 0.
+    expect(contar(`${FUENTE_UI}\n<Button disabled={busy} />`)).toBe(16);
+    expect(contar("<Button disabled={otraCosa} />")).toBe(0);
   });
 
   it("no hay pares de clicks pegados sobre un botón que puede estar deshabilitado", () => {
@@ -136,7 +202,7 @@ describe("candado: ningún click sobre un botón gateado por `busy` va pegado a 
   // Las exenciones son tres, y son las tres que quedaron declaradas en su propia línea. Si alguien
   // agrega una cuarta sin decir por qué, este `it` se pone rojo.
   it("las exenciones son exactamente las declaradas, y todas siguen existiendo", () => {
-    expect(EXENTOS).toHaveLength(3);
+    expect(EXENTOS).toHaveLength(4);
     const vivas = EXENTOS.filter((e) => {
       const [f, ln] = e.split(":");
       const lineas = readFileSync(path.join(DIR, f as string), "utf8").split("\n");

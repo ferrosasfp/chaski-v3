@@ -107,3 +107,34 @@ export function motivoParaNoMostrar(p: { href: string; leer: LeerDelDisco }): Mo
   if (viaje !== null) return "viaje-de-billetera-en-el-disco";
   return null;
 }
+
+/**
+ * HU 073 / AC-5 — ¿esta persona llegó por la vuelta del verificador?
+ *
+ * 🔴 TRES VALORES, NO DOS, y por eso el nombre dice «volvió POR la vuelta» y no «volvió». `true` es
+ * *«la URL trae la marca que NOSOTROS escribimos»* (`urlDeVueltaDeKyc`, `:54`). `false` es
+ * *«la URL no la trae»*, que ⛔ **NO es «la persona no volvió del verificador»**: el parámetro se puede
+ * perder en un redirect intermedio, en un cliente de correo que reescribe enlaces, o simplemente porque
+ * la persona abrió la app de nuevo a mano. La lección está escrita al lado, en el docblock de
+ * (`MotivoParaNoMostrar`, `:68`): «no pude preguntar» ≠ «no».
+ *
+ * ⛔ POR ESO SU AUSENCIA NO HABILITA NINGUNA FRASE (CD-5). En la Ola A este predicado **no tiene NINGÚN consumidor de producción**, y eso es la decisión de W3.2, ⛔ no una pata floja: por la ausencia no se puede afirmar nada (CD-5), y por la PRESENCIA el copy no cambia ni una palabra (`T-073-5`), así que un consumidor sólo podría existir para hacer una de esas dos cosas.
+ * ⛔ ACÁ VA EL CRITERIO Y ⛔ NO LA CIFRA (CR/BLQ-BAJO-2). El criterio es *«este símbolo aparece SÓLO en su definición y en su propio test»*, y se re-deriva mirando QUÉ archivos salen —no cuántos hits— de un `grep -ro` del identificador sobre `src/`. Acá había un control positivo con un número («⇒ 18») que el árbol ya no daba, y lo que lo hace ejemplar es CÓMO dejó de darlo: **el commit que escribió ese número lo volvió falso él mismo**, porque en la misma edición agregó una cita anclada que subió la cuenta. ⛔ REGLA: un número que cuenta ocurrencias del archivo que estás editando se falsifica solo — o lo re-deriva un instrumento (y los marcadores `[[CENSO …]]` no tienen campo para contar ocurrencias de un símbolo), o no se escribe. Es la misma decisión que ya tomó, para sus propias cifras, el docblock donde vive el censo de `flow.tsx`: «un número que sólo una persona sabe reproducir es el que vuelve a envejecer».
+ * ⛔ NO LO BORRES POR «CÓDIGO MUERTO»: es el vocabulario que hace MEDIBLE que los dos montajes digan lo mismo, y su test ((`volvioPorLaVueltaDeKyc`, `splash-puerta.test.ts:131-157`)) es lo que impide que alguien reintroduzca la lectura de dos valores. La enmienda de AC-5 que sale de esto está escrita en el auto-blindaje de la HU Y en el encabezado del `cr-report.md`, que es lo que F4 lee.
+ * Una frase del tipo «parece que no completaste la verificación» derivada de este `false`
+ * sería exactamente la clase de afirmación sin medición que esta HU vino a eliminar.
+ *
+ * ⛔ El literal `"kyc"`/`"return"` NO se vuelve a escribir: se reusan las dos constantes de arriba, que
+ * son las mismas que usa el único productor de esa URL.
+ */
+export function volvioPorLaVueltaDeKyc(href: string): boolean {
+  let params: URLSearchParams;
+  try {
+    params = new URL(href).searchParams;
+  } catch {
+    // Un href que no parsea no trae la marca, y tampoco permite afirmar que la persona no volvió. Acá
+    // el `false` significa «no hay marca», nunca «no volvió»: ver el docblock de arriba.
+    return false;
+  }
+  return params.get(PARAM_KYC) === VALOR_VUELTA_KYC;
+}

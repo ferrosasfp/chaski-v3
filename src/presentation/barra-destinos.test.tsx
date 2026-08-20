@@ -71,7 +71,7 @@
 // 🔴 EL 4 ERA UNA FILA AMBIGUA Y AHORA SON DOS, y la diferencia no es de un test: son 11 contra 8. Decía
 // "la barra pintada sin el guard `esDestino(step)`", que se lee de dos maneras — borrar el guard COMPLETO
 // (y ahí caen además los tres `it` de `T-063-20`, porque la barra se pinta encima de los dos overlays) o
-// borrar sólo ese término y dejar `!resuming && !timedOut`. El `11 failed` de la tabla vieja es la
+// borrar sólo ese término y dejar `!resuming && !finDelResume`. El `11 failed` de la tabla vieja es la
 // PRIMERA lectura; la segunda da 8 y es la que aísla lo que su nombre dice. Mismo tratamiento que el par
 // 7 / 7b, que ya se había partido por lo mismo.
 // ⚠️ EL 1 MATA CATORCE, y los cuatro que se sumaron sobre el 10 del fix-pack 2 son los cuatro `it` nuevos
@@ -125,7 +125,7 @@ import { buildTestContainer } from "../test-support/test-container";
 import type { Container } from "../composition/container";
 import type { ResumeKycResult } from "../application/use-cases/resume-kyc";
 import { Money } from "../domain/money";
-import { Remittance, type RemittanceState, toPersistedIdentity } from "../domain/remittance"; import { clickCuandoHabilite } from "../test-support/clicks"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
+import { Remittance, type RemittanceState, toPersistedIdentity } from "../domain/remittance"; import { clickCuandoHabilite } from "../test-support/clicks"; import { COPY_RESUME_NO_PODEMOS_SEGUIR, COPY_RESUME_NO_PODEMOS_SEGUIR_AVISO, COPY_RESUME_INTERRUMPIDO_TITULO } from "./flow-vm"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
 import {
   FAKE_SOLANA_BENEFICIARY,
   FakeKycGateway,
@@ -345,7 +345,7 @@ describe("T-063-4 (AC-3/AC-4): la máquina de `Step` está partida en pasos y de
 
 describe("T-063-5 (AC-3): NINGÚN paso del envío pinta la barra", () => {
   // MUTANTE 4b (aplicado): borrar `esDestino(step)` del guard de la barra, dejando `!resuming &&
-  // !timedOut` ⇒ `8 failed | 31 passed (39)`. Los 7 `it` de este `it.each` MÁS el que camina el
+  // !finDelResume` ⇒ `8 failed | 31 passed (39)`. Los 7 `it` de este `it.each` MÁS el que camina el
   // recorrido real, que está abajo: OCHO y no siete (fix-pack 2). Con el guard ENTERO borrado son 11,
   // porque caen también los tres de `T-063-20`; las dos filas están en el encabezado.
   it.each(PASOS_DEL_FLUJO)("en `%s` no hay barra de destinos", (paso) => {
@@ -601,7 +601,7 @@ describe("T-063-9: las tres pantallas de destino respetan las reglas de copy del
 // 🔴 EL DEFECTO, y es el camino del video de M5. El KYC se va a Didit con `window.location.href` y
 // vuelve como RECARGA, así que el resume-loop corre al MONTAR. Y desde esta HU el default de
 // `pasoInicial` es `"bienvenida"`, o sea que el `step` de ese montaje YA es un destino. La barra se
-// pintaba fuera del ternario `resuming/timedOut`, así que quedaba DEBAJO de "Verificando tu identidad…"
+// pintaba fuera del ternario `resuming/finDelResume`, así que quedaba DEBAJO de "Verificando tu identidad…"
 // con las tres pestañas habilitadas; al tocar una, la pestaña se marcaba `aria-current="page"` —la barra
 // AFIRMABA estar en Recuperar— y la pantalla seguía en el overlay. AC-3 dice lo contrario: hay un envío
 // en curso, no hay barra.
@@ -614,7 +614,7 @@ describe("T-063-20 (AR/BLQ-MED-1): con un overlay de KYC arriba, la barra NO se 
 
   it("🔴 mientras el resume dice `processing`, hay overlay y NO hay barra", async () => {
     // MUTANTE F1 (aplicado): devolver el guard a `esDestino(step)` a secas ⇒ `3 failed | 36 passed (39)`.
-    // ⚠️ CAEN TRES Y NO DOS, y el tercero es el que importa: éste, el de `timedOut`, y el que lee el
+    // ⚠️ CAEN TRES Y NO DOS, y el tercero es el que importa: éste, el del fin del resume, y el que lee el
     // FUENTE (porque la línea de la barra deja de contener `!resuming`). Sin el mutante: `38 passed`.
     render(<RemittanceFlow container={conResume(async () => ({ kind: "processing" }))} />);
 
@@ -624,9 +624,9 @@ describe("T-063-20 (AR/BLQ-MED-1): con un overlay de KYC arriba, la barra NO se 
     expect(barra(), "la barra no puede convivir con el overlay del resume").toBeNull();
   });
 
-  it("🔴 y con el resume vencido (`timedOut`) tampoco", async () => {
-    // `resumeKyc` que TIRA: el loop hace `break` y cae en la rama de timeout, así que se llega al
-    // segundo overlay sin esperar los 20 s de los 8 polls.
+  it("🔴 y con el resume CORTADO (el `catch`, D-3) tampoco", async () => {
+    // `resumeKyc` que TIRA: desde la HU 073 el `catch` tiene su PROPIO aterrizaje (D-3) y ya no cae en
+    // la rama del techo, así que se llega al segundo overlay sin esperar los 20 s de los 8 polls. ⚠️ Este `it` NO es un control de AC-2: sólo construye el throw TEMPRANO, o sea el sub-caso en el que la frase vieja era cierta. El caso que la volvía falsa (throw DESPUÉS de una consulta contestada) lo mide `T-073-2d` en `use-cases.test.ts`.
     render(
       <RemittanceFlow
         container={conResume(async () => {
@@ -634,8 +634,8 @@ describe("T-063-20 (AR/BLQ-MED-1): con un overlay de KYC arriba, la barra NO se 
         })}
       />,
     );
-    expect(await screen.findByRole("heading", { name: /La verificación está tardando/ })).toBeInTheDocument();
-    expect(barra(), "la barra no puede convivir con el overlay de timeout").toBeNull();
+    expect(await screen.findByRole("heading", { name: COPY_RESUME_INTERRUMPIDO_TITULO })).toBeInTheDocument();
+    expect(barra(), "la barra no puede convivir con la card del fin del resume").toBeNull();
   });
 
   it("(control) sin nada en vuelo, el MISMO montaje sí pinta la barra", () => {
@@ -645,7 +645,7 @@ describe("T-063-20 (AR/BLQ-MED-1): con un overlay de KYC arriba, la barra NO se 
   });
 
   it("🔴 ningún overlay NUEVO puede nacer sin sumarse al guard de la barra (se lee el FUENTE)", () => {
-    // ⚠️ ESTE `it` EXISTE PORQUE `!resuming && !timedOut` ES UNA LISTA, y una lista no se actualiza sola:
+    // ⚠️ ESTE `it` EXISTE PORQUE `!resuming && !finDelResume` ES UNA LISTA, y una lista no se actualiza sola:
     // un tercer overlay agregado mañana al mismo ternario volvería a pintar la barra encima, que es
     // EXACTAMENTE el defecto que este bloque cierra. En vez de declararlo en prosa, se mide: se sacan
     // las banderas de las ramas del ternario del `<main>` y se exige que cada una esté negada en la
@@ -685,7 +685,7 @@ describe("T-063-20 (AR/BLQ-MED-1): con un overlay de KYC arriba, la barra NO se 
     // tercera que aparezca cae en el `for` y una que desaparezca cae acá.
     expect(banderas, "las ramas del ternario del overlay cambiaron: vení a leer el guard de la barra").toEqual([
       "resuming",
-      "timedOut",
+      "finDelResume",
     ]);
 
     const lineaBarra = fuente.find((l) => l.includes("<BarraDestinos activo="));
@@ -928,7 +928,7 @@ describe("T-063-21 (AR-it2/BLQ-MED-1): la ventana previa a la primera respuesta 
     fireEvent.click(within(barra() as HTMLElement).getByRole("button", { name: "Recuperar" }));
 
     contestar({ kind: "failed", snapshot: remesaConDeposito("rem-13") });
-    expect(await screen.findByText("Tu verificación necesita otro intento")).toBeInTheDocument();
+    expect(await screen.findByText(COPY_RESUME_NO_PODEMOS_SEGUIR_AVISO)).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: /Recuperar fondos de un envío anterior/ }),
       "un `failed` tampoco puede llevarse puesta la pantalla que la persona eligió",
@@ -938,14 +938,14 @@ describe("T-063-21 (AR-it2/BLQ-MED-1): la ventana previa a la primera respuesta 
       "el copy del caso bueno no puede aparecer cuando la verificación NO pasó",
     ).toBeNull();
     expect(
-      screen.queryByText(/La verificación no pasó/),
+      screen.queryByText(COPY_RESUME_NO_PODEMOS_SEGUIR),
       "el banner habla de `verify`: sobre `recuperar` no tiene de qué hablar",
     ).toBeNull();
 
     // El botón es el que navega, y recién ahí el banner dice lo que pasó.
     fireEvent.click(screen.getByRole("button", { name: "Reintentar la verificación" }));
     expect(await screen.findByRole("button", { name: /Verificar mi identidad/ })).toBeInTheDocument();
-    expect(screen.getByText(/La verificación no pasó/)).toBeInTheDocument();
+    expect(screen.getByText(COPY_RESUME_NO_PODEMOS_SEGUIR)).toBeInTheDocument();
   });
 
   it("🔴 (control del `failed`) sin tocar nada, el `failed` SÍ navega solo a `verify`, con su banner", async () => {
@@ -966,9 +966,9 @@ describe("T-063-21 (AR-it2/BLQ-MED-1): la ventana previa a la primera respuesta 
 
     contestar({ kind: "failed", snapshot: remesaConDeposito("rem-14") });
     expect(await screen.findByRole("button", { name: /Verificar mi identidad/ })).toBeInTheDocument();
-    expect(screen.getByText(/La verificación no pasó/)).toBeInTheDocument();
+    expect(screen.getByText(COPY_RESUME_NO_PODEMOS_SEGUIR)).toBeInTheDocument();
     expect(
-      screen.queryByText("Tu verificación necesita otro intento"),
+      screen.queryByText(COPY_RESUME_NO_PODEMOS_SEGUIR_AVISO),
       "sin interacción previa no hay nada que avisar: navegar ES el comportamiento correcto acá",
     ).toBeNull();
   });

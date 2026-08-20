@@ -41,7 +41,7 @@ import {
   PREPARE_NO_AGENT_FOR_CAPABILITY,
   isPrepareRejection, isPrepareUnreachable, // WKH-358 (fix-pack): EN ESTA LÍNEA, no en una nueva — este archivo recibe citas por número por decenas (el censo, con su marcador verificado, vive en UN solo lugar: `:44`). ⚠️ ACÁ DECÍA «131» y ese número no se re-derivaba de NINGUNA lectura (re-AR it2 · BLQ-BAJO-4): se borra en vez de re-medirse y una línea de import de más las corre a todas
 } from "../application/agent-rejections"; // hallazgo #75: rechazo del agente ≠ payout fallido
-import { resolveSolanaExplorerTxUrl, resolveSolanaNetworkConfig } from "../infrastructure/chain"; import { canonicalizeAddress } from "../infrastructure/address"; // HU-SOL-13: cluster Solana activo (env-driven) · WKH-346: la URL del visor que enlaza el comprobante · WKH-354/AC-3: `canonicalizeAddress` entra EN ESTA LÍNEA, no en una nueva. ⛔ EL NÚMERO, CON SU INSTRUMENTO AL LADO — Y EL INSTRUMENTO ES UN ARCHIVO DEL REPO, NO UNA DEFINICIÓN EN PROSA. Acá vivía un "74" falso (CR/MNR-5) y después un "131 (98 largas desde 30 archivos, 8 internas, + 33 auto) a 79 destinos" que NO SE RE-DERIVA DE NINGUNA LECTURA: el re-AR it2 probó ocho y ninguna da esos números (BLQ-BAJO-4). Una definición escrita a mano no se puede correr; un archivo sí. ⇒ SE MIDE CON EL INSTRUMENTO DE `citas-ancladas.test.ts`: su regex `ANCLADA` (`ANCLADA`, `../composition/citas-ancladas.test.ts:74`) más su resolución de destino, contando las entrantes largas + las auto-citas ANCLADAS y filtrando por destino. Es el MISMO instrumento que lleva los censos de `solana-wallet.ts`. ⇒ Y DESDE EL FIX-PACK DEL CR EL NÚMERO YA NO SE ESCRIBE ACÁ: es un MARCADOR que ese mismo archivo VERIFICA en cada `npm test` y que se pone ROJO solo. Este archivo recibe [[CENSO src/presentation/flow.tsx entrantes=98]] citas ancladas a [[CENSO src/presentation/flow.tsx destinos=62]] líneas destino distintas, y TODAS apuntan más abajo de esta línea. ⚠️ ACÁ DECÍA «82 a 56 destinos» con un desglose (68 largas desde 25 archivos + 14 auto) que **ningún candado puede re-derivar**, así que el desglose se BORRA en vez de re-medirse: un número que sólo una persona sabe reproducir es el que vuelve a envejecer. ⚠️ Y LO QUE EL MARCADOR NO CUENTA, QUE HAY QUE DECIRLO: las citas SUELTAS —`flow.tsx:NNNN` sin símbolo delante— se rompen igual con una línea nueva acá y NO LAS MIRA NADIE, ni el candado de citas ni el de censo. Acá vivió un «205» para ellas y se BORRA por lo mismo: no hay instrumento en el repo que lo reproduzca, y el re-AR it2 ya midió que ocho lecturas distintas daban ocho números distintos. Lo que queda es el criterio, que no necesita cifra; el invariante que justifica el Δ0 es que TODO lo que está más abajo se corre con una línea nueva acá
+import { resolveSolanaExplorerTxUrl, resolveSolanaNetworkConfig } from "../infrastructure/chain"; import { canonicalizeAddress } from "../infrastructure/address"; // HU-SOL-13: cluster Solana activo (env-driven) · WKH-346: la URL del visor que enlaza el comprobante · WKH-354/AC-3: `canonicalizeAddress` entra EN ESTA LÍNEA, no en una nueva. ⛔ EL NÚMERO, CON SU INSTRUMENTO AL LADO — Y EL INSTRUMENTO ES UN ARCHIVO DEL REPO, NO UNA DEFINICIÓN EN PROSA. Acá vivía un "74" falso (CR/MNR-5) y después un "131 (98 largas desde 30 archivos, 8 internas, + 33 auto) a 79 destinos" que NO SE RE-DERIVA DE NINGUNA LECTURA: el re-AR it2 probó ocho y ninguna da esos números (BLQ-BAJO-4). Una definición escrita a mano no se puede correr; un archivo sí. ⇒ SE MIDE CON EL INSTRUMENTO DE `citas-ancladas.test.ts`: su regex `ANCLADA` (`ANCLADA`, `../composition/citas-ancladas.test.ts:74`) más su resolución de destino, contando las entrantes largas + las auto-citas ANCLADAS y filtrando por destino. Es el MISMO instrumento que lleva los censos de `solana-wallet.ts`. ⇒ Y DESDE EL FIX-PACK DEL CR EL NÚMERO YA NO SE ESCRIBE ACÁ: es un MARCADOR que ese mismo archivo VERIFICA en cada `npm test` y que se pone ROJO solo. Este archivo recibe [[CENSO src/presentation/flow.tsx entrantes=132]] citas ancladas a [[CENSO src/presentation/flow.tsx destinos=85]] líneas destino distintas, y TODAS apuntan más abajo de esta línea. ⚠️ ACÁ DECÍA «82 a 56 destinos» con un desglose (68 largas desde 25 archivos + 14 auto) que **ningún candado puede re-derivar**, así que el desglose se BORRA en vez de re-medirse: un número que sólo una persona sabe reproducir es el que vuelve a envejecer. ⚠️ Y LO QUE EL MARCADOR NO CUENTA, QUE HAY QUE DECIRLO: las citas SUELTAS —`flow.tsx:NNNN` sin símbolo delante— se rompen igual con una línea nueva acá y NO LAS MIRA NADIE, ni el candado de citas ni el de censo. Acá vivió un «205» para ellas y se BORRA por lo mismo: no hay instrumento en el repo que lo reproduzca, y el re-AR it2 ya midió que ocho lecturas distintas daban ocho números distintos. Lo que queda es el criterio, que no necesita cifra; el invariante que justifica el Δ0 es que TODO lo que está más abajo se corre con una línea nueva acá
 import type {
   CloseableEscrow, EscrowChainState, SolanaEscrowChainStateReader, // WKH-349: EN ESTA LÍNEA, no en dos nuevas. Decía "las 19 citas … apuntan de `:243` para abajo" y las dos mitades eran falsas (CR/MNR-5), y después decía 131, que tampoco se re-derivaba (re-AR it2 · BLQ-BAJO-4). El número, su instrumento y su fecha viven en UN solo lugar, `:44`, y este renglón no los repite. Lo que sí vale, y es el argumento: TODAS apuntan más abajo de `:44`, así que dos líneas nuevas acá las corren todas
   EscrowRefundConfirmation,
@@ -72,7 +72,7 @@ import {
   lostEscrowRecoveryError,
   shortErrorCode,
   statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, type GestoRenovacion, REVISION_APAGADA, REVISION_FIRMANDO, REVISION_GESTO, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_BILLETERA, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, esVentanaSinAbiertos, // WKH-339: EN ESTA LÍNEA. `flow.tsx:661` lo citan 6 archivos (`ports.ts`, `container.test.ts`, `http-pop-signer.ts`, `pop-proof-store.ts`, `ledger-payout-status-gateway.ts`, `solana-providers.tsx`) más 2 sitios de acá, y NINGUNA de las 8 es una cita anclada ⇒ si se mueve, nada se pone rojo y los 8 comentarios rotan en silencio. ⛔ Acá decía `632`, que era el número correcto en `ce4f31e` y lo dejó de ser en esta rama: los 6 archivos SÍ se remapearon a 661 y esta línea, que es la que NOMBRA el número, quedó atrás (CR/BLQ-BAJO-1) · WKH-346 fix-pack: `esVentanaSinAbiertos` entra acá por lo mismo (Δ0)
-  cruceDeCuenta, seVerificoLaCuenta, copyDeEntregaFallida } from "./flow-vm"; // WKH-359/AC-6 — los dos EN ESTA LÍNEA (Δ0: este archivo recibe [[CENSO src/presentation/flow.tsx entrantes=98]] citas ancladas y una línea nueva acá arriba las corre a todas — el número es un MARCADOR verificado por `citas-ancladas.test.ts`, no una cifra escrita a mano: cuando esta HU lo escribió decía 83 y su propio commit lo volvió falso). ⚠️ Van ACÁ y no al final de `:74` porque esa línea TERMINA en comentario: pegar un import ahí lo deja comentado, y `tsc` no lo caza hasta que algo lo use. Me pasó dos veces en esta HU.
+  cruceDeCuenta, seVerificoLaCuenta, copyDeEntregaFallida, COPY_VERIFY_PIDE_UNA_NUEVA, COPY_RESUME_NO_PODEMOS_SEGUIR, COPY_RESUME_NO_PODEMOS_SEGUIR_AVISO, LABEL_VOLVER_A_EMPEZAR_EL_ENVIO, copyDelFinDelResume, type FinDelResume } from "./flow-vm"; // WKH-359/AC-6 — los dos EN ESTA LÍNEA (Δ0: este archivo recibe [[CENSO src/presentation/flow.tsx entrantes=132]] citas ancladas y una línea nueva acá arriba las corre a todas — el número es un MARCADOR verificado por `citas-ancladas.test.ts`, no una cifra escrita a mano: cuando esta HU lo escribió decía 83 y su propio commit lo volvió falso). ⚠️ Van ACÁ y no al final de `:74` porque esa línea TERMINA en comentario: pegar un import ahí lo deja comentado, y `tsc` no lo caza hasta que algo lo use. Me pasó dos veces en esta HU.
 import { cn } from "./cn";
 import { phantomBrowseUrl, useWalletAvailability, useConnectedWalletAddress, mwaEnabled, useMwaOffered, deeplinkEnabled } from "./wallet-availability"; import type { BilleteraDeeplink } from "../infrastructure/solana/deeplink/protocol"; import { hrefSinRastroDeVuelta, marcaDeVuelta } from "../infrastructure/solana/deeplink/conexion"; import type { EstadoDeLaCuentaDeNonce } from "../composition/container"; import { NONCE_ACCOUNT_RENT_LAMPORTS, formatLamportsAsSol } from "../application/solana-escrow-rent"; // WKH-358: los dos EN ESTA MISMA LÍNEA, por lo mismo que los dos de WKH-MWA // el aviso de "acá no hay wallet" (NoWalletHere) · WKH-354/AC-6: `useConnectedWalletAddress` para el banner (CuentaCambiada) · WKH-MWA: los dos últimos, EN ESTA MISMA LÍNEA (el censo de citas por número de `:44` `flow.tsx:NNNN` cuelgan de que este archivo no cambie de largo)
 import { Aviso, Button, Card, ChaskiMark, Field, Money, Muted, Pill, Row, Stepper, TextInput } from "./ui"; import { BarraDestinos, type Destino, VolverAlInicio, esDestino } from "./barra-destinos"; import { Bienvenida } from "./bienvenida"; import { DestinoRecuperar, QUE_RECUPERA } from "./recuperar"; import { LEMA } from "./marca"; import { urlDeVueltaDeKyc } from "./splash-puerta"; // HU-066: los DOS EN ESTA LÍNEA, no en dos nuevas, por lo mismo que dice el resto de este renglón. `LEMA` es el lema del header, que el splash repite y que hasta esta HU estaba escrito a mano acá abajo; `urlDeVueltaDeKyc` arma el callback de Didit, que hasta esta HU era un literal y que la puerta del splash necesita LEER: eran dos escrituras del mismo string en dos archivos, sin nada que las atara // ola 2: los nombres nuevos entran EN ESTA LÍNEA, no en una nueva. Este archivo recibe MUCHAS citas por número, y una sola línea de import de más corre todas las que apuntan más abajo. ⛔ EL NÚMERO NO SE ESCRIBE ACÁ: vive en UN solo lugar, con su definición y su fecha, en el comentario de `:44` (fix-pack, CR/MNR-5). Acá había un valor y el mismo archivo llevaba otros cuatro distintos para el mismo hecho, cada uno copiado de un vecino en vez de medido · WKH-063: los TRES imports nuevos entran acá por lo mismo (Δ0 líneas)
@@ -168,7 +168,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
   // (WKH-333/R-1) para que no haga falta un SEGUNDO prompt de billetera por el mismo motivo.
   const [kycProof, setKycProof] = useState<WalletPossessionProof | undefined>(undefined);
   const [resuming, setResuming] = useState(false); const [estadoNonce, setEstadoNonce] = useState<EstadoDeLaCuentaDeNonce | "en-vuelo" | null>(null); // retomando KYC al volver de Didit · WKH-358/AC-5: `estadoNonce` EN ESTA LÍNEA (Δ0 de citas, `:44`). `null` = "todavía no le preguntamos a la cadena", que NO es ninguno de los cuatro estados y por eso no es uno de sus valores: con `null` la tarjeta no se pinta. El quinto valor, `"en-vuelo"`, no viene de la cadena sino del broadcast, y por eso vive acá y no en `EstadoDeLaCuentaDeNonce`
-  const [timedOut, setTimedOut] = useState(false); // el resume-loop agotó el timeout
+  const [finDelResume, setFinDelResume] = useState<FinDelResume | null>(null); // CÓMO terminó el resume-loop, y `null` = no terminó. 🔴 HU 073: ERA UN `boolean` Y COLAPSABA DOS FINALES QUE NO COMPARTEN UN SOLO HECHO — el techo del bucle (preguntamos varias veces, ninguna respuesta fue final) y el corte por throw (que también ocurre DESPUÉS de una consulta contestada y ya aplicada: (`kycStore.save`, `./application/use-cases/resume-kyc.ts:49`)). Con un booleano los dos caían en la MISMA card, y esa card tenía que elegir una causa: elegía la del primero y se la aplicaba también al segundo. ⛔ CD-26: ningún valor de `FinDelResume` puede ser falsy — la rama de `:786` es un chequeo POR VERDAD, no un `!== null`, y el anti-vacuidad que la vigila lee el fuente
   const [confirmReset, setConfirmReset] = useState(false); // control "¿No sos vos?" (WKH-184)
   const [rateUpdated, setRateUpdated] = useState(false); // WKH-187: el quote se re-cotizó tras expirar durante el KYC
   const [showResumeEscape, setShowResumeEscape] = useState(false); // WKH-188: botón de escape a los 5 s
@@ -213,7 +213,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
         try {
           res = await c.resumeKyc.execute();
         } catch {
-          break;
+          if (alive && !cancelledRef.current) { setResuming(false); setFinDelResume("no-pudimos-preguntar"); } return; // 🔴 HU 073/D-3 — EL ATERRIZAJE PROPIO DEL THROW, EN ESTA LÍNEA (Δ0). Era un `break` que caía en el cierre de `:276-281`, o sea en la MISMA card que el techo del bucle; y esa card dice que lo intentamos varias veces, cuando acá puede no haber salido ni una consulta. ⛔ NO llama a `abandonPendingKyc` (DT-8): el throw puede VENIR de `pending.clear()`, y si vino de antes el pendiente sigue siendo lo único que permite retomar en una recarga. ⛔ `return` y no `break`: el cierre del bucle ES el desenlace del techo, y éste no es ése. 🔴 EL `!cancelledRef.current` LO REPUSO EL AR (MNR-3), Y ERA EL ÚNICO PUNTO DE SUSPENSIÓN DEL BUCLE QUE NO LO LEÍA: sus tres hermanos ((`cancelledRef`, `:211`), (`cancelledRef`, `:221`), (`cancelledRef`, `:229`)) ya llevaban la convención CD-CANCEL. Sin él, un rechazo que llega DESPUÉS del escape de los 5 s prendía `finDelResume`, y la rama de (`finDelResume`, `:786`) gana sobre el `step`: la card se pintaba ENCIMA de la pantalla a la que la persona ya había salido, diciéndole que algo se interrumpió al abrir una pantalla que no estaba abriendo. Preexistente (el `break` viejo tampoco lo leía) y reproducido: `T-073-ESC-D3` da rojo sin esta guarda, con su calibración inversa al lado.
         }
         if (!alive) return;
         // BLQ-MED-1 (WKH-188): 3er punto de suspensión. Si el escape corrió mientras execute()
@@ -269,15 +269,15 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
         } else {
           // 🔴 EL SEGUNDO CAMINO QUE EL FIX-PACK 2 DEJÓ ABIERTO, CERRADO ACÁ (WKH-063 · fix-pack 3). Eran tres sentencias sueltas —`setRem` + `setStep("verify")` + `setError`— y ninguna pasaba por el gate: medido, tocar «Recuperar» en la ventana y recibir después un `failed` reemplazaba la pantalla elegida por `verify` con los controles `["¿No sos vos?", "Verificar mi identidad"]`, indistinguible del caso en que la persona no tocó nada. Las tres viven ahora en `aterrizar` (`:208`), que decide. Δ0 de líneas: esta línea y las dos de abajo reemplazan a las tres que había.
           // ⚠️ EL COPY DEL AVISO NO PUEDE SER EL DE `passed` EN ESTA RAMA, y de eso se ocupa `:757`: "tu verificación quedó lista" sería falso acá. La variante dice que necesita otro intento y su botón lleva a `verify`, que es donde se reintenta.
-          aterrizar("verify", res.snapshot, "La verificación no pasó. Probá de nuevo.");
+          aterrizar("verify", res.snapshot, COPY_RESUME_NO_PODEMOS_SEGUIR);
         }
         return;
       }
       if (alive) {
         setResuming(false);
-        await c.abandonPendingKyc.execute(); // limpia el pending (CD-6): próximo reload no repite el bloqueo
-        setTimedOut(true);
-        // La card de timedOut ya comunica el mensaje; no seteamos error para no duplicarlo (MENOR-A).
+        try { await c.abandonPendingKyc.execute(); } catch { /* best-effort: el resto del cierre corre igual (patrón de `:537-541`) */ } // limpia el pending (CD-6): próximo reload no repite el bloqueo 🔴 EL `try` LO AGREGÓ LA HU 073, y no es defensivo de más: `LocalKycPendingStore.clear` TIRA `kyc_pending_unavailable` cuando `removeItem` falla. Sin el `catch`, `setResuming(false)` (arriba) YA corrió y el `setFinDelResume` de abajo NO corre nunca ⇒ la persona queda sin overlay, sin card y sin ninguna explicación después de 20 s de spinner, que es peor que la card mentirosa que esta HU vino a arreglar. Candado: `T-073-7`.
+        setFinDelResume("sin-respuesta-en-el-techo");
+        // La card del fin del resume ya comunica el mensaje (y desde la HU 073 dice CUÁL de los dos finales fue); no seteamos error para no duplicarlo (MENOR-A).
       }
     })();
     return () => {
@@ -546,7 +546,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
 
   // A4: tras el timeout del KYC, reintentar sin refrescar (resetea a un flujo fresco en "send").
   const onRetryKyc = () => {
-    setTimedOut(false);
+    setFinDelResume(null);
     setError(null);
     resetTo(setStep, setRem, setPreview);
   };
@@ -623,7 +623,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
   const adoptarCuentaConectada = () =>
     guard(async () => {
       const r = await c.connectWallet.execute();
-      setAddress(r.address); if (r.estado === "hay-que-salir") { window.location.href = r.irA; return; } // WKH-359/AC-3 — EN ESTA LÍNEA (Δ0: este archivo recibe [[CENSO src/presentation/flow.tsx entrantes=98]] citas ancladas, marcador verificado). La dirección se aplica IGUAL antes de salir, porque el `connect()` ya corrió y ya la conocemos: perderla obligaría a re-conectar al volver del salto
+      setAddress(r.address); if (r.estado === "hay-que-salir") { window.location.href = r.irA; return; } // WKH-359/AC-3 — EN ESTA LÍNEA (Δ0: este archivo recibe [[CENSO src/presentation/flow.tsx entrantes=132]] citas ancladas, marcador verificado). La dirección se aplica IGUAL antes de salir, porque el `connect()` ya corrió y ya la conocemos: perderla obligaría a re-conectar al volver del salto
       setServerVerdict(r.serverVerdict);
       setKycProof(r.kycProof);
       if (rem) resetTo(setStep, setRem, setPreview); // → paso `send`
@@ -754,7 +754,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
       {esDestino(step) ? null : (<div className="mb-aire">
         <Stepper steps={STEP_LABELS} current={STEP_INDEX[step]} />
       </div>)}
-      {avisoKyc !== null ? (<Aviso tono={avisoKyc.destino === "verify" ? "atencion" : "bueno"} className="mb-holgado text-body"><span className="block font-semibold">{avisoKyc.destino === "verify" ? "Tu verificación necesita otro intento" : "Tu verificación quedó lista"}</span><span className="mt-ajustado block">No te sacamos de esta pantalla porque la estabas usando vos. El envío que dejaste a medias sigue guardado.</span><Button variant="outline" className="mt-normal" onClick={() => { const a = avisoKyc; setAvisoKyc(null); setRem(a.snapshot); if (a.error !== undefined) setError({ message: a.error }); setStep(a.destino); }}>{avisoKyc.destino === "verify" ? "Reintentar la verificación" : "Seguir con ese envío"}</Button></Aviso>) : null}{/* 🔴 WKH-063 (fix-pack 2, con SUS DOS CAMINOS ABIERTOS CERRADOS EN EL 3) · EL AVISO QUE REEMPLAZA AL PISÓN, y es NO MODAL a propósito: no tapa nada, no roba el foco y no navega. Se prende cuando el resume terminó y `yaInteractuoRef` (`:175`) está en `true`, o sea cuando antes había una navegación no pedida. 🔴 SON DOS VARIANTES Y NO UNA (fix-pack 3), porque el resume tiene dos desenlaces terminales y el `failed` también pisaba: con `destino === "verify"` el título NO puede decir que la verificación quedó lista, y el `tono` tampoco puede ser `bueno` (el verde de esta app es el del dinero que llega). La segunda frase es la MISMA en las dos ramas a propósito, y por eso dice "la estabas usando" y no "la habías elegido": el fix-pack 3 sumó el embudo, donde la persona no eligió un destino con la barra sino que entró a tipear, y "elegido" habría sido falso en ese camino. ⛔ EL BOTÓN NO ES DECORACIÓN, y desde el fix-pack 3 es más que un `setStep`: APLICA EL SNAPSHOT (`setRem`) que `aterrizar` (`:208`) no aplicó. Es el único camino de vuelta medido — la barra sólo ofrece los tres destinos, "Empezar un envío" crea una remesa NUEVA, y "Mis envíos" tampoco sirve para una remesa sin depósito autorizado, que se lista SIN control de fila (`openable`, `:3412`). ⚠️ VA ACÁ Y NO ABAJO DEL BLOQUE DE ERROR: a 375x667 las tres pantallas de destino miden más que el viewport (medido en el encabezado de `recuperar-composicion.test.tsx`), así que un aviso puesto al lado de la barra nace debajo del pliegue. ⛔ Δ0 DE LÍNEAS: entra en la línea en blanco que había acá, por las citas por número de este archivo (`:44`). */}{estadoNonce !== null ? (<TarjetaDeCuentaDeNonce estado={estadoNonce} ocupado={busy} onCrear={onCrearCuentaDeNonce} onVolverAMirar={onVolverAMirarLaCuentaDeNonce} onSeguirSinCrearla={() => setEstadoNonce(null)} />) : null}{/* WKH-358/AC-5 — EN ESTA LÍNEA (Δ0 de citas, `:44`) y ACÁ ARRIBA, junto al aviso del KYC, por el mismo motivo que ése: a 375x667 las pantallas miden más que el viewport, así que algo puesto al final nace debajo del pliegue. El componente vive al FINAL del archivo, con todo su razonamiento. ⛔ «Seguir sin crearla» sólo apaga la tarjeta y NO limpia nada: el corte del adaptador por cuenta de nonce ausente sigue siendo el cinturón y trae a la persona de vuelta a esta misma oferta */}
+      {avisoKyc !== null ? (<Aviso tono={avisoKyc.destino === "verify" ? "atencion" : "bueno"} className="mb-holgado text-body"><span className="block font-semibold">{avisoKyc.destino === "verify" ? COPY_RESUME_NO_PODEMOS_SEGUIR_AVISO : "Tu verificación quedó lista"}</span><span className="mt-ajustado block">No te sacamos de esta pantalla porque la estabas usando vos. El envío que dejaste a medias sigue guardado.</span><Button variant="outline" className="mt-normal" onClick={() => { const a = avisoKyc; setAvisoKyc(null); setRem(a.snapshot); if (a.error !== undefined) setError({ message: a.error }); setStep(a.destino); }}>{avisoKyc.destino === "verify" ? "Reintentar la verificación" : "Seguir con ese envío"}</Button></Aviso>) : null}{/* 🔴 WKH-063 (fix-pack 2, con SUS DOS CAMINOS ABIERTOS CERRADOS EN EL 3) · EL AVISO QUE REEMPLAZA AL PISÓN, y es NO MODAL a propósito: no tapa nada, no roba el foco y no navega. Se prende cuando el resume terminó y `yaInteractuoRef` (`:175`) está en `true`, o sea cuando antes había una navegación no pedida. 🔴 SON DOS VARIANTES Y NO UNA (fix-pack 3), porque el resume tiene dos desenlaces terminales y el `failed` también pisaba: con `destino === "verify"` el título NO puede decir que la verificación quedó lista, y el `tono` tampoco puede ser `bueno` (el verde de esta app es el del dinero que llega). La segunda frase es la MISMA en las dos ramas a propósito, y por eso dice "la estabas usando" y no "la habías elegido": el fix-pack 3 sumó el embudo, donde la persona no eligió un destino con la barra sino que entró a tipear, y "elegido" habría sido falso en ese camino. ⛔ EL BOTÓN NO ES DECORACIÓN, y desde el fix-pack 3 es más que un `setStep`: APLICA EL SNAPSHOT (`setRem`) que `aterrizar` (`:208`) no aplicó. Es el único camino de vuelta medido — la barra sólo ofrece los tres destinos, "Empezar un envío" crea una remesa NUEVA, y "Mis envíos" tampoco sirve para una remesa sin depósito autorizado, que se lista SIN control de fila (`openable`, `:3412`). ⚠️ VA ACÁ Y NO ABAJO DEL BLOQUE DE ERROR: a 375x667 las tres pantallas de destino miden más que el viewport (medido en el encabezado de `recuperar-composicion.test.tsx`), así que un aviso puesto al lado de la barra nace debajo del pliegue. ⛔ Δ0 DE LÍNEAS: entra en la línea en blanco que había acá, por las citas por número de este archivo (`:44`). */}{estadoNonce !== null ? (<TarjetaDeCuentaDeNonce estado={estadoNonce} ocupado={busy} onCrear={onCrearCuentaDeNonce} onVolverAMirar={onVolverAMirarLaCuentaDeNonce} onSeguirSinCrearla={() => setEstadoNonce(null)} />) : null}{/* WKH-358/AC-5 — EN ESTA LÍNEA (Δ0 de citas, `:44`) y ACÁ ARRIBA, junto al aviso del KYC, por el mismo motivo que ése: a 375x667 las pantallas miden más que el viewport, así que algo puesto al final nace debajo del pliegue. El componente vive al FINAL del archivo, con todo su razonamiento. ⛔ «Seguir sin crearla» sólo apaga la tarjeta y NO limpia nada: el corte del adaptador por cuenta de nonce ausente sigue siendo el cinturón y trae a la persona de vuelta a esta misma oferta */}
       {rem && isDemoMode(rem) && (step === "review" || step === "confirm" || step === "track" || step === "verify") ? (
         <div className="mb-holgado flex items-center justify-center">
           <Pill tone="prueba">{DEMO_PILL}</Pill>
@@ -783,16 +783,16 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
             </div>
           ) : null}
         </Card>
-      ) : timedOut ? (
-        <Card className="mt-ajustado flex-1 space-y-holgado text-center">
-          <div>
-            <h2 className="text-title font-bold">La verificación está tardando</h2>
-            <Muted className="mx-auto mt-ajustado max-w-xs">
-              No pudimos confirmar tu identidad a tiempo. Podés reintentar sin recargar la página.
-            </Muted>
-          </div>
-          <Button onClick={onRetryKyc}>Reintentar</Button>
-        </Card>
+      ) : finDelResume ? (
+        // 🔴 Δ0 — ESTAS NUEVE LÍNEAS SON LAS MISMAS NUEVE que ocupaba la card literal, y el relleno no es
+        // cosmético: este archivo recibe citas por número hasta `:4301`, así que borrar ocho líneas acá
+        // las corre TODAS. `CardDeFinDelResume` se define al final del archivo (después de la última
+        // cita) y resuelve el copy por el MOTIVO del final del resume, no por un booleano.
+        <CardDeFinDelResume
+          fin={finDelResume}
+          onVolverAEmpezar={onRetryKyc}
+          onIrAlInicio={() => { setFinDelResume(null); setStep("bienvenida"); }} // 🔴 EL `setFinDelResume(null)` NO ES DECORATIVO Y LO CAZÓ `T-073-3`: la rama de `:786` gana sobre el `step`, así que un `setStep` solo dejaba la card puesta y la salida quedaba INERTE — la persona tocaba «Volver al inicio» y no pasaba nada. Sigue sin escribir nada: dos setters de React.
+        />
       ) : (
       <MotionConfig reducedMotion="user"><AnimatePresence mode="wait">
         <motion.div
@@ -1051,7 +1051,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
                 ) : (
                   <VerificationProgress approved={scanStage >= 4} />
                 )}
-              </Card>
+              </Card><AvisoDeVerificacionNueva />{/* HU 073/AC-4 · EN ESTA LÍNEA (Δ0) y ⛔ NO en una nueva: este archivo recibe citas por número. Va colgado del `</Card>` porque es la última línea que ya existía ARRIBA del botón que gasta (`:1055`), y AC-4 exige el aviso en la misma pantalla y ANTES del toque. */}
               <Button disabled={busy} onClick={onVerify}>
                 {busy ? (
                   <Loader2 className="size-icono-sm animate-spin" />
@@ -1227,14 +1227,14 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
       ) : null}
 
       {/* WKH-063/AC-3+AC-4 · LA BARRA. Dos mitades: `step` es un DESTINO **y no hay overlay arriba**. La segunda la agregó el fix-pack (AR/BLQ-MED-1). Un paso nuevo del flujo nace sin barra y un destino nuevo nace con ella: el candado recorre `STEP_INDEX` entero contra una tabla a mano, así que un `Step` nuevo obliga a clasificarlo.
-          🔴 POR QUÉ `!resuming && !timedOut`, y es el camino del video: el KYC vuelve de Didit como RECARGA (`window.location.href` en el `redirect` de `:457-461`), así que el resume corre AL MONTAR — y con el default `pasoInicial = "bienvenida"` el `step` de ese montaje ya es un destino. Medido antes del arreglo, con `resumeKyc` devolviendo `processing`: la barra se pintaba debajo de "Verificando tu identidad…" con las tres pestañas HABILITADAS, y al tocar una quedaba marcada `aria-current="page"` mientras la pantalla seguía en el overlay. O sea: la barra afirmaba un lugar donde la persona no estaba, y AC-3 pide lo contrario (hay un envío en curso ⇒ no hay barra).
+          🔴 POR QUÉ `!resuming && !finDelResume`, y es el camino del video: el KYC vuelve de Didit como RECARGA (`window.location.href` en el `redirect` de `:457-461`), así que el resume corre AL MONTAR — y con el default `pasoInicial = "bienvenida"` el `step` de ese montaje ya es un destino. Medido antes del arreglo, con `resumeKyc` devolviendo `processing`: la barra se pintaba debajo de "Verificando tu identidad…" con las tres pestañas HABILITADAS, y al tocar una quedaba marcada `aria-current="page"` mientras la pantalla seguía en el overlay. O sea: la barra afirmaba un lugar donde la persona no estaba, y AC-3 pide lo contrario (hay un envío en curso ⇒ no hay barra).
           ⛔ LOS DOS OVERLAYS VIVEN EN EL TERNARIO DE ARRIBA (`:764-796`), y por eso esta línea nombra sus banderas y no una lista de pasos. ⚠️ Un TERCER overlay que nazca mañana en ese ternario NO queda cubierto por esta línea, y eso no se declara en prosa: `T-063-20` lee este archivo, saca las banderas de las ramas del ternario y exige que cada una esté negada acá. Una rama nueva sin su `!bandera` se pone roja sola.
           ✅ LO QUE ESTA LÍNEA NO ARREGLABA, Y HOY ESTÁ CERRADO EN OTRO LUGAR (fix-pack 2 · AR-it2/BLQ-MED-1). Acá decía que una elección hecha en la ventana ANTERIOR a la primera respuesta se pisaba igual, y que cortar el `setStep` era peor porque dejaría "una identidad ya verificada sin ninguna pantalla que la retome". LAS DOS MITADES DE ESA JUSTIFICACIÓN ESTABAN MEDIDAS AL REVÉS: la identidad la persiste `ResumeKyc` (`kycStore`, `../application/use-cases/resume-kyc.ts:49` — el AR-it2 y su verificación independiente decían `:47` los dos, y `:47` es el `applyKyc`; el `kycStore.save` está DOS líneas más abajo, inmediatamente después del `repo.save` de `:48`, así que el hecho aguanta y el número no lo hacía. Lo cazó `citas-ancladas.test.ts`, no una relectura) ANTES de que la UI navegue, y el atajo KYC-once de `onConnect` (`:356-377`) la retoma con CERO llamadas a Didit — lo que se perdía era un formulario, no el KYC pagado; y la ventana no dura "cientos de ms" sino HASTA 10 s (`AbortSignal`, `../infrastructure/kyc/agent-kyc-client.ts:248` — WKH-233 lo movió: el `fetch` del borde salió de la route y vive en el cliente del agente, con el MISMO techo de 10 s) y SIN TECHO cuando la petición no llega, que es el caso plausible en una recarga desde un redirect externo en red móvil. El gate vive en `aterrizar` (`:208`) y `T-063-21` congela hoy el comportamiento NUEVO, con sus controles. ✅ Y LOS DOS CAMINOS QUE ACÁ QUEDABAN DECLARADOS Y ABIERTOS SE CERRARON EN EL FIX-PACK 3, con el candado que cada uno pedía. (1) EL EMBUDO: el gate era "ya eligió un destino CON LA BARRA", así que entrar por «Empezar un envío» y tipear no contaba. Hoy el ref es `yaInteractuoRef` (`:175`) y lo marcan los DOS puntos de entrada de la ventana, la barra y el CTA de la bienvenida (`:1195`). Sonda de antes: controles finales `["¿No sos vos?", "Confirmar y enviar $400.00"]`, sin aviso. Sonda de ahora: la entrada de monto sigue en pantalla con lo tipeado y los controles son `["¿No sos vos?", "Seguir con ese envío", "Volver al inicio", "Continuar"]`. Lo cubren dos `it` de `T-063-21` y el mutante G3 (borrarle la marca al CTA) mata esos dos y nada más. Se agrega una pérdida de datos que este renglón NO nombraba: el `setRem` corría antes del gate y REEMPLAZABA la remesa en curso, que sin `ownerAddress` no la lista "Mis envíos" ni tiene control de fila (`openable`, `:3412`) ⇒ quedaba inalcanzable. Hoy el snapshot viaja en el aviso y lo aplica el botón; el mutante G5 (devolver el `setRem` al frente del gate) mata el `it` que lo mide, y sólo ése. (2) EL RESUME `failed`: pasa por el mismo `aterrizar` con su propio copy ("Tu verificación necesita otro intento", `tono="atencion"`, botón a `verify`), y el banner de error se prende al llegar y no antes. Lo cubren un `it` gateado + un control, y el mutante G4 (devolverle las tres sentencias sueltas) mata el gateado. ⛔ QUÉ NO AFIRMA ESTE RENGLÓN: no dice "ya no puede pasar". Dice que lo que está medido y congelado son esos cuatro `it` sobre el resume del KYC en jsdom, con la ventana simulada por una promesa diferida y no por latencia real; y que `setAddress` (`:246`) sigue corriendo aunque el gate frene, porque WKH-354 lo necesita y no es parte de ninguno de los dos caminos. La retoma de la remesa del KYC es de UNA SOLA DIRECCIÓN: al usar el botón, la remesa que la persona estaba creando queda sin fila que la liste (los valores del formulario sí sobreviven en estado).
           ⛔ VA ÚLTIMA DENTRO DEL `<main>`, y no es orden estético: su `mt-auto` sólo la empuja al borde
           inferior si es el último hijo de la columna flex. Debajo del bloque de error a propósito, y no
           por descuido: un error habla de la pantalla en la que estás, no de la navegación que la
           rodea. */}
-      {esDestino(step) && !resuming && !timedOut ? <BarraDestinos activo={step} onIr={irADestino} disabled={busy} /> : null}
+      {esDestino(step) && !resuming && !finDelResume ? <BarraDestinos activo={step} onIr={irADestino} disabled={busy} /> : null}
     </main>
   );
 }
@@ -4341,4 +4341,81 @@ async function resolverVueltaDelPermiso(i: {
     return "cortar";
   }
   return "seguir"; // `pop-payout` con el permiso conseguido: cae al bloque de reanudación de siempre
+}
+
+/**
+ * HU 073 · LA CARD DEL FINAL DEL RESUME — una pantalla por MOTIVO, no una por booleano.
+ *
+ * 🔴 POR QUÉ ESTÁ ACÁ ABAJO Y NO EN EL SITIO DONDE SE USA. Este archivo recibe citas `archivo:línea`
+ * por número hasta (`resolverVueltaDelPermiso`, `:4301`), así que una línea de más arriba las corre todas. Lo nuevo se define después
+ * de la última cita y se invoca desde una línea que ya existía. La invocación ocupa EXACTAMENTE las
+ * nueve líneas que ocupaba la card literal.
+ *
+ * 🔴 QUÉ CAMBIÓ Y POR QUÉ IMPORTA. La card vieja decía «La verificación está tardando» / «No pudimos
+ * confirmar tu identidad a tiempo» para los DOS finales del bucle. Para el final por corte esa frase es
+ * falsa: el resume pudo haber preguntado, recibido un veredicto terminal y haber tirado DESPUÉS, al
+ * persistirlo (hay cuatro `throw` posteriores a la consulta). Le atribuía a la persona una causa que
+ * nadie había medido. Ahora el copy sale de (`copyDelFinDelResume`, `./flow-vm.ts:1740`), que resuelve
+ * por el motivo, y las frases viven como constantes exportadas para que los tests las consulten POR EL
+ * SÍMBOLO y no copiándolas.
+ *
+ * 🔴 LAS DOS SALIDAS, Y NINGUNA ESCRIBE NADA (AC-3). Medido: (`onRetryKyc`, `:548`) es
+ * `setFinDelResume(null)` + `setError(null)` + (`resetTo`, `:3526`), que son tres setters de React —
+ * sin red, sin repositorio, sin `KycStore`. (`VolverAlInicio`, `./barra-destinos.tsx:148`)
+ * mueve `step` y nada más. ⚠️ Y la segunda salida NO es un lujo: con esta card la barra de destinos
+ * **no se pinta** (su guard es (`BarraDestinos`, `:1237`)), así que sin ella el único camino
+ * sería empezar un envío nuevo.
+ *
+ * ⛔ «Mis envíos» directo NO es una de las dos: (`openHistory`, `:412`) pasa por (`resolveSender`, `:396`), que puede disparar `connectWallet` — o sea una acción de billetera desde una pantalla que
+ * está pidiendo disculpas. Se llega igual desde la bienvenida, con un toque más.
+ */
+function CardDeFinDelResume({
+  fin,
+  onVolverAEmpezar,
+  onIrAlInicio,
+}: {
+  fin: FinDelResume;
+  onVolverAEmpezar: () => void;
+  onIrAlInicio: () => void;
+}) {
+  const { titulo, cuerpo } = copyDelFinDelResume(fin);
+  return (
+    <Card className="mt-ajustado flex-1 space-y-holgado text-center">
+      <div>
+        <h2 className="text-title font-bold">{titulo}</h2>
+        <Muted className="mx-auto mt-ajustado max-w-xs">{cuerpo}</Muted>
+      </div>
+      <div className="space-y-ajustado">
+        <Button onClick={onVolverAEmpezar}>{LABEL_VOLVER_A_EMPEZAR_EL_ENVIO}</Button>
+        <div>
+          <VolverAlInicio onVolver={onIrAlInicio} />
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+/**
+ * HU 073 · AC-4 — EL AVISO DE QUE ESTE BOTÓN PIDE UNA VERIFICACIÓN NUEVA.
+ *
+ * 🔴 POR QUÉ EN LA PANTALLA `verify` Y NO EN LA CARD DEL FIN DEL RESUME. Medido: tocar el control de
+ * reintento NO invoca `KycGateway.start`. El gasto ocurre una pantalla después, en (`onVerify`, `:441`),
+ * que llama a `c.startKyc.execute` en `:447`. AC-4 pide el aviso «en la misma pantalla y antes del
+ * toque», así que vive acá y se invoca desde `:1054`, la última línea que ya existía arriba del botón.
+ *
+ * ⛔ EL TEXTO ES CONDICIONAL A PROPÓSITO. Si la billetera ya tiene un veredicto usable, los dos atajos
+ * de `StartKyc` cortan antes de llamar al verificador y no se gasta nada; un «esto consume una
+ * verificación» categórico sería falso para esa persona. Y dice «pide», ⛔ no «abre»: sin agente
+ * configurado el fallback resuelve sin ningún redirect, así que no hay sesión hospedada que abrir — pero
+ * la llamada ocurre en las dos configuraciones.
+ *
+ * 🚧 RESIDUAL DECLARADO, NO CERRADO (MI-8). En la configuración SIN agente, la oración del cupo insinúa
+ * un costo que ahí no existe: ese fallback no consume ninguna cuota y se le puede pedir infinitas veces.
+ * Cerrarlo exige una señal del modo del verificador visible en el navegador, que hoy no existe (la env
+ * que lo decide es de servidor). ⛔ NO se tapa con un `NEXT_PUBLIC_` improvisado: sería exponer la
+ * configuración del verificador al cliente sin ningún análisis. Es el mismo techo que `:769-772` ya
+ * declara textual para el overlay de al lado. Queda ABIERTO, para otra HU.
+ */
+function AvisoDeVerificacionNueva() {
+  return <Muted className="mt-ajustado block text-left text-label">{COPY_VERIFY_PIDE_UNA_NUEVA}</Muted>;
 }

@@ -27,6 +27,7 @@ import {
   PARAM_KYC,
   urlDeVueltaDeKyc,
   VALOR_VUELTA_KYC,
+  volvioPorLaVueltaDeKyc,
   type MotivoParaNoMostrar,
 } from "./splash-puerta";
 
@@ -124,5 +125,35 @@ describe("HU-066 · la puerta deja pasar el splash sólo cuando no hay nada que 
       }) as MotivoParaNoMostrar,
     );
     expect(motivos).toEqual(["vuelta-de-kyc-en-la-url", "kyc-pendiente-en-el-disco"]);
+  });
+});
+
+// ── HU 073 / AC-5 · `volvioPorLaVueltaDeKyc` ──────────────────────────────────────────────────────
+//
+// ⛔ El parámetro NO se escribe a mano en ningún assert de acá: se arma con las dos constantes que usa
+// el único productor de esa URL. Si mañana el callback cambia, esta suite mide el valor verdadero en
+// vez de quedar verde sobre uno viejo.
+describe("HU 073 / AC-5 · reconocer la vuelta del verificador, con TRES valores y no dos", () => {
+  it("con la marca que escribe `urlDeVueltaDeKyc` ⇒ true", () => {
+    expect(volvioPorLaVueltaDeKyc(urlDeVueltaDeKyc("https://chaski.test"))).toBe(true);
+  });
+
+  it("con el parámetro armado a partir de las constantes ⇒ true, y con otro valor ⇒ false", () => {
+    expect(volvioPorLaVueltaDeKyc(`${LIMPIA}?${PARAM_KYC}=${VALOR_VUELTA_KYC}`)).toBe(true);
+    // 🧬 MUTANTE: comparar con `params.has(PARAM_KYC)` en vez del VALOR ⇒ esto se pone rojo. La
+    // diferencia importa: `?kyc=cualquier-cosa` no es una vuelta nuestra.
+    expect(volvioPorLaVueltaDeKyc(`${LIMPIA}?${PARAM_KYC}=otra-cosa`)).toBe(false);
+  });
+
+  it("sin el parámetro ⇒ false, y ⛔ ese `false` NO significa «no volvió»", () => {
+    // El `false` es «no hay marca». La app no puede distinguir «abrió la app a mano» de «volvió del
+    // verificador y un redirect intermedio se comió el parámetro», y por eso la Ola A ⛔ no escribe
+    // NINGUNA frase a partir de este valor. El candado de que no la escribe es `T-073-5`, en
+    // `flow.test.tsx`: los dos montajes tienen que leer IGUAL.
+    expect(volvioPorLaVueltaDeKyc(LIMPIA)).toBe(false);
+  });
+
+  it("un href que no parsea ⇒ false, sin tirar", () => {
+    expect(volvioPorLaVueltaDeKyc("no-soy-una-url")).toBe(false);
   });
 });

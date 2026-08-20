@@ -267,6 +267,25 @@ export async function readAgentKycDecision(input: {
   if (!Array.isArray(reasons) || reasons.some((r) => typeof r !== "string")) {
     throw new Error("kyc_agent_bad_response:decision:reasons");
   }
+  // 🔴 REGLA NORMATIVA — CÓMO ENTRA UN CAMPO NUEVO DE `GET /decision` (HU 073 · W0, gate de la HU
+  // hermana del agente). Esta wave NO cambia ningún comportamiento: congela el que ya existe.
+  //
+  // El discriminador que el agente va a agregar entra por el patrón de (`identityMatches`, `:302`):
+  // OPCIONAL, y ausente se preserva AUSENTE. ⛔ NUNCA como un `readString`/`readBoolean` requerido de la
+  // lista de acá abajo. El orden importa y está medido: si el agente lo agrega primero y después se le
+  // hace ROLLBACK, un lector estricto convierte la respuesta en `kyc_agent_bad_response` ⇒ 502 en
+  // (`readAgentKycDecision`, `../../../app/api/kyc/decision/route.ts:89`) ⇒ throw en
+  // (`kyc_decision_failed`, `./agent-kyc-gateway.ts:73`) ⇒ el `catch` de
+  // (`decision`, `../../application/use-cases/resume-kyc.ts:40`) devuelve `processing` para siempre ⇒
+  // 20 s de spinner y la card del techo del resume PARA TODO EL MUNDO A LA VEZ. Un campo que el agente
+  // agrega para informar mejor no puede ser el que corta el KYC entero.
+  //
+  // ⛔ Y jamás `?? false` sobre ese campo nuevo: ausente significa «no se preguntó», y `false` sería una
+  // acusación sobre la persona. Es la misma regla que las tres líneas de abajo ya escriben para
+  // `identityMatches`, repetida acá porque acá es donde se lee la respuesta.
+  //
+  // 🔒 La tolerancia está congelada por `T-073-TOL-1` (una clave DESCONOCIDA no tira y no se cuela) y su
+  // control `T-073-TOL-2` (una clave CONOCIDA mal tipada SÍ tira), en `./agent-kyc-client.test.ts`.
   const output: KycAgentDecisionOutput = {
     terminal: readBoolean(raw, "terminal", "decision"),
     status: readString(raw, "status", "decision"),

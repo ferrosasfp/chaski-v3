@@ -2620,3 +2620,72 @@ describe("T-COPY-SD: la frase del fallo sin depósito le sirve a sus OCHO enums"
     expect(COPY_FALLO_SIN_DEPOSITO, "el escrow es justo lo que NO hay que prometer acá").not.toMatch(/escrow/i);
   });
 });
+
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// T-COPY-SD-DERIVA — LAS DOS MITADES DE `sinRamaPropia`, CON ENUMS SINTÉTICOS (re-AR it3 · §4.6)
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 EL BORDE QUE EL AR DEJÓ SIN SONDA, Y NO ES UN HALLAZGO DE HOY: (`copyDeEntregaFallida`,
+// `flow-vm.ts:1595`) decide "este enum no tiene copy propio" comparando contra DOS genéricos —el
+// catch-all de `payout` y el `default` final—. De los 14 enums que emite la route, **la mitad `payout`
+// la ejercitaba UNO SOLO** (`payout_pop_unverified`); los otros siete genéricos caen en el `default`.
+// ⇒ el día que alguien le escriba copy propio a ese enum, esa mitad de la derivación se queda sin
+// ningún test que la toque y **nada se pone rojo**. El mutante "borrarle la comparación contra el
+// catch-all de `payout`" pasaría en verde.
+//
+// ⇒ ESTOS `it` NO DEPENDEN DE QUÉ ENUM EXISTA. Usan códigos SINTÉTICOS elegidos por la propiedad que
+// los mete en cada mitad, así que sobreviven a que la route agregue, borre o renombre enums, y a que
+// `payout_pop_unverified` reciba copy propio mañana.
+//
+// ⚠️ LO QUE NO CUBREN, dicho para que nadie se apoye de más: no miden que la route emita estos códigos
+// (no los emite: son de mentira), ni el salto `HTTP status ⇒ enum`, ni qué lee la persona en pantalla
+// —eso es `copy-de-prepare-en-pantalla.test.tsx`—. Cubren el MECANISMO de la derivación, que es
+// justamente lo que se quedaba sin sonda.
+describe("T-COPY-SD-DERIVA: las dos mitades de `sinRamaPropia`, sin depender de ningún enum real", () => {
+  const sinDeposito = (reason: string): RemittanceState =>
+    ({
+      status: "payout_failed",
+      principalTx: null,
+      refundTx: null,
+      failureReason: reason,
+    }) as RemittanceState;
+
+  // 🧪 LA PRECONDICIÓN, Y SIN ELLA TODO ESTE BLOQUE SERÍA VACUO. Si los dos genéricos devolvieran la
+  // MISMA frase, una sola comparación cubriría a las dos y los `it` de abajo no podrían distinguir el
+  // código con las dos mitades del código con una. Acá se mide que son frases DISTINTAS.
+  it("T-DERIVA-0: los dos genéricos NO son la misma frase (las dos comparaciones hacen falta)", () => {
+    expect(humanError("payout_failed")).not.toBe(humanError(""));
+    expect(humanError("payout_failed"), "control: la mitad `payout` es la que promete el escrow").toMatch(/escrow/i);
+    expect(humanError(""), "control: el `default` final no habla de ningún escrow").not.toMatch(/escrow/i);
+  });
+
+  // LA MITAD `payout`. Un código sintético que contiene "payout" y no tiene rama propia cae en el
+  // catch-all —el único `return` que manda a sacar USDC del escrow— y la derivación TIENE que verlo
+  // como "sin copy propio" y reemplazarlo. MUTANTE: borrar `propio === humanError("payout_failed")`
+  // de `copyDeEntregaFallida` ⇒ este `it` se pone rojo con la promesa del escrow en la mano.
+  it("T-DERIVA-1: un enum `payout_*` SIN rama propia no lee la promesa del escrow", () => {
+    const copy = copyDeEntregaFallida(sinDeposito("payout_sintetico_que_nadie_mapea"));
+    expect(copy, "cayó en el catch-all de `payout`: manda a un escrow que está vacío").toBe(
+      COPY_FALLO_SIN_DEPOSITO,
+    );
+    expect(copy).not.toBe(humanError("payout_failed"));
+  });
+
+  // LA OTRA MITAD. Un código sin ninguna subcadena reconocida cae en el `default` final, y también
+  // tiene que ser reemplazado. MUTANTE: borrar `propio === humanError("")` ⇒ rojo.
+  it("T-DERIVA-2: un enum sin NINGUNA rama tampoco se queda con el genérico final", () => {
+    const copy = copyDeEntregaFallida(sinDeposito("zzz_sintetico_sin_ninguna_rama"));
+    expect(copy).toBe(COPY_FALLO_SIN_DEPOSITO);
+    expect(copy).not.toBe(humanError(""));
+  });
+
+  // 🧪 EL CONTROL NEGATIVO, y es el que impide "arreglar" esto devolviendo la constante SIEMPRE: un
+  // código CON copy propio tiene que conservarlo. Sin este `it`, un `return COPY_FALLO_SIN_DEPOSITO`
+  // incondicional pondría verdes a los dos de arriba y borraría todos los copys propios de la pantalla.
+  it("T-DERIVA-3: un enum CON copy propio conserva el suyo (la derivación no arrasa)", () => {
+    const propio = humanError("payout_authority_unavailable");
+    expect(propio, "control: el enum elegido sigue teniendo rama propia").not.toBe(humanError("payout_failed"));
+    expect(copyDeEntregaFallida(sinDeposito("payout_authority_unavailable"))).toBe(propio);
+  });
+});

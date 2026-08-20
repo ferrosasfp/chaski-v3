@@ -139,8 +139,7 @@ function textoEnPantalla(snapshot: RemittanceState): string {
  * contenedor (Supabase, HMAC, ed25519) a un test de pantalla. Se leen los literales de los
  * `NextResponse.json({ error: … })`, incluido el ternario de la respuesta del agente.
  */
-function enumsQueEmiteLaRoute(): string[] {
-  const src = readFileSync(path.resolve(process.cwd(), "app/api/payout/prepare/route.ts"), "utf8");
+function enumsDeLaFuente(src: string): string[] {
   const vistos = new Set<string>();
   for (const m of src.matchAll(/error:\s*([^}]*)\}/g)) {
     for (const s of (m[1] as string).matchAll(/"([a-z][a-z0-9_]*)"/g)) {
@@ -151,7 +150,59 @@ function enumsQueEmiteLaRoute(): string[] {
   return [...vistos].sort();
 }
 
+function enumsQueEmiteLaRoute(): string[] {
+  return enumsDeLaFuente(readFileSync(path.resolve(process.cwd(), "app/api/payout/prepare/route.ts"), "utf8"));
+}
+
 const ENUMS = enumsQueEmiteLaRoute();
+
+// ── EL PIN, Y POR QUÉ NO ES UN PISO (re-AR it3 · MNR-2) ───────────────────────────────────────
+//
+// 🔴 QUÉ DEFECTO CIERRA, CON EL MUTANTE QUE LO ENCONTRÓ. Acá había `toBeGreaterThanOrEqual(13)`
+// contra **14** enums medidos, y el AR construyó el input que lo derrota: en la route, cambiar
+// `{ error: "prepare_rate_limited" }` por `{ error: UNA_CONSTANTE }` —mover un literal a una
+// constante, el refactor más común que existe—. El regex de arriba lee LITERALES, así que el enum
+// desaparece del conjunto, el barrido pasa a recorrer 13, y `13 >= 13` deja el archivo en **4 passed,
+// exit 0**. O sea: un enum se sale del barrido y NADA se pone rojo.
+//
+// ⛔ Y SUBIR EL PISO A 14 NO ARREGLA NADA A FUTURO: cualquier piso deja que el conjunto se DESGASTE
+// hasta él. El problema no es el valor, es la forma: un `>=` sólo puede ver que el barrido se vacía,
+// nunca que pierde de a uno. Ésta es exactamente la clase de candado que se pudre solo — el mutante
+// que lo derrotaba era CIERTO el día que se escribió.
+//
+// ⇒ SE PINNEA EL CONJUNTO EXACTO, no un número. Cualquier diferencia —para arriba o para abajo—
+// pone rojo y obliga a que alguien lo mire:
+//   · un enum que SALE del barrido (literal → constante, un `error:` que se mueve a un helper, un
+//     rename) ⇒ rojo, y el mensaje lo nombra;
+//   · un enum NUEVO y legítimo ⇒ rojo también, a propósito. Agregarlo acá es barato y es el momento
+//     en que alguien decide si su copy en pantalla es el correcto. Un enum nuevo entrando en silencio
+//     es justo lo que ya pasó dos veces en esta HU.
+//
+// ⚠️ ESTA LISTA **NO** ALIMENTA EL BARRIDO. `T-PANT-2` sigue recorriendo `ENUMS`, que se DERIVA de la
+// route; el pin sólo compara. Si la lista alimentara el barrido, sería un guard que se compara consigo
+// mismo y el mutante de arriba lo pasaría igual.
+//
+// ⚠️ LO QUE EL PIN NO HACE: no entiende la route. No sigue una constante, no resuelve un `import`, no
+// mira el `switch` de `HTTP status ⇒ enum`. Sólo afirma «el conjunto que el regex deriva HOY es
+// exactamente éste». Hacerlo seguir la indirección se descartó a propósito: las formas de indirección
+// son ilimitadas (constante, template, import, computado) y cada una que el escáner no entienda
+// volvería a perder un enum EN SILENCIO. El pin no puede perder ninguno, porque no razona.
+const ENUMS_PINNEADOS: readonly string[] = [
+  "payout_authority_unavailable",
+  "payout_not_authorized",
+  "payout_pop_unavailable",
+  "payout_pop_unverified",
+  "prepare_invalid_request",
+  "prepare_kyc_verdict_missing",
+  "prepare_kyc_verdict_unavailable",
+  "prepare_no_deposit_address",
+  "prepare_not_configured",
+  "prepare_rate_limit_unavailable",
+  "prepare_rate_limited",
+  "prepare_solana_authority_unavailable",
+  "prepare_unavailable",
+  "prepare_upstream_error",
+];
 
 describe("del enum del `prepare` a la frase que la persona LEE en la pantalla de seguimiento", () => {
   afterEach(() => cleanup());
@@ -196,9 +247,14 @@ describe("del enum del `prepare` a la frase que la persona LEE en la pantalla de
   // depósito. Si mañana aparece un enum nuevo en la route, entra solo a este barrido — y si el
   // mecanismo de la pantalla se debilita, se pone rojo sin que nadie agregue un test.
   it("T-PANT-2: NINGÚN enum del `prepare` promete el escrow cuando no hubo depósito", async () => {
-    // El piso es el conteo MEDIDO al escribirlo, no un objetivo: si alguien vacía el regex, este
-    // barrido quedaría recorriendo CERO enums y en verde, que es como un candado deja de existir.
-    expect(ENUMS.length, `enums derivados: ${ENUMS.join(", ")}`).toBeGreaterThanOrEqual(13);
+    // ⛔ NO ES UN PISO (re-AR it3 · MNR-2): es el conjunto EXACTO. Un piso deja que el barrido pierda
+    // enums de a uno y siga verde — el mutante está escrito arriba, en el docblock de `ENUMS_PINNEADOS`.
+    expect(
+      ENUMS,
+      "el conjunto que el regex deriva de la route dejó de ser el pinneado. Si un enum FALTA, se salió " +
+        "del barrido (¿un literal que pasó a constante?) y hay que hacerlo volver, NO borrarlo del pin. " +
+        "Si SOBRA, es un enum nuevo: sumalo al pin DESPUÉS de mirar qué lee la persona en pantalla.",
+    ).toEqual([...ENUMS_PINNEADOS]);
     const rotos: string[] = [];
     for (const e of ENUMS) {
       const texto = textoEnPantalla(await runPrepareFailure(e));
@@ -206,6 +262,32 @@ describe("del enum del `prepare` a la frase que la persona LEE en la pantalla de
       cleanup();
     }
     expect(rotos, "estos enums mandan a buscar USDC a un escrow vacío").toEqual([]);
+  });
+
+  // ── T-PANT-4 — EL CONTROL DEL PIN, con fuente SINTÉTICA (re-AR it3 · MNR-2) ───────────────────
+  //
+  // El pin de `T-PANT-2` sólo sirve si el escáner que lo alimenta puede EFECTIVAMENTE perder un enum.
+  // Acá se ejercita el mutante del AR sin tocar `prepare/route.ts` (que queda con CERO diff): la misma
+  // función de derivación, contra tres fuentes de mentira. Las dos direcciones en la misma corrida.
+  it("T-PANT-4: el escáner PIERDE un enum si el literal se va a una constante (y por eso el pin es exacto)", () => {
+    const conLiteral = `return NextResponse.json({ error: "prepare_rate_limited" }, { status: 429 });`;
+    const conConstante = `const E = "prepare_rate_limited";\nreturn NextResponse.json({ error: E }, { status: 429 });`;
+    const conUnoNuevo = `${conLiteral}\nreturn NextResponse.json({ error: "prepare_flamante" }, { status: 500 });`;
+
+    // CONTROL POSITIVO: con el literal, el escáner lo ve.
+    expect(enumsDeLaFuente(conLiteral)).toEqual(["prepare_rate_limited"]);
+    // EL MUTANTE M-B DEL AR: el enum se sale del barrido en silencio. Un `>=` no puede verlo.
+    expect(
+      enumsDeLaFuente(conConstante),
+      "si esto deja de estar vacío, el escáner aprendió a seguir constantes y el pin puede relajarse",
+    ).toEqual([]);
+    // Y LA DIRECCIÓN CONTRARIA: un enum nuevo entra solo al conjunto, así que el pin también lo caza.
+    expect(enumsDeLaFuente(conUnoNuevo)).toEqual(["prepare_flamante", "prepare_rate_limited"]);
+
+    // ⇒ las dos derivas mueven el conjunto, y `toEqual` las ve a las dos. Un piso sólo veía la 1ª
+    //   cuando llegaba a cero.
+    expect(ENUMS_PINNEADOS).toHaveLength(14);
+    expect(new Set(ENUMS_PINNEADOS).size, "el pin no puede traer duplicados").toBe(14);
   });
 
   // ── T-PANT-3 — EL REVÉS, que es el mutante peligroso ──────────────────────────────────────────

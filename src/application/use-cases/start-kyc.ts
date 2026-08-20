@@ -137,11 +137,18 @@ export class StartKyc {
     // `kyc_session_tokens` puede no estar. La única pregunta que vale es la del momento del dinero.
     // Esto ACOTA el callejón, no lo cierra.
     //
-    // ⚠️ Y LA ESCRITURA DEL CACHÉ SIGUE COMO ESTABA (`:170` acá y `resume-kyc.ts:49`), que también
-    // dicen `approved && payoutAllowed`. NO se cambian, y la razón es que cada gate usa el campo que
-    // le corresponde: guardar es una decisión de PANTALLA (¿esta persona pasó la verificación que la
-    // pantalla muestra?) y saltear es una decisión sobre el PAGO. Cambiar la escritura además dejaría
-    // sin caché al demo entero (el gateway de fallback declara `realVerified: false` por definición).
+    // ⚠️ Y LA ESCRITURA DEL CACHÉ SIGUE COMO ESTABA (`:213` acá y `resume-kyc.ts:49`), que también dicen
+    // `approved && payoutAllowed`. NO se cambian, y la razón que queda en pie es que cada gate usa el
+    // campo que le corresponde: guardar es una decisión de PANTALLA (¿esta persona pasó la verificación
+    // que la pantalla muestra?) y saltear es una decisión sobre el PAGO.
+    // ⛔ ACÁ HABÍA UNA SEGUNDA RAZÓN —«cambiar la escritura dejaría sin caché al demo entero»— Y NO
+    // SOSTIENE NADA (re-AR it2 · MNR-1): el demo YA se quedó sin atajo, por el lado de la LECTURA. La
+    // cadena es determinista: sin `KYC_AGENT_BASE_URL`, `/api/kyc/session` da 501 ⇒ `AgentKycGateway`
+    // delega en `FallbackKycGateway`, que devuelve `{approved:true, payoutAllowed:true,
+    // realVerified:false}` ⇒ la escritura de `:213` SÍ guarda la fila, y esta LECTURA nunca la usa. ⇒ en
+    // la configuración de demo la persona vuelve a pasar por `review`+`verify` en CADA reconexión. Es
+    // una consecuencia ACEPTADA de H-2b (la congela `T-AC4c`), no un bug abierto — pero se escribe como
+    // lo que es, y no como un motivo para no tocar la escritura.
     if (remembered?.approved && remembered.realVerified && !servidorDiceQueNoHayFila) {
       r.applyKyc(remembered, this.clock.nowIso());
       await this.repo.save(r);

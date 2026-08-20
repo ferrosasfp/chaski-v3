@@ -232,8 +232,16 @@ export async function POST(req: Request): Promise<Response> {
   // ahí moría en el prepare, sin camino de vuelta. Preguntar lo mismo que pregunta el pago es lo que
   // vuelve `usable` una afirmación sobre el pago y no sobre una tabla.
   //
-  // ⛔ VA DESPUÉS DEL TTL Y NO ANTES: si la fila ya venció, `expired` es lo cierto y es más informativo
-  // que "no hay credencial". Un `absent` genérico se comería ese motivo.
+  // ⛔ VA DESPUÉS DEL TTL Y NO ANTES, y el orden real está verificado (V6/TTL arriba, esto abajo).
+  // ⚠️ PERO LA RAZÓN ESCRITA NO ESTÁ MEDIDA, y así queda dicha (re-AR it2 · MNR-4). Decía que `expired`
+  // «es más informativo que "no hay credencial"», y HOY ESA INFORMACIÓN NO LA CONSUME NADIE: el cliente
+  // colapsa los tres motivos en un solo `outcome:"absent"` (`ABSENT_REASONS` incluye `"expired"`,
+  // (`ABSENT_REASONS`, `../../../../src/infrastructure/kyc/http-kyc-verdict-gateway.ts:42`)), y los dos
+  // únicos lectores miran el `outcome` y nunca el `reason` (`start-kyc.ts:109`, `flow.tsx:355`; grep
+  // sobre `src/presentation` + `src/application`: cero ramas por `reason`). ⇒ el orden es defendible
+  // igual —vencido+sin credencial es `expired`, vigente+sin credencial es `absent`— pero lo que lo
+  // sostiene es que no cuesta nada, no que alguien lea la diferencia. Si mañana alguien la ramifica,
+  // esta nota es la que dice desde cuándo empezó a importar.
   //
   // 🔴 Y LOS DOS FALLOS DE LECTURA **NO** SALEN POR `absent`, QUE ES LA PARTE QUE IMPORTA. `absent`
   // prende `servidorDiceQueNoHayFila` en `../../../../src/application/use-cases/start-kyc.ts:109`, que

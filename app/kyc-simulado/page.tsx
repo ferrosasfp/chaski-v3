@@ -27,7 +27,16 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { mockDiditSurfaceEnabled } from "../../src/infrastructure/mock-surface";
 
-export const metadata = { title: "Verificación simulada · Chaski" };
+// 🔴 `generateMetadata` Y NO UN `metadata` CONSTANTE (re-AR it2 · MNR-7). Con el gate apagado la página
+// corta con `notFound()`, pero el `metadata` estático se sirve IGUAL: medido con `curl` contra un build
+// local, el cuerpo traía "This page could not be found" **y** `<title>Verificación simulada · Chaski</title>`,
+// sin ninguna otra cadena del simulador. O sea que la pantalla apagada se anunciaba por su nombre a
+// cualquiera que mirara el HTML — y el 404 de esta app ya sale con status 200 (ver `T-GATE-3'`), así que
+// el título era el segundo indicio que quedaba. ⛔ NO cambia el gate ni el corte: sólo deja de nombrar
+// una superficie de prueba cuando esa superficie no existe.
+export async function generateMetadata(): Promise<{ title?: string }> {
+  return mockDiditSurfaceEnabled() ? { title: "Verificación simulada · Chaski" } : {};
+}
 
 // 🔴 SIN ESTO EL GATE SE EVALÚA UNA SOLA VEZ, AL COMPILAR. Medido el 2026-08-11: `npm run build`
 // marcaba esta ruta `○ (Static)`, o sea prerenderizada, así que `mockDiditSurfaceEnabled()` corría con

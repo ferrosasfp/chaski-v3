@@ -335,11 +335,11 @@ describe("GET /api/kyc/decision — la fila se escribe SÓLO con `payoutAllowed 
 
   // ── T-DEC-1b (WKH-233 fix-pack · H-6) — EL CASO QUE SEPARA EL AC DEL CÓDIGO ───────────────────
   //
-  // 🔴 QUÉ MIDE. `payoutAllowed: true` con `identityMatches: false`. El work-item dice que este caso
-  // NO debe escribir fila (AC-7: *"sólo si `identityMatches === true`"*); el código SÍ la escribe,
-  // porque el gate es `payoutAllowed` y nada más (DT-5', aprobado por el founder en MI-1). Este `it`
-  // fija **lo que el código hace**. Si mañana alguien "arregla" el código para cumplir el AC como
-  // está escrito, esto se pone rojo y obliga a decidir a propósito en vez de por deriva.
+  // 🔴 QUÉ MIDE. `payoutAllowed: true` con `identityMatches: false`. El gate del código es `payoutAllowed`
+  // y nada más (DT-5', aprobado por el founder en MI-1). ⚠️ ACÁ DECÍA que «el work-item dice que este caso
+  // NO debe escribir fila (AC-7: *sólo si `identityMatches === true`*)», Y SE VOLVIÓ FALSO EL 2026-08-20,
+  // sin que nadie editara la línea (re-AR it2 · R-6): AC-5 y AC-7 YA ESTÁN REESCRITOS y hoy piden
+  // `payoutAllowed === true`, lo mismo que hace el código (`work-item.md:485-501` y `:505-521`). Este `it` fija **lo que el código hace**: si mañana alguien lo cambia, se pone rojo y obliga a decidir a propósito en vez de por deriva.
   //
   // ⛔ Y ACÁ VA EL LÍMITE, EXPLÍCITO, PORQUE ESTO ES ACOTAMIENTO Y NO CIERRE:
   //   · ESTE repo verifica que la fila se escribe si y sólo si el agente dijo `payoutAllowed === true`.
@@ -357,9 +357,10 @@ describe("GET /api/kyc/decision — la fila se escribe SÓLO con `payoutAllowed 
     await GET(req({ "x-kyc-token": issueSessionToken(SESSION) }));
     expect(
       store.put,
-      "el código dejó de escribir con `identityMatches: false`. Puede ser correcto —es lo que AC-7 " +
-        "pide— pero contradice DT-5', que el founder aprobó en MI-1: decidilo a propósito y " +
-        "actualizá el work-item, no dejes que las dos versiones convivan",
+      "el código dejó de escribir con `identityMatches: false`, o sea que cambió el gate. ⚠️ ACÁ DECÍA " +
+        "«puede ser correcto, es lo que AC-7 pide», y eso quedó VIEJO el 2026-08-20: AC-7 ya se " +
+        "reescribió y hoy pide `payoutAllowed === true`, igual que DT-5'. Ahora el AC, el SDD y el " +
+        "código dicen lo mismo, así que este cambio los contradice a los tres: decidilo a propósito",
     ).toHaveBeenCalledTimes(1);
   });
 

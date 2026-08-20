@@ -139,6 +139,41 @@ describe("candado · la superficie de prueba de Didit se apaga entera y desde un
     expect(out, "la página no devolvió un elemento de React con el gate encendido").toBeTruthy();
   });
 
+  // ── T-GATE-6 (re-AR it2 · MNR-7) — CON EL GATE APAGADO, LA PÁGINA TAMPOCO SE NOMBRA ───────────
+  //
+  // 🔴 QUÉ AGUJERO CIERRA, MEDIDO Y NO DEDUCIDO. El AR midió con `curl` contra un build local que, con
+  // el gate apagado, la respuesta trae el cuerpo del not-found de Next **y** el `<title>Verificación
+  // simulada · Chaski</title>` — porque el `metadata` era una constante de módulo y Next lo resuelve
+  // aunque el árbol corte. Ninguna otra cadena del simulador aparecía (ni "Entorno de prueba" ni el
+  // `h1`), así que el contenido SÍ estaba apagado: lo que quedaba encendido era el nombre.
+  //
+  // Importa porque el 404 de esta app sale con status 200 (`T-GATE-3'`): un monitor externo que
+  // pregunte "¿está apagado?" ya leía 200, y además leía el título de la pantalla apagada.
+  //
+  // ⚠️ LO QUE ESTE `it` **NO** MIDE: el HTML servido. Llama a `generateMetadata()`, que es la función
+  // de la que sale el `<title>`; el render completo pide un build, y eso no es algo que un test
+  // unitario haga. El eslabón que queda a mano es "Next usa lo que devuelve esta función".
+  it("T-GATE-6: con el gate apagado, `generateMetadata` no nombra el simulador", async () => {
+    vi.stubEnv("MOCK_KYC_SURFACE_ENABLED", undefined);
+    vi.resetModules();
+    const { generateMetadata } = await import("./page");
+    const meta = await generateMetadata();
+    // 🧬 MUTANTE: volver a `export const metadata = { title: "Verificación simulada · Chaski" }` ⇒ el
+    // título sale igual con el gate apagado ⇒ ROJO acá.
+    expect(JSON.stringify(meta)).not.toContain("simulada");
+    expect(meta.title).toBeUndefined();
+  });
+
+  // 🧪 CONTROL POSITIVO, EN LA MISMA CORRIDA: con el gate encendido el título SIGUE ESTANDO. Sin esto,
+  // borrar el `metadata` entero pondría verde al `it` de arriba y le sacaría el nombre a la pantalla
+  // que sí existe.
+  it("T-GATE-6(control): con el gate encendido, el título del simulador SÍ está", async () => {
+    vi.stubEnv("MOCK_KYC_SURFACE_ENABLED", "true");
+    vi.resetModules();
+    const { generateMetadata } = await import("./page");
+    expect((await generateMetadata()).title).toBe("Verificación simulada · Chaski");
+  });
+
   // ── Forma: el gate se evalúa POR REQUEST y no al compilar ─────────────────────────────────────
   // Sin `force-dynamic`, `npm run build` marcaba esta ruta `○ (Static)`: el gate corría con el
   // `DIDIT_ENV` del build y quedaba horneado. Un operador que pasa la env a `live` no cerraría la

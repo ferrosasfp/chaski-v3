@@ -47,7 +47,7 @@
 //   1. (`resolvePayoutAuthority`, `../../../app/api/payout/prepare/route.ts:331`) — el money-path real.
 //   2. (`resolvePayoutAuthority`, `../../../app/api/payout/validate/route.ts:66`) — advisory: un POST
 //      público que ningún paso del flujo llama.
-//   3. (`resolvePayoutAuthority`, `../../../app/api/kyc/verdict/route.ts:327`) — el backfill (V8), que
+//   3. (`resolvePayoutAuthority`, `../../../app/api/kyc/verdict/route.ts:335`) — el backfill (V8), que
 //      re-consulta con la pista del navegador y persiste sólo si vuelve autorizada. ⚠️ ESE CALLER LEE EL
 //      `httpStatus`, NO SÓLO EL `authorized` (re-AR it2 · BLQ-BAJO-1): un 5xx de acá significa "no
 //      contestamos", no "dijimos que no", y colapsar los dos hacía que la ruta respondiera `absent` —
@@ -197,9 +197,9 @@ export async function resolvePayoutAuthority(
     // ⛔ Y ACÁ VA EL LÍMITE DE ESTE GATE, ESCRITO COMO ACOTAMIENTO Y NO COMO CIERRE (WKH-233 fix-pack
     // · H-5). El work-item de la HU dice, en AC-5 y AC-7, que se autoriza *"únicamente si la respuesta
     // trae `identityMatches === true`"*. **Este código no mira `identityMatches` en ninguna línea**, y
-    // eso es correcto: lo sustituyó DT-5' (`sdd.md:307-333`), que el founder aprobó en MI-1. Lo que
-    // nadie hizo fue reescribir los ACs, así que el expediente describe un control que el sistema no
-    // tiene. ⇒ **Manda el código y DT-5'; los ACs están viejos.**
+    // eso es correcto: lo sustituyó DT-5' (`sdd.md:307-337`), que el founder aprobó en MI-1. Lo que
+    // nadie había hecho al escribir esto era reescribir los ACs. ⚠️ ESO SE VOLVIÓ FALSO EL 2026-08-20, sin
+    // que nadie editara esta línea (re-AR it2 · R-6): AC-5 y AC-7 YA ESTÁN REESCRITOS y hoy dicen `payoutAllowed === true`, o sea lo mismo que hace el código — verificado en `work-item.md:485-501` y `:505-521`, que además citan `sdd.md:307-337`. ⇒ **Manda el código y DT-5', y el expediente ya coincide.** ⛔ Es un candado que se pudre solo: nada vigila esta frase, así que si volvés a leerla dentro de seis meses, re-derivala del work-item antes de creerle.
     //
     // 🔴 LA PREMISA QUE HACE SANA ESA DECISIÓN NO SE VERIFICA ACÁ, NI PUEDE: que `payoutAllowed === true`
     // ya exija una identidad coincidente lo sostiene el AGENTE, en otro repo, que es Scope OUT. Este

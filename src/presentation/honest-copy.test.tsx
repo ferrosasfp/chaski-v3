@@ -842,6 +842,10 @@ const VEDADAS_DEL_RESUME: ReadonlyArray<readonly [string, string]> = [
   ["no pudimos", "es un pasado sobre un intento que puede no haber ocurrido. ⛔ LITERAL EXACTO: «no podemos» (presente) SÍ está permitido y es el copy de D-4"],
   ["no pasó", "es un veredicto sobre la verificación de la persona, y uno de los sub-casos ni siquiera consultó al verificador"],
   ["rechaz", "ídem: un veredicto que nadie emitió"],
+  // ⚠️ La octava del léxico de CD-6, y la más fácil de dejarse afuera por genérica: reponer la palabra
+  // que el contrato enumera no es opcional. Sin ella, un copy futuro tipo «Hubo un error al retomar tu
+  // verificación» pasa en verde por las cinco pantallas.
+  ["error", "nombra una falla técnica, y D-2 se alcanza con ocho respuestas EXITOSAS que no fueron finales (ninguna falló); en D-3 hubo un throw pero el desenlace no distingue de quién fue"],
   ["falló", "le atribuye el fallo a la verificación en vez de a nosotros"],
   ["fallo", "ídem"],
 ];

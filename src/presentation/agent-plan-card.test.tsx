@@ -43,15 +43,15 @@ vi.mock("framer-motion", () => ({
   // Lista CERRADA: lo que no esté acá no existe para este archivo, y el faltante tira TODA la
   // suite del archivo, no un test. Ver el docblock del mismo doble en `flow.test.tsx`.
   MotionConfig: ({ children }: { children: React.ReactNode }) => children,
-  motion: new Proxy(
-    {},
-    {
-      get:
-        (_t, tag: string) =>
-        ({ children, ...props }: { children?: React.ReactNode } & Record<string, unknown>) =>
-          React.createElement(tag, props, children),
+  // 🔴 CACHEA POR TAG, y el caché ES el target del Proxy (WKH-233 it4 · F4/§4.3): un `get` que fabrica en cada acceso da un TIPO de componente distinto por render y React REMONTA el subárbol entero.
+  motion: new Proxy({} as Record<string, unknown>, {
+    get: (t: Record<string, unknown>, tag: string) => {
+      if (!(tag in t))
+        t[tag] = ({ children, ...props }: { children?: React.ReactNode } & Record<string, unknown>) =>
+          React.createElement(tag, props, children);
+      return t[tag];
     },
-  ),
+  }),
 }));
 
 afterEach(() => {

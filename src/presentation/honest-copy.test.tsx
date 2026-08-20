@@ -834,8 +834,8 @@ describe("barridos de prosa (AC-15 / AC-16)", () => {
 // contain 'no podemos seguir con esta verificaci…'`. Los otros cuatro siguen verdes ⇒ para ellos el
 // banner no aporta un solo carácter. Lo que sí aporta en las cinco es la pantalla de destino entera:
 // la prueba es el `ajeno` de D-5, que existe porque `confirm` mete texto que este barrido ve.
-// ⛔ LO QUE QUEDA AFUERA, declarado: el estado `error` ES alcanzable en las otras cuatro (`guard`,
-// `flow.tsx:300-312`, lo setea y nada del resume lo limpia), y **ningún `it` de acá construye esa
+// ⛔ LO QUE QUEDA AFUERA, declarado: el estado `error` ES alcanzable en las otras cuatro ((`guard`, `flow.tsx:300-312`) lo setea y
+// nada del resume lo limpia), y **ningún `it` de acá construye esa
 // coexistencia**. Un léxico vedado que llegara por el banner sobre D-1/D-2/D-3/D-5 no lo caza nadie.
 //
 // ⚠️ R-12, MEDIDO ANTES DE ESCRIBIR UNA LÍNEA DE ACÁ. El léxico vedado incluye «no pudimos» (pasado) y

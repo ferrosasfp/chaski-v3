@@ -2428,7 +2428,7 @@ describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace",
 // ⛔ EL RESIDUAL, SIN SUAVIZAR ([NC-1] de la HU): esto mide que el tri-estado EXISTE y que el caso
 // `null` NO se reporta como verificado. **NO es un evento observable en producción** y esta HU no
 // inventa uno: no hay ningún `console.*` ni sink de telemetría en el camino de `flow.tsx:506-519`
-// (medido), y agregar infraestructura de observabilidad no pedida a un archivo de [[CENSO src/presentation/flow.tsx lineas=4421]] líneas con [[CENSO src/presentation/flow.tsx entrantes=120]]
+// (medido), y agregar infraestructura de observabilidad no pedida a un archivo de [[CENSO src/presentation/flow.tsx lineas=4421]] líneas con [[CENSO src/presentation/flow.tsx entrantes=121]]
 // citas ANCLADAS entrantes sería expandir el scope para "cumplir" un AC. ⚠️ ACÁ DECÍA «4268 líneas con 83 citas» Y LO VOLVIÓ FALSO EL COMMIT `7338c37` DE ESTA MISMA HU, sin que nadie editara la frase (F4/F4-2). Por eso hoy son MARCADORES que verifica `citas-ancladas.test.ts` contra el árbol en cada `npm test`, no cifras escritas a mano. ⚠️ Y «ANCLADAS» no es un adorno: el marcador cuenta SÓLO las citas con símbolo delante — las sueltas (`flow.tsx:4009`) se rompen igual y siguen sin que las mire nadie. **Si el founder quería un evento que
 // se pueda ver en producción, esto no lo entrega.**
 describe("T-067-10 (WKH-359/AC-6): el cruce de cuenta distingue NO COMPARADO de COMPARADO", () => {
@@ -2789,8 +2789,8 @@ describe("HU 073 · D-3 (el intento se cortó) tiene texto propio y no toma part
   // 🔴 QUÉ FRASE MATA Y POR QUÉ NINGUNA DE LAS ANTERIORES PODÍA. `T-073-COPY-2d` prohíbe tomar partido
   // sobre si la consulta SALIÓ; el residual que el AR encontró es del otro lado: la frase vieja decía
   // «no sabemos en qué estado quedó», o sea afirmaba nuestra IGNORANCIA del veredicto. Es falso en la
-  // rama medida: con el throw en (`kycStore.save`, `resume-kyc.ts:49`) o en (`pending.clear`,
-  // `resume-kyc.ts:50`), (`applyKyc`, `resume-kyc.ts:47`) y (`repo.save`, `resume-kyc.ts:48`) YA
+  // rama medida: con el throw en (`kycStore.save`, `resume-kyc.ts:49`) o en (`pending.clear`, `resume-kyc.ts:50`),
+  // (`applyKyc`, `resume-kyc.ts:47`) y (`repo.save`, `resume-kyc.ts:48`) YA
   // corrieron y el veredicto está aplicado y guardado ⇒ la app sí lo sabe.
   //
   // ⚠️ EL PEOR ESTADO NO SE CONSTRUYE ACÁ PORQUE YA ESTÁ CONSTRUIDO Y VERDE, y es anterior a esta HU:

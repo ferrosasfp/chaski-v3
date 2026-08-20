@@ -821,8 +821,22 @@ describe("barridos de prosa (AC-15 / AC-16)", () => {
 //
 // 🔴 QUÉ MIDE Y POR QUÉ NO ES UNA LISTA DE FRASES. Los `T-073-COPY-*` de `flow-vm.test.ts` miran las
 // constantes; esto mira lo que la persona LEE de verdad, o sea el `textContent` renderizado, que es lo
-// único que incluye lo que aportan los componentes de alrededor (el banner de error, el aviso, el
-// stepper). Una frase puede ser honesta y quedar al lado de otra que no lo es.
+// único que incluye lo que aportan los componentes de alrededor. Una frase puede ser honesta y quedar
+// al lado de otra que no lo es.
+//
+// ⚠️ Y CUÁLES SON «LOS COMPONENTES DE ALREDEDOR» EN CADA UNA DE LAS CINCO, MEDIDO (AR/MNR-2). Acá decía
+// «(el banner de error, el aviso, el stepper)», y esa enumeración afirmaba de más: **el banner de error
+// sólo está en el árbol en D-4**. Es (`aterrizar`, `flow.tsx:208`) el que hace el `setError`, y de los
+// cinco desenlaces sólo `failed` le pasa un `err` ((`COPY_RESUME_NO_PODEMOS_SEGUIR`, `flow.tsx:272`)); D-1 y D-3 no setean error, D-2
+// declara textual que no lo setea para no duplicar la card, y D-5 aterriza sin `err`.
+// **Cómo se midió, y no por lectura**: quitándole el `setError` a `aterrizar` cae UN solo `it` de este
+// bloque —D-4, y por su CONTROL POSITIVO— con `expected 'chaskitu plata a perú, sin vueltaspas…' to
+// contain 'no podemos seguir con esta verificaci…'`. Los otros cuatro siguen verdes ⇒ para ellos el
+// banner no aporta un solo carácter. Lo que sí aporta en las cinco es la pantalla de destino entera:
+// la prueba es el `ajeno` de D-5, que existe porque `confirm` mete texto que este barrido ve.
+// ⛔ LO QUE QUEDA AFUERA, declarado: el estado `error` ES alcanzable en las otras cuatro (`guard`,
+// `flow.tsx:300-312`, lo setea y nada del resume lo limpia), y **ningún `it` de acá construye esa
+// coexistencia**. Un léxico vedado que llegara por el banner sobre D-1/D-2/D-3/D-5 no lo caza nadie.
 //
 // ⚠️ R-12, MEDIDO ANTES DE ESCRIBIR UNA LÍNEA DE ACÁ. El léxico vedado incluye «no pudimos» (pasado) y
 // el copy nuevo de D-4 dice «no podemos» (presente). Si el barrido estuviera escrito como `/no pud/i` o

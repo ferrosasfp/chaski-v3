@@ -396,10 +396,10 @@ describe("T-063-10 (2º pase): la pantalla dice QUÉ VA A PASAR, y lo que dice s
     // README de la librería: se MIDIÓ con una sonda (`findByText` sobre un texto inexistente, en este
     // mismo runner) que dio `sin argumento = 1004 ms`, `{timeout:2500} = 2502 ms`,
     // `{timeout:150} = 151 ms`. Esa misma sonda es la que prueba que el TERCER argumento es el que
-    // manda: si se ignorara, los tres habrían dado ~1000. Aislado el `it` pasa 22/22. La causa
-    // no es de esta HU —worktrees en `da0fb68` y `9e3e147` dan verde— sino CONTENCIÓN DE CPU: entre el
-    // click de arriba y este texto corren `connectWallet` + `lockQuote`, y con la máquina cargada esa
-    // cadena de microtareas no cierra en un segundo.
+    // manda: si se ignorara, los tres habrían dado ~1000. Aislado el `it` pasa 22/22. 🔴 ACÁ ESCRIBÍ «sino CONTENCIÓN DE CPU» Y **ES FALSO**, medido en la it4 (F4/§4.3): el desprendedor era el doble de `framer-motion` de `:174` — un `get` sin caché devuelve una función NUEVA por acceso ⇒ React ve otro TIPO de componente y REMONTA la pantalla entera en cada render. Con la máquina OCIOSA y sin tocar nada, el nodo se desprendía solo a los 208 ms; con el caché puesto, `desprendioSoloMs` pasa a -1.
+    // El techo se queda igual pero por la OTRA mitad —encontrar el nodo bajo carga sí puede tardar—,
+    // y ⛔ dejó de ser el candado de esta línea: lo que la sostiene es que el doble ya no remonte.
+    // ⚠️ Y LA CORRECCIÓN DE LA CORRECCIÓN: el 2º pase decía que la causa «no es de esta HU» y eso SIGUE SIENDO CIERTO (los 10 dobles vivían en `main` intactos), pero la RAZÓN que escribí estaba medida contra `e9b41b2..HEAD` en vez de contra `main`. Contra `main`, `cd15fba` sí reescribió el cuerpo de este `it` —incluida la línea del assert—, así que no fue un espectador: no creó la carrera, le movió el entrelazado.
     //
     // ⛔ POR QUÉ UN TECHO Y NO `getByText`: el elemento NO está montado cuando se pide. El click de
     // arriba dispara trabajo asíncrono, así que un `getBy*` fallaría SIEMPRE, no a veces.

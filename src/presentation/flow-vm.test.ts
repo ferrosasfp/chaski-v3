@@ -2783,6 +2783,36 @@ describe("HU 073 · D-3 (el intento se cortó) tiene texto propio y no toma part
         "`get` del disco está FUERA del `try` del store, así que un disco ilegible aterriza en este mismo desenlace",
     ).toMatch(/^Si estabas volviendo/);
   });
+
+  // T-073-COPY-2f · AR/MNR-1 — LA PROPIEDAD QUE LA FRASE NUEVA SE PUSO A SÍ MISMA.
+  //
+  // 🔴 QUÉ FRASE MATA Y POR QUÉ NINGUNA DE LAS ANTERIORES PODÍA. `T-073-COPY-2d` prohíbe tomar partido
+  // sobre si la consulta SALIÓ; el residual que el AR encontró es del otro lado: la frase vieja decía
+  // «no sabemos en qué estado quedó», o sea afirmaba nuestra IGNORANCIA del veredicto. Es falso en la
+  // rama medida: con el throw en (`kycStore.save`, `resume-kyc.ts:49`) o en (`pending.clear`,
+  // `resume-kyc.ts:50`), (`applyKyc`, `resume-kyc.ts:47`) y (`repo.save`, `resume-kyc.ts:48`) YA
+  // corrieron y el veredicto está aplicado y guardado ⇒ la app sí lo sabe.
+  //
+  // ⚠️ EL PEOR ESTADO NO SE CONSTRUYE ACÁ PORQUE YA ESTÁ CONSTRUIDO Y VERDE, y es anterior a esta HU:
+  // (`ResumeKyc`, `use-cases.test.ts:244`) corre `rejects` y `status === "kyc_passed"` en la MISMA
+  // corrida, que es exactamente la contradicción. Duplicarlo sería un segundo escritor del mismo hecho.
+  // Lo que falta y va acá es el candado de la PROPIEDAD del copy, en el formato de las otras siete.
+  it("T-073-COPY-2f: D-3 no afirma nada sobre el ESTADO de la verificación, ni siquiera que lo ignoramos", () => {
+    const AFIRMA_SOBRE_EL_ESTADO = /sabemos|saber|se desconoce|estado qued/i;
+    // CONTROL POSITIVO (CD-24): un regex que no matchea nada dejaría el `not` de abajo verde para
+    // siempre. Acá se planta la frase EXACTA que el AR marcó como falsa y se comprueba que cae.
+    expect(
+      "Si estabas volviendo de una verificación, no sabemos en qué estado quedó, ni si la consulta llegó a salir.",
+      "el criterio dejó de cazar la frase que el AR midió falsa: este candado es decorativo",
+    ).toMatch(AFIRMA_SOBRE_EL_ESTADO);
+    for (const frase of [COPY_RESUME_INTERRUMPIDO_TITULO, COPY_RESUME_INTERRUMPIDO_CUERPO]) {
+      expect(
+        frase,
+        "D-3 volvió a enunciar sobre el estado de la verificación, y en esta rama ese estado puede " +
+          "estar ya aplicado y persistido: lo único que la pantalla puede afirmar es lo que ELLA hizo",
+      ).not.toMatch(AFIRMA_SOBRE_EL_ESTADO);
+    }
+  });
 });
 
 describe("HU 073 · D-4 no emite un veredicto sobre la persona", () => {

@@ -1649,12 +1649,12 @@ export const COPY_RESUME_SIN_RESPUESTA_CUERPO =
 /** D-3 · el intento se cortó. Habla de la PANTALLA, que es lo único que se midió. */
 export const COPY_RESUME_INTERRUMPIDO_TITULO = "Algo se interrumpió al abrir esta pantalla";
 
-/** D-3 · el cuerpo, y el antecedente condicional es obligatorio: acá también llega quien NUNCA empezó
- *  una verificación (el `get` del disco está FUERA del `try` del store, así que un disco ilegible cae
- *  en este mismo desenlace). Sin el «Si estabas volviendo», se le afirmaría una verificación a alguien
- *  que no tiene ninguna. ⛔ Y no toma partido sobre si la consulta salió: no se midió. */
+/** D-3 · el cuerpo. ⛔ ENUNCIA SOBRE ESTA PANTALLA Y SOBRE NADA MÁS. El antecedente condicional es obligatorio: acá también llega quien NUNCA empezó una verificación (el `get` del disco está FUERA del `try` del store).
+ *  🔴 Y YA NO DICE «no sabemos en qué estado quedó» (AR/MNR-1): era FALSO cuando el throw cae en (`kycStore.save`, `resume-kyc.ts:49`) o en (`pending.clear`, `resume-kyc.ts:50`), porque (`applyKyc`, `resume-kyc.ts:47`) y (`repo.save`, `resume-kyc.ts:48`) YA persistieron el veredicto: ahí la app sí sabe cómo quedó, y lo único cierto de esta rama es que la pantalla no llegó a mostrarlo.
+ *  Evidencia verde y anterior a esta HU, no razonada: (`ResumeKyc`, `use-cases.test.ts:244`) hace `rejects` y `status === "kyc_passed"` en la MISMA corrida.
+ *  Candado de la propiedad: `T-073-COPY-2f`, con su control positivo (la frase vieja tiene que caer). */
 export const COPY_RESUME_INTERRUMPIDO_CUERPO =
-  "Si estabas volviendo de una verificación, no sabemos en qué estado quedó, ni si la consulta llegó a salir.";
+  "Si estabas volviendo de una verificación, no llegamos a mostrarte cómo quedó.";
 
 /** D-4 · el banner. Enuncia sobre NOSOTROS y en PRESENTE («no podemos seguir»), ⛔ nunca un veredicto
  *  sobre la persona ni sobre su verificación: uno de los dos sub-casos que llegan acá ni siquiera

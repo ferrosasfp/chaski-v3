@@ -160,6 +160,11 @@ async function conectarYArrancarKyc(pop: PopSigner) {
 describe("rechazar la firma al conectar NO impide iniciar el KYC (CD-15/AC-13, AR/BLQ-ALTO-2)", () => {
   beforeEach(() => {
     vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test"); // CON host: el camino real, no el demo
+    // WKH-233 (fix-pack · H-3): la credencial de invoke pasó a ser OBLIGATORIA (`invokeAuthHeader`
+    // es fail-closed), así que sembrarla es PRE-REQUISITO del camino real, igual que el host de la
+    // línea de arriba. Sin esto, `createAgentKycSession` TIRA antes de gastar el viaje y estos `it`
+    // medirían ese guard en vez de lo que dicen medir.
+    vi.stubEnv("KYC_AGENT_INVOKE_SECRET", "invoke-secret-de-test");
     vi.stubEnv("KYC_SESSION_SECRET", "kyc-session-secret");
     vi.stubEnv("PAYOUT_POP_SECRET", "test-pop-secret");
     rlMock.mockReset();
@@ -231,6 +236,11 @@ describe("rechazar la firma al conectar NO impide iniciar el KYC (CD-15/AC-13, A
 describe("T-067-6 (WKH-359/AC-3): con la prueba del enlace, la sesión de Didit se crea ATADA", () => {
   beforeEach(() => {
     vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test");
+    // WKH-233 (fix-pack · H-3): la credencial de invoke pasó a ser OBLIGATORIA (`invokeAuthHeader`
+    // es fail-closed), así que sembrarla es PRE-REQUISITO del camino real, igual que el host de la
+    // línea de arriba. Sin esto, `createAgentKycSession` TIRA antes de gastar el viaje y estos `it`
+    // medirían ese guard en vez de lo que dicen medir.
+    vi.stubEnv("KYC_AGENT_INVOKE_SECRET", "invoke-secret-de-test");
     vi.stubEnv("KYC_SESSION_SECRET", "kyc-session-secret");
     vi.stubEnv("PAYOUT_POP_SECRET", "test-pop-secret");
     rlMock.mockReset();

@@ -230,6 +230,27 @@ const pintarBienvenida = () => render(<RemittanceFlow container={buildTestContai
 //   · y hay un `it` de ANTIVACUIDAD que lee el cuerpo de cada sonda y exige que llame a `expect`. Una
 //     fila nueva con `sonda: () => {}` se pone roja sola.
 type Sondeo = { seguir: () => Promise<void> };
+/**
+ * 🔴 EL TECHO DE TODA ESPERA DE LA CAMINATA (WKH-233 fix-pack · H-13). El default de `findBy*` es
+ * **1000 ms** —medido con una sonda en este mismo runner: sin argumento 1004 ms, `{timeout:2500}`
+ * 2502 ms, `{timeout:150}` 151 ms, o sea que el default es ése y el TERCER argumento es el que
+ * manda— y ese segundo NO alcanza cuando la máquina está cargada. El `it` que camina el flujo
+ * reventaba en 2 de 4 corridas de la suite completa, y volvió a reventar —en OTRA de sus esperas—
+ * corriendo con instrumentación de cobertura, que es más carga todavía.
+ *
+ * ⛔ NO ESCONDE NINGUNA REGRESIÓN: una regresión real nunca resuelve, así que el rojo sigue siendo
+ * rojo — sólo tarda más en decirlo. Lo que el techo compra es que "lento" deje de leerse como "roto".
+ * ⛔ Y NO SE ARREGLA CON `getBy*`: los elementos NO están montados cuando se piden (cada uno llega
+ * después de trabajo asíncrono del use-case), así que un `getBy*` fallaría SIEMPRE, no a veces.
+ *
+ * ⚠️ PERÍMETRO, DECLARADO PORQUE ESTO ARREGLA UN ARCHIVO Y NO LA CLASE: al 2026-08-20 el árbol tiene
+ * **327** llamadas `findBy*` y —contadas con el mismo barrido— NINGUNA pasaba `timeout`. Las demás
+ * siguen con el techo de 1000 ms y pueden reventar por lo mismo bajo carga. El arreglo de la CLASE
+ * sería `asyncUtilTimeout` global, y eso exige un `vitest.config.*` que este repo NO tiene a
+ * propósito (`readme-test-count.test.ts` se apoya en el descubrimiento por defecto). Es otra HU.
+ */
+const TECHO_ESPERA = { timeout: 8_000 } as const;
+
 const PASOS_ESPERADOS: readonly { frase: string; sonda: (s: Sondeo) => Promise<void> }[] = [
   {
     frase: "Ponés el monto y el CCI de tu familiar.",
@@ -245,12 +266,12 @@ const PASOS_ESPERADOS: readonly { frase: string; sonda: (s: Sondeo) => Promise<v
     // primero la identidad, y DESPUÉS de avanzar, la firma. El orden es parte de lo que el renglón dice.
     sonda: async ({ seguir }) => {
       expect(
-        await screen.findByRole("button", { name: /Verificar mi identidad/ }),
+        await screen.findByRole("button", { name: /Verificar mi identidad/ }, TECHO_ESPERA),
         "el renglón 2 anuncia una verificación de identidad: el flujo tiene que tenerla",
       ).toBeInTheDocument();
       await seguir();
       expect(
-        await screen.findByRole("button", { name: /Confirmar y enviar/ }),
+        await screen.findByRole("button", { name: /Confirmar y enviar/ }, TECHO_ESPERA),
         "y el renglón 2 también anuncia una firma",
       ).toBeInTheDocument();
     },
@@ -271,7 +292,7 @@ const PASOS_ESPERADOS: readonly { frase: string; sonda: (s: Sondeo) => Promise<v
     sonda: async ({ seguir }) => {
       await seguir();
       expect(
-        await screen.findByText("Paso 4 de 4"),
+        await screen.findByText("Paso 4 de 4", undefined, TECHO_ESPERA),
         "el renglón 3 anuncia un seguimiento: después de firmar el flujo tiene que seguir",
       ).toBeInTheDocument();
     },
@@ -315,7 +336,7 @@ describe("T-063-10 (2º pase): la pantalla dice QUÉ VA A PASAR, y lo que dice s
     // ⚠️ LA NAVEGACIÓN ES DE ESTE `it` Y LOS ASSERTS SON DE CADA SONDA (fix-pack, CR/MNR-7): antes los
     // asserts de los renglones 2 y 3 estaban acá inline y sus sondas eran cuerpos vacíos.
     const tocar = (nombre: RegExp) => async () => {
-      fireEvent.click(await screen.findByRole("button", { name: nombre }));
+      fireEvent.click(await screen.findByRole("button", { name: nombre }, TECHO_ESPERA));
     };
     pintarBienvenida();
     fireEvent.click(screen.getByRole("button", { name: /Empezar un envío/ }));
@@ -333,7 +354,7 @@ describe("T-063-10 (2º pase): la pantalla dice QUÉ VA A PASAR, y lo que dice s
       target: { value: TEST_CCI },
     });
     fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }, TECHO_ESPERA));
     // 🔴 EL ÚNICO `findBy*` DEL REPO CON TECHO EXPLÍCITO, Y ES POR UN FLAKE MEDIDO (WKH-233 fix-pack ·
     // H-13). Esta línea reventaba en **2 de 4 corridas** de la suite completa, y NO por una aserción:
     // por el timeout de `findBy*`, que por defecto es **1000 ms** — y ese default NO se dedujo del
@@ -358,8 +379,8 @@ describe("T-063-10 (2º pase): la pantalla dice QUÉ VA A PASAR, y lo que dice s
     // arreglan acá: el arreglo de la CLASE sería subir `asyncUtilTimeout` global, y eso exige un
     // `vitest.config.*` que este repo NO tiene a propósito (`readme-test-count.test.ts` se apoya en que
     // el descubrimiento sea el default). Es una HU aparte, no un renglón de este fix-pack.
-    await screen.findByText(/Revisá el envío/, undefined, { timeout: 8_000 });
-    fireEvent.click(await screen.findByRole("button", { name: /Continuar/ }));
+    await screen.findByText(/Revisá el envío/, undefined, TECHO_ESPERA);
+    fireEvent.click(await screen.findByRole("button", { name: /Continuar/ }, TECHO_ESPERA));
 
     // Renglón 2 · la identidad primero y la firma después, en ese orden y con ese nombre.
     await (PASOS_ESPERADOS[1] as { sonda: (s: Sondeo) => Promise<void> }).sonda({
@@ -631,7 +652,7 @@ describe("T-063-24 (AR/BLQ-BAJO-2): la promesa del explorador se ejecuta en las 
 // ══ HU-068 · LOS CANDADOS DE LA BANDA DE MARCA ════════════════════════════════════════════════════
 //
 // ⛔ VAN AL FINAL DEL ARCHIVO, Y NO ES ORDEN ESTÉTICO: `bienvenida.tsx:153` cita
-// (`PASOS_ESPERADOS`, `bienvenida-composicion.test.tsx:233`), así que un `describe` insertado más
+// (`PASOS_ESPERADOS`, `bienvenida-composicion.test.tsx:254`), así que un `describe` insertado más
 // arriba correría ese número y rompería una cita SALIENTE — el lado que HU-066 se olvidó de mirar.
 // ⛔ Y POR LO MISMO NO HAY NINGÚN `import` NUEVO EN LA CABECERA: lo que estos tests necesitan de
 // `node:fs`, de `lucide-react`, de `./marca` y del splash entra con `await import(...)` adentro del

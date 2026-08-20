@@ -433,6 +433,77 @@ describe("POST /api/kyc/verdict (WKH-333)", () => {
     expect(authorityMock).not.toHaveBeenCalled();
   });
 
+  // ── T-EP-11b/c/d (fix-pack it2 · re-AR/BLQ-BAJO-1) — "NO PUDE PREGUNTAR" NO ES "NO HAY" ────────
+  //
+  // 🔴 QUÉ AGUJERO CIERRA. El `backfill` devolvía `null` tanto cuando la autoridad decía QUE NO como
+  // cuando NO PODÍA CONTESTAR, y las dos salían por `{verdict:null, reason:"absent"}` con status 200.
+  // `absent` prende `servidorDiceQueNoHayFila` en `start-kyc.ts:109`, apaga el atajo KYC-once, y manda
+  // a alguien YA VERIFICADO a escanear el documento otra vez, quemando un cupo del tier gratuito
+  // (500/día). Es el "no pude preguntar" leído como "no hay" que la doctrina de V9.5 —cincuenta líneas
+  // más abajo, en el MISMO handler— declara prohibido.
+  //
+  // Los tres `it` son el tri-estado completo, y el tercero es el control positivo: sin él, hacer que
+  // TODO salga por 502 pondría verde a los dos primeros y rompería la rama que sí debe decir `absent`.
+  it("T-EP-11b: autoridad que NO CONTESTA (502) ⇒ 502, NUNCA `absent`", async () => {
+    const store = honestStore([]);
+    getStoreMock.mockReturnValue(store);
+    authorityMock.mockResolvedValue({ authorized: false, reason: "kyc_reauth_failed", httpStatus: 502 });
+    const res = await POST(
+      req({ sender: SENDER_A, ...realPop(KP_A), candidateVerificationId: "did-del-navegador" }),
+    );
+    // 🧬 MUTANTE: volver el corte a `if (!decision.authorized) return { estado: "no-hay" }` ⇒ 200 `absent` ⇒ ROJO.
+    expect(
+      res.status,
+      "se le contestó a la persona que no hay verificación cuando lo cierto es que no pudimos preguntar: " +
+        "vuelve a escanear el documento y se quema un cupo del tier gratuito",
+    ).toBe(502);
+    expect(await res.json()).toEqual({ error: "kyc_verdict_unavailable" });
+    expect(store.put).not.toHaveBeenCalled();
+  });
+
+  it("T-EP-11c: autoridad INDISPONIBLE (503) ⇒ el mismo 502, y sin escribir nada", async () => {
+    const store = honestStore([]);
+    getStoreMock.mockReturnValue(store);
+    authorityMock.mockResolvedValue({
+      authorized: false,
+      reason: "kyc_authority_unavailable",
+      httpStatus: 503,
+    });
+    const res = await POST(
+      req({ sender: SENDER_A, ...realPop(KP_A), candidateVerificationId: "did-del-navegador" }),
+    );
+    expect(res.status).toBe(502);
+    expect(store.put).not.toHaveBeenCalled();
+  });
+
+  it("T-EP-11d: la autoridad que TIRA tampoco es `absent`", async () => {
+    const store = honestStore([]);
+    getStoreMock.mockReturnValue(store);
+    authorityMock.mockRejectedValue(new Error("boom"));
+    const res = await POST(
+      req({ sender: SENDER_A, ...realPop(KP_A), candidateVerificationId: "did-del-navegador" }),
+    );
+    expect(res.status).toBe(502);
+  });
+
+  // 🧪 CONTROL POSITIVO, EN LA MISMA CORRIDA. La rama de "la autoridad SÍ contestó y dijo que no"
+  // sigue saliendo por 200 `absent`. Sin este `it`, un fix perezoso —502 para todo `!authorized`—
+  // dejaría verdes a los tres de arriba y rompería el desenlace más común del backfill.
+  it("T-EP-11e CONTROL: un NO de verdad (200) sigue siendo 200 `absent`, no 502", async () => {
+    const store = honestStore([]);
+    getStoreMock.mockReturnValue(store);
+    authorityMock.mockResolvedValue({
+      authorized: false,
+      reason: "kyc_ownership_mismatch",
+      httpStatus: 200,
+    });
+    const res = await POST(
+      req({ sender: SENDER_A, ...realPop(KP_A), candidateVerificationId: "did-del-navegador" }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ verdict: null, reason: "absent" });
+  });
+
   // ── T-EP-15 — AC-6: el identificador NO SALE NUNCA ──────────────────────────────────────────
   it("T-EP-15: NINGÚN cuerpo, en NINGUNA rama, contiene el verification_id (M-22)", async () => {
     const bodies: string[] = [];

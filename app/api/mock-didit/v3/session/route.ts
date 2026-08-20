@@ -18,7 +18,7 @@
 // esté en la allow-list de verificaciones REALES **del agente**.
 // ⛔ Y ESO ES SCOPE OUT: la allow-list vive en el otro repo y Chaski no puede verificarla. Lo que este
 // repo sí verifica es que su gate sea exactamente ese booleano y nada más
-// ((`payoutAllowed`, `../../../../../src/infrastructure/payout/authority.ts:206`)). Escrito como
+// ((`payoutAllowed`, `../../../../../src/infrastructure/payout/authority.ts:210`)). Escrito como
 // acotamiento, no como cierre.
 //
 // SE APAGA SOLO. Sin `MOCK_KYC_SURFACE_ENABLED=true` esta ruta responde 404 ⚠️ (ACÁ DECÍA

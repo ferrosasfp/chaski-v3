@@ -47,8 +47,12 @@
 //   1. (`resolvePayoutAuthority`, `../../../app/api/payout/prepare/route.ts:331`) — el money-path real.
 //   2. (`resolvePayoutAuthority`, `../../../app/api/payout/validate/route.ts:66`) — advisory: un POST
 //      público que ningún paso del flujo llama.
-//   3. (`resolvePayoutAuthority`, `../../../app/api/kyc/verdict/route.ts:299`) — el backfill (V8), que
-//      re-consulta con la pista del navegador y persiste sólo si vuelve autorizada.
+//   3. (`resolvePayoutAuthority`, `../../../app/api/kyc/verdict/route.ts:327`) — el backfill (V8), que
+//      re-consulta con la pista del navegador y persiste sólo si vuelve autorizada. ⚠️ ESE CALLER LEE EL
+//      `httpStatus`, NO SÓLO EL `authorized` (re-AR it2 · BLQ-BAJO-1): un 5xx de acá significa "no
+//      contestamos", no "dijimos que no", y colapsar los dos hacía que la ruta respondiera `absent` —
+//      o sea, un hecho sobre la verificación de una persona que nadie midió. Si algún día un desenlace
+//      5xx pasa a significar una respuesta de verdad, ese caller queda mal SIN que nada se ponga rojo.
 // ⛔ Y LA CUENTA ENVEJECE SOLA: es una foto de un `grep`, no un invariante. Nada la vigila. Si agregás
 // un cuarto consumidor, esta lista queda vieja en silencio; re-derivala antes de apoyarte en ella.
 // La cabecera de antes nombraba además `/api/a2a/payout/submit`, que **NO EXISTE en este repo**

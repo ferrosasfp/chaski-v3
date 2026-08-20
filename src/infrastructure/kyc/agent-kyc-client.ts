@@ -59,7 +59,7 @@ const DECISION_TOKEN_HEADER = "x-kyc-decision-token";
  *
  * ⚠️ QUÉ ROMPE ESTO Y QUÉ NO. Los TRES consumidores envuelven la llamada en un `try/catch` y la
  * convierten en el 502 que ya devuelven cuando el agente contesta 401 (`app/api/kyc/session/route.ts:253`,
- * `app/api/kyc/decision/route.ts:89`, (`readAgentKycDecision`, `../payout/authority.ts:176`) ⇒ `kyc_reauth_failed`).
+ * `app/api/kyc/decision/route.ts:89`, (`readAgentKycDecision`, `../payout/authority.ts:180`) ⇒ `kyc_reauth_failed`).
  * ⛔ ACÁ DECÍA «⇒ el conjunto de errores observables NO cambia», Y ERA FALSO, MEDIDO (re-AR it2 ·
  * BLQ-MED-2): el `upstream` viaja en el BODY de `/api/kyc/session`, y sin la env pasaba de
  * `{error:"kyc_session_failed", upstream:401}` a `upstream:0`. El `401` era el ÚNICO dato que apuntaba

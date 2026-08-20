@@ -178,11 +178,25 @@ export async function POST(req: Request): Promise<Response> {
   // nada más: por dónde preguntar. NO se le cree — el propio `ports.ts` dice que los booleanos del
   // localStorage son atacante-controlables. Se re-consulta a la autoridad con la dirección
   // PoP-VERIFICADA, y la autoridad compara el `vendor_data` que Didit ecoa contra esa dirección.
+  //
+  // 🔴 Y EL BACKFILL DEVUELVE TRES COSAS, NO DOS (re-AR it2 · BLQ-BAJO-1). Devolvía `null` tanto cuando
+  // la autoridad dijo QUE NO como cuando NO PUDO CONTESTAR (timeout, DNS, 401, `KYC_AGENT_BASE_URL`
+  // ausente), y las dos caían en el `reason:"absent"` de acá abajo. `absent` prende
+  // `servidorDiceQueNoHayFila` (`../../../../src/application/use-cases/start-kyc.ts:109`), apaga el
+  // atajo KYC-once y manda a escanear el documento otra vez, quemando un cupo del tier gratuito. O sea:
+  // "no pude preguntar" contestado como "preguntamos y no hay", que es EXACTAMENTE lo que la doctrina
+  // de V9.5 —cincuenta líneas más abajo, en este mismo handler— declara prohibido. No era una
+  // regresión del fix-pack: era el agujero al que el fix-pack le pasó al lado mientras escribía la
+  // regla que lo prohíbe.
+  // ⇒ El tercer valor sale por el MISMO 502 que ya usa V9.5, y por la misma razón: el gateway lo LANZA
+  // y el atajo local sobrevive, en vez de mandar a re-verificarse a alguien que sí está verificado.
   if (!record) {
     const candidate =
       typeof body.candidateVerificationId === "string" ? body.candidateVerificationId.trim() : "";
     if (candidate) {
-      record = await backfill(store, candidate, owner);
+      const r = await backfill(store, candidate, owner);
+      if (r.estado === "no-se-pudo-preguntar") return json({ error: "kyc_verdict_unavailable" }, 502);
+      if (r.estado === "fila") record = r.record;
     }
   }
 
@@ -212,7 +226,7 @@ export async function POST(req: Request): Promise<Response> {
   //
   // 🔴 QUÉ CALLEJÓN SIN SALIDA CIERRA. Hasta acá esta ruta contestaba `usable` mirando SÓLO la fila de
   // `kyc_verdicts`. El pago mira otra cosa: `resolvePayoutAuthority` exige la fila de
-  // `kyc_session_tokens` para el par (sesión, dueño) —(`getForOwner`, `../../../../src/infrastructure/payout/authority.ts:150`)— y sin ella corta con
+  // `kyc_session_tokens` para el par (sesión, dueño) —(`getForOwner`, `../../../../src/infrastructure/payout/authority.ts:154`)— y sin ella corta con
   // `kyc_ownership_mismatch` ⇒ `payout_not_authorized`/403. La consecuencia medida: `usable` mandaba a
   // la persona de `connect` derecho a `confirm` **sin mostrar nunca la pantalla de verificación**, y
   // ahí moría en el prepare, sin camino de vuelta. Preguntar lo mismo que pregunta el pago es lo que
@@ -245,7 +259,7 @@ export async function POST(req: Request): Promise<Response> {
     // NUNCA 500 crudo, NUNCA eco del SQLSTATE. Y NUNCA `absent`: ver arriba.
     return json({ error: "kyc_verdict_unavailable" }, 502);
   }
-  // ⚠️ ACÁ NO SE DEVUELVE UN MOTIVO NUEVO. `absent` es la forma que esta ruta YA emite en `:182` y que
+  // ⚠️ ACÁ NO SE DEVUELVE UN MOTIVO NUEVO. `absent` es la forma que esta ruta YA emite en (`absent`, `:204`) y que
   // el cliente ya sabe leer (`ABSENT_REASONS`); un motivo nuevo cae en el `readAbsentReason` del
   // gateway y se lee como `absent` de todos modos, pero además ensancha un borde de confianza para no
   // decir nada nuevo. Lo cierto es lo mismo que dice `absent`: no hay veredicto UTILIZABLE.
@@ -289,11 +303,25 @@ export async function POST(req: Request): Promise<Response> {
  *
  * Best-effort: si la escritura falla, se sigue como si no hubiera fila. Nunca rompe la respuesta.
  */
+/**
+ * LOS TRES DESENLACES DE PREGUNTARLE A LA AUTORIDAD, y ninguno colapsa en otro (re-AR it2 · BLQ-BAJO-1).
+ *
+ * ⚠️ ACÁ HABÍA UN `KycVerdictRecord | null`, Y UN `null` NO TENÍA DÓNDE PONER EL TERCERO. "La autoridad
+ * dijo que no" y "no pude preguntarle a la autoridad" salían los dos por `null`, y río abajo eso se
+ * leía como `absent` — o sea, se le respondía a la persona un hecho sobre su verificación que nadie
+ * midió. Es la misma forma de bug que el `boolean` de `failAndRefund` (que perdía "no pude averiguar si
+ * el depósito entró") y que el `usable` de esta ruta antes de H-2a.
+ */
+type ResultadoBackfill =
+  | { estado: "fila"; record: KycVerdictRecord }
+  | { estado: "no-hay" }
+  | { estado: "no-se-pudo-preguntar" };
+
 async function backfill(
   store: KycVerdictStore,
   candidateVerificationId: string,
   owner: string,
-): Promise<KycVerdictRecord | null> {
+): Promise<ResultadoBackfill> {
   let decision: Awaited<ReturnType<typeof resolvePayoutAuthority>>;
   try {
     decision = await resolvePayoutAuthority({
@@ -301,15 +329,22 @@ async function backfill(
       address: owner, // la PoP-verificada: la autoridad compara el vendor_data ecoado contra ESTA
     });
   } catch {
-    return null; // la autoridad no contestó ⇒ no se escribe nada
+    return { estado: "no-se-pudo-preguntar" }; // la autoridad tiró ⇒ no sabemos nada de esta persona
   }
+  // 🔴 EL CORTE ENTRE "NO" Y "NO PUDE PREGUNTAR" SE DERIVA DEL `httpStatus`, NO DE UNA LISTA DE
+  // `reason`. Una lista de motivos envejece sola con cada motivo nuevo; el status no: los desenlaces
+  // 5xx de `resolvePayoutAuthority` son, por construcción, aquellos en los que la autoridad no dio una
+  // respuesta sobre la persona (`kyc_reauth_failed`/502 y `kyc_authority_unavailable`/503), y los 200 y
+  // 400 son respuestas de verdad (`kyc_not_approved`, `kyc_ownership_mismatch`,
+  // `invalid_verification_id`). ⇒ un `reason` nuevo entra al lado correcto sin que nadie lo declare.
+  if (!decision.authorized && decision.httpStatus >= 500) return { estado: "no-se-pudo-preguntar" };
   // Las tres condiciones son conjuntas y ninguna es redundante:
   //   · authorized      — la autoridad dijo que sí.
   //   · reason ausente  — `simulated_dev` también viene con authorized:true (CD-24).
   //   · provenance      — sin proveniencia declarada no hay qué persistir sin inventarlo.
-  if (!decision.authorized) return null;
-  if (decision.reason === "simulated_dev") return null;
-  if (!decision.provenance || !decision.riskLevel) return null;
+  if (!decision.authorized) return { estado: "no-hay" };
+  if (decision.reason === "simulated_dev") return { estado: "no-hay" };
+  if (!decision.provenance || !decision.riskLevel) return { estado: "no-hay" };
 
   const record: KycVerdictRecord = {
     senderAddress: owner,
@@ -323,8 +358,10 @@ async function backfill(
     await store.put(record);
   } catch {
     // La fila no quedó, pero la respuesta de esta llamada es la misma que si hubiera quedado: el
-    // caller ya tiene el veredicto en la mano y el próximo `ensure` reintenta.
-    return record;
+    // caller ya tiene el veredicto en la mano y el próximo `ensure` reintenta. ⛔ Y NO es
+    // `no-se-pudo-preguntar`: a la autoridad SÍ se le preguntó y contestó que sí. Lo que falló es la
+    // escritura, y eso no vuelve dudoso el veredicto que ya tenemos en la mano.
+    return { estado: "fila", record };
   }
-  return record;
+  return { estado: "fila", record };
 }

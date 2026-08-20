@@ -118,9 +118,9 @@ export function motivoParaNoMostrar(p: { href: string; leer: LeerDelDisco }): Mo
  * la persona abrió la app de nuevo a mano. La lección está escrita al lado, en el docblock de
  * (`MotivoParaNoMostrar`, `:68`): «no pude preguntar» ≠ «no».
  *
- * ⛔ POR ESO SU AUSENCIA NO HABILITA NINGUNA FRASE (CD-5). En la Ola A este predicado **no tiene
- * consumidor de copy**: existe para que la pantalla trate igual los dos casos y para que eso sea
- * medible. Una frase del tipo «parece que no completaste la verificación» derivada de este `false`
+ * ⛔ POR ESO SU AUSENCIA NO HABILITA NINGUNA FRASE (CD-5). En la Ola A este predicado **no tiene NINGÚN consumidor de producción**, y eso es la decisión de W3.2, ⛔ no una pata floja: por la ausencia no se puede afirmar nada (CD-5), y por la PRESENCIA el copy no cambia ni una palabra (`T-073-5`), así que un consumidor sólo podría existir para hacer una de esas dos cosas. Medido en este árbol (AR/MNR-4): **8 apariciones, 1 la definición + 7 en su propio test**; control positivo del instrumento con un símbolo que sí se usa, `urlDeVueltaDeKyc` ⇒ **18**.
+ * ⛔ NO LO BORRES POR «CÓDIGO MUERTO»: es el vocabulario que hace MEDIBLE que los dos montajes digan lo mismo, y su test (`splash-puerta.test.ts:131-157`) es lo que impide que alguien reintroduzca la lectura de dos valores. La enmienda de AC-5 que sale de esto está escrita en el auto-blindaje de la HU.
+ * Una frase del tipo «parece que no completaste la verificación» derivada de este `false`
  * sería exactamente la clase de afirmación sin medición que esta HU vino a eliminar.
  *
  * ⛔ El literal `"kyc"`/`"return"` NO se vuelve a escribir: se reusan las dos constantes de arriba, que

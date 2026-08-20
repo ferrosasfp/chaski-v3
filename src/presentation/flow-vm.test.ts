@@ -2939,8 +2939,32 @@ function solapamiento(a: string, b: string): number {
   return comunes / Math.min(pa.size, pb.size);
 }
 
-/** Calibrado, no elegido: con el copy de hoy el par más alto que NO es intencional da 0.5 (el cuerpo
- *  de D-2 contra el aviso de D-4), y el par intencional de D-4 da 1.0. 0.6 los separa. */
+/** Calibrado, no elegido: con el copy de hoy el par más alto que NO es intencional da 0.500 (el cuerpo
+ *  de D-2 contra el aviso de D-4), y el par intencional de D-4 da 1.000. 0.6 los separa.
+ *
+ *  🔴 Y LO QUE FALTABA ES EL TAMAÑO DE ESE MARGEN, QUE ES UNA SOLA PALABRA (F4/MNR-6 — hasta hoy esto
+ *  vivía sólo en un `doc/` gitignoreado, o sea que no viajaba con el repo). `solapamiento` normaliza
+ *  por la frase MÁS CORTA del par, y en el par que marca el máximo la más corta es el aviso de D-4
+ *  («Con esta verificación no podemos seguir»): 4 palabras de contenido —`esta`, `verificacion`,
+ *  `podemos`, `seguir`, porque `palabrasDeContenido` tira las de menos de 4 letras—. ⇒ contra ese
+ *  texto la métrica sólo puede valer MÚLTIPLOS de 1/4 = 0.25, y entre el máximo no intencional (0.500)
+ *  y el umbral (0.6) NO ENTRA NI UN ESCALÓN: UNA palabra castellana común compartida de más lo cruza
+ *  (0.500 ⇒ 0.750). Y el texto más corto del censo es todavía más corto (el título de D-2, 3 palabras
+ *  de contenido), así que ahí el escalón es aún más grueso: 1/3.
+ *
+ *  ⛔ LA DIRECTIVA, QUE ES LO ÚNICO QUE HAY QUE OBEDECER ACÁ: si este barrido se pone ROJO con un copy
+ *  CORTO, el sospechoso es la MÉTRICA, ⛔ NO el copy y ⛔ NO esta constante. Subirla no arregla el
+ *  falso positivo —la métrica sigue dando exactamente lo mismo— y APAGA la detección real, que es la
+ *  deuda declarada. El arreglo es rediseñar la métrica (Jaccard, o un piso de palabras), y eso NO es
+ *  un ajuste de constante. Tres rojos falsos REPRODUCIDOS contra el aviso de D-4, no imaginados:
+ *  «Podemos seguir con esta compra» da 0.750 diciendo LO CONTRARIO y encima de otro tema; «Con esta
+ *  verificación podés seguir» da 0.750 siendo la NEGACIÓN del texto real; y «Seguir con esta
+ *  verificación» da 1.000 siendo el fragmento SIN el «no», o sea el permiso en vez del corte.
+ *  ⇒ la métrica mide VOCABULARIO, no sentido.
+ *
+ *  ⚠️ Y NINGUNO DE ESOS NÚMEROS ES PROSA: los re-deriva `T-073-CENSO-MARGEN` —el último `it` de este
+ *  describe— contra el copy del árbol en cada `npm test`. Si alguno envejece se pone rojo ese `it`, no
+ *  este párrafo, que es lo que hace falta cuando al número lo mueve el mismo commit que lo escribe. */
 const SOLAPAMIENTO_QUE_HAY_QUE_DECLARAR = 0.6;
 
 describe("T-073-CENSO (AC-7): los cinco desenlaces del resume tienen texto declarado y justificado", () => {
@@ -3026,5 +3050,84 @@ describe("T-073-CENSO (AC-7): los cinco desenlaces del resume tienen texto decla
       DESENLACES_DEL_RESUME.D4_failed.mismoTextoQue?.con,
       "D-4 tiene el banner y el aviso sin declarar que son el MISMO desenlace visto desde dos ramas",
     ).toBe("D4_failed");
+  });
+
+  // 🔴 T-073-CENSO-MARGEN (F4/MNR-6) — EL INSTRUMENTO QUE RE-DERIVA LOS NÚMEROS DEL DOCBLOCK DE
+  // `SOLAPAMIENTO_QUE_HAY_QUE_DECLARAR`, para que ninguno de ellos pueda envejecer en prosa. Existe
+  // porque la deuda estaba escrita SÓLO en un `doc/` gitignoreado: quien clonaba el repo leía
+  // «calibrado» y nada más, y el arreglo «natural» ante un rojo falso es SUBIR la constante — que es
+  // exactamente lo que la deuda dice que no se puede hacer. Acá el que sube la constante se come un
+  // rojo con la explicación adentro.
+  it("T-073-CENSO-MARGEN: entre el máximo NO intencional y el umbral no entra ni UNA palabra", () => {
+    const filas = Object.entries(DESENLACES_DEL_RESUME);
+    let peor = { valor: 0, paso: 1, par: "ninguno" };
+    for (let i = 0; i < filas.length; i++) {
+      for (let j = i; j < filas.length; j++) {
+        const [ka, fa] = filas[i] as [string, (typeof filas)[number][1]];
+        const [kb, fb] = filas[j] as [string, (typeof filas)[number][1]];
+        // El par INTENCIONAL (D-4 con sí mismo) queda afuera: el margen se mide contra los OTROS.
+        if (fa.mismoTextoQue?.con === kb || fb.mismoTextoQue?.con === ka) continue;
+        for (const ta of fa.copy) {
+          for (const tb of fb.copy) {
+            if (ta === tb && ka === kb) continue;
+            const s = solapamiento(ta, tb);
+            if (s <= peor.valor) continue;
+            peor = {
+              valor: s,
+              paso: 1 / Math.min(palabrasDeContenido(ta).size, palabrasDeContenido(tb).size),
+              par: `${ka} ↔ ${kb}`,
+            };
+          }
+        }
+      }
+    }
+    // ANTI-VACUIDAD: sin esto, un censo que dejara de comparar pares dejaría todo lo de abajo midiendo
+    // el vacío y este `it` sería decorativo, que es el defecto que este mismo archivo ya documenta.
+    expect(peor.par, "no se comparó NINGÚN par no intencional: este `it` está midiendo el vacío").not.toBe("ninguno");
+    expect(
+      peor.valor,
+      "el máximo no intencional ya cruza el umbral; eso lo tiene que cazar el `it` del barrido, no éste",
+    ).toBeLessThan(SOLAPAMIENTO_QUE_HAY_QUE_DECLARAR);
+
+    // EL MARGEN: menor que un escalón de la métrica ⇒ una sola palabra compartida de más lo cruza.
+    expect(
+      SOLAPAMIENTO_QUE_HAY_QUE_DECLARAR - peor.valor,
+      `el margen del umbral dejó de ser de MENOS de una palabra (par ${peor.par}: ${peor.valor.toFixed(3)}, ` +
+        `escalón ${peor.paso.toFixed(3)}, umbral ${SOLAPAMIENTO_QUE_HAY_QUE_DECLARAR}). ⛔ Si llegaste acá porque ` +
+        "SUBISTE la constante: no arreglaste ningún falso positivo (la métrica sigue dando lo mismo) y apagaste " +
+        "la detección real. Leé el docblock de `SOLAPAMIENTO_QUE_HAY_QUE_DECLARAR`: el arreglo es rediseñar la " +
+        "métrica (Jaccard, o un piso de palabras), no mover este número.",
+    ).toBeLessThan(peor.paso);
+
+    // Y el texto más corto del censo es aún más corto que la más corta de ESE par ⇒ escalón más grueso.
+    const masCortaDelCenso = Math.min(
+      ...filas.flatMap(([, f]) => f.copy.map((t) => palabrasDeContenido(t).size)),
+    );
+    expect(
+      masCortaDelCenso,
+      "cambió el texto más corto del censo: el escalón de la métrica ya no es el que dice el docblock",
+    ).toBe(3);
+    expect(1 / masCortaDelCenso, "el escalón del texto más corto dejó de ser el más grueso").toBeGreaterThan(peor.paso);
+
+    // 🔴 LOS TRES ROJOS FALSOS, REPRODUCIDOS Y NO IMAGINADOS. Ninguno dice lo que dice el copy real
+    // contra el que se lo mide —dos dicen LO CONTRARIO— y la métrica igual los marca como «casi igual».
+    const ROJOS_FALSOS = [
+      { sintetico: "Podemos seguir con esta compra", da: 0.75, porQue: "dice LO CONTRARIO («podemos» vs «no podemos») y encima habla de otro tema" },
+      { sintetico: "Con esta verificación podés seguir", da: 0.75, porQue: "es la NEGACIÓN del texto real" },
+      { sintetico: "Seguir con esta verificación", da: 1, porQue: "es el fragmento SIN el «no»: el permiso en vez del corte" },
+    ] as const;
+    for (const { sintetico, da, porQue } of ROJOS_FALSOS) {
+      const medido = solapamiento(sintetico, COPY_RESUME_NO_PODEMOS_SEGUIR_AVISO);
+      expect(
+        medido,
+        `cambió la métrica o el copy: «${sintetico}» ya no da ${da} contra el aviso de D-4. Este renglón es la ` +
+          "EVIDENCIA de que la métrica mide vocabulario y no sentido; si cambió, re-medí y actualizá el docblock",
+      ).toBeCloseTo(da, 3);
+      expect(
+        medido,
+        `«${sintetico}» dejó de cruzar el umbral. ⛔ Si es porque SUBISTE la constante: no arreglaste nada ` +
+          `—la métrica le sigue dando ${da}— y apagaste la detección real (${porQue})`,
+      ).toBeGreaterThanOrEqual(SOLAPAMIENTO_QUE_HAY_QUE_DECLARAR);
+    }
   });
 });

@@ -36,7 +36,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { RemittanceFlow } from "./flow";
 import { buildTestContainer } from "../test-support/test-container";
-import { TEST_CCI } from "../test-support/fakes";
+import { TEST_CCI } from "../test-support/fakes"; import { clickCuandoHabilite } from "../test-support/clicks"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). El click sobre un botón `disabled={busy}` se descarta EN SILENCIO; el helper espera a que se habilite. Su docblock tiene el mecanismo
 
 vi.mock("framer-motion", () => ({
   AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
@@ -117,7 +117,7 @@ async function verLaTarjeta(steps: PlanStep[], totalUsdc: number): Promise<void>
   });
   fireEvent.change(screen.getByPlaceholderText("002 193 004455667788 99"), { target: { value: TEST_CCI } });
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+  await clickCuandoHabilite(/Conectar wallet/);
   await screen.findByText(/Revisá el envío/);
   await screen.findByText(/Quién va a atender tu envío/);
 }

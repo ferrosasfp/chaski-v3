@@ -79,7 +79,7 @@ function buscarConElContainerReal() {
   const c = createContainer();
   render(<LostEscrowRecovery refund={c.solanaRefund} resolveSender={async () => SENDER} />);
   fireEvent.click(screen.getByRole("button", { name: /Recuperar un envío perdido/ }));
-  fireEvent.click(screen.getByRole("button", { name: /Buscar mis escrows/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Buscar mis escrows/ })); // ⚠️ CLICK CRUDO DELIBERADO (re-AR it2 · BLQ-BAJO-2): el de arriba abre la puerta con `onClick={() => setOpen(true)}` (`flow.tsx:2476`), un `setState` síncrono y sin `guard`, así que `busy` nunca se prende y no hay carrera. Convertirlo obligaría a volver `async` este helper y sus call-sites
 }
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════

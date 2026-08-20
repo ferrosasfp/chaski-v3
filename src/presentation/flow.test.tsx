@@ -41,7 +41,7 @@ import {
 } from "../application/use-cases/recover-escrow-funds";
 import { PREPARE_NO_AGENT_FOR_CAPABILITY, isPrepareRejection } from "../application/agent-rejections";
 const KYC_PROVENANCE_LIVE = "didit"; // WKH-233: el literal se escribe ACÁ, en un test, porque el módulo que lo exportaba se borró con la HU (el juicio "esto es real" ya no lo hace Chaski). EN UNA SOLA LÍNEA: este archivo recibe citas `archivo:línea` y agregar líneas las corre.
-import { ConnectWallet } from "../application/use-cases/connect-wallet";
+import { ConnectWallet } from "../application/use-cases/connect-wallet"; import { clickCuandoHabilite } from "../test-support/clicks"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
 import { solanaWalletBridge } from "../infrastructure/solana-wallet-bridge"; import { SolanaWalletAdapter } from "../infrastructure/solana-wallet"; import { guardarEleccion } from "../infrastructure/solana/deeplink/conexion"; import { almacenDeNavegador, guardarViaje } from "../infrastructure/solana/deeplink/sesion"; // WKH-358 agregó los tres últimos EN ESTA LÍNEA y ANTES de este comentario: `history-grupos.test.tsx:532` y `jerarquia-relativa.test.tsx:83` citan por número líneas de este archivo, así que tres líneas nuevas acá arriba las rotan a las dos. WKH-354/R-2: la costura del BANNER (el bridge global); la del guard es el `connectedWallet` inyectado
 import {
   FAKE_SOLANA_BENEFICIARY,
@@ -175,7 +175,7 @@ function fillSend(recipient = "Mamá", destination = TEST_CCI): void {
 async function goToReview(): Promise<void> {
   fillSend();
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+  await clickCuandoHabilite(/Conectar wallet/);
   await screen.findByText(/Revisá el envío/); // paso review pre-KYC
 }
 
@@ -183,7 +183,7 @@ async function goToReview(): Promise<void> {
 async function goToConfirm(): Promise<void> {
   await goToReview();
   fireEvent.click(await screen.findByRole("button", { name: /Continuar/ })); // CTA review → verify
-  fireEvent.click(await screen.findByRole("button", { name: /Verificar mi identidad/ }));
+  await clickCuandoHabilite(/Verificar mi identidad/);
   await screen.findByRole("button", { name: /Confirmar y enviar/ }); // paso confirm
 }
 
@@ -276,7 +276,7 @@ it("T4: '¿No sos vos?' aparece solo con una address conectada", async () => {
   // (ii) send → connect: FakeWallet.connect() = la pubkey base58 "4zMMC9…".
   fillSend();
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+  await clickCuandoHabilite(/Conectar wallet/);
 
   // (b) con address conectada → aparece el control + el badge de address.
   expect(await screen.findByText("¿No sos vos?")).toBeInTheDocument();
@@ -292,7 +292,7 @@ it("T5: 'Borrar igual' limpia address + PII del beneficiario y vuelve a la panta
 
   fillSend("Mamá", TEST_CCI);
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+  await clickCuandoHabilite(/Conectar wallet/);
 
   // Con address conectada → abrir la confirmación y ejecutar forgetAndDisconnect.
   fireEvent.click(await screen.findByText("¿No sos vos?"));
@@ -358,7 +358,7 @@ it("T-AC4: KYC-once → tras conectar va directo a confirm (sin review ni escane
 
   fillSend();
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+  await clickCuandoHabilite(/Conectar wallet/);
 
   // (a) aterriza en confirm: botón "Confirmar y enviar" + identidad + quote.
   expect(await screen.findByRole("button", { name: /Confirmar y enviar/ })).toBeInTheDocument();
@@ -399,7 +399,7 @@ it("T-AC4b: local verificado + el servidor dice `absent` ⇒ va a review, y NO s
 
   fillSend();
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+  await clickCuandoHabilite(/Conectar wallet/);
 
   // Aterriza en review (la CTA "Continuar" del paso review), NO en confirm.
   expect(
@@ -846,7 +846,7 @@ function buildFlowSnapshot(
 async function goToConfirmViaKycOnce(): Promise<void> {
   fillSend();
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+  await clickCuandoHabilite(/Conectar wallet/);
   await screen.findByRole("button", { name: /Confirmar y enviar/ });
 }
 
@@ -2737,7 +2737,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     // (2) recién ahora la persona cambia de cuenta en Phantom.
     cambiarDeCuentaA(B, probe);
     fireEvent.click(await screen.findByRole("button", { name: "Recuperar un envío perdido" }));
-    fireEvent.click(await screen.findByRole("button", { name: /Buscar mis escrows/ }));
+    await clickCuandoHabilite(/Buscar mis escrows/);
 
     await waitFor(() => expect(refundGw.calls).toHaveLength(1));
     expect(refundGw.calls[0]?.sender).toBe(B);
@@ -2790,7 +2790,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     fireEvent.click(await screen.findByRole("button", { name: "Recuperar" })); // WKH-063: las dos puertas de la cadena ya no viven en `send` (adonde llevaba "Volver"): viven en el destino "Recuperar", y desde el historial se llega por la barra, que el historial SÍ pinta. Nombre exacto y no regex: /Recuperar/ matchearía también las dos puertas.
 
     fireEvent.click(await screen.findByRole("button", { name: "Recuperar un envío perdido" }));
-    fireEvent.click(await screen.findByRole("button", { name: /Buscar mis escrows/ }));
+    await clickCuandoHabilite(/Buscar mis escrows/);
     await waitFor(() => expect(refundGw.calls).toHaveLength(1));
     expect(refundGw.calls[0]?.sender).toBe(A);
 
@@ -3037,7 +3037,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     irAlFormulario();
     fillSend();
     fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+    await clickCuandoHabilite(/Conectar wallet/);
 
     // KYC-once intacto: ni `review` ni `verify`, directo a confirmar.
     expect(await screen.findByRole("button", { name: /Confirmar y enviar/ })).toBeInTheDocument();
@@ -3065,7 +3065,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     irAlFormulario();
     fillSend();
     fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+    await clickCuandoHabilite(/Conectar wallet/);
 
     expect(await screen.findByText(/Revisá el envío/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Confirmar y enviar/ })).toBeNull();
@@ -3601,7 +3601,7 @@ it("T-AC4c: cacheado con `realVerified:false` ⇒ va a review y NO se crea sesi�
 
   fillSend();
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+  await clickCuandoHabilite(/Conectar wallet/);
 
   expect(
     await screen.findByRole("button", { name: /Continuar/ }),
@@ -3627,7 +3627,7 @@ it("T-AC4c(control): el MISMO fixture con `realVerified:true` sí va directo a c
 
   fillSend();
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+  await clickCuandoHabilite(/Conectar wallet/);
 
   expect(await screen.findByRole("button", { name: /Confirmar y enviar/ })).toBeInTheDocument();
 });

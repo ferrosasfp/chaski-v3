@@ -125,7 +125,7 @@ import { buildTestContainer } from "../test-support/test-container";
 import type { Container } from "../composition/container";
 import type { ResumeKycResult } from "../application/use-cases/resume-kyc";
 import { Money } from "../domain/money";
-import { Remittance, type RemittanceState, toPersistedIdentity } from "../domain/remittance";
+import { Remittance, type RemittanceState, toPersistedIdentity } from "../domain/remittance"; import { clickCuandoHabilite } from "../test-support/clicks"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
 import {
   FAKE_SOLANA_BENEFICIARY,
   FakeKycGateway,
@@ -281,7 +281,7 @@ describe("T-063-2 (AC-2): la acción de la bienvenida entra al formulario", () =
       target: { value: "Mamá" },
     });
     fireEvent.click(screen.getByRole("button", { name: /Volver al inicio/ }));
-    fireEvent.click(screen.getByRole("button", { name: /Empezar un envío/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Empezar un envío/ })); // ⚠️ SIGUE SIENDO UN CLICK CRUDO, Y ES DELIBERADO (re-AR it2 · BLQ-BAJO-2): el click de la línea de arriba es `VolverAlInicio`, cuyo `onVolver` es un `setStep` SÍNCRONO (`barra-destinos.tsx:158` ⇒ `flow.tsx:807`), no un `guard()`. Sin `guard` no hay `setBusy(true)`, así que la carrera que cierra `clickCuandoHabilite` no existe acá. Convertirlo obligaría a volver `async` a este `it` y no mediría nada nuevo
 
     expect(screen.getByPlaceholderText("Nombre de tu familiar")).toHaveValue("Mamá");
   });
@@ -369,7 +369,7 @@ describe("T-063-5 (AC-3): NINGÚN paso del envío pinta la barra", () => {
     fireEvent.change(screen.getByPlaceholderText("Nombre de tu familiar"), { target: { value: "Mamá" } });
     fireEvent.change(screen.getByPlaceholderText("002 193 004455667788 99"), { target: { value: TEST_CCI } });
     fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+    await clickCuandoHabilite(/Conectar wallet/);
     await screen.findByText(/Revisá el envío/);
     expect(barra(), "review").toBeNull();
 
@@ -488,13 +488,13 @@ describe("T-063-8 (AC-7): la píldora de modo demo no cambió de texto ni de con
     fireEvent.change(screen.getByPlaceholderText("Nombre de tu familiar"), { target: { value: "Mamá" } });
     fireEvent.change(screen.getByPlaceholderText("002 193 004455667788 99"), { target: { value: TEST_CCI } });
     fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+    await clickCuandoHabilite(/Conectar wallet/);
     // El recorrido completo: con el doble de KYC por defecto la identidad NO está recordada, así que
     // pasa por `review` y por `verify`. Es el camino que produce un `rem.kyc` con proveniencia
     // simulada, que es la entrada que `isDemoMode` mira.
     await screen.findByText(/Revisá el envío/);
     fireEvent.click(await screen.findByRole("button", { name: /Continuar/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Verificar mi identidad/ }));
+    await clickCuandoHabilite(/Verificar mi identidad/);
     await screen.findByRole("button", { name: /Confirmar y enviar/ });
 
     expect(screen.getByText("Modo demo (con pasos simulados)")).toBeInTheDocument();
@@ -1079,7 +1079,7 @@ describe("T-063-23 (AR/BLQ-BAJO-1): después de «Borrar igual», el dispositivo
     fireEvent.change(screen.getByPlaceholderText("Nombre de tu familiar"), { target: { value: "Mamá" } });
     fireEvent.change(screen.getByPlaceholderText("002 193 004455667788 99"), { target: { value: TEST_CCI } });
     fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+    await clickCuandoHabilite(/Conectar wallet/);
     await screen.findByText(/Revisá el envío/);
 
     fireEvent.click(await screen.findByRole("button", { name: /¿No sos vos\?/ }));

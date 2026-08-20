@@ -157,7 +157,7 @@ import { Receipt, RemittanceFlow } from "./flow";
 import { buildTestContainer } from "../test-support/test-container";
 import { Money } from "../domain/money";
 import { Remittance, type RemittanceState, toPersistedIdentity } from "../domain/remittance";
-import { FAKE_SOLANA_BENEFICIARY, TEST_CCI, T0, beneficiary } from "../test-support/fakes";
+import { FAKE_SOLANA_BENEFICIARY, TEST_CCI, T0, beneficiary } from "../test-support/fakes"; import { clickCuandoHabilite } from "../test-support/clicks"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). El helper que vivía más abajo, ahora compartido
 const KYC_PROVENANCE_LIVE = "didit"; // WKH-233: el literal se escribe ACÁ, en un test, porque el módulo que lo exportaba se borró con la HU (el juicio "esto es real" ya no lo hace Chaski). EN UNA SOLA LÍNEA: este archivo recibe citas `archivo:línea` y agregar líneas las corre.
 
 // El MISMO doble que `barra-destinos.test.tsx`: sin él el `exit` de AnimatePresence no completa en el
@@ -277,14 +277,14 @@ const TECHO_ESPERA = { timeout: 8_000 } as const;
  * ⚠️ Se re-consulta el botón DENTRO del `waitFor` y otra vez para el click: React lo re-crea en cada
  * render, así que guardar la referencia de la primera consulta sería clickear un nodo viejo.
  */
-const clickCuandoHabilite = async (nombre: RegExp): Promise<void> => {
-  await waitFor(() => {
-    const b = screen.getByRole("button", { name: nombre });
-    expect(b, `el botón «${nombre}» sigue deshabilitado: el click se descartaría en silencio`)
-      .not.toBeDisabled();
-  }, TECHO_ESPERA);
-  fireEvent.click(screen.getByRole("button", { name: nombre }));
-};
+// ⚠️ ESTE HELPER YA NO VIVE ACÁ (re-AR it2 · BLQ-BAJO-2). Vivía en este archivo, y por eso el arreglo
+// de H-13 no se pudo aplicar en `agent-plan-card.test.tsx`, que tenía LITERALMENTE el mismo par de
+// líneas y que el propio commit reportaba haber visto fallar. Un helper privado de un archivo cierra
+// un `it`, no una familia. Se mudó a `../test-support/clicks.ts`, con el mecanismo entero escrito ahí,
+// y desde ahí lo usan los 32 sitios del árbol donde un `fireEvent.click` cae sobre un botón que puede
+// estar `disabled={busy}`. ⛔ NO se re-declara acá: una segunda copia es la que se queda vieja.
+//
+// (el `import` está arriba, pegado a una línea que ya existía, por el Δ0 de este archivo)
 
 const PASOS_ESPERADOS: readonly { frase: string; sonda: (s: Sondeo) => Promise<void> }[] = [
   {

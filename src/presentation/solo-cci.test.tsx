@@ -24,7 +24,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { Receipt, RemittanceFlow } from "./flow";
 import { buildTestContainer } from "../test-support/test-container";
 import { LocalRepo } from "../infrastructure/persistence";
-import { Money } from "../domain/money";
+import { Money } from "../domain/money"; import { clickCuandoHabilite } from "../test-support/clicks"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
 import {
   CCI_DIGITS,
   type KycVerification,
@@ -136,7 +136,7 @@ describe("el destino tiene que ser un CCI", () => {
     expect(screen.getByRole("button", CONTINUAR)).toBeEnabled();
 
     fireEvent.click(screen.getByRole("button", CONTINUAR));
-    fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+    await clickCuandoHabilite(/Conectar wallet/);
     await screen.findByText(/Revisá el envío/);
     // La remesa creada por la pantalla: método bancario (NO "yape") y el CCI en dígitos limpios.
     expect(screen.getByText(`cuenta bancaria · ${TEST_CCI}`)).toBeInTheDocument();

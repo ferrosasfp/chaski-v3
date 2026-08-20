@@ -33,7 +33,7 @@ import { CUSTODY_WINDOW_SECS } from "../infrastructure/solana-wallet";
 import { Money } from "../domain/money";
 import { Remittance, type RemittanceState, toPersistedIdentity } from "../domain/remittance";
 import { RecoverEscrowFunds } from "../application/use-cases/recover-escrow-funds";
-import type { ResumeKyc } from "../application/use-cases/resume-kyc";
+import type { ResumeKyc } from "../application/use-cases/resume-kyc"; import { clickCuandoHabilite } from "../test-support/clicks"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
 import {
   FakeKycGateway,
   FakeSolanaEscrowRefundGateway,
@@ -104,10 +104,10 @@ async function irAConfirmarConKyc(provenance: string | undefined, realVerified =
   );
   fillSend();
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+  await clickCuandoHabilite(/Conectar wallet/);
   await screen.findByText(/Revisá el envío/);
   fireEvent.click(await screen.findByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Verificar mi identidad/ }));
+  await clickCuandoHabilite(/Verificar mi identidad/);
   await screen.findByRole("button", { name: /Confirmar y enviar/ });
 }
 
@@ -291,7 +291,7 @@ describe("paso de identidad", () => {
   it("mientras arranca no narra tres etapas de un verificador que no se está ejecutando", async () => {
     await irARevisar();
     fireEvent.click(await screen.findByRole("button", { name: /Continuar/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Verificar mi identidad/ }));
+    await clickCuandoHabilite(/Verificar mi identidad/);
 
     expect(screen.queryByText(/Escaneando tu documento/)).toBeNull();
     expect(screen.queryByText(/Verificando tu rostro/)).toBeNull();

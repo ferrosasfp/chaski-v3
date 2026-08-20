@@ -76,7 +76,7 @@ import {
   TEST_CCI,
   beneficiary,
 } from "../test-support/fakes";
-import { InMemoryPopProofStore } from "../infrastructure/auth/pop-proof-store";
+import { InMemoryPopProofStore } from "../infrastructure/auth/pop-proof-store"; import { clickCuandoHabilite } from "../test-support/clicks"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
 
 // CD-8 / DT-7 — el mismo doble que `flow.test.tsx`: jsdom no implementa requestAnimationFrame, así que
 // sin esto el `exit` de AnimatePresence no completa y los pasos del flujo NUNCA montan. Es una lista
@@ -456,10 +456,10 @@ function llenarSend(): void {
 async function irAConfirm(): Promise<void> {
   llenarSend();
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+  await clickCuandoHabilite(/Conectar wallet/);
   await screen.findByText(/Revisá el envío/);
   fireEvent.click(await screen.findByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Verificar mi identidad/ }));
+  await clickCuandoHabilite(/Verificar mi identidad/);
   await screen.findByRole("button", { name: /Confirmar y enviar/ });
 }
 

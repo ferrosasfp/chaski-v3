@@ -173,7 +173,7 @@ import React from "react";
 import { RemittanceFlow } from "./flow";
 import { QUE_RECUPERA } from "./recuperar";
 import { buildTestContainer } from "../test-support/test-container";
-import { Money } from "../domain/money";
+import { Money } from "../domain/money"; import { clickCuandoHabilite } from "../test-support/clicks"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
 import {
   type KycVerification,
   Remittance,
@@ -353,7 +353,7 @@ describe("T-063-14 (2º pase): el pie dice con qué cuenta se busca, y la búsqu
   const buscar = async () => {
     const abrir = screen.queryByRole("button", { name: /Recuperar un envío perdido/ });
     if (abrir !== null) fireEvent.click(abrir);
-    fireEvent.click(await screen.findByRole("button", { name: /Buscar mis escrows/ }));
+    await clickCuandoHabilite(/Buscar mis escrows/);
   };
 
   it("🔴 cambiar la cuenta conectada entre dos búsquedas cambia el `sender` de la segunda", async () => {

@@ -85,7 +85,7 @@ const passKyc: KycVerification = {
   identity: passIdentity,
 };
 
-// Construye un snapshot kyc_passed (con quote) para stubbear resumeKyc en los tests de resume.
+// Construye un snapshot kyc_passed (con quote) para stubbear resumeKyc en los tests de resume. ⚠️ NO ES EL ÚNICO DEL REPO (F4/MNR-5): (`snapshotAprobado`, `./honest-copy.test.tsx:890`) construye otro, y los dos DIVERGEN a propósito —aquél SÍ exige cotización vigente, porque sin el aterrizaje su barrido mediría la bienvenida—. Medido: ninguno de los dos nombraba al otro. El disparador para unificarlos es el TERCER sitio que construya un `passed`, y el precedente del helper compartido en archivo propio es (`esperarListo`, `../test-support/desenlaces.ts:32`).
 function passedSnapshot(receiveMajor: number, rate: number, expiresAt: string): RemittanceState {
   const r = Remittance.create("rem-1", beneficiary(), Money.of(400, "USDC"), T0);
   r.attachQuote(

@@ -886,7 +886,7 @@ describe("HU 073 · ninguna de las cinco pantallas del resume usa el léxico ved
 
   /** El `passed` necesita una remesa con cotización VIGENTE y KYC aplicado, o el aterrizaje no ocurre
    *  y el barrido mediría la bienvenida creyendo que mide `confirm` (medido: con un snapshot pelado el
-   *  `textContent` era el de la bienvenida y el control positivo lo cazó). */
+   *  `textContent` era el de la bienvenida y el control positivo lo cazó). ⚠️ Y NO ES EL ÚNICO `passed` DEL REPO (F4/MNR-5): (`passedSnapshot`, `./flow.test.tsx:89`) construye otro, y los dos DIVERGEN a propósito —aquél no necesita cotización vigente—. Medido: ninguno de los dos nombraba al otro, así que el TERCER sitio que construya un `passed` los triplica sin enterarse, y ése es el disparador para unificarlos. El precedente escrito de por qué un helper compartido va en ARCHIVO PROPIO está en la cabecera de (`esperarListo`, `../test-support/desenlaces.ts:32`). */
   const snapshotAprobado = (): RemittanceState => {
     const r = RemesaDeDominio.create("rem-073-ok", beneficiarioDeTest(), Money.of(400, "USDC"), T_CERO);
     r.attachQuote(

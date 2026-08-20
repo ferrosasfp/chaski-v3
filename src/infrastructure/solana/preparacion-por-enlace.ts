@@ -519,7 +519,7 @@ export class RecorridoPorEnlaceReal implements PreparacionPorEnlace {
 
 /**
  * WKH-359 — Qué salió de leer la vuelta del salto del PoP. Va AL FINAL del archivo, donde hay CERO
- * citas ancladas: [[CENSO src/infrastructure/solana/preparacion-por-enlace.ts entrantes-desde-520=0]] apuntan de acá para abajo, y el CERO es lo que sostiene la decisión. ⚠️ ACÁ DECÍA «las únicas dos de este archivo apuntan a `:246`» Y SE DESMENTÍA SIN SALIR DEL BLOQUE (CR/MNR-3): este mismo docblock contiene una tercera cita dos líneas más abajo, y el fix-pack agregó una cuarta en `:474`. Hoy son [[CENSO src/infrastructure/solana/preparacion-por-enlace.ts entrantes=5]] entrantes a [[CENSO src/infrastructure/solana/preparacion-por-enlace.ts destinos=4]] destinos, todos MARCADORES verificados.
+ * citas ancladas: [[CENSO src/infrastructure/solana/preparacion-por-enlace.ts entrantes-desde-520=0]] apuntan de acá para abajo, y el CERO es lo que sostiene la decisión. ⚠️ ACÁ DECÍA «las únicas dos de este archivo apuntan a `:246`» Y SE DESMENTÍA SIN SALIR DEL BLOQUE (CR/MNR-3): este mismo docblock contiene una tercera cita dos líneas más abajo, y el fix-pack agregó una cuarta en `:474`. Hoy son [[CENSO src/infrastructure/solana/preparacion-por-enlace.ts entrantes=6]] entrantes a [[CENSO src/infrastructure/solana/preparacion-por-enlace.ts destinos=5]] destinos, todos MARCADORES verificados.
  *
  * ⛔ ES UN TIPO PROPIO Y NO UNA VARIANTE MÁS DE (`ResultadoDePreparacion`, `:71`), y no es duplicación:
  * ese tipo lo consume un `switch` exhaustivo en la pantalla, así que agregarle un miembro obliga a

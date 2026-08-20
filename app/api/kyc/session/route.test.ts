@@ -6,7 +6,13 @@ vi.mock("../../../../src/infrastructure/rate-limit", () => ({ checkKycRateLimit:
 
 // WKH-233 — el store del `decisionToken`. Se mockea el MÓDULO (no la base) para poder contar
 // llamadas y forzar el fallo de la escritura, que es lo que T-TOK-6 mide.
-const { putMock, storeMock } = vi.hoisted(() => ({ putMock: vi.fn(), storeMock: vi.fn() }));
+// hotfix 2026-08-20 · F-2: el pre-vuelo (`probeReachable`) corre ANTES del viaje al agente, así que
+// el doble del store tiene que tenerlo o TODO `it` que llegue al agente moriría con un TypeError.
+const { putMock, probeMock, storeMock } = vi.hoisted(() => ({
+  putMock: vi.fn(),
+  probeMock: vi.fn(),
+  storeMock: vi.fn(),
+}));
 vi.mock("../../../../src/infrastructure/persistence/supabase-kyc-session-tokens", () => ({
   getKycSessionTokenStore: storeMock,
 }));
@@ -90,8 +96,10 @@ beforeEach(() => {
   rlMock.mockResolvedValue({ ok: true });
   putMock.mockReset();
   putMock.mockResolvedValue(undefined);
+  probeMock.mockReset();
+  probeMock.mockResolvedValue(undefined);
   storeMock.mockReset();
-  storeMock.mockReturnValue({ put: putMock });
+  storeMock.mockReturnValue({ put: putMock, probeReachable: probeMock });
   vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test");
   // WKH-233 (fix-pack · H-3): la credencial de invoke es OBLIGATORIA desde que `invokeAuthHeader`
   // es fail-closed, así que sembrarla es PRE-REQUISITO de cualquier `it` que llegue al agente —
@@ -747,5 +755,233 @@ describe("POST /api/kyc/session — T-SES-1/T-TOK-3/T-TOK-4/T-TOK-6", () => {
     });
     await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
     expect(orden).toEqual(["limiter", "agente", "put"]);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//  HOTFIX 2026-08-20 — la causa en el log (F-1) + la cuota que no se quema por misconfig nuestra (F-2)
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// EL HECHO QUE LOS PIDE, medido en producción: `POST /api/kyc/session` → 503 con el log
+// `kyc_session_token_write_failed { atada: true }`, y el agente había contestado **200** en el mismo
+// segundo ⇒ la sesión SE CREÓ en el proveedor, la cuota SE GASTÓ, y la persona no recibió la URL.
+// Dos defectos distintos: (1) el `catch` descartaba el error entero, así que no había causa; (2) lo
+// que puede fallar por culpa NUESTRA corría después de gastar la cuota.
+describe("POST /api/kyc/session — hotfix: la causa se loguea y la cuota no se quema", () => {
+  function fetchOkAgent() {
+    const m = vi.fn(async (_url: string, init?: RequestInit) => {
+      void init;
+      return { ok: true, status: 200, json: async () => AGENT_OK };
+    });
+    vi.stubGlobal("fetch", m);
+    return m;
+  }
+
+  /** Captura de TODOS los `console.*` en un solo array, como hace T-TOK-4. */
+  function capturarLogs(): string[] {
+    const capturado: string[] = [];
+    const anotar = (...a: unknown[]) => {
+      capturado.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" "));
+    };
+    vi.spyOn(console, "warn").mockImplementation(anotar);
+    vi.spyOn(console, "error").mockImplementation(anotar);
+    vi.spyOn(console, "log").mockImplementation(anotar);
+    return capturado;
+  }
+
+  // ── F-2 — EL CANDADO, Y NO MIRA EL STATUS: CUENTA LLAMADAS ───────────────────────────────────
+  it("T-HF-1: con la persistencia ROTA, el doble de `fetch` recibe CERO llamadas (y el status es 503)", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchMock = fetchOkAgent();
+    probeMock.mockRejectedValue(new Error("kyc_session_token_probe_failed:42P01"));
+    const res = await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+    // 🧬 MUTANTE: bajar `await tokenStore.probeReachable()` a después de `createAgentKycSession`
+    // ⇒ el doble recibe 1 llamada ⇒ ROJO, con el status TODAVÍA en 503. Por eso el assert que vale
+    // es el CONTADOR: el 503 ya salía antes del hotfix, y salía DESPUÉS de gastar una verificación.
+    expect(
+      fetchMock,
+      "se creó una sesión REAL en el agente —cuota del proveedor gastada— para después contestar 503 " +
+        "por una misconfig NUESTRA que se podía detectar antes de salir a la red",
+    ).toHaveBeenCalledTimes(0);
+    expect(putMock, "se intentó escribir un token de una sesión que nunca se creó").toHaveBeenCalledTimes(0);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "kyc_session_unavailable" });
+  });
+
+  it("✅ calibración inversa: con el pre-vuelo OK el agente recibe EXACTAMENTE 1 llamada", async () => {
+    // Sin esta mitad, un pre-vuelo que SIEMPRE cortara pasaría T-HF-1 en verde y nadie podría
+    // verificarse nunca.
+    const fetchMock = fetchOkAgent();
+    const res = await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(probeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("T-HF-2: el pre-vuelo corre DESPUÉS del limiter y ANTES del agente, y el `put` sigue al final", async () => {
+    const orden: string[] = [];
+    rlMock.mockImplementation(async () => {
+      orden.push("limiter");
+      return { ok: true };
+    });
+    probeMock.mockImplementation(async () => {
+      orden.push("prevuelo");
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        orden.push("agente");
+        return { ok: true, status: 200, json: async () => AGENT_OK };
+      }),
+    );
+    putMock.mockImplementation(async () => {
+      orden.push("put");
+    });
+    await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+    expect(orden).toEqual(["limiter", "prevuelo", "agente", "put"]);
+  });
+
+  it("⚠️ LO QUE EL PRE-VUELO **NO** CUBRE: un fallo del INSERT sigue ocurriendo con la cuota YA gastada", async () => {
+    // Esto NO es un defecto del test: es el residual declarado. `probeReachable` hace un `select`, y
+    // un `select` no ejercita el `insert` (23505, restricciones de columna, GRANT que niega INSERT).
+    // El test existe para que nadie lea el verde de T-HF-1 como "ya no puede pasar".
+    const capturado = capturarLogs();
+    const fetchMock = fetchOkAgent();
+    putMock.mockRejectedValue(new Error("kyc_session_token_write_failed:23505"));
+    const res = await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+    expect(fetchMock, "la cuota SÍ se gastó en esta clase de fallo, y así se declara").toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(503);
+    // Y la etiqueta lo distingue: quien lee el log sabe si la verificación se gastó o no.
+    expect(capturado.join("\n")).toContain("kyc_session_token_write_failed");
+    expect(capturado.join("\n")).not.toContain("kyc_session_token_probe_failed");
+  });
+
+  // ── F-1 — LA CAUSA ────────────────────────────────────────────────────────────────────────────
+  it("T-HF-3: el 503 de la ESCRITURA loguea el SQLSTATE, no sólo la etiqueta", async () => {
+    const capturado = capturarLogs();
+    fetchOkAgent();
+    putMock.mockRejectedValue(new Error("kyc_session_token_write_failed:42P01"));
+    const res = await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+    expect(res.status).toBe(503);
+    // 🧬 MUTANTE: volver a `} catch {` (descartar el error entero) ⇒ ROJO. Y ése ES el mutante: el
+    // incidente del 2026-08-20 dejó `{ atada: true }` y nada más, y se diagnosticó con hipótesis.
+    expect(console.warn).toHaveBeenCalledWith("[kyc-session] kyc_session_token_write_failed", {
+      atada: true,
+      errorName: "Error",
+      errorCode: "kyc_session_token_write_failed",
+      dbCode: "42P01",
+    });
+    // ⛔ Y el `message` crudo del driver NO viaja: sólo el código.
+    expect(capturado.join("\n")).not.toContain("boom");
+  });
+
+  it("T-HF-4: `address_canonicalization_failed` NO se disfraza de «no se pudo escribir»", async () => {
+    // 🔴 LA SEGUNDA MENTIRA DE LA ETIQUETA VIEJA: `canonicalizeAddress` corre dentro de `put`, o sea
+    // dentro del mismo `try`, así que "no se pudo escribir" podía ser en realidad "la dirección no
+    // era válida". Dos causas que se arreglan distinto no pueden compartir una etiqueta.
+    // ⚠️ Se simula con un `put` que tira ESE error, y se dice por qué: desde esta route el
+    // `provedAddress` ya viene canonicalizado por P3, así que ningún input REAL puede llegar acá con
+    // una dirección inválida. Lo que este `it` clava es el LOG, no la alcanzabilidad de la rama.
+    capturarLogs();
+    fetchOkAgent();
+    putMock.mockRejectedValue(new Error("address_canonicalization_failed"));
+    const res = await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+    expect(res.status).toBe(503);
+    expect(console.warn).toHaveBeenCalledWith("[kyc-session] kyc_session_token_write_failed", {
+      atada: true,
+      errorName: "Error",
+      errorCode: "address_canonicalization_failed",
+    });
+  });
+
+  it("T-HF-5: el 503 del PRE-VUELO loguea su propio código, con su etiqueta propia", async () => {
+    capturarLogs();
+    const fetchMock = fetchOkAgent();
+    probeMock.mockRejectedValue(new Error("kyc_session_token_probe_failed:PGRST301"));
+    const res = await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+    expect(res.status).toBe(503);
+    expect(fetchMock).toHaveBeenCalledTimes(0);
+    expect(console.warn).toHaveBeenCalledWith("[kyc-session] kyc_session_token_probe_failed", {
+      atada: true, // sale de si hubo dirección PROBADA; acá la hubo (el `it` presenta un PoP real)
+      errorName: "Error",
+      errorCode: "kyc_session_token_probe_failed",
+      dbCode: "PGRST301",
+    });
+  });
+
+  it("T-HF-6: «otra cosa» se ve como otra cosa — un error de runtime no finge ser un SQLSTATE", async () => {
+    capturarLogs();
+    fetchOkAgent();
+    putMock.mockRejectedValue(new TypeError("Cannot read properties of undefined (reading 'x')"));
+    const res = await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+    expect(res.status).toBe(503);
+    // El `message` no arranca con un código en minúsculas ⇒ `errorCode` NO se emite, y `dbCode`
+    // tampoco. Lo que queda es `errorName: "TypeError"`, que es exactamente la tercera clase.
+    expect(console.warn).toHaveBeenCalledWith("[kyc-session] kyc_session_token_write_failed", {
+      atada: true,
+      errorName: "TypeError",
+    });
+  });
+
+  it("T-HF-7: ⛔ VALUE-FREE — ni el token, ni el sessionId, ni la dirección entran al log por el `err`", async () => {
+    const capturado = capturarLogs();
+    fetchOkAgent();
+    // Un `message` que trae TODO lo que no puede salir. El extractor toma el prefijo hasta el primer
+    // `:` y nada más, así que la cola —que acá lleva la pubkey y el token— se descarta entera.
+    putMock.mockRejectedValue(
+      new Error(`kyc_session_token_write_failed: fila ${ADDR_A} token ${TOKEN_CENTINELA} url https://x.test`),
+    );
+    const res = await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+    expect(res.status).toBe(503);
+    const texto = capturado.join("\n");
+    // 🧬 MUTANTE: ecoar `err.message` (o `String(err)`) en vez del código ⇒ ROJO por los TRES.
+    expect(texto, "el decisionToken salió en un log").not.toContain(TOKEN_CENTINELA);
+    expect(texto, "la dirección de la persona salió en un log").not.toContain(ADDR_A);
+    expect(texto, "la cola del message del driver salió en un log").not.toContain("https://x.test");
+    // ✅ Calibración: y sin embargo el log SIGUE diciendo la causa (un log vacío también pasaría
+    // los tres asserts de arriba, y sería el fallo indiagnosticable que costó este incidente).
+    expect(texto).toContain("kyc_session_token_write_failed");
+  });
+
+  it("T-HF-8: una cola que NO tiene forma de SQLSTATE no se emite (el filtro es por FORMA, no por confianza)", async () => {
+    capturarLogs();
+    fetchOkAgent();
+    putMock.mockRejectedValue(new Error("kyc_session_token_write_failed:eyJhbGciOiJIUzI1NiJ9.secreto"));
+    await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+    // `dbCode` AUSENTE: la cola tiene minúsculas y un punto, así que no matchea SQLSTATE/PGRST/unknown.
+    expect(console.warn).toHaveBeenCalledWith("[kyc-session] kyc_session_token_write_failed", {
+      atada: true,
+      errorName: "Error",
+      errorCode: "kyc_session_token_write_failed",
+    });
+  });
+
+  it("T-HF-9: sin `code` del driver, el store escribe `unknown` y el log lo dice (no lo omite)", async () => {
+    capturarLogs();
+    fetchOkAgent();
+    putMock.mockRejectedValue(new Error("kyc_session_token_write_failed:unknown"));
+    await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+    // "el driver no trajo código" es un dato distinto de "no miré el código", y se distingue.
+    expect(console.warn).toHaveBeenCalledWith("[kyc-session] kyc_session_token_write_failed", {
+      atada: true,
+      errorName: "Error",
+      errorCode: "kyc_session_token_write_failed",
+      dbCode: "unknown",
+    });
+  });
+
+  it("T-HF-10: sin PoP el pre-vuelo igual corre, y el log dice `atada:false`", async () => {
+    capturarLogs();
+    const fetchMock = fetchOkAgent();
+    probeMock.mockRejectedValue(new Error("kyc_session_token_probe_failed:42P01"));
+    const res = await POST(req({ vendorData: ADDR_A })); // sin PoP ⇒ sesión SIN ATAR
+    expect(res.status).toBe(503);
+    expect(fetchMock).toHaveBeenCalledTimes(0);
+    expect(console.warn).toHaveBeenCalledWith("[kyc-session] kyc_session_token_probe_failed", {
+      atada: false,
+      errorName: "Error",
+      errorCode: "kyc_session_token_probe_failed",
+      dbCode: "42P01",
+    });
   });
 });

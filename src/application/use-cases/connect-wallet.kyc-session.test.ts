@@ -24,9 +24,11 @@ vi.mock("../../infrastructure/rate-limit", () => ({ checkKycRateLimit: rlMock })
 // WKH-233 — el store del `decisionToken`. También es un borde del mundo (la base), como el limiter:
 // sin él la route contesta 503 a propósito (la escritura NO es best-effort) y ningún caso llegaría a
 // medirse. Lo que este archivo mide sigue siendo la JUNTA, no la persistencia.
-const { putMock } = vi.hoisted(() => ({ putMock: vi.fn() }));
+// hotfix 2026-08-20 · F-2: `probeReachable` es el pre-vuelo que corre ANTES del viaje al agente.
+// Acá es borde del mundo igual que `put`, y por eso resuelve OK: lo que este archivo mide es la JUNTA.
+const { putMock, probeMock } = vi.hoisted(() => ({ putMock: vi.fn(), probeMock: vi.fn() }));
 vi.mock("../../infrastructure/persistence/supabase-kyc-session-tokens", () => ({
-  getKycSessionTokenStore: () => ({ put: putMock }),
+  getKycSessionTokenStore: () => ({ put: putMock, probeReachable: probeMock }),
 }));
 
 import { POST as KYC_SESSION_POST } from "../../../app/api/kyc/session/route";

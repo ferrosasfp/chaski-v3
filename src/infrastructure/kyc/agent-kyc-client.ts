@@ -58,7 +58,7 @@ const DECISION_TOKEN_HEADER = "x-kyc-decision-token";
  * que sobrevive a un `clone`.
  *
  * ⚠️ QUÉ ROMPE ESTO Y QUÉ NO. Los TRES consumidores envuelven la llamada en un `try/catch` y la
- * convierten en el 502 que ya devuelven cuando el agente contesta 401 ((`createAgentKycSession`, `../../../app/api/kyc/session/route.ts:268`),
+ * convierten en el 502 que ya devuelven cuando el agente contesta 401 ((`createAgentKycSession`, `../../../app/api/kyc/session/route.ts:330`),
  * (`readAgentKycDecision`, `../../../app/api/kyc/decision/route.ts:89`), (`readAgentKycDecision`, `../payout/authority.ts:180`) ⇒ `kyc_reauth_failed`). ⚠️ LAS TRES VAN ANCLADAS A PROPÓSITO (re-AR it3 · MNR-1): la de `session` decía `:253`, que es una línea MUDA (`//`). Nació correcta en `main` y la rompió esta misma rama al reescribir el párrafo sin re-derivar el número; una cita SUELTA no la mira ningún candado, y anclarla es lo que la mete adentro de `citas-ancladas.test.ts`.
  * ⛔ ACÁ DECÍA «⇒ el conjunto de errores observables NO cambia», Y ERA FALSO, MEDIDO (re-AR it2 ·
  * BLQ-MED-2): el `upstream` viaja en el BODY de `/api/kyc/session`, y sin la env pasaba de

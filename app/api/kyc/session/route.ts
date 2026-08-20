@@ -287,7 +287,7 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // (2) LA PERSISTENCIA, HASTA DONDE SE PUEDE VERIFICAR SIN ESCRIBIR BASURA. Ver el docblock de
-  // (`probeReachable`, `../../../../src/infrastructure/persistence/supabase-kyc-session-tokens.ts:151`):
+  // (`probeReachable`, `../../../../src/infrastructure/persistence/supabase-kyc-session-tokens.ts:178`):
   // mide alcance + credencial + existencia de la tabla + permiso de LECTURA, y NO mide que el insert
   // vaya a andar. La alternativa —un insert de prueba que después se borra— se descartó ahí mismo,
   // con su motivo: deja residuo en una tabla del money-path.
@@ -407,7 +407,7 @@ export async function POST(req: Request): Promise<Response> {
     //
     // 🔴 ACÁ SE TIRABA EL ERROR ENTERO (`} catch {`), y eso es lo que dejó el incidente del
     // 2026-08-20 sin causa: el store SÍ traía el SQLSTATE —tira
-    // `kyc_session_token_write_failed:<code>`, (`put`, `../../../../src/infrastructure/persistence/supabase-kyc-session-tokens.ts:164`)—
+    // `kyc_session_token_write_failed:<code>`, (`put`, `../../../../src/infrastructure/persistence/supabase-kyc-session-tokens.ts:255`)—
     // y este `catch` lo descartaba. Diagnosticar "42P01 (falta la migración)" y "23505 (sessionId
     // duplicado)" se hacía a ciegas, con hipótesis, cuando el dato estaba a una línea.
     console.warn("[kyc-session] kyc_session_token_write_failed", {

@@ -356,9 +356,9 @@ export class ConfirmAndSend {
     //
     //    QUÉ CAMBIA Y HAY QUE MIRAR: los `reason` que llegaban de la autoridad en este punto
     //    (`kyc_not_approved`, `kyc_ownership_mismatch`, `kyc_authority_unavailable`, `simulated_dev`)
-    //    dejan de producirse acá. Los que salen ahora son los de `prepare` (`payout_not_authorized`,
-    //    `prepare_kyc_verdict_missing`, `payout_authority_unavailable`), y `flow-vm.ts` les dio copy
-    //    propio para que ninguno prometa USDC en el escrow cuando el corte fue anterior a la firma.
+    //    dejan de producirse acá. Los que salen ahora son los de `prepare`, y ⚠️ ACÁ DECÍA que `flow-vm.ts` «les dio copy propio para que ninguno prometa USDC en el escrow» — ERA FALSO Y NADIE LO MEDÍA: eran DOS de TRES. `payout_authority_unavailable` no tenía rama propia y caía en el catch-all `code.includes("payout")`, que dice "si tus USDC entraron al escrow, los sacás vos firmando" cuando el corte de esta ruta es anterior a `authorizePrincipal` y NO hay un solo USDC en ningún escrow. Lo cerró WKH-233 (fix-pack · H-1).
+    //    HOY los tres tienen rama propia, y las citas van ANCLADAS para que `src/composition/citas-ancladas.test.ts` se ponga rojo si alguna se muda: (`payout_not_authorized`, `../../presentation/flow-vm.ts:741`), (`prepare_kyc_verdict_missing`, `../../presentation/flow-vm.ts:688`) y (`payout_authority_unavailable`, `../../presentation/flow-vm.ts:743`). El CONTENIDO de cada copy lo miden T-COPY-2, T-COPY-1 y T-COPY-5 en `../../presentation/flow-vm.test.ts`.
+    //    ⛔ LO QUE NADA DE ESO MIDE, y por eso va escrito: que esta lista de tres sean TODOS los enums que `prepare` puede devolver. Eso sigue siendo lectura a mano de su `switch`, y si mañana aparece un cuarto, esta frase vuelve a ser dos de tres sin que ningún test cambie de color.
     //
     //    El guard de address se CONSERVA tal cual: sigue cortando antes de la primera llamada de red
     //    del money-path, y "no se movió nada" sigue siendo un hecho y no una suposición.

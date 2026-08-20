@@ -2475,3 +2475,68 @@ describe("T-067-10 (WKH-359/AC-6): el cruce de cuenta distingue NO COMPARADO de 
     expect(new Set(todos).size, "dos de los tres estados colapsaron en el mismo valor").toBe(3);
   });
 });
+
+// ── T-COPY-5 (WKH-233 fix-pack · H-1) — el tercer enum del prepare tampoco promete USDC en el escrow ──
+//
+// 🔴 QUÉ DEFECTO CIERRA, Y POR QUÉ NADIE LO VIO. `confirm-and-send.ts` declaraba que los TRES enums que
+// puede devolver `/api/payout/prepare` tenían copy propio en `flow-vm.ts` "para que ninguno prometa USDC
+// en el escrow". Eran DOS. `payout_authority_unavailable` no tenía rama y caía en el catch-all
+// `code.includes("payout")`, cuyo texto manda a la persona a sacar del escrow unos USDC que nunca
+// salieron de su billetera: los tres emisores del enum (`app/api/payout/prepare/route.ts:333`, `:344`,
+// `:347`) cortan antes del forward al agente y antes de `authorizePrincipal`.
+//
+// ⛔ ESTE `describe` VA AL FINAL DEL ARCHIVO A PROPÓSITO, y no es prolijidad: `:481`, `:520`, `:76-101`,
+// `:1704-1707` y `:1873` de este archivo los cita otro por NÚMERO (`http-pop-signer.ts:33`,
+// `flow-vm.ts:1003`, `history-grupos.test.tsx:405`/`:532`, `history-onchain.test.tsx:255`/`:473`).
+// Un `it` insertado en el medio los rota en silencio; appendear al final no mueve ninguno.
+describe("T-COPY-5: `payout_authority_unavailable` tiene copy propio (WKH-233/H-1)", () => {
+  const CATCH_ALL_PAYOUT =
+    "No se pudo entregar. No hay un reembolso automático: si tus USDC entraron al escrow, los sacás vos firmando desde tu wallet.";
+
+  // 🧪 CONTROL POSITIVO, EN LA MISMA CORRIDA. Sin esto, las aserciones de abajo pasarían igual si
+  // alguien borrara el catch-all entero o le cambiara el texto: estarían midiendo contra una constante
+  // que ya no existe en el código. Este `it` prueba que el catch-all SIGUE VIVO y SIGUE tragándose lo
+  // que le corresponde — o sea que el barrido de abajo puede encontrar algo.
+  it("control positivo: un código de payout desconocido SÍ cae en el catch-all, y su texto es ese", () => {
+    expect(humanError("payout_algo_que_nadie_mapeó")).toBe(CATCH_ALL_PAYOUT);
+    expect(humanError("payout_failed")).toBe(CATCH_ALL_PAYOUT);
+  });
+
+  it("NO cae en el catch-all de `payout`", () => {
+    const msg = humanError("payout_authority_unavailable");
+    expect(
+      msg,
+      "`payout_authority_unavailable` volvió a caer en el catch-all de `payout`: la persona lee que " +
+        "sus USDC pueden estar en el escrow cuando el corte de `prepare` es anterior a `authorizePrincipal`",
+    ).not.toBe(CATCH_ALL_PAYOUT);
+  });
+
+  it("y su copy no promete USDC en el escrow ni un reembolso", () => {
+    const msg = humanError("payout_authority_unavailable");
+    expect(msg).not.toContain("escrow");
+    expect(msg).not.toMatch(/te (reembolsamos|devolvemos)/i);
+    expect(msg).toContain("No se movió ningún USDC");
+    // Sin em dashes en el copy que ve la persona (misma regla que el resto de la tabla).
+    expect(msg).not.toContain("—");
+  });
+
+  // ⚠️ NO dice "no se pidió ninguna firma", que sería FALSO: para llegar a este guard el PoP ya se
+  // verificó (`prepare/route.ts:214` en adelante), o sea que la billetera SÍ firmó un mensaje. Lo
+  // cierto es que ese mensaje no mueve valor. Si alguien "simplifica" el copy negando la firma, rojo.
+  it("no niega la firma que sí ocurrió (el PoP), la explica", () => {
+    const msg = humanError("payout_authority_unavailable");
+    expect(msg).not.toMatch(/no se (te )?pidió ninguna firma/i);
+    expect(msg).toContain("probar que la billetera es tuya");
+  });
+
+  // Y no colapsa con sus dos hermanos: tres cortes distintos, tres frases distintas.
+  it("los TRES enums de `prepare` dan tres mensajes DISTINTOS entre sí", () => {
+    const tres = [
+      "payout_not_authorized",
+      "prepare_kyc_verdict_missing",
+      "payout_authority_unavailable",
+    ].map(humanError);
+    expect(new Set(tres).size, "dos de los tres colapsaron en el mismo copy").toBe(3);
+    for (const msg of tres) expect(msg).not.toBe(CATCH_ALL_PAYOUT);
+  });
+});

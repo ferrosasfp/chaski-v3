@@ -150,7 +150,7 @@
 // pantalla de entrada no la vigilaba ningún test.
 import { describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach } from "vitest";
 import React from "react";
 import { Receipt, RemittanceFlow } from "./flow";

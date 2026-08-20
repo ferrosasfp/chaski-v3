@@ -25,12 +25,24 @@
 //
 // ⚠️ LO QUE ESTE CANDADO NO CIERRA, declarado y no disfrazado:
 //   1. Las citas SIN ancla siguen sin vigilancia, y NADA las cuenta: lo único medido es el otro lado del
-//      conjunto, y ese total NO se escribe acá porque envejece: se deriva con el regex de `:62`.
+//      conjunto, y ese total NO se escribe acá porque envejece: se deriva con el regex de `:74`.
 //   2. Un ancla que aparece en varias líneas del archivo destino da verde apuntando a cualquiera de
 //      ellas. El ancla prueba "esta línea habla del símbolo", no "es LA línea". ⚠️ Y ACÁ VA EL TAMAÑO DEL AGUJERO, que hasta el fix-pack de WKH-359 (AR/MNR-3) nadie había medido: de las 658 citas ancladas del árbol, **580 (88,1 %) tienen su ancla en MÁS DE UNA línea del archivo destino** ⇒ el verde de este candado discrimina de verdad en ~12 % de los casos. ⛔ Los dos números son una FOTO —se mueven con cada comentario nuevo— y por eso NO hay ningún `expect` que los fije: se re-derivan con la receta de `:62` más un conteo de ocurrencias del ancla en el destino, y el instrumento que los derive tiene que calibrarse contra el total que cuenta ESTE archivo antes de que se le crea. Lo invariante sí es el reparto: este candado caza el ancla que NO existe en el destino, y no la línea equivocada dentro del mismo símbolo.
 //   3. Sólo resuelve el archivo destino si la ruta es relativa al que cita o si el basename es único
 //      en el árbol. Si no resuelve, el test FALLA (una cita a un archivo inexistente es un hallazgo,
 //      no una excepción).
+//   4. 🔴 UNA CITA A UN MÓDULO **BORRADO** PASA SIN CHISTAR SI NO ESTÁ ANCLADA, Y ESO YA COSTÓ SEIS
+//      CITAS MUERTAS (WKH-233 fix-pack · H-8). WKH-233 borró `src/infrastructure/didit/` entero, y
+//      quedaron SEIS comentarios citando `didit-env.ts` y `didit/decision.ts` como si fueran exemplares
+//      vivos: `kyc-verdict-ttl-env.ts`, `kyc-verdict-ttl.ts`, `flow.tsx`, `flow-vm.ts`,
+//      `persistence/supabase-kyc-verdicts.ts` y `app/api/mock-didit/v3/session/route.ts`. **Este
+//      candado pasaba en verde (9 de 9) mientras las seis estaban rotas**, y no por un defecto: NINGUNA
+//      estaba en formato anclado, así que ninguna entraba a su conjunto. El punto 3 de arriba —"si no
+//      resuelve, el test FALLA"— sólo vale para las ANCLADAS, y leído rápido suena a que el candado
+//      cubre todo archivo citado. NO lo cubre.
+//      ⛔ Corolario, que es lo que hay que llevarse: **el verde de este archivo NO significa "las citas
+//      del repo están bien"**. Significa "las que alguien decidió anclar están bien". El perímetro es
+//      opt-in y quien lo lea tiene que saber de qué tamaño es lo que queda afuera.
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

@@ -124,9 +124,14 @@ export async function POST(req: Request): Promise<Response> {
   //   · DESPUÉS del rate-limit. Este bloque hace HMAC + ed25519, o sea CPU. Ponerlo antes del limiter
   //     abriría una ventana de CPU-DoS. Es el mismo orden que ya resolvieron
   //     `app/api/a2a/payout/challenge/route.ts` y `app/api/solana/escrow/remittance-ids/route.ts`.
-  //   · DESPUÉS del 501 de `DIDIT_API_KEY`. Sin key la ruta ya salió arriba con 501 y
-  //     `DiditKycGateway.start` cae a la simulación ⇒ EL DEMO QUEDA BYTE-IDÉNTICO (AC-12). Si este
-  //     bloque estuviera antes, el demo empezaría a exigir una firma de billetera que hoy no pide.
+  //   · DESPUÉS DEL 501 DE ARRIBA. ⚠️ ACÁ DECÍA *"después del 501 de `DIDIT_API_KEY` … y
+  //     `DiditKycGateway.start` cae a la simulación"*, Y NI LA ENV NI LA CLASE EXISTEN: `DIDIT_API_KEY`
+  //     no aparece en ninguna línea de código del repo (sólo en comentarios) y `DiditKycGateway` la
+  //     borró esta misma HU. El 501 REAL de esta ruta es el de
+  //     (`resolveKycAgentBaseUrl`, `:73`) (el guard de la env `KYC_AGENT_BASE_URL`, en `:72-76`), y quien cae al
+  //     fallback es `AgentKycGateway.start`, que es lo que hace que sin esa env el demo quede
+  //     BYTE-IDÉNTICO (AC-12). Si este bloque estuviera antes, el demo empezaría a exigir una firma
+  //     de billetera que hoy no pide.
   //
   // 🔴 LA PRUEBA ATA, PERO NO ES REQUISITO PARA VERIFICARSE (AR/BLQ-ALTO-2, CD-15/AC-13). Acá el PoP
   // era OBLIGATORIO: sin prueba, 403. Medido, eso rompía CD-15 textualmente — `ConnectWallet` vuelve

@@ -51,7 +51,9 @@ interface RawRow {
 
 /** El `risk_level` de la fila es `text`, así que puede traer algo fuera del conjunto (una versión
  *  vieja del mapeo, un proveedor nuevo). Lo desconocido cuenta como `"high"`: es la dirección
- *  fail-safe y la misma que ya usa `resolveRiskLevel` en `didit/decision.ts` cuando no reconoce la
+ *  fail-safe. ⚠️ ACÁ SE CITABA `resolveRiskLevel` en `didit/decision.ts` como si existiera: WKH-233
+ *  borró ese módulo y esa función, así que la comparación ya no se puede seguir (el lector vivo con el
+ *  mismo criterio es (`readRiskLevel`, `../kyc/http-kyc-verdict-gateway.ts:51`)) cuando no reconoce la
  *  señal. Input que lo refuta: una fila con `risk_level = 'bajo'` — si esto devolviera `"low"`, la
  *  pantalla afirmaría un riesgo que nadie evaluó. */
 function readRiskLevel(raw: string): "low" | "medium" | "high" {

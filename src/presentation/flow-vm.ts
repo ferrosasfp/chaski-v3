@@ -89,7 +89,7 @@ export function isPayoutDemo(p: string | null | undefined): boolean {
  * hace la frase falsable a simple vista.
  *
  * El `provenance` se muestra en claro a propósito: es una etiqueta de configuración de un conjunto
- * chico (mismo criterio que el eco de `DIDIT_ENV` en `didit-env.ts`:76-81), nunca un secreto ni PII.
+ * chico (el criterio venía del eco de `DIDIT_ENV` en `didit-env.ts`:76-81, ⛔ ARCHIVO BORRADO por WKH-233 con el proveedor entero: la cita no se puede seguir y se deja nombrada en vez de callada. El criterio se conserva y hoy no tiene otro sitio donde vivir), nunca un secreto ni PII.
  */
 export function kycOriginNotice(p: string | null | undefined): string {
   const raw = typeof p === "string" ? p.trim() : "";

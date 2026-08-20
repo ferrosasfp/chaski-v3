@@ -1027,7 +1027,7 @@ export type CausaDeEnlaceEnPantalla =
 //
 // 🔴 POR QUÉ AL FINAL DEL ARCHIVO Y NO AL LADO DE SUS HERMANAS DEL PASO DEL NONCE. No es orden ni
 // estilo: este módulo recibe **13 citas ancladas de `:276` para abajo** (medido en `723ca3c` con el
-// escáner de (`ANCLADA`, `../../../composition/citas-ancladas.test.ts:62`), la misma receta del
+// escáner de (`ANCLADA`, `../../../composition/citas-ancladas.test.ts:74`), la misma receta del
 // candado), así que abrir un hueco arriba las corre a todas. Acá abajo hay CERO. `tsc` no pide orden
 // para los tipos, así que la unión de (`CausaDeEnlace`, `:264`) las nombra desde arriba sin problema.
 //

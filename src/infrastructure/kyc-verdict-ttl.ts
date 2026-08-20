@@ -31,7 +31,8 @@ export const KYC_CLIENT_HINT_TTL_DAYS = 180;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// Brand nominal (exemplar: didit-env.ts:45-46). `KycVerdictTtlDays` es asignable a `number`, pero un
+// Brand nominal (el exemplar era `didit-env.ts:45-46` y SE BORRÓ con el proveedor en WKH-233; el vivo
+// es (`KycAgentBaseUrl`, `./kyc/agent-env.ts:36`)). `KycVerdictTtlDays` es asignable a `number`, pero un
 // `number` NO es asignable a `KycVerdictTtlDays`: pasarle un `365` literal a `isVerdictExpired` no
 // compila. La ÚNICA fábrica es `resolveKycVerdictTtlDays()` en `kyc-verdict-ttl-env.ts` — el brand es
 // lo que hace imposible un segundo origen del número.

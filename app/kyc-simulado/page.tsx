@@ -4,7 +4,13 @@
 // Acá no se escanea nada, y la pantalla lo dice. Es deliberado que ESTA sea la pantalla y no un
 // formulario que pida datos: pedirlos daría a entender que se validan, y no se valida ninguno.
 //
-// 🔴 SÓLO RESPONDE CON `DIDIT_ENV=mock`, y eso ahora es un gate y no una esperanza.
+// 🔴 SÓLO RESPONDE CON `MOCK_KYC_SURFACE_ENABLED=true`, y eso es un gate y no una esperanza.
+//
+// ⚠️ ACÁ DECÍA `DIDIT_ENV=mock`, Y ESA ENV ESTÁ MUERTA (WKH-233 fix-pack · H-10). No la lee ni una
+// línea de código del repo: el único gate es (`mockDiditSurfaceEnabled`, `../../src/infrastructure/mock-surface.ts:51`),
+// que compara `MOCK_KYC_SURFACE_ENABLED` contra el literal exacto `"true"`. Un operador que siguiera
+// la línea vieja setearía una env que no hace nada y la página seguiría apagada, sin ningún error que
+// se lo diga. Son DOS envs distintas y el cambio está declarado en `.env.example`.
 //
 // Lo que decía antes: *"la ruta que emite el link ni siquiera responde, así que nadie llega hasta
 // acá"*. La primera mitad es cierta — `app/api/mock-didit/v3/session/route.ts` devuelve 404 sin mock —
@@ -25,8 +31,8 @@ export const metadata = { title: "Verificación simulada · Chaski" };
 
 // 🔴 SIN ESTO EL GATE SE EVALÚA UNA SOLA VEZ, AL COMPILAR. Medido el 2026-08-11: `npm run build`
 // marcaba esta ruta `○ (Static)`, o sea prerenderizada, así que `mockDiditSurfaceEnabled()` corría con
-// el `DIDIT_ENV` del BUILD y el resultado quedaba horneado en el HTML. Consecuencia concreta: pasar
-// `DIDIT_ENV` a `live` en el proveedor **no cerraría esta página** hasta un rebuild, y el 404 dejaría
+// la env del BUILD y el resultado quedaba horneado en el HTML. Consecuencia concreta: apagar
+// `MOCK_KYC_SURFACE_ENABLED` en el proveedor **no cerraría esta página** hasta un rebuild, y el 404 dejaría
 // de significar lo que la ruta hermana dice que significa. Es la misma familia de trampa que "un
 // redeploy no recompila las variables": la que hace que apagar algo no lo apague.
 //

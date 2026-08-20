@@ -16,11 +16,17 @@
 // Guard-order fail-closed (envs en runtime, CD-14): V1 secreto PoP → V2 rate-limit → V3 body →
 // V4 PoP P1..P5 → V5 store → V6 TTL → V7 lectura owner-scoped → V8 backfill → V9 juicio →
 // V9.5 credencial del money-path (WKH-233/H-2a) → 200.
-// Exemplar: app/api/solana/escrow/remittance-ids/route.ts:39-137.
+// Exemplar: (`POST`, `../../solana/escrow/remittance-ids/route.ts:46`) y su cadena de guards hasta el
+// final del archivo (`:145`). ⚠️ ACÁ DECÍA `:39-137`, y los DOS extremos eran falsos: `:39` es
+// `const MAX_IDS = …` (el handler arranca en `:46`) y `:137` cae en medio de la última lectura. Se
+// ancla al símbolo para que el candado lo vigile, en vez de a un rango que nada verifica.
 //
 // 🔴 V5 Y V6 VAN DESPUÉS DEL PoP, y no es cosmético. Si el chequeo del flag fuese antes, un caller
 // ANÓNIMO distinguiría "la tabla no está encendida" (501) de "está encendida y no sos vos" (403), y
-// eso ya es medio oráculo. Es exactamente lo que el exemplar resolvió en sus líneas 117-121.
+// eso ya es medio oráculo. Es exactamente lo que el exemplar resolvió en su R5:
+// (`getSettlementLedger`, `../../solana/escrow/remittance-ids/route.ts:125`), con su 501 en `:127`.
+// ⚠️ ACÁ DECÍA `117-121`: LA PROSA ERA CORRECTA Y LOS NÚMEROS NO — en `:117-121` vive el bloque P5
+// del PoP (la verificación ed25519), no el orden flag-vs-PoP que la frase describe.
 //
 // 🔴 V7 CONSULTA CON `ch.address`, NUNCA CON `body.sender`. `body.sender` sólo existe para poder
 // rechazar temprano lo malformado; el valor que toca la base es el del challenge PoP-verificado
@@ -206,7 +212,7 @@ export async function POST(req: Request): Promise<Response> {
   //
   // 🔴 QUÉ CALLEJÓN SIN SALIDA CIERRA. Hasta acá esta ruta contestaba `usable` mirando SÓLO la fila de
   // `kyc_verdicts`. El pago mira otra cosa: `resolvePayoutAuthority` exige la fila de
-  // `kyc_session_tokens` para el par (sesión, dueño) —(`getForOwner`, `../../../../src/infrastructure/payout/authority.ts:141`)— y sin ella corta con
+  // `kyc_session_tokens` para el par (sesión, dueño) —(`getForOwner`, `../../../../src/infrastructure/payout/authority.ts:150`)— y sin ella corta con
   // `kyc_ownership_mismatch` ⇒ `payout_not_authorized`/403. La consecuencia medida: `usable` mandaba a
   // la persona de `connect` derecho a `confirm` **sin mostrar nunca la pantalla de verificación**, y
   // ahí moría en el prepare, sin camino de vuelta. Preguntar lo mismo que pregunta el pago es lo que

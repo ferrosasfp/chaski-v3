@@ -59,7 +59,7 @@ const DECISION_TOKEN_HEADER = "x-kyc-decision-token";
  *
  * ⚠️ QUÉ ROMPE ESTO Y QUÉ NO. Los TRES consumidores envuelven la llamada en un `try/catch` y la
  * convierten en el 502 que ya devuelven cuando el agente contesta 401 (`app/api/kyc/session/route.ts:253`,
- * `app/api/kyc/decision/route.ts:89`, `../payout/authority.ts:167` ⇒ `kyc_reauth_failed`). ⇒ el
+ * `app/api/kyc/decision/route.ts:89`, (`readAgentKycDecision`, `../payout/authority.ts:176`) ⇒ `kyc_reauth_failed`). ⇒ el
  * conjunto de errores observables NO cambia; lo que cambia es que el fallo pasa a ser NUESTRO y
  * diagnosticable en vez de un 401 ajeno. Un `.trim()` vacío cuenta como ausente: `Bearer ` pelado es
  * `credential_malformed` para el agente, que es peor que no salir.

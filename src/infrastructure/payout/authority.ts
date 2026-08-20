@@ -40,11 +40,20 @@
 // hasta que se re-verifique.** ⛔ PROHIBIDO agregar un reintento con otra credencial, un camino de
 // respaldo, o un `?? true`.
 //
-// ⚠️ CONSUMIDORES, MEDIDO Y NO SUPUESTO (2026-08-19): **uno vivo** — `app/api/payout/prepare/route.ts`,
-// el money-path real— y **uno advisory sin consumidor de producción** — `app/api/payout/validate`,
-// que es un POST público que nadie del flujo llama—. La cabecera anterior nombraba además
-// `/api/a2a/payout/submit`, que **NO EXISTE en este repo** (`ls -R app/api/a2a/`: sólo `plan`,
-// `quote` y `payout/challenge`). ⛔ Y NO se crea para que la cita sea cierta: se corrige la cita.
+// ⚠️ CONSUMIDORES — SON **TRES**, Y LA CUENTA ANTERIOR DECÍA DOS (WKH-233 fix-pack · H-7). El que
+// faltaba no es menor: es el BACKFILL, o sea justo el camino del que depende el análisis de rescate
+// de quien no tiene fila. Re-derivado con `grep -rn resolvePayoutAuthority src app scripts` (no de
+// memoria), al 2026-08-19:
+//   1. (`resolvePayoutAuthority`, `../../../app/api/payout/prepare/route.ts:331`) — el money-path real.
+//   2. (`resolvePayoutAuthority`, `../../../app/api/payout/validate/route.ts:66`) — advisory: un POST
+//      público que ningún paso del flujo llama.
+//   3. (`resolvePayoutAuthority`, `../../../app/api/kyc/verdict/route.ts:299`) — el backfill (V8), que
+//      re-consulta con la pista del navegador y persiste sólo si vuelve autorizada.
+// ⛔ Y LA CUENTA ENVEJECE SOLA: es una foto de un `grep`, no un invariante. Nada la vigila. Si agregás
+// un cuarto consumidor, esta lista queda vieja en silencio; re-derivala antes de apoyarte en ella.
+// La cabecera de antes nombraba además `/api/a2a/payout/submit`, que **NO EXISTE en este repo**
+// (`ls -R app/api/a2a/`: sólo `plan`, `quote` y `payout/challenge`). ⛔ NO se crea para que la cita
+// sea cierta: se corrige la cita.
 //
 // Guard-order (fail-closed en las cinco ramas; nunca un fetch antes de pasar los guards):
 //   1. host del agente ausente + prod   → 503 fail-loud (nunca autoriza por default)

@@ -1512,7 +1512,7 @@ export const CAUSAS_CON_COPY = Object.keys(COPY_DE_ENLACE);
  * ⛔ Y ACÁ VA EL RESIDUAL, SIN SUAVIZAR ([NC-1] de la HU). **Esto NO es un evento observable en
  * producción.** No hay ningún `console.*` ni sink de telemetría en el camino de `flow.tsx:506-519`
  * (medido), y esta HU **no inventa uno**: agregar infraestructura de observabilidad no pedida a un
- * archivo de [[CENSO src/presentation/flow.tsx lineas=4421]] líneas con [[CENSO src/presentation/flow.tsx entrantes=115]] citas ANCLADAS entrantes sería expandir el scope para "cumplir" un AC. ⚠️ ACÁ DECÍA «4268 líneas con 83 citas» Y LO VOLVIÓ FALSO EL COMMIT `7338c37` DE ESTA MISMA HU, sin que nadie editara la frase (F4/F4-2). Por eso hoy son MARCADORES que verifica `citas-ancladas.test.ts` contra el árbol en cada `npm test`, no cifras escritas a mano. ⚠️ Y «ANCLADAS» no es un adorno: el marcador cuenta SÓLO las citas con símbolo delante — las sueltas (`flow.tsx:4009`) se rompen igual y siguen sin que las mire nadie.
+ * archivo de [[CENSO src/presentation/flow.tsx lineas=4421]] líneas con [[CENSO src/presentation/flow.tsx entrantes=119]] citas ANCLADAS entrantes sería expandir el scope para "cumplir" un AC. ⚠️ ACÁ DECÍA «4268 líneas con 83 citas» Y LO VOLVIÓ FALSO EL COMMIT `7338c37` DE ESTA MISMA HU, sin que nadie editara la frase (F4/F4-2). Por eso hoy son MARCADORES que verifica `citas-ancladas.test.ts` contra el árbol en cada `npm test`, no cifras escritas a mano. ⚠️ Y «ANCLADAS» no es un adorno: el marcador cuenta SÓLO las citas con símbolo delante — las sueltas (`flow.tsx:4009`) se rompen igual y siguen sin que las mire nadie.
  * Lo que esto entrega es que el tri-estado **existe en el código y es medible por un test**
  * (`T-067-10`). Si el founder quería un evento que se pueda ver en producción, **esto no lo entrega**.
  *
@@ -1687,8 +1687,8 @@ export type DesenlaceDelResume = "D1_none" | "D2_processing" | "D3_throw" | "D4_
 export type FilaDeDesenlace = {
   /** Los textos que la persona puede leer en este desenlace. `[]` = no cambia el copy que ya existía. */
   readonly copy: readonly string[];
-  /** ⛔ CITA `archivo:línea`, NO razona. `T-073-CENSO` exige la cita: una justificación sin cita es una
-   *  opinión, y una opinión no se puede volver a verificar cuando el código de abajo cambie. */
+  /** ⛔ CITA `archivo:línea`, NO razona. `T-073-CENSO` exige la cita: una justificación sin cita es una opinión, y una opinión no se puede volver a verificar cuando el código de abajo cambie.
+   *  🔴 CD-10 (AR/MNR-5) · POR QUÉ CADA FILA REPITE SUS CITAS EN UN `//` DE AL LADO, Y NO ES REDUNDANCIA DECORATIVA. `citas-ancladas.test.ts` **saltea las cadenas a propósito** (su lexer: (`lineasConComentario`, `../composition/citas-ancladas.test.ts:112`)), así que una cita que vive DENTRO de este `string` no la mira nadie: las 21 de acá abajo estaban correctas y sin candado, que es el estado del que sale una cita rota sin que nadie se entere. ⛔ NO se pudieron MOVER —que era lo barato— porque `T-073-CENSO` exige por regex que el `porQue` TENGA una cita, y sacarlas lo pone rojo en las cinco filas; aflojar ese candado no es una opción. ⇒ La cita del `porQue` es la que se LEE y la del `//` es la que se VERIFICA (anclada). Si el destino se mueve, el `//` se pone rojo **y eso es el aviso de que la del string quedó vieja**: se arreglan las dos juntas, nunca una sola. */
   readonly porQue: string;
   /**
    * Se declara cuando dos textos del censo LEEN CASI IGUAL, y ⛔ tiene que NOMBRAR con cuál desenlace
@@ -1705,32 +1705,32 @@ export type FilaDeDesenlace = {
 
 export const DESENLACES_DEL_RESUME: Readonly<Record<DesenlaceDelResume, FilaDeDesenlace>> = {
   D1_none: {
-    copy: [],
+    copy: [], // CD-10 · las citas del `porQue`, ancladas y por eso VERIFICADAS: (`none`, `resume-kyc.ts:25`), (`none`, `resume-kyc.ts:30`), (`none`, `resume-kyc.ts:35`) — los tres `return` que devuelven el mismo desenlace por tres hechos distintos.
     porQue:
       "resume-kyc.ts:25, :30 y :35 devuelven el MISMO `none` para tres hechos distintos (no hay pendiente / no hay remesa / la remesa ya salió de kyc_pending). Cualquier frase tendría que elegir uno de los tres, así que este desenlace no dice nada del KYC: aterriza en la bienvenida, que tiene salidas.",
   },
   D2_processing: {
-    copy: [COPY_RESUME_SIN_RESPUESTA_TITULO, COPY_RESUME_SIN_RESPUESTA_CUERPO],
+    copy: [COPY_RESUME_SIN_RESPUESTA_TITULO, COPY_RESUME_SIN_RESPUESTA_CUERPO], // CD-10 · citas del `porQue`, ancladas: (`dec.terminal`, `resume-kyc.ts:44`) contestaron y no era final; (`catch`, `resume-kyc.ts:41-42`) la consulta falló y se reintenta.
     porQue:
       "resume-kyc.ts:44 (contestaron y no era final) y resume-kyc.ts:41-42 (la consulta falló y se reintenta) llegan al mismo `processing`: el tipo no los distingue, así que el copy NO enumera causas.",
   },
   D3_throw: {
-    copy: [COPY_RESUME_INTERRUMPIDO_TITULO, COPY_RESUME_INTERRUMPIDO_CUERPO],
+    copy: [COPY_RESUME_INTERRUMPIDO_TITULO, COPY_RESUME_INTERRUMPIDO_CUERPO], // CD-10 · citas del `porQue`, ancladas: (`catch`, `flow.tsx:215`) no mira el error; los cuatro throws POSTERIORES a la consulta (`applyKyc`, `resume-kyc.ts:47`), (`repo.save`, `resume-kyc.ts:48`), (`kycStore.save`, `resume-kyc.ts:49`), (`pending.clear`, `resume-kyc.ts:50`); el anterior (`pending.get`, `resume-kyc.ts:24`); y la evidencia ejecutable (`ResumeKyc`, `use-cases.test.ts:244-260`).
     porQue:
       "flow.tsx:215 no mira el error, y hay CUATRO throws POSTERIORES a la consulta (resume-kyc.ts:47 applyKyc, :48 repo.save, :49 kycStore.save, :50 pending.clear) más uno anterior (:24). Evidencia ejecutable de que el throw tardío existe: use-cases.test.ts:244-260 y T-073-2d, que además cuenta la llamada a `decision`.",
   },
   D4_failed: {
-    copy: [COPY_RESUME_NO_PODEMOS_SEGUIR, COPY_RESUME_NO_PODEMOS_SEGUIR_AVISO],
+    copy: [COPY_RESUME_NO_PODEMOS_SEGUIR, COPY_RESUME_NO_PODEMOS_SEGUIR_AVISO], // CD-10 · citas del `porQue`, ancladas: (`carril`, `resume-kyc.ts:37`) el corte sin `applyKyc`; y la evidencia (`kyc.decision`, `resume-kyc.carril.test.ts:188-208`) con su calibración inversa (`carril`, `resume-kyc.carril.test.ts:210-220`).
     porQue:
       "resume-kyc.ts:37 declara textual que no se inventa un veredicto sobre esa persona, sólo que NO PUDIMOS RETOMAR. Evidencia ejecutable: resume-kyc.carril.test.ts:188-208 mide `decision` en CERO llamadas para el pendiente sin carril, con su calibración inversa en :210-220.",
     mismoTextoQue: {
-      con: "D4_failed",
+      con: "D4_failed", // CD-10 · citas del `porQue` de acá abajo, ancladas: las dos ramas de (`yaInteractuoRef`, `flow.tsx:175`) y (`aterrizar`, `flow.tsx:208`).
       porQue:
         "el banner y el aviso son el MISMO desenlace visto desde las dos ramas de `yaInteractuoRef` (flow.tsx:175 y :208), no dos desenlaces. Se solapan a propósito: quien ya estaba usando la pantalla recibe el aviso en vez de que se la reemplacen.",
     },
   },
   D5_passed: {
-    copy: [],
+    copy: [], // CD-10 · citas del `porQue`, ancladas: la rama que ya era cierta (`avisoKyc`, `flow.tsx:757`), y por qué lo es: (`dec.terminal`, `resume-kyc.ts:44`) y (`kyc_passed`, `resume-kyc.ts:51`).
     porQue:
       "flow.tsx:757 rama `confirm` («Tu verificación quedó lista») ya es cierta: se preguntó, contestaron y el veredicto fue terminal y aprobado (resume-kyc.ts:44 y :51). Esta HU no lo toca.",
   },

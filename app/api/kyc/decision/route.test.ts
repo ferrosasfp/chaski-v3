@@ -299,13 +299,23 @@ describe("GET /api/kyc/decision — la fila se escribe SÓLO con `payoutAllowed 
 
   // ── T-DEC-1 ──────────────────────────────────────────────────────────────────────────────────
   //
-  // 🔴 POR QUÉ ESTE TEST NECESITA LOS DOS CASOS DE `identityMatches`. Un `identityMatches ?? false`
-  // NO se muere con el caso ausente solo: da el mismo resultado. El mutante que sí muere es
-  // `identityMatches !== false` (que autorizaría el ausente), y para matarlo hacen falta las DOS
-  // ramas — `false` explícito y la clave AUSENTE— afirmando que NINGUNA escribe.
+  // ⛔ ACÁ HABÍA UNA DEFENSA FALSA, Y SE RETIRA EN VEZ DE CORREGIRLA A MEDIAS (WKH-233 fix-pack · H-6).
+  // Decía: *"POR QUÉ ESTE TEST NECESITA LOS DOS CASOS DE `identityMatches` … el mutante que sí muere
+  // es `identityMatches !== false`, y para matarlo hacen falta las DOS ramas"*. **Es imposible**: los
+  // TRES casos ponen `payoutAllowed: false`, y `persistKycVerdict` corta en su PRIMERA línea
+  // (`route.ts:150`, `if (d.payoutAllowed !== true) return`) sin llegar a mirar `identityMatches`
+  // jamás. Los tres decían la verdad ("no se escribe fila") por un motivo distinto del que afirmaban,
+  // y ningún mutante sobre `identityMatches` podía morir acá. Los títulos se corrigieron para nombrar
+  // el gate que de verdad los explica.
+  //
+  // 🔴 Y EL CASO QUE FALTABA ES EL QUE IMPORTA: `payoutAllowed: true` + `identityMatches: false`. Es
+  // el único que separa lo que el expediente PIDE (AC-5/AC-7 del work-item: *"escribir la fila SÓLO
+  // si `identityMatches === true`"*) de lo que el código HACE (DT-5': el gate es `payoutAllowed`).
+  // No existía en la suite. Tiene su `it` propio abajo, y **afirma lo que el código hace**, no lo que
+  // el AC dice.
   it.each([
-    ["`identityMatches: false` explícito", { payoutAllowed: false, identityMatches: false }],
-    ["la clave `identityMatches` AUSENTE", { payoutAllowed: false, identityMatches: undefined }],
+    ["`payoutAllowed: false` (con `identityMatches: false`)", { payoutAllowed: false, identityMatches: false }],
+    ["`payoutAllowed: false` (con `identityMatches` AUSENTE)", { payoutAllowed: false, identityMatches: undefined }],
     ["`payoutAllowed: false` con `approved: true` e `identityMatches: true`", { payoutAllowed: false }],
   ])("T-DEC-1: con %s ⇒ NO se escribe fila", async (_c, over) => {
     const body: Record<string, unknown> = { ...AGENT_APPROVED, ...over };
@@ -321,6 +331,36 @@ describe("GET /api/kyc/decision — la fila se escribe SÓLO con `payoutAllowed 
         "de un pago, y el invariante que sostiene todo lo demás es que existir signifique real",
     ).not.toHaveBeenCalled();
     expect(alerta).not.toHaveBeenCalled();
+  });
+
+  // ── T-DEC-1b (WKH-233 fix-pack · H-6) — EL CASO QUE SEPARA EL AC DEL CÓDIGO ───────────────────
+  //
+  // 🔴 QUÉ MIDE. `payoutAllowed: true` con `identityMatches: false`. El work-item dice que este caso
+  // NO debe escribir fila (AC-7: *"sólo si `identityMatches === true`"*); el código SÍ la escribe,
+  // porque el gate es `payoutAllowed` y nada más (DT-5', aprobado por el founder en MI-1). Este `it`
+  // fija **lo que el código hace**. Si mañana alguien "arregla" el código para cumplir el AC como
+  // está escrito, esto se pone rojo y obliga a decidir a propósito en vez de por deriva.
+  //
+  // ⛔ Y ACÁ VA EL LÍMITE, EXPLÍCITO, PORQUE ESTO ES ACOTAMIENTO Y NO CIERRE:
+  //   · ESTE repo verifica que la fila se escribe si y sólo si el agente dijo `payoutAllowed === true`.
+  //   · La premisa de que `payoutAllowed === true` YA EXIGE una identidad coincidente la sostiene el
+  //     AGENTE, en otro repo (`sdd.md:704`), que es Scope OUT. **Chaski no puede verificarlo, y este
+  //     test no lo verifica.** Si esa premisa dejara de valer del otro lado, acá no se pondría rojo
+  //     nada: se escribiría una fila que habilita un pago sin identidad comprobada.
+  // ⛔ PROHIBIDO reescribir este bloque como si la garantía estuviera cerrada.
+  it("T-DEC-1b: `payoutAllowed: true` + `identityMatches: false` ⇒ SÍ escribe (el gate es DT-5')", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(AHORA));
+    agenteResponde({ ...AGENT_APPROVED, identityMatches: false });
+    const store = fakeStore();
+    getStoreMock.mockReturnValue(store);
+    await GET(req({ "x-kyc-token": issueSessionToken(SESSION) }));
+    expect(
+      store.put,
+      "el código dejó de escribir con `identityMatches: false`. Puede ser correcto —es lo que AC-7 " +
+        "pide— pero contradice DT-5', que el founder aprobó en MI-1: decidilo a propósito y " +
+        "actualizá el work-item, no dejes que las dos versiones convivan",
+    ).toHaveBeenCalledTimes(1);
   });
 
   it("✅ calibración inversa: con `payoutAllowed: true`, `store.put` recibe EXACTAMENTE 1 llamada", async () => {

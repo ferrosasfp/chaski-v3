@@ -180,6 +180,20 @@ export async function resolvePayoutAuthority(
     // 🔴 EL GATE, Y NADA MÁS (DT-5'). ⛔ PROHIBIDO agregarle un `|| esDemo()`, un `?? true`, o una
     // recomposición con `approved && identityMatches`. La comparación es `=== true` ESTRICTA, nunca
     // truthiness: un `payoutAllowed: "true"` (el STRING) es truthy y abriría el gate.
+    //
+    // ⛔ Y ACÁ VA EL LÍMITE DE ESTE GATE, ESCRITO COMO ACOTAMIENTO Y NO COMO CIERRE (WKH-233 fix-pack
+    // · H-5). El work-item de la HU dice, en AC-5 y AC-7, que se autoriza *"únicamente si la respuesta
+    // trae `identityMatches === true`"*. **Este código no mira `identityMatches` en ninguna línea**, y
+    // eso es correcto: lo sustituyó DT-5' (`sdd.md:307-333`), que el founder aprobó en MI-1. Lo que
+    // nadie hizo fue reescribir los ACs, así que el expediente describe un control que el sistema no
+    // tiene. ⇒ **Manda el código y DT-5'; los ACs están viejos.**
+    //
+    // 🔴 LA PREMISA QUE HACE SANA ESA DECISIÓN NO SE VERIFICA ACÁ, NI PUEDE: que `payoutAllowed === true`
+    // ya exija una identidad coincidente lo sostiene el AGENTE, en otro repo, que es Scope OUT. Este
+    // repo verifica que el gate es exactamente ese booleano y nada más (T-AUTH-1). **NO verifica qué
+    // hay detrás de él.** Si el agente aflojara ese criterio, acá no se pondría rojo nada y este
+    // `return` autorizaría un desembolso sin identidad comprobada. ⛔ PROHIBIDO reescribir este
+    // párrafo como si la garantía estuviera cerrada de este lado.
     if (r.output.payoutAllowed !== true) {
       return { authorized: false, reason: "kyc_not_approved", httpStatus: 200 };
     }

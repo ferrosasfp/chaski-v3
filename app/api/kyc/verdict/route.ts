@@ -254,7 +254,7 @@ export async function POST(req: Request): Promise<Response> {
   //
   // ⚠️ LA RAMA `!tokenStore` ES INALCANZABLE HOY, Y SE ESCRIBE IGUAL: V5 ya devolvió 501 si no hay
   // cliente de Supabase, y las DOS fábricas salen del MISMO `getSupabaseServerClient()`
-  // (`../../../../src/infrastructure/persistence/supabase-kyc-session-tokens.ts:145`). O sea que hoy
+  // (`../../../../src/infrastructure/persistence/supabase-kyc-session-tokens.ts:340`). O sea que hoy
   // no se puede llegar acá con `store` presente y `tokenStore` ausente. Es un acoplamiento entre dos
   // fábricas que nada vigila, así que el `if` fail-closed se queda: el día que una de las dos cambie
   // de condición, esto corta en vez de contestar `usable` sin haber podido mirar la credencial.

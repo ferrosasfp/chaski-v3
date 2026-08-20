@@ -1,85 +1,59 @@
 // T-TOK-1/T-TOK-2 — el token at-rest y su filtro de dueño (WKH-233/W2.5, CD-19). Cero red, cero DB.
+// T-HF3 — y la sesión que el proveedor devuelve REPETIDA (hotfix 2026-08-20 · F-3).
 //
-// 🔴 EL DOBLE FILTRA DE VERDAD. No es un `vi.fn().mockResolvedValue(fila)`: es un mini-store con dos
-// dueños que APLICA los `.eq()` que la cadena le pide, igual que lo haría Postgres. Con un doble que
+// 🔴 EL DOBLE FILTRA DE VERDAD. No es un `vi.fn().mockResolvedValue(fila)`: aplica los `.eq()`/`.is()`
+// que la cadena le pide y el índice único de la tabla, igual que lo haría Postgres. Con un doble que
 // aprueba desde arriba, borrar el `.eq("owner_address", …)` del repositorio dejaría estos tests en
 // verde: el mutante sobreviviría y el IDOR entraría a producción con la suite aplaudiendo. Exemplar:
 // `supabase-kyc-verdicts.test.ts`.
-import type { SupabaseClient } from "@supabase/supabase-js";
+//
+// ⚠️ EL DOBLE YA NO VIVE ACÁ: se mudó a `src/test-support/kyc-session-tokens-db.ts` cuando F-3 sumó
+// una segunda suite que lo necesita (la route corriendo contra el store REAL). Dos copias del mismo
+// doble es cómo se desincronizan dos verdes. Su cabecera dice qué aplica y qué NO (no es Postgres:
+// sin transacciones, sin concurrencia, sin triggers).
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   SupabaseKycSessionTokenStore,
   getKycSessionTokenStore,
 } from "./supabase-kyc-session-tokens";
 import { __resetSupabaseClient } from "./supabase-server";
+import {
+  type KycSessionTokenRow,
+  makeKycSessionTokensDb,
+} from "../../test-support/kyc-session-tokens-db";
 
 // Pubkeys base58 REALES y fijas: reproducibles corrida a corrida, y `canonicalizeAddress` las acepta.
 const OWNER_A = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 const OWNER_B = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
-interface Row {
-  session_id: string;
-  decision_token: string;
-  owner_address: string | null;
+type Row = KycSessionTokenRow;
+
+/**
+ * El store REAL sobre el doble COMPARTIDO (`src/test-support/kyc-session-tokens-db.ts`) — el mismo
+ * que usa `app/api/kyc/session/route.test.ts` en T-HF3-R. Su cabecera dice qué aplica (el índice
+ * único y el `WHERE`) y qué no (no es Postgres: sin transacciones, sin concurrencia, sin triggers).
+ */
+function makeStore(seed: Row[], opts: Parameters<typeof makeKycSessionTokensDb>[1] = {}) {
+  const db = makeKycSessionTokensDb(seed, opts);
+  return { store: new SupabaseKycSessionTokenStore(db.client), ...db };
 }
 
-function makeStore(seed: Row[], opts: { failOn?: "select" | "insert"; errorCode?: string } = {}) {
-  const rows = [...seed];
-  const eqCalls: Array<[string, unknown]> = [];
-  const inserted: Array<Record<string, unknown>> = [];
-  const client = {
-    from: vi.fn(() => {
-      let verb: "select" | "insert" | null = null;
-      const filters: Array<{ col: string; val: unknown }> = [];
-      let payload: Record<string, unknown> = {};
-      const matched = () =>
-        rows.filter((r) =>
-          filters.every((f) => (r as unknown as Record<string, unknown>)[f.col] === f.val),
-        );
-      const settle = (): { data: unknown; error: unknown } => {
-        if (opts.failOn === verb) {
-          return { data: null, error: { code: opts.errorCode ?? "42P01", message: "boom-secreto" } };
-        }
-        if (verb === "select") {
-          const hit = matched()[0];
-          return { data: hit ? { ...hit } : null, error: null };
-        }
-        if (rows.some((r) => r.session_id === payload.session_id)) {
-          return { data: null, error: { code: "23505", message: "duplicate key" } };
-        }
-        inserted.push(payload);
-        rows.push(payload as unknown as Row);
-        return { data: null, error: null };
-      };
-      const builder: Record<string, unknown> = {};
-      builder.maybeSingle = vi.fn(() => builder);
-      // hotfix 2026-08-20 · F-2: lo usa el pre-vuelo `probeReachable`.
-      builder.limit = vi.fn(() => builder);
-      builder.eq = vi.fn((col: string, val: unknown) => {
-        eqCalls.push([col, val]);
-        filters.push({ col, val });
-        return builder;
-      });
-      // biome-ignore lint/suspicious/noThenProperty: thenable intencional, replica supabase-js.
-      builder.then = (resolve: (v: unknown) => void) => resolve(settle());
-      builder.select = vi.fn(() => {
-        verb ??= "select";
-        return builder;
-      });
-      builder.insert = vi.fn((p: Record<string, unknown>) => {
-        verb ??= "insert";
-        payload = p;
-        return builder;
-      });
-      return builder;
-    }),
-  };
-  return {
-    store: new SupabaseKycSessionTokenStore(client as unknown as SupabaseClient),
-    rows,
-    eqCalls,
-    inserted,
-  };
+/**
+ * El desenlace de un `put`, como STRING, sin assertion de por medio.
+ *
+ * 🔴 EXISTE POR EL ORDEN DE LOS `expect`, y el orden es la mitad del valor del test. Con
+ * `await expect(...).rejects.toThrow(...)` primero, un mutante que REESCRIBE la fila y además
+ * resuelve muere con «promise resolved "undefined" instead of rejecting» — cierto, pero no dice lo
+ * único que importa: que la sesión de otra persona quedó reatada. Capturando el desenlace acá, los
+ * `expect` que leen LA FILA corren PRIMERO y el mensaje del mutante es el del daño.
+ */
+async function desenlaceDe(p: Promise<void>): Promise<string> {
+  try {
+    await p;
+    return "RESOLVIÓ SIN ERROR";
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
 }
 
 afterEach(() => {
@@ -236,11 +210,200 @@ describe("`probeReachable` — el pre-vuelo que corre ANTES de gastar cuota (hot
   it("⚠️ NO ejercita el INSERT, y por eso el `put` puede fallar igual después (declarado, no tapado)", async () => {
     // El doble falla SÓLO en el insert: el pre-vuelo pasa y el `put` tira. Es exactamente la clase de
     // fallo que este pre-vuelo NO cubre y que sigue ocurriendo DESPUÉS de gastar la cuota.
-    const { store } = makeStore([], { failOn: "insert", errorCode: "23505" });
+    //
+    // ⚠️ ACÁ DECÍA `23505`, Y EL HOTFIX F-3 LO VOLVIÓ FALSO — se cambia la sonda, no el punto. Desde
+    // F-3, un `session_id` duplicado YA NO es un fallo de escritura: es "esa sesión ya existe", y
+    // `put` la ATA o la RECHAZA por dueño (`kyc_session_owner_conflict`). Este `it` mide otra cosa
+    // —que un `select` no prueba que el `insert` vaya a andar—, así que la sonda pasa a `42501`
+    // (`insufficient_privilege`: un GRANT que da SELECT y niega INSERT), que es la MISMA clase de
+    // fallo, sigue siendo invisible para el pre-vuelo, y sigue ocurriendo después de la cuota.
+    const { store } = makeStore([], { failOn: "insert", errorCode: "42501" });
     await expect(store.probeReachable()).resolves.toBeUndefined();
     await expect(
       store.put({ sessionId: "ses-9", decisionToken: "k1.t", ownerAddress: null }),
-    ).rejects.toThrow(/kyc_session_token_write_failed:23505/);
+    ).rejects.toThrow(/kyc_session_token_write_failed:42501/);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//  T-HF3 — LA SESIÓN QUE EL PROVEEDOR DEVUELVE REPETIDA (hotfix 2026-08-20 · F-3)
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// EL INCIDENTE, con su hora: 21:22:14 UTC entró una sesión SIN ATAR; 21:43:40 UTC el proveedor
+// devolvió LA MISMA sesión, ahora con prueba de posesión, y el `insert` pelado murió con `23505`
+// (`kyc_session_token_write_failed { atada: true, dbCode: '23505' }`). Medido contra bdwv: 5 filas,
+// los 5 `session_id` distintos ⇒ la fila que falló nunca entró y la persona no pudo verificarse.
+//
+// 🔴 LO QUE ESTOS `it` MIDEN NO ES "QUE NO FALLE": es que el arreglo NO sea un `upsert` ingenuo.
+// Un `upsert(..., { onConflict: "session_id" })` pasaría el primer `it` de acá abajo y convertiría
+// esta tabla —que guarda la credencial que gatea el desembolso— en algo que una segunda llamada
+// puede reatar a otra persona. Por eso cada caso permitido viene con su caso PROHIBIDO al lado, y
+// el prohibido se verifica LEYENDO LA FILA DESPUÉS, no mirando si la promesa se rechazó.
+describe("T-HF3 · `put` sobre una sesión que YA existe — atar sí, secuestrar no", () => {
+  const TOKEN_1 = "k1.token-de-la-primera-llamada";
+  const TOKEN_2 = "k1.token-de-la-sesion-repetida";
+
+  it("T-HF3-1 · NULL → dirección: ATA la fila que la primera llamada dejó sin atar", async () => {
+    const { store, rows, inserted } = makeStore([]);
+    // 21:22:14 — sin prueba de posesión.
+    await store.put({ sessionId: "ses-1", decisionToken: TOKEN_1, ownerAddress: null });
+    // 21:43:40 — el proveedor devuelve LA MISMA sesión, ahora con PoP. Esto es lo que daba 23505.
+    // 🧬 MUTANTE: volver `put` al `insert` pelado de antes ⇒ ROJO acá con `..._write_failed:23505`,
+    // que es LITERALMENTE el error de producción.
+    await expect(
+      store.put({ sessionId: "ses-1", decisionToken: TOKEN_2, ownerAddress: OWNER_A }),
+    ).resolves.toBeUndefined();
+    expect(rows).toHaveLength(1); // no duplicó la sesión
+    expect(inserted).toHaveLength(1); // el segundo `put` NO insertó: actualizó
+    expect(rows[0]?.owner_address).toBe(OWNER_A);
+    // Y desde el producto, no sólo desde el doble:
+    expect(await store.getForOwner("ses-1", OWNER_A)).toBe(TOKEN_2);
+  });
+
+  it("T-HF3-2 · dirección A → dirección B: FALLA CERRADO, y la fila NO se reescribe", async () => {
+    const { store, rows } = makeStore([
+      { session_id: "ses-1", decision_token: TOKEN_1, owner_address: OWNER_A },
+    ]);
+    // 🧬 MUTANTE (el que importa): cambiar el `.is("owner_address", null)` del intento que ATA por un
+    // `upsert`/un update sin guard de dueño ⇒ este `it` se pone ROJO con el mensaje:
+    //   «la sesión de otra persona quedó reatada: su `owner_address` cambió de A a B. Con esa fila,
+    //    B autoriza el desembolso de A»
+    const desenlace = await desenlaceDe(
+      store.put({ sessionId: "ses-1", decisionToken: TOKEN_2, ownerAddress: OWNER_B }),
+    );
+
+    // 🔴 LA MITAD QUE VALE, Y VA PRIMERO: se LEE LA FILA DESPUÉS DEL INTENTO. Un `rejects.toThrow`
+    // solo no distingue "rechazó sin escribir" de "escribió y después tiró".
+    expect(
+      rows[0]?.owner_address,
+      "la sesión de otra persona quedó REATADA: su `owner_address` pasó de A a B. Con esa fila, B " +
+        "autoriza el desembolso de A",
+    ).toBe(OWNER_A);
+    expect(
+      rows[0]?.decision_token,
+      "la credencial de A quedó pisada por la de la segunda llamada",
+    ).toBe(TOKEN_1);
+    expect(
+      desenlace,
+      "no falló cerrado: `put` aceptó una segunda llamada sobre la sesión de OTRA dirección",
+    ).toBe("kyc_session_owner_conflict");
+    // Y el guard del money-path sigue diciendo lo mismo que antes del intento:
+    expect(await store.getForOwner("ses-1", OWNER_B)).toBeNull();
+    expect(await store.getForOwner("ses-1", OWNER_A)).toBe(TOKEN_1);
+  });
+
+  it("T-HF3-3 · dirección A → la MISMA dirección A: idempotente, no es un error", async () => {
+    const { store, rows } = makeStore([
+      { session_id: "ses-1", decision_token: TOKEN_1, owner_address: OWNER_A },
+    ]);
+    // 🧬 MUTANTE: hacer que el conflicto se dispare por "la fila ya tiene dueño" sin comparar CUÁL
+    // ⇒ ROJO acá. Fail-closed no puede significar "nadie puede reintentar nunca": el proveedor
+    // devuelve la misma sesión también cuando es la misma persona.
+    await expect(
+      store.put({ sessionId: "ses-1", decisionToken: TOKEN_2, ownerAddress: OWNER_A }),
+    ).resolves.toBeUndefined();
+    expect(rows[0]?.owner_address).toBe(OWNER_A);
+  });
+
+  it("T-HF3-4 · el `decision_token` SE ACTUALIZA (la sesión repetida trae uno nuevo)", async () => {
+    // Las TRES transiciones permitidas tienen que refrescar la credencial: si el agente emitió otra,
+    // la vieja puede no servir para leer el veredicto, y sin veredicto no hay desembolso.
+    // 🧬 MUTANTE: sacar `decision_token` del `patch` (dejar sólo `updated_at`) ⇒ ROJO en las tres.
+    const casos: Array<[string, string | null, string | null]> = [
+      ["atando una sesión sin atar", null, OWNER_A],
+      ["repitiendo el MISMO dueño", OWNER_A, OWNER_A],
+      ["repitiendo una sesión SIN ATAR", null, null],
+    ];
+    for (const [caso, duenoPrevio, duenoNuevo] of casos) {
+      const { store, rows } = makeStore([
+        { session_id: "ses-1", decision_token: TOKEN_1, owner_address: duenoPrevio },
+      ]);
+      await store.put({ sessionId: "ses-1", decisionToken: TOKEN_2, ownerAddress: duenoNuevo });
+      expect(rows[0]?.decision_token, `no se refrescó el token ${caso}`).toBe(TOKEN_2);
+      expect(rows[0]?.owner_address, `cambió el dueño ${caso}`).toBe(duenoNuevo ?? duenoPrevio);
+      // `updated_at` se escribe a mano porque su `default now()` sólo corre en el INSERT.
+      expect(typeof rows[0]?.updated_at, `no se movió updated_at ${caso}`).toBe("string");
+    }
+  });
+
+  it("T-HF3-5 · SIN dirección probada sobre una fila YA ATADA: falla cerrado, no la desata", async () => {
+    const { store, rows } = makeStore([
+      { session_id: "ses-1", decision_token: TOKEN_1, owner_address: OWNER_A },
+    ]);
+    // Quien no prueba posesión de la billetera no puede tocar la sesión de quien sí la probó — ni
+    // para borrarle el dueño, ni para refrescarle la credencial en silencio.
+    // 🧬 MUTANTE: que el intento sin dueño filtre sólo por `session_id` ⇒ ROJO con «se desató» o con
+    // «se le refrescó la credencial a una sesión ajena sin probar posesión».
+    const desenlace = await desenlaceDe(
+      store.put({ sessionId: "ses-1", decisionToken: TOKEN_2, ownerAddress: null }),
+    );
+    expect(rows[0]?.owner_address, "se DESATÓ una sesión que estaba atada").toBe(OWNER_A);
+    expect(
+      rows[0]?.decision_token,
+      "se le refrescó la credencial a una sesión ajena sin probar posesión de la billetera",
+    ).toBe(TOKEN_1);
+    expect(desenlace, "no falló cerrado sobre una fila ya atada").toBe("kyc_session_owner_conflict");
+  });
+
+  it("T-HF3-6 · el intento del MISMO dueño ni siquiera manda `owner_address` en el payload", async () => {
+    const { store, updates } = makeStore([
+      { session_id: "ses-1", decision_token: TOKEN_1, owner_address: OWNER_A },
+    ]);
+    await store.put({ sessionId: "ses-1", decisionToken: TOKEN_2, ownerAddress: OWNER_A });
+    // Son DOS updates: (1) intentar ATAR — 0 filas, la fila ya tiene dueño; (2) el mismo dueño.
+    expect(updates).toHaveLength(2);
+    expect(updates[0]?.afectadas).toBe(0);
+    expect(updates[0]?.filtros).toEqual([
+      { col: "session_id", val: "ses-1", op: "eq" },
+      { col: "owner_address", val: null, op: "is" },
+    ]);
+    expect(updates[1]?.afectadas).toBe(1);
+    expect(updates[1]?.filtros).toEqual([
+      { col: "session_id", val: "ses-1", op: "eq" },
+      { col: "owner_address", val: OWNER_A, op: "eq" },
+    ]);
+    // 🧬 MUTANTE: agregar `owner_address` al payload de este segundo intento ⇒ ROJO. Hoy ese camino
+    // es ESTRUCTURALMENTE incapaz de cambiar de dueño, no sólo improbable: no manda la columna.
+    expect(
+      Object.keys(updates[1]?.patch ?? {}).sort(),
+      "el intento del dueño repetido pasó a poder escribir `owner_address`",
+    ).toEqual(["decision_token", "updated_at"]);
+  });
+
+  it("T-HF3-7 · un fallo del driver en el UPDATE sale como `write_failed:<SQLSTATE>`, sin el message", async () => {
+    const { store } = makeStore(
+      [{ session_id: "ses-1", decision_token: TOKEN_1, owner_address: null }],
+      { failOn: "update", errorCode: "42501" },
+    );
+    // Un problema de infra en el camino nuevo NO puede disfrazarse de conflicto de dueño: se
+    // arreglan distinto (uno es un GRANT, el otro es quién pide la sesión de quién).
+    await expect(
+      store.put({ sessionId: "ses-1", decisionToken: TOKEN_2, ownerAddress: OWNER_A }),
+    ).rejects.toThrow(/kyc_session_token_write_failed:42501/);
+    await expect(
+      store.put({ sessionId: "ses-1", decisionToken: TOKEN_2, ownerAddress: OWNER_A }),
+    ).rejects.not.toThrow(/boom-secreto/);
+  });
+
+  it("T-HF3-8 · un `insert` que falla por OTRA cosa que 23505 no intenta ningún UPDATE", async () => {
+    const { store, updates } = makeStore([], { failOn: "insert", errorCode: "42P01" });
+    // 42P01 = falta la tabla. ⛔ No es "la fila ya existe": no hay nada que atar, y reintentar por
+    // otro camino sólo enmascararía la misconfig.
+    await expect(
+      store.put({ sessionId: "ses-1", decisionToken: TOKEN_1, ownerAddress: OWNER_A }),
+    ).rejects.toThrow(/kyc_session_token_write_failed:42P01/);
+    expect(updates).toHaveLength(0);
+  });
+
+  it("T-HF3-9 · ✅ calibración: el camino de siempre —sesión NUEVA— sigue siendo UN insert y CERO updates", async () => {
+    const { store, inserted, updates } = makeStore([]);
+    // Sin esto, todo lo de arriba daría verde también si `put` hubiera dejado de insertar y
+    // resolviera siempre por update: el caso normal (una sesión que no existía) es el 99%.
+    await store.put({ sessionId: "ses-nueva", decisionToken: TOKEN_1, ownerAddress: OWNER_A });
+    expect(inserted).toEqual([
+      { session_id: "ses-nueva", decision_token: TOKEN_1, owner_address: OWNER_A },
+    ]);
+    expect(updates).toHaveLength(0);
   });
 });
 

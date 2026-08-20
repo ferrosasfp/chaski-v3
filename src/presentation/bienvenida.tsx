@@ -150,7 +150,7 @@ import { Aviso, Button, Card, Muted } from "./ui"; import { Grecas } from "./gre
  *
  * ⛔ CADA RENGLÓN ES UN HECHO SOBRE EL RECORRIDO, Y SE VERIFICA CORRIÉNDOLO. El candado no busca estas
  * frases en la pantalla: camina el flujo real y comprueba que el tramo que cada una anuncia existe
- * (`PASOS_ESPERADOS`, `bienvenida-composicion.test.tsx:254`). Por eso están escritas en términos de lo
+ * (`PASOS_ESPERADOS`, `bienvenida-composicion.test.tsx:289`). Por eso están escritas en términos de lo
  * que la app HACE y no de lo que se siente:
  *   · el 1 nombra los dos datos que el paso `send` pide (el monto y el CCI);
  *   · el 2 nombra la verificación de identidad y la firma, que son `verify` y `confirm`. ⚠️ HU-068 le

@@ -150,7 +150,7 @@
 // pantalla de entrada no la vigilaba ningún test.
 import { describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach } from "vitest";
 import React from "react";
 import { Receipt, RemittanceFlow } from "./flow";
@@ -251,6 +251,41 @@ type Sondeo = { seguir: () => Promise<void> };
  */
 const TECHO_ESPERA = { timeout: 8_000 } as const;
 
+/**
+ * 🔴 LA CAUSA REAL DEL FLAKE, Y NO ERA LENTITUD (WKH-233 fix-pack · H-13, 2ª iteración).
+ *
+ * ⚠️ ACÁ PRIMERO ESCRIBÍ "es contención de CPU, con un techo de 8 s alcanza". **Lo corrí y NO
+ * alcanzó**: con el techo puesto, el `it` esperó los 8,4 s COMPLETOS y falló igual, y el volcado del
+ * DOM mostró la pantalla parada en `connect` ("Paso 1 de 4", el botón *Conectar wallet* presente y
+ * sin ningún cartel de error). Esperar más no sirve cuando la pantalla no está tardando: está quieta.
+ *
+ * EL MECANISMO, leído del código y no inferido del síntoma:
+ *   · `flow.tsx:300-314` — `guard()` hace `setBusy(true)` → `await fn()` → `setBusy(false)`.
+ *   · `flow.tsx:964` — `<Button disabled={busy} onClick={onConnect}>`.
+ *   · `fireEvent.click` sobre un botón DESHABILITADO **no hace nada, y no avisa** — MEDIDO con una
+ *     sonda de dos casos: `disabled` ⇒ el `onClick` recibe 0 llamadas; el MISMO click sin
+ *     `disabled` ⇒ 1. No es una creencia sobre la librería.
+ * ⇒ Entre que el paso anterior cambia de pantalla y que su `guard` libera `busy`, el botón nuevo ya
+ * está en el DOM pero todavía deshabilitado. `findByRole` lo encuentra —existe—, el click se dispara,
+ * se descarta en silencio, y el flujo queda parado PARA SIEMPRE. Es una carrera, no un timeout: por
+ * eso fallaba ~2 de 4 y por eso aislado pasaba 22/22.
+ *
+ * ⛔ POR ESO NO SE ARREGLA CON UN TECHO MÁS GRANDE, y el techo de arriba se queda igual pero por otra
+ * razón (las esperas de PRESENCIA sí pueden tardar bajo carga). Lo que arregla la carrera es esperar
+ * a que el botón esté HABILITADO antes de tocarlo, que es lo que hace este helper.
+ *
+ * ⚠️ Se re-consulta el botón DENTRO del `waitFor` y otra vez para el click: React lo re-crea en cada
+ * render, así que guardar la referencia de la primera consulta sería clickear un nodo viejo.
+ */
+const clickCuandoHabilite = async (nombre: RegExp): Promise<void> => {
+  await waitFor(() => {
+    const b = screen.getByRole("button", { name: nombre });
+    expect(b, `el botón «${nombre}» sigue deshabilitado: el click se descartaría en silencio`)
+      .not.toBeDisabled();
+  }, TECHO_ESPERA);
+  fireEvent.click(screen.getByRole("button", { name: nombre }));
+};
+
 const PASOS_ESPERADOS: readonly { frase: string; sonda: (s: Sondeo) => Promise<void> }[] = [
   {
     frase: "Ponés el monto y el CCI de tu familiar.",
@@ -336,10 +371,10 @@ describe("T-063-10 (2º pase): la pantalla dice QUÉ VA A PASAR, y lo que dice s
     // ⚠️ LA NAVEGACIÓN ES DE ESTE `it` Y LOS ASSERTS SON DE CADA SONDA (fix-pack, CR/MNR-7): antes los
     // asserts de los renglones 2 y 3 estaban acá inline y sus sondas eran cuerpos vacíos.
     const tocar = (nombre: RegExp) => async () => {
-      fireEvent.click(await screen.findByRole("button", { name: nombre }, TECHO_ESPERA));
+      await clickCuandoHabilite(nombre);
     };
     pintarBienvenida();
-    fireEvent.click(screen.getByRole("button", { name: /Empezar un envío/ }));
+    await clickCuandoHabilite(/Empezar un envío/);
 
     // Renglón 1 · el monto y el CCI.
     await (PASOS_ESPERADOS[0] as { sonda: (s: Sondeo) => Promise<void> }).sonda({
@@ -353,8 +388,8 @@ describe("T-063-10 (2º pase): la pantalla dice QUÉ VA A PASAR, y lo que dice s
     fireEvent.change(screen.getByPlaceholderText("002 193 004455667788 99"), {
       target: { value: TEST_CCI },
     });
-    fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }, TECHO_ESPERA));
+    await clickCuandoHabilite(/Continuar/);
+    await clickCuandoHabilite(/Conectar wallet/);
     // 🔴 EL ÚNICO `findBy*` DEL REPO CON TECHO EXPLÍCITO, Y ES POR UN FLAKE MEDIDO (WKH-233 fix-pack ·
     // H-13). Esta línea reventaba en **2 de 4 corridas** de la suite completa, y NO por una aserción:
     // por el timeout de `findBy*`, que por defecto es **1000 ms** — y ese default NO se dedujo del
@@ -380,7 +415,7 @@ describe("T-063-10 (2º pase): la pantalla dice QUÉ VA A PASAR, y lo que dice s
     // `vitest.config.*` que este repo NO tiene a propósito (`readme-test-count.test.ts` se apoya en que
     // el descubrimiento sea el default). Es una HU aparte, no un renglón de este fix-pack.
     await screen.findByText(/Revisá el envío/, undefined, TECHO_ESPERA);
-    fireEvent.click(await screen.findByRole("button", { name: /Continuar/ }, TECHO_ESPERA));
+    await clickCuandoHabilite(/Continuar/);
 
     // Renglón 2 · la identidad primero y la firma después, en ese orden y con ese nombre.
     await (PASOS_ESPERADOS[1] as { sonda: (s: Sondeo) => Promise<void> }).sonda({
@@ -652,7 +687,7 @@ describe("T-063-24 (AR/BLQ-BAJO-2): la promesa del explorador se ejecuta en las 
 // ══ HU-068 · LOS CANDADOS DE LA BANDA DE MARCA ════════════════════════════════════════════════════
 //
 // ⛔ VAN AL FINAL DEL ARCHIVO, Y NO ES ORDEN ESTÉTICO: `bienvenida.tsx:153` cita
-// (`PASOS_ESPERADOS`, `bienvenida-composicion.test.tsx:254`), así que un `describe` insertado más
+// (`PASOS_ESPERADOS`, `bienvenida-composicion.test.tsx:289`), así que un `describe` insertado más
 // arriba correría ese número y rompería una cita SALIENTE — el lado que HU-066 se olvidó de mirar.
 // ⛔ Y POR LO MISMO NO HAY NINGÚN `import` NUEVO EN LA CABECERA: lo que estos tests necesitan de
 // `node:fs`, de `lucide-react`, de `./marca` y del splash entra con `await import(...)` adentro del

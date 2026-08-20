@@ -41,7 +41,7 @@ import {
 } from "../application/use-cases/recover-escrow-funds";
 import { PREPARE_NO_AGENT_FOR_CAPABILITY, isPrepareRejection } from "../application/agent-rejections";
 const KYC_PROVENANCE_LIVE = "didit"; // WKH-233: el literal se escribe ACÁ, en un test, porque el módulo que lo exportaba se borró con la HU (el juicio "esto es real" ya no lo hace Chaski). EN UNA SOLA LÍNEA: este archivo recibe citas `archivo:línea` y agregar líneas las corre.
-import { ConnectWallet } from "../application/use-cases/connect-wallet"; import { clickCuandoHabilite } from "../test-support/clicks"; import { urlDeVueltaDeKyc, VALOR_VUELTA_KYC } from "./splash-puerta"; import { COPY_RESUME_SIN_RESPUESTA_TITULO, COPY_RESUME_SIN_RESPUESTA_CUERPO, COPY_RESUME_INTERRUMPIDO_TITULO, COPY_RESUME_INTERRUMPIDO_CUERPO, COPY_RESUME_NO_PODEMOS_SEGUIR, LABEL_VOLVER_A_EMPEZAR_EL_ENVIO } from "./flow-vm"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
+import { ConnectWallet } from "../application/use-cases/connect-wallet"; import { clickCuandoHabilite } from "../test-support/clicks"; import { urlDeVueltaDeKyc, VALOR_VUELTA_KYC } from "./splash-puerta"; import { COPY_RESUME_SIN_RESPUESTA_TITULO, COPY_RESUME_SIN_RESPUESTA_CUERPO, COPY_RESUME_INTERRUMPIDO_TITULO, COPY_RESUME_INTERRUMPIDO_CUERPO, COPY_RESUME_NO_PODEMOS_SEGUIR, COPY_VERIFY_PIDE_UNA_NUEVA, LABEL_VOLVER_A_EMPEZAR_EL_ENVIO } from "./flow-vm"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
 import { solanaWalletBridge } from "../infrastructure/solana-wallet-bridge"; import { SolanaWalletAdapter } from "../infrastructure/solana-wallet"; import { guardarEleccion } from "../infrastructure/solana/deeplink/conexion"; import { almacenDeNavegador, guardarViaje } from "../infrastructure/solana/deeplink/sesion"; // WKH-358 agregó los tres últimos EN ESTA LÍNEA y ANTES de este comentario: `history-grupos.test.tsx:532` y `jerarquia-relativa.test.tsx:83` citan por número líneas de este archivo, así que tres líneas nuevas acá arriba las rotan a las dos. WKH-354/R-2: la costura del BANNER (el bridge global); la del guard es el `connectedWallet` inyectado
 import {
   FAKE_SOLANA_BENEFICIARY,
@@ -3955,5 +3955,57 @@ describe("HU 073 · T-073-5 (AC-5): la app no cuenta CÓMO entró la persona", (
     const sin = await textoCon(SIN_MARCA, async () => ({ kind: "none" as const }), 0);
     expect(con, "el barrido no ve la bienvenida").toContain("Empezar un envío");
     expect(con, "sin marca en la URL, la app inventa que la persona no volvió del verificador").toBe(sin);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// HU 073 · T-073-4 (AC-4) — el aviso está ANTES del toque que gasta, y el toque OCURRE
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 TRES PASOS Y ⛔ NINGÚN `if`, y el motivo está medido. La forma condicional («SI el contador pasa a
+// 1, el censo debe contener el aviso») es un candado VACUO: con el aviso borrado y el recorrido cortado
+// un paso antes de `onVerify`, el assert no corre y el test pasa en verde. Y llegar a que el contador
+// sea 1 en jsdom no es trivial —hay que pasar por `connect` con la billetera doble, que `remembered`
+// esté vacío y que `serverVerdict` no sea usable—, así que cualquiera de las tres mal armada deja el
+// contador en 0 **y el candado mudo**.
+//
+// El paso (2) es la PRECONDICIÓN, y va INCONDICIONAL: si el recorrido no llega a gastar, este `it` se
+// pone rojo POR ESO, con su propio mensaje. Medir la precondición antes de afirmar la consecuencia.
+describe("HU 073 · T-073-4 (AC-4): el aviso del cupo, en la misma pantalla y antes del toque", () => {
+  afterEach(() => cleanup());
+
+  it("🔴 el texto que estaba en pantalla ANTES de tocar ya avisaba, y el toque SÍ gastó", async () => {
+    const base = buildTestContainer();
+    const startSpy = vi.fn((i: Parameters<typeof base.startKyc.execute>[0]) => base.startKyc.execute(i));
+    const container = { ...base, startKyc: { execute: startSpy } as unknown as typeof base.startKyc };
+
+    render(<RemittanceFlow pasoInicial="send" container={container} />);
+    fillSend();
+    fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+    await clickCuandoHabilite(/Conectar wallet/);
+    await screen.findByText(/Revisá el envío/);
+    fireEvent.click(await screen.findByRole("button", { name: /Continuar/ }));
+    await screen.findByRole("button", { name: /Verificar mi identidad/ });
+
+    // (1) El texto de la pantalla ANTES de tocar nada. Se captura acá y se asserta al final: lo que
+    // AC-4 pide es que el aviso ya estuviera puesto, no que aparezca después.
+    const textoAntesDelToque = document.body.textContent ?? "";
+
+    // (2) LA PRECONDICIÓN, INCONDICIONAL. 🧬 MUTANTE: cortar el recorrido un paso antes de `onVerify`
+    // ⇒ rojo ACÁ. Con la versión condicional anterior, ese mutante sobrevivía en verde.
+    await clickCuandoHabilite(/Verificar mi identidad/);
+    expect(
+      startSpy,
+      "el recorrido no llegó a gastar una verificación: sin esto, el assert de abajo mediría una " +
+        "pantalla que nunca cobró nada y el candado quedaría mudo",
+    ).toHaveBeenCalledTimes(1);
+
+    // (3) LA CONSECUENCIA, INCONDICIONAL y contra el símbolo importado.
+    // 🧬 MUTANTE: borrar el aviso de `flow.tsx:1054` ⇒ rojo ACÁ.
+    expect(
+      textoAntesDelToque,
+      "la pantalla cobró una verificación sin decirlo antes: el aviso no estaba en el árbol al momento " +
+        "en que la persona decidió tocar",
+    ).toContain(COPY_VERIFY_PIDE_UNA_NUEVA);
   });
 });

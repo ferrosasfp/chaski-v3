@@ -964,14 +964,14 @@ describe("HU 073 · ninguna de las cinco pantallas del resume usa el léxico ved
       // y sobre una consulta que efectivamente no se pudo hacer— y no la escribió esta HU. Se declara
       // por su texto EXACTO, así que cualquier OTRO «no pudimos» que aparezca en `confirm` sigue
       // poniendo esto rojo. FUENTE, CORREGIDA (CR/MNR-2): la frase declarada sale de UNA sola línea, (`informativo`, `flow.tsx:2847`).
-      // ⛔ ACÁ TAMBIÉN DECÍA «y `:2992`», Y ESA ES OTRA FRASE: (`atiende`, `flow.tsx:2992`) dice «No pudimos consultar el catálogo PARA ESTE PASO. No
+      // ⛔ ACÁ TAMBIÉN SE NOMBRABA UNA SEGUNDA LÍNEA, Y ESA ES OTRA FRASE: (`atiende`, `flow.tsx:2992`) dice «No pudimos consultar el catálogo PARA ESTE PASO. No
       //    sabemos quién lo atiende…», y vive en la rama MUTUAMENTE EXCLUYENTE — (`failed`, `flow.tsx:2842`) hace `return` antes, así que o se pinta
       //    una o se pinta la otra, nunca las dos. ⇒ en `confirm` hay un SEGUNDO «no pudimos» que este `ajeno` NO declara, y la cita vieja lo escondía
       //    haciéndolo pasar por la misma frase.
-      // ⚠️ Y DE QUÉ DEPENDE HOY EL VERDE DE D-5, declarado porque el CR lo pidió: se pinta la rama de `:2847` porque el `fetch("/api/a2a/plan")` de
+      // ⚠️ Y DE QUÉ DEPENDE HOY EL VERDE DE D-5, declarado porque el CR lo pidió: se pinta la rama de la frase declarada porque el `fetch("/api/a2a/plan")` de
       //    jsdom FALLA. ⛔ No es una dependencia silenciosa: si algún día contestara, el assert de VIGENCIA del `ajeno` (el `for` de abajo, «la
       //    excepción declarada … ya no está») se pone ROJO, porque la frase declarada dejaría de estar en la pantalla. Y el arreglo en ese caso es
-      //    declarar TAMBIÉN la de `:2992` con su texto exacto, ⛔ nunca borrar la excepción ni aflojar el léxico.
+      //    declarar TAMBIÉN la SEGUNDA frase con su texto exacto, ⛔ nunca borrar la excepción ni aflojar el léxico.
       ajeno: [
         "No pudimos consultar el catálogo ahora. Tu envío sigue igual: esto es informativo.",
       ],

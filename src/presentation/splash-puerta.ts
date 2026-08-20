@@ -107,3 +107,33 @@ export function motivoParaNoMostrar(p: { href: string; leer: LeerDelDisco }): Mo
   if (viaje !== null) return "viaje-de-billetera-en-el-disco";
   return null;
 }
+
+/**
+ * HU 073 / AC-5 — ¿esta persona llegó por la vuelta del verificador?
+ *
+ * 🔴 TRES VALORES, NO DOS, y por eso el nombre dice «volvió POR la vuelta» y no «volvió». `true` es
+ * *«la URL trae la marca que NOSOTROS escribimos»* (`urlDeVueltaDeKyc`, `:54`). `false` es
+ * *«la URL no la trae»*, que ⛔ **NO es «la persona no volvió del verificador»**: el parámetro se puede
+ * perder en un redirect intermedio, en un cliente de correo que reescribe enlaces, o simplemente porque
+ * la persona abrió la app de nuevo a mano. La lección está escrita al lado, en el docblock de
+ * (`MotivoParaNoMostrar`, `:68`): «no pude preguntar» ≠ «no».
+ *
+ * ⛔ POR ESO SU AUSENCIA NO HABILITA NINGUNA FRASE (CD-5). En la Ola A este predicado **no tiene
+ * consumidor de copy**: existe para que la pantalla trate igual los dos casos y para que eso sea
+ * medible. Una frase del tipo «parece que no completaste la verificación» derivada de este `false`
+ * sería exactamente la clase de afirmación sin medición que esta HU vino a eliminar.
+ *
+ * ⛔ El literal `"kyc"`/`"return"` NO se vuelve a escribir: se reusan las dos constantes de arriba, que
+ * son las mismas que usa el único productor de esa URL.
+ */
+export function volvioPorLaVueltaDeKyc(href: string): boolean {
+  let params: URLSearchParams;
+  try {
+    params = new URL(href).searchParams;
+  } catch {
+    // Un href que no parsea no trae la marca, y tampoco permite afirmar que la persona no volvió. Acá
+    // el `false` significa «no hay marca», nunca «no volvió»: ver el docblock de arriba.
+    return false;
+  }
+  return params.get(PARAM_KYC) === VALOR_VUELTA_KYC;
+}

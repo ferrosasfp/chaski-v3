@@ -41,7 +41,7 @@ import {
 } from "../application/use-cases/recover-escrow-funds";
 import { PREPARE_NO_AGENT_FOR_CAPABILITY, isPrepareRejection } from "../application/agent-rejections";
 const KYC_PROVENANCE_LIVE = "didit"; // WKH-233: el literal se escribe ACÁ, en un test, porque el módulo que lo exportaba se borró con la HU (el juicio "esto es real" ya no lo hace Chaski). EN UNA SOLA LÍNEA: este archivo recibe citas `archivo:línea` y agregar líneas las corre.
-import { ConnectWallet } from "../application/use-cases/connect-wallet"; import { clickCuandoHabilite } from "../test-support/clicks"; import { COPY_RESUME_SIN_RESPUESTA_TITULO, COPY_RESUME_SIN_RESPUESTA_CUERPO, COPY_RESUME_INTERRUMPIDO_TITULO, COPY_RESUME_INTERRUMPIDO_CUERPO, COPY_RESUME_NO_PODEMOS_SEGUIR, LABEL_VOLVER_A_EMPEZAR_EL_ENVIO } from "./flow-vm"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
+import { ConnectWallet } from "../application/use-cases/connect-wallet"; import { clickCuandoHabilite } from "../test-support/clicks"; import { urlDeVueltaDeKyc, VALOR_VUELTA_KYC } from "./splash-puerta"; import { COPY_RESUME_SIN_RESPUESTA_TITULO, COPY_RESUME_SIN_RESPUESTA_CUERPO, COPY_RESUME_INTERRUMPIDO_TITULO, COPY_RESUME_INTERRUMPIDO_CUERPO, COPY_RESUME_NO_PODEMOS_SEGUIR, LABEL_VOLVER_A_EMPEZAR_EL_ENVIO } from "./flow-vm"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
 import { solanaWalletBridge } from "../infrastructure/solana-wallet-bridge"; import { SolanaWalletAdapter } from "../infrastructure/solana-wallet"; import { guardarEleccion } from "../infrastructure/solana/deeplink/conexion"; import { almacenDeNavegador, guardarViaje } from "../infrastructure/solana/deeplink/sesion"; // WKH-358 agregó los tres últimos EN ESTA LÍNEA y ANTES de este comentario: `history-grupos.test.tsx:532` y `jerarquia-relativa.test.tsx:83` citan por número líneas de este archivo, así que tres líneas nuevas acá arriba las rotan a las dos. WKH-354/R-2: la costura del BANNER (el bridge global); la del guard es el `connectedWallet` inyectado
 import {
   FAKE_SOLANA_BENEFICIARY,
@@ -3883,5 +3883,77 @@ describe("HU 073 · la pantalla del resume no atribuye una causa que no midió",
       "el fallo al limpiar el pendiente dejó a la persona sin card y sin overlay",
     ).toBeInTheDocument();
     expect(censoDeBotones()).toEqual([LABEL_VOLVER_A_EMPEZAR_EL_ENVIO, "Volver al inicio"]);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// HU 073 · T-073-5 (AC-5) — con `?kyc=return` y sin él, la pantalla dice LO MISMO
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 LA EXIGENCIA ES SIMÉTRICA, y por eso este `it` es más fuerte que el que se iba a escribir. La Ola A
+// ⛔ NO agrega ninguna frase por la presencia del parámetro (eso habría sido una octava frase sin copy
+// revisado), y ⛔ tampoco la agrega por su AUSENCIA: «parece que no completaste la verificación» sería
+// una afirmación derivada de un `false` que sólo significa «no hay marca» (CD-5, tres valores).
+// ⇒ Lo que se mide es que los dos montajes rinden el MISMO texto. Cualquier frase que aparezca de un
+// lado y no del otro pone esto rojo, en las dos direcciones.
+//
+// ⛔ El parámetro no se escribe a mano: sale de `urlDeVueltaDeKyc`, el ÚNICO productor de esa URL
+// (barrido: `flow.tsx:446` es su único llamador).
+describe("HU 073 · T-073-5 (AC-5): la app no cuenta CÓMO entró la persona", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    window.history.replaceState({}, "", "/");
+  });
+
+  const textoCon = async (
+    url: string,
+    execute: () => Promise<{ kind: "none" | "processing" }>,
+    ms: number,
+  ): Promise<string> => {
+    window.history.replaceState({}, "", url);
+    render(
+      <RemittanceFlow
+        container={buildTestContainer({
+          useCases: { resumeKyc: { execute } as unknown as ResumeKyc },
+        })}
+      />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+    const t = document.body.textContent ?? "";
+    cleanup();
+    return t;
+  };
+
+  const CON_MARCA = urlDeVueltaDeKyc("https://chaski.test").replace("https://chaski.test", "");
+  const SIN_MARCA = "/";
+
+  it("la card del techo del resume lee IGUAL con la marca y sin ella", async () => {
+    // Precondición del propio test: la URL con marca es DISTINTA de la limpia. Sin esto, el `toBe` de
+    // abajo pasaría comparando dos montajes idénticos.
+    expect(CON_MARCA, "las dos URLs son la misma: este `it` no está midiendo nada").not.toBe(SIN_MARCA);
+    expect(CON_MARCA).toContain(VALOR_VUELTA_KYC);
+
+    const con = await textoCon(CON_MARCA, async () => ({ kind: "processing" as const }), 20_000);
+    const sin = await textoCon(SIN_MARCA, async () => ({ kind: "processing" as const }), 20_000);
+    // Control positivo: se está comparando la card, no dos pantallas en blanco.
+    expect(con, "el barrido no ve la card: la comparación de abajo sería entre dos vacíos").toContain(
+      COPY_RESUME_SIN_RESPUESTA_CUERPO,
+    );
+    expect(
+      con,
+      "la pantalla dice algo distinto según CÓMO entró la persona, y eso es una afirmación que la app " +
+        "no puede sostener: la marca se pierde en cualquier redirect intermedio",
+    ).toBe(sin);
+  });
+
+  it("la bienvenida (sin pendiente que retomar) también lee IGUAL", async () => {
+    const con = await textoCon(CON_MARCA, async () => ({ kind: "none" as const }), 0);
+    const sin = await textoCon(SIN_MARCA, async () => ({ kind: "none" as const }), 0);
+    expect(con, "el barrido no ve la bienvenida").toContain("Empezar un envío");
+    expect(con, "sin marca en la URL, la app inventa que la persona no volvió del verificador").toBe(sin);
   });
 });

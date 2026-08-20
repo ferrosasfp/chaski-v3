@@ -76,7 +76,7 @@ import {
   TEST_CCI,
   beneficiary,
 } from "../test-support/fakes";
-import { InMemoryPopProofStore } from "../infrastructure/auth/pop-proof-store";
+import { InMemoryPopProofStore } from "../infrastructure/auth/pop-proof-store"; import { clickCuandoHabilite } from "../test-support/clicks"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
 
 // CD-8 / DT-7 — el mismo doble que `flow.test.tsx`: jsdom no implementa requestAnimationFrame, así que
 // sin esto el `exit` de AnimatePresence no completa y los pasos del flujo NUNCA montan. Es una lista
@@ -84,15 +84,15 @@ import { InMemoryPopProofStore } from "../infrastructure/auth/pop-proof-store";
 vi.mock("framer-motion", () => ({
   AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
   MotionConfig: ({ children }: { children: React.ReactNode }) => children,
-  motion: new Proxy(
-    {},
-    {
-      get:
-        (_t, tag: string) =>
-        ({ children, ...props }: { children?: React.ReactNode } & Record<string, unknown>) =>
-          React.createElement(tag, props, children),
+  // 🔴 CACHEA POR TAG, y el caché ES el target del Proxy (WKH-233 it4 · F4/§4.3): un `get` que fabrica en cada acceso da un TIPO de componente distinto por render y React REMONTA el subárbol entero.
+  motion: new Proxy({} as Record<string, unknown>, {
+    get: (t: Record<string, unknown>, tag: string) => {
+      if (!(tag in t))
+        t[tag] = ({ children, ...props }: { children?: React.ReactNode } & Record<string, unknown>) =>
+          React.createElement(tag, props, children);
+      return t[tag];
     },
-  ),
+  }),
 }));
 
 afterEach(cleanup);
@@ -456,10 +456,10 @@ function llenarSend(): void {
 async function irAConfirm(): Promise<void> {
   llenarSend();
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+  await clickCuandoHabilite(/Conectar wallet/);
   await screen.findByText(/Revisá el envío/);
   fireEvent.click(await screen.findByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Verificar mi identidad/ }));
+  await clickCuandoHabilite(/Verificar mi identidad/);
   await screen.findByRole("button", { name: /Confirmar y enviar/ });
 }
 

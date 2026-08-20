@@ -33,7 +33,7 @@ import { resolveSolanaNetworkId } from "../../../../src/infrastructure/chain";
 import { canonicalizeAddress } from "../../../../src/infrastructure/address";
 import type { KycAgentSessionOutput } from "../../../../src/infrastructure/kyc/agent-contract";
 import type { AgentKycCall } from "../../../../src/infrastructure/kyc/agent-kyc-client";
-import { createAgentKycSession } from "../../../../src/infrastructure/kyc/agent-kyc-client";
+import { createAgentKycSession, KycAgentConfigError, UPSTREAM_INVOKE_SECRET_UNSET } from "../../../../src/infrastructure/kyc/agent-kyc-client";
 import { resolveKycAgentBaseUrl } from "../../../../src/infrastructure/kyc/agent-env";
 import { getKycSessionTokenStore } from "../../../../src/infrastructure/persistence/supabase-kyc-session-tokens";
 import { issueSessionToken } from "../../../../src/infrastructure/kyc-auth";
@@ -124,9 +124,14 @@ export async function POST(req: Request): Promise<Response> {
   //   · DESPUÉS del rate-limit. Este bloque hace HMAC + ed25519, o sea CPU. Ponerlo antes del limiter
   //     abriría una ventana de CPU-DoS. Es el mismo orden que ya resolvieron
   //     `app/api/a2a/payout/challenge/route.ts` y `app/api/solana/escrow/remittance-ids/route.ts`.
-  //   · DESPUÉS del 501 de `DIDIT_API_KEY`. Sin key la ruta ya salió arriba con 501 y
-  //     `DiditKycGateway.start` cae a la simulación ⇒ EL DEMO QUEDA BYTE-IDÉNTICO (AC-12). Si este
-  //     bloque estuviera antes, el demo empezaría a exigir una firma de billetera que hoy no pide.
+  //   · DESPUÉS DEL 501 DE ARRIBA. ⚠️ ACÁ DECÍA *"después del 501 de `DIDIT_API_KEY` … y
+  //     `DiditKycGateway.start` cae a la simulación"*, Y NI LA ENV NI LA CLASE EXISTEN: `DIDIT_API_KEY`
+  //     no aparece en ninguna línea de código del repo (sólo en comentarios) y `DiditKycGateway` la
+  //     borró esta misma HU. El 501 REAL de esta ruta es el de
+  //     (`resolveKycAgentBaseUrl`, `:73`) (el guard de la env `KYC_AGENT_BASE_URL`, en `:72-76`), y quien cae al
+  //     fallback es `AgentKycGateway.start`, que es lo que hace que sin esa env el demo quede
+  //     BYTE-IDÉNTICO (AC-12). Si este bloque estuviera antes, el demo empezaría a exigir una firma
+  //     de billetera que hoy no pide.
   //
   // 🔴 LA PRUEBA ATA, PERO NO ES REQUISITO PARA VERIFICARSE (AR/BLQ-ALTO-2, CD-15/AC-13). Acá el PoP
   // era OBLIGATORIO: sin prueba, 403. Medido, eso rompía CD-15 textualmente — `ConnectWallet` vuelve
@@ -247,14 +252,28 @@ export async function POST(req: Request): Promise<Response> {
   // `console.warn` que lo hace diagnosticable. Medido con tres sondas del AR, no deducido.
   //
   // `upstream: 0` = "no hubo status upstream". Es el MISMO valor que ya usa `decision/route.ts` para
-  // su rama sin fila, así que no entra ningún código nuevo al conjunto observable.
+  // su rama sin fila.
+  //
+  // 🔴 SALVO UNA CAUSA, Y SEPARARLA ES EL PUNTO (re-AR it2 · BLQ-MED-2). Sin
+  // `KYC_AGENT_INVOKE_SECRET` el fallo NO es "el agente no contestó": es que NOSOTROS no podemos
+  // acreditarnos, y no salió ningún viaje. Colapsarla en el `0` del transporte es el mismo daño que
+  // costó los ocho días —un diagnóstico que no distingue causas que se arreglan distinto—, sólo que
+  // ahora del lado del fail-closed. ⇒ va con su propio `upstream` y el cliente ya emitió
+  // `session_config_missing` con el NOMBRE de la env.
+  // ⚠️ Y ESTO **SÍ** CAMBIA EL CONJUNTO OBSERVABLE, dicho en voz alta: en un entorno sin la env, el
+  // body pasa de `{error:"kyc_session_failed", upstream:401}` (el 401 del agente, camino fail-open)
+  // a `{..., upstream:-1}`. El STATUS sigue siendo 502 en los dos.
   let r: AgentKycCall<KycAgentSessionOutput>;
   try {
     r = await createAgentKycSession({ identityRef: provedAddress });
-  } catch {
-    // ⛔ Value-free: el `err` NO se toca. Su `message` puede traer la clave que faltó y, por el
-    // camino del transporte, la URL del agente. El cliente ya emitió su propio log de rama.
-    r = { ok: false, upstream: 0 };
+  } catch (err) {
+    // ⛔ Value-free: del `err` NO se lee ni el `message` ni nada más que su TIPO. El `message` puede
+    // traer la clave que faltó y, por el camino del transporte, la URL del agente. El cliente ya
+    // emitió su propio log de rama.
+    r = {
+      ok: false,
+      upstream: err instanceof KycAgentConfigError ? UPSTREAM_INVOKE_SECRET_UNSET : 0,
+    };
   }
 
   if (!r.ok) {

@@ -23,7 +23,7 @@ import bs58 from "bs58";
 import { LostEscrowRecovery, RemittanceFlow } from "./flow";
 import { buildTestContainer } from "../test-support/test-container";
 import { MAX_RECOVERY_CANDIDATES } from "../infrastructure/solana-wallet";
-import type { SolanaEscrowRefundGateway, SolanaEscrowRefundResult } from "../application/ports";
+import type { SolanaEscrowRefundGateway, SolanaEscrowRefundResult } from "../application/ports"; import { clickCuandoHabilite } from "../test-support/clicks"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
 import {
   FAKE_SOLANA_BENEFICIARY,
   FAKE_SOLANA_SIGNATURE,
@@ -263,7 +263,7 @@ describe("recuperar un envío perdido: la puerta en el recorrido", () => {
     await irAlDestinoRecuperar();
 
     fireEvent.click(await screen.findByRole("button", { name: /Recuperar un envío perdido/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Buscar mis escrows/ }));
+    await clickCuandoHabilite(/Buscar mis escrows/);
 
     await waitFor(() => expect(gateway.calls).toHaveLength(1));
     expect(gateway.calls[0]?.sender).toBe(FAKE_SOLANA_BENEFICIARY);

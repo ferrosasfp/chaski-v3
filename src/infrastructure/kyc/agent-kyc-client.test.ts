@@ -52,10 +52,18 @@ function headersDe(init: RequestInit): Record<string, string> {
   return Object.fromEntries(Object.entries(h).map(([k, v]) => [k.toLowerCase(), String(v)]));
 }
 
+// ⚠️ EL DEFAULT DE `KYC_AGENT_INVOKE_SECRET` CAMBIÓ EN EL FIX-PACK DE WKH-233 (H-3): era `undefined`,
+// y desde que la credencial es OBLIGATORIA ese default haría tirar a TODOS los `it` del archivo antes
+// de llegar a lo que miden (el body, el query, las cabeceras, los logs). Ahora el default es el camino
+// feliz —la credencial presente— y los `it` que miden su AUSENCIA la sacan a propósito con su propio
+// `vi.stubEnv(..., undefined)`. Es el mismo criterio que `KYC_AGENT_BASE_URL`, que también se siembra
+// acá y sólo se saca en el `describe` que mide su guard.
+const SECRETO_POR_DEFECTO = "invoke-secret-de-test";
+
 beforeEach(() => {
   llamadas = [];
   vi.stubEnv("KYC_AGENT_BASE_URL", BASE);
-  vi.stubEnv("KYC_AGENT_INVOKE_SECRET", undefined);
+  vi.stubEnv("KYC_AGENT_INVOKE_SECRET", SECRETO_POR_DEFECTO);
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -229,15 +237,56 @@ describe("T-CLI-3 · CD-15 — ningún log lleva un VALOR", () => {
   });
 });
 
-describe("T-CLI-4 · la cabecera de invoke se manda SÓLO si el secreto está", () => {
-  it("sin `KYC_AGENT_INVOKE_SECRET`, la cabecera NO EXISTE (byte-idéntico a hoy)", async () => {
+// ⛔ ACÁ VIVÍA `T-CLI-4 · la cabecera de invoke se manda SÓLO si el secreto está`, Y SE RETIRÓ EN EL
+// FIX-PACK DE WKH-233 (H-3). Su primer `it` afirmaba —verde, y verde desde siempre— que sin
+// `KYC_AGENT_INVOKE_SECRET` *"la cabecera NO EXISTE (byte-idéntico a hoy)"*. O sea que la suite no es
+// que no cazó el bug: **lo declaró el comportamiento correcto**. El agente encendió su guard el
+// 2026-08-11, empezó a contestar 401 `credential_missing`, y este test siguió en verde ocho días
+// mientras el 100 % de los usuarios veía "No pudimos verificar tu identidad".
+//
+// Lo reemplaza su INVERSO. El resto del bloque (el `it` del secreto presente, el de sólo-espacios y
+// el de que el secreto no se loguea) se conserva: seguían siendo ciertos y siguen midiendo algo.
+describe("T-CLI-4' · la credencial de invoke es OBLIGATORIA (fail-closed, WKH-233/H-3)", () => {
+  it("sin `KYC_AGENT_INVOKE_SECRET`, las dos funciones TIRAN y NO se gasta ningún viaje", async () => {
+    vi.stubEnv("KYC_AGENT_INVOKE_SECRET", undefined);
     responder(200, SESION_OK);
-    await createAgentKycSession({});
+    await expect(createAgentKycSession({})).rejects.toThrow(/kyc_agent_invoke_secret_unset/);
     responder(200, DECISION_OK);
-    await readAgentKycDecision({ sessionId: "s", decisionToken: "t" });
-    // 🧬 MUTANTE: mandarla siempre, con `""` de valor ⇒ la clave existe ⇒ ROJO. Y el mutante importa:
-    // `Bearer ` pelado es `credential_malformed` para el agente el día que encienda su guard.
-    for (const l of llamadas) expect(headersDe(l.init).authorization).toBeUndefined();
+    await expect(readAgentKycDecision({ sessionId: "s", decisionToken: "t" })).rejects.toThrow(
+      /kyc_agent_invoke_secret_unset/,
+    );
+    // 🧬 MUTANTE: volver al `return secret ? {...} : {}` ⇒ las dos resuelven ⇒ ROJO en los `rejects`.
+    // Y lo que importa no es el throw: es que NO se le preguntó al agente por la identidad de una
+    // persona sin poder acreditar quién pregunta. Mismo criterio que el guard del host, abajo.
+    expect(llamadas, "se gastó un viaje al agente sin credencial").toHaveLength(0);
+  });
+
+  it("un secreto de sólo espacios TAMBIÉN tira: `Bearer ` pelado es peor que no salir", async () => {
+    vi.stubEnv("KYC_AGENT_INVOKE_SECRET", "   ");
+    responder(200, SESION_OK);
+    await expect(createAgentKycSession({})).rejects.toThrow(/kyc_agent_invoke_secret_unset/);
+    expect(llamadas).toHaveLength(0);
+  });
+
+  // 🔴 DÓNDE TIRA, MEDIDO. Si tirara en module-load, `next build` voltearía rutas que no le hablan al
+  // agente y el orden de encendido (sembrar la env ANTES del deploy) dejaría de funcionar. Este `it`
+  // importa el módulo con la env AUSENTE: si el import resuelve, la evaluación es perezosa.
+  it("🔴 el módulo se puede IMPORTAR con la env ausente: tira en la llamada, no en el import", async () => {
+    vi.stubEnv("KYC_AGENT_INVOKE_SECRET", undefined);
+    const mod = await import("./agent-kyc-client");
+    expect(typeof mod.createAgentKycSession).toBe("function");
+    expect(typeof mod.readAgentKycDecision).toBe("function");
+  });
+
+  // 🧪 CONTROL POSITIVO: el error es el de la CREDENCIAL y no el del host. Sin esto, los `it` de
+  // arriba pasarían igual si el throw viniera de `resolveKycAgentBaseUrl` por un `beforeEach` mal
+  // armado, y estaríamos midiendo el guard viejo creyendo que medimos el nuevo.
+  it("CONTROL: con el host presente y el secreto ausente, el error es el de la CREDENCIAL", async () => {
+    vi.stubEnv("KYC_AGENT_BASE_URL", BASE);
+    vi.stubEnv("KYC_AGENT_INVOKE_SECRET", undefined);
+    responder(200, SESION_OK);
+    await expect(createAgentKycSession({})).rejects.toThrow(/kyc_agent_invoke_secret_unset/);
+    await expect(createAgentKycSession({})).rejects.not.toThrow(/kyc_agent_base_url_unset/);
   });
 
   it("✅ con el secreto seteado, va `Authorization: Bearer <valor>` en LAS DOS funciones", async () => {
@@ -250,12 +299,10 @@ describe("T-CLI-4 · la cabecera de invoke se manda SÓLO si el secreto está", 
     for (const l of llamadas) expect(headersDe(l.init).authorization).toBe("Bearer s3cr3t0");
   });
 
-  it("un secreto de sólo espacios cuenta como ausente (no se manda un `Bearer` vacío)", async () => {
-    vi.stubEnv("KYC_AGENT_INVOKE_SECRET", "   ");
-    responder(200, SESION_OK);
-    await createAgentKycSession({});
-    expect(headersDe((llamadas[0] as Llamada).init).authorization).toBeUndefined();
-  });
+  // ⛔ ACÁ VIVÍA el `it` que afirmaba que un secreto de sólo espacios *"cuenta como ausente (no se
+  // manda un `Bearer` vacío)"* y seguía adelante con la llamada. Es la misma bendición del fail-open
+  // aplicada al valor en blanco, y lo reemplaza el `it` de sólo-espacios de arriba, que exige el
+  // throw. El `.trim()` que lo detecta no cambió; lo que cambió es qué se hace con el resultado.
 
   it("el secreto NUNCA aparece en un log, ni en el camino de fallo", async () => {
     vi.stubEnv("KYC_AGENT_INVOKE_SECRET", "s3cr3t0");
@@ -292,5 +339,94 @@ describe("el host se resuelve fail-closed también desde el cliente", () => {
     );
     // Lo que importa no es el throw: es que NO se gastó un viaje al agente.
     expect(llamadas).toHaveLength(0);
+  });
+});
+
+// ── T-CLI-4'' (fix-pack it2 · re-AR/BLQ-MED-2) — DÓNDE tira, y CON QUÉ ETIQUETA ────────────────────
+//
+// 🔴 QUÉ DEFECTO CIERRA. La 1ª iteración puso el fail-closed con `invokeAuthHeader()` DENTRO del `try`
+// del `fetch`, así que su throw salía por el `catch` del transporte y el ÚNICO rastro que quedaba era
+// `session_transport_failed` — la misma etiqueta que un DNS caído, un timeout o un connection reset.
+// El fail-open costó ocho días **porque el diagnóstico no distinguía causas**; un fail-closed que
+// colapsa una misconfig nuestra en "transporte" reintroduce ese daño con otro nombre.
+//
+// ⛔ ESTE `describe` VA AL FINAL DEL ARCHIVO: appendear no rota ninguna línea de las de arriba.
+describe("T-CLI-4'' · la credencial se resuelve ANTES del `fetch`, y su log dice CONFIG", () => {
+  /** Captura `console.warn` como texto plano, argumentos incluidos. */
+  function espiarWarn(): () => string {
+    const out: string[] = [];
+    vi.spyOn(console, "warn").mockImplementation((...a: unknown[]) =>
+      out.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" ")),
+    );
+    return () => out.join("\n");
+  }
+
+  it("sin la credencial: CERO llamadas al `fetch` y el log dice `config`, no `transport`", async () => {
+    vi.stubEnv("KYC_AGENT_INVOKE_SECRET", undefined);
+    responder(200, SESION_OK);
+    const leer = espiarWarn();
+    await expect(createAgentKycSession({})).rejects.toThrow(/kyc_agent_invoke_secret_unset/);
+    const salida = leer();
+    // 1. No se gastó un viaje. Es el assert que distingue "tira antes" de "tira después".
+    expect(llamadas, "salió un `fetch` sin credencial").toHaveLength(0);
+    // 2. 🧬 MUTANTE: mover `invokeAuthHeader("session")` de vuelta ADENTRO del `try` ⇒ el log pasa a
+    //    `session_transport_failed` ⇒ estas dos aserciones se ponen ROJAS (las dos, no una).
+    expect(salida, "la misconfig se etiquetó como un fallo de transporte").not.toContain(
+      "session_transport_failed",
+    );
+    expect(salida).toContain("session_config_missing");
+    // 3. Y el log NOMBRA la env. Sin esto, el operador lee "algo de configuración" y adivina cuál.
+    expect(salida).toContain("KYC_AGENT_INVOKE_SECRET");
+  });
+
+  it("lo mismo en la otra función: `decision_config_missing`, y ningún viaje", async () => {
+    vi.stubEnv("KYC_AGENT_INVOKE_SECRET", undefined);
+    responder(200, DECISION_OK);
+    const leer = espiarWarn();
+    await expect(readAgentKycDecision({ sessionId: "s", decisionToken: "t" })).rejects.toThrow(
+      /kyc_agent_invoke_secret_unset/,
+    );
+    const salida = leer();
+    expect(llamadas).toHaveLength(0);
+    expect(salida).not.toContain("decision_transport_failed");
+    expect(salida).toContain("decision_config_missing");
+  });
+
+  // 🧪 CONTROL POSITIVO, EN LA MISMA CORRIDA: la etiqueta `*_transport_failed` SIGUE EXISTIENDO y
+  // sigue siendo la que se emite cuando el transporte REALMENTE se cae. Sin este `it`, los dos de
+  // arriba pasarían igual si alguien borrara el `catch` del transporte entero: estarían comprobando
+  // la ausencia de una cadena que ya no produce nadie.
+  it("CONTROL: con la credencial puesta y el transporte caído, el log SÍ dice `transport`", async () => {
+    vi.stubEnv("KYC_AGENT_INVOKE_SECRET", "s3cr3t0");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        const e = new Error("connect ECONNREFUSED");
+        e.name = "TypeError";
+        throw e;
+      }),
+    );
+    const leer = espiarWarn();
+    await expect(createAgentKycSession({})).rejects.toThrow();
+    const salida = leer();
+    expect(salida).toContain("session_transport_failed");
+    expect(salida).not.toContain("session_config_missing");
+  });
+
+  // 🔴 EL TIPO DEL ERROR ES LO QUE LAS ROUTES LEEN, y por eso se mide acá y no sólo en las routes:
+  // sin una clase propia, el `upstream` de la misconfig tendría que salir de parsear el `message`, que
+  // es value-free a propósito. El `instanceof` es el único canal que sobrevive hasta el body.
+  it("el error es una `KycAgentConfigError` que NOMBRA la env (y un fallo de transporte NO lo es)", async () => {
+    const mod = await import("./agent-kyc-client");
+    vi.stubEnv("KYC_AGENT_INVOKE_SECRET", undefined);
+    responder(200, SESION_OK);
+    const err = await createAgentKycSession({}).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(mod.KycAgentConfigError);
+    expect((err as InstanceType<typeof mod.KycAgentConfigError>).env).toBe("KYC_AGENT_INVOKE_SECRET");
+    // 🧪 CONTROL: el sentinela no puede chocar con un status HTTP real ni con el `0` del transporte.
+    expect(mod.UPSTREAM_INVOKE_SECRET_UNSET).toBeLessThan(0);
   });
 });

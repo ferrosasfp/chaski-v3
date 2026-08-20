@@ -24,7 +24,7 @@
 import { NextResponse } from "next/server";
 import type { KycAgentDecisionOutput } from "../../../../src/infrastructure/kyc/agent-contract";
 import type { AgentKycCall } from "../../../../src/infrastructure/kyc/agent-kyc-client";
-import { readAgentKycDecision } from "../../../../src/infrastructure/kyc/agent-kyc-client";
+import { readAgentKycDecision, KycAgentConfigError, UPSTREAM_INVOKE_SECRET_UNSET } from "../../../../src/infrastructure/kyc/agent-kyc-client";
 import { resolveKycAgentBaseUrl } from "../../../../src/infrastructure/kyc/agent-env";
 import { canonicalizeAddress } from "../../../../src/infrastructure/address";
 import { getKycVerdictStore } from "../../../../src/infrastructure/persistence/supabase-kyc-verdicts";
@@ -91,10 +91,19 @@ export async function GET(req: Request): Promise<Response> {
       identityClaim: fila.ownerAddress ?? undefined,
       decisionToken: fila.token,
     });
-  } catch {
-    // ⛔ Value-free: el `err` NO se toca. Su `message` puede traer la URL del agente, que lleva el
-    // `sessionId` y el `identityClaim` en el query. El cliente ya emitió su log de rama.
-    r = { ok: false, upstream: 0 };
+  } catch (err) {
+    // ⛔ Value-free: del `err` NO se lee ni el `message` ni nada más que su TIPO. El `message` puede
+    // traer la URL del agente, que lleva el `sessionId` y el `identityClaim` en el query. El cliente
+    // ya emitió su log de rama.
+    //
+    // 🔴 LA MISCONFIG NO SE COLAPSA EN EL `0` (re-AR it2 · BLQ-MED-2), y acá el argumento del oráculo
+    // NO se debilita: `UPSTREAM_INVOKE_SECRET_UNSET` es un fallo NUESTRO que no depende del
+    // `sessionId` — sale idéntico para una sesión que existe y para una que no, porque ni siquiera
+    // llegamos a preguntar. Lo que sigue siendo indistinguible es lo que P-6 pide que lo sea.
+    r = {
+      ok: false,
+      upstream: err instanceof KycAgentConfigError ? UPSTREAM_INVOKE_SECRET_UNSET : 0,
+    };
   }
   if (!r.ok) {
     return NextResponse.json(

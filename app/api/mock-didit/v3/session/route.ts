@@ -2,17 +2,28 @@
 //
 // ⚠️ QUÉ ES Y QUÉ NO ES. Esto NO verifica la identidad de nadie: acepta lo que le mandan y devuelve
 // una sesión que siempre termina aprobada. Existe para que se pueda recorrer la app de punta a punta
-// sin que una persona real escanee un documento real. Didit **no publica un host de sandbox** (ver
-// `src/infrastructure/didit/didit-env.ts`), así que el único modo de prueba que no consume cuota ni
-// PII es un endpoint nuestro, y este es ese endpoint.
+// sin que una persona real escanee un documento real. Didit **no publica un host de sandbox** (lo
+// declaraba `src/infrastructure/didit/didit-env.ts`, ⛔ BORRADO por WKH-233 con el proveedor entero:
+// `ls src/infrastructure/didit` da error, así que la cita no se puede seguir y se deja nombrada en vez
+// de callada), así que el único modo de prueba que no consume cuota ni PII es un endpoint nuestro, y
+// este es ese endpoint.
 //
-// 🔴 POR QUÉ NO PUEDE HACERSE PASAR POR REAL. La decisión que sale de acá se etiqueta
-// `didit-mock` (`mapDiditDecision` toma el ambiente declarado), y `didit-mock` NO está en
-// `REAL_KYC_PROVENANCES` del agente de desembolso, que es la única rama que abre un payout real.
-// La etiqueta no la elige esta ruta: la elige el ambiente con el que se resolvió el host, así que no
-// hay forma de que el host sea el mock y la etiqueta diga otra cosa.
+// 🔴 POR QUÉ NO PUEDE HACERSE PASAR POR REAL — Y EL MECANISMO CAMBIÓ, ASÍ QUE LA EXPLICACIÓN VIEJA YA
+// NO SE PUEDE SEGUIR (WKH-233 fix-pack · H-10). Decía que la decisión se etiqueta `didit-mock` porque
+// *"`mapDiditDecision` toma el ambiente declarado"* y que `didit-mock` no está en
+// `REAL_KYC_PROVENANCES`. ⛔ NINGUNO DE LOS DOS SÍMBOLOS EXISTE en este repo: los borró WKH-233 con el
+// proveedor, y no quedan ni definidos ni importados en ninguna línea (sólo nombrados en comentarios).
+// LO QUE SOSTIENE HOY la misma propiedad, y vive en otro lado: el gate del desembolso es el
+// `payoutAllowed` del AGENTE, adoptado tal cual (DT-5'), y ese booleano exige que la proveniencia
+// esté en la allow-list de verificaciones REALES **del agente**.
+// ⛔ Y ESO ES SCOPE OUT: la allow-list vive en el otro repo y Chaski no puede verificarla. Lo que este
+// repo sí verifica es que su gate sea exactamente ese booleano y nada más
+// ((`payoutAllowed`, `../../../../../src/infrastructure/payout/authority.ts:210`)). Escrito como
+// acotamiento, no como cierre.
 //
-// SE APAGA SOLO. Sin `DIDIT_ENV=mock` esta ruta responde 404: no queda colgando en un despliegue que
+// SE APAGA SOLO. Sin `MOCK_KYC_SURFACE_ENABLED=true` esta ruta responde 404 ⚠️ (ACÁ DECÍA
+// `DIDIT_ENV=mock`, que es una env MUERTA: nadie la lee, y quien la setee no enciende nada): no queda
+// colgando en un despliegue que
 // habla con el Didit real. Un mock alcanzable en un entorno que se cree productivo es peor que no
 // tenerlo, porque el 404 es lo que hace verificable que está apagado.
 import { NextResponse } from "next/server";

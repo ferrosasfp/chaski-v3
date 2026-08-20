@@ -22,7 +22,7 @@ import {
   PRINCIPAL_SETTLED_REFUND_MANUAL,
   PRINCIPAL_STATE_UNKNOWN,
 } from "../application/use-cases/confirm-and-send";
-import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
+import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds"; import { clickCuandoHabilite } from "../test-support/clicks"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
 import {
   FAKE_SOLANA_BENEFICIARY,
   FakeSolanaEscrowRefundGateway,
@@ -171,7 +171,7 @@ describe("una remesa con fondos en el escrow siempre es alcanzable desde la inte
 
     fireEvent.click(screen.getByRole("button", { name: /Mis envíos/ }));
     fireEvent.click(await screen.findByRole("button", { name: /Ver seguimiento/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Recuperar fondos/ }));
+    await clickCuandoHabilite(/Recuperar fondos/);
 
     expect(await screen.findByText(/Recuperaste tus fondos/)).toBeInTheDocument();
     await waitFor(async () => expect((await repo.get("rem-1"))?.status).toBe("refunded"));
@@ -463,7 +463,7 @@ describe("el botón que borra avisa lo que se lleva", () => {
       target: { value: TEST_CCI },
     });
     fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+    await clickCuandoHabilite(/Conectar wallet/);
     await screen.findByText(/Revisá el envío/);
 
     fireEvent.click(screen.getByText("¿No sos vos?"));

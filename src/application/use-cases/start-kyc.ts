@@ -110,7 +110,46 @@ export class StartKyc {
 
     // KYC-once: reusar la verificación recordada para esta wallet si ya pasó.
     const remembered = await this.kycStore.get(input.address);
-    if (remembered?.approved && remembered.payoutAllowed && !servidorDiceQueNoHayFila) {
+    // 🔴 WKH-233 (fix-pack · H-2b) — EL ATAJO MIRA `realVerified`, Y ANTES MIRABA UNA TAUTOLOGÍA.
+    //
+    // Decía `remembered?.approved && remembered.payoutAllowed`. Los dos campos salen del MISMO
+    // booleano: (`payoutAllowed`, `../../infrastructure/kyc/agent-kyc-gateway.ts:84`) se pobla desde
+    // `d.approved` a propósito (D-3), así que la condición era `approved && approved` — UNA sola
+    // pregunta escrita dos veces, que se lee como si fueran dos.
+    //
+    // El juicio que decide el PAGO es el otro: (`realVerified`,
+    // `../../infrastructure/kyc/agent-kyc-gateway.ts:87`), que adopta el `payoutAllowed` del AGENTE
+    // tal cual, y es exactamente lo que `resolvePayoutAuthority` va a exigir en el momento del
+    // dinero. Saltear la pantalla de verificación por `approved` mandaba a `confirm` a gente que el
+    // money-path iba a rechazar, y desde `confirm` NO HAY VUELTA: ese es el callejón sin salida.
+    //
+    // ⚠️ POR QUÉ ESTO HACE FALTA AUNQUE H-2a ARREGLE EL SERVIDOR. `servidorDiceQueNoHayFila` sólo es
+    // `true` con `outcome === "absent"`. En los CUATRO desenlaces `not_asked` (`pop_declined`,
+    // `pop_disabled`, `store_disabled`, `pop_rejected`) es `false` ⇒ el arreglo del servidor no llega
+    // hasta acá, y el atajo se tomaba igual. Y dos de esos cuatro —`store_disabled` y `pop_disabled`—
+    // NO tienen ninguna otra salida: el remedio que ofrece el comentario de arriba ("reconectar y
+    // aceptar la firma") sirve para `pop_declined` y `pop_rejected`, que son gestos de la persona;
+    // una tabla apagada o un emisor de PoP sin secreto no se arreglan firmando de nuevo.
+    //
+    // ⛔ LO QUE ESTO **NO** GARANTIZA, y no se escribe como si lo hiciera: que `realVerified: true`
+    // implique que el pago va a salir. Es el juicio que el agente dio la ÚLTIMA vez que se le
+    // preguntó, guardado en este navegador; el agente puede haber cambiado de opinión, y la fila de
+    // `kyc_session_tokens` puede no estar. La única pregunta que vale es la del momento del dinero.
+    // Esto ACOTA el callejón, no lo cierra.
+    //
+    // ⚠️ Y LA ESCRITURA DEL CACHÉ SIGUE COMO ESTABA (`:213` acá y `resume-kyc.ts:49`), que también dicen
+    // `approved && payoutAllowed`. NO se cambian, y la razón que queda en pie es que cada gate usa el
+    // campo que le corresponde: guardar es una decisión de PANTALLA (¿esta persona pasó la verificación
+    // que la pantalla muestra?) y saltear es una decisión sobre el PAGO.
+    // ⛔ ACÁ HABÍA UNA SEGUNDA RAZÓN —«cambiar la escritura dejaría sin caché al demo entero»— Y NO
+    // SOSTIENE NADA (re-AR it2 · MNR-1): el demo YA se quedó sin atajo, por el lado de la LECTURA. La
+    // cadena es determinista: sin `KYC_AGENT_BASE_URL`, `/api/kyc/session` da 501 ⇒ `AgentKycGateway`
+    // delega en `FallbackKycGateway`, que devuelve `{approved:true, payoutAllowed:true,
+    // realVerified:false}` ⇒ la escritura de `:213` SÍ guarda la fila, y esta LECTURA nunca la usa. ⇒ en
+    // la configuración de demo la persona vuelve a pasar por `review`+`verify` en CADA reconexión. Es
+    // una consecuencia ACEPTADA de H-2b (la congela `T-AC4c`), no un bug abierto — pero se escribe como
+    // lo que es, y no como un motivo para no tocar la escritura.
+    if (remembered?.approved && remembered.realVerified && !servidorDiceQueNoHayFila) {
       r.applyKyc(remembered, this.clock.nowIso());
       await this.repo.save(r);
       return { kind: "done", snapshot: r.snapshot };
@@ -138,6 +177,17 @@ export class StartKyc {
         // escribe SÓLO con `payoutAllowed === true` del agente, y ese booleano ya exige que la
         // proveniencia esté en la allow-list de verificaciones REALES del agente. Una verificación
         // simulada no produce fila, así que este camino no puede alcanzarse con una.
+        //
+        // ✅ EL ARGUMENTO SE REVISÓ EN EL FIX-PACK DE WKH-233 (H-2b) Y HOY ES MÁS FUERTE, NO MÁS
+        // DÉBIL: desde H-2a, `usable` además exige la fila de `kyc_session_tokens` para el par
+        // (sesión, dueño) —la MISMA credencial que pide el money-path—, así que este camino ya no
+        // puede alcanzarse con un veredicto que el pago vaya a rechazar por falta de credencial.
+        //
+        // ⛔ PERO LA PREMISA DE FONDO SIGUE SIN VERIFICARSE ACÁ, y decirlo es parte del arreglo:
+        // que el `payoutAllowed` del agente implique una verificación REAL y con identidad
+        // coincidente lo sostiene el AGENTE, en otro repo. Este repo verifica que se escribe sólo
+        // con `payoutAllowed === true` (`app/api/kyc/decision/route.ts:150`) y que `usable` exige la
+        // credencial; NO verifica —ni puede— qué hay detrás de ese booleano.
         realVerified: true,
         verifiedAt: sv.verdict.verifiedAt, // el momento que el servidor observó; NO se inventa acá
         riskLevel: sv.verdict.riskLevel,

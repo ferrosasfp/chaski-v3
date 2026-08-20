@@ -24,7 +24,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { Receipt, RemittanceFlow } from "./flow";
 import { buildTestContainer } from "../test-support/test-container";
 import { LocalRepo } from "../infrastructure/persistence";
-import { Money } from "../domain/money";
+import { Money } from "../domain/money"; import { clickCuandoHabilite } from "../test-support/clicks"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
 import {
   CCI_DIGITS,
   type KycVerification,
@@ -48,15 +48,15 @@ vi.mock("framer-motion", () => ({
   // Lista CERRADA: lo que no esté acá no existe para este archivo, y el faltante tira TODA la
   // suite del archivo, no un test. Ver el docblock del mismo doble en `flow.test.tsx`.
   MotionConfig: ({ children }: { children: React.ReactNode }) => children,
-  motion: new Proxy(
-    {},
-    {
-      get:
-        (_t, tag: string) =>
-        ({ children, ...props }: { children?: React.ReactNode } & Record<string, unknown>) =>
-          React.createElement(tag, props, children),
+  // 🔴 CACHEA POR TAG, y el caché ES el target del Proxy (WKH-233 it4 · F4/§4.3): un `get` que fabrica en cada acceso da un TIPO de componente distinto por render y React REMONTA el subárbol entero.
+  motion: new Proxy({} as Record<string, unknown>, {
+    get: (t: Record<string, unknown>, tag: string) => {
+      if (!(tag in t))
+        t[tag] = ({ children, ...props }: { children?: React.ReactNode } & Record<string, unknown>) =>
+          React.createElement(tag, props, children);
+      return t[tag];
     },
-  ),
+  }),
 }));
 
 afterEach(() => cleanup());
@@ -136,7 +136,7 @@ describe("el destino tiene que ser un CCI", () => {
     expect(screen.getByRole("button", CONTINUAR)).toBeEnabled();
 
     fireEvent.click(screen.getByRole("button", CONTINUAR));
-    fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+    await clickCuandoHabilite(/Conectar wallet/);
     await screen.findByText(/Revisá el envío/);
     // La remesa creada por la pantalla: método bancario (NO "yape") y el CCI en dígitos limpios.
     expect(screen.getByText(`cuenta bancaria · ${TEST_CCI}`)).toBeInTheDocument();

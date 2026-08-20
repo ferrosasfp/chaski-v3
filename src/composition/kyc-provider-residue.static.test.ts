@@ -150,7 +150,11 @@ function hitsDe(needle: string): Hit[] {
  * cierre de la HU. Si cambian, alguien tocó uno de estos cuatro archivos y hay que ir a mirar QUÉ.
  */
 const PERMITIDOS_G1: ReadonlyMap<string, number> = new Map([
-  ["app/kyc-simulado/page.tsx", 5],
+  // ⚠️ 5 → 6 (re-AR it2 · MNR-7): el `metadata` constante pasó a ser `generateMetadata()`, que
+  // consulta `mockDiditSurfaceEnabled()` para no anunciar por su nombre una pantalla apagada. El hit
+  // nuevo es esa llamada, o sea el identificador exportado del punto 4 de acá arriba — el que no se
+  // puede renombrar. No entra ninguna cadena nueva con el nombre del proveedor.
+  ["app/kyc-simulado/page.tsx", 6],
   ["app/api/mock-didit/v3/session/route.ts", 3],
   [path.join("app", "api", "mock-didit", "v3", "session", "[sessionId]", "decision", "route.ts"), 3],
   ["src/infrastructure/mock-surface.ts", 1],

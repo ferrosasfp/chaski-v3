@@ -34,6 +34,11 @@ const REAL_CANON = (await vi.importActual<typeof import("../address")>("../addre
   .canonicalizeAddress;
 
 import { resolvePayoutAuthority } from "./authority";
+// WKH-233 (fix-pack · H-1) — el traductor de copy, importado desde un test de infraestructura A
+// PROPÓSITO: lo que este archivo cierra es la CADENA (reason ⇒ enum de la route ⇒ frase en pantalla),
+// y esa cadena no existe en ninguna de las dos capas por separado. `humanError` es una función PURA
+// de un string, sin React ni DOM, así que importarla acá no arrastra entorno de pantalla.
+import { humanError } from "../../presentation/flow-vm";
 
 const VID = "sess-abc";
 const ADDR = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
@@ -80,7 +85,11 @@ afterEach(() => {
 });
 beforeEach(() => {
   vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test");
-  vi.stubEnv("KYC_AGENT_INVOKE_SECRET", undefined);
+  // WKH-233 (fix-pack · H-3): la credencial de invoke es OBLIGATORIA desde que `invokeAuthHeader`
+  // es fail-closed, así que sembrarla es PRE-REQUISITO de cualquier `it` que llegue al agente —
+  // igual que el host de la línea de arriba. Sin esto, 45 `it` de tres archivos morían con
+  // `kyc_agent_invoke_secret_unset` antes de llegar a lo que miden.
+  vi.stubEnv("KYC_AGENT_INVOKE_SECRET", "invoke-secret-de-test");
   vi.stubEnv("VERCEL_ENV", undefined);
   getTokenStoreMock.mockReset();
   storeConLaFilaDe(VID, ADDR);
@@ -371,6 +380,49 @@ describe("T-AUTH-6: si el token fue invalidado, el agente contesta 401 y NO se r
     const d = await resolvePayoutAuthority({ verificationId: VID, address: ADDR });
     expect(d.reason).toBe("kyc_reauth_failed");
     expect(d.httpStatus).toBe(502);
+  });
+
+  // ── WKH-233 (fix-pack · H-1) — Y LO QUE LA PERSONA LEE AL FINAL DE ESA CADENA ─────────────────
+  //
+  // 🔴 POR QUÉ ESTA ASERCIÓN VIVE ACÁ Y NO SÓLO EN `flow-vm.test.ts`. El defecto no estaba en ninguna
+  // de las dos puntas: estaba en que NADA ataba el `reason` que fija el `it` de arriba con el copy que
+  // sale del otro lado. La cadena medida es `kyc_reauth_failed`/502 (acá) ⇒ el `default` del `switch`
+  // de `app/api/payout/prepare/route.ts:347` ⇒ `payout_authority_unavailable` ⇒ el `case` 1:1 de
+  // `../settlement/http-solana-prepare-gateway.ts:59` ⇒ `payout_authority_unavailable` como `failureReason`
+  // persistido. Con las dos puntas verdes por separado, ese enum estuvo cayendo en el catch-all
+  // `code.includes("payout")` y la persona leía "si tus USDC entraron al escrow, los sacás vos firmando"
+  // — sobre un corte que ocurre ANTES del forward al agente y ANTES de `authorizePrincipal`, o sea con
+  // CERO USDC en ningún escrow.
+  //
+  // 🔴 LO QUE ESTE `it` MIDE, EXACTAMENTE: **la FUNCIÓN de copy, no la PANTALLA.** Acá se llama a
+  // `humanError()` y se afirma sobre lo que devuelve. ⚠️ ACÁ DECÍA «⇒ `humanError` EN LA PANTALLA», Y ESA
+  // ERA LA MITAD FALSA (re-AR it2 · BLQ-ALTO-1): el `it` daba verde mientras `TrackView` no llamaba nunca
+  // a `humanError` con este motivo —su `else` estaba hardcodeado a `humanError("payout_failed")`—, así que
+  // el copy nuevo era INALCANZABLE y este archivo lo daba por entregado. El último eslabón, el que la
+  // persona lee, lo mide RENDERIZANDO la vista: `src/presentation/copy-de-prepare-en-pantalla.test.tsx`
+  // (T-PANT-1 para este enum, T-PANT-2 para el conjunto). Si ese archivo desaparece, este `it` vuelve a
+  // ser una punta suelta y hay que decirlo en voz alta.
+  //
+  // ⚠️ LO QUE ESTO **NO** MIDE, declarado: el salto `502 ⇒ payout_authority_unavailable` es lectura a
+  // mano del `switch` de `prepare/route.ts` (fuera del Scope IN de este fix-pack: ese archivo tiene
+  // que quedar con CERO diff). Acá se fija el reason de un lado y el copy del otro; el eslabón del
+  // medio lo cubren `app/api/payout/prepare/route.test.ts:459` y el `case` del gateway.
+  it("y el copy que la persona lee al final de esa cadena NO le habla de USDC en el escrow", () => {
+    const msg = humanError("payout_authority_unavailable");
+    // 🧪 CONTROL POSITIVO EN LA MISMA CORRIDA: el catch-all de `payout` SIGUE EXISTIENDO y sigue
+    // tragándose lo que le corresponde. Sin este par, las dos aserciones de abajo pasarían igual si
+    // alguien borrara el catch-all entero: estarían comparando contra un texto que ya no produce
+    // nadie, o sea un barrido que no puede encontrar nada.
+    const catchAll = humanError("payout_un_codigo_que_nadie_mapeó");
+    expect(catchAll).toContain("entraron al escrow");
+    // Y ahora sí: el enum de ESTA cadena no es ese.
+    expect(
+      msg,
+      "`payout_authority_unavailable` cayó en el catch-all de `payout`: manda a sacar del escrow " +
+        "unos USDC que nunca salieron de la billetera de la persona",
+    ).not.toBe(catchAll);
+    expect(msg).not.toContain("escrow");
+    expect(msg).toContain("No se movió ningún USDC");
   });
 });
 

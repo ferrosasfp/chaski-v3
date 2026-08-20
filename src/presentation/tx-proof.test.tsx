@@ -175,7 +175,7 @@ function comprobanteDe(enlace: HTMLElement): HTMLElement {
 function buscarEscrows(gateway: FakeSolanaEscrowRefundGateway): void {
   render(<LostEscrowRecovery refund={gateway} resolveSender={resolveSender} />);
   fireEvent.click(screen.getByRole("button", { name: /Recuperar un envío perdido/ }));
-  fireEvent.click(screen.getByRole("button", { name: /Buscar mis escrows/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Buscar mis escrows/ })); // ⚠️ CLICK CRUDO DELIBERADO (re-AR it2 · BLQ-BAJO-2): mismo caso que `refund-perdido-registro-mudo.test.tsx` — la puerta de arriba es `setOpen(true)` síncrono (`flow.tsx:2476`), sin `guard` y sin `busy`
 }
 
 /**

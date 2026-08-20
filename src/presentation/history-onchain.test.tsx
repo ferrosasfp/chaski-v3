@@ -26,7 +26,7 @@ import {
 } from "../domain/remittance";
 import { PRINCIPAL_SETTLED_REFUND_MANUAL } from "../application/use-cases/confirm-and-send";
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds";
-import type { EscrowChainState } from "../application/ports";
+import type { EscrowChainState } from "../application/ports"; import { clickCuandoHabilite } from "../test-support/clicks"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
 import {
   FAKE_SOLANA_BENEFICIARY,
   FakeSolanaEscrowChainStateReader, FakeSolanaEscrowRefundGateway, // WKH-352/CR MNR-2: acá decía "va EN ESTA LÍNEA" porque tres citas sin ancla de `flow-vm.test.ts` apuntaban a este archivo por número y una línea de más las corría en silencio. Ya no: la única que queda apunta a (`escrowOutcomeDisplay`, `:41-45`) y va ANCLADA, así que si esto se corre, `citas-ancladas.test.ts` se pone rojo en vez de mentir. El amontonamiento se deja como está para no correr nada en este commit, pero ya no es lo que sostiene la cita
@@ -597,7 +597,7 @@ describe("WKH-352/WKH-354 · el consejo del copy, ejecutado sin reabrir la app",
     // `find*` y no `get*`: volver a `send` desde el historial pasa por `AnimatePresence`, así que la
     // puerta no está en el DOM en el mismo tick del click. Con `get*` esto fallaba SÓLO en el control.
     fireEvent.click(await screen.findByRole("button", { name: "Recuperar un envío perdido" }));
-    fireEvent.click(await screen.findByRole("button", { name: /Buscar mis escrows/ }));
+    await clickCuandoHabilite(/Buscar mis escrows/);
   }
 
   // 🔴 T-354-W12 — SEGUIR EL CONSEJO TERMINA CON LA BILLETERA NUEVA, Y SIN REABRIR NADA.

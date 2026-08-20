@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Money } from "../domain/money";
 import { ConfirmAndSend } from "./use-cases/confirm-and-send";
 import { ConnectWallet } from "./use-cases/connect-wallet";
@@ -183,7 +183,13 @@ describe("Use-cases — money-path", () => {
     expect(res.rememberedKyc?.approved).toBe(true);
   });
 
-  it("KYC-once: la 2da remesa de la misma wallet reusa el KYC (sin re-verificar)", async () => {
+  // ⚠️ ESTE `it` SE RENOMBRÓ PORQUE SU NOMBRE AFIRMABA LO QUE NO MEDÍA (re-AR it2 · MNR-2). Decía
+  // *"KYC-once: la 2da remesa de la misma wallet reusa el KYC (sin re-verificar)"*, y no medía ni el
+  // reuso ni el "sin re-verificar": el doble trae `realVerified: false` (`fakes.ts:183`), o sea que el
+  // atajo NO se toma y la 2da remesa llega a `kyc_passed` por el camino LARGO, verificándose de nuevo.
+  // Medido por el AR: el mutante que devuelve el atajo a `payoutAllowed` deja este `it` VERDE.
+  // ⇒ El nombre dice ahora lo que el cuerpo hace, y el atajo de verdad lo mide el `it` de abajo.
+  it("la 2da remesa de la misma wallet vuelve a pasar el KYC y termina en `kyc_passed`", async () => {
     const kycStore = new FakeKycStore();
     const { create, startKyc, lock } = setup({ kycStore });
     const r1 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
@@ -194,6 +200,33 @@ describe("Use-cases — money-path", () => {
     const res = await startKyc.execute({ remittanceId: r2.snapshot.id, address: FAKE_SOLANA_BENEFICIARY });
     expect(res.kind).toBe("done");
     if (res.kind === "done") expect(res.snapshot.status).toBe("kyc_passed");
+  });
+
+  // ── EL ATAJO KYC-once DE VERDAD, y lo que lo separa del `it` de arriba es UN booleano ────────────
+  //
+  // 🔴 QUÉ MIDE, Y POR QUÉ HACE FALTA UN `it` NUEVO. "Reusa el KYC" no es "termina en `kyc_passed`":
+  // las dos remesas terminan ahí por caminos distintos. Lo único que distingue el atajo es que **al
+  // gateway NO se le pide nada**, y eso se mide contando llamadas, no mirando el status final.
+  // El gate del atajo es `realVerified` (WKH-233 fix-pack · H-2b): el doble por defecto lo trae en
+  // `false`, así que este `it` lo pone en `true` a propósito — que es lo que hace un agente cuando la
+  // verificación fue REAL y habilita el pago.
+  it("KYC-once: con `realVerified: true`, la 2da remesa NO le pide nada al gateway", async () => {
+    const kycStore = new FakeKycStore();
+    const kyc = new FakeKycGateway({ realVerified: true });
+    const { create, startKyc, lock } = setup({ kycStore, kyc });
+    const r1 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
+    await lock.execute({ remittanceId: r1.snapshot.id });
+    await startKyc.execute(kycInput(r1.snapshot.id));
+    const espia = vi.spyOn(kyc, "start");
+    const r2 = await create.execute({ amountUsd: 200, beneficiary: beneficiary() });
+    await lock.execute({ remittanceId: r2.snapshot.id });
+    const res = await startKyc.execute({ remittanceId: r2.snapshot.id, address: FAKE_SOLANA_BENEFICIARY });
+    expect(res.kind).toBe("done");
+    // 🧬 MUTANTE: volver el gate del atajo a `approved && payoutAllowed` ⇒ el atajo se toma igual y
+    // esta línea sigue verde; volverlo a `false` o borrarlo ⇒ `start` se llama y esto se pone ROJO.
+    // ⇒ lo que este `it` clava es que el atajo EXISTE y ahorra el viaje, no cuál es su gate (eso lo
+    // clavan `T-SK-REAL` y `T-AC4c`, uno por sitio).
+    expect(espia, "la 2da remesa volvió a pedirle una verificación al gateway: no hubo atajo").not.toHaveBeenCalled();
   });
 
   it("Didit redirect → resume aplica la decisión y pasa el KYC (flujo móvil)", async () => {

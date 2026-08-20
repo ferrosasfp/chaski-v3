@@ -221,3 +221,69 @@ describe("StartKyc — sólo un veredicto USABLE saltea la sesión de Didit (WKH
     expect(sent.popChallenge).toBeUndefined();
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// T-SK-REAL (WKH-233 fix-pack · H-2b) — el atajo local mira el juicio del AGENTE, no una tautología
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ AGUJERO CIERRA, Y POR QUÉ NINGÚN TEST LO VEÍA. El guard decía
+// `remembered?.approved && remembered.payoutAllowed`. Los dos campos salen del MISMO booleano:
+// `agent-kyc-gateway.ts:84` puebla `payoutAllowed` desde `d.approved` a propósito (D-3). O sea que la
+// condición era `approved && approved` — una sola pregunta escrita dos veces. El juicio que decide el
+// PAGO vive en `realVerified` (`agent-kyc-gateway.ts:87`, el `payoutAllowed` del AGENTE tal cual).
+//
+// 🧬 MEDIDO ANTES DE ESCRIBIR ESTO: con el guard revertido a `payoutAllowed`, `vitest run
+// src/application/use-cases` daba **182 passed, 0 failed**. Ningún test del árbol distinguía los dos
+// campos en esta línea, porque TODOS los fixtures del repo declaran los dos en `true` a la vez. El
+// caso que los separa —`payoutAllowed: true` + `realVerified: false`— no existía en la suite, y es
+// exactamente el que produce el gateway de fallback (`infrastructure/fallback/gateways.ts:91`) y el
+// `FakeKycGateway` por default (`test-support/fakes.ts:183`).
+//
+// ⛔ ESTE BLOQUE VA AL FINAL DEL ARCHIVO: appendear no corre ninguna línea de las que otro cite.
+describe("T-SK-REAL: el atajo KYC-once mira `realVerified` (WKH-233/H-2b)", () => {
+  const cacheado = (realVerified: boolean) => ({
+    verificationId: "did-local",
+    approved: true,
+    payoutAllowed: true, // ← el de PANTALLA, que sale de `approved`: siempre true en este par
+    realVerified, // ← el del AGENTE, que es el que decide el pago
+    verifiedAt: null,
+    riskLevel: "low" as const,
+    provenance: "didit",
+    identity: null,
+  });
+
+  // 🧪 CONTROL POSITIVO, MISMO FIXTURE, UN SOLO CAMPO DE DIFERENCIA. Sin esto, el `it` de abajo
+  // pasaría igual si el atajo se hubiera roto del todo y `startKyc` llamara SIEMPRE al proveedor.
+  it("CONTROL: con `realVerified: true` el atajo SÍ se toma (no se gasta cupo del proveedor)", async () => {
+    const store = new FakeKycStore();
+    await store.save(ADDR, cacheado(true));
+    const { repo, uc, startSpy } = build(store);
+    const res = await uc.execute({ remittanceId: await seed(repo), address: ADDR });
+    expect(res.kind).toBe("done");
+    expect(startSpy).not.toHaveBeenCalled();
+  });
+
+  it("con `realVerified: false` el atajo NO se toma: se crea la sesión y la pantalla se muestra", async () => {
+    const store = new FakeKycStore();
+    await store.save(ADDR, cacheado(false));
+    const { repo, uc, startSpy } = build(store);
+    const res = await uc.execute({ remittanceId: await seed(repo), address: ADDR });
+    expect(
+      res.kind,
+      "el atajo mandó a `confirm` a alguien que el agente NO juzgó verificado: llega al prepare, " +
+        "se corta con `payout_not_authorized`, y desde `confirm` no hay camino de vuelta",
+    ).not.toBe("done");
+    expect(startSpy, "no se creó la sesión, así que la pantalla de verificación no aparece").toHaveBeenCalled();
+  });
+
+  // ⛔ Y `approved` NO SE FUE: sigue siendo la primera mitad del guard. Un `realVerified: true` con
+  // `approved: false` es un estado que el gateway no produce hoy, y aun así no puede saltear: el
+  // atajo es una conjunción, no un reemplazo de un campo por otro.
+  it("`approved: false` sigue cortando el atajo aunque `realVerified` sea true", async () => {
+    const store = new FakeKycStore();
+    await store.save(ADDR, { ...cacheado(true), approved: false });
+    const { repo, uc, startSpy } = build(store);
+    await uc.execute({ remittanceId: await seed(repo), address: ADDR });
+    expect(startSpy).toHaveBeenCalled();
+  });
+});

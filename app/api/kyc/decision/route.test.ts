@@ -19,7 +19,7 @@ vi.mock("../../../../src/infrastructure/persistence/supabase-kyc-session-tokens"
   getKycSessionTokenStore: tokenStoreMock,
 }));
 
-import { GET } from "./route";
+import { GET } from "./route"; import { UPSTREAM_INVOKE_SECRET_UNSET } from "../../../../src/infrastructure/kyc/agent-kyc-client"; // F4/MNR-Q2 — EN ESTA LÍNEA (Δ0): el F4 y el work-item citan este archivo por `archivo:línea` (`T-DEC-1b`, `:351`), y agregar una línea las corre a todas.
 
 const SESSION = "sess-abc";
 const OWNER = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
@@ -62,7 +62,11 @@ afterEach(() => {
 });
 beforeEach(() => {
   vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test");
-  vi.stubEnv("KYC_AGENT_INVOKE_SECRET", undefined);
+  // WKH-233 (fix-pack · H-3): la credencial de invoke es OBLIGATORIA desde que `invokeAuthHeader`
+  // es fail-closed, así que sembrarla es PRE-REQUISITO de cualquier `it` que llegue al agente —
+  // igual que el host de la línea de arriba. Sin esto, 45 `it` de tres archivos morían con
+  // `kyc_agent_invoke_secret_unset` antes de llegar a lo que miden.
+  vi.stubEnv("KYC_AGENT_INVOKE_SECRET", "invoke-secret-de-test");
   vi.stubEnv("KYC_SESSION_SECRET", "test-secret-123");
   getStoreMock.mockReset();
   getStoreMock.mockReturnValue(null);
@@ -295,13 +299,23 @@ describe("GET /api/kyc/decision — la fila se escribe SÓLO con `payoutAllowed 
 
   // ── T-DEC-1 ──────────────────────────────────────────────────────────────────────────────────
   //
-  // 🔴 POR QUÉ ESTE TEST NECESITA LOS DOS CASOS DE `identityMatches`. Un `identityMatches ?? false`
-  // NO se muere con el caso ausente solo: da el mismo resultado. El mutante que sí muere es
-  // `identityMatches !== false` (que autorizaría el ausente), y para matarlo hacen falta las DOS
-  // ramas — `false` explícito y la clave AUSENTE— afirmando que NINGUNA escribe.
+  // ⛔ ACÁ HABÍA UNA DEFENSA FALSA, Y SE RETIRA EN VEZ DE CORREGIRLA A MEDIAS (WKH-233 fix-pack · H-6).
+  // Decía: *"POR QUÉ ESTE TEST NECESITA LOS DOS CASOS DE `identityMatches` … el mutante que sí muere
+  // es `identityMatches !== false`, y para matarlo hacen falta las DOS ramas"*. **Es imposible**: los
+  // TRES casos ponen `payoutAllowed: false`, y `persistKycVerdict` corta en su PRIMERA línea
+  // (`route.ts:150`, `if (d.payoutAllowed !== true) return`) sin llegar a mirar `identityMatches`
+  // jamás. Los tres decían la verdad ("no se escribe fila") por un motivo distinto del que afirmaban,
+  // y ningún mutante sobre `identityMatches` podía morir acá. Los títulos se corrigieron para nombrar
+  // el gate que de verdad los explica.
+  //
+  // 🔴 Y EL CASO QUE FALTABA ES EL QUE IMPORTA: `payoutAllowed: true` + `identityMatches: false`. Es
+  // el único que separa lo que el expediente PIDE (AC-5/AC-7 del work-item: *"escribir la fila SÓLO
+  // si `identityMatches === true`"*) de lo que el código HACE (DT-5': el gate es `payoutAllowed`).
+  // No existía en la suite. Tiene su `it` propio abajo, y **afirma lo que el código hace**, no lo que
+  // el AC dice.
   it.each([
-    ["`identityMatches: false` explícito", { payoutAllowed: false, identityMatches: false }],
-    ["la clave `identityMatches` AUSENTE", { payoutAllowed: false, identityMatches: undefined }],
+    ["`payoutAllowed: false` (con `identityMatches: false`)", { payoutAllowed: false, identityMatches: false }],
+    ["`payoutAllowed: false` (con `identityMatches` AUSENTE)", { payoutAllowed: false, identityMatches: undefined }],
     ["`payoutAllowed: false` con `approved: true` e `identityMatches: true`", { payoutAllowed: false }],
   ])("T-DEC-1: con %s ⇒ NO se escribe fila", async (_c, over) => {
     const body: Record<string, unknown> = { ...AGENT_APPROVED, ...over };
@@ -317,6 +331,37 @@ describe("GET /api/kyc/decision — la fila se escribe SÓLO con `payoutAllowed 
         "de un pago, y el invariante que sostiene todo lo demás es que existir signifique real",
     ).not.toHaveBeenCalled();
     expect(alerta).not.toHaveBeenCalled();
+  });
+
+  // ── T-DEC-1b (WKH-233 fix-pack · H-6) — EL CASO QUE SEPARA EL AC DEL CÓDIGO ───────────────────
+  //
+  // 🔴 QUÉ MIDE. `payoutAllowed: true` con `identityMatches: false`. El gate del código es `payoutAllowed`
+  // y nada más (DT-5', aprobado por el founder en MI-1). ⚠️ ACÁ DECÍA que «el work-item dice que este caso
+  // NO debe escribir fila (AC-7: *sólo si `identityMatches === true`*)», Y SE VOLVIÓ FALSO EL 2026-08-20,
+  // sin que nadie editara la línea (re-AR it2 · R-6): AC-5 y AC-7 YA ESTÁN REESCRITOS y hoy piden
+  // `payoutAllowed === true`, lo mismo que hace el código (`work-item.md:485-501` y `:505-521`). Este `it` fija **lo que el código hace**: si mañana alguien lo cambia, se pone rojo y obliga a decidir a propósito en vez de por deriva.
+  //
+  // ⛔ Y ACÁ VA EL LÍMITE, EXPLÍCITO, PORQUE ESTO ES ACOTAMIENTO Y NO CIERRE:
+  //   · ESTE repo verifica que la fila se escribe si y sólo si el agente dijo `payoutAllowed === true`.
+  //   · La premisa de que `payoutAllowed === true` YA EXIGE una identidad coincidente la sostiene el
+  //     AGENTE, en otro repo (`sdd.md:704`), que es Scope OUT. **Chaski no puede verificarlo, y este
+  //     test no lo verifica.** Si esa premisa dejara de valer del otro lado, acá no se pondría rojo
+  //     nada: se escribiría una fila que habilita un pago sin identidad comprobada.
+  // ⛔ PROHIBIDO reescribir este bloque como si la garantía estuviera cerrada.
+  it("T-DEC-1b: `payoutAllowed: true` + `identityMatches: false` ⇒ SÍ escribe (el gate es DT-5')", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(AHORA));
+    agenteResponde({ ...AGENT_APPROVED, identityMatches: false });
+    const store = fakeStore();
+    getStoreMock.mockReturnValue(store);
+    await GET(req({ "x-kyc-token": issueSessionToken(SESSION) }));
+    expect(
+      store.put,
+      "el código dejó de escribir con `identityMatches: false`, o sea que cambió el gate. ⚠️ ACÁ DECÍA " +
+        "«puede ser correcto, es lo que AC-7 pide», y eso quedó VIEJO el 2026-08-20: AC-7 ya se " +
+        "reescribió y hoy pide `payoutAllowed === true`, igual que DT-5'. Ahora el AC, el SDD y el " +
+        "código dicen lo mismo, así que este cambio los contradice a los tres: decidilo a propósito",
+    ).toHaveBeenCalledTimes(1);
   });
 
   it("✅ calibración inversa: con `payoutAllowed: true`, `store.put` recibe EXACTAMENTE 1 llamada", async () => {
@@ -441,5 +486,68 @@ describe("GET /api/kyc/decision — el `decisionToken` no sale por ningún lado 
     await GET(req({ "x-kyc-token": issueSessionToken(SESSION) }));
     expect(capturado.join("\n")).not.toContain(TOKEN_CENTINELA);
     if (status !== 200) expect(capturado.join("\n")).toContain("[kyc-agent]");
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// T-DEC-4d · F4/MNR-Q2 — EL GEMELO QUE FALTABA: la misconfig NUESTRA no se disfraza de agente caído
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ AGUJERO CIERRA, Y CÓMO SE ENCONTRÓ (que es la mitad que más enseña). El fix-pack puso el
+// MISMO ternario `err instanceof KycAgentConfigError ? UPSTREAM_INVOKE_SECRET_UNSET : 0` en las DOS
+// rutas —`session/route.ts:275` y `decision/route.ts:105`— y lo mecanizó en UNA sola: `T-SE-8c`
+// (`session/route.test.ts:670`) afirma el `-1`, y este archivo no lo nombraba ni una vez.
+//
+// ⚠️ NADIE LO VIO LEYENDO EL DIFF: lo delató la ÚNICA baja de cobertura de la rama. `decision/route.ts`
+// pasó de 42 a 43 ramas con las MISMAS 40 cubiertas (branch 95.23 → 93.02) mientras el total del
+// conjunto SUBÍA. O sea que la rama nueva la agregó el propio fix-pack y no la miraba ningún test de
+// route. El comportamiento del cliente sí estaba medido (la sonda de runtime del F4 imprime
+// `decision_config_missing`), así que esto estaba ACOTADO, no descubierto — pero acotado no es cerrado.
+//
+// 🧬 MUTANTE: volver el ternario de `decision/route.ts:105` a `upstream: 0` a secas ⇒ el 1er `it` se
+// pone ROJO y `T-DEC-4a` —que afirma `upstream: 0` para el agente INALCANZABLE— sigue VERDE. Ése es
+// exactamente el punto: los dos valores tienen que poder distinguirse, y hasta acá el `0` era el único
+// afirmado, así que colapsar el `-1` en el `0` salía gratis.
+describe("GET /api/kyc/decision — T-DEC-4d: sin la credencial de invoke, el `upstream` es PROPIO", () => {
+  /** El `fetch` RECHAZA. Si algo llegara a viajar, el caso se vería igual que `T-DEC-4a`. */
+  function agenteInalcanzable() {
+    const m = vi.fn(async () => {
+      throw new TypeError("fetch failed");
+    });
+    vi.stubGlobal("fetch", m);
+    return m;
+  }
+
+  it("T-DEC-4d: sin `KYC_AGENT_INVOKE_SECRET` ⇒ 502 con `upstream` distinguible y CERO viajes", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubEnv("KYC_AGENT_INVOKE_SECRET", undefined);
+    const fetchMock = agenteInalcanzable();
+    const res = await GET(req({ "x-kyc-token": issueSessionToken(SESSION) }));
+    expect(res.status).toBe(502);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.error).toBe("kyc_decision_failed");
+    // 1. El `upstream` DISTINGUE la misconfig nuestra de un agente caído. Es lo único que el
+    //    operador lee del body, y las dos causas se arreglan distinto (setear una env vs. mirar el
+    //    deployment del agente).
+    expect(body.upstream, "la misconfig se ve igual que un agente caído").toBe(
+      UPSTREAM_INVOKE_SECRET_UNSET,
+    );
+    expect(body.upstream).not.toBe(0);
+    // 2. Y no salió ningún viaje: no se preguntó por la identidad de nadie sin acreditarse.
+    expect(fetchMock, "se gastó un viaje al agente sin credencial").toHaveBeenCalledTimes(0);
+    // 3. Value-free: el nombre de la env que faltó NO sale al cliente (viene del `message` del error,
+    //    que es lo único que este `catch` tiene prohibido tocar).
+    expect(JSON.stringify(body)).not.toContain("KYC_AGENT_INVOKE_SECRET");
+  });
+
+  it("✅ calibración inversa: CON la credencial, el MISMO caso vuelve a `upstream: 0` y a 1 viaje", async () => {
+    // Cambia UNA cosa respecto del `it` de arriba: la env (que el `beforeEach` siembra). Sin este
+    // control, el `-1` podría venir de cualquier otra cosa del fixture y no de la credencial.
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchMock = agenteInalcanzable();
+    const res = await GET(req({ "x-kyc-token": issueSessionToken(SESSION) }));
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "kyc_decision_failed", upstream: 0 });
+    expect(fetchMock, "el caso no llegó a ejercitar el borde").toHaveBeenCalledTimes(1);
   });
 });

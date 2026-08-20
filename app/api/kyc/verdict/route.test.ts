@@ -35,6 +35,16 @@ vi.mock("../../../../src/infrastructure/payout/authority", () => ({
   resolvePayoutAuthority: authorityMock,
 }));
 
+// WKH-233 fix-pack · H-2a — EL STORE DE LA CREDENCIAL DEL MONEY-PATH (`kyc_session_tokens`).
+//
+// ⚠️ POR QUÉ EL DOBLE FILTRA DE VERDAD por (`session_id`, `owner_address`), igual que el del veredicto:
+// con un `mockResolvedValue("token")` fijo, el guard V9.5 daría verde con el `.eq("owner_address", …)`
+// borrado — o sea, el candado aprobaría el IDOR que su propia razón de ser nombra.
+const { getTokenStoreMock } = vi.hoisted(() => ({ getTokenStoreMock: vi.fn() }));
+vi.mock("../../../../src/infrastructure/persistence/supabase-kyc-session-tokens", () => ({
+  getKycSessionTokenStore: getTokenStoreMock,
+}));
+
 import { POST } from "./route";
 
 // Seeds FIJAS (no Keypair.generate): las addresses son reproducibles corrida a corrida.
@@ -82,6 +92,27 @@ function honestStore(rows: KycVerdictRecord[], opts: { readThrows?: boolean } = 
   return { get, put, rows };
 }
 
+/** Mini-store HONESTO de `kyc_session_tokens`: filtra por LOS DOS campos, como el `.eq().eq()` real.
+ *  Un doble que devolviera siempre el token dejaría pasar la pérdida del filtro por dueño. */
+function honestTokenStore(
+  filas: Array<{ sessionId: string; owner: string }>,
+  opts: { readThrows?: boolean } = {},
+) {
+  const getForOwner = vi.fn(async (sessionId: string, ownerAddress: string) => {
+    if (opts.readThrows) throw new Error("kyc_session_token_read_failed:42P01");
+    const hit = filas.find((f) => f.sessionId === sessionId && f.owner === ownerAddress);
+    return hit ? `token-de-${hit.sessionId}` : null;
+  });
+  return { getForOwner, filas };
+}
+
+/** Las credenciales que existen en el camino feliz: la sembrada y la que escribe el backfill.
+ *  Cada `it` que quiera medir su AUSENCIA la saca a propósito. */
+const CREDENCIALES_OK = () => [
+  { sessionId: SEEDED_VID, owner: SENDER_A },
+  { sessionId: "did-del-navegador", owner: SENDER_A },
+];
+
 /** Challenge REAL + firma ed25519 REAL. `challengeFor` permite emitir el challenge de una wallet y
  *  presentarlo como si fuera de otra. */
 function realPop(signer: Keypair, challengeFor: Keypair = signer) {
@@ -114,6 +145,11 @@ describe("POST /api/kyc/verdict (WKH-333)", () => {
     getStoreMock.mockReset();
     getStoreMock.mockReturnValue(null); // default: flag OFF
     authorityMock.mockReset();
+    // Default: la credencial del money-path EXISTE para el dueño sembrado. Es el estado del camino
+    // feliz —una sesión creada por esta app escribe su fila en `kyc_session_tokens`— y no un atajo:
+    // los `it` de T-EP-CRED la sacan para medir su ausencia.
+    getTokenStoreMock.mockReset();
+    getTokenStoreMock.mockReturnValue(honestTokenStore(CREDENCIALES_OK()));
     vi.spyOn(console, "info").mockImplementation(() => {});
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
@@ -397,6 +433,77 @@ describe("POST /api/kyc/verdict (WKH-333)", () => {
     expect(authorityMock).not.toHaveBeenCalled();
   });
 
+  // ── T-EP-11b/c/d (fix-pack it2 · re-AR/BLQ-BAJO-1) — "NO PUDE PREGUNTAR" NO ES "NO HAY" ────────
+  //
+  // 🔴 QUÉ AGUJERO CIERRA. El `backfill` devolvía `null` tanto cuando la autoridad decía QUE NO como
+  // cuando NO PODÍA CONTESTAR, y las dos salían por `{verdict:null, reason:"absent"}` con status 200.
+  // `absent` prende `servidorDiceQueNoHayFila` en `start-kyc.ts:109`, apaga el atajo KYC-once, y manda
+  // a alguien YA VERIFICADO a escanear el documento otra vez, quemando un cupo del tier gratuito
+  // (500/día). Es el "no pude preguntar" leído como "no hay" que la doctrina de V9.5 —cincuenta líneas
+  // más abajo, en el MISMO handler— declara prohibido.
+  //
+  // Los tres `it` son el tri-estado completo, y el tercero es el control positivo: sin él, hacer que
+  // TODO salga por 502 pondría verde a los dos primeros y rompería la rama que sí debe decir `absent`.
+  it("T-EP-11b: autoridad que NO CONTESTA (502) ⇒ 502, NUNCA `absent`", async () => {
+    const store = honestStore([]);
+    getStoreMock.mockReturnValue(store);
+    authorityMock.mockResolvedValue({ authorized: false, reason: "kyc_reauth_failed", httpStatus: 502 });
+    const res = await POST(
+      req({ sender: SENDER_A, ...realPop(KP_A), candidateVerificationId: "did-del-navegador" }),
+    );
+    // 🧬 MUTANTE: volver el corte a `if (!decision.authorized) return { estado: "no-hay" }` ⇒ 200 `absent` ⇒ ROJO.
+    expect(
+      res.status,
+      "se le contestó a la persona que no hay verificación cuando lo cierto es que no pudimos preguntar: " +
+        "vuelve a escanear el documento y se quema un cupo del tier gratuito",
+    ).toBe(502);
+    expect(await res.json()).toEqual({ error: "kyc_verdict_unavailable" });
+    expect(store.put).not.toHaveBeenCalled();
+  });
+
+  it("T-EP-11c: autoridad INDISPONIBLE (503) ⇒ el mismo 502, y sin escribir nada", async () => {
+    const store = honestStore([]);
+    getStoreMock.mockReturnValue(store);
+    authorityMock.mockResolvedValue({
+      authorized: false,
+      reason: "kyc_authority_unavailable",
+      httpStatus: 503,
+    });
+    const res = await POST(
+      req({ sender: SENDER_A, ...realPop(KP_A), candidateVerificationId: "did-del-navegador" }),
+    );
+    expect(res.status).toBe(502);
+    expect(store.put).not.toHaveBeenCalled();
+  });
+
+  it("T-EP-11d: la autoridad que TIRA tampoco es `absent`", async () => {
+    const store = honestStore([]);
+    getStoreMock.mockReturnValue(store);
+    authorityMock.mockRejectedValue(new Error("boom"));
+    const res = await POST(
+      req({ sender: SENDER_A, ...realPop(KP_A), candidateVerificationId: "did-del-navegador" }),
+    );
+    expect(res.status).toBe(502);
+  });
+
+  // 🧪 CONTROL POSITIVO, EN LA MISMA CORRIDA. La rama de "la autoridad SÍ contestó y dijo que no"
+  // sigue saliendo por 200 `absent`. Sin este `it`, un fix perezoso —502 para todo `!authorized`—
+  // dejaría verdes a los tres de arriba y rompería el desenlace más común del backfill.
+  it("T-EP-11e CONTROL: un NO de verdad (200) sigue siendo 200 `absent`, no 502", async () => {
+    const store = honestStore([]);
+    getStoreMock.mockReturnValue(store);
+    authorityMock.mockResolvedValue({
+      authorized: false,
+      reason: "kyc_ownership_mismatch",
+      httpStatus: 200,
+    });
+    const res = await POST(
+      req({ sender: SENDER_A, ...realPop(KP_A), candidateVerificationId: "did-del-navegador" }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ verdict: null, reason: "absent" });
+  });
+
   // ── T-EP-15 — AC-6: el identificador NO SALE NUNCA ──────────────────────────────────────────
   it("T-EP-15: NINGÚN cuerpo, en NINGUNA rama, contiene el verification_id (M-22)", async () => {
     const bodies: string[] = [];
@@ -461,5 +568,118 @@ describe("POST /api/kyc/verdict (WKH-333)", () => {
     const text = await res.text();
     expect(JSON.parse(text)).toEqual({ error: "kyc_verdict_unavailable" });
     expect(text, "se ecoó el SQLSTATE de Postgres al cliente").not.toContain("42P01");
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  // T-EP-CRED (WKH-233 fix-pack · H-2a) — `usable` habla del PAGO, no de una tabla
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  //
+  // 🔴 EL CALLEJÓN SIN SALIDA QUE ESTO CIERRA, medido de punta a punta. Esta ruta contestaba `usable`
+  // mirando SÓLO `kyc_verdicts`. El pago mira además `kyc_session_tokens`: `resolvePayoutAuthority`
+  // pide `getForOwner(verificationId, address)` y sin fila corta con `kyc_ownership_mismatch` ⇒
+  // `payout_not_authorized`/403. Con `usable`, `flow.tsx` manda a la persona de `connect` derecho a
+  // `confirm` SIN mostrar la pantalla de verificación, y ahí muere: no hay camino de vuelta.
+  //
+  // ⚠️ NINGUNO DE ESTOS `it` PRUEBA QUE EL PAGO FUNCIONE. Prueban que las dos puntas hacen la MISMA
+  // pregunta. Que la respuesta de `getForOwner` sea la que el agente va a aceptar depende del agente,
+  // y eso vive en otro repo (Scope OUT).
+  describe("T-EP-CRED: sin la credencial del money-path, `usable` no se emite", () => {
+    // 🧪 CONTROL POSITIVO, PRIMERO Y CON EL MISMO FIXTURE. Sin este `it`, el de abajo pasaría igual si
+    // el endpoint hubiese quedado roto y contestara `absent` SIEMPRE: un candado que no puede
+    // distinguir el sí del no. Acá el único cambio entre los dos es la fila de la credencial.
+    it("CONTROL: con la credencial presente, la MISMA fila da 200 con veredicto", async () => {
+      getStoreMock.mockReturnValue(honestStore([verdict()]));
+      getTokenStoreMock.mockReturnValue(honestTokenStore(CREDENCIALES_OK()));
+      const res = await POST(req({ sender: SENDER_A, ...realPop(KP_A) }));
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { verdict?: unknown; reason?: string };
+      expect(body.verdict).toBeTruthy();
+      expect(body.reason).toBeUndefined();
+    });
+
+    it("sin fila en `kyc_session_tokens` ⇒ 200 `absent`, NO `usable`", async () => {
+      getStoreMock.mockReturnValue(honestStore([verdict()]));
+      getTokenStoreMock.mockReturnValue(honestTokenStore([])); // ninguna credencial
+      const res = await POST(req({ sender: SENDER_A, ...realPop(KP_A) }));
+      expect(res.status).toBe(200);
+      expect(
+        await res.json(),
+        "el endpoint dijo `usable` sobre una verificación que el money-path va a rechazar: la " +
+          "persona salta la pantalla de verificación y muere en el prepare, sin camino de vuelta",
+      ).toEqual({ verdict: null, reason: "absent" });
+    });
+
+    // ⚠️ LO QUE ESTE `it` **NO** PUEDE MEDIR, y por eso está escrito acá y no disfrazado de garantía:
+    // que el SEGUNDO argumento salga de `ch.address` y no de `body.sender`. P3 de la ruta (`:117`) ya
+    // rechaza con 403 todo request donde los dos difieran, así que después del PoP son el MISMO valor
+    // y ningún input de este archivo puede distinguir las dos implementaciones. Ese medio guard lo
+    // sostiene P3, no esto. Lo que SÍ se puede medir —y se mide— es el primer argumento: sale de la
+    // FILA, no de la pista que el navegador mandó en el body, que es atacante-controlable.
+    it("la credencial se busca con la sesión de LA FILA, no con la pista del navegador", async () => {
+      const tokens = honestTokenStore(CREDENCIALES_OK());
+      getStoreMock.mockReturnValue(honestStore([verdict()]));
+      getTokenStoreMock.mockReturnValue(tokens);
+      await POST(
+        req({
+          sender: SENDER_A,
+          candidateVerificationId: "did-mentira-del-navegador",
+          ...realPop(KP_A),
+        }),
+      );
+      expect(tokens.getForOwner).toHaveBeenCalledWith(SEEDED_VID, SENDER_A);
+      expect(
+        tokens.getForOwner,
+        "la credencial se buscó con el identificador que mandó el navegador: eso es creerle a un " +
+          "valor que `ports.ts` declara atacante-controlable, en la pregunta que habilita un pago",
+      ).not.toHaveBeenCalledWith("did-mentira-del-navegador", SENDER_A);
+    });
+
+    it("la credencial de OTRO dueño no sirve: mismo `session_id`, owner ajeno ⇒ `absent`", async () => {
+      getStoreMock.mockReturnValue(honestStore([verdict()]));
+      getTokenStoreMock.mockReturnValue(
+        honestTokenStore([{ sessionId: SEEDED_VID, owner: SENDER_B }]),
+      );
+      const res = await POST(req({ sender: SENDER_A, ...realPop(KP_A) }));
+      expect(await res.json()).toEqual({ verdict: null, reason: "absent" });
+    });
+
+    // 🔴 EL `it` QUE MÁS IMPORTA DE ESTE BLOQUE. Un fallo de LECTURA saliendo por `absent` mandaría a
+    // re-escanear el documento —quemando cupo del proveedor, 500/día— a gente que SÍ está verificada,
+    // porque NUESTRA base se cayó. Es "no pude preguntar" leído como "no hay", que el docblock de
+    // `src/infrastructure/kyc/http-kyc-verdict-gateway.ts:19-24` prohíbe con todas las letras.
+    it("🔴 un THROW del store NO sale por `absent`: sale por el 502 que el gateway LANZA", async () => {
+      getStoreMock.mockReturnValue(honestStore([verdict()]));
+      getTokenStoreMock.mockReturnValue(honestTokenStore([], { readThrows: true }));
+      const res = await POST(req({ sender: SENDER_A, ...realPop(KP_A) }));
+      expect(
+        res.status,
+        "la lectura rota salió como una RESPUESTA sobre la persona ('no hay veredicto') en vez de " +
+          "como una caída nuestra: manda a re-verificarse a alguien que ya está verificado",
+      ).toBe(502);
+      const text = await res.text();
+      expect(JSON.parse(text)).toEqual({ error: "kyc_verdict_unavailable" });
+      expect(text, "se ecoó el SQLSTATE al cliente").not.toContain("42P01");
+    });
+
+    // La fábrica ausente es misconfig NUESTRA, no "no hay fila". Hoy es inalcanzable —V5 corta antes,
+    // porque las dos fábricas salen del mismo `getSupabaseServerClient()`— y el `if` existe para el
+    // día que esa coincidencia deje de valer. Se mide igual: un guard sin test es una intención.
+    it("la fábrica del store ausente ⇒ 502, nunca `absent`", async () => {
+      getStoreMock.mockReturnValue(honestStore([verdict()]));
+      getTokenStoreMock.mockReturnValue(null);
+      const res = await POST(req({ sender: SENDER_A, ...realPop(KP_A) }));
+      expect(res.status).toBe(502);
+      expect(await res.json()).toEqual({ error: "kyc_verdict_unavailable" });
+    });
+
+    // ⛔ ORDEN: el TTL manda sobre la credencial. Una fila vencida tiene que decir `expired` —que es
+    // más informativo— aunque además le falte la credencial. Colapsar los dos en `absent` pierde el
+    // único motivo que le explica a la persona por qué tiene que volver a verificarse.
+    it("una fila VENCIDA sigue diciendo `expired`, no `absent`, aunque falte la credencial", async () => {
+      getStoreMock.mockReturnValue(honestStore([verdict({ verifiedAt: daysAgo(400) })]));
+      getTokenStoreMock.mockReturnValue(honestTokenStore([]));
+      const res = await POST(req({ sender: SENDER_A, ...realPop(KP_A) }));
+      expect(await res.json()).toEqual({ verdict: null, reason: "expired" });
+    });
   });
 });

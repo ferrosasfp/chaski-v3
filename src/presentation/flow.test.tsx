@@ -41,7 +41,7 @@ import {
 } from "../application/use-cases/recover-escrow-funds";
 import { PREPARE_NO_AGENT_FOR_CAPABILITY, isPrepareRejection } from "../application/agent-rejections";
 const KYC_PROVENANCE_LIVE = "didit"; // WKH-233: el literal se escribe ACÁ, en un test, porque el módulo que lo exportaba se borró con la HU (el juicio "esto es real" ya no lo hace Chaski). EN UNA SOLA LÍNEA: este archivo recibe citas `archivo:línea` y agregar líneas las corre.
-import { ConnectWallet } from "../application/use-cases/connect-wallet";
+import { ConnectWallet } from "../application/use-cases/connect-wallet"; import { clickCuandoHabilite } from "../test-support/clicks"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
 import { solanaWalletBridge } from "../infrastructure/solana-wallet-bridge"; import { SolanaWalletAdapter } from "../infrastructure/solana-wallet"; import { guardarEleccion } from "../infrastructure/solana/deeplink/conexion"; import { almacenDeNavegador, guardarViaje } from "../infrastructure/solana/deeplink/sesion"; // WKH-358 agregó los tres últimos EN ESTA LÍNEA y ANTES de este comentario: `history-grupos.test.tsx:532` y `jerarquia-relativa.test.tsx:83` citan por número líneas de este archivo, así que tres líneas nuevas acá arriba las rotan a las dos. WKH-354/R-2: la costura del BANNER (el bridge global); la del guard es el `connectedWallet` inyectado
 import {
   FAKE_SOLANA_BENEFICIARY,
@@ -120,15 +120,15 @@ vi.mock("framer-motion", () => ({
   AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
   // Pasa de largo: el punto del doble es pintar DOM plano, y la config de framer no pinta nada.
   MotionConfig: ({ children }: { children: React.ReactNode }) => children,
-  motion: new Proxy(
-    {},
-    {
-      get:
-        (_t, tag: string) =>
-        ({ children, ...props }: { children?: React.ReactNode } & Record<string, unknown>) =>
-          React.createElement(tag, props, children),
+  // 🔴 CACHEA POR TAG, y el caché ES el target del Proxy (WKH-233 it4 · F4/§4.3): un `get` que fabrica en cada acceso da un TIPO de componente distinto por render y React REMONTA el subárbol entero.
+  motion: new Proxy({} as Record<string, unknown>, {
+    get: (t: Record<string, unknown>, tag: string) => {
+      if (!(tag in t))
+        t[tag] = ({ children, ...props }: { children?: React.ReactNode } & Record<string, unknown>) =>
+          React.createElement(tag, props, children);
+      return t[tag];
     },
-  ),
+  }),
 }));
 
 afterEach(() => cleanup());
@@ -175,7 +175,7 @@ function fillSend(recipient = "Mamá", destination = TEST_CCI): void {
 async function goToReview(): Promise<void> {
   fillSend();
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+  await clickCuandoHabilite(/Conectar wallet/);
   await screen.findByText(/Revisá el envío/); // paso review pre-KYC
 }
 
@@ -183,7 +183,7 @@ async function goToReview(): Promise<void> {
 async function goToConfirm(): Promise<void> {
   await goToReview();
   fireEvent.click(await screen.findByRole("button", { name: /Continuar/ })); // CTA review → verify
-  fireEvent.click(await screen.findByRole("button", { name: /Verificar mi identidad/ }));
+  await clickCuandoHabilite(/Verificar mi identidad/);
   await screen.findByRole("button", { name: /Confirmar y enviar/ }); // paso confirm
 }
 
@@ -276,7 +276,7 @@ it("T4: '¿No sos vos?' aparece solo con una address conectada", async () => {
   // (ii) send → connect: FakeWallet.connect() = la pubkey base58 "4zMMC9…".
   fillSend();
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+  await clickCuandoHabilite(/Conectar wallet/);
 
   // (b) con address conectada → aparece el control + el badge de address.
   expect(await screen.findByText("¿No sos vos?")).toBeInTheDocument();
@@ -292,11 +292,11 @@ it("T5: 'Borrar igual' limpia address + PII del beneficiario y vuelve a la panta
 
   fillSend("Mamá", TEST_CCI);
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+  await clickCuandoHabilite(/Conectar wallet/);
 
   // Con address conectada → abrir la confirmación y ejecutar forgetAndDisconnect.
   fireEvent.click(await screen.findByText("¿No sos vos?"));
-  fireEvent.click(await screen.findByText("Borrar igual"));
+  await clickCuandoHabilite(/^Borrar igual$/); // re-AR it3/MNR-3 — el 2º click va sobre `<button disabled={busy}>` (`flow.tsx:722`)
 
   // (a) WKH-063 fix-pack (AR/BLQ-BAJO-1): vuelve a la PANTALLA DE ENTRADA, no al medio del formulario.
   // Antes este assert buscaba el input de monto directo, porque `forgetAndDisconnect` hacía
@@ -358,7 +358,7 @@ it("T-AC4: KYC-once → tras conectar va directo a confirm (sin review ni escane
 
   fillSend();
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+  await clickCuandoHabilite(/Conectar wallet/);
 
   // (a) aterriza en confirm: botón "Confirmar y enviar" + identidad + quote.
   expect(await screen.findByRole("button", { name: /Confirmar y enviar/ })).toBeInTheDocument();
@@ -399,7 +399,7 @@ it("T-AC4b: local verificado + el servidor dice `absent` ⇒ va a review, y NO s
 
   fillSend();
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+  await clickCuandoHabilite(/Conectar wallet/);
 
   // Aterriza en review (la CTA "Continuar" del paso review), NO en confirm.
   expect(
@@ -846,7 +846,7 @@ function buildFlowSnapshot(
 async function goToConfirmViaKycOnce(): Promise<void> {
   fillSend();
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+  await clickCuandoHabilite(/Conectar wallet/);
   await screen.findByRole("button", { name: /Confirmar y enviar/ });
 }
 
@@ -1271,7 +1271,13 @@ describe("HU-SOL-13 — acción refund en TrackView (T7)", () => {
     render(<LiveTrackView initial={rem} recover={recover} />);
 
     fireEvent.click(await screen.findByRole("button", { name: /Recuperar fondos/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Volver a intentar/ }));
+    // re-AR it3/MNR-3 — EL ÚNICO DE LOS 5 EN QUE EL PRIMER CLICK SÍ ABRE UNA VENTANA DE `busy`, y el AR
+    // no lo vio porque "Volver a intentar" no estaba en la lista del candado. Es el MISMO botón
+    // (`flow.tsx:2205`), que cambia de etiqueta: `onRefund` hace `setBusy(true)` → `await` →
+    // `setEnviados(...)` (lo que produce la etiqueta nueva) → `setBusy(false)` en el `finally`. Hoy
+    // React junta las dos últimas en un solo commit y por eso pasa; que pase depende de ESE batching,
+    // no de nada que este test afirme.
+    await clickCuandoHabilite(/Volver a intentar/);
 
     await waitFor(() => expect(gateway.calls).toHaveLength(2));
   });
@@ -2737,7 +2743,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     // (2) recién ahora la persona cambia de cuenta en Phantom.
     cambiarDeCuentaA(B, probe);
     fireEvent.click(await screen.findByRole("button", { name: "Recuperar un envío perdido" }));
-    fireEvent.click(await screen.findByRole("button", { name: /Buscar mis escrows/ }));
+    await clickCuandoHabilite(/Buscar mis escrows/);
 
     await waitFor(() => expect(refundGw.calls).toHaveLength(1));
     expect(refundGw.calls[0]?.sender).toBe(B);
@@ -2790,7 +2796,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     fireEvent.click(await screen.findByRole("button", { name: "Recuperar" })); // WKH-063: las dos puertas de la cadena ya no viven en `send` (adonde llevaba "Volver"): viven en el destino "Recuperar", y desde el historial se llega por la barra, que el historial SÍ pinta. Nombre exacto y no regex: /Recuperar/ matchearía también las dos puertas.
 
     fireEvent.click(await screen.findByRole("button", { name: "Recuperar un envío perdido" }));
-    fireEvent.click(await screen.findByRole("button", { name: /Buscar mis escrows/ }));
+    await clickCuandoHabilite(/Buscar mis escrows/);
     await waitFor(() => expect(refundGw.calls).toHaveLength(1));
     expect(refundGw.calls[0]?.sender).toBe(A);
 
@@ -3037,7 +3043,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     irAlFormulario();
     fillSend();
     fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+    await clickCuandoHabilite(/Conectar wallet/);
 
     // KYC-once intacto: ni `review` ni `verify`, directo a confirmar.
     expect(await screen.findByRole("button", { name: /Confirmar y enviar/ })).toBeInTheDocument();
@@ -3065,7 +3071,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     irAlFormulario();
     fillSend();
     fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+    await clickCuandoHabilite(/Conectar wallet/);
 
     expect(await screen.findByText(/Revisá el envío/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Confirmar y enviar/ })).toBeNull();
@@ -3150,7 +3156,7 @@ describe("WKH-354 · cambiar de cuenta en la billetera sin perder el KYC", () =>
     fireEvent.click(await screen.findByRole("button", { name: /Volver/ }));
 
     fireEvent.click(await screen.findByRole("button", { name: /¿No sos vos\?/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "Borrar igual" }));
+    await clickCuandoHabilite(/^Borrar igual$/); // re-AR it3/MNR-3 — el 2º click va sobre `<button disabled={busy}>` (`flow.tsx:722`)
 
     await waitFor(() => expect(forgetSpy).toHaveBeenCalledTimes(1));
   });
@@ -3570,3 +3576,64 @@ class WalletDelBridgeSuelto extends FakeWallet {
     return solanaWalletBridge.getState().publicKey ?? FAKE_WALLET_ADDRESS;
   }
 }
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// T-AC4c (WKH-233 fix-pack · H-2b) — el atajo de `onConnect` mira `realVerified`, no `payoutAllowed`
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ CIERRA. `flow.tsx:358-360` decía `rememberedKyc.approved && rememberedKyc.payoutAllowed`, y
+// los dos campos salen del MISMO booleano (`agent-kyc-gateway.ts:84` puebla `payoutAllowed` desde
+// `d.approved`, D-3). O sea `approved && approved`: una sola pregunta escrita dos veces. El juicio del
+// AGENTE —el que decide el pago— es `realVerified`, y es el mismo que `flow.tsx:1309` ya usa para
+// decidir si esta pantalla puede AFIRMAR una verificación.
+//
+// ⚠️ ESTE `it` NO CUBRE UN AGUJERO DE PAGO: el guard que vale es el de `StartKyc` (T-SK-REAL), que
+// corre igual. Lo que cubre es lo que dice el comentario de `flow.tsx:349-354`: si `onConnect` llama a
+// `startKyc`, éste devuelve `redirect`, `onConnect` DESCARTA la URL, y la pantalla de verificación
+// crea una SEGUNDA sesión. Un cupo del tier gratuito por persona, tirado.
+//
+// ⛔ VA AL FINAL DEL ARCHIVO: `:1041`, `:1454`, `:1510` y `:1581` de acá los citan otros por número.
+it("T-AC4c: cacheado con `realVerified:false` ⇒ va a review y NO se crea sesión en el connect", async () => {
+  const kycStore = new FakeKycStore();
+  // El par que el gateway de fallback produce por definición, y que ningún fixture del repo tenía:
+  // la PANTALLA lo da por aprobado (`approved`/`payoutAllowed`) y el AGENTE no lo verificó.
+  await kycStore.save("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", {
+    ...passKyc,
+    realVerified: false,
+  });
+  const kyc = new FakeKycGateway({}, true); // redirect=true ⇒ crear sesión es observable
+  const startSpy = vi.spyOn(kyc, "start");
+  render(<RemittanceFlow pasoInicial="send" container={buildTestContainer({ kycStore, kyc })} />);
+
+  fillSend();
+  fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+  await clickCuandoHabilite(/Conectar wallet/);
+
+  expect(
+    await screen.findByRole("button", { name: /Continuar/ }),
+    "el atajo mandó a `confirm` a alguien que el agente no verificó: muere en el prepare y la " +
+      "pantalla de verificación no se le muestra nunca",
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Confirmar y enviar/ })).toBeNull();
+  expect(
+    startSpy,
+    "se creó una sesión en el connect: `onConnect` descarta esa URL, así que el cupo se gasta al pedo",
+  ).not.toHaveBeenCalled();
+});
+
+// 🧪 CONTROL POSITIVO DEL ANTERIOR. T-AC4 ya cubre el camino feliz, pero con OTRO fixture; acá el
+// único cambio respecto del `it` de arriba es ese booleano, que es lo que hace al control informativo.
+it("T-AC4c(control): el MISMO fixture con `realVerified:true` sí va directo a confirm", async () => {
+  const kycStore = new FakeKycStore();
+  await kycStore.save("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", {
+    ...passKyc,
+    realVerified: true,
+  });
+  render(<RemittanceFlow pasoInicial="send" container={buildTestContainer({ kycStore })} />);
+
+  fillSend();
+  fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+  await clickCuandoHabilite(/Conectar wallet/);
+
+  expect(await screen.findByRole("button", { name: /Confirmar y enviar/ })).toBeInTheDocument();
+});

@@ -125,7 +125,7 @@ import { buildTestContainer } from "../test-support/test-container";
 import type { Container } from "../composition/container";
 import type { ResumeKycResult } from "../application/use-cases/resume-kyc";
 import { Money } from "../domain/money";
-import { Remittance, type RemittanceState, toPersistedIdentity } from "../domain/remittance";
+import { Remittance, type RemittanceState, toPersistedIdentity } from "../domain/remittance"; import { clickCuandoHabilite } from "../test-support/clicks"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
 import {
   FAKE_SOLANA_BENEFICIARY,
   FakeKycGateway,
@@ -144,15 +144,15 @@ const KYC_PROVENANCE_LIVE = "didit"; // WKH-233: el literal se escribe ACÁ, en 
 vi.mock("framer-motion", () => ({
   AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
   MotionConfig: ({ children }: { children: React.ReactNode }) => children,
-  motion: new Proxy(
-    {},
-    {
-      get:
-        (_t, tag: string) =>
-        ({ children, ...props }: { children?: React.ReactNode } & Record<string, unknown>) =>
-          React.createElement(tag, props, children),
+  // 🔴 CACHEA POR TAG, y el caché ES el target del Proxy (WKH-233 it4 · F4/§4.3): un `get` que fabrica en cada acceso da un TIPO de componente distinto por render y React REMONTA el subárbol entero.
+  motion: new Proxy({} as Record<string, unknown>, {
+    get: (t: Record<string, unknown>, tag: string) => {
+      if (!(tag in t))
+        t[tag] = ({ children, ...props }: { children?: React.ReactNode } & Record<string, unknown>) =>
+          React.createElement(tag, props, children);
+      return t[tag];
     },
-  ),
+  }),
 }));
 
 afterEach(cleanup);
@@ -281,7 +281,7 @@ describe("T-063-2 (AC-2): la acción de la bienvenida entra al formulario", () =
       target: { value: "Mamá" },
     });
     fireEvent.click(screen.getByRole("button", { name: /Volver al inicio/ }));
-    fireEvent.click(screen.getByRole("button", { name: /Empezar un envío/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Empezar un envío/ })); // ⚠️ SIGUE SIENDO UN CLICK CRUDO, Y ES DELIBERADO (re-AR it2 · BLQ-BAJO-2): el click de la línea de arriba es `VolverAlInicio`, cuyo `onVolver` es un `setStep` SÍNCRONO (`barra-destinos.tsx:158` ⇒ `flow.tsx:807`), no un `guard()`. Sin `guard` no hay `setBusy(true)`, así que la carrera que cierra `clickCuandoHabilite` no existe acá. Convertirlo obligaría a volver `async` a este `it` y no mediría nada nuevo
 
     expect(screen.getByPlaceholderText("Nombre de tu familiar")).toHaveValue("Mamá");
   });
@@ -369,7 +369,7 @@ describe("T-063-5 (AC-3): NINGÚN paso del envío pinta la barra", () => {
     fireEvent.change(screen.getByPlaceholderText("Nombre de tu familiar"), { target: { value: "Mamá" } });
     fireEvent.change(screen.getByPlaceholderText("002 193 004455667788 99"), { target: { value: TEST_CCI } });
     fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+    await clickCuandoHabilite(/Conectar wallet/);
     await screen.findByText(/Revisá el envío/);
     expect(barra(), "review").toBeNull();
 
@@ -488,13 +488,13 @@ describe("T-063-8 (AC-7): la píldora de modo demo no cambió de texto ni de con
     fireEvent.change(screen.getByPlaceholderText("Nombre de tu familiar"), { target: { value: "Mamá" } });
     fireEvent.change(screen.getByPlaceholderText("002 193 004455667788 99"), { target: { value: TEST_CCI } });
     fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+    await clickCuandoHabilite(/Conectar wallet/);
     // El recorrido completo: con el doble de KYC por defecto la identidad NO está recordada, así que
     // pasa por `review` y por `verify`. Es el camino que produce un `rem.kyc` con proveniencia
     // simulada, que es la entrada que `isDemoMode` mira.
     await screen.findByText(/Revisá el envío/);
     fireEvent.click(await screen.findByRole("button", { name: /Continuar/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Verificar mi identidad/ }));
+    await clickCuandoHabilite(/Verificar mi identidad/);
     await screen.findByRole("button", { name: /Confirmar y enviar/ });
 
     expect(screen.getByText("Modo demo (con pasos simulados)")).toBeInTheDocument();
@@ -726,7 +726,7 @@ describe("T-063-21 (AR-it2/BLQ-MED-1): la ventana previa a la primera respuesta 
     //     está dos líneas más abajo. El hecho ("corre antes de que la UI navegue") aguanta; el número no.
     //   · "la ventana es corta (cientos de ms)" también es FALSO: el `fetch` del cliente a
     //     `/api/kyc/decision` no tiene timeout y el del server es `AbortSignal.timeout(10_000)`
-    //     (`AbortSignal`, `../infrastructure/kyc/agent-kyc-client.ts:171` — WKH-233 lo movió: el `fetch` del borde salió de la route y vive en el cliente del agente, con el MISMO techo de 10 s), así que son HASTA 10 s cuando la
+    //     (`AbortSignal`, `../infrastructure/kyc/agent-kyc-client.ts:248` — WKH-233 lo movió: el `fetch` del borde salió de la route y vive en el cliente del agente, con el MISMO techo de 10 s), así que son HASTA 10 s cuando la
     //     petición llega, y sin techo cuando no llega — el caso plausible, porque la app se está
     //     recargando desde un redirect externo en una red móvil.
     // Y el aterrizaje no era una pantalla de navegación: era `confirm`, la que pide la firma que mueve la
@@ -1079,11 +1079,11 @@ describe("T-063-23 (AR/BLQ-BAJO-1): después de «Borrar igual», el dispositivo
     fireEvent.change(screen.getByPlaceholderText("Nombre de tu familiar"), { target: { value: "Mamá" } });
     fireEvent.change(screen.getByPlaceholderText("002 193 004455667788 99"), { target: { value: TEST_CCI } });
     fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+    await clickCuandoHabilite(/Conectar wallet/);
     await screen.findByText(/Revisá el envío/);
 
     fireEvent.click(await screen.findByRole("button", { name: /¿No sos vos\?/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Borrar igual/ }));
+    await clickCuandoHabilite(/Borrar igual/); // re-AR it3/MNR-3 — el 2º click va sobre `<button disabled={busy}>` (`flow.tsx:722`)
 
     expect(
       await screen.findByRole("heading", { name: "Tu plata no pasa por Chaski" }),

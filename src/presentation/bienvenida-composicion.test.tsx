@@ -157,7 +157,7 @@ import { Receipt, RemittanceFlow } from "./flow";
 import { buildTestContainer } from "../test-support/test-container";
 import { Money } from "../domain/money";
 import { Remittance, type RemittanceState, toPersistedIdentity } from "../domain/remittance";
-import { FAKE_SOLANA_BENEFICIARY, TEST_CCI, T0, beneficiary } from "../test-support/fakes";
+import { FAKE_SOLANA_BENEFICIARY, TEST_CCI, T0, beneficiary } from "../test-support/fakes"; import { clickCuandoHabilite } from "../test-support/clicks"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). El helper que vivía más abajo, ahora compartido
 const KYC_PROVENANCE_LIVE = "didit"; // WKH-233: el literal se escribe ACÁ, en un test, porque el módulo que lo exportaba se borró con la HU (el juicio "esto es real" ya no lo hace Chaski). EN UNA SOLA LÍNEA: este archivo recibe citas `archivo:línea` y agregar líneas las corre.
 
 // El MISMO doble que `barra-destinos.test.tsx`: sin él el `exit` de AnimatePresence no completa en el
@@ -168,15 +168,15 @@ const KYC_PROVENANCE_LIVE = "didit"; // WKH-233: el literal se escribe ACÁ, en 
 vi.mock("framer-motion", () => ({
   AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
   MotionConfig: ({ children }: { children: React.ReactNode }) => children,
-  motion: new Proxy(
-    {},
-    {
-      get:
-        (_t, tag: string) =>
-        ({ children, ...props }: { children?: React.ReactNode } & Record<string, unknown>) =>
-          React.createElement(tag, props, children),
+  // 🔴 CACHEA POR TAG, y el caché ES el target del Proxy (WKH-233 it4 · F4/§4.3): un `get` que fabrica en cada acceso da un TIPO de componente distinto por render y React REMONTA el subárbol entero.
+  motion: new Proxy({} as Record<string, unknown>, {
+    get: (t: Record<string, unknown>, tag: string) => {
+      if (!(tag in t))
+        t[tag] = ({ children, ...props }: { children?: React.ReactNode } & Record<string, unknown>) =>
+          React.createElement(tag, props, children);
+      return t[tag];
     },
-  ),
+  }),
 }));
 
 afterEach(cleanup);
@@ -230,6 +230,62 @@ const pintarBienvenida = () => render(<RemittanceFlow container={buildTestContai
 //   · y hay un `it` de ANTIVACUIDAD que lee el cuerpo de cada sonda y exige que llame a `expect`. Una
 //     fila nueva con `sonda: () => {}` se pone roja sola.
 type Sondeo = { seguir: () => Promise<void> };
+/**
+ * 🔴 EL TECHO DE TODA ESPERA DE LA CAMINATA (WKH-233 fix-pack · H-13). El default de `findBy*` es
+ * **1000 ms** —medido con una sonda en este mismo runner: sin argumento 1004 ms, `{timeout:2500}`
+ * 2502 ms, `{timeout:150}` 151 ms, o sea que el default es ése y el TERCER argumento es el que
+ * manda— y ese segundo NO alcanza cuando la máquina está cargada. El `it` que camina el flujo
+ * reventaba en 2 de 4 corridas de la suite completa, y volvió a reventar —en OTRA de sus esperas—
+ * corriendo con instrumentación de cobertura, que es más carga todavía.
+ *
+ * ⛔ NO ESCONDE NINGUNA REGRESIÓN: una regresión real nunca resuelve, así que el rojo sigue siendo
+ * rojo — sólo tarda más en decirlo. Lo que el techo compra es que "lento" deje de leerse como "roto".
+ * ⛔ Y NO SE ARREGLA CON `getBy*`: los elementos NO están montados cuando se piden (cada uno llega
+ * después de trabajo asíncrono del use-case), así que un `getBy*` fallaría SIEMPRE, no a veces.
+ *
+ * ⚠️ PERÍMETRO, DECLARADO PORQUE ESTO ARREGLA UN ARCHIVO Y NO LA CLASE: al 2026-08-20 el árbol tiene
+ * **327** llamadas `findBy*` y —contadas con el mismo barrido— NINGUNA pasaba `timeout`. Las demás
+ * siguen con el techo de 1000 ms y pueden reventar por lo mismo bajo carga. El arreglo de la CLASE
+ * sería `asyncUtilTimeout` global, y eso exige un `vitest.config.*` que este repo NO tiene a
+ * propósito (`readme-test-count.test.ts` se apoya en el descubrimiento por defecto). Es otra HU.
+ */
+const TECHO_ESPERA = { timeout: 8_000 } as const;
+
+/**
+ * 🔴 LA CAUSA REAL DEL FLAKE, Y NO ERA LENTITUD (WKH-233 fix-pack · H-13, 2ª iteración).
+ *
+ * ⚠️ ACÁ PRIMERO ESCRIBÍ "es contención de CPU, con un techo de 8 s alcanza". **Lo corrí y NO
+ * alcanzó**: con el techo puesto, el `it` esperó los 8,4 s COMPLETOS y falló igual, y el volcado del
+ * DOM mostró la pantalla parada en `connect` ("Paso 1 de 4", el botón *Conectar wallet* presente y
+ * sin ningún cartel de error). Esperar más no sirve cuando la pantalla no está tardando: está quieta.
+ *
+ * EL MECANISMO, leído del código y no inferido del síntoma:
+ *   · `flow.tsx:300-314` — `guard()` hace `setBusy(true)` → `await fn()` → `setBusy(false)`.
+ *   · `flow.tsx:964` — `<Button disabled={busy} onClick={onConnect}>`.
+ *   · `fireEvent.click` sobre un botón DESHABILITADO **no hace nada, y no avisa** — MEDIDO con una
+ *     sonda de dos casos: `disabled` ⇒ el `onClick` recibe 0 llamadas; el MISMO click sin
+ *     `disabled` ⇒ 1. No es una creencia sobre la librería.
+ * ⇒ Entre que el paso anterior cambia de pantalla y que su `guard` libera `busy`, el botón nuevo ya
+ * está en el DOM pero todavía deshabilitado. `findByRole` lo encuentra —existe—, el click se dispara,
+ * se descarta en silencio, y el flujo queda parado PARA SIEMPRE. Es una carrera, no un timeout: por
+ * eso fallaba ~2 de 4 y por eso aislado pasaba 22/22.
+ *
+ * ⛔ POR ESO NO SE ARREGLA CON UN TECHO MÁS GRANDE, y el techo de arriba se queda igual pero por otra
+ * razón (las esperas de PRESENCIA sí pueden tardar bajo carga). Lo que arregla la carrera es esperar
+ * a que el botón esté HABILITADO antes de tocarlo, que es lo que hace este helper.
+ *
+ * ⚠️ Se re-consulta el botón DENTRO del `waitFor` y otra vez para el click: React lo re-crea en cada
+ * render, así que guardar la referencia de la primera consulta sería clickear un nodo viejo.
+ */
+// ⚠️ ESTE HELPER YA NO VIVE ACÁ (re-AR it2 · BLQ-BAJO-2). Vivía en este archivo, y por eso el arreglo
+// de H-13 no se pudo aplicar en `agent-plan-card.test.tsx`, que tenía LITERALMENTE el mismo par de
+// líneas y que el propio commit reportaba haber visto fallar. Un helper privado de un archivo cierra
+// un `it`, no una familia. Se mudó a `../test-support/clicks.ts`, con el mecanismo entero escrito ahí,
+// y desde ahí lo usan los 32 sitios del árbol donde un `fireEvent.click` cae sobre un botón que puede
+// estar `disabled={busy}`. ⛔ NO se re-declara acá: una segunda copia es la que se queda vieja.
+//
+// (el `import` está arriba, pegado a una línea que ya existía, por el Δ0 de este archivo)
+
 const PASOS_ESPERADOS: readonly { frase: string; sonda: (s: Sondeo) => Promise<void> }[] = [
   {
     frase: "Ponés el monto y el CCI de tu familiar.",
@@ -245,12 +301,12 @@ const PASOS_ESPERADOS: readonly { frase: string; sonda: (s: Sondeo) => Promise<v
     // primero la identidad, y DESPUÉS de avanzar, la firma. El orden es parte de lo que el renglón dice.
     sonda: async ({ seguir }) => {
       expect(
-        await screen.findByRole("button", { name: /Verificar mi identidad/ }),
+        await screen.findByRole("button", { name: /Verificar mi identidad/ }, TECHO_ESPERA),
         "el renglón 2 anuncia una verificación de identidad: el flujo tiene que tenerla",
       ).toBeInTheDocument();
       await seguir();
       expect(
-        await screen.findByRole("button", { name: /Confirmar y enviar/ }),
+        await screen.findByRole("button", { name: /Confirmar y enviar/ }, TECHO_ESPERA),
         "y el renglón 2 también anuncia una firma",
       ).toBeInTheDocument();
     },
@@ -271,7 +327,7 @@ const PASOS_ESPERADOS: readonly { frase: string; sonda: (s: Sondeo) => Promise<v
     sonda: async ({ seguir }) => {
       await seguir();
       expect(
-        await screen.findByText("Paso 4 de 4"),
+        await screen.findByText("Paso 4 de 4", undefined, TECHO_ESPERA),
         "el renglón 3 anuncia un seguimiento: después de firmar el flujo tiene que seguir",
       ).toBeInTheDocument();
     },
@@ -315,10 +371,10 @@ describe("T-063-10 (2º pase): la pantalla dice QUÉ VA A PASAR, y lo que dice s
     // ⚠️ LA NAVEGACIÓN ES DE ESTE `it` Y LOS ASSERTS SON DE CADA SONDA (fix-pack, CR/MNR-7): antes los
     // asserts de los renglones 2 y 3 estaban acá inline y sus sondas eran cuerpos vacíos.
     const tocar = (nombre: RegExp) => async () => {
-      fireEvent.click(await screen.findByRole("button", { name: nombre }));
+      await clickCuandoHabilite(nombre);
     };
     pintarBienvenida();
-    fireEvent.click(screen.getByRole("button", { name: /Empezar un envío/ }));
+    await clickCuandoHabilite(/Empezar un envío/);
 
     // Renglón 1 · el monto y el CCI.
     await (PASOS_ESPERADOS[0] as { sonda: (s: Sondeo) => Promise<void> }).sonda({
@@ -332,10 +388,34 @@ describe("T-063-10 (2º pase): la pantalla dice QUÉ VA A PASAR, y lo que dice s
     fireEvent.change(screen.getByPlaceholderText("002 193 004455667788 99"), {
       target: { value: TEST_CCI },
     });
-    fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
-    await screen.findByText(/Revisá el envío/);
-    fireEvent.click(await screen.findByRole("button", { name: /Continuar/ }));
+    await clickCuandoHabilite(/Continuar/);
+    await clickCuandoHabilite(/Conectar wallet/);
+    // 🔴 EL ÚNICO `findBy*` DEL REPO CON TECHO EXPLÍCITO, Y ES POR UN FLAKE MEDIDO (WKH-233 fix-pack ·
+    // H-13). Esta línea reventaba en **2 de 4 corridas** de la suite completa, y NO por una aserción:
+    // por el timeout de `findBy*`, que por defecto es **1000 ms** — y ese default NO se dedujo del
+    // README de la librería: se MIDIÓ con una sonda (`findByText` sobre un texto inexistente, en este
+    // mismo runner) que dio `sin argumento = 1004 ms`, `{timeout:2500} = 2502 ms`,
+    // `{timeout:150} = 151 ms`. Esa misma sonda es la que prueba que el TERCER argumento es el que
+    // manda: si se ignorara, los tres habrían dado ~1000. Aislado el `it` pasa 22/22. 🔴 ACÁ ESCRIBÍ «sino CONTENCIÓN DE CPU» Y **ES FALSO**, medido en la it4 (F4/§4.3): el desprendedor era el doble de `framer-motion` de `:174` — un `get` sin caché devuelve una función NUEVA por acceso ⇒ React ve otro TIPO de componente y REMONTA la pantalla entera en cada render. Con la máquina OCIOSA y sin tocar nada, el nodo se desprendía solo a los 208 ms; con el caché puesto, `desprendioSoloMs` pasa a -1.
+    // El techo se queda igual pero por la OTRA mitad —encontrar el nodo bajo carga sí puede tardar—,
+    // y ⛔ dejó de ser el candado de esta línea: lo que la sostiene es que el doble ya no remonte.
+    // ⚠️ Y LA CORRECCIÓN DE LA CORRECCIÓN: el 2º pase decía que la causa «no es de esta HU» y eso SIGUE SIENDO CIERTO (los 10 dobles vivían en `main` intactos), pero la RAZÓN que escribí estaba medida contra `e9b41b2..HEAD` en vez de contra `main`. Contra `main`, `cd15fba` sí reescribió el cuerpo de este `it` —incluida la línea del assert—, así que no fue un espectador: no creó la carrera, le movió el entrelazado.
+    //
+    // ⛔ POR QUÉ UN TECHO Y NO `getByText`: el elemento NO está montado cuando se pide. El click de
+    // arriba dispara trabajo asíncrono, así que un `getBy*` fallaría SIEMPRE, no a veces.
+    // ⛔ Y POR QUÉ ESTO NO ESCONDE UNA REGRESIÓN: una regresión real nunca resuelve, así que el test
+    // sigue rojo — sólo tarda más en decirlo. Lo que el techo compra es que "lento" deje de leerse
+    // como "roto". El `it` lleva su propio techo (`20_000`) porque el default de vitest son 5000 ms y
+    // sin subirlo el `it` moriría antes que el `findBy`.
+    //
+    // ⚠️ PERÍMETRO, DECLARADO PORQUE ESTO ARREGLA UN SITIO Y NO LA CLASE: al 2026-08-20 el árbol tiene
+    // **327** llamadas `findBy*` y —contadas con el mismo barrido— **ninguna** pasaba `timeout`. O sea
+    // que las otras 326 siguen con el techo de 1000 ms y pueden reventar por lo mismo bajo carga. No se
+    // arreglan acá: el arreglo de la CLASE sería subir `asyncUtilTimeout` global, y eso exige un
+    // `vitest.config.*` que este repo NO tiene a propósito (`readme-test-count.test.ts` se apoya en que
+    // el descubrimiento sea el default). Es una HU aparte, no un renglón de este fix-pack.
+    await screen.findByText(/Revisá el envío/, undefined, TECHO_ESPERA);
+    await clickCuandoHabilite(/Continuar/);
 
     // Renglón 2 · la identidad primero y la firma después, en ese orden y con ese nombre.
     await (PASOS_ESPERADOS[1] as { sonda: (s: Sondeo) => Promise<void> }).sonda({
@@ -346,7 +426,10 @@ describe("T-063-10 (2º pase): la pantalla dice QUÉ VA A PASAR, y lo que dice s
     await (PASOS_ESPERADOS[2] as { sonda: (s: Sondeo) => Promise<void> }).sonda({
       seguir: tocar(/Confirmar y enviar/),
     });
-  });
+    // El techo del `it`: ver el bloque del `findByText` de arriba. El default de vitest (5000 ms) es
+    // MENOR que el techo que este test necesita, así que sin esto el `it` moriría primero y el rojo
+    // volvería a leerse como "el flujo no llega", que es justo el diagnóstico equivocado.
+  }, 20_000);
 
   it("🔴 ninguna fila de la tabla puede traer una sonda VACÍA (antivacuidad del propio candado)", () => {
     // MUTANTE (aplicado): agregar una cuarta fila con `frase: "…" , sonda: async () => {}` ⇒ rojo acá,
@@ -604,7 +687,7 @@ describe("T-063-24 (AR/BLQ-BAJO-2): la promesa del explorador se ejecuta en las 
 // ══ HU-068 · LOS CANDADOS DE LA BANDA DE MARCA ════════════════════════════════════════════════════
 //
 // ⛔ VAN AL FINAL DEL ARCHIVO, Y NO ES ORDEN ESTÉTICO: `bienvenida.tsx:153` cita
-// (`PASOS_ESPERADOS`, `bienvenida-composicion.test.tsx:233`), así que un `describe` insertado más
+// (`PASOS_ESPERADOS`, `bienvenida-composicion.test.tsx:289`), así que un `describe` insertado más
 // arriba correría ese número y rompería una cita SALIENTE — el lado que HU-066 se olvidó de mirar.
 // ⛔ Y POR LO MISMO NO HAY NINGÚN `import` NUEVO EN LA CABECERA: lo que estos tests necesitan de
 // `node:fs`, de `lucide-react`, de `./marca` y del splash entra con `await import(...)` adentro del

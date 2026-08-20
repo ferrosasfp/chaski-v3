@@ -4,7 +4,13 @@
 // Acá no se escanea nada, y la pantalla lo dice. Es deliberado que ESTA sea la pantalla y no un
 // formulario que pida datos: pedirlos daría a entender que se validan, y no se valida ninguno.
 //
-// 🔴 SÓLO RESPONDE CON `DIDIT_ENV=mock`, y eso ahora es un gate y no una esperanza.
+// 🔴 SÓLO RESPONDE CON `MOCK_KYC_SURFACE_ENABLED=true`, y eso es un gate y no una esperanza.
+//
+// ⚠️ ACÁ DECÍA `DIDIT_ENV=mock`, Y ESA ENV ESTÁ MUERTA (WKH-233 fix-pack · H-10). No la lee ni una
+// línea de código del repo: el único gate es (`mockDiditSurfaceEnabled`, `../../src/infrastructure/mock-surface.ts:51`),
+// que compara `MOCK_KYC_SURFACE_ENABLED` contra el literal exacto `"true"`. Un operador que siguiera
+// la línea vieja setearía una env que no hace nada y la página seguiría apagada, sin ningún error que
+// se lo diga. Son DOS envs distintas y el cambio está declarado en `.env.example`.
 //
 // Lo que decía antes: *"la ruta que emite el link ni siquiera responde, así que nadie llega hasta
 // acá"*. La primera mitad es cierta — `app/api/mock-didit/v3/session/route.ts` devuelve 404 sin mock —
@@ -21,12 +27,21 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { mockDiditSurfaceEnabled } from "../../src/infrastructure/mock-surface";
 
-export const metadata = { title: "Verificación simulada · Chaski" };
+// 🔴 `generateMetadata` Y NO UN `metadata` CONSTANTE (re-AR it2 · MNR-7). Con el gate apagado la página
+// corta con `notFound()`, pero el `metadata` estático se sirve IGUAL: medido con `curl` contra un build
+// local, el cuerpo traía "This page could not be found" **y** `<title>Verificación simulada · Chaski</title>`,
+// sin ninguna otra cadena del simulador. O sea que la pantalla apagada se anunciaba por su nombre a
+// cualquiera que mirara el HTML — y el 404 de esta app ya sale con status 200 (ver `T-GATE-3'`), así que
+// el título era el segundo indicio que quedaba. ⛔ NO cambia el gate ni el corte: sólo deja de nombrar
+// una superficie de prueba cuando esa superficie no existe.
+export async function generateMetadata(): Promise<{ title?: string }> {
+  return mockDiditSurfaceEnabled() ? { title: "Verificación simulada · Chaski" } : {};
+}
 
 // 🔴 SIN ESTO EL GATE SE EVALÚA UNA SOLA VEZ, AL COMPILAR. Medido el 2026-08-11: `npm run build`
 // marcaba esta ruta `○ (Static)`, o sea prerenderizada, así que `mockDiditSurfaceEnabled()` corría con
-// el `DIDIT_ENV` del BUILD y el resultado quedaba horneado en el HTML. Consecuencia concreta: pasar
-// `DIDIT_ENV` a `live` en el proveedor **no cerraría esta página** hasta un rebuild, y el 404 dejaría
+// la env del BUILD y el resultado quedaba horneado en el HTML. Consecuencia concreta: apagar
+// `MOCK_KYC_SURFACE_ENABLED` en el proveedor **no cerraría esta página** hasta un rebuild, y el 404 dejaría
 // de significar lo que la ruta hermana dice que significa. Es la misma familia de trampa que "un
 // redeploy no recompila las variables": la que hace que apagar algo no lo apague.
 //
@@ -40,8 +55,20 @@ export default async function KycSimuladoPage({
   searchParams: Promise<{ session?: string; vendor?: string }>;
 }) {
   // ⛔ ANTES de leer los parámetros y antes de renderizar nada: si el mock no está declarado, esta
-  // pantalla no existe. `notFound()` da el 404 de Next, o sea la misma respuesta observable que la ruta
-  // hermana, que es lo que hace verificable desde afuera que la superficie de prueba está apagada.
+  // pantalla no se renderiza. `notFound()` corta con la señal de 404 del framework.
+  //
+  // ⚠️ ACÁ DECÍA que eso da *"la misma respuesta observable que la ruta hermana"*, Y ES FALSO —MEDIDO,
+  // no deducido (WKH-233 fix-pack · H-12)—. Contra un build local de este árbol, con un centinela que
+  // prueba que el servidor servía ese build: esta página devuelve **HTTP 200** con el cuerpo del
+  // not-found de Next, mientras `POST /api/mock-didit/v3/session` devuelve **404**. Dos sondas
+  // mínimas (`force-dynamic` + `notFound()` a secas, y la misma sin `force-dynamic`) también dieron
+  // 200 ⇒ **ninguna página de esta app devuelve 404 desde `notFound()`**; una URL que de verdad no
+  // existe sí. No es algo que esta página pueda arreglar sola.
+  //
+  // ⇒ LO QUE SÍ ES CIERTO: el contenido del simulador NO se sirve. Lo que NO es cierto: que el status
+  // lo delate. Un monitor externo que pregunte "¿está apagado?" por el código HTTP va a leer que no.
+  // ⛔ PROHIBIDO volver a escribir "da el 404" sin una medición nueva que lo sostenga. El candado que
+  // mide el corte —no el texto de esta línea— es `T-GATE-3'` en `kyc-simulado-gate.test.ts`.
   if (!mockDiditSurfaceEnabled()) notFound();
 
   const { session = "", vendor = "" } = await searchParams;

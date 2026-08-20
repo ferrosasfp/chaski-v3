@@ -40,11 +40,24 @@
 // hasta que se re-verifique.** ⛔ PROHIBIDO agregar un reintento con otra credencial, un camino de
 // respaldo, o un `?? true`.
 //
-// ⚠️ CONSUMIDORES, MEDIDO Y NO SUPUESTO (2026-08-19): **uno vivo** — `app/api/payout/prepare/route.ts`,
-// el money-path real— y **uno advisory sin consumidor de producción** — `app/api/payout/validate`,
-// que es un POST público que nadie del flujo llama—. La cabecera anterior nombraba además
-// `/api/a2a/payout/submit`, que **NO EXISTE en este repo** (`ls -R app/api/a2a/`: sólo `plan`,
-// `quote` y `payout/challenge`). ⛔ Y NO se crea para que la cita sea cierta: se corrige la cita.
+// ⚠️ CONSUMIDORES — SON **TRES**, Y LA CUENTA ANTERIOR DECÍA DOS (WKH-233 fix-pack · H-7). El que
+// faltaba no es menor: es el BACKFILL, o sea justo el camino del que depende el análisis de rescate
+// de quien no tiene fila. Re-derivado con `grep -rn resolvePayoutAuthority src app scripts` (no de
+// memoria), al 2026-08-19:
+//   1. (`resolvePayoutAuthority`, `../../../app/api/payout/prepare/route.ts:331`) — el money-path real.
+//   2. (`resolvePayoutAuthority`, `../../../app/api/payout/validate/route.ts:66`) — advisory: un POST
+//      público que ningún paso del flujo llama.
+//   3. (`resolvePayoutAuthority`, `../../../app/api/kyc/verdict/route.ts:335`) — el backfill (V8), que
+//      re-consulta con la pista del navegador y persiste sólo si vuelve autorizada. ⚠️ ESE CALLER LEE EL
+//      `httpStatus`, NO SÓLO EL `authorized` (re-AR it2 · BLQ-BAJO-1): un 5xx de acá significa "no
+//      contestamos", no "dijimos que no", y colapsar los dos hacía que la ruta respondiera `absent` —
+//      o sea, un hecho sobre la verificación de una persona que nadie midió. Si algún día un desenlace
+//      5xx pasa a significar una respuesta de verdad, ese caller queda mal SIN que nada se ponga rojo.
+// ⛔ Y LA CUENTA ENVEJECE SOLA: es una foto de un `grep`, no un invariante. Nada la vigila. Si agregás
+// un cuarto consumidor, esta lista queda vieja en silencio; re-derivala antes de apoyarte en ella.
+// La cabecera de antes nombraba además `/api/a2a/payout/submit`, que **NO EXISTE en este repo**
+// (`ls -R app/api/a2a/`: sólo `plan`, `quote` y `payout/challenge`). ⛔ NO se crea para que la cita
+// sea cierta: se corrige la cita.
 //
 // Guard-order (fail-closed en las cinco ramas; nunca un fetch antes de pasar los guards):
 //   1. host del agente ausente + prod   → 503 fail-loud (nunca autoriza por default)
@@ -180,6 +193,20 @@ export async function resolvePayoutAuthority(
     // 🔴 EL GATE, Y NADA MÁS (DT-5'). ⛔ PROHIBIDO agregarle un `|| esDemo()`, un `?? true`, o una
     // recomposición con `approved && identityMatches`. La comparación es `=== true` ESTRICTA, nunca
     // truthiness: un `payoutAllowed: "true"` (el STRING) es truthy y abriría el gate.
+    //
+    // ⛔ Y ACÁ VA EL LÍMITE DE ESTE GATE, ESCRITO COMO ACOTAMIENTO Y NO COMO CIERRE (WKH-233 fix-pack
+    // · H-5). El work-item de la HU dice, en AC-5 y AC-7, que se autoriza *"únicamente si la respuesta
+    // trae `identityMatches === true`"*. **Este código no mira `identityMatches` en ninguna línea**, y
+    // eso es correcto: lo sustituyó DT-5' (`sdd.md:307-337`), que el founder aprobó en MI-1. Lo que
+    // nadie había hecho al escribir esto era reescribir los ACs. ⚠️ ESO SE VOLVIÓ FALSO EL 2026-08-20, sin
+    // que nadie editara esta línea (re-AR it2 · R-6): AC-5 y AC-7 YA ESTÁN REESCRITOS y hoy dicen `payoutAllowed === true`, o sea lo mismo que hace el código — verificado en `work-item.md:485-501` y `:505-521`, que además citan `sdd.md:307-337`. ⇒ **Manda el código y DT-5', y el expediente ya coincide.** ⛔ Es un candado que se pudre solo: nada vigila esta frase, así que si volvés a leerla dentro de seis meses, re-derivala del work-item antes de creerle.
+    //
+    // 🔴 LA PREMISA QUE HACE SANA ESA DECISIÓN NO SE VERIFICA ACÁ, NI PUEDE: que `payoutAllowed === true`
+    // ya exija una identidad coincidente lo sostiene el AGENTE, en otro repo, que es Scope OUT. Este
+    // repo verifica que el gate es exactamente ese booleano y nada más (T-AUTH-1). **NO verifica qué
+    // hay detrás de él.** Si el agente aflojara ese criterio, acá no se pondría rojo nada y este
+    // `return` autorizaría un desembolso sin identidad comprobada. ⛔ PROHIBIDO reescribir este
+    // párrafo como si la garantía estuviera cerrada de este lado.
     if (r.output.payoutAllowed !== true) {
       return { authorized: false, reason: "kyc_not_approved", httpStatus: 200 };
     }

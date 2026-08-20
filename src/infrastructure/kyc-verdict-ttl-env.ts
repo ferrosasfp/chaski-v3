@@ -5,8 +5,11 @@
 // inlinea como `undefined` y esto devolvería 365 en silencio mientras el servidor usa otro número.
 // El motivo largo está en la cabecera de `kyc-verdict-ttl.ts`.
 //
-// Exemplar: `didit/didit-env.ts:40-87` (resolvedor fail-loud + tipo branded + mensaje que nombra el
-// daño). Igual que ahí: PROHIBIDO el `??`. El operador DECLARA la política; el código no la adivina.
+// Exemplar: `src/infrastructure/didit/didit-env.ts:40-87`, ⛔ QUE YA NO EXISTE — lo borró WKH-233 con
+// el proveedor entero (`ls src/infrastructure/didit` da error). El exemplar VIVO equivalente es
+// (`resolveKycAgentBaseUrl`, `./kyc/agent-env.ts:51`): mismo molde (resolvedor fail-loud + tipo
+// branded + mensaje que nombra el daño). Igual que ahí: PROHIBIDO el `??`. El operador DECLARA la
+// política; el código no la adivina.
 import {
   KYC_CLIENT_HINT_TTL_DAYS,
   KYC_VERDICT_DEFAULT_TTL_DAYS,

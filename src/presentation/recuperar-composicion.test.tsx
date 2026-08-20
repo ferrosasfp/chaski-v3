@@ -173,7 +173,7 @@ import React from "react";
 import { RemittanceFlow } from "./flow";
 import { QUE_RECUPERA } from "./recuperar";
 import { buildTestContainer } from "../test-support/test-container";
-import { Money } from "../domain/money";
+import { Money } from "../domain/money"; import { clickCuandoHabilite } from "../test-support/clicks"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
 import {
   type KycVerification,
   Remittance,
@@ -198,15 +198,15 @@ import {
 vi.mock("framer-motion", () => ({
   AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
   MotionConfig: ({ children }: { children: React.ReactNode }) => children,
-  motion: new Proxy(
-    {},
-    {
-      get:
-        (_t, tag: string) =>
-        ({ children, ...props }: { children?: React.ReactNode } & Record<string, unknown>) =>
-          React.createElement(tag, props, children),
+  // 🔴 CACHEA POR TAG, y el caché ES el target del Proxy (WKH-233 it4 · F4/§4.3): un `get` que fabrica en cada acceso da un TIPO de componente distinto por render y React REMONTA el subárbol entero.
+  motion: new Proxy({} as Record<string, unknown>, {
+    get: (t: Record<string, unknown>, tag: string) => {
+      if (!(tag in t))
+        t[tag] = ({ children, ...props }: { children?: React.ReactNode } & Record<string, unknown>) =>
+          React.createElement(tag, props, children);
+      return t[tag];
     },
-  ),
+  }),
 }));
 
 afterEach(cleanup);
@@ -353,7 +353,7 @@ describe("T-063-14 (2º pase): el pie dice con qué cuenta se busca, y la búsqu
   const buscar = async () => {
     const abrir = screen.queryByRole("button", { name: /Recuperar un envío perdido/ });
     if (abrir !== null) fireEvent.click(abrir);
-    fireEvent.click(await screen.findByRole("button", { name: /Buscar mis escrows/ }));
+    await clickCuandoHabilite(/Buscar mis escrows/);
   };
 
   it("🔴 cambiar la cuenta conectada entre dos búsquedas cambia el `sender` de la segunda", async () => {

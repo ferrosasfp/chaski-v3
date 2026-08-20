@@ -75,12 +75,103 @@ describe("candado · la superficie de prueba de Didit se apaga entera y desde un
     expect(mockDiditSurfaceEnabled()).toBe(true);
   });
 
-  // ── Forma: la página realmente CONSULTA el gate y corta antes de renderizar ────────────────────
-  it("T-GATE-3: la página llama al gate y hace notFound()", () => {
-    const src = leer("app/kyc-simulado/page.tsx");
-    expect(src).toContain("mockDiditSurfaceEnabled");
-    expect(src).toContain("notFound()");
-    expect(src).toMatch(/if\s*\(!mockDiditSurfaceEnabled\(\)\)\s*notFound\(\)/);
+  // ── COMPORTAMIENTO: la página CORTA. Y esto ya no se lee del fuente ────────────────────────────
+  //
+  // ⛔ ACÁ VIVÍA `T-GATE-3`, Y ERA UN `toMatch` SOBRE EL TEXTO DEL ARCHIVO (WKH-233 fix-pack · H-12).
+  // Sus tres aserciones —`toContain("notFound()")` y
+  // `toMatch(/if\s*\(!mockDiditSurfaceEnabled\(\)\)\s*notFound\(\)/)`— verificaban que la LÍNEA
+  // estuviera escrita, nunca que hiciera algo. Un `notFound` importado de otro lado, un `if` invertido
+  // por un typo en el gate, o la línea entera dentro de un bloque muerto: los tres pasan ese regex.
+  // Lo reemplaza esto, que llama a la función y mira qué pasa.
+  //
+  // 🔴 Y ACÁ VA EL LÍMITE, MEDIDO Y DECLARADO EN VEZ DE PROMETIDO. La cabecera de la página decía que
+  // `notFound()` produce *"la misma respuesta observable que la ruta hermana"*, o sea un 404. **Es
+  // FALSO en esta app, y no por culpa de esta página.** Medido el 2026-08-20 contra un build local de
+  // este árbol, con un centinela que prueba que el servidor servía ESE build:
+  //
+  //     GET /kyc-simulado          (gate apagado)              ⇒ 200, cuerpo del not-found de Next
+  //     GET /ruta-que-no-existe    (control)                   ⇒ 404
+  //     POST /api/mock-didit/v3/session (la ruta hermana)      ⇒ 404 {"error":"mock_didit_disabled"}
+  //     GET /zz-probe-a  (sonda: `force-dynamic` + `notFound()` y NADA más)  ⇒ 200
+  //     GET /zz-probe-b  (sonda: página prerenderizada + `notFound()`)       ⇒ 200
+  //
+  // Las dos sondas se borraron después de medir. Lo que dicen es que **ninguna página de esta app
+  // devuelve 404 desde `notFound()`**, tenga `force-dynamic` o no: el status ya está comprometido
+  // cuando el árbol se resuelve. No es algo que esta página pueda arreglar sola, y arreglarlo de
+  // verdad (un `middleware.ts`) es infraestructura nueva que este fix-pack no trae. ⇒ Se declara.
+  //
+  // ⚠️ QUÉ SÍ ESTÁ GARANTIZADO, Y ES LO QUE ESTE `it` MIDE: con el gate apagado la página **no
+  // renderiza su contenido** —corta con la señal de 404 del framework antes de leer los parámetros—,
+  // así que el simulador no se muestra. Lo que NO está garantizado es el STATUS. Y el 200 importa:
+  // un monitor externo que pregunte "¿está apagado?" mirando el código HTTP va a leer que NO.
+  // ⛔ PROHIBIDO reescribir esto como "responde 404" mientras no haya una medición que lo sostenga.
+  //
+  // ⚠️ Y LO QUE ESTA MEDICIÓN NO CUBRE: se hizo con `next start` local. En Vercel la respuesta pasa
+  // además por su capa de routing. Al 2026-08-20 prod devuelve lo MISMO (200 con el marcador
+  // `BAILOUT_TO_CLIENT_SIDE_RENDERING` y sin el cuerpo del simulador), así que las dos coinciden hoy;
+  // eso es una foto de un `curl`, no un invariante, y nada lo vigila.
+  it("T-GATE-3': con el gate apagado la página CORTA con la señal de 404 (llamada, no leída)", async () => {
+    vi.stubEnv("MOCK_KYC_SURFACE_ENABLED", undefined);
+    vi.resetModules();
+    const { default: KycSimuladoPage } = await import("./page");
+    let err: unknown;
+    try {
+      await KycSimuladoPage({ searchParams: Promise.resolve({}) });
+    } catch (e) {
+      err = e;
+    }
+    // 🧬 MUTANTE: invertir el `if`, o borrar el `notFound()`, ⇒ la llamada RESUELVE ⇒ rojo acá. El
+    // regex de antes seguía verde con el `if` invertido, porque la línea seguía escrita igual.
+    expect(err, "la página renderizó el simulador con el gate apagado").toBeDefined();
+    // Y no cualquier error: la señal de 404 del framework. Sin esto, un `throw` por un import roto
+    // pasaría por "el gate funciona".
+    expect((err as { digest?: string })?.digest).toBe("NEXT_HTTP_ERROR_FALLBACK;404");
+  });
+
+  // 🧪 CONTROL POSITIVO, EN LA MISMA CORRIDA. Sin él, el `it` de arriba pasaría igual si la página
+  // tirara SIEMPRE (un import roto, un typo en el gate que lo deje en `false` fijo): estaríamos
+  // midiendo "esto explota" y llamándolo "el gate corta".
+  it("T-GATE-3'(control): con el gate encendido la página SÍ renderiza", async () => {
+    vi.stubEnv("MOCK_KYC_SURFACE_ENABLED", "true");
+    vi.resetModules();
+    const { default: KycSimuladoPage } = await import("./page");
+    const out = await KycSimuladoPage({ searchParams: Promise.resolve({ session: "s-1" }) });
+    expect(out, "la página no devolvió un elemento de React con el gate encendido").toBeTruthy();
+  });
+
+  // ── T-GATE-6 (re-AR it2 · MNR-7) — CON EL GATE APAGADO, LA PÁGINA TAMPOCO SE NOMBRA ───────────
+  //
+  // 🔴 QUÉ AGUJERO CIERRA, MEDIDO Y NO DEDUCIDO. El AR midió con `curl` contra un build local que, con
+  // el gate apagado, la respuesta trae el cuerpo del not-found de Next **y** el `<title>Verificación
+  // simulada · Chaski</title>` — porque el `metadata` era una constante de módulo y Next lo resuelve
+  // aunque el árbol corte. Ninguna otra cadena del simulador aparecía (ni "Entorno de prueba" ni el
+  // `h1`), así que el contenido SÍ estaba apagado: lo que quedaba encendido era el nombre.
+  //
+  // Importa porque el 404 de esta app sale con status 200 (`T-GATE-3'`): un monitor externo que
+  // pregunte "¿está apagado?" ya leía 200, y además leía el título de la pantalla apagada.
+  //
+  // ⚠️ LO QUE ESTE `it` **NO** MIDE: el HTML servido. Llama a `generateMetadata()`, que es la función
+  // de la que sale el `<title>`; el render completo pide un build, y eso no es algo que un test
+  // unitario haga. El eslabón que queda a mano es "Next usa lo que devuelve esta función".
+  it("T-GATE-6: con el gate apagado, `generateMetadata` no nombra el simulador", async () => {
+    vi.stubEnv("MOCK_KYC_SURFACE_ENABLED", undefined);
+    vi.resetModules();
+    const { generateMetadata } = await import("./page");
+    const meta = await generateMetadata();
+    // 🧬 MUTANTE: volver a `export const metadata = { title: "Verificación simulada · Chaski" }` ⇒ el
+    // título sale igual con el gate apagado ⇒ ROJO acá.
+    expect(JSON.stringify(meta)).not.toContain("simulada");
+    expect(meta.title).toBeUndefined();
+  });
+
+  // 🧪 CONTROL POSITIVO, EN LA MISMA CORRIDA: con el gate encendido el título SIGUE ESTANDO. Sin esto,
+  // borrar el `metadata` entero pondría verde al `it` de arriba y le sacaría el nombre a la pantalla
+  // que sí existe.
+  it("T-GATE-6(control): con el gate encendido, el título del simulador SÍ está", async () => {
+    vi.stubEnv("MOCK_KYC_SURFACE_ENABLED", "true");
+    vi.resetModules();
+    const { generateMetadata } = await import("./page");
+    expect((await generateMetadata()).title).toBe("Verificación simulada · Chaski");
   });
 
   // ── Forma: el gate se evalúa POR REQUEST y no al compilar ─────────────────────────────────────

@@ -33,7 +33,7 @@ import { CUSTODY_WINDOW_SECS } from "../infrastructure/solana-wallet";
 import { Money } from "../domain/money";
 import { Remittance, type RemittanceState, toPersistedIdentity } from "../domain/remittance";
 import { RecoverEscrowFunds } from "../application/use-cases/recover-escrow-funds";
-import type { ResumeKyc } from "../application/use-cases/resume-kyc";
+import type { ResumeKyc } from "../application/use-cases/resume-kyc"; import { clickCuandoHabilite } from "../test-support/clicks"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
 import {
   FakeKycGateway,
   FakeSolanaEscrowRefundGateway,
@@ -54,15 +54,15 @@ vi.mock("framer-motion", () => ({
   // Lista CERRADA: lo que no esté acá no existe para este archivo, y el faltante tira TODA la
   // suite del archivo, no un test. Ver el docblock del mismo doble en `flow.test.tsx`.
   MotionConfig: ({ children }: { children: React.ReactNode }) => children,
-  motion: new Proxy(
-    {},
-    {
-      get:
-        (_t, tag: string) =>
-        ({ children, ...props }: { children?: React.ReactNode } & Record<string, unknown>) =>
-          React.createElement(tag, props, children),
+  // 🔴 CACHEA POR TAG, y el caché ES el target del Proxy (WKH-233 it4 · F4/§4.3): un `get` que fabrica en cada acceso da un TIPO de componente distinto por render y React REMONTA el subárbol entero.
+  motion: new Proxy({} as Record<string, unknown>, {
+    get: (t: Record<string, unknown>, tag: string) => {
+      if (!(tag in t))
+        t[tag] = ({ children, ...props }: { children?: React.ReactNode } & Record<string, unknown>) =>
+          React.createElement(tag, props, children);
+      return t[tag];
     },
-  ),
+  }),
 }));
 
 afterEach(() => cleanup());
@@ -104,10 +104,10 @@ async function irAConfirmarConKyc(provenance: string | undefined, realVerified =
   );
   fillSend();
   fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+  await clickCuandoHabilite(/Conectar wallet/);
   await screen.findByText(/Revisá el envío/);
   fireEvent.click(await screen.findByRole("button", { name: /Continuar/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Verificar mi identidad/ }));
+  await clickCuandoHabilite(/Verificar mi identidad/);
   await screen.findByRole("button", { name: /Confirmar y enviar/ });
 }
 
@@ -291,7 +291,7 @@ describe("paso de identidad", () => {
   it("mientras arranca no narra tres etapas de un verificador que no se está ejecutando", async () => {
     await irARevisar();
     fireEvent.click(await screen.findByRole("button", { name: /Continuar/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Verificar mi identidad/ }));
+    await clickCuandoHabilite(/Verificar mi identidad/);
 
     expect(screen.queryByText(/Escaneando tu documento/)).toBeNull();
     expect(screen.queryByText(/Verificando tu rostro/)).toBeNull();

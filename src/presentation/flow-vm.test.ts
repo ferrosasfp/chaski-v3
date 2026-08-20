@@ -29,7 +29,7 @@ import {
   kycOriginNotice,
   // ⛔ acá estaba `REAL_KYC_PROVENANCES`: misma HU, mismo motivo. Ver la lápida en `flow-vm.ts`.
   esVentanaSinAbiertos, sinAbiertosCopy, sinIndiceCopy, indiceIlegibleCopy, statusDisplay, lecturaSeguimiento, gestoDespuesDeProve, REVISION_MECANISMO_APAGADO, REVISION_NO_SE_PUDO_PEDIR, REVISION_SIN_FIRMA, REVISION_TECHO_ALCANZADO, // WKH-339/CR: las otras 4 constantes YA NO se importan por nombre — el loop las DERIVA del módulo, que es el arreglo de BLQ-BAJO-1. Si vuelven acá por nombre, el loop volvió a ser una lista a mano. // WKH-339: EN ESTA LÍNEA, no en líneas nuevas — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
-} from "./flow-vm"; import { cruceDeCuenta, seVerificoLaCuenta } from "./flow-vm"; import * as MODULO_FLOW_VM from "./flow-vm"; // WKH-339/CR-BLQ-BAJO-1: el namespace entero, para DERIVAR la lista de copies en vez de escribirla. En esta línea para no desplazar `:520`
+} from "./flow-vm"; import { COPY_FALLO_SIN_DEPOSITO, copyDeEntregaFallida } from "./flow-vm"; import { cruceDeCuenta, seVerificoLaCuenta } from "./flow-vm"; import * as MODULO_FLOW_VM from "./flow-vm"; // WKH-339/CR-BLQ-BAJO-1: el namespace entero, para DERIVAR la lista de copies en vez de escribirla. En esta línea para no desplazar `:520`
 // WKH-233 — los dos literales del proveedor se escriben ACÁ, en un test. El módulo que los exportaba
 // se borró con la HU; los tests SÍ pueden nombrarlo (el candado de residuo salta los `*.test.*`).
 const KYC_PROVENANCE_LIVE = "didit";
@@ -2473,5 +2473,219 @@ describe("T-067-10 (WKH-359/AC-6): el cruce de cuenta distingue NO COMPARADO de 
   it("los tres valores son DISTINTOS entre sí: colapsar dos pierde la distinción que AC-6 pide", () => {
     const todos = [cruceDeCuenta(A, A), cruceDeCuenta(A, null), cruceDeCuenta(null, A)];
     expect(new Set(todos).size, "dos de los tres estados colapsaron en el mismo valor").toBe(3);
+  });
+});
+
+// ── T-COPY-5 (WKH-233 fix-pack · H-1) — el tercer enum del prepare tampoco promete USDC en el escrow ──
+//
+// 🔴 QUÉ DEFECTO CIERRA, Y POR QUÉ NADIE LO VIO. `confirm-and-send.ts` declaraba que los TRES enums que
+// puede devolver `/api/payout/prepare` tenían copy propio en `flow-vm.ts` "para que ninguno prometa USDC
+// en el escrow". Eran DOS. `payout_authority_unavailable` no tenía rama y caía en el catch-all
+// `code.includes("payout")`, cuyo texto manda a la persona a sacar del escrow unos USDC que nunca
+// salieron de su billetera: los tres emisores del enum (`app/api/payout/prepare/route.ts:333`, `:344`,
+// `:347`) cortan antes del forward al agente y antes de `authorizePrincipal`.
+//
+//
+// 🔴 QUÉ MIDE ESTE `describe` Y QUÉ NO, ESCRITO PORQUE LA DIFERENCIA YA COSTÓ UNA ITERACIÓN (re-AR it2 ·
+// BLQ-ALTO-1). Mide **la FUNCIÓN `humanError`**: que el enum tenga rama propia y que el catch-all siga
+// vivo. **NO mide la PANTALLA.** Con estos `it` en verde, `TrackView` estuvo igual de roto que antes
+// durante toda la 1ª iteración del fix-pack, porque su `else` estaba hardcodeado a
+// `humanError("payout_failed")` y el `failureReason` real no llegaba nunca hasta acá. Lo que la persona
+// LEE lo mide `src/presentation/copy-de-prepare-en-pantalla.test.tsx`, que renderiza la vista y barre
+// TODOS los enums que emite la route. Los dos hacen falta: éste clava el copy, aquél clava el camino.
+// ⛔ ESTE `describe` VA AL FINAL DEL ARCHIVO A PROPÓSITO, y no es prolijidad: `:481`, `:520`, `:76-101`,
+// `:1704-1707` y `:1873` de este archivo los cita otro por NÚMERO (`http-pop-signer.ts:33`,
+// `flow-vm.ts:1003`, `history-grupos.test.tsx:405`/`:532`, `history-onchain.test.tsx:255`/`:473`).
+// Un `it` insertado en el medio los rota en silencio; appendear al final no mueve ninguno.
+describe("T-COPY-5: `payout_authority_unavailable` tiene copy propio (WKH-233/H-1)", () => {
+  const CATCH_ALL_PAYOUT =
+    "No se pudo entregar. No hay un reembolso automático: si tus USDC entraron al escrow, los sacás vos firmando desde tu wallet.";
+
+  // 🧪 CONTROL POSITIVO, EN LA MISMA CORRIDA. Sin esto, las aserciones de abajo pasarían igual si
+  // alguien borrara el catch-all entero o le cambiara el texto: estarían midiendo contra una constante
+  // que ya no existe en el código. Este `it` prueba que el catch-all SIGUE VIVO y SIGUE tragándose lo
+  // que le corresponde — o sea que el barrido de abajo puede encontrar algo.
+  it("control positivo: un código de payout desconocido SÍ cae en el catch-all, y su texto es ese", () => {
+    expect(humanError("payout_algo_que_nadie_mapeó")).toBe(CATCH_ALL_PAYOUT);
+    expect(humanError("payout_failed")).toBe(CATCH_ALL_PAYOUT);
+  });
+
+  it("NO cae en el catch-all de `payout`", () => {
+    const msg = humanError("payout_authority_unavailable");
+    expect(
+      msg,
+      "`payout_authority_unavailable` volvió a caer en el catch-all de `payout`: la persona lee que " +
+        "sus USDC pueden estar en el escrow cuando el corte de `prepare` es anterior a `authorizePrincipal`",
+    ).not.toBe(CATCH_ALL_PAYOUT);
+  });
+
+  it("y su copy no promete USDC en el escrow ni un reembolso", () => {
+    const msg = humanError("payout_authority_unavailable");
+    expect(msg).not.toContain("escrow");
+    expect(msg).not.toMatch(/te (reembolsamos|devolvemos)/i);
+    expect(msg).toContain("No se movió ningún USDC");
+    // Sin em dashes en el copy que ve la persona (misma regla que el resto de la tabla).
+    expect(msg).not.toContain("—");
+  });
+
+  // ⚠️ NO dice "no se pidió ninguna firma", que sería FALSO: para llegar a este guard el PoP ya se
+  // verificó (`prepare/route.ts:214` en adelante), o sea que la billetera SÍ firmó un mensaje. Lo
+  // cierto es que ese mensaje no mueve valor. Si alguien "simplifica" el copy negando la firma, rojo.
+  it("no niega la firma que sí ocurrió (el PoP), la explica", () => {
+    const msg = humanError("payout_authority_unavailable");
+    expect(msg).not.toMatch(/no se (te )?pidió ninguna firma/i);
+    expect(msg).toContain("probar que la billetera es tuya");
+  });
+
+  // Y no colapsa con sus dos hermanos: tres cortes distintos, tres frases distintas.
+  it("los TRES enums de `prepare` dan tres mensajes DISTINTOS entre sí", () => {
+    const tres = [
+      "payout_not_authorized",
+      "prepare_kyc_verdict_missing",
+      "payout_authority_unavailable",
+    ].map(humanError);
+    expect(new Set(tres).size, "dos de los tres colapsaron en el mismo copy").toBe(3);
+    for (const msg of tres) expect(msg).not.toBe(CATCH_ALL_PAYOUT);
+  });
+});
+
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// T-COPY-SD — `COPY_FALLO_SIN_DEPOSITO`: la frase que leen los 8 enums SIN copy propio (re-AR it3 · MNR-4)
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ DEFECTO CIERRA. La frase decía «Podés empezar de nuevo con una cotización fresca» y esa acción
+// no le sirve a 2 de sus 8 enums: con `prepare_rate_limited`, hacerlo INMEDIATAMENTE vuelve a chocar con
+// el mismo límite; con `prepare_not_configured` —una misconfiguración nuestra— no funciona NUNCA. No era
+// falsa: era una acción inútil para dos casos, y por eso el AR la dejó en MENOR. Además callaba la firma
+// del PoP que su copy hermano, escrito en el mismo commit, sí nombra a propósito.
+//
+// ⛔ Y ESTA CONSTANTE NO TENÍA NI UN TEST. Se podía reescribir entera —o volver a la versión que este
+// MENOR corrige— sin que nada cambiara de color. Lo único que la miraba era `T-PANT-2`, y sólo por lo
+// que NO dice (que no promete el escrow).
+//
+// ⚠️ SE MIDEN PROPIEDADES, NO EL LITERAL. Un `toBe("…")` con la frase copiada acá sería un guard que se
+// compara consigo mismo y que hay que editar cada vez que se toca una coma. Lo que estos `it` clavan es
+// lo que la vuelve correcta o incorrecta para sus 8 casos.
+describe("T-COPY-SD: la frase del fallo sin depósito le sirve a sus OCHO enums", () => {
+  const remesa = (s: Partial<RemittanceState>): RemittanceState =>
+    ({ status: "created", principalTx: null, refundTx: null, failureReason: null, ...s }) as RemittanceState;
+
+  /** Un corte del `prepare`: `payout_failed` y `principalTx === null` ⇒ `escrowFundsKnowledge` = "no-deposit". */
+  const sinDeposito = (reason: string): RemittanceState =>
+    remesa({ status: "payout_failed", failureReason: reason });
+
+  // 🧪 CONTROL POSITIVO, MISMA CORRIDA: sin esto, los `it` de abajo podrían estar midiendo una frase que
+  // la pantalla no usa. Acá se prueba que ESTOS enums llegan de verdad a la constante, por el mecanismo
+  // real (`copyDeEntregaFallida`), y que el revés —con el depósito en vuelo— NO la usa.
+  it("T-COPY-SD-0: los dos enums del hallazgo llegan a esta frase, y con depósito en vuelo NO", () => {
+    for (const e of ["prepare_rate_limited", "prepare_not_configured"]) {
+      expect(copyDeEntregaFallida(sinDeposito(e)), e).toBe(COPY_FALLO_SIN_DEPOSITO);
+    }
+    const conDeposito = remesa({ status: "payout_failed", failureReason: "prepare_rate_limited", principalTx: "sig" });
+    expect(copyDeEntregaFallida(conDeposito)).not.toBe(COPY_FALLO_SIN_DEPOSITO);
+  });
+
+  // EL HALLAZGO. `prepare_rate_limited` se arregla ESPERANDO y `prepare_not_configured` no se arregla
+  // desde el lado de la persona. Una acción que no admita el paso del tiempo no le sirve a ninguno de los
+  // dos. MUTANTE que lo mata: volver la frase a «Podés empezar de nuevo con una cotización fresca» a secas.
+  it("T-COPY-SD-1: la acción admite el paso del tiempo y no promete que reintentar alcance", () => {
+    expect(COPY_FALLO_SIN_DEPOSITO, "sin el 'en un rato', el rate-limit vuelve a chocar").toContain("en un rato");
+    expect(
+      COPY_FALLO_SIN_DEPOSITO,
+      "sin esto, `prepare_not_configured` deja a la persona reintentando algo que no puede funcionar",
+    ).toMatch(/el problema es nuestro/);
+    // Y NO da la orden opuesta: nada de "volvé a intentar AHORA".
+    expect(COPY_FALLO_SIN_DEPOSITO).not.toMatch(/(intentá|probá) de nuevo ahora/i);
+  });
+
+  // LA CONSISTENCIA CON EL HERMANO, que es la mitad que el AR marcó aparte. Los dos salen de cortes en
+  // los que la billetera YA firmó el PoP; uno lo nombraba y el otro lo callaba.
+  it("T-COPY-SD-2: nombra la firma del PoP igual que `payout_authority_unavailable`, y ninguno la niega", () => {
+    const hermano = humanError("payout_authority_unavailable");
+    expect(hermano, "control: el hermano sigue nombrándola").toContain("probar que la billetera es tuya");
+    expect(COPY_FALLO_SIN_DEPOSITO).toContain("probar que la billetera es tuya");
+    for (const frase of [COPY_FALLO_SIN_DEPOSITO, hermano]) {
+      expect(frase, "negar la firma sería FALSO: el PoP se firma antes del POST").not.toMatch(
+        /no se (te )?pidió ninguna firma/i,
+      );
+    }
+  });
+
+  // LO QUE NO PUEDE PERDER AL ARREGLARSE: la certeza que la vuelve usable. Si alguien la suaviza a
+  // "puede que no se haya movido nada", vuelve la duda que esta HU sacó de la pantalla.
+  it("T-COPY-SD-3: sigue afirmando en categórico que no salió nada y que no hay nada que reclamar", () => {
+    expect(COPY_FALLO_SIN_DEPOSITO).toContain("no llegó a salir ningún USDC de tu wallet");
+    expect(COPY_FALLO_SIN_DEPOSITO).toContain("no hay ningún reembolso pendiente ni nada que reclamar");
+    expect(COPY_FALLO_SIN_DEPOSITO, "el escrow es justo lo que NO hay que prometer acá").not.toMatch(/escrow/i);
+  });
+});
+
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// T-COPY-SD-DERIVA — LAS DOS MITADES DE `sinRamaPropia`, CON ENUMS SINTÉTICOS (re-AR it3 · §4.6)
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 EL BORDE QUE EL AR DEJÓ SIN SONDA, Y NO ES UN HALLAZGO DE HOY: (`copyDeEntregaFallida`,
+// `flow-vm.ts:1595`) decide "este enum no tiene copy propio" comparando contra DOS genéricos —el
+// catch-all de `payout` y el `default` final—. De los 14 enums que emite la route, **la mitad `payout`
+// la ejercitaba UNO SOLO** (`payout_pop_unverified`); los otros siete genéricos caen en el `default`.
+// ⇒ el día que alguien le escriba copy propio a ese enum, esa mitad de la derivación se queda sin
+// ningún test que la toque y **nada se pone rojo**. El mutante "borrarle la comparación contra el
+// catch-all de `payout`" pasaría en verde.
+//
+// ⇒ ESTOS `it` NO DEPENDEN DE QUÉ ENUM EXISTA. Usan códigos SINTÉTICOS elegidos por la propiedad que
+// los mete en cada mitad, así que sobreviven a que la route agregue, borre o renombre enums, y a que
+// `payout_pop_unverified` reciba copy propio mañana.
+//
+// ⚠️ LO QUE NO CUBREN, dicho para que nadie se apoye de más: no miden que la route emita estos códigos
+// (no los emite: son de mentira), ni el salto `HTTP status ⇒ enum`, ni qué lee la persona en pantalla
+// —eso es `copy-de-prepare-en-pantalla.test.tsx`—. Cubren el MECANISMO de la derivación, que es
+// justamente lo que se quedaba sin sonda.
+describe("T-COPY-SD-DERIVA: las dos mitades de `sinRamaPropia`, sin depender de ningún enum real", () => {
+  const sinDeposito = (reason: string): RemittanceState =>
+    ({
+      status: "payout_failed",
+      principalTx: null,
+      refundTx: null,
+      failureReason: reason,
+    }) as RemittanceState;
+
+  // 🧪 LA PRECONDICIÓN, Y SIN ELLA TODO ESTE BLOQUE SERÍA VACUO. Si los dos genéricos devolvieran la
+  // MISMA frase, una sola comparación cubriría a las dos y los `it` de abajo no podrían distinguir el
+  // código con las dos mitades del código con una. Acá se mide que son frases DISTINTAS.
+  it("T-DERIVA-0: los dos genéricos NO son la misma frase (las dos comparaciones hacen falta)", () => {
+    expect(humanError("payout_failed")).not.toBe(humanError(""));
+    expect(humanError("payout_failed"), "control: la mitad `payout` es la que promete el escrow").toMatch(/escrow/i);
+    expect(humanError(""), "control: el `default` final no habla de ningún escrow").not.toMatch(/escrow/i);
+  });
+
+  // LA MITAD `payout`. Un código sintético que contiene "payout" y no tiene rama propia cae en el
+  // catch-all —el único `return` que manda a sacar USDC del escrow— y la derivación TIENE que verlo
+  // como "sin copy propio" y reemplazarlo. MUTANTE: borrar `propio === humanError("payout_failed")`
+  // de `copyDeEntregaFallida` ⇒ este `it` se pone rojo con la promesa del escrow en la mano.
+  it("T-DERIVA-1: un enum `payout_*` SIN rama propia no lee la promesa del escrow", () => {
+    const copy = copyDeEntregaFallida(sinDeposito("payout_sintetico_que_nadie_mapea"));
+    expect(copy, "cayó en el catch-all de `payout`: manda a un escrow que está vacío").toBe(
+      COPY_FALLO_SIN_DEPOSITO,
+    );
+    expect(copy).not.toBe(humanError("payout_failed"));
+  });
+
+  // LA OTRA MITAD. Un código sin ninguna subcadena reconocida cae en el `default` final, y también
+  // tiene que ser reemplazado. MUTANTE: borrar `propio === humanError("")` ⇒ rojo.
+  it("T-DERIVA-2: un enum sin NINGUNA rama tampoco se queda con el genérico final", () => {
+    const copy = copyDeEntregaFallida(sinDeposito("zzz_sintetico_sin_ninguna_rama"));
+    expect(copy).toBe(COPY_FALLO_SIN_DEPOSITO);
+    expect(copy).not.toBe(humanError(""));
+  });
+
+  // 🧪 EL CONTROL NEGATIVO, y es el que impide "arreglar" esto devolviendo la constante SIEMPRE: un
+  // código CON copy propio tiene que conservarlo. Sin este `it`, un `return COPY_FALLO_SIN_DEPOSITO`
+  // incondicional pondría verdes a los dos de arriba y borraría todos los copys propios de la pantalla.
+  it("T-DERIVA-3: un enum CON copy propio conserva el suyo (la derivación no arrasa)", () => {
+    const propio = humanError("payout_authority_unavailable");
+    expect(propio, "control: el enum elegido sigue teniendo rama propia").not.toBe(humanError("payout_failed"));
+    expect(copyDeEntregaFallida(sinDeposito("payout_authority_unavailable"))).toBe(propio);
   });
 });

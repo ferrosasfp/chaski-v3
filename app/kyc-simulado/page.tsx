@@ -46,8 +46,20 @@ export default async function KycSimuladoPage({
   searchParams: Promise<{ session?: string; vendor?: string }>;
 }) {
   // ⛔ ANTES de leer los parámetros y antes de renderizar nada: si el mock no está declarado, esta
-  // pantalla no existe. `notFound()` da el 404 de Next, o sea la misma respuesta observable que la ruta
-  // hermana, que es lo que hace verificable desde afuera que la superficie de prueba está apagada.
+  // pantalla no se renderiza. `notFound()` corta con la señal de 404 del framework.
+  //
+  // ⚠️ ACÁ DECÍA que eso da *"la misma respuesta observable que la ruta hermana"*, Y ES FALSO —MEDIDO,
+  // no deducido (WKH-233 fix-pack · H-12)—. Contra un build local de este árbol, con un centinela que
+  // prueba que el servidor servía ese build: esta página devuelve **HTTP 200** con el cuerpo del
+  // not-found de Next, mientras `POST /api/mock-didit/v3/session` devuelve **404**. Dos sondas
+  // mínimas (`force-dynamic` + `notFound()` a secas, y la misma sin `force-dynamic`) también dieron
+  // 200 ⇒ **ninguna página de esta app devuelve 404 desde `notFound()`**; una URL que de verdad no
+  // existe sí. No es algo que esta página pueda arreglar sola.
+  //
+  // ⇒ LO QUE SÍ ES CIERTO: el contenido del simulador NO se sirve. Lo que NO es cierto: que el status
+  // lo delate. Un monitor externo que pregunte "¿está apagado?" por el código HTTP va a leer que no.
+  // ⛔ PROHIBIDO volver a escribir "da el 404" sin una medición nueva que lo sostenga. El candado que
+  // mide el corte —no el texto de esta línea— es `T-GATE-3'` en `kyc-simulado-gate.test.ts`.
   if (!mockDiditSurfaceEnabled()) notFound();
 
   const { session = "", vendor = "" } = await searchParams;

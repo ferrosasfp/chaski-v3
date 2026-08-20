@@ -334,7 +334,31 @@ describe("T-063-10 (2º pase): la pantalla dice QUÉ VA A PASAR, y lo que dice s
     });
     fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
     fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
-    await screen.findByText(/Revisá el envío/);
+    // 🔴 EL ÚNICO `findBy*` DEL REPO CON TECHO EXPLÍCITO, Y ES POR UN FLAKE MEDIDO (WKH-233 fix-pack ·
+    // H-13). Esta línea reventaba en **2 de 4 corridas** de la suite completa, y NO por una aserción:
+    // por el timeout de `findBy*`, que por defecto es **1000 ms** — y ese default NO se dedujo del
+    // README de la librería: se MIDIÓ con una sonda (`findByText` sobre un texto inexistente, en este
+    // mismo runner) que dio `sin argumento = 1004 ms`, `{timeout:2500} = 2502 ms`,
+    // `{timeout:150} = 151 ms`. Esa misma sonda es la que prueba que el TERCER argumento es el que
+    // manda: si se ignorara, los tres habrían dado ~1000. Aislado el `it` pasa 22/22. La causa
+    // no es de esta HU —worktrees en `da0fb68` y `9e3e147` dan verde— sino CONTENCIÓN DE CPU: entre el
+    // click de arriba y este texto corren `connectWallet` + `lockQuote`, y con la máquina cargada esa
+    // cadena de microtareas no cierra en un segundo.
+    //
+    // ⛔ POR QUÉ UN TECHO Y NO `getByText`: el elemento NO está montado cuando se pide. El click de
+    // arriba dispara trabajo asíncrono, así que un `getBy*` fallaría SIEMPRE, no a veces.
+    // ⛔ Y POR QUÉ ESTO NO ESCONDE UNA REGRESIÓN: una regresión real nunca resuelve, así que el test
+    // sigue rojo — sólo tarda más en decirlo. Lo que el techo compra es que "lento" deje de leerse
+    // como "roto". El `it` lleva su propio techo (`20_000`) porque el default de vitest son 5000 ms y
+    // sin subirlo el `it` moriría antes que el `findBy`.
+    //
+    // ⚠️ PERÍMETRO, DECLARADO PORQUE ESTO ARREGLA UN SITIO Y NO LA CLASE: al 2026-08-20 el árbol tiene
+    // **327** llamadas `findBy*` y —contadas con el mismo barrido— **ninguna** pasaba `timeout`. O sea
+    // que las otras 326 siguen con el techo de 1000 ms y pueden reventar por lo mismo bajo carga. No se
+    // arreglan acá: el arreglo de la CLASE sería subir `asyncUtilTimeout` global, y eso exige un
+    // `vitest.config.*` que este repo NO tiene a propósito (`readme-test-count.test.ts` se apoya en que
+    // el descubrimiento sea el default). Es una HU aparte, no un renglón de este fix-pack.
+    await screen.findByText(/Revisá el envío/, undefined, { timeout: 8_000 });
     fireEvent.click(await screen.findByRole("button", { name: /Continuar/ }));
 
     // Renglón 2 · la identidad primero y la firma después, en ese orden y con ese nombre.
@@ -346,7 +370,10 @@ describe("T-063-10 (2º pase): la pantalla dice QUÉ VA A PASAR, y lo que dice s
     await (PASOS_ESPERADOS[2] as { sonda: (s: Sondeo) => Promise<void> }).sonda({
       seguir: tocar(/Confirmar y enviar/),
     });
-  });
+    // El techo del `it`: ver el bloque del `findByText` de arriba. El default de vitest (5000 ms) es
+    // MENOR que el techo que este test necesita, así que sin esto el `it` moriría primero y el rojo
+    // volvería a leerse como "el flujo no llega", que es justo el diagnóstico equivocado.
+  }, 20_000);
 
   it("🔴 ninguna fila de la tabla puede traer una sonda VACÍA (antivacuidad del propio candado)", () => {
     // MUTANTE (aplicado): agregar una cuarta fila con `frase: "…" , sonda: async () => {}` ⇒ rojo acá,

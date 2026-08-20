@@ -121,6 +121,32 @@ describe("T-CON-2 · la respuesta se ESTRECHA, no se castea", () => {
     const r = await readAgentKycDecision({ sessionId: "s", identityClaim: "A", decisionToken: "t" });
     expect(r.ok && r.output.identityMatches).toBe(false);
   });
+  // T-073-TOL-1/2 (HU 073 · W0) — CONGELA la tolerancia que YA existe, sin cambiar comportamiento.
+  // Es el gate declarado hacia la HU hermana del agente: si el agente agrega un discriminador nuevo a
+  // `GET /decision` y este lector fuera ESTRICTO, un rollback del agente cortaría el KYC entero
+  // (ver el docblock de `readAgentKycDecision`, `./agent-kyc-client.ts:234`).
+  it("T-073-TOL-1: una clave que el agente NO devuelve hoy no tira, y NO se cuela en `output`", async () => {
+    responder(200, { ...DECISION_OK, unaClaveQueElAgenteNoDevuelveHoy: "x" });
+    const r = await readAgentKycDecision({ sessionId: "ses-1", decisionToken: "t" });
+    // 🧬 MUTANTE: reemplazar el estrechamiento por `raw as KycAgentDecisionOutput` ⇒ la clave desconocida
+    // aparece en `output` ⇒ ROJO por el segundo assert.
+    expect(r.ok, "una clave desconocida NO puede tirar: un agente más nuevo cortaría el KYC entero").toBe(
+      true,
+    );
+    expect(
+      r.ok && "unaClaveQueElAgenteNoDevuelveHoy" in r.output,
+      "la clave desconocida se DESCARTA: el lector estrecha, no castea",
+    ).toBe(false);
+  });
+
+  it("T-073-TOL-2 (control positivo): una clave CONOCIDA con el tipo equivocado SÍ tira", async () => {
+    // ⛔ Sin este control, T-073-TOL-1 pasaría también con un lector que no valida NADA: ése es todo su
+    // motivo. La tolerancia es a lo DESCONOCIDO, no a lo mal tipado.
+    responder(200, { ...DECISION_OK, terminal: "si" });
+    await expect(
+      readAgentKycDecision({ sessionId: "ses-1", decisionToken: "t" }),
+    ).rejects.toThrow(/kyc_agent_bad_response/);
+  });
 
   it("un !ok NO tira: devuelve el status upstream para que la route lo pueda seguir reportando", async () => {
     responder(502, { error: "kyc_upstream_failed" });

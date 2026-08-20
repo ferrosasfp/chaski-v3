@@ -26,6 +26,8 @@ import {
 } from "../../../../src/infrastructure/auth/pop-challenge";
 import { POST } from "./route";
 import { UPSTREAM_INVOKE_SECRET_UNSET } from "../../../../src/infrastructure/kyc/agent-kyc-client";
+// hotfix 2026-08-20 · F-3: el doble de la tabla, COMPARTIDO con la suite del store (T-HF3-R).
+import { makeKycSessionTokensDb } from "../../../../src/test-support/kyc-session-tokens-db";
 
 // La salida del agente. `decisionToken` es un CENTINELA reconocible: T-TOK-3/T-TOK-4 barren el body,
 // las cabeceras y los logs buscándolo. Si aparece en alguno, CD-20 está roto.
@@ -983,5 +985,114 @@ describe("POST /api/kyc/session — hotfix: la causa se loguea y la cuota no se 
       errorCode: "kyc_session_token_probe_failed",
       dbCode: "42P01",
     });
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//  T-HF3-R — LA SESIÓN QUE EL PROVEEDOR DEVUELVE REPETIDA, CONTRA EL STORE **REAL**
+//  (hotfix 2026-08-20 · F-3)
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 ACÁ EL `put` NO ES UN DOBLE. Todo el resto de este archivo mockea el módulo del store para poder
+// contar llamadas; estos `it` lo traen con `vi.importActual` y lo montan sobre el doble COMPARTIDO de
+// la tabla (`src/test-support/kyc-session-tokens-db.ts`, el mismo que usa la suite del store). Sin
+// esto, el arreglo de F-3 estaría medido en el store y la route quedaría atada a él sólo por un
+// literal copiado a mano — y un literal copiado a mano no lo vigila nadie.
+//
+// LO QUE REPRODUCE, con su hora: `AGENT_OK.sessionId` es SIEMPRE `"s1"`, o sea que el doble del
+// agente devuelve la MISMA sesión en las dos llamadas. Eso no es un atajo del test: es exactamente
+// lo que hizo el proveedor el 2026-08-20 (21:22:14 sin atar, 21:43:40 la misma sesión con PoP).
+//
+// ⚠️ LO QUE **NO** MIDE: nada de la base real. El doble no tiene transacciones, ni concurrencia, ni
+// triggers ⇒ el candado de base de la migración de F-3 no se ejercita en ningún verde de acá.
+describe("T-HF3-R · la sesión repetida del proveedor, con el store REAL", () => {
+  const RUTA_STORE = "../../../../src/infrastructure/persistence/supabase-kyc-session-tokens";
+
+  async function storeReal(seed: Parameters<typeof makeKycSessionTokensDb>[0]) {
+    const { SupabaseKycSessionTokenStore } =
+      await vi.importActual<typeof import("../../../../src/infrastructure/persistence/supabase-kyc-session-tokens")>(
+        RUTA_STORE,
+      );
+    const db = makeKycSessionTokensDb(seed);
+    storeMock.mockReturnValue(new SupabaseKycSessionTokenStore(db.client));
+    return db;
+  }
+
+  function fetchOkAgent() {
+    const m = vi.fn(async (_url: string, init?: RequestInit) => {
+      void init;
+      return { ok: true, status: 200, json: async () => AGENT_OK };
+    });
+    vi.stubGlobal("fetch", m);
+    return m;
+  }
+
+  function capturarLogs(): string[] {
+    const capturado: string[] = [];
+    const anotar = (...a: unknown[]) => {
+      capturado.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" "));
+    };
+    vi.spyOn(console, "warn").mockImplementation(anotar);
+    return capturado;
+  }
+
+  it("T-HF3-R1: primero SIN PoP y después CON PoP sobre la MISMA sesión ⇒ 200 y la fila queda ATADA", async () => {
+    const db = await storeReal([]);
+    fetchOkAgent();
+    const r1 = await POST(req({ vendorData: ADDR_A })); // 21:22:14 — sin prueba de posesión
+    const r2 = await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) })); // 21:43:40 — con PoP
+    expect(r1.status).toBe(200);
+    // 🧬 MUTANTE: el `insert` pelado de antes ⇒ acá 503 y el log `..._write_failed dbCode 23505`,
+    // que es LITERALMENTE lo que el founder recibió en producción.
+    expect(r2.status, "la segunda llamada sobre la misma sesión del proveedor sigue sin poder atar").toBe(200);
+    // Y devuelve lo que la persona necesita para ir a verificarse, no un 503 sin URL:
+    expect((await r2.json()) as Record<string, unknown>).toMatchObject({
+      sessionId: "s1",
+      url: AGENT_OK.url,
+    });
+    expect(db.rows).toHaveLength(1);
+    expect(db.rows[0]?.owner_address, "la sesión quedó sin atar: no puede autorizar el desembolso").toBe(ADDR_A);
+    expect(db.rows[0]?.decision_token).toBe(TOKEN_CENTINELA);
+  });
+
+  it("T-HF3-R2: la sesión ya atada a OTRA dirección ⇒ 503, la fila INTACTA y su propia etiqueta en el log", async () => {
+    const capturado = capturarLogs();
+    const db = await storeReal([
+      { session_id: "s1", decision_token: "k1.token-de-B", owner_address: ADDR_B },
+    ]);
+    fetchOkAgent();
+    const res = await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+
+    // Primero la fila: un 503 sin mirar la tabla no distingue "rechazó" de "pisó y después falló".
+    expect(
+      db.rows[0]?.owner_address,
+      "la sesión de otra persona quedó REATADA desde la route: con esa fila, A autoriza el desembolso de B",
+    ).toBe(ADDR_B);
+    expect(db.rows[0]?.decision_token, "la credencial de B quedó pisada").toBe("k1.token-de-B");
+    expect(res.status).toBe(503);
+    // El conjunto observable de errores NO cambia: el mismo body que esta route ya devuelve. Desde
+    // afuera no se dice si esa sesión existe ni de quién es.
+    expect(await res.json()).toEqual({ error: "kyc_session_unavailable" });
+    // 🔴 Y ACÁ ESTÁ EL LOCK ENTRE LOS DOS ARCHIVOS: la etiqueta la decide un literal en `route.ts` y
+    // el código lo produce el store REAL. 🧬 MUTANTE: renombrar `KYC_SESSION_OWNER_CONFLICT` en el
+    // store (o el literal de la route) ⇒ ROJO acá, que es lo único que ata las dos copias.
+    expect(console.warn).toHaveBeenCalledWith("[kyc-session] kyc_session_owner_conflict", {
+      atada: true,
+      errorName: "Error",
+      errorCode: "kyc_session_owner_conflict",
+    });
+    // ⛔ Y no se disfraza de problema de infra: son dos causas que se arreglan distinto.
+    expect(capturado.join("\n")).not.toContain("kyc_session_token_write_failed");
+    // ⛔ CD-20: la credencial que ya estaba guardada no sale por ningún lado.
+    expect(capturado.join("\n")).not.toContain("k1.token-de-B");
+  });
+
+  it("T-HF3-R3: ✅ calibración — con el store REAL una sesión NUEVA sigue dando 200 (el 200 no es constante)", async () => {
+    const db = await storeReal([]);
+    fetchOkAgent();
+    const res = await POST(req({ vendorData: ADDR_A, ...realPop(KP_A) }));
+    expect(res.status).toBe(200);
+    expect(db.inserted).toHaveLength(1);
+    expect(db.updates).toHaveLength(0);
   });
 });

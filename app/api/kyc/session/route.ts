@@ -255,10 +255,14 @@ export async function POST(req: Request): Promise<Response> {
   //   · ANTES de gastar cuota (acá): la dirección que no canonicaliza, y todo lo que hace que la
   //     tabla no sea alcanzable/legible — falta la migración, la credencial de Supabase no sirve, el
   //     proyecto no responde, no hay permiso de SELECT.
-  //   · DESPUÉS de gastar cuota (sigue igual, y se declara): todo lo que sólo dispara al INSERTAR —
-  //     `session_id` duplicado, una restricción de columna, una columna que falta en el insert, un
-  //     GRANT que da SELECT y niega INSERT— y la base que se cae en la ventana entre este pre-vuelo
-  //     y el `put`. Esa 503 se distingue por su etiqueta: `..._write_failed`, no `..._probe_failed`.
+  //   · DESPUÉS de gastar cuota (sigue igual, y se declara): todo lo que sólo dispara al ESCRIBIR —
+  //     una restricción de columna, una columna que falta en el insert, un GRANT que da SELECT y
+  //     niega INSERT— y la base que se cae en la ventana entre este pre-vuelo y el `put`. Esa 503 se
+  //     distingue por su etiqueta: `..._write_failed`, no `..._probe_failed`.
+  //     ⚠️ ACÁ DECÍA "`session_id` duplicado" Y EL HOTFIX F-3 LO SACÓ: un `session_id` repetido ya no
+  //     es un fallo —`put` ATA esa fila— salvo que la sesión sea de OTRA dirección, y ése es el modo
+  //     de falla NUEVO de esta lista: `kyc_session_owner_conflict`, que también cae después de la
+  //     cuota, que este pre-vuelo tampoco puede ver, y que sale con SU PROPIA etiqueta más abajo.
   //
   // Candado: el doble de `fetch` recibe **CERO llamadas** cuando la persistencia está rota. Es un
   // test sobre el CONTADOR de llamadas, no sobre el status —el 503 ya salía antes—, igual que
@@ -410,10 +414,33 @@ export async function POST(req: Request): Promise<Response> {
     // `kyc_session_token_write_failed:<code>`, (`put`, `../../../../src/infrastructure/persistence/supabase-kyc-session-tokens.ts:255`)—
     // y este `catch` lo descartaba. Diagnosticar "42P01 (falta la migración)" y "23505 (sessionId
     // duplicado)" se hacía a ciegas, con hipótesis, cuando el dato estaba a una línea.
-    console.warn("[kyc-session] kyc_session_token_write_failed", {
+    // 🟩 Y SIRVIÓ, MEDIDO: el 2026-08-20 21:43:40 UTC este log emitió `dbCode: '23505'` y ESE dato es
+    // el diagnóstico entero del hotfix F-3 de abajo. ⛔ No lo degrades.
+    //
+    // 🔴 Y DESDE EL HOTFIX F-3 HAY UNA CAUSA MÁS QUE NO ES "NO SE PUDO ESCRIBIR", ASÍ QUE NO
+    // COMPARTE ETIQUETA. `put` ya no es un `insert` pelado: sabe ATAR una sesión que el proveedor
+    // devolvió repetida, y RECHAZA —fail-closed— la que ya está atada a otra dirección. Ese rechazo
+    // no se arregla mirando la base ni la migración: se arregla mirando quién está pidiendo la
+    // sesión de quién. Colapsarlo en `..._write_failed` sería repetir exactamente el daño que este
+    // bloque existe para cerrar (un log que no distingue causas que se arreglan distinto), sólo que
+    // ahora sobre la única que además es un evento de seguridad.
+    //
+    // ⛔ El literal va escrito acá y NO importado del store: `route.test.ts` mockea ese módulo, así
+    // que un import llegaría `undefined` y `causa.errorCode === undefined` matchearía cualquier
+    // error sin código — el discriminador se volvería un comodín SIN ponerse rojo. Lo que ata las
+    // dos copias es `T-HF3-*`, que corre esta route contra el store REAL.
+    const causa = causaDe(err);
+    const etiqueta =
+      causa.errorCode === "kyc_session_owner_conflict"
+        ? "kyc_session_owner_conflict"
+        : "kyc_session_token_write_failed";
+    console.warn(`[kyc-session] ${etiqueta}`, {
       atada: provedAddress !== undefined,
-      ...causaDe(err),
+      ...causa,
     });
+    // El STATUS y el BODY no cambian —503 `kyc_session_unavailable`, el mismo que esta route ya
+    // devuelve—, y es a propósito: desde afuera no se le dice a quien pide si esa sesión existe y de
+    // quién es. La distinción vive en el log, que es de adentro.
     return NextResponse.json({ error: "kyc_session_unavailable" }, { status: 503 });
   }
 

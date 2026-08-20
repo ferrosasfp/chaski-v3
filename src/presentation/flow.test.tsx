@@ -3884,6 +3884,89 @@ describe("HU 073 · la pantalla del resume no atribuye una causa que no midió",
     ).toBeInTheDocument();
     expect(censoDeBotones()).toEqual([LABEL_VOLVER_A_EMPEZAR_EL_ENVIO, "Volver al inicio"]);
   });
+
+  // ── T-073-ESC-D3 (AR/MNR-3) · el rechazo que llega DESPUÉS del escape ──────────────────────────
+  //
+  // 🔴 QUÉ CAMINO CIERRA, Y POR QUÉ NINGÚN TEST LO CONSTRUÍA. El `catch` del resume era el ÚNICO punto
+  // de suspensión del bucle que no leía `cancelledRef`; sus tres hermanos ((`cancelledRef`, `flow.tsx:211`),
+  // (`cancelledRef`, `flow.tsx:221`), (`cancelledRef`, `flow.tsx:229`)) sí. Consecuencia: tras el escape
+  // de los 5 s la persona ya está en `send`, y si el `execute()` que quedó en vuelo RECHAZA, el bucle
+  // pinta la card de D-3 encima diciendo «Algo se interrumpió al abrir esta pantalla» cuando no estaba
+  // abriendo ninguna. La rama de (`finDelResume`, `flow.tsx:786`) gana sobre el `step`, así que tapa.
+  // `T-ESC7` (`flow.test.tsx:742`) cruza el escape con un execute que RESUELVE; ninguno lo cruzaba con
+  // uno que RECHAZA, que es el único camino que entra al `catch`.
+  //
+  // Los dos `it` van juntos a propósito: el segundo es la CALIBRACIÓN INVERSA. Sin él, el primero
+  // pasaría también si el rechazo tardío nunca llegara al bucle (por ejemplo si el `it` construyera mal
+  // la promesa diferida), que es un verde por vacuidad y no por el guard.
+  const resumeDiferido = () => {
+    const enVuelo: Array<{ resolve: (v: { kind: "processing" }) => void; reject: (e: Error) => void }> = [];
+    const execute = () =>
+      new Promise<{ kind: "processing" }>((resolve, reject) => {
+        enVuelo.push({ resolve, reject });
+      });
+    return { enVuelo, execute };
+  };
+
+  /** Deja el overlay colgado con el 2do `execute()` EN VUELO y el botón de escape ya visible. */
+  const hastaElEscape = async (enVuelo: ReturnType<typeof resumeDiferido>["enVuelo"]) => {
+    await avanzar(1); // el bucle llama al 1er execute()
+    await act(async () => {
+      enVuelo[0]?.resolve({ kind: "processing" });
+      await vi.advanceTimersByTimeAsync(1); // resuming = true, se agenda el timer del escape
+    });
+    await avanzar(6999); // > 5 s (escape visible) y < 20 s (techo del bucle): dispara el 2do execute()
+    expect(
+      enVuelo.length,
+      "el 2do `execute()` no quedó en vuelo: este `it` no está construyendo el cruce que dice construir",
+    ).toBe(2);
+  };
+
+  it("T-073-ESC-D3: un rechazo que llega DESPUÉS del escape NO pinta la card de D-3 sobre la pantalla nueva", async () => {
+    const { enVuelo, execute } = resumeDiferido();
+    const abandonSpy = vi.fn(async () => {});
+    montarConResume(execute as never, {
+      useCases: { abandonPendingKyc: { execute: abandonSpy } as unknown as AbandonPendingKyc },
+    });
+    await hastaElEscape(enVuelo);
+
+    // La persona toca el escape y se va a `send`. Desde acá NO está abriendo ninguna pantalla.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Empezar de nuevo/ }));
+    });
+    expect(abandonSpy, "el escape no llegó a correr: no hay cancelación que cruzar").toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Monto en dólares")).toBeInTheDocument();
+
+    // Y AHORA rechaza el `execute()` que había quedado en vuelo.
+    await act(async () => {
+      enVuelo[1]?.reject(new Error("didit_caido"));
+      await vi.advanceTimersByTimeAsync(1);
+    });
+
+    expect(
+      screen.queryByRole("heading", { name: COPY_RESUME_INTERRUMPIDO_TITULO }),
+      "la card de D-3 se pintó encima de la pantalla a la que la persona ya salió, y le dice que algo " +
+        "se interrumpió al abrir una pantalla que no estaba abriendo",
+    ).toBeNull();
+    expect(screen.getByLabelText("Monto en dólares")).toBeInTheDocument();
+  });
+
+  it("✅ calibración inversa: el MISMO rechazo, SIN escape, sí pinta la card de D-3", async () => {
+    const { enVuelo, execute } = resumeDiferido();
+    montarConResume(execute as never);
+    await hastaElEscape(enVuelo);
+
+    // Mismo cruce, sin el click: acá el desenlace D-3 es el correcto y tiene que verse.
+    await act(async () => {
+      enVuelo[1]?.reject(new Error("didit_caido"));
+      await vi.advanceTimersByTimeAsync(1);
+    });
+
+    expect(
+      screen.getByRole("heading", { name: COPY_RESUME_INTERRUMPIDO_TITULO }),
+      "el rechazo tardío ya no llega al `catch` del bucle: el `it` de arriba pasaría por vacuidad",
+    ).toBeInTheDocument();
+  });
 });
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════

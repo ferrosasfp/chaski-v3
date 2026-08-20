@@ -33,7 +33,7 @@ import { CUSTODY_WINDOW_SECS } from "../infrastructure/solana-wallet";
 import { Money } from "../domain/money";
 import { Remittance, type RemittanceState, toPersistedIdentity } from "../domain/remittance";
 import { RecoverEscrowFunds } from "../application/use-cases/recover-escrow-funds";
-import type { ResumeKyc } from "../application/use-cases/resume-kyc"; import { clickCuandoHabilite } from "../test-support/clicks"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
+import type { ResumeKyc } from "../application/use-cases/resume-kyc"; import { act } from "@testing-library/react"; import { COPY_RESUME_SIN_RESPUESTA_CUERPO, COPY_RESUME_INTERRUMPIDO_CUERPO, COPY_RESUME_NO_PODEMOS_SEGUIR } from "./flow-vm"; import { Remittance as RemesaDeDominio } from "../domain/remittance"; import { beneficiary as beneficiarioDeTest, T0 as T_CERO } from "../test-support/fakes"; import { clickCuandoHabilite } from "../test-support/clicks"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
 import {
   FakeKycGateway,
   FakeSolanaEscrowRefundGateway,
@@ -812,6 +812,187 @@ describe("barridos de prosa (AC-15 / AC-16)", () => {
       "una prosa dice que el veredicto de KYC vive sólo en el navegador. La tabla `kyc_verdicts` está " +
         "aplicada a producción y `prepare` saca el identificador de SU PROPIA fila (bloque PR5.5): el " +
         "del cliente se lee para descartarlo",
+    ).toEqual([]);
+  });
+});
+
+
+// ── 11. HU 073 · las cinco pantallas del resume de KYC, contra el léxico vedado ───────────────────
+//
+// 🔴 QUÉ MIDE Y POR QUÉ NO ES UNA LISTA DE FRASES. Los `T-073-COPY-*` de `flow-vm.test.ts` miran las
+// constantes; esto mira lo que la persona LEE de verdad, o sea el `textContent` renderizado, que es lo
+// único que incluye lo que aportan los componentes de alrededor (el banner de error, el aviso, el
+// stepper). Una frase puede ser honesta y quedar al lado de otra que no lo es.
+//
+// ⚠️ R-12, MEDIDO ANTES DE ESCRIBIR UNA LÍNEA DE ACÁ. El léxico vedado incluye «no pudimos» (pasado) y
+// el copy nuevo de D-4 dice «no podemos» (presente). Si el barrido estuviera escrito como `/no pud/i` o
+// `/no pod/i`, el copy nuevo quedaría rojo y la tentación sería aflojarlo.
+// **Medido en `dc705c8`:** `grep -n "no pudimos\|no pud\|no pod" honest-copy.test.tsx` ⇒ **CERO**
+// (control positivo del grep: 16 `describe` en el mismo archivo), y el mismo barrido sobre `src/`+`app/`
+// sólo devuelve PROSA de comentarios, ningún assert. ⇒ **no había ningún barrido que aflojar.** El de
+// acá se escribe con el literal EXACTO en minúsculas, ⛔ nunca con la subcadena.
+//
+// Y la diferencia no es gramatical: «No pudimos confirmar tu identidad a tiempo» atribuye una causa a un
+// intento que terminó —y en la rama del corte esa causa es falsa para todo el mundo a la vez—, mientras
+// que «No podemos seguir con esta verificación» describe el estado presente de la app, cierto en los dos
+// sub-casos que llegan ahí.
+const VEDADAS_DEL_RESUME: ReadonlyArray<readonly [string, string]> = [
+  ["tardando", "atribuye lentitud, y el techo del bucle también se alcanza con ocho respuestas rápidas que no fueron finales"],
+  ["a tiempo", "afirma que había un plazo y que se venció: nadie midió ningún plazo"],
+  ["no pudimos", "es un pasado sobre un intento que puede no haber ocurrido. ⛔ LITERAL EXACTO: «no podemos» (presente) SÍ está permitido y es el copy de D-4"],
+  ["no pasó", "es un veredicto sobre la verificación de la persona, y uno de los sub-casos ni siquiera consultó al verificador"],
+  ["rechaz", "ídem: un veredicto que nadie emitió"],
+  ["falló", "le atribuye el fallo a la verificación en vez de a nosotros"],
+  ["fallo", "ídem"],
+];
+
+describe("HU 073 · ninguna de las cinco pantallas del resume usa el léxico vedado", () => {
+  const snapshotPelado = () =>
+    RemesaDeDominio.create("rem-073", beneficiarioDeTest(), Money.of(400, "USDC"), T_CERO).snapshot;
+
+  /** El `passed` necesita una remesa con cotización VIGENTE y KYC aplicado, o el aterrizaje no ocurre
+   *  y el barrido mediría la bienvenida creyendo que mide `confirm` (medido: con un snapshot pelado el
+   *  `textContent` era el de la bienvenida y el control positivo lo cazó). */
+  const snapshotAprobado = (): RemittanceState => {
+    const r = RemesaDeDominio.create("rem-073-ok", beneficiarioDeTest(), Money.of(400, "USDC"), T_CERO);
+    r.attachQuote(
+      {
+        quoteId: "q",
+        send: Money.of(400, "USDC"),
+        receive: Money.of(1478.15, "PEN"),
+        feeUsd: Money.of(0.5, "USDC"),
+        rate: 3.7,
+        etaMinutes: 30,
+        expiresAt: "2099-01-01T00:00:00.000Z",
+        provenance: "didit",
+      },
+      T_CERO,
+    );
+    r.startKyc(T_CERO, "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
+    r.applyKyc(
+      {
+        verificationId: "v-1",
+        approved: true,
+        payoutAllowed: true,
+        realVerified: true,
+        verifiedAt: null,
+        riskLevel: "low",
+        provenance: "didit",
+        identity: toPersistedIdentity({
+          firstName: "Test",
+          lastNamePaternal: "Quispe",
+          lastNameMaternal: "Mamani",
+          documentType: "DNI",
+          documentNumber: "12345678",
+          dateOfBirth: "1990-01-01",
+          nationality: "PE",
+        }),
+      },
+      T_CERO,
+    );
+    return r.snapshot;
+  };
+
+  const pantallas: ReadonlyArray<{
+    nombre: string;
+    execute: () => Promise<never | { kind: "none" | "processing" | "passed" | "failed"; snapshot?: RemittanceState }>;
+    ms: number;
+    /** Una frase que SÍ está en esa pantalla. ⛔ CD-24: sin esto, los `not.toContain` de abajo pasarían
+     *  también contra un árbol vacío, que es como un barrido deja de existir sin ponerse rojo. */
+    testigo: string;
+    /**
+     * Frases de la pantalla que NO son de este desenlace, con su motivo escrito. ⛔ NO es una forma de
+     * aflojar el léxico: el léxico no se toca. Es el PERÍMETRO, sitio por sitio, y cada entrada lleva
+     * su propio assert de que la frase sigue existiendo (si se reescribe, la excepción se cae sola).
+     */
+    ajeno: readonly string[];
+  }> = [
+    { nombre: "D-1 `none` (bienvenida)", execute: async () => ({ kind: "none" as const }), ms: 0, testigo: "Empezar un envío", ajeno: [] },
+    { nombre: "D-2 el techo del bucle", execute: async () => ({ kind: "processing" as const }), ms: 20_000, testigo: COPY_RESUME_SIN_RESPUESTA_CUERPO, ajeno: [] },
+    {
+      nombre: "D-3 el corte por throw",
+      execute: async () => {
+        throw new Error("didit_caido");
+      },
+      ms: 0,
+      testigo: COPY_RESUME_INTERRUMPIDO_CUERPO,
+      ajeno: [],
+    },
+    { nombre: "D-4 `failed`", execute: async () => ({ kind: "failed" as const, snapshot: snapshotPelado() }), ms: 0, testigo: COPY_RESUME_NO_PODEMOS_SEGUIR, ajeno: [] },
+    {
+      nombre: "D-5 `passed`",
+      execute: async () => ({ kind: "passed" as const, snapshot: snapshotAprobado() }),
+      ms: 0,
+      testigo: "Confirmar y enviar",
+      // 🔴 HALLAZGO MEDIDO, y la única excepción del barrido. `passed` aterriza en `confirm`, que pinta
+      // la tarjeta de quién atiende el envío, y ésa trae de antes de esta HU un «No pudimos consultar
+      // el catálogo…». ⛔ NO se afloja el léxico (R-12): esa frase es HONESTA —enuncia sobre nosotros
+      // y sobre una consulta que efectivamente no se pudo hacer— y no la escribió esta HU. Se declara
+      // por su texto EXACTO, así que cualquier OTRO «no pudimos» que aparezca en `confirm` sigue
+      // poniendo esto rojo. Fuente: `flow.tsx:2847` y `:2992`.
+      ajeno: [
+        "No pudimos consultar el catálogo ahora. Tu envío sigue igual: esto es informativo.",
+      ],
+    },
+  ];
+
+  for (const pantalla of pantallas) {
+    it(`${pantalla.nombre}: sin léxico vedado y sin em dash`, async () => {
+      vi.useFakeTimers();
+      try {
+        render(
+          <RemittanceFlow
+            container={buildTestContainer({
+              useCases: { resumeKyc: { execute: pantalla.execute } as unknown as ResumeKyc },
+            })}
+          />,
+        );
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(pantalla.ms);
+        });
+        const texto = (document.body.textContent ?? "").toLowerCase();
+
+        // CONTROL POSITIVO (CD-24): el barrido tiene que estar viendo ESTA pantalla.
+        expect(texto, `${pantalla.nombre}: el barrido no ve la pantalla, los \`not\` de abajo son vacuos`).toContain(
+          pantalla.testigo.toLowerCase(),
+        );
+
+        for (const [palabra, porQue] of VEDADAS_DEL_RESUME) {
+          const sinLoAjeno = pantalla.ajeno.reduce((t, frase) => t.split(frase.toLowerCase()).join(" ⟦ajeno⟧ "), texto);
+          expect(sinLoAjeno, `${pantalla.nombre} dice «${palabra}»: ${porQue}`).not.toContain(palabra.toLowerCase());
+        }
+        // Y lo declarado como AJENO tiene que SEGUIR ESTANDO: si la frase se reescribe, esta excepción
+        // deja de tapar algo que existe y hay que volver a mirarla. ⛔ Sin esto, una excepción escrita
+        // una vez tapa para siempre, incluida la frase NUEVA que se escriba en su lugar.
+        for (const frase of pantalla.ajeno) {
+          expect(texto, `la excepción declarada «${frase}» ya no está en ${pantalla.nombre}: quedó tapando de más`).toContain(
+            frase.toLowerCase(),
+          );
+        }
+        // Extiende a estas cards el barrido de em dash de la sección 9, que hoy sólo cubre
+        // `review`/`verify`/`confirm` y no llega hasta acá.
+        expect(document.body.textContent ?? "", `${pantalla.nombre} mete un em dash`).not.toContain("—");
+      } finally {
+        cleanup();
+        vi.useRealTimers();
+      }
+    });
+  }
+
+  it("✅ el barrido SÍ se dispara: una palabra vedada plantada a mano la caza", () => {
+    // Sin este `it`, un `not.toContain` mal escrito (o un léxico vacío) dejaría los cinco de arriba
+    // verdes para siempre. Acá se planta la frase que la HU vino a borrar y se comprueba que el mismo
+    // criterio la ve.
+    const plantada = "no pudimos confirmar tu identidad a tiempo.";
+    const cazadas = VEDADAS_DEL_RESUME.filter(([w]) => plantada.includes(w.toLowerCase())).map(([w]) => w);
+    expect(cazadas, "el léxico dejó de cazar la frase exacta que esta HU eliminó").toEqual(
+      expect.arrayContaining(["a tiempo", "no pudimos"]),
+    );
+    // Y la del presente NO se caza: es el copy de D-4 y tiene que poder existir (R-12).
+    const permitida = "no podemos seguir con esta verificación. podés hacer una nueva.";
+    expect(
+      VEDADAS_DEL_RESUME.filter(([w]) => permitida.includes(w.toLowerCase())),
+      "el léxico se escribió como subcadena (`no pud`/`no pod`) y se lleva puesto el copy de D-4",
     ).toEqual([]);
   });
 });

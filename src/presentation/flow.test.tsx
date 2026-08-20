@@ -41,7 +41,7 @@ import {
 } from "../application/use-cases/recover-escrow-funds";
 import { PREPARE_NO_AGENT_FOR_CAPABILITY, isPrepareRejection } from "../application/agent-rejections";
 const KYC_PROVENANCE_LIVE = "didit"; // WKH-233: el literal se escribe ACÁ, en un test, porque el módulo que lo exportaba se borró con la HU (el juicio "esto es real" ya no lo hace Chaski). EN UNA SOLA LÍNEA: este archivo recibe citas `archivo:línea` y agregar líneas las corre.
-import { ConnectWallet } from "../application/use-cases/connect-wallet"; import { clickCuandoHabilite } from "../test-support/clicks"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
+import { ConnectWallet } from "../application/use-cases/connect-wallet"; import { clickCuandoHabilite } from "../test-support/clicks"; import { COPY_RESUME_SIN_RESPUESTA_TITULO, COPY_RESUME_SIN_RESPUESTA_CUERPO, COPY_RESUME_INTERRUMPIDO_TITULO, COPY_RESUME_INTERRUMPIDO_CUERPO, COPY_RESUME_NO_PODEMOS_SEGUIR, LABEL_VOLVER_A_EMPEZAR_EL_ENVIO } from "./flow-vm"; // re-AR it2/BLQ-BAJO-2 — EN ESTA LÍNEA (Δ0). Un click sobre un botón `disabled={busy}` se descarta EN SILENCIO y el flujo queda parado para siempre; el helper espera a que se habilite. El mecanismo, en su docblock
 import { solanaWalletBridge } from "../infrastructure/solana-wallet-bridge"; import { SolanaWalletAdapter } from "../infrastructure/solana-wallet"; import { guardarEleccion } from "../infrastructure/solana/deeplink/conexion"; import { almacenDeNavegador, guardarViaje } from "../infrastructure/solana/deeplink/sesion"; // WKH-358 agregó los tres últimos EN ESTA LÍNEA y ANTES de este comentario: `history-grupos.test.tsx:532` y `jerarquia-relativa.test.tsx:83` citan por número líneas de este archivo, así que tres líneas nuevas acá arriba las rotan a las dos. WKH-354/R-2: la costura del BANNER (el bridge global); la del guard es el `connectedWallet` inyectado
 import {
   FAKE_SOLANA_BENEFICIARY,
@@ -645,7 +645,7 @@ describe("WKH-188 resume escape (fake timers aislados, CD-10)", () => {
     expect(screen.getByLabelText("Monto en dólares")).toBeInTheDocument();
   });
 
-  // ── T-ESC5 — AC-5: timeout total 20 s (no 100 s) + `timedOut` (ex-T3) ─────
+  // ── T-ESC5 — AC-5: timeout total 20 s (no 100 s) + el fin del resume (ex-T3) ─────
   it("T-ESC5: tras el timeout del resume-KYC (8× sleep(2500) = 20 s) muestra 'Reintentar' y el retry NO recarga la página", async () => {
     // resumeKyc siempre "processing" → el resume-loop (8× sleep(2500) = 20 s) agota el timeout.
     const abandonSpy = vi.fn(async () => {});
@@ -664,16 +664,16 @@ describe("WKH-188 resume escape (fake timers aislados, CD-10)", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(15_000);
     });
-    expect(screen.queryByText("Reintentar")).toBeNull();
+    expect(screen.queryByText(LABEL_VOLVER_A_EMPEZAR_EL_ENVIO)).toBeNull();
     expect(screen.getByText(/Verificando tu identidad/)).toBeInTheDocument();
 
-    // Completar el loop (total 8 × 2500 ms = 20 s) → estado timedOut.
+    // Completar el loop (total 8 × 2500 ms = 20 s) → el bucle llega a su TECHO (`"sin-respuesta-en-el-techo"`), que desde la HU 073 ya no es el mismo desenlace que el corte por throw.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5_000);
     });
 
     // (a) botón "Reintentar" visible + abandon llamado al agotarse (WKH-178).
-    expect(screen.getByText("Reintentar")).toBeInTheDocument();
+    expect(screen.getByText(LABEL_VOLVER_A_EMPEZAR_EL_ENVIO)).toBeInTheDocument();
     expect(abandonSpy).toHaveBeenCalled();
 
     // Spy sobre window.location.reload — onRetryKyc NO debe recargar. jsdom marca reload como
@@ -688,10 +688,10 @@ describe("WKH-188 resume escape (fake timers aislados, CD-10)", () => {
     try {
       // (b) click "Reintentar" → vuelve a "send"; "Reintentar" desaparece.
       act(() => {
-        fireEvent.click(screen.getByText("Reintentar"));
+        fireEvent.click(screen.getByText(LABEL_VOLVER_A_EMPEZAR_EL_ENVIO));
       });
       expect(screen.getByLabelText("Monto en dólares")).toBeInTheDocument();
-      expect(screen.queryByText("Reintentar")).toBeNull();
+      expect(screen.queryByText(LABEL_VOLVER_A_EMPEZAR_EL_ENVIO)).toBeNull();
 
       // (c) onRetryKyc no llama a window.location.reload.
       expect(reloadSpy).not.toHaveBeenCalled();
@@ -725,7 +725,7 @@ describe("WKH-188 resume escape (fake timers aislados, CD-10)", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(screen.getByRole("button", { name: /Verificar mi identidad/ })).toBeInTheDocument();
-    expect(screen.getByText(/La verificación no pasó/)).toBeInTheDocument();
+    expect(screen.getByText(COPY_RESUME_NO_PODEMOS_SEGUIR)).toBeInTheDocument();
 
     // El escape NUNCA aparece (el overlay `resuming` nunca estuvo activo el tiempo suficiente).
     await act(async () => {
@@ -3636,4 +3636,252 @@ it("T-AC4c(control): el MISMO fixture con `realVerified:true` sí va directo a c
   await clickCuandoHabilite(/Conectar wallet/);
 
   expect(await screen.findByRole("button", { name: /Confirmar y enviar/ })).toBeInTheDocument();
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// HU 073 · los desenlaces del resume de KYC, en pantalla (AC-1, AC-2, AC-3) + BLQ-MED-6
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// ⛔ NINGUNA frase se escribe como literal acá: todo va contra el SÍMBOLO importado de `./flow-vm`.
+describe("HU 073 · la pantalla del resume no atribuye una causa que no midió", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  /** El censo de controles USABLES de la pantalla: botones habilitados, por su texto. */
+  const censoDeBotones = (): string[] =>
+    screen
+      .getAllByRole("button")
+      .filter((b) => !(b as HTMLButtonElement).disabled)
+      .map((b) => (b.textContent ?? "").trim());
+
+  /** El repo y el almacén de KYC con contador: lo que AC-3 mide es que NADIE escriba. */
+  function conEspias() {
+    const real = new InMemoryRepo();
+    const save = vi.fn(async (r: Remittance) => real.save(r));
+    const clearByOwner = vi.fn(async (a: string) => real.clearByOwner(a));
+    const repo = {
+      save,
+      clearByOwner,
+      get: (id: string) => real.get(id),
+      list: (a: string) => real.list(a),
+    } as unknown as InMemoryRepo;
+    const almacen = new FakeKycStore();
+    const kycSave = vi.fn(async (a: string, v: KycVerification) => almacen.save(a, v));
+    const kycStore = {
+      save: kycSave,
+      get: (a: string) => almacen.get(a),
+      clear: (a: string) => almacen.clear(a),
+      peek: (a: string) => almacen.peek(a),
+    } as unknown as FakeKycStore;
+    const ceroEscrituras = (donde: string) => {
+      expect(save, `${donde}: se escribió en el repositorio`).not.toHaveBeenCalled();
+      expect(clearByOwner, `${donde}: se purgó el repositorio`).not.toHaveBeenCalled();
+      expect(kycSave, `${donde}: se escribió en el almacén de KYC`).not.toHaveBeenCalled();
+    };
+    return { repo, kycStore, ceroEscrituras };
+  }
+
+  const montarConResume = (
+    execute: () => Promise<{ kind: "none" | "processing" | "passed" | "failed"; snapshot?: RemittanceState }>,
+    extra: Parameters<typeof buildTestContainer>[0] = {},
+  ) =>
+    render(
+      <RemittanceFlow
+        container={buildTestContainer({
+          ...extra,
+          useCases: { resumeKyc: { execute } as unknown as ResumeKyc, ...(extra.useCases ?? {}) },
+        })}
+      />,
+    );
+
+  const avanzar = async (ms: number) => {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  };
+
+  // ── T-073-1 (AC-1) ──────────────────────────────────────────────────────────────────────────────
+  it("T-073-1: al agotarse el techo, la card NO dice que el sistema estuvo lento, y ofrece DOS salidas", async () => {
+    montarConResume(async () => ({ kind: "processing" as const }));
+    await avanzar(20_000);
+
+    expect(screen.getByRole("heading", { name: COPY_RESUME_SIN_RESPUESTA_TITULO })).toBeInTheDocument();
+    const texto = document.body.textContent ?? "";
+    // CONTROL POSITIVO del barrido: si el árbol no fuera el de esta card, los `not.toMatch` de abajo
+    // pasarían por vacuidad. Esto ancla que lo que se está barriendo ES la card.
+    expect(texto, "el barrido no está viendo la card: los `not` de abajo serían vacuos").toContain(
+      COPY_RESUME_SIN_RESPUESTA_CUERPO,
+    );
+    expect(
+      texto,
+      "la pantalla afirma una causa (lentitud nuestra, un plazo vencido) que este desenlace no distingue",
+    ).not.toMatch(/tardando|a tiempo|no pudimos/i);
+
+    // AC-1 pide ≥2 caminos hacia adelante, y son EXACTAMENTE éstos: el censo cerrado hace visible
+    // cualquier control que se agregue o se caiga.
+    expect(censoDeBotones()).toEqual([LABEL_VOLVER_A_EMPEZAR_EL_ENVIO, "Volver al inicio"]);
+  });
+
+  it("T-073-1b (borde): a los 15 s todavía no hay card; a los 20 s sí", async () => {
+    montarConResume(async () => ({ kind: "processing" as const }));
+    await avanzar(15_000);
+    // 🧬 MUTANTE: `RESUME_MAX_POLLS = 4` (10 s) ⇒ la card ya estaría acá ⇒ rojo.
+    expect(
+      screen.queryByText(COPY_RESUME_SIN_RESPUESTA_TITULO),
+      "la card apareció ANTES del techo: el bucle dejó de intentar lo que el copy dice que intenta",
+    ).toBeNull();
+    await avanzar(5_000);
+    expect(screen.getByText(COPY_RESUME_SIN_RESPUESTA_TITULO)).toBeInTheDocument();
+  });
+
+  // ── T-073-2a/2b (AC-2) ──────────────────────────────────────────────────────────────────────────
+  it("T-073-2a: cuando la consulta TIRA, la card aterriza sola, sin esperar un solo poll", async () => {
+    montarConResume(async () => {
+      throw new Error("didit_caido");
+    });
+    // ⛔ CERO ms: ni un `RESUME_POLL_INTERVAL_MS`. 🧬 MUTANTE: devolver el `break` a `flow.tsx:216` ⇒ el
+    // corte cae en el cierre del bucle y la card no aparece hasta los 20 s ⇒ rojo acá.
+    await avanzar(0);
+    expect(screen.getByRole("heading", { name: COPY_RESUME_INTERRUMPIDO_TITULO })).toBeInTheDocument();
+    expect(censoDeBotones()).toEqual([LABEL_VOLVER_A_EMPEZAR_EL_ENVIO, "Volver al inicio"]);
+  });
+
+  it("T-073-2b: el texto del corte NO es el del techo, y no habla de duración", async () => {
+    montarConResume(async () => {
+      throw new Error("didit_caido");
+    });
+    await avanzar(0);
+    screen.getByRole("heading", { name: COPY_RESUME_INTERRUMPIDO_TITULO });
+    const texto = document.body.textContent ?? "";
+    expect(texto, "el barrido no está viendo la card de D-3").toContain(COPY_RESUME_INTERRUMPIDO_CUERPO);
+    expect(
+      texto,
+      "el corte volvió a pintarse con el texto del techo: son dos finales que no comparten un solo hecho",
+    ).not.toContain(COPY_RESUME_SIN_RESPUESTA_TITULO);
+    expect(texto).not.toContain(COPY_RESUME_SIN_RESPUESTA_CUERPO);
+    expect(texto, "acá no se midió ningún tiempo: el bucle ni llegó a su techo").not.toMatch(
+      /tardando|a tiempo|demora/i,
+    );
+  });
+
+  // ── T-073-3 (AC-3) ──────────────────────────────────────────────────────────────────────────────
+  //
+  // 🔴 LO QUE ESTE `it` MIDE, Y LO QUE NO — porque los cinco desenlaces NO son simétricos y decirlo
+  // simétrico sería afirmar de más. Medido, censo de botones habilitados de cada aterrizaje:
+  //   · D-1 `none`       → bienvenida:  ["Empezar un envío","Enviar","Mis envíos","Recuperar"]
+  //   · D-2 techo        → la card:     [LABEL_VOLVER_A_EMPEZAR_EL_ENVIO,"Volver al inicio"]
+  //   · D-3 throw        → la card:     [LABEL_VOLVER_A_EMPEZAR_EL_ENVIO,"Volver al inicio"]
+  //   · D-4 `failed`     → verify:      ["Verificar mi identidad"]
+  //   · D-5 `passed`     → confirm:     ["¿No sos vos?","Confirmar y enviar $400.00"]
+  //
+  // ⇒ Lo que se asserta para LOS CINCO es (a) que hay al menos un control usable sin recargar y
+  // (b) que ATERRIZAR no escribe ni en el repositorio ni en el almacén de KYC.
+  // ⛔ Lo que NO se asserta, y se declara: que el control de D-4 y el de D-5 no escriban. El de D-4
+  // («Verificar mi identidad») SÍ gasta —llama a `startKyc`, que hace `repo.save`— y ése es exactamente
+  // el motivo por el que AC-4 pide un aviso en ESA pantalla y antes del toque. El de D-5 («Confirmar y
+  // enviar») escribe a propósito: es el money-path, no un callejón del KYC. Escribir un assert que los
+  // incluyera exigiría inventar un control que no existe.
+  it("T-073-3 (AC-3): los cinco desenlaces ofrecen salida, y aterrizar en ninguno escribe nada", async () => {
+    const casos: Array<{
+      nombre: string;
+      execute: () => Promise<never | { kind: "none" | "processing" | "passed" | "failed"; snapshot?: RemittanceState }>;
+      ms: number;
+      censo: string[];
+    }> = [
+      { nombre: "D-1 `none`", execute: async () => ({ kind: "none" as const }), ms: 0, censo: ["Empezar un envío", "Enviar", "Mis envíos", "Recuperar"] },
+      { nombre: "D-2 techo", execute: async () => ({ kind: "processing" as const }), ms: 20_000, censo: [LABEL_VOLVER_A_EMPEZAR_EL_ENVIO, "Volver al inicio"] },
+      {
+        nombre: "D-3 throw",
+        execute: async () => {
+          throw new Error("didit_caido");
+        },
+        ms: 0,
+        censo: [LABEL_VOLVER_A_EMPEZAR_EL_ENVIO, "Volver al inicio"],
+      },
+      {
+        nombre: "D-4 `failed`",
+        execute: async () => ({ kind: "failed" as const, snapshot: Remittance.create("rem-73-4", beneficiary(), Money.of(400, "USDC"), T0).snapshot }),
+        ms: 0,
+        censo: ["Verificar mi identidad"],
+      },
+      {
+        nombre: "D-5 `passed`",
+        execute: async () => ({ kind: "passed" as const, snapshot: passedSnapshot(1478.15, 3.7, "2999-01-01T00:00:00.000Z") }),
+        ms: 0,
+        censo: ["¿No sos vos?", "Confirmar y enviar $400.00"],
+      },
+    ];
+
+    for (const caso of casos) {
+      const { repo, kycStore, ceroEscrituras } = conEspias();
+      montarConResume(caso.execute as never, { repo, kycStore });
+      await avanzar(caso.ms);
+      expect(censoDeBotones(), `${caso.nombre}: el censo de controles cambió`).toEqual(caso.censo);
+      expect(censoDeBotones().length, `${caso.nombre}: no ofrece ningún control usable`).toBeGreaterThanOrEqual(1);
+      ceroEscrituras(`${caso.nombre}, al aterrizar`);
+      cleanup();
+    }
+  });
+
+  it("T-073-3 (AC-3, la otra mitad): usar CUALQUIERA de las dos salidas de la card tampoco escribe", async () => {
+    for (const etiqueta of [LABEL_VOLVER_A_EMPEZAR_EL_ENVIO, "Volver al inicio"]) {
+      const { repo, kycStore, ceroEscrituras } = conEspias();
+      montarConResume(async () => ({ kind: "processing" as const }), { repo, kycStore });
+      await avanzar(20_000);
+      act(() => {
+        fireEvent.click(screen.getByText(etiqueta));
+      });
+      ceroEscrituras(`la card del techo, tras tocar «${etiqueta}»`);
+      // Y la card se fue: el control lleva a alguna parte, no es decorativo.
+      expect(screen.queryByText(COPY_RESUME_SIN_RESPUESTA_TITULO), `«${etiqueta}» no sacó de la card`).toBeNull();
+      cleanup();
+    }
+  });
+
+  it("T-073-3b (AC-3 · D-1): `none` aterriza en la bienvenida, con salidas y sin escribir", async () => {
+    const { repo, kycStore, ceroEscrituras } = conEspias();
+    montarConResume(async () => ({ kind: "none" as const }), { repo, kycStore });
+    await avanzar(0);
+    // 🧬 MUTANTE: cambiar el `pasoInicial` por defecto ⇒ el censo deja de ser el de la bienvenida ⇒ rojo.
+    expect(censoDeBotones()).toEqual(["Empezar un envío", "Enviar", "Mis envíos", "Recuperar"]);
+    ceroEscrituras("D-1, al aterrizar en la bienvenida");
+    act(() => {
+      fireEvent.click(screen.getByText("Empezar un envío"));
+    });
+    ceroEscrituras("D-1, tras tocar «Empezar un envío»");
+  });
+
+  // ── T-073-7 (BLQ-MED-6) ─────────────────────────────────────────────────────────────────────────
+  //
+  // 🔴 EL HALLAZGO QUE CIERRA. `flow.tsx:278` hacía `await c.abandonPendingKyc.execute()` SIN `try`.
+  // Si `clear()` tira —y `LocalKycPendingStore.clear` tira `kyc_pending_unavailable` cuando `removeItem`
+  // falla—, `setResuming(false)` YA corrió y el `setFinDelResume` de abajo no corre nunca: la persona
+  // queda en la pantalla de abajo, sin overlay, sin card y sin ninguna explicación, después de 20 s de
+  // spinner. Peor que la card mentirosa que esta HU vino a arreglar.
+  //
+  // ⚠️ POR QUÉ HACÍA FALTA ESTE `it`, medido: los TRES spies de `abandonPendingKyc` de este archivo
+  // (`:548`, `:651`, `:751`) son `vi.fn(async () => {})`, o sea que RESUELVEN SIEMPRE. Ninguno rechaza,
+  // así que el arreglo entraría sin candado.
+  it("T-073-7: si limpiar el pendiente TIRA, la card se pinta igual", async () => {
+    montarConResume(async () => ({ kind: "processing" as const }), {
+      useCases: {
+        abandonPendingKyc: {
+          execute: async () => {
+            throw new Error("kyc_pending_unavailable");
+          },
+        } as unknown as AbandonPendingKyc,
+      },
+    });
+    await avanzar(20_000);
+    // 🧬 MUTANTE: sacar el `try/catch` de `flow.tsx:278` ⇒ la card NO aparece ⇒ rojo.
+    // ✅ CALIBRADOR que debe SOBREVIVIR: cambiar el `message` del `Error`.
+    expect(
+      screen.getByRole("heading", { name: COPY_RESUME_SIN_RESPUESTA_TITULO }),
+      "el fallo al limpiar el pendiente dejó a la persona sin card y sin overlay",
+    ).toBeInTheDocument();
+    expect(censoDeBotones()).toEqual([LABEL_VOLVER_A_EMPEZAR_EL_ENVIO, "Volver al inicio"]);
+  });
 });

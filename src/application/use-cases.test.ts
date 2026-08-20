@@ -348,3 +348,69 @@ describe("Use-cases — money-path", () => {
     }
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// T-073-2d (HU 073 / AC-2) — el candado de COMPORTAMIENTO del desenlace D-3
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ FRASE MATA, Y POR QUÉ NINGÚN TEST ANTERIOR PODÍA MATARLA. La card vieja del resume decía «No
+// pudimos confirmar tu identidad a tiempo» para TODOS los finales, incluido el `catch` de
+// `flow.tsx:215`. Los dos tests que se iban a usar como evidencia (`T-073-2a` y
+// `barra-destinos.test.tsx:627-639`) construyen el throw TEMPRANO, o sea el único sub-caso donde esa
+// frase era casi cierta. **La cobertura y la falsedad estaban en cuadrantes distintos.**
+//
+// Este `it` construye el PEOR estado: se preguntó, contestaron, el veredicto fue terminal y APROBADO, y
+// el resume tiró DESPUÉS, al persistirlo. Ahí la frase vieja es falsa dos veces: sí se preguntó, y la
+// verificación de esa persona puede haber pasado.
+//
+// LOS DOS ASSERTS SON DOS A PROPÓSITO:
+//   (a) `rejects` — la FORMA: el resume terminó tirando, o sea que esto ES D-3.
+//   (b) `decisionSpy === 1` — el COMPORTAMIENTO: la consulta SALIÓ y fue contestada.
+// Con (b) solo no hay D-3; con (a) solo no se prueba que se preguntó. Juntas son la contradicción.
+describe("T-073-2d · D-3 puede ocurrir DESPUÉS de una consulta contestada (HU 073)", () => {
+  it("🔴 el resume TIRA con el veredicto ya en la mano: se preguntó, contestaron, y aun así es D-3", async () => {
+    const repoReal = new InMemoryRepo();
+    const clock = new FixedClock();
+    const kycStore = new FakeKycStore();
+    const pending = new FakeKycPendingStore();
+    const kycGw = new FakeKycGateway({}, true); // `true` = fuerza el redirect ⇒ deja un pendiente
+    const create = new CreateRemittance(repoReal, clock, new SeqIds());
+    const lock = new LockQuote(new FakeQuoteGateway(), repoReal, clock);
+    const startKyc = new StartKyc(kycGw, kycStore, pending, repoReal, clock);
+
+    const r0 = await create.execute({ amountUsd: 400, beneficiary: beneficiary() });
+    const id = r0.snapshot.id;
+    await lock.execute({ remittanceId: id });
+    expect((await startKyc.execute({ remittanceId: id, address: FAKE_SOLANA_BENEFICIARY })).kind).toBe("redirect");
+
+    // El pendiente se resuelve por el carril del AGENTE: es el camino que llega hasta `decision`.
+    const p = await pending.get();
+    expect(p, "sin pendiente no hay resume que medir").not.toBeNull();
+    await pending.save({ ...(p as NonNullable<typeof p>), carril: "agente" });
+
+    // El repositorio que NO deja guardar: el throw ocurre en `repo.save`, o sea DESPUÉS de la consulta.
+    const repoQueNoGuarda = {
+      save: async () => {
+        throw new Error("repo_no_disponible");
+      },
+      get: (i: string) => repoReal.get(i),
+      list: (a: string) => repoReal.list(a),
+      clearByOwner: (a: string) => repoReal.clearByOwner(a),
+    };
+    const decisionSpy = vi.spyOn(kycGw, "decision");
+    const uc = new ResumeKyc(kycGw, kycStore, pending, repoQueNoGuarda as never, clock);
+
+    // (a) FORMA — 🧬 MUTANTE: que `repo.save` RESUELVA ⇒ el `rejects` cae ⇒ el test dejó de construir
+    // el peor estado y hay que venir a leer esto.
+    await expect(
+      uc.execute(),
+      "el resume ya no termina tirando: este `it` dejó de construir el desenlace D-3",
+    ).rejects.toThrow();
+    // (b) COMPORTAMIENTO — la consulta salió y volvió con un veredicto.
+    expect(
+      decisionSpy,
+      "no se llegó a preguntar: sin esto, el `rejects` de arriba también lo daría un throw ANTERIOR a " +
+        "la consulta, que es justo el sub-caso donde la frase vieja no era falsa",
+    ).toHaveBeenCalledTimes(1);
+  });
+});

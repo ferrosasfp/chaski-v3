@@ -52,10 +52,18 @@ function headersDe(init: RequestInit): Record<string, string> {
   return Object.fromEntries(Object.entries(h).map(([k, v]) => [k.toLowerCase(), String(v)]));
 }
 
+// ⚠️ EL DEFAULT DE `KYC_AGENT_INVOKE_SECRET` CAMBIÓ EN EL FIX-PACK DE WKH-233 (H-3): era `undefined`,
+// y desde que la credencial es OBLIGATORIA ese default haría tirar a TODOS los `it` del archivo antes
+// de llegar a lo que miden (el body, el query, las cabeceras, los logs). Ahora el default es el camino
+// feliz —la credencial presente— y los `it` que miden su AUSENCIA la sacan a propósito con su propio
+// `vi.stubEnv(..., undefined)`. Es el mismo criterio que `KYC_AGENT_BASE_URL`, que también se siembra
+// acá y sólo se saca en el `describe` que mide su guard.
+const SECRETO_POR_DEFECTO = "invoke-secret-de-test";
+
 beforeEach(() => {
   llamadas = [];
   vi.stubEnv("KYC_AGENT_BASE_URL", BASE);
-  vi.stubEnv("KYC_AGENT_INVOKE_SECRET", undefined);
+  vi.stubEnv("KYC_AGENT_INVOKE_SECRET", SECRETO_POR_DEFECTO);
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -229,15 +237,56 @@ describe("T-CLI-3 · CD-15 — ningún log lleva un VALOR", () => {
   });
 });
 
-describe("T-CLI-4 · la cabecera de invoke se manda SÓLO si el secreto está", () => {
-  it("sin `KYC_AGENT_INVOKE_SECRET`, la cabecera NO EXISTE (byte-idéntico a hoy)", async () => {
+// ⛔ ACÁ VIVÍA `T-CLI-4 · la cabecera de invoke se manda SÓLO si el secreto está`, Y SE RETIRÓ EN EL
+// FIX-PACK DE WKH-233 (H-3). Su primer `it` afirmaba —verde, y verde desde siempre— que sin
+// `KYC_AGENT_INVOKE_SECRET` *"la cabecera NO EXISTE (byte-idéntico a hoy)"*. O sea que la suite no es
+// que no cazó el bug: **lo declaró el comportamiento correcto**. El agente encendió su guard el
+// 2026-08-11, empezó a contestar 401 `credential_missing`, y este test siguió en verde ocho días
+// mientras el 100 % de los usuarios veía "No pudimos verificar tu identidad".
+//
+// Lo reemplaza su INVERSO. El resto del bloque (el `it` del secreto presente, el de sólo-espacios y
+// el de que el secreto no se loguea) se conserva: seguían siendo ciertos y siguen midiendo algo.
+describe("T-CLI-4' · la credencial de invoke es OBLIGATORIA (fail-closed, WKH-233/H-3)", () => {
+  it("sin `KYC_AGENT_INVOKE_SECRET`, las dos funciones TIRAN y NO se gasta ningún viaje", async () => {
+    vi.stubEnv("KYC_AGENT_INVOKE_SECRET", undefined);
     responder(200, SESION_OK);
-    await createAgentKycSession({});
+    await expect(createAgentKycSession({})).rejects.toThrow(/kyc_agent_invoke_secret_unset/);
     responder(200, DECISION_OK);
-    await readAgentKycDecision({ sessionId: "s", decisionToken: "t" });
-    // 🧬 MUTANTE: mandarla siempre, con `""` de valor ⇒ la clave existe ⇒ ROJO. Y el mutante importa:
-    // `Bearer ` pelado es `credential_malformed` para el agente el día que encienda su guard.
-    for (const l of llamadas) expect(headersDe(l.init).authorization).toBeUndefined();
+    await expect(readAgentKycDecision({ sessionId: "s", decisionToken: "t" })).rejects.toThrow(
+      /kyc_agent_invoke_secret_unset/,
+    );
+    // 🧬 MUTANTE: volver al `return secret ? {...} : {}` ⇒ las dos resuelven ⇒ ROJO en los `rejects`.
+    // Y lo que importa no es el throw: es que NO se le preguntó al agente por la identidad de una
+    // persona sin poder acreditar quién pregunta. Mismo criterio que el guard del host, abajo.
+    expect(llamadas, "se gastó un viaje al agente sin credencial").toHaveLength(0);
+  });
+
+  it("un secreto de sólo espacios TAMBIÉN tira: `Bearer ` pelado es peor que no salir", async () => {
+    vi.stubEnv("KYC_AGENT_INVOKE_SECRET", "   ");
+    responder(200, SESION_OK);
+    await expect(createAgentKycSession({})).rejects.toThrow(/kyc_agent_invoke_secret_unset/);
+    expect(llamadas).toHaveLength(0);
+  });
+
+  // 🔴 DÓNDE TIRA, MEDIDO. Si tirara en module-load, `next build` voltearía rutas que no le hablan al
+  // agente y el orden de encendido (sembrar la env ANTES del deploy) dejaría de funcionar. Este `it`
+  // importa el módulo con la env AUSENTE: si el import resuelve, la evaluación es perezosa.
+  it("🔴 el módulo se puede IMPORTAR con la env ausente: tira en la llamada, no en el import", async () => {
+    vi.stubEnv("KYC_AGENT_INVOKE_SECRET", undefined);
+    const mod = await import("./agent-kyc-client");
+    expect(typeof mod.createAgentKycSession).toBe("function");
+    expect(typeof mod.readAgentKycDecision).toBe("function");
+  });
+
+  // 🧪 CONTROL POSITIVO: el error es el de la CREDENCIAL y no el del host. Sin esto, los `it` de
+  // arriba pasarían igual si el throw viniera de `resolveKycAgentBaseUrl` por un `beforeEach` mal
+  // armado, y estaríamos midiendo el guard viejo creyendo que medimos el nuevo.
+  it("CONTROL: con el host presente y el secreto ausente, el error es el de la CREDENCIAL", async () => {
+    vi.stubEnv("KYC_AGENT_BASE_URL", BASE);
+    vi.stubEnv("KYC_AGENT_INVOKE_SECRET", undefined);
+    responder(200, SESION_OK);
+    await expect(createAgentKycSession({})).rejects.toThrow(/kyc_agent_invoke_secret_unset/);
+    await expect(createAgentKycSession({})).rejects.not.toThrow(/kyc_agent_base_url_unset/);
   });
 
   it("✅ con el secreto seteado, va `Authorization: Bearer <valor>` en LAS DOS funciones", async () => {
@@ -250,12 +299,10 @@ describe("T-CLI-4 · la cabecera de invoke se manda SÓLO si el secreto está", 
     for (const l of llamadas) expect(headersDe(l.init).authorization).toBe("Bearer s3cr3t0");
   });
 
-  it("un secreto de sólo espacios cuenta como ausente (no se manda un `Bearer` vacío)", async () => {
-    vi.stubEnv("KYC_AGENT_INVOKE_SECRET", "   ");
-    responder(200, SESION_OK);
-    await createAgentKycSession({});
-    expect(headersDe((llamadas[0] as Llamada).init).authorization).toBeUndefined();
-  });
+  // ⛔ ACÁ VIVÍA el `it` que afirmaba que un secreto de sólo espacios *"cuenta como ausente (no se
+  // manda un `Bearer` vacío)"* y seguía adelante con la llamada. Es la misma bendición del fail-open
+  // aplicada al valor en blanco, y lo reemplaza el `it` de sólo-espacios de arriba, que exige el
+  // throw. El `.trim()` que lo detecta no cambió; lo que cambió es qué se hace con el resultado.
 
   it("el secreto NUNCA aparece en un log, ni en el camino de fallo", async () => {
     vi.stubEnv("KYC_AGENT_INVOKE_SECRET", "s3cr3t0");

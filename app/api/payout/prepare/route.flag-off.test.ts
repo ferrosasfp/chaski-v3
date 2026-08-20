@@ -142,7 +142,7 @@ describe("prepare + autoridad REAL — la semántica del flag OFF (AR/BLQ-ALTO-1
     // (consultar al agente de KYC) en vez de la rama `simulated_dev`. Sin esto el test mediría el
     // demo, no el money-path.
     vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test");
-    vi.stubEnv("KYC_AGENT_INVOKE_SECRET", undefined);
+    vi.stubEnv("KYC_AGENT_INVOKE_SECRET", "invoke-secret-de-test"); // WKH-233 (fix-pack · H-3): la credencial de invoke pasó a ser OBLIGATORIA (`invokeAuthHeader` es fail-closed), así que sembrarla es PRE-REQUISITO de todo `it` que llegue al agente. Estaba en `undefined` a propósito cuando la ausencia era inocua; hoy la ausencia CORTA, y dejarla haría que estos `it` midieran el guard nuevo en vez de lo que dicen medir.
     getTokenStoreMock.mockReset();
     getTokenStoreMock.mockReturnValue({
       // El filtro por dueño, aplicado: sólo devuelve el token si el par (sesión, dirección) coincide.

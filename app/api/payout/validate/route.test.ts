@@ -59,7 +59,7 @@ beforeEach(() => {
   // Default: rate-limit permite el paso (los tests de autoridad no lo ejercitan).
   checkRouteRateLimitMock.mockReset();
   checkRouteRateLimitMock.mockResolvedValue({ ok: true });
-  vi.stubEnv("KYC_AGENT_INVOKE_SECRET", undefined);
+  vi.stubEnv("KYC_AGENT_INVOKE_SECRET", "invoke-secret-de-test"); // WKH-233 (fix-pack · H-3): la credencial de invoke pasó a ser OBLIGATORIA (`invokeAuthHeader` es fail-closed), así que sembrarla es PRE-REQUISITO de todo `it` que llegue al agente. Estaba en `undefined` a propósito cuando la ausencia era inocua; hoy la ausencia CORTA, y dejarla haría que estos `it` midieran el guard nuevo en vez de lo que dicen medir.
   vi.stubEnv("VERCEL_ENV", undefined);
   // La fila del token existe para el par legítimo `(VID, ADDR)` y para ningún otro.
   getTokenStoreMock.mockReset();

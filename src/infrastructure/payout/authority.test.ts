@@ -85,7 +85,11 @@ afterEach(() => {
 });
 beforeEach(() => {
   vi.stubEnv("KYC_AGENT_BASE_URL", "https://agentes.test");
-  vi.stubEnv("KYC_AGENT_INVOKE_SECRET", undefined);
+  // WKH-233 (fix-pack · H-3): la credencial de invoke es OBLIGATORIA desde que `invokeAuthHeader`
+  // es fail-closed, así que sembrarla es PRE-REQUISITO de cualquier `it` que llegue al agente —
+  // igual que el host de la línea de arriba. Sin esto, 45 `it` de tres archivos morían con
+  // `kyc_agent_invoke_secret_unset` antes de llegar a lo que miden.
+  vi.stubEnv("KYC_AGENT_INVOKE_SECRET", "invoke-secret-de-test");
   vi.stubEnv("VERCEL_ENV", undefined);
   getTokenStoreMock.mockReset();
   storeConLaFilaDe(VID, ADDR);

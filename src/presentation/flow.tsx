@@ -357,7 +357,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
         !servidorDiceQueNoHayFila &&
         rememberedKyc &&
         rememberedKyc.approved &&
-        rememberedKyc.payoutAllowed
+        rememberedKyc.realVerified // 🔴 WKH-233 (fix-pack · H-2b) — EN ESTA LÍNEA, Δ0: `:330` recibe 75 citas ancladas y este archivo 98 entrantes, así que una línea nueva acá las corre a todas. ⚠️ DECÍA `payoutAllowed`, Y ERA UNA TAUTOLOGÍA CON EL RENGLÓN DE ARRIBA: `agent-kyc-gateway.ts:84` puebla `payoutAllowed` desde `d.approved`, o sea que `approved && payoutAllowed` preguntaba `approved && approved`. El juicio que decide el PAGO es (`realVerified`, `../infrastructure/kyc/agent-kyc-gateway.ts:87`), el `payoutAllowed` del AGENTE adoptado tal cual — el mismo que ya usa `:1309` para decidir si esta pantalla puede AFIRMAR una verificación. ⛔ EL GUARD QUE VALE ES EL DE `StartKyc` (mismo cambio, `../application/use-cases/start-kyc.ts:113`): éste se repite acá por lo que dice el comentario de arriba —si se llamara igual, `StartKyc` devolvería `redirect`, esta función descarta la URL y se quemaría un cupo del tier gratuito que nadie usa—. Desincronizar los dos no abre un agujero de pago, quema cupo.
       ) {
         // KYC-once: esta wallet ya está verificada → salta review+verify, directo a confirmar (AC-4).
         // ⚠️ Va la variable LOCAL, no el estado: `setServerVerdict` de arriba no se ve dentro de este

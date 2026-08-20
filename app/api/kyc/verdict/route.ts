@@ -14,7 +14,8 @@
 // consiguió.
 //
 // Guard-order fail-closed (envs en runtime, CD-14): V1 secreto PoP → V2 rate-limit → V3 body →
-// V4 PoP P1..P5 → V5 store → V6 TTL → V7 lectura owner-scoped → V8 backfill → V9 200.
+// V4 PoP P1..P5 → V5 store → V6 TTL → V7 lectura owner-scoped → V8 backfill → V9 juicio →
+// V9.5 credencial del money-path (WKH-233/H-2a) → 200.
 // Exemplar: app/api/solana/escrow/remittance-ids/route.ts:39-137.
 //
 // 🔴 V5 Y V6 VAN DESPUÉS DEL PoP, y no es cosmético. Si el chequeo del flag fuese antes, un caller
@@ -36,6 +37,7 @@ import { verifySolanaPop } from "../../../../src/infrastructure/auth/pop-verify-
 import { resolveSolanaNetworkId } from "../../../../src/infrastructure/chain";
 import { canonicalizeAddress } from "../../../../src/infrastructure/address";
 import { getKycVerdictStore } from "../../../../src/infrastructure/persistence/supabase-kyc-verdicts";
+import { getKycSessionTokenStore } from "../../../../src/infrastructure/persistence/supabase-kyc-session-tokens";
 import { resolveKycVerdictTtlDays } from "../../../../src/infrastructure/kyc-verdict-ttl-env";
 import { isVerdictExpired } from "../../../../src/infrastructure/kyc-verdict-ttl";
 import { resolvePayoutAuthority } from "../../../../src/infrastructure/payout/authority";
@@ -199,6 +201,50 @@ export async function POST(req: Request): Promise<Response> {
   if (isVerdictExpired(record.verifiedAt, ttlDays, Date.now())) {
     return json({ verdict: null, reason: "expired" }, 200);
   }
+
+  // V9.5 — LA CREDENCIAL DEL MONEY-PATH: LA MISMA PREGUNTA QUE HACE EL PAGO, HECHA ACÁ (WKH-233 fix-pack · H-2a).
+  //
+  // 🔴 QUÉ CALLEJÓN SIN SALIDA CIERRA. Hasta acá esta ruta contestaba `usable` mirando SÓLO la fila de
+  // `kyc_verdicts`. El pago mira otra cosa: `resolvePayoutAuthority` exige la fila de
+  // `kyc_session_tokens` para el par (sesión, dueño) —(`getForOwner`, `../../../../src/infrastructure/payout/authority.ts:141`)— y sin ella corta con
+  // `kyc_ownership_mismatch` ⇒ `payout_not_authorized`/403. La consecuencia medida: `usable` mandaba a
+  // la persona de `connect` derecho a `confirm` **sin mostrar nunca la pantalla de verificación**, y
+  // ahí moría en el prepare, sin camino de vuelta. Preguntar lo mismo que pregunta el pago es lo que
+  // vuelve `usable` una afirmación sobre el pago y no sobre una tabla.
+  //
+  // ⛔ VA DESPUÉS DEL TTL Y NO ANTES: si la fila ya venció, `expired` es lo cierto y es más informativo
+  // que "no hay credencial". Un `absent` genérico se comería ese motivo.
+  //
+  // 🔴 Y LOS DOS FALLOS DE LECTURA **NO** SALEN POR `absent`, QUE ES LA PARTE QUE IMPORTA. `absent`
+  // prende `servidorDiceQueNoHayFila` en `../../../../src/application/use-cases/start-kyc.ts:109`, que
+  // apaga el atajo KYC-once ⇒ la persona vuelve a escanear el documento y se quema un cupo del tier
+  // gratuito (500/día). Mandar ahí a alguien que SÍ está verificado, porque la base se cayó, es el
+  // "no pude preguntar" leído como "no hay" que la doctrina de
+  // `../../../../src/infrastructure/kyc/http-kyc-verdict-gateway.ts:19-24` prohíbe explícitamente. Por
+  // eso salen por el 502 que esta ruta YA tiene: el gateway lo LANZA, `ConnectWallet` lo degrada a
+  // "seguimos como hoy" y el atajo local sigue vivo.
+  //
+  // ⚠️ LA RAMA `!tokenStore` ES INALCANZABLE HOY, Y SE ESCRIBE IGUAL: V5 ya devolvió 501 si no hay
+  // cliente de Supabase, y las DOS fábricas salen del MISMO `getSupabaseServerClient()`
+  // (`../../../../src/infrastructure/persistence/supabase-kyc-session-tokens.ts:145`). O sea que hoy
+  // no se puede llegar acá con `store` presente y `tokenStore` ausente. Es un acoplamiento entre dos
+  // fábricas que nada vigila, así que el `if` fail-closed se queda: el día que una de las dos cambie
+  // de condición, esto corta en vez de contestar `usable` sin haber podido mirar la credencial.
+  const tokenStore = getKycSessionTokenStore();
+  if (!tokenStore) return json({ error: "kyc_verdict_unavailable" }, 502);
+  let credencial: string | null;
+  try {
+    credencial = await tokenStore.getForOwner(record.verificationId, owner);
+  } catch {
+    // NUNCA 500 crudo, NUNCA eco del SQLSTATE. Y NUNCA `absent`: ver arriba.
+    return json({ error: "kyc_verdict_unavailable" }, 502);
+  }
+  // ⚠️ ACÁ NO SE DEVUELVE UN MOTIVO NUEVO. `absent` es la forma que esta ruta YA emite en `:182` y que
+  // el cliente ya sabe leer (`ABSENT_REASONS`); un motivo nuevo cae en el `readAbsentReason` del
+  // gateway y se lee como `absent` de todos modos, pero además ensancha un borde de confianza para no
+  // decir nada nuevo. Lo cierto es lo mismo que dice `absent`: no hay veredicto UTILIZABLE.
+  if (credencial === null) return json({ verdict: null, reason: "absent" }, 200);
+
   return json(
     {
       verdict: {

@@ -3570,3 +3570,64 @@ class WalletDelBridgeSuelto extends FakeWallet {
     return solanaWalletBridge.getState().publicKey ?? FAKE_WALLET_ADDRESS;
   }
 }
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// T-AC4c (WKH-233 fix-pack · H-2b) — el atajo de `onConnect` mira `realVerified`, no `payoutAllowed`
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ CIERRA. `flow.tsx:358-360` decía `rememberedKyc.approved && rememberedKyc.payoutAllowed`, y
+// los dos campos salen del MISMO booleano (`agent-kyc-gateway.ts:84` puebla `payoutAllowed` desde
+// `d.approved`, D-3). O sea `approved && approved`: una sola pregunta escrita dos veces. El juicio del
+// AGENTE —el que decide el pago— es `realVerified`, y es el mismo que `flow.tsx:1309` ya usa para
+// decidir si esta pantalla puede AFIRMAR una verificación.
+//
+// ⚠️ ESTE `it` NO CUBRE UN AGUJERO DE PAGO: el guard que vale es el de `StartKyc` (T-SK-REAL), que
+// corre igual. Lo que cubre es lo que dice el comentario de `flow.tsx:349-354`: si `onConnect` llama a
+// `startKyc`, éste devuelve `redirect`, `onConnect` DESCARTA la URL, y la pantalla de verificación
+// crea una SEGUNDA sesión. Un cupo del tier gratuito por persona, tirado.
+//
+// ⛔ VA AL FINAL DEL ARCHIVO: `:1041`, `:1454`, `:1510` y `:1581` de acá los citan otros por número.
+it("T-AC4c: cacheado con `realVerified:false` ⇒ va a review y NO se crea sesión en el connect", async () => {
+  const kycStore = new FakeKycStore();
+  // El par que el gateway de fallback produce por definición, y que ningún fixture del repo tenía:
+  // la PANTALLA lo da por aprobado (`approved`/`payoutAllowed`) y el AGENTE no lo verificó.
+  await kycStore.save("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", {
+    ...passKyc,
+    realVerified: false,
+  });
+  const kyc = new FakeKycGateway({}, true); // redirect=true ⇒ crear sesión es observable
+  const startSpy = vi.spyOn(kyc, "start");
+  render(<RemittanceFlow pasoInicial="send" container={buildTestContainer({ kycStore, kyc })} />);
+
+  fillSend();
+  fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+
+  expect(
+    await screen.findByRole("button", { name: /Continuar/ }),
+    "el atajo mandó a `confirm` a alguien que el agente no verificó: muere en el prepare y la " +
+      "pantalla de verificación no se le muestra nunca",
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Confirmar y enviar/ })).toBeNull();
+  expect(
+    startSpy,
+    "se creó una sesión en el connect: `onConnect` descarta esa URL, así que el cupo se gasta al pedo",
+  ).not.toHaveBeenCalled();
+});
+
+// 🧪 CONTROL POSITIVO DEL ANTERIOR. T-AC4 ya cubre el camino feliz, pero con OTRO fixture; acá el
+// único cambio respecto del `it` de arriba es ese booleano, que es lo que hace al control informativo.
+it("T-AC4c(control): el MISMO fixture con `realVerified:true` sí va directo a confirm", async () => {
+  const kycStore = new FakeKycStore();
+  await kycStore.save("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", {
+    ...passKyc,
+    realVerified: true,
+  });
+  render(<RemittanceFlow pasoInicial="send" container={buildTestContainer({ kycStore })} />);
+
+  fillSend();
+  fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Conectar wallet/ }));
+
+  expect(await screen.findByRole("button", { name: /Confirmar y enviar/ })).toBeInTheDocument();
+});

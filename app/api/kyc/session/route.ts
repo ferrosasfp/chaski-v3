@@ -239,6 +239,68 @@ export async function POST(req: Request): Promise<Response> {
     }
   }
 
+  // ── PRE-VUELO — LO QUE PUEDE FALLAR POR CULPA NUESTRA VA **ANTES** DE GASTAR LA CUOTA ──────────
+  // (hotfix 2026-08-20 · F-2)
+  //
+  // 🔴 EL INCIDENTE QUE LO PIDE, MEDIDO. 2026-08-20, 14:09:58 UTC: el agente contestó **200** —la
+  // sesión se creó en el proveedor y la cuota SE GASTÓ— y recién después falló la escritura del token
+  // de más abajo. La route devolvió 503 y la persona NO recibió la URL. Pagamos una verificación y no
+  // entregamos nada. La doctrina que esto aplica ya estaba escrita en el otro repo
+  // (`wasiai-remittance-agents`, `src/app/api/agents/remit-kyc-validator/session/route.ts`, bloque
+  // "POR QUÉ EL SECRETO Y EL WORKFLOW SE RESUELVEN ANTES DE CREAR LA SESIÓN"): *"si se resolvieran
+  // DESPUÉS, una misconfiguración NUESTRA dejaría una sesión creada en el partner que nadie va a
+  // poder consultar: CUOTA GASTADA y un BINDING COLGADO"*. Es literalmente lo que pasó.
+  //
+  // ⛔ NO DICE, NI VA A DECIR, "YA NO PUEDE PASAR". Lo que cambia es CUÁNDO ocurre cada clase:
+  //   · ANTES de gastar cuota (acá): la dirección que no canonicaliza, y todo lo que hace que la
+  //     tabla no sea alcanzable/legible — falta la migración, la credencial de Supabase no sirve, el
+  //     proyecto no responde, no hay permiso de SELECT.
+  //   · DESPUÉS de gastar cuota (sigue igual, y se declara): todo lo que sólo dispara al INSERTAR —
+  //     `session_id` duplicado, una restricción de columna, una columna que falta en el insert, un
+  //     GRANT que da SELECT y niega INSERT— y la base que se cae en la ventana entre este pre-vuelo
+  //     y el `put`. Esa 503 se distingue por su etiqueta: `..._write_failed`, no `..._probe_failed`.
+  //
+  // Candado: el doble de `fetch` recibe **CERO llamadas** cuando la persistencia está rota. Es un
+  // test sobre el CONTADOR de llamadas, no sobre el status —el 503 ya salía antes—, igual que
+  // T-TOK-6b y que el molde del otro repo.
+
+  // (1) LO PURO PRIMERO. `canonicalizeAddress` no toca la red: no hay ninguna excusa para correrlo
+  // después del viaje. Hoy corre además en P3 (`:222`) sobre `ch.address`, así que el valor que llega
+  // acá YA es canónico y esta línea es idempotente — se deja igual, y la razón es que el orden deje
+  // de ser un accidente: sin ella, la única garantía de que la canonicalización precede al fetch es
+  // que nadie mueva P3, y `put` volvería a ser el primero en canonicalizar un valor nuestro.
+  // ⚠️ HONESTIDAD SOBRE SU ALCANCE: por eso mismo, HOY esta rama NO es alcanzable desde ningún input
+  // de esta route, y no hay test que la ponga en rojo. Lo que aporta es estructura, no cobertura.
+  let ownerParaPersistir: string | null;
+  try {
+    ownerParaPersistir = provedAddress === undefined ? null : canonicalizeAddress(provedAddress);
+  } catch (err) {
+    // 🔴 ETIQUETA PROPIA, y ése es medio hotfix: `kyc_session_token_write_failed` cubría TAMBIÉN este
+    // caso —`canonicalizeAddress` corría dentro del `try` del `put`, vía el propio `put`— así que el
+    // log decía "no se pudo escribir" cuando la causa real era "la dirección no era válida". Dos
+    // causas que se arreglan distinto no pueden compartir etiqueta.
+    console.warn("[kyc-session] kyc_session_owner_not_canonical", {
+      atada: provedAddress !== undefined,
+      ...causaDe(err),
+    });
+    return NextResponse.json({ error: "kyc_session_unavailable" }, { status: 503 });
+  }
+
+  // (2) LA PERSISTENCIA, HASTA DONDE SE PUEDE VERIFICAR SIN ESCRIBIR BASURA. Ver el docblock de
+  // (`probeReachable`, `../../../../src/infrastructure/persistence/supabase-kyc-session-tokens.ts:151`):
+  // mide alcance + credencial + existencia de la tabla + permiso de LECTURA, y NO mide que el insert
+  // vaya a andar. La alternativa —un insert de prueba que después se borra— se descartó ahí mismo,
+  // con su motivo: deja residuo en una tabla del money-path.
+  try {
+    await tokenStore.probeReachable();
+  } catch (err) {
+    console.warn("[kyc-session] kyc_session_token_probe_failed", {
+      atada: provedAddress !== undefined,
+      ...causaDe(err),
+    });
+    return NextResponse.json({ error: "kyc_session_unavailable" }, { status: 503 });
+  }
+
   // ⛔ EL `callback` SE FUE (DT-11). Ya no se construye ni se manda: el agente valida el
   // `callbackUrl` contra una allowlist de orígenes que nace VACÍA (fail-closed), así que mandarlo sin
   // esa env sería un 400 garantizado; y el retomar del flujo de Chaski no depende del callback sino
@@ -337,12 +399,20 @@ export async function POST(req: Request): Promise<Response> {
     await tokenStore.put({
       sessionId: r.output.sessionId,
       decisionToken: r.output.decisionToken,
-      ownerAddress: provedAddress ?? null,
+      ownerAddress: ownerParaPersistir,
     });
-  } catch {
-    // Value-free: sólo la etiqueta de la rama. ⛔ NUNCA el token, ni el sessionId, ni la dirección.
+  } catch (err) {
+    // Value-free: la etiqueta de la rama + el CÓDIGO de la causa. ⛔ NUNCA el token, ni el sessionId,
+    // ni la dirección, ni el `message` crudo del driver.
+    //
+    // 🔴 ACÁ SE TIRABA EL ERROR ENTERO (`} catch {`), y eso es lo que dejó el incidente del
+    // 2026-08-20 sin causa: el store SÍ traía el SQLSTATE —tira
+    // `kyc_session_token_write_failed:<code>`, (`put`, `../../../../src/infrastructure/persistence/supabase-kyc-session-tokens.ts:164`)—
+    // y este `catch` lo descartaba. Diagnosticar "42P01 (falta la migración)" y "23505 (sessionId
+    // duplicado)" se hacía a ciegas, con hipótesis, cuando el dato estaba a una línea.
     console.warn("[kyc-session] kyc_session_token_write_failed", {
       atada: provedAddress !== undefined,
+      ...causaDe(err),
     });
     return NextResponse.json({ error: "kyc_session_unavailable" }, { status: 503 });
   }
@@ -352,4 +422,55 @@ export async function POST(req: Request): Promise<Response> {
   // no va a un log. Vive server-side y se lee owner-scoped.
   const authToken = issueSessionToken(r.output.sessionId);
   return NextResponse.json({ sessionId: r.output.sessionId, url: r.output.url, authToken });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//  🔴 LA CAUSA, SIN EL VALOR (hotfix 2026-08-20 · F-1)
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// QUÉ ESTABA MAL. El `catch` de la escritura del token era `} catch {` pelado: descartaba el error
+// ENTERO. El único rastro del incidente del 2026-08-20 fue
+// `kyc_session_token_write_failed { atada: true }` — una etiqueta que no distingue NINGUNA causa de
+// las que se arreglan distinto, y que además MENTÍA sobre una de ellas (`canonicalizeAddress` corría
+// dentro de ese mismo `try`, vía `put`, así que "no se pudo escribir" podía ser en realidad "la
+// dirección no era válida"). Es el mismo daño que el otro repo ya pagó y ya documentó: cuatro guards
+// que tiran `new Error(...)` reportan todos `name: 'Error'`, "el log distinguía cero causas de
+// cuatro, y desde afuera las cuatro se ven igual".
+//
+// MOLDE COPIADO, NO INVENTADO: `wasiai-remittance-agents`,
+// `src/app/api/agents/remit-kyc-validator/session/route.ts` (bloque del `catch`). De ahí sale el
+// `errorName` y el `errorCode` con su regex EXACTA.
+//
+// ⛔ POR QUÉ ESTO NO PUEDE SER UN SECRETO NI PII — POR SU FORMA, NO POR CONFIANZA:
+//   · `errorName`: el `name` de un `Error`. Es un identificador de clase (`Error`, `TypeError`,
+//     `KycAgentConfigError`), nunca contenido.
+//   · `errorCode`: el prefijo del `message` hasta el primer `:`, y SÓLO si matchea
+//     `^[a-z][a-z0-9_]{2,47}` — minúsculas, dígitos y guión bajo, tope 48. Este repo escribe siempre
+//     sus códigos así (`kyc_session_token_write_failed`, `address_canonicalization_failed`,
+//     `kyc_session_token_probe_failed`). Una API key, un token `k1.…`, una pubkey base58, una URL o
+//     un nombre propio NO matchean ese patrón: todos llevan mayúsculas, puntos, guiones o barras. Si
+//     el `message` no arranca con un código —un error de runtime, uno de una librería— el match
+//     falla y la clave NO se emite.
+//   · `dbCode`: la cola DESPUÉS del primer `:`, y sólo si es un SQLSTATE (5 caracteres `[A-Z0-9]`,
+//     p. ej. `42P01`, `23505`, `42501`), un código de PostgREST (`PGRST` + 3 dígitos, hasta 8
+//     caracteres) o el literal `unknown` que el propio store escribe cuando el driver no trae `code`.
+//     El ÚNICO productor de esa cola es `error.code ?? "unknown"` del store, que es un enum del
+//     motor. Cualquier otra cosa —incluido cualquier texto con minúsculas o separadores— NO matchea
+//     y NO se emite. ⛔ El `message` crudo del driver no se ecoa nunca: puede traer el valor de un
+//     filtro.
+//
+// ⚠️ LO QUE ESTO NO HACE: no clasifica. Emite el código y deja el juicio a quien lea el log. Y para
+// un error que no es `Error` (un `throw "texto"`, un rechazo con un objeto) devuelve sólo
+// `errorName: "unknown"` — eso es la tercera clase, "otra cosa", y se ve como tal.
+function causaDe(err: unknown): { errorName: string; errorCode?: string; dbCode?: string } {
+  if (!(err instanceof Error)) return { errorName: "unknown" };
+  const errorCode = /^[a-z][a-z0-9_]{2,47}/.exec(err.message)?.[0] ?? null;
+  const corte = err.message.indexOf(":");
+  const cola = corte === -1 ? "" : err.message.slice(corte + 1);
+  const dbCode = /^(?:[A-Z0-9]{5}|PGRST[0-9]{3}|unknown)$/.test(cola) ? cola : null;
+  return {
+    errorName: err.name,
+    ...(errorCode !== null ? { errorCode } : {}),
+    ...(dbCode !== null ? { dbCode } : {}),
+  };
 }

@@ -53,6 +53,8 @@ function makeStore(seed: Row[], opts: { failOn?: "select" | "insert"; errorCode?
       };
       const builder: Record<string, unknown> = {};
       builder.maybeSingle = vi.fn(() => builder);
+      // hotfix 2026-08-20 · F-2: lo usa el pre-vuelo `probeReachable`.
+      builder.limit = vi.fn(() => builder);
       builder.eq = vi.fn((col: string, val: unknown) => {
         eqCalls.push([col, val]);
         filters.push({ col, val });
@@ -203,6 +205,42 @@ describe("`put` — el dueño se escribe PROBADO o NULL, nunca rellenado", () =>
       store.put({ sessionId: "ses-4", decisionToken: "k1.t", ownerAddress: "$$$" }),
     ).rejects.toThrow(/address_canonicalization_failed/);
     expect(inserted).toHaveLength(0);
+  });
+});
+
+describe("`probeReachable` — el pre-vuelo que corre ANTES de gastar cuota (hotfix 2026-08-20 · F-2)", () => {
+  it("con la tabla ausente TIRA con el SQLSTATE, y NO ecoa el message del driver", async () => {
+    const { store } = makeStore([], { failOn: "select", errorCode: "42P01" });
+    // 42P01 = la tabla no existe ⇒ falta la migración. Es una misconfig NUESTRA, y el punto del
+    // pre-vuelo es que se sepa ANTES de crear la sesión en el proveedor.
+    await expect(store.probeReachable()).rejects.toThrow(/kyc_session_token_probe_failed:42P01/);
+    await expect(store.probeReachable()).rejects.not.toThrow(/boom-secreto/);
+  });
+
+  it("la etiqueta es PROPIA: `probe_failed`, nunca `write_failed` (son dos momentos distintos)", async () => {
+    const { store } = makeStore([], { failOn: "select", errorCode: "42501" });
+    // 🧬 MUTANTE: reusar `kyc_session_token_write_failed` acá ⇒ ROJO. Y el mutante importa: la
+    // etiqueta es lo único que le dice a quien lee el log si la cuota del proveedor SE GASTÓ o no.
+    await expect(store.probeReachable()).rejects.not.toThrow(/write_failed/);
+  });
+
+  it("✅ calibración: con la tabla sana NO tira, y NO devuelve ninguna fila", async () => {
+    const { store } = makeStore([
+      { session_id: "ses-A", decision_token: "k1.token-de-A", owner_address: OWNER_A },
+    ]);
+    // Devuelve `void` a propósito: `data` no sale de la función, así que no hay fila que un dueño
+    // equivocado pueda leer (no es la lectura sin filtro que vigila G-5).
+    await expect(store.probeReachable()).resolves.toBeUndefined();
+  });
+
+  it("⚠️ NO ejercita el INSERT, y por eso el `put` puede fallar igual después (declarado, no tapado)", async () => {
+    // El doble falla SÓLO en el insert: el pre-vuelo pasa y el `put` tira. Es exactamente la clase de
+    // fallo que este pre-vuelo NO cubre y que sigue ocurriendo DESPUÉS de gastar la cuota.
+    const { store } = makeStore([], { failOn: "insert", errorCode: "23505" });
+    await expect(store.probeReachable()).resolves.toBeUndefined();
+    await expect(
+      store.put({ sessionId: "ses-9", decisionToken: "k1.t", ownerAddress: null }),
+    ).rejects.toThrow(/kyc_session_token_write_failed:23505/);
   });
 });
 

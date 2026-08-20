@@ -108,6 +108,52 @@ export class SupabaseKycSessionTokenStore {
   }
 
   /**
+   * PRE-VUELO DE LA ESCRITURA (hotfix 2026-08-20 · F-2). Corre **ANTES** de crear la sesión en el
+   * agente, o sea antes de gastar cuota del proveedor.
+   *
+   * 🔴 POR QUÉ EXISTE, Y ES UN INCIDENTE MEDIDO, NO UNA PRECAUCIÓN. El 2026-08-20 a las 14:09:58 UTC
+   * el agente contestó 200 —la sesión SE CREÓ en el proveedor y la cuota SE GASTÓ— y recién después
+   * falló el `put` de acá abajo: `/api/kyc/session` devolvió 503 sin darle la URL a la persona.
+   * Pagamos una verificación y no entregamos nada. El molde de la doctrina que esto aplica es el
+   * docblock de `wasiai-remittance-agents/src/app/api/agents/remit-kyc-validator/session/route.ts`
+   * ("si se resolvieran DESPUÉS, una misconfiguración NUESTRA dejaría una sesión creada en el partner
+   * que nadie va a poder consultar: CUOTA GASTADA y un BINDING COLGADO").
+   *
+   * ⚠️ QUÉ PRUEBA Y QUÉ **NO** PRUEBA, y la distinción es el punto entero:
+   *   SÍ  que la tabla existe, que el proyecto de Supabase es alcanzable, que la credencial sirve y
+   *       que tenemos permiso de **LEER** (42P01/PGRST205 = falta la migración; PGRST301/401 = la
+   *       credencial; PGRST106 = el esquema; un rechazo de transporte = la base no responde).
+   *   NO  que podamos **ESCRIBIR**. Un `select` no ejercita el `insert`: quedan afuera el
+   *       `23505` (`session_id` duplicado), un `NOT NULL`/`CHECK`/FK que sólo dispara al insertar,
+   *       una columna que falta en el `insert` (PGRST204), y un GRANT que da SELECT y niega INSERT.
+   *       Esa clase de fallo **sigue ocurriendo después** de gastar la cuota, y su 503 se distingue
+   *       del de acá por la etiqueta del log (`..._write_failed` vs `..._probe_failed`).
+   *   NO  nada sobre la ventana entre este `select` y el `insert`: la base puede caerse en el medio.
+   *
+   * ⛔ LA ALTERNATIVA QUE SE DESCARTÓ, con su motivo: un `insert` de prueba + `delete`. Ejercitaría
+   * de verdad el permiso de escritura, y por eso se evaluó. Se descarta porque escribe basura en una
+   * tabla del money-path: si el `delete` falla queda un residuo con un `decision_token` de mentira,
+   * el `session_id` centinela colisiona consigo mismo (23505) en cada request, y el propio repo
+   * prohíbe rellenar estas columnas con valores que no salieron de una prueba. Se prefiere cubrir
+   * MENOS y no escribir nada.
+   *
+   * Devuelve `void` **a propósito**: `data` no sale de esta función, así que no hay ninguna fila que
+   * un dueño equivocado pueda leer y CD-19 no tiene nada que decir acá. No es la lectura sin filtro
+   * de dueño que vigila G-5 — ésa devuelve la credencial; ésta no devuelve nada.
+   *
+   * NUNCA se ecoa el `message` del driver (puede traer el valor de un filtro). Sólo el SQLSTATE,
+   * igual que las dos lecturas de arriba y que `put`.
+   *
+   * ⛔ EL NOMBRE NO ES `probeWritable`, Y NO ES UN DETALLE: se llama `probeReachable` porque eso es
+   * lo único que mide. Un nombre que prometiera escritura invitaría al próximo a leer su verde como
+   * "el `put` va a andar", que es exactamente la afirmación que este método NO puede hacer.
+   */
+  async probeReachable(): Promise<void> {
+    const { error } = await this.client.from(TABLE).select("session_id").limit(1);
+    if (error) throw new Error(`kyc_session_token_probe_failed:${error.code ?? "unknown"}`);
+  }
+
+  /**
    * Escritura. `ownerAddress` `null` = sesión SIN ATAR (sin prueba de posesión), y se escribe `null`
    * de verdad: ⛔ PROHIBIDO rellenarlo con un centinela, con la dirección del body o con cualquier
    * valor que no haya salido de una prueba de posesión.

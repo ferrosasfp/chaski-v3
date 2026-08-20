@@ -19,7 +19,7 @@ vi.mock("../../../../src/infrastructure/persistence/supabase-kyc-session-tokens"
   getKycSessionTokenStore: tokenStoreMock,
 }));
 
-import { GET } from "./route";
+import { GET } from "./route"; import { UPSTREAM_INVOKE_SECRET_UNSET } from "../../../../src/infrastructure/kyc/agent-kyc-client"; // F4/MNR-Q2 — EN ESTA LÍNEA (Δ0): el F4 y el work-item citan este archivo por `archivo:línea` (`T-DEC-1b`, `:351`), y agregar una línea las corre a todas.
 
 const SESSION = "sess-abc";
 const OWNER = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
@@ -486,5 +486,68 @@ describe("GET /api/kyc/decision — el `decisionToken` no sale por ningún lado 
     await GET(req({ "x-kyc-token": issueSessionToken(SESSION) }));
     expect(capturado.join("\n")).not.toContain(TOKEN_CENTINELA);
     if (status !== 200) expect(capturado.join("\n")).toContain("[kyc-agent]");
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// T-DEC-4d · F4/MNR-Q2 — EL GEMELO QUE FALTABA: la misconfig NUESTRA no se disfraza de agente caído
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ AGUJERO CIERRA, Y CÓMO SE ENCONTRÓ (que es la mitad que más enseña). El fix-pack puso el
+// MISMO ternario `err instanceof KycAgentConfigError ? UPSTREAM_INVOKE_SECRET_UNSET : 0` en las DOS
+// rutas —`session/route.ts:275` y `decision/route.ts:105`— y lo mecanizó en UNA sola: `T-SE-8c`
+// (`session/route.test.ts:670`) afirma el `-1`, y este archivo no lo nombraba ni una vez.
+//
+// ⚠️ NADIE LO VIO LEYENDO EL DIFF: lo delató la ÚNICA baja de cobertura de la rama. `decision/route.ts`
+// pasó de 42 a 43 ramas con las MISMAS 40 cubiertas (branch 95.23 → 93.02) mientras el total del
+// conjunto SUBÍA. O sea que la rama nueva la agregó el propio fix-pack y no la miraba ningún test de
+// route. El comportamiento del cliente sí estaba medido (la sonda de runtime del F4 imprime
+// `decision_config_missing`), así que esto estaba ACOTADO, no descubierto — pero acotado no es cerrado.
+//
+// 🧬 MUTANTE: volver el ternario de `decision/route.ts:105` a `upstream: 0` a secas ⇒ el 1er `it` se
+// pone ROJO y `T-DEC-4a` —que afirma `upstream: 0` para el agente INALCANZABLE— sigue VERDE. Ése es
+// exactamente el punto: los dos valores tienen que poder distinguirse, y hasta acá el `0` era el único
+// afirmado, así que colapsar el `-1` en el `0` salía gratis.
+describe("GET /api/kyc/decision — T-DEC-4d: sin la credencial de invoke, el `upstream` es PROPIO", () => {
+  /** El `fetch` RECHAZA. Si algo llegara a viajar, el caso se vería igual que `T-DEC-4a`. */
+  function agenteInalcanzable() {
+    const m = vi.fn(async () => {
+      throw new TypeError("fetch failed");
+    });
+    vi.stubGlobal("fetch", m);
+    return m;
+  }
+
+  it("T-DEC-4d: sin `KYC_AGENT_INVOKE_SECRET` ⇒ 502 con `upstream` distinguible y CERO viajes", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubEnv("KYC_AGENT_INVOKE_SECRET", undefined);
+    const fetchMock = agenteInalcanzable();
+    const res = await GET(req({ "x-kyc-token": issueSessionToken(SESSION) }));
+    expect(res.status).toBe(502);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.error).toBe("kyc_decision_failed");
+    // 1. El `upstream` DISTINGUE la misconfig nuestra de un agente caído. Es lo único que el
+    //    operador lee del body, y las dos causas se arreglan distinto (setear una env vs. mirar el
+    //    deployment del agente).
+    expect(body.upstream, "la misconfig se ve igual que un agente caído").toBe(
+      UPSTREAM_INVOKE_SECRET_UNSET,
+    );
+    expect(body.upstream).not.toBe(0);
+    // 2. Y no salió ningún viaje: no se preguntó por la identidad de nadie sin acreditarse.
+    expect(fetchMock, "se gastó un viaje al agente sin credencial").toHaveBeenCalledTimes(0);
+    // 3. Value-free: el nombre de la env que faltó NO sale al cliente (viene del `message` del error,
+    //    que es lo único que este `catch` tiene prohibido tocar).
+    expect(JSON.stringify(body)).not.toContain("KYC_AGENT_INVOKE_SECRET");
+  });
+
+  it("✅ calibración inversa: CON la credencial, el MISMO caso vuelve a `upstream: 0` y a 1 viaje", async () => {
+    // Cambia UNA cosa respecto del `it` de arriba: la env (que el `beforeEach` siembra). Sin este
+    // control, el `-1` podría venir de cualquier otra cosa del fixture y no de la credencial.
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchMock = agenteInalcanzable();
+    const res = await GET(req({ "x-kyc-token": issueSessionToken(SESSION) }));
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "kyc_decision_failed", upstream: 0 });
+    expect(fetchMock, "el caso no llegó a ejercitar el borde").toHaveBeenCalledTimes(1);
   });
 });

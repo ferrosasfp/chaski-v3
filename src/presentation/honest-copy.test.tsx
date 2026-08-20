@@ -837,6 +837,13 @@ describe("barridos de prosa (AC-15 / AC-16)", () => {
 // ⛔ LO QUE QUEDA AFUERA, declarado: el estado `error` ES alcanzable en las otras cuatro ((`guard`, `flow.tsx:300-312`) lo setea y
 // nada del resume lo limpia), y **ningún `it` de acá construye esa
 // coexistencia**. Un léxico vedado que llegara por el banner sobre D-1/D-2/D-3/D-5 no lo caza nadie.
+// 🔴 Y LA DIRECCIÓN INVERSA DEL MISMO AGUJERO (CR/MNR-7), que es la que va a confundir a quien vea el rojo. La vedada `error` se busca
+//    sobre el `textContent` ENTERO, y el banner renderiza el código crudo en (`error.code`, `flow.tsx:1223`). Hay códigos que contienen
+//    la palabra: (`MAX_NAME_LEN`, `./solana/wallet-error-code.ts:195`) devuelve `wallet_error:<Nombre>`, y del lado del servidor hay
+//    `kyc_authority_error` y `prepare_upstream_error`. ⇒ el día que el banner coexista con una de estas cinco pantallas, este barrido se
+//    pone ROJO diciendo «dice «error»» y ⛔ EL SOSPECHOSO NO ES EL LÉXICO: es el PERÍMETRO. El arreglo correcto es acotar qué nodo se lee
+//    (o declarar el código como `ajeno` con su texto exacto), ⛔ nunca sacar `error` del léxico — esa palabra está en CD-6 y sin ella un
+//    copy tipo «Hubo un error al retomar tu verificación» pasa en verde por las cinco.
 //
 // ⚠️ R-12, MEDIDO ANTES DE ESCRIBIR UNA LÍNEA DE ACÁ. El léxico vedado incluye «no pudimos» (pasado) y
 // el copy nuevo de D-4 dice «no podemos» (presente). Si el barrido estuviera escrito como `/no pud/i` o

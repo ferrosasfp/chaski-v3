@@ -766,10 +766,10 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
           <Loader2 className="mx-auto mt-aire size-icono-lg animate-spin text-cochineal" />
           <div>
             <h2 className="text-title font-bold">Verificando tu identidad…</h2>
-            {/* "con Didit" se cayó: con `DIDIT_ENV=mock` la persona vuelve de `/kyc-simulado`, que es
+            {/* "con Didit" se cayó: con el simulador encendido la persona vuelve de `/kyc-simulado`, que es
                 una página nuestra, y este overlay le decía que estábamos hablando con un proveedor que
                 nadie llamó. Esta pantalla no puede distinguir las dos configuraciones (el navegador no
-                ve `DIDIT_ENV`), así que dice lo que vale en las dos. */}
+                ve ninguna env del servidor), así que dice lo que vale en las dos. ⚠️ ACÁ DECÍA `DIDIT_ENV` Y ESA ENV ESTÁ MUERTA: no la lee NINGUNA línea del repo y quien la setee no enciende nada. El simulador hoy se enciende con `MOCK_KYC_SURFACE_ENABLED=true` (`mockDiditSurfaceEnabled`, `../infrastructure/mock-surface.ts:51`). El LÍMITE que justifica esta frase no cambió —el navegador no ve las envs del servidor—, pero el estado de PRODUCCIÓN sí: está medido, con su sonda, en «LA MEDICIÓN DEL 2026-08-05», más abajo en este archivo (se busca por esa frase, no por número de línea). */}
             <Muted className="mx-auto mt-ajustado max-w-xs">
               Estamos confirmando tu verificación. Un segundo.
             </Muted>
@@ -1003,20 +1003,20 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
                 </div>
                 {/* TRES frases se cayeron acá, y la tercera es de la misma familia que las dos
                     primeras. Las dos primeras, del barrido anterior:
-                    · "Lo hace Didit, un verificador certificado": con `DIDIT_ENV=mock` no lo hace
+                    · "Lo hace Didit, un verificador certificado": con el simulador encendido no lo hace
                       Didit, lo hace `/kyc-simulado`, que es una página nuestra que no verifica nada. Y
                       esta pantalla no puede distinguir las dos configuraciones, porque el navegador no
-                      ve `DIDIT_ENV` y todavía no existe ninguna decisión con `provenance`.
+                      ve las envs del servidor y todavía no existe ninguna decisión con `provenance`. (Acá decía `DIDIT_ENV`: env MUERTA, ver la anotación de abajo.)
                     · "Tus datos no se comparten": sin decir con quién, no hay forma de falsearla ni de
                       cumplirla, y además es falsa en el único sentido literal (el documento y la
                       selfie van al verificador; ese es el punto). Lo que sí está probado es el límite
                       concreto: el body que sale hacia los agentes no lleva `kyc` ni `identity`
                       (`a2a/gateway-client.test.ts`, T-A6.1). Eso es lo que dice ahora.
                     · "Escaneás tu DNI y te sacás una selfie": la que quedó, y la única que describía
-                      una ACCIÓN FÍSICA. Con `DIDIT_ENV=mock` la persona aterriza en `/kyc-simulado`,
-                      que no pide ni un dato y lo dice con todas las letras. Medido contra producción
-                      el 2026-08-05: `POST /api/kyc/session` devuelve un `url` que apunta a
-                      `/kyc-simulado`, o sea que ésa ES la configuración con la que se recorre la demo.
+                      una ACCIÓN FÍSICA. Con el simulador encendido la persona aterriza en `/kyc-simulado`,
+                      que no pide ni un dato y lo dice con todas las letras.
+                      ⛔ LA MEDICIÓN DEL 2026-08-05 — SE ANOTA, NO SE BORRA. Acá decía: «Medido contra producción el 2026-08-05: `POST /api/kyc/session` devuelve un `url` que apunta a `/kyc-simulado`, o sea que ésa ES la configuración con la que se recorre la demo». ERA CIERTA CUANDO SE ESCRIBIÓ —el 2026-08-05 `DIDIT_ENV=mock` todavía era el gate vivo del simulador— y HOY ES FALSA. Queda escrita porque es lo único que explica por qué alguien creyó lo contrario: borrarla deja el error sin causa y lo deja volver.
+                      QUÉ LA VOLVIÓ FALSA: WKH-233 (commit `9bf46e2`, 2026-08-19) desacopló el KYC del proveedor y BORRÓ `DIDIT_ENV`, así que el antecedente de la frase ya no se puede cumplir ni seteándola. CÓMO SE COMPRUEBA HOY —GRATIS, SIN PII Y SIN CONSUMIR CUOTA DEL PROVEEDOR, y por eso se escribe la RECETA y no el veredicto—: `curl -s -o /dev/null -w '%{http_code}' https://chaski-v2.vercel.app/api/kyc/decision` SIN `sessionId`. El guard-order de esa route es 501 → 500 → 400 (`resolveKycAgentBaseUrl`, `../../app/api/kyc/decision/route.ts:39`), así que **501 `kyc_agent_not_configured` ⇒ no hay host del agente ⇒ `AgentKycGateway.start` cae al `FallbackKycGateway` ⇒ carril SIMULADO**, y **400 `missing_session` ⇒ el host ESTÁ configurado ⇒ carril REAL**. MEDIDO el 2026-08-21: **400 `missing_session`** ⇒ producción NO corre el carril simulado. Dos sondas más, del mismo precio y en la misma dirección: `POST /api/mock-didit/v3/session` da **404 `mock_didit_disabled`** (la superficie del simulador está APAGADA en prod) y `/kyc-simulado` sirve el cuerpo de "not found". ⚠️ QUÉ NO PRUEBA LA SONDA: que el AGENTE hable con el proveedor real — eso vive en el otro repo y éste no puede verificarlo (mismo scope-out que ya está escrito en `app/api/mock-didit/v3/session/route.ts`). Lo que decide es en cuál de los DOS carriles de ESTE repo está prod. CONTROL POSITIVO de que la lectura discrimina: el 501 es alcanzable y hay un `it` que lo ejercita — «sin KYC_AGENT_BASE_URL → 501, sin exigir token», en `app/api/kyc/decision/route.test.ts`. 🔴 Y ESTA FRASE YA HIZO DAÑO AFUERA: un agente que actualizaba el pitch deck que ve el jurado leyó esta prosa y estuvo por escribir «la demo pública corre el KYC en modo simulado»; lo frenó otro agente que fue a medir. Una medición correcta que envejeció sola casi sale publicada.
                       Se borra, con el mismo criterio que las dos vecinas: la pantalla no puede
                       distinguir las dos configuraciones, así que dice sólo lo que vale en las dos. Lo
                       que la persona va a tener que hacer lo decide el verificador, y este componente
@@ -1029,11 +1029,11 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
                     era una frase. Acá había `IdCard → ArrowRight → ScanFace`: documento, flecha, cara
                     escaneada. Es la MISMA promesa que se borró del párrafo y del botón ("escaneás tu
                     DNI y te sacás una selfie"), dibujada en vez de escrita, y en el elemento más
-                    grande del recuadro. Con `DIDIT_ENV=mock` la persona aterriza en `/kyc-simulado`,
-                    que no le pide ni un dato: nadie escanea nada, y esa es la configuración con la
-                    que se recorre la demo hoy.
-                    Y NO se arregla mostrando un dibujo por modo: `DIDIT_ENV` se lee server-side y no
-                    tiene variante `NEXT_PUBLIC_` (lo declaraba `didit-env.ts:66`, ⛔ BORRADO en WKH-233 junto con el proveedor; el hecho sigue siendo cierto —no hay ninguna `NEXT_PUBLIC_DIDIT_*` en el árbol— pero ya no hay archivo que lo diga, y por eso se dice acá), así que este componente no sabe
+                    grande del recuadro. Con el simulador encendido la persona aterriza en `/kyc-simulado`,
+                    que no le pide ni un dato: nadie escanea nada. ⚠️ ACÁ SEGUÍA «y esa es la configuración con la que se recorre la demo hoy», con `DIDIT_ENV=mock` como antecedente, y LAS DOS MITADES SON FALSAS HOY: la env está muerta y prod no corre el carril simulado. Era cierta al escribirse; se anota y no se borra. La anotación entera, con la sonda que lo decide y su control positivo, está arriba en «LA MEDICIÓN DEL 2026-08-05».
+                    ⛔ EL BORRADO DEL DIBUJO NO DEPENDÍA DE ESA MITAD FALSA: se sostiene igual en el carril real, por el límite de la línea que sigue.
+                    Y NO se arregla mostrando un dibujo por modo: la env que decide el modo se lee server-side y no
+                    tiene variante `NEXT_PUBLIC_`. ⚠️ ACÁ SE NOMBRABA `DIDIT_ENV` y su declaración en `didit-env.ts:66` (⛔ ARCHIVO BORRADO por WKH-233): la env de hoy es `MOCK_KYC_SURFACE_ENABLED` (`mockDiditSurfaceEnabled`, `../infrastructure/mock-surface.ts:51`), server-side igual. Y el hecho va como RECETA y no como afirmación cerrada, porque la anterior se auto-desmentía —negaba que cierto prefijo apareciera en el árbol, escribiéndolo en la misma línea—: se deriva con `grep -rhoE "NEXT_PUBLIC_[A-Z0-9_]+" src app scripts | sort -u` y ninguna de las que salen nombra el KYC ni el simulador. Así que este componente no sabe
                     qué verificador está configurado — el mismo límite que ya está anotado para las
                     frases vecinas. Queda un ícono que vale en las dos configuraciones: el escudo de
                     "verificación", el mismo del título de la tarjeta y del botón que la arranca. No
@@ -1249,8 +1249,8 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
  * 1. Las etapas 2 y 3 NO EXISTEN. `setScanStage` sólo se llama con 0, 1 y 4 en todo este archivo, así
  *    que la segunda y la tercera fila nunca se prendían: se quedaban grises para siempre y saltaban
  *    directo a un tilde verde. Nadie las midió porque nadie las testeaba.
- * 2. Entre la etapa 1 y la 4 lo único que ocurre es UNA llamada a `startKyc`. Con `DIDIT_ENV=mock`
- *    (la configuración de producción, medida el 2026-08-05: la sesión resuelve a `/kyc-simulado`)
+ * 2. Entre la etapa 1 y la 4 lo único que ocurre es UNA llamada a `startKyc`. Con el simulador encendido
+ *    (⚠️ ACÁ DECÍA `DIDIT_ENV=mock` «la configuración de producción, medida el 2026-08-05: la sesión resuelve a `/kyc-simulado`», y hoy las DOS mitades son falsas: esa env la borró WKH-233 el 2026-08-19, y la sonda del 2026-08-21 —`GET /api/kyc/decision` sin `sessionId` ⇒ 400 `missing_session`, no 501— dice que prod NO corre el carril simulado. Se anota y no se borra: era CIERTA el 2026-08-05. La receta completa, con su control positivo, está en «LA MEDICIÓN DEL 2026-08-05», en el bloque del paso `verify` de este archivo.)
  *    nadie escanea un documento, nadie mira una cara y nadie consulta una lista AML. La pantalla
  *    narraba tres pasos de un verificador que no se estaba ejecutando.
  *
@@ -1282,8 +1282,8 @@ function VerificationProgress({ approved }: { approved: boolean }) {
  * La tarjeta de identidad del paso `confirm`.
  *
  * 🔴 QUÉ ARREGLA. Esto era un solo bloque verde con un tilde que decía "Identidad verificada:" y los
- * datos al lado, SIEMPRE, pasara lo que pasara con la verificación. Con `DIDIT_ENV=mock` (la
- * configuración con la que se recorre la demo) la decisión llega con `provenance: "didit-mock"`, o sea
+ * datos al lado, SIEMPRE, pasara lo que pasara con la verificación. Con el simulador encendido (⚠️ acá
+ * decía `DIDIT_ENV=mock` «la configuración con la que se recorre la demo»: env MUERTA desde WKH-233 y afirmación de PRODUCCIÓN falsa hoy —la sonda está en «LA MEDICIÓN DEL 2026-08-05»—; se anota porque era cierta al escribirse) la decisión llega con `provenance: "didit-mock"`, o sea
  * datos de una verificación que no existió, y la pantalla los presentaba como verificados. Peor: el
  * sello de "Modo demo" tampoco se prendía, porque `isDemoMode` sólo reconocía `local-fallback`. Quien
  * mirara esa pantalla veía una app dando por buena una identidad inventada, sin un solo aviso.

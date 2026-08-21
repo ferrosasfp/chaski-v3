@@ -625,7 +625,7 @@ export interface KycVerdictStore {
  *                   un fallo de red, no menos.
  *
  * 🔴 Colapsar `not_asked` en `absent` (M-19) no rompe nada visible: los dos terminan creando la
- * sesión de Didit. Lo que rompe es la capacidad de saber por qué se gastó el cupo, y en el momento en
+ * sesión de Didit. Lo que rompe es saber POR QUÉ se la mandó a escanear otra vez (⚠️ acá decía "por qué se gastó el cupo", y CREAR no gasta: sólo COMPLETAR — `app/api/kyc/session/route.ts`), y en el momento en
  * que alguien use `usable` como default de "no pude preguntar", la persona se queda sin verificación
  * y sin poder pagar. Los tres se escriben.
  *

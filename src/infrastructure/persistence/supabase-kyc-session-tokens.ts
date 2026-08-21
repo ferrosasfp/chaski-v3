@@ -131,15 +131,22 @@ export class SupabaseKycSessionTokenStore {
 
   /**
    * PRE-VUELO DE LA ESCRITURA (hotfix 2026-08-20 · F-2). Corre **ANTES** de crear la sesión en el
-   * agente, o sea antes de gastar cuota del proveedor.
+   * agente. ⚠️ ACÁ DECÍA "o sea antes de gastar cuota del proveedor", y crear NO gasta cuota: el
+   * hecho, con su cita textual y su fecha, vive UNA sola vez, en el bloque «CUÁNDO SE CONSUME LA
+   * CUOTA» de `app/api/kyc/session/route.ts`. Corre antes por otra razón, la de abajo.
    *
    * 🔴 POR QUÉ EXISTE, Y ES UN INCIDENTE MEDIDO, NO UNA PRECAUCIÓN. El 2026-08-20 a las 14:09:58 UTC
-   * el agente contestó 200 —la sesión SE CREÓ en el proveedor y la cuota SE GASTÓ— y recién después
-   * falló el `put` de acá abajo: `/api/kyc/session` devolvió 503 sin darle la URL a la persona.
-   * Pagamos una verificación y no entregamos nada. El molde de la doctrina que esto aplica es el
+   * el agente contestó 200 —la sesión SE CREÓ en el proveedor— y recién después falló el `put` de acá
+   * abajo: `/api/kyc/session` devolvió 503 sin darle la URL a la persona. ⚠️ ACÁ DECÍA "y la cuota SE
+   * GASTÓ" y "Pagamos una verificación y no entregamos nada": las dos son FALSAS. Esa sesión nunca se
+   * abrió, así que no se contabilizó. Lo que costó, y basta: la persona no se pudo verificar y quedó
+   * una sesión colgada que nadie va a poder consultar (su `decisionToken` no se persistió).
+   * ⛔ El pre-vuelo NO se afloja por esto: lo justifica el desenlace de la PERSONA, no el precio.
+   * El molde de la doctrina que esto aplica es el
    * docblock de `wasiai-remittance-agents/src/app/api/agents/remit-kyc-validator/session/route.ts`
    * ("si se resolvieran DESPUÉS, una misconfiguración NUESTRA dejaría una sesión creada en el partner
-   * que nadie va a poder consultar: CUOTA GASTADA y un BINDING COLGADO").
+   * que nadie va a poder consultar: CUOTA GASTADA y un BINDING COLGADO" — cita textual: su primera
+   * mitad es la afirmación que se midió falsa, y la doctrina se sostiene con la segunda sola).
    *
    * ⚠️ QUÉ PRUEBA Y QUÉ **NO** PRUEBA, y la distinción es el punto entero:
    *   SÍ  que la tabla existe, que el proyecto de Supabase es alcanzable, que la credencial sirve y
@@ -148,13 +155,13 @@ export class SupabaseKycSessionTokenStore {
    *   NO  que podamos **ESCRIBIR**. Un `select` no ejercita el `insert`: quedan afuera un
    *       `NOT NULL`/`CHECK`/FK que sólo dispara al insertar, una columna que falta en el `insert`
    *       (PGRST204), y un GRANT que da SELECT y niega INSERT (42501).
-   *       Esa clase de fallo **sigue ocurriendo después** de gastar la cuota, y su 503 se distingue
+   *       Esa clase de fallo **sigue ocurriendo después** de crear la sesión, y su 503 se distingue
    *       del de acá por la etiqueta del log (`..._write_failed` vs `..._probe_failed`).
    *       ⚠️ ACÁ ESTABA LISTADO EL `23505` (`session_id` duplicado) Y EL HOTFIX F-3 LO SACÓ DE ESTA
    *       LISTA, porque dejó de ser un fallo: hoy significa "esa sesión ya tiene fila" y `put` la
    *       ATA o la rechaza por dueño. Lo que sí quedó, y es un modo de falla NUEVO que este
    *       pre-vuelo tampoco puede ver, es ese rechazo: `kyc_session_owner_conflict`, que sale por
-   *       su propia etiqueta en el log de la route, también DESPUÉS de gastar la cuota.
+   *       su propia etiqueta en el log de la route, también DESPUÉS de crear la sesión.
    *   NO  nada sobre la ventana entre este `select` y el `insert`: la base puede caerse en el medio.
    *
    * ⛔ LA ALTERNATIVA QUE SE DESCARTÓ, con su motivo: un `insert` de prueba + `delete`. Ejercitaría

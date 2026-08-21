@@ -5,8 +5,8 @@
 // ⛔ ESTA ROUTE NO ES UN PROXY, Y NO PUEDE SERLO (CD-1). Lo que se reemplazó es UN `fetch`. Todo lo
 // demás se queda, y cada cosa por su motivo:
 //   · `clientIp()` + `checkKycRateLimit` (P-1/P-2) — 🔴 EL AGENTE NO TIENE RATE LIMIT. Si el límite
-//     sale de acá, NO LO CUBRE NADIE, y cada sesión creada consume cuota del proveedor. Corre ANTES
-//     de cualquier viaje al agente, y su candado cuenta LLAMADAS, no status.
+//     sale de acá, NO LO CUBRE NADIE. ⚠️ ACÁ DECÍA "y cada sesión creada consume cuota del proveedor",
+//     Y ES FALSO: crear es gratis. El motivo corregido, en el bloque «CUÁNDO SE CONSUME LA CUOTA».
 //   · el bloque S5 completo (P-3/P-4) — la prueba de posesión que decide si la sesión nace ATADA.
 //   · `issueSessionToken` (P-5) — el HMAC NUESTRO que después autoriza el GET /decision de Chaski.
 //     ⛔ NO es el `decisionToken` del agente: son secretos de repos distintos.
@@ -81,12 +81,12 @@ export async function POST(req: Request): Promise<Response> {
 
   // 🔴 AR/BLQ-BAJO-2 — LA RESOLUCIÓN DEL STORE SUBIÓ ACÁ, Y NO ES ORDEN COSMÉTICO. Estaba DESPUÉS de
   // `createAgentKycSession`, o sea después de crear una sesión REAL en el agente. Con las envs de
-  // Supabase ausentes eso QUEMA UNA VERIFICACIÓN DEL PROVEEDOR por request y después contesta 503:
-  // cuota gastada por una misconfig NUESTRA, que este mismo archivo ya cuenta como el costo caro
-  // ("Fallar acá cuesta UN reintento. No fallar cuesta UNA VERIFICACIÓN ENTERA", más abajo). Con el
-  // limiter en 5/10min, cada IP quema 5 cupos por ventana, indefinidamente y sin que nadie se
-  // verifique. Resolver el store NO es un fetch (es leer dos envs y construir el cliente), así que
-  // subirlo no toca P-7: al agente se le sigue hablando recién después de los guards.
+  // Supabase ausentes eso deja una sesión colgada en el proveedor por request y después contesta 503.
+  // ⚠️ ACÁ DECÍA "QUEMA UNA VERIFICACIÓN DEL PROVEEDOR por request" y "cada IP quema 5 cupos por
+  // ventana, indefinidamente y SIN QUE NADIE SE VERIFIQUE", y esa última cláusula se refutaba sola:
+  // sin que nadie se verifique NO se consume nada (bloque «CUÁNDO SE CONSUME LA CUOTA», más abajo).
+  // El orden se mantiene igual, por lo que sí es cierto: 503 sin basura > 503 con basura. Resolver el
+  // store NO es un fetch, así que subirlo no toca P-7: al agente se le habla después de los guards.
   //
   // ⛔ LO QUE **NO** SUBIÓ ES LA ESCRITURA. `put` necesita el `sessionId`, que no existe antes del
   // agente, y sigue donde estaba —fuera de este bloque— con su propio 503 y su propio log.
@@ -187,9 +187,9 @@ export async function POST(req: Request): Promise<Response> {
   //
   // 🔴 COSTO REAL DEL CAMINO SIN ATAR, que se conserva escrito porque no lo arregla esta HU: sin
   // binding, el proveedor no puede deduplicar entre sesiones ⇒ quien rechaza la firma varias veces
-  // genera verificaciones que NO se colapsan, y cada una consume cuota. ⛔ NO se inventa un
-  // centinela: cualquier valor que no sea la dirección PROBADA reabre R-1, que costó un bloqueante
-  // cerrar. Un identificador de sesión no adivinable sería diseño nuevo, y va a HU aparte.
+  // genera verificaciones que NO se colapsan. ⚠️ DECÍA "y cada una consume cuota", y consume sólo la
+  // que se COMPLETA (bloque «CUÁNDO SE CONSUME LA CUOTA»). ⛔ NO se inventa un centinela: cualquier
+  // valor que no sea la dirección PROBADA reabre R-1, un bloqueante. Un no-adivinable, a HU aparte.
   let provedAddress: string | undefined;
 
   if (popPresentado) {
@@ -239,30 +239,71 @@ export async function POST(req: Request): Promise<Response> {
     }
   }
 
-  // ── PRE-VUELO — LO QUE PUEDE FALLAR POR CULPA NUESTRA VA **ANTES** DE GASTAR LA CUOTA ──────────
-  // (hotfix 2026-08-20 · F-2)
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  // 🔴 CUÁNDO SE CONSUME LA CUOTA DEL PROVEEDOR — LA ÚNICA COPIA DE ESTE HECHO EN EL REPO
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  //
+  // MEDIDO CONTRA EL PROVEEDOR, NO INFERIDO. Didit, consultado el 2026-08-21 (panel de la cuenta +
+  // su agente de soporte). Textual, las tres cosas:
+  //   · Plan: «500 GRATIS/MES · LUEGO $0.15» ⇒ LA CUOTA ES **MENSUAL**, no diaria. Esto CIERRA el
+  //     conflicto "500/día vs 500/mes" que los expedientes de las HUs 016 y 073 declaraban ABIERTO:
+  //     la diferencia de 30× no existe. Todo renglón de este repo que diga "/día" está viejo.
+  //   · «La cuota se consume al COMPLETAR exitosamente una verificación (cuando la sesión alcanza un
+  //     estado final como `Approved` o `Declined` tras haber procesado los datos)».
+  //   · «Las sesiones `Not Started` o `Abandoned` NO consumen cuota. Si creás una sesión y la persona
+  //     nunca la abre, o la abandona a mitad de camino, esa sesión no se contabiliza».
+  //
+  // ⇒ **CREAR ES GRATIS. COMPLETAR CUESTA.** Este `POST` no gasta cuota por sí solo: lo que cuesta es
+  // que una persona TERMINE el recorrido hospedado, y eso ocurre lejos de acá y puede no ocurrir.
+  //
+  // ⛔ LO QUE **NO** SE SIGUE DE ESTO, y hay que leerlo antes de aflojar un guard de este archivo:
+  //   1. NO se sigue que crear sesiones sea inocuo. Cada una es una que alguien PUEDE completar, y la
+  //      que nadie usa queda COLGADA en el proveedor. El rate limit sigue siendo la única defensa que
+  //      existe (el agente no tiene ninguna): cambia el ARGUMENTO —abuso y basura, ya no "cada request
+  //      quema una verificación"—, ⛔ no el guard.
+  //   2. NO se sigue que el pre-vuelo de abajo sobre. Sigue, con su motivo corregido ahí mismo.
+  //   3. NO está medido qué pasa con una sesión que queda a mitad y el proveedor cierra por timeout,
+  //      ni si el AGENTE intermedio agrega algún consumo propio. Nadie lo preguntó. ⛔ No lo afirmes.
+  //
+  // ⚠️ ESTE BLOQUE ES PROSA SOBRE UN TERCERO Y NINGÚN TEST PUEDE VERIFICARLO: envejece si el proveedor
+  // cambia de plan, y nada se va a poner rojo. Lo único que lo protege es que sea LA ÚNICA copia —
+  // el resto del repo apunta acá en vez de repetir la cifra— y la fecha de arriba.
+  //
+  // ── PRE-VUELO — LO QUE PUEDE FALLAR POR CULPA NUESTRA VA **ANTES** DE CREAR LA SESIÓN ───────────
+  // (hotfix 2026-08-20 · F-2 — el POR QUÉ se corrigió el 2026-08-21; el guard NO se tocó)
   //
   // 🔴 EL INCIDENTE QUE LO PIDE, MEDIDO. 2026-08-20, 14:09:58 UTC: el agente contestó **200** —la
-  // sesión se creó en el proveedor y la cuota SE GASTÓ— y recién después falló la escritura del token
-  // de más abajo. La route devolvió 503 y la persona NO recibió la URL. Pagamos una verificación y no
-  // entregamos nada. La doctrina que esto aplica ya estaba escrita en el otro repo
+  // sesión se creó en el proveedor— y recién después falló la escritura del token de más abajo. La
+  // route devolvió 503 y la persona NO recibió la URL.
+  //
+  // ⚠️ ACÁ DECÍA "y la cuota SE GASTÓ" Y "Pagamos una verificación y no entregamos nada": LAS DOS SON
+  // FALSAS. Esa sesión nunca se abrió ⇒ quedó `Not Started` ⇒ el proveedor no la contabiliza (bloque
+  // de arriba). Lo que el incidente costó DE VERDAD, que ya alcanza y no hace falta inflarlo: la
+  // persona no pudo verificarse, y quedó una sesión colgada que nadie va a poder consultar nunca
+  // (el `decisionToken` no se persistió y el agente NO lo re-emite, CD-21).
+  // ⛔ EL PRE-VUELO NO SE AFLOJA POR ESTO: lo que lo justifica es el desenlace de la PERSONA, no el
+  // precio, y ése no cambió ni un poco.
+  //
+  // La doctrina que esto aplica ya estaba escrita en el otro repo
   // (`wasiai-remittance-agents`, `src/app/api/agents/remit-kyc-validator/session/route.ts`, bloque
   // "POR QUÉ EL SECRETO Y EL WORKFLOW SE RESUELVEN ANTES DE CREAR LA SESIÓN"): *"si se resolvieran
   // DESPUÉS, una misconfiguración NUESTRA dejaría una sesión creada en el partner que nadie va a
-  // poder consultar: CUOTA GASTADA y un BINDING COLGADO"*. Es literalmente lo que pasó.
+  // poder consultar: CUOTA GASTADA y un BINDING COLGADO"*. ⚠️ Es CITA TEXTUAL y no se reescribe, pero
+  // su primera mitad ("CUOTA GASTADA") es exactamente la afirmación que se midió falsa; la segunda es
+  // la que pasó. La doctrina se sostiene entera con la segunda mitad sola.
   //
   // ⛔ NO DICE, NI VA A DECIR, "YA NO PUEDE PASAR". Lo que cambia es CUÁNDO ocurre cada clase:
-  //   · ANTES de gastar cuota (acá): la dirección que no canonicaliza, y todo lo que hace que la
+  //   · ANTES de crear la sesión (acá): la dirección que no canonicaliza, y todo lo que hace que la
   //     tabla no sea alcanzable/legible — falta la migración, la credencial de Supabase no sirve, el
   //     proyecto no responde, no hay permiso de SELECT.
-  //   · DESPUÉS de gastar cuota (sigue igual, y se declara): todo lo que sólo dispara al ESCRIBIR —
+  //   · DESPUÉS de crearla (sigue igual, y se declara): todo lo que sólo dispara al ESCRIBIR —
   //     una restricción de columna, una columna que falta en el insert, un GRANT que da SELECT y
   //     niega INSERT— y la base que se cae en la ventana entre este pre-vuelo y el `put`. Esa 503 se
   //     distingue por su etiqueta: `..._write_failed`, no `..._probe_failed`.
   //     ⚠️ ACÁ DECÍA "`session_id` duplicado" Y EL HOTFIX F-3 LO SACÓ: un `session_id` repetido ya no
   //     es un fallo —`put` ATA esa fila— salvo que la sesión sea de OTRA dirección, y ése es el modo
-  //     de falla NUEVO de esta lista: `kyc_session_owner_conflict`, que también cae después de la
-  //     cuota, que este pre-vuelo tampoco puede ver, y que sale con SU PROPIA etiqueta más abajo.
+  //     de falla NUEVO de esta lista: `kyc_session_owner_conflict`, que también cae después de crear
+  //     la sesión, que este pre-vuelo tampoco puede ver, y que sale con SU PROPIA etiqueta más abajo.
   //
   // Candado: el doble de `fetch` recibe **CERO llamadas** cuando la persistencia está rota. Es un
   // test sobre el CONTADOR de llamadas, no sobre el status —el 503 ya salía antes—, igual que
@@ -291,7 +332,7 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // (2) LA PERSISTENCIA, HASTA DONDE SE PUEDE VERIFICAR SIN ESCRIBIR BASURA. Ver el docblock de
-  // (`probeReachable`, `../../../../src/infrastructure/persistence/supabase-kyc-session-tokens.ts:178`):
+  // (`probeReachable`, `../../../../src/infrastructure/persistence/supabase-kyc-session-tokens.ts:185`):
   // mide alcance + credencial + existencia de la tabla + permiso de LECTURA, y NO mide que el insert
   // vaya a andar. La alternativa —un insert de prueba que después se borra— se descartó ahí mismo,
   // con su motivo: deja residuo en una tabla del money-path.
@@ -363,8 +404,10 @@ export async function POST(req: Request): Promise<Response> {
     // ni la firma. `upstream` es el status del agente, que además ya sale en la respuesta.
     //
     // ⚠️ LO QUE ESTE LOG NO MIDE: sólo se emite en el camino de FALLO. NO cuenta cuántas sesiones sin
-    // atar se crean con ÉXITO, así que NO sirve para dimensionar el consumo de cupo por deduplicación
-    // perdida que se documenta más arriba. Eso necesitaría una señal en el camino feliz, y no está.
+    // atar se crean con ÉXITO, así que NO sirve para dimensionar la deduplicación perdida que se
+    // documenta más arriba. Eso necesitaría una señal en el camino feliz, y no está. ⚠️ Y AUNQUE LA
+    // TUVIERA, contar sesiones CREADAS no dimensionaría el consumo de cupo: lo que consume es la que
+    // se COMPLETA, y ese dato no lo tiene este repo por ningún camino (bloque «CUÁNDO SE CONSUME»).
     console.warn("[kyc-session] kyc_session_failed", {
       atada: provedAddress !== undefined,
       upstream: r.upstream,
@@ -379,11 +422,16 @@ export async function POST(req: Request): Promise<Response> {
   // esta sesión, por CUALQUIER camino: ni la pantalla ni el pago pueden hacerlo sin ella, y el agente
   // NO tiene forma de re-emitirla (CD-21). Si no se persiste y devolviéramos la URL igual, la persona
   // escanearía su documento para un veredicto que NADIE va a poder consultar nunca.
-  // ⇒ Fallar acá cuesta UN reintento. No fallar cuesta UNA VERIFICACIÓN ENTERA.
+  // ⇒ Fallar acá cuesta UN reintento. No fallar cuesta UNA VERIFICACIÓN ENTERA — y ese renglón SIGUE
+  // SIENDO CIERTO con el hecho nuevo, porque el costo lo pone la persona al COMPLETAR el escaneo para
+  // un veredicto que nadie va a poder leer. Es el único sitio de este archivo donde el "cuesta" estaba
+  // del lado correcto.
   //
-  // ⚠️ CONSECUENCIA DECLARADA: la sesión YA se creó en el agente, así que la CUOTA YA SE GASTÓ, y no
-  // hay forma de deshacerlo desde acá (no existe un `DELETE /session`). Es el costo aceptado, y es
-  // estrictamente menor que el otro.
+  // ⚠️ CONSECUENCIA DECLARADA: la sesión YA se creó en el agente y no hay forma de deshacerlo desde
+  // acá (no existe un `DELETE /session`) ⇒ queda una fila colgada en el proveedor. ⚠️ ACÁ DECÍA "así
+  // que la CUOTA YA SE GASTÓ" y es FALSO: si se falla acá, la persona nunca abre esa sesión y queda
+  // `Not Started`, que no se contabiliza (bloque «CUÁNDO SE CONSUME LA CUOTA»). El costo aceptado es
+  // basura en el proveedor, no cuota, y sigue siendo estrictamente menor que el otro.
   //
   // ⛔ `ownerAddress` SALE DE `provedAddress` —la dirección PoP-PROBADA— Y DE NINGÚN OTRO LADO. Nunca
   // de `body.vendorData`, nunca de otro campo del body, nunca de un header. Es P-3/P-11 extendido a
@@ -396,9 +444,10 @@ export async function POST(req: Request): Promise<Response> {
   // `PAYOUT_POP_SECRET` ausente): el conjunto observable de errores no cambia.
   //
   // ⚠️ ACÁ ESTABA `getKycSessionTokenStore()` con su guard de `null`, y SUBIÓ al bloque de guards del
-  // principio (AR/BLQ-BAJO-2): preguntarlo recién acá gastaba una verificación del proveedor antes de
-  // un chequeo gratis. Lo que queda —la ESCRITURA— no puede subir: necesita el `sessionId`, que sólo
-  // existe después del agente.
+  // principio (AR/BLQ-BAJO-2): preguntarlo recién acá creaba una sesión en el proveedor antes de un
+  // chequeo gratis (⚠️ decía "gastaba una verificación", y crear no gasta: ver el bloque «CUÁNDO SE
+  // CONSUME LA CUOTA»; lo que dejaba era una sesión colgada, y el orden sigue siendo el correcto).
+  // Lo que queda —la ESCRITURA— no puede subir: necesita el `sessionId`, que sólo existe después.
   try {
     await tokenStore.put({
       sessionId: r.output.sessionId,
@@ -411,7 +460,7 @@ export async function POST(req: Request): Promise<Response> {
     //
     // 🔴 ACÁ SE TIRABA EL ERROR ENTERO (`} catch {`), y eso es lo que dejó el incidente del
     // 2026-08-20 sin causa: el store SÍ traía el SQLSTATE —tira
-    // `kyc_session_token_write_failed:<code>`, (`put`, `../../../../src/infrastructure/persistence/supabase-kyc-session-tokens.ts:255`)—
+    // `kyc_session_token_write_failed:<code>`, (`put`, `../../../../src/infrastructure/persistence/supabase-kyc-session-tokens.ts:262`)—
     // y este `catch` lo descartaba. Diagnosticar "42P01 (falta la migración)" y "23505 (sessionId
     // duplicado)" se hacía a ciegas, con hipótesis, cuando el dato estaba a una línea.
     // 🟩 Y SIRVIÓ, MEDIDO: el 2026-08-20 21:43:40 UTC este log emitió `dbCode: '23505'` y ESE dato es

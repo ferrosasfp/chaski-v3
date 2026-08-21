@@ -18,7 +18,7 @@
 //
 // 🔴 POR QUÉ LAS CUATRO PRIMERAS NO SE COLAPSAN (CD-16, M-18). Las cuatro terminan en el mismo lugar
 // —se crea la sesión de Didit, como hoy— así que colapsarlas no rompe nada VISIBLE. Lo que rompe es
-// poder decir por qué se gastó un cupo del tier gratuito. Y el día que alguien use el desenlace como
+// poder decir por qué se la mandó a escanear otra vez —⚠️ acá decía "por qué se gastó un cupo del tier gratuito", y CREAR la sesión no gasta: sólo COMPLETAR (`app/api/kyc/session/route.ts`)—. Y el día que alguien use el desenlace como
 // entrada de una decisión, "no pude preguntar" leído como "ya está verificada" deja a la persona sin
 // verificación y sin poder pagar. El input que lo distingue: apagar `PAYOUT_POP_SECRET` — con los
 // cuatro colapsados, el sistema no puede diferenciar eso de "esta billetera nunca se verificó".

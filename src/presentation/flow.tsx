@@ -162,7 +162,7 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
   const [rem, setRem] = useState<RemittanceState | null>(null); const onElegirBilleteraDeEnlace = (b: BilleteraDeeplink) => { if (rem === null) return; yaInteractuoRef.current = true; try { window.location.href = c.recorridoPorEnlace.elegir({ billetera: b, remittanceId: rem.id }).irA; } catch (e) { setError({ message: humanError((e as Error).message) }); } }; // WKH-358 — EN ESTA LÍNEA (Δ0 de citas, `:44`) y ACÁ ABAJO porque necesita `rem`, que se declara en esta misma línea. TRES cosas que no son obvias: (1) `rem === null` NO puede saltar — el viaje se abre CON el `remittanceId` desde el primer byte (CD-5) y sin remesa no hay dueño cruzado que comparar a la vuelta; (2) marca `yaInteractuoRef` porque esto ES una interacción de la persona, y sin eso un resume que resuelva mientras ella está en la app de la billetera navegaría por encima al volver; (3) el `catch` traduce en vez de tirar: `elegir` sube una causa del vocabulario del enlace cuando el disco no acepta el viaje, y eso hay que DECIRLO, no dejarlo como excepción sin causa. ⚠️ Y LA CAUSA SE DERIVA DEL ERROR, NUNCA SE ESCRIBE ACÁ COMO LITERAL: el candado de copy de `deeplink-callers.test.ts` cuenta las causas del vocabulario del enlace que aparecen en `src/presentation`, y hasta que exista el `Record` con todas (once en W5, catorce desde el re-AR it2) escribir una sola acá lo rompe a propósito. Hoy `humanError` la manda a su default, que es exactamente lo que el docblock del motor declara
   const [address, setAddress] = useState<string | null>(null);
   // WKH-333: el veredicto de KYC que el servidor ya contestó al conectar. NO es un guard: sólo decide
-  // si se gasta un cupo de Didit (el guard del dinero es `prepare`, server-side).
+  // si se manda a la persona a verificarse otra vez (el guard del dinero es `prepare`, server-side).
   const [serverVerdict, setServerVerdict] = useState<KycVerdictLookup | undefined>(undefined);
   // La prueba de posesión que se firmó al conectar. Viaja hasta la creación de la sesión de Didit
   // (WKH-333/R-1) para que no haga falta un SEGUNDO prompt de billetera por el mismo motivo.
@@ -350,14 +350,14 @@ export function RemittanceFlow({ container, pasoInicial = "bienvenida" }: { cont
       // no se toma. `StartKyc` tiene el mismo guard y es el que vale (defensa en profundidad); acá se
       // repite por una razón concreta y medible: si se llamara igual, `StartKyc` devolvería
       // `redirect` y esta función descarta la URL (mirá el `else` de abajo) ⇒ se crearía una sesión
-      // de Didit que nadie usa, y la pantalla de verificación crearía una SEGUNDA. Un cupo del tier
-      // gratuito por cada persona en esta situación, que es justo lo que la HU vino a ahorrar.
+      // de Didit que nadie usa, y la pantalla de verificación crearía una SEGUNDA. ⚠️ ESA PRIMERA NO
+      // CUESTA CUOTA (queda `Not Started`, ver `app/api/kyc/session/route.ts`): lo que deja es basura.
       const servidorDiceQueNoHayFila = serverVerdict?.outcome === "absent";
       if (
         !servidorDiceQueNoHayFila &&
         rememberedKyc &&
         rememberedKyc.approved &&
-        rememberedKyc.realVerified // 🔴 WKH-233 (fix-pack · H-2b) — EN ESTA LÍNEA, Δ0: `:330` recibe 75 citas ancladas y este archivo 98 entrantes, así que una línea nueva acá las corre a todas. ⚠️ DECÍA `payoutAllowed`, Y ERA UNA TAUTOLOGÍA CON EL RENGLÓN DE ARRIBA: `agent-kyc-gateway.ts:84` puebla `payoutAllowed` desde `d.approved`, o sea que `approved && payoutAllowed` preguntaba `approved && approved`. El juicio que decide el PAGO es (`realVerified`, `../infrastructure/kyc/agent-kyc-gateway.ts:87`), el `payoutAllowed` del AGENTE adoptado tal cual — el mismo que ya usa `:1309` para decidir si esta pantalla puede AFIRMAR una verificación. ⛔ EL GUARD QUE VALE ES EL DE `StartKyc` (mismo cambio, `../application/use-cases/start-kyc.ts:113`): éste se repite acá por lo que dice el comentario de arriba —si se llamara igual, `StartKyc` devolvería `redirect`, esta función descarta la URL y se quemaría un cupo del tier gratuito que nadie usa—. Desincronizar los dos no abre un agujero de pago, quema cupo.
+        rememberedKyc.realVerified // 🔴 WKH-233 (fix-pack · H-2b) — EN ESTA LÍNEA, Δ0: `:330` recibe 75 citas ancladas y este archivo 98 entrantes, así que una línea nueva acá las corre a todas. ⚠️ DECÍA `payoutAllowed`, Y ERA UNA TAUTOLOGÍA CON EL RENGLÓN DE ARRIBA: `agent-kyc-gateway.ts:84` puebla `payoutAllowed` desde `d.approved`, o sea que `approved && payoutAllowed` preguntaba `approved && approved`. El juicio que decide el PAGO es (`realVerified`, `../infrastructure/kyc/agent-kyc-gateway.ts:87`), el `payoutAllowed` del AGENTE adoptado tal cual — el mismo que ya usa `:1309` para decidir si esta pantalla puede AFIRMAR una verificación. ⛔ EL GUARD QUE VALE ES EL DE `StartKyc` (mismo cambio, `../application/use-cases/start-kyc.ts:113`): éste se repite acá por lo que dice el comentario de arriba —si se llamara igual, `StartKyc` devolvería `redirect`, esta función descarta la URL y quedaría una sesión huérfana que nadie usa—. Desincronizar los dos no abre un agujero de pago, y ⚠️ TAMPOCO quema cupo (acá decía que sí, y era falso: una sesión creada y nunca abierta queda `Not Started`, que el proveedor NO contabiliza — la cita, en `app/api/kyc/session/route.ts`); deja basura en el proveedor.
       ) {
         // KYC-once: esta wallet ya está verificada → salta review+verify, directo a confirmar (AC-4).
         // ⚠️ Va la variable LOCAL, no el estado: `setServerVerdict` de arriba no se ve dentro de este
@@ -4399,22 +4399,22 @@ function CardDeFinDelResume({
  * HU 073 · AC-4 — EL AVISO DE QUE ESTE BOTÓN PIDE UNA VERIFICACIÓN NUEVA.
  *
  * 🔴 POR QUÉ EN LA PANTALLA `verify` Y NO EN LA CARD DEL FIN DEL RESUME. Medido: tocar el control de
- * reintento NO invoca `KycGateway.start`. El gasto ocurre una pantalla después, en (`onVerify`, `:441`),
+ * reintento NO invoca `KycGateway.start`. La llamada ocurre una pantalla después, en (`onVerify`, `:441`),
  * que llama a `c.startKyc.execute` en `:447`. AC-4 pide el aviso «en la misma pantalla y antes del
  * toque», así que vive acá y se invoca desde `:1054`, la última línea que ya existía arriba del botón.
  *
  * ⛔ EL TEXTO ES CONDICIONAL A PROPÓSITO. Si la billetera ya tiene un veredicto usable, los dos atajos
- * de `StartKyc` cortan antes de llamar al verificador y no se gasta nada; un «esto consume una
- * verificación» categórico sería falso para esa persona. Y dice «pide», ⛔ no «abre»: sin agente
- * configurado el fallback resuelve sin ningún redirect, así que no hay sesión hospedada que abrir — pero
- * la llamada ocurre en las dos configuraciones.
+ * de `StartKyc` cortan antes de llamar al verificador; un «este botón pide una verificación» categórico
+ * sería falso para esa persona. Y dice «pide», ⛔ no «abre»: sin agente configurado el fallback resuelve
+ * sin ningún redirect, así que no hay sesión hospedada que abrir, pero la llamada ocurre en las dos.
  *
- * 🚧 RESIDUAL DECLARADO, NO CERRADO (MI-8). En la configuración SIN agente, la oración del cupo insinúa
- * un costo que ahí no existe: ese fallback no consume ninguna cuota y se le puede pedir infinitas veces.
- * Cerrarlo exige una señal del modo del verificador visible en el navegador, que hoy no existe (la env
- * que lo decide es de servidor). ⛔ NO se tapa con un `NEXT_PUBLIC_` improvisado: sería exponer la
- * configuración del verificador al cliente sin ningún análisis. Es el mismo techo que `:769-772` ya
- * declara textual para el overlay de al lado. Queda ABIERTO, para otra HU.
+ * 🔴 ACÁ HABÍA UNA SEGUNDA ORACIÓN —«El cupo de verificaciones no es ilimitado»— Y SE SACÓ, con un
+ * hecho MEDIDO contra el proveedor y no inferido (la cita completa y su fecha viven UNA sola vez, en la
+ * cabecera de `app/api/kyc/session/route.ts`): la cuota se consume al COMPLETAR una verificación, y las
+ * sesiones `Not Started` o `Abandoned` NO la consumen. ⇒ tocar este botón CREA una sesión, y crear es
+ * GRATIS: la oración advertía de un costo que este botón no incurre, en el único estado en el que se
+ * muestra. Con eso muere también el residual MI-8 que se declaraba acá, porque era de esa oración.
+ * Qué se pierde al sacarla, y por qué el costo no se reubicó: `T-073-COPY-4c` en `flow-vm.test.ts`.
  */
 function AvisoDeVerificacionNueva() {
   return <Muted className="mt-ajustado block text-left text-label">{COPY_VERIFY_PIDE_UNA_NUEVA}</Muted>;

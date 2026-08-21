@@ -1666,12 +1666,12 @@ export const COPY_RESUME_NO_PODEMOS_SEGUIR = "No podemos seguir con esta verific
  *  `D4_failed` lo declara con `mismoTextoQue`. */
 export const COPY_RESUME_NO_PODEMOS_SEGUIR_AVISO = "Con esta verificación no podemos seguir";
 
-/** El aviso de la pantalla `verify`, arriba del botón que gasta. ⛔ Es CONDICIONAL a propósito: si la
- *  billetera ya tiene un veredicto usable el botón ni se toca, así que un «esto consume una
- *  verificación» categórico sería falso. Y dice «pide», ⛔ no «abre»: sin agente configurado no hay
- *  ninguna sesión hospedada que abrir, pero la llamada ocurre en las dos configuraciones. */
+/** El aviso de la pantalla `verify`, arriba del botón que PIDE la verificación (⛔ ya no «el botón que
+ *  gasta»: tocarlo CREA una sesión, y crear no consume cuota — el hecho, medido contra el proveedor,
+ *  en el docblock de `AvisoDeVerificacionNueva`). Es CONDICIONAL a propósito: con un veredicto usable
+ *  el botón ni llama al verificador. Y dice «pide», ⛔ no «abre»: sin agente no hay sesión hospedada. */
 export const COPY_VERIFY_PIDE_UNA_NUEVA =
-  "Si esta billetera todavía no tiene una verificación aprobada, este botón pide una verificación nueva. El cupo de verificaciones no es ilimitado.";
+  "Si esta billetera todavía no tiene una verificación aprobada, este botón pide una verificación nueva.";
 
 /** ⛔ NO puede llamarse «Empezar de nuevo»: ése es el escape de los 5 s del overlay de al lado, que
  *  LIMPIA el pendiente, y éste no lo limpia. Dos sinónimos con efectos distintos son ambiguos para la

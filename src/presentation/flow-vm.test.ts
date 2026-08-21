@@ -2843,7 +2843,7 @@ describe("HU 073 · el aviso de la pantalla verify (AC-4)", () => {
   it("T-073-COPY-4a: es CONDICIONAL, no categórico", () => {
     expect(
       COPY_VERIFY_PIDE_UNA_NUEVA,
-      "el aviso afirma sin condición que el botón consume una verificación, y con un veredicto usable " +
+      "el aviso afirma sin condición que el botón pide una verificación, y con un veredicto usable " +
         "en la billetera el botón ni llega a llamar al verificador",
     ).toMatch(/^Si esta billetera todav[ií]a no tiene una verificaci[óo]n aprobada/);
   });
@@ -2856,8 +2856,61 @@ describe("HU 073 · el aviso de la pantalla verify (AC-4)", () => {
     ).not.toMatch(/abre una verificaci[óo]n/i);
   });
 
-  it("T-073-COPY-4c: nombra el cupo (AC-4 pide decir que CONSUME, no que abre)", () => {
-    expect(COPY_VERIFY_PIDE_UNA_NUEVA, "se borró la oración que dice que el cupo no es infinito").toMatch(/cupo/i);
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  // 🔴 T-073-COPY-4c CAMBIÓ DE PROPIEDAD, Y EL HECHO QUE LO OBLIGA ESTÁ MEDIDO CONTRA EL PROVEEDOR
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  //
+  // ANTES exigía que la frase NOMBRARA el cupo (`.toMatch(/cupo/i)`), y con eso CONGELABA la oración
+  // «El cupo de verificaciones no es ilimitado». Esa oración es FALSA en el único estado en el que se
+  // muestra: tocar el botón CREA una sesión, y crear no consume nada. La cita textual del proveedor y
+  // su fecha viven UNA sola vez, en `app/api/kyc/session/route.ts`, bloque «CUÁNDO SE CONSUME LA
+  // CUOTA»: la cuota se consume al COMPLETAR, y las sesiones `Not Started`/`Abandoned` no cuentan.
+  // ⇒ el candado estaba defendiendo la frase falsa. Era un candado de la HU que existe para eliminar
+  // frases falsas, sosteniendo una propia.
+  //
+  // ⛔ NO SE BORRA, SE CORRIGE, y la propiedad nueva es la que sí sobrevive a la medición:
+  //     el aviso enuncia LA ACCIÓN del botón, y ⛔ no le atribuye ningún costo.
+  // Las dos mitades hacen falta. Sólo la negativa (`not.toMatch`) quedaría verde con la frase vaciada
+  // o reescrita a cualquier cosa que no hable de plata; la positiva la ancla a lo que el botón HACE.
+  // (`T-073-COPY-4a` ancla el antecedente condicional, ⛔ no el consecuente: sin la mitad positiva de
+  // acá, «…, este botón no hace nada» pasaba 4a, 4b y 4c a la vez.)
+  //
+  // 🚧 POR QUÉ NO SE REUBICÓ EL COSTO A DONDE OCURRE, en vez de sacarlo. Una segunda oración del tipo
+  // «el cupo se consume recién al completarla» es CIERTA con el agente configurado y FALSA sin él: el
+  // fallback no consume nunca, y el navegador no puede distinguir las dos configuraciones (la env que
+  // lo decide es de servidor). O sea que reubicarla cambia una frase falsa-en-un-estado por otra
+  // falsa-en-una-configuración, que es el mismo defecto. QUÉ SE PIERDE, dicho y no escondido: la
+  // pantalla deja de señalar que las verificaciones son un recurso finito. Ese aviso era del OPERADOR
+  // (la cuota la paga Chaski, no quien la lee) y ningún freno del repo depende de él: los frenos son
+  // `checkKycRateLimit` y el atajo KYC-once de `StartKyc`, y los dos siguen intactos.
+  it("T-073-COPY-4c: dice QUÉ hace el botón y ⛔ no le atribuye ningún costo (tocarlo no consume cuota)", () => {
+    const ATRIBUYE_UN_COSTO = /cupo|cuota|ilimitad|consum|gast|cuesta|l[ií]mite|pag[ao]/i;
+    // CONTROL POSITIVO (CD-24): sin esto, un criterio que no matchea nada dejaría el `not` de abajo
+    // verde para siempre. Se planta la frase EXACTA que esta corrección sacó, y tiene que caer.
+    expect(
+      "Si esta billetera todavía no tiene una verificación aprobada, este botón pide una verificación " +
+        "nueva. El cupo de verificaciones no es ilimitado.",
+      "el criterio dejó de cazar la frase que se midió falsa contra el proveedor: este candado es decorativo",
+    ).toMatch(ATRIBUYE_UN_COSTO);
+    // Y la variante REUBICADA también cae: no es que «cupo» esté prohibido por la palabra, es que esta
+    // pantalla no puede sostener NINGUNA afirmación de costo (ver el 🚧 de arriba).
+    expect(
+      "Si esta billetera todavía no tiene una verificación aprobada, este botón pide una verificación " +
+        "nueva. El cupo se consume recién al completarla.",
+      "el criterio no caza la variante que reubica el costo: la decisión de arriba quedaría sin candado",
+    ).toMatch(ATRIBUYE_UN_COSTO);
+
+    expect(
+      COPY_VERIFY_PIDE_UNA_NUEVA,
+      "el aviso volvió a advertir de un costo. Tocar este botón CREA una sesión, y crear no consume " +
+        "cuota (`app/api/kyc/session/route.ts`, bloque «CUÁNDO SE CONSUME LA CUOTA»): la advertencia " +
+        "sería falsa en el único estado en el que la pantalla la muestra",
+    ).not.toMatch(ATRIBUYE_UN_COSTO);
+    expect(
+      COPY_VERIFY_PIDE_UNA_NUEVA,
+      "el aviso dejó de decir QUÉ hace el botón. Sacar la oración del cupo no autoriza a dejar la " +
+        "pantalla muda sobre la acción: eso es lo único que el aviso puede afirmar y sostener",
+    ).toMatch(/pide una verificaci[óo]n nueva/i);
   });
 });
 

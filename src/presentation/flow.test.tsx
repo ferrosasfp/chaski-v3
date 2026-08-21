@@ -4042,8 +4042,18 @@ describe("HU 073 · T-073-5 (AC-5): la app no cuenta CÓMO entró la persona", (
 });
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
-// HU 073 · T-073-4 (AC-4) — el aviso está ANTES del toque que gasta, y el toque OCURRE
+// HU 073 · T-073-4 (AC-4) — el aviso está ANTES del toque, y el botón HACE lo que el aviso dice
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 SU PREMISA CAMBIÓ EL 2026-08-21 Y ESTE `it` SOBREVIVE, CON OTRA RAZÓN. Nació como «el aviso está
+// antes del toque QUE GASTA»: la cuota, se creía, se consumía al crear la sesión. Medido contra el
+// proveedor, no: crear es gratis y sólo COMPLETAR consume (la cita, UNA vez, en
+// `app/api/kyc/session/route.ts`, bloque «CUÁNDO SE CONSUME LA CUOTA»). ⇒ si su razón de ser hubiera
+// sido el COSTO, este `it` habría que borrarlo. No lo era, y la propiedad que queda es más fuerte:
+//   · el aviso dice «este botón pide una verificación nueva» — una afirmación sobre la ACCIÓN;
+//   · el paso (2) es lo que la vuelve VERDADERA: el botón invoca `StartKyc` de verdad;
+//   · el paso (3) es que estaba puesta ANTES, o sea cuando la persona decidió tocar.
+// El costo no aparece en ninguno de los tres, y por eso ninguno se cayó con la medición.
 //
 // 🔴 TRES PASOS Y ⛔ NINGÚN `if`, y el motivo está medido. La forma condicional («SI el contador pasa a
 // 1, el censo debe contener el aviso») es un candado VACUO: con el aviso borrado y el recorrido cortado
@@ -4052,12 +4062,12 @@ describe("HU 073 · T-073-5 (AC-5): la app no cuenta CÓMO entró la persona", (
 // esté vacío y que `serverVerdict` no sea usable—, así que cualquiera de las tres mal armada deja el
 // contador en 0 **y el candado mudo**.
 //
-// El paso (2) es la PRECONDICIÓN, y va INCONDICIONAL: si el recorrido no llega a gastar, este `it` se
-// pone rojo POR ESO, con su propio mensaje. Medir la precondición antes de afirmar la consecuencia.
-describe("HU 073 · T-073-4 (AC-4): el aviso del cupo, en la misma pantalla y antes del toque", () => {
+// El paso (2) es la PRECONDICIÓN, y va INCONDICIONAL: si el recorrido no llega a pedir la verificación,
+// este `it` se pone rojo POR ESO, con su propio mensaje. Medir la precondición antes de la consecuencia.
+describe("HU 073 · T-073-4 (AC-4): el aviso de lo que el botón hace, en la misma pantalla y antes del toque", () => {
   afterEach(() => cleanup());
 
-  it("🔴 el texto que estaba en pantalla ANTES de tocar ya avisaba, y el toque SÍ gastó", async () => {
+  it("🔴 el texto que estaba en pantalla ANTES de tocar ya avisaba, y el toque SÍ pidió la verificación", async () => {
     const base = buildTestContainer();
     const startSpy = vi.fn((i: Parameters<typeof base.startKyc.execute>[0]) => base.startKyc.execute(i));
     const container = { ...base, startKyc: { execute: startSpy } as unknown as typeof base.startKyc };
@@ -4076,19 +4086,21 @@ describe("HU 073 · T-073-4 (AC-4): el aviso del cupo, en la misma pantalla y an
 
     // (2) LA PRECONDICIÓN, INCONDICIONAL. 🧬 MUTANTE: cortar el recorrido un paso antes de `onVerify`
     // ⇒ rojo ACÁ. Con la versión condicional anterior, ese mutante sobrevivía en verde.
+    // Y es además lo que vuelve CIERTO al aviso: si el botón no invocara `StartKyc`, «este botón pide
+    // una verificación nueva» sería la frase falsa de esta pantalla, sólo que del otro lado.
     await clickCuandoHabilite(/Verificar mi identidad/);
     expect(
       startSpy,
-      "el recorrido no llegó a gastar una verificación: sin esto, el assert de abajo mediría una " +
-        "pantalla que nunca cobró nada y el candado quedaría mudo",
+      "el recorrido no llegó a PEDIR una verificación: sin esto, el assert de abajo mediría una " +
+        "pantalla cuyo botón no hace lo que el aviso dice, y el candado quedaría mudo",
     ).toHaveBeenCalledTimes(1);
 
     // (3) LA CONSECUENCIA, INCONDICIONAL y contra el símbolo importado.
     // 🧬 MUTANTE: borrar el aviso de (`AvisoDeVerificacionNueva`, `flow.tsx:1054`) ⇒ rojo ACÁ.
     expect(
       textoAntesDelToque,
-      "la pantalla cobró una verificación sin decirlo antes: el aviso no estaba en el árbol al momento " +
-        "en que la persona decidió tocar",
+      "la pantalla pidió una verificación sin decir antes que el botón lo hacía: el aviso no estaba en " +
+        "el árbol al momento en que la persona decidió tocar",
     ).toContain(COPY_VERIFY_PIDE_UNA_NUEVA);
   });
 });

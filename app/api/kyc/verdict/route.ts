@@ -246,15 +246,23 @@ export async function POST(req: Request): Promise<Response> {
   // 🔴 Y LOS DOS FALLOS DE LECTURA **NO** SALEN POR `absent`, QUE ES LA PARTE QUE IMPORTA. `absent`
   // prende `servidorDiceQueNoHayFila` en `../../../../src/application/use-cases/start-kyc.ts:109`, que
   // apaga el atajo KYC-once ⇒ la persona vuelve a escanear el documento y se quema un cupo del tier
-  // gratuito (500/día). Mandar ahí a alguien que SÍ está verificado, porque la base se cayó, es el
+  // gratuito (500/MES — acá decía "500/día" y era falso; medido el 2026-08-21 contra el proveedor, y
+  // el hecho vive UNA vez, en `app/api/kyc/session/route.ts`, bloque «CUÁNDO SE CONSUME LA CUOTA»:
+  // ahí también se cierra el conflicto 500/día vs 500/mes que las HUs 016 y 073 dejaron abierto. Este
+  // "se quema" SÍ es correcto: la persona COMPLETA el escaneo, que es donde el proveedor cobra).
+  // Mandar ahí a alguien que SÍ está verificado, porque la base se cayó, es el
   // "no pude preguntar" leído como "no hay" que la doctrina de
   // `../../../../src/infrastructure/kyc/http-kyc-verdict-gateway.ts:19-24` prohíbe explícitamente. Por
   // eso salen por el 502 que esta ruta YA tiene: el gateway lo LANZA, `ConnectWallet` lo degrada a
   // "seguimos como hoy" y el atajo local sigue vivo.
   //
   // ⚠️ LA RAMA `!tokenStore` ES INALCANZABLE HOY, Y SE ESCRIBE IGUAL: V5 ya devolvió 501 si no hay
-  // cliente de Supabase, y las DOS fábricas salen del MISMO `getSupabaseServerClient()`
-  // (`../../../../src/infrastructure/persistence/supabase-kyc-session-tokens.ts:340`). O sea que hoy
+  // cliente de Supabase, y las DOS fábricas salen del MISMO
+  // (`getSupabaseServerClient`, `../../../../src/infrastructure/persistence/supabase-kyc-session-tokens.ts:356`).
+  // ⚠️ ESTA CITA ESTABA ROTA EN `main`, y no la rompió esta HU: decía `:340`, que es una línea de prosa
+  // (`getSupabaseServerClient()` estaba en `:349`). Nadie la miraba porque NO estaba ANCLADA — le
+  // faltaba el `` `símbolo`, `` de adelante, que es lo único que hace que `citas-ancladas.test.ts` la
+  // resuelva. Se ancla acá para que no vuelva a envejecer en silencio. O sea que hoy
   // no se puede llegar acá con `store` presente y `tokenStore` ausente. Es un acoplamiento entre dos
   // fábricas que nada vigila, así que el `if` fail-closed se queda: el día que una de las dos cambie
   // de condición, esto corta en vez de contestar `usable` sin haber podido mirar la credencial.

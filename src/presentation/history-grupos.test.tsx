@@ -402,7 +402,7 @@ const CP_VENTANA_ABIERTA = "El contrato dice que tus USDC siguen en el escrow, a
 // Las etiquetas SÍ se derivan del productor, y es la decisión opuesta a la de arriba a propósito: acá
 // el conjunto PROHIBIDO tiene que seguir a `statusDisplay` si alguien le cambia una palabra, o el
 // candado quedaría vigilando una etiqueta que ya nadie pinta. El `Record` fuerza la exhaustividad por
-// tipos, mismo molde que (`TODOS`, `flow-vm.test.ts:1873`): un `RemittanceStatus` nuevo no compila
+// tipos, mismo molde que (`TODOS`, `flow-vm.test.ts:1902`): un `RemittanceStatus` nuevo no compila
 // hasta que entra acá.
 const TODOS_LOS_STATUS: Record<RemittanceStatus, true> = {
   created: true,
@@ -599,7 +599,7 @@ describe("WKH-352 · el desenlace nuevo cae en el grupo que esa fila ya tenía",
   // fija es que ganar una frase propia NO la mueve: sigue bajo "Sin respuesta sobre tu plata", que es
   // el grupo que ya tenía, y el reparto de las 9 filas no cambia.
   // MUTANTE MEDIDO: mapear `"chain-absent-after-deposit"` a `"sin-plata"` en `GRUPO_POR_DESENLACE`
-  // (`flow-vm.ts:1366`), que es la edición tentadora ("total, ya se resolvió"). Es justo la que
+  // (`flow-vm.ts:1373`), que es la edición tentadora ("total, ya se resolvió"). Es justo la que
   // AFIRMARÍA sobre la plata de alguien: mandaría bajo "Sin plata en el escrow" una fila de la que lo
   // único que se sabe es que el depósito entró y que la cuenta se cerró.
   // Medido: T-W8 rojo. Y medido también lo que NO es exclusivo de acá: ese mismo mutante pone rojo a

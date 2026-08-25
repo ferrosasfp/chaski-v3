@@ -431,6 +431,67 @@ describe("runViaGateway — AC-2: fallo TIPADO y granular, cero segundo intento"
     expect(r).toMatchObject({ ok: false, code: "step_failed", step: 0, httpStatus: 400 });
   });
 
+  // ── WKH-335: el campo `agentFailure` del gateway ────────────────────────────────────────────
+  // El gateway (`wasiai-a2a`) ahora dice, en un campo propio de vocabulario cerrado, si el agente
+  // que el step invocó rechazó el CONTENIDO del pedido. Estos tres cubren los DOS sitios que este
+  // cliente tiene para armar un fallo, más el guard de valor.
+
+  // Sitio 1 (`if (!res.ok)`): llega por el spread de `readFailureFields`. VERIFICADO, no asumido.
+  it("T-335-GW-1: 400 success:false + agentFailure ⇒ el campo llega (sitio 1, vía readFailureFields)", async () => {
+    const { fn } = router({
+      status: 400,
+      body: {
+        success: false,
+        steps: [],
+        error: "Step 0 failed: Agent remit-corridor-fx-solana returned 400: out of range",
+        agentFailure: "INPUT_REJECTED",
+      },
+    });
+    vi.stubGlobal("fetch", fn);
+    const r = await runViaGateway({ steps: [fxStep] });
+    expect(r).toMatchObject({ ok: false, code: "step_failed", agentFailure: "INPUT_REJECTED" });
+  });
+
+  // Sitio 2 (`200 + success:false`): arma el objeto A MANO, sin `readFailureFields`. CD-11: sin la
+  // línea nueva de ese sitio, el MISMO fallo se clasificaba distinto según el status con que llega.
+  it("T-335-GW-2: 200 success:false + agentFailure ⇒ el campo TAMBIÉN llega (sitio 2, CD-11)", async () => {
+    const { fn } = router({
+      body: {
+        success: false,
+        steps: [],
+        error: "Step 0 failed: Agent x returned 500",
+        agentFailure: "AGENT_ERROR",
+      },
+    });
+    vi.stubGlobal("fetch", fn);
+    const r = await runViaGateway({ steps: [fxStep] });
+    expect(r).toMatchObject({ ok: false, code: "step_failed", agentFailure: "AGENT_ERROR" });
+  });
+
+  // Guard de VALOR, no de tipo: el campo ramifica hacia un 422, así que un string de fantasía no
+  // puede colarse. Y la AUSENCIA se prueba con `not.toHaveProperty`, no con `=== undefined`.
+  it("T-335-GW-3: agentFailure con un valor fuera de la lista cerrada ⇒ NO se copia (guard de valor)", async () => {
+    for (const basura of ["cualquier_cosa", "input_rejected", 42, {}, null, ""]) {
+      const { fn } = router({
+        status: 400,
+        body: { success: false, steps: [], error: "Step 0 failed", agentFailure: basura },
+      });
+      vi.stubGlobal("fetch", fn);
+      const r = await runViaGateway({ steps: [fxStep] });
+      expect(r).toMatchObject({ ok: false, code: "step_failed" });
+      expect(r).not.toHaveProperty("agentFailure");
+    }
+
+    // Control de discriminación: el MISMO camino, con el valor bueno, SÍ lo copia. Sin esto el
+    // `for` de arriba pasaría igual si el campo no se leyera nunca.
+    const { fn } = router({
+      status: 400,
+      body: { success: false, steps: [], error: "Step 0 failed", agentFailure: "AGENT_ERROR" },
+    });
+    vi.stubGlobal("fetch", fn);
+    expect(await runViaGateway({ steps: [fxStep] })).toHaveProperty("agentFailure", "AGENT_ERROR");
+  });
+
   // T-A2.5 (asesino de M11): un 200 cuyo shape no es el pedido es bad_response, NO un éxito parcial.
   it("T-A2.5: bad_response (steps no-array / largo ≠ al pedido / output no-record) y unavailable (red, status no mapeado)", async () => {
     const twoSteps = [

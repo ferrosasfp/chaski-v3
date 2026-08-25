@@ -493,7 +493,7 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
 
   // ── Hallazgo #75 — cinco causas, un enum ───────────────────────────────────
   // `prepare_no_deposit_address` cubría los cuatro rechazos del agente (que llegan en su campo
-  // (`reason`, `route.ts:88`), validado de TIPO y nunca leído) MÁS el provider mock. Acá decía
+  // (`reason`, `route.ts:89`), validado de TIPO y nunca leído) MÁS el provider mock. Acá decía
   // `route.ts:62`, sin ancla, y esa línea es el cuerpo de `isRecord`: dice `typeof v === "object"`,
   // o sea que un lector apurado ve un `typeof` y da la cita por buena sin haber comprobado nada
   // (CR/MNR-1). Cada `it` de acá
@@ -806,7 +806,7 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       }
     });
 
-    it("AC-3: depositAddress base58 válido pero payoutId ausente (vacío/whitespace) → 502 prepare_no_deposit_address (guard route.ts:469-473)", async () => {
+    it("AC-3: depositAddress base58 válido pero payoutId ausente (vacío/whitespace) → 502 prepare_no_deposit_address (guard route.ts:482-486)", async () => {
       // payoutId="" pasa isValidPayoutResult (status submitted) pero muere en el guard fail-closed:
       // no se atesta una orden sin id trackeable. (payoutId=null+submitted lo caza antes PR8 → upstream_error.)
       for (const badPayoutId of ["", "   "]) {
@@ -1135,6 +1135,117 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       expect(Object.keys(jsonSinAgente)).toEqual(["error"]);
     });
 
+    // ── WKH-335 (§9.4) — LA PATA DE DINERO. Es el camino que decide A DÓNDE VA LA PLATA, y hasta
+    // acá un rechazo del agente por el CONTENIDO del pedido salía con las palabras de una caída.
+    //
+    // ⚠️ Lo que estos `it` NO prueban, declarado: que el Coordinador REAL emita `agentFailure`.
+    // El gateway acá es un doble y el campo lo pone el test. Que `/compose` lo emita de verdad lo
+    // prueba `wasiai-a2a/src/services/compose.test.ts` (§9.1) y sólo ese archivo.
+
+    // 🔴 LOS DOS DESENLACES EN EL MISMO `it`, COMPARADOS ENTRE SÍ: un test que sólo mire
+    // `INPUT_REJECTED` pasaría igual con los dos mapeados al mismo enum.
+    it("T-335-P-1/AC-7: INPUT_REJECTED ⇒ 422 prepare_agent_rejected; AGENT_ERROR ⇒ sigue 502, comparados entre sí", async () => {
+      setGatewayEnv();
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const rechazado = gwRouter({
+        status: 400,
+        body: {
+          success: false,
+          steps: [],
+          error: "Step 0 failed: Agent remit-payout-solana returned 400: bad amount",
+          agentFailure: "INPUT_REJECTED",
+        },
+      });
+      const resRechazado = await POST(req(bodyOf()));
+      const jsonRechazado = (await resRechazado.json()) as Record<string, unknown>;
+
+      const roto = gwRouter({
+        status: 400,
+        body: {
+          success: false,
+          steps: [],
+          error: "Step 0 failed: Agent remit-payout-solana returned 500",
+          agentFailure: "AGENT_ERROR",
+        },
+      });
+      const resRoto = await POST(req(bodyOf()));
+      const jsonRoto = (await resRoto.json()) as Record<string, unknown>;
+
+      expect(resRechazado.status).toBe(422);
+      expect(jsonRechazado).toEqual({ error: "prepare_agent_rejected" });
+      expect(resRoto.status).toBe(502);
+      expect(jsonRoto).toEqual({ error: "prepare_upstream_error" });
+      // La comparación explícita: el mutante que mapee los dos al mismo lado muere acá.
+      expect(resRechazado.status).not.toBe(resRoto.status);
+      expect(jsonRechazado.error).not.toBe(jsonRoto.error);
+      // CD-1: cero fallback punto-a-punto en los dos cortes.
+      expect(rechazado.agentCalls).toHaveLength(0);
+      expect(roto.agentCalls).toHaveLength(0);
+    });
+
+    // AC-8: el body sigue con EXACTAMENTE una clave, y el `message` del gateway no se loguea.
+    it("T-335-P-2/AC-8: body = { error } y cero eco del gateway; el enum SÍ al log", async () => {
+      setGatewayEnv();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const { agentCalls } = gwRouter({
+        status: 400,
+        body: {
+          success: false,
+          steps: [],
+          error: "Step 0 failed: Agent remit-payout-solana returned 422: quote_amount_mismatch",
+          agentFailure: "INPUT_REJECTED",
+        },
+      });
+      const res = await POST(req(bodyOf()));
+      expect(res.status).toBe(422);
+      const json = (await res.json()) as Record<string, unknown>;
+      expect(json).toEqual({ error: "prepare_agent_rejected" });
+      expect(Object.keys(json)).toEqual(["error"]);
+      expect(agentCalls).toHaveLength(0);
+      const logged = JSON.stringify(warn.mock.calls);
+      expect(logged).toContain("INPUT_REJECTED"); // el enum SÍ (canal de sólo-enums)
+      expect(logged).not.toContain("quote_amount_mismatch"); // el message del gateway NO
+      expect(logged).not.toContain("remit-payout-solana"); // ni el slug del agente
+    });
+
+    // AC-10 — el orden de despliegue equivocado es INOCUO: sin el campo, el 502 de hoy, byte por
+    // byte. ⚠️ No prueba que el orden se haya respetado, sólo que equivocarlo no rompe nada.
+    it("T-335-P-3: sin agentFailure (gateway viejo) ⇒ 502 prepare_upstream_error, igual que hoy", async () => {
+      setGatewayEnv();
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const { agentCalls } = gwRouter({
+        status: 400,
+        body: {
+          success: false,
+          steps: [],
+          error: "Step 0 failed: Agent remit-payout-solana returned 400: bad amount",
+        },
+      });
+      const res = await POST(req(bodyOf()));
+      expect(res.status).toBe(502);
+      expect(await res.json()).toEqual({ error: "prepare_upstream_error" });
+      expect(agentCalls).toHaveLength(0);
+    });
+
+    // CD-5 — `payment_required` (402) SIGUE colapsado, y eso es la decisión, no un olvido: habla de
+    // NUESTRO saldo de Agent Key, no del pedido de quien llama. El guard por `code === "step_failed"`
+    // es lo que impide que la rama nueva se lo lleve puesto aunque el body traiga el campo.
+    it("T-335-P-4/CD-5: 402 payment_required sigue colapsado en prepare_upstream_error", async () => {
+      setGatewayEnv();
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const { agentCalls } = gwRouter({
+        status: 402,
+        // El campo viene puesto A PROPÓSITO: si el guard mirara sólo `agentFailure` y no el `code`,
+        // este 402 se iría por el 422 nuevo. Muere acá.
+        body: { error: "insufficient budget", code: "payment_required", agentFailure: "INPUT_REJECTED" },
+      });
+      const res = await POST(req(bodyOf()));
+      expect(res.status).toBe(502);
+      expect(await res.json()).toEqual({ error: "prepare_upstream_error" });
+      expect(agentCalls).toHaveLength(0);
+    });
+
     // T-13.4 (AR fix-pack BLQ-MED-1) — el 422 colapsa CUATRO motivos, y uno es "no pude preguntar".
     //
     // 🔴 QUÉ MIDE, con el input concreto. `mapErrorStatus` traduce todo 422 a `no_agent_match`, pero
@@ -1326,7 +1437,7 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
 
     // ── CANDADO: el leg de payout NUNCA pide el carril de estreno ─────────────────────────────
     //
-    // Hasta acá lo único que sostenía esta decisión era un comentario en la route (route.ts:395,
+    // Hasta acá lo único que sostenía esta decisión era un comentario en la route (route.ts:396,
     // "CD-5: NUNCA omitir") y dos asserts colgados del happy path (T-A5.1, arriba). Eso alcanza
     // contra un descuido y NO alcanza contra el escenario que de verdad va a pasar, que está medido
     // y es este: el día que se encienda `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER=a2a-gateway`, el agente
@@ -1363,7 +1474,7 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       }
 
       /** Escanea el body de /compose SALVO el `input` de cada step. El `input` es el body del caller
-       *  TAL CUAL (route.ts:396): una clave con ese nombre ahí la puso quien llamó, no este leg, y el
+       *  TAL CUAL (route.ts:397): una clave con ese nombre ahí la puso quien llamó, no este leg, y el
        *  gateway sólo lee el carril dentro de `constraints`. Todo lo demás del body SÍ se escanea,
        *  así que la clave no se salva escondiéndola a nivel step ni a nivel raíz. */
       function trialKeysSentTo(rawBody: string): string[] {

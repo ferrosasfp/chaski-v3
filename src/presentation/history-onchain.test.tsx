@@ -252,7 +252,7 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
   // vault salió del escrow y "Entregado" dice que el partner de payout reportó haber entregado los PEN,
   // y uno no prueba el otro.
   // 🔴 LO QUE SÍ MATA EL ASSERT DE CP3_LIBERADO: que la respuesta `released` deje de producir la frase
-  // del vault en la tarjeta. T-V8 cubre ese copy en PURO, no en el render: (`escrowOutcomeDisplay`, `flow-vm.test.ts:1715`).
+  // del vault en la tarjeta. T-V8 cubre ese copy en PURO, no en el render: (`escrowOutcomeDisplay`, `flow-vm.test.ts:1744`).
   // 🔴 EL MUTANTE DEL QUE ESTE TEST SÍ ES DUEÑO, MEDIDO: devolver `<Pill tone={status.tone}>{status.label}</Pill>`
   // a `HistoryEntry` (`flow.tsx:3433`) pone rojo el assert de ausencia de abajo. ⚠️ Lo que NO caza es un
   // `<span>` que pinte la etiqueta con un prefijo ("Estado: Pago en curso"): `queryAllByText` es match
@@ -418,7 +418,7 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
   // `unverifiedSnapshot` llama (`markPrincipalIn`, `:101`), o sea que ESTE fixture ya es el de AC-1:
   // no hace falta inventar ninguno. La cadena contesta `absent` y la fila, en vez de la disyunción,
   // dice que el depósito entró y que no se puede saber cómo terminó.
-  // MUTANTE (a) MEDIDO — NO RAMIFICAR: volver `flow-vm.ts:1206` a `return "chain-absent";`. Medido:
+  // MUTANTE (a) MEDIDO — NO RAMIFICAR: volver `flow-vm.ts:1213` a `return "chain-absent";`. Medido:
   // T-W6 y T-W7 rojos (los dos esperan el copy nuevo en el DOM).
   // MUTANTE (b) MEDIDO — DIBUJAR LAS DOS: un `<p>` de más en `flow.tsx:3433` con
   // `escrowOutcomeDisplay("chain-absent").copy`, o sea el copy nuevo JUNTO al viejo en vez de
@@ -470,7 +470,7 @@ describe("WKH-349 · el historial pregunta por el bucket que no sabe, y dice qu�
     // EL ASSERT DE CONTROL, que NO es opcional: sin él este test pasa igual aunque el doble esté mal
     // puesto (un `stubGlobal` que no llegó a aplicarse, o un nombre mal escrito) y quedaría verde POR
     // AUSENCIA, que es como un guard deja de existir. Misma disciplina que T-V7
-    // en (`VERBOS`, `flow-vm.test.ts:1704-1707`) y que `evm-residue-guard.static.test.ts:40-43`.
+    // en (`VERBOS`, `flow-vm.test.ts:1733-1736`) y que `evm-residue-guard.static.test.ts:40-43`.
     expect(() => (globalThis.fetch as unknown as () => void)()).toThrow(
       "fetch_prohibido_en_esta_pantalla",
     );

@@ -40,12 +40,15 @@
 /** Familia: quien atendió la capacidad `remittance-fx-quote` rechazó la cotización. Enum que sale al
  *  browser SIEMPRE que llegue un rechazo de ese leg.
  *
- *  ⚠️ HOY NINGÚN PRODUCTOR DE ESTA APP LO EMITE, y eso está escrito acá para que no se lea como un
- *  camino vivo. Lo emitía la rama punto a punto de `/api/a2a/quote`, que leía el body de error del
- *  agente; WKH-332/W3 la borró y por `/compose` el step fallado viaja sin `code` y sin `reason`. Se
- *  conserva porque el valor SÍ puede llegar desde el almacenamiento local: una remesa guardada antes
- *  de ese deploy tiene este enum en su `failureReason`, y `humanError` le sigue dando copy propio.
- *  El desenlace estructural está pedido en WKH-335 (`wasiai-a2a`, otro repo). */
+ *  ✅ WKH-335 — YA TIENE PRODUCTOR. Lo emite `app/api/a2a/quote/route.ts` cuando el gateway
+ *  devuelve `code: "step_failed"` junto a `agentFailure: "INPUT_REJECTED"`, o sea cuando el agente
+ *  que atendió el step LEYÓ el pedido y rechazó su contenido (contestó 400 o 422). Entre WKH-332/W3
+ *  y WKH-335 estuvo huérfano: la rama punto a punto que lo emitía se borró y por `/compose` el step
+ *  fallado viajaba sin nada que clasificar.
+ *
+ *  ⚠️ Lo que llega es una CLASE de dos valores, no el `reason` del agente — ver el bloque de abajo:
+ *  esa parte sigue valiendo. Y el valor también puede llegar desde el almacenamiento local: una
+ *  remesa guardada antes de todo esto tiene este enum en su `failureReason`. */
 export const QUOTE_REJECTED = "a2a_quote_rejected";
 
 // 🔴 ACÁ VIVÍA `RELAYABLE_QUOTE_REJECTIONS` = ["fx_amount_below_minimum", "fx_amount_above_maximum"],
@@ -55,9 +58,15 @@ export const QUOTE_REJECTED = "a2a_quote_rejected";
 // de error del agente invocado por su slug. Ese carril no existe, así que la lista no filtra nada: no
 // hay `reason` que llegar. Dejarla habría sido una allow-list de un canal cerrado, o sea un control
 // que se lee como activo y no mira nada.
-// ⛔ Reintroducirla exigiría que `/compose` mande el desenlace estructural (WKH-335, otro repo). Hasta
-// entonces, AC-4 está declarado NO CUMPLIDO y el candado que lo deja escrito es T-4.1' en
-// `src/presentation/flow-vm.test.ts`.
+// ⛔ NO LA REINTRODUZCAS, y WKH-335 no cambia eso — al contrario, lo aclara. Lo que `/compose` manda
+// ahora es `agentFailure`, una CLASE de dos valores (`INPUT_REJECTED` / `AGENT_ERROR`), NO el
+// `reason` del agente: sigue sin haber ningún `fx_amount_below_minimum` que llegue, así que una
+// allow-list de `fx_*` seguiría siendo un control que se lee como activo y no mira nada.
+// Lo que WKH-335 SÍ cerró es el desenlace: la route ya distingue "rechazó tu pedido" de "se cayó" y
+// emite `QUOTE_REJECTED` con 422. Lo que NO devuelve es CUÁL campo del pedido estaba mal — eso
+// sigue siendo el `reason` privado del agente y sigue sin viajar. El candado T-4.1' de
+// `src/presentation/flow-vm.test.ts` sigue válido y NO hay que darlo vuelta: mide `humanError`, y
+// `step_failed` sigue siendo el bucket de lo que no se pudo clasificar.
 
 /** Familia: quien atendió la capacidad `remittance-payout` rechazó crear la orden. Enum que sale al
  *  browser SIEMPRE. */
@@ -70,8 +79,10 @@ export const PREPARE_REJECTED = "prepare_agent_rejected";
  *
  * ⚠️ A DIFERENCIA DE LA LISTA DE FX, ESTA SIGUE VIVA, y la asimetría no es un descuido: el agente de
  * payout contesta su rechazo en el `output` del step (`status: "blocked"` + `reason`), o sea DENTRO
- * del 200 de `/compose`, que sí llega intacto. El de FX lo contestaba con un status HTTP de error, que
- * es justamente lo que el gateway colapsa.
+ * del 200 de `/compose`, que sí llega intacto y con el `reason` adentro. El de FX lo contesta con un
+ * status HTTP de error, y por ahí el `reason` sigue sin llegar: desde WKH-335 el gateway ya no lo
+ * colapsa del todo —manda `agentFailure`, la CLASE del fallo— pero eso es un enum de dos valores,
+ * no el motivo. Por eso una lista como ésta sigue teniendo sentido de este lado y no del otro.
  *
  * ⚠️ `kyc_gate_not_passed` NO está en esta lista, y su ausencia es la decisión, no un olvido. Es un
  * VEREDICTO sobre una verificación de identidad, o sea la familia exacta que WKH-205 colapsó del
@@ -251,7 +262,7 @@ export function isPrepareRejection(reason: string | null | undefined): boolean {
  * así que NO SE PUEDE AFIRMAR que no se pidió firma. Ese mensaje no mueve plata, pero es una firma, y
  * negarla sería exactamente la clase de afirmación de más que esta familia vino a corregir.
  * ⚠️ Y LA CONTRACARA, QUE VIVE EN EL COPY Y NO ACÁ: el sub-caso 501 es NUESTRO, no de la red ni del
- * navegador. El copy de (`payout_pop_unavailable`, `../presentation/flow-vm.ts:742`) nombraba sólo esas dos causas y
+ * navegador. El copy de (`payout_pop_unavailable`, `../presentation/flow-vm.ts:749`) nombraba sólo esas dos causas y
  * dejaba a la persona sin la real y sin señal de que el problema es de nuestro lado; hoy nombra las tres.
  *
  * ⚠️ LOS DOS LITERALES ESTÁN ESCRITOS ACÁ Y TAMBIÉN EN SUS PRODUCTORES, y eso es una segunda lista — el

@@ -367,7 +367,7 @@ describe("T-063-14 (2º pase): el pie dice con qué cuenta se busca, y la búsqu
     // algo (las dos resuelven por `sender`), no estaba dicha en ninguna de las dos —ni abiertas ni
     // cerradas—, y es la causa #1 de un "no encontramos nada" que no significa "no tenés nada":
     // buscar con la cuenta B los envíos que firmó la A. El copy de la cadena ya manda gente acá
-    // justamente por eso (`escrowOutcomeDisplay`, `flow-vm.ts:1253`).
+    // justamente por eso (`escrowOutcomeDisplay`, `flow-vm.ts:1260`).
     const { refund, probe, container } = mundo();
     pintarRecuperar(container);
 

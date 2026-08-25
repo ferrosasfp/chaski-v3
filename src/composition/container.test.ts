@@ -438,9 +438,12 @@ describe("createContainer — el seguimiento del payout lee el ledger (WKH-337/A
    *  lo que se prueba es el cableado, y un repo inyectado a mano no lo tocaría.
    *
    *  🔴 LOS IMPORTS SON DINÁMICOS Y ES DELIBERADO, no una preferencia de estilo. Un `import` estático
-   *  arriba desplazaría (`CABLEADO`, `:135`), que `../application/agent-rejections.test.ts:115` cita por
-   *  número de línea — y ese archivo está fuera del Scope IN de esta HU. Medido: con los 5 imports
-   *  arriba, `citas-ancladas.test.ts` se puso rojo por esa cita. ⛔ No los "subas" sin re-medirla. */
+   *  arriba desplazaría (`CABLEADO`, `:135`), que (`CABLEADO`, `../application/agent-rejections.test.ts:140`)
+   *  cita por número de línea — y ese archivo está fuera del Scope IN de esta HU. Medido: con los 5
+   *  imports arriba, `citas-ancladas.test.ts` se puso rojo por esa cita. ⛔ No los "subas" sin re-medirla.
+   *  ⚠️ Decía `:115` y ESTA HU lo rompió: `T-335-AR-1` metió +21 líneas en `agent-rejections.test.ts:71`,
+   *  o sea ARRIBA de la cita (115 → 136 el bloque, 119 → 140 la cita). Ahora va ANCLADA, que es la única
+   *  forma que `citas-ancladas.test.ts` sabe verificar — suelta era el agujero declarado #1 de ese candado. */
   async function seedSubmitted(c: ReturnType<typeof createContainer>): Promise<string> {
     const { Money } = await import("../domain/money");
     const { Remittance } = await import("../domain/remittance");
@@ -1078,7 +1081,7 @@ describe("createContainer — WKH-359/AC-3: el `connectWallet` REAL consigue el 
         "Consecuencia, y por eso este candado existe: en todo teléfono sin extensión la sesión de Didit " +
         "se crea SIN ATAR, `persistKycVerdict` no escribe la fila del veredicto (su gate es " +
         "`d.payoutAllowed !== true`) y " +
-        "`app/api/payout/prepare/route.ts:310` contesta 403 `prepare_kyc_verdict_missing`. ⚠️ Y NO SE " +
+        "`app/api/payout/prepare/route.ts:311` contesta 403 `prepare_kyc_verdict_missing`. ⚠️ Y NO SE " +
         "VE: una billetera que YA tiene fila cierra igual, así que el bug sólo lo sufre la gente nueva",
     ).toBe("hay-que-salir");
     if (out.estado !== "hay-que-salir") return; // narrowing; el `expect` de arriba ya falló

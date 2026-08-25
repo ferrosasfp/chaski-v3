@@ -66,7 +66,7 @@ import { Aviso, Card, Muted } from "./ui";
  *    billetera VIVA en cada búsqueda— y no estaba dicha en ninguna de las dos, ni abierta ni cerrada.
  *    Es también la causa #1 de un "no encontré nada" que no significa "no tenés nada": buscar con la
  *    cuenta B los envíos que firmó la A. El copy de la cadena ya manda gente acá justamente por eso
- *    (`escrowOutcomeDisplay`, `flow-vm.ts:1253`). Su candado tampoco lo lee: CAMBIA la cuenta
+ *    (`escrowOutcomeDisplay`, `flow-vm.ts:1260`). Su candado tampoco lo lee: CAMBIA la cuenta
  *    conectada entre dos búsquedas y comprueba con qué `sender` sale cada una (`T-063-14`).
  *
  * 3. LA TERCERA FORMA DE RECUPERAR, QUE NO ES NINGUNA DE LAS DOS PUERTAS: el envío que la app SÍ

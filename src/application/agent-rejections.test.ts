@@ -68,6 +68,27 @@ describe("agent-rejections — la allow-list decide, no el agente", () => {
     expect(QUOTE_NO_AGENT_FOR_CAPABILITY).not.toContain("fx_");
   });
 
+  // T-335-AR-1 (CD-1) — WKH-335 le devolvió PRODUCTOR a `QUOTE_REJECTED`: ahora lo emite
+  // `app/api/a2a/quote/route.ts` cuando el gateway manda `agentFailure: "INPUT_REJECTED"`.
+  //
+  // 🔴 POR QUÉ ESTE CANDADO IMPORTA MÁS AHORA QUE ANTES. Mientras el enum no tenía productor, que
+  // llevara o no el vocabulario del agente era teórico: no salía a ninguna pantalla. Con productor
+  // vivo, este string VIAJA al browser en el body de un 422. Si alguien "mejorara" el enum
+  // pegándole el `reason` del agente, estaríamos publicando el vocabulario privado de un tercero —
+  // y el que atienda la capacidad mañana puede usar otro prefijo o ninguno.
+  //
+  // Lo que llega del gateway es una CLASE de dos valores, NO un motivo: por eso el enum no puede
+  // ni debe volverse más específico.
+  it("T-335-AR-1: con productor vivo, el enum del quote SIGUE sin el vocabulario del agente", () => {
+    expect(QUOTE_REJECTED).toBe("a2a_quote_rejected");
+    expect(QUOTE_REJECTED).not.toContain("fx_");
+    // Tampoco puede filtrarse el vocabulario del CONTRATO nuevo: `agentFailure` es un detalle de
+    // transporte entre gateway y route, no algo que la pantalla deba leer.
+    expect(QUOTE_REJECTED).not.toContain("INPUT_REJECTED");
+    expect(QUOTE_REJECTED).not.toContain("AGENT_ERROR");
+    expect(QUOTE_REJECTED).not.toContain("step_failed");
+  });
+
   it("los relayables del payout salen prefijados y todos entran en PREPARE_REJECTION_ENUMS", () => {
     for (const r of RELAYABLE_PREPARE_REJECTIONS) {
       const enumo = prepareRejectionEnum(r);

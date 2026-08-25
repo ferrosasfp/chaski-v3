@@ -34,6 +34,7 @@ import { NextResponse } from "next/server";
 import {
   LOGGABLE_PREPARE_REJECTIONS,
   PREPARE_NO_AGENT_FOR_CAPABILITY,
+  PREPARE_REJECTED,
   noAgentMeansNobodyFits,
   prepareRejectionEnum,
 } from "../../../../src/application/agent-rejections";
@@ -270,7 +271,7 @@ export async function POST(req: Request): Promise<Response> {
   // 🔴 `KYC_VERDICT_STORE_ENABLED` NO ES UN KILL-SWITCH. ES UN INTERRUPTOR DE UNA SOLA DIRECCIÓN, Y
   // APAGARLO CORTA LOS PAGOS. Acá decía "con el flag apagado esta ruta no cambia de comportamiento",
   // y era FALSO — medido con la autoridad REAL en el lazo (AR/BLQ-ALTO-1): sin store, el `""` que se
-  // le pasaba a `resolvePayoutAuthority` cae en su guard de formato (`authority.ts:58-60` y `:65-67`,
+  // le pasaba a `resolvePayoutAuthority` cae en su guard de formato (`authority.ts:58-60` y `:66-68`,
   // las dos ramas) ⇒ `invalid_verification_id` ⇒ **400 a TODO pagador legítimo**, sin consultar
   // siquiera a la autoridad. El candado de esa medición es
   // `app/api/payout/prepare/route.flag-off.test.ts`, que NO mockea la autoridad.
@@ -355,7 +356,7 @@ export async function POST(req: Request): Promise<Response> {
   // ⚠️ ACÁ DECÍA que con `"fallback"` *"nadie llega hasta acá"*, Y ERA FALSO (AR/BLQ-MED-1). Este
   // handler NO lee esa bandera ni importa `createContainer`, y el repo no tiene `middleware.ts`: no
   // hay ningún valor de esa env que lo detenga. La contra-evidencia está en este mismo commit:
-  // (`it.each`, `route.test.ts:1296`) corre con la bandera en `"fallback"` y en `undefined`, y en los
+  // (`it.each`, `route.test.ts:1407`) corre con la bandera en `"fallback"` y en `undefined`, y en los
   // dos casos el POST devuelve **200** y forwardea a `${GW}/compose`. Lo cierto es más chico: con
   // `"fallback"` el container del CLIENTE cablea los simuladores de COTIZACIÓN y de ESTADO. ⚠️ Y NO que *"la UI propia no llama
   // a este endpoint"*: eso decía y era FALSO (CR2). Con `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED=true` la llama la UI, por `solana.prepare`.
@@ -373,12 +374,12 @@ export async function POST(req: Request): Promise<Response> {
   // clase de afirmación de imposibilidad: es una propiedad de TODO el archivo enunciada desde una
   // línea, y no la sostiene nada de este renglón. La frase que reemplazó citaba su candado y la nueva
   // se lo había comido (AR/MNR-3). El candado es **T-PR-11 / M-30**: (`composeBody`,
-  // `route.test.ts:1739`). MEDIDO (está en el verde de la suite): un POST con
+  // `route.test.ts:1850`). MEDIDO (está en el verde de la suite): un POST con
   // `kycVerificationId: "did-QUE-EL-CLIENTE-PROPUSO"` en el body produce un `/compose` que contiene
   // `did-de-la-fila` y NO contiene el valor del caller. Y el input que lo pone en ROJO ya está MEDIDO
   // (lo aplicó y revirtió el CR; acá no se muta una route de plata): invertir este spread a
   // `{ kycVerificationId: …, ...body }` da DOS rojos, (`toBeLessThan`,
-  // `kyc-verification-id-guard.static.test.ts:150`) y (`toContain`, `route.test.ts:1738`).
+  // `kyc-verification-id-guard.static.test.ts:150`) y (`toContain`, `route.test.ts:1849`).
   //
   // `rowVerificationId` acá SIEMPRE viene de una fila que existe: si no había store se cortó con 503
   // y si no había fila se cortó con 403, las dos cosas arriba. No hay ninguna rama que llegue hasta
@@ -403,11 +404,18 @@ export async function POST(req: Request): Promise<Response> {
     // hay orden, no hay atestación, no hay ledger. Un fallback silencioso acá crearía la orden con
     // OTRO agente y atestaría SU dirección.
     //
-    // WKH-332/AC-13 — "ninguna capacidad resolvió" sale con enum PROPIO y 422, no con el 502 de una
-    // caída. Reintentar no crea un agente: la misma llamada, un segundo después, vuelve a no
-    // encontrar a nadie, y el 502 invitaba justamente a eso. Es el ÚNICO code que se abre: el resto
-    // —incluido `payment_required`, que hablaría de nuestro saldo y no del pedido de quien llama—
-    // sigue colapsado en `prepare_upstream_error`. Un enum nuestro no es un eco del gateway (CD-5).
+    // SE ABREN DOS codes, los dos con enum PROPIO y 422 en vez del 502 de una caída, y los dos por
+    // el mismo criterio: reintentar la misma llamada no puede cambiar el resultado, y el 502
+    // invitaba justamente a eso.
+    //   1. WKH-332/AC-13 — `no_agent_match`: ninguna capacidad resolvió. Reintentar no crea un
+    //      agente; un segundo después vuelve a no encontrar a nadie.
+    //   2. WKH-335/AC-7 — `step_failed` + `agentFailure === "INPUT_REJECTED"`: el agente que
+    //      atendió el step LEYÓ el pedido y rechazó su CONTENIDO (contestó 400 o 422). Reintentar
+    //      con el MISMO input está garantizado a fallar.
+    // El resto sigue colapsado en `prepare_upstream_error`, y `payment_required` (402) entre ellos:
+    // hablaría de NUESTRO saldo y no del pedido de quien llama (CD-5). `AGENT_ERROR` tampoco se
+    // abre — ahí reintentar sí puede servir (429, 5xx, credencial nuestra vencida). Un enum nuestro
+    // no es un eco del gateway (CD-5).
     //
     // 🔴 Y NO ALCANZA CON EL `code` (AR/BLQ-MED-1). El 422 colapsa CUATRO motivos, y uno de ellos
     // —`reputation_unavailable`— es "el gateway no pudo leer el historial", o sea "no pude
@@ -420,6 +428,11 @@ export async function POST(req: Request): Promise<Response> {
         { error: PREPARE_NO_AGENT_FOR_CAPABILITY },
         { status: 422 },
       );
+    // WKH-335 (AC-7) — la pata de dinero. El guard por `code === "step_failed"` es OBLIGATORIO: el
+    // campo sólo puede venir de un sobre de fallo de pipeline. Va ANTES del `return` final, y no
+    // puede colisionar con el `not_configured` que vive dentro de ése porque exige otro `code`.
+    if (r.code === "step_failed" && r.agentFailure === "INPUT_REJECTED")
+      return NextResponse.json({ error: PREPARE_REJECTED }, { status: 422 });
     return NextResponse.json(
       { error: r.code === "not_configured" ? "prepare_not_configured" : "prepare_upstream_error" },
       { status: r.code === "not_configured" ? 501 : 502 },

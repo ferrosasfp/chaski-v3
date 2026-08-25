@@ -38,14 +38,14 @@ import {
 // a mano de cualquiera de los dos lados.
 const MAX_IDS = ESCROW_ID_LOOKUP_CEILING;
 
-// Excluye arrays (mirror de prepare/route.ts:74-76).
+// Excluye arrays: mirror de (`isRecord`, `../../../payout/prepare/route.ts:75-77`).
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 export async function POST(req: Request): Promise<Response> {
   // R1 — sin secreto no se puede verificar NINGÚN PoP ⇒ 503 fail-closed (NUNCA fail-open: sin esto el
-  // endpoint degradaría a IDOR abierto). Mirror de prepare/route.ts:213-217.
+  // endpoint degradaría a IDOR abierto). Mirror de (`POP_SECRET`, `../../../payout/prepare/route.ts:214-218`).
   const POP_SECRET = process.env.PAYOUT_POP_SECRET; // CD-14: dentro del handler
   if (!POP_SECRET) {
     return NextResponse.json({ error: "escrow_recovery_unavailable" }, { status: 503 });
@@ -77,7 +77,7 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // R4 — proof-of-possession Solana OBLIGATORIO (CD-16). Copiado del bloque P1..P5 de
-  // prepare/route.ts:220-256. SIN claim-once del nonce (igual que prepare: se quema recién en submit).
+  // prepare/route.ts:221-257. SIN claim-once del nonce (igual que prepare: se quema recién en submit).
   // CUALQUIER falla colapsa en el MISMO 403 opaco (no-oracle: no distinguir el motivo).
   const popChallenge = body.popChallenge;
   const popSignature = body.popSignature;

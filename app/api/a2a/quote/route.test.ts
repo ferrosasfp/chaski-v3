@@ -292,6 +292,140 @@ describe("POST /api/a2a/quote — modo a2a-gateway (WKH-218 / WKH-304)", () => {
     expect(caido.directCalls).toHaveLength(0);
   });
 
+  // ── WKH-335 (§9.4) — el rechazo por INPUT del agente deja de decirse como una caída ──────────
+  //
+  // 🔴 LOS DOS DESENLACES EN EL MISMO `it`, COMPARADOS ENTRE SÍ (misma regla que T-13.2): un test
+  // que sólo mire `INPUT_REJECTED` pasaría igual con los dos mapeados al mismo enum, y lo que AC-6
+  // pide no es que exista un 422 — es que "rechazó tu monto" y "el agente se cayó" dejen de
+  // decirse igual.
+  //
+  // ⚠️ Lo que este `it` NO prueba, y va declarado: que el Coordinador REAL emita `agentFailure`.
+  // Acá el gateway es un doble, así que el campo lo pone el test. Que `/compose` lo emita de verdad
+  // lo prueba `wasiai-a2a/src/services/compose.test.ts` (§9.1) y sólo ese archivo.
+  it("T-335-Q-1: INPUT_REJECTED y AGENT_ERROR NO comparten ni status ni enum", async () => {
+    setGatewayEnv();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const rechazado = gwRouter({
+      status: 400,
+      compose: () => ({
+        success: false,
+        steps: [],
+        error: "Step 0 failed: Agent remit-corridor-fx-solana returned 400: out of range",
+        agentFailure: "INPUT_REJECTED",
+      }),
+    });
+    vi.stubGlobal("fetch", rechazado.fn);
+    const resRechazado = await POST(req({ amountUsd: 100000 }));
+    const jsonRechazado = await resRechazado.json();
+
+    const roto = gwRouter({
+      status: 400,
+      compose: () => ({
+        success: false,
+        steps: [],
+        error: "Step 0 failed: Agent remit-corridor-fx-solana returned 500",
+        agentFailure: "AGENT_ERROR",
+      }),
+    });
+    vi.stubGlobal("fetch", roto.fn);
+    const resRoto = await POST(req({ amountUsd: 400 }));
+    const jsonRoto = await resRoto.json();
+
+    expect(resRechazado.status).toBe(422);
+    expect(jsonRechazado).toEqual({ error: "a2a_quote_rejected" });
+    // AGENT_ERROR sigue saliendo por el 502 de siempre: reintentar ahí SÍ puede servir.
+    expect(resRoto.status).toBe(502);
+    expect(jsonRoto).toEqual({ error: "a2a_unavailable" });
+    // La comparación explícita: el mutante que mapee los dos al mismo lado muere acá.
+    expect(resRechazado.status).not.toBe(resRoto.status);
+    expect(jsonRechazado.error).not.toBe(jsonRoto.error);
+    expect(rechazado.directCalls).toHaveLength(0);
+    expect(roto.directCalls).toHaveLength(0);
+  });
+
+  // AC-8: el body sigue teniendo EXACTAMENTE una clave y el `message` del gateway no se loguea.
+  // CD-1: ni la URL del agente ni su body crudo salen por ningún lado.
+  it("T-335-Q-2: cero eco del gateway en el body, el enum SÍ al log, cero punto-a-punto", async () => {
+    setGatewayEnv();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { fn, directCalls } = gwRouter({
+      status: 400,
+      compose: () => ({
+        success: false,
+        steps: [],
+        error:
+          "Step 0 failed: Agent remit-corridor-fx-solana returned 400: {\"error\":\"fx_amount_above_maximum\"}",
+        agentFailure: "INPUT_REJECTED",
+      }),
+    });
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req({ amountUsd: 100000 }));
+    expect(res.status).toBe(422);
+    const json = await res.json();
+    expect(json).toEqual({ error: "a2a_quote_rejected" });
+    expect(Object.keys(json)).toEqual(["error"]); // CD-8: cero eco del gateway en el body
+    expect(directCalls).toHaveLength(0); // cero fallback silencioso
+    const logged = JSON.stringify(warn.mock.calls[0]);
+    expect(logged).toContain("INPUT_REJECTED"); // el enum SÍ (canal de sólo-enums)
+    expect(logged).not.toContain("fx_amount_above_maximum"); // el message del gateway NO
+    expect(logged).not.toContain("remit-corridor-fx-solana"); // ni el slug del agente
+  });
+
+  // AC-6 / AC-10 — el orden de despliegue equivocado es INOCUO. Con Vercel adelante de Railway el
+  // campo no llega, y sin campo el comportamiento es byte-idéntico al de hoy: 502 a2a_unavailable.
+  // ⚠️ Esto NO prueba que el orden se haya respetado — sólo que equivocarlo no rompe nada.
+  it("T-335-Q-3: sin agentFailure (gateway viejo) ⇒ 502 a2a_unavailable, igual que hoy", async () => {
+    setGatewayEnv();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { fn, directCalls } = gwRouter({
+      status: 400,
+      compose: () => ({
+        success: false,
+        steps: [],
+        error: "Step 0 failed: Agent remit-corridor-fx-solana returned 400: out of range",
+      }),
+    });
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req({ amountUsd: 100000 }));
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "a2a_unavailable" });
+    expect(directCalls).toHaveLength(0);
+  });
+
+  // T-335-Q-4/CD-5 (AR fix-pack · MNR-2) — el GEMELO de `T-335-P-4`, que hasta acá sólo existía del
+  // lado del payout. §9.4 pidió el testigo del leg de desembolso y no el de cotización, y esa
+  // asimetría dejó el guard `code === "step_failed"` de ESTA ruta SIN TESTIGO. No es una sospecha: el AR
+  // corrió el mutante M9 —borrarle `r.code === "step_failed" && ` al guard de (`QUOTE_REJECTED`, `route.ts:174`)—
+  // contra la suite COMPLETA y dio `154 passed` / `3059 passed`. Este `it` es lo que lo mata: el fix-pack
+  // volvió a aplicar M9 con este `it` puesto y la suite se pone ROJA acá (medición en `auto-blindaje.md`).
+  //
+  // 🔴 QUÉ MIDE, con el input concreto. Un 402 —la Agent Key NUESTRA sin saldo— que ADEMÁS trae
+  // `agentFailure: "INPUT_REJECTED"` en el body. `mapErrorStatus(402)` da `payment_required`, nunca
+  // `step_failed` (`gateway-client.ts:281-282`), así que el 422 nuevo no debe dispararse. Sin el
+  // guard por `code`, ese 402 le diría a quien llama "rechazamos tu monto" cuando el problema es
+  // operativo NUESTRO: el defecto exacto que esta HU vino a cerrar, invertido. Y de paso mide CD-5,
+  // que manda dejar el 402 colapsado en `a2a_unavailable`.
+  it("T-335-Q-4/CD-5: 402 payment_required con agentFailure sigue colapsado en a2a_unavailable", async () => {
+    setGatewayEnv();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { fn, directCalls } = gwRouter({
+      status: 402,
+      // El campo va puesto A PROPÓSITO: si el guard mirara sólo `agentFailure` y no el `code`, este
+      // 402 se iría por el 422 nuevo. Muere acá.
+      compose: () => ({
+        error: "insufficient budget",
+        code: "payment_required",
+        agentFailure: "INPUT_REJECTED",
+      }),
+    });
+    vi.stubGlobal("fetch", fn);
+    const res = await POST(req({ amountUsd: 400 }));
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "a2a_unavailable" });
+    expect(directCalls).toHaveLength(0);
+  });
+
   // T-13.5 (AR fix-pack BLQ-MED-1) — el leg de FX, mismo agujero: el 422 no es un solo desenlace.
   //
   // `reputation_unavailable` es "el gateway no pudo leer el historial" (MEDIDO en

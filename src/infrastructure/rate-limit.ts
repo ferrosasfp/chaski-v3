@@ -280,7 +280,7 @@ export const PAYOUT_STATUS_RL: RouteRateLimitConfig = {
 //
 // IP 30/"10 m" (sin addr). LA RUTA SIGUE SIENDO PÚBLICA Y ASÍ TIENE QUE SER: la llama el cliente de
 // la propia DApp antes de que exista wallet, address o KYC
-// (`A2aQuoteGateway`, `./a2a/gateways.ts:134`). El control acá es el límite de tasa, NO una credencial.
+// (`A2aQuoteGateway`, `./a2a/gateways.ts:152`). El control acá es el límite de tasa, NO una credencial.
 //
 // LA ARITMÉTICA, con las tres cantidades por separado:
 //
@@ -292,7 +292,7 @@ export const PAYOUT_STATUS_RL: RouteRateLimitConfig = {
 //  2. CUÁNTAS NECESITA UNA PERSONA EN 10 MINUTOS. 10, contadas de los dos únicos productores:
 //      · preview en vivo, debounce de 300 ms (`previewQuote`, `../presentation/flow.tsx:192`) y sólo
 //        con monto >= 5 (`MIN_SEND_USD`, `../domain/remittance.ts:209`). Sin caché de ningún tipo:
-//        cada preview es un POST (`requestQuote`, `./a2a/gateways.ts:135`, que no memoiza). Tipear
+//        cada preview es un POST (`requestQuote`, `./a2a/gateways.ts:153`, que no memoiza). Tipear
 //        "400" con pausas largas da 2 (el "4" queda bajo el mínimo y no pide nada); con una
 //        corrección y tres montos distintos probados ⇒ 6.
 //      · el lock, 3 sitios de llamada (`lockQuote`, `../presentation/flow.tsx:256`), (`lockQuote`,
@@ -310,7 +310,7 @@ export const PAYOUT_STATUS_RL: RouteRateLimitConfig = {
 // ⚠️ LO QUE ESTE LÍMITE **NO** HACE, dicho de frente: no cierra el agujero, lo acota. 30 × 0,03 =
 // 0,90 USDC por IP cada 10 minutos SIGUEN siendo gasto legítimo-a-los-ojos-del-limitador. Contra el
 // único saldo que este repo tiene anotado (6,793 USDC en `solana-devnet`, el que cita el mensaje de
-// error transcripto en `./a2a/gateway-client.ts:216-217` — una FOTO vieja, no una medición de hoy),
+// error transcripto en `./a2a/gateway-client.ts:230-231` — una FOTO vieja, no una medición de hoy),
 // una sola IP lo vacía en ~7,5 ventanas ≈ 75 minutos, y N IPs lo dividen por N. El contador se
 // reinicia por ventana deslizante de 10 min y por IP: cambiar de IP lo reinicia entero. El control
 // que faltaría para CERRAR esto es un tope de gasto/alarma sobre el saldo de la key, del lado del

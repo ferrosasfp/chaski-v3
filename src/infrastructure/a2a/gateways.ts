@@ -107,19 +107,37 @@ async function readQuoteRejection(res: Response): Promise<string | undefined> {
   // cayó, probá de nuevo" — o sea que el enum nuevo existiría en la route y no lo vería nadie. Se
   // propaga 1:1 y sin `reason`: es un enum NUESTRO, no un eco del gateway.
   if (body.error === QUOTE_NO_AGENT_FOR_CAPABILITY) return QUOTE_NO_AGENT_FOR_CAPABILITY;
-  // ⚠️ ESTE `if` LEE UN ENUM QUE NINGÚN PRODUCTOR DE ESTA APP EMITE (AR/MNR-1). Es la MISMA
-  // declaración que ya lleva el docblock de su constante
-  // (`QUOTE_REJECTED`, `../../application/agent-rejections.ts:49`), escrita también acá, un nivel
-  // arriba, porque acá es donde se lee. MEDIDO: el universo de `error`
-  // que `app/api/a2a/quote/route.ts` puede devolver hoy son cuatro y `a2a_quote_rejected` no está entre
-  // ellos — `a2a_not_configured` (`:116`), el enum de no-agente (`:124`), `a2a_unavailable` (`:125`) y
-  // `a2a_bad_shape` (`:128`).
-  // ⛔ Y AUN ASÍ NO ES CÓDIGO MUERTO, que es la razón por la que W4 borró la allow-list y NO borró esto:
-  // el body puede traer este enum desde un server driftado, desde una versión anterior de la route
-  // durante un deploy o desde un intermediario, y desde el `failureReason` de una remesa guardada antes
-  // del deploy de W3. ESO —y no un camino vivo de la route— es lo que miden los 4 casos de
+  // ✅ WKH-335 — ESTE `if` YA LEE UN ENUM CON PRODUCTOR VIVO. Hasta acá decía lo contrario (AR/MNR-1),
+  // y era cierto: entre WKH-332/W3 y WKH-335 nadie lo emitía. Ahora lo emite
+  // `app/api/a2a/quote/route.ts` cuando el gateway manda `code: "step_failed"` +
+  // `agentFailure: "INPUT_REJECTED"`. Es la MISMA declaración que lleva el docblock de su constante
+  // (`QUOTE_REJECTED`, `../../application/agent-rejections.ts:52`), escrita también acá, un nivel
+  // arriba, porque acá es donde se lee.
+  //
+  // MEDIDO (2026-08-25, `grep -n 'NextResponse.json({ error' app/api/a2a/quote/route.ts`): el universo
+  // de `error` que esa route puede devolver desde el corte del gateway pasó de CUATRO a CINCO, y
+  // `a2a_quote_rejected` ahora SÍ está entre ellos —
+  // (`a2a_not_configured`, `../../../app/api/a2a/quote/route.ts:168`),
+  // (`QUOTE_REJECTED`, `../../../app/api/a2a/quote/route.ts:174`),
+  // (`QUOTE_NO_AGENT_FOR_CAPABILITY`, `../../../app/api/a2a/quote/route.ts:182`),
+  // (`a2a_unavailable`, `../../../app/api/a2a/quote/route.ts:183`) y
+  // (`a2a_bad_shape`, `../../../app/api/a2a/quote/route.ts:186`).
+  // (Los dos del limitador de tasa están antes del corte del gateway y esta función no los ve.)
+  //
+  // ⚠️ ESTOS CINCO NÚMEROS VAN EN FORMATO ANCLADO A PROPÓSITO, y no es cosmético. Los CUATRO de la
+  // versión anterior estaban escritos sueltos (`:116`, `:124`, `:125`, `:128`) y APUNTABAN A PROSA:
+  // los returns reales vivían en `:161/:169/:170/:173`. Se pudrieron solos y no los cazó nadie
+  // porque `src/composition/citas-ancladas.test.ts` —que SÍ existe y SÍ corre en `npm test`— sólo
+  // verifica el formato `(`símbolo`, `ruta:NN`)`; una cita suelta es su agujero declarado #1.
+  // Anclarlas las pone bajo ese candado. Se re-midieron con el `grep` de arriba, no se recalcularon
+  // con una resta.
+  // ⛔ Y SIGUE SIN SER CÓDIGO MUERTO por los otros motivos, que es la razón por la que W4 borró la
+  // allow-list y NO borró esto: el body puede traer este enum desde un server driftado, desde una
+  // versión anterior de la route durante un deploy o desde un intermediario, y desde el
+  // `failureReason` de una remesa guardada antes del deploy de W3. ESO es lo que miden los 4 casos de
   // (`rejects`, `gateways.test.ts:128`) y (`rejects`, `gateways.test.ts:140`): que si el enum llega, se
-  // colapse sin propagar `reason`. El desenlace estructural está pedido en WKH-335 (otro repo).
+  // colapse sin propagar `reason` — y eso NO cambió, porque lo que WKH-335 agrega es una CLASE, no el
+  // `reason` del agente.
   if (body.error !== QUOTE_REJECTED) return undefined;
   // 🔴 ACÁ SE LEÍA `body.reason` FILTRADO POR `RELAYABLE_QUOTE_REJECTIONS`, Y ESE FILTRO SE FUE EN
   // WKH-332/W4 CON EL CANAL QUE LO ALIMENTABA (AC-5). El `reason` sólo existía en la respuesta del

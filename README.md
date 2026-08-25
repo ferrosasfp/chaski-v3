@@ -109,7 +109,7 @@ Where that stands today, in present tense:
 - **There is no point to point path any more.** This bullet said it was the active one, calling a known
   base URL. WKH-332 deleted that rail: by default the app wires the demo gateways and calls no agent.
 - **By capability is the only transport, and this flag does not switch it off.**
-  `app/api/a2a/quote/route.ts:91-96` and `app/api/payout/prepare/route.ts:391-395` send a `capability`,
+  `app/api/a2a/quote/route.ts:91-96` and `app/api/payout/prepare/route.ts:392-396` send a `capability`,
   plus a reputation floor on each leg, and let the gateway choose. `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`
   picks ONE client adapter, the quote; the payout STATUS no longer hangs off it (WKH-337 reads it from the ledger);
   these routes never read it. Drop the gateway URL or key and both answer 501 with no fetch.

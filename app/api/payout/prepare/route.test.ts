@@ -494,7 +494,7 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
   // ── Hallazgo #75 — cinco causas, un enum ───────────────────────────────────
   // `prepare_no_deposit_address` cubría los cuatro rechazos del agente (que llegan en su campo
   // (`reason`, `route.ts:89`), validado de TIPO y nunca leído) MÁS el provider mock. Acá decía
-  // `route.ts:63`, sin ancla, y esa línea es el cuerpo de `isRecord`: dice `typeof v === "object"`,
+  // `route.ts:62`, sin ancla, y esa línea es el cuerpo de `isRecord`: dice `typeof v === "object"`,
   // o sea que un lector apurado ve un `typeof` y da la cita por buena sin haber comprobado nada
   // (CR/MNR-1). Cada `it` de acá
   // muere si su causa vuelve a colapsar; el último candado muere si el mock deja de ser 502.

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"; import { WALLET_SIGN_MESSAGE_ERROR, laBilleteraFueTocada } from "./solana/wallet-error-code"; import { readFileSync } from "node:fs"; import path from "node:path"; import { CAUSAS_CON_COPY } from "./flow-vm"; import { SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT } from "../application/solana-escrow-rent"; // WKH-358/AC-8 agregó los cuatro EN ESTA LÍNEA y ANTES de este comentario, por lo mismo. WKH-339/CR: EN ESTA LÍNEA — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
 import { Money } from "../domain/money";
-import type { RemittanceState, RemittanceStatus } from "../domain/remittance"; import { Remittance } from "../domain/remittance"; // WKH-352: EN ESTA LÍNEA, no en una nueva — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número, y `:1743`/`:1873` los citan otros dos tests sin ancla
+import type { RemittanceState, RemittanceStatus } from "../domain/remittance"; import { Remittance } from "../domain/remittance"; // WKH-352: EN ESTA LÍNEA, no en una nueva — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número, y `:1743`/`:1902` los citan otros dos tests sin ancla
 import {
   PRINCIPAL_SETTLED_REFUND_MANUAL,
   PRINCIPAL_STATE_UNKNOWN,
@@ -2057,7 +2057,7 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
   // 🔴 T-W3 (AC-2) — EL CANDADO: LA FRASE NUEVA NO SE DERRAMA SOBRE QUIEN NO TIENE LA PRUEBA.
   // MUTANTE MEDIDO: predicar por el CAMINO en vez de por la evidencia, o sea
   // `return k === "unverified" ? "chain-absent-after-deposit" : "chain-absent";` en `flow-vm.ts:1213`.
-  // Ese predicado es SIEMPRE verdadero ahí (`escrowOutcome` ya cortó en `:1224` con
+  // Ese predicado es SIEMPRE verdadero ahí (`escrowOutcome` ya cortó en `:1203` con
   // `if (k !== "unverified") return k`), así que le daría la frase "tu depósito entró" a filas que no
   // tienen NINGUNA prueba de que entró. Aplicado y medido: T-W3 se pone rojo ("expected
   // 'chain-absent-after-deposit' to be 'chain-absent'") y NINGÚN otro test de este bloque cae, lo cual

@@ -8,6 +8,7 @@
 import { NextResponse } from "next/server";
 import {
   QUOTE_NO_AGENT_FOR_CAPABILITY,
+  QUOTE_REJECTED,
   noAgentMeansNobodyFits,
 } from "../../../../src/application/agent-rejections";
 import { isParseableIso } from "../../../../src/domain/remittance";
@@ -31,9 +32,10 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 // (WKH-332/W3). Los dos leían la respuesta HTTP del agente invocado por su slug: el primero decidía
 // si un 400/422 suyo era un rechazo del pedido, el segundo sacaba el `reason` de su body con
 // `RELAYABLE_QUOTE_REJECTIONS` como filtro. Por el gateway no hay respuesta del agente que leer —
-// `/compose` devuelve el step fallado sin `code` ni `reason` (es lo que WKH-335 abre en el otro
-// repo), así que no hay nada que filtrar. El borrado NO es cosmético: dejarlos sin llamador daba 3
-// errores de `noUnusedVariables` en biome, medido.
+// `/compose` devuelve el step fallado sin `code` ni `reason` del agente. WKH-335 ya aterrizó en el
+// otro repo, pero lo que agregó es `agentFailure`, una CLASE de dos valores — NO el `reason` del
+// agente —, así que sigue sin haber nada que filtrar con una allow-list de `fx_*`. El borrado NO es
+// cosmético: dejarlos sin llamador daba 3 errores de `noUnusedVariables` en biome, medido.
 
 // Shape mínimo esperado del result del agente (validación defensiva, sin any).
 function isValidQuoteResult(v: unknown): boolean {
@@ -55,7 +57,7 @@ export async function POST(req: Request): Promise<Response> {
   //
   // Esta ruta es PÚBLICA y tiene que seguir siéndolo: la llama el cliente de la propia DApp antes de
   // que exista wallet, address o KYC
-  // (`A2aQuoteGateway`, `../../../../src/infrastructure/a2a/gateways.ts:134`), así que no hay
+  // (`A2aQuoteGateway`, `../../../../src/infrastructure/a2a/gateways.ts:152`), así que no hay
   // credencial que pedirle sin romper la primera pantalla del producto. El control que corresponde
   // acá es el límite de tasa, NO la autenticación.
   //
@@ -126,13 +128,13 @@ export async function POST(req: Request): Promise<Response> {
   // Lo cierto es más chico y es esto: con `"fallback"` el container del CLIENTE cablea
   // `FallbackQuoteGateway` (`usesRealGateways`, `../../../../src/composition/value-delivery-adapter.ts:74`)
   // y la UI propia no llama a este endpoint; el endpoint NO lee la bandera y le contesta igual a quien
-  // sea. Input que lo demuestra, en este repo: (`it.each`, `route.test.ts:413`) corre con la bandera en
+  // sea. Input que lo demuestra, en este repo: (`it.each`, `route.test.ts:547`) corre con la bandera en
   // `"fallback"` y en `undefined`, y en los dos casos exige 200 y un único fetch a `${GW}/compose`.
   //
   // 🔴 POR QUÉ NO ES UN DETALLE: §9 del Story File nombra el flip de esa bandera como la palanca de
   // rollback. Poner `"fallback"` NO corta esta ruta —sigue componiendo y gastando la Agent Key—. Lo
   // que sí la corta sin re-desplegar es sacarle la config del gateway: con la URL o la key ausentes la
-  // config resuelve a `null` (`not_configured`, `gateway-client.ts:225`) ⇒ el 501 de abajo, sin fetch.
+  // config resuelve a `null` (`not_configured`, `gateway-client.ts:239`) ⇒ el 501 de abajo, sin fetch.
   const r = await runViaGateway({
     steps: [
       {
@@ -150,15 +152,26 @@ export async function POST(req: Request): Promise<Response> {
   // SÓLO al log": `Object.keys(json)` debe ser `["error"]`). Además, lo que un 402 filtraría no es
   // un dato del pedido de quien llama sino del estado operativo nuestro.
   //
-  // 🔴 SE ABRE UNO SOLO: `no_agent_match` (WKH-332/AC-13). No es un eco del gateway (CD-5) —no
-  // viaja su `message`, ni su `reason`, ni la URL—: es UNA palabra nuestra para un desenlace
-  // nuestro, y el body sigue teniendo exactamente una clave. Se abre porque "ninguna capacidad
-  // resolvió" no se arregla reintentando, y el 502 invitaba justamente a eso: la misma llamada, un
-  // segundo después, vuelve a no encontrar a nadie. Abrir el 402 sigue necesitando su propio SDD.
+  // 🔴 SE ABREN DOS, y los dos por el mismo criterio: el desenlace no se arregla reintentando, así
+  // que el 502 ("algo salió mal, probá de nuevo") invitaba a lo único garantizado a fallar.
+  // Ninguno de los dos es un eco del gateway (CD-5) —no viaja su `message`, ni su `reason`, ni la
+  // URL—: son palabras NUESTRAS para desenlaces nuestros, y el body sigue teniendo exactamente una
+  // clave.
+  //   1. `no_agent_match` (WKH-332/AC-13) — ninguna capacidad resolvió.
+  //   2. `step_failed` + `agentFailure === "INPUT_REJECTED"` (WKH-335) — el agente que atendió el
+  //      step LEYÓ el pedido y rechazó su contenido (contestó 400 o 422). El caso medido en prod
+  //      es un `amountUsd` fuera del rango que el corredor cotiza.
+  // Abrir el 402 sigue necesitando su propio SDD.
   if (!r.ok) {
     logGatewayFailure("quote", r);
     if (r.code === "not_configured")
       return NextResponse.json({ error: "a2a_not_configured" }, { status: 501 });
+    // WKH-335 (AC-6). El guard por `code === "step_failed"` es OBLIGATORIO y deliberado: el campo
+    // sólo puede venir de un sobre de fallo de pipeline, y exigirlo impide que esta rama dispare
+    // por un status que no es ése. `AGENT_ERROR` NO entra acá — ahí reintentar sí puede servir
+    // (429, 5xx, credencial nuestra), y el 502 genérico es vago y CIERTO.
+    if (r.code === "step_failed" && r.agentFailure === "INPUT_REJECTED")
+      return NextResponse.json({ error: QUOTE_REJECTED }, { status: 422 });
     // 🔴 El `code` NO alcanza (AR/BLQ-MED-1): el 422 colapsa cuatro motivos y uno es
     // `reputation_unavailable`, o sea "el gateway no pudo leer el historial". Para ése, "no hay
     // ningún proveedor que pueda cotizar" es una afirmación que no podemos hacer, y "reintentar no

@@ -154,6 +154,20 @@ export type GatewayFailure = {
   reason?: string;
   /** Mensaje del gateway. SERVER-ONLY: prohibido ecoarlo al browser y prohibido loguearlo (CD-8/CD-9). */
   message?: string;
+  /**
+   * WKH-335: la CLASE del fallo del agente INVOCADO por el step, tal como la clasificó el
+   * gateway. `INPUT_REJECTED` = el agente leyó el pedido y rechazó su CONTENIDO (contestó 400
+   * o 422); `AGENT_ERROR` = contestó cualquier otro no-2xx (401/402/403/404/408/429/5xx).
+   *
+   * `undefined` es un estado real y son DOS cosas distintas que no se pueden separar desde acá:
+   * el gateway no lo dijo (versión vieja sin desplegar, un proxy) o el agente nunca contestó con
+   * un status HTTP (red, DNS, timeout, SSRF). Las dos son "no sé", y el desenlace correcto para
+   * las dos es el de HOY: `a2a_unavailable` / `prepare_upstream_error`. Rellenarlo sería inventar.
+   *
+   * Se lee para DECIDIR (mismo criterio que `reason`) y se loguea en `logGatewayFailure` porque
+   * es un ENUM. **Nunca se ecoa al browser** (CD-1/CD-8).
+   */
+  agentFailure?: "INPUT_REJECTED" | "AGENT_ERROR";
   httpStatus?: number;
 };
 
@@ -227,8 +241,15 @@ function readGatewayConfig(): {
   return paymentChain ? { url, key, paymentChain } : { url, key };
 }
 
+/** WKH-335: guard de VALOR, no sólo de tipo. Un string que no esté en la lista cerrada NO se
+ *  copia — el campo ramifica hacia un 422 y un valor de fantasía no puede colarse por ahí. */
+function readAgentFailure(v: unknown): GatewayFailure["agentFailure"] {
+  return v === "INPUT_REJECTED" || v === "AGENT_ERROR" ? v : undefined;
+}
+
 /** Copia los campos granulares del body de error del gateway SIN traducirlos (§5 del Story).
- *  Sólo `code`/`error_code` → gatewayCode, `reason`, `step` numérico y `error` → message. */
+ *  Sólo `code`/`error_code` → gatewayCode, `reason`, `step` numérico, `error` → message y
+ *  `agentFailure` (WKH-335, con guard de valor). */
 function readFailureFields(body: unknown): Omit<GatewayFailure, "ok" | "code"> {
   if (!isRecord(body)) return {};
   const step = typeof body.step === "number" ? body.step : undefined;
@@ -240,11 +261,13 @@ function readFailureFields(body: unknown): Omit<GatewayFailure, "ok" | "code"> {
         : undefined;
   const reason = typeof body.reason === "string" ? body.reason : undefined;
   const message = typeof body.error === "string" ? body.error : undefined;
+  const agentFailure = readAgentFailure(body.agentFailure);
   return {
     ...(step !== undefined ? { step } : {}),
     ...(gatewayCode !== undefined ? { gatewayCode } : {}),
     ...(reason !== undefined ? { reason } : {}),
     ...(message !== undefined ? { message } : {}),
+    ...(agentFailure !== undefined ? { agentFailure } : {}),
   };
 }
 
@@ -343,11 +366,20 @@ export async function runViaGateway(params: { steps: GatewayStep[] }): Promise<G
   //    PROHIBIDO parsear el texto "Step 2 failed: ..." (message queda server-only, CD-8/CD-9).
   if (parsed.success !== true) {
     const completed = Array.isArray(parsed.steps) ? parsed.steps.length : undefined;
+    // WKH-335 / CD-11: este sitio arma el fallo A MANO y NO pasa por `readFailureFields`, así que
+    // sin esta línea el MISMO fallo del agente se clasificaría distinto según con qué status
+    // llegue (400 ⇒ el `if (!res.ok)` de arriba sí lo trae; 200+success:false ⇒ no). Esa asimetría
+    // silenciosa es lo que la línea previene. CR/MNR-4: va en un `const` y NO evaluado dos veces
+    // dentro del spread, que es el patrón de `readFailureFields` (`agentFailure`, `:264`) y el de
+    // las otras cuatro claves. Hoy `readAgentFailure` es pura y barata; el costo de tener las dos
+    // formas en el mismo archivo es que se copia la mala el día que deje de serlo.
+    const agentFailure = readAgentFailure(parsed.agentFailure);
     return {
       ok: false,
       code: "step_failed",
       ...(completed !== undefined ? { step: completed } : {}),
       ...(typeof parsed.error === "string" ? { message: parsed.error } : {}),
+      ...(agentFailure !== undefined ? { agentFailure } : {}),
     };
   }
 
@@ -387,6 +419,8 @@ export function logGatewayFailure(
     step: f.step,
     gatewayCode: f.gatewayCode,
     reason: f.reason,
+    // WKH-335: es un ENUM de vocabulario cerrado, así que entra en este canal sin violar CD-9.
+    agentFailure: f.agentFailure,
     httpStatus: f.httpStatus,
   });
 }

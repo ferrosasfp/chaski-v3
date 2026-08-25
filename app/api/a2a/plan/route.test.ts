@@ -453,7 +453,7 @@ describe("GET /api/a2a/plan — los tres estados de disponibilidad (AC-14 / CD-1
 // decide si la ENTREGA la corre un agente real es la OTRA bandera,
 // `NEXT_PUBLIC_SOLANA_SETTLE_ENABLED` (`solanaSettleOn`, `container.ts:141`): con el settle en
 // `"true"` el envío postea a `/api/payout/prepare`, y ese POST compone contra el gateway con
-// CUALQUIER valor del adapter (`it.each`, `../../payout/prepare/route.test.ts:1296`). O sea que con
+// CUALQUIER valor del adapter (`it.each`, `../../payout/prepare/route.test.ts:1407`). O sea que con
 // `settle="true"` + `adapter="fallback"` la fila "Entregar el dinero" decía "modo demo" mientras se
 // llamaba a un agente real y se le cobraba.
 //

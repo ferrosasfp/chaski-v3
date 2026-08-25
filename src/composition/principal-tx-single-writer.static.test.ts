@@ -101,7 +101,7 @@ const SKIP_DIRS = new Set(["node_modules", ".next", "doc", "migrations"]);
  *  `stripComments('if (rem.principalTx != null) return true; // ojo: principalTx = la prueba')` devolvía
  *  la línea COMPLETA y `ESCRITURA.test(...)` daba `true`. Y medido también de punta a punta: con
  *  `// ojo: principalTx = la prueba del deposito` pegado al final de una LECTURA de verdad, la de
- *  (`principalTx`, `../presentation/flow-vm.ts:1206`), T-W9(a) denunciaba a `flow-vm.ts` como
+ *  (`principalTx`, `../presentation/flow-vm.ts:1213`), T-W9(a) denunciaba a `flow-vm.ts` como
  *  escritor. Por qué eso es grave lo escribe este mismo archivo más arriba: un candado que se dispara
  *  con las lecturas es uno que alguien va a aflojar hasta volverlo inútil.
  *
@@ -196,7 +196,7 @@ const FUENTES: { rel: string; code: string; crudo: string }[] = SCAN_DIRS.flatMa
  *
  *  ⚠️ LA COMILLA OPCIONAL NO ES ADORNO, Y ESTE CANDADO SE SALTEABA SIN ELLA. La primera versión era
  *  `/principalTx\s*[:=]/`, y una clave ENTRE COMILLAS no matchea, porque `"` no es `\s`. Este repo
- *  escribe claves entre comillas seguido (`GRUPO_POR_DESENLACE`, `../presentation/flow-vm.ts:1356`),
+ *  escribe claves entre comillas seguido (`GRUPO_POR_DESENLACE`, `../presentation/flow-vm.ts:1363`),
  *  así que no era una forma exótica. MEDIDO: con `const MUTANTE2: Record<string, string> = {
  *  "principalTx": "fabricada" };` agregado a `container.ts`, la versión sin comilla daba
  *  `5 passed`; con esta da rojo en T-W9(a). El `\]?` cierra la misma puerta por acceso indexado

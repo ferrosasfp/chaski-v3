@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"; import { WALLET_SIGN_MESSAGE_ERROR, laBilleteraFueTocada } from "./solana/wallet-error-code"; import { readFileSync } from "node:fs"; import path from "node:path"; import { CAUSAS_CON_COPY } from "./flow-vm"; import { SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT } from "../application/solana-escrow-rent"; // WKH-358/AC-8 agregó los cuatro EN ESTA LÍNEA y ANTES de este comentario, por lo mismo. WKH-339/CR: EN ESTA LÍNEA — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número
 import { Money } from "../domain/money";
-import type { RemittanceState, RemittanceStatus } from "../domain/remittance"; import { Remittance } from "../domain/remittance"; // WKH-352: EN ESTA LÍNEA, no en una nueva — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número, y `:1714`/`:1873` los citan otros dos tests sin ancla
+import type { RemittanceState, RemittanceStatus } from "../domain/remittance"; import { Remittance } from "../domain/remittance"; // WKH-352: EN ESTA LÍNEA, no en una nueva — `http-pop-signer.ts:33` (NO-TOUCH) cita `flow-vm.test.ts:520` por número, y `:1743`/`:1873` los citan otros dos tests sin ancla
 import {
   PRINCIPAL_SETTLED_REFUND_MANUAL,
   PRINCIPAL_STATE_UNKNOWN,
@@ -1006,26 +1006,31 @@ describe("T-13.3 / AC-13: 'no hay quién' no se dice con las palabras de una ca�
   });
 });
 
-// ── T-4.1' — AC-4 QUEDA NO CUMPLIDO, Y ACÁ ESTÁ ESCRITO ──────────────────────────────────────────
+// ── T-4.1' — LA REGRESIÓN DE AC-4 SE CERRÓ EN WKH-335, Y ESTE CANDADO SIGUE VÁLIDO ──────────────
 //
-// 🔴 ESTE TEST NO CUMPLE AC-4: LO DECLARA. AC-4 pedía distinguir en pantalla un RECHAZO del agente de
-// FX (por ejemplo, un monto por debajo del mínimo del corredor) de una CAÍDA del agente. Por el
-// carril del gateway eso es inalcanzable hoy, y no por falta de ganas:
+// ✅ QUÉ CAMBIÓ. Este bloque declaraba AC-4 NO CUMPLIDO: por el carril del gateway, un rechazo del
+// agente de FX (por ejemplo un monto fuera del rango del corredor) se leía en pantalla como una
+// caída del sistema. WKH-335 lo cerró AGREGANDO un campo, sin levantar ninguna prohibición:
 //
-//   · `/compose` devuelve el step fallado SIN `code` y SIN `reason`; el único portador de la causa es
-//     el `message`, que es TEXTO LIBRE.
-//   · Parsear ese texto está prohibido (`gateway-client.ts`), y ecoarlo al browser también: es
-//     server-only por CD-8/CD-9.
-//   · `mapErrorStatus` colapsa "el agente negó el pedido" y "el agente se cayó" en `step_failed`.
+//   · `/compose` ahora manda `agentFailure` — `INPUT_REJECTED` | `AGENT_ERROR` — al lado del
+//     `message`. Es un enum de vocabulario cerrado, no el `reason` del agente.
+//   · `readFailureFields` lo copia con guard de VALOR, y `app/api/a2a/quote/route.ts` mapea
+//     `code === "step_failed" && agentFailure === "INPUT_REJECTED"` a **422 `a2a_quote_rejected`**.
+//   · Parsear el `message` SIGUE PROHIBIDO (`gateway-client.ts`) y ecoarlo al browser también
+//     (CD-8/CD-9). Nada de eso se tocó: el dato nuevo llega estructural o no llega.
 //
-// Lo que este test asserta es que el copy resultante NO PROMETE distinguir la causa. Una frase que
-// dijera "el monto está fuera de rango" sobre un `step_failed` sería una afirmación que el código no
-// puede sostener, y sería peor que la regresión. La salida estructural está anotada como WKH-335 en
-// `wasiai-a2a` (otro repo, Scope OUT de esta HU).
+// ⛔ Y AUN ASÍ EL `expect` DE ABAJO NO SE DA VUELTA. La versión anterior de este comentario decía
+// *"si algún día WKH-335 aterriza, ESTE `expect` es el que hay que dar vuelta"*, y está MEDIDO que
+// no: después del mapeo, el cliente **nunca recibe `step_failed` como `error` del body** — la route
+// lo traduce ANTES. `humanError("step_failed")` sigue —correctamente— dando el copy genérico,
+// porque `step_failed` sigue siendo el bucket de lo que NO se pudo clasificar (`AGENT_ERROR`,
+// campo ausente, gateway sin desplegar). Darlo vuelta rompería un candado que sigue diciendo la
+// verdad.
 //
-// ⚠️ ESTO ES UNA REGRESIÓN DECLARADA, NO UN AC CUBIERTO. Por el carril del gateway, un envío por
-// debajo del mínimo del corredor vuelve a leerse en pantalla como una caída del sistema.
-describe("T-4.1': AC-4 NO CUMPLIDO — el corte por rechazo del agente de FX no promete distinguir la causa", () => {
+// ⚠️ LO QUE SIGUE SIENDO CIERTO: el copy no nombra CUÁL campo del pedido estaba mal. `agentFailure`
+// es una CLASE, no un motivo; el vocabulario `fx_*` del agente sigue sin llegar. Lo que la pantalla
+// gana es distinguir "el corredor rechazó tu pedido" de "algo se cayó", que era el defecto.
+describe("T-4.1': el copy genérico sigue siendo el bucket de lo NO clasificado (WKH-335)", () => {
   it("un `step_failed` del gateway cae en el copy genérico, y ese copy no nombra ninguna causa", () => {
     const copy = humanError("step_failed");
     // La regresión, medida: es el default de último recurso. No dice "monto", no dice "mínimo", no
@@ -1043,8 +1048,32 @@ describe("T-4.1': AC-4 NO CUMPLIDO — el corte por rechazo del agente de FX no 
   it("y la asimetría con AC-13 es la que explica por qué uno se pudo y el otro no", () => {
     // Este llega con un code estructural del gateway ⇒ copy propio.
     expect(humanError("a2a_no_agent_for_capability")).not.toBe("Algo salió mal. Intentá de nuevo.");
-    // Este no ⇒ default. Si algún día WKH-335 aterriza, ESTE `expect` es el que hay que dar vuelta.
+    // ⛔ ESTE `expect` NO SE DA VUELTA, y WKH-335 es justamente lo que lo confirma: después del
+    // mapeo de la route, `step_failed` sólo llega al cliente cuando NO se pudo clasificar, y para
+    // eso el copy genérico es lo correcto. Ver el docblock de este `describe`.
     expect(humanError("step_failed")).toBe("Algo salió mal. Intentá de nuevo.");
+  });
+
+  // T-335-VM-1 — la cadena NUEVA, de punta a punta del lado del cliente, y comparada contra la
+  // vieja EN EL MISMO `it`. Sin la comparación, un mutante que mapeara los dos al mismo copy
+  // pasaría: es exactamente el defecto que esta HU arregla, escrito al revés.
+  it("T-335-VM-1: a2a_quote_rejected tiene copy PROPIO, y step_failed SIGUE siendo el genérico", () => {
+    const GENERICO = "Algo salió mal. Intentá de nuevo.";
+    const rechazado = humanError("a2a_quote_rejected");
+
+    // (a) el desenlace NUEVO no es el genérico y nombra el rechazo, no una caída.
+    expect(rechazado).not.toBe(GENERICO);
+    expect(rechazado).toBe(
+      "No pudimos cotizar este envío: el corredor lo rechazó. Probá con otro monto.",
+    );
+    // (b) el bucket de lo no clasificado NO se movió.
+    expect(humanError("step_failed")).toBe(GENERICO);
+    // (c) la comparación explícita: se DISTINGUEN.
+    expect(rechazado).not.toBe(humanError("step_failed"));
+    // (d) CD-1 — el copy sigue sin ecoar el vocabulario privado del agente: `agentFailure` es una
+    // CLASE, no el `reason`, así que ningún `fx_*` puede aparecer en pantalla.
+    expect(rechazado).not.toContain("fx_");
+    expect(rechazado).not.toContain("INPUT_REJECTED");
   });
 });
 
@@ -1670,7 +1699,7 @@ describe("WKH-349 · escrowOutcome / escrowOutcomeDisplay", () => {
   // `pares` se incrementa UNA VEZ POR ITERACIÓN del mismo producto que después se compara, así que no
   // puede fallar nunca. Se deja porque documenta la forma del recorrido, pero no prueba nada.
   // EL CANDADO REAL de que el recorrido cubra TODOS los valores del tipo es `ANSWER_SET`
-  // (`ANSWER_SET`, `:1572`), un `Record<EscrowChainAnswer, true>`: un valor nuevo en el tipo y sin
+  // (`ANSWER_SET`, `:1601`), un `Record<EscrowChainAnswer, true>`: un valor nuevo en el tipo y sin
   // entrada ahí es un error de `tsc`, no un test verde mirando un valor menos. Lo mismo `FIXTURES`
   // para `KNOWLEDGES`. Un `toBe(28)` clavado acá tampoco servía: esta misma HU le agregó un valor al
   // tipo y el número correcto pasó de 28 a 32 — habría envejecido igual que una cita.
@@ -1902,15 +1931,15 @@ describe("WKH-350 · agrupación del historial", () => {
  * "SEIS citas `flow-vm.test.ts:NN` sin ancla" apuntaban a este bloque, y que "todo lo que se le agregue
  * va DEBAJO de la 1911". Medido con
  * `grep -rEon 'flow-vm\.test\.ts:[0-9]+(-[0-9]+)?' src app scripts contracts`: las citas externas eran
- * OCHO, con UNA sola anclada (la de `flow-vm.ts:1003` a `:481`), o sea SIETE sin ancla, no seis. Y la
+ * OCHO, con UNA sola anclada (la de `flow-vm.ts:1010` a `:481`), o sea SIETE sin ancla, no seis. Y la
  * séptima, escrita por esta misma HU, fijaba la 1935, que está DEBAJO de la 1911: el CR insertó una
  * línea en la 1920, que es exactamente lo que esa regla autorizaba, y el contenido citado se corrió de
  * 1935 a 1936 SIN UN SOLO ROJO, con `citas-ancladas.test.ts` en verde.
  *
  * EL ARREGLO NO FUE CORREGIR EL NÚMERO, FUE ANCLAR. Las cuatro citas externas que apuntan a CÓDIGO de
  * este archivo hoy llevan símbolo, así que las mira `citas-ancladas.test.ts` y un desplazamiento se
- * pone ROJO en vez de mentir: (`statusDisplay`, `:76-101`) y (`TODOS`, `:1873`) desde
- * `history-grupos.test.tsx`, y (`VERBOS`, `:1704-1707`) y (`escrowOutcomeDisplay`, `:1715`) desde
+ * pone ROJO en vez de mentir: (`statusDisplay`, `:76-101`) y (`TODOS`, `:1902`) desde
+ * `history-grupos.test.tsx`, y (`VERBOS`, `:1733-1736`) y (`escrowOutcomeDisplay`, `:1744`) desde
  * `history-onchain.test.tsx`. Las otras dos eran BOOKKEEPING de esta misma disciplina: una apuntaba a la
  * PROSA de este párrafo y la otra, desde `history-onchain.test.tsx`, listaba en qué líneas de acá vivían
  * las citas que la nombraban. Las dos se borraron de raíz, porque con las citas ancladas ese inventario
@@ -1933,7 +1962,7 @@ describe("WKH-350 · agrupación del historial", () => {
  * palabra que esté en LA línea y no en las de al lado. Si la 520 se mueve, el candado se pone rojo y hay
  * que ir a corregir la cita de allá. ⚠️ LO QUE EL CANARIO NO HACE: no lee `http-pop-signer.ts`, así que
  * no prueba que esa cita diga la verdad; prueba que la línea 520 de acá no se movió. Las SEIS auto-citas
- * de este archivo a `:520` (`:1`, `:3`, `:21`, `:31`, `:484` y `:1358`) quedan cubiertas por el mismo
+ * de este archivo a `:520` (`:1`, `:3`, `:21`, `:31`, `:484` y `:1387`) quedan cubiertas por el mismo
  * canario, porque todas apuntan a esa línea.
  *
  * 🔴 REGLA DE ESTE BLOQUE (CD-12/CD-14): cada test nombra la edición plausible que lo pone en rojo, Y
@@ -1972,7 +2001,7 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
   const OUTCOMES_352 = Object.keys(OUTCOME_SET_352) as EscrowOutcome[];
 
   // 🔴 T-W1 (AC-1) — LA FILA CON PRUEBA DEL DEPÓSITO RECIBE SU PROPIO DESENLACE.
-  // MUTANTE MEDIDO: borrar el ternario de `flow-vm.ts:1206` y volver a `return "chain-absent";`.
+  // MUTANTE MEDIDO: borrar el ternario de `flow-vm.ts:1213` y volver a `return "chain-absent";`.
   // Aplicado y medido: T-W1 se pone rojo ("expected 'chain-absent' to be 'chain-absent-after-deposit'").
   // QUÉ NO CUBRE: no mide que la frase sea comprensible para quien la lee. Eso no lo puede medir un test.
   it("T-W1: `absent` + `principalTx` ⇒ `chain-absent-after-deposit`, y su copy ya no dice la disyunción", () => {
@@ -2027,14 +2056,14 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
 
   // 🔴 T-W3 (AC-2) — EL CANDADO: LA FRASE NUEVA NO SE DERRAMA SOBRE QUIEN NO TIENE LA PRUEBA.
   // MUTANTE MEDIDO: predicar por el CAMINO en vez de por la evidencia, o sea
-  // `return k === "unverified" ? "chain-absent-after-deposit" : "chain-absent";` en `flow-vm.ts:1206`.
-  // Ese predicado es SIEMPRE verdadero ahí (`escrowOutcome` ya cortó en `:1195` con
+  // `return k === "unverified" ? "chain-absent-after-deposit" : "chain-absent";` en `flow-vm.ts:1213`.
+  // Ese predicado es SIEMPRE verdadero ahí (`escrowOutcome` ya cortó en `:1224` con
   // `if (k !== "unverified") return k`), así que le daría la frase "tu depósito entró" a filas que no
   // tienen NINGUNA prueba de que entró. Aplicado y medido: T-W3 se pone rojo ("expected
   // 'chain-absent-after-deposit' to be 'chain-absent'") y NINGÚN otro test de este bloque cae, lo cual
   // es el punto: este candado es el único que cubre esa edición. El loop corta en el PRIMER fixture, así
   // que lo medido es que el mutante lo mata, no que los tres asserts se ejecuten y fallen.
-  // SEGUNDO MUTANTE MEDIDO: retocar la frase vieja de `flow-vm.ts:1270` (CD-8) ⇒ T-W3 rojo por el `toBe`.
+  // SEGUNDO MUTANTE MEDIDO: retocar la frase vieja de `flow-vm.ts:1277` (CD-8) ⇒ T-W3 rojo por el `toBe`.
   // QUÉ NO CUBRE: no mide el copy NUEVO (eso es T-W1/T-W2), ni cubre un cuarto camino a `unverified`
   // que alguien agregue después a `escrowFundsKnowledge`.
   it("T-W3: sin `principalTx`, `absent` sigue dando `chain-absent` con su frase BYTE-IDÉNTICA", () => {
@@ -2096,13 +2125,13 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
 
   // 🔴 T-W5 (AC-1) — LA RAMA NUEVA ES DE `absent` Y DE NINGUNA OTRA RESPUESTA.
   // MUTANTE MEDIDO: ramificar sobre `principalTx` ANTES del `switch` de respuestas, o sea poner
-  // `if (rem.principalTx != null) return "chain-absent-after-deposit";` arriba de `flow-vm.ts:1198`.
+  // `if (rem.principalTx != null) return "chain-absent-after-deposit";` arriba de `flow-vm.ts:1205`.
   // "No pudimos preguntar" pasaría a decirle a la persona que la cuenta se cerró. Aplicado y medido:
   // T-W5 se pone rojo. QUÉ NO CUBRE: mide el DESENLACE, no el copy de cada uno.
   it("T-W5: con `principalTx`, SÓLO `absent` produce el valor nuevo; las otras 7 respuestas no se mueven", () => {
     const conPrueba = rem({ status: "principal_in", principalTx: "sig" });
     // Exhaustivo por `tsc`: si `EscrowChainAnswer` gana un valor y nadie lo mapea acá, no compila. Es
-    // el mismo motivo por el que `ANSWER_SET` (`:1572`) existe: una lista a mano deja de mirar el valor
+    // el mismo motivo por el que `ANSWER_SET` (`:1601`) existe: una lista a mano deja de mirar el valor
     // nuevo justo el día que se agrega.
     const ESPERADO_352: Record<EscrowChainAnswer, EscrowOutcome> = {
       "deposited-window-open": "chain-deposited-window-open",
@@ -2141,9 +2170,9 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
   // `NEXT_PUBLIC_SOLANA_RPC_URL` mal apuntada harían que la pantalla le dijera a alguien que no hay
   // nada que recuperar sobre una fila donde SÍ lo hay, apagándole (`LostEscrowRecovery`,
   // `flow.tsx:1203`), que es la puerta que le queda. Argumento largo en el docblock de
-  // (`escrowOutcomeDisplay`, `flow-vm.ts:1253`).
+  // (`escrowOutcomeDisplay`, `flow-vm.ts:1260`).
   //
-  // MUTANTE MEDIDO: reponer esa media frase en `flow-vm.ts:1269`. Aplicado y medido: T-W10 se pone
+  // MUTANTE MEDIDO: reponer esa media frase en `flow-vm.ts:1276`. Aplicado y medido: T-W10 se pone
   // rojo por el primer assert, y de este bloque no cae ningún otro.
   // SEGUNDO MUTANTE MEDIDO: borrar el "ni descartar que la cuenta siga abierta..." final (o sea sacar
   // el "se cerró" y no poner nada en su lugar, que deja la misma puerta cerrada por omisión) ⇒ T-W10
@@ -2196,7 +2225,7 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
   //   (1) decía "en EL CONTRATO que estamos consultando no figura ninguna cuenta para este envío". Lo
   //       que se lee es UNA dirección: la que (`deriveEscrowStateFromId16`, `../infrastructure/solana-wallet.ts:294`)
   //       deriva de "escrow" + sender + id16, no el programa entero.
-  //       El docblock de (`escrowOutcomeDisplay`, `flow-vm.ts:1253`) ya decía que lo ÚNICO medido es
+  //       El docblock de (`escrowOutcomeDisplay`, `flow-vm.ts:1260`) ya decía que lo ÚNICO medido es
   //       "en la dirección que derivamos HOY no hay cuenta": el copy afirmaba más que su propio
   //       docblock, y ese par (prosa que afirma / docblock que acota) es el que nadie vuelve a leer.
   //   (2) la tercera posibilidad decía "siga abierta en un contrato que no estamos mirando", y ése es
@@ -2205,7 +2234,7 @@ describe("WKH-352 · `absent` con prueba local del depósito", () => {
   //       (`LostEscrowRecovery`, `flow.tsx:2340`) la encuentra porque resuelve por sender. Mandar a un
   //       "otro contrato" es mandar a la persona al único lugar donde no hay nada que buscar.
   //
-  // MUTANTE MEDIDO: reponer en `flow-vm.ts:1269` la frase vieja ("Y en el contrato que estamos
+  // MUTANTE MEDIDO: reponer en `flow-vm.ts:1276` la frase vieja ("Y en el contrato que estamos
   // consultando no figura ninguna cuenta para este envío... siga abierta en un contrato que no estamos
   // mirando"). Aplicado y medido: T-W11 rojo por el primer assert, y de ESTE bloque no cae ningún otro
   // (T-W10 sigue verde: la frase vieja tampoco decía "se cerró"). Fuera de este archivo caen TRES, los
@@ -2482,7 +2511,7 @@ describe("T-067-10 (WKH-359/AC-6): el cruce de cuenta distingue NO COMPARADO de 
 // puede devolver `/api/payout/prepare` tenían copy propio en `flow-vm.ts` "para que ninguno prometa USDC
 // en el escrow". Eran DOS. `payout_authority_unavailable` no tenía rama y caía en el catch-all
 // `code.includes("payout")`, cuyo texto manda a la persona a sacar del escrow unos USDC que nunca
-// salieron de su billetera: los tres emisores del enum (`app/api/payout/prepare/route.ts:333`, `:344`,
+// salieron de su billetera: los tres emisores del enum (`app/api/payout/prepare/route.ts:334`, `:344`,
 // `:347`) cortan antes del forward al agente y antes de `authorizePrincipal`.
 //
 //
@@ -2494,8 +2523,8 @@ describe("T-067-10 (WKH-359/AC-6): el cruce de cuenta distingue NO COMPARADO de 
 // LEE lo mide `src/presentation/copy-de-prepare-en-pantalla.test.tsx`, que renderiza la vista y barre
 // TODOS los enums que emite la route. Los dos hacen falta: éste clava el copy, aquél clava el camino.
 // ⛔ ESTE `describe` VA AL FINAL DEL ARCHIVO A PROPÓSITO, y no es prolijidad: `:481`, `:520`, `:76-101`,
-// `:1704-1707` y `:1873` de este archivo los cita otro por NÚMERO (`http-pop-signer.ts:33`,
-// `flow-vm.ts:1003`, `history-grupos.test.tsx:405`/`:532`, `history-onchain.test.tsx:255`/`:473`).
+// `:1733-1736` y `:1902` de este archivo los cita otro por NÚMERO (`http-pop-signer.ts:33`,
+// `flow-vm.ts:1010`, `history-grupos.test.tsx:405`/`:532`, `history-onchain.test.tsx:255`/`:473`).
 // Un `it` insertado en el medio los rota en silencio; appendear al final no mueve ninguno.
 describe("T-COPY-5: `payout_authority_unavailable` tiene copy propio (WKH-233/H-1)", () => {
   const CATCH_ALL_PAYOUT =
@@ -2627,7 +2656,7 @@ describe("T-COPY-SD: la frase del fallo sin depósito le sirve a sus OCHO enums"
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
 //
 // 🔴 EL BORDE QUE EL AR DEJÓ SIN SONDA, Y NO ES UN HALLAZGO DE HOY: (`copyDeEntregaFallida`,
-// `flow-vm.ts:1595`) decide "este enum no tiene copy propio" comparando contra DOS genéricos —el
+// `flow-vm.ts:1602`) decide "este enum no tiene copy propio" comparando contra DOS genéricos —el
 // catch-all de `payout` y el `default` final—. De los 14 enums que emite la route, **la mitad `payout`
 // la ejercitaba UNO SOLO** (`payout_pop_unverified`); los otros siete genéricos caen en el `default`.
 // ⇒ el día que alguien le escriba copy propio a ese enum, esa mitad de la derivación se queda sin

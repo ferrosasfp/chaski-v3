@@ -387,7 +387,7 @@ describe("T-AUTH-6: si el token fue invalidado, el agente contesta 401 y NO se r
   // 🔴 POR QUÉ ESTA ASERCIÓN VIVE ACÁ Y NO SÓLO EN `flow-vm.test.ts`. El defecto no estaba en ninguna
   // de las dos puntas: estaba en que NADA ataba el `reason` que fija el `it` de arriba con el copy que
   // sale del otro lado. La cadena medida es `kyc_reauth_failed`/502 (acá) ⇒ el `default` del `switch`
-  // de `app/api/payout/prepare/route.ts:347` ⇒ `payout_authority_unavailable` ⇒ el `case` 1:1 de
+  // de `app/api/payout/prepare/route.ts:348` ⇒ `payout_authority_unavailable` ⇒ el `case` 1:1 de
   // `../settlement/http-solana-prepare-gateway.ts:59` ⇒ `payout_authority_unavailable` como `failureReason`
   // persistido. Con las dos puntas verdes por separado, ese enum estuvo cayendo en el catch-all
   // `code.includes("payout")` y la persona leía "si tus USDC entraron al escrow, los sacás vos firmando"

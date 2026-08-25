@@ -89,7 +89,7 @@ export interface PasoPop {
   /**
    * El token opaco que emitió el servidor. Se guarda porque **la firma sola no sirve**: `prepare`
    * exige el PAR (`popChallenge` + `popSignature`) y verifica el HMAC del token antes de mirar la
-   * firma (`../../../../app/api/payout/prepare/route.ts:218`).
+   * firma (`../../../../app/api/payout/prepare/route.ts:219`).
    */
   popChallenge: string;
   /**
@@ -113,7 +113,7 @@ export interface PasoPop {
    * autenticado de este lado**. El HMAC del desafío sólo lo verifica el servidor, así que un `exp`
    * adulterado se cree acá sin chistar. Se usa ÚNICAMENTE para "no molestes a la persona / no
    * POSTees en vano", **nunca** para autorizar nada. Quien autoriza es P2, server-side, en
-   * `../../../../app/api/payout/prepare/route.ts:230`. Adelantarlo sólo se hace daño a sí mismo;
+   * `../../../../app/api/payout/prepare/route.ts:231`. Adelantarlo sólo se hace daño a sí mismo;
    * atrasarlo no compra nada, porque el servidor rechaza igual.
    */
   exp: number;

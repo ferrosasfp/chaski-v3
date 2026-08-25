@@ -109,7 +109,7 @@ import { Aviso, Button, Card, Muted } from "./ui"; import { Grecas } from "./gre
  *    `NEXT_PUBLIC_SOLANA_RPC_URL` (`resolveSolanaRpcUrlPublic`, `chain.ts:190`) SIN ninguna validación
  *    cruzada contra ese literal. Nada en el código impide que el env apunte a mainnet mientras la
  *    pantalla sigue diciendo "devnet". El repo ya lo tenía medido y escrito en otro lado:
- *    `flow-vm.ts:1224` lista "una `NEXT_PUBLIC_SOLANA_RPC_URL` mal apuntada" como uno de sus cuatro
+ *    `flow-vm.ts:1231` lista "una `NEXT_PUBLIC_SOLANA_RPC_URL` mal apuntada" como uno de sus cuatro
  *    disparadores reales, "que es hoy y sin desplegar código".
  *    ✅ LO QUE SÍ ES CIERTO, y es lo que se afirma ahora: la copia coincide con la red real mientras el
  *    env no la contradiga. Medido en este worktree (2026-08-17): `NEXT_PUBLIC_SOLANA_RPC_URL` no está

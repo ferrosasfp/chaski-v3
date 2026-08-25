@@ -2511,8 +2511,8 @@ describe("T-067-10 (WKH-359/AC-6): el cruce de cuenta distingue NO COMPARADO de 
 // puede devolver `/api/payout/prepare` tenían copy propio en `flow-vm.ts` "para que ninguno prometa USDC
 // en el escrow". Eran DOS. `payout_authority_unavailable` no tenía rama y caía en el catch-all
 // `code.includes("payout")`, cuyo texto manda a la persona a sacar del escrow unos USDC que nunca
-// salieron de su billetera: los tres emisores del enum (`app/api/payout/prepare/route.ts:334`, `:344`,
-// `:347`) cortan antes del forward al agente y antes de `authorizePrincipal`.
+// salieron de su billetera: los tres emisores del enum (`app/api/payout/prepare/route.ts:334`, `:345`,
+// `:348`) cortan antes del forward al agente y antes de `authorizePrincipal`.
 //
 //
 // 🔴 QUÉ MIDE ESTE `describe` Y QUÉ NO, ESCRITO PORQUE LA DIFERENCIA YA COSTÓ UNA ITERACIÓN (re-AR it2 ·
@@ -2558,7 +2558,7 @@ describe("T-COPY-5: `payout_authority_unavailable` tiene copy propio (WKH-233/H-
   });
 
   // ⚠️ NO dice "no se pidió ninguna firma", que sería FALSO: para llegar a este guard el PoP ya se
-  // verificó (`prepare/route.ts:214` en adelante), o sea que la billetera SÍ firmó un mensaje. Lo
+  // verificó ((`POP_SECRET`, `../../app/api/payout/prepare/route.ts:214`) en adelante), o sea que la billetera SÍ firmó un mensaje. Lo
   // cierto es que ese mensaje no mueve valor. Si alguien "simplifica" el copy negando la firma, rojo.
   it("no niega la firma que sí ocurrió (el PoP), la explica", () => {
     const msg = humanError("payout_authority_unavailable");

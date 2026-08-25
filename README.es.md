@@ -114,7 +114,7 @@ Dónde está eso hoy, en presente:
 - **Ya no hay camino punto a punto.** Este bullet decía que era el activo y que llamaba a una base URL
   conocida. WKH-332 borró ese carril: por defecto la app cablea los gateways demo y no llama a ningún agente.
 - **Por capacidad es el único transporte, y esta bandera no lo apaga.**
-  `app/api/a2a/quote/route.ts:91-96` y `app/api/payout/prepare/route.ts:391-395` mandan una `capability`,
+  `app/api/a2a/quote/route.ts:91-96` y `app/api/payout/prepare/route.ts:392-396` mandan una `capability`,
   con un piso de reputación en cada pata, y el gateway elige. `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER` cablea
   UN adapter del CLIENTE, el de la cotización; el ESTADO del payout ya NO cuelga de ella (WKH-337: lo lee el ledger); estas
   routes no la leen. Sacale al gateway la URL o la key y las dos ROUTES contestan 501 sin un solo fetch.

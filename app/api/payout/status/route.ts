@@ -40,7 +40,7 @@ import {
 // y acota lo que entra al `.eq(...)` sin inventar un formato que el proveedor no garantiza.
 const MAX_PAYOUT_ID_LEN = 200;
 
-// Excluye arrays (mirror de prepare/route.ts:74-76).
+// Excluye arrays: mirror de (`isRecord`, `../prepare/route.ts:75-77`).
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }

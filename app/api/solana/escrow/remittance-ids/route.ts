@@ -38,7 +38,7 @@ import {
 // a mano de cualquiera de los dos lados.
 const MAX_IDS = ESCROW_ID_LOOKUP_CEILING;
 
-// Excluye arrays (mirror de prepare/route.ts:74-76).
+// Excluye arrays: mirror de (`isRecord`, `../../../payout/prepare/route.ts:75-77`).
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }

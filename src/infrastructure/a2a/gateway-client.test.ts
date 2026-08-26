@@ -4,6 +4,7 @@
 // GRANULAR (índice del step + code/reason reales) sin segundo intento ni agente alternativo.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  FX_MIN_REPUTATION,
   FX_QUOTE_CAPABILITY,
   PAYOUT_CAPABILITY,
   PAYOUT_MIN_REPUTATION,
@@ -67,7 +68,13 @@ describe("runViaGateway — AC-1: se pide por CAPACIDAD, el gateway resuelve (ce
     const { fn, calls } = router();
     vi.stubGlobal("fetch", fn);
     const r = await runViaGateway({ steps: [fxStep] });
-    expect(r).toEqual({ ok: true, outputs: [quoteOutput], agents: [null] });
+    expect(r).toEqual({
+      ok: true,
+      outputs: [quoteOutput],
+      agents: [null],
+      invokeUrls: [null],
+      bridged: [false],
+    });
 
     expect(calls.map((c) => c.url)).toEqual([`${URL}/compose`]);
     expect(calls.some((c) => c.url.includes("/discover"))).toBe(false);
@@ -133,13 +140,18 @@ describe("runViaGateway — AC-1: se pide por CAPACIDAD, el gateway resuelve (ce
   // El tipo `GatewayStep` ya rechaza esas claves en compilación (TS2353); el intersect con
   // Record<string, unknown> es lo que permite construir el caso hostil SIN `any` ni `as unknown as`.
   it("T-A1.1b: el step emitido es un whitelist (capability/input/constraints): lo que el caller agregue de más NO viaja", async () => {
+    // ⚠️ WKH-366 CAMBIÓ LO QUE ESTE CASO PUEDE AFIRMAR, y se dice en vez de disimularlo. Antes
+    // `agent` era basura como `passOutput` y el assert podía pedir `["capability","input"]` con un
+    // `agent` en la entrada. Hoy `agent` es la OTRA variante de la unión, así que un objeto con las
+    // dos claves ya no es "una capability con basura": es ambiguo, y lo cubre T-A1.1c aparte. Acá
+    // queda la basura que sigue siendo basura.
     const hostile: GatewayStep & Record<string, unknown> = {
       capability: PAYOUT_CAPABILITY,
       input: { amountUsd: 400 },
       inputFromPrevious: { quoteId: "quoteId" }, // chaining: sólo con WKH-305 + decisión de producto
       passOutput: true, // chaining viejo del server
-      agent: "remit-cashout-payout", // nombre del agente (CD-1)
       registry: "default",
+      slug: "remit-cashout-payout", // el nombre del agente por otra puerta (CD-1)
     };
     const { fn, calls } = router();
     vi.stubGlobal("fetch", fn);
@@ -151,6 +163,110 @@ describe("runViaGateway — AC-1: se pide por CAPACIDAD, el gateway resuelve (ce
     expect(raw).not.toContain("passOutput");
     expect(raw).not.toContain("registry");
     expect(raw).not.toContain("remit-cashout-payout");
+  });
+
+  // T-A1.1c (WKH-366) — LA VARIANTE PINEADA, y el desempate cuando llegan las dos claves.
+  //
+  // 🔴 EL DESEMPATE ES «GANA `agent`», Y NO ES ARBITRARIO. Las dos claves juntas serían
+  // `ambiguous_step`/400 del servidor, así que emitir las dos nunca es una opción; hay que elegir
+  // una. Si ganara `capability`, un step de AUTORIZACIÓN DE DINERO al que alguien le agregó una
+  // capacidad saldría SIN PIN y lo resolvería el ranking del gateway — o sea el agujero que AC-6
+  // cierra. Ganando `agent`, el error de más se resuelve hacia el lado pineado. En compilación esto
+  // no puede ocurrir (la unión no declara `agent` en la variante de capacidad); el caso se
+  // construye a mano para que el desempate quede MEDIDO y no supuesto.
+  it("T-A1.1c: la variante pineada emite EXACTO ['agent','input'], y con las dos claves gana `agent`", async () => {
+    const { fn, calls } = router();
+    vi.stubGlobal("fetch", fn);
+    const hostile: GatewayStep & Record<string, unknown> = {
+      agent: "un-agente-pineado",
+      input: { sessionId: "s" },
+      capability: PAYOUT_CAPABILITY, // la otra mitad de la ambigüedad
+      constraints: { min_reputation: 2 }, // la variante pineada NO las declara
+      passOutput: true,
+    };
+    await runViaGateway({ steps: [hostile] });
+
+    const raw = calls[0]!.init!.body as string;
+    expect(Object.keys(composeBody(calls).steps[0]!)).toEqual(["agent", "input"]);
+    expect(composeBody(calls).steps[0]!.agent).toBe("un-agente-pineado");
+    expect(raw).not.toContain("capability");
+    expect(raw).not.toContain("constraints");
+    expect(raw).not.toContain("passOutput");
+  });
+
+  // T-C1b (WKH-366/AC-8) — EL BODY DE LA VARIANTE `capability` ES BYTE-IDÉNTICO AL DE ANTES DE ESTA
+  // HU. Los tres literales de abajo NO se escribieron a ojo: se capturaron corriendo este mismo
+  // cliente sobre el `main` previo a WKH-366 el 2026-08-26, volcando `init.body` tal cual sale del
+  // `JSON.stringify`. Un assert sobre claves parseadas no serviría: el orden de las claves también
+  // es parte de "byte-idéntico", y `JSON.parse` lo borra.
+  //
+  // 🧬 MUTANTE: tocar el `map` de la rama `capability` (reordenar las claves, emitir `constraints`
+  // siempre, spreadear `s`) ⇒ los tres strings dejan de coincidir ⇒ ROJO.
+  it("T-C1b: el body de los dos legs vivos (FX y payout) no cambió UN BYTE", async () => {
+    vi.stubEnv("WASIAI_A2A_PAYMENT_CHAIN", "solana-devnet");
+    const { fn, calls } = router();
+    vi.stubGlobal("fetch", fn);
+
+    await runViaGateway({
+      steps: [
+        {
+          capability: FX_QUOTE_CAPABILITY,
+          input: { amountUsd: 400 },
+          constraints: { min_reputation: FX_MIN_REPUTATION, allow_trial: true },
+        },
+      ],
+    });
+    await runViaGateway({
+      steps: [
+        {
+          capability: PAYOUT_CAPABILITY,
+          input: { amountLocal: 1500 },
+          constraints: { min_reputation: PAYOUT_MIN_REPUTATION },
+        },
+      ],
+    });
+    await runViaGateway({ steps: [{ capability: FX_QUOTE_CAPABILITY, input: { amountUsd: 400 } }] });
+
+    expect(calls.map((c) => c.init?.body as string)).toEqual([
+      '{"steps":[{"capability":"remittance-fx-quote","input":{"amountUsd":400},"constraints":{"min_reputation":2,"allow_trial":true}}]}',
+      '{"steps":[{"capability":"remittance-payout","input":{"amountLocal":1500},"constraints":{"min_reputation":2}}]}',
+      '{"steps":[{"capability":"remittance-fx-quote","input":{"amountUsd":400}}]}',
+    ]);
+    // Y las cabeceras, que también son parte del "cero cambio observable".
+    expect(calls[0]!.init?.headers).toEqual({
+      "content-type": "application/json",
+      "x-a2a-key": KEY,
+      "x-payment-chain": "solana-devnet",
+    });
+  });
+
+  // WKH-366/CD-2 — `bridged` mide PRESENCIA, no valor. Es lo que hace que el consumidor pueda ser
+  // fail-closed sobre un campo cuyo vocabulario no controla.
+  it("T-A1.1d: `bridged[i]` es true ante CUALQUIER `bridgeType` presente, y false sólo si falta", async () => {
+    const { fn } = router({
+      body: {
+        success: true,
+        steps: [
+          { output: { a: 1 }, bridgeType: "LLM" },
+          { output: { b: 2 }, bridgeType: 123 }, // un valor que hoy no existe
+          { output: { c: 3 }, bridgeType: undefined }, // presente pero sin valor ⇒ no hubo bridge
+          { output: { d: 4 } }, // ausente ⇒ no hubo bridge
+        ],
+      },
+    });
+    vi.stubGlobal("fetch", fn);
+    const r = await runViaGateway({
+      steps: [
+        { capability: FX_QUOTE_CAPABILITY, input: {} },
+        { capability: FX_QUOTE_CAPABILITY, input: {} },
+        { capability: FX_QUOTE_CAPABILITY, input: {} },
+        { capability: FX_QUOTE_CAPABILITY, input: {} },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("unreachable");
+    // 🧬 MUTANTE: `entry.bridgeType === "LLM"` en vez de la presencia ⇒ la 2ª posición da false ⇒ ROJO.
+    expect(r.bridged).toEqual([true, true, false, false]);
   });
 
   it("el input viaja TAL CUAL en el step (idempotencyKey/beneficiary intactos, CD-8)", async () => {
@@ -256,7 +372,92 @@ describe("runViaGateway — AC-1: se pide por CAPACIDAD, el gateway resuelve (ce
     });
     vi.stubGlobal("fetch", fn);
     const r = await runViaGateway({ steps: [{ capability: FX_QUOTE_CAPABILITY, input: {} }] });
-    expect(r).toEqual({ ok: true, outputs: [{ a: 1 }], agents: [null] });
+    expect(r).toEqual({
+      ok: true,
+      outputs: [{ a: 1 }],
+      agents: [null],
+      invokeUrls: [null],
+      bridged: [false],
+    });
+  });
+
+  // ── T-A1.4 (WKH-366 fix-pack AR/BLQ-ALTO-1) — `invokeUrls` ──────────────────────────────────
+  //
+  // 🔴 LO QUE ESTE BLOQUE SOSTIENE SON DOS COSAS DISTINTAS, y la segunda es la que costó un rojo:
+  //   (1) la `invokeUrl` del ejecutor VIAJA, porque de ella depende el guard de origen que decide
+  //       un desembolso en `kyc/gateway-kyc-client.ts`;
+  //   (2) NO viaja adentro de `agents[i]`, porque ese objeto lo ecoan al browser dos rutas sin
+  //       proyectar campo por campo. Cuando estuvo ahí adentro, `/api/a2a/quote` y
+  //       `/api/payout/prepare` filtraron la URL interna del agente al navegador y sus propios
+  //       tests lo cazaron. El arreglo no fue "acordarse de borrarla en las dos rutas": fue que no
+  //       pueda estar.
+  it("la `invokeUrl` del ejecutor viaja en `invokeUrls`, y NO adentro de `agents[i]`", async () => {
+    const { fn } = router({
+      body: {
+        success: true,
+        steps: [
+          {
+            output: { a: 1 },
+            agent: { slug: "s", registry: "r", invokeUrl: "https://interno.example.com/invoke" },
+          },
+        ],
+      },
+    });
+    vi.stubGlobal("fetch", fn);
+    const r = await runViaGateway({ steps: [{ capability: FX_QUOTE_CAPABILITY, input: {} }] });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("unreachable");
+    // (1) viaja
+    expect(r.invokeUrls).toEqual(["https://interno.example.com/invoke"]);
+    // 🧬 MUTANTE: devolver `invokeUrl` dentro del ref ⇒ ROJO acá, y en las dos rutas.
+    expect(r.agents[0]).toEqual({ slug: "s", registry: "r" });
+    expect(r.agents[0]).not.toHaveProperty("invokeUrl");
+    // (2) y por si alguien "arregla" el `toEqual` de arriba: el ref serializado —que es lo que las
+    // rutas mandan al browser— no puede contener el host interno por NINGUNA clave.
+    expect(JSON.stringify(r.agents[0])).not.toContain("interno.example.com");
+  });
+
+  it.each<[string, unknown]>([
+    ["ausente", undefined],
+    ["cadena vacía", ""],
+    ["no es string", 8080],
+    ["null explícito", null],
+  ])("`invokeUrl` %s ⇒ `null` en su posición (⛔ nunca \"\")", async (_caso, invokeUrl) => {
+    // ⛔ `null` y no `""`: del otro lado se compara con `===` contra el origen del deploy, y dos
+    // cadenas vacías se comparan IGUALES. Un "no sé" que pasa por coincidencia autoriza plata.
+    const agent: Record<string, unknown> = { slug: "s", registry: "r" };
+    if (invokeUrl !== undefined) agent.invokeUrl = invokeUrl;
+    const { fn } = router({ body: { success: true, steps: [{ output: { a: 1 }, agent }] } });
+    vi.stubGlobal("fetch", fn);
+    const r = await runViaGateway({ steps: [{ capability: FX_QUOTE_CAPABILITY, input: {} }] });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("unreachable");
+    expect(r.invokeUrls).toEqual([null]);
+  });
+
+  it("`invokeUrls` es POSICIONAL: mismo largo que `outputs`, aunque falte en un step", async () => {
+    const { fn } = router({
+      body: {
+        success: true,
+        steps: [
+          { output: { a: 1 }, agent: { slug: "s1", invokeUrl: "https://uno.example/invoke" } },
+          { output: { b: 2 }, agent: { slug: "s2" } },
+        ],
+      },
+    });
+    vi.stubGlobal("fetch", fn);
+    const r = await runViaGateway({
+      steps: [
+        { capability: FX_QUOTE_CAPABILITY, input: {} },
+        { capability: PAYOUT_CAPABILITY, input: {} },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("unreachable");
+    // 🧬 MUTANTE: hacer `push` sólo cuando la URL existe ⇒ el arreglo se desalinea y el consumidor
+    // compara el origen del step 0 contra el ejecutor del step 1. ROJO acá.
+    expect(r.invokeUrls).toEqual(["https://uno.example/invoke", null]);
+    expect(r.invokeUrls).toHaveLength(r.outputs.length);
   });
 
   // `trial` ausente NO se traduce a `false`: "el gateway no lo marcó" no es "tiene historial".
@@ -282,7 +483,13 @@ describe("runViaGateway — AC-1: se pide por CAPACIDAD, el gateway resuelve (ce
         { capability: PAYOUT_CAPABILITY, input: {} },
       ],
     });
-    expect(r).toEqual({ ok: true, outputs: [{ a: 1 }, { b: 2 }], agents: [null, null] });
+    expect(r).toEqual({
+      ok: true,
+      outputs: [{ a: 1 }, { b: 2 }],
+      agents: [null, null],
+      invokeUrls: [null, null],
+      bridged: [false, false],
+    });
   });
 });
 

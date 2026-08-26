@@ -23,8 +23,8 @@
 // estaba, la tarjeta se habría borrado de la pantalla sin que nadie lo notara.
 import { NextResponse } from "next/server";
 import type { KycAgentDecisionOutput } from "../../../../src/infrastructure/kyc/agent-contract";
-import type { AgentKycCall } from "../../../../src/infrastructure/kyc/agent-kyc-client";
-import { readAgentKycDecision, KycAgentConfigError, UPSTREAM_INVOKE_SECRET_UNSET } from "../../../../src/infrastructure/kyc/agent-kyc-client";
+import type { AgentKycCall } from "../../../../src/infrastructure/kyc/kyc-transport";
+import { readAgentKycDecision, KycAgentConfigError, UPSTREAM_INVOKE_SECRET_UNSET } from "../../../../src/infrastructure/kyc/kyc-transport";
 import { resolveKycAgentBaseUrl } from "../../../../src/infrastructure/kyc/agent-env";
 import { canonicalizeAddress } from "../../../../src/infrastructure/address";
 import { getKycVerdictStore } from "../../../../src/infrastructure/persistence/supabase-kyc-verdicts";

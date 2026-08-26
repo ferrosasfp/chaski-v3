@@ -32,8 +32,8 @@ import { verifySolanaPop } from "../../../../src/infrastructure/auth/pop-verify-
 import { resolveSolanaNetworkId } from "../../../../src/infrastructure/chain";
 import { canonicalizeAddress } from "../../../../src/infrastructure/address";
 import type { KycAgentSessionOutput } from "../../../../src/infrastructure/kyc/agent-contract";
-import type { AgentKycCall } from "../../../../src/infrastructure/kyc/agent-kyc-client";
-import { createAgentKycSession, KycAgentConfigError, UPSTREAM_INVOKE_SECRET_UNSET } from "../../../../src/infrastructure/kyc/agent-kyc-client";
+import type { AgentKycCall } from "../../../../src/infrastructure/kyc/kyc-transport";
+import { createAgentKycSession, KycAgentConfigError, UPSTREAM_INVOKE_SECRET_UNSET } from "../../../../src/infrastructure/kyc/kyc-transport";
 import { resolveKycAgentBaseUrl } from "../../../../src/infrastructure/kyc/agent-env";
 import { getKycSessionTokenStore } from "../../../../src/infrastructure/persistence/supabase-kyc-session-tokens";
 import { issueSessionToken } from "../../../../src/infrastructure/kyc-auth";

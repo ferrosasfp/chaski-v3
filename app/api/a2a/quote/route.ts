@@ -134,7 +134,7 @@ export async function POST(req: Request): Promise<Response> {
   // 🔴 POR QUÉ NO ES UN DETALLE: §9 del Story File nombra el flip de esa bandera como la palanca de
   // rollback. Poner `"fallback"` NO corta esta ruta —sigue componiendo y gastando la Agent Key—. Lo
   // que sí la corta sin re-desplegar es sacarle la config del gateway: con la URL o la key ausentes la
-  // config resuelve a `null` (`not_configured`, `gateway-client.ts:239`) ⇒ el 501 de abajo, sin fetch.
+  // config resuelve a `null` (`not_configured`, `gateway-client.ts:333`) ⇒ el 501 de abajo, sin fetch.
   const r = await runViaGateway({
     steps: [
       {

@@ -30,36 +30,53 @@
 //      línea, sea código o prosa, cuenta como hit.
 //
 // ════════════════════════════════════════════════════════════════════════════════════════════════
-// 🔴 WKH-233 — EXISTE UN SLUG NUEVO EN PRODUCCIÓN, `remit-kyc-validator`, Y **NO ENTRA A
-// `PROHIBIDAS`**. La excepción va escrita ACÁ, dentro del propio candado, porque `doc/` no viaja con
-// el repo y una excepción que sólo vive en un documento es una excepción que nadie va a encontrar.
+// 🔴 TRES SLUGS DE KYC VIVEN EN PRODUCCIÓN Y NINGUNO ENTRA A `PROHIBIDAS`. REESCRITO EL 2026-08-26
+// POR WKH-366, PORQUE LO QUE ESTE BLOQUE DECÍA ANTES YA NO ES CIERTO.
 //
-// (a) QUÉ ES. Desde WKH-233, Chaski deja de implementar el KYC y lo consume del agente
-//     `remit-kyc-validator` (repo `wasiai-remittance-agents`). El nombre aparece en producción, sí.
+// El bloque anterior (WKH-233) sostenía la excepción sobre esta premisa, textual: *"el gateway A2A …
+// el protocolo NO SABE EXPRESAR eso hoy (DT-1). No hay una capacidad que pedir en lugar del slug"*,
+// y cerraba con una instrucción: *"El día que el gateway sepa expresar una capacidad de dos saltos
+// con redirect humano, este slug tiene que irse a `PROHIBIDAS` como los otros — y ese día hay que
+// borrar este bloque, no ampliarlo."*
 //
-// (b) 🔴 POR QUÉ NO ES EL PATRÓN QUE ESTE CANDADO EXISTE PARA CAZAR, que es la parte que importa.
-//     Lo que AC-2 prohíbe es "un slug CABLEADO EN VEZ DE PEDIR UNA CAPACIDAD": el repo sabía nombrar
-//     `remittance-fx-quote` y aun así llamaba a un proveedor concreto por su nombre, así que la
-//     pantalla podía nombrar a quien no corría. **Ese camino alternativo no existe para el KYC.** El
-//     gateway A2A resuelve capacidades con un `POST /compose` de N pasos, y `GET /decision` es un
-//     **GET con la credencial en una cabecera** y un redirect humano en el medio: el protocolo NO
-//     SABE EXPRESAR eso hoy (DT-1). No hay una capacidad que pedir en lugar del slug — hay un slug o
-//     no hay KYC. Cablearlo no es elegir el camino fácil sobre el correcto: es el único que existe.
-//     ⚠️ Y se dice al derecho: esto NO es "Chaski corre entero sobre el gateway". Es "Chaski CONSUME
-//     el agente de KYC". La diferencia está declarada como residual de la HU, no disimulada.
+// **ESE DÍA LLEGÓ, Y ES ESTA HU. Y LOS SLUGS NO SE VAN.** El motivo es DISTINTO del que la
+// instrucción anticipaba, y por eso el bloque se reescribe entero en vez de tacharle una línea: un
+// bloque que dice "esto se va el día X" cuando el día X ya pasó y no se fue es prosa que envejeció.
 //
-// (c) APARECE **EXACTAMENTE UNA VEZ** en producción, y ese uno está gateado: vive en
-//     `src/infrastructure/kyc/agent-env.ts`, en la constante que compone la ruta, junto a la única
-//     fábrica del host (fail-closed, sin default). Los call sites NO lo escriben: usan `kycAgentUrl`,
-//     que es lo que impide la segunda aparición. Su candado propio es **T-ENV-3** en
-//     `agent-env.test.ts`, que cuenta apariciones TEXTUALES en ese módulo y exige exactamente 1 —
-//     por eso ni siquiera la prosa de ese archivo lo nombra.
+// (a) EL GATEWAY YA SABE EXPRESARLO. Es exactamente lo que WKH-366 construyó: dos endpoints POST que
+//     hablan el dialecto de `/compose` (body, `{result}`), dos filas de catálogo y dos capacidades
+//     propias. La premisa de DT-1 quedó obsoleta por construcción.
 //
-// ⛔ LO QUE NO SE HIZO, Y SE DICE: **no se lo agregó a `PROHIBIDAS` con una excepción por archivo.**
-// Eso habría sido pasar por debajo de la lista de agujas sin declararlo, o sea ganar la métrica sin
-// cumplir la regla. La regla se cumple por otro lado (el conteo de T-ENV-3) y acá se explica por qué.
-// El día que el gateway sepa expresar una capacidad de dos saltos con redirect humano, este slug
-// tiene que irse a `PROHIBIDAS` como los otros — y ese día hay que borrar este bloque, no ampliarlo.
+// (b) 🔴 Y AUN ASÍ EL SLUG SE QUEDA, PORQUE CAMBIÓ DE ROL. Ya no es una URL cableada: es el PIN de
+//     AC-6/CD-1. Pedir la capacidad en su lugar NO funcionaría igual de bien —funcionaría PEOR, y de
+//     una forma que no se ve—: el Coordinador ordena a los candidatos por `verified`, que el propio
+//     candidato AUTO-REPORTA en su card, así que un tercero que se declare verificado ordena por
+//     encima del agente propio y pasa a ser **quien contesta `payoutAllowed`**. Un slug que se
+//     mantiene para no dejar que un desconocido decida un desembolso no es el acoplamiento que AC-2
+//     prohíbe: es su opuesto.
+//
+// (c) LA DEROGACIÓN ESTÁ ACOTADA, Y EL LÍMITE ES VERIFICABLE. Vale ÚNICAMENTE para los steps cuyo
+//     output es un veredicto de autorización de dinero, y para ninguno más: **los legs de FX y de
+//     payout siguen pidiendo capacidad, sin una línea de diff** (T-C1b canda que su body no cambió
+//     un byte). Por eso las dos agujas de `PROHIBIDAS` se quedan como están: si mañana alguien
+//     "simplifica" el KYC y de paso vuelve a cablear FX o payout, este candado se pone rojo igual.
+//
+// (d) QUÉ LO CANDA AHORA, que es lo único que hace verificable todo lo de arriba:
+//     · el slug del validador viejo (`agent-env.ts`, la constante que compone la ruta, fail-closed y
+//       sin default) ⇒ **T-ENV-3** en `agent-env.test.ts`, que cuenta apariciones TEXTUALES en ese
+//       módulo y exige exactamente 1 — por eso ni la prosa de ese archivo lo nombra;
+//     · los dos slugs nuevos del KYC por gateway ⇒ **T-KGS-1 / T-KGS-2 / T-KGS-3** en
+//       `kyc-gateway-slug-count.static.test.ts`, que exigen una aparición cada uno y pinean además
+//       los importadores del transporte directo.
+//
+// ⛔ LO QUE NO SE HIZO, Y SE DICE: **ninguno de los tres se agregó a `PROHIBIDAS` con una excepción
+// por archivo.** Eso sería pasar por debajo de la lista de agujas sin declararlo, o sea ganar la
+// métrica sin cumplir la regla. La regla se cumple por otro lado —los conteos de (d)— y acá se
+// explica por qué.
+//
+// ⚠️ Y QUE NINGÚN CANDADO SE PONGA ROJO NO ES PERMISO PARA NO DECLARAR NADA: los dos slugs nuevos no
+// contienen ninguna de las dos agujas de `PROHIBIDAS` ni la subcadena del validador, así que habrían
+// entrado en silencio. Están declarados acá porque corresponde, no porque algo obligara.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
@@ -171,6 +188,11 @@ describe("AC-2 — barrido estático: ningún nombre de agente en el código de 
     // Y el control positivo del propio assert: las agujas SÍ cubren lo que tienen que cubrir. Sin
     // esto, un `PROHIBIDAS` vacío pasaría el `toBe(false)` de arriba y este `it` sería vacuo.
     expect(PROHIBIDAS.some((n) => "remit-corridor-fx-solana".includes(n))).toBe(true);
+    // WKH-366 — la misma mitad medible para los DOS slugs nuevos. El punto (d) de la cabecera dice
+    // que sus candados son T-KGS-1/2/3 y no `PROHIBIDAS`; esto lo vuelve falsable acá mismo, en vez
+    // de dejarlo como una afirmación de prosa que envejece sola.
+    expect(PROHIBIDAS.some((n) => "remit-kyc-session".includes(n))).toBe(false);
+    expect(PROHIBIDAS.some((n) => "remit-kyc-decision".includes(n))).toBe(false);
   });
 
   it("AC-2: cero hits en `src` y `app` (excluidos los `*.test.*`), en código Y en comentarios", () => {

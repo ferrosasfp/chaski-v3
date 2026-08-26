@@ -4,7 +4,15 @@
 // test sobre el status no distingue "se mandó bien" de "se mandó cualquier cosa y el doble contestó
 // 200 igual".
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createAgentKycSession, readAgentKycDecision } from "./agent-kyc-client";
+// WKH-366/W3: los dos exports se renombraron a `…Direct` (el despachador `kyc-transport.ts` se
+// quedó con los nombres viejos). Los ALIAS locales existen para que los ~40 `it` de este archivo
+// midan EXACTAMENTE el mismo cuerpo que antes, sin un solo cambio de assert: lo que WKH-366 tiene
+// que demostrar acá es que el cliente directo no cambió de comportamiento, y un archivo de test
+// reescrito no puede demostrar eso.
+import {
+  createAgentKycSessionDirect as createAgentKycSession,
+  readAgentKycDecisionDirect as readAgentKycDecision,
+} from "./agent-kyc-client";
 
 const BASE = "https://agentes.test";
 
@@ -300,8 +308,8 @@ describe("T-CLI-4' · la credencial de invoke es OBLIGATORIA (fail-closed, WKH-2
   it("🔴 el módulo se puede IMPORTAR con la env ausente: tira en la llamada, no en el import", async () => {
     vi.stubEnv("KYC_AGENT_INVOKE_SECRET", undefined);
     const mod = await import("./agent-kyc-client");
-    expect(typeof mod.createAgentKycSession).toBe("function");
-    expect(typeof mod.readAgentKycDecision).toBe("function");
+    expect(typeof mod.createAgentKycSessionDirect).toBe("function");
+    expect(typeof mod.readAgentKycDecisionDirect).toBe("function");
   });
 
   // 🧪 CONTROL POSITIVO: el error es el de la CREDENCIAL y no el del host. Sin esto, los `it` de

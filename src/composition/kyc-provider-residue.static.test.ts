@@ -163,16 +163,30 @@ const PERMITIDOS_G1: ReadonlyMap<string, number> = new Map([
 /**
  * G-3 — dónde puede aparecer `identityMatches` en producción.
  *
- * 🔴 SON DOS ARCHIVOS, NO CUATRO, Y ES A PROPÓSITO MÁS ESTRICTO QUE EL PLAN. El plan de la HU
+ * 🔴 EL CRITERIO ES «EL BORDE», Y ES A PROPÓSITO MÁS ESTRICTO QUE EL PLAN DE WKH-233. Aquel plan
  * permitía además `src/infrastructure/payout/authority.ts` y `app/api/kyc/decision/route.ts`. Medido
  * al cierre: **ninguno de los dos lo lee**, y no leerlo es justamente DT-5' —el gate es
  * `payoutAllowed === true` y NADA MÁS, porque recomponer el criterio con `approved && identityMatches`
  * sería re-implementar el juicio de KYC—. ⇒ permitirlo ahí habría dejado abierta la puerta exacta que
- * la HU cierra. Los dos que quedan son el borde: el TIPO y el módulo que lo estrecha.
+ * esa HU cerró.
+ *
+ * ⚠️ ACÁ DECÍA «SON DOS ARCHIVOS, NO CUATRO», Y WKH-366 LO VOLVIÓ FALSO EL 2026-08-26. Hoy son TRES,
+ * y el tercero entra por el MISMO criterio, no por una excepción: el TIPO
+ * (`agent-contract.ts`) y **los dos módulos que estrechan la respuesta**, uno por transporte
+ * —`agent-kyc-client.ts` (HTTP directo al agente) y `gateway-kyc-client.ts` (por el Coordinador)—.
+ * Los dos leen el campo para lo mismo y sólo para eso: **preservarlo AUSENTE**. Que la clave falte
+ * significa "no se preguntó"; un `?? false` sería una acusación sobre la persona, y es lo que los
+ * dos tienen prohibido y ningún otro archivo necesita hacer.
+ *
+ * 🔴 EL NÚMERO NO ES EL CRITERIO Y ENVEJECE SOLO — acabamos de verlo. El criterio es: **sólo el tipo
+ * del borde y los módulos que estrechan la respuesta del agente**. Cuando W6 borre el transporte
+ * directo, esta lista vuelve a dos, y el que sobra hay que borrarlo de acá también: una excepción a
+ * un archivo que ya no existe no protege nada.
  */
 const PERMITIDOS_IDENTITY_MATCHES: ReadonlySet<string> = new Set([
   "src/infrastructure/kyc/agent-contract.ts",
   "src/infrastructure/kyc/agent-kyc-client.ts",
+  "src/infrastructure/kyc/gateway-kyc-client.ts",
 ]);
 
 /** G-5 — los DOS únicos sitios de la lectura SIN filtro de dueño. Ver el docblock del store. */

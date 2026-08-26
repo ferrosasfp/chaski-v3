@@ -175,7 +175,7 @@ function warnError(rama: string, err: unknown): void {
  * nace vacía (fail-closed), así que mandarlo sin esa env sería un 400 garantizado; y el retomar del
  * flujo de Chaski no depende del callback sino del pendiente en `localStorage`.
  */
-export async function createAgentKycSession(input: {
+export async function createAgentKycSessionDirect(input: {
   identityRef?: string;
 }): Promise<AgentKycCall<KycAgentSessionOutput>> {
   const url = kycAgentUrl(resolveKycAgentBaseUrl(), "session");
@@ -231,7 +231,7 @@ export async function createAgentKycSession(input: {
  * es lo correcto: no se preguntó. Rellenarlo con cualquier valor que no venga de una prueba de
  * posesión reabre el binding falso que costó un bloqueante cerrar.
  */
-export async function readAgentKycDecision(input: {
+export async function readAgentKycDecisionDirect(input: {
   sessionId: string;
   identityClaim?: string;
   decisionToken: string;

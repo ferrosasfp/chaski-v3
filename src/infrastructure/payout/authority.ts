@@ -66,7 +66,7 @@
 //   4. el token, OWNER-SCOPED           → 503 (misconfig) / 502 (lectura rota) / 200 sin fila
 //   5. el agente                        → 502 (!ok, throw, JSON roto) / 200 con su veredicto
 import { canonicalizeAddress } from "../address";
-import { readAgentKycDecision } from "../kyc/agent-kyc-client";
+import { readAgentKycDecision } from "../kyc/kyc-transport";
 import { resolveKycAgentBaseUrl } from "../kyc/agent-env";
 import { getKycSessionTokenStore } from "../persistence/supabase-kyc-session-tokens";
 

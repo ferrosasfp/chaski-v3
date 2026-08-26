@@ -1,9 +1,35 @@
-// Infrastructure — cliente server-only del gateway wasiai-a2a (WKH-218, reescrito en WKH-304). 3er
-// modo de transporte value-delivery ("a2a-gateway"): NO resuelve el agente por nombre — manda
-// `capability` (+ `constraints` opcionales) por step a POST /compose y el GATEWAY resuelve, fail-closed
-// (WKH-304/CD-1). Este cliente ya no descubre agentes ni los elige: la resolución por nombre y su
-// caída silenciosa al primer agente de la lista se borraron enteras — corrían OTRO agente sin
-// decirlo, que es el anti-patrón que esta HU cierra.
+// Infrastructure — cliente server-only del gateway wasiai-a2a (WKH-218, reescrito en WKH-304,
+// ACOTADO en WKH-366 el 2026-08-26). 3er modo de transporte value-delivery ("a2a-gateway").
+//
+// 🔴 CÓMO SE PIDE UN STEP. Son DOS formas, y cada una tiene su regla — este bloque decía, sin
+// excepción, "NO resuelve el agente por nombre", y WKH-366 lo volvió falso:
+//
+//   (a) EL CASO GENERAL, que no cambió — `{capability, input, constraints?}`. Este cliente NO
+//       resuelve el agente: manda la CAPACIDAD y el GATEWAY resuelve, fail-closed (WKH-304/CD-1).
+//       La resolución por nombre y su caída silenciosa al primer agente de la lista se borraron
+//       enteras: corrían OTRO agente sin decirlo, que es el anti-patrón que WKH-304 cerró. Los dos
+//       legs vivos —FX y payout— piden así, y su body no cambió UN BYTE en WKH-366 (T-C1b).
+//
+//   (b) LA EXCEPCIÓN, ACOTADA Y CON SU MOTIVO (WKH-366 / AC-6 / CD-1) — `{agent, input}`. Un step
+//       cuyo output es un VEREDICTO DE AUTORIZACIÓN DE DINERO va PINEADO al slug. Ahí delegar la
+//       elección no es una simplificación: cambia QUIÉN CONTESTA `payoutAllowed`. Y la primera
+//       clave del ranking del gateway (`verified`) la AUTO-REPORTA el candidato, así que un tercero
+//       que se declare verificado ordena POR ENCIMA del agente propio. Del otro lado el Coordinador
+//       RECHAZA esas capacidades con 400 PRE-DÉBITO (`capability_requires_pinned_agent`) ⇒ el pin no
+//       es una preferencia, es el único camino que existe.
+//
+// 🔴 EL CONJUNTO DE LA EXCEPCIÓN SON EXACTAMENTE DOS CAPACIDADES, Y NINGUNA MÁS: crear la sesión de
+// verificación de identidad, y leer su veredicto. Ningún leg de FX ni de payout entra acá.
+//
+// 🔴 Y EL PIN SOLO NO ALCANZA. La verificación POST-HOC de quién ejecutó DE VERDAD (N3 de AC-6) NO
+// vive acá: vive en src/infrastructure/kyc/gateway-kyc-client.ts, que cruza `steps[i].agent` contra
+// el ORIGEN del deploy (`KYC_AGENT_BASE_URL`) —más el par (slug, registry) como cinturón— y rechaza
+// si no coincide. Este cliente sólo TRANSPORTA esos datos (`agents`, `invokeUrls`, `bridged`); no
+// decide nada con ellos. El campo que sostiene esa decisión es la `invokeUrl` del ejecutor, que este
+// cliente descartaba y que hoy viaja en `invokeUrls` — un arreglo PARALELO a `agents`, y no una
+// clave adentro de `GatewayAgentRef`, porque ese objeto se ecoa al browser. El porqué, con el
+// incidente que lo obligó, está en los docblocks de los dos.
+//
 // Multi-step por contrato (`steps[]`), errores GRANULARES (índice del paso + code/reason reales del
 // gateway) en vez de colapsar todo a "unavailable". Lo importan SOLO las routes server-only
 // (NUNCA container.ts ni "use client" — CD-A2A-10). Cero PII / cero secreto en logs (CD-8/CD-9):
@@ -94,11 +120,23 @@ export type GatewayConstraints = {
   allow_trial?: boolean;
 };
 
-export type GatewayStep = {
-  capability: string; // NUNCA `agent` (CD-1)
-  input: Record<string, unknown>; // el body TAL CUAL
-  constraints?: GatewayConstraints;
-};
+/**
+ * Un step del pipeline. UNIÓN DISCRIMINADA (WKH-366/DT-13), y las dos variantes existen por razones
+ * distintas:
+ *
+ *  · `{capability, …}` — el caso normal (CD-1/WKH-304): el GATEWAY resuelve quién ejecuta. Es lo que
+ *    emiten los legs de FX y de payout, y su body es BYTE-IDÉNTICO al de antes de WKH-366 (T-C1b).
+ *  · `{agent, …}` — WKH-366/AC-6: SÓLO para capacidades cuyo output es un VEREDICTO DE AUTORIZACIÓN
+ *    DE DINERO. Ahí "delegar la elección" no es una simplificación: cambia quién contesta
+ *    `payoutAllowed`. El Coordinador rechaza esas capacidades con 400 pre-débito
+ *    (`capability_requires_pinned_agent`), así que el pin no es una preferencia: es el único camino.
+ *
+ * ⛔ Las dos claves son MUTUAMENTE EXCLUYENTES: `agent` + `capability` juntos ⇒ `ambiguous_step`
+ * (400) del servidor. El tipo lo impide en compilación.
+ */
+export type GatewayStep =
+  | { capability: string; input: Record<string, unknown>; constraints?: GatewayConstraints }
+  | { agent: string; input: Record<string, unknown> };
 
 /**
  * QUIÉN ejecutó un step, tal como lo dijo el gateway. Se lee de `steps[i].agent` (+ `resolvedFrom`),
@@ -106,6 +144,15 @@ export type GatewayStep = {
  *
  * Es trazabilidad, no una decisión: nada del transporte lo usa para elegir, reintentar ni validar.
  * Sirve para poder responder "qué agente atendió esta remesa", que sin esto no se podía responder.
+ *
+ * 🔴 ESTE OBJETO SE ECOA AL BROWSER TAL CUAL, Y ESO ACOTA QUÉ PUEDE VIVIR ACÁ ADENTRO. Dos rutas
+ * hacen `{ agent: r.agents[0] }` sin proyectar campo por campo (`app/api/a2a/quote/route.ts` y
+ * `app/api/payout/prepare/route.ts`) ⇒ **toda clave que se agregue a este tipo sale por HTTP.**
+ * ⛔ NO es hipotético: el fix-pack del AR agregó acá el `invokeUrl` del ejecutor y las dos rutas
+ * empezaron a filtrar la URL interna del agente al navegador. Lo cazaron sus propios tests
+ * (`expect(raw).not.toContain("interno.example.com")`), y por eso ese dato terminó en `invokeUrls`,
+ * un arreglo PARALELO que las rutas no ecoan. ⛔ Antes de agregar una clave acá, mirá los dos call
+ * sites: si el dato no puede salir por HTTP, no va en este tipo.
  */
 export type GatewayAgentRef = {
   slug: string;
@@ -185,6 +232,39 @@ export type GatewayResult =
        * que un `agent` ilegible NO invalida un output que sí es válido.
        */
       agents: (GatewayAgentRef | null)[];
+      /**
+       * 🔴 WKH-366 fix-pack (AR/BLQ-ALTO-1) — A QUÉ URL LE HABLÓ EL COORDINADOR, uno por step y en
+       * el MISMO orden que `outputs`. `null` = el gateway no la dijo con el tipo exacto.
+       *
+       * ⛔ NO ES TRAZABILIDAD Y NO VA ADENTRO DE `GatewayAgentRef`, y la separación es el control:
+       * las dos rutas que ecoan al browser hacen `{ agent: r.agents[0] }` sin proyectar, así que
+       * meterlo ahí filtraba la URL interna del agente al navegador — pasó, y lo cazaron los tests
+       * de esas rutas. Acá vive un dato que se LEE PARA DECIDIR y que jamás debe salir por HTTP.
+       *
+       * QUIÉN LO USA Y PARA QUÉ: `kyc/gateway-kyc-client.ts` cruza su ORIGEN contra
+       * `KYC_AGENT_BASE_URL` —una env del DEPLOY, no del catálogo— y sin coincidencia no autoriza
+       * un desembolso. Es la única mitad de N3 (AC-6) cuyo lado derecho no lo elige un publicador.
+       *
+       * `null` y no `""` a propósito: `""` compararía igual contra otro `""` y dos "no sé" pasarían
+       * por una coincidencia. Del otro lado, `null` es un RECHAZO.
+       */
+      invokeUrls: (string | null)[];
+      /**
+       * WKH-366 / CD-2 — ¿el gateway reportó que un BRIDGE corrió sobre este step?
+       *
+       * Uno por step, en el MISMO orden que `outputs`. `true` = el step trae un `bridgeType`
+       * presente y distinto de `undefined`, sea cual sea su valor.
+       *
+       * 🔴 SE MIDE LA PRESENCIA, NO EL VALOR, Y ES A PROPÓSITO. Enumerar valores conocidos
+       * ("LLM", "CACHE_L1", …) sería fail-OPEN sobre cualquier valor que el gateway agregue
+       * mañana, y el consumidor de esto es el gate de un desembolso. Sólo la AUSENCIA pasa.
+       *
+       * ⚠️ ESTA CLAVE NO ES UNA DECISIÓN DE DISEÑO DE ESTA CAPA: es superficie FORZADA por el gap
+       * G-3 del Story File de WKH-366 (el SDD daba por disponible un `bridgeType` que este cliente
+       * no exponía, y sin ella T-C6 era inimplementable). Se anota así para que AR/CR la evalúen
+       * como lo que es.
+       */
+      bridged: boolean[];
     }
   | GatewayFailure;
 
@@ -216,6 +296,20 @@ function readAgentRef(entry: unknown): GatewayAgentRef | null {
     ...(capability !== undefined ? { capability } : {}),
     ...(trial !== undefined ? { trial } : {}),
   };
+}
+
+/**
+ * `steps[i].agent.invokeUrl` — la URL a la que el Coordinador le habló DE VERDAD.
+ *
+ * 🔴 VIVE APARTE DE `readAgentRef` PORQUE SU SALIDA VA APARTE (ver `invokeUrls`): lo que ese lector
+ * arma se ecoa al browser, y esto no puede salir por HTTP. Sin el tipo exacto devuelve `null`, que
+ * del otro lado es un rechazo y no un "seguí".
+ */
+function readInvokeUrl(entry: unknown): string | null {
+  if (!isRecord(entry)) return null;
+  const agent = entry.agent;
+  if (!isRecord(agent)) return null;
+  return typeof agent.invokeUrl === "string" && agent.invokeUrl ? agent.invokeUrl : null;
 }
 
 // Config server-only (SIN NEXT_PUBLIC_, CD-3), leída en runtime dentro de la fn (patrón !BASE).
@@ -326,11 +420,18 @@ export async function runViaGateway(params: { steps: GatewayStep[] }): Promise<G
         ...(cfg.paymentChain ? { "x-payment-chain": cfg.paymentChain } : {}),
       },
       body: JSON.stringify({
-        steps: params.steps.map((s) => ({
-          capability: s.capability,
-          input: s.input,
-          ...(s.constraints ? { constraints: s.constraints } : {}),
-        })),
+        // WKH-366: cada variante emite EXACTAMENTE sus claves y nada más. La rama `capability` es la
+        // de siempre, sin un byte de diferencia (T-C1b); la rama `agent` emite dos claves y NUNCA
+        // `constraints` (el tipo tampoco la deja declarar: pinear ya elige, restringir sería ruido).
+        steps: params.steps.map((s) =>
+          "agent" in s
+            ? { agent: s.agent, input: s.input }
+            : {
+                capability: s.capability,
+                input: s.input,
+                ...(s.constraints ? { constraints: s.constraints } : {}),
+              },
+        ),
       }),
       signal: AbortSignal.timeout(10_000),
     });
@@ -370,7 +471,7 @@ export async function runViaGateway(params: { steps: GatewayStep[] }): Promise<G
     // sin esta línea el MISMO fallo del agente se clasificaría distinto según con qué status
     // llegue (400 ⇒ el `if (!res.ok)` de arriba sí lo trae; 200+success:false ⇒ no). Esa asimetría
     // silenciosa es lo que la línea previene. CR/MNR-4: va en un `const` y NO evaluado dos veces
-    // dentro del spread, que es el patrón de `readFailureFields` (`agentFailure`, `:264`) y el de
+    // dentro del spread, que es el patrón de `readFailureFields` (`agentFailure`, `:358`) y el de
     // las otras cuatro claves. Hoy `readAgentFailure` es pura y barata; el costo de tener las dos
     // formas en el mismo archivo es que se copia la mala el día que deje de serlo.
     const agentFailure = readAgentFailure(parsed.agentFailure);
@@ -391,6 +492,8 @@ export async function runViaGateway(params: { steps: GatewayStep[] }): Promise<G
   }
   const outputs: Record<string, unknown>[] = [];
   const agents: (GatewayAgentRef | null)[] = [];
+  const invokeUrls: (string | null)[] = [];
+  const bridged: boolean[] = [];
   for (let i = 0; i < steps.length; i++) {
     const entry: unknown = steps[i];
     const output = isRecord(entry) ? entry.output : undefined;
@@ -399,11 +502,18 @@ export async function runViaGateway(params: { steps: GatewayStep[] }): Promise<G
     // QUIÉN lo ejecutó. El gateway ya lo mandaba en `steps[i].agent` y este cliente lo tiraba.
     // No participa de ninguna validación: un agente ilegible da `null`, nunca un bad_response.
     agents.push(readAgentRef(entry));
+    // A QUÉ URL le habló. Va SEPARADO de `agents` y no adentro: ver el docblock de `invokeUrls`.
+    // Mismo criterio de lectura que el resto —sin el tipo exacto no se afirma nada— pero acá el
+    // "no sé" se representa con `null` y no con una clave ausente, porque el arreglo es posicional.
+    invokeUrls.push(readInvokeUrl(entry));
+    // WKH-366/CD-2 — PRESENCIA, no valor (ver el docblock de `bridged`). Un step sin la clave, o con
+    // la clave en `undefined`, es el único caso que da `false`. Cualquier otra cosa es `true`.
+    bridged.push(isRecord(entry) && "bridgeType" in entry && entry.bridgeType !== undefined);
   }
 
   // 8. Happy path: outputs[i] = steps[i].output SIN re-desenvolver (el gateway ya hizo
   //    output = data.result ?? data, DT-A2A-6). Cada route revalida su propio shape final.
-  return { ok: true, outputs, agents };
+  return { ok: true, outputs, agents, invokeUrls, bridged };
 }
 
 /** Log de fallo con SÓLO enums (CD-9): ni el `message` del gateway, ni el input (PII), ni la URL,

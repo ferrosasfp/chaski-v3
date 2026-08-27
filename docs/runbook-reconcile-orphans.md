@@ -4,9 +4,11 @@
 > estaba configurado en producción, **y no lo invocaba nadie**: no había `vercel.json`, el único
 > workflow del repo no tenía `schedule:`, ningún script de `package.json` mencionaba la ruta y no hay
 > UI de administración. Ahora hay un `.github/workflows/reconcile-orphans.yml` que queda declarado
-> para invocarla cada hora, y este documento dice qué hacer con cada rojo de ese workflow. ⛔ Antes de
-> apoyarte en eso: al 2026-08-19 **ese workflow todavía no corrió ni una vez**, y hay dos
-> pre-requisitos founder-only pendientes. Están medidos en la sección de abajo.
+> para invocarla cada hora, y este documento dice qué hacer con cada rojo de ese workflow. ⛔ Este
+> encabezado decía, hasta el 2026-08-27, que «ese workflow todavía no corrió ni una vez» y que había
+> dos pre-requisitos pendientes: las dos cosas dejaron de ser ciertas el mismo 2026-08-19, unas horas
+> después, y la sección de abajo ya lo había corregido mientras este párrafo seguía viejo. El estado
+> se lee corriendo los comandos de esa sección, nunca acá.
 
 ## ✅ Estado al 2026-08-19 12:30 UTC: el cron CORRE, y su primera corrida encontró hallazgos reales
 

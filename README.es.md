@@ -497,8 +497,13 @@ nunca los ids de correlación: los logs de un repositorio público son públicos
 Estado al 2026-08-27, medido: el workflow **está registrado y corriendo**. `gh api
 repos/ferrosasfp/chaski-v3/actions/workflows` lista `ci.yml` y `reconcile-orphans.yml`, los dos
 `active`; `gh run list --workflow=reconcile-orphans.yml` devuelve corridas horarias con evento
-`schedule`; y el secret `RECONCILE_ADMIN_SECRET` está cargado desde el 2026-08-19. Lo que sigue sin
-estar resuelto es la cadencia: de las cinco corridas más recientes, dos terminaron en rojo. Ese estado
+`schedule`; y el secret `RECONCILE_ADMIN_SECRET` está cargado desde el 2026-08-19. Dos de las cinco corridas más recientes
+terminaron en rojo, y acá el rojo es la señal funcionando, no el job rompiéndose: las dos fallan en el
+tercer paso —`sin hallazgos que revisar`— con el paso de transporte en verde, que es como este
+workflow avisa que hay filas huérfanas esperando a una persona. Lo que la lista de corridas sí muestra
+es que el tick horario no es confiable: entre la corrida del 2026-08-26T23:49Z y la del
+2026-08-27T10:02Z pasaron diez horas, justo el tick salteado del que advierte la sección de abajo. Una
+corrida roja y una corrida ausente no se parecen en nada, y sólo una de las dos está en la pantalla. Ese estado
 se lee corriendo esos comandos, nunca creyéndole a este párrafo — una versión anterior decía que el
 workflow no había corrido nunca, y estaba escrita unas horas antes de que se cargara el secreto, sin
 volver a medirse. Qué hacer con cada rojo está en

@@ -470,8 +470,13 @@ logs of a public repository are public.
 Status on 2026-08-27, measured: the workflow **is registered and running**. `gh api
 repos/ferrosasfp/chaski-v3/actions/workflows` lists both `ci.yml` and `reconcile-orphans.yml` as
 `active`, `gh run list --workflow=reconcile-orphans.yml` returns hourly runs with a `schedule` event,
-and `RECONCILE_ADMIN_SECRET` has been loaded since 2026-08-19. What is not settled is the cadence: of
-the five most recent runs, two ended red. That state is read by running those commands, never by
+and `RECONCILE_ADMIN_SECRET` has been loaded since 2026-08-19. Two of the five most recent runs ended red, and red here
+is the signal working, not the job breaking: both failed on the third step — `sin hallazgos que
+revisar` — with the transport step green, which is how this workflow reports that there are orphan
+rows waiting for a person. What the run list does show is that the hourly tick is not reliable: the
+gap between the runs of 2026-08-26T23:49Z and 2026-08-27T10:02Z is ten hours, exactly the skipped
+tick the section below warns about. A red run and an absent run look nothing alike, and only one of
+them is on the screen. That state is read by running those commands, never by
 trusting this paragraph — an earlier version of it said the workflow had never run, and it was written
 a few hours before the secret was loaded and never re-measured. Per-failure guidance is in
 [`docs/runbook-reconcile-orphans.md`](docs/runbook-reconcile-orphans.md), whose own status table dates

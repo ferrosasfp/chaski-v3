@@ -387,7 +387,13 @@ de esta app y rechazan un origen ajeno y una petición sin origen. Su límite ho
 sitio web** use la credencial, no que un script mande la cabecera a mano.
 
 ⚠️ Una consecuencia que conviene saber antes de escribir herramientas: `getProgramAccounts` **no está
-disponible en el plan gratuito de ese proveedor**, y el endpoint público lo limita por cuota. La app nunca
+disponible en el plan gratuito de ese proveedor**, y el endpoint público lo limita por cuota. Medido
+el 2026-08-27, con el control que hace que la medición signifique algo: `getHealth` contra el MISMO
+endpoint devuelve `ok`, así que está alcanzable y autenticado y lo que falta es el método —
+`getProgramAccounts is not available on the Free tier - upgrade to Pay As You Go`. Sin ese control,
+una petición bloqueada y un método ausente se ven idénticos. La consecuencia para quien quiera
+enumerar escrows está trackeada en `wasiai-a2a#180`: el dedicado no ofrece el método, el público lo
+ofrece pero se cae por cuota, y ninguna de las dos mitades sola deja camino. La app nunca
 lo llama — cero ocurrencias en todo el árbol. Los métodos que sí usa son ocho: `getAccountInfo`,
 `getMultipleAccountsInfo`, `getLatestBlockhash`, `getBalance`, `getBlockHeight`,
 `getSignatureStatuses`, `sendRawTransaction` y `confirmTransaction`. La verificación contra el

@@ -361,7 +361,13 @@ request. Its honest limit: it stops another *website* from using the key, not a 
 header by hand.
 
 ⚠️ One consequence worth knowing before you reach for tooling: `getProgramAccounts` is **not available on
-that provider's free tier**, and the public endpoint rate-limits it. The app never calls it — zero occurrences in the whole
+that provider's free tier**, and the public endpoint rate-limits it. Measured 2026-08-27, with the
+control that makes the measurement mean something — `getHealth` against the *same* endpoint returns
+`ok`, so the endpoint is reachable and authenticated and it is the method that is missing:
+`getProgramAccounts is not available on the Free tier - upgrade to Pay As You Go`. Without that
+control a blocked request and an absent method look identical. The consequence for anyone who wants
+to enumerate escrows is tracked in `wasiai-a2a#180`: the dedicated endpoint does not offer the
+method, the public one offers it but rate-limits, and neither half alone is a path. The app never calls it — zero occurrences in the whole
 tree. The methods it does use are eight: `getAccountInfo`, `getMultipleAccountsInfo`,
 `getLatestBlockhash`, `getBalance`, `getBlockHeight`, `getSignatureStatuses`, `sendRawTransaction` and
 `confirmTransaction`. The verification against the provider covered the first five of that list; the

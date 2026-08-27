@@ -24,7 +24,7 @@ Los cuatro pre-requisitos, **medidos hoy**, y las dos ramas del job **observadas
 | El workflow registrado en GitHub | ✅ **SÍ**, `state: active` | `gh api repos/ferrosasfp/chaski-v3/actions/workflows` |
 | Una corrida con **`event: schedule`** — el único nivel que prueba el registro | ✅ **SÍ**: `2026-08-19T11:46:15Z` | `gh api …/workflows/reconcile-orphans.yml/runs` |
 | El secreto en los Secrets de Actions | ✅ **SÍ**, cargado 11:51:35 UTC | `gh api …/actions/secrets` ⇒ `total_count=1` |
-| El backlog real de `prepared` huérfanas | ✅ **MEDIDO**: `preparedOrphans.total=6`, `failed=0`, `manualReview=19` | la corrida de las 11:51 |
+| El backlog real de `prepared` huérfanas | ✅ **MEDIDO el 2026-08-19**: `preparedOrphans.total=6`, `failed=0`, `manualReview=19`. ⚠️ Es una foto de ese día, no el estado de hoy — el vigente y cómo derivarlo están en **«Línea de base declarada»** | la corrida de las 11:51 |
 
 ### Las dos ramas, observadas con 5 minutos de diferencia
 
@@ -153,6 +153,95 @@ igual.** La mitigación reduce el riesgo, **no lo elimina** — no la cuentes co
 
 Son dos pasos con nombre propio y distinto justamente para que el rojo se lea de un vistazo: un rojo
 de L1 es un problema de **plomería**; un rojo de L2 es un problema de **negocio**.
+
+## 🟠 Línea de base declarada — por qué L2 está rojo y va a seguir estándolo
+
+> Escrito el **2026-08-27**. Esta sección existe porque el propio runbook fija la regla, unas líneas
+> más abajo: *"si el rojo de L2 se vuelve permanente, la decisión no es bajarle el volumen: es limpiar
+> el backlog o dejar escrito acá por qué se convive con él, con fecha"*. **No se puede limpiar**, así
+> que acá está el porqué.
+
+### El motivo, y no es un bug
+
+**La pata de payout es un stub mientras no haya proveedor de pagos contratado.** Consecuencia
+mecánica: el depósito aterriza (`principal_in`), el payout nunca ocurre, y a los 15 minutos el
+barrido de varadas etiqueta la fila como `manual_review`.
+
+⇒ **Cada depósito exitoso produce un `manual_review` más.** L2 no puede volver a verde por sí solo.
+Lo que lo termina es una sola cosa, y es de producto, no de código: **que exista una pata de payout
+real**. Hasta entonces esta sección es la explicación del rojo.
+
+### El estado medido — y cómo re-derivarlo, porque el número envejece
+
+Al **2026-08-27**, sobre las 33 filas del ledger:
+
+| | |
+|---|---|
+| `manual_review` | **25** |
+| `failed` | 8 |
+| **`settled`** | **0 — ninguna remesa llegó nunca a éxito terminal** |
+| escrows vivos | **8**, con **48 USDC de devnet** en custodia |
+
+⚠️ **Estos cuatro números son una foto y se pudren solos** — es el mismo modo de falla que este
+documento ya se comió una vez, tres secciones más arriba. No te apoyes en ellos: **derivalos**.
+
+```bash
+# distribución de estados, ahora
+curl -s "$SUPABASE_URL/rest/v1/remittance_settlements?select=status" \
+  -H "apikey: $KEY" -H "authorization: Bearer $KEY" | jq -r '.[].status' | sort | uniq -c
+```
+
+Lo **durable** de esta sección no es la tabla: es la regla de lectura de abajo.
+
+### Cómo leer el rojo de L2 mientras dure esto
+
+La anotación del job trae los tres contadores. **No son intercambiables:**
+
+| Contador | Qué significa hoy | ¿Accionable? |
+|---|---|---|
+| `preparedOrphans.total > 0` | Hay órdenes sin depósito registrado pasado el vencimiento de la atestación | **SÍ, siempre.** Ver el procedimiento de abajo |
+| `manualReview > 0` | El barrido acaba de etiquetar filas varadas **en esta corrida** | Sólo si la tasa no se explica por los depósitos del período |
+| `failed > 0` | Una etiqueta no se pudo escribir | **SÍ, siempre.** Es una falla de escritura |
+
+`manualReview` cuenta lo etiquetado **en esa corrida**, no el total acumulado: una fila ya etiquetada
+sale del conjunto y no se vuelve a contar. Así que un `manualReview: 4` con cuatro depósitos en la
+última hora es el backlog conocido creciendo al ritmo esperado; el mismo `4` sin depósitos en el
+período **no lo es**, y ahí sí hay que mirar.
+
+⚠️ **Lo que esta línea de base NO autoriza es ignorar L1.** El riesgo entero de convivir con un L2
+crónicamente rojo es que entrena a no abrir el job, y ahí una falla de **transporte** —el endpoint
+caído, el secreto vencido, el host cambiado— pasa desapercibida. L1 y L2 son pasos con nombre propio
+justamente para que se puedan mirar por separado: **abrir el job y leer cuál de los dos está rojo
+cuesta diez segundos, y es la única parte de esta sección que no es opcional.**
+
+### Procedimiento para una `prepared` huérfana — el discriminador es el HISTORIAL, no la existencia
+
+⛔ **`getAccountInfo` sobre la PDA del escrow NO alcanza**, y equivocarse acá cierra en falso un caso
+real: **un escrow reembolsado también está cerrado**, así que "la cuenta no existe" no distingue
+*nunca depositó* de *depositó y le devolvieron*.
+
+Lo que discrimina es cuántas firmas tuvo la cuenta **en toda su vida**:
+
+```
+seeds  = ["escrow", <sender>, sha256(utf8(<remittanceId>))[:16]]     # de solana-wallet.ts
+```
+⚠️ Tomá las semillas de `src/infrastructure/solana-wallet.ts` (`deriveEscrowStateFromId16`), **no** de
+`solana-sponsor.ts` del repo del facilitator, que las documenta mal y produce un falso *"no aterrizó"*.
+
+```bash
+getSignaturesForAddress(<pda>)
+#   0 firmas  ⇒ la cuenta NUNCA existió ⇒ abandono. Sin fondos que recuperar.
+#  >0 firmas + la cuenta NO existe ⇒ hubo depósito y se cerró (release o refund): NO es abandono.
+#  >0 firmas + la cuenta existe    ⇒ 🔴 hay plata en escrow. Esto no se cierra, se escala.
+```
+
+**Control positivo obligatorio antes de creerle a un cero:** corré la misma derivación sobre una fila
+con depósito confirmado y verificá que da ≥1 firma. Un cero que no se contrastó puede ser una
+derivación equivocada, y se lee idéntico a un abandono.
+
+Confirmado el abandono, la fila se cierra a `failed` con el motivo en `last_error` (texto sin PII,
+CD-7), con un `UPDATE` filtrado además por `status=eq.prepared` — compare-and-swap, para que no pise
+una fila que cambió mientras mirabas. Precedentes: 6 filas el 2026-08-19, 2 el 2026-08-27.
 
 ## Rojo de L1, código por código
 

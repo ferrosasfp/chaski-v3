@@ -16,8 +16,8 @@ composed, and where the work stands today, including the two places where the ch
 open and why.
 
 > **A note on the name.** The hosting project was created as `chaski-v2` and cannot be renamed from
-> here, so the deployed site is served from `chaski-v2.vercel.app`. The same string survives on purpose
-> in the `id` field of `public/manifest.json`: changing a PWA manifest `id` orphans existing installs.
+> here, so the deployed site is served from `chaski-v2.vercel.app`. That is the only place the old
+> string survives: the PWA manifest `id` is `chaski-v3` (`public/manifest.json:4`), same as the repo.
 
 ## Try it on devnet
 
@@ -28,7 +28,7 @@ Circle's devnet USDC. No real money moves, and nobody is asked for a real identi
 in it, and that is the first wall a tester hits. The screen says so and offers the way through: a
 button that reopens the same URL inside Phantom, built as
 `https://phantom.app/ul/browse/<url>?ref=<origin>` (`src/presentation/wallet-availability.ts:26-28`,
-screen copy at `src/presentation/flow.tsx:1311-1329`). On a computer the path is the other one:
+screen copy at `src/presentation/flow.tsx`, el `href={phantomBrowseUrl(...)}`). On a computer the path is the other one:
 install the Phantom or Solflare extension and reload. Those two are the only wallets the app wires
 (`src/presentation/solana/solana-providers.tsx:228`).
 
@@ -64,13 +64,13 @@ in the same file).
    (`src/domain/remittance.ts:31` and `:44`), so an invented number gets you through.
 3. Identity. **In this deployment it is simulated**: the screen states that it verifies nothing and
    asks for no data. That screen only exists when the operator declares the mock
-   (`src/infrastructure/didit/mock-surface-enabled.ts:26`), and the deployed app served it with a 200
+   (`src/infrastructure/mock-surface.ts`, `mockDiditSurfaceEnabled()`), and the deployed app served it with a 200
    on 2026-08-16.
 4. Confirm. **The wallet asks to sign twice, and that is deliberate**: first the deposit transaction,
    then a readable message naming this remittance, so that a captured transaction signature is not
-   enough for somebody else to get a deposit sponsored (`src/infrastructure/solana-wallet.ts:781-799`).
+   enough for somebody else to get a deposit sponsored (`src/infrastructure/solana-wallet.ts`, la asignación de `popSignature`).
 5. The deposit lands on chain and the screen links the transaction to the explorer
-   (`src/presentation/flow.tsx:3582`). The USDC are in the escrow vault, and the operator cannot
+   (`src/infrastructure/chain.ts`, `SOLANA_EXPLORER_TX_BASE`). The USDC are in the escrow vault, and the operator cannot
    redirect them.
 
 ### What will not happen, said before you start and not after
@@ -109,16 +109,21 @@ Where that stands today, in present tense:
 - **There is no point to point path any more.** This bullet said it was the active one, calling a known
   base URL. WKH-332 deleted that rail: by default the app wires the demo gateways and calls no agent.
 - **By capability is the only transport, and this flag does not switch it off.**
-  `app/api/a2a/quote/route.ts:91-96` and `app/api/payout/prepare/route.ts:392-396` send a `capability`,
+  `app/api/a2a/quote/route.ts`, el `capability:` y su `constraints.min_reputation` and `app/api/payout/prepare/route.ts:392-396` send a `capability`,
   plus a reputation floor on each leg, and let the gateway choose. `NEXT_PUBLIC_VALUE_DELIVERY_ADAPTER`
   picks ONE client adapter, the quote; the payout STATUS no longer hangs off it (WKH-337 reads it from the ledger);
   these routes never read it. Drop the gateway URL or key and both answer 501 with no fetch.
 - **It is fail closed on purpose.** If the gateway does not answer, the operation stops. It never falls
   back to a direct call, because a silent fallback would create the payout order with a different agent
   than the one the rest of the flow was built around.
-- **Identity is not on this rail yet.** KYC is still a direct integration with a provider
-  (`src/infrastructure/didit/kyc-gateway.ts`), with no capability declared for it. Moving it onto the
-  same rail is open work.
+- **Identity is already an agent; what it is not yet is requested by capability.** WKH-233 replaced the
+  direct provider integration with a KYC agent (`src/infrastructure/kyc/agent-kyc-gateway.ts`), and
+  WKH-366 added the gateway transport behind `KYC_TRANSPORT`
+  (`src/infrastructure/kyc/kyc-transport.ts:51`), which sits at `direct` because that variable is not
+  declared in production. What is missing to put identity on the same rail as quoting and payout is
+  capability resolution: even over the gateway the body sends `agent: <slug>` and never `capability`,
+  which `gateway-kyc-client.test.ts:147` pins down with `expect(body).not.toContain("capability")`.
+  That is the open work — not the agentification, which already happened.
 
 ## Where this is today
 
@@ -156,10 +161,13 @@ from the public devnet RPC, no permission needed. What the chain proves is the t
 client was a phone browser is the report of whoever ran it, the same kind of evidence as the CSP
 walkthrough further down.
 
-**What is not proven is the full cycle, and the reason is not the deposit.** The 13 USDC of those two
-runs are still in custody: the two vaults held 7 and 6 USDC on 2026-08-16, and a
-`getTokenAccountBalance` on each says whether that is still true when you read this. Nothing failed
-there. The run ends where the system ends today, because the release is triggered by a person.
+**What is not proven is the full cycle, and the reason is not the deposit.** Of those two runs, the
+07:40 one is still in custody with **6 USDC** in vault
+`HcsP8afrHr8ofxALSrRcYnrP3QpJW8tdGzt4aDQJnDZr`; the 06:17 one was refunded, and its vault
+`GppYQSnQYZpE986zi9jGP2GHrGJQAMzgtQZpAwQX2Y2N` no longer exists — `getTokenAccountBalance` on it
+answers `could not find account`. Both addresses are spelled out so the figure never has to be taken
+on faith: that one call returns whatever is true the day you make it (measured 2026-08-27). Nothing
+failed there. The run ends where the system ends today, because the release is triggered by a person.
 
 **The way out was exercised too, and by the sender alone.** The escrow of 2026-08-15 passed its
 deadline and whoever deposited took the money back without anyone's cooperation:
@@ -190,7 +198,7 @@ public devnet RPC with `getTransaction`, without asking us for anything.
 and signers, never the program that assembled them. For the two runs above, the phone browser is the
 report of whoever ran them. For this one there is no such report, and what can be said is narrower:
 the four instruction shape `[limit, price, deposit, register]` is built only by the app's deposit
-path (`src/infrastructure/solana-wallet.ts:769-771`), while the smoke script builds three, with no
+path (`src/infrastructure/solana-wallet.ts`, el `.add(limitIx, priceIx, ix, regIx)`), while the smoke script builds three, with no
 `register_escrow` (`scripts/smoke-solana-e2e.ts:455`), and its signer is not the sender those smoke
 runs were measured on (`src/application/solana-escrow-rent.ts:14`). So it is not a run of the smoke
 as this tree has it, and further than that the chain does not go.
@@ -223,8 +231,11 @@ spending the forward. That replacement is this branch, not open work.
 session without a binding to the sender's wallet address; `/api/payout/validate` would then authorize
 any address presented by an unauthenticated caller. This was reproduced in production: a public POST
 with an empty body created a session with no `vendor_data`, the mock approved it, and three unrelated
-addresses each passed validation. The endpoint now fails closed: `vendor_data` must match the address
-or the authorization is refused (WKH-180, reviewed in `app/api/payout/validate/route.test.ts:156-180`).
+addresses each passed validation. The endpoint now fails closed, and since WKH-233 the binding is no
+longer the `vendor_data` the provider echoed back: it is the token row, meaning the pair
+`(session, address)`. No binding, no authorization. The observable outcome of the route did not change,
+which is why the assertions did not either (WKH-180 + WKH-233, reviewed in
+`app/api/payout/validate/route.test.ts:156-180`).
 The second fix: the confirmation endpoint now verifies that the wallet address exists before querying
 the payout authority. If the KYC session has no address, `confirm-and-send` returns `wallet_address_unavailable`
 instead of letting an empty address travel to the authority, which would convert a trivial local state
@@ -350,10 +361,12 @@ request. Its honest limit: it stops another *website* from using the key, not a 
 header by hand.
 
 ⚠️ One consequence worth knowing before you reach for tooling: `getProgramAccounts` is **not available on
-that provider's free tier**, and the public endpoint rate-limits it. The app never calls it (its five
-methods are `getAccountInfo`, `getLatestBlockhash`, `getBalance`, `sendRawTransaction` and
-`confirmTransaction`, all verified working), but any script that enumerates program accounts has no
-endpoint to run against today.
+that provider's free tier**, and the public endpoint rate-limits it. The app never calls it — zero occurrences in the whole
+tree. The methods it does use are eight: `getAccountInfo`, `getMultipleAccountsInfo`,
+`getLatestBlockhash`, `getBalance`, `getBlockHeight`, `getSignatureStatuses`, `sendRawTransaction` and
+`confirmTransaction`. The verification against the provider covered the first five of that list; the
+three added later — `getMultipleAccountsInfo`, `getBlockHeight`, `getSignatureStatuses` — were never
+re-verified. Any script that enumerates program accounts still has no endpoint to run against today.
 
 ### Devnet smoke
 
@@ -366,8 +379,8 @@ uncomfortable to run:
 
 - It aborts before any call unless `SMOKE_ALLOW_REAL=true`. It does not run in CI.
 - Service URLs, keys, identifiers, amount, mint and the facilitator pubkey are all environment
-  variables: thirteen required ones, listed and validated one by one in
-  `scripts/smoke-solana-e2e.ts:55-69`. If one is missing the script aborts and prints the variable's
+  variables: eleven required ones, listed and validated one by one in
+  `scripts/smoke-solana-e2e.ts:65-82`. If one is missing the script aborts and prints the variable's
   name, never its value.
 - Two inputs are not variables, and that is the point of each. The cluster is the constant
   `CLUSTER = "devnet"` (`:46`): there is no environment variable that can aim this script at mainnet.
@@ -454,15 +467,15 @@ production with the secret in a header, and to go red if the transport fails or 
 rows that a person has to look at. It prints only the aggregate counters, never the correlation ids: the
 logs of a public repository are public.
 
-⛔ Status as of 2026-08-19, measured and not assumed: **that workflow has never run.** GitHub lists only
-`ci.yml` under `gh api repos/ferrosasfp/chaski-v3/actions/workflows`,
-`gh run list --workflow=reconcile-orphans.yml` answers HTTP 404, and the repository has zero Actions
-secrets (`{"total_count":0}`). Merging the file registers the schedule, which is the easy half. The
-other half is not: with no secret loaded, the job fails on its first step without calling the route, so
-every hourly run is red and nothing gets reconciled, until someone runs
-`gh secret set RECONCILE_ADMIN_SECRET`. The measured status table is at the top of
-[`docs/runbook-reconcile-orphans.md`](docs/runbook-reconcile-orphans.md). Read it before you conclude
-that an hourly check is watching the ledger, because right now none is.
+Status on 2026-08-27, measured: the workflow **is registered and running**. `gh api
+repos/ferrosasfp/chaski-v3/actions/workflows` lists both `ci.yml` and `reconcile-orphans.yml` as
+`active`, `gh run list --workflow=reconcile-orphans.yml` returns hourly runs with a `schedule` event,
+and `RECONCILE_ADMIN_SECRET` has been loaded since 2026-08-19. What is not settled is the cadence: of
+the five most recent runs, two ended red. That state is read by running those commands, never by
+trusting this paragraph — an earlier version of it said the workflow had never run, and it was written
+a few hours before the secret was loaded and never re-measured. Per-failure guidance is in
+[`docs/runbook-reconcile-orphans.md`](docs/runbook-reconcile-orphans.md), whose own status table dates
+from the same day and deserves the same suspicion.
 
 What it does not do, once it does run, is stand guard. If GitHub delays or skips a scheduled tick there
 is no run, and therefore nothing turns red. That gap is written down rather than implied, in the header
@@ -470,7 +483,9 @@ of the workflow and in `docs/runbook-reconcile-orphans.md`, which also says what
 
 ## Architecture
 
-Layer by layer detail and the full list of API routes: [`docs/architecture.md`](docs/architecture.md).
+Layer by layer detail: [`docs/architecture.md`](docs/architecture.md). It does not inventory the HTTP
+surface, and this line used to promise that it did — `find app/api -name route.ts` enumerates it
+instead (17 routes on 2026-08-27).
 
 Clean Architecture, with the dependency rule pointing inward.
 
@@ -499,7 +514,7 @@ the thing being swapped is an adapter behind a port, not a branch in the busines
 
 ## Configuration
 
-`.env.example` documents the variables read by `src/` and `app/`, plus the sixteen the devnet smoke
+`.env.example` documents the variables read by `src/` and `app/`, plus the fourteen the devnet smoke
 script reads, in a section of its own at the end. It does not cover what the hosting platform injects by
 itself. The design rule is that **every default is the safe one**: with an empty file the app comes up
 in demo mode and moves no funds.

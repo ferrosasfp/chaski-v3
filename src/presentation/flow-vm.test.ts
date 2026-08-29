@@ -2353,7 +2353,7 @@ describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace",
     // WKH-359 sumó las TRES de la prueba de posesión por enlace (`deeplink_pop_sin_firma`,
     // `deeplink_pop_vencido`, `deeplink_pop_alterado`) ⇒ 17. Este `it` se puso ROJO al agregarlas y ésa
     // es la prueba de que la segunda fuente sirve: el `Record` ya las tenía y el número no.
-    expect(CAUSAS, "el `Record` dejó de tener las diecisiete causas").toHaveLength(17);
+    expect(CAUSAS, "el `Record` dejó de tener las diecinueve causas").toHaveLength(19); // WKH-075 sumó las DOS de la vuelta que no se pudo resolver (`deeplink_disponibilidad_sin_resolver`, `deeplink_marca_sin_consumidor`) ⇒ 19. Este `it` se puso ROJO al agregarlas, igual que con las tres de WKH-359: es la prueba de que la segunda fuente sigue sirviendo.
     for (const c of CAUSAS) {
       expect(humanError(c), `\`${c}\` cae en el default: la persona lee la frase genérica`).not.toBe(
         "Algo salió mal. Intentá de nuevo.",
@@ -3210,6 +3210,55 @@ describe("T-073-CENSO (AC-7): los cinco desenlaces del resume tienen texto decla
         `«${sintetico}» dejó de cruzar el umbral. ⛔ Si es porque SUBISTE la constante: no arreglaste nada ` +
           `—la métrica le sigue dando ${da}— y apagaste la detección real (${porQue})`,
       ).toBeGreaterThanOrEqual(SOLAPAMIENTO_QUE_HAY_QUE_DECLARAR);
+    }
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-075 · T-075-COPY (AC-3) — las dos causas nuevas dicen algo PROPIO
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// 🔴 POR QUÉ ESTE BLOQUE EXISTE SI YA ESTÁ `T-065-COPY-1`. Ese candado exige que la causa **no caiga en
+// el default**, y eso NO alcanza para AC-3: el AC pide que la persona pueda distinguir esto de un
+// selector que se cerró. Dos causas con copy propio pero IDÉNTICO entre sí, o idéntico al de
+// `wallet_connect_cancelled`, pasarían `T-065-COPY-1` enteras y dejarían a la persona leyendo que
+// «cerró el selector» justo cuando no tocó nada. Eso es el defecto que esta HU vino a sacar, una capa
+// más arriba.
+describe("T-075-COPY (WKH-075/AC-3): la vuelta que no se pudo resolver no se confunde con un selector cerrado", () => {
+  const SIN_RESOLVER = humanError("deeplink_disponibilidad_sin_resolver");
+  const SIN_CONSUMIDOR = humanError("deeplink_marca_sin_consumidor");
+  const CANCELADO = humanError("wallet_connect_cancelled");
+
+  it("las tres frases se leyeron de verdad (si alguna viniera vacía, todo lo de abajo sería vacuo)", () => {
+    // 🔴 CONTROL POSITIVO PRIMERO: tres `not.toBe` entre cadenas vacías pasan siempre.
+    for (const [nombre, t] of [["sin-resolver", SIN_RESOLVER], ["sin-consumidor", SIN_CONSUMIDOR], ["cancelado", CANCELADO]] as const) {
+      expect(t.length, `el copy de \`${nombre}\` vino vacío o casi`).toBeGreaterThan(40);
+    }
+    // Y la de `wallet_connect_cancelled` sigue siendo la que esta HU NO quiere que la persona lea por
+    // una vuelta buena. Si este `expect` se rompe, el resto del bloque está comparando contra otra cosa.
+    expect(CANCELADO).toContain("Se cerró el selector de wallet sin conectar");
+  });
+
+  it("ninguna de las dos es el default de `humanError`", () => {
+    expect(SIN_RESOLVER).not.toBe("Algo salió mal. Intentá de nuevo.");
+    expect(SIN_CONSUMIDOR).not.toBe("Algo salió mal. Intentá de nuevo.");
+  });
+
+  it("ninguna de las dos dice lo que dice `wallet_connect_cancelled`, y son distintas ENTRE SÍ", () => {
+    expect(SIN_RESOLVER, "la vuelta sin resolver le atribuye a la persona haber cerrado el selector").not.toBe(CANCELADO);
+    expect(SIN_CONSUMIDOR, "la marca sin consumidor le atribuye a la persona haber cerrado el selector").not.toBe(CANCELADO);
+    expect(SIN_RESOLVER, "las dos causas colapsaron en el mismo texto: nombran silencios distintos y piden acciones distintas").not.toBe(SIN_CONSUMIDOR);
+    // ⛔ Y ninguna de las dos le atribuye a la persona un gesto que no hizo. Es la batalla de
+    // `wallet-error-code.ts:216-218`, y acá cuesta más caro: la persona YA firmó.
+    for (const t of [SIN_RESOLVER, SIN_CONSUMIDOR]) expect(t).not.toMatch(/cerraste|cancelaste|se cerró el selector/i);
+  });
+
+  it("las dos afirman que la vuelta LLEGÓ y que no se envió nada, y ⛔ no tienen em dashes", () => {
+    // Lo que esta HU agrega contra el precedente: la persona gastó un viaje redondo a su billetera, y
+    // el copy tiene que reconocerlo antes de pedirle nada.
+    for (const t of [SIN_RESOLVER, SIN_CONSUMIDOR]) {
+      expect(t, "el copy no reconoce que la persona volvió de su billetera").toMatch(/Volviste de tu billetera/);
+      expect(t, "el copy no dice qué quedó del envío").toMatch(/no se envió nada|No se envió nada/);
+      expect(t, "em dash en copy público").not.toMatch(/[—–]/);
     }
   });
 });

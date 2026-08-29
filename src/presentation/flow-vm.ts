@@ -1491,7 +1491,7 @@ const COPY_DE_ENLACE: Record<CausaDeEnlaceEnPantalla, string> = {
   // billetera contestó que no) ni habla de la transacción (eso es `deeplink_tx_alterada`, donde hay
   // USDC en juego): esto es una firma de MENSAJE, no toca fondos, y el corte es ANTES de mover nada.
   deeplink_pop_alterado:
-    "Lo que volvió de tu billetera no coincide con lo que te pedimos, así que lo cortamos acá y no mandamos tus USDC. Empezá el envío de nuevo desde esta pantalla.",
+    "Lo que volvió de tu billetera no coincide con lo que te pedimos, así que lo cortamos acá y no mandamos tus USDC. Empezá el envío de nuevo desde esta pantalla.", /* WKH-075 — LAS DOS ENTRADAS NUEVAS EN ESTA MISMA LÍNEA FÍSICA (Δ0). ⛔ No en dos renglones: una línea de más acá corre 8 citas ancladas (`:1538`×1, `:1599`×1, `:1602`×4, `:1747`×2, medidas contra `b71e917`). 🔴 LAS DOS SON DISTINTAS ENTRE SÍ Y DISTINTAS DE `wallet_connect_cancelled` A PROPÓSITO, y no es estilo: `T-065-COPY-1` sólo exige que no sean el default, y eso NO alcanza para AC-3, que pide que la persona pueda distinguir esto de un selector que se cerró. Lo mide `T-075-COPY`. ⛔ Cero em dashes (convención de copy público). */ deeplink_disponibilidad_sin_resolver: "Volviste de tu billetera y la vuelta llegó bien. Lo que no pudimos es terminar de reconocer qué billetera hay en este navegador, así que frenamos acá y no se envió nada. Probá de nuevo en unos segundos.", deeplink_marca_sin_consumidor: "Volviste de tu billetera, pero esta pantalla no pudo retomar el envío desde donde lo dejaste. No se envió nada. Empezá el envío de nuevo desde esta pantalla.",
 };
 
 /**

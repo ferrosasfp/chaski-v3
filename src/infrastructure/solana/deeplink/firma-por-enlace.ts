@@ -1020,7 +1020,7 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
 export type CausaDeEnlaceEnPantalla =
   | CausaDeEnlace
   | typeof DEEPLINK_NONCE_AUSENTE
-  | typeof DEEPLINK_SALDO_INSUFICIENTE;
+  | typeof DEEPLINK_SALDO_INSUFICIENTE | typeof DEEPLINK_DISPONIBILIDAD_SIN_RESOLVER | typeof DEEPLINK_MARCA_SIN_CONSUMIDOR; // WKH-075 — LAS DOS EN ESTA LÍNEA, no en dos nuevas: este archivo recibe 23 citas ancladas de `:100` para abajo y dos líneas nuevas las corren a todas. Las declaraciones viven al final, donde hay CERO (medido: 0 citas >= 796).
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 // WKH-359 — LAS TRES CAUSAS DE LA PRUEBA DE POSESIÓN POR ENLACE.
@@ -1093,3 +1093,28 @@ export const DEEPLINK_POP_VENCIDO = "deeplink_pop_vencido";
  * `conexion.ts:508`) no: allá lo que está en juego es cero USDC y la cadena es el segundo par de ojos.
  */
 export const DEEPLINK_POP_ALTERADO = "deeplink_pop_alterado";
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-075 — LAS DOS CAUSAS DE LA VUELTA QUE NO SE PUDO RESOLVER.
+//
+// 🔴 POR QUÉ ACÁ Y NO EN `disponibilidad-decidible.ts`, QUE ES «DONDE PERTENECEN». Porque acá, y sólo
+// acá, las ve el candado de copy: `T-065-COPY-1` (`deeplink-callers.test.ts:159`) deriva las causas
+// con `/^export const (DEEPLINK_\w+) = "(\w+)";$/gm` sobre ESTE archivo y exige
+// `humanError(c) !== "Algo salió mal. Intentá de nuevo."`. Una causa declarada en el módulo nuevo
+// sería INVISIBLE para ese candado y la persona leería el default sin que nada se ponga rojo.
+// ⚠️ Por eso las dos líneas son ancla-a-ancla y sin nada extra: si el regex no matchea, el candado
+// queda verde en falso. ⛔ No les agregues `as const`, ni un comentario antes del `;`.
+//
+// 🔴 POR QUÉ SON DOS Y NO UNA. Nombran dos silencios distintos y piden acciones distintas:
+//  · `deeplink_disponibilidad_sin_resolver`: la vuelta LLEGÓ y verificó, pero al vencer el techo de
+//    (`TECHO_DISPONIBILIDAD_MS`, `../disponibilidad-decidible.ts:46`) seguimos sin saber qué billetera
+//    hay en este navegador. ⛔ NO se degrada a `"none"`: un techo que degrada callado es el mismo
+//    defecto una capa más abajo, y degradar acá reabre el camino inyectado que esta HU vino a cerrar.
+//  · `deeplink_marca_sin_consumidor`: la barra traía una marca de vuelta CONOCIDA
+//    (`MARCAS_DE_VUELTA`, `sesion.ts:495`) y ninguna rama la reclamó. Hoy eso muere en un `return`
+//    mudo (`flow.tsx:4070`) y la persona no lee NADA después de haber firmado.
+//
+// ⛔ NINGUNA DE LAS DOS ES UNA PERILLA. No se leen de una env, no se configuran, y el `techoMs` que
+// las produce es inyectable SÓLO para que los tests no esperen 3 s (CD-20).
+export const DEEPLINK_DISPONIBILIDAD_SIN_RESOLVER = "deeplink_disponibilidad_sin_resolver";
+export const DEEPLINK_MARCA_SIN_CONSUMIDOR = "deeplink_marca_sin_consumidor";

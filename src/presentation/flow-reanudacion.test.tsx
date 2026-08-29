@@ -27,7 +27,7 @@ import { Money } from "../domain/money";
 import { SolanaWalletAdapter } from "../infrastructure/solana-wallet";
 import { solanaWalletBridge } from "../infrastructure/solana-wallet-bridge";
 import { RecorridoPorEnlaceReal } from "../infrastructure/solana/preparacion-por-enlace";
-import { almacenDeNavegador, guardarViaje } from "../infrastructure/solana/deeplink/sesion";
+import { MARCAS_DE_VUELTA, almacenDeNavegador, guardarViaje } from "../infrastructure/solana/deeplink/sesion";
 import { guardarEleccion } from "../infrastructure/solana/deeplink/conexion";
 
 // Mismo doble cerrado que `flow.test.tsx`: jsdom no implementa `requestAnimationFrame`, así que sin
@@ -719,5 +719,118 @@ describe("T-067-11 / T-067-12 (WKH-359/AC-7): la vuelta del salto del permiso", 
     ).toBeInTheDocument();
     // 3 · y ⛔ NO se disparó ninguna orden de pago: avisar no es reanudar.
     expect(spy).toHaveBeenCalledTimes(0);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-075 · AC-2 y AC-5 — la espera no toca el camino de siempre, y una marca CONOCIDA no muere muda
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+describe("T-075-2 / T-075-5 / T-075-5b (WKH-075)", () => {
+  /** 🔴 EL RECORRIDO QUE LLEGA HASTA EL FALLTHROUGH, y por qué hace falta doblarlo. Con el recorrido
+   *  REAL y una barra sin carga de respuesta, `completar()` contesta un CORTE (`deeplink_viaje_vencido`)
+   *  y el productor retorna en `flow.tsx:4027`, o sea **antes** de la línea que esta HU cambia. El
+   *  desenlace que llega a `:4070` es `nada` —la marca estaba pero ninguna rama la reclamó—, que es
+   *  exactamente el caso que hoy muere en silencio. ⛔ Hereda de `RecorridoPorEnlaceNulo`, que TIRA en
+   *  todo lo demás: un camino no previsto se ve. */
+  class RecorridoQueNoReclamaLaMarca extends RecorridoPorEnlaceNulo {
+    override remesaEnCurso(): string | null {
+      return REM;
+    }
+    override async completar(): Promise<never> {
+      return { estado: "nada" } as never;
+    }
+  }
+  function contenedorQueLlegaAlFallthrough(repo: InMemoryRepo) {
+    return buildTestContainer({
+      repo,
+      wallet: new FakeWallet(),
+      connectedWallet: new SolanaWalletAdapter(),
+      recorridoPorEnlace: new RecorridoQueNoReclamaLaMarca(),
+    });
+  }
+
+  /** Un trozo del copy de `deeplink_marca_sin_consumidor`, y ⛔ NO la causa escrita como literal: lo que
+   *  la persona lee es la frase, y es lo que este archivo puede afirmar sin mirar el `Record`. */
+  const SENAL_SIN_CONSUMIDOR = /esta pantalla no pudo retomar el envío desde donde lo dejaste/;
+  /** Ídem para `deeplink_disponibilidad_sin_resolver`. */
+  const CAUSA_DEL_TECHO = /terminar de reconocer qué billetera hay en este navegador/;
+
+  // ── AC-2 · el camino de siempre no cambia ──────────────────────────────────────────────────────
+  // 🔴 EL CORTE SIN TICK ES LO QUE HACE ESTO CIERTO, y se mide aparte en
+  // `../infrastructure/solana/disponibilidad-decidible.test.ts` (que cuenta timers y listeners). Acá se
+  // mide la consecuencia visible: con la disponibilidad YA decidida, el recorrido llega igual y ⛔ la
+  // causa del techo NO aparece nunca.
+  it("T-075-2 (AC-2): con `injected` la vuelta se resuelve igual que siempre y la causa del techo NO aparece", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo, "confirmed");
+    sembrarVuelta("conectar");
+    solanaWalletBridge.setWalletAvailability("injected"); // ⚠️ pisa el `none` del arnés: es el camino inyectado
+    const c = contenedor(repo);
+
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
+
+    // Que la barra se limpie prueba que el consumidor CORRIÓ. Sin esta mitad, el `queryByText` de abajo
+    // sería un cero vacuo: pasaría igual si el productor no hubiera arrancado nunca.
+    await waitFor(() => expect(new URL(window.location.href).searchParams.get("dl")).toBeNull());
+    expect(
+      screen.queryByText(CAUSA_DEL_TECHO),
+      "el camino inyectado leyó la causa del techo: la espera está frenando un recorrido que no tiene por qué esperar",
+    ).toBeNull();
+  });
+
+  // ── AC-5 · la señal del fallthrough ────────────────────────────────────────────────────────────
+  it("T-075-5b (AC-5): `crear-nonce` —marca CONOCIDA que ninguna rama reclama— deja SEÑAL, no silencio", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo, "confirmed");
+    sembrarVuelta("crear-nonce");
+    // CD-18 — el fixture fabricó el caso: la marca está, y es una de las CONOCIDAS.
+    expect(new URL(window.location.href).searchParams.get("dl")).toBe("crear-nonce");
+    expect(MARCAS_DE_VUELTA as readonly string[]).toContain("crear-nonce");
+
+    render(<RemittanceFlow pasoInicial="send" container={contenedorQueLlegaAlFallthrough(repo)} />);
+
+    await waitFor(() => expect(screen.getByText(SENAL_SIN_CONSUMIDOR)).toBeInTheDocument());
+  });
+
+  // 🔴 LA OTRA MITAD, Y SIN ELLA EL `it` DE ARRIBA NO DICE NADA: si la señal saliera para CUALQUIER
+  // marca, sería ruido y no información. `marcaDeVuelta` devuelve la marca CRUDA SIN VALIDAR, así que
+  // una marca de otro sistema llega hasta el mismo punto — y NO tiene que disparar nada.
+  it("T-075-5b (control negativo): una marca que NADIE escribió NO dispara la señal", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo, "confirmed");
+    sembrarVuelta("una-marca-que-nadie-escribio");
+
+    render(<RemittanceFlow pasoInicial="send" container={contenedorQueLlegaAlFallthrough(repo)} />);
+
+    await waitFor(() => expect(new URL(window.location.href).searchParams.get("dl")).toBeNull());
+    expect(
+      screen.queryByText(SENAL_SIN_CONSUMIDOR),
+      "una marca ajena disparó la señal: el gate está mirando `marca != null` en vez de «marca conocida»",
+    ).toBeNull();
+  });
+
+  // ── AC-5 · la lista es un VALOR, no una copia a mano ───────────────────────────────────────────
+  // ⛔ Hasta esta HU el universo de marcas vivía SÓLO en el tipo del parámetro de `enlaceDeVuelta`, y un
+  // tipo no se puede recorrer en runtime: un test que las listara las copiaría a mano y sería una lista
+  // que envejece sola. Este `it` las recorre DERIVÁNDOLAS.
+  it("T-075-5 (AC-5): las marcas se derivan de `MARCAS_DE_VUELTA`, y las tres del motor NO disparan la señal", async () => {
+    // 🔴 CONTROL POSITIVO PRIMERO: si la tupla llegara vacía, el `for` de abajo no correría y este `it`
+    // pasaría sin medir nada. Es la trampa nº1 de `readme-test-count.test.ts:18-23`.
+    expect(MARCAS_DE_VUELTA.length, "la tupla de marcas llegó vacía: el barrido de abajo sería vacuo").toBeGreaterThanOrEqual(6);
+    expect(MARCAS_DE_VUELTA as readonly string[]).toEqual(
+      expect.arrayContaining(["conectar", "firmar-tx", "firmar-patrocinio", "crear-nonce", "pop-payout", "pop-kyc"]),
+    );
+    // Las tres que el `if` de la reanudación deja pasar SIGUEN DE LARGO y ⛔ no disparan la señal: si la
+    // dispararan, la persona leería «no pudimos retomar» justo cuando sí se está retomando.
+    for (const marca of MARCAS_DE_VUELTA.filter((m) => m === "firmar-tx" || m === "firmar-patrocinio" || m === "pop-payout")) {
+      cleanup();
+      window.localStorage.clear();
+      const repo = new InMemoryRepo();
+      await sembrarRemesaConfirmada(repo, "confirmed");
+      sembrarVuelta(marca);
+      render(<RemittanceFlow pasoInicial="send" container={contenedorQueLlegaAlFallthrough(repo)} />);
+      await waitFor(() => expect(new URL(window.location.href).searchParams.get("dl")).toBeNull());
+      expect(screen.queryByText(SENAL_SIN_CONSUMIDOR), `\`${marca}\` disparó la señal del fallthrough`).toBeNull();
+    }
   });
 });

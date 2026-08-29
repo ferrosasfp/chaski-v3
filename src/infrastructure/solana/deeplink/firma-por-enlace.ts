@@ -64,7 +64,7 @@ import { guardarPreparado, leerPreparado, terminarPreparado } from "./preparado"
 // HOY, medido: cada causa tiene su propio texto en el `Record` de `flow-vm.ts`, consultado por un
 // LOOKUP EXACTO que corre ANTES de la cadena de `includes` de `humanError`.
 //
-// ⚠️ Y SON **CATORCE**, NO NUEVE, que es la parte que un `switch` exhaustivo no ve. `CausaDeEnlace` lista
+// ⚠️ Y SON MÁS QUE LAS NUEVE DEL `switch`, que es la parte que un `switch` exhaustivo no ve. ⚠️ ACÁ DECÍA «CATORCE» y el `Record` de copy tenía 19 (fix-pack · CR/INFO-1): acá el número no se escribe. `CausaDeEnlace` lista
 // DOCE: las nueve que emite ESTE módulo más las TRES del paso de la cuenta de nonce (dos del fix-pack, la
 // tercera del re-AR it2), que emiten `conexion.ts` / `preparacion-por-enlace.ts` y viven acá porque acá vive
 // el vocabulario. Y el adaptador tira dos más (`deeplink_saldo_insuficiente` y `deeplink_nonce_ausente`) que
@@ -998,7 +998,7 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
 }
 
 /**
- * WKH-358/AC-8 — LAS **CATORCE** CAUSAS QUE PUEDEN LLEGAR A LA PANTALLA, y por qué este tipo existe
+ * WKH-358/AC-8 — LAS CAUSAS QUE PUEDEN LLEGAR A LA PANTALLA, y por qué este tipo existe
  * además de `CausaDeEnlace`. (Eran once al cerrar la ola 4; el fix-pack sumó dos del paso del nonce y el re-AR it2 la tercera.)
  *
  * 🔴 EL AGUJERO DE TIPO, MEDIDO. `CausaDeEnlace` (`:264`) lista **DOCE**: nueve que emite ESTE módulo y
@@ -1107,7 +1107,7 @@ export const DEEPLINK_POP_ALTERADO = "deeplink_pop_alterado";
 //
 // 🔴 POR QUÉ SON DOS Y NO UNA. Nombran dos silencios distintos y piden acciones distintas:
 //  · `deeplink_disponibilidad_sin_resolver`: la vuelta LLEGÓ y verificó, pero al vencer el techo de
-//    (`TECHO_DISPONIBILIDAD_MS`, `../disponibilidad-decidible.ts:46`) seguimos sin saber qué billetera
+//    (`TECHO_DISPONIBILIDAD_MS`, `../disponibilidad-decidible.ts:49`) seguimos sin saber qué billetera
 //    hay en este navegador. ⛔ NO se degrada a `"none"`: un techo que degrada callado es el mismo
 //    defecto una capa más abajo, y degradar acá reabre el camino inyectado que esta HU vino a cerrar.
 //  · `deeplink_marca_sin_consumidor`: la barra traía una marca de vuelta CONOCIDA

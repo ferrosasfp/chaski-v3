@@ -9,9 +9,20 @@
 //
 //   exit 0   la vuelta se resuelve por el camino por enlace y EL SELECTOR NO APARECE
 //   exit 10  EL DEFECTO: el selector de la librería está en el DOM tras una vuelta válida
-//   exit 20  el techo venció y la vuelta salió por la causa de AC-3
 //   exit 30  EL INSTRUMENTO NO PUDO CORRER — ⛔ y esto NO ES UN VERDE. Es la lección del cero
 //            uniforme: un barrido que no ejecutó nada y un barrido que no encontró nada se ven igual.
+//
+// 🔴 ACÁ HABÍA UN `exit 20` («el techo venció y la vuelta salió por la causa de AC-3») Y ERA
+// INALCANZABLE POR CONSTRUCCIÓN (fix-pack · CR/MNR-4). Se disparaba buscando el texto del copy del
+// techo dentro de los casos FALLADOS del archivo objetivo, y ningún `it` de ese archivo puede
+// producirlo: con `SolanaProviders` montado la gracia escribe `"none"` a los 1500 ms, o sea SIEMPRE
+// antes del techo de 3000, así que la rama del techo no se ejecuta ahí. MEDIDO: `grep -c` del texto
+// sobre el archivo objetivo da **0**, y con un control positivo (el mismo texto plantado a mano) da
+// **1** — o sea que el barrido discrimina y el cero es real. Era una fila de tabla que ningún input
+// alcanzaba, así que se BORRA en vez de dejarla decorativa. El testigo del techo vive en
+// `src/presentation/flow-reanudacion.test.tsx` (`T-075-3d`), que monta SIN providers; si un día se
+// quiere atribución para él, hay que apuntar este envoltorio a ESE archivo. Mientras tanto, un rojo
+// que este script no sepa atribuir cae en `exit 30`, que ⛔ no es un verde.
 //
 // ⛔ SU LLAMADOR, NOMBRADO Y SIN ADORNOS: se corre A MANO con
 //
@@ -68,9 +79,6 @@ const fallados = casos.filter((c) => c.status === "failed");
 if (fallados.length === 0) fin(0, `${casos.length} casos, ninguno falló: el selector no aparece por ninguna de las dos puertas`);
 
 const texto = JSON.stringify(fallados);
-if (texto.includes("terminar de reconocer qué billetera hay en este navegador")) {
-  fin(20, "el techo venció y la vuelta salió por la causa de AC-3");
-}
 if (texto.includes("el selector de la librería está en el DOM") || texto.includes("sigue abriendo el selector")) {
   fin(10, `EL DEFECTO: el selector de la librería está en el DOM tras una vuelta válida (${fallados.length} casos)`);
 }

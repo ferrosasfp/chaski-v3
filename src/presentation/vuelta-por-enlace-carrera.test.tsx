@@ -25,7 +25,7 @@
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import bs58 from "bs58";
 import { RemittanceFlow } from "./flow";
 import { buildTestContainer } from "../test-support/test-container";
@@ -152,11 +152,32 @@ function selectorDeLaLibreriaEnElDOM(): boolean {
 /** Monta el árbol REAL —providers de la librería + la pantalla real— y le da RELOJ REAL de sobra para
  *  pasar la gracia de la disponibilidad (`WALLET_GRACE_MS = 1500`). Los 1700 ms salen de `T-CABLE-1`
  *  (`wallet-availability.test.tsx:128`) CON SU MOTIVO: con 1200 el valor correcto todavía es
- *  `"unknown"`, así que un `expect` a los 1200 ms mediría otra cosa. */
+ *  `"unknown"`, así que un `expect` a los 1200 ms mediría otra cosa.
+ *
+ *  🔴 Y NO TERMINA CUANDO SE ACABA EL RELOJ, SINO CUANDO EL TRABAJO ATERRIZÓ (fix-pack · AR/BLQ-6).
+ *  Los 1700 ms dejaban apenas ~200 ms de holgura después de que la gracia escribe `"none"` a los 1500,
+ *  y en esa holgura tiene que caber la cadena entera `completarPop → ConnectWallet.execute → connect()`.
+ *  En una máquina cargada no cabe, y entonces el rezagado aterriza YA FUERA del `it`: para ese momento
+ *  el `afterEach` volvió la disponibilidad a `"unknown"` (`solanaWalletBridge.reset()`), así que
+ *  `direccionDelViajeConectado()` contesta `null`, `connect()` se va al camino INYECTADO y llama a
+ *  `openModal()` — sobre el handle que el `it` SIGUIENTE ya registró al montar su propio árbol. Ése es
+ *  el selector intruso, y ⛔ un `sleep` más largo sólo mueve la probabilidad: no cierra la ventana.
+ *
+ *  ⇒ Se espera al TRABAJO. `openModal()` vive adentro de `connect()`, que vive adentro de
+ *  `ConnectWallet.execute()`: mientras una de esas promesas siga en vuelo, este `it` todavía puede
+ *  pintarle un selector al siguiente; una vez que TODAS aterrizaron, por este camino ya no puede salir
+ *  ninguna llamada más. El bucle es de PUNTO FIJO porque una llamada puede arrancar mientras se espera
+ *  a las anteriores.
+ *
+ *  ⚠️ El espía además afirma que el recorrido LLEGÓ A LA PUERTA. Sin esa mitad, un fixture que nunca
+ *  llegara a `execute()` dejaría los `toBe(false)` de los dos `it` en verde sin medir nada — que es
+ *  exactamente el defecto que el auto-blindaje de W4 documenta. */
 async function montarLaVueltaYDejarCorrerElReloj(marca: "pop-kyc" | "conectar", esperaMs = 1700) {
   const repo = new InMemoryRepo();
   await sembrarRemesaConfirmada(repo);
   sembrarVueltaConLaDisponibilidadSinDecidir(marca);
+  const c = contenedor(repo, new RecorridoDeVueltaValida("pop-kyc"));
+  const espia = vi.spyOn(c.connectWallet, "execute"); // ⛔ sin `mockImplementation`: pasa de largo al real
   const { default: SolanaProviders } = await import("./solana/solana-providers");
   // 🔴 PRECONDICIÓN: el DOM arranca SIN selector. Sin esto, un selector que quedó de un `it` anterior
   // haría fallar el `it` de abajo acusando a un defecto que no está.
@@ -164,13 +185,38 @@ async function montarLaVueltaYDejarCorrerElReloj(marca: "pop-kyc" | "conectar", 
   await act(async () => {
     render(
       <SolanaProviders>
-        <RemittanceFlow pasoInicial="send" container={contenedor(repo, new RecorridoDeVueltaValida("pop-kyc"))} />
+        <RemittanceFlow pasoInicial="send" container={c} />
       </SolanaProviders>,
     );
   });
   await act(async () => {
     await new Promise((r) => setTimeout(r, esperaMs));
   });
+  await waitFor(() =>
+    expect(
+      espia.mock.calls.length,
+      "el recorrido no llegó a pedir la conexión: este `it` no está midiendo la carrera, y sus `toBe(false)` son vacuos",
+    ).toBeGreaterThan(0),
+  );
+  // ⚠️ LA ESPERA AL TRABAJO ESTÁ ACOTADA, Y EL TECHO NO ES COSMÉTICO — MEDIDO, y la primera versión de
+  // este arreglo NO lo tenía. Si `connect()` tomó el camino INYECTADO, `execute()` queda parado en
+  // `waitForConnection()` y **no settlea**: una espera sin techo convierte el rojo de la aserción de
+  // abajo —«el selector está en el DOM», que NOMBRA el defecto— en un «Test timed out», que es un rojo
+  // que no dice nada y que encima esconde qué pasó. Salió así 1 de cada ~17 corridas del gate completo,
+  // primero contra el default de 5 s y después contra un techo de `it` de 20 s.
+  // ⇒ Con techo, el caso patológico cae igual pero EN LA ASERCIÓN. Y que la espera venza es, en sí
+  // misma, evidencia de que se abrió el selector: por eso no se convierte en una falla propia.
+  for (let i = 0; i < 5; i++) {
+    const enVuelo = espia.mock.results.map((r) => r.value as Promise<unknown>);
+    let aterrizaron = false;
+    await act(async () => {
+      aterrizaron = await Promise.race([
+        Promise.allSettled(enVuelo).then(() => true),
+        new Promise<boolean>((r) => setTimeout(() => r(false), 2_000)),
+      ]);
+    });
+    if (!aterrizaron || espia.mock.results.length === enVuelo.length) return;
+  }
 }
 
 beforeEach(() => {
@@ -179,7 +225,10 @@ beforeEach(() => {
   solanaWalletBridge.reset(); // deja la disponibilidad en "unknown", que es la precondición de la carrera
 });
 
-// 🔴 EL ORDEN DE ESTE TEARDOWN NO ES COSMÉTICO, Y MEDIRLO COSTÓ UN FLAKE DE ~2 DE CADA 10.
+// ⚠️ ESTE TEARDOWN ES CINTURÓN Y TIRADORES, ⛔ NO ES EL AISLAMIENTO. El aislamiento vive arriba, en
+// `montarLaVueltaYDejarCorrerElReloj`, que no deja terminar un `it` hasta que su `execute()` aterrizó.
+// Lo de acá reduce el daño de lo que aterrice igual (por un camino que no sea `execute`), y el orden
+// no es cosmético: medirlo costó un flake de ~2 de cada 10.
 // El bridge es un SINGLETON que vive toda la corrida, y el trabajo asíncrono de un `it` NO se detiene
 // cuando el `it` termina: la cadena `resolverVueltaDelPermiso → ConnectWallet.execute → connect()`
 // sigue en vuelo. MEDIDO con un registro de transiciones: el `openModal()` intruso venía de
@@ -221,7 +270,11 @@ describe("T-075-1 · AC-1/AC-6 · la vuelta por enlace NO cae al selector de la 
       selectorDeLaLibreriaEnElDOM(),
       "el selector de la librería está en el DOM tras una vuelta válida: la persona va a leer «Se cerró el selector de wallet sin conectar», una acción que no hizo",
     ).toBe(false);
-  });
+    // ⚠️ TECHO EXPLÍCITO, Y NO ES COSMÉTICO — MEDIDO EN EL FIX-PACK 1. Este `it` corre RELOJ REAL
+    // (1700 ms) y además espera a que el trabajo aterrice, y con el default de vitest (5 s) una máquina
+    // cargada lo corta con «Test timed out»: un rojo que NO dice nada sobre la propiedad, y que encima
+    // deja trabajo en vuelo que después envenena al `it` siguiente. Pasó en 1 de 14 corridas.
+  }, 20_000);
 
   it("PUERTA 2 · `dl=conectar` con la disponibilidad todavía sin decidir ⇒ el selector tampoco aparece", async () => {
     // 🔴 LA CARRERA ENTRA POR LAS DOS PUERTAS Y ESTÁ MEDIDO. Arreglar sólo la del PoP deja el síntoma
@@ -229,17 +282,28 @@ describe("T-075-1 · AC-1/AC-6 · la vuelta por enlace NO cae al selector de la 
     await montarLaVueltaYDejarCorrerElReloj("conectar");
     expect(solanaWalletBridge.getWalletAvailability(), "la disponibilidad no terminó en `none`").toBe("none");
     expect(selectorDeLaLibreriaEnElDOM(), "la otra puerta sigue abriendo el selector").toBe(false);
-  });
+  }, 20_000);
 
   // 🔴 EL CONTROL POSITIVO VA ÚLTIMO, Y EL ORDEN ES PARTE DEL INSTRUMENTO (medido, no estético). Sin él, `querySelector(".wallet-adapter-modal")
   // === null` no dice "el selector no apareció": dice "estoy preguntando por una clase que quizá no
   // existe en esta versión". Un cero uniforme acusa al instrumento.
   //
   // ⚠️ Y VA AL FINAL PORQUE ENVENENA AL `it` QUE LE SIGUE. MEDIDO con el arnés de estrés: las dos
-  // puertas corridas SOLAS dan 12/12 verde; con este `it` DELANTE, ~2 de cada 14 rojo. Este `it` es el
-  // único que deja el selector ABIERTO y un handle de `openModal` vivo sobre un singleton que dura toda
-  // la corrida, así que lo que quede en vuelo cuando el `it` siguiente ya montó su árbol le pinta un
-  // selector que ese `it` no pidió. ⛔ No lo muevas arriba "por legibilidad": el orden es el arreglo.
+  // puertas corridas SOLAS dan 12/12 verde; con este `it` DELANTE, ~2 de cada 14 rojo. Deja el selector
+  // ABIERTO y un handle de `openModal` vivo sobre un singleton que dura toda la corrida, así que lo que
+  // quede en vuelo cuando el `it` siguiente ya montó su árbol le pinta un selector que ese `it` no pidió.
+  //
+  // 🔴 ACÁ DECÍA «este `it` es el ÚNICO que deja estado abierto» Y ESO ES UNA AUSENCIA QUE QUEDÓ
+  // REFUTADA (fix-pack · AR/BLQ-6). El AR reprodujo PUERTA 2 en rojo **dos veces en ~10 corridas con
+  // este `it` YA al final**, con la firma del selector intruso y con la precondición de `:163` («el DOM
+  // ya traía un selector ANTES de montar») **en verde** ⇒ la contaminación aterriza DESPUÉS de montar y
+  // no viene sólo de acá. La otra fuente es PUERTA 1: su cadena `execute() → connect()` puede aterrizar
+  // fuera de su propio `it`, y para entonces el `afterEach` ya devolvió la disponibilidad a `"unknown"`
+  // ⇒ `connect()` toma el camino INYECTADO y llama a `openModal()`. **Ése** es el hueco que el fix-pack
+  // cerró, y no reordenando: `montarLaVueltaYDejarCorrerElReloj` ahora no deja terminar un `it` hasta
+  // que TODAS sus llamadas a `execute()` aterrizaron.
+  // ⛔ Seguí sin moverlo arriba "por legibilidad": el orden sigue siendo parte del instrumento. Lo que
+  // ya NO se afirma es que el orden solo alcance.
   it("CONTROL POSITIVO · el MISMO observable SÍ ve el selector cuando el selector está", async () => {
     const { default: SolanaProviders } = await import("./solana/solana-providers");
     let arbol!: ReturnType<typeof render>;
@@ -266,5 +330,5 @@ describe("T-075-1 · AC-1/AC-6 · la vuelta por enlace NO cae al selector de la 
       arbol.unmount();
     });
     expect(selectorDeLaLibreriaEnElDOM(), "desmontar el árbol no se llevó el selector").toBe(false);
-  });
+  }, 20_000);
 });

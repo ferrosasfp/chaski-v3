@@ -130,7 +130,7 @@ describe("T-075-TECHO · DT-3 · el techo tiene que superar la gracia de la disp
   // este `it` se pone rojo el día que alguien suba la gracia por encima del techo. ⛔ Y no se
   // reemplaza el regex por un `1500` escrito a mano: eso lo convertiría en el candado podrido que
   // `solana-providers.tsx:78-83` prohíbe por escrito.
-  it("TECHO_DISPONIBILIDAD_MS > WALLET_GRACE_MS, leyendo las DOS constantes reales", () => {
+  it("gracia < TECHO_DISPONIBILIDAD_MS <= 2× gracia, leyendo las DOS constantes reales", () => {
     const GRACIA_SRC = readFileSync(path.resolve(ROOT, "src/presentation/solana/solana-providers.tsx"), "utf8");
     const m = GRACIA_SRC.match(/^export const WALLET_GRACE_MS = (\d+);$/m);
     // 🔴 CONTROL POSITIVO PRIMERO: un regex que dejó de matchear da `null` y las comparaciones de
@@ -143,5 +143,14 @@ describe("T-075-TECHO · DT-3 · el techo tiene que superar la gracia de la disp
       TECHO_DISPONIBILIDAD_MS,
       "el techo dejó de superar a la gracia: la espera cortaría ANTES de que el efecto de la gracia escriba `none`, y el defecto vuelve",
     ).toBeGreaterThan(gracia);
+    // 🔴 Y EL OTRO LADO, QUE FALTABA (fix-pack · AR/MNR-2). Con sólo `> gracia`, `TECHO = 3_000_000`
+    // dejaba la suite entera en verde: **un techo de 50 minutos no es un techo**, es la misma pantalla
+    // colgada que esta HU vino a cerrar, con un número puesto. El límite superior se DERIVA de la misma
+    // constante real y ⛔ no se escribe `3000` a mano: el docblock del módulo declara «3000 = 2× la
+    // gracia», así que ése es el invariante, y si alguien quiere más techo tiene que cambiar los dos.
+    expect(
+      TECHO_DISPONIBILIDAD_MS,
+      "el techo se fue por encima de 2× la gracia: dejó de ser un techo y pasó a ser una espera que la persona no puede distinguir de una pantalla colgada",
+    ).toBeLessThanOrEqual(2 * gracia);
   });
 });

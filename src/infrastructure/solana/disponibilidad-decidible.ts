@@ -11,8 +11,11 @@
  * `cancelConnection()` y la persona lee «Se cerró el selector de wallet sin conectar». **Una acción
  * que no hizo**, y leída después de haber firmado, o sea después de gastar un viaje redondo.
  *
- * MEDIDO con el árbol real y reloj real: `t=50ms availability=unknown selector-en-el-DOM=true` ·
- * `t=1750ms availability=none`. **El dato nunca faltó: llegaba tarde.**
+ * MEDIDO (foto del 2026-08-29, ⛔ NO re-derivable desde esta suite): `t=50ms availability=unknown
+ * selector-en-el-DOM=true` · `t=1750ms availability=none`. **El dato nunca faltó: llegaba tarde.** El
+ * instrumento fue la Sonda 2 de `doc/sdd/075-la-vuelta-.../sdd.md` §0.2 —`SolanaProviders` real, adapters reales,
+ * reloj real, ninguna wallet inyectada—, un archivo temporal que se creó, se corrió y se BORRÓ, así
+ * que estos dos números son una FOTO fechada y no algo que el gate re-mida (fix-pack · AR/MNR-3).
  *
  * ⛔ POR QUÉ EL ARREGLO NO ES CAMBIAR EL GATE A `!== "injected"`. Está prohibido por escrito en
  * (`el gate`, `../solana-wallet.ts:2222-2228`) y lo mata `T-065-GATE-3`: con esa forma, un escritorio
@@ -28,7 +31,7 @@
  * crudo del archivo y no distingue un comentario de una lectura, así que nombrarla dejaría el
  * candado rojo por una frase. El nombre vive donde se lee.
  * `techoMs` es inyectable **SÓLO para que los tests no esperen 3 s** —mismo patrón que
- * `confirmTimeoutMs` en `../solana-wallet.ts:184`— y ⛔ no se cablea desde producción.
+ * `confirmTimeoutMs` en `../solana-wallet.ts:185`— y ⛔ no se cablea desde producción.
  *
  * ⛔ NO IMPORTA REACT NI NADA DE `src/presentation/`: es infraestructura, igual que el bridge.
  */

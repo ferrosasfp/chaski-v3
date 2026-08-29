@@ -2346,20 +2346,20 @@ describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace",
   // agregar una causa sin copy dejara este bloque en verde, que es justo lo que tiene que cazar.
   const CAUSAS = CAUSAS_CON_COPY;
 
-  it("son DIECISIETE, y ninguna cae en el default de `humanError`", () => {
+  it("son las que el `Record` tiene, y ninguna cae en el default de `humanError`", () => {
     // ⚠️ EL NÚMERO ESTÁ ESCRITO A MANO A PROPÓSITO y es la SEGUNDA fuente: la lista se deriva del
     // `Record` con `Object.keys`, así que sin este número agregar una causa sin copy no movería nada acá.
     // Eran ONCE al cerrar la ola 4; el fix-pack sumó dos del paso de la cuenta de nonce y el re-AR it2 la tercera.
     // WKH-359 sumó las TRES de la prueba de posesión por enlace (`deeplink_pop_sin_firma`,
     // `deeplink_pop_vencido`, `deeplink_pop_alterado`) ⇒ 17. Este `it` se puso ROJO al agregarlas y ésa
     // es la prueba de que la segunda fuente sirve: el `Record` ya las tenía y el número no.
-    expect(CAUSAS, "el `Record` dejó de tener las diecinueve causas").toHaveLength(19); // WKH-075 sumó las DOS de la vuelta que no se pudo resolver (`deeplink_disponibilidad_sin_resolver`, `deeplink_marca_sin_consumidor`) ⇒ 19. Este `it` se puso ROJO al agregarlas, igual que con las tres de WKH-359: es la prueba de que la segunda fuente sigue sirviendo.
+    expect(CAUSAS, "el `Record` dejó de tener la cantidad de causas que este `it` fija como segunda fuente").toHaveLength(19); // WKH-075 sumó las DOS de la vuelta que no se pudo resolver (`deeplink_disponibilidad_sin_resolver`, `deeplink_marca_sin_consumidor`) ⇒ 19. Este `it` se puso ROJO al agregarlas, igual que con las tres de WKH-359: es la prueba de que la segunda fuente sigue sirviendo.
     for (const c of CAUSAS) {
       expect(humanError(c), `\`${c}\` cae en el default: la persona lee la frase genérica`).not.toBe(
         "Algo salió mal. Intentá de nuevo.",
       );
     }
-    // Y las diecisiete son textos con contenido, no cadenas de relleno.
+    // Y las causas del `Record` son textos con contenido, no cadenas de relleno.
     for (const c of CAUSAS) expect(humanError(c).length).toBeGreaterThan(40);
   });
 
@@ -2370,8 +2370,8 @@ describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace",
   // gramática que vigila, o sea un guard que se compara consigo mismo. El costo real es que el copy de
   // este `Record` no puede usar ese verbo ni en negativo, y eso ya se pagó una vez en el fix-pack.
   it("T-065-COPY-3: NINGÚN copy afirma que se movió plata, y ninguno tiene em dashes", () => {
-    // 🔴 LAS DIECISIETE CORTAN ANTES DEL BROADCAST DEL DEPÓSITO. Decir "se debitó" ahí es falso, y manda a la
-    // persona a buscar plata donde no hay ninguna. ⚠️ Tres de las diecisiete (las del paso del nonce) SÍ son
+    // 🔴 LAS CAUSAS DEL `Record` CORTAN ANTES DEL BROADCAST DEL DEPÓSITO. Decir "se debitó" ahí es falso, y manda
+    // a la persona a buscar plata donde no hay ninguna. ⚠️ Tres de ellas (las del paso del nonce) SÍ son
     // post-broadcast de OTRA transacción, la que crea la cuenta: ahí lo que puede haberse debitado es el
     // alquiler en SOL, nunca USDC, y ninguno de los tres copys afirma lo contrario.
     const MOVIO_PLATA = /se debit|se cobr|te cobramos|se movi|se transfir|se descont|salieron de tu/i;
@@ -2388,7 +2388,7 @@ describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace",
   // `includes` y antes del `return` del default. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit, `it` rojos y el árbol de los 54, y se re-corre con `node scripts/mutacion/bateria-065.mjs`.)
   //
   // ⚠️ POR QUÉ ESTE `it` ES TEXTUAL Y NO DE COMPORTAMIENTO, dicho porque un review lo va a preguntar:
-  // HOY ninguna de las diecisiete contiene ninguno de los needles de la cadena, así que **no existe ningún
+  // HOY ninguna causa del `Record` contiene ninguno de los needles de la cadena, así que **no existe ningún
   // input que distinga los dos órdenes**. Un `it` de comportamiento sería verde con el lookup en
   // cualquier lado. Lo que DT-8 fija es una propiedad del CÓDIGO, y por eso se mide sobre el código.
   it("T-065-COPY-4: el lookup exacto corre ANTES de la cadena de `includes`", () => {
@@ -2416,7 +2416,7 @@ describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace",
     expect(
       cuerpo.indexOf("copyDeEnlace(code)"),
       "el lookup exacto quedó DESPUÉS de la cadena de `includes`: un needle nuevo que sea subcadena " +
-        "de una de las diecisiete se las roba en silencio (DT-8)",
+        "de una de las causas del `Record` se las roba en silencio (DT-8)",
     ).toBeLessThan(cuerpo.indexOf("code.includes("));
   });
 
@@ -3252,13 +3252,30 @@ describe("T-075-COPY (WKH-075/AC-3): la vuelta que no se pudo resolver no se con
     for (const t of [SIN_RESOLVER, SIN_CONSUMIDOR]) expect(t).not.toMatch(/cerraste|cancelaste|se cerró el selector/i);
   });
 
-  it("las dos afirman que la vuelta LLEGÓ y que no se envió nada, y ⛔ no tienen em dashes", () => {
-    // Lo que esta HU agrega contra el precedente: la persona gastó un viaje redondo a su billetera, y
-    // el copy tiene que reconocerlo antes de pedirle nada.
+  // 🔴 ESTE `it` SE LLAMABA «las dos afirman que la vuelta LLEGÓ» Y ESA ERA LA AFIRMACIÓN NO MEDIDA
+  // (fix-pack · CR/BLQ-1). Lo que el sistema sabe cuando emite `deeplink_disponibilidad_sin_resolver`
+  // es que hay una marca CONOCIDA en la barra —o sea que esta pantalla mandó a esa persona a su
+  // billetera y volvió—, y ⛔ NADA sobre la respuesta: `flow.tsx:4005` corre ANTES de `completar()`.
+  // ⇒ Se afloja a lo que sí está medido (que la persona VOLVIÓ) y se le agrega el guard que impide
+  // reintroducir lo otro. ⚠️ El `toMatch(/Volviste de tu billetera/)` se queda: esa mitad es cierta y
+  // es lo que la HU agrega contra el precedente —la persona gastó un viaje redondo y el copy tiene que
+  // reconocerlo antes de pedirle nada—; lo que se va es «la vuelta llegó bien».
+  it("las dos reconocen que la persona VOLVIÓ y que no se envió nada, ⛔ ninguna afirma que la vuelta se haya VALIDADO, y ⛔ no tienen em dashes", () => {
+    const AFIRMA_QUE_LA_VUELTA_SIRVIÓ = /llegó bien|volvió bien|salió bien|vino bien|la recibimos bien/i;
+    // 🔴 REFUTACIÓN DEL INSTRUMENTO PRIMERO: sin esto, un regex que dejó de matchear daría dos
+    // `not.toMatch` vacuos y el guard se caería solo sin que nadie lo note.
+    expect(
+      AFIRMA_QUE_LA_VUELTA_SIRVIÓ.test("Volviste de tu billetera y la vuelta llegó bien."),
+      "el regex no encuentra la frase prohibida ni en el texto que la contiene: los dos `not.toMatch` de abajo son vacuos",
+    ).toBe(true);
     for (const t of [SIN_RESOLVER, SIN_CONSUMIDOR]) {
       expect(t, "el copy no reconoce que la persona volvió de su billetera").toMatch(/Volviste de tu billetera/);
       expect(t, "el copy no dice qué quedó del envío").toMatch(/no se envió nada|No se envió nada/);
       expect(t, "em dash en copy público").not.toMatch(/[—–]/);
+      expect(
+        t,
+        "el copy afirma que la vuelta llegó BIEN, y en el punto donde se emite no corrió nada que mire la respuesta",
+      ).not.toMatch(AFIRMA_QUE_LA_VUELTA_SIRVIÓ);
     }
   });
 });

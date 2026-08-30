@@ -179,8 +179,8 @@ export function terminarPasoPop(a: Almacen): void {
 
 /**
  * Lee el ancla. `null` ante ausencia, basura, `exp` vencido o instante del futuro — y **limpia el
- * disco en los tres últimos casos**, por la lección de 061: un campo inválido que hace tirar y NO
- * limpia repite la excepción en CADA carga de la página.
+ * disco en DOS de esos cuatro casos**, basura y `exp` vencido, por la lección de 061: un campo inválido que hace tirar y NO
+ * limpia repite la excepción en CADA carga de la página. 🔴 ACÁ DECÍA «limpia el disco en los TRES últimos casos» Y ESTE MISMO COMMIT LO VOLVIÓ FALSO (AR-fp/BLQ-BAJO-1): la rama del futuro es hoy la ÚNICA de las tres que NO limpia (`terminarPasoPop`, `:220`). Es la misma edición que el addendum declaró obligatoria para el gemelo de `preparado.ts:61` y que acá quedó sin hacer. Lo que se borraba era el `PasoPop` con la `firma` del PoP YA DADA adentro.
  *
  * ⚠️ LA VENTANA ES EL `exp` DEL SERVIDOR Y NADA MÁS (DT-10). `desde` se valida como número finito y
  * se usa sólo para descartar un ancla que dice haber empezado en el FUTURO —basura, no juventud, el
@@ -215,9 +215,9 @@ export function leerPasoPop(a: Almacen, ahora: number): PasoPop | null {
     terminarPasoPop(a);
     return null;
   }
-  // `exp` viene en SEGUNDOS epoch (es lo que emite el servidor) y `ahora` en MILISEGUNDOS. Mezclarlos
-  // daría un ancla eterna o una muerta al nacer, según el lado del error.
-  if (x.desde > ahora || ahora / 1000 >= x.exp) {
+  // 🔴 DOS GUARDS, NO UNO, Y ANTES ERAN UN SOLO `||` QUE DESTRUÍA LAS DOS RAMAS. `exp` viene en SEGUNDOS
+  // epoch (es lo que emite el servidor) y `ahora` en MILISEGUNDOS: mezclarlos daría un ancla eterna o una
+  if (x.desde > ahora) return null; if (ahora / 1000 >= x.exp) { // muerta al nacer, según el lado del error. ⛔ LA RAMA DEL FUTURO NO LLAMA `terminarPasoPop`: `Date.now()` es reloj de PARED y puede RETROCEDER (corrección NTP), y acá lo que se borraba era el `PasoPop` con la `firma` del PoP YA DADA adentro (`firma`, `:136`). El retorno sigue siendo `null` —esta función no gana forma nueva— y el copy que su llamador emite (`deeplink_pop_vencido`) sigue sin mentir sobre el dinero: su docblock dice textual que NO AFIRMA NI QUE SE FIRMÓ NI QUE NO. 🔴 PERO ⛔ ESO NO ALCANZA PARA LLAMARLO HONESTO PARA ESTE CASO, y la diferencia la creó ESTE MISMO ARREGLO (AR-fp/BLQ-BAJO-3): el addendum lo evaluó en UN SOLO EJE y el arreglo cambió el valor de verdad de OTRA cláusula de la misma oración. Ese copy dice «el permiso que estábamos usando ya no vale» y eso HOY ES FALSO: el `PasoPop` con su `firma` sigue en el disco y revive en cuanto el reloj pasa su `desde`. Queda como RESIDUAL DECLARADO junto con el «Pasó demasiado tiempo» que el addendum ya había declarado, y ⛔ el copy no se toca acá (arrastra `T-065-18`). Lo que este guard resuelve, y es lo único que se afirma, es que no hacía falta un estado nuevo: hacía falta dejar de destruir, que es la regla ya escrita acá abajo — una LECTURA no destruye lo que no entrega.
     terminarPasoPop(a);
     return null;
   }

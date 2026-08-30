@@ -27,8 +27,8 @@ import { Money } from "../domain/money";
 import { SolanaWalletAdapter } from "../infrastructure/solana-wallet";
 import { solanaWalletBridge } from "../infrastructure/solana-wallet-bridge";
 import { RecorridoPorEnlaceReal } from "../infrastructure/solana/preparacion-por-enlace";
-import { almacenDeNavegador, guardarViaje } from "../infrastructure/solana/deeplink/sesion";
-import { guardarEleccion } from "../infrastructure/solana/deeplink/conexion";
+import { MARCAS_DE_VUELTA, almacenDeNavegador, guardarViaje } from "../infrastructure/solana/deeplink/sesion";
+import { guardarEleccion } from "../infrastructure/solana/deeplink/conexion"; import { TECHO_DISPONIBILIDAD_MS } from "../infrastructure/solana/disponibilidad-decidible"; import { deeplinkEnabled } from "./wallet-availability"; // WKH-075 · fix-pack 1 — LOS DOS PEGADOS A ESTA LÍNEA (Δ0) y ⛔ NO en una nueva: `sembrarVuelta` (`:95`) y `completarPop` (`:575`) reciben citas ancladas desde `../infrastructure/solana/preparacion-por-enlace.test.ts` y `./vuelta-por-enlace-carrera.test.tsx`, y una línea de más acá las rompe a las dos (MEDIDO: el candado `citas-ancladas` las reportó)
 
 // Mismo doble cerrado que `flow.test.tsx`: jsdom no implementa `requestAnimationFrame`, así que sin
 // esto el exit de `AnimatePresence` no completa y los pasos nunca montan. Lo que no esté acá NO EXISTE
@@ -720,4 +720,339 @@ describe("T-067-11 / T-067-12 (WKH-359/AC-7): la vuelta del salto del permiso", 
     // 3 · y ⛔ NO se disparó ninguna orden de pago: avisar no es reanudar.
     expect(spy).toHaveBeenCalledTimes(0);
   });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-075 · AC-2 y AC-5 — la espera no toca el camino de siempre, y una marca CONOCIDA no muere muda
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+describe("T-075-2 / T-075-5 / T-075-5b / T-075-1c / T-075-3d / T-075-4b / T-075-4c (WKH-075)", () => {
+  /** 🔴 EL RECORRIDO QUE LLEGA HASTA EL FALLTHROUGH, y por qué hace falta doblarlo. Con el recorrido
+   *  REAL y una barra sin carga de respuesta, `completar()` contesta un CORTE (`deeplink_viaje_vencido`)
+   *  y el productor retorna en `flow.tsx:4027`, o sea **antes** de la línea que esta HU cambia. El
+   *  desenlace que llega a `:4070` es `nada` —la marca estaba pero ninguna rama la reclamó—, que es
+   *  exactamente el caso que hoy muere en silencio. ⛔ Hereda de `RecorridoPorEnlaceNulo`, que TIRA en
+   *  todo lo demás: un camino no previsto se ve. */
+  class RecorridoQueNoReclamaLaMarca extends RecorridoPorEnlaceNulo {
+    override remesaEnCurso(): string | null {
+      return REM;
+    }
+    override async completar(): Promise<never> {
+      return { estado: "nada" } as never;
+    }
+  }
+  function contenedorQueLlegaAlFallthrough(repo: InMemoryRepo) {
+    return buildTestContainer({
+      repo,
+      wallet: new FakeWallet(),
+      connectedWallet: new SolanaWalletAdapter(),
+      recorridoPorEnlace: new RecorridoQueNoReclamaLaMarca(),
+    });
+  }
+
+  /** Un trozo del copy de `deeplink_marca_sin_consumidor`, y ⛔ NO la causa escrita como literal: lo que
+   *  la persona lee es la frase, y es lo que este archivo puede afirmar sin mirar el `Record`. */
+  const SENAL_SIN_CONSUMIDOR = /esta pantalla no pudo retomar el envío desde donde lo dejaste/;
+  /** Ídem para `deeplink_disponibilidad_sin_resolver`. */
+  const CAUSA_DEL_TECHO = /terminar de reconocer qué billetera hay en este navegador/;
+
+  // ── AC-2 · el camino de siempre no cambia ──────────────────────────────────────────────────────
+  // 🔴 EL CORTE SIN TICK ES LO QUE HACE ESTO CIERTO, y se mide aparte en
+  // `../infrastructure/solana/disponibilidad-decidible.test.ts` (que cuenta timers y listeners). Acá se
+  // mide la consecuencia visible: con la disponibilidad YA decidida, el recorrido llega igual y ⛔ la
+  // causa del techo NO aparece nunca.
+  it("T-075-2 (AC-2): con `injected` la vuelta se resuelve igual que siempre y la causa del techo NO aparece", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo, "confirmed");
+    sembrarVuelta("conectar");
+    solanaWalletBridge.setWalletAvailability("injected"); // ⚠️ pisa el `none` del arnés: es el camino inyectado
+    const c = contenedor(repo);
+
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
+
+    // Que la barra se limpie prueba que el consumidor CORRIÓ. Sin esta mitad, el `queryByText` de abajo
+    // sería un cero vacuo: pasaría igual si el productor no hubiera arrancado nunca.
+    await waitFor(() => expect(new URL(window.location.href).searchParams.get("dl")).toBeNull());
+    expect(
+      screen.queryByText(CAUSA_DEL_TECHO),
+      "el camino inyectado leyó la causa del techo: la espera está frenando un recorrido que no tiene por qué esperar",
+    ).toBeNull();
+  });
+
+  // ── AC-5 · la señal del fallthrough ────────────────────────────────────────────────────────────
+  it("T-075-5b (AC-5): `crear-nonce` —marca CONOCIDA que ninguna rama reclama— deja SEÑAL, no silencio", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo, "confirmed");
+    sembrarVuelta("crear-nonce");
+    // CD-18 — el fixture fabricó el caso: la marca está, y es una de las CONOCIDAS.
+    expect(new URL(window.location.href).searchParams.get("dl")).toBe("crear-nonce");
+    expect(MARCAS_DE_VUELTA as readonly string[]).toContain("crear-nonce");
+
+    render(<RemittanceFlow pasoInicial="send" container={contenedorQueLlegaAlFallthrough(repo)} />);
+
+    await waitFor(() => expect(screen.getByText(SENAL_SIN_CONSUMIDOR)).toBeInTheDocument());
+  });
+
+  // 🔴 LA OTRA MITAD, Y SIN ELLA EL `it` DE ARRIBA NO DICE NADA: si la señal saliera para CUALQUIER
+  // marca, sería ruido y no información. `marcaDeVuelta` devuelve la marca CRUDA SIN VALIDAR, así que
+  // una marca de otro sistema llega hasta el mismo punto — y NO tiene que disparar nada.
+  it("T-075-5b (control negativo): una marca que NADIE escribió NO dispara la señal", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo, "confirmed");
+    sembrarVuelta("una-marca-que-nadie-escribio");
+
+    render(<RemittanceFlow pasoInicial="send" container={contenedorQueLlegaAlFallthrough(repo)} />);
+
+    await waitFor(() => expect(new URL(window.location.href).searchParams.get("dl")).toBeNull());
+    expect(
+      screen.queryByText(SENAL_SIN_CONSUMIDOR),
+      "una marca ajena disparó la señal: el gate está mirando `marca != null` en vez de «marca conocida»",
+    ).toBeNull();
+  });
+
+  // ── AC-5 · la lista es un VALOR, no una copia a mano ───────────────────────────────────────────
+  // ⛔ Hasta esta HU el universo de marcas vivía SÓLO en el tipo del parámetro de `enlaceDeVuelta`, y un
+  // tipo no se puede recorrer en runtime: un test que las listara las copiaría a mano y sería una lista
+  // que envejece sola. Este `it` las recorre DERIVÁNDOLAS.
+  it("T-075-5 (AC-5): las marcas se derivan de `MARCAS_DE_VUELTA`, y las tres del motor NO disparan la señal", async () => {
+    // 🔴 CONTROL POSITIVO PRIMERO: si la tupla llegara vacía, el `for` de abajo no correría y este `it`
+    // pasaría sin medir nada. Es la trampa nº1 de `readme-test-count.test.ts:18-23`.
+    expect(MARCAS_DE_VUELTA.length, "la tupla de marcas llegó vacía: el barrido de abajo sería vacuo").toBeGreaterThanOrEqual(6);
+    expect(MARCAS_DE_VUELTA as readonly string[]).toEqual(
+      expect.arrayContaining(["conectar", "firmar-tx", "firmar-patrocinio", "crear-nonce", "pop-payout", "pop-kyc"]),
+    );
+    // Las tres que el `if` de la reanudación deja pasar SIGUEN DE LARGO y ⛔ no disparan la señal: si la
+    // dispararan, la persona leería «no pudimos retomar» justo cuando sí se está retomando.
+    for (const marca of MARCAS_DE_VUELTA.filter((m) => m === "firmar-tx" || m === "firmar-patrocinio" || m === "pop-payout")) {
+      cleanup();
+      window.localStorage.clear();
+      const repo = new InMemoryRepo();
+      await sembrarRemesaConfirmada(repo, "confirmed");
+      sembrarVuelta(marca);
+      render(<RemittanceFlow pasoInicial="send" container={contenedorQueLlegaAlFallthrough(repo)} />);
+      await waitFor(() => expect(new URL(window.location.href).searchParams.get("dl")).toBeNull());
+      expect(screen.queryByText(SENAL_SIN_CONSUMIDOR), `\`${marca}\` disparó la señal del fallthrough`).toBeNull();
+    }
+  });
+
+  // ════════════════════════════════════════════════════════════════════════════════════════════════
+  // FIX-PACK 1 — LAS TRES COMBINACIONES QUE NO EJERCITABA NADIE:
+  //   `unknown` × marca AJENA (CR/BLQ-1) · `unknown` × techo vencido CON RENDER (AR/BLQ-2) ·
+  //   la BANDERA de repliegue apagada (AR/BLQ-5).
+  //
+  // 🔴 POR QUÉ VIVEN ACÁ Y NO EN `vuelta-por-enlace-carrera.test.tsx`. Allá se monta `SolanaProviders`,
+  // y ese árbol escribe `"none"` a los `WALLET_GRACE_MS = 1500`, o sea SIEMPRE antes del techo de 3000:
+  // con el árbol montado la rama del techo es **inalcanzable**, y por eso ningún `it` de allá la podía
+  // ejecutar. Acá `RemittanceFlow` se monta SOLO —sin providers—, que es exactamente el caso que el
+  // módulo declara alcanzable por escrito en el docblock de
+  // (`esperarDisponibilidadDecidible`, `../infrastructure/solana/disponibilidad-decidible.ts:72`): el
+  // chunk de `next/dynamic` no carga ⇒ el árbol nunca monta ⇒ la gracia nunca corre ⇒ la
+  // disponibilidad queda en `"unknown"` PARA SIEMPRE.
+  //
+  // ⚠️ LO QUE ESTE BLOQUE **NO** MIDE, escrito ANTES de que alguien se apoye en su verde: sin
+  // `SolanaProviders` no hay ningún `.wallet-adapter-modal` que consultar, así que un `querySelector`
+  // de esa clase acá daría `null` SIEMPRE y sería vacuo — es la lección del cero uniforme. El
+  // observable del selector vive en `vuelta-por-enlace-carrera.test.tsx` (CD-17). Lo que acá se mide en
+  // su lugar es `execute()`, y la relación entre los dos es de LLAMADOR: `openModal()` vive adentro de
+  // `connect()` del adaptador de Solana, que vive adentro de `ConnectWallet.execute()` ⇒ 0 llamadas a
+  // `execute()` implica 0 llamadas a `openModal()` por este camino. Eso es una
+  // DERIVACIÓN DEL GRAFO DE LLAMADAS, ⛔ no una medición de esta suite.
+
+  /** 🔴 IDÉNTICO A `sembrarVuelta` (`:95`) SALVO EN LA LÍNEA QUE DESHACE: la disponibilidad vuelve a
+   *  `"unknown"`, que es como arranca un navegador de verdad, y ⛔ se queda ahí PARA SIEMPRE porque
+   *  este archivo no monta el árbol de providers. Ésa es toda la diferencia, y es la carrera. */
+  function sembrarVueltaConLaDisponibilidadSinDecidir(paso: string) {
+    sembrarVuelta(paso);
+    solanaWalletBridge.setWalletAvailability("unknown");
+  }
+
+  /** El recorrido que SÍ llega a `execute()`: la vuelta del paso `conectar` que trajo dirección (es la
+   *  PUERTA 2 de `./vuelta-por-enlace-carrera.test.tsx`, acá sin árbol de providers). ⛔ Hereda de
+   *  `RecorridoPorEnlaceNulo`, que TIRA en todo lo demás: un camino no previsto se VE. */
+  class RecorridoQueConectaPorEnlace extends RecorridoPorEnlaceNulo {
+    override remesaEnCurso(): string | null {
+      return REM;
+    }
+    override async completar(): Promise<never> {
+      return { estado: "conectado", direccion: DIRECCION } as never;
+    }
+  }
+  /** 🔴 `wallet: new SolanaWalletAdapter()` Y ⛔ NO `FakeWallet`, y es la lección del auto-blindaje W4:
+   *  el caso de uso `ConnectWallet` recibe `o.wallet` (`connectWallet`, `../test-support/test-container.ts:100`), así que
+   *  con el default el contador de abajo estaría espiando un camino que el defecto no toca. */
+  function contenedorQueLlegaAExecute(repo: InMemoryRepo) {
+    return buildTestContainer({
+      repo,
+      wallet: new SolanaWalletAdapter(),
+      connectedWallet: new SolanaWalletAdapter(),
+      recorridoPorEnlace: new RecorridoQueConectaPorEnlace(),
+    });
+  }
+
+  /** Reloj REAL más allá del techo. ⚠️ Se DERIVA de la constante y no se escribe `3000` a mano; que la
+   *  constante no pueda crecer hasta volver eterna esta espera lo sostiene el otro lado del invariante
+   *  de `T-075-TECHO`, que este mismo fix-pack le agregó. */
+  async function dejarVencerElTecho() {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, TECHO_DISPONIBILIDAD_MS + 400));
+    });
+  }
+
+  // ── fix-pack 1 · CR/BLQ-1 · el gate de `:4005` es «marca CONOCIDA», ⛔ no `marca != null` ────────
+  // 🔴 LA COMBINACIÓN QUE NO EJERCITABA NADIE: marca AJENA **×** disponibilidad `unknown`. El control
+  // negativo de `:798` siembra la marca ajena, pero su arnés escribe `availability = "none"`, así que
+  // allá la espera resuelve en el primer tick y esta rama no se ejecuta ni con el gate roto. Medido por
+  // el CR sobre el árbol entregado: con `?dl=una-marca-que-nadie-escribio` en la barra, la pantalla
+  // mostraba el copy del techo.
+  it("T-075-1c (AC-1): una marca AJENA con la disponibilidad SIN DECIDIR ⛔ no entra a la espera", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo, "confirmed");
+    sembrarVueltaConLaDisponibilidadSinDecidir("una-marca-que-nadie-escribio");
+    // CD-18 · el fixture fabricó el caso, y se afirman las TRES mitades que lo definen.
+    expect(new URL(window.location.href).searchParams.get("dl")).toBe("una-marca-que-nadie-escribio");
+    expect(MARCAS_DE_VUELTA as readonly string[]).not.toContain("una-marca-que-nadie-escribio");
+    expect(
+      solanaWalletBridge.getWalletAvailability(),
+      "precondición: sin `unknown` este `it` repite el caso que `:798` ya cubre y no mide nada nuevo",
+    ).toBe("unknown");
+
+    render(<RemittanceFlow pasoInicial="send" container={contenedorQueLlegaAlFallthrough(repo)} />);
+
+    // 1 · POR TIEMPO. La barra se limpia MUY por debajo del techo; con el gate en `marca != null` el
+    //     productor queda bloqueado en la espera y esto se pone rojo por timeout. La distancia entre
+    //     los dos números —1200 acá contra `TECHO_DISPONIBILIDAD_MS`— ES el discriminante.
+    await waitFor(
+      () =>
+        expect(
+          new URL(window.location.href).searchParams.get("dl"),
+          "la barra sigue sucia 1200 ms después de montar: el productor está bloqueado en la espera, o sea que una marca AJENA entró al gate",
+        ).toBeNull(),
+      { timeout: 1200 },
+    );
+    // 2 · POR CONTENIDO, y es el síntoma exacto que midió el CR. Se deja correr el reloj MÁS ALLÁ del
+    //     techo para que la ausencia signifique «no pasa» y no «todavía no llegó».
+    await dejarVencerElTecho();
+    expect(
+      screen.queryByText(CAUSA_DEL_TECHO),
+      "una marca ajena disparó la espera: el gate está mirando `marca != null` en vez de «marca conocida»",
+    ).toBeNull();
+    expect(screen.queryByText(SENAL_SIN_CONSUMIDOR), "una marca ajena disparó la señal del fallthrough").toBeNull();
+    // ⚠️ EL TECHO DE ESTE `it` ES EXPLÍCITO Y NO COSMÉTICO: acá corre RELOJ REAL por encima de
+    // `TECHO_DISPONIBILIDAD_MS`, y con el default de vitest (5 s) el rojo saldría como «Test timed out»
+    // —o sea por el reloj y no por la propiedad—, que es un rojo que no dice nada. MEDIDO: con el gate
+    // roto y el `waitFor` aflojado, el default se comía la aserción POR CONTENIDO antes de ejecutarla.
+  }, 20_000);
+
+  // ── fix-pack 1 · AR/BLQ-2 · LA RAMA DEL TECHO, QUE NO EJECUTABA NI UN TEST DEL REPO ──────────────
+  // 🔴 M16 —reemplazar el cuerpo de esa rama por un `throw`, líneo-neutro— SOBREVIVÍA a la suite
+  // entera: 162 archivos / 3305 tests en verde. ⚠️ ESE `3305` ES UNA FOTO DEL ÁRBOL EN QUE SE CORRIÓ EL EXPERIMENTO (fix-pack 1) Y ⛔ NO SE RE-DERIVA: re-escribirlo con el número de hoy falsearía la medición, porque el mutante se corrió contra ESA suite. Lo que sí quedaba implícito y ahora está dicho (AR-fp/MNR-6): no es una afirmación sobre el árbol actual, y el conteo vivo del repo vive en un solo sitio, con su fecha, en (`MARCAS_DE_VUELTA`, `../infrastructure/solana/deeplink/sesion.ts:495`). Y con él M14 (emitir otra causa) y M10-bis (borrar
+  // `limpiarLaBarra()` de esa rama). Este `it` es el testigo de AC-3 que `sdd.md:530` declaraba
+  // —«el módulo + un `it` de render»— y que nunca se había escrito.
+  it("T-075-3d (AC-3): con la disponibilidad `unknown` PARA SIEMPRE vence el techo, la persona LEE la causa, la barra queda limpia y ⛔ no se llama a `execute()`", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo, "confirmed");
+    sembrarVueltaConLaDisponibilidadSinDecidir("conectar");
+    const c = contenedorQueLlegaAExecute(repo);
+    const espia = vi.spyOn(c.connectWallet, "execute");
+    expect(
+      solanaWalletBridge.getWalletAvailability(),
+      "precondición: si esto no es `unknown` el techo no puede vencer y el `it` mide otra cosa",
+    ).toBe("unknown");
+
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
+
+    // 1 · LA CAUSA PROPIA, EN PANTALLA. ⛔ Ni silencio (M16) ni otra causa (M14) ni `"none"` degradado.
+    expect(
+      await screen.findByText(CAUSA_DEL_TECHO, {}, { timeout: TECHO_DISPONIBILIDAD_MS + 2000 }),
+      "el techo venció y la persona no leyó nada: volvió de firmar y la pantalla se quedó muda",
+    ).toBeInTheDocument();
+    // 2 · el paso 2 TAMBIÉN corre en esta rama (M10-bis).
+    expect(
+      new URL(window.location.href).searchParams.get("dl"),
+      "el techo venció y dejó el rastro de la vuelta en la barra",
+    ).toBeNull();
+    // 3 · ⛔ Y NO SE PIDIÓ NINGUNA CONEXIÓN. El techo sale por su causa propia, corta, y no navega.
+    expect(
+      espia,
+      "el techo venció y aun así se llamó a `execute()`: por ahí adentro está `openModal()`, o sea el selector que esta HU vino a cerrar",
+    ).toHaveBeenCalledTimes(0);
+
+    // 🔴 CONTROL POSITIVO EN LA MISMA CORRIDA, con el MISMO contador y el MISMO container: un cero sólo
+    // dice «no pasó» si el mismo instrumento sabe dar ≠ 0 en el caso que sí pasa.
+    cleanup();
+    window.history.replaceState(null, "", "/enviar");
+    sembrarVuelta("conectar"); // ⚠️ LA ÚNICA VARIABLE QUE SE MUEVE: acá la disponibilidad SÍ está decidida
+    render(<RemittanceFlow pasoInicial="send" container={c} />);
+    await waitFor(() =>
+      expect(
+        espia.mock.calls.length,
+        "el MISMO contador no llega a 1 ni con la disponibilidad decidida: el cero de arriba no dice «no pasó», dice «no medí»",
+      ).toBeGreaterThan(0),
+    );
+  }, 20_000);
+
+  // ── fix-pack 1 · AR/BLQ-5 · AC-4: la espera TAMBIÉN cuelga de la bandera de repliegue ────────────
+  // ⚠️ ⛔ ESTO NO ES UNA SEGUNDA PERILLA, QUE ES LO QUE CD-3 PROHÍBE: es LA MISMA env
+  // (`deeplinkEnabled`, `./wallet-availability.ts:156`), aplicada en un sitio más. Con la bandera
+  // apagada —que es EL repliegue declarado del BUILD, y el escenario es apagarla con gente a mitad de
+  // viaje— una vuelta con `?dl=` bloqueaba el consumidor de montaje hasta la gracia y podía mostrar un
+  // copy que en `b71e917` no existía. M17 (agregar `&& deeplinkEnabled()`) dejaba la suite en 162/3305
+  // verde: ningún `it` distinguía las dos formas. ⚠️ Ese `3305` es una FOTO del árbol del fix-pack 1, igual que el de `:947`, y ⛔ no se re-deriva por el mismo motivo: el mutante se corrió contra ESA suite (AR-fp/MNR-6).
+  it("T-075-4b (AC-4): con la bandera de repliegue AUSENTE la vuelta ⛔ no entra a la espera", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo, "confirmed");
+    sembrarVueltaConLaDisponibilidadSinDecidir("crear-nonce");
+    // ⚠️ AUSENTE y ⛔ no `"false"`: es el estado de un build que nunca la declaró, y el resolver es
+    // opt-in estricto (`resolveSolanaDeeplinkEnabled`, `../infrastructure/chain.ts:269`).
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", undefined);
+    // CD-18 · las CUATRO mitades del fixture, y la primera es la que decide si el `it` mide algo.
+    expect(deeplinkEnabled(), "precondición: la bandera quedó PRENDIDA y este `it` está midiendo el caso de siempre").toBe(false);
+    expect(new URL(window.location.href).searchParams.get("dl")).toBe("crear-nonce");
+    expect(MARCAS_DE_VUELTA as readonly string[]).toContain("crear-nonce");
+    expect(solanaWalletBridge.getWalletAvailability()).toBe("unknown");
+
+    render(<RemittanceFlow pasoInicial="send" container={contenedorQueLlegaAlFallthrough(repo)} />);
+
+    await waitFor(
+      () =>
+        expect(
+          new URL(window.location.href).searchParams.get("dl"),
+          "con la bandera apagada la barra sigue sucia 1200 ms después: la espera corrió igual, o sea que la superficie nueva NO es replegable",
+        ).toBeNull(),
+      { timeout: 1200 },
+    );
+    await dejarVencerElTecho();
+    expect(
+      screen.queryByText(CAUSA_DEL_TECHO),
+      "con la bandera de repliegue apagada la persona leyó un copy que en `b71e917` no existía (AC-4)",
+    ).toBeNull();
+  }, 20_000);
+
+  // 🔴 LA OTRA MITAD DE AC-4, Y ES UN HALLAZGO PROPIO DE ESTE FIX-PACK: la SEÑAL de `:4070` es copy tan
+  // nuevo como el del techo, así que con la bandera apagada tampoco puede aparecer. Acá la
+  // disponibilidad va YA DECIDIDA a propósito: así la espera es un no-op y la ÚNICA variable que se
+  // mueve entre las dos mitades de este `it` es la bandera.
+  it("T-075-4c (AC-4): con la bandera AUSENTE la señal del fallthrough ⛔ tampoco aparece, y con la bandera puesta SÍ", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo, "confirmed");
+    sembrarVuelta("crear-nonce");
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", undefined);
+    expect(deeplinkEnabled(), "precondición: la bandera quedó prendida").toBe(false);
+
+    render(<RemittanceFlow pasoInicial="send" container={contenedorQueLlegaAlFallthrough(repo)} />);
+    await waitFor(() => expect(new URL(window.location.href).searchParams.get("dl")).toBeNull());
+    expect(
+      screen.queryByText(SENAL_SIN_CONSUMIDOR),
+      "con la bandera de repliegue apagada la persona leyó la señal, que es copy que `b71e917` no tenía (AC-4)",
+    ).toBeNull();
+
+    // 🔴 CONTROL POSITIVO EN LA MISMA CORRIDA: el MISMO fixture, moviendo SÓLO la bandera, SÍ la muestra.
+    // Sin esto, el `queryByText` de arriba sería un cero que no distingue «la bandera la apagó» de «este
+    // fixture nunca llega al fallthrough».
+    cleanup();
+    window.history.replaceState(null, "", "/enviar");
+    sembrarVuelta("crear-nonce"); // vuelve a poner la env en `"true"`
+    expect(deeplinkEnabled(), "el control positivo no encendió la bandera: la ausencia de arriba no dice nada").toBe(true);
+    render(<RemittanceFlow pasoInicial="send" container={contenedorQueLlegaAlFallthrough(repo)} />);
+    await waitFor(() => expect(screen.getByText(SENAL_SIN_CONSUMIDOR)).toBeInTheDocument());
+  }, 20_000);
 });

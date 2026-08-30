@@ -569,7 +569,7 @@ export function shortErrorCode(raw: string): string | undefined {
 }
 
 /** Traduce un código de error interno a copy humano para la UI. */
-export function humanError(code: string): string { const porEnlace = copyDeEnlace(code); if (porEnlace !== null) return porEnlace; // WKH-358/AC-8/DT-8 — EN ESTA LÍNEA (Δ0: el primer `if` de abajo es `:573` y una línea acá rompe 24 citas ancladas) y PRIMERO, antes de la cadena de `includes`. Es un lookup EXACTO, así que no puede robarle un código a nadie; lo que sí puede pasar al revés es que un needle nuevo de abajo sea subcadena de una de las catorce y se las robe en silencio. Medido: hoy ninguna de las catorce contiene ninguno de los needles actuales, o sea que HOY no hay colisión — pero el orden de una cadena de `includes` es una propiedad frágil y esto la fija. Lo mide `T-065-COPY-4`
+export function humanError(code: string): string { const porEnlace = copyDeEnlace(code); if (porEnlace !== null) return porEnlace; // WKH-358/AC-8/DT-8 — EN ESTA LÍNEA (Δ0: el primer `if` de abajo es `:573` y una línea acá rompe 24 citas ancladas) y PRIMERO, antes de la cadena de `includes`. Es un lookup EXACTO, así que no puede robarle un código a nadie; lo que sí puede pasar al revés es que un needle nuevo de abajo sea subcadena de una de las causas del `Record` y se las robe en silencio. Medido: hoy ninguna de ellas contiene ninguno de los needles actuales, o sea que HOY no hay colisión — pero el orden de una cadena de `includes` es una propiedad frágil y esto la fija. Lo mide `T-065-COPY-4`
   if (code.includes("quote_expired") || code.includes("QUOTE_STALE"))
     return "La tasa cambió. Revisá el nuevo monto.";
   // 🔴 ACÁ VIVÍAN DOS RAMAS `fx_*` Y SE FUERON EN WKH-332/W4 (AC-5), con la regresión declarada.
@@ -1384,7 +1384,7 @@ export function historyGroupFor(o: EscrowOutcome): HistoryGroup {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
-// WKH-358/AC-8 · EL COPY DE LAS CATORCE CAUSAS DEL RECORRIDO POR ENLACE
+// WKH-358/AC-8 · EL COPY DE LAS CAUSAS DEL RECORRIDO POR ENLACE
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
 //
 // 🔴 POR QUÉ ESTO NO ES UNA RAMA MÁS DE `humanError`. Esa función es una cadena de `includes`, y hasta
@@ -1393,11 +1393,11 @@ export function historyGroupFor(o: EscrowOutcome): HistoryGroup {
 // distintos con acciones distintas, y colapsarlos hace que una persona reintente contra un muro.
 //
 // ⛔ ES UN LOOKUP EXACTO Y CORRE **PRIMERO**, antes de la cadena de `includes` (DT-8). Medido: hoy
-// ninguna de las catorce contiene ninguno de los needles actuales, o sea que HOY no hay colisión — pero
+// ninguna de ellas contiene ninguno de los needles actuales, o sea que HOY no hay colisión — pero
 // el orden de una cadena de `includes` es una propiedad frágil, y un needle nuevo que sea subcadena de
-// una de estas catorce se las robaría en silencio. Lo mide `T-065-COPY-4`, moviendo el lookup al final.
+// una de estas causas se las robaría en silencio. Lo mide `T-065-COPY-4`, moviendo el lookup al final.
 //
-// ⛔ NINGUNO DE LOS CATORCE AFIRMA QUE SE MOVIÓ PLATA, y no es una preferencia de tono: las catorce cortan
+// ⛔ NINGUNO DE ESTOS COPYS AFIRMA QUE SE MOVIÓ PLATA, y no es una preferencia de tono: todos cortan
 // ANTES del broadcast del DEPÓSITO. Decir "se debitó" ahí sería falso y mandaría a la persona a buscar
 // plata donde no hay ninguna. Lo mide `T-065-COPY-3`. ⛔ Y SIN EM DASHES (CD-16).
 // ⚠️ PLATA NO ES LO MISMO QUE ALQUILER, Y LAS TRES CAUSAS NUEVAS OBLIGAN A DISTINGUIRLO (fix-pack + re-AR it2): las
@@ -1491,11 +1491,11 @@ const COPY_DE_ENLACE: Record<CausaDeEnlaceEnPantalla, string> = {
   // billetera contestó que no) ni habla de la transacción (eso es `deeplink_tx_alterada`, donde hay
   // USDC en juego): esto es una firma de MENSAJE, no toca fondos, y el corte es ANTES de mover nada.
   deeplink_pop_alterado:
-    "Lo que volvió de tu billetera no coincide con lo que te pedimos, así que lo cortamos acá y no mandamos tus USDC. Empezá el envío de nuevo desde esta pantalla.",
+    "Lo que volvió de tu billetera no coincide con lo que te pedimos, así que lo cortamos acá y no mandamos tus USDC. Empezá el envío de nuevo desde esta pantalla.", /* WKH-075 — LAS DOS ENTRADAS NUEVAS EN ESTA MISMA LÍNEA FÍSICA (Δ0). ⛔ No en dos renglones: una línea de más acá corre 8 citas ancladas (`:1538`×1, `:1599`×1, `:1602`×4, `:1747`×2, medidas contra `b71e917`). 🔴 LAS DOS SON DISTINTAS ENTRE SÍ Y DISTINTAS DE `wallet_connect_cancelled` A PROPÓSITO, y no es estilo: `T-065-COPY-1` sólo exige que no sean el default, y eso NO alcanza para AC-3, que pide que la persona pueda distinguir esto de un selector que se cerró. Lo mide `T-075-COPY`. ⛔ Cero em dashes (convención de copy público). 🔴 EL COPY DE `deeplink_disponibilidad_sin_resolver` DECÍA «y la vuelta llegó bien» Y ERA UNA AFIRMACIÓN QUE EL SISTEMA NO HABÍA MEDIDO (fix-pack · CR/BLQ-1): esta causa la emite la espera de `flow.tsx:4005`, y en esa línea todavía no corrió NADA que mire la respuesta — `remesaEnCurso()` es esa misma línea, `resolverVueltaDelPermiso` la siguiente y `completar()` viene después. MEDIDO por el CR con el gate ya arreglado: con `dl=firmar-tx` y SIN carga de respuesta en la barra, la pantalla leía igual «la vuelta llegó bien». Hoy afirma sólo lo que esa línea sabe: que la persona volvió (hay una marca CONOCIDA en la barra) y que se frenó ANTES de leer la respuesta. ⛔ Y el trozo «terminar de reconocer qué billetera hay en este navegador» NO se toca: es el observable que usan tres testigos. */ deeplink_disponibilidad_sin_resolver: "Volviste de tu billetera, pero no pudimos terminar de reconocer qué billetera hay en este navegador, así que frenamos antes de leer la respuesta y no se envió nada. Probá de nuevo en unos segundos.", deeplink_marca_sin_consumidor: "Volviste de tu billetera, pero esta pantalla no pudo retomar el envío desde donde lo dejaste. No se envió nada. Empezá el envío de nuevo desde esta pantalla.", /* 🔴 WKH-075/addendum del reloj — LA ENTRADA NUEVA EN ESTA MISMA LÍNEA FÍSICA (Δ0: hay 5 citas ancladas a este archivo por debajo de acá, `:1538`×1, `:1602`×3, `:1747`×1, re-derivadas sobre este árbol). ⛔ SIETE COSAS QUE ESTE COPY NO PUEDE DECIR, y el motivo de cada una está en el bloque de (`DEEPLINK_RELOJ_INCONSISTENTE`, `../infrastructure/solana/deeplink/firma-por-enlace.ts:1153`). Las dos que más importan: NO dice «no se firmó nada» —puede haber una `transaccionFirmada` en el disco, que es justo lo que el arreglo salva— y NO dice «empezá el envío de nuevo», que empujaría a tirarla. Por eso ⛔ no se reusó `deeplink_viaje_vencido`, unos renglones más arriba, cuyo copy dice las dos. ⛔ Tampoco nombra ninguna duración: no sabemos cuánto retrocedió el reloj y afirmarlo sería inventar. ⛔ Cero em dashes y CERO DÍGITOS: `T-065-18` hace un `slice` del cuerpo de este `Record` y se pone rojo con cualquier literal de forma dígito-coma-cuatro-dígitos. 🔒 Las siete prohibiciones las mide `T-075-RELOJ-COPY`, con los literales escritos EN EL TEST: buscarlos acá sería un control que se lee a sí mismo. */ deeplink_reloj_inconsistente: "El reloj de este teléfono no coincide con el momento en que empezaste, así que no podemos fechar este envío. No perdimos nada: lo que hayas firmado sigue guardado. Volvé a intentarlo.",
 };
 
 /**
- * El copy de una causa del recorrido por enlace, o `null` si el código no es una de las catorce.
+ * El copy de una causa del recorrido por enlace, o `null` si el código no es una de las del `Record`.
  *
  * ⚠️ `null` Y NO UN DEFAULT: quien llama es `humanError`, y si esto contestara una frase genérica se
  * comería todos los demás códigos del sistema. El default sigue siendo el de allá, uno solo.
@@ -1506,7 +1506,7 @@ export function copyDeEnlace(code: string): string | null {
     : null;
 }
 
-/** Sólo para los tests: las catorce claves, derivadas del `Record` y no escritas a mano. ⚠️ El NÚMERO de este renglón envejece solo: lo que no envejece es que se derive del `Record` con `Object.keys`. */
+/** Sólo para los tests: TODAS las claves, derivadas del `Record` y no escritas a mano. ⚠️ ACÁ DECÍA «las catorce» y el `Record` tenía 19 (fix-pack · CR/INFO-1): el desvío entró con WKH-359 y esta HU lo tuvo delante sin verlo. El número no se escribe en ningún renglón de prosa; vive en UN solo sitio, el `toHaveLength` de `T-065-COPY-3`. */
 export const CAUSAS_CON_COPY = Object.keys(COPY_DE_ENLACE);
 
 /**

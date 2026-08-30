@@ -13,7 +13,7 @@
 // | borrar la validación de `mensajeBase64`                         | 1 | 3 |
 // | borrar la validación de `referenceBase58`                       | 1 | 3 |
 // | `esTextoUtil` degradado a `typeof === "string"`                  | 1 | 6 |
-// | ⚠️ `typeof desde !== "number"` en vez de `Number.isFinite`       | **0** | **0 — SOBREVIVE** |
+// | ⚠️ `typeof desde !== "number"` en vez de `Number.isFinite` | 1 | 1 — YA NO SOBREVIVE (ver abajo) |
 // | borrar el guard del `desde` en el FUTURO                        | 1 | 1 |
 // | borrar la ventana de edad                                      | 1 | 1 |
 // | NO limpiar el disco ante un JSON roto                          | 1 | 1 |
@@ -210,28 +210,29 @@ describe("preparado — leerPreparado valida el disco y limpia ante basura", () 
     });
   }
 
-  // ⚠️ MUTANTE QUE **SOBREVIVE**, y va escrito porque medirlo es lo que lo volvió honesto. Acá decía
-  // «MUTANTE QUE MATA: `typeof p?.desde !== "number"` en vez de `!Number.isFinite(p?.desde)`, porque
-  // `JSON.parse("1e999")` produce `Infinity` y su `typeof` es `"number"`». **Eso es falso** y la
-  // batería de WKH-356 lo midió: con el guard mutado la suite queda VERDE (exit 0, 0 rojos).
-  //
-  // POR QUÉ, medido input por input: ningún valor alcanzable desde `JSON.parse` los distingue.
-  //   `1e999`  → `Infinity`  ⇒ lo corta el guard del FUTURO (`Infinity > ahora` es true)
+  // ⚠️ MUTANTE QUE SOBREVIVÍA Y HOY MUERE, y la historia entera vale más que el veredicto. Primero acá
+  // decía «MUTANTE QUE MATA: `typeof p?.desde !== "number"` en vez de `!Number.isFinite(p?.desde)`»;
+  // la batería de WKH-356 lo corrió y midió la suite VERDE (exit 0, 0 rojos), así que la frase se
+  // corrigió a «SOBREVIVE» con el porqué input por input:
+  //   `1e999`  → `Infinity`  ⇒ lo cortaba el guard del FUTURO (`Infinity > ahora` es true)
   //   `-1e999` → `-Infinity` ⇒ lo corta la VENTANA (`ahora - (-Infinity)` es `Infinity`)
   //   `"ayer"`, `null`, `true`, `[]`, `{}` ⇒ los corta el `typeof` mutado igual
   //   `NaN`    → no es JSON válido: `JSON.parse` TIRA y lo cubre el `catch` de más arriba
-  // Los cinco convergen en `no-hay`, que es la MISMA respuesta que da el original.
+  // Los cinco convergían en `no-hay`, que era la MISMA respuesta que daba el original.
   //
-  // ⚠️ Y POR QUÉ EN `sesion.ts` EL MISMO GUARD SÍ TIENE CANDADO: porque `leerViaje` tiene TRES
-  // desenlaces y `-Infinity` sale por «vencido», que es una respuesta OBSERVABLEMENTE distinta —se le
-  // afirma a la persona que hubo un viaje suyo y que firmó al pedo. `LecturaDelPreparado` tiene DOS, y
-  // esa diferencia es la que se pierde.
+  // 🔴 EL ADDENDUM DEL RELOJ ROMPIÓ ESA CONVERGENCIA, y no a propósito: el guard del futuro ya no
+  // contesta `no-hay` ni limpia, contesta `no-fechable` y ⛔ DEJA EL DISCO. Así que hoy el `1e999` sí
+  // distingue las dos versiones del código, y el `it` de acá abajo se pone rojo con el mutante puesto.
+  // MUTANTE QUE MATA (medido en esta pasada): `typeof p?.desde !== "number"` ⇒ el `it` de `1e999` da
+  // `expected { tipo: "no-fechable" } to deeply equal { tipo: "no-hay" }` y `expected 0 to be 1`.
+  // ⚠️ Y LA CONSECUENCIA REAL ES PEOR QUE EL ROJO: sin esta validación un `+Infinity` sería basura que
+  // la ventana NO limpia nunca, porque `ahora - Infinity` es `-Infinity`.
   //
-  // ⛔ EL GUARD SE QUEDA. No se borra "porque ningún test lo ve": sigue siendo la validación correcta
-  // de un campo que se resta, y el día que este tipo gane un tercer valor pasa a ser observable. Lo
-  // que se corrige es la PROMESA del comentario, no el código. Los dos `it` de abajo siguen siendo
-  // candados válidos de la CONDUCTA (basura ⇒ `no-hay` + limpieza); lo que no son es candados de
-  // ESTA línea.
+  // ⚠️ El párrafo que seguía acá decía que en `sesion.ts` el mismo guard SÍ tenía candado «porque
+  // `leerViaje` tiene TRES desenlaces y `LecturaDelPreparado` tiene DOS». La segunda mitad ya es falsa:
+  // `LecturaDelPreparado` tiene TRES desde el addendum, y ésa es exactamente la razón por la que el
+  // mutante dejó de sobrevivir. El propio comentario había escrito su condición de caducidad («el día
+  // que este tipo gane un tercer valor pasa a ser observable»), y ese día llegó.
   it("un `desde` no finito POSITIVO es basura: no-hay + limpieza", () => {
     const a = almacenFalso();
     a.escribir(
@@ -259,14 +260,50 @@ describe("preparado — leerPreparado valida el disco y limpia ante basura", () 
     expect(a.borrados).toBe(1);
   });
 
-  // 🔴 MUTANTE QUE MATA: borrar el `if (p.desde > ahora)`. Sin él, `ahora - desde` es negativo y
-  // nunca supera `MAX_EDAD_MS`, así que un `desde` adelantado diez días mantiene vivo el registro
-  // diez días más veinte minutos. Es el agujero exacto que 061 midió en `leerViaje`.
-  it("un `desde` en el FUTURO es basura, no un registro joven", () => {
+  // ══ WKH-075 · ADDENDUM DEL RELOJ · testigo E ═══════════════════════════════════════════════════
+  //
+  // 🔴 EL RETROCESO SE EXPRESA CON `ahora` POR PARÁMETRO, ⛔ nunca con un reloj real: `leerPreparado`
+  // recibe el instante (`leerPreparado`, `./preparado.ts:129`), así que un retroceso son dos llamadas
+  // con `ahora` decreciente. Un testigo que dependiera del reloj del runner quedaría verde con el bug
+  // adentro en cualquier máquina con el reloj disciplinado por slew.
+  //
+  // 🔴 POR QUÉ ESTE REGISTRO IMPORTA SI «SOLO NO VALE NADA»: su `mensajeBase64` es lo ÚNICO contra lo
+  // que se puede verificar la `transaccionFirmada` que el viaje sí preserva. Arreglar el viaje sin
+  // arreglar esto convierte el defecto en otro: viaje vivo sobre registro muerto ⇒
+  // `deeplink_sin_memoria` en CADA invocación, con la firma preservada e inutilizable.
+  // MUTANTE QUE MATA (E-1): quitar la rama `p.desde > ahora` de `preparado.ts` ⇒ `expected { tipo:
+  //   "hay", ... } to deeply equal { tipo: "no-fechable" }`. ⚠️ Si el rojo saliera del `borrados`, el
+  //   mutante habría muerto por la VENTANA y sería un falso KILLED: con `desde` futuro `ahora - desde`
+  //   es negativo y esa ventana no se alcanza nunca.
+  // MUTANTE QUE MATA (E-2): devolverle el `terminarPreparado(a)` a esa rama ⇒ `expected 1 to be 0` en
+  //   el `expect` del disco. Ése es EL `expect` que mide el arreglo.
+  it("T-075-RELOJ-E · un `desde` en el FUTURO no se puede fechar, y ⛔ el registro NO SE BORRA", () => {
     const a = almacenFalso();
     guardarPreparado(a, preparado({ desde: AHORA + 10 * 24 * 60 * 60 * 1000 }));
-    expect(leerPreparado(a, AHORA)).toEqual({ tipo: "no-hay" });
-    expect(a.borrados).toBe(1);
+    expect(leerPreparado(a, AHORA)).toEqual({ tipo: "no-fechable" });
+    expect(a.borrados, "una LECTURA no destruye lo que no entrega").toBe(0);
+    expect(a.datos.has("chaski.billetera.preparado.v1")).toBe(true);
+  });
+
+  it("T-075-RELOJ-E2 · un MILISEGUNDO adelantado ya no es fechable, y el registro REVIVE después", () => {
+    // El borde, sin tolerancia, y la vuelta: en cuanto el reloj pasa su `desde`, el MISMO registro
+    // vuelve a servir sin que nadie lo haya reescrito. Es la mitad que prueba que degradar no mutila.
+    const a = almacenFalso();
+    const p = preparado({ desde: AHORA + 1 });
+    guardarPreparado(a, p);
+    expect(leerPreparado(a, AHORA)).toEqual({ tipo: "no-fechable" });
+    expect(leerPreparado(a, AHORA + 1)).toEqual({ tipo: "hay", preparado: p });
+    expect(a.borrados).toBe(0);
+  });
+
+  it("T-075-RELOJ-E-J · CONTROL NEGATIVO: con retroceso CERO el registro sigue siendo «hay»", () => {
+    // ⛔ Sin esto, nada distingue «arreglé el guard» de «rompí el guard»: el corte es ESTRICTAMENTE
+    // mayor, y un registro leído en el mismo milisegundo en que se escribió es el caso normal.
+    const a = almacenFalso();
+    const p = preparado({ desde: AHORA });
+    guardarPreparado(a, p);
+    expect(leerPreparado(a, AHORA)).toEqual({ tipo: "hay", preparado: p });
+    expect(a.borrados).toBe(0);
   });
 
   // MUTANTE QUE MATA: borrar el `if (ahora - p.desde > MAX_EDAD_MS)` ⇒ un registro de horas atrás

@@ -2346,20 +2346,20 @@ describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace",
   // agregar una causa sin copy dejara este bloque en verde, que es justo lo que tiene que cazar.
   const CAUSAS = CAUSAS_CON_COPY;
 
-  it("son DIECISIETE, y ninguna cae en el default de `humanError`", () => {
+  it("son las que el `Record` tiene, y ninguna cae en el default de `humanError`", () => {
     // ⚠️ EL NÚMERO ESTÁ ESCRITO A MANO A PROPÓSITO y es la SEGUNDA fuente: la lista se deriva del
     // `Record` con `Object.keys`, así que sin este número agregar una causa sin copy no movería nada acá.
     // Eran ONCE al cerrar la ola 4; el fix-pack sumó dos del paso de la cuenta de nonce y el re-AR it2 la tercera.
     // WKH-359 sumó las TRES de la prueba de posesión por enlace (`deeplink_pop_sin_firma`,
     // `deeplink_pop_vencido`, `deeplink_pop_alterado`) ⇒ 17. Este `it` se puso ROJO al agregarlas y ésa
     // es la prueba de que la segunda fuente sirve: el `Record` ya las tenía y el número no.
-    expect(CAUSAS, "el `Record` dejó de tener las diecisiete causas").toHaveLength(17);
+    expect(CAUSAS, "el `Record` dejó de tener la cantidad de causas que este `it` fija como segunda fuente").toHaveLength(20); // WKH-075 sumó las DOS de la vuelta que no se pudo resolver (`deeplink_disponibilidad_sin_resolver`, `deeplink_marca_sin_consumidor`) ⇒ 19, y el addendum del reloj sumó `deeplink_reloj_inconsistente` ⇒ 20. Este `it` se puso ROJO al agregarlas, igual que con las tres de WKH-359: es la prueba de que la segunda fuente sigue sirviendo.
     for (const c of CAUSAS) {
       expect(humanError(c), `\`${c}\` cae en el default: la persona lee la frase genérica`).not.toBe(
         "Algo salió mal. Intentá de nuevo.",
       );
     }
-    // Y las diecisiete son textos con contenido, no cadenas de relleno.
+    // Y las causas del `Record` son textos con contenido, no cadenas de relleno.
     for (const c of CAUSAS) expect(humanError(c).length).toBeGreaterThan(40);
   });
 
@@ -2370,8 +2370,8 @@ describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace",
   // gramática que vigila, o sea un guard que se compara consigo mismo. El costo real es que el copy de
   // este `Record` no puede usar ese verbo ni en negativo, y eso ya se pagó una vez en el fix-pack.
   it("T-065-COPY-3: NINGÚN copy afirma que se movió plata, y ninguno tiene em dashes", () => {
-    // 🔴 LAS DIECISIETE CORTAN ANTES DEL BROADCAST DEL DEPÓSITO. Decir "se debitó" ahí es falso, y manda a la
-    // persona a buscar plata donde no hay ninguna. ⚠️ Tres de las diecisiete (las del paso del nonce) SÍ son
+    // 🔴 LAS CAUSAS DEL `Record` CORTAN ANTES DEL BROADCAST DEL DEPÓSITO. Decir "se debitó" ahí es falso, y manda
+    // a la persona a buscar plata donde no hay ninguna. ⚠️ Tres de ellas (las del paso del nonce) SÍ son
     // post-broadcast de OTRA transacción, la que crea la cuenta: ahí lo que puede haberse debitado es el
     // alquiler en SOL, nunca USDC, y ninguno de los tres copys afirma lo contrario.
     const MOVIO_PLATA = /se debit|se cobr|te cobramos|se movi|se transfir|se descont|salieron de tu/i;
@@ -2388,7 +2388,7 @@ describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace",
   // `includes` y antes del `return` del default. (MEDIDO: ver LA BATERÍA DE MUTACIÓN al final de `deeplink/conexion.test.ts`, que trae exit, `it` rojos y el árbol de los 54, y se re-corre con `node scripts/mutacion/bateria-065.mjs`.)
   //
   // ⚠️ POR QUÉ ESTE `it` ES TEXTUAL Y NO DE COMPORTAMIENTO, dicho porque un review lo va a preguntar:
-  // HOY ninguna de las diecisiete contiene ninguno de los needles de la cadena, así que **no existe ningún
+  // HOY ninguna causa del `Record` contiene ninguno de los needles de la cadena, así que **no existe ningún
   // input que distinga los dos órdenes**. Un `it` de comportamiento sería verde con el lookup en
   // cualquier lado. Lo que DT-8 fija es una propiedad del CÓDIGO, y por eso se mide sobre el código.
   it("T-065-COPY-4: el lookup exacto corre ANTES de la cadena de `includes`", () => {
@@ -2416,7 +2416,7 @@ describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace",
     expect(
       cuerpo.indexOf("copyDeEnlace(code)"),
       "el lookup exacto quedó DESPUÉS de la cadena de `includes`: un needle nuevo que sea subcadena " +
-        "de una de las diecisiete se las roba en silencio (DT-8)",
+        "de una de las causas del `Record` se las roba en silencio (DT-8)",
     ).toBeLessThan(cuerpo.indexOf("code.includes("));
   });
 
@@ -2447,6 +2447,78 @@ describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace",
       "hay una cifra de SOL escrita a mano en el `Record`: AC-7 exige que se DERIVE de la constante",
     ).toEqual([]);
     expect(cuerpo).toContain("formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT)");
+  });
+
+  // ── WKH-075 · ADDENDUM DEL RELOJ · testigo H ────────────────────────────────────────────────────
+  //
+  // ⛔ LOS LITERALES PROHIBIDOS VIVEN ACÁ, EN EL TEST, Y NO SE DERIVAN DEL COPY. Si este `it` buscara
+  // una subcadena del propio copy sería un control que se lee a sí mismo: nunca podría fallar. Y por
+  // eso además lleva REFUTACIÓN DEL INSTRUMENTO — cada prohibición se corre contra una causa que SÍ
+  // la dice, así que una rama rota (o vacía) se pone roja en vez de aplaudir.
+  //
+  // 🔴 Y LA REFUTACIÓN ES POR PROHIBICIÓN, NO POR REGEX (AR-fp/MNR-1). Acá había UN solo regex
+  // alternado (`/a|b|c|d|e|f/`) con TRES testigos positivos, y eso valida el regex ENTERO, no cada
+  // alternativa: MEDIDO — rompiendo UNA sola rama (`empezá el envío de nuevo` → `ZZZ`) el archivo
+  // quedaba en 233 passed, verde. De las SEIS prohibiciones sólo 3 tenían refutación efectiva, y las
+  // otras 3 eran ramas que ningún `expect` podía poner en rojo. Ahora cada una trae su testigo y el
+  // rojo sale CON EL NOMBRE de la prohibición que se rompió.
+  //
+  // 🔴 POR QUÉ CADA PROHIBICIÓN, que es lo que hace que esto no sea estilo:
+  //   · «no se firmó nada»          → puede haber una `transaccionFirmada` en el disco.
+  //   · «empezá el envío de nuevo»  → empujaría a descartar lo que el arreglo acaba de salvar.
+  //   · «pasó demasiado tiempo»     → es literalmente lo contrario de lo que ocurrió.
+  //   · «cancelaste»                → nadie canceló nada; eso es `deeplink_rechazado`.
+  //   · modo privado / no se puede guardar → eso es `deeplink_sin_memoria`; acá el disco funciona.
+  //   · cualquier duración          → NO sabemos cuánto retrocedió el reloj. Afirmarlo es inventar.
+  //   · em dashes                   → convención de copy público (CD-16).
+  // MUTANTE QUE MATA: reusar el copy de `deeplink_viaje_vencido` para esta causa ⇒ rojo en TRES de los
+  //   `it.each` (las tres frases que ese copy dice) y también en el bloque de unicidad de más abajo.
+  const PROHIBICIONES = [
+    { nombre: "no se firmó nada", re: /no se firmó nada/i, loDice: "deeplink_viaje_vencido" },
+    { nombre: "empezá el envío de nuevo", re: /empezá el envío de nuevo/i, loDice: "deeplink_viaje_vencido" },
+    { nombre: "pasó demasiado tiempo", re: /pasó demasiado tiempo/i, loDice: "deeplink_pop_vencido" },
+    { nombre: "cancelaste", re: /cancelaste/i, loDice: "deeplink_rechazado" },
+    { nombre: "modo privado", re: /modo privado/i, loDice: "deeplink_sin_memoria" },
+    { nombre: "no puede guardar", re: /no puede guardar/i, loDice: "deeplink_sin_memoria" },
+  ] as const;
+
+  it.each(PROHIBICIONES)(
+    "T-075-RELOJ-COPY · el copy del reloj no dice «$nombre», y el instrumento SÍ la ve en `$loDice`",
+    ({ nombre, re, loDice }) => {
+      // (1) REFUTACIÓN DEL INSTRUMENTO, PRIMERO: si esta rama dejó de matchear, el `toBe(false)` de
+      // abajo sería vacuo y verde para siempre. Acá se le entra con la causa que SÍ dice la frase.
+      expect(re.test(humanError(loDice)), `el patrón de «${nombre}» no la encuentra ni en \`${loDice}\`, que la dice`).toBe(true);
+      // (2) y recién ahora la prohibición.
+      expect(re.test(humanError("deeplink_reloj_inconsistente")), `el copy del reloj dice «${nombre}»`).toBe(false);
+    },
+  );
+
+  it("T-075-RELOJ-COPY-2: el copy del reloj no promete plazos, no tiene em dash, y dice lo que compró", () => {
+    const t = humanError("deeplink_reloj_inconsistente");
+    // (0) control del instrumento: la causa existe en el `Record` y no cayó en el default.
+    expect(t, "la causa nueva cae en el default de `humanError`").not.toBe("Algo salió mal. Intentá de nuevo.");
+    // (2) ninguna duración, ni en cifras ni en palabras: no sabemos cuánto retrocedió el reloj.
+    expect(/\d/.test(t), "el copy del reloj nombra una cifra").toBe(false);
+    expect(/en un momento|en unos segundos|en unos minutos|en un rato/i.test(t), "el copy del reloj promete un plazo").toBe(false);
+    // (3) em dashes.
+    expect(t.includes("—"), "el copy del reloj tiene un em dash (CD-16)").toBe(false);
+    // (4) y lo que SÍ tiene que decir, porque es la mitad que el arreglo compró: que no se perdió nada.
+    expect(t, "el copy del reloj no le dice a la persona que lo suyo sigue guardado").toContain("sigue guardado");
+  });
+
+  // 🔴 UNICIDAD CONTRA LAS OTRAS 19, NO CONTRA UN VECINO (AR-fp/MNR-2). Acá había un solo
+  // `not.toBe(humanError("deeplink_viaje_vencido"))`, y §3.4 pide que la persona pueda DISTINGUIR este
+  // caso: un copy que se repita con cualquier otra causa la deja sin poder distinguirlo, no sólo con
+  // esa. ⛔ Y la lista NO se escribe a mano: se deriva del `Record` con `CAUSAS_CON_COPY`, igual que
+  // arriba, para que una causa nueva entre sola al barrido.
+  it("T-075-RELOJ-COPY-3: el copy del reloj no es igual al de NINGUNA otra causa del `Record`", () => {
+    const t = humanError("deeplink_reloj_inconsistente");
+    const otras = CAUSAS_CON_COPY.filter((c) => c !== "deeplink_reloj_inconsistente");
+    // ⛔ REFUTACIÓN DEL INSTRUMENTO: con una lista vacía este `it` no afirma NADA y queda verde para
+    // siempre. El piso es el `Record` de 20 menos ésta, y es la misma segunda fuente del `it` de arriba.
+    expect(otras, "el barrido de unicidad se quedó sin causas contra las que comparar").toHaveLength(19);
+    const gemelas = otras.filter((c) => humanError(c) === t);
+    expect(gemelas, `el copy del reloj es idéntico al de otra causa: la persona no puede distinguirlas`).toEqual([]);
   });
 });
 
@@ -3210,6 +3282,72 @@ describe("T-073-CENSO (AC-7): los cinco desenlaces del resume tienen texto decla
         `«${sintetico}» dejó de cruzar el umbral. ⛔ Si es porque SUBISTE la constante: no arreglaste nada ` +
           `—la métrica le sigue dando ${da}— y apagaste la detección real (${porQue})`,
       ).toBeGreaterThanOrEqual(SOLAPAMIENTO_QUE_HAY_QUE_DECLARAR);
+    }
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-075 · T-075-COPY (AC-3) — las dos causas nuevas dicen algo PROPIO
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// 🔴 POR QUÉ ESTE BLOQUE EXISTE SI YA ESTÁ `T-065-COPY-1`. Ese candado exige que la causa **no caiga en
+// el default**, y eso NO alcanza para AC-3: el AC pide que la persona pueda distinguir esto de un
+// selector que se cerró. Dos causas con copy propio pero IDÉNTICO entre sí, o idéntico al de
+// `wallet_connect_cancelled`, pasarían `T-065-COPY-1` enteras y dejarían a la persona leyendo que
+// «cerró el selector» justo cuando no tocó nada. Eso es el defecto que esta HU vino a sacar, una capa
+// más arriba.
+describe("T-075-COPY (WKH-075/AC-3): la vuelta que no se pudo resolver no se confunde con un selector cerrado", () => {
+  const SIN_RESOLVER = humanError("deeplink_disponibilidad_sin_resolver");
+  const SIN_CONSUMIDOR = humanError("deeplink_marca_sin_consumidor");
+  const CANCELADO = humanError("wallet_connect_cancelled");
+
+  it("las tres frases se leyeron de verdad (si alguna viniera vacía, todo lo de abajo sería vacuo)", () => {
+    // 🔴 CONTROL POSITIVO PRIMERO: tres `not.toBe` entre cadenas vacías pasan siempre.
+    for (const [nombre, t] of [["sin-resolver", SIN_RESOLVER], ["sin-consumidor", SIN_CONSUMIDOR], ["cancelado", CANCELADO]] as const) {
+      expect(t.length, `el copy de \`${nombre}\` vino vacío o casi`).toBeGreaterThan(40);
+    }
+    // Y la de `wallet_connect_cancelled` sigue siendo la que esta HU NO quiere que la persona lea por
+    // una vuelta buena. Si este `expect` se rompe, el resto del bloque está comparando contra otra cosa.
+    expect(CANCELADO).toContain("Se cerró el selector de wallet sin conectar");
+  });
+
+  it("ninguna de las dos es el default de `humanError`", () => {
+    expect(SIN_RESOLVER).not.toBe("Algo salió mal. Intentá de nuevo.");
+    expect(SIN_CONSUMIDOR).not.toBe("Algo salió mal. Intentá de nuevo.");
+  });
+
+  it("ninguna de las dos dice lo que dice `wallet_connect_cancelled`, y son distintas ENTRE SÍ", () => {
+    expect(SIN_RESOLVER, "la vuelta sin resolver le atribuye a la persona haber cerrado el selector").not.toBe(CANCELADO);
+    expect(SIN_CONSUMIDOR, "la marca sin consumidor le atribuye a la persona haber cerrado el selector").not.toBe(CANCELADO);
+    expect(SIN_RESOLVER, "las dos causas colapsaron en el mismo texto: nombran silencios distintos y piden acciones distintas").not.toBe(SIN_CONSUMIDOR);
+    // ⛔ Y ninguna de las dos le atribuye a la persona un gesto que no hizo. Es la batalla de
+    // `wallet-error-code.ts:216-218`, y acá cuesta más caro: la persona YA firmó.
+    for (const t of [SIN_RESOLVER, SIN_CONSUMIDOR]) expect(t).not.toMatch(/cerraste|cancelaste|se cerró el selector/i);
+  });
+
+  // 🔴 ESTE `it` SE LLAMABA «las dos afirman que la vuelta LLEGÓ» Y ESA ERA LA AFIRMACIÓN NO MEDIDA
+  // (fix-pack · CR/BLQ-1). Lo que el sistema sabe cuando emite `deeplink_disponibilidad_sin_resolver`
+  // es que hay una marca CONOCIDA en la barra —o sea que esta pantalla mandó a esa persona a su
+  // billetera y volvió—, y ⛔ NADA sobre la respuesta: `flow.tsx:4005` corre ANTES de `completar()`.
+  // ⇒ Se afloja a lo que sí está medido (que la persona VOLVIÓ) y se le agrega el guard que impide
+  // reintroducir lo otro. ⚠️ El `toMatch(/Volviste de tu billetera/)` se queda: esa mitad es cierta y
+  // es lo que la HU agrega contra el precedente —la persona gastó un viaje redondo y el copy tiene que
+  // reconocerlo antes de pedirle nada—; lo que se va es «la vuelta llegó bien».
+  it("las dos reconocen que la persona VOLVIÓ y que no se envió nada, ⛔ ninguna afirma que la vuelta se haya VALIDADO, y ⛔ no tienen em dashes", () => {
+    const AFIRMA_QUE_LA_VUELTA_SIRVIÓ = /llegó bien|volvió bien|salió bien|vino bien|la recibimos bien/i;
+    // 🔴 REFUTACIÓN DEL INSTRUMENTO PRIMERO: sin esto, un regex que dejó de matchear daría dos
+    // `not.toMatch` vacuos y el guard se caería solo sin que nadie lo note.
+    expect(
+      AFIRMA_QUE_LA_VUELTA_SIRVIÓ.test("Volviste de tu billetera y la vuelta llegó bien."),
+      "el regex no encuentra la frase prohibida ni en el texto que la contiene: los dos `not.toMatch` de abajo son vacuos",
+    ).toBe(true);
+    for (const t of [SIN_RESOLVER, SIN_CONSUMIDOR]) {
+      expect(t, "el copy no reconoce que la persona volvió de su billetera").toMatch(/Volviste de tu billetera/);
+      expect(t, "el copy no dice qué quedó del envío").toMatch(/no se envió nada|No se envió nada/);
+      expect(t, "em dash en copy público").not.toMatch(/[—–]/);
+      expect(
+        t,
+        "el copy afirma que la vuelta llegó BIEN, y en el punto donde se emite no corrió nada que mire la respuesta",
+      ).not.toMatch(AFIRMA_QUE_LA_VUELTA_SIRVIÓ);
     }
   });
 });

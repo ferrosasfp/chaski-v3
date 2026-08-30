@@ -58,8 +58,8 @@ export interface Preparado {
   desde: number;
 }
 
-/** El resultado de leer el disco. Dos valores, no tres: acá "vencido" y "no hay" se tratan igual. */
-export type LecturaDelPreparado = { tipo: "hay"; preparado: Preparado } | { tipo: "no-hay" };
+/** El resultado de leer el disco. TRES valores. ⚠️ ACÁ DECÍA «Dos valores, no tres: acá "vencido" y "no hay" se tratan igual», y la primera mitad quedó falsa con el arreglo del reloj: dejarla habría sido publicar una afirmación falsa sobre el tipo de la línea de abajo. Lo que SIGUE siendo cierto es la segunda mitad: «vencido» y «no hay» se tratan igual, porque el registro no tiene adentro ninguna firma ni ninguna clave. Lo que NO se puede tratar igual es «no-fechable», porque ése ⛔ no se borra. */
+export type LecturaDelPreparado = { tipo: "hay"; preparado: Preparado } | { tipo: "no-hay" } | { tipo: "no-fechable" }; // 🔴 EL TERCERO EN ESTA MISMA LÍNEA (Δ0: la unión es de UNA línea y hay citas ancladas por debajo, `:80` y `:172`). ⛔ SIN PAYLOAD, al revés que el cuarto valor de `LecturaDelViaje`: el `Preparado` no lleva adentro ninguna firma ni ninguna clave —son identificadores y bytes públicos—, así que no hay nada que un `resultadoPreservable` tenga que decidir sobre él y el motor ya tiene escrito que ignorarlo no destruye nada. Lo único que hacía falta es que NO SE BORRE: su `mensajeBase64` es lo ÚNICO contra lo que se puede verificar la `transaccionFirmada` que el viaje sí preserva, y guardar la firma borrando su ancla es guardar algo que ya no sirve.
 
 /**
  * ⚠️ ESTA SÍ PUEDE TIRAR, Y ES DELIBERADO — igual que `guardarViaje`. `localStorage.setItem` lanza
@@ -115,13 +115,13 @@ function esTextoUtil(x: unknown): x is string {
  *   · `desde` se resta contra `ahora`, así que tiene que ser un número FINITO. `Number.isFinite` y no
  *     `typeof === "number"`, porque `JSON.parse` produce `Infinity` con `1e999` y su `typeof` es
  *     `"number"`.
- *     ⚠️ HONESTIDAD SOBRE ESTA LÍNEA, medida por la batería de mutación de WKH-356: degradarla a
- *     `typeof === "number"` **NO pone rojo ningún test**, porque los dos únicos valores que la
- *     distinguen (`±Infinity`) los cortan igual los dos guards de abajo —el del futuro y el de la
- *     ventana— y `NaN` no es JSON válido. Se queda por corrección y porque el día que
- *     `LecturaDelPreparado` gane un tercer valor pasa a ser observable (es exactamente lo que ocurre
- *     en `leerViaje`, que sí distingue «vencido» de «no-hay»), pero **no está bajo candado**. El
- *     detalle input por input está en el `it` correspondiente de `preparado.test.ts`.
+ *     ⚠️ ESTE PÁRRAFO DECÍA QUE ESTA LÍNEA NO ESTABA BAJO CANDADO, Y EL DÍA QUE ÉL MISMO NOMBRÓ YA LLEGÓ.
+ *     La medición de WKH-356 era: degradarla a `typeof === "number"` no pone rojo nada, porque los dos
+ *     únicos valores que la distinguen (`±Infinity`) los cortaban igual los dos guards de abajo —y los
+ *     dos contestaban LO MISMO—, y `NaN` no es JSON válido. El propio párrafo escribió su condición de
+ *     caducidad («el día que `LecturaDelPreparado` gane un tercer valor pasa a ser observable») y el
+ *     arreglo del reloj se la cumplió: hoy el guard del futuro contesta «no-fechable» y ⛔ NO LIMPIA, así
+ *     que un `+Infinity` sin esta validación sería basura imborrable. Lo mide el `it` de `1e999`.
  *
  * Y ante cualquier basura se LIMPIA el disco antes de contestar. La lección es medida en 061: un
  * campo inválido que hace tirar y NO limpia repite la excepción en cada carga de la página.
@@ -155,15 +155,15 @@ export function leerPreparado(a: Almacen, ahora: number): LecturaDelPreparado {
     terminarPreparado(a);
     return { tipo: "no-hay" };
   }
-  // 🔴 UN REGISTRO QUE EMPEZÓ EN EL FUTURO ES BASURA, NO UNO JOVEN. `ahora - desde` es negativo, así
-  // que nunca supera `MAX_EDAD_MS`: un `desde` adelantado X días lo mantiene vivo X días más veinte
-  // minutos. Es el mismo agujero que 061 midió en `leerViaje` (`desde` +10 días ⇒ «hay» diez días
-  // después) y se cierra igual. Lo que esto rompe, dicho: un reloj corregido HACIA ATRÁS en medio
-  // del viaje mata el registro y hay que empezar de nuevo. Se prefiere eso a una ventana cuya
-  // duración la elige quien haya movido el reloj.
+  // 🔴 UN REGISTRO QUE EMPEZÓ EN EL FUTURO NO SE PUEDE FECHAR, y por eso no sale por «hay»: `ahora - desde`
+  // es negativo, así que nunca supera `MAX_EDAD_MS` y un `desde` adelantado X días lo mantendría vivo X
+  // días más veinte minutos. Es el mismo agujero que 061 midió en `leerViaje` y se corta igual.
+  //
+  // 🔴 PERO ACÁ SE BORRABA, Y ESO ERA EL DEFECTO. `Date.now()` es reloj de PARED y puede RETROCEDER (una
+  // corrección NTP), y este `if` cubre el recorrido entero. Acá decía «un reloj corregido HACIA ATRÁS en
+  // medio del viaje mata el registro y hay que empezar de nuevo. Se prefiere eso»: NO se prefiere, y no porque el registro valga —solo no vale nada— sino porque su `mensajeBase64` es lo ÚNICO contra lo que
   if (p.desde > ahora) {
-    terminarPreparado(a);
-    return { tipo: "no-hay" };
+    return { tipo: "no-fechable" }; // se puede verificar la `transaccionFirmada` que el viaje sí preserva. ⛔ NO SE BORRA. Y arreglar el viaje sin arreglar esto convierte el defecto en otro: viaje vivo sobre registro muerto ⇒ `deeplink_sin_memoria` en CADA invocación, con la firma preservada e inutilizable hasta que la ventana mate el viaje.
   }
   // La MISMA ventana que el viaje, importada y no copiada: los dos describen el mismo recorrido, y
   // dos números con el mismo criterio escritos en dos lugares es exactamente cómo se desincronizan.

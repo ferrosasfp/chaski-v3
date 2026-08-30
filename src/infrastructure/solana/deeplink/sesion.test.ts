@@ -288,15 +288,16 @@ describe("T-VJ-2: los TRES desenlaces de leer, y que «vencido» no se disfrace 
     // medido, el viaje contestaba «hay» diez años después. Un `desde` en el futuro (reloj del
     // teléfono movido) lo trata el `it` del `desde` en el futuro, más abajo.
     //
-    // ⚠️ ESTE `it` NO PINCHA `Number.isFinite`, Y ANTES DECÍA QUE SÍ. Acá decía «MUTANTE QUE MATA:
-    // volver `Number.isFinite(v?.desde)` a `typeof v?.desde !== "number"`», y el re-AR aplicó
-    // exactamente ese mutante (M13) y midió los 92 tests en verde. La causa es el mismo fix-pack que
-    // escribió la frase: el guard `v.desde > ahora` SUBSUME este caso, porque `Infinity > ahora` es
-    // `true` y el viaje muere ahí aunque `Number.isFinite` no exista. Un «MUTANTE QUE MATA» falso es
-    // peor que no tener el comentario: promete una cobertura que no existe, y quien borre la
-    // validación confiando en este `it` no ve nada rojo.
-    // QUÉ MATA ESTE `it`, dicho de verdad: dejar `desde` sin mirar en las DOS validaciones a la vez.
-    // Quien pincha `Number.isFinite` por sí solo es el `it` de abajo, el de `-1e999`.
+    // ⚠️ ESTE `it` NO PINCHABA `Number.isFinite`, Y DESDE EL ADDENDUM DEL RELOJ SÍ LO PINCHA. La
+    // historia entera, porque es un caso de prosa que envejeció sola: primero acá decía «MUTANTE QUE
+    // MATA: volver `Number.isFinite(v?.desde)` a `typeof v?.desde !== "number"`»; el re-AR aplicó ese
+    // mutante (M13) y midió los 92 tests en VERDE, porque el guard `v.desde > ahora` subsumía el caso
+    // —`Infinity > ahora` es `true`— y contestaba lo MISMO que esta validación: «no-hay» + limpieza.
+    // Se corrigió la frase. Hoy ese guard contesta «no-fechable» y ⛔ NO LIMPIA, así que las dos ramas
+    // dejaron de ser indistinguibles y este `it` volvió a tener filo, sin que nadie lo reescribiera.
+    // MUTANTE QUE MATA (HOY, medido): `typeof v?.desde !== "number"` ⇒ `expected "no-fechable" to be
+    // "no-hay"` en el `expect` de abajo. Y la consecuencia real del mutante es peor que el rojo: un
+    // `+Infinity` sin esta validación sería basura que la ventana NUNCA limpia.
     //
     // ⚠️ El `desde` se escribe A MANO en el JSON y no con `JSON.stringify`, porque
     // `JSON.stringify(Infinity)` produce `null` y el viaje moriría por la otra mitad de la
@@ -460,49 +461,128 @@ describe("T-VJ-2: los TRES desenlaces de leer, y que «vencido» no se disfrace 
     expect(a.datos.has(CLAVE_EN_DISCO)).toBe(false);
   });
 
-  it("un viaje que empezó en el FUTURO es basura, no un viaje eterno", () => {
+  // ══ WKH-075 · ADDENDUM DEL RELOJ ═════════════════════════════════════════════════════════════
+  //
+  // 🔴 EL RETROCESO SE EXPRESA CON `ahora` POR PARÁMETRO Y ⛔ NUNCA CON UN RELOJ REAL. `leerViaje`
+  // recibe el instante (`leerViaje`, `./sesion.ts:283`), así que un retroceso son dos llamadas con
+  // `ahora` decreciente. Un testigo que dependiera de que el reloj del runner retroceda quedaría
+  // VERDE con el bug adentro en cualquier máquina con el reloj disciplinado por slew, y eso es peor
+  // que rojo: apaga la revisión en vez de encenderla.
+  //
+  // ⚠️ ESTOS TRES `it` YA EXISTÍAN Y AFIRMABAN «no-hay» + disco borrado. No se borraron: el borde que
+  // pinchaban sigue existiendo y sigue sin tolerancia; lo que cambió es el DESENLACE.
+  it("T-075-RELOJ-A · un viaje que empezó en el FUTURO no es «hay», y ⛔ NO SE BORRA", () => {
     // 🔴 `ahora - desde` es NEGATIVO, así que nunca supera `MAX_EDAD_MS`. Medido en el re-AR: con
     // `desde` adelantado 10 días el viaje contestaba «hay» diez días después, y con él seguían vivas
-    // `secreta`, `claveBilletera` y la ventana en la que el paso 1 se puede forjar.
-    //
-    // El fix-pack anterior no lo cerró con el argumento de que "la ventana no es un control de
-    // seguridad" (DT-7). Ese argumento dejó de ser cierto en cuanto el paso 1 quedó declarado como
-    // residual: hoy la ventana es la ÚNICA contención que le queda en esta capa, así que su duración
-    // no la puede elegir quien mueva el reloj del teléfono.
-    // MUTANTE QUE MATA: sacar la rama `v.desde > ahora` de `leerViaje`.
+    // `secreta`, `claveBilletera` y la ventana en la que el paso 1 se puede forjar. Por eso NO sale
+    // por «hay». Pero ⛔ TAMPOCO SE BORRA, y ésa es la mitad que este `it` agrega: `Date.now()` es
+    // reloj de pared y puede retroceder, y el disco puede tener una firma adentro.
+    // MUTANTE QUE MATA (A): sacar la rama `v.desde > ahora` de `leerViaje` ⇒ `expected "hay" to be
+    //   "no-fechable"`. ⚠️ Si el rojo dijera `"vencido"`, el mutante habría muerto por el guard de la
+    //   VENTANA y no por éste: sería un falso KILLED y no diría nada de este `it`.
+    // MUTANTE QUE MATA (B): devolverle el `terminarViaje(a)` a esa rama ⇒ `expected false to be true`
+    //   en el `expect` del disco. Éste es EL `expect` que mide el arreglo.
     const a = almacenFalso();
     const DIEZ_DIAS = 10 * 24 * 60 * 60 * 1000;
     guardarViaje(a, viajeBase({ desde: AHORA + DIEZ_DIAS }));
-    expect(leerViaje(a, AHORA).tipo).toBe("no-hay");
-    expect(a.datos.has(CLAVE_EN_DISCO)).toBe(false);
+    expect(leerViaje(a, AHORA).tipo).toBe("no-fechable");
+    expect(a.datos.has(CLAVE_EN_DISCO), "el guard de futuro borró un viaje que puede tener una firma adentro").toBe(true);
+    expect(a.borrados, "una LECTURA no destruye lo que no entrega").toBe(0);
   });
 
-  it("pero el instante exacto todavía vale: el corte es estrictamente mayor", () => {
-    // El control del `it` de arriba. Un guard que matara `desde === ahora` mataría todo viaje que se
-    // lea en el mismo milisegundo en que se escribió, que es el caso normal de la primera lectura.
+  it("T-075-RELOJ-D · el cuarto valor NO colapsa: no es «no-hay» y no es «vencido»", () => {
+    // 🔴 CD-4 EN SU VERSIÓN NUEVA. Los tres desenlaces piden reacciones distintas: «no-hay» dice que
+    // no se pierde nada, «vencido» le afirma a la persona que firmó al pedo, y «no-fechable» dice que
+    // hay algo suyo en el disco que este dispositivo no puede fechar. Colapsarlos es el defecto que
+    // 061 midió, y el `expect` de arriba no alcanza para verlo: por eso los dos `not.toBe`.
+    // MUTANTE QUE MATA (D-1): devolver `{ tipo: "no-hay" }` en la rama de futuro ⇒ rojo en el primer
+    //   `not.toBe` con el motivo literal `expected "no-hay" not to be "no-hay"`.
+    // MUTANTE QUE MATA (D-2): devolver `{ tipo: "vencido", ... }` ⇒ rojo en el segundo. Los dos matan
+    //   por su lado; si sólo uno matara, el valor no estaría defendido.
+    const a = almacenFalso();
+    guardarViaje(a, viajeBase({ desde: AHORA + 1 }));
+    const t = leerViaje(a, AHORA).tipo;
+    expect(t, "el cuarto valor colapsó en «no-hay»").not.toBe("no-hay");
+    expect(t, "el cuarto valor colapsó en «vencido»").not.toBe("vencido");
+    expect(t).toBe("no-fechable");
+  });
+
+  it("T-075-RELOJ-J · CONTROL NEGATIVO: con retroceso CERO el instante exacto sigue siendo «hay»", () => {
+    // ⛔ SIN ESTE `it` NADA DISTINGUE «arreglé el guard» de «rompí el guard». Un guard que matara
+    // `desde === ahora` mataría todo viaje que se lea en el mismo milisegundo en que se escribió, que
+    // es el caso normal de la primera lectura. El corte es ESTRICTAMENTE mayor y sigue siéndolo.
     const a = almacenFalso();
     guardarViaje(a, viajeBase({ desde: AHORA }));
     expect(leerViaje(a, AHORA).tipo).toBe("hay");
+    expect(a.datos.has(CLAVE_EN_DISCO), "el control negativo perdió el disco").toBe(true);
+    expect(a.borrados).toBe(0);
   });
 
-  it("y UN MILISEGUNDO adelantado ya es basura: ese borde no tiene tolerancia de reloj", () => {
-    // 🔴 EL BORDE DE ESE GUARD NO LO PINCHABA NADIE, y son los dos `it` de arriba los que lo dejan
+  it("T-075-RELOJ-A2 · y UN MILISEGUNDO adelantado ya no es fechable: ese borde no tiene tolerancia", () => {
+    // 🔴 EL BORDE DE ESE GUARD NO LO PINCHABA NADIE, y eran los dos `it` de arriba los que lo dejaban
     // sin pinchar: uno usa `desde` +10 días y el otro exactamente `ahora`, así que todo el intervalo
     // `(ahora, ahora + 20 min]` quedaba libre. Medido en el re-AR: meter una tolerancia de reloj de
     // 20 minutos (`v.desde > ahora + MAX_EDAD_MS`) dejaba los 92 tests en verde (M37), y en el
     // fix-pack 3 se midió que ni siquiera hace falta tanto — `+ 1` también sobrevivía (M37b).
     //
-    // Por qué el borde de ESTE guard y no de cualquier otro: con esa tolerancia un viaje vive 40
-    // minutos en vez de 20, y la ventana es —por el docblock del propio guard— la ÚNICA contención
-    // que le queda en esta capa al residual del paso 1. Un límite que se puede aflojar sin que nada
-    // se ponga rojo convierte ese argumento en una frase. La tolerancia además la elegiría quien
-    // mueva el reloj del teléfono, que es justo de quien la ventana no tiene que depender.
-    // MUTANTE QUE MATA: cualquier `v.desde > ahora + N` con `N > 0`. Medido: +1 ms da `no-hay` hoy,
-    // y `hay` con la tolerancia puesta.
+    // ⚠️ Y EL BORDE SIGUE IMPORTANDO DESPUÉS DEL ARREGLO, aunque la rama ya no destruya: con una
+    // tolerancia de `T`, un viaje vive `20 min + T` y `T` lo elige quien mueva el reloj, que es justo
+    // de quien la ventana no tiene que depender. El addendum dejó la tolerancia FUERA por eso.
+    // MUTANTE QUE MATA: cualquier `v.desde > ahora + N` con `N > 0` ⇒ `expected "hay" to be
+    //   "no-fechable"`, porque con la tolerancia el viaje pasa de largo y cae en el camino feliz.
     const a = almacenFalso();
     guardarViaje(a, viajeBase({ desde: AHORA + 1 }));
-    expect(leerViaje(a, AHORA).tipo).toBe("no-hay");
-    expect(a.datos.has(CLAVE_EN_DISCO)).toBe(false);
+    expect(leerViaje(a, AHORA).tipo).toBe("no-fechable");
+    expect(a.datos.has(CLAVE_EN_DISCO)).toBe(true);
+  });
+
+  it("T-075-RELOJ-C · la transacción firmada SOBREVIVE al retroceso y REVIVE cuando el reloj lo pasa", () => {
+    // 🔴 ÉSTE ES EL CASO DEL CAMINO DEL DINERO, y es el que el defecto destruía: la persona firmó el
+    // depósito, la página murió en el salto, y lo único que queda de esa firma es el disco. Un
+    // retroceso de reloj de 1 segundo la tiraba a la basura.
+    // MUTANTE QUE MATA: cualquier variante que mutile el viaje al degradar (borrarlo, o devolver el
+    //   desenlace sin el `viaje`, o guardar una copia recortada) ⇒ la SEGUNDA lectura deja de dar
+    //   «hay», o la `transaccionFirmada` cambia.
+    const a = almacenFalso();
+    const firmante = nacl.sign.keyPair();
+    const tx = bs58.encode(nacl.sign.detached(new Uint8Array([7, 7, 7]), firmante.secretKey));
+    expect(bs58.decode(tx).length, "el fixture no es una firma ed25519 de 64 bytes").toBe(64);
+    guardarViaje(a, viajeBase({ desde: AHORA + 1000, transaccionFirmada: tx }));
+    expect(leerViaje(a, AHORA).tipo).toBe("no-fechable");
+    // Y el reloj alcanza a `desde`: el mismo viaje, sin tocar el disco, vuelve a servir.
+    const despues = leerViaje(a, AHORA + 1000);
+    expect(despues.tipo).toBe("hay");
+    expect(despues.tipo === "hay" ? despues.viaje.transaccionFirmada : null).toBe(tx);
+    expect(a.borrados).toBe(0);
+  });
+
+  it("T-075-RELOJ-K · COMPATIBILIDAD HACIA ATRÁS: un viaje escrito por el árbol de antes se lee «hay»", () => {
+    // ⛔ EL JSON SE ESCRIBE A MANO, no con `viajeBase()`: es el oráculo independiente. Si se armara con
+    // el helper, agregarle un campo al helper movería las dos puntas a la vez y este `it` no lo vería.
+    // Es la FORMA EXACTA que `9620be1`/`6bbd977` dejan en el disco, sin ningún campo nuevo.
+    // MUTANTE QUE MATA: agregarle a `Viaje` un campo REQUERIDO (o validarlo en `leerViaje`) ⇒ este
+    //   registro deja de leerse «hay» y todo lo que ya está en el disco de la gente se muere.
+    const a = almacenFalso();
+    const firmante = nacl.sign.keyPair();
+    const tx = bs58.encode(nacl.sign.detached(new Uint8Array([1]), firmante.secretKey));
+    const viejo = {
+      billetera: "phantom",
+      secreta: bs58.encode(par.secretKey),
+      publica: bs58.encode(par.publicKey),
+      claveBilletera: bs58.encode(billeteraReal.publicKey),
+      session: "sesion-opaca",
+      direccion: bs58.encode(billeteraReal.publicKey),
+      paso: "firmar-tx",
+      remittanceId: "rem-viejo",
+      pasosConsumidos: ["conectar"],
+      transaccionFirmada: tx,
+      desde: AHORA - 1000,
+    };
+    a.escribir(CLAVE_EN_DISCO, JSON.stringify(viejo));
+    const r = leerViaje(a, AHORA);
+    expect(r.tipo).toBe("hay");
+    expect(r.tipo === "hay" ? r.viaje : null).toEqual(viejo);
+    expect(a.borrados, "un viaje viejo perfectamente válido se limpió").toBe(0);
   });
 
   it("un almacén que ni siquiera deja LEER contesta «no-hay», no revienta", () => {
@@ -660,6 +740,32 @@ describe("T-VJ-4: interpretar la vuelta — los caminos que NO son el feliz", ()
     expect(l.tipo).toBe("hay");
     if (l.tipo !== "hay") return;
     expect(l.viaje.transaccionFirmada).toBe("TX-QUE-LA-PERSONA-FIRMO");
+  });
+
+  // 🔴 WKH-075/addendum del reloj — LA DECISIÓN `no-fechable → "manos-vacias"` NO TENÍA TESTIGO
+  // (AR-fp/BLQ-MED-2). Su propio comentario dice en mayúsculas que el motivo NO es `"sin-viaje"` «y no es
+  // un matiz», y aun así ponerlo en `"sin-viaje"` dejaba la suite ENTERA en 162 archivos / 3323 tests
+  // verde: una afirmación en mayúsculas que no puede ponerse roja no es una defensa, es una opinión.
+  //
+  // ⚠️ POR QUÉ ESTA RAMA SE ALCANZA POR `interpretarVuelta` Y NO POR EL MOTOR: el motor discrimina el
+  // `no-fechable` antes de llegar acá (`lectura`, `./firma-por-enlace.ts:685`), pero el connect llama a
+  // esta función directo (`vuelta`, `./conexion.ts:273`), así que ÉSTE es el camino por el que la
+  // decisión se ejecuta en producción.
+  // MUTANTE QUE MATA (X1): poner `motivo: "sin-viaje"` en la rama `no-fechable` de `interpretarVuelta`
+  //   ⇒ `expected "sin-viaje" to be "manos-vacias"`. Y lo que se pierde con ese mutante no es una
+  //   etiqueta: `conexion.ts` traduce `sin-viaje` a `DEEPLINK_VIAJE_VENCIDO` (`manos-vacias`,
+  //   `./conexion.ts:292`), o sea que la vuelta del connect con el reloj atrasado mostraría «Pasó
+  //   demasiado tiempo… No se firmó nada. Empezá el envío de nuevo» — las TRES frases que este addendum
+  //   existe para no decir, con la `transaccionFirmada` de la persona intacta en el disco.
+  it("T-075-RELOJ-M · la vuelta del connect con el viaje SIN FECHAR es huérfana por `manos-vacias`, ⛔ no por `sin-viaje`", () => {
+    const a = almacenFalso();
+    guardarViaje(a, viajeConectado({ paso: "conectar", transaccionFirmada: "TX-QUE-LA-PERSONA-FIRMO", desde: AHORA + 1 }));
+    const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: "conectar" }), AHORA, null);
+    // La aserción es POSITIVA y entera: «no salió `sin-viaje`» no distingue el valor bueno de otros ocho.
+    expect(v).toEqual({ tipo: "huerfana", paso: "conectar", motivo: "manos-vacias" });
+    // Y lo que estaba en juego, que es por lo que el motivo importa: el disco sigue, con la firma adentro.
+    expect(a.datos.has(CLAVE_EN_DISCO), "la vuelta destruyó un viaje que sólo no se podía fechar").toBe(true);
+    expect(leerViaje(a, AHORA + 1).tipo, "el viaje no revive cuando el reloj alcanza su `desde`").toBe("hay");
   });
 
   it("«vencida» cuando había viaje pero ya no vale: la persona firmó al pedo y merece saberlo", () => {

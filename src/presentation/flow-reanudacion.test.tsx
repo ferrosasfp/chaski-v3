@@ -21,7 +21,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import bs58 from "bs58";
 import { RemittanceFlow } from "./flow";
 import { buildTestContainer } from "../test-support/test-container";
-import { FakeWallet, InMemoryRepo, RecorridoPorEnlaceNulo, T0, beneficiary } from "../test-support/fakes";
+import { FakeWallet, InMemoryRepo, RecorridoPorEnlaceNulo, T0, TEST_CCI, beneficiary } from "../test-support/fakes"; // HU-075/reanudar: `TEST_CCI` EN ESTA MISMA LINEA, no en una nueva — este archivo recibe citas por numero en `:95`, `:527` y `:575`
 import { type KycVerification, Remittance, toPersistedIdentity } from "../domain/remittance";
 import { Money } from "../domain/money";
 import { SolanaWalletAdapter } from "../infrastructure/solana-wallet";
@@ -1055,4 +1055,180 @@ describe("T-075-2 / T-075-5 / T-075-5b / T-075-1c / T-075-3d / T-075-4b / T-075-
     render(<RemittanceFlow pasoInicial="send" container={contenedorQueLlegaAlFallthrough(repo)} />);
     await waitFor(() => expect(screen.getByText(SENAL_SIN_CONSUMIDOR)).toBeInTheDocument());
   }, 20_000);
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// HU-075/reanudar — EL BLOQUEANTE DEL FOUNDER: volver de la billetera y SEGUIR DONDE ESTABA
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 EL SÍNTOMA, TEXTUAL, EN EL SITIO DESPLEGADO: *«yo ya estoy en la 3ra pantalla, ya llené datos, el
+// monto, la persona que recibe, la cuenta del banco, le doy ok y me pasa a una pantalla para conectar
+// la wallet, conecto, debería seguir el proceso pero me re envía a la pantalla inicial»*.
+//
+// 🔴 LA CAUSA, MEDIDA: la vuelta de la billetera es un REMONTE de la página. `step` es estado de React
+// y `pasoInicial` vale `"bienvenida"` por default, así que el recorrido arranca de cero SIEMPRE. El
+// consumidor de la vuelta repoblaba la conexión (`setAddress` y los dos del KYC) y nada más: no había
+// un solo `setStep` en la rama `conectado`.
+//
+// 🔴 POR QUÉ NINGÚN `it` DE ESTE ARCHIVO LO VEÍA, y es la lección que se cobró caro. Todos montan con
+// `pasoInicial="send"` y ninguno pregunta EN QUÉ PANTALLA quedó la persona. El más cercano —el control
+// de `T-065-8b`— sólo cuenta las llamadas a `connectWallet.execute()`, y ese contador da 1 tanto si el
+// recorrido sigue como si muere en la pantalla de entrada. ⇒ **el caso de prueba es el RECORRIDO
+// COMPLETO y el observable es la PANTALLA**, no un contador ni una dirección en un chip. Yo mismo di
+// esta HU por funcionando mirando una captura del INICIO del recorrido.
+//
+// ⚠️ `pasoInicial="bienvenida"` NO ES DECORATIVO ACÁ: es el default de producción (lo declara el
+// docblock de `pasoInicial` en `flow.tsx`, y `barra-destinos.test.tsx` tiene el candado que impide que
+// `app/page.tsx` pase otro). Montar en `"send"` como hacen los demás `it` de este archivo ESCONDE
+// exactamente el defecto, porque el paso inicial ya sería uno del flujo.
+//
+// ⛔ LO QUE ESTOS `it` NO MIDEN, dicho antes de que alguien se apoye en su verde:
+//   1. Corren en **jsdom**, con `completar()` doblado. NO sustituyen a un teléfono: lo que el founder
+//      reportó se comprueba en un celular. Lo que se mide acá es el CABLEADO de la pantalla.
+//   2. No miden el segundo salto real (el sobre cifrado del connect); eso vive en
+//      `preparacion-por-enlace.test.ts`. Acá el doble contesta el desenlace y se mide qué hace la
+//      pantalla con él.
+describe("HU-075/reanudar: la vuelta por enlace RETOMA el recorrido con los datos ya cargados", () => {
+  /** El borrador EXACTO que deja `onSend`: la remesa ya existe en el repo —`createRemittance` la
+   *  escribió antes del salto— y ⛔ NO tiene `ownerAddress` (eso lo escribe `startKyc`, más adelante).
+   *  Es lo que hace inservible al historial para recuperarla: `repo.list(dueño)` NO la devuelve. Por
+   *  eso la reanudación del connect NO puede pasar por el mismo camino que la del `firmar-tx`. */
+  async function sembrarBorradorDelFormulario(repo: InMemoryRepo) {
+    const r = Remittance.create(REM, beneficiary(), Money.of(400, "USDC"), T0);
+    await repo.save(r);
+    return r;
+  }
+
+  /** ⛔ Hereda de `RecorridoPorEnlaceNulo`, que TIRA en todo lo demás: un camino no previsto se VE. */
+  class RecorridoQueVuelveConectado extends RecorridoPorEnlaceNulo {
+    override remesaEnCurso(): string {
+      return REM;
+    }
+    override async completar(): Promise<never> {
+      return { estado: "conectado", direccion: DIRECCION } as never;
+    }
+    override async estadoDeLaCuentaDeNonce(): Promise<never> {
+      return "no-pudimos-preguntar" as never;
+    }
+  }
+
+  function contenedorQueVuelveConectado(repo: InMemoryRepo) {
+    return buildTestContainer({
+      repo,
+      wallet: new FakeWallet(),
+      connectedWallet: new SolanaWalletAdapter(), // el adaptador REAL: lo que se prueba es el cableado
+      recorridoPorEnlace: new RecorridoQueVuelveConectado(),
+    });
+  }
+
+  // 🔴 MUTANTE QUE MATA (medido, ver el reporte): en `flow.tsx:286`, borrar
+  // `if (remittanceId !== undefined) void onConnect({ remittanceId, rc: r });` del `alConectar`. Es
+  // exactamente el código de antes de esta HU, y deja este `it` en rojo por su motivo propio: el
+  // `findByText("Revisá el envío")` no encuentra nada y la pantalla sigue mostrando la bienvenida.
+  it("T-075-REANUDAR-1: con el formulario YA LLENO, al volver de la billetera la persona retoma en `review` con SUS datos", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarBorradorDelFormulario(repo);
+    sembrarVuelta("conectar");
+    const c = contenedorQueVuelveConectado(repo);
+
+    // CD-18 — el fixture fabricó el caso ANTES de medir nada: la barra trae la vuelta y la remesa está
+    // en el repo sin dueño, o sea el estado exacto de quien saltó desde la pantalla `connect`.
+    expect(new URL(window.location.href).searchParams.get("dl")).toBe("conectar");
+    expect((await repo.get(REM))?.snapshot.ownerAddress).toBeNull();
+
+    render(<RemittanceFlow pasoInicial="bienvenida" container={c} />);
+
+    // 1 · EL RECORRIDO SIGUE. `review` es la pantalla a la que lleva conectar por el camino inyectado,
+    // así que la vuelta por enlace aterriza en la MISMA, que es lo que "seguir el proceso" significa.
+    expect(await screen.findByText("Revisá el envío")).toBeInTheDocument();
+
+    // 2 · Y LLEGA CON LOS DATOS, que es la otra mitad del reporte («ya llené datos, el monto, la
+    // persona que recibe, la cuenta del banco»). Los tres salen del snapshot del repo, no del estado
+    // de React, que el remonte borró.
+    expect(screen.getByText(/Mamá/)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(TEST_CCI))).toBeInTheDocument();
+    expect(screen.getAllByText("$400.00").length, "el monto del borrador no llegó a la pantalla que se retomó").toBeGreaterThan(0);
+
+    // 3 · Y NO quedó nada de la pantalla de entrada por debajo.
+    expect(screen.queryByRole("button", { name: /Empezar un envío/ })).toBeNull();
+  });
+
+  // 🔴 EL PAR NEGATIVO, Y ES LO QUE HACE FALSABLE AL DE ARRIBA. Mismo montaje, misma remesa en el
+  // repo, misma bandera: la ÚNICA variable que se mueve es que NO hay vuelta en la barra. Sin esto, un
+  // arreglo que saltara a `review` en cualquier montaje pasaría el `it` de arriba y rompería la
+  // pantalla de entrada para todo el mundo (AC-1 de la HU 068).
+  it("T-075-REANUDAR-1(control): si la vuelta NO trajo conexión, el MISMO montaje se queda en la bienvenida", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarBorradorDelFormulario(repo);
+    sembrarVuelta("conectar"); // MISMA barra, MISMO viaje, MISMA bandera, MISMO cuadrante que arriba
+    /** La ÚNICA variable que se mueve: `completar()` contesta `nada` en vez de `conectado`. */
+    class RecorridoSinConexion extends RecorridoPorEnlaceNulo {
+      override remesaEnCurso(): string {
+        return REM;
+      }
+      override async completar(): Promise<never> {
+        return { estado: "nada" } as never;
+      }
+    }
+    const c = buildTestContainer({
+      repo,
+      wallet: new FakeWallet(),
+      connectedWallet: new SolanaWalletAdapter(),
+      recorridoPorEnlace: new RecorridoSinConexion(),
+    });
+
+    render(<RemittanceFlow pasoInicial="bienvenida" container={c} />);
+
+    expect(await screen.findByRole("button", { name: /Empezar un envío/ })).toBeInTheDocument();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByText("Revisá el envío")).toBeNull();
+  });
+
+  // 🔴 EL ATERRIZAJE QUE DE VERDAD OCURRE EN PRODUCCIÓN, Y NO ES EL DE ARRIBA. Desde `connect` la
+  // persona salta con `dl=conectar`; al volver, `connectWallet.execute()` le pide LA FIRMA del PoP de
+  // KYC y la manda a la billetera OTRA VEZ, ahora con `dl=pop-kyc`. La vuelta de ese SEGUNDO salto
+  // entra por `resolverVueltaDelPermiso`, no por la rama `conectado`, y hasta esta HU moría en la
+  // pantalla de entrada igual que la otra. Arreglar una sola de las dos mueve el síntoma un salto más
+  // allá y lo deja idéntico para quien lo sufre.
+  //
+  // ⛔ Y ACÁ ESTÁ LA RAZÓN POR LA QUE `onConnect` RECIBE EL `rc` YA RESUELTO EN VEZ DE CONECTAR DE
+  // NUEVO: la prueba del PoP por enlace es de UN SOLO USO (`leerPruebaPop` borra el ancla ANTES de
+  // devolver), así que una segunda llamada a `connectWallet.execute()` saldría `hay-que-salir` y
+  // mandaría a la persona a firmar por tercera vez. Este `it` lo pincha contando las llamadas.
+  //
+  // 🔴 MUTANTE QUE MATA: en `flow.tsx`, volver `alConectar(rk, remId ?? undefined)` a `alConectar(rk)`
+  // dentro de `resolverVueltaDelPermiso`.
+  it("T-075-REANUDAR-2: la vuelta del PoP de KYC también retoma el recorrido, y ⛔ sin pedir una segunda conexión", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarBorradorDelFormulario(repo);
+    sembrarVuelta("pop-kyc");
+    class RecorridoConPopDeKyc extends RecorridoPorEnlaceNulo {
+      override remesaEnCurso(): string {
+        return REM;
+      }
+      override async completarPop(): Promise<never> {
+        return { estado: "pop-listo", proposito: "pop-kyc" } as never;
+      }
+    }
+    const c = buildTestContainer({
+      repo,
+      wallet: new FakeWallet(),
+      connectedWallet: new SolanaWalletAdapter(),
+      recorridoPorEnlace: new RecorridoConPopDeKyc(),
+    });
+    const conectar = vi.spyOn(c.connectWallet, "execute");
+
+    expect(new URL(window.location.href).searchParams.get("dl")).toBe("pop-kyc");
+
+    render(<RemittanceFlow pasoInicial="bienvenida" container={c} />);
+
+    expect(await screen.findByText("Revisá el envío")).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(TEST_CCI))).toBeInTheDocument();
+    expect(
+      conectar,
+      "el recorrido pidió una SEGUNDA conexión: con la prueba del PoP ya consumida eso manda a la persona a firmar otra vez",
+    ).toHaveBeenCalledTimes(1);
+  });
 });

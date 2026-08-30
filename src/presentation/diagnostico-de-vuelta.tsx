@@ -57,7 +57,7 @@
 //    Lo mide `T-DIAG-OBSERVADOR`.
 //
 // ⚠️ DÓNDE SE MONTA Y POR QUÉ AHÍ: en `app/page.tsx`, HERMANO de `RemittanceFlow` y no adentro. Así
-// `flow.tsx` —[[CENSO src/presentation/flow.tsx lineas=4421]] líneas y [[CENSO src/presentation/flow.tsx entrantes=149]] citas ancladas— no recibe ni una línea por este bloque. La única cosa
+// `flow.tsx` —[[CENSO src/presentation/flow.tsx lineas=4453]] líneas y [[CENSO src/presentation/flow.tsx entrantes=149]] citas ancladas— no recibe ni una línea por este bloque. La única cosa
 // que sí necesita de ahí adentro es la causa cruda del corte, y eso entra por
 // (`anotarCorteDeVuelta`, `./bitacora-de-vuelta.ts:43`), en la línea que ya existía.
 //

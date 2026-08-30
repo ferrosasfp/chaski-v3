@@ -72,7 +72,7 @@ export const MARCA_POP_KYC = "pop-kyc";
  * que el viaje del depósito, no más. Su ventana la fija el servidor y son 10 minutos; el viaje dura
  * 20. Compartir clave haría que terminar el permiso vencido se llevara el viaje que todavía sirve.
  */
-const CLAVE_POP = "chaski.billetera.pop.v1";
+export const CLAVE_POP = "chaski.billetera.pop.v1"; // HU-075/diagnóstico: SE EXPORTA, mismo motivo y mismas condiciones que (`CLAVE_ELECCION`, `./conexion.ts:129`).
 
 /**
  * Lo que hay que recordar del salto que pide la firma del desafío. ⛔ NINGUNA clave de cifrado: la

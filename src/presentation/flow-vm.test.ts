@@ -2353,7 +2353,7 @@ describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace",
     // WKH-359 sumó las TRES de la prueba de posesión por enlace (`deeplink_pop_sin_firma`,
     // `deeplink_pop_vencido`, `deeplink_pop_alterado`) ⇒ 17. Este `it` se puso ROJO al agregarlas y ésa
     // es la prueba de que la segunda fuente sirve: el `Record` ya las tenía y el número no.
-    expect(CAUSAS, "el `Record` dejó de tener la cantidad de causas que este `it` fija como segunda fuente").toHaveLength(19); // WKH-075 sumó las DOS de la vuelta que no se pudo resolver (`deeplink_disponibilidad_sin_resolver`, `deeplink_marca_sin_consumidor`) ⇒ 19. Este `it` se puso ROJO al agregarlas, igual que con las tres de WKH-359: es la prueba de que la segunda fuente sigue sirviendo.
+    expect(CAUSAS, "el `Record` dejó de tener la cantidad de causas que este `it` fija como segunda fuente").toHaveLength(20); // WKH-075 sumó las DOS de la vuelta que no se pudo resolver (`deeplink_disponibilidad_sin_resolver`, `deeplink_marca_sin_consumidor`) ⇒ 19, y el addendum del reloj sumó `deeplink_reloj_inconsistente` ⇒ 20. Este `it` se puso ROJO al agregarlas, igual que con las tres de WKH-359: es la prueba de que la segunda fuente sigue sirviendo.
     for (const c of CAUSAS) {
       expect(humanError(c), `\`${c}\` cae en el default: la persona lee la frase genérica`).not.toBe(
         "Algo salió mal. Intentá de nuevo.",
@@ -2447,6 +2447,44 @@ describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace",
       "hay una cifra de SOL escrita a mano en el `Record`: AC-7 exige que se DERIVE de la constante",
     ).toEqual([]);
     expect(cuerpo).toContain("formatLamportsAsSol(SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT)");
+  });
+
+  // ── WKH-075 · ADDENDUM DEL RELOJ · testigo H ────────────────────────────────────────────────────
+  //
+  // ⛔ LOS LITERALES PROHIBIDOS VIVEN ACÁ, EN EL TEST, Y NO SE DERIVAN DEL COPY. Si este `it` buscara
+  // una subcadena del propio copy sería un control que se lee a sí mismo: nunca podría fallar. Y por
+  // eso además lleva REFUTACIÓN DEL INSTRUMENTO — el mismo regex se corre contra las tres causas que SÍ
+  // dicen cada frase, así que un regex roto (o vacío) se pone rojo en vez de aplaudir.
+  //
+  // 🔴 POR QUÉ CADA PROHIBICIÓN, que es lo que hace que esto no sea estilo:
+  //   · «no se firmó nada»          → puede haber una `transaccionFirmada` en el disco.
+  //   · «empezá el envío de nuevo»  → empujaría a descartar lo que el arreglo acaba de salvar.
+  //   · «pasó demasiado tiempo»     → es literalmente lo contrario de lo que ocurrió.
+  //   · «cancelaste»                → nadie canceló nada; eso es `deeplink_rechazado`.
+  //   · modo privado / no se puede guardar → eso es `deeplink_sin_memoria`; acá el disco funciona.
+  //   · cualquier duración          → NO sabemos cuánto retrocedió el reloj. Afirmarlo es inventar.
+  //   · em dashes                   → convención de copy público (CD-16).
+  // MUTANTE QUE MATA: reusar el copy de `deeplink_viaje_vencido` para esta causa ⇒ rojo en el primer
+  //   `expect` con el motivo literal «dice una frase prohibida», y también en el `not.toBe` del final.
+  it("T-075-RELOJ-COPY: el copy del reloj no dice ninguna de las SIETE cosas prohibidas", () => {
+    const t = humanError("deeplink_reloj_inconsistente");
+    // (0) control del instrumento: la causa existe en el `Record` y no cayó en el default.
+    expect(t, "la causa nueva cae en el default de `humanError`").not.toBe("Algo salió mal. Intentá de nuevo.");
+    const PROHIBIDO = /no se firmó nada|empezá el envío de nuevo|pasó demasiado tiempo|cancelaste|modo privado|no puede guardar/i;
+    expect(PROHIBIDO.test(t), `el copy del reloj dice una frase prohibida: «${t}»`).toBe(false);
+    // (1) REFUTACIÓN DEL INSTRUMENTO: el mismo regex SÍ las encuentra donde de verdad están.
+    expect(PROHIBIDO.test(humanError("deeplink_viaje_vencido")), "el regex no ve «no se firmó nada»").toBe(true);
+    expect(PROHIBIDO.test(humanError("deeplink_rechazado")), "el regex no ve «cancelaste»").toBe(true);
+    expect(PROHIBIDO.test(humanError("deeplink_sin_memoria")), "el regex no ve «modo privado»").toBe(true);
+    // (2) ninguna duración, ni en cifras ni en palabras: no sabemos cuánto retrocedió el reloj.
+    expect(/\d/.test(t), "el copy del reloj nombra una cifra").toBe(false);
+    expect(/en un momento|en unos segundos|en unos minutos|en un rato/i.test(t), "el copy del reloj promete un plazo").toBe(false);
+    // (3) em dashes.
+    expect(t.includes("—"), "el copy del reloj tiene un em dash (CD-16)").toBe(false);
+    // (4) y lo que SÍ tiene que decir, porque es la mitad que el arreglo compró: que no se perdió nada.
+    expect(t, "el copy del reloj no le dice a la persona que lo suyo sigue guardado").toContain("sigue guardado");
+    // (5) y que NO es el copy del vecino, que es exactamente el error que esta causa vino a no repetir.
+    expect(t).not.toBe(humanError("deeplink_viaje_vencido"));
   });
 });
 

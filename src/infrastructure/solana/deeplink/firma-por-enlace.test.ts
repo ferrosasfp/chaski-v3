@@ -126,7 +126,7 @@ import {
 import { type Preparado, guardarPreparado, leerPreparado } from "./preparado";
 import {
   DEEPLINK_PREPARE_DIVERGED,
-  DEEPLINK_RECHAZADO,
+  DEEPLINK_RECHAZADO, DEEPLINK_RELOJ_INCONSISTENTE, // el segundo EN ESTA LÍNEA (Δ0): este archivo recibe una cita anclada en `:1532` y una línea nueva acá la correría
   DEEPLINK_RESPUESTA_ILEGIBLE,
   DEEPLINK_SIN_MEMORIA,
   DEEPLINK_TX_ALTERADA,
@@ -1610,5 +1610,90 @@ describe("MNR-4: un patrocinio sin transacción NO manda a firmar nada, corta", 
     });
     expect(causas).toEqual([DEEPLINK_VIAJE_VENCIDO, DEEPLINK_VIAJE_VENCIDO, DEEPLINK_VIAJE_VENCIDO]);
     expect(a.datos.has(CLAVE_VIAJE), "el corte borró una firma que la persona dio").toBe(true);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-075 · ADDENDUM DEL RELOJ — testigos F y G: el motor en un retroceso de reloj
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ MIDE ESTE `describe` Y POR QUÉ NO ALCANZABA CON LOS UNITARIOS DE `sesion.test.ts`. Los de allá
+// prueban que `leerViaje` degrada sin borrar. Acá se mide la AMPLIFICACIÓN, que es un defecto del motor
+// y no del lector: cuando el guard de futuro borraba el viaje ADENTRO de `leerViaje`, el `cortar` de
+// más arriba lo releía y ya no estaba ⇒ `enDisco.tipo !== "hay"` ⇒ `hayAlgoQueSalvar === false` ⇒ el
+// motor llamaba ADEMÁS a `terminarPreparado`. O sea que el guard de futuro era la ÚNICA rama del módulo
+// que destruía un resultado sin pasar por `resultadoPreservable`, y encima se llevaba puesto el ancla.
+// ⛔ Por eso los `expect` son sobre LAS DOS CLAVES: verificar sólo el viaje no ve la amplificación.
+//
+// ⛔ EL RETROCESO SE EXPRESA CON `ahora` POR PARÁMETRO —`pedido()` fija `ahora: AHORA` y el disco se
+// siembra con `desde: AHORA + 1`—, nunca con un reloj real. Un testigo que dependiera de que el reloj
+// del runner retroceda quedaría VERDE con el bug adentro en cualquier CI con el reloj disciplinado por
+// slew, que es peor que rojo: apaga la revisión.
+describe("T-075-RELOJ-F/G: un retroceso de reloj NO destruye, y la causa que sale no miente", () => {
+  /** Una firma REAL del sender adentro del viaje: es lo que `resultadoPreservable` exige para preservar. */
+  function conFirmaDelSender(over: Partial<Viaje> = {}): Viaje {
+    return viajeConectado({ transaccionFirmada: txFirmadaB58(), ...over });
+  }
+
+  // MUTANTE QUE MATA (F): volver `hayAlgoQueSalvar` a `enDisco.tipo === "hay" && …` ⇒ el `no-fechable`
+  //   deja de contar como algo que salvar, el corte limpia las DOS claves y saltan los dos `expect` del
+  //   disco con `expected false to be true`. ⚠️ Ese mutante es LÍNEA-NEUTRO y no lo mata ningún vecino:
+  //   con `desde` en el futuro la ventana no se alcanza (la resta es negativa) y el viaje es válido en
+  //   todo lo demás, así que ninguna otra rama toca el disco en esta invocación.
+  it("T-075-RELOJ-F · con los DOS discos sin fechar, el corte preserva el viaje Y el `Preparado`", () => {
+    const a = almacenFalso();
+    guardarViaje(a, conFirmaDelSender({ desde: AHORA + 1 }));
+    guardarPreparado(a, preparadoBase({ desde: AHORA + 1 }));
+    const r = motor.resolver(pedido(a));
+    expect(r.tipo).toBe("corte");
+    expect(a.datos.has(CLAVE_VIAJE), "el retroceso de reloj borró una transacción firmada").toBe(true);
+    expect(a.datos.has(CLAVE_PREPARADO), "el retroceso borró el ancla contra la que esa firma se verifica").toBe(true);
+    expect(a.borrados, "una lectura destruyó algo que no entregó").toEqual([]);
+  });
+
+  // MUTANTE QUE MATA (G-1): emitir `DEEPLINK_VIAJE_VENCIDO` en el sitio del `leerPreparado` ⇒
+  //   `expected "deeplink_viaje_vencido" to be "deeplink_reloj_inconsistente"`.
+  // MUTANTE QUE MATA (G-1b): emitir `DEEPLINK_SIN_MEMORIA` ahí ⇒ mismo `expect`, con el otro literal.
+  // ⚠️ ESTO PRUEBA QUE LA CAUSA LA EMITE EL MOTOR POR EJECUCIÓN, no que la constante exista: un
+  //   mecanismo sin llamador no es una defensa.
+  it("T-075-RELOJ-G1 · el `Preparado` sin fechar corta con `deeplink_reloj_inconsistente`", () => {
+    const a = almacenFalso();
+    guardarViaje(a, conFirmaDelSender({ desde: AHORA + 1 }));
+    guardarPreparado(a, preparadoBase({ desde: AHORA + 1 }));
+    expect(motor.resolver(pedido(a))).toEqual({ tipo: "corte", causa: DEEPLINK_RELOJ_INCONSISTENTE });
+  });
+
+  // MUTANTE QUE MATA (G-2): borrar el primer `if` de `:685`, o cambiarle la causa a
+  //   `DEEPLINK_VIAJE_VENCIDO` ⇒ `expected "deeplink_viaje_vencido" to be
+  //   "deeplink_reloj_inconsistente"`. ⚠️ ES OTRO SITIO QUE EL DE ARRIBA y por eso es otro `it`: acá el
+  //   `Preparado` está perfectamente fechado y quien no se puede fechar es el VIAJE, así que el corte
+  //   sale del paso 2 y no del paso 1. Arreglar uno solo dejaría este `it` rojo.
+  it("T-075-RELOJ-G2 · el VIAJE sin fechar corta con `deeplink_reloj_inconsistente`, y preserva", () => {
+    const a = almacenFalso();
+    guardarViaje(a, conFirmaDelSender({ desde: AHORA + 1 }));
+    guardarPreparado(a, preparadoBase({ desde: AHORA }));
+    expect(motor.resolver(pedido(a))).toEqual({ tipo: "corte", causa: DEEPLINK_RELOJ_INCONSISTENTE });
+    expect(a.datos.has(CLAVE_VIAJE)).toBe(true);
+    expect(a.datos.has(CLAVE_PREPARADO)).toBe(true);
+  });
+
+  // ⛔ CONTROL NEGATIVO, obligatorio: sin esto nada distingue «el motor discrimina el retroceso» de «el
+  // motor contesta `deeplink_reloj_inconsistente` a cualquier cosa».
+  it("T-075-RELOJ-G-J · CONTROL NEGATIVO: con retroceso CERO el motor NO emite la causa nueva", () => {
+    const a = almacenFalso();
+    guardarViaje(a, conFirmaDelSender({ desde: AHORA }));
+    guardarPreparado(a, preparadoBase({ desde: AHORA }));
+    const r = motor.resolver(pedido(a));
+    expect(r.tipo === "corte" ? r.causa : null).not.toBe(DEEPLINK_RELOJ_INCONSISTENTE);
+  });
+
+  // ⛔ Y EL OTRO CONTROL NEGATIVO, el que separa la causa nueva de la vieja: un viaje VENCIDO —el caso
+  // para el que `deeplink_viaje_vencido` sí es honesto— tiene que seguir saliendo por la causa vieja.
+  // Si las dos salieran por la nueva, el arreglo habría borrado una distinción en vez de agregarla.
+  it("T-075-RELOJ-G-J2 · un viaje VENCIDO sigue siendo `deeplink_viaje_vencido`, no el reloj", () => {
+    const a = almacenFalso();
+    guardarViaje(a, conFirmaDelSender({ desde: AHORA - 20 * 60 * 1000 - 1 }));
+    const r = motor.resolver(pedido(a));
+    expect(r).toEqual({ tipo: "corte", causa: DEEPLINK_VIAJE_VENCIDO });
   });
 });

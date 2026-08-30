@@ -215,9 +215,9 @@ export function leerPasoPop(a: Almacen, ahora: number): PasoPop | null {
     terminarPasoPop(a);
     return null;
   }
-  // `exp` viene en SEGUNDOS epoch (es lo que emite el servidor) y `ahora` en MILISEGUNDOS. Mezclarlos
-  // daría un ancla eterna o una muerta al nacer, según el lado del error.
-  if (x.desde > ahora || ahora / 1000 >= x.exp) {
+  // 🔴 DOS GUARDS, NO UNO, Y ANTES ERAN UN SOLO `||` QUE DESTRUÍA LAS DOS RAMAS. `exp` viene en SEGUNDOS
+  // epoch (es lo que emite el servidor) y `ahora` en MILISEGUNDOS: mezclarlos daría un ancla eterna o una
+  if (x.desde > ahora) return null; if (ahora / 1000 >= x.exp) { // muerta al nacer, según el lado del error. ⛔ LA RAMA DEL FUTURO NO LLAMA `terminarPasoPop`: `Date.now()` es reloj de PARED y puede RETROCEDER (corrección NTP), y acá lo que se borraba era el `PasoPop` con la `firma` del PoP YA DADA adentro (`firma`, `:136`). El retorno sigue siendo `null` —esta función no gana forma nueva— y el copy que su llamador emite (`deeplink_pop_vencido`) no miente sobre el dinero: su docblock dice textual que NO AFIRMA NI QUE SE FIRMÓ NI QUE NO. Lo que hacía falta no era un estado nuevo: era dejar de destruir, que es la regla ya escrita acá abajo — una LECTURA no destruye lo que no entrega.
     terminarPasoPop(a);
     return null;
   }

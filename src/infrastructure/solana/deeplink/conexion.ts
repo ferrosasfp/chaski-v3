@@ -493,9 +493,9 @@ function leerPasoDelNonce(a: Almacen, ahora: number): PasoDelNonce | null {
     terminarPasoDelNonce(a);
     return null;
   }
-  // Un ancla que empezó en el FUTURO es basura, no una joven: `ahora - desde` es negativo y nunca
-  // supera la ventana. Mismo agujero que 061 midió en `leerViaje` y se cierra igual.
-  if (x.desde > ahora || ahora - x.desde > MAX_EDAD_MS) {
+  // 🔴 DOS GUARDS, NO UNO, Y ANTES ERAN UN SOLO `||` QUE DESTRUÍA LAS DOS RAMAS. Un ancla que empezó en
+  // el FUTURO no se puede fechar (`ahora - desde` es negativo y nunca supera la ventana), pero `Date.now()`
+  if (x.desde > ahora) return null; if (ahora - x.desde > MAX_EDAD_MS) { // 🔴 `MAX_EDAD_MS` SIGUE EN ESTA LÍNEA A PROPÓSITO: (`MAX_EDAD_MS`, `./pop-por-enlace.ts:104`) la cita por número justamente por eso, y moverla la rompería. ⛔ LA RAMA DEL FUTURO NO LLAMA `terminarPasoDelNonce`: es reloj de PARED y puede RETROCEDER (corrección NTP), así que un retroceso borraba el `mensajeBase64` del nonce durable de alguien que quizás YA FIRMÓ. El retorno sigue siendo `null` —esta función no gana forma nueva— y el copy que su llamador emite (`deeplink_nonce_sin_contexto`) ya es honesto para este caso: dice «Si llegaste a firmar, la cuenta puede haber quedado creada», o sea NO afirma que no se firmó. Lo que hacía falta no era un estado nuevo: era dejar de destruir. Y una LECTURA no destruye lo que no entrega, que es la regla que este módulo ya tiene escrita en (`ancla`, `./pop-por-enlace.ts:405`).
     terminarPasoDelNonce(a);
     return null;
   }

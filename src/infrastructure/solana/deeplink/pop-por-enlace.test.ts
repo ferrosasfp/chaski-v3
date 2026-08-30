@@ -515,13 +515,41 @@ describe("T-067-18 (DT-10): la ventana la fija el `exp` del servidor, no un relo
     });
   });
 
-  it("un ancla que dice haber empezado en el FUTURO es basura, no juventud, y se limpia", () => {
+  // ══ WKH-075 · ADDENDUM DEL RELOJ · testigo I (PoP) ═══════════════════════════════════════════════
+  //
+  // 🔴 ESTE `it` YA EXISTÍA Y AFIRMABA QUE EL ANCLA «SE LIMPIA». Lo que borraba era un `PasoPop` con la
+  // `firma` del PoP YA DADA adentro (`firma`, `./pop-por-enlace.ts:136`), y el disparador no es un
+  // atacante: `Date.now()` es reloj de pared y una corrección NTP hacia atrás mientras la persona está
+  // en la billetera produce exactamente este estado. El retorno SIGUE siendo `null` —esta función no
+  // gana forma nueva y eso también se afirma acá— y lo que cambia es que ⛔ ya no destruye.
+  //
+  // ⛔ EL RETROCESO SE EXPRESA CON `ahora` POR PARÁMETRO: `leerPasoPop` recibe el instante
+  // (`leerPasoPop`, `./pop-por-enlace.ts:189`), así que son dos llamadas con `ahora` decreciente. Nada
+  // depende del reloj del runner.
+  // MUTANTE QUE MATA: devolverle el `terminarPasoPop(a)` a la rama del futuro ⇒ `expected undefined to
+  //   be defined` en el `expect` del disco. ⚠️ El vecino NO lo puede matar: la otra mitad del `if` es
+  //   `ahora / 1000 >= x.exp`, y con `ahora` 60 s ANTES de `desde` el `exp` está lejísimos de vencer,
+  //   así que un rojo acá sólo puede venir de esta rama.
+  it("T-075-RELOJ-I-POP · un ancla del FUTURO no se entrega, y ⛔ NO SE BORRA (la firma vive adentro)", () => {
     const a = almacenFalso();
     viajeConectado(a);
     saltoDelPop(a, MARCA_POP_PAYOUT, { ahora: AHORA });
-    // Se lee con un `ahora` ANTERIOR al `desde` del ancla.
-    expect(leerPasoPop(a, AHORA - 60_000)).toBeNull();
-    expect(a.datos.get(CLAVE_POP), "el ancla basura quedó en el disco y va a repetir el fallo").toBeUndefined();
+    const antes = a.datos.get(CLAVE_POP);
+    // Se lee con un `ahora` ANTERIOR al `desde` del ancla: el reloj retrocedió un minuto.
+    expect(leerPasoPop(a, AHORA - 60_000), "la forma del retorno cambió: sigue siendo `null`").toBeNull();
+    expect(a.datos.get(CLAVE_POP), "el guard de futuro borró un ancla que puede tener la firma del PoP adentro").toBe(antes);
+    expect(a.borrados, "una LECTURA no destruye lo que no entrega").toBe(0);
+    // Y en cuanto el reloj vuelve a pasar su `desde`, la MISMA ancla vuelve a servir.
+    expect(leerPasoPop(a, AHORA)).not.toBeNull();
+  });
+
+  it("T-075-RELOJ-I-POP-J · CONTROL NEGATIVO: con retroceso CERO el ancla se entrega igual que siempre", () => {
+    // ⛔ Sin esto, un `leerPasoPop` roto que devolviera `null` siempre dejaría verde al `it` de arriba.
+    const a = almacenFalso();
+    viajeConectado(a);
+    saltoDelPop(a, MARCA_POP_PAYOUT, { ahora: AHORA });
+    expect(leerPasoPop(a, AHORA)).not.toBeNull();
+    expect(a.borrados).toBe(0);
   });
 
   it("basura en el disco no tira, devuelve `null`, y LIMPIA", () => {

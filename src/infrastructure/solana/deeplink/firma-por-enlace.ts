@@ -273,7 +273,7 @@ export type CausaDeEnlace =
   | typeof DEEPLINK_VIAJE_VENCIDO
   | typeof DEEPLINK_NONCE_YA_CONSUMIDO
   | typeof DEEPLINK_NONCE_NO_ENTRO
-  | typeof DEEPLINK_NONCE_SIN_CONTEXTO | typeof DEEPLINK_POP_SIN_FIRMA | typeof DEEPLINK_POP_VENCIDO | typeof DEEPLINK_POP_ALTERADO; // WKH-359 — LOS TRES EN ESTA LÍNEA, no en tres nuevas: hay 13 citas ancladas de acá para abajo (medido en `723ca3c`) y tres líneas nuevas las corren a todas. Las declaraciones viven al final del archivo, donde hay CERO.
+  | typeof DEEPLINK_NONCE_SIN_CONTEXTO | typeof DEEPLINK_POP_SIN_FIRMA | typeof DEEPLINK_POP_VENCIDO | typeof DEEPLINK_POP_ALTERADO | typeof DEEPLINK_RELOJ_INCONSISTENTE; // WKH-075/addendum del reloj — LA CAUSA NUEVA TAMBIÉN EN ESTA LÍNEA, por el mismo motivo (medido de nuevo: 20 citas ancladas de acá para abajo, 292, 300, 376×2, 410×2, 490, 629, 639, 665, 685, 691×4, 795×5). ⛔ NO SE REUSA `DEEPLINK_VIAJE_VENCIDO`: su copy dice «Pasó demasiado tiempo desde que empezaste… No se firmó nada. Empezá el envío de nuevo», y en un retroceso de reloj las tres frases son falsas o dañinas (no pasó tiempo, pasó lo contrario; puede haber una `transaccionFirmada` que este arreglo acaba de salvar; y «empezá de nuevo» empuja a tirarla). // WKH-359 — LOS TRES EN ESTA LÍNEA, no en tres nuevas: hay 13 citas ancladas de acá para abajo (medido en `723ca3c`) y tres líneas nuevas las corren a todas. Las declaraciones viven al final del archivo, donde hay CERO.
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
@@ -580,7 +580,7 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
       // predicado, su medición y su residuo están en `resultadoPreservable` (AR-it2/BLQ-BAJO-1). Acá
       // decía "basura en el campo de un resultado NO cuenta como firma" sobre un `esFirmaUtil` que
       // aceptaba cualquier basura no blanca, y eso trababa el recorrido hasta que la ventana lo mataba.
-      const hayAlgoQueSalvar = enDisco.tipo === "hay" && resultadoPreservable(enDisco.viaje, p.sender);
+      const hayAlgoQueSalvar = (enDisco.tipo === "hay" || enDisco.tipo === "no-fechable") && resultadoPreservable(enDisco.viaje, p.sender); // 🔴 EL CUARTO VALOR ENTRA ACÁ, EN ESTA MISMA LÍNEA (Δ0), Y NO ES COSMÉTICO. Antes del arreglo del reloj, un `desde` futuro hacía que `leerViaje` BORRARA el viaje adentro de sí mismo, así que cuando `cortar` lo releía ya no estaba: `enDisco.tipo !== "hay"` ⇒ `hayAlgoQueSalvar === false` ⇒ este corte llamaba ADEMÁS a `terminarPreparado`. O sea que el guard de futuro era la única rama del módulo que destruía un resultado SIN pasar por `resultadoPreservable`, y encima amplificaba el daño al registro. Hoy el desenlace trae el `viaje`, así que se le aplica el MISMO predicado que a cualquier otro corte y no hay una segunda regla de preservación. ⛔ Y NO se preserva a ciegas: con un `desde` futuro `ahora - desde` es negativo y la ventana NO limpia nunca, así que un viaje sin nada rescatable tiene que morir acá o se queda para siempre.
       if (!hayAlgoQueSalvar) {
         terminarViaje(p.almacen);
         terminarPreparado(p.almacen);
@@ -605,7 +605,7 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
     // salió de un `prepare()` cuya atestación se verificó en ESTE proceso. Por eso un disco
     // adulterado sólo puede producir un falso NEGATIVO (denegar un envío legítimo) y jamás un falso
     // positivo.
-    const registro = leerPreparado(p.almacen, p.ahora);
+    const registro = leerPreparado(p.almacen, p.ahora); if (registro.tipo === "no-fechable") return cortar(DEEPLINK_RELOJ_INCONSISTENTE); // 🔴 EL PRIMER EMISOR DE LA CAUSA NUEVA, EN ESTA MISMA LÍNEA (Δ0). ⛔ NO es `DEEPLINK_SIN_MEMORIA`: su copy dice «Este navegador no puede guardar los datos del envío» y acá el disco funciona perfecto — lo que no se puede es FECHAR lo que hay adentro. ⛔ Y no se ignora como el registro de otra remesa de acá abajo: un registro ajeno se ignora porque el recorrido nuevo puede empezar limpio, y acá no puede, porque el MISMO retroceso deja también al viaje sin fechar. Cortar por acá es lo que hace que `cortar` corra su preservación una sola vez y con las dos claves en juego.
     // 🔴 UN REGISTRO DE OTRA REMESA (O DE OTRA CUENTA) NO ES UN ANCLA — AR/BLQ-MED-2.
     //
     // La clave del `Preparado` es un SINGLETON del origen: no lleva la remesa ni el sender adentro.
@@ -682,7 +682,7 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
     // ⛔ Comparación exacta. NUNCA `.toLowerCase()`: base58 es case-sensitive y bajarlo a minúsculas
     // fabrica colisiones. El adaptador ya canonicaliza los dos lados antes de llegar acá.
     const lectura = leerViaje(p.almacen, p.ahora);
-    if (lectura.tipo !== "hay") return cortar(DEEPLINK_VIAJE_VENCIDO);
+    if (lectura.tipo === "no-fechable") return cortar(DEEPLINK_RELOJ_INCONSISTENTE); if (lectura.tipo !== "hay") return cortar(DEEPLINK_VIAJE_VENCIDO); // 🔴 LOS DOS `if` EN ESTA MISMA LÍNEA, y son dos requisitos a la vez: Δ0 (9 citas ancladas de acá para abajo) y que esta línea SIGA conteniendo el literal `DEEPLINK_VIAJE_VENCIDO`, porque `../../solana-wallet.ts:2294` la cita por ese símbolo. 🔴 EL ORDEN IMPORTA: `no-fechable` se discrimina PRIMERO, si no cae en el `!== "hay"` y la persona lee «Pasó demasiado tiempo… No se firmó nada. Empezá el envío de nuevo» justo cuando puede haber una `transaccionFirmada` suya en el disco, que es exactamente lo que este arreglo salva.
     const viaje = lectura.viaje;
     // Sin `claveBilletera`/`session`/`direccion` el connect nunca completó, así que no hay canal
     // cifrado con el que pedir nada. 062 NO es dueña del connect (es de la ola 4) y lo EXIGE: la
@@ -1118,3 +1118,36 @@ export const DEEPLINK_POP_ALTERADO = "deeplink_pop_alterado";
 // las produce es inyectable SÓLO para que los tests no esperen 3 s (CD-20).
 export const DEEPLINK_DISPONIBILIDAD_SIN_RESOLVER = "deeplink_disponibilidad_sin_resolver";
 export const DEEPLINK_MARCA_SIN_CONSUMIDOR = "deeplink_marca_sin_consumidor";
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-075 · ADDENDUM DEL RELOJ — LA CAUSA DE UN `desde` QUE NO SE PUEDE FECHAR.
+//
+// 🔴 POR QUÉ UNA CAUSA NUEVA Y ⛔ POR QUÉ NO SE REUSA `DEEPLINK_VIAJE_VENCIDO`. El copy de esa causa
+// dice «Pasó demasiado tiempo desde que empezaste y este intento ya no sirve. No se firmó nada.
+// Empezá el envío de nuevo.», y en un retroceso de reloj las tres frases fallan de las tres maneras
+// que este módulo ya corrigió dos veces:
+//   · «pasó demasiado tiempo» es literalmente lo contrario de lo que ocurrió (el reloj volvió atrás);
+//   · «no se firmó nada» puede ser falso, y después de este arreglo la firma SIGUE EN EL DISCO;
+//   · «empezá el envío de nuevo» empuja a la persona a tirar exactamente lo que el arreglo salvó.
+// Los dos precedentes internos están escritos: (`DEEPLINK_NONCE_SIN_CONTEXTO`, `:262`) y el bloque de
+// `deeplink_nonce_ya_consumido` en (`COPY_DE_ENLACE`, `../../../presentation/flow-vm.ts:1421`).
+//
+// ⛔ LO QUE SU COPY NO PUEDE DECIR, con el motivo de cada prohibición (las siete, y no se negocian):
+//   · «no se firmó nada»           → puede haber una `transaccionFirmada` en el disco.
+//   · «empezá el envío de nuevo»   → empujaría a descartar lo que el arreglo acaba de salvar.
+//   · «pasó demasiado tiempo»      → es lo contrario de lo que ocurrió.
+//   · «cancelaste» / cualquier culpa → nadie canceló nada; eso es `DEEPLINK_RECHAZADO`.
+//   · cualquier duración           → NO sabemos cuánto retrocedió el reloj. Afirmarlo es inventar.
+//   · modo privado o disco         → eso es `DEEPLINK_SIN_MEMORIA`; acá el disco funciona perfecto.
+//   · em dashes                    → convención de copy público del repo.
+// 🔒 Quien las mide es `T-075-RELOJ-COPY`, y ⛔ los literales prohibidos viven EN EL TEST y no acá: un
+// control que buscara una subcadena de este mismo bloque se leería a sí mismo y no podría fallar nunca.
+//
+// 🔴 QUIÉN LA EMITE, y son DOS sitios, los dos por ejecución (⛔ ningún mecanismo sin llamador):
+// (`registro`, `:608`) cuando el que no se puede fechar es el `Preparado`, y (`lectura`, `:685`) cuando
+// es el viaje. ⛔ NO es una perilla: no se lee de ninguna env y no se configura.
+// ⚠️ Y ACÁ, no en el módulo que "le correspondería": es el único archivo sobre el que corre el candado
+// de copy `T-065-COPY-1`, que deriva las causas con un regex sobre ESTE archivo. Por eso la línea de
+// abajo va ancla-a-ancla, sin `as const` y sin nada antes del `;`: si el regex no matchea, el candado
+// queda verde en falso y la persona lee el default.
+export const DEEPLINK_RELOJ_INCONSISTENTE = "deeplink_reloj_inconsistente";

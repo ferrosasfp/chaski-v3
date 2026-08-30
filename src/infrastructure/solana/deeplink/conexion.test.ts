@@ -740,6 +740,57 @@ describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
     );
     expect(a.datos.get(CLAVE_VIAJE), "la vuelta del nonce consumió un paso del viaje").toBe(viajeAntes);
   });
+
+  // ══ WKH-075 · ADDENDUM DEL RELOJ · testigo I (ancla del nonce) ═══════════════════════════════════
+  //
+  // 🔴 QUÉ SE BORRABA ACÁ. `leerPasoDelNonce` fusionaba en un solo `||` el ancla del FUTURO con la
+  // ancla VENCIDA y las destruía a las dos, y lo que destruía era el `mensajeBase64` del nonce durable
+  // de alguien que quizás YA FIRMÓ. El disparador no es un atacante: `Date.now()` es reloj de pared y
+  // una corrección NTP hacia atrás mientras la persona está en la billetera produce este estado.
+  //
+  // ⛔ EL RETROCESO SE EXPRESA CON `ahora` POR PARÁMETRO: el ancla se escribe por el camino de
+  // producción con `guardarPasoDelNonce` y se lee con un `ahora` menor. Nada depende del reloj del
+  // runner, que en un CI con el reloj disciplinado por slew nunca reproduciría esto.
+  // MUTANTE QUE MATA: devolverle el `terminarPasoDelNonce(a)` a la rama del futuro ⇒ `expected false to
+  //   be true` en el `expect` del disco. ⚠️ El vecino NO lo puede matar: la otra mitad del `if` es
+  //   `ahora - x.desde > MAX_EDAD_MS`, y con `desde` en el futuro esa resta es NEGATIVA y no se alcanza
+  //   nunca. Un rojo acá sólo puede venir de esta rama.
+  it("T-075-RELOJ-I-NONCE · un ancla del FUTURO no se entrega, y ⛔ NO SE BORRA", () => {
+    const a = almacenFalso();
+    const { base58, mensajeBase64 } = transaccion(Keypair.generate());
+    const { publicaDeLaApp, redirectLink } = prepararSalto(a, mensajeBase64);
+    // Se re-ancla por el camino de producción con un `desde` un milisegundo en el FUTURO.
+    guardarPasoDelNonce(a, mensajeBase64, AHORA + 1);
+    const antes = a.datos.get(CLAVE_NONCE);
+    const href = vueltaDelNonce(
+      redirectLink,
+      respuestaDeLaBilletera({ transaction: base58 }, publicaDeLaApp),
+    );
+    const r = completarVuelta(pedido(a, { hrefActual: href }));
+    // El desenlace NO cambia de forma: sigue siendo el corte que ya emitía, con el copy que ya era
+    // honesto para este caso («Si llegaste a firmar, la cuenta puede haber quedado creada»).
+    expect(r).toEqual({ tipo: "corte", causa: "deeplink_nonce_sin_contexto" });
+    expect(a.datos.get(CLAVE_NONCE), "el guard de futuro borró el ancla del nonce durable").toBe(antes);
+    // Y cuando el reloj vuelve a pasar su `desde`, la MISMA ancla sirve: el corte deja de salir.
+    expect(completarVuelta(pedido(a, { hrefActual: href, ahora: AHORA + 1 })).tipo).not.toBe("corte");
+  });
+
+  it("T-075-RELOJ-I-NONCE-J · CONTROL NEGATIVO: con retroceso CERO la vuelta del nonce sigue andando", () => {
+    // ⛔ Sin esto, un `leerPasoDelNonce` roto que devolviera `null` siempre dejaría verde al `it` de
+    // arriba: los dos `expect` de allá pasarían igual.
+    const a = almacenFalso();
+    const { base58, mensajeBase64 } = transaccion(Keypair.generate());
+    const { publicaDeLaApp, redirectLink } = prepararSalto(a, mensajeBase64);
+    const r = completarVuelta(
+      pedido(a, {
+        hrefActual: vueltaDelNonce(
+          redirectLink,
+          respuestaDeLaBilletera({ transaction: base58 }, publicaDeLaApp),
+        ),
+      }),
+    );
+    expect(r.tipo).not.toBe("corte");
+  });
 });
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════

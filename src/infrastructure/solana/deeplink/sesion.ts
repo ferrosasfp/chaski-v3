@@ -191,23 +191,23 @@ export interface Viaje {
 }
 
 /**
- * LEER EL VIAJE TIENE TRES DESENLACES, y el tercero es el que siempre se pierde.
- *   · "hay"      hay un viaje vigente.
- *   · "no-hay"   nunca hubo, o ya se terminó y se limpió.
- *   · "vencido"  hubo uno, pero es viejo. NO es lo mismo que no haber: acá sí hay que decirle algo a
- *                la persona, porque probablemente esté esperando que su firma sirva para algo.
+ * LEER EL VIAJE TIENE CUATRO DESENLACES, y los dos últimos son los que siempre se pierden.
+ *   · "hay"          hay un viaje vigente.
+ *   · "no-hay"       nunca hubo, o ya se terminó y se limpió.
+ *   · "vencido"      hubo uno, pero es viejo. NO es lo mismo que no haber: acá sí hay que decirle algo
+ *                    a la persona, porque probablemente esté esperando que su firma sirva para algo.
+ *   · "no-fechable"  hay uno y su `desde` es POSTERIOR a `ahora`: este dispositivo no lo puede fechar.
+ *                    ⛔ NO SE BORRA. Adentro puede estar la `transaccionFirmada` que la persona ya dio.
  */
 export type LecturaDelViaje =
   /**
    * `secretaBytes` es la `secreta` YA decodificada. Va acá y no se recalcula más arriba para que no
-   * exista ningún camino en el que un «hay» traiga una `secreta` que no sirve: antes esa garantía
-   * era una frase en un comentario y `interpretarVuelta` tenía que volver a decodificar y a manejar
-   * un `null` que `leerViaje` ya había descartado. La rama imposible se borró en vez de dejarla sin
-   * test (era el mutante M7 del re-AR, vivo justo porque nadie podía llegar).
+   * exista ningún camino en el que un «hay» traiga una `secreta` que no sirve: antes esa garantía era
+   * una frase en un comentario e `interpretarVuelta` tenía que volver a decodificar y a manejar un
+   * `null` que `leerViaje` ya había descartado (era el mutante M7 del re-AR, vivo porque nadie llegaba).
    */
   | { tipo: "hay"; viaje: Viaje; secretaBytes: Uint8Array }
-  | { tipo: "no-hay" }
-  | { tipo: "vencido" };
+  | { tipo: "no-hay" } | { tipo: "vencido" } | { tipo: "no-fechable"; viaje: Viaje }; // 🔴 LOS TRES EN ESTA LÍNEA (Δ0: este archivo recibe 33 citas ancladas de `:222` para abajo y una línea nueva las corre a todas). 🔴 EL CUARTO VALOR LLEVA EL `viaje` Y ⛔ NO LLEVA `secretaBytes`, y las dos mitades son deliberadas. Lleva el `viaje` para que `cortar` le pueda aplicar el MISMO `resultadoPreservable` que ya aplica, en vez de inventar una segunda regla de preservación — y preservar A CIEGAS no era opción, porque con un `desde` futuro `ahora - desde` es negativo y la ventana NO LIMPIA NUNCA, o sea que lo preservado a ciegas se quedaría para siempre. No lleva `secretaBytes` porque sin ella no se abre ningún sobre, y ésa es la garantía ESTRUCTURAL de que desde este estado el viaje no se puede usar: es el mismo razonamiento del docblock de «hay» de acá arriba, aplicado al revés. ⛔ Y NO COLAPSA con «no-hay» ni con «vencido»: los tres piden reacciones distintas y colapsarlos es el defecto que 061 midió.
 
 /**
  * ⚠️ ESTA SÍ PUEDE TIRAR, Y ES DELIBERADO. `localStorage.setItem` lanza con la cuota llena y en el
@@ -305,11 +305,11 @@ export function leerViaje(a: Almacen, ahora: number): LecturaDelViaje {
   // 🔴 `Number.isFinite` y no `typeof === "number"` a secas: `JSON.parse` produce `Infinity` con
   // `1e999` y `-Infinity` con `-1e999`, y el `typeof` de los dos es `"number"`.
   //
-  // ⚠️ ACÁ DECÍA «con eso el viaje contestaba `hay` diez años después» Y HOY ES FALSO — es el gemelo
-  // de un comentario que el fix-pack 3 ya había corregido en `sesion.test.ts` y que se dejó vivo en
-  // ESTE archivo, que es el que manda. Medido con el mutante puesto (`typeof v?.desde !== "number"`):
-  // el `+Infinity` NO llega a depender de esta línea, lo mata el guard `v.desde > ahora` de más
-  // abajo, porque `Infinity > ahora` es `true`. El único `it` que se pone rojo es el de `-1e999`.
+  // ⚠️ ESTA LÍNEA ESTUVO SIN CANDADO Y HOY SÍ LO TIENE, y es un efecto lateral del arreglo del reloj,
+  // no algo que se haya escrito a propósito. Acá decía que con el mutante `typeof v?.desde !== "number"`
+  // el `+Infinity` «NO llega a depender de esta línea» porque lo mataba el guard de futuro: eso era
+  // cierto cuando ese guard contestaba «no-hay» Y LIMPIABA. Hoy contesta «no-fechable» y ⛔ NO limpia,
+  // así que un `+Infinity` sin esta validación sería basura PARA SIEMPRE. Con el mutante puesto, el `it` de `1e999` se pone rojo, y el de `-1e999` también. ⚠️ La medición vieja no era falsa cuando se escribió: envejeció sola al cambiar el guard de abajo, que es justo lo que un «MUTANTE QUE MATA» escrito en prosa no puede avisar.
   //
   // QUÉ SOSTIENE ESTA LÍNEA, DICHO SOBRE EL CÓDIGO DE HOY: `-Infinity` es el único valor que pasa el
   // guard de futuro (`-Infinity > ahora` es `false`) y llega a la resta, donde `ahora - (-Infinity)`
@@ -331,30 +331,30 @@ export function leerViaje(a: Almacen, ahora: number): LecturaDelViaje {
   // forma mínima" y se quedaba a mitad: un `"!!!no-base58!!!"` pasaba el `typeof` y reventaba una
   // capa más arriba, en el `bs58.decode` de `interpretarVuelta`, con una excepción no capturada que
   // además NO caía en ninguna rama que limpiara — o sea que se repetía en CADA carga de la página.
-  // Se trata como lo que es: basura en el disco. Se limpia y se contesta "no hay", igual que un JSON
-  // roto. NO se agrega un cuarto valor a `LecturaDelViaje`: ese trío es CD-4.
+  // Se trata como lo que es: basura en el disco. Se limpia y se contesta "no hay". ⚠️ ACÁ DECÍA «NO se
+  // agrega un cuarto valor a `LecturaDelViaje`: ese trío es CD-4», Y HOY SON CUATRO. La corrección no es cosmética: CD-4 se escribió contra darle un valor propio a la BASURA, y sobre ESTA rama sigue mandando — una `secreta` que no decodifica se limpia y se contesta «no-hay», sin valor propio. El cuarto valor no es basura: es un viaje BUENO que este dispositivo no puede fechar, y por eso, al revés que esta rama, NO se borra.
   const secretaBytes = decodificarSecreta(v.secreta);
   if (secretaBytes === null) {
     terminarViaje(a);
     return { tipo: "no-hay" };
   }
-  // 🔴 UN VIAJE QUE EMPEZÓ EN EL FUTURO ES BASURA, NO UN VIAJE JOVEN. `ahora - desde` es negativo,
-  // así que nunca supera `MAX_EDAD_MS`: un `desde` adelantado en X días hace que el viaje —y con él
-  // `secreta`, `claveBilletera`, `direccion`, `session` y la ventana en la que el paso 1 se puede
-  // forjar— viva X días más 20 minutos. Medido en el re-AR: `desde` +10 días contestaba «hay» diez
-  // días después.
+  // 🔴 UN VIAJE QUE EMPEZÓ EN EL FUTURO NO SE PUEDE FECHAR, y por eso NO SALE POR «hay»: `ahora - desde`
+  // es negativo y nunca supera `MAX_EDAD_MS`, así que un `desde` adelantado X días haría vivir el viaje
+  // —y con él `secreta`, `claveBilletera`, `direccion`, `session` y la ventana en la que el paso 1 se
+  // puede forjar— X días más 20 minutos. Medido en el re-AR: +10 días contestaba «hay» diez días después.
+  // ⛔ Por eso el desenlace NO lleva `secretaBytes`: sin ella no se abre ningún sobre, o sea que desde
+  // este estado el viaje es estructuralmente inusable y la ventana de forja del paso 1 no se agranda.
   //
-  // El fix-pack anterior argumentó que no hacía falta porque "la ventana no es un control de
-  // seguridad" (DT-7). Ese argumento dejó de valer cuando el paso 1 quedó declarado como residual:
-  // hoy la ventana es la ÚNICA contención que le queda a esa forja en esta capa, así que una ventana
-  // de duración arbitraria es un agujero. Con esta línea DT-7 vuelve a ser cierto.
-  //
-  // Lo que esta línea rompe, dicho: un reloj que se corrige HACIA ATRÁS mientras el viaje está en
-  // curso mata ese viaje (`no-hay`, hay que volver a pedir). Se prefiere eso a sostener una ventana
-  // cuya duración la elige quien haya movido el reloj.
+  // 🔴 PERO ACÁ SE BORRABA EL DISCO, Y ESO ERA EL DEFECTO — no la clasificación. `Date.now()` es reloj
+  // de PARED y PUEDE RETROCEDER (una corrección NTP en un teléfono que recupera señal), y la ventana
+  // de daño no es un instante: `desde` nace en `iniciarConexion` y `consumir` lo conserva, así que este
+  // `if` cubre el viaje ENTERO —hasta 20 minutos—, justo el rato en que la persona está en la billetera.
+  // MEDIDO por el camino de producción `getAddress()`, 5/5 y con control negativo (retroceso 0 ⇒ la
+  // cuenta sigue y el viaje sigue en disco): con 1 ms de retroceso el viaje se borraba con la
+  // `transaccionFirmada` adentro. ⛔ Y no se arregla con una tolerancia: su tamaño dependería de la
   if (v.desde > ahora) {
-    terminarViaje(a);
-    return { tipo: "no-hay" };
+    // distribución de saltos NTP, que nadie midió. ⛔ NO SE BORRA, y por eso el desenlace lleva el
+    return { tipo: "no-fechable", viaje: v }; // `viaje`: quien decide qué se preserva es `resultadoPreservable`, el MISMO predicado que ya usa `cortar`.
   }
   if (ahora - v.desde > MAX_EDAD_MS) {
     terminarViaje(a);
@@ -424,9 +424,9 @@ export type Vuelta =
    * nadie porque la página se murió en el salto.
    *   · "sin-viaje"    en el disco no hay NADA que se pueda usar (nunca hubo, o era basura y se
    *                    limpió). Empezar de nuevo es la reacción correcta y no se pierde nada.
-   *   · "manos-vacias" HAY viaje, y esta URL no trae respuesta (o le faltan parámetros). Puede tener
-   *                    resultados de pasos anteriores adentro. ⛔ NO limpiar sin leerlos.
-   * (Mismo patrón que `otra-clave`/`motivo`, por la misma razón: dos hechos distintos, dos valores.)
+   *   · "manos-vacias" HAY viaje y de acá no sale ningún resultado: o esta URL no trae respuesta (o le
+   *                    faltan parámetros), o el viaje NO SE PUEDE FECHAR (`no-fechable`, el reloj de pared
+   *                    retrocedió). Puede tener resultados de pasos anteriores adentro. ⛔ NO limpiar sin leerlos. (Mismo patrón que `otra-clave`/`motivo`, por la misma razón: dos hechos distintos, dos valores.)
    */
   | { tipo: "huerfana"; paso: PasoDelViaje; motivo: "sin-viaje" | "manos-vacias" }
   /** Había viaje, pero ya no vale. La persona firmó al pedo y merece saberlo. */
@@ -492,7 +492,7 @@ export const MARCA = "dl";
  *
  * Lo que NO toca: cualquier otro parámetro del origen (`?kyc=return`, etc.) sigue viajando.
  */
-export const MARCAS_DE_VUELTA = ["conectar", "firmar-tx", "firmar-patrocinio", "crear-nonce", "pop-payout", "pop-kyc"] as const; export function enlaceDeVuelta(origen: string, paso: (typeof MARCAS_DE_VUELTA)[number]): string { // WKH-075 — `MARCAS_DE_VUELTA` Y LA FIRMA, LOS DOS EN ESTA LÍNEA (Δ0: `:495` recibe 5 citas y hay 13 sitios más por debajo). El universo de marcas vivía SÓLO en el parámetro de esta función, y un TIPO no se puede recorrer en runtime: un test que las listara las copiaría a mano y sería una lista que envejece sola. Ahora es un VALOR, y eso es lo que permite RECORRERLAS en runtime en vez de copiarlas a mano. 🔴 ACÁ DECÍA «`tsc` ata las dos puntas: el tipo del parámetro se DERIVA de la tupla, así que agregar una marca acá y no darle consumidor es lo que `T-075-5` caza» Y ES FALSO (fix-pack · AR+CR/BLQ-4). EL INPUT QUE LA FALSEA, y está corrido: agregar un 7º elemento a esta tupla, líneo-neutro. MEDIDO sobre el gate COMPLETO del repo (`npm run qa`) el 2026-08-29: `biome lint` 0 errores / 137 warnings, `tsc --noEmit` 0, `vitest` 162 archivos / 3305 tests, exit 0. Ninguno de los tres puede cazarlo, y por motivos DISTINTOS: `T-075-5` sólo pide `length >= 6`, un `arrayContaining` de las seis, y después FILTRA a las tres del motor; y `tsc` no puede POR CONSTRUCCIÓN, porque agregar un valor ENSANCHA la unión del parámetro de `enlaceDeVuelta`, no la contradice. ⚠️ Y NO SE ESCRIBIÓ EL TEST QUE «SÍ LO CAZARÍA», a propósito: una marca nueva que ninguna rama reclame cae en el fallthrough de `flow.tsx:4070` y dispara `DEEPLINK_MARCA_SIN_CONSUMIDOR`, que es el COMPORTAMIENTO DISEÑADO y no un defecto — o sea que no hay nada que cazar. Lo que sí hay que hacer al agregar una marca es darle rama o aceptar la señal. ⛔ `esPaso` (`:121`) NO se toca, y el porqué está tres renglones más abajo en esta misma línea junto con la medición de que el `never` no es candado de esto. // WKH-358/AC-5 — EN ESTA LÍNEA (Δ0: este archivo recibe 4 citas ancladas). El salto que CREA la cuenta de nonce vuelve con su propia marca, y ⛔ ESA MARCA NO ES UN `PasoDelViaje` A PROPÓSITO: `esPaso` es un conjunto cerrado de tres, así que `interpretarVuelta` contesta `no-volvimos` y el motor no consume ni destruye nada si esta marca queda en la barra. El literal va escrito acá y no importado de `conexion.ts` para no invertir la dependencia (ese módulo importa a éste); quien lo ata es `tsc`, porque `MARCA_CREAR_NONCE` es un `const` de ese mismo literal y pasarlo acá no compilaría si divergieran WKH-359 — LAS DOS MARCAS DEL PoP ENTRAN ACÁ POR EL MISMO MOTIVO: ⛔ NO son `PasoDelViaje` y ⛔ NO se agregan a `esPaso` (`:121`), que sigue siendo un conjunto CERRADO de tres, así que `interpretarVuelta` (`:585`) contesta `no-volvimos` y el motor no consume ni destruye nada si una de estas marcas queda en la barra. 🔴 Y ACÁ VA UNA CORRECCIÓN DE MI PROPIA EVIDENCIA, que vale más que la regla: el Story File de esta HU decía que el candado era el `never` de (`nunca`, `./firma-por-enlace.ts:795`) —«si el cambio compila, la marca se coló»—. **LO CORRÍ Y ES FALSO**: agregué `"pop-payout"` a `PasoDelViaje` (`:114`) Y a `esPaso` (`:122`) y `tsc --noEmit` quedó VERDE, y la suite entera también. El motivo es estructural: ese `never` es exhaustividad sobre `Vuelta.tipo` (`:407`), y `PasoDelViaje` entra a esas variantes como CAMPO, no como discriminante ⇒ agregarle un valor no agrega ninguna variante que el `switch` tenga que ver. ⇒ EL ÚNICO CANDADO REAL ES `T-067-16` en `./sesion.test.ts`, que es de runtime, y por eso se escribió en la misma wave que esta línea y no más tarde. La razón propia de estas dos marcas sigue en pie: la prueba de posesión no mueve USDC ni consume un paso del viaje del depósito, así que un salto suyo que quede en la barra NO puede destruir el viaje en curso.
+export const MARCAS_DE_VUELTA = ["conectar", "firmar-tx", "firmar-patrocinio", "crear-nonce", "pop-payout", "pop-kyc"] as const; export function enlaceDeVuelta(origen: string, paso: (typeof MARCAS_DE_VUELTA)[number]): string { // WKH-075 — `MARCAS_DE_VUELTA` Y LA FIRMA, LOS DOS EN ESTA LÍNEA (Δ0: `:495` recibe 5 citas y hay 13 sitios más por debajo). El universo de marcas vivía SÓLO en el parámetro de esta función, y un TIPO no se puede recorrer en runtime: un test que las listara las copiaría a mano y sería una lista que envejece sola. Ahora es un VALOR, y eso es lo que permite RECORRERLAS en runtime en vez de copiarlas a mano. 🔴 ACÁ DECÍA «`tsc` ata las dos puntas: el tipo del parámetro se DERIVA de la tupla, así que agregar una marca acá y no darle consumidor es lo que `T-075-5` caza» Y ES FALSO (fix-pack · AR+CR/BLQ-4). EL INPUT QUE LA FALSEA, y está corrido: agregar un 7º elemento a esta tupla, líneo-neutro. RE-MEDIDO sobre el gate COMPLETO del repo (`npm run qa`) el 2026-08-29, en el árbol del addendum del reloj (sobre `6bbd977`): `biome lint` 0 errores / 137 warnings, `tsc --noEmit` 0, `vitest` 162 archivos / **3323 tests**, exit 0. ⚠️ ACÁ DECÍA «3305» Y EL ÁRBOL DABA OTRA COSA: 3309 en `6bbd977` y 3323 con los testigos del addendum. El conteo de `it` es una FOTO y se pudre solo cada vez que alguien agrega un test, así que no se apoya nada en él: lo que el experimento afirma es el EXIT y los tres ceros, que no dependen del número. Si volvés a citarlo, re-corré el gate. Ninguno de los tres puede cazarlo, y por motivos DISTINTOS: `T-075-5` sólo pide `length >= 6`, un `arrayContaining` de las seis, y después FILTRA a las tres del motor; y `tsc` no puede POR CONSTRUCCIÓN, porque agregar un valor ENSANCHA la unión del parámetro de `enlaceDeVuelta`, no la contradice. ⚠️ Y NO SE ESCRIBIÓ EL TEST QUE «SÍ LO CAZARÍA», a propósito: una marca nueva que ninguna rama reclame cae en el fallthrough de `flow.tsx:4070` y dispara `DEEPLINK_MARCA_SIN_CONSUMIDOR`, que es el COMPORTAMIENTO DISEÑADO y no un defecto — o sea que no hay nada que cazar. Lo que sí hay que hacer al agregar una marca es darle rama o aceptar la señal. ⛔ `esPaso` (`:121`) NO se toca, y el porqué está tres renglones más abajo en esta misma línea junto con la medición de que el `never` no es candado de esto. // WKH-358/AC-5 — EN ESTA LÍNEA (Δ0: este archivo recibe 4 citas ancladas). El salto que CREA la cuenta de nonce vuelve con su propia marca, y ⛔ ESA MARCA NO ES UN `PasoDelViaje` A PROPÓSITO: `esPaso` es un conjunto cerrado de tres, así que `interpretarVuelta` contesta `no-volvimos` y el motor no consume ni destruye nada si esta marca queda en la barra. El literal va escrito acá y no importado de `conexion.ts` para no invertir la dependencia (ese módulo importa a éste); quien lo ata es `tsc`, porque `MARCA_CREAR_NONCE` es un `const` de ese mismo literal y pasarlo acá no compilaría si divergieran WKH-359 — LAS DOS MARCAS DEL PoP ENTRAN ACÁ POR EL MISMO MOTIVO: ⛔ NO son `PasoDelViaje` y ⛔ NO se agregan a `esPaso` (`:121`), que sigue siendo un conjunto CERRADO de tres, así que `interpretarVuelta` (`:585`) contesta `no-volvimos` y el motor no consume ni destruye nada si una de estas marcas queda en la barra. 🔴 Y ACÁ VA UNA CORRECCIÓN DE MI PROPIA EVIDENCIA, que vale más que la regla: el Story File de esta HU decía que el candado era el `never` de (`nunca`, `./firma-por-enlace.ts:795`) —«si el cambio compila, la marca se coló»—. **LO CORRÍ Y ES FALSO**: agregué `"pop-payout"` a `PasoDelViaje` (`:114`) Y a `esPaso` (`:122`) y `tsc --noEmit` quedó VERDE, y la suite entera también. El motivo es estructural: ese `never` es exhaustividad sobre `Vuelta.tipo` (`:407`), y `PasoDelViaje` entra a esas variantes como CAMPO, no como discriminante ⇒ agregarle un valor no agrega ninguna variante que el `switch` tenga que ver. ⇒ EL ÚNICO CANDADO REAL ES `T-067-16` en `./sesion.test.ts`, que es de runtime, y por eso se escribió en la misma wave que esta línea y no más tarde. La razón propia de estas dos marcas sigue en pie: la prueba de posesión no mueve USDC ni consume un paso del viaje del depósito, así que un salto suyo que quede en la barra NO puede destruir el viaje en curso.
   const u = new URL(origen);
   for (const p of PARAMS_DE_RESPUESTA) u.searchParams.delete(p);
   u.searchParams.set(MARCA, paso);
@@ -591,7 +591,7 @@ export function interpretarVuelta(
   // `"sin-viaje"`: acá el disco NO tiene nada usable —nunca hubo, o había basura y `leerViaje` la
   // limpió—, así que no hay ningún resultado que se pueda perder. Es el único caso en el que
   // "empezá de nuevo" es una reacción sin costo. Ver `Vuelta`.
-  if (lectura.tipo === "no-hay") return { tipo: "huerfana", paso, motivo: "sin-viaje" };
+  if (lectura.tipo === "no-hay") return { tipo: "huerfana", paso, motivo: "sin-viaje" }; if (lectura.tipo === "no-fechable") return { tipo: "huerfana", paso, motivo: "manos-vacias" }; // 🔴 LAS DOS EN ESTA LÍNEA (Δ0). ⛔ EL MOTIVO DEL SEGUNDO NO ES `"sin-viaje"`, y no es un matiz: el docblock de ese motivo dice literalmente «no se pierde nada», y acá SÍ hay viaje en el disco y puede tener adentro la `transaccionFirmada` del paso 2. `"manos-vacias"` es el único motivo que los DOS consumidores tratan sin limpiar (el motor hace `break` y sigue a leer los resultados, `manos-vacias`, `./firma-por-enlace.ts:718`; el connect contesta `nada`, `manos-vacias`, `./conexion.ts:292`), que es exactamente lo que este arreglo necesita. ⚠️ Y ES ALCANZABLE POR EJECUCIÓN, no defensiva: por el motor no —su guard discrimina antes, `lectura`, `./firma-por-enlace.ts:685`— pero por el connect sí, que llama acá directo (`vuelta`, `./conexion.ts:273`).
   const { viaje, secretaBytes } = lectura;
 
   if (remesaEnCurso !== null && viaje.remittanceId !== remesaEnCurso) {

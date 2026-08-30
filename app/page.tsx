@@ -1,3 +1,4 @@
+import { DiagnosticoDeVuelta } from "@/presentation/diagnostico-de-vuelta";
 import { RemittanceFlow } from "@/presentation/flow";
 import { Splash } from "@/presentation/splash";
 
@@ -18,6 +19,17 @@ export default function Page() {
   return (
     <>
       <Splash />
+      {/* HU-075/diagnóstico · EL BLOQUE VA ACÁ POR TRES RAZONES, y ninguna es estética.
+          1. HERMANO Y NO ADENTRO, por lo mismo que el splash: así `flow.tsx` —[[CENSO src/presentation/flow.tsx lineas=4421]] líneas y
+             [[CENSO src/presentation/flow.tsx entrantes=149]] citas ancladas por número— no recibe ni una línea por esto. Lo único que sí necesita de ahí
+             adentro es la causa cruda del corte, y eso entra por la bitácora, en una línea que ya
+             existía.
+          2. DESPUÉS DEL SPLASH, para no tocar el invariante de foco que el docblock de arriba declara:
+             el splash tiene que seguir siendo el primer subárbol del documento.
+          3. ANTES DE `RemittanceFlow`, para que quede ARRIBA DE TODO en el flujo normal y entre en
+             una captura de pantalla sin scrollear, que es el entregable.
+          ⛔ Sin `?diag=1` esto devuelve `null` y no ejecuta ninguna lectura: la página queda idéntica. */}
+      <DiagnosticoDeVuelta />
       <RemittanceFlow />
     </>
   );

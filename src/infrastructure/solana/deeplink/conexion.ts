@@ -126,7 +126,7 @@ export type EleccionDeBilletera = BilleteraDeeplink | null;
  * apagaría y el recorrido caería al camino inyectado **en silencio**, con la vuelta de la billetera ya
  * en la barra y nadie que la lea. Lo único que la borra es un gesto explícito (`olvidarEleccion`). ⚠️ QUÉ COSTABA ESA DECISIÓN, Y QUÉ HIZO FALTA AGREGARLE (fix-pack · AR/BLQ-MED-1). Sin TTL y **sin ningún llamador de producción de `olvidarEleccion`** —que es como se cerró la ola 4, con el docblock de `olvidar()` afirmando lo contrario— la elección era PEGAJOSA SIN SALIDA: quien elegía Phantom quedaba con el gate del adaptador armado para ese origen para siempre, y un build con la bandera del enlace apagada NO lo replegaba. La decisión de no expirar sigue en pie (su modo de falla sigue siendo peor); lo que se agregó son las DOS puertas que faltaban, y ninguna es un reloj: la bandera como 3ª condición del gate ((`caminoPorEnlace`, `../../solana-wallet.ts:2239`)) y el gesto explícito que este párrafo ya prometía ((`OlvidarBilleteraDeEnlace`, `../../../presentation/flow.tsx:4243`)).
  */
-const CLAVE_ELECCION = "chaski.billetera.eleccion.v1";
+export const CLAVE_ELECCION = "chaski.billetera.eleccion.v1"; // HU-075/diagnóstico: SE EXPORTA, y el `export` entra EN ESTA LÍNEA y no con un bloque nuevo arriba, por lo mismo que (`CLAVE`, `./sesion.ts:95`) — esta línea está citada por número y un renglón nuevo la correría. POR QUÉ: el bloque de diagnóstico de `../../../presentation/diagnostico-de-vuelta.tsx` informa la PRESENCIA de esta clave, y copiar el literal allá habría dejado dos sitios escribiendo el mismo string. ⛔ SIGUE SIENDO DE ESTE MÓDULO: el único escritor es `guardarEleccion` y el único borrador `olvidarEleccion`; afuera sólo se lee para decir si está o no.
 
 /** El conjunto CERRADO de dos, comparado con literales para que `tsc` estreche en el que llama. */
 function esBilletera(x: unknown): x is BilleteraDeeplink {
@@ -426,7 +426,7 @@ export function remesaDelViaje(a: Almacen, ahora: number): string | null {
  * persona haga después, y un corte del depósito no tiene por qué borrar el ancla de una transacción
  * de creación que puede estar en vuelo.
  */
-const CLAVE_NONCE = "chaski.billetera.nonce.v1";
+export const CLAVE_NONCE = "chaski.billetera.nonce.v1"; // HU-075/diagnóstico: SE EXPORTA, mismo motivo y mismas condiciones que (`CLAVE_ELECCION`, `:129`).
 
 /**
  * Lo que hay que recordar del salto que pide la firma de la creación. ⛔ NINGUNA clave: la sesión y la

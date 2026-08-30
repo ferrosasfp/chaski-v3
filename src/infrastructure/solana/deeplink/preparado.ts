@@ -28,7 +28,7 @@ import { MAX_EDAD_MS } from "./sesion";
  * intento en el que se pidió la PRIMERA firma y es contra ése que hay que comparar. Compartir clave
  * haría que limpiar uno se llevara el otro, que es exactamente el bug que hay que evitar.
  */
-const CLAVE = "chaski.billetera.preparado.v1";
+export const CLAVE = "chaski.billetera.preparado.v1"; // HU-075/diagnóstico: SE EXPORTA, mismo motivo y mismas condiciones que (`CLAVE_ELECCION`, `./conexion.ts:129`).
 
 /** Lo que hay que recordar del intento en el que se pidió la firma. ⛔ NINGUNA clave privada. */
 export interface Preparado {

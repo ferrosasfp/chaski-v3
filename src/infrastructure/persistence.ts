@@ -12,7 +12,7 @@ import { ConcurrentModificationError } from "../application/errors";
 import type { RemittanceRepository } from "../application/ports";
 import { canonicalizeAddress, isOwnedBy } from "./address"; // WKH-348: el predicado, importado
 
-const KEY = "chaski.remittances.v1";
+export const KEY = "chaski.remittances.v1"; // HU-075/diagnóstico it2: SE EXPORTA, mismo motivo y mismas condiciones que (`CLAVE_POP`, `./solana/deeplink/pop-por-enlace.ts:75`) — el bloque de diagnóstico necesita CRUZAR el `remittanceId` del viaje contra el blob del repo, y copiar el literal allá habría dejado dos sitios de escritura del mismo string. ⛔ SIGUE SIENDO DE ESTE MÓDULO: nadie de afuera escribe en esta clave, y el único lector externo lee DOS campos (`id` y `status`) y no usa `LocalRepo`, porque su `read()` colapsa «blob ilegible» con «no la encuentro».
 
 // Read defensivo (AC-4): un snapshot legacy puede traer identity FULL (documentNumber crudo,
 // dateOfBirth, nationality) o carecer de ownerAddress. Normaliza al shape reducido SIN crashear;

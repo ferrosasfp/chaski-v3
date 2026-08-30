@@ -27,7 +27,7 @@ import path from "node:path";
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { hydrateRoot } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 import bs58 from "bs58";
@@ -36,15 +36,27 @@ import { enlaceDeVuelta } from "../infrastructure/solana/deeplink/sesion";
 import { hrefSinRastroDeVuelta } from "../infrastructure/solana/deeplink/conexion";
 import { RemittanceFlow } from "./flow";
 import { buildTestContainer } from "../test-support/test-container";
-import { FakeWallet, InMemoryRepo, RecorridoPorEnlaceNulo } from "../test-support/fakes";
-import { anotarCorteDeVuelta, olvidarCorteDeVuelta, ultimoCorteDeVuelta } from "./bitacora-de-vuelta";
+import { FakeWallet, InMemoryRepo, RecorridoPorEnlaceNulo, T0, beneficiary } from "../test-support/fakes";
+import { Remittance } from "../domain/remittance";
+import { Money } from "../domain/money";
+import { anotarCorteDeVuelta, anotarHito, leerHito, olvidarCorteDeVuelta, olvidarHitos, ultimoCorteDeVuelta } from "./bitacora-de-vuelta";
+import { MAX_EDAD_MS } from "../infrastructure/solana/deeplink/sesion";
+import { MARCA_POP_KYC, MARCA_POP_PAYOUT } from "../infrastructure/solana/deeplink/pop-por-enlace";
+import { KEY as CLAVE_DEL_REPO } from "../infrastructure/persistence";
 import {
   DiagnosticoDeVuelta,
   PARAM_DIAG,
+  REFRESCO_MS,
   VALOR_DIAG,
   diagnosticoPedido,
+  duracion,
   enmascarar,
+  estadoEnElRepo,
   presenciaEnElDisco,
+  renglonDeLaRemesa,
+  renglonDelPaso,
+  renglonDelPop,
+  retratoDelPop,
 } from "./diagnostico-de-vuelta";
 
 // Mismo doble cerrado que `flow-reanudacion.test.tsx`: jsdom no implementa `requestAnimationFrame`, así
@@ -76,6 +88,77 @@ const SECRETOS = {
   firmaDePatrocinio: "FIRMAPATROCINIO-QUE-NO-PUEDE-SALIR-555555555",
 } as const;
 
+/** ⛔ NO PUEDEN SALIR NUNCA, y son los del ancla del PoP: uno es la prueba de posesión FIRMADA y el
+ *  otro el desafío que la autentica. Valores que sólo pueden venir de acá, por el mismo motivo que
+ *  `SECRETOS`: derivarlos del sitio del que los deriva el componente dejaría el candado vigilando el
+ *  vacío el día que uno de los dos se renombre. */
+const FIRMA_QUE_NO_PUEDE_SALIR = "FIRMAPOP-QUE-NO-PUEDE-SALIR-666666666666666";
+const DESAFIO_QUE_NO_PUEDE_SALIR = "DESAFIOPOP-QUE-NO-PUEDE-SALIR-7777777777777";
+
+/** La PII que el blob del repo lleva de verdad: beneficiario, CCI y apellido. ⛔ El bloque lee DOS
+ *  campos de ese blob (`id` y `status`) y este fixture es el que lo hace medible. */
+const PII_DEL_REPO = {
+  beneficiario: "BENEFICIARIO-QUE-NO-PUEDE-SALIR-8888888",
+  cci: "00212345678901234567",
+  apellido: "APELLIDO-QUE-NO-PUEDE-SALIR-999999999",
+} as const;
+
+/** Un id con la forma REAL —un UUID— y no `"rem-1"`: `enmascarar` tiene un piso de 12 caracteres, así
+ *  que un id corto saldría «(inesperado, N chars)» y la captura de este archivo no se parecería a la
+ *  del teléfono, que es lo único que hace útil al `it` de la captura. */
+const REM_UUID = "8f3a2c11-0000-4000-8000-00000000c21b";
+
+/** El blob del repo, escrito A MANO con la forma que `LocalRepo` persiste. ⛔ No se construye con
+ *  `LocalRepo` a propósito: un fixture que use el mismo escritor que el lector deja de poder
+ *  contradecirlo. */
+function blobDelRepo(id: string, status: string): string {
+  return JSON.stringify([
+    {
+      id,
+      status,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      ownerAddress: DIRECCION,
+      version: 1,
+      beneficiary: {
+        name: PII_DEL_REPO.beneficiario,
+        country: "PE",
+        method: "bank_cci",
+        destination: PII_DEL_REPO.cci,
+      },
+      kyc: { identity: { lastNamePaternal: PII_DEL_REPO.apellido, documentNumberLast4: "5678" } },
+    },
+  ]);
+}
+
+/** El doble que hace recorrer a la pantalla REAL el camino de la vuelta hasta `onConnect`. ⛔ Extiende
+ *  el nulo en vez de implementar el puerto entero: lo que no se sobrescribe TIRA, así que un camino
+ *  que este `it` no previó se ve en vez de pasar por un desenlace inventado. */
+class RecorridoQueConecta extends RecorridoPorEnlaceNulo {
+  override remesaEnCurso(): string | null {
+    return "rem-1";
+  }
+  override async completar(): Promise<never> {
+    return { estado: "conectado", direccion: DIRECCION } as never;
+  }
+  override async estadoDeLaCuentaDeNonce(): Promise<never> {
+    return "existe" as never;
+  }
+}
+
+/** Monta la pantalla REAL en el estado EXACTO de una vuelta del salto `conectar` y espera a que el
+ *  productor de montaje termine. ⛔ No dobla `alConectar` ni `onConnect`: lo que se mide es el
+ *  cableado, y un doble ahí lo escondería. */
+async function montarLaVuelta(repo: InMemoryRepo): Promise<void> {
+  barra("?dl=conectar");
+  solanaWalletBridge.setWalletAvailability("none"); // la espera de la disponibilidad resuelve sin tick
+  vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", "true");
+  const c = buildTestContainer({ repo, wallet: new FakeWallet(), recorridoPorEnlace: new RecorridoQueConecta() });
+  await act(async () => {
+    render(<RemittanceFlow container={c} />);
+  });
+  await waitFor(() => expect(leerHito("continuacion"), "`onConnect` no anotó nada: el cableado se cortó antes").not.toBeNull());
+}
+
 function viajeCompleto(extra: Record<string, unknown> = {}) {
   return JSON.stringify({
     billetera: "phantom",
@@ -106,6 +189,7 @@ const VUELTA_CON_DIAG = `?${PARAM_DIAG}=${VALOR_DIAG}&dl=conectar`;
 beforeEach(() => {
   window.localStorage.clear();
   olvidarCorteDeVuelta();
+  olvidarHitos(); // ⛔ los hitos son estado de MÓDULO: sin esto un `it` lee el desenlace del anterior
   solanaWalletBridge.reset();
   vi.unstubAllEnvs();
 });
@@ -230,16 +314,16 @@ describe("el bloque de diagnóstico de la vuelta por enlace", () => {
     // nuestro», que pide un arreglo distinto de «este navegador nunca vio nada».
     window.localStorage.setItem("chaski.billetera.eleccion.v1", "phantom");
     render(<DiagnosticoDeVuelta />);
-    expect(textoDelBloque()).toContain("viaje=no eleccion=sí preparado=no nonce=no pop=no");
+    expect(textoDelBloque()).toContain("viaje=no eleccion=sí pop=no");
   });
 
   it("T-DIAG-DISCO-2: `presenciaEnElDisco` distingue «no hay» de «no se pudo preguntar»", () => {
-    const vacio = presenciaEnElDisco(() => null);
+    const vacio = presenciaEnElDisco(() => null, Date.now());
     expect(vacio.ilegible).toBe(false);
     expect(vacio.viaje).toBe(false);
     const roto = presenciaEnElDisco(() => {
       throw new Error("SecurityError");
-    });
+    }, Date.now());
     expect(roto.ilegible, "un disco que no se deja leer se reportó como disco vacío").toBe(true);
   });
 
@@ -439,31 +523,6 @@ describe("el bloque de diagnóstico de la vuelta por enlace", () => {
   });
 
   // ── 8 · LA PANTALLA COMPLETA, COMO LA VA A VER LA PERSONA ──────────────────────────────────────
-  it("T-DIAG-CAPTURA: los seis campos salen en una sola captura", async () => {
-    barra(VUELTA_CON_DIAG);
-    window.localStorage.setItem("chaski.billetera.viaje.v1", viajeCompleto());
-    window.localStorage.setItem("chaski.billetera.eleccion.v1", "phantom");
-    vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", "true");
-    render(<DiagnosticoDeVuelta />);
-    await act(async () => {
-      solanaWalletBridge.setWalletAvailability("none");
-    });
-    const texto = textoDelBloque() ?? "";
-    for (const campo of [
-      "marca al montar : conectar",
-      "disponibilidad  : none",
-      "viaje=sí eleccion=sí preparado=no nonce=no pop=no",
-      "viaje.paso      : conectar",
-      `viaje.direccion : ${DIRECCION.slice(0, 6)}…${DIRECCION.slice(-4)}`,
-      "corte           : sin corte",
-      "enlace          : on · cluster: devnet",
-    ]) {
-      expect(texto, `falta el campo: ${campo}`).toContain(campo);
-    }
-    // Y el bloque es VISIBLE, no un nodo escondido: una captura tiene que poder mostrarlo.
-    expect(screen.getByText(/DIAG · vuelta por enlace/)).toBeVisible();
-  });
-
   it("T-DIAG-BANDERA: con la bandera del enlace apagada, el bloque lo dice", () => {
     barra(VUELTA_CON_DIAG);
     vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", "");
@@ -514,5 +573,337 @@ describe("el bloque de diagnóstico de la vuelta por enlace", () => {
       ultimoCorteDeVuelta(),
       "la pantalla cortó y la bitácora no se enteró: el `alFallar` dejó de anotarla",
     ).toBe("deeplink_viaje_vencido");
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  // 10 · LOS CAMPOS DE LA SEGUNDA VUELTA — los que la captura del founder no tenía
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  //
+  // 🔴 QUÉ HAY QUE PROBAR ACÁ Y POR QUÉ. La captura anterior dijo `corte: sin corte`, `viaje=sí` y la
+  // pantalla en la BIENVENIDA, y ningún campo separaba las razones posibles de eso. Estos `it` miden
+  // que cada campo nuevo tenga los valores DISTINTOS que hacen falta para separarlas: un campo que
+  // dijera lo mismo en dos hipótesis distintas sería ruido con forma de dato, que es exactamente el
+  // defecto que esta segunda vuelta viene a arreglar.
+
+  it("T-DIAG-REMESA: los cinco desenlaces del cruce contra el repo son cinco textos distintos", () => {
+    const id = "8f3a2c11-0000-4000-8000-00000000c21b";
+    const disco = { viaje: true, remesaDelViaje: id } as ReturnType<typeof presenciaEnElDisco>;
+    const dichos = [
+      renglonDeLaRemesa({ ...disco, viaje: false, remesaDelViaje: null }, { tipo: "sin-id" }),
+      renglonDeLaRemesa({ ...disco, remesaDelViaje: null }, { tipo: "sin-id" }),
+      renglonDeLaRemesa(disco, { tipo: "sin-blob" }),
+      renglonDeLaRemesa(disco, { tipo: "ilegible" }),
+      renglonDeLaRemesa(disco, { tipo: "no-esta" }),
+      renglonDeLaRemesa(disco, { tipo: "esta", status: "confirmed" }),
+    ];
+    // 🔴 LA PROPIEDAD ES QUE SON SEIS TEXTOS DISTINTOS, no que cada uno diga una frase concreta: dos
+    // desenlaces con el mismo texto dejan al campo sin poder separar las dos hipótesis, que es el
+    // único motivo por el que este campo existe. Un `toContain` por rama no vería esa colisión.
+    expect(new Set(dichos).size, `dos desenlaces se leen igual: ${JSON.stringify(dichos)}`).toBe(6);
+    expect(dichos[1], "un viaje SIN `remittanceId` es el gate mudo de `flow.tsx:4010`, y tiene que gritarlo").toContain("SIN ID EN EL VIAJE");
+    expect(dichos[5]).toBe(`${id.slice(0, 6)}…${id.slice(-4)} · repo: confirmed`);
+    expect(dichos[5], "el id de la remesa salió entero").not.toContain(id);
+  });
+
+  it("T-DIAG-REMESA-2: `estadoEnElRepo` no colapsa «no puedo leer» con «no la encuentro»", () => {
+    const fila = (id: string) => JSON.stringify([{ id, status: "confirmed" }]);
+    expect(estadoEnElRepo(null, "rem-1")).toEqual({ tipo: "sin-blob" });
+    expect(estadoEnElRepo("{no soy json", "rem-1")).toEqual({ tipo: "ilegible" });
+    expect(estadoEnElRepo('{"no":"soy un array"}', "rem-1")).toEqual({ tipo: "ilegible" });
+    expect(estadoEnElRepo(fila("otra"), "rem-1")).toEqual({ tipo: "no-esta" });
+    expect(estadoEnElRepo(fila("rem-1"), "rem-1")).toEqual({ tipo: "esta", status: "confirmed" });
+    expect(estadoEnElRepo(fila("rem-1"), null), "sin id no hay nada que cruzar").toEqual({ tipo: "sin-id" });
+    // Un blob con una entrada que NO es un objeto no puede tapar a la que sí lo es: es la familia que
+    // `LocalRepo.read()` colapsa a un Map vacío, y por eso este lector no lo usa.
+    expect(estadoEnElRepo(JSON.stringify([null, { id: "rem-1", status: "quoted" }]), "rem-1")).toEqual({
+      tipo: "esta",
+      status: "quoted",
+    });
+  });
+
+  // 🔴 EL FIXTURE REPRODUCE EL DEFECTO: el blob del repo lleva beneficiario, CCI y apellido con valores
+  // que sólo pueden venir de acá, así que un lector que volcara la fila entera —o que pintara el id sin
+  // enmascarar— pone este `it` en rojo. Un blob con la fila vacía daría verde para siempre.
+  it("T-DIAG-SECRETOS-3: del blob del repo salen DOS campos y ninguno es PII", () => {
+    barra(VUELTA_CON_DIAG);
+    window.localStorage.setItem("chaski.billetera.viaje.v1", viajeCompleto());
+    window.localStorage.setItem(CLAVE_DEL_REPO, blobDelRepo("rem-1", "confirmed"));
+    render(<DiagnosticoDeVuelta />);
+    const texto = textoDelBloque() ?? "";
+    expect(texto, "el bloque no se pintó: sin DOM este `it` pasaría por vacío").not.toBe("");
+    expect(texto, "el `status` no llegó ⇒ el cruce no se hizo y el resto de este `it` no mide nada").toContain("repo: confirmed");
+    for (const [campo, valor] of Object.entries(PII_DEL_REPO)) {
+      expect(texto, `el campo ${campo} del blob del repo llegó al bloque`).not.toContain(valor);
+      expect(document.body.innerHTML, `el campo ${campo} apareció fuera del bloque`).not.toContain(valor);
+    }
+    expect(texto, "el id de la remesa salió entero").not.toContain("rem-1");
+  });
+
+  it("T-DIAG-EDAD: un viaje VENCIDO sale presente y con su edad, que es lo que el productor sí mira", () => {
+    barra(VUELTA_CON_DIAG);
+    window.localStorage.setItem(
+      "chaski.billetera.viaje.v1",
+      viajeCompleto({ desde: Date.now() - MAX_EDAD_MS - 60_000 }),
+    );
+    render(<DiagnosticoDeVuelta />);
+    const texto = textoDelBloque() ?? "";
+    // Las dos mitades: este bloque NO aplica la ventana (sigue diciendo `viaje=sí`) **y** publica el
+    // juicio que el productor sí aplica. Sin la segunda, `viaje=sí` con el productor tratándolo como
+    // ausente se lee igual que un viaje sano, que es la confusión que este campo cierra.
+    expect(texto, "el bloque aplicó la ventana y se comió el dato").toContain("viaje=sí");
+    expect(texto).toContain("⇒ VENCIDO");
+    expect(renglonDelPaso(presenciaEnElDisco(() => null, Date.now())), "sin viaje no hay edad que inventar").toBe("—");
+  });
+
+  it("T-DIAG-EDAD-2: un `desde` en el FUTURO no se reporta como una edad chica", () => {
+    // Es el cuarto desenlace de `leerViaje` («no-fechable»): con `ahora - desde` negativo la ventana no
+    // vence NUNCA. Un `duracion()` sobre el valor absoluto lo mostraría como «edad 2m» y sería la
+    // lectura opuesta a la verdad.
+    const disco = presenciaEnElDisco(
+      (k) => (k === "chaski.billetera.viaje.v1" ? viajeCompleto({ desde: Date.now() + 120_000 }) : null),
+      Date.now(),
+    );
+    expect(renglonDelPaso(disco)).toContain("EMPEZÓ EN EL FUTURO");
+    expect(renglonDelPaso(disco), "se leería como un viaje sano y recién nacido").not.toContain("⇒ vigente");
+  });
+
+  // ── EL ANCLA DEL PoP ───────────────────────────────────────────────────────────────────────────
+  //
+  // ⚠️ LO QUE ESTE CAMPO **NO** PUEDE CONTESTAR, y se dice acá para que nadie se lo pida: «¿el ancla es
+  // de ESTA remesa?». (`PasoPop`, `../infrastructure/solana/deeplink/pop-por-enlace.ts:81`) ⛔ no tiene
+  // `remittanceId` — sus campos son `proposito`, `popChallenge`, `popMessage`, `exp`, `direccion`,
+  // `desde`, `consumido` y `firma`, y ninguno nombra una remesa. Lo que SÍ la scopea son el propósito
+  // (CD-15), la cuenta y el `exp`, y son los tres que este renglón informa.
+  it("T-DIAG-POP: el retrato cruza el propósito, la cuenta y el `exp`, y separa lo que decide", () => {
+    // 🔴 UN INSTANTE FIJO Y MÚLTIPLO EXACTO DE 1000, y no `Date.now()`. MEDIDO, no razonado: con
+    // `Date.now()` este `it` era FLAKY y lo cazó el barrido de mutación —`segundosAlExp` es
+    // `round(exp - ahoraMs/1000)` y `exp` son segundos ENTEROS, así que la fracción de segundo del
+    // reloj hacía que `300` cayera a `299` en algunas corridas—. ⛔ Un `it` que falla por el reloj es
+    // ruido que enseña a ignorar los rojos, y en un barrido de mutación es peor: fabrica falsos KILLED.
+    const ahora = 1_788_000_000_000;
+    const ancla = (extra: Record<string, unknown> = {}) =>
+      JSON.stringify({
+        proposito: MARCA_POP_KYC,
+        popChallenge: DESAFIO_QUE_NO_PUEDE_SALIR,
+        popMessage: "firmá esto",
+        exp: Math.floor(ahora / 1000) + 300,
+        direccion: DIRECCION,
+        desde: ahora,
+        ...extra,
+      });
+    const mismo = retratoDelPop(ancla(), DIRECCION, ahora);
+    expect(mismo).toEqual({ proposito: MARCA_POP_KYC, cuenta: "misma", firma: false, usado: false, segundosAlExp: 300 });
+    // La de OTRA cuenta: `leerPruebaPop` la entregaría igual (sólo cruza el propósito), y el `prepare`
+    // la rechazaría del otro lado. Que se vea acá es la diferencia entre diagnosticar y adivinar.
+    expect(retratoDelPop(ancla(), "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDX", ahora)?.cuenta).toBe("OTRA");
+    expect(retratoDelPop(ancla(), null, ahora)?.cuenta, "sin viaje no hay contra qué cruzar, y no se inventa").toBe("?");
+    // El propósito AJENO: un ancla de `pop-payout` ⛔ no satisface un pedido de `pop-kyc` (CD-15), así
+    // que ver `pop=sí` sin ver el propósito es ver un ancla que puede no servir para nada.
+    expect(retratoDelPop(ancla({ proposito: MARCA_POP_PAYOUT }), DIRECCION, ahora)?.proposito).toBe(MARCA_POP_PAYOUT);
+    expect(retratoDelPop(ancla({ proposito: "cualquier-cosa" }), DIRECCION, ahora)?.proposito, "un texto del disco se pintó tal cual").toBe("?");
+    expect(retratoDelPop(ancla({ consumido: true }), DIRECCION, ahora)?.usado).toBe(true);
+    expect(retratoDelPop(ancla({ firma: "unafirma" }), DIRECCION, ahora)?.firma).toBe(true);
+    expect(retratoDelPop(ancla({ exp: Math.floor(ahora / 1000) - 42 }), DIRECCION, ahora)?.segundosAlExp).toBe(-42);
+    expect(retratoDelPop(ancla({ exp: "no soy un numero" }), DIRECCION, ahora)?.segundosAlExp).toBeNull();
+    expect(retratoDelPop("{no soy json", DIRECCION, ahora), "un ancla ilegible no es un ancla vacía").toBeNull();
+  });
+
+  it("T-DIAG-POP-SECRETO: ni la firma ni el desafío del ancla llegan al DOM", () => {
+    barra(VUELTA_CON_DIAG);
+    window.localStorage.setItem("chaski.billetera.viaje.v1", viajeCompleto());
+    window.localStorage.setItem(
+      "chaski.billetera.pop.v1",
+      JSON.stringify({
+        proposito: MARCA_POP_KYC,
+        popChallenge: DESAFIO_QUE_NO_PUEDE_SALIR,
+        popMessage: "firmá esto",
+        exp: Math.floor(Date.now() / 1000) + 300,
+        direccion: DIRECCION,
+        desde: Date.now(),
+        firma: FIRMA_QUE_NO_PUEDE_SALIR,
+      }),
+    );
+    render(<DiagnosticoDeVuelta />);
+    const texto = textoDelBloque() ?? "";
+    expect(texto, "el retrato no se pintó ⇒ el resto de este `it` pasaría por vacío").toContain("firma=sí");
+    expect(texto, "la firma del PoP llegó al DOM").not.toContain(FIRMA_QUE_NO_PUEDE_SALIR);
+    expect(texto, "el desafío del PoP llegó al DOM").not.toContain(DESAFIO_QUE_NO_PUEDE_SALIR);
+    expect(document.body.innerHTML).not.toContain(FIRMA_QUE_NO_PUEDE_SALIR);
+    expect(document.body.innerHTML).not.toContain(DESAFIO_QUE_NO_PUEDE_SALIR);
+    // Y el ancla sigue en el disco: `leerPruebaPop` la BORRA al entregarla, y un observador que la
+    // consumiera le quemaría la prueba al recorrido real (⛔ la tercera prohibición).
+    expect(window.localStorage.getItem("chaski.billetera.pop.v1"), "el observador consumió el ancla del PoP").not.toBeNull();
+  });
+
+  it("T-DIAG-POP-2: sin ancla dice `—`, y con un ancla ilegible lo dice", () => {
+    const sinAncla = presenciaEnElDisco(() => null, Date.now());
+    expect(renglonDelPop(sinAncla)).toBe("—");
+    const ilegible = presenciaEnElDisco(
+      (k) => (k === "chaski.billetera.pop.v1" ? "{no soy json" : null),
+      Date.now(),
+    );
+    expect(renglonDelPop(ilegible), "un ancla que no parsea se reportó como si no estuviera").toContain("ILEGIBLE");
+  });
+
+  // ── EL REFRESCO ────────────────────────────────────────────────────────────────────────────────
+  //
+  // 🔴 SIN ÉL LA CAPTURA ES UNA FOTO DE LOS PRIMEROS SEGUNDOS. La primera versión se re-renderizaba
+  // TRES veces y todo lo que este bloque mira cambia después: `leerPruebaPop` consume el ancla, el
+  // productor puede borrar el viaje, `onConnect` termina más tarde. Este `it` mueve el disco DESPUÉS
+  // del render y exige que el bloque lo vea, con la calibración de que antes del tick todavía no.
+  it("T-DIAG-REFRESCO: el bloque vuelve a mirar el disco solo", () => {
+    vi.useFakeTimers();
+    try {
+      barra(VUELTA_CON_DIAG);
+      window.localStorage.setItem("chaski.billetera.pop.v1", JSON.stringify({ proposito: MARCA_POP_KYC, desde: Date.now() }));
+      render(<DiagnosticoDeVuelta />);
+      expect(textoDelBloque(), "precondición: el ancla se sembró y el bloque la vio").toContain("pop=sí");
+      window.localStorage.removeItem("chaski.billetera.pop.v1"); // lo que hace `leerPruebaPop` al entregarla
+      // CALIBRACIÓN, en el mismo `it`: sin avanzar el reloj el bloque NO se enteró. Sin esta mitad, un
+      // bloque que se re-renderizara por cualquier otra razón dejaría el `it` verde sin que el
+      // temporizador existiera.
+      expect(textoDelBloque(), "algo más lo re-renderizó ⇒ este `it` no mide el refresco").toContain("pop=sí");
+      act(() => {
+        vi.advanceTimersByTime(REFRESCO_MS);
+      });
+      expect(textoDelBloque(), "el bloque no volvió a mirar el disco: la captura sería una foto vieja").toContain("pop=no");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("T-DIAG-APAGADO-4: sin el parámetro NO arma un solo temporizador", () => {
+    barra("");
+    const conIntervalo = vi.spyOn(globalThis, "setInterval");
+    const conTecho = vi.spyOn(globalThis, "setTimeout");
+    render(<DiagnosticoDeVuelta />);
+    expect(conIntervalo, "armó el refresco sin que nadie pidiera el bloque").not.toHaveBeenCalled();
+    expect(conTecho, "armó el techo sin que nadie pidiera el bloque").not.toHaveBeenCalled();
+    // CALIBRACIÓN: con el parámetro puesto sí los arma. Sin esta mitad, un espía sobre el objeto
+    // equivocado dejaría las dos afirmaciones de arriba verdes para siempre.
+    cleanup();
+    conIntervalo.mockClear();
+    conTecho.mockClear();
+    barra(VUELTA_CON_DIAG);
+    render(<DiagnosticoDeVuelta />);
+    expect(conIntervalo, "CALIBRACIÓN: con el parámetro tampoco arma el refresco ⇒ el espía no mide nada").toHaveBeenCalled();
+    expect(conTecho, "CALIBRACIÓN: con el parámetro tampoco arma el techo ⇒ el espía no mide nada").toHaveBeenCalled();
+  });
+
+  it("T-DIAG-DURACION: la duración se lee en un teléfono y no miente con el signo", () => {
+    expect(duracion(0)).toBe("0s");
+    expect(duracion(38_000)).toBe("38s");
+    expect(duracion(252_000)).toBe("4m12s");
+    expect(duracion(MAX_EDAD_MS)).toBe("20m00s");
+    expect(duracion(-42_000), "el signo lo pone quien la llama, no ella").toBe("42s");
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  // 11 · LOS LLAMADORES DE LOS CUATRO HITOS — un artefacto sin llamador no es una defensa
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  //
+  // 🔴 TODOS LOS `it` DE ARRIBA QUE PINTAN UN HITO SE LO ESCRIBEN A MANO. Borrar los `anotarHito` de
+  // `./flow.tsx` los dejaría a TODOS en verde y los cuatro campos dirían «no corrió» para siempre en
+  // producción: exactamente el estado que este bloque existe para descartar. ⛔ Por eso acá se monta la
+  // PANTALLA REAL y se la hace recorrer el camino de verdad.
+
+  it("T-DIAG-LLAMADOR-2 · `pantalla`: la pantalla real anota su paso al montar", async () => {
+    expect(leerHito("pantalla"), "precondición: los hitos arrancan vacíos").toBeNull();
+    await act(async () => {
+      render(<RemittanceFlow container={buildTestContainer({ repo: new InMemoryRepo(), wallet: new FakeWallet(), recorridoPorEnlace: new RecorridoPorEnlaceNulo() })} />);
+    });
+    expect(leerHito("pantalla"), "la pantalla montó y no anotó su paso: el campo diría `—` siempre").toBe("bienvenida");
+  });
+
+  it("T-DIAG-LLAMADOR-3 · `connect` + `continuacion` + `error`: la vuelta que REVIENTA en la continuación", async () => {
+    // El repo NO tiene la remesa que el viaje nombra ⇒ `lockQuote` tira `remittance_not_found` adentro
+    // de `onConnect`, que es una de las hipótesis vivas del reporte de campo. Los tres hitos juntos son
+    // lo que la separa: la conexión SÍ resolvió, la continuación arrancó y NO llegó a navegar.
+    await montarLaVuelta(new InMemoryRepo());
+    expect(leerHito("connect"), "`alConectar` dejó de anotar el estado del `rc`").toBe("listo");
+    expect(leerHito("continuacion"), "`onConnect` dejó de anotar que arrancó").toBe("vuelta: corriendo");
+    expect(leerHito("error"), "el `catch` de `guard` dejó de anotar el código").toBe("remittance_not_found");
+  });
+
+  it("T-DIAG-LLAMADOR-4 · `continuacion`: la vuelta que SÍ continúa dice a dónde navegó", async () => {
+    const repo = new InMemoryRepo();
+    await repo.save(Remittance.create("rem-1", beneficiary(), Money.of(400, "USDC"), T0));
+    await montarLaVuelta(repo);
+    expect(leerHito("continuacion"), "`onConnect` navegó y no lo anotó: «no corrió» y «navegó» se leerían igual").toBe(
+      "vuelta: navegó a review",
+    );
+    expect(leerHito("error"), "no hubo error y el campo inventó uno").toBeNull();
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  // 12 · LA CAPTURA COMPLETA — el texto EXACTO que va a ver el founder
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  //
+  // 🔴 ES UNA IGUALDAD Y NO UNA LISTA DE `toContain`, a propósito: el entregable de esta HU es un
+  // TEXTO que alguien lee en un teléfono, y un campo de más, uno de menos o una etiqueta desalineada
+  // no los ve ningún `toContain`. Los dos números que cambian entre corridas (el instante de la foto y
+  // el de la decisión) se normalizan; ⛔ nada más se normaliza.
+  it("T-DIAG-CAPTURA: los catorce renglones salen en una sola captura, con este texto exacto", async () => {
+    // 🔴 EL RELOJ SE PINCHA, Y NO ES COMODIDAD: `exp` son SEGUNDOS y `Date.now()` son MILISEGUNDOS, así
+    // que entre sembrar el ancla y renderizar pasa una fracción de segundo y `exp=vigente(+5m12s)` cae
+    // a `+5m11s` cuando el redondeo cruza. MEDIDO: la primera forma de este `it` alternaba entre los
+    // dos. ⛔ Se pincha `Date.now` y NO los temporizadores: `vi.useFakeTimers()` también congela
+    // `performance.now()` en 0, y ahí `msDecision <= msMontaje` cambia el renglón de la disponibilidad
+    // a la otra rama ⇒ el `it` mediría un texto que ninguna persona ve.
+    vi.spyOn(Date, "now").mockReturnValue(1_788_000_000_000); // múltiplo exacto de 1000: `exp` no arrastra fracción
+    barra(VUELTA_CON_DIAG);
+    window.localStorage.setItem("chaski.billetera.viaje.v1", viajeCompleto({ desde: Date.now() - 252_000, remittanceId: REM_UUID }));
+    window.localStorage.setItem("chaski.billetera.eleccion.v1", "phantom");
+    window.localStorage.setItem(CLAVE_DEL_REPO, blobDelRepo(REM_UUID, "confirmed"));
+    window.localStorage.setItem(
+      "chaski.billetera.pop.v1",
+      JSON.stringify({
+        proposito: MARCA_POP_KYC,
+        popChallenge: DESAFIO_QUE_NO_PUEDE_SALIR,
+        popMessage: "m",
+        exp: Math.floor(Date.now() / 1000) + 312,
+        direccion: DIRECCION,
+        desde: Date.now(),
+      }),
+    );
+    anotarHito("pantalla", "bienvenida");
+    anotarHito("connect", "listo");
+    anotarHito("continuacion", "vuelta: corriendo");
+    anotarHito("error", "remittance_not_found");
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", "true");
+    render(<DiagnosticoDeVuelta />);
+    await act(async () => {
+      solanaWalletBridge.setWalletAvailability("none");
+    });
+    const texto = (textoDelBloque() ?? "").replace(/\d+ ms/g, "N ms");
+    // 🔴 DOS TEXTOS ACEPTABLES Y NO UNA NORMALIZACIÓN, y la diferencia importa. El renglón de la
+    // disponibilidad tiene DOS formas LEGÍTIMAS —el bloque no afirma haber medido la carrera si ya
+    // estaba decidida al montar— y cuál sale depende de si `performance.now()` avanzó entre el montaje
+    // y el efecto de la decisión. MEDIDO en este árbol: 2 de 14 corridas salieron por la segunda, y con
+    // una sola forma esperada este `it` era FLAKY. ⛔ La salida barata era normalizar ese renglón con
+    // un regex, y no se hizo: eso lo habría dejado de medir. Se enumeran las dos, que es lo que el
+    // founder puede ver de verdad.
+    const capturaCon = (cuando: string) =>
+      [
+        "DIAG · vuelta por enlace · foto t=N ms",
+        "marca al montar : conectar",
+        `disponibilidad  : none · ${cuando}`,
+        "disco           : viaje=sí eleccion=sí pop=sí",
+        "viaje.paso      : conectar · edad 4m12s (ventana 20m00s) ⇒ vigente",
+        `viaje.direccion : ${DIRECCION.slice(0, 6)}…${DIRECCION.slice(-4)}`,
+        `viaje.remesa    : ${REM_UUID.slice(0, 6)}…${REM_UUID.slice(-4)} · repo: confirmed`,
+        "pop             : pop-kyc cuenta=misma firma=no usado=no exp=vigente(+5m12s)",
+        "pantalla        : bienvenida",
+        "connect         : listo",
+        "continuacion    : vuelta: corriendo",
+        "corte           : sin corte",
+        "error           : remittance_not_found",
+        "enlace          : on · cluster: devnet",
+      ].join("\n");
+    expect([capturaCon("decidida a los N ms (techo 3000)"), capturaCon("ya decidida al montar el bloque (N ms)")]).toContain(
+      texto,
+    );
+    // Y el bloque es VISIBLE, no un nodo escondido: una captura tiene que poder mostrarlo.
+    expect(screen.getByText(/DIAG · vuelta por enlace/)).toBeVisible();
   });
 });

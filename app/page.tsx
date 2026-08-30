@@ -20,7 +20,7 @@ export default function Page() {
     <>
       <Splash />
       {/* HU-075/diagnóstico · EL BLOQUE VA ACÁ POR TRES RAZONES, y ninguna es estética.
-          1. HERMANO Y NO ADENTRO, por lo mismo que el splash: así `flow.tsx` —[[CENSO src/presentation/flow.tsx lineas=4421]] líneas y
+          1. HERMANO Y NO ADENTRO, por lo mismo que el splash: así `flow.tsx` —[[CENSO src/presentation/flow.tsx lineas=4453]] líneas y
              [[CENSO src/presentation/flow.tsx entrantes=149]] citas ancladas por número— no recibe ni una línea por esto. Lo único que sí necesita de ahí
              adentro es la causa cruda del corte, y eso entra por la bitácora, en una línea que ya
              existía.

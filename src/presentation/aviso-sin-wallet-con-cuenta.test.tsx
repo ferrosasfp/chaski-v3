@@ -31,7 +31,7 @@
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react"; // HU-075/reanudar: `act` EN ESTA MISMA LINEA, para mover la disponibilidad a mano dentro del transitorio
 import bs58 from "bs58";
 import { RemittanceFlow } from "./flow";
 import { buildTestContainer } from "../test-support/test-container";
@@ -95,6 +95,28 @@ async function sembrarRemesaConfirmada(repo: InMemoryRepo) {
  */
 function sembrarCelularSinExtension() {
   solanaWalletBridge.setWalletAvailability("none");
+  vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", "true");
+}
+
+/**
+ * HU-075/reanudar — EL MISMO CUADRANTE, PERO **ANTES** DE QUE LA DISPONIBILIDAD SE DECIDA.
+ *
+ * 🔴 POR QUE HACE FALTA UNA SEGUNDA SIEMBRA Y NO ALCANZABA CON LA DE ARRIBA, y es la lección entera de
+ * este fix: `sembrarCelularSinExtension()` deja la disponibilidad en `"none"` **desde antes de montar**,
+ * o sea que en esos dos `it` el TRANSITORIO no existe — la espera de `esperarDisponibilidadDecidible()`
+ * resuelve sin un solo tick y la conexión llega prácticamente junto con el primer render. Por eso el
+ * arreglo anterior (gatear el aviso por `direccionConectada !== null`) daba verde ahí y ⛔ seguía
+ * fallando en el teléfono del founder.
+ *
+ * MEDIDO EN SU TELÉFONO con el bloque `?diag=1` (2026-08-30): `disponibilidad decidida a los 1852 ms`
+ * (techo 3000), y la dirección llega DESPUÉS de eso. Entre los dos instantes `availability` ya vale
+ * `"none"` y `address` todavía vale `null`: ésa es la ventana en la que el aviso se pintaba.
+ *
+ * ⇒ Acá la disponibilidad arranca SIN DECIDIR y el `it` la mueve a mano, que es la única forma de
+ * tener esa ventana adentro de un test.
+ */
+function sembrarCelularConLaDisponibilidadSinDecidir() {
+  solanaWalletBridge.setWalletAvailability("unknown");
   vi.stubEnv("NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED", "true");
 }
 
@@ -195,5 +217,162 @@ describe("WKH-075/fix · el aviso de 'no hay wallet' y la persona que YA conect�
     // Y la precondición que lo distingue del `it` de arriba: acá NO hay chip, o sea NO hay dirección.
     expect(screen.queryByText(CHIP)).toBeNull();
     expect(solanaWalletBridge.getWalletAvailability()).toBe("none");
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// HU-075/reanudar — EL AVISO NO SE PINTA **DURANTE** LA VENTANA DE ESPERA
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ QUEDÓ ABIERTO DESPUÉS DEL ARREGLO DE `T-075-AVISO-1`, y por qué su verde no lo veía. Ese `it`
+// gatea el aviso por `direccionConectada !== null`, y eso cubre el estado **final**. El founder reportó
+// el defecto otra vez, y midiéndolo en su teléfono con `?diag=1` apareció el estado **transitorio**:
+//
+//     marca al montar : conectar        disco · viaje  : sí        viaje.direccion : HSV3FF…KU1m
+//     disponibilidad  : decidida a los 1852 ms (techo 3000)        corte : sin corte
+//
+// O sea que la conexión SÍ se completa y el viaje SÍ queda en disco: lo que falla es lo que pasa
+// mientras vuelve. `address` arranca en `null` en cada remonte y la disponibilidad ya vale `"none"` a
+// los 1852 ms, así que entre esos dos instantes las dos condiciones del guard viejo dejaban pasar el
+// aviso — y con `esElUnicoCamino` ese aviso trae como acción principal un enlace que saca a la persona
+// a OTRO navegador, justo después de que firmó. **El arreglo anterior era correcto y llegaba tarde.**
+//
+// 🔑 EL PREDICADO NUEVO ⛔ NO ES UNA TERCERA FUENTE DE «HAY BILLETERA» —ésas siguen siendo dos, el
+// estado `address` y el bridge de la inyectada—: dice que TODAVÍA NO SE SABE. Mientras no se sabe, no
+// se afirma.
+//
+// ⛔ LO QUE ESTOS `it` NO MIDEN: corren en jsdom y mueven la disponibilidad a mano. NO sustituyen al
+// teléfono; lo que reproducen es la SECUENCIA (unknown → none → conexión), que es lo que el guard mira.
+describe("HU-075/reanudar · el aviso y la VENTANA en la que todavía no se sabe", () => {
+  /** La vuelta del connect, DETENIDA: `completar()` no contesta hasta que el `it` la suelte. Es lo que
+   *  mantiene abierta la ventana entre «la disponibilidad ya dijo `none`» y «llegó la dirección». */
+  class RecorridoQueVuelveConectadoDespacio extends RecorridoPorEnlaceNulo {
+    constructor(private readonly puerta: Promise<void>) {
+      super();
+    }
+    override remesaEnCurso(): string {
+      return REM;
+    }
+    override async completar(): Promise<never> {
+      await this.puerta;
+      return { estado: "conectado", direccion: FAKE_WALLET_ADDRESS } as never;
+    }
+    override async estadoDeLaCuentaDeNonce(): Promise<never> {
+      return "no-pudimos-preguntar" as never;
+    }
+  }
+
+  // 🔴 MUTANTE QUE MATA (medido, ver el reporte): en `flow.tsx`, borrar `|| vueltaSinResolver` del
+  // guard de `NoWalletHere`. Es el código de antes de este fix y deja este `it` en rojo por su motivo
+  // propio: el `queryByText(AVISO)` del transitorio encuentra el aviso.
+  it("T-075-AVISO-2: con la disponibilidad ya en `none` y la conexión TODAVÍA en vuelo, el aviso ⛔ no se pinta", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo);
+    sembrarCelularConLaDisponibilidadSinDecidir();
+    sembrarVueltaDelConectar();
+    let soltar: () => void = () => {};
+    const puerta = new Promise<void>((res) => {
+      soltar = res;
+    });
+    const c = contenedor(repo, new RecorridoQueVuelveConectadoDespacio(puerta));
+
+    render(<RemittanceFlow pasoInicial="connect" container={c} />);
+
+    // ── LA VENTANA, FABRICADA A MANO ────────────────────────────────────────────────────────────
+    // La disponibilidad se decide (1852 ms en el teléfono del founder; acá, a mano) y la conexión
+    // todavía no volvió.
+    await act(async () => {
+      solanaWalletBridge.setWalletAvailability("none");
+      await Promise.resolve();
+    });
+
+    // ⚠️ LAS DOS PRECONDICIONES, PINCHADAS, PORQUE SIN ELLAS ESTE `it` ES UN FALSO KILLED ESPERANDO:
+    // con la disponibilidad en `"unknown"` el guard VIEJO ya escondía el aviso solo, y con la dirección
+    // ya aplicada lo escondía la condición del fix ANTERIOR. Sólo con `"none"` y SIN chip el único
+    // motivo posible de la ausencia es la condición nueva.
+    expect(
+      solanaWalletBridge.getWalletAvailability(),
+      "el arnés se desvió del cuadrante: sin `none` el guard viejo ya escondía el aviso y esto sería un falso KILLED",
+    ).toBe("none");
+    expect(
+      screen.queryByText(CHIP),
+      "la conexión ya se había aplicado: esto ya no es el transitorio, es el estado final que `T-075-AVISO-1` mide",
+    ).toBeNull();
+
+    expect(screen.queryByText(AVISO)).toBeNull();
+    expect(screen.queryByRole("link", { name: CAMINO })).toBeNull();
+
+    // ── Y AL CERRARSE LA VENTANA SIGUE SIN PINTARSE, ahora por la condición del fix anterior ────
+    await act(async () => {
+      soltar();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.getByText(CHIP)).toBeInTheDocument());
+    expect(screen.queryByText(AVISO)).toBeNull();
+  });
+
+  // 🔴 EL PAR NEGATIVO, Y ES LO QUE HACE FALSABLE AL DE ARRIBA. La MISMA secuencia exacta —la misma
+  // siembra, la misma disponibilidad moviéndose de `unknown` a `none`, el mismo recorrido detenido— y
+  // la ÚNICA variable que se mueve es que la barra NO trae ninguna marca nuestra, o sea que no hay
+  // ninguna vuelta en curso. Ahí el aviso es correcto y ⛔ TIENE que estar: un arreglo que lo apagara
+  // siempre pasaría el `it` de arriba y rompería éste.
+  it("T-075-AVISO-2(control): sin ninguna vuelta en la barra, la MISMA secuencia SÍ pinta el aviso", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo);
+    sembrarCelularConLaDisponibilidadSinDecidir();
+    let soltar: () => void = () => {};
+    const puerta = new Promise<void>((res) => {
+      soltar = res;
+    });
+    const c = contenedor(repo, new RecorridoQueVuelveConectadoDespacio(puerta));
+
+    // CD-18 — el fixture fabricó el caso: la barra NO trae marca, que es la única diferencia.
+    expect(new URL(window.location.href).searchParams.get("dl")).toBeNull();
+
+    render(<RemittanceFlow pasoInicial="connect" container={c} />);
+
+    await act(async () => {
+      solanaWalletBridge.setWalletAvailability("none");
+      await Promise.resolve();
+    });
+
+    expect(solanaWalletBridge.getWalletAvailability()).toBe("none");
+    expect(screen.queryByText(CHIP)).toBeNull();
+    await waitFor(() => expect(screen.getByText(AVISO)).toBeInTheDocument());
+    expect(screen.getByRole("link", { name: CAMINO })).toBeInTheDocument();
+    soltar();
+  });
+
+  // 🔴 EL TERCER CASO, Y ES EL QUE IMPIDE QUE «no se sabe» SE VUELVA «no se sabe NUNCA MÁS». Si la
+  // vuelta CORTA, no hay conexión y no la va a haber: el aviso vuelve a ser cierto y tiene que
+  // reaparecer. Lo que lo garantiza es que el `.finally` del productor corre en TODOS los desenlaces,
+  // no sólo en el feliz — un apagado escrito rama por rama se olvida de una y deja el aviso mudo para
+  // el resto de la pestaña.
+  //
+  // 🔴 MUTANTE QUE MATA: en `flow.tsx`, cambiar `})().finally(alResolverseLaVuelta)` por `})()`.
+  it("T-075-AVISO-3: si la vuelta CORTA, el aviso vuelve a aparecer (el apagado no es para siempre)", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo);
+    sembrarCelularConLaDisponibilidadSinDecidir();
+    sembrarVueltaDelConectar();
+    class RecorridoQueCorta extends RecorridoPorEnlaceNulo {
+      override remesaEnCurso(): string {
+        return REM;
+      }
+      override async completar(): Promise<never> {
+        return { estado: "corte", causa: "deeplink_respuesta_invalida" } as never;
+      }
+    }
+    const c = contenedor(repo, new RecorridoQueCorta());
+
+    render(<RemittanceFlow pasoInicial="connect" container={c} />);
+
+    await act(async () => {
+      solanaWalletBridge.setWalletAvailability("none");
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText(CHIP), "hubo corte: no puede haber dirección aplicada").toBeNull();
+    await waitFor(() => expect(screen.getByText(AVISO)).toBeInTheDocument());
   });
 });

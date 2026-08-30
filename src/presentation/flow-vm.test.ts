@@ -2453,8 +2453,15 @@ describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace",
   //
   // ⛔ LOS LITERALES PROHIBIDOS VIVEN ACÁ, EN EL TEST, Y NO SE DERIVAN DEL COPY. Si este `it` buscara
   // una subcadena del propio copy sería un control que se lee a sí mismo: nunca podría fallar. Y por
-  // eso además lleva REFUTACIÓN DEL INSTRUMENTO — el mismo regex se corre contra las tres causas que SÍ
-  // dicen cada frase, así que un regex roto (o vacío) se pone rojo en vez de aplaudir.
+  // eso además lleva REFUTACIÓN DEL INSTRUMENTO — cada prohibición se corre contra una causa que SÍ
+  // la dice, así que una rama rota (o vacía) se pone roja en vez de aplaudir.
+  //
+  // 🔴 Y LA REFUTACIÓN ES POR PROHIBICIÓN, NO POR REGEX (AR-fp/MNR-1). Acá había UN solo regex
+  // alternado (`/a|b|c|d|e|f/`) con TRES testigos positivos, y eso valida el regex ENTERO, no cada
+  // alternativa: MEDIDO — rompiendo UNA sola rama (`empezá el envío de nuevo` → `ZZZ`) el archivo
+  // quedaba en 233 passed, verde. De las SEIS prohibiciones sólo 3 tenían refutación efectiva, y las
+  // otras 3 eran ramas que ningún `expect` podía poner en rojo. Ahora cada una trae su testigo y el
+  // rojo sale CON EL NOMBRE de la prohibición que se rompió.
   //
   // 🔴 POR QUÉ CADA PROHIBICIÓN, que es lo que hace que esto no sea estilo:
   //   · «no se firmó nada»          → puede haber una `transaccionFirmada` en el disco.
@@ -2464,18 +2471,32 @@ describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace",
   //   · modo privado / no se puede guardar → eso es `deeplink_sin_memoria`; acá el disco funciona.
   //   · cualquier duración          → NO sabemos cuánto retrocedió el reloj. Afirmarlo es inventar.
   //   · em dashes                   → convención de copy público (CD-16).
-  // MUTANTE QUE MATA: reusar el copy de `deeplink_viaje_vencido` para esta causa ⇒ rojo en el primer
-  //   `expect` con el motivo literal «dice una frase prohibida», y también en el `not.toBe` del final.
-  it("T-075-RELOJ-COPY: el copy del reloj no dice ninguna de las SIETE cosas prohibidas", () => {
+  // MUTANTE QUE MATA: reusar el copy de `deeplink_viaje_vencido` para esta causa ⇒ rojo en TRES de los
+  //   `it.each` (las tres frases que ese copy dice) y también en el bloque de unicidad de más abajo.
+  const PROHIBICIONES = [
+    { nombre: "no se firmó nada", re: /no se firmó nada/i, loDice: "deeplink_viaje_vencido" },
+    { nombre: "empezá el envío de nuevo", re: /empezá el envío de nuevo/i, loDice: "deeplink_viaje_vencido" },
+    { nombre: "pasó demasiado tiempo", re: /pasó demasiado tiempo/i, loDice: "deeplink_pop_vencido" },
+    { nombre: "cancelaste", re: /cancelaste/i, loDice: "deeplink_rechazado" },
+    { nombre: "modo privado", re: /modo privado/i, loDice: "deeplink_sin_memoria" },
+    { nombre: "no puede guardar", re: /no puede guardar/i, loDice: "deeplink_sin_memoria" },
+  ] as const;
+
+  it.each(PROHIBICIONES)(
+    "T-075-RELOJ-COPY · el copy del reloj no dice «$nombre», y el instrumento SÍ la ve en `$loDice`",
+    ({ nombre, re, loDice }) => {
+      // (1) REFUTACIÓN DEL INSTRUMENTO, PRIMERO: si esta rama dejó de matchear, el `toBe(false)` de
+      // abajo sería vacuo y verde para siempre. Acá se le entra con la causa que SÍ dice la frase.
+      expect(re.test(humanError(loDice)), `el patrón de «${nombre}» no la encuentra ni en \`${loDice}\`, que la dice`).toBe(true);
+      // (2) y recién ahora la prohibición.
+      expect(re.test(humanError("deeplink_reloj_inconsistente")), `el copy del reloj dice «${nombre}»`).toBe(false);
+    },
+  );
+
+  it("T-075-RELOJ-COPY-2: el copy del reloj no promete plazos, no tiene em dash, y dice lo que compró", () => {
     const t = humanError("deeplink_reloj_inconsistente");
     // (0) control del instrumento: la causa existe en el `Record` y no cayó en el default.
     expect(t, "la causa nueva cae en el default de `humanError`").not.toBe("Algo salió mal. Intentá de nuevo.");
-    const PROHIBIDO = /no se firmó nada|empezá el envío de nuevo|pasó demasiado tiempo|cancelaste|modo privado|no puede guardar/i;
-    expect(PROHIBIDO.test(t), `el copy del reloj dice una frase prohibida: «${t}»`).toBe(false);
-    // (1) REFUTACIÓN DEL INSTRUMENTO: el mismo regex SÍ las encuentra donde de verdad están.
-    expect(PROHIBIDO.test(humanError("deeplink_viaje_vencido")), "el regex no ve «no se firmó nada»").toBe(true);
-    expect(PROHIBIDO.test(humanError("deeplink_rechazado")), "el regex no ve «cancelaste»").toBe(true);
-    expect(PROHIBIDO.test(humanError("deeplink_sin_memoria")), "el regex no ve «modo privado»").toBe(true);
     // (2) ninguna duración, ni en cifras ni en palabras: no sabemos cuánto retrocedió el reloj.
     expect(/\d/.test(t), "el copy del reloj nombra una cifra").toBe(false);
     expect(/en un momento|en unos segundos|en unos minutos|en un rato/i.test(t), "el copy del reloj promete un plazo").toBe(false);
@@ -2483,8 +2504,21 @@ describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace",
     expect(t.includes("—"), "el copy del reloj tiene un em dash (CD-16)").toBe(false);
     // (4) y lo que SÍ tiene que decir, porque es la mitad que el arreglo compró: que no se perdió nada.
     expect(t, "el copy del reloj no le dice a la persona que lo suyo sigue guardado").toContain("sigue guardado");
-    // (5) y que NO es el copy del vecino, que es exactamente el error que esta causa vino a no repetir.
-    expect(t).not.toBe(humanError("deeplink_viaje_vencido"));
+  });
+
+  // 🔴 UNICIDAD CONTRA LAS OTRAS 19, NO CONTRA UN VECINO (AR-fp/MNR-2). Acá había un solo
+  // `not.toBe(humanError("deeplink_viaje_vencido"))`, y §3.4 pide que la persona pueda DISTINGUIR este
+  // caso: un copy que se repita con cualquier otra causa la deja sin poder distinguirlo, no sólo con
+  // esa. ⛔ Y la lista NO se escribe a mano: se deriva del `Record` con `CAUSAS_CON_COPY`, igual que
+  // arriba, para que una causa nueva entre sola al barrido.
+  it("T-075-RELOJ-COPY-3: el copy del reloj no es igual al de NINGUNA otra causa del `Record`", () => {
+    const t = humanError("deeplink_reloj_inconsistente");
+    const otras = CAUSAS_CON_COPY.filter((c) => c !== "deeplink_reloj_inconsistente");
+    // ⛔ REFUTACIÓN DEL INSTRUMENTO: con una lista vacía este `it` no afirma NADA y queda verde para
+    // siempre. El piso es el `Record` de 20 menos ésta, y es la misma segunda fuente del `it` de arriba.
+    expect(otras, "el barrido de unicidad se quedó sin causas contra las que comparar").toHaveLength(19);
+    const gemelas = otras.filter((c) => humanError(c) === t);
+    expect(gemelas, `el copy del reloj es idéntico al de otra causa: la persona no puede distinguirlas`).toEqual([]);
   });
 });
 

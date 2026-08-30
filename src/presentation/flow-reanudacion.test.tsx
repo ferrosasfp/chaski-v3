@@ -944,7 +944,7 @@ describe("T-075-2 / T-075-5 / T-075-5b / T-075-1c / T-075-3d / T-075-4b / T-075-
 
   // ── fix-pack 1 · AR/BLQ-2 · LA RAMA DEL TECHO, QUE NO EJECUTABA NI UN TEST DEL REPO ──────────────
   // 🔴 M16 —reemplazar el cuerpo de esa rama por un `throw`, líneo-neutro— SOBREVIVÍA a la suite
-  // entera: 162 archivos / 3305 tests en verde. Y con él M14 (emitir otra causa) y M10-bis (borrar
+  // entera: 162 archivos / 3305 tests en verde. ⚠️ ESE `3305` ES UNA FOTO DEL ÁRBOL EN QUE SE CORRIÓ EL EXPERIMENTO (fix-pack 1) Y ⛔ NO SE RE-DERIVA: re-escribirlo con el número de hoy falsearía la medición, porque el mutante se corrió contra ESA suite. Lo que sí quedaba implícito y ahora está dicho (AR-fp/MNR-6): no es una afirmación sobre el árbol actual, y el conteo vivo del repo vive en un solo sitio, con su fecha, en (`MARCAS_DE_VUELTA`, `../infrastructure/solana/deeplink/sesion.ts:495`). Y con él M14 (emitir otra causa) y M10-bis (borrar
   // `limpiarLaBarra()` de esa rama). Este `it` es el testigo de AC-3 que `sdd.md:530` declaraba
   // —«el módulo + un `it` de render»— y que nunca se había escrito.
   it("T-075-3d (AC-3): con la disponibilidad `unknown` PARA SIEMPRE vence el techo, la persona LEE la causa, la barra queda limpia y ⛔ no se llama a `execute()`", async () => {
@@ -996,7 +996,7 @@ describe("T-075-2 / T-075-5 / T-075-5b / T-075-1c / T-075-3d / T-075-4b / T-075-
   // apagada —que es EL repliegue declarado del BUILD, y el escenario es apagarla con gente a mitad de
   // viaje— una vuelta con `?dl=` bloqueaba el consumidor de montaje hasta la gracia y podía mostrar un
   // copy que en `b71e917` no existía. M17 (agregar `&& deeplinkEnabled()`) dejaba la suite en 162/3305
-  // verde: ningún `it` distinguía las dos formas.
+  // verde: ningún `it` distinguía las dos formas. ⚠️ Ese `3305` es una FOTO del árbol del fix-pack 1, igual que el de `:947`, y ⛔ no se re-deriva por el mismo motivo: el mutante se corrió contra ESA suite (AR-fp/MNR-6).
   it("T-075-4b (AC-4): con la bandera de repliegue AUSENTE la vuelta ⛔ no entra a la espera", async () => {
     const repo = new InMemoryRepo();
     await sembrarRemesaConfirmada(repo, "confirmed");

@@ -472,8 +472,8 @@ export function terminarPasoDelNonce(a: Almacen): void {
 }
 
 /** Lee el ancla. `null` ante ausencia, basura, ventana vencida o instante del futuro — y limpia el
- *  disco en los tres últimos casos, por la lección de 061: un campo inválido que hace tirar y NO
- *  limpia repite la excepción en CADA carga de la página. */
+ *  disco en DOS de esos cuatro casos, basura y ventana vencida, por la lección de 061: un campo inválido que hace tirar y NO
+ *  limpia repite la excepción en CADA carga de la página. 🔴 ACÁ DECÍA «limpia el disco en los TRES últimos casos» Y ESTE MISMO COMMIT LO VOLVIÓ FALSO (AR-fp/BLQ-BAJO-1): la rama del futuro es hoy la ÚNICA de las tres que NO limpia (`terminarPasoDelNonce`, `:498`), y ésa es exactamente la corrección que el addendum declaró obligatoria para el gemelo de `preparado.ts:61` y que acá quedó sin hacer. Lo que se borraba era el `mensajeBase64` del nonce durable de alguien que quizás YA FIRMÓ, y `Date.now()` puede retroceder: una LECTURA no destruye lo que no entrega. */
 function leerPasoDelNonce(a: Almacen, ahora: number): PasoDelNonce | null {
   let crudo: string | null;
   try {
@@ -495,7 +495,7 @@ function leerPasoDelNonce(a: Almacen, ahora: number): PasoDelNonce | null {
   }
   // 🔴 DOS GUARDS, NO UNO, Y ANTES ERAN UN SOLO `||` QUE DESTRUÍA LAS DOS RAMAS. Un ancla que empezó en
   // el FUTURO no se puede fechar (`ahora - desde` es negativo y nunca supera la ventana), pero `Date.now()`
-  if (x.desde > ahora) return null; if (ahora - x.desde > MAX_EDAD_MS) { // 🔴 `MAX_EDAD_MS` SIGUE EN ESTA LÍNEA A PROPÓSITO: (`MAX_EDAD_MS`, `./pop-por-enlace.ts:104`) la cita por número justamente por eso, y moverla la rompería. ⛔ LA RAMA DEL FUTURO NO LLAMA `terminarPasoDelNonce`: es reloj de PARED y puede RETROCEDER (corrección NTP), así que un retroceso borraba el `mensajeBase64` del nonce durable de alguien que quizás YA FIRMÓ. El retorno sigue siendo `null` —esta función no gana forma nueva— y el copy que su llamador emite (`deeplink_nonce_sin_contexto`) ya es honesto para este caso: dice «Si llegaste a firmar, la cuenta puede haber quedado creada», o sea NO afirma que no se firmó. Lo que hacía falta no era un estado nuevo: era dejar de destruir. Y una LECTURA no destruye lo que no entrega, que es la regla que este módulo ya tiene escrita en (`ancla`, `./pop-por-enlace.ts:405`).
+  if (x.desde > ahora) return null; if (ahora - x.desde > MAX_EDAD_MS) { // 🔴 `MAX_EDAD_MS` SIGUE EN ESTA LÍNEA A PROPÓSITO: (`MAX_EDAD_MS`, `./pop-por-enlace.ts:104`) la cita por número justamente por eso, y moverla la rompería. ⛔ LA RAMA DEL FUTURO NO LLAMA `terminarPasoDelNonce`: es reloj de PARED y puede RETROCEDER (corrección NTP), así que un retroceso borraba el `mensajeBase64` del nonce durable de alguien que quizás YA FIRMÓ. El retorno sigue siendo `null` —esta función no gana forma nueva— y el copy que su llamador emite (`deeplink_nonce_sin_contexto`) sigue sin afirmar que no se firmó: dice «Si llegaste a firmar, la cuenta puede haber quedado creada». 🔴 PERO ⛔ NO SE PUEDE DECIR QUE «ES HONESTO PARA ESTE CASO», que es lo que decía acá y lo VOLVIÓ FALSO ESTE MISMO ARREGLO (AR-fp/BLQ-BAJO-3): el addendum evaluó ese copy en UN SOLO EJE —«¿afirma que no se firmó?»— y el arreglo cambió el valor de verdad de OTRA cláusula de la misma oración. Ese copy dice «este navegador ya no tiene los datos para leer esa respuesta» y eso HOY ES FALSO: el ancla sigue en el disco y revive en cuanto el reloj pasa su `desde`. Queda como RESIDUAL DECLARADO y ⛔ el copy no se toca en esta pasada (es scope de `flow-vm.ts` y arrastra `T-065-18`). Lo que este guard resuelve, y es lo único que se afirma acá, es que no hacía falta un estado nuevo: hacía falta dejar de destruir. Y una LECTURA no destruye lo que no entrega, que es la regla que este módulo ya tiene escrita en (`ancla`, `./pop-por-enlace.ts:405`).
     terminarPasoDelNonce(a);
     return null;
   }

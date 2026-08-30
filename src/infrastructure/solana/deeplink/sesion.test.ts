@@ -742,6 +742,32 @@ describe("T-VJ-4: interpretar la vuelta — los caminos que NO son el feliz", ()
     expect(l.viaje.transaccionFirmada).toBe("TX-QUE-LA-PERSONA-FIRMO");
   });
 
+  // 🔴 WKH-075/addendum del reloj — LA DECISIÓN `no-fechable → "manos-vacias"` NO TENÍA TESTIGO
+  // (AR-fp/BLQ-MED-2). Su propio comentario dice en mayúsculas que el motivo NO es `"sin-viaje"` «y no es
+  // un matiz», y aun así ponerlo en `"sin-viaje"` dejaba la suite ENTERA en 162 archivos / 3323 tests
+  // verde: una afirmación en mayúsculas que no puede ponerse roja no es una defensa, es una opinión.
+  //
+  // ⚠️ POR QUÉ ESTA RAMA SE ALCANZA POR `interpretarVuelta` Y NO POR EL MOTOR: el motor discrimina el
+  // `no-fechable` antes de llegar acá (`lectura`, `./firma-por-enlace.ts:685`), pero el connect llama a
+  // esta función directo (`vuelta`, `./conexion.ts:273`), así que ÉSTE es el camino por el que la
+  // decisión se ejecuta en producción.
+  // MUTANTE QUE MATA (X1): poner `motivo: "sin-viaje"` en la rama `no-fechable` de `interpretarVuelta`
+  //   ⇒ `expected "sin-viaje" to be "manos-vacias"`. Y lo que se pierde con ese mutante no es una
+  //   etiqueta: `conexion.ts` traduce `sin-viaje` a `DEEPLINK_VIAJE_VENCIDO` (`manos-vacias`,
+  //   `./conexion.ts:292`), o sea que la vuelta del connect con el reloj atrasado mostraría «Pasó
+  //   demasiado tiempo… No se firmó nada. Empezá el envío de nuevo» — las TRES frases que este addendum
+  //   existe para no decir, con la `transaccionFirmada` de la persona intacta en el disco.
+  it("T-075-RELOJ-M · la vuelta del connect con el viaje SIN FECHAR es huérfana por `manos-vacias`, ⛔ no por `sin-viaje`", () => {
+    const a = almacenFalso();
+    guardarViaje(a, viajeConectado({ paso: "conectar", transaccionFirmada: "TX-QUE-LA-PERSONA-FIRMO", desde: AHORA + 1 }));
+    const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: "conectar" }), AHORA, null);
+    // La aserción es POSITIVA y entera: «no salió `sin-viaje`» no distingue el valor bueno de otros ocho.
+    expect(v).toEqual({ tipo: "huerfana", paso: "conectar", motivo: "manos-vacias" });
+    // Y lo que estaba en juego, que es por lo que el motivo importa: el disco sigue, con la firma adentro.
+    expect(a.datos.has(CLAVE_EN_DISCO), "la vuelta destruyó un viaje que sólo no se podía fechar").toBe(true);
+    expect(leerViaje(a, AHORA + 1).tipo, "el viaje no revive cuando el reloj alcanza su `desde`").toBe("hay");
+  });
+
   it("«vencida» cuando había viaje pero ya no vale: la persona firmó al pedo y merece saberlo", () => {
     const a = almacenFalso();
     guardarViaje(a, viajeBase({ paso: "firmar-patrocinio" }));

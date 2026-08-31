@@ -89,13 +89,13 @@ const pedido = (a: Almacen, over: Partial<Parameters<typeof completarVuelta>[0]>
 function respuestaDeLaBilletera(
   cuerpo: unknown,
   publicaDeLaApp: Uint8Array,
-  opciones: { billetera?: BilleteraDeeplink; quien?: nacl.BoxKeyPair } = {},
+  opciones: { billetera?: BilleteraDeeplink; quien?: nacl.BoxKeyPair; sinClaveDeCifrado?: true } = {},
 ): Record<string, string> {
   const billetera = opciones.billetera ?? "phantom";
   const quien = opciones.quien ?? billeteraReal;
   const secreto = nacl.box.before(publicaDeLaApp, quien.secretKey);
   const nonce = nacl.randomBytes(24);
-  const data = nacl.box.after(new TextEncoder().encode(JSON.stringify(cuerpo)), nonce, secreto);
+  const data = nacl.box.after(new TextEncoder().encode(JSON.stringify(cuerpo)), nonce, secreto); if (opciones.sinClaveDeCifrado) return { nonce: bs58.encode(nonce), data: bs58.encode(data) }; // 🔴 LA RESPUESTA REAL DE `/signTransaction` ES ÉSTA: `nonce` + `data` y nada más. docs.phantom.com documenta el `phantom_encryption_public_key` en la respuesta del `/connect`, y sólo ahí. El default de abajo la agrega porque los `it` del connect la necesitan para fijar QUÉ clave dice la URL, pero ⛔ un `it` de un paso POSTERIOR que no pase esta opción está midiendo una respuesta que ninguna billetera manda. Ver `T-075-CLAVE-NONCE`.
   return {
     [NOMBRE_DE_LA_CLAVE[billetera]]: bs58.encode(quien.publicKey),
     nonce: bs58.encode(nonce),
@@ -706,6 +706,55 @@ describe("T-065-15 / T-065-16: la vuelta del paso del nonce", () => {
     );
     expect(r).toEqual({ tipo: "corte", causa: "deeplink_rechazado" });
   });
+
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  // T-075-CLAVE-NONCE · la vuelta REAL de `/signTransaction`, que no trae clave de cifrado
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  // 🔴 ESTE PASO NUNCA PUDO FUNCIONAR POR ENLACE, y no lo vio nadie. `vueltaDelNonce` comparaba la
+  // clave de cifrado de la URL contra la anclada con un `!==` a secas; la respuesta de
+  // `/signTransaction` no trae esa clave, así que `null !== ancla` era SIEMPRE cierto y toda vuelta
+  // buena salía `deeplink_tx_alterada`. Los `it` de arriba no lo veían porque TODOS sus fixtures
+  // metían la clave. ⚠️ No hay medición en teléfono de este camino: el recorrido del founder corta
+  // antes, en el PoP. Lo que hay es la misma línea de código, y ahora estos `it`.
+  it("T-075-CLAVE-NONCE: sin clave de cifrado en la URL, la transacción firmada SÍ vuelve", () => {
+    // ⛔ SIN EL ARREGLO ESTE `it` ES ROJO en el `toEqual`, con
+    // `{ tipo: "corte", causa: "deeplink_tx_alterada" }` en vez de `{ tipo: "nonce-firmado", ... }`.
+    const a = almacenFalso();
+    const { base58, mensajeBase64 } = transaccion(Keypair.generate());
+    const { publicaDeLaApp, redirectLink } = prepararSalto(a, mensajeBase64);
+    const respuesta = respuestaDeLaBilletera({ transaction: base58 }, publicaDeLaApp, {
+      sinClaveDeCifrado: true,
+    });
+    expect(Object.keys(respuesta).sort(), "el fixture tiene que ser la respuesta REAL").toEqual([
+      "data",
+      "nonce",
+    ]);
+    const r = completarVuelta(pedido(a, { hrefActual: vueltaDelNonce(redirectLink, respuesta) }));
+    expect(r).toEqual({ tipo: "nonce-firmado", transaccionBase58: base58 });
+  });
+
+  it("🔒 T-075-CLAVE-NONCE: un sobre de OTRA clave, TAMBIÉN sin clave en la URL, no se transmite", () => {
+    // La propiedad de seguridad sin la comparación de cadenas: el sobre se abre contra la clave
+    // ANCLADA o no se abre. Si esto diera `nonce-firmado`, el arreglo habría abierto un agujero.
+    const a = almacenFalso();
+    const { base58, mensajeBase64 } = transaccion(Keypair.generate());
+    const { publicaDeLaApp, redirectLink } = prepararSalto(a, mensajeBase64);
+    const r = completarVuelta(
+      pedido(a, {
+        hrefActual: vueltaDelNonce(
+          redirectLink,
+          respuestaDeLaBilletera({ transaction: base58 }, publicaDeLaApp, {
+            quien: nacl.box.keyPair(),
+            sinClaveDeCifrado: true,
+          }),
+        ),
+      }),
+    );
+    // ⚠️ La causa CAMBIA respecto del sobre que sí trae clave ajena (`deeplink_tx_alterada`, arriba):
+    // sin clave en la URL no hay nada que acusar de alterado y lo único observable es que no abre.
+    expect(r).toEqual({ tipo: "corte", causa: "deeplink_respuesta_ilegible" });
+  });
+
 
   it("sin ancla viva, no se transmite nada (y una ancla vencida no cuenta)", () => {
     const a = almacenFalso();

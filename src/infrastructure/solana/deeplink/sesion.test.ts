@@ -105,27 +105,37 @@ function viajeConectado(over: Partial<Viaje> = {}): Viaje {
  * a Phantom, y por eso reemplazar las lecturas de `viaje.billetera` por `"phantom"` sobrevivía a la
  * suite entera.
  *
- * ⚠️ CUÁNTAS SON ESAS LECTURAS: acá decía **tres** y hoy son **CUATRO** (`sesion.ts:613, 646, 661,
- * 668`). La cuarta la agregó el ancla de un fix-pack posterior y el número se quedó viejo solo, sin
- * que nadie tocara esta línea. Y no era una cifra decorativa: la cuarta —la del ancla— era
- * justamente la ÚNICA sin candado, porque el bloque de ataque `T-VJ-6` corría entero con Phantom.
- * Medido en el fix-pack 4, un mutante por lectura (`"phantom"` fijo en cada una):
+ * ⚠️ CUÁNTAS SON ESAS LECTURAS: decía **tres**, después fueron **CUATRO** (`sesion.ts:613, 646, 661,
+ * 668`) y HOY SON **DOS** (`sesion.ts:613` y `sesion.ts:646`). No se perdió ningún candado: las dos que
+ * faltan eran los lectores de los pasos POSTERIORES al connect, y desde el arreglo de la clave fuera
+ * del connect esos pasos usan (`leerRespuestaAnclada`, `./protocol.ts:321`), que **no lee ningún
+ * parámetro de la URL** y por lo tanto no puede confundir una billetera con la otra: no hay nombre que
+ * mutar. La confusión phantom↔solflare sólo es posible donde la clave se lee de la URL, o sea el
+ * connect (`:646`) y el guard de diagnóstico del ancla (`:613`).
+ * Medido en el fix-pack 4, un mutante por lectura (`"phantom"` fijo en cada una), cuando eran cuatro:
  *   ANTES del fix-pack:  613 VIVO 96/96 · 646 muere (1 rojo) · 661 muere (2) · 668 muere (1)
  *   DESPUÉS:             613 muere (4)  · 646 muere (2)      · 661 muere (3) · 668 muere (1)
- * Las cuatro lecturas tienen candado y **los cuatro rojos de la 613 son casos `solflare`**, que es
- * exactamente el agujero que faltaba. Los conteos son de una fecha, no una propiedad: si tocás el
- * bloque de abajo, se re-corren.
+ * ⛔ ESOS CONTEOS SON DE UNA FECHA Y DE UN ÁRBOL QUE YA NO ES ÉSTE: 661 y 668 ya no existen como
+ * lecturas. Los de 613 y 646 se re-corrieron con este arreglo puesto y el resultado está abajo, en el
+ * `it` de `T-VJ-5` que los nombra. Si tocás el bloque de abajo, se vuelven a correr.
  */
 function respuestaDeLaBilletera(
   cuerpo: unknown,
   publicaDeLaApp: Uint8Array,
-  opciones: { billetera?: BilleteraDeeplink; quien?: nacl.BoxKeyPair } = {},
+  opciones: { billetera?: BilleteraDeeplink; quien?: nacl.BoxKeyPair; sinClaveDeCifrado?: true } = {},
 ): Record<string, string> {
   const billetera = opciones.billetera ?? "phantom";
   const quien = opciones.quien ?? billeteraReal;
   const secreto = nacl.box.before(publicaDeLaApp, quien.secretKey);
   const nonce = nacl.randomBytes(24);
   const data = nacl.box.after(new TextEncoder().encode(JSON.stringify(cuerpo)), nonce, secreto);
+  // 🔴 `sinClaveDeCifrado` ES LA RESPUESTA REAL DE UN PASO POSTERIOR AL CONNECT, y el default NO lo es.
+  // docs.phantom.com documenta el `phantom_encryption_public_key` en la respuesta del `/connect` y sólo
+  // ahí; las de `/signMessage` y `/signTransaction` son `nonce` + `data`. El default se conserva porque
+  // los `it` del connect lo necesitan y porque es lo que fija QUÉ clave dice la URL en los `it` de
+  // ataque, pero ⛔ un `it` de un paso posterior que no pase esta opción mide una respuesta que ninguna
+  // billetera manda. Ver `T-VJ-5b` al final de este archivo.
+  if (opciones.sinClaveDeCifrado) return { nonce: bs58.encode(nonce), data: bs58.encode(data) };
   return {
     [NOMBRE_DE_LA_CLAVE[billetera]]: bs58.encode(quien.publicKey),
     nonce: bs58.encode(nonce),
@@ -1415,13 +1425,22 @@ describe("T-VJ-5: interpretar la vuelta — los tres pasos que sí salen bien", 
     expect(v).toEqual({ tipo: "patrocinio-firmado", firma: "FirmaPoP", persistencia: "guardado" });
   });
 
-  it("una respuesta de Phantom NO se lee como Solflare al atravesar la sesión", () => {
-    // El mismo candado que `protocol.test.ts` tiene para `leerRespuesta`, pero de este lado: acá el
-    // nombre del parámetro sale de `viaje.billetera`, que es el que el mutante de arriba borra.
+  it("una respuesta de Phantom NO se lee como Solflare al atravesar la sesión — en el CONNECT", () => {
+    // 🔴 ESTE `it` MEDÍA OTRA COSA HASTA EL ARREGLO DE LA CLAVE FUERA DEL CONNECT, y el cambio es una
+    // lección, no una regresión. Decía `paso: "firmar-tx"` y esperaba `huerfana`, y ese `huerfana` NO
+    // salía de que la sesión distinguiera las dos billeteras: salía de que el lector de los pasos
+    // posteriores exigía una clave de cifrado en la URL que ninguna billetera manda en esos pasos. O
+    // sea que el `it` verde estaba certificando el defecto. Con el sobre abierto contra el ANCLA, ese
+    // mismo caso da `tx-firmada` —y es correcto: el sobre lo cerró la billetera anclada— así que la
+    // propiedad "no confundir phantom con solflare" hay que medirla donde SIGUE siendo posible
+    // confundirlas, que es el único paso que lee la clave de la URL: el connect.
+    // MUTANTE QUE MATA: `"phantom"` fijo en la lectura de (`leerRespuestaDelConnect`, `./sesion.ts:646`).
     const a = almacenFalso();
-    guardarViaje(a, viajeConectado({ billetera: "solflare", paso: "firmar-tx" }));
-    const r = respuestaDeLaBilletera({ transaction: "T" }, par.publicKey, { billetera: "phantom" });
-    const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: "firmar-tx", ...r }), AHORA, null);
+    guardarViaje(a, viajeBase({ billetera: "solflare", paso: "conectar" }));
+    const r = respuestaDeLaBilletera({ public_key: "A", session: "B" }, par.publicKey, {
+      billetera: "phantom",
+    });
+    const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: "conectar", ...r }), AHORA, null);
     expect(v.tipo).toBe("huerfana");
   });
 
@@ -1767,5 +1786,80 @@ describe("T-067-16 (CD-11) · las marcas que NO son pasos del viaje no entran al
     expect(
       interpretarVuelta(a, new URLSearchParams({ [MARCA]: "conectar" }), AHORA, null).tipo,
     ).not.toBe("no-volvimos");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// T-VJ-5b · LOS DOS PASOS DEL MOTOR CON LA RESPUESTA REAL, QUE NO TRAE CLAVE DE CIFRADO
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+describe("T-VJ-5b: `firmar-tx` y `firmar-patrocinio` con la vuelta REAL de la billetera", () => {
+  // 🔴 LOS DOS PASOS DEL MOTOR NUNCA FUNCIONARON POR ENLACE, y este archivo no lo veía. El guard del
+  // ancla de (`interpretarVuelta`, `./sesion.ts:578`) NO era el culpable acá —pregunta `!== null`
+  // antes de comparar, así que con la respuesta real ni se activa—: el corte lo daba el LECTOR, que
+  // exigía la clave de cifrado en la URL. Sin ella devolvía `ninguno` y `traducir` lo pasaba a
+  // `huerfana/manos-vacias`. Ninguna firma buena llegaba nunca a `tx-firmada` ni a
+  // `patrocinio-firmado`. ⛔ Los 83 `it` de este archivo estaban en verde porque TODOS los fixtures de
+  // pasos posteriores metían una clave que ninguna billetera manda en esos pasos.
+  // ⚠️ CAMBIA QUÉ HAY QUE PROBAR EN UN TELÉFONO: que ande el PoP no dice nada de estos dos.
+  it("`firmar-tx` sin clave de cifrado en la URL devuelve la transacción firmada", () => {
+    // ⛔ SIN EL ARREGLO ES ROJO con `{ tipo: "huerfana", paso: "firmar-tx", motivo: "manos-vacias" }`.
+    const a = almacenFalso();
+    guardarViaje(a, viajeConectado({ paso: "firmar-tx" }));
+    const r = respuestaDeLaBilletera({ transaction: "TxFirmada58" }, par.publicKey, {
+      sinClaveDeCifrado: true,
+    });
+    expect(Object.keys(r).sort(), "el fixture tiene que ser la respuesta REAL").toEqual([
+      "data",
+      "nonce",
+    ]);
+    const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: "firmar-tx", ...r }), AHORA, null);
+    expect(v).toEqual({ tipo: "tx-firmada", transaccionBase58: "TxFirmada58", persistencia: "guardado" });
+  });
+
+  it("`firmar-patrocinio` sin clave de cifrado en la URL devuelve la firma", () => {
+    // ⛔ SIN EL ARREGLO ES ROJO con `{ tipo: "huerfana", paso: "firmar-patrocinio", motivo: "manos-vacias" }`.
+    const a = almacenFalso();
+    guardarViaje(a, viajeConectado({ paso: "firmar-patrocinio" }));
+    const r = respuestaDeLaBilletera({ signature: "FirmaPoP" }, par.publicKey, {
+      sinClaveDeCifrado: true,
+    });
+    const v = interpretarVuelta(
+      a,
+      new URLSearchParams({ [MARCA]: "firmar-patrocinio", ...r }),
+      AHORA,
+      null,
+    );
+    expect(v).toEqual({ tipo: "patrocinio-firmado", firma: "FirmaPoP", persistencia: "guardado" });
+  });
+
+  it("🔒 un sobre de OTRA billetera, TAMBIÉN sin clave en la URL, no sale como un paso bueno", () => {
+    // La propiedad de seguridad del ancla, sin la comparación de cadenas: el sobre se abre contra la
+    // clave ANCLADA o no se abre. Con la clave ajena EN la URL el corte sería `otra-clave`; sin ella no
+    // hay nada que comparar y lo único que puede cortar es la criptografía.
+    const a = almacenFalso();
+    guardarViaje(a, viajeConectado({ paso: "firmar-tx" }));
+    const r = respuestaDeLaBilletera({ transaction: "TxFalsa" }, par.publicKey, {
+      quien: nacl.box.keyPair(),
+      sinClaveDeCifrado: true,
+    });
+    const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: "firmar-tx", ...r }), AHORA, null);
+    expect(v).toEqual({
+      tipo: "rechazo",
+      paso: "firmar-tx",
+      origen: "nuestro",
+      codigo: "sobre_ilegible",
+      mensaje: "",
+    });
+  });
+
+  it("un paso del motor SIN ancla en el disco vuelve «huerfana/manos-vacias», y no revienta", () => {
+    // El desenlace que antes daba el camino sin clave en la URL, ahora explícito: sin ancla no hay
+    // canal. ⛔ `manos-vacias` y NO `sin-viaje`: el viaje está en el disco y puede tener adentro la
+    // `transaccionFirmada` del paso 2, así que quien lo lea no debe contestar «empezá de nuevo».
+    const a = almacenFalso();
+    guardarViaje(a, viajeBase({ paso: "firmar-tx", session: "s", pasosConsumidos: ["conectar"] }));
+    const r = respuestaDeLaBilletera({ transaction: "T" }, par.publicKey, { sinClaveDeCifrado: true });
+    const v = interpretarVuelta(a, new URLSearchParams({ [MARCA]: "firmar-tx", ...r }), AHORA, null);
+    expect(v).toEqual({ tipo: "huerfana", paso: "firmar-tx", motivo: "manos-vacias" });
   });
 });

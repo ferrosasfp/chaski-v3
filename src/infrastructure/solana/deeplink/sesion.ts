@@ -72,7 +72,7 @@ import type { BilleteraDeeplink, CodigoNuestro, Desenlace } from "./protocol";
 import {
   PARAMS_DE_RESPUESTA,
   clavePublicaEnRespuesta,
-  leerRespuesta,
+  leerRespuestaAnclada, leerRespuestaDelConnect,
   soloTextos,
 } from "./protocol";
 
@@ -207,7 +207,7 @@ export type LecturaDelViaje =
    * `null` que `leerViaje` ya había descartado (era el mutante M7 del re-AR, vivo porque nadie llegaba).
    */
   | { tipo: "hay"; viaje: Viaje; secretaBytes: Uint8Array }
-  | { tipo: "no-hay" } | { tipo: "vencido" } | { tipo: "no-fechable"; viaje: Viaje }; // 🔴 LOS TRES EN ESTA LÍNEA (Δ0: este archivo recibe [[CENSO src/infrastructure/solana/deeplink/sesion.ts entrantes-desde-222=30]] citas ANCLADAS de `:222` para abajo (acá decía «33» y este mismo commit lo volvió falso, porque las citas que faltaban las agregó él — AR-fp/BLQ-MED-3; el número lo publica ahora un marcador que `../../../composition/citas-ancladas.test.ts` deriva del árbol en cada `npm test`. ⚠️ Cuenta sólo las ANCLADAS: por el método de todas —`grep -rhoE 'sesion\.ts:[0-9]+'`— hoy son 35, y ESA es la cifra que manda para el Δ0, porque una cita suelta se rompe igual. El marcador vigila el piso, no el total) y una línea nueva las corre a todas). 🔴 EL CUARTO VALOR LLEVA EL `viaje` Y ⛔ NO LLEVA `secretaBytes`, y las dos mitades son deliberadas. Lleva el `viaje` para que `cortar` le pueda aplicar el MISMO `resultadoPreservable` que ya aplica, en vez de inventar una segunda regla de preservación — y preservar A CIEGAS no era opción, porque con un `desde` futuro `ahora - desde` es negativo y la ventana NO LIMPIA NUNCA, o sea que lo preservado a ciegas se quedaría para siempre. No lleva `secretaBytes` porque sin ella no se abre ningún sobre, y ésa es la garantía ESTRUCTURAL de que desde este estado el viaje no se puede usar: es el mismo razonamiento del docblock de «hay» de acá arriba, aplicado al revés. ⛔ Y NO COLAPSA con «no-hay» ni con «vencido»: los tres piden reacciones distintas y colapsarlos es el defecto que 061 midió.
+  | { tipo: "no-hay" } | { tipo: "vencido" } | { tipo: "no-fechable"; viaje: Viaje }; // 🔴 LOS TRES EN ESTA LÍNEA (Δ0: este archivo recibe [[CENSO src/infrastructure/solana/deeplink/sesion.ts entrantes-desde-222=33]] citas ANCLADAS de `:222` para abajo (el arreglo de la clave fuera del connect lo llevó de 30 a 33 —tres citas nuevas hacia `:578` y `:646`—; antes decía «33» y otro commit lo había vuelto falso, porque las citas que faltaban las agregó él — AR-fp/BLQ-MED-3; el número lo publica ahora un marcador que `../../../composition/citas-ancladas.test.ts` deriva del árbol en cada `npm test`. ⚠️ Cuenta sólo las ANCLADAS: por el método de todas —`grep -rhoE 'sesion\.ts:[0-9]+'`— hoy son 35, y ESA es la cifra que manda para el Δ0, porque una cita suelta se rompe igual. El marcador vigila el piso, no el total) y una línea nueva las corre a todas). 🔴 EL CUARTO VALOR LLEVA EL `viaje` Y ⛔ NO LLEVA `secretaBytes`, y las dos mitades son deliberadas. Lleva el `viaje` para que `cortar` le pueda aplicar el MISMO `resultadoPreservable` que ya aplica, en vez de inventar una segunda regla de preservación — y preservar A CIEGAS no era opción, porque con un `desde` futuro `ahora - desde` es negativo y la ventana NO LIMPIA NUNCA, o sea que lo preservado a ciegas se quedaría para siempre. No lleva `secretaBytes` porque sin ella no se abre ningún sobre, y ésa es la garantía ESTRUCTURAL de que desde este estado el viaje no se puede usar: es el mismo razonamiento del docblock de «hay» de acá arriba, aplicado al revés. ⛔ Y NO COLAPSA con «no-hay» ni con «vencido»: los tres piden reacciones distintas y colapsarlos es el defecto que 061 midió.
 
 /**
  * ⚠️ ESTA SÍ PUEDE TIRAR, Y ES DELIBERADO. `localStorage.setItem` lanza con la cuota llena y en el
@@ -643,12 +643,12 @@ export function interpretarVuelta(
   };
 
   if (paso === "conectar") {
-    const d = leerRespuesta(viaje.billetera, params, secretaBytes, soloTextos("public_key", "session"));
+    const d = leerRespuestaDelConnect(viaje.billetera, params, secretaBytes, soloTextos("public_key", "session"));
     return traducir(d, paso, (x) => ({
       tipo: "conectado" as const,
       direccion: x.public_key,
       session: x.session,
-      // `claveEnLaUrl` no puede ser `null` acá: sin clave en la URL `leerRespuesta` habría dado
+      // `claveEnLaUrl` no puede ser `null` acá: sin clave en la URL `leerRespuestaDelConnect` habría dado
       // `ninguno`. Y si el ancla ya estaba puesta, el guard de arriba garantiza que es LA MISMA.
       persistencia: consumir({
         claveBilletera: claveEnLaUrl ?? undefined,
@@ -656,16 +656,16 @@ export function interpretarVuelta(
         session: x.session,
       }),
     }));
-  }
+  } if (viaje.claveBilletera === undefined) return { tipo: "huerfana", paso, motivo: "manos-vacias" }; // ⛔ DE ACÁ ABAJO YA NO ES EL CONNECT: sin ancla no hay canal y no hay con qué abrir ningún sobre. Antes esto lo decidía (`leerRespuestaDelConnect`, `./protocol.ts:289`) leyendo la clave DE LA URL, y por eso toda vuelta REAL de `/signMessage` y de `/signTransaction` —que según docs.phantom.com no traen clave de cifrado— salía `ninguno` ⇒ «huerfana/manos-vacias» AUNQUE la firma fuera buena: 🔴 los DOS pasos del motor nunca funcionaron por enlace. El desenlace de ESTA línea es el mismo que ese camino ya daba, así que no aparece ninguna rama nueva; lo que cambia es que ahora el sobre se abre contra el ANCLA y no contra la URL ((`leerRespuestaAnclada`, `./protocol.ts:321`)).
   if (paso === "firmar-tx") {
-    const d = leerRespuesta(viaje.billetera, params, secretaBytes, soloTextos("transaction"));
+    const d = leerRespuestaAnclada(params, secretaBytes, viaje.claveBilletera, soloTextos("transaction"));
     return traducir(d, paso, (x) => ({
       tipo: "tx-firmada" as const,
       transaccionBase58: x.transaction,
       persistencia: consumir({ transaccionFirmada: x.transaction }),
     }));
   }
-  const d = leerRespuesta(viaje.billetera, params, secretaBytes, soloTextos("signature"));
+  const d = leerRespuestaAnclada(params, secretaBytes, viaje.claveBilletera, soloTextos("signature"));
   return traducir(d, paso, (x) => ({
     tipo: "patrocinio-firmado" as const,
     firma: x.signature,

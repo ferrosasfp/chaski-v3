@@ -1207,8 +1207,10 @@ describe("WKH-358/AC-9: la bandera NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED es opt-in
 //
 // Qué se agrega en la pantalla y qué mide cada `it`:
 //   · La OFERTA en `bienvenida` (AC-1-1)          → `T-372-W1-1` y su control negativo `T-372-W1-2`
+//   · Lo que el `href` de la oferta LLEVA (AC-1-1)→ `T-372-W1-1`, tercera mitad (AR/BLQ-BAJO-1)
 //   · El segundo enlace, el de instalar (AC-1-4)  → `T-372-W1-6`
 //   · El aviso de aterrizaje, TRES casos (AC-1-4b)→ `T-372-W1-7`
+//   · La pantalla donde el aviso se pinta (I-2(b))→ `T-372-W1-7c` (AR/MNR-4)
 import {
   PARAM_SALIDA,
   URL_INSTALAR_PHANTOM,
@@ -1217,6 +1219,11 @@ import {
 import { KEY as CLAVE_DEL_REPO } from "../infrastructure/persistence";
 import { leerHito, olvidarHitos } from "./bitacora-de-vuelta";
 import { DiagnosticoDeVuelta } from "./diagnostico-de-vuelta";
+// AR/BLQ-BAJO-1 — los tres traen lo que hace falta para mirar ADENTRO del enlace de la oferta:
+// `PARAM_KYC`/`VALOR_VUELTA_KYC` son el rastro que NO tiene que viajar, y `hrefQueLaBilleteraVaAAbrir`
+// es el desarmado del universal link. ⛔ Los tres se IMPORTAN y ninguno se re-escribe acá.
+import { PARAM_KYC, VALOR_VUELTA_KYC } from "./splash-puerta";
+import { hrefQueLaBilleteraVaAAbrir } from "../test-support/salida-al-navegador";
 
 const OFERTA = /¿Estás en un celular con Phantom\?/;
 const INSTALAR = /Instalarla y crear mi billetera/;
@@ -1237,7 +1244,21 @@ describe("WKH-372/AC-1-1: la oferta de abrir Chaski adentro del navegador de la 
   // ⛔ FALSO KILLED A EVITAR: un mutante que rompa el render entero mata cualquier `it`. Por eso el
   // control negativo (`T-372-W1-2`, abajo) tiene que seguir VERDE con el mismo mutante puesto: si los
   // dos caen a la vez, lo que se rompió es la pantalla y no la oferta.
-  it("T-372-W1-1: en `bienvenida` sin wallet aparece un ENLACE al universal link, y nadie navega solo", async () => {
+  //
+  // 🔴 AR/BLQ-BAJO-1 — LA TERCERA MITAD, Y POR QUÉ EXISTE. Hasta el fix-pack este `it` miraba
+  // SOLAMENTE el `hostname` del enlace, y eso lo medió el AR: reemplazando la expresión del `href` de
+  // la oferta (`flow.tsx:757`) por el enlace CRUDO de antes de W1 —o sea reintroduciendo el defecto que
+  // esta ola viene a cerrar— la suite entera quedaba en `exit 0`, `3420 passed`. El arreglo estaba
+  // vigilado en el enlace SECUNDARIO (`T-LINK-1`) y no en el principal, que es la puerta que la ola
+  // construye. Acá se cierra: el enlace se DESARMA y se mira lo que lleva adentro.
+  // MUTANTE QUE TIENE QUE MATAR LA TERCERA MITAD (MUT-I): en `flow.tsx:757`, cambiar
+  // `urlDeSalidaAlNavegadorDeLaBilletera({…})` por `phantomBrowseUrl(window.location.href, origin)`.
+  it("T-372-W1-1: en `bienvenida` sin wallet aparece un ENLACE al universal link, no navega solo, y el rastro del KYC no viaja", async () => {
+    // 🔴 EL FIXTURE FABRICA EL CUADRANTE R-5, y sin él este `it` no puede distinguir nada: la persona
+    // está parada en el aterrizaje del verificador de identidad (`urlDeVueltaDeKyc`) con un monto ya
+    // cargado en la barra. Es el caso donde el enlace crudo se lleva el `?kyc=return` al otro
+    // navegador y allá arranca a retomar un trámite que en ESE almacenamiento no existe.
+    window.history.replaceState({}, "", `/?monto=400&${PARAM_KYC}=${VALOR_VUELTA_KYC}`);
     const antesDeMedir = window.location.href;
     await enLaBienvenida("none");
 
@@ -1256,6 +1277,27 @@ describe("WKH-372/AC-1-1: la oferta de abrir Chaski adentro del navegador de la 
       window.location.href,
       "algo navegó solo al montar: el salto tiene que ocurrir DENTRO de un gesto de la persona",
     ).toBe(antesDeMedir);
+    // 4 · CD-18 — el fixture reprodujo el defecto: el rastro del KYC estaba puesto ANTES de medir. Sin
+    //     esto, una URL pelada dejaría la fila de abajo verde sin haber ejercitado ninguna limpieza.
+    expect(
+      new URL(antesDeMedir).searchParams.get(PARAM_KYC),
+      "el fixture no dejó el rastro del KYC en la URL de origen: no hay nada que limpiar",
+    ).toBe(VALOR_VUELTA_KYC);
+    // 5 · LO QUE LA BILLETERA VA A ABRIR, DESARMADO. ⛔ El prefijo `…/browse/…` no se escribe acá: el
+    //     helper toma el último segmento del `path` y lo decodifica, sea cual sea ese prefijo.
+    const abre = hrefQueLaBilleteraVaAAbrir(enlace.getAttribute("href") as string);
+    expect(
+      abre.searchParams.get(PARAM_KYC),
+      "el `?kyc=return` viaja al navegador de la billetera: allá la puerta lo lee como una vuelta de " +
+        "verificación y retoma un trámite que en ESE almacenamiento no existe",
+    ).toBeNull();
+    // 6 · Y LA OTRA MITAD, la que hace falsable a la de arriba: lo que SÍ es de la app sigue viajando.
+    //     Sin esto, un `href` que borrara todos los parámetros —o que apuntara a la raíz pelada—
+    //     pasaría la fila 5 sin haber limpiado nada en particular.
+    expect(
+      abre.searchParams.get("monto"),
+      "el enlace se llevó puesto un parámetro de la app: limpiar el rastro no es vaciar la URL",
+    ).toBe("400");
   });
 
   // MUTANTE QUE LO TIENE QUE MATAR: quitar la condición `disponibilidadWallet === "none"` de la
@@ -1373,9 +1415,21 @@ describe("WKH-372/AC-1-4b: el aterrizaje dentro del navegador de la billetera, c
 
   // 🔴 EL RENGLÓN DEL BLOQUE DE DIAGNÓSTICO, Y POR QUÉ ESTE `it` EXISTE. La regla del propio
   // `./bitacora-de-vuelta.ts` es que un quinto hito «obliga a decidir qué pregunta contesta y a darle
-  // renglón». El renglón se escribió, y MEDIDO: borrarlo dejaba la suite entera en VERDE
-  // (`36 passed` en `diagnostico-de-vuelta.test.tsx`, `39 passed` acá). O sea que era decoración: un
-  // artefacto que nadie mira no es un instrumento. Este `it` es su único guard.
+  // renglón». El renglón se escribió, y MEDIDO: mientras nadie lo miraba, borrarlo dejaba la suite
+  // entera en VERDE (`36 passed` en `diagnostico-de-vuelta.test.tsx`, `39 passed` acá). O sea que era
+  // decoración: un artefacto que nadie mira no es un instrumento.
+  //
+  // 🔴 AR/MNR-1 — ACÁ DECÍA «Este `it` es su único guard» Y ERA FALSO. Corregido midiendo: MUT-D
+  // (borrar el renglón del template) mata DOS, éste y (`T-DIAG-CAPTURA`,
+  // `./diagnostico-de-vuelta.test.tsx:846`), que pinnea el texto EXACTO de los quince renglones y por
+  // eso se pone rojo ante cualquiera que falte. Éste es su guard DEDICADO; aquél lo cubre de rebote,
+  // por pinneo del texto. La frase vieja se escribió con la medición tomada ANTES de actualizar el
+  // valor esperado de `T-DIAG-CAPTURA` —cuando el bloque todavía tenía catorce renglones y borrar el
+  // decimoquinto no tocaba nada— y no se volvió a medir después de actualizarlo.
+  // ⇒ Y LO QUE ESTE `it` APORTA SOBRE AQUÉL, que es por qué los dos hacen falta: `T-DIAG-CAPTURA`
+  // anota los hitos A MANO y no monta `RemittanceFlow`, así que su valor esperado es `no corrió`. Éste
+  // monta la pantalla real, o sea que es el único que mide que el renglón diga lo que el ATERRIZAJE
+  // midió, y no un literal que alguien dejó puesto.
   //
   // MUTANTE QUE LO TIENE QUE MATAR: borrar del template de `./diagnostico-de-vuelta.tsx` el renglón
   // `salida navegador: …`.
@@ -1401,5 +1455,52 @@ describe("WKH-372/AC-1-4b: el aterrizaje dentro del navegador de la billetera, c
       "el bloque de diagnóstico no publica el veredicto del aterrizaje: en el teléfono no hay forma " +
         "de leer si el almacenamiento cruzó el salto",
     ).toContain("salida navegador: con-marca-sin-borrador");
+  });
+
+  // 🔴 AR/MNR-4 — LA PANTALLA DONDE EL AVISO SE PINTA, QUE HASTA EL FIX-PACK NO TENÍA GATE. El aviso
+  // de aterrizaje no llevaba ninguna condición de `step`, así que con la marca puesta y el disco vacío
+  // seguía clavado arriba de `send`, `history` y `recuperar`: «Acá no están los datos que cargaste
+  // antes» encima de una lista vacía en «Mis envíos». Esta HU existe porque la experiencia no se veía
+  // profesional, y eso es exactamente eso. La OFERTA de al lado ya llevaba `step === "bienvenida"` con
+  // su motivo escrito, así que el gate nuevo es CONSISTENCIA con el vecino, no diseño nuevo.
+  //
+  // MUTANTE QUE LO TIENE QUE MATAR: quitar `step === "bienvenida" &&` de la condición del aviso
+  // (`flow.tsx:757`) ⇒ el caso (b) se pone rojo.
+  // ⛔ FALSO KILLED A EVITAR: sin el caso (a), un aviso que no se montara en NINGUNA pantalla pasaría
+  //    el `queryByText` de (b) sin haber medido nada.
+  // ⚠️ LA PANTALLA MEDIDA ES `recuperar` Y NO `history`, y no es capricho: con `pasoInicial="history"`
+  //    el estado del historial es `null` y el sitio de render no pinta NINGUNA pantalla (medido en
+  //    `barra-destinos.test.tsx:504-518`: 59 caracteres de body). El fixture sería el header solo, y
+  //    entonces la fila (b) pasaría por no haber montado un destino. `recuperar` sí se pinta, y por eso
+  //    puede traer su propio marcador de CD-18.
+  it("T-372-W1-7c: el aviso de aterrizaje vive en la bienvenida y no se cuela en los destinos", async () => {
+    olvidarHitos();
+    window.history.replaceState({}, "", `/?${PARAM_SALIDA}=${VALOR_SALIDA}`);
+    window.localStorage.setItem(CLAVE_DEL_REPO, "[]");
+
+    // (a) EN LA BIENVENIDA SÍ. Es la mitad que hace falsable a la otra.
+    await enLaBienvenida("none");
+    expect(
+      screen.getByText(AVISO_ATERRIZAJE),
+      "el aviso dejó de aparecer en la pantalla donde SÍ corresponde: el fixture no reproduce el caso",
+    ).toBeInTheDocument();
+    cleanup();
+
+    // (b) EN UN DESTINO NO. El mismo aterrizaje, otra pantalla.
+    render(<RemittanceFlow pasoInicial="recuperar" container={buildTestContainer()} />);
+    await act(async () => {
+      solanaWalletBridge.setWalletAvailability("none");
+    });
+    // CD-18 — el destino se montó de verdad: sin esto, una pantalla que no pintara nada dejaría la
+    // aserción de abajo verde sin haber ejercitado el gate.
+    expect(
+      screen.getByText(/Recuperar fondos de un envío anterior/),
+      "la pantalla de destino no se montó: la fila de abajo no mediría ningún gate",
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(AVISO_ATERRIZAJE),
+      "el aviso del aterrizaje quedó clavado arriba de una pantalla de destino, que es la falta de " +
+        "prolijidad que esta HU vino a cerrar",
+    ).not.toBeInTheDocument();
   });
 });

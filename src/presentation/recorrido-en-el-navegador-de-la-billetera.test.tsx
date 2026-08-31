@@ -203,8 +203,8 @@ function espiarNavegacion(): { asignado: string[]; restaurar: () => void } {
 }
 
 /** Los hosts de billetera que aparecieron en una tanda de navegaciones. Vacío = ningún viaje a la
- *  billetera, que es exactamente lo que AC-1-2a mide. Un href impareseable se conserva como tal para
- *  que no desaparezca de la cuenta en silencio. */
+ *  billetera, que es exactamente lo que AC-1-2a mide. ⚠️ Un href que no parsea se DESCARTA y NO se cuenta como viaje.
+ *  Hoy no llega ninguno: medido cambiando el `catch` por un `throw` ⇒ los 6 `it` del archivo siguen verdes. Y ningún verde se apoya en esta función sola: los 3 llamadores miran además la lista CRUDA (`T-372-W1-3` su contenido; `T-372-W1-13` su largo y el hostname del único href). */
 function viajesALaBilletera(asignado: string[]): string[] {
   return asignado.filter((h) => {
     try {

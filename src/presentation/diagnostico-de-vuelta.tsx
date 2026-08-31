@@ -112,7 +112,7 @@
 // instante de la foto: la captura se fecha a sí misma.
 //
 // ⚠️ DÓNDE SE MONTA Y POR QUÉ AHÍ: en `app/page.tsx`, HERMANO de `RemittanceFlow` y no adentro. Así
-// `flow.tsx` —[[CENSO src/presentation/flow.tsx lineas=4453]] líneas y [[CENSO src/presentation/flow.tsx entrantes=153]] citas ancladas— no recibe ni una línea por este bloque. Lo que sí necesita de
+// `flow.tsx` —[[CENSO src/presentation/flow.tsx lineas=4453]] líneas y [[CENSO src/presentation/flow.tsx entrantes=155]] citas ancladas— no recibe ni una línea por este bloque. Lo que sí necesita de
 // ahí adentro —la causa cruda del corte y los cuatro hitos del recorrido— entra por
 // (`anotarCorteDeVuelta`, `./bitacora-de-vuelta.ts:43`) y (`anotarHito`, `./bitacora-de-vuelta.ts:101`),
 // en líneas que ya existían.

@@ -23,7 +23,7 @@ import bs58 from "bs58";
 import type { BilleteraDeeplink } from "./protocol";
 import { MARCA, type Almacen } from "./sesion";
 import { completarVuelta, iniciarConexion } from "./conexion";
-import { DEEPLINK_POP_ALTERADO, DEEPLINK_POP_VENCIDO, DEEPLINK_RECHAZADO, DEEPLINK_TX_ALTERADA, DEEPLINK_VIAJE_VENCIDO } from "./firma-por-enlace";
+import { DEEPLINK_POP_ALTERADO, DEEPLINK_POP_VENCIDO, DEEPLINK_RECHAZADO, DEEPLINK_RESPUESTA_ILEGIBLE, DEEPLINK_TX_ALTERADA, DEEPLINK_VIAJE_VENCIDO } from "./firma-por-enlace";
 import {
   MARCA_POP_KYC,
   MARCA_POP_PAYOUT,
@@ -94,13 +94,19 @@ const pedido = (a: Almacen, over: Record<string, unknown> = {}) => ({
 function respuestaDeLaBilletera(
   cuerpo: unknown,
   publicaDeLaApp: Uint8Array,
-  opciones: { billetera?: BilleteraDeeplink; quien?: nacl.BoxKeyPair } = {},
+  opciones: { billetera?: BilleteraDeeplink; quien?: nacl.BoxKeyPair; sinClaveDeCifrado?: true } = {},
 ): Record<string, string> {
   const billetera = opciones.billetera ?? "phantom";
   const quien = opciones.quien ?? billeteraReal;
   const secreto = nacl.box.before(publicaDeLaApp, quien.secretKey);
   const nonce = nacl.randomBytes(24);
   const data = nacl.box.after(new TextEncoder().encode(JSON.stringify(cuerpo)), nonce, secreto);
+  // 🔴 `sinClaveDeCifrado` ES LA RESPUESTA REAL DE `/signMessage`, y el default de acá NO lo es. Según
+  // docs.phantom.com la clave de cifrado la devuelve `/connect` y sólo `/connect`; la del `signMessage`
+  // son `nonce` + `data`. El default se conserva porque los `it` de arriba lo usan para el connect y
+  // para fijar QUÉ clave dice la URL, pero ⛔ todo `it` de un paso POSTERIOR que no lo pase está
+  // midiendo una respuesta que ninguna billetera manda. Ver `T-075-CLAVE-POP` al final del archivo.
+  if (opciones.sinClaveDeCifrado) return { nonce: bs58.encode(nonce), data: bs58.encode(data) };
   return {
     [NOMBRE_DE_LA_CLAVE[billetera]]: bs58.encode(quien.publicKey),
     nonce: bs58.encode(nonce),
@@ -593,6 +599,80 @@ describe("el chequeo 4: la respuesta tiene que venir de la MISMA clave que conte
     expect(vueltaDelPop(pedido(a, { hrefActual: href }))).toEqual({
       tipo: "corte",
       causa: DEEPLINK_VIAJE_VENCIDO,
+    });
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// T-075-CLAVE-POP · LA VUELTA REAL DE `/signMessage`, QUE NO TRAE CLAVE DE CIFRADO
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+describe("T-075-CLAVE-POP: la vuelta REAL de `/signMessage` (sólo `nonce` + `data`)", () => {
+  // 🔴 QUÉ DEFECTO REPRODUCE, MEDIDO EN UN TELÉFONO. `vueltaDelPop` comparaba la clave de cifrado de la
+  // URL contra la anclada con un `!==` a secas. La respuesta de `/signMessage` NO trae esa clave
+  // (docs.phantom.com la documenta en la respuesta del `/connect`, y sólo ahí), así que `null !== ancla`
+  // era SIEMPRE cierto: toda firma buena salía `deeplink_pop_alterado` y la persona leía «lo que volvió
+  // de tu billetera no coincide». ⛔ Ningún `it` de este archivo lo veía porque TODOS los fixtures de la
+  // vuelta metían la clave, que es una respuesta que ninguna billetera manda.
+  it("camino feliz REAL: sin clave de cifrado en la URL ⇒ `pop-firmado`, y la prueba se entrega", () => {
+    // ⛔ SIN EL ARREGLO ESTE `it` ES ROJO en el primer `expect`, con
+    // `{ tipo: "corte", causa: "deeplink_pop_alterado" }` en vez de `{ tipo: "pop-firmado", ... }`.
+    const a = almacenFalso();
+    viajeConectado(a);
+    const { publicaDeLaApp, redirectLink } = saltoDelPop(a);
+    const respuesta = respuestaDeLaBilletera({ signature: firmar(DESAFIO) }, publicaDeLaApp, {
+      sinClaveDeCifrado: true,
+    });
+    expect(Object.keys(respuesta).sort(), "el fixture tiene que ser la respuesta REAL").toEqual([
+      "data",
+      "nonce",
+    ]);
+    const href = hrefDeVuelta(redirectLink, respuesta);
+    expect(vueltaDelPop(pedido(a, { hrefActual: href }))).toEqual({
+      tipo: "pop-firmado",
+      proposito: MARCA_POP_PAYOUT,
+    });
+    expect(leerPruebaPop(a, AHORA, MARCA_POP_PAYOUT)?.firma).toBe(firmar(DESAFIO));
+  });
+
+  it("🔒 un sobre de OTRA billetera, TAMBIÉN sin clave en la URL, no entrega ninguna prueba", () => {
+    // La propiedad de seguridad que el guard viejo sostenía con una comparación de cadenas, sostenida
+    // ahora por la criptografía: el sobre se abre contra la clave ANCLADA o no se abre. Sin clave en la
+    // URL no hay ninguna cadena que comparar, así que si esto se pusiera verde por «pop-firmado» el
+    // arreglo habría cambiado un corte de más por un agujero.
+    const a = almacenFalso();
+    viajeConectado(a);
+    const { publicaDeLaApp, redirectLink } = saltoDelPop(a);
+    const href = hrefDeVuelta(
+      redirectLink,
+      respuestaDeLaBilletera({ signature: firmar(DESAFIO) }, publicaDeLaApp, {
+        quien: nacl.box.keyPair(),
+        sinClaveDeCifrado: true,
+      }),
+    );
+    // ⚠️ La causa CAMBIA respecto del sobre que sí trae clave ajena (`deeplink_pop_alterado`, arriba):
+    // sin clave en la URL no hay nada que acusar de alterado, y lo único observable es que el sobre no
+    // abre. Las dos cortan y ninguna entrega prueba, que es lo que tiene que valer.
+    expect(vueltaDelPop(pedido(a, { hrefActual: href }))).toEqual({
+      tipo: "corte",
+      causa: DEEPLINK_RESPUESTA_ILEGIBLE,
+    });
+    expect(leerPruebaPop(a, AHORA, MARCA_POP_PAYOUT)).toBeNull();
+  });
+
+  it("el rechazo explícito de la billetera llega sin clave y NO se lee como alterado", () => {
+    // El camino que el guard viejo protegía con su chequeo interno de `errorCode`. Tiene que seguir
+    // dando `deeplink_rechazado`: decirle «alterado» a quien tocó «cancelar» lo manda a buscar un
+    // ataque que no existe.
+    const a = almacenFalso();
+    viajeConectado(a);
+    const { redirectLink } = saltoDelPop(a);
+    const href = hrefDeVuelta(redirectLink, {
+      errorCode: "4001",
+      errorMessage: "User rejected the request.",
+    });
+    expect(vueltaDelPop(pedido(a, { hrefActual: href }))).toEqual({
+      tipo: "corte",
+      causa: DEEPLINK_RECHAZADO,
     });
   });
 });

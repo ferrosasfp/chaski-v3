@@ -28,7 +28,7 @@ import { Transaction } from "@solana/web3.js";
 import type { Almacen, Viaje } from "./sesion";
 import { MARCA, MAX_EDAD_MS, enlaceDeVuelta, guardarViaje, interpretarVuelta, leerViaje } from "./sesion";
 import type { BilleteraDeeplink } from "./protocol";
-import { PARAMS_DE_RESPUESTA, clavePublicaEnRespuesta, leerRespuesta, nuevoParDeCifrado, secretoCompartido, soloTextos, urlConectar, urlFirmarTransaccion } from "./protocol";
+import { PARAMS_DE_RESPUESTA, clavePublicaEnRespuesta, leerRespuestaAnclada, nuevoParDeCifrado, secretoCompartido, soloTextos, urlConectar, urlFirmarTransaccion } from "./protocol";
 import type { CausaDeEnlace } from "./firma-por-enlace";
 import {
   DEEPLINK_RECHAZADO, DEEPLINK_NONCE_YA_CONSUMIDO, DEEPLINK_NONCE_SIN_CONTEXTO, // WKH-358 (fix-pack · AR/BLQ-BAJO-2; la tercera, del re-AR it2 · BLQ-BAJO-1): las dos entran EN ESTA LÍNEA para no correr las citas por número que este archivo recibe. ⚠️ ACÁ DECÍA «las 4 (`:129`, `:149`, `:254`, `:400`)» Y YA ERA FALSO CUANDO SE ESCRIBIÓ: el propio fix-pack agregó una quinta al citar `vueltaDelNonce`. RE-MEDIDO en el árbol de este commit con el instrumento de `citas-ancladas.test.ts` (su regex `ANCLADA` + su resolución de destino, sumando entrantes largas y auto-citas ancladas): **13 ocurrencias a 7 destinos** (`:129` x2, `:149`, `:209` x2, `:254`, `:400` x2, `:461` x2, `:528` x3). El número es una foto y este mismo commit lo movió de 7 a 13 escribiendo comentarios; el invariante es que los 7 destinos apuntan más abajo de esta línea
@@ -538,22 +538,22 @@ function vueltaDelNonce(p: PedidoDeConexion): VueltaDeConexion {
   }
 
   const params = new URLSearchParams(new URL(p.hrefActual).search);
-  // 🔒 EL ANCLA WRITE-ONCE, ANTES DE ABRIR NADA: la respuesta tiene que venir de la MISMA clave que
-  // contestó el connect. Es el mismo guard que `interpretarVuelta` aplica a los pasos del motor.
-  if (clavePublicaEnRespuesta(viaje.billetera, params) !== viaje.claveBilletera) {
-    // ⚠️ Un rechazo explícito de la billetera llega SIN clave de cifrado, así que caería acá y se
-    // leería como "alterada". Se mira primero el `errorCode`, que es lo único observable.
-    const codigo = params.get("errorCode");
-    if (codigo) return { tipo: "corte", causa: DEEPLINK_RECHAZADO };
-    return { tipo: "corte", causa: DEEPLINK_TX_ALTERADA };
-  }
-
-  const desenlace = leerRespuesta(
-    viaje.billetera,
-    params,
-    lectura.secretaBytes,
-    soloTextos("transaction"),
-  );
+  // 🔒 EL ANCLA WRITE-ONCE. ⛔ ACÁ HABÍA UN `!==` A SECAS Y CORTABA TODA FIRMA BUENA, EXACTAMENTE COMO EN EL PASO DEL PoP
+  // ((`vueltaDelPop`, `./pop-por-enlace.ts:313`)): comparaba la clave de la URL contra el ancla sin preguntar primero si la URL
+  // TRAÍA una. La respuesta de `/signTransaction` NO trae clave de cifrado —docs.phantom.com la documenta en la del `/connect`,
+  // y sólo ahí—, así que `null !== ancla` era SIEMPRE cierto y toda vuelta buena de este paso salía `deeplink_tx_alterada`.
+  // 🔴 ⇒ LA CREACIÓN DE LA CUENTA DE NONCE POR ENLACE NUNCA PUDO FUNCIONAR, y hay que decirlo aunque nadie lo haya reportado:
+  // el recorrido del founder corta antes, en el PoP, así que este camino no tiene medición en teléfono. Lo que sí hay es la
+  // línea de arriba, que es LA MISMA. ⚠️ Y cambia qué hay que probar: el paso 2-BIS no está cubierto por «anduvo el PoP».
+  // ⛔ EL TERCER SITIO CON ESTA FORMA es (`interpretarVuelta`, `./sesion.ts:578`), y ahí el guard YA preguntaba si la clave
+  // estaba: no cortaba, pero el lector de abajo sí, así que `firmar-tx` y `firmar-patrocinio` volvían «huérfanas».
+  // 🔒 QUIÉN SOSTIENE HOY LA PROPIEDAD («viene de la MISMA billetera que contestó el connect»): NO esta comparación, sino que el
+  // sobre se abre con el secreto derivado de la clave ANCLADA ((`leerRespuestaAnclada`, `./protocol.ts:321`)) y un sobre cerrado
+  // contra cualquier otra clave no abre. Lo que queda acá es DIAGNÓSTICO: con una clave en la URL que no es la anclada se dice
+  // «alterada» y no «ilegible». El `errorCode` manda porque un rechazo explícito no es una alteración; y sin clave en la URL ese
+  // mismo rechazo lo traduce igual `leerRespuestaAnclada`, que lo mira antes que nada.
+  const claveEnLaUrl = clavePublicaEnRespuesta(viaje.billetera, params); if (claveEnLaUrl !== null && claveEnLaUrl !== viaje.claveBilletera) return { tipo: "corte", causa: params.get("errorCode") ? DEEPLINK_RECHAZADO : DEEPLINK_TX_ALTERADA };
+  const desenlace = leerRespuestaAnclada(params, lectura.secretaBytes, viaje.claveBilletera, soloTextos("transaction"));
   if (desenlace.tipo === "ninguno") return { tipo: "nada" }; // la marca estaba pero no hay respuesta
   if (desenlace.tipo === "rechazo") {
     return {

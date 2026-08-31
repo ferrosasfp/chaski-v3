@@ -808,14 +808,24 @@ describe("T-067-21 (AR/BLQ-ALTO-1): la vuelta del permiso se lee del href que le
   });
 
   // ⛔ LA CALIBRACIÓN, en la dirección contraria: con el href que el navegador REALMENTE tiene después
-  // del paso 2 —el que leía la versión rechazada— la misma vuelta buena sale `deeplink_pop_alterado`.
-  // Esto es lo que el bug producía en el teléfono, y es lo que impide que el `it` de arriba dé verde
-  // por un `completarPop` que contestara `pop-listo` a cualquier cosa.
-  it("CALIBRACIÓN: con el href de DESPUÉS de limpiar, la misma firma buena sale `deeplink_pop_alterado`", async () => {
+  // del paso 2 —el que leía la versión rechazada— la misma vuelta buena NO llega a `pop-listo`. Es lo
+  // que impide que el `it` de arriba dé verde por un `completarPop` que contestara `pop-listo` a
+  // cualquier cosa.
+  //
+  // 🔴 ESTE VALOR CAMBIÓ AL ARREGLAR LA CLAVE FUERA DEL CONNECT, Y EL CAMBIO ES INFORMACIÓN, NO UNA
+  // REGRESIÓN. Acá decía `corte` / `deeplink_pop_alterado`, y ese `alterado` **era el defecto**: sobre
+  // un href SIN ningún parámetro de respuesta, `vueltaDelPop` comparaba `null !== claveAnclada` y
+  // gritaba «alterada» donde no había absolutamente nada que mirar. Con el guard preguntando primero si
+  // la URL trae clave, un href limpio cae donde corresponde: `nada`, o sea «acá no volvió ninguna
+  // respuesta». La calibración sigue calibrando —discrimina de `pop-listo`, que es lo único que este
+  // `it` tiene que impedir— y ahora además dice la verdad sobre lo que pasó.
+  it("CALIBRACIÓN: con el href de DESPUÉS de limpiar, la misma firma buena NO se verifica (`nada`)", async () => {
     const { recorrido, hrefLimpio } = await volviendoDeFirmarElPermiso();
-    expect(await recorrido.completarPop({ hrefDeLaVuelta: hrefLimpio })).toEqual({
-      estado: "corte",
-      causa: "deeplink_pop_alterado",
+    const r = await recorrido.completarPop({ hrefDeLaVuelta: hrefLimpio });
+    expect(r).toEqual({ estado: "nada" });
+    expect(r, "la calibración existe para descartar ESTE valor").not.toEqual({
+      estado: "pop-listo",
+      proposito: "pop-payout",
     });
   });
 });

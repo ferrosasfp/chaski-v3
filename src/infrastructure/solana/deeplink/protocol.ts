@@ -261,7 +261,19 @@ export interface DatosDeConexion {
 }
 
 /**
- * Lee la URL de vuelta y abre el sobre.
+ * ⛔ SÓLO PARA LA VUELTA DEL `/connect`. Lee la URL de vuelta y abre el sobre tomando la clave
+ * pública de cifrado de la billetera DE LA PROPIA URL.
+ *
+ * 🔴 POR QUÉ EL NOMBRE DICE "DEL CONNECT", Y NO ES CELO: esto se llamaba `leerRespuesta`, a secas, y
+ * esa generalidad se comió los tres pasos POSTERIORES del protocolo. Según docs.phantom.com el
+ * `phantom_encryption_public_key` lo devuelve `/connect` **y sólo `/connect`** ("an encryption public
+ * key used by Phantom for the construction of a shared secret"); la respuesta de `/signMessage` y la
+ * de `/signTransaction` son `nonce` + `data`, más `errorCode`/`errorMessage` si la persona rechaza.
+ * Con la clave leída de la URL, toda vuelta REAL de esos pasos caía en `!clave` ⇒ `ninguno`, y los
+ * guards que comparaban esa clave contra el ancla del viaje cortaban TODA firma buena. Medido en un
+ * teléfono: la persona firma bien y la app contesta `deeplink_pop_alterado`.
+ * ⇒ Los pasos posteriores usan (`leerRespuestaAnclada`, `:321`), que NO mira la URL. Que sean dos
+ * funciones y no un parámetro es lo que hace que `tsc` no deje volver a confundirlas.
  *
  * `secretaDeLaApp` es la clave privada guardada antes del salto. Si no coincide con el sobre, esto
  * devuelve `rechazo` con `sobre_ilegible` y NO revienta: una respuesta que no se puede abrir es un
@@ -274,10 +286,56 @@ export interface DatosDeConexion {
  * verificó. Ahora el que llama declara qué campos espera; si no están, es un desenlace
  * (`forma_inesperada`) y no un `undefined` que viaja disfrazado de `string` hasta el facilitator.
  */
-export function leerRespuesta<T>(
+export function leerRespuestaDelConnect<T>(
   billetera: BilleteraDeeplink,
   params: URLSearchParams,
   secretaDeLaApp: Uint8Array,
+  forma: (crudo: unknown) => T | null,
+): Desenlace<T> {
+  return abrirSobre(params, secretaDeLaApp, clavePublicaEnRespuesta(billetera, params), forma);
+}
+
+/**
+ * La vuelta de CUALQUIER paso POSTERIOR al connect, abierta con la clave que el viaje ya tiene
+ * ANCLADA. ⛔ No lee ninguna clave de la URL, y ésa es toda la idea: no puede volver a aplicarle a una
+ * respuesta que no es de connect un invariante que sólo el connect cumple.
+ *
+ * 🔒 QUÉ GARANTIZA, Y POR QUÉ ALCANZA SIN LA COMPARACIÓN DE CADENAS QUE HABÍA ANTES. La propiedad que
+ * hay que sostener es «esta respuesta la produjo la MISMA billetera que contestó el connect», y acá la
+ * sostiene la criptografía: el sobre se abre con `box.before(claveAnclada, secretaDeLaApp)`, así que un
+ * sobre cerrado contra cualquier otra clave NO abre y sale `sobre_ilegible`. Quien tenga la pública de
+ * la app —que viaja en la URL de ida, queda en el historial y está en el disco— puede fabricar un
+ * sobre, pero no uno que abra contra el ancla: para eso hace falta la SECRETA de la billetera. Es el
+ * mismo argumento del docblock de `nuevoParDeCifrado`, con el ancla del lado de adentro en vez de
+ * afuera. La comparación de cadenas que hacían los llamadores era, como mucho, redundante con esto; lo
+ * que NO era es inocua, porque se aplicaba también cuando no había clave que comparar.
+ *
+ * ⚠️ LO QUE NO GARANTIZA, y hay que decirlo para que nadie se apoye de más: nada sobre QUIÉN es la
+ * persona dueña de esa billetera. El ancla se fija en el connect, y el connect es justamente el paso
+ * que no tiene contra qué compararse (residual declarado en el docblock de `interpretarVuelta`).
+ *
+ * ⛔ `claveAnclada` es `string` y no `string | undefined`: un viaje sin ancla no tiene canal, y eso lo
+ * tiene que decidir el llamador ANTES de llegar acá, no un `?` que hace que olvidarlo se vea igual que
+ * decidirlo (misma razón que `remesaEnCurso` en `interpretarVuelta`).
+ */
+export function leerRespuestaAnclada<T>(
+  params: URLSearchParams,
+  secretaDeLaApp: Uint8Array,
+  claveAnclada: string,
+  forma: (crudo: unknown) => T | null,
+): Desenlace<T> {
+  return abrirSobre(params, secretaDeLaApp, claveAnclada, forma);
+}
+
+/**
+ * El cuerpo común de los dos lectores. `clave` viene `null` sólo por el camino del connect, cuando la
+ * URL de vuelta no la trae; por el camino anclado nunca es `null`, y por eso ahí `ninguno` significa
+ * exactamente «volvimos sin `nonce`/`data`» y ninguna otra cosa.
+ */
+function abrirSobre<T>(
+  params: URLSearchParams,
+  secretaDeLaApp: Uint8Array,
+  clave: string | null,
   forma: (crudo: unknown) => T | null,
 ): Desenlace<T> {
   const codigo = params.get("errorCode");
@@ -286,7 +344,6 @@ export function leerRespuesta<T>(
     // que es el único hecho observable. Nadie autenticó eso (ver el docblock de `Desenlace`).
     return { tipo: "rechazo", origen: "billetera", codigo, mensaje: params.get("errorMessage") ?? "" };
   }
-  const clave = clavePublicaEnRespuesta(billetera, params);
   const nonce = params.get("nonce");
   const data = params.get("data");
   // Los tres tienen que estar. Que falte alguno NO es un rechazo: es que acá no hay respuesta.

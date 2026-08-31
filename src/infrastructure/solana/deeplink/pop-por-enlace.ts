@@ -31,7 +31,7 @@ import bs58 from "bs58";
 import nacl from "tweetnacl";
 import type { Almacen } from "./sesion";
 import { enlaceDeVuelta, leerViaje } from "./sesion";
-import { clavePublicaEnRespuesta, leerRespuesta, secretoCompartido, soloTextos, urlFirmarMensaje } from "./protocol";
+import { clavePublicaEnRespuesta, leerRespuestaAnclada, secretoCompartido, soloTextos, urlFirmarMensaje } from "./protocol";
 import type { CausaDeEnlace } from "./firma-por-enlace";
 import {
   DEEPLINK_POP_ALTERADO,
@@ -323,17 +323,17 @@ export function vueltaDelPop(p: PedidoDePop): VueltaDePop {
   }
 
   const params = new URLSearchParams(new URL(p.hrefActual).search);
-  // 🔒 EL ANCLA WRITE-ONCE, ANTES DE ABRIR NADA: la respuesta tiene que venir de la MISMA clave que
-  // contestó el connect. Es el mismo guard que `interpretarVuelta` aplica a los pasos del motor.
-  if (clavePublicaEnRespuesta(viaje.billetera, params) !== viaje.claveBilletera) {
-    // ⚠️ Un rechazo explícito de la billetera llega SIN clave de cifrado, así que caería acá y se
-    // leería como "alterada". Se mira primero el `errorCode`, que es lo único observable.
-    const codigo = params.get("errorCode");
-    if (codigo) return { tipo: "corte", causa: DEEPLINK_RECHAZADO };
-    return { tipo: "corte", causa: DEEPLINK_POP_ALTERADO };
-  }
-
-  const desenlace = leerRespuesta(viaje.billetera, params, lectura.secretaBytes, soloTextos("signature"));
+  // 🔒 EL ANCLA WRITE-ONCE. ⛔ ACÁ HABÍA UN `!==` A SECAS Y CORTABA TODA FIRMA BUENA: comparaba la clave de la URL contra el ancla
+  // sin preguntar primero si la URL TRAÍA una. La respuesta de `/signMessage` NO trae clave de cifrado —docs.phantom.com la
+  // documenta en la del `/connect`, y sólo ahí—, así que `null !== ancla` era SIEMPRE cierto y toda vuelta buena salía
+  // `deeplink_pop_alterado`. Reproducido en un teléfono real: la persona firma bien y la app le contesta que no coincide.
+  // 🔒 QUIÉN SOSTIENE HOY LA PROPIEDAD («viene de la MISMA billetera que contestó el connect»): NO esta comparación, sino que el
+  // sobre se abre con el secreto derivado de la clave ANCLADA ((`leerRespuestaAnclada`, `./protocol.ts:321`)) y un sobre cerrado
+  // contra cualquier otra clave no abre. Lo que queda acá es DIAGNÓSTICO: con una clave en la URL que no es la anclada se dice
+  // «alterada» y no «ilegible». El `errorCode` manda porque un rechazo explícito no es una alteración; y sin clave en la URL ese
+  // mismo rechazo lo traduce igual `leerRespuestaAnclada`, que mira el `errorCode` antes que nada.
+  const claveEnLaUrl = clavePublicaEnRespuesta(viaje.billetera, params); if (claveEnLaUrl !== null && claveEnLaUrl !== viaje.claveBilletera) return { tipo: "corte", causa: params.get("errorCode") ? DEEPLINK_RECHAZADO : DEEPLINK_POP_ALTERADO };
+  const desenlace = leerRespuestaAnclada(params, lectura.secretaBytes, viaje.claveBilletera, soloTextos("signature"));
   if (desenlace.tipo === "ninguno") return { tipo: "nada" }; // la marca estaba pero no hay respuesta
   if (desenlace.tipo === "rechazo") {
     return {

@@ -3,7 +3,7 @@
 // 🔬 CÓMO SE PRUEBA ALGO QUE HABLA CON UNA APP DE TERCEROS SIN TENER LA APP. Este archivo implementa
 // **el otro lado**: una billetera de mentira que hace exactamente lo que dice la documentación de
 // Phantom y de Solflare (genera su par x25519, deriva el mismo secreto por Diffie-Hellman, cifra la
-// respuesta con `nacl.box.after`). Si nuestro `leerRespuesta` abre ese sobre, es porque el esquema
+// respuesta con `nacl.box.after`). Si nuestro `leerRespuestaDelConnect` abre ese sobre, es porque el esquema
 // que implementamos es el que ellos describen.
 //
 // ⚠️ LO QUE ESTO **NO** PRUEBA, y hay que decirlo antes de que alguien lea el verde como una
@@ -17,7 +17,8 @@ import bs58 from "bs58";
 import {
   type BilleteraDeeplink,
   type DatosDeConexion,
-  leerRespuesta,
+  leerRespuestaAnclada,
+  leerRespuestaDelConnect,
   nuevoParDeCifrado,
   soloTextos,
   urlConectar,
@@ -121,7 +122,7 @@ describe("T-DL-2: la vuelta del connect se abre y se lee", () => {
       nonce: r.nonce,
       data: r.data,
     });
-    const d = leerRespuesta(billetera, params, par.secreta, FORMA_CONEXION);
+    const d = leerRespuestaDelConnect(billetera, params, par.secreta, FORMA_CONEXION);
     expect(d.tipo).toBe("ok");
     if (d.tipo !== "ok") return;
     expect(d.datos.public_key).toBe("EjPubKey");
@@ -134,7 +135,7 @@ describe("T-DL-2: la vuelta del connect se abre y se lee", () => {
     const par = nuevoParDeCifrado();
     const r = billeteraQueContesta(par.publica, { public_key: "A", session: "B" });
     const params = new URLSearchParams({ phantom_encryption_public_key: r.clave, nonce: r.nonce, data: r.data });
-    expect(leerRespuesta("solflare", params, par.secreta, FORMA_CONEXION).tipo).toBe("ninguno");
+    expect(leerRespuestaDelConnect("solflare", params, par.secreta, FORMA_CONEXION).tipo).toBe("ninguno");
   });
 });
 
@@ -148,7 +149,7 @@ describe("T-DL-6: la forma del cuerpo descifrado se valida, no se castea", () =>
     const par = nuevoParDeCifrado();
     const r = billeteraQueContesta(par.publica, { ok: true });
     const params = new URLSearchParams({ phantom_encryption_public_key: r.clave, nonce: r.nonce, data: r.data });
-    const d = leerRespuesta("phantom", params, par.secreta, FORMA_CONEXION);
+    const d = leerRespuestaDelConnect("phantom", params, par.secreta, FORMA_CONEXION);
     expect(d.tipo).toBe("rechazo");
     if (d.tipo !== "rechazo") return;
     expect(d.codigo).toBe("forma_inesperada");
@@ -164,7 +165,7 @@ describe("T-DL-6: la forma del cuerpo descifrado se valida, no se castea", () =>
     const par = nuevoParDeCifrado();
     const r = billeteraQueContesta(par.publica, { public_key: "", session: "" });
     const params = new URLSearchParams({ phantom_encryption_public_key: r.clave, nonce: r.nonce, data: r.data });
-    const d = leerRespuesta("phantom", params, par.secreta, FORMA_CONEXION);
+    const d = leerRespuestaDelConnect("phantom", params, par.secreta, FORMA_CONEXION);
     expect(d.tipo).toBe("rechazo");
     if (d.tipo !== "rechazo") return;
     expect(d.codigo).toBe("forma_inesperada");
@@ -176,7 +177,7 @@ describe("T-DL-6: la forma del cuerpo descifrado se valida, no se castea", () =>
     const par = nuevoParDeCifrado();
     const r = billeteraQueContesta(par.publica, { public_key: "EjPubKey", session: "" });
     const params = new URLSearchParams({ phantom_encryption_public_key: r.clave, nonce: r.nonce, data: r.data });
-    expect(leerRespuesta("phantom", params, par.secreta, FORMA_CONEXION).tipo).toBe("rechazo");
+    expect(leerRespuestaDelConnect("phantom", params, par.secreta, FORMA_CONEXION).tipo).toBe("rechazo");
   });
 
   it("un cuerpo que falta UN campo de dos tampoco pasa", () => {
@@ -185,7 +186,7 @@ describe("T-DL-6: la forma del cuerpo descifrado se valida, no se castea", () =>
     const par = nuevoParDeCifrado();
     const r = billeteraQueContesta(par.publica, { public_key: "A" });
     const params = new URLSearchParams({ phantom_encryption_public_key: r.clave, nonce: r.nonce, data: r.data });
-    const d = leerRespuesta("phantom", params, par.secreta, FORMA_CONEXION);
+    const d = leerRespuestaDelConnect("phantom", params, par.secreta, FORMA_CONEXION);
     expect(d.tipo).toBe("rechazo");
     if (d.tipo !== "rechazo") return;
     expect(d.codigo).toBe("forma_inesperada");
@@ -202,8 +203,8 @@ describe("T-DL-6: la forma del cuerpo descifrado se valida, no se castea", () =>
     const par = nuevoParDeCifrado();
     const r = billeteraQueContesta(par.publica, undefined, crudo);
     const params = new URLSearchParams({ phantom_encryption_public_key: r.clave, nonce: r.nonce, data: r.data });
-    expect(() => leerRespuesta("phantom", params, par.secreta, FORMA_CONEXION)).not.toThrow();
-    expect(leerRespuesta("phantom", params, par.secreta, FORMA_CONEXION).tipo).toBe("rechazo");
+    expect(() => leerRespuestaDelConnect("phantom", params, par.secreta, FORMA_CONEXION)).not.toThrow();
+    expect(leerRespuestaDelConnect("phantom", params, par.secreta, FORMA_CONEXION).tipo).toBe("rechazo");
   });
 
   it("un sobre que abre pero NO trae JSON es «json_ilegible», y esa rama existe", () => {
@@ -214,7 +215,7 @@ describe("T-DL-6: la forma del cuerpo descifrado se valida, no se castea", () =>
     const par = nuevoParDeCifrado();
     const r = billeteraQueContesta(par.publica, undefined, "{esto no es json");
     const params = new URLSearchParams({ phantom_encryption_public_key: r.clave, nonce: r.nonce, data: r.data });
-    const d = leerRespuesta("phantom", params, par.secreta, FORMA_CONEXION);
+    const d = leerRespuestaDelConnect("phantom", params, par.secreta, FORMA_CONEXION);
     expect(d.tipo).toBe("rechazo");
     if (d.tipo !== "rechazo") return;
     expect(d.codigo).toBe("json_ilegible");
@@ -227,7 +228,7 @@ describe("T-DL-6: la forma del cuerpo descifrado se valida, no se castea", () =>
     const roto = billeteraQueContesta(par.publica, undefined, "{no");
     const otraForma = billeteraQueContesta(par.publica, { ok: true });
     const codigo = (r: { clave: string; nonce: string; data: string }) => {
-      const d = leerRespuesta(
+      const d = leerRespuestaDelConnect(
         "phantom",
         new URLSearchParams({ phantom_encryption_public_key: r.clave, nonce: r.nonce, data: r.data }),
         par.secreta,
@@ -246,15 +247,15 @@ describe("T-DL-3: los TRES desenlaces, y que ninguno colapsa en otro", () => {
     // MUTANTE QUE MATA: devolver `rechazo` cuando falta alguno de los tres parámetros.
     const par = nuevoParDeCifrado();
     const forma = FORMA_CONEXION;
-    expect(leerRespuesta("phantom", new URLSearchParams(""), par.secreta, forma).tipo).toBe("ninguno");
+    expect(leerRespuestaDelConnect("phantom", new URLSearchParams(""), par.secreta, forma).tipo).toBe("ninguno");
     expect(
-      leerRespuesta("phantom", new URLSearchParams({ nonce: "x" }), par.secreta, forma).tipo,
+      leerRespuestaDelConnect("phantom", new URLSearchParams({ nonce: "x" }), par.secreta, forma).tipo,
     ).toBe("ninguno");
   });
 
   it("«rechazo» cuando la billetera lo dice con errorCode, y el código llega tal cual", () => {
     const par = nuevoParDeCifrado();
-    const d = leerRespuesta(
+    const d = leerRespuestaDelConnect(
       "phantom",
       new URLSearchParams({ errorCode: "4001", errorMessage: "User rejected the request." }),
       par.secreta,
@@ -276,10 +277,10 @@ describe("T-DL-3: los TRES desenlaces, y que ninguno colapsa en otro", () => {
     // El candado mira los TRES códigos nuestros y no sólo uno: el defecto era del campo, no de un
     // valor, así que un `origen` puesto a mano en una sola de las tres ramas no debe alcanzar.
     // MUTANTE QUE MATA: devolver `origen: "billetera"` en cualquiera de las tres ramas internas de
-    // `leerRespuesta`, o `origen: "nuestro"` en la rama del `errorCode`.
+    // `leerRespuestaDelConnect`, o `origen: "nuestro"` en la rama del `errorCode`.
     const par = nuevoParDeCifrado();
     const codigoYOrigen = (params: URLSearchParams, secreta = par.secreta) => {
-      const d = leerRespuesta("phantom", params, secreta, FORMA_CONEXION);
+      const d = leerRespuestaDelConnect("phantom", params, secreta, FORMA_CONEXION);
       return d.tipo === "rechazo" ? `${d.origen}:${d.codigo}` : d.tipo;
     };
     const conSobre = (r: { clave: string; nonce: string; data: string }) =>
@@ -304,7 +305,7 @@ describe("T-DL-3: los TRES desenlaces, y que ninguno colapsa en otro", () => {
     const otra = nuevoParDeCifrado();
     const r = billeteraQueContesta(delViaje.publica, { public_key: "A", session: "B" });
     const params = new URLSearchParams({ phantom_encryption_public_key: r.clave, nonce: r.nonce, data: r.data });
-    const d = leerRespuesta("phantom", params, otra.secreta, FORMA_CONEXION);
+    const d = leerRespuestaDelConnect("phantom", params, otra.secreta, FORMA_CONEXION);
     expect(d.tipo).toBe("rechazo");
     if (d.tipo !== "rechazo") return;
     expect(d.codigo).toBe("sobre_ilegible");
@@ -317,8 +318,8 @@ describe("T-DL-3: los TRES desenlaces, y que ninguno colapsa en otro", () => {
       nonce: "!!!",
       data: "???",
     });
-    expect(() => leerRespuesta("phantom", params, par.secreta, FORMA_CONEXION)).not.toThrow();
-    expect(leerRespuesta("phantom", params, par.secreta, FORMA_CONEXION).tipo).toBe("rechazo");
+    expect(() => leerRespuestaDelConnect("phantom", params, par.secreta, FORMA_CONEXION)).not.toThrow();
+    expect(leerRespuestaDelConnect("phantom", params, par.secreta, FORMA_CONEXION).tipo).toBe("rechazo");
   });
 });
 
@@ -451,9 +452,105 @@ describe("T-DL-0(instrumento): la billetera de mentira de este archivo sirve par
     const app = nuevoParDeCifrado();
     const r = billeteraQueContesta(app.publica, { public_key: "A", session: "B" });
     const params = new URLSearchParams({ phantom_encryption_public_key: r.clave, nonce: r.nonce, data: r.data });
-    expect(leerRespuesta("phantom", params, app.secreta, FORMA_CONEXION).tipo).toBe("ok");
+    expect(leerRespuestaDelConnect("phantom", params, app.secreta, FORMA_CONEXION).tipo).toBe("ok");
     expect(
-      leerRespuesta("phantom", params, nuevoParDeCifrado().secreta, FORMA_CONEXION).tipo,
+      leerRespuestaDelConnect("phantom", params, nuevoParDeCifrado().secreta, FORMA_CONEXION).tipo,
     ).toBe("rechazo");
+  });
+});
+
+describe("T-DL-6: la vuelta de un paso POSTERIOR al connect se abre contra la clave ANCLADA", () => {
+  // 🔴 EL FIXTURE ES LA MITAD DEL CANDADO, Y ANTES ERA EL AGUJERO. La respuesta de `/signMessage` y la
+  // de `/signTransaction` son `nonce` + `data` y NADA MÁS: docs.phantom.com documenta el
+  // `phantom_encryption_public_key` en la respuesta del `/connect`, y sólo ahí. Todos los fixtures de
+  // pasos posteriores de este árbol metían igual la clave, así que pasaban con el código roto y no
+  // medían nada. `sinClave` construye la respuesta que una billetera REAL manda.
+  const sinClave = (r: { nonce: string; data: string }) =>
+    new URLSearchParams({ nonce: r.nonce, data: r.data });
+
+  it("una respuesta REAL —sólo `nonce` + `data`— se abre con la clave anclada", () => {
+    // ⛔ SIN EL ARREGLO ESTE `it` ES ROJO por `expected 'ninguno' to be 'ok'`: el lector viejo pedía la
+    // clave en la URL y, al no encontrarla, devolvía `ninguno` para toda firma buena.
+    const par = nuevoParDeCifrado();
+    const r = billeteraQueContesta(par.publica, { signature: "FirmaDelPoP" });
+    const d = leerRespuestaAnclada(sinClave(r), par.secreta, r.clave, soloTextos("signature"));
+    expect(d.tipo).toBe("ok");
+    if (d.tipo !== "ok") return;
+    expect(d.datos.signature).toBe("FirmaDelPoP");
+  });
+
+  it("🔒 un sobre de OTRA billetera, también SIN clave en la URL, no abre", () => {
+    // Acá vive la propiedad que antes sostenía la comparación de cadenas de los llamadores: que la
+    // respuesta la haya producido la MISMA billetera que contestó el connect. Sin clave en la URL no
+    // hay ninguna cadena que comparar, así que lo único que puede sostenerla es la criptografía. Si
+    // este `it` se pone verde por la razón equivocada —porque el sobre se abre igual— el arreglo
+    // habría cambiado un corte de más por un agujero.
+    const par = nuevoParDeCifrado();
+    const ancla = billeteraQueContesta(par.publica, { signature: "X" }).clave;
+    const impostora = billeteraQueContesta(par.publica, { signature: "FirmaFalsa" });
+    expect(impostora.clave).not.toBe(ancla);
+    const d = leerRespuestaAnclada(sinClave(impostora), par.secreta, ancla, soloTextos("signature"));
+    expect(d.tipo).toBe("rechazo");
+    if (d.tipo !== "rechazo") return;
+    expect(d.origen).toBe("nuestro");
+    expect(d.codigo).toBe("sobre_ilegible");
+  });
+
+  it("⛔ la clave que venga en la URL es IRRELEVANTE: el lector anclado no la mira", () => {
+    // El control positivo de que el arreglo es el que se dice. Con la clave de OTRA billetera puesta
+    // en la URL con el nombre de Phantom, el sobre bueno igual abre.
+    const par = nuevoParDeCifrado();
+    const r = billeteraQueContesta(par.publica, { signature: "Buena" });
+    const otra = billeteraQueContesta(par.publica, { signature: "Otra" });
+    const params = new URLSearchParams({
+      phantom_encryption_public_key: otra.clave,
+      nonce: r.nonce,
+      data: r.data,
+    });
+    expect(leerRespuestaAnclada(params, par.secreta, r.clave, soloTextos("signature")).tipo).toBe("ok");
+  });
+
+  it("🔒 el sobre de una impostora NO entra ni poniendo SU clave en la URL", () => {
+    // 🔴 ESTE `it` ESTÁ SUELTO Y NO PEGADO AL DE ARRIBA A PROPÓSITO. Estaba adentro, después del
+    // `expect(...).toBe("ok")`, y ahí era un control que NO SE PODÍA EVALUAR: el mutante que lo pone en
+    // rojo —volver a derivar el secreto de la clave de la URL— tumba primero el `expect` de arriba, así
+    // que la ejecución nunca llegaba a este bloque y el `it` moría por el motivo del OTRO. Un falso
+    // KILLED. Separado, el rojo dice lo que tiene que decir: entró un sobre que no era de la billetera
+    // anclada. Es la dirección que importa de la propiedad de seguridad.
+    const par = nuevoParDeCifrado();
+    const ancla = billeteraQueContesta(par.publica, { signature: "Buena" }).clave;
+    const otra = billeteraQueContesta(par.publica, { signature: "Falsa" });
+    const deLaImpostora = new URLSearchParams({
+      phantom_encryption_public_key: otra.clave,
+      nonce: otra.nonce,
+      data: otra.data,
+    });
+    const d = leerRespuestaAnclada(deLaImpostora, par.secreta, ancla, soloTextos("signature"));
+    expect(d.tipo).toBe("rechazo");
+    if (d.tipo !== "rechazo") return;
+    expect(d.codigo).toBe("sobre_ilegible");
+  });
+
+  it("el rechazo explícito llega sin clave de cifrado y se sigue leyendo como rechazo de la billetera", () => {
+    const d = leerRespuestaAnclada(
+      new URLSearchParams({ errorCode: "4001", errorMessage: "User rejected the request." }),
+      nuevoParDeCifrado().secreta,
+      "LaClaveAnclada",
+      soloTextos("signature"),
+    );
+    expect(d.tipo).toBe("rechazo");
+    if (d.tipo !== "rechazo") return;
+    expect(d.origen).toBe("billetera");
+    expect(d.codigo).toBe("4001");
+  });
+
+  it("sin `nonce` ni `data` es «ninguno» y NO un rechazo: acá no volvió nada", () => {
+    const par = nuevoParDeCifrado();
+    expect(
+      leerRespuestaAnclada(new URLSearchParams(""), par.secreta, "A", soloTextos("signature")).tipo,
+    ).toBe("ninguno");
+    expect(
+      leerRespuestaAnclada(new URLSearchParams({ nonce: "x" }), par.secreta, "A", soloTextos("signature")).tipo,
+    ).toBe("ninguno");
   });
 });

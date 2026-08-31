@@ -16,6 +16,7 @@ import {
   PARAM_SALIDA,
   URL_INSTALAR_PHANTOM,
   VALOR_SALIDA,
+  hrefSinLaMarcaDeSalida,
   urlDeSalidaAlNavegadorDeLaBilletera,
   vinoDeUnaSalidaConBorrador,
 } from "./salida-al-navegador-de-la-billetera";
@@ -104,6 +105,66 @@ describe("WKH-372/AC-1-4b · qué viaja y qué NO viaja al navegador de la bille
     expect(vinoDeUnaSalidaConBorrador(`${ORIGEN}/enviar?monto=400`), "sin marca no hay salida").toBe(false);
     // Y un href que no se deja leer: no se puede afirmar que traiga una marca lo que no se puede leer.
     expect(vinoDeUnaSalidaConBorrador("no-soy-una-url"), "un href impareseable afirmó una salida").toBe(false);
+  });
+
+  // 🔴 CR/`BLQ-MEDIO-1` — LA MITAD PURA DE CONSUMIR LA MARCA. La mitad de PANTALLA (que el aterrizaje
+  // sobreviva a una recarga) la mide `T-372-W1-7e` en `./wallet-availability.test.tsx`; acá se mide el
+  // cálculo, que es donde vive el criterio de qué se saca y qué se deja.
+  // MUTANTE QUE LO TIENE QUE MATAR: cambiar el `delete(PARAM_SALIDA)` por un `return null` ⇒ la fila
+  // (a) se pone roja porque la marca sigue en el href.
+  // ⛔ FALSO KILLED A EVITAR: medir sólo el caso (a). Sin la fila (c), una función que devolviera
+  //    SIEMPRE un href limpio haría que quien llama reescriba la barra en cada carga de la app.
+  it("T-372-W1-9b: `hrefSinLaMarcaDeSalida` saca la marca, deja el resto, y devuelve `null` cuando no hay nada que consumir", () => {
+    // (a) CON MARCA: sale la marca y NADA MÁS. El href de entrada se arma con los nombres importados.
+    const conMarca = new URL(`${ORIGEN}/enviar`);
+    conMarca.searchParams.set("monto", "400");
+    conMarca.searchParams.set(PARAM_SALIDA, VALOR_SALIDA);
+    // CD-18 — el fixture reprodujo el caso: la marca estaba puesta ANTES de consumirla. Sin esto, una
+    // URL pelada dejaría las dos filas de abajo verdes sin haber ejercitado ninguna limpieza.
+    expect(
+      vinoDeUnaSalidaConBorrador(conMarca.toString()),
+      "el fixture no dejó la marca puesta: no hay nada que consumir",
+    ).toBe(true);
+    const limpio = hrefSinLaMarcaDeSalida(conMarca.toString());
+    expect(limpio, "no devolvió un href: la barra se quedaría con la marca puesta").not.toBeNull();
+    expect(
+      vinoDeUnaSalidaConBorrador(limpio as string),
+      "la marca sobrevivió al consumo: una recarga de la pestaña volvería a leerla como un aterrizaje",
+    ).toBe(false);
+    // La otra mitad, la que hace falsable a la de arriba: consumir NO es vaciar la URL.
+    expect(
+      new URL(limpio as string).searchParams.get("monto"),
+      "se llevó puesto un parámetro de la app: consumir la marca no es vaciar la barra",
+    ).toBe("400");
+
+    // (b) CUALQUIER VALOR, no sólo el que el lector acepta. El que LEE es opt-in estricto; el que
+    //     CONSUME tiene que sacar el parámetro igual, o la barra queda con la condición viva.
+    const otroValor = `${ORIGEN}/enviar?${PARAM_SALIDA}=${encodeURIComponent(`${VALOR_SALIDA}x`)}`;
+    expect(
+      hrefSinLaMarcaDeSalida(otroValor) === null
+        ? null
+        : new URL(hrefSinLaMarcaDeSalida(otroValor) as string).searchParams.has(PARAM_SALIDA),
+      "un `wb` con otro valor se quedó en la barra: es un nombre de este repo y no se deja a medias",
+    ).toBe(false);
+
+    // (c) SIN NADA QUE CONSUMIR ⇒ `null`, y por eso quien llama no toca el historial. Sin esta fila,
+    //     la app reescribiría la barra en cada carga que no viene de una salida.
+    expect(
+      hrefSinLaMarcaDeSalida(`${ORIGEN}/enviar?monto=400`),
+      "devolvió un href sin haber marca: quien llama escribiría el historial en cada carga",
+    ).toBeNull();
+    // (d) Y un href que no se deja leer tampoco produce una barra nueva: no se reescribe lo que no se
+    //     puede parsear. Mismo criterio que `vinoDeUnaSalidaConBorrador` y que la rama del `catch` de
+    //     `urlDeSalidaAlNavegadorDeLaBilletera`.
+    expect(
+      hrefSinLaMarcaDeSalida("no-soy-una-url"),
+      "un href impareseable produjo una barra nueva, fabricada a partir de algo ilegible",
+    ).toBeNull();
+    // (e) Y el `?` no queda colgando cuando la marca era el único parámetro: se ve en la barra.
+    expect(
+      hrefSinLaMarcaDeSalida(`${ORIGEN}/enviar?${PARAM_SALIDA}=${VALOR_SALIDA}`),
+      "quedó un `?` colgando en la barra de la persona",
+    ).toBe(`${ORIGEN}/enviar`);
   });
 
   // MUTANTE QUE LO TIENE QUE MATAR: reescribir el prefijo del universal link a mano dentro de

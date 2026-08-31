@@ -1219,7 +1219,7 @@ import {
   VALOR_SALIDA,
 } from "./salida-al-navegador-de-la-billetera";
 import { KEY as CLAVE_DEL_REPO } from "../infrastructure/persistence";
-import { leerHito, olvidarHitos } from "./bitacora-de-vuelta";
+import { anotarLaSalidaAlNavegador, leerHito, olvidarHitos } from "./bitacora-de-vuelta";
 import { DiagnosticoDeVuelta } from "./diagnostico-de-vuelta";
 // AR/BLQ-BAJO-1 — los tres traen lo que hace falta para mirar ADENTRO del enlace de la oferta:
 // `PARAM_KYC`/`VALOR_VUELTA_KYC` son el rastro que NO tiene que viajar, y `hrefQueLaBilleteraVaAAbrir`
@@ -1323,15 +1323,36 @@ describe("WKH-372/AC-1-1: la oferta de abrir Chaski adentro del navegador de la 
   //
   // 🔴 Y ESTE FIXTURE ES, ADEMÁS, LA MEDICIÓN DE ALCANZABILIDAD QUE EL AR DECLARÓ NO HABER HECHO.
   // La pregunta abierta era si `step === "bienvenida"` con `rem !== null` existe fuera del papel.
-  // EXISTE, y el camino es de producción, no un atajo de test: las cuatro entradas a `bienvenida` son
-  // `flow.tsx:587` (que limpia `rem` en `flow.tsx:577`), `flow.tsx:807` (sale de `send`, adonde sólo
-  // se llega con `rem` en `null`: lo deja así la función `resetTo` en `flow.tsx:3526`),
-  // `flow.tsx:1186` (sale de `history`, que no toca `rem`) y la card del fin del resume, cuyo
-  // `onIrAlInicio` vive en `flow.tsx:794` y se cablea en `flow.tsx:4391`. Esa card es la ÚNICA que
-  // vuelve a un destino sin tocar la remesa. El resume corre en el montaje y la ventana anterior a su
-  // primera respuesta
-  // NO tiene overlay —está escrito en `flow.tsx:208`—, así que la persona alcanza a crear la remesa
-  // mientras la consulta está en vuelo. Eso es exactamente lo que hacen las líneas de abajo.
+  // EXISTE, y el camino es de producción, no un atajo de test.
+  //
+  // ⚠️ CR/`BLQ-BAJO-3` — LA LISTA QUE ESTABA ACÁ ERA FALSA EN TRES SUB-AFIRMACIONES, y la conclusión
+  // no cambia: es alcanzable, y por MÁS caminos de los que decía. Lo que estaba mal era el registro, y
+  // éste es el único registro escrito del análisis que cerró `AR-it2/BLQ-BAJO-2`. Re-derivada a mano
+  // con `/usr/bin/grep -n 'setStep(' src/presentation/flow.tsx` ⇒ 24 líneas, de las cuales las que
+  // entran a `bienvenida` o a `send` son `:208 :429 :587 :794 :807 :1185 :1186 :1195 :3533`.
+  // Descartadas dos: `:208` es `setStep(destino)` con `destino: "confirm" | "verify"` (el aterrizaje
+  // del resume, que no llega ni a `bienvenida` ni a `send`), y `:1185` es PROSA — el literal
+  // `setStep("send")` aparece adentro de un comentario, no de una llamada.
+  //
+  // LAS CINCO ENTRADAS A `bienvenida`, y qué le hace cada una a `rem`:
+  //   · `flow.tsx:587`  — el reset del dispositivo compartido. **Limpia `rem`** (`flow.tsx:577`).
+  //   · `flow.tsx:794`  — `onIrAlInicio` de la card del fin del resume. **No toca `rem`.**
+  //   · `flow.tsx:807`  — `VolverAlInicio` desde el flujo. **No toca `rem`.**
+  //   · `flow.tsx:1186` — `onBack` del historial. **No toca `rem`.**
+  //   · `flow.tsx:429`  — `irADestino` (`flow.tsx:426-430`), la pestaña «Enviar» de la barra.
+  //     **No toca `rem`.** ⛔ ÉSTA FALTABA, y era la quinta.
+  // ⇒ O sea que «esa card es la ÚNICA que vuelve a un destino sin tocar la remesa» era falso DOS
+  // veces: `openHistory` (`flow.tsx:412-417`) e `irADestino("recuperar")` tampoco la tocan.
+  //
+  // Y LAS DOS ENTRADAS A `send`, que es de donde salía el sub-motivo equivocado de que a `send` sólo
+  // se llega con `rem` en `null`:
+  //   · `flow.tsx:3533` — `resetTo`, que **sí** limpia `rem` y `preview`.
+  //   · `flow.tsx:1195` — `Bienvenida onEmpezar`. **No toca `rem`.** ⛔ Ésta también faltaba.
+  //
+  // ESTE `it` toma el camino de la card del fin del resume porque es el que se puede fabricar sin
+  // tocar la barra de destinos: el resume corre en el montaje y la ventana anterior a su primera
+  // respuesta NO tiene overlay —está escrito en `flow.tsx:208`—, así que la persona alcanza a crear la
+  // remesa mientras la consulta está en vuelo. Eso es exactamente lo que hacen las líneas de abajo.
   //
   // MUTANTE QUE LO TIENE QUE MATAR (MUT-L): en `flow.tsx:757`, `hayBorrador: rem !== null` →
   // `hayBorrador: false`.
@@ -1438,6 +1459,72 @@ describe("WKH-372/AC-1-1: la oferta de abrir Chaski adentro del navegador de la 
     expect(texto, "sin em dashes en el copy que ve la persona").not.toContain("—");
     // ⛔ CD-12 — esta ola NO baja el SOL del remitente a cero, y el copy no puede insinuarlo.
     expect(texto, "el copy afirma algo sobre el SOL que esta ola no cambió").not.toMatch(/no necesit[áa]s? SOL/i);
+  });
+
+  // 🔴 CR/`BLQ-BAJO-2` — I-5 ERA LA ÚNICA LÍNEA DE PRODUCCIÓN DE LA OLA SIN NINGÚN TESTIGO, Y ESTO ES
+  // ESE TESTIGO. Lo midió el revisor con MUT-CR-2: revertir `flow.tsx:1386` a su texto de antes de W1
+  // —o sea borrar de un saque las DOS cosas que I-5 pide, la advertencia de volver a cargar y el
+  // segundo enlace de instalación— dejaba el gate ENTERO verde (`167 passed / 3422 passed`). Por el
+  // criterio que esta misma ola escribió a cuatro `it` de acá (`:1505-1508`: «un artefacto que nadie
+  // mira no es un instrumento»), eso volvía a I-5 decoración.
+  //
+  // 🔴 Y ES JUSTO EL ENLACE QUE EXISTE PARA NO DEPENDER DE UNA INCÓGNITA: que un universal link
+  // `browse` caiga solo en la página de descarga sin la app instalada NO está verificado
+  // (`salida-al-navegador-de-la-billetera.ts:35-38`), y este enlace es lo que hace que el recorrido de
+  // instalación no dependa de eso.
+  //
+  // ⚠️ ES LA OTRA PANTALLA, y por eso es un `it` aparte y no una fila de `T-372-W1-6`: aquél mide el
+  // enlace gemelo de la OFERTA en `bienvenida` (`flow.tsx:757`, «Instalarla y crear mi billetera»);
+  // éste, el de `NoWalletHere` en `connect` (`flow.tsx:1386`, «Instalar Phantom y crear mi billetera»).
+  //
+  // MUTANTE QUE LO TIENE QUE MATAR (MUT-CR-2): revertir `flow.tsx:1386` a
+  // `/usr/bin/git show cc02b61:src/presentation/flow.tsx | sed -n '1386p'`.
+  // ⛔ PROHIBIDO escribir acá el literal de la URL de descarga: sería el guard leyéndose a sí mismo.
+  //    Se IMPORTA `URL_INSTALAR_PHANTOM`, igual que `T-372-W1-6`.
+  // ⛔ FALSO KILLED A EVITAR: que el rojo lo produzca `T-372-W1-6`, que mide la MISMA constante en la
+  //    OTRA pantalla. El mutante vive en `flow.tsx:1386` y `T-372-W1-6` mira `flow.tsx:757`, así que
+  //    el `×` tiene que ser de este `it` y de ninguno más. Y que lo produzca `T-LINK-1`, que mira el
+  //    enlace PRIMARIO del mismo bloque, tampoco: el mutante no toca esa línea.
+  it("T-372-W1-6b: el aviso de `connect` sin wallet trae la advertencia de volver a cargar y su enlace de instalar", async () => {
+    irAlPasoConectar();
+    await screen.findByRole("button", { name: /Conectar wallet/ });
+    await act(async () => {
+      solanaWalletBridge.setWalletAvailability("none");
+    });
+
+    // CD-18 — el fixture llegó al cuadrante: `NoWalletHere` se montó de verdad. Sin esto, una pantalla
+    // que no pintara nada dejaría las aserciones de abajo rojas sin decir por qué, o —peor— un
+    // `queryBy` verde por vacío.
+    expect(
+      screen.getByText(AVISO),
+      "`NoWalletHere` no se montó: este `it` no estaría midiendo ninguna de las dos mitades de I-5",
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: CAMINO }),
+      "el enlace principal del bloque no está: el fixture no es el que este `it` dice medir",
+    ).toBeInTheDocument();
+
+    // 1 · EL SEGUNDO ENLACE EXISTE Y APUNTA A LA CONSTANTE DE PRODUCCIÓN, no a un literal de acá.
+    const instalar = screen.getByRole("link", { name: /Instalar Phantom y crear mi billetera/ });
+    expect(
+      instalar,
+      "el segundo enlace del aviso dejó de apuntar a la constante de instalación de producción",
+    ).toHaveAttribute("href", URL_INSTALAR_PHANTOM);
+    expect(instalar.tagName, "el enlace de instalación dejó de ser algo que la persona toca").toBe("A");
+
+    // 2 · LA ADVERTENCIA CONDICIONAL, PINNEADA. Es la mitad de I-5 que no es un enlace: le dice a la
+    //     persona qué hacer si el borrador no cruzó, en la pantalla desde la que se salta.
+    const nota = instalar.closest("p, div, span")?.textContent ?? "";
+    expect(
+      nota,
+      "se fue la advertencia de que puede haber que volver a cargar los datos al llegar",
+    ).toContain("Si al llegar no ves lo que cargaste, cargalo otra vez.");
+    // ⛔ Y NO DICE QUE ALGO FALLÓ NI «empezá de nuevo», que es la disciplina de copy de esta ola.
+    expect(nota, "el copy dice que algo falló, y no falló").not.toMatch(/fall[óo]|error|se perdi[óo]/i);
+    expect(nota, "el copy dice «empezá de nuevo», que es el pecado que este repo persigue").not.toMatch(
+      /empez[áa] de nuevo/i,
+    );
+    expect(nota, "sin em dashes en el copy que ve la persona").not.toContain("—");
   });
 });
 
@@ -1584,6 +1671,17 @@ describe("WKH-372/AC-1-4b: el aterrizaje dentro del navegador de la billetera, c
     cleanup();
 
     // (b) EN UN DESTINO NO. El mismo aterrizaje, otra pantalla.
+    // ⚠️ CR/`BLQ-MEDIO-1` — LA MARCA SE RE-ARMA ACÁ, Y NO ES HIGIENE: desde el fix-pack `flow.tsx:146`
+    //    CONSUME `wb` de la barra al aterrizar, así que el montaje de (a) la dejó limpia. Sin esta
+    //    línea, el segundo montaje llegaría SIN marca y la fila de abajo pasaría por no haber
+    //    aterrizaje, no por el gate de `step`: verde por la razón equivocada.
+    olvidarHitos();
+    window.history.replaceState({}, "", `/?${PARAM_SALIDA}=${VALOR_SALIDA}`);
+    // CD-18 — y que la marca esté puesta EN ESTE INSTANTE, que es lo que la nota de arriba afirma.
+    expect(
+      new URL(window.location.href).searchParams.get(PARAM_SALIDA),
+      "el fixture llega al destino sin la marca del aterrizaje: la fila de abajo no mediría el gate",
+    ).toBe(VALOR_SALIDA);
     render(<RemittanceFlow pasoInicial="recuperar" container={buildTestContainer()} />);
     await act(async () => {
       solanaWalletBridge.setWalletAvailability("none");
@@ -1599,5 +1697,174 @@ describe("WKH-372/AC-1-4b: el aterrizaje dentro del navegador de la billetera, c
       "el aviso del aterrizaje quedó clavado arriba de una pantalla de destino, que es la falta de " +
         "prolijidad que esta HU vino a cerrar",
     ).not.toBeInTheDocument();
+  });
+
+  // 🔴 CR/`MNR-1` — EL TESTIGO DEL ONCE-GUARD, que hasta acá no lo medía nada. MUT-CR-1 (borrar el
+  // `if (hitos.has("salida-al-navegador")) return;` de `bitacora-de-vuelta.ts`) dejaba el gate entero
+  // verde. El docblock de esa función además daba un motivo INALCANZABLE desde su único llamador
+  // (`aterrizaje` es un valor congelado, así que re-anotar escribiría el mismo valor); el motivo está
+  // corregido allá y acá queda el candado, que es lo que lo saca de «afirmación sin testigo».
+  //
+  // ⚠️ SE LLAMA A LA FUNCIÓN DIRECTO Y NO SE MONTA LA PANTALLA, a propósito: la propiedad que se mide
+  // es de la FUNCIÓN («la foto es la del aterrizaje, la garantiza ella y no quien la llama»), y
+  // montarla desde la pantalla la mediría prestada de la disciplina del llamador, que es justamente lo
+  // que el guard existe para no depender. Precedente en este repo: `formaDelDestino`, medida por
+  // llamada directa (`flow-reanudacion.test.tsx:1407`).
+  //
+  // MUTANTE QUE LO TIENE QUE MATAR (MUT-CR-1): borrar el `if (hitos.has(...)) return;` de
+  // `bitacora-de-vuelta.ts`.
+  // ⛔ FALSO KILLED A EVITAR: un segundo veredicto IGUAL al primero. Con `{ vinoConMarca: true,
+  //    borradorEnElDisco: "sin-borrador" }` las dos veces, el mutante sobrevive porque re-anotar
+  //    escribe lo mismo. Por eso el fixture prueba primero, en un `Map` limpio, que el segundo
+  //    veredicto ES distinto.
+  it("T-372-W1-7d: el veredicto del aterrizaje se anota UNA vez y gana el primero", () => {
+    // CD-18 (1/2) — el fixture reproduce el defecto: el SEGUNDO veredicto, solo, produce otro valor.
+    // Sin esta mitad, las dos llamadas de abajo podrían estar escribiendo lo mismo y el `it` pasaría
+    // sin haber ejercitado ningún guard.
+    olvidarHitos();
+    anotarLaSalidaAlNavegador({ vinoConMarca: true, borradorEnElDisco: "con-borrador" });
+    expect(
+      leerHito("salida-al-navegador"),
+      "el segundo veredicto del fixture no produce un valor distinto: no hay nada que pisar",
+    ).toBe("con-marca-y-borrador");
+
+    // CD-18 (2/2) — y el PRIMERO también es observable por su cuenta.
+    olvidarHitos();
+    anotarLaSalidaAlNavegador({ vinoConMarca: true, borradorEnElDisco: "sin-borrador" });
+    expect(leerHito("salida-al-navegador"), "el primer veredicto no se anotó").toBe("con-marca-sin-borrador");
+
+    // Y ACÁ EL GUARD: el segundo no pisa al primero.
+    anotarLaSalidaAlNavegador({ vinoConMarca: true, borradorEnElDisco: "con-borrador" });
+    expect(
+      leerHito("salida-al-navegador"),
+      "una segunda anotación pisó la foto del aterrizaje: el hito pasa a medir lo que ocurrió DESPUÉS " +
+        "de llegar, o sea el resultado de la propia medición",
+    ).toBe("con-marca-sin-borrador");
+  });
+
+  // 🔴 CR/`BLQ-MEDIO-1` — EL INSTRUMENTO DE CAMPO SE DABA VUELTA CON UNA RECARGA, y esto es la
+  // secuencia exacta que el revisor corrió. Nadie limpiaba `wb` de la barra: `hrefSinRastroDeVuelta`
+  // borra los parámetros de respuesta de la billetera y `dl`, y nada más. Con la marca sobreviviendo,
+  // los DOS instrumentos de la ola (el aviso y el hito) publicaban «el almacenamiento cruzó» sobre un
+  // borrador que la persona había cargado a mano de este lado. Un pull-to-refresh en el teléfono
+  // invertía la medición en silencio, y la medición de campo es la razón de ser de esta ola.
+  //
+  // 🔴 CÓMO SE SIMULA LA RECARGA: se desmonta el árbol y se `olvidarHitos()` —una recarga estrena
+  // contexto de JS, así que el `Map` de módulo nace vacío— y ⛔ NO SE TOCA LA BARRA, que es lo único
+  // que un `location.reload()` conserva. Reescribirla sería fabricar el aterrizaje que se dice NO haber.
+  //
+  // MUTANTE QUE LO TIENE QUE MATAR (MUT-CR-BM): borrar de `flow.tsx:146` el
+  // `if (sinLaMarca !== null) window.history.replaceState(...)`, o sea volver al código de hoy.
+  // ⛔ FALSO KILLED A EVITAR: que el rojo salga del PRIMER aterrizaje. Las filas del paso 1 son las
+  //    mismas que `T-372-W1-7` ya mide, así que están acá como CD-18 y el `×` que cierra el hallazgo
+  //    es el del paso 3, con su mensaje propio.
+  it("T-372-W1-7e: la marca se consume al aterrizar, así que una recarga no publica un aterrizaje que no ocurrió", async () => {
+    olvidarHitos();
+    window.history.replaceState({}, "", `/?monto=400&${PARAM_SALIDA}=${VALOR_SALIDA}`);
+    window.localStorage.setItem(CLAVE_DEL_REPO, "[]");
+
+    // PASO 1 · EL ATERRIZAJE DE VERDAD: con marca y sin borrador ⇒ se avisa, y el hito lo dice.
+    await enLaBienvenida("none");
+    expect(
+      screen.getByText(AVISO_ATERRIZAJE),
+      "el fixture no reprodujo el aterrizaje: sin él la recarga de abajo no mide nada",
+    ).toBeInTheDocument();
+    expect(leerHito("salida-al-navegador"), "el aterrizaje no se anotó").toBe("con-marca-sin-borrador");
+    // Y LA MARCA SE CONSUMIÓ. Es el MECANISMO; el paso 3 es la propiedad observable.
+    // ⚠️ `expect.soft` EN ESTAS DOS FILAS, Y NO ES COMODIDAD: con un `expect` duro, el mutante que
+    //    borra el consumo (MUT-CR-BM) corta acá y el `it` nunca llega al paso 3, así que el rojo
+    //    hablaría del mecanismo y no de lo que el hallazgo pide cerrar —que una RECARGA no publique un
+    //    aterrizaje que no ocurrió—. Con `soft` (`vitest@2.1.9`, `node_modules/vitest/dist/index.d.ts:77`)
+    //    el `it` sigue hasta el final y el mutante deja los DOS mensajes, el del mecanismo y el de la
+    //    propiedad. ⛔ Fallan igual: `soft` no perdona, junta.
+    expect.soft(
+      new URL(window.location.href).searchParams.get(PARAM_SALIDA),
+      "la marca del aterrizaje quedó viva en la barra: cualquier recarga posterior la vuelve a leer " +
+        "como un aterrizaje nuevo",
+    ).toBeNull();
+    // La otra mitad, la que hace falsable a la de arriba: consumir la marca NO es vaciar la URL.
+    expect.soft(
+      new URL(window.location.href).searchParams.get("monto"),
+      "se llevó puestos los parámetros de la app: consumir la marca no es vaciar la barra",
+    ).toBe("400");
+    cleanup();
+
+    // PASO 2 · LA PERSONA RE-TIPEA. `createRemittance` persiste antes de devolver
+    // (`create-remittance.ts:20`), así que del otro lado del re-tipeo hay una fila en el disco.
+    window.localStorage.setItem(CLAVE_DEL_REPO, JSON.stringify([{ id: "r-1", status: "created" }]));
+
+    // PASO 3 · LA RECARGA. Contexto nuevo (hitos vacíos), MISMA barra.
+    olvidarHitos();
+    await enLaBienvenida("none");
+    expect(
+      leerHito("salida-al-navegador"),
+      "tras una recarga el hito publica un aterrizaje que no ocurrió: dice que el almacenamiento " +
+        "cruzó el salto, sobre un borrador que la persona cargó a mano de este lado",
+    ).toBe("sin-marca");
+    expect(
+      screen.queryByText(AVISO_ATERRIZAJE),
+      "el aviso del aterrizaje reapareció en una recarga, que no es un aterrizaje",
+    ).not.toBeInTheDocument();
+  });
+
+  // 🔴 CR/`BLQ-BAJO-1` — «NO PUDE LEER EL DISCO» ESTABA COLAPSADO EN «NO HAY BORRADOR». `flow.tsx:146`
+  // tenía un `catch { hayBorrador = false; }`, y el revisor lo corrió: con `?wb=1`, el borrador **SÍ**
+  // en el disco y un `getItem` que tira, la pantalla mostraba *«Acá no están los datos que cargaste
+  // antes»* y el hito decía `con-marca-sin-borrador`. O sea que se le decía a la persona que sus datos
+  // no están CUANDO SÍ ESTÁN, y el instrumento de campo publicaba «no cruzó» sin haber podido mirar.
+  // El repo ya declaraba la disciplina contraria para la marca (`bitacora-de-vuelta.ts`, el párrafo de
+  // `sin-marca`) y ya tenía el tercer valor con nombre: `"disco-ilegible"` (`splash-puerta.ts:73`),
+  // publicado como `ILEGIBLE (no se pudo preguntar)` en `diagnostico-de-vuelta.tsx:580`.
+  //
+  // 🔴 EL DOBLE TIRA SÓLO PARA LA CLAVE DEL REPO: uno que tire para TODAS rompe el montaje del árbol
+  // de providers, y el rojo/verde de abajo hablaría de otra cosa. Al resto se le delega el real.
+  //
+  // MUTANTE QUE LO TIENE QUE MATAR (MUT-CR-BB1): en `flow.tsx:146`, cambiar
+  // `catch { borradorEnElDisco = "disco-ilegible"; }` por `catch { borradorEnElDisco = "sin-borrador"; }`,
+  // o sea reintroducir el defecto exacto.
+  // ⛔ FALSO KILLED A EVITAR: assertar sólo que el aviso NO aparece. Un mutante que colapsara el
+  //    ilegible en `"con-borrador"` también lo dejaría ausente, y ahí se estaría afirmando la
+  //    PRESENCIA de datos sin haber preguntado, que es el mismo pecado en la otra dirección. Por eso
+  //    la fila que cierra el hallazgo es la del hito, que no afirma ninguna de las dos.
+  it("T-372-W1-7f: con el disco ilegible no se afirma ni que el borrador está ni que no está", async () => {
+    olvidarHitos();
+    window.history.replaceState({}, "", `/?${PARAM_SALIDA}=${VALOR_SALIDA}`);
+    // El borrador SÍ está: es la mitad que vuelve grave al defecto (se le decía que no estaban sus
+    // datos teniéndolos ahí).
+    window.localStorage.setItem(CLAVE_DEL_REPO, JSON.stringify([{ id: "r-1", status: "created" }]));
+    const getItemReal = Storage.prototype.getItem;
+    // CD-18 (1/2) — el fixture dejó el borrador en el disco ANTES de romper la lectura.
+    expect(
+      getItemReal.call(window.localStorage, CLAVE_DEL_REPO),
+      "el fixture no dejó ningún borrador: el caso que se quiere medir no está montado",
+    ).toContain("r-1");
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(function (this: Storage, clave: string) {
+      if (clave === CLAVE_DEL_REPO) throw new DOMException("no se puede leer", "SecurityError");
+      return getItemReal.call(this, clave);
+    });
+    // CD-18 (2/2) — y la lectura tira de verdad. Sin esto, un doble que no se aplicara dejaría este
+    // `it` verde midiendo el camino feliz.
+    expect(
+      () => window.localStorage.getItem(CLAVE_DEL_REPO),
+      "el doble no se aplicó: la clave del repo se sigue leyendo y este `it` mediría otro caso",
+    ).toThrow();
+
+    await enLaBienvenida("none");
+
+    // 1 · NO SE AFIRMA LA AUSENCIA. Es lo que la persona lee, y era falso.
+    // ⚠️ `expect.soft` por lo mismo que en `T-372-W1-7e`: con un `expect` duro, el mutante que
+    //    reintroduce el colapso corta acá y la fila 2 —la que distingue este hallazgo de su espejo—
+    //    nunca corre, así que el rojo no diría cuál de las dos afirmaciones se rompió.
+    expect.soft(
+      screen.queryByText(AVISO_ATERRIZAJE),
+      "se le dice a la persona que sus datos no están cuando el disco no se dejó leer: es «no pude " +
+        "preguntar» publicado como «no pasó», y encima los datos estaban ahí",
+    ).not.toBeInTheDocument();
+    // 2 · Y TAMPOCO SE AFIRMA LA PRESENCIA. El hito dice exactamente lo que se sabe, que es nada
+    //     sobre el borrador y todo sobre por qué.
+    expect(
+      leerHito("salida-al-navegador"),
+      "el hito colapsó «el disco no se dejó leer» en uno de los dos veredictos que no puede sostener",
+    ).toBe("con-marca-disco-ilegible");
   });
 });

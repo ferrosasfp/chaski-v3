@@ -112,6 +112,50 @@ export function urlDeSalidaAlNavegadorDeLaBilletera(p: {
 }
 
 /**
+ * WKH-372/W1 (CR/`BLQ-MEDIO-1`) — CONSUMIR LA MARCA: el mismo href sin `wb`, o `null` si no había
+ * nada que consumir.
+ *
+ * 🔴 QUÉ DEFECTO CIERRA, MEDIDO POR EL CR. Nadie borraba `wb` de la barra, y el instrumento de campo
+ * de esta ola —el aviso de (`flow.tsx:757`) y el hito que publica el bloque de diagnóstico— se daba
+ * vuelta con una recarga de pestaña: se aterriza con `?wb=1` y el disco vacío ⇒ aviso puesto e hito
+ * `con-marca-sin-borrador` (*no cruzó*); la persona re-tipea, `createRemittance` persiste; se recarga
+ * con `?wb=1` TODAVÍA en la barra ⇒ aviso ausente e hito `con-marca-y-borrador`, o sea los dos
+ * instrumentos publicando *«el almacenamiento cruzó»* sobre un borrador que la persona cargó a mano.
+ * Un pull-to-refresh en el teléfono invertía la medición sin que nada se pusiera rojo.
+ *
+ * ♻️ ESTO ES LO QUE EL REPO YA HACE CON `dl`: la marca de vuelta del enlace profundo se limpia de la
+ * barra apenas se lee, y por la misma razón (`hrefSinRastroDeVuelta`,
+ * `../infrastructure/solana/deeplink/conexion.ts:362`). `wb` es una marca de UN aterrizaje, no un
+ * estado de la pestaña.
+ *
+ * ⛔ `has` Y NO `get(...) === VALOR_SALIDA`, y es deliberado: el que LEE la marca es opt-in estricto
+ * (`vinoDeUnaSalidaConBorrador`, abajo), pero el que la CONSUME tiene que sacar el parámetro sea cual
+ * sea su valor. `wb` es un nombre de ESTE repo y no se lo pisa a nadie (CD-W1-12: no aparece en ningún
+ * otro `searchParams.get(`), así que dejar un `wb=loquesea` en la barra sería dejar viva justo la
+ * condición que este helper existe para eliminar. Mismo criterio, y por lo mismo, que el `has(MARCA)`
+ * de (`motivoParaNoMostrar`, `./splash-puerta.ts:84`), en su línea 97.
+ *
+ * ⛔ DEVUELVE `null` Y NO EL MISMO HREF cuando no hay nada que hacer, para que quien llama no tenga
+ * que comparar strings para saber si toca la barra: sin marca no se llama a `replaceState`, y así
+ * este helper no le agrega una escritura de historial a las miles de cargas que no vienen de una
+ * salida. `null` también ante un href que no parsea: no se reescribe la barra a partir de algo que no
+ * se puede leer, que es el mismo criterio de la rama de arriba.
+ */
+export function hrefSinLaMarcaDeSalida(href: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(href);
+  } catch {
+    return null;
+  }
+  if (!u.searchParams.has(PARAM_SALIDA)) return null;
+  u.searchParams.delete(PARAM_SALIDA);
+  // Misma normalización, y por el mismo motivo, que arriba: `URL.toString()` deja un `?` colgando
+  // cuando no queda ningún parámetro, y eso se ve en la barra de la persona.
+  return u.searchParams.size === 0 ? `${u.origin}${u.pathname}${u.hash}` : u.toString();
+}
+
+/**
  * ¿Este aterrizaje viene de una salida que traía algo cargado?
  *
  * 🔴 QUÉ PREGUNTA CONTESTA Y CUÁL NO. Contesta *"al salir había un borrador"*. ⛔ **NO** contesta

@@ -22,16 +22,13 @@ import {
 import { phantomBrowseUrl } from "./wallet-availability";
 import { PARAM_KYC, VALOR_VUELTA_KYC } from "./splash-puerta";
 import { MARCA } from "../infrastructure/solana/deeplink/sesion";
+// AR/BLQ-BAJO-1 — EL DECODIFICADO SE MUDÓ A `../test-support/salida-al-navegador.ts` y acá se
+// IMPORTA. Estaba definido en este archivo, y el `it` de la OFERTA (`wallet-availability.test.tsx`,
+// `T-372-W1-1`) necesita exactamente el mismo desarmado: dos copias serían dos guards que se corrigen
+// por separado, y una copia nueva escrita a mano es la ocasión de escribir el prefijo a mano.
+import { hrefQueLaBilleteraVaAAbrir } from "../test-support/salida-al-navegador";
 
 const ORIGEN = "https://chaski.test";
-
-/** El href que efectivamente se le pide a la billetera que abra: sale del `?browse/<encodeado>` que
- *  arma el universal link, y se DECODIFICA en vez de compararse contra un string escrito a mano. */
-function hrefQueLaBilleteraVaAAbrir(urlDeSalida: string): URL {
-  const u = new URL(urlDeSalida);
-  const encodeado = u.pathname.slice(u.pathname.lastIndexOf("/") + 1);
-  return new URL(decodeURIComponent(encodeado));
-}
 
 describe("WKH-372/AC-1-4b · qué viaja y qué NO viaja al navegador de la billetera", () => {
   // MUTANTE QUE LO TIENE QUE MATAR: en `./salida-al-navegador-de-la-billetera.ts`, borrar la línea

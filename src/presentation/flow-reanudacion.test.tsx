@@ -21,7 +21,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import bs58 from "bs58";
 import { RemittanceFlow } from "./flow";
 import { buildTestContainer } from "../test-support/test-container";
-import { FakeWallet, InMemoryRepo, RecorridoPorEnlaceNulo, T0, TEST_CCI, beneficiary } from "../test-support/fakes"; // HU-075/reanudar: `TEST_CCI` EN ESTA MISMA LINEA, no en una nueva — este archivo recibe citas por numero en `:95`, `:527` y `:575`
+import { FakeWallet, InMemoryRepo, RecorridoPorEnlaceNulo, T0, TEST_CCI, beneficiary } from "../test-support/fakes"; import type { Container } from "../composition/container"; import { leerHito } from "./bitacora-de-vuelta"; // HU-075/reanudar: `TEST_CCI` EN ESTA MISMA LINEA, no en una nueva — este archivo recibe citas por numero en `:95`, `:527` y `:575`. HU-075/gesto: el `Container` PEGADO ACÁ por lo mismo, y ⛔ no en una línea nueva
 import { type KycVerification, Remittance, toPersistedIdentity } from "../domain/remittance";
 import { Money } from "../domain/money";
 import { SolanaWalletAdapter } from "../infrastructure/solana-wallet";
@@ -1230,5 +1230,273 @@ describe("HU-075/reanudar: la vuelta por enlace RETOMA el recorrido con los dato
       conectar,
       "el recorrido pidió una SEGUNDA conexión: con la prueba del PoP ya consumida eso manda a la persona a firmar otra vez",
     ).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// HU-075/gesto — EL SEGUNDO SALTO SALE DE UN TOQUE, NO DE UN EFECTO DE MONTAJE
+//
+// 🔴 EL DEFECTO, MEDIDO EN EL TELÉFONO DEL FOUNDER con el bloque `?diag=1` (foto t=12830 ms):
+//
+//     marca al montar : conectar          disco : viaje=sí eleccion=sí pop=sí
+//     connect         : hay-que-salir     continuacion : no corrió
+//     pantalla        : bienvenida        corte : sin corte      error : sin error
+//
+// O sea: la vuelta llegó bien, el viaje estaba vigente, `connectWallet.execute()` pidió el SEGUNDO
+// salto (la firma del PoP de KYC), no hubo excepción… y a los 12,8 segundos la persona seguía en la
+// bienvenida. La marca nunca pasó de `conectar` a `pop-kyc`: el segundo salto NO SE DISPARÓ.
+//
+// LA CAUSA: `flow.tsx:286` resolvía ese desenlace con `window.location.href = r.irA` DESDE EL EFECTO
+// DE MONTAJE, o sea una navegación programática a una app externa fuera de todo gesto de la persona.
+// Los navegadores móviles la descartan sin error y sin rastro, que es exactamente lo que el
+// diagnóstico muestra.
+//
+// ⚠️ QUÉ MIDEN ESTOS `it` Y QUÉ NO (CD-12, y va sin suavizar). jsdom NO bloquea nada: acá una
+// asignación a `location.href` "funciona" siempre. Lo que estos `it` miden es que la asignación
+// PROGRAMÁTICA YA NO OCURRE y que en su lugar queda en pantalla un `<a href>` que la persona toca —el
+// mismo patrón que este repo ya tiene probado para `phantomBrowseUrl` (`flow.tsx:1379`)—. Que un
+// teléfono real descarte la primera y honre el segundo NO lo mide este archivo: lo mide el
+// diagnóstico de arriba, de un lado, y el patrón ya desplegado, del otro.
+//
+// 🔴 Y MIDEN LA OTRA MITAD, que era la hipótesis rival: que `r.irA` llegara VACÍO o mal formado, con
+// lo cual la navegación no habría tenido a dónde ir y la causa sería otra. Por eso el contenedor de
+// `T-075-GESTO-1` cablea el `pop` REAL (`SolanaWalletAdapter`) contra el disco REAL que siembra
+// `sembrarVuelta`: el `irA` que llega a la pantalla lo arma el código de producción, y el `it` LEE su
+// forma. Lo único de mentira es la respuesta del emisor del desafío.
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+describe("HU-075/gesto: el segundo salto necesita un TOQUE", () => {
+  const TITULO_FIRMA = /Falta una firma para seguir/;
+  const CTA_FIRMA = /Ir a firmar a mi billetera/;
+
+  /** Igual que el del bloque de arriba: la remesa que dejó `onSend`, sin `ownerAddress`. */
+  async function sembrarBorrador(repo: InMemoryRepo) {
+    await repo.save(Remittance.create(REM, beneficiary(), Money.of(400, "USDC"), T0));
+  }
+
+  /** Reemplaza `window.location` por uno que ANOTA los `href = …` en vez de navegar. Es la misma
+   *  receta que `flow.test.tsx:3236`, y es la única forma de ver la navegación programática en jsdom.
+   *  Devuelve el array de lo asignado y el restaurador. */
+  function espiarNavegacion(): { asignado: string[]; restaurar: () => void } {
+    const original = window.location;
+    const asignado: string[] = [];
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        ...original,
+        get href() {
+          return original.href;
+        },
+        set href(v: string) {
+          asignado.push(v);
+        },
+        get origin() {
+          return original.origin;
+        },
+        get search() {
+          return original.search;
+        },
+        get pathname() {
+          return original.pathname;
+        },
+      },
+    });
+    return { asignado, restaurar: () => Object.defineProperty(window, "location", { configurable: true, value: original }) };
+  }
+
+  /** 🔴 EL `irA` DE PRODUCCIÓN, COPIADO DE UNA CORRIDA REAL Y NO INVENTADO. Es la forma que devolvió
+   *  `T-075-GESTO-IRA` (`../infrastructure/solana/preparacion-por-enlace.test.ts`), que sí corre el
+   *  cableado de `container.ts:185` con el disco real. ⛔ ACÁ NO SE PUEDE CORRER ESE CAMINO, y la
+   *  razón está MEDIDA (sonda temporal del 2026-08-30, creada, corrida y borrada): en el entorno jsdom
+   *  de este repo `new TextEncoder().encode(…)` devuelve un `Uint8Array` DE OTRO REALM ⇒
+   *  `b instanceof Uint8Array` es **false**, y `tweetnacl` rechaza el cifrado con
+   *  `TypeError: unexpected type, use Uint8Array` adentro de (`sobre`, `../infrastructure/solana/deeplink/protocol.ts:170`).
+   *  O sea que `urlFirmarMensaje` es INALCANZABLE desde jsdom. ⇒ el reparto es: el `irA` real lo mide
+   *  el `it` de node; lo que estos `it` miden es qué HACE la pantalla con él. */
+  const IR_A_POP_KYC = "https://phantom.app/ul/v1/signMessage?dapp_encryption_public_key=6b1t&nonce=9xQz&redirect_link=https%3A%2F%2Fchaski.test%2Fenviar%3Fdl%3Dpop-kyc&payload=Ax7k";
+
+  /** El doble de `ConnectWallet` que devuelve la suspensión, con la forma EXACTA del tipo de
+   *  `connect-wallet.ts:83`. ⛔ No es un `as any`: si el desenlace cambia de forma, esto no compila. */
+  function connectWalletQueSuspende(irA = IR_A_POP_KYC) {
+    return { execute: async () => ({ estado: "hay-que-salir" as const, address: DIRECCION, irA, esperando: "firma-pop-kyc" as const }) } as unknown as Container["connectWallet"];
+  }
+
+  class RecorridoQueVuelveConectado2 extends RecorridoPorEnlaceNulo {
+    override remesaEnCurso(): string {
+      return REM;
+    }
+    override async completar(): Promise<never> {
+      return { estado: "conectado", direccion: DIRECCION } as never;
+    }
+    override async estadoDeLaCuentaDeNonce(): Promise<never> {
+      return "no-pudimos-preguntar" as never;
+    }
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // 🔴 MUTANTE QUE MATA (medido, ver el reporte): en `flow.tsx:286`, dentro de `alConectar`, volver
+  // `setSaltoPendiente(r.irA)` a `window.location.href = r.irA`. Deja este `it` en rojo por su motivo
+  // propio: `asignado` vuelve a tener la URL de Phantom y el `<a>` no se renderiza.
+  it("T-075-GESTO-1: con la vuelta resolviendo `hay-que-salir`, ⛔ NO navega sola y ofrece un enlace que la persona toca", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarBorrador(repo);
+    sembrarVuelta("conectar");
+    const c = buildTestContainer({
+      repo,
+      wallet: new FakeWallet(),
+      connectedWallet: new SolanaWalletAdapter(),
+      recorridoPorEnlace: new RecorridoQueVuelveConectado2(),
+      useCases: { connectWallet: connectWalletQueSuspende() },
+    });
+
+    // CD-18 — el fixture fabricó el caso ANTES de medir: la barra trae la vuelta, la remesa está en el
+    // repo sin dueño, y `execute()` contesta la suspensión, que es lo que leyó el diagnóstico.
+    expect(new URL(window.location.href).searchParams.get("dl")).toBe("conectar");
+    expect((await repo.get(REM))?.snapshot.ownerAddress).toBeNull();
+    expect((await c.connectWallet.execute()).estado, "el fixture no reproduce el caso: `execute()` no pidió el segundo salto").toBe("hay-que-salir");
+
+    const espia = espiarNavegacion();
+    try {
+      render(<RemittanceFlow pasoInicial="bienvenida" container={c} />);
+
+      // 1 · SE ESPERA A QUE LA VUELTA RESUELVA, Y ⛔ NO A QUE APAREZCA EL ENLACE. La diferencia es lo
+      //     que hace que el mutante muera POR SU MOTIVO: con un `findByRole` acá, la versión que
+      //     navega sola moriría por "no encuentro el enlace", que es el síntoma, y el `expect` de
+      //     abajo —el que nombra la navegación y la IMPRIME— no llegaría a correr nunca.
+      await waitFor(() =>
+        expect(
+          espia.asignado.length > 0 || screen.queryByRole("link", { name: CTA_FIRMA }) !== null,
+          "la vuelta no resolvió: ni navegó ni ofreció el enlace",
+        ).toBe(true),
+      );
+
+      // 2 · ⛔ NO HUBO NINGUNA NAVEGACIÓN PROGRAMÁTICA. Es el assert que mata el mutante.
+      expect(
+        espia.asignado,
+        "la pantalla navegó sola a la billetera: en un móvil eso lo descarta el navegador sin error y la persona se queda mirando la bienvenida",
+      ).toEqual([]);
+
+      // 3 · EL ARREGLO. La pantalla ofrece el salto como un `<a href>` y la persona sigue donde estaba.
+      const enlace = screen.getByRole("link", { name: CTA_FIRMA });
+      expect(screen.getByText(TITULO_FIRMA)).toBeInTheDocument();
+
+      // 3 · Y EL DESTINO LLEGA TAL CUAL: la pantalla no lo parsea, no lo reescribe y no le agrega nada.
+      //     Es la misma regla que `flow.tsx:521` ya tenía escrita para la navegación del depósito.
+      expect(enlace).toHaveAttribute("href", IR_A_POP_KYC);
+
+      // 4 · Y EL BLOQUE DE DIAGNÓSTICO PUBLICA LA FORMA DEL DESTINO. ⛔ Esto NO es decoración: es lo
+      //     único que deja volver a separar EN EL TELÉFONO las dos causas que la foto del founder no
+      //     separaba (`irA` vacío vs. navegación sin gesto) si algo cambia río arriba. Sin este
+      //     `expect`, `formaDelDestino` sería un `export` que corre en producción y que ningún control
+      //     mira, o sea un artefacto sin llamador verificado.
+      expect(
+        leerHito("connect"),
+        "el renglón `connect` del bloque `?diag=1` dejó de publicar la forma del destino",
+      ).toBe(`hay-que-salir · destino https://phantom.app/ul/v1/signMessage (${IR_A_POP_KYC.length} chars)`);
+    } finally {
+      espia.restaurar();
+    }
+  });
+
+  // 🔴 EL PAR NEGATIVO, Y ES LO QUE HACE FALSABLE AL DE ARRIBA. Mismo montaje, misma barra, mismo
+  // disco: la ÚNICA variable que se mueve es que `execute()` resuelve `listo`. Sin esto, un arreglo
+  // que pintara el aviso en CUALQUIER montaje pasaría el `it` de arriba y le pondría un cartel de
+  // "falta una firma" a todo el mundo.
+  it("T-075-GESTO-1(control): si la vuelta resuelve `listo`, ⛔ no hay aviso de firma y el recorrido sigue", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarBorrador(repo);
+    sembrarVuelta("conectar");
+    const c = buildTestContainer({
+      repo,
+      wallet: new FakeWallet(),
+      connectedWallet: new SolanaWalletAdapter(),
+      recorridoPorEnlace: new RecorridoQueVuelveConectado2(),
+    });
+    expect((await c.connectWallet.execute()).estado, "el control no es control: acá `execute()` también suspende").toBe("listo");
+
+    render(<RemittanceFlow pasoInicial="bienvenida" container={c} />);
+
+    expect(await screen.findByText("Revisá el envío")).toBeInTheDocument();
+    expect(screen.queryByText(TITULO_FIRMA)).toBeNull();
+    expect(screen.queryByRole("link", { name: CTA_FIRMA })).toBeNull();
+  });
+
+  // 🔴 EL SEGUNDO SITIO CON EL MISMO DEFECTO, y corre por el mismo efecto de montaje: `alReanudar`.
+  // La persona vuelve del salto del depósito, `confirmAndSend.execute()` pide OTRA firma, y hasta este
+  // arreglo eso también era un `window.location.href` sin gesto. ⛔ NO es el mismo camino que
+  // `flow.tsx:521` (ése corre adentro del `onClick` de "Confirmar y enviar", que SÍ es un gesto, y lo
+  // mide `T-062-22/AC-1` en `flow.test.tsx`).
+  //
+  // 🔴 MUTANTE QUE MATA: en `flow.tsx:286`, dentro de `alReanudar`, volver `setSaltoPendiente(r.irA)`
+  // a `window.location.href = r.irA`.
+  it("T-075-GESTO-2: la reanudación del depósito tampoco navega sola, y ofrece el mismo enlace", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo, "confirmed");
+    sembrarVuelta("firmar-tx");
+    const IR_A = "https://phantom.app/ul/v1/signTransaction?payload=abc&nonce=def";
+    const c = buildTestContainer({
+      repo,
+      wallet: new FakeWallet(),
+      connectedWallet: new SolanaWalletAdapter(),
+      recorridoPorEnlace: new RecorridoPorEnlaceReal(),
+      useCases: {
+        confirmAndSend: { execute: async () => ({ estado: "hay-que-salir", irA: IR_A, esperando: "firma-tx" }) } as unknown as Container["confirmAndSend"],
+      },
+    });
+
+    const espia = espiarNavegacion();
+    try {
+      render(<RemittanceFlow pasoInicial="bienvenida" container={c} />);
+
+      // Mismo orden que en `T-075-GESTO-1`, y por el mismo motivo: primero se espera a que la vuelta
+      // resuelva DE CUALQUIERA DE LAS DOS FORMAS, y recién después se acusa a la navegación. Al revés,
+      // el mutante moriría por "no encuentro el enlace" y este `expect` no correría nunca.
+      await waitFor(() =>
+        expect(
+          espia.asignado.length > 0 || screen.queryByRole("link", { name: CTA_FIRMA }) !== null,
+          "la reanudación no resolvió: ni navegó ni ofreció el enlace",
+        ).toBe(true),
+      );
+      expect(
+        espia.asignado,
+        "la reanudación navegó sola a la billetera desde el efecto de montaje",
+      ).toEqual([]);
+      expect(screen.getByRole("link", { name: CTA_FIRMA })).toHaveAttribute("href", IR_A);
+    } finally {
+      espia.restaurar();
+    }
+  });
+
+  // ⛔ EL COPY NO PUEDE AFIRMAR QUE ALGO FALLÓ, y no falló: la firma volvió, el viaje está vigente y la
+  // billetera quedó conectada. Es el pecado que esta HU persigue desde el primer día, y un `it` sobre
+  // el texto es lo único que lo pone rojo cuando alguien lo "mejore".
+  it("T-075-GESTO-3: el copy dice que la billetera quedó conectada y que falta UNA firma, y ⛔ no dice que falló ni que hay que empezar de nuevo", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarBorrador(repo);
+    sembrarVuelta("conectar");
+    const c = buildTestContainer({ repo, wallet: new FakeWallet(), connectedWallet: new SolanaWalletAdapter(), recorridoPorEnlace: new RecorridoQueVuelveConectado2(), useCases: { connectWallet: connectWalletQueSuspende() } });
+
+    // ⚠️ EL ESPÍA VA ACÁ AUNQUE ESTE `it` NO MIDA LA NAVEGACIÓN, y no es simetría: es para que el
+    // ARNÉS no rompa lo que mide. MEDIDO el 2026-08-30: sin él, al correr el mutante de `alConectar`
+    // este `it` hacía una asignación REAL a `window.location.href` en jsdom, y en 1 de 4 corridas del
+    // archivo completo apareció un rojo EXTRA en `T-065-8` —un `it` que no toca nada de esto— que en
+    // aislamiento pasaba 3 de 3. Un arnés que ensucia el entorno vuelve ilegibles las corridas de
+    // mutación que vengan después, que es exactamente cómo se fabrica un falso KILLED.
+    const espia = espiarNavegacion();
+    try {
+      render(<RemittanceFlow pasoInicial="bienvenida" container={c} />);
+      const aviso = (await screen.findByRole("link", { name: CTA_FIRMA })).closest("div") as HTMLElement;
+      const texto = aviso.textContent ?? "";
+
+      expect(texto).toMatch(/quedó conectada/);
+      expect(texto).toMatch(/una firma más/);
+      for (const prohibida of [/fall(ó|a)/i, /error/i, /empez(á|a)r? de nuevo/i, /volv(é|e)r? a empezar/i, /no se pudo/i, /—/]) {
+        expect(texto, `el copy del aviso dice algo que no es cierto o que no corresponde: ${prohibida}`).not.toMatch(prohibida);
+      }
+    } finally {
+      espia.restaurar();
+    }
   });
 });

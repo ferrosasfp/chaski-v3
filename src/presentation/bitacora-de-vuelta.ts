@@ -112,3 +112,35 @@ export function leerHito(clave: HitoDeVuelta): string | null {
 export function olvidarHitos(): void {
   hitos.clear();
 }
+
+/**
+ * HU-075/gesto — LA FORMA DEL DESTINO DEL SALTO, y ⛔ NUNCA EL DESTINO.
+ *
+ * 🔴 QUÉ PREGUNTA CONTESTA. El diagnóstico del teléfono mostraba `connect: hay-que-salir` con la
+ * persona parada en la bienvenida, y eso admitía dos causas que la foto no separaba: que el `irA`
+ * llegara VACÍO —y entonces no había a dónde navegar— o que el navegador móvil descartara la
+ * navegación programática sin gesto. Este renglón separa las dos EN EL TELÉFONO, que es donde la
+ * hipótesis 1 se puede volver a levantar si algo cambia río arriba.
+ *
+ * ⛔ POR QUÉ ESTO NO VIOLA LA REGLA DE ARRIBA («ningún valor que venga del disco o de la billetera»).
+ * Lo que devuelve es esquema + host + path + LARGO, y nada más:
+ *   · el esquema/host/path salen del mapa `BASE` de `../infrastructure/solana/deeplink/protocol.ts`,
+ *     que es una constante que escribe ESTE repo (`https://phantom.app/ul/v1`, `https://solflare.com/ul/v1`);
+ *   · ⛔ LA QUERY SE TIRA ENTERA, y ahí es donde viven el sobre cifrado, el `nonce` y la `session`;
+ *   · el largo es un número.
+ * Las dos ramas de falla tampoco imprimen el valor: dicen qué le pasa y cuánto mide.
+ *
+ * ⚠️ NO afirma que la URL sea BUENA: una URL absoluta bien formada puede igual apuntar a cualquier
+ * lado. Afirma que existe y qué forma tiene, que es exactamente lo que hace falta para descartar «no
+ * había a dónde ir».
+ */
+export function formaDelDestino(irA: string): string {
+  if (irA === "") return "VACÍO (0 chars)";
+  let u: URL;
+  try {
+    u = new URL(irA);
+  } catch {
+    return `NO ES UNA URL ABSOLUTA (${irA.length} chars)`;
+  }
+  return `${u.protocol}//${u.host}${u.pathname} (${irA.length} chars)`;
+}

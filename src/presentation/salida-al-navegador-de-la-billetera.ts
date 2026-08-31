@@ -163,11 +163,11 @@ export function hrefSinLaMarcaDeSalida(href: string): string | null {
  * es lo único que puede decir si el almacenamiento cruzó el salto. Colapsarlas en una sola sería
  * afirmar el resultado de una medición que todavía no se hizo.
  *
- * ⇒ HAY TRES DESENLACES OBSERVABLES, NO DOS:
+ * ⇒ HAY CUATRO DESENLACES OBSERVABLES, NO DOS:
  *   · marca **y** borrador en el disco ⇒ cruzó, y no hay nada que avisar.
  *   · marca **sin** borrador en el disco ⇒ no cruzó, y ahí sí corresponde decirlo.
- *   · **sin** marca ⇒ es una primera visita, y no se le puede hablar a alguien de datos que nunca
- *     cargó. Éste es el caso que un `has()` perdería.
+ *   · marca **y el disco no se dejó leer** ⇒ no se sabe, y decir cualquiera de las dos anteriores sería inventar. Es el 4º, `con-marca-disco-ilegible`, el que el CR encontró colapsado en `con-marca-sin-borrador`; la unión cerrada que lo nombra es `BorradorEnElDisco` y su mapa `DESENLACE_CON_MARCA`, los dos en `./bitacora-de-vuelta.ts`.
+ *   · **sin** marca ⇒ es una primera visita, y no se le puede hablar a alguien de datos que nunca cargó. Éste es el caso que un `has()` perdería.
  *
  * COMPARA EL VALOR EXACTO, ⛔ no `searchParams.has(...)`. Opt-in estricto, mismo patrón que
  * (`diagnosticoPedido`, `./diagnostico-de-vuelta.tsx:164`) y por la misma razón: ningún valor puede

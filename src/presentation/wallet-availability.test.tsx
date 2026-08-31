@@ -1528,7 +1528,7 @@ describe("WKH-372/AC-1-1: la oferta de abrir Chaski adentro del navegador de la 
   });
 });
 
-describe("WKH-372/AC-1-4b: el aterrizaje dentro del navegador de la billetera, con sus TRES desenlaces", () => {
+describe("WKH-372/AC-1-4b: el aterrizaje dentro del navegador de la billetera, con sus CUATRO desenlaces", () => {
   /** Aterriza en la app con (o sin) la marca de salida, y con (o sin) borrador en el disco. */
   async function aterrizar(p: { conMarca: boolean; conBorrador: boolean }): Promise<void> {
     // ⛔ El hito se anota UNA sola vez por carga de la pestaña (es la foto del aterrizaje), así que

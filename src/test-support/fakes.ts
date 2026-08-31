@@ -1075,10 +1075,10 @@ export class RecorridoPorEnlaceNulo implements PreparacionPorEnlace {
   /** ⚠️ TIRA, por lo mismo. ⛔ Y NO devuelve `"falta"` ni `"no-pudimos-preguntar"`: los dos son
    *  desenlaces REALES de preguntarle a la cadena, y un doble que imite uno esconde el cableado que
    *  falta. Un test que necesite un estado concreto pasa SU propio doble, y así queda escrito ahí. */
-  async estadoDeLaCuentaDeNonce(): Promise<never> {
+  async estadoDeLaCuentaDeNonce(_direccion: string): Promise<never> { // HU-075/nonce: el parametro va aunque este doble no lo use, MISMA razon que `completarPop` de abajo: un `override` no puede pedir MAS argumentos que su base, y los dobles que si lo miran extienden
     throw new Error("preparacion_por_enlace_no_cableada_en_este_test");
   }
-  async crearCuentaDeNonce(): Promise<never> {
+  async crearCuentaDeNonce(_i: { direccion: string; remittanceId: string }): Promise<never> { // HU-075/nonce: idem — el doble que mide CON QUE remesa se pidio el salto necesita poder mirarlo
     throw new Error("preparacion_por_enlace_no_cableada_en_este_test");
   }
   /** WKH-359 — ⚠️ TIRA, por la MISMA razón que `completar()`: ningún test puede creer que volvió del

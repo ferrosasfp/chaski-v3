@@ -1215,6 +1215,8 @@ import {
   VALOR_SALIDA,
 } from "./salida-al-navegador-de-la-billetera";
 import { KEY as CLAVE_DEL_REPO } from "../infrastructure/persistence";
+import { leerHito, olvidarHitos } from "./bitacora-de-vuelta";
+import { DiagnosticoDeVuelta } from "./diagnostico-de-vuelta";
 
 const OFERTA = /¿Estás en un celular con Phantom\?/;
 const INSTALAR = /Instalarla y crear mi billetera/;
@@ -1309,6 +1311,9 @@ describe("WKH-372/AC-1-1: la oferta de abrir Chaski adentro del navegador de la 
 describe("WKH-372/AC-1-4b: el aterrizaje dentro del navegador de la billetera, con sus TRES desenlaces", () => {
   /** Aterriza en la app con (o sin) la marca de salida, y con (o sin) borrador en el disco. */
   async function aterrizar(p: { conMarca: boolean; conBorrador: boolean }): Promise<void> {
+    // ⛔ El hito se anota UNA sola vez por carga de la pestaña (es la foto del aterrizaje), así que
+    //    sin esto el segundo caso leería el veredicto del primero.
+    olvidarHitos();
     window.history.replaceState({}, "", p.conMarca ? `/?${PARAM_SALIDA}=${VALOR_SALIDA}` : "/");
     window.localStorage.setItem(
       CLAVE_DEL_REPO,
@@ -1335,6 +1340,10 @@ describe("WKH-372/AC-1-4b: el aterrizaje dentro del navegador de la billetera, c
     expect(texto, "el copy dice «empezá de nuevo», que es el pecado que este repo persigue").not.toMatch(
       /empez[áa] de nuevo/i,
     );
+    // Y EL HITO, que es lo mismo pero legible desde `?diag=1` en el teléfono del founder. Sin este
+    // par de aserciones, `anotarLaSalidaAlNavegador` sería un artefacto que alguien llama y que nadie
+    // mira: el renglón diría cualquier cosa y la suite seguiría verde.
+    expect(leerHito("salida-al-navegador"), "el hito no distingue el caso (a)").toBe("con-marca-sin-borrador");
     cleanup();
 
     // (b) La marca está y el borrador TAMBIÉN cruzó ⇒ no hubo nada que contar.
@@ -1343,6 +1352,7 @@ describe("WKH-372/AC-1-4b: el aterrizaje dentro del navegador de la billetera, c
       screen.queryByText(AVISO_ATERRIZAJE),
       "el borrador cruzó y la app igual dijo que no estaba",
     ).not.toBeInTheDocument();
+    expect(leerHito("salida-al-navegador"), "el hito no distingue el caso (b)").toBe("con-marca-y-borrador");
     cleanup();
 
     // (c) 🔴 EL CONTROL QUE SOSTIENE A LOS OTROS DOS: sin marca no hay aviso. A alguien que entra por
@@ -1353,7 +1363,43 @@ describe("WKH-372/AC-1-4b: el aterrizaje dentro del navegador de la billetera, c
       screen.queryByText(AVISO_ATERRIZAJE),
       "a un visitante nuevo se le avisó sobre datos que nunca cargó",
     ).not.toBeInTheDocument();
+    // ⛔ Y EL HITO DICE `sin-marca`, que NO es lo mismo que `con-marca-sin-borrador`: de una visita
+    //    nueva no se puede concluir nada sobre si el almacenamiento cruzó. Colapsar los dos sería
+    //    convertir «no pude preguntar» en «no pasó».
+    expect(leerHito("salida-al-navegador"), "el hito colapsó `sin-marca` con `sin-borrador`").toBe("sin-marca");
     // Y la pantalla de entrada sigue siendo la de siempre: la oferta está, porque no hay wallet acá.
     expect(screen.getByText(OFERTA)).toBeInTheDocument();
+  });
+
+  // 🔴 EL RENGLÓN DEL BLOQUE DE DIAGNÓSTICO, Y POR QUÉ ESTE `it` EXISTE. La regla del propio
+  // `./bitacora-de-vuelta.ts` es que un quinto hito «obliga a decidir qué pregunta contesta y a darle
+  // renglón». El renglón se escribió, y MEDIDO: borrarlo dejaba la suite entera en VERDE
+  // (`36 passed` en `diagnostico-de-vuelta.test.tsx`, `39 passed` acá). O sea que era decoración: un
+  // artefacto que nadie mira no es un instrumento. Este `it` es su único guard.
+  //
+  // MUTANTE QUE LO TIENE QUE MATAR: borrar del template de `./diagnostico-de-vuelta.tsx` el renglón
+  // `salida navegador: …`.
+  // ⛔ El bloque se monta APARTE porque en producción no cuelga del flujo sino de `app/page.tsx`;
+  //    montarlo acá es lo que hace que este `it` mida el renglón REAL y no una copia.
+  it("T-372-W1-7b: el bloque de diagnóstico publica el veredicto del aterrizaje, legible desde el teléfono", async () => {
+    olvidarHitos();
+    window.history.replaceState({}, "", `/?${PARAM_SALIDA}=${VALOR_SALIDA}&diag=1`);
+    window.localStorage.setItem(CLAVE_DEL_REPO, "[]");
+    await enLaBienvenida("none");
+    // CD-18 — el hito se anotó: sin esto el renglón podría decir «no corrió» y el `it` mediría el
+    // texto de un caso que nunca ocurrió.
+    expect(leerHito("salida-al-navegador"), "el aterrizaje no se anotó").toBe("con-marca-sin-borrador");
+
+    await act(async () => {
+      render(<DiagnosticoDeVuelta />);
+    });
+
+    const bloque = document.querySelector("pre")?.textContent ?? "";
+    expect(bloque, "el bloque de diagnóstico no se montó: `?diag=1` no lo encendió").toContain("DIAG");
+    expect(
+      bloque,
+      "el bloque de diagnóstico no publica el veredicto del aterrizaje: en el teléfono no hay forma " +
+        "de leer si el almacenamiento cruzó el salto",
+    ).toContain("salida navegador: con-marca-sin-borrador");
   });
 });

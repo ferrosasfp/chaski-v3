@@ -93,7 +93,7 @@ export function olvidarCorteDeVuelta(): void {
 // el mismo argumento que ya está escrito arriba para la causa del corte.
 
 /** Los cuatro, cerrados. Un quinto obliga a decidir qué pregunta contesta y a darle renglón. */
-export type HitoDeVuelta = "pantalla" | "connect" | "continuacion" | "error";
+export type HitoDeVuelta = "pantalla" | "connect" | "continuacion" | "error" | "salida-al-navegador"; // WKH-372/W1 — EL QUINTO, EN ESTA MISMA LÍNEA (Δ0), y con su renglón: lo pinta el renglón `salida navegador` del bloque de diagnóstico (`./diagnostico-de-vuelta.tsx:589`). La pregunta que contesta está en (`anotarLaSalidaAlNavegador`, `:176`)
 
 const hitos = new Map<HitoDeVuelta, string>();
 
@@ -143,4 +143,40 @@ export function formaDelDestino(irA: string): string {
     return `NO ES UNA URL ABSOLUTA (${irA.length} chars)`;
   }
   return `${u.protocol}//${u.host}${u.pathname} (${irA.length} chars)`;
+}
+
+/**
+ * WKH-372/W1 — EL QUINTO HITO: ¿qué se encontró la app al ATERRIZAR dentro del navegador de la
+ * billetera?
+ *
+ * 🔴 QUÉ PREGUNTA CONTESTA, que es lo que el renglón de arriba exige antes de aceptar un quinto valor:
+ * *"¿el `localStorage` cruzó el salto al navegador de la billetera?"*. Nadie la contestó todavía en un
+ * teléfono, y este repo NO la afirma: la mide en el campo. El navegador de la billetera es OTRA
+ * PARTICIÓN DE ALMACENAMIENTO —no es volver al mismo origen, es el mismo origen en otro navegador—,
+ * así que la respuesta no se puede heredar de ninguna medición previa.
+ *
+ * TRES VALORES, y ninguno se puede colapsar en otro:
+ *   · `con-marca-y-borrador`  — se salió con datos cargados y del otro lado ESTÁN ⇒ el disco cruzó.
+ *   · `con-marca-sin-borrador`— se salió con datos cargados y del otro lado NO están ⇒ no cruzó.
+ *   · `sin-marca`             — no se llegó por una salida: es una visita nueva en este navegador, y
+ *     de ahí no se puede concluir NADA sobre el almacenamiento. ⛔ Colapsarlo en `sin-borrador` sería
+ *     convertir "no pude preguntar" en "no pasó".
+ *
+ * ⛔ QUÉ **NO** ENTRA ACÁ, y es la regla de este archivo: ninguna dirección, ninguna clave, ninguna
+ * URL. Los tres son etiquetas que escribe ESTE repo, igual que los cuatro de arriba. Por eso la
+ * función recibe DOS BOOLEANOS y no el href ni el blob del disco: lo que sabe leerlos es la pantalla,
+ * y lo único que cruza esta puerta es el veredicto.
+ *
+ * 🔴 SE ANOTA UNA SOLA VEZ, Y ES LA PARTE QUE IMPORTA: la pregunta es sobre el ATERRIZAJE. Si se
+ * re-anotara en cada cambio de pantalla, la primera carga del formulario poblaría el disco y el hito
+ * pasaría a decir `con-marca-y-borrador` sobre un borrador que creó la propia persona DESPUÉS de
+ * llegar. O sea que se estaría midiendo el resultado de la medición. `olvidarHitos()` lo limpia entre
+ * tests, igual que a los otros cuatro.
+ */
+export function anotarLaSalidaAlNavegador(p: { vinoConMarca: boolean; hayBorrador: boolean }): void {
+  if (hitos.has("salida-al-navegador")) return;
+  hitos.set(
+    "salida-al-navegador",
+    p.vinoConMarca ? (p.hayBorrador ? "con-marca-y-borrador" : "con-marca-sin-borrador") : "sin-marca",
+  );
 }

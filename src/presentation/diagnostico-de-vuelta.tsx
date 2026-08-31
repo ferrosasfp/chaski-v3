@@ -586,7 +586,7 @@ pantalla        : ${leerHito("pantalla") ?? "—"}
 connect         : ${leerHito("connect") ?? "no corrió"}
 continuacion    : ${leerHito("continuacion") ?? "no corrió"}
 corte           : ${corte ?? "sin corte"}
-error           : ${leerHito("error") ?? "sin error"}
+error           : ${leerHito("error") ?? "sin error"}\nsalida navegador: ${leerHito("salida-al-navegador") ?? "no corrió"}
 enlace          : ${deeplinkEnabled() ? "on" : "off"} · cluster: ${resolveSolanaNetworkConfig().cluster}`}
     </pre>
   );

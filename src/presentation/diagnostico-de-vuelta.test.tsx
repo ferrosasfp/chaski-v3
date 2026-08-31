@@ -843,7 +843,7 @@ describe("el bloque de diagnóstico de la vuelta por enlace", () => {
   // TEXTO que alguien lee en un teléfono, y un campo de más, uno de menos o una etiqueta desalineada
   // no los ve ningún `toContain`. Los dos números que cambian entre corridas (el instante de la foto y
   // el de la decisión) se normalizan; ⛔ nada más se normaliza.
-  it("T-DIAG-CAPTURA: los catorce renglones salen en una sola captura, con este texto exacto", async () => {
+  it("T-DIAG-CAPTURA: los quince renglones salen en una sola captura, con este texto exacto", async () => {
     // 🔴 EL RELOJ SE PINCHA, Y NO ES COMODIDAD: `exp` son SEGUNDOS y `Date.now()` son MILISEGUNDOS, así
     // que entre sembrar el ancla y renderizar pasa una fracción de segundo y `exp=vigente(+5m12s)` cae
     // a `+5m11s` cuando el redondeo cruza. MEDIDO: la primera forma de este `it` alternaba entre los
@@ -898,6 +898,13 @@ describe("el bloque de diagnóstico de la vuelta por enlace", () => {
         "continuacion    : vuelta: corriendo",
         "corte           : sin corte",
         "error           : remittance_not_found",
+        // WKH-372/W1 — EL RENGLÓN QUINCE. Este `it` es lo que hace que agregar un renglón al bloque
+        // NO se pueda hacer en silencio: se puso rojo con `expected […] to include …` en cuanto el
+        // renglón nuevo entró. `no corrió` es el valor correcto acá: este `it` anota cuatro hitos a
+        // mano y NO monta `RemittanceFlow`, así que nadie llamó al anotador del aterrizaje. Que la
+        // ausencia se distinga del veredicto es justamente lo que separa «no pude preguntar» de «no
+        // pasó», y lo mide `T-372-W1-7` en `wallet-availability.test.tsx`.
+        "salida navegador: no corrió",
         "enlace          : on · cluster: devnet",
       ].join("\n");
     expect([capturaCon("decidida a los N ms (techo 3000)"), capturaCon("ya decidida al montar el bloque (N ms)")]).toContain(

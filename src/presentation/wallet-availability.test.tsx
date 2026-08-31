@@ -254,10 +254,29 @@ describe("la pantalla de conectar dice la verdad cuando no hay wallet en este na
 });
 
 describe("el enlace lleva a ESTA DApp adentro de Phantom", () => {
-  it("T-LINK-1: el href del aviso apunta a la URL viva de la página, query string incluida", async () => {
-    // Con query string a propósito: el flujo del KYC vuelve a `/?kyc=return`, y un `?` sin encodear se
-    // comería el `?ref=` del universal link.
-    window.history.replaceState({}, "", "/?kyc=return");
+  // 🔴 WKH-372/W1 — ESTE `it` ESTABA VERDE CONGELANDO UN DEFECTO, Y ESO ES LO QUE HAY QUE LEER ACÁ.
+  //
+  // Su expectativa literal era
+  // `…/ul/browse/http%3A%2F%2Flocalhost%3A3000%2F%3Fkyc%3Dreturn?ref=…`, o sea que afirmaba que el
+  // `?kyc=return` VIAJA al navegador de Phantom. Y viajaba: `NoWalletHere` tomaba
+  // `window.location.href` crudo. El problema es lo que pasa del otro lado — el navegador de Phantom
+  // es OTRA partición de almacenamiento, así que la puerta del splash lee ese parámetro como una
+  // vuelta del verificador y arranca a retomar un trámite que en ESE disco no existe.
+  //
+  // ⚠️ O sea que el `it` no estaba mal escrito: estaba midiendo bien un comportamiento equivocado, y
+  // por eso su verde no protegía nada. Al arreglarlo se puso rojo, y ese rojo es INFORMACIÓN.
+  //
+  // Qué mide ahora, que son DOS propiedades y no una:
+  //   (a) el ENCODEADO sigue entero —que era el motivo original de este `it`: un `?` sin encodear se
+  //       comería el `?ref=` del universal link—, y se mide con un parámetro que es DE LA APP y que
+  //       por lo tanto tiene que sobrevivir el salto;
+  //   (b) el rastro del navegador de ORIGEN (`kyc`) NO viaja;
+  //   (c) la marca `wb=1` SÍ viaja, porque en el paso `connect` ya hay una remesa cargada. Es la
+  //       prueba de que la prop `hayBorrador` está CABLEADA de punta a punta: si nadie la pasara, el
+  //       literal de abajo no tendría el `%26wb%3D1` y este `it` se pondría rojo.
+  // ⛔ El literal se sigue escribiendo a mano y NO se recalcula con la función que se está probando.
+  it("T-LINK-1: el href del aviso apunta a la URL viva, encodeada, y SIN los rastros del navegador de origen", async () => {
+    window.history.replaceState({}, "", "/?monto=400&kyc=return");
     irAlPasoConectar();
     await screen.findByRole("button", { name: /Conectar wallet/ });
     await act(async () => {
@@ -267,7 +286,7 @@ describe("el enlace lleva a ESTA DApp adentro de Phantom", () => {
     // Literal, NO recalculado con la misma función que se está probando.
     expect(screen.getByRole("link", { name: CAMINO })).toHaveAttribute(
       "href",
-      "https://phantom.app/ul/browse/http%3A%2F%2Flocalhost%3A3000%2F%3Fkyc%3Dreturn?ref=http%3A%2F%2Flocalhost%3A3000",
+      "https://phantom.app/ul/browse/http%3A%2F%2Flocalhost%3A3000%2F%3Fmonto%3D400%26wb%3D1?ref=http%3A%2F%2Flocalhost%3A3000",
     );
   });
 
@@ -1177,5 +1196,210 @@ describe("WKH-358/AC-9: la bandera NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED es opt-in
     expect(screen.queryByRole("button", { name: CAMBIAR })).not.toBeInTheDocument();
     // Y el camino verificado en cadena sigue estando: replegar no es dejar a nadie sin salida.
     expect(screen.getByRole("link", { name: CAMINO })).toBeInTheDocument();
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-372 / W1.2 — LA PUERTA DE ENTRADA AL NAVEGADOR DE LA BILLETERA
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// ⛔ APÉNDICE AL FINAL, y nada de lo de arriba se reordena: este archivo recibe citas por número.
+//
+// Qué se agrega en la pantalla y qué mide cada `it`:
+//   · La OFERTA en `bienvenida` (AC-1-1)          → `T-372-W1-1` y su control negativo `T-372-W1-2`
+//   · El segundo enlace, el de instalar (AC-1-4)  → `T-372-W1-6`
+//   · El aviso de aterrizaje, TRES casos (AC-1-4b)→ `T-372-W1-7`
+import {
+  PARAM_SALIDA,
+  URL_INSTALAR_PHANTOM,
+  VALOR_SALIDA,
+} from "./salida-al-navegador-de-la-billetera";
+import { KEY as CLAVE_DEL_REPO } from "../infrastructure/persistence";
+import { leerHito, olvidarHitos } from "./bitacora-de-vuelta";
+import { DiagnosticoDeVuelta } from "./diagnostico-de-vuelta";
+
+const OFERTA = /¿Estás en un celular con Phantom\?/;
+const INSTALAR = /Instalarla y crear mi billetera/;
+const AVISO_ATERRIZAJE = /Acá no están los datos que cargaste antes/;
+
+/** Monta la pantalla de entrada y deja que el árbol decida la disponibilidad, igual que el resto del
+ *  archivo: primero se renderiza, después se empuja el cuadrante que el `it` quiere medir. */
+async function enLaBienvenida(disponibilidad: "none" | "injected" | "unknown"): Promise<void> {
+  render(<RemittanceFlow pasoInicial="bienvenida" container={buildTestContainer()} />);
+  await act(async () => {
+    solanaWalletBridge.setWalletAvailability(disponibilidad);
+  });
+}
+
+describe("WKH-372/AC-1-1: la oferta de abrir Chaski adentro del navegador de la billetera", () => {
+  // MUTANTE QUE LO TIENE QUE MATAR: cambiar el `<a href>` de la oferta por un `<button onClick>` ⇒
+  // `getByRole("link", …)` no encuentra nada.
+  // ⛔ FALSO KILLED A EVITAR: un mutante que rompa el render entero mata cualquier `it`. Por eso el
+  // control negativo (`T-372-W1-2`, abajo) tiene que seguir VERDE con el mismo mutante puesto: si los
+  // dos caen a la vez, lo que se rompió es la pantalla y no la oferta.
+  it("T-372-W1-1: en `bienvenida` sin wallet aparece un ENLACE al universal link, y nadie navega solo", async () => {
+    const antesDeMedir = window.location.href;
+    await enLaBienvenida("none");
+
+    const enlace = screen.getByRole("link", { name: /Abrir Chaski en Phantom/ });
+    // 1 · ES UN `<a href>` Y NO UN BOTÓN. La diferencia no es de estilo: fuera de un gesto de la
+    //     persona los navegadores móviles descartan la navegación a otra app SIN error y SIN rastro.
+    expect(enlace.tagName, "la oferta dejó de ser un elemento que la persona toca").toBe("A");
+    // 2 · Y APUNTA AL UNIVERSAL LINK DE LA BILLETERA. El prefijo NO se escribe acá: se deriva del
+    //     productor de producción, que es el mismo que este repo ya tenía desplegado.
+    expect(new URL(enlace.getAttribute("href") as string).hostname).toBe(
+      new URL(phantomBrowseUrl("https://x.test/", "https://x.test")).hostname,
+    );
+    // 3 · NADIE NAVEGÓ EN EL MONTAJE. Es la mitad que impide "arreglarlo" con un efecto: si algún
+    //     `useEffect` asignara `location.href`, la barra habría cambiado sola.
+    expect(
+      window.location.href,
+      "algo navegó solo al montar: el salto tiene que ocurrir DENTRO de un gesto de la persona",
+    ).toBe(antesDeMedir);
+  });
+
+  // MUTANTE QUE LO TIENE QUE MATAR: quitar la condición `disponibilidadWallet === "none"` de la
+  // oferta ⇒ el bloque aparece también con la billetera inyectada y el `innerHTML` deja de ser
+  // idéntico.
+  // ⛔ FALSO KILLED A EVITAR: comparar sólo un texto en vez del `innerHTML` deja pasar cambios de
+  // estructura. Patrón obligatorio: `T-065-21` (`:1037`), que compara el
+  // `innerHTML` del paso entero.
+  it("T-372-W1-2(control): con la billetera INYECTADA la pantalla de entrada es byte-idéntica", async () => {
+    await enLaBienvenida("injected");
+    const conInyectada = document.body.innerHTML;
+    // CD-18 — que el fixture haya llegado a renderizar algo. Sin esto, dos pantallas vacías serían
+    // "idénticas" y este `it` pasaría por vacío.
+    expect(conInyectada.length, "no se llegó a renderizar la pantalla de entrada").toBeGreaterThan(200);
+    expect(screen.queryByText(OFERTA), "la oferta apareció con la billetera INYECTADA").not.toBeInTheDocument();
+    cleanup();
+
+    // La otra mitad, la que hace falsable a la de arriba: en `"none"` la pantalla SÍ cambia. Sin esto,
+    // un bloque que no se montara nunca pasaría el `queryByText` de arriba igual.
+    await enLaBienvenida("none");
+    expect(
+      document.body.innerHTML,
+      "la pantalla es igual en los dos cuadrantes: la oferta no se está montando en ninguno",
+    ).not.toBe(conInyectada);
+    expect(screen.getByText(OFERTA)).toBeInTheDocument();
+  });
+
+  // MUTANTE QUE LO TIENE QUE MATAR: borrar el segundo enlace (el de instalar) del bloque de la oferta.
+  // ⛔ PROHIBIDO escribir acá el literal de la URL de descarga: sería el guard leyéndose a sí mismo, y
+  // cambiar los dos lados a la vez lo dejaría verde. Se IMPORTA la constante.
+  it("T-372-W1-6: la oferta trae un SEGUNDO enlace, el de instalar la billetera, y no es un callejón", async () => {
+    await enLaBienvenida("none");
+
+    const instalar = screen.getByRole("link", { name: INSTALAR });
+    expect(instalar).toHaveAttribute("href", URL_INSTALAR_PHANTOM);
+    // Y va a la MISMA billetera que el universal link, no a cualquier lado: el recorrido de
+    // instalación termina en el mismo camino principal.
+    expect(
+      new URL(URL_INSTALAR_PHANTOM).hostname.split(".")[0],
+      "el enlace de instalación no apunta a la misma billetera que el enlace de abrir",
+    ).toBe(new URL(phantomBrowseUrl("https://x.test/", "https://x.test")).hostname.split(".")[0]);
+    // ⛔ Y NO SE OFRECE NINGUNA BILLETERA CUSTODIAL NI EMBEBIDA: el único enlace de instalación es el
+    // de la app no custodial, y no hay ningún «creá tu cuenta acá» que guarde la clave por la persona.
+    const texto = screen.getByText(OFERTA).closest("div")?.parentElement?.textContent ?? "";
+    expect(texto, "no se capturó el copy de la oferta").toContain("Abrí Chaski adentro de Phantom");
+    expect(texto, "el copy ofrece una billetera custodial").not.toMatch(/custodi/i);
+    expect(texto, "sin em dashes en el copy que ve la persona").not.toContain("—");
+    // ⛔ CD-12 — esta ola NO baja el SOL del remitente a cero, y el copy no puede insinuarlo.
+    expect(texto, "el copy afirma algo sobre el SOL que esta ola no cambió").not.toMatch(/no necesit[áa]s? SOL/i);
+  });
+});
+
+describe("WKH-372/AC-1-4b: el aterrizaje dentro del navegador de la billetera, con sus TRES desenlaces", () => {
+  /** Aterriza en la app con (o sin) la marca de salida, y con (o sin) borrador en el disco. */
+  async function aterrizar(p: { conMarca: boolean; conBorrador: boolean }): Promise<void> {
+    // ⛔ El hito se anota UNA sola vez por carga de la pestaña (es la foto del aterrizaje), así que
+    //    sin esto el segundo caso leería el veredicto del primero.
+    olvidarHitos();
+    window.history.replaceState({}, "", p.conMarca ? `/?${PARAM_SALIDA}=${VALOR_SALIDA}` : "/");
+    window.localStorage.setItem(
+      CLAVE_DEL_REPO,
+      p.conBorrador ? JSON.stringify([{ id: "r-1", status: "created" }]) : "[]",
+    );
+    await enLaBienvenida("none");
+  }
+
+  // MUTANTE QUE LO TIENE QUE MATAR: invertir la condición del aviso ⇒ el caso (c) se pone rojo, que
+  // es el control que impide el aviso falso al visitante nuevo.
+  // ⛔ SIN EL CASO (c), un mutante que ponga la condición en `true` SOBREVIVE: los casos (a) y (b) no
+  // alcanzan para distinguir "aparece cuando corresponde" de "aparece siempre".
+  it("T-372-W1-7: marca sin borrador AVISA; marca con borrador NO; sin marca NO", async () => {
+    // (a) La marca dice que al salir había algo cargado, y en este disco no está ⇒ se dice.
+    await aterrizar({ conMarca: true, conBorrador: false });
+    expect(
+      screen.getByText(AVISO_ATERRIZAJE),
+      "la persona cruzó con datos cargados, del otro lado no están, y la app no se lo dijo",
+    ).toBeInTheDocument();
+    // El copy no explica una causa que nadie midió, y no dice que algo falló.
+    const texto = screen.getByText(AVISO_ATERRIZAJE).closest("div")?.textContent ?? "";
+    expect(texto, "el copy afirma una causa que nadie midió").not.toMatch(/guarda todo aparte|partición/i);
+    expect(texto, "el copy dice que algo falló, y no falló").not.toMatch(/fall[óo]|error|se perdi[óo]/i);
+    expect(texto, "el copy dice «empezá de nuevo», que es el pecado que este repo persigue").not.toMatch(
+      /empez[áa] de nuevo/i,
+    );
+    // Y EL HITO, que es lo mismo pero legible desde `?diag=1` en el teléfono del founder. Sin este
+    // par de aserciones, `anotarLaSalidaAlNavegador` sería un artefacto que alguien llama y que nadie
+    // mira: el renglón diría cualquier cosa y la suite seguiría verde.
+    expect(leerHito("salida-al-navegador"), "el hito no distingue el caso (a)").toBe("con-marca-sin-borrador");
+    cleanup();
+
+    // (b) La marca está y el borrador TAMBIÉN cruzó ⇒ no hubo nada que contar.
+    await aterrizar({ conMarca: true, conBorrador: true });
+    expect(
+      screen.queryByText(AVISO_ATERRIZAJE),
+      "el borrador cruzó y la app igual dijo que no estaba",
+    ).not.toBeInTheDocument();
+    expect(leerHito("salida-al-navegador"), "el hito no distingue el caso (b)").toBe("con-marca-y-borrador");
+    cleanup();
+
+    // (c) 🔴 EL CONTROL QUE SOSTIENE A LOS OTROS DOS: sin marca no hay aviso. A alguien que entra por
+    //     primera vez dentro del navegador de la billetera no se le puede hablar de datos que nunca
+    //     cargó. Este es el caso que un mutante «condición siempre verdadera» tiene que romper.
+    await aterrizar({ conMarca: false, conBorrador: false });
+    expect(
+      screen.queryByText(AVISO_ATERRIZAJE),
+      "a un visitante nuevo se le avisó sobre datos que nunca cargó",
+    ).not.toBeInTheDocument();
+    // ⛔ Y EL HITO DICE `sin-marca`, que NO es lo mismo que `con-marca-sin-borrador`: de una visita
+    //    nueva no se puede concluir nada sobre si el almacenamiento cruzó. Colapsar los dos sería
+    //    convertir «no pude preguntar» en «no pasó».
+    expect(leerHito("salida-al-navegador"), "el hito colapsó `sin-marca` con `sin-borrador`").toBe("sin-marca");
+    // Y la pantalla de entrada sigue siendo la de siempre: la oferta está, porque no hay wallet acá.
+    expect(screen.getByText(OFERTA)).toBeInTheDocument();
+  });
+
+  // 🔴 EL RENGLÓN DEL BLOQUE DE DIAGNÓSTICO, Y POR QUÉ ESTE `it` EXISTE. La regla del propio
+  // `./bitacora-de-vuelta.ts` es que un quinto hito «obliga a decidir qué pregunta contesta y a darle
+  // renglón». El renglón se escribió, y MEDIDO: borrarlo dejaba la suite entera en VERDE
+  // (`36 passed` en `diagnostico-de-vuelta.test.tsx`, `39 passed` acá). O sea que era decoración: un
+  // artefacto que nadie mira no es un instrumento. Este `it` es su único guard.
+  //
+  // MUTANTE QUE LO TIENE QUE MATAR: borrar del template de `./diagnostico-de-vuelta.tsx` el renglón
+  // `salida navegador: …`.
+  // ⛔ El bloque se monta APARTE porque en producción no cuelga del flujo sino de `app/page.tsx`;
+  //    montarlo acá es lo que hace que este `it` mida el renglón REAL y no una copia.
+  it("T-372-W1-7b: el bloque de diagnóstico publica el veredicto del aterrizaje, legible desde el teléfono", async () => {
+    olvidarHitos();
+    window.history.replaceState({}, "", `/?${PARAM_SALIDA}=${VALOR_SALIDA}&diag=1`);
+    window.localStorage.setItem(CLAVE_DEL_REPO, "[]");
+    await enLaBienvenida("none");
+    // CD-18 — el hito se anotó: sin esto el renglón podría decir «no corrió» y el `it` mediría el
+    // texto de un caso que nunca ocurrió.
+    expect(leerHito("salida-al-navegador"), "el aterrizaje no se anotó").toBe("con-marca-sin-borrador");
+
+    await act(async () => {
+      render(<DiagnosticoDeVuelta />);
+    });
+
+    const bloque = document.querySelector("pre")?.textContent ?? "";
+    expect(bloque, "el bloque de diagnóstico no se montó: `?diag=1` no lo encendió").toContain("DIAG");
+    expect(
+      bloque,
+      "el bloque de diagnóstico no publica el veredicto del aterrizaje: en el teléfono no hay forma " +
+        "de leer si el almacenamiento cruzó el salto",
+    ).toContain("salida navegador: con-marca-sin-borrador");
   });
 });

@@ -1262,7 +1262,7 @@ describe("WKH-372/AC-1-1: la oferta de abrir Chaski adentro del navegador de la 
   // oferta ⇒ el bloque aparece también con la billetera inyectada y el `innerHTML` deja de ser
   // idéntico.
   // ⛔ FALSO KILLED A EVITAR: comparar sólo un texto en vez del `innerHTML` deja pasar cambios de
-  // estructura. Patrón obligatorio: `T-065-21` (`:1018` antes de este apéndice), que compara el
+  // estructura. Patrón obligatorio: `T-065-21` (`:1037`), que compara el
   // `innerHTML` del paso entero.
   it("T-372-W1-2(control): con la billetera INYECTADA la pantalla de entrada es byte-idéntica", async () => {
     await enLaBienvenida("injected");

@@ -86,7 +86,7 @@ describe("WKH-372/AC-1-4b · qué viaja y qué NO viaja al navegador de la bille
 
   // MUTANTE QUE LO TIENE QUE MATAR: en `vinoDeUnaSalidaConBorrador`, cambiar la comparación por
   // `new URL(href).searchParams.has(PARAM_SALIDA)` ⇒ `""`, `"true"`, `"0"` y `"1 "` pasan a prender.
-  // Patrón obligatorio: (`T-065-20`, `./wallet-availability.test.tsx:1002`), que ya hace exactamente
+  // Patrón obligatorio: (`T-065-20`, `./wallet-availability.test.tsx:1021`), que ya hace exactamente
   // esto para una env.
   it("T-372-W1-9: la marca es opt-in ESTRICTO: sólo el valor exacto prende", () => {
     const conValor = (v: string): string => `${ORIGEN}/?${PARAM_SALIDA}=${encodeURIComponent(v)}`;

@@ -75,7 +75,7 @@ import { esperarListo } from "../test-support/desenlaces";
 import { buildTestContainer } from "../test-support/test-container";
 
 // El barrel `@solana/wallet-adapter-wallets` arrastra el adapter de Ledger, que no resuelve bajo
-// vitest. Mismo reemplazo, y por el mismo motivo, que `./wallet-availability.test.tsx:33`: lo único
+// vitest. Mismo reemplazo, y por el mismo motivo, que `./wallet-availability.test.tsx:32`: lo único
 // que se saltea es el re-export; la detección que se está midiendo sigue siendo la de la librería.
 vi.mock("@solana/wallet-adapter-wallets", async () => {
   const p = await import("@solana/wallet-adapter-phantom");
@@ -165,7 +165,7 @@ async function entrarAlNavegadorDeLaBilletera(inyectar = true, esperaMs = 1200):
 
 /** El host de la billetera, DERIVADO del productor de producción y ⛔ nunca escrito a mano acá: si
  *  alguien cambia el universal link, este valor lo sigue solo. Es el mismo antídoto que `T-H1-3` usa
- *  para el alto del CTA (`./wallet-availability.test.tsx:956`): se LEE, no se re-escribe. */
+ *  para el alto del CTA (`./wallet-availability.test.tsx:975`): se LEE, no se re-escribe. */
 const HOST_DE_LA_BILLETERA = new URL(phantomBrowseUrl("https://chaski.test/", "https://chaski.test"))
   .hostname;
 

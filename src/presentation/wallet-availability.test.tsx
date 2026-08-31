@@ -1208,6 +1208,8 @@ describe("WKH-358/AC-9: la bandera NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED es opt-in
 // Qué se agrega en la pantalla y qué mide cada `it`:
 //   · La OFERTA en `bienvenida` (AC-1-1)          → `T-372-W1-1` y su control negativo `T-372-W1-2`
 //   · Lo que el `href` de la oferta LLEVA (AC-1-1)→ `T-372-W1-1`, tercera mitad (AR/BLQ-BAJO-1)
+//   · La MARCA que ese `href` lleva (AC-1-4b)     → `T-372-W1-1b` (AR-it2/BLQ-BAJO-2), con la mitad
+//     negativa en `T-372-W1-1`: son las DOS propiedades de la misma expresión de `flow.tsx:757`
 //   · El segundo enlace, el de instalar (AC-1-4)  → `T-372-W1-6`
 //   · El aviso de aterrizaje, TRES casos (AC-1-4b)→ `T-372-W1-7`
 //   · La pantalla donde el aviso se pinta (I-2(b))→ `T-372-W1-7c` (AR/MNR-4)
@@ -1297,6 +1299,95 @@ describe("WKH-372/AC-1-1: la oferta de abrir Chaski adentro del navegador de la 
     expect(
       abre.searchParams.get("monto"),
       "el enlace se llevó puesto un parámetro de la app: limpiar el rastro no es vaciar la URL",
+    ).toBe("400");
+    // 7 · AR-it2/BLQ-BAJO-2 · LA MITAD NEGATIVA DEL PAR QUE CIERRA `hayBorrador`. Acá la pantalla
+    //     recién se montó, así que `rem` es `null` y NO hay nada que se pueda perder al cruzar ⇒ la
+    //     marca de salida no tiene por qué viajar. Sin esta fila, `hayBorrador: true` clavado pasaría
+    //     este `it` Y el hermano de abajo, y la prop volvería a no decir nada.
+    expect(
+      abre.searchParams.get(PARAM_SALIDA),
+      "la marca de salida viaja sin que haya nada cargado: del otro lado la app le avisaría a alguien " +
+        "sobre datos que nunca existieron",
+    ).toBeNull();
+  });
+
+  // 🔴 AR-it2/BLQ-BAJO-2 — LA OTRA MITAD DE LA MISMA EXPRESIÓN, Y POR QUÉ ES UN `it` ENTERO. El
+  // `href` de la oferta (`flow.tsx:757`) tiene DOS propiedades y el fix-pack anterior cerró UNA. Lo
+  // midió el revisor con MUT-L: cambiando `hayBorrador: rem !== null` por `hayBorrador: false` la
+  // suite completa quedaba en `exit 0` (`167 passed / 3421 passed`). Con `hayBorrador` clavado en
+  // `false` el enlace NUNCA lleva `?wb=1`, que es lo único que enciende el aviso del aterrizaje ⇒ se
+  // podía apagar en silencio el desenlace `con-marca-sin-borrador` entero, que es el que esta ola
+  // construyó para decirle a la persona que sus datos no cruzaron. `T-LINK-1` (`:278`) mide el
+  // `hayBorrador` del enlace SECUNDARIO (`flow.tsx:1379`); el de la puerta principal no lo miraba
+  // nadie. Mismo cuadrante que `BLQ-BAJO-1`, en la otra mitad de la misma expresión.
+  //
+  // 🔴 Y ESTE FIXTURE ES, ADEMÁS, LA MEDICIÓN DE ALCANZABILIDAD QUE EL AR DECLARÓ NO HABER HECHO.
+  // La pregunta abierta era si `step === "bienvenida"` con `rem !== null` existe fuera del papel.
+  // EXISTE, y el camino es de producción, no un atajo de test: las cuatro entradas a `bienvenida` son
+  // `flow.tsx:587` (que limpia `rem` en `flow.tsx:577`), `flow.tsx:807` (sale de `send`, adonde sólo
+  // se llega con `rem` en `null`: lo deja así la función `resetTo` en `flow.tsx:3526`),
+  // `flow.tsx:1186` (sale de `history`, que no toca `rem`) y la card del fin del resume, cuyo
+  // `onIrAlInicio` vive en `flow.tsx:794` y se cablea en `flow.tsx:4391`. Esa card es la ÚNICA que
+  // vuelve a un destino sin tocar la remesa. El resume corre en el montaje y la ventana anterior a su
+  // primera respuesta
+  // NO tiene overlay —está escrito en `flow.tsx:208`—, así que la persona alcanza a crear la remesa
+  // mientras la consulta está en vuelo. Eso es exactamente lo que hacen las líneas de abajo.
+  //
+  // MUTANTE QUE LO TIENE QUE MATAR (MUT-L): en `flow.tsx:757`, `hayBorrador: rem !== null` →
+  // `hayBorrador: false`.
+  // ⛔ FALSO KILLED A EVITAR: que el rojo lo produzca `T-LINK-1`, que mide la MISMA prop en el OTRO
+  //    enlace. El mutante vive en `flow.tsx:757` y `T-LINK-1` mira `flow.tsx:1379`, así que el `×`
+  //    tiene que ser de este `it` y de ninguno más.
+  it("T-372-W1-1b: con una remesa ya cargada, el enlace de la oferta SÍ lleva la marca de salida", async () => {
+    window.history.replaceState({}, "", "/?monto=400");
+    // El resume se queda EN VUELO hasta que este `it` lo corta: es la ventana sin overlay de
+    // `flow.tsx:208`, la única en la que la persona puede crear una remesa antes de que aterrice.
+    // ⛔ El valor inicial TIRA a propósito: si `resumeKyc.execute` nunca se llamara, el fixture no
+    //    habría montado el camino que dice montar y hay que enterarse ahí, no tres filas después.
+    let cortarElResume: () => void = () => {
+      throw new Error("el resume nunca se llamó: este fixture no está en la ventana que dice medir");
+    };
+    const container = buildTestContainer({
+      useCases: {
+        resumeKyc: {
+          execute: () =>
+            new Promise<never>((_resolver, rechazar) => {
+              cortarElResume = () => rechazar(new Error("didit-no-contesta"));
+            }),
+        } as unknown as ReturnType<typeof buildTestContainer>["resumeKyc"],
+      },
+    });
+
+    irAlPasoConectar(container);
+    // CD-18 (1/2) — EL FIXTURE DEJÓ UNA REMESA CARGADA. `onSend` hace `setRem(r.snapshot)` y recién
+    // después `setStep("connect")` (`flow.tsx:324-327`), así que estar parado en `connect` es la
+    // prueba observable de que `rem` dejó de ser `null`. Sin esta fila, un `createRemittance` que
+    // fallara dejaría la aserción final roja sin decir por qué.
+    await screen.findByRole("button", { name: /Conectar wallet/ });
+
+    // El resume se cae ⇒ la card del fin del resume gana sobre el `step` (`flow.tsx:786`) y ofrece la
+    // vuelta al inicio SIN tocar `rem`.
+    await act(async () => {
+      cortarElResume();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Volver al inicio/ }));
+    await act(async () => {
+      solanaWalletBridge.setWalletAvailability("none");
+    });
+
+    // CD-18 (2/2) — se llegó a la BIENVENIDA con la remesa puesta: la oferta sólo se pinta ahí.
+    const enlace = screen.getByRole("link", { name: /Abrir Chaski en Phantom/ });
+    const abre = hrefQueLaBilleteraVaAAbrir(enlace.getAttribute("href") as string);
+    expect(
+      abre.searchParams.get(PARAM_SALIDA),
+      "el enlace de la oferta cruza SIN la marca de salida habiendo una remesa cargada: del otro lado " +
+        "la app no puede saber que había datos, y el aviso del aterrizaje no se enciende nunca",
+    ).toBe(VALOR_SALIDA);
+    // La otra mitad, la que impide que un `?wb=1` pegado a la fuerza pase la fila de arriba: el
+    // enlace sigue siendo el de ESTA app, con sus parámetros.
+    expect(
+      abre.searchParams.get("monto"),
+      "el enlace perdió los parámetros de la app: la marca se suma a la URL, no la reemplaza",
     ).toBe("400");
   });
 
@@ -1473,7 +1564,13 @@ describe("WKH-372/AC-1-4b: el aterrizaje dentro del navegador de la billetera, c
   //    `barra-destinos.test.tsx:504-518`: 59 caracteres de body). El fixture sería el header solo, y
   //    entonces la fila (b) pasaría por no haber montado un destino. `recuperar` sí se pinta, y por eso
   //    puede traer su propio marcador de CD-18.
-  it("T-372-W1-7c: el aviso de aterrizaje vive en la bienvenida y no se cuela en los destinos", async () => {
+  // ⚠️ AR-it2/MNR-A · Y `send` TAMPOCO SE MIDE ACÁ, que es lo que el nombre viejo («los destinos», en
+  //    plural) tapaba: `send` se pinta, sí, pero no es un `Destino` (`barra-destinos.tsx:25`) y este
+  //    `it` mide UNA pantalla, la que nombra su título. Lo que queda dicho y no medido: que el aviso
+  //    tampoco se cuele en `send`. El gate es UNA sola condición para todas las pantallas
+  //    (`step === "bienvenida"`, `flow.tsx:757`), así que el mutante que la quita se pone rojo acá
+  //    igual; de `send` no se afirma nada.
+  it("T-372-W1-7c: el aviso de aterrizaje vive en la bienvenida y no se cuela en «recuperar»", async () => {
     olvidarHitos();
     window.history.replaceState({}, "", `/?${PARAM_SALIDA}=${VALOR_SALIDA}`);
     window.localStorage.setItem(CLAVE_DEL_REPO, "[]");

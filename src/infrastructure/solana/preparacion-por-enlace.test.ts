@@ -1057,3 +1057,77 @@ describe("T-067-24..27 (CR/MNR-4): las cuatro ramas de `pedir()`, sobre el adapt
     expect(otraVez.estado, "la prueba se entregó dos veces: el «un solo uso» de CD-15 no está").not.toBe("listo");
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// HU-075/gesto · T-075-GESTO-IRA — QUÉ TRAE `r.irA` EN EL SEGUNDO SALTO, MEDIDO SOBRE EL CAMINO REAL
+//
+// 🔴 POR QUÉ ESTE `it` EXISTE Y POR QUÉ VIVE ACÁ Y NO EN `flow-reanudacion.test.tsx`.
+//
+// El diagnóstico del teléfono del founder dejó `connect: hay-que-salir` con la persona parada en la
+// bienvenida y SIN error, y eso admitía dos causas que la foto no separa:
+//   (1) `r.irA` llega VACÍO o mal formado ⇒ la navegación no tiene a dónde ir, y el arreglo sería otro;
+//   (2) la URL está bien y el navegador móvil DESCARTA la navegación programática sin gesto.
+// Este `it` cierra (1) POR MEDICIÓN: corre el cableado de producción de `container.ts:185` —el 4º
+// argumento de `ConnectWallet` es el `SolanaWalletAdapter` REAL— contra el disco que dejó la vuelta
+// del connect, y lee el `irA` que sale. Lo único de mentira es la respuesta del emisor del desafío.
+//
+// ⛔ Y POR QUÉ NO SE PUEDE MEDIR EN jsdom, que es donde vive la pantalla. MEDIDO el 2026-08-30 con una
+// sonda temporal (creada, corrida y borrada): en el entorno jsdom de este repo
+// `new TextEncoder().encode(…)` devuelve un `Uint8Array` DE OTRO REALM ⇒ `b instanceof Uint8Array`
+// es **false**, y `tweetnacl` lo rechaza con `TypeError: unexpected type, use Uint8Array` en
+// (`sobre`, `./deeplink/protocol.ts:170`). O sea: `urlFirmarMensaje` —y con él todo `irA` de
+// producción— es INALCANZABLE desde cualquier test jsdom de este repo. No es un defecto del producto
+// (un navegador real tiene un solo realm); es una costura del aparato de medición, y está escrita acá
+// para que nadie intente cerrar (1) del otro lado y crea que "no se puede armar la URL".
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+describe("HU-075/gesto: el `irA` del segundo salto", () => {
+  it("T-075-GESTO-IRA: `execute()` suspende con una URL ABSOLUTA de la billetera, ⛔ no con una vacía", async () => {
+    const nav = montarNavegador();
+    const billetera = nacl.box.keyPair();
+    const recorrido = new RecorridoPorEnlaceReal();
+
+    // 1 · el recorrido real hasta que el disco tiene el viaje CONECTADO, igual que el `it` de AC-1.
+    const { irA: irAlConnect } = recorrido.elegir({ billetera: "phantom", remittanceId: REM });
+    const q = new URL(irAlConnect).searchParams;
+    nav.navegarA(
+      hrefDeVuelta(
+        q.get("redirect_link") as string,
+        respuestaDeLaBilletera({ public_key: DIRECCION, session: "sess-1" }, bs58.decode(q.get("dapp_encryption_public_key") as string), billetera),
+      ),
+    );
+    expect(await recorrido.completar({ remittanceId: REM })).toEqual({ estado: "conectado", direccion: DIRECCION });
+
+    // 2 · el teléfono sin extensión, y el emisor del desafío contestando.
+    solanaWalletBridge.setWalletAvailability("none");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ popChallenge: "ch-gesto", popMessage: "firmá esto", exp: Math.floor(Date.now() / 1000) + 600 }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+
+    // 3 · EL CABLEADO DE PRODUCCIÓN. El 3er argumento TIRA si alguien lo llama: este camino sale por la
+    //     suspensión del PoP ANTES de consultar veredicto, y si dejara de ser cierto hay que verlo.
+    const wallet = new SolanaWalletAdapter();
+    const r = await new ConnectWallet(
+      wallet,
+      new FakeKycStore(),
+      { ensure: async () => { throw new Error("se consultó el veredicto: este camino salía antes por la suspensión del PoP"); } } as never,
+      wallet,
+    ).execute();
+
+    // CD-18 — el fixture reproduce el caso del teléfono: el mismo desenlace que leyó el diagnóstico.
+    expect(r.estado, "el fixture no reproduce el caso del diagnóstico: `execute()` no pidió el segundo salto").toBe("hay-que-salir");
+    if (r.estado !== "hay-que-salir") throw new Error("inalcanzable");
+
+    // 4 · LA MEDICIÓN. Las tres afirmaciones son las que descartan la hipótesis (1).
+    expect(r.irA, "el destino del segundo salto llegó VACÍO: la causa del bloqueo sería otra").not.toBe("");
+    const u = new URL(r.irA); // TIRA si no es absoluta: ésa es la mitad "mal formada" de la hipótesis
+    expect(`${u.protocol}//${u.host}${u.pathname}`).toBe("https://phantom.app/ul/v1/signMessage");
+    expect(new URL(u.searchParams.get("redirect_link") as string).origin, "el salto no lleva por dónde volver").toBe(ORIGEN);
+  });
+});

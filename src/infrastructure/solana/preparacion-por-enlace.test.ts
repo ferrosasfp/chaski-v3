@@ -854,7 +854,7 @@ describe("T-067-21 (AR/BLQ-ALTO-1): la vuelta del permiso se lee del href que le
 // ⛔ POR QUÉ EL CONNECT SE REPITE ACÁ EN VEZ DE COMPARTIR EL FIXTURE DE `T-067-21`, y es Δ0 y no
 // pereza: subir aquel `volviendoDeFirmarElPermiso()` a scope de módulo lo obliga a moverse de línea, y
 // este archivo lo citan DOS sitios por número —(`completarPop`, `../../presentation/flow.tsx:4009`) y
-// (`completarPop`, `../../presentation/flow-reanudacion.test.tsx:575`), las dos a `:696`—. Lo que se
+// (`completarPop`, `../../presentation/flow-reanudacion.test.tsx:590`), las dos a `:696`—. Lo que se
 // comparte de verdad no es el código: es que las dos mitades produzcan el MISMO estado del mundo, y
 // eso se verifica solo (si el connect de acá no dejara el viaje conectado, `pedir()` no llegaría a
 // ninguna de las cuatro ramas y los cuatro `it` se caerían en el `throw` del fixture).

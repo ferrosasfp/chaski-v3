@@ -283,19 +283,33 @@ describe("T-065-8: el pisón", () => {
 
     render(<RemittanceFlow pasoInicial="bienvenida" container={c} />);
 
-    // La persona entra al formulario: eso es lo que marca `yaInteractuoRef`.
-    fireEvent.click(await screen.findByRole("button", { name: /Empezar un envío/ }));
-    expect(await screen.findByPlaceholderText("Nombre de tu familiar")).toBeInTheDocument();
+    // La persona se va a otro destino con la barra: eso es lo que marca `yaInteractuoRef` (`irADestino`,
+    // `./flow.tsx:426`).
+    //
+    // 🔴 ACÁ TOCABA «Empezar un envío», Y ESE BOTÓN YA NO EXISTE EN ESTA VENTANA — no es un test
+    // ajustado para pasar, es que la superficie se movió a propósito (HU-075/aterrizaje, `./flow.tsx:1195`).
+    // Mientras la vuelta por enlace no resuelve, la pantalla de entrada NO se pinta: era el CTA más
+    // grande de la pantalla justo cuando la persona vuelve de firmar, y tocarlo mandaba su reanudación
+    // a este mismo aviso en vez de al salto que venía a dar.
+    // ⛔ LO QUE ESTE `it` MIDE NO CAMBIÓ, y el gate que vigila tampoco: la barra de destinos SÍ sigue
+    // pintada en esa ventana, porque la pinta el (`esDestino`, `./flow.tsx:1237`) del paso y `bienvenida`
+    // ES un destino. O sea que la interacción que dispara el pisón sigue siendo alcanzable en producción
+    // por este camino. Si algún día la barra también se apagara ahí, este `it` se cae y lo que hay que
+    // rediscutir es el pisón, no el fixture.
+    fireEvent.click(await screen.findByRole("button", { name: /Recuperar/ }));
+    expect(await screen.findByRole("heading", { name: /Recuperar fondos de un envío anterior/ })).toBeInTheDocument();
 
     await act(async () => {
       soltar();
       await Promise.resolve();
     });
 
-    // (i) avisa; (ii) NO llamó al use-case; (iii) sigue en el formulario que la persona estaba usando.
+    // (i) avisa; (ii) NO llamó al use-case; (iii) sigue en el destino que la persona estaba usando.
+    // El (iii) es MÁS falsable que antes: sin el pisón, `alReanudar` hace `setStep("track")` y este
+    // encabezado desaparece.
     expect(await screen.findByText(/Volviste de tu billetera/)).toBeInTheDocument();
     expect(spy, "la reanudación corrió por debajo mientras la persona usaba la pantalla").toHaveBeenCalledTimes(0);
-    expect(screen.getByPlaceholderText("Nombre de tu familiar")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Recuperar fondos de un envío anterior/ })).toBeInTheDocument();
   });
 
   // 🔴 T-065-8b — EL SEGUNDO PISÓN, QUE NO TENÍA NINGÚN `it` Y LO DESTAPÓ LA BATERÍA DEL FIX-PACK.
@@ -346,9 +360,10 @@ describe("T-065-8: el pisón", () => {
 
     render(<RemittanceFlow pasoInicial="bienvenida" container={c} />);
 
-    // La persona entra al formulario: eso es lo que marca `yaInteractuoRef`.
-    fireEvent.click(await screen.findByRole("button", { name: /Empezar un envío/ }));
-    expect(await screen.findByPlaceholderText("Nombre de tu familiar")).toBeInTheDocument();
+    // La persona se va a otro destino con la barra: eso es lo que marca `yaInteractuoRef`. Mismo motivo
+    // que en el `it` de arriba para que NO sea «Empezar un envío» (ver el bloque de ahí).
+    fireEvent.click(await screen.findByRole("button", { name: /Recuperar/ }));
+    expect(await screen.findByRole("heading", { name: /Recuperar fondos de un envío anterior/ })).toBeInTheDocument();
 
     await act(async () => {
       soltar();
@@ -359,7 +374,7 @@ describe("T-065-8: el pisón", () => {
       conectar,
       "el productor conectó la billetera por debajo mientras la persona usaba la pantalla",
     ).toHaveBeenCalledTimes(0);
-    expect(screen.getByPlaceholderText("Nombre de tu familiar")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Recuperar fondos de un envío anterior/ })).toBeInTheDocument();
   });
 
   // El par negativo, y es lo que hace falsable al `it` de arriba: sin ninguna interacción, la MISMA vuelta
@@ -1498,5 +1513,183 @@ describe("HU-075/gesto: el segundo salto necesita un TOQUE", () => {
     } finally {
       espia.restaurar();
     }
+  });
+
+  // ⛔ EL PAR POSITIVO DE `T-075-GESTO-3`, que mide sólo lo que el copy NO dice. La pregunta del founder
+  // fue textual: «por qué me pide dos firmas cuando conecto wallet, es raro», y hasta acá la pantalla no
+  // la contestaba en ninguna parte. Un `it` que sólo prohíbe palabras queda verde con un copy mudo.
+  //
+  // 🔴 MUTANTE QUE MATA (medido, ver el reporte): en `flow.tsx:757`, borrar del cuerpo del aviso la
+  // frase «Conectar y firmar son dos permisos distintos: conectar nos da tu dirección, y cada firma la
+  // autorizás vos por separado.». Deja ESTE `it` en rojo por su motivo propio (los dos `toMatch` de
+  // abajo) y ⛔ NO toca a `T-075-GESTO-3`, que sigue verde porque lo que él mide son ausencias.
+  //
+  // ⚠️ LO QUE ESTE `it` **NO** MIDE, declarado: que la persona ENTIENDA la frase. Eso no se mide con un
+  // `toMatch` y no se afirma acá. Lo único verificado es que la pantalla lo DICE, en el mismo aviso y en
+  // el mismo momento en que la pregunta aparece.
+  it("T-075-COPY-2FIRMAS: el aviso explica POR QUÉ hace falta esa firma, sin nombrar un mecanismo que no aplica a los tres saltos", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarBorrador(repo);
+    sembrarVuelta("conectar");
+    const c = buildTestContainer({ repo, wallet: new FakeWallet(), connectedWallet: new SolanaWalletAdapter(), recorridoPorEnlace: new RecorridoQueVuelveConectado2(), useCases: { connectWallet: connectWalletQueSuspende() } });
+    const espia = espiarNavegacion(); // mismo motivo que en `T-075-GESTO-3`: que el arnés no ensucie el entorno
+    try {
+      render(<RemittanceFlow pasoInicial="bienvenida" container={c} />);
+      const aviso = (await screen.findByRole("link", { name: CTA_FIRMA })).closest("div") as HTMLElement;
+      const texto = aviso.textContent ?? "";
+
+      // 1 · CONTESTA LA PREGUNTA: conectar y firmar no son lo mismo, y cada firma se autoriza sola.
+      expect(texto, "el aviso no dice que conectar y firmar sean dos cosas distintas").toMatch(/dos permisos distintos/);
+      expect(texto, "el aviso no dice que cada firma se autoriza por separado").toMatch(/cada firma la autorizás vos por separado/);
+
+      // 2 · ⛔ Y NO NOMBRA LA PRUEBA DE POSESIÓN, que es lo que hace verdadera a la frase en los TRES
+      // saltos: este MISMO aviso sale para `firmar-tx` y `firmar-patrocinio`, donde «esta firma prueba
+      // que la billetera es tuya» sería FALSO. Sin este `expect`, un copy más específico y más lindo
+      // pasaría el punto 1 y mentiría en el camino del depósito.
+      for (const prohibida of [/prueba que .{0,30}es tuya/i, /posesión/i]) {
+        expect(texto, `el aviso afirma un mecanismo que no vale para los tres saltos: ${prohibida}`).not.toMatch(prohibida);
+      }
+    } finally {
+      espia.restaurar();
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  // HU-075/aterrizaje — «me bota al inicio y me dice que falta una firma»
+  //
+  // 🔴 EL DEFECTO, TEXTUAL DEL FOUNDER: «cuando firmo la primera vez me bota al inicio y me dice que
+  // falta una firma … debería pedirme la firma sin necesidad de ir al inicio». El BOTÓN es necesario
+  // (el navegador descarta el salto automático: es todo el razonamiento de `T-075-GESTO-1`); mandarla
+  // a la pantalla de entrada NO lo es.
+  //
+  // ⚠️ MEDIDO ANTES DE TOCAR NADA (sonda del 2026-08-30, creada, corrida y borrada): con `dl=firmar-tx`
+  // y la reanudación devolviendo `hay-que-salir`, el `document.body` decía «Chaskitu plata a Perú, sin
+  // vueltas · Falta una firma para seguir … · Tu plata no pasa por Chaski …», o sea el aviso ENCIMA de
+  // la pantalla de entrada entera.
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+
+  /** El CTA de la pantalla de entrada. Es lo que la persona ve cuando «la botan al inicio». */
+  const CTA_INICIO = /Empezar un envío/;
+
+  // 🔴 MUTANTE QUE MATA (medido, ver el reporte): en `flow.tsx:1195`, sacar `saltoPendiente === null` de
+  // la condición del `<Bienvenida>`.
+  // ⚠️ Y EL MUTANTE ESTÁ ELEGIDO PARA QUE NO LO MATE NINGÚN VECINO: `T-075-GESTO-2` monta este MISMO
+  // fixture y sólo mira el `<a>`, así que sigue verde con la bienvenida puesta; y
+  // `T-075-REANUDAR-1(control)` exige que la bienvenida SÍ aparezca cuando no hay conexión, o sea que
+  // vigila el sentido contrario. El rojo sale con el nombre de este `it`.
+  it("T-075-ATERRIZAJE-1: con la firma pendiente, la pantalla se queda pidiendo la firma y ⛔ NO vuelve al inicio", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo, "confirmed");
+    sembrarVuelta("firmar-tx");
+    const IR_A = "https://phantom.app/ul/v1/signTransaction?payload=abc&nonce=def";
+    const c = buildTestContainer({
+      repo,
+      wallet: new FakeWallet(),
+      connectedWallet: new SolanaWalletAdapter(),
+      recorridoPorEnlace: new RecorridoPorEnlaceReal(),
+      useCases: {
+        confirmAndSend: { execute: async () => ({ estado: "hay-que-salir", irA: IR_A, esperando: "firma-tx" }) } as unknown as Container["confirmAndSend"],
+      },
+    });
+
+    const espia = espiarNavegacion();
+    try {
+      render(<RemittanceFlow pasoInicial="bienvenida" container={c} />);
+
+      // 1 · Lo que la persona TIENE que poder hacer sigue estando.
+      expect(await screen.findByRole("link", { name: CTA_FIRMA })).toHaveAttribute("href", IR_A);
+
+      // 2 · Y la pantalla de entrada NO está debajo. ⛔ El `queryBy` va DESPUÉS del `findBy` de arriba a
+      // propósito: preguntarlo antes de que la vuelta resuelva daría `null` por el motivo equivocado
+      // (todavía no había pasado nada) y este `it` quedaría verde sin poder fallar.
+      expect(screen.queryByRole("button", { name: CTA_INICIO }), "la persona quedó en la pantalla de entrada con el aviso encima").toBeNull();
+      expect(espia.asignado, "además navegó sola").toEqual([]);
+    } finally {
+      espia.restaurar();
+    }
+  });
+
+  // 🔴 LA SEGUNDA MITAD, Y NO ES SIMETRÍA: cierra una CARRERA medida. El productor de la vuelta espera
+  // hasta `TECHO_DISPONIBILIDAD_MS` (3 s) antes de resolver nada, y en esa ventana la pantalla de
+  // entrada ofrecía su CTA, que marca `yaInteractuoRef` (`./flow.tsx:175`). Un toque ahí manda la
+  // reanudación al aviso del pisón (`T-065-8`) en vez de al salto: la persona vuelve de firmar y se
+  // queda sin poder dar la firma que venía a dar.
+  //
+  // 🔴 MUTANTE QUE MATA: en `flow.tsx:1195`, sacar `!vueltaSinResolver` de la condición del
+  // `<Bienvenida>`.
+  //
+  // ⚠️ LO QUE ESTE `it` NO AFIRMA: que la ventana quede intocable. La barra de destinos SIGUE pintada
+  // ahí (`esDestino("bienvenida")`), y por ese camino el pisón se sigue disparando — es exactamente lo
+  // que mide `T-065-8` desde este mismo fix. Lo que se saca es el CTA más grande de la pantalla, no
+  // toda la superficie táctil.
+  it("T-075-ATERRIZAJE-2: mientras la vuelta no resuelve, ⛔ la pantalla de entrada no se ofrece", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo, "confirmed");
+    sembrarVuelta("firmar-tx");
+    let soltar: () => void = () => {};
+    const puerta = new Promise<void>((res) => {
+      soltar = res;
+    });
+    /** La ÚNICA variable del `it`: la vuelta queda colgada, que es la ventana real de hasta 3 s. */
+    class RecorridoColgado extends RecorridoPorEnlaceNulo {
+      override remesaEnCurso(): string {
+        return REM;
+      }
+      override async completar(): Promise<never> {
+        await puerta;
+        return { estado: "nada" } as never;
+      }
+    }
+    const IR_A = "https://phantom.app/ul/v1/signTransaction?payload=abc&nonce=def";
+    const c = buildTestContainer({
+      repo,
+      wallet: new FakeWallet(),
+      connectedWallet: new SolanaWalletAdapter(),
+      recorridoPorEnlace: new RecorridoColgado(),
+      useCases: {
+        confirmAndSend: { execute: async () => ({ estado: "hay-que-salir", irA: IR_A, esperando: "firma-patrocinio" }) } as unknown as Container["confirmAndSend"],
+      },
+    });
+
+    const espia = espiarNavegacion();
+    try {
+      render(<RemittanceFlow pasoInicial="bienvenida" container={c} />);
+
+      // 1 · Se dice lo que está pasando, y ⛔ no se afirma que la vuelta haya salido bien.
+      expect(await screen.findByText(/Volviendo de tu billetera/)).toBeInTheDocument();
+      // 2 · Y el CTA que envenena la reanudación no está.
+      expect(screen.queryByRole("button", { name: CTA_INICIO }), "el CTA de la pantalla de entrada quedó tocable en la ventana de la vuelta").toBeNull();
+
+      // 3 · Y al resolverse, la persona pasa de «volviendo» al pedido de firma SIN ver la pantalla de
+      // entrada en el medio, que es la queja entera del founder. ⛔ La supresión NO es permanente y eso
+      // lo miden dos controles que NO dependen de este fixture: `T-075-ATERRIZAJE(control)` (sin marca
+      // en la barra, la entrada está desde el primer render) y `T-075-REANUDAR-1(control)` (con marca,
+      // en cuanto la vuelta resuelve sin conexión la entrada aparece).
+      await act(async () => {
+        soltar();
+        await Promise.resolve();
+      });
+      expect(await screen.findByRole("link", { name: CTA_FIRMA })).toHaveAttribute("href", IR_A);
+      expect(screen.queryByRole("button", { name: CTA_INICIO })).toBeNull();
+    } finally {
+      espia.restaurar();
+    }
+  });
+
+  // 🔴 EL PAR NEGATIVO DE LOS DOS DE ARRIBA, y es lo que los hace falsables. MISMO montaje, MISMA
+  // remesa, MISMA bandera: la única variable que se mueve es que la barra NO trae marca nuestra. Sin
+  // esto, un arreglo que apagara la pantalla de entrada SIEMPRE pasaría los dos y rompería la app
+  // entera para todo el mundo (AC-1 de la HU 068).
+  it("T-075-ATERRIZAJE(control): sin marca en la barra, la pantalla de entrada se ofrece como siempre", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo, "confirmed");
+    // ⛔ NADA de `sembrarVuelta`: la barra queda en `/enviar` sin `dl`, que es el caso de los ~100 `it`
+    // que montan esta pantalla sin tener nada que ver con el enlace.
+    const c = buildTestContainer({ repo, wallet: new FakeWallet(), connectedWallet: new SolanaWalletAdapter(), recorridoPorEnlace: new RecorridoPorEnlaceNulo() });
+
+    render(<RemittanceFlow pasoInicial="bienvenida" container={c} />);
+
+    expect(await screen.findByRole("button", { name: CTA_INICIO })).toBeInTheDocument();
+    expect(screen.queryByText(/Volviendo de tu billetera/)).toBeNull();
   });
 });

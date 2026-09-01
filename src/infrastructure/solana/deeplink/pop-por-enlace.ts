@@ -1,7 +1,7 @@
 // EL PASO DE LA PRUEBA DE POSESIÓN por enlace profundo (WKH-359 / AC-1, AC-4, AC-5).
 //
 // 🔴 QUÉ ES ESTO Y QUÉ NO ES. `prepare()` del payout exige una prueba de posesión firmada
-// (`../../settlement/http-solana-prepare-gateway.ts:193`), y en un teléfono sin extensión el bridge
+// ((`prepare`, `../../settlement/http-solana-prepare-gateway.ts:227`) — iba SIN ancla y decía `:193`, que hoy es un comentario: la ola W3 de WKH-372 metió 76 líneas en ese archivo y la corrió; anclada, `citas-ancladas.test.ts` la cubre — AR/BLQ-MED-1), y en un teléfono sin extensión el bridge
 // está vacío ⇒ hasta esta HU todo depósito por enlace moría en `payout_pop_unavailable`. Este módulo
 // escribe el par ida/vuelta de ese permiso: ancla el desafío que emitió el servidor, produce la URL
 // del salto, y al volver verifica la firma antes de dejar que nadie la use.

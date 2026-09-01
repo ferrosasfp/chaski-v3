@@ -209,7 +209,7 @@ export async function POST(req: Request): Promise<Response> {
   // Lo cierto es que NADIE quema el nonce: dentro de los 10 minutos de TTL (pop-challenge.ts) un
   // par (challenge, firma) capturado se puede reenviar a esta ruta. El input que lo demuestra:
   // repetir el mismo request dos veces dentro de la ventana — las dos pasan. Residual R-3;
-  // restituir el single-use acá es una HU aparte.
+  // restituir el single-use acá es una HU aparte. 🔴 R-3 TIENE DOS MITADES Y UNA YA ESTÁ CERRADA (AR/BLQ-BAJO-2, fix-pack de W3): la de que la credencial se le ENTREGUE a un tercero. Hasta el fix-pack, el par (challenge, firma) —y desde W3 también la sesión— viajaba en el `forwardBody` al agente que resuelve `remittance-payout`, que es un tercero elegido por capacidad; hoy las tres se sacan del cuerpo antes de forwardear y lo mide `T-372-W3-21`, por nombre, en `./route.test.ts`. ⛔ LA MITAD QUE SIGUE ABIERTA es ésta, la de arriba: quien capture el par EN LA RED lo puede reenviar dentro de la ventana, porque nadie quema el nonce.
   // Cualquier fallo cripto → 403 opaco (CD-4, no-oracle).
   const POP_SECRET = process.env.PAYOUT_POP_SECRET; // CD-14: dentro del handler
   // CD-2 / AC-3: OBLIGATORIO. Sin secreto → 503 fail-closed (NUNCA skip).
@@ -428,8 +428,8 @@ export async function POST(req: Request): Promise<Response> {
   // piso de reputación sube el piso, no reemplaza esas dos capas, que son independientes de QUÉ
   // agente respondió.
   // 🔴 PAYLOAD SANEADO (WKH-333/AC-16). El `kycVerificationId` del cliente —si vino— queda PISADO por
-  // el de la fila: el spread pone `...body` primero justo para eso. Se armaba una vez para las DOS
-  // ramas de transporte; ahora hay una sola y sigue siendo el único objeto que se forwardea.
+  // el de la fila: el spread pone el resto del body primero justo para eso. Se armaba una vez para
+  // las DOS ramas de transporte; ahora hay una sola y sigue siendo el único objeto que se forwardea.
   // ⚠️ ACÁ DECÍA *"no hay ningún camino por el que el valor del caller sobreviva"*, y §16 prohíbe esa
   // clase de afirmación de imposibilidad: es una propiedad de TODO el archivo enunciada desde una
   // línea, y no la sostiene nada de este renglón. La frase que reemplazó citaba su candado y la nueva
@@ -438,13 +438,54 @@ export async function POST(req: Request): Promise<Response> {
   // `kycVerificationId: "did-QUE-EL-CLIENTE-PROPUSO"` en el body produce un `/compose` que contiene
   // `did-de-la-fila` y NO contiene el valor del caller. Y el input que lo pone en ROJO ya está MEDIDO
   // (lo aplicó y revirtió el CR; acá no se muta una route de plata): invertir este spread a
-  // `{ kycVerificationId: …, ...body }` da DOS rojos, (`toBeLessThan`,
-  // `kyc-verification-id-guard.static.test.ts:150`) y (`toContain`, `route.test.ts:1849`).
+  // `{ kycVerificationId: …, ...alAgente }` da DOS rojos, (`toBeLessThan`,
+  // `kyc-verification-id-guard.static.test.ts:159`) y (`toContain`, `route.test.ts:1849`).
   //
   // `rowVerificationId` acá SIEMPRE viene de una fila que existe: si no había store se cortó con 503
   // y si no había fila se cortó con 403, las dos cosas arriba. No hay ninguna rama que llegue hasta
   // este renglón con un identificador vacío o propuesto por el cliente.
-  const forwardBody = { ...body, kycVerificationId: rowVerificationId };
+  //
+  // 🔴 W3.5 / AR-BLQ-BAJO-2 — LAS TRES CREDENCIALES DE IDENTIDAD SE QUEDAN ACÁ, y este renglón es
+  // el sitio del saneo, no uno nuevo: ya existía para pisar el `kycVerificationId` del cliente.
+  //
+  // QUÉ PASABA. El spread mandaba el body ENTERO, así que `sessionToken`, `popChallenge` y
+  // `popSignature` viajaban verbatim al `/compose` del gateway, que reenvía el `input` TAL CUAL
+  // (`input TAL CUAL`, `../../../../src/infrastructure/a2a/gateway-client.ts:400`) al agente que
+  // resolvió la capacidad `remittance-payout` — un TERCERO elegido por capacidad, no por nombre.
+  // Ese agente podía reenviar cualquiera de las tres a `POST /api/payout/prepare` y crear órdenes a
+  // nombre de esa dirección: el par PoP durante los 10 minutos de su `exp`, y la sesión durante los
+  // 30 de `SESION_TTL_SECONDS`. Contradecía lo que este mismo mecanismo defiende en
+  // (`credencial al portador`, `../../../../src/infrastructure/auth/sesion-store.ts:22`): no se
+  // guarda at-rest en el navegador propio y se le mandaba al disco de un tercero.
+  //
+  // ⚠️ EL PAR PoP YA VIAJABA ASÍ ANTES DE W3 (residual `R-3`, declarado en `:209-212`). Lo que W3
+  // agregó fue una credencial más y el triple de ventana. Sacar las TRES cierra la mitad de `R-3`
+  // que no cerraba nadie: la de que la credencial se le entregue a un tercero. ⛔ La OTRA mitad
+  // sigue abierta y sigue siendo una HU aparte: dentro de su ventana, un par capturado en la RED
+  // se puede reenviar, porque nadie quema el nonce.
+  //
+  // ⛔ NINGUNA DE LAS TRES ES PARTE DEL CONTRATO DEL AGENTE, y está verificado contra el schema, no
+  // supuesto: `CashoutPayoutInputSchema` declara `quoteId`, `amountUsd`, `kycVerificationId`,
+  // `senderIdentity`, `address`, `beneficiary` e `idempotencyKey`, y ninguna de las tres aparece
+  // (`wasiai-remittance-agents/src/agents/cashout-payout.ts:47-82`); su manifiesto publica la misma
+  // lista en `required` (`wasiai-remittance-agents/src/manifest/registry.ts:203-210`). Es un
+  // `z.object` sin `.strict()`, así que hoy las strippea en silencio: quitarlas no le cambia ni un
+  // byte a lo que el agente lee.
+  //
+  // ⛔ SE SACAN POR NOMBRE Y NO CON UNA ALLOW-LIST: una lista blanca de campos permitidos rompería
+  // el forward el día que el contrato del agente crezca, y el fallo sería silencioso (un campo que
+  // deja de llegar). Acá lo que se agregue de más al body llega, y lo que se agregue de más de
+  // CREDENCIALES hay que agregarlo también a este destructuring — que es exactamente lo que el
+  // candado de abajo pone en rojo. El candado es **T-372-W3-21**: (`sinCredenciales`,
+  // `./route.test.ts:2172`), que captura el cuerpo del `/compose` y exige que las tres claves NO
+  // estén. Su mutante, MEDIDO: volver este renglón a `{ ...body, … }` lo pone rojo.
+  const {
+    sessionToken: _laSesionNoViaja,
+    popChallenge: _elDesafioNoViaja,
+    popSignature: _laFirmaNoViaja,
+    ...alAgente
+  } = body;
+  const forwardBody = { ...alAgente, kycVerificationId: rowVerificationId };
   // QUIÉN dio el depositAddress. `undefined` = el gateway no lo dijo de forma legible. Viaja al 200
   // para que la remesa pueda decir de dónde salió la dirección contra la que la persona firmó. NO
   // participa de ningún guard.
@@ -454,7 +495,9 @@ export async function POST(req: Request): Promise<Response> {
       {
         capability: process.env.WASIAI_A2A_PAYOUT_CAPABILITY ?? PAYOUT_CAPABILITY,
         constraints: { min_reputation: PAYOUT_MIN_REPUTATION }, // CD-5: NUNCA omitir
-        input: forwardBody, // saneado: el kycVerificationId es el de la fila, no el del cliente
+        // saneado dos veces: el `kycVerificationId` es el de la fila y no el del cliente, y las
+        // tres credenciales de identidad se quedaron de este lado (AR-BLQ-BAJO-2).
+        input: forwardBody,
       },
     ],
   });

@@ -93,8 +93,16 @@ function findHits(): Hit[] {
  * Los ÚNICOS dos sitios de producción donde el identificador puede aparecer en CÓDIGO, los dos en la
  * misma route y los dos existiendo para NEUTRALIZARLO:
  *   · el `void (…body.kycVerificationId…)` que lo lee para descartarlo (deja escrito que no se usa);
- *   · el `{ ...body, kycVerificationId: rowVerificationId }` que lo PISA con el de la fila.
+ *   · el `{ ...alAgente, kycVerificationId: rowVerificationId }` que lo PISA con el de la fila.
  * Se anclan por archivo, no por número de línea: el archivo es la unidad estable.
+ *
+ * ⚠️ EL OBJETO QUE SE SPREADEA SE LLAMA `alAgente` Y NO `body` DESDE AR/BLQ-BAJO-2. Es el body MENOS
+ * las tres credenciales de identidad (`sessionToken`, `popChallenge`, `popSignature`), que dejaron de
+ * viajar al agente. El guard se re-apuntó al nombre nuevo en vez de aflojarse a un `.includes("...")`:
+ * la propiedad que vigila es de ORDEN dentro del spread, y para medir un orden hay que saber qué dos
+ * cosas se ordenan. Efecto colateral buscado: revertir aquel arreglo también pone ESTE guard en rojo.
+ * ⛔ Lo que este guard sigue SIN mirar es qué campos lleva `alAgente`: eso lo mide `T-372-W3-21`, por
+ * nombre, en `../../app/api/payout/prepare/route.test.ts`, sobre el cuerpo que efectivamente viajó.
  */
 const PERMITIDOS = new Set(["app/api/payout/prepare/route.ts"]);
 
@@ -138,13 +146,14 @@ describe("CD-26/CD-27 — barrido estático del `kycVerificationId` en código d
       true,
     );
     expect(
-      pisada.includes("...body") && pisada.includes("rowVerificationId"),
+      pisada.includes("...alAgente") && pisada.includes("rowVerificationId"),
       `el segundo uso dejó de ser la pisada con el id de la fila: «${pisada}»`,
     ).toBe(true);
-    // 🔴 EL ORDEN DENTRO DEL SPREAD ES EL GUARD. `{ ...body, kycVerificationId: … }` pisa; al revés
-    // (`{ kycVerificationId: …, ...body }`) el valor del cliente GANA y el agente recibe el suyo.
+    // 🔴 EL ORDEN DENTRO DEL SPREAD ES EL GUARD. `{ ...alAgente, kycVerificationId: … }` pisa; al
+    // revés (`{ kycVerificationId: …, ...alAgente }`) el valor del cliente GANA y el agente recibe el
+    // suyo.
     expect(
-      pisada.indexOf("...body"),
+      pisada.indexOf("...alAgente"),
       "el spread quedó DESPUÉS del campo: el valor del cliente pisa al de la fila y el agente " +
         "autoriza con la verificación que propuso quien llama (CD-26)",
     ).toBeLessThan(pisada.indexOf(NEEDLE));

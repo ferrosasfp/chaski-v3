@@ -26,8 +26,13 @@ const ADDR_B = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 // ⛔ MUTANTES QUE MATAN A `T-372-W3-7`, y se corren POR SEPARADO:
 //   (i)  en `./sesion-store.ts`, cambiar `>=` por `>` en la comparación del TTL ⇒ muere la mitad (d),
 //        con el mensaje "en el ms exacto del vencimiento ya no vale";
-//   (ii) borrar la línea `if (!Number.isFinite(ahora)) return null;` ⇒ muere la mitad (f), con el
-//        mensaje "un reloj ilegible dejó la sesión válida para siempre".
+//   (ii) borrar la línea `if (!Number.isFinite(ahora)) return null;` de `peek` ⇒ muere la mitad (f),
+//        con el mensaje "un reloj ilegible dejó la sesión válida para siempre";
+//  (iii) borrar el guard de `Number.isFinite` de `record` ⇒ muere la mitad (g), con el mensaje "una
+//        sesión grabada con el reloj ilegible se entrega para siempre".
+// ⛔ (ii) Y (iii) NO SE TAPAN ENTRE SÍ, y por eso son dos mitades y no una: la mitad (f) rompe el
+// reloj en las DOS operaciones, así que muere en el guard de `peek` sin llegar a mirar el de
+// `record`. La mitad (g) lo rompe SÓLO en la escritura, que es el único input que separa a los dos.
 // ⚠️ FALSO KILLED A EVITAR: un `it` que sólo probara "sin nada grabado da null" daría verde con un
 // almacén que devolviera `null` SIEMPRE. Por eso cada mitad negativa viaja con su mitad positiva.
 describe("InMemorySesionStore — la sesión se transporta, y vence (WKH-372/W3.4)", () => {
@@ -64,6 +69,35 @@ describe("InMemorySesionStore — la sesión se transporta, y vence (WKH-372/W3.
     const roto = new InMemorySesionStore({ nowIso: () => "no soy una fecha" });
     roto.record(ADDR_A, TOKEN);
     expect(roto.peek(ADDR_A), "un reloj ilegible dejó la sesión válida para siempre").toBeNull();
+
+    // (g) EL RELOJ ILEGIBLE **EN LA ESCRITURA** TAMPOCO  ⇒ mutante (iii)  [AR/MNR-3].
+    // La mitad (f) rompe el reloj en las dos operaciones y muere en el guard de `peek`: no dice nada
+    // del de `record`. Acá el reloj es ilegible SÓLO mientras se graba, y legible al leer, que es el
+    // único input que llega al guard nuevo. Sin él, `atMs` queda `NaN`, `ahora - NaN >= TTL` es
+    // `false` para cualquier `ahora`, y el token se entrega para siempre.
+    const relojDeLaMitadG = new RelojMovible();
+    let legible = false;
+    const rotoAlGrabar = new InMemorySesionStore({
+      nowIso: () => (legible ? relojDeLaMitadG.nowIso() : "no soy una fecha"),
+    });
+    rotoAlGrabar.record(ADDR_A, TOKEN);
+    legible = true;
+    expect(
+      rotoAlGrabar.peek(ADDR_A),
+      "una sesión grabada con el reloj ilegible se entrega para siempre",
+    ).toBeNull();
+    // Y NO ES QUE EL ALMACÉN QUEDÓ INERTE: con el reloj ya legible, la siguiente sí se graba y se lee.
+    rotoAlGrabar.record(ADDR_A, TOKEN);
+    expect(rotoAlGrabar.peek(ADDR_A), "el almacén quedó muerto tras un reloj ilegible").toBe(TOKEN);
+    // ⛔ Y LA VIEJA NO SOBREVIVE A UNA ESCRITURA QUE NO SE PUDO FECHAR: grabar con el reloj roto
+    // BORRA la que había, en vez de dejar servida una credencial que la persona ya reemplazó.
+    legible = false;
+    rotoAlGrabar.record(ADDR_A, "token.nuevo");
+    legible = true;
+    expect(
+      rotoAlGrabar.peek(ADDR_A),
+      "tras una escritura sin fecha quedó servida la sesión ANTERIOR",
+    ).toBeNull();
   });
 
   // 🔴 EL LECTOR NO TIENE `record` Y EL ESCRITOR NO TIENE `peek`, Y ESO LO CAZA `tsc`, NO ESTE `it`.

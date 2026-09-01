@@ -764,7 +764,7 @@ describe("POST /api/payout/prepare (WKH-211)", () => {
       );
       expect(res.status).toBe(200);
       const json = (await res.json()) as Record<string, unknown>;
-      // Shape EXACTO de isValidSolanaPrepareShape (http-solana-prepare-gateway.ts:87).
+      // Shape EXACTO de (`isValidSolanaPrepareShape`, `../../../../src/infrastructure/settlement/http-solana-prepare-gateway.ts:109`) — iba sin ancla y decía `:87`, que el fix-pack del AR de W3 corrió 19 líneas. ⛔ EN UNA SOLA LÍNEA: este archivo recibe citas por número (`:1407`, `:1849`, `:1850`) y una línea de más las corre a todas.
       expect(json.beneficiary).toBe(SOL_BENEFICIARY);
       expect(json.authority).toBe(authorityPubkey);
       expect(json.payoutId).toBe("transfi-po-1");
@@ -2155,5 +2155,58 @@ describe("POST /api/payout/prepare — W3.2: sesión O PoP (WKH-372/AC-3-2)", ()
     expect(checkRouteRateLimitMock.mock.calls.length, "el limiter no llegó a correr").toBe(1);
     expect(store.get, "se leyó la fila del veredicto con el limiter agotado").not.toHaveBeenCalled();
     expect(authorityMock).not.toHaveBeenCalled();
+  });
+
+  // ── T-372-W3-21 — AR/BLQ-BAJO-2 ───────────────────────────────────────────────────────────────
+  //
+  // 🔴 QUÉ MIDE: que las TRES credenciales de identidad se queden del lado del servidor y NO viajen
+  // al agente. El `input` del `/compose` se reenvía TAL CUAL al que resolvió `remittance-payout`,
+  // que es un tercero elegido por capacidad: mandarle la sesión le regala 30 minutos para crear
+  // órdenes a nombre de esa dirección, y mandarle el par PoP, los 10 de su `exp`.
+  //
+  // ⛔ SE MIDE EL CUERPO QUE VIAJÓ, no el objeto que la route armó. Molde: `T-PR-11 / M-30`, en este
+  // mismo archivo, que ya captura ese cuerpo con el mismo `fetchMock.mockImplementation`.
+  //
+  // ⛔ EL POST LLEVA LAS TRES A LA VEZ (sesión + el par PoP que `bodyOf` pone siempre) a propósito:
+  // con una sola, una implementación que sacara la que el `it` mira y dejara las otras dos daría
+  // verde. La rama que corre es la de la sesión, y el par igual está en el body.
+  //
+  // 🧬 MUTANTE, MEDIDO: volver el renglón de `./route.ts` a `const forwardBody = { ...body,
+  // kycVerificationId: rowVerificationId };` ⇒ ROJO acá, por el assert de `sessionToken`.
+  // ⛔ FALSO KILLED A EVITAR: sin la mitad (a) —el control positivo del 200 y del payload real— un
+  // forward que no ocurriera nunca, o un cuerpo vacío, pasarían las tres ausencias en verde.
+  it("T-372-W3-21: el cuerpo que llega al agente NO lleva ninguna de las tres credenciales de identidad", async () => {
+    let sinCredenciales = "";
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/compose")) sinCredenciales = String(init?.body ?? "");
+      return new Response(JSON.stringify({ success: true, steps: [{ output: agentResult() }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const token = sesionDe(ADDR);
+    const res = await POST(req(bodyOf({ sessionToken: token })));
+
+    // (a) CONTROL POSITIVO: el forward OCURRIÓ y lleva el pedido de verdad. Sin esto, todo lo de
+    //     abajo lo pasaría un cuerpo vacío o un `/compose` que nunca se llamó.
+    expect(res.status, "la ruta no llegó a forwardear: las ausencias de abajo no prueban nada").toBe(200);
+    expect(sinCredenciales, "no se capturó el `/compose` del gateway").not.toBe("");
+    expect(sinCredenciales, "el agente no recibió el pedido").toContain("did-de-la-fila-default");
+    expect(sinCredenciales, "el agente no recibió el beneficiario").toContain("999888777");
+    expect(sinCredenciales, "el agente no recibió la clave de idempotencia").toContain("rem-1:q-400");
+
+    // (b) LAS TRES AUSENCIAS. Se miran la CLAVE y el VALOR: la clave sola la podría sacar un rename,
+    //     y el valor solo no cubre el caso de una credencial vacía.
+    const alAgente: unknown = JSON.parse(sinCredenciales);
+    const input = (alAgente as { steps: Array<{ input: Record<string, unknown> }> }).steps[0]?.input;
+    expect(input, "el step forwardeado no tiene `input`").toBeTypeOf("object");
+    for (const clave of ["sessionToken", "popChallenge", "popSignature"]) {
+      expect(
+        Object.keys(input as Record<string, unknown>),
+        `la credencial \`${clave}\` viajó al agente, que es un tercero elegido por capacidad`,
+      ).not.toContain(clave);
+      expect(sinCredenciales, `\`${clave}\` aparece en el cuerpo que viajó al gateway`).not.toContain(clave);
+    }
+    expect(sinCredenciales, "el token de la sesión viajó al agente").not.toContain(token);
   });
 });

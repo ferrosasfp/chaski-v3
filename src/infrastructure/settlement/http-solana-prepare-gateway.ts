@@ -47,6 +47,28 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 
 /** Mapa status/enum → reason estable. Fail-closed (CD-12): cualquier enum/status desconocido ⇒ un
  *  reason que BLOQUEA. Sin default permisivo (lección WKH-198). El enum de la route es nuestro. */
+/**
+ * El ÚNICO de los tres 403 de `POST /api/payout/prepare` que cambiar de credencial puede arreglar
+ * (AR/MNR-1). Los otros dos —`prepare_kyc_verdict_missing` y `payout_not_authorized`— hablan del
+ * estado de identidad de la persona, no de cómo probó que la dirección es suya: reintentar con el
+ * PoP devuelve el MISMO 403 y de paso le abre la billetera para nada.
+ * ⛔ Literal a propósito y NO importado de la route: este archivo corre en el navegador y la route es
+ * server-only. Es el mismo motivo por el que `../auth/sesion-store.ts` duplica su TTL. El candado que
+ * ata las dos puntas es `T-372-W3-17`, que arma su 403 con el enum que la route emite de verdad.
+ */
+const PREPARE_403_QUE_LA_SESION_ARREGLA = "payout_pop_unverified";
+
+/** El `error` del cuerpo de una respuesta de `prepare`, o `undefined` si no se puede leer.
+ *  ⛔ Sobre un `clone()`: el `res` original lo consume el bloque `!res.ok` del final de `prepare`. */
+async function leerEnum(res: Response): Promise<string | undefined> {
+  try {
+    const cuerpo: unknown = await res.clone().json();
+    return isRecord(cuerpo) && typeof cuerpo.error === "string" ? cuerpo.error : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function mapErrorReason(status: number, error: unknown): string {
   if (typeof error === "string") {
     switch (error) {
@@ -335,10 +357,37 @@ export class HttpSolanaPayoutPrepareGateway implements SolanaPayoutPrepareGatewa
     //     sería postear dos veces la MISMA credencial ya rechazada;
     //   · `res.status === 403` — un 500 o un 429 no dicen nada de la sesión, y reintentarlos convierte
     //     un incidente del servidor en el doble de carga;
+    //   · el ENUM del cuerpo — ver el bloque de acá abajo;
     //   · una sola vez — el reintento no vuelve a mirar `tokenDeSesion`, así que no hay bucle posible.
-    // Las tres las mide `T-372-W3-17`, por nombre, en `./http-solana-prepare-gateway.test.ts`, con sus
-    // tres ramas: si sólo estuviera el caso positivo, un bucle pasaría el test.
-    if (!res.ok && res.status === 403 && tokenDeSesion !== null) {
+    // Las cuatro las mide `T-372-W3-17`, por nombre, en `./http-solana-prepare-gateway.test.ts`, con
+    // sus cuatro ramas: si sólo estuviera el caso positivo, un bucle pasaría el test.
+    //
+    // 🔴 EL STATUS NO ALCANZA (AR/MNR-1). `prepare` emite 403 con TRES enums, y sólo UNO lo puede
+    // arreglar la credencial:
+    //   · `payout_pop_unverified`      — la credencial de identidad no valió ⇒ el PoP SÍ puede servir;
+    //   · `prepare_kyc_verdict_missing` — no hay fila de veredicto para esa dirección;
+    //   · `payout_not_authorized`      — la autoridad de KYC dijo que no.
+    // Con los dos últimos, la persona con sesión VÁLIDA pagaba: un POST de más, un token de
+    // rate-limit de más, un prompt de billetera de más —porque `pop.prove()` abre la extensión— y en
+    // `payout_not_authorized` una consulta de más al proveedor de KYC, o sea CUPO. Y el segundo
+    // intento devolvía EL MISMO 403, porque la credencial nunca fue el problema.
+    //
+    // ⛔ ILEGIBLE ⇒ NO SE REINTENTA. Un cuerpo que no parsea, o un `error` que no es string, no
+    // prueba que la sesión sea el problema, y este reintento gasta un prompt de la persona: la duda
+    // se resuelve del lado barato. En el repliegue REAL —quitar `PAYOUT_SESSION_SECRET` del
+    // proveedor— la route contesta ese enum en JSON en los cinco modos de fallar de la sesión
+    // (`payout_pop_unverified`, `../../../app/api/payout/prepare/route.ts:241`), así que el camino
+    // que este reintento existe para cubrir NO depende de esa duda.
+    //
+    // ⛔ SE LEE SOBRE UN `clone()`: `res` lo vuelve a consumir el bloque `!res.ok` de más abajo, y un
+    // body ya leído le daría `prepare_rejected` a TODO 403, aplanando los tres enums en la pantalla.
+    const enumDelRechazo = !res.ok && res.status === 403 ? await leerEnum(res) : undefined;
+    if (
+      !res.ok &&
+      res.status === 403 &&
+      enumDelRechazo === PREPARE_403_QUE_LA_SESION_ARREGLA &&
+      tokenDeSesion !== null
+    ) {
       let deRepuesto: Awaited<ReturnType<PopSigner["prove"]>>;
       try {
         // Si el salto por enlace ya trajo una prueba, se usa ÉSA: pedir otra sería gastarle a la

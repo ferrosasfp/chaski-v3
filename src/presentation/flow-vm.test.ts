@@ -2529,7 +2529,7 @@ describe("T-065-COPY-3 / COPY-4 / T-065-18 · el copy del recorrido por enlace",
 // ⛔ EL RESIDUAL, SIN SUAVIZAR ([NC-1] de la HU): esto mide que el tri-estado EXISTE y que el caso
 // `null` NO se reporta como verificado. **NO es un evento observable en producción** y esta HU no
 // inventa uno: no hay ningún `console.*` ni sink de telemetría en el camino de `flow.tsx:506-519`
-// (medido), y agregar infraestructura de observabilidad no pedida a un archivo de [[CENSO src/presentation/flow.tsx lineas=4453]] líneas con [[CENSO src/presentation/flow.tsx entrantes=155]]
+// (medido), y agregar infraestructura de observabilidad no pedida a un archivo de [[CENSO src/presentation/flow.tsx lineas=4453]] líneas con [[CENSO src/presentation/flow.tsx entrantes=163]]
 // citas ANCLADAS entrantes sería expandir el scope para "cumplir" un AC. ⚠️ ACÁ DECÍA «4268 líneas con 83 citas» Y LO VOLVIÓ FALSO EL COMMIT `7338c37` DE ESTA MISMA HU, sin que nadie editara la frase (F4/F4-2). Por eso hoy son MARCADORES que verifica `citas-ancladas.test.ts` contra el árbol en cada `npm test`, no cifras escritas a mano. ⚠️ Y «ANCLADAS» no es un adorno: el marcador cuenta SÓLO las citas con símbolo delante — las sueltas (`flow.tsx:4009`) se rompen igual y siguen sin que las mire nadie. **Si el founder quería un evento que
 // se pueda ver en producción, esto no lo entrega.**
 describe("T-067-10 (WKH-359/AC-6): el cruce de cuenta distingue NO COMPARADO de COMPARADO", () => {

@@ -21,7 +21,7 @@ export default function Page() {
       <Splash />
       {/* HU-075/diagnóstico · EL BLOQUE VA ACÁ POR TRES RAZONES, y ninguna es estética.
           1. HERMANO Y NO ADENTRO, por lo mismo que el splash: así `flow.tsx` —[[CENSO src/presentation/flow.tsx lineas=4453]] líneas y
-             [[CENSO src/presentation/flow.tsx entrantes=155]] citas ancladas por número— no recibe ni una línea por esto. Lo único que sí necesita de ahí
+             [[CENSO src/presentation/flow.tsx entrantes=163]] citas ancladas por número— no recibe ni una línea por esto. Lo único que sí necesita de ahí
              adentro es la causa cruda del corte, y eso entra por la bitácora, en una línea que ya
              existía.
           2. DESPUÉS DEL SPLASH, para no tocar el invariante de foco que el docblock de arriba declara:

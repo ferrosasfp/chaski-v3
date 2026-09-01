@@ -87,7 +87,7 @@ describe("Use-cases — money-path", () => {
     let r = await lock.execute({ remittanceId: id }); // WKH-187: cotiza PRIMERO (created→quoted)
     expect(r.status).toBe("quoted");
     expect((await startKyc.execute(kycInput(id))).kind).toBe("done"); // quoted→kyc_pending→kyc_passed
-    r = esperarListo(await confirm.execute({ remittanceId: id }));
+    r = esperarListo(await confirm.execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
     expect(r.status).toBe("payout_submitted");
     r = await track.execute({ remittanceId: id });
     expect(r.status).toBe("settled"); // delivered dentro de tolerancia del receive lockeado (AC-6)
@@ -103,7 +103,7 @@ describe("Use-cases — money-path", () => {
     const id = r0.snapshot.id;
     await lock.execute({ remittanceId: id }); // WKH-187: cotiza antes del KYC
     await startKyc.execute(kycInput(id));
-    await confirm.execute({ remittanceId: id });
+    await confirm.execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" });
     const r = await track.execute({ remittanceId: id });
     expect(r.snapshot.status).toBe("settled");
     expect(r.snapshot.deliveredPen).toBeNull();
@@ -147,7 +147,7 @@ describe("Use-cases — money-path", () => {
     const id = r0.snapshot.id;
     await lock.execute({ remittanceId: id }); // WKH-187: cotiza antes del KYC
     await startKyc.execute(kycInput(id));
-    const r = esperarListo(await confirm.execute({ remittanceId: id }));
+    const r = esperarListo(await confirm.execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
     // Antes de WKH-186 la remesa quedaba clavada en payout_failed; ahora el refund la avanza a
     // refunded en el mismo execute(). markRefunded solo patchea refundTx → failureReason sobrevive.
     expect(r.status).toBe("refunded");

@@ -54,7 +54,7 @@ async function realDepositTx(beneficiary: string): Promise<string> {
   const res = esperarAutorizacionLista(await adapter.authorizePrincipal(quote(), "rem-read-1", {
     address: "unused",
     escrow: { beneficiary, authority: AUTHORITY_B58 },
-  }));
+  }, "https://chaski.test/enviar"));
   const b64 = res.solana?.partialSignedTx;
   if (!b64) throw new Error("no_partial_signed_tx");
   return b64;

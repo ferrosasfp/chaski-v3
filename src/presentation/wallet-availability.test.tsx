@@ -1599,7 +1599,7 @@ describe("WKH-372/AC-1-4b: el aterrizaje dentro del navegador de la billetera, c
   //
   // 🔴 AR/MNR-1 — ACÁ DECÍA «Este `it` es su único guard» Y ERA FALSO. Corregido midiendo: MUT-D
   // (borrar el renglón del template) mata DOS, éste y (`T-DIAG-CAPTURA`,
-  // `./diagnostico-de-vuelta.test.tsx:846`), que pinnea el texto EXACTO de los quince renglones y por
+  // `./diagnostico-de-vuelta.test.tsx:846`), que pinnea el texto EXACTO de los renglones del bloque —quince cuando esto se escribió, DIECINUEVE desde WKH-373; ⛔ el número no se vuelve a copiar acá, que es lo que lo pudre— y por
   // eso se pone rojo ante cualquiera que falte. Éste es su guard DEDICADO; aquél lo cubre de rebote,
   // por pinneo del texto. La frase vieja se escribió con la medición tomada ANTES de actualizar el
   // valor esperado de `T-DIAG-CAPTURA` —cuando el bloque todavía tenía catorce renglones y borrar el

@@ -8,9 +8,9 @@ import { ComputeBudgetProgram, Connection, Keypair, PublicKey, SystemProgram, Tr
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Money } from "../domain/money";
 import type { Quote } from "../domain/remittance";
-import { CUSTODY_WINDOW_SECS, SolanaWalletAdapter } from "./solana-wallet"; import { SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT } from "../application/solana-escrow-rent"; // WKH-357: EN ESTA LÍNEA, no en una nueva — `solana-wallet.test.ts:453-454` y `:506` se citan por número desde otros dos archivos (ver el comentario de más abajo), así que una línea nueva acá arriba los rota. Y el umbral se IMPORTA, nunca se escribe como literal en un test (CD-12)
+import { CUSTODY_WINDOW_SECS, SolanaWalletAdapter } from "./solana-wallet"; import { SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT } from "../application/solana-escrow-rent"; const HREF_DE_LA_VUELTA = "https://chaski.test/enviar?rem=rem-1"; /* WKH-373: el 4º argumento de `authorizePrincipal`, ahora REQUERIDO. Es el MISMO valor que `montarEntorno` (`:1453`) le pone a `location.href`, así que ningún `it` de este archivo cambia de condiciones: lo que cambia es que el href entra por PARÁMETRO en vez de leerse en vivo. Va EN ESTA LÍNEA por lo mismo que dice el comentario de acá al lado. */ // WKH-357: EN ESTA LÍNEA, no en una nueva — `solana-wallet.test.ts:453-454` y `:506` se citan por número desde otros dos archivos (ver el comentario de más abajo), así que una línea nueva acá arriba los rota. Y el umbral se IMPORTA, nunca se escribe como literal en un test (CD-12)
 import { escrowIdl } from "./solana/escrow-idl";
-import { solanaWalletBridge } from "./solana-wallet-bridge"; import { esperarAutorizacionLista } from "../test-support/desenlaces"; import { readFileSync } from "node:fs"; import path from "node:path"; import { FirmaPorEnlaceReal, type DesenlaceDeFirma, type FirmaPorEnlace, type PedidoDeFirma } from "./solana/deeplink/firma-por-enlace"; import { direccionDelNonce } from "./solana/nonce-duradero"; import { guardarEleccion, leerEleccion } from "./solana/deeplink/conexion"; import { almacenDeNavegador, guardarViaje } from "./solana/deeplink/sesion"; import { MARCA_POP_PAYOUT, guardarPasoPop } from "./solana/deeplink/pop-por-enlace"; // WKH-359 agregó los dos ÚLTIMOS y ⛔ ANTES del `//`, que es donde estuve por equivocarme: esta línea TERMINA en comentario, así que pegar un import "al final" lo deja comentado y `tsc` lo caza recién cuando alguien lo usa. WKH-358 agregó los dos anteriores por la MISMA razón y ANTES de este comentario. WKH-356: TODO en esta línea — `solana-wallet.test.ts:453-454` y `:506` los citan por número desde otros dos archivos, así que una línea nueva acá arriba los rota. WKH-357 agregó el último por la MISMA razón y ANTES de este comentario
+import { solanaWalletBridge } from "./solana-wallet-bridge"; import { esperarAutorizacionLista } from "../test-support/desenlaces"; import { readFileSync } from "node:fs"; import path from "node:path"; import { FirmaPorEnlaceReal, type DesenlaceDeFirma, type FirmaPorEnlace, type PedidoDeFirma } from "./solana/deeplink/firma-por-enlace"; import { direccionDelNonce } from "./solana/nonce-duradero"; import { guardarEleccion, hrefSinRastroDeVuelta, leerEleccion } from "./solana/deeplink/conexion"; import { almacenDeNavegador, guardarViaje } from "./solana/deeplink/sesion"; import { MARCA_POP_PAYOUT, guardarPasoPop } from "./solana/deeplink/pop-por-enlace"; // WKH-359 agregó los dos ÚLTIMOS y ⛔ ANTES del `//`, que es donde estuve por equivocarme: esta línea TERMINA en comentario, así que pegar un import "al final" lo deja comentado y `tsc` lo caza recién cuando alguien lo usa. WKH-358 agregó los dos anteriores por la MISMA razón y ANTES de este comentario. WKH-356: TODO en esta línea — `solana-wallet.test.ts:453-454` y `:506` los citan por número desde otros dos archivos, así que una línea nueva acá arriba los rota. WKH-357 agregó el último por la MISMA razón y ANTES de este comentario
 
 const VALID_B58 = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // base58 válido (mixed-case)
 
@@ -296,7 +296,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
   it("AC-1: arma la ix deposit (programId DR5G…SE4x, discriminator, accounts del IDL + PDAs/ATA)", async () => {
     const adapter = await connectedAdapter();
     const rid = "rem-ac1";
-    await adapter.authorizePrincipal(makeQuote(), rid, escrowDeposit());
+    await adapter.authorizePrincipal(makeQuote(), rid, escrowDeposit(), HREF_DE_LA_VUELTA);
 
     const ix = depositIx(capturedTx(signSpy));
     expect(ix.programId.toBase58()).toBe(ESCROW_PROGRAM_ID);
@@ -343,7 +343,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
   it("★ WKH-343: la ix deposit lleva 9 cuentas del IDL y la del índice 8 es la ATA del BENEFICIARIO, no writable y no signer", async () => {
     const adapter = await connectedAdapter();
     const rid = "rem-wkh343";
-    await adapter.authorizePrincipal(makeQuote(), rid, escrowDeposit());
+    await adapter.authorizePrincipal(makeQuote(), rid, escrowDeposit(), HREF_DE_LA_VUELTA);
 
     const ix = depositIx(capturedTx(signSpy));
     const programId = new PublicKey(ESCROW_PROGRAM_ID);
@@ -402,7 +402,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     const adapter = await connectedAdapter();
     const rid = "rem-037";
     const quote = makeQuote();
-    await adapter.authorizePrincipal(quote, rid, escrowDeposit());
+    await adapter.authorizePrincipal(quote, rid, escrowDeposit(), HREF_DE_LA_VUELTA);
 
     expect(signMessageSpy).toHaveBeenCalledTimes(1);
 
@@ -429,7 +429,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     const adapter = await connectedAdapter();
     const rid = "rem-037-envelope";
     const quote = makeQuote();
-    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(quote, rid, escrowDeposit()));
+    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(quote, rid, escrowDeposit(), HREF_DE_LA_VUELTA));
 
     const popSignature = res.solana?.popSignature;
     expect(typeof popSignature).toBe("string");
@@ -454,14 +454,14 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     signSpy.mockImplementation(async (tx: unknown) => tx); // no firma
     const adapter = await connectedAdapter();
     await expect(
-      adapter.authorizePrincipal(makeQuote(), "rem-037-nosig", escrowDeposit()),
+      adapter.authorizePrincipal(makeQuote(), "rem-037-nosig", escrowDeposit(), HREF_DE_LA_VUELTA),
     ).rejects.toThrow("sender_signature_missing");
     expect(signMessageSpy).not.toHaveBeenCalled();
   });
 
   it("AC-2/CD-SDD-5: feePayer = facilitator; firma SÓLO la wallet (bridge) 1×", async () => {
     const adapter = await connectedAdapter();
-    await adapter.authorizePrincipal(makeQuote(), "rem-ac2", escrowDeposit());
+    await adapter.authorizePrincipal(makeQuote(), "rem-ac2", escrowDeposit(), HREF_DE_LA_VUELTA);
 
     expect(signSpy).toHaveBeenCalledTimes(1); // partial-sign wallet-only
     const tx = capturedTx(signSpy);
@@ -472,7 +472,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
 
   it("AC-3/CD-SDD-1: NUNCA broadcast; return trae solana.partialSignedTx b64 + reference b58", async () => {
     const adapter = await connectedAdapter();
-    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-ac3", escrowDeposit()));
+    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-ac3", escrowDeposit(), HREF_DE_LA_VUELTA));
 
     expect(Connection.prototype.sendRawTransaction).not.toHaveBeenCalled();
     expect(Connection.prototype.sendTransaction).not.toHaveBeenCalled();
@@ -487,7 +487,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
 
   it("AC-4/CD-SDD-6: reference como remainingAccount no-signer/no-writable, al final del set", async () => {
     const adapter = await connectedAdapter();
-    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-ac4", escrowDeposit()));
+    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-ac4", escrowDeposit(), HREF_DE_LA_VUELTA));
 
     const ix = depositIx(capturedTx(signSpy));
     const last = ix.keys[ix.keys.length - 1];
@@ -500,7 +500,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
   it("AC-7: sin wallet conectada → throw wallet_not_connected SIN firmar", async () => {
     const adapter = new SolanaWalletAdapter(); // sin connect ⇒ getAddress()→null
     await expect(
-      adapter.authorizePrincipal(makeQuote(), "rem-ac7", escrowDeposit()),
+      adapter.authorizePrincipal(makeQuote(), "rem-ac7", escrowDeposit(), HREF_DE_LA_VUELTA),
     ).rejects.toThrow("wallet_not_connected");
     expect(signSpy).not.toHaveBeenCalled();
   });
@@ -508,7 +508,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
   it("CD-SDD-8: sin escrow (beneficiary/authority) → throw escrow_params_missing SIN firmar", async () => {
     const adapter = await connectedAdapter();
     await expect(
-      adapter.authorizePrincipal(makeQuote(), "rem-noescrow", { address: "x" }),
+      adapter.authorizePrincipal(makeQuote(), "rem-noescrow", { address: "x" }, HREF_DE_LA_VUELTA),
     ).rejects.toThrow("escrow_params_missing");
     expect(signSpy).not.toHaveBeenCalled();
   });
@@ -517,7 +517,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     const adapter = await connectedAdapter();
     const quote = makeQuote({ expiresAt: "2099-06-15T12:00:00.000Z" });
     const before = Math.floor(Date.now() / 1000);
-    await adapter.authorizePrincipal(quote, "rem-ac8", escrowDeposit());
+    await adapter.authorizePrincipal(quote, "rem-ac8", escrowDeposit(), HREF_DE_LA_VUELTA);
     const after = Math.floor(Date.now() / 1000);
 
     const data = depositIx(capturedTx(signSpy)).data;
@@ -538,7 +538,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
   it("el deadline cae dentro de la ventana que el programa acepta: [now+3600, now+86400]", async () => {
     const adapter = await connectedAdapter();
     const before = Math.floor(Date.now() / 1000);
-    await adapter.authorizePrincipal(makeQuote(), "rem-ventana", escrowDeposit());
+    await adapter.authorizePrincipal(makeQuote(), "rem-ventana", escrowDeposit(), HREF_DE_LA_VUELTA);
     const after = Math.floor(Date.now() / 1000);
 
     const data = depositIx(capturedTx(signSpy)).data;
@@ -561,7 +561,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
       makeQuote({ expiresAt: diezMinutos }),
       "rem-ttl-corto",
       escrowDeposit(),
-    );
+     HREF_DE_LA_VUELTA);
     const after = Math.floor(Date.now() / 1000);
 
     const data = depositIx(capturedTx(signSpy)).data;
@@ -575,7 +575,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
   it("AC-8: expiresAt inválido → throw quote_expires_at_invalid", async () => {
     const adapter = await connectedAdapter();
     await expect(
-      adapter.authorizePrincipal(makeQuote({ expiresAt: "not-a-date" }), "rem-bad", escrowDeposit()),
+      adapter.authorizePrincipal(makeQuote({ expiresAt: "not-a-date" }), "rem-bad", escrowDeposit(), HREF_DE_LA_VUELTA),
     ).rejects.toThrow("quote_expires_at_invalid");
   });
 
@@ -606,7 +606,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
   // las dos ComputeBudget siguen siendo exactamente dos, siguen primeras y siguen en ese orden.
   it("T1 (AC-1 mitad espacial / AC-5): la tx lleva 4 ix — [SetComputeUnitLimit, SetComputeUnitPrice, deposit, register_escrow], en ese orden — el 'antes de firmar' lo cubre T3", async () => {
     const adapter = await connectedAdapter();
-    await adapter.authorizePrincipal(makeQuote(), "rem-cb-orden", escrowDeposit());
+    await adapter.authorizePrincipal(makeQuote(), "rem-cb-orden", escrowDeposit(), HREF_DE_LA_VUELTA);
 
     const tx = capturedTx(signSpy);
     expect(tx.instructions).toHaveLength(4);
@@ -632,7 +632,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
 
   it("T2 (AC-2): los valores emitidos son 120.000 CU y 10.000 µL/CU", async () => {
     const adapter = await connectedAdapter();
-    await adapter.authorizePrincipal(makeQuote(), "rem-cb-valores", escrowDeposit());
+    await adapter.authorizePrincipal(makeQuote(), "rem-cb-valores", escrowDeposit(), HREF_DE_LA_VUELTA);
 
     const tx = capturedTx(signSpy);
     const [limitIx, priceIx] = tx.instructions;
@@ -664,7 +664,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     solanaWalletBridge.registerSignTransaction(snapshotSpy);
 
     const adapter = await connectedAdapter();
-    await adapter.authorizePrincipal(makeQuote(), "rem-cb-antes", escrowDeposit());
+    await adapter.authorizePrincipal(makeQuote(), "rem-cb-antes", escrowDeposit(), HREF_DE_LA_VUELTA);
 
     expect(snapshotSpy).toHaveBeenCalledTimes(1);
     // 🔴 MIGRADO EN WKH-347: 4 y no 3, porque la tx lleva además el `register_escrow`. Y esta foto es
@@ -687,7 +687,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
 
   it("T4 (AC-3): agregar una ix DESPUÉS de firmar invalida la firma del sender", async () => {
     const adapter = await connectedAdapter();
-    await adapter.authorizePrincipal(makeQuote(), "rem-cb-firma", escrowDeposit());
+    await adapter.authorizePrincipal(makeQuote(), "rem-cb-firma", escrowDeposit(), HREF_DE_LA_VUELTA);
 
     const tx = capturedTx(signSpy);
     const senderSig = tx.signatures.find((s) => s.publicKey.equals(SENDER_KP.publicKey))?.signature;
@@ -721,7 +721,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
   it("T5 (AC-6, no-regresión): la ix deposit se localiza por programId y llega intacta", async () => {
     const adapter = await connectedAdapter();
     const rid = "rem-cb-deposit-intacto";
-    await adapter.authorizePrincipal(makeQuote(), rid, escrowDeposit());
+    await adapter.authorizePrincipal(makeQuote(), rid, escrowDeposit(), HREF_DE_LA_VUELTA);
 
     // Localizada por programId, NO por índice: con las ComputeBudget adelante, el `deposit` ya no
     // está en la posición 0 y un lector posicional leería la instrucción equivocada.
@@ -745,7 +745,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
 
   it("T6 (AC-5): a lo sumo 2 ix ComputeBudget, sin repetidas y sin ninguna fuera de {limit, price}", async () => {
     const adapter = await connectedAdapter();
-    await adapter.authorizePrincipal(makeQuote(), "rem-cb-forma", escrowDeposit());
+    await adapter.authorizePrincipal(makeQuote(), "rem-cb-forma", escrowDeposit(), HREF_DE_LA_VUELTA);
 
     const cbIx = capturedTx(signSpy).instructions.filter((i) =>
       i.programId.equals(ComputeBudgetProgram.programId),
@@ -776,7 +776,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
   // billetera devuelve — que es la mitad que sí se puede verificar desde acá.
   it("T12 (AC-5, payload): la tx que se POSTEA trae exactamente [limit 120.000, price 10.000, deposit, register_escrow]", async () => {
     const adapter = await connectedAdapter();
-    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-cb-payload", escrowDeposit()));
+    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-cb-payload", escrowDeposit(), HREF_DE_LA_VUELTA));
 
     const posted = Transaction.from(Buffer.from(res.solana?.partialSignedTx ?? "", "base64"));
 
@@ -822,7 +822,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
   it("T-347-1 (AC-1): la 2ª ix de negocio es `register_escrow` — 24 bytes, 4 cuentas posicionales y sus flags", async () => {
     const adapter = await connectedAdapter();
     const rid = "rem-347-forma";
-    await adapter.authorizePrincipal(makeQuote(), rid, escrowDeposit());
+    await adapter.authorizePrincipal(makeQuote(), rid, escrowDeposit(), HREF_DE_LA_VUELTA);
 
     const ix = registerIx(capturedTx(signSpy));
     expect(ix.programId.toBase58()).toBe(ESCROW_PROGRAM_ID);
@@ -866,7 +866,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
   it("T-347-2 (AC-1): la 2ª ix habla del MISMO escrow que la de posición 0, no de otro", async () => {
     const adapter = await connectedAdapter();
     const rid = "rem-347-binding";
-    await adapter.authorizePrincipal(makeQuote(), rid, escrowDeposit());
+    await adapter.authorizePrincipal(makeQuote(), rid, escrowDeposit(), HREF_DE_LA_VUELTA);
 
     const [deposit, register] = businessIx(capturedTx(signSpy));
     if (!deposit || !register) throw new Error("faltan las dos ix de negocio");
@@ -887,7 +887,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
 
   it("T-347-3 (AC-2): la firma del sender cubre la tx de DOS ix de negocio, y es la que viaja en el mensaje canónico", async () => {
     const adapter = await connectedAdapter();
-    await adapter.authorizePrincipal(makeQuote(), "rem-347-firma", escrowDeposit());
+    await adapter.authorizePrincipal(makeQuote(), "rem-347-firma", escrowDeposit(), HREF_DE_LA_VUELTA);
 
     const tx = capturedTx(signSpy);
     // La precondición de todo lo demás: efectivamente son DOS. Sin esto el test verificaría una firma
@@ -922,7 +922,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
       ),
     });
     const adapter = await connectedAdapter();
-    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-347-lleno", escrowDeposit()));
+    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-347-lleno", escrowDeposit(), HREF_DE_LA_VUELTA));
 
     // UNA sola ix de negocio, y es el `deposit`. Registrar contra un índice lleno devolvería
     // EscrowIndexFull (6005) y, al viajar en la misma tx, REVERTIRÍA EL DEPÓSITO.
@@ -940,7 +940,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
   it("T-347-5(a) (AC-6): la sonda LANZA ⇒ una sola ix de negocio y la promesa RESUELVE", async () => {
     mockChain({ [ESCROW_INDEX_PDA.toBase58()]: "throw" });
     const adapter = await connectedAdapter();
-    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-347-rpc-caido", escrowDeposit()));
+    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-347-rpc-caido", escrowDeposit(), HREF_DE_LA_VUELTA));
     expect(businessIx(capturedTx(signSpy))).toHaveLength(1);
     expect(res.solana?.partialSignedTx).toBeTruthy();
   });
@@ -954,7 +954,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     try {
       mockChain({ [ESCROW_INDEX_PDA.toBase58()]: "hang" });
       const adapter = await connectedAdapter();
-      const p = adapter.authorizePrincipal(makeQuote(), "rem-347-colgada", escrowDeposit());
+      const p = adapter.authorizePrincipal(makeQuote(), "rem-347-colgada", escrowDeposit(), HREF_DE_LA_VUELTA);
       // El techo son 5.000 ms y está declarado como costo. 🚫 Subirlo es PROHIBIDO: son hasta 5 s de
       // la persona mirando la pantalla antes del diálogo de firma.
       //
@@ -1017,7 +1017,7 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
     // podemos identificar en una tx del money-path es peor que no mandarla.
     mockChain({ [ESCROW_INDEX_PDA.toBase58()]: Buffer.alloc(64, 7) });
     const adapter = await connectedAdapter();
-    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-347-basura", escrowDeposit()));
+    const res = esperarAutorizacionLista(await adapter.authorizePrincipal(makeQuote(), "rem-347-basura", escrowDeposit(), HREF_DE_LA_VUELTA));
     expect(businessIx(capturedTx(signSpy))).toHaveLength(1);
     expect(res.solana?.partialSignedTx).toBeTruthy();
   });
@@ -1025,8 +1025,8 @@ describe("SolanaWalletAdapter.authorizePrincipal (HU-SOL-5)", () => {
   it("T-347-7 (CD-14.2): dos depósitos sobre el MISMO adapter sondean el índice DOS veces (prohibido memoizar)", async () => {
     const chainSpy = mockChain({});
     const adapter = await connectedAdapter(); // el adapter es un SINGLETON del container en producción
-    await adapter.authorizePrincipal(makeQuote(), "rem-347-memo-1", escrowDeposit());
-    await adapter.authorizePrincipal(makeQuote(), "rem-347-memo-2", escrowDeposit());
+    await adapter.authorizePrincipal(makeQuote(), "rem-347-memo-1", escrowDeposit(), HREF_DE_LA_VUELTA);
+    await adapter.authorizePrincipal(makeQuote(), "rem-347-memo-2", escrowDeposit(), HREF_DE_LA_VUELTA);
 
     // 🔴 EL INPUT QUE LO PONE EN ROJO: guardar el resultado de la sonda en un campo del adapter. La
     // ocupación del índice cambia con cada registro, así que un valor memoizado es un dato viejo
@@ -1291,7 +1291,7 @@ describe("T-347-6 (AC-9/CD-10): con el índice LLENO la tx sale byte-idéntica a
           authority: AUTHORITY.publicKey.toBase58(),
         },
       },
-    ));
+     HREF_DE_LA_VUELTA));
     return res.solana?.partialSignedTx ?? "";
   }
 
@@ -1569,6 +1569,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
         desde: Date.now(),
       }),
     );
+    return { par, billetera }; // WKH-373: los dos pares SALEN, para poder fabricar la vuelta CIFRADA de la billetera con el canal que este mismo viaje declara. ⛔ Ningún `it` anterior cambia: es un valor de retorno que nadie miraba.
   }
 
   // ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -1625,7 +1626,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       expect(delViaje, "el fixture sembró la misma cuenta que el bridge").not.toBe(SENDER_B58);
       expect(solanaWalletBridge.getState().publicKey).toBe(SENDER_B58);
 
-      await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA);
 
       // 🔴 Y ESTO ES LO QUE VUELVE COHERENCIA AL GUARD DE `:556`: llega lo mismo por los dos lados.
       expect(motor.pedidos[0]?.sender).toBe(delViaje);
@@ -1635,7 +1636,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       montarEntorno();
       const adapter = await adaptadorConMotor(new FirmaPorEnlaceReal());
       sembrarViaje(SENDER_B58);
-      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA);
       expect(r.estado).toBe("hay-que-salir");
       expect(r.estado === "hay-que-salir" && r.esperando).toBe("firma-tx");
       expect(r.estado === "hay-que-salir" && new URL(r.irA).host).toBe("phantom.app");
@@ -1655,7 +1656,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       const motor = new MotorProgramable();
       const adapter = await adaptadorConMotor(motor);
       sembrarViaje(SENDER_B58);
-      await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA);
       expect(motor.pedidos[0]?.sender).toBe(new PublicKey(SENDER_B58).toBase58());
       expect(motor.pedidos[0]?.remittanceId, "se le pasó otra cosa que el 2º argumento (T2)").toBe(REM);
       expect(motor.pedidos[0]?.beneficiary).toBe(BENEFICIARY_B58);
@@ -1700,7 +1701,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       const saldo = vi
         .spyOn(Connection.prototype, "getBalance")
         .mockResolvedValue(1_000_000_000 as never);
-      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA);
       return { motor, saldo, r };
     }
 
@@ -1758,7 +1759,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
         },
       });
       const adapter = await adaptadorConMotor(new FirmaPorEnlaceReal());
-      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit())).rejects.toThrow(
+      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA)).rejects.toThrow(
         "deeplink_sin_memoria",
       );
     });
@@ -1767,7 +1768,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       montarEntorno();
       vi.stubGlobal("location", undefined);
       const adapter = await adaptadorConMotor(new FirmaPorEnlaceReal());
-      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit())).rejects.toThrow(
+      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA)).rejects.toThrow(
         "deeplink_sin_memoria",
       );
     });
@@ -1809,7 +1810,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       expect(() => new PublicKey(BASURA), "el fixture sembró algo que SÍ parsea").toThrow();
       expect(JSON.parse(disco.get(CLAVE_VIAJE) as string).direccion).toBe(BASURA);
       disco.set(CLAVE_PREPARADO, JSON.stringify({ basura: true }));
-      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit())).rejects.toThrow(
+      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA)).rejects.toThrow(
         "wallet_not_connected",
       );
       expect(motor.pedidos, "la rama de enlace corrió con una dirección que no parsea").toEqual([]);
@@ -1882,7 +1883,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
     async function primeraVuelta(motor: MotorProgramable): Promise<PedidoDeFirma> {
       const adapter = await adaptadorConMotor(motor);
       sembrarViaje(SENDER_B58);
-      await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA);
       const p = motor.pedidos[0];
       if (!p) throw new Error("el motor no recibió ningún pedido");
       return p;
@@ -1908,7 +1909,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
         mensajeBase64: p.mensajeBase64,
       });
       const adapter = await adaptadorConMotor(motor);
-      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA);
       expect(r.estado).toBe("listo");
       if (r.estado !== "listo") return;
       expect(r.solana?.vm).toBe("solana");
@@ -1950,7 +1951,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       });
       const adapter = await adaptadorConMotor(motor);
       await expect(
-        adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit()),
+        adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA),
       ).rejects.toThrow("deeplink_tx_alterada");
     });
 
@@ -1976,7 +1977,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       });
       const adapter = await adaptadorConMotor(motor);
       await expect(
-        adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit()),
+        adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA),
       ).rejects.toThrow("deeplink_tx_alterada");
     });
 
@@ -2006,7 +2007,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       });
       const adapter = await adaptadorConMotor(motor);
       await expect(
-        adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit()),
+        adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA),
       ).rejects.toThrow("deeplink_tx_alterada");
     });
 
@@ -2045,7 +2046,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       mockNonce([bytesDeCuentaDeNonce(Keypair.generate().publicKey.toBase58())]);
       const adapter = await adaptadorConMotor(motor);
       await expect(
-        adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit()),
+        adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA),
       ).rejects.toThrow("deeplink_blockhash_expired");
       // 🔴 Y ES POR ESO QUE `execute()` NUNCA LLEGA AL SETTLE: `authorizePrincipal` TIRA, y su único
       // llamador de producción (`confirm-and-send.ts:484`) NO tiene `try/catch` alrededor. No hay
@@ -2082,7 +2083,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       sembrarPreparado();
       mockNonce([bytesDeCuentaDeNonce(VALOR_DEL_NONCE), null]);
       const adapter = await adaptadorConMotor(motor);
-      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit())).rejects.toThrow(
+      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA)).rejects.toThrow(
         "deeplink_blockhash_expired",
       );
       expect(disco.has(CLAVE_VIAJE)).toBe(false);
@@ -2105,7 +2106,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       });
       const adapter = await adaptadorConMotor(motor);
       const r = esperarAutorizacionLista(
-        await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit()),
+        await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA),
       );
       // Y la tx que viaja lleva el valor del NONCE, no el blockhash de la red. Los dos mocks tienen
       // valores DISTINTOS, así que esta comparación distingue de verdad (AC-1).
@@ -2152,7 +2153,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       // mueve el reloj falso, que ya tiene a quién vencer.
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
-        const corriendo = adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+        const corriendo = adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA);
         let causa: string | null = null;
         void corriendo.catch((e: unknown) => {
           causa = e instanceof Error ? e.message : String(e);
@@ -2206,7 +2207,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       // dos dispositivos del mismo remitente, y la tx de este dispositivo está muerta para siempre.
       mockNonce([bytesDeCuentaDeNonce(Keypair.generate().publicKey.toBase58())]);
       const adapter = await adaptadorConMotor(motor);
-      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit())).rejects.toThrow(
+      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA)).rejects.toThrow(
         "deeplink_blockhash_expired",
       );
       expect(disco.has(CLAVE_VIAJE)).toBe(false);
@@ -2234,7 +2235,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       });
       sembrarPreparado(); // el doble no escribe el ancla; acá se mide su limpieza
       const adapter = await adaptadorConMotor(motor);
-      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA);
       expect(r.estado).toBe("listo");
       expect(r.estado === "listo" && r.solana?.popSignature).toBe("FIRMA-POP"); // el envelope se armó
       expect(disco.has(CLAVE_VIAJE), "la x25519 privada sobrevivió a un envío exitoso").toBe(false);
@@ -2260,7 +2261,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       solanaWalletBridge.setState({ publicKey: SENDER_B58, connected: true });
       const adapter = new SolanaWalletAdapter(); // ← sin colaborador: el camino de siempre
       await adapter.connect();
-      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA);
       expect(r.estado).toBe("listo");
       expect(
         blockhashValidoSpy,
@@ -2278,7 +2279,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
     async function pedidoDeLaPrimeraVuelta(motor: MotorProgramable): Promise<PedidoDeFirma> {
       const adapter = await adaptadorConMotor(motor);
       sembrarViaje(SENDER_B58);
-      await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA);
       const p = motor.pedidos[0];
       if (!p) throw new Error("el motor no recibió ningún pedido");
       return p;
@@ -2293,7 +2294,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       montarEntorno();
       const motor = new MotorProgramable();
       const adapter = await adaptadorConMotor(motor);
-      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA);
       expect(r.estado).toBe("hay-que-salir");
       const pedido = motor.pedidos[0];
       if (!pedido) throw new Error("el motor no recibió ningún pedido");
@@ -2362,7 +2363,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       });
       solanaWalletBridge.registerSignTransaction(firmas);
       const adapter = await adaptadorConMotor(motor);
-      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit())).rejects.toThrow(
+      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA)).rejects.toThrow(
         "deeplink_nonce_ausente",
       );
       // 🔴 NO SE PIDIÓ NINGUNA FIRMA: el corte es anterior al diálogo de la billetera.
@@ -2401,7 +2402,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       expect(disco.has(CLAVE_VIAJE)).toBe(true);
       expect(disco.has(CLAVE_PREPARADO)).toBe(true);
 
-      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit())).rejects.toThrow(
+      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA)).rejects.toThrow(
         "deeplink_blockhash_desconocido",
       );
 
@@ -2427,7 +2428,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       const firmas = vi.fn(async (t: unknown) => t);
       solanaWalletBridge.registerSignTransaction(firmas);
       const adapter = await adaptadorConMotor(motor);
-      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit())).rejects.toThrow(
+      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA)).rejects.toThrow(
         "deeplink_saldo_insuficiente",
       );
       expect(firmas).toHaveBeenCalledTimes(0);
@@ -2440,7 +2441,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
         SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT as never,
       );
       const adapter = await adaptadorConMotor(motor);
-      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA);
       expect(r.estado).toBe("hay-que-salir");
     });
 
@@ -2452,7 +2453,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       const motor = new MotorProgramable();
       vi.spyOn(Connection.prototype, "getBalance").mockRejectedValue(new Error("rpc_down"));
       const adapter = await adaptadorConMotor(motor);
-      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit());
+      const r = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA);
       expect(r.estado).toBe("hay-que-salir");
     });
 
@@ -2490,7 +2491,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       const adapter = new SolanaWalletAdapter();
       await adapter.connect();
       const r = esperarAutorizacionLista(
-        await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit()),
+        await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA),
       );
 
       expect(latest).toHaveBeenCalledTimes(1);
@@ -2531,7 +2532,7 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
         bytesDeCuentaDeNonce(Keypair.generate().publicKey.toBase58()), // la de la VUELTA: ya avanzó
       ]);
       const adapter = await adaptadorConMotor(motor);
-      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit())).rejects.toThrow(
+      await expect(adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF_DE_LA_VUELTA)).rejects.toThrow(
         "deeplink_blockhash_expired",
       );
       // Y se leyó la cuenta DOS veces en esta invocación: un valor guardado en un campo del adapter
@@ -2661,6 +2662,121 @@ describe("SolanaWalletAdapter.authorizePrincipal — rama de enlace profundo (WK
       ).toBe(-1);
     }
   });
+
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  // WKH-373 · EL HREF DE LA VUELTA ENTRA POR PARÁMETRO, Y ES LA CAUSA RAÍZ DEL «me pide muchas firmas»
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  //
+  // 🔴 EL DEFECTO QUE ESTE BLOQUE REPRODUCE, medido en el árbol de `main` en `8ffdd78`:
+  //   1. (`limpiarLaBarra`, `../presentation/flow.tsx:4023`) corre INCONDICIONALMENTE y para toda
+  //      vuelta, y `hrefSinRastroDeVuelta` le saca a la barra el `dl`, el `nonce`, el `data` y la clave
+  //      de cifrado de la billetera;
+  //   2. recién DESPUÉS, (`execute`, `../presentation/flow.tsx:4087`) llama a `confirmAndSend`, que
+  //      llega hasta `authorizePrincipal`;
+  //   3. y `authorizePrincipal` leía el href de `entornoDeEnlace()` (`./solana-wallet.ts:1177`), que
+  //      consulta `globalThis.location.href` EN VIVO ⇒ leía la barra YA LIMPIADA en el paso 1.
+  //   4. `interpretarVuelta` no encontraba `dl` ⇒ `{tipo:"no-volvimos"}` ⇒ el motor re-anclaba y
+  //      devolvía OTRO salto ⇒ **la misma firma, pedida de nuevo en cada vuelta**, con la persona sin
+  //      salir nunca de la bienvenida. Eso es, palabra por palabra, «me sigue pidiendo muchas firmas».
+  //
+  // ⛔ Y ES EL MISMO BUG QUE YA SE ARREGLÓ PARA EL PoP y no se había arreglado para el depósito: el
+  // docblock de (`completarPop`, `./solana/preparacion-por-enlace.ts:495`) lo predijo por escrito
+  // —«con el href leído en vivo, cualquiera que vuelva a mover la limpieza reabre el mismo agujero sin
+  // tocar una línea de este archivo»—.
+  //
+  // 🔴 MUTANTE QUE MATA (MEDIDO, y es el criterio de cierre de esta HU): en `solana-wallet.ts`, volver
+  // `hrefActual: hrefDeLaVuelta` a `hrefActual: entorno.href`. El `it` T-373-1 se pone rojo con
+  // «la invocación B volvió a pedir la firma de la TRANSACCIÓN: la vuelta no se leyó», que es el
+  // síntoma del founder convertido en aserción.
+  describe("WKH-373: el href de la vuelta entra por PARÁMETRO", () => {
+    /** Abre el sobre que salió hacia la billetera y devuelve lo que se le mandó a firmar. */
+    function contenidoDelSalto(irA: string, par: nacl.BoxKeyPair, billetera: nacl.BoxKeyPair): Record<string, string> {
+      const q = new URL(irA).searchParams;
+      const abierto = nacl.box.open.after(
+        bs58.decode(q.get("payload") as string),
+        bs58.decode(q.get("nonce") as string),
+        nacl.box.before(par.publicKey, billetera.secretKey),
+      );
+      if (abierto === null) throw new Error("el sobre del salto no abrió: el fixture no habla el protocolo");
+      return JSON.parse(new TextDecoder().decode(abierto)) as Record<string, string>;
+    }
+
+    /** El href con el que la billetera nos devuelve el control, con su respuesta CIFRADA adentro. */
+    function vuelta(irA: string, par: nacl.BoxKeyPair, billetera: nacl.BoxKeyPair, cuerpo: unknown): string {
+      const secreto = nacl.box.before(par.publicKey, billetera.secretKey);
+      const n = nacl.randomBytes(24);
+      const data = nacl.box.after(new TextEncoder().encode(JSON.stringify(cuerpo)), n, secreto);
+      const u = new URL(new URL(irA).searchParams.get("redirect_link") as string);
+      u.searchParams.set("nonce", bs58.encode(n));
+      u.searchParams.set("data", bs58.encode(data));
+      return u.toString();
+    }
+
+    it("T-373-1: con la barra YA LIMPIA, la vuelta del depósito AVANZA en vez de volver a pedir la misma firma", async () => {
+      montarEntorno();
+      const adapter = await adaptadorConMotor(new FirmaPorEnlaceReal()); // el motor REAL: es el que lee la URL
+      const { par, billetera } = sembrarViaje(SENDER_B58);
+
+      // 1 · INVOCACIÓN A — sale el salto a firmar la transacción, y el motor ancla sus bytes.
+      const a = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF);
+      expect(a.estado, "la invocación A no pidió el salto: el fixture no reproduce el caso").toBe("hay-que-salir");
+      if (a.estado !== "hay-que-salir") throw new Error("inalcanzable");
+      expect(a.esperando).toBe("firma-tx");
+
+      // 2 · la billetera firma LA MISMA transacción que se le mandó y vuelve a nuestro origen.
+      const tx = Transaction.from(bs58.decode(contenidoDelSalto(a.irA, par, billetera).transaction as string));
+      tx.partialSign(SENDER_KP);
+      const hrefSucio = vuelta(a.irA, par, billetera, {
+        transaction: bs58.encode(tx.serialize({ requireAllSignatures: false, verifySignatures: false })),
+      });
+
+      // 🔴 CD-18 — EL FIXTURE REPRODUCE EL DEFECTO, Y ESTA ES LA MITAD QUE LO HACE. La barra sigue
+      // LIMPIA: es exactamente el estado en que `limpiarLaBarra()` la deja antes de que corra
+      // `confirmAndSend.execute()`. Sin esto, `location.href` traería la respuesta y el `it` pasaría
+      // con el código roto, o sea que no mediría nada.
+      const enLaBarra = new URL((globalThis as { location: { href: string } }).location.href).searchParams;
+      expect(enLaBarra.get("dl"), "la barra trae la marca: el fixture no reproduce el estado post-limpieza").toBeNull();
+      expect(enLaBarra.get("data"), "la barra trae la respuesta: el fixture no reproduce el estado post-limpieza").toBeNull();
+      expect(new URL(hrefSucio).searchParams.get("dl"), "el href del parámetro no trae la marca").toBe("firmar-tx");
+
+      // 3 · INVOCACIÓN B — el href SUCIO entra POR PARÁMETRO, que es todo el arreglo.
+      const b = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), hrefSucio);
+      expect(b.estado, "la invocación B no devolvió un salto").toBe("hay-que-salir");
+      if (b.estado !== "hay-que-salir") throw new Error("inalcanzable");
+      expect(
+        b.esperando,
+        "la invocación B volvió a pedir la firma de la TRANSACCIÓN: la vuelta no se leyó, el motor re-ancló y la persona vuelve a firmar lo mismo",
+      ).toBe("firma-patrocinio");
+      // Y la firma quedó en el disco, que es lo que permite que la invocación siguiente cierre.
+      expect(
+        JSON.parse(disco.get(CLAVE_VIAJE) as string).transaccionFirmada,
+        "la transacción firmada no se persistió: la vuelta no llegó al viaje",
+      ).toBe(bs58.encode(tx.serialize({ requireAllSignatures: false, verifySignatures: false })));
+    });
+
+    // ⛔ EL CONTROL NEGATIVO. Sin él, T-373-1 no distingue «se leyó el href del parámetro» de «se leyó
+    // cualquier href y el motor avanza igual»: con un href SIN la respuesta, el desenlace tiene que
+    // volver a ser `firma-tx`. O sea que el `esperando` de arriba lo decide LO QUE TRAE EL PARÁMETRO.
+    it("T-373-1b: con un href SIN respuesta por parámetro, el motor vuelve a pedir la firma de la transacción", async () => {
+      montarEntorno();
+      const adapter = await adaptadorConMotor(new FirmaPorEnlaceReal());
+      const { par, billetera } = sembrarViaje(SENDER_B58);
+      const a = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), HREF);
+      if (a.estado !== "hay-que-salir") throw new Error("la invocación A no pidió el salto");
+      const tx = Transaction.from(bs58.decode(contenidoDelSalto(a.irA, par, billetera).transaction as string));
+      tx.partialSign(SENDER_KP);
+      // La MISMA vuelta que en T-373-1, pero pasada por la limpieza que hace el productor de montaje.
+      const limpio = hrefSinRastroDeVuelta(
+        vuelta(a.irA, par, billetera, {
+          transaction: bs58.encode(tx.serialize({ requireAllSignatures: false, verifySignatures: false })),
+        }),
+      );
+      const b = await adapter.authorizePrincipal(makeQuote(), REM, escrowDeposit(), limpio);
+      if (b.estado !== "hay-que-salir") throw new Error("la invocación B no devolvió un salto");
+      expect(b.esperando, "con la vuelta borrada el motor avanzó igual: entonces T-373-1 no mide el href").toBe("firma-tx");
+    });
+  });
+
 });
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════

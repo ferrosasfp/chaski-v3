@@ -99,7 +99,7 @@ async function runSettleFailure(
       probe,
       senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace(),
     },
-  ).execute({ remittanceId: "rem-1" }));
+  ).execute({ remittanceId: "rem-1" , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
   return { snapshot: out.snapshot, probeCalls: probe.calls.length };
 }

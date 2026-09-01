@@ -93,7 +93,7 @@ export function olvidarCorteDeVuelta(): void {
 // el mismo argumento que ya está escrito arriba para la causa del corte.
 
 /** Los cuatro, cerrados. Un quinto obliga a decidir qué pregunta contesta y a darle renglón. */
-export type HitoDeVuelta = "pantalla" | "connect" | "continuacion" | "error" | "salida-al-navegador"; // WKH-372/W1 — EL QUINTO, EN ESTA MISMA LÍNEA (Δ0), y con su renglón: lo pinta el renglón `salida navegador` del bloque de diagnóstico (`./diagnostico-de-vuelta.tsx:589`). La pregunta que contesta está en (`anotarLaSalidaAlNavegador`, `:226`)
+export type HitoDeVuelta = "pantalla" | "connect" | "continuacion" | "error" | "salida-al-navegador" | "href-al-montar" | "href-al-reanudar"; // WKH-372/W1 — EL QUINTO, EN ESTA MISMA LÍNEA (Δ0), y con su renglón: lo pinta el renglón `salida navegador` del bloque de diagnóstico (`./diagnostico-de-vuelta.tsx:589`). La pregunta que contesta está en (`anotarLaSalidaAlNavegador`, `:226`) // WKH-373 — EL SEXTO Y EL SÉPTIMO, EN ESTA MISMA LÍNEA (Δ0), y con su renglón: los dos los pinta `href al leer` del bloque de `?diag=1`. ⛔ Su valor NO es el href: es lo que devuelve `formaDelHref` (abajo), o sea la PRESENCIA de cada parámetro de respuesta, porque `data` es el sobre cifrado y la clave pública de la billetera viaja al lado.
 
 const hitos = new Map<HitoDeVuelta, string>();
 

@@ -170,7 +170,7 @@ const HOST_DE_LA_BILLETERA = new URL(phantomBrowseUrl("https://chaski.test/", "h
   .hostname;
 
 /** Reemplaza `window.location` por uno que ANOTA los `href = …` en vez de navegar. Misma receta que
- *  (`espiarNavegacion`, `./flow-reanudacion.test.tsx:1294`), que es la única forma de ver la
+ *  (`espiarNavegacion`, `./flow-reanudacion.test.tsx:1304`), que es la única forma de ver la
  *  navegación programática bajo jsdom. */
 function espiarNavegacion(): { asignado: string[]; restaurar: () => void } {
   const original = window.location;
@@ -372,7 +372,7 @@ describe("W1.0 · adentro del navegador de la billetera el recorrido es el inyec
         senderBalance: new FakeSolanaSenderSolBalanceProbe(1_000_000_000),
         pop,
       })
-        .execute({ remittanceId: id })
+        .execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" })
         .catch((e: unknown) => e as Error);
 
       // 1 · QUÉ CONTESTÓ `pedir()`, la lista entera y no un `not.toContain`. Va PRIMERA: es la
@@ -439,7 +439,7 @@ describe("W1.0 · el recargo del durable nonce desaparece por INALCANZABILIDAD",
     // bumps y tira «Unable to find a viable program address nonce». O sea que `authorizePrincipal`
     // es INALCANZABLE desde jsdom sin esto, y no por nada que tenga que ver con el gate que este `it`
     // mide. Es la misma clase de defecto que este repo ya tiene escrita para `tweetnacl` en
-    // (`IR_A_POP_KYC`, `./flow-reanudacion.test.tsx:1330`).
+    // (`IR_A_POP_KYC`, `./flow-reanudacion.test.tsx:1340`).
     // ⛔ LO QUE ESTA LÍNEA **NO** HACE: no toca la disponibilidad, no toca `caminoPorEnlace`, no toca
     // el colaborador de firma por enlace, y no fabrica ninguna PDA. Alinea el realm y nada más; el
     // mutante del gate sigue matando este `it` con esta línea puesta.
@@ -477,7 +477,7 @@ describe("W1.0 · el recargo del durable nonce desaparece por INALCANZABILIDAD",
           beneficiary: Keypair.generate().publicKey.toBase58(),
           authority: Keypair.generate().publicKey.toBase58(),
         },
-      })
+      }, "https://chaski.test/enviar")
       .catch((e: unknown) => e as Error);
 
     // 1 · NO CORTÓ POR EL CAMINO POR ENLACE. Con el gate invertido el corte sería
@@ -526,7 +526,7 @@ describe("W1.0 · el recargo del durable nonce desaparece por INALCANZABILIDAD",
         gateway: new FakeSolanaSettlementGateway(),
         senderBalance: new FakeSolanaSenderSolBalanceProbe(SENDER_MIN_LAMPORTS_FOR_DEPOSIT),
         pop: new FakePruebaDePosesionPorEnlace(),
-      }).execute({ remittanceId: idA }),
+      }).execute({ remittanceId: idA , hrefDeLaVuelta: "https://chaski.test/enviar" }),
     );
     expect(
       salidaA.snapshot.status,
@@ -546,7 +546,7 @@ describe("W1.0 · el recargo del durable nonce desaparece por INALCANZABILIDAD",
         gateway: new FakeSolanaSettlementGateway(),
         senderBalance: new FakeSolanaSenderSolBalanceProbe(SENDER_MIN_LAMPORTS_FOR_DEPOSIT - 1),
         pop: new FakePruebaDePosesionPorEnlace(),
-      }).execute({ remittanceId: idB }),
+      }).execute({ remittanceId: idB , hrefDeLaVuelta: "https://chaski.test/enviar" }),
     );
     expect(salidaB.snapshot.status, "un lamport por debajo del umbral igual pasó: el guard no corta").toBe(
       "payout_failed",
@@ -581,7 +581,7 @@ describe("W1.0 · el conteo de `prepare()` por envío", () => {
         gateway: new FakeSolanaSettlementGateway(),
         senderBalance: new FakeSolanaSenderSolBalanceProbe(1_000_000_000),
         pop,
-      }).execute({ remittanceId: id }),
+      }).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }),
     );
 
     expect(

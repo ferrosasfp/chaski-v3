@@ -6,7 +6,7 @@
 //     lecturas de cuenta.
 //   · en `solana-wallet.ts` tampoco, y por un motivo MEDIDO y no estético: ese archivo tiene
 //     [[CENSO src/infrastructure/solana-wallet.ts lineas=2498]] líneas y recibe
-//     [[CENSO src/infrastructure/solana-wallet.ts entrantes=127]] citas ancladas, de las que
+//     [[CENSO src/infrastructure/solana-wallet.ts entrantes=130]] citas ancladas, de las que
 //     [[CENSO src/infrastructure/solana-wallet.ts entrantes-desde-1233=60]] apuntan de `:1233` para
 //     abajo, así que insertar en el medio las rompe a todas. ⚠️ LOS TRES YA ENVEJECIERON DOS VECES ACÁ
 //     («2247/85/34» ⇒ «2362/116/50» ⇒ los de hoy) sin que nadie editara la frase, y por eso desde el
@@ -25,7 +25,7 @@ import type { CausaDeEnlace } from "./deeplink/firma-por-enlace";
 import type { Almacen } from "./deeplink/sesion";
 import { almacenDeNavegador, terminarViaje } from "./deeplink/sesion";
 import { completarVuelta, guardarEleccion, iniciarConexion, iniciarCreacionDeNonce, leerEleccion, olvidarEleccion, remesaDelViaje } from "./deeplink/conexion"; import { vueltaDelPop } from "./deeplink/pop-por-enlace"; // WKH-359: EN ESTA LÍNEA, por el mismo motivo que el resto de este archivo evita líneas nuevas arriba
-import { DEEPLINK_NONCE_NO_ENTRO, DEEPLINK_SIN_MEMORIA, DEEPLINK_TX_ALTERADA } from "./deeplink/firma-por-enlace";
+import { DEEPLINK_NONCE_NO_ENTRO, DEEPLINK_SIN_MEMORIA, DEEPLINK_TX_ALTERADA } from "./deeplink/firma-por-enlace"; import { anotarSitioDelCorte } from "./deeplink/bitacora-del-corte"; /* WKH-373: EN ESTA MISMA LÍNEA (Δ0) */
 
 import { resolveSolanaNetworkConfig, resolveSolanaRpcUrlPublic } from "../chain";
 import { construirCreacionDeNonce, direccionDelNonce, leerNonce, type ConTecho } from "./nonce-duradero";
@@ -410,12 +410,12 @@ export class RecorridoPorEnlaceReal implements PreparacionPorEnlace {
     try {
       tx = Transaction.from(bs58.decode(transaccionBase58));
     } catch {
-      return { estado: "corte", causa: DEEPLINK_TX_ALTERADA };
+      anotarSitioDelCorte("E12-nonce-transmision-ilegible"); return { estado: "corte", causa: DEEPLINK_TX_ALTERADA }; // WKH-373: el sitio, EN ESTA MISMA LÍNEA (Δ0)
     }
     // El `feePayer` de esta tx es el sender: es de donde sale la cuenta cuyo nonce hay que releer.
     // ⛔ NO se toma del disco: se toma de la transacción que efectivamente se va a transmitir.
     const senderPk = tx.feePayer;
-    if (senderPk === undefined) return { estado: "corte", causa: DEEPLINK_TX_ALTERADA };
+    if (senderPk === undefined) { anotarSitioDelCorte("E13-nonce-transmision-sin-feepayer"); return { estado: "corte", causa: DEEPLINK_TX_ALTERADA }; } // WKH-373: el sitio, EN ESTA MISMA LÍNEA (Δ0)
 
     let firma: string | null = null;
     try {
@@ -519,7 +519,7 @@ export class RecorridoPorEnlaceReal implements PreparacionPorEnlace {
 
 /**
  * WKH-359 — Qué salió de leer la vuelta del salto del PoP. Va AL FINAL del archivo, donde hay CERO
- * citas ancladas: [[CENSO src/infrastructure/solana/preparacion-por-enlace.ts entrantes-desde-520=0]] apuntan de acá para abajo, y el CERO es lo que sostiene la decisión. ⚠️ ACÁ DECÍA «las únicas dos de este archivo apuntan a `:246`» Y SE DESMENTÍA SIN SALIR DEL BLOQUE (CR/MNR-3): este mismo docblock contiene una tercera cita dos líneas más abajo, y el fix-pack agregó una cuarta en `:474`. Hoy son [[CENSO src/infrastructure/solana/preparacion-por-enlace.ts entrantes=6]] entrantes a [[CENSO src/infrastructure/solana/preparacion-por-enlace.ts destinos=5]] destinos, todos MARCADORES verificados.
+ * citas ancladas: [[CENSO src/infrastructure/solana/preparacion-por-enlace.ts entrantes-desde-520=0]] apuntan de acá para abajo, y el CERO es lo que sostiene la decisión. ⚠️ ACÁ DECÍA «las únicas dos de este archivo apuntan a `:246`» Y SE DESMENTÍA SIN SALIR DEL BLOQUE (CR/MNR-3): este mismo docblock contiene una tercera cita dos líneas más abajo, y el fix-pack agregó una cuarta en `:474`. Hoy son [[CENSO src/infrastructure/solana/preparacion-por-enlace.ts entrantes=10]] entrantes a [[CENSO src/infrastructure/solana/preparacion-por-enlace.ts destinos=7]] destinos, todos MARCADORES verificados.
  *
  * ⛔ ES UN TIPO PROPIO Y NO UNA VARIANTE MÁS DE (`ResultadoDePreparacion`, `:71`), y no es duplicación:
  * ese tipo lo consume un `switch` exhaustivo en la pantalla, así que agregarle un miembro obliga a

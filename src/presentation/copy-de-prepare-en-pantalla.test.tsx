@@ -106,7 +106,7 @@ async function runPrepareFailure(enumDeLaRoute: string): Promise<RemittanceState
       probe: new FakeSolanaEscrowDepositProbe("not_deposited"),
       senderBalance: new FakeSolanaSenderSolBalanceProbe(),
       pop: new FakePruebaDePosesionPorEnlace(),
-    }).execute({ remittanceId: "rem-1" }),
+    }).execute({ remittanceId: "rem-1" , hrefDeLaVuelta: "https://chaski.test/enviar" }),
   );
   return out.snapshot;
 }

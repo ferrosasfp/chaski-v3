@@ -162,7 +162,7 @@ describe("T-065-7: la reanudación de `execute()`", () => {
     );
 
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
-    expect(spy.mock.calls[0]?.[0]).toEqual({ remittanceId: REM });
+    { const pasado = spy.mock.calls[0]?.[0] as { remittanceId: string; hrefDeLaVuelta: string }; expect(pasado.remittanceId).toBe(REM); expect(new URL(pasado.hrefDeLaVuelta).searchParams.get("dl"), "el productor le pasó a `execute()` un href SIN `dl`: es el de DESPUÉS de limpiar la barra, y con él `authorizePrincipal` no puede reconocer de qué salto se volvió").toBe("firmar-tx"); } // 🔴 WKH-373 — EN ESTA MISMA LÍNEA (Δ0: este archivo se cita por número desde otros cuatro). ACÁ DECÍA `toEqual({ remittanceId: REM })` y esa igualdad estricta era la que se ponía roja al agregar el campo, o sea que el `it` medía la FORMA del argumento y no su contenido. Ahora mide lo que importa: que el href que viaja a `execute()` —y de ahí a `authorizePrincipal`— sea el de ANTES del paso 2.
     // ⛔ Y NO SE VOLVIÓ A LLAMAR `r.confirm()`: la remesa ya entró `confirmed`, así que el guard de
     // reanudación del use-case tiene que saltearlo. El espía va sobre el PROTOTIPO del dominio y no
     // sobre el estado final, porque el estado final depende de lo que haga la billetera de mentira
@@ -613,8 +613,18 @@ describe("T-067-11 / T-067-12 (WKH-359/AC-7): la vuelta del salto del permiso", 
     render(<RemittanceFlow pasoInicial="send" container={c} />);
 
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
-    expect(spy.mock.calls[0]?.[0]).toEqual({ remittanceId: REM });
+    { const pasado = spy.mock.calls[0]?.[0] as { remittanceId: string; hrefDeLaVuelta: string }; expect(pasado.remittanceId).toBe(REM); for (const q of ["phantom_encryption_public_key", "nonce", "data", "dl"]) expect(new URL(pasado.hrefDeLaVuelta).searchParams.get(q), `el productor le pasó a \`execute()\` un href SIN \`${q}\`: es el de DESPUÉS de limpiar la barra, y con él \`authorizePrincipal\` contesta \`no-volvimos\`, re-ancla y vuelve a pedir la MISMA firma`).not.toBeNull(); } // 🔴 WKH-373 — EL GEMELO DEL DEPÓSITO, EN ESTA MISMA LÍNEA (Δ0). Éste es exactamente el `it` que faltaba: el de abajo mide el href que recibe `completarPop` y NADIE medía el que recibe el consumidor de la vuelta del DEPÓSITO. Con el código de antes, `authorizePrincipal` no recibía ningún href —lo leía de `location` en vivo, ya limpiado— y este `it` no podía ni escribirse.
     expect(recorrido.llamadas, "la vuelta del permiso no se leyó, o se leyó de más").toBe(1);
+    // 🔴 WKH-373 — Y EL CABLEADO DEL RENGLÓN DE `?diag=1`, MEDIDO ACÁ Y NO EN EL BLOQUE. Los `it` del
+    // bloque de diagnóstico anotan los hitos A MANO, así que verdes los dos no prueban que ALGUIEN los
+    // escriba en producción: un `formaDelHref` sin llamador y uno cableado son indistinguibles desde
+    // allá. Éste es el único `it` que monta el flujo REAL y mira lo que quedó anotado.
+    // MUTANTE QUE MATA: borrar cualquiera de los dos `anotarHito` de `./flow.tsx` (`:3997` y `:4087`).
+    for (const [hito, quien] of [["href-al-montar", "el productor de montaje"], ["href-al-reanudar", "la reanudación"]] as const) {
+      expect(leerHito(hito), `${quien} no anotó su href: el renglón \`href al leer\` de \`?diag=1\` diría «no corrió» en una captura de un teléfono donde SÍ corrió`).toBe(
+        "dl=pop-payout nonce=sí data=sí key=sí",
+      );
+    }
 
     // 🔴 LA MITAD DEL FIX-PACK (AR/BLQ-ALTO-1): lo que el productor le pasó a `completarPop` es el href
     // de ANTES de limpiar la barra. Los tres parámetros de respuesta tienen que estar: sin ellos, el
@@ -1691,5 +1701,91 @@ describe("HU-075/gesto: el segundo salto necesita un TOQUE", () => {
 
     expect(await screen.findByRole("button", { name: CTA_INICIO })).toBeInTheDocument();
     expect(screen.queryByText(/Volviendo de tu billetera/)).toBeNull();
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-373 · LA SALIDA DE EMERGENCIA NO SE ESCONDE JUSTO CUANDO EL CAMINO POR ENLACE NO CIERRA
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 EL HECHO, MEDIDO Y NO SUPUESTO. El founder reporta que en el navegador interno de Phantom el
+// mismo recorrido SÍ cierra: o sea que hay un camino que funciona, y la pantalla lo ofrece con
+// «Abrir Chaski en Phantom» ((`urlDeSalidaAlNavegadorDeLaBilletera`, `./flow.tsx:757`)). Ese ofrecimiento
+// estaba gateado, entre otras cosas, por `saltoPendiente === null` y `estadoNonce === null`, que son
+// exactamente los dos estados en los que el camino por enlace NO está cerrando:
+//   · `saltoPendiente !== null` es «la vuelta resolvió que hace falta OTRO salto», que bajo la causa
+//     raíz de esta HU ocurría en CADA vuelta (el bucle de «me sigue pidiendo muchas firmas»);
+//   · `estadoNonce !== null` es la tarjeta de la cuenta de nonce, que se enciende justamente cuando el
+//     depósito cortó por `deeplink_nonce_ausente`.
+// ⇒ La puerta al camino que funciona se cerraba en los dos momentos en que hacía falta.
+//
+// ⚠️ ACÁ HAY UNA PRECISIÓN QUE HAY QUE HACER PARA NO AFIRMAR DE MÁS. El diagnóstico decía que el
+// culpable era `vueltaSinResolver`, «que sólo se apaga cuando la vuelta resuelve BIEN». **Es falso, y
+// está medido**: se apaga en `.finally(alResolverseLaVuelta)` ((`alResolverseLaVuelta`, `./flow.tsx:4092`)),
+// que corre en los SEIS desenlaces y en los dos `catch`. La bandera no es la que esconde nada, y por
+// eso ⛔ NO se tocó: mientras la vuelta se está resolviendo la pantalla muestra un spinner, y ofrecer
+// una salida ahí sería ruido. Los que sí escondían son los otros dos, y son los que cambian.
+describe("WKH-373: la salida al navegador de la billetera", () => {
+  it("T-373-5: con un salto pendiente (la vuelta pidió OTRA firma), la salida SIGUE ofrecida", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo, "confirmed");
+    sembrarVuelta("firmar-tx");
+    const c = contenedor(repo);
+    // El desenlace del bucle: `execute()` contesta que hace falta OTRO salto, en cada vuelta.
+    vi.spyOn(c.confirmAndSend, "execute").mockResolvedValue({
+      estado: "hay-que-salir",
+      irA: "https://phantom.app/ul/v1/signTransaction?x=1",
+      esperando: "firma-tx",
+    });
+
+    render(<RemittanceFlow pasoInicial="bienvenida" container={c} />);
+
+    // CD-18 — el fixture reproduce el estado del founder: la pantalla ofrece el salto otra vez.
+    await screen.findByText(/Falta una firma para seguir/);
+    expect(
+      screen.queryByRole("link", { name: /Abrir Chaski en Phantom/ }),
+      "con un salto pendiente la pantalla escondió la salida al camino que SÍ cierra",
+    ).not.toBeNull();
+  });
+
+  // 🔴 EL CONTROL, Y CAMBIA UNA SOLA VARIABLE: el DESENLACE de `execute()`. Con un corte —el que el
+  // founder leyó, `deeplink_tx_alterada`— no hay salto pendiente, la persona se queda en la misma
+  // pantalla y la salida SÍ estaba ofrecida, también antes de esta HU. Los dos `it` juntos son los que
+  // fijan «igual, o más»: sin este control, el de arriba no distingue «el gate dejó de depender de
+  // `saltoPendiente`» de «la salida se muestra siempre, pase lo que pase».
+  it("T-373-5b: con el CORTE que leyó el founder la salida también está (el control)", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo, "confirmed");
+    sembrarVuelta("firmar-tx");
+    const c = contenedor(repo);
+    vi.spyOn(c.confirmAndSend, "execute").mockRejectedValue(new Error("deeplink_tx_alterada"));
+
+    render(<RemittanceFlow pasoInicial="bienvenida" container={c} />);
+
+    await screen.findByText(/no es lo que te mandamos a firmar/);
+    expect(screen.queryByText(/Falta una firma para seguir/), "el control no controla: hay salto pendiente").toBeNull();
+    expect(
+      screen.queryByRole("link", { name: /Abrir Chaski en Phantom/ }),
+      "con el corte en pantalla la salida al camino que SÍ cierra no está",
+    ).not.toBeNull();
+  });
+
+  // Y el tercer estado en que el camino por enlace no cierra: la tarjeta de la cuenta de nonce, que se
+  // enciende con `deeplink_nonce_ausente` ((`alSaberDelNonce`, `./flow.tsx:4090`)). Mismo argumento: es
+  // justo cuando hace falta la otra puerta.
+  it("T-373-5c: con la tarjeta de la cuenta de nonce encendida, la salida SIGUE ofrecida", async () => {
+    const repo = new InMemoryRepo();
+    await sembrarRemesaConfirmada(repo, "confirmed");
+    sembrarVuelta("firmar-tx");
+    const c = contenedor(repo);
+    vi.spyOn(c.confirmAndSend, "execute").mockRejectedValue(new Error("deeplink_nonce_ausente"));
+
+    render(<RemittanceFlow pasoInicial="bienvenida" container={c} />);
+
+    await screen.findByText(/Crear la cuenta/);
+    expect(
+      screen.queryByRole("link", { name: /Abrir Chaski en Phantom/ }),
+      "con la tarjeta del nonce encendida la pantalla escondió la salida al camino que SÍ cierra",
+    ).not.toBeNull();
   });
 });

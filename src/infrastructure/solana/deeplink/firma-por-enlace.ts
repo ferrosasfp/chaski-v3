@@ -47,7 +47,7 @@ import {
   leerViaje,
   terminarViaje,
 } from "./sesion";
-import { guardarPreparado, leerPreparado, terminarPreparado } from "./preparado";
+import { guardarPreparado, leerPreparado, terminarPreparado } from "./preparado"; import { anotarSitioDelCorte } from "./bitacora-del-corte"; /* WKH-373: el sitio del corte, EN ESTA MISMA LÍNEA (Δ0) */
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 // Las causas. Strings estables: viajan como `Error.message` desde `authorizePrincipal`. Cada docblock
@@ -273,7 +273,7 @@ export type CausaDeEnlace =
   | typeof DEEPLINK_VIAJE_VENCIDO
   | typeof DEEPLINK_NONCE_YA_CONSUMIDO
   | typeof DEEPLINK_NONCE_NO_ENTRO
-  | typeof DEEPLINK_NONCE_SIN_CONTEXTO | typeof DEEPLINK_POP_SIN_FIRMA | typeof DEEPLINK_POP_VENCIDO | typeof DEEPLINK_POP_ALTERADO | typeof DEEPLINK_RELOJ_INCONSISTENTE; // WKH-075/addendum del reloj — LA CAUSA NUEVA TAMBIÉN EN ESTA LÍNEA, por el mismo motivo ([[CENSO src/infrastructure/solana/deeplink/firma-por-enlace.ts entrantes-desde-276=23]] citas ancladas de acá para abajo. 🔴 ACÁ HABÍA UN «20» ESCRITO A MANO —MÁS LA LISTA DE LÍNEAS— Y ESTE MISMO COMMIT LO VOLVIÓ FALSO, porque las citas que faltaban las agregó él (AR-fp/BLQ-MED-3). Hoy es un MARCADOR que `../../../composition/citas-ancladas.test.ts` deriva del árbol y verifica en cada `npm test`, así que se pone rojo solo en vez de pudrirse. La enumeración a mano se fue con el número: envejecía igual y no la vigilaba nadie. ⚠️ Y el marcador cuenta SÓLO las citas ANCLADAS —símbolo delante—: las sueltas se rompen igual al insertar acá y siguen sin que las mire nadie, así que el Δ0 lo sigue exigiendo el criterio, no el número). ⛔ NO SE REUSA `DEEPLINK_VIAJE_VENCIDO`: su copy dice «Pasó demasiado tiempo desde que empezaste… No se firmó nada. Empezá el envío de nuevo», y en un retroceso de reloj las tres frases son falsas o dañinas (no pasó tiempo, pasó lo contrario; puede haber una `transaccionFirmada` que este arreglo acaba de salvar; y «empezá de nuevo» empuja a tirarla). // WKH-359 — LOS TRES EN ESTA LÍNEA, no en tres nuevas: hay 13 citas ancladas de acá para abajo (medido en `723ca3c`) y tres líneas nuevas las corren a todas. Las declaraciones viven al final del archivo, donde hay CERO.
+  | typeof DEEPLINK_NONCE_SIN_CONTEXTO | typeof DEEPLINK_POP_SIN_FIRMA | typeof DEEPLINK_POP_VENCIDO | typeof DEEPLINK_POP_ALTERADO | typeof DEEPLINK_RELOJ_INCONSISTENTE; // WKH-075/addendum del reloj — LA CAUSA NUEVA TAMBIÉN EN ESTA LÍNEA, por el mismo motivo ([[CENSO src/infrastructure/solana/deeplink/firma-por-enlace.ts entrantes-desde-276=25]] citas ancladas de acá para abajo. 🔴 ACÁ HABÍA UN «20» ESCRITO A MANO —MÁS LA LISTA DE LÍNEAS— Y ESTE MISMO COMMIT LO VOLVIÓ FALSO, porque las citas que faltaban las agregó él (AR-fp/BLQ-MED-3). Hoy es un MARCADOR que `../../../composition/citas-ancladas.test.ts` deriva del árbol y verifica en cada `npm test`, así que se pone rojo solo en vez de pudrirse. La enumeración a mano se fue con el número: envejecía igual y no la vigilaba nadie. ⚠️ Y el marcador cuenta SÓLO las citas ANCLADAS —símbolo delante—: las sueltas se rompen igual al insertar acá y siguen sin que las mire nadie, así que el Δ0 lo sigue exigiendo el criterio, no el número). ⛔ NO SE REUSA `DEEPLINK_VIAJE_VENCIDO`: su copy dice «Pasó demasiado tiempo desde que empezaste… No se firmó nada. Empezá el envío de nuevo», y en un retroceso de reloj las tres frases son falsas o dañinas (no pasó tiempo, pasó lo contrario; puede haber una `transaccionFirmada` que este arreglo acaba de salvar; y «empezá de nuevo» empuja a tirarla). // WKH-359 — LOS TRES EN ESTA LÍNEA, no en tres nuevas: hay 13 citas ancladas de acá para abajo (medido en `723ca3c`) y tres líneas nuevas las corren a todas. Las declaraciones viven al final del archivo, donde hay CERO.
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
@@ -682,7 +682,7 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
     // ⛔ Comparación exacta. NUNCA `.toLowerCase()`: base58 es case-sensitive y bajarlo a minúsculas
     // fabrica colisiones. El adaptador ya canonicaliza los dos lados antes de llegar acá.
     const lectura = leerViaje(p.almacen, p.ahora);
-    if (lectura.tipo === "no-fechable") return cortar(DEEPLINK_RELOJ_INCONSISTENTE); if (lectura.tipo !== "hay") return cortar(DEEPLINK_VIAJE_VENCIDO); // 🔴 LOS DOS `if` EN ESTA MISMA LÍNEA, y son dos requisitos a la vez: Δ0 ([[CENSO src/infrastructure/solana/deeplink/firma-por-enlace.ts entrantes-desde-685=14]] citas ANCLADAS de acá para abajo; acá decía «9» y este mismo commit lo volvió falso, así que el número lo publica ahora el marcador y lo verifica el árbol — AR-fp/BLQ-MED-3. ⚠️ El marcador cuenta sólo las ANCLADAS: las sueltas se rompen igual, así que el Δ0 lo manda el criterio y no el número) y que esta línea SIGA conteniendo el literal `DEEPLINK_VIAJE_VENCIDO`, porque `../../solana-wallet.ts:2294` la cita por ese símbolo. 🔴 EL ORDEN IMPORTA: `no-fechable` se discrimina PRIMERO, si no cae en el `!== "hay"` y la persona lee «Pasó demasiado tiempo… No se firmó nada. Empezá el envío de nuevo» justo cuando puede haber una `transaccionFirmada` suya en el disco, que es exactamente lo que este arreglo salva.
+    if (lectura.tipo === "no-fechable") return cortar(DEEPLINK_RELOJ_INCONSISTENTE); if (lectura.tipo !== "hay") return cortar(DEEPLINK_VIAJE_VENCIDO); // 🔴 LOS DOS `if` EN ESTA MISMA LÍNEA, y son dos requisitos a la vez: Δ0 ([[CENSO src/infrastructure/solana/deeplink/firma-por-enlace.ts entrantes-desde-685=16]] citas ANCLADAS de acá para abajo; acá decía «9» y este mismo commit lo volvió falso, así que el número lo publica ahora el marcador y lo verifica el árbol — AR-fp/BLQ-MED-3. ⚠️ El marcador cuenta sólo las ANCLADAS: las sueltas se rompen igual, así que el Δ0 lo manda el criterio y no el número) y que esta línea SIGA conteniendo el literal `DEEPLINK_VIAJE_VENCIDO`, porque `../../solana-wallet.ts:2294` la cita por ese símbolo. 🔴 EL ORDEN IMPORTA: `no-fechable` se discrimina PRIMERO, si no cae en el `!== "hay"` y la persona lee «Pasó demasiado tiempo… No se firmó nada. Empezá el envío de nuevo» justo cuando puede haber una `transaccionFirmada` suya en el disco, que es exactamente lo que este arreglo salva.
     const viaje = lectura.viaje;
     // Sin `claveBilletera`/`session`/`direccion` el connect nunca completó, así que no hay canal
     // cifrado con el que pedir nada. 062 NO es dueña del connect (es de la ola 4) y lo EXIGE: la
@@ -730,7 +730,7 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
         // El sobre abrió, y ÉSE es el problema: lo cifró una clave que no es la que fijó el connect.
         // Los dos motivos (`no-coincide` y `sin-fijar`) dicen lo mismo para nosotros: lo que volvió
         // no es lo que esta app pidió firmar.
-        return cortar(DEEPLINK_TX_ALTERADA);
+        anotarSitioDelCorte("E9-motor-otra-clave"); return cortar(DEEPLINK_TX_ALTERADA); // WKH-373: el sitio, EN ESTA MISMA LÍNEA (Δ0)
       case "otra-remesa":
         return cortar(DEEPLINK_VIAJE_VENCIDO);
       case "conectado":
@@ -829,9 +829,9 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
     // Presente pero basura ⇒ corte, no "ausente": tratarlo como ausente le pediría a la persona una
     // firma que ya dio. Ver `esFirmaUtil` por qué el disco puede traer un `object` acá.
     if (txFirmadaCruda !== undefined && !esFirmaUtil(txFirmadaCruda))
-      return cortar(DEEPLINK_TX_ALTERADA);
+      { anotarSitioDelCorte("E10-tx-firmada-en-disco-basura"); return cortar(DEEPLINK_TX_ALTERADA); } // WKH-373: el sitio, EN ESTA MISMA LÍNEA (Δ0)
     if (patrocinioCrudo !== undefined && !esFirmaUtil(patrocinioCrudo))
-      return cortar(DEEPLINK_TX_ALTERADA);
+      { anotarSitioDelCorte("E11-patrocinio-en-disco-basura"); return cortar(DEEPLINK_TX_ALTERADA); } // WKH-373: el sitio, EN ESTA MISMA LÍNEA (Δ0)
     const txFirmada = txFirmadaCruda;
     const patrocinio = patrocinioCrudo;
     // 🔴 UN PATROCINIO SIN TRANSACCIÓN NO ES UN RESULTADO A MEDIAS: ES UN VIAJE QUE YA NO PUEDE CERRAR
@@ -965,7 +965,7 @@ export class FirmaPorEnlaceReal implements FirmaPorEnlace {
       const firma = firmaDelSender(txFirmada, p.sender);
       // Sin la firma del sender adentro de lo que volvió, no hay mensaje de patrocinio que armar: lo
       // que devolvió la billetera no es lo que se pidió firmar.
-      if (firma === null) return cortar(DEEPLINK_TX_ALTERADA);
+      if (firma === null) { anotarSitioDelCorte("E3-deposito-sin-firma-del-sender"); return cortar(DEEPLINK_TX_ALTERADA); } // WKH-373: el sitio, EN ESTA MISMA LÍNEA (Δ0)
       return {
         tipo: "salto",
         irA: urlFirmarMensaje({

@@ -74,9 +74,9 @@
 //                    a la billetera? Las dos son propiedades del artefacto desplegado, que nadie
 //                    midió, y una `NEXT_PUBLIC_` no se lee en runtime: se inlinea en el build.
 //
-// ⛔ Y DOS CAMPOS SE FUERON, porque una captura ilegible en un teléfono no sirve para nada:
-// `preparado=` y `nonce=` valieron `no` en LAS CUATRO capturas del founder ⇒ no discriminan nada y
-// ocupaban ancho. Con ellos también se fueron sus dos lecturas de disco.
+// ⛔ Y DOS CAMPOS SE FUERON, porque una captura ilegible en un teléfono no sirve para nada: `preparado=` y `nonce=` valieron `no` en LAS CUATRO capturas del founder ⇒ no discriminan nada y ocupaban ancho. Con ellos también se fueron sus dos lecturas de disco.
+// 🔴 WKH-373 — `nonce` VOLVIÓ, Y NO ES EL MISMO CAMPO: aquel era un `sí/no` de presencia, y éste es el ancla ABIERTA (`consumido`, `edad`, `huella`). La diferencia es la que importa: el `sí/no` no separaba ninguna de las cuatro hipótesis del corte `deeplink_tx_alterada` del paso del nonce y éste separa dos de un vistazo, porque al lado va la huella de LO QUE VOLVIÓ. Entran CUATRO renglones y ninguno más, cada uno con la hipótesis que descarta:
+// href al leer   qué trae el href que recibió cada consumidor (`dl`/`nonce`/`data`/`key`, PRESENCIA y nunca el valor). Separa la causa raíz de esta HU —que la barra se limpie ANTES de que el único lector de la vuelta del depósito la mire— de TODAS las demás. Es la única medición que decide si el depósito llega o no llega. · nonce ancla    `consumido`, edad y HUELLA del ancla del paso del nonce. La huella y ⛔ nunca los bytes: la regla 1 de acá abajo prohíbe volcar contenido de las anclas y un hash la respeta. · nonce vuelta   la huella del mensaje que la billetera devolvió, o `ILEGIBLE`. Al lado de la de arriba distingue **E2 por ancla pisada** (dos huellas legibles y distintas) de **E2 por transacción que no parsea** (`ILEGIBLE`), que el `||` de (`mensaje`, `../infrastructure/solana/deeplink/conexion.ts:568`) funde en un solo copy. · corte @        el CÓDIGO DE SITIO junto a la causa. `deeplink_tx_alterada` la escriben MUCHOS sitios con el MISMO string y desde la pantalla son indistinguibles; el conjunto cerrado está en (`SitioDelCorte`, `../infrastructure/solana/deeplink/bitacora-del-corte.ts:45`) y ⛔ su número no se copia acá: lo deriva del árbol el candado de `bitacora-del-corte.test.ts`.
 //
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
 // ⛔ LAS TRES PROHIBICIONES, Y CÓMO ESTÁN CUMPLIDAS
@@ -112,7 +112,7 @@
 // instante de la foto: la captura se fecha a sí misma.
 //
 // ⚠️ DÓNDE SE MONTA Y POR QUÉ AHÍ: en `app/page.tsx`, HERMANO de `RemittanceFlow` y no adentro. Así
-// `flow.tsx` —[[CENSO src/presentation/flow.tsx lineas=4453]] líneas y [[CENSO src/presentation/flow.tsx entrantes=155]] citas ancladas— no recibe ni una línea por este bloque. Lo que sí necesita de
+// `flow.tsx` —[[CENSO src/presentation/flow.tsx lineas=4453]] líneas y [[CENSO src/presentation/flow.tsx entrantes=163]] citas ancladas— no recibe ni una línea por este bloque. Lo que sí necesita de
 // ahí adentro —la causa cruda del corte y los cuatro hitos del recorrido— entra por
 // (`anotarCorteDeVuelta`, `./bitacora-de-vuelta.ts:43`) y (`anotarHito`, `./bitacora-de-vuelta.ts:101`),
 // en líneas que ya existían.
@@ -141,7 +141,7 @@ import { type SolanaWalletAvailability, solanaWalletBridge } from "../infrastruc
 import {
   TECHO_DISPONIBILIDAD_MS,
 } from "../infrastructure/solana/disponibilidad-decidible";
-import { CLAVE_ELECCION, marcaDeVuelta } from "../infrastructure/solana/deeplink/conexion";
+import { CLAVE_ELECCION, CLAVE_NONCE, marcaDeVuelta } from "../infrastructure/solana/deeplink/conexion"; import { huella, ultimaHuellaDeLaVuelta, ultimoSitioDelCorte } from "../infrastructure/solana/deeplink/bitacora-del-corte"; /* WKH-373: EN ESTA MISMA LÍNEA (Δ0) */
 import { CLAVE_POP, MARCA_POP_KYC, MARCA_POP_PAYOUT } from "../infrastructure/solana/deeplink/pop-por-enlace";
 import { CLAVE as CLAVE_DEL_VIAJE, MARCAS_DE_VUELTA, MAX_EDAD_MS } from "../infrastructure/solana/deeplink/sesion";
 import { leerHito, suscribirAlCorteDeVuelta, ultimoCorteDeVuelta } from "./bitacora-de-vuelta";
@@ -389,7 +389,7 @@ export function presenciaEnElDisco(leer: (clave: string) => string | null, ahora
   };
 }
 
-const si = (b: boolean): string => (b ? "sí" : "no");
+const si = (b: boolean): string => (b ? "sí" : "no"); /** WKH-373 — EL RENGLÓN `nonce ancla`, y ⛔ SIN VOLCAR EL ANCLA. Lee el CRUDO de (`CLAVE_NONCE`, `../infrastructure/solana/deeplink/conexion.ts:429`) —que se exporta desde HU-075 justo para este bloque— y lo parsea acá, ⛔ nunca con `leerPasoDelNonce`, que LIMPIA el disco ante basura o ventana vencida: un observador que destruye lo que observa deja de serlo, y encima le quemaría el ancla al recorrido real. De los tres campos del ancla sale `consumido`, la EDAD y la HUELLA de `mensajeBase64`; ⛔ los bytes NO salen nunca. Va EN ESTA MISMA LÍNEA FÍSICA (Δ0: este archivo tiene 593 líneas y las citas por número de `flow.tsx` y del resto no se pueden rotar). */ export function renglonDelNonce(crudo: string | null, ahoraMs: number): string { if (crudo === null) return "—"; let a: { mensajeBase64?: unknown; desde?: unknown; consumido?: unknown }; try { a = JSON.parse(crudo); } catch { return "ILEGIBLE (hay ancla y no parsea)"; } if (a === null || typeof a !== "object" || typeof a.mensajeBase64 !== "string") return "ILEGIBLE (hay ancla y no trae bytes)"; const edad = Number.isFinite(a.desde) ? `edad ${duracion(ahoraMs - (a.desde as number))}` : "edad ?"; return `consumido=${si(a.consumido === true)} ${edad} huella=${huella(a.mensajeBase64)}`; } /** WKH-373 — EL RENGLÓN `nonce vuelta`. `—` = nadie leyó todavía una vuelta con bytes en esta carga. ⛔ El valor lo escribe el LECTOR de la vuelta y no este bloque: la respuesta viaja CIFRADA en la URL y abrirla exigiría la clave secreta del viaje, que la regla 1 de este archivo prohíbe tocar. */ export function renglonDeLaVueltaDelNonce(h: string | null): string { return h ?? "—"; }
 
 /** El renglón `viaje.remesa`, con los cinco desenlaces separados. Se saca del componente para poder
  *  medirlo sin montar nada: es el campo del que cuelga la hipótesis número uno. */
@@ -548,7 +548,7 @@ export function DiagnosticoDeVuelta(): React.JSX.Element | null {
     crudoDelRepo = window.localStorage.getItem(CLAVE_DEL_REPO);
   } catch {
     crudoDelRepo = null; // un disco que no se deja leer ya salió declarado en `disco.ilegible`
-  }
+  } let crudoDelNonce: string | null = null; try { crudoDelNonce = window.localStorage.getItem(CLAVE_NONCE); } catch { crudoDelNonce = null; } // WKH-373: el crudo del ancla del nonce, con su propio `try` y en la MISMA disciplina que el de arriba. ⛔ `getItem` y no `leerPasoDelNonce`: el lector del módulo LIMPIA el disco ante basura o ventana vencida.
   const decision =
     msDecision === null
       ? vencioElTecho
@@ -581,11 +581,11 @@ disco           : ${disco.ilegible ? "ILEGIBLE (no se pudo preguntar)" : `viaje=
 viaje.paso      : ${renglonDelPaso(disco)}
 viaje.direccion : ${disco.direccionDelViaje ?? "—"}
 viaje.remesa    : ${renglonDeLaRemesa(disco, estadoEnElRepo(crudoDelRepo, disco.remesaDelViaje))}
-pop             : ${renglonDelPop(disco)}
+pop             : ${renglonDelPop(disco)}\nhref al leer    : montaje=${leerHito("href-al-montar") ?? "no corrió"} · confirm=${leerHito("href-al-reanudar") ?? "no corrió"}\nnonce ancla     : ${renglonDelNonce(crudoDelNonce, Date.now())}\nnonce vuelta    : ${renglonDeLaVueltaDelNonce(ultimaHuellaDeLaVuelta())}
 pantalla        : ${leerHito("pantalla") ?? "—"}
 connect         : ${leerHito("connect") ?? "no corrió"}
 continuacion    : ${leerHito("continuacion") ?? "no corrió"}
-corte           : ${corte ?? "sin corte"}
+corte           : ${corte ?? "sin corte"} @ ${ultimoSitioDelCorte() ?? "—"}
 error           : ${leerHito("error") ?? "sin error"}\nsalida navegador: ${leerHito("salida-al-navegador") ?? "no corrió"}
 enlace          : ${deeplinkEnabled() ? "on" : "off"} · cluster: ${resolveSolanaNetworkConfig().cluster}`}
     </pre>

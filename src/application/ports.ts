@@ -496,11 +496,11 @@ export interface WalletPort {
   getAddress(): Promise<string | null>;
   // WKH-211 — 3er arg OPCIONAL `deposit`. En modo real el destino de la firma es el `deposit.address`
   // ATESTADO server-side (NUNCA un receiver estático): sin él, fail-loud (throw), NO fail-open.
-  // Opcional en el tipo SOLO para preservar la firma demo (que lo ignora, AC-5).
+  // ⚠️ ACÁ DECÍA «Opcional en el tipo SOLO para preservar la firma demo (que lo ignora, AC-5)» sobre `deposit`, y sigue valiendo el motivo: la firma demo no lo mira. Lo que cambió en WKH-373 es la FORMA de decirlo — `| undefined` en vez de `?` —, y no es cosmética: un `?` deja de exigir que el argumento se ESCRIBA, y con un 4º parámetro detrás eso ya no se puede permitir (TypeScript ni siquiera admite un parámetro requerido después de uno opcional). Las implementaciones que no lo miran siguen pudiendo declararlo con `?` o no declararlo: una función que acepta MENOS argumentos que su base sigue siendo asignable.
   authorizePrincipal(
     quote: Quote,
     remittanceId: string,
-    deposit?: { address: string; escrow?: SolanaEscrowDeposit }, // escrow? = ADITIVO (Solana, HU-SOL-5)
+    deposit: { address: string; escrow?: SolanaEscrowDeposit } | undefined, hrefDeLaVuelta: string, // escrow? = ADITIVO (Solana, HU-SOL-5) · 🔴 WKH-373 — EL HREF ENTRA POR PARÁMETRO Y NO SE LEE EN VIVO, EN ESTA MISMA LÍNEA (Δ0: este bloque tiene citas por número debajo). ⛔ SIN `?` A PROPÓSITO, y es literalmente el mismo arreglo que ya se hizo para el PoP y que su docblock (`completarPop`, `../infrastructure/solana/preparacion-por-enlace.ts:495`) predijo que iba a hacer falta otra vez: la única implementación que lo usa leía `globalThis.location.href` EN VIVO ((`entornoDeEnlace`, `../infrastructure/solana-wallet.ts:1177`)), y su llamador de producción corre DESPUÉS de que (`limpiarLaBarra`, `../presentation/flow.tsx:4023`) le borró a esa URL el `dl`, el `nonce`, el `data` y la clave de cifrado ⇒ el único lector de la vuelta del DEPÓSITO veía una URL sin respuesta, contestaba `no-volvimos`, re-anclaba y volvía a pedir LA MISMA firma en cada vuelta. Con `?` el llamador podía volver a olvidarlo y el compilador no decía nada; sin `?` hay que escribirlo aunque el valor sea `undefined`.
   ): Promise<AutorizacionDelPrincipal>;
   // El retorno son TRES desenlaces y no dos (WKH-356). El `Promise<{ tx, solana? }>` que había acá
   // sólo sabía escribir "resolvió con esto" y "tiró"; el porqué del tercero —y por qué no es `null`

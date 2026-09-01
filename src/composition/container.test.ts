@@ -1113,3 +1113,71 @@ describe("createContainer — WKH-359/AC-3: el `connectWallet` REAL consigue el 
     expect(out.address).toBe(DIRECCION_DEL_VIAJE); // conectar sigue funcionando: el PoP no puede ser la puerta (CD-15)
   });
 });
+
+// ── 🔴 WKH-372/W3.4 · T-372-W3-16 — LA MISMA INSTANCIA DEL ALMACÉN EN LOS DOS GATEWAYS ───────────
+//
+// QUÉ AGUJERO CIERRA, Y ES EL MODO DE FALLA MÁS BARATO DE TODA LA OLA. El almacén de la sesión entra
+// como SEGUNDO argumento OPCIONAL en los dos gateways (`../infrastructure/kyc/http-kyc-verdict-gateway.ts`
+// y `../infrastructure/settlement/http-solana-prepare-gateway.ts`), y opcional significa que si
+// `container.ts` no lo cablea —o cablea DOS instancias distintas, una por gateway— todo compila, toda
+// la suite queda VERDE, y la ola entera es un no-op: el veredicto graba la sesión en un `Map` que el
+// depósito nunca lee, así que la persona sigue firmando dos veces y nadie se entera.
+//
+// Es exactamente el defecto que `T-CABLE-1` (por nombre, en este mismo archivo) ya cubre para el 3er
+// argumento de `ConnectWallet`, y por eso el molde se copia en vez de inventarse.
+//
+// ⛔ Y NO ALCANZA UN `toBeDefined()`: dos instancias distintas también están definidas. Por eso este
+// `it` EJERCITA — graba por la cara de escritura y lee por la de lectura. Si no son el mismo objeto,
+// el `peek` devuelve `null`.
+//
+// MUTANTE QUE LO MATA: en `./container.ts:106`, instanciar un segundo almacén y pasarle ÉSE a uno de
+// los dos gateways ⇒ `peek` devuelve null y este `it` se pone rojo con su mensaje.
+//
+// ⚠️ SE CITA SIEMPRE CON SU ARCHIVO: hay `T-CABLE-*` en este archivo Y en
+// `../presentation/wallet-availability.test.tsx`, midiendo cosas distintas.
+describe("createContainer — WKH-372/W3.4: el almacén de la sesión es UNA sola instancia", () => {
+  const DIRECCION = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+
+  it("T-372-W3-16: el gateway del veredicto y el del depósito comparten el MISMO almacén de sesión", () => {
+    // Las tres envs que el bundle de Solana exige para construirse, con los MISMOS valores que ya usa
+    // el `it` de "flag Solana ON con todo configurado" de más arriba en este archivo.
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_SETTLE_ENABLED", "true");
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_USDC_MINT", "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
+    vi.stubEnv("NEXT_PUBLIC_SOLANA_FACILITATOR_PUBKEY", "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+    const c = createContainer();
+
+    // La cara de ESCRITURA: la que `HttpKycVerdictGateway` recibe (`SesionRecorder`).
+    const escritor = (
+      c.connectWallet as unknown as { verdictGateway?: { sesiones?: { record(a: string, t: string): void } } }
+    ).verdictGateway?.sesiones;
+    // La cara de LECTURA: la que `HttpSolanaPayoutPrepareGateway` recibe (`SesionReader`).
+    const lector = (
+      c.confirmAndSend as unknown as { solana?: { prepare?: { sesiones?: { peek(a: string): string | null } } } }
+    ).solana?.prepare?.sesiones;
+
+    expect(
+      escritor,
+      "el container NO le cableó el almacén al gateway del veredicto: la sesión nunca se graba y la " +
+        "persona sigue firmando dos veces, con toda la suite en verde",
+    ).toBeDefined();
+    expect(
+      lector,
+      "el container NO le cableó el almacén al gateway del depósito: la sesión se graba y nadie la lee",
+    ).toBeDefined();
+
+    // 🔴 LA AFIRMACIÓN, Y ES DE COMPORTAMIENTO: lo que uno graba, el otro lo lee.
+    escritor?.record(DIRECCION, "sesion-de-prueba.mac");
+    expect(
+      lector?.peek(DIRECCION),
+      "el container cableó DOS instancias distintas: el veredicto graba en un Map y el depósito lee " +
+        "otro ⇒ `peek` devuelve null en producción y la ola es un no-op verde",
+    ).toBe("sesion-de-prueba.mac");
+
+    // CONTROL POSITIVO del instrumento: el lector sabe decir que NO. Sin esta mitad, un doble que
+    // devolviera siempre el mismo string pasaría la línea de arriba.
+    expect(
+      lector?.peek("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
+      "el lector contesta lo mismo para cualquier dirección: este `it` no mide nada",
+    ).toBeNull();
+  });
+});

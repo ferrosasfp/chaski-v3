@@ -1868,3 +1868,77 @@ describe("WKH-372/AC-1-4b: el aterrizaje dentro del navegador de la billetera, c
     ).toBe("con-marca-disco-ilegible");
   });
 });
+
+// ── 🔴 WKH-372/W3.5 · AC-3-6 — LAS CUATRO FRASES DE LA FIRMA DE IDENTIDAD ────────────────────────
+//
+// ⛔ EL TEXTO NO SE ESCRIBE ACÁ: se IMPORTA de `./flow` (`COPY_FIRMA_DE_IDENTIDAD`, `./flow.tsx:3902`).
+// Un `toContain("Te vamos a pedir una firma…")` con el literal tipeado en el `it` sería el guard
+// leyéndose a sí mismo: borrar la frase de la pantalla y del test a la vez lo dejaría verde, y una
+// frase que ya no se muestra pasaría por mostrada.
+//
+// MUTANTE QUE LO MATA: borrar la frase 4 de la constante en `./flow.tsx:3902` ⇒ el arreglo pasa a
+// tener 3 entradas y las dos mitades (`injected` y `none`) se ponen rojas por longitud.
+// ⛔ FALSO KILLED A EVITAR: medir SÓLO el cuadrante `none`. La ola entera existe para el camino
+// INYECTADO, que es donde la sesión borra la segunda firma; si el copy se gateara sin querer al
+// cuadrante donde no hay wallet, la persona a la que MÁS le hablan estas frases no las vería.
+import { COPY_FIRMA_DE_IDENTIDAD } from "./flow";
+
+describe("WKH-372/W3.5 · AC-3-6: el paso `connect` dice qué firma se pide, que es gratis y que no mueve plata", () => {
+  /** El texto del paso `connect` entero, que es el contenedor que `T-UI-3` y `T-065-21` ya usan. */
+  const textoDelPaso = (): string =>
+    screen.getByText(/Conectá tu wallet/).closest("div")?.parentElement?.parentElement?.textContent ?? "";
+
+  it("T-372-W3-10: las CUATRO frases aparecen, en `injected` Y en `none`, sin gate", async () => {
+    // El instrumento primero: si la constante no tuviera cuatro frases, todo lo de abajo mediría otra
+    // cosa y daría verde igual.
+    expect(
+      COPY_FIRMA_DE_IDENTIDAD.length,
+      "el copy de AC-3-6 dejó de tener cuatro frases: este `it` estaría midiendo un arreglo recortado",
+    ).toBe(4);
+
+    for (const cuadrante of ["injected", "none"] as const) {
+      cleanup();
+      irAlPasoConectar();
+      await screen.findByRole("button", { name: /Conectar wallet/ });
+      await act(async () => {
+        solanaWalletBridge.setWalletAvailability(cuadrante);
+      });
+      const texto = textoDelPaso();
+      expect(texto, `no se llegó a renderizar el paso \`connect\` en el cuadrante ${cuadrante}`).toBeTruthy();
+      for (const frase of COPY_FIRMA_DE_IDENTIDAD) {
+        expect(
+          texto,
+          `la frase «${frase}» NO se muestra con la disponibilidad en "${cuadrante}": el copy quedó ` +
+            "gateado a un solo cuadrante",
+        ).toContain(frase);
+      }
+    }
+  });
+
+  // Las prohibiciones del checklist de la copy, cada una con el input que la pondría en rojo.
+  // ⚠️ `T-UI-2` ya vigila el aviso de `NoWalletHere` con la misma disciplina, y tenía razón: un guard
+  // de esta familia frenó una frase de W1. Estas cuatro frases se someten a lo mismo.
+  it("T-372-W3-10c: el copy no tiene em dashes, no dice que algo falló, y no habla de SOL", async () => {
+    irAlPasoConectar();
+    await screen.findByRole("button", { name: /Conectar wallet/ });
+    await act(async () => {
+      solanaWalletBridge.setWalletAvailability("injected");
+    });
+    const copy = COPY_FIRMA_DE_IDENTIDAD.join(" ");
+    // Que el fixture haya llegado al cuadrante que se quiere medir (CD-18).
+    expect(textoDelPaso(), "el fixture no capturó el copy").toContain(COPY_FIRMA_DE_IDENTIDAD[0]);
+
+    expect(copy, "hay un em dash en el copy que ve la persona").not.toContain("—");
+    // ⛔ Ninguna dice que algo falló ni usa un pasado sobre haber revisado: cuando la sesión VENCE, la
+    // persona ve el prompt de siempre y no puede distinguirlo del funcionamiento normal. Esa ausencia
+    // es la decisión, no un olvido.
+    expect(copy, "el copy afirma que algo falló").not.toMatch(/fall(ó|o|ida)|error|no pudimos|venci/i);
+    // ⛔ Ninguna afirma que el remitente no necesita SOL (el depósito NO es gasless para el remitente).
+    expect(copy, "el copy afirma que no hace falta SOL").not.toMatch(/\bSOL\b/);
+    // ⛔ Ninguna vuelve falso el `<h2>Tu plata no pasa por Chaski</h2>` de `./bienvenida.tsx:232`: la
+    // frase 3 dice literalmente lo contrario, y ésta es la mitad que lo clava.
+    expect(copy, "el copy sugiere que la firma mueve plata o autoriza un pago").toContain(
+      "No mueve tus USDC ni autoriza ningún pago.",
+    );
+  });
+});

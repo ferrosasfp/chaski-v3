@@ -2363,7 +2363,7 @@ export class SolanaWalletAdapter
    *
    *  🔴 AC-5 — EL 501 NO SALTA A NINGUNA BILLETERA. Cuando el emisor contesta 501 (`PAYOUT_POP_SECRET`
    *  ausente server-side) esto corta con la marca ESTABLE `payout_pop_unavailable` —la misma que ya
-   *  producía (`prepare`, `./settlement/http-solana-prepare-gateway.ts:193`) antes de esta HU— y ⛔ NO
+   *  producía (`prepare`, `./settlement/http-solana-prepare-gateway.ts:205`) antes de esta HU— y ⛔ NO
    *  escribe ancla y ⛔ NO devuelve `irA`. Es lo mismo que hace hoy `HttpPopSigner` con su
    *  `if (res.status === 501) return null` (`./auth/http-pop-signer.ts:22`), y es una decisión de
    *  ahorro además de correctitud: la route leería ESA MISMA env y contestaría 503, así que saltar

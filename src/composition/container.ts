@@ -23,7 +23,7 @@ import type {
 } from "../application/ports";
 import { A2aQuoteGateway } from "../infrastructure/a2a/gateways";
 import { HttpPopSigner } from "../infrastructure/auth/http-pop-signer";
-import { InMemoryPopProofStore } from "../infrastructure/auth/pop-proof-store";
+import { InMemoryPopProofStore } from "../infrastructure/auth/pop-proof-store"; import { InMemorySesionStore } from "../infrastructure/auth/sesion-store"; // 🔴 WKH-372/W3.4 — EL IMPORT EN ESTA MISMA LÍNEA (Δ0): `container.ts` recibe citas ancladas por número y una línea de import de más las corre a todas
 import { HttpKycVerdictGateway } from "../infrastructure/kyc/http-kyc-verdict-gateway";
 import {
   resolveSolanaFacilitatorPubkey,
@@ -103,7 +103,7 @@ export function createContainer(): Container {
   const repo = new LocalRepo();
   const kycStore = new LocalKycStore();
   const kycPending = new LocalKycPendingStore();
-  const popProofs = new InMemoryPopProofStore(clock); // WKH-337: OBSERVA las pruebas PoP de los gestos
+  const popProofs = new InMemoryPopProofStore(clock); const sesiones = new InMemorySesionStore(clock); // WKH-337: OBSERVA las pruebas PoP de los gestos · 🔴 WKH-372/W3.4 — EL ALMACÉN DE LA SESIÓN, EN ESTA MISMA LÍNEA FÍSICA (Δ0) y al lado de su hermano, porque son el mismo patrón con otra credencial. ⛔ TIENE QUE SER UNA SOLA INSTANCIA para los DOS gateways de abajo (`:161` la lee, `:185` la escribe): con dos instancias distintas el veredicto graba en una y el depósito lee la otra, nadie se entera, y la ola entera queda en un no-op VERDE. Lo mide `T-372-W3-16`, por nombre, en `./container.test.ts`, ejercitando `record` de un lado y `peek` del otro. ⚠️ El reloj es el MISMO `clock` inyectado: ni este almacén ni el de al lado llaman `Date.now()`
   // La wallet es SIEMPRE el SolanaWalletAdapter: no hay selección posible, y por eso no hay ternario.
   const wallet = createSolanaWallet(popProofs);
   // WKH-332/AC-3: el valor NO se compara crudo. Con la env en "a2a-gatewayy" la comparación directa
@@ -158,7 +158,7 @@ export function createContainer(): Container {
   // gasless para el remitente (el fee lo paga el facilitator, el rent de las cuentas del escrow no).
   const solana = solanaSettleOn
     ? {
-        prepare: new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet, popProofs)),
+        prepare: new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet, popProofs), sesiones), // 🔴 WKH-372/W3.4 — EL 2º ARGUMENTO EN ESTA MISMA LÍNEA (Δ0). Entra como `SesionReader`: este gateway LEE la sesión que la persona ya se ganó al conectar y presenta esa prueba en vez de pedirle una SEGUNDA firma. ⛔ No puede grabarse una: el tipo no tiene `record`
         gateway: new HttpSolanaSettlementGateway(),
         probe: wallet,
         senderBalance: wallet, pop: wallet, // WKH-359/AC-2 — ⛔ SIN `?`, EN ESTA LÍNEA. `pop` es el MISMO adapter otra vez (como `probe` y `senderBalance`) y no es pereza: la pregunta "¿estamos en el camino por enlace?" la contesta (`caminoPorEnlace`, `../infrastructure/solana-wallet.ts:2239`), que es `private` de esa clase, y el gate y el disco viven ahí. ⛔ Opcional dejaría que BORRAR ESTA LÍNEA compilara con la suite verde, que es la razón que este archivo ya escribió dos veces (`:79` y `:213-220`); requerido lo vuelve un error de compilación en 6 sitios. El único test que ve esta línea es el que ejercita el objeto que ESTA FUNCIÓN DEVUELVE (`container.test.ts`). En el camino inyectado `pedir()` contesta `no-corresponde` y no ejecuta ninguna línea nueva (AC-8).
@@ -182,7 +182,7 @@ export function createContainer(): Container {
     // NINGÚN camino real y toda persona ya verificada llega a `prepare` sin fila. Por eso tiene test
     // propio en `container.test.ts` (T-CABLE-1), que ejercita el `connectWallet` QUE ESTA LÍNEA
     // DEVUELVE. Es el MISMO HttpPopSigner sobre la MISMA wallet que ya usan el prepare y el refund.
-    connectWallet: new ConnectWallet(wallet, kycStore, new HttpKycVerdictGateway(new HttpPopSigner(wallet, popProofs)), wallet), // WKH-359/AC-3 — el 4º argumento EN ESTA LÍNEA. Es el MISMO adapter otra vez (como `probe`, `senderBalance` y `pop` del bundle de arriba): la pregunta "¿estamos en el camino por enlace?" la contesta `caminoPorEnlace`, que es `private` de esa clase. ⛔ SIN ESTA LÍNEA la sesión de Didit se crea SIN ATAR en todo teléfono sin extensión, el gate `payoutAllowed !== true` de `persistKycVerdict` (en `app/api/kyc/decision/route.ts`) no escribe fila y `prepare` contesta 403 — y ⚠️ NO SE VE, porque una billetera que ya tiene fila cierra igual. Lo ve `container.test.ts` — `T-CABLE-2`, que prende `NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED` **Y** ejercita el `connectWallet` que ESTA LÍNEA devuelve **EN EL MISMO `it`**, que es la única forma de verlo: con la bandera apagada este argumento no hace nada y `pedir()` contesta `no-corresponde` en su primera línea (AC-8). ⚠️ ESTA FRASE FUE FALSA DESDE QUE SE ESCRIBIÓ HASTA EL CIERRE DE F4 (F4/F4-1), y no por poco: el `it` no existía —este archivo tenía la bandera y el `connectWallet` en `it` SEPARADOS—, así que **M4** (el argumento ⇒ `undefined as never`) daba **36 passed (36)** y **M5** (el argumento BORRADO, o sea literalmente «sin esta línea») daba `tsc --noEmit` **exit 0** con la suite COMPLETA en verde. Hoy mueren los dos, y también un tercero que un `toBeDefined()` dejaría pasar: el colaborador INERTE cuyo `pedir()` contesta siempre `no-corresponde`
+    connectWallet: new ConnectWallet(wallet, kycStore, new HttpKycVerdictGateway(new HttpPopSigner(wallet, popProofs), sesiones), wallet), // WKH-359/AC-3 — el 4º argumento EN ESTA LÍNEA. Es el MISMO adapter otra vez (como `probe`, `senderBalance` y `pop` del bundle de arriba): la pregunta "¿estamos en el camino por enlace?" la contesta `caminoPorEnlace`, que es `private` de esa clase. ⛔ SIN ESTA LÍNEA la sesión de Didit se crea SIN ATAR en todo teléfono sin extensión, el gate `payoutAllowed !== true` de `persistKycVerdict` (en `app/api/kyc/decision/route.ts`) no escribe fila y `prepare` contesta 403 — y ⚠️ NO SE VE, porque una billetera que ya tiene fila cierra igual. Lo ve `container.test.ts` — `T-CABLE-2`, que prende `NEXT_PUBLIC_SOLANA_DEEPLINK_ENABLED` **Y** ejercita el `connectWallet` que ESTA LÍNEA devuelve **EN EL MISMO `it`**, que es la única forma de verlo: con la bandera apagada este argumento no hace nada y `pedir()` contesta `no-corresponde` en su primera línea (AC-8). ⚠️ ESTA FRASE FUE FALSA DESDE QUE SE ESCRIBIÓ HASTA EL CIERRE DE F4 (F4/F4-1), y no por poco: el `it` no existía —este archivo tenía la bandera y el `connectWallet` en `it` SEPARADOS—, así que **M4** (el argumento ⇒ `undefined as never`) daba **36 passed (36)** y **M5** (el argumento BORRADO, o sea literalmente «sin esta línea») daba `tsc --noEmit` **exit 0** con la suite COMPLETA en verde. Hoy mueren los dos, y también un tercero que un `toBeDefined()` dejaría pasar: el colaborador INERTE cuyo `pedir()` contesta siempre `no-corresponde`
     startKyc: new StartKyc(kyc, kycStore, kycPending, repo, clock),
     resumeKyc: new ResumeKyc(kyc, kycStore, kycPending, repo, clock),
     lockQuote: new LockQuote(quotes, repo, clock),

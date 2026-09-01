@@ -56,6 +56,8 @@ import type {
   SolanaSenderSolBalanceProbe,
   PruebaDePosesionPorEnlace,
   PruebaPorEnlace,
+  SesionReader,
+  SesionRecorder,
   WalletPossessionProof,
   SolanaSettlementFailureReason,
   SolanaPrincipalInOutcome,
@@ -1216,5 +1218,32 @@ export class FakePruebaDePosesionPorEnlace implements PruebaDePosesionPorEnlace 
   pedir(input: { proposito: "pop-payout" | "pop-kyc"; direccion: string }): Promise<PruebaPorEnlace> {
     this.llamadas.push({ proposito: input.proposito, direccion: input.direccion });
     return Promise.resolve(this.respuesta);
+  }
+}
+
+// WKH-372/W3.4 — el doble del almacén de la sesión de posesión. Calcado de `FakePopSigner` (`:310`):
+// no valida nada, transporta, y ANOTA, que es lo que permite afirmar quién lo leyó y quién le escribió.
+//
+// ⛔ NO tiene TTL, y es a propósito: el vencimiento lo mide `T-372-W3-7`, por nombre, en
+// `../infrastructure/auth/sesion-store.test.ts`, contra la clase REAL y con un reloj movible. Un doble
+// que además venciera sería una segunda implementación del mismo invariante, que se corrige por
+// separado de la primera.
+export class FakeSesionStore implements SesionReader, SesionRecorder {
+  private readonly porAddress = new Map<string, string>();
+  readonly lecturas: string[] = [];
+  readonly escrituras: { address: string; token: string }[] = [];
+
+  constructor(inicial?: { address: string; token: string }) {
+    if (inicial) this.porAddress.set(inicial.address, inicial.token);
+  }
+
+  peek(address: string): string | null {
+    this.lecturas.push(address);
+    return this.porAddress.get(address) ?? null;
+  }
+
+  record(address: string, token: string): void {
+    this.escrituras.push({ address, token });
+    this.porAddress.set(address, token);
   }
 }

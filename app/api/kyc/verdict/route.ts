@@ -39,7 +39,7 @@ import {
   buildSolanaPopMessage,
   verifySolanaPopChallenge,
 } from "../../../../src/infrastructure/auth/pop-challenge";
-import { verifySolanaPop } from "../../../../src/infrastructure/auth/pop-verify-solana";
+import { verifySolanaPop } from "../../../../src/infrastructure/auth/pop-verify-solana"; import { emitirSesionDePosesion } from "../../../../src/infrastructure/auth/sesion-de-posesion"; // ⚠️ EN ESTA LÍNEA: `authority.ts:50` cita `:343` de este archivo por número
 import { resolveSolanaNetworkId } from "../../../../src/infrastructure/chain";
 import { canonicalizeAddress } from "../../../../src/infrastructure/address";
 import { getKycVerdictStore } from "../../../../src/infrastructure/persistence/supabase-kyc-verdicts";
@@ -149,6 +149,24 @@ export async function POST(req: Request): Promise<Response> {
   // exclusivamente de SU propia situación, así que ya no hay oráculo posible.
   const owner = canonicalizeAddress(ch.address); // ← la PoP-verificada, NUNCA body.sender (CD-18)
 
+  // 🔴 W3 — LA SESIÓN SE ACUÑA ACÁ, Y SÓLO ACÁ (WKH-372/AC-3-2, AC-3-3).
+  //
+  // AGUAS ABAJO de la línea de arriba, o sea DESPUÉS de que `P1..P5` pasaron: acuñarla más arriba
+  // sería emitir una credencial para una dirección que nadie probó. ⛔ Y NO se agrega a ningún 403 ni
+  // a ningún 503: sólo a los 200, que son las respuestas que el dueño ya se ganó.
+  //
+  // ✅ SÍ SE AGREGA A LOS `absent`, y eso NO es un descuido: 🔴 la sesión prueba POSESIÓN, no
+  // verificación. Que la persona esté verificada lo sigue decidiendo `resolvePayoutAuthority` en CADA
+  // pago, en `../../payout/prepare/route.ts`, y esta sesión no lo toca ni puede.
+  //
+  // ⛔ Y NO HAY RUTA NUEVA. Un `POST /api/a2a/payout/session` exigiría una SEXTA copia del bloque
+  // `P1..P5` (ya hay cinco), y `/api/kyc/session` no sirve porque ahí el PoP es opcional a propósito.
+  //
+  // `null` cuando falta `PAYOUT_SESSION_SECRET` ⇒ el campo simplemente no viaja, ningún cliente tiene
+  // sesión, y todos siguen mandando PoP. Eso es el orden de despliegue y el repliegue, sin flags.
+  const sesion = emitirSesionDePosesion(owner, resolveSolanaNetworkId(), Date.now());
+  const conSesion = sesion ? { sesion } : {};
+
   // V5 — el store DESPUÉS del PoP (ver la cabecera).
   const store = getKycVerdictStore();
   if (!store) {
@@ -201,11 +219,11 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // V9 — 200 con el juicio aplicado. SIN `verificationId` en ninguna rama (AC-6).
-  if (!record) return json({ verdict: null, reason: "absent" }, 200);
+  if (!record) return json({ verdict: null, reason: "absent", ...conSesion }, 200);
   // Orden del juicio: primero lo que dijo la autoridad (`approved`), después de dónde salió
   // (`provenance`), y al final la vigencia. Los tres viajan sólo detrás del PoP, o sea sólo al dueño,
   // y existen para que la pantalla pueda decir "tu verificación venció" sin inventarlo.
-  if (!record.approved) return json({ verdict: null, reason: "not_approved" }, 200);
+  if (!record.approved) return json({ verdict: null, reason: "not_approved", ...conSesion }, 200);
   // 🔴 WKH-233 — ACÁ ESTABA `if (isKycDemo(record.provenance)) return … reason:"simulated"`, y YA NO
   // HACE FALTA: desde esta HU `app/api/kyc/decision/route.ts` escribe la fila SÓLO cuando el agente
   // devuelve `payoutAllowed === true`, y ese booleano ya exige que la proveniencia esté en su
@@ -219,7 +237,7 @@ export async function POST(req: Request): Promise<Response> {
   // las dudas": un valor que NINGÚN código puede producir es superficie muerta en un borde de
   // confianza, y el próximo que lo lea va a creer que pasa.
   if (isVerdictExpired(record.verifiedAt, ttlDays, Date.now())) {
-    return json({ verdict: null, reason: "expired" }, 200);
+    return json({ verdict: null, reason: "expired", ...conSesion }, 200);
   }
 
   // V9.5 — LA CREDENCIAL DEL MONEY-PATH: LA MISMA PREGUNTA QUE HACE EL PAGO, HECHA ACÁ (WKH-233 fix-pack · H-2a).
@@ -275,11 +293,11 @@ export async function POST(req: Request): Promise<Response> {
     // NUNCA 500 crudo, NUNCA eco del SQLSTATE. Y NUNCA `absent`: ver arriba.
     return json({ error: "kyc_verdict_unavailable" }, 502);
   }
-  // ⚠️ ACÁ NO SE DEVUELVE UN MOTIVO NUEVO. `absent` es la forma que esta ruta YA emite en (`absent`, `:204`) y que
+  // ⚠️ ACÁ NO SE DEVUELVE UN MOTIVO NUEVO. `absent` es la forma que esta ruta YA emite en (`absent`, `:222`) y que
   // el cliente ya sabe leer (`ABSENT_REASONS`); un motivo nuevo cae en el `readAbsentReason` del
   // gateway y se lee como `absent` de todos modos, pero además ensancha un borde de confianza para no
   // decir nada nuevo. Lo cierto es lo mismo que dice `absent`: no hay veredicto UTILIZABLE.
-  if (credencial === null) return json({ verdict: null, reason: "absent" }, 200);
+  if (credencial === null) return json({ verdict: null, reason: "absent", ...conSesion }, 200);
 
   return json(
     {
@@ -288,6 +306,7 @@ export async function POST(req: Request): Promise<Response> {
         provenance: record.provenance,
         verifiedAt: record.verifiedAt,
       },
+      ...conSesion,
     },
     200,
   );

@@ -14,6 +14,8 @@ import {
   buildSolanaPopMessage,
   issueSolanaPopChallenge,
 } from "../../../../src/infrastructure/auth/pop-challenge";
+import { verificarSesionDePosesion } from "../../../../src/infrastructure/auth/sesion-de-posesion";
+import { resolveSolanaNetworkId } from "../../../../src/infrastructure/chain";
 
 // Rate-limit: los tests no fijan env de Upstash (fail-closed → 503). Mock a { ok:true } por default.
 const { checkRouteRateLimitMock } = vi.hoisted(() => ({ checkRouteRateLimitMock: vi.fn() }));
@@ -681,5 +683,146 @@ describe("POST /api/kyc/verdict (WKH-333)", () => {
       const res = await POST(req({ sender: SENDER_A, ...realPop(KP_A) }));
       expect(await res.json()).toEqual({ verdict: null, reason: "expired" });
     });
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-372 / W3.2 · EL EMISOR — la sesión se acuña acá, y sólo detrás del PoP
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 POR QUÉ ESTOS `it` VIVEN EN UN `describe` HERMANO Y NO EN EL DE ARRIBA. El de arriba NO setea
+// `PAYOUT_SESSION_SECRET`, así que ahí el emisor devuelve `null` y el campo no viaja: sus ~40
+// `toEqual({ verdict: null, reason: … })` exactos siguen verdes SIN tocarlos. **Eso no es suerte: es
+// la regla 5 del módulo**, y que esos `it` sigan verdes es la evidencia de runtime de que desplegar
+// este código con la env ausente es un no-op. Acá abajo se prende la env y se mide lo otro.
+//
+// §7 del Story File no les da nombre porque su tabla cubre el RECEPTOR (`prepare`). El emisor también
+// se shippea en W3.2, y sin estos `it` no habría un solo testigo de que emite bien.
+describe("POST /api/kyc/verdict — W3.2: la sesión de posesión (WKH-372)", () => {
+  const SECRETO_SESION = "secreto-de-la-sesion-w3"; // ⛔ DISTINTO de `SECRET`, el del PoP
+
+  beforeEach(() => {
+    vi.stubEnv("PAYOUT_POP_SECRET", SECRET);
+    vi.stubEnv("PAYOUT_SESSION_SECRET", SECRETO_SESION);
+    delete process.env.KYC_VERDICT_TTL_DAYS;
+    checkRouteRateLimitMock.mockReset();
+    checkRouteRateLimitMock.mockResolvedValue({ ok: true });
+    getStoreMock.mockReset();
+    getStoreMock.mockReturnValue(null);
+    authorityMock.mockReset();
+    getTokenStoreMock.mockReset();
+    getTokenStoreMock.mockReturnValue(honestTokenStore(CREDENCIALES_OK()));
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+    delete process.env.KYC_VERDICT_TTL_DAYS;
+  });
+
+  /** Los CINCO desenlaces de 200 de esta ruta, cada uno con el montaje que lo produce. ⛔ Escritos como
+   *  tabla y no como cinco `it`: lo que se mide es que NINGUNO se olvide, y una tabla con un `for`
+   *  se pone roja cuando aparece un sexto sin campo. */
+  const LOS_CINCO_200: Array<{ nombre: string; montar: () => void; espera: unknown }> = [
+    {
+      nombre: "absent (sin fila)",
+      montar: () => getStoreMock.mockReturnValue(honestStore([])),
+      espera: { verdict: null, reason: "absent" },
+    },
+    {
+      nombre: "not_approved",
+      montar: () => getStoreMock.mockReturnValue(honestStore([verdict({ approved: false })])),
+      espera: { verdict: null, reason: "not_approved" },
+    },
+    {
+      nombre: "expired",
+      montar: () => getStoreMock.mockReturnValue(honestStore([verdict({ verifiedAt: daysAgo(366) })])),
+      espera: { verdict: null, reason: "expired" },
+    },
+    {
+      nombre: "absent (sin credencial del money-path)",
+      montar: () => {
+        getStoreMock.mockReturnValue(honestStore([verdict()]));
+        getTokenStoreMock.mockReturnValue(honestTokenStore([]));
+      },
+      espera: { verdict: null, reason: "absent" },
+    },
+    {
+      nombre: "verdict utilizable",
+      montar: () => getStoreMock.mockReturnValue(honestStore([verdict()])),
+      espera: {
+        verdict: { riskLevel: "low", provenance: "didit", verifiedAt: daysAgo(10) },
+      },
+    },
+  ];
+
+  // 🧬 MUTANTE: borrar `...conSesion` de CUALQUIERA de los cinco `return … 200` de `./route.ts` ⇒ ese
+  // caso se pone rojo con su nombre. ⛔ Y el `sesion` NO se compara contra un literal: se VERIFICA con
+  // el verificador de producción, así que un campo con un string cualquiera no pasaría.
+  for (const caso of LOS_CINCO_200) {
+    it(`T-372-W3-E1 (${caso.nombre}): el 200 trae una sesión que VERIFICA y está atada al dueño PoP-verificado`, async () => {
+      caso.montar();
+      const res = await POST(req({ sender: SENDER_A, ...realPop(KP_A) }));
+      expect(res.status).toBe(200);
+      const cuerpo = (await res.json()) as Record<string, unknown>;
+      expect(cuerpo, "el 200 dejó de decir lo que decía: W3 cambió más que agregar un campo").toMatchObject(
+        caso.espera as Record<string, unknown>,
+      );
+      const sesion = verificarSesionDePosesion(cuerpo.sesion as string, Date.now());
+      expect(sesion, `el 200 de \`${caso.nombre}\` no trae una sesión verificable`).not.toBe(null);
+      // 🔴 ATADA A LA DIRECCIÓN PoP-VERIFICADA, y al cluster que resuelve el servidor.
+      expect(sesion?.address, "la sesión no está atada al dueño que probó posesión").toBe(SENDER_A);
+      expect(sesion?.networkId).toBe(resolveSolanaNetworkId());
+      // Y NO es la otra billetera: sin esto, un emisor que acuñara una constante daría verde.
+      expect(sesion?.address, "la sesión se acuñó para otra dirección").not.toBe(SENDER_B);
+    });
+  }
+
+  // 🧬 MUTANTE: subir el `emitirSesionDePosesion(...)` de `./route.ts` por ENCIMA del bloque `P1..P5`
+  // (o agregar `...conSesion` a un 403) ⇒ el primer caso de este `it` se pone rojo.
+  it("T-372-W3-E2: ningún 403 ni 503 lleva sesión — se acuña SÓLO aguas abajo del PoP", async () => {
+    getStoreMock.mockReturnValue(honestStore([verdict()]));
+    // (a) 403: el challenge es de B y el sender declarado es A ⇒ muere en P3, antes de la acuñación.
+    const malPop = await POST(req({ sender: SENDER_A, ...realPop(KP_B, KP_B) }));
+    expect(malPop.status).toBe(403);
+    expect(
+      Object.keys((await malPop.json()) as Record<string, unknown>),
+      "un 403 trajo una sesión: se está acuñando ANTES de que nadie pruebe nada",
+    ).toEqual(["error"]);
+    // (b) 503: sin secreto del PoP no se verifica nada y no hay dueño a quien acuñarle. ⚠️ La prueba
+    //     se arma ANTES de apagar la env: el emisor del challenge también la lee, y armarla después
+    //     mataría este `it` con un throw del arnés en vez de con lo que dice medir.
+    const pruebaValida = realPop(KP_A);
+    vi.stubEnv("PAYOUT_POP_SECRET", "");
+    const sinSecreto = await POST(req({ sender: SENDER_A, ...pruebaValida }));
+    expect(sinSecreto.status).toBe(503);
+    expect(Object.keys((await sinSecreto.json()) as Record<string, unknown>)).toEqual(["error"]);
+    // ✅ CONTROL POSITIVO: con el mismo montaje, el camino legítimo SÍ trae el campo. Sin esta mitad,
+    // un emisor apagado dejaría verdes las dos de arriba.
+    vi.stubEnv("PAYOUT_POP_SECRET", SECRET);
+    const bueno = (await (await POST(req({ sender: SENDER_A, ...realPop(KP_A) }))).json()) as Record<
+      string,
+      unknown
+    >;
+    expect(typeof bueno.sesion, "este `it` no puede distinguir un 200 con sesión de uno sin: no mide nada").toBe(
+      "string",
+    );
+  });
+
+  // 🧬 MUTANTE: que `emitirSesionDePosesion` devuelva un token cuando falta la env (o que la ruta
+  // agregue `sesion: null`) ⇒ este `it` se pone rojo. Es el testigo del ORDEN DE DESPLIEGUE: con la
+  // env ausente, este código desplegado no cambia una sola respuesta.
+  it("T-372-W3-E3: sin `PAYOUT_SESSION_SECRET`, el 200 es el de siempre — el campo NO viaja", async () => {
+    vi.stubEnv("PAYOUT_SESSION_SECRET", "");
+    getStoreMock.mockReturnValue(honestStore([verdict()]));
+    const res = await POST(req({ sender: SENDER_A, ...realPop(KP_A) }));
+    expect(res.status).toBe(200);
+    expect(
+      await res.json(),
+      "con la env ausente la respuesta cambió: desplegar W3 sin el secreto ya no es un no-op",
+    ).toEqual({ verdict: { riskLevel: "low", provenance: "didit", verifiedAt: daysAgo(10) } });
   });
 });

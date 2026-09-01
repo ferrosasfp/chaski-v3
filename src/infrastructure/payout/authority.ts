@@ -44,10 +44,10 @@
 // faltaba no es menor: es el BACKFILL, o sea justo el camino del que depende el análisis de rescate
 // de quien no tiene fila. Re-derivado con `grep -rn resolvePayoutAuthority src app scripts` (no de
 // memoria), al 2026-08-19:
-//   1. (`resolvePayoutAuthority`, `../../../app/api/payout/prepare/route.ts:332`) — el money-path real.
+//   1. (`resolvePayoutAuthority`, `../../../app/api/payout/prepare/route.ts:392`) — el money-path real.
 //   2. (`resolvePayoutAuthority`, `../../../app/api/payout/validate/route.ts:66`) — advisory: un POST
 //      público que ningún paso del flujo llama.
-//   3. (`resolvePayoutAuthority`, `../../../app/api/kyc/verdict/route.ts:343`) — el backfill (V8), que
+//   3. (`resolvePayoutAuthority`, `../../../app/api/kyc/verdict/route.ts:362`) — el backfill (V8), que
 //      re-consulta con la pista del navegador y persiste sólo si vuelve autorizada. ⚠️ ESE CALLER LEE EL
 //      `httpStatus`, NO SÓLO EL `authorized` (re-AR it2 · BLQ-BAJO-1): un 5xx de acá significa "no
 //      contestamos", no "dijimos que no", y colapsar los dos hacía que la ruta respondiera `absent` —

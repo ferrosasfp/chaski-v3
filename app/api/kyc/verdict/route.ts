@@ -39,7 +39,7 @@ import {
   buildSolanaPopMessage,
   verifySolanaPopChallenge,
 } from "../../../../src/infrastructure/auth/pop-challenge";
-import { verifySolanaPop } from "../../../../src/infrastructure/auth/pop-verify-solana"; import { emitirSesionDePosesion } from "../../../../src/infrastructure/auth/sesion-de-posesion"; // ⚠️ EN ESTA LÍNEA: `authority.ts:50` cita `:343` de este archivo por número
+import { verifySolanaPop } from "../../../../src/infrastructure/auth/pop-verify-solana"; import { emitirSesionDePosesion } from "../../../../src/infrastructure/auth/sesion-de-posesion"; // ⚠️ EN ESTA LÍNEA: (`resolvePayoutAuthority`, `../../../../src/infrastructure/payout/authority.ts:50`) cita `:362` de este archivo por número. ⚠️ ACÁ DECÍA `:343`, Y NACIÓ FALSA (AR/BLQ-MED-1): ese es el número de ANTES de la ola W3, o sea que se leyó el archivo antes de la propia edición que lo corrió 19 líneas. La cita de allá siempre dijo `:362` y siempre estuvo bien; la rota era ésta
 import { resolveSolanaNetworkId } from "../../../../src/infrastructure/chain";
 import { canonicalizeAddress } from "../../../../src/infrastructure/address";
 import { getKycVerdictStore } from "../../../../src/infrastructure/persistence/supabase-kyc-verdicts";

@@ -869,13 +869,18 @@ describe("HttpSolanaPayoutPrepareGateway — la sesión borra la segunda firma (
     ).toBe(true);
   });
 
-  // ── 🔴 T-372-W3-17 · EL REINTENTO ÚNICO DEL REPLIEGUE, CON SUS TRES RAMAS ──────────────────────
+  // ── 🔴 T-372-W3-17 · EL REINTENTO ÚNICO DEL REPLIEGUE, CON SUS CUATRO RAMAS ───────────────────
   //
-  // MUTANTE QUE LO MATA: quitar la condición `res.status === 403` ⇒ se reintenta ante CUALQUIER
-  // `!res.ok` y la rama (c) se pone roja.
+  // DOS MUTANTES, Y SE CORREN POR SEPARADO:
+  //   (i)  quitar la condición `res.status === 403` ⇒ se reintenta ante CUALQUIER `!res.ok` y la
+  //        rama (c) se pone roja;
+  //   (ii) quitar la condición del ENUM (`enumDelRechazo === PREPARE_403_QUE_LA_SESION_ARREGLA`) ⇒
+  //        se reintenta ante los OTROS dos 403 de la route y la rama (d) se pone roja  [AR/MNR-1].
+  // ⛔ (i) NO MATA A (ii) NI AL REVÉS: la rama (c) es un 500, que el guard del enum ni mira, y la
+  // rama (d) es un 403, que el guard del status deja pasar. Son dos condiciones y por eso dos ramas.
   // ⛔ FALSO KILLED A EVITAR: un `it` con SÓLO el caso positivo deja pasar un bucle y deja pasar el
-  // reintento en un 500. Por eso van las tres ramas, y por eso se CUENTAN los `fetch`.
-  it("T-372-W3-17: ante un 403 con sesión reintenta UNA vez sin ella; sin sesión y ante un 500, NO reintenta", async () => {
+  // reintento en un 500. Por eso van las cuatro ramas, y por eso se CUENTAN los `fetch`.
+  it("T-372-W3-17: reintenta UNA vez sólo ante el 403 que la credencial puede arreglar; sin sesión, ante un 500 y ante los OTROS 403, NO", async () => {
     // (a) 403 CON sesión ⇒ UN reintento, sin `sessionToken` y con el PoP de siempre.
     const f403 = prepareRespondsWith(403, { error: "payout_pop_unverified" });
     vi.stubGlobal("fetch", f403);
@@ -906,15 +911,74 @@ describe("HttpSolanaPayoutPrepareGateway — la sesión borra la segunda firma (
 
     // (c) 500 CON sesión ⇒ NO reintenta: un 500 no dice nada de la sesión, y reintentarlo convierte un
     //     incidente del servidor en el doble de carga.
-    const f500 = prepareRespondsWith(500, { error: "internal" });
+    //
+    // 🔴 EL 500 LLEVA EL ENUM DE LA SESIÓN A PROPÓSITO, Y NO ES ALGO QUE LA ROUTE EMITA. Es el único
+    // cuerpo con el que esta rama mide LA CONDICIÓN DE STATUS y nada más. MEDIDO: con
+    // `{ error: "internal" }` —que era lo que había— el mutante (i) SOBREVIVE, porque el guard del
+    // enum ya cortaba solo y la rama daba verde sin que el status participara. Un control que no
+    // puede fallar es indistinguible de uno que funciona, así que se le saca al 500 todo lo demás
+    // que lo estaba matando y queda el status como única cosa en pie.
+    const f500 = prepareRespondsWith(500, { error: "payout_pop_unverified" });
     vi.stubGlobal("fetch", f500);
     await new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet), lector(sesionReal())).prepare(
       prepareInput(),
     );
     expect(
       f500.mock.calls.filter((c) => String(c[0]) === "/api/payout/prepare").length,
-      "se reintentó ante un 500: el reintento perdió su condición de status",
+      "se reintentó ante un 500 que trae el enum de la sesión: el reintento perdió su condición de " +
+        "status y ahora se apoya sólo en el cuerpo",
     ).toBe(1);
+
+    // (d) 🔴 LOS OTROS DOS 403 DE LA ROUTE, CON SESIÓN VÁLIDA ⇒ NO REINTENTA  [AR/MNR-1].
+    //     `prepare` emite 403 con TRES enums y sólo `payout_pop_unverified` lo puede arreglar otra
+    //     credencial. Con los otros dos, el segundo intento devuelve EL MISMO 403 y de paso le abre
+    //     la billetera a la persona para nada, gasta un token de rate-limit y —en
+    //     `payout_not_authorized`— una consulta más al proveedor de KYC, o sea cupo.
+    //     ⛔ SE MIDE TAMBIÉN QUE NO SE LE PIDA LA FIRMA: contar sólo los `fetch` dejaría pasar una
+    //     implementación que llamara a `prove()` (el prompt, que es lo que le cuesta a la persona) y
+    //     después decidiera no postear.
+    // ⚠️ EL `reason` ESPERADO NO ES SIEMPRE EL ENUM DE LA ROUTE, y se escribe medido en vez de
+    //    supuesto: `mapErrorReason` (arriba, en `./http-solana-prepare-gateway.ts`) propaga 1:1 los
+    //    enums de su lista y aplana el resto en `prepare_rejected`. `payout_not_authorized` está en
+    //    la lista; `prepare_kyc_verdict_missing` NO, y eso es PREEXISTENTE a este arreglo (la route
+    //    lo emite desde WKH-333 y el mapa nunca lo incluyó). ⛔ No se "arregla" acá: agregarlo es
+    //    cambiar qué ve la pantalla, que es otra decisión y otra HU.
+    //    ⇒ EL TESTIGO DEL `clone()` ES `payout_not_authorized`: si el cuerpo se consumiera al
+    //    mirarlo, ÉSE caería a `prepare_rejected`. El otro da `prepare_rejected` de las dos formas,
+    //    así que del `clone()` no dice nada, y se anota para que nadie lo lea como si dijera algo.
+    for (const [enumDe403, reasonEsperado] of [
+      ["prepare_kyc_verdict_missing", "prepare_rejected"],
+      ["payout_not_authorized", "payout_not_authorized"],
+    ] as const) {
+      const f = prepareRespondsWith(403, { error: enumDe403 });
+      vi.stubGlobal("fetch", f);
+      const signerD = new HttpPopSigner(wallet);
+      const proveD = vi.spyOn(signerD, "prove");
+      const outD = await new HttpSolanaPayoutPrepareGateway(signerD, lector(sesionReal())).prepare(
+        prepareInput(),
+      );
+      expect(
+        f.mock.calls.filter((c) => String(c[0]) === "/api/payout/prepare").length,
+        `se reintentó ante un 403 \`${enumDe403}\`, que cambiar de credencial no arregla: el ` +
+          "reintento mira el status y no el enum",
+      ).toBe(1);
+      expect(
+        proveD,
+        `se le abrió la billetera a la persona para replegarse de un 403 \`${enumDe403}\``,
+      ).not.toHaveBeenCalled();
+      // ⛔ Y EL ENUM LLEGA ENTERO A QUIEN LLAMA: leer el cuerpo para decidir el reintento no puede
+      //    consumirlo. Sin el `clone()`, esto sería `prepare_rejected` para los tres 403.
+      expect(
+        outD,
+        "el cuerpo del 403 se consumió al mirarlo: el enum que la route emitió no llegó a la pantalla",
+      ).toEqual({ ok: false, reason: reasonEsperado });
+    }
+
+    // (e) Y EL CUERPO DEL CASO POSITIVO TAMPOCO SE CONSUME: la rama (a) llega con su enum entero.
+    expect(outA, "el 403 del repliegue perdió su enum al leerse").toEqual({
+      ok: false,
+      reason: "payout_pop_unverified",
+    });
   });
 
   // ⛔ Y SIN ALMACÉN CABLEADO EL GATEWAY CORRE BYTE-IDÉNTICO A COMO CORRÍA ANTES DE W3. Es la mitad que

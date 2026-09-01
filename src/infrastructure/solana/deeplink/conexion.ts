@@ -7,7 +7,7 @@
 //
 // ⛔ Y LO QUE ESTA HU NO ENTREGA, DICHO ACÁ PARA QUE NADIE LO LEA AL REVÉS: el DEPÓSITO por enlace no
 // cierra con esto. `prepare()` exige una prueba de posesión firmada por el bridge
-// (`http-solana-prepare-gateway.ts:222-235`), y en un teléfono sin extensión el bridge está vacío, así
+// ((`prove`, `../../settlement/http-solana-prepare-gateway.ts:283-296`) — iba SIN ancla y decía `:222-235`, que hoy es la firma de un tipo: la ola W3 de WKH-372 metió 76 líneas en ese archivo y la corrió — AR/BLQ-MED-1), y en un teléfono sin extensión el bridge está vacío, así
 // que todo depósito por enlace muere en `payout_pop_unavailable` ANTES de que la rama de enlace de
 // `authorizePrincipal` ejecute una línea. Eso es una HU aparte (WKH-359). Lo que SÍ cierra acá es el
 // recorrido de la CUENTA DE NONCE: connect por enlace, firma por enlace, broadcast, y lectura de la

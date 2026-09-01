@@ -746,8 +746,12 @@ describe("createContainer — WKH-358/CD-14: la firma por enlace YA está cablea
   //
   // ⛔ LO QUE ESTE `it` NO AFIRMA, y hay que decirlo porque el nombre invita a leerlo así: NO afirma que
   // el depósito por enlace funcione. `prepare()` exige un PoP firmado por el bridge
-  // (`http-solana-prepare-gateway.ts:222-235`) y en un móvil sin extensión el bridge está vacío, así que
-  // un depósito por enlace muere en `payout_pop_unavailable` antes de llegar a la rama. Eso es WKH-359.
+  // ((`prove`, `../infrastructure/settlement/http-solana-prepare-gateway.ts:283-296`)) y en un móvil sin
+  // extensión el bridge está vacío, así que un depósito por enlace muere en `payout_pop_unavailable`
+  // antes de llegar a la rama. Eso es WKH-359.
+  // ⚠️ ESA CITA IBA SIN ANCLA Y DECÍA `:222-235`, que hoy es la firma de un tipo: la ola W3 de WKH-372
+  // metió 76 líneas en ese archivo y la corrió, y sin ancla `citas-ancladas.test.ts` no la mira por
+  // diseño, así que el gate quedó verde con la cita rota (AR/BLQ-MED-1).
   // Lo que esta HU enciende es el connect y la creación de la cuenta de nonce.
   it("T-062-21 (INVERTIDO): el `SolanaWalletAdapter` del container se construye CON el colaborador de enlace", () => {
     const c = createContainer();
@@ -1074,6 +1078,14 @@ describe("createContainer — WKH-359/AC-3: el `connectWallet` REAL consigue el 
 
     const out = await c.connectWallet.execute();
 
+    // 🔴 LA CITA POR NÚMERO VIVE ACÁ ARRIBA Y NO ADENTRO DEL MENSAJE, y es a propósito
+    // (AR/BLQ-MED-1). Decía `prepare/route.ts:311` desde dentro de la cadena del `expect`, y esa
+    // línea ya era un `})`: la ola W3 insertó 60 líneas más arriba y la corrió. ⛔ Y NO ALCANZABA
+    // CON RE-DERIVARLA AHÍ: `citas-ancladas.test.ts` sólo mira las líneas que llevan COMENTARIO —su
+    // lexer saltea las cadenas a propósito—, así que una cita adentro de un string es invisible para
+    // el candado por más anclada que esté. Acá arriba sí la cubre, y el mensaje del `expect` se queda
+    // con el nombre del enum, que no tiene número que envejecer.
+    // El corte es (`prepare_kyc_verdict_missing`, `../../app/api/payout/prepare/route.ts:371`).
     expect(
       out.estado,
       "el `connectWallet` que ESTA composición devuelve NO pidió la prueba de posesión por enlace: el " +
@@ -1081,7 +1093,8 @@ describe("createContainer — WKH-359/AC-3: el `connectWallet` REAL consigue el 
         "Consecuencia, y por eso este candado existe: en todo teléfono sin extensión la sesión de Didit " +
         "se crea SIN ATAR, `persistKycVerdict` no escribe la fila del veredicto (su gate es " +
         "`d.payoutAllowed !== true`) y " +
-        "`app/api/payout/prepare/route.ts:311` contesta 403 `prepare_kyc_verdict_missing`. ⚠️ Y NO SE " +
+        "`prepare/route.ts` contesta 403 `prepare_kyc_verdict_missing` (la línea exacta, anclada, en " +
+        "el comentario de arriba). ⚠️ Y NO SE " +
         "VE: una billetera que YA tiene fila cierra igual, así que el bug sólo lo sufre la gente nueva",
     ).toBe("hay-que-salir");
     if (out.estado !== "hay-que-salir") return; // narrowing; el `expect` de arriba ya falló

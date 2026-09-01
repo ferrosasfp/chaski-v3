@@ -44,8 +44,27 @@ import type { Clock, SesionReader, SesionRecorder } from "../../application/port
  * ⚠️ ES UN SEGUNDO LITERAL Y NO SE PUEDE DERIVAR POR IMPORT, por el motivo del docblock de arriba
  * (`node:crypto`). Un segundo literal sin candado es un punto ciego, así que **la relación se ata con
  * un candado estático, no con disciplina**: `./sesion-store.test.ts` lee los DOS archivos con
- * `readFileSync` y compara los números. ⛔ Si cambiás uno, el candado se pone rojo: no lo "arregles"
- * tocando el otro sin releer esta derivación.
+ * `readFileSync` y compara los números.
+ *
+ * ⛔ QUÉ GARANTIZA ESE CANDADO, EXACTAMENTE, Y QUÉ NO (corregido por AR/BLQ-BAJO-1). Acá decía
+ * *"si cambiás uno, el candado se pone rojo"*, y su propio input lo deja VERDE. MEDIDO sobre la
+ * suite ENTERA, no sobre este módulo: subiendo `SESION_TTL_SECONDS` de `30 * 60` a `60 * 60` en
+ * `./sesion-de-posesion.ts` —y nada más— `npx vitest run` da `172 passed (172)` archivos y
+ * `3491 passed (3491)` tests. Ni uno rojo. Lo que el candado ata es **la desigualdad**, no los
+ * valores: mover los DOS conservando `cliente < servidor` lo deja verde A PROPÓSITO, y su propio
+ * `it` lo dice bien: (`SESION_STORE_TTL_MS`, `./sesion-store.test.ts:134`) es el que lo declara.
+ * ⚠️ ESA CITA DECÍA `:95` Y NUNCA ESTUVO ANCLADA aunque lo pareciera: su «símbolo» era la frase
+ * `Este candado NO clava los valores`, con espacios, y el regex de `../../composition/citas-ancladas.test.ts`
+ * sólo admite identificadores. O sea que el candado de citas no la miraba, y las 31 líneas que este
+ * mismo fix-pack agregó al archivo de tests la habrían corrido en silencio.
+ *
+ * ⛔ Y NO SE "ARREGLA" CLAVANDO LOS VALORES. Un candado que exigiera `28` y `30` se pondría rojo
+ * ante cualquier ajuste legítimo del plazo, que es una hipótesis sin medir (regla 4 de
+ * `./sesion-de-posesion.ts`), y el rojo diría "cambiaste un número" en vez de "rompiste la
+ * relación". El único modo de falla que importa es que el TTL del cliente ALCANCE al del servidor,
+ * y ÉSE es el que se pone rojo. ⛔ Entonces: si tocás **uno solo** de los dos y el cliente queda
+ * mayor o igual que el servidor, el candado corta; si tocás los dos conservando el margen, no.
+ * Releé esta derivación antes de mover cualquiera de los dos.
  *
  * ⚠️ Y VENCERSE NO ES FALLAR. Cuando esto devuelve `null`, el gateway del depósito pide la firma
  * igual que siempre y la persona ve el prompt de su billetera, indistinguible del funcionamiento
@@ -73,7 +92,26 @@ export class InMemorySesionStore implements SesionReader, SesionRecorder {
     // La última gana: una sesión más nueva siempre es preferible, y sobrescribir evita que el Map
     // crezca por address. NO se valida el token acá — el único que puede verificarlo es el servidor,
     // que tiene el secreto del HMAC. Este almacén transporta, no juzga.
-    this.porAddress.set(address, { token, atMs: this.ahoraMs() });
+    //
+    // 🔴 EL RELOJ SE CHEQUEA ACÁ TAMBIÉN, Y NO ES SIMÉTRICO POR PROLIJIDAD (AR/MNR-3). El guard de
+    // `peek` mira el AHORA; el que faltaba es éste, que mira el ENTONCES. Con un `nowIso()` ilegible
+    // en la escritura, `atMs` quedaba `NaN`, y después `ahora - NaN >= TTL` es `false` para cualquier
+    // `ahora` legible ⇒ la sesión se entregaba PARA SIEMPRE, que es exactamente el modo de falla que
+    // el guard de `peek` dice cerrar. Reproducido antes del arreglo: `peek` devolvía el token 100
+    // años después de grabarlo.
+    // ⚠️ No es alcanzable con el `Clock` real del composition root, y falla del lado barato: sin
+    // sesión se pide la firma, que es lo de hoy. Se cierra igual porque el costo es una línea y el
+    // modo de falla es "credencial eterna".
+    // ⛔ BORRA la que hubiera: si no se puede fechar la nueva, quedarse con la vieja sería entregar
+    // una credencial que la persona ya reemplazó. Lo mide la mitad (g) de `T-372-W3-7`, por nombre,
+    // en `./sesion-store.test.ts`, con el reloj roto SÓLO en la escritura — la mitad (f) rompe las
+    // dos operaciones y por eso no veía éste.
+    const ahora = this.ahoraMs();
+    if (!Number.isFinite(ahora)) {
+      this.porAddress.delete(address);
+      return;
+    }
+    this.porAddress.set(address, { token, atMs: ahora });
   }
 
   /** `null` significa DOS cosas que para el caller son la misma: no hay sesión, o la que hay venció.

@@ -2363,7 +2363,7 @@ export class SolanaWalletAdapter
    *
    *  🔴 AC-5 — EL 501 NO SALTA A NINGUNA BILLETERA. Cuando el emisor contesta 501 (`PAYOUT_POP_SECRET`
    *  ausente server-side) esto corta con la marca ESTABLE `payout_pop_unavailable` —la misma que ya
-   *  producía (`prepare`, `./settlement/http-solana-prepare-gateway.ts:205`) antes de esta HU— y ⛔ NO
+   *  producía (`prepare`, `./settlement/http-solana-prepare-gateway.ts:227`) antes de esta HU— y ⛔ NO
    *  escribe ancla y ⛔ NO devuelve `irA`. Es lo mismo que hace hoy `HttpPopSigner` con su
    *  `if (res.status === 501) return null` (`./auth/http-pop-signer.ts:22`), y es una decisión de
    *  ahorro además de correctitud: la route leería ESA MISMA env y contestaría 503, así que saltar
@@ -2371,7 +2371,7 @@ export class SolanaWalletAdapter
    *
    *  ⚠️ EL EMISOR ES EL MISMO PARA LOS DOS PROPÓSITOS, y no es un atajo: `HttpKycVerdictGateway`
    *  también saca su desafío de `/api/a2a/payout/challenge` (lo hace vía el mismo `PopSigner`, ver
-   *  `./kyc/http-kyc-verdict-gateway.ts:60`). Lo que separa los dos permisos es el `proposito` del
+   *  (`PopSigner`, `./kyc/http-kyc-verdict-gateway.ts:74`) — iba SIN ancla y decía `:60`, que hoy es una línea EN BLANCO: la ola W3 de WKH-372 metió 35 líneas en ese archivo y la corrió — AR/BLQ-MED-1). Lo que separa los dos permisos es el `proposito` del
    *  ancla, no el emisor (CD-15).
    *
    *  ⛔ NO IMPORTA `pop-challenge.ts` (CD-13): la ventana sale del `exp` que viene en ESTE JSON, nunca

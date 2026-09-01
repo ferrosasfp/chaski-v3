@@ -2583,8 +2583,13 @@ describe("T-067-10 (WKH-359/AC-6): el cruce de cuenta distingue NO COMPARADO de 
 // puede devolver `/api/payout/prepare` tenían copy propio en `flow-vm.ts` "para que ninguno prometa USDC
 // en el escrow". Eran DOS. `payout_authority_unavailable` no tenía rama y caía en el catch-all
 // `code.includes("payout")`, cuyo texto manda a la persona a sacar del escrow unos USDC que nunca
-// salieron de su billetera: los tres emisores del enum (`app/api/payout/prepare/route.ts:334`, `:345`,
-// `:348`) cortan antes del forward al agente y antes de `authorizePrincipal`.
+// salieron de su billetera: los tres emisores del enum ((`payout_authority_unavailable`,
+// `../../app/api/payout/prepare/route.ts:394`), (`payout_authority_unavailable`,
+// `../../app/api/payout/prepare/route.ts:405`) y (`payout_authority_unavailable`,
+// `../../app/api/payout/prepare/route.ts:408`)) cortan antes del forward al agente y antes de
+// `authorizePrincipal`. ⚠️ IBAN SIN ANCLA y decían `:334`/`:345`/`:348`, tres comentarios: la ola W3
+// de WKH-372 insertó 60 líneas más arriba y las corrió a las tres sin que nada se pusiera rojo, que
+// es justo lo que `citas-ancladas.test.ts` no mira cuando falta el ancla (AR/BLQ-MED-1).
 //
 //
 // 🔴 QUÉ MIDE ESTE `describe` Y QUÉ NO, ESCRITO PORQUE LA DIFERENCIA YA COSTÓ UNA ITERACIÓN (re-AR it2 ·

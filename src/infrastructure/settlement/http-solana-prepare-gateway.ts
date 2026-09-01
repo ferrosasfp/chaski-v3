@@ -39,7 +39,7 @@ import {
   PREPARE_REJECTION_ENUMS,
 } from "../../application/agent-rejections";
 import type { AgentRef, Beneficiary } from "../../domain/remittance";
-import type { PopSigner, SolanaPayoutPrepareGateway, WalletPossessionProof } from "../../application/ports";
+import type { PopSigner, SesionReader, SolanaPayoutPrepareGateway, WalletPossessionProof } from "../../application/ports";
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -188,7 +188,19 @@ export class HttpSolanaPayoutPrepareGateway implements SolanaPayoutPrepareGatewa
   // El PoP NO es opcional acá. La route lo exige (PR6) y responde 403 opaco sin él, así que un
   // gateway sin PopSigner sólo puede producir un rechazo: por eso el signer es un argumento de
   // construcción y no un campo opcional que alguien pueda olvidar de cablear.
-  constructor(private readonly pop: PopSigner) {}
+  // 🔴 WKH-372/W3.4 — EL SEGUNDO ARGUMENTO ES EL ALMACÉN DE LA SESIÓN, Y ES DE SÓLO LECTURA.
+  // El tipo es `SesionReader`, que NO TIENE `record` (`SesionReader`, `../../application/ports.ts:1250`):
+  // este gateway puede presentar la sesión que la persona ya se ganó al conectar, y NO puede
+  // fabricarse una. La separación es por TIPO y no por disciplina.
+  //
+  // ⚠️ OPCIONAL, por lo mismo que en `../kyc/http-kyc-verdict-gateway.ts`: requerido obligaría a tocar
+  // los 21 sitios de `./http-solana-prepare-gateway.test.ts` que lo construyen, y el riesgo de que el
+  // composition root no lo cablee lo cubre `T-372-W3-16`, por nombre, en
+  // `../../composition/container.test.ts`. ⛔ Sin sesión cableada, el camino es EXACTAMENTE el de hoy.
+  constructor(
+    private readonly pop: PopSigner,
+    private readonly sesiones?: SesionReader,
+  ) {}
 
   async prepare(input: {
     remittanceId: string;
@@ -237,8 +249,19 @@ export class HttpSolanaPayoutPrepareGateway implements SolanaPayoutPrepareGatewa
     //   (c) su ventana la fija el `exp` del SERVIDOR, no el cliente — lo mide `T-067-18`.
     //
     // ⚠️ SIN `input.proof` ESTO CORRE BYTE-IDÉNTICO a como corría antes de esta HU. Lo mide `T-067-4`.
+    //
+    // 🔴 WKH-372/W3.4 — Y ACÁ ES DONDE DEJA DE PEDIRSE LA SEGUNDA FIRMA. La sesión que
+    // `/api/kyc/verdict` acuñó cuando la persona firmó AL CONECTAR prueba exactamente lo mismo que
+    // esta segunda firma probaría: que la dirección es suya. Si hay una guardada, se presenta y
+    // ⛔ `prove()` NO SE LLAMA. Si no hay —porque no existe, porque venció, o porque el camino por
+    // enlace remontó el árbol y se la llevó— el camino de abajo corre BYTE POR BYTE como hoy.
+    // ⚠️ Vencerse NO es fallar: la persona ve el prompt de su billetera igual que siempre, y no hay
+    // ni un string que le diga que algo salió mal, porque no salió mal nada.
+    const tokenDeSesion = this.sesiones?.peek(input.address) ?? null;
     let proof: Awaited<ReturnType<PopSigner["prove"]>>;
-    if (input.proof) {
+    if (tokenDeSesion) {
+      proof = null; // ⛔ la sesión reemplaza a la prueba: no se le pide una firma a nadie
+    } else if (input.proof) {
       proof = input.proof;
     } else {
       try {
@@ -249,35 +272,88 @@ export class HttpSolanaPayoutPrepareGateway implements SolanaPayoutPrepareGatewa
         return { ok: false, reason: "payout_pop_unavailable" };
       }
     }
-    if (!proof) {
+    // LA CREDENCIAL DE IDENTIDAD QUE VIAJA, que es UNA de las dos formas y nunca las dos.
+    //
+    // ⛔ EL CAMPO O ESTÁ O NO ESTÁ, y por eso se arma un objeto en vez de mandar `sessionToken` siempre
+    // con lo que haya. La route ramifica con `body.sessionToken !== undefined` y ⛔ un `sessionToken`
+    // presente CORTA, no cae al PoP: mandar `sessionToken: null` "igual" haría que todo request sin
+    // sesión entrara por la rama de la sesión y muriera en 403, o sea el corte total del producto.
+    // ⚠️ Y NO ALCANZA CON MANDAR `undefined`: `JSON.stringify` lo BORRA, así que ese descuido en
+    // particular es invisible desde el cuerpo. El que se ve, y el que rompe, es el `null`.
+    // Lo mide `T-372-W3-6`, por nombre, en `./http-solana-prepare-gateway.test.ts`, verificando la
+    // AUSENCIA de la propiedad en el cuerpo que efectivamente viajó.
+    let credencial: { sessionToken: string } | { popChallenge: string; popSignature: string };
+    if (tokenDeSesion) {
+      credencial = { sessionToken: tokenDeSesion };
+    } else if (proof) {
+      credencial = { popChallenge: proof.challenge, popSignature: proof.signature };
+    } else {
       // `null` = el emisor respondió 501: el server NO tiene PAYOUT_POP_SECRET. La route lee ESA MISMA
       // env y respondería 503 `payout_pop_unavailable` (`POP_SECRET`, `../../../app/api/payout/prepare/route.ts:216`). Cortamos acá con el enum
       // idéntico en vez de gastar un POST y un token de rate-limit en un rechazo ya determinado.
       return { ok: false, reason: "payout_pop_unavailable" };
     }
 
-    let res: Response;
-    try {
-      res = await fetch("/api/payout/prepare", {
+    // ⛔ EL CUERPO SE ARMA EN UN SOLO SITIO, y no es estética: el repliegue de abajo lo vuelve a
+    // postear con la otra credencial, y dos literales que hay que mantener sincronizados a mano son
+    // exactamente cómo uno se corrige y el otro se queda viejo.
+    const postear = (cred: typeof credencial): Promise<Response> =>
+      fetch("/api/payout/prepare", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           remittanceId: input.remittanceId,
           quoteId: input.quoteId,
           // 🔴 SIN `kycVerificationId` (WKH-333/AC-14'). La route lo resuelve desde su propia fila,
-          // indexada por la dirección que el PoP de acá abajo prueba. Un cliente que lo mandara no
-          // aportaría un dato: propondría con qué verificación de identidad se lo autoriza — y la
+          // indexada por la dirección que la credencial de acá abajo prueba. Un cliente que lo mandara
+          // no aportaría un dato: propondría con qué verificación de identidad se lo autoriza — y la
           // route lo pisa igual (AC-16), así que mandarlo sólo sería ruido en la red.
           address: input.address,
           amountUsd: input.amountUsd,
           beneficiary: input.beneficiary, // viaja al server; NUNCA se loguea (CD-5)
           idempotencyKey: input.idempotencyKey,
-          popChallenge: proof.challenge,
-          popSignature: proof.signature,
+          ...cred,
         }),
       });
+
+    let res: Response;
+    try {
+      res = await postear(credencial);
     } catch {
       return { ok: false, reason: "prepare_unavailable" }; // red caída ⇒ fail-closed
+    }
+
+    // 🔴 EL REINTENTO ÚNICO DEL REPLIEGUE (WKH-372/W3.4). SIN ESTO EL REPLIEGUE NO ES LIMPIO.
+    //
+    // El repliegue de esta ola es QUITAR `PAYOUT_SESSION_SECRET` del proveedor. En ese instante el
+    // servidor deja de aceptar las sesiones YA EMITIDAS, y toda persona que tenga una en memoria
+    // recibiría 403 sin reintentar: se le cortaría el envío por la mitad, con la billetera desbloqueada
+    // y sin que ella haya hecho nada mal. Acá se vuelve a postear UNA vez con el PoP de siempre.
+    //
+    // ⛔ LAS TRES CONDICIONES SON NECESARIAS Y NINGUNA SE AFLOJA:
+    //   · `tokenDeSesion !== null` — sin sesión mandada no hay nada de qué replegarse, y reintentar
+    //     sería postear dos veces la MISMA credencial ya rechazada;
+    //   · `res.status === 403` — un 500 o un 429 no dicen nada de la sesión, y reintentarlos convierte
+    //     un incidente del servidor en el doble de carga;
+    //   · una sola vez — el reintento no vuelve a mirar `tokenDeSesion`, así que no hay bucle posible.
+    // Las tres las mide `T-372-W3-17`, por nombre, en `./http-solana-prepare-gateway.test.ts`, con sus
+    // tres ramas: si sólo estuviera el caso positivo, un bucle pasaría el test.
+    if (!res.ok && res.status === 403 && tokenDeSesion !== null) {
+      let deRepuesto: Awaited<ReturnType<PopSigner["prove"]>>;
+      try {
+        // Si el salto por enlace ya trajo una prueba, se usa ÉSA: pedir otra sería gastarle a la
+        // persona una firma que ya hizo.
+        deRepuesto = input.proof ?? (await this.pop.prove(input.address));
+      } catch {
+        deRepuesto = null; // no se pudo conseguir ⇒ se cae al 403 de abajo, que es lo de hoy
+      }
+      if (deRepuesto) {
+        try {
+          res = await postear({ popChallenge: deRepuesto.challenge, popSignature: deRepuesto.signature });
+        } catch {
+          return { ok: false, reason: "prepare_unavailable" }; // red caída ⇒ fail-closed
+        }
+      }
     }
 
     if (!res.ok) {

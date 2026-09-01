@@ -27,6 +27,7 @@ import type {
   KycVerdictGateway,
   KycVerdictLookup,
   PopSigner,
+  SesionRecorder,
   WalletPossessionProof,
 } from "../../application/ports";
 
@@ -37,6 +38,11 @@ interface VerdictResponse {
     verifiedAt?: unknown;
   } | null;
   reason?: unknown;
+  /** WKH-372/W3.4 — la sesión de posesión que el servidor acuñó tras verificar la firma de la persona
+   *  (`emitirSesionDePosesion`, `../auth/sesion-de-posesion.ts:95`). Opcional a propósito: sin
+   *  `PAYOUT_SESSION_SECRET` el servidor no la manda, este cliente no graba nada, y todo sigue como
+   *  hoy. Ése es el orden de despliegue y el repliegue, sin ningún flag. */
+  sesion?: unknown;
 }
 
 const ABSENT_REASONS = ["absent", "expired", "not_approved"] as const; // EN ESTA LÍNEA: `solana-wallet.ts:2374` cita `:60` de este archivo por número. WKH-233 — `"simulated"` se fue de `KycVerdictAbsentReason` y por eso se va de acá: la fila del veredicto se escribe SÓLO con `payoutAllowed === true` del agente de KYC, así que una fila que existe es real por invariante y ningún servidor puede emitir ya ese motivo. Un servidor viejo que lo emitiera cae en la rama de `readAbsentReason` y cuenta como `absent`, que es el fail-safe correcto: la respuesta existe, pero este cliente no puede afirmar de qué motivo habla
@@ -53,7 +59,21 @@ function readRiskLevel(v: unknown): "low" | "medium" | "high" {
 }
 
 export class HttpKycVerdictGateway implements KycVerdictGateway {
-  constructor(private readonly pop: PopSigner) {}
+  // 🔴 WKH-372/W3.4 — EL SEGUNDO ARGUMENTO ES EL ALMACÉN DE LA SESIÓN, Y ES DE SÓLO ESCRITURA.
+  // El tipo es `SesionRecorder`, que NO TIENE `peek` (`SesionRecorder`, `../../application/ports.ts:1253`):
+  // este gateway puede grabar la sesión que el servidor le dio, y no puede leerla ni reusarla. La
+  // separación es por TIPO y no por disciplina, igual que `PopProofReader`/`PopProofRecorder`.
+  //
+  // ⚠️ OPCIONAL, Y EL COSTO ESTÁ MEDIDO Y CUBIERTO. Requerido obligaría a tocar los 15 sitios de
+  // `./http-kyc-verdict-gateway.test.ts` que construyen este gateway, y el riesgo que abre —que el
+  // composition root no lo cablee y la suite quede verde igual— es EXACTAMENTE el que `T-CABLE-1` ya
+  // cubre para el 3er argumento de `ConnectWallet`. Acá lo cubre `T-372-W3-16`, por nombre, en
+  // `../../composition/container.test.ts`, que además exige que sea LA MISMA instancia que lee el
+  // gateway del depósito. ⛔ Sin ese `it`, este `?` sería el defecto que 041/MNR-5 midió.
+  constructor(
+    private readonly pop: PopSigner,
+    private readonly sesiones?: SesionRecorder,
+  ) {}
 
   // 🔴 WKH-359/AC-3 — EL 3er ARGUMENTO ES LA PRUEBA YA CONSEGUIDA, y es el eslabón entero de esta HU.
   // Sin él, en el camino por enlace `this.pop.prove()` tira `wallet_sign_not_available` (no hay
@@ -115,6 +135,21 @@ export class HttpKycVerdictGateway implements KycVerdictGateway {
     if (!res.ok) throw new Error("kyc_verdict_unavailable");
 
     const body = (await res.json()) as VerdictResponse;
+    // 🔴 WKH-372/W3.4 — LA SESIÓN SE GRABA ACÁ, Y ACÁ ES EL ÚNICO SITIO POSIBLE.
+    //
+    // JUSTO DESPUÉS del `res.json()` y ANTES de la rama `!v` de abajo: el servidor agrega el campo a
+    // los CINCO `return … 200` de `/api/kyc/verdict` —los cuatro `absent`/`expired`/`not_approved` y
+    // el que trae veredicto— así que una sola escritura acá los cubre a los cinco. Ponerla adentro de
+    // la rama del veredicto usable dejaría sin sesión a toda persona que todavía no se verificó, que
+    // es justo la que después va a firmar de más.
+    //
+    // ✅ Y GRABAR EN LOS `absent` NO ES UN DESCUIDO: 🔴 la sesión prueba POSESIÓN, no verificación.
+    // Que la persona esté verificada lo sigue decidiendo `resolvePayoutAuthority` en CADA pago.
+    //
+    // ⛔ UN `sesion` AUSENTE O DE TIPO RARO NO ES UN ERROR: simplemente no se graba nada y el gateway
+    // del depósito pide la firma como siempre. ⛔ Y no se valida el token acá: el único que puede
+    // verificarlo es el servidor, que tiene el secreto. Este lado transporta, no juzga.
+    if (typeof body.sesion === "string" && body.sesion) this.sesiones?.record(address, body.sesion);
     const v = body.verdict;
     if (!v || typeof v.verifiedAt !== "string" || typeof v.provenance !== "string") {
       return out({ outcome: "absent", reason: readAbsentReason(body.reason) });

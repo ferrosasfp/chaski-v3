@@ -44,6 +44,8 @@ import { PREPARE_NO_AGENT_FOR_CAPABILITY } from "../../application/agent-rejecti
 import { humanError } from "../../presentation/flow-vm";
 import type { PopSigner } from "../../application/ports";
 import { HttpPopSigner } from "../auth/http-pop-signer";
+import { emitirSesionDePosesion } from "../auth/sesion-de-posesion"; // WKH-372/W3.4 — el emisor REAL: un token escrito a mano no probaría que la route lo acepta
+import { resolveSolanaNetworkId } from "../chain"; // ⛔ el CAIP-2 se resuelve server-side, NUNCA se escribe `"solana:devnet"` a mano
 import { HttpSolanaPayoutPrepareGateway } from "./http-solana-prepare-gateway";
 import { POST as CHALLENGE_POST } from "../../../app/api/a2a/payout/challenge/route";
 import { POST as PREPARE_POST } from "../../../app/api/payout/prepare/route";
@@ -744,4 +746,189 @@ describe("HttpSolanaPayoutPrepareGateway — el body que arma el cliente ES el q
     });
   });
 
+});
+// ── 🔴 WKH-372/W3.4 · LA SESIÓN DE POSESIÓN DEL LADO DEL CLIENTE ─────────────────────────────────
+//
+// Lo que custodian estos `it`: (1) sin sesión guardada el gateway corre EXACTAMENTE como hoy, y (2) el
+// repliegue —quitarle `PAYOUT_SESSION_SECRET` al proveedor— no le corta el envío a nadie que ya tenga
+// una sesión en memoria.
+//
+// ⚠️ ACÁ LA ROUTE CORRE DE VERDAD (`routeFetch` invoca `PREPARE_POST`), así que la sesión que viaja la
+// emite el emisor REAL y la verifica el verificador REAL. Un token escrito a mano no probaría nada.
+describe("HttpSolanaPayoutPrepareGateway — la sesión borra la segunda firma (WKH-372/W3.4)", () => {
+  beforeEach(() => {
+    KP = nacl.sign.keyPair();
+    ADDR = bs58.encode(KP.publicKey);
+    AUTHORITY = bs58.encode(nacl.sign.keyPair().publicKey);
+    vi.stubEnv("DEPOSIT_ATTESTATION_SECRET", "test-deposit-secret");
+    vi.stubEnv("SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY", AUTHORITY);
+    vi.stubEnv("VERCEL_ENV", "");
+    vi.stubEnv("PAYOUT_POP_SECRET", "pop-secret");
+    // 🔴 SECRETO PROPIO, y con un valor DISTINTO al del PoP a propósito: si fueran el mismo, un `it`
+    // no podría distinguir un verificador que lee el secreto equivocado (`T-372-W3-9`).
+    vi.stubEnv("PAYOUT_SESSION_SECRET", "session-secret-distinto");
+    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", "https://gateway.test");
+    vi.stubEnv("WASIAI_A2A_AGENT_KEY", "ak_prepare_gateway_test");
+    checkRouteRateLimitMock.mockReset();
+    checkRouteRateLimitMock.mockResolvedValue({ ok: true });
+    authorityMock.mockReset();
+    authorityMock.mockResolvedValue({ authorized: true, httpStatus: 200 });
+    getVerdictStoreMock.mockReset();
+    getVerdictStoreMock.mockReturnValue({
+      get: vi.fn(async (sender: string) =>
+        sender === ADDR
+          ? {
+              senderAddress: ADDR,
+              verificationId: "did-de-la-fila",
+              approved: true,
+              riskLevel: "low" as const,
+              provenance: "didit",
+              verifiedAt: "2026-08-01T00:00:00.000Z",
+            }
+          : null,
+      ),
+      put: vi.fn(),
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  /** Almacén de sólo lectura con lo que se le ponga. `null` = "no hay sesión" (o venció). */
+  function lector(token: string | null) {
+    return { peek: () => token };
+  }
+
+  /** Una sesión REAL para `ADDR`, emitida por el emisor de producción con la env de arriba. */
+  function sesionReal(): string {
+    const t = emitirSesionDePosesion(ADDR, resolveSolanaNetworkId(), Date.now());
+    if (!t) throw new Error("el emisor devolvió null: la env del test no está puesta");
+    return t;
+  }
+
+  /** El body del request `n` hecho a `/api/payout/prepare`. */
+  function bodyDelPrepare(m: { mock: { calls: unknown[][] } }, n = 0): Record<string, unknown> {
+    const calls = m.mock.calls.filter((c) => String(c[0]) === "/api/payout/prepare");
+    const call = calls[n];
+    if (!call) throw new Error(`no hubo un request #${n} a /api/payout/prepare`);
+    const init = call[1] as RequestInit | undefined;
+    if (!init?.body) throw new Error("el request no llevó body");
+    return JSON.parse(String(init.body)) as Record<string, unknown>;
+  }
+
+  // MUTANTE QUE LO MATA: en `./http-solana-prepare-gateway.ts`, mandar `sessionToken: undefined`
+  // "igual" en la rama sin sesión ⇒ la aserción de la AUSENCIA de la propiedad se pone roja.
+  // ⛔ FALSO KILLED A EVITAR: `toHaveBeenCalled()` sin contar deja pasar DOS firmas. Y verificar
+  // `sessionToken === undefined` en vez de la ausencia de la propiedad deja pasar el mutante entero.
+  it("T-372-W3-6: SIN sesión guardada, el gateway pide la firma UNA vez y el body viaja SIN `sessionToken`", async () => {
+    const fetchMock = routeFetch(agentOk);
+    vi.stubGlobal("fetch", fetchMock);
+    const signer = new HttpPopSigner(wallet);
+    const proveSpy = vi.spyOn(signer, "prove");
+
+    const out = await new HttpSolanaPayoutPrepareGateway(signer, lector(null)).prepare(prepareInput());
+
+    expect(proveSpy, "sin sesión hay que pedir la firma, y exactamente una vez").toHaveBeenCalledTimes(1);
+    const body = bodyDelPrepare(fetchMock);
+    expect(
+      Object.hasOwn(body, "sessionToken"),
+      "el body llevó la propiedad `sessionToken` sin haber sesión: la route ramifica con " +
+        "`!== undefined`, así que el campo O ESTÁ O NO ESTÁ",
+    ).toBe(false);
+    expect(body.popChallenge, "el camino de hoy dejó de mandar el PoP").toBeTypeOf("string");
+    expect(out.ok, "la route rechazó el camino de siempre: se rompió lo que ya funcionaba").toBe(true);
+  });
+
+  // 🔴 EL `it` QUE CIERRA LA OLA DEL LADO DEL GATEWAY: con sesión, NO se firma y la route DEJA PASAR.
+  // MUTANTE QUE LO MATA: hacer que `peek()` no se consulte (o que su resultado se ignore) ⇒ vuelve a
+  // llamarse `prove`. ⛔ FALSO KILLED A EVITAR: sin la mitad `out.ok === true`, un gateway que mandara
+  // basura y comiera un 403 también dejaría de llamar `prove` y este `it` daría verde.
+  it("T-372-W3-6b: CON sesión guardada, `prove()` NO se llama y la route acepta igual", async () => {
+    const token = sesionReal();
+    const fetchMock = routeFetch(agentOk);
+    vi.stubGlobal("fetch", fetchMock);
+    const signer = new HttpPopSigner(wallet);
+    const proveSpy = vi.spyOn(signer, "prove");
+
+    const out = await new HttpSolanaPayoutPrepareGateway(signer, lector(token)).prepare(prepareInput());
+
+    expect(proveSpy, "se le pidió una SEGUNDA firma a la persona teniendo la sesión en la mano").not.toHaveBeenCalled();
+    const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+    expect(urls, "se pidió un challenge: la sesión no está reemplazando nada").not.toContain(
+      "/api/a2a/payout/challenge",
+    );
+    const body = bodyDelPrepare(fetchMock);
+    expect(body.sessionToken, "la sesión no viajó en el cuerpo").toBe(token);
+    expect(Object.hasOwn(body, "popChallenge"), "viajaron las DOS credenciales a la vez").toBe(false);
+    expect(
+      out.ok,
+      "la route NO aceptó la sesión: el gateway dejó de firmar y el envío se cortó, que es el corte " +
+        "total del producto que el orden de las waves existe para evitar",
+    ).toBe(true);
+  });
+
+  // ── 🔴 T-372-W3-17 · EL REINTENTO ÚNICO DEL REPLIEGUE, CON SUS TRES RAMAS ──────────────────────
+  //
+  // MUTANTE QUE LO MATA: quitar la condición `res.status === 403` ⇒ se reintenta ante CUALQUIER
+  // `!res.ok` y la rama (c) se pone roja.
+  // ⛔ FALSO KILLED A EVITAR: un `it` con SÓLO el caso positivo deja pasar un bucle y deja pasar el
+  // reintento en un 500. Por eso van las tres ramas, y por eso se CUENTAN los `fetch`.
+  it("T-372-W3-17: ante un 403 con sesión reintenta UNA vez sin ella; sin sesión y ante un 500, NO reintenta", async () => {
+    // (a) 403 CON sesión ⇒ UN reintento, sin `sessionToken` y con el PoP de siempre.
+    const f403 = prepareRespondsWith(403, { error: "payout_pop_unverified" });
+    vi.stubGlobal("fetch", f403);
+    const signerA = new HttpPopSigner(wallet);
+    const proveA = vi.spyOn(signerA, "prove");
+    const outA = await new HttpSolanaPayoutPrepareGateway(signerA, lector(sesionReal())).prepare(prepareInput());
+
+    const prepA = f403.mock.calls.filter((c) => String(c[0]) === "/api/payout/prepare");
+    expect(prepA.length, "el repliegue no reintentó, o entró en bucle: tiene que ser EXACTAMENTE 2").toBe(2);
+    expect(bodyDelPrepare(f403, 0).sessionToken, "el primer intento no llevó la sesión").toBeTypeOf("string");
+    expect(
+      Object.hasOwn(bodyDelPrepare(f403, 1), "sessionToken"),
+      "el reintento volvió a mandar la sesión que el servidor acaba de rechazar",
+    ).toBe(false);
+    expect(bodyDelPrepare(f403, 1).popChallenge, "el reintento no llevó el PoP de siempre").toBeTypeOf("string");
+    expect(proveA, "el reintento no le pidió la firma a la persona").toHaveBeenCalledTimes(1);
+    expect(outA.ok, "el doble contesta 403 siempre: el desenlace tiene que seguir siendo un rechazo").toBe(false);
+
+    // (b) 403 SIN sesión ⇒ NO reintenta: no hay nada de qué replegarse y sería postear dos veces la
+    //     misma credencial ya rechazada.
+    const f403b = prepareRespondsWith(403, { error: "payout_pop_unverified" });
+    vi.stubGlobal("fetch", f403b);
+    await new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet), lector(null)).prepare(prepareInput());
+    expect(
+      f403b.mock.calls.filter((c) => String(c[0]) === "/api/payout/prepare").length,
+      "se reintentó sin haber mandado sesión: eso es postear dos veces lo mismo",
+    ).toBe(1);
+
+    // (c) 500 CON sesión ⇒ NO reintenta: un 500 no dice nada de la sesión, y reintentarlo convierte un
+    //     incidente del servidor en el doble de carga.
+    const f500 = prepareRespondsWith(500, { error: "internal" });
+    vi.stubGlobal("fetch", f500);
+    await new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet), lector(sesionReal())).prepare(
+      prepareInput(),
+    );
+    expect(
+      f500.mock.calls.filter((c) => String(c[0]) === "/api/payout/prepare").length,
+      "se reintentó ante un 500: el reintento perdió su condición de status",
+    ).toBe(1);
+  });
+
+  // ⛔ Y SIN ALMACÉN CABLEADO EL GATEWAY CORRE BYTE-IDÉNTICO A COMO CORRÍA ANTES DE W3. Es la mitad que
+  // hace que el 2º argumento pueda ser opcional sin cambiarle el comportamiento a nadie.
+  it("T-372-W3-6c: sin almacén cableado, el camino es el de siempre", async () => {
+    const fetchMock = routeFetch(agentOk);
+    vi.stubGlobal("fetch", fetchMock);
+    const signer = new HttpPopSigner(wallet);
+    const proveSpy = vi.spyOn(signer, "prove");
+
+    const out = await new HttpSolanaPayoutPrepareGateway(signer).prepare(prepareInput());
+
+    expect(proveSpy).toHaveBeenCalledTimes(1);
+    expect(Object.hasOwn(bodyDelPrepare(fetchMock), "sessionToken")).toBe(false);
+    expect(out.ok).toBe(true);
+  });
 });

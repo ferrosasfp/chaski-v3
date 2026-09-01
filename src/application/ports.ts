@@ -307,7 +307,7 @@ export interface SolanaPayoutPrepareGateway {
     address: string;
     amountUsd: number;
     beneficiary: Beneficiary;
-    idempotencyKey: string; proof?: WalletPossessionProof; // WKH-359/AC-2 — PEGADO A `idempotencyKey`, EN LA LÍNEA QUE EXISTE: este archivo recibe 17 citas ancladas de acá para abajo a 12 destinos (medido en `723ca3c` con la receta del candado) y una línea de más las corre a todas. 🔴 QUÉ ES: la prueba de posesión YA OBTENIDA, que el camino por enlace consigue con su propio salto. Cuando viene, (`prepare`, `../infrastructure/settlement/http-solana-prepare-gateway.ts:193`) la usa y NO llama a `pop.prove()`; cuando falta, ese gateway corre byte-idéntico a como corría antes de esta HU. ⛔ NO la vuelve opcional en el sentido de CD-2: el que decide si el PoP es exigible sigue siendo el SERVIDOR ((`POP_SECRET`, `../../app/api/payout/prepare/route.ts:214`)), que contesta 403 sin él. Esto sólo dice QUIÉN la consiguió.
+    idempotencyKey: string; proof?: WalletPossessionProof; // WKH-359/AC-2 — PEGADO A `idempotencyKey`, EN LA LÍNEA QUE EXISTE: este archivo recibe 17 citas ancladas de acá para abajo a 12 destinos (medido en `723ca3c` con la receta del candado) y una línea de más las corre a todas. 🔴 QUÉ ES: la prueba de posesión YA OBTENIDA, que el camino por enlace consigue con su propio salto. Cuando viene, (`prepare`, `../infrastructure/settlement/http-solana-prepare-gateway.ts:205`) la usa y NO llama a `pop.prove()`; cuando falta, ese gateway corre byte-idéntico a como corría antes de esta HU. ⛔ NO la vuelve opcional en el sentido de CD-2: el que decide si el PoP es exigible sigue siendo el SERVIDOR ((`POP_SECRET`, `../../app/api/payout/prepare/route.ts:214`)), que contesta 403 sin él. Esto sólo dice QUIÉN la consiguió.
   }): Promise<
     | {
         ok: true;
@@ -1231,4 +1231,25 @@ export type PruebaPorEnlace =
  */
 export interface PruebaDePosesionPorEnlace {
   pedir(input: { proposito: "pop-payout" | "pop-kyc"; direccion: string }): Promise<PruebaPorEnlace>;
+}
+
+// ── WKH-372/W3.4 · LA SESIÓN DE POSESIÓN, DEL LADO DEL CLIENTE ───────────────────────────────────
+//
+// Van ACÁ ABAJO, al final del archivo, por la razón que `:295-303` ya dejó escrita: este archivo
+// recibe citas ancladas por número y meterlos en el medio las corre a todas.
+//
+// 🔴 SON DOS INTERFACES Y NO UNA, Y LA SEPARACIÓN ES POR TIPO, NO POR DISCIPLINA. Es el mismo patrón
+// —y el mismo motivo— que `PopProofReader` / `PopProofRecorder` de `:150`: el lector NO TIENE
+// `record` y el escritor NO TIENE `peek`, así que un gateway que sólo lee no puede escribirse una
+// sesión a sí mismo aunque alguien quiera, y `tsc` lo impide. ⛔ PROHIBIDO fusionarlas en un puerto
+// único con los dos métodos "para simplificar": eso reintroduce el defecto entero.
+//
+// El token es un `string` opaco para el cliente: lo emite y lo verifica el servidor con un secreto
+// que el navegador no tiene (`emitirSesionDePosesion`,
+// `../infrastructure/auth/sesion-de-posesion.ts:95`). Este lado sólo lo transporta.
+export interface SesionReader {
+  peek(address: string): string | null; // null si no hay, o si la que hay VENCIÓ
+}
+export interface SesionRecorder {
+  record(address: string, token: string): void;
 }

@@ -69,6 +69,10 @@ import { ConnectWallet } from "../application/use-cases/connect-wallet";
 import type { PopSigner, PruebaDePosesionPorEnlace, PruebaPorEnlace } from "../application/ports";
 import { HttpPopSigner } from "../infrastructure/auth/http-pop-signer";
 import { InMemoryPopProofStore } from "../infrastructure/auth/pop-proof-store";
+import { buildSolanaPopMessage, verifySolanaPopChallenge } from "../infrastructure/auth/pop-challenge"; // WKH-372/W3.5 — el CONSTRUCTOR REAL del mensaje PoP: `T-372-W3-10b` NO reescribe el mensaje a mano
+import { emitirSesionDePosesion } from "../infrastructure/auth/sesion-de-posesion"; // el EMISOR REAL de la sesión: un token inventado no probaría nada
+import { InMemorySesionStore } from "../infrastructure/auth/sesion-store";
+import { resolveSolanaNetworkId } from "../infrastructure/chain"; // ⛔ el CAIP-2 se resuelve, NUNCA se escribe a mano
 import { HttpKycVerdictGateway } from "../infrastructure/kyc/http-kyc-verdict-gateway";
 import { SupabaseKycSessionTokenStore } from "../infrastructure/persistence/supabase-kyc-session-tokens";
 import { HttpSolanaPayoutPrepareGateway } from "../infrastructure/settlement/http-solana-prepare-gateway";
@@ -177,26 +181,74 @@ async function sembrarCotizada(repo: InMemoryRepo): Promise<string> {
 /** 🔴 EL SERVIDOR ES DE MENTIRA, LOS CLIENTES SON DE VERDAD. Los cuatro endpoints que un recorrido
  *  inyectado toca. Lo que se mide no es el servidor: son los DOS gateways reales y el `HttpPopSigner`
  *  real, que son los que deciden cuántas veces se le pide una firma a la persona. */
-function servidorDeLaApp(): ReturnType<typeof vi.fn> {
-  return vi.fn(async (url: string) => {
+/** 🔴 LO QUE EL REGISTRO ANOTA, Y POR QUÉ HACE FALTA. Sin él, "la sesión reemplazó a la firma" sólo se
+ *  podría afirmar contando prompts, y contar prompts no distingue "no se firmó porque la sesión viajó"
+ *  de "no se firmó porque el recorrido se cortó antes". Acá quedan los cuerpos que efectivamente
+ *  viajaron y los desafíos que el emisor REAL produjo. */
+interface RegistroDelServidor {
+  readonly prepares: Record<string, unknown>[];
+  readonly desafios: { popChallenge: string; popMessage: string }[];
+}
+
+function registroVacio(): RegistroDelServidor {
+  return { prepares: [], desafios: [] };
+}
+
+/** 🔴 EL SERVIDOR ES DE MENTIRA, LOS CLIENTES SON DE VERDAD. Los cuatro endpoints que un recorrido
+ *  inyectado toca. Lo que se mide no es el servidor: son los DOS gateways reales y el `HttpPopSigner`
+ *  real, que son los que deciden cuántas veces se le pide una firma a la persona.
+ *
+ *  ⚠️ LAS OPCIONES SON ADITIVAS: `servidorDeLaApp()` sin argumentos se comporta EXACTAMENTE como se
+ *  comportaba cuando W3.0 midió la premisa, así que `T-372-W3-0a` sigue midiendo lo mismo.
+ *  · `emisorReal` — el desafío lo emite el HANDLER de producción (`CHALLENGE_POST`) en vez de un
+ *    literal, así que el mensaje que la billetera firma lo construye `buildSolanaPopMessage` de
+ *    verdad. Es lo que hace falsable a `T-372-W3-10b`. Requiere `PAYOUT_POP_SECRET` stubeada.
+ *  · `conSesion` — el 200 del veredicto trae una sesión emitida por el EMISOR REAL para el `sender`
+ *    que el cliente mandó. ⛔ Nunca un string escrito a mano: un token inventado no probaría que el
+ *    que viaja es el que el servidor acuña. Requiere `PAYOUT_SESSION_SECRET` stubeada. */
+function servidorDeLaApp(
+  opciones: { emisorReal?: boolean; conSesion?: boolean; registro?: RegistroDelServidor } = {},
+): ReturnType<typeof vi.fn> {
+  const reg = opciones.registro;
+  return vi.fn(async (url: string, init?: RequestInit) => {
     const cuerpo = (o: unknown) =>
       new Response(JSON.stringify(o), { status: 200, headers: { "content-type": "application/json" } });
+    const leerBody = (): Record<string, unknown> =>
+      init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
     const destino = { beneficiary: FAKE_SOLANA_BENEFICIARY, authority: FAKE_SOLANA_AUTHORITY };
-    if (url === "/api/a2a/payout/challenge")
-      return cuerpo({ popChallenge: "ch-w3", popMessage: MENSAJE_POP, exp: Math.floor(Date.now() / 1000) + 600 });
-    if (url === "/api/kyc/verdict")
-      return cuerpo({ verdict: { riskLevel: "low", provenance: "didit", verifiedAt: T0 } });
-    if (url === "/api/payout/prepare")
+    if (url === "/api/a2a/payout/challenge") {
+      if (!opciones.emisorReal)
+        return cuerpo({ popChallenge: "ch-w3", popMessage: MENSAJE_POP, exp: Math.floor(Date.now() / 1000) + 600 });
+      const res = await CHALLENGE_POST(pedido("/api/a2a/payout/challenge", leerBody()));
+      const emitido = (await res.clone().json()) as { popChallenge: string; popMessage: string };
+      reg?.desafios.push(emitido);
+      return res;
+    }
+    if (url === "/api/kyc/verdict") {
+      const sender = String(leerBody().sender ?? "");
+      const sesion = opciones.conSesion ? emitirSesionDePosesion(sender, resolveSolanaNetworkId(), Date.now()) : null;
+      if (opciones.conSesion && !sesion)
+        throw new Error("el emisor de la sesión devolvió null: falta stubear PAYOUT_SESSION_SECRET");
+      return cuerpo({
+        verdict: { riskLevel: "low", provenance: "didit", verifiedAt: T0 },
+        ...(sesion ? { sesion } : {}),
+      });
+    }
+    if (url === "/api/payout/prepare") {
+      reg?.prepares.push(leerBody());
       return cuerpo({ ...destino, attestation: "att-w3", payoutId: "po-w3", provenance: "transfi" });
+    }
     if (url === "/api/payout/attestation") return cuerpo(destino);
-    throw new Error(`endpoint no previsto en este arnés: ${url}`);
+    throw new Error(`endpoint no previsto en este arnes: ${url}`);
   });
 }
 
 /** El recorrido de identidad completo, con los colaboradores REALES: conectar (que consulta el
  *  veredicto) y enviar (que prepara el payout). Devuelve los mensajes que la billetera terminó
  *  firmando, en orden. */
-async function recorridoInyectado(): Promise<{ firmados: string[]; estadoFinal: string; enlace: string[] }> {
+async function recorridoInyectado(
+  sesiones?: InMemorySesionStore,
+): Promise<{ firmados: string[]; estadoFinal: string; enlace: string[] }> {
   const wallet = new FakeSolanaWallet();
   const firmados: string[] = [];
   vi.spyOn(wallet, "signMessage").mockImplementation(async (mensaje: string) => {
@@ -209,7 +261,7 @@ async function recorridoInyectado(): Promise<{ firmados: string[]; estadoFinal: 
   await new ConnectWallet(
     wallet,
     new FakeKycStore(),
-    new HttpKycVerdictGateway(new HttpPopSigner(wallet, popProofs)),
+    new HttpKycVerdictGateway(new HttpPopSigner(wallet, popProofs), sesiones),
     enlace,
   ).execute();
 
@@ -217,7 +269,7 @@ async function recorridoInyectado(): Promise<{ firmados: string[]; estadoFinal: 
   const id = await sembrarCotizada(repo);
   const remesa = esperarListo(
     await new ConfirmAndSend(wallet, repo, new FixedClock(), new FakeRefundGateway("no-receipt"), {
-      prepare: new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet, popProofs)),
+      prepare: new HttpSolanaPayoutPrepareGateway(new HttpPopSigner(wallet, popProofs), sesiones),
       gateway: new FakeSolanaSettlementGateway(),
       probe: new FakeSolanaEscrowDepositProbe(),
       senderBalance: new FakeSolanaSenderSolBalanceProbe(1_000_000_000),
@@ -418,5 +470,183 @@ describe("W3.0 · `kyc_session_tokens` no sirve de sesión", () => {
     ).toBe(2);
     // CONTROL POSITIVO del anotador: sabe decir que una columna NO se miró.
     expect(a.filtros.map((f) => f.col), "el anotador afirma columnas que nadie filtró").not.toContain("exp");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// 6 · W3.4 — CON LA SESIÓN CABLEADA, EL MISMO RECORRIDO PIDE UNA SOLA FIRMA
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 ES EL `it` QUE CIERRA LA OLA, Y SE LEE CONTRA `T-372-W3-0a`: el MISMO arnés, el MISMO recorrido,
+// los MISMOS colaboradores reales. Lo único que cambia es que el almacén de la sesión está cableado y
+// que el servidor manda el campo `sesion`. Si esto diera 2, la ola no borró nada.
+describe("W3.4 · la sesión borra la SEGUNDA firma (AC-3-1)", () => {
+  // MUTANTE QUE LO MATA: hacer que `peek()` devuelva siempre `null` (o que el gateway del depósito
+  // ignore su resultado) ⇒ vuelve a firmarse 2 veces y esto se pone rojo.
+  // ⛔ FALSO KILLED A EVITAR: `toHaveBeenCalled()` no sirve, tiene que ser el NÚMERO. Y el estado
+  // terminal se assertea PRIMERO: un recorrido cortado antes del `prepare` también contaría 1, y
+  // haría parecer que la ola funciona cuando lo que pasó es que el envío murió.
+  it("T-372-W3-1: con el almacén cableado, el MISMO recorrido invoca `signMessage` EXACTAMENTE 1 vez", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", "secreto-del-desafio");
+    vi.stubEnv("PAYOUT_SESSION_SECRET", "secreto-de-la-sesion-distinto");
+    expect(
+      await entrarAlNavegadorDeLaBilletera(),
+      "el árbol no llegó a `injected`: este `it` no está midiendo el recorrido inyectado",
+    ).toBe("injected");
+    sembrarElCaminoPorEnlace();
+    const registro = registroVacio();
+    vi.stubGlobal("fetch", servidorDeLaApp({ emisorReal: true, conSesion: true, registro }));
+
+    const { firmados, estadoFinal, enlace } = await recorridoInyectado(new InMemorySesionStore(new FixedClock()));
+
+    // 1 · EL RECORRIDO CERRÓ. Va primero, por el falso KILLED de arriba.
+    expect(estadoFinal, "el envío no llegó a su estado terminal: no se ejercitó el recorrido entero").toBe(
+      "payout_submitted",
+    );
+    // 2 · Y fue el camino INYECTADO, con el de enlace sembrado y aun así apagado. Idéntico a `-0a`.
+    expect(enlace, "el recorrido salió del camino inyectado").toEqual(["no-corresponde", "no-corresponde"]);
+    // 3 · UNA SOLA FIRMA. El número ES la afirmación, y el contraste con `T-372-W3-0a` (que mide 2 con
+    //     el mismo arnés y sin almacén) es lo que dice que la sesión es lo que la borró.
+    expect(
+      firmados.length,
+      "se siguen pidiendo DOS firmas de identidad: la sesión no está reemplazando a la segunda",
+    ).toBe(1);
+    // 4 · Y LA QUE QUEDA ES LA PRIMERA, la del connect: es un requisito (AC-3-5), no una concesión.
+    expect(firmados[0], "la firma que quedó no es una prueba de posesión").toContain(
+      "Chaski Proof-of-Possession",
+    );
+    // 5 · LA MITAD SIN LA CUAL EL CONTEO NO PRUEBA NADA: la sesión VIAJÓ en el cuerpo del `prepare`.
+    //     Sin esto, un gateway que simplemente dejara de mandar credencial daría el mismo 1.
+    expect(registro.prepares.length, "no hubo `prepare`: el recorrido no llegó al pago").toBe(1);
+    const cuerpo = registro.prepares[0] ?? {};
+    expect(cuerpo.sessionToken, "el `prepare` no llevó la sesión").toBeTypeOf("string");
+    expect(
+      Object.hasOwn(cuerpo, "popChallenge"),
+      "viajaron las DOS credenciales: el gateway no está eligiendo, está mandando todo",
+    ).toBe(false);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// 7 · W3.4 — LA RECARGA SE LLEVA LA SESIÓN, Y ESO ES EL AC-3-5
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+describe("W3.4 · la sesión NO sobrevive a una recarga (AC-3-5)", () => {
+  // MUTANTE QUE LO MATA: persistir la sesión en `localStorage` dentro de `InMemorySesionStore`
+  // (escribirla en `record` y leerla en `peek`) ⇒ (a) el token aparece en el disco del navegador y
+  // (b) el almacén NUEVO la encuentra. Las dos mitades se ponen rojas.
+  // ⛔ FALSO KILLED A EVITAR: un `it` que sólo mirara el almacén no prueba el recorrido. Acá el árbol
+  // se monta DOS veces y la segunda vuelta corre el recorrido entero otra vez.
+  it("T-372-W3-8: tras una recarga (almacén nuevo), la PRIMERA firma se vuelve a pedir y la sesión no está en ningún disco", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", "secreto-del-desafio");
+    vi.stubEnv("PAYOUT_SESSION_SECRET", "secreto-de-la-sesion-distinto");
+
+    // ── PRIMERA VISITA ────────────────────────────────────────────────────────────────────────────
+    expect(await entrarAlNavegadorDeLaBilletera()).toBe("injected");
+    sembrarElCaminoPorEnlace();
+    const reg1 = registroVacio();
+    vi.stubGlobal("fetch", servidorDeLaApp({ emisorReal: true, conSesion: true, registro: reg1 }));
+    const antes = new InMemorySesionStore(new FixedClock());
+    const v1 = await recorridoInyectado(antes);
+    expect(v1.estadoFinal, "la primera visita no cerró: no hay sesión que perder").toBe("payout_submitted");
+    expect(v1.firmados.length, "la primera visita no llegó a usar la sesión").toBe(1);
+
+    // 🔴 (a) LA SESIÓN NO QUEDÓ EN NINGÚN DISCO DEL NAVEGADOR. Es la mitad que mata al mutante.
+    const token = String((reg1.prepares[0] ?? {}).sessionToken ?? "");
+    expect(token, "no viajó ninguna sesión: no hay nada que buscar en el disco").not.toBe("");
+    expect(
+      JSON.stringify({ ...window.localStorage }),
+      "la sesión quedó escrita en `localStorage`: sobreviviría a la recarga y sería una credencial " +
+        "al portador at-rest en el navegador",
+    ).not.toContain(token);
+    expect(JSON.stringify({ ...window.sessionStorage }), "la sesión quedó en `sessionStorage`").not.toContain(
+      token,
+    );
+    expect(document.cookie, "la sesión quedó en una cookie").not.toContain(token);
+    expect(window.location.href, "la sesión quedó en la URL").not.toContain(token);
+
+    // ── LA RECARGA: árbol nuevo, almacén nuevo, y el recorrido entero otra vez ────────────────────
+    cleanup();
+    solanaWalletBridge.reset();
+    quitarWalletInyectada();
+    const despues = new InMemorySesionStore(new FixedClock());
+    expect(
+      despues.peek(FAKE_SOLANA_BENEFICIARY),
+      "un almacén NUEVO encontró la sesión de la visita anterior: entonces sobrevive a la recarga y " +
+        "la primera firma se saltearía",
+    ).toBeNull();
+
+    expect(await entrarAlNavegadorDeLaBilletera()).toBe("injected");
+    sembrarElCaminoPorEnlace();
+    const reg2 = registroVacio();
+    vi.stubGlobal("fetch", servidorDeLaApp({ emisorReal: true, conSesion: true, registro: reg2 }));
+    const v2 = await recorridoInyectado(despues);
+
+    expect(v2.estadoFinal, "la segunda visita no cerró").toBe("payout_submitted");
+    expect(
+      v2.firmados.length,
+      "tras la recarga no se volvió a pedir la PRIMERA firma: la sesión sobrevivió y AC-3-5 está roto",
+    ).toBe(1);
+    expect(v2.firmados[0], "lo que se volvió a firmar no es la prueba de posesión del connect").toContain(
+      "Chaski Proof-of-Possession",
+    );
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// 8 · W3.5 — LA CUARTA FRASE DEL COPY ES VERDADERA, Y ACÁ ESTÁ SU TESTIGO
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 SIN ESTE `it`, LA FRASE 4 ES PROSA. El copy le dice a la persona: *"Si te la volvemos a pedir, es
+// por lo mismo: confirmar que es tuya."* Eso es una afirmación falsable sobre TODA firma que la app le
+// pida, y lo que la vuelve verdadera es que el único mensaje que se manda a firmar sea el que
+// construye el constructor de mensajes de posesión.
+//
+// ⛔ EL `it` IMPORTA `buildSolanaPopMessage` Y `verifySolanaPopChallenge`: NO reescribe el mensaje a
+// mano. Un `toContain("Chaski Proof-of-Possession")` con el literal escrito acá sería el guard
+// leyéndose a sí mismo, y pasaría con cualquier mensaje que empezara igual y siguiera con un monto.
+describe("W3.5 · toda firma que la app pide es una prueba de posesión (AC-3-6, frase 4)", () => {
+  // MUTANTE QUE LO MATA: en `../infrastructure/auth/http-pop-signer.ts`, firmar un mensaje arbitrario
+  // en vez del `popMessage` que el servidor emitió ⇒ la reconstrucción con el constructor real deja
+  // de coincidir y esto se pone rojo.
+  // ⛔ FALSO KILLED A EVITAR: comparar sólo el prefijo. Se compara el mensaje ENTERO, reconstruido
+  // desde el challenge que el emisor REAL firmó.
+  it("T-372-W3-10b: cada mensaje firmado es EXACTAMENTE el que construye `buildSolanaPopMessage`, y no lleva monto ni beneficiario", async () => {
+    vi.stubEnv("PAYOUT_POP_SECRET", "secreto-del-desafio");
+    expect(await entrarAlNavegadorDeLaBilletera()).toBe("injected");
+    sembrarElCaminoPorEnlace();
+    const registro = registroVacio();
+    vi.stubGlobal("fetch", servidorDeLaApp({ emisorReal: true, registro }));
+
+    // ⛔ SIN sesión: así se ejercitan las DOS firmas y la afirmación cubre las dos, no una.
+    const { firmados, estadoFinal } = await recorridoInyectado();
+    expect(estadoFinal, "el recorrido no cerró: no se ejercitaron todas las firmas").toBe("payout_submitted");
+    expect(firmados.length, "no se midió ninguna firma: este `it` estaría vacío").toBe(2);
+    expect(registro.desafios.length, "el emisor real no emitió los desafíos que el cliente firmó").toBe(2);
+
+    // 🔴 LA AFIRMACIÓN: cada mensaje firmado se RECONSTRUYE con el constructor de producción a partir
+    // del challenge que el emisor de producción firmó. Si el cliente firmara otra cosa, no coincide.
+    const reconstruidos = registro.desafios.map((d) => {
+      const ch = verifySolanaPopChallenge(d.popChallenge, Date.now());
+      if (!ch) throw new Error("el emisor real produjo un challenge que su propio verificador rechaza");
+      return buildSolanaPopMessage(ch);
+    });
+    expect(
+      firmados,
+      "la app mandó a firmar algo que NO es el mensaje de posesión que el servidor emitió: la frase " +
+        '"si te la volvemos a pedir, es por lo mismo" sería falsa',
+    ).toEqual(reconstruidos);
+
+    // Y lo que esos mensajes NO contienen, que es la otra mitad de la frase: no mueven plata.
+    for (const m of firmados) {
+      expect(m, "el mensaje firmado lleva el monto del envío").not.toContain("400");
+      expect(m, "el mensaje firmado lleva el destino del beneficiario").not.toContain("999888777");
+      expect(m, "el mensaje firmado lleva el nombre del beneficiario").not.toContain("Mamá");
+    }
+
+    // CONTROL POSITIVO DEL INSTRUMENTO: la reconstrucción SABE distinguir. Si `buildSolanaPopMessage`
+    // devolviera siempre lo mismo, la igualdad de arriba pasaría con cualquier par de firmas.
+    expect(reconstruidos[0], "los dos desafíos produjeron el MISMO mensaje: el instrumento no distingue").not.toBe(
+      reconstruidos[1],
+    );
   });
 });

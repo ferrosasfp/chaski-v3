@@ -254,7 +254,7 @@ export async function POST(req: Request): Promise<Response> {
   // ⚠️ PERO LA RAZÓN ESCRITA NO ESTÁ MEDIDA, y así queda dicha (re-AR it2 · MNR-4). Decía que `expired`
   // «es más informativo que "no hay credencial"», y HOY ESA INFORMACIÓN NO LA CONSUME NADIE: el cliente
   // colapsa los tres motivos en un solo `outcome:"absent"` (`ABSENT_REASONS` incluye `"expired"`,
-  // (`ABSENT_REASONS`, `../../../../src/infrastructure/kyc/http-kyc-verdict-gateway.ts:42`)), y los dos
+  // (`ABSENT_REASONS`, `../../../../src/infrastructure/kyc/http-kyc-verdict-gateway.ts:48`)), y los dos
   // únicos lectores miran el `outcome` y nunca el `reason` (`start-kyc.ts:109`, `flow.tsx:355`; grep
   // sobre `src/presentation` + `src/application`: cero ramas por `reason`). ⇒ el orden es defendible
   // igual —vencido+sin credencial es `expired`, vigente+sin credencial es `absent`— pero lo que lo

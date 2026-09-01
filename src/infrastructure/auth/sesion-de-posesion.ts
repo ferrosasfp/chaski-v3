@@ -2,7 +2,7 @@
 //
 // 🔴 QUÉ PROBLEMA RESUELVE. Hoy se piden DOS firmas de billetera que prueban lo mismo: que la
 // dirección es suya. Una la pide `ConnectWallet` para el veredicto de KYC
-// (`HttpKycVerdictGateway`, `../kyc/http-kyc-verdict-gateway.ts:55`); la otra, el gateway del depósito
+// (`HttpKycVerdictGateway`, `../kyc/http-kyc-verdict-gateway.ts:61`); la otra, el gateway del depósito
 // antes de `POST /api/payout/prepare`. Las dos existen porque **la app no tiene sesión**: cada request
 // re-prueba la posesión desde cero. Este módulo emite esa sesión y `prepare` acepta la prueba YA hecha.
 //

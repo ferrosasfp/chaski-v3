@@ -65,7 +65,7 @@ const BASE: Record<BilleteraDeeplink, string> = {
  * permite que el resto del archivo no sepa con cuál está hablando; y los dos tienen candado por
  * separado: el host lo miran los `it.each` de `T-DL-1/4/5` y el nombre de la respuesta, `T-DL-2`.
  */
-const CLAVE_EN_RESPUESTA: Record<BilleteraDeeplink, string> = {
+export const CLAVE_EN_RESPUESTA: Record<BilleteraDeeplink, string> = { // WKH-373: SE EXPORTA, y es el mismo motivo por el que ya se exporta `PARAMS_DE_RESPUESTA` de acá abajo — el renglón `href al leer` de `?diag=1` informa la PRESENCIA de la clave de cifrado en la vuelta, y copiar los dos nombres a mano en la pantalla sería una lista que envejece sola. ⛔ El mapa NO se toca: lo que sale de este módulo sigue siendo el mismo valor con el mismo candado (`T-DL-2`).
   phantom: "phantom_encryption_public_key",
   solflare: "solflare_encryption_public_key",
 };

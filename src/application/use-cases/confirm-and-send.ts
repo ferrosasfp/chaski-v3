@@ -284,7 +284,7 @@ export class ConfirmAndSend {
     }
   }
 
-  async execute(input: { remittanceId: string }): Promise<ResultadoDeEnvio> {
+  async execute(input: { remittanceId: string; hrefDeLaVuelta: string }): Promise<ResultadoDeEnvio> { // 🔴 WKH-373 — EL SEGUNDO CAMPO, EN ESTA MISMA LÍNEA (Δ0: este archivo tiene censos anclados a `:463`). ⛔ SIN `?`: es el href de la barra TAL COMO ESTABA AL MONTAR, y su único destino es `authorizePrincipal` (`:486`), que hasta WKH-373 lo leía de `globalThis.location` EN VIVO — o sea, ya limpiado por `limpiarLaBarra` (`../../presentation/flow.tsx:4023`). Este caso de uso ⛔ NO lo interpreta, ⛔ no lo parsea y ⛔ no lo reescribe: lo pasa tal cual, que es lo que hace que la aplicación NO dependa del orden entre dos archivos.
     const r = await this.repo.get(input.remittanceId);
     if (!r) throw new Error("remittance_not_found");
 
@@ -460,7 +460,7 @@ export class ConfirmAndSend {
     //     servidor acepta, de forma monótona. Eso vive server-side y fuera del scope de esta HU; del
     //     lado del cliente lo tapa la comparación de destino del motor de enlace, que es justamente por
     //     qué esa comparación no es una redundancia defensiva.
-    const pop = await this.solana.pop.pedir({ proposito: "pop-payout", direccion: address }); if (pop.estado === "no-se-puede") { await this.failAndRefund(r, pop.causa, "not_deposited"); return { estado: "listo", remesa: r }; } if (pop.estado === "hay-que-salir") return { estado: "hay-que-salir", irA: pop.irA, esperando: "firma-pop-payout" };     let prep: Awaited<ReturnType<SolanaPayoutPrepareGateway["prepare"]>>; // WKH-359/AC-2 — EL PASO DE LA PRUEBA DE POSESIÓN, PEGADO A LA LÍNEA QUE EXISTE y ⛔ ANTES DEL `try` de abajo. Δ0: hay [[CENSO src/application/use-cases/confirm-and-send.ts entrantes-desde-463=10]] citas ancladas de acá para abajo a [[CENSO src/application/use-cases/confirm-and-send.ts destinos-desde-463=4]] destinos y DOS de las emisoras viven en `flow.tsx`, el archivo de [[CENSO src/presentation/flow.tsx lineas=4453]] líneas con [[CENSO src/presentation/flow.tsx entrantes=155]] citas entrantes. ⚠️ Los cuatro son MARCADORES verificados: los de acá decían «8 a 3» contando sólo las externas, y los de `flow.tsx` decían «4268 líneas / 83 citas», que este mismo fix-pack volvió falso. ⛔ POR QUÉ NO ADENTRO DEL `try`: el `catch` de `:476` se lo comería y devolvería `prepare_unavailable`, o sea el diagnóstico de un prepare que nunca corrió — ése es exactamente el mutante de `T-067-3`. ⛔ Y POR QUÉ ANTES DE (`authorizePrincipal`, `:486`): `prepare` corta en 403 sin la prueba, así que pedirla después sería gastarle a la persona una firma de transacción para un POST ya condenado. En el camino inyectado esto contesta `no-corresponde` y no ejecuta ninguna línea nueva (AC-8)
+    const pop = await this.solana.pop.pedir({ proposito: "pop-payout", direccion: address }); if (pop.estado === "no-se-puede") { await this.failAndRefund(r, pop.causa, "not_deposited"); return { estado: "listo", remesa: r }; } if (pop.estado === "hay-que-salir") return { estado: "hay-que-salir", irA: pop.irA, esperando: "firma-pop-payout" };     let prep: Awaited<ReturnType<SolanaPayoutPrepareGateway["prepare"]>>; // WKH-359/AC-2 — EL PASO DE LA PRUEBA DE POSESIÓN, PEGADO A LA LÍNEA QUE EXISTE y ⛔ ANTES DEL `try` de abajo. Δ0: hay [[CENSO src/application/use-cases/confirm-and-send.ts entrantes-desde-463=10]] citas ancladas de acá para abajo a [[CENSO src/application/use-cases/confirm-and-send.ts destinos-desde-463=4]] destinos y DOS de las emisoras viven en `flow.tsx`, el archivo de [[CENSO src/presentation/flow.tsx lineas=4453]] líneas con [[CENSO src/presentation/flow.tsx entrantes=163]] citas entrantes. ⚠️ Los cuatro son MARCADORES verificados: los de acá decían «8 a 3» contando sólo las externas, y los de `flow.tsx` decían «4268 líneas / 83 citas», que este mismo fix-pack volvió falso. ⛔ POR QUÉ NO ADENTRO DEL `try`: el `catch` de `:476` se lo comería y devolvería `prepare_unavailable`, o sea el diagnóstico de un prepare que nunca corrió — ése es exactamente el mutante de `T-067-3`. ⛔ Y POR QUÉ ANTES DE (`authorizePrincipal`, `:486`): `prepare` corta en 403 sin la prueba, así que pedirla después sería gastarle a la persona una firma de transacción para un POST ya condenado. En el camino inyectado esto contesta `no-corresponde` y no ejecuta ninguna línea nueva (AC-8)
     try {
       prep = await this.solana.prepare.prepare({
         remittanceId: s.id,
@@ -486,7 +486,7 @@ export class ConfirmAndSend {
     const autorizacion = await this.wallet.authorizePrincipal(quote, s.id, {
       address: prep.result.beneficiary,
       escrow: { beneficiary: prep.result.beneficiary, authority: prep.result.authority },
-    });
+    }, input.hrefDeLaVuelta); // 🔴 WKH-373 — EL 4º ARGUMENTO, EN LA LÍNEA QUE EXISTE (Δ0). Va TAL CUAL desde `execute`: esta capa no sabe leer un href y no tiene por qué.
     // WKH-356/AC-1 — la SUSPENSIÓN sube TAL CUAL y no toca la remesa. Que quede persistida en
     // `confirmed` es la precondición de que la reanudación funcione: es el estado que el guard del
     // paso 1 vuelve re-ejecutable (AC-3). ⛔ NO la conviertas acá en un `failAndRefund`: nadie firmó

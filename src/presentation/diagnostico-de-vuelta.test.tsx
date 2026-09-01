@@ -40,6 +40,7 @@ import { FakeWallet, InMemoryRepo, RecorridoPorEnlaceNulo, T0, beneficiary } fro
 import { Remittance } from "../domain/remittance";
 import { Money } from "../domain/money";
 import { anotarCorteDeVuelta, anotarHito, leerHito, olvidarCorteDeVuelta, olvidarHitos, ultimoCorteDeVuelta } from "./bitacora-de-vuelta";
+import { anotarHuellaDeLaVuelta, anotarSitioDelCorte, HUELLA_ILEGIBLE, huella, olvidarElSitioDelCorte } from "../infrastructure/solana/deeplink/bitacora-del-corte";
 import { MAX_EDAD_MS } from "../infrastructure/solana/deeplink/sesion";
 import { MARCA_POP_KYC, MARCA_POP_PAYOUT } from "../infrastructure/solana/deeplink/pop-por-enlace";
 import { KEY as CLAVE_DEL_REPO } from "../infrastructure/persistence";
@@ -56,6 +57,8 @@ import {
   renglonDeLaRemesa,
   renglonDelPaso,
   renglonDelPop,
+  renglonDeLaVueltaDelNonce,
+  renglonDelNonce,
   retratoDelPop,
 } from "./diagnostico-de-vuelta";
 
@@ -190,6 +193,7 @@ beforeEach(() => {
   window.localStorage.clear();
   olvidarCorteDeVuelta();
   olvidarHitos(); // ⛔ los hitos son estado de MÓDULO: sin esto un `it` lee el desenlace del anterior
+  olvidarElSitioDelCorte(); // WKH-373: ídem, y por lo mismo — el sitio y la huella de la vuelta también son estado de módulo
   solanaWalletBridge.reset();
   vi.unstubAllEnvs();
 });
@@ -843,7 +847,7 @@ describe("el bloque de diagnóstico de la vuelta por enlace", () => {
   // TEXTO que alguien lee en un teléfono, y un campo de más, uno de menos o una etiqueta desalineada
   // no los ve ningún `toContain`. Los dos números que cambian entre corridas (el instante de la foto y
   // el de la decisión) se normalizan; ⛔ nada más se normaliza.
-  it("T-DIAG-CAPTURA: los quince renglones salen en una sola captura, con este texto exacto", async () => {
+  it("T-DIAG-CAPTURA: los diecinueve renglones salen en una sola captura, con este texto exacto", async () => {
     // 🔴 EL RELOJ SE PINCHA, Y NO ES COMODIDAD: `exp` son SEGUNDOS y `Date.now()` son MILISEGUNDOS, así
     // que entre sembrar el ancla y renderizar pasa una fracción de segundo y `exp=vigente(+5m12s)` cae
     // a `+5m11s` cuando el redondeo cruza. MEDIDO: la primera forma de este `it` alternaba entre los
@@ -893,10 +897,18 @@ describe("el bloque de diagnóstico de la vuelta por enlace", () => {
         `viaje.direccion : ${DIRECCION.slice(0, 6)}…${DIRECCION.slice(-4)}`,
         `viaje.remesa    : ${REM_UUID.slice(0, 6)}…${REM_UUID.slice(-4)} · repo: confirmed`,
         "pop             : pop-kyc cuenta=misma firma=no usado=no exp=vigente(+5m12s)",
+        // 🔴 WKH-373 — LOS TRES RENGLONES NUEVOS DE ARRIBA DEL BLOQUE. `no corrió` y `—` son los
+        // valores CORRECTOS acá y no un hueco: este `it` anota cuatro hitos a mano, ⛔ no monta
+        // `RemittanceFlow` (así que nadie anotó los dos hitos del href) y ⛔ no siembra `CLAVE_NONCE`.
+        // Que la AUSENCIA se distinga de un veredicto es la misma disciplina que el renglón quince.
+        // El contenido de los tres, con el disco sembrado, lo miden los `it` de `T-373-DIAG-*`.
+        "href al leer    : montaje=no corrió · confirm=no corrió",
+        "nonce ancla     : —",
+        "nonce vuelta    : —",
         "pantalla        : bienvenida",
         "connect         : listo",
         "continuacion    : vuelta: corriendo",
-        "corte           : sin corte",
+        "corte           : sin corte @ —", // WKH-373: el CÓDIGO DE SITIO pegado a la causa. `—` = ningún sitio escribió un corte en esta carga; los siete emisores de `deeplink_tx_alterada` lo escriben con un valor distinto cada uno.
         "error           : remittance_not_found",
         // WKH-372/W1 — EL RENGLÓN QUINCE. Este `it` es lo que hace que agregar un renglón al bloque
         // NO se pueda hacer en silencio: se puso rojo con `expected […] to include …` en cuanto el
@@ -912,5 +924,105 @@ describe("el bloque de diagnóstico de la vuelta por enlace", () => {
     );
     // Y el bloque es VISIBLE, no un nodo escondido: una captura tiene que poder mostrarlo.
     expect(screen.getByText(/DIAG · vuelta por enlace/)).toBeVisible();
+  });
+});
+
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-373 · LOS CUATRO RENGLONES QUE SEPARAN LAS CUATRO HIPÓTESIS
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ PROBLEMA RESUELVEN, Y POR QUÉ SIN ELLOS HABÍA QUE PROBAR CUATRO VECES EN UN TELÉFONO. El
+// copy `deeplink_tx_alterada` lo escriben SIETE sitios con el MISMO string, y el `||` de
+// (`mensaje`, `../infrastructure/solana/deeplink/conexion.ts:568`) funde además dos hipótesis con
+// arreglos opuestos. Desde la pantalla, «la barra se limpió antes de leer la vuelta», «el ancla se
+// pisó», «la billetera devolvió algo que no parsea» y «la clave de cifrado no es la anclada» dan
+// exactamente la misma captura.
+describe("WKH-373: los renglones del ancla del nonce, la vuelta y el sitio del corte", () => {
+  const CLAVE_NONCE = "chaski.billetera.nonce.v1";
+  const MENSAJE = "AQABAmVzdG8tZXMtdW4tbWVuc2FqZS1kZS1wcnVlYmE=";
+
+  // ⛔ EL PRIMERO Y EL MÁS IMPORTANTE: es la ÚNICA medición que dice si el consumidor de la vuelta del
+  // DEPÓSITO recibió la respuesta o una URL ya limpiada. MUTANTE QUE MATA: en `flow.tsx`, pasarle a
+  // `execute()` `window.location.href` en vez de `hrefAlMontar` ⇒ el renglón dice `dl=— nonce=no
+  // data=no` y este `it` cae.
+  it("T-373-DIAG-1: `href al leer` informa lo que trae el href de CADA consumidor, y ⛔ nunca el href", () => {
+    barra(VUELTA_CON_DIAG);
+    anotarHito("href-al-montar", "dl=firmar-tx nonce=sí data=sí key=no");
+    anotarHito("href-al-reanudar", "dl=firmar-tx nonce=sí data=sí key=no");
+    render(<DiagnosticoDeVuelta />);
+    expect(textoDelBloque()).toContain("href al leer    : montaje=dl=firmar-tx nonce=sí data=sí key=no · confirm=dl=firmar-tx nonce=sí data=sí key=no");
+  });
+
+  it("T-373-DIAG-1b: sin hito, el renglón dice `no corrió` y ⛔ no lo confunde con `no trae nada`", () => {
+    barra(VUELTA_CON_DIAG);
+    render(<DiagnosticoDeVuelta />);
+    expect(textoDelBloque()).toContain("href al leer    : montaje=no corrió · confirm=no corrió");
+  });
+
+  // 🔴 EL RENGLÓN DEL ANCLA, Y SU REGLA DURA: sale la HUELLA y ⛔ NUNCA los bytes. La regla 1 de este
+  // archivo prohíbe volcar contenido de las anclas, y un hash la respeta.
+  it("T-373-DIAG-2: `nonce ancla` trae `consumido`, la edad y la HUELLA, y ⛔ NO el `mensajeBase64`", () => {
+    barra(VUELTA_CON_DIAG);
+    window.localStorage.setItem(
+      CLAVE_NONCE,
+      JSON.stringify({ mensajeBase64: MENSAJE, desde: Date.now() - 42_000, consumido: true }),
+    );
+    render(<DiagnosticoDeVuelta />);
+    const texto = textoDelBloque() ?? "";
+    expect(texto).toContain(`nonce ancla     : consumido=sí edad 42s huella=${huella(MENSAJE)}`);
+    // ⛔ EL SECRETO NO SALIÓ. Sin esta mitad el `it` de arriba pasaría igual con el ancla volcada entera.
+    expect(texto, "el bloque volcó el `mensajeBase64` del ancla").not.toContain(MENSAJE);
+    // Y la huella NO es el valor: 12 hex, y distinta del texto que resume.
+    expect(huella(MENSAJE)).toMatch(/^[0-9a-f]{12}$/);
+  });
+
+  it("T-373-DIAG-2b: sin ancla dice `—`, y un ancla que no parsea dice `ILEGIBLE` (no son lo mismo)", () => {
+    barra(VUELTA_CON_DIAG);
+    expect(renglonDelNonce(null, Date.now())).toBe("—");
+    expect(renglonDelNonce("{no es json", Date.now())).toBe("ILEGIBLE (hay ancla y no parsea)");
+    expect(renglonDelNonce(JSON.stringify({ desde: 1 }), Date.now())).toBe("ILEGIBLE (hay ancla y no trae bytes)");
+  });
+
+  // 🔴 LAS DOS HUELLAS JUNTAS SON EL DISCRIMINANTE, y por eso este `it` mide las DOS: dos huellas
+  // legibles y DISTINTAS = el ancla se pisó; `ILEGIBLE` = la billetera devolvió algo que no parsea.
+  it("T-373-DIAG-3: `nonce vuelta` al lado de `nonce ancla` separa «ancla pisada» de «vuelta ilegible»", () => {
+    barra(VUELTA_CON_DIAG);
+    window.localStorage.setItem(CLAVE_NONCE, JSON.stringify({ mensajeBase64: MENSAJE, desde: Date.now() }));
+    anotarHuellaDeLaVuelta(huella("OTRO-MENSAJE-DISTINTO"));
+    render(<DiagnosticoDeVuelta />);
+    const texto = textoDelBloque() ?? "";
+    expect(texto).toContain(`nonce ancla     : consumido=no edad 0s huella=${huella(MENSAJE)}`);
+    expect(texto).toContain(`nonce vuelta    : ${huella("OTRO-MENSAJE-DISTINTO")}`);
+    // CD-18 — el fixture fabricó el caso: las dos huellas son DISTINTAS. Sin esta mitad, un renglón
+    // que imprimiera dos veces la misma cosa pasaría igual y no discriminaría nada.
+    expect(huella("OTRO-MENSAJE-DISTINTO")).not.toBe(huella(MENSAJE));
+    cleanup();
+    olvidarElSitioDelCorte();
+    anotarHuellaDeLaVuelta(HUELLA_ILEGIBLE);
+    render(<DiagnosticoDeVuelta />);
+    expect(textoDelBloque()).toContain("nonce vuelta    : ILEGIBLE");
+  });
+
+  it("T-373-DIAG-3b: sin ninguna vuelta leída dice `—`, que ⛔ no es `ILEGIBLE`", () => {
+    expect(renglonDeLaVueltaDelNonce(null)).toBe("—");
+    expect(renglonDeLaVueltaDelNonce(HUELLA_ILEGIBLE)).toBe("ILEGIBLE");
+  });
+
+  // 🔴 EL CÓDIGO DE SITIO. MUTANTE QUE MATA: borrar el `anotarSitioDelCorte(...)` de cualquiera de los
+  // siete emisores ⇒ su captura vuelve a decir `@ —` y no se puede saber cuál fue.
+  it("T-373-DIAG-4: `corte @` dice CUÁL de los siete emisores escribió la causa", () => {
+    barra(VUELTA_CON_DIAG);
+    anotarCorteDeVuelta("deeplink_tx_alterada");
+    anotarSitioDelCorte("E2b-nonce-bytes-distintos");
+    render(<DiagnosticoDeVuelta />);
+    expect(textoDelBloque()).toContain("corte           : deeplink_tx_alterada @ E2b-nonce-bytes-distintos");
+  });
+
+  it("T-373-DIAG-4b: sin sitio anotado dice `@ —`, y ⛔ no inventa uno", () => {
+    barra(VUELTA_CON_DIAG);
+    anotarCorteDeVuelta("deeplink_tx_alterada");
+    render(<DiagnosticoDeVuelta />);
+    expect(textoDelBloque()).toContain("corte           : deeplink_tx_alterada @ —");
   });
 });

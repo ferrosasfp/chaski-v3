@@ -93,7 +93,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       new FakeRefundGateway(),
       { prepare, gateway, probe: new FakeSolanaEscrowDepositProbe(),
         senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace() },
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" });
 
     // Orden REAL de invocación: prepare ANTES de firmar ANTES de settle.
     expect(firstCallOrder(prepareSpy)).toBeLessThan(firstCallOrder(authorizeSpy));
@@ -133,7 +133,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       new FakeRefundGateway(),
       { prepare, gateway, probe: new FakeSolanaEscrowDepositProbe(),
         senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace() },
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" });
 
     expect(prepareSpy).toHaveBeenCalledTimes(1);
     // Y sigue corriendo ANTES de que la billetera firme y ANTES del broadcast: si esto se invirtiera,
@@ -167,7 +167,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       new FakeRefundGateway(),
       { prepare, gateway: new FakeSolanaSettlementGateway(), probe: new FakeSolanaEscrowDepositProbe(),
         senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace() },
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" });
 
     expect(
       prepareSpy.mock.calls.length,
@@ -190,7 +190,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       new FakeRefundGateway(),
       { prepare, gateway: new FakeSolanaSettlementGateway(), probe: new FakeSolanaEscrowDepositProbe(),
         senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace() },
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(prepareSpy).not.toHaveBeenCalled();
     expect(out.snapshot.failureReason).toBe("quote_expired_before_submit");
@@ -217,7 +217,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       refund,
       { prepare, gateway, probe: new FakeSolanaEscrowDepositProbe(),
         senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace() },
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(authorizeSpy).not.toHaveBeenCalled(); // AC-7: NUNCA se pidió la firma
     expect(settleSpy).not.toHaveBeenCalled();
@@ -243,7 +243,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
         probe: new FakeSolanaEscrowDepositProbe(),
         senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace(),
       },
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     // DT-7/DT-11: el use-case ya ni recibe el PayoutGateway; este spy no puede dispararse ni por
     // accidente. El PEN lo libera el proveedor al detectar el depósito on-chain.
@@ -270,7 +270,7 @@ describe("ConfirmAndSend — orden de los guards del camino no-custodial (WKH-21
       new FakeRefundGateway(),
       { prepare: new FakeSolanaPayoutPrepareGateway(), gateway, probe: new FakeSolanaEscrowDepositProbe(),
         senderBalance: new FakeSolanaSenderSolBalanceProbe(), pop: new FakePruebaDePosesionPorEnlace() },
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(out.snapshot.principalTx).toBeNull();
     expect(out.snapshot.failureReason).toBe("solana_settle_rejected");

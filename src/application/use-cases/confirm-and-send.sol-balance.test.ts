@@ -98,6 +98,7 @@ describe("ConfirmAndSend — guard de rent: el SOL del remitente ANTES de armar 
 
     const out = esperarListo(await build(repo, wallet, prepare, gateway, senderBalance).execute({
       remittanceId: id,
+      hrefDeLaVuelta: "https://chaski.test/enviar",
     }));
 
     // 1. El reason es SUYO. No es "payout_failed", no es PRINCIPAL_STATE_UNKNOWN, no es un 502 del
@@ -131,7 +132,7 @@ describe("ConfirmAndSend — guard de rent: el SOL del remitente ANTES de armar 
       prepare,
       gateway,
       new FakeSolanaSenderSolBalanceProbe(1_000_000_000), // 1 SOL
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(out.snapshot.status).toBe("payout_submitted");
     expect(out.snapshot.failureReason).toBeFalsy();
@@ -153,7 +154,7 @@ describe("ConfirmAndSend — guard de rent: el SOL del remitente ANTES de armar 
       new FakeSolanaPayoutPrepareGateway(),
       new FakeSolanaSettlementGateway(),
       new FakeSolanaSenderSolBalanceProbe(SENDER_MIN_LAMPORTS_FOR_DEPOSIT),
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(out.snapshot.status).toBe("payout_submitted");
     expect(wallet.authorizeCalls).toHaveLength(1);
@@ -175,7 +176,7 @@ describe("ConfirmAndSend — guard de rent: el SOL del remitente ANTES de armar 
       new FakeSolanaPayoutPrepareGateway(),
       new FakeSolanaSettlementGateway(),
       new FakeSolanaSenderSolBalanceProbe(0, "reject"), // el 0 no se lee: el probe ni contesta
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(out.snapshot.failureReason).not.toBe(SOLANA_SENDER_SOL_INSUFFICIENT);
     expect(out.snapshot.status).toBe("payout_submitted");
@@ -193,7 +194,7 @@ describe("ConfirmAndSend — guard de rent: el SOL del remitente ANTES de armar 
       new FakeSolanaPayoutPrepareGateway(),
       new FakeSolanaSettlementGateway(),
       new FakeSolanaSenderSolBalanceProbe(0, "unknown"),
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(out.snapshot.failureReason).not.toBe(SOLANA_SENDER_SOL_INSUFFICIENT);
     expect(out.snapshot.status).toBe("payout_submitted");

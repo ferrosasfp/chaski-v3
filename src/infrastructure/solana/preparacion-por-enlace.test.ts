@@ -1141,3 +1141,214 @@ describe("HU-075/gesto: el `irA` del segundo salto", () => {
     expect(new URL(u.searchParams.get("redirect_link") as string).origin, "el salto no lleva por dónde volver").toBe(ORIGEN);
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-373 · LA COSTURA REAL DEL PASO DEL NONCE: el ESCRITOR de verdad contra el LECTOR de verdad
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 EL HUECO QUE ESTE BLOQUE CIERRA, Y POR QUÉ NINGÚN `it` ANTERIOR LO CUBRÍA. Las dos mitades del
+// paso del nonce estaban probadas por separado y ninguna contra la otra:
+//   · (`crearCuentaDeNonce`, `./preparacion-por-enlace.ts:351`) tiene su `it` unos bloques más arriba,
+//     que verifica que el ancla se guarde y con qué blockhash;
+//   · (`vueltaDelNonce`, `./deeplink/conexion.ts:528`) tiene los suyos en `./deeplink/conexion.test.ts`,
+//     y su fixture es un `SystemProgram.transfer` SINTÉTICO de una cuenta a sí misma
+//     ((`transaccion`, `./deeplink/conexion.test.ts:514`)) — ⛔ **no** la transacción que
+//     `construirCreacionDeNonce` arma de verdad. El bloque de `T-065-17` de más arriba hace lo mismo:
+//     siembra `CLAVE_NONCE` a mano con `transaccionFirmada()`.
+// ⇒ La costura entre el escritor REAL y el lector REAL no la ejercitaba nadie, y es exactamente la que
+// el founder pisó primero: hasta su recorrido, el paso 2-BIS **no tenía medición en ningún teléfono**.
+//
+// ⚠️ Y QUÉ **NO** AFIRMA ESTE BLOQUE: no afirma que la creación funcione en un teléfono. Afirma que
+// las dos mitades encajan byte a byte cuando la billetera devuelve lo que se le mandó a firmar, que es
+// la precondición de todo lo demás y la única mitad que un runner puede medir.
+describe("WKH-373 · `crearCuentaDeNonce` ↔ `vueltaDelNonce`, ida y vuelta REAL", () => {
+  const CLAVE_NONCE = "chaski.billetera.nonce.v1";
+  const SENDER = Keypair.generate();
+  const BLOCKHASH_A = Keypair.generate().publicKey.toBase58();
+  const BLOCKHASH_B = Keypair.generate().publicKey.toBase58();
+
+  /** La cadena de mentira: `getAccountInfo` contesta `null` (la cuenta todavía no existe). */
+  function cuentaAusente() {
+    vi.spyOn(Connection.prototype, "getAccountInfo").mockImplementation((async () => null) as never);
+  }
+
+  function fijarBlockhash(valor: string) {
+    vi.spyOn(Connection.prototype, "getLatestBlockhash").mockResolvedValue({
+      blockhash: valor,
+      lastValidBlockHeight: 1,
+    } as never);
+  }
+
+  /** Deja el viaje CONECTADO por camino de producción y devuelve el canal para hablarle a la app. */
+  async function conectar(nav: ReturnType<typeof montarNavegador>) {
+    const billetera = nacl.box.keyPair();
+    const recorrido = new RecorridoPorEnlaceReal();
+    const q = new URL(recorrido.elegir({ billetera: "phantom", remittanceId: REM }).irA).searchParams;
+    const publicaDeLaApp = bs58.decode(q.get("dapp_encryption_public_key") as string);
+    const redirectLink = q.get("redirect_link") as string;
+    nav.navegarA(
+      hrefDeVuelta(
+        redirectLink,
+        respuestaDeLaBilletera({ public_key: SENDER.publicKey.toBase58(), session: "s" }, publicaDeLaApp, billetera),
+      ),
+    );
+    await recorrido.completar({ remittanceId: REM });
+    return { recorrido, publicaDeLaApp, redirectLink, billetera };
+  }
+
+  /**
+   * ⛔ ABRE EL SOBRE QUE SALE HACIA LA BILLETERA. Es lo que vuelve REAL a este bloque: la transacción
+   * que se firma NO se fabrica acá, se saca de la URL que produjo `crearCuentaDeNonce`. Un fixture que
+   * la armara a mano volvería a medir dos mitades que nunca se tocan.
+   */
+  function transaccionQueSeMandoAFirmar(irA: string, publicaDeLaApp: Uint8Array, billetera: nacl.BoxKeyPair): string {
+    const q = new URL(irA).searchParams;
+    const secreto = nacl.box.before(publicaDeLaApp, billetera.secretKey);
+    const abierto = nacl.box.open.after(
+      bs58.decode(q.get("payload") as string),
+      bs58.decode(q.get("nonce") as string),
+      secreto,
+    );
+    if (abierto === null) throw new Error("el sobre del salto no abrió: el fixture no habla el protocolo");
+    return (JSON.parse(new TextDecoder().decode(abierto)) as { transaction: string }).transaction;
+  }
+
+  /** El href con el que la billetera devuelve la transacción FIRMADA del paso del nonce. */
+  function vueltaConLaFirma(ctx: Awaited<ReturnType<typeof conectar>>, base58: string): string {
+    const u = new URL(
+      hrefDeVuelta(ctx.redirectLink, respuestaDeLaBilletera({ transaction: base58 }, ctx.publicaDeLaApp, ctx.billetera)),
+    );
+    u.searchParams.set(MARCA, "crear-nonce");
+    return u.toString();
+  }
+
+  /** Firma con el sender la tx que salió del sobre y la re-serializa, como haría la billetera. */
+  function firmarComoLaBilletera(base58: string): string {
+    const tx = Transaction.from(bs58.decode(base58));
+    tx.partialSign(SENDER);
+    return bs58.encode(tx.serialize({ requireAllSignatures: false, verifySignatures: false }));
+  }
+
+  it("T-373-4: la tx que la billetera devuelve es la que el ESCRITOR armó, y el LECTOR la acepta", async () => {
+    const nav = montarNavegador();
+    const ctx = await conectar(nav);
+    fijarBlockhash(BLOCKHASH_A);
+    cuentaAusente();
+    const { irA } = await ctx.recorrido.crearCuentaDeNonce({ direccion: SENDER.publicKey.toBase58(), remittanceId: REM });
+
+    const cruda = transaccionQueSeMandoAFirmar(irA, ctx.publicaDeLaApp, ctx.billetera);
+    // CD-18 — el fixture es la transacción REAL de la creación y no un `transfer` sintético: lleva el
+    // blockhash que este mismo `it` fijó y pide UNA sola firma (el sender es el `feePayer`).
+    const mensaje = Message.from(Transaction.from(bs58.decode(cruda)).serializeMessage());
+    expect(mensaje.recentBlockhash, "la tx del sobre no es la que se armó en esta invocación").toBe(BLOCKHASH_A);
+    expect(mensaje.header.numRequiredSignatures).toBe(1);
+    // Y es EXACTAMENTE la que el ancla describe: ésa es la costura que nadie medía.
+    const ancla = JSON.parse(nav.disco.get(CLAVE_NONCE) as string) as { mensajeBase64: string };
+    expect(Buffer.from(mensaje.serialize()).toString("base64")).toBe(ancla.mensajeBase64);
+
+    const envio = vi.spyOn(Connection.prototype, "sendRawTransaction").mockResolvedValue("firma-1" as never);
+    nav.navegarA(vueltaConLaFirma(ctx, firmarComoLaBilletera(cruda)));
+    const res = await ctx.recorrido.completar({ remittanceId: REM });
+
+    // El desenlace es `nonce-en-vuelo` porque `getAccountInfo` sigue contestando `null` (se transmitió
+    // y la red todavía no la confirma). ⛔ Lo que este `it` prohíbe es el OTRO desenlace: un corte.
+    expect(res, "la vuelta REAL del paso del nonce salió cortada").toEqual({ estado: "nonce-en-vuelo" });
+    expect(envio, "no se transmitió nada: la comparación de bytes cortó antes").toHaveBeenCalledTimes(1);
+  });
+
+  // ⛔ EL CONTROL NEGATIVO, y sin él el `it` de arriba no distingue «los bytes coinciden» de «nadie los
+  // compara»: con OTRA transacción bien cifrada por el mismo canal, la vuelta tiene que cortar.
+  it("T-373-4b: con OTRA transacción, la MISMA costura corta con `deeplink_tx_alterada`", async () => {
+    const nav = montarNavegador();
+    const ctx = await conectar(nav);
+    fijarBlockhash(BLOCKHASH_A);
+    cuentaAusente();
+    await ctx.recorrido.crearCuentaDeNonce({ direccion: SENDER.publicKey.toBase58(), remittanceId: REM });
+
+    const ajena = new Transaction({ feePayer: SENDER.publicKey, blockhash: BLOCKHASH_B, lastValidBlockHeight: 1 });
+    ajena.add(SystemProgram.transfer({ fromPubkey: SENDER.publicKey, toPubkey: SENDER.publicKey, lamports: 1 }));
+    ajena.partialSign(SENDER);
+    const envio = vi.spyOn(Connection.prototype, "sendRawTransaction").mockResolvedValue("firma-1" as never);
+    nav.navegarA(vueltaConLaFirma(ctx, bs58.encode(ajena.serialize({ requireAllSignatures: false, verifySignatures: false }))));
+
+    expect(await ctx.recorrido.completar({ remittanceId: REM })).toEqual({ estado: "corte", causa: "deeplink_tx_alterada" });
+    expect(envio, "se transmitió una transacción que no es la que se mandó a firmar").not.toHaveBeenCalled();
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  // WKH-373 · EL ANCLA DEL NONCE CONSERVA `consumido`
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  //
+  // 🔴 MUTANTE QUE MATA: en (`guardarPasoDelNonce`, `./deeplink/conexion.ts:461`), volver a
+  // `a.escribir(CLAVE_NONCE, JSON.stringify({ mensajeBase64, desde: ahora }))` — o sea el código de
+  // antes de esta HU. El `it` de acá abajo se pone rojo con el mensaje «el segundo toque de "Crear la
+  // cuenta" reseteó el anti-replay». ⛔ Y el mutante NO puede morir por un vecino: el `it` de control
+  // que le sigue exige lo CONTRARIO (que con bytes distintos el flag SÍ se resetee), así que un
+  // "arreglo" que conserve `consumido` siempre lo pone rojo a él.
+  it("T-373-2: un segundo «Crear la cuenta» con los MISMOS bytes NO resetea el anti-replay", async () => {
+    const nav = montarNavegador();
+    const ctx = await conectar(nav);
+    fijarBlockhash(BLOCKHASH_A);
+    cuentaAusente();
+    const { irA } = await ctx.recorrido.crearCuentaDeNonce({ direccion: SENDER.publicKey.toBase58(), remittanceId: REM });
+    const cruda = transaccionQueSeMandoAFirmar(irA, ctx.publicaDeLaApp, ctx.billetera);
+    const vuelta = vueltaConLaFirma(ctx, firmarComoLaBilletera(cruda));
+
+    const envio = vi.spyOn(Connection.prototype, "sendRawTransaction").mockResolvedValue("firma-1" as never);
+    nav.navegarA(vuelta);
+    expect((await ctx.recorrido.completar({ remittanceId: REM })).estado, "la primera vuelta no transmitió").toBe("nonce-en-vuelo");
+    expect(JSON.parse(nav.disco.get(CLAVE_NONCE) as string).consumido, "la vuelta no marcó el ancla").toBe(true);
+
+    // 🔴 EL SEGUNDO TOQUE. La persona vuelve a la tarjeta y toca «Crear la cuenta» otra vez: con el
+    // MISMO blockhash la transacción es IDÉNTICA, que es justo el caso en que la URL de vuelta vieja
+    // todavía casa byte a byte.
+    nav.navegarA(HREF);
+    const segundo = await ctx.recorrido.crearCuentaDeNonce({ direccion: SENDER.publicKey.toBase58(), remittanceId: REM });
+    // CD-18 — el fixture fabricó el caso: los bytes son los MISMOS. Sin esta mitad, un cambio de
+    // blockhash volvería verde este `it` por el camino equivocado.
+    expect(
+      transaccionQueSeMandoAFirmar(segundo.irA, ctx.publicaDeLaApp, ctx.billetera),
+      "el fixture armó OTRA transacción: este `it` mediría el caso de al lado",
+    ).toBe(cruda);
+    expect(
+      JSON.parse(nav.disco.get(CLAVE_NONCE) as string).consumido,
+      "el segundo toque de «Crear la cuenta» reseteó el anti-replay: la MISMA vuelta se puede volver a transmitir",
+    ).toBe(true);
+
+    // Y la consecuencia observable, que es lo que le importa a la persona: la vuelta vieja NO se
+    // vuelve a transmitir.
+    nav.navegarA(vuelta);
+    expect(await ctx.recorrido.completar({ remittanceId: REM })).toEqual({ estado: "corte", causa: "deeplink_nonce_ya_consumido" });
+    expect(envio, "se transmitió DOS veces la misma creación de cuenta").toHaveBeenCalledTimes(1);
+  });
+
+  // ⛔ EL CONTROL QUE IMPIDE QUE EL ARREGLO SE VUELVA UN BLOQUEO. Conservar `consumido` SIEMPRE dejaría
+  // a la persona sin poder volver a crear su cuenta hasta que venciera la ventana de 20 min: se cambia
+  // un agujero por una puerta cerrada. Con bytes DISTINTOS el flag se resetea, porque «esto ya se
+  // transmitió» deja de ser verdad sobre la transacción nueva.
+  it("T-373-2b: con OTRO blockhash el ancla es de OTRA transacción y `consumido` SÍ se resetea", async () => {
+    const nav = montarNavegador();
+    const ctx = await conectar(nav);
+    fijarBlockhash(BLOCKHASH_A);
+    cuentaAusente();
+    const { irA } = await ctx.recorrido.crearCuentaDeNonce({ direccion: SENDER.publicKey.toBase58(), remittanceId: REM });
+    const cruda = transaccionQueSeMandoAFirmar(irA, ctx.publicaDeLaApp, ctx.billetera);
+    vi.spyOn(Connection.prototype, "sendRawTransaction").mockResolvedValue("firma-1" as never);
+    nav.navegarA(vueltaConLaFirma(ctx, firmarComoLaBilletera(cruda)));
+    await ctx.recorrido.completar({ remittanceId: REM });
+    expect(JSON.parse(nav.disco.get(CLAVE_NONCE) as string).consumido).toBe(true);
+
+    nav.navegarA(HREF);
+    fijarBlockhash(BLOCKHASH_B); // el reintento pide un blockhash nuevo: OTRA transacción
+    const segundo = await ctx.recorrido.crearCuentaDeNonce({ direccion: SENDER.publicKey.toBase58(), remittanceId: REM });
+    const nueva = transaccionQueSeMandoAFirmar(segundo.irA, ctx.publicaDeLaApp, ctx.billetera);
+    expect(nueva, "el fixture no cambió la transacción: el control no controla nada").not.toBe(cruda);
+    expect(
+      JSON.parse(nav.disco.get(CLAVE_NONCE) as string).consumido,
+      "el ancla de una transacción NUEVA nació consumida: la persona no puede volver a crear su cuenta",
+    ).toBeUndefined();
+
+    nav.navegarA(vueltaConLaFirma(ctx, firmarComoLaBilletera(nueva)));
+    expect((await ctx.recorrido.completar({ remittanceId: REM })).estado, "el reintento legítimo quedó bloqueado").toBe("nonce-en-vuelo");
+  });
+});

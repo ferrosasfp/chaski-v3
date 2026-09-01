@@ -222,7 +222,7 @@ async function recorridoInyectado(): Promise<{ firmados: string[]; estadoFinal: 
       probe: new FakeSolanaEscrowDepositProbe(),
       senderBalance: new FakeSolanaSenderSolBalanceProbe(1_000_000_000),
       pop: enlace,
-    }).execute({ remittanceId: id }),
+    }).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }),
   );
   return { firmados, estadoFinal: remesa.snapshot.status, enlace: enlace.respuestas };
 }

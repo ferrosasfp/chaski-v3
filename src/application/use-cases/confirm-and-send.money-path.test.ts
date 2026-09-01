@@ -110,7 +110,7 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
     const submitSpy = vi.spyOn(payouts, "submit");
     const id = await seedQuoted(repo);
 
-    const out = esperarListo(await build(repo, wallet, prepare, gateway, payouts).execute({ remittanceId: id }));
+    const out = esperarListo(await build(repo, wallet, prepare, gateway, payouts).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     // prepare resolvió {beneficiary, authority} server-side (una sola llamada).
     expect(prepare.calls).toHaveLength(1);
@@ -230,12 +230,12 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
     });
 
     // Invocación 1: suspende. La remesa QUEDA en `confirmed`, que es la precondición de AC-3.
-    const primera = await uc.execute({ remittanceId: id });
+    const primera = await uc.execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" });
     expect(primera.estado).toBe("hay-que-salir");
     expect((await repo.get(id))?.status).toBe("confirmed");
 
     // Invocación 2: la reanudación. Cierra.
-    const segunda = esperarListo(await uc.execute({ remittanceId: id }));
+    const segunda = esperarListo(await uc.execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
     expect(segunda.status).toBe("payout_submitted");
 
     // EL COSTO, dicho con un número: DOS prepare ⇒ DOS órdenes de payout server-side, y la remesa se
@@ -268,7 +268,7 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
     const gateway = new FakeSolanaSettlementGateway();
     const id = await seedQuoted(repo);
 
-    const res = await build(repo, wallet, prepare, gateway).execute({ remittanceId: id });
+    const res = await build(repo, wallet, prepare, gateway).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" });
 
     // 1. El desenlace es `listo` y NO una suspensión: el camino inyectado no suspende nunca.
     expect(
@@ -329,7 +329,7 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
       new FakeSolanaWallet(),
       prepare,
       new FakeSolanaSettlementGateway(),
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(out.status).toBe("payout_submitted");
     expect(out.snapshot.payoutAgent).toEqual({
@@ -351,7 +351,7 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
       new FakeSolanaWallet(),
       new FakeSolanaPayoutPrepareGateway(),
       new FakeSolanaSettlementGateway(),
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(out.status).toBe("payout_submitted");
     expect(out.snapshot.payoutAgent).toBeNull();
@@ -366,6 +366,7 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
 
     const out = esperarListo(await build(repo, wallet, prepare, gateway, new FakePayoutGateway()).execute({
       remittanceId: id,
+      hrefDeLaVuelta: "https://chaski.test/enviar",
     }));
 
     expect(wallet.authorizeCalls).toHaveLength(0); // NUNCA firmó
@@ -384,6 +385,7 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
 
     const out = esperarListo(await build(repo, wallet, prepare, gateway, new FakePayoutGateway()).execute({
       remittanceId: id,
+      hrefDeLaVuelta: "https://chaski.test/enviar",
     }));
 
     expect(wallet.authorizeCalls).toHaveLength(1); // firmó (arma la ix deposit)
@@ -402,6 +404,7 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
 
     const out = esperarListo(await build(repo, wallet, prepare, gateway, new FakePayoutGateway()).execute({
       remittanceId: id,
+      hrefDeLaVuelta: "https://chaski.test/enviar",
     }));
 
     expect(out.snapshot.principalTx).toBeNull();
@@ -427,7 +430,7 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
       gateway,
       new FakePayoutGateway(),
       new LedgerRefundGateway(), // producción, no fake
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(out.status).toBe("payout_failed");
     expect(out.status).not.toBe("refunded");
@@ -447,6 +450,7 @@ describe("ConfirmAndSend — el money-path completo (HU-SOL-13)", () => {
 
     const out = esperarListo(await build(repo, wallet, prepare, gateway, new FakePayoutGateway()).execute({
       remittanceId: id,
+      hrefDeLaVuelta: "https://chaski.test/enviar",
     }));
 
     expect(gateway.calls).toHaveLength(0); // NUNCA broadcastea sin envelope
@@ -485,6 +489,7 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
 
     const out = esperarListo(await afterSettleFailure(repo, probe, throwingGateway()).execute({
       remittanceId: id,
+      hrefDeLaVuelta: "https://chaski.test/enviar",
     }));
 
     expect(out.snapshot.failureReason).toBe("solana_settle_unavailable");
@@ -500,6 +505,7 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
 
     const out = esperarListo(await afterSettleFailure(repo, probe, throwingGateway()).execute({
       remittanceId: id,
+      hrefDeLaVuelta: "https://chaski.test/enviar",
     }));
 
     expect(out.snapshot.failureReason).toBe(PRINCIPAL_SETTLED_REFUND_MANUAL);
@@ -520,6 +526,7 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
 
     const out = esperarListo(await afterSettleFailure(repo, probe, throwingGateway()).execute({
       remittanceId: id,
+      hrefDeLaVuelta: "https://chaski.test/enviar",
     }));
 
     expect(out.snapshot.failureReason).toBe(PRINCIPAL_STATE_UNKNOWN);
@@ -536,6 +543,7 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
 
     const out = esperarListo(await afterSettleFailure(repo, probe, throwingGateway()).execute({
       remittanceId: id,
+      hrefDeLaVuelta: "https://chaski.test/enviar",
     }));
 
     expect(out.snapshot.failureReason).toBe(PRINCIPAL_STATE_UNKNOWN);
@@ -554,7 +562,7 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
       reason: "solana_settle_unavailable",
     });
 
-    const out = esperarListo(await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id }));
+    const out = esperarListo(await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(probe.calls).toHaveLength(1);
     expect(out.snapshot.failureReason).toBe(PRINCIPAL_STATE_UNKNOWN);
@@ -569,7 +577,7 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
       reason: "solana_settle_unverified",
     });
 
-    const out = esperarListo(await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id }));
+    const out = esperarListo(await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(probe.calls).toHaveLength(1);
     expect(out.snapshot.failureReason).toBe(PRINCIPAL_SETTLED_REFUND_MANUAL);
@@ -584,7 +592,7 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
       reason: "solana_settle_broadcast_failed",
     });
 
-    const out = esperarListo(await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id }));
+    const out = esperarListo(await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(probe.calls).toHaveLength(1);
     expect(out.snapshot.failureReason).toBe(PRINCIPAL_SETTLED_REFUND_MANUAL);
@@ -600,7 +608,7 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
       const probe = new FakeSolanaEscrowDepositProbe("deposited"); // aunque dijera que sí
       const gateway = new FakeSolanaSettlementGateway({ ok: false, reason });
 
-      const out = esperarListo(await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id }));
+      const out = esperarListo(await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
       expect(probe.calls).toHaveLength(0);
       expect(out.snapshot.failureReason).toBe(reason);
@@ -624,7 +632,7 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
       const probe = new FakeSolanaEscrowDepositProbe("deposited"); // aunque dijera que sí
       const gateway = new FakeSolanaSettlementGateway({ ok: false, reason });
 
-      const out = esperarListo(await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id }));
+      const out = esperarListo(await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
       expect(probe.calls).toHaveLength(0);
       expect(out.snapshot.failureReason).toBe(reason);
@@ -652,7 +660,7 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
       reason: SOLANA_SETTLE_LEDGER_UNAVAILABLE,
     });
 
-    const out = esperarListo(await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id }));
+    const out = esperarListo(await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(probe.calls).toHaveLength(0);
     expect(out.snapshot.failureReason).toBe(SOLANA_SETTLE_LEDGER_UNAVAILABLE);
@@ -678,7 +686,7 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
       reason: "solana_settle_unavailable", // el 503 del timeout, POSTERIOR al broadcast
     });
 
-    const out = esperarListo(await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id }));
+    const out = esperarListo(await afterSettleFailure(repo, probe, gateway).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     // Se le preguntó a la cadena. Con el enum compartido en la lista, esto sería 0.
     expect(probe.calls).toHaveLength(1);
@@ -699,6 +707,7 @@ describe("ConfirmAndSend: sabemos que no entró / sabemos que sí / no pudimos a
 
     const out = esperarListo(await afterSettleFailure(repo, probe, throwingGateway()).execute({
       remittanceId: id,
+      hrefDeLaVuelta: "https://chaski.test/enviar",
     }));
     expect(out.snapshot.failureReason).toBe(PRINCIPAL_STATE_UNKNOWN);
 
@@ -734,7 +743,7 @@ describe("ConfirmAndSend — DT-8: sin `solana` inyectado (WKH-320)", () => {
       new FixedClock(),
       refund,
       // sin 6º arg: flag apagado / envs faltantes
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     // NUNCA 'confirmed' en silencio.
     expect(out.status).toBe("refunded");
@@ -758,7 +767,7 @@ describe("ConfirmAndSend — DT-8: sin `solana` inyectado (WKH-320)", () => {
         repo,
         new FixedClock(),
         new FakeRefundGateway(),
-      ).execute({ remittanceId: id }),
+      ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }),
     ).resolves.toBeDefined();
   });
 });
@@ -842,7 +851,7 @@ describe("WKH-354/AC-5 · una firma de B NO puede pagar un depósito emitido par
       // no-receipt porque `payout_failed` es el estado desde el que la persona todavía puede sacar
       // su plata, que es el que esta HU tiene que preservar.
       new FakeRefundGateway("no-receipt"),
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     // (1) el envío NO avanzó: quedó en el estado del que se puede salir.
     expect(out.snapshot.status).toBe("payout_failed");
@@ -878,7 +887,7 @@ describe("WKH-354/AC-5 · una firma de B NO puede pagar un depósito emitido par
       gateway,
       new FakePayoutGateway(),
       new FakeRefundGateway("no-receipt"),
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     // El doble NO rechaza siempre: con la misma cuenta contesta ok:true.
     expect(prepare.calls).toEqual([{ address: FAKE_SOLANA_BENEFICIARY }]);
@@ -909,6 +918,7 @@ describe("WKH-359 · el permiso del payout se consigue ANTES de `prepare` (AC-2,
 
     const r = await build(repo, wallet, prepare, gateway, undefined, undefined, undefined, undefined, pop).execute({
       remittanceId: id,
+      hrefDeLaVuelta: "https://chaski.test/enviar",
     });
 
     expect(r).toEqual({
@@ -929,7 +939,7 @@ describe("WKH-359 · el permiso del payout se consigue ANTES de `prepare` (AC-2,
     const repo = new InMemoryRepo();
     const pop = new FakePruebaDePosesionPorEnlace({ estado: "hay-que-salir", irA: "https://phantom.app/x" });
     const id = await seedQuoted(repo);
-    await build(repo, new FakeSolanaWallet(), new FakeSolanaPayoutPrepareGateway(), new FakeSolanaSettlementGateway(), undefined, undefined, undefined, undefined, pop).execute({ remittanceId: id });
+    await build(repo, new FakeSolanaWallet(), new FakeSolanaPayoutPrepareGateway(), new FakeSolanaSettlementGateway(), undefined, undefined, undefined, undefined, pop).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" });
 
     expect(pop.llamadas).toHaveLength(1);
     expect(pop.llamadas[0]!.proposito, "un permiso del KYC no autoriza un payout (CD-15)").toBe("pop-payout");
@@ -947,6 +957,7 @@ describe("WKH-359 · el permiso del payout se consigue ANTES de `prepare` (AC-2,
 
     const r = await build(repo, new FakeSolanaWallet(), prepare, new FakeSolanaSettlementGateway(), undefined, undefined, undefined, undefined, pop).execute({
       remittanceId: id,
+      hrefDeLaVuelta: "https://chaski.test/enviar",
     });
 
     expect(r.estado, "con el emisor apagado el recorrido saltó igual a la billetera").toBe("listo");
@@ -966,7 +977,7 @@ describe("WKH-359 · el permiso del payout se consigue ANTES de `prepare` (AC-2,
     });
     const id = await seedQuoted(repo);
 
-    const out = esperarListo(await build(repo, new FakeSolanaWallet(), prepare, new FakeSolanaSettlementGateway(), undefined, undefined, undefined, undefined, pop).execute({ remittanceId: id }));
+    const out = esperarListo(await build(repo, new FakeSolanaWallet(), prepare, new FakeSolanaSettlementGateway(), undefined, undefined, undefined, undefined, pop).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(prepare.calls).toHaveLength(1);
     expect(prepare.calls[0]!.proof, "la prueba no viajó: el gateway va a pedirle otra al bridge vacío").toEqual({

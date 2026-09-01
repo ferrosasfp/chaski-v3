@@ -29,7 +29,7 @@ import type { Almacen, Viaje } from "./sesion";
 import { MARCA, MAX_EDAD_MS, enlaceDeVuelta, guardarViaje, interpretarVuelta, leerViaje } from "./sesion";
 import type { BilleteraDeeplink } from "./protocol";
 import { PARAMS_DE_RESPUESTA, clavePublicaEnRespuesta, leerRespuestaAnclada, nuevoParDeCifrado, secretoCompartido, soloTextos, urlConectar, urlFirmarTransaccion } from "./protocol";
-import type { CausaDeEnlace } from "./firma-por-enlace";
+import type { CausaDeEnlace } from "./firma-por-enlace"; import { anotarHuellaDeLaVuelta, anotarSitioDelCorte, HUELLA_ILEGIBLE, huella } from "./bitacora-del-corte"; /* WKH-373: el sitio del corte y la huella de la vuelta, EN ESTA MISMA LÍNEA (Δ0) */
 import {
   DEEPLINK_RECHAZADO, DEEPLINK_NONCE_YA_CONSUMIDO, DEEPLINK_NONCE_SIN_CONTEXTO, // WKH-358 (fix-pack · AR/BLQ-BAJO-2; la tercera, del re-AR it2 · BLQ-BAJO-1): las dos entran EN ESTA LÍNEA para no correr las citas por número que este archivo recibe. ⚠️ ACÁ DECÍA «las 4 (`:129`, `:149`, `:254`, `:400`)» Y YA ERA FALSO CUANDO SE ESCRIBIÓ: el propio fix-pack agregó una quinta al citar `vueltaDelNonce`. RE-MEDIDO en el árbol de este commit con el instrumento de `citas-ancladas.test.ts` (su regex `ANCLADA` + su resolución de destino, sumando entrantes largas y auto-citas ancladas): **13 ocurrencias a 7 destinos** (`:129` x2, `:149`, `:209` x2, `:254`, `:400` x2, `:461` x2, `:528` x3). El número es una foto y este mismo commit lo movió de 7 a 13 escribiendo comentarios; el invariante es que los 7 destinos apuntan más abajo de esta línea
   DEEPLINK_RESPUESTA_ILEGIBLE,
@@ -300,7 +300,7 @@ export function completarVuelta(p: PedidoDeConexion): VueltaDeConexion {
       // 🔒 ACÁ MUERE EL CONNECT FORJADO TARDÍO. El ancla `claveBilletera` es write-once
       // (`claveBilletera`, `sesion.ts:148`), así que una vez fijada ningún connect posterior la pisa.
       // Lo mide `T-065-3`.
-      return { tipo: "corte", causa: DEEPLINK_TX_ALTERADA };
+      anotarSitioDelCorte("E8-viaje-otra-clave"); return { tipo: "corte", causa: DEEPLINK_TX_ALTERADA }; // WKH-373: el sitio, EN ESTA MISMA LÍNEA (Δ0)
     case "rechazo":
       // El `origen` decide y no el `codigo`, por lo mismo que en el motor: el `errorCode` viaja SIN
       // cifrar y lo escribe quien arme la URL, así que un fallo de cripto NUESTRO no puede salir como
@@ -453,13 +453,13 @@ interface PasoDelNonce {
 }
 
 /**
- * ⚠️ TIRA si el disco no acepta el ancla, igual que (`guardarViaje`, `./sesion.ts:222`) y por la misma
- * razón: se llama ANTES del salto, y un ancla que no se pudo guardar significa que al volver no vamos
- * a poder comparar nada. Transmitir una transacción que no pudimos verificar contra lo que mandamos a
- * firmar es exactamente lo que esta ancla existe para impedir.
+ * ⚠️ TIRA si el disco no acepta el ancla, igual que (`guardarViaje`, `./sesion.ts:222`) y por la misma razón: se llama ANTES del salto, y un ancla que no se pudo guardar significa que al volver no vamos a poder comparar nada. Transmitir una transacción que no pudimos verificar contra lo que mandamos a firmar es exactamente lo que esta ancla existe para impedir.
+ * 🔴 WKH-373 — CONSERVA `consumido`, Y ANTES LO PERDÍA. Esto escribía el objeto ENTERO de cero (`{mensajeBase64, desde}` a secas), así que un segundo toque de «Crear la cuenta» —el botón es re-tocable: tiene guard de doble toque pero no de un solo uso, (`onCrear`, `../../../presentation/flow.tsx:4198`)— reponía el ancla SIN el flag y **reseteaba el anti-replay** que este paso tiene propio. Es exactamente el residual que el gemelo del DEPÓSITO ya tenía declarado y resuelto de esta misma forma: (`desde`, `./firma-por-enlace.ts:942`) escribe `desde: ancla?.desde ?? p.ahora` para que una invocación nueva no le reinicie la ventana al recorrido; acá el campo que no puede reiniciarse es `consumido`.
+ * 🔴 Y SE CONSERVA SÓLO CUANDO LOS BYTES SON LOS MISMOS, que es la única condición bajo la cual decir «esto ya se transmitió» sigue siendo VERDAD. Las dos mitades, y ninguna es de gusto: · MISMO `mensajeBase64` ⇒ el ancla describe LA MISMA transacción que ya se transmitió, así que una URL de vuelta vieja todavía puede casar byte a byte y transmitirla otra vez — ése es el replay, y su disparador es real: dos toques dentro de la vida de un mismo blockhash arman una tx IDÉNTICA. · BYTES DISTINTOS ⇒ es OTRA transacción, y lo que se consumió no dice nada de ella; conservar el flag ahí dejaría a la persona sin poder volver a crear su cuenta de nonce hasta que venciera la ventana de 20 min, o sea que arreglar el replay le cerraría el camino que funciona. ⛔ Eso no se hace: no se cambia un agujero por un bloqueo.
+ * ⚠️ LO QUE ESTO **NO** ARREGLA, y hay que decirlo para que nadie se apoye de más en el flag: la RANURA sigue siendo UNA. Si el salto B pisa el ancla del salto A mientras A sigue siendo contestable, la vuelta de A sale `deeplink_tx_alterada` sobre una firma que la persona SÍ dio. Es el mismo residual, con las mismas dos salidas, que (`guardarPreparado`, `./firma-por-enlace.ts:935`) declara para el depósito. Lo que sí cambia es que ahora el sitio del corte queda anotado (`E2b-nonce-bytes-distintos`) y la captura de `?diag=1` lo separa de las otras tres hipótesis.
  */
 export function guardarPasoDelNonce(a: Almacen, mensajeBase64: string, ahora: number): void {
-  a.escribir(CLAVE_NONCE, JSON.stringify({ mensajeBase64, desde: ahora } satisfies PasoDelNonce));
+  const previa = leerPasoDelNonce(a, ahora); a.escribir(CLAVE_NONCE, JSON.stringify({ mensajeBase64, desde: ahora, ...(previa?.mensajeBase64 === mensajeBase64 && previa.consumido === true ? { consumido: true } : {}) } satisfies PasoDelNonce)); // Δ0: las dos sentencias en la línea que ya existía. ⚠️ `leerPasoDelNonce` aplica la ventana y limpia la basura, y eso es lo correcto acá: un ancla que el lector de la vuelta ya no aceptaría tampoco puede aportar un `consumido` con sentido.
 }
 
 /** Borra el ancla del paso del nonce. NO tira: es limpieza. */
@@ -552,7 +552,7 @@ function vueltaDelNonce(p: PedidoDeConexion): VueltaDeConexion {
   // contra cualquier otra clave no abre. Lo que queda acá es DIAGNÓSTICO: con una clave en la URL que no es la anclada se dice
   // «alterada» y no «ilegible». El `errorCode` manda porque un rechazo explícito no es una alteración; y sin clave en la URL ese
   // mismo rechazo lo traduce igual `leerRespuestaAnclada`, que lo mira antes que nada.
-  const claveEnLaUrl = clavePublicaEnRespuesta(viaje.billetera, params); if (claveEnLaUrl !== null && claveEnLaUrl !== viaje.claveBilletera) return { tipo: "corte", causa: params.get("errorCode") ? DEEPLINK_RECHAZADO : DEEPLINK_TX_ALTERADA };
+  const claveEnLaUrl = clavePublicaEnRespuesta(viaje.billetera, params); if (claveEnLaUrl !== null && claveEnLaUrl !== viaje.claveBilletera) { anotarSitioDelCorte("E1-nonce-otra-clave"); return { tipo: "corte", causa: params.get("errorCode") ? DEEPLINK_RECHAZADO : DEEPLINK_TX_ALTERADA }; } // WKH-373: el sitio, EN ESTA MISMA LÍNEA (Δ0)
   const desenlace = leerRespuestaAnclada(params, lectura.secretaBytes, viaje.claveBilletera, soloTextos("transaction"));
   if (desenlace.tipo === "ninguno") return { tipo: "nada" }; // la marca estaba pero no hay respuesta
   if (desenlace.tipo === "rechazo") {
@@ -564,9 +564,9 @@ function vueltaDelNonce(p: PedidoDeConexion): VueltaDeConexion {
 
   // 5 · BYTES CONTRA BYTES. `null` acá es "no se pudo leer la transacción", que se trata igual que
   // "no es la que mandamos": las dos cosas significan que no podemos afirmar qué se va a transmitir.
-  const mensaje = mensajeDeLaTransaccion(desenlace.datos.transaction);
+  const mensaje = mensajeDeLaTransaccion(desenlace.datos.transaction); anotarHuellaDeLaVuelta(mensaje === null ? HUELLA_ILEGIBLE : huella(mensaje)); // WKH-373: la huella de lo que VOLVIÓ, en la línea que existe (Δ0) y ⛔ TAMBIÉN en el camino feliz.
   if (mensaje === null || mensaje !== ancla.mensajeBase64) {
-    return { tipo: "corte", causa: DEEPLINK_TX_ALTERADA };
+    anotarSitioDelCorte(mensaje === null ? "E2a-nonce-ilegible" : "E2b-nonce-bytes-distintos"); return { tipo: "corte", causa: DEEPLINK_TX_ALTERADA }; // 🔴 WKH-373 — LAS DOS EN ESTA MISMA LÍNEA (Δ0: este archivo recibe citas por número, entre ellas a `:568`). EL `||` DE ARRIBA FUNDE DOS HIPÓTESIS CON ARREGLOS OPUESTOS («la billetera devolvió algo que `Transaction.from` no parsea» y «se parsea y NO es la que mandamos a firmar») y la pantalla decía lo mismo para las dos. ⛔ EL `if` NO SE PARTIÓ: la decisión sigue siendo una sola y el corte sigue siendo el mismo string. Lo único que se agrega es CUÁL de las dos fue.
   }
 
   // ⛔ EL FLAG SE ESCRIBE ANTES DE DEVOLVER. Si se escribiera después de transmitir, una recarga en el

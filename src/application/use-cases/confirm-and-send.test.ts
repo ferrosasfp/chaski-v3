@@ -109,7 +109,7 @@ describe("ConfirmAndSend — el pre-check de autoridad SE ELIMINÓ (WKH-333/DT-2
       repo,
       new FixedClock(),
       new FakeRefundGateway(),
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     // El doble está construido y NADIE lo tocó: no hay forma de que este use-case llegue a él.
     expect(
@@ -149,7 +149,7 @@ describe("ConfirmAndSend — el pre-check de autoridad SE ELIMINÓ (WKH-333/DT-2
       repo,
       new FixedClock(),
       new FakeRefundGateway(),
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(out.snapshot.principalTx).toBeNull();
     expect(
@@ -172,7 +172,7 @@ describe("ConfirmAndSend — el pre-check de autoridad SE ELIMINÓ (WKH-333/DT-2
       repo,
       new FixedClock(),
       new FakeRefundGateway(),
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(
       out.snapshot.failureReason,
@@ -203,7 +203,7 @@ describe("ConfirmAndSend — sin address de wallet no se le pregunta a la autori
       repo,
       new FixedClock(),
       new FakeRefundGateway(),
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(out.snapshot.failureReason).toBe("wallet_address_unavailable");
     // Lo que este test protege de verdad: que la causa NO se disfrace de la otra.
@@ -227,7 +227,7 @@ describe("ConfirmAndSend — sin address de wallet no se le pregunta a la autori
       repo,
       new FixedClock(),
       new FakeRefundGateway(),
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(out.snapshot.failureReason).toBe("wallet_address_unavailable");
     expect(authority.calls).toEqual([]);
@@ -250,7 +250,7 @@ describe("ConfirmAndSend — sin address de wallet no se le pregunta a la autori
       repo,
       new FixedClock(),
       new FakeRefundGateway(),
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(out.snapshot.failureReason).toBe("settlement_unavailable");
     expect(out.snapshot.failureReason).not.toBe("wallet_address_unavailable");
@@ -271,7 +271,7 @@ describe("ConfirmAndSend — re-check de vigencia del quote (M2/AC-5)", () => {
       repo,
       clock,
       new FakeRefundGateway(),
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(out.status).toBe("refunded"); // WKH-186: refund-on-failure; guard de expiry intacto
     expect(out.snapshot.failureReason).toBe("quote_expired_before_submit");
@@ -300,7 +300,7 @@ describe("ConfirmAndSend — refund-on-failure best-effort (WKH-186 AC-7)", () =
       repo,
       new FixedClock(),
       refund,
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(out.status).toBe("payout_failed"); // best-effort: NO escala a refunded ni tira
     expect(
@@ -324,7 +324,7 @@ describe("ConfirmAndSend — refund-on-failure best-effort (WKH-186 AC-7)", () =
       repo,
       new FixedClock(),
       refund,
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" });
 
     expect(refund.calls).toHaveLength(1);
     expect(refund.calls[0]?.amountUsd).toEqual(Money.of(400, "USDC"));
@@ -372,7 +372,7 @@ describe("ConfirmAndSend — reanudación tras una suspensión (WKH-356)", () =>
       repo,
       new FixedClock(),
       new FakeRefundGateway(),
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     // Llegó hasta el tapón DT-8 (sin `solana` inyectado), o sea que ATRAVESÓ el paso 1 en vez de
     // morir en él. Ese reason es la prueba de que la reanudación siguió, no el objeto de la prueba.
@@ -406,7 +406,7 @@ describe("ConfirmAndSend — reanudación tras una suspensión (WKH-356)", () =>
       repo,
       new FixedClock(),
       new FakeRefundGateway(),
-    ).execute({ remittanceId: id });
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" });
 
     expect(
       estados[0],
@@ -431,7 +431,7 @@ describe("ConfirmAndSend — reanudación tras una suspensión (WKH-356)", () =>
       repo,
       new ScriptedClock(["2026-07-09T18:11:00.000Z"]), // > QUOTE_EXPIRES (18:10)
       new FakeRefundGateway(),
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(out.snapshot.failureReason).toBe("quote_expired_before_submit");
     expect(
@@ -461,7 +461,7 @@ describe("ConfirmAndSend — reanudación tras una suspensión (WKH-356)", () =>
       repo,
       new ScriptedClock(["2026-07-09T18:11:00.000Z"]), // la vuelta ocurre DESPUÉS del vencimiento
       new FakeRefundGateway(),
-    ).execute({ remittanceId: id }));
+    ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" }));
 
     expect(
       out.snapshot.failureReason,
@@ -507,7 +507,7 @@ describe("ConfirmAndSend — reanudación tras una suspensión (WKH-356)", () =>
         repo,
         new ScriptedClock(["2026-07-09T18:11:00.000Z"]),
         new FakeRefundGateway(),
-      ).execute({ remittanceId: id });
+      ).execute({ remittanceId: id , hrefDeLaVuelta: "https://chaski.test/enviar" });
 
       expect(
         wallet.abandonos,
@@ -522,6 +522,7 @@ describe("ConfirmAndSend — reanudación tras una suspensión (WKH-356)", () =>
 
       await new ConfirmAndSend(wallet, repo, new FixedClock(), new FakeRefundGateway()).execute({
         remittanceId: id,
+        hrefDeLaVuelta: "https://chaski.test/enviar",
       });
 
       expect(wallet.abandonos).toBe(1);
@@ -541,6 +542,7 @@ describe("ConfirmAndSend — reanudación tras una suspensión (WKH-356)", () =>
       const out = esperarListo(
         await new ConfirmAndSend(wallet, repo, new FixedClock(), new FakeRefundGateway()).execute({
           remittanceId: id,
+          hrefDeLaVuelta: "https://chaski.test/enviar",
         }),
       );
       expect(out.snapshot.failureReason).toBe("settlement_unavailable");
@@ -557,7 +559,7 @@ describe("ConfirmAndSend — invariantes de entrada", () => {
         repo,
         new FixedClock(),
         new FakeRefundGateway(),
-      ).execute({ remittanceId: "no-existe" }),
+      ).execute({ remittanceId: "no-existe" , hrefDeLaVuelta: "https://chaski.test/enviar" }),
     ).rejects.toThrow("remittance_not_found");
   });
 });

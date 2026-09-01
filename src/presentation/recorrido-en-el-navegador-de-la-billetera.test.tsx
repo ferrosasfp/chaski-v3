@@ -766,3 +766,234 @@ describe("W1.0 · cuántas veces se atraviesa la pantalla de entrada", () => {
     }
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// 6 · WKH-374 · W0 — LA PUERTA DE LA HU: CALIBRAR EL INSTRUMENTO Y DERIVAR LA MÉTRICA
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// ⛔ ESTOS `it` VAN AL FINAL DEL ARCHIVO Y NO AGREGAN UN SOLO `import` ARRIBA, y lo segundo no es
+// estilo: `sesion-borra-la-segunda-firma.test.tsx` cita ANCLADO cinco símbolos de la mitad de arriba
+// de este archivo (`inyectarWallet` en :113 de aquel, `entrarAlNavegadorDeLaBilletera` en :129,
+// `sembrarElCaminoPorEnlace` en :149, `PopDelAdaptadorReal` en :156 y `sembrarCotizada` en :168), y un
+// `import` nuevo arriba corre las cinco líneas destino y pone rojo a `citas-ancladas.test.ts`. Por eso
+// lo que hace falta entra por `await import(...)` adentro del `it`, que es el mismo recurso que
+// (`entrarAlNavegadorDeLaBilletera`, `:149`) ya usa para `./solana/solana-providers`.
+describe("W0 · el instrumento de los viajes, CALIBRADO antes de publicar cualquier número", () => {
+  // 🔴 POR QUÉ ESTE `it` VA PRIMERO Y ES BLOQUEANTE. `viajesALaBilletera` (`:208`) filtra por
+  // `hostname === HOST_DE_LA_BILLETERA` (`:169`), y ese host sale de `phantomBrowseUrl`, que es el
+  // enlace para abrir Chaski ADENTRO de Phantom. El camino por enlace usa OTRA familia de URLs, la de
+  // `urlConectar` sobre el mapa `BASE` de `../infrastructure/solana/deeplink/protocol.ts` (⛔ esa cita
+  // va SIN ancla a propósito: anclarla obligaría a mover el número si ese archivo se edita, y el
+  // patrón está declarado en `bitacora-de-vuelta.ts:175-177`). Medido al escribir esto: el filtro se
+  // ejercitaba en TRES sitios de este archivo (`:395`, `:737`, `:763`) y los TRES asertan `.toEqual([])`
+  // ⇒ NUNCA CONTESTÓ QUE SÍ. Un filtro que siempre devuelve `[]` es indistinguible de «no hubo saltos»,
+  // así que sin este `it` los números de `T-374-W0-1` saldrían de una balanza probada sólo vacía.
+  //
+  // MUTANTE QUE LO TIENE QUE MATAR (M-0): en `deeplink/protocol.ts:55`, cambiar el valor de `phantom`
+  // por `https://phantom.example/ul/v1` ⇒ cae la aserción 1.
+  // ⛔ LOS DOS FALSOS KILLED A EVITAR:
+  //   (1) si la aserción 2 dijera `.toHaveLength(1)`, un filtro que devolviera TODO pasaría igual. Por
+  //       eso compara el arreglo ENTERO, por VALOR.
+  //   (2) M-0 también pone rojos los `it.each` de `T-DL-1/4/5` en `deeplink/protocol.test.ts`, que
+  //       miran el host por su cuenta. El `×` que cuenta como KILLED de acá es el de ESTE `it`, con su
+  //       nombre; un rojo en aquel archivo no es este KILLED.
+  // ⛔ Y ESTE `it` NO ESCRIBE EL LITERAL DEL HOST EN NINGUNA LÍNEA: los dos lados se LEEN de
+  // producción, de dos módulos distintos, que es lo único que impide que el guard se lea a sí mismo.
+  it("T-374-W0-0: el filtro de viajes reconoce un href de ENLACE PROFUNDO, y declara que solflare queda afuera", async () => {
+    const { nuevoParDeCifrado, urlConectar } = await import(
+      "../infrastructure/solana/deeplink/protocol"
+    );
+    const comun = {
+      appUrl: "https://chaski.test",
+      redirectLink: "https://chaski.test/?dl=conectar",
+      clavePublicaDeLaApp: nuevoParDeCifrado().publica,
+      cluster: "devnet",
+    };
+    const hrefDeEnlace = urlConectar({ ...comun, billetera: "phantom" });
+    const hrefDeSolflare = urlConectar({ ...comun, billetera: "solflare" });
+    // Un distractor que NO es de ninguna billetera: es el host del verificador de identidad, el mismo
+    // que `T-372-W1-13` ya declara como la única recarga heredada del recorrido de primera vez.
+    const hrefDelVerificador = "https://verificacion.example/kyc?r=r-1";
+
+    // 1 · LOS DOS HOSTS COINCIDEN, y los dos salen de producción. Si esta aserción cae con el árbol
+    //     SANO, el instrumento no sirve y ningún número de W0-1/W0-2 es publicable.
+    expect(
+      new URL(hrefDeEnlace).hostname,
+      "el host del ENLACE PROFUNDO de phantom no es el que `viajesALaBilletera` reconoce: el filtro no " +
+        "puede ver el camino por enlace, y todo conteo que se apoye en él sería un cero por vacío",
+    ).toBe(HOST_DE_LA_BILLETERA);
+
+    // 2 · EL FILTRO CONTESTA QUE SÍ, Y POR VALOR. Un `.toHaveLength(1)` acá dejaría pasar un filtro
+    //     que devuelve todo lo que le entra.
+    expect(
+      viajesALaBilletera([hrefDeEnlace, hrefDeSolflare, hrefDelVerificador, "no-soy-una-url"]),
+      "el filtro no separó el href de la billetera del resto: o no reconoce el enlace profundo, o " +
+        "devuelve de más",
+    ).toEqual([hrefDeEnlace]);
+
+    // 3 · EL AGUJERO, DECLARADO: solflare queda AFUERA del instrumento ⇒ todo número que salga de
+    //     `viajesALaBilletera` vale para Phantom y NO para Solflare. Esta aserción existe para que ese
+    //     límite se ponga rojo el día que alguien unifique los hosts y la frase deje de ser cierta.
+    expect(
+      new URL(hrefDeSolflare).hostname,
+      "el host de solflare coincide con el que mira el filtro: la frase «este instrumento no cubre " +
+        "solflare» dejó de ser verdadera y hay que re-escribirla",
+    ).not.toBe(HOST_DE_LA_BILLETERA);
+  });
+});
+
+// 🔴 EL CAMINO POR ENLACE NO CIERRA EN UNA SOLA PASADA, Y NO ES UN DEFECTO: ES LO QUE EL CAMINO ES.
+// Sale a la billetera y vuelve. El propio repo ya lo tiene escrito: el docblock del mutante de
+// (`T-372-W1-12`, `:562`) dice que con `pop` contestando `hay-que-salir` «el envío suspende y la
+// reanudación vuelve a llamar `prepare()`». ⇒ el recorrido se mide EN TRAMOS, cada uno con su propio
+// desenlace afirmable, y ⛔ el número de un tramo NO se publica como si fuera el del recorrido entero.
+// Lo de abajo mide EL TRAMO DE IDA y NADA MÁS, y lo dice en el nombre del `it`.
+describe("W0 · el tramo de IDA del camino por enlace, contado ejecutando", () => {
+  // 🔴 LOS DOS NÚMEROS DE ESTE `it` SALIERON DE UNA CORRIDA, y ésta es la salida cruda de la primera
+  // (2026-09-01, `chaski-v3@c1bd8d3`, `vitest run … -t "SONDA-W0-1c"`, sonda borrada después):
+  //   asignado = ["https://phantom.app/ul/v1/connect?app_url=http%3A%2F%2Flocalhost%3A3000
+  //               &dapp_encryption_public_key=2mtpXWjDgANDdQkTN7tcygnc3YqN46G6TLyuE9KKtWUH
+  //               &redirect_link=http%3A%2F%2Flocalhost%3A3000%2F%3Fdl%3Dconectar&cluster=devnet"]
+  //   viajes   = (el mismo href)          travesias = 2
+  // ⛔ NINGUNO DE LOS DOS SE COPIÓ DE NINGÚN DOCUMENTO.
+  //
+  // 🟡 EL ALCANCE DEL NÚMERO, Y SIN ESTO EL NÚMERO MIENTE:
+  //   · Es el TRAMO DE IDA: la carga inicial más el salto al `connect` de la billetera. El recorrido
+  //     NO cierra acá — sigue con la vuelta del connect, la firma de posesión, la de la transacción y
+  //     la del patrocinio, y cada una de ésas es otro salto. **El total del recorrido NO se midió en
+  //     W0**, y «no se pudo medir» ⛔ no es «vale eso».
+  //   · Es `jsdom`, no un teléfono (lo declara el encabezado de este archivo en `:31-32`).
+  //   · Es Phantom y sólo Phantom: `T-374-W0-0` declara que el instrumento no cubre solflare.
+  //   · Es el árbol de HOY. Es LA LÍNEA DE BASE contra la que comparar, ⛔ no una promesa sobre nada.
+  //
+  // MUTANTES QUE LO TIENEN QUE MATAR, y son DOS porque miden cosas distintas:
+  //   · M-1 · quitarle a (`sembrarElCaminoPorEnlace`, `:226`) el `vi.stubEnv` de la bandera ⇒ cae la
+  //     aserción 2 (y detrás, el desenlace). ⛔ FALSO KILLED: M-1 NO mata por el CONTEO. Si el rojo
+  //     que ves es un `expected 3 to be 2`, ése no es este KILLED.
+  //   · M-2 · una asignación de `window.location.href` DE MÁS hacia el host de la billetera en la rama
+  //     del enlace ⇒ caen la 5 y la 6, y sólo ésas. ⛔ La línea del mutante no puede llevar un
+  //     marcador de censo, o el rojo lo produce el candado de citas y el KILLED es falso.
+  it("T-374-W0-1: en el camino POR ENLACE, el TRAMO DE IDA atraviesa la pantalla de entrada 2 veces y sale a la billetera 1 vez", async () => {
+    const { RecorridoPorEnlaceReal } = await import("../infrastructure/solana/preparacion-por-enlace");
+    const { nuevoParDeCifrado, urlConectar } = await import(
+      "../infrastructure/solana/deeplink/protocol"
+    );
+    // ⛔ El emisor del desafío contesta SÓLO su propio endpoint. Está medido por qué: con un `fetch`
+    // que contesta ese JSON a TODO, el catálogo de agentes recibe un cuerpo sin `steps` y la pantalla
+    // de revisión revienta con «Cannot read properties of undefined (reading 'map')» — un rojo del
+    // ARNÉS que se lee como un rojo del sujeto.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (u: unknown) => {
+        if (!String(u).includes("/api/a2a/payout/challenge")) return new Response("", { status: 500 });
+        return new Response(
+          JSON.stringify({
+            popChallenge: "ch-374",
+            popMessage: "chaski:pop:payout:x:1",
+            exp: Math.floor(Date.now() / 1000) + 600,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }),
+    );
+
+    // 1 · EL ÁRBOL LLEGÓ AL CUADRANTE DEL ENLACE. Sin esto, un `it` que quedó en `injected` contaría
+    //     los números del OTRO camino. Mismo patrón y mismo mensaje que `T-372-W1-11` (`:660-663`).
+    expect(
+      await entrarAlNavegadorDeLaBilletera(false, 1700),
+      "el árbol no llegó a `none`: no se está midiendo el camino por enlace",
+    ).toBe("none");
+    sembrarElCaminoPorEnlace();
+
+    // ── (a) LAS TRES CONDICIONES DE `caminoPorEnlace` ESTÁN CONJUGADAS ───────────────────────────
+    // 🔴 POR QUÉ HACE FALTA ESTA MITAD: `caminoPorEnlace` es `private` y ⛔ no se puede llamar desde
+    // acá. El observable es qué contestó `pedir()`, que es lo que anota (`PopDelAdaptadorReal`, `:294`).
+    // Sin esta mitad, cualquiera de las tres condiciones —disponibilidad, bandera, elección— explicaría
+    // el salto de la mitad (b), y el número saldría de un camino que no es el que dice medir.
+    const espiaA = espiarNavegacion();
+    try {
+      const repoA = new InMemoryRepo();
+      const pop = new PopDelAdaptadorReal();
+      const idA = await sembrarCotizada(repoA);
+      await armarEnvio({
+        repo: repoA,
+        wallet: new FakeSolanaWallet(),
+        prepare: new FakeSolanaPayoutPrepareGateway(),
+        gateway: new FakeSolanaSettlementGateway(),
+        senderBalance: new FakeSolanaSenderSolBalanceProbe(1_000_000_000),
+        pop,
+      })
+        .execute({ remittanceId: idA, hrefDeLaVuelta: "https://chaski.test/enviar" })
+        .catch((e: unknown) => e as Error);
+
+      // 2 · `pedir()` NO contestó `no-corresponde` ⇒ el gate del camino por enlace SE ENCENDIÓ.
+      expect(
+        pop.respuestas,
+        "`pedir()` contestó `no-corresponde`: el camino por enlace está APAGADO y este `it` estaría " +
+          "contando los saltos de otro camino",
+      ).not.toEqual(["no-corresponde"]);
+      // Y esta mitad no aporta ni una navegación: el conteo de (b) es de (b).
+      expect(espiaA.asignado, "la mitad (a) navegó: contaminaría el conteo de la mitad (b)").toEqual([]);
+    } finally {
+      espiaA.restaurar();
+    }
+    cleanup();
+
+    // ── (b) EL TRAMO DE IDA, DESDE CERO, CONTADO ────────────────────────────────────────────────
+    const espia = espiarNavegacion();
+    try {
+      render(
+        <RemittanceFlow
+          pasoInicial="send"
+          container={buildTestContainer({ recorridoPorEnlace: new RecorridoPorEnlaceReal() })}
+        />,
+      );
+      fireEvent.change(screen.getByPlaceholderText("Nombre de tu familiar"), { target: { value: "Mamá" } });
+      fireEvent.change(screen.getByPlaceholderText("002 193 004455667788 99"), { target: { value: TEST_CCI } });
+      fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+      // ⚠️ EL `findBy*` VA AFUERA DEL `act`, Y NO ES ESTILO: adentro, el sondeo de la librería y el
+      // `act` se traban y el `it` muere por timeout mostrando la pantalla ANTERIOR, o sea un rojo que
+      // se lee como «la pantalla no ofrece el salto» cuando lo que pasó es que nunca se re-renderizó.
+      const salir = await screen.findByRole("button", { name: /Conectar con Phantom/ });
+      await act(async () => {
+        fireEvent.click(salir);
+      });
+      const viajes = viajesALaBilletera(espia.asignado);
+
+      // 3 · EL DESENLACE DEL TRAMO (I): la salida ocurrió y ES la del PROTOCOLO POR ENLACE.
+      //     🔴 ESTA SEGUNDA MITAD NO ES CELO: `HOST_DE_LA_BILLETERA` sale de `phantomBrowseUrl`, o sea
+      //     que el enlace «Abrir Chaski en Phantom» que la MISMA pantalla ofrece dos párrafos más
+      //     abajo TAMBIÉN pasa el filtro. Sin comparar el camino contra el que produce `urlConectar`,
+      //     un `it` que saliera por ESE enlace contaría igual y estaría midiendo otro recorrido.
+      //     ⛔ El camino se DERIVA de producción; no se escribe ningún literal acá.
+      expect(espia.asignado, "el tramo de ida navegó a algo que no es la billetera").toEqual(viajes);
+      expect(
+        new URL(viajes[0] ?? "https://sin-salto.invalid/").pathname,
+        "la salida no es el `connect` del protocolo por enlace: puede ser el universal link `browse`, " +
+          "que comparte el host y pasa el filtro igual",
+      ).toBe(
+        new URL(
+          urlConectar({
+            billetera: "phantom",
+            appUrl: "https://chaski.test",
+            redirectLink: "https://chaski.test/?dl=conectar",
+            clavePublicaDeLaApp: nuevoParDeCifrado().publica,
+            cluster: "devnet",
+          }),
+        ).pathname,
+      );
+      // 4 · LA TRAMPA DEL FALSO VERDE POR VACÍO, que es la que `T-374-W0-0` vuelve creíble.
+      expect(viajes, "no hubo ningún salto a la billetera: el conteo de abajo sería un cero por vacío").not.toEqual(
+        [],
+      );
+      // 5 · LAS TRAVESÍAS. La definición ya está escrita en este archivo (`:680-684`) y ⛔ no se
+      //     re-inventa: `travesías = 1 + asignaciones`. Las 2 son la carga inicial y la vuelta del
+      //     salto al `connect`; ⛔ el recorrido NO cierra ahí.
+      expect(1 + espia.asignado.length, "el tramo de ida cambió de largo").toBe(2);
+      // 6 · LAS SALIDAS A LA BILLETERA DEL TRAMO.
+      expect(viajes.length, "el tramo de ida cambió de cantidad de salidas a la billetera").toBe(1);
+    } finally {
+      espia.restaurar();
+    }
+  });
+});

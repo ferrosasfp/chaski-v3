@@ -1933,7 +1933,8 @@ describe("WKH-372/W3.5 · AC-3-6: el paso `connect` dice qué firma se pide, que
     // persona ve el prompt de siempre y no puede distinguirlo del funcionamiento normal. Esa ausencia
     // es la decisión, no un olvido.
     expect(copy, "el copy afirma que algo falló").not.toMatch(/fall(ó|o|ida)|error|no pudimos|venci/i);
-    // ⛔ Ninguna afirma que el remitente no necesita SOL (el depósito NO es gasless para el remitente).
+    // ⛔ Ninguna toca el asunto del gas nativo del remitente: el depósito NO es gasless para él, y el
+    // literal de la moneda nativa se prohíbe entero para no depender de cómo esté redactada la frase.
     expect(copy, "el copy afirma que no hace falta SOL").not.toMatch(/\bSOL\b/);
     // ⛔ Ninguna vuelve falso el `<h2>Tu plata no pasa por Chaski</h2>` de `./bienvenida.tsx:232`: la
     // frase 3 dice literalmente lo contrario, y ésta es la mitad que lo clava.

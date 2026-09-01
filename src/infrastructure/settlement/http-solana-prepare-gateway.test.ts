@@ -871,13 +871,22 @@ describe("HttpSolanaPayoutPrepareGateway — la sesión borra la segunda firma (
 
   // ── 🔴 T-372-W3-17 · EL REINTENTO ÚNICO DEL REPLIEGUE, CON SUS CUATRO RAMAS ───────────────────
   //
-  // DOS MUTANTES, Y SE CORREN POR SEPARADO:
-  //   (i)  quitar la condición `res.status === 403` ⇒ se reintenta ante CUALQUIER `!res.ok` y la
-  //        rama (c) se pone roja;
-  //   (ii) quitar la condición del ENUM (`enumDelRechazo === PREPARE_403_QUE_LA_SESION_ARREGLA`) ⇒
-  //        se reintenta ante los OTROS dos 403 de la route y la rama (d) se pone roja  [AR/MNR-1].
-  // ⛔ (i) NO MATA A (ii) NI AL REVÉS: la rama (c) es un 500, que el guard del enum ni mira, y la
-  // rama (d) es un 403, que el guard del status deja pasar. Son dos condiciones y por eso dos ramas.
+  // DOS MUTANTES, Y SE CORREN POR SEPARADO. ⛔ CADA UNO NOMBRA SU SITIO EXACTO (CR/BLQ-BAJO-3): la receta vieja decía
+  // "quitar la condición `res.status === 403`" y esa condición estaba escrita DOS veces —el ternario y el `if`—, así
+  // que borrar la del `if` dejaba en pie la del ternario y el mutante SOBREVIVÍA. Hoy se escribe una sola vez.
+  //   (i)  dejar el ternario de (`enumDelRechazo`, `./http-solana-prepare-gateway.ts:384`) en `!res.ok ? await
+  //        leerEnum(res) : undefined` ⇒ se reintenta ante CUALQUIER `!res.ok` y la rama (c) se pone roja;
+  //   (ii) en el `if` de (`enumDelRechazo`, `./http-solana-prepare-gateway.ts:390`), aflojar la comparación del ENUM a
+  //        `enumDelRechazo !== undefined` ⇒ se reintenta ante los OTROS dos 403 y la rama (d) se pone roja  [AR/MNR-1].
+  // ⛔ (ii) AFLOJA Y NO BORRA, Y ES A PROPÓSITO: borrar el conjunto entero se lleva puesta también la condición de
+  // status —que hoy llega al `if` a través de `enumDelRechazo`, que es `undefined` para todo lo que no sea un 403—, y
+  // entonces el mutante muere en la rama (c) y no dice nada del enum. MEDIDO: borrándolo, el rojo es «se reintentó ante
+  // un 500 que trae el enum de la sesión»; aflojándolo, es «se reintentó ante un 403 `prepare_kyc_verdict_missing`».
+  // ⛔ (i) NO MATA A (ii) NI AL REVÉS: cada uno deja intacta la condición que la OTRA rama mira. (i) no toca la
+  // comparación del enum, así que los otros dos 403 de la (d) siguen sin coincidir; (ii) no toca el status, y un 500
+  // nunca llega a tener enum. ⚠️ EL ROJO SE LEE POR SU MENSAJE Y NO POR SU COLOR —el `it` aborta en la primera
+  // aserción que cae, y las ramas corren (a)(b)(c)(d)—: lo verificado CORRIENDO es que los dos mensajes son distintos
+  // y cada uno nombra su rama. Son dos condiciones y por eso dos ramas.
   // ⛔ FALSO KILLED A EVITAR: un `it` con SÓLO el caso positivo deja pasar un bucle y deja pasar el
   // reintento en un 500. Por eso van las cuatro ramas, y por eso se CUENTAN los `fetch`.
   it("T-372-W3-17: reintenta UNA vez sólo ante el 403 que la credencial puede arreglar; sin sesión, ante un 500 y ante los OTROS 403, NO", async () => {

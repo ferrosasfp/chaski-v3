@@ -53,8 +53,8 @@ function isRecord(v: unknown): v is Record<string, unknown> {
  * estado de identidad de la persona, no de cómo probó que la dirección es suya: reintentar con el
  * PoP devuelve el MISMO 403 y de paso le abre la billetera para nada.
  * ⛔ Literal a propósito y NO importado de la route: este archivo corre en el navegador y la route es
- * server-only. Es el mismo motivo por el que `../auth/sesion-store.ts` duplica su TTL. El candado que
- * ata las dos puntas es `T-372-W3-17`, que arma su 403 con el enum que la route emite de verdad.
+ * server-only. Es el mismo motivo por el que `../auth/sesion-store.ts` duplica su TTL. ⚠️ ACÁ DECÍA «el candado que ata las dos puntas es `T-372-W3-17`», y es FALSO, MEDIDO (CR/BLQ-BAJO-2): ese `it` arma su 403 con un `Response` fabricado y NO toca la route, así que renombrando las 12 emisiones del enum en `../../../app/api/payout/prepare/route.ts` sigue VERDE. Lo que `T-372-W3-17` ata es LA PUNTA DE ACÁ: mutando esta constante muere con «el repliegue no reintentó, o entró en bucle: tiene que ser EXACTAMENTE 2: expected 1 to be 2».
+ * LA OTRA PUNTA —que la route emita de verdad ESTE literal en la rama de la sesión— la clavan `T-372-W3-2` y `T-372-W3-4` de `../../../app/api/payout/prepare/route.test.ts`, que comparan el cuerpo del 403 contra `{ error: "payout_pop_unverified" }`. Mutante MEDIDO: renombrar el enum SÓLO en la rama de la sesión ⇒ esos dos rojos, más `T-372-W3-5` (que exige que el 403 de la sesión vencida sea byte a byte el mismo que el de no presentar nada) y el candado de citas ancladas por el ancla de `:379`. ⛔ NINGUNA DE LAS DOS PUNTAS ALCANZA SOLA: hacen falta las dos, y son `it` distintos en archivos distintos.
  */
 const PREPARE_403_QUE_LA_SESION_ARREGLA = "payout_pop_unverified";
 
@@ -352,11 +352,11 @@ export class HttpSolanaPayoutPrepareGateway implements SolanaPayoutPrepareGatewa
     // recibiría 403 sin reintentar: se le cortaría el envío por la mitad, con la billetera desbloqueada
     // y sin que ella haya hecho nada mal. Acá se vuelve a postear UNA vez con el PoP de siempre.
     //
-    // ⛔ LAS TRES CONDICIONES SON NECESARIAS Y NINGUNA SE AFLOJA:
+    // ⛔ LAS TRES CONDICIONES SON NECESARIAS Y NINGUNA SE AFLOJA — y cada una se escribe UNA SOLA VEZ:
     //   · `tokenDeSesion !== null` — sin sesión mandada no hay nada de qué replegarse, y reintentar
     //     sería postear dos veces la MISMA credencial ya rechazada;
-    //   · `res.status === 403` — un 500 o un 429 no dicen nada de la sesión, y reintentarlos convierte
-    //     un incidente del servidor en el doble de carga;
+    //   · `res.status === 403` —que vive en el ternario de (`enumDelRechazo`, `:384`) y NO en el `if`— un 500 o un 429
+    //     no dicen nada de la sesión, y reintentarlos convierte un incidente del servidor en el doble de carga;
     //   · el ENUM del cuerpo — ver el bloque de acá abajo;
     //   · una sola vez — el reintento no vuelve a mirar `tokenDeSesion`, así que no hay bucle posible.
     // Las cuatro las mide `T-372-W3-17`, por nombre, en `./http-solana-prepare-gateway.test.ts`, con
@@ -382,12 +382,12 @@ export class HttpSolanaPayoutPrepareGateway implements SolanaPayoutPrepareGatewa
     // ⛔ SE LEE SOBRE UN `clone()`: `res` lo vuelve a consumir el bloque `!res.ok` de más abajo, y un
     // body ya leído le daría `prepare_rejected` a TODO 403, aplanando los tres enums en la pantalla.
     const enumDelRechazo = !res.ok && res.status === 403 ? await leerEnum(res) : undefined;
-    if (
-      !res.ok &&
-      res.status === 403 &&
-      enumDelRechazo === PREPARE_403_QUE_LA_SESION_ARREGLA &&
-      tokenDeSesion !== null
-    ) {
+    // ⛔ ACÁ ESTABAN REPETIDOS `!res.ok &&` y `res.status === 403 &&`, y eran CONJUNTOS MUERTOS (CR/BLQ-BAJO-3):
+    // (`enumDelRechazo`, `:384`) sólo puede ser distinto de `undefined` si el ternario de arriba YA vio esas dos, así
+    // que ninguna de las dos podía cambiar el resultado de este `if`. Y no salían gratis: volvían IRREPRODUCIBLE la
+    // receta (i) de `./http-solana-prepare-gateway.test.ts` —borrar el renglón del status— porque el ternario seguía
+    // cortando igual y el mutante SOBREVIVÍA. Hoy el status se escribe UNA vez, en `:384`, y la receta nombra ESE sitio.
+    if (enumDelRechazo === PREPARE_403_QUE_LA_SESION_ARREGLA && tokenDeSesion !== null) {
       let deRepuesto: Awaited<ReturnType<PopSigner["prove"]>>;
       try {
         // Si el salto por enlace ya trajo una prueba, se usa ÉSA: pedir otra sería gastarle a la

@@ -467,8 +467,8 @@ export async function POST(req: Request): Promise<Response> {
   // ⛔ NINGUNA DE LAS TRES ES PARTE DEL CONTRATO DEL AGENTE, y está verificado contra el schema, no
   // supuesto: `CashoutPayoutInputSchema` declara `quoteId`, `amountUsd`, `kycVerificationId`,
   // `senderIdentity`, `address`, `beneficiary` e `idempotencyKey`, y ninguna de las tres aparece
-  // (`wasiai-remittance-agents/src/agents/cashout-payout.ts:47-82`); su manifiesto publica la misma
-  // lista en `required` (`wasiai-remittance-agents/src/manifest/registry.ts:203-210`). Es un
+  // (`wasiai-remittance-agents/src/agents/cashout-payout.ts:47-83`); su manifiesto pide en `required` esas
+  // MISMAS MENOS `address`, que es el alias legado y por eso no es obligatorio: seis claves, y tampoco entre ellas hay ninguna de las tres (`wasiai-remittance-agents/src/manifest/registry.ts:206-213` — acá decía `:203-210` y decía «la misma lista»: eran las tres líneas del docblock de `senderIdentity`, y las listas no son iguales. CR/MNR-4, re-derivado leyendo el otro repo). Es un
   // `z.object` sin `.strict()`, así que hoy las strippea en silencio: quitarlas no le cambia ni un
   // byte a lo que el agente lee.
   //
@@ -476,9 +476,9 @@ export async function POST(req: Request): Promise<Response> {
   // el forward el día que el contrato del agente crezca, y el fallo sería silencioso (un campo que
   // deja de llegar). Acá lo que se agregue de más al body llega, y lo que se agregue de más de
   // CREDENCIALES hay que agregarlo también a este destructuring — que es exactamente lo que el
-  // candado de abajo pone en rojo. El candado es **T-372-W3-21**: (`sinCredenciales`,
-  // `./route.test.ts:2172`), que captura el cuerpo del `/compose` y exige que las tres claves NO
-  // estén. Su mutante, MEDIDO: volver este renglón a `{ ...body, … }` lo pone rojo.
+  // candado de abajo pone en rojo. El candado es **T-372-W3-21**: captura el cuerpo del `/compose`
+  // (`sinCredenciales`, `./route.test.ts:2181`) y exige que las tres claves NO estén ahí adentro
+  // (`sinCredenciales`, `./route.test.ts:2208`). Mutante MEDIDO: volver esto a `{ ...body, … }` ⇒ rojo.
   const {
     sessionToken: _laSesionNoViaja,
     popChallenge: _elDesafioNoViaja,

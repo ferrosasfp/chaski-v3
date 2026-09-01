@@ -48,7 +48,7 @@ vi.mock("../../../../src/infrastructure/persistence/supabase-settlement-ledger",
 }));
 
 import bs58 from "bs58";
-import nacl from "tweetnacl";
+import nacl from "tweetnacl"; import { createHmac } from "node:crypto"; import { SESION_TTL_SECONDS, emitirSesionDePosesion } from "../../../../src/infrastructure/auth/sesion-de-posesion"; // ⚠️ EN ESTA LÍNEA: 3 archivos citan `:1407` y `:1849` de este archivo POR NÚMERO
 import {
   issueSolanaPopChallenge,
   buildSolanaPopMessage,
@@ -1983,5 +1983,177 @@ describe("POST /api/payout/prepare — T-TOK-3c/T-TOK-4c: nada de la autoridad s
     expect(JSON.parse(cuerpo)).toEqual({ error: "payout_not_authorized" }); // control positivo
     expect(cuerpo).not.toContain(TOKEN_CENTINELA);
     expect(JSON.stringify([...res.headers.entries()])).not.toContain(TOKEN_CENTINELA);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// WKH-372 / W3.2 · EL RECEPTOR ACEPTA LAS DOS FORMAS, Y RECHAZA TODO LO DEMÁS CON EL MISMO 403
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 🔴 QUÉ SE MIDE ACÁ QUE NO SE MIDE EN `sesion-de-posesion.test.ts`: el módulo mide su cripto; esto
+// mide LA RUTA — que la rama nueva viva DEBAJO del rate-limit, que corte ANTES de tocar la fila del
+// veredicto y la autoridad, y que sus cinco fallos sean indistinguibles de los cinco del PoP.
+describe("POST /api/payout/prepare — W3.2: sesión O PoP (WKH-372/AC-3-2)", () => {
+  const SECRETO_SESION = "secreto-de-la-sesion-w3"; // ⛔ DISTINTO del de PoP, a propósito (ver T-372-W3-2)
+  let store: ReturnType<typeof honestVerdictStore>;
+
+  /** Una sesión REAL, acuñada por el emisor de producción. ⛔ Nunca un string escrito a mano: un token
+   *  inventado mediría que la ruta rechaza basura, que es otra cosa. `desfaseMs` la puede envejecer. */
+  function sesionDe(addr: string, desfaseMs = 0): string {
+    return emitirSesionDePosesion(addr, "solana:devnet", Date.now() + desfaseMs) as string;
+  }
+
+  // ⚠️ Replica el `beforeEach` del primer describe a propósito: este bloque es hermano, no anidado.
+  beforeEach(() => {
+    KP = nacl.sign.keyPair();
+    ADDR = bs58.encode(KP.publicKey);
+    AUTHORITY = bs58.encode(nacl.sign.keyPair().publicKey);
+    vi.stubEnv("DEPOSIT_ATTESTATION_SECRET", "test-deposit-secret");
+    vi.stubEnv("SOLANA_ESCROW_RELEASE_AUTHORITY_PUBKEY", AUTHORITY);
+    vi.stubEnv("VERCEL_ENV", "");
+    vi.stubEnv("PAYOUT_POP_SECRET", "pop-secret");
+    vi.stubEnv("PAYOUT_SESSION_SECRET", SECRETO_SESION);
+    vi.stubEnv("WASIAI_A2A_GATEWAY_URL", GW);
+    vi.stubEnv("WASIAI_A2A_AGENT_KEY", GW_KEY);
+    checkRouteRateLimitMock.mockReset();
+    checkRouteRateLimitMock.mockResolvedValue({ ok: true });
+    authorityMock.mockReset();
+    authorityMock.mockResolvedValue({ authorized: true, httpStatus: 200 });
+    ledgerMock.recordOrderPrepared.mockReset();
+    ledgerMock.recordOrderPrepared.mockResolvedValue(undefined);
+    getLedgerMock.mockReset();
+    getLedgerMock.mockReturnValue(null);
+    getVerdictStoreMock.mockReset();
+    store = storeConFilaDe(ADDR);
+    getVerdictStoreMock.mockReturnValue(store);
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    agentResponds(200, agentResult());
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  // 🧬 DOS MUTANTES, Y SE CORREN POR SEPARADO:
+  //   (i)  borrar el chequeo de `S3` (`sesion.tipo !== SESION_TIPO`) en `./route.ts`.
+  //   (ii) que `secret()` de `../../../../src/infrastructure/auth/sesion-de-posesion.ts` caiga a
+  //        `PAYOUT_POP_SECRET`. ⚠️ Ese mutante NO lo caza la mitad (b): con el secreto compartido, un
+  //        challenge crudo sigue muriendo en `S3` porque su payload no tiene `tipo`. Lo caza la mitad
+  //        (c), que presenta un token CON la forma de sesión firmado con el secreto del PoP.
+  // 🔴 SIN LA MITAD (a) —el control positivo— un verificador que RECHAZARA TODO daría verde. Es el
+  // `it` más importante de la ola y por eso la mitad positiva va PRIMERA.
+  it("T-372-W3-2: un `popChallenge` crudo del emisor REAL presentado como sesión ⇒ 403, y ese MISMO token sigue sirviendo de PoP ⇒ 200", async () => {
+    const { popChallenge, popSignature } = signedSolanaPop(KP, ADDR);
+
+    // (a) CONTROL POSITIVO: el token, en el campo que le corresponde, sigue abriendo la puerta.
+    const bueno = await POST(req(bodyOf({ popChallenge, popSignature })));
+    expect(
+      bueno.status,
+      "el PoP de siempre dejó de funcionar: sin esta mitad, un 403 a todo daría verde abajo",
+    ).toBe(200);
+    // ⚠️ El control positivo SÍ consulta la autoridad (llegó al 200), así que las dos mitades de abajo
+    // miden que el contador NO CREZCA. Un `not.toHaveBeenCalled()` acá mediría la mitad (a).
+    const trasElControl = authorityMock.mock.calls.length;
+
+    // (b) EL MISMO TOKEN, presentado como sesión ⇒ 403 opaco, y NADA se toca.
+    const comoSesion = await POST(req(bodyOf({ sessionToken: popChallenge })));
+    expect(comoSesion.status, "un `popChallenge` crudo pasó como sesión").toBe(403);
+    expect(await comoSesion.json()).toEqual({ error: "payout_pop_unverified" });
+    expect(authorityMock.mock.calls.length, "un challenge crudo llegó a la autoridad").toBe(trasElControl);
+
+    // (c) UN TOKEN CON FORMA DE SESIÓN, FIRMADO CON EL SECRETO DEL PoP, y sin `PAYOUT_SESSION_SECRET`.
+    //     Es el caso que separa "dominio propio" de "SECRETO propio": si el verificador cayera al
+    //     secreto del desafío, esto pasaría — y como `/api/a2a/payout/challenge` emite para CUALQUIER
+    //     dirección sin pedir firma, sería un desembolso autorizado por un anónimo.
+    vi.stubEnv("PAYOUT_SESSION_SECRET", SECRETO_SESION);
+    const conFormaDeSesion = sesionDe(ADDR);
+    vi.stubEnv("PAYOUT_SESSION_SECRET", "");
+    const falsificada = conFormaDeSesion.split(".")[0] as string;
+    const conSecretoDelPop = `${falsificada}.${createHmac("sha256", "pop-secret").update(falsificada).digest("base64url")}`;
+    const res = await POST(req(bodyOf({ sessionToken: conSecretoDelPop })));
+    expect(res.status, "una sesión firmada con el secreto del PoP fue aceptada").toBe(403);
+    expect(authorityMock.mock.calls.length, "la sesión falsificada llegó a la autoridad").toBe(trasElControl);
+  });
+
+  // 🧬 MUTANTE: mover la rama de identidad (el `if (sessionToken !== undefined) … else … P1..P5`) por
+  // DEBAJO del bloque `PR5.5` de `./route.ts` ⇒ `direccionProbada` llega `undefined` a
+  // `verdictStore.get`, el contador deja de ser 0 y este `it` se pone rojo por su tercer assert.
+  // ⛔ COMPARAR SÓLO EL STATUS NO ALCANZA: los tres darían 403 con cuerpos distintos. Se comparan los
+  // CUERPOS entre sí (molde: `T-PR-4`, por nombre, en este mismo archivo) y se CUENTAN las llamadas.
+  it("T-372-W3-3: sin sesión y sin PoP, tres `kycVerificationId` distintos ⇒ mismo cuerpo byte a byte y CERO lecturas", async () => {
+    const { popChallenge, popSignature, ...anon } = bodyOf();
+    void popChallenge;
+    void popSignature;
+    const cuerpos: Array<{ status: number; body: string }> = [];
+    for (const id of ["did-de-la-fila-default", "did-de-otra-persona", "did-QUE-NO-EXISTE"]) {
+      const r = await POST(req({ ...anon, kycVerificationId: id }));
+      cuerpos.push({ status: r.status, body: await r.text() });
+    }
+    expect(cuerpos[0], "las respuestas se distinguen: la ruta es un oráculo de identidades ajenas").toEqual(
+      cuerpos[1],
+    );
+    expect(cuerpos[1], "idem, con un id inventado").toEqual(cuerpos[2]);
+    expect(cuerpos[0]?.status).toBe(403);
+    // 🔴 P-7: un caller sin credencial NO llega ni a la fila del veredicto ni a la autoridad.
+    expect(store.get.mock.calls.length, "un caller sin credencial llegó a leer la fila del veredicto").toBe(0);
+    expect(authorityMock.mock.calls.length, "un caller sin credencial gastó cupo del proveedor").toBe(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // 🧬 MUTANTE: borrar el chequeo de `S4` en `./route.ts`. Con `S4` borrado, la sesión de A pasa `S5`,
+  // `direccionProbada` queda en A, la fila de A existe y el pago sale 200 ⇒ rojo por el conteo.
+  // ⛔ SE CORRE POR SEPARADO DEL DE `S3`: un mutante que rompa el PARSEO mata este mismo `it` sin
+  // haber probado NADA del binding.
+  it("T-372-W3-4: una sesión de A presentada con `address` de B ⇒ 403, y la fila del veredicto NO se lee", async () => {
+    const otroKp = nacl.sign.keyPair();
+    const otraAddr = bs58.encode(otroKp.publicKey);
+    const { popChallenge, popSignature, ...anon } = bodyOf();
+    void popChallenge;
+    void popSignature;
+    const res = await POST(req({ ...anon, address: otraAddr, sessionToken: sesionDe(ADDR) }));
+    expect(res.status, "la sesión de una dirección autorizó el pago de OTRA").toBe(403);
+    expect(await res.json()).toEqual({ error: "payout_pop_unverified" });
+    expect(store.get.mock.calls.length, "se leyó la fila del veredicto con un binding roto").toBe(0);
+    expect(authorityMock).not.toHaveBeenCalled();
+  });
+
+  // 🧬 MUTANTE: quitar la comprobación del `exp` en `verificarSesionDePosesion`
+  // (`../../../../src/infrastructure/auth/sesion-de-posesion.ts`) ⇒ la mitad (a) devuelve 200.
+  // ⛔ LA SESIÓN VENCIDA SE CONSTRUYE CON EL EMISOR REAL y un reloj atrasado, NUNCA a mano.
+  it("T-372-W3-5: una sesión VENCIDA ⇒ el mismo 403 que sin sesión, y el mismo request con PoP ⇒ 200", async () => {
+    const { popChallenge, popSignature, ...anon } = bodyOf();
+    const vencida = sesionDe(ADDR, -(SESION_TTL_SECONDS + 60) * 1000);
+
+    // (a) VENCIDA ⇒ 403, y con el MISMO cuerpo que no presentar nada. ⚠️ Vencer no es fallar: el
+    //     cliente vuelve a pedir la firma, que es lo que la app hace hoy (AC-3-3).
+    const conVencida = await POST(req({ ...anon, sessionToken: vencida }));
+    const sinNada = await POST(req(anon));
+    expect(
+      { status: conVencida.status, body: await conVencida.text() },
+      "una sesión vencida se distingue de no presentar nada: la ruta dice CUÁL mecanismo falló",
+    ).toEqual({ status: sinNada.status, body: await sinNada.text() });
+    expect(conVencida.status).toBe(403);
+
+    // (b) Y EL MISMO REQUEST CON PoP VÁLIDO CIERRA. Sin esta mitad, un 403 a todo daría verde.
+    const conPop = await POST(req({ ...anon, popChallenge, popSignature }));
+    expect(conPop.status, "el camino del PoP dejó de funcionar cuando la sesión venció").toBe(200);
+  });
+
+  // 🧬 MUTANTE: subir la rama de identidad por ENCIMA de `PR3` en `./route.ts` ⇒ una sesión inválida
+  // contestaría 403 antes de que el limiter corra, y la primera aserción se pone roja.
+  // ⛔ SE CUENTAN LAS LLAMADAS AL LIMITER; no se lee el orden del archivo.
+  it("T-372-W3-13: con el rate-limit agotado, una sesión inválida contesta 429 y NO 403", async () => {
+    checkRouteRateLimitMock.mockResolvedValue({ ok: true, unavailable: false });
+    checkRouteRateLimitMock.mockResolvedValueOnce({ ok: false, retryAfter: 42 });
+    const { popChallenge, popSignature, ...anon } = bodyOf();
+    void popChallenge;
+    void popSignature;
+    const res = await POST(req({ ...anon, sessionToken: "una-sesion-que-no-vale-nada" }));
+    expect(res.status, "la rama de sesión corrió ANTES del rate-limit").toBe(429);
+    expect(checkRouteRateLimitMock.mock.calls.length, "el limiter no llegó a correr").toBe(1);
+    expect(store.get, "se leyó la fila del veredicto con el limiter agotado").not.toHaveBeenCalled();
+    expect(authorityMock).not.toHaveBeenCalled();
   });
 });

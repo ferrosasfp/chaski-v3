@@ -113,7 +113,7 @@ export interface PasoPop {
    * autenticado de este lado**. El HMAC del desafío sólo lo verifica el servidor, así que un `exp`
    * adulterado se cree acá sin chistar. Se usa ÚNICAMENTE para "no molestes a la persona / no
    * POSTees en vano", **nunca** para autorizar nada. Quien autoriza es P2, server-side, en
-   * (`verifySolanaPopChallenge`, `../../../../app/api/payout/prepare/route.ts:231`). Adelantarlo sólo se hace daño a sí mismo;
+   * (`verifySolanaPopChallenge`, `../../../../app/api/payout/prepare/route.ts:288`). Adelantarlo sólo se hace daño a sí mismo;
    * atrasarlo no compra nada, porque el servidor rechaza igual.
    */
   exp: number;

@@ -1531,7 +1531,7 @@ export const CAUSAS_CON_COPY = Object.keys(COPY_DE_ENLACE);
  *      A compra poco.
  *   3. **El fail-closed que hace falta YA EXISTE y es más fuerte, y vive del otro lado**:
  *      (`POP_SECRET`, `../../app/api/payout/prepare/route.ts:216`) exige el PoP, P1..P5 lo verifican ed25519 contra el
- *      `sender`, y (`prepare_kyc_verdict_missing`, `../../app/api/payout/prepare/route.ts:311`) exige la fila del veredicto SIN respaldo. Ninguna remesa deposita sin que el
+ *      `sender`, y (`prepare_kyc_verdict_missing`, `../../app/api/payout/prepare/route.ts:371`) exige la fila del veredicto SIN respaldo. Ninguna remesa deposita sin que el
  *      SERVIDOR haya verificado una firma sobre la dirección del `sender`, tenga `ownerAddress` lo que
  *      tenga. Un segundo corte client-side sobre el mismo hecho es defensa duplicada en la capa débil.
  */

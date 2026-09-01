@@ -33,44 +33,44 @@
 import { NextResponse } from "next/server";
 import {
   LOGGABLE_PREPARE_REJECTIONS,
+  noAgentMeansNobodyFits,
   PREPARE_NO_AGENT_FOR_CAPABILITY,
   PREPARE_REJECTED,
-  noAgentMeansNobodyFits,
   prepareRejectionEnum,
 } from "../../../../src/application/agent-rejections";
+import {
+  logGatewayFailure,
+  PAYOUT_CAPABILITY,
+  PAYOUT_MIN_REPUTATION,
+  runViaGateway,
+} from "../../../../src/infrastructure/a2a/gateway-client";
+import { canonicalizeAddress } from "../../../../src/infrastructure/address";
 import {
   buildSolanaPopMessage,
   verifySolanaPopChallenge,
 } from "../../../../src/infrastructure/auth/pop-challenge";
-import { verifySolanaPop } from "../../../../src/infrastructure/auth/pop-verify-solana";
+import { verifySolanaPop } from "../../../../src/infrastructure/auth/pop-verify-solana"; import { SESION_TIPO, verificarSesionDePosesion } from "../../../../src/infrastructure/auth/sesion-de-posesion"; // ⚠️ EN ESTA LÍNEA, y no en una nueva: 6 archivos citan `:75-77` y `:214` de este archivo POR NÚMERO. Una línea de import de más los corre a todos
 import {
+  resolveSolanaNetworkConfig,
   resolveSolanaNetworkId,
   resolveSolanaReleaseAuthorityPubkey,
-  resolveSolanaNetworkConfig,
 } from "../../../../src/infrastructure/chain";
-import { canonicalizeAddress } from "../../../../src/infrastructure/address";
-import {
-  PAYOUT_CAPABILITY,
-  PAYOUT_MIN_REPUTATION,
-  logGatewayFailure,
-  runViaGateway,
-} from "../../../../src/infrastructure/a2a/gateway-client";
+import { resolvePayoutAuthority } from "../../../../src/infrastructure/payout/authority";
+import { logLedgerWriteFailure } from "../../../../src/infrastructure/persistence/ledger-write-failure";
+import { getKycVerdictStore } from "../../../../src/infrastructure/persistence/supabase-kyc-verdicts";
 import {
   CHAIN_ID_NOT_APPLICABLE,
   getSettlementLedger,
 } from "../../../../src/infrastructure/persistence/supabase-settlement-ledger";
-import { logLedgerWriteFailure } from "../../../../src/infrastructure/persistence/ledger-write-failure";
-import { getKycVerdictStore } from "../../../../src/infrastructure/persistence/supabase-kyc-verdicts";
-import { resolvePayoutAuthority } from "../../../../src/infrastructure/payout/authority";
+import {
+  checkRouteRateLimit,
+  clientIp,
+  DEPOSIT_PREPARE_RL,
+} from "../../../../src/infrastructure/rate-limit";
 import {
   DEPOSIT_ATTESTATION_TTL_SECONDS,
   issueSolanaDepositAttestation,
 } from "../../../../src/infrastructure/settlement/deposit-attestation";
-import {
-  DEPOSIT_PREPARE_RL,
-  checkRouteRateLimit,
-  clientIp,
-} from "../../../../src/infrastructure/rate-limit";
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v); // excluye arrays
@@ -218,42 +218,101 @@ export async function POST(req: Request): Promise<Response> {
   }
   const popChallenge = body.popChallenge;
   const popSignature = body.popSignature;
-  // P1 — presencia + tipo → 403 opaco.
-  if (
-    typeof popChallenge !== "string" ||
-    !popChallenge.trim() ||
-    typeof popSignature !== "string" ||
-    !popSignature.trim()
-  ) {
-    return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
-  }
-  // P2 — HMAC + exp + tipos colapsan en null → 403 opaco.
-  const ch = verifySolanaPopChallenge(popChallenge, Date.now());
-  if (!ch) {
-    return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
-  }
-  // P3 — address match (CD-8, base58 case-sensitive). canonicalizeAddress throwea → try/catch → 403.
-  try {
-    if (canonicalizeAddress(ch.address) !== canonicalizeAddress(address)) {
+
+  // 🔴 W3 — LAS DOS FORMAS DE PROBAR LA MISMA COSA, Y POR QUÉ HAY DOS (WKH-372/AC-3-2).
+  //
+  // Hasta acá la ÚNICA credencial de identidad de esta ruta eran los dos campos de abajo, y eso
+  // obligaba a la persona a firmar una SEGUNDA vez lo mismo que ya había firmado al conectar. La
+  // sesión que emite `/api/kyc/verdict` es esa primera prueba, transportada. Esta ruta acepta
+  // **sesión O PoP**, y los CINCO modos de fallar de cada camino colapsan en el MISMO 403 con el
+  // MISMO enum y el MISMO cuerpo. ⛔ CERO ENUMS NUEVOS: un enum propio le diría al caller CUÁL de los
+  // dos mecanismos lo rechazó, que es un oráculo del mecanismo.
+  //
+  // ⛔ UN `sessionToken` PRESENTE **CORTA**, NO CAE AL PoP. Si cayera, un atacante con una sesión rota
+  // más un PoP robado podría ELEGIR el camino, y el guard nuevo se saltearía por el viejo.
+  //
+  // ⛔ Y EL BINDING ES LA DIRECCIÓN PROBADA, JAMÁS UN CAMPO DEL CUERPO: `S4` reproduce exactamente lo
+  // que hace `P3`. PROHIBIDO un `?? address` o cualquier default en cualquiera de las dos ramas.
+  const sessionToken = body.sessionToken;
+  let direccionProbada: string;
+  if (sessionToken !== undefined) {
+    // S1 — presencia + tipo string no vacío → 403 opaco.
+    if (typeof sessionToken !== "string" || !sessionToken.trim()) {
       return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
     }
-  } catch {
-    return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
-  }
-  // P4 — CAIP-2 binding (AC-4/CD-3): network-id del token vs el resuelto server-side, NUNCA del body.
-  if (ch.networkId !== resolveSolanaNetworkId()) {
-    return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
-  }
-  // P5 — ed25519 (AC-1/AC-2): mensaje reconstruido con la MISMA buildSolanaPopMessage (CD-6). SIN
-  // claim-once del nonce: ver la nota de arriba (residual R-3).
-  if (
-    !verifySolanaPop({
-      addressBase58: ch.address,
-      message: buildSolanaPopMessage(ch),
-      signatureBase58: popSignature,
-    })
-  ) {
-    return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+    // S2 — HMAC + secreto propio + tipos + expiración colapsan en null → 403 opaco. ⚠️ Vencer NO es
+    // fallar: el cliente vuelve a pedir la firma, que es lo que la app hace hoy (AC-3-3).
+    const sesion = verificarSesionDePosesion(sessionToken, Date.now());
+    if (!sesion) {
+      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+    }
+    // S3 — 🔴 ESTE GUARD ES INALCANZABLE HOY, Y SE ESCRIBE IGUAL. LA MEDICIÓN, PARA QUE NADIE LO
+    // DESCUBRA CREYENDO QUE ENCONTRÓ UN AGUJERO: `verificarSesionDePosesion` ya rechaza cualquier
+    // `tipo` distinto y devuelve el literal `SESION_TIPO` en su retorno
+    // (`SESION_TIPO`, `../../../../src/infrastructure/auth/sesion-de-posesion.ts:58`), así que NO
+    // EXISTE input que llegue acá con otro `tipo`. ⛔ MEDIDO, no supuesto: borrando estas cuatro
+    // líneas, los 5 `it` de `T-372-W3-*` de `./route.test.ts` siguen VERDES — el mutante SOBREVIVE, y
+    // eso está reportado como tal en vez de disfrazarse de KILLED.
+    // Se conserva por la misma razón por la que `../../kyc/verdict/route.ts` conserva su rama
+    // `!tokenStore`: el día que el verificador cambie de condición, esto CORTA en vez de dejar pasar.
+    // ⛔ Y NO se arregla debilitando el módulo para volverlo alcanzable: el testigo real del dominio
+    // es la mitad (c) de `T-372-W3-2`, que sí mata al mutante del SECRETO compartido.
+    if (sesion.tipo !== SESION_TIPO) {
+      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+    }
+    // S4 — 🔴 ES `P-3`. La sesión de la dirección A no autoriza un pago de la dirección B.
+    try {
+      if (canonicalizeAddress(sesion.address) !== canonicalizeAddress(address)) {
+        return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+      }
+    } catch {
+      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+    }
+    // S5 — binding CAIP-2 server-side, NUNCA del body. Segunda comparación deliberada, por la misma
+    // razón que `S3`: el verificador ya la hace, y acá se lee dónde se decide el pago.
+    if (sesion.networkId !== resolveSolanaNetworkId()) {
+      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+    }
+    direccionProbada = canonicalizeAddress(sesion.address);
+  } else {
+    // P1 — presencia + tipo → 403 opaco.
+    if (
+      typeof popChallenge !== "string" ||
+      !popChallenge.trim() ||
+      typeof popSignature !== "string" ||
+      !popSignature.trim()
+    ) {
+      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+    }
+    // P2 — HMAC + exp + tipos colapsan en null → 403 opaco.
+    const ch = verifySolanaPopChallenge(popChallenge, Date.now());
+    if (!ch) {
+      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+    }
+    // P3 — address match (CD-8, base58 case-sensitive). canonicalizeAddress throwea → try/catch → 403.
+    try {
+      if (canonicalizeAddress(ch.address) !== canonicalizeAddress(address)) {
+        return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+      }
+    } catch {
+      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+    }
+    // P4 — CAIP-2 binding (AC-4/CD-3): network-id del token vs el resuelto server-side, NUNCA del body.
+    if (ch.networkId !== resolveSolanaNetworkId()) {
+      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+    }
+    // P5 — ed25519 (AC-1/AC-2): mensaje reconstruido con la MISMA buildSolanaPopMessage (CD-6). SIN
+    // claim-once del nonce: ver la nota de arriba (residual R-3).
+    if (
+      !verifySolanaPop({
+        addressBase58: ch.address,
+        message: buildSolanaPopMessage(ch),
+        signatureBase58: popSignature,
+      })
+    ) {
+      return NextResponse.json({ error: "payout_pop_unverified" }, { status: 403 });
+    }
+    direccionProbada = canonicalizeAddress(ch.address);
   }
 
   // PR5.5 — 🔴 DE DÓNDE SALE EL IDENTIFICADOR DE LA VERIFICACIÓN (WKH-333/AC-16, AC-17, CD-26).
@@ -297,10 +356,11 @@ export async function POST(req: Request): Promise<Response> {
   }
   let row: Awaited<ReturnType<typeof verdictStore.get>>;
   try {
-    // OWNER-SCOPED con `ch.address`, la PoP-VERIFICADA — NUNCA `body.address` (CD-18). Son iguales
-    // en el camino legítimo porque P3 los comparó, y aun así se usa la del challenge: la del body
-    // es un valor que el caller escribió, la del challenge es una que firmó.
-    row = await verdictStore.get(canonicalizeAddress(ch.address));
+    // OWNER-SCOPED con la dirección PROBADA — NUNCA `body.address` (CD-18). Son iguales en el camino
+    // legítimo porque `P3`/`S4` las compararon, y aun así se usa la probada: la del body es un valor
+    // que el caller escribió, ésta sale de un token que NOSOTROS firmamos. W3 sólo cambió DE DÓNDE
+    // sale (del challenge o de la sesión, según la rama de arriba); la propiedad es la misma.
+    row = await verdictStore.get(direccionProbada);
   } catch {
     // NUNCA 500 crudo, NUNCA eco del error.code de Postgres. No poder preguntar NO es "no hay":
     // se corta con el enum de "no pudimos comprobar", no con el de "no estás verificado".

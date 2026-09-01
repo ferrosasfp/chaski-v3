@@ -459,7 +459,7 @@ El árbol de dependencias mezcla React 19 con paquetes que todavía declaran pee
 
 ## Tests
 
-**167 archivos de test**, todos en verde. Ese número no es una afirmación que haya que creer:
+**168 archivos de test**, todos en verde. Ese número no es una afirmación que haya que creer:
 `src/composition/readme-test-count.test.ts` cuenta el árbol en cada corrida y pone la suite roja si esta
 línea se le despega. Para el número de casos individuales, corré `npm test`, que lo imprime. Se reparten
 en:

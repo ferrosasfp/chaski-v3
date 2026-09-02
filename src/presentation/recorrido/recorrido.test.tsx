@@ -2,7 +2,7 @@
 //
 // WKH-374 · W1.2 — EL ANFITRIÓN DEL RECORRIDO NUEVO, EJECUTÁNDOSE
 //
-// Los cinco `it` de acá montan `<Recorrido/>` de verdad y lo recorren. ⛔ Nada de esto corre en un
+// Los `it` de acá montan `<Recorrido/>` de verdad y lo recorren. ⛔ Nada de esto corre en un
 // teléfono: todo es jsdom, y la medición en un dispositivo real es de otra ola. Se dice acá arriba
 // para que nadie lea el verde de este archivo como si dijera algo sobre un teléfono.
 
@@ -36,9 +36,12 @@ import {
 import { buildTestContainer } from "../../test-support/test-container";
 import { MARCA, enlaceDeVuelta } from "../../infrastructure/solana/deeplink/sesion";
 import { MARCA_CREAR_NONCE } from "../../infrastructure/solana/deeplink/conexion";
+import { MARCA_POP_PAYOUT } from "../../infrastructure/solana/deeplink/pop-por-enlace";
+import { PARAM_ERROR } from "../../infrastructure/solana/deeplink/protocol";
 import { MIN_SEND_USD } from "../../domain/remittance";
+import { escrowRentExplainer } from "../flow-vm";
 import { ETIQUETA_CONECTANDO, ETIQUETA_VERIFICANDO, NO_CUSTODIAL } from "./pantallas";
-import { TABLA } from "./pasos";
+import { TABLA, etiquetaDe, indiceEn, itinerario } from "./pasos";
 import { MS_DE_ESPERA_DE_LA_COTIZACION, type PropsDelRecorrido, Recorrido } from "./recorrido";
 import { MOTIVO_SIN_ATERRIZAJE, TEXTO_EN_VUELO_IDENTIDAD, anuncioDe } from "./salto";
 
@@ -103,12 +106,20 @@ function revisarCopy(texto: string, quien: string) {
   expect(texto, `${quien} promete que «Crear la cuenta» desaparece`).not.toMatch(
     /sin crear (?:la )?cuenta/i,
   );
-  // 🔴 LAS DOS MENTIRAS DEL CR, CERRADAS ACÁ PARA QUE NO VUELVAN. Las dos estuvieron renderizadas en
-  // producción del árbol nuevo y las dos las leía la persona:
+  // 🔴 LAS DOS MENTIRAS DEL CR. Las dos estuvieron renderizadas en producción del árbol nuevo y las
+  // dos las leía la persona:
   //   · «Se guarda solo mientras lo completás» ⇒ no se guarda nada hasta tocar «Seguir»;
   //   · «Una vez sola / no la vuelven a pedir» ⇒ la costura que lo saltea ⛔ no tiene productor.
-  // ⛔ Los predicados son por el SENTIDO y no por la frase exacta: prohibir el literal viejo dejaría
-  // pasar la misma promesa escrita con otras palabras, que es como vuelven estas cosas.
+  //
+  // ⛔ ACÁ DECÍA «los predicados son por el SENTIDO y no por la frase exacta», Y ES FALSO, MEDIDO
+  // (F4/`H-2`). Son una disyunción de TRES REDACCIONES CERCANAS cada uno, o sea que cazan LITERALES
+  // parecidos y ⛔ no un significado. F4 lo falsificó con dos paráfrasis que dicen la MISMA mentira y
+  // pasan con la suite en verde; este fix-pack corrió otras TRES inventadas para la ocasión, y las
+  // cinco pasaron estos dos `not.toMatch` sin despeinarse.
+  // ⇒ LO QUE ESTOS DOS PREDICADOS GARANTIZAN, dicho sin adornarlo: que ⛔ no vuelva la redacción
+  // VIEJA ni sus vecinas inmediatas. El sentido ⛔ no lo cubre ningún guard de texto, y por eso el
+  // copy de las cinco pantallas está PINEADO en `T-374-W1-26`: ahí cualquier redacción nueva es un
+  // diff que alguien tiene que aprobar a propósito. Las cinco paráfrasis mueren ahí, ⛔ no acá.
   expect(texto, `${quien} sugiere que lo cargado se guarda solo`).not.toMatch(
     /se guarda\s+sol[oa]|guardado autom|se va guardando/i,
   );
@@ -962,7 +973,17 @@ describe("WKH-374/W1.2 · el recorrido nuevo, montado y recorrido", () => {
   // 🔴 SIN ESTO, LOS DOS `not.toMatch` DE `revisarCopy` SON INDISTINGUIBLES DE DOS LÍNEAS QUE NO
   // PUEDEN FALLAR. Las frases de abajo son los LITERALES que estaban renderizados en `5afe979`, y lo
   // que se afirma es que el predicado las habría puesto en rojo. ⛔ No alcanza con que hoy no estén.
-  it("T-374-W1-24: los predicados de copy cazan las dos frases que le mentían a la persona", () => {
+  //
+  // ⚠️ Y ACÁ VA EL LÍMITE DE ESTE `it`, QUE F4 MIDIÓ Y ES EL MOTIVO DE `H-2`: le pasa los literales
+  // que estaban renderizados en `5afe979`, o sea que confirma EXACTAMENTE la forma que ya funcionaba.
+  // Eso ⛔ no es un defecto que se arregle acá —calibrar contra la frase que se fue es justo lo que
+  // este `it` tiene que hacer—, pero ⛔ SÍ es un techo: de acá ⛔ no se puede concluir nada sobre una
+  // redacción distinta. Quien quiera esa garantía tiene que ir a `T-374-W1-26`.
+  // ⛔ Y NO SE AGREGAN LAS PARÁFRASIS A ESTA LISTA: harían falsa la calibración —dejarían de ser los
+  // literales renderizados— y sobre todo empujarían a ensanchar los predicados hasta cubrir las
+  // paráfrasis conocidas, que es el mismo control que confirma la única forma que ya funcionaba, un
+  // escalón más arriba.
+  it("T-374-W1-24: los predicados de copy cazan los dos LITERALES que le mentían a la persona", () => {
     const mentiras = [
       "Se guarda solo mientras lo completás.",
       "Una vez sola. Después de esto, tus próximos envíos no la vuelven a pedir.",
@@ -984,4 +1005,175 @@ describe("WKH-374/W1.2 · el recorrido nuevo, montado y recorrido", () => {
       revisarCopy(`${NO_CUSTODIAL} Verificamos quién sos antes de mandar la plata. ${"relleno ".repeat(12)}`, "el control positivo"),
     ).not.toThrow();
   });
+
+  // ── `AC-8`, DE PUNTA A PUNTA: LA FIRMA RECHAZADA ───────────────────────────────────────────────
+  //
+  // 🔴 EL CASO QUE `AC-8` NOMBRA CON ESAS PALABRAS, Y QUE HASTA ESTE FIX-PACK NO SE CUMPLÍA (F4/`H-1`).
+  // F4 lo midió con el código de rechazo real de Phantom y la persona aterrizaba UN PASO MÁS ADELANTE,
+  // en una pantalla que le decía «Todavía no hay ningún envío en curso» y desde la que ⛔ no podía
+  // reintentar la firma.
+  //
+  // MUTANTE QUE MATA (`MW-15`): en `./salto.ts`, apuntar la entrada de la prueba de posesión del pago
+  // en `ORIGEN_POR_ENLACE` al mismo paso que tiene en `ATERRIZAJE_POR_ENLACE`.
+  // ⛔ FALSO KILLED A EVITAR: afirmar sólo «no es la pantalla de entrada». Eso ya era cierto ANTES del
+  // arreglo —la vuelta caía en el seguimiento, que tampoco es la entrada—, así que un `it` que sólo
+  // mirara el NUNCA quedaba verde sobre el defecto entero. Por eso acá se afirma la pantalla POR SU
+  // NOMBRE, se afirma que hay un control vivo para reintentar, y se afirma la AUSENCIA de la frase de
+  // la pantalla equivocada.
+  // ⛔ Y POR ESO ESTÁ LA MITAD (a): sin el camino SIN rechazo, el mutante inverso —mandar las dos
+  // ramas a la pantalla de firmar— rompería `AC-7` y este `it` no se enteraría.
+  it("T-374-W1-25: una firma RECHAZADA vuelve a la pantalla de la que salió; sin rechazo, el recorrido sigue", () => {
+    const ORIGEN = "https://chaski.test/";
+    // El código crudo que una billetera deja al rechazar. ⛔ No es una marca de vuelta ni una causa
+    // del vocabulario del enlace: es texto de la billetera, y `humanError` lo manda a su default.
+    const CODIGO_DE_RECHAZO = "4001";
+    const sinRechazo = enlaceDeVuelta(ORIGEN, MARCA_POP_PAYOUT);
+
+    // (a) SIN RECHAZO ⇒ el recorrido sigue (`AC-7`). ⛔ El nombre de la pantalla sale de la tabla.
+    montar({ hrefDeAterrizaje: sinRechazo });
+    expect(
+      screen.getByRole("heading").textContent,
+      "la vuelta sin rechazo dejó de avanzar: `AC-7` pide el paso siguiente",
+    ).toBe(etiquetaDe("seguimiento"));
+    cleanup();
+
+    // (b) CON RECHAZO ⇒ la pantalla de la que se salió (`AC-8`).
+    const conRechazo = new URL(sinRechazo);
+    conRechazo.searchParams.set(PARAM_ERROR, CODIGO_DE_RECHAZO);
+    // Calibración del fixture: las dos URLs tienen que DIFERIR en el código, o las dos mitades de
+    // este `it` estarían midiendo la misma vuelta.
+    expect(
+      conRechazo.toString(),
+      "la URL del rechazo quedó igual que la del camino feliz: el fixture no reproduce nada",
+    ).not.toBe(sinRechazo);
+
+    montar({ hrefDeAterrizaje: conRechazo.toString() });
+    expect(
+      screen.getByRole("heading").textContent,
+      "una firma rechazada deja a la persona en otra pantalla que la que salió: `AC-8` pide el mismo paso, y F4 midió que aterrizaba un paso MÁS ADELANTE",
+    ).toBe(etiquetaDe("firmar"));
+    const texto = document.body.textContent ?? "";
+    expect(
+      texto,
+      "la persona rechazó la firma y ⛔ no lee ningún motivo: eso es moverla de pantalla en silencio",
+    ).toContain("No pudimos terminar ese paso");
+    // 🔴 Y LA MITAD QUE HACE ÚTIL AL PASO: desde acá se puede volver a intentar el MISMO salto.
+    expect(
+      screen.getByRole("button", { name: anuncioDe({ porEnlace: true }).boton }),
+      "no hay ningún control vivo para reintentar la firma: volver al paso correcto sin poder reintentar es el mismo callejón con otra pantalla",
+    ).toBeEnabled();
+    // Y la frase de la pantalla EQUIVOCADA, la que F4 leyó, ⛔ no aparece.
+    expect(
+      texto,
+      "la vuelta con rechazo sigue cayendo en la pantalla del recibo",
+    ).not.toContain("Todavía no hay ningún envío en curso");
+  });
+
+  // ── EL COPY APROBADO, PINEADO ──────────────────────────────────────────────────────────────────
+  //
+  // 🔴 POR QUÉ ESTE `it` EXISTE, Y ES UNA CORRECCIÓN DE LA EVIDENCIA DEL FIX-PACK ANTERIOR (F4/`H-2`).
+  // Ese fix-pack afirmó que los predicados de `revisarCopy` iban «por el SENTIDO y no por la frase
+  // exacta». F4 lo falsificó con cuatro mutantes: los dos literales viejos ponen rojo, y estas dos
+  // paráfrasis —la MISMA mentira con otras palabras— pasan con la suite en `13 passed`:
+  //     «Lo que vas escribiendo queda en este navegador mientras completás.»
+  //     «Es una sola vez: en tus próximos envíos ya no hace falta repetirla.»
+  //
+  // ⛔ Y EL ARREGLO ⛔ NO FUE AGREGAR ESAS DOS AL PREDICADO: cerrar las dos paráfrasis conocidas es el
+  // mismo defecto una vuelta más arriba —el control que confirma la única forma que ya funcionaba—,
+  // y una tercera redacción volvería a pasar. Un guard de TEXTO ⛔ no puede cazar un SENTIDO. Lo que
+  // sí puede es CONGELAR el texto aprobado: acá el copy visible de las cinco pantallas está escrito a
+  // mano, y cualquier redacción nueva —fiel o mentirosa— sale como un diff que una persona tiene que
+  // aprobar a propósito. Es infalsificable por paráfrasis, que es exactamente lo que fallaba.
+  //
+  // MUTANTE QUE MATA (`MW-16`): cambiar CUALQUIER frase de `./pantallas.tsx` o de `anuncioDe`. Está
+  // corrido con las DOS paráfrasis de F4 y con TRES inventadas para este fix-pack.
+  // ⛔ FALSO KILLED A EVITAR: pinear un hash, o dejar que la herramienta reescriba el pin. Las dos
+  // cosas convierten la revisión humana en un `-u` y el guard vuelve a no decir nada. El pin va como
+  // literal legible, y ⛔ ningún comando de este repo lo actualiza solo.
+  //
+  // ⚠️ QUÉ **NO** CUBRE, para que nadie lea este verde de más:
+  //   · cubre el copy que se ve montando cada paso por DEFAULT, y ⛔ no los textos que aparecen sólo
+  //     tras una interacción o una vuelta con marca (el motivo de la marca sin consumidor, el de «sin
+  //     envío en esta pestaña», el corte por el mínimo, las etiquetas de «en curso», el estado en
+  //     vuelo). Ésos los sigue mirando `revisarCopy`, que caza LITERALES cercanos y ⛔ no sentidos;
+  //   · ⛔ el bloque del alquiler de red ⛔ NO se pinea, se ENMASCARA: no es copy de esta ola, lo
+  //     produce `escrowRentExplainer` con una cifra que sale de una constante de la cadena, y
+  //     transcribirlo acá pondría este guard en rojo por un cambio que ⛔ no es de copy — con lo que
+  //     el arreglo natural sería actualizar el pin sin leerlo, que es justo lo que hay que evitar.
+  //     ⇒ una frase falsa metida DENTRO de ese texto ⛔ no la caza este `it`;
+  //   · ⛔ tampoco cubre el itinerario CORTO (`identidadYaVerificada`), que hoy no tiene productor.
+  it("T-374-W1-26: el copy visible de las cinco pantallas es EXACTAMENTE el aprobado", () => {
+    const itin = itinerario({ identidadYaVerificada: false });
+    expect(
+      itin.length,
+      "el itinerario vino vacío: el `for` de abajo no daría una vuelta y el pin pasaría por vacío",
+    ).toBeGreaterThanOrEqual(5);
+    // Calibración: el pin tiene que tener una entrada por paso, o los pasos que falten ⛔ no se miran.
+    for (const paso of itin) {
+      expect(
+        Object.hasOwn(COPY_PINEADO, paso),
+        `el paso «${paso}» ⛔ no tiene copy pineado: su pantalla no la mira nadie`,
+      ).toBe(true);
+    }
+    const reusado = textoDelAlquiler();
+    // Calibración del enmascarado: con el texto reusado vacío, `String.replace("")` insertaría el
+    // marcador al principio y el pin quedaría comparando cualquier cosa.
+    expect(
+      reusado.length,
+      "el texto reusado del alquiler de red vino vacío: el enmascarado de abajo insertaría el marcador en cualquier lado",
+    ).toBeGreaterThan(50);
+
+    for (const paso of itin) {
+      montar({ pasoDeArranque: paso });
+      // ⛔ EL INDICADOR DE PROGRESO SE DERIVA Y ⛔ NO SE PINEA: sus dos números salen del itinerario,
+      // así que escribirlos acá sería publicar el largo del recorrido en un literal, que es
+      // exactamente lo que `AC-2` prohíbe.
+      const prefijo = `Paso ${indiceEn(itin, paso) + 1} de ${itin.length}`;
+      const crudo = (document.body.textContent ?? "").replace(/\s+/g, " ").trim();
+      expect(
+        crudo.startsWith(prefijo),
+        `la pantalla «${paso}» no arranca con su indicador de progreso: el recorte de abajo estaría cortando copy`,
+      ).toBe(true);
+      const texto = crudo.slice(prefijo.length).trim().replace(reusado, MARCADOR_DEL_ALQUILER);
+      expect(
+        texto,
+        `el copy visible de la pantalla «${paso}» dejó de ser el aprobado. ⛔ Esto NO se arregla actualizando el pin: leé la frase nueva, verificá que sea VERDADERA para las seis marcas de vuelta y recién ahí aprobala a propósito`,
+      ).toBe(COPY_PINEADO[paso]);
+      cleanup();
+    }
+  });
 });
+
+/** El bloque de copy que la pantalla de firmar REUSA de producción, tal cual se renderiza (título y
+ *  cuerpo pegados). ⛔ No se transcribe: se pide al mismo productor que la pantalla consulta. */
+function textoDelAlquiler(): string {
+  const a = escrowRentExplainer("discovery");
+  return `${a.title}${a.body}`;
+}
+
+/** Lo que ocupa el lugar del bloque de arriba en el pin. ⛔ Es un texto que ⛔ NO puede aparecer en
+ *  una pantalla, para que su presencia en el pin no se confunda con copy aprobado. */
+const MARCADOR_DEL_ALQUILER = "[[el bloque del alquiler de red, tal cual lo devuelve escrowRentExplainer]]";
+
+/**
+ * 🔴 EL COPY APROBADO DE LAS CINCO PANTALLAS, PALABRA POR PALABRA. Se toma del árbol montado y se
+ * pega acá A MANO: ⛔ ningún comando lo regenera, y ésa es toda la defensa.
+ *
+ * ⚠️ TRES FRASES DE ACÁ SON LAS QUE ESTE FIX-PACK Y EL ANTERIOR TUVIERON QUE SACAR, y quedan como
+ * recordatorio de qué se aprobó y por qué:
+ *   · la bajada del envío dice que ⛔ NO se guarda nada (decía «Se guarda solo mientras lo completás»);
+ *   · la de identidad ⛔ no promete «una vez sola»;
+ *   · la del anuncio ⛔ no promete volver «a esta misma pantalla» (F4/`H-3`: cinco de las seis marcas
+ *     vuelven a otra).
+ */
+const COPY_PINEADO: Readonly<Record<string, string>> = {
+  entrar:
+    "EntrarChaski manda USDC desde tu billetera a una cuenta bancaria en Perú.Conectar mi billeteraTus fondos y tus llaves son tuyos. Chaski no los guarda ni firma por vos.¿Todavía no tenés billetera? Instalá una.",
+  envio:
+    "Cuánto y para quiénTodavía no se guarda nada: si recargás la página, esto se vuelve a empezar.Cuánto mandásEn USDC, desde tu billetera.Quién recibeCCI de la cuentaLos 20 dígitos que imprime el banco.Escribí el monto y te decimos cuánto llega.SeguirVolverTus fondos y tus llaves son tuyos. Chaski no los guarda ni firma por vos.",
+  identidad:
+    "Tu identidadVerificamos quién sos antes de mandar la plata.Qué se verificaUn documento y una foto tuya, para que el banco de destino pueda acreditar el envío. Lo revisa nuestro verificador de identidad, no Chaski.Se abre la pantalla del verificador y, cuando termines, volvés a este mismo paso.Verificar mi identidadVolver",
+  firmar: `Firmar y enviarRevisá lo que vas a firmar antes de salir.Todavía no tenemos la cotización de este envío.${MARCADOR_DEL_ALQUILER}Vas a salir a tu billeteraSe abre tu billetera para que revises y firmes. Chaski no firma por vos.Te va a pedir 1 firma:La transacción que deposita tus USDC en el escrow. Es la que mueve tu plata. Sin esta firma no sale nada.Cuando termines, el recorrido sigue. Si rechazás alguna firma, te avisamos y podés volver a intentar.Abrir mi billeteraVolverTus fondos y tus llaves son tuyos. Chaski no los guarda ni firma por vos.`,
+  seguimiento:
+    "SeguimientoAcá vas viendo dónde está tu envío.Todavía no hay ningún envío en curso.VolverTus fondos y tus llaves son tuyos. Chaski no los guarda ni firma por vos.",
+};

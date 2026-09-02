@@ -27,7 +27,7 @@ import { MARCA_POP_KYC, MARCA_POP_PAYOUT } from "../../infrastructure/solana/dee
 import { PARAM_ERROR } from "../../infrastructure/solana/deeplink/protocol";
 import { PARAM_KYC, VALOR_VUELTA_KYC, urlDeVueltaDeKyc } from "../splash-puerta";
 import { PARAM_SALIDA, VALOR_SALIDA } from "../salida-al-navegador-de-la-billetera";
-import { PASO_DE_ENTRADA, esPasoDelRecorrido } from "./pasos";
+import { PASO_DE_ENTRADA, esPasoDelRecorrido, indiceEn, itinerario } from "./pasos";
 import {
   MARCA_DEL_VERIFICADOR,
   MARCA_DE_LA_SALIDA,
@@ -39,6 +39,7 @@ import {
   aterrizajeDelAnfitrion,
   codigoDeErrorDeLaUrl,
   marcaDeLaUrl,
+  origenDe,
   volvioPorEnlace,
   vueltaDeUnSalto,
 } from "./salto";
@@ -158,12 +159,24 @@ describe("WKH-374/W1.0 · la premisa: el universo de marcas de vuelta es enumera
 
   // ── LA VUELTA COMPLETA, DE LA URL AL PASO ──────────────────────────────────────────────────────
   //
-  // MUTANTE QUE MATA (`MW-3`): en `./salto.ts`, en `vueltaDeUnSalto`, hacer que la rama con
-  // `codigoDeError` devuelva la pantalla de entrada en vez del mismo paso.
-  // ⛔ FALSO KILLED A EVITAR: recorrer sólo el camino feliz. `AC-8` es la mitad que importa, y con el
-  // mutante puesto el camino feliz sigue verde. Por eso el `it` recorre LAS DOS RAMAS sobre el mismo
-  // conjunto de URLs, y compara el paso de una contra el de la otra.
-  it("T-374-W1-3: ninguna marca aterriza en `entrar`, y el camino de ERROR aterriza en el MISMO paso que el feliz", () => {
+  // 🔴 ESTE `it` MEDÍA LA FRASE EQUIVOCADA, Y ERA UN CANDADO SOBRE EL DEFECTO (F4/`H-1`). Afirmaba
+  // que «el camino de ERROR aterriza en el MISMO paso que el feliz», que es lo que `salto.ts` decía
+  // de sí mismo; y eso ⛔ NO es lo que pide `AC-8`, que dice *«aterrizar en el mismo paso DONDE
+  // ESTABA»*. Los dos enunciados sólo coinciden si el salto vuelve a su propia pantalla, y F4 midió
+  // que para cinco de las seis marcas no coinciden: `?dl=firmar-tx&errorCode=4001` dejaba a la
+  // persona en el seguimiento, un paso MÁS ADELANTE y sin forma de reintentar la firma.
+  //
+  // MUTANTE QUE MATA (`MW-3`): en `./salto.ts`, apuntar la entrada de la prueba de posesión del pago
+  // en `ORIGEN_POR_ENLACE` al mismo paso que tiene en `ATERRIZAJE_POR_ENLACE` —o sea, volver a la
+  // tabla única— ⇒ cae la ligadura por nombre Y cae el conteo de marcas que retroceden.
+  // ⛔ FALSO KILLED A EVITAR 1: recorrer sólo el camino feliz. Con el mutante puesto el feliz sigue
+  // verde, porque el mutante ⛔ no toca la tabla de aterrizaje.
+  // ⛔ FALSO KILLED A EVITAR 2 —y es el que hacía inútil la versión vieja—: comparar el error contra
+  // el feliz y nada más. Esa comparación es verdadera para la tabla única Y para las dos tablas si
+  // colapsaran, así que no separa el arreglo del defecto. Por eso acá hay (a) ligaduras marca →
+  // origen escritas a mano contra los nombres que producción exporta, y (b) un conteo POSITIVO de
+  // marcas cuyo error deja a la persona ANTES que el camino feliz, que con la tabla única es CERO.
+  it("T-374-W1-3: el camino feliz ⛔ nunca aterriza en `entrar`, y el de ERROR vuelve al paso del que se SALIÓ", () => {
     const origen = "https://chaski.test/";
     // El código crudo que una billetera deja al rechazar. ⛔ NO es una marca de vuelta (no lo vigila
     // `CD-W1-7`) y ⛔ no es una causa del vocabulario del enlace: es texto de la billetera, y por eso
@@ -187,8 +200,14 @@ describe("WKH-374/W1.0 · la premisa: el universo de marcas de vuelta es enumera
       MARCAS_DE_VUELTA.length + 2,
     );
 
+    const itin = itinerario({ identidadYaVerificada: false });
     const enLaEntrada: string[] = [];
-    const divergentes: string[] = [];
+    /** Las marcas cuyo camino de ERROR deja a la persona MÁS ADELANTE que el feliz. Es el defecto de
+     *  `H-1` contado: con la tabla única esta lista quedaba vacía porque los dos pasos eran el mismo,
+     *  y por eso hace falta además el conteo positivo de más abajo. */
+    const adelantadas: string[] = [];
+    /** Las que la dejan ANTES, o sea las que el arreglo mueve. Con la tabla única son CERO. */
+    const retrocedidas: string[] = [];
     let aterrizajes = 0;
     for (const href of urls) {
       // La lectura de la marca y el aterrizaje son dos pasos distintos, y los dos tienen que dar: una
@@ -216,28 +235,95 @@ describe("WKH-374/W1.0 · la premisa: el universo de marcas de vuelta es enumera
       ).toBe("aterriza");
       if (feliz.desenlace !== "aterriza" || conError.desenlace !== "aterriza") continue;
       aterrizajes++;
-      if (feliz.paso === PASO_DE_ENTRADA || conError.paso === PASO_DE_ENTRADA) enLaEntrada.push(href);
-      if (feliz.paso !== conError.paso) {
-        divergentes.push(`${href}: feliz=${feliz.paso} error=${conError.paso}`);
-      }
-      // Y el error cambia el MOTIVO, que es lo único que puede cambiar.
-      expect(feliz.motivo, "el camino feliz no puede traer motivo de error").toBeNull();
+      // ⛔ SÓLO EL CAMINO FELIZ SE MIDE ACÁ CONTRA `AC-7`. El de error puede devolver la entrada
+      // —tres marcas SALEN de esa pantalla— y quien hace cumplir el NUNCA es `aterrizajeDelAnfitrion`,
+      // que es lo que se mide en el bloque siguiente. Medirlo acá sería exigirle la prohibición a la
+      // función que ⛔ no la implementa, y el arreglo sería mentir sobre el origen.
+      if (feliz.paso === PASO_DE_ENTRADA) enLaEntrada.push(href);
+
+      // 🔴 LO QUE LA PERSONA VE, que es lo único que `AC-8` promete: el desenlace del anfitrión.
+      const visto = aterrizajeDelAnfitrion(conError, PASO_DE_ENTRADA);
       expect(
-        conError.motivo,
-        "el camino de error tiene que traer un motivo legible, o la persona queda sin saber qué pasó",
+        visto.paso,
+        `una vuelta con código de rechazo deja a la persona en la pantalla de entrada, que es lo que AC-8 prohíbe con la palabra NUNCA: ${href}`,
+      ).not.toBe(PASO_DE_ENTRADA);
+      expect(
+        visto.motivo,
+        `la persona rechazó la firma y ⛔ no lee ningún motivo: ${href}`,
       ).toBeTruthy();
+
+      const iFeliz = indiceEn(itin, aterrizajeDelAnfitrion(feliz, PASO_DE_ENTRADA).paso);
+      const iError = indiceEn(itin, visto.paso);
+      expect(iFeliz, `el paso feliz de ${href} no está en el itinerario`).toBeGreaterThanOrEqual(0);
+      expect(iError, `el paso de error de ${href} no está en el itinerario`).toBeGreaterThanOrEqual(0);
+      if (iError > iFeliz) adelantadas.push(`${href}: feliz=${feliz.paso} error=${visto.paso}`);
+      if (iError < iFeliz) retrocedidas.push(`${href}: feliz=${feliz.paso} error=${visto.paso}`);
+
+      // Y el camino feliz ⛔ no puede traer motivo de error: si lo trajera, la pantalla diría que algo
+      // falló cuando no falló.
+      expect(feliz.motivo, "el camino feliz no puede traer motivo de error").toBeNull();
     }
-    expect(aterrizajes, "ninguna URL llegó a aterrizar: las dos listas de abajo pasarían por vacío").toBe(
+    expect(aterrizajes, "ninguna URL llegó a aterrizar: todo lo de abajo pasaría por vacío").toBe(
       urls.length,
     );
     expect(
       enLaEntrada,
-      "una vuelta aterriza en la pantalla de entrada. AC-7 lo prohíbe con la palabra NUNCA",
+      "una vuelta del camino feliz aterriza en la pantalla de entrada. AC-7 lo prohíbe con la palabra NUNCA",
     ).toEqual([]);
     expect(
-      divergentes,
-      "el camino de ERROR manda a otro paso que el feliz: el error cambia el motivo, ⛔ nunca el paso (AC-8)",
+      adelantadas,
+      "el camino de ERROR deja a la persona MÁS ADELANTE que el feliz: rechazar una firma no puede hacer avanzar el recorrido (AC-8)",
     ).toEqual([]);
+    // 🔴 EL CONTROL POSITIVO DE `H-1`, y sin él las dos listas vacías de arriba las pasa la TABLA
+    // ÚNICA que este fix-pack vino a partir en dos: con una sola tabla, error y feliz son el mismo
+    // paso para las ocho marcas ⇒ esta lista queda vacía y el `it` quedaría verde sobre el defecto.
+    expect(
+      retrocedidas.length,
+      "ninguna marca vuelve a un paso ANTERIOR al del camino feliz: las dos tablas de aterrizaje colapsaron en una y `AC-8` volvió a ser la re-lectura de `AC-7`",
+    ).toBeGreaterThanOrEqual(1);
+
+    // ── LA LIGADURA MARCA → ORIGEN, con los nombres que producción exporta ────────────────────────
+    //
+    // Mismo recurso que la permutación de `T-374-W1-0`, y por el mismo motivo: las listas de arriba
+    // son invariantes bajo permutación de la tabla de orígenes, así que sola no diría a qué paso
+    // vuelve cada marca. ⛔ Ningún literal de marca: los tres nombres entran de producción.
+    expect(
+      origenDe(MARCA_POP_PAYOUT),
+      "la prueba de posesión del pago dejó de tener su origen en la pantalla de firmar: la pide `confirmAndSend` antes del `prepare`, y es exactamente la vuelta que F4 midió aterrizando un paso más adelante",
+    ).toBe("firmar");
+    expect(
+      origenDe(MARCA_CREAR_NONCE),
+      "la creación del nonce durable dejó de tener su origen en la pantalla de firmar: es un salto DENTRO de preparar la firma",
+    ).toBe("firmar");
+    expect(
+      origenDe(MARCA_POP_KYC),
+      "la prueba de posesión de la identidad dejó de tener su origen en la pantalla de entrada: la pide `connectWallet`, ⛔ no la pantalla de identidad",
+    ).toBe(PASO_DE_ENTRADA);
+    expect(
+      origenDe(MARCA_DEL_VERIFICADOR),
+      "el salto al verificador dejó de tener su origen en la pantalla de identidad, que es la única que lo ofrece",
+    ).toBe("identidad");
+    expect(
+      origenDe(MARCA_DE_LA_SALIDA),
+      "la salida al navegador de la billetera dejó de tener su origen en la pantalla de entrada, que es la única que la ofrece",
+    ).toBe(PASO_DE_ENTRADA);
+    // Y una marca que este repo no escribió ⛔ no tiene origen: el tercer valor, ⛔ no un paso por
+    // defecto. Es lo que hace que `vueltaDeUnSalto` caiga al aterrizaje en vez de adivinar.
+    expect(
+      origenDe("marca-que-nadie-escribio"),
+      "una marca desconocida tiene ORIGEN: el camino de error la mandaría a un paso adivinado",
+    ).toBe(SIN_ATERRIZAJE);
+    //
+    // ⚠️ LO QUE **NO** SE CIERRA ACÁ, con su tamaño exacto y por la misma razón que el límite
+    // declarado en `T-374-W1-0`: el connect y las dos firmas del depósito ⛔ NO tienen constante
+    // exportada con nombre propio en producción —son literales dentro de `esPaso`, que no se
+    // exporta—, así que su ligadura marca → origen ⛔ no se puede afirmar acá sin transcribir un
+    // literal, que es lo que `CD-W1-7` prohíbe.
+    // ⚠️ LA MARCA QUE `AC-8` NOMBRA —la firma de la transacción— ES UNA DE ESAS TRES. Lo que sí se
+    // mide de punta a punta, montando el anfitrión en `T-374-W1-25`, es la prueba de posesión del
+    // PAGO: comparte con ella el origen (la pantalla de firmar) Y el aterrizaje feliz (el
+    // seguimiento), o sea que reproduce el desenlace exacto que F4 midió. ⛔ Eso no la reemplaza:
+    // que la de la transacción se comporte igual descansa en que las dos salen de la misma tabla.
   });
 
   // ── LA MARCA QUE VIENE DEL PROTOTIPO ───────────────────────────────────────────────────────────

@@ -13,9 +13,16 @@
 //
 // ⛔ Y ESTE ARCHIVO NO TOCA `localStorage`, `sessionStorage`, `document.cookie` NI LA BARRA DE
 // DIRECCIONES. La única lectura de la URL es la del `href` en el montaje, que se le PASA a la
-// función pura de `./salto.ts` — leer no es escribir, y escribir no pasa. Lo mide `T-374-W1-12`.
+// función pura de `./salto.ts`: leer no es escribir, y escribir no pasa.
+//
+// ⚠️ QUÉ MIDE DE ESO `T-374-W1-12` Y QUÉ NO, porque la frase anterior decía «lo mide» a secas y era
+// falsa para media docena de formas (CR/BLQ-ALTO-1): mide las OCHO formas de su tabla —los dos
+// almacenes por punto y por corchete, el alias, la cookie en las dos direcciones, el historial y la
+// salida por `location` con prefijo o sin él, por asignación o por método—, ⛔ y no mide la
+// reflexión, la indirección por otro módulo ni las salidas que no pasan por `location`. La lista
+// completa de lo que queda afuera vive en el `it`, y ⛔ acá no se afirma más que eso.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Container } from "../../composition/container";
 import { getContainer } from "../../composition/container";
 import { MIN_SEND_USD, OFFERED_PAYOUT_METHODS, cciDigits, isValidCci } from "../../domain/remittance";
@@ -36,6 +43,7 @@ import {
   PASO_DE_ENTRADA,
   type PasoDelRecorrido,
   anterior,
+  etiquetaDe,
   etiquetasDe,
   indiceEn,
   itinerario,
@@ -63,7 +71,16 @@ export interface PropsDelRecorrido {
   pasoDeArranque?: PasoDelRecorrido;
   /** El `href` con el que se aterrizó. Default: el de esta ventana. ⛔ Se LEE, nunca se escribe. */
   hrefDeAterrizaje?: string;
-  /** ¿Esta persona ya tiene la identidad verificada? Decide el itinerario (`AC-4`). */
+  /**
+   * ¿Esta persona ya tiene la identidad verificada? Decide el itinerario (`AC-4`).
+   *
+   * ⚠️ HOY ⛔ NO TIENE NINGÚN PRODUCTOR FUERA DE LOS TESTS, y se dice acá porque una costura sin
+   * llamador que no está declarada es una rama que alguien va a leer como viva (CR/BLQ-MED-1). El
+   * punto de montaje arma `<Recorrido />` sin props ⇒ vale `false` ⇒ el paso de la identidad aparece
+   * siempre. El copy de esa pantalla ya ⛔ no promete lo contrario, y el itinerario corto queda
+   * ejercitado sólo por los `it` de `./pasos.test.ts`. Cablearlo es de otra ola: el veredicto vive en
+   * el disco del navegador y ⛔ este árbol no lo puede leer.
+   */
   identidadYaVerificada?: boolean;
 }
 
@@ -76,10 +93,18 @@ interface Borrador {
 
 const BORRADOR_VACIO: Borrador = { monto: "", nombre: "", cci: "" };
 
-/** Los mismos 300 ms que el debounce de la cotización del árbol viejo (`../flow.tsx`, el efecto
- *  «preview en vivo (debounced)»). ⛔ Cita SIN ancla a propósito: ese archivo lleva marcadores de
- *  censo de citas ancladas entrantes por número, y anclar una nueva obligaría a editarlos. */
-const MS_DE_ESPERA_DE_LA_COTIZACION = 300;
+/**
+ * Los mismos milisegundos que el debounce de la cotización del árbol viejo (`../flow.tsx`, el efecto
+ * «preview en vivo (debounced)»). ⛔ Cita SIN ancla a propósito: ese archivo lleva marcadores de
+ * censo de citas ancladas entrantes por número, y anclar una nueva obligaría a editarlos.
+ *
+ * 🔴 SE EXPORTA PARA QUE UN `it` PUEDA COMPARARLO CON EL ORIGINAL (CR/MNR-1). El número estaba
+ * duplicado y ⛔ sin ningún testigo: ponerlo en `0` dejaba la suite entera en verde, así que «los
+ * mismos 300 ms» era una frase que nadie podía refutar. `T-374-W1-19` lee el fuente del árbol viejo,
+ * saca SU número y exige que sean el mismo. ⛔ No se extrajo a un módulo compartido porque eso
+ * obligaría a editar `../flow.tsx`, que esta ola tiene que dejar con Δ0.
+ */
+export const MS_DE_ESPERA_DE_LA_COTIZACION = 300;
 
 /**
  * ⛔ NI `verificar` NI `firmar` PUEDEN SEGUIR SIN UN ENVÍO, y hasta el fix-pack se volvían de vuelta
@@ -87,9 +112,14 @@ const MS_DE_ESPERA_DE_LA_COTIZACION = 300;
  * paso de firmar remonta el árbol, así que esta pestaña ya no tiene la remesa que se estaba armando.
  *
  * ⛔ NO DICE QUE FALLÓ EL ENVÍO: no falló, lo que falta son los datos EN ESTA PESTAÑA.
+ *
+ * 🔴 Y MANDA AL PASO DONDE HAY ALGO QUE CARGAR (CR/BLQ-BAJO-2). Decía «Volvé un paso», y un paso
+ * atrás desde el de firmar es el de la identidad, donde ⛔ no hay ningún dato que volver a escribir.
+ * O sea que el copy del caso central —volver de la billetera y encontrarse sin envío— mandaba a la
+ * persona a una pantalla que no la podía ayudar. ⛔ El nombre del paso NO SE ESCRIBE: sale de la
+ * tabla, que es el único sitio donde las etiquetas están escritas.
  */
-const MOTIVO_SIN_ENVIO =
-  "Este navegador ya no tiene los datos de este envío, así que todavía no hay nada que firmar. Volvé un paso y cargalo de nuevo: tu billetera sigue conectada.";
+const MOTIVO_SIN_ENVIO = `Este navegador ya no tiene los datos de este envío, así que todavía no hay nada que firmar. Volvé hasta «${etiquetaDe("envio")}» y cargalo de nuevo: tu billetera sigue conectada.`;
 
 /** La misma frase que el árbol viejo muestra para el mismo desenlace. ⛔ No pasa por `humanError`:
  *  el caso de uso no tira, contesta un snapshot que no llegó a `kyc_passed`. */
@@ -127,6 +157,16 @@ export function Recorrido({
   const [cotizacion, setCotizacion] = useState<Quote | null>(null);
   const [remesa, setRemesa] = useState<RemittanceState | null>(null);
   const [enVuelo, setEnVuelo] = useState(false);
+  /** ⇒ hay un caso de uso corriendo. Lo leen las pantallas para apagar los controles y decirlo. */
+  const [enCurso, setEnCurso] = useState(false);
+  /**
+   * 🔴 LA GUARDA DE REENTRADA, Y POR QUÉ UN `ref` Y ⛔ NO EL ESTADO DE ARRIBA (CR/BLQ-MED-4). Medido
+   * sobre el árbol anterior: tres clics seguidos daban TRES llamadas al caso de uso, y del otro lado
+   * hay un depósito y una cuota de proveedor. El `disabled` de las pantallas es la mitad que se ve;
+   * ésta es la que decide, porque no depende de que un render haya llegado a pintarse entre dos
+   * toques. ⛔ Un `useState` leído desde el manejador lee el valor del render que lo creó.
+   */
+  const enCursoRef = useRef(false);
   /** La dirección que `connectWallet` contestó. La necesita `startKyc` y ⛔ no se lee del disco. */
   const [direccion, setDireccion] = useState<string | null>(null);
   /** A dónde hay que ir a firmar. `null` = todavía no hay ningún salto pendiente. */
@@ -156,6 +196,10 @@ export function Recorrido({
   // mínimo el agente rechaza la cotización igual, así que pedirla es un viaje garantizado a un error.
   // La constante es la de producción; ⛔ acá no se escribe ningún número.
   const montoCotizable = Number.isFinite(monto) && monto >= MIN_SEND_USD;
+  /** 🔴 EL MISMO CORTE, PERO PARA DECIRLO (CR/BLQ-MED-2). ⛔ Pide un monto ESCRITO Y MAYOR A CERO: el
+   *  campo vacío también está por debajo del mínimo, y gritarle a alguien que todavía no escribió
+   *  nada es la otra forma de que la pantalla hable de más. Mismo predicado que el árbol viejo. */
+  const porDebajoDelMinimo = Number.isFinite(monto) && monto > 0 && monto < MIN_SEND_USD;
 
   // La cotización en vivo de la pantalla 2. Se pide por el caso de uso, ⛔ nunca por un `fetch` de
   // acá: la pantalla no sabe con quién se cotiza y no tiene por qué saberlo.
@@ -193,6 +237,69 @@ export function Recorrido({
     };
   }, [c, monto, montoCotizable]);
 
+  /**
+   * 🔴 EL APAGADOR DEL ESTADO EN VUELO, Y ES UN ARREGLO DE COPY ANTES QUE UNO DE ESTADO
+   * (CR/BLQ-MED-3). `setEnVuelo(false)` no aparecía NI UNA VEZ: un flag que se prendía y no se
+   * apagaba, compartido por tres pantallas. Reproducción: tocar el enlace del verificador, «Volver»,
+   * «Seguir» ⇒ la pantalla decía «Estamos en el verificador» con el navegador quieto, y esa frase
+   * seguía a la persona a las otras pantallas. ⛔ Decir dónde está alguien que no está ahí es la
+   * misma clase de mentira que este fix-pack vino a cerrar.
+   *
+   * Cambiar de paso lo apaga: si la persona se está moviendo por el recorrido, no está en la otra app.
+   */
+  // ⚠️ `paso` ⛔ NO SE LEE ADENTRO: es el DISPARADOR. El efecto existe para correr CUANDO el paso
+  // cambia, así que sacarlo de la lista —que es lo que el linter propone— lo dejaría corriendo una
+  // sola vez en el montaje y el apagador no apagaría nada. Lo mide `T-374-W1-22` en su aserción (A).
+  // ⛔ La supresión va en UNA sola línea y pegada al `useEffect`: partida en varias, el linter la
+  // reporta como supresión sin efecto y la regla queda igual de encendida (medido).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `paso` es el disparador, no una lectura
+  useEffect(() => {
+    setEnVuelo(false);
+  }, [paso]);
+
+  /**
+   * Y LA SEGUNDA MITAD, PARA EL CASO QUE MÁS DUELE: volver del salto SIN cambiar de paso. Es lo que
+   * pasa en un teléfono cuando la billetera abre y se vuelve con el botón del sistema, y también
+   * cuando el enlace lleva a una página web y se vuelve con «atrás».
+   *   · `visibilitychange` ⇒ la pestaña volvió a estar a la vista;
+   *   · `pageshow` ⇒ la página volvió desde la caché de ida y vuelta del navegador.
+   *
+   * ⚠️ EL LÍMITE, DECLARADO: si el toque ⛔ NO produce NADA —la app no abre y la pestaña nunca se
+   * esconde— ninguno de los dos eventos llega, y el único apagador que queda es el de arriba. Eso ⛔
+   * no se cierra escuchando eventos, y no se afirma cerrado.
+   */
+  useEffect(() => {
+    if (!enVuelo) return;
+    const apagar = () => {
+      if (document.visibilityState === "visible") setEnVuelo(false);
+    };
+    window.addEventListener("pageshow", apagar);
+    document.addEventListener("visibilitychange", apagar);
+    return () => {
+      window.removeEventListener("pageshow", apagar);
+      document.removeEventListener("visibilitychange", apagar);
+    };
+  }, [enVuelo]);
+
+  /**
+   * El molde es el `guard` del árbol viejo (`../flow.tsx`), que existe exactamente para esto.
+   * ⛔ Cita SIN ancla a propósito: ese archivo lleva marcadores de censo de citas entrantes por
+   * número, y anclar una nueva obligaría a editarlos.
+   * ⛔ El `finally` no es decorativo: sin él, un caso de uso que tira deja los controles apagados
+   * para siempre y la persona sin forma de reintentar.
+   */
+  const conGuarda = useCallback(async (fn: () => Promise<unknown>) => {
+    if (enCursoRef.current) return;
+    enCursoRef.current = true;
+    setEnCurso(true);
+    try {
+      await fn();
+    } finally {
+      enCursoRef.current = false;
+      setEnCurso(false);
+    }
+  }, []);
+
   const avanzar = useCallback(() => setPaso((p) => siguiente(itin, p)), [itin]);
 
   /** ⛔ NO LIMPIA NADA. Retrocede un paso y deja el borrador donde estaba (`AC-3`). */
@@ -200,52 +307,58 @@ export function Recorrido({
 
   const conectar = useCallback(() => {
     setMotivo(null);
-    void c.connectWallet
-      .execute()
-      .then((r) => {
-        setDireccion(r.address);
-        // El caso de uso puede contestar que hay que SALIR. Cuando lo hace, se anuncia ANTES —el
-        // anuncio se pinta porque hay destino— y el salto queda como algo que la persona TOCA:
-        // ⛔ nunca un salto sin aviso previo, y ⛔ nunca una navegación programática (ver `Salir`).
-        if (r.estado === "hay-que-salir") {
-          setPorEnlace(true);
-          setDestinoDelSalto(r.irA);
-          return;
-        }
-        avanzar();
-      })
-      .catch((e: unknown) => setMotivo(humanError(codigoDe(e))));
-  }, [c, avanzar]);
+    void conGuarda(() =>
+      c.connectWallet
+        .execute()
+        .then((r) => {
+          setDireccion(r.address);
+          // El caso de uso puede contestar que hay que SALIR. Cuando lo hace, se anuncia ANTES —el
+          // anuncio se pinta porque hay destino— y el salto queda como algo que la persona TOCA:
+          // ⛔ nunca un salto sin aviso previo, y ⛔ nunca una navegación programática (ver `Salir`).
+          if (r.estado === "hay-que-salir") {
+            setPorEnlace(true);
+            setDestinoDelSalto(r.irA);
+            return;
+          }
+          avanzar();
+        })
+        .catch((e: unknown) => setMotivo(humanError(codigoDe(e)))),
+    );
+  }, [c, avanzar, conGuarda]);
 
-  /** ⛔ NO NAVEGA. Lo dispara el `onClick` del `<a href>`, que es quien navega, y lo único que hace
-   *  es prender el estado EN VUELO para que quede algo con palabras mientras la pestaña se va. */
-  const salirALaBilletera = useCallback(() => {
-    setEnVuelo(true);
-  }, []);
-
-  /** El mismo gesto, para el salto al verificador. Va aparte porque el TEXTO en vuelo es otro. */
-  const salirAlVerificador = useCallback(() => {
+  /**
+   * ⛔ NO NAVEGA. Lo dispara el `onClick` del `<a href>`, que es quien navega, y lo único que hace es
+   * prender el estado EN VUELO para que quede algo con palabras mientras la pestaña se va.
+   *
+   * 🔴 ES UNO SOLO Y ⛔ NO DOS (CR/MNR-2). Había dos `useCallback` con el MISMO cuerpo y un motivo
+   * inventado al lado: «va aparte porque el TEXTO en vuelo es otro». Es falso: el texto lo elige cada
+   * pantalla al renderizar, este gesto ⛔ no lo toca y no lo puede tocar. Un motivo inventado en un
+   * docblock es peor que ningún motivo, porque el que lea después no lo vuelve a revisar.
+   */
+  const salirDeLaApp = useCallback(() => {
     setEnVuelo(true);
   }, []);
 
   const seguirDelEnvio = useCallback(() => {
     setMotivo(null);
-    void c.createRemittance
-      .execute({
-        amountUsd: monto,
-        beneficiary: {
-          name: borrador.nombre,
-          country: "PE",
-          method: OFFERED_PAYOUT_METHODS[0],
-          destination: cciDigits(borrador.cci),
-        },
-      })
-      .then((r) => {
-        setRemesa(r.snapshot);
-        avanzar();
-      })
-      .catch((e: unknown) => setMotivo(humanError(codigoDe(e))));
-  }, [c, monto, borrador.nombre, borrador.cci, avanzar]);
+    void conGuarda(() =>
+      c.createRemittance
+        .execute({
+          amountUsd: monto,
+          beneficiary: {
+            name: borrador.nombre,
+            country: "PE",
+            method: OFFERED_PAYOUT_METHODS[0],
+            destination: cciDigits(borrador.cci),
+          },
+        })
+        .then((r) => {
+          setRemesa(r.snapshot);
+          avanzar();
+        })
+        .catch((e: unknown) => setMotivo(humanError(codigoDe(e)))),
+    );
+  }, [c, monto, borrador.nombre, borrador.cci, avanzar, conGuarda]);
 
   /**
    * 🔴 VERIFICAR LLAMA A `startKyc`. Acá había `setEnVuelo(true); avanzar();` y nada más, o sea que la
@@ -265,26 +378,28 @@ export function Recorrido({
       setMotivo(MOTIVO_SIN_ENVIO);
       return;
     }
-    void c.startKyc
-      .execute({
-        remittanceId: id,
-        address: direccion ?? "",
-        callbackUrl: origenDeLaVuelta === "" ? undefined : urlDeVueltaDeKyc(origenDeLaVuelta),
-      })
-      .then((res) => {
-        if (res.kind === "redirect") {
-          setDestinoDelVerificador(res.url);
-          return;
-        }
-        if (res.snapshot.status !== "kyc_passed") {
-          setMotivo(MOTIVO_KYC_NO_PASO);
-          return;
-        }
-        setRemesa(res.snapshot);
-        avanzar();
-      })
-      .catch((e: unknown) => setMotivo(humanError(codigoDe(e))));
-  }, [c, remesa?.id, direccion, origenDeLaVuelta, avanzar]);
+    void conGuarda(() =>
+      c.startKyc
+        .execute({
+          remittanceId: id,
+          address: direccion ?? "",
+          callbackUrl: origenDeLaVuelta === "" ? undefined : urlDeVueltaDeKyc(origenDeLaVuelta),
+        })
+        .then((res) => {
+          if (res.kind === "redirect") {
+            setDestinoDelVerificador(res.url);
+            return;
+          }
+          if (res.snapshot.status !== "kyc_passed") {
+            setMotivo(MOTIVO_KYC_NO_PASO);
+            return;
+          }
+          setRemesa(res.snapshot);
+          avanzar();
+        })
+        .catch((e: unknown) => setMotivo(humanError(codigoDe(e)))),
+    );
+  }, [c, remesa?.id, direccion, origenDeLaVuelta, avanzar, conGuarda]);
 
   /**
    * 🔴 EL CAMINO POR ENLACE YA NO SE DESCARTA EN SILENCIO. Acá había un `if (r.estado === "listo")`
@@ -301,18 +416,20 @@ export function Recorrido({
       setMotivo(MOTIVO_SIN_ENVIO);
       return;
     }
-    void c.confirmAndSend
-      .execute({ remittanceId: id, hrefDeLaVuelta: hrefDeMontaje })
-      .then((r) => {
-        if (r.estado === "hay-que-salir") {
-          setDestinoDelSalto(r.irA);
-          return;
-        }
-        setRemesa(r.remesa.snapshot);
-        avanzar();
-      })
-      .catch((e: unknown) => setMotivo(humanError(codigoDe(e))));
-  }, [c, remesa?.id, hrefDeMontaje, avanzar]);
+    void conGuarda(() =>
+      c.confirmAndSend
+        .execute({ remittanceId: id, hrefDeLaVuelta: hrefDeMontaje })
+        .then((r) => {
+          if (r.estado === "hay-que-salir") {
+            setDestinoDelSalto(r.irA);
+            return;
+          }
+          setRemesa(r.remesa.snapshot);
+          avanzar();
+        })
+        .catch((e: unknown) => setMotivo(humanError(codigoDe(e)))),
+    );
+  }, [c, remesa?.id, hrefDeMontaje, avanzar, conGuarda]);
 
   // ⛔ EL MISMO CORTE QUE LA COTIZACIÓN, y no dos reglas distintas: si por debajo del mínimo no se
   // cotiza, tampoco se puede seguir con un envío del que no hay cifra. Es el gate del árbol viejo.
@@ -333,10 +450,11 @@ export function Recorrido({
           anuncio={anuncio}
           destinoDelSalto={destinoDelSalto}
           enVuelo={enVuelo}
+          enCurso={enCurso}
           motivo={motivo}
           urlParaInstalar={URL_INSTALAR_PHANTOM}
           onConectar={conectar}
-          onSalirALaBilletera={salirALaBilletera}
+          onSalirALaBilletera={salirDeLaApp}
         />
       ) : null}
       {paso === "envio" ? (
@@ -345,8 +463,10 @@ export function Recorrido({
           nombre={borrador.nombre}
           cci={borrador.cci}
           cotizacion={cotizacion}
+          porDebajoDelMinimo={porDebajoDelMinimo}
           motivo={motivo}
           puedeSeguir={puedeSeguir}
+          enCurso={enCurso}
           onMonto={(v) => setBorrador((b) => ({ ...b, monto: v }))}
           onNombre={(v) => setBorrador((b) => ({ ...b, nombre: v }))}
           onCci={(v) => setBorrador((b) => ({ ...b, cci: v }))}
@@ -359,9 +479,10 @@ export function Recorrido({
           verificador="nuestro verificador de identidad"
           destinoDelVerificador={destinoDelVerificador}
           enVuelo={enVuelo}
+          enCurso={enCurso}
           motivo={motivo}
           onVerificar={verificar}
-          onSalirAlVerificador={salirAlVerificador}
+          onSalirAlVerificador={salirDeLaApp}
           onVolver={volver}
         />
       ) : null}
@@ -372,9 +493,10 @@ export function Recorrido({
           anuncio={anuncioDe({ porEnlace })}
           destinoDelSalto={destinoDelSalto}
           enVuelo={enVuelo}
+          enCurso={enCurso}
           motivo={motivo}
           onFirmar={firmar}
-          onSalirALaBilletera={salirALaBilletera}
+          onSalirALaBilletera={salirDeLaApp}
           onVolver={volver}
         />
       ) : null}

@@ -6,6 +6,8 @@
 // teléfono: todo es jsdom, y la medición en un dispositivo real es de otra ola. Se dice acá arriba
 // para que nadie lea el verde de este archivo como si dijera algo sobre un teléfono.
 
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -35,10 +37,10 @@ import { buildTestContainer } from "../../test-support/test-container";
 import { MARCA, enlaceDeVuelta } from "../../infrastructure/solana/deeplink/sesion";
 import { MARCA_CREAR_NONCE } from "../../infrastructure/solana/deeplink/conexion";
 import { MIN_SEND_USD } from "../../domain/remittance";
-import { NO_CUSTODIAL } from "./pantallas";
+import { ETIQUETA_CONECTANDO, NO_CUSTODIAL } from "./pantallas";
 import { TABLA } from "./pasos";
-import { type PropsDelRecorrido, Recorrido } from "./recorrido";
-import { MOTIVO_SIN_ATERRIZAJE, anuncioDe } from "./salto";
+import { MS_DE_ESPERA_DE_LA_COTIZACION, type PropsDelRecorrido, Recorrido } from "./recorrido";
+import { MOTIVO_SIN_ATERRIZAJE, TEXTO_EN_VUELO_IDENTIDAD, anuncioDe } from "./salto";
 
 const NOMBRE = "Maria Elena Quispe";
 const MONTO = "25";
@@ -100,6 +102,18 @@ function revisarCopy(texto: string, quien: string) {
   );
   expect(texto, `${quien} promete que «Crear la cuenta» desaparece`).not.toMatch(
     /sin crear (?:la )?cuenta/i,
+  );
+  // 🔴 LAS DOS MENTIRAS DEL CR, CERRADAS ACÁ PARA QUE NO VUELVAN. Las dos estuvieron renderizadas en
+  // producción del árbol nuevo y las dos las leía la persona:
+  //   · «Se guarda solo mientras lo completás» ⇒ no se guarda nada hasta tocar «Seguir»;
+  //   · «Una vez sola / no la vuelven a pedir» ⇒ la costura que lo saltea ⛔ no tiene productor.
+  // ⛔ Los predicados son por el SENTIDO y no por la frase exacta: prohibir el literal viejo dejaría
+  // pasar la misma promesa escrita con otras palabras, que es como vuelven estas cosas.
+  expect(texto, `${quien} sugiere que lo cargado se guarda solo`).not.toMatch(
+    /se guarda\s+sol[oa]|guardado autom|se va guardando/i,
+  );
+  expect(texto, `${quien} promete que la identidad se pide una sola vez`).not.toMatch(
+    /una vez sola|no (?:te )?la vuelven a pedir|no (?:te )?la volvemos a pedir/i,
   );
 }
 
@@ -652,5 +666,273 @@ describe("WKH-374/W1.2 · el recorrido nuevo, montado y recorrido", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // ── EL CORTE POR EL MÍNIMO SE LE DICE A LA PERSONA (CR/BLQ-MED-2) ──────────────────────────────
+  //
+  // MUTANTE QUE MATA (`MW-24`): en `./recorrido.tsx`, `const porDebajoDelMinimo = false;` ⇒ cae la
+  // primera aserción, la del `role="alert"`.
+  // MUTANTE QUE TAMBIÉN MATA (`MW-24b`): en `./pantallas.tsx`, escribir la cifra a mano en vez de
+  // interpolar la constante ⇒ cae la aserción que compara contra `MIN_SEND_USD` el día que la
+  // constante cambie. ⚠️ DECLARADO: mientras la constante valga lo que hoy vale, ese mutante ⛔ NO
+  // muere, y por eso la aserción de la cifra ⛔ no se cuenta como el candado del mutante. Lo que sí
+  // clava este `it` es que el mensaje EXISTA, que sea un `alert` y que lleve la cifra.
+  // ⛔ FALSO KILLED A EVITAR: afirmar sólo que «Seguir» está en gris. Eso ya era cierto ANTES del
+  // arreglo —el gate del mínimo existía— y el hallazgo era justamente que la persona no sabía por
+  // qué. Lo que se afirma es el TEXTO, y que el hueco ⛔ deje de pedir lo que ya se hizo.
+  it("T-374-W1-18: por debajo del mínimo la pantalla DICE por qué no cotiza, y no repite «escribí el monto»", async () => {
+    vi.useFakeTimers();
+    try {
+      montar({ pasoDeArranque: "envio" });
+      const campo = screen.getByLabelText("Cuánto mandás");
+
+      // CALIBRACIÓN 1 · CON EL CAMPO VACÍO NO SE LE GRITA A NADIE. Sin esto, un mensaje que estuviera
+      // SIEMPRE pasaría la aserción de abajo y sería indistinguible del arreglo.
+      expect(
+        screen.queryByRole("alert"),
+        "la pantalla avisa del mínimo con el campo vacío: le está reclamando a alguien que todavía no escribió nada",
+      ).toBeNull();
+
+      // ── EL CASO ─────────────────────────────────────────────────────────────────────────────
+      // El monto sale de la constante de producción: ⛔ acá no se escribe ninguna cifra.
+      fireEvent.change(campo, { target: { value: String(MIN_SEND_USD - 1) } });
+      await act(async () => {
+        vi.advanceTimersByTime(2000);
+      });
+      const aviso = screen.getByRole("alert");
+      expect(
+        aviso.textContent ?? "",
+        "por debajo del mínimo la pantalla no dice por qué no hay cotización: «Seguir» queda en gris sin motivo, en la única pantalla donde se escribe algo",
+      ).toContain("El mínimo para enviar es");
+      // Y la cifra es LA CONSTANTE, no un número escrito al lado.
+      expect(
+        aviso.textContent ?? "",
+        "el mensaje del mínimo no lleva la cifra de `MIN_SEND_USD`: estaría anunciando un mínimo que no es el que corta",
+      ).toContain(String(MIN_SEND_USD));
+      // ⛔ Y EL HUECO DEJÓ DE PEDIR LO QUE LA PERSONA ACABA DE HACER.
+      expect(
+        screen.queryByText("Escribí el monto y te decimos cuánto llega."),
+        "el hueco sigue pidiendo el monto que la persona ya escribió: dos textos sobre el mismo hecho y ninguno útil",
+      ).toBeNull();
+      // «Seguir» sigue en gris, que es la mitad que ya existía: el arreglo AGREGA el motivo.
+      expect(
+        screen.getByRole("button", { name: "Seguir" }),
+        "«Seguir» dejó de estar deshabilitado por debajo del mínimo",
+      ).toBeDisabled();
+      revisarCopy(document.body.textContent ?? "", "la pantalla del envío por debajo del mínimo");
+
+      // CALIBRACIÓN 2 · CON UN MONTO VÁLIDO EL MENSAJE SE VA. Sin esto, un `alert` pegado para
+      // siempre pasaría todo lo de arriba.
+      fireEvent.change(campo, { target: { value: String(MIN_SEND_USD + 5) } });
+      await act(async () => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(
+        screen.queryByRole("alert"),
+        "el aviso del mínimo quedó pegado con un monto que SÍ cotiza: es copy que dice que algo está mal cuando no lo está",
+      ).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // ── EL ESTADO EN VUELO SE APAGA (CR/BLQ-MED-3) ────────────────────────────────────────────────
+  //
+  // MUTANTE QUE MATA (`MW-25`): en `./recorrido.tsx`, borrar el `useEffect` que hace
+  // `setEnVuelo(false)` con `[paso]` ⇒ cae la aserción (A).
+  // MUTANTE QUE MATA (`MW-25b`): borrar el efecto de `visibilitychange`/`pageshow` ⇒ cae la (B).
+  // ⛔ FALSO KILLED A EVITAR: mirar sólo que el texto esté al tocar el enlace. Eso ya pasaba ANTES:
+  // el defecto no era que no se prendiera, era que ⛔ NO SE APAGABA NUNCA, así que las dos mitades
+  // que cuentan son las de después. Por eso primero se afirma que el texto ESTÁ (si no, lo de abajo
+  // pasaría por vacío) y recién después que se fue.
+  it("T-374-W1-22: el estado «estamos en la otra app» se apaga al cambiar de paso y al volver a la pestaña", async () => {
+    const base = buildTestContainer();
+    const container: Container = {
+      ...base,
+      startKyc: {
+        execute: async () => ({ kind: "redirect", url: DESTINO_DEL_VERIFICADOR }) as const,
+      } as unknown as Container["startKyc"],
+    };
+    montar({ container, pasoDeArranque: "envio" });
+    cargarElEnvio();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Seguir" }));
+    });
+    await screen.findByRole("heading", { name: "Tu identidad" });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Verificar mi identidad" }));
+    });
+    tocarSinNavegar(await screen.findByRole("link", { name: "Verificar mi identidad" }));
+
+    // Calibración: el texto TIENE que estar acá, o las dos mitades de abajo no dirían nada.
+    expect(
+      document.body.textContent ?? "",
+      "tocar el enlace no dejó el texto del estado en vuelo: lo de abajo pasaría por vacío",
+    ).toContain(TEXTO_EN_VUELO_IDENTIDAD);
+
+    // ── (A) CAMBIAR DE PASO LO APAGA ────────────────────────────────────────────────────────────
+    //
+    // 🔴 SE VUELVE AL MISMO PASO, Y ⛔ NO SE MIRA LA PANTALLA DEL MEDIO. Ésta es la reproducción
+    // LITERAL del CR —«Volver» y después «Seguir»— y la forma es load-bearing: mirar la pantalla del
+    // envío no mide NADA, porque esa pantalla ⛔ no renderiza el bloque en vuelo en ningún caso, así
+    // que el texto desaparece de ahí con apagador y sin él. MEDIDO: con el `useEffect` del apagador
+    // atado a `[]` en vez de a `[paso]`, esa versión de esta aserción daba **13 passed**. Un control
+    // vacío y un control que funciona se ven exactamente igual desde afuera.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Volver" }));
+    });
+    await screen.findByRole("heading", { name: "Cuánto y para quién" });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Seguir" }));
+    });
+    await screen.findByRole("heading", { name: "Tu identidad" });
+    expect(
+      document.body.textContent ?? "",
+      "volver al paso del verificador lo encuentra diciendo «estamos en el verificador» con el navegador quieto, y esa frase sigue a la persona por el recorrido",
+    ).not.toContain(TEXTO_EN_VUELO_IDENTIDAD);
+
+    // ── (B) VOLVER A LA PESTAÑA LO APAGA, SIN CAMBIAR DE PASO ───────────────────────────────────
+    // Es el caso del teléfono: se sale a la otra app y se vuelve con el botón del sistema, al MISMO
+    // paso. Sin este apagador, (A) sola dejaría la frase puesta justo en el camino que la HU trata.
+    // ⚠️ Acá el control YA es el enlace y ⛔ no el botón: el destino que el caso de uso contestó sigue
+    // en el estado del anfitrión, así que volver a este paso no obliga a pedirlo de nuevo. Se dice
+    // porque buscar el botón acá deja este `it` rojo por el instrumento y no por lo que mide.
+    tocarSinNavegar(await screen.findByRole("link", { name: "Verificar mi identidad" }));
+    expect(
+      document.body.textContent ?? "",
+      "el segundo toque no dejó el texto en vuelo: la mitad (B) pasaría por vacío",
+    ).toContain(TEXTO_EN_VUELO_IDENTIDAD);
+    // La pestaña vuelve a estar a la vista. ⛔ `visibilityState` es de sólo lectura en jsdom, así que
+    // se declara el valor y se emite el evento: es el mismo par que el navegador entrega al volver.
+    await act(async () => {
+      Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(
+      document.body.textContent ?? "",
+      "volver a la pestaña no apagó «estamos en el verificador»: la frase se queda para siempre si no se cambia de paso",
+    ).not.toContain(TEXTO_EN_VUELO_IDENTIDAD);
+  });
+
+  // ── EL SEGUNDO TOQUE NO LLEGA AL CASO DE USO, Y EL PRIMERO SE VE (CR/BLQ-MED-4) ────────────────
+  //
+  // MUTANTE QUE MATA (`MW-26`): en `./recorrido.tsx`, borrar el `if (enCursoRef.current) return;` de
+  // `conGuarda` ⇒ cae (A), el conteo de llamadas.
+  // MUTANTE QUE MATA (`MW-26b`): en `./pantallas.tsx`, sacarle el `disabled` y la etiqueta en curso
+  // al botón de `Salir` ⇒ cae (B), la que mira lo que la persona VE.
+  // ⛔ FALSO KILLED A EVITAR: medir sólo con `disabled`. Un `disabled` que llega tarde —porque el
+  // render no alcanzó a pintarse entre dos toques— dejaría pasar la segunda llamada igual, y el
+  // conteo es lo único que lo distingue. Por eso (A) usa un caso de uso que ⛔ NO resuelve, o sea el
+  // escenario real: la red tardando.
+  it("T-374-W1-23: el segundo toque ⛔ no vuelve a llamar al caso de uso, y entre el toque y el enlace la pantalla cambia", async () => {
+    let llamadas = 0;
+    let resolver: (() => void) | null = null;
+    const base = buildTestContainer();
+    const container: Container = {
+      ...base,
+      connectWallet: {
+        execute: async () => {
+          llamadas++;
+          // ⛔ No resuelve hasta que el `it` lo diga: es la ventana en la que la persona toca de nuevo.
+          await new Promise<void>((r) => {
+            resolver = r;
+          });
+          return { estado: "hay-que-salir", address: FAKE_WALLET_ADDRESS, irA: DESTINO_DE_LA_BILLETERA } as const;
+        },
+      } as unknown as Container["connectWallet"],
+    };
+    montar({ container });
+    const boton = screen.getByRole("button", { name: "Conectar mi billetera" });
+
+    // ── (A) TRES TOQUES, UNA SOLA LLAMADA ───────────────────────────────────────────────────────
+    await act(async () => {
+      fireEvent.click(boton);
+    });
+    expect(llamadas, "el primer toque no llamó al caso de uso: lo de abajo pasaría por vacío").toBe(1);
+    fireEvent.click(boton);
+    fireEvent.click(boton);
+    expect(
+      llamadas,
+      "el segundo y el tercer toque volvieron a llamar al caso de uso: del otro lado hay un depósito y una cuota de proveedor",
+    ).toBe(1);
+
+    // ── (B) Y LA PANTALLA CAMBIÓ ENTRE EL TOQUE Y EL ENLACE ─────────────────────────────────────
+    // El hallazgo del CR no era sólo que se pudiera tocar dos veces: era que ⛔ no cambiaba un solo
+    // pixel, así que tocar de nuevo era lo razonable. Se afirman las DOS mitades de lo que se ve.
+    const enCurso = screen.getByRole("button", { name: ETIQUETA_CONECTANDO });
+    expect(
+      enCurso,
+      "entre el toque y el enlace el botón sigue diciendo lo mismo: la persona no tiene forma de saber que el primer toque hizo algo",
+    ).toBeInTheDocument();
+    expect(enCurso, "el botón en curso se puede volver a tocar").toBeDisabled();
+    revisarCopy(document.body.textContent ?? "", "la pantalla de entrada con el connect en curso");
+
+    // ── (C) Y CUANDO EL CASO DE USO CONTESTA, LOS CONTROLES VUELVEN ─────────────────────────────
+    // Sin esto, apagar el botón para siempre pasaría (A) y (B) y dejaría a la persona sin salida.
+    await act(async () => {
+      resolver?.();
+      await Promise.resolve();
+    });
+    expect(
+      await screen.findByRole("link", { name: "Abrir mi billetera" }),
+      "el caso de uso contestó y el salto no apareció: los controles quedaron apagados para siempre",
+    ).toBeInTheDocument();
+  });
+
+  // ── EL TESTIGO DE LOS 300 ms DUPLICADOS (CR/MNR-1) ────────────────────────────────────────────
+  //
+  // MUTANTE QUE MATA (`MW-27`): en `./recorrido.tsx`, `MS_DE_ESPERA_DE_LA_COTIZACION = 0` ⇒ cae la
+  // comparación. Antes de este `it` ese mutante daba la suite ENTERA en verde, y por eso «los mismos
+  // 300 ms que el árbol viejo» era una frase que nadie podía refutar.
+  // ⛔ FALSO KILLED A EVITAR: escribir `300` acá. Eso ataría la copia a un número de este archivo y
+  // no al ORIGINAL, que es lo único que la frase afirma. El número se EXTRAE del fuente del árbol
+  // viejo, y la calibración exige que la extracción haya encontrado algo.
+  // ⛔ Cita SIN ancla y SIN número de línea a propósito: `../flow.tsx` lleva marcadores de censo de
+  // citas entrantes por número.
+  it("T-374-W1-19: la espera de la cotización es la MISMA que la del árbol viejo, leída de su fuente", () => {
+    const viejo = readFileSync(path.join(process.cwd(), "src/presentation/flow.tsx"), "utf8");
+    // El debounce del árbol viejo: desde el pedido de cotización hasta el cierre de su `setTimeout`.
+    const m = /previewQuote\.execute\([\s\S]*?\},\s*(\d+)\);/.exec(viejo);
+    expect(
+      m,
+      "no se encontró el debounce de la cotización en el árbol viejo: el testigo no estaría comparando con nada",
+    ).not.toBeNull();
+    const delViejo = Number(m?.[1]);
+    expect(
+      Number.isFinite(delViejo) && delViejo > 0,
+      "el número extraído del árbol viejo no es una espera: la extracción está midiendo otra cosa",
+    ).toBe(true);
+    expect(
+      MS_DE_ESPERA_DE_LA_COTIZACION,
+      "la espera de la cotización del recorrido nuevo dejó de ser la del árbol viejo, y el docblock dice que son la misma",
+    ).toBe(delViejo);
+  });
+
+  // ── LOS DOS PREDICADOS QUE CIERRAN LAS MENTIRAS, CALIBRADOS CONTRA EL COPY QUE SE FUE ──────────
+  //
+  // 🔴 SIN ESTO, LOS DOS `not.toMatch` DE `revisarCopy` SON INDISTINGUIBLES DE DOS LÍNEAS QUE NO
+  // PUEDEN FALLAR. Las frases de abajo son los LITERALES que estaban renderizados en `5afe979`, y lo
+  // que se afirma es que el predicado las habría puesto en rojo. ⛔ No alcanza con que hoy no estén.
+  it("T-374-W1-24: los predicados de copy cazan las dos frases que le mentían a la persona", () => {
+    const mentiras = [
+      "Se guarda solo mientras lo completás.",
+      "Una vez sola. Después de esto, tus próximos envíos no la vuelven a pedir.",
+    ];
+    for (const frase of mentiras) {
+      let cazada = false;
+      try {
+        revisarCopy(`${NO_CUSTODIAL} ${frase} ${"relleno ".repeat(12)}`, "el control de calibración");
+      } catch {
+        cazada = true;
+      }
+      expect(
+        cazada,
+        `el barrido de copy NO caza «${frase}»: el predicado que la prohíbe no puede fallar y no está midiendo nada`,
+      ).toBe(true);
+    }
+    // Y el control positivo: un copy sano ⛔ NO se pone rojo, o el barrido estaría prohibiendo todo.
+    expect(() =>
+      revisarCopy(`${NO_CUSTODIAL} Verificamos quién sos antes de mandar la plata. ${"relleno ".repeat(12)}`, "el control positivo"),
+    ).not.toThrow();
   });
 });

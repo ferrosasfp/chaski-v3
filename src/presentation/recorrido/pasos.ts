@@ -66,21 +66,43 @@ export function etiquetasDe(itin: readonly PasoDelRecorrido[]): readonly string[
   return itin.map((id) => TABLA.find((f) => f.id === id)?.etiqueta ?? id);
 }
 
+/** La etiqueta de UN paso. Existe para que un copy que necesite nombrar una pantalla la nombre como
+ *  la nombra el indicador de progreso, ⛔ y no con un literal que se despega el día que la tabla
+ *  cambie. Mismo cuerpo que `etiquetasDe`, para un solo paso. */
+export function etiquetaDe(paso: PasoDelRecorrido): string {
+  return TABLA.find((f) => f.id === paso)?.etiqueta ?? paso;
+}
+
 /** La posición de `paso` en `itin`, o `-1` si ese paso no le toca a esta persona. */
 export function indiceEn(itin: readonly PasoDelRecorrido[], paso: PasoDelRecorrido): number {
   return itin.indexOf(paso);
 }
 
-/** El paso siguiente. En el último devuelve el último (el seguimiento es terminal y ⛔ no hay
- *  «siguiente» que inventarle), y un paso que no está en el itinerario devuelve el primero que sí
- *  está: es el caso de la identidad ya verificada. */
+/**
+ * El paso siguiente. En el último devuelve el último: no hay «siguiente» que inventarle.
+ *
+ * 🔴 Y PARA UN PASO QUE ⛔ NO ESTÁ EN EL ITINERARIO DEVUELVE EL QUE LE SIGUE EN LA TABLA, ⛔ NUNCA EL
+ * PRIMERO (CR/BLQ-BAJO-3). Acá había `return itin[0]`, o sea LA PANTALLA DE ENTRADA, que es lo único
+ * que el invariante de esta HU prohíbe con la palabra NUNCA. El caso que lo alcanza es concreto:
+ * quien ya tiene la identidad verificada no lleva ese paso en su itinerario, así que avanzar desde
+ * ahí mandaba a la persona al principio del recorrido en vez de a la pantalla de firmar.
+ *
+ * ⚠️ Hoy ese caso no se puede provocar desde la app porque el prop que arma el itinerario corto ⛔ no
+ * tiene ningún productor, y ésa es justamente la razón para arreglarlo ahora: es una mina que se arma
+ * sola el día que se cablee, y para entonces nadie va a estar mirando esta función.
+ *
+ * ⛔ El último recurso es el ÚLTIMO paso del itinerario, y si el itinerario viniera vacío devuelve el
+ * paso recibido (quedarse quieto). Ninguna de las dos salidas es la pantalla de entrada.
+ */
 export function siguiente(
   itin: readonly PasoDelRecorrido[],
   paso: PasoDelRecorrido,
 ): PasoDelRecorrido {
   const i = indiceEn(itin, paso);
-  if (i < 0) return itin[0] ?? PASO_DE_ENTRADA;
-  return itin[Math.min(i + 1, itin.length - 1)] ?? paso;
+  if (i >= 0) return itin[Math.min(i + 1, itin.length - 1)] ?? paso;
+  const enLaTabla = TABLA.findIndex((f) => f.id === paso);
+  for (const id of itin) if (TABLA.findIndex((f) => f.id === id) > enLaTabla) return id;
+  return itin[itin.length - 1] ?? paso;
 }
 
 /**

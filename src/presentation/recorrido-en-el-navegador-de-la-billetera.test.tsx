@@ -204,7 +204,7 @@ function espiarNavegacion(): { asignado: string[]; restaurar: () => void } {
 
 /** Los hosts de billetera que aparecieron en una tanda de navegaciones. Vacío = ningún viaje a la
  *  billetera, que es exactamente lo que AC-1-2a mide. ⚠️ Un href que no parsea se DESCARTA y NO se cuenta como viaje.
- *  Hoy no llega ninguno: medido cambiando el `catch` por un `throw` ⇒ los 6 `it` del archivo siguen verdes. Y ningún verde se apoya en esta función sola: los 3 llamadores miran además la lista CRUDA (`T-372-W1-3` su contenido; `T-372-W1-13` su largo y el hostname del único href). */
+ *  🔴 Y AL `catch` SÍ LE LLEGA ALGO, DESDE ESTA MISMA OLA. Acá decía «hoy no llega ninguno … los 6 `it` del archivo siguen verdes», y los TRES números eran falsos (`BLQ-BAJO-1` del AR). Re-derivado sobre `chaski-v3@ec3fb33` + este fix-pack: el archivo tiene **8** `it`, y `T-374-W0-0` le entra `"no-soy-una-url"` A PROPÓSITO, así que el descarte dejó de ser una rama sin testigo. Medido cambiando el `catch` por un `throw` ⇒ **1 failed | 7 passed (8)**, y el único rojo es `× T-374-W0-0` con `TypeError: Invalid URL: no-soy-una-url` — ⚠️ un rojo del `URL`, no de una aserción. Y ningún verde se apoya en esta función sola: los **5** llamadores (`:395`, `:737`, `:763`, `:833`, `:984`, re-derivados con `/usr/bin/grep -n` después de la última edición) miran además la lista CRUDA (`T-372-W1-3` su contenido; `T-372-W1-13` su largo y el hostname del único href). */
 function viajesALaBilletera(asignado: string[]): string[] {
   return asignado.filter((h) => {
     try {
@@ -784,10 +784,14 @@ describe("W0 · el instrumento de los viajes, CALIBRADO antes de publicar cualqu
   // enlace para abrir Chaski ADENTRO de Phantom. El camino por enlace usa OTRA familia de URLs, la de
   // `urlConectar` sobre el mapa `BASE` de `../infrastructure/solana/deeplink/protocol.ts` (⛔ esa cita
   // va SIN ancla a propósito: anclarla obligaría a mover el número si ese archivo se edita, y el
-  // patrón está declarado en `bitacora-de-vuelta.ts:175-177`). Medido al escribir esto: el filtro se
-  // ejercitaba en TRES sitios de este archivo (`:395`, `:737`, `:763`) y los TRES asertan `.toEqual([])`
-  // ⇒ NUNCA CONTESTÓ QUE SÍ. Un filtro que siempre devuelve `[]` es indistinguible de «no hubo saltos»,
-  // así que sin este `it` los números de `T-374-W0-1` saldrían de una balanza probada sólo vacía.
+  // patrón está declarado en `bitacora-de-vuelta.ts:175-177`). Medido **en `chaski-v3@c1bd8d3`, o sea
+  // ANTES de esta ola** (`/usr/bin/git show c1bd8d3:… | /usr/bin/grep -n viajesALaBilletera`): el
+  // filtro se ejercitaba en TRES sitios (`:395`, `:737`, `:763` de aquel commit) y los TRES asertan
+  // `.toEqual([])` ⇒ NUNCA CONTESTÓ QUE SÍ. Un filtro que siempre devuelve `[]` es indistinguible de
+  // «no hubo saltos», así que sin este `it` los números de `T-374-W0-1` saldrían de una balanza
+  // probada sólo vacía. ⚠️ HOY SON CINCO, y los dos que faltan los agregó esta misma ola (`:833` acá
+  // abajo y `:984` en el tramo de ida): «tres» sin su commit no se re-deriva, y el `MNR-3` del AR lo
+  // cazó exactamente así.
   //
   // MUTANTE QUE LO TIENE QUE MATAR (M-0): en `deeplink/protocol.ts:55`, cambiar el valor de `phantom`
   // por `https://phantom.example/ul/v1` ⇒ cae la aserción 1.
@@ -926,12 +930,31 @@ describe("W0 · el tramo de IDA del camino por enlace, contado ejecutando", () =
         .execute({ remittanceId: idA, hrefDeLaVuelta: "https://chaski.test/enviar" })
         .catch((e: unknown) => e as Error);
 
-      // 2 · `pedir()` NO contestó `no-corresponde` ⇒ el gate del camino por enlace SE ENCENDIÓ.
+      // 2 · `pedir()` CONTESTÓ, Y CONTESTÓ ESTO. ⛔ ACÁ HABÍA UN `.not.toEqual(["no-corresponde"])`
+      //     SOLO, Y DABA VERDE POR VACÍO (`BLQ-MED-2` del AR, reproducido): si `execute` falla ANTES
+      //     de llegar a `pedir()` —bajarle el saldo a 0 alcanza—, el `.catch` de acá arriba se traga
+      //     el error, `pop.respuestas` queda `[]`, y `[] !== ["no-corresponde"]` PASA. Un `it` que
+      //     certifica que `N=2` y `M=1` salieron del camino por enlace no puede apoyarse en una
+      //     aserción que un arnés roto satisface. El molde es el de la aserción 4 de la mitad (b):
+      //     primero se exige que HAYA observable, después se lo compara POR VALOR.
       expect(
         pop.respuestas,
-        "`pedir()` contestó `no-corresponde`: el camino por enlace está APAGADO y este `it` estaría " +
-          "contando los saltos de otro camino",
-      ).not.toEqual(["no-corresponde"]);
+        "`pedir()` no dejó ni una anotación: `execute` falló ANTES de llegar al gate del camino por " +
+          "enlace, y este `it` estaría dando verde por VACÍO en vez de por haber medido algo",
+      ).not.toEqual([]);
+      // 🔴 EL OBSERVABLE REAL DEL ÁRBOL SANO, MEDIDO Y NO COPIADO (sonda `SONDA-W0-1a`, 2026-09-01,
+      //    `chaski-v3@ec3fb33`, creada, corrida y borrada): `["TIRÓ: deeplink_viaje_vencido"]`. O sea
+      //    que `pedir()` NO contesta `no-corresponde` y tampoco contesta: **TIRA**, y
+      //    (`PopDelAdaptadorReal`, `:294`) anota el throw y lo deja subir. Que tire POR EL VIAJE
+      //    VENCIDO ya es la prueba de que las tres condiciones de `caminoPorEnlace` se conjugaron:
+      //    con la bandera apagada la respuesta sería `"no-corresponde"` y no habría viaje que vencer.
+      //    ⚠️ El docblock viejo, el mensaje viejo y el story file describían un observable que en el
+      //    árbol sano NO OCURRE, y el que sí ocurre no estaba nombrado en ningún lado.
+      expect(
+        pop.respuestas,
+        "`pedir()` contestó otra cosa que la del árbol sano: si dice `no-corresponde`, el camino por " +
+          "enlace está APAGADO y este `it` estaría contando los saltos de otro camino",
+      ).toEqual(["TIRÓ: deeplink_viaje_vencido"]);
       // Y esta mitad no aporta ni una navegación: el conteo de (b) es de (b).
       expect(espiaA.asignado, "la mitad (a) navegó: contaminaría el conteo de la mitad (b)").toEqual([]);
     } finally {
@@ -986,6 +1009,14 @@ describe("W0 · el tramo de IDA del camino por enlace, contado ejecutando", () =
       expect(viajes, "no hubo ningún salto a la billetera: el conteo de abajo sería un cero por vacío").not.toEqual(
         [],
       );
+      // 5 y 6 · ⚠️ EN EL TRAMO DE IDA `N` Y `M` NO SON DOS OBSERVACIONES: SON UNA (`MNR-2` del AR).
+      //     La aserción 3 de acá arriba ya fija `espia.asignado ≡ viajes`, así que
+      //     `N = 1 + espia.asignado.length = 1 + viajes.length = 1 + M` POR CONSTRUCCIÓN, y las dos
+      //     cifras no pueden divergir mientras esa aserción esté verde. Se publican las dos igual
+      //     porque son las dos ETIQUETAS contra las que W1 y W3 van a comparar, ⛔ pero quien las lea
+      //     no puede tomarlas como dos mediciones independientes. Divergirían recién en un tramo
+      //     donde el árbol navegue a algo que no es la billetera, que es justo lo que la 3 prohíbe
+      //     hoy — y ése es el día en que estas dos aserciones empiezan a decir cosas distintas.
       // 5 · LAS TRAVESÍAS. La definición ya está escrita en este archivo (`:680-684`) y ⛔ no se
       //     re-inventa: `travesías = 1 + asignaciones`. Las 2 son la carga inicial y la vuelta del
       //     salto al `connect`; ⛔ el recorrido NO cierra ahí.

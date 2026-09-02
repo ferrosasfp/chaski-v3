@@ -33,8 +33,18 @@ const EXTS = new Set([".ts", ".tsx"]);
 const SKIP = new Set(["node_modules", ".next", "doc", "migrations"]);
 const DESTINO = "src/presentation/flow.tsx";
 
-/** 🔴 RUTA EXACTA, ⛔ NUNCA UN GLOB NI EL SUFIJO `.test.`. Este archivo fabrica citas de mentira; sin
- *  excluirse, se contaría a sí mismo. Mismo recurso que (`SELF`, `./citas-ancladas.test.ts:56`). */
+/** 🔴 RUTA EXACTA, ⛔ NUNCA UN GLOB NI EL SUFIJO `.test.`. Mismo recurso que
+ *  (`SELF`, `./citas-ancladas.test.ts:56`).
+ *  ⚠️ Y EL MOTIVO ESCRITO ACÁ ERA FALSO, medido en el fix-pack del AR de esta ola (`MNR-1`): decía
+ *  «este archivo fabrica citas de mentira; sin excluirse, se contaría a sí mismo». **No se contaría**:
+ *  quitando esta exclusión del recolector, el `it` sigue en `1 passed`. Lo que de verdad impide la
+ *  auto-lectura es que las citas de mentira se arman por CONCATENACIÓN (`B`, más abajo), así que
+ *  ninguna línea de este archivo contiene el patrón anclado entero. La decisión de excluirse se
+ *  queda —es el cinturón sobre el tirante, y el que hace que el día que alguien escriba el patrón
+ *  con todas las letras acá adentro el modo de falla sea un rojo y no un conteo inflado en silencio—,
+ *  pero ⛔ hoy no es load-bearing y no se la puede citar como si lo fuera. En
+ *  `../presentation/el-salto-remonta-el-arbol.test.tsx` la exclusión análoga SÍ lo es: ese archivo
+ *  escribe los patrones vigilados en su prosa. */
 const SELF = path.resolve(ROOT, "src/composition/el-arbol-propio-cuesta-cero-citas.test.ts");
 
 /** El regex ANCLADO, re-implementado del que vive en (`ANCLADA`, `./citas-ancladas.test.ts:74`).
@@ -128,7 +138,7 @@ describe("W0-4 · el costo de una cita ANCLADA nueva hacia `flow.tsx`", () => {
   // ⛔ LOS TRES FALSOS KILLED A EVITAR: (1) auto-lectura ⇒ exclusión por RUTA EXACTA, arriba;
   // (2) el ancla PARTIDA, que el candado real NO cuenta ⇒ la aserción 3b exige que ésta tampoco;
   // (3) importar el candado real ⇒ correría sus `describe`. Se re-implementa y se calibra (aserción 4).
-  it("T-374-W0-4: una cita ANCLADA nueva hacia flow.tsx mueve 12 marcadores en 6 archivos; una SUELTA no mueve ninguno", () => {
+  it("T-374-W0-4: una cita ANCLADA nueva hacia flow.tsx mueve 13 marcadores en 6 archivos; una SUELTA no mueve ninguno", () => {
     // 1 · EL CENSO DE HOY. Los nombres SE DERIVAN del barrido y van en el mensaje del rojo para que
     //     sea accionable; lo que se afirma son los CUATRO números, que son la foto que envejece.
     const archivos = [...new Set(MARCAS.map((m) => m.desde))].sort();
@@ -142,6 +152,7 @@ describe("W0-4 · el costo de una cita ANCLADA nueva hacia `flow.tsx`", () => {
     //     el árbol se movió, y ⛔ ningún número de abajo vale. Los dos lados se derivan; ⛔ el `165`
     //     no se escribe en ninguna línea de este archivo.
     const declarado = porCampo("entrantes")[0]?.dice;
+    const declaradoDestinos = porCampo("destinos")[0]?.dice;
     expect(
       new Set(porCampo("entrantes").map((m) => m.dice)).size,
       "los 12 marcadores `entrantes` no dicen todos el mismo número: el árbol quedó a medio actualizar",
@@ -152,11 +163,17 @@ describe("W0-4 · el costo de una cita ANCLADA nueva hacia `flow.tsx`", () => {
         "instrumento está mal, o el árbol se movió y hay que re-derivar el censo entero",
     ).toBe(declarado);
     expect(destinosDe(CITAS, DESTINO), "los `destinos` derivados no coinciden con el marcador").toBe(
-      porCampo("destinos")[0]?.dice,
+      declaradoDestinos,
     );
 
     // 2 · UNA CITA ANCLADA NUEVA, sobre líneas SINTÉTICAS (⛔ no se escribe ningún archivo, en ningún
-    //     lado): el conteo sube en uno ⇒ los 12 marcadores quedan desajustados de golpe.
+    //     lado): los DOS conteos suben en uno ⇒ 13 marcadores quedan desajustados de golpe.
+    //     🔴 ACÁ DECÍA 12, Y 12 ERA EL MEJOR CASO. Lo cazó el `BLQ-MED-1` del AR de esta ola: este
+    //     `it` filtraba a `porCampo("entrantes")` y NUNCA evaluaba `destinosDe`, así que se comía el
+    //     marcador `destinos` de `flow.tsx`. 12 sale sólo si la cita nueva apunta a una línea que YA
+    //     estaba citada; el caso normal —una línea cualquiera, como la de este fixture— mueve además
+    //     los `destinos`, y son 13. El 13 no se copió de ningún documento: sale de la aserción de acá
+    //     abajo, que lo deriva contando marcadores desajustados de los DOS campos.
     const conAnclada = recolectar([...ARBOL, { archivo: "src/sintetico.ts", lineas: [citaAnclada] }]);
     expect(
       entrantesA(conAnclada, DESTINO),
@@ -164,9 +181,18 @@ describe("W0-4 · el costo de una cita ANCLADA nueva hacia `flow.tsx`", () => {
         "este `it` existe para medir",
     ).toBe((declarado as number) + 1);
     expect(
-      porCampo("entrantes").filter((m) => m.dice !== entrantesA(conAnclada, DESTINO)).length,
+      destinosDe(conAnclada, DESTINO),
+      "una cita ANCLADA nueva hacia una línea que nadie citaba no movió los `destinos`: el costo " +
+        "declarado se queda corto justo en el marcador que este `it` no miraba",
+    ).toBe((declaradoDestinos as number) + 1);
+    expect(
+      MARCAS.filter(
+        (m) =>
+          (m.campo === "entrantes" && m.dice !== entrantesA(conAnclada, DESTINO)) ||
+          (m.campo === "destinos" && m.dice !== destinosDe(conAnclada, DESTINO)),
+      ).length,
       "una cita anclada nueva dejó marcadores en su sitio: el costo declarado es menor que el real",
-    ).toBe(12);
+    ).toBe(13);
 
     // 3 · LA MISMA CITA, SIN ANCLA (⛔ sin la coma entre backticks): no mueve NADA. Ése es el motivo
     //     por el que esta ola cita `flow.tsx` suelto y con su motivo al lado.

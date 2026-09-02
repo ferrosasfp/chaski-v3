@@ -39,3 +39,4 @@ docs/*
 !docs/architecture.md
 !docs/runbook-alertas-ledger.md
 !docs/runbook-reconcile-orphans.md
+!docs/clasificador-prosa-codigo.py

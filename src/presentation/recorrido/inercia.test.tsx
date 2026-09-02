@@ -297,8 +297,8 @@ describe("WKH-374/W1.2 · la bandera apagada no cambia nada (AC-13)", () => {
   });
 });
 
-/** Los `.ts`/`.tsx` de un directorio, recursivo. Molde: (`walk`,
- *  `../../composition/no-evm-surface.test.ts:35`). */
+/** Los `.ts`/`.tsx` de un directorio, recursivo.
+ *  Molde: (`walk`, `../../composition/no-evm-surface.test.ts:35`). */
 function recorrer(dir: string, out: string[] = []): string[] {
   if (!existsSync(dir)) return out;
   for (const entry of readdirSync(dir)) {

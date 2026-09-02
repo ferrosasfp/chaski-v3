@@ -1,27 +1,17 @@
 // WKH-374 · W1.0 — LA TABLA ÚNICA Y ENUMERABLE DEL RECORRIDO NUEVO (AC-2)
 //
-// ⛔ CERO JSX, CERO DOM, CERO ALMACENAMIENTO. Este módulo es la aritmética del recorrido: qué pasos
-// hay, cuáles se muestran a esta persona y cómo se avanza y se retrocede entre ellos. Todo lo que
-// dibuja vive en `./pantallas.tsx` y todo lo que decide en vivo vive en `./recorrido.tsx`.
-//
-// ⚠️ ESTE ARCHIVO NO SE EJECUTA EN PRODUCCIÓN TODAVÍA. La bandera de `./bandera.ts` está APAGADA y su
-// encendido es otra ola. Nada de lo de acá cambia una sola pantalla de la app de hoy.
+// ⛔ CERO JSX, CERO DOM, CERO ALMACENAMIENTO: acá vive la aritmética del recorrido y nada más.
+// ⚠️ Y todavía no se ejecuta en producción: la bandera de `./bandera.ts` está APAGADA.
 
 /**
- * Los pasos del recorrido nuevo. La unión y la tabla de abajo son EL MISMO conjunto, y ése es el
- * punto de `AC-2`: un sitio único donde el conjunto está escrito.
- *
- * ⛔ NO SE ESCRIBE EN NINGÚN LADO CUÁNTOS SON. El tamaño sale de `TABLA.length` — un número escrito
- * a mano se queda viejo el día que la tabla crece y nadie se entera, que es exactamente la clase de
- * artefacto que esta HU vino a eliminar.
+ * Los pasos del recorrido. La unión y la tabla de abajo son EL MISMO conjunto, y ése es el punto de
+ * `AC-2`. ⛔ Cuántos son no se escribe en ningún lado: sale de `TABLA.length`, porque un número a
+ * mano se queda viejo el día que la tabla crece y nadie se entera.
  */
 export type PasoDelRecorrido = "entrar" | "envio" | "identidad" | "firmar" | "seguimiento";
 
-/**
- * La pantalla de entrada, nombrada aparte porque es el ÚNICO paso sobre el que hay una prohibición:
- * ⛔ ninguna vuelta de un salto puede aterrizar acá (`AC-7`, y lo mide `T-374-W1-3`).
- * Tenerlo como constante es lo que deja que `./salto.ts` lo compare por valor sin volver a escribirlo.
- */
+/** La pantalla de entrada. Va aparte porque es el ÚNICO paso con una prohibición: ⛔ ninguna vuelta
+ *  de un salto aterriza acá (`AC-7`, lo mide `T-374-W1-3`), y `./salto.ts` la compara POR VALOR. */
 export const PASO_DE_ENTRADA: PasoDelRecorrido = "entrar";
 
 export interface FilaDelRecorrido {
@@ -29,21 +19,17 @@ export interface FilaDelRecorrido {
   readonly id: PasoDelRecorrido;
   /** Lo que la persona lee en el indicador de progreso. */
   readonly etiqueta: string;
-  /**
-   * `true` ⇒ el paso se muestra SÓLO la primera vez (`AC-4`). Es lo que hace que un envío recurrente
-   * tenga un itinerario más corto que uno de primera vez, y por eso el indicador de progreso recibe
-   * el ITINERARIO y ⛔ nunca la tabla: si recibiera la tabla, una persona recurrente vería una
-   * etiqueta de más y un paso de menos.
-   */
+  /** `true` ⇒ se muestra SÓLO la primera vez (`AC-4`). Por eso el indicador de progreso recibe el
+   *  ITINERARIO y ⛔ nunca la tabla: con la tabla, una persona recurrente vería una etiqueta de más
+   *  y un paso de menos. */
   readonly soloLaPrimeraVez: boolean;
 }
 
 /**
- * 🔴 LA TABLA. Es el único sitio del árbol nuevo donde el conjunto de pasos está escrito.
+ * 🔴 LA TABLA. El único sitio del árbol nuevo donde el conjunto de pasos está escrito.
  *
- * El orden ES load-bearing y es la mitad de `AC-1`: conectar la billetera es el PRIMER paso, no el
- * tercero. De ahí sale que cuando se pide monto, beneficiario y CCI ya hay una dirección conectada a
- * la que atar el envío, y de ahí sale —§3.2 del Story File— que la pantalla donde se tipea no
+ * El orden ES load-bearing y es la mitad de `AC-1`: conectar es el PRIMER paso y no el tercero. De
+ * ahí sale que la pantalla donde se tipea ya tenga una dirección conectada, y de ahí sale que no
  * necesite saltar a ningún lado.
  */
 export const TABLA: readonly FilaDelRecorrido[] = [
@@ -71,12 +57,10 @@ export function itinerario(p: { identidadYaVerificada: boolean }): readonly Paso
 }
 
 /**
- * Las etiquetas del itinerario, en su orden.
- *
- * 🔴 EL INVARIANTE QUE ESTA FUNCIÓN EXISTE PARA SOSTENER: `etiquetasDe(i).length === i.length`,
- * SIEMPRE. Se cumple por construcción —se mapea el mismo arreglo— y no por una comparación que
- * alguien tenga que acordarse de hacer. Lo mide `T-374-W1-2` en los DOS casos, porque en el de
- * primera vez el itinerario y la tabla coinciden y un error ahí no se ve.
+ * Las etiquetas del itinerario, en su orden. 🔴 El invariante que sostiene es
+ * `etiquetasDe(i).length === i.length`, SIEMPRE, y se cumple por construcción: se mapea el mismo
+ * arreglo. Lo mide `T-374-W1-2` en los DOS casos, porque en el de primera vez itinerario y tabla
+ * coinciden y un error ahí no se ve.
  */
 export function etiquetasDe(itin: readonly PasoDelRecorrido[]): readonly string[] {
   return itin.map((id) => TABLA.find((f) => f.id === id)?.etiqueta ?? id);
@@ -87,12 +71,9 @@ export function indiceEn(itin: readonly PasoDelRecorrido[], paso: PasoDelRecorri
   return itin.indexOf(paso);
 }
 
-/**
- * El paso siguiente dentro del itinerario. En el último paso devuelve el último: el seguimiento es
- * el estado terminal del recorrido y ⛔ no hay ningún «siguiente» que inventarle.
- * Un paso que no está en el itinerario devuelve el primero que sí está — es el caso de la identidad
- * ya verificada, donde el paso condicional no existe para esta persona.
- */
+/** El paso siguiente. En el último devuelve el último (el seguimiento es terminal y ⛔ no hay
+ *  «siguiente» que inventarle), y un paso que no está en el itinerario devuelve el primero que sí
+ *  está: es el caso de la identidad ya verificada. */
 export function siguiente(
   itin: readonly PasoDelRecorrido[],
   paso: PasoDelRecorrido,
@@ -103,11 +84,10 @@ export function siguiente(
 }
 
 /**
- * El paso anterior dentro del itinerario: es lo que hace «Volver» (`AC-3`).
+ * El paso anterior: es lo que hace «Volver» (`AC-3`).
  *
- * ⛔ RETROCEDER NO BORRA NADA. Esta función devuelve un identificador de paso y no toca ningún dato:
- * lo cargado vive en el estado del anfitrión, que ⛔ no se limpia al retroceder. Lo mide
- * `T-374-W1-6` afirmando los VALORES de los tres campos, y no el paso — el paso volvería bien igual
+ * ⛔ RETROCEDER NO BORRA NADA. Esto devuelve un identificador y no toca ningún dato. Lo mide
+ * `T-374-W1-6` afirmando los VALORES de los tres campos y ⛔ no el paso: el paso volvería bien igual
  * con el estado borrado, que es el falso KILLED que ese `it` existe para evitar.
  */
 export function anterior(

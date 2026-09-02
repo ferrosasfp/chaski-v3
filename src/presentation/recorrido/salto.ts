@@ -1,26 +1,20 @@
 // WKH-374 · W1.0 — EL SALTO: ANUNCIO, ESTADO EN VUELO Y ATERRIZAJE
 //
-// ⛔ CERO DOM, CERO ALMACENAMIENTO, CERO LECTURA DE LA BARRA DE DIRECCIONES. Todo lo de acá son
-// funciones puras sobre un `href` que el llamador le pasa. Quien lee la barra es el anfitrión, una
-// sola vez, en el montaje.
+// ⛔ CERO DOM, CERO ALMACENAMIENTO, CERO LECTURA DE LA BARRA. Todo lo de acá son funciones puras
+// sobre un `href` que el llamador pasa; quien lee la barra es el anfitrión, una vez, en el montaje.
 //
-// ═══════════════════════════════════════════════════════════════════════════════════════════════
-// 🔴 EL INVARIANTE QUE ESTE MÓDULO EXISTE PARA SOSTENER
-// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// 🔴 EL INVARIANTE QUE ESTE MÓDULO SOSTIENE. Todo salto a la billetera o al verificador se ANUNCIA
+// ANTES, se MUESTRA MIENTRAS PASA, y al volver SE ATERRIZA DONDE SE ESTABA, UN PASO MÁS ADELANTE.
+// ⛔ NUNCA en la pantalla de entrada, ni en el camino feliz ni en el de error: el error cambia el
+// MOTIVO en pantalla, ⛔ nunca el paso.
 //
-// Todo salto a la billetera o al verificador se ANUNCIA ANTES, se MUESTRA MIENTRAS PASA, y al volver
-// SE ATERRIZA DONDE SE ESTABA, UN PASO MÁS ADELANTE. ⛔ NUNCA en la pantalla de entrada, ni en el
-// camino feliz ni en el de error: el error cambia el MOTIVO en pantalla, ⛔ nunca el paso.
+// 🔴 Y SE RESUELVE COMO FUNCIÓN PURA DE LA MARCA QUE TRAE LA URL. ⛔ No de un estado recordado, ⛔ no
+// del disco, ⛔ no de la sesión, y no es preferencia de estilo: el salto REMONTA EL ÁRBOL DE REACT
+// —medido, con su candado en `../el-salto-remonta-el-arbol.test.tsx`— y un árbol remontado no
+// recuerda en qué paso estaba. Lo único que cruza la ida y la vuelta es la URL.
 //
-// 🔴 Y SE RESUELVE COMO FUNCIÓN PURA DE LA MARCA QUE TRAE LA URL DE VUELTA. ⛔ No de un estado
-// recordado, ⛔ no del disco, ⛔ no de la sesión, y no es una preferencia de estilo: el salto REMONTA
-// EL ÁRBOL DE REACT —eso está medido y tiene su propio candado en
-// `../el-salto-remonta-el-arbol.test.tsx`—, y un árbol remontado no recuerda en qué paso estaba. Lo
-// único que cruza la salida y la vuelta es la URL.
-//
-// ⚠️ EL LÍMITE DE «SE MUESTRA MIENTRAS PASA», declarado para que nadie le pida lo que no da: mientras
-// la persona está en la billetera, nuestra pantalla NO está a la vista. Lo que se garantiza es lo que
-// encuentra al volver la vista atrás, no que alguien lo esté mirando.
+// ⚠️ EL LÍMITE DE «SE MUESTRA MIENTRAS PASA»: mientras la persona está en la billetera, nuestra
+// pantalla NO está a la vista. Lo garantizado es lo que encuentra al volver la vista atrás.
 
 import {
   PARAM_SALIDA,
@@ -38,13 +32,10 @@ import { MARCA, MARCAS_DE_VUELTA } from "../../infrastructure/solana/deeplink/se
 import { PASO_DE_ENTRADA, type PasoDelRecorrido } from "./pasos";
 
 /**
- * 🔴 EL TERCER VALOR, Y NO UN BOOLEANO NI UN PASO POR DEFECTO.
- *
- * Una marca que este repo no escribió no tiene aterrizaje, y eso NO es lo mismo que «aterriza en el
- * principio». Con un booleano se perdería la diferencia entre «esta marca vuelve al paso X» y «no sé
- * qué es esta marca», y quien consume la respuesta no podría distinguir un aterrizaje de un default.
- * Es exactamente el molde de (`motivoParaNoMostrar`, `../splash-puerta.ts:84`), que por lo mismo
- * contesta un motivo y no un `boolean`.
+ * 🔴 EL TERCER VALOR, Y NO UN BOOLEANO NI UN PASO POR DEFECTO. Una marca que este repo no escribió no
+ * tiene aterrizaje, y eso NO es «aterriza en el principio»: con un booleano se perdería la diferencia
+ * entre «vuelve al paso X» y «no sé qué es esta marca». Mismo molde que
+ * (`motivoParaNoMostrar`, `../splash-puerta.ts:84`), que por lo mismo contesta un motivo.
  */
 export const SIN_ATERRIZAJE = "sin-aterrizaje";
 
@@ -65,12 +56,10 @@ export const MARCA_DE_LA_SALIDA = `${PARAM_SALIDA}=${VALOR_SALIDA}`;
 /**
  * 🔴 LA TABLA DE ATERRIZAJE DEL ENLACE PROFUNDO, INDEXADA POR LA TUPLA DE PRODUCCIÓN.
  *
- * ⛔ LAS CLAVES NO SE ESCRIBEN: son las posiciones de la tupla que el módulo de sesión exporta. Esto
- * NO es una preferencia de estilo, es lo que hace que la tabla no pueda quedar incompleta en
- * silencio: una marca nueva agregada a esa tupla queda sin entrada acá, `aterrizajeDe` le contesta el
- * tercer valor, y `T-374-W1-0` —que recorre la tupla ENTERA— se pone rojo. Una lista de nombres
- * escrita a mano envejecería sola y en verde, que es la clase de artefacto que esta ola vino a no
- * dejar atrás.
+ * ⛔ LAS CLAVES NO SE ESCRIBEN: son las posiciones de la tupla que el módulo de sesión exporta, y eso
+ * es lo que impide que la tabla quede incompleta en silencio. Una marca nueva en esa tupla queda sin
+ * entrada acá, `aterrizajeDe` le contesta el tercer valor, y `T-374-W1-0` —que recorre la tupla
+ * ENTERA— se pone rojo. Una lista de nombres a mano envejecería sola y en verde.
  *
  * Los índices, con su razón (⛔ los nombres de las marcas no se transcriben acá: `CD-W1-7`):
  *   [0] la vuelta de CONECTAR      ⇒ hay dirección ⇒ el paso siguiente, donde se arma el envío.
@@ -96,14 +85,12 @@ const ATERRIZAJE_POR_ENLACE: Readonly<
 /**
  * Dónde aterriza una marca de vuelta. La función pura del invariante de arriba.
  *
- * 🔴 El aterrizaje del verificador es la pantalla de IDENTIDAD y ⛔ no el principio: es el pedido
- * textual del founder, y es lo que hace que una verificación ya pagada no obligue a recorrer la app
- * de nuevo.
+ * 🔴 El verificador aterriza en IDENTIDAD y ⛔ no en el principio: es el pedido textual del founder, y
+ * es lo que evita que una verificación ya pagada obligue a recorrer la app de nuevo.
  *
- * 🔴 El aterrizaje de la salida al navegador de la billetera es el paso siguiente al que la ofrece.
- * Esa salida se ofrece en la pantalla de entrada —es la única que la ofrece—, así que «un paso más
- * adelante» es la pantalla del envío. ⛔ W1 NO lee el contexto de borrador que esa marca transporta
- * (el módulo de salida lo pone y lo consume por su cuenta): volver ese contexto durable es otra ola.
+ * 🔴 La salida al navegador de la billetera aterriza en el paso siguiente al que la ofrece, que es la
+ * pantalla de entrada (la única que la ofrece) ⇒ la del envío. ⛔ W1 NO lee el contexto de borrador
+ * que esa marca transporta: volverlo durable es otra ola.
  */
 export function aterrizajeDe(marca: string): Aterrizaje {
   if (marca === MARCA_DEL_VERIFICADOR) return "identidad";
@@ -116,8 +103,9 @@ export function aterrizajeDe(marca: string): Aterrizaje {
  * La marca que trae un `href`, en el vocabulario único de `aterrizajeDe`, o `null` si no trae
  * ninguna.
  *
- * El ORDEN de las tres consultas es el mismo que el de (`motivoParaNoMostrar`,
- * `../splash-puerta.ts:84`) y por el mismo motivo: la vuelta del verificador se reconoce por el par
+ * El ORDEN de las tres consultas es el mismo que el de
+ * (`motivoParaNoMostrar`, `../splash-puerta.ts:84`), y por el mismo motivo: la vuelta del
+ * verificador se reconoce por el par
  * nombre + valor, y la del enlace profundo por la PRESENCIA del parámetro, porque su valor es cuál
  * paso volvió y puede ser hasta uno que este repo no escribió.
  *
@@ -188,14 +176,12 @@ export interface Firma {
 /**
  * Las firmas que el camino elegido va a pedir.
  *
- * ⛔ LA PANTALLA RENDERIZA `.length` Y ⛔ NUNCA UN NÚMERO ESCRITO (`CD-W1-6`). Lo que esta función
- * garantiza es eso: que el número que se muestra salga de contar la lista que se muestra, así que no
- * puede quedar viejo respecto de lo que se enumera al lado.
+ * ⛔ LA PANTALLA RENDERIZA `.length` Y ⛔ NUNCA UN NÚMERO ESCRITO. Lo garantizado es eso: el número
+ * que se muestra sale de contar la lista que se muestra.
  *
- * ⚠️ LO QUE ESTA FUNCIÓN **NO** ES, dicho antes de que alguien lea de más: la lista se arma acá y ⛔
- * no se deriva de producción. Un camino que empiece a pedir una firma más y no pase por acá quedaría
- * mal enumerado, y ⛔ nada de esta ola lo detectaría. Lo que sí queda cerrado es el modo de falla que
- * `CD-W1-6` nombra: que la pantalla diga un número y enumere otra cosa.
+ * ⚠️ LO QUE ESTA FUNCIÓN **NO** ES: la lista se arma acá y ⛔ no se deriva de producción. Un camino
+ * que empiece a pedir una firma más y no pase por acá quedaría mal enumerado, y ⛔ nada de esta ola lo
+ * detectaría. Lo que sí queda cerrado es que la pantalla diga un número y enumere otra cosa.
  */
 export function firmasDelCamino(p: { porEnlace: boolean }): readonly Firma[] {
   const laTransaccion: Firma = {

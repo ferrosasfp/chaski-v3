@@ -387,10 +387,12 @@ describe("WKH-374/W1.2 · el recorrido nuevo, montado y recorrido", () => {
       const cuerpo = document.body.textContent ?? "";
 
       // (1) ⛔ NO ES LA PANTALLA DE ENTRADA. Es el caso que `AC-8` nombra con esas palabras.
+      // ⚠️ `toBeNull()` Y ⛔ NO `.not.toBeInTheDocument()`: medido, ese matcher DESCARTA el mensaje y
+      // el rojo sale como «expected document not to contain element», que no dice qué se rompió.
       expect(
         screen.queryByRole("button", { name: "Conectar mi billetera" }),
         `\`?${MARCA}=${valor}\` aterriza en la PANTALLA DE ENTRADA: AC-8 lo prohíbe con la palabra NUNCA`,
-      ).not.toBeInTheDocument();
+      ).toBeNull();
 
       // (2) Y HAY UN MOTIVO LEGIBLE. Sin esto, mandarla a otro paso seguiría siendo en silencio.
       expect(
@@ -481,7 +483,15 @@ describe("WKH-374/W1.2 · el recorrido nuevo, montado y recorrido", () => {
   // ── LA COTIZACIÓN: UNA POR LO QUE SE TIPEA, NINGUNA POR DEBAJO DEL MÍNIMO, Y EL ERROR SE LIMPIA ──
   //
   // MUTANTES QUE MATAN, y son TRES porque el hallazgo eran tres defectos en el mismo efecto:
-  //   · `MW-17a` — sacar el `setTimeout` del efecto de la cotización ⇒ cae (B): `pedidos` queda `[9, 95]`.
+  //   · `MW-17a` — que el pedido NO se difiera (el cuerpo del `setTimeout` corre dentro del propio
+  //     efecto) ⇒ cae (B): `pedidos` queda `[9, 95]`, que es la misma forma que el AR midió (`[2, 25]`).
+  //     ⚠️ Y ACÁ VA EL LÍMITE, MEDIDO Y NO RAZONADO: el primer intento de este mutante fue
+  //     `setTimeout(…, 0)` y **SOBREVIVIÓ** (`8 passed`). El motivo es estructural: con temporizadores
+  //     falsos el tiempo sólo avanza cuando el `it` lo avanza, y la limpieza del efecto cancela el
+  //     temporizador anterior en cada tecla ⇒ con CUALQUIER demora, incluida 0, las dos teclas
+  //     colapsan en un pedido. ⇒ **lo que este `it` clava es que el pedido esté DIFERIDO fuera del
+  //     render, ⛔ NO que la demora sean 300 ms.** El valor vive en `MS_DE_ESPERA_DE_LA_COTIZACION` y
+  //     ⛔ no lo vigila nada de acá.
   //   · `MW-17b` — cambiar el corte del mínimo por `monto > 0` ⇒ cae (A).
   //   · `MW-17c` — borrar el `setMotivo(null)` del `then` ⇒ cae (C): el banner queda junto a la cifra.
   // ⛔ FALSO KILLED A EVITAR en (B): tipear un monto POR DEBAJO del mínimo como primera tecla. Ahí el
@@ -554,7 +564,7 @@ describe("WKH-374/W1.2 · el recorrido nuevo, montado y recorrido", () => {
       expect(
         screen.queryByText("No pudimos terminar ese paso"),
         "el banner de error quedó pegado JUNTO a la cotización correcta: es copy que dice que algo falló cuando no falló",
-      ).not.toBeInTheDocument();
+      ).toBeNull();
     } finally {
       vi.useRealTimers();
     }

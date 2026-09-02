@@ -203,7 +203,7 @@ export function Bienvenida({ onEmpezar, disabled }: { onEmpezar: () => void; dis
         data-marca-entrada
         className="relative flex h-10 items-center justify-center overflow-hidden"
       >
-        {/* 🔴 EL `id` NO PUEDE SER EL DEL SPLASH, y es un bug medido: `app/page.tsx:20-21` monta
+        {/* 🔴 EL `id` NO PUEDE SER EL DEL SPLASH, y es un bug medido: `app/page.tsx:21-22` monta
             `<Splash />` y `<RemittanceFlow />` como HERMANOS, así que los dos `<pattern>` conviven en
             un solo documento los ~1200 ms que el splash se queda (`splash.tsx:60`). `url(#…)` resuelve
             al PRIMERO en orden de documento, que sería el del splash: su `stroke` es `#FBFAF7`, el tono

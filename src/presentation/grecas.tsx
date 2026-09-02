@@ -6,7 +6,7 @@
 // idénticos sin nada que los ate es exactamente cómo uno se corrige y el otro no". Acá la geometría
 // —el `path`, el paso de 28px, el `strokeWidth`— está escrita UNA vez y los dos sitios la leen.
 //
-// 🔴 Y EL `id` ES UN PROP REQUERIDO, SIN DEFAULT, POR UN BUG MEDIDO Y NO POR GUSTO. `app/page.tsx:20-21`
+// 🔴 Y EL `id` ES UN PROP REQUERIDO, SIN DEFAULT, POR UN BUG MEDIDO Y NO POR GUSTO. `app/page.tsx:21-22`
 // monta `<Splash />` y `<RemittanceFlow />` como HERMANOS, así que los dos subárboles conviven en UN
 // solo documento durante los ~1200 ms que el splash se queda (`MS_EN_PANTALLA`, `splash.tsx:60`). Un
 // `id` de SVG no pertenece al componente: pertenece al documento, y `fill="url(#…)"` resuelve al PRIMERO

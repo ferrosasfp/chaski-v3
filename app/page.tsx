@@ -1,5 +1,6 @@
 import { DiagnosticoDeVuelta } from "@/presentation/diagnostico-de-vuelta";
 import { RemittanceFlow } from "@/presentation/flow";
+import { recorridoV2Enabled } from "@/presentation/recorrido/bandera"; import { Recorrido } from "@/presentation/recorrido/recorrido"; // WKH-374/W1 — LOS DOS EN ESTA LÍNEA (edición línea-neutra: abajo hay citas por número)
 import { Splash } from "@/presentation/splash";
 
 /**
@@ -30,7 +31,14 @@ export default function Page() {
              una captura de pantalla sin scrollear, que es el entregable.
           ⛔ Sin `?diag=1` esto devuelve `null` y no ejecuta ninguna lectura: la página queda idéntica. */}
       <DiagnosticoDeVuelta />
-      <RemittanceFlow />
+      {/* WKH-374/W1 · EL INTERRUPTOR DEL RECORRIDO NUEVO, y envuelve SÓLO estos dos componentes.
+          El splash y el bloque de diagnóstico quedan AFUERA y montados como hoy, y eso no es
+          prolijidad: meterlos adentro cambiaría la forma del import o los dejaría comentados, y hay
+          un candado que lee este fuente y exige la línea de import literal más el elemento fuera de
+          todo comentario.
+          ⛔ La bandera se despliega APAGADA. Con ella apagada esto monta el árbol de hoy, byte por
+          byte, y eso tampoco es una promesa: lo mide `T-374-W1-10`. */}
+      {recorridoV2Enabled() ? <Recorrido /> : <RemittanceFlow />}
     </>
   );
 }

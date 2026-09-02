@@ -859,7 +859,7 @@ describe("J-AC8 (HU-068/AC-8): la banda no lleva texto ni superficie de color pr
 });
 
 describe("J-DT4 (HU-068/§0.3): el splash y la app conviven en UN documento, y ningún `id` se repite", () => {
-  it("🔴 montados como en `app/page.tsx:20-21`, no hay dos elementos con el mismo `id`", async () => {
+  it("🔴 montados como en `app/page.tsx:21-22`, no hay dos elementos con el mismo `id`", async () => {
     // EL BUG QUE ESTE `it` CAZA, y que ningún artefacto anterior tenía: los dos subárboles conviven
     // ~1200 ms (`splash.tsx:60`), un `id` de SVG es del DOCUMENTO y `url(#…)` resuelve al PRIMERO en
     // orden de documento. Con el `id` repetido la banda de la entrada pintaría con el `<pattern>` del

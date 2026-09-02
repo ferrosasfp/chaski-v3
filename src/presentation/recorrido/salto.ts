@@ -210,8 +210,8 @@ export function firmasDelCamino(p: { porEnlace: boolean }): readonly Firma[] {
     },
     laTransaccion,
     {
-      queSeFirma: "La autorización para que la comisión de red la pague Chaski",
-      porQue: "Es lo que te evita tener que comprar SOL para poder enviar.",
+      queSeFirma: "La autorización del patrocinio de la comisión de red",
+      porQue: "Va aparte de la transacción de arriba porque la pide el camino patrocinado.",
     },
   ];
 }

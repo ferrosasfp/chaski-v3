@@ -32,12 +32,19 @@ import {
   beneficiary,
 } from "../../test-support/fakes";
 import { buildTestContainer } from "../../test-support/test-container";
+import { MARCA } from "../../infrastructure/solana/deeplink/sesion";
+import { MIN_SEND_USD } from "../../domain/remittance";
 import { NO_CUSTODIAL } from "./pantallas";
+import { TABLA } from "./pasos";
 import { type PropsDelRecorrido, Recorrido } from "./recorrido";
-import { anuncioDe } from "./salto";
+import { MOTIVO_SIN_ATERRIZAJE, anuncioDe } from "./salto";
 
 const NOMBRE = "Maria Elena Quispe";
 const MONTO = "25";
+/** El destino que un caso de uso puede contestar cuando hay que salir. ⛔ Es un doble: no se le pide
+ *  forma de enlace universal de ninguna billetera, se le pide ser distinguible del `href` del test. */
+const DESTINO_DE_LA_BILLETERA = "https://billetera.example/ul/v1/firmar?x=1";
+const DESTINO_DEL_VERIFICADOR = "https://verificacion.example/session/fake";
 
 afterEach(() => {
   cleanup();
@@ -58,6 +65,21 @@ function montar(o: PropsDelRecorrido = {}) {
     contenedorDeCasosDeUso: container,
     ...render(<Recorrido hrefDeAterrizaje="https://chaski.test/" {...o} container={container} />),
   };
+}
+
+/**
+ * Toca un `<a href>` y ⛔ le corta la navegación.
+ *
+ * ⚠️ POR QUÉ, Y QUÉ **NO** DEBILITA: jsdom no implementa la navegación —tira «Not implemented» desde
+ * un `setTimeout`, o sea DESPUÉS de que el `it` terminó, y ese error se le cuelga al archivo que
+ * corra después—. Lo que este archivo afirma sobre el salto es el `href` del enlace, con su propia
+ * aserción; el `preventDefault` sólo evita que el ruido cruce de archivo. El listener va en el
+ * ELEMENTO y React escucha delegado en la raíz, así que el `onClick` del componente corre igual: si
+ * no corriera, la aserción del estado en vuelo que le sigue se pondría roja.
+ */
+function tocarSinNavegar(a: HTMLElement) {
+  a.addEventListener("click", (e) => e.preventDefault(), { once: true });
+  fireEvent.click(a);
 }
 
 /** Completa los tres campos de la pantalla del envío. */
@@ -233,7 +255,14 @@ describe("WKH-374/W1.2 · el recorrido nuevo, montado y recorrido", () => {
   // `../honest-copy.test.tsx`. Ese monta el árbol VIEJO ⇒ no cubre ni una pantalla de éstas. ⛔ Y no
   // se lo toca.
   it("T-374-W1-8: el copy preserva la afirmación no custodial, no mete em dashes y no promete lo que otra HU entrega", async () => {
-    const pasos = ["entrar", "envio", "identidad", "firmar", "seguimiento"] as const;
+    // 🔴 LOS PASOS SE DERIVAN DE `TABLA`, ⛔ NO SE ESCRIBEN (fix-pack AR/MNR-3). Escritos a mano, un
+    // paso nuevo en la tabla quedaba sin barrer y este `it` seguía verde sobre la pantalla que nadie
+    // miró. La calibración de abajo es lo que impide que una `TABLA` vacía lo deje pasar por vacío.
+    const pasos = TABLA.map((f) => f.id);
+    expect(
+      pasos.length,
+      "la tabla de pasos vino vacía: el `for` de abajo no daría una vuelta y todo pasaría por vacío",
+    ).toBeGreaterThanOrEqual(5);
     // ⛔ La pantalla de identidad NO habla de fondos, así que no lleva la afirmación no custodial:
     // repetirla ahí sería ruido. Las otras CUATRO sí, y por eso el conteo de abajo es sobre esas.
     const hablanDeFondos = pasos.filter((x) => x !== "identidad");
@@ -268,11 +297,17 @@ describe("WKH-374/W1.2 · el recorrido nuevo, montado y recorrido", () => {
   // mutante —queda el de «Volver», y cualquier otro botón que la pantalla tenga—, así que lo que se
   // afirma es el TEXTO: el título del anuncio, la enumeración de las firmas y la promesa de la vuelta.
   it("T-374-W1-9: el anuncio existe ANTES del salto, enumera las firmas y ⛔ no escribe ningún número literal", async () => {
-    // La firma queda SUSPENDIDA a propósito: es lo que deja el estado «en vuelo» a la vista para
-    // poder mirarlo. En producción lo que suspende es que la persona está en la otra app.
+    // 🔴 EL DOBLE CONTESTA `hay-que-salir`, QUE ES EL DESENLACE DEL CAMINO DEL QUE TRATA ESTA HU.
+    // ⚠️ Acá el doble devolvía una promesa que NUNCA resolvía, «para dejar el estado en vuelo a la
+    // vista». Eso medía el estado en vuelo de un salto que no existía: el AR midió que el anfitrión
+    // descartaba `hay-que-salir` en silencio (un `if (estado === "listo")` sin `else`) y aun así la
+    // pantalla decía «Estamos en tu billetera» con el navegador quieto.
     const container: Container = buildTestContainer({
       useCases: {
-        confirmAndSend: { execute: () => new Promise(() => {}) } as unknown as Container["confirmAndSend"],
+        confirmAndSend: {
+          execute: async () =>
+            ({ estado: "hay-que-salir", irA: DESTINO_DE_LA_BILLETERA, esperando: "firma-tx" }) as const,
+        } as unknown as Container["confirmAndSend"],
       },
     });
     montar({ container, pasoDeArranque: "envio", identidadYaVerificada: true });
@@ -303,12 +338,225 @@ describe("WKH-374/W1.2 · el recorrido nuevo, montado y recorrido", () => {
 
     // Y el estado EN VUELO aparece recién cuando se sale, ⛔ nunca antes.
     expect(screen.queryByText(/Estamos en tu billetera/)).not.toBeInTheDocument();
+    // (1) El control ES un botón mientras no hay destino: lo que dispara es el caso de uso.
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: esperado.boton }));
+    });
+    // (2) 🔴 Y CON EL DESTINO YA CONTESTADO, EL CONTROL ES UN ENLACE QUE APUNTA A ÉL. Ésta es la
+    // aserción que el AR midió ausente: sin ella, «se ejecuta el salto» era una promesa en prosa y el
+    // `location.href` no se movía nunca.
+    const enlace = await screen.findByRole("link", { name: esperado.boton });
+    expect(
+      enlace.getAttribute("href"),
+      "el control de salida no apunta a donde el caso de uso dijo: el salto no se ejecuta y la pantalla igual dice que estamos en la billetera",
+    ).toBe(DESTINO_DE_LA_BILLETERA);
+    // Y todavía NO dice que estamos en la billetera: nadie tocó nada.
+    expect(
+      screen.queryByText(/Estamos en tu billetera/),
+      "la pantalla afirma que estamos en la billetera y la persona todavía no tocó el enlace",
+    ).not.toBeInTheDocument();
+    // (3) Recién al tocarlo aparece el estado en vuelo.
+    await act(async () => {
+      tocarSinNavegar(enlace);
     });
     expect(
       screen.getByText(/Estamos en tu billetera/),
       "al salir no queda ningún texto en pantalla: AC-6 prohíbe la pantalla vacía y el indicador mudo",
     ).toBeInTheDocument();
+  });
+
+  // ── 🔴 EL INVARIANTE DE LA HU, CON EL ANFITRIÓN MONTADO ────────────────────────────────────────
+  //
+  // 🔴 POR QUÉ ESTE `it` EXISTE Y POR QUÉ NINGUNO DE LOS QUE HABÍA PODÍA VERLO. `AC-8` pide, textual:
+  // «marca ausente, marca sin consumidor, firma rechazada ⇒ aterrizar en el mismo paso con un motivo
+  // legible, y NUNCA en la pantalla de entrada». La FUNCIÓN PURA lo cumplía —contesta el tercer
+  // valor— y el ANFITRIÓN lo colapsaba con un `? :` contra el paso de arranque. `T-374-W1-0` y
+  // `T-374-W1-3` no lo podían ver porque NINGUNO DE LOS DOS MONTA EL ANFITRIÓN: los dos miden la
+  // función pura, que era la mitad que estaba bien.
+  //
+  // MUTANTE QUE MATA (`MW-15`): en `./recorrido.tsx`, volver al colapso, o sea reemplazar el
+  // `aterrizajeDelAnfitrion(...)` del `useState` por
+  // `{ paso: v.desenlace === "aterriza" ? v.paso : pasoDeArranque, motivo: null }` ⇒ caen la (1) y la (2).
+  // ⛔ FALSO KILLED A EVITAR: afirmar sólo la AUSENCIA del botón de conectar. Un árbol que no
+  // renderizara nada la pasaría igual, y ése es el síntoma exacto del `BLQ-MED-1` (`?dl=toString`
+  // dejaba el `body` en «Paso 1 de 5» sin ninguna pantalla). Por eso el `it` afirma también QUÉ
+  // pantalla es y trae un control positivo sin marca.
+  it("T-374-W1-15: con una marca sin consumidor el anfitrión ⛔ NO aterriza en la entrada y muestra el motivo", () => {
+    for (const valor of ["marca-que-nadie-escribio", "", "toString", "CONECTAR"]) {
+      montar({ hrefDeAterrizaje: `https://chaski.test/?${MARCA}=${valor}` });
+      const cuerpo = document.body.textContent ?? "";
+
+      // (1) ⛔ NO ES LA PANTALLA DE ENTRADA. Es el caso que `AC-8` nombra con esas palabras.
+      expect(
+        screen.queryByRole("button", { name: "Conectar mi billetera" }),
+        `\`?${MARCA}=${valor}\` aterriza en la PANTALLA DE ENTRADA: AC-8 lo prohíbe con la palabra NUNCA`,
+      ).not.toBeInTheDocument();
+
+      // (2) Y HAY UN MOTIVO LEGIBLE. Sin esto, mandarla a otro paso seguiría siendo en silencio.
+      expect(
+        cuerpo,
+        `\`?${MARCA}=${valor}\` no deja ningún motivo: la persona cambió de paso sin que nadie le diga por qué`,
+      ).toContain(MOTIVO_SIN_ATERRIZAJE);
+
+      // (3) Y SE MONTÓ UNA PANTALLA DE VERDAD, ⛔ no un marco vacío. Es lo que separa «no está el
+      // botón de conectar» de «no se renderizó nada», que es el síntoma que el AR midió con `toString`.
+      expect(
+        screen.getByRole("heading", { name: "Cuánto y para quién" }),
+        `\`?${MARCA}=${valor}\` no montó ninguna pantalla: el marco quedó con el indicador de progreso y nada más`,
+      ).toBeInTheDocument();
+      cleanup();
+    }
+
+    // CONTROL POSITIVO: sin marca, la pantalla de entrada SÍ se muestra. Sin esto, las cuatro
+    // ausencias de arriba serían indistinguibles de un anfitrión que nunca la renderiza.
+    montar();
+    expect(
+      screen.getByRole("button", { name: "Conectar mi billetera" }),
+      "sin marca en la URL la pantalla de entrada no aparece: el control positivo no mide nada",
+    ).toBeInTheDocument();
+    expect(document.body.textContent ?? "", "sin marca no hay ningún motivo que mostrar").not.toContain(
+      MOTIVO_SIN_ATERRIZAJE,
+    );
+  });
+
+  // ── EL SALTO AL VERIFICADOR SE PIDE, Y ⛔ NADIE DA LA IDENTIDAD POR VERIFICADA ──────────────────
+  //
+  // MUTANTE QUE MATA (`MW-16`): en `./recorrido.tsx`, volver `verificar` a `setEnVuelo(true);
+  // avanzar();` ⇒ cae la aserción del conteo de llamadas Y la de que la pantalla no avanzó.
+  // ⛔ FALSO KILLED A EVITAR: mirar sólo el conteo de llamadas. El defecto que el AR midió tiene DOS
+  // mitades y la segunda es la grave —«avanza igual» = da la identidad por verificada sin verificar
+  // nada—, así que las dos se afirman por separado y con el control de que ANTES del clic el conteo
+  // era cero.
+  it("T-374-W1-16: «Verificar mi identidad» llama al caso de uso y ⛔ no avanza sola", async () => {
+    const llamadas: { remittanceId: string; address: string }[] = [];
+    const base = buildTestContainer();
+    const container: Container = {
+      ...base,
+      startKyc: {
+        execute: async (i: { remittanceId: string; address: string }) => {
+          llamadas.push(i);
+          return { kind: "redirect", url: DESTINO_DEL_VERIFICADOR } as const;
+        },
+      } as unknown as Container["startKyc"],
+    };
+    montar({ container, pasoDeArranque: "envio" });
+    cargarElEnvio();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Seguir" }));
+    });
+    await screen.findByRole("heading", { name: "Tu identidad" });
+    // CALIBRACIÓN: hasta acá NADIE pidió verificar nada. Sin esto, un doble que se llamara solo
+    // dejaría verde la aserción de abajo.
+    expect(llamadas.length, "el caso de uso se llamó antes de que la persona tocara el botón").toBe(0);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Verificar mi identidad" }));
+    });
+
+    expect(
+      llamadas.length,
+      "«Verificar mi identidad» no llama al caso de uso: la pantalla dice que se verificó y no se verificó nada",
+    ).toBe(1);
+    expect(
+      llamadas[0]?.remittanceId,
+      "el caso de uso se llamó sin el envío: no habría qué verificar",
+    ).toBeTruthy();
+    // ⛔ Y NO AVANZÓ. Ésta es la mitad grave: avanzar acá es dar la identidad por verificada.
+    expect(
+      screen.getByRole("heading", { name: "Tu identidad" }),
+      "el recorrido avanzó sin que la verificación haya terminado",
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Firmar y enviar" }),
+      "el recorrido llegó a firmar sin haber verificado la identidad",
+    ).not.toBeInTheDocument();
+    // Y el salto quedó como algo que la persona TOCA, apuntando a donde el caso de uso dijo.
+    const enlace = await screen.findByRole("link", { name: "Verificar mi identidad" });
+    expect(
+      enlace.getAttribute("href"),
+      "el control de salida al verificador no apunta a la pantalla que el caso de uso devolvió",
+    ).toBe(DESTINO_DEL_VERIFICADOR);
+  });
+
+  // ── LA COTIZACIÓN: UNA POR LO QUE SE TIPEA, NINGUNA POR DEBAJO DEL MÍNIMO, Y EL ERROR SE LIMPIA ──
+  //
+  // MUTANTES QUE MATAN, y son TRES porque el hallazgo eran tres defectos en el mismo efecto:
+  //   · `MW-17a` — sacar el `setTimeout` del efecto de la cotización ⇒ cae (B): `pedidos` queda `[9, 95]`.
+  //   · `MW-17b` — cambiar el corte del mínimo por `monto > 0` ⇒ cae (A).
+  //   · `MW-17c` — borrar el `setMotivo(null)` del `then` ⇒ cae (C): el banner queda junto a la cifra.
+  // ⛔ FALSO KILLED A EVITAR en (B): tipear un monto POR DEBAJO del mínimo como primera tecla. Ahí el
+  // corte del mínimo mata al mutante del debounce y el `×` no diría nada del debounce. Por eso las dos
+  // teclas de (B) están las dos POR ENCIMA del mínimo, derivado de la constante de producción.
+  it("T-374-W1-17: una sola cotización por lo tipeado, ninguna por debajo del mínimo, y el error no queda pegado", async () => {
+    vi.useFakeTimers();
+    try {
+      const pedidos: number[] = [];
+      let debeFallar = true;
+      const base = buildTestContainer();
+      const container: Container = {
+        ...base,
+        previewQuote: {
+          execute: async (i: { amountUsd: number; method: string }) => {
+            pedidos.push(i.amountUsd);
+            if (debeFallar) throw new Error("a2a_quote_rejected");
+            return base.previewQuote.execute(i as never);
+          },
+        } as unknown as Container["previewQuote"],
+      };
+      montar({ container, pasoDeArranque: "envio" });
+      const campo = screen.getByLabelText("Cuánto mandás");
+
+      // ── (A) POR DEBAJO DEL MÍNIMO NO SE COTIZA ────────────────────────────────────────────────
+      // El monto sale de la constante de producción: ⛔ acá no se escribe ninguna cifra.
+      fireEvent.change(campo, { target: { value: String(MIN_SEND_USD - 1) } });
+      await act(async () => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(
+        pedidos,
+        "se pidió una cotización por debajo del mínimo: el agente la rechaza igual, así que es un viaje garantizado a un error",
+      ).toEqual([]);
+
+      // ── (B) UNA SOLA COTIZACIÓN POR LO TIPEADO, Y ES LA DEL MONTO FINAL ───────────────────────
+      const primera = MIN_SEND_USD + 4;
+      const segunda = primera * 10 + 5;
+      fireEvent.change(campo, { target: { value: String(primera) } });
+      fireEvent.change(campo, { target: { value: String(segunda) } });
+      await act(async () => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(
+        pedidos,
+        "se pidió una cotización POR TECLA: la del monto a medio escribir no la pidió nadie",
+      ).toEqual([segunda]);
+      // Y el error de esa cotización SÍ se ve: sin esto, la limpieza de (C) sería indistinguible de
+      // un banner que nunca se prendió.
+      expect(
+        screen.getByText("No pudimos terminar ese paso"),
+        "la cotización falló y la pantalla no dice nada",
+      ).toBeInTheDocument();
+
+      // ── (C) EL CAMINO FELIZ LIMPIA EL MOTIVO ─────────────────────────────────────────────────
+      debeFallar = false;
+      const tercera = segunda + 1;
+      fireEvent.change(campo, { target: { value: String(tercera) } });
+      await act(async () => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(pedidos, "la tercera cotización no se pidió: lo de abajo pasaría por vacío").toEqual([
+        segunda,
+        tercera,
+      ]);
+      expect(
+        screen.getByText("Es lo que le llega a quien recibe."),
+        "la cotización buena no llegó a la pantalla",
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText("No pudimos terminar ese paso"),
+        "el banner de error quedó pegado JUNTO a la cotización correcta: es copy que dice que algo falló cuando no falló",
+      ).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

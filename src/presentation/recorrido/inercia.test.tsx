@@ -185,10 +185,23 @@ describe("WKH-374/W1.2 · la bandera apagada no cambia nada (AC-13)", () => {
     // Es la misma «TRAMPA 3» que este repo ya tiene escrita en
     // (`FORBIDDEN`, `../../composition/no-evm-surface.test.ts:56`): los comentarios no son código.
     //
-    // ⚠️ EL LÍMITE DE ESTA FORMA, declarado: un delator al que se llame por un alias tomado en OTRA
-    // línea se le escapa a las cuatro primeras filas. Por eso existe la quinta, que caza justamente el
-    // gesto de tomar el alias. ⛔ Lo que sigue afuera es un alias armado por reflexión
-    // (`window["local" + "Storage"]`), y eso no se cierra con un barrido de texto.
+    // 🔴 EL BARRIDO CORRE SOBRE EL ARCHIVO CON LOS SALTOS DE LÍNEA COLAPSADOS, Y ÉSE ES EL ARREGLO DEL
+    // `BLQ-MED-2` DEL AR. Acá se barría LÍNEA POR LÍNEA, y el AR midió que cuatro escrituras metidas en
+    // `./pantallas.tsx` dejaban este `it` en PASS y el lint sin una mención. Lo grave de una de ellas:
+    // la forma que se escapaba era **el alias partido en dos líneas**, o sea el gesto que la quinta
+    // fila vino a cerrar, con el salto de línea que el formateador produce solo. Un barrido por línea y
+    // un formateador que envuelve son un agujero que se abre sin que nadie lo pida.
+    //
+    // ⚠️ EL LÍMITE, REESCRITO CON LO QUE QUEDA REALMENTE AFUERA (la frase anterior era de cobertura y
+    // dos líneas la falsificaban):
+    //   · un alias armado por REFLEXIÓN (`window["local" + "Storage"]`, un nombre de propiedad en una
+    //     variable): no se cierra con un barrido de texto, y no se intenta;
+    //   · la INDIRECCIÓN por otro módulo: una pantalla que llame a un helper de fuera de este
+    //     directorio que toque el disco. El barrido mira estos archivos y ⛔ no sigue los imports;
+    //   · el disco al que se llegue por una API que no sea ninguna de estas ocho (IndexedDB, la Cache
+    //     API, `navigator.storage`). ⛔ Ninguna está en la tabla y ninguna se afirma cubierta.
+    // Lo que sí queda cerrado, y está calibrado más abajo con un cebo PARTIDO EN DOS LÍNEAS: cualquiera
+    // de las ocho formas, escrita en una línea o repartida en varias.
     const DELATORES = [
       {
         nombre: "localStorage",
@@ -225,6 +238,12 @@ describe("WKH-374/W1.2 · la bandera apagada no cambia nada (AC-13)", () => {
         pattern: /=\s*(?:window\s*\.\s*)?(?:local|session)Storage\b/,
         por: "tomar el almacén en una variable es tocarlo igual, sólo que en dos líneas",
       },
+      {
+        // La OCTAVA, del fix-pack: las cuatro primeras piden un `.` y se les escapa el corchete.
+        nombre: "índice de un almacén",
+        pattern: /\b(?:window\s*\.\s*)?(?:local|session)Storage\s*\[\s*["'`]/,
+        por: "entrar al almacén por corchetes es tocarlo igual que por punto",
+      },
     ] as const;
 
     // CONTROL NEGATIVO, con los LITERALES EXACTOS que el instrumento tiene que cazar, en memoria. Sin
@@ -238,6 +257,7 @@ describe("WKH-374/W1.2 · la bandera apagada no cambia nada (AC-13)", () => {
       "asignación de window.location": 'window.location.href = "https://ejemplo.test/";',
       "reescritura del historial": 'window.history.replaceState(null, "", "/x");',
       "alias de un almacén": "const s = window.localStorage;",
+      "índice de un almacén": 'window.localStorage["x"] = "y";',
     };
     for (const d of DELATORES) {
       const cebo = cebos[d.nombre] ?? "";
@@ -248,17 +268,45 @@ describe("WKH-374/W1.2 · la bandera apagada no cambia nada (AC-13)", () => {
       ).toBe(true);
     }
 
+    // 🔴 CONTROL NEGATIVO DE LA NORMALIZACIÓN, y es el que vuelve falsable al arreglo del `BLQ-MED-2`.
+    // Los OCHO cebos de arriba se escriben en UNA línea, así que los pasaría también el barrido viejo.
+    // Éste está PARTIDO, que es la forma que el AR usó para escaparse, y trae su propia refutación: se
+    // exige que el barrido por línea NO lo cace y que el normalizado SÍ. Sin la segunda mitad, esto
+    // sería un `it` que aplaude cualquier normalización, incluida una que no haga nada.
+    const CEBO_PARTIDO = 'const s =\n  window.localStorage;\nconst t = s;';
+    const aliasPartido = DELATORES.find((d) => d.nombre === "alias de un almacén");
+    expect(aliasPartido, "el delator del alias desapareció de la tabla: el cebo partido no mide nada").toBeDefined();
+    expect(
+      CEBO_PARTIDO.split("\n").some((l) => aliasPartido?.pattern.test(l) === true),
+      "el cebo PARTIDO se caza línea por línea: entonces no reproduce el escape que el AR midió y este control no dice nada",
+    ).toBe(false);
+    const normalizado = normalizar(CEBO_PARTIDO);
+    expect(
+      aliasPartido?.pattern.test(normalizado.texto),
+      "el barrido normalizado NO caza el alias partido en dos líneas: sigue abierto el gesto que la quinta fila vino a cerrar",
+    ).toBe(true);
+    // Y la línea que reporta es la del arranque del match, no un número cualquiera.
+    expect(
+      normalizado.lineaDe(normalizado.texto.indexOf("=")),
+      "el mapeo de posición a línea no apunta a la línea donde el match arranca: los hallazgos citarían un número inventado",
+    ).toBe(1);
+    expect(
+      normalizado.lineaDe(normalizado.texto.indexOf("const t")),
+      "el mapeo de posición a línea no llega a la tercera línea",
+    ).toBe(3);
+
     const tocanElDisco: string[] = [];
     for (const abs of archivos) {
-      readFileSync(abs, "utf8")
-        .split("\n")
-        .forEach((l, i) => {
-          for (const d of DELATORES) {
-            if (d.pattern.test(l)) {
-              tocanElDisco.push(`${path.relative(ROOT, abs)}:${i + 1} → ${d.nombre} (${d.por})`);
-            }
-          }
-        });
+      const { texto, lineaDe } = normalizar(readFileSync(abs, "utf8"));
+      for (const d of DELATORES) {
+        // ⛔ La copia con `g` se arma ACÁ y por match: `test()` con `g` arrastra `lastIndex` entre
+        // llamadas y saltearía uno de cada dos, que es un falso VERDE gratis de evitar.
+        for (const m of texto.matchAll(new RegExp(d.pattern.source, "g"))) {
+          tocanElDisco.push(
+            `${path.relative(ROOT, abs)}:${lineaDe(m.index)} → ${d.nombre} (${d.por})`,
+          );
+        }
+      }
     }
     expect(
       tocanElDisco,
@@ -307,6 +355,39 @@ function recorrer(dir: string, out: string[] = []): string[] {
     else if (entry.endsWith(".ts") || entry.endsWith(".tsx")) out.push(full);
   }
   return out;
+}
+
+/**
+ * 🔴 EL ARCHIVO CON LOS SALTOS DE LÍNEA COLAPSADOS, MÁS EL MAPA DE VUELTA A LA LÍNEA ORIGINAL.
+ *
+ * Existe por el `BLQ-MED-2` del AR: un barrido por línea no ve un delator que el formateador partió
+ * en dos, y ésa era la forma con la que se le escapaban cuatro escrituras. Cada salto de línea pasa a
+ * ser UN espacio —así una llamada envuelta se lee igual que una en una línea— y `lineaDe` devuelve la
+ * línea donde arranca el match, para que el hallazgo se pueda citar por número.
+ *
+ * ⚠️ LO QUE ESTA FORMA EMPEORA, declarado: al pegar líneas, un delator escrito en la prosa de un
+ * docblock puede juntarse con el código de la línea siguiente y dar un falso positivo. El efecto es
+ * revisar de MÁS, nunca de menos, y las ocho formas son call-shaped o índice-shaped —nunca substrings
+ * crudos— justamente para que la prosa de este árbol, que nombra los delatores para prohibirlos, no
+ * los dispare. Medido: con las ocho filas y el árbol de hoy, el barrido devuelve la lista vacía.
+ */
+function normalizar(src: string): { texto: string; lineaDe: (i: number) => number } {
+  const lineas = src.split("\n");
+  const inicios: number[] = [];
+  let largo = 0;
+  for (const l of lineas) {
+    inicios.push(largo);
+    largo += l.length + 1; // +1 por el separador con el que se pegan
+  }
+  const texto = lineas.join(" ");
+  return {
+    texto,
+    lineaDe: (i: number) => {
+      let n = 1;
+      for (let k = 0; k < inicios.length; k++) if ((inicios[k] as number) <= i) n = k + 1;
+      return n;
+    },
+  };
 }
 
 /** Los `className="..."` de un archivo. ⛔ NUNCA el archivo entero: los comentarios de este repo citan

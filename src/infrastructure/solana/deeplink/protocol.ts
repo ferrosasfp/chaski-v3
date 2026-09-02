@@ -41,7 +41,7 @@ import nacl from "tweetnacl";
 import bs58 from "bs58";
 
 /** Las dos billeteras que hablan este protocolo. Los dos lo implementan igual salvo un nombre. */
-export type BilleteraDeeplink = "phantom" | "solflare";
+export type BilleteraDeeplink = "phantom" | "solflare"; export const PARAM_ERROR = "errorCode"; // WKH-374 (fix-pack AR/BLQ-MED-4) — EL NOMBRE DEL PARÁMETRO DE ERROR, EN ESTA MISMA LÍNEA (Δ0): este archivo recibe citas ancladas por número y una línea nueva las corre a todas. Se EXPORTA por el mismo motivo que `PARAMS_DE_RESPUESTA` de más abajo, que ahora lo consume en vez de repetir el literal: el recorrido nuevo (`../../../presentation/recorrido/salto.ts`) necesita leer el código de error que la billetera deja en la URL de vuelta, y copiar el nombre a mano sería una segunda lista que envejece sola. ⛔ El valor NO se toca: es el que las dos billeteras escriben.
 
 /**
  * Base de los enlaces universales de cada una.
@@ -83,7 +83,7 @@ export const PARAMS_DE_RESPUESTA: readonly string[] = [
   ...Object.values(CLAVE_EN_RESPUESTA),
   "nonce",
   "data",
-  "errorCode",
+  PARAM_ERROR,
   "errorMessage",
 ];
 

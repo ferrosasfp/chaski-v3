@@ -845,16 +845,24 @@ describe("WKH-374/W1.2 · el recorrido nuevo, montado y recorrido", () => {
     const boton = screen.getByRole("button", { name: "Conectar mi billetera" });
 
     // ── (A) TRES TOQUES, UNA SOLA LLAMADA ───────────────────────────────────────────────────────
+    //
+    // 🔴 LOS DOS PRIMEROS VAN EN EL MISMO LOTE, Y ESA FORMA ES LO QUE MIDE LA GUARDA (medido). Con un
+    // toque por `act`, React alcanza a pintar el `disabled` entre uno y otro ⇒ el segundo no llega
+    // nunca al manejador, y el mutante que borra la guarda de reentrada SOBREVIVE: verificado en
+    // disco, `13 passed`. O sea que esa forma medía el `disabled` con el nombre de la guarda. Dentro
+    // de un solo `act` el render queda pendiente, que es la carrera real del teléfono: dos toques
+    // antes de que la pantalla se entere del primero.
     await act(async () => {
       fireEvent.click(boton);
+      fireEvent.click(boton);
     });
-    expect(llamadas, "el primer toque no llamó al caso de uso: lo de abajo pasaría por vacío").toBe(1);
-    fireEvent.click(boton);
-    fireEvent.click(boton);
     expect(
       llamadas,
-      "el segundo y el tercer toque volvieron a llamar al caso de uso: del otro lado hay un depósito y una cuota de proveedor",
+      "el segundo toque del mismo lote volvió a llamar al caso de uso: del otro lado hay un depósito y una cuota de proveedor, y el `disabled` todavía no se pintó",
     ).toBe(1);
+    // Y el tercero, ya con la pantalla pintada. Ésta la cubren las DOS mitades, y por eso va aparte.
+    fireEvent.click(boton);
+    expect(llamadas, "el tercer toque, con la pantalla ya pintada, volvió a llamar al caso de uso").toBe(1);
 
     // ── (B) Y LA PANTALLA CAMBIÓ ENTRE EL TOQUE Y EL ENLACE ─────────────────────────────────────
     // El hallazgo del CR no era sólo que se pudiera tocar dos veces: era que ⛔ no cambiaba un solo

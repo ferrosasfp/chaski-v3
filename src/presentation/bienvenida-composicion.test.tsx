@@ -533,8 +533,8 @@ describe("T-063-11 (2º pase): el bloque pide crecer y centrarse, y su padre pue
 // ⚠️ EL TÍTULO DE ESTE BLOQUE DECÍA "y es la que va a firmar", Y ESO NO ES LO QUE MIDE (fix-pack,
 // AR/MNR-2). Mide que el literal de la pantalla sea `devnet`. Que ese literal COINCIDA con la red contra
 // la que se firma no lo garantiza nada: el nombre es un literal (`cluster`, `../infrastructure/chain.ts:8`)
-// y el endpoint sale de `NEXT_PUBLIC_SOLANA_RPC_URL` (`resolveSolanaRpcUrlPublic`,
-// `../infrastructure/chain.ts:190`) sin validación cruzada. El detalle, con la precondición del env
+// y el endpoint sale de `NEXT_PUBLIC_SOLANA_RPC_URL` (`resolveSolanaRpcUrlPublic`, `../infrastructure/chain.ts:190`)
+// sin validación cruzada. El detalle, con la precondición del env
 // medida, está en el docblock de `bienvenida.tsx`.
 describe("T-063-12 (2º pase): la pantalla nombra la red, y el nombre es un literal vigilado", () => {
   it("🔴 dice «Solana devnet», y el literal va escrito ACÁ y no importado del resolver", () => {

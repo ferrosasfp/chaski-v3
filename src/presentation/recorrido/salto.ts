@@ -4,9 +4,15 @@
 // sobre un `href` que el llamador pasa; quien lee la barra es el anfitrión, una vez, en el montaje.
 //
 // 🔴 EL INVARIANTE QUE ESTE MÓDULO SOSTIENE. Todo salto a la billetera o al verificador se ANUNCIA
-// ANTES, se MUESTRA MIENTRAS PASA, y al volver SE ATERRIZA DONDE SE ESTABA, UN PASO MÁS ADELANTE.
-// ⛔ NUNCA en la pantalla de entrada, ni en el camino feliz ni en el de error: el error cambia el
-// MOTIVO en pantalla, ⛔ nunca el paso.
+// ANTES, se MUESTRA MIENTRAS PASA, y al volver SE ATERRIZA EN UN PASO CONOCIDO: el SIGUIENTE si el
+// salto salió (`AC-7`), y EL PASO DEL QUE SE SALIÓ si la billetera reportó un rechazo (`AC-8`).
+// ⛔ NUNCA en la pantalla de entrada, ni en el camino feliz ni en el de error.
+//
+// ⚠️ ACÁ DECÍA «el error cambia el MOTIVO en pantalla, ⛔ nunca el paso» Y ERA UNA RE-LECTURA DE
+// `AC-8`, NO SU CUMPLIMIENTO (F4/`H-1`). `AC-8` pide DOS cosas —el mismo paso donde estaba Y un
+// motivo legible— y esa frase se quedaba con una. Medido por F4 con el código de rechazo real de
+// Phantom: `?dl=firmar-tx&errorCode=4001` dejaba a la persona en *Seguimiento*, un paso MÁS
+// ADELANTE, leyendo «Todavía no hay ningún envío en curso» y sin forma de reintentar la firma.
 //
 // 🔴 Y SE RESUELVE COMO FUNCIÓN PURA DE LA MARCA QUE TRAE LA URL. ⛔ No de un estado recordado, ⛔ no
 // del disco, ⛔ no de la sesión, y no es preferencia de estilo: el salto REMONTA EL ÁRBOL DE REACT
@@ -112,6 +118,65 @@ export function aterrizajeDe(marca: string): Aterrizaje {
 }
 
 /**
+ * 🔴 LA OTRA MITAD DE `AC-8`: DE QUÉ PASO SALIÓ CADA MARCA. Indexada por la MISMA tupla de producción
+ * que la tabla de arriba, y por el mismo motivo: una marca nueva queda sin entrada acá, `origenDe` le
+ * contesta el tercer valor y el camino de error cae al aterrizaje feliz en vez de inventar un paso.
+ *
+ * ⛔ NO ES LA TABLA DE ARRIBA CON OTRO NOMBRE, y ésa es toda la corrección de `H-1`: hasta este
+ * fix-pack había UNA sola tabla para los dos caminos, así que rechazar la firma dejaba a la persona
+ * un paso MÁS ADELANTE del que había salido. Las dos tablas coinciden sólo donde el salto vuelve a su
+ * propia pantalla.
+ *
+ * CADA ORIGEN, con el sitio de producción que lo emite (⛔ los nombres de las marcas no se
+ * transcriben: `CD-W1-7`):
+ *   [0] el connect ⇒ lo pide `connectWallet.execute()`, y en este recorrido eso lo dispara la
+ *       PANTALLA DE ENTRADA.
+ *   [1] la firma de la TRANSACCIÓN     ⇒ sale de `confirmAndSend.execute()` ⇒ la pantalla de firmar.
+ *   [2] la firma del PATROCINIO        ⇒ ídem.
+ *   [3] la creación del NONCE DURABLE  ⇒ ídem: es un salto DENTRO de preparar la firma.
+ *   [4] la prueba de posesión del PAGO ⇒ la pide `confirmAndSend.execute()` antes del `prepare`, o
+ *       sea también desde la pantalla de firmar. Es la que F4 midió aterrizando en el seguimiento.
+ *   [5] la prueba de posesión de la IDENTIDAD ⇒ ⛔ NO sale de la pantalla de identidad: la pide
+ *       `connectWallet.execute()`, DENTRO del connect ⇒ el origen es la pantalla de entrada.
+ *
+ * ⚠️ Y ACÁ HAY UN CHOQUE ENTRE LAS DOS MITADES DE `AC-8`, que se resuelve y ⛔ no se disimula: para
+ * las marcas que salen de la PANTALLA DE ENTRADA, «el mismo paso donde estaba» ES el paso que el
+ * mismo AC prohíbe con la palabra NUNCA. Gana la prohibición: `aterrizajeDelAnfitrion` las desvía por
+ * `aterrizaEnLaEntrada` al paso de la marca desconocida y CONSERVA el motivo. Desde ahí la pantalla
+ * de entrada queda a un «Volver» (`anterior`, `./pasos.ts:111`), así que reintentar el connect ⛔ no
+ * exige recargar nada.
+ */
+const ORIGEN_POR_ENLACE: Readonly<
+  Record<(typeof MARCAS_DE_VUELTA)[number], PasoDelRecorrido>
+> = {
+  [MARCAS_DE_VUELTA[0]]: PASO_DE_ENTRADA,
+  [MARCAS_DE_VUELTA[1]]: "firmar",
+  [MARCAS_DE_VUELTA[2]]: "firmar",
+  [MARCAS_DE_VUELTA[3]]: "firmar",
+  [MARCAS_DE_VUELTA[4]]: "firmar",
+  [MARCAS_DE_VUELTA[5]]: PASO_DE_ENTRADA,
+};
+
+/**
+ * De qué paso salió una marca. Mismo molde exacto que `aterrizajeDe` —`Object.hasOwn` primero y la
+ * salida validada contra la tabla de pasos— y por los mismos dos motivos: el literal hereda de
+ * `Object.prototype`, y una entrada que dejara de ser un paso no puede colarse por el tipo.
+ *
+ * 🔴 EL VERIFICADOR SALE DE LA PANTALLA DE IDENTIDAD, que es la única que ofrece ese salto, y ⛔ es la
+ * misma donde aterriza: para esa marca el camino feliz y el de error coinciden, y coinciden por el
+ * diseño de la pantalla, no por casualidad.
+ * 🔴 LA SALIDA AL NAVEGADOR DE LA BILLETERA la ofrece SÓLO la pantalla de entrada, así que su origen
+ * es el paso que `AC-8` prohíbe: cae en el desvío del docblock de arriba.
+ */
+export function origenDe(marca: string): Aterrizaje {
+  if (marca === MARCA_DEL_VERIFICADOR) return "identidad";
+  if (marca === MARCA_DE_LA_SALIDA) return PASO_DE_ENTRADA;
+  if (!Object.hasOwn(ORIGEN_POR_ENLACE, marca)) return SIN_ATERRIZAJE;
+  const porEnlace: unknown = (ORIGEN_POR_ENLACE as Record<string, unknown>)[marca];
+  return typeof porEnlace === "string" && esPasoDelRecorrido(porEnlace) ? porEnlace : SIN_ATERRIZAJE;
+}
+
+/**
  * ¿Esta URL vuelve del recorrido POR ENLACE PROFUNDO? ⛔ No es «trae una marca»: la del verificador y
  * la de la salida al navegador de la billetera son marcas y ⛔ no son el camino por enlace.
  *
@@ -155,9 +220,13 @@ export function marcaDeLaUrl(href: string): string | null {
 /**
  * El desenlace de una vuelta: qué encuentra la persona cuando la pestaña vuelve a estar a la vista.
  *
- * 🔴 LAS DOS RAMAS —feliz y error— DEVUELVEN EL MISMO `paso`, y ésa es la mitad de `AC-8` que
- * importa. Lo único que el error cambia es `motivo`. Un desenlace de error que mandara a otro paso
- * (y sobre todo a la entrada) es el mutante que `T-374-W1-3` mata.
+ * 🔴 LAS DOS RAMAS —feliz y error— DEVUELVEN PASOS DISTINTOS, Y ÉSA ES LA CORRECCIÓN DE `H-1`: la
+ * feliz devuelve el aterrizaje (`AC-7`, el siguiente) y la de error devuelve EL PASO DEL QUE SE SALIÓ
+ * (`AC-8`), que es lo único desde donde se puede reintentar el salto que se rechazó.
+ *
+ * ⚠️ ACÁ DECÍA «las dos ramas devuelven el MISMO paso, y ésa es la mitad de `AC-8` que importa», y
+ * era falso como lectura del AC: el AC pide las DOS mitades. `T-374-W1-3` medía la frase vieja, así
+ * que era un candado sobre el defecto; hoy mide la ligadura marca → origen.
  */
 export type Vuelta =
   | { desenlace: "sin-marca" }
@@ -172,6 +241,10 @@ export type Vuelta =
  * exactamente lo que pasaba antes del fix-pack (AR/BLQ-MED-4).
  * El texto legible sale de (`humanError`, `../flow-vm.ts:572`), que a su vez consulta primero a
  * (`copyDeEnlace`, `../flow-vm.ts:1503`): ⛔ acá no se escribe ni un mensaje de error nuevo.
+ *
+ * 🔴 Y EL CÓDIGO DE ERROR ELIGE LA TABLA, ⛔ NO SÓLO EL MOTIVO (`H-1`). Sin código, el aterrizaje;
+ * con código, el ORIGEN. ⛔ Y si el origen no se conoce ⛔ no se inventa ninguno: se cae al
+ * aterrizaje, que es el paso conocido, en vez de dejar a la persona en una pantalla adivinada.
  */
 export function vueltaDeUnSalto(p: { href: string }): Vuelta {
   const marca = marcaDeLaUrl(p.href);
@@ -179,7 +252,13 @@ export function vueltaDeUnSalto(p: { href: string }): Vuelta {
   const paso = aterrizajeDe(marca);
   if (paso === SIN_ATERRIZAJE) return { desenlace: "sin-aterrizaje", marca };
   const codigo = codigoDeErrorDeLaUrl(p.href);
-  return { desenlace: "aterriza", paso, motivo: codigo === null ? null : humanError(codigo) };
+  if (codigo === null) return { desenlace: "aterriza", paso, motivo: null };
+  const origen = origenDe(marca);
+  return {
+    desenlace: "aterriza",
+    paso: origen === SIN_ATERRIZAJE ? paso : origen,
+    motivo: humanError(codigo),
+  };
 }
 
 /**
@@ -191,14 +270,19 @@ export function vueltaDeUnSalto(p: { href: string }): Vuelta {
  * construcción mientras un `it` ejercitaba una rama que nadie construye. Hoy el productor es la URL,
  * que es de donde sale en producción, y el parámetro se fue.
  *
- * ⛔ EL NOMBRE DEL PARÁMETRO NO SE ESCRIBE ACÁ: entra por (`PARAM_ERROR`,
- * `../../infrastructure/solana/deeplink/protocol.ts:44`), el mismo símbolo que consume
- * `PARAMS_DE_RESPUESTA` en ese módulo.
+ * ⛔ EL NOMBRE DEL PARÁMETRO NO SE ESCRIBE ACÁ: entra por
+ * (`PARAM_ERROR`, `../../infrastructure/solana/deeplink/protocol.ts:44`), el mismo símbolo que
+ * consume `PARAMS_DE_RESPUESTA` en ese módulo.
+ * ⚠️ ESA CITA VA ENTERA EN UNA LÍNEA A PROPÓSITO: partida por el salto de línea del docblock, un
+ * lector estricto de línea la cuenta como suelta, y así estaba (F4/`H-5`, que midió 1 partida donde
+ * el reporte declaraba 0).
  *
  * ⚠️ EL LÍMITE, declarado: este código viaja SIN CIFRAR y ⛔ no lo autenticó nadie, exactamente como
- * lo dice (`abrirSobre`, `../../infrastructure/solana/deeplink/protocol.ts:335`). No se usa para
- * afirmar un hecho sobre el dinero: lo único que decide es qué MOTIVO se lee en pantalla, y el paso no
- * lo toca (`AC-8`).
+ * lo dice (`abrirSobre`, `../../infrastructure/solana/deeplink/protocol.ts:335`). ⛔ No se usa para
+ * afirmar un hecho sobre el dinero.
+ * ⚠️ ACÁ DECÍA «el paso no lo toca» Y DESDE `H-1` ES FALSO: este código decide el MOTIVO y también
+ * QUÉ TABLA resuelve el paso. Lo que sigue sin poder hacer es mover a la persona a un paso que no
+ * salga de una de las dos tablas de este módulo, y sobre todo ⛔ no puede mandarla a la entrada.
  */
 export function codigoDeErrorDeLaUrl(href: string): string | null {
   let params: URLSearchParams;
@@ -260,12 +344,18 @@ export const MOTIVO_SIN_ATERRIZAJE =
  *   · `sin-marca`       ⇒ arranque normal. `pasoDeArranque` es la costura de test, y su default ES la
  *                         pantalla de entrada: acá eso es correcto, porque nadie volvió de ningún lado.
  *   · `sin-aterrizaje`  ⇒ `PASO_DE_LA_MARCA_DESCONOCIDA` + motivo legible. ⛔ Nunca la entrada.
- *   · `aterriza`        ⇒ el paso de la tabla, con el motivo que la URL de vuelta haya traído.
+ *   · `aterriza`        ⇒ el paso que resolvió `vueltaDeUnSalto` —el aterrizaje si el salto salió, el
+ *                         origen si la billetera reportó un rechazo—, con el motivo que traiga.
  *
  * 🔴 Y ACÁ ES DONDE `aterrizaEnLaEntrada` TIENE SU LLAMADOR (el AR midió que tenía CERO). Es el
- * fallo-cerrado que su docblock promete: si la tabla de aterrizaje alguna vez apuntara a la entrada,
- * esto NO manda a la persona al principio en silencio, la deja en el paso de la marca desconocida y
- * le da el motivo. ⛔ No es decorativo: `T-374-W1-15` lo pone rojo mutando la tabla.
+ * fallo-cerrado que su docblock promete: la persona ⛔ no vuelve al principio en silencio, queda en
+ * el paso de la marca desconocida y CON el motivo. ⛔ No es decorativo: `T-374-W1-15` lo pone rojo
+ * mutando la tabla.
+ *
+ * ⚠️ Y DESDE `H-1` ESTA RAMA YA ⛔ NO ES HIPOTÉTICA: tres marcas salen de la pantalla de entrada
+ * (`ORIGEN_POR_ENLACE`), así que el camino de error de esas tres pasa por acá EN PRODUCCIÓN. Es el
+ * choque entre las dos mitades de `AC-8`, resuelto a favor de la que dice NUNCA, y ⛔ sin perder el
+ * motivo: el `??` sólo se usa si la vuelta no trajo ninguno.
  */
 export function aterrizajeDelAnfitrion(
   v: Vuelta,
@@ -345,12 +435,34 @@ export interface Anuncio {
   readonly boton: string;
 }
 
+/**
+ * 🔴 `volves` YA NO PROMETE UNA VUELTA QUE EL SISTEMA NO HACE (F4/`H-3`). Decía *«Cuando termines,
+ * volvés a esta misma pantalla y seguimos donde estabas.»*, este bloque se lee en la pantalla de
+ * entrada y en la de firmar, y era lo último que la persona leía antes de salir. F4 lo midió marca
+ * por marca: **cinco de las seis aterrizan en otra pantalla**, y la frase además CONTRADECÍA a
+ * `AC-7`, que pide explícitamente el paso siguiente — la frase y el AC no podían ser ciertos a la vez.
+ *
+ * LA FRASE NUEVA HACE DOS AFIRMACIONES Y LAS DOS SE MIDEN, para las seis marcas y para los dos
+ * caminos (por enlace y con extensión), en `T-374-W1-25` y `T-374-W1-26`:
+ *   1. «el recorrido sigue» ⇒ el camino feliz ⛔ NUNCA deja a la persona en un paso ANTERIOR al que
+ *      salió. ⛔ No dice «el siguiente» ni «esta misma pantalla»: las dos serían falsas para alguna
+ *      marca, y decir la que vale para la mayoría es la clase de frase que este fix-pack vino a sacar.
+ *   2. «si rechazás alguna firma, te avisamos y podés volver a intentar» ⇒ toda vuelta con código de
+ *      rechazo trae MOTIVO y aterriza en un paso con un control vivo para reintentar ese mismo salto.
+ *
+ * ⛔ LO QUE LA FRASE **NO** DICE, y es a propósito: ⛔ no nombra ninguna pantalla, ⛔ no promete que
+ * lo cargado sobreviva —un salto REMONTA EL ÁRBOL y el borrador de esta pestaña se pierde, que es
+ * justo el caso que `MOTIVO_SIN_ENVIO` existe para explicar— y ⛔ no promete un motivo específico: la
+ * billetera puede devolver un código que este repo no tiene traducido y ahí `humanError` contesta su
+ * texto genérico.
+ */
 export function anuncioDe(p: { porEnlace: boolean }): Anuncio {
   return {
     titulo: "Vas a salir a tu billetera",
     aDondeVas: "Se abre tu billetera para que revises y firmes. Chaski no firma por vos.",
     firmas: firmasDelCamino(p),
-    volves: "Cuando termines, volvés a esta misma pantalla y seguimos donde estabas.",
+    volves:
+      "Cuando termines, el recorrido sigue. Si rechazás alguna firma, te avisamos y podés volver a intentar.",
     boton: "Abrir mi billetera",
   };
 }

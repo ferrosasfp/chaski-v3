@@ -6,6 +6,16 @@
 // módulo nuevo vacío y verificar que su censo entrante es 0. Eso es TAUTOLÓGICO: nadie cita un archivo
 // que acaba de nacer, y un `it` que no puede fallar no es un control.
 //
+// ⚠️ Y HASTA EL `MNR-3` DEL CR DE ESTA OLA ESTE ARCHIVO SE LLAMABA `el-arbol-propio-cuesta-cero-citas.test.ts`,
+// o sea que su nombre —lo que alguien va a grepear dentro de seis meses— publicaba **la medición
+// abandonada**, la que el párrafo de acá arriba declara tautológica. El nombre viejo queda escrito
+// acá a propósito: es lo que hace que un grep por él siga aterrizando en este archivo. Impacto del
+// renombre, medido antes de hacerlo con `/usr/bin/grep -rn`: **1 sitio en el repo** (el `SELF` de más
+// abajo, que se mueve en esta misma edición), **8 en los documentos de la HU** —de los cuales **1
+// vive en el AR**, que es el registro de su momento y ⛔ no se reescribe— y **ninguno** en los
+// mensajes de commit de la ola ni en el CR. Con el nombre viejo escrito acá, ese sitio del AR sigue
+// llegando a destino por grep.
+//
 // LO QUE SÍ MIDE: cuánto cuesta la ALTERNATIVA, que es un número real y es el que decide `DT-1`. Hoy
 // `src/presentation/flow.tsx` es el destino de un censo declarado en marcadores repartidos por el
 // árbol; UNA cita anclada nueva hacia él corre ese número y pone rojo a TODOS los marcadores que lo
@@ -34,18 +44,13 @@ const SKIP = new Set(["node_modules", ".next", "doc", "migrations"]);
 const DESTINO = "src/presentation/flow.tsx";
 
 /** 🔴 RUTA EXACTA, ⛔ NUNCA UN GLOB NI EL SUFIJO `.test.`. Mismo recurso que
- *  (`SELF`, `./citas-ancladas.test.ts:56`).
- *  ⚠️ Y EL MOTIVO ESCRITO ACÁ ERA FALSO, medido en el fix-pack del AR de esta ola (`MNR-1`): decía
- *  «este archivo fabrica citas de mentira; sin excluirse, se contaría a sí mismo». **No se contaría**:
- *  quitando esta exclusión del recolector, el `it` sigue en `1 passed`. Lo que de verdad impide la
- *  auto-lectura es que las citas de mentira se arman por CONCATENACIÓN (`B`, más abajo), así que
- *  ninguna línea de este archivo contiene el patrón anclado entero. La decisión de excluirse se
- *  queda —es el cinturón sobre el tirante, y el que hace que el día que alguien escriba el patrón
- *  con todas las letras acá adentro el modo de falla sea un rojo y no un conteo inflado en silencio—,
- *  pero ⛔ hoy no es load-bearing y no se la puede citar como si lo fuera. En
- *  `../presentation/el-salto-remonta-el-arbol.test.tsx` la exclusión análoga SÍ lo es: ese archivo
- *  escribe los patrones vigilados en su prosa. */
-const SELF = path.resolve(ROOT, "src/composition/el-arbol-propio-cuesta-cero-citas.test.ts");
+ *  (`SELF`, `./citas-ancladas.test.ts:56`). ⚠️ Y ACÁ NO ES LOAD-BEARING, medido en el fix-pack del AR
+ *  (`MNR-1`): quitándolo, el `it` sigue en `1 passed`, porque las citas de mentira se arman por
+ *  CONCATENACIÓN (`B`, más abajo) y ninguna línea lleva el patrón entero. Se queda de cinturón —el
+ *  modo de falla pasa a ser un rojo y no un conteo inflado en silencio—, ⛔ pero no se lo puede citar
+ *  como si vigilara algo hoy. En `../presentation/el-salto-remonta-el-arbol.test.tsx` la exclusión
+ *  análoga SÍ lo es: ese archivo escribe los seis delatores en su prosa. */
+const SELF = path.resolve(ROOT, "src/composition/costo-de-una-cita-anclada.test.ts");
 
 /** El regex ANCLADO, re-implementado del que vive en (`ANCLADA`, `./citas-ancladas.test.ts:74`).
  *  🔴 LA COMA ENTRE LOS DOS BACKTICKS ES LO QUE VUELVE ANCLADA A UNA CITA. Sin ella es una cita
@@ -59,6 +64,16 @@ type Fuente = { archivo: string; lineas: readonly string[] };
 type Cita = { desde: string; ancla: string; archivo: string; linea: number };
 type Marca = { desde: string; ruta: string; campo: string; dice: number };
 
+/** 🔴 ESTE RECORREDOR ESTÁ DUPLICADO A PROPÓSITO, Y ES EL `MNR-1` DEL CR. Él, `SKIP`, `EXTS` y
+ *  `type Fuente` son byte a byte los de
+ *  (`leerElArbol`, `../presentation/el-salto-remonta-el-arbol.test.tsx:114`), y **existe una tercera
+ *  vez** en (`walk`, `./no-evm-surface.test.ts:35`) desde WKH-320, que además es el molde del que
+ *  salen las tres trampas que estos archivos documentan. ⛔ NO se extrae a un módulo compartido:
+ *  **W0 escribe CERO líneas de producción** (`CD-W0-1`) y un helper fuera de un `.test.` es
+ *  producción; y extraerlo ataría tres guards independientes a un solo punto de falla —un `SKIP`
+ *  agregado para arreglar uno ciega a los otros dos en silencio—. ⚠️ Lo que sí se corrigió es la
+ *  divergencia muda que el CR marcó: este archivo barría cuatro raíces y el otro dos, sin motivo
+ *  escrito. Hoy las cuatro raíces coinciden en los tres, y el otro archivo dice con qué se midió. */
 function leerElArbol(dir: string, out: Fuente[] = []): Fuente[] {
   for (const entrada of readdirSync(dir)) {
     const full = path.join(dir, entrada);

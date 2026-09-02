@@ -83,16 +83,12 @@ export function indiceEn(itin: readonly PasoDelRecorrido[], paso: PasoDelRecorri
  *
  * 🔴 Y PARA UN PASO QUE ⛔ NO ESTÁ EN EL ITINERARIO DEVUELVE EL QUE LE SIGUE EN LA TABLA, ⛔ NUNCA EL
  * PRIMERO (CR/BLQ-BAJO-3). Acá había `return itin[0]`, o sea LA PANTALLA DE ENTRADA, que es lo único
- * que el invariante de esta HU prohíbe con la palabra NUNCA. El caso que lo alcanza es concreto:
- * quien ya tiene la identidad verificada no lleva ese paso en su itinerario, así que avanzar desde
- * ahí mandaba a la persona al principio del recorrido en vez de a la pantalla de firmar.
- *
- * ⚠️ Hoy ese caso no se puede provocar desde la app porque el prop que arma el itinerario corto ⛔ no
- * tiene ningún productor, y ésa es justamente la razón para arreglarlo ahora: es una mina que se arma
- * sola el día que se cablee, y para entonces nadie va a estar mirando esta función.
- *
- * ⛔ El último recurso es el ÚLTIMO paso del itinerario, y si el itinerario viniera vacío devuelve el
- * paso recibido (quedarse quieto). Ninguna de las dos salidas es la pantalla de entrada.
+ * que el invariante prohíbe con la palabra NUNCA: quien ya tiene la identidad verificada no lleva
+ * ese paso en su itinerario, así que avanzar desde ahí mandaba al principio en vez de a firmar.
+ * ⚠️ Hoy no se puede provocar desde la app porque el prop del itinerario corto ⛔ no tiene productor,
+ * y ésa es la razón para arreglarlo ahora: es una mina que se arma sola el día que se cablee.
+ * ⛔ El último recurso es el ÚLTIMO paso, y con itinerario vacío devuelve el paso recibido. Ninguna
+ * de las dos salidas es la pantalla de entrada.
  */
 export function siguiente(
   itin: readonly PasoDelRecorrido[],

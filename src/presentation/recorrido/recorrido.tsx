@@ -14,13 +14,9 @@
 // ⛔ Y ESTE ARCHIVO NO TOCA `localStorage`, `sessionStorage`, `document.cookie` NI LA BARRA DE
 // DIRECCIONES. La única lectura de la URL es la del `href` en el montaje, que se le PASA a la
 // función pura de `./salto.ts`: leer no es escribir, y escribir no pasa.
-//
-// ⚠️ QUÉ MIDE DE ESO `T-374-W1-12` Y QUÉ NO, porque la frase anterior decía «lo mide» a secas y era
-// falsa para media docena de formas (CR/BLQ-ALTO-1): mide las OCHO formas de su tabla —los dos
-// almacenes por punto y por corchete, el alias, la cookie en las dos direcciones, el historial y la
-// salida por `location` con prefijo o sin él, por asignación o por método—, ⛔ y no mide la
-// reflexión, la indirección por otro módulo ni las salidas que no pasan por `location`. La lista
-// completa de lo que queda afuera vive en el `it`, y ⛔ acá no se afirma más que eso.
+// ⚠️ De eso, `T-374-W1-12` mide las OCHO formas de su tabla y ⛔ NADA MÁS. Acá decía «lo mide» a
+// secas y era falso para media docena de variantes de la salida (CR/BLQ-ALTO-1); qué queda afuera
+// está enumerado en ese `it` y ⛔ acá no se afirma más que eso.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Container } from "../../composition/container";
@@ -71,16 +67,10 @@ export interface PropsDelRecorrido {
   pasoDeArranque?: PasoDelRecorrido;
   /** El `href` con el que se aterrizó. Default: el de esta ventana. ⛔ Se LEE, nunca se escribe. */
   hrefDeAterrizaje?: string;
-  /**
-   * ¿Esta persona ya tiene la identidad verificada? Decide el itinerario (`AC-4`).
-   *
-   * ⚠️ HOY ⛔ NO TIENE NINGÚN PRODUCTOR FUERA DE LOS TESTS, y se dice acá porque una costura sin
-   * llamador que no está declarada es una rama que alguien va a leer como viva (CR/BLQ-MED-1). El
-   * punto de montaje arma `<Recorrido />` sin props ⇒ vale `false` ⇒ el paso de la identidad aparece
-   * siempre. El copy de esa pantalla ya ⛔ no promete lo contrario, y el itinerario corto queda
-   * ejercitado sólo por los `it` de `./pasos.test.ts`. Cablearlo es de otra ola: el veredicto vive en
-   * el disco del navegador y ⛔ este árbol no lo puede leer.
-   */
+  /** ¿Esta persona ya tiene la identidad verificada? Decide el itinerario (`AC-4`).
+   *  ⚠️ HOY ⛔ NO TIENE PRODUCTOR fuera de los tests: el punto de montaje arma `<Recorrido />` sin
+   *  props ⇒ vale `false` ⇒ el paso de la identidad aparece siempre. El porqué de que no se cablee
+   *  todavía está en el docblock de `PantallaIdentidad` (CR/BLQ-MED-1). */
   identidadYaVerificada?: boolean;
 }
 
@@ -93,17 +83,11 @@ interface Borrador {
 
 const BORRADOR_VACIO: Borrador = { monto: "", nombre: "", cci: "" };
 
-/**
- * Los mismos milisegundos que el debounce de la cotización del árbol viejo (`../flow.tsx`, el efecto
- * «preview en vivo (debounced)»). ⛔ Cita SIN ancla a propósito: ese archivo lleva marcadores de
- * censo de citas ancladas entrantes por número, y anclar una nueva obligaría a editarlos.
- *
- * 🔴 SE EXPORTA PARA QUE UN `it` PUEDA COMPARARLO CON EL ORIGINAL (CR/MNR-1). El número estaba
- * duplicado y ⛔ sin ningún testigo: ponerlo en `0` dejaba la suite entera en verde, así que «los
- * mismos 300 ms» era una frase que nadie podía refutar. `T-374-W1-19` lee el fuente del árbol viejo,
- * saca SU número y exige que sean el mismo. ⛔ No se extrajo a un módulo compartido porque eso
- * obligaría a editar `../flow.tsx`, que esta ola tiene que dejar con Δ0.
- */
+/** Los mismos milisegundos que el debounce de la cotización del árbol viejo (`../flow.tsx`, el
+ *  efecto «preview en vivo (debounced)»). ⛔ Cita SIN ancla: ese archivo lleva marcadores de censo.
+ *  🔴 SE EXPORTA PARA QUE `T-374-W1-19` LO COMPARE CON EL ORIGINAL (CR/MNR-1): estaba duplicado sin
+ *  testigo, y ponerlo en `0` dejaba la suite entera en verde. ⛔ No se extrajo a un módulo
+ *  compartido porque eso obligaría a editar `../flow.tsx`, que esta ola deja con Δ0. */
 export const MS_DE_ESPERA_DE_LA_COTIZACION = 300;
 
 /**
@@ -161,10 +145,9 @@ export function Recorrido({
   const [enCurso, setEnCurso] = useState(false);
   /**
    * 🔴 LA GUARDA DE REENTRADA, Y POR QUÉ UN `ref` Y ⛔ NO EL ESTADO DE ARRIBA (CR/BLQ-MED-4). Medido
-   * sobre el árbol anterior: tres clics seguidos daban TRES llamadas al caso de uso, y del otro lado
-   * hay un depósito y una cuota de proveedor. El `disabled` de las pantallas es la mitad que se ve;
-   * ésta es la que decide, porque no depende de que un render haya llegado a pintarse entre dos
-   * toques. ⛔ Un `useState` leído desde el manejador lee el valor del render que lo creó.
+   * antes: tres clics daban TRES llamadas, y del otro lado hay un depósito y una cuota de proveedor.
+   * El `disabled` de las pantallas es la mitad que se VE; ésta es la que decide, porque ⛔ no depende
+   * de que un render haya llegado a pintarse entre dos toques.
    */
   const enCursoRef = useRef(false);
   /** La dirección que `connectWallet` contestó. La necesita `startKyc` y ⛔ no se lee del disco. */
@@ -240,12 +223,9 @@ export function Recorrido({
   /**
    * 🔴 EL APAGADOR DEL ESTADO EN VUELO, Y ES UN ARREGLO DE COPY ANTES QUE UNO DE ESTADO
    * (CR/BLQ-MED-3). `setEnVuelo(false)` no aparecía NI UNA VEZ: un flag que se prendía y no se
-   * apagaba, compartido por tres pantallas. Reproducción: tocar el enlace del verificador, «Volver»,
-   * «Seguir» ⇒ la pantalla decía «Estamos en el verificador» con el navegador quieto, y esa frase
-   * seguía a la persona a las otras pantallas. ⛔ Decir dónde está alguien que no está ahí es la
-   * misma clase de mentira que este fix-pack vino a cerrar.
-   *
-   * Cambiar de paso lo apaga: si la persona se está moviendo por el recorrido, no está en la otra app.
+   * apagaba, compartido por tres pantallas. Reproducción: enlace del verificador, «Volver»,
+   * «Seguir» ⇒ «Estamos en el verificador» con el navegador quieto. Cambiar de paso lo apaga: si la
+   * persona se mueve por el recorrido, no está en la otra app.
    */
   // ⚠️ `paso` ⛔ NO SE LEE ADENTRO: es el DISPARADOR. El efecto existe para correr CUANDO el paso
   // cambia, así que sacarlo de la lista —que es lo que el linter propone— lo dejaría corriendo una
@@ -258,15 +238,11 @@ export function Recorrido({
   }, [paso]);
 
   /**
-   * Y LA SEGUNDA MITAD, PARA EL CASO QUE MÁS DUELE: volver del salto SIN cambiar de paso. Es lo que
-   * pasa en un teléfono cuando la billetera abre y se vuelve con el botón del sistema, y también
-   * cuando el enlace lleva a una página web y se vuelve con «atrás».
-   *   · `visibilitychange` ⇒ la pestaña volvió a estar a la vista;
-   *   · `pageshow` ⇒ la página volvió desde la caché de ida y vuelta del navegador.
-   *
-   * ⚠️ EL LÍMITE, DECLARADO: si el toque ⛔ NO produce NADA —la app no abre y la pestaña nunca se
-   * esconde— ninguno de los dos eventos llega, y el único apagador que queda es el de arriba. Eso ⛔
-   * no se cierra escuchando eventos, y no se afirma cerrado.
+   * Y LA SEGUNDA MITAD, PARA EL CASO QUE MÁS DUELE: volver del salto SIN cambiar de paso, que es lo
+   * que pasa en un teléfono. `visibilitychange` ⇒ la pestaña volvió a estar a la vista; `pageshow` ⇒
+   * la página volvió desde la caché de ida y vuelta.
+   * ⚠️ EL LÍMITE: si el toque ⛔ no produce NADA y la pestaña nunca se esconde, ninguno de los dos
+   * llega y el único apagador es el de arriba. ⛔ Eso no se afirma cerrado.
    */
   useEffect(() => {
     if (!enVuelo) return;
@@ -282,11 +258,9 @@ export function Recorrido({
   }, [enVuelo]);
 
   /**
-   * El molde es el `guard` del árbol viejo (`../flow.tsx`), que existe exactamente para esto.
-   * ⛔ Cita SIN ancla a propósito: ese archivo lleva marcadores de censo de citas entrantes por
-   * número, y anclar una nueva obligaría a editarlos.
-   * ⛔ El `finally` no es decorativo: sin él, un caso de uso que tira deja los controles apagados
-   * para siempre y la persona sin forma de reintentar.
+   * El molde es el `guard` del árbol viejo (`../flow.tsx`; ⛔ cita SIN ancla: ese archivo lleva
+   * marcadores de censo). ⛔ El `finally` no es decorativo: sin él, un caso de uso que tira deja los
+   * controles apagados para siempre y a la persona sin forma de reintentar.
    */
   const conGuarda = useCallback(async (fn: () => Promise<unknown>) => {
     if (enCursoRef.current) return;
@@ -331,9 +305,8 @@ export function Recorrido({
    * prender el estado EN VUELO para que quede algo con palabras mientras la pestaña se va.
    *
    * 🔴 ES UNO SOLO Y ⛔ NO DOS (CR/MNR-2). Había dos `useCallback` con el MISMO cuerpo y un motivo
-   * inventado al lado: «va aparte porque el TEXTO en vuelo es otro». Es falso: el texto lo elige cada
-   * pantalla al renderizar, este gesto ⛔ no lo toca y no lo puede tocar. Un motivo inventado en un
-   * docblock es peor que ningún motivo, porque el que lea después no lo vuelve a revisar.
+   * inventado al lado: «va aparte porque el TEXTO en vuelo es otro». Falso: el texto lo elige cada
+   * pantalla al renderizar y este gesto ⛔ no lo toca.
    */
   const salirDeLaApp = useCallback(() => {
     setEnVuelo(true);

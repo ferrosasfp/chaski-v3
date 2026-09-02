@@ -32,15 +32,10 @@ import { TEXTO_EN_VUELO, TEXTO_EN_VUELO_IDENTIDAD } from "./salto";
  */
 export const NO_CUSTODIAL = "Tus fondos y tus llaves son tuyos. Chaski no los guarda ni firma por vos.";
 
-/**
- * LO QUE DICEN LOS CONTROLES MIENTRAS UN CASO DE USO PIENSA (CR/BLQ-MED-4).
- *
- * ⛔ Cada una nombra el trabajo QUE DE VERDAD ESTÁ CORRIENDO en ese momento, y ⛔ no una promesa: la
- * de conectar sale mientras corre el caso de uso del connect, la del envío mientras el repositorio
- * guarda la remesa, la de la verificación mientras se pide la sesión y la de la firma mientras se
- * arma el salto. Una etiqueta de espera que nombra otra cosa es la misma mentira que un botón que no
- * se mueve, sólo que más difícil de ver.
- */
+/** LO QUE DICEN LOS CONTROLES MIENTRAS UN CASO DE USO PIENSA (CR/BLQ-MED-4). ⛔ Cada una nombra el
+ *  trabajo QUE DE VERDAD ESTÁ CORRIENDO: el connect, el `save` del repositorio, la sesión del
+ *  verificador y el armado del salto. Una etiqueta de espera que nombra otra cosa es la misma
+ *  mentira que un botón que no se mueve, sólo que más difícil de ver. */
 export const ETIQUETA_CONECTANDO = "Conectando con tu billetera...";
 export const ETIQUETA_GUARDANDO = "Guardando el envío...";
 export const ETIQUETA_VERIFICANDO = "Pidiendo la verificación...";
@@ -111,9 +106,8 @@ function Salir(p: {
 }) {
   if (p.destino === null) {
     // 🔴 EL ESTADO ENTRE EL TOQUE Y EL ENLACE (CR/BLQ-MED-4). Acá el botón no cambiaba UN SOLO PIXEL
-    // mientras el caso de uso iba a la red: misma etiqueta, mismo color, mismo alto, misma posición.
-    // Un control que se ve idéntico después de tocarlo se lee como «no pasó nada», y lo que la
-    // persona hace es tocarlo de nuevo, con un depósito o una cuota de proveedor del otro lado.
+    // mientras el caso de uso iba a la red, y un control idéntico después de tocarlo se lee como «no
+    // pasó nada»: la persona lo toca de nuevo, con un depósito o una cuota del otro lado.
     // ⛔ El `disabled` no reemplaza a la guarda de reentrada del anfitrión: es la mitad que se VE.
     return (
       <Button onClick={p.onPedir} type="button" disabled={p.enCurso}>
@@ -288,12 +282,11 @@ export function PantallaEnvio(p: {
 }) {
   return (
     <Card>
-      {/* 🔴 LA BAJADA DICE LO QUE EL CÓDIGO HACE (CR/BLQ-BAJO-1). Acá decía «Se guarda solo mientras
-          lo completás.» y era FALSO: mientras se completa no se escribe nada en ningún lado, el caso
-          de uso que crea el envío corre recién al tocar «Seguir», y el anfitrión guarda el borrador
-          en estado de React y nada más. Reproducción: escribir los tres campos, recargar, y volver a
-          la pantalla de entrada con todo vacío. ⛔ En una app de plata, una frase que sugiere
-          autoguardado es la que hace que alguien recargue tranquilo y pierda lo que cargó. */}
+      {/* 🔴 LA BAJADA DICE LO QUE EL CÓDIGO HACE (CR/BLQ-BAJO-1). Decía «Se guarda solo mientras lo
+          completás.» y era FALSO: el caso de uso que crea el envío corre recién al tocar «Seguir» y
+          el borrador vive en estado de React. Reproducción: escribir los tres campos, recargar, y
+          volver a la pantalla de entrada con todo vacío. ⛔ En una app de plata, una frase que
+          sugiere autoguardado es la que hace que alguien recargue tranquilo y pierda lo que cargó. */}
       <Encabezado
         titulo="Cuánto y para quién"
         bajada="Todavía no se guarda nada: si recargás la página, esto se vuelve a empezar."
@@ -324,14 +317,12 @@ export function PantallaEnvio(p: {
           />
         </Field>
       </div>
-      {/* 🔴 EL CORTE POR EL MÍNIMO SE DICE, Y NO SÓLO SE APLICA (CR/BLQ-MED-2). El anfitrión ya no
-          cotizaba por debajo del mínimo, pero la pantalla no lo contaba: escribir un monto corto
-          dejaba a la persona sin cifra, con «Seguir» en gris SIN motivo, y con el hueco de abajo
-          repitiéndole que escribiera el monto que acababa de escribir. Un callejón, y en la única
-          pantalla donde se escribe algo. El texto es el mismo que el árbol viejo muestra para el
-          mismo desenlace, ⛔ la cifra SALE DE LA CONSTANTE, y el `role="alert"` es el mismo:
-          quien usa lector de pantalla se entera sin tener que ir a buscar el cartel.
-          ⛔ Y ESTE MENSAJE REEMPLAZA AL HUECO, no se suma: dos textos sobre el mismo hecho, uno
+      {/* 🔴 EL CORTE POR EL MÍNIMO SE DICE, Y NO SÓLO SE APLICA (CR/BLQ-MED-2). El anfitrión ya
+          cortaba, pero la pantalla no lo contaba: un monto corto dejaba a la persona sin cifra, con
+          «Seguir» en gris SIN motivo y con el hueco repitiéndole que escribiera el monto que acababa
+          de escribir. Un callejón, en la única pantalla donde se escribe algo. El texto y el
+          `role="alert"` son los del árbol viejo para el mismo desenlace, y ⛔ la cifra SALE DE LA
+          CONSTANTE. ⛔ Y REEMPLAZA al hueco, no se suma: dos textos sobre el mismo hecho, uno
           pidiendo lo que ya se hizo, es lo que hacía el callejón. */}
       <div className="mt-holgado">
         {p.porDebajoDelMinimo ? (
@@ -390,15 +381,13 @@ function Cotizacion({ quote }: { quote: Quote }) {
  *
  * 🔴 LA BAJADA YA NO PROMETE «UNA VEZ SOLA» (CR/BLQ-MED-1), Y ES UNA MENTIRA CERRADA. Decía «Una vez
  * sola. Después de esto, tus próximos envíos no la vuelven a pedir.», y era falso para el 100 % de
- * las personas: la costura que saltea este paso es el prop `identidadYaVerificada` del anfitrión, que
- * ⛔ NO TIENE NINGÚN PRODUCTOR fuera de los tests. El punto de montaje real arma `<Recorrido />` sin
- * props ⇒ el prop vale `false` ⇒ el paso aparece SIEMPRE.
+ * las personas: el prop `identidadYaVerificada` del anfitrión ⛔ NO TIENE PRODUCTOR fuera de los
+ * tests, el punto de montaje arma `<Recorrido />` sin props ⇒ el paso aparece SIEMPRE.
  *
- * ⛔ Y NO SE CABLEÓ EN ESTA RONDA, con el motivo medido y no razonado: el veredicto vive en
- * `LocalKycStore`, que lee el disco del navegador, y el punto de montaje es un componente de
- * SERVIDOR (no lleva la directiva de cliente), así que ahí no se puede leer. Leerlo desde el
- * anfitrión lo pondría a tocar el disco, que es justo lo que `T-374-W1-12` prohíbe en este árbol.
- * Cablearlo es una ola con su propia costura; ⛔ prometerlo en una bajada, no. Queda declarado en
+ * ⛔ Y NO SE CABLEÓ ACÁ, con el motivo MEDIDO: el veredicto vive en `LocalKycStore`, que lee el disco
+ * del navegador, y el punto de montaje es un componente de SERVIDOR (no lleva la directiva de
+ * cliente) ⇒ ahí no se puede leer; leerlo desde el anfitrión lo pondría a tocar el disco, que es lo
+ * que `T-374-W1-12` prohíbe. Cablearlo es otra ola; ⛔ prometerlo en una bajada, no. Declarado en
  * «lo que W1 no entrega».
  */
 export function PantallaIdentidad(p: {
@@ -527,9 +516,9 @@ export function PantallaFirmar(p: {
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
 
 /**
- * Dónde va el envío, y el recibo cuando cierra. Es el ÚLTIMO paso del itinerario, y ⛔ eso no es lo
- * mismo que un estado terminal: «Volver» sigue acá, retrocede un paso como en todas las demás y ⛔ no
- * borra nada (`AC-3`). El envío ya salió; lo que el botón deshace es la pantalla, no el envío.
+ * Dónde va el envío, y el recibo cuando cierra. Es el ÚLTIMO paso del itinerario, y ⛔ eso NO es un
+ * estado terminal (CR/MNR-5): «Volver» sigue acá y retrocede como en todas las demás. El envío ya
+ * salió; lo que el botón deshace es la pantalla, no el envío.
  *
  * La etiqueta y el tono salen de (`statusDisplay`, `../flow-vm.ts:133`), que es donde este repo ya
  * decide cómo se nombra cada estado: ⛔ acá no se inventa un vocabulario paralelo, y sobre todo no se

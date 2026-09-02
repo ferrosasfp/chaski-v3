@@ -64,13 +64,67 @@ function Motivo({ motivo }: { motivo: string | null }) {
 }
 
 /**
+ * 🔴 EL CONTROL QUE SALE DE LA APP, Y EL ARREGLO ENTERO DEL `BLQ-ALTO-2` DEL AR ESTÁ ACÁ.
+ *
+ * Tiene DOS formas y ⛔ no son intercambiables:
+ *   · `destino === null` ⇒ un `<button>`: todavía no sabemos a dónde hay que ir, así que lo que el
+ *     gesto dispara es el CASO DE USO que lo averigua (`onPedir`).
+ *   · `destino` con URL ⇒ un `<a href>`: el destino ya está, y la persona lo TOCA.
+ *
+ * 🔴 POR QUÉ UN `<a href>` Y ⛔ NO UN `onClick` QUE ASIGNE `location.href`, con las dos razones:
+ *   1. Es el patrón que este repo YA tiene desplegado y medido para el caso equivalente: el árbol
+ *      viejo navegaba desde un efecto de montaje, los navegadores móviles lo descartaban SIN ERROR y
+ *      la persona se quedaba mirando la pantalla de entrada (el razonamiento entero, con la foto del
+ *      teléfono, vive en el comentario de `../flow.tsx:286`; ⛔ cita SIN ancla a propósito: ese
+ *      archivo lleva marcadores de censo de citas entrantes por número).
+ *   2. `T-374-W1-12` prohíbe toda asignación de `window.location` DENTRO de este árbol, y con razón:
+ *      una pantalla que navega por su cuenta es la costura que ese barrido existe para cerrar. Un
+ *      `<a href>` no navega por su cuenta, navega porque alguien lo tocó.
+ *
+ * ⚠️ `onSalir` en el `<a>` ⛔ NO NAVEGA: sólo prende el estado EN VUELO (`AC-6`), para que lo que
+ * quede montado mientras la pestaña se va diga con palabras qué está pasando.
+ */
+function Salir(p: {
+  destino: string | null;
+  etiqueta: string;
+  onPedir: () => void;
+  onSalir: () => void;
+}) {
+  if (p.destino === null) {
+    return (
+      <Button onClick={p.onPedir} type="button">
+        {p.etiqueta}
+      </Button>
+    );
+  }
+  return (
+    // `min-h-[52px]` y ⛔ no `h-`: en una pantalla angosta esta etiqueta envuelve, y con alto fijo
+    // quedaría recortada. Es el mismo criterio, y las mismas clases, que el enlace de salto del árbol
+    // viejo. ⛔ El `href` va TAL CUAL: no se parsea, no se reescribe y no se le agrega un parámetro.
+    <a
+      href={p.destino}
+      rel="noreferrer"
+      onClick={p.onSalir}
+      className="inline-flex min-h-[52px] w-full items-center justify-center gap-ajustado rounded-caja bg-cochineal px-5 text-body font-semibold text-white shadow-lift"
+    >
+      {p.etiqueta}
+    </a>
+  );
+}
+
+/**
  * EL ANUNCIO DEL SALTO (`AC-5`) — el bloque que dice QUÉ se va a firmar y POR QUÉ, ANTES de salir.
  * ⛔ Nunca un salto sin aviso previo.
  *
  * ⛔ EL NÚMERO DE FIRMAS NO SE ESCRIBE: sale de contar la misma lista que se enumera abajo
  * (`CD-W1-6`), así que no puede quedar diciendo un número y mostrando otra cosa.
  */
-export function AnuncioDelSalto({ anuncio, onSalir }: { anuncio: Anuncio; onSalir: () => void }) {
+export function AnuncioDelSalto({
+  anuncio,
+  destino,
+  onPedir,
+  onSalir,
+}: { anuncio: Anuncio; destino: string | null; onPedir: () => void; onSalir: () => void }) {
   return (
     <Aviso tono="atencion" className="mb-normal">
       <p className="text-body font-semibold text-ink">{anuncio.titulo}</p>
@@ -89,9 +143,7 @@ export function AnuncioDelSalto({ anuncio, onSalir }: { anuncio: Anuncio; onSali
       </ul>
       <Muted className="mt-normal">{anuncio.volves}</Muted>
       <div className="mt-normal">
-        <Button onClick={onSalir} type="button">
-          {anuncio.boton}
-        </Button>
+        <Salir destino={destino} etiqueta={anuncio.boton} onPedir={onPedir} onSalir={onSalir} />
       </div>
     </Aviso>
   );
@@ -126,6 +178,8 @@ export function EnVuelo({ texto }: { texto: string }) {
  */
 export function PantallaEntrar(p: {
   anuncio: Anuncio | null;
+  /** A dónde hay que ir, cuando el caso de uso ya lo contestó. `null` ⇒ todavía no hay destino. */
+  destinoDelSalto: string | null;
   enVuelo: boolean;
   motivo: string | null;
   urlParaInstalar: string;
@@ -141,7 +195,12 @@ export function PantallaEntrar(p: {
       <Motivo motivo={p.motivo} />
       {p.enVuelo ? <EnVuelo texto={TEXTO_EN_VUELO} /> : null}
       {p.anuncio === null ? null : (
-        <AnuncioDelSalto anuncio={p.anuncio} onSalir={p.onSalirALaBilletera} />
+        <AnuncioDelSalto
+          anuncio={p.anuncio}
+          destino={p.destinoDelSalto}
+          onPedir={p.onConectar}
+          onSalir={p.onSalirALaBilletera}
+        />
       )}
       <Button onClick={p.onConectar} type="button">
         Conectar mi billetera
@@ -262,9 +321,12 @@ function Cotizacion({ quote }: { quote: Quote }) {
  */
 export function PantallaIdentidad(p: {
   verificador: string;
+  /** La pantalla del verificador, cuando el caso de uso ya la devolvió. `null` ⇒ todavía no se pidió. */
+  destinoDelVerificador: string | null;
   enVuelo: boolean;
   motivo: string | null;
   onVerificar: () => void;
+  onSalirAlVerificador: () => void;
   onVolver: () => void;
 }) {
   return (
@@ -286,9 +348,17 @@ export function PantallaIdentidad(p: {
         </Muted>
       </Aviso>
       <div className="space-y-ajustado">
-        <Button onClick={p.onVerificar} type="button">
-          Verificar mi identidad
-        </Button>
+        {/* 🔴 DOS FORMAS, Y LA SEGUNDA ES EL ARREGLO: antes esto era un `<Button>` que ⛔ NO llamaba a
+            `startKyc` y avanzaba igual, o sea que daba la identidad por verificada sin verificar
+            nada (AR/BLQ-ALTO-2). Hoy el botón PIDE la sesión de verificación y, cuando el caso de uso
+            contesta con una pantalla a la que hay que ir, el control pasa a ser el enlace que la
+            persona toca. */}
+        <Salir
+          destino={p.destinoDelVerificador}
+          etiqueta="Verificar mi identidad"
+          onPedir={p.onVerificar}
+          onSalir={p.onSalirAlVerificador}
+        />
         <Volver onVolver={p.onVolver} />
       </div>
     </Card>
@@ -312,11 +382,15 @@ export function PantallaIdentidad(p: {
  */
 export function PantallaFirmar(p: {
   cotizacion: Quote | null;
+  /** Los últimos dígitos de la cuenta de destino, o `""` si esta pestaña no los tiene. */
   destino: string;
   anuncio: Anuncio;
+  /** A dónde hay que ir a firmar, cuando el caso de uso ya lo contestó. */
+  destinoDelSalto: string | null;
   enVuelo: boolean;
   motivo: string | null;
   onFirmar: () => void;
+  onSalirALaBilletera: () => void;
   onVolver: () => void;
 }) {
   const alquiler = escrowRentExplainer("discovery");
@@ -338,13 +412,24 @@ export function PantallaFirmar(p: {
           />
         </div>
       )}
-      <Muted className="mt-normal">A dónde va: a la cuenta que termina en {p.destino}.</Muted>
+      {/* ⛔ SIN DÍGITOS NO SE ESCRIBE LA FRASE (AR/BLQ-BAJO-2). Acá quedaba «A dónde va: a la cuenta
+          que termina en .» con el punto colgando cada vez que la vuelta de un salto remontaba el árbol
+          y esta pestaña ya no tenía el envío. Una frase a la que le falta el dato no es una frase más
+          corta: es una que dice algo que no sabe. */}
+      {p.destino === "" ? null : (
+        <Muted className="mt-normal">A dónde va: a la cuenta que termina en {p.destino}.</Muted>
+      )}
       <Aviso tono="neutro" className="mt-normal">
         <p className="text-body font-semibold text-ink">{alquiler.title}</p>
         <Muted className="mt-ajustado">{alquiler.body}</Muted>
       </Aviso>
       <div className="mt-normal">
-        <AnuncioDelSalto anuncio={p.anuncio} onSalir={p.onFirmar} />
+        <AnuncioDelSalto
+          anuncio={p.anuncio}
+          destino={p.destinoDelSalto}
+          onPedir={p.onFirmar}
+          onSalir={p.onSalirALaBilletera}
+        />
       </div>
       <Volver onVolver={p.onVolver} />
       <Muted className="mt-normal">{NO_CUSTODIAL}</Muted>

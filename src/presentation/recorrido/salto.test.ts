@@ -20,15 +20,26 @@ import {
   MARCAS_DE_VUELTA,
   enlaceDeVuelta,
 } from "../../infrastructure/solana/deeplink/sesion";
+// Las TRES marcas del enlace que producción exporta con nombre propio. ⛔ Ningún literal: son las que
+// hacen falta para cerrar la permutación de la tupla (ver el `it` de la premisa).
+import { MARCA_CREAR_NONCE } from "../../infrastructure/solana/deeplink/conexion";
+import { MARCA_POP_KYC, MARCA_POP_PAYOUT } from "../../infrastructure/solana/deeplink/pop-por-enlace";
+import { PARAM_ERROR } from "../../infrastructure/solana/deeplink/protocol";
 import { PARAM_KYC, VALOR_VUELTA_KYC, urlDeVueltaDeKyc } from "../splash-puerta";
 import { PARAM_SALIDA, VALOR_SALIDA } from "../salida-al-navegador-de-la-billetera";
 import { PASO_DE_ENTRADA, esPasoDelRecorrido } from "./pasos";
 import {
   MARCA_DEL_VERIFICADOR,
   MARCA_DE_LA_SALIDA,
+  MOTIVO_SIN_ATERRIZAJE,
+  PASO_DE_LA_MARCA_DESCONOCIDA,
   SIN_ATERRIZAJE,
+  aterrizaEnLaEntrada,
   aterrizajeDe,
+  aterrizajeDelAnfitrion,
+  codigoDeErrorDeLaUrl,
   marcaDeLaUrl,
+  volvioPorEnlace,
   vueltaDeUnSalto,
 } from "./salto";
 
@@ -104,6 +115,45 @@ describe("WKH-374/W1.0 · la premisa: el universo de marcas de vuelta es enumera
       esPasoDelRecorrido(String(aterrizajeDe(sintetica))),
       "el tercer valor se está colando como si fuera un paso de la tabla",
     ).toBe(false);
+
+    // ── (5) 🔴 LA PERMUTACIÓN, QUE ES EL AGUJERO QUE EL AR MIDIÓ (MNR-1) ─────────────────────────
+    //
+    // ⚠️ ACÁ SE DECLARABA EL AGUJERO EQUIVOCADO: se decía que la calibración «no cierra el caso de que
+    // producción RENOMBRE las seis manteniendo el conteo», y ese caso es INOFENSIVO — las claves de la
+    // tabla de aterrizaje salen de la MISMA tupla, así que un renombre mueve las dos puntas a la vez y
+    // nada se rompe. El agujero real es el otro: una PERMUTACIÓN de la tupla re-apunta la tabla
+    // (indexada por POSICIÓN) y las cuatro aserciones de arriba siguen verdes, porque las cuatro son
+    // invariantes bajo permutación: «todas aterrizan», «ninguna en la entrada», «la sintética no».
+    //
+    // SE CIERRA CON LOS TRES NOMBRES QUE PRODUCCIÓN EXPORTA, y ⛔ sin escribir un solo literal de marca:
+    // se afirma la LIGADURA marca → paso, que es justo lo que una permutación rompe.
+    expect(
+      aterrizajeDe(MARCA_CREAR_NONCE),
+      "la vuelta de la creación del nonce durable dejó de aterrizar en el paso de firmar: es un salto DENTRO de preparar la firma, así que vuelve de donde salió",
+    ).toBe("firmar");
+    expect(
+      aterrizajeDe(MARCA_POP_PAYOUT),
+      "la vuelta de la prueba de posesión del pago dejó de aterrizar en el seguimiento: sirve para leer el estado, no para mover fondos",
+    ).toBe("seguimiento");
+    expect(
+      aterrizajeDe(MARCA_POP_KYC),
+      "la vuelta de la prueba de posesión de la identidad dejó de aterrizar en el seguimiento",
+    ).toBe("seguimiento");
+    // Y las tres tienen que SER de la tupla, o estaríamos midiendo tres marcas que no están en juego.
+    for (const m of [MARCA_CREAR_NONCE, MARCA_POP_PAYOUT, MARCA_POP_KYC]) {
+      expect(
+        MARCAS_DE_VUELTA as readonly string[],
+        `${m} no está en la tupla de producción: la ligadura de arriba no diría nada de la tabla`,
+      ).toContain(m);
+    }
+    //
+    // ⚠️ LO QUE **SIGUE** ABIERTO, declarado con su tamaño exacto: una permutación confinada a las tres
+    // marcas del viaje del depósito (`PasoDelViaje`), que ⛔ NO tienen constante exportada con nombre
+    // propio en producción — son literales dentro de `esPaso`, que no se exporta. De esas tres, dos
+    // aterrizan en el MISMO paso, así que intercambiarlas es un no-op observable; lo que queda
+    // realmente abierto es la permutación que mueve la marca del connect contra una de las otras dos.
+    // ⛔ Cerrarlo exigiría transcribir un literal acá, que es lo que `CD-W1-7` prohíbe, o exportar tres
+    // constantes nuevas desde el motor del enlace, que es un archivo fuera del alcance de esta ola.
   });
 
   // ── LA VUELTA COMPLETA, DE LA URL AL PASO ──────────────────────────────────────────────────────
@@ -115,6 +165,10 @@ describe("WKH-374/W1.0 · la premisa: el universo de marcas de vuelta es enumera
   // conjunto de URLs, y compara el paso de una contra el de la otra.
   it("T-374-W1-3: ninguna marca aterriza en `entrar`, y el camino de ERROR aterriza en el MISMO paso que el feliz", () => {
     const origen = "https://chaski.test/";
+    // El código crudo que una billetera deja al rechazar. ⛔ NO es una marca de vuelta (no lo vigila
+    // `CD-W1-7`) y ⛔ no es una causa del vocabulario del enlace: es texto de la billetera, y por eso
+    // `humanError` lo manda a su default, que es exactamente lo que hace el árbol viejo con él.
+    const CODIGO_DE_RECHAZO = "4001";
     // Las URLs se ARMAN con los constructores de producción o con los símbolos de producción, ⛔ nunca
     // escribiendo un literal de marca a mano (`CD-W1-7`).
     //
@@ -141,7 +195,21 @@ describe("WKH-374/W1.0 · la premisa: el universo de marcas de vuelta es enumera
       // URL que no entrega marca dejaría al `for` sin nada que comparar.
       expect(marcaDeLaUrl(href), `esta URL no entrega ninguna marca legible: ${href}`).not.toBeNull();
       const feliz = vueltaDeUnSalto({ href });
-      const conError = vueltaDeUnSalto({ href, codigoDeError: "wallet_rejected" });
+      // 🔴 LA RAMA DE ERROR SE CONSTRUYE COMO LA CONSTRUYE PRODUCCIÓN: pegándole a la MISMA URL el
+      // parámetro con el que la billetera reporta un rechazo. Hasta el fix-pack esto entraba por un
+      // argumento (`codigoDeError`) que ⛔ NINGÚN LLAMADOR PASABA, o sea que este `it` ejercitaba una
+      // rama que nadie construye y el motivo era `null` para toda vuelta real (AR/BLQ-MED-4).
+      // ⛔ El nombre del parámetro no se escribe: entra por `PARAM_ERROR`, de producción.
+      const conCodigo = new URL(href);
+      conCodigo.searchParams.set(PARAM_ERROR, CODIGO_DE_RECHAZO);
+      const conError = vueltaDeUnSalto({ href: conCodigo.toString() });
+      // Calibración del fixture: el código está EN la URL, y lo lee el mismo lector que usa
+      // `vueltaDeUnSalto`. Sin esto, un typo en el armado dejaría las dos ramas idénticas y las
+      // comparaciones de abajo pasarían por trivialidad.
+      expect(
+        codigoDeErrorDeLaUrl(conCodigo.toString()),
+        "la URL de la rama de error no lleva ningún código: las dos ramas serían la MISMA",
+      ).toBe(CODIGO_DE_RECHAZO);
       expect(
         feliz.desenlace,
         `esta URL no trajo ninguna marca reconocible: ${href}`,
@@ -172,6 +240,109 @@ describe("WKH-374/W1.0 · la premisa: el universo de marcas de vuelta es enumera
     ).toEqual([]);
   });
 
+  // ── LA MARCA QUE VIENE DEL PROTOTIPO ───────────────────────────────────────────────────────────
+  //
+  // MUTANTE QUE MATA (`MW-13`): en `./salto.ts`, volver a la forma vieja —borrar el
+  // `if (!Object.hasOwn(...))` y devolver `(ATERRIZAJE_POR_ENLACE as Record<string, PasoDelRecorrido |
+  // undefined>)[marca] ?? SIN_ATERRIZAJE`— ⇒ cae la PRIMERA aserción, con `toString`.
+  // ⛔ FALSO KILLED A EVITAR: probar sólo una marca INVENTADA, que es lo que hacía el control negativo
+  // de `T-374-W1-0`. Una marca inventada no existe en `Object.prototype`, así que la forma vieja la
+  // contesta bien y el `it` queda verde sobre el defecto. Por eso las claves de acá son las del
+  // PROTOTIPO, y por eso hay un control positivo con una marca REAL: sin él, un `aterrizajeDe` que
+  // devolviera el tercer valor SIEMPRE pasaría las cuatro primeras.
+  it("T-374-W1-13: una clave del prototipo de `Object` NO es un aterrizaje", () => {
+    for (const clave of ["toString", "constructor", "valueOf", "hasOwnProperty"]) {
+      const a = aterrizajeDe(clave);
+      expect(
+        a,
+        `«${clave}» viene de \`Object.prototype\` y se está colando como aterrizaje: con eso la app queda sin ninguna pantalla montada`,
+      ).toBe(SIN_ATERRIZAJE);
+      expect(
+        typeof a,
+        `«${clave}» devolvió algo que ni siquiera es una cadena: el tipo publicado por \`Aterrizaje\` es falso`,
+      ).toBe("string");
+      expect(
+        aterrizaEnLaEntrada(a),
+        `el predicado de fallo-cerrado contesta cualquier cosa para «${clave}»`,
+      ).toBe(false);
+    }
+    // Y la vuelta ENTERA, desde la URL: es el input exacto que dejaba el `body` en «Paso 1 de 5».
+    const conPrototipo = new URL("https://chaski.test/");
+    conPrototipo.searchParams.set(MARCA, "toString");
+    expect(
+      vueltaDeUnSalto({ href: conPrototipo.toString() }).desenlace,
+      "una marca heredada del prototipo se lee como si fuera un aterrizaje de la tabla",
+    ).toBe("sin-aterrizaje");
+
+    // CONTROL POSITIVO: una marca REAL sigue aterrizando. Sin esto, las de arriba las pasaría un
+    // `aterrizajeDe` que contestara el tercer valor siempre, que es el mutante más barato.
+    expect(
+      aterrizajeDe(MARCA_CREAR_NONCE),
+      "el control positivo no aterriza: las aserciones de arriba pasarían por un `aterrizajeDe` que no reconoce NADA",
+    ).not.toBe(SIN_ATERRIZAJE);
+  });
+
+  // ── EL DESENLACE DEL ANFITRIÓN, COMO FUNCIÓN PURA ──────────────────────────────────────────────
+  //
+  // MUTANTE QUE MATA (`MW-14`): en `aterrizajeDelAnfitrion`, hacer que la rama `sin-aterrizaje`
+  // devuelva `{ paso: pasoDeArranque, motivo: null }`, o sea el `? :` que había en el anfitrión ⇒ caen
+  // las DOS aserciones del caso desconocido (el paso y el motivo).
+  // ⛔ FALSO KILLED A EVITAR: afirmar sólo «no es la entrada». Con `pasoDeArranque` puesto a mano en
+  // un paso del medio eso seguiría siendo cierto y el defecto seguiría ahí, así que el `it` pasa la
+  // costura en la PANTALLA DE ENTRADA —que es el default de producción— y afirma las dos mitades.
+  it("T-374-W1-14: una marca sin consumidor NO colapsa en el paso de arranque, y trae motivo", () => {
+    const desconocida = vueltaDeUnSalto({
+      href: `https://chaski.test/?${MARCA}=marca-que-nadie-escribio`,
+    });
+    expect(
+      desconocida.desenlace,
+      "el fixture no reproduce el caso: esta URL no da el tercer valor",
+    ).toBe("sin-aterrizaje");
+
+    const r = aterrizajeDelAnfitrion(desconocida, PASO_DE_ENTRADA);
+    expect(
+      r.paso,
+      "una marca sin consumidor manda a la persona al paso de arranque: con el default de producción eso es la PANTALLA DE ENTRADA, que es lo que AC-8 prohíbe con la palabra NUNCA",
+    ).not.toBe(PASO_DE_ENTRADA);
+    expect(r.paso, "el paso de la marca desconocida no es el que el módulo declara").toBe(
+      PASO_DE_LA_MARCA_DESCONOCIDA,
+    );
+    expect(
+      r.motivo,
+      "la persona vuelve con una marca que no reconocemos y no lee NINGÚN motivo: eso es mandarla a otro lado en silencio",
+    ).toBe(MOTIVO_SIN_ATERRIZAJE);
+
+    // Los otros dos desenlaces, para que las dos de arriba no sean el único comportamiento posible.
+    const sinMarca = aterrizajeDelAnfitrion(vueltaDeUnSalto({ href: "https://chaski.test/" }), PASO_DE_ENTRADA);
+    expect(sinMarca.paso, "sin marca en la URL el arranque tiene que ser el normal").toBe(PASO_DE_ENTRADA);
+    expect(sinMarca.motivo, "sin marca no hay nada que reportar").toBeNull();
+
+    const buena = aterrizajeDelAnfitrion(
+      vueltaDeUnSalto({ href: enlaceDeVuelta("https://chaski.test/", MARCA_CREAR_NONCE) }),
+      PASO_DE_ENTRADA,
+    );
+    expect(buena.paso, "una marca REAL dejó de aterrizar donde la tabla dice").toBe("firmar");
+    expect(buena.motivo, "una vuelta sin código de error no puede traer motivo").toBeNull();
+
+    // Y el predicado de fallo-cerrado tiene que ser FALSO para el paso al que este módulo manda: si
+    // fuera la entrada, la rama de arriba entraría en un bucle en vez de fallar cerrado.
+    expect(
+      aterrizaEnLaEntrada(PASO_DE_LA_MARCA_DESCONOCIDA),
+      "el paso de la marca desconocida ES la pantalla de entrada: el fallo-cerrado no tendría a dónde caer",
+    ).toBe(false);
+
+    // `volvioPorEnlace` distingue el camino del enlace de las otras dos marcas del universo.
+    expect(
+      volvioPorEnlace(enlaceDeVuelta("https://chaski.test/", MARCA_POP_PAYOUT)),
+      "una vuelta del enlace profundo no se reconoce como tal: la pantalla anunciaría las firmas del otro camino",
+    ).toBe(true);
+    expect(
+      volvioPorEnlace(urlDeVueltaDeKyc("https://chaski.test")),
+      "la vuelta del verificador se está contando como camino por enlace",
+    ).toBe(false);
+    expect(volvioPorEnlace("https://chaski.test/"), "una URL sin marca no vuelve de ningún enlace").toBe(false);
+  });
+
   // ── EL BARRIDO DE LITERALES ────────────────────────────────────────────────────────────────────
   //
   // MUTANTE QUE MATA (`MW-4`): escribir el literal del parámetro del enlace profundo a mano, entre
@@ -192,9 +363,11 @@ describe("WKH-374/W1.0 · la premisa: el universo de marcas de vuelta es enumera
     // buscarlo entre comillas cazaría cualquier `"1"` legítimo (un `tabIndex`, un monto de fixture) y
     // el guard sería ruido en vez de señal. Lo que sí se vigila es el NOMBRE de ese parámetro, que es
     // el que no puede quedar duplicado a mano.
-    const literales = [MARCA, PARAM_KYC, VALOR_VUELTA_KYC, PARAM_SALIDA, ...MARCAS_DE_VUELTA];
+    // `PARAM_ERROR` entró en el fix-pack, junto con el lector del código de error: es el quinto nombre
+    // de parámetro que el árbol nuevo consume y ⛔ el quinto que no puede quedar transcrito a mano.
+    const literales = [MARCA, PARAM_KYC, VALOR_VUELTA_KYC, PARAM_SALIDA, PARAM_ERROR, ...MARCAS_DE_VUELTA];
     expect(literales.length, "la lista de literales vino vacía: el barrido no miraría nada").toBe(
-      MARCAS_DE_VUELTA.length + 4,
+      MARCAS_DE_VUELTA.length + 5,
     );
     const patrones = literales.map((l) => ({
       literal: l,

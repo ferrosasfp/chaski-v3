@@ -19,15 +19,35 @@
  * Lo que sí queda afirmado es lo simétrico y más chico, y lo mide `T-374-W1-10`: apagada, la página
  * monta el árbol de HOY byte por byte.
  *
- * ⚠️ GOTCHA DE DESPLIEGUE, el mismo que el de `mwaEnabled` (`../wallet-availability.ts:95-96`) y por
- * eso se repite acá adentro en vez de citarse: las `NEXT_PUBLIC_` las inlinea el BUILD, no se leen en
- * runtime. Cambiar el valor en el panel de Vercel y REDESPLEGAR EL MISMO ARTEFACTO **no cambia
- * nada**: hay que REBUILDEAR. Este ecosistema ya perdió una tarde con esa exacta confusión, y el
- * síntoma es el peor posible — un despliegue que reporta éxito y no despliega el cambio.
+ * ⚠️ GOTCHA DE DESPLIEGUE: hay que REBUILDEAR. Cambiar el valor en el panel de Vercel y REDESPLEGAR
+ * EL MISMO ARTEFACTO **no cambia nada**, y el síntoma es el peor posible: un despliegue que reporta
+ * éxito y no despliega el cambio.
  *
- * ⛔ Y AL REVÉS TAMBIÉN: una `NEXT_PUBLIC_` AUSENTE en el momento del build queda ausente en el
- * bundle para siempre, aunque después aparezca en el panel. La bandera se despliega APAGADA a
- * propósito (`CD-W1-14`); prenderla es una ola aparte, con su propia medición en teléfono.
+ * 🔴 Y ACÁ VA UNA CORRECCIÓN DE MI PROPIA EVIDENCIA, QUE VALE MÁS QUE LA CONCLUSIÓN (fix-pack ·
+ * AR/MNR-2). Este bloque decía que el motivo era el mismo que el de `mwaEnabled`: *«las
+ * `NEXT_PUBLIC_` las inlinea el BUILD»* y *«una ausente queda ausente en el bundle para siempre»*.
+ * **ESO NO APLICA A ESTA BANDERA**, y el AR lo midió sobre el artefacto: el inlineado es del bundle
+ * de CLIENTE, y el único llamador de esta función es `app/page.tsx`, que ⛔ NO lleva `"use client"`
+ * ⇒ la lectura queda VIVA en el bundle de servidor. Con el motivo falso escrito acá, el día que
+ * alguien lo siga va a concluir cosas que no valen.
+ *
+ * RE-MEDIDO EN EL FIX-PACK, sobre el artefacto de `npm run build` y no sobre el fuente:
+ *   `/usr/bin/grep -rl NEXT_PUBLIC_CHASKI_RECORRIDO_V2 .next/server` ⇒ `.next/server/app/page.js`
+ *   `/usr/bin/grep -rl NEXT_PUBLIC_CHASKI_RECORRIDO_V2 .next/static` ⇒ **nada**
+ * O sea: inlineada del lado del cliente (donde no hay ningún llamador) y VIVA del lado del servidor.
+ *
+ * 🔴 EL MOTIVO VERDADERO, Y ES OTRO: `/` se PRERENDERIZA ESTÁTICA. Medido en la misma corrida: la
+ * tabla de rutas del build marca `○ /`, y `○` es *«prerendered as static content»*. La bandera se
+ * evalúa UNA vez, en el build, y el HTML que se sirve ya trae el árbol elegido. Por eso hay que
+ * rebuildear.
+ *
+ * ⚠️ RIESGO DEL MOTIVO FALSO, dicho para que no se pierda: el día que `/` deje de ser estática (un
+ * `cookies()`, un `dynamic = "force-dynamic"`, cualquier cosa que la vuelva dinámica), un cambio en
+ * el panel prende el recorrido ENTERO sin rebuild, porque la lectura sigue viva del lado del
+ * servidor. El docblock viejo decía que eso no podía pasar. **Sí puede.**
+ *
+ * La bandera se despliega APAGADA a propósito (`CD-W1-14`); prenderla es una ola aparte, con su
+ * propia medición en teléfono.
  */
 export function recorridoV2Enabled(): boolean {
   return process.env.NEXT_PUBLIC_CHASKI_RECORRIDO_V2 === "true";

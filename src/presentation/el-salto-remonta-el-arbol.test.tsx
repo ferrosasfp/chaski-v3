@@ -38,11 +38,18 @@ const SKIP = new Set(["node_modules", ".next", "doc", "migrations"]);
  *  aplicado en la condición de recolección de (`SELF`, `../composition/citas-ancladas.test.ts:64`). */
 const SELF = path.resolve(ROOT, "src/presentation/el-salto-remonta-el-arbol.test.tsx");
 
-/** Los cuatro literales que delatarían una navegación BLANDA (sin recargar el documento). Armados por
+/** Los SEIS literales que delatarían una navegación BLANDA (sin recargar el documento). Armados por
  *  concatenación para que el barrido no pueda encontrarlos escritos enteros en NINGUNA línea de este
  *  archivo, ni siquiera si mañana alguien le saca la exclusión por ruta. Es cinturón sobre tirante:
- *  la defensa que vale es `SELF`, y ésta hace que el modo de falla sea un rojo y no un falso verde. */
-const PATRONES = ["useRouter", `router${"."}push`, `router${"."}replace`, `next${"/"}navigation`];
+ *  la defensa que vale es `SELF`, y ésta hace que el modo de falla sea un rojo y no un falso verde.
+ *  🔴 LOS DOS ÚLTIMOS ENTRARON POR EL `BLQ-ALTO-1` DEL AR DE ESTA MISMA OLA, y el hallazgo vale la
+ *  pena escribirlo: con los cuatro primeros solos, este `it` publicaba que «no hay router de cliente»
+ *  mientras el árbol tenía —y tiene— un `<Link>` de `next/link` VIVO una línea debajo del import que
+ *  la aserción de más abajo pinnea como la única permitida. Un componente nuevo con un `<Link>` para
+ *  cambiar de pantalla —el gesto más natural de W1— dejaba este `it` en verde, o sea que el candado
+ *  no protegía del error que existe para prevenir. `next/link` NO recarga el documento: preserva el
+ *  registro de módulos, y con él el `singleton` que la pata (a) mide. */
+const PATRONES = ["useRouter", `router${"."}push`, `router${"."}replace`, `next${"/"}navigation`, `next${"/"}link`, `<${"L"}ink`];
 
 type Fuente = { archivo: string; lineas: readonly string[] };
 type Hallazgo = { archivo: string; linea: number; patron: string; texto: string };
@@ -95,6 +102,11 @@ describe("W0-3 · el salto por enlace remonta el árbol (`L-5`)", () => {
   //     sería producción, y además correría el conteo de tests de los dos README.
   //   · M-5 · que `peek` devuelva siempre `null` en `infrastructure/auth/sesion-store.ts` ⇒ cae (c).
   //     ⚠️ FALSO KILLED: `sesion-store.test.ts` también se pondrá rojo. El `×` que cuenta es el de acá.
+  //   · M-8 · 🔴 EL MUTANTE DEL `BLQ-ALTO-1`, y es el único que se aplica escribiendo un archivo:
+  //     un componente NUEVO en `src/` con `import Link from "next/link"` y un enlace a `/enviar` ⇒
+  //     caen las dos aserciones de `next/link` de la pata (b). Es exactamente el gesto que W1 va a
+  //     hacer para cambiar de pantalla, y con los cuatro patrones originales este `it` lo dejaba
+  //     pasar en verde. ⛔ El archivo del mutante se BORRA en la misma tarea: es producción.
   it("T-374-W0-3: el almacén de sesión es POR DOCUMENTO, la salida al enlace es una navegación de documento, y el instrumento sabe decir que SÍ hay sesión", () => {
     // ── (a) EL ALMACÉN ES POR DOCUMENTO, NO POR NAVEGACIÓN ────────────────────────────────────────
     // Las dos mitades juntas dicen QUÉ DEPENDE DE QUÉ. Ninguna sola dice nada: la primera sin la
@@ -110,11 +122,13 @@ describe("W0-3 · el salto por enlace remonta el árbol (`L-5`)", () => {
         "reusando el almacén de sesión de la anterior, y `L-5` sería falsa",
     ).not.toBe(createContainer());
 
-    // ── (b) 🔴 LA QUE DE VERDAD DECIDE: EN ESTE REPO NO HAY ROUTER DE CLIENTE ─────────────────────
+    // ── (b) 🔴 LA QUE DE VERDAD DECIDE: EN EL RECORRIDO NO HAY NI UNA NAVEGACIÓN BLANDA ──────────
     // Toda navegación del recorrido es `window.location.href = …` ⇒ toda salida es una navegación de
     // DOCUMENTO ⇒ el registro de módulos se descarta ⇒ el `singleton` de (a) vuelve a `null`. O sea:
     // `L-5` es verdadera hoy, y lo es POR AUSENCIA. Este barrido convierte esa ausencia en candado: el
     // día que alguien agregue un router de cliente, la premisa de la HU cambia y esto se pone rojo.
+    // ⚠️ Y LA FRASE VA ACOTADA AL RECORRIDO A PROPÓSITO: «en este repo no hay ninguna navegación
+    // blanda» sería FALSA hoy, y el AR de esta ola lo midió. Hay exactamente una, declarada abajo.
     expect(de("useRouter"), "apareció un hook de router de cliente: `L-5` hay que volver a medirla").toEqual([]);
     expect(de(PATRONES[1] as string), "apareció una navegación blanda por `push`").toEqual([]);
     expect(de(PATRONES[2] as string), "apareció una navegación blanda por `replace`").toEqual([]);
@@ -126,6 +140,40 @@ describe("W0-3 · el salto por enlace remonta el árbol (`L-5`)", () => {
       "el conjunto de imports de `next/navigation` del árbol cambió: puede haber entrado una " +
         "navegación de cliente",
     ).toEqual(['app/kyc-simulado/page.tsx → import { notFound } from "next/navigation";']);
+    // ⛔ LA SEGUNDA OCURRENCIA PERMITIDA, Y ÉSTA SÍ NAVEGA: hay UN `<Link>` de `next/link` vivo en el
+    // árbol, `app/kyc-simulado/page.tsx:114`, una línea debajo del import de acá arriba. No cuenta
+    // contra `L-5` por dos motivos que se afirman, no se prometen: (1) NO ESTÁ EN EL RECORRIDO —es la
+    // pantalla del simulador de KYC, no una pantalla del envío—, y (2) ESTÁ DETRÁS DE UNA BANDERA: esa
+    // página corta con `notFound()` salvo que `MOCK_KYC_SURFACE_ENABLED` valga el literal `"true"`, y
+    // eso lo decide (`mockDiditSurfaceEnabled`, `../infrastructure/mock-surface.ts:51`) ⇒ fuera de un
+    // despliegue con el simulador prendido ese `<Link>` no se renderiza nunca. El (2) lo fija la
+    // tercera aserción de abajo: si alguien le saca el corte, la excepción deja de valer y esto cae.
+    expect(
+      HALLAZGOS.filter((h) => h.patron === PATRONES[4]).map((h) => `${h.archivo} → ${h.texto}`),
+      "el conjunto de imports de `next/link` del árbol cambió: entró una navegación BLANDA, que NO " +
+        "recarga el documento, preserva el registro de módulos y vuelve a poner en duda `L-5`",
+    ).toEqual(['app/kyc-simulado/page.tsx → import Link from "next/link";']);
+    expect(
+      HALLAZGOS.filter((h) => h.patron === PATRONES[5]).map((h) => h.archivo),
+      "apareció un enlace de `next/link` fuera de la página apagada del simulador de KYC: es una " +
+        "navegación blanda del App Router y el recorrido no puede tener ninguna",
+    ).toEqual(["app/kyc-simulado/page.tsx"]);
+    // ⛔ EL PREDICADO EXIGE LOS DOS SÍMBOLOS EN LA MISMA LÍNEA Y QUE NO SEA UN COMENTARIO, y eso NO
+    // es celo: ese archivo nombra `notFound()` en su prosa en `:31`, `:58`, `:64` y `:65`, así que un
+    // `.includes("notFound()")` a secas lo pasaría leyendo los comentarios y seguiría verde con el
+    // corte borrado — un guard que se apoya en la prosa del archivo que vigila. La única línea que
+    // conjuga los dos es `app/kyc-simulado/page.tsx:72`, que es el corte de verdad.
+    expect(
+      (ARBOL.find((f) => f.archivo === "app/kyc-simulado/page.tsx")?.lineas ?? []).some(
+        (l) =>
+          !l.trimStart().startsWith("//") &&
+          l.includes("mockDiditSurfaceEnabled()") &&
+          l.includes("notFound()"),
+      ),
+      "la página que aloja el único enlace blando del árbol dejó de cortar con `notFound()` cuando la " +
+        "bandera del simulador está apagada: su navegación blanda ya no está detrás de una bandera y " +
+        "la excepción de este guard no vale más",
+    ).toBe(true);
     // 🔴 EL CONTROL NEGATIVO, SIN EL CUAL LO DE ARRIBA NO DICE NADA: un barrido roto que no encuentra
     // nada es indistinguible de un repo sin router. Las líneas son SINTÉTICAS y viven en memoria.
     const sintetico = barrer([
@@ -137,18 +185,22 @@ describe("W0-3 · el salto por enlace remonta el árbol (`L-5`)", () => {
           `  router${"."}replace("/y");`,
           `import { redirect } from "next${"/"}navigation";`,
           `const nada = 1;`,
+          `import Enlace from "next${"/"}link";`,
+          `  <${"L"}ink href="/enviar">Ir a enviar</${"L"}ink>`,
         ],
       },
     ]);
     expect(
       sintetico.map((h) => `${h.linea}:${h.patron}`),
-      "el barrido no caza un router escrito con todas las letras: su `[]` de arriba es ceguera, no " +
-        "una ausencia",
+      "el barrido no caza un router ni un enlace blando escritos con todas las letras: su `[]` de " +
+        "arriba es ceguera, no una ausencia",
     ).toEqual([
       `1:useRouter`,
       `2:${PATRONES[1]}`,
       `3:${PATRONES[2]}`,
       `4:${PATRONES[3]}`,
+      `6:${PATRONES[4]}`,
+      `7:${PATRONES[5]}`,
     ]);
 
     // ── (c) EL CONTROL POSITIVO, SIN EL CUAL (a) NO DICE NADA ────────────────────────────────────

@@ -37,7 +37,7 @@ import { buildTestContainer } from "../../test-support/test-container";
 import { MARCA, enlaceDeVuelta } from "../../infrastructure/solana/deeplink/sesion";
 import { MARCA_CREAR_NONCE } from "../../infrastructure/solana/deeplink/conexion";
 import { MIN_SEND_USD } from "../../domain/remittance";
-import { ETIQUETA_CONECTANDO, NO_CUSTODIAL } from "./pantallas";
+import { ETIQUETA_CONECTANDO, ETIQUETA_VERIFICANDO, NO_CUSTODIAL } from "./pantallas";
 import { TABLA } from "./pasos";
 import { MS_DE_ESPERA_DE_LA_COTIZACION, type PropsDelRecorrido, Recorrido } from "./recorrido";
 import { MOTIVO_SIN_ATERRIZAJE, TEXTO_EN_VUELO_IDENTIDAD, anuncioDe } from "./salto";
@@ -885,6 +885,47 @@ describe("WKH-374/W1.2 · el recorrido nuevo, montado y recorrido", () => {
       await screen.findByRole("link", { name: "Abrir mi billetera" }),
       "el caso de uso contestó y el salto no apareció: los controles quedaron apagados para siempre",
     ).toBeInTheDocument();
+
+    // ── (D) Y LA OTRA FORMA DEL CONTROL: EL BOTÓN DE `Salir` ────────────────────────────────────
+    //
+    // 🔴 ESTO ENTRÓ PORQUE UN MUTANTE SOBREVIVIÓ. La primera versión de este `it` sólo tocaba el
+    // botón propio de la pantalla de entrada, así que el mutante que le sacaba el `disabled` y la
+    // etiqueta en curso al botón de `Salir` —el componente compartido, el que dispara `startKyc` y
+    // `confirmAndSend`— daba `13 passed`. Un componente que ningún `it` renderiza en ese estado no
+    // está defendido, por más que su hermano sí lo esté. Del otro lado de este botón hay cuota de
+    // proveedor, así que se ejercita.
+    cleanup();
+    let soltar: (() => void) | null = null;
+    const lento: Container = {
+      ...buildTestContainer(),
+      startKyc: {
+        execute: async () => {
+          await new Promise<void>((r) => {
+            soltar = r;
+          });
+          return { kind: "redirect", url: DESTINO_DEL_VERIFICADOR } as const;
+        },
+      } as unknown as Container["startKyc"],
+    };
+    montar({ container: lento, pasoDeArranque: "envio" });
+    cargarElEnvio();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Seguir" }));
+    });
+    await screen.findByRole("heading", { name: "Tu identidad" });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Verificar mi identidad" }));
+    });
+    const verificando = screen.getByRole("button", { name: ETIQUETA_VERIFICANDO });
+    expect(
+      verificando,
+      "el botón de salir no dice nada mientras se pide la sesión de verificación: la persona toca de nuevo y se paga otra cuota",
+    ).toBeInTheDocument();
+    expect(verificando, "el botón de salir se puede volver a tocar mientras el caso de uso corre").toBeDisabled();
+    await act(async () => {
+      soltar?.();
+      await Promise.resolve();
+    });
   });
 
   // ── EL TESTIGO DE LOS 300 ms DUPLICADOS (CR/MNR-1) ────────────────────────────────────────────

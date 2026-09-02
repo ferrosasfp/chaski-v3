@@ -31,8 +31,15 @@
  * ⇒ la lectura queda VIVA en el bundle de servidor. Con el motivo falso escrito acá, el día que
  * alguien lo siga va a concluir cosas que no valen.
  *
- * 🔴 EL MOTIVO VERDADERO, Y ES OTRO: `/` se PRERENDERIZA ESTÁTICA. La bandera se evalúa una vez, en
- * el build, y el HTML que se sirve ya trae el árbol elegido. Por eso hay que rebuildear.
+ * RE-MEDIDO EN EL FIX-PACK, sobre el artefacto de `npm run build` y no sobre el fuente:
+ *   `/usr/bin/grep -rl NEXT_PUBLIC_CHASKI_RECORRIDO_V2 .next/server` ⇒ `.next/server/app/page.js`
+ *   `/usr/bin/grep -rl NEXT_PUBLIC_CHASKI_RECORRIDO_V2 .next/static` ⇒ **nada**
+ * O sea: inlineada del lado del cliente (donde no hay ningún llamador) y VIVA del lado del servidor.
+ *
+ * 🔴 EL MOTIVO VERDADERO, Y ES OTRO: `/` se PRERENDERIZA ESTÁTICA. Medido en la misma corrida: la
+ * tabla de rutas del build marca `○ /`, y `○` es *«prerendered as static content»*. La bandera se
+ * evalúa UNA vez, en el build, y el HTML que se sirve ya trae el árbol elegido. Por eso hay que
+ * rebuildear.
  *
  * ⚠️ RIESGO DEL MOTIVO FALSO, dicho para que no se pierda: el día que `/` deje de ser estática (un
  * `cookies()`, un `dynamic = "force-dynamic"`, cualquier cosa que la vuelva dinámica), un cambio en

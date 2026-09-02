@@ -32,7 +32,8 @@ import {
   beneficiary,
 } from "../../test-support/fakes";
 import { buildTestContainer } from "../../test-support/test-container";
-import { MARCA } from "../../infrastructure/solana/deeplink/sesion";
+import { MARCA, enlaceDeVuelta } from "../../infrastructure/solana/deeplink/sesion";
+import { MARCA_CREAR_NONCE } from "../../infrastructure/solana/deeplink/conexion";
 import { MIN_SEND_USD } from "../../domain/remittance";
 import { NO_CUSTODIAL } from "./pantallas";
 import { TABLA } from "./pasos";
@@ -80,6 +81,26 @@ function montar(o: PropsDelRecorrido = {}) {
 function tocarSinNavegar(a: HTMLElement) {
   a.addEventListener("click", (e) => e.preventDefault(), { once: true });
   fireEvent.click(a);
+}
+
+/**
+ * Los TRES predicados de copy de `T-374-W1-8`, en un solo sitio.
+ *
+ * 🔴 Se extrajeron en el fix-pack porque el `it` pasó a mirar copy que los cinco montajes por default
+ * ⛔ NO alcanzan (los motivos y el anuncio del camino por enlace), y tres predicados copiados cuatro
+ * veces es un guard que envejece por partes: el día que se agregue el cuarto, entra en uno solo.
+ */
+function revisarCopy(texto: string, quien: string) {
+  expect(texto.length, `${quien} no renderizó nada: el barrido pasaría por vacío`).toBeGreaterThan(50);
+  expect(texto, `${quien} mete un em dash en copy visible`).not.toContain("—");
+  // ⛔ Nada promete lo que hoy no está aprobado ni entregado: ni que desaparezca el paso de crear la
+  // cuenta, ni que quien manda no necesite la moneda de red.
+  expect(texto, `${quien} promete que no hace falta la moneda de red`).not.toMatch(
+    /no (?:vas a )?necesit\w*\s+SOL/i,
+  );
+  expect(texto, `${quien} promete que «Crear la cuenta» desaparece`).not.toMatch(
+    /sin crear (?:la )?cuenta/i,
+  );
 }
 
 /** Completa los tres campos de la pantalla del envío. */
@@ -270,21 +291,47 @@ describe("WKH-374/W1.2 · el recorrido nuevo, montado y recorrido", () => {
     for (const paso of pasos) {
       montar({ pasoDeArranque: paso });
       const texto = document.body.textContent ?? "";
-      expect(texto.length, `la pantalla «${paso}» no renderizó nada: el barrido pasaría por vacío`).toBeGreaterThan(
-        50,
-      );
-      expect(texto, `la pantalla «${paso}» mete un em dash en copy visible`).not.toContain("—");
-      // ⛔ Ninguna pantalla promete lo que hoy no está aprobado ni entregado: ni que desaparezca el
-      // paso de crear la cuenta, ni que quien manda no necesite la moneda de red.
-      expect(texto, `la pantalla «${paso}» promete que no hace falta la moneda de red`).not.toMatch(
-        /no (?:vas a )?necesit\w*\s+SOL/i,
-      );
-      expect(texto, `la pantalla «${paso}» promete que «Crear la cuenta» desaparece`).not.toMatch(
-        /sin crear (?:la )?cuenta/i,
-      );
+      revisarCopy(texto, `la pantalla «${paso}»`);
       if (texto.includes(NO_CUSTODIAL)) conNoCustodial++;
       cleanup();
     }
+
+    // 🔴 Y LOS TRES TEXTOS QUE LOS CINCO MONTAJES DE ARRIBA ⛔ NO ALCANZAN, que son todos copy que
+    // ENTRÓ CON EL FIX-PACK. Sin esto, el barrido de arriba diría «el copy del recorrido» y estaría
+    // mirando el subconjunto que se ve sin tocar nada, o sea el que menos cambió.
+    //
+    // (a) EL MOTIVO DE UNA MARCA QUE NADIE ESCRIBIÓ.
+    montar({ hrefDeAterrizaje: `https://chaski.test/?${MARCA}=marca-que-nadie-escribio` });
+    revisarCopy(document.body.textContent ?? "", "el motivo de la marca sin consumidor");
+    expect(
+      document.body.textContent ?? "",
+      "el fixture (a) no llegó a pintar el motivo: el barrido pasaría por vacío",
+    ).toContain(MOTIVO_SIN_ATERRIZAJE);
+    cleanup();
+
+    // (b) EL ANUNCIO DEL CAMINO POR ENLACE, que enumera una firma MÁS que el otro camino y ⛔ no se
+    //     ve montando la pantalla de firmar sin marca.
+    montar({ hrefDeAterrizaje: enlaceDeVuelta("https://chaski.test/", MARCA_CREAR_NONCE) });
+    const porEnlace = document.body.textContent ?? "";
+    revisarCopy(porEnlace, "el anuncio del camino por enlace");
+    for (const f of anuncioDe({ porEnlace: true }).firmas) {
+      expect(
+        porEnlace,
+        `el fixture (b) no enumera «${f.queSeFirma}»: no está mostrando el anuncio del camino por enlace`,
+      ).toContain(f.queSeFirma);
+    }
+    cleanup();
+
+    // (c) EL MOTIVO DE «no hay envío en esta pestaña», que sale al tocar el salto sin remesa.
+    montar({ pasoDeArranque: "firmar" });
+    fireEvent.click(screen.getByRole("button", { name: "Abrir mi billetera" }));
+    const sinEnvio = document.body.textContent ?? "";
+    revisarCopy(sinEnvio, "el motivo de «sin envío en esta pestaña»");
+    expect(
+      sinEnvio,
+      "el fixture (c) no dejó ningún motivo: la vuelta a un paso sin envío sigue siendo un callejón silencioso",
+    ).toContain("todavía no hay nada que firmar");
+    cleanup();
     // Las cuatro pantallas que hablan de fondos preservan la afirmación no custodial (AC-16).
     expect(
       conNoCustodial,
@@ -478,6 +525,43 @@ describe("WKH-374/W1.2 · el recorrido nuevo, montado y recorrido", () => {
       enlace.getAttribute("href"),
       "el control de salida al verificador no apunta a la pantalla que el caso de uso devolvió",
     ).toBe(DESTINO_DEL_VERIFICADOR);
+
+    // ── EL OTRO DESENLACE: EL CASO DE USO CONTESTA SIN REDIRECT Y LA VERIFICACIÓN **NO** PASÓ ─────
+    // ⛔ Ése tampoco puede avanzar, y es el que más se parece al defecto original: el caso de uso
+    // contesta, no hay excepción, y avanzar ahí es dar por verificada una identidad que no lo está.
+    cleanup();
+    const sinPasar = Remittance.create("r-2", beneficiary(), Money.of(Number(MONTO), "USDC"), T0);
+    const container2: Container = {
+      ...buildTestContainer(),
+      startKyc: {
+        execute: async () => ({ kind: "done", snapshot: sinPasar.snapshot }) as const,
+      } as unknown as Container["startKyc"],
+    };
+    montar({ container: container2, pasoDeArranque: "envio" });
+    cargarElEnvio();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Seguir" }));
+    });
+    await screen.findByRole("heading", { name: "Tu identidad" });
+    // Calibración del fixture: el snapshot que el doble devuelve NO está verificado, o el `it` estaría
+    // midiendo el camino feliz con el nombre del otro.
+    expect(
+      sinPasar.snapshot.status,
+      "el fixture no reproduce el caso: este snapshot ya está verificado",
+    ).not.toBe("kyc_passed");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Verificar mi identidad" }));
+    });
+    expect(
+      screen.queryByRole("heading", { name: "Firmar y enviar" }),
+      "el recorrido avanzó con una verificación que NO pasó: eso es dar la identidad por verificada",
+    ).toBeNull();
+    const texto = document.body.textContent ?? "";
+    expect(
+      texto,
+      "la verificación no pasó y la pantalla no dice nada: la persona se queda sin saber por qué no avanza",
+    ).toContain("No pudimos verificar tu identidad");
+    revisarCopy(texto, "el motivo de la verificación que no pasó");
   });
 
   // ── LA COTIZACIÓN: UNA POR LO QUE SE TIPEA, NINGUNA POR DEBAJO DEL MÍNIMO, Y EL ERROR SE LIMPIA ──

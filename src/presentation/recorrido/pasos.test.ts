@@ -10,6 +10,7 @@ import {
   TABLA,
   anterior,
   esPasoDelRecorrido,
+  etiquetaDe,
   etiquetasDe,
   indiceEn,
   itinerario,
@@ -140,6 +141,59 @@ describe("WKH-374/W1.0 · la tabla enumerable de pasos (AC-2) y el itinerario co
     if (primero !== undefined && ultimo !== undefined) {
       expect(anterior(primeraVez, primero), "«Volver» en el primer paso se sale del recorrido").toBe(primero);
       expect(siguiente(primeraVez, ultimo), "«Seguir» en el último paso se sale del recorrido").toBe(ultimo);
+    }
+  });
+
+  // ── AVANZAR DESDE UN PASO QUE ⛔ NO ESTÁ EN EL ITINERARIO ──────────────────────────────────────
+  //
+  // MUTANTE QUE MATA (`MW-22`): en `./pasos.ts`, volver `siguiente` a su forma anterior, o sea
+  // reemplazar las tres últimas líneas por `if (i < 0) return itin[0] ?? PASO_DE_ENTRADA;` antes de
+  // la salida de siempre ⇒ cae la PRIMERA aserción, la que nombra la pantalla de entrada.
+  // ⛔ El comentario ⛔ NO escribe esa palabra reservada entre acentos graves, y no es prolijidad:
+  // `T-374-W1-4` barre este árbol con patrones literal-shaped y uno de los valores que vigila se
+  // escribe igual que ella. Medido: con los acentos graves ese `it` se pone rojo.
+  // ⛔ FALSO KILLED A EVITAR: afirmar sólo «devuelve el paso posterior». Eso lo cumple también una
+  // implementación que devuelva la entrada cuando el posterior no exista, que es la mitad que el
+  // invariante prohíbe con la palabra NUNCA. Por eso las dos aserciones van SEPARADAS: primero que
+  // ⛔ NO sea la pantalla de entrada, después cuál es. Y la calibración de arriba impide que un
+  // itinerario que igual contenga el paso deje las dos pasando por el camino de siempre.
+  it("T-374-W1-20: avanzar desde un paso fuera del itinerario ⛔ NUNCA aterriza en la pantalla de entrada", () => {
+    const recurrente = itinerario({ identidadYaVerificada: true });
+    const fuera = TABLA.find((f) => f.soloLaPrimeraVez)?.id;
+    expect(fuera, "no hay ningún paso condicional: este `it` no tendría caso que medir").toBeTruthy();
+    if (fuera === undefined) return;
+    // CALIBRACIÓN: el paso tiene que estar REALMENTE fuera del itinerario, o `siguiente` tomaría el
+    // camino de siempre y este `it` mediría otra cosa con el nombre de ésta.
+    expect(
+      indiceEn(recurrente, fuera),
+      "el paso condicional sigue dentro del itinerario recurrente: no se está ejercitando la rama de «fuera del itinerario»",
+    ).toBe(-1);
+
+    const destino = siguiente(recurrente, fuera);
+    expect(
+      destino,
+      "avanzar desde un paso fuera del itinerario aterriza en la PANTALLA DE ENTRADA, que es lo único que el invariante prohíbe con la palabra NUNCA",
+    ).not.toBe(PASO_DE_ENTRADA);
+    // Y va a donde tiene que ir: el siguiente de la TABLA que sí le toca a esta persona.
+    const posterior = TABLA[TABLA.findIndex((f) => f.id === fuera) + 1]?.id;
+    expect(posterior, "el paso condicional no tiene posterior en la tabla").toBeTruthy();
+    expect(
+      destino,
+      "avanzar desde un paso fuera del itinerario no sigue el orden de la tabla",
+    ).toBe(posterior);
+  });
+
+  // MUTANTE QUE MATA (`MW-23`): en `./pasos.ts`, que `etiquetaDe` devuelva siempre su argumento
+  // (`return paso;`) ⇒ cae la aserción de la etiqueta, porque el id y la etiqueta no coinciden.
+  // ⛔ FALSO KILLED A EVITAR: probarlo con un paso cuyo id y etiqueta se parezcan. Se prueban TODOS
+  // los de la tabla, y la calibración exige que al menos uno tenga etiqueta distinta de su id.
+  it("T-374-W1-21: `etiquetaDe` devuelve la etiqueta de la tabla, que es lo que un copy puede nombrar", () => {
+    expect(
+      TABLA.some((f) => f.etiqueta !== f.id),
+      "ninguna fila tiene etiqueta distinta de su id: el mutante de la identidad sobreviviría",
+    ).toBe(true);
+    for (const f of TABLA) {
+      expect(etiquetaDe(f.id), `«${f.id}» no devuelve su etiqueta de la tabla`).toBe(f.etiqueta);
     }
   });
 });

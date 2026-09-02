@@ -18,6 +18,7 @@
 // `../el-salto-remonta-el-arbol.test.tsx` sobre las cuatro raíces del árbol.
 
 import type { ReactNode } from "react";
+import { MIN_SEND_USD } from "../../domain/remittance";
 import type { Quote, RemittanceState } from "../../domain/remittance";
 import { escrowRentExplainer, statusDisplay } from "../flow-vm";
 import { Aviso, Button, Card, Field, Money, Muted, Pill, Row, TextInput } from "../ui";
@@ -30,6 +31,15 @@ import { TEXTO_EN_VUELO, TEXTO_EN_VUELO_IDENTIDAD } from "./salto";
  * embebida, y la frase que lo dice no puede quedar en una sola de ellas.
  */
 export const NO_CUSTODIAL = "Tus fondos y tus llaves son tuyos. Chaski no los guarda ni firma por vos.";
+
+/** LO QUE DICEN LOS CONTROLES MIENTRAS UN CASO DE USO PIENSA (CR/BLQ-MED-4). ⛔ Cada una nombra el
+ *  trabajo QUE DE VERDAD ESTÁ CORRIENDO: el connect, el `save` del repositorio, la sesión del
+ *  verificador y el armado del salto. Una etiqueta de espera que nombra otra cosa es la misma
+ *  mentira que un botón que no se mueve, sólo que más difícil de ver. */
+export const ETIQUETA_CONECTANDO = "Conectando con tu billetera...";
+export const ETIQUETA_GUARDANDO = "Guardando el envío...";
+export const ETIQUETA_VERIFICANDO = "Pidiendo la verificación...";
+export const ETIQUETA_ARMANDO_FIRMA = "Armando la firma...";
 
 /** El encabezado común: título de la pantalla y, debajo, una línea de qué se hace acá. */
 function Encabezado({ titulo, bajada }: { titulo: string; bajada: string }) {
@@ -77,9 +87,10 @@ function Motivo({ motivo }: { motivo: string | null }) {
  *      la persona se quedaba mirando la pantalla de entrada (el razonamiento entero, con la foto del
  *      teléfono, vive en el comentario de `../flow.tsx:286`; ⛔ cita SIN ancla a propósito: ese
  *      archivo lleva marcadores de censo de citas entrantes por número).
- *   2. `T-374-W1-12` prohíbe toda asignación de `window.location` DENTRO de este árbol, y con razón:
- *      una pantalla que navega por su cuenta es la costura que ese barrido existe para cerrar. Un
- *      `<a href>` no navega por su cuenta, navega porque alguien lo tocó.
+ *   2. `T-374-W1-12` prohíbe DENTRO de este árbol toda salida por `location`, con prefijo o sin él y
+ *      tanto por asignación como por método, y con razón: una pantalla que navega por su cuenta es la
+ *      costura que ese barrido existe para cerrar. Un `<a href>` no navega por su cuenta, navega
+ *      porque alguien lo tocó. ⚠️ Lo que ese barrido ⛔ NO ve está enumerado en su propio `it`.
  *
  * ⚠️ `onSalir` en el `<a>` ⛔ NO NAVEGA: sólo prende el estado EN VUELO (`AC-6`), para que lo que
  * quede montado mientras la pestaña se va diga con palabras qué está pasando.
@@ -87,13 +98,20 @@ function Motivo({ motivo }: { motivo: string | null }) {
 function Salir(p: {
   destino: string | null;
   etiqueta: string;
+  /** Lo que dice el botón MIENTRAS el caso de uso piensa. ⛔ Es otra etiqueta, no la misma en gris. */
+  etiquetaEnCurso: string;
+  enCurso: boolean;
   onPedir: () => void;
   onSalir: () => void;
 }) {
   if (p.destino === null) {
+    // 🔴 EL ESTADO ENTRE EL TOQUE Y EL ENLACE (CR/BLQ-MED-4). Acá el botón no cambiaba UN SOLO PIXEL
+    // mientras el caso de uso iba a la red, y un control idéntico después de tocarlo se lee como «no
+    // pasó nada»: la persona lo toca de nuevo, con un depósito o una cuota del otro lado.
+    // ⛔ El `disabled` no reemplaza a la guarda de reentrada del anfitrión: es la mitad que se VE.
     return (
-      <Button onClick={p.onPedir} type="button">
-        {p.etiqueta}
+      <Button onClick={p.onPedir} type="button" disabled={p.enCurso}>
+        {p.enCurso ? p.etiquetaEnCurso : p.etiqueta}
       </Button>
     );
   }
@@ -122,9 +140,18 @@ function Salir(p: {
 export function AnuncioDelSalto({
   anuncio,
   destino,
+  etiquetaEnCurso,
+  enCurso,
   onPedir,
   onSalir,
-}: { anuncio: Anuncio; destino: string | null; onPedir: () => void; onSalir: () => void }) {
+}: {
+  anuncio: Anuncio;
+  destino: string | null;
+  etiquetaEnCurso: string;
+  enCurso: boolean;
+  onPedir: () => void;
+  onSalir: () => void;
+}) {
   return (
     <Aviso tono="atencion" className="mb-normal">
       <p className="text-body font-semibold text-ink">{anuncio.titulo}</p>
@@ -143,7 +170,14 @@ export function AnuncioDelSalto({
       </ul>
       <Muted className="mt-normal">{anuncio.volves}</Muted>
       <div className="mt-normal">
-        <Salir destino={destino} etiqueta={anuncio.boton} onPedir={onPedir} onSalir={onSalir} />
+        <Salir
+          destino={destino}
+          etiqueta={anuncio.boton}
+          etiquetaEnCurso={etiquetaEnCurso}
+          enCurso={enCurso}
+          onPedir={onPedir}
+          onSalir={onSalir}
+        />
       </div>
     </Aviso>
   );
@@ -181,6 +215,8 @@ export function PantallaEntrar(p: {
   /** A dónde hay que ir, cuando el caso de uso ya lo contestó. `null` ⇒ todavía no hay destino. */
   destinoDelSalto: string | null;
   enVuelo: boolean;
+  /** ⇒ hay un caso de uso corriendo. Apaga los controles y cambia lo que dicen (CR/BLQ-MED-4). */
+  enCurso: boolean;
   motivo: string | null;
   urlParaInstalar: string;
   onConectar: () => void;
@@ -198,12 +234,14 @@ export function PantallaEntrar(p: {
         <AnuncioDelSalto
           anuncio={p.anuncio}
           destino={p.destinoDelSalto}
+          etiquetaEnCurso={ETIQUETA_CONECTANDO}
+          enCurso={p.enCurso}
           onPedir={p.onConectar}
           onSalir={p.onSalirALaBilletera}
         />
       )}
-      <Button onClick={p.onConectar} type="button">
-        Conectar mi billetera
+      <Button onClick={p.onConectar} type="button" disabled={p.enCurso}>
+        {p.enCurso ? ETIQUETA_CONECTANDO : "Conectar mi billetera"}
       </Button>
       <Muted className="mt-normal">{NO_CUSTODIAL}</Muted>
       <Muted escala="label" className="mt-ajustado">
@@ -231,8 +269,11 @@ export function PantallaEnvio(p: {
   nombre: string;
   cci: string;
   cotizacion: Quote | null;
+  /** ⇒ hay un monto escrito y no llega al mínimo. Es lo que dispara el corte, DICHO (CR/BLQ-MED-2). */
+  porDebajoDelMinimo: boolean;
   motivo: string | null;
   puedeSeguir: boolean;
+  enCurso: boolean;
   onMonto: (v: string) => void;
   onNombre: (v: string) => void;
   onCci: (v: string) => void;
@@ -241,7 +282,15 @@ export function PantallaEnvio(p: {
 }) {
   return (
     <Card>
-      <Encabezado titulo="Cuánto y para quién" bajada="Se guarda solo mientras lo completás." />
+      {/* 🔴 LA BAJADA DICE LO QUE EL CÓDIGO HACE (CR/BLQ-BAJO-1). Decía «Se guarda solo mientras lo
+          completás.» y era FALSO: el caso de uso que crea el envío corre recién al tocar «Seguir» y
+          el borrador vive en estado de React. Reproducción: escribir los tres campos, recargar, y
+          volver a la pantalla de entrada con todo vacío. ⛔ En una app de plata, una frase que
+          sugiere autoguardado es la que hace que alguien recargue tranquilo y pierda lo que cargó. */}
+      <Encabezado
+        titulo="Cuánto y para quién"
+        bajada="Todavía no se guarda nada: si recargás la página, esto se vuelve a empezar."
+      />
       <Motivo motivo={p.motivo} />
       <div className="space-y-normal">
         <Field label="Cuánto mandás" hint="En USDC, desde tu billetera.">
@@ -268,16 +317,27 @@ export function PantallaEnvio(p: {
           />
         </Field>
       </div>
+      {/* 🔴 EL CORTE POR EL MÍNIMO SE DICE, Y NO SÓLO SE APLICA (CR/BLQ-MED-2). El anfitrión ya
+          cortaba, pero la pantalla no lo contaba: un monto corto dejaba a la persona sin cifra, con
+          «Seguir» en gris SIN motivo y con el hueco repitiéndole que escribiera el monto que acababa
+          de escribir. Un callejón, en la única pantalla donde se escribe algo. El texto y el
+          `role="alert"` son los del árbol viejo para el mismo desenlace, y ⛔ la cifra SALE DE LA
+          CONSTANTE. ⛔ Y REEMPLAZA al hueco, no se suma: dos textos sobre el mismo hecho, uno
+          pidiendo lo que ya se hizo, es lo que hacía el callejón. */}
       <div className="mt-holgado">
-        {p.cotizacion === null ? (
+        {p.porDebajoDelMinimo ? (
+          <p className="text-label font-medium text-cochineal" role="alert">
+            El mínimo para enviar es ${MIN_SEND_USD}. Por debajo de eso no cotizamos el envío.
+          </p>
+        ) : p.cotizacion === null ? (
           <Muted>Escribí el monto y te decimos cuánto llega.</Muted>
         ) : (
           <Cotizacion quote={p.cotizacion} />
         )}
       </div>
       <div className="mt-holgado space-y-ajustado">
-        <Button onClick={p.onSeguir} type="button" disabled={!p.puedeSeguir}>
-          Seguir
+        <Button onClick={p.onSeguir} type="button" disabled={!p.puedeSeguir || p.enCurso}>
+          {p.enCurso ? ETIQUETA_GUARDANDO : "Seguir"}
         </Button>
         <Volver onVolver={p.onVolver} />
       </div>
@@ -313,17 +373,29 @@ function Cotizacion({ quote }: { quote: Quote }) {
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
 
 /**
- * Sólo la primera vez (`AC-4`): quien ya se verificó nunca ve esta pantalla, y por eso el indicador
- * de progreso recibe el ITINERARIO y no la tabla.
+ * El itinerario puede saltearse este paso (`AC-4`), y por eso el indicador de progreso recibe el
+ * ITINERARIO y no la tabla.
  *
- * Dice qué se verifica, con quién, y —lo que importa para el invariante— que se sale a otra pantalla
+ * Dice qué se verifica, con quién, y lo que importa para el invariante: que se sale a otra pantalla
  * Y SE VUELVE ACÁ MISMO. La vuelta del verificador aterriza en este paso, ⛔ no en el principio.
+ *
+ * 🔴 LA BAJADA YA NO PROMETE «UNA VEZ SOLA» (CR/BLQ-MED-1), Y ES UNA MENTIRA CERRADA. Decía «Una vez
+ * sola. Después de esto, tus próximos envíos no la vuelven a pedir.», y era falso para el 100 % de
+ * las personas: el prop `identidadYaVerificada` del anfitrión ⛔ NO TIENE PRODUCTOR fuera de los
+ * tests, el punto de montaje arma `<Recorrido />` sin props ⇒ el paso aparece SIEMPRE.
+ *
+ * ⛔ Y NO SE CABLEÓ ACÁ, con el motivo MEDIDO: el veredicto vive en `LocalKycStore`, que lee el disco
+ * del navegador, y el punto de montaje es un componente de SERVIDOR (no lleva la directiva de
+ * cliente) ⇒ ahí no se puede leer; leerlo desde el anfitrión lo pondría a tocar el disco, que es lo
+ * que `T-374-W1-12` prohíbe. Cablearlo es otra ola; ⛔ prometerlo en una bajada, no. Declarado en
+ * «lo que W1 no entrega».
  */
 export function PantallaIdentidad(p: {
   verificador: string;
   /** La pantalla del verificador, cuando el caso de uso ya la devolvió. `null` ⇒ todavía no se pidió. */
   destinoDelVerificador: string | null;
   enVuelo: boolean;
+  enCurso: boolean;
   motivo: string | null;
   onVerificar: () => void;
   onSalirAlVerificador: () => void;
@@ -331,10 +403,7 @@ export function PantallaIdentidad(p: {
 }) {
   return (
     <Card>
-      <Encabezado
-        titulo="Tu identidad"
-        bajada="Una vez sola. Después de esto, tus próximos envíos no la vuelven a pedir."
-      />
+      <Encabezado titulo="Tu identidad" bajada="Verificamos quién sos antes de mandar la plata." />
       <Motivo motivo={p.motivo} />
       {p.enVuelo ? <EnVuelo texto={TEXTO_EN_VUELO_IDENTIDAD} /> : null}
       <Aviso tono="neutro" className="mb-normal">
@@ -356,6 +425,8 @@ export function PantallaIdentidad(p: {
         <Salir
           destino={p.destinoDelVerificador}
           etiqueta="Verificar mi identidad"
+          etiquetaEnCurso={ETIQUETA_VERIFICANDO}
+          enCurso={p.enCurso}
           onPedir={p.onVerificar}
           onSalir={p.onSalirAlVerificador}
         />
@@ -388,6 +459,7 @@ export function PantallaFirmar(p: {
   /** A dónde hay que ir a firmar, cuando el caso de uso ya lo contestó. */
   destinoDelSalto: string | null;
   enVuelo: boolean;
+  enCurso: boolean;
   motivo: string | null;
   onFirmar: () => void;
   onSalirALaBilletera: () => void;
@@ -427,6 +499,8 @@ export function PantallaFirmar(p: {
         <AnuncioDelSalto
           anuncio={p.anuncio}
           destino={p.destinoDelSalto}
+          etiquetaEnCurso={ETIQUETA_ARMANDO_FIRMA}
+          enCurso={p.enCurso}
           onPedir={p.onFirmar}
           onSalir={p.onSalirALaBilletera}
         />
@@ -442,7 +516,9 @@ export function PantallaFirmar(p: {
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
 
 /**
- * Dónde va el envío, y el recibo cuando cierra. Estado terminal del recorrido.
+ * Dónde va el envío, y el recibo cuando cierra. Es el ÚLTIMO paso del itinerario, y ⛔ eso NO es un
+ * estado terminal (CR/MNR-5): «Volver» sigue acá y retrocede como en todas las demás. El envío ya
+ * salió; lo que el botón deshace es la pantalla, no el envío.
  *
  * La etiqueta y el tono salen de (`statusDisplay`, `../flow-vm.ts:133`), que es donde este repo ya
  * decide cómo se nombra cada estado: ⛔ acá no se inventa un vocabulario paralelo, y sobre todo no se

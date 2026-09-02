@@ -192,14 +192,33 @@ describe("WKH-374/W1.2 · la bandera apagada no cambia nada (AC-13)", () => {
     // fila vino a cerrar, con el salto de línea que el formateador produce solo. Un barrido por línea y
     // un formateador que envuelve son un agujero que se abre sin que nadie lo pida.
     //
-    // ⚠️ EL LÍMITE, REESCRITO CON LO QUE QUEDA REALMENTE AFUERA (la frase anterior era de cobertura y
-    // dos líneas la falsificaban):
+    // 🔴 Y LA QUINTA FILA NO PIDE NI EL PREFIJO `window.` NI UN `=`, QUE ES EL ARREGLO DEL `BLQ-ALTO-1`
+    // DEL CR. Pedía las dos cosas, así que el barrido había pasado de ciego a los saltos de línea a
+    // ciego a la VARIANTE SINTÁCTICA: medido sobre `5afe979`, dos líneas en `Salir` —una con
+    // `location.href =` sin prefijo y otra con la forma de método— dejaban este archivo en **3 passed**
+    // y el gate del repo en exit 0. Las formas que entran hoy son SEIS y cada una tiene su cebo abajo:
+    // sin prefijo, con `window.`, con `document.`, la asignación al objeto entero, y las dos formas de
+    // método. ⛔ El prefijo es OPCIONAL a propósito: `location` sola es la misma navegación.
+    //
+    // ⚠️ EL LÍMITE, REESCRITO CON LO QUE QUEDA REALMENTE AFUERA (dos frases anteriores eran de
+    // cobertura y unas pocas líneas las falsificaron):
     //   · un alias armado por REFLEXIÓN (`window["local" + "Storage"]`, un nombre de propiedad en una
-    //     variable): no se cierra con un barrido de texto, y no se intenta;
+    //     variable): no se cierra con un barrido de texto, y no se intenta. Vale igual para la salida:
+    //     tomar el objeto en una variable y asignarle `href` desde ahí ⛔ NO lo caza esta tabla;
     //   · la INDIRECCIÓN por otro módulo: una pantalla que llame a un helper de fuera de este
-    //     directorio que toque el disco. El barrido mira estos archivos y ⛔ no sigue los imports;
+    //     directorio que toque el disco o navegue. El barrido mira estos archivos y ⛔ no sigue los
+    //     imports. La navegación blanda de un hook de router de cliente tampoco entra acá: eso lo
+    //     mira el otro candado, el que barre las cuatro raíces. ⛔ Y este comentario no escribe el
+    //     nombre de ese método: aquel candado barre por literal y se pondría rojo por la prosa
+    //     (medido: puso rojo a `T-374-W0-3` la primera vez que lo escribí con todas las letras);
     //   · el disco al que se llegue por una API que no sea ninguna de estas ocho (IndexedDB, la Cache
-    //     API, `navigator.storage`). ⛔ Ninguna está en la tabla y ninguna se afirma cubierta.
+    //     API, `navigator.storage`). ⛔ Ninguna está en la tabla y ninguna se afirma cubierta;
+    //   · las salidas que no pasan por `location`: `window.open(...)`, un `<form action>` con submit
+    //     programático, o `top`/`parent`. ⛔ Ninguna se afirma cubierta.
+    // ⚠️ Y LO QUE ESTA TABLA REVISA DE MÁS, dicho para que nadie lea un rojo como un hallazgo seguro:
+    // la quinta fila no distingue el objeto global de una variable que se llame igual, así que un
+    // `algo.location.replace(a, b)` sobre una cadena se pondría rojo. El efecto es revisar de más,
+    // nunca de menos, y hoy el árbol no tiene ninguno.
     // Lo que sí queda cerrado, y está calibrado más abajo con un cebo PARTIDO EN DOS LÍNEAS: cualquiera
     // de las ocho formas, escrita en una línea o repartida en varias.
     const DELATORES = [
@@ -224,8 +243,12 @@ describe("WKH-374/W1.2 · la bandera apagada no cambia nada (AC-13)", () => {
         por: "la pantalla estaría leyendo credenciales del documento",
       },
       {
-        nombre: "asignación de window.location",
-        pattern: /\bwindow\s*\.\s*location\s*(?:\.\s*\w+\s*)?=[^=]/,
+        // La QUINTA, reescrita por el `BLQ-ALTO-1` del CR: el prefijo es OPCIONAL y el `=` dejó de ser
+        // obligatorio. `=[^=]` cubre la asignación (al objeto o a cualquiera de sus propiedades) y
+        // ⛔ no confunde una comparación; la segunda rama cubre las dos formas de método.
+        nombre: "salida de la app por location",
+        pattern:
+          /\b(?:(?:window|document|self|globalThis)\s*\.\s*)?location\s*(?:\.\s*\w+\s*)?(?:=[^=]|\.\s*(?:assign|replace)\s*\()/,
         por: "la pantalla estaría navegando por su cuenta",
       },
       {
@@ -249,23 +272,56 @@ describe("WKH-374/W1.2 · la bandera apagada no cambia nada (AC-13)", () => {
     // CONTROL NEGATIVO, con los LITERALES EXACTOS que el instrumento tiene que cazar, en memoria. Sin
     // esto, el `toEqual([])` de abajo es indistinguible de un barrido que no ve nada. ⚠️ Escrito por
     // el LITERAL y no por lo que significa: un control negativo redactado por su significado no caza.
-    const cebos: Record<string, string> = {
-      localStorage: 'window.localStorage.getItem("x");',
-      sessionStorage: 'window.sessionStorage.setItem("x", "y");',
-      "escritura de document.cookie": 'document.cookie = "x=1";',
-      "lectura de document.cookie": "const c = document.cookie;",
-      "asignación de window.location": 'window.location.href = "https://ejemplo.test/";',
-      "reescritura del historial": 'window.history.replaceState(null, "", "/x");',
-      "alias de un almacén": "const s = window.localStorage;",
-      "índice de un almacén": 'window.localStorage["x"] = "y";',
+    //
+    // 🔴 UN CEBO POR FORMA, ⛔ NO UNO POR DELATOR (`BLQ-ALTO-1` del CR). La fila de la salida tenía UN
+    // solo cebo —el que llevaba `window.` y un `=`— y ése es exactamente el que el patrón viejo cazaba:
+    // el control negativo confirmaba la única forma que ya funcionaba. Las SEIS de abajo son las que el
+    // CR midió escapándose, más la que ya entraba.
+    const cebos: Record<string, readonly string[]> = {
+      localStorage: ['window.localStorage.getItem("x");'],
+      sessionStorage: ['window.sessionStorage.setItem("x", "y");'],
+      "escritura de document.cookie": ['document.cookie = "x=1";'],
+      "lectura de document.cookie": ["const c = document.cookie;"],
+      "salida de la app por location": [
+        'window.location.href = "https://ejemplo.test/";', // la única que el patrón viejo cazaba
+        'location.href = "https://ejemplo.test/";', // sin prefijo
+        'document.location.href = "https://ejemplo.test/";', // por `document`
+        'window.location = "https://ejemplo.test/";', // al objeto entero, sin propiedad
+        'window.location.assign("https://ejemplo.test/");', // método, con prefijo
+        'location.assign("https://ejemplo.test/");', // método, sin prefijo
+        'location.replace("https://ejemplo.test/");', // el otro método
+      ],
+      "reescritura del historial": ['window.history.replaceState(null, "", "/x");'],
+      "alias de un almacén": ["const s = window.localStorage;"],
+      "índice de un almacén": ['window.localStorage["x"] = "y";'],
     };
     for (const d of DELATORES) {
-      const cebo = cebos[d.nombre] ?? "";
-      expect(cebo, `falta el cebo del delator «${d.nombre}»`).not.toBe("");
+      const lista = cebos[d.nombre] ?? [];
+      expect(lista.length, `falta el cebo del delator «${d.nombre}»`).toBeGreaterThan(0);
+      for (const cebo of lista) {
+        expect(
+          d.pattern.test(cebo),
+          `el barrido NO caza «${d.nombre}» escrito así: ${JSON.stringify(cebo)} — no está midiendo esa forma`,
+        ).toBe(true);
+      }
+    }
+
+    // 🔴 Y LA OTRA MITAD DE LA QUINTA FILA: LO QUE ⛔ NO TIENE QUE CAZAR. Sin esto, el patrón más
+    // amplio posible —uno que cace la palabra `location` y nada más— pasaría los siete cebos de arriba
+    // y pondría rojo al anfitrión, que LEE `window.location.href` una vez en el montaje. Leer no es
+    // escribir, y el barrido tiene que saber la diferencia o el arreglo de esta ronda sería inservible.
+    const salida = DELATORES.find((d) => d.nombre === "salida de la app por location");
+    expect(salida, "el delator de la salida desapareció de la tabla: lo de abajo no mide nada").toBeDefined();
+    for (const lectura of [
+      "const h = window.location.href;",
+      "const o = new URL(window.location.href).origin;",
+      "if (window.location.href === x) return;",
+      "if (location.href !== x) return;",
+    ]) {
       expect(
-        d.pattern.test(cebo),
-        `el barrido NO caza «${d.nombre}» escrito con todas las letras: no está midiendo nada`,
-      ).toBe(true);
+        salida?.pattern.test(lectura) === true,
+        `el barrido caza una LECTURA de la barra: ${JSON.stringify(lectura)} — el anfitrión no podría leer el href del montaje`,
+      ).toBe(false);
     }
 
     // 🔴 CONTROL NEGATIVO DE LA NORMALIZACIÓN, y es el que vuelve falsable al arreglo del `BLQ-MED-2`.

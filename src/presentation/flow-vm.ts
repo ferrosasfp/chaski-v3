@@ -6,7 +6,7 @@ import {
 } from "../application/use-cases/confirm-and-send";
 import { ESCROW_REFUNDED_BY_SENDER } from "../application/use-cases/recover-escrow-funds"; import { laBilleteraFueTocada, mwaHumanError } from "./solana/wallet-error-code"; // WKH-339/CR: EN ESTA LÍNEA, no en una nueva — `:25`, `:29`, `:30`, `:206` y `:253` de este archivo los cita otro por número
 import {
-  ESCROW_DEPOSIT_RENT_LAMPORTS,
+  ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS,
   SENDER_MIN_LAMPORTS_FOR_DEPOSIT, SENDER_MIN_LAMPORTS_FOR_DEEPLINK_DEPOSIT, // WKH-358/AC-7: EN ESTA LÍNEA, no en una nueva (50 citas ancladas debajo)
   formatLamportsAsSol,
   formatLamportsAsSolFloor,
@@ -389,12 +389,12 @@ export function lostEscrowRecoveryError(code: string, maxCandidates: number): st
 /**
  * Qué recupera la persona al cerrar, en su idioma.
  *
- * 🔴 La cifra sale de `formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_LAMPORTS)`, NUNCA de un literal.
- * Un "0,0040" escrito a mano es lo que permite que la constante y el copy diverjan sin que nada se
- * ponga rojo. Y el FLOOR no es un detalle de estilo: `formatLamportsAsSol` (ceil) devuelve "0,0041"
- * para este mismo valor, que es EXACTAMENTE la misma cadena que el umbral del depósito — o sea que con
- * el ceil el copy sobreestima 2,4% lo que la persona cobra, y además un test no puede distinguir si se
- * formateó la constante correcta.
+ * 🔴 La cifra sale de `formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS)` —la constante del lado que RECIBE—, NUNCA de un literal.
+ * Un "0,0036" escrito a mano es lo que permite que la constante y el copy diverjan sin que nada se
+ * ponga rojo. Y el FLOOR no es un detalle de estilo: `formatLamportsAsSol` (ceil) devuelve "0,0037"
+ * para este mismo valor, o sea que sobreestimaría 1,61 % lo que la persona cobra. HU-077: acá vivía la
+ * constante SIN dirección, escrita al factor de mainnet (6960) — la pantalla prometía "0,0040" y la
+ * cadena devolvía "0,0036", 360.525 lamports de sobre-promesa. ⛔ El identificador entero de su gemela del lado que COBRA (la que termina en `_CHARGED_LAMPORTS`) NO se escribe en este archivo ni en un comentario: T-077-2 lee este archivo como TEXTO y asserta que no aparece. Si ves ESE rojo, borralo de acá; no ablandes el test.
  *
  * Lo que este texto NO dice, a propósito:
  *  · No dice "recuperá tu alquiler" a secas: dice CUÁLES dos cuentas.
@@ -428,7 +428,7 @@ export function escrowRentExplainer(voice: "discovery" | "remittance"): {
   body: string;
   notRecovered: string;
 } {
-  const monto = formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_LAMPORTS);
+  const monto = formatLamportsAsSolFloor(ESCROW_DEPOSIT_RENT_RETURNED_LAMPORTS);
   return {
     title: "Recuperá tu depósito de red",
     body:
